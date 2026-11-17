@@ -197,7 +197,8 @@ pub(crate) fn create_event<'gc>(
         "messageevent" => CreatedEvent::Message,
         _ => return Err(ApiError::dom(ExceptionName::NotSupported)),
     };
-    let event = cx.create_uninitialized_event(cx.window_of(this));
+    let event =
+        cx.create_uninitialized_event(cx.window_of(this).map(|window| cx.window_context(window)));
     match kind {
         CreatedEvent::Plain => {}
         CreatedEvent::Ui => cx.set_ui_event_data(event, None, 0),
@@ -375,23 +376,23 @@ pub(crate) fn create_comment<'gc>(
 }
 
 /// `new DocumentFragment()`: a fragment of the current realm's document.
-pub(crate) fn construct_document_fragment<'gc, O: crate::typed::OpFront>(
-    op: &mut O,
+pub(crate) fn construct_document_fragment<'gc>(
     cx: &ApiCx<'_, 'gc>,
+    window: Option<Gc<'gc, dom::Window>>,
 ) -> Result<NodeRef<'gc>, ApiError> {
-    let document = crate::character_data::realm_document(op, cx)?;
+    let document = crate::character_data::realm_document(cx, window)?;
     Ok(cx.create_document_fragment(document))
 }
 
 /// `new Document()`: an XML document (not an HTML one) at `about:blank`,
 /// in no browsing context (as `createHTMLDocument`'s).
-pub(crate) fn construct_document<'gc, O: crate::typed::OpFront>(
-    op: &mut O,
+pub(crate) fn construct_document<'gc>(
     cx: &ApiCx<'_, 'gc>,
+    window: Option<Gc<'gc, dom::Window>>,
 ) -> Result<NodeRef<'gc>, ApiError> {
-    crate::character_data::realm_document(op, cx)?;
+    crate::character_data::realm_document(cx, window)?;
     let document = cx.create_document(false);
-    cx.set_document_relevant_window(document, op.current_window(cx));
+    cx.set_document_relevant_window(document, window);
     cx.set_document_url(document, "about:blank");
     Ok(document)
 }

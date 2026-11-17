@@ -860,9 +860,9 @@ impl<'s> InfoKind<'s> for IndexedSet {
 /// A plain member's call out of its operation.
 pub(crate) struct InfoFront<'s, K: InfoKind<'s> = Method> {
     info: K::Info,
-    /// Whether the member asks for the current realm's window
-    /// (`Front::prepare_window`, a static operation's): told before the
-    /// operation, found in it (`InfoOp::current_window`). Known as the
+    /// Whether the member asks for the current realm's window or execution
+    /// context (`Front::prepare_window`, a static operation's): told before
+    /// the operation, found in it (`InfoOp::realm_window`). Known as the
     /// member's call is expanded.
     window: bool,
     /// The window of another realm than the current one that the member
@@ -1263,6 +1263,17 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     /// getter may run script), on what has their reads alone.
     fn reading<V: dom_api::typed::ReadDict<Self>>(&mut self, reads: V) -> V::Out {
         self.with_scoped(|scoped| reads.read(scoped))
+    }
+
+    #[inline(always)]
+    fn op_window<'o, 'gc>(
+        op: &mut Self::Op<'o>,
+        cx: &ApiCx<'_, 'gc>,
+    ) -> Option<elise::Gc<'gc, Window>>
+    where
+        Self: 'o,
+    {
+        op.realm_window(cx)
     }
 
     type Op<'o>
@@ -2402,21 +2413,13 @@ impl<'s, K: InfoKind<'s>> OpFront for InfoOp<'_, 's, K> {
         }
     }
 
-    /// The current realm's window, of a member that asked for it
-    /// (`InfoFront::prepare_window`): its context's global, read from the
-    /// isolate now; none if that isn't a window of the DOM's.
     #[inline(always)]
-    fn current_window<'gc>(&mut self, cx: &ApiCx<'_, 'gc>) -> Option<elise::Gc<'gc, Window>> {
-        // Another realm's, found before the operation; else the current
-        // one's, if the member asked.
-        if let Some(global) = self.other_window {
-            return self.no_gc.unwrap::<Window>(cx.gc, global);
-        }
-        if !self.window {
-            return None;
-        }
-        let global = self.no_gc.current_global();
-        self.no_gc.unwrap::<Window>(cx.gc, global)
+    fn current_context<'gc>(
+        &mut self,
+        cx: &ApiCx<'_, 'gc>,
+    ) -> Option<elise::Gc<'gc, dom::ExecutionContext>> {
+        self.realm_window(cx)
+            .map(|window| cx.window_context(window))
     }
 
     #[inline(always)]
@@ -2709,6 +2712,23 @@ impl<'s, K: InfoKind<'s>> OpFront for InfoOp<'_, 's, K> {
 }
 
 impl<'s, K: InfoKind<'s>> InfoOp<'_, 's, K> {
+    /// The window of the realm a member that asked for one runs in
+    /// (`InfoFront::prepare_window`): another realm's found before the
+    /// operation (the incumbent or the entry realm's, or `this`'s relevant
+    /// one), else the current realm's context's global, read from the
+    /// isolate now; none if that isn't a window of the DOM's.
+    #[inline(always)]
+    fn realm_window<'gc>(&mut self, cx: &ApiCx<'_, 'gc>) -> Option<elise::Gc<'gc, Window>> {
+        if let Some(global) = self.other_window {
+            return self.no_gc.unwrap::<Window>(cx.gc, global);
+        }
+        if !self.window {
+            return None;
+        }
+        let global = self.no_gc.current_global();
+        self.no_gc.unwrap::<Window>(cx.gc, global)
+    }
+
     /// As `root_node`, an object of any type.
     #[cold]
     #[inline(never)]

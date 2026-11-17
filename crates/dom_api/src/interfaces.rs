@@ -54,6 +54,7 @@ use crate::{
 };
 
 crate::declare! {
+    #[exposed(Window, Worker)]
     interface EventTarget [type = TargetObject] {
         #[front]
         constructor() = event_target::construct_event_target;
@@ -91,6 +92,7 @@ crate::declare! {
         signal: Option<SignalObject<T::Node>> = None,
     }
 
+    #[exposed(Window, Worker)]
     interface Event [type = dom::Event] {
         attribute r#type: DomString, get = event::event_type;
         attribute target: Option<EventTarget>, get = event::target;
@@ -126,6 +128,7 @@ crate::declare! {
     }
 
     // DOM's: an event with a value of script's.
+    #[exposed(Window, Worker)]
     interface CustomEvent : Event [type = CustomEventObject] {
         #[front]
         constructor(r#type: DomString, eventInitDict?: CustomEventInit) = event::construct_custom_event;
@@ -176,6 +179,7 @@ crate::declare! {
         newURL: String = String::new(),
     }
 
+    #[exposed(Window, Worker)]
     interface MessageEvent : Event [type = MessageEventObject] {
         #[front]
         constructor(r#type: DomString, eventInitDict?: MessageEventInit) = message::construct_message_event;
@@ -216,6 +220,7 @@ crate::declare! {
         targetOrigin: String = "/".to_owned(),
     }
 
+    #[exposed(Window, Worker)]
     interface MessageChannel [type = dom::MessageChannel] {
         #[front]
         constructor() = message::construct_message_channel;
@@ -223,6 +228,7 @@ crate::declare! {
         attribute port2: MessagePort, get = message::port2;
     }
 
+    #[exposed(Window, Worker)]
     interface MessagePort : EventTarget [type = MessagePortObject] {
         method postMessage(message: PortMessage) = message::port_post_message;
         method start() = message::start;
@@ -302,7 +308,7 @@ crate::declare! {
 
     // Its keyframes are script objects (JS's only); no copy constructor.
     interface KeyframeEffect : AnimationEffect [type = dom::KeyframeEffectObject] {
-        #[front]
+        #[window]
         constructor(target: Option<Element>, keyframes: Keyframes, options?: EffectOptions) = effect::construct;
         attribute target: Option<Element>, get = effect::target, set = effect::set_target;
         attribute pseudoElement: Option<DomString>, get = effect::pseudo_element, set = effect::set_pseudo_element;
@@ -312,7 +318,7 @@ crate::declare! {
     }
 
     interface Animation : EventTarget [type = AnimationObject] {
-        #[front]
+        #[window]
         constructor(effect?: Option<KeyframeEffect>, timeline?: TimelineArg) = animation::construct;
         attribute id: DomString, get = animation::id, set = animation::set_id;
         attribute effect: Option<KeyframeEffect>, get = animation::effect, set = animation::set_effect;
@@ -714,6 +720,7 @@ crate::declare! {
     }
 
     // No constructor yet: its dictionary has an `any` member.
+    #[exposed(Window, Worker)]
     interface ErrorEvent : Event [type = ErrorEventObject] {
         #[front]
         constructor(r#type: DomString, eventInitDict?: ErrorEventInit) = event::construct_error_event;
@@ -737,6 +744,7 @@ crate::declare! {
     }
 
     // No constructor yet: its dictionary has `any` members.
+    #[exposed(Window, Worker)]
     interface PromiseRejectionEvent : Event [type = PromiseRejectionEventObject] {
         attribute promise: Any, get = event::promise;
         attribute reason: Any, get = event::reason;
@@ -1025,7 +1033,7 @@ crate::declare! {
         #[front]
         method fetch(input: RequestInfo, init?: RequestInit) -> PendingPromise<Response> = fetch::fetch;
         // HTML's window post message steps (`message.rs`).
-        #[front]
+        #[window]
         #[cross_origin]
         method postMessage(message: WindowMessage) = message::window_post_message;
         // HTML's: the value serialized with its options' transfer list (the
@@ -1152,6 +1160,7 @@ crate::declare! {
     }
 
     // DOM's: a controller makes its signal and aborts it.
+    #[exposed(Window, Worker)]
     interface AbortController [type = dom::AbortController] {
         #[front]
         constructor() = abort::construct;
@@ -1162,6 +1171,7 @@ crate::declare! {
     }
 
     // Its static members first, as in Blink's `abort_signal.idl`.
+    #[exposed(Window, Worker)]
     interface AbortSignal : EventTarget [type = AbortSignalObject] {
         #[static_method]
         #[front]
@@ -1180,6 +1190,7 @@ crate::declare! {
     }
 
     // Fetch's: a header list and its guard, its pairs sorted and combined.
+    #[exposed(Window, Worker)]
     interface Headers [type = dom::Headers] {
         constructor(init?: HeaderPairs) = headers::construct;
         method append(name: ByteString, value: ByteString) = headers::append;
@@ -1223,6 +1234,7 @@ crate::declare! {
 
     // Fetch's; the body mixin's members after its own, as in Blink's
     // `request.idl`.
+    #[exposed(Window, Worker)]
     interface Request [type = dom::Request] {
         #[front]
         constructor(input: RequestInfo, init?: RequestInit) = request::construct;
@@ -1251,6 +1263,7 @@ crate::declare! {
         method text() -> PromiseOfString = request::text;
     }
 
+    #[exposed(Window, Worker)]
     interface Response [type = dom::Response] {
         #[front]
         constructor(body?: NullableBody, init?: ResponseInit) = response::construct;
@@ -1306,6 +1319,7 @@ crate::declare! {
     // the desktop (not `type`, `downlinkMax` and `ontypechange`, which it
     // has on Android and ChromeOS only), `onchange` first as in Blink's
     // `network_information.idl`.
+    #[exposed(Window, Worker)]
     interface NetworkInformation : EventTarget [type = NetworkInformationObject] {
         #[front]
         attribute onchange: EventHandler, get = handlers::port_handler::<{ event_type::CHANGE }>, set = handlers::set_port_handler::<_, { event_type::CHANGE }>;
@@ -1388,6 +1402,7 @@ crate::declare! {
 
     // HR-Time's, a window's: an event target of its own, on its document's
     // timeline; Performance Timeline's and User Timing's partials.
+    #[exposed(Window, Worker)]
     interface Performance : EventTarget [type = PerformanceObject] {
         method now() -> f64 = performance::now;
         attribute timeOrigin: f64, get = performance::time_origin;
@@ -1404,6 +1419,7 @@ crate::declare! {
     }
 
     // One `dom` type for every kind, as `Event` is.
+    #[exposed(Window, Worker)]
     interface PerformanceEntry [type = PerformanceEntryObject] {
         attribute name: DomString, get = performance::name;
         attribute entryType: DomString, get = performance::entry_type;
@@ -1411,6 +1427,7 @@ crate::declare! {
         attribute duration: f64, get = performance::duration;
     }
 
+    #[exposed(Window, Worker)]
     interface PerformanceMark : PerformanceEntry [type = PerformanceMarkObject] {
         #[front]
         constructor(markName: DomString, markOptions?: PerformanceMarkOptions) = performance::construct_mark;
@@ -1418,6 +1435,7 @@ crate::declare! {
         attribute detail: EntryDetail, get = performance::detail;
     }
 
+    #[exposed(Window, Worker)]
     interface PerformanceMeasure : PerformanceEntry [type = PerformanceMeasureObject] {
         attribute detail: EntryDetail, get = performance::detail;
     }
@@ -1438,6 +1456,7 @@ crate::declare! {
 
     // JS's only (a guest reads the timeline). The methods in Chrome's
     // order.
+    #[exposed(Window, Worker)]
     interface PerformanceObserver [type = dom::PerformanceObserver] {
         #[front]
         constructor(callback: PerformanceObserverCallback) = performance::construct_observer;
@@ -1456,6 +1475,7 @@ crate::declare! {
     }
 
     // What an observer delivers, in `startTime` order.
+    #[exposed(Window, Worker)]
     interface PerformanceObserverEntryList [type = dom::PerformanceObserverEntryList] {
         method getEntries() -> Sequence<PerformanceEntry> = performance::list_entries;
         method getEntriesByName(name: DomString, r#type?: OptionalString) -> Sequence<PerformanceEntry> = performance::list_entries_by_name;
@@ -1464,6 +1484,7 @@ crate::declare! {
 
     // A navigation entry's times (machopo has no resource entries). The members
     // in Chrome 152's order; the service worker's are 0 or empty.
+    #[exposed(Window, Worker)]
     interface PerformanceResourceTiming : PerformanceEntry [type = NavigationTimingObject] {
         attribute initiatorType: DomString, get = performance::initiator_type;
         attribute nextHopProtocol: DomString, get = performance::next_hop_protocol;
@@ -1519,6 +1540,7 @@ crate::declare! {
     // None is ever made: machopo has no server timing (`serverTiming` is
     // empty) and no back-forward cache (`notRestoredReasons` is null). The
     // interfaces are there, as Chrome's.
+    #[exposed(Window, Worker)]
     interface PerformanceServerTiming [type = NoObject] {}
 
     interface NotRestoredReasons [type = NoObject] {}
@@ -1566,6 +1588,7 @@ crate::declare! {
     }
 
     // URL Standard's API. `toString()` is the stringifier.
+    #[exposed(Window, Worker)]
     interface URL [type = dom::Url] {
         constructor(url: DomString, base?: OptionalString) = url::construct;
         #[static_method]
@@ -1596,6 +1619,7 @@ crate::declare! {
     }
 
     // WebIDL's `iterable<USVString, USVString>`: its pairs (`#[pairs]`).
+    #[exposed(Window, Worker)]
     interface URLSearchParams [type = dom::UrlSearchParams] {
         constructor(init?: StringPairs) = url::construct_search_params;
         attribute size: u32, get = url::size;
@@ -1612,6 +1636,7 @@ crate::declare! {
     }
 
     // WebCrypto's, without `subtle`.
+    #[exposed(Window, Worker)]
     interface Crypto [type = dom::Crypto] {
         method getRandomValues(array: ArrayView) -> FilledView = crypto::get_random_values;
         method randomUUID() -> DomString = crypto::random_uuid;
@@ -1711,10 +1736,10 @@ crate::declare! {
 
     interface Document : Node [Document] {
         // An XML document (DOM's `new Document()`).
-        #[front]
+        #[window]
         constructor() = document::construct_document;
         #[static_method]
-        #[front]
+        #[window]
         method parseHTMLUnsafe(html: DomString) -> NewObject<Document> = markup::parse_html_unsafe;
         attribute implementation: DOMImplementation, get = document::implementation;
         attribute URL: DomString, get = document::url;
@@ -2024,7 +2049,7 @@ crate::declare! {
     }
 
     interface DocumentFragment : Node [DocumentFragment] {
-        #[front]
+        #[window]
         constructor() = document::construct_document_fragment;
 
         attribute children: HTMLCollection, get = parent_node::children;
@@ -2428,6 +2453,7 @@ crate::declare! {
 
         // `[HTMLConstructor]`: a custom element's `super()`.
         #[front]
+        #[window]
         constructor() = custom_elements::html_constructor;
 
         // `HTMLOrSVGElement`'s focus, which dispatches the focus events.
@@ -3029,7 +3055,7 @@ crate::declare! {
     }
 
     interface HTMLImageElement : HTMLElement [element html img] {
-        #[front]
+        #[window]
         #[legacy_factory]
         method Image(width?: Option<u32>, height?: Option<u32>) -> HTMLImageElement = image::construct_image;
         #[ce_reactions]
@@ -3314,7 +3340,7 @@ crate::declare! {
     }
 
     interface HTMLOptionElement : HTMLElement [element html option] {
-        #[front]
+        #[window]
         #[legacy_factory]
         method Option(
             text?: EmptyStringDefault,
@@ -3488,7 +3514,7 @@ crate::declare! {
 
     // With the legacy `rules`, `addRule` and `removeRule`.
     interface CSSStyleSheet : StyleSheet [type = dom::CssStyleSheet] {
-        #[front]
+        #[window]
         constructor(options?: CSSStyleSheetInit) = css_style_sheet::construct;
         attribute ownerRule: Option<CSSRule>, get = css_style_sheet::owner_rule;
         attribute cssRules: CSSRuleList, get = css_style_sheet::css_rules;
@@ -3786,6 +3812,7 @@ crate::declare! {
     // yet.
     interface IntersectionObserver [type = dom::IntersectionObserver] {
         #[front]
+        #[window]
         constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInitArg) = intersection_observer::construct;
         attribute root: Option<Node>, get = intersection_observer::root;
         attribute rootMargin: DomString, get = intersection_observer::root_margin;
@@ -3814,6 +3841,7 @@ crate::declare! {
     // Resize Observer's (Blink's `core/resize_observer`).
     interface ResizeObserver [type = dom::ResizeObserver] {
         #[front]
+        #[window]
         constructor(callback: ResizeObserverCallback) = resize_observer::construct;
         method observe(target: Element, options?: ResizeObserverOptions) = resize_observer::observe;
         method unobserve(target: Element) = resize_observer::unobserve;
@@ -4044,6 +4072,7 @@ crate::declare! {
     }
 
     // `colorStop`'s offset a (finite) `double`.
+    #[exposed(Window, Worker)]
     interface CanvasGradient [type = dom::CanvasGradient] {
         method addColorStop(offset: f64, color: DomString) = canvas::add_color_stop;
     }
@@ -4405,6 +4434,7 @@ crate::declare! {
 
     // `measureText`'s numbers as they were; no `emHeightAscent` and the
     // other experimental ones.
+    #[exposed(Window, Worker)]
     interface TextMetrics [type = dom::TextMetrics] {
         attribute width: f64, get = canvas::text_metrics::width;
         attribute actualBoundingBoxLeft: f64, get = canvas::text_metrics::actual_bounding_box_left;
@@ -4421,6 +4451,7 @@ crate::declare! {
     // A path its `CanvasPath` members build (the context's, the same
     // functions); no `DOMMatrix` for `addPath`'s transform (a
     // `DOMMatrix2DInit`).
+    #[exposed(Window, Worker)]
     interface Path2D [type = dom::Path2d] {
         constructor(path?: OptionalPath2dOrString) = canvas::construct_path_2d;
         method addPath(path: Path2D, transform?: DOMMatrix2DInit) = canvas::add_path;
@@ -4477,12 +4508,14 @@ crate::declare! {
     }
 
     // Its image as it was when made.
+    #[exposed(Window, Worker)]
     interface CanvasPattern [type = dom::CanvasPattern] {
         method setTransform(transform?: DOMMatrix2DInit) = canvas::set_pattern_transform;
     }
 
     // File API's: bytes that never change. `size` a WebIDL `unsigned long
     // long`, given as a `double` (no blob is past 2^53 bytes); no `stream()`.
+    #[exposed(Window, Worker)]
     interface Blob [type = dom::Blob] {
         constructor(blobParts?: BlobParts, options?: BlobPropertyBag) = blob::construct;
         attribute size: f64, get = blob::size;
@@ -4500,6 +4533,7 @@ crate::declare! {
         method bytes() -> PromiseOfAny = blob::bytes;
     }
 
+    #[exposed(Window, Worker)]
     interface File : Blob [type = FileObject] {
         #[front]
         constructor(fileBits: BlobParts, fileName: DomString, options?: FilePropertyBag) = file_reader::construct_file;
@@ -4517,6 +4551,7 @@ crate::declare! {
     }
 
     // Its members in Chrome's order.
+    #[exposed(Window, Worker)]
     interface FileReader : EventTarget [type = FileReaderObject] {
         #[front]
         constructor() = file_reader::construct;
@@ -4547,6 +4582,7 @@ crate::declare! {
         method readAsText(blob: Blob, encoding?: OptionalString) = file_reader::read_as_text;
     }
 
+    #[exposed(Window, Worker)]
     interface ProgressEvent : Event [type = ProgressEventObject] {
         #[front]
         constructor(r#type: DomString, eventInitDict?: ProgressEventInit) = file_reader::construct_progress_event;
@@ -4573,6 +4609,7 @@ crate::declare! {
 
     // Its pixels the engine's `Uint8ClampedArray`, the same each time; no
     // `pixelFormat`.
+    #[exposed(Window, Worker)]
     interface ImageData [type = dom::ImageData] {
         constructor(sw: u32, sh: u32, settings?: ImageDataSettings) = canvas::construct_image_data;
         #[front]
@@ -4612,6 +4649,7 @@ crate::declare! {
 
     // Geometry's rects: what the layout gives script. No constructors or
     // `toJSON()` yet.
+    #[exposed(Window, Worker)]
     interface DOMRectReadOnly [type = dom::DomRect] {
         constructor(
             x?: OptionalUnrestrictedDouble,
@@ -4633,6 +4671,7 @@ crate::declare! {
     }
 
     // Its own `x`, `y`, `width` and `height` are settable.
+    #[exposed(Window, Worker)]
     interface DOMRect : DOMRectReadOnly [type = dom::DomRect] {
         constructor(
             x?: OptionalUnrestrictedDouble,
@@ -4689,7 +4728,7 @@ crate::declare! {
     }
 
     interface Text : CharacterData [Text] {
-        #[front]
+        #[window]
         constructor(data?: OptionalString) = character_data::construct_text;
         method splitText(offset: u32) -> NewObject<Text> = character_data::split_text;
         attribute wholeText: DomString, get = character_data::whole_text;
@@ -4731,7 +4770,7 @@ crate::declare! {
     }
 
     interface DOMParser [type = dom::DomParser] {
-        #[front]
+        #[window]
         constructor() = attr::construct_dom_parser;
         // `DOMParserSupportedType`, as a string (`attr::parse_from_string`).
         method parseFromString(string: DomString, r#type: DomString) -> Document = attr::parse_from_string;
@@ -4752,7 +4791,7 @@ crate::declare! {
     }
 
     interface Range : AbstractRange [type = dom::Range] {
-        #[front]
+        #[window]
         constructor() = range::construct;
         const START_TO_START: u32 = 0;
         const START_TO_END: u32 = 1;
@@ -4902,7 +4941,7 @@ crate::declare! {
     interface XMLDocument : Document [] {}
 
     interface Comment : CharacterData [Comment] {
-        #[front]
+        #[window]
         constructor(data?: OptionalString) = character_data::construct_comment;
     }
 

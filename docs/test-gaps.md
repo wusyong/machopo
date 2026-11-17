@@ -68,6 +68,7 @@
 | `gfx::Path` 的弧、圓角矩形和 transform 新加的情況（`gfx` 的 `path_shapes.rs`） | 現有的 108 個情況逐位比對 Skia 還在時存下來的結果（`path_shapes.golden`，`shapes_are_skias_bit_for_bit`）；workspace 裡沒有 Skia 了，新的情況沒有東西可以對 | 審查；現有的情況守著公式 | 新的情況對 Chromium 的 `SkPathBuilder` 手動算一次、加進那份檔案 |
 | Vello 在最後 render 進 canvas 的 bitmap 途中 panic 時，bitmap 寫到一半（`raster` 的 `draw_into`） | 沒有會在 render 途中 panic 的內容；測試裡的 panic 都在建場景時，bitmap 還沒被動到 | 審查：`guarded` 接住之後不動 bitmap，只補不透明的 alpha | 有實例時加測試；要保證原樣就得每次 flush 先備份 bitmap |
 | raster 用的 Vello 缺的功能裡，API 根本不存在的那幾項（`docs/render-gaps.md` 第一張表裡沒有「上游還缺」的測試的） | 沒有東西可以呼叫，寫不出「上游補上就失敗」的測試 | 升級 Vello 時逐列對那張表 | 上游加了 API 之後補測試，或拿掉補的那一段 |
+| `dom` 沒有「給執行環境、拿回它的 window 或文件」的公開函式（`dom` 的 `execution_context.rs`：指回 global 的欄位和 `context_window`、`context_document` 只在 crate 裡），所以 worker 也有的 interface 的成員只拿得到執行環境 | Rust 只能用可見性擋，沒有檢查「哪些公開函式回傳 `Window` 或文件」的工具；新加一個公開的就破了，測試不會失敗 | 審查；`OpFront` 沒有給 window 的方法、`#[window]` 只能寫在只有 `Window` 的 interface 上，這兩條由型別和 `declare!` 的檢查守著 | 有了只在 worker 裡跑的程式之後，`ApiCx` 照 realm 的種類分型別，讓這件事由型別擋 |
 
 ## 只做過手動確認
 

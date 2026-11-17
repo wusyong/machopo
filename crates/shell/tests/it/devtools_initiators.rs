@@ -259,11 +259,23 @@ fn script_asks_with_its_stack() {
     assert_eq!(functions(&attached["stack"])[0], "addFrame", "{attached}");
 
     // A stack that asked for nothing new (an image it has) doesn't stay
-    // for the next time the element asks.
+    // for the next time the element asks, in a later pass of the
+    // renderer's loop: the stacks no load took go as a pass ends. (Two
+    // tasks in one pass, as when the next call comes on a busy machine
+    // before the pass is over, keep the first's: an animation frame, after
+    // the pass, between them.)
     evaluate(
         &mut page,
         "function again() { document.querySelector('img').src = '/x.png'; } again(); 0",
         None,
+    );
+    page.call(
+        None,
+        "Runtime.evaluate",
+        json!({
+            "expression": "new Promise(resolve => requestAnimationFrame(resolve))",
+            "awaitPromise": true,
+        }),
     );
     evaluate(
         &mut page,

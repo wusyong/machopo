@@ -21,32 +21,29 @@ pub enum BlobRead {
 }
 
 impl<'gc> Cx<'_, 'gc> {
-    /// A blob read of `window`'s realm (File API's "read the blob" of
+    /// A blob read of `context`'s realm (File API's "read the blob" of
     /// `text()`, `arrayBuffer()`, `bytes()`): its promise, of the number
-    /// this gives, resolved with `read` in a task of `window`'s (Blink's
+    /// this gives, resolved with `read` in a task of `context`'s (Blink's
     /// `FileReaderLoader` answers in a task), after the microtasks queued
     /// before it.
-    pub fn queue_blob_read(&self, window: Gc<'gc, crate::Window>, read: BlobRead) -> u64 {
+    pub fn queue_blob_read(
+        &self,
+        context: Gc<'gc, crate::ExecutionContext>,
+        read: BlobRead,
+    ) -> u64 {
         let promise = self.new_promise_number();
-        let cell = window.into_ref().blob_reads.get();
+        let cell = context.into_ref().blob_reads.get();
         let mut reads = cell.take();
         reads.push((promise, read));
         cell.set(reads);
-        let document = self.window_document(window);
-        self.push_element_task(
-            window,
-            document,
-            crate::names::NONE,
-            crate::window::BLOB_READ,
-            promise,
-        );
+        self.push_context_task(context, crate::window::BLOB_READ, promise);
         promise
     }
 
     /// The blob read whose promise is numbered `promise`, taken (its task
     /// runs).
     pub fn take_blob_read(&self, window: Gc<'gc, crate::Window>, promise: u64) -> Option<BlobRead> {
-        let cell = window.into_ref().blob_reads.get();
+        let cell = self.window_context(window).into_ref().blob_reads.get();
         let mut reads = cell.take();
         let index = reads.iter().position(|(number, _)| *number == promise);
         let read = index.map(|index| reads.remove(index).1);

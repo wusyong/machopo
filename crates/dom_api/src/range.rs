@@ -12,7 +12,7 @@ use elise::Gc;
 use gfx::RectF;
 
 use crate::exception::ExceptionName;
-use crate::typed::{DomStr, OpFront, StaticRangeInit};
+use crate::typed::{DomStr, StaticRangeInit};
 use crate::{ApiCx, ApiError};
 
 fn invalid_node_type(message: &str) -> ApiError {
@@ -102,11 +102,11 @@ pub(crate) fn create_range<'gc>(
 }
 
 /// `new Range()`: collapsed at the start of the realm's document.
-pub(crate) fn construct<'gc, O: OpFront>(
-    op: &mut O,
+pub(crate) fn construct<'gc>(
     cx: &ApiCx<'_, 'gc>,
+    window: Option<Gc<'gc, dom::Window>>,
 ) -> Result<Gc<'gc, Range>, ApiError> {
-    let document = crate::character_data::realm_document(op, cx)?;
+    let document = crate::character_data::realm_document(cx, window)?;
     Ok(cx.create_range((document, 0), (document, 0)))
 }
 

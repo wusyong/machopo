@@ -29,13 +29,13 @@ pub(crate) fn construct<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
 ) -> Result<Gc<'gc, EventTargetImpl>, ApiError> {
-    let window = op.current_window(cx).ok_or_else(|| {
+    let context = op.current_context(cx).ok_or_else(|| {
         ApiError::Dom(DomException {
             name: ExceptionName::InvalidState,
             message: "no realm to make the FileReader in".to_owned(),
         })
     })?;
-    Ok(cx.create_file_reader(window))
+    Ok(cx.create_file_reader(context))
 }
 
 /// `readyState`.
@@ -207,7 +207,7 @@ fn fire<H: ScriptHost>(
                 composed: false,
                 trusted: true,
             },
-            cx.target_window(target),
+            cx.target_context(target),
         );
         let (loaded, total) = read.unwrap_or_default();
         #[expect(
@@ -377,7 +377,7 @@ pub(crate) fn construct_progress_event<'gc, O: OpFront>(
             composed: init.composed,
             trusted: false,
         },
-        op.current_window(cx),
+        op.current_context(cx),
     );
     cx.set_progress_event_data(event, init.lengthComputable, init.loaded, init.total);
     Ok(event)

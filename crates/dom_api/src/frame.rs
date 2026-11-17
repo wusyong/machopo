@@ -523,38 +523,17 @@ pub fn documents_in_tree_order<'gc>(
     documents
 }
 
-/// The document whose URL gives `document` its origin: itself, or for an
-/// `about:` document of a child frame (its initial `about:blank`, an
-/// `about:srcdoc`), its iframe's document's, as its creator's (HTML's).
-fn origin_document<'gc>(cx: &dom::Cx<'_, 'gc>, document: dom::NodeRef<'gc>) -> dom::NodeRef<'gc> {
-    let mut at = document;
-    // A frame tree is fewer than u16::MAX deep.
-    for _ in 0..u16::MAX {
-        let about = cx
-            .document_url(at)
-            .and_then(|url| url::Url::parse(&url.to_str()).ok())
-            .is_some_and(|url| url.scheme() == "about");
-        match cx.frame_owner(at) {
-            Some(owner) if about => at = cx.document_of(owner),
-            _ => break,
-        }
-    }
-    at
-}
-
-/// `document`'s origin, as its URL's (`origin_document`'s): none without
-/// one.
+/// `document`'s origin, as its URL's (`dom`'s `document_origin`): none
+/// without one.
 pub fn origin<'gc>(cx: &dom::Cx<'_, 'gc>, document: dom::NodeRef<'gc>) -> Option<url::Origin> {
-    cx.document_url(origin_document(cx, document))
-        .and_then(|url| url::Url::parse(&url.to_str()).ok())
-        .map(|url| url.origin())
+    cx.document_origin(document)
 }
 
 /// Whether `a` and `b` are of the same origin: their origins' documents
 /// (`origin_document`) the same one, or their URLs' origins the same tuple
 /// (an opaque one is no other document's).
 pub fn same_origin<'gc>(cx: &dom::Cx<'_, 'gc>, a: dom::NodeRef<'gc>, b: dom::NodeRef<'gc>) -> bool {
-    let (a, b) = (origin_document(cx, a), origin_document(cx, b));
+    let (a, b) = (cx.origin_document(a), cx.origin_document(b));
     if elise::Gc::ptr_eq(a, b) {
         return true;
     }

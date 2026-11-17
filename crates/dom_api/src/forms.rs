@@ -243,7 +243,11 @@ pub(crate) fn reset_form<H: ScriptHost>(host: &mut H, form: &NodeRoot) {
         };
         Persistent::new(
             cx.gc,
-            cx.create_event(dom::names::event::RESET, flags, window),
+            cx.create_event(
+                dom::names::event::RESET,
+                flags,
+                window.map(|window| cx.window_context(window)),
+            ),
         )
     });
     if dispatch(host, &target, &event) {

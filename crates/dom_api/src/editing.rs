@@ -202,7 +202,7 @@ fn fire_ui<H: ScriptHost>(
                 composed: true,
                 trusted: true,
             },
-            window,
+            window.map(|window| cx.window_context(window)),
         );
         data(cx, event, window);
         Persistent::new(cx.gc, event)
@@ -273,7 +273,7 @@ fn fire_plain<H: ScriptHost>(host: &mut H, element: &NodeRoot, event_type: NameI
                 composed,
                 trusted: true,
             },
-            window,
+            window.map(|window| cx.window_context(window)),
         );
         Persistent::new(cx.gc, event)
     });

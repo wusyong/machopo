@@ -1,7 +1,8 @@
 # RFC 0103：worker 的執行環境：Window 以外的 global，和 dedicated worker
 
 - 開始日期：2026-11-17
-- 狀態：📝 草稿
+- 狀態：🚧 已排程：2026-11-17
+- 進度：`progress.md`
 - 細節：`details.md`
 
 ## 摘要
@@ -69,18 +70,18 @@ worker 的 script 在另一條 thread 上跑：它算很久的時候，頁面照
 
 ### 執行環境（`dom`）
 
-`dom` 多一個 GC 型別，暫名 `GlobalScope`（Blink 的 `ExecutionContext`），放不需要文件的狀態；`Window` 拿著一個，worker 的 global（暫名 `WorkerGlobalScope`）也拿著一個。`Window` 現在的欄位怎麼分，見 `details.md` 的「`Window` 的狀態分到哪裡」。task 的挑選（`Cx::next_task`）、timer 的到期、訊息的佇列改成對執行環境做。
+`dom` 多一個 GC 型別 `ExecutionContext`（Blink 的同名類別；那邊是 `LocalDOMWindow` 和 worker 的 global 繼承它，這裡是兩者各拿著一個），放不需要文件的狀態；`Window` 拿著一個，worker 的 global（暫名 `WorkerGlobalScope`）也拿著一個。`Window` 現在的欄位怎麼分，見 `details.md` 的「`Window` 的狀態分到哪裡」。task 的挑選（`Cx::next_task`）、timer 的到期、訊息的佇列改成對執行環境做。
 
 ### 宣告表的 exposed（`dom_api`）
 
 `declare!` 的 interface 多一個屬性，寫它在哪些 global 有（WebIDL 的 `[Exposed]`：`Window`、`Worker`、`DedicatedWorker`），沒寫的只在 Window 有；個別的成員需要時也可以寫。產生的 `InterfaceDesc` 帶著它。`DedicatedWorkerGlobalScope`、`WorkerGlobalScope`、`Worker`、`WorkerNavigator`、`WorkerLocation` 是表上新的 interface。
 
-成員拿不到 window 由型別保證（「已決定的事項」第 2 條）。怎麼寫是 2026-11-17 的看法，1a 的第一步用原型確認：
+成員拿不到 window 由型別保證（「已決定的事項」第 2 條）。2026-11-17 用原型確認了下面的寫法（`details.md` 的「2A 的原型」）：
 
 - 現在成員的函式經過 front 的操作那一側拿 window：`OpFront::current_window`（`crates/dom_api/src/typed.rs`），表上標了 `#[front]` 的成員都拿得到（`crates/dom_api/src/interfaces.rs` 有 470 個），標了 `#[realm]` 的拿到的是 `this` 的 relevant realm 的（3 個，`Blob` 的讀取）。
-- 改成：`OpFront` 給成員的只有執行環境（現在的 realm 的，或 `#[realm]` 時 `this` 的 relevant realm 的）。要 window 的成員在表上另外標明（暫名 `#[window]`），由 `declare!` 產生的程式拿 window、當成參數交給它的函式；成員的函式自己沒有辦法向 front 要 window。
+- 改成：`OpFront` 給成員的只有執行環境（現在的 realm 的，或 `#[realm]` 時 `this` 的 relevant realm 的）。要 window 的成員在表上標 `#[window]`，由 `declare!` 產生的程式拿 window（`Front::op_window`）、當成參數交給它的函式（`Option<Gc<Window>>`，接在 `ApiCx` 後面）。`op_window` 是 `Front` 的 associated function，參數是 `&mut Self::Op`：產生的程式對 front 的型別是泛型的，叫得到它；成員的函式只拿到 `O: OpFront`，寫不出 front 的型別，叫它是編譯錯誤（`E0283`）。
 - `#[window]` 寫在 exposed 不只 Window 的 interface 的成員上時，`declare!` 報錯，指到表上那一行。「放錯」因此是表的編譯錯誤，不是執行時的例外。
-- 另一個寫法是把 `OpFront` 拆成兩個 trait、讓 `declare!` 照 exposed 給不同的型別。它要替每個 front 多一個型別或一層轉交（`OpFront` 的實作有四個：`dom_js` 的、`dom_wasm` 的和兩個測試用的），所以看法是用上面那個；原型發現上面那個擋不住時再比。
+- 沒有選的寫法是把 `OpFront` 拆成兩個 trait、讓 `declare!` 照 exposed 給不同的型別：要替每個 front 多一個型別或一層轉交（`OpFront` 的實作有四個：`dom_js` 的、`dom_wasm` 的和兩個測試用的）。上面的寫法只動巨集和 `Front`，原型確認擋得住，就不用它。
 
 ### global 照表建（`dom_js`）
 
@@ -139,7 +140,7 @@ worker 的主 script 和 `importScripts()` 的 script 經過 Browser 的 `net` �
 
 | 做法 | 優點 | 缺點 |
 | --- | --- | --- |
-| A：分出共用的 `GlobalScope`，`Window` 和 worker 的 global 各拿一個（Blink 的 `ExecutionContext`，那邊是兩者繼承它） | 一份實作；成員的函式從型別就看得出要不要文件 | 重構的範圍最大 |
+| A：分出共用的部分（`ExecutionContext`），`Window` 和 worker 的 global 各拿一個（Blink 的 `ExecutionContext`，那邊是兩者繼承它） | 一份實作；成員的函式從型別就看得出要不要文件 | 重構的範圍最大 |
 | B：worker 的 global 是沒有文件的 `Window` | 改得最少 | `Window` 的每個成員都要想「沒有文件怎麼辦」；型別擋不住在 worker 裡碰 `document` |
 | C：另寫一個 `WorkerGlobalScope`，timer、訊息各自一份 | 不動現有的 `Window` | 兩份實作會走偏；`current_window` 的每一處都要分兩種情況 |
 
@@ -185,9 +186,13 @@ Firefox 和 Servo 也是每個 worker 一條 thread、自己的 JS runtime（這
 
 2026-11-17：
 
-1. **執行環境從 `Window` 分出來，兩種 global 各拿著一個共用的部分**（「理由和其他做法」的 A）。`dom` 多一個 GC 型別（暫名 `GlobalScope`），放不需要文件的狀態和它們的操作；`Window` 和 worker 的 global 各拿著一個。不選 B（worker 的 global 是沒有文件的 `Window`）：`Window` 的每個成員都要處理沒有文件的情形，型別擋不住在 worker 裡碰文件。不選 C（另寫一個 worker 的 global，timer 和訊息各自一份）：兩份實作要一起維護，`current_window` 的每一處都要分兩種情況。理由：這是唯一讓「一個 API 在 worker 能不能用」由型別決定的做法，也和 Blink 的分法一樣（`ExecutionContext`，那邊是兩者繼承它）；代價是 1a 的重構最大。
+1. **執行環境從 `Window` 分出來，兩種 global 各拿著一個共用的部分**（「理由和其他做法」的 A）。`dom` 多一個 GC 型別，放不需要文件的狀態和它們的操作；`Window` 和 worker 的 global 各拿著一個。不選 B（worker 的 global 是沒有文件的 `Window`）：`Window` 的每個成員都要處理沒有文件的情形，型別擋不住在 worker 裡碰文件。不選 C（另寫一個 worker 的 global，timer 和訊息各自一份）：兩份實作要一起維護，`current_window` 的每一處都要分兩種情況。理由：這是唯一讓「一個 API 在 worker 能不能用」由型別決定的做法，也和 Blink 的分法一樣（`ExecutionContext`，那邊是兩者繼承它）；代價是 1a 的重構最大。
 2. **worker 也有的 interface 的成員拿不到 window，由型別保證**（「待決定」原本的第 2 條的 2A）。exposed 寫在宣告表的 interface 上，個別的成員需要時也可以寫；front 給成員的介面分成兩層，都有的拿執行環境，只有 Window 的 interface 的成員拿得到 window，`declare!` 照 exposed 決定每個成員拿到哪一層，放錯是編譯錯誤。不選 2B（只在執行時檢查，Blink 的 `DynamicTo<LocalDOMWindow>`）：放錯要在 worker 裡跑到那一行才知道。2C（2B 加上掃過宣告表的測試）是退路：1a 的原型做不出合理的寫法時用它，那時回來改這一條。
 3. **1a 做完先自己 merge 回 `main`**，不等 1b（`rfcs/README.md` 的「流程」的階段的 merge）。1a 是重構、行為不變；merge 之後新的 API 馬上照新的規則寫，和其他 DOM 的工作衝突的時間最短。不選「等 1b 一起」：branch 活得久，期間每個新加的 API 都要再改一次。代價是 `main` 上有一段時間執行環境分出來了、還沒有第二種 global 在用。
+4. **執行環境的型別叫 `ExecutionContext`**（2026-11-17），Blink 的名字（`CLAUDE.md`：型別和模組盡量對應 Chromium 的名字）。不叫草稿裡的暫名 `GlobalScope`：Blink 的 `WorkerGlobalScope` 是 JS 看得到的 global 物件，名字相近容易混。和 Blink 不同的是那邊 `LocalDOMWindow` 和 `WorkerOrWorkletGlobalScope` 繼承它，這裡兩者各拿著一個，註解寫明。
+5. **listener 和 wrapper 留在各自的 event target，不放進執行環境**（2026-11-17）。`Window` 照舊拿著它的 listener 和 JS 的 global 物件（wrapper）；1b 的 worker 的 global 是另一種 event target，自己拿著。和 Blink 一樣：listener 在 `EventTarget` 的 `EventTargetData` 裡，wrapper 是 `EventTarget` 的（它是 `ScriptWrappable`），`ExecutionContext` 兩者都沒有；machopo 的節點、`Window`、`EventTargetImpl` 已經各自拿著自己的 listener。不選放進執行環境：listener 是 `window` 這個物件的，放到環境上讓 global 變成 target 裡的特例；執行環境不是 JS 看得到的物件，沒有 wrapper 可放（Blink 的網頁和擴充功能的 script 共用一個 `ExecutionContext`、各有自己的 global）。非節點的 target 共用一個放 listener 的型別（Blink 的 `EventTargetData`）留到 1b 加 worker 的 global 時再看。
+6. **執行環境指回它的 global，由 `dom` 回答從 global 來的值**（2026-11-17）。base URL、origin 這類從 window 的文件算出來的值，由 `dom` 照執行環境的 global 回答（`context_base_url`、`context_origin`；1b 加上 worker 的 global）。指回 global 的欄位只在 `dom` 裡面用，沒有「給一個執行環境、拿回 window 或它的文件」的公開函式；算 origin 的邏輯（`about:` 的文件照它的 iframe 的文件）跟著從 `dom_api` 搬進 `dom`。和 Blink 一樣：`ExecutionContext` 的 `BaseURL()`、`GetSecurityOrigin()` 是 virtual，`LocalDOMWindow` 從它的文件回答。不選「執行環境自己存一份 URL 和 origin」：base URL 隨 `<base>` 改，每個改的地方都要記得同步。
+7. **從物件找 window 的 `dom` 函式是執行時檢查**（2026-11-17）。`dom` 本來就有從物件找到 window 的公開函式（`target_window`、`window_of(document_of(node))`），engine 建 wrapper 時也靠它們找 realm（`dom_api::realm_document`）；物件改記執行環境之後，`target_window` 在 `dom` 裡面經過執行環境找回 window，在 worker 的物件上回傳沒有。所以第 2 條由型別擋住的是「成員向 front 要現在的 realm 的 window」這條路，從物件找 window 是執行時檢查，和 Blink 的 `DynamicTo<LocalDOMWindow>(context)` 一樣。不選「改得更嚴」（engine 改用執行環境找 realm、這類函式拆成 window 才有和 worker 也有的兩組）：從節點出發的路（`window_of(document_of(node))`）照樣擋不住，要完全擋住得把 `dom` 的 API 照 realm 的種類拆開（「之後的可能」）。而且 worker 也有的成員在 window 的 realm 裡本來就該碰到 window（`dispatchEvent` 的路徑經過 window），兩邊都跑的程式只能在執行時分辨。
 
 ## 待決定
 
@@ -215,6 +220,8 @@ Firefox 和 Servo 也是每個 worker 一條 thread、自己的 JS runtime（這
 - **service worker**：要攔截網路請求，還要先有 cookie、HTTP cache 和持久的儲存；另一份 RFC，排在那些之後。
 - **worklet**（`AudioWorklet`、CSS 的 paint worklet）、`OffscreenCanvas`、worker 的 DevTools session、`FileReaderSync`。
 - **wasm 文件的 worker**。
+
+- **realm 的種類寫在型別上**：`ApiCx`（和它底下的 `dom::Cx`）多一個型別參數，說它是 window 的 realm、worker 的 realm，或兩者都可能；window 才有的 `dom` 函式（`window_of`、`target_window`、文件的）只在 window 的那一型上，`declare!` 照 exposed 給成員哪一型。只在 worker 裡跑的程式因此在編譯時碰不到 window；兩邊都跑的程式照樣經過回傳 `Option` 的函式，在執行時分辨（「已決定的事項」第 7 條）。`dom_api` 幾乎每個成員的簽名都會動到，要等 1b 之後有只在 worker 裡跑的程式時才有意義；另一份 RFC。Blink 和 Servo 都是執行時檢查（`DynamicTo<LocalDOMWindow>`、`GlobalScope::downcast::<Window>()`）。
 
 ### 架構上可能要先做的事（2026-11-17 的評估）
 

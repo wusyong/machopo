@@ -66,8 +66,8 @@ fn parse_relative_to_entry<'gc, O: OpFront>(
     this: Gc<'gc, Location>,
     url: &str,
 ) -> Result<Url, ApiError> {
-    let base = match op.current_window(cx) {
-        Some(entry) => cx.document_base_url(cx.window_document(entry)),
+    let base = match op.current_context(cx) {
+        Some(entry) => cx.context_base_url(entry),
         None => relevant_document(cx, this).and_then(|document| cx.document_base_url(document)),
     }
     .unwrap_or_else(|| url_of(cx, this));

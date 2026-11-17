@@ -27,7 +27,7 @@ pub(crate) fn construct_event_target<'gc, O: OpFront>(
     cx: &ApiCx<'_, 'gc>,
 ) -> Result<Gc<'gc, EventTargetImpl>, ApiError> {
     let target = cx.create_event_target();
-    cx.set_event_target_window(target, op.current_window(cx));
+    cx.set_event_target_context(target, op.current_context(cx));
     Ok(target)
 }
 
@@ -163,7 +163,7 @@ pub fn fire_event<H: ScriptHost>(
                 composed: false,
                 trusted: true,
             },
-            window,
+            window.map(|window| cx.window_context(window)),
         );
         Persistent::new(cx.gc, event)
     });

@@ -8,6 +8,7 @@
 //! which machopo doesn't have: the members there are a `NotSupportedError`.
 
 use dom::{NodeKind, NodeRef, QualName, names};
+use elise::Gc;
 
 use crate::exception::{DomException, ExceptionName};
 use crate::typed::DomStr;
@@ -241,13 +242,13 @@ pub(crate) fn set_shadow_html_unsafe<'gc>(
 /// `Document.parseHTMLUnsafe(html)`: a new HTML document parsed from
 /// `html`, scripting disabled (it has no browsing context), its
 /// `<template shadowrootmode>`s attaching declarative shadow roots.
-pub(crate) fn parse_html_unsafe<'gc, O: crate::typed::OpFront>(
-    op: &mut O,
+pub(crate) fn parse_html_unsafe<'gc>(
     cx: &ApiCx<'_, 'gc>,
+    window: Option<Gc<'gc, dom::Window>>,
     html: &str,
 ) -> Result<NodeRef<'gc>, ApiError> {
     let document = html::parser::parse_document_unsafe_in(cx, html);
-    cx.set_document_relevant_window(document, op.current_window(cx));
+    cx.set_document_relevant_window(document, window);
     Ok(document)
 }
 

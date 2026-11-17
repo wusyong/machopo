@@ -7,18 +7,18 @@
 //! steps, out of the operation: its algorithms (listeners removed), then
 //! `abort` fired at it.
 
-use dom::{AbortController, EventTargetImpl, NativeAction, TargetRoot, Window};
+use dom::{AbortController, EventTargetImpl, ExecutionContext, NativeAction, TargetRoot};
 use elise::{Gc, Persistent};
 
 use crate::typed::{AnyArg, OpFront, Root, ScriptHost, ThenScript};
 use crate::{ApiCx, ApiError, DomException, ExceptionName};
 
-fn current_window<'gc, O: OpFront>(
+fn current_context<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     what: &str,
-) -> Result<Gc<'gc, Window>, ApiError> {
-    op.current_window(cx).ok_or_else(|| {
+) -> Result<Gc<'gc, ExecutionContext>, ApiError> {
+    op.current_context(cx).ok_or_else(|| {
         ApiError::Dom(DomException {
             name: ExceptionName::InvalidState,
             message: format!("no realm to make the {what} in"),
@@ -31,8 +31,8 @@ pub(crate) fn construct<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
 ) -> Result<Gc<'gc, AbortController>, ApiError> {
-    let window = current_window(op, cx, "AbortController")?;
-    Ok(cx.create_abort_controller(window))
+    let context = current_context(op, cx, "AbortController")?;
+    Ok(cx.create_abort_controller(context))
 }
 
 /// `AbortController.signal`.
@@ -117,24 +117,24 @@ pub(crate) fn abort_signal<'gc, O: OpFront>(
     cx: &ApiCx<'_, 'gc>,
     reason: AnyArg<O::Any>,
 ) -> Result<Gc<'gc, EventTargetImpl>, ApiError> {
-    let window = current_window(op, cx, "AbortSignal")?;
-    let signal = cx.create_abort_signal(window);
+    let context = current_context(op, cx, "AbortSignal")?;
+    let signal = cx.create_abort_signal(context);
     op.store_any(cx, cx.abort_reason_edge(signal), reason);
     cx.signal_abort(signal);
     Ok(signal)
 }
 
 /// `AbortSignal.timeout(milliseconds)`: a new signal of the current realm,
-/// which a native timer of its window aborts with a `TimeoutError` then
+/// which a native timer of its realm's aborts with a `TimeoutError` then
 /// (`timeout_fired`).
 pub(crate) fn timeout<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     milliseconds: f64,
 ) -> Result<Gc<'gc, EventTargetImpl>, ApiError> {
-    let window = current_window(op, cx, "AbortSignal")?;
-    let signal = cx.create_abort_signal(window);
-    cx.add_target_timer(window, signal, NativeAction::AbortTimeout, milliseconds);
+    let context = current_context(op, cx, "AbortSignal")?;
+    let signal = cx.create_abort_signal(context);
+    cx.add_target_timer(context, signal, NativeAction::AbortTimeout, milliseconds);
     Ok(signal)
 }
 
@@ -153,8 +153,8 @@ pub(crate) fn any<'gc, O: OpFront>(
     cx: &ApiCx<'_, 'gc>,
     signals: Vec<Gc<'gc, EventTargetImpl>>,
 ) -> Result<Gc<'gc, EventTargetImpl>, ApiError> {
-    let window = current_window(op, cx, "AbortSignal")?;
-    Ok(cx.create_dependent_abort_signal(window, &signals))
+    let context = current_context(op, cx, "AbortSignal")?;
+    Ok(cx.create_dependent_abort_signal(context, &signals))
 }
 
 /// `AbortSignal.aborted`.

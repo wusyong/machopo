@@ -84,18 +84,14 @@ pub(crate) fn create_object_url<'gc, O: OpFront>(
     cx: &ApiCx<'_, 'gc>,
     obj: Gc<'gc, Blob>,
 ) -> Result<DomStr<'gc>, ApiError> {
-    let window = op
-        .current_window(cx)
-        .ok_or_else(|| ApiError::type_error("createObjectURL: no window"))?;
-    let document = cx.window_document(window);
-    let origin = crate::frame::origin(cx, document)
+    let context = op
+        .current_context(cx)
+        .ok_or_else(|| ApiError::type_error("createObjectURL: no realm"))?;
+    let origin = cx
+        .context_origin(context)
         .map_or_else(|| "null".to_owned(), |origin| origin.ascii_serialization());
     let url = format!("blob:{origin}/{}", crate::crypto::new_uuid());
-    cx.request_blob_url(BlobUrlRequest::Register {
-        document: cx.node_id(document),
-        url: url.clone(),
-        data: cx.blob_data(obj).clone(),
-    });
+    cx.register_context_blob_url(context, url.clone(), cx.blob_data(obj).clone());
     Ok(DomStr::fresh(url))
 }
 
@@ -109,10 +105,10 @@ pub(crate) fn revoke_object_url<'gc, O: OpFront>(
     let Ok(parsed) = Url::parse(url) else {
         return Ok(());
     };
-    let Some(window) = op.current_window(cx) else {
+    let Some(context) = op.current_context(cx) else {
         return Ok(());
     };
-    let origin = crate::frame::origin(cx, cx.window_document(window));
+    let origin = cx.context_origin(context);
     let blob_origin = parsed.origin();
     if parsed.scheme() != "blob" || !blob_origin.is_tuple() || origin.as_ref() != Some(&blob_origin)
     {

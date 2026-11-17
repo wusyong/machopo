@@ -52,9 +52,9 @@ pub struct PostedMessage {
 /// A message port's data (HTML's `MessagePort`).
 #[derive(GcObject)]
 pub struct MessagePort {
-    /// Its relevant global: the window its messages are tasks of (none
-    /// while it travels in a message).
-    owner: Member<Window>,
+    /// Its relevant global's execution context: the one its messages are
+    /// tasks of (none while it travels in a message).
+    owner: Member<crate::ExecutionContext>,
     /// The port it is entangled with, if any.
     entangled: Member<EventTargetImpl>,
     /// Its port message queue.
@@ -100,15 +100,15 @@ pub struct MessageEventInit<'gc> {
 
 impl<'gc> Cx<'_, 'gc> {
     /// A new `MessageEvent` of `event_type` (not bubbling, not cancelable)
-    /// of `window`, its data the engine's to set (null till then).
+    /// of `context`'s realm, its data the engine's to set (null till then).
     pub fn create_message_event(
         &self,
         event_type: crate::names::NameId,
         flags: crate::EventFlags,
-        window: Option<Gc<'gc, Window>>,
+        context: Option<Gc<'gc, crate::ExecutionContext>>,
         init: MessageEventInit<'gc>,
     ) -> Gc<'gc, Event> {
-        let event = self.create_event(event_type, flags, window);
+        let event = self.create_event(event_type, flags, context);
         self.set_message_event_data(event, init);
         event
     }
@@ -169,7 +169,10 @@ impl<'gc> Cx<'_, 'gc> {
     }
 
     /// A new message port of `owner` (HTML's), entangled with nothing yet.
-    pub fn create_message_port(&self, owner: Option<Gc<'gc, Window>>) -> Gc<'gc, EventTargetImpl> {
+    pub fn create_message_port(
+        &self,
+        owner: Option<Gc<'gc, crate::ExecutionContext>>,
+    ) -> Gc<'gc, EventTargetImpl> {
         let target = self.create_event_target();
         let port = self.gc.alloc_in(
             &sites::OTHER,
@@ -187,7 +190,7 @@ impl<'gc> Cx<'_, 'gc> {
     /// A new `MessageChannel` of `owner`: two new ports, entangled.
     pub fn create_message_channel(
         &self,
-        owner: Option<Gc<'gc, Window>>,
+        owner: Option<Gc<'gc, crate::ExecutionContext>>,
     ) -> Gc<'gc, MessageChannel> {
         let (one, two) = (
             self.create_message_port(owner),
@@ -239,8 +242,11 @@ impl<'gc> Cx<'_, 'gc> {
         self.port_data(target).is_some()
     }
 
-    /// The window `port`'s messages are tasks of.
-    pub fn message_port_owner(&self, port: Gc<'gc, EventTargetImpl>) -> Option<Gc<'gc, Window>> {
+    /// The execution context `port`'s messages are tasks of.
+    pub fn message_port_owner(
+        &self,
+        port: Gc<'gc, EventTargetImpl>,
+    ) -> Option<Gc<'gc, crate::ExecutionContext>> {
         self.port_data(port)?.owner.get(self.gc)
     }
 
@@ -265,21 +271,21 @@ impl<'gc> Cx<'_, 'gc> {
         self.keep_port(port, data);
     }
 
-    /// `port`, enabled and entangled, in its window's list of ports: alive
+    /// `port`, enabled and entangled, in its owner's list of ports: alive
     /// while messages may come, its queue looked at.
     fn keep_port(&self, port: Gc<'gc, EventTargetImpl>, data: Gc<'gc, MessagePort>) {
         let state = data.state.get();
         if state & ENABLED == 0 || state & CLOSED != 0 || data.entangled.get(self.gc).is_none() {
             return;
         }
-        let Some(window) = data.owner.get(self.gc) else {
+        let Some(owner) = data.owner.get(self.gc) else {
             return;
         };
-        let ports = match window.message_ports.get(self.gc) {
+        let ports = match owner.message_ports.get(self.gc) {
             Some(ports) => ports,
             None => {
                 let ports = HeapVector::new(self.gc, 1);
-                window.message_ports.set(self.gc, Some(ports));
+                owner.message_ports.set(self.gc, Some(ports));
                 ports
             }
         };
@@ -291,12 +297,12 @@ impl<'gc> Cx<'_, 'gc> {
         }
     }
 
-    /// `port` out of its window's list of ports.
+    /// `port` out of its owner's list of ports.
     fn forget_port(&self, port: Gc<'gc, EventTargetImpl>) {
-        let window = self
+        let owner = self
             .port_data(port)
             .and_then(|data| data.owner.get(self.gc));
-        let Some(ports) = window.and_then(|window| window.message_ports.get(self.gc)) else {
+        let Some(ports) = owner.and_then(|owner| owner.message_ports.get(self.gc)) else {
             return;
         };
         if let Some(index) = list_items(self, Some(ports))
@@ -375,7 +381,7 @@ impl<'gc> Cx<'_, 'gc> {
     fn receive_ports(&self, window: Gc<'gc, Window>, ports: &[Gc<'gc, EventTargetImpl>]) {
         for &port in ports {
             if let Some(data) = self.port_data(port) {
-                data.owner.set(self.gc, Some(window));
+                data.owner.set(self.gc, Some(self.window_context(window)));
             }
         }
     }
@@ -392,11 +398,13 @@ impl<'gc> Cx<'_, 'gc> {
         ports: &[Gc<'gc, EventTargetImpl>],
     ) {
         let message = self.posted_message(payload, origin, source, ports);
-        let queue = match window.posted_messages.get(self.gc) {
+        let queue = match self.window_context(window).posted_messages.get(self.gc) {
             Some(queue) => queue,
             None => {
                 let queue = HeapVector::new(self.gc, 1);
-                window.posted_messages.set(self.gc, Some(queue));
+                self.window_context(window)
+                    .posted_messages
+                    .set(self.gc, Some(queue));
                 queue
             }
         };
@@ -458,11 +466,11 @@ impl<'gc> Cx<'_, 'gc> {
     /// Whether `window` has a message to deliver: one posted to it, or one
     /// in an enabled port's queue of its.
     pub fn has_posted_message(&self, window: Gc<'gc, Window>) -> bool {
-        window
+        self.window_context(window)
             .posted_messages
             .get(self.gc)
             .is_some_and(|queue| !queue.is_empty())
-            || list_items(self, window.message_ports.get(self.gc))
+            || list_items(self, self.window_context(window).message_ports.get(self.gc))
                 .into_iter()
                 .any(|port| {
                     self.port_data(port)
@@ -479,7 +487,7 @@ impl<'gc> Cx<'_, 'gc> {
         let (port, _) = self.first_message(window)?;
         let (message, target) = match port {
             None => {
-                let queue = window.posted_messages.get(self.gc)?;
+                let queue = self.window_context(window).posted_messages.get(self.gc)?;
                 (queue.remove(self.gc, 0), TargetRef::Window(window))
             }
             Some(port) => {
@@ -517,12 +525,13 @@ impl<'gc> Cx<'_, 'gc> {
         &self,
         window: Gc<'gc, Window>,
     ) -> Option<(Option<Gc<'gc, EventTargetImpl>>, Gc<'gc, PostedMessage>)> {
-        let own = window
+        let own = self
+            .window_context(window)
             .posted_messages
             .get(self.gc)
             .and_then(|queue| queue.get(self.gc, 0))
             .map(|message| (None, message));
-        let ports = list_items(self, window.message_ports.get(self.gc))
+        let ports = list_items(self, self.window_context(window).message_ports.get(self.gc))
             .into_iter()
             .filter_map(|port| {
                 let message = self.port_data(port)?.queue.get(self.gc)?.get(self.gc, 0)?;

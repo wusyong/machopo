@@ -4,8 +4,9 @@
 //! (`splitText`, `wholeText`) and the constructors of `Text`, `Comment`.
 
 use dom::{NodeRef, StrRef};
+use elise::Gc;
 
-use crate::typed::{DomStr, OpFront};
+use crate::typed::DomStr;
 use crate::{ApiCx, ApiError};
 
 /// The data of a text where it is, the table's types promising one.
@@ -158,29 +159,28 @@ pub(crate) fn whole_text<'gc>(
 
 /// `new Text(data)`, `new Comment(data)`: a node in no tree, of the
 /// current realm's document.
-pub(crate) fn construct_text<'gc, O: OpFront>(
-    op: &mut O,
+pub(crate) fn construct_text<'gc>(
     cx: &ApiCx<'_, 'gc>,
+    window: Option<Gc<'gc, dom::Window>>,
     data: Option<&str>,
 ) -> Result<NodeRef<'gc>, ApiError> {
-    Ok(cx.create_text(realm_document(op, cx)?, data.unwrap_or("")))
+    Ok(cx.create_text(realm_document(cx, window)?, data.unwrap_or("")))
 }
 
-pub(crate) fn construct_comment<'gc, O: OpFront>(
-    op: &mut O,
+pub(crate) fn construct_comment<'gc>(
     cx: &ApiCx<'_, 'gc>,
+    window: Option<Gc<'gc, dom::Window>>,
     data: Option<&str>,
 ) -> Result<NodeRef<'gc>, ApiError> {
-    Ok(cx.create_comment(realm_document(op, cx)?, data.unwrap_or("")))
+    Ok(cx.create_comment(realm_document(cx, window)?, data.unwrap_or("")))
 }
 
-/// The document of the realm a constructor runs in (its window's).
-pub(crate) fn realm_document<'gc, O: OpFront>(
-    op: &mut O,
+/// The document of the realm a constructor runs in: its window's
+/// (`#[window]`'s).
+pub(crate) fn realm_document<'gc>(
     cx: &ApiCx<'_, 'gc>,
+    window: Option<Gc<'gc, dom::Window>>,
 ) -> Result<NodeRef<'gc>, ApiError> {
-    let window = op
-        .current_window(cx)
-        .ok_or_else(|| ApiError::type_error("Illegal constructor"))?;
+    let window = window.ok_or_else(|| ApiError::type_error("Illegal constructor"))?;
     Ok(cx.window_document(window))
 }

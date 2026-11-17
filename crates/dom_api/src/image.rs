@@ -13,11 +13,11 @@ use css::media::{self, MediaEnvironment};
 use dom::{
     ImageDecode, ImageRequestState, ImageTaskAction, NodeRef, QualifiedName, TargetRoot, names,
 };
-use elise::Persistent;
+use elise::{Gc, Persistent};
 use html::srcset;
 
 use crate::exception::DomException;
-use crate::typed::{OpFront, PromiseOf, ScriptHost};
+use crate::typed::{PromiseOf, ScriptHost};
 use crate::{ApiCx, ApiError, DomStr, ExceptionName};
 
 /// HTML's microtask of "update the image data", for each `<img>` whose is
@@ -314,15 +314,13 @@ fn decoding_error() -> ApiError {
 
 /// `new Image(width, height)`: an `<img>` of the current window's document,
 /// with `width` and `height` set if given.
-pub(crate) fn construct_image<'gc, O: OpFront>(
-    op: &mut O,
+pub(crate) fn construct_image<'gc>(
     cx: &ApiCx<'_, 'gc>,
+    window: Option<Gc<'gc, dom::Window>>,
     width: Option<u32>,
     height: Option<u32>,
 ) -> Result<NodeRef<'gc>, ApiError> {
-    let window = op
-        .current_window(cx)
-        .ok_or_else(|| ApiError::type_error("Illegal constructor"))?;
+    let window = window.ok_or_else(|| ApiError::type_error("Illegal constructor"))?;
     let document = cx.window_document(window);
     let image = cx.create_element(document, dom::QualName::html("img"));
     if let Some(width) = width {

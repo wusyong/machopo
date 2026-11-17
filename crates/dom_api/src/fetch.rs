@@ -57,7 +57,7 @@ pub(crate) fn fetch<'gc, O: OpFront>(
     input: RequestInput<'_, 'gc>,
     init: &RequestInit<O::Node>,
 ) -> Result<u64, ApiError> {
-    let request = crate::request::new_request(op, cx, this, input, init)?;
+    let request = crate::request::new_request(op, cx, cx.window_context(this), input, init)?;
     let signal = cx.request_signal(request);
     // Aborted already: the promise rejects with the reason, nothing goes.
     if cx.abort_reason(signal).is_some() {
@@ -160,7 +160,8 @@ pub fn did_receive_response<H: ScriptHost>(
         let Ok(response) = response else {
             return Some((state.promise, None));
         };
-        let response = make_response(cx, window, state.redirect, state.credentials, response);
+        let context = cx.window_context(window);
+        let response = make_response(cx, context, state.redirect, state.credentials, response);
         if cx.with_response_data(response, |data| {
             matches!(data.response_type, ResponseType::Basic | ResponseType::Cors)
         }) {
@@ -180,7 +181,7 @@ pub fn did_receive_response<H: ScriptHost>(
 
 fn make_response<'gc>(
     cx: &ApiCx<'_, 'gc>,
-    window: Gc<'gc, Window>,
+    context: Gc<'gc, dom::ExecutionContext>,
     redirect: RequestRedirect,
     credentials: RequestCredentials,
     response: FetchedResponse,
@@ -193,7 +194,7 @@ fn make_response<'gc>(
             status: 0,
             ..ResponseData::default()
         };
-        return cx.create_response(window, data, immutable);
+        return cx.create_response(context, data, immutable);
     }
     // An opaque response: nothing of it but its type (no URL either).
     if response.tainting == ResponseTainting::Opaque {
@@ -202,7 +203,7 @@ fn make_response<'gc>(
             status: 0,
             ..ResponseData::default()
         };
-        return cx.create_response(window, data, immutable);
+        return cx.create_response(context, data, immutable);
     }
     let headers: Vec<(String, String)> = response
         .headers
@@ -233,5 +234,5 @@ fn make_response<'gc>(
         body: (!crate::response::is_null_body_status(response.status)).then_some(response.body),
         body_used: false,
     };
-    cx.create_response(window, data, immutable)
+    cx.create_response(context, data, immutable)
 }

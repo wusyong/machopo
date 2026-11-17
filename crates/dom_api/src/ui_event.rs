@@ -63,7 +63,7 @@ pub(crate) fn construct_ui_event<'gc, O: OpFront>(
             composed: init.composed,
             trusted: false,
         },
-        op.current_window(cx),
+        op.current_context(cx),
     );
     cx.set_ui_event_data(event, init_view(op, cx, &init.view), init.detail);
     Ok(event)
@@ -126,7 +126,7 @@ pub(crate) fn construct_mouse_event<'gc, O: OpFront>(
             composed: init.composed,
             trusted: false,
         },
-        op.current_window(cx),
+        op.current_context(cx),
     );
     let related = related_target_of(op, cx, &init.relatedTarget);
     cx.set_mouse_event_data(
@@ -154,7 +154,7 @@ pub(crate) fn construct_wheel_event<'gc, O: OpFront>(
             composed: init.composed,
             trusted: false,
         },
-        op.current_window(cx),
+        op.current_context(cx),
     );
     let wheel = WheelEventInfo {
         delta_x: init.deltaX,
@@ -189,7 +189,7 @@ pub(crate) fn construct_input_event<'gc, O: OpFront>(
             composed: init.composed,
             trusted: false,
         },
-        op.current_window(cx),
+        op.current_context(cx),
     );
     let info = InputEventInfo {
         detail: init.detail,
@@ -330,7 +330,7 @@ pub(crate) fn construct_keyboard_event<'gc, O: OpFront>(
             composed: init.composed,
             trusted: false,
         },
-        op.current_window(cx),
+        op.current_context(cx),
     );
     let info = KeyboardEventInfo {
         detail: init.detail,

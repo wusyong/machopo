@@ -435,15 +435,13 @@ pub(crate) fn tree_get_animations<'gc>(
 /// `new Animation(effect, timeline)`: script's, idle, of the realm's
 /// document; the document's timeline unless `timeline` is `null`. (An
 /// effect's object comes from another animation's `effect`: it moves.)
-pub(crate) fn construct<'gc, O: OpFront>(
-    op: &mut O,
+pub(crate) fn construct<'gc>(
     cx: &ApiCx<'_, 'gc>,
+    window: Option<Gc<'gc, dom::Window>>,
     effect: Option<Gc<'gc, KeyframeEffectObject>>,
     has_timeline: bool,
 ) -> Result<Gc<'gc, EventTargetImpl>, ApiError> {
-    let window = op
-        .current_window(cx)
-        .ok_or_else(|| ApiError::type_error("no window"))?;
+    let window = window.ok_or_else(|| ApiError::type_error("no window"))?;
     let document = cx.window_document(window);
     Ok(make_animation(cx, document, effect, has_timeline))
 }
@@ -1167,7 +1165,7 @@ pub(crate) fn construct_playback_event<'gc, O: OpFront>(
             composed: init.composed,
             trusted: false,
         },
-        op.current_window(cx),
+        op.current_context(cx),
     );
     cx.set_animation_playback_event_data(event, init.currentTime, init.timelineTime);
     Ok(event)
@@ -1278,7 +1276,8 @@ pub(crate) fn playback_event<H: ScriptHost>(
                 trusted: true,
                 ..EventFlags::default()
             },
-            cx.window_of(document.get(cx.gc)),
+            cx.window_of(document.get(cx.gc))
+                .map(|window| cx.window_context(window)),
         );
         cx.set_animation_playback_event_data(event, current_time, timeline_time);
         Persistent::new(cx.gc, event)

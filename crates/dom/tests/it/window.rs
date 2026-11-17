@@ -66,7 +66,11 @@ fn times_count_from_a_windows_time_origin() {
     std::thread::sleep(std::time::Duration::from_millis(3));
     let (origin, since_window, since_dom, event_time) = dom.mutate(|cx| {
         let window = cx.create_window(cx.create_document(true));
-        let event = cx.create_event(dom::names::intern("x"), EventFlags::default(), Some(window));
+        let event = cx.create_event(
+            dom::names::intern("x"),
+            EventFlags::default(),
+            Some(cx.window_context(window)),
+        );
         (
             cx.window_time_origin(window),
             cx.now_since(Some(window)),
@@ -269,7 +273,7 @@ fn an_error_event_and_its_data() {
             lineno: 3,
             colno: 7,
         };
-        let event = cx.create_error_event(&info, Some(window));
+        let event = cx.create_error_event(&info, Some(cx.window_context(window)));
         assert_eq!(dom::names::get(cx.event_type(event)), "error");
         assert_eq!(
             cx.event_flags(event),
@@ -309,7 +313,7 @@ fn timers_and_error_data_survive_gcs() {
             lineno: 1,
             colno: 2,
         };
-        let event = cx.create_error_event(&info, Some(window));
+        let event = cx.create_error_event(&info, Some(cx.window_context(window)));
         (
             elise::Persistent::new(cx.gc, window),
             elise::Persistent::new(cx.gc, event),

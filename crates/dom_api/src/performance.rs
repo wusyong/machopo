@@ -8,8 +8,8 @@
 //! its events fire).
 
 use dom::{
-    DomString, EventTargetImpl, NavigationTiming, NavigationType, NodeRoot, PerformanceEntry,
-    PerformanceEntryType, PerformanceObserver, PerformanceObserverEntryList,
+    DomString, EventTargetImpl, ExecutionContext, NavigationTiming, NavigationType, NodeRoot,
+    PerformanceEntry, PerformanceEntryType, PerformanceObserver, PerformanceObserverEntryList,
     PerformanceObserverMode, PerformanceTiming, PerformanceTimingKind, Window,
 };
 use elise::{Gc, Persistent};
@@ -26,14 +26,14 @@ pub(crate) fn window_performance<'gc>(
     this: Gc<'gc, Window>,
 ) -> Result<Gc<'gc, EventTargetImpl>, ApiError> {
     let performance = cx.window_performance(this);
-    ensure_navigation_entry(cx, this, performance);
+    ensure_navigation_entry(cx, cx.window_context(this), performance);
     Ok(performance)
 }
 
-/// HR-Time's "current high resolution time" of `window`: the time since
+/// HR-Time's "current high resolution time" of `context`: the time since
 /// its time origin, coarsened.
-fn window_now<'gc>(cx: &ApiCx<'_, 'gc>, window: Gc<'gc, Window>) -> f64 {
-    coarsen(cx.now_since(Some(window)))
+fn context_now<'gc>(cx: &ApiCx<'_, 'gc>, context: Gc<'gc, ExecutionContext>) -> f64 {
+    coarsen(cx.now_in(Some(context)))
 }
 
 /// `now()`.
@@ -41,7 +41,7 @@ pub(crate) fn now<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, EventTargetImpl>,
 ) -> Result<f64, ApiError> {
-    Ok(window_now(cx, cx.performance_window(this)))
+    Ok(context_now(cx, cx.performance_context(this)))
 }
 
 /// `timeOrigin`: the time origin's Unix time, in milliseconds, coarsened.
@@ -50,7 +50,7 @@ pub(crate) fn time_origin<'gc>(
     this: Gc<'gc, EventTargetImpl>,
 ) -> Result<f64, ApiError> {
     Ok(coarsen(
-        cx.window_unix_time_origin(cx.performance_window(this)),
+        cx.context_unix_time_origin(cx.performance_context(this)),
     ))
 }
 
@@ -186,12 +186,12 @@ fn dom_error(name: ExceptionName, message: String) -> ApiError {
     ApiError::Dom(DomException { name, message })
 }
 
-/// The `PerformanceMark` constructor's steps, for a mark of `window`'s: a
+/// The `PerformanceMark` constructor's steps, for a mark of `context`'s: a
 /// timing name is a `SyntaxError`; a given `startTime` (not negative) or
 /// now.
 fn make_mark<'gc>(
     cx: &ApiCx<'_, 'gc>,
-    window: Gc<'gc, Window>,
+    context: Gc<'gc, ExecutionContext>,
     name: &str,
     options: &PerformanceMarkOptions,
 ) -> Result<Gc<'gc, PerformanceEntry>, ApiError> {
@@ -208,11 +208,11 @@ fn make_mark<'gc>(
             return Err(ApiError::type_error("startTime can't be negative"));
         }
         Some(time) => time,
-        None => window_now(cx, window),
+        None => context_now(cx, context),
     };
     let detail = options.detail.as_ref().map(|detail| detail.0.clone());
     Ok(cx.create_performance_entry(
-        window,
+        context,
         PerformanceEntryType::Mark,
         name,
         start_time,
@@ -229,10 +229,10 @@ pub(crate) fn construct_mark<'gc, O: OpFront>(
     name: &str,
     options: &PerformanceMarkOptions,
 ) -> Result<Gc<'gc, PerformanceEntry>, ApiError> {
-    let window = op
-        .current_window(cx)
-        .ok_or_else(|| ApiError::type_error("PerformanceMark needs a window"))?;
-    make_mark(cx, window, name, options)
+    let context = op
+        .current_context(cx)
+        .ok_or_else(|| ApiError::type_error("PerformanceMark needs a realm"))?;
+    make_mark(cx, context, name, options)
 }
 
 /// `mark(markName, markOptions)`: a new mark, queued in the buffer.
@@ -242,7 +242,7 @@ pub(crate) fn mark<'gc>(
     name: &str,
     options: &PerformanceMarkOptions,
 ) -> Result<Gc<'gc, PerformanceEntry>, ApiError> {
-    let mark = make_mark(cx, cx.performance_window(this), name, options)?;
+    let mark = make_mark(cx, cx.performance_context(this), name, options)?;
     queue_entry(cx, this, mark);
     Ok(mark)
 }
@@ -285,10 +285,10 @@ fn mark_time<'gc>(
         return Ok(0.0);
     }
     if TIMING_NAMES.contains(&name) {
-        let window = cx.performance_window(performance);
+        let context = cx.performance_context(performance);
         return match (
-            legacy_time(cx, window, name),
-            legacy_time(cx, window, "navigationStart"),
+            legacy_time(cx, context, name),
+            legacy_time(cx, context, "navigationStart"),
         ) {
             #[expect(
                 clippy::cast_precision_loss,
@@ -360,7 +360,7 @@ pub(crate) fn measure<'gc>(
         }
         other => other,
     };
-    let window = cx.performance_window(this);
+    let context = cx.performance_context(this);
     let end = if let Some(end_mark) = end_mark {
         mark_time(cx, this, &StringOrNumber::String(end_mark.to_owned()))?
     } else if let Some(end) = options.and_then(|o| o.end.as_ref()) {
@@ -369,7 +369,7 @@ pub(crate) fn measure<'gc>(
     {
         mark_time(cx, this, start)? + duration
     } else {
-        window_now(cx, window)
+        context_now(cx, context)
     };
     let start = if let Some(start) = options.and_then(|o| o.start.as_ref()) {
         mark_time(cx, this, start)?
@@ -384,7 +384,7 @@ pub(crate) fn measure<'gc>(
         .and_then(|o| o.detail.as_ref())
         .map(|detail| detail.0.clone());
     let measure = cx.create_performance_entry(
-        window,
+        context,
         PerformanceEntryType::Measure,
         name,
         start,
@@ -425,13 +425,13 @@ pub(crate) fn construct_observer<'gc, O: OpFront>(
     cx: &ApiCx<'_, 'gc>,
     callback: Callback<O::Callback>,
 ) -> Result<Gc<'gc, PerformanceObserver>, ApiError> {
-    let window = op.current_window(cx).ok_or_else(|| {
+    let context = op.current_context(cx).ok_or_else(|| {
         dom_error(
             ExceptionName::InvalidState,
             "no realm to make the PerformanceObserver in".to_owned(),
         )
     })?;
-    let observer = cx.create_performance_observer(window);
+    let observer = cx.create_performance_observer(context);
     op.store_callback(
         cx,
         cx.performance_observer_callback_edge(observer),
@@ -444,9 +444,9 @@ fn observer_performance<'gc>(
     cx: &ApiCx<'_, 'gc>,
     observer: Gc<'gc, PerformanceObserver>,
 ) -> Gc<'gc, EventTargetImpl> {
-    let window = cx.performance_observer_window(observer);
-    let performance = cx.window_performance(window);
-    ensure_navigation_entry(cx, window, performance);
+    let context = cx.performance_observer_context(observer);
+    let performance = cx.context_performance(context);
+    ensure_navigation_entry(cx, context, performance);
     performance
 }
 
@@ -591,7 +591,7 @@ fn trace_entry<'gc>(
     if !tracing::enabled!(target: "blink.user_timing", tracing::Level::TRACE) {
         return;
     }
-    let now = cx.now_since(Some(cx.performance_window(performance)));
+    let now = cx.now_in(Some(cx.performance_context(performance)));
     let ago = |time: f64| base::numerics::saturated_cast::<i64, _>((now - time) * 1e6);
     let (start, duration) = cx.performance_entry_times(entry);
     let name = cx.performance_entry_name(entry).to_str();
@@ -707,25 +707,26 @@ const HEADER_SIZE: u64 = 300;
 /// `confidence.randomizedTriggerRate`: Chrome 152's.
 pub const RANDOMIZED_TRIGGER_RATE: f64 = 0.4994798;
 
-/// `performance`'s window's document's navigation entry, made and put in
-/// the buffer the first time (when script first reaches `performance`),
-/// named its URL, at 0, if its host gave the window a navigation timing.
+/// The navigation entry of the document of `performance`'s execution
+/// context's window, made and put in the buffer the first time (when
+/// script first reaches `performance`), named its URL, at 0, if its host
+/// gave the window a navigation timing (none for a context of no document).
 fn ensure_navigation_entry<'gc>(
     cx: &ApiCx<'_, 'gc>,
-    window: Gc<'gc, Window>,
+    context: Gc<'gc, ExecutionContext>,
     performance: Gc<'gc, EventTargetImpl>,
 ) {
-    if cx.navigation_timing(window).is_none()
+    if cx.context_navigation_timing(context).is_none()
         || cx.set_performance_navigation_entry_made(performance)
     {
         return;
     }
     let url = cx
-        .document_url(cx.window_document(window))
+        .context_url(context)
         .map(|url| url.to_str().into_owned())
         .unwrap_or_default();
     let entry = cx.create_performance_entry(
-        window,
+        context,
         PerformanceEntryType::Navigation,
         &url,
         0.0,
@@ -747,7 +748,7 @@ pub(crate) fn load_ended<H: ScriptHost>(host: &mut H, document: &NodeRoot) {
             return;
         }
         let performance = cx.window_performance(window);
-        ensure_navigation_entry(cx, window, performance);
+        ensure_navigation_entry(cx, cx.window_context(window), performance);
         let entry = cx
             .performance_entries(performance)
             .into_iter()
@@ -759,7 +760,7 @@ pub(crate) fn load_ended<H: ScriptHost>(host: &mut H, document: &NodeRoot) {
 }
 
 fn entry_timing<'gc>(cx: &ApiCx<'_, 'gc>, entry: Gc<'gc, PerformanceEntry>) -> NavigationTiming {
-    cx.navigation_timing(cx.performance_entry_window(entry))
+    cx.context_navigation_timing(cx.performance_entry_context(entry))
         .unwrap_or_default()
 }
 
@@ -941,8 +942,7 @@ pub(crate) fn confidence<'gc>(
     this: Gc<'gc, PerformanceEntry>,
 ) -> Result<Gc<'gc, PerformanceTiming>, ApiError> {
     let high = entry_timing(cx, this).confidence_high;
-    let window = cx.performance_entry_window(this);
-    let performance = cx.window_performance(window);
+    let performance = cx.context_performance(cx.performance_entry_context(this));
     Ok(cx.performance_timing_of(performance, PerformanceTimingKind::Confidence(high)))
 }
 
@@ -979,11 +979,12 @@ pub(crate) fn navigation<'gc>(
     Ok(cx.performance_timing_of(this, PerformanceTimingKind::Navigation))
 }
 
-/// `PerformanceTiming`'s attribute `name` of `window`'s document: whole
-/// milliseconds since the Unix epoch, 0 for what hasn't happened (User
-/// Timing's marks of those names read them too).
-fn legacy_time<'gc>(cx: &ApiCx<'_, 'gc>, window: Gc<'gc, Window>, name: &str) -> u64 {
-    let timing = cx.navigation_timing(window).unwrap_or_default();
+/// `PerformanceTiming`'s attribute `name` of the document of `context`'s
+/// window: whole milliseconds since the Unix epoch, 0 for what hasn't
+/// happened or a context of no document (User Timing's marks of those
+/// names read them too).
+fn legacy_time<'gc>(cx: &ApiCx<'_, 'gc>, context: Gc<'gc, ExecutionContext>, name: &str) -> u64 {
+    let timing = cx.context_navigation_timing(context).unwrap_or_default();
     let time = match name {
         "navigationStart" => Some(0.0),
         "redirectStart" => timing.redirect_start,
@@ -1010,7 +1011,7 @@ fn legacy_time<'gc>(cx: &ApiCx<'_, 'gc>, window: Gc<'gc, Window>, name: &str) ->
     };
     time.map_or(0, |time| {
         base::numerics::saturated_cast::<u64, _>(
-            (cx.window_unix_time_origin(window) + time).floor(),
+            (cx.context_unix_time_origin(context) + time).floor(),
         )
     })
 }
@@ -1026,7 +1027,7 @@ pub(crate) fn legacy<'gc, const NAME: u8>(
     )]
     Ok(legacy_time(
         cx,
-        cx.performance_timing_window(this),
+        cx.window_context(cx.performance_timing_window(this)),
         TIMING_NAMES[usize::from(NAME)],
     ) as f64)
 }

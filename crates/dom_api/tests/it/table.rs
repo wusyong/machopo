@@ -430,6 +430,64 @@ fn interfaces_have_their_parents_and_kinds_parents_first() {
 }
 
 /// An interface accepts its own kinds and its descendants'.
+/// Each interface in the globals WebIDL's `[Exposed]` names: every one in a
+/// window's; a worker's, those the specs' IDL exposes in `Worker` too
+/// (`*` included), none of a document's.
+#[test]
+fn interfaces_are_exposed_in_their_globals() {
+    let mut in_workers: Vec<_> = INTERFACES
+        .iter()
+        .filter(|desc| desc.exposed.in_dedicated_worker())
+        .map(|desc| desc.name)
+        .collect();
+    in_workers.sort_unstable();
+    assert_eq!(
+        in_workers,
+        [
+            "AbortController",
+            "AbortSignal",
+            "Blob",
+            "CanvasGradient",
+            "CanvasPattern",
+            "Crypto",
+            "CustomEvent",
+            "DOMRect",
+            "DOMRectReadOnly",
+            "ErrorEvent",
+            "Event",
+            "EventTarget",
+            "File",
+            "FileReader",
+            "Headers",
+            "ImageData",
+            "MessageChannel",
+            "MessageEvent",
+            "MessagePort",
+            "NetworkInformation",
+            "Path2D",
+            "Performance",
+            "PerformanceEntry",
+            "PerformanceMark",
+            "PerformanceMeasure",
+            "PerformanceObserver",
+            "PerformanceObserverEntryList",
+            "PerformanceResourceTiming",
+            "PerformanceServerTiming",
+            "ProgressEvent",
+            "PromiseRejectionEvent",
+            "Request",
+            "Response",
+            "TextMetrics",
+            "URL",
+            "URLSearchParams",
+        ]
+    );
+    assert!(INTERFACES.iter().all(|desc| desc.exposed.window));
+    assert!(!INTERFACES.iter().any(|desc| desc.exposed.dedicated_worker));
+    let node = interface("Node").exposed;
+    assert!(node.window && !node.in_dedicated_worker());
+}
+
 #[test]
 fn interfaces_accept_their_kinds_and_their_descendants() {
     use dom_api::interfaces::{

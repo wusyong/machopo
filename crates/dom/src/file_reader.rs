@@ -8,7 +8,7 @@ use std::cell::Cell;
 
 use elise::{Gc, GcObject, JsEdge, LocalExternal, Member};
 
-use crate::{BlobData, Cx, Event, EventTargetImpl, Window, sites};
+use crate::{BlobData, Cx, Event, EventTargetImpl, ExecutionContext, sites};
 
 /// A reader's `readyState`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,8 +50,8 @@ type Reading = Option<(BlobData, ReadAs)>;
 
 #[derive(GcObject)]
 pub struct FileReaderData {
-    /// The window whose element task queue its reads' tasks go to.
-    window: Member<Window>,
+    /// The execution context whose task queue its reads' tasks go to.
+    context: Member<ExecutionContext>,
     state: Cell<u8>,
     /// Its read's number: a task of an earlier one (aborted, or begun anew)
     /// does nothing.
@@ -79,13 +79,16 @@ const LOADING: u8 = 1;
 const DONE: u8 = 2;
 
 impl<'gc> Cx<'_, 'gc> {
-    /// A new `FileReader` of `window`'s.
-    pub fn create_file_reader(&self, window: Gc<'gc, Window>) -> Gc<'gc, EventTargetImpl> {
+    /// A new `FileReader` of `context`'s.
+    pub fn create_file_reader(
+        &self,
+        context: Gc<'gc, ExecutionContext>,
+    ) -> Gc<'gc, EventTargetImpl> {
         let target = self.create_event_target();
         let data = self.gc.alloc_in(
             &sites::OTHER,
             FileReaderDataInit {
-                window: Some(window),
+                context: Some(context),
                 state: Cell::new(EMPTY),
                 read: Cell::new(0),
                 reading: LocalExternal::new(Cell::new(None)),
@@ -102,9 +105,13 @@ impl<'gc> Cx<'_, 'gc> {
         target.file_reader.get(self.gc).is_some()
     }
 
-    /// The window a `FileReader` was made in; none for another target.
-    pub fn file_reader_window(&self, target: Gc<'gc, EventTargetImpl>) -> Option<Gc<'gc, Window>> {
-        target.file_reader.get(self.gc)?.window.get(self.gc)
+    /// The execution context a `FileReader` was made in; none for another
+    /// target.
+    pub fn file_reader_context(
+        &self,
+        target: Gc<'gc, EventTargetImpl>,
+    ) -> Option<Gc<'gc, ExecutionContext>> {
+        target.file_reader.get(self.gc)?.context.get(self.gc)
     }
 
     fn reader(&self, reader: Gc<'gc, EventTargetImpl>) -> Gc<'gc, FileReaderData> {
@@ -138,14 +145,14 @@ impl<'gc> Cx<'_, 'gc> {
         read
     }
 
-    /// Queues `read`'s `step`, a task of the reader's window's.
+    /// Queues `read`'s `step`, a task of the reader's execution context's.
     pub fn queue_file_read_step(
         &self,
         reader: Gc<'gc, EventTargetImpl>,
         read: u64,
         step: ReadStep,
     ) {
-        let Some(window) = self.reader(reader).window.get(self.gc) else {
+        let Some(context) = self.reader(reader).context.get(self.gc) else {
             return;
         };
         let step = match step {
@@ -154,7 +161,7 @@ impl<'gc> Cx<'_, 'gc> {
             ReadStep::Load => 2,
         };
         self.push_target_task(
-            window,
+            context,
             reader,
             crate::window::FILE_READ,
             read.wrapping_shl(2) | step,

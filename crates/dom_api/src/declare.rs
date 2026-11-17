@@ -93,7 +93,27 @@ pub struct InterfaceDesc {
     /// falsy; V8's undetectable objects, as Blink makes them), and calling
     /// one calls its `item` (its `legacycaller`).
     pub is_html_dda: bool,
+    /// The globals whose realms have it (WebIDL's `[Exposed]`).
+    pub exposed: Exposed,
     pub members: &'static [Member],
+}
+
+/// The globals an interface is exposed in (WebIDL's `[Exposed]`,
+/// `#[exposed(Window, Worker, DedicatedWorker)]` in the table, `Window`
+/// alone without one): what a realm of each kind installs. `Worker` is
+/// every worker's global, `DedicatedWorker` a dedicated worker's alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Exposed {
+    pub window: bool,
+    pub worker: bool,
+    pub dedicated_worker: bool,
+}
+
+impl Exposed {
+    /// Whether a dedicated worker's realm has it.
+    pub const fn in_dedicated_worker(self) -> bool {
+        self.worker || self.dedicated_worker
+    }
 }
 
 /// A callback interface with constants (`NodeFilter`): WebIDL's legacy

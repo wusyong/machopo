@@ -384,7 +384,7 @@ impl EventHandler {
                     composed: true,
                     trusted: true,
                 },
-                window,
+                window.map(|window| cx.window_context(window)),
             );
             let mouse = MouseEventInfo {
                 detail: 0,
@@ -929,7 +929,7 @@ fn fire_key<H: ScriptHost>(
                 composed: true,
                 trusted: true,
             },
-            window,
+            window.map(|window| cx.window_context(window)),
         );
         cx.set_keyboard_event_data(event, window, info);
         Persistent::new(cx.gc, event)
@@ -1205,7 +1205,7 @@ fn dispatch_mouse<H: ScriptHost>(
                 composed: !boundary_only,
                 trusted: true,
             },
-            window,
+            window.map(|window| cx.window_context(window)),
         );
         let related = related.map(|related| TargetRef::Node(related.get(cx.gc)));
         cx.set_mouse_event_data(event, window, info, related);

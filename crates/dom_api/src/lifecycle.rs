@@ -132,7 +132,7 @@ fn fire_load<H: ScriptHost>(host: &mut H, window: &TargetRoot, document: &Target
                 trusted: true,
                 ..EventFlags::default()
             },
-            cx.target_window(window),
+            cx.target_context(window),
         );
         Persistent::new(cx.gc, event)
     });
@@ -152,7 +152,10 @@ pub fn report_unhandled_rejection<H: ScriptHost>(
     let mut values = Some((promise, reason));
     let event: Persistent<Event> = host.mutate_storing(|cx, store| {
         let window = window.get(cx.gc);
-        let event = cx.create_promise_rejection_event(event::UNHANDLEDREJECTION, Some(window));
+        let event = cx.create_promise_rejection_event(
+            event::UNHANDLEDREJECTION,
+            Some(cx.window_context(window)),
+        );
         let data = cx
             .promise_rejection_data(event)
             .expect("a rejection's data");

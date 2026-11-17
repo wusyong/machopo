@@ -310,8 +310,9 @@ fn illegal_constructor() -> ApiError {
 pub(crate) fn html_constructor<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
+    window: Option<Gc<'gc, dom::Window>>,
 ) -> Result<HtmlConstructed<'gc>, ApiError> {
-    let window = op.current_window(cx).ok_or_else(illegal_constructor)?;
+    let window = window.ok_or_else(illegal_constructor)?;
     let number = op.new_target_number().ok_or_else(illegal_constructor)?;
     let running = cx.active_constructor(|definition| {
         op.is_new_target(cx, cx.definition_edges(definition).constructor)

@@ -6,8 +6,8 @@
 //! `Referer`, and has no HTTP cache or SRI.
 
 use dom::{
-    DomString, EventTargetImpl, HeadersGuard, Referrer, Request, RequestCache, RequestCredentials,
-    RequestData, RequestMode, RequestPriority, RequestRedirect, Window,
+    DomString, EventTargetImpl, ExecutionContext, HeadersGuard, Referrer, Request, RequestCache,
+    RequestCredentials, RequestData, RequestMode, RequestPriority, RequestRedirect,
 };
 use elise::Gc;
 use protocol::{header_list, network};
@@ -93,12 +93,12 @@ fn normalize_method(method: &str) -> String {
         .map_or_else(|| method.to_owned(), |known| (*known).to_owned())
 }
 
-pub(crate) fn current_window<'gc, O: OpFront>(
+pub(crate) fn current_context<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     what: &str,
-) -> Result<Gc<'gc, Window>, ApiError> {
-    op.current_window(cx).ok_or_else(|| {
+) -> Result<Gc<'gc, ExecutionContext>, ApiError> {
+    op.current_context(cx).ok_or_else(|| {
         ApiError::Dom(DomException {
             name: ExceptionName::InvalidState,
             message: format!("no realm to make a {what} in"),
@@ -113,22 +113,21 @@ pub(crate) fn construct<'gc, O: OpFront>(
     input: RequestInput<'_, 'gc>,
     init: &RequestInit<O::Node>,
 ) -> Result<Gc<'gc, Request>, ApiError> {
-    let window = current_window(op, cx, "Request")?;
-    new_request(op, cx, window, input, init)
+    let context = current_context(op, cx, "Request")?;
+    new_request(op, cx, context, input, init)
 }
 
-/// Fetch's `Request` constructor steps, in `window`'s realm (its document's
-/// base URL and origin), which `fetch()` runs too.
+/// Fetch's `Request` constructor steps, in `context`'s realm (its API base
+/// URL and origin), which `fetch()` runs too.
 pub(crate) fn new_request<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
-    window: Gc<'gc, Window>,
+    context: Gc<'gc, ExecutionContext>,
     input: RequestInput<'_, 'gc>,
     init: &RequestInit<O::Node>,
 ) -> Result<Gc<'gc, Request>, ApiError> {
-    let document = cx.window_document(window);
-    let base = cx.document_base_url(document);
-    let origin = crate::frame::origin(cx, document);
+    let base = cx.context_base_url(context);
+    let origin = cx.context_origin(context);
     // The request it starts from, its signal, and the mode if init has none.
     let (mut data, input_request, mut signal, fallback_mode) = match input {
         RequestInput::Url(url) => {
@@ -268,7 +267,7 @@ pub(crate) fn new_request<'gc, O: OpFront>(
     // A dependent of the signal it was given, if any (so aborting one
     // aborts the other, but not back).
     let sources: Vec<Gc<'gc, EventTargetImpl>> = signal.into_iter().collect();
-    let signal = cx.create_dependent_abort_signal(window, &sources);
+    let signal = cx.create_dependent_abort_signal(context, &sources);
     let headers = cx.create_headers(HeadersGuard::Request);
     if let Some(input) = input_request {
         let list = cx.with_header_list(cx.request_headers(input), |list| list.clone());
@@ -328,7 +327,7 @@ pub(crate) fn new_request<'gc, O: OpFront>(
         data.body = Some(input_body);
     }
     data.body_used = false;
-    Ok(cx.create_request(window, data, headers, signal))
+    Ok(cx.create_request(context, data, headers, signal))
 }
 
 fn string<'gc>(text: impl Into<std::borrow::Cow<'static, str>>) -> Result<DomStr<'gc>, ApiError> {
@@ -470,14 +469,14 @@ pub(crate) fn clone<'gc>(
             "Failed to execute 'clone' on 'Request': Request body is already used",
         ));
     }
-    let window = cx.request_window(this);
+    let context = cx.request_context(this);
     let data = cx.with_request_data(this, |data| data.clone());
     let guard = cx.headers_guard(cx.request_headers(this));
     let headers = cx.create_headers(guard);
     let list = cx.with_header_list(cx.request_headers(this), |list| list.clone());
     cx.with_header_list(headers, |own| *own = list);
-    let signal = cx.create_dependent_abort_signal(window, &[cx.request_signal(this)]);
-    Ok(cx.create_request(window, data, headers, signal))
+    let signal = cx.create_dependent_abort_signal(context, &[cx.request_signal(this)]);
+    Ok(cx.create_request(context, data, headers, signal))
 }
 
 pub(crate) fn body_used<'gc>(

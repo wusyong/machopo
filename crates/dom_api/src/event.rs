@@ -34,7 +34,7 @@ pub(crate) fn construct_event<'gc, O: crate::OpFront>(
             composed: init.composed,
             trusted: false,
         },
-        op.current_window(cx),
+        op.current_context(cx),
     ))
 }
 
@@ -292,7 +292,7 @@ pub(crate) fn construct_custom_event<'gc, O: crate::OpFront>(
             composed: init.composed,
             trusted: false,
         },
-        op.current_window(cx),
+        op.current_context(cx),
     );
     cx.set_custom_event_data(event);
     if let Some(detail) = init.detail {
@@ -324,7 +324,7 @@ pub(crate) fn construct_error_event<'gc, O: crate::OpFront>(
             lineno: init.lineno,
             colno: init.colno,
         },
-        op.current_window(cx),
+        op.current_context(cx),
     );
     if let Some(error) = init.error {
         op.store_any(cx, cx.error_edge(error_data(cx, event)), error);

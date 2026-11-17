@@ -169,7 +169,7 @@ fn fire_focus_event<H: ScriptHost>(
                 composed: true,
                 trusted: true,
             },
-            window,
+            window.map(|window| cx.window_context(window)),
         );
         let related = related.map(|related| TargetRef::Node(related.get(cx.gc)));
         cx.set_focus_event_data(event, window, 0, related);
@@ -581,7 +581,7 @@ pub(crate) fn construct_focus_event<'gc, O: OpFront>(
             composed: init.composed,
             trusted: false,
         },
-        op.current_window(cx),
+        op.current_context(cx),
     );
     let view = crate::ui_event::init_view(op, cx, &init.view);
     let related = crate::ui_event::related_target_of(op, cx, &init.relatedTarget);

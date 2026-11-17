@@ -162,8 +162,9 @@ impl Default for RequestData {
 
 #[derive(GcObject)]
 pub struct Request {
-    /// Its relevant global: the window of the realm that made it.
-    window: Member<Window>,
+    /// Its relevant global's execution context: that of the realm that
+    /// made it.
+    context: Member<crate::ExecutionContext>,
     /// Its `headers` and `signal`: made with it, never changed.
     headers: Member<Headers>,
     signal: Member<EventTargetImpl>,
@@ -174,7 +175,8 @@ pub struct Request {
 
 #[derive(GcObject)]
 pub struct Response {
-    window: Member<Window>,
+    /// Its relevant global's execution context, as a request's.
+    context: Member<crate::ExecutionContext>,
     headers: Member<Headers>,
     /// The signal of the `fetch()` it came from, if it did: once that
     /// aborts, its body can't be read (Blink errors the body's stream).
@@ -248,10 +250,10 @@ const CREDENTIALS: [RequestCredentials; 3] = [
 ];
 
 impl<'gc> Cx<'_, 'gc> {
-    /// A new `Request` of `window`'s realm.
+    /// A new `Request` of `context`'s realm.
     pub fn create_request(
         &self,
-        window: Gc<'gc, Window>,
+        context: Gc<'gc, crate::ExecutionContext>,
         data: RequestData,
         headers: Gc<'gc, Headers>,
         signal: Gc<'gc, EventTargetImpl>,
@@ -259,7 +261,7 @@ impl<'gc> Cx<'_, 'gc> {
         self.gc.alloc_in(
             &sites::OTHER,
             RequestInit {
-                window: Some(window),
+                context: Some(context),
                 headers: Some(headers),
                 signal: Some(signal),
                 data: LocalExternal::new(Cell::new(data)),
@@ -289,21 +291,24 @@ impl<'gc> Cx<'_, 'gc> {
         request.signal.get(self.gc).expect("a request's signal")
     }
 
-    pub fn request_window(&self, request: Gc<'gc, Request>) -> Gc<'gc, Window> {
-        request.window.get(self.gc).expect("a request's window")
+    pub fn request_context(&self, request: Gc<'gc, Request>) -> Gc<'gc, crate::ExecutionContext> {
+        request
+            .context
+            .get(self.gc)
+            .expect("a request's execution context")
     }
 
-    /// A new `Response` of `window`'s realm, of no `fetch()`.
+    /// A new `Response` of `context`'s realm, of no `fetch()`.
     pub fn create_response(
         &self,
-        window: Gc<'gc, Window>,
+        context: Gc<'gc, crate::ExecutionContext>,
         data: ResponseData,
         headers: Gc<'gc, Headers>,
     ) -> Gc<'gc, Response> {
         self.gc.alloc_in(
             &sites::OTHER,
             ResponseInit {
-                window: Some(window),
+                context: Some(context),
                 headers: Some(headers),
                 signal: None,
                 data: LocalExternal::new(Cell::new(data)),
@@ -329,8 +334,14 @@ impl<'gc> Cx<'_, 'gc> {
         response.headers.get(self.gc).expect("a response's headers")
     }
 
-    pub fn response_window(&self, response: Gc<'gc, Response>) -> Gc<'gc, Window> {
-        response.window.get(self.gc).expect("a response's window")
+    pub fn response_context(
+        &self,
+        response: Gc<'gc, Response>,
+    ) -> Gc<'gc, crate::ExecutionContext> {
+        response
+            .context
+            .get(self.gc)
+            .expect("a response's execution context")
     }
 
     /// The signal of the `fetch()` `response` came from, if it did.
@@ -369,11 +380,13 @@ impl<'gc> Cx<'_, 'gc> {
                 credentials: Cell::new(index_of(&CREDENTIALS, credentials)),
             },
         );
-        let fetches = match window.fetches.get(self.gc) {
+        let fetches = match self.window_context(window).fetches.get(self.gc) {
             Some(fetches) => fetches,
             None => {
                 let fetches = HeapVector::new(self.gc, 1);
-                window.fetches.set(self.gc, Some(fetches));
+                self.window_context(window)
+                    .fetches
+                    .set(self.gc, Some(fetches));
                 fetches
             }
         };
@@ -401,7 +414,7 @@ impl<'gc> Cx<'_, 'gc> {
 
     /// `window`'s fetch in flight numbered `id`, if it has it.
     pub fn window_fetch(&self, window: Gc<'gc, Window>, id: u64) -> Option<Gc<'gc, FetchRecord>> {
-        let fetches = window.fetches.get(self.gc)?;
+        let fetches = self.window_context(window).fetches.get(self.gc)?;
         (0..fetches.len())
             .filter_map(|index| fetches.get(self.gc, index))
             .find(|record| record.id.get() == id)
@@ -412,7 +425,7 @@ impl<'gc> Cx<'_, 'gc> {
     /// Whether it was in flight.
     pub fn finish_fetch(&self, record: Gc<'gc, FetchRecord>) -> bool {
         let window = self.fetch_window(record);
-        let Some(fetches) = window.fetches.get(self.gc) else {
+        let Some(fetches) = self.window_context(window).fetches.get(self.gc) else {
             return false;
         };
         let Some(index) = (0..fetches.len()).find(|&index| {

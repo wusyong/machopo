@@ -85,7 +85,7 @@ fn untrusted<'gc, O: OpFront>(
             composed,
             trusted: false,
         },
-        op.current_window(cx),
+        op.current_context(cx),
     )
 }
 
@@ -187,7 +187,8 @@ pub fn update_animations<H: ScriptHost>(
                         composed: false,
                         trusted: true,
                     },
-                    cx.window_of(document),
+                    cx.window_of(document)
+                        .map(|window| cx.window_context(window)),
                 );
                 let pseudo_element = match pending.pseudo {
                     None => "",

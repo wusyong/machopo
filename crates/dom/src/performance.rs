@@ -16,7 +16,7 @@ use std::cell::Cell;
 
 use elise::{Gc, GcObject, HeapVector, JsEdge, LocalExternal, Member};
 
-use crate::{Cx, DomString, EventTargetImpl, Window, sites};
+use crate::{Cx, DomString, EventTargetImpl, ExecutionContext, Window, sites};
 
 /// An entry's `entryType`, which its interface goes by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,7 +144,8 @@ impl NavigationMilestone {
 
 #[derive(GcObject)]
 pub struct PerformanceData {
-    window: Member<Window>,
+    /// The execution context whose `performance` it is.
+    context: Member<ExecutionContext>,
     /// Its buffer, the oldest first.
     entries: Member<HeapVector<PerformanceEntry>>,
     /// The observers registered with it, in the order they first observed;
@@ -165,9 +166,9 @@ pub struct PerformanceData {
 /// navigation entry's times are its window's navigation timing's).
 #[derive(GcObject)]
 pub struct PerformanceEntry {
-    /// Its relevant global: the window whose `performance` made it, or the
-    /// realm's that constructed it.
-    window: Member<Window>,
+    /// Its relevant global's execution context: that whose `performance`
+    /// made it, or the realm's that constructed it.
+    context: Member<ExecutionContext>,
     entry_type: Cell<u8>,
     name: LocalExternal<DomString>,
     start_time: Cell<f64>,
@@ -193,7 +194,7 @@ pub enum PerformanceObserverMode {
 
 #[derive(GcObject)]
 pub struct PerformanceObserver {
-    window: Member<Window>,
+    context: Member<ExecutionContext>,
     /// Its callback, the engine's to set (`performance_observer_callback_edge`).
     callback: JsEdge,
     mode: Cell<u8>,
@@ -254,14 +255,22 @@ impl PerformanceTimingKind {
 impl<'gc> Cx<'_, 'gc> {
     /// `window`'s `performance`, the same each time.
     pub fn window_performance(&self, window: Gc<'gc, Window>) -> Gc<'gc, EventTargetImpl> {
-        if let Some(performance) = window.performance.get(self.gc) {
+        self.context_performance(self.window_context(window))
+    }
+
+    /// `context`'s `performance`, the same each time.
+    pub fn context_performance(
+        &self,
+        context: Gc<'gc, ExecutionContext>,
+    ) -> Gc<'gc, EventTargetImpl> {
+        if let Some(performance) = context.performance.get(self.gc) {
             return performance;
         }
         let target = self.create_event_target();
         let data = self.gc.alloc_in(
             &sites::OTHER,
             PerformanceDataInit {
-                window: Some(window),
+                context: Some(context),
                 entries: None,
                 observers: None,
                 active: None,
@@ -272,7 +281,7 @@ impl<'gc> Cx<'_, 'gc> {
             },
         );
         target.performance.set(self.gc, Some(data));
-        window.performance.set(self.gc, Some(target));
+        context.performance.set(self.gc, Some(target));
         target
     }
 
@@ -284,17 +293,30 @@ impl<'gc> Cx<'_, 'gc> {
         performance.performance.get(self.gc).expect("a performance")
     }
 
-    pub fn performance_window(&self, performance: Gc<'gc, EventTargetImpl>) -> Gc<'gc, Window> {
+    /// The execution context whose `performance` `performance` is.
+    pub fn performance_context(
+        &self,
+        performance: Gc<'gc, EventTargetImpl>,
+    ) -> Gc<'gc, ExecutionContext> {
         self.performance_data(performance)
-            .window
+            .context
             .get(self.gc)
-            .expect("a performance's window")
+            .expect("a performance's execution context")
     }
 
-    /// A new entry of `window`'s, in no buffer.
+    /// The window whose `performance` `performance` is, if its execution
+    /// context is a window's.
+    pub fn performance_window(
+        &self,
+        performance: Gc<'gc, EventTargetImpl>,
+    ) -> Option<Gc<'gc, Window>> {
+        self.context_window(self.performance_context(performance))
+    }
+
+    /// A new entry of `context`'s, in no buffer.
     pub fn create_performance_entry(
         &self,
-        window: Gc<'gc, Window>,
+        context: Gc<'gc, ExecutionContext>,
         entry_type: PerformanceEntryType,
         name: &str,
         start_time: f64,
@@ -304,7 +326,7 @@ impl<'gc> Cx<'_, 'gc> {
         self.gc.alloc_in(
             &sites::OTHER,
             PerformanceEntryInit {
-                window: Some(window),
+                context: Some(context),
                 entry_type: Cell::new(entry_type.bit()),
                 name: LocalExternal::new(DomString::new(name)),
                 start_time: Cell::new(start_time),
@@ -329,8 +351,22 @@ impl<'gc> Cx<'_, 'gc> {
         (entry.start_time.get(), entry.duration.get())
     }
 
-    pub fn performance_entry_window(&self, entry: Gc<'gc, PerformanceEntry>) -> Gc<'gc, Window> {
-        entry.window.get(self.gc).expect("an entry's window")
+    pub fn performance_entry_context(
+        &self,
+        entry: Gc<'gc, PerformanceEntry>,
+    ) -> Gc<'gc, ExecutionContext> {
+        entry
+            .context
+            .get(self.gc)
+            .expect("an entry's execution context")
+    }
+
+    /// The window `entry` is of, if its execution context is a window's.
+    pub fn performance_entry_window(
+        &self,
+        entry: Gc<'gc, PerformanceEntry>,
+    ) -> Option<Gc<'gc, Window>> {
+        self.context_window(self.performance_entry_context(entry))
     }
 
     /// A mark's or a measure's `detail` serialized (none: `null`).
@@ -422,7 +458,10 @@ impl<'gc> Cx<'_, 'gc> {
         kind: PerformanceTimingKind,
     ) -> Gc<'gc, PerformanceTiming> {
         let data = self.performance_data(performance);
-        let window = data.window.get(self.gc);
+        let window = data
+            .context
+            .get(self.gc)
+            .and_then(|context| self.context_window(context));
         let make = || {
             self.gc.alloc_in(
                 &sites::OTHER,
@@ -461,6 +500,15 @@ impl<'gc> Cx<'_, 'gc> {
     /// the document commits).
     pub fn set_navigation_timing(&self, window: Gc<'gc, Window>, timing: NavigationTiming) {
         window.navigation_timing.set(Some(Box::new(timing)));
+    }
+
+    /// The navigation timing of `context`'s global's document, if it has
+    /// one (a window's, its host gave it one).
+    pub fn context_navigation_timing(
+        &self,
+        context: Gc<'gc, ExecutionContext>,
+    ) -> Option<NavigationTiming> {
+        self.navigation_timing(self.context_window(context)?)
     }
 
     /// `window`'s document's navigation timing, if its host gave one.
@@ -504,15 +552,15 @@ impl<'gc> Cx<'_, 'gc> {
         cell.set(Some(timing));
     }
 
-    /// A new observer of `window`'s.
+    /// A new observer of `context`'s.
     pub fn create_performance_observer(
         &self,
-        window: Gc<'gc, Window>,
+        context: Gc<'gc, ExecutionContext>,
     ) -> Gc<'gc, PerformanceObserver> {
         self.gc.alloc_in(
             &sites::OTHER,
             PerformanceObserverInit {
-                window: Some(window),
+                context: Some(context),
                 callback: (),
                 mode: Cell::new(0),
                 types: Cell::new(0),
@@ -523,11 +571,14 @@ impl<'gc> Cx<'_, 'gc> {
         )
     }
 
-    pub fn performance_observer_window(
+    pub fn performance_observer_context(
         &self,
         observer: Gc<'gc, PerformanceObserver>,
-    ) -> Gc<'gc, Window> {
-        observer.window.get(self.gc).expect("an observer's window")
+    ) -> Gc<'gc, ExecutionContext> {
+        observer
+            .context
+            .get(self.gc)
+            .expect("an observer's execution context")
     }
 
     pub fn performance_observer_callback_edge(
@@ -711,14 +762,15 @@ impl<'gc> Cx<'_, 'gc> {
     }
 
     /// Queues the task delivering `performance`'s observers' entries (a
-    /// window element task of `performance`'s), unless it is queued.
+    /// task of `performance`'s, in its execution context's queue), unless
+    /// it is queued.
     pub fn queue_performance_observer_task(&self, performance: Gc<'gc, EventTargetImpl>) {
         let data = self.performance_data(performance);
         if data.task_queued.replace(true) {
             return;
         }
-        if let Some(window) = data.window.get(self.gc) {
-            self.push_target_task(window, performance, crate::window::PERFORMANCE_TIMELINE, 0);
+        if let Some(context) = data.context.get(self.gc) {
+            self.push_target_task(context, performance, crate::window::PERFORMANCE_TIMELINE, 0);
         }
     }
 

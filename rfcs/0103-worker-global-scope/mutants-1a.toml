@@ -1,0 +1,155 @@
+# 1a: the execution context split out of the window, the table's
+# `#[exposed]` and `#[window]`, members given the execution context and
+# only `#[window]` ones the window.
+test = ["cargo", "test", "-q", "-p", "dom_api_macros", "-p", "dom", "-p", "dom_api", "-p", "dom_js"]
+timeout = 1800
+
+[[mutant]]
+name = "#[window] is allowed on an interface a worker has too"
+file = "crates/dom_api_macros/src/lib.rs"
+from = '''            if let Some(span) = window_at
+                && !window_only(interface)'''
+to = '''            if let Some(span) = window_at
+                && interface.exposed.is_empty()'''
+test = ["cargo", "test", "-q", "-p", "dom_api_macros"]
+
+[[mutant]]
+name = "the table's #[exposed] is dropped"
+file = "crates/dom_api_macros/src/lib.rs"
+from = '''            exposed = Some(globals.into_iter().collect());'''
+to = '''            let _ = globals;'''
+
+[[mutant]]
+name = "a #[window] constructor is given no window"
+file = "crates/dom_api_macros/src/lib.rs"
+from = '''    let prepare_window = (with_front || with_window).then(|| quote!(#front.prepare_window();));
+    let window = local("window");
+    let find_window =
+        with_window.then(|| quote!(let #window = <F as #api::typed::Front>::op_window(#op, #cx);));'''
+to = '''    let prepare_window = (with_front || with_window).then(|| quote!(#front.prepare_window();));
+    let window = local("window");
+    let find_window = with_window
+        .then(|| quote!(let #window = ::std::option::Option::<::elise::Gc<'_, ::dom::Window>>::None;));'''
+
+[[mutant]]
+name = "a #[window] method is given no window"
+file = "crates/dom_api_macros/src/lib.rs"
+from = '''    let (front, op, cx, this_, result, value, error) = locals();
+    let window = local("window");
+    let find_window =
+        with_window.then(|| quote!(let #window = <F as #api::typed::Front>::op_window(#op, #cx);));'''
+to = '''    let (front, op, cx, this_, result, value, error) = locals();
+    let window = local("window");
+    let find_window = with_window
+        .then(|| quote!(let #window = ::std::option::Option::<::elise::Gc<'_, ::dom::Window>>::None;));'''
+
+[[mutant]]
+name = "V8's front gives no window"
+file = "crates/dom_js/src/info_front.rs"
+from = '''    {
+        op.realm_window(cx)
+    }'''
+to = '''    {
+        let _ = (op, cx);
+        None
+    }'''
+
+[[mutant]]
+name = "V8's front gives no execution context"
+file = "crates/dom_js/src/info_front.rs"
+from = '''    ) -> Option<elise::Gc<'gc, dom::ExecutionContext>> {
+        self.realm_window(cx)
+            .map(|window| cx.window_context(window))
+    }'''
+to = '''    ) -> Option<elise::Gc<'gc, dom::ExecutionContext>> {
+        let _ = cx;
+        None
+    }'''
+
+[[mutant]]
+name = "an event's time doesn't count from its context's time origin"
+file = "crates/dom/src/execution_context.rs"
+from = '''        context.map_or(now, |context| now - context.time_origin.get())'''
+to = '''        context.map_or(now, |_| now)'''
+
+[[mutant]]
+name = "a context has no base URL"
+file = "crates/dom/src/execution_context.rs"
+from = '''        self.document_base_url(self.context_document(context)?)'''
+to = '''        self.document_base_url(self.context_document(context)?).and(None)'''
+
+[[mutant]]
+name = "a context has no origin"
+file = "crates/dom/src/execution_context.rs"
+from = '''        self.document_origin(self.context_document(context)?)'''
+to = '''        self.document_origin(self.context_document(context)?).and(None)'''
+
+[[mutant]]
+name = "a context's blob URL isn't registered"
+file = "crates/dom/src/execution_context.rs"
+from = '''        let Some(document) = self.context_document(context) else {
+            return;
+        };
+        self.request_blob_url(crate::BlobUrlRequest::Register {'''
+to = '''        let Some(document) = self.context_document(context).filter(|_| false) else {
+            return;
+        };
+        self.request_blob_url(crate::BlobUrlRequest::Register {'''
+
+[[mutant]]
+name = "a target's task loses its target"
+file = "crates/dom/src/window.rs"
+from = '''        self.push_task(
+            context,
+            document,
+            Some(target),'''
+to = '''        self.push_task(
+            context,
+            document,
+            Some(target).filter(|_| false),'''
+
+[[mutant]]
+name = "an abort signal's context isn't its target's"
+file = "crates/dom/src/event.rs"
+from = '''                .or_else(|| self.abort_signal_context(target))'''
+to = '''                .or_else(|| self.abort_signal_context(target).filter(|_| false))'''
+
+[[mutant]]
+name = "a port isn't kept by its owner"
+file = "crates/dom/src/message.rs"
+from = '''        let Some(owner) = data.owner.get(self.gc) else {
+            return;
+        };
+        let ports = match owner.message_ports.get(self.gc) {'''
+to = '''        let Some(owner) = data.owner.get(self.gc).filter(|_| false) else {
+            return;
+        };
+        let ports = match owner.message_ports.get(self.gc) {'''
+
+[[mutant]]
+name = "a port received has no owner"
+file = "crates/dom/src/message.rs"
+from = '''                data.owner.set(self.gc, Some(self.window_context(window)));'''
+to = '''                data.owner.set(self.gc, Some(self.window_context(window)).filter(|_| false));'''
+
+[[mutant]]
+name = "a context has no navigation timing"
+file = "crates/dom/src/performance.rs"
+from = '''        self.navigation_timing(self.context_window(context)?)'''
+to = '''        self.navigation_timing(self.context_window(context)?).and(None)'''
+
+[[mutant]]
+name = "a Location's URL isn't resolved against the entry realm's base URL"
+file = "crates/dom_api/src/location.rs"
+from = '''        Some(entry) => cx.context_base_url(entry),'''
+to = '''        Some(_) => None,'''
+
+[[mutant]]
+name = "a window installs no interface"
+file = "crates/dom_js/src/templates.rs"
+from = '''        if !exposed {
+            continue;
+        }'''
+to = '''        if exposed {
+            continue;
+        }'''

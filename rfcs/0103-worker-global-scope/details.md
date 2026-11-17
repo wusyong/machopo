@@ -57,17 +57,28 @@
 
 | 去向 | 欄位 |
 | --- | --- |
-| 執行環境（兩種 global 都要） | `listeners`、`time_origin`、`timers`、`last_timer_id`、`nesting`、`posted_messages`、`message_ports`、`fetches`、`blob_reads`、`crypto`、`performance`、`reporting`、`wrapper` |
-| 留在 `Window` | `document`、`location`、`history`、`navigation_timing`、`hash_changes`、`animation_frames`、`last_animation_frame`、`element_tasks`、`native_timers`、`intersection_observers`、`pending_intersection_observers`、`resize_observers`、`idle_callbacks`、`last_idle_callback`、`pending_images`、`page_focused`、`focus_visible`、`page_hidden`、`last_activation`、`custom_elements`、`current_event` |
+| 執行環境（兩種 global 都要） | `time_origin`、`timers`、`last_timer_id`、`nesting`、`native_timers`、`element_tasks`、`posted_messages`、`message_ports`、`fetches`、`blob_reads`、`crypto`、`performance`、`reporting`。`native_timers`（UA 自己的 timer）和 `element_tasks`（task 的佇列）是 2026-11-17 搬的時候加的：`AbortSignal.timeout()` 用前者，`FileReader`、blob 的讀取、performance timeline 的 task 用後者，worker 都有 |
+| 留在 `Window` | `listeners`、`wrapper`（「已決定的事項」第 5 條）、`document`、`location`、`history`、`navigation_timing`、`hash_changes`、`animation_frames`、`last_animation_frame`、`intersection_observers`、`pending_intersection_observers`、`resize_observers`、`idle_callbacks`、`last_idle_callback`、`pending_images`、`page_focused`、`focus_visible`、`page_hidden`、`last_activation`、`custom_elements`、`current_event` |
 | 要再看的 | `navigator`（worker 的是 `WorkerNavigator`，成員是 `Navigator` 的一部分） |
+
+## 2A 的原型
+
+2026-11-17，branch `0103`。要回答的：成員的函式能不能被擋在 window 之外，而 `declare!` 產生的程式拿得到。
+
+- `declare!` 的 interface 收 `#[exposed(Window, Worker, DedicatedWorker)]`（沒寫是只有 `Window`），建構子收 `#[window]`；`#[window]` 寫在 exposed 不只 `Window` 的 interface 上是表的錯誤。
+- `Front::op_window(op: &mut Self::Op<'o>, cx)` 是 `Front` 的 associated function。`#[window]` 的建構子在操作之前 `prepare_window`，操作裡由產生的程式呼叫 `<F as Front>::op_window(op, cx)`，把結果交給函式。
+- `new CSSStyleSheet()` 改成 `#[window]`：函式不再拿 `op`，改拿 `window: Option<Gc<Window>>`。
+- 試著在一個只有 `O: OpFront` 的函式裡寫 `<_ as Front>::op_window(op, cx)`：編譯錯誤 `E0283`（推不出 front 的型別）。成員改寫成 `fn f<F: Front>(op: &mut F::Op<'_>)` 也一樣：產生的程式呼叫它時推不出 `F`。試完拿掉了，沒有留在程式裡。
+
+原型裡 `op_window` 的預設實作還是呼叫 `OpFront::current_window`；`current_window` 要等執行環境分出來、50 處都改完才能拿掉，那時 `op_window` 改成每個 engine 自己實作，「成員拿不到 window」才完整成立。
 
 ## Chromium 的對應
 
 2026-11-17 對照 Chromium `main` 的 `0889dbff0b08`。路徑都在 Chromium 的 repo 裡；`core/` 是 `third_party/blink/renderer/core/`。
 
-| machopo（暫名） | Chromium | 在哪裡 | 原始碼怎麼說 |
+| machopo | Chromium | 在哪裡 | 原始碼怎麼說 |
 | --- | --- | --- | --- |
-| `GlobalScope` | `ExecutionContext` | `core/execution_context/execution_context.h` | 「An environment in which script can execute」：window 和 worker 共同的 base URL、security context、暫停和結束、console；「Typically, the ExecutionContext is an instance of LocalDOMWindow or of WorkerOrWorkletGlobalScope」 |
+| `ExecutionContext`（`Window` 和 worker 的 global 各拿著一個） | `ExecutionContext`（兩者繼承它） | `core/execution_context/execution_context.h` | 「An environment in which script can execute」：window 和 worker 共同的 base URL、security context、暫停和結束、console；「Typically, the ExecutionContext is an instance of LocalDOMWindow or of WorkerOrWorkletGlobalScope」 |
 | `Window` | `LocalDOMWindow` | `core/frame/local_dom_window.h` | 繼承 `DOMWindow`、`ExecutionContext`、`WindowOrWorkerGlobalScope`、`WindowEventHandlers` |
 | `WorkerGlobalScope` | `WorkerGlobalScope` | `core/workers/worker_global_scope.h` | 繼承 `WorkerOrWorkletGlobalScope`（它繼承 `EventTarget` 和 `ExecutionContext`）和 `WindowOrWorkerGlobalScope` |
 | `DedicatedWorkerGlobalScope` | 同名 | `core/workers/dedicated_worker_global_scope.h` | `final`，繼承 `WorkerGlobalScope` |

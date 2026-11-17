@@ -153,18 +153,18 @@ pub(crate) fn bytes<'gc, O: OpFront>(
 }
 
 /// File API's "read the blob" (the bytes are all here: no streams): a new
-/// promise resolved with `read` in a task of the window of the blob's
-/// relevant realm (its wrapper's: `#[realm]`; `Cx::queue_blob_read`), so
-/// that the microtasks queued before it run first, as in Chrome.
+/// promise resolved with `read` in a task of the blob's relevant realm
+/// (its wrapper's: `#[realm]`; `Cx::queue_blob_read`), so that the
+/// microtasks queued before it run first, as in Chrome.
 fn read<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     read: BlobRead,
 ) -> Result<PromiseOf<'gc>, ApiError> {
-    let window = op
-        .current_window(cx)
-        .ok_or_else(|| ApiError::type_error("reading a blob needs a window"))?;
-    Ok(PromiseOf::Pending(cx.queue_blob_read(window, read)))
+    let context = op
+        .current_context(cx)
+        .ok_or_else(|| ApiError::type_error("reading a blob needs a realm"))?;
+    Ok(PromiseOf::Pending(cx.queue_blob_read(context, read)))
 }
 
 #[cfg(test)]

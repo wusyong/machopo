@@ -1421,20 +1421,28 @@ pub(crate) fn new_wrapper_unwrapped<'s>(
     bindings::new_wrapper(scope.scope(), boilerplate)
 }
 
-/// Installs the table's interface objects, `DOMException` and
-/// `QuotaExceededError`, and the legacy
-/// callback interface objects (`NodeFilter`) on `global` (a realm's): lazy
-/// data properties (made the first time they are read), not enumerable,
-/// as WebIDL's interface objects. The isolate's DOM is made with the
-/// first.
+/// Installs the interface objects of the table's interfaces exposed in a
+/// window (WebIDL's `[Exposed]`, `InterfaceDesc::exposed`: a window's realm
+/// is the only kind there is yet), `DOMException` and `QuotaExceededError`,
+/// and the legacy callback interface objects (`NodeFilter`) on `global` (a
+/// window realm's): lazy data properties (made the first time they are
+/// read), not enumerable, as WebIDL's interface objects. The isolate's DOM
+/// is made with the first.
 pub fn install(scope: &mut v8::PinScope<'_, '_>, global: v8::Local<'_, v8::Object>) {
     state::install(scope);
     let names = INTERFACES
         .iter()
-        .map(|interface| interface.name)
-        .chain(["DOMException", "QuotaExceededError"])
-        .chain(CALLBACK_INTERFACES.iter().map(|interface| interface.name));
-    for (index, name) in names.enumerate() {
+        .map(|interface| (interface.name, interface.exposed.window))
+        .chain([("DOMException", true), ("QuotaExceededError", true)])
+        .chain(
+            CALLBACK_INTERFACES
+                .iter()
+                .map(|interface| (interface.name, true)),
+        );
+    for (index, (name, exposed)) in names.enumerate() {
+        if !exposed {
+            continue;
+        }
         let name = string(scope, name);
         let data = v8::Integer::new(scope, i32::try_from(index).expect("a small table"));
         global.set_lazy_data_property_with_data(

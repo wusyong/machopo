@@ -19,7 +19,7 @@ use dom::{DomString, FreeEffect, KeyframeEffectObject, NodeRef};
 use elise::Gc;
 
 use crate::typed::{AnimationOptions, DictValue, DomStr};
-use crate::{ApiCx, ApiError, DomException, ExceptionName, OpFront};
+use crate::{ApiCx, ApiError, DomException, ExceptionName};
 
 /// Where an effect is.
 enum Place {
@@ -159,16 +159,14 @@ fn gone() -> ApiError {
 
 /// `new KeyframeEffect(target, keyframes, options)`: of the realm's
 /// document, without an animation (on its object).
-pub(crate) fn construct<'gc, O: OpFront>(
-    op: &mut O,
+pub(crate) fn construct<'gc>(
     cx: &ApiCx<'_, 'gc>,
+    window: Option<Gc<'gc, dom::Window>>,
     target: Option<NodeRef<'gc>>,
     keyframes: Option<&ScriptKeyframes>,
     options: &AnimationOptions,
 ) -> Result<Gc<'gc, KeyframeEffectObject>, ApiError> {
-    let window = op
-        .current_window(cx)
-        .ok_or_else(|| ApiError::type_error("no window"))?;
+    let window = window.ok_or_else(|| ApiError::type_error("no window"))?;
     let document = cx.window_document(window);
     let mut timing = animation::default_timing();
     let mut input = TimingInput::default();

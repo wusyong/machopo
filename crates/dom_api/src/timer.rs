@@ -234,7 +234,7 @@ pub fn report_exception<H: ScriptHost>(
             return None;
         }
         cx.set_reporting(window, true);
-        let event = cx.create_error_event(info, Some(window));
+        let event = cx.create_error_event(info, Some(cx.window_context(window)));
         let data = cx.error_event_data(event).expect("an error event's data");
         if let Some(error) = error.take() {
             store(cx.error_edge(data), error);

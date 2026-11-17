@@ -238,11 +238,10 @@ pub(crate) fn remove_named_item_ns<'gc>(
 // --- DOMParser ---------------------------------------------------------------
 
 /// `new DOMParser()`: of the current realm's window.
-pub(crate) fn construct_dom_parser<'gc, O: crate::typed::OpFront>(
-    op: &mut O,
+pub(crate) fn construct_dom_parser<'gc>(
     cx: &ApiCx<'_, 'gc>,
+    window: Option<Gc<'gc, dom::Window>>,
 ) -> Result<Gc<'gc, dom::DomParser>, ApiError> {
-    let window = op.current_window(cx);
     Ok(cx.create_dom_parser(window))
 }
 

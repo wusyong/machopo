@@ -105,10 +105,24 @@ struct InterfaceDef {
     /// `#[is_html_dda]`: HTML's [[IsHTMLDDA]] (`HTMLAllCollection`): its
     /// objects undetectable in JS, callable as its `item`.
     is_html_dda: bool,
+    /// `#[exposed(Window, Worker)]`: WebIDL's `[Exposed]`, the globals
+    /// whose realms have it (`GLOBALS`); `Window` alone if not given.
+    exposed: Vec<Ident>,
     name: Ident,
     parent: Option<Ident>,
     objects: Objects,
     members: Vec<MemberDef>,
+}
+
+/// The globals an interface may be exposed in (WebIDL's names, as Blink's
+/// IDL writes them): a document's window, any worker's global, a dedicated
+/// worker's.
+const GLOBALS: [&str; 3] = ["Window", "Worker", "DedicatedWorker"];
+
+/// Whether an interface is exposed in `Window`'s realms alone: its members'
+/// functions may be given the window (`#[window]`).
+fn window_only(interface: &InterfaceDef) -> bool {
+    interface.exposed.iter().all(|global| global == "Window")
 }
 
 /// What an interface's objects are: nodes, its own kinds listed; or the
@@ -180,11 +194,16 @@ enum MemberDef {
         /// `#[front]`: its function gets the front end too (for what
         /// only the engine does: comparing and storing a callback).
         front: bool,
-        /// `#[realm]`: `#[front]`, the window of `this`'s relevant realm found
-        /// before its operation (`Front::prepare_relevant_window`, then
-        /// `OpFront::current_window`: what it queues a task in, a blob
+        /// `#[realm]`: `#[front]`, `this`'s relevant realm found before its
+        /// operation (`Front::prepare_relevant_window`, then
+        /// `OpFront::current_context`: what it queues a task in, a blob
         /// read's).
         realm: bool,
+        /// `#[window]`: its function gets the window of the realm it runs
+        /// in, as a constructor's (`MemberDef::Constructor::window`): the
+        /// current realm's, or what its arguments prepared instead (the
+        /// incumbent realm's, `postMessage`'s).
+        window: bool,
         /// `#[calls_script]`: its function runs out of the operation and
         /// calls script through the front end (`ScriptHost`).
         calls_script: bool,
@@ -240,8 +259,13 @@ enum MemberDef {
         args: Vec<Arg>,
         function: Path,
         /// `#[front]`: its function gets the front end too (the current
-        /// realm, `Front::current_window`).
+        /// realm's execution context, `OpFront::current_context`).
         front: bool,
+        /// `#[window]`: its function gets the current realm's window
+        /// (`Front::op_window`, `Option<Gc<Window>>` after the operation's
+        /// `ApiCx`), which only an interface exposed in `Window` alone may
+        /// ask for (`check`): a member's own function can't find one.
+        window: bool,
     },
 }
 
@@ -337,12 +361,27 @@ impl Parse for InterfaceDef {
         let namespace = attrs.iter().any(|attr| attr.path().is_ident("namespace"));
         let global = attrs.iter().any(|attr| attr.path().is_ident("global"));
         let is_html_dda = attrs.iter().any(|attr| attr.path().is_ident("is_html_dda"));
+        let mut exposed = None;
+        for attr in attrs.iter().filter(|attr| attr.path().is_ident("exposed")) {
+            let globals =
+                attr.parse_args_with(Punctuated::<Ident, Token![,]>::parse_separated_nonempty)?;
+            for global in &globals {
+                if !GLOBALS.iter().any(|name| global == name) {
+                    return Err(syn::Error::new(
+                        global.span(),
+                        "an interface is exposed in `Window`, `Worker` or `DedicatedWorker`",
+                    ));
+                }
+            }
+            exposed = Some(globals.into_iter().collect());
+        }
         attrs.retain(|attr| {
             !attr.path().is_ident("iterable")
                 && !attr.path().is_ident("override_builtins")
                 && !attr.path().is_ident("namespace")
                 && !attr.path().is_ident("global")
                 && !attr.path().is_ident("is_html_dda")
+                && !attr.path().is_ident("exposed")
         });
         input.parse::<kw::interface>()?;
         let name: Ident = input.parse()?;
@@ -403,6 +442,7 @@ impl Parse for InterfaceDef {
                 ));
             }
         }
+        let exposed = exposed.unwrap_or_else(|| vec![Ident::new("Window", name.span())]);
         Ok(Self {
             attrs,
             iterable,
@@ -410,6 +450,7 @@ impl Parse for InterfaceDef {
             namespace,
             global,
             is_html_dda,
+            exposed,
             name,
             parent,
             objects,
@@ -432,8 +473,9 @@ impl Parse for MemberDef {
             mut pairs,
             mut replaceable,
             mut realm,
+            mut window,
         ) = (
-            false, false, false, false, false, false, false, false, false, false,
+            false, false, false, false, false, false, false, false, false, false, false,
         );
         let mut first: Option<Path> = None;
         let mut named = None;
@@ -600,12 +642,17 @@ impl Parse for MemberDef {
                 (&mut replaceable, input.peek(kw::attribute))
             } else if attr.path().is_ident("realm") {
                 (&mut realm, input.peek(kw::method))
+            } else if attr.path().is_ident("window") {
+                (
+                    &mut window,
+                    input.peek(kw::constructor) || input.peek(kw::method),
+                )
             } else {
                 return Err(syn::Error::new_spanned(
                     attr,
                     "a member's attribute is `#[front]`, `#[calls_script]`, `#[then_script]`, \
                      `#[unforgeable]`, `#[indexed]`, `#[ce_reactions]`, `#[static_method]`, `#[pairs]`, \
-                     `#[replaceable]` or `#[realm]`",
+                     `#[replaceable]`, `#[realm]` or `#[window]`",
                 ));
             };
             if !allowed {
@@ -615,10 +662,18 @@ impl Parse for MemberDef {
                      method or an attribute, `#[then_script]` a method, `#[unforgeable]` a method or \
                      an attribute, `#[indexed]` a method, `#[ce_reactions]` a method or an attribute, \
                      `#[static_method]` a method or an attribute, `#[pairs]` a method, \
-                     `#[replaceable]` an attribute, `#[realm]` a method",
+                     `#[replaceable]` an attribute, `#[realm]` a method, `#[window]` a constructor or a \
+                     method",
                 ));
             }
             *flag = true;
+        }
+        // Given in the one operation the generated call opens.
+        if window && (calls_script || then_script || realm) {
+            return Err(syn::Error::new_spanned(
+                &attrs[0],
+                "a `#[window]` method is none of `#[calls_script]`, `#[then_script]` and `#[realm]`",
+            ));
         }
         // An attribute's are its setter's and its getter's.
         if front && calls_script && !input.peek(kw::attribute) {
@@ -669,6 +724,7 @@ impl Parse for MemberDef {
                 args,
                 function: input.parse()?,
                 front,
+                window,
             }
         } else if lookahead.peek(kw::attribute) {
             input.parse::<kw::attribute>()?;
@@ -766,6 +822,7 @@ impl Parse for MemberDef {
                 function,
                 front: front || realm,
                 realm,
+                window,
                 calls_script,
                 first,
                 then_script,
@@ -919,6 +976,12 @@ fn expand(table: &Table) -> syn::Result<Tokens> {
             Objects::Nodes(_) | Objects::Type(_) => quote!(::std::option::Option::None),
         };
         let descs = entries.iter().map(|entry| &entry.desc);
+        let exposed_in = |global: &str| interface.exposed.iter().any(|exposed| exposed == global);
+        let (in_window, in_worker, in_dedicated_worker) = (
+            exposed_in("Window"),
+            exposed_in("Worker"),
+            exposed_in("DedicatedWorker"),
+        );
         items.extend(quote! {
             #(#attrs)*
             pub struct #name;
@@ -935,6 +998,11 @@ fn expand(table: &Table) -> syn::Result<Tokens> {
                     namespace: #namespace,
                     global: #global,
                     is_html_dda: #is_html_dda,
+                    exposed: #api::declare::Exposed {
+                        window: #in_window,
+                        worker: #in_worker,
+                        dedicated_worker: #in_dedicated_worker,
+                    },
                     members: &[#(#descs),*],
                 };
                 const NAME: &'static str = #name_str;
@@ -1211,6 +1279,29 @@ fn check(table: &Table) -> syn::Result<()> {
                 }
                 seen.push(key);
             }
+            let window_at = match member {
+                MemberDef::Constructor {
+                    token,
+                    window: true,
+                    ..
+                } => Some(token.span),
+                MemberDef::Method {
+                    name, window: true, ..
+                } => Some(name.span()),
+                _ => None,
+            };
+            if let Some(span) = window_at
+                && !window_only(interface)
+            {
+                fail(syn::Error::new(
+                    span,
+                    format!(
+                        "`#[window]` marks a member of an interface exposed in `Window` alone; \
+                         `{}` is in a worker's global too",
+                        interface.name
+                    ),
+                ));
+            }
             if let MemberDef::Method { args, .. } | MemberDef::Constructor { args, .. } = member
                 && let Some(first) = args.iter().position(|arg| arg.optional)
                 && let Some(required) = args[first..].iter().find(|arg| !arg.optional)
@@ -1317,7 +1408,19 @@ fn entries(interface: &InterfaceDef) -> Vec<Entry<'_>> {
                         } else if *is_static {
                             // No `this`: a static method's path, of no
                             // arguments.
-                            method(iface, name, &[], ty, get, false, false, true, false, false)
+                            method(
+                                iface,
+                                name,
+                                &[],
+                                ty,
+                                get,
+                                false,
+                                false,
+                                true,
+                                false,
+                                false,
+                                false,
+                            )
                         } else {
                             getter(iface, ty, get)
                         },
@@ -1375,6 +1478,7 @@ fn entries(interface: &InterfaceDef) -> Vec<Entry<'_>> {
                 function,
                 front,
                 realm,
+                window,
                 calls_script,
                 first,
                 then_script,
@@ -1502,6 +1606,7 @@ fn entries(interface: &InterfaceDef) -> Vec<Entry<'_>> {
                                 *ce_reactions,
                                 *is_static,
                                 *realm,
+                                *window,
                                 *legacy_factory,
                             )
                         },
@@ -1516,6 +1621,7 @@ fn entries(interface: &InterfaceDef) -> Vec<Entry<'_>> {
                 args,
                 function,
                 front,
+                window,
             } => {
                 let params = args.iter().map(param);
                 entries.push(Entry {
@@ -1538,7 +1644,7 @@ fn entries(interface: &InterfaceDef) -> Vec<Entry<'_>> {
                     path: Some((
                         Kind::Constructor,
                         "constructor",
-                        constructor(iface, args, function, *front),
+                        constructor(iface, args, function, *front, *window),
                     )),
                     types: args.iter().map(|arg| &arg.ty).collect(),
                     is_static: false,
@@ -1738,15 +1844,20 @@ fn method(
     ce_reactions: bool,
     is_static: bool,
     realm: bool,
+    with_window: bool,
     legacy_factory: bool,
 ) -> Tokens {
     let api = api();
     let (front, op, cx, this_, result, value, error) = locals();
+    let window = local("window");
+    let find_window =
+        with_window.then(|| quote!(let #window = <F as #api::typed::Front>::op_window(#op, #cx);));
+    let window_arg = with_window.then(|| quote!(, #window));
     // A legacy factory function is called as a constructor (of its
     // interface, whose object it makes), and may ask for its realm's
     // window in the operation.
     let checked = if legacy_factory {
-        let prepare_window = with_front.then(|| quote!(#front.prepare_window();));
+        let prepare_window = (with_front || with_window).then(|| quote!(#front.prepare_window();));
         let required = args.iter().take_while(|arg| !arg.optional).count();
         quote! {
             if !#front.construct(<#iface as #api::declare::Interface>::INDEX, #required) {
@@ -1760,10 +1871,13 @@ fn method(
         // A static operation with the front end has no `this` to find its
         // realm's window by: the current realm's found before it
         // (`URL.createObjectURL`'s origin).
+        // One given the window has its realm's found before its arguments
+        // are taken: an argument that finds another realm's (the incumbent
+        // one, `postMessage`'s message) has the last word.
         let prepare_window = if realm {
             Some(quote!(#front.prepare_relevant_window();))
         } else {
-            (is_static && with_front).then(|| quote!(#front.prepare_window();))
+            (is_static && with_front || with_window).then(|| quote!(#front.prepare_window();))
         };
         quote! {
             if !#front.has_args(#js, #required) {
@@ -1792,7 +1906,8 @@ fn method(
             #(
                 let #names = <#types as #api::typed::ArgType>::param(#op, #cx, &#names, #param_indices)?;
             )*
-            let #value = #function(#front_arg #cx #this_arg #(, #names)*)?;
+            #find_window
+            let #value = #function(#front_arg #cx #window_arg #this_arg #(, #names)*)?;
             ::std::result::Result::Ok(
                 <#ret as #api::typed::RetType>::give_prepared(
                     #op,
@@ -2073,12 +2188,23 @@ fn script_method(
 /// A constructor's call: checked as one and its arguments counted, its
 /// arguments taken, then in an operation, the arguments, the function, and
 /// its new object given to the call's own new wrapper.
-fn constructor(iface: &Ident, args: &[Arg], function: &Path, with_front: bool) -> Tokens {
+fn constructor(
+    iface: &Ident,
+    args: &[Arg],
+    function: &Path,
+    with_front: bool,
+    with_window: bool,
+) -> Tokens {
     let api = api();
     let (front, op, cx, _, result, value, error) = locals();
     let front_arg = with_front.then(|| quote!(#op,));
-    // Its function may ask for the realm's window in the operation.
-    let prepare_window = with_front.then(|| quote!(#front.prepare_window();));
+    // Its function may ask for the realm's window in the operation, or be
+    // given it.
+    let prepare_window = (with_front || with_window).then(|| quote!(#front.prepare_window();));
+    let window = local("window");
+    let find_window =
+        with_window.then(|| quote!(let #window = <F as #api::typed::Front>::op_window(#op, #cx);));
+    let window_arg = with_window.then(|| quote!(, #window));
     let required = args.iter().take_while(|arg| !arg.optional).count();
     let (names, types, optional) = args_of(args);
     let indices = 0..args.len();
@@ -2102,7 +2228,8 @@ fn constructor(iface: &Ident, args: &[Arg], function: &Path, with_front: bool) -
                 #(
                     let #names = <#types as #api::typed::ArgType>::param(#op, #cx, &#names, #param_indices)?;
                 )*
-                let #value = #function(#front_arg #cx #(, #names)*)?;
+                #find_window
+                let #value = #function(#front_arg #cx #window_arg #(, #names)*)?;
                 ::std::result::Result::Ok(#api::typed::Constructed::construct(#value, #op, #cx))
             });
             #(#api::typed::release(#names);)*
@@ -2736,6 +2863,123 @@ mod tests {
         );
     }
 
+    /// A constructor marked `#[window]` finds the current realm's window
+    /// and gives it to its function after the operation's `ApiCx`; one that
+    /// isn't finds none.
+    #[test]
+    fn a_window_constructor_is_given_the_window() {
+        let table = "interface A [type = dom::A] {
+            #[window]
+            constructor(x: u32) = a::construct;
+        }
+        interface B [type = dom::B] {
+            constructor(x: u32) = b::construct;
+        }";
+        let tokens = expand(&syn::parse_str::<Table>(table).unwrap())
+            .unwrap()
+            .to_string();
+        let a = &tokens[tokens.find("a :: construct").unwrap() - 400..];
+        assert!(
+            tokens.contains(":: op_window (op , cx)"),
+            "the window found: {tokens}"
+        );
+        assert!(a.contains("a :: construct (cx , window , arg0)"), "{a}");
+        assert_eq!(tokens.matches("op_window").count(), 1, "B's finds none");
+        assert!(tokens.contains("b :: construct (cx , arg0)"));
+    }
+
+    /// `#[window]` only on an interface exposed in `Window` alone: in a
+    /// worker's global there is none to give.
+    #[test]
+    fn only_a_window_interface_is_given_the_window() {
+        assert_eq!(
+            error(
+                "#[exposed(Window, Worker)]
+                interface A [type = dom::A] {
+                    #[window]
+                    constructor() = a::construct;
+                }"
+            ),
+            "`#[window]` marks a member of an interface exposed in `Window` alone; \
+             `A` is in a worker's global too"
+        );
+        assert_eq!(
+            error(
+                "#[exposed(DedicatedWorker)]
+                interface A [type = dom::A] {
+                    #[window]
+                    constructor() = a::construct;
+                }"
+            ),
+            "`#[window]` marks a member of an interface exposed in `Window` alone; \
+             `A` is in a worker's global too"
+        );
+        // Exposed in `Window` alone, by default or as written: given it.
+        for exposed in ["", "#[exposed(Window)]"] {
+            let table = format!(
+                "{exposed} interface A [type = dom::A] {{ #[window] constructor() = a::construct; }}"
+            );
+            expand(&syn::parse_str::<Table>(&table).unwrap()).unwrap();
+        }
+    }
+
+    #[test]
+    fn an_interface_is_exposed_in_a_known_global() {
+        assert_eq!(
+            error("#[exposed(Window, ServiceWorker)] interface A [] {}"),
+            "an interface is exposed in `Window`, `Worker` or `DedicatedWorker`"
+        );
+    }
+
+    #[test]
+    fn window_marks_a_constructor_or_a_method() {
+        assert_eq!(
+            error("interface A [] { #[window] attribute a: u32, get = f; }"),
+            "`#[front]` marks a method, a constructor or an attribute, `#[calls_script]` a \
+             method or an attribute, `#[then_script]` a method, `#[unforgeable]` a method or \
+             an attribute, `#[indexed]` a method, `#[ce_reactions]` a method or an attribute, \
+             `#[static_method]` a method or an attribute, `#[pairs]` a method, \
+             `#[replaceable]` an attribute, `#[realm]` a method, `#[window]` a constructor or a \
+             method"
+        );
+        assert_eq!(
+            error("interface A [] { #[window] #[calls_script] method f() = f; }"),
+            "a `#[window]` method is none of `#[calls_script]`, `#[then_script]` and `#[realm]`"
+        );
+    }
+
+    /// A method marked `#[window]` is given the window after the
+    /// operation's `ApiCx`, before `this`; its realm's is found before its
+    /// arguments are taken, a legacy factory's and a static one's too.
+    #[test]
+    fn a_window_method_is_given_the_window() {
+        let table = "interface A [type = dom::A] {
+            #[window]
+            method f(x: u32) = a::f;
+            #[window]
+            #[static_method]
+            method g() = a::g;
+        }";
+        let tokens = expand(&syn::parse_str::<Table>(table).unwrap())
+            .unwrap()
+            .to_string();
+        assert!(
+            tokens.contains("a :: f (cx , window , this , arg0)"),
+            "{tokens}"
+        );
+        assert!(tokens.contains("a :: g (cx , window)"), "{tokens}");
+        assert_eq!(tokens.matches("prepare_window ()").count(), 2, "{tokens}");
+        assert_eq!(tokens.matches("op_window").count(), 2, "{tokens}");
+        // On an interface a worker has too: the table's error.
+        assert_eq!(
+            error(
+                "#[exposed(Window, Worker)] interface A [type = dom::A] { #[window] method f() = a::f; }"
+            ),
+            "`#[window]` marks a member of an interface exposed in `Window` alone; \
+             `A` is in a worker's global too"
+        );
+    }
+
     #[test]
     fn a_constant_is_a_u32() {
         assert_eq!(
@@ -2902,27 +3146,27 @@ mod tests {
     fn member_attributes_go_where_they_may() {
         assert_eq!(
             error("interface W [type = W] { #[unforgeable] constructor() = f; }"),
-            "`#[front]` marks a method, a constructor or an attribute, `#[calls_script]` a method or an attribute, `#[then_script]` a method, `#[unforgeable]` a method or an attribute, `#[indexed]` a method, `#[ce_reactions]` a method or an attribute, `#[static_method]` a method or an attribute, `#[pairs]` a method, `#[replaceable]` an attribute, `#[realm]` a method"
+            "`#[front]` marks a method, a constructor or an attribute, `#[calls_script]` a method or an attribute, `#[then_script]` a method, `#[unforgeable]` a method or an attribute, `#[indexed]` a method, `#[ce_reactions]` a method or an attribute, `#[static_method]` a method or an attribute, `#[pairs]` a method, `#[replaceable]` an attribute, `#[realm]` a method, `#[window]` a constructor or a method"
         );
         assert_eq!(
             error("interface W [type = W] { #[inline] method m() = f; }"),
-            "a member's attribute is `#[front]`, `#[calls_script]`, `#[then_script]`, `#[unforgeable]`, `#[indexed]`, `#[ce_reactions]`, `#[static_method]`, `#[pairs]`, `#[replaceable]` or `#[realm]`"
+            "a member's attribute is `#[front]`, `#[calls_script]`, `#[then_script]`, `#[unforgeable]`, `#[indexed]`, `#[ce_reactions]`, `#[static_method]`, `#[pairs]`, `#[replaceable]`, `#[realm]` or `#[window]`"
         );
         assert_eq!(
             error("interface W [type = W] { #[calls_script] constructor() = f; }"),
-            "`#[front]` marks a method, a constructor or an attribute, `#[calls_script]` a method or an attribute, `#[then_script]` a method, `#[unforgeable]` a method or an attribute, `#[indexed]` a method, `#[ce_reactions]` a method or an attribute, `#[static_method]` a method or an attribute, `#[pairs]` a method, `#[replaceable]` an attribute, `#[realm]` a method"
+            "`#[front]` marks a method, a constructor or an attribute, `#[calls_script]` a method or an attribute, `#[then_script]` a method, `#[unforgeable]` a method or an attribute, `#[indexed]` a method, `#[ce_reactions]` a method or an attribute, `#[static_method]` a method or an attribute, `#[pairs]` a method, `#[replaceable]` an attribute, `#[realm]` a method, `#[window]` a constructor or a method"
         );
         assert_eq!(
             error("interface W [type = W] { #[indexed] attribute a: u32, get = f; }"),
-            "`#[front]` marks a method, a constructor or an attribute, `#[calls_script]` a method or an attribute, `#[then_script]` a method, `#[unforgeable]` a method or an attribute, `#[indexed]` a method, `#[ce_reactions]` a method or an attribute, `#[static_method]` a method or an attribute, `#[pairs]` a method, `#[replaceable]` an attribute, `#[realm]` a method"
+            "`#[front]` marks a method, a constructor or an attribute, `#[calls_script]` a method or an attribute, `#[then_script]` a method, `#[unforgeable]` a method or an attribute, `#[indexed]` a method, `#[ce_reactions]` a method or an attribute, `#[static_method]` a method or an attribute, `#[pairs]` a method, `#[replaceable]` an attribute, `#[realm]` a method, `#[window]` a constructor or a method"
         );
         assert_eq!(
             error("interface W [type = W] { #[realm] attribute a: u32, get = f; }"),
-            "`#[front]` marks a method, a constructor or an attribute, `#[calls_script]` a method or an attribute, `#[then_script]` a method, `#[unforgeable]` a method or an attribute, `#[indexed]` a method, `#[ce_reactions]` a method or an attribute, `#[static_method]` a method or an attribute, `#[pairs]` a method, `#[replaceable]` an attribute, `#[realm]` a method"
+            "`#[front]` marks a method, a constructor or an attribute, `#[calls_script]` a method or an attribute, `#[then_script]` a method, `#[unforgeable]` a method or an attribute, `#[indexed]` a method, `#[ce_reactions]` a method or an attribute, `#[static_method]` a method or an attribute, `#[pairs]` a method, `#[replaceable]` an attribute, `#[realm]` a method, `#[window]` a constructor or a method"
         );
         assert_eq!(
             error("interface W [type = W] { #[then_script] attribute a: u32, get = f; }"),
-            "`#[front]` marks a method, a constructor or an attribute, `#[calls_script]` a method or an attribute, `#[then_script]` a method, `#[unforgeable]` a method or an attribute, `#[indexed]` a method, `#[ce_reactions]` a method or an attribute, `#[static_method]` a method or an attribute, `#[pairs]` a method, `#[replaceable]` an attribute, `#[realm]` a method"
+            "`#[front]` marks a method, a constructor or an attribute, `#[calls_script]` a method or an attribute, `#[then_script]` a method, `#[unforgeable]` a method or an attribute, `#[indexed]` a method, `#[ce_reactions]` a method or an attribute, `#[static_method]` a method or an attribute, `#[pairs]` a method, `#[replaceable]` an attribute, `#[realm]` a method, `#[window]` a constructor or a method"
         );
         for marks in ["#[calls_script]", "#[ce_reactions]", "#[static_method]"] {
             assert_eq!(

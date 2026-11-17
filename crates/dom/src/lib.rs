@@ -54,6 +54,7 @@ mod custom_element;
 mod directionality;
 mod editing;
 mod event;
+mod execution_context;
 mod fetch;
 mod file_reader;
 mod flat;
@@ -137,6 +138,7 @@ pub use event::{
     Listener, ListenerFlags, ObjectRef, ObjectRoot, PromiseRejectionEventData, ShadowEntry,
     ShadowPath, TargetRef, TargetRoot,
 };
+pub use execution_context::ExecutionContext;
 pub use fetch::{
     FetchHostRequest, FetchRecord, FetchRequest, FetchState, Referrer, Request, RequestCache,
     RequestCredentials, RequestData, RequestMode, RequestPriority, RequestRedirect, Response,

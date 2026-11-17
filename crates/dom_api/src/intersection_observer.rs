@@ -36,12 +36,11 @@ const TRACK_VISIBILITY: &str = "Failed to construct 'IntersectionObserver': To e
 pub(crate) fn construct<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
+    window: Option<Gc<'gc, dom::Window>>,
     callback: Callback<O::Callback>,
     options: IntersectionOptions<'gc>,
 ) -> Result<Gc<'gc, IntersectionObserver>, ApiError> {
-    let window = op
-        .current_window(cx)
-        .ok_or_else(|| ApiError::type_error("Illegal constructor"))?;
+    let window = window.ok_or_else(|| ApiError::type_error("Illegal constructor"))?;
     let IntersectionOptions { root, init } = options;
     if root.is_some_and(|root| !matches!(cx.kind(root), NodeKind::Element | NodeKind::Document)) {
         return Err(ApiError::type_error(

@@ -427,7 +427,7 @@ pub(crate) fn construct_pop_state_event<'gc, O: OpFront>(
             composed: init.composed,
             trusted: false,
         },
-        op.current_window(cx),
+        op.current_context(cx),
     );
     cx.set_pop_state_event_data(event, init.hasUAVisualTransition);
     if let Some(state) = init.state {
@@ -472,7 +472,7 @@ pub(crate) fn construct_hash_change_event<'gc, O: OpFront>(
             composed: init.composed,
             trusted: false,
         },
-        op.current_window(cx),
+        op.current_context(cx),
     );
     cx.set_hash_change_event_data(
         event,
@@ -513,7 +513,7 @@ pub fn fire_pop_state<H: ScriptHost>(host: &mut H, window: &Persistent<Window>) 
                 trusted: true,
                 ..EventFlags::default()
             },
-            Some(window),
+            Some(cx.window_context(window)),
         );
         cx.set_pop_state_event_data(event, false);
         let history = cx.window_history(window);
@@ -542,7 +542,7 @@ pub(crate) fn run_hash_change<H: ScriptHost>(
                 trusted: true,
                 ..EventFlags::default()
             },
-            Some(window),
+            Some(cx.window_context(window)),
         );
         cx.set_hash_change_event_data(event, old_url, new_url);
         Some((

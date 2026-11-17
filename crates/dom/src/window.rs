@@ -18,54 +18,24 @@ use crate::{
 /// The `hashchange`s queued: their URLs before and after.
 type HashChanges = Vec<(DomString, DomString)>;
 
-/// The blob reads queued: each promise's number and what it resolves with.
-type BlobReads = Vec<(u64, crate::BlobRead)>;
-
 #[derive(GcObject)]
 pub struct Window {
+    /// Its execution context: what its realm's script runs with that isn't
+    /// its document's (its timers, tasks, messages, `fetch()`s).
+    pub(crate) context: Member<crate::ExecutionContext>,
     document: Member<crate::Node>,
     location: Member<Location>,
     pub(crate) history: Member<crate::History>,
     /// Its `navigator`, once asked for.
     pub(crate) navigator: Member<crate::Navigator>,
-    /// Its `crypto`, once asked for.
-    pub(crate) crypto: Member<crate::Crypto>,
-    /// Its `performance`, once asked for, and its document's navigation
-    /// timing, once its host gave it (`performance`; taken and put back).
-    pub(crate) performance: Member<crate::EventTargetImpl>,
     pub(crate) navigation_timing: LocalExternal<Cell<Option<Box<crate::NavigationTiming>>>>,
     /// The `hashchange`s queued, their URLs before and after, in order
     /// (`history`'s `queue_hash_change`); taken and put back.
     pub(crate) hash_changes: LocalExternal<Cell<HashChanges>>,
-    /// The blob reads queued (`text()`, `arrayBuffer()`, `bytes()`), by
-    /// their promises' numbers, what each resolves with (`blob`); taken
-    /// and put back.
-    pub(crate) blob_reads: LocalExternal<Cell<BlobReads>>,
     pub(crate) listeners: Member<HeapVector<Listener>>,
-    /// Its time origin (HR-Time's), in milliseconds since the DOM was made:
-    /// what its events' times count from.
-    time_origin: Cell<f64>,
-    /// Its timers (HTML's map of active timers, Blink's
-    /// `DOMTimerCoordinator`), in the order they were made: few at a time,
-    /// found by a scan.
-    timers: Member<HeapVector<Timer>>,
-    /// The last timer's id (HTML's: ids go up from 1, a WebIDL `long`).
-    last_timer_id: Cell<i32>,
     /// Its animation frame callbacks (HTML's map of them, Blink's
     /// `FrameRequestCallbackCollection`), in the order requested.
     animation_frames: Member<HeapVector<AnimationFrame>>,
-    /// The element tasks queued for its document's elements, in order
-    /// (`queue_element_task`).
-    element_tasks: Member<HeapVector<ElementTask>>,
-    /// The messages posted to it waiting to be delivered, in order
-    /// (`message`'s posted message task source).
-    pub(crate) posted_messages: Member<HeapVector<crate::PostedMessage>>,
-    /// Its message ports enabled and entangled (`message`): alive while
-    /// messages may come, their queues looked at.
-    pub(crate) message_ports: Member<HeapVector<crate::EventTargetImpl>>,
-    /// The UA's own timers of its document's elements (`add_native_timer`),
-    /// in the order made.
-    native_timers: Member<HeapVector<NativeTimer>>,
     /// Its intersection observers, weakly, in the order they were made; and
     /// those waiting for the task that delivers their entries, in the
     /// order they got their first (`intersection`).
@@ -79,20 +49,12 @@ pub struct Window {
     /// Its idle callbacks (`idle`), in the order requested, and the last
     /// one's handle (from 1, an `unsigned long`).
     pub(crate) idle_callbacks: Member<HeapVector<crate::IdleCallback>>,
-    /// Its `fetch()`s in flight (`fetch`), in the order made.
-    pub(crate) fetches: Member<HeapVector<crate::FetchRecord>>,
     /// Its document's `<img>`s whose requests wait for their images
     /// (`image`): alive till their image comes, nothing else holding them
     /// (a `new Image()`), as their task holds them after; Blink's
     /// `ImageLoader::HasPendingActivity`.
     pub(crate) pending_images: Member<HeapVector<crate::Node>>,
     pub(crate) last_idle_callback: Cell<u32>,
-    /// The nesting level of the timer whose callback runs, 0 out of one
-    /// (HTML's "timer nesting level").
-    nesting: Cell<u8>,
-    /// Whether it reports an exception now (HTML's "in error reporting
-    /// mode"): one thrown meanwhile isn't reported again.
-    reporting: Cell<bool>,
     /// Whether its page has the system's focus, and whether a focus from
     /// script shows a ring (`:focus-visible`): the host's, which it gives
     /// each window (Blink's `FocusController`), here for its members.
@@ -292,37 +254,26 @@ impl<'gc> Cx<'_, 'gc> {
             data.window.get(self.gc).is_none(),
             "a document has one window"
         );
+        let context = self.create_execution_context();
         let window = self.gc.alloc_in(
             &sites::OTHER,
             WindowInit {
+                context: Some(context),
                 document: Some(document),
                 location: None,
                 history: None,
                 navigator: None,
-                crypto: None,
-                performance: None,
                 navigation_timing: LocalExternal::new(Cell::new(None)),
                 hash_changes: LocalExternal::new(Cell::new(Vec::new())),
-                blob_reads: LocalExternal::new(Cell::new(Vec::new())),
                 listeners: None,
-                time_origin: Cell::new(self.origin.elapsed().as_secs_f64() * 1000.0),
-                timers: None,
-                last_timer_id: Cell::new(0),
                 animation_frames: None,
-                element_tasks: None,
-                posted_messages: None,
-                message_ports: None,
-                native_timers: None,
                 intersection_observers: None,
                 pending_intersection_observers: None,
                 resize_observers: None,
                 last_animation_frame: Cell::new(0),
                 idle_callbacks: None,
-                fetches: None,
                 pending_images: None,
                 last_idle_callback: Cell::new(0),
-                nesting: Cell::new(0),
-                reporting: Cell::new(false),
                 page_focused: Cell::new(false),
                 focus_visible: Cell::new(true),
                 page_hidden: Cell::new(false),
@@ -333,6 +284,7 @@ impl<'gc> Cx<'_, 'gc> {
             },
         );
         data.window.set(self.gc, Some(window));
+        self.set_context_global(context, window);
         window
     }
 
@@ -406,7 +358,12 @@ impl<'gc> Cx<'_, 'gc> {
     /// `window`'s time origin as a Unix time, in milliseconds (HR-Time's
     /// `timeOrigin`, not coarsened).
     pub fn window_unix_time_origin(&self, window: Gc<'gc, Window>) -> f64 {
-        self.changes.unix_origin.get() + window.time_origin.get()
+        self.context_unix_time_origin(self.window_context(window))
+    }
+
+    /// `context`'s time origin as a Unix time, in milliseconds.
+    pub fn context_unix_time_origin(&self, context: Gc<'gc, crate::ExecutionContext>) -> f64 {
+        self.changes.unix_origin.get() + context.time_origin.get()
     }
 
     /// Sets `window`'s time origin to `origin` (a navigation's start, the
@@ -418,7 +375,7 @@ impl<'gc> Cx<'_, 'gc> {
             Some(after) => after.as_secs_f64() * 1000.0,
             None => -self.origin.saturating_duration_since(origin).as_secs_f64() * 1000.0,
         };
-        window.time_origin.set(ms);
+        self.window_context(window).time_origin.set(ms);
     }
 
     /// HTML's "queue an element task" to fire an event of `event_type` at
@@ -485,21 +442,40 @@ impl<'gc> Cx<'_, 'gc> {
         action: u8,
         data: u64,
     ) {
-        self.push_task(window, element, None, event_type, action, data);
+        let context = self.window_context(window);
+        self.push_task(context, element, None, event_type, action, data);
     }
 
-    /// An element task of `target`'s, of no element (its element `window`'s
-    /// document).
+    /// A task of no element's or target's, in `context`'s queue (its
+    /// element the document of the context's window): a blob read's.
+    pub(crate) fn push_context_task(
+        &self,
+        context: Gc<'gc, crate::ExecutionContext>,
+        action: u8,
+        data: u64,
+    ) {
+        let Some(window) = self.context_window(context) else {
+            return;
+        };
+        let document = self.window_document(window);
+        self.push_task(context, document, None, crate::names::NONE, action, data);
+    }
+
+    /// A task of `target`'s, of no element, in `context`'s queue (its
+    /// element the document of the context's window).
     pub(crate) fn push_target_task(
         &self,
-        window: Gc<'gc, Window>,
+        context: Gc<'gc, crate::ExecutionContext>,
         target: Gc<'gc, crate::EventTargetImpl>,
         action: u8,
         data: u64,
     ) {
+        let Some(window) = self.context_window(context) else {
+            return;
+        };
         let document = self.window_document(window);
         self.push_task(
-            window,
+            context,
             document,
             Some(target),
             crate::names::NONE,
@@ -510,7 +486,7 @@ impl<'gc> Cx<'_, 'gc> {
 
     fn push_task(
         &self,
-        window: Gc<'gc, Window>,
+        context: Gc<'gc, crate::ExecutionContext>,
         element: NodeRef<'gc>,
         target: Option<Gc<'gc, crate::EventTargetImpl>>,
         event_type: NameId,
@@ -530,11 +506,11 @@ impl<'gc> Cx<'_, 'gc> {
                 number: Cell::new(number),
             },
         );
-        let tasks = match window.element_tasks.get(self.gc) {
+        let tasks = match context.element_tasks.get(self.gc) {
             Some(tasks) => tasks,
             None => {
                 let tasks = HeapVector::new(self.gc, 1);
-                window.element_tasks.set(self.gc, Some(tasks));
+                context.element_tasks.set(self.gc, Some(tasks));
                 tasks
             }
         };
@@ -558,7 +534,7 @@ impl<'gc> Cx<'_, 'gc> {
             return;
         };
         self.push_native_timer(
-            window,
+            self.window_context(window),
             element,
             None,
             action,
@@ -567,23 +543,27 @@ impl<'gc> Cx<'_, 'gc> {
         );
     }
 
-    /// A native timer of `window`'s for `target`, an event target of no
-    /// element, doing `action` in `delay` milliseconds from now.
+    /// A native timer of `context`'s for `target`, an event target of no
+    /// element, doing `action` in `delay` milliseconds from now (its element
+    /// the document of the context's window).
     pub fn add_target_timer(
         &self,
-        window: Gc<'gc, Window>,
+        context: Gc<'gc, crate::ExecutionContext>,
         target: Gc<'gc, crate::EventTargetImpl>,
         action: NativeAction,
         delay: f64,
     ) {
+        let Some(window) = self.context_window(context) else {
+            return;
+        };
         let document = self.window_document(window);
-        let due = self.now_since(Some(window)) + delay;
-        self.push_native_timer(window, document, Some(target), action, 0, due);
+        let due = self.now_in(Some(context)) + delay;
+        self.push_native_timer(context, document, Some(target), action, 0, due);
     }
 
     fn push_native_timer(
         &self,
-        window: Gc<'gc, Window>,
+        context: Gc<'gc, crate::ExecutionContext>,
         element: NodeRef<'gc>,
         target: Option<Gc<'gc, crate::EventTargetImpl>>,
         action: NativeAction,
@@ -601,11 +581,11 @@ impl<'gc> Cx<'_, 'gc> {
                 number: Cell::new(self.next_task_number()),
             },
         );
-        let timers = match window.native_timers.get(self.gc) {
+        let timers = match context.native_timers.get(self.gc) {
             Some(timers) => timers,
             None => {
                 let timers = HeapVector::new(self.gc, 1);
-                window.native_timers.set(self.gc, Some(timers));
+                context.native_timers.set(self.gc, Some(timers));
                 timers
             }
         };
@@ -625,7 +605,7 @@ impl<'gc> Cx<'_, 'gc> {
         u64,
         Option<Gc<'gc, crate::EventTargetImpl>>,
     )> {
-        let timers = window.native_timers.get(self.gc)?;
+        let timers = self.window_context(window).native_timers.get(self.gc)?;
         let (index, timer) = self.first_native_timer(window)?;
         if timer.due.get() > now {
             return None;
@@ -641,7 +621,7 @@ impl<'gc> Cx<'_, 'gc> {
 
     /// Whether `window` has an element task queued.
     pub fn has_element_task(&self, window: Gc<'gc, Window>) -> bool {
-        window
+        self.window_context(window)
             .element_tasks
             .get(self.gc)
             .is_some_and(|tasks| !tasks.is_empty())
@@ -658,7 +638,7 @@ impl<'gc> Cx<'_, 'gc> {
         ElementTaskKind,
         Option<Gc<'gc, crate::EventTargetImpl>>,
     )> {
-        let tasks = window.element_tasks.get(self.gc)?;
+        let tasks = self.window_context(window).element_tasks.get(self.gc)?;
         let task = tasks.get(self.gc, 0)?;
         if !self.task_may_run(task.number.get()) {
             return None;
@@ -767,14 +747,16 @@ impl<'gc> Cx<'_, 'gc> {
 
     /// `window`'s time origin, in milliseconds since the DOM was made.
     pub fn window_time_origin(&self, window: Gc<'gc, Window>) -> f64 {
-        window.time_origin.get()
+        self.window_context(window).time_origin.get()
     }
 
     /// Milliseconds since `window`'s time origin, or since the DOM was made
     /// with none: an event's time (`timeStamp`'s, before it is coarsened).
     pub fn now_since(&self, window: Option<Gc<'gc, Window>>) -> f64 {
         let now = self.origin.elapsed().as_secs_f64() * 1000.0;
-        window.map_or(now, |window| now - window.time_origin.get())
+        window.map_or(now, |window| {
+            now - self.window_context(window).time_origin.get()
+        })
     }
 
     /// `document`'s URL, if it has one (a document a window's: what its
@@ -904,14 +886,15 @@ impl<'gc> Cx<'_, 'gc> {
     /// `timeout` if `repeat`, its nesting level one more than the timer
     /// running now. Its callback and arguments are the engine's to set.
     pub fn add_timer(&self, window: Gc<'gc, Window>, timeout: f64, repeat: bool) -> Gc<'gc, Timer> {
-        let running = window.nesting.get();
+        let running = self.window_context(window).nesting.get();
         let timeout = clamp_timeout(timeout, running);
-        let id = window
+        let id = self
+            .window_context(window)
             .last_timer_id
             .get()
             .checked_add(1)
             .expect("fewer than 2^31 timers a window");
-        window.last_timer_id.set(id);
+        self.window_context(window).last_timer_id.set(id);
         let timer = self.gc.alloc_in(
             &sites::OTHER,
             TimerInit {
@@ -924,11 +907,13 @@ impl<'gc> Cx<'_, 'gc> {
                 arguments: (),
             },
         );
-        let timers = match window.timers.get(self.gc) {
+        let timers = match self.window_context(window).timers.get(self.gc) {
             Some(timers) => timers,
             None => {
                 let timers = HeapVector::new(self.gc, 1);
-                window.timers.set(self.gc, Some(timers));
+                self.window_context(window)
+                    .timers
+                    .set(self.gc, Some(timers));
                 timers
             }
         };
@@ -1049,13 +1034,13 @@ impl<'gc> Cx<'_, 'gc> {
     /// `at` in milliseconds since `window`'s time origin.
     pub fn time_at(&self, window: Gc<'gc, Window>, at: std::time::Instant) -> f64 {
         let since = at.saturating_duration_since(self.origin);
-        since.as_secs_f64() * 1000.0 - window.time_origin.get()
+        since.as_secs_f64() * 1000.0 - self.window_context(window).time_origin.get()
     }
 
     /// `clearTimeout`, `clearInterval`: `window`'s timer `id` removed, if it
     /// has one.
     pub fn remove_timer(&self, window: Gc<'gc, Window>, id: i32) {
-        let Some(timers) = window.timers.get(self.gc) else {
+        let Some(timers) = self.window_context(window).timers.get(self.gc) else {
             return;
         };
         let found = (0..timers.len()).find(|&index| {
@@ -1073,12 +1058,16 @@ impl<'gc> Cx<'_, 'gc> {
     pub fn next_due(&self, window: Gc<'gc, Window>) -> Option<f64> {
         // The UA's own timers too (`add_native_timer`), and the idle
         // callbacks' timeouts (`idle`), which run as timers do.
-        let native = window.native_timers.get(self.gc).and_then(|timers| {
-            (0..timers.len())
-                .filter_map(|index| timers.get(self.gc, index))
-                .map(|timer| timer.due.get())
-                .reduce(f64::min)
-        });
+        let native = self
+            .window_context(window)
+            .native_timers
+            .get(self.gc)
+            .and_then(|timers| {
+                (0..timers.len())
+                    .filter_map(|index| timers.get(self.gc, index))
+                    .map(|timer| timer.due.get())
+                    .reduce(f64::min)
+            });
         [
             self.next_script_timer_due(window),
             native,
@@ -1092,12 +1081,15 @@ impl<'gc> Cx<'_, 'gc> {
     /// When `window`'s next script timer (`setTimeout`'s, `setInterval`'s)
     /// is due, in milliseconds since its time origin; none with none.
     pub fn next_script_timer_due(&self, window: Gc<'gc, Window>) -> Option<f64> {
-        window.timers.get(self.gc).and_then(|timers| {
-            (0..timers.len())
-                .filter_map(|index| timers.get(self.gc, index))
-                .map(|timer| timer.due.get())
-                .reduce(f64::min)
-        })
+        self.window_context(window)
+            .timers
+            .get(self.gc)
+            .and_then(|timers| {
+                (0..timers.len())
+                    .filter_map(|index| timers.get(self.gc, index))
+                    .map(|timer| timer.due.get())
+                    .reduce(f64::min)
+            })
     }
 
     /// `window`'s timer due by `now` (milliseconds since its time origin)
@@ -1109,7 +1101,7 @@ impl<'gc> Cx<'_, 'gc> {
     /// `DOMTimer::Fired`: past 5, at least 4 ms, so that a host running the
     /// timers due by one time ends). None if none is due.
     pub fn take_due(&self, window: Gc<'gc, Window>, now: f64) -> Option<(Gc<'gc, Timer>, u8)> {
-        let timers = window.timers.get(self.gc)?;
+        let timers = self.window_context(window).timers.get(self.gc)?;
         let (index, timer) = self.first_timer(window)?;
         if timer.due.get() > now {
             return None;
@@ -1135,7 +1127,7 @@ impl<'gc> Cx<'_, 'gc> {
     /// the earliest due, ties by number (the order set; an interval's
     /// number is its latest).
     fn first_timer(&self, window: Gc<'gc, Window>) -> Option<(usize, Gc<'gc, Timer>)> {
-        let timers = window.timers.get(self.gc)?;
+        let timers = self.window_context(window).timers.get(self.gc)?;
         let mut first: Option<(usize, Gc<'gc, Timer>)> = None;
         for index in 0..timers.len() {
             let timer = timers.get(self.gc, index).expect("below the length");
@@ -1157,7 +1149,7 @@ impl<'gc> Cx<'_, 'gc> {
 
     /// `window`'s native timer to run first (`first_timer`'s order).
     fn first_native_timer(&self, window: Gc<'gc, Window>) -> Option<(usize, Gc<'gc, NativeTimer>)> {
-        let timers = window.native_timers.get(self.gc)?;
+        let timers = self.window_context(window).native_timers.get(self.gc)?;
         let mut first: Option<(usize, Gc<'gc, NativeTimer>)> = None;
         for index in 0..timers.len() {
             let timer = timers.get(self.gc, index).expect("below the length");
@@ -1193,7 +1185,11 @@ impl<'gc> Cx<'_, 'gc> {
     /// When `window`'s first element task was queued (the DOM's clock), and
     /// its number, if the host's pass lets it run (`tasks`).
     pub(crate) fn next_element_task(&self, window: Gc<'gc, Window>) -> Option<(f64, u64)> {
-        let task = window.element_tasks.get(self.gc)?.get(self.gc, 0)?;
+        let task = self
+            .window_context(window)
+            .element_tasks
+            .get(self.gc)?
+            .get(self.gc, 0)?;
         let number = task.number.get();
         self.task_may_run(number)
             .then(|| (task.queued.get(), number))
@@ -1231,21 +1227,21 @@ impl<'gc> Cx<'_, 'gc> {
     /// The nesting level of the timer whose callback runs in `window` (0
     /// out of one); set as one runs and back after.
     pub fn timer_nesting(&self, window: Gc<'gc, Window>) -> u8 {
-        window.nesting.get()
+        self.window_context(window).nesting.get()
     }
 
     pub fn set_timer_nesting(&self, window: Gc<'gc, Window>, nesting: u8) {
-        window.nesting.set(nesting);
+        self.window_context(window).nesting.set(nesting);
     }
 
     /// Whether `window` reports an exception now (HTML's "in error
     /// reporting mode").
     pub fn reporting(&self, window: Gc<'gc, Window>) -> bool {
-        window.reporting.get()
+        self.window_context(window).reporting.get()
     }
 
     pub fn set_reporting(&self, window: Gc<'gc, Window>, reporting: bool) {
-        window.reporting.set(reporting);
+        self.window_context(window).reporting.set(reporting);
     }
 
     pub(crate) fn window_wrapper_edge(&self, window: Gc<'gc, Window>) -> &'gc JsEdge {

@@ -141,9 +141,9 @@ pub struct EventTargetImpl {
     pub(crate) connection: Member<Window>,
     /// An `AbortSignal`'s state (`abort`).
     pub(crate) abort: Member<crate::AbortSignalData>,
-    /// `new EventTarget()`'s: the window whose script made it, its
-    /// relevant global.
-    window: Member<Window>,
+    /// `new EventTarget()`'s: the execution context of the realm whose
+    /// script made it, its relevant global's.
+    context: Member<crate::ExecutionContext>,
     wrapper: JsEdge,
 }
 
@@ -976,18 +976,18 @@ impl ObjectRoot {
 impl<'gc> Cx<'_, 'gc> {
     /// A new event of `event_type` (DOM's "create an event", then its
     /// initialization), made now: its time since its relevant global's
-    /// time origin (`window`'s; the DOM's start with none).
+    /// time origin (`context`'s; the DOM's start with none).
     pub fn create_event(
         &self,
         event_type: NameId,
         flags: EventFlags,
-        window: Option<Gc<'gc, Window>>,
+        context: Option<Gc<'gc, crate::ExecutionContext>>,
     ) -> Gc<'gc, Event> {
         self.gc.alloc_in(
             &sites::OTHER,
             EventInit {
                 event_type: Cell::new(event_type),
-                time_stamp: Cell::new(self.now_since(window)),
+                time_stamp: Cell::new(self.now_in(context)),
                 flags: Cell::new(flag_bits(flags) | INITIALIZED),
                 target: None,
                 current_target: None,
@@ -1002,8 +1002,11 @@ impl<'gc> Cx<'_, 'gc> {
 
     /// A new event of no type, not initialized (DOM's "create an event" of
     /// `createEvent`): an `init*Event` initializes it.
-    pub fn create_uninitialized_event(&self, window: Option<Gc<'gc, Window>>) -> Gc<'gc, Event> {
-        let event = self.create_event(names::NONE, EventFlags::default(), window);
+    pub fn create_uninitialized_event(
+        &self,
+        context: Option<Gc<'gc, crate::ExecutionContext>>,
+    ) -> Gc<'gc, Event> {
+        let event = self.create_event(names::NONE, EventFlags::default(), context);
         set_bits(&event.flags, INITIALIZED, false);
         event
     }
@@ -1039,7 +1042,7 @@ impl<'gc> Cx<'_, 'gc> {
     pub fn create_error_event(
         &self,
         info: &ErrorInfo,
-        window: Option<Gc<'gc, Window>>,
+        context: Option<Gc<'gc, crate::ExecutionContext>>,
     ) -> Gc<'gc, Event> {
         self.create_error_event_of(
             names::event::ERROR,
@@ -1049,7 +1052,7 @@ impl<'gc> Cx<'_, 'gc> {
                 ..EventFlags::default()
             },
             info,
-            window,
+            context,
         )
     }
 
@@ -1060,9 +1063,9 @@ impl<'gc> Cx<'_, 'gc> {
         event_type: NameId,
         flags: EventFlags,
         info: &ErrorInfo,
-        window: Option<Gc<'gc, Window>>,
+        context: Option<Gc<'gc, crate::ExecutionContext>>,
     ) -> Gc<'gc, Event> {
-        let event = self.create_event(event_type, flags, window);
+        let event = self.create_event(event_type, flags, context);
         let data = self.gc.alloc_in(
             &sites::OTHER,
             ErrorEventDataInit {
@@ -1084,7 +1087,7 @@ impl<'gc> Cx<'_, 'gc> {
     pub fn create_promise_rejection_event(
         &self,
         event_type: NameId,
-        window: Option<Gc<'gc, Window>>,
+        context: Option<Gc<'gc, crate::ExecutionContext>>,
     ) -> Gc<'gc, Event> {
         let event = self.create_event(
             event_type,
@@ -1093,7 +1096,7 @@ impl<'gc> Cx<'_, 'gc> {
                 trusted: true,
                 ..EventFlags::default()
             },
-            window,
+            context,
         );
         let data = self.gc.alloc_in(
             &sites::OTHER,
@@ -1448,16 +1451,16 @@ impl<'gc> Cx<'_, 'gc> {
         event.time_stamp.get()
     }
 
-    /// A new event target that is nothing else (`new EventTarget()`).
-    /// `target`, made by `new EventTarget()`, of `window`'s script.
-    pub fn set_event_target_window(
+    /// `target`, made by `new EventTarget()`, of `context`'s script.
+    pub fn set_event_target_context(
         &self,
         target: Gc<'gc, EventTargetImpl>,
-        window: Option<Gc<'gc, Window>>,
+        context: Option<Gc<'gc, crate::ExecutionContext>>,
     ) {
-        target.window.set(self.gc, window);
+        target.context.set(self.gc, context);
     }
 
+    /// A new event target that is nothing else (`new EventTarget()`).
     pub fn create_event_target(&self) -> Gc<'gc, EventTargetImpl> {
         self.gc.alloc_in(
             &sites::OTHER,
@@ -1471,7 +1474,7 @@ impl<'gc> Cx<'_, 'gc> {
                 wake_lock: None,
                 connection: None,
                 abort: None,
-                window: None,
+                context: None,
                 wrapper: (),
             },
         )
@@ -2319,23 +2322,49 @@ impl<'gc> Cx<'_, 'gc> {
     }
 
     /// The window `target` belongs to (its relevant global, as the DOM
-    /// knows it): a window itself, a node's document's; none for a plain
-    /// target, or a node whose document has none.
+    /// knows it): a window itself, a node's document's, a target's whose
+    /// execution context is a window's; none for a node whose document has
+    /// none, or a target of no window.
     pub fn target_window(&self, target: TargetRef<'gc>) -> Option<Gc<'gc, Window>> {
         match target {
             TargetRef::Window(window) => Some(window),
             TargetRef::Node(node) => self.window_of(self.document_of(node)),
-            // A message port's: its owner's; a `FileReader`'s and an abort
-            // signal's: the window it was made in; a wake lock's sentinel's
-            // and a `connection`'s: their navigator's.
+            // A wake lock's sentinel's and a `connection`'s: their
+            // navigator's.
+            TargetRef::EventTarget(event_target) => self
+                .target_context(target)
+                .and_then(|context| self.context_window(context))
+                .or_else(|| self.wake_lock_sentinel_window(event_target))
+                .or_else(|| self.network_information_window(event_target)),
+        }
+    }
+
+    /// The execution context of the realm `target` belongs to (its relevant
+    /// global's): a window's, a node's document's window's; a plain
+    /// target's, an abort signal's and a `FileReader`'s, that of the realm
+    /// it was made in; a message port's, its owner's; a wake lock's
+    /// sentinel's and a `connection`'s, their navigator's window's. None for
+    /// a node whose document has no window.
+    pub fn target_context(
+        &self,
+        target: TargetRef<'gc>,
+    ) -> Option<Gc<'gc, crate::ExecutionContext>> {
+        match target {
+            TargetRef::Window(window) => Some(self.window_context(window)),
+            TargetRef::Node(node) => self
+                .window_of(self.document_of(node))
+                .map(|window| self.window_context(window)),
             TargetRef::EventTarget(target) => target
-                .window
+                .context
                 .get(self.gc)
                 .or_else(|| self.message_port_owner(target))
-                .or_else(|| self.abort_signal_window(target))
-                .or_else(|| self.file_reader_window(target))
-                .or_else(|| self.wake_lock_sentinel_window(target))
-                .or_else(|| self.network_information_window(target)),
+                .or_else(|| self.abort_signal_context(target))
+                .or_else(|| self.file_reader_context(target))
+                .or_else(|| {
+                    self.wake_lock_sentinel_window(target)
+                        .or_else(|| self.network_information_window(target))
+                        .map(|window| self.window_context(window))
+                }),
         }
     }
 }

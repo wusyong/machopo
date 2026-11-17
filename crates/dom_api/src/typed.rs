@@ -608,6 +608,24 @@ pub trait Front: DictFront {
         f: impl for<'gc> FnOnce(&ApiCx<'_, 'gc>, &mut Self::Op<'o>) -> R,
     ) -> R;
 
+    /// The window of the realm the call runs in (`prepare_window`), in its
+    /// operation, if it is one of the DOM's: what a member the table marks
+    /// `#[window]` is given. Only the code `declare!` makes calls it: a
+    /// member's function has its operation's `OpFront`, and can't name the
+    /// front end's type to call this, so a member of an interface a worker
+    /// has too can't find a window (the table allows `#[window]` on an
+    /// interface exposed in `Window` alone).
+    fn op_window<'o, 'gc>(
+        op: &mut Self::Op<'o>,
+        cx: &ApiCx<'_, 'gc>,
+    ) -> Option<Gc<'gc, dom::Window>>
+    where
+        Self: 'o,
+    {
+        let _ = (op, cx);
+        None
+    }
+
     /// Runs one operation of the DOM: a safepoint first (the heap may
     /// collect), the DOM borrowed whole.
     fn mutate<'o, R>(
@@ -1049,9 +1067,10 @@ pub trait Front: DictFront {
         unreachable!("a front end binding a constructor checks its calls")
     }
 
-    /// A constructor's call that may ask for its realm's window in its
-    /// operation (`OpFront::current_window`), before it: what the engine
-    /// finds it by, found while it may.
+    /// A call that may ask for its realm's execution context in its
+    /// operation (`OpFront::current_context`), or be given its window
+    /// (`Front::op_window`), before it: what the engine finds it by, found
+    /// while it may.
     fn prepare_window(&mut self) {}
 
     /// `prepare_window` with the incumbent realm's window (HTML's: the
@@ -1573,10 +1592,16 @@ pub trait OpFront: FrontTypes {
         unreachable!("a front end binding `createElement` constructs custom elements")
     }
 
-    /// The window of the realm the call runs in (its current realm's
-    /// global, `Front::prepare_window`), if it is one of the DOM's: what
-    /// a constructor's new object belongs to (an event's time origin).
-    fn current_window<'gc>(&mut self, cx: &ApiCx<'_, 'gc>) -> Option<Gc<'gc, dom::Window>> {
+    /// The execution context of the realm the call runs in (its current
+    /// realm's global's, `Front::prepare_window`; or another realm's an
+    /// argument prepared, the entry realm's), if it is one of the DOM's:
+    /// what a new object of an interface a worker has too belongs to (an
+    /// event's time origin, a signal's timer). Never its window: a member
+    /// that needs that is `#[window]` (`Front::op_window`).
+    fn current_context<'gc>(
+        &mut self,
+        cx: &ApiCx<'_, 'gc>,
+    ) -> Option<Gc<'gc, dom::ExecutionContext>> {
         let _ = cx;
         None
     }
@@ -6712,9 +6737,9 @@ pub fn realm_document<'gc>(cx: &dom::Cx<'_, 'gc>, object: ObjectRef<'gc>) -> Opt
         ObjectRef::Geolocation(geolocation) => Some(cx.geolocation_window(geolocation)),
         ObjectRef::WakeLock(wake_lock) => Some(cx.wake_lock_window(wake_lock)),
         ObjectRef::PerformanceTiming(timing) => Some(cx.performance_timing_window(timing)),
-        ObjectRef::PerformanceEntry(entry) => Some(cx.performance_entry_window(entry)),
+        ObjectRef::PerformanceEntry(entry) => cx.performance_entry_window(entry),
         ObjectRef::EventTarget(target) if cx.is_performance(target) => {
-            Some(cx.performance_window(target))
+            cx.performance_window(target)
         }
         ObjectRef::EventTarget(target) => cx.target_window(dom::TargetRef::EventTarget(target)),
         _ => None,

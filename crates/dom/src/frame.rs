@@ -315,6 +315,33 @@ impl<'gc> Cx<'_, 'gc> {
             .get(self.gc)
     }
 
+    /// The document whose URL gives `document` its origin: itself, or for
+    /// an `about:` document of a child frame (its initial `about:blank`, an
+    /// `about:srcdoc`), its iframe's document's, as its creator's (HTML's).
+    pub fn origin_document(&self, document: NodeRef<'gc>) -> NodeRef<'gc> {
+        let mut at = document;
+        // A frame tree is fewer than u16::MAX deep.
+        for _ in 0..u16::MAX {
+            let about = self
+                .document_url(at)
+                .and_then(|url| url::Url::parse(&url.to_str()).ok())
+                .is_some_and(|url| url.scheme() == "about");
+            match self.frame_owner(at) {
+                Some(owner) if about => at = self.document_of(owner),
+                _ => break,
+            }
+        }
+        at
+    }
+
+    /// `document`'s origin, as its URL's (`origin_document`'s): none
+    /// without one.
+    pub fn document_origin(&self, document: NodeRef<'gc>) -> Option<url::Origin> {
+        self.document_url(self.origin_document(document))
+            .and_then(|url| url::Url::parse(&url.to_str()).ok())
+            .map(|url| url.origin())
+    }
+
     /// `owner`'s content document is `document` now (none: its browsing
     /// context went); the one before is no longer its. One its iframe
     /// navigated from is discarded, with its iframes' (HTML's "unload a

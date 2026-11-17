@@ -57,7 +57,7 @@ fn fire<H: ScriptHost>(host: &mut H, element: &NodeRoot, event_type: dom::NameId
                 composed,
                 trusted: true,
             },
-            window,
+            window.map(|window| cx.window_context(window)),
         );
         Persistent::new(cx.gc, event)
     });

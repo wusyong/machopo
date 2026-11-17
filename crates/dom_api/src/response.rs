@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use dom::{DomString, HeadersGuard, Response, ResponseData, ResponseType, Window};
+use dom::{DomString, ExecutionContext, HeadersGuard, Response, ResponseData, ResponseType};
 use elise::Gc;
 use protocol::header_list;
 
@@ -85,7 +85,7 @@ pub(crate) fn construct<'gc, O: OpFront>(
     body: Option<&BodyArg<O::Node>>,
     init: &ResponseInit,
 ) -> Result<Gc<'gc, Response>, ApiError> {
-    let window = crate::request::current_window(op, cx, "Response")?;
+    let context = crate::request::current_context(op, cx, "Response")?;
     let headers = cx.create_headers(HeadersGuard::Response);
     let body = body.map(|body| body::extract(op, cx, body));
     let mut data = ResponseData::default();
@@ -97,7 +97,7 @@ pub(crate) fn construct<'gc, O: OpFront>(
         body,
         "Failed to construct 'Response'",
     )?;
-    Ok(cx.create_response(window, data, headers))
+    Ok(cx.create_response(context, data, headers))
 }
 
 /// `Response.error()`: a network error, with immutable headers.
@@ -105,14 +105,14 @@ pub(crate) fn error<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
 ) -> Result<Gc<'gc, Response>, ApiError> {
-    let window = crate::request::current_window(op, cx, "Response")?;
-    Ok(network_error(cx, window))
+    let context = crate::request::current_context(op, cx, "Response")?;
+    Ok(network_error(cx, context))
 }
 
-/// A network error of `window`'s realm.
+/// A network error of `context`'s realm.
 pub(crate) fn network_error<'gc>(
     cx: &ApiCx<'_, 'gc>,
-    window: Gc<'gc, Window>,
+    context: Gc<'gc, ExecutionContext>,
 ) -> Gc<'gc, Response> {
     let headers = cx.create_headers(HeadersGuard::Immutable);
     let data = ResponseData {
@@ -120,7 +120,7 @@ pub(crate) fn network_error<'gc>(
         status: 0,
         ..ResponseData::default()
     };
-    cx.create_response(window, data, headers)
+    cx.create_response(context, data, headers)
 }
 
 /// `Response.redirect(url, status)`: `url` parsed against the current
@@ -132,8 +132,8 @@ pub(crate) fn redirect<'gc, O: OpFront>(
     url: &str,
     status: u16,
 ) -> Result<Gc<'gc, Response>, ApiError> {
-    let window = crate::request::current_window(op, cx, "Response")?;
-    let base = cx.document_base_url(cx.window_document(window));
+    let context = crate::request::current_context(op, cx, "Response")?;
+    let base = cx.context_base_url(context);
     let parsed = url::Url::options()
         .base_url(base.as_ref())
         .parse(url)
@@ -155,7 +155,7 @@ pub(crate) fn redirect<'gc, O: OpFront>(
         status,
         ..ResponseData::default()
     };
-    Ok(cx.create_response(window, data, headers))
+    Ok(cx.create_response(context, data, headers))
 }
 
 /// `Response.json(data, init)`: `data` serialized as JSON (the front end
@@ -167,7 +167,7 @@ pub(crate) fn json_static<'gc, O: OpFront>(
     data: &str,
     init: &ResponseInit,
 ) -> Result<Gc<'gc, Response>, ApiError> {
-    let window = crate::request::current_window(op, cx, "Response")?;
+    let context = crate::request::current_context(op, cx, "Response")?;
     let headers = cx.create_headers(HeadersGuard::Response);
     let body = (
         Arc::from(data.as_bytes()),
@@ -182,7 +182,7 @@ pub(crate) fn json_static<'gc, O: OpFront>(
         Some(body),
         "Failed to execute 'json' on 'Response'",
     )?;
-    Ok(cx.create_response(window, response, headers))
+    Ok(cx.create_response(context, response, headers))
 }
 
 fn string<'gc>(text: impl Into<std::borrow::Cow<'static, str>>) -> Result<DomStr<'gc>, ApiError> {
@@ -274,7 +274,7 @@ pub(crate) fn clone<'gc>(
     let headers = cx.create_headers(guard);
     let list = cx.with_header_list(cx.response_headers(this), |list| list.clone());
     cx.with_header_list(headers, |own| *own = list);
-    let clone = cx.create_response(cx.response_window(this), data, headers);
+    let clone = cx.create_response(cx.response_context(this), data, headers);
     if let Some(signal) = cx.response_signal(this) {
         cx.set_response_signal(clone, signal);
     }

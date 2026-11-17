@@ -246,7 +246,7 @@ fn fire_input_event<H: ScriptHost>(
                 composed,
                 trusted: true,
             },
-            window,
+            window.map(|window| cx.window_context(window)),
         );
         Persistent::new(cx.gc, event)
     });
@@ -380,7 +380,7 @@ pub(crate) fn simulated_click<H: ScriptHost>(
                 composed: true,
                 trusted,
             },
-            window,
+            window.map(|window| cx.window_context(window)),
         );
         let info = MouseEventInfo {
             detail: 1,

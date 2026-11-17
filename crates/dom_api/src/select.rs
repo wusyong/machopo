@@ -9,7 +9,7 @@ use dom::{DomString, HtmlCollection, NodeRef, QualName, names, number_to_string,
 use elise::Gc;
 
 use crate::exception::DomException;
-use crate::typed::{ElementOrLong, OpFront};
+use crate::typed::ElementOrLong;
 use crate::{ApiCx, ApiError, DomStr, ExceptionName};
 
 /// Blink's limit on the options a `length` or an index past the end adds
@@ -325,17 +325,15 @@ pub(crate) fn options_set_selected_index<'gc>(
 /// the current realm's document with `text` as its text, `value` and
 /// `selected` (from `defaultSelected`) attributes, and `selected` its
 /// selectedness.
-pub(crate) fn construct_option<'gc, O: OpFront>(
-    op: &mut O,
+pub(crate) fn construct_option<'gc>(
     cx: &ApiCx<'_, 'gc>,
+    window: Option<Gc<'gc, dom::Window>>,
     text: &str,
     value: Option<&str>,
     default_selected: bool,
     selected: bool,
 ) -> Result<NodeRef<'gc>, ApiError> {
-    let window = op
-        .current_window(cx)
-        .ok_or_else(|| ApiError::type_error("Illegal constructor"))?;
+    let window = window.ok_or_else(|| ApiError::type_error("Illegal constructor"))?;
     let document = cx.window_document(window);
     let option = cx.create_element(document, QualName::html("option"));
     if let Some(value) = value {

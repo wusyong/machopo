@@ -93,6 +93,36 @@ fn a_windows_scripts_run_in_its_realm() {
     );
 }
 
+/// An event the user agent fires at an abort signal counts its time from
+/// the time origin of the realm the signal was made in (the signal's
+/// execution context's): not from the DOM's start, 30 ms before it.
+#[test]
+fn a_signal_s_event_counts_from_its_realm_s_origin() {
+    let mut engine = V8Engine::new(EngineSettings { web_tests: true });
+    std::thread::sleep(Duration::from_millis(30));
+    let origin = Instant::now();
+    engine
+        .create_window(engine.top_frame(), "about:blank", origin)
+        .expect("a window");
+    run(
+        &mut engine,
+        "var c = new AbortController(), stamp;
+         c.signal.onabort = e => stamp = e.timeStamp;
+         c.abort();
+         testRunner.reportHarnessResults(String(stamp))",
+    );
+    let since = origin.elapsed().as_secs_f64() * 1e3;
+    let stamp: f64 = engine
+        .take_harness_results()
+        .expect("the event's time")
+        .parse()
+        .expect("a number");
+    assert!(
+        stamp <= since + 1.0,
+        "{stamp} ms, {since} ms since the origin"
+    );
+}
+
 /// An event's time counts from the time origin given (a navigation's
 /// start, before the window was made); without web tests there is no
 /// `testRunner`.

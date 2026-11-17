@@ -86,7 +86,8 @@ pub type IntersectionLog = Rc<RefCell<Vec<(u64, Vec<String>)>>>;
 pub struct Listeners {
     pub actions: Rc<RefCell<std::collections::HashMap<u64, Action>>>,
     pub log: Rc<RefCell<Vec<Call>>>,
-    /// What `Front::current_window` gives: the realm's window, if any.
+    /// The realm's window, if any: what `Front::op_window` gives, and
+    /// whose execution context `OpFront::current_context` gives.
     pub current_window: Rc<RefCell<Option<elise::Persistent<dom::Window>>>>,
     /// The timers' calls (`ScriptHost::call_timer`).
     pub timer_log: Rc<RefCell<Vec<TimerCall>>>,
@@ -317,6 +318,15 @@ pub enum This {
 }
 
 impl<'d> TestFront<'d> {
+    /// The window the test set as the current realm's.
+    fn realm_window<'gc>(&mut self, cx: &ApiCx<'_, 'gc>) -> Option<elise::Gc<'gc, dom::Window>> {
+        self.listeners
+            .current_window
+            .borrow()
+            .as_ref()
+            .map(|window| window.get(cx.gc))
+    }
+
     fn new(dom: &'d TestDom, this: This, args: &[Arg]) -> Self {
         Self {
             dom: &dom.0,
@@ -557,6 +567,16 @@ impl<'d> Front for TestFront<'d> {
     #[inline(always)]
     fn reading<V: dom_api::typed::ReadDict<Self>>(&mut self, reads: V) -> V::Out {
         reads.read(self)
+    }
+
+    fn op_window<'o, 'gc>(
+        op: &mut Self::Op<'o>,
+        cx: &ApiCx<'_, 'gc>,
+    ) -> Option<elise::Gc<'gc, dom::Window>>
+    where
+        Self: 'o,
+    {
+        op.realm_window(cx)
     }
 
     type Op<'o>
@@ -890,12 +910,12 @@ impl OpFront for TestFront<'_> {
         erased.downcast()
     }
 
-    fn current_window<'gc>(&mut self, cx: &ApiCx<'_, 'gc>) -> Option<elise::Gc<'gc, dom::Window>> {
-        self.listeners
-            .current_window
-            .borrow()
-            .as_ref()
-            .map(|window| window.get(cx.gc))
+    fn current_context<'gc>(
+        &mut self,
+        cx: &ApiCx<'_, 'gc>,
+    ) -> Option<elise::Gc<'gc, dom::ExecutionContext>> {
+        self.realm_window(cx)
+            .map(|window| cx.window_context(window))
     }
 
     fn construct_object<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, object: ObjectRef<'gc>) {

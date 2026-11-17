@@ -52,14 +52,12 @@ fn url_context<'gc>(
 /// document (its constructor document), with the options' `media` and
 /// `disabled`, whose `url()`s resolve against `baseURL` (parsed against
 /// the document's URL; that URL itself by default).
-pub(crate) fn construct<'gc, O: crate::OpFront>(
-    op: &mut O,
+pub(crate) fn construct<'gc>(
     cx: &ApiCx<'_, 'gc>,
+    window: Option<Gc<'gc, dom::Window>>,
     options: &CSSStyleSheetInit,
 ) -> Result<Gc<'gc, CssStyleSheet>, ApiError> {
-    let window = op
-        .current_window(cx)
-        .ok_or_else(|| ApiError::dom(ExceptionName::NotAllowed))?;
+    let window = window.ok_or_else(|| ApiError::dom(ExceptionName::NotAllowed))?;
     let document = cx.window_document(window);
     let base = match &options.baseURL {
         None => None,

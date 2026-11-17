@@ -141,25 +141,18 @@ fn param<'a, 'gc, O: OpFront + 'a>(
     }
 }
 
-/// The origin of the realm the call is from, serialized (HTML's
-/// incumbent settings object's origin): `null` for an opaque one.
-fn incumbent_origin<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>) -> Option<url::Origin> {
-    let window = op.current_window(cx)?;
-    crate::origin(cx, cx.window_document(window))
-}
-
 /// `window.postMessage(message, targetOrigin, transfer)` (HTML's window
 /// post message steps): `targetOrigin` `*` (any), `/` (the caller's
 /// origin) or a URL (else a `SyntaxError`); the ports transferred are
 /// shipped; the message goes to the window's queue if its document is of
 /// that origin, from the caller's window and origin.
-pub(crate) fn window_post_message<'gc, O: OpFront>(
-    op: &mut O,
+pub(crate) fn window_post_message<'gc>(
     cx: &ApiCx<'_, 'gc>,
+    window: Option<Gc<'gc, dom::Window>>,
     this: Gc<'gc, Window>,
     message: MessageParam<'_, 'gc>,
 ) -> Result<(), ApiError> {
-    let incumbent = incumbent_origin(op, cx);
+    let incumbent = window.and_then(|window| cx.document_origin(cx.window_document(window)));
     let target = match message.target_origin.unwrap_or("/") {
         "*" => None,
         "/" => incumbent.clone(),
@@ -191,8 +184,7 @@ pub(crate) fn window_post_message<'gc, O: OpFront>(
         return Ok(());
     }
     let origin = incumbent.map_or_else(|| "null".to_owned(), |origin| origin.ascii_serialization());
-    let source = op.current_window(cx);
-    cx.post_window_message(this, payload, DomString::new(&origin), source, &ports);
+    cx.post_window_message(this, payload, DomString::new(&origin), window, &ports);
     Ok(())
 }
 
@@ -215,13 +207,13 @@ pub(crate) fn port_post_message<'gc>(
     Ok(())
 }
 
-/// `new MessageChannel()`: two new ports of the caller's window, entangled.
+/// `new MessageChannel()`: two new ports of the caller's realm, entangled.
 pub(crate) fn construct_message_channel<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
 ) -> Result<Gc<'gc, MessageChannel>, ApiError> {
-    let window = op.current_window(cx);
-    Ok(cx.create_message_channel(window))
+    let context = op.current_context(cx);
+    Ok(cx.create_message_channel(context))
 }
 
 pub(crate) fn port1<'gc>(
@@ -265,7 +257,6 @@ pub(crate) fn construct_message_event<'gc, O: OpFront>(
     event_type: &str,
     init: &MessageEventInit<O::Any>,
 ) -> Result<Gc<'gc, Event>, ApiError> {
-    let window = op.current_window(cx);
     let event = cx.create_message_event(
         names::intern(event_type),
         EventFlags {
@@ -274,7 +265,7 @@ pub(crate) fn construct_message_event<'gc, O: OpFront>(
             composed: init.composed,
             trusted: false,
         },
-        window,
+        op.current_context(cx),
         Init {
             origin: DomString::new(&init.origin),
             last_event_id: DomString::new(&init.lastEventId),
@@ -419,7 +410,7 @@ pub fn run_posted_message<H: ScriptHost>(host: &mut H, window: &Persistent<Windo
                     trusted: true,
                     ..EventFlags::default()
                 },
-                Some(window.get(cx.gc)),
+                Some(cx.window_context(window.get(cx.gc))),
                 Init {
                     origin,
                     last_event_id: DomString::new(""),

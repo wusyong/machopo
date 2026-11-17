@@ -16,7 +16,7 @@ use std::cell::Cell;
 
 use elise::{Erased, Gc, GcObject, HeapVector, JsEdge, Member, WeakMember};
 
-use crate::{Cx, EventTargetImpl, Listener, TargetRef, Window, names, sites};
+use crate::{Cx, EventTargetImpl, ExecutionContext, Listener, TargetRef, names, sites};
 
 #[derive(GcObject)]
 pub struct AbortController {
@@ -27,8 +27,8 @@ pub struct AbortController {
 /// An abort signal's state.
 #[derive(GcObject)]
 pub struct AbortSignalData {
-    /// The window of the realm it was made in.
-    window: Member<Window>,
+    /// The execution context of the realm it was made in.
+    context: Member<ExecutionContext>,
     aborted: Cell<bool>,
     /// DOM's "dependent": made by `AbortSignal.any()`, aborted only through
     /// its sources.
@@ -63,9 +63,12 @@ pub struct AbortAlgorithm {
 }
 
 impl<'gc> Cx<'_, 'gc> {
-    /// A new controller, with a new signal of `window`'s realm.
-    pub fn create_abort_controller(&self, window: Gc<'gc, Window>) -> Gc<'gc, AbortController> {
-        let signal = self.create_abort_signal(window);
+    /// A new controller, with a new signal of `context`'s realm.
+    pub fn create_abort_controller(
+        &self,
+        context: Gc<'gc, ExecutionContext>,
+    ) -> Gc<'gc, AbortController> {
+        let signal = self.create_abort_signal(context);
         self.gc.alloc_in(
             &sites::OTHER,
             AbortControllerInit {
@@ -85,13 +88,16 @@ impl<'gc> Cx<'_, 'gc> {
             .expect("a controller's signal")
     }
 
-    /// A new abort signal of `window`'s realm, not aborted.
-    pub fn create_abort_signal(&self, window: Gc<'gc, Window>) -> Gc<'gc, EventTargetImpl> {
+    /// A new abort signal of `context`'s realm, not aborted.
+    pub fn create_abort_signal(
+        &self,
+        context: Gc<'gc, ExecutionContext>,
+    ) -> Gc<'gc, EventTargetImpl> {
         let target = self.create_event_target();
         let data = self.gc.alloc_in(
             &sites::OTHER,
             AbortSignalDataInit {
-                window: Some(window),
+                context: Some(context),
                 aborted: Cell::new(false),
                 dependent: Cell::new(false),
                 reason: (),
@@ -114,9 +120,13 @@ impl<'gc> Cx<'_, 'gc> {
         signal.abort.get(self.gc).expect("an abort signal")
     }
 
-    /// The window of the realm `target` was made in, if it is a signal.
-    pub fn abort_signal_window(&self, target: Gc<'gc, EventTargetImpl>) -> Option<Gc<'gc, Window>> {
-        target.abort.get(self.gc)?.window.get(self.gc)
+    /// The execution context of the realm `target` was made in, if it is a
+    /// signal.
+    pub fn abort_signal_context(
+        &self,
+        target: Gc<'gc, EventTargetImpl>,
+    ) -> Option<Gc<'gc, ExecutionContext>> {
+        target.abort.get(self.gc)?.context.get(self.gc)
     }
 
     pub fn abort_signal_aborted(&self, signal: Gc<'gc, EventTargetImpl>) -> bool {
@@ -143,15 +153,15 @@ impl<'gc> Cx<'_, 'gc> {
     }
 
     /// DOM's "create a dependent abort signal" from `sources` (each an
-    /// abort signal), of `window`'s realm: aborted already, with its
+    /// abort signal), of `context`'s realm: aborted already, with its
     /// reason, if one of them is; else linked to each source that is no
     /// dependent and the sources of each that is.
     pub fn create_dependent_abort_signal(
         &self,
-        window: Gc<'gc, Window>,
+        context: Gc<'gc, ExecutionContext>,
         sources: &[Gc<'gc, EventTargetImpl>],
     ) -> Gc<'gc, EventTargetImpl> {
-        let signal = self.create_abort_signal(window);
+        let signal = self.create_abort_signal(context);
         let data = self.signal_data(signal);
         data.dependent.set(true);
         if let Some(&aborted) = sources

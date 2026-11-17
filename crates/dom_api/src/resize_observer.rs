@@ -20,11 +20,10 @@ use crate::{ApiCx, ApiError};
 pub(crate) fn construct<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
+    window: Option<Gc<'gc, dom::Window>>,
     callback: Callback<O::Callback>,
 ) -> Result<Gc<'gc, ResizeObserver>, ApiError> {
-    let window = op
-        .current_window(cx)
-        .ok_or_else(|| ApiError::type_error("Illegal constructor"))?;
+    let window = window.ok_or_else(|| ApiError::type_error("Illegal constructor"))?;
     let observer = cx.create_resize_observer(window);
     op.store_callback(cx, cx.resize_callback_edge(observer), callback);
     Ok(observer)

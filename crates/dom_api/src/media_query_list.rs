@@ -144,7 +144,7 @@ pub(crate) fn construct_event<'gc, O: OpFront>(
             composed: init.composed,
             trusted: false,
         },
-        op.current_window(cx),
+        op.current_context(cx),
     );
     cx.set_media_query_list_event_data(event, &init.media, init.matches);
     Ok(event)
@@ -188,7 +188,8 @@ pub fn report_media_query_changes<H: ScriptHost>(host: &mut H, document: &NodeRo
                         trusted: true,
                         ..EventFlags::default()
                     },
-                    cx.window_of(document),
+                    cx.window_of(document)
+                        .map(|window| cx.window_context(window)),
                 );
                 let media = cx.media_query_list_queries(list).to_css();
                 let matches = cx.media_query_list_queries(list).matches(&environment);

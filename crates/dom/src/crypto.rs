@@ -13,11 +13,13 @@ pub struct Crypto {
 impl<'gc> Cx<'_, 'gc> {
     /// `window`'s `crypto`, the same each time.
     pub fn window_crypto(&self, window: Gc<'gc, Window>) -> Gc<'gc, Crypto> {
-        if let Some(crypto) = window.crypto.get(self.gc) {
+        if let Some(crypto) = self.window_context(window).crypto.get(self.gc) {
             return crypto;
         }
         let crypto = self.gc.alloc_in(&sites::OTHER, CryptoInit { wrapper: () });
-        window.crypto.set(self.gc, Some(crypto));
+        self.window_context(window)
+            .crypto
+            .set(self.gc, Some(crypto));
         crypto
     }
 

@@ -258,7 +258,8 @@ fn an_exception_reported_fires_an_error_event() {
 
     // The event's members, its interface ErrorEvent.
     let event = dom.mutate(|cx| {
-        let event = cx.create_error_event(&error_info(), Some(window.get(cx.gc)));
+        let event =
+            cx.create_error_event(&error_info(), Some(cx.window_context(window.get(cx.gc))));
         let data = cx.error_event_data(event).unwrap();
         cx.error_edge(data).set_embedder_word(cx.gc, 42);
         let api = dom_api::ApiCx::new(cx);
