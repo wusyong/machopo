@@ -7,7 +7,7 @@ use taffy::{AlignItems, AvailableSpace, FlexDirection, Size, Style};
 
 use crate::{
     AnyViewId, App, Cursor, EventCtx, Handled, Key, KeyEvent, MeasureCtx, Modifiers, PaintCtx,
-    PointerButton, PointerEvent, TextContexts, View, ViewId, ViewTree,
+    PointerButton, PointerEvent, ScrollView, TextContexts, View, ViewId, ViewTree,
 };
 
 struct TestApp;
@@ -89,6 +89,7 @@ impl View<TestApp> for Swatch {
             PointerEvent::Move { .. } => "move",
             PointerEvent::Down { .. } => "down",
             PointerEvent::Up { .. } => "up",
+            PointerEvent::Wheel { .. } => "wheel",
         };
         self.heard.push(format!("{what} {} {}", p.x, p.y));
         if self.handles && matches!(event, PointerEvent::Down { .. }) {
@@ -1111,4 +1112,319 @@ fn every_view_of_a_type_is_found_in_paint_order() {
         .collect();
     assert_eq!(widths, [10.0, 20.0, 30.0]);
     assert!(tree.find_all::<Swatch>().is_empty());
+}
+
+// --- Scrolling ----------------------------------------------------------------
+
+/// The root a row: a swatch 40 wide, then a scroll view 100 × 50 whose
+/// column of five swatches, 100 × 20 each, reaches 100 down. The rows
+/// don't handle the pointer: a wheel over them goes up to the scroll view.
+fn scrolling(tree: &mut ViewTree<TestApp>) -> (ViewId<ScrollView>, Vec<ViewId<Swatch>>) {
+    tree.set_style(tree.root(), row());
+    let left = tree.insert(Swatch::new("left", 40.0, 20.0));
+    tree.append_child(tree.root(), left);
+    let scroll = tree.insert(ScrollView::default());
+    tree.set_style(
+        scroll,
+        Style {
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::FLEX_START,
+            size: Size {
+                width: length(100.0),
+                height: length(50.0),
+            },
+            ..Style::default()
+        },
+    );
+    tree.append_child(tree.root(), scroll);
+    let rows = ["r0", "r1", "r2", "r3", "r4"]
+        .into_iter()
+        .map(|name| {
+            let id = tree.insert(Swatch::new(name, 100.0, 20.0).passive());
+            tree.append_child(scroll, id);
+            id
+        })
+        .collect();
+    (scroll, rows)
+}
+
+fn wheel(x: f32, y: f32, dy: f32) -> PointerEvent {
+    PointerEvent::Wheel {
+        position: PointF::new(x, y),
+        delta: PointF::new(0.0, dy),
+        modifiers: Modifiers::NONE,
+    }
+}
+
+fn offset(tree: &ViewTree<TestApp>, scroll: ViewId<ScrollView>) -> f32 {
+    tree.get(scroll).unwrap().offset().y
+}
+
+/// Each layer's owner, origin, clip and invalidation.
+type LayerSeen = (
+    Option<AnyViewId>,
+    PointF,
+    Option<RectF>,
+    Option<Vec<RectF>>,
+);
+
+fn layers(tree: &mut ViewTree<TestApp>) -> Option<Vec<LayerSeen>> {
+    let frame = tree.paint()?;
+    Some(
+        frame
+            .layers
+            .iter()
+            .map(|layer| {
+                (
+                    layer.owner,
+                    layer.origin,
+                    layer.clip,
+                    layer.invalidation.as_ref().map(|rects| rects.to_vec()),
+                )
+            })
+            .collect(),
+    )
+}
+
+#[test]
+fn a_wheel_scrolls_within_the_content_and_past_its_ends_goes_up() {
+    let mut tree = tree();
+    let (scroll, _) = scrolling(&mut tree);
+    tree.layout();
+    assert_eq!(tree.pointer(wheel(60.0, 10.0, 30.0)), Handled::Yes);
+    assert_eq!(offset(&tree, scroll), 30.0);
+    // 100 of content in 50: no further than 50.
+    assert_eq!(tree.pointer(wheel(60.0, 10.0, 100.0)), Handled::Yes);
+    assert_eq!(offset(&tree, scroll), 50.0);
+    // At its end it doesn't take the wheel: an ancestor may.
+    assert_eq!(tree.pointer(wheel(60.0, 10.0, 10.0)), Handled::No);
+    assert_eq!(tree.pointer(wheel(60.0, 10.0, -500.0)), Handled::Yes);
+    assert_eq!(offset(&tree, scroll), 0.0);
+    // Not over it: not its.
+    tree.pointer(wheel(20.0, 10.0, 30.0));
+    assert_eq!(offset(&tree, scroll), 0.0);
+}
+
+#[test]
+fn a_scroll_view_s_children_are_a_layer_of_their_own_cut_to_it() {
+    let mut tree = tree();
+    let (scroll, rows) = scrolling(&mut tree);
+    let frame = tree.paint().unwrap();
+    let [root, scrolled] = &frame.layers[..] else {
+        panic!("two layers")
+    };
+    assert_eq!(root.owner, None);
+    assert_eq!(root.size, SizeF::new(200.0, 100.0));
+    assert_eq!(scrolled.owner, Some(scroll.any()));
+    // As large as the content; where the view is, cut to it.
+    assert_eq!(scrolled.size, SizeF::new(100.0, 100.0));
+    assert_eq!(scrolled.origin, PointF::new(40.0, 0.0));
+    assert_eq!(scrolled.clip, Some(RectF::new(40.0, 0.0, 100.0, 50.0)));
+    assert_eq!(scrolled.invalidation, None);
+    // The rows in it, at their places in it; none in the tree's layer.
+    let in_scrolled = scrolled.display_list.visual_rects();
+    assert!(
+        (0..rows.len())
+            .map(|i| RectF::new(0.0, 20.0 * i as f32, 100.0, 20.0))
+            .all(|row| in_scrolled.contains(&row))
+    );
+    assert_eq!(
+        scrolled.display_list.bounds(),
+        RectF::new(0.0, 0.0, 100.0, 100.0)
+    );
+    assert_eq!(
+        root.display_list.bounds(),
+        RectF::new(0.0, 0.0, 40.0, 20.0)
+    );
+    assert_fresh(&mut tree);
+}
+
+#[test]
+fn scrolling_moves_the_layer_and_paints_nothing_again() {
+    let mut tree = tree();
+    let (scroll, rows) = scrolling(&mut tree);
+    tree.paint();
+    tree.pointer(wheel(60.0, 10.0, 30.0));
+    let seen = layers(&mut tree).unwrap();
+    assert_eq!(
+        seen,
+        [
+            (None, PointF::new(0.0, 0.0), None, Some(vec![])),
+            (
+                Some(scroll.any()),
+                PointF::new(40.0, -30.0),
+                Some(RectF::new(40.0, 0.0, 100.0, 50.0)),
+                Some(vec![]),
+            ),
+        ]
+    );
+    assert!(rows.iter().all(|&row| paints(&tree, row) == 1));
+    // Scrolled no further: no frame.
+    assert!(tree.paint().is_none());
+    assert_fresh(&mut tree);
+}
+
+#[test]
+fn a_view_in_a_scroll_view_damages_its_layer_where_it_is_in_it() {
+    let mut tree = tree();
+    let (scroll, rows) = scrolling(&mut tree);
+    tree.paint();
+    tree.pointer(wheel(60.0, 10.0, 30.0));
+    tree.paint();
+    tree.update(rows[2], |swatch, ctx| {
+        swatch.set_color(Color::rgb(0, 0, 255), ctx)
+    });
+    let seen = layers(&mut tree).unwrap();
+    assert_eq!(seen[0].3, Some(vec![]));
+    assert_eq!(seen[1].0, Some(scroll.any()));
+    // In the layer's coordinates: unmoved by the offset.
+    assert_eq!(seen[1].3, Some(vec![RectF::new(0.0, 40.0, 100.0, 20.0)]));
+    assert_fresh(&mut tree);
+}
+
+#[test]
+fn hits_and_bounds_follow_the_scroll() {
+    let mut tree = tree();
+    let (scroll, rows) = scrolling(&mut tree);
+    tree.layout();
+    assert_eq!(
+        tree.hit_test(PointF::new(60.0, 25.0)),
+        Some((rows[1].any(), PointF::new(20.0, 5.0)))
+    );
+    tree.pointer(wheel(60.0, 10.0, 30.0));
+    // 25 down the view is 55 down its content: the third row's 15.
+    assert_eq!(
+        tree.hit_test(PointF::new(60.0, 25.0)),
+        Some((rows[2].any(), PointF::new(20.0, 15.0)))
+    );
+    assert_eq!(
+        tree.absolute_bounds(rows[2]),
+        Some(RectF::new(40.0, 10.0, 100.0, 20.0))
+    );
+    // Its own bounds don't move.
+    assert_eq!(
+        tree.absolute_bounds(scroll),
+        Some(RectF::new(40.0, 0.0, 100.0, 50.0))
+    );
+    // Below the view, its rows can't be hit, even where they are drawn
+    // unscrolled.
+    assert_eq!(
+        tree.hit_test(PointF::new(60.0, 70.0)).map(|(id, _)| id),
+        None
+    );
+    tree.pointer(down(60.0, 25.0));
+    assert_eq!(take_heard(&mut tree, rows[2]), ["hover true", "down 20 15"]);
+}
+
+#[test]
+fn what_scrolls_under_the_pointer_is_hovered_then() {
+    let mut tree = tree();
+    let (_, rows) = scrolling(&mut tree);
+    tree.layout();
+    tree.pointer(move_to(60.0, 25.0));
+    take_heard(&mut tree, rows[1]);
+    tree.pointer(wheel(60.0, 25.0, 20.0));
+    assert_eq!(take_heard(&mut tree, rows[1]), ["wheel 20 5", "hover false"]);
+    assert_eq!(take_heard(&mut tree, rows[2]), ["hover true"]);
+}
+
+#[test]
+fn a_wheel_goes_to_what_is_under_the_pointer_even_while_another_view_has_it() {
+    let mut tree = tree();
+    let (scroll, rows) = scrolling(&mut tree);
+    let left = tree.children(tree.root())[0];
+    tree.layout();
+    // The left swatch has the pointer while its button is down.
+    tree.pointer(down(10.0, 10.0));
+    assert_eq!(tree.captured(), Some(left));
+    assert_eq!(tree.pointer(wheel(60.0, 10.0, 30.0)), Handled::Yes);
+    assert_eq!(offset(&tree, scroll), 30.0);
+    assert_eq!(tree.captured(), Some(left));
+    assert!(!heard(&tree, rows[0]).iter().any(|e| e.starts_with("down")));
+}
+
+#[test]
+fn a_scroll_view_keeps_within_its_content_as_it_shrinks() {
+    let mut tree = tree();
+    let (scroll, rows) = scrolling(&mut tree);
+    tree.layout();
+    tree.pointer(wheel(60.0, 10.0, 50.0));
+    assert_eq!(offset(&tree, scroll), 50.0);
+    // Three rows left: 60 of content in 50.
+    tree.remove(rows[4]);
+    tree.remove(rows[3]);
+    tree.paint();
+    assert_eq!(offset(&tree, scroll), 10.0);
+    // Shorter than the view: none.
+    tree.remove(rows[2]);
+    let seen = layers(&mut tree).unwrap();
+    assert_eq!(offset(&tree, scroll), 0.0);
+    // The layer as large as the view: a new size, drawn whole.
+    assert_eq!(seen[1].1, PointF::new(40.0, 0.0));
+    assert_eq!(seen[1].3, None);
+    let frame = tree.paint();
+    assert!(frame.is_none());
+    tree.remove(rows[1]);
+    let frame = tree.paint().unwrap();
+    assert_eq!(frame.layers[1].size, SizeF::new(100.0, 50.0));
+}
+
+#[test]
+fn a_scroll_view_in_another_is_cut_to_both_and_moved_by_both() {
+    let mut tree = tree();
+    let (outer, rows) = scrolling(&mut tree);
+    // In place of the second row, a scroll view 100 × 30 of two rows.
+    let inner = tree.insert(ScrollView::default());
+    tree.set_style(
+        inner,
+        Style {
+            flex_direction: FlexDirection::Column,
+            flex_shrink: 0.0,
+            size: Size {
+                width: length(100.0),
+                height: length(30.0),
+            },
+            ..Style::default()
+        },
+    );
+    tree.insert_child(outer, 1, inner);
+    tree.remove(rows[1]);
+    for name in ["i0", "i1"] {
+        let id = tree.insert(Swatch::new(name, 100.0, 20.0).passive());
+        tree.append_child(inner, id);
+    }
+    tree.layout();
+    // The outer scrolled 30: the inner, 20 down its content, is 10 above
+    // the outer's top, cut by it.
+    tree.update(outer, |view, ctx| view.scroll_to(PointF::new(0.0, 30.0), ctx));
+    tree.update(inner, |view, ctx| view.scroll_to(PointF::new(0.0, 5.0), ctx));
+    let frame = tree.paint().unwrap();
+    let [_, _, nested] = &frame.layers[..] else {
+        panic!("the tree's, the outer's and the inner's")
+    };
+    assert_eq!(nested.owner, Some(inner.any()));
+    assert_eq!(nested.origin, PointF::new(40.0, -15.0));
+    assert_eq!(nested.clip, Some(RectF::new(40.0, 0.0, 100.0, 20.0)));
+}
+
+#[test]
+fn a_rect_is_scrolled_to_as_little_as_shows_it() {
+    let mut tree = tree();
+    let (scroll, _) = scrolling(&mut tree);
+    tree.layout();
+    let to = |tree: &mut ViewTree<TestApp>, rect: RectF| {
+        tree.update(scroll, |view, ctx| view.scroll_rect_to_visible(rect, ctx));
+        offset(tree, scroll)
+    };
+    // Below: its bottom at the bottom.
+    assert_eq!(to(&mut tree, RectF::new(0.0, 60.0, 100.0, 20.0)), 30.0);
+    // Showing already: no change.
+    assert_eq!(to(&mut tree, RectF::new(0.0, 40.0, 100.0, 20.0)), 30.0);
+    // Above: its top at the top.
+    assert_eq!(to(&mut tree, RectF::new(0.0, 20.0, 100.0, 20.0)), 20.0);
+    // Past the end: as far as it goes.
+    assert_eq!(to(&mut tree, RectF::new(0.0, 90.0, 100.0, 20.0)), 50.0);
+    // Taller than the view, from below the top: its top, not its bottom.
+    assert_eq!(to(&mut tree, RectF::new(0.0, 0.0, 100.0, 20.0)), 0.0);
+    assert_eq!(to(&mut tree, RectF::new(0.0, 10.0, 100.0, 80.0)), 10.0);
 }

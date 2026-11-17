@@ -92,6 +92,24 @@ pub trait View<A: App>: Any {
         let _ = position;
         Cursor::Default
     }
+
+    /// `Some`: the view scrolls its children (a [`crate::ScrollView`]).
+    /// They are drawn in a layer of their own, cut to the view's bounds
+    /// and moved up and left by this offset; hit testing and their bounds
+    /// in the tree's coordinates move with them. Scrolling changes only
+    /// the offset: nothing is painted again. The tree reads it at every
+    /// paint and hit test, so a change needs no request.
+    fn scroll_offset(&self) -> Option<PointF> {
+        None
+    }
+
+    /// The view was laid out again and its size, or its content's (what
+    /// its children take, [`EventCtx::content_size`]), changed: a scroll
+    /// container keeps its offset within them. Don't ask to be laid out
+    /// again from here.
+    fn on_layout(&mut self, ctx: &mut EventCtx<'_, A>) {
+        let _ = ctx;
+    }
 }
 
 /// A view that only holds others: it draws nothing and isn't hit itself,
@@ -192,6 +210,7 @@ pub(crate) struct Requests {
 pub struct EventCtx<'a, A: App> {
     pub(crate) shared: &'a mut Shared<A>,
     pub(crate) size: SizeF,
+    pub(crate) content_size: SizeF,
     pub(crate) focused: bool,
     pub(crate) requests: Requests,
 }
@@ -220,6 +239,12 @@ impl<A: App> EventCtx<'_, A> {
     /// The view's size, as last laid out.
     pub fn size(&self) -> SizeF {
         self.size
+    }
+
+    /// How far its children reach, as last laid out (the far edges of
+    /// taffy's scrollable overflow): with its padding, from its top left.
+    pub fn content_size(&self) -> SizeF {
+        self.content_size
     }
 
     pub fn is_focused(&self) -> bool {

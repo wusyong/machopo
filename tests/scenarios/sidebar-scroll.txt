@@ -1,0 +1,28 @@
+# The sidebar's rows scroll in their list, under the buttons, the field
+# and New Tab. In the 800 × 600 window the rows are 36 high and 2 apart
+# from y 126, the list down to 592 (466 high). Thirteen tabs reach 492:
+# the last, new and shown, is scrolled to, the first cut off at the top.
+navigate pages/tab-one.html
+wait-loaded
+wait-text #name "one"
+key primary+shift+,
+key primary+t
+key primary+t
+key primary+t
+key primary+t
+key primary+t
+key primary+t
+key primary+t
+key primary+t
+key primary+t
+key primary+t
+key primary+t
+key primary+t
+# For a person to look at: thirteen rows, the last (active) at the bottom
+# of the list, the first cut off under New Tab.
+screenshot sidebar-scroll
+# Scrolled 26 down, (100, 144) is the fifth row's: up to the top, it is
+# the first's, the page "one".
+wheel-at 100 300 0 -1000
+click-at 100 144
+wait-text #name "one"

@@ -15,9 +15,9 @@
 | 2b：直的分頁清單、側邊欄的版面和切換 | 做完 | 2026-11-17 |
 | 第 3 階段：外觀 | 進行中 | |
 | 3a：深色主題、跟著系統的深淺色 | 做完 | 2026-11-17 |
-| 3b：視窗：畫進標題列、透明和毛玻璃 | 還沒開始 | |
+| 3b：視窗：畫進標題列、透明和毛玻璃 | 延後 | |
+| 3d：分頁清單捲動 | 做完 | 2026-11-17 |
 | 3c：側邊欄收合、網頁卡片 | 還沒開始 | |
-| 3d：分頁清單捲動 | 還沒開始 | |
 
 ## 驗收
 
@@ -39,6 +39,9 @@
 | 深色主題：換成深色時整個 UI 重畫，和一開始就是深色的一樣；同一種不重畫 | `cargo test -p shell --lib chrome` |
 | `BrowserView` 換成深色：分頁列、工具列、網址列、側邊欄和目前的列是深色的值，網頁不變；換回淺色 | `cargo test -p shell --test it -- browser_view::` |
 | `--ui-theme`：預設跟著系統，`light`、`dark`；不認得的值、和 `--automation-pipe` 一起都報錯 | `cargo test -p shell --bin machopo` |
+| `ui` 的捲動：滾輪捲在內容的範圍裡、捲到底交給外層；子 view 自己的 layer（大小、位置、裁切、巢狀時取交集）；捲動不重畫；layer 裡變了的範圍；hit test、`absolute_bounds` 跟著位移；捲完的 hover；收住指標時滾輪照樣給底下的；內容變小時夾住；捲到看得到 | `cargo test -p ui` |
+| 側邊欄的分頁那幾列捲動：自己的 layer、按鈕和網址列不動、捲到底停住、捲過之後點到的是那一列、切換分頁或回到側邊欄時捲到目前的分頁、改標題不捲、關掉分頁時夾住 | `cargo test -p shell --lib chrome` |
+| compositor 照 UI 的 layer 畫：捲動後的位置、裁在清單裡（不蓋到 New Tab）、點擊、網頁不動 | `cargo test -p shell --test it -- browser_view::`；情境 `sidebar-scroll` |
 | `BrowserView` 用 `UiState` 取代 `sync_toolbar`，行為不變 | `cargo test -p shell --test it`；情境 `tab-strip`、`navigation`、`demo-busy`、`rounded`、`demo-script`、`gpu-crash` |
 
 ## 做過的檢查
@@ -151,3 +154,22 @@
 - **mutation test**（`mutants-3a.toml`）：13 個都抓到。
 - **只靠審查和手動確認的**：直接開的視窗跟著系統、系統切換時跟著換（`window.rs`）：自動化一律淺色，記進 `docs/test-gaps.md`。
 - **跑過的**：`shell` 的單元測試 86 個、`machopo` 的 10 個；整合測試的 `browser_view::`、`windowless::` 70 個；真的視窗的情境 `sidebar`、`tab-strip`、`navigation`（`window.rs` 改了）；`sanity.py` 的 7 項。
+
+### 3d
+
+2026-11-17，macOS（Apple Silicon）。順序改成 3d 在 3c 之前（第 35 條）。
+
+- **`ui`**：
+  - `PointerEvent::Wheel`（CSS px，正的往右、往下）：一律給指標底下的 view、往上找，不管誰收住指標；捲完再算一次 hover。
+  - `View::scroll_offset`：回傳 `Some` 的 view 的子 view 畫進另一個 layer。`Frame` 從一個 layer 變成多個，`FrameLayer` 多了 `owner`、`origin`（樹的座標，已經扣掉位移）和 `clip`；每個 view 錄下的東西記著它在哪個 layer，變了的範圍算在那個 layer 的座標裡。layer 的位置或大小變了就算一個新的 `Frame`（捲動時沒有 view 重畫，變了的範圍是空的）；新的 layer 和大小變了的 layer 整個重 raster。
+  - `View::on_layout` 和 `EventCtx::content_size`：版面排完之後，大小或內容的大小（taffy 的 scrollable overflow 的右、下邊）變了的 view 收到它。
+  - `ScrollView`（`Component`，Props 是 `()`）：位移是它自己的狀態；`scroll_to`、`scroll_rect_to_visible`（照 `nearest`）；捲到底不收滾輪，交給外層。
+- **`shell`**：側邊欄的分頁那幾列放進名叫 `tabs` 的 `ScrollView`（`flex_grow` 1、`overflow-y: scroll`）。`Chrome::update` 在目前的分頁換了、或清單是新的時，排版之後捲到那一列（照列的順序找，列和分頁的順序一樣）。`BrowserView` 把 UI 的每個 layer 轉成 compositor 的 `PictureLayer`：樹的照舊是 1 號；捲動的 layer 用一個 clip 節點裁切，id 從 1000 開始、每個捲動的 view 一個，在它存在的期間不變（tile 留著）。滾輪在 UI 上時，照 `compositor::wheel_scroll_delta` 把行數換成 px 給樹。分頁列的 view 和側邊欄的列不收滾輪。
+- **實作時決定的細節**：
+  - 畫在 `ScrollView` 之後、和它重疊的 view 在樹的 layer 裡，會被捲動的 layer 蓋住（側邊欄裡沒有這種 view），寫進 `ui` 的 README。
+  - 捲動的 layer 不另外做 compositor 的 scroll 節點：瀏覽器的 compositor 和 UI 在同一個 thread，位移直接放進 layer 的位置。
+  - 捲完時指標底下那一列的關閉鈕要等下一次指標移動才出現（hover 有更新，但列沒收到 Move）。
+- **外觀**：用整合測試的 harness 把 2 倍、捲到一半的側邊欄讀回來看過（暫時的測試，沒有 commit）：列裁在清單裡、沒有蓋到 New Tab，文字清楚。
+- **新的測試**：`ui` 的 10 個（捲動）；`chrome` 的 4 個（側邊欄的 layer 和捲動、捲過之後點擊、捲到目前的分頁、關掉分頁時夾住）；整合測試 1 個（捲動、裁切、點擊的像素）；情境 `sidebar-scroll`（拿掉滾輪那一行時失敗，確認過）。
+- **mutation test**（`mutants-3d.toml`）：24 個抓到 23 個。沒抓到的「比清單高的範圍貼齊底部」：測試裡那個範圍在原本的位移上面，兩種寫法都貼齊頂端；改成先捲回開頭再試，重跑抓到。
+- **跑過的**：`ui` 45 個；`shell` 的單元測試 90 個、`machopo` 10 個；整合測試的 `browser_view::`、`windowless::` 71 個；情境 `sidebar`、`sidebar-scroll`、`tab-strip`、`navigation`；`cargo clippy -p ui -p shell --all-targets -- -D warnings`（改了一處：layer 的索引在加進去之前取）；`sanity.py` 的 7 項。

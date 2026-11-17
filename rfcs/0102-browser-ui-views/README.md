@@ -1,7 +1,7 @@
 # RFC 0102：瀏覽器 UI 的 view 樹和可以換的版面
 
 - 開始日期：2026-11-16
-- 狀態：🚧 已排程：2026-11-16（第 1、2 階段做完；第 3 階段進行中，分 3a 到 3d）
+- 狀態：🚧 已排程：2026-11-16（第 1、2 階段做完；第 3 階段進行中：3a、3d 做完，3b 延後，接著 3c）
 - 細節：`details.md`；進度、驗收和做過的檢查：`progress.md`
 
 ## 摘要
@@ -159,6 +159,14 @@ gfx、compositor_paint、parley（UI 的文字，現在的 ui_text 搬過來）�
 30. **深色主題用 Chrome 舊版的深色**（2026-11-17，第 3 階段的 3a）：淺色主題就是 Chrome 2023 年改版前的淺色（工具列 `#F1F3F4`、分頁列 `#DEE1E6`、文字 `#202124`，Google Material 的灰），深色用同一套的另一面（分頁列 `#202124`、工具列和目前的分頁 `#35363A`、文字 `#E8EAED`），每個 token 一對一對應；其他 token 的值對照 Chromium 原始碼裡的顏色定義確認，對不上的列出來。之後要整體換成 Zen 的風格，是換兩份主題的值，結構不動（第 10 條）。不選照 Zen 的深色：淺色是 Chrome 的、深色是 Zen 的，對不上，Zen 的深色大多靠毛玻璃加一層顏色，沒有毛玻璃時的值要另外找。不選自己配：沒有來源可以對。2026-11-17 對照原始碼的結果在 `details.md` 的「3a. 深色主題的值」：文字照原始碼是白色（`kColorToolbarText`、`kColorOmniboxText`），不是上面寫的 `#E8EAED`；淺色本身和 Chrome 的也不是一對一（Chrome 的工具列是白的）；Chrome 沒有自己的顏色的（hover、分頁之間的線、側邊欄）用淺色主題裡同樣兩個顏色之間的比例推。
 31. **直接開的視窗跟著系統的深淺色，`--ui-theme=light|dark` 可以強制；自動化的 pipe 和情境一律淺色**（2026-11-17，第 3 階段的 3a）：winit 給系統的深淺色（`Window::theme()`），使用者切換時有 `ThemeChanged`。`--ui-theme` 照 `--ui-layout` 的樣子只對直接開的視窗有用，`--automation-pipe` 不接受：截圖和 WPT 的結果不該因為跑測試那台機器的系統設定而變（和第 28 條同樣的理由）。深色的正確性由整合測試直接把 `BrowserView` 換成深色、檢查工具列和側邊欄的像素來守。不選只跟著系統：想看深色要改系統設定。不選情境多一個 `window theme=dark` 的設定：情境的截圖只給人看，像素由整合測試檢查；之後要看深色的畫面再加。
 32. **網頁的 `prefers-color-scheme` 不在這份 RFC，照舊是 `light`**（2026-11-17，第 3 階段的 3a）：系統是深色時，Chrome 的 UI 變深，網頁的 `prefers-color-scheme` 也是 `dark`（網頁的預設背景照樣是白色，除非網頁用 `color-scheme` 說它支援深色）。那是網頁平台的功能：renderer 啟動時要拿到使用者要的深淺色、切換時重新算 style 和通知 `matchMedia`，還有 `color-scheme` 和深色的表單控制項，動到 renderer 和 `protocol`，要找 WPT 的測試，規模和測試的方式都和 UI 不同，另開一份 RFC（「之後的可能」）。在那之前是深色的 UI 配淺色的網頁，`docs/limitations.md` 原本的那條照舊。
+33. **macOS 的毛玻璃用系統的 vibrancy（`NSVisualEffectView`），經過 `window-vibrancy`**（2026-11-17，第 3 階段的 3b）：視窗透明，winit 的 view 下面放一個 `NSVisualEffectView`（側邊欄的材質），wgpu 的 surface 改成不是不透明的（Metal 的 `PostMultiplied`），UI 透明或半透明的地方透出它。這是 Zen 實際的做法（Firefox 用 `NSVisualEffectView`）；公開的 API，10.14 以上都有；系統的材質自己跟著深淺色，「減少透明度」的設定打開時系統換成不透明的。呼叫 AppKit 要 `unsafe`，`shell` 不能有，所以用 `window-vibrancy`（Tauri 的；它用的 objc2 0.6 和 objc2-app-kit 0.3 已經在 `Cargo.lock` 裡），同一個 crate 也有 Windows 的 Mica 和 Acrylic。Chrome 在 macOS 的主視窗是不透明的，沒有對應。實作前先用一個小程式確認 effect view 在 wgpu 的 Metal layer 下面、透得出來；透不出來就回來重新決定。不選 winit 的 `set_blur`：私有的 `CGSSetWindowBackgroundBlurRadius`，只有固定半徑的模糊，沒有材質，顏色要自己疊，也不理會「減少透明度」。不選 macOS 26 的 Liquid Glass（`NSGlassEffectView`）：只有 26 以上，舊的系統照樣要 vibrancy，API 很新；之後要加時當成 vibrancy 之上的選項（「之後的可能」）。2026-11-17 實驗的結果（`details.md` 的「3b 的實驗」）：`window-vibrancy` 把 effect view 加成 winit 的 view 的子 view，子 view 畫在 view 自己的內容上面，wgpu 的 Metal layer 正是 winit 的 view 自己的內容，所以整個被材質蓋住，行不通（Liquid Glass 的 API 也是同樣的放法）；effect view 放在視窗的框裡、winit 的 view 後面才透得出來，那要 machopo 自己寫 AppKit 的呼叫。3b 因此延後（第 34 條）。
+34. **3b（視窗的毛玻璃、畫進標題列）延後，先做 3c、3d**（2026-11-17）：照第 33 條的實驗，系統的材質要 machopo 自己把 effect view 放在 winit 的 view 後面，得多一個允許 `unsafe` 的平台 crate（專案的規則是 `unsafe` 只在 `bindings` 和 `ipc`）；其他的路是 fork `window-vibrancy`（為了約 20 行多維護一個 fork），或 winit 的 `set_blur`（私有 API、只有模糊、沒有材質）。都要先改規則或多一份維護，現在不值得。畫進標題列一起延後（和毛玻璃都是視窗那一層的事，透明的視窗才看得出效果）。3c 的網頁卡片和 3d 的捲動不靠它：卡片之間的縫先是側邊欄的顏色。之後要做時，從「之後的可能」的「視窗的毛玻璃和畫進標題列」開始，先決定 `unsafe` 放在哪裡。
+35. **先做 3d（分頁清單捲動），再做 3c（收合、網頁卡片）**（2026-11-17）：3c 的收合要像 Zen 的 compact mode 那樣，指標到左邊緣時側邊欄浮出、蓋在網頁上，UI 就要有疊在網頁上面的 layer；3d 的捲動本來就要讓 view 有自己的 layer（第 9 條留的路），先做它，3c 的浮出用同一套東西。原本照第 29 條的順序（3c 先），3c 只能先做「藏起來、快捷鍵展開、網頁跟著縮回」，浮出等之後。
+36. **側邊欄只有分頁的那幾列捲動**（2026-11-17，第 3 階段的 3d）：按鈕、網址列和 New Tab 固定在上面，下面的分頁清單捲動。網址列和新分頁隨時按得到，和 Edge 的直式分頁（Chromium）一樣；之後加釘選的分頁（Zen 的 pinned、essentials）也放在固定的那一段。不選整個側邊欄一起捲：捲到下面要先捲回去才能打網址。不選 New Tab 跟著分頁捲：捲到下面時看不到它。
+37. **捲動容器是 `ui` 的元件 `ScrollView`，捲動的位移是它自己的狀態**（2026-11-17，第 3 階段的 3d）：描述裡放 `Element::new::<ScrollView>(…)`，內容是它的子節點；位移不在 Props 裡，重新描述時留著；滾輪由它的事件處理，沒用完的往父 view 傳；從外面捲（捲到看得到的地方）照樣走 `tree.update`。樹要認得「這個節點的子 view 移了多少」：hit test、畫的位置、`absolute_bounds` 都扣掉它。對應 Chromium Views 的 `ScrollView`，SwiftUI、Flutter 也是元件。不選樣式的 `overflow: scroll`（CSS 的做法）：位移和滾輪的處理變成樹內建的行為，從外面捲要另外的 API；`ui` 的樣式只管排版。不選側邊欄專用的 view：3c 的浮出、之後的選單和設定頁不能重用。
+38. **捲動的內容是自己的 layer，捲動只改位移**（2026-11-17，第 3 階段的 3d）：`ScrollView` 的內容錄進自己的 `PictureLayer`（內容的整個高度），compositor 的 transform 節點帶位移、clip 節點裁在容器裡；捲動不重 raster，只重新合成（compositor 只 raster 看得到的範圍周圍的 tile）。`ui` 的 `Frame` 因此從一個 layer 變成多個，每個帶位置、裁切和位移，重畫的範圍算在各自的 layer 上；`BrowserView` 把它們轉成 compositor 的 layer 和 property tree。這是第 9 條留的「個別 view 自己的 layer」，3c 的浮出（疊在網頁上的 layer，compositor 的 `over_surfaces`）和之後的動畫也用它。對應 Views 的 `ScrollView` 在 `ScrollWithLayers` 時：內容是自己的 `ui::Layer`。不選同一個 layer、捲了就重畫：每捲一格清單看得到的範圍整片重 raster（2 倍時約 62 萬像素），3c 時照樣要做 layer。
+39. **捲動的輸入和樣子和網頁一樣：沒有捲軸，滾輪一格 40 px、立刻到位，觸控板照系統**（2026-11-17，第 3 階段的 3d）：滾輪的行數照 `compositor::scroll_utils`（Chromium 的 `kPixelsPerLineStep`）換成 CSS px，沒有平滑的動畫；觸控板的像素和慣性是系統送來的；捲到邊停住，不回彈。最下面被切掉一半的那一列看得出下面還有。捲軸之後和網頁的捲軸一起做（`docs/limitations.md`：網頁沒有捲軸），用同一套畫法和動畫。不選一直顯示的細指示條：它要畫在捲動的內容上面，得另外分層，UI 有捲軸而網頁沒有。不選 macOS 的 overlay 捲軸（Zen 的樣子）：多出計時、淡出、拖動，先替 UI 單獨做一套。
+40. **目前的分頁跑出畫面時，捲到剛好看得到**（2026-11-17，第 3 階段的 3d）：切換分頁（快捷鍵、關掉目前的分頁之後）、開新分頁、從連結開的分頁時，目前的分頁那一列在上面看不到就捲到它貼齊頂端，在下面看不到就貼齊底部，看得到就不動（Views 的 `ScrollView::ScrollRectToVisible`、Blink 的 `scrollIntoView({block: 'nearest'})`）；滑鼠點的那一列本來就看得到，不跳。分頁關掉、清單變短或視窗變矮時，位移夾到新的最大值；切換版面時側邊欄重新建立，位移回到 0（和打到一半的網址一樣）。不選不自動捲：開了新分頁看不到它。不選一律捲到中間：點一列清單就跳。
 
 2026-11-16 的看法：預設的版面維持橫式（現有的情境照它的位置點擊）；切換先用命令列選項。第 2 階段確認。
 
@@ -175,4 +183,6 @@ gfx、compositor_paint、parley（UI 的文字，現在的 ui_text 搬過來）�
 - **拖拉排序分頁**。
 - **公開的 GUI API**：`ui` 的 API 在瀏覽器裡用穩之後。
 - **使用者自訂外觀**：主題或設定的格式。
+- **視窗的毛玻璃和畫進標題列**（原本的 3b，第 33、34 條）：macOS 的 effect view 放在 winit 的 view 後面（要一個允許 `unsafe` 的平台 crate），UI 用半透明的顏色，主題多一組有毛玻璃的值；側邊欄的版面讓內容延伸到整個視窗，紅黃綠按鈕疊在側邊欄上，空白處拖動視窗；Windows 的 Mica，Linux 的 KDE 用 `set_blur`；自動化一律不透明。
+- **Liquid Glass**：macOS 26 以上用 `NSGlassEffectView` 代替 vibrancy（第 33 條），舊的系統照舊。
 - **網頁跟著深淺色**：`prefers-color-scheme`、`color-scheme`、深色的表單控制項（第 32 條），另開一份 RFC。

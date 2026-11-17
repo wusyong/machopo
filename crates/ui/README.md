@@ -7,8 +7,9 @@ machopo 自己的 UI 框架：瀏覽器的分頁列、工具列、網址列是�
 - **樹**：`ViewTree<A>` 把 view 存在一個 arena（`Vec`）裡，用帶世代的 id 指：`ViewId<T>` 拿到的就是 `T`（插入時就定了型別），`AnyViewId` 是不管型別的。拿掉的 view 的 id 查不到東西，那一格給新的 view 重用時也查不到。父、子、焦點、收住指標的 view 都只是 id。
 - **App**：`A: App` 帶兩個型別：view 送出的訊息（`Message`）和畫的時候用的主題（`Theme`）。
 - **排版**：每個節點有一個 taffy 的 `Style`。樹實作 taffy 的低階 trait（和 `layout` crate 的 `BoxTree` 同樣的做法）：有子節點的是 flex 或 grid 容器，沒有子節點的是葉子，由 view 的 `measure` 量；結果在整棵樹上快取。bounds 是 f32 的 CSS px，相對於父 view。
-- **畫**：每個 view 錄自己的 display list（自己的座標，不含子 view），留到它要求重畫或大小變了為止。整棵樹組成一個 layer（`Frame`），附上變了的範圍：重畫的 view 的舊位置和新位置、搬動的 view 的兩個位置、拿掉和隱藏的 view 原本的位置，夾在 layer 裡。使用的一方交給 compositor，只重 raster 碰到的 tile。
-- **事件**：指標給收住它的 view，或 hit test 找到的最深的 view，不處理（`Handled::No`）就往父 view 找；處理了按下的 view 收住指標，直到那個按鈕放開。hover 的進出比較前後兩次指標下面的路徑（離開的從深到淺，進來的從淺到深）。按鍵和輸入法給有焦點的 view，同樣往上找。
+- **畫**：每個 view 錄自己的 display list（自己的座標，不含子 view），留到它要求重畫或大小變了為止。整棵樹組成一個 layer（`Frame` 的第一個），附上變了的範圍：重畫的 view 的舊位置和新位置、搬動的 view 的兩個位置、拿掉和隱藏的 view 原本的位置，夾在 layer 裡。使用的一方交給 compositor，只重 raster 碰到的 tile。
+- **捲動**：`View::scroll_offset` 回傳 `Some` 的 view（`ScrollView`）的子 view 畫在另一個 layer：layer 有內容的大小、畫在哪裡（樹的座標，已經扣掉位移）和裁切的範圍（那個 view 的範圍，再和外層的裁切取交集），變了的範圍算在那個 layer 自己的座標裡。捲動只改位移：沒有 view 重畫，只給一個新的 `Frame`，每個 layer 變了的範圍是空的。hit test、`absolute_bounds` 和事件的座標都扣掉位移。版面排完之後，大小或內容的大小變了的 view 收到 `on_layout`，`ScrollView` 在那裡把位移夾回範圍裡。
+- **事件**：指標給收住它的 view，或 hit test 找到的最深的 view，不處理（`Handled::No`）就往父 view 找；處理了按下的 view 收住指標，直到那個按鈕放開。滾輪（`PointerEvent::Wheel`，CSS px，正的往右、往下）一律給指標底下的 view，不管誰收住指標，往上找到能捲的 `ScrollView`（捲到底的不收，交給外層），捲完再算一次 hover。hover 的進出比較前後兩次指標下面的路徑（離開的從深到淺，進來的從淺到深）。按鍵和輸入法給有焦點的 view，同樣往上找。
 - **宣告式的一層**：app 從它的狀態描述 UI，是一棵 `Element` 的樹（每個節點是一種 view 的 Props、它的 `Style`，可以帶 key 和名字），交給 `ViewTree::describe`。比對前一次的描述：同一種 view、同一個 key（沒有 key 的照兄弟之間的位置）的留著，Props 不相等才呼叫它的 `set_props`，換了位置的搬過去；其他的建新的，或拿掉。名字在描述裡唯一，`find::<T>(名字)` 拿到帶型別的 id，給命令式的操作（讓網址列取得焦點）和測試用；`find_all::<T>()` 照畫的順序拿到某一種 view 的全部（瀏覽器用它收集網頁的位置）。用描述管理的子 view 不要再用 `append_child` 手動加。
 - **訊息**：view 處理事件時 `ctx.submit(message)`，使用的一方在分派完之後 `take_messages()`，照順序處理。元件內部的狀態（編輯中的文字、hover 的樣子）留在 view 自己。
 - **主題**：app 用 `tokens!` 宣告 token 的 enum，`TokenTable` 是每份主題的值（用 `match` 建，少一個 token 編不過）。
@@ -59,9 +60,9 @@ if let Some(frame) = tree.paint() { /* frame.layers[0].display_list、invalidati
 ## 還沒有的
 
 - 排版：block 的容器、`position: absolute`（taffy 的 fork 把 out-of-flow 的子節點交給包含它的區塊排，要實作它的 `LayoutContainingBlock`）、自己寫排法的容器（排版時 view 要能叫子 view 排）。
-- 個別 view 自己的 layer（捲動的清單只改位移、動畫），裁切。
+- 捲動以外的 layer（動畫、疊在別的東西上面的浮層）；畫在 `ScrollView` 之後、和它重疊的 view（後面的兄弟）在樹的 layer 裡，被它的 layer 蓋住。捲軸、平滑捲動、捲動的動畫。
 - 焦點的走訪（Tab 鍵）、無障礙、動畫、拖放。
 
 ## 測試
 
-`cargo test -p ui`：描述（第一次建立、Props 相等不碰、新的 Props、有 key 的搬動、沒有 key 的照位置、換型別、拿掉、名字）、id 和世代、flex 的排版和要求重排、hit test、事件往上找、收住指標（連同那個 view 被拿掉時）、hover 的順序、焦點和按鍵、游標、只重畫變了的 view 和各種變了的範圍、debug build 的錄製檢查、token 表。瀏覽器的 view 的測試在 `shell` 的 `chrome.rs`、`omnibox.rs`、`tab_strip.rs` 和整合測試的 `browser_view`。
+`cargo test -p ui`：描述（第一次建立、Props 相等不碰、新的 Props、有 key 的搬動、沒有 key 的照位置、換型別、拿掉、名字）、id 和世代、flex 的排版和要求重排、hit test、事件往上找、收住指標（連同那個 view 被拿掉時）、hover 的順序、焦點和按鍵、游標、只重畫變了的 view 和各種變了的範圍、debug build 的錄製檢查、token 表；捲動（滾輪捲到底交給外層、子 view 自己的 layer 和裁切、捲動不重畫、layer 裡的變了的範圍、hit test 和位置跟著位移、捲完的 hover、收住指標時的滾輪、內容變小時夾住、捲到看得到、巢狀的裁切和位移）。瀏覽器的 view 的測試在 `shell` 的 `chrome.rs`、`omnibox.rs`、`tab_strip.rs` 和整合測試的 `browser_view`。

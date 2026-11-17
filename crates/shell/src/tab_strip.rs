@@ -492,6 +492,8 @@ impl View<BrowserUi> for TabStrip {
             PointerEvent::Up {
                 position, button, ..
             } => self.mouse_up(position, button),
+            // The tabs shrink to fit: nothing to scroll.
+            PointerEvent::Wheel { .. } => None,
         };
         match action {
             Some(Action::Activate(index)) => {

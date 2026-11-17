@@ -52,6 +52,15 @@ pub enum PointerEvent {
         click_count: u32,
         modifiers: Modifiers,
     },
+    /// A wheel's or a touchpad's scroll, CSS px (the DOM's `deltaX`,
+    /// `deltaY`: positive scrolls right and down). Whatever drives the tree
+    /// turns a wheel's lines into px. It goes to the view under the
+    /// pointer, captured or not, and up its ancestors until one scrolls.
+    Wheel {
+        position: PointF,
+        delta: PointF,
+        modifiers: Modifiers,
+    },
 }
 
 impl PointerEvent {
@@ -59,7 +68,8 @@ impl PointerEvent {
         match *self {
             PointerEvent::Move { position, .. }
             | PointerEvent::Down { position, .. }
-            | PointerEvent::Up { position, .. } => position,
+            | PointerEvent::Up { position, .. }
+            | PointerEvent::Wheel { position, .. } => position,
         }
     }
 
@@ -67,7 +77,8 @@ impl PointerEvent {
         match *self {
             PointerEvent::Move { modifiers, .. }
             | PointerEvent::Down { modifiers, .. }
-            | PointerEvent::Up { modifiers, .. } => modifiers,
+            | PointerEvent::Up { modifiers, .. }
+            | PointerEvent::Wheel { modifiers, .. } => modifiers,
         }
     }
 
@@ -76,7 +87,8 @@ impl PointerEvent {
         match &mut self {
             PointerEvent::Move { position, .. }
             | PointerEvent::Down { position, .. }
-            | PointerEvent::Up { position, .. } => *position = at,
+            | PointerEvent::Up { position, .. }
+            | PointerEvent::Wheel { position, .. } => *position = at,
         }
         self
     }

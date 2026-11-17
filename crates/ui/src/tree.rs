@@ -1,8 +1,9 @@
 //! The tree of views: an arena of nodes, each a view and where it is. The
 //! tree lays the views out (taffy, through its low-level traits, as the
-//! `layout` crate does for boxes), paints them into one display list,
-//! keeping what each recorded until it asks to be painted again, hit tests
-//! and dispatches the user's events.
+//! `layout` crate does for boxes), paints them into display lists (one
+//! layer, and one more for each view that scrolls its children), keeping
+//! what each recorded until it asks to be painted again, hit tests and
+//! dispatches the user's events.
 
 use std::any::Any;
 use std::collections::{HashMap, VecDeque};
@@ -40,8 +41,12 @@ struct Node {
     /// Where taffy put the node, in its parent's coordinates.
     layout: Layout,
     cache: Cache,
-    /// Its bounds as last laid out, in its parent's coordinates.
+    /// Its bounds as last laid out, in its parent's coordinates (unmoved
+    /// by its parent's scroll offset).
     bounds: RectF,
+    /// How far its children reach, as last laid out (the far edges of
+    /// taffy's scrollable overflow).
+    content_size: SizeF,
     /// It asked to be painted again (or its size changed).
     needs_paint: bool,
     /// What it recorded last, and where in the tree's coordinates it was
@@ -51,11 +56,15 @@ struct Node {
 
 struct Painted {
     list: DisplayItemList,
+    /// The layer it is in: `None` the tree's, else the one of the view that
+    /// scrolls it.
+    layer: Option<AnyViewId>,
+    /// In that layer's coordinates.
     origin: PointF,
 }
 
 impl Painted {
-    /// Where it may have drawn, in the tree's coordinates: every op's
+    /// Where it may have drawn, in its layer's coordinates: every op's
     /// visual rect, an op recorded without one (which may draw anywhere)
     /// included, which the list's bounds leave out.
     fn drawn(&self) -> RectF {
@@ -78,8 +87,10 @@ struct Mounted<A: App> {
     children: Vec<Mounted<A>>,
 }
 
-/// What the tree drew: its layers, the first under the others. There is
-/// one; a view that scrolls or animates may get its own later.
+/// What the tree drew: its layers, in paint order. The first is the
+/// tree's: every view but those a [`View::scroll_offset`] scrolls, which
+/// are in a layer of that view's, over it. A view painted after a view
+/// that scrolls (a later sibling) is in the layer under that one's.
 #[derive(Debug, Clone)]
 pub struct Frame {
     pub layers: Vec<FrameLayer>,
@@ -87,13 +98,40 @@ pub struct Frame {
 
 #[derive(Debug, Clone)]
 pub struct FrameLayer {
-    /// The layer's size, CSS px: the tree's.
+    /// Whose layer: `None` the tree's, else the view that scrolls it (the
+    /// same view's layer from one frame to the next).
+    pub owner: Option<AnyViewId>,
+    /// The layer's size, CSS px: the tree's, or the content's of the view
+    /// that scrolls it (as large as the view at least).
     pub size: SizeF,
+    /// Where its top left is drawn, in the tree's coordinates: moved by
+    /// its view's scroll offset.
+    pub origin: PointF,
+    /// What of it shows, in the tree's coordinates: its view's bounds,
+    /// within the layers' around it. `None`: all of it.
+    pub clip: Option<RectF>,
     pub display_list: Arc<DisplayItemList>,
     /// What changed since the layer's last frame, in its coordinates:
     /// only these need rastering again. `None`: all of it (the first
     /// frame, or a new size).
     pub invalidation: Option<Arc<[RectF]>>,
+}
+
+/// A layer's place, as the last frame drew it: a new one, or one that
+/// moved, is a change even if no view painted again.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct LayerPlace {
+    owner: Option<AnyViewId>,
+    size: SizeF,
+    origin: PointF,
+    clip: Option<RectF>,
+}
+
+/// A layer being painted.
+struct LayerBuild {
+    place: LayerPlace,
+    list: DisplayItemList,
+    damage: Vec<RectF>,
 }
 
 /// A tree of views of the app `A`, with a [`Container`] as its root.
@@ -112,8 +150,10 @@ pub struct ViewTree<A: App> {
     /// The layer is drawn again whole (first, or after a new size).
     needs_full_paint: bool,
     /// What changed outside what the next paint sees (views removed), in
-    /// the tree's coordinates.
-    damage: Vec<RectF>,
+    /// their layers' coordinates.
+    damage: Vec<(Option<AnyViewId>, RectF)>,
+    /// The layers the last frame drew.
+    layers: Vec<LayerPlace>,
     /// The views under the pointer, from the root down.
     hovered: Vec<AnyViewId>,
     /// The view that handled the press of a button still down, which gets
@@ -150,6 +190,7 @@ impl<A: App> ViewTree<A> {
             needs_layout: true,
             needs_full_paint: true,
             damage: Vec::new(),
+            layers: Vec::new(),
             hovered: Vec::new(),
             captured: None,
             focused: None,
@@ -234,6 +275,7 @@ impl<A: App> ViewTree<A> {
             layout: Layout::default(),
             cache: Cache::new(),
             bounds: RectF::default(),
+            content_size: SizeF::default(),
             needs_paint: true,
             painted: None,
         };
@@ -367,7 +409,7 @@ impl<A: App> ViewTree<A> {
             node.needs_paint = true;
             stack.extend(node.children.iter().copied());
             if let Some(painted) = painted {
-                self.damage.push(painted.drawn());
+                self.damage.push((painted.layer, painted.drawn()));
             }
         }
     }
@@ -420,7 +462,8 @@ impl<A: App> ViewTree<A> {
         Some(self.node(id.into())?.bounds)
     }
 
-    /// `id`'s bounds as last laid out, in the tree's coordinates.
+    /// `id`'s bounds as last laid out, in the tree's coordinates: moved by
+    /// the scroll offsets of the views around it.
     pub fn absolute_bounds(&self, id: impl Into<AnyViewId>) -> Option<RectF> {
         let id = id.into();
         let bounds = self.node(id)?.bounds;
@@ -435,12 +478,24 @@ impl<A: App> ViewTree<A> {
             origin.x += node.bounds.x;
             origin.y += node.bounds.y;
             match node.parent {
-                Some(parent) => id = parent,
+                Some(parent) => {
+                    if let Some(offset) = self.scroll_offset(parent) {
+                        origin.x -= offset.x;
+                        origin.y -= offset.y;
+                    }
+                    id = parent;
+                }
                 None if id == self.root => return Some(origin),
                 // Not under the root: nowhere.
                 None => return None,
             }
         }
+    }
+
+    /// How far `id` scrolls its children, if it does
+    /// ([`View::scroll_offset`]).
+    fn scroll_offset(&self, id: AnyViewId) -> Option<PointF> {
+        self.views.get(id.slot())?.as_deref()?.scroll_offset()
     }
 
     /// `id` and its ancestors are laid out again: their taffy caches are
@@ -489,12 +544,14 @@ impl<A: App> ViewTree<A> {
         id: AnyViewId,
         f: impl FnOnce(&mut dyn View<A>, &mut EventCtx<'_, A>) -> R,
     ) -> Option<R> {
-        let size = self.node(id)?.bounds.size();
+        let node = self.node(id)?;
+        let (size, content_size) = (node.bounds.size(), node.content_size);
         let focused = self.focused == Some(id);
         let view = self.views[id.slot()].as_deref_mut()?;
         let mut ctx = EventCtx {
             shared: &mut self.shared,
             size,
+            content_size,
             focused,
             requests: Requests::default(),
         };
@@ -686,7 +743,9 @@ impl<A: App> ViewTree<A> {
             pass.compute_child_layout(node_id(root), inputs);
         }
         // The root is where the tree is; every other view where taffy put
-        // it. One whose size changed paints again.
+        // it. One whose size changed paints again; one whose size or
+        // content's changed hears it.
+        let mut resized = Vec::new();
         let mut stack = vec![root];
         while let Some(id) = stack.pop() {
             let node = self.node_mut(id).expect("a child of the tree");
@@ -701,11 +760,22 @@ impl<A: App> ViewTree<A> {
                     layout.size.height,
                 )
             };
+            // Its scrollable overflow's far edges (the content's border
+            // boxes and the padding after them, from its top left).
+            let overflow = node.layout.scrollable_overflow_rect.rect();
+            let content_size = SizeF::new(overflow.right, overflow.bottom);
             if bounds.size() != node.bounds.size() {
                 node.needs_paint = true;
             }
+            if bounds.size() != node.bounds.size() || content_size != node.content_size {
+                resized.push(id);
+            }
             node.bounds = bounds;
+            node.content_size = content_size;
             stack.extend(node.children.iter().copied());
+        }
+        for id in resized {
+            self.call(id, |view, ctx| view.on_layout(ctx));
         }
     }
 
@@ -731,9 +801,19 @@ impl<A: App> ViewTree<A> {
         let full = std::mem::take(&mut self.needs_full_paint);
         let mut damage = std::mem::take(&mut self.damage);
         let mut changed = full || !damage.is_empty();
-        let mut list = DisplayItemList::new();
-        let mut stack = vec![(self.root, PointF::new(0.0, 0.0))];
-        while let Some((id, parent_origin)) = stack.pop() {
+        let mut layers = vec![LayerBuild {
+            place: LayerPlace {
+                owner: None,
+                size: self.size,
+                origin: PointF::new(0.0, 0.0),
+                clip: None,
+            },
+            list: DisplayItemList::new(),
+            damage: Vec::new(),
+        }];
+        // A view, where its parent is in their layer, and that layer.
+        let mut stack = vec![(self.root, PointF::new(0.0, 0.0), 0)];
+        while let Some((id, parent_origin, layer)) = stack.pop() {
             let node = self.node(id).expect("a child of the tree");
             if node.style.display == Display::None {
                 if node.painted.is_some() {
@@ -747,60 +827,129 @@ impl<A: App> ViewTree<A> {
                 parent_origin.x + node.bounds.x,
                 parent_origin.y + node.bounds.y,
             );
+            let owner = layers[layer].place.owner;
             let repaint = node.needs_paint || node.painted.is_none();
             if repaint {
-                let painted = self.paint_view(id, origin);
+                let painted = self.paint_view(id, owner, origin);
                 let node = self.node_mut(id).expect("a child of the tree");
                 if let Some(old) = node.painted.replace(painted) {
-                    damage.push(old.drawn());
+                    damage.push((old.layer, old.drawn()));
                 }
                 changed = true;
-                damage.push(node.painted.as_ref().expect("just painted").drawn());
+                damage.push((owner, node.painted.as_ref().expect("just painted").drawn()));
             } else {
                 let node = self.node_mut(id).expect("a child of the tree");
                 let painted = node.painted.as_mut().expect("painted before");
-                if painted.origin != origin {
+                if painted.origin != origin || painted.layer != owner {
                     // Moved: where it was and where it is.
-                    damage.push(painted.drawn());
+                    damage.push((painted.layer, painted.drawn()));
                     painted.origin = origin;
-                    damage.push(painted.drawn());
+                    painted.layer = owner;
+                    damage.push((owner, painted.drawn()));
                     changed = true;
                 }
             }
             let node = self.node(id).expect("a child of the tree");
             let painted = node.painted.as_ref().expect("painted");
-            list.push_list_at(&painted.list, origin.x, origin.y);
+            layers[layer]
+                .list
+                .push_list_at(&painted.list, origin.x, origin.y);
+            // A view that scrolls has its children in a layer of its own,
+            // over its parent's, cut to it and moved by its offset.
+            let (child_origin, child_layer) = match self.scroll_offset(id) {
+                Some(offset) => {
+                    let around = layers[layer].place;
+                    let at = RectF::new(
+                        around.origin.x + origin.x,
+                        around.origin.y + origin.y,
+                        node.bounds.width,
+                        node.bounds.height,
+                    );
+                    let clip = around.clip.map_or(at, |clip| clip.intersect(&at));
+                    let content = node.content_size;
+                    let index = layers.len();
+                    layers.push(LayerBuild {
+                        place: LayerPlace {
+                            owner: Some(id),
+                            size: SizeF::new(
+                                content.width.max(at.width),
+                                content.height.max(at.height),
+                            ),
+                            origin: PointF::new(at.x - offset.x, at.y - offset.y),
+                            clip: Some(clip),
+                        },
+                        list: DisplayItemList::new(),
+                        damage: Vec::new(),
+                    });
+                    (PointF::new(0.0, 0.0), index)
+                }
+                None => (origin, layer),
+            };
             // Later children over earlier ones: pushed so the first pops
             // first.
-            stack.extend(node.children.iter().rev().map(|&child| (child, origin)));
+            stack.extend(
+                node.children
+                    .iter()
+                    .rev()
+                    .map(|&child| (child, child_origin, child_layer)),
+            );
+        }
+        let places: Vec<LayerPlace> = layers.iter().map(|layer| layer.place).collect();
+        if places != self.layers {
+            changed = true;
         }
         if !changed {
             return None;
         }
-        list.finalize();
-        // Within the layer (an op that may draw anywhere damages it all).
-        let layer = RectF::from_size(self.size);
-        let mut damage: Vec<RectF> = damage
-            .iter()
-            .map(|rect| rect.intersect(&layer))
-            .filter(|rect| !rect.is_empty())
-            .collect();
-        damage.dedup();
-        Some(Frame {
-            layers: vec![FrameLayer {
-                size: self.size,
-                display_list: Arc::new(list),
-                invalidation: (!full).then(|| damage.into()),
-            }],
-        })
+        // Each layer's damage within it (an op that may draw anywhere
+        // damages it all); a layer gone has none.
+        for (owner, rect) in damage {
+            if let Some(layer) = layers.iter_mut().find(|layer| layer.place.owner == owner) {
+                let rect = rect.intersect(&RectF::from_size(layer.place.size));
+                if !rect.is_empty() {
+                    layer.damage.push(rect);
+                }
+            }
+        }
+        let before = std::mem::replace(&mut self.layers, places);
+        let frame = Frame {
+            layers: layers
+                .into_iter()
+                .map(|mut layer| {
+                    layer.list.finalize();
+                    layer.damage.dedup();
+                    // Drawn whole: the tree's after a new size, or a layer
+                    // new or of a new size.
+                    let whole = match layer.place.owner {
+                        None => full,
+                        Some(_) => !before.iter().any(|old| {
+                            old.owner == layer.place.owner && old.size == layer.place.size
+                        }),
+                    };
+                    FrameLayer {
+                        owner: layer.place.owner,
+                        size: layer.place.size,
+                        origin: layer.place.origin,
+                        clip: layer.place.clip,
+                        display_list: Arc::new(layer.list),
+                        invalidation: (!whole).then(|| layer.damage.into()),
+                    }
+                })
+                .collect(),
+        };
+        Some(frame)
     }
 
-    /// Records what `id` draws, to be put at `origin`.
-    fn paint_view(&mut self, id: AnyViewId, origin: PointF) -> Painted {
+    /// Records what `id` draws, to be put at `origin` in `layer`.
+    fn paint_view(&mut self, id: AnyViewId, layer: Option<AnyViewId>, origin: PointF) -> Painted {
         let list = self.record(id);
         let node = self.node_mut(id).expect("a child of the tree");
         node.needs_paint = false;
-        Painted { list, origin }
+        Painted {
+            list,
+            layer,
+            origin,
+        }
     }
 
     fn record(&mut self, id: AnyViewId) -> DisplayItemList {
@@ -877,8 +1026,11 @@ impl<A: App> ViewTree<A> {
         if !RectF::from_size(node.bounds.size()).contains(local) {
             return None;
         }
+        // Its children where it has scrolled them.
+        let offset = self.scroll_offset(id).unwrap_or_default();
+        let in_children = PointF::new(local.x + offset.x, local.y + offset.y);
         for &child in node.children.iter().rev() {
-            if let Some(hit) = self.hit_test_in(child, local) {
+            if let Some(hit) = self.hit_test_in(child, in_children) {
                 return Some(hit);
             }
         }
@@ -912,6 +1064,17 @@ impl<A: App> ViewTree<A> {
     pub fn pointer(&mut self, event: PointerEvent) -> Handled {
         let hit = self.hit_test(event.position());
         self.set_hovered(hit.map(|(id, _)| id));
+        if let PointerEvent::Wheel { .. } = event {
+            // To what is under the pointer, whatever has captured it.
+            let handled = match hit {
+                Some((target, _)) => self.bubble_pointer(target, event),
+                None => Handled::No,
+            };
+            // What is under it may have scrolled.
+            let hit = self.hit_test(event.position());
+            self.set_hovered(hit.map(|(id, _)| id));
+            return handled;
+        }
         let captured = self
             .captured
             .filter(|(id, _)| self.contains(*id))

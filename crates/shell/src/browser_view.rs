@@ -16,12 +16,12 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use browser::{ContentsEvent, OpenUrlParams, WebContents};
+use base::SequenceNumber;
 use compositor::mojo_embedder::ChannelLayerTreeFrameSink;
 use compositor::{
-    LayerId, LayerProperties, LayerTreeHost, LayerTreeSettings, PictureLayer, PropertyTrees,
-    SingleThreadProxy, SurfaceLayer,
+    ClipNode, ClipNodeId, LayerId, LayerProperties, LayerTreeHost, LayerTreeSettings, PictureLayer,
+    PropertyTrees, SingleThreadProxy, SurfaceLayer, TransformNodeId,
 };
-use compositor_paint::DisplayItemList;
 use crossbeam_channel::Sender;
 use gfx::{Color, PointF, Rect, RectF, Size, SizeF};
 use protocol::TabId;
@@ -247,9 +247,16 @@ pub struct BrowserView {
     /// The tab strip and the toolbar (Chromium's `TopContainerView`), one
     /// layer, painted where it changed.
     chrome: Chrome,
-    /// The UI's layer as last painted: given the compositor again while
-    /// only other layers change, so that it keeps its tiles.
-    chrome_layer: Option<Arc<DisplayItemList>>,
+    /// The UI's layers as last painted (the tree's, then one for each view
+    /// that scrolls its children): given the compositor again while only
+    /// other layers change, so that they keep their tiles.
+    chrome_layers: Vec<ui::FrameLayer>,
+    /// The compositor's layer for each view that scrolls, while it is
+    /// there: a layer keeps its tiles from one frame to the next.
+    chrome_layer_ids: HashMap<ui::AnyViewId, LayerId>,
+    /// Their ids: after the browser's own layers' (the UI's 1, the web
+    /// views' from 2, the dropdown's 50, sad tabs' from 100).
+    next_chrome_layer_id: SequenceNumber<u32>,
     /// What the UI's last frame changed, as given its layer (`None`: all
     /// of it), for tests.
     chrome_invalidation: Option<Arc<[RectF]>>,
@@ -330,7 +337,9 @@ impl BrowserView {
                 Box::new(frame_sink),
             ),
             chrome: Chrome::new(test_fonts, clipboard),
-            chrome_layer: None,
+            chrome_layers: Vec::new(),
+            chrome_layer_ids: HashMap::new(),
+            next_chrome_layer_id: SequenceNumber::starting_at(1000),
             chrome_invalidation: None,
             sad_tab: SadTab::new(),
             sad_drawn: Vec::new(),
@@ -1255,6 +1264,18 @@ impl BrowserView {
             self.close_popup(PopupMenuResult::Canceled { by_press: false });
             self.update();
         }
+        // Over the UI, to what scrolls there.
+        if let Some((Target::Chrome, p)) = self.hit_test(self.pointer) {
+            let modifiers = self.ui_modifiers();
+            self.chrome.tree.pointer(ui::PointerEvent::Wheel {
+                position: p,
+                delta: compositor::wheel_scroll_delta(delta),
+                modifiers,
+            });
+            self.handle_ui_messages();
+            self.update();
+            return;
+        }
         let (buttons, modifiers) = (self.buttons, self.page_modifiers());
         if let Some((Target::WebView(tab), p)) = self.hit_test(self.pointer)
             && let Some(contents) = self.contents_mut(tab).filter(|c| !c.is_crashed())
@@ -1596,32 +1617,69 @@ impl BrowserView {
             .collect();
         let popup_dirty = std::mem::take(&mut self.popup_dirty);
         // The UI's tree, painted where it changed (`None`: nothing did).
-        let mut invalidation = None;
         let chrome_changed = match self.chrome.tree.paint() {
             Some(frame) => {
-                for layer in frame.layers {
-                    // One: the UI has no view with a layer of its own.
-                    self.chrome_layer = Some(layer.display_list);
-                    invalidation = layer.invalidation;
-                    self.chrome_invalidation.clone_from(&invalidation);
-                }
+                self.chrome_invalidation = frame.layers[0].invalidation.clone();
+                self.chrome_layers = frame.layers;
                 true
             }
             None => false,
         };
         if chrome_changed || sad != self.sad_drawn || popup_dirty {
-            // The window: the web views are drawn over it where the UI lays
-            // them out, and where no op draws its tiles aren't rastered.
-            let mut layers = vec![PictureLayer {
-                id: LayerId(1),
-                bounds: self.chrome.tree.size(),
-                display_list: self.chrome_layer.clone().expect("painted"),
-                contents_opaque: true,
-                background_color: Color::WHITE,
-                // Read only when the list is a new one.
-                invalidation,
-                properties: LayerProperties::default(),
-            }];
+            let mut trees = PropertyTrees::default();
+            let layers_now = &self.chrome_layers;
+            self.chrome_layer_ids
+                .retain(|owner, _| layers_now.iter().any(|layer| layer.owner == Some(*owner)));
+            let mut layers = Vec::new();
+            for layer in &self.chrome_layers {
+                // Each list is read again only when it is a new one: the
+                // same one keeps its tiles.
+                let (display_list, invalidation) =
+                    (layer.display_list.clone(), layer.invalidation.clone());
+                match layer.owner {
+                    // The window: the web views are drawn over it where the
+                    // UI lays them out, and where no op draws its tiles
+                    // aren't rastered.
+                    None => layers.push(PictureLayer {
+                        id: LayerId(1),
+                        bounds: layer.size,
+                        display_list,
+                        contents_opaque: true,
+                        background_color: Color::WHITE,
+                        invalidation,
+                        properties: LayerProperties::default(),
+                    }),
+                    // A view's scrolled children (`views::ScrollView`'s
+                    // contents layer): moved by the offset, cut to the view.
+                    Some(owner) => {
+                        let next = &mut self.next_chrome_layer_id;
+                        let id = *self
+                            .chrome_layer_ids
+                            .entry(owner)
+                            .or_insert_with(|| LayerId(next.get_next()));
+                        let clip = ClipNodeId(trees.clip.len());
+                        trees.clip.push(ClipNode {
+                            parent: Some(ClipNodeId(0)),
+                            transform: TransformNodeId(0),
+                            rect: layer.clip,
+                            radii: Default::default(),
+                        });
+                        layers.push(PictureLayer {
+                            id,
+                            bounds: layer.size,
+                            display_list,
+                            contents_opaque: false,
+                            background_color: Color::TRANSPARENT,
+                            invalidation,
+                            properties: LayerProperties {
+                                origin: layer.origin,
+                                clip,
+                                ..Default::default()
+                            },
+                        });
+                    }
+                }
+            }
             for (bounds, id) in sad.iter().zip(100..) {
                 let at = css(*bounds);
                 layers.push(PictureLayer {
@@ -1654,7 +1712,7 @@ impl BrowserView {
                     },
                 });
             }
-            self.compositor.set_layers(layers, PropertyTrees::default());
+            self.compositor.set_layers(layers, trees);
             self.sad_drawn = sad;
         }
         // In the web views' order: a later one is drawn over an earlier

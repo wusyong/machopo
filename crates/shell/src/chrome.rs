@@ -10,9 +10,10 @@ use base::numerics::{clamp_round, saturated_cast};
 use gfx::{PointF, Rect, SizeF};
 use protocol::TabId;
 use ui::taffy::prelude::{length, percent};
-use ui::taffy::{AlignItems, FlexDirection, Size, Style};
+use ui::taffy::{AlignItems, FlexDirection, Overflow, Point, Size, Style};
 use ui::{
-    Clipboard, Component, CreateCtx, Element, EventCtx, TextContexts, View, ViewId, ViewTree,
+    Clipboard, Component, CreateCtx, Element, EventCtx, ScrollView, TextContexts, View, ViewId,
+    ViewTree,
 };
 
 use crate::browser_view::Command;
@@ -257,12 +258,19 @@ pub fn sidebar(state: &UiState, theme: &BrowserTheme) -> Element<BrowserUi> {
                     ui::taffy::Dimension::auto(),
                     ui::taffy::Dimension::auto(),
                 )))
+                // The rows scroll under the buttons, the field and New
+                // Tab, which stay.
                 .child(
-                    Element::container()
+                    Element::new::<ScrollView>(())
                         .name("tabs")
                         .style(Style {
                             flex_direction: FlexDirection::Column,
-                            flex_shrink: 0.0,
+                            flex_grow: 1.0,
+                            // As tall as the sidebar leaves it, not its rows.
+                            overflow: Point {
+                                x: Overflow::Visible,
+                                y: Overflow::Scroll,
+                            },
                             gap: Size {
                                 width: length(0.0),
                                 height: length(2.0),
@@ -365,6 +373,8 @@ pub struct Chrome {
     /// has them, and the address field.
     pub buttons: [ViewId<NavButton>; 3],
     pub omnibox: ViewId<Omnibox>,
+    /// The sidebar's list of tabs, which scrolls.
+    pub tab_list: Option<ViewId<ScrollView>>,
     /// What the UI was last described from.
     state: UiState,
     custom: Option<CustomLayout>,
@@ -380,6 +390,7 @@ impl Chrome {
         let mut chrome = Self {
             tab_strip: None,
             toolbar: None,
+            tab_list: None,
             buttons: [
                 found(&tree, "back"),
                 found(&tree, "forward"),
@@ -399,6 +410,7 @@ impl Chrome {
         let tree = &self.tree;
         self.tab_strip = tree.find("tab-strip");
         self.toolbar = tree.find("toolbar");
+        self.tab_list = tree.find("tabs");
         self.buttons = [
             found(tree, "back"),
             found(tree, "forward"),
@@ -433,8 +445,31 @@ impl Chrome {
         if state == self.state {
             return;
         }
+        let (list, active) = (self.tab_list, self.state.tabs.get(self.state.active).copied());
         self.describe(&state);
         self.state = state;
+        // Another tab shown, or the list new (the sidebar laid out anew):
+        // its row is scrolled to, if it is out of sight.
+        if self.tab_list != list || self.state.tabs.get(self.state.active).copied() != active {
+            self.reveal_active_tab();
+        }
+    }
+
+    /// Scrolls the sidebar's list as little as shows the active tab's row
+    /// (Chromium's `ScrollRectToVisible`).
+    fn reveal_active_tab(&mut self) {
+        let Some(list) = self.tab_list else {
+            return;
+        };
+        // Where the row is now: the list laid out with it.
+        self.tree.layout();
+        let Some(row) = self.tree.children(list).get(self.state.active).copied() else {
+            return;
+        };
+        if let Some(rect) = self.tree.bounds(row) {
+            self.tree
+                .update(list, |list, ctx| list.scroll_rect_to_visible(rect, ctx));
+        }
     }
 
     fn describe(&mut self, state: &UiState) {
@@ -1309,5 +1344,120 @@ mod sidebar_tests {
         assert_eq!(horizontal, [(TabId(2), Rect::new(0, 74, 800, 526))]);
         assert_eq!(sidebar, [(TabId(2), Rect::new(264, 0, 536, 600))]);
         chrome.tree.paint();
+    }
+
+    /// `count` tabs, the one at `active` shown, in the sidebar of an
+    /// 800 × 600 window: the rows (36 high, 2 apart) from 126, the list
+    /// down to 592, 466 high.
+    fn many(count: u32, active: usize) -> UiState {
+        let tabs: Vec<TabId> = (1..=count).map(TabId).collect();
+        UiState {
+            titles: tabs.iter().map(|tab| format!("tab {}", tab.0)).collect(),
+            shown: vec![tabs[active]],
+            tabs,
+            active,
+            ..state()
+        }
+    }
+
+    fn scrolled(chrome: &Chrome) -> f32 {
+        let list = chrome.tab_list.unwrap();
+        chrome.tree.get(list).unwrap().offset().y
+    }
+
+    fn wheel(chrome: &mut Chrome, at: PointF, dy: f32) {
+        chrome.tree.pointer(PointerEvent::Wheel {
+            position: at,
+            delta: PointF::new(0.0, dy),
+            modifiers: Modifiers::NONE,
+        });
+    }
+
+    #[test]
+    fn the_rows_scroll_in_a_layer_of_their_own_under_what_stays() {
+        let mut chrome = chrome(many(20, 0));
+        let list = chrome.tab_list.unwrap();
+        assert_eq!(rect(&chrome, list), RectF::new(8.0, 126.0, 244.0, 466.0));
+        let field = rect(&chrome, chrome.omnibox);
+        wheel(&mut chrome, PointF::new(100.0, 300.0), 100.0);
+        assert_eq!(scrolled(&chrome), 100.0);
+        let frame = chrome.tree.paint().unwrap();
+        let [_, rows] = &frame.layers[..] else {
+            panic!("the tree's layer and the rows'")
+        };
+        assert_eq!(rows.owner, Some(list.any()));
+        // 20 rows of 36, 2 apart; moved up by the scroll, cut to the list.
+        assert_eq!(rows.size, SizeF::new(244.0, 758.0));
+        assert_eq!(rows.origin, PointF::new(8.0, 26.0));
+        assert_eq!(rows.clip, Some(RectF::new(8.0, 126.0, 244.0, 466.0)));
+        // The field and the buttons stay.
+        assert_eq!(rect(&chrome, chrome.omnibox), field);
+        // No further than the last row: 758 in 466.
+        wheel(&mut chrome, PointF::new(100.0, 300.0), 1000.0);
+        assert_eq!(scrolled(&chrome), 292.0);
+        // Over the field the wheel scrolls nothing.
+        wheel(&mut chrome, center(field), -50.0);
+        assert_eq!(scrolled(&chrome), 292.0);
+    }
+
+    #[test]
+    fn a_row_scrolled_to_is_the_one_clicked() {
+        let mut chrome = chrome(many(20, 0));
+        wheel(&mut chrome, PointF::new(100.0, 300.0), 100.0);
+        chrome.tree.take_messages();
+        // 126 + 18 down the window, 100 + 18 down the list: the fourth row
+        // (114 to 150).
+        click(
+            &mut chrome,
+            PointF::new(100.0, 126.0 + 18.0),
+            PointerButton::Primary,
+        );
+        assert_eq!(
+            chrome.tree.take_messages(),
+            [UiMessage::SelectTabById(TabId(4))]
+        );
+    }
+
+    #[test]
+    fn the_active_tab_s_row_is_scrolled_to_when_another_is_shown() {
+        // The last shown: its row's bottom at the list's.
+        let mut chrome = chrome(many(20, 19));
+        assert_eq!(scrolled(&chrome), 292.0);
+        // The first: its top at the top.
+        chrome.update(many(20, 0));
+        assert_eq!(scrolled(&chrome), 0.0);
+        // The eleventh (380 to 416) shows already: nothing moves.
+        chrome.update(many(20, 10));
+        assert_eq!(scrolled(&chrome), 0.0);
+        // A new title isn't another tab: the list stays where it was put.
+        wheel(&mut chrome, PointF::new(100.0, 300.0), 40.0);
+        let mut renamed = many(20, 10);
+        renamed.titles[3] = "renamed".into();
+        chrome.update(renamed);
+        assert_eq!(scrolled(&chrome), 40.0);
+        // Back in the sidebar after the horizontal layout: a new list,
+        // scrolled to the tab.
+        chrome.update(UiState {
+            layout: UiLayout::Horizontal,
+            ..many(20, 19)
+        });
+        assert!(chrome.tab_list.is_none());
+        chrome.update(many(20, 19));
+        assert_eq!(scrolled(&chrome), 292.0);
+    }
+
+    #[test]
+    fn closing_tabs_keeps_the_list_within_its_rows() {
+        let mut chrome = chrome(many(20, 19));
+        assert_eq!(scrolled(&chrome), 292.0);
+        // The first ten closed, the same tab shown (so not scrolled to):
+        // 378 of rows in 466, nothing to scroll.
+        let mut fewer = many(20, 19);
+        fewer.tabs.drain(..10);
+        fewer.titles.drain(..10);
+        fewer.active = 9;
+        chrome.update(fewer);
+        chrome.tree.layout();
+        assert_eq!(scrolled(&chrome), 0.0);
     }
 }

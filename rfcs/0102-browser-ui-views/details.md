@@ -174,6 +174,19 @@ P2 預留的做法：工具列的 `PictureLayer` 換成嵌入 UI renderer 的 `S
 - **Chrome 沒有自己的顏色、用推的**：按鈕的 hover（Chrome 是 ink drop，疊上一層半透明）、hover 的分頁、分頁的關閉鈕的 hover、分頁之間的線。都用淺色主題裡同樣兩個顏色之間的比例。分頁的關閉鈕的 hover 例外：照淺色的比例（9.5%）在深色是 `#353639`，和目前的分頁（`#35363A`）一樣，看不到，所以加到 18%。
 - **側邊欄是 machopo 自己的**，Chrome 沒有對應的顏色。
 
+### 3b 的實驗
+
+2026-11-17，macOS 26.6（Apple Silicon），winit 0.30.13、wgpu 30.0.1、`window-vibrancy` 0.8.1，一個 600×300 的小程式（不在 repo 裡）：視窗透明、內容延伸到標題列，wgpu 的 surface 用 `PostMultiplied`（Metal 只有 `Opaque` 和它），畫面分三等份：左邊全透明、中間 30% 的白、右邊不透明的綠。
+
+| 做法 | 結果 |
+| --- | --- |
+| 不加 effect view | 右邊的綠畫得出來 |
+| `window-vibrancy` 的 `apply_vibrancy`（`Sidebar` 的材質），建 surface 之前或之後加 | 整個視窗都是材質，綠的不見：effect view 是 winit 的 view 的子 view，畫在 view 自己的內容（wgpu 加的 `CAMetalLayer`）上面 |
+| 自己建 `NSVisualEffectView`，放進 winit 的 view 的 superview（視窗的框），排在 winit 的 view 下面 | 左邊是材質，右邊的綠還在 |
+
+- 視窗的截圖（ScreenCaptureKit 只截那個視窗）裡，中間半透明的那段是純白的，看不出材質；半透明的地方要人看，或截整個螢幕。
+- 最後那個做法要把 raw window handle 的 `ns_view` 轉成 `&NSView`（`unsafe`），其他的 AppKit 呼叫 objc2-app-kit 0.3 都是 safe 的。`window-vibrancy` 的 Liquid Glass（`NSGlassEffectView`）也是加成子 view，同樣會蓋住。
+
 ## 參考資料
 
 - Chromium：`ui/views/view.h`、`ui/views/widget/root_view.h`、`ui/views/view_targeter.h`、`ui/views/layout/flex_layout.h`、`ui/color/color_provider.h`、`chrome/browser/ui/views/frame/browser_view_layout.h`、`chrome/browser/ui/views/frame/webui_tab_strip_container_view.h`、`chrome/browser/ui/views/frame/browser_non_client_frame_view_mac.h`。

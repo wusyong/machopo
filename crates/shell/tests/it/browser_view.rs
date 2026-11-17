@@ -1971,3 +1971,38 @@ fn the_ui_turns_dark_and_light_again_and_the_page_stays_as_it_is() {
     assert_eq!(window.pixel(270, 5), GREEN);
     window.close();
 }
+
+#[test]
+fn the_sidebar_s_rows_scroll_cut_to_their_list() {
+    let server = server(&[("/", GREEN_PAGE)]);
+    let mut window = Window::open(Size::new(800, 300), 1.0);
+    window.load(&server.url("/"));
+    for _ in 0..5 {
+        window.shortcut("t");
+    }
+    window.toggle_sidebar();
+    // Six rows of 36, 2 apart, from 126 (226 of them) in a list down to
+    // 292 (166). The last, new and shown, scrolled to: at the bottom.
+    const ACTIVE: [u8; 4] = [255, 255, 255, 255];
+    assert_eq!(window.pixel(14, 274), ACTIVE);
+    // Up past the top: the fourth row (240 to 276), not shown, is there.
+    window.view.pointer_moved(PointF::new(100.0, 220.0));
+    window.view.wheel(ScrollDelta::Pixels { x: 0.0, y: -100.0 });
+    assert_eq!(window.pixel(14, 274), SIDEBAR);
+    // The first shown: at the top. Scrolled 20 down, it is cut at the
+    // list's top: New Tab's row above stays.
+    window.shortcut("1");
+    assert_eq!(window.pixel(14, 130), ACTIVE);
+    window.view.wheel(ScrollDelta::Pixels { x: 0.0, y: 20.0 });
+    assert_eq!(window.pixel(14, 130), ACTIVE);
+    assert_eq!(window.pixel(14, 115), SIDEBAR);
+    // A click goes to the row where it is now: the second (144 to 180).
+    window.click(100.0, 160.0);
+    assert_eq!(window.view.active_tab_index(), 1);
+    // The page didn't move.
+    assert_eq!(
+        window.view.web_view_bounds(TabId(1)),
+        Some(RectF::new(264.0, 0.0, 536.0, 300.0))
+    );
+    window.close();
+}

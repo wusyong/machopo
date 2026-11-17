@@ -6,8 +6,9 @@
 //! lays them out with taffy's algorithms through its low-level traits (each
 //! node a flex or grid container, or a leaf a view measures), paints each
 //! into a display list it keeps until the view asks to be painted again,
-//! and puts them together into one layer with what changed since the last
-//! frame. Events go to the view under the pointer (or the one that has
+//! and puts them together into layers (the tree's, and one for each
+//! [`ScrollView`]'s children, which scrolling only moves) with what changed
+//! since the last frame. Events go to the view under the pointer (or the one that has
 //! captured it, or the focused one for keys), then up its ancestors until
 //! one handles them; views send what they mean as the app's messages.
 //!
@@ -29,6 +30,7 @@
 mod element;
 pub mod event;
 mod id;
+mod scroll_view;
 pub mod text;
 mod theme;
 mod tree;
@@ -40,6 +42,7 @@ pub use event::{
     PointerEvent,
 };
 pub use id::{AnyViewId, ViewId};
+pub use scroll_view::ScrollView;
 pub use taffy;
 pub use text::TextContexts;
 pub use theme::{Token, TokenTable};

@@ -249,6 +249,8 @@ impl View<BrowserUi> for SidebarTab {
                     ctx.submit(UiMessage::CloseTabById(self.props.tab));
                 }
             }
+            // To the list, which scrolls.
+            PointerEvent::Wheel { .. } => return Handled::No,
         }
         Handled::Yes
     }

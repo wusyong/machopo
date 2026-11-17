@@ -1,0 +1,164 @@
+# The sidebar's tab rows scroll: ui's ScrollView, its layer, and the
+# browser's use of them.
+test = ["sh", "-c", "cargo test -q -p ui && cargo test -q -p shell --lib chrome:: && cargo test -q -p shell --test it browser_view::the_sidebar"]
+timeout = 900
+
+[[mutant]]
+name = "hit testing ignores the scroll"
+file = "crates/ui/src/tree.rs"
+from = '''        let in_children = PointF::new(local.x + offset.x, local.y + offset.y);'''
+to = '''        let in_children = PointF::new(local.x, local.y + 0.0 * offset.y);'''
+
+[[mutant]]
+name = "bounds in the tree ignore the scroll"
+file = "crates/ui/src/tree.rs"
+from = '''                        origin.y -= offset.y;'''
+to = '''                        origin.y -= 0.0 * offset.y;'''
+
+[[mutant]]
+name = "the scrolled layer isn't moved"
+file = "crates/ui/src/tree.rs"
+from = '''                            origin: PointF::new(at.x - offset.x, at.y - offset.y),'''
+to = '''                            origin: PointF::new(at.x, at.y),'''
+
+[[mutant]]
+name = "a nested layer isn't cut by the one around it"
+file = "crates/ui/src/tree.rs"
+from = '''                    let clip = around.clip.map_or(at, |clip| clip.intersect(&at));'''
+to = '''                    let clip = at;'''
+
+[[mutant]]
+name = "a scrolled layer is only as large as its content"
+file = "crates/ui/src/tree.rs"
+from = '''                                content.height.max(at.height),'''
+to = '''                                content.height,'''
+
+[[mutant]]
+name = "a layer moved alone isn't a change"
+file = "crates/ui/src/tree.rs"
+from = '''        if places != self.layers {
+            changed = true;
+        }'''
+to = '''        let _ = &places;'''
+
+[[mutant]]
+name = "a new layer isn't drawn whole"
+file = "crates/ui/src/tree.rs"
+from = '''                        Some(_) => !before.iter().any(|old| {'''
+to = '''                        Some(_) => false && !before.iter().any(|old| {'''
+
+[[mutant]]
+name = "a view painted again damages the tree's layer"
+file = "crates/ui/src/tree.rs"
+from = '''                damage.push((owner, node.painted.as_ref().expect("just painted").drawn()));'''
+to = '''                damage.push((None, node.painted.as_ref().expect("just painted").drawn()));'''
+
+[[mutant]]
+name = "the wheel goes to the captured view"
+file = "crates/ui/src/tree.rs"
+from = '''        if let PointerEvent::Wheel { .. } = event {
+            // To what is under the pointer, whatever has captured it.'''
+to = '''        if let PointerEvent::Wheel { .. } = event
+            && false
+        {
+            // To what is under the pointer, whatever has captured it.'''
+
+[[mutant]]
+name = "nothing is hovered again after a wheel"
+file = "crates/ui/src/tree.rs"
+from = '''            // What is under it may have scrolled.
+            let hit = self.hit_test(event.position());
+            self.set_hovered(hit.map(|(id, _)| id));'''
+to = '''            // What is under it may have scrolled.'''
+
+[[mutant]]
+name = "a view laid out anew isn't told"
+file = "crates/ui/src/tree.rs"
+from = '''            self.call(id, |view, ctx| view.on_layout(ctx));'''
+to = '''            let _ = id;'''
+
+[[mutant]]
+name = "only a new size is told, not new content"
+file = "crates/ui/src/tree.rs"
+from = '''            if bounds.size() != node.bounds.size() || content_size != node.content_size {'''
+to = '''            if bounds.size() != node.bounds.size() {'''
+
+[[mutant]]
+name = "a scroll view scrolls past its content"
+file = "crates/ui/src/scroll_view.rs"
+from = '''        (content.height - size.height).max(0.0),'''
+to = '''        content.height.max(0.0),'''
+
+[[mutant]]
+name = "a scroll view at its end takes the wheel"
+file = "crates/ui/src/scroll_view.rs"
+from = '''        if to == self.offset {
+            return Handled::No;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a rect below is put at the top"
+file = "crates/ui/src/scroll_view.rs"
+from = '''                start + length - port'''
+to = '''                start'''
+
+[[mutant]]
+name = "a rect taller than the view is put at its bottom"
+file = "crates/ui/src/scroll_view.rs"
+from = '''            if start < offset || length > port {'''
+to = '''            if start < offset {'''
+
+[[mutant]]
+name = "a new list isn't scrolled to the tab"
+file = "crates/shell/src/chrome.rs"
+from = '''        if self.tab_list != list || self.state.tabs.get(self.state.active).copied() != active {'''
+to = '''        if self.state.tabs.get(self.state.active).copied() != active {'''
+
+[[mutant]]
+name = "another tab shown isn't scrolled to"
+file = "crates/shell/src/chrome.rs"
+from = '''        if self.tab_list != list || self.state.tabs.get(self.state.active).copied() != active {'''
+to = '''        if self.tab_list != list {'''
+
+[[mutant]]
+name = "the first row is scrolled to"
+file = "crates/shell/src/chrome.rs"
+from = '''        let Some(row) = self.tree.children(list).get(self.state.active).copied() else {'''
+to = '''        let Some(row) = self.tree.children(list).first().copied() else {'''
+
+[[mutant]]
+name = "the list is as tall as its rows"
+file = "crates/shell/src/chrome.rs"
+from = '''                                y: Overflow::Scroll,'''
+to = '''                                y: Overflow::Visible,'''
+
+[[mutant]]
+name = "a row takes the wheel"
+file = "crates/shell/src/sidebar.rs"
+from = '''            PointerEvent::Wheel { .. } => return Handled::No,'''
+to = '''            PointerEvent::Wheel { .. } => {}'''
+
+[[mutant]]
+name = "the browser doesn't give the UI the wheel"
+file = "crates/shell/src/browser_view.rs"
+from = '''        if let Some((Target::Chrome, p)) = self.hit_test(self.pointer) {
+            let modifiers = self.ui_modifiers();
+            self.chrome.tree.pointer(ui::PointerEvent::Wheel {'''
+to = '''        if let Some((Target::Chrome, p)) = self.hit_test(self.pointer)
+            && false
+        {
+            let modifiers = self.ui_modifiers();
+            self.chrome.tree.pointer(ui::PointerEvent::Wheel {'''
+
+[[mutant]]
+name = "the compositor's layer isn't moved by the scroll"
+file = "crates/shell/src/browser_view.rs"
+from = '''                                origin: layer.origin,'''
+to = '''                                origin: PointF::new(layer.origin.x, 126.0),'''
+
+[[mutant]]
+name = "the compositor's layer isn't cut"
+file = "crates/shell/src/browser_view.rs"
+from = '''                            rect: layer.clip,'''
+to = '''                            rect: None,'''
