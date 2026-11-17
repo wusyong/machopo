@@ -152,4 +152,9 @@ pub struct SurfaceLayer {
     pub surface_id: SurfaceId,
     /// Shown until the surface has a frame.
     pub background_color: Color,
+    /// Its corners' radius, CSS px (0: square): the surface is cut to it,
+    /// anti-aliased (`ui::Layer::SetRoundedCornerRadius`, a rounded
+    /// `mask_filter_info` on the surface quad). A quad of the surface's
+    /// with a rounded clip of its own keeps only its own.
+    pub corner_radius: f32,
 }

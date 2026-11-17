@@ -15,8 +15,8 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use browser::{ContentsEvent, OpenUrlParams, WebContents};
 use base::SequenceNumber;
+use browser::{ContentsEvent, OpenUrlParams, WebContents};
 use compositor::mojo_embedder::ChannelLayerTreeFrameSink;
 use compositor::{
     ClipNode, ClipNodeId, LayerId, LayerProperties, LayerTreeHost, LayerTreeSettings, PictureLayer,
@@ -115,6 +115,8 @@ pub enum Command {
     SelectLastTab,
     /// Lay the UI out down a sidebar, or across the top again.
     ToggleSidebar,
+    /// Collapse the sidebar, or expand it again (in the sidebar layout).
+    ToggleSidebarCollapsed,
 }
 
 /// The shortcut `key` is, with `modifiers` held, on macOS (`mac`) or
@@ -165,6 +167,8 @@ pub fn command_for(
         // makes [ and ] the braces on most layouts.
         Key::Character(c) => match c.to_lowercase().as_str() {
             "r" if primary => Some(Command::Reload),
+            // Safari's to show or hide its sidebar; before Cmd+L.
+            "l" if primary && shift => Some(Command::ToggleSidebarCollapsed),
             "l" if primary => Some(Command::FocusLocation),
             "d" if modifiers.alt_key() && !mac => Some(Command::FocusLocation),
             "t" if primary => Some(Command::NewTab),
@@ -207,6 +211,8 @@ struct WebView {
     contents: TabId,
     /// Physical px of the window.
     bounds: Rect,
+    /// Its corners' radius, CSS px: a card's.
+    radius: f32,
 }
 
 /// Makes the web contents of new tabs and takes back closed ones
@@ -242,6 +248,9 @@ pub struct BrowserView {
     ui_layout: UiLayout,
     /// The sidebar's width, CSS px, as last dragged.
     sidebar_width: f32,
+    /// The sidebar collapsed (Cmd+Shift+L), and floating over the page now.
+    sidebar_collapsed: bool,
+    sidebar_floating: bool,
     /// `ui::Compositor`.
     compositor: LayerTreeHost<SingleThreadProxy>,
     /// The tab strip and the toolbar (Chromium's `TopContainerView`), one
@@ -262,8 +271,8 @@ pub struct BrowserView {
     chrome_invalidation: Option<Arc<[RectF]>>,
     /// What a web view whose renderer has gone shows.
     sad_tab: SadTab,
-    /// Where sad tabs were last drawn, physical px.
-    sad_drawn: Vec<Rect>,
+    /// Where sad tabs were last drawn, physical px, and their corners.
+    sad_drawn: Vec<(Rect, f32)>,
     /// Physical px.
     size: Size,
     scale: f32,
@@ -272,6 +281,9 @@ pub struct BrowserView {
     local_surface_id: LocalSurfaceId,
     /// CSS px of the window.
     pointer: PointF,
+    /// Whether the pointer is in the window: it moved there and hasn't
+    /// left (unknown at first, as if not).
+    pointer_in_window: bool,
     modifiers: ModifiersState,
     /// Where the primary button went down: it gets the moves and the up.
     captured: Option<Target>,
@@ -329,6 +341,8 @@ impl BrowserView {
             close_requested: false,
             ui_layout: UiLayout::Horizontal,
             sidebar_width: BrowserTheme::light().size(SizeToken::SidebarWidth),
+            sidebar_collapsed: false,
+            sidebar_floating: false,
             compositor: LayerTreeHost::new_single_threaded(
                 LayerTreeSettings {
                     shared_image_interface: gpu,
@@ -348,6 +362,7 @@ impl BrowserView {
             origin: PointF::new(0.0, 0.0),
             local_surface_id: LocalSurfaceId::default(),
             pointer: PointF::new(0.0, 0.0),
+            pointer_in_window: false,
             modifiers: ModifiersState::empty(),
             captured: None,
             focused: tab,
@@ -834,6 +849,7 @@ impl BrowserView {
                 WebView {
                     contents: tab,
                     bounds,
+                    radius: self.chrome.web_view_radius(tab),
                 }
             })
             .collect();
@@ -883,6 +899,13 @@ impl BrowserView {
     /// the web views from the top one down, then the UI (aura's
     /// `WindowTargeter`).
     fn hit_test(&self, point: PointF) -> Option<(Target, PointF)> {
+        // The sidebar floated over the page is over it.
+        if self
+            .floating_sidebar()
+            .is_some_and(|sidebar| sidebar.contains(point))
+        {
+            return Some((Target::Chrome, self.in_target(Target::Chrome, point)?));
+        }
         let at = PointF::new(point.x * self.scale, point.y * self.scale);
         let target = self
             .web_views
@@ -982,6 +1005,7 @@ impl BrowserView {
     /// The pointer moved to `point`, CSS px of the window.
     pub fn pointer_moved(&mut self, point: PointF) {
         self.pointer = point;
+        self.pointer_in_window = true;
         if let Some(popup) = &mut self.popup
             && (popup.contains(point) || self.pressed_in_popup)
         {
@@ -1343,9 +1367,16 @@ impl BrowserView {
                 return;
             }
             // Every key goes to the field while it has them, used or not.
-            self.chrome
-                .tree
-                .key(&keyboard::ui_key_event(input, self.modifiers));
+            let event = keyboard::ui_key_event(input, self.modifiers);
+            self.chrome.tree.key(&event);
+            // Escape in the field of the floating sidebar puts it away too,
+            // as Enter does.
+            if self.sidebar_floating
+                && event.pressed
+                && event.key == ui::Key::Named(ui::NamedKey::Escape)
+            {
+                self.chrome.blur_omnibox();
+            }
             self.handle_ui_messages();
             self.update();
             return;
@@ -1409,6 +1440,12 @@ impl BrowserView {
                 };
                 self.relayout();
             }
+            // Nothing to collapse across the top.
+            Command::ToggleSidebarCollapsed if self.ui_layout == UiLayout::Sidebar => {
+                self.sidebar_collapsed = !self.sidebar_collapsed;
+                self.relayout();
+            }
+            Command::ToggleSidebarCollapsed => {}
         }
         self.sync_ui();
         self.update();
@@ -1534,6 +1571,8 @@ impl BrowserView {
             // As dragged, or the theme's at first, within this window: a
             // window made wider again gives it back.
             sidebar_width: self.sidebar_width_in_window(self.sidebar_width),
+            sidebar_collapsed: self.sidebar_collapsed,
+            sidebar_floating: self.sidebar_floats(),
             layout: self.ui_layout,
             tabs: self.tabs.iter().map(WebContents::tab).collect(),
             shown: std::iter::once(self.tabs.active().tab())
@@ -1546,7 +1585,40 @@ impl BrowserView {
     /// changed.
     fn sync_ui(&mut self) {
         let state = self.ui_state();
+        self.sidebar_floating = state.sidebar_floating;
         self.chrome.update(state);
+    }
+
+    /// Whether the collapsed sidebar floats over the page now (Zen's
+    /// compact mode): the pointer at the window's left edge brings it, and
+    /// over it keeps it; the address field having the keys (Cmd+L) keeps
+    /// it, and so does a press in it until the button comes up.
+    fn sidebar_floats(&self) -> bool {
+        if !(self.sidebar_collapsed && self.ui_layout == UiLayout::Sidebar) {
+            return false;
+        }
+        let p = self.pointer;
+        let in_window = self.pointer_in_window;
+        let edge = self.chrome.tree.theme().size(SizeToken::SidebarEdgeWidth);
+        let over = self.sidebar_floating && p.x < self.sidebar_width_in_window(self.sidebar_width);
+        (in_window && (p.x < edge || over))
+            || self.chrome.omnibox_focused()
+            || (self.sidebar_floating && self.chrome.tree.captured().is_some())
+    }
+
+    /// The pointer left the window: nothing in it is under the pointer,
+    /// and the floating sidebar goes (unless its field has the keys).
+    pub fn pointer_left_window(&mut self) {
+        self.pointer_in_window = false;
+        self.chrome.tree.pointer_left();
+        self.update();
+    }
+
+    /// The floating sidebar's bounds, CSS px of the window, while it
+    /// floats.
+    fn floating_sidebar(&self) -> Option<RectF> {
+        let panel = self.chrome.floating_panel()?;
+        self.chrome.tree.absolute_bounds(panel)
     }
 
     /// What the pointer should look like where it is: over a page, what
@@ -1609,11 +1681,11 @@ impl BrowserView {
         let css = move |rect: Rect| rect.to_f32().scale(1.0 / scale);
         // The web views whose renderer has gone show their sad tab instead
         // (Chromium's `SadTabView`, over the contents).
-        let sad: Vec<Rect> = self
+        let sad: Vec<(Rect, f32)> = self
             .web_views
             .iter()
             .filter(|view| !view.bounds.is_empty() && self.crashed(view.contents))
-            .map(|view| view.bounds)
+            .map(|view| (view.bounds, view.radius))
             .collect();
         let popup_dirty = std::mem::take(&mut self.popup_dirty);
         // The UI's tree, painted where it changed (`None`: nothing did).
@@ -1631,6 +1703,7 @@ impl BrowserView {
             self.chrome_layer_ids
                 .retain(|owner, _| layers_now.iter().any(|layer| layer.owner == Some(*owner)));
             let mut layers = Vec::new();
+            let floating = self.chrome.floating_panel();
             for layer in &self.chrome_layers {
                 // Each list is read again only when it is a new one: the
                 // same one keeps its tiles.
@@ -1650,7 +1723,8 @@ impl BrowserView {
                         properties: LayerProperties::default(),
                     }),
                     // A view's scrolled children (`views::ScrollView`'s
-                    // contents layer): moved by the offset, cut to the view.
+                    // contents layer), moved by the offset and cut to the
+                    // view; or a view painted to a layer of its own.
                     Some(owner) => {
                         let next = &mut self.next_chrome_layer_id;
                         let id = *self
@@ -1674,14 +1748,26 @@ impl BrowserView {
                             properties: LayerProperties {
                                 origin: layer.origin,
                                 clip,
+                                // The sidebar floated over the page, and
+                                // what scrolls in it.
+                                over_surfaces: floating
+                                    .is_some_and(|panel| self.chrome.tree.is_within(owner, panel)),
                                 ..Default::default()
                             },
                         });
                     }
                 }
             }
-            for (bounds, id) in sad.iter().zip(100..) {
-                let at = css(*bounds);
+            for (&(bounds, radius), id) in sad.iter().zip(100..) {
+                let at = css(bounds);
+                // A card's corners, as its web view's.
+                let clip = ClipNodeId(trees.clip.len());
+                trees.clip.push(ClipNode {
+                    parent: Some(ClipNodeId(0)),
+                    transform: TransformNodeId(0),
+                    rect: Some(at),
+                    radii: [SizeF::new(radius, radius); 4],
+                });
                 layers.push(PictureLayer {
                     id: LayerId(id),
                     bounds: at.size(),
@@ -1691,6 +1777,7 @@ impl BrowserView {
                     invalidation: None,
                     properties: LayerProperties {
                         origin: PointF::new(at.x, at.y),
+                        clip,
                         ..Default::default()
                     },
                 });
@@ -1731,6 +1818,7 @@ impl BrowserView {
                     bounds: bounds.size(),
                     surface_id: self.contents(view.contents)?.surface_id(),
                     background_color: Color::WHITE,
+                    corner_radius: view.radius,
                 })
             })
             .collect();

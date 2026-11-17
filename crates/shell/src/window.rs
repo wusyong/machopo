@@ -630,6 +630,7 @@ impl ApplicationHandler<ShellEvent> for App {
             }
             WindowEvent::ModifiersChanged(modifiers) => view.set_modifiers(modifiers.state()),
             WindowEvent::Focused(focused) => view.set_window_focused(focused),
+            WindowEvent::CursorLeft { .. } => view.pointer_left_window(),
             // The system's changed: the UI follows, unless `--ui-theme`
             // chose, or the pipe drives it.
             WindowEvent::ThemeChanged(theme)

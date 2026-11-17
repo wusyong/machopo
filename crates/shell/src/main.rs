@@ -31,8 +31,8 @@ use std::process::ExitCode;
 
 use browser::{HostMappingRules, NetworkContextParams};
 use shell::chrome::UiLayout;
-use shell::theme::ColorMode;
 use shell::devtools_http_handler::{self, AllowedOrigins};
+use shell::theme::ColorMode;
 use shell::{automation_pipe, to_url};
 use tracing_log::AsLog;
 use tracing_subscriber::Layer;
@@ -552,14 +552,8 @@ mod tests {
     #[test]
     fn the_ui_theme_of_a_window() {
         assert_eq!(run(&[]).ui_theme, None);
-        assert_eq!(
-            run(&["--ui-theme", "dark"]).ui_theme,
-            Some(ColorMode::Dark)
-        );
-        assert_eq!(
-            run(&["--ui-theme=light"]).ui_theme,
-            Some(ColorMode::Light)
-        );
+        assert_eq!(run(&["--ui-theme", "dark"]).ui_theme, Some(ColorMode::Dark));
+        assert_eq!(run(&["--ui-theme=light"]).ui_theme, Some(ColorMode::Light));
         let err = |args: &[&str]| parse(args).unwrap_err();
         assert!(err(&["--ui-theme", "auto"]).contains("light or dark"));
         // What drives the pipe sees the light UI.

@@ -1276,18 +1276,32 @@ impl LayerTreeHostImpl {
         let mut resources = Vec::new();
         // The picture layers drawn over the surface layers, front to back.
         let mut over = Vec::new();
+        let mut shared_quad_states = vec![SharedQuadState::default()];
         // `SurfaceLayerImpl::AppendQuads`: front to back, so the last
         // surface layer first, all of them over the root layer.
         let scale = tree.device_scale_factor;
         for layer in tree.surface_layers.iter().rev() {
+            let rect = RectF::new(
+                (layer.position.x * scale).round(),
+                (layer.position.y * scale).round(),
+                (layer.bounds.width * scale).round(),
+                (layer.bounds.height * scale).round(),
+            );
+            // Rounded corners: a state of its own, which Viz gives the
+            // surface's quads too.
+            let shared_quad_state = if layer.corner_radius > 0.0 {
+                let index = shared_quad_states.len();
+                shared_quad_states.push(SharedQuadState {
+                    rounded_clip: Some(RRectF::uniform(rect, layer.corner_radius * scale)),
+                    ..SharedQuadState::default()
+                });
+                index
+            } else {
+                0
+            };
             quads.push(DrawQuad {
-                rect: RectF::new(
-                    (layer.position.x * scale).round(),
-                    (layer.position.y * scale).round(),
-                    (layer.bounds.width * scale).round(),
-                    (layer.bounds.height * scale).round(),
-                ),
-                shared_quad_state: 0,
+                rect,
+                shared_quad_state,
                 material: Material::Surface {
                     surface_id: layer.surface_id,
                     default_background_color: layer.background_color,
@@ -1298,7 +1312,6 @@ impl LayerTreeHostImpl {
         // layer first. Each layer's content space is the target space moved
         // to where the layer is, less the viewport's scroll offset; the
         // clips around a layer are its quads' shared state.
-        let mut shared_quad_states = vec![SharedQuadState::default()];
         for layer in tree.layers.iter().rev() {
             let properties = layer.properties();
             let quads = if properties.over_surfaces {
@@ -2874,6 +2887,7 @@ mod tests {
             bounds: SizeF::new(100.0, 100.0),
             surface_id,
             background_color: Color::WHITE,
+            corner_radius: 0.0,
         }]);
         host.composite();
         let frames = frames.lock().unwrap();
@@ -2913,6 +2927,7 @@ mod tests {
             bounds: SizeF::new(100.0, 30.0),
             surface_id,
             background_color: Color::WHITE,
+            corner_radius: 0.0,
         };
         host.set_viewport_rect_and_scale(Size::new(100, 100), 2.0, LocalSurfaceId::default());
         host.set_surface_layers(vec![layer.clone()]);
@@ -2936,6 +2951,56 @@ mod tests {
                 .iter()
                 .all(|q| matches!(q.material, Material::Texture { .. }))
         );
+        // Square: no rounded clip.
+        let pass = frames[0].root_pass().unwrap();
+        let state = pass.shared_quad_state_list[quads[0].shared_quad_state];
+        assert_eq!(state.rounded_clip, None);
+    }
+
+    #[test]
+    fn a_surface_layer_s_corners_are_its_quad_s_rounded_clip() {
+        use protocol::viz::{FrameSinkId, SurfaceId};
+
+        use crate::SurfaceLayer;
+
+        let (mut host, frames) = tall_layer();
+        let surface_id = SurfaceId {
+            frame_sink_id: FrameSinkId {
+                client_id: 1,
+                sink_id: 1,
+            },
+            local_surface_id: LocalSurfaceId::default(),
+        };
+        host.set_viewport_rect_and_scale(Size::new(100, 100), 2.0, LocalSurfaceId::default());
+        host.set_surface_layers(vec![SurfaceLayer {
+            id: LayerId(2),
+            position: gfx::PointF::new(10.0, 20.0),
+            bounds: SizeF::new(80.0, 30.0),
+            surface_id,
+            background_color: Color::WHITE,
+            corner_radius: 8.0,
+        }]);
+        host.composite();
+        let frames = frames.lock().unwrap();
+        let pass = frames[0].root_pass().unwrap();
+        let quad = &pass.quad_list[0];
+        assert!(matches!(quad.material, Material::Surface { .. }));
+        // Physical px: the quad's rect, radius 16.
+        let state = pass.shared_quad_state_list[quad.shared_quad_state];
+        assert_eq!(
+            state.rounded_clip,
+            Some(gfx::RRectF::uniform(
+                RectF::new(20.0, 40.0, 160.0, 60.0),
+                16.0
+            ))
+        );
+        assert_eq!((state.clip_rect, state.opacity), (None, 1.0));
+        // The tiles under it aren't cut.
+        assert!(pass.quad_list[1..].iter().all(|q| {
+            pass.shared_quad_state_list[q.shared_quad_state]
+                .rounded_clip
+                .is_none()
+        }));
     }
 
     #[test]

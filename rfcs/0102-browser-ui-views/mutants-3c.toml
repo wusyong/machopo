@@ -1,0 +1,179 @@
+# The sidebar collapsed and floated over the page; the page as a card
+# with round corners.
+test = ["sh", "-c", "cargo test -q -p compositor --lib surface_layer && cargo test -q -p ui && cargo test -q -p shell --lib chrome:: && cargo test -q -p shell --test it -- browser_view::the_page_beside browser_view::collapsed browser_view::dragging_the_sidebar"]
+timeout = 900
+
+[[mutant]]
+name = "a surface's corners aren't its quad's"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''            let shared_quad_state = if layer.corner_radius > 0.0 {'''
+to = '''            let shared_quad_state = if layer.corner_radius > 0.0 && false {'''
+
+[[mutant]]
+name = "a surface's corners are CSS px in physical px"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                    rounded_clip: Some(RRectF::uniform(rect, layer.corner_radius * scale)),'''
+to = '''                    rounded_clip: Some(RRectF::uniform(rect, layer.corner_radius)),'''
+
+[[mutant]]
+name = "a view that paints to a layer doesn't"
+file = "crates/ui/src/tree.rs"
+from = '''            if self.paints_to_layer(id) {
+                debug_assert!'''
+to = '''            if self.paints_to_layer(id) && false {
+                debug_assert!'''
+
+[[mutant]]
+name = "a painted layer isn't moved by the layer around it"
+file = "crates/ui/src/tree.rs"
+from = '''                        origin: PointF::new(around.origin.x + origin.x, around.origin.y + origin.y),'''
+to = '''                        origin: PointF::new(origin.x, origin.y),'''
+
+[[mutant]]
+name = "a hidden view's children are laid out shown"
+file = "crates/ui/src/tree.rs"
+from = '''        if inputs.run_mode == RunMode::PerformHiddenLayout {
+            return compute_hidden_layout(self, id);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "any view is within any"
+file = "crates/ui/src/tree.rs"
+from = '''        self.contains(id) && self.is_ancestor(ancestor, id)'''
+to = '''        self.contains(id) && self.contains(ancestor)'''
+
+[[mutant]]
+name = "the card has no gap above"
+file = "crates/shell/src/chrome.rs"
+from = '''                top: length(gap),'''
+to = '''                top: length(0.0),'''
+
+[[mutant]]
+name = "the card's corners are square"
+file = "crates/shell/src/chrome.rs"
+from = '''            radius: card.map_or(0.0, |card| card.radius),'''
+to = '''            radius: 0.0,'''
+
+[[mutant]]
+name = "the page's surface isn't rounded"
+file = "crates/shell/src/browser_view.rs"
+from = '''                    corner_radius: view.radius,'''
+to = '''                    corner_radius: 0.0,'''
+
+[[mutant]]
+name = "the sad tab isn't rounded"
+file = "crates/shell/src/browser_view.rs"
+from = '''                    radii: [SizeF::new(radius, radius); 4],'''
+to = '''                    radii: Default::default(),'''
+
+[[mutant]]
+name = "the whole gap drags"
+file = "crates/shell/src/sidebar.rs"
+from = '''        position.x >= start && position.x < start + band'''
+to = '''        position.x >= 0.0'''
+
+[[mutant]]
+name = "the collapsed sidebar isn't hidden"
+file = "crates/shell/src/chrome.rs"
+from = '''        display: if collapsed && !state.sidebar_floating {'''
+to = '''        display: if false {'''
+
+[[mutant]]
+name = "the floating sidebar isn't a layer"
+file = "crates/shell/src/sidebar.rs"
+from = '''    fn paints_to_layer(&self) -> bool {
+        self.floating
+    }'''
+to = '''    fn paints_to_layer(&self) -> bool {
+        false
+    }'''
+
+[[mutant]]
+name = "the floating sidebar is under the page"
+file = "crates/shell/src/browser_view.rs"
+from = '''                                over_surfaces: floating.is_some_and(|panel| {'''
+to = '''                                over_surfaces: false && floating.is_some_and(|panel| {'''
+
+[[mutant]]
+name = "the page is hit before the floating sidebar"
+file = "crates/shell/src/browser_view.rs"
+from = '''        if self
+            .floating_sidebar()
+            .is_some_and(|sidebar| sidebar.contains(point))'''
+to = '''        if false
+            && self
+                .floating_sidebar()
+                .is_some_and(|sidebar| sidebar.contains(point))'''
+
+[[mutant]]
+name = "the left edge doesn't float it"
+file = "crates/shell/src/browser_view.rs"
+from = '''        (in_window && (p.x < edge || over))'''
+to = '''        (in_window && (p.x < 0.0 * edge || over))'''
+
+[[mutant]]
+name = "over it, it doesn't stay"
+file = "crates/shell/src/browser_view.rs"
+from = '''        let over = self.sidebar_floating
+            && p.x < self.sidebar_width_in_window(self.sidebar_width);'''
+to = '''        let over = self.sidebar_floating && p.x < 0.0;'''
+
+[[mutant]]
+name = "the field's keys don't keep it"
+file = "crates/shell/src/browser_view.rs"
+from = '''            || self.chrome.omnibox_focused()
+            || (self.sidebar_floating && self.chrome.tree.captured().is_some())'''
+to = '''            || (self.sidebar_floating && self.chrome.tree.captured().is_some())'''
+
+[[mutant]]
+name = "a press in it doesn't keep it"
+file = "crates/shell/src/browser_view.rs"
+from = '''            || (self.sidebar_floating && self.chrome.tree.captured().is_some())'''
+to = ''''''
+
+[[mutant]]
+name = "Escape doesn't put it away"
+file = "crates/shell/src/browser_view.rs"
+from = '''            if self.sidebar_floating
+                && event.pressed'''
+to = '''            if self.sidebar_floating
+                && false
+                && event.pressed'''
+
+[[mutant]]
+name = "the floating state isn't kept"
+file = "crates/shell/src/browser_view.rs"
+from = '''        self.sidebar_floating = state.sidebar_floating;'''
+to = ''''''
+
+[[mutant]]
+name = "a move doesn't put the pointer in the window"
+file = "crates/shell/src/browser_view.rs"
+from = '''        self.pointer_in_window = true;'''
+to = ''''''
+
+[[mutant]]
+name = "leaving the window doesn't take the pointer out"
+file = "crates/shell/src/browser_view.rs"
+from = '''        self.pointer_in_window = false;
+        self.chrome.tree.pointer_left();'''
+to = '''        self.chrome.tree.pointer_left();'''
+
+[[mutant]]
+name = "across the top it collapses too"
+file = "crates/shell/src/browser_view.rs"
+from = '''            Command::ToggleSidebarCollapsed if self.ui_layout == UiLayout::Sidebar => {'''
+to = '''            Command::ToggleSidebarCollapsed if true => {'''
+
+[[mutant]]
+name = "Cmd+Shift+L is Cmd+L"
+file = "crates/shell/src/browser_view.rs"
+from = '''            "l" if primary && shift => Some(Command::ToggleSidebarCollapsed),'''
+to = '''            "l" if primary && shift && false => Some(Command::ToggleSidebarCollapsed),'''
+
+[[mutant]]
+name = "an expanded sidebar floats"
+file = "crates/shell/src/chrome.rs"
+from = '''        (floating && shown).then_some(panel)'''
+to = '''        shown.then_some(panel)'''

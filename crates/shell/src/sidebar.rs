@@ -16,6 +16,8 @@ use crate::browser_view::Command;
 use crate::chrome::{BrowserUi, UiMessage};
 use crate::theme::{BrowserTheme, ColorToken, SizeToken};
 
+/// How wide the band in the middle of the edge's gap that drags is.
+const EDGE_BAND: f32 = 4.0;
 /// The close button's size, and its gap to the row's end.
 const CLOSE: f32 = 16.0;
 const CLOSE_MARGIN: f32 = 10.0;
@@ -24,31 +26,69 @@ const TEXT_X: f32 = 12.0;
 /// How many steps a title too long fades out in.
 const FADE_STEPS: u8 = 8;
 
+/// Whether the sidebar floats over the page (it is collapsed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SidebarPanelProps {
+    pub floating: bool,
+}
+
 /// The sidebar's background. It takes a press on itself, so that the
-/// pointer stays with the sidebar until the button comes up.
-pub struct SidebarPanel;
+/// pointer stays with the sidebar until the button comes up. Collapsed, it
+/// is a layer of its own, which the browser view puts over the page, with
+/// a line where it ends.
+pub struct SidebarPanel {
+    floating: bool,
+}
 
 impl Component<BrowserUi> for SidebarPanel {
-    type Props = ();
+    type Props = SidebarPanelProps;
 
-    fn create(_: &(), _: &mut CreateCtx<'_, BrowserUi>) -> Self {
-        SidebarPanel
+    fn create(props: &SidebarPanelProps, _: &mut CreateCtx<'_, BrowserUi>) -> Self {
+        Self {
+            floating: props.floating,
+        }
     }
 
-    fn set_props(&mut self, _: &(), _: &mut EventCtx<'_, BrowserUi>) {}
+    fn set_props(&mut self, props: &SidebarPanelProps, ctx: &mut EventCtx<'_, BrowserUi>) {
+        if props.floating != self.floating {
+            self.floating = props.floating;
+            ctx.request_paint();
+        }
+    }
+}
+
+impl SidebarPanel {
+    pub fn is_floating(&self) -> bool {
+        self.floating
+    }
 }
 
 impl View<BrowserUi> for SidebarPanel {
     fn paint(&mut self, ctx: &mut PaintCtx<'_, BrowserUi>, list: &mut DisplayItemList) {
-        let rect = RectF::from_size(ctx.size());
-        let color = ctx.theme().color(ColorToken::SidebarBackground);
+        let size = ctx.size();
+        let rect = RectF::from_size(size);
+        let theme = ctx.theme();
         list.push(
             PaintOp::DrawRect {
                 rect,
-                flags: PaintFlags::fill(color),
+                flags: PaintFlags::fill(theme.color(ColorToken::SidebarBackground)),
             },
             Some(rect),
         );
+        if self.floating {
+            let line = RectF::new(size.width - 1.0, 0.0, 1.0, size.height);
+            list.push(
+                PaintOp::DrawRect {
+                    rect: line,
+                    flags: PaintFlags::fill(theme.color(ColorToken::SidebarEdge)),
+                },
+                Some(line),
+            );
+        }
+    }
+
+    fn paints_to_layer(&self) -> bool {
+        self.floating
     }
 
     fn on_pointer(&mut self, _: &mut EventCtx<'_, BrowserUi>, event: &PointerEvent) -> Handled {
@@ -354,6 +394,37 @@ impl View<BrowserUi> for NewTabRow {
     }
 }
 
+/// The sidebar's color under it, around the page's card and in its gaps.
+/// It isn't hit: a press there is the panel's or nothing's.
+pub struct SidebarBackdrop;
+
+impl Component<BrowserUi> for SidebarBackdrop {
+    type Props = ();
+
+    fn create(_: &(), _: &mut CreateCtx<'_, BrowserUi>) -> Self {
+        SidebarBackdrop
+    }
+
+    fn set_props(&mut self, _: &(), _: &mut EventCtx<'_, BrowserUi>) {}
+}
+
+impl View<BrowserUi> for SidebarBackdrop {
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, BrowserUi>, list: &mut DisplayItemList) {
+        let rect = RectF::from_size(ctx.size());
+        list.push(
+            PaintOp::DrawRect {
+                rect,
+                flags: PaintFlags::fill(ctx.theme().color(ColorToken::SidebarBackground)),
+            },
+            Some(rect),
+        );
+    }
+
+    fn hit_test(&self, _: PointF) -> bool {
+        false
+    }
+}
+
 /// How wide the sidebar is, for the edge dragged to change it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SidebarEdgeProps {
@@ -364,6 +435,8 @@ pub struct SidebarEdgeProps {
 /// be, for the browser view to clamp and lay out.
 pub struct SidebarEdge {
     width: f32,
+    /// How wide the gap it is in is.
+    gap: f32,
     /// Where in the edge the primary button went down, while it is down.
     grab: Option<f32>,
 }
@@ -371,9 +444,10 @@ pub struct SidebarEdge {
 impl Component<BrowserUi> for SidebarEdge {
     type Props = SidebarEdgeProps;
 
-    fn create(props: &SidebarEdgeProps, _: &mut CreateCtx<'_, BrowserUi>) -> Self {
+    fn create(props: &SidebarEdgeProps, ctx: &mut CreateCtx<'_, BrowserUi>) -> Self {
         Self {
             width: props.width,
+            gap: ctx.theme().size(SizeToken::CardGap),
             grab: None,
         }
     }
@@ -385,25 +459,14 @@ impl Component<BrowserUi> for SidebarEdge {
 }
 
 impl View<BrowserUi> for SidebarEdge {
-    fn paint(&mut self, ctx: &mut PaintCtx<'_, BrowserUi>, list: &mut DisplayItemList) {
-        let size = ctx.size();
-        let theme = ctx.theme();
-        let rect = RectF::from_size(size);
-        list.push(
-            PaintOp::DrawRect {
-                rect,
-                flags: PaintFlags::fill(theme.color(ColorToken::SidebarBackground)),
-            },
-            Some(rect),
-        );
-        let line = RectF::new(size.width - 1.0, 0.0, 1.0, size.height);
-        list.push(
-            PaintOp::DrawRect {
-                rect: line,
-                flags: PaintFlags::fill(theme.color(ColorToken::SidebarEdge)),
-            },
-            Some(line),
-        );
+    // It draws nothing: it is the gap between the sidebar and the page,
+    // the backdrop's color.
+
+    /// Only the middle of the gap drags: what is around it is the gap.
+    fn hit_test(&self, position: PointF) -> bool {
+        let (width, band) = (self.gap, EDGE_BAND);
+        let start = (width - band) / 2.0;
+        position.x >= start && position.x < start + band
     }
 
     fn on_pointer(&mut self, ctx: &mut EventCtx<'_, BrowserUi>, event: &PointerEvent) -> Handled {

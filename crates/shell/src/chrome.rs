@@ -9,8 +9,8 @@
 use base::numerics::{clamp_round, saturated_cast};
 use gfx::{PointF, Rect, SizeF};
 use protocol::TabId;
-use ui::taffy::prelude::{length, percent};
-use ui::taffy::{AlignItems, FlexDirection, Overflow, Point, Size, Style};
+use ui::taffy::prelude::{fr, length, line, minmax, percent};
+use ui::taffy::{AlignItems, Display, FlexDirection, Overflow, Point, Size, Style};
 use ui::{
     Clipboard, Component, CreateCtx, Element, EventCtx, ScrollView, TextContexts, View, ViewId,
     ViewTree,
@@ -19,7 +19,8 @@ use ui::{
 use crate::browser_view::Command;
 use crate::omnibox::{Omnibox, OmniboxProps};
 use crate::sidebar::{
-    NewTabRow, SidebarEdge, SidebarEdgeProps, SidebarPanel, SidebarTab, SidebarTabProps,
+    NewTabRow, SidebarBackdrop, SidebarEdge, SidebarEdgeProps, SidebarPanel, SidebarPanelProps,
+    SidebarTab, SidebarTabProps,
 };
 use crate::tab_strip::{TabStrip, TabStripProps};
 use crate::theme::{BrowserTheme, ColorMode, SizeToken};
@@ -89,6 +90,11 @@ pub struct UiState {
     pub strip_height: f32,
     /// How wide the sidebar is, CSS px.
     pub sidebar_width: f32,
+    /// The sidebar collapsed: the page takes the window, and the sidebar
+    /// is shown only floated over it.
+    pub sidebar_collapsed: bool,
+    /// Collapsed, floated over the page.
+    pub sidebar_floating: bool,
 }
 
 impl Default for UiState {
@@ -108,6 +114,8 @@ impl Default for UiState {
             scale: 1.0,
             strip_height: crate::tab_strip::HEIGHT,
             sidebar_width: BrowserTheme::light().size(SizeToken::SidebarWidth),
+            sidebar_collapsed: false,
+            sidebar_floating: false,
         }
     }
 }
@@ -164,7 +172,7 @@ pub fn horizontal(state: &UiState, theme: &BrowserTheme) -> Element<BrowserUi> {
                     .style(field_style(theme)),
                 ),
         )
-        .children(first_web_view(state))
+        .children(first_web_view(state, None))
 }
 
 /// The UI laid out down a sidebar on the left: back, forward and reload,
@@ -200,97 +208,133 @@ pub fn sidebar(state: &UiState, theme: &BrowserTheme) -> Element<BrowserUi> {
                 ui::taffy::Dimension::auto(),
             ))
         });
-    Element::container()
-        .style(Style {
-            flex_direction: FlexDirection::Row,
-            ..Style::default()
+    let gap = theme.size(SizeToken::CardGap);
+    let collapsed = state.sidebar_collapsed;
+    // The same view expanded, hidden and floated: what is typed in its
+    // field stays.
+    let panel = Element::new::<SidebarPanel>(SidebarPanelProps {
+        floating: collapsed,
+    })
+    .name("sidebar")
+    .style(Style {
+        display: if collapsed && !state.sidebar_floating {
+            Display::None
+        } else {
+            Display::Flex
+        },
+        grid_row: line(1),
+        grid_column: line(1),
+        justify_self: Some(AlignItems::START),
+        flex_direction: FlexDirection::Column,
+        padding: ui::taffy::Rect {
+            left: length(padding),
+            right: length(padding),
+            top: length(padding),
+            bottom: length(padding),
+        },
+        gap: Size {
+            width: length(0.0),
+            height: length(padding),
+        },
+        size: Size {
+            width: length(state.sidebar_width),
+            height: percent(1.0),
+        },
+        ..Style::default()
+    })
+    .child(
+        Element::container()
+            .style(Style {
+                flex_direction: FlexDirection::Row,
+                flex_shrink: 0.0,
+                align_items: AlignItems::CENTER,
+                gap: Size {
+                    width: length(theme.size(SizeToken::ToolbarGap)),
+                    height: length(0.0),
+                },
+                ..Style::default()
+            })
+            .child(button(Button::Back, "back", state.can_go_back))
+            .child(button(Button::Forward, "forward", state.can_go_forward))
+            .child(button(Button::Reload, "reload", true)),
+    )
+    .child(
+        Element::new::<Omnibox>(OmniboxProps {
+            url: state.url.clone(),
+            mac: state.mac,
         })
-        .child(
-            Element::new::<SidebarPanel>(())
-                .name("sidebar")
-                .style(Style {
-                    flex_direction: FlexDirection::Column,
-                    flex_shrink: 0.0,
-                    padding: ui::taffy::Rect {
-                        left: length(padding),
-                        right: length(padding),
-                        top: length(padding),
-                        bottom: length(padding),
-                    },
-                    gap: Size {
-                        width: length(0.0),
-                        height: length(padding),
-                    },
-                    size: Size {
-                        width: length(state.sidebar_width),
-                        height: percent(1.0),
-                    },
-                    ..Style::default()
-                })
-                .child(
-                    Element::container()
-                        .style(Style {
-                            flex_direction: FlexDirection::Row,
-                            flex_shrink: 0.0,
-                            align_items: AlignItems::CENTER,
-                            gap: Size {
-                                width: length(theme.size(SizeToken::ToolbarGap)),
-                                height: length(0.0),
-                            },
-                            ..Style::default()
-                        })
-                        .child(button(Button::Back, "back", state.can_go_back))
-                        .child(button(Button::Forward, "forward", state.can_go_forward))
-                        .child(button(Button::Reload, "reload", true)),
-                )
-                .child(
-                    Element::new::<Omnibox>(OmniboxProps {
-                        url: state.url.clone(),
-                        mac: state.mac,
-                    })
-                    .name("omnibox")
-                    .style(fixed(
-                        ui::taffy::Dimension::auto(),
-                        length(theme.size(SizeToken::FieldHeight)),
-                    )),
-                )
-                .child(Element::new::<NewTabRow>(()).name("new-tab").style(fixed(
-                    ui::taffy::Dimension::auto(),
-                    ui::taffy::Dimension::auto(),
-                )))
-                // The rows scroll under the buttons, the field and New
-                // Tab, which stay.
-                .child(
-                    Element::new::<ScrollView>(())
-                        .name("tabs")
-                        .style(Style {
-                            flex_direction: FlexDirection::Column,
-                            flex_grow: 1.0,
-                            // As tall as the sidebar leaves it, not its rows.
-                            overflow: Point {
-                                x: Overflow::Visible,
-                                y: Overflow::Scroll,
-                            },
-                            gap: Size {
-                                width: length(0.0),
-                                height: length(2.0),
-                            },
-                            ..Style::default()
-                        })
-                        .children(tabs),
-                ),
-        )
-        .child(
+        .name("omnibox")
+        .style(fixed(
+            ui::taffy::Dimension::auto(),
+            length(theme.size(SizeToken::FieldHeight)),
+        )),
+    )
+    .child(Element::new::<NewTabRow>(()).name("new-tab").style(fixed(
+        ui::taffy::Dimension::auto(),
+        ui::taffy::Dimension::auto(),
+    )))
+    // The rows scroll under the buttons, the field and New
+    // Tab, which stay.
+    .child(
+        Element::new::<ScrollView>(())
+            .name("tabs")
+            .style(Style {
+                flex_direction: FlexDirection::Column,
+                flex_grow: 1.0,
+                // As tall as the sidebar leaves it, not its rows.
+                overflow: Point {
+                    x: Overflow::Visible,
+                    y: Overflow::Scroll,
+                },
+                gap: Size {
+                    width: length(0.0),
+                    height: length(2.0),
+                },
+                ..Style::default()
+            })
+            .children(tabs),
+    );
+    // Under the panel: where it is (nothing when collapsed), the gap right
+    // of it with the edge that drags it, and the page, a card in the gaps.
+    let place = if collapsed {
+        vec![Element::container().style(fixed(length(gap), percent(1.0)))]
+    } else {
+        vec![
+            Element::container().style(fixed(length(state.sidebar_width), percent(1.0))),
             Element::new::<SidebarEdge>(SidebarEdgeProps {
                 width: state.sidebar_width,
             })
             .name("sidebar-edge")
-            .style(fixed(
-                length(theme.size(SizeToken::SidebarEdgeWidth)),
-                percent(1.0),
-            )),
-        )
-        .children(first_web_view(state))
+            .style(fixed(length(gap), percent(1.0))),
+        ]
+    };
+    let page = Element::new::<SidebarBackdrop>(())
+        .style(Style {
+            grid_row: line(1),
+            grid_column: line(1),
+            flex_direction: FlexDirection::Row,
+            ..Style::default()
+        })
+        .children(place)
+        .children(first_web_view(
+            state,
+            Some(Card {
+                gap,
+                radius: theme.size(SizeToken::CardRadius),
+            }),
+        ));
+    // One cell, the page's row and the panel over it: the window's size,
+    // whatever is in it (`minmax(0, 1fr)`, not `1fr`, whose minimum is
+    // its content's).
+    Element::container()
+        .style(Style {
+            display: Display::Grid,
+            grid_template_columns: vec![minmax(length(0.0), fr(1.0))],
+            grid_template_rows: vec![minmax(length(0.0), fr(1.0))],
+            ..Style::default()
+        })
+        .child(page)
+        .child(panel)
 }
 
 /// The UI as `state` says it is laid out.
@@ -301,31 +345,51 @@ pub fn describe(state: &UiState, theme: &BrowserTheme) -> Element<BrowserUi> {
     }
 }
 
+/// A web view as a card: its gaps to what is around it, and its corners.
+#[derive(Debug, Clone, Copy)]
+struct Card {
+    gap: f32,
+    radius: f32,
+}
+
 /// The active tab's web view, taking the rest of its parent: the layouts
 /// show one web contents (another, like a docked DevTools', needs a layout
-/// of its own).
-fn first_web_view(state: &UiState) -> Option<Element<BrowserUi>> {
+/// of its own). As a card, with gaps above, right and below it (the one
+/// left of it is its parent's).
+fn first_web_view(state: &UiState, card: Option<Card>) -> Option<Element<BrowserUi>> {
     let &tab = state.shown.first()?;
+    let gap = card.map_or(0.0, |card| card.gap);
     Some(
-        Element::new::<WebViewSlot>(WebViewSlotProps { tab })
-            .key(u64::from(tab.0))
-            .style(Style {
-                flex_grow: 1.0,
-                flex_shrink: 1.0,
-                flex_basis: length(0.0),
-                min_size: Size {
-                    width: length(0.0),
-                    height: length(0.0),
-                },
-                ..Style::default()
-            }),
+        Element::new::<WebViewSlot>(WebViewSlotProps {
+            tab,
+            radius: card.map_or(0.0, |card| card.radius),
+        })
+        .key(u64::from(tab.0))
+        .style(Style {
+            flex_grow: 1.0,
+            flex_shrink: 1.0,
+            flex_basis: length(0.0),
+            min_size: Size {
+                width: length(0.0),
+                height: length(0.0),
+            },
+            margin: ui::taffy::Rect {
+                left: length(0.0),
+                right: length(gap),
+                top: length(gap),
+                bottom: length(gap),
+            },
+            ..Style::default()
+        }),
     )
 }
 
 /// Which web contents a web view slot shows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WebViewSlotProps {
     pub tab: TabId,
+    /// Its corners' radius, CSS px: 0 square.
+    pub radius: f32,
 }
 
 /// Where a web view is (Chromium's `views::WebView`): it draws nothing and
@@ -333,11 +397,17 @@ pub struct WebViewSlotProps {
 /// it is laid out, and sends it the input there.
 pub struct WebViewSlot {
     tab: TabId,
+    radius: f32,
 }
 
 impl WebViewSlot {
     pub fn tab(&self) -> TabId {
         self.tab
+    }
+
+    /// Its corners' radius, CSS px.
+    pub fn radius(&self) -> f32 {
+        self.radius
     }
 }
 
@@ -345,11 +415,15 @@ impl Component<BrowserUi> for WebViewSlot {
     type Props = WebViewSlotProps;
 
     fn create(props: &WebViewSlotProps, _: &mut CreateCtx<'_, BrowserUi>) -> Self {
-        Self { tab: props.tab }
+        Self {
+            tab: props.tab,
+            radius: props.radius,
+        }
     }
 
     fn set_props(&mut self, props: &WebViewSlotProps, _: &mut EventCtx<'_, BrowserUi>) {
         self.tab = props.tab;
+        self.radius = props.radius;
     }
 }
 
@@ -445,7 +519,10 @@ impl Chrome {
         if state == self.state {
             return;
         }
-        let (list, active) = (self.tab_list, self.state.tabs.get(self.state.active).copied());
+        let (list, active) = (
+            self.tab_list,
+            self.state.tabs.get(self.state.active).copied(),
+        );
         self.describe(&state);
         self.state = state;
         // Another tab shown, or the list new (the sidebar laid out anew):
@@ -513,6 +590,27 @@ impl Chrome {
                 ))
             })
             .collect()
+    }
+
+    /// The corners' radius of the web view showing `tab`, CSS px.
+    pub fn web_view_radius(&self, tab: TabId) -> f32 {
+        let tree = &self.tree;
+        tree.find_all::<WebViewSlot>()
+            .into_iter()
+            .filter_map(|id| tree.get(id))
+            .find(|slot| slot.tab() == tab)
+            .map_or(0.0, WebViewSlot::radius)
+    }
+
+    /// The sidebar, while it floats over the page (collapsed and shown).
+    pub fn floating_panel(&self) -> Option<ViewId<SidebarPanel>> {
+        let panel = self.tree.find::<SidebarPanel>("sidebar")?;
+        let floating = self.tree.get(panel)?.is_floating();
+        let shown = self
+            .tree
+            .style(panel)
+            .is_some_and(|style| style.display != Display::None);
+        (floating && shown).then_some(panel)
     }
 
     pub fn omnibox(&self) -> &Omnibox {
@@ -1075,20 +1173,20 @@ mod web_view_tests {
     }
 
     #[test]
-    fn the_page_is_right_of_the_sidebar_and_its_edge() {
-        // 260 + 4 CSS px in.
+    fn the_page_is_a_card_right_of_the_sidebar() {
+        // 260 + the gap of 8 CSS px in, 8 from the other edges.
         assert_eq!(
             web_view(UiLayout::Sidebar, 800, 600, 1.0),
-            Rect::new(264, 0, 536, 600)
+            Rect::new(268, 8, 524, 584)
         );
         assert_eq!(
             web_view(UiLayout::Sidebar, 1200, 900, 1.5),
-            Rect::new(396, 0, 804, 900)
+            Rect::new(402, 12, 786, 876)
         );
-        // Dragged to 261: the page from 397.5px, rounded half away from 0.
+        // Dragged to 261: the page from 403.5px, rounded half away from 0.
         assert_eq!(
             web_view_with(UiLayout::Sidebar, 1200, 900, 1.5, 261.0),
-            Rect::new(398, 0, 802, 900)
+            Rect::new(404, 12, 784, 876)
         );
     }
 }
@@ -1194,13 +1292,18 @@ mod sidebar_tests {
         assert_eq!(rows.len(), 3);
         assert_eq!(rect(&chrome, rows[0]), RectF::new(8.0, 126.0, 244.0, 36.0));
         assert_eq!(rect(&chrome, rows[1]).y, 126.0 + 38.0);
-        // The edge, then the page.
+        // The gap with the edge in it, then the page. The middle 4 of the
+        // gap's 8 drag; its sides are only the gap.
         let edge = chrome.tree.find::<SidebarEdge>("sidebar-edge").unwrap();
-        assert_eq!(rect(&chrome, edge), RectF::new(260.0, 0.0, 4.0, 600.0));
+        assert_eq!(rect(&chrome, edge), RectF::new(260.0, 0.0, 8.0, 600.0));
         assert_eq!(
             chrome.tree.cursor(center(rect(&chrome, edge))),
             ui::Cursor::ResizeHorizontal
         );
+        for x in [261.0, 266.5] {
+            let hit = chrome.tree.hit_test(PointF::new(x, 300.0));
+            assert_ne!(hit.map(|(id, _)| id), Some(edge.any()), "{x}");
+        }
     }
 
     #[test]
@@ -1290,11 +1393,11 @@ mod sidebar_tests {
     fn dragging_the_edge_asks_for_the_width_under_the_pointer() {
         let mut chrome = chrome(state());
         let edge = chrome.tree.find::<SidebarEdge>("sidebar-edge").unwrap();
-        let grab = PointF::new(261.0, 300.0);
+        let grab = PointF::new(264.0, 300.0);
         assert_eq!(rect(&chrome, edge).x, 260.0);
         press(&mut chrome, grab, PointerButton::Primary, true);
         chrome.tree.pointer(PointerEvent::Move {
-            position: PointF::new(301.0, 300.0),
+            position: PointF::new(304.0, 300.0),
             modifiers: Modifiers::NONE,
         });
         assert_eq!(
@@ -1310,7 +1413,7 @@ mod sidebar_tests {
         chrome.tree.layout();
         assert_eq!(rect(&chrome, edge).x, 300.0);
         chrome.tree.pointer(PointerEvent::Move {
-            position: PointF::new(291.0, 300.0),
+            position: PointF::new(294.0, 300.0),
             modifiers: Modifiers::NONE,
         });
         assert_eq!(
@@ -1319,7 +1422,7 @@ mod sidebar_tests {
         );
         press(
             &mut chrome,
-            PointF::new(291.0, 300.0),
+            PointF::new(294.0, 300.0),
             PointerButton::Primary,
             false,
         );
@@ -1342,7 +1445,7 @@ mod sidebar_tests {
         assert!(chrome.tab_strip.is_none());
         let sidebar = chrome.web_views(1.0);
         assert_eq!(horizontal, [(TabId(2), Rect::new(0, 74, 800, 526))]);
-        assert_eq!(sidebar, [(TabId(2), Rect::new(264, 0, 536, 600))]);
+        assert_eq!(sidebar, [(TabId(2), Rect::new(268, 8, 524, 584))]);
         chrome.tree.paint();
     }
 
@@ -1459,5 +1562,60 @@ mod sidebar_tests {
         chrome.update(fewer);
         chrome.tree.layout();
         assert_eq!(scrolled(&chrome), 0.0);
+    }
+
+    #[test]
+    fn collapsed_the_page_takes_the_window_and_the_sidebar_floats_over_it() {
+        let collapsed = UiState {
+            sidebar_collapsed: true,
+            ..state()
+        };
+        let mut chrome = chrome(collapsed.clone());
+        // Hidden: the page a card in the whole window.
+        assert_eq!(chrome.floating_panel(), None);
+        assert_eq!(
+            chrome.web_views(1.0),
+            [(TabId(2), Rect::new(8, 8, 784, 584))]
+        );
+        assert_eq!(chrome.web_view_radius(TabId(2)), 8.0);
+        assert_eq!(chrome.tree.hit_test(PointF::new(100.0, 144.0)), None);
+        // Floating: over the page, which stays; a layer of its own, the
+        // list's in it.
+        let field = chrome.omnibox;
+        chrome.update(UiState {
+            sidebar_floating: true,
+            ..collapsed.clone()
+        });
+        let panel = chrome.floating_panel().unwrap();
+        assert_eq!(
+            chrome.web_views(1.0),
+            [(TabId(2), Rect::new(8, 8, 784, 584))]
+        );
+        assert_eq!(rect(&chrome, panel), RectF::new(0.0, 0.0, 260.0, 600.0));
+        let row = rows(&chrome)[0];
+        assert_eq!(
+            chrome
+                .tree
+                .hit_test(PointF::new(100.0, 144.0))
+                .map(|(id, _)| id),
+            Some(row.any())
+        );
+        let frame = chrome.tree.paint().unwrap();
+        let owners: Vec<_> = frame.layers.iter().map(|layer| layer.owner).collect();
+        let list = chrome.tab_list.unwrap();
+        assert_eq!(owners, [None, Some(panel.any()), Some(list.any())]);
+        assert!(chrome.tree.is_within(list, panel));
+        // The same field, hidden, floated and expanded.
+        assert_eq!(chrome.omnibox, field);
+        chrome.update(collapsed);
+        assert_eq!(chrome.floating_panel(), None);
+        chrome.update(state());
+        assert_eq!(chrome.omnibox, field);
+        assert_eq!(chrome.floating_panel(), None);
+        assert_eq!(
+            chrome.tree.paint().unwrap().layers.len(),
+            2,
+            "the tree's and the list's"
+        );
     }
 }

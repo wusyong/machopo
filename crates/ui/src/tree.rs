@@ -89,8 +89,9 @@ struct Mounted<A: App> {
 
 /// What the tree drew: its layers, in paint order. The first is the
 /// tree's: every view but those a [`View::scroll_offset`] scrolls, which
-/// are in a layer of that view's, over it. A view painted after a view
-/// that scrolls (a later sibling) is in the layer under that one's.
+/// are in a layer of that view's, over it, and those in a view that
+/// [`View::paints_to_layer`], with it in a layer of its own. A view painted
+/// after one of those (a later sibling) is in the layer under that one's.
 #[derive(Debug, Clone)]
 pub struct Frame {
     pub layers: Vec<FrameLayer>,
@@ -98,17 +99,19 @@ pub struct Frame {
 
 #[derive(Debug, Clone)]
 pub struct FrameLayer {
-    /// Whose layer: `None` the tree's, else the view that scrolls it (the
-    /// same view's layer from one frame to the next).
+    /// Whose layer: `None` the tree's, else the view that scrolls it, or
+    /// that paints to it (the same view's layer from one frame to the
+    /// next).
     pub owner: Option<AnyViewId>,
-    /// The layer's size, CSS px: the tree's, or the content's of the view
-    /// that scrolls it (as large as the view at least).
+    /// The layer's size, CSS px: the tree's, the content's of the view
+    /// that scrolls it (as large as the view at least), or the view's that
+    /// paints to it.
     pub size: SizeF,
     /// Where its top left is drawn, in the tree's coordinates: moved by
     /// its view's scroll offset.
     pub origin: PointF,
-    /// What of it shows, in the tree's coordinates: its view's bounds,
-    /// within the layers' around it. `None`: all of it.
+    /// What of it shows, in the tree's coordinates: the bounds of the view
+    /// that scrolls it, within the layers' around it. `None`: all of it.
     pub clip: Option<RectF>,
     pub display_list: Arc<DisplayItemList>,
     /// What changed since the layer's last frame, in its coordinates:
@@ -492,6 +495,20 @@ impl<A: App> ViewTree<A> {
         }
     }
 
+    /// Whether `id` paints to a layer of its own ([`View::paints_to_layer`]).
+    fn paints_to_layer(&self, id: AnyViewId) -> bool {
+        self.views
+            .get(id.slot())
+            .and_then(|view| view.as_deref())
+            .is_some_and(|view| view.paints_to_layer())
+    }
+
+    /// Whether `id` is `ancestor` or under it.
+    pub fn is_within(&self, id: impl Into<AnyViewId>, ancestor: impl Into<AnyViewId>) -> bool {
+        let (id, ancestor) = (id.into(), ancestor.into());
+        self.contains(id) && self.is_ancestor(ancestor, id)
+    }
+
     /// How far `id` scrolls its children, if it does
     /// ([`View::scroll_offset`]).
     fn scroll_offset(&self, id: AnyViewId) -> Option<PointF> {
@@ -823,10 +840,30 @@ impl<A: App> ViewTree<A> {
                 }
                 continue;
             }
-            let origin = PointF::new(
+            let mut origin = PointF::new(
                 parent_origin.x + node.bounds.x,
                 parent_origin.y + node.bounds.y,
             );
+            // A view that paints to a layer starts one, at its top left.
+            let mut layer = layer;
+            if self.paints_to_layer(id) {
+                debug_assert!(self.scroll_offset(id).is_none(), "a layer, or a scroller");
+                let around = layers[layer].place;
+                let index = layers.len();
+                layers.push(LayerBuild {
+                    place: LayerPlace {
+                        owner: Some(id),
+                        size: node.bounds.size(),
+                        origin: PointF::new(around.origin.x + origin.x, around.origin.y + origin.y),
+                        clip: around.clip,
+                    },
+                    list: DisplayItemList::new(),
+                    damage: Vec::new(),
+                });
+                layer = index;
+                origin = PointF::new(0.0, 0.0);
+            }
+            let node = self.node(id).expect("a child of the tree");
             let owner = layers[layer].place.owner;
             let repaint = node.needs_paint || node.painted.is_none();
             if repaint {
@@ -1241,6 +1278,11 @@ impl<A: App> LayoutPass<'_, A> {
         let node = self.node(id);
         let display = node.style.display;
         let has_children = !node.children.is_empty();
+        // Under a hidden view, every view is hidden too, whatever its own
+        // display (as `TaffyTree` does).
+        if inputs.run_mode == RunMode::PerformHiddenLayout {
+            return compute_hidden_layout(self, id);
+        }
         match display {
             Display::None => compute_hidden_layout(self, id),
             Display::Flex if has_children => compute_flexbox_layout(self, id, inputs),

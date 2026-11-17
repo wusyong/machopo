@@ -1161,12 +1161,7 @@ fn offset(tree: &ViewTree<TestApp>, scroll: ViewId<ScrollView>) -> f32 {
 }
 
 /// Each layer's owner, origin, clip and invalidation.
-type LayerSeen = (
-    Option<AnyViewId>,
-    PointF,
-    Option<RectF>,
-    Option<Vec<RectF>>,
-);
+type LayerSeen = (Option<AnyViewId>, PointF, Option<RectF>, Option<Vec<RectF>>);
 
 fn layers(tree: &mut ViewTree<TestApp>) -> Option<Vec<LayerSeen>> {
     let frame = tree.paint()?;
@@ -1232,10 +1227,7 @@ fn a_scroll_view_s_children_are_a_layer_of_their_own_cut_to_it() {
         scrolled.display_list.bounds(),
         RectF::new(0.0, 0.0, 100.0, 100.0)
     );
-    assert_eq!(
-        root.display_list.bounds(),
-        RectF::new(0.0, 0.0, 40.0, 20.0)
-    );
+    assert_eq!(root.display_list.bounds(), RectF::new(0.0, 0.0, 40.0, 20.0));
     assert_fresh(&mut tree);
 }
 
@@ -1324,7 +1316,10 @@ fn what_scrolls_under_the_pointer_is_hovered_then() {
     tree.pointer(move_to(60.0, 25.0));
     take_heard(&mut tree, rows[1]);
     tree.pointer(wheel(60.0, 25.0, 20.0));
-    assert_eq!(take_heard(&mut tree, rows[1]), ["wheel 20 5", "hover false"]);
+    assert_eq!(
+        take_heard(&mut tree, rows[1]),
+        ["wheel 20 5", "hover false"]
+    );
     assert_eq!(take_heard(&mut tree, rows[2]), ["hover true"]);
 }
 
@@ -1396,8 +1391,12 @@ fn a_scroll_view_in_another_is_cut_to_both_and_moved_by_both() {
     tree.layout();
     // The outer scrolled 30: the inner, 20 down its content, is 10 above
     // the outer's top, cut by it.
-    tree.update(outer, |view, ctx| view.scroll_to(PointF::new(0.0, 30.0), ctx));
-    tree.update(inner, |view, ctx| view.scroll_to(PointF::new(0.0, 5.0), ctx));
+    tree.update(outer, |view, ctx| {
+        view.scroll_to(PointF::new(0.0, 30.0), ctx)
+    });
+    tree.update(inner, |view, ctx| {
+        view.scroll_to(PointF::new(0.0, 5.0), ctx)
+    });
     let frame = tree.paint().unwrap();
     let [_, _, nested] = &frame.layers[..] else {
         panic!("the tree's, the outer's and the inner's")
@@ -1427,4 +1426,128 @@ fn a_rect_is_scrolled_to_as_little_as_shows_it() {
     // Taller than the view, from below the top: its top, not its bottom.
     assert_eq!(to(&mut tree, RectF::new(0.0, 0.0, 100.0, 20.0)), 0.0);
     assert_eq!(to(&mut tree, RectF::new(0.0, 10.0, 100.0, 80.0)), 10.0);
+}
+
+/// A container that paints a background, in a layer of its own while
+/// `on`.
+struct Layered {
+    on: bool,
+}
+
+impl View<TestApp> for Layered {
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, TestApp>, list: &mut DisplayItemList) {
+        let rect = RectF::from_size(ctx.size());
+        list.push(
+            PaintOp::DrawRect {
+                rect,
+                flags: PaintFlags::fill(Color::rgb(0, 0, 255)),
+            },
+            Some(rect),
+        );
+    }
+
+    fn paints_to_layer(&self) -> bool {
+        self.on
+    }
+}
+
+#[test]
+fn a_view_that_paints_to_a_layer_has_itself_and_its_children_in_it() {
+    let mut tree = tree();
+    tree.set_style(tree.root(), row());
+    let left = tree.insert(Swatch::new("left", 40.0, 20.0));
+    tree.append_child(tree.root(), left);
+    let panel = tree.insert(Layered { on: true });
+    tree.set_style(panel, sized_row(60.0, 50.0));
+    tree.append_child(tree.root(), panel);
+    let inner = tree.insert(Swatch::new("inner", 20.0, 20.0));
+    tree.append_child(panel, inner);
+    let frame = tree.paint().unwrap();
+    let [root, layer] = &frame.layers[..] else {
+        panic!("two layers")
+    };
+    assert_eq!(root.display_list.bounds(), RectF::new(0.0, 0.0, 40.0, 20.0));
+    assert_eq!(layer.owner, Some(panel.any()));
+    assert_eq!(layer.origin, PointF::new(40.0, 0.0));
+    assert_eq!(layer.size, SizeF::new(60.0, 50.0));
+    assert_eq!(layer.clip, None);
+    assert_eq!(
+        layer.display_list.bounds(),
+        RectF::new(0.0, 0.0, 60.0, 50.0)
+    );
+    assert!(tree.is_within(inner, panel) && !tree.is_within(left, panel));
+    // A child painted again damages the layer, in its coordinates.
+    tree.update(inner, |swatch, ctx| {
+        swatch.set_color(Color::rgb(0, 128, 0), ctx)
+    });
+    let seen = layers(&mut tree).unwrap();
+    assert_eq!(seen[0].3, Some(vec![]));
+    assert_eq!(seen[1].3, Some(vec![RectF::new(0.0, 0.0, 20.0, 20.0)]));
+    // No layer of its own any more: it and its child are in the tree's,
+    // where they are.
+    tree.update(panel, |view, ctx| {
+        view.on = false;
+        ctx.request_paint();
+    });
+    let seen = layers(&mut tree).unwrap();
+    assert_eq!(seen.len(), 1);
+    let damage = seen[0].3.clone().unwrap();
+    assert!(damage.contains(&RectF::new(40.0, 0.0, 60.0, 50.0)));
+    assert!(damage.contains(&RectF::new(40.0, 0.0, 20.0, 20.0)));
+    assert_fresh(&mut tree);
+}
+
+#[test]
+fn a_hidden_view_s_children_are_hidden_and_shown_again_with_it() {
+    let mut tree = tree();
+    tree.set_style(tree.root(), row());
+    let group = tree.insert(crate::Container);
+    tree.set_style(
+        group,
+        Style {
+            display: taffy::Display::None,
+            ..sized_row(100.0, 50.0)
+        },
+    );
+    tree.append_child(tree.root(), group);
+    let inner = tree.insert(Swatch::new("inner", 20.0, 20.0));
+    tree.append_child(group, inner);
+    tree.paint();
+    assert_eq!(tree.hit_test(PointF::new(5.0, 5.0)), None);
+    tree.set_style(group, sized_row(100.0, 50.0));
+    tree.paint();
+    assert_eq!(
+        tree.hit_test(PointF::new(5.0, 5.0)).map(|(id, _)| id),
+        Some(inner.any())
+    );
+}
+
+#[test]
+fn a_view_painted_to_a_layer_in_a_scroll_view_moves_with_it() {
+    let mut tree = tree();
+    let (scroll, rows) = scrolling(&mut tree);
+    // In place of the second row.
+    let panel = tree.insert(Layered { on: true });
+    tree.set_style(
+        panel,
+        Style {
+            flex_shrink: 0.0,
+            ..sized_row(100.0, 20.0)
+        },
+    );
+    tree.insert_child(scroll, 1, panel);
+    tree.remove(rows[1]);
+    tree.layout();
+    tree.update(scroll, |view, ctx| {
+        view.scroll_to(PointF::new(0.0, 30.0), ctx)
+    });
+    let frame = tree.paint().unwrap();
+    let [_, scrolled, layer] = &frame.layers[..] else {
+        panic!("the tree's, the scrolled one and the panel's")
+    };
+    assert_eq!(scrolled.origin, PointF::new(40.0, -30.0));
+    // 20 down the scrolled content: 10 above the window's top.
+    assert_eq!(layer.owner, Some(panel.any()));
+    assert_eq!(layer.origin, PointF::new(40.0, -10.0));
+    assert_eq!(layer.clip, Some(RectF::new(40.0, 0.0, 100.0, 50.0)));
 }

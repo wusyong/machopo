@@ -13,11 +13,11 @@
 | 第 2 階段：宣告式的一層、版面管理和側邊欄 | 做完 | 2026-11-17 |
 | 2a：宣告式的一層，橫式 UI 用函式描述 | 做完 | 2026-11-17 |
 | 2b：直的分頁清單、側邊欄的版面和切換 | 做完 | 2026-11-17 |
-| 第 3 階段：外觀 | 進行中 | |
+| 第 3 階段：外觀 | 做完（3b 延後） | 2026-11-17 |
 | 3a：深色主題、跟著系統的深淺色 | 做完 | 2026-11-17 |
 | 3b：視窗：畫進標題列、透明和毛玻璃 | 延後 | |
 | 3d：分頁清單捲動 | 做完 | 2026-11-17 |
-| 3c：側邊欄收合、網頁卡片 | 還沒開始 | |
+| 3c：側邊欄收合、網頁卡片 | 做完 | 2026-11-17 |
 
 ## 驗收
 
@@ -42,6 +42,10 @@
 | `ui` 的捲動：滾輪捲在內容的範圍裡、捲到底交給外層；子 view 自己的 layer（大小、位置、裁切、巢狀時取交集）；捲動不重畫；layer 裡變了的範圍；hit test、`absolute_bounds` 跟著位移；捲完的 hover；收住指標時滾輪照樣給底下的；內容變小時夾住；捲到看得到 | `cargo test -p ui` |
 | 側邊欄的分頁那幾列捲動：自己的 layer、按鈕和網址列不動、捲到底停住、捲過之後點到的是那一列、切換分頁或回到側邊欄時捲到目前的分頁、改標題不捲、關掉分頁時夾住 | `cargo test -p shell --lib chrome` |
 | compositor 照 UI 的 layer 畫：捲動後的位置、裁在清單裡（不蓋到 New Tab）、點擊、網頁不動 | `cargo test -p shell --test it -- browser_view::`；情境 `sidebar-scroll` |
+| `ui` 的 `paints_to_layer`：view 和子 view 在自己的 layer、在捲動的清單裡跟著移動；`is_within`；隱藏的 view 的子 view 照隱藏排 | `cargo test -p ui` |
+| compositor 的 `SurfaceLayer` 帶圓角：surface quad 的 `rounded_clip`（physical px），沒圓角時沒有 | `cargo test -p compositor --lib surface_layer` |
+| 網頁卡片：留縫、圓角（網頁和 sad tab 的角是縫的顏色）、拖曳的邊在縫的中間 | `cargo test -p shell --lib chrome`；`cargo test -p shell --test it -- browser_view::` |
+| 收合：網頁佔滿、側邊欄藏起來；左邊緣浮出、在上面停留、點得到列、離開收回；Cmd+L 浮出、Escape 收回；按著時不收；離開視窗收回；指標位置未知時不浮出；橫式按了沒作用；同一個網址列 | `cargo test -p shell --lib chrome`；`cargo test -p shell --test it -- browser_view::`；情境 `sidebar-collapse` |
 | `BrowserView` 用 `UiState` 取代 `sync_toolbar`，行為不變 | `cargo test -p shell --test it`；情境 `tab-strip`、`navigation`、`demo-busy`、`rounded`、`demo-script`、`gpu-crash` |
 
 ## 做過的檢查
@@ -173,3 +177,34 @@
 - **新的測試**：`ui` 的 10 個（捲動）；`chrome` 的 4 個（側邊欄的 layer 和捲動、捲過之後點擊、捲到目前的分頁、關掉分頁時夾住）；整合測試 1 個（捲動、裁切、點擊的像素）；情境 `sidebar-scroll`（拿掉滾輪那一行時失敗，確認過）。
 - **mutation test**（`mutants-3d.toml`）：24 個抓到 23 個。沒抓到的「比清單高的範圍貼齊底部」：測試裡那個範圍在原本的位移上面，兩種寫法都貼齊頂端；改成先捲回開頭再試，重跑抓到。
 - **跑過的**：`ui` 45 個；`shell` 的單元測試 90 個、`machopo` 10 個；整合測試的 `browser_view::`、`windowless::` 71 個；情境 `sidebar`、`sidebar-scroll`、`tab-strip`、`navigation`；`cargo clippy -p ui -p shell --all-targets -- -D warnings`（改了一處：layer 的索引在加進去之前取）；`sanity.py` 的 7 項。
+
+### 3c
+
+2026-11-17，macOS（Apple Silicon）。
+
+- **`ui`**：`View::paints_to_layer`：回傳 `true` 的 view 開一個新的 layer，它自己和子 view 畫在裡面（位置是外層 layer 的位置加上它的位置，裁切照外層的）。`ViewTree::is_within`。
+- **compositor**：`SurfaceLayer::corner_radius`：大於 0 時，surface quad 有自己的 shared quad state，帶 physical px 的 `rounded_clip`；Viz 照現有的規則套到網頁的 quad 上。
+- **`shell`**：
+  - 側邊欄的版面改成一格的 grid（`minmax(0, 1fr)`）：底下是 `SidebarBackdrop`（側邊欄的顏色）那一列：側邊欄的位置、8 寬的縫（拖曳的 `SidebarEdge` 在裡面，只有中間 4 px 收指標）、網頁（上、右、下的 margin 8，圓角 8）；上面疊 `SidebarPanel`。面板在展開、藏起來、浮出時都是同一個 view，網址列打到一半的字留著。
+  - 收合（`Command::ToggleSidebarCollapsed`，Cmd+Shift+L）：面板 `display: none`，浮出時顯示並 `paints_to_layer`。`BrowserView::sidebar_floats` 決定浮出：指標在視窗裡而且在左邊 4 px，或已經浮出而且在面板上；網址列有焦點；已經浮出而且 UI 收住指標。hit test 先看浮出的面板。浮出的面板和它裡面的清單的 layer 是 `over_surfaces`。網址列裡按 Escape 時，浮出的話也讓網址列失去焦點。
+  - 網頁的圓角從 `WebViewSlot` 的 Props 來，交給 `SurfaceLayer`；sad tab 用帶圓角的 clip 節點。
+  - 指標在不在視窗裡：`pointer_moved` 時在，winit 的 `CursorLeft`（`pointer_left_window`）時不在，一開始不在。
+- **實作時發現、修好的**：
+  - `ui` 排 `display: none` 的 view 時，它的子 view 照它們自己的 display 排，碰到 taffy 的 `unreachable!`（hidden layout 的模式交給葉子量測）。之前藏起來的都是葉子，沒碰到。改成在 hidden layout 的模式下一律照隱藏排（和 `TaffyTree` 一樣），補了測試。
+  - grid 的軌道一開始用 `1fr`：它的最小值是內容的大小，面板被分頁撐高，清單就不捲了；改成 `minmax(0, 1fr)`。
+  - 指標的位置一開始是 (0, 0)，收合時被當成在左邊緣而浮出（情境拿掉「碰左邊緣」那一行照樣通過，才發現）。改成記住指標在不在視窗裡，情境也先把指標移到網頁上。
+- **新的測試**：`ui` 的 3 個（自己的 layer、在捲動的清單裡的、藏起來的 view 的子 view）；compositor 的 1 個；`chrome` 的 1 個（收合和浮出），原本的位置的測試改成卡片的位置；整合測試 2 個（卡片和 sad tab 的圓角的像素；收合、浮出、Cmd+L、Escape、按著拖出去、離開視窗、橫式），原本的位置和網頁的取樣點跟著卡片改；情境 `sidebar-collapse`（拿掉「碰左邊緣」那一行時失敗，確認過）。
+- **mutation test**（`mutants-3c.toml`）：26 個抓到 25 個。沒抓到的「畫到自己的 layer 的 view 不跟著外層的 layer 移動」：只有它在捲動的清單裡面時看得出來，補了那個測試，重跑抓到。
+- **只靠審查的**：winit 的 `CursorLeft` 交給 `pointer_left_window`（`window.rs`），記進 `docs/test-gaps.md`。
+
+### 第 3 階段結束的檢查
+
+2026-11-17，macOS（Apple Silicon）。
+
+- **`cargo fmt`**：整理了這一階段的程式（`chrome.rs` 的側邊欄描述、測試等），之後 `cargo fmt --check` 通過。
+- **`cargo clippy --workspace --all-targets -- -D warnings`**：通過。
+- **`cargo test --workspace`**：第一次在 `shell` 的整合測試停下（`devtools_initiators::script_asks_with_its_stack` 失敗，`no frames: null`）；用 `--no-fail-fast` 再跑一次，3982 個通過、1 個失敗（`browser` 的 `navigation::a_srcdoc_document_commits_with_nothing_else_to_wake_the_renderer`）。兩個都是和這份 RFC 無關的不穩定測試，這一階段沒有動到它們和它們測的程式：
+  - `devtools_initiators::script_asks_with_its_stack`：RFC 0007、0092 的 `progress.md` 都記過。這次 `shell` 的整合測試連跑 3 次失敗 1 次，單獨跑 3 次都通過。原因照 0092 的推測（沒有驗證）：沒被 load 拿走的 stack 在 render thread 一輪的最後才清掉，兩個 `Runtime.evaluate` 落在同一輪時第二個拿到第一個的。
+  - `navigation::a_srcdoc_document_commits_with_nothing_else_to_wake_the_renderer`：等 srcdoc 的 title 只給 5 秒；失敗那次 `browser` 的整合測試整體跑了 14 秒（平常 4 秒左右）。之後單獨跑 5 次、整個 `browser` 的整合測試連跑 6 次都通過。推測是負載重的時候超過 5 秒的期限，沒有驗證。
+- **真的視窗**（`python3 scripts/test.py scenarios --window sidebar sidebar-scroll sidebar-collapse tab-strip navigation demo-busy rounded demo-script gpu-crash`）：9 個都通過。看過 `sidebar-collapse/sidebar-floating.png`（浮出的側邊欄蓋在網頁上、右邊一條線）和 `sidebar-scroll/sidebar-scroll.png`（真的視窗是 1024×768，13 個分頁放得下、沒有捲；網頁卡片的圓角和縫）。
+- `sanity.py` 的 7 項都通過。

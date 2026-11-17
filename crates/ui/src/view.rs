@@ -93,6 +93,16 @@ pub trait View<A: App>: Any {
         Cursor::Default
     }
 
+    /// Whether the view and its children are drawn in a layer of their
+    /// own, over the layers before it (Chromium's
+    /// `View::SetPaintToLayer`): whoever drives the tree can put that
+    /// layer over what it draws beside the tree (a sidebar floated over
+    /// the page). Read at every paint: a change needs no request beyond
+    /// the one that changed it. Not for a view that scrolls.
+    fn paints_to_layer(&self) -> bool {
+        false
+    }
+
     /// `Some`: the view scrolls its children (a [`crate::ScrollView`]).
     /// They are drawn in a layer of their own, cut to the view's bounds
     /// and moved up and left by this offset; hit testing and their bounds

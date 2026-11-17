@@ -9,6 +9,7 @@ machopo 自己的 UI 框架：瀏覽器的分頁列、工具列、網址列是�
 - **排版**：每個節點有一個 taffy 的 `Style`。樹實作 taffy 的低階 trait（和 `layout` crate 的 `BoxTree` 同樣的做法）：有子節點的是 flex 或 grid 容器，沒有子節點的是葉子，由 view 的 `measure` 量；結果在整棵樹上快取。bounds 是 f32 的 CSS px，相對於父 view。
 - **畫**：每個 view 錄自己的 display list（自己的座標，不含子 view），留到它要求重畫或大小變了為止。整棵樹組成一個 layer（`Frame` 的第一個），附上變了的範圍：重畫的 view 的舊位置和新位置、搬動的 view 的兩個位置、拿掉和隱藏的 view 原本的位置，夾在 layer 裡。使用的一方交給 compositor，只重 raster 碰到的 tile。
 - **捲動**：`View::scroll_offset` 回傳 `Some` 的 view（`ScrollView`）的子 view 畫在另一個 layer：layer 有內容的大小、畫在哪裡（樹的座標，已經扣掉位移）和裁切的範圍（那個 view 的範圍，再和外層的裁切取交集），變了的範圍算在那個 layer 自己的座標裡。捲動只改位移：沒有 view 重畫，只給一個新的 `Frame`，每個 layer 變了的範圍是空的。hit test、`absolute_bounds` 和事件的座標都扣掉位移。版面排完之後，大小或內容的大小變了的 view 收到 `on_layout`，`ScrollView` 在那裡把位移夾回範圍裡。
+- **自己的 layer**：`View::paints_to_layer` 回傳 `true` 的 view 和它的子 view 畫在另一個 layer（它自己的大小和位置），使用的一方可以把它放在別的東西上面（瀏覽器把浮出的側邊欄放在網頁上面）；`ViewTree::is_within` 判斷一個 layer 的 view 在不在它裡面。
 - **事件**：指標給收住它的 view，或 hit test 找到的最深的 view，不處理（`Handled::No`）就往父 view 找；處理了按下的 view 收住指標，直到那個按鈕放開。滾輪（`PointerEvent::Wheel`，CSS px，正的往右、往下）一律給指標底下的 view，不管誰收住指標，往上找到能捲的 `ScrollView`（捲到底的不收，交給外層），捲完再算一次 hover。hover 的進出比較前後兩次指標下面的路徑（離開的從深到淺，進來的從淺到深）。按鍵和輸入法給有焦點的 view，同樣往上找。
 - **宣告式的一層**：app 從它的狀態描述 UI，是一棵 `Element` 的樹（每個節點是一種 view 的 Props、它的 `Style`，可以帶 key 和名字），交給 `ViewTree::describe`。比對前一次的描述：同一種 view、同一個 key（沒有 key 的照兄弟之間的位置）的留著，Props 不相等才呼叫它的 `set_props`，換了位置的搬過去；其他的建新的，或拿掉。名字在描述裡唯一，`find::<T>(名字)` 拿到帶型別的 id，給命令式的操作（讓網址列取得焦點）和測試用；`find_all::<T>()` 照畫的順序拿到某一種 view 的全部（瀏覽器用它收集網頁的位置）。用描述管理的子 view 不要再用 `append_child` 手動加。
 - **訊息**：view 處理事件時 `ctx.submit(message)`，使用的一方在分派完之後 `take_messages()`，照順序處理。元件內部的狀態（編輯中的文字、hover 的樣子）留在 view 自己。
@@ -60,7 +61,7 @@ if let Some(frame) = tree.paint() { /* frame.layers[0].display_list、invalidati
 ## 還沒有的
 
 - 排版：block 的容器、`position: absolute`（taffy 的 fork 把 out-of-flow 的子節點交給包含它的區塊排，要實作它的 `LayoutContainingBlock`）、自己寫排法的容器（排版時 view 要能叫子 view 排）。
-- 捲動以外的 layer（動畫、疊在別的東西上面的浮層）；畫在 `ScrollView` 之後、和它重疊的 view（後面的兄弟）在樹的 layer 裡，被它的 layer 蓋住。捲軸、平滑捲動、捲動的動畫。
+- 動畫；畫在 `ScrollView` 或 `paints_to_layer` 的 view 之後、和它重疊的 view（後面的兄弟）在樹的 layer 裡，被它的 layer 蓋住。捲軸、平滑捲動、捲動的動畫。
 - 焦點的走訪（Tab 鍵）、無障礙、動畫、拖放。
 
 ## 測試

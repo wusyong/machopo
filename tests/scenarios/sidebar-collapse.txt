@@ -1,0 +1,27 @@
+# The sidebar collapsed: the page takes the window (a card 8px from its
+# edges), and the sidebar floats over it while the pointer is at the
+# window's left edge or over it. Its rows are where they are expanded:
+# the first's middle at (100, 144), the second's at (100, 182).
+navigate pages/tab-one.html
+wait-loaded
+wait-text #name "one"
+key primary+t
+navigate pages/tab-two.html
+wait-loaded
+wait-text #name "two"
+key primary+shift+,
+# The pointer on the page (it starts at the top left, at the edge).
+hover-at 500 300
+key primary+shift+l
+# At the left edge: it floats over the page.
+hover-at 2 300
+# For a person to look at: the sidebar over the page, which stays where
+# it was, its corners round.
+screenshot sidebar-floating
+click-at 100 144
+wait-text #name "one"
+# Off it, it goes; expanded again, its second row shows the second tab.
+hover-at 500 300
+key primary+shift+l
+click-at 100 182
+wait-text #name "two"

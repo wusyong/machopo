@@ -572,7 +572,7 @@ fn side_by_side_layout(overlap: bool) -> CustomLayout {
         let first_width = if overlap { half + 50 } else { half - 9 };
         let css = |px: f32| px / scale;
         let slot = |tab: TabId, style| {
-            ui::Element::new::<WebViewSlot>(WebViewSlotProps { tab })
+            ui::Element::new::<WebViewSlot>(WebViewSlotProps { tab, radius: 0.0 })
                 .key(u64::from(tab.0))
                 .style(style)
         };
@@ -1855,13 +1855,13 @@ fn the_sidebar_comes_and_goes_with_its_shortcut_and_the_page_moves() {
     );
     window.toggle_sidebar();
     assert_eq!(window.view.ui_layout(), UiLayout::Sidebar);
-    // 260 CSS px of sidebar and 4 of its edge, the page the rest, the
-    // whole height.
+    // 260 CSS px of sidebar, then the page as a card, 8 from the sidebar
+    // and the window's edges.
     assert_eq!(
         window.view.web_view_bounds(TabId(0)),
-        Some(RectF::new(264.0, 0.0, 536.0, 600.0))
+        Some(RectF::new(268.0, 8.0, 524.0, 584.0))
     );
-    window.until_pixel(270, 5, GREEN);
+    window.until_pixel(280, 20, GREEN);
     // The sidebar where the page was: its background.
     assert_eq!(window.pixel(100, 590), SIDEBAR);
     window.toggle_sidebar();
@@ -1881,21 +1881,21 @@ fn a_row_in_the_sidebar_shows_its_tab() {
     window.shortcut("t");
     window.load(&server.url("/blue"));
     window.toggle_sidebar();
-    window.until_pixel(270, 5, BLUE);
+    window.until_pixel(280, 20, BLUE);
     // The first row, under the buttons, the field and new tab.
     window.click(100.0, 126.0 + 18.0);
     assert_eq!(window.view.active_tab_index(), 0);
-    window.until_pixel(270, 5, GREEN);
+    window.until_pixel(280, 20, GREEN);
     // A row is its tab's, wherever the tab is: with the first closed, the
     // first row is the blue one, whose id is 1.
     window.shortcut("w");
-    window.until_pixel(270, 5, BLUE);
+    window.until_pixel(280, 20, BLUE);
     window.shortcut("t");
     window.load(&server.url("/green"));
-    window.until_pixel(270, 5, GREEN);
+    window.until_pixel(280, 20, GREEN);
     window.click(100.0, 126.0 + 18.0);
     assert_eq!(window.view.active_tab_index(), 0);
-    window.until_pixel(270, 5, BLUE);
+    window.until_pixel(280, 20, BLUE);
     window.close();
 }
 
@@ -1913,15 +1913,17 @@ fn dragging_the_sidebar_s_edge_resizes_the_page_within_bounds() {
         window.view.mouse_input(MouseButton::Left, false);
     };
     let page_x = |window: &Window| window.view.web_view_bounds(TabId(0)).unwrap().x;
-    drag(&mut window, 261.0, 361.0);
-    assert_eq!(page_x(&window), 364.0);
+    // From the middle of the gap right of it, 8 wide: the page is 8 from
+    // the sidebar.
+    drag(&mut window, 264.0, 364.0);
+    assert_eq!(page_x(&window), 368.0);
     // No wider than half the window, no narrower than 200.
-    drag(&mut window, 361.0, 700.0);
-    assert_eq!(page_x(&window), 404.0);
-    drag(&mut window, 401.0, 10.0);
-    assert_eq!(page_x(&window), 204.0);
+    drag(&mut window, 364.0, 700.0);
+    assert_eq!(page_x(&window), 408.0);
+    drag(&mut window, 404.0, 10.0);
+    assert_eq!(page_x(&window), 208.0);
     // The page's renderer is told its new size.
-    window.until_pixel(210, 5, GREEN);
+    window.until_pixel(220, 20, GREEN);
     window.close();
 }
 
@@ -1933,7 +1935,7 @@ fn the_sidebar_is_no_wider_than_half_a_narrow_window() {
     window.toggle_sidebar();
     assert_eq!(
         window.view.web_view_bounds(TabId(0)),
-        Some(RectF::new(204.0, 0.0, 196.0, 300.0))
+        Some(RectF::new(208.0, 8.0, 184.0, 284.0))
     );
     window.close();
 }
@@ -1962,13 +1964,13 @@ fn the_ui_turns_dark_and_light_again_and_the_page_stays_as_it_is() {
     assert_eq!(at(&mut window, page), GREEN);
     // The sidebar, and its active row (left of the title), dark too.
     window.toggle_sidebar();
-    window.until_pixel(270, 5, GREEN);
+    window.until_pixel(280, 20, GREEN);
     assert_eq!(window.pixel(100, 590), [53, 54, 58, 255]);
     assert_eq!(window.pixel(14, 126 + 18), [81, 82, 86, 255]);
     window.view.set_color_mode(ColorMode::Light);
     assert_eq!(window.pixel(100, 590), SIDEBAR);
     assert_eq!(window.pixel(14, 126 + 18), [255, 255, 255, 255]);
-    assert_eq!(window.pixel(270, 5), GREEN);
+    assert_eq!(window.pixel(280, 20), GREEN);
     window.close();
 }
 
@@ -2002,7 +2004,114 @@ fn the_sidebar_s_rows_scroll_cut_to_their_list() {
     // The page didn't move.
     assert_eq!(
         window.view.web_view_bounds(TabId(1)),
-        Some(RectF::new(264.0, 0.0, 536.0, 300.0))
+        Some(RectF::new(268.0, 8.0, 524.0, 284.0))
+    );
+    window.close();
+}
+
+/// Cmd+Shift+L (Ctrl+Shift+L elsewhere; Shift makes it `L`).
+fn toggle_collapsed(window: &mut Window) {
+    window
+        .view
+        .set_modifiers(ModifiersState::SUPER | ModifiersState::SHIFT);
+    press(
+        &mut window.view,
+        Key::Character("L".into()),
+        Some("L".into()),
+    );
+    window.view.set_modifiers(ModifiersState::empty());
+}
+
+#[test]
+fn the_page_beside_the_sidebar_is_a_card_with_round_corners_its_sad_tab_too() {
+    let server = server(&[("/", GREEN_PAGE)]);
+    let mut window = Window::open(Size::new(800, 600), 1.0);
+    window.load(&server.url("/"));
+    window.toggle_sidebar();
+    window.until_pixel(280, 20, GREEN);
+    // The card from (268, 8) to (792, 592), its corners' radius 8: the
+    // corners' own pixels are the gap's.
+    assert_eq!(window.pixel(268, 8), SIDEBAR);
+    assert_eq!(window.pixel(791, 591), SIDEBAR);
+    assert_eq!(window.pixel(276, 16), GREEN);
+    assert_eq!(window.pixel(784, 8), GREEN);
+    let sad = Color::rgb(248, 249, 250).premultiplied();
+    window.view.navigate("about:crash");
+    window.until_pixel(280, 20, sad);
+    assert_eq!(window.pixel(268, 8), SIDEBAR);
+    assert_eq!(window.pixel(791, 591), SIDEBAR);
+    window.close();
+}
+
+#[test]
+fn collapsed_the_sidebar_floats_over_the_page_from_the_left_edge() {
+    let server = server(&[("/green", GREEN_PAGE), ("/blue", BLUE_PAGE)]);
+    let mut window = Window::open(Size::new(800, 600), 1.0);
+    window.load(&server.url("/green"));
+    window.shortcut("t");
+    window.load(&server.url("/blue"));
+    window.toggle_sidebar();
+    // Where the pointer is isn't known yet: not at the edge.
+    toggle_collapsed(&mut window);
+    window.until_pixel(100, 300, BLUE);
+    toggle_collapsed(&mut window);
+    window.view.pointer_moved(PointF::new(500.0, 300.0));
+    toggle_collapsed(&mut window);
+    // The page takes the window, 8 from its edges.
+    let card = Some(RectF::new(8.0, 8.0, 784.0, 584.0));
+    assert_eq!(window.view.web_view_bounds(TabId(1)), card);
+    window.until_pixel(100, 300, BLUE);
+    // The pointer at the left edge floats it over the page, which stays.
+    window.view.pointer_moved(PointF::new(2.0, 300.0));
+    assert_eq!(window.pixel(100, 300), SIDEBAR);
+    assert_eq!(window.view.web_view_bounds(TabId(1)), card);
+    // Over it, it stays; a row there is the row's, not the page's.
+    window.click(100.0, 126.0 + 18.0);
+    assert_eq!(window.view.active_tab_index(), 0);
+    assert_eq!(window.pixel(100, 300), SIDEBAR);
+    window.until_pixel(500, 300, GREEN);
+    // Off it, it goes.
+    window.view.pointer_moved(PointF::new(500.0, 300.0));
+    assert_eq!(window.pixel(100, 300), GREEN);
+    // Cmd+L floats it with the field's keys; Escape puts it away.
+    window.shortcut("l");
+    assert!(window.view.omnibox().is_focused());
+    assert_eq!(window.pixel(100, 300), SIDEBAR);
+    window.key(NamedKey::Escape);
+    assert_eq!(window.pixel(100, 300), GREEN);
+    // Pressed in it, it stays while the button is down, wherever the
+    // pointer goes.
+    window.view.pointer_moved(PointF::new(2.0, 300.0));
+    window.view.pointer_moved(PointF::new(100.0, 400.0));
+    window.view.mouse_input(MouseButton::Left, true);
+    window.view.pointer_moved(PointF::new(500.0, 300.0));
+    assert_eq!(window.pixel(100, 300), SIDEBAR);
+    window.view.mouse_input(MouseButton::Left, false);
+    window.view.pointer_moved(PointF::new(501.0, 300.0));
+    assert_eq!(window.pixel(100, 300), GREEN);
+    // Out of the window from the edge, it goes too.
+    window.view.pointer_moved(PointF::new(2.0, 300.0));
+    assert_eq!(window.pixel(100, 300), SIDEBAR);
+    window.view.pointer_left_window();
+    assert_eq!(window.pixel(100, 300), GREEN);
+    // Expanded again: the card right of it.
+    toggle_collapsed(&mut window);
+    assert_eq!(
+        window.view.web_view_bounds(TabId(0)),
+        Some(RectF::new(268.0, 8.0, 524.0, 584.0))
+    );
+    // Across the top there is nothing to collapse: back in the sidebar,
+    // it is as it was.
+    window.toggle_sidebar();
+    toggle_collapsed(&mut window);
+    assert_eq!(
+        window.view.web_view_bounds(TabId(0)),
+        Some(RectF::new(0.0, TOP, 800.0, 600.0 - TOP))
+    );
+    window.toggle_sidebar();
+    assert_eq!(
+        window.view.web_view_bounds(TabId(0)),
+        Some(RectF::new(268.0, 8.0, 524.0, 584.0))
     );
     window.close();
 }

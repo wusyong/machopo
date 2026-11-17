@@ -90,8 +90,13 @@ ui::tokens! {
         SidebarRowHeight,
         SidebarRowRadius,
         SidebarFontSize,
-        /// The edge dragged to resize the sidebar.
+        /// The edge dragged to resize the sidebar, in the gap right of it;
+        /// and, collapsed, the strip at the window's left edge that floats
+        /// it out.
         SidebarEdgeWidth,
+        /// Around the page beside the sidebar: it is a card.
+        CardGap,
+        CardRadius,
     }
 }
 
@@ -239,5 +244,6 @@ fn sizes() -> TokenTable<SizeToken, f32> {
         SizeToken::SidebarRowRadius => 8.0,
         SizeToken::SidebarFontSize => 13.0,
         SizeToken::SidebarEdgeWidth => 4.0,
+        SizeToken::CardGap | SizeToken::CardRadius => 8.0,
     })
 }
