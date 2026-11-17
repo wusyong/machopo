@@ -81,6 +81,9 @@ Each script's `-h` describes its commands (`ci.py`, `test.py`, `bench.py`,
 `sanity.py`). The full suites run in CI: WPT and the rest every day, the GC's
 `matrix` and `fuzz` every week.
 
+`python3 scripts/features.py` lists the web platform features machopo lacks,
+by how much of the web uses them (`target/features/priority.md`).
+
 ## Working on the V8 fork
 
 To change rusty_v8's C++ or V8 itself, fetch the fork's submodules
