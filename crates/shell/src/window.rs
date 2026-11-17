@@ -34,6 +34,7 @@ use shell::devtools_http_handler::{self, DevToolsHttpHandler};
 use shell::keyboard::KeyInput;
 use shell::mouse::{ClickCounter, double_click_interval};
 use shell::omnibox::Clipboard;
+use shell::theme::ColorMode;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{
@@ -42,7 +43,7 @@ use winit::event::{
 };
 use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::keyboard::ModifiersState;
-use winit::window::{CursorIcon, Window, WindowId, WindowLevel};
+use winit::window::{CursorIcon, Theme, Window, WindowId, WindowLevel};
 
 /// Events posted to the UI thread from other threads.
 #[derive(Debug)]
@@ -188,6 +189,9 @@ struct App {
     initial_url: String,
     /// How the UI is laid out at first (`--ui-layout`).
     ui_layout: UiLayout,
+    /// Light or dark (`--ui-theme`); `None`: as the system is, and as it
+    /// changes.
+    ui_theme: Option<ColorMode>,
     test_fonts: bool,
     num_raster_threads: Option<usize>,
     proxy: EventLoopProxy<ShellEvent>,
@@ -263,6 +267,12 @@ impl App {
         if automation {
             // Nothing covers it: a window hidden has no frames to read back.
             attrs = attrs.with_window_level(WindowLevel::AlwaysOnTop);
+        } else if let Some(mode) = self.ui_theme {
+            // The title bar too, where the system draws it.
+            attrs = attrs.with_theme(Some(match mode {
+                ColorMode::Light => Theme::Light,
+                ColorMode::Dark => Theme::Dark,
+            }));
         }
         // Driven through the pipe, the caret doesn't blink, so each frame
         // comes out the same; a person's blinks as the system's does.
@@ -343,6 +353,11 @@ impl App {
             automation_pipe::start_blank(&mut browser);
         } else {
             browser.view_mut().set_ui_layout(self.ui_layout);
+            // Driven through the pipe the UI stays light, whatever the
+            // system: the screenshots don't change with the machine.
+            browser
+                .view_mut()
+                .set_color_mode(window.theme().map_or(ColorMode::Light, color_mode));
             browser.view_mut().navigate(&self.initial_url);
         }
         let context_lost: Arc<dyn ContextLostObserver> =
@@ -615,6 +630,13 @@ impl ApplicationHandler<ShellEvent> for App {
             }
             WindowEvent::ModifiersChanged(modifiers) => view.set_modifiers(modifiers.state()),
             WindowEvent::Focused(focused) => view.set_window_focused(focused),
+            // The system's changed: the UI follows, unless `--ui-theme`
+            // chose, or the pipe drives it.
+            WindowEvent::ThemeChanged(theme)
+                if self.automating.is_none() && self.ui_theme.is_none() =>
+            {
+                view.set_color_mode(color_mode(theme));
+            }
             WindowEvent::MouseInput { state, button, .. } => {
                 let pressed = state == ElementState::Pressed;
                 let page_button = match button {
@@ -774,6 +796,7 @@ impl ApplicationHandler<ShellEvent> for App {
 pub fn run(
     url: String,
     ui_layout: UiLayout,
+    ui_theme: Option<ColorMode>,
     test_fonts: bool,
     num_raster_threads: Option<usize>,
     pipe: Option<NetworkContextParams>,
@@ -785,6 +808,7 @@ pub fn run(
     let mut app = App {
         initial_url: url,
         ui_layout,
+        ui_theme,
         test_fonts,
         num_raster_threads,
         proxy: event_loop.create_proxy(),
@@ -812,5 +836,12 @@ pub fn run(
             Err("the window closed before what drove it was done".into())
         }
         _ => Ok(()),
+    }
+}
+
+fn color_mode(theme: Theme) -> ColorMode {
+    match theme {
+        Theme::Light => ColorMode::Light,
+        Theme::Dark => ColorMode::Dark,
     }
 }

@@ -43,7 +43,7 @@ use crate::popup_menu::{KeyOutcome, PopupMenu};
 use crate::sad_tab::{self, SadTab};
 use crate::tab_strip::TabStrip;
 use crate::tab_strip_model::TabStripModel;
-use crate::theme::{BrowserTheme, SizeToken};
+use crate::theme::{BrowserTheme, ColorMode, SizeToken};
 use crate::url_fixup::fixup_url;
 
 /// The browser's own frame sink: the root of a window's `Display`.
@@ -728,6 +728,16 @@ impl BrowserView {
 
     pub fn ui_layout(&self) -> UiLayout {
         self.ui_layout
+    }
+
+    /// Paints the UI light or dark from now on (the pages are as they were).
+    pub fn set_color_mode(&mut self, mode: ColorMode) {
+        self.chrome.set_color_mode(mode);
+        self.update();
+    }
+
+    pub fn color_mode(&self) -> ColorMode {
+        self.chrome.color_mode()
     }
 
     /// Shows `web_contents` too, in a web view of its own after the others.

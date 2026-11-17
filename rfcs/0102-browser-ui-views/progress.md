@@ -13,7 +13,11 @@
 | 第 2 階段：宣告式的一層、版面管理和側邊欄 | 做完 | 2026-11-17 |
 | 2a：宣告式的一層，橫式 UI 用函式描述 | 做完 | 2026-11-17 |
 | 2b：直的分頁清單、側邊欄的版面和切換 | 做完 | 2026-11-17 |
-| 第 3 階段：外觀 | 還沒開始 | |
+| 第 3 階段：外觀 | 進行中 | |
+| 3a：深色主題、跟著系統的深淺色 | 做完 | 2026-11-17 |
+| 3b：視窗：畫進標題列、透明和毛玻璃 | 還沒開始 | |
+| 3c：側邊欄收合、網頁卡片 | 還沒開始 | |
+| 3d：分頁清單捲動 | 還沒開始 | |
 
 ## 驗收
 
@@ -32,6 +36,9 @@
 | 側邊欄：按鈕、網址列、New Tab、每個分頁一列的位置；分頁開關搬動時列跟著分頁；點分頁、關閉鈕（指標在上面或是目前的分頁時）、中鍵、New Tab（按下放開都在上面）；拖邊緣送出指標下的寬度、游標 | `cargo test -p shell --lib chrome` |
 | 快捷鍵切換版面、網頁跟著移動；點側邊欄的列切換到那個分頁（第一個分頁關掉之後也是）；拖邊緣時網頁跟著縮放，夾在 200 到 min(600, 視窗的一半)；窄視窗裡側邊欄是視窗的一半 | `cargo test -p shell --test it -- browser_view::`；情境 `sidebar` |
 | `--ui-layout`：預設橫式，`sidebar`；不認得的值、和 `--automation-pipe` 一起都報錯 | `cargo test -p shell --bin machopo` |
+| 深色主題：換成深色時整個 UI 重畫，和一開始就是深色的一樣；同一種不重畫 | `cargo test -p shell --lib chrome` |
+| `BrowserView` 換成深色：分頁列、工具列、網址列、側邊欄和目前的列是深色的值，網頁不變；換回淺色 | `cargo test -p shell --test it -- browser_view::` |
+| `--ui-theme`：預設跟著系統，`light`、`dark`；不認得的值、和 `--automation-pipe` 一起都報錯 | `cargo test -p shell --bin machopo` |
 | `BrowserView` 用 `UiState` 取代 `sync_toolbar`，行為不變 | `cargo test -p shell --test it`；情境 `tab-strip`、`navigation`、`demo-busy`、`rounded`、`demo-script`、`gpu-crash` |
 
 ## 做過的檢查
@@ -128,3 +135,19 @@
 - **新的測試**：`toolbar` 的 4 個（線的寬度、圓頭、圓角；圖示在按鈕裡的範圍；箭頭的頭在哪一邊、兩邊在尖端後面成 45 度；重新整理的弧的起訖和直角頭）。原本畫實心多邊形的程式和它們沒有對應的測試。
 - **mutation test**（`mutants-icons.toml`）：7 個抓到 5 個；沒抓到的「上一頁朝右」和「箭頭的頭是一直線」：原本的測試只看有沒有一個點在左端（桿子兩端都有點）。改成直接檢查頭的三個點，重跑都抓到。
 - **跑過的**：`shell` 的單元測試 85 個；整合測試的 `browser_view::`、`windowless::` 69 個；情境 `tab-strip`、`sidebar`、`navigation`；`cargo clippy -p shell -p ui --all-targets -- -D warnings`；`sanity.py` 的 `numerics`、`docs`。
+
+### 3a
+
+2026-11-17，macOS（Apple Silicon）。
+
+- **深色的值**：對照 Chromium 100 的原始碼，每個 token 的來源和對不上的在 `details.md` 的「3a. 深色主題的值」。和第 30 條原本寫的不同的：文字照原始碼是白色，不是 `#E8EAED`；分頁的關閉鈕的 hover 照淺色的比例算出來和目前的分頁同色，加深到 18%。
+- **實作時改的設計**：
+  - 有毛玻璃的那組值移到 3b（第 29 條）：要視窗透明了才看得到、才能檢查，值也看 vibrancy 還是 Liquid Glass。主題照深淺色建（`BrowserTheme::new(ColorMode)`），兩份的大小共用（`sizes()`）。
+  - 換主題用 `ViewTree::set_theme`（第 1 階段就有：全部重畫）；大小不變，描述不用重做。同一種深淺色不呼叫它，不重畫。
+  - `--ui-theme` 固定時，視窗也照它建（winit 的 `with_theme`），macOS 的標題列跟著；跟著系統時，系統切換有 `ThemeChanged`。
+  - sad tab 和 `<select>` 的選單照舊是淺色的：它們在網頁的範圍裡，和網頁一起跟著深淺色（之後的「網頁跟著深淺色」）。
+- **外觀**：用整合測試的 harness 把 2 倍、深色的畫面讀回來看過（暫時的測試，沒有 commit）：橫式的分頁列、目前的分頁和工具列接在一起、hover 的按鈕、網址列；側邊欄的按鈕、網址列、New Tab、目前的列。
+- **新的測試**：`chrome` 的 1 個（換成深色時全部重畫、和一開始就是深色的一樣，同一種不重畫）；`machopo` 的 `--ui-theme` 1 個；整合測試 1 個（換成深色、檢查分頁列、工具列、網址列、側邊欄、目前的列的像素和網頁，再換回淺色）。
+- **mutation test**（`mutants-3a.toml`）：13 個都抓到。
+- **只靠審查和手動確認的**：直接開的視窗跟著系統、系統切換時跟著換（`window.rs`）：自動化一律淺色，記進 `docs/test-gaps.md`。
+- **跑過的**：`shell` 的單元測試 86 個、`machopo` 的 10 個；整合測試的 `browser_view::`、`windowless::` 70 個；真的視窗的情境 `sidebar`、`tab-strip`、`navigation`（`window.rs` 改了）；`sanity.py` 的 7 項。

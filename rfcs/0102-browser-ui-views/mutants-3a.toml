@@ -1,0 +1,84 @@
+# The dark theme, and the UI changing between light and dark.
+test = ["sh", "-c", "cargo test -q -p shell --lib chrome:: && cargo test -q -p shell --bin machopo the_ui_theme && cargo test -q -p shell --test it browser_view::the_ui_turns"]
+timeout = 900
+
+[[mutant]]
+name = "dark makes the light theme"
+file = "crates/shell/src/theme.rs"
+from = '''            ColorMode::Dark => Self::dark(),'''
+to = '''            ColorMode::Dark => Self::light(),'''
+
+[[mutant]]
+name = "the dark theme says it is light"
+file = "crates/shell/src/theme.rs"
+from = '''            mode: ColorMode::Dark,'''
+to = '''            mode: ColorMode::Light,'''
+
+[[mutant]]
+name = "the dark toolbar is the light one's"
+file = "crates/shell/src/theme.rs"
+from = '''                ColorToken::ToolbarBackground => Color::rgb(53, 54, 58),'''
+to = '''                ColorToken::ToolbarBackground => Color::rgb(241, 243, 244),'''
+
+[[mutant]]
+name = "the dark field is the toolbar's color"
+file = "crates/shell/src/theme.rs"
+from = '''                ColorToken::Field | ColorToken::FieldFocused => Color::rgb(32, 33, 36),'''
+to = '''                ColorToken::Field | ColorToken::FieldFocused => Color::rgb(53, 54, 58),'''
+
+[[mutant]]
+name = "the dark tab strip is the toolbar's color"
+file = "crates/shell/src/theme.rs"
+from = '''                ColorToken::TabStrip => Color::rgb(32, 33, 36),'''
+to = '''                ColorToken::TabStrip => Color::rgb(53, 54, 58),'''
+
+[[mutant]]
+name = "the dark sidebar is the strip's color"
+file = "crates/shell/src/theme.rs"
+from = '''                ColorToken::SidebarBackground => Color::rgb(53, 54, 58),'''
+to = '''                ColorToken::SidebarBackground => Color::rgb(32, 33, 36),'''
+
+[[mutant]]
+name = "the dark active row is the sidebar's color"
+file = "crates/shell/src/theme.rs"
+from = '''                ColorToken::SidebarTabActive => Color::rgb(81, 82, 86),'''
+to = '''                ColorToken::SidebarTabActive => Color::rgb(53, 54, 58),'''
+
+[[mutant]]
+name = "the UI keeps its theme"
+file = "crates/shell/src/chrome.rs"
+from = '''            self.tree.set_theme(BrowserTheme::new(mode));'''
+to = '''            let _ = mode;'''
+
+[[mutant]]
+name = "the same mode paints everything again"
+file = "crates/shell/src/chrome.rs"
+from = '''        if self.tree.theme().mode() != mode {'''
+to = '''        if true {'''
+
+[[mutant]]
+name = "the browser view doesn't paint the new theme"
+file = "crates/shell/src/browser_view.rs"
+from = '''        self.chrome.set_color_mode(mode);
+        self.update();'''
+to = '''        self.chrome.set_color_mode(mode);'''
+
+[[mutant]]
+name = "--ui-theme dark is light"
+file = "crates/shell/src/main.rs"
+from = '''                    "dark" => ColorMode::Dark,'''
+to = '''                    "dark" => ColorMode::Light,'''
+
+[[mutant]]
+name = "the pipe takes --ui-theme"
+file = "crates/shell/src/main.rs"
+from = '''    if automation_pipe && ui_theme.is_some() {'''
+to = '''    if automation_pipe && ui_theme.is_some() && false {'''
+
+[[mutant]]
+name = "--ui-theme is dropped"
+file = "crates/shell/src/main.rs"
+from = '''        ui_layout: ui_layout.unwrap_or_default(),
+        ui_theme,'''
+to = '''        ui_layout: ui_layout.unwrap_or_default(),
+        ui_theme: None,'''

@@ -31,6 +31,7 @@ use std::process::ExitCode;
 
 use browser::{HostMappingRules, NetworkContextParams};
 use shell::chrome::UiLayout;
+use shell::theme::ColorMode;
 use shell::devtools_http_handler::{self, AllowedOrigins};
 use shell::{automation_pipe, to_url};
 use tracing_log::AsLog;
@@ -51,8 +52,9 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 const DEFAULT_LOG_FILTER: &str = "info,wgpu_core=warn,wgpu_hal=warn,naga=warn";
 
 const USAGE: &str = "\
-usage: machopo [--ui-layout LAYOUT] [--test-fonts] [--num-raster-threads N]
-           [--remote-debugging-port PORT [--remote-allow-origins ORIGINS]] [URL|PATH]
+usage: machopo [--ui-layout LAYOUT] [--ui-theme THEME] [--test-fonts]
+           [--num-raster-threads N] [--remote-debugging-port PORT
+           [--remote-allow-origins ORIGINS]] [URL|PATH]
        machopo --automation-pipe [--window | --scale F] [--host-resolver-rules RULES]
            [--additional-trust-anchors PEM] [--test-fonts]
            [--num-raster-threads N] [--remote-debugging-port PORT
@@ -81,6 +83,9 @@ Options:
                       above the toolbar) or sidebar (the toolbar and the
                       tabs down the left). Cmd+Shift+, (Ctrl+Shift+,
                       elsewhere) switches between them.
+  --ui-theme THEME    In a window (not with --automation-pipe): light or dark,
+                      the UI's colors (not the pages'). By default the
+                      system's, changing as it does.
   --scale F           With --automation-pipe (but not --window): the device
                       scale factor (default 1), as Chromium's
                       --force-device-scale-factor. The pipe's screenshots
@@ -173,6 +178,8 @@ struct Args {
     url: String,
     /// `--ui-layout`.
     ui_layout: UiLayout,
+    /// `--ui-theme`; `None`: the system's.
+    ui_theme: Option<ColorMode>,
     test_fonts: bool,
     automation_pipe: Option<AutomationPipe>,
     /// `--num-raster-threads`; `None`: the default.
@@ -209,6 +216,7 @@ impl Default for AutomationPipe {
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String> {
     let mut url = None;
     let mut ui_layout = None;
+    let mut ui_theme = None;
     let mut scale = None;
     let mut test_fonts = false;
     let mut automation_pipe = false;
@@ -250,6 +258,14 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
                             "--ui-layout wants horizontal or sidebar, not {v:?}"
                         ));
                     }
+                });
+            }
+            "--ui-theme" => {
+                let v = value("--ui-theme")?;
+                ui_theme = Some(match v.as_str() {
+                    "light" => ColorMode::Light,
+                    "dark" => ColorMode::Dark,
+                    _ => return Err(format!("--ui-theme wants light or dark, not {v:?}")),
                 });
             }
             "--test-fonts" => test_fonts = true,
@@ -299,6 +315,13 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
                 .into(),
         );
     }
+    if automation_pipe && ui_theme.is_some() {
+        return Err(
+            "--ui-theme only applies to a window: what drives the pipe sees the light UI, so \
+             that its screenshots don't change with the machine"
+                .into(),
+        );
+    }
     if automation_pipe && url.is_some() {
         return Err(
             "--automation-pipe is driven through the pipe, which navigates: no URL or path".into(),
@@ -327,6 +350,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
     Ok(Command::Run(Box::new(Args {
         url: url.map_or_else(|| DEFAULT_URL.to_owned(), |arg| to_url(&arg)),
         ui_layout: ui_layout.unwrap_or_default(),
+        ui_theme,
         test_fonts,
         num_raster_threads,
         remote_debugging,
@@ -407,6 +431,7 @@ fn main() -> ExitCode {
             Ok(network) if pipe.window => window::run(
                 args.url,
                 UiLayout::Horizontal,
+                Some(ColorMode::Light),
                 args.test_fonts,
                 args.num_raster_threads,
                 Some(network),
@@ -428,6 +453,7 @@ fn main() -> ExitCode {
         None => window::run(
             args.url,
             args.ui_layout,
+            args.ui_theme,
             args.test_fonts,
             args.num_raster_threads,
             None,
@@ -521,6 +547,23 @@ mod tests {
         assert!(err(&["--ui-layout", "vertical"]).contains("horizontal or sidebar"));
         // What drives the pipe starts horizontal.
         assert!(err(&["--automation-pipe", "--ui-layout", "sidebar"]).contains("only applies"));
+    }
+
+    #[test]
+    fn the_ui_theme_of_a_window() {
+        assert_eq!(run(&[]).ui_theme, None);
+        assert_eq!(
+            run(&["--ui-theme", "dark"]).ui_theme,
+            Some(ColorMode::Dark)
+        );
+        assert_eq!(
+            run(&["--ui-theme=light"]).ui_theme,
+            Some(ColorMode::Light)
+        );
+        let err = |args: &[&str]| parse(args).unwrap_err();
+        assert!(err(&["--ui-theme", "auto"]).contains("light or dark"));
+        // What drives the pipe sees the light UI.
+        assert!(err(&["--automation-pipe", "--ui-theme", "dark"]).contains("only applies"));
     }
 
     #[test]

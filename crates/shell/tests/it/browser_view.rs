@@ -28,6 +28,7 @@ use shell::chrome::{self, CustomLayout, UiLayout, UiState, WebViewSlot, WebViewS
 use shell::omnibox::Clipboard;
 use shell::sad_tab::SadTab;
 use shell::tab_strip::TabStrip;
+use shell::theme::ColorMode;
 use shell::{tab_strip, toolbar};
 use viz::{BeginFrameSource, Display, GpuSharedImages, WgpuRenderer};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
@@ -1934,5 +1935,39 @@ fn the_sidebar_is_no_wider_than_half_a_narrow_window() {
         window.view.web_view_bounds(TabId(0)),
         Some(RectF::new(204.0, 0.0, 196.0, 300.0))
     );
+    window.close();
+}
+
+#[test]
+fn the_ui_turns_dark_and_light_again_and_the_page_stays_as_it_is() {
+    let server = server(&[("/", GREEN_PAGE)]);
+    let mut window = Window::open(Size::new(800, 600), 1.0);
+    window.load(&server.url("/"));
+    // Right of the new tab button; above the field; in the field, right
+    // of its text; the page.
+    let strip = (790, 3);
+    let toolbar = (400, TOOLBAR_Y as u32 + 2);
+    let field = (400, TOOLBAR_Y as u32 + 20);
+    let page = (400, TOP as u32 + 50);
+    let at = |window: &mut Window, (x, y): (u32, u32)| window.pixel(x, y);
+    assert_eq!(at(&mut window, strip), [222, 225, 230, 255]);
+    assert_eq!(at(&mut window, toolbar), [241, 243, 244, 255]);
+    assert_eq!(at(&mut window, field), [222, 225, 229, 255]);
+    window.view.set_color_mode(ColorMode::Dark);
+    assert_eq!(window.view.color_mode(), ColorMode::Dark);
+    // Chrome's dark frame, toolbar and address field.
+    assert_eq!(at(&mut window, strip), [32, 33, 36, 255]);
+    assert_eq!(at(&mut window, toolbar), [53, 54, 58, 255]);
+    assert_eq!(at(&mut window, field), [32, 33, 36, 255]);
+    assert_eq!(at(&mut window, page), GREEN);
+    // The sidebar, and its active row (left of the title), dark too.
+    window.toggle_sidebar();
+    window.until_pixel(270, 5, GREEN);
+    assert_eq!(window.pixel(100, 590), [53, 54, 58, 255]);
+    assert_eq!(window.pixel(14, 126 + 18), [81, 82, 86, 255]);
+    window.view.set_color_mode(ColorMode::Light);
+    assert_eq!(window.pixel(100, 590), SIDEBAR);
+    assert_eq!(window.pixel(14, 126 + 18), [255, 255, 255, 255]);
+    assert_eq!(window.pixel(270, 5), GREEN);
     window.close();
 }

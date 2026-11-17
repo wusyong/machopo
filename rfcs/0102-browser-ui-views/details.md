@@ -141,6 +141,39 @@ P2 預留的做法：工具列的 `PictureLayer` 換成嵌入 UI renderer 的 `S
 
 - 不做 Chromium 的 `ColorProvider` 的 mixer（一串改顏色的管線）：它是為了上百個元件、使用者的主題色、高對比模式，現在用不到。
 
+## 第 3 階段
+
+### 3a. 深色主題的值
+
+2026-11-17 對照 Chromium 100（`100.0.4896.0`，2023 年改版前）的原始碼：`chrome/browser/themes/theme_properties.cc` 的深色（`GetDarkModeColor`，就是 incognito 的那一組）、`chrome/browser/ui/color/chrome_color_mixer.cc`、`omnibox_color_mixer.cc`、`tab_strip_color_mixer.cc`、`ui/color/core_default_color_mixer.cc`、`ui_color_mixer.cc`，顏色的名字在 `ui/gfx/color_palette.h`。`HSLShift` 照 `ui/gfx/color_utils.cc` 算。
+
+| token | 淺色 | 深色 | 深色從哪裡來 |
+| --- | --- | --- | --- |
+| `ToolbarBackground` | `#F1F3F4` | `#35363A` | `kColorToolbar` |
+| `ToolbarSeparator` | `#DADCE0` | `#3C4043` | `kColorToolbarContentAreaSeparator` → `kColorSeparator` → `kColorMidground`（`kGoogleGrey800`） |
+| `Icon` | `#5F6368` | `#F1F3F4` | `kColorToolbarButtonIcon`：`kChromeIconGrey` 照 `TINT_BUTTONS` 的 `HSLShift`，算出來是 `kGoogleGrey100` |
+| `IconDisabled` | `#BDC1C6` | `#7D7E81` | `kColorIconDisabled`：圖示的顏色加 `kDisabledControlAlpha`（`0x61`），疊在工具列上 |
+| `ButtonHover` | `#DEE1E5` | `#4C4D50` | 推的：圖示的顏色 12% 疊在工具列上（淺色的比例） |
+| `Field`、`FieldFocused` | `#DEE1E5`、白 | `#202124` | `kColorOmniboxBackground`（`kGoogleGrey900`）；深色的 Chrome 拿到焦點時不變亮，只有外框 |
+| `FocusRing` | `#1A73E8` | `#8AB4F8` | `kColorAccent`（`kGoogleBlue300`） |
+| `FieldText`、`TabTitle` | `#202124` | 白 | `kColorOmniboxText`、`kColorToolbarText`（目前的分頁和其他分頁的字都從它來） |
+| `FieldSelection` | `#C6DAFC` | `#4E607F` | `kColorTextSelectionBackground`：accent 加 `kGoogleGreyAlpha500`，疊在網址列上 |
+| `TabStrip` | `#DEE1E6` | `#202124` | `kColorFrameActive`：`#DEE1E6` 照 `TINT_FRAME` 的 `HSLShift`，算出來是 `kGoogleGrey900` |
+| `TabHover` | `#E8EAED` | `#2A2C2F` | 推的：分頁列和目前的分頁的一半（淺色的比例） |
+| `TabButtonHover` | `#CCCFD4` | `#48494C` | 推的：白 18% 疊在分頁列上 |
+| `TabSeparator` | `#A0A4AA` | `#67686A` | 推的：白 32% 疊在分頁列上（淺色的比例） |
+| `SidebarBackground` | `#F1F3F4` | `#35363A` | machopo 的：工具列的 |
+| `SidebarRowHover` | `#E2E5E9` | `#434448` | machopo 的：白 7% 疊在側邊欄上（淺色的比例） |
+| `SidebarTabActive` | 白 | `#515256` | machopo 的：白 14% 疊在側邊欄上，比其他列亮（淺色也是） |
+| `SidebarEdge` | `#DADCE0` | `#3C4043` | machopo 的：和工具列下的線一樣 |
+
+對不上的：
+
+- **文字是白的，不是 `#E8EAED`**：`kColorToolbarText` 和 `kColorOmniboxText` 在深色都是 `SK_ColorWHITE`；`#E8EAED`（`kGoogleGrey200`）是對話框之類的 `kColorPrimaryForeground`。照原始碼用白。
+- **淺色本身不是一對一照 Chrome 的**：Chrome 的工具列和目前的分頁是白的、網址列是 `#F1F3F4`；machopo 的工具列是 `#F1F3F4`、網址列再深一點（`#DEE1E5`），拿到焦點時才變白。深色照 Chrome 的深色，兩者「網址列比工具列深」的關係一樣。
+- **Chrome 沒有自己的顏色、用推的**：按鈕的 hover（Chrome 是 ink drop，疊上一層半透明）、hover 的分頁、分頁的關閉鈕的 hover、分頁之間的線。都用淺色主題裡同樣兩個顏色之間的比例。分頁的關閉鈕的 hover 例外：照淺色的比例（9.5%）在深色是 `#353639`，和目前的分頁（`#35363A`）一樣，看不到，所以加到 18%。
+- **側邊欄是 machopo 自己的**，Chrome 沒有對應的顏色。
+
 ## 參考資料
 
 - Chromium：`ui/views/view.h`、`ui/views/widget/root_view.h`、`ui/views/view_targeter.h`、`ui/views/layout/flex_layout.h`、`ui/color/color_provider.h`、`chrome/browser/ui/views/frame/browser_view_layout.h`、`chrome/browser/ui/views/frame/webui_tab_strip_container_view.h`、`chrome/browser/ui/views/frame/browser_non_client_frame_view_mac.h`。

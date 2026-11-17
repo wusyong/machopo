@@ -21,7 +21,7 @@ use crate::sidebar::{
     NewTabRow, SidebarEdge, SidebarEdgeProps, SidebarPanel, SidebarTab, SidebarTabProps,
 };
 use crate::tab_strip::{TabStrip, TabStripProps};
-use crate::theme::{BrowserTheme, SizeToken};
+use crate::theme::{BrowserTheme, ColorMode, SizeToken};
 use crate::toolbar::{self, Button, NavButton, NavButtonProps, ToolbarRow};
 
 /// What the browser UI's views share: they send [`UiMessage`]s and paint
@@ -407,6 +407,18 @@ impl Chrome {
         self.omnibox = found(tree, "omnibox");
     }
 
+    /// Paints the UI light or dark from now on: all of it again, if that's
+    /// a change. The sizes are the same, so nothing moves.
+    pub fn set_color_mode(&mut self, mode: ColorMode) {
+        if self.tree.theme().mode() != mode {
+            self.tree.set_theme(BrowserTheme::new(mode));
+        }
+    }
+
+    pub fn color_mode(&self) -> ColorMode {
+        self.tree.theme().mode()
+    }
+
     /// Lays the UI out with `layout` from now on, instead of as the state
     /// says (`None`: as it says).
     pub fn set_custom_layout(&mut self, layout: Option<CustomLayout>) {
@@ -771,6 +783,31 @@ mod tests {
         assert!(!chrome.omnibox_focused());
         chrome.tree.paint();
         assert_eq!(chrome.tree.stale_views(), []);
+    }
+
+    #[test]
+    fn a_new_color_mode_paints_everything_and_the_same_one_nothing() {
+        let mut chrome = chrome();
+        chrome.tree.paint();
+        chrome.set_color_mode(ColorMode::Light);
+        assert!(chrome.tree.paint().is_none());
+        chrome.set_color_mode(ColorMode::Dark);
+        assert_eq!(chrome.color_mode(), ColorMode::Dark);
+        let toolbar = BrowserTheme::dark().color(crate::theme::ColorToken::ToolbarBackground);
+        let frame = chrome.tree.paint().unwrap();
+        let ops = frame.layers[0].display_list.ops();
+        assert!(ops.iter().any(|op| matches!(
+            op,
+            compositor_paint::PaintOp::DrawRect { flags, .. } if flags.color == toolbar
+        )));
+        // Painted all again: as if dark from the start.
+        let mut fresh = Chrome::new(true, Box::new(NoClipboard));
+        fresh.set_color_mode(ColorMode::Dark);
+        fresh.update(state());
+        let fresh = fresh.tree.paint().unwrap();
+        assert_eq!(ops, fresh.layers[0].display_list.ops());
+        chrome.set_color_mode(ColorMode::Dark);
+        assert!(chrome.tree.paint().is_none());
     }
 
     #[test]
