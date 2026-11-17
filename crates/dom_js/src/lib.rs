@@ -42,10 +42,12 @@ mod templates;
 mod webdriver;
 mod window;
 mod window_properties;
+mod worker;
 
 pub use engine::{ScriptTerminator, V8Engine};
 pub use front::names_by_identity_for_testing;
 pub use info_front::size_report_scopes_for_testing;
+pub use worker::V8WorkerEngine;
 
 /// A Perfetto trace of the process: V8's events (GC, compiling, parsing)
 /// and the embedder's spans together, as Chrome's trace has them. Started
@@ -57,7 +59,7 @@ pub use machopo_dom::{
     string_conversions, uncaught_exceptions, wrappers_ahead, wrappers_made, wrappers_wasted,
 };
 pub use strings::{ArgString, StringCache, arg_string, new_string, string_arg, throw_type_error};
-pub use templates::{install, overload_interfaces_untold};
+pub use templates::{GlobalKind, install, overload_interfaces_untold};
 pub use window::{
     create_window_realm, next_timer, run_element_tasks, run_posted_messages, run_timers,
 };

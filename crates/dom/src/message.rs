@@ -402,13 +402,31 @@ impl<'gc> Cx<'_, 'gc> {
         ports: &[Gc<'gc, EventTargetImpl>],
     ) {
         let message = self.posted_message(payload, origin, source, ports);
-        let queue = match self.window_context(window).posted_messages.get(self.gc) {
+        self.queue_posted_message(self.window_context(window), message);
+    }
+
+    /// A message posted to the worker's global `global` by its `Worker`
+    /// (HTML's dedicated worker's implicit port): a task of its posted
+    /// message task source, of no origin and no source.
+    pub fn post_worker_global_message(
+        &self,
+        global: Gc<'gc, crate::WorkerGlobalScope>,
+        payload: SerializedMessage,
+    ) {
+        let message = self.posted_message(payload, DomString::new(""), None, &[]);
+        self.queue_posted_message(self.worker_global_context(global), message);
+    }
+
+    fn queue_posted_message(
+        &self,
+        context: Gc<'gc, crate::ExecutionContext>,
+        message: Gc<'gc, PostedMessage>,
+    ) {
+        let queue = match context.posted_messages.get(self.gc) {
             Some(queue) => queue,
             None => {
                 let queue = HeapVector::new(self.gc, 1);
-                self.window_context(window)
-                    .posted_messages
-                    .set(self.gc, Some(queue));
+                context.posted_messages.set(self.gc, Some(queue));
                 queue
             }
         };

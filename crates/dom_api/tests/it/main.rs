@@ -594,8 +594,12 @@ impl<'d> dom_api::typed::ScriptFront for TestFront<'d> {
                 };
                 elise::Persistent::new(cx.gc, window)
             });
-            let reported =
-                dom_api::report_exception(&mut TestHost(self), &window, &error_info(), Some(99));
+            let reported = dom_api::report_exception(
+                &mut TestHost(self),
+                &dom::GlobalRoot::Window(window.clone()),
+                &error_info(),
+                Some(99),
+            );
             listeners.reported.borrow_mut().push(reported);
         }
     }
@@ -924,7 +928,7 @@ impl<'d> Front for TestFront<'d> {
 
 impl dom_api::WorkerHost for TestFront<'_> {
     /// Its number: one more than the starts before.
-    fn start_worker(&mut self, start: dom_api::WorkerStart) -> u64 {
+    fn start_worker(&self, start: dom_api::WorkerStart) -> u64 {
         let mut log = self.listeners.workers.borrow_mut();
         log.calls.push(WorkerCall::Start(start));
         let started = log
@@ -935,7 +939,7 @@ impl dom_api::WorkerHost for TestFront<'_> {
         u64::try_from(started).unwrap()
     }
 
-    fn post_to_worker(&mut self, id: u64, message: dom::SerializedMessage) {
+    fn post_to_worker(&self, id: u64, message: dom::SerializedMessage) {
         self.listeners
             .workers
             .borrow_mut()
@@ -943,7 +947,7 @@ impl dom_api::WorkerHost for TestFront<'_> {
             .push(WorkerCall::Post(id, message.bytes));
     }
 
-    fn terminate_worker(&mut self, id: u64) {
+    fn terminate_worker(&self, id: u64) {
         self.listeners
             .workers
             .borrow_mut()
@@ -953,7 +957,7 @@ impl dom_api::WorkerHost for TestFront<'_> {
 }
 
 impl dom_api::WorkerGlobalHost for TestFront<'_> {
-    fn post_to_owner(&mut self, message: dom::SerializedMessage) {
+    fn post_to_owner(&self, message: dom::SerializedMessage) {
         self.listeners
             .workers
             .borrow_mut()
@@ -961,8 +965,12 @@ impl dom_api::WorkerGlobalHost for TestFront<'_> {
             .push(WorkerCall::PostToOwner(message.bytes));
     }
 
-    fn close(&mut self) {
-        self.listeners.workers.borrow_mut().calls.push(WorkerCall::Close);
+    fn close(&self) {
+        self.listeners
+            .workers
+            .borrow_mut()
+            .calls
+            .push(WorkerCall::Close);
     }
 }
 
@@ -1049,14 +1057,14 @@ impl OpFront for TestFront<'_> {
         })
     }
 
-    fn worker_host(&mut self) -> Option<&mut dyn dom_api::WorkerHost> {
+    fn worker_host(&mut self) -> Option<&dyn dom_api::WorkerHost> {
         let hosted = self.listeners.workers.borrow().hosted;
-        hosted.then_some(self as &mut dyn dom_api::WorkerHost)
+        hosted.then_some(self as &dyn dom_api::WorkerHost)
     }
 
-    fn worker_global_host(&mut self) -> Option<&mut dyn dom_api::WorkerGlobalHost> {
+    fn worker_global_host(&mut self) -> Option<&dyn dom_api::WorkerGlobalHost> {
         let hosted = self.listeners.workers.borrow().hosted;
-        hosted.then_some(self as &mut dyn dom_api::WorkerGlobalHost)
+        hosted.then_some(self as &dyn dom_api::WorkerGlobalHost)
     }
 
     fn construct_object<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, object: ObjectRef<'gc>) {
@@ -1185,17 +1193,13 @@ impl dom_api::ScriptHost for TestHost<'_, '_> {
         self.0.listeners.mutation_log.borrow_mut().push(call);
     }
 
-    fn call_timer(
-        &mut self,
-        window: &elise::Persistent<dom::Window>,
-        timer: &elise::Persistent<dom::Timer>,
-    ) {
+    fn call_timer(&mut self, global: &dom::GlobalRoot, timer: &elise::Persistent<dom::Timer>) {
         let call = self.read(|cx| {
             let timer = timer.get(cx.gc);
             TimerCall {
                 callback: cx.timer_callback_edge(timer).embedder_word(cx.gc),
                 arguments: cx.timer_arguments_edge(timer).embedder_word(cx.gc),
-                nesting: cx.timer_nesting(cx.window_context(window.get(cx.gc))),
+                nesting: cx.timer_nesting(cx.global_context(global.get(cx.gc))),
             }
         });
         let callback = call.callback;
@@ -1205,7 +1209,7 @@ impl dom_api::ScriptHost for TestHost<'_, '_> {
         // window's nesting level.
         if callback >= 100 {
             self.mutate(|cx| {
-                let timer = cx.add_timer(cx.window_context(window.get(cx.gc)), 0.0, false);
+                let timer = cx.add_timer(cx.global_context(global.get(cx.gc)), 0.0, false);
                 cx.timer_callback_edge(timer)
                     .set_embedder_word(cx.gc, callback - 100);
             });

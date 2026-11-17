@@ -136,7 +136,9 @@ impl<'gc> Cx<'_, 'gc> {
     /// worker's global's; none without one.
     pub fn context_url(&self, context: Gc<'gc, ExecutionContext>) -> Option<crate::DomString> {
         if let Some(global) = context.worker.get(self.gc) {
-            return Some(crate::DomString::new(self.worker_global_url(global).as_str()));
+            return Some(crate::DomString::new(
+                self.worker_global_url(global).as_str(),
+            ));
         }
         self.document_url(self.context_document(context)?)
     }

@@ -228,7 +228,9 @@ fn an_idle_callback_s_timeout_is_a_task_once_due() {
         assert!(cx.next_task(context, cx.dom_now() + 10_000.0).is_none());
         cx.add_idle_callback(window, 5);
         assert!(cx.next_task(context, cx.dom_now()).is_none());
-        let next = cx.next_task(context, cx.dom_now() + 10.0).expect("its timeout is due");
+        let next = cx
+            .next_task(context, cx.dom_now() + 10.0)
+            .expect("its timeout is due");
         assert_eq!(next.queue, TaskQueue::IdleTimeout);
     });
 }

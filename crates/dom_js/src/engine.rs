@@ -1325,7 +1325,10 @@ impl ScriptEngine for V8Engine {
             frames
                 .iter()
                 .filter_map(|frame| {
-                    dom_api::until_next_due(cx, cx.window_of(frame.document.get(cx.gc))?)
+                    dom_api::until_next_due(
+                        cx,
+                        dom::GlobalRef::Window(cx.window_of(frame.document.get(cx.gc))?),
+                    )
                 })
                 .min()
         })
@@ -1671,7 +1674,10 @@ impl V8Engine {
 
 /// `testRunner` on `global` (web tests): `reportHarnessResults(text)` keeps
 /// the text for the host.
-fn install_test_runner(scope: &mut v8::PinScope<'_, '_>, global: v8::Local<'_, v8::Object>) {
+pub(crate) fn install_test_runner(
+    scope: &mut v8::PinScope<'_, '_>,
+    global: v8::Local<'_, v8::Object>,
+) {
     let runner = v8::Object::new(scope);
     let report = v8::FunctionTemplate::new(scope, report_harness_results);
     let report = report.get_function(scope).expect("a function");

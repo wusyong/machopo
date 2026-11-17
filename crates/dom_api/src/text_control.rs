@@ -6,7 +6,7 @@
 //! (`run_element_tasks`).
 
 use dom::{
-    ElementTaskKind, NodeRef, NodeRoot, SelectionDirection, SelectionMode, TargetRoot, Window,
+    ElementTaskKind, GlobalRoot, NodeRef, NodeRoot, SelectionDirection, SelectionMode, TargetRoot,
     names,
 };
 use elise::Persistent;
@@ -245,9 +245,9 @@ pub(crate) fn set_range_text<'gc>(
 /// `toBlob` callback (`canvas`); and the tasks of no element's (a
 /// `FileReader`'s read, the performance timeline's, geolocation's and the
 /// wake lock's permissions); the window's `load`. How many ran.
-pub fn run_element_tasks<H: ScriptHost>(host: &mut H, window: &Persistent<Window>) -> usize {
+pub fn run_element_tasks<H: ScriptHost>(host: &mut H, global: &GlobalRoot) -> usize {
     let mut ran = 0usize;
-    while run_element_task(host, window) {
+    while run_element_task(host, global) {
         ran = ran.saturating_add(1);
     }
     ran
@@ -255,11 +255,11 @@ pub fn run_element_tasks<H: ScriptHost>(host: &mut H, window: &Persistent<Window
 
 /// Runs `window`'s first element task (`run_element_tasks`'s one), if the
 /// DOM's pass lets it run. Whether one ran.
-pub fn run_element_task<H: ScriptHost>(host: &mut H, window: &Persistent<Window>) -> bool {
+pub fn run_element_task<H: ScriptHost>(host: &mut H, global: &GlobalRoot) -> bool {
     {
         let task = host.mutate(|cx| {
             let (element, kind, target) =
-                cx.take_element_task(cx.window_context(window.get(cx.gc)))?;
+                cx.take_element_task(cx.global_context(global.get(cx.gc)))?;
             Some((
                 cx.root(element),
                 kind,
@@ -300,15 +300,23 @@ pub fn run_element_task<H: ScriptHost>(host: &mut H, window: &Persistent<Window>
                     crate::file_reader::run_read_task(host, reader, read, step);
                 }
             }
-            ElementTaskKind::Geolocation(step) => crate::geolocation::run_task(host, window, step),
+            // A window's navigator's alone.
+            ElementTaskKind::Geolocation(step) => {
+                if let GlobalRoot::Window(window) = global {
+                    crate::geolocation::run_task(host, window, step);
+                }
+            }
             ElementTaskKind::WakeLockPermission { promise, answered } => {
-                crate::wake_lock::run_task(host, window, promise, answered);
+                if let GlobalRoot::Window(window) = global {
+                    crate::wake_lock::run_task(host, window, promise, answered);
+                }
             }
             // HTML's "the end": complete, the window's `load` (each event
             // with its checkpoint), then the host hears of it
             // (`Dom::take_loaded_documents`): its iframe's `load` next.
             ElementTaskKind::BlobRead(promise) => {
-                let read = host.read(|cx| cx.take_blob_read(window.get(cx.gc), promise));
+                let read = host
+                    .read(|cx| cx.take_blob_read(cx.global_context(global.get(cx.gc)), promise));
                 if let Some(read) = read {
                     host.resolve_promise_with_read(promise, read);
                 }

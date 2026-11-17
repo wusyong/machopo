@@ -502,9 +502,10 @@ pub(crate) fn retargeted_related<'gc>(
         (TargetRef::Node(related), Some(TargetRef::Node(current))) => {
             TargetRef::Node(cx.retarget(related, Some(current)))
         }
-        (TargetRef::Node(related), Some(TargetRef::Window(_) | TargetRef::EventTarget(_) | TargetRef::WorkerGlobal(_))) => {
-            TargetRef::Node(cx.retarget(related, None))
-        }
+        (
+            TargetRef::Node(related),
+            Some(TargetRef::Window(_) | TargetRef::EventTarget(_) | TargetRef::WorkerGlobal(_)),
+        ) => TargetRef::Node(cx.retarget(related, None)),
         (related, _) => related,
     }
 }

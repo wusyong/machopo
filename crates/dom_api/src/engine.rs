@@ -534,6 +534,52 @@ pub trait ScriptEngine: ParserHost {
     fn devtools_page(&mut self) -> Box<dyn DevToolsPage + '_>;
 }
 
+/// A dedicated worker's engine, on the worker's thread (Blink's
+/// `WorkerOrWorkletScriptController`, of the worker's global): its realm,
+/// whose global is a worker's global, and what runs its script and its
+/// tasks. The worker's thread's loop drives it, as a frame's drives a
+/// `ScriptEngine`, one task at a time.
+pub trait WorkerEngine {
+    /// Its realm, made: its global a dedicated worker's global of `url`
+    /// (its script's response's), `origin` and `name`, what it sends to its
+    /// `Worker` going to `host`.
+    fn create_global(
+        &mut self,
+        url: &url::Url,
+        origin: url::Origin,
+        name: &str,
+        host: Box<dyn crate::WorkerGlobalHost>,
+    );
+
+    /// Runs its classic script (its main script's), what it throws reported
+    /// at its global (HTML's "run a classic script"); a microtask
+    /// checkpoint after.
+    fn run_classic_script(&mut self, script: &ClassicScript<'_>);
+
+    /// A message from its `Worker`: a task of its global's, a `message` at
+    /// it as it runs.
+    fn post_message(&mut self, message: dom::SerializedMessage);
+
+    /// How long until it has a task to run (none with none: it waits for a
+    /// message).
+    fn until_next_task(&mut self) -> Option<std::time::Duration>;
+
+    /// Runs its tasks due now, each with its microtask checkpoint, in the
+    /// DOM's order (`dom::Cx::next_task`). Whether one ran.
+    fn run_due_tasks(&mut self) -> bool;
+
+    /// What stops its script from another thread (V8's
+    /// `TerminateExecution`): `Worker.terminate()`'s.
+    fn terminator(&mut self) -> Box<dyn Fn() + Send>;
+
+    /// Where `console` messages go.
+    fn set_console_sink(&mut self, sink: ConsoleSink);
+
+    /// What `testRunner.reportHarnessResults` was given since the last
+    /// ask, if anything (web tests only).
+    fn take_harness_results(&mut self) -> Option<String>;
+}
+
 /// What DevTools calls a frame: `None` for one it has no name for (the
 /// top-level one before the browser named it).
 pub type DevToolsFrameIds = Box<dyn Fn(crate::FrameId) -> Option<String>>;

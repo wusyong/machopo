@@ -78,8 +78,11 @@ fn dom_error(error: Result<Rc<ObjectRoot>, ApiError>) -> ExceptionName {
 #[test]
 fn a_worker_starts_its_worker() {
     let mut dom = page(true);
-    let worker = construct(&mut dom, &[Arg::Str("w.js"), Arg::StrDict(vec![("name", "fib")])])
-        .expect("a worker");
+    let worker = construct(
+        &mut dom,
+        &[Arg::Str("w.js"), Arg::StrDict(vec![("name", "fib")])],
+    )
+    .expect("a worker");
     let origin = url::Url::parse("https://example.test/").unwrap().origin();
     assert_eq!(
         calls(&dom),
@@ -124,11 +127,18 @@ fn a_worker_that_can_t_start_throws() {
         ExceptionName::NotSupported
     );
     assert!(matches!(
-        construct(&mut dom, &[Arg::Str("w.js"), Arg::StrDict(vec![("type", "wasm")])]),
+        construct(
+            &mut dom,
+            &[Arg::Str("w.js"), Arg::StrDict(vec![("type", "wasm")])]
+        ),
         Err(ApiError::Type(_))
     ));
     // `classic`, given: it starts.
-    construct(&mut dom, &[Arg::Str("w.js"), Arg::StrDict(vec![("type", "classic")])]).unwrap();
+    construct(
+        &mut dom,
+        &[Arg::Str("w.js"), Arg::StrDict(vec![("type", "classic")])],
+    )
+    .unwrap();
     assert_eq!(calls(&dom).len(), 1);
     let mut unhosted = page(false);
     assert_eq!(
@@ -146,7 +156,14 @@ fn a_worker_posts_and_terminates_through_its_host() {
     let mut dom = page(true);
     let worker = construct(&mut dom, &[Arg::Str("w.js")]).unwrap();
     calls(&dom);
-    call(&mut dom, &worker, "Worker", "postMessage", &[Arg::Str("hi")]).unwrap();
+    call(
+        &mut dom,
+        &worker,
+        "Worker",
+        "postMessage",
+        &[Arg::Str("hi")],
+    )
+    .unwrap();
     assert_eq!(calls(&dom), [WorkerCall::Post(1, b"hi".to_vec())]);
 
     let port = dom.read(|cx| {
@@ -165,7 +182,14 @@ fn a_worker_posts_and_terminates_through_its_host() {
 
     call(&mut dom, &worker, "Worker", "terminate", &[]).unwrap();
     call(&mut dom, &worker, "Worker", "terminate", &[]).unwrap();
-    call(&mut dom, &worker, "Worker", "postMessage", &[Arg::Str("late")]).unwrap();
+    call(
+        &mut dom,
+        &worker,
+        "Worker",
+        "postMessage",
+        &[Arg::Str("late")],
+    )
+    .unwrap();
     assert_eq!(calls(&dom), [WorkerCall::Terminate(1)]);
 }
 
@@ -224,7 +248,14 @@ fn a_worker_s_global_has_its_own_timers() {
         })
     };
     assert!(due(&mut dom).is_some());
-    call(&mut dom, &global, "WorkerGlobalScope", "clearTimeout", &[Arg::Number(id)]).unwrap();
+    call(
+        &mut dom,
+        &global,
+        "WorkerGlobalScope",
+        "clearTimeout",
+        &[Arg::Number(id)],
+    )
+    .unwrap();
     assert!(due(&mut dom).is_none());
     call(
         &mut dom,
@@ -235,7 +266,14 @@ fn a_worker_s_global_has_its_own_timers() {
     )
     .unwrap();
     assert!(due(&mut dom).is_some());
-    call(&mut dom, &global, "WorkerGlobalScope", "clearInterval", &[Arg::Number(2.0)]).unwrap();
+    call(
+        &mut dom,
+        &global,
+        "WorkerGlobalScope",
+        "clearInterval",
+        &[Arg::Number(2.0)],
+    )
+    .unwrap();
     assert!(due(&mut dom).is_none());
 }
 
@@ -245,17 +283,29 @@ fn a_worker_s_global_has_its_own_timers() {
 #[test]
 fn a_worker_s_global_s_own_members() {
     let (mut dom, global) = worker_global(true);
-    assert!(matches!(get(&mut dom, &global, "DedicatedWorkerGlobalScope", "name"), Ret::Str(name) if name.to_string() == "fib"));
+    assert!(
+        matches!(get(&mut dom, &global, "DedicatedWorkerGlobalScope", "name"), Ret::Str(name) if name.to_string() == "fib")
+    );
     let Ret::Object(this) = get(&mut dom, &global, "WorkerGlobalScope", "self") else {
         panic!("an object");
     };
-    dom.read(|cx| assert!(elise::Gc::ptr_eq(this.get(cx.gc).erase(), global.get(cx.gc).erase())));
+    dom.read(|cx| {
+        assert!(elise::Gc::ptr_eq(
+            this.get(cx.gc).erase(),
+            global.get(cx.gc).erase()
+        ))
+    });
     let crypto = |dom: &mut TestDom| match get(dom, &global, "WorkerGlobalScope", "crypto") {
         Ret::Object(crypto) => crypto,
         other => panic!("{other:?}"),
     };
     let (one, two) = (crypto(&mut dom), crypto(&mut dom));
-    dom.read(|cx| assert!(elise::Gc::ptr_eq(one.get(cx.gc).erase(), two.get(cx.gc).erase())));
+    dom.read(|cx| {
+        assert!(elise::Gc::ptr_eq(
+            one.get(cx.gc).erase(),
+            two.get(cx.gc).erase()
+        ))
+    });
     dom.read(|cx| {
         assert_eq!(
             dom_api::interface_of(&dom_api::ApiCx::new(cx), global.get(cx.gc)),
@@ -263,7 +313,14 @@ fn a_worker_s_global_s_own_members() {
         );
     });
 
-    call(&mut dom, &global, "DedicatedWorkerGlobalScope", "postMessage", &[Arg::Str("done")]).unwrap();
+    call(
+        &mut dom,
+        &global,
+        "DedicatedWorkerGlobalScope",
+        "postMessage",
+        &[Arg::Str("done")],
+    )
+    .unwrap();
     let port = dom.read(|cx| {
         let channel = cx.create_message_channel(None);
         Rc::new(cx.root_object(ObjectRef::EventTarget(cx.message_channel_ports(channel).0)))
@@ -276,7 +333,14 @@ fn a_worker_s_global_s_own_members() {
         &[Arg::Str("port"), Arg::Object(port)],
     );
     assert!(matches!(transferred, Err(ApiError::Dom(e)) if e.name == ExceptionName::DataClone));
-    call(&mut dom, &global, "DedicatedWorkerGlobalScope", "close", &[]).unwrap();
+    call(
+        &mut dom,
+        &global,
+        "DedicatedWorkerGlobalScope",
+        "close",
+        &[],
+    )
+    .unwrap();
     assert_eq!(
         calls(&dom),
         [WorkerCall::PostToOwner(b"done".to_vec()), WorkerCall::Close]

@@ -42,8 +42,12 @@ impl<'gc> Cx<'_, 'gc> {
 
     /// The blob read whose promise is numbered `promise`, taken (its task
     /// runs).
-    pub fn take_blob_read(&self, window: Gc<'gc, crate::Window>, promise: u64) -> Option<BlobRead> {
-        let cell = self.window_context(window).into_ref().blob_reads.get();
+    pub fn take_blob_read(
+        &self,
+        context: Gc<'gc, crate::ExecutionContext>,
+        promise: u64,
+    ) -> Option<BlobRead> {
+        let cell = context.into_ref().blob_reads.get();
         let mut reads = cell.take();
         let index = reads.iter().position(|(number, _)| *number == promise);
         let read = index.map(|index| reads.remove(index).1);

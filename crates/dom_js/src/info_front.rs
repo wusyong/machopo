@@ -2418,8 +2418,22 @@ impl<'s, K: InfoKind<'s>> OpFront for InfoOp<'_, 's, K> {
         &mut self,
         cx: &ApiCx<'_, 'gc>,
     ) -> Option<elise::Gc<'gc, dom::ExecutionContext>> {
-        self.realm_window(cx)
-            .map(|window| cx.window_context(window))
+        let global = self.realm_global()?;
+        if let Some(window) = self.no_gc.unwrap::<Window>(cx.gc, global) {
+            return Some(cx.window_context(window));
+        }
+        // A worker's realm's.
+        self.no_gc
+            .unwrap::<dom::WorkerGlobalScope>(cx.gc, global)
+            .map(|global| cx.worker_global_context(global))
+    }
+
+    fn worker_host(&mut self) -> Option<&dyn dom_api::WorkerHost> {
+        self.caches.worker_host.as_deref()
+    }
+
+    fn worker_global_host(&mut self) -> Option<&dyn dom_api::WorkerGlobalHost> {
+        self.caches.worker_global_host.as_deref()
     }
 
     #[inline(always)]
@@ -2451,6 +2465,9 @@ impl<'s, K: InfoKind<'s>> OpFront for InfoOp<'_, 's, K> {
         }
         if let Some(window) = self.no_gc.unwrap::<Window>(cx.gc, *object) {
             return TargetRef::Window(window);
+        }
+        if let Some(global) = self.no_gc.unwrap::<dom::WorkerGlobalScope>(cx.gc, *object) {
+            return TargetRef::WorkerGlobal(global);
         }
         TargetRef::EventTarget(
             self.no_gc
@@ -2719,14 +2736,22 @@ impl<'s, K: InfoKind<'s>> InfoOp<'_, 's, K> {
     /// isolate now; none if that isn't a window of the DOM's.
     #[inline(always)]
     fn realm_window<'gc>(&mut self, cx: &ApiCx<'_, 'gc>) -> Option<elise::Gc<'gc, Window>> {
+        let global = self.realm_global()?;
+        self.no_gc.unwrap::<Window>(cx.gc, global)
+    }
+
+    /// The global object of the realm the member asked for (`realm_window`'s
+    /// window's, or a worker's global's): another realm's an argument
+    /// prepared, else the current one's if it asked.
+    #[inline(always)]
+    fn realm_global(&mut self) -> Option<v8::Local<'s, v8::Object>> {
         if let Some(global) = self.other_window {
-            return self.no_gc.unwrap::<Window>(cx.gc, global);
+            return Some(global);
         }
         if !self.window {
             return None;
         }
-        let global = self.no_gc.current_global();
-        self.no_gc.unwrap::<Window>(cx.gc, global)
+        Some(self.no_gc.current_global())
     }
 
     /// As `root_node`, an object of any type.

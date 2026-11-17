@@ -75,6 +75,7 @@ mod web_animations;
 mod webdriver;
 mod window;
 mod window_named;
+mod worker;
 mod wrappers;
 
 // Forced GCs: `--expose-gc` lets a test ask V8 for one.

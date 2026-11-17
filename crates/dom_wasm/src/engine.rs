@@ -199,7 +199,7 @@ impl ScriptHost for Host<'_> {
         }
     }
 
-    fn call_timer(&mut self, _: &Persistent<Window>, _: &Persistent<dom::Timer>) {}
+    fn call_timer(&mut self, _: &dom::GlobalRoot, _: &Persistent<dom::Timer>) {}
 
     fn call_mutation_callback(
         &mut self,
@@ -1021,9 +1021,12 @@ impl ScriptEngine for WasmEngine {
             .min()
             .map(|deadline| Duration::from_nanos(deadline.saturating_sub(now)));
         let document = self.document.clone()?;
-        let own = self
-            .dom()
-            .read(|cx| dom_api::until_next_due(cx, cx.window_of(document.get(cx.gc))?));
+        let own = self.dom().read(|cx| {
+            dom_api::until_next_due(
+                cx,
+                dom::GlobalRef::Window(cx.window_of(document.get(cx.gc))?),
+            )
+        });
         match (guests, own) {
             (Some(guests), Some(own)) => Some(guests.min(own)),
             (guests, own) => guests.or(own),
@@ -1052,7 +1055,12 @@ impl ScriptEngine for WasmEngine {
             let Some((task, now)) = next else {
                 break;
             };
-            if !dom_api::run_task(&mut self.host(), &window, task.queue, now) {
+            if !dom_api::run_task(
+                &mut self.host(),
+                &dom::GlobalRoot::Window(window.clone()),
+                task.queue,
+                now,
+            ) {
                 break;
             }
             ran = true;
@@ -1083,7 +1091,9 @@ impl ScriptEngine for WasmEngine {
         let Some(window) = self.window() else {
             return false;
         };
-        let ran = dom_api::run_element_tasks(&mut self.host(), &window) > 0;
+        let ran =
+            dom_api::run_element_tasks(&mut self.host(), &dom::GlobalRoot::Window(window.clone()))
+                > 0;
         if ran {
             self.perform_microtask_checkpoint();
         }

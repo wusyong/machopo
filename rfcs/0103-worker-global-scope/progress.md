@@ -12,7 +12,7 @@
 | 1b-1：被打斷的 script 不被 `dom_js` 回頭呼叫 script 的地方吞掉 | 做完（「已決定的事項」第 13 條） | 2026-11-17 |
 | 1b-2：`dom` 的 worker 的 global（自己的執行環境、event target），執行環境的 timer 和 task | 做完（第 14、15 條） | 2026-11-17 |
 | 1b-3：`dom_api` 的 `Worker`、`WorkerGlobalScope`、`DedicatedWorkerGlobalScope` 和 worker 也有的 timer 等成員 | 做完（第 16、17 條） | 2026-11-17 |
-| 1b-4：worker 的 engine（`dom_api` 的 trait、`dom_js` 的實作，global 照 exposed 建） | 還沒開始 | |
+| 1b-4：worker 的 engine（`dom_api` 的 trait、`dom_js` 的實作，global 照 exposed 建） | 做完（第 18 條） | 2026-11-17 |
 | 1b-5：`renderer` 的 worker 的 thread 和 event loop、兩個方向的 `postMessage`、`terminate()`、`close()`、`onerror` | 還沒開始 | |
 | 1b-6：Browser 的登記和主 script 的載入、子資源的請求帶 client、`importScripts()` | 還沒開始 | |
 | 1b-7：WPT 的 `workers/`、情境、`about:demo`、文件、整個階段的檢查 | 還沒開始 | |
@@ -29,6 +29,7 @@
 | 1b-1：從別的 thread 打斷的 script 在 DOM 回頭呼叫的每種 callback 裡停下，呼叫它的 script 也停下、之後的一行都不跑，不回報錯誤；下一個 task 的 script 照常跑 | `cargo test -p dom_js --test it termination::`、`cargo test -p bindings --test it termination::`；debug 的 V8 加上 `--strict-termination-checks` 跑同樣的測試 |
 | 1b-2：worker 的 global 的執行環境回答它自己的 URL、base URL 和 origin；它的 timer、task、port 的訊息是它的執行環境的，和同一個 `Dom` 裡的 window 分開；它是自己的 event target | `cargo test -p dom --test it worker_global::`、`events::every_target_holds_listeners`、`tasks::` |
 | 1b-3：`new Worker()` 照 realm 的 base URL 解析網址、帶名稱和 realm 的 origin 當場請 host 啟動 worker，錯的網址、`type` 和沒有 host 時丟對的例外；`postMessage()`、`terminate()` 當場經過 host；worker 的 global 的 timer、`name`、`self`、`crypto`、`postMessage()`、`close()` | `cargo test -p dom_api --test it worker::`、`cargo test -p dom --test it worker::`；表的 `table::` 測試 |
+| 1b-4：worker 的 engine 的 realm 的 global 是 worker 的 global，只有 dedicated worker 有的 interface，`[Global]` 的成員是 global 自己的；它的 timer、`Worker` 送來的訊息是它的 task，送出的和 `close()` 經過 host，例外到它的 `onerror`（`OnErrorEventHandler` 的呼叫方式），script 之後 microtask checkpoint，從別的 thread 打斷得了 | `cargo test -p dom_js --test it worker::` |
 
 ## 做過的檢查
 
@@ -106,4 +107,15 @@
 - mutation test（`rfcs/0103-worker-global-scope/mutants-1b3.toml`）：21 條全部抓到（其中一條原本的寫法編不過：最後一個分支加了 guard，`match` 就不完整，改寫之後抓到）。
 - WPT（`python3 scripts/test.py wpt`）：`include.txt` 裡的 6 份 `idlharness`、預期結果提到 worker 的 5 份、`netinfo/`、`geolocation/`、`screen-wake-lock/`：2341 個檢查，沒有和預期不同的。
 - 跑過的：`cargo test -p dom -p dom_api -p dom_js -p dom_wasm -p renderer` 都通過。
+
+### 1b-4：worker 的 engine（2026-11-17，macOS，Apple Silicon）
+
+- `dom`：`GlobalRef`、`GlobalRoot`（「已決定的事項」第 18 條），`global_context`、`root_global`；`post_worker_global_message`（`Worker` 送給 worker 的 global 的訊息：沒有 origin、沒有 source，target 是 worker 的 global）；`take_blob_read` 改收執行環境。
+- `dom_api`：跑 task 的函式（`run_due`、`run_next_due`、`run_task`、`until_next_due`、`next_due`、`run_posted_messages`、`run_element_tasks`、`report_exception`）和 `ScriptHost::call_timer`、`deserialize_message` 改收 `GlobalRoot`；idle callback 的 timeout、geolocation、wake lock 的 task 只有 window 的。`WorkerEngine` trait（第 10 條）。1b-3 的 `WorkerHost`、`WorkerGlobalHost` 的方法改成 `&self`、`OpFront` 給 `Option<&dyn …>`：`dom_js` 的操作只借得到 `State` 的 `Caches`（共享的），host 放在那裡（`Caches::worker_host`、`worker_global_host`）；送到別的 thread 的實作本來就不需要 `&mut`。
+- `dom_js`：`V8WorkerEngine`（`worker.rs`）：自己的 isolate 和 DOM，realm 從 `DedicatedWorkerGlobalScope` 的 template 建；`templates::install` 收 `GlobalKind`（worker 的 realm 沒有 legacy callback interface、alias、legacy factory）；`[Global]` 的祖先（`WorkerGlobalScope`）的成員也裝在子的 instance template 上（V8 不套用 parent 的 instance template：原本只對 unforgeable 的成員這樣做，第一次跑測試時 `self`、`setTimeout` 不在 global 上）；`window::global_of`、`global_root`，跑 task 和回報例外的函式 window 和 worker 共用；`InfoOp::current_context` 也給 worker 的 realm 的；`this` 和物件參數轉成 target 時認得 worker 的 global；`onerror` 的特別的呼叫方式也給 worker 的 global（1b-2 留下的三處）；`call_timer` 的 `this`、URL 和 base URL 從 global 和它的執行環境拿。
+- 新的測試：`dom_js` 的 `worker::a_worker_s_global_is_its_realm_s`、`a_worker_s_microtasks_run_after_its_script`（mutation test 沒抓到的那一條補的）、`a_worker_s_realm_has_the_interfaces_exposed_there`（表上每個 interface：dedicated worker 有的在、沒有的不在）、`a_worker_s_timers_are_its_tasks`（`setInterval` 會重複、`this` 是 global：1b-3 留下的）、`a_worker_s_messages_go_both_ways`（worker 送出的訊息當成它的 `Worker` 送來的再給它：`onmessage`、listener、`source`、`origin`：1b-3 留下的 event handler）、`a_worker_s_errors_reach_its_onerror`、`a_worker_makes_no_worker`、`a_worker_s_script_stops_from_another_thread`。
+- mutation test（`rfcs/0103-worker-global-scope/mutants-1b4.toml`）：14 條。第一次 12 條抓到，沒抓到的：「script 之後不做 microtask checkpoint」（補了上面的測試，重跑抓到）、「worker 的 global 當成參數時是一般的 target」：等價，記進 `docs/test-gaps.md`（worker 有的成員沒有收 event target 參數的：收它的只有 `MouseEvent`、`FocusEvent` 的 `relatedTarget`，只在 window；window 的 realm 拿不到 worker 的 global）。1b-2 沒抓到的「發給 worker 的 global 的訊息的 target 是 window」用 `dom_js` 的 `worker::` 重跑，抓到（`mutants-1b2.toml` 的那一條改用它）。
+- 找到、留給 1b-7 的：沒有 window 的執行環境裡，一般的 target 的 task 和 UA 的 timer 被丟掉（`dom` 的 `push_target_task`、`add_target_timer` 照執行環境的 window 的文件排）：worker 裡 `FileReader` 的事件、`AbortSignal.timeout()`、`Blob` 的 `text()` 等現在不會完成。要讓 task 的元素可以沒有；1b-7 跑 WPT 的 worker variant 時看用到的有哪些再改。
+- WPT（`python3 scripts/test.py wpt dom/events/ html/webappapis/timers/ webmessaging/ html/webappapis/scripting/ html/webappapis/microtask-queuing/ dom/abort/ url/idlharness.any.js FileAPI/`）：3324 個檢查，和預期不同的 4 個是 1a 記下的 `scrollend` 那幾個（Mac 上 `navigator.platform` 的關係），和這次無關。
+- 跑過的：`cargo test -p dom -p dom_api -p dom_js -p dom_wasm -p renderer -p bindings` 都通過。
 

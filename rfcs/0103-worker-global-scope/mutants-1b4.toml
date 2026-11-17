@@ -1,0 +1,116 @@
+# 1b-4: a dedicated worker's engine (dom_js's V8WorkerEngine, dom_api's
+# WorkerEngine), its realm and global, the tasks' functions taking a
+# realm's global (GlobalRoot).
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "worker::"]
+timeout = 900
+
+[[mutant]]
+name = "a [Global] ancestor's members aren't the global's own"
+file = "crates/dom_js/src/templates.rs"
+from = '''        let all = desc.global && INTERFACES[index].global;'''
+to = '''        let all = false;'''
+
+[[mutant]]
+name = "a worker's realm has a window's interfaces"
+file = "crates/dom_js/src/templates.rs"
+from = '''            Self::DedicatedWorker => exposed.in_dedicated_worker(),'''
+to = '''            Self::DedicatedWorker => exposed.window,'''
+
+[[mutant]]
+name = "a worker's realm has a window's legacy factories"
+file = "crates/dom_js/src/templates.rs"
+from = '''    if !window {
+        return;
+    }'''
+to = '''    if false {
+        return;
+    }'''
+
+[[mutant]]
+name = "a worker's realm has a window's callback interfaces"
+file = "crates/dom_js/src/templates.rs"
+from = '''                .map(|interface| (interface.name, window)),'''
+to = '''                .map(|interface| (interface.name, true)),'''
+
+[[mutant]]
+name = "a worker's global isn't the DOM's"
+file = "crates/dom_js/src/window.rs"
+from = '''        no_gc
+            .unwrap::<dom::WorkerGlobalScope>(cx.gc, global)
+            .map(|global| dom::GlobalRoot::WorkerGlobal(Persistent::new(cx.gc, global)))'''
+to = '''        None'''
+
+[[mutant]]
+name = "a worker's realm has no execution context"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        // A worker's realm's.
+        self.no_gc
+            .unwrap::<dom::WorkerGlobalScope>(cx.gc, global)
+            .map(|global| cx.worker_global_context(global))'''
+to = '''        // A worker's realm's.
+        let _ = global;
+        None'''
+
+[[mutant]]
+name = "a worker's global's onerror is a plain handler"
+file = "crates/dom_js/src/listeners.rs"
+from = '''                            dom::TargetRef::Window(_) | dom::TargetRef::WorkerGlobal(_)'''
+to = '''                            dom::TargetRef::Window(_)'''
+
+[[mutant]]
+name = "a worker's global as this is a plain target"
+file = "crates/dom_api/src/typed.rs"
+from = '''        if let Some(global) = op.this_as::<dom::WorkerGlobalScope>(cx) {
+            return TargetRef::WorkerGlobal(global);
+        }'''
+to = '''
+
+'''
+
+[[mutant]]
+name = "a worker's global as an argument is a plain target"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if let Some(global) = self.no_gc.unwrap::<dom::WorkerGlobalScope>(cx.gc, *object) {
+            return TargetRef::WorkerGlobal(global);
+        }'''
+to = '''
+
+'''
+
+[[mutant]]
+name = "a message to a worker's global isn't queued"
+file = "crates/dom/src/message.rs"
+from = '''        self.queue_posted_message(self.worker_global_context(global), message);'''
+to = '''        let _ = (global, message);'''
+
+[[mutant]]
+name = "a worker's engine posts no message"
+file = "crates/dom_js/src/worker.rs"
+from = '''            .mutate(|cx| cx.post_worker_global_message(global.get(cx.gc), message));'''
+to = '''            .mutate(|cx| {
+                let _ = (cx, &global, message);
+            });'''
+
+[[mutant]]
+name = "a worker's engine runs no microtasks after its script"
+file = "crates/dom_js/src/worker.rs"
+from = '''        });
+        self.perform_microtask_checkpoint();
+    }'''
+to = '''        });
+    }'''
+
+[[mutant]]
+name = "a worker's engine has no global host"
+file = "crates/dom_js/src/worker.rs"
+from = '''        self.state().caches.worker_global_host = Some(host);'''
+to = '''        let _ = host;'''
+
+[[mutant]]
+name = "a window's idle timeout isn't due before its timers"
+file = "crates/dom_api/src/timer.rs"
+from = '''    if let GlobalRoot::Window(window) = global {
+        let idle_first'''
+to = '''    if let (false, GlobalRoot::Window(window)) = (true, global) {
+        let idle_first'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "-p", "dom_js"]

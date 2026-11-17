@@ -148,7 +148,7 @@ pub use dom_api_macros::declare;
 pub use engine::{
     ClassicScript, ConsoleMessage, ConsoleSink, DevToolsFrameIds, DevToolsInterrupter,
     DevToolsObjects, DevToolsPage, DevToolsQueue, DevToolsQueued, DevToolsSend, EngineSettings,
-    LoadSink, ScriptEngine, WasmScript,
+    LoadSink, ScriptEngine, WasmScript, WorkerEngine,
 };
 pub use event::{cancel as cancel_event, coarsen};
 pub use event_target::{dispatch, fire_event};
@@ -195,7 +195,6 @@ pub use text_control::run_element_tasks;
 pub use timer::{
     Reported, next_due, report_exception, run_due, run_next_due, run_task, until_next_due,
 };
-pub use worker::{WorkerGlobalHost, WorkerHost, WorkerStart};
 pub use typed::{
     Any, AnyArg, AnyOrNull, ArgType, Callback, ConstructorInfo, Created, DictFront, DictMember,
     DictOrBool, Dictionary, DomStr, EmptyStringDefault, ErrorEventObject, Front, FrontHost,
@@ -213,6 +212,7 @@ pub use webdriver::{
 pub use window::{
     NamedProperty, named_property, named_property_collection, window_document_gets_for_testing,
 };
+pub use worker::{WorkerGlobalHost, WorkerHost, WorkerStart};
 
 /// A member's call: the DOM's operation (`dom::Cx`, which it derefs
 /// to), and what the engine gives the API: its frame's layout, if it has

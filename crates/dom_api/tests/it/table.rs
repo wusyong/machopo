@@ -498,7 +498,10 @@ fn interfaces_are_exposed_in_their_globals() {
         .filter(|desc| !desc.exposed.window)
         .map(|desc| desc.name)
         .collect();
-    assert_eq!(not_in_windows, ["WorkerGlobalScope", "DedicatedWorkerGlobalScope"]);
+    assert_eq!(
+        not_in_windows,
+        ["WorkerGlobalScope", "DedicatedWorkerGlobalScope"]
+    );
     let dedicated_only: Vec<_> = INTERFACES
         .iter()
         .filter(|desc| desc.exposed.dedicated_worker)

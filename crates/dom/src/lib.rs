@@ -141,8 +141,6 @@ pub use event::{
     ShadowPath, TargetRef, TargetRoot,
 };
 pub use execution_context::ExecutionContext;
-pub use worker::WorkerObjectData;
-pub use worker_global::WorkerGlobalScope;
 pub use fetch::{
     FetchHostRequest, FetchRecord, FetchRequest, FetchState, Referrer, Request, RequestCache,
     RequestCredentials, RequestData, RequestMode, RequestPriority, RequestRedirect, Response,
@@ -224,6 +222,8 @@ pub use window::{
     AnimationFrame, ElementTask, ElementTaskKind, Location, NativeAction, NativeTimer, Timer,
     TimerState, Window,
 };
+pub use worker::WorkerObjectData;
+pub use worker_global::{GlobalRef, GlobalRoot, WorkerGlobalScope};
 
 pub use elise::LocalToken;
 pub use gfx::{NodeId, NodeIdHashMap, NodeIdHashSet};

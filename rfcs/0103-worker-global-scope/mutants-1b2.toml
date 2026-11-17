@@ -32,6 +32,7 @@ name = "a message posted to a worker's global is for a window"
 file = "crates/dom/src/execution_context.rs"
 from = '''            Some(global) => crate::TargetRef::WorkerGlobal(global),'''
 to = '''            Some(_) => crate::TargetRef::Window(self.context_window(context).expect("a context's global")),'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "worker::"]
 
 [[mutant]]
 name = "a worker's global isn't its context's global"

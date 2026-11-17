@@ -55,7 +55,7 @@ pub fn create_window_realm<'s>(
             wrap_new_object(&mut no_gc, cx, proxy, window.into());
         });
     }
-    templates::install(scope, proxy);
+    templates::install(scope, proxy, templates::GlobalKind::Window);
     update_cached_accessors(&mut state::scope(scope).expect("installed"), proxy);
     crate::window_properties::install_in_realm(&mut state::scope(scope).expect("installed"), proxy);
     install_queue_microtask(scope, proxy);
@@ -137,6 +137,32 @@ pub(crate) fn update_cached_accessors(
     }
 }
 
+/// The DOM's global that `context`'s global is (a window, a worker's
+/// global), if it is one of the DOM's.
+pub(crate) fn global_of(
+    scope: &mut Scope<'_, '_, '_>,
+    context: v8::Local<'_, v8::Context>,
+) -> Option<dom::GlobalRoot> {
+    let global = context.global(scope.scope());
+    global_root(scope, global)
+}
+
+/// The DOM's global that `global`, a realm's global object, is.
+pub(crate) fn global_root(
+    scope: &mut Scope<'_, '_, '_>,
+    global: v8::Local<'_, v8::Object>,
+) -> Option<dom::GlobalRoot> {
+    let (state, mut no_gc) = scope.state();
+    state.dom.read(|cx| {
+        if let Some(window) = no_gc.unwrap::<Window>(cx.gc, global) {
+            return Some(dom::GlobalRoot::Window(Persistent::new(cx.gc, window)));
+        }
+        no_gc
+            .unwrap::<dom::WorkerGlobalScope>(cx.gc, global)
+            .map(|global| dom::GlobalRoot::WorkerGlobal(Persistent::new(cx.gc, global)))
+    })
+}
+
 /// The window that is `context`'s global, if it is one of the DOM's.
 fn window_of(
     scope: &mut Scope<'_, '_, '_>,
@@ -164,14 +190,16 @@ pub fn run_timers(
     let Some(mut scope) = state::scope(scope) else {
         return 0;
     };
-    let Some(window) = window_of(&mut scope, context) else {
+    let Some(global) = global_of(&mut scope, context) else {
         return 0;
     };
     let now = now.unwrap_or_else(|| {
         let (state, _) = scope.state();
-        state.dom.read(|cx| cx.now_since(Some(window.get(cx.gc))))
+        state
+            .dom
+            .read(|cx| cx.now_in(Some(cx.global_context(global.get(cx.gc)))))
     });
-    let ran = dom_api::run_due(&mut Host { scope: &mut scope }, &window, now);
+    let ran = dom_api::run_due(&mut Host { scope: &mut scope }, &global, now);
     state::report(&mut scope);
     ran
 }
@@ -188,10 +216,10 @@ pub(crate) fn run_next_timer(
     let Some(mut scope) = state::scope(scope) else {
         return false;
     };
-    let Some(window) = window_of(&mut scope, context) else {
+    let Some(global) = global_of(&mut scope, context) else {
         return false;
     };
-    let ran = dom_api::run_next_due(&mut Host { scope: &mut scope }, &window, now);
+    let ran = dom_api::run_next_due(&mut Host { scope: &mut scope }, &global, now);
     state::report(&mut scope);
     ran
 }
@@ -210,10 +238,10 @@ pub(crate) fn run_task(
     let Some(mut scope) = state::scope(scope) else {
         return false;
     };
-    let Some(window) = window_of(&mut scope, context) else {
+    let Some(global) = global_of(&mut scope, context) else {
         return false;
     };
-    let ran = dom_api::run_task(&mut Host { scope: &mut scope }, &window, queue, now);
+    let ran = dom_api::run_task(&mut Host { scope: &mut scope }, &global, queue, now);
     state::report(&mut scope);
     ran
 }
@@ -229,10 +257,10 @@ pub fn run_element_tasks(
     let Some(mut scope) = state::scope(scope) else {
         return 0;
     };
-    let Some(window) = window_of(&mut scope, context) else {
+    let Some(global) = global_of(&mut scope, context) else {
         return 0;
     };
-    let ran = dom_api::run_element_tasks(&mut Host { scope: &mut scope }, &window);
+    let ran = dom_api::run_element_tasks(&mut Host { scope: &mut scope }, &global);
     state::report(&mut scope);
     ran
 }
@@ -248,10 +276,10 @@ pub fn run_posted_messages(
     let Some(mut scope) = state::scope(scope) else {
         return 0;
     };
-    let Some(window) = window_of(&mut scope, context) else {
+    let Some(global) = global_of(&mut scope, context) else {
         return 0;
     };
-    let ran = dom_api::run_posted_messages(&mut Host { scope: &mut scope }, &window);
+    let ran = dom_api::run_posted_messages(&mut Host { scope: &mut scope }, &global);
     state::report(&mut scope);
     ran
 }
@@ -427,8 +455,8 @@ pub fn next_timer(
     context: v8::Local<'_, v8::Context>,
 ) -> Option<f64> {
     let mut scope = state::scope(scope)?;
-    let window = window_of(&mut scope, context)?;
-    dom_api::next_due(&scope.state().0.dom, &window)
+    let global = global_of(&mut scope, context)?;
+    dom_api::next_due(&scope.state().0.dom, &global)
 }
 
 /// `queueMicrotask` on `global` (HTML's `WindowOrWorkerGlobalScope`): the
@@ -437,7 +465,10 @@ pub fn next_timer(
 /// exception"), as a listener's. Not the declaration table's: it touches
 /// no DOM state, only the engine's queue. A writable, configurable,
 /// enumerable data property, as a `[Global]` interface's operations are.
-fn install_queue_microtask(scope: &mut v8::PinScope<'_, '_>, global: v8::Local<'_, v8::Object>) {
+pub(crate) fn install_queue_microtask(
+    scope: &mut v8::PinScope<'_, '_>,
+    global: v8::Local<'_, v8::Object>,
+) {
     let template = v8::FunctionTemplate::builder(queue_microtask)
         .length(1)
         .constructor_behavior(v8::ConstructorBehavior::Throw)

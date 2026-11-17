@@ -46,7 +46,9 @@ fn id(ret: Result<Ret, dom_api::ApiError>) -> f64 {
 }
 
 fn run(dom: &mut TestDom, window: &Persistent<dom::Window>, now: f64) -> usize {
-    with_host(dom, |host| dom_api::run_due(host, window, now))
+    with_host(dom, |host| {
+        dom_api::run_due(host, &dom::GlobalRoot::Window(window.clone()), now)
+    })
 }
 
 fn calls(dom: &TestDom) -> Vec<(u64, u64, u8)> {
@@ -101,7 +103,7 @@ fn timers_through_the_windows_members() {
         "a handler is required"
     );
 
-    let start = dom_api::next_due(&dom.dom(), &window).unwrap();
+    let start = dom_api::next_due(&dom.dom(), &dom::GlobalRoot::Window(window.clone())).unwrap();
     assert_eq!(run(&mut dom, &window, start), 1);
     // The rest arguments' count, the tests' word; nested one level.
     assert_eq!(calls(&dom), [(2, 2, 1)]);
@@ -112,7 +114,10 @@ fn timers_through_the_windows_members() {
     call(&mut dom, &object, "clearInterval", &[Arg::Number(later)]).unwrap();
     call(&mut dom, &object, "clearTimeout", &[]).unwrap();
     assert_eq!(run(&mut dom, &window, start + 1000.0), 0);
-    assert_eq!(dom_api::next_due(&dom.dom(), &window), None);
+    assert_eq!(
+        dom_api::next_due(&dom.dom(), &dom::GlobalRoot::Window(window.clone())),
+        None
+    );
     // The window's nesting level is back to 0 out of the timers.
     assert_eq!(
         dom.read(|cx| cx.timer_nesting(cx.window_context(window.get(cx.gc)))),
@@ -153,7 +158,7 @@ fn a_timeouts_long() {
         "setTimeout",
         &[Arg::Callback(1), Arg::Number(4_294_967_301.0)],
     ));
-    let due = dom_api::next_due(&dom.dom(), &window).unwrap();
+    let due = dom_api::next_due(&dom.dom(), &dom::GlobalRoot::Window(window.clone())).unwrap();
     // Made a moment after `now` (well under 50 ms, even when busy).
     assert!((5.0..55.0).contains(&(due - now)), "{}", due - now);
     call(&mut dom, &object, "clearTimeout", &[Arg::Number(1.0)]).unwrap();
@@ -163,7 +168,7 @@ fn a_timeouts_long() {
         "setTimeout",
         &[Arg::Callback(1), Arg::Number(-30.0)],
     ));
-    let due = dom_api::next_due(&dom.dom(), &window).unwrap();
+    let due = dom_api::next_due(&dom.dom(), &dom::GlobalRoot::Window(window.clone())).unwrap();
     assert!(due - now < 50.0, "{}", due - now);
 }
 
@@ -195,7 +200,10 @@ fn timers_made_by_timers_nest() {
     ));
     let at = 3e9;
     assert_eq!(run(&mut dom, &window, at), 6);
-    assert_eq!(dom_api::next_due(&dom.dom(), &window), Some(at + 4.0));
+    assert_eq!(
+        dom_api::next_due(&dom.dom(), &dom::GlobalRoot::Window(window.clone())),
+        Some(at + 4.0)
+    );
     let levels: Vec<u8> = calls(&dom).iter().map(|call| call.2).collect();
     assert_eq!(levels, [1, 2, 3, 4, 5, 6]);
     call(&mut dom, &object, "clearInterval", &[Arg::Number(interval)]).unwrap();
@@ -225,7 +233,12 @@ fn listen(dom: &mut TestDom, window: &Rc<ObjectRoot>, callback: u64, action: Act
 
 fn report(dom: &mut TestDom, window: &Persistent<dom::Window>) -> Reported {
     with_host(dom, |host| {
-        dom_api::report_exception(host, window, &error_info(), Some(42))
+        dom_api::report_exception(
+            host,
+            &dom::GlobalRoot::Window(window.clone()),
+            &error_info(),
+            Some(42),
+        )
     })
 }
 

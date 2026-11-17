@@ -88,3 +88,62 @@ impl<'gc> Cx<'_, 'gc> {
         &global.into_ref().wrapper
     }
 }
+
+/// A realm's global, of either kind: what runs a realm's tasks takes it
+/// (`dom_api`'s timers, messages, reports), and what is a window's alone
+/// (an idle callback's timeout, a `hashchange`) is matched on it, as no
+/// function gives an execution context's window (Blink's
+/// `DynamicTo<LocalDOMWindow>` of an `ExecutionContext`).
+#[derive(Clone, Copy)]
+pub enum GlobalRef<'gc> {
+    Window(Gc<'gc, crate::Window>),
+    WorkerGlobal(Gc<'gc, WorkerGlobalScope>),
+}
+
+impl<'gc> GlobalRef<'gc> {
+    /// As an event target (an `error` event's, a message's).
+    pub fn target(self) -> crate::TargetRef<'gc> {
+        match self {
+            Self::Window(window) => crate::TargetRef::Window(window),
+            Self::WorkerGlobal(global) => crate::TargetRef::WorkerGlobal(global),
+        }
+    }
+}
+
+/// A root of a `GlobalRef` (`Cx::root_global`).
+#[derive(Debug, Clone)]
+pub enum GlobalRoot {
+    Window(elise::Persistent<crate::Window>),
+    WorkerGlobal(elise::Persistent<WorkerGlobalScope>),
+}
+
+impl GlobalRoot {
+    pub fn get<'gc>(&self, cx: &elise::Mutation<'gc>) -> GlobalRef<'gc> {
+        match self {
+            Self::Window(root) => GlobalRef::Window(root.get(cx)),
+            Self::WorkerGlobal(root) => GlobalRef::WorkerGlobal(root.get(cx)),
+        }
+    }
+}
+
+impl<'gc> Cx<'_, 'gc> {
+    /// `global`'s execution context.
+    pub fn global_context(&self, global: GlobalRef<'gc>) -> Gc<'gc, ExecutionContext> {
+        match global {
+            GlobalRef::Window(window) => self.window_context(window),
+            GlobalRef::WorkerGlobal(global) => self.worker_global_context(global),
+        }
+    }
+
+    /// A root of `global`.
+    pub fn root_global(&self, global: GlobalRef<'gc>) -> GlobalRoot {
+        match global {
+            GlobalRef::Window(window) => {
+                GlobalRoot::Window(elise::Persistent::new(self.gc, window))
+            }
+            GlobalRef::WorkerGlobal(global) => {
+                GlobalRoot::WorkerGlobal(elise::Persistent::new(self.gc, global))
+            }
+        }
+    }
+}

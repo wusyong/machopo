@@ -106,29 +106,33 @@ impl<'s> ScriptHost for Host<'_, '_, 's, '_> {
         crate::handlers::compile_event_handler(self.scope, target, event_type);
     }
 
-    fn call_timer(&mut self, window: &Persistent<Window>, timer: &Persistent<Timer>) {
+    fn call_timer(&mut self, global: &dom::GlobalRoot, timer: &Persistent<Timer>) {
         // Its checkpoint is the caller's: the timer's nesting level goes
         // back to 0 first.
-        call_function(self.scope, |scope| call_timer(scope, window, timer));
+        call_function(self.scope, |scope| call_timer(scope, global, timer));
     }
 
-    /// In the realm of the frame showing `window`'s document (the current
-    /// one's for a window no frame shows), its ports' wrappers made there.
+    /// In the realm of the frame showing a window's document (the current
+    /// one's for a window no frame shows, and a worker's global's: its
+    /// isolate's one realm), its ports' wrappers made there.
     fn deserialize_message(
         &mut self,
-        window: &Persistent<Window>,
+        global: &dom::GlobalRoot,
         payload: dom::SerializedMessage,
         ports: &[Persistent<dom::EventTargetImpl>],
     ) -> Option<Self::Value> {
-        let realm = {
-            let (state, _) = self.scope.state();
-            let document = state
-                .dom
-                .read(|cx| cx.node_id(cx.window_document(window.get(cx.gc))));
-            state
-                .frames
-                .of_document(document)
-                .map(|frame| frame.context.clone())
+        let realm = match global {
+            dom::GlobalRoot::Window(window) => {
+                let (state, _) = self.scope.state();
+                let document = state
+                    .dom
+                    .read(|cx| cx.node_id(cx.window_document(window.get(cx.gc))));
+                state
+                    .frames
+                    .of_document(document)
+                    .map(|frame| frame.context.clone())
+            }
+            dom::GlobalRoot::WorkerGlobal(_) => None,
         };
         let scope = self.scope.scope();
         let context = match &realm {
@@ -691,7 +695,14 @@ pub(crate) fn call_listener(
             let handler = cx.listener_is_handler(listener).then(|| {
                 let error = cx
                     .error_event_data(event)
-                    .filter(|_| matches!(target, dom::TargetRef::Window(_)))
+                    // A global's `onerror` (HTML's `OnErrorEventHandler`:
+                    // a window's and a worker's global's).
+                    .filter(|_| {
+                        matches!(
+                            target,
+                            dom::TargetRef::Window(_) | dom::TargetRef::WorkerGlobal(_)
+                        )
+                    })
                     .filter(|_| cx.listener_type(listener) == dom::names::event::ERROR);
                 match error {
                     Some(data) => HandlerCall::OnError(
@@ -1185,7 +1196,7 @@ fn call_blob_callback(
 /// (the global proxy), its arguments the timer's.
 pub(crate) fn call_timer(
     scope: &mut Scope<'_, '_, '_>,
-    window: &Persistent<Window>,
+    global: &dom::GlobalRoot,
     timer: &Persistent<Timer>,
 ) {
     let (callback, arguments, this, url, base_url) = {
@@ -1193,14 +1204,14 @@ pub(crate) fn call_timer(
         // Allocates nothing: a read.
         state.dom.read(|cx| {
             let timer = timer.get(cx.gc);
-            let window = window.get(cx.gc);
-            let document = cx.window_document(window);
+            let global = global.get(cx.gc);
+            let context = cx.global_context(global);
             (
                 no_gc.strong_value(cx.timer_callback_edge(timer)),
                 no_gc.strong_value(cx.timer_arguments_edge(timer)),
-                no_gc.wrapper(cx.object_wrapper_edge(window.into())),
-                cx.document_url(document),
-                cx.document_base_url(document),
+                no_gc.wrapper(cx.object_wrapper_edge(global.target().into())),
+                cx.context_url(context),
+                cx.context_base_url(context),
             )
         })
     };
@@ -1406,18 +1417,11 @@ fn report(
     global: Option<v8::Local<'_, v8::Object>>,
     thrown: Thrown,
 ) {
-    let window = global.and_then(|global| {
-        let (state, mut no_gc) = scope.state();
-        state.dom.read(|cx| {
-            no_gc
-                .unwrap::<Window>(cx.gc, global)
-                .map(|window| Persistent::new(cx.gc, window))
-        })
-    });
+    let at = global.and_then(|global| crate::window::global_root(scope, global));
     let exception = v8::Local::new(scope.scope(), &thrown.exception);
-    let reported = match window {
-        Some(window) => {
-            dom_api::report_exception(&mut Host { scope }, &window, &thrown.info, Some(exception))
+    let reported = match &at {
+        Some(at) => {
+            dom_api::report_exception(&mut Host { scope }, at, &thrown.info, Some(exception))
         }
         None => Reported::NotCanceled,
     };

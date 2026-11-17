@@ -148,6 +148,13 @@ pub(crate) struct Caches {
     /// (`OpFront::ret_fresh_string`: no string of the DOM's made of it),
     /// for the tests.
     pub(crate) fresh_strings: Cell<u64>,
+    /// The host of the dedicated workers the engine's realms make, and in
+    /// a worker's engine the worker's own host (`dom_api::WorkerHost`,
+    /// `dom_api::WorkerGlobalHost`): a member's operation calls them at
+    /// once (`new Worker()`, `postMessage()`), so they are here, what an
+    /// operation reads. None till the host gives one.
+    pub(crate) worker_host: Option<Box<dyn dom_api::WorkerHost>>,
+    pub(crate) worker_global_host: Option<Box<dyn dom_api::WorkerGlobalHost>>,
 }
 
 impl bindings::EmbedderHeapState for State {
@@ -240,6 +247,8 @@ pub(crate) fn install(isolate: &mut v8::Isolate) {
                 wrappers_wasted: Cell::new(0),
                 wrappers_ahead: Cell::new(0),
                 fresh_strings: Cell::new(0),
+                worker_host: None,
+                worker_global_host: None,
             },
             templates: (0..slots).map(|_| None).collect(),
             boilerplates: (0..slots).map(|_| None).collect(),

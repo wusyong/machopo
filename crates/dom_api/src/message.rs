@@ -12,8 +12,8 @@
 use std::cell::Cell;
 
 use dom::{
-    DomString, Event, EventFlags, EventTargetImpl, MessageChannel, MessageEventInit as Init,
-    SerializedMessage, TargetRef, Window, names,
+    DomString, Event, EventFlags, EventTargetImpl, GlobalRoot, MessageChannel,
+    MessageEventInit as Init, SerializedMessage, TargetRef, Window, names,
 };
 use elise::{Gc, Persistent};
 
@@ -362,25 +362,26 @@ pub(crate) fn init_message_event<'gc, O: OpFront>(
     Ok(())
 }
 
-/// Runs `window`'s messages (the posted message task source's tasks):
-/// each deserialized in the window's realm (`ScriptHost::
+/// Runs `global`'s messages (the posted message task source's tasks):
+/// each deserialized in its realm (`ScriptHost::
 /// deserialize_message`) as a trusted `message` event's `data` (a
 /// `messageerror` if it can't be), dispatched at the window or the port it
-/// is for, then a microtask checkpoint. How many ran.
-pub fn run_posted_messages<H: ScriptHost>(host: &mut H, window: &Persistent<Window>) -> usize {
+/// is for (a worker's global for one posted to it), then a microtask
+/// checkpoint. How many ran.
+pub fn run_posted_messages<H: ScriptHost>(host: &mut H, global: &GlobalRoot) -> usize {
     let mut ran = 0usize;
-    while run_posted_message(host, window) {
+    while run_posted_message(host, global) {
         ran = ran.saturating_add(1);
     }
     ran
 }
 
-/// Delivers `window`'s first message (`run_posted_messages`'s one), if the
+/// Delivers `global`'s first message (`run_posted_messages`'s one), if the
 /// DOM's pass lets it run. Whether one was.
-pub fn run_posted_message<H: ScriptHost>(host: &mut H, window: &Persistent<Window>) -> bool {
+pub fn run_posted_message<H: ScriptHost>(host: &mut H, global: &GlobalRoot) -> bool {
     {
         let taken = host.mutate(|cx| {
-            let taken = cx.take_posted_message(cx.window_context(window.get(cx.gc)))?;
+            let taken = cx.take_posted_message(cx.global_context(global.get(cx.gc)))?;
             let ports: Vec<_> = taken
                 .ports
                 .iter()
@@ -397,7 +398,7 @@ pub fn run_posted_message<H: ScriptHost>(host: &mut H, window: &Persistent<Windo
         let Some((target, payload, origin, source, ports)) = taken else {
             return false;
         };
-        let value = payload.and_then(|payload| host.deserialize_message(window, payload, &ports));
+        let value = payload.and_then(|payload| host.deserialize_message(global, payload, &ports));
         let error = value.is_none();
         let event = host.mutate_storing(|cx, store| {
             let event = cx.create_message_event(
@@ -410,7 +411,7 @@ pub fn run_posted_message<H: ScriptHost>(host: &mut H, window: &Persistent<Windo
                     trusted: true,
                     ..EventFlags::default()
                 },
-                Some(cx.window_context(window.get(cx.gc))),
+                Some(cx.global_context(global.get(cx.gc))),
                 Init {
                     origin,
                     last_event_id: DomString::new(""),

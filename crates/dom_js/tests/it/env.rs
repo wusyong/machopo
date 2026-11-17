@@ -83,7 +83,7 @@ impl Env {
             let context = v8::Context::new(scope, Default::default());
             let scope = &mut v8::ContextScope::new(scope, context);
             let global = context.global(scope);
-            dom_js::install(scope, global);
+            dom_js::install(scope, global, dom_js::GlobalKind::Window);
             dom_js::install_machopo_dom(scope, global);
             v8::Global::new(scope, context)
         };

@@ -79,23 +79,27 @@ fn make_template<'s>(
         let parent = template_of(scope, parent);
         template.inherit(parent);
     }
-    // The ancestors with unforgeable members, and their templates: V8
-    // doesn't apply a parent's instance template to a child's instances,
-    // so each object gets them from its own (as Blink's generated bindings
-    // install them).
-    let mut unforgeable_ancestors = Vec::new();
+    // The ancestors with members on each object, their templates, and
+    // whether only their unforgeable ones are: V8 doesn't apply a parent's
+    // instance template to a child's instances, so each object gets them
+    // from its own (as Blink's generated bindings install them). Of a
+    // `[Global]` interface's `[Global]` ancestor (`WorkerGlobalScope` of
+    // `DedicatedWorkerGlobalScope`), all are the global's own.
+    let mut own_ancestors = Vec::new();
     let mut ancestor = desc.parent;
     while let Some(name) = ancestor {
         let index = INTERFACES
             .iter()
             .position(|desc| desc.name == name)
             .expect("a parent of the table");
-        if INTERFACES[index]
-            .members
-            .iter()
-            .any(|member| member.unforgeable)
+        let all = desc.global && INTERFACES[index].global;
+        if all
+            || INTERFACES[index]
+                .members
+                .iter()
+                .any(|member| member.unforgeable)
         {
-            unforgeable_ancestors.push((index, self::template(scope, index)));
+            own_ancestors.push((index, self::template(scope, index), !all));
         }
         ancestor = INTERFACES[index].parent;
     }
@@ -137,7 +141,7 @@ fn make_template<'s>(
         named,
         ..
     } = members;
-    for (ancestor, ancestor_template) in unforgeable_ancestors {
+    for (ancestor, ancestor_template, only_unforgeable) in own_ancestors {
         let signature = v8::Signature::new(scope, ancestor_template);
         let mut members = Members {
             scope: &mut *scope,
@@ -151,7 +155,7 @@ fn make_template<'s>(
             setters: Vec::new(),
             pairs: None,
             named: NamedCalls::default(),
-            only_unforgeable: true,
+            only_unforgeable,
         };
         dom_api::visit_typed(&mut members);
         members.install_ordered();
@@ -1421,23 +1425,46 @@ pub(crate) fn new_wrapper_unwrapped<'s>(
     bindings::new_wrapper(scope.scope(), boilerplate)
 }
 
+/// The kind of global a realm's is: what its realm has of the table
+/// (WebIDL's `[Exposed]`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GlobalKind {
+    Window,
+    DedicatedWorker,
+}
+
+impl GlobalKind {
+    /// Whether its realm has an interface exposed in `exposed`.
+    pub(crate) fn has(self, exposed: dom_api::declare::Exposed) -> bool {
+        match self {
+            Self::Window => exposed.window,
+            Self::DedicatedWorker => exposed.in_dedicated_worker(),
+        }
+    }
+}
+
 /// Installs the interface objects of the table's interfaces exposed in a
-/// window (WebIDL's `[Exposed]`, `InterfaceDesc::exposed`: a window's realm
-/// is the only kind there is yet), `DOMException` and `QuotaExceededError`,
-/// and the legacy callback interface objects (`NodeFilter`) on `global` (a
-/// window realm's): lazy data properties (made the first time they are
-/// read), not enumerable, as WebIDL's interface objects. The isolate's DOM
-/// is made with the first.
-pub fn install(scope: &mut v8::PinScope<'_, '_>, global: v8::Local<'_, v8::Object>) {
+/// global of `kind` (WebIDL's `[Exposed]`, `InterfaceDesc::exposed`),
+/// `DOMException` and `QuotaExceededError`, and in a window the legacy
+/// callback interface objects (`NodeFilter`), aliases and factory functions
+/// (`Image`), on `global`: lazy data properties (made the first time they
+/// are read), not enumerable, as WebIDL's interface objects. The isolate's
+/// DOM is made with the first.
+pub fn install(
+    scope: &mut v8::PinScope<'_, '_>,
+    global: v8::Local<'_, v8::Object>,
+    kind: GlobalKind,
+) {
     state::install(scope);
+    let window = kind == GlobalKind::Window;
     let names = INTERFACES
         .iter()
-        .map(|interface| (interface.name, interface.exposed.window))
+        .map(|interface| (interface.name, kind.has(interface.exposed)))
         .chain([("DOMException", true), ("QuotaExceededError", true)])
         .chain(
             CALLBACK_INTERFACES
                 .iter()
-                .map(|interface| (interface.name, true)),
+                .map(|interface| (interface.name, window)),
         );
     for (index, (name, exposed)) in names.enumerate() {
         if !exposed {
@@ -1454,6 +1481,9 @@ pub fn install(scope: &mut v8::PinScope<'_, '_>, global: v8::Local<'_, v8::Objec
             v8::SideEffectType::HasNoSideEffect,
             v8::SideEffectType::HasSideEffect,
         );
+    }
+    if !window {
+        return;
     }
     // WebIDL's `[LegacyWindowAlias]`es: the same interface object by
     // another name.

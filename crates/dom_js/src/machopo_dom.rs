@@ -21,7 +21,7 @@ pub fn install_machopo_dom(scope: &mut v8::PinScope<'_, '_>, global: v8::Local<'
         .expect("a function");
     let name = string(scope, "createDocument");
     next.set(scope, name.into(), create.into());
-    templates::install(scope, next);
+    templates::install(scope, next, templates::GlobalKind::Window);
     let name = string(scope, "machopoDom");
     global.define_own_property(
         scope,

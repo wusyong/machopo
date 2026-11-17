@@ -1609,13 +1609,13 @@ pub trait OpFront: FrontTypes {
     /// The host of the dedicated workers the call's realm makes
     /// (`new Worker()`, `postMessage()`, `terminate()`), if the engine was
     /// given one.
-    fn worker_host(&mut self) -> Option<&mut dyn crate::WorkerHost> {
+    fn worker_host(&mut self) -> Option<&dyn crate::WorkerHost> {
         None
     }
 
     /// The host the call's realm sends to the realm that made it, if it is
     /// a dedicated worker's (`postMessage()`, `close()` of its global).
-    fn worker_global_host(&mut self) -> Option<&mut dyn crate::WorkerGlobalHost> {
+    fn worker_global_host(&mut self) -> Option<&dyn crate::WorkerGlobalHost> {
         None
     }
 
@@ -2016,11 +2016,11 @@ pub trait ScriptHost {
     /// default: a host with no messages.
     fn deserialize_message(
         &mut self,
-        window: &Persistent<dom::Window>,
+        global: &dom::GlobalRoot,
         payload: dom::SerializedMessage,
         ports: &[Persistent<dom::EventTargetImpl>],
     ) -> Option<Self::Value> {
-        let _ = (window, payload, ports);
+        let _ = (global, payload, ports);
         None
     }
 
@@ -2047,7 +2047,7 @@ pub trait ScriptHost {
     /// timer's, `this` its window, `window`), reporting what it throws; no
     /// microtask checkpoint after (the caller's, once the timer's nesting
     /// level is back to 0).
-    fn call_timer(&mut self, window: &Persistent<dom::Window>, timer: &Persistent<dom::Timer>);
+    fn call_timer(&mut self, global: &dom::GlobalRoot, timer: &Persistent<dom::Timer>);
 
     /// Calls `observer`'s callback with `records` (a new array) and the
     /// observer, `this` the observer (DOM's "notify mutation observers"),
@@ -2314,7 +2314,7 @@ impl<F: ScriptFront> ScriptHost for FrontHost<'_, F> {
         self.0.compile_event_handler(target, event_type);
     }
 
-    fn call_timer(&mut self, _: &Persistent<dom::Window>, _: &Persistent<dom::Timer>) {
+    fn call_timer(&mut self, _: &dom::GlobalRoot, _: &Persistent<dom::Timer>) {
         unreachable!("timers run out of any member's call");
     }
 
@@ -4614,7 +4614,7 @@ pub struct TargetObject;
 impl ObjectType for TargetObject {
     type Ref<'gc> = TargetRef<'gc>;
 
-    // In each member's call: the receiver's type is told by three
+    // In each member's call: the receiver's type is told by a few
     // compares, which a call of its own costs more than.
     #[inline(always)]
     fn this<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, _: usize) -> TargetRef<'gc> {
@@ -4623,6 +4623,9 @@ impl ObjectType for TargetObject {
         }
         if let Some(window) = op.this_as::<dom::Window>(cx) {
             return TargetRef::Window(window);
+        }
+        if let Some(global) = op.this_as::<dom::WorkerGlobalScope>(cx) {
+            return TargetRef::WorkerGlobal(global);
         }
         TargetRef::EventTarget(
             op.this_as::<EventTargetImpl>(cx)

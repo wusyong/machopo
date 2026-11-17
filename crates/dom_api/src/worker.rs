@@ -32,18 +32,20 @@ pub struct WorkerStart {
 }
 
 /// What starts the dedicated workers a realm makes and carries what goes to
-/// them (Blink's `DedicatedWorkerMessagingProxy`): the engine's host's.
+/// them (Blink's `DedicatedWorkerMessagingProxy`): the engine's host's,
+/// called in a member's operation (its methods `&self`: what they do goes
+/// to another thread).
 pub trait WorkerHost {
     /// A new dedicated worker of `start`: the number it is known by from
     /// now on. Messages posted to it before it runs wait for it.
-    fn start_worker(&mut self, start: WorkerStart) -> u64;
+    fn start_worker(&self, start: WorkerStart) -> u64;
 
     /// `message` posted to the worker `id` (`Worker.postMessage`).
-    fn post_to_worker(&mut self, id: u64, message: SerializedMessage);
+    fn post_to_worker(&self, id: u64, message: SerializedMessage);
 
     /// The worker `id` terminated (`Worker.terminate()`): its script
     /// stopped at once, nothing more of it delivered.
-    fn terminate_worker(&mut self, id: u64);
+    fn terminate_worker(&self, id: u64);
 }
 
 /// What carries what a dedicated worker's global sends to the realm that
@@ -52,10 +54,10 @@ pub trait WorkerHost {
 pub trait WorkerGlobalHost {
     /// `message` posted to the worker's `Worker`
     /// (`DedicatedWorkerGlobalScope.postMessage`).
-    fn post_to_owner(&mut self, message: SerializedMessage);
+    fn post_to_owner(&self, message: SerializedMessage);
 
     /// The worker closed itself (`close()`): it runs no more tasks.
-    fn close(&mut self);
+    fn close(&self);
 }
 
 /// `new Worker(scriptURL, options)`: the URL parsed against the current

@@ -265,7 +265,7 @@ pub fn report_loop_error<H: ScriptHost>(
         lineno: 0,
         colno: 0,
     };
-    crate::report_exception(host, window, &info, None)
+    crate::report_exception(host, &dom::GlobalRoot::Window(window.clone()), &info, None)
 }
 
 /// Whether `window`'s document has a resize observer observing anything:
