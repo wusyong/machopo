@@ -118,3 +118,13 @@
 - **`cargo fmt --check`**、**`cargo clippy --workspace --all-targets -- -D warnings`**：見 2b。
 - **真的視窗**（`python3 scripts/test.py scenarios --window sidebar tab-strip navigation demo-busy rounded demo-script gpu-crash`）：7 個都通過；看過 `target/automation-results/sidebar/sidebar.png`（2 倍、系統字型）：按鈕、網址列、New Tab、兩列分頁（目前的白底、有關閉鈕），網頁在側邊欄和邊緣的右邊。
 - `sanity.py` 的 7 項都通過。
+
+### 第 2 階段之後：工具列的圖示
+
+2026-11-17，macOS（Apple Silicon）。使用者看了覺得按鈕的圖示怪，尤其是重新整理。
+
+- **原本的問題**（放大截圖看的）：上一頁、下一頁是實心的大三角形加上 2 px 的細桿，粗細不一致；重新整理的三角形浮在圓環缺口的右上方，沒有接在弧上、方向也不順著弧。
+- **改成線條式的圖示**（`toolbar.rs` 的 `icon`、`icon_flags`）：所有線 2 px、圓頭、圓角接合（Chrome、Material 的線條圖示的畫法）。箭頭是一條桿子加一個開口的頭（兩邊各 45 度）。重新整理照常見的「順時針旋轉」線條圖示（Lucide 的 `rotate-cw` 這類）：半徑 6.5 的弧從右邊往下 30 度起、順時針到右上方，接到一個和座標軸對齊的直角頭（往上、往左各 4），角就是尖端；右邊留一段缺口。中間試過的：頭是沿著切線的開口箭頭，擠在圓的正上方、超出按鈕的範圍；弧從正右方開始，1x 時缺口被 2 px 的線蓋掉。1x 和 2x 的截圖放大看過。
+- **新的測試**：`toolbar` 的 4 個（線的寬度、圓頭、圓角；圖示在按鈕裡的範圍；箭頭的頭在哪一邊、兩邊在尖端後面成 45 度；重新整理的弧的起訖和直角頭）。原本畫實心多邊形的程式和它們沒有對應的測試。
+- **mutation test**（`mutants-icons.toml`）：7 個抓到 5 個；沒抓到的「上一頁朝右」和「箭頭的頭是一直線」：原本的測試只看有沒有一個點在左端（桿子兩端都有點）。改成直接檢查頭的三個點，重跑都抓到。
+- **跑過的**：`shell` 的單元測試 85 個；整合測試的 `browser_view::`、`windowless::` 69 個；情境 `tab-strip`、`sidebar`、`navigation`；`cargo clippy -p shell -p ui --all-targets -- -D warnings`；`sanity.py` 的 `numerics`、`docs`。

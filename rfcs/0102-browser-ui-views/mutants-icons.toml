@@ -1,0 +1,46 @@
+# The toolbar's icons as lines.
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "toolbar"]
+timeout = 600
+
+[[mutant]]
+name = "the icons' ends are square"
+file = "crates/shell/src/toolbar.rs"
+from = '''        cap: compositor_paint::LineCap::Round,'''
+to = '''        cap: compositor_paint::LineCap::Butt,'''
+
+[[mutant]]
+name = "the icons' joins are mitered"
+file = "crates/shell/src/toolbar.rs"
+from = '''        join: compositor_paint::LineJoin::Round,'''
+to = '''        join: compositor_paint::LineJoin::Miter,'''
+
+[[mutant]]
+name = "the reload arc has no gap"
+file = "crates/shell/src/toolbar.rs"
+from = '''            path.arc_to(p(-radius, -radius), p(radius, radius), 30.0, 285.0, true);'''
+to = '''            path.arc_to(p(-radius, -radius), p(radius, radius), 0.0, 315.0, true);'''
+
+[[mutant]]
+name = "the reload arc doesn't reach the head"
+file = "crates/shell/src/toolbar.rs"
+from = '''            let tip = p(radius, -RELOAD_TIP);
+            path.line_to(tip);'''
+to = '''            let tip = p(radius, -RELOAD_TIP);'''
+
+[[mutant]]
+name = "the reload head's arm goes down"
+file = "crates/shell/src/toolbar.rs"
+from = '''            path.move_to(p(radius, -RELOAD_TIP - arm));'''
+to = '''            path.move_to(p(radius, -RELOAD_TIP + arm));'''
+
+[[mutant]]
+name = "back points right"
+file = "crates/shell/src/toolbar.rs"
+from = '''            let dir = if button == Button::Back { -1.0 } else { 1.0 };'''
+to = '''            let dir = if button == Button::Back { 1.0 } else { 1.0 };'''
+
+[[mutant]]
+name = "an arrow's head is a straight line"
+file = "crates/shell/src/toolbar.rs"
+from = '''            let (cos, sin) = (std::f32::consts::FRAC_1_SQRT_2, sign * std::f32::consts::FRAC_1_SQRT_2);'''
+to = '''            let (cos, sin) = (0.0f32, sign);'''
