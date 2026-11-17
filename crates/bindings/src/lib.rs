@@ -87,3 +87,40 @@ pub use unified_heap::{
     set_wrapper, strong, strong_value, unwrap, unwrap_object, unwrap_receiver, wrap, wrapper,
 };
 pub use v8_text::{LentString, ascii_scans_for_testing, borrowed_texts};
+
+/// Throws `exception` in `scope`'s isolate (`Isolate::ThrowException`),
+/// unless its script is being stopped (`TerminateExecution`, a worker's
+/// `terminate()`): V8's `ThrowException` clears the exception pending
+/// first, and a termination replaced by an exception would be one script
+/// can catch, so that it runs on. As Blink's `V8ThrowException::
+/// ThrowException`, which its `ExceptionState` throws through.
+pub fn throw(scope: &mut v8::PinScope<'_, '_>, exception: v8::Local<'_, v8::Value>) {
+    if scope.is_execution_terminating() {
+        return;
+    }
+    scope.throw_exception(exception);
+}
+
+/// A callback's script stopped (`TerminateExecution`), caught by the
+/// embedder: asked to stop again, until the next outermost entry into
+/// script ([`trace::enter_script`]). V8 throws the stop on into the script
+/// under the callback (the script that dispatched the event, defined the
+/// element) as the `TryCatch` ends, but the next of its API that runs
+/// script (making a wrapper, settling a promise, calling a function)
+/// clears it first, and that script would run on; asked again, V8 stops
+/// whatever script runs next at its first check (a function's entry, a
+/// loop's jump back). With no script under it (a task's callback), the
+/// next task's script runs: its entry ends the stop first (a window's,
+/// stopped by DevTools' `Runtime.terminateExecution`, as V8's inspector
+/// ends its stop as the outermost call completes; a worker's loop runs
+/// none). Asked for whether script is under or not: V8's API can't tell
+/// while a stop is pending (capturing the stack instantiates functions,
+/// which reports it). Blink asks once (`WorkerThread::
+/// EnsureScriptExecutionTerminates`): it stops a worker's script only
+/// after 2 s, its members rarely midway.
+#[cold]
+#[inline(never)]
+pub fn stop_again(scope: &v8::Isolate) {
+    scope.terminate_execution();
+    trace::stop_until_next_entry(scope.thread_safe_handle());
+}

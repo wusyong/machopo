@@ -593,7 +593,7 @@ fn resolve_module<'s>(
         );
         let message = v8::String::new(scope, &message).unwrap_or_else(|| v8::String::empty(scope));
         let error = v8::Exception::error(scope, message);
-        scope.throw_exception(error);
+        crate::throw(scope, error);
     }
     resolved
 }
@@ -671,7 +671,7 @@ fn import_meta_resolve(
             let message =
                 v8::String::new(scope, &message).unwrap_or_else(|| v8::String::empty(scope));
             let error = v8::Exception::type_error(scope, message);
-            scope.throw_exception(error);
+            crate::throw(scope, error);
         }
     }
 }

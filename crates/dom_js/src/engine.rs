@@ -20,6 +20,17 @@ use crate::templates::string;
 use crate::window::create_window_realm;
 
 /// V8 as the DOM's engine.
+/// Stops the script an engine runs, from any thread (`V8Engine::
+/// terminator`): what runs stops, and no script runs in the engine's isolate
+/// till its stack has unwound. Nothing once the engine is gone.
+pub struct ScriptTerminator(v8::IsolateHandle);
+
+impl ScriptTerminator {
+    pub fn terminate(&self) {
+        self.0.terminate_execution();
+    }
+}
+
 pub struct V8Engine {
     settings: EngineSettings,
     /// A context of no window, to make the first realm in (a realm is
@@ -71,6 +82,14 @@ impl V8Engine {
     }
 
     /// For whoever starts a renderer: its new DOM's engine.
+    /// What stops the script the engine runs from another thread (V8's
+    /// `TerminateExecution`, Blink's `WorkerThread::
+    /// EnsureScriptExecutionTerminates`): a worker's owner's, as it
+    /// terminates the worker.
+    pub fn terminator(&mut self) -> ScriptTerminator {
+        ScriptTerminator(self.data.isolate().thread_safe_handle())
+    }
+
     pub fn boxed(settings: EngineSettings) -> Box<dyn ScriptEngine> {
         Box::new(Self::new(settings))
     }

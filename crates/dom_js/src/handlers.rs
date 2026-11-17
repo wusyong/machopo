@@ -25,6 +25,9 @@ pub(crate) fn compile_event_handler(
     target: &TargetRoot,
     event_type: NameId,
 ) {
+    if crate::listeners::stopped(scope.scope()) {
+        return;
+    }
     let found = {
         let (state, mut no_gc) = scope.state();
         // Allocates nothing: a read.

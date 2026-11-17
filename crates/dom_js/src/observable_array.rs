@@ -393,7 +393,7 @@ fn set_the_length<'s>(
     if f64::from(uint32) != number {
         let message = templates::string(scope, "Invalid array length");
         let error = v8::Exception::range_error(scope, message);
-        scope.throw_exception(error);
+        bindings::throw(scope, error);
         return None;
     }
     // Converting may have run script that changed the list.

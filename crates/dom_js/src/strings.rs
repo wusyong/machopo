@@ -285,7 +285,7 @@ pub fn throw_range_error(scope: &mut v8::PinScope<'_, '_>, message: &str) {
         return;
     };
     let error = v8::Exception::range_error(scope, message);
-    scope.throw_exception(error);
+    bindings::throw(scope, error);
 }
 
 /// Throws a `TypeError` of `message`.
@@ -294,7 +294,7 @@ pub fn throw_type_error(scope: &mut v8::PinScope<'_, '_>, message: &str) {
         return;
     };
     let error = v8::Exception::type_error(scope, message);
-    scope.throw_exception(error);
+    bindings::throw(scope, error);
 }
 
 #[cfg(test)]

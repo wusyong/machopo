@@ -66,6 +66,7 @@ mod style_sheets;
 mod svg;
 mod svg_geometry;
 mod tasks;
+mod termination;
 mod text_controls;
 mod timers;
 mod ui_events;

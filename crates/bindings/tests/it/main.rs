@@ -20,6 +20,7 @@ mod isolate_state;
 mod modules;
 mod promise_resolvers;
 mod stack_traces;
+mod termination;
 mod unified_heap;
 mod v8_smoke;
 mod v8_text;

@@ -1658,6 +1658,12 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Scoped<'a, 's, 'i, 'r, A> {
             v8::tc_scope!(let tc, scope);
             match v8::json::parse(tc, string) {
                 Some(value) => Ok(value),
+                // Stopped (`TerminateExecution`): nothing to reject with,
+                // and the stop asked for again for script under this.
+                None if tc.has_terminated() => {
+                    bindings::stop_again(tc);
+                    Err(None)
+                }
                 None => Err(tc.exception()),
             }
         };
@@ -1885,6 +1891,11 @@ pub(crate) fn construct_custom_element<'s>(
     }
     if let Some(made) = given {
         return Some(v8::Local::new(scope.scope(), made));
+    }
+    // Stopped in its constructor: no failed element either (its wrapper's
+    // instance template would run V8's API that clears the termination).
+    if crate::listeners::stopped(scope.scope()) {
+        return None;
     }
     let (state, _) = scope.state_mut();
     let (root, interface) = state.dom.mutate(|cx| {
@@ -2300,6 +2311,9 @@ pub(crate) fn settle_promises(
     promises: &[u64],
     error: Option<&ApiError>,
 ) {
+    if crate::listeners::stopped(scope.scope()) {
+        return;
+    }
     let resolvers: Vec<v8::Global<v8::PromiseResolver>> = {
         let (state, _) = scope.state_mut();
         promises
@@ -2352,6 +2366,9 @@ pub(crate) fn upgrade_element(
     definition: &Persistent<dom::CustomElementDefinition>,
     element: &Persistent<Node>,
 ) -> bool {
+    if crate::listeners::stopped(scope.scope()) {
+        return false;
+    }
     let Some(constructor) = constructor_of(scope, definition) else {
         return false;
     };
@@ -2404,6 +2421,9 @@ pub(crate) fn call_lifecycle_callback(
     definition: &Persistent<dom::CustomElementDefinition>,
     callback: dom_api::LifecycleCallback,
 ) {
+    if crate::listeners::stopped(scope.scope()) {
+        return;
+    }
     use dom_api::LifecycleCallback as Which;
     let (function, this, documents) = {
         let (state, mut no_gc) = scope.state();
@@ -2517,7 +2537,7 @@ pub(crate) fn throw_abort_reason(
         })
     };
     let reason = reason.unwrap_or_else(|| v8::undefined(scope.scope()).into());
-    scope.scope().throw_exception(reason);
+    bindings::throw(scope.scope(), reason);
 }
 
 /// The engine's number for `object` (V8's identity hash, as Blink's

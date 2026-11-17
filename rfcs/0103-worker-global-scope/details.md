@@ -97,6 +97,46 @@
 
 和起草時憑記憶寫的不同的兩處：timer 的表不是 `ExecutionContext` 的欄位，是掛在它上面的 supplement；Browser 知道每個 dedicated worker，而且是 Browser 開始載入主 script。
 
+## `terminate()` 之後多久打斷正在跑的 script
+
+2026-11-17 查的，回答「待決定」第 8 條要選的事。
+
+**規範**：`terminate()` 的步驟是 terminate a worker，它和 worker 的 main loop 平行跑：設 closing flag、丟掉排著的 task、「Abort the script currently running in the worker」、清空頁面那一側的 port message queue，沒有等待的時間。規範留給 user agent 決定時間的只有另一種情形：worker 不再被需要（例如它的文件不在了）而 closing flag 設了之後還在跑時，user agent「may」terminate 它。
+
+**Chromium 為什麼等 2 秒**：2016 年以前 `terminate()` 是馬上呼叫 V8 的 `TerminateExecution()`。之後改成先排一個收尾的 task，2 秒後 worker 還沒開始收尾才打斷（codereview 2011763002，「Worker: Attempt to gracefully terminate WorkerThread as much as possible」，crbug 487050）。理由：被打斷之後，正在進行的 V8 呼叫會回傳空的 handle，沒處理這種情形的 C++ 程式會 crash；先讓 worker 在兩個 task 之間自己收尾，只有跑不停的 script 才強制打斷。2 秒是沿用更早的強制結束機制的時間（code review 裡 reviewer 的建議，第一版是 3 秒），程式裡留著「Adjust the delay based on UMA」的 TODO。所以這是實作上的選擇，不是規範要求的。
+
+**WPT**（`../third_party/wpt` 的 `0f195499f`）：`workers/` 裡呼叫 `terminate()` 的有 12 份，測的是頁面看得到的效果，沒有一份要求 worker 在多久之內停下：
+
+- `constructors/Worker/terminate.html`、`Worker_terminate_event_queue.htm`：`terminate()` 之後頁面不再收到 worker 的 `message`（頁面那一側的 queue 清空，和 worker 什麼時候停無關）。
+- `Worker-terminate-forever.html`、`Worker-terminate-forever-during-evaluation.html`（主 script、module、`importScripts()`、巢狀的 `importScripts()`、`import()`、top-level `await` 裡跑不停）：不 crash、不 hang、不觸發 `error`，被打斷的 script 之後的東西都不發生。
+- `Worker-termination-with-port-messages.html`：還有上千則 port 的訊息沒送進 worker 時 terminate，不 hang、不 crash。
+- `nested_worker_terminate_from_document.html` 等巢狀的：結束一串巢狀的 worker。
+
+這些在兩種做法下都應該通過。看得出差別的是 worker 停下之前還能做的、頁面以外的事（`SharedArrayBuffer` 的寫入、同步的請求），WPT 沒有測它們。
+
+## 1b 的原型：打斷 script
+
+2026-11-17，branch `0103`（1a 之後），macOS（Apple Silicon）。程式在 `terminate-prototype/`。
+
+一條新的 thread 上建 `V8Engine` 和一個 window，跑一個不會停的迴圈，另一條 thread 在 0、50、200、1000、5000、20000 µs 後呼叫 V8 的 `TerminateExecution()`；之後在那條 thread 上跑一次到期的 task、放掉 engine。9 種迴圈：建 event、建和插入節點（字串來回）、`dispatchEvent` 到一個 listener、丟和接 `DOMException`、`AbortController`（`abort()` 觸發 `onabort`）、`URL`、`Request`、`Response`、timer 和 microtask、`MessageChannel` 的訊息、`innerHTML` 和 `querySelectorAll`。
+
+- **145 次，沒有 panic、沒有 crash**，engine 和 DOM 的 heap 在被打斷之後都放得掉。
+- **兩種迴圈停不下來**：`dispatchEvent` 到 listener、`abort()` 觸發 `onabort`，打斷的時間不是 0 的每一次都停不下來。原因：`dom_js` 從 Rust 回頭呼叫 script 的每個地方（listener、timer、observer、idle callback 等，約 15 處，`listeners.rs`、`handlers.rs` 等）都用 V8 的 TryCatch 接住例外交給 `report_caught` 回報，打斷也被當成一般的例外接住、回報掉，外層的 JS 迴圈就繼續跑。
+
+1b 要處理的：這些地方接住的是打斷時（TryCatch 的 `HasTerminated()`）不回報、讓它繼續往外傳（`ReThrow`），呼叫的那一側不再呼叫下一個 script（分派 event 時下一個 listener、跑 timer 時下一個 timer）。測試照原型的做法：每種回頭呼叫 script 的路都在被打斷時停得下來。
+
+## V8 怎麼結束、清掉打斷
+
+2026-11-17 做 1b-1 時讀 `../third_party/rusty_v8/v8/src` 查的，決定「已決定的事項」第 13 條。
+
+- **打斷是 isolate 目前的例外的一個特殊值**（`Isolate::is_execution_terminating` 比較 `thread_local_top()->exception_` 和 `termination_exception`），清掉例外就清掉打斷。
+- **`TryCatch` 結束時**（`api.cc` 的 `TryCatch::~TryCatch`）：接住的是打斷、而且 call depth 不是 0（embedder 還在某個 V8 API 的呼叫裡，也就是 stack 上還有 script）時再丟出去；call depth 是 0 時 `Reset()`，打斷就結束了。所以從 Rust 的 task 直接呼叫的 callback 被打斷之後，下一個 callback 開始時 isolate 已經不在打斷的狀態；從別的 thread 要求的打斷（`TerminateExecution`）是一個 interrupt，要等 script 跑到檢查點（函式的入口、迴圈的回跳）才生效，Rust 剛進入時也不會已經在打斷的狀態。1b-1 一開始在這些 callback 的入口加的 11 道檢查因此走不到（mutation test 都沒抓到），拿掉了。
+- **會跑 script 的 API 一進來就清掉目前的例外**（`api-inl.h` 的 `PrepareForExecutionScope::ClearInternalException`）：呼叫函式、`NewInstance`（建 wrapper、`DOMException`）、reject promise、`JSON.parse` 都經過它。它之後才 `DCHECK(!is_execution_terminating())`，所以 debug 的 V8 加上 `--strict-termination-checks` 也抓不到。listener 被打斷之後，同一個成員裡接著用了這種 API，外層的 script 就繼續跑：`fetch` 的 signal 被 abort 時，abort 的 listener 不停地跑、被打斷，接著 `fetch` 的 promise 被 reject，外層的 `for (;;)` 停不下來（`dom_js` 的 `termination::script_called_back_stops_with_what_called_it` 的「a promise settled after a listener」）。不會跑 script 的 API（`Exception::TypeError`、`String::New`、`StackTrace::CurrentStackTrace`）用 `EnterV8NoScriptNoExceptionScope`，不清。
+- **打斷進行中時取 stack trace 會 DCHECK 失敗**：`CaptureDetailedStackTrace` 整理 API callback 的 frame 時要建它的函式（`ApiNatives::InstantiateFunction`），那裡回報目前的例外（`ReportPendingMessages`，`AllowExceptions::IsAllowed`）。所以「stack 上還有沒有 script」也問不了 V8；`bindings::stop_again` 一律再要求打斷，由下一次最外層的進入 script（`bindings::trace::enter_script`）取消。
+- **V8 的 inspector 的 `Runtime.terminateExecution`** 也是「打斷，到最外層的呼叫結束時取消」（用 `AddCallCompletedCallback`；rusty_v8 沒有這個 API 的 binding，所以用 `enter_script` 的計數）。
+
+**Blink 怎麼做**（Chromium `main` 的 `a5229e6c`，2026-11-17）：`WorkerThread::Terminate` 先在 worker 的 thread 上排收尾的 task，2 秒後還在跑才在 `EnsureScriptExecutionTerminates` 呼叫 `TerminateExecution`（整個 Blink 只有這一處）；收尾時 `NotifyContextDestroyed`，之後 `IsCallbackFunctionRunnable` 看到執行環境結束、不再呼叫 callback。打斷之後檢查 `IsExecutionTerminating` 的地方：listener 的入口（`JSBasedEventListener::Invoke`）、event handler 回傳之後（`JSEventHandler`）、丟例外前（`V8ThrowException::ThrowException`）、建 `DOMException` 前（`V8ThrowDOMException`）、回報錯誤和沒處理的 rejection 前（`V8Initializer`、`RejectedPromises`）；頂層的 script 的 `TryCatch::CanContinue()` 是 false 時 worker 設 `ForbidExecution()`。一般的 callback function（`V8ScriptRunner::CallFunction`）、建 wrapper、promise 都不檢查，也不再要求打斷：從程式看，Blink 也擋不住上面 `fetch` 那種情形（沒有在 Chrome 上試），但它只在 script 跑超過 2 秒時才打斷，碰到的機會少得多。
+
 ## 使用量
 
 chromestatus.com 的 `featurepopularity`，2026-11-15 的數字，Chrome 的 page load 比例。這幾個是 Chromium 舊的計數器，`python3 scripts/features.py` 沒有自動對到它們。

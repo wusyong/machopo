@@ -444,6 +444,9 @@ pub(crate) fn run_classic_script(
     document: &NodeRoot,
     script: &dom_api::ClassicScript<'_>,
 ) {
+    if crate::listeners::stopped(scope.scope()) {
+        return;
+    }
     let realm = {
         let (state, _) = scope.state();
         let id = state.dom.read(|cx| cx.node_id(document.get(cx.gc)));

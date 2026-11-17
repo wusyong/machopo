@@ -107,7 +107,7 @@ worker 的主 script 和 `importScripts()` 的 script 經過 Browser 的 `net` �
 
 ### 結束
 
-`worker.terminate()`、worker 自己的 `close()`、擁有它的文件被丟棄時 worker 結束。`terminate()` 要能打斷正在跑的 script（V8 的 `IsolateHandle::terminate_execution` 可以從別的 thread 呼叫）；之後那條 thread 照順序放掉 engine、`Dom` 和 isolate，再結束。
+`worker.terminate()`、worker 自己的 `close()`、擁有它的文件被丟棄時 worker 結束（「已決定的事項」第 12 條）。`terminate()` 馬上打斷正在跑的 script（V8 的 `IsolateHandle::terminate_execution` 可以從別的 thread 呼叫）；之後那條 thread 照順序放掉 engine、`Dom` 和 isolate，再結束。原型確認了打斷之後不會 crash，但 `dom_js` 回頭呼叫 script 的地方（listener、timer、observer）會把打斷當成一般的例外接住、回報掉，script 繼續跑（`details.md` 的「1b 的原型：打斷 script」）：那些地方要讓打斷繼續往外傳，呼叫的那一側不再呼叫下一個 script。
 
 ### 測試
 
@@ -193,6 +193,12 @@ Firefox 和 Servo 也是每個 worker 一條 thread、自己的 JS runtime（這
 5. **listener 和 wrapper 留在各自的 event target，不放進執行環境**（2026-11-17）。`Window` 照舊拿著它的 listener 和 JS 的 global 物件（wrapper）；1b 的 worker 的 global 是另一種 event target，自己拿著。和 Blink 一樣：listener 在 `EventTarget` 的 `EventTargetData` 裡，wrapper 是 `EventTarget` 的（它是 `ScriptWrappable`），`ExecutionContext` 兩者都沒有；machopo 的節點、`Window`、`EventTargetImpl` 已經各自拿著自己的 listener。不選放進執行環境：listener 是 `window` 這個物件的，放到環境上讓 global 變成 target 裡的特例；執行環境不是 JS 看得到的物件，沒有 wrapper 可放（Blink 的網頁和擴充功能的 script 共用一個 `ExecutionContext`、各有自己的 global）。非節點的 target 共用一個放 listener 的型別（Blink 的 `EventTargetData`）留到 1b 加 worker 的 global 時再看。
 6. **執行環境指回它的 global，由 `dom` 回答從 global 來的值**（2026-11-17）。base URL、origin 這類從 window 的文件算出來的值，由 `dom` 照執行環境的 global 回答（`context_base_url`、`context_origin`；1b 加上 worker 的 global）。指回 global 的欄位只在 `dom` 裡面用，沒有「給一個執行環境、拿回 window 或它的文件」的公開函式；算 origin 的邏輯（`about:` 的文件照它的 iframe 的文件）跟著從 `dom_api` 搬進 `dom`。和 Blink 一樣：`ExecutionContext` 的 `BaseURL()`、`GetSecurityOrigin()` 是 virtual，`LocalDOMWindow` 從它的文件回答。不選「執行環境自己存一份 URL 和 origin」：base URL 隨 `<base>` 改，每個改的地方都要記得同步。
 7. **從物件找 window 的 `dom` 函式是執行時檢查**（2026-11-17）。`dom` 本來就有從物件找到 window 的公開函式（`target_window`、`window_of(document_of(node))`），engine 建 wrapper 時也靠它們找 realm（`dom_api::realm_document`）；物件改記執行環境之後，`target_window` 在 `dom` 裡面經過執行環境找回 window，在 worker 的物件上回傳沒有。所以第 2 條由型別擋住的是「成員向 front 要現在的 realm 的 window」這條路，從物件找 window 是執行時檢查，和 Blink 的 `DynamicTo<LocalDOMWindow>(context)` 一樣。不選「改得更嚴」（engine 改用執行環境找 realm、這類函式拆成 window 才有和 worker 也有的兩組）：從節點出發的路（`window_of(document_of(node))`）照樣擋不住，要完全擋住得把 `dom` 的 API 照 realm 的種類拆開（「之後的可能」）。而且 worker 也有的成員在 window 的 realm 裡本來就該碰到 window（`dispatchEvent` 的路徑經過 window），兩邊都跑的程式只能在執行時分辨。
+8. **dedicated worker 向 Browser 登記**（2026-11-17，「待決定」原本的第 4 條）。`new Worker()` 時 renderer 告訴 Browser；Browser 記下它屬於哪個 renderer、哪個文件，載入它的主 script，worker 結束時清掉。1b 的 Browser 那一側只做這三件事。和 Chromium 一樣（`DedicatedWorker::Start` 的 `CreateWorkerHost`、Browser 的 `DedicatedWorkerHost` 和 `WorkerScriptFetcher`）。不選「renderer 自己建、Browser 不知道」：shared worker 要 Browser 找到它、service worker 要知道每個 client（dedicated worker 也是），儲存的 key 也掛在這裡，到時候 dedicated worker 的啟動流程得重寫。
+9. **worker 的子資源請求走 renderer 現有的通道，訊息帶它是哪個 client 的**（2026-11-17，「待決定」原本的第 5 條）。worker 的 thread 自己送 `FetchResource`，訊息多帶 client（main thread 或第幾個 worker）；回應也帶著它，renderer 收訊息的那一端照它排到那個 worker 的佇列，不經過 main thread（`importScripts()` 是同步的，頁面的 script 忙時 worker 照樣等得到回應）。Browser 照第 8 條的登記檢查 client 是不是這個 renderer 的 worker。Chromium 的效果一樣、做法不同：每個 worker 一條 `URLLoaderFactory` 的通道，Browser 登記時建好交給 renderer（`DedicatedWorkerHost` 替 worker 建 network factory，`WebWorkerFetchContext` 在 worker 的 thread 上用它）。不選「每個 worker 一條通道」：`protocol` 的訊息裡不能放通道（`docs/architecture.md` 的「Process 的邊界」規則 3、5），`ipc` 也還不能傳通道；拆成 process 之後收訊息的是 renderer 的 IO thread，照 client 分到各 thread 正好是它的工作，之後能傳通道時只換這一層。不選「經過 main thread 轉交」：頁面忙時 worker 卡住。
+10. **worker 的 engine 是 `dom_api` 裡另一個小的 trait**（2026-11-17，「待決定」原本的第 6 條；暫名 `WorkerEngine`）：建 worker 的 global、跑 classic script、跑到期的 task、收訊息、結束時打斷正在跑的 script；啟動 renderer 時和 `ScriptEngineFactory` 一樣多給一個建它的函式。`dom_js` 多一個實作它的型別，和 `V8Engine` 共用 isolate 和 template 的程式；`dom_wasm` 不實作（worker 的 script 是 JS）。和 Blink 一樣是兩個類別：frame 的 `ScriptController`（`bindings/core/v8/script_controller.h`）和 worker 的 `WorkerOrWorkletScriptController`（同一個目錄，由 worker 的 global 拿著）。不選擴充 `ScriptEngine`：它是照 frame 和文件設計的（建 window、parser 的 host、輸入、layout），worker 的那份大部分方法用不到。
+11. **worker 的 thread 和 event loop 是 `renderer` 的新模組**（2026-11-17，「待決定」原本的第 7 條；暫名 `worker_thread.rs`），和 main thread 的 scheduler（`task_queue.rs`）放在一起：共用佇列的型別、`RendererSender` 照 client 的分流（第 9 條）和啟動 renderer 時給的 engine 工廠（第 10 條）；`renderer` 已經在 `sanity.py boundary` 的 renderer 這一側。和 Chromium 一樣和 frame 的程式在同一個元件（Blink 的 `core/workers/`）。不選新的 crate：那些型別要搬到兩邊都用得到的地方，邊界的檢查也要多列一個；之後 `renderer` 太大時再拆。
+12. **worker 的結束**（2026-11-17，「待決定」原本的第 8 條）。由擁有它的那一側（頁面的 thread）發起，worker 的 thread 自己收尾：它的 engine（V8 的 context 和 persistent）、DOM 的 heap、isolate 照這個順序在它自己的 thread 上放掉（`Dom` 不是 `Send`），論證寫進 `crates/bindings/soundness.md`。`terminate()` 時**馬上**打斷正在跑的 script（V8 的 `TerminateExecution()`，從頁面的 thread 呼叫），同時排收尾的 task；之後排著的 task 不跑。文件被丟掉時走同一條路；renderer 結束時 main thread 等每個 worker 的 thread 結束才離開；結束之後才到的回應和訊息丟掉，Browser 照第 8 條的登記清掉它。和規範一樣（terminate a worker 要「Abort the script currently running in the worker」）。不選 Chromium 的「先排收尾的 task，2 秒後還在跑才打斷」：那是它的實作選擇，為了少走打斷之後 V8 呼叫回傳空值的路（`details.md` 的「`terminate()` 之後多久打斷正在跑的 script」）；這條路兩種做法都得處理好，馬上打斷讓測試每次都走到它。WPT 的 `workers/` 只測頁面看得到的效果，兩種做法都會通過。1b 的第一步用原型確認打斷之後從 bindings 一路退出來不會 crash。
+13. **被打斷的 callback 回到還有 script 在下面的地方時，再要求打斷一次**（2026-11-17，1b-1 的 mutation test 找到的漏洞之後選的，選項 C）。V8 會把正在進行的打斷清掉：會跑 script 的 API（呼叫函式、建 wrapper、reject promise、`JSON.parse`）一進來就先清掉目前的例外，打斷也是一種例外；debug 的 V8 先清、後 DCHECK，也抓不到。所以 listener 被打斷之後，同一個成員裡接著用了這種 API（例如 `fetch` 在 abort 時 reject），外層的 script 就繼續跑。`dom_js` 接住打斷的地方（回報例外的 `report_caught`、node filter、解析 JSON）在 stack 上還有 script 時，在自己的 thread 上再呼叫一次 `TerminateExecution()`：之後不管哪個 API 清掉，script 在下一個檢查點（函式的入口、迴圈的回跳）就停。底下沒有 script（task 直接呼叫的 callback）時不再要求：V8 在那裡自己結束打斷，下一個 task 照常跑（window 被 DevTools 的 `Runtime.terminateExecution` 打斷之後；worker 的 loop 不再跑 task）。另外照 Blink 的 `V8ThrowDOMException`，被打斷時連 `DOMException` 都不建（建它會清掉打斷），丟例外前也檢查（`bindings::throw`）。從 Rust 的 task 直接呼叫 callback 的入口的檢查拿掉：打斷在那裡已經被 V8 結束，從別的 thread 要求的打斷要等 script 在跑才生效，那些檢查走不到。Blink 只在 listener 的入口、建和丟例外前、回報錯誤前檢查，不再要求打斷：它先讓 worker 在兩個 task 之間收尾，2 秒後還在跑才打斷，成員做到一半被打斷的情形少；我們馬上打斷（第 12 條），那是常態。不選只逐處檢查（A，Blink 的做法）：每個「回頭呼叫 script 之後、同一個成員裡又用 V8 的 API」的地方都要一道，多半沒有測試走得到，`fetch` 這條就漏了。不選只再要求打斷、不留任何檢查（B）：打斷之後 embedder 不該再進 V8（V8 的 `--strict-termination-checks` 的約定），回頭呼叫 script 的入口照樣先檢查。平常的路上沒有成本：再要求打斷只在被打斷時走；檢查是讀一次 isolate 的狀態，只在呼叫 script 和丟例外的旁邊，一般的成員呼叫不經過。
 
 ## 待決定
 
@@ -202,15 +208,15 @@ Firefox 和 Servo 也是每個 worker 一條 thread、自己的 JS runtime（這
 2. （已決定，見「已決定的事項」第 2 條；比較過的三個做法在「理由和其他做法」。）
 3. （已決定，見「已決定的事項」第 3 條。）
 
-1b 開始前決定：
+1b 開始前決定的五條都決定了：
 
-4. **誰建 worker、Browser 知不知道**：renderer 的 main thread 直接建 thread（Browser 不知道），或照 Chromium 先向 Browser 登記（`DedicatedWorkerHost`：Browser 開始載入主 script、給 worker 子資源的通道、記著它屬於哪個文件）。看法：照 Chromium 登記，但 Browser 那一側只做載入和通道；理由是 worker 的請求通道（第 5 條）本來就要由 Browser 給，之後 storage 的 key 和 service worker 也掛在這裡。
-5. **worker 的請求通道**：worker 的 thread 自己有一條到 Browser 的請求通道（啟動時多給一端，或執行中向 Browser 要），或經過 main thread 轉交。看法：自己有一條；它要過 process 的邊界，照 `docs/architecture.md` 的「Process 的邊界」的規則 5 設計。
-6. **worker 的 engine 的介面**：`dom_api` 裡另一個 trait，或擴充 `ScriptEngine`。看法：另一個小的 trait。
-7. **event loop 放在哪**：`renderer` 的新模組，或新的 crate。看法：`renderer` 的新模組。
-8. **結束的順序**：`terminate()`、`close()`、文件丟棄、renderer 結束各自怎麼收尾，還在路上的訊息和回應怎麼處理。要寫成 `crates/bindings/soundness.md` 的論證。
+4. （已決定，見「已決定的事項」第 8 條。）
+5. （已決定，見「已決定的事項」第 9 條。）
+6. （已決定，見「已決定的事項」第 10 條。）
+7. （已決定，見「已決定的事項」第 11 條。）
+8. （已決定，見「已決定的事項」第 12 條。）
 
-怎麼回答：第 5、8 條可以先做一個不合併的原型（一條 thread、一個 isolate、跑一段 script 再結束）。
+1b 的第一步是一個原型：worker 的 thread 上跑 script，從另一條 thread 打斷正在呼叫 DOM 的 script，確認不會 crash、engine 和 heap 照第 12 條的順序放得掉。
 
 ## 之後的可能
 

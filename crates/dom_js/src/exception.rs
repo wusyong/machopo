@@ -346,6 +346,10 @@ pub(crate) fn new_quota_exceeded_error<'s>(
     quota: Option<f64>,
     requested: Option<f64>,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    // As `new_dom_exception`: none made while script is being stopped.
+    if crate::listeners::stopped(scope.scope()) {
+        return None;
+    }
     let function = quota_interface_object(scope)?;
     let scope = scope.scope();
     let message = v8::String::new(scope, message)?;
@@ -442,17 +446,23 @@ fn get_code<'s>(
 /// realm, with its stack: after the DOM's operation (V8 allocates).
 pub(crate) fn throw_dom_exception(scope: &mut Scope<'_, '_, '_>, name: &str, message: &str) {
     if let Some(exception) = new_dom_exception(scope, name, message) {
-        scope.scope().throw_exception(exception.into());
+        bindings::throw(scope.scope(), exception.into());
     }
 }
 
 /// A new `DOMException` of `name` and `message`, made in the current
 /// realm, with its stack (an abort reason's): out of the DOM's operations.
+/// None while script is being stopped (`TerminateExecution`): constructing
+/// it runs V8's API that clears the stop, as Blink's `V8ThrowDOMException`
+/// makes none then either.
 pub(crate) fn new_dom_exception<'s>(
     scope: &mut Scope<'_, 's, '_>,
     name: &str,
     message: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    if crate::listeners::stopped(scope.scope()) {
+        return None;
+    }
     // The DOM's `QuotaExceededError` is one of its own interface, its
     // quota and amount requested unknown (null).
     if name == "QuotaExceededError" {
@@ -477,5 +487,5 @@ pub(crate) fn throw_range_error(scope: &mut v8::PinScope<'_, '_>, message: &str)
         return;
     };
     let error = v8::Exception::range_error(scope, message);
-    scope.throw_exception(error);
+    bindings::throw(scope, error);
 }

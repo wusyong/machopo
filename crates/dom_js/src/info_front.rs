@@ -2322,7 +2322,7 @@ impl<'s, K: InfoKind<'s>> dom_api::typed::ScriptFront for InfoFront<'s, K> {
             // Caught so that the call's `TryCatch` ends, thrown again at
             // once: V8 holds it until the member returns, as it is.
             filtered.map_err(|thrown| {
-                scope.scope().throw_exception(thrown);
+                bindings::throw(scope.scope(), thrown);
                 ApiError::Thrown
             })
         })

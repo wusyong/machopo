@@ -12,7 +12,9 @@
 //! has it (Blink's `UserTiming`, category `blink.user_timing`).
 //!
 //! [`enter_script`] counts the embedder's entries into script on a thread,
-//! for spans named as Chrome's are (the outermost call is a `FunctionCall`).
+//! for spans named as Chrome's are (the outermost call is a `FunctionCall`),
+//! and ends a stop asked for again ([`crate::stop_again`]) before the next
+//! outermost one.
 
 use std::cell::Cell;
 use std::path::Path;
@@ -146,6 +148,15 @@ pub fn measure(name: &str, start_ago: i64, end_ago: i64) {
 thread_local! {
     /// How many entries into script ([`enter_script`]) this thread is in.
     static SCRIPT_DEPTH: Cell<u32> = const { Cell::new(0) };
+    /// The isolate asked to stop again ([`crate::stop_again`]), its stop
+    /// to end as the next outermost entry into script starts.
+    static STOPPED_AGAIN: Cell<Option<v8::IsolateHandle>> = const { Cell::new(None) };
+}
+
+/// `isolate`, asked to stop again, ends that stop as the next outermost
+/// entry into script starts: the script it stopped has ended by then.
+pub(crate) fn stop_until_next_entry(isolate: v8::IsolateHandle) {
+    STOPPED_AGAIN.with(|stopped| stopped.set(Some(isolate)));
 }
 
 /// The embedder's entry into script (a call, a construction, a script's or
@@ -194,6 +205,14 @@ pub fn enter_script() -> ScriptEntry {
                 .expect("script nests no deeper than the stack"),
         )
     });
+    if depth == 0
+        && let Some(isolate) = STOPPED_AGAIN.with(Cell::take)
+    {
+        // What it stopped ended with the outermost entry before; the stop
+        // asked for again may not have been run into by then, and would
+        // stop this entry's script.
+        isolate.cancel_terminate_execution();
+    }
     ScriptEntry {
         outermost: depth == 0,
     }

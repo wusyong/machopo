@@ -1,0 +1,225 @@
+# 1b-1: script stopped from another thread (`TerminateExecution`) stops
+# with what called it: no callback reports or clears it, no throw replaces
+# it, no exception is made while it is pending, it is asked for again when
+# a callback caught it (until the next outermost entry into script), and
+# what would call script back while it is pending doesn't.
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it"]
+timeout = 900
+
+[[mutant]]
+name = "a caught stop is reported and cleared"
+file = "crates/dom_js/src/listeners.rs"
+from = '''    if tc.has_terminated() {
+        bindings::stop_again(tc);
+        return;
+    }'''
+to = '''    if false {
+        bindings::stop_again(tc);
+        return;
+    }'''
+
+[[mutant]]
+name = "a callback's caught stop isn't asked for again"
+file = "crates/dom_js/src/listeners.rs"
+from = '''    if tc.has_terminated() {
+        bindings::stop_again(tc);'''
+to = '''    if tc.has_terminated() {
+        let _ = &tc;'''
+
+[[mutant]]
+name = "asking to stop again asks nothing"
+file = "crates/bindings/src/lib.rs"
+from = '''    scope.terminate_execution();
+    trace::stop_until_next_entry(scope.thread_safe_handle());'''
+to = '''    let _ = scope;
+    trace::stop_until_next_entry(scope.thread_safe_handle());'''
+test = ["cargo", "test", "-q", "-p", "bindings", "--test", "it", "termination::"]
+
+[[mutant]]
+name = "a stop asked for again outlives its script"
+file = "crates/bindings/src/trace.rs"
+from = '''        isolate.cancel_terminate_execution();'''
+to = '''        let _ = isolate;'''
+test = ["cargo", "test", "-q", "-p", "bindings", "--test", "it", "termination::"]
+
+[[mutant]]
+name = "a throw replaces the stop"
+file = "crates/bindings/src/lib.rs"
+from = '''    if scope.is_execution_terminating() {
+        return;
+    }
+    scope.throw_exception(exception);'''
+to = '''    if false {
+        return;
+    }
+    scope.throw_exception(exception);'''
+
+[[mutant]]
+name = "nothing is ever stopped"
+file = "crates/dom_js/src/listeners.rs"
+from = '''    scope.is_execution_terminating()
+}'''
+to = '''    false
+}'''
+
+[[mutant]]
+name = "a DOMException is made while stopped"
+file = "crates/dom_js/src/exception.rs"
+from = '''    message: &str,
+) -> Option<v8::Local<'s, v8::Object>> {
+    if crate::listeners::stopped(scope.scope()) {'''
+to = '''    message: &str,
+) -> Option<v8::Local<'s, v8::Object>> {
+    if false {'''
+
+[[mutant]]
+name = "a QuotaExceededError is made while stopped"
+file = "crates/dom_js/src/exception.rs"
+from = '''    // As `new_dom_exception`: none made while script is being stopped.
+    if crate::listeners::stopped(scope.scope()) {'''
+to = '''    // As `new_dom_exception`: none made while script is being stopped.
+    if false {'''
+
+[[mutant]]
+name = "a node filter's stop is thrown again as an exception"
+file = "crates/dom_js/src/listeners.rs"
+from = '''        None if tc.has_terminated() => {
+            bindings::stop_again(tc);
+            Err(v8::undefined(tc).into())'''
+to = '''        None if false => {
+            bindings::stop_again(tc);
+            Err(v8::undefined(tc).into())'''
+
+[[mutant]]
+name = "a node filter's stop isn't asked for again"
+file = "crates/dom_js/src/listeners.rs"
+from = '''        None if tc.has_terminated() => {
+            bindings::stop_again(tc);
+            Err(v8::undefined(tc).into())'''
+to = '''        None if tc.has_terminated() => {
+            let _ = &tc;
+            Err(v8::undefined(tc).into())'''
+
+[[mutant]]
+name = "a JSON body stopped in its parse rejects"
+file = "crates/dom_js/src/front.rs"
+from = '''                None if tc.has_terminated() => {'''
+to = '''                None if false => {'''
+
+[[mutant]]
+name = "a JSON body's stop isn't asked for again"
+file = "crates/dom_js/src/front.rs"
+from = '''                    bindings::stop_again(tc);
+                    Err(None)'''
+to = '''                    let _ = &tc;
+                    Err(None)'''
+
+[[mutant]]
+name = "the next listener is called when stopped"
+file = "crates/dom_js/src/listeners.rs"
+from = '''    argument: v8::Local<'s, v8::Object>,
+) {
+    if stopped(scope.scope()) {
+        return;'''
+to = '''    argument: v8::Local<'s, v8::Object>,
+) {
+    if false {
+        return;'''
+
+[[mutant]]
+name = "the next event handler is called when stopped"
+file = "crates/dom_js/src/listeners.rs"
+from = '''    handler: HandlerCall<'s>,
+) {
+    if stopped(scope.scope()) {
+        return;'''
+to = '''    handler: HandlerCall<'s>,
+) {
+    if false {
+        return;'''
+
+[[mutant]]
+name = "the next event handler is compiled when stopped"
+file = "crates/dom_js/src/handlers.rs"
+from = '''    event_type: NameId,
+) {
+    if crate::listeners::stopped(scope.scope()) {
+        return;'''
+to = '''    event_type: NameId,
+) {
+    if false {
+        return;'''
+
+[[mutant]]
+name = "the next element is upgraded when stopped"
+file = "crates/dom_js/src/front.rs"
+from = '''    element: &Persistent<Node>,
+) -> bool {
+    if crate::listeners::stopped(scope.scope()) {
+        return false;'''
+to = '''    element: &Persistent<Node>,
+) -> bool {
+    if false {
+        return false;'''
+
+[[mutant]]
+name = "the next lifecycle callback is called when stopped"
+file = "crates/dom_js/src/front.rs"
+from = '''    callback: dom_api::LifecycleCallback,
+) {
+    if crate::listeners::stopped(scope.scope()) {
+        return;'''
+to = '''    callback: dom_api::LifecycleCallback,
+) {
+    if false {
+        return;'''
+
+[[mutant]]
+name = "the next classic script runs when stopped"
+file = "crates/dom_js/src/frames.rs"
+from = '''    script: &dom_api::ClassicScript<'_>,
+) {
+    if crate::listeners::stopped(scope.scope()) {
+        return;'''
+to = '''    script: &dom_api::ClassicScript<'_>,
+) {
+    if false {
+        return;'''
+
+[[mutant]]
+name = "promises are settled when stopped"
+file = "crates/dom_js/src/front.rs"
+from = '''    error: Option<&ApiError>,
+) {
+    if crate::listeners::stopped(scope.scope()) {
+        return;'''
+to = '''    error: Option<&ApiError>,
+) {
+    if false {
+        return;'''
+
+[[mutant]]
+name = "a failed element is made for a constructor stopped"
+file = "crates/dom_js/src/front.rs"
+from = '''    // instance template would run V8's API that clears the termination).
+    if crate::listeners::stopped(scope.scope()) {
+        return None;'''
+to = '''    // instance template would run V8's API that clears the termination).
+    if false {
+        return None;'''
+
+[[mutant]]
+name = "a fetch is rejected when stopped"
+file = "crates/dom_js/src/listeners.rs"
+from = '''    signal: &Persistent<dom::EventTargetImpl>,
+) {
+    if stopped(scope.scope()) {
+        return;
+    }
+    let Some(resolver)'''
+to = '''    signal: &Persistent<dom::EventTargetImpl>,
+) {
+    if false {
+        return;
+    }
+    let Some(resolver)'''

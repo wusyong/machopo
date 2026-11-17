@@ -46,6 +46,18 @@ pub(crate) fn wrap<'s>(scope: &mut Scope<'_, 's, '_>, have: Have<'s>) -> v8::Loc
     }
 }
 
+/// Whether the isolate's script is being stopped (`TerminateExecution`,
+/// a worker's `terminate()`): what would call script back while script
+/// that called the DOM is stopping returns at once instead, as V8 asks of
+/// embedders (`--strict-termination-checks`) and Blink's listeners check
+/// (`JSBasedEventListener::Invoke`). Only there: script a task calls back
+/// with none under it is never stopped as it starts (V8 ends a stop as the
+/// outermost `TryCatch` ends, and one asked for from another thread waits
+/// for script to run).
+pub(crate) fn stopped(scope: &v8::Isolate) -> bool {
+    scope.is_execution_terminating()
+}
+
 /// V8 as the DOM's script host out of any member's call: what runs the
 /// timers (`run_timers`), reports an exception (the `error` event's
 /// listeners) and a rejection; the values it stores, V8's.
@@ -781,6 +793,9 @@ fn call_callback<'s>(
     this: v8::Local<'s, v8::Object>,
     argument: v8::Local<'s, v8::Object>,
 ) {
+    if stopped(scope.scope()) {
+        return;
+    }
     v8::tc_scope!(let scope, scope.scope());
     let result = match v8::Local::<v8::Function>::try_from(callback) {
         Ok(function) => function.call(scope, this.into(), &[argument.into()]),
@@ -873,6 +888,12 @@ pub(crate) fn call_node_filter<'s>(
     let converted = result.and_then(|value| crate::front::to_uint32(tc, value));
     match converted {
         Some(value) => Ok(u16::try_from(value & 0xFFFF).expect("the low 16 bits")),
+        // Stopped: V8 throws the stop on as the `TryCatch` ends; what the
+        // member throws again is not thrown (`bindings::throw`).
+        None if tc.has_terminated() => {
+            bindings::stop_again(tc);
+            Err(v8::undefined(tc).into())
+        }
         None => Err(tc.exception().unwrap_or_else(|| v8::undefined(tc).into())),
     }
 }
@@ -889,6 +910,9 @@ fn call_handler<'s>(
     argument: v8::Local<'s, v8::Object>,
     handler: HandlerCall<'s>,
 ) {
+    if stopped(scope.scope()) {
+        return;
+    }
     let Ok(function) = v8::Local::<v8::Function>::try_from(callback) else {
         return;
     };
@@ -1079,12 +1103,17 @@ fn set_abort_reason(
 }
 
 /// The DOM's pending promise numbered `promise` rejected with `signal`'s
-/// abort reason; nothing if its resolver is gone.
+/// abort reason; nothing if its resolver is gone, or while script is being
+/// stopped (a signal's listener stopped before its fetch is rejected:
+/// rejecting runs V8's API that clears the stop).
 pub(crate) fn reject_promise_with_reason(
     scope: &mut Scope<'_, '_, '_>,
     promise: u64,
     signal: &Persistent<dom::EventTargetImpl>,
 ) {
+    if stopped(scope.scope()) {
+        return;
+    }
     let Some(resolver) = scope.state_mut().0.when_defined.remove(&promise) else {
         return;
     };
@@ -1265,6 +1294,14 @@ fn report_caught_of(
     at: ReportAt<'_>,
     url: Option<&str>,
 ) {
+    // The script being stopped (`TerminateExecution`): nothing to report,
+    // and not cleared (`reset`), which would cancel it; V8 throws it on as
+    // the `TryCatch` ends while script is on the stack, and it is asked
+    // for again for when V8's API clears it (`bindings::stop_again`).
+    if tc.has_terminated() {
+        bindings::stop_again(tc);
+        return;
+    }
     let Some(mut thrown) = Thrown::caught(tc) else {
         return;
     };

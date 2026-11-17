@@ -162,6 +162,7 @@
 | raster 的 playback panic 之後，DevTools 的 Console 多一筆警告：`RenderThread` 收到 `ToMainThread::RasterFailed` 加一筆、每個 task 之後拿 canvas 的失敗（`renderer` 的 `render_thread/documents.rs` 的 `log_raster_failure`、`log_canvas_raster_failure`）；以及留成底色的 tile 在視窗裡的樣子 | 兩頭各有測試（`compositor` 送出訊息、`LogEntry::raster_failed` 的內容、`raster` 的 tile 是底色），中間這兩小段要整個瀏覽器跑起來才走得到，而沒有頁面內容能讓 raster panic（已知的那個被擋在 Vello 前面） | 審查 | 加一個只給測試用的啟動參數讓接下來幾次 raster 失敗（`RasterCache::fail_next_for_testing` 已經有），寫成 `shell` 的 `devtools_log` 測試和一份情境 |
 | 點陣 glyph 的 ink bounds：外側 bearing 的正負號，和 Apple Color Emoji 專用的位移（`raster` 的 `ink.rs` 的 `bitmap_ink`） | 測試用的 Noto Color Emoji（CBDT）外側 bearing 是 0，弄反了也沒有測試失敗；要 sbix 的字型才測得到，手上沒有可以放進 repo 的 | 審查：算法照 glifo 擺點陣圖的那一段 | 找一個授權允許的 sbix 字型（或自己做一個子集）加測試 |
 | 沒有外框線的 COLR glyph 的 ink bounds 是空的（`raster` 的 `ink.rs`） | 沒有這種字型的測試 | 審查 | 做了 COLR 的範圍之後一起加測試 |
+| DOM 回頭呼叫的 script 被打斷之後，`dom_js` 接住它的地方再要求打斷（`report_caught_of`、node filter、解析 JSON 呼叫 `bindings::stop_again`），被打斷時不建 `DOMException`、`QuotaExceededError`（`exception.rs` 的 `new_dom_exception`、`new_quota_exceeded_error`），node filter 不把打斷交給成員再丟一次，JSON 解析到一半被打斷時不 reject | 測試走得到的巢狀的路上，會清掉打斷的 V8 API 前都有自己的入口檢查，拿掉再要求打斷看不出差別（兩層互相遮住）；沒找到「callback 被打斷之後同一個成員接著丟 `DOMException`」的路；`dom_js` 的 `termination::` 裡解析 JSON 的迴圈不一定在解析中被打斷 | `bindings` 的 `termination::` 直接測再要求打斷和取消；`dom_js` 的 `termination::` 的其他路；審查 | 找到一條「被打斷之後同一個成員裡用了會跑 script 的 V8 API、沒有入口檢查」的路，或「接著丟 `DOMException`」的成員時，加進 `termination::`；JSON 用 1b-5 的 worker 在解析大 body 時 `terminate()` |
 
 ## 沒有計數守著的優化
 
@@ -308,6 +309,7 @@
 - `IntersectionObserver` 的可見的判斷，矩形相交時先比外框的那一步不嚴格（`paint` 的 `hit_test::overlaps`：邊相接也算過）：接著照平行四邊形的兩個軸比，軸對齊的框的兩個軸就是 x 和 y，一樣是嚴格的；只差在轉過的框的角剛好落在 target 的邊上，浮點數幾乎不會剛好相等。
 - number 和 range 的 step：`stepUp()` 不先看最小值大於最大值（下一步的對齊的最大值低於最小值，照樣不改），`valueAsNumber` 設成 `NaN` 時把值設成 `"NaN"`（sanitization 把它變成空的，range 的是預設值，和清空一樣），使用者往上加時不先把低於最小值的值設成最小值、在最大值以上時不先停下（`dom` 的 `step_range.rs` 的 `StepRange::apply` 夾到對齊的最小值、往反方向時不改，number 和 range 的 step base 有 `min` 時就是它，結果一樣）。
 - DOM 的 `new DOMRectReadOnly(...)` 做出的 rect 標成 `DOMRect`（`dom_api` 的 `geometry::construct_read_only_rect` 的 `read_only`）：建構子的 wrapper 是建構的呼叫自己做的，prototype 照 `new.target`，不經過照 `read_only` 選 interface（`typed::interface_of`）的那一步，wrapper 之後一直留著；`DOMRect` 的 setter 由 V8 的 signature 擋掉不是 `DOMRect` 的物件。`read_only` 只對 DOM 做的、之後才包 wrapper 的 rect 有作用（`fromRect`、observer 的 entry），它們有測試。
+- DOM 回頭呼叫 script 的入口在被打斷時直接回來（`dom_js` 的 `listeners.rs` 的 `call_callback`、`call_handler`，`handlers.rs` 的 `compile_event_handler`，`front.rs` 的 `upgrade_element`、`call_lifecycle_callback`、`settle_promises`，`frames.rs` 的 `run_classic_script`）：拿掉時下一個 callback 照樣被呼叫，但前一個被打斷時已經再要求了打斷（`bindings::stop_again`），它在函式的入口就停下，看不到差別。留著是照 V8 的約定（打斷之後 embedder 不再進 V8，`--strict-termination-checks`），和 Blink 的 listener 的入口一樣（`JSBasedEventListener::Invoke`）；也省下建 wrapper、編譯 handler 的工夫。
 
 - debug build 比對 fast path 和 tree builder 的結果時，不比 input 的型別（`html` 的 `fast_path_build::same_tree` 的 `input_kind`）：兩邊屬性一樣時，只有 fast path 把 input 建錯才會型別不同，檢查就是為了抓這個；fast path 建對時拿掉它結果一樣。fast path 照屬性建 input 的型別由 `html` 的 `fast_path::inputs_are_made_of_their_types` 直接比兩種 parser 的結果守著。
 

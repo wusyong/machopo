@@ -1,0 +1,32 @@
+diff --git a/crates/dom_js/src/engine.rs b/crates/dom_js/src/engine.rs
+index f422698..d97c075 100644
+--- a/crates/dom_js/src/engine.rs
++++ b/crates/dom_js/src/engine.rs
+@@ -71,6 +71,15 @@ impl V8Engine {
+     }
+ 
+     /// For whoever starts a renderer: its new DOM's engine.
++    /// PROTOTYPE (RFC 0103, 1b): what another thread calls to stop the
++    /// script this engine runs (V8's `TerminateExecution`).
++    pub fn prototype_terminator(&mut self) -> Box<dyn Fn() + Send> {
++        let handle = self.data.isolate().thread_safe_handle();
++        Box::new(move || {
++            handle.terminate_execution();
++        })
++    }
++
+     pub fn boxed(settings: EngineSettings) -> Box<dyn ScriptEngine> {
+         Box::new(Self::new(settings))
+     }
+diff --git a/crates/dom_js/tests/it/main.rs b/crates/dom_js/tests/it/main.rs
+index dd08e3b..c0f7e22 100644
+--- a/crates/dom_js/tests/it/main.rs
++++ b/crates/dom_js/tests/it/main.rs
+@@ -9,6 +9,7 @@
+ )]
+ 
+ mod abort;
++mod prototype_terminate;
+ mod activation;
+ mod bench;
+ mod blobs;
