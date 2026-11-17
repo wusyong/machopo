@@ -69,11 +69,13 @@ fn a_node_has_one_wrapper() {
 /// the prototype, a constructor the interface object itself (its length
 /// its required parameters'); interface objects aren't the global's
 /// enumerable properties, their `prototype` is read-only, and those
-/// without a constructor throw on `new`.
+/// without a constructor throw on `new`. Of the interfaces a window's
+/// realm has.
 #[test]
 fn the_tables_members_are_webidl_shaped() {
     let mut env = Env::window("https://example.test/");
-    for interface in INTERFACES {
+    // Those a window's realm has (not a worker's globals' own).
+    for interface in INTERFACES.iter().filter(|desc| desc.exposed.window) {
         let name = interface.name;
         // An observable array attribute has a setter of its own (WebIDL's),
         // and so does a `[Replaceable]` one.

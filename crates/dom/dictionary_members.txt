@@ -106,6 +106,7 @@ modifierSymbol
 modifierSymbolLock
 movementX
 movementY
+name
 newURL
 oldURL
 once

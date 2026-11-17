@@ -1,9 +1,10 @@
-//! A window's `crypto` (WebCrypto's `Crypto`, Blink's `modules/crypto`):
-//! the same object each time; what it does is `dom_api`'s.
+//! A realm's `crypto` (WebCrypto's `Crypto`, Blink's `modules/crypto`):
+//! its execution context's, the same object each time; what it does is
+//! `dom_api`'s.
 
 use elise::{Gc, GcObject, JsEdge};
 
-use crate::{Cx, Window, sites};
+use crate::{Cx, ExecutionContext, sites};
 
 #[derive(GcObject)]
 pub struct Crypto {
@@ -11,15 +12,13 @@ pub struct Crypto {
 }
 
 impl<'gc> Cx<'_, 'gc> {
-    /// `window`'s `crypto`, the same each time.
-    pub fn window_crypto(&self, window: Gc<'gc, Window>) -> Gc<'gc, Crypto> {
-        if let Some(crypto) = self.window_context(window).crypto.get(self.gc) {
+    /// `context`'s `crypto`, the same each time.
+    pub fn context_crypto(&self, context: Gc<'gc, ExecutionContext>) -> Gc<'gc, Crypto> {
+        if let Some(crypto) = context.crypto.get(self.gc) {
             return crypto;
         }
         let crypto = self.gc.alloc_in(&sites::OTHER, CryptoInit { wrapper: () });
-        self.window_context(window)
-            .crypto
-            .set(self.gc, Some(crypto));
+        context.crypto.set(self.gc, Some(crypto));
         crypto
     }
 

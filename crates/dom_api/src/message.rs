@@ -47,8 +47,8 @@ enum TargetOrigin<S> {
 
 /// A message in the operation.
 pub struct MessageParam<'a, 'gc> {
-    payload: &'a Cell<Option<SerializedMessage>>,
-    ports: Vec<Gc<'gc, EventTargetImpl>>,
+    pub(crate) payload: &'a Cell<Option<SerializedMessage>>,
+    pub(crate) ports: Vec<Gc<'gc, EventTargetImpl>>,
     target_origin: Option<&'a str>,
 }
 

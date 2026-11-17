@@ -121,7 +121,8 @@ pub struct ErrorInfo {
 }
 
 /// The target `new EventTarget()` makes: an event target that is nothing
-/// else; or a message port (its `port`).
+/// else; or a message port (its `port`), a `Worker` (`worker`) and the
+/// others of no node, each with its data.
 #[derive(GcObject)]
 pub struct EventTargetImpl {
     listeners: Member<HeapVector<Listener>>,
@@ -141,6 +142,8 @@ pub struct EventTargetImpl {
     pub(crate) connection: Member<Window>,
     /// An `AbortSignal`'s state (`abort`).
     pub(crate) abort: Member<crate::AbortSignalData>,
+    /// A `Worker`'s data (`worker`).
+    pub(crate) worker: Member<crate::WorkerObjectData>,
     /// `new EventTarget()`'s: the execution context of the realm whose
     /// script made it, its relevant global's.
     context: Member<crate::ExecutionContext>,
@@ -1487,6 +1490,7 @@ impl<'gc> Cx<'_, 'gc> {
                 wake_lock: None,
                 connection: None,
                 abort: None,
+                worker: None,
                 context: None,
                 wrapper: (),
             },

@@ -38,6 +38,7 @@ mod text;
 mod tree;
 mod ua_shadow;
 mod window;
+mod worker;
 mod worker_global;
 
 use dom::{Cx, NodeRef};

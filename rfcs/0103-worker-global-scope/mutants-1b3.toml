@@ -1,0 +1,160 @@
+# 1b-3: dom_api's Worker, WorkerGlobalScope and DedicatedWorkerGlobalScope,
+# their hosts (WorkerHost, WorkerGlobalHost), dom's Worker object.
+test = ["cargo", "test", "-q", "-p", "dom", "-p", "dom_api"]
+timeout = 900
+
+[[mutant]]
+name = "a module worker starts"
+file = "crates/dom_api/src/worker.rs"
+from = '''        "module" => {
+            return Err(dom_error('''
+to = '''        "module" if false => {
+            return Err(dom_error('''
+
+[[mutant]]
+name = "a worker of any type starts"
+file = "crates/dom_api/src/worker.rs"
+from = '''        other => {
+            return Err(ApiError::Type(format!('''
+to = '''        other => {
+            let _ = Err::<(), _>(ApiError::Type(format!('''
+
+[[mutant]]
+name = "a worker's URL isn't against the base URL"
+file = "crates/dom_api/src/worker.rs"
+from = '''        .base_url(base.as_ref())'''
+to = '''        .base_url(None)'''
+
+[[mutant]]
+name = "a worker has no name"
+file = "crates/dom_api/src/worker.rs"
+from = '''        name: options.name.clone(),'''
+to = '''        name: String::new(),'''
+
+[[mutant]]
+name = "a worker's owner has no origin"
+file = "crates/dom_api/src/worker.rs"
+from = '''        owner_origin: cx.context_origin(context),'''
+to = '''        owner_origin: None,'''
+
+[[mutant]]
+name = "a worker's number isn't its host's"
+file = "crates/dom_api/src/worker.rs"
+from = '''    Ok(cx.create_worker_object(context, id))'''
+to = '''    Ok(cx.create_worker_object(context, id.wrapping_add(1)))'''
+
+[[mutant]]
+name = "a port goes to a worker"
+file = "crates/dom_api/src/worker.rs"
+from = '''    if !message.ports.is_empty() {
+        return Err(dom_error(
+            ExceptionName::DataClone,
+            "A MessagePort can't be transferred to a worker.",'''
+to = '''    if message.ports.is_empty() && false {
+        return Err(dom_error(
+            ExceptionName::DataClone,
+            "A MessagePort can't be transferred to a worker.",'''
+
+[[mutant]]
+name = "a terminated worker is posted to"
+file = "crates/dom_api/src/worker.rs"
+from = '''    if cx.worker_terminated(this) {
+        return Ok(());
+    }
+    let Some(payload) = message.payload.take() else {'''
+to = '''    if false {
+        return Ok(());
+    }
+    let Some(payload) = message.payload.take() else {'''
+
+[[mutant]]
+name = "a message isn't posted to the worker"
+file = "crates/dom_api/src/worker.rs"
+from = '''        host.post_to_worker(cx.worker_id(this), payload);'''
+to = '''        let _ = (host, payload);'''
+
+[[mutant]]
+name = "a worker is terminated twice"
+file = "crates/dom_api/src/worker.rs"
+from = '''    if cx.worker_terminated(this) {
+        return Ok(());
+    }
+    cx.terminate_worker_object(this);'''
+to = '''    if false {
+        return Ok(());
+    }
+    cx.terminate_worker_object(this);'''
+
+[[mutant]]
+name = "a worker terminated isn't marked"
+file = "crates/dom_api/src/worker.rs"
+from = '''    cx.terminate_worker_object(this);
+'''
+to = '''
+'''
+
+[[mutant]]
+name = "a worker isn't terminated by its host"
+file = "crates/dom_api/src/worker.rs"
+from = '''        host.terminate_worker(cx.worker_id(this));'''
+to = '''        let _ = host;'''
+
+[[mutant]]
+name = "a port goes out of a worker"
+file = "crates/dom_api/src/worker.rs"
+from = '''    if !message.ports.is_empty() {
+        return Err(dom_error(
+            ExceptionName::DataClone,
+            "A MessagePort can't be transferred out of a worker.",'''
+to = '''    if message.ports.is_empty() && false {
+        return Err(dom_error(
+            ExceptionName::DataClone,
+            "A MessagePort can't be transferred out of a worker.",'''
+
+[[mutant]]
+name = "a worker's message isn't posted to its owner"
+file = "crates/dom_api/src/worker.rs"
+from = '''        host.post_to_owner(payload);'''
+to = '''        let _ = (host, payload);'''
+
+[[mutant]]
+name = "a worker's close isn't its host's"
+file = "crates/dom_api/src/worker.rs"
+from = '''        host.close();'''
+to = '''        let _ = host;'''
+
+[[mutant]]
+name = "a worker's global has no name"
+file = "crates/dom_api/src/worker.rs"
+from = '''    Ok(DomStr::Owned(cx.worker_global_name(this).clone()))'''
+to = '''    Ok(DomStr::Owned(dom::DomString::new("")))'''
+
+[[mutant]]
+name = "a worker's global's timeout isn't cleared"
+file = "crates/dom_api/src/timer.rs"
+from = '''    cx.remove_timer(cx.worker_global_context(this), id);'''
+to = '''    let _ = (this, id);'''
+
+[[mutant]]
+name = "a worker is a plain target's interface"
+file = "crates/dom_api/src/typed.rs"
+from = '''        ObjectRef::EventTarget(target) if cx.is_worker(target) => {'''
+to = '''        ObjectRef::EventTarget(target) if cx.is_worker(target) && false => {'''
+
+[[mutant]]
+name = "nothing is a worker"
+file = "crates/dom/src/worker.rs"
+from = '''        target.worker.get(self.gc).is_some()'''
+to = '''        false'''
+
+[[mutant]]
+name = "a worker is never terminated"
+file = "crates/dom/src/worker.rs"
+from = '''        self.worker_data(worker).terminated.get()'''
+to = '''        false'''
+
+[[mutant]]
+name = "a worker has no realm"
+file = "crates/dom/src/worker.rs"
+from = '''        self.set_event_target_context(target, Some(context));'''
+to = '''        let _ = context;'''

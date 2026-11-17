@@ -130,6 +130,7 @@ mod url;
 mod wake_lock;
 mod webdriver;
 mod window;
+mod worker;
 
 /// What `EventHandler` says the pointer looks like: `cursor`'s keyword,
 /// `auto` resolved.
@@ -194,6 +195,7 @@ pub use text_control::run_element_tasks;
 pub use timer::{
     Reported, next_due, report_exception, run_due, run_next_due, run_task, until_next_due,
 };
+pub use worker::{WorkerGlobalHost, WorkerHost, WorkerStart};
 pub use typed::{
     Any, AnyArg, AnyOrNull, ArgType, Callback, ConstructorInfo, Created, DictFront, DictMember,
     DictOrBool, Dictionary, DomStr, EmptyStringDefault, ErrorEventObject, Front, FrontHost,

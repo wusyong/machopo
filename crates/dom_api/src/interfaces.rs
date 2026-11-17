@@ -38,7 +38,7 @@ use crate::typed::{
     StaticRangeInitArg, StringOrNumber, StringPairs, Strings, TargetObject, TextEventObject,
     TimelineArg, TimerHandler, TransitionEventObject, U16Default302, UiEventObject,
     Uint8ClampedArray, UnrestrictedDouble, ViewObject, WakeLockSentinelObject, WhatToShow,
-    WheelEventObject,
+    WheelEventObject, WorkerObject,
 };
 use crate::window::NavigationUrl;
 use crate::{
@@ -50,7 +50,7 @@ use crate::{
     media_query_list, menu_list, message, mutation_observer, navigator, node, parent_node,
     performance, query, range, reflect, request, resize_observer, response, script, scroll, select,
     selection, shadow_root, slot, svg, svg_geometry, table, text_control, timer, token_list,
-    traversal, ui_event, url, wake_lock, window,
+    traversal, ui_event, url, wake_lock, window, worker,
 };
 
 crate::declare! {
@@ -237,6 +237,65 @@ crate::declare! {
         attribute onmessage: EventHandler, get = handlers::port_handler::<{ event_type::MESSAGE }>, set = handlers::set_port_message_handler::<_, { event_type::MESSAGE }>;
         #[front]
         attribute onmessageerror: EventHandler, get = handlers::port_handler::<{ event_type::MESSAGEERROR }>, set = handlers::set_port_handler::<_, { event_type::MESSAGEERROR }>;
+    }
+
+    // HTML's dedicated workers (`worker.rs`): a worker's object in the
+    // realm that made it.
+    #[exposed(Window, Worker)]
+    interface Worker : EventTarget [type = WorkerObject] {
+        #[front]
+        constructor(scriptURL: DomString, options?: WorkerOptions) = worker::construct;
+        #[front]
+        method terminate() = worker::terminate;
+        #[front]
+        method postMessage(message: PortMessage) = worker::post_message;
+        #[front]
+        attribute onmessage: EventHandler, get = handlers::port_handler::<{ event_type::MESSAGE }>, set = handlers::set_port_handler::<_, { event_type::MESSAGE }>;
+        #[front]
+        attribute onmessageerror: EventHandler, get = handlers::port_handler::<{ event_type::MESSAGEERROR }>, set = handlers::set_port_handler::<_, { event_type::MESSAGEERROR }>;
+        #[front]
+        attribute onerror: EventHandler, get = handlers::port_handler::<{ event_type::ERROR }>, set = handlers::set_port_handler::<_, { event_type::ERROR }>;
+    }
+
+    dictionary WorkerOptions {
+        name: String = String::new(),
+        r#type: String = String::from("classic"),
+    }
+
+    // HTML's: a worker's global (`dom::WorkerGlobalScope`); its members are
+    // the global object's own, as a window's. Of `WindowOrWorkerGlobalScope`
+    // the members a window has too (its timers, `structuredClone`,
+    // `crypto`), its execution context's.
+    #[global]
+    #[exposed(Worker)]
+    interface WorkerGlobalScope : EventTarget [type = dom::WorkerGlobalScope] {
+        attribute self: WorkerGlobalScope, get = worker::global_self;
+        #[front]
+        attribute onerror: EventHandler, get = handlers::worker_global_handler::<{ event_type::ERROR }>, set = handlers::set_worker_global_handler::<_, { event_type::ERROR }>;
+        attribute crypto: Crypto, get = crypto::worker_crypto;
+        #[front]
+        method setTimeout(handler: TimerHandler, timeout?: i32, arguments?: Rest) -> i32 =
+            timer::worker_set_timeout;
+        #[front]
+        method setInterval(handler: TimerHandler, timeout?: i32, arguments?: Rest) -> i32 =
+            timer::worker_set_interval;
+        method clearTimeout(id?: i32) = timer::worker_clear_timer;
+        method clearInterval(id?: i32) = timer::worker_clear_timer;
+        method structuredClone(value: CloneValue) -> Cloned = crypto::worker_structured_clone;
+    }
+
+    #[global]
+    #[exposed(DedicatedWorker)]
+    interface DedicatedWorkerGlobalScope : WorkerGlobalScope [type = dom::WorkerGlobalScope] {
+        attribute name: DomString, get = worker::name;
+        #[front]
+        method postMessage(message: PortMessage) = worker::global_post_message;
+        #[front]
+        method close() = worker::close;
+        #[front]
+        attribute onmessage: EventHandler, get = handlers::worker_global_handler::<{ event_type::MESSAGE }>, set = handlers::set_worker_global_handler::<_, { event_type::MESSAGE }>;
+        #[front]
+        attribute onmessageerror: EventHandler, get = handlers::worker_global_handler::<{ event_type::MESSAGEERROR }>, set = handlers::set_worker_global_handler::<_, { event_type::MESSAGEERROR }>;
     }
 
     // CSSOM's: JS's only (a wasm guest has no namespaces).

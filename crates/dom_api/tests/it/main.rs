@@ -44,6 +44,7 @@ mod token_list;
 mod webdriver;
 mod wheel;
 mod window;
+mod worker;
 
 use dom_api::typed::ScriptFront;
 use dom_api::{
@@ -67,6 +68,7 @@ impl Drop for TestDom {
     /// may share them, and keep theirs past it no more than the DOM).
     fn drop(&mut self) {
         self.1.current_window.borrow_mut().take();
+        self.1.current_worker.borrow_mut().take();
         self.1.action_node.borrow_mut().take();
     }
 }
@@ -117,6 +119,29 @@ pub struct Listeners {
     pub layout: Rc<dom_api::LayoutCell>,
     /// The operations the front opened (`Front::read`, `Front::mutate`).
     pub operations: Rc<std::cell::Cell<usize>>,
+    /// The realm's worker's global, if it is a worker's: whose execution
+    /// context `OpFront::current_context` gives.
+    pub current_worker: Rc<RefCell<Option<elise::Persistent<dom::WorkerGlobalScope>>>>,
+    /// The dedicated workers' hosts and what they were asked.
+    pub workers: Rc<RefCell<WorkerLog>>,
+}
+
+/// What the tests' dedicated workers' hosts (`WorkerHost`,
+/// `WorkerGlobalHost`) were asked: none unless `hosted`.
+#[derive(Debug, Default)]
+pub struct WorkerLog {
+    pub hosted: bool,
+    pub calls: Vec<WorkerCall>,
+}
+
+/// One call of a dedicated workers' host; a message as its bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkerCall {
+    Start(dom_api::WorkerStart),
+    Post(u64, Vec<u8>),
+    Terminate(u64),
+    PostToOwner(Vec<u8>),
+    Close,
 }
 
 /// One call of a timer's callback: its number, its arguments' (their
@@ -228,6 +253,8 @@ pub enum Arg {
     Node(std::rc::Rc<NodeRoot>),
     /// A dictionary's members; `None` a member whose getter throws.
     Dict(Vec<(&'static str, Option<bool>)>),
+    /// A dictionary of string members.
+    StrDict(Vec<(&'static str, &'static str)>),
     Bool(bool),
     /// A callback, by its number.
     Callback(u64),
@@ -350,7 +377,7 @@ impl FrontTypes for TestFront<'_> {
     const STUBS: bool = true;
     type Str = String;
     type Node = Taken;
-    type Dict = Vec<(&'static str, Option<bool>)>;
+    type Dict = TestDict;
     type PendingString = std::convert::Infallible;
     type PendingNode = std::convert::Infallible;
     type PendingNumber = std::convert::Infallible;
@@ -362,13 +389,33 @@ impl FrontTypes for TestFront<'_> {
     type Rest = u64;
 }
 
+/// A dictionary argument: its boolean members (`Arg::Dict`) or its string
+/// members (`Arg::StrDict`).
+#[derive(Clone, Default)]
+pub struct TestDict {
+    bools: Vec<(&'static str, Option<bool>)>,
+    strings: Vec<(&'static str, &'static str)>,
+}
+
 impl<'d> DictFront for TestFront<'d> {
+    fn dict_string(
+        &mut self,
+        dict: &Self::Dict,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<String>> {
+        let entry = dict.strings.iter().find(|(name, _)| *name == member.name());
+        if let Some((name, _)) = entry {
+            self.hooks.dict_reads.push(name);
+        }
+        Some(entry.map(|(_, value)| (*value).to_owned()))
+    }
+
     fn dict_bool(
         &mut self,
         dict: &Self::Dict,
         member: dom_api::typed::MemberName,
     ) -> Option<Option<bool>> {
-        let entry = dict.iter().find(|(name, _)| *name == member.name());
+        let entry = dict.bools.iter().find(|(name, _)| *name == member.name());
         if let Some((name, _)) = entry {
             self.hooks.dict_reads.push(name);
         }
@@ -624,7 +671,9 @@ impl<'d> Front for TestFront<'d> {
                 Arg::Null => "null".to_owned(),
                 Arg::Undefined => "undefined".to_owned(),
                 Arg::Node(_) => "[object Node]".to_owned(),
-                Arg::Dict(_) | Arg::Object(_) | Arg::Callback(_) => "[object Object]".to_owned(),
+                Arg::Dict(_) | Arg::StrDict(_) | Arg::Object(_) | Arg::Callback(_) => {
+                    "[object Object]".to_owned()
+                }
                 Arg::Bool(value) => value.to_string(),
                 Arg::Number(value) => value.to_string(),
             },
@@ -662,7 +711,14 @@ impl<'d> Front for TestFront<'d> {
 
     fn dict_arg(&mut self, index: usize, name: &str) -> Option<Option<Self::Dict>> {
         match self.args.get(index).cloned().unwrap_or(Arg::Undefined) {
-            Arg::Dict(members) => Some(Some(members)),
+            Arg::Dict(bools) => Some(Some(TestDict {
+                bools,
+                ..TestDict::default()
+            })),
+            Arg::StrDict(strings) => Some(Some(TestDict {
+                strings,
+                ..TestDict::default()
+            })),
             Arg::Null | Arg::Undefined => Some(None),
             _ => {
                 self.throw_type_error(&format!("not a {name}"));
@@ -692,6 +748,29 @@ impl<'d> Front for TestFront<'d> {
             self.args.get(index).cloned().unwrap_or(Arg::Undefined),
             Arg::Null | Arg::Undefined
         )
+    }
+
+    /// A message: a string's bytes, serialized; the object after it, if
+    /// any, the one port transferred.
+    fn message_arg(
+        &mut self,
+        index: usize,
+        _: dom_api::typed::TransferArg,
+        _: bool,
+    ) -> Option<(dom::SerializedMessage, Vec<Self::Node>)> {
+        let bytes = match self.args.get(index).cloned().unwrap_or(Arg::Undefined) {
+            Arg::Str(text) => text.as_bytes().to_vec(),
+            _ => Vec::new(),
+        };
+        let ports = match self.args.get(index.saturating_add(1)).cloned() {
+            Some(Arg::Object(port)) => vec![Taken::Object(port)],
+            _ => Vec::new(),
+        };
+        let message = dom::SerializedMessage {
+            bytes,
+            transferred: None,
+        };
+        Some((message, ports))
     }
 
     fn is_dictionary_like(&mut self, index: usize) -> bool {
@@ -843,6 +922,50 @@ impl<'d> Front for TestFront<'d> {
     }
 }
 
+impl dom_api::WorkerHost for TestFront<'_> {
+    /// Its number: one more than the starts before.
+    fn start_worker(&mut self, start: dom_api::WorkerStart) -> u64 {
+        let mut log = self.listeners.workers.borrow_mut();
+        log.calls.push(WorkerCall::Start(start));
+        let started = log
+            .calls
+            .iter()
+            .filter(|call| matches!(call, WorkerCall::Start(_)))
+            .count();
+        u64::try_from(started).unwrap()
+    }
+
+    fn post_to_worker(&mut self, id: u64, message: dom::SerializedMessage) {
+        self.listeners
+            .workers
+            .borrow_mut()
+            .calls
+            .push(WorkerCall::Post(id, message.bytes));
+    }
+
+    fn terminate_worker(&mut self, id: u64) {
+        self.listeners
+            .workers
+            .borrow_mut()
+            .calls
+            .push(WorkerCall::Terminate(id));
+    }
+}
+
+impl dom_api::WorkerGlobalHost for TestFront<'_> {
+    fn post_to_owner(&mut self, message: dom::SerializedMessage) {
+        self.listeners
+            .workers
+            .borrow_mut()
+            .calls
+            .push(WorkerCall::PostToOwner(message.bytes));
+    }
+
+    fn close(&mut self) {
+        self.listeners.workers.borrow_mut().calls.push(WorkerCall::Close);
+    }
+}
+
 impl OpFront for TestFront<'_> {
     dom_api::unbound_op_methods!();
 
@@ -914,8 +1037,26 @@ impl OpFront for TestFront<'_> {
         &mut self,
         cx: &ApiCx<'_, 'gc>,
     ) -> Option<elise::Gc<'gc, dom::ExecutionContext>> {
-        self.realm_window(cx)
-            .map(|window| cx.window_context(window))
+        let worker = self
+            .listeners
+            .current_worker
+            .borrow()
+            .as_ref()
+            .map(|global| cx.worker_global_context(global.get(cx.gc)));
+        worker.or_else(|| {
+            self.realm_window(cx)
+                .map(|window| cx.window_context(window))
+        })
+    }
+
+    fn worker_host(&mut self) -> Option<&mut dyn dom_api::WorkerHost> {
+        let hosted = self.listeners.workers.borrow().hosted;
+        hosted.then_some(self as &mut dyn dom_api::WorkerHost)
+    }
+
+    fn worker_global_host(&mut self) -> Option<&mut dyn dom_api::WorkerGlobalHost> {
+        let hosted = self.listeners.workers.borrow().hosted;
+        hosted.then_some(self as &mut dyn dom_api::WorkerGlobalHost)
     }
 
     fn construct_object<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, object: ObjectRef<'gc>) {

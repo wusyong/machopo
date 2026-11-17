@@ -4,11 +4,11 @@
 //! the DOM has; it is a target of its own (an event's, read back as
 //! one), of no window.
 
-use dom::{Cx, Dom, EventFlags, SerializedMessage, TaskQueue, TargetRef, WorkerGlobalScope};
+use dom::{Cx, Dom, DomString, EventFlags, SerializedMessage, TaskQueue, TargetRef, WorkerGlobalScope};
 use elise::Gc;
 
 fn worker<'gc>(cx: &Cx<'_, 'gc>, url: &str, origin: url::Origin) -> Gc<'gc, WorkerGlobalScope> {
-    cx.create_worker_global(url::Url::parse(url).unwrap(), origin)
+    cx.create_worker_global(url::Url::parse(url).unwrap(), origin, DomString::new(""))
 }
 
 fn message() -> SerializedMessage {

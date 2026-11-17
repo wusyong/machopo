@@ -10,7 +10,7 @@ use elise::{Gc, GcObject, HeapVector, JsEdge, LocalExternal, Member};
 
 use url::Url;
 
-use crate::{Cx, ExecutionContext, Listener, sites};
+use crate::{Cx, DomString, ExecutionContext, Listener, sites};
 
 #[derive(GcObject)]
 pub struct WorkerGlobalScope {
@@ -23,17 +23,21 @@ pub struct WorkerGlobalScope {
     /// Its origin (HTML's worker's settings object's): its owner's for a
     /// script of a `data:` URL, an opaque one, else its URL's.
     origin: LocalExternal<url::Origin>,
+    /// Its name (`new Worker(url, { name })`, `self.name`).
+    name: LocalExternal<DomString>,
     pub(crate) listeners: Member<HeapVector<Listener>>,
     wrapper: JsEdge,
 }
 
 impl<'gc> Cx<'_, 'gc> {
-    /// A new worker's global, its URL `url` and its origin `origin`, with an
-    /// execution context of its own, its time origin now.
+    /// A new worker's global, its URL `url`, its origin `origin` and its
+    /// name `name`, with an execution context of its own, its time origin
+    /// now.
     pub fn create_worker_global(
         &self,
         url: Url,
         origin: url::Origin,
+        name: DomString,
     ) -> Gc<'gc, WorkerGlobalScope> {
         let context = self.create_execution_context();
         let global = self.gc.alloc_in(
@@ -42,6 +46,7 @@ impl<'gc> Cx<'_, 'gc> {
                 context: Some(context),
                 url: LocalExternal::new(url),
                 origin: LocalExternal::new(origin),
+                name: LocalExternal::new(name),
                 listeners: None,
                 wrapper: (),
             },
@@ -69,6 +74,11 @@ impl<'gc> Cx<'_, 'gc> {
     /// `global`'s origin.
     pub fn worker_global_origin(&self, global: Gc<'gc, WorkerGlobalScope>) -> &'gc url::Origin {
         global.into_ref().origin.get()
+    }
+
+    /// `global`'s name.
+    pub fn worker_global_name(&self, global: Gc<'gc, WorkerGlobalScope>) -> &'gc DomString {
+        global.into_ref().name.get()
     }
 
     pub(crate) fn worker_global_wrapper_edge(

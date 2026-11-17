@@ -1,5 +1,6 @@
-//! A window's timers (https://html.spec.whatwg.org/#timers) and its
-//! reporting of exceptions
+//! A window's timers and a worker's global's
+//! (https://html.spec.whatwg.org/#timers, its execution context's), and a
+//! window's reporting of exceptions
 //! (https://html.spec.whatwg.org/#report-an-exception). A timer is the
 //! DOM's (`dom::Timer`, on its window), its callback and arguments
 //! the engine's; the host runs the timers due (`run_due`) out of any
@@ -8,7 +9,7 @@
 //! reported at its window (`report_exception`): an `ErrorEvent`, logged by
 //! the engine if no listener cancels it.
 
-use dom::{Dom, ErrorInfo, TargetRef, Window};
+use dom::{Dom, ErrorInfo, ExecutionContext, TargetRef, Window, WorkerGlobalScope};
 use elise::{Gc, Persistent};
 
 use crate::typed::{Callback, OpFront, ScriptHost};
@@ -23,7 +24,7 @@ pub(crate) fn set_timeout<'gc, O: OpFront>(
     timeout: i32,
     arguments: Option<O::Rest>,
 ) -> Result<i32, ApiError> {
-    Ok(add(op, cx, this, (handler, arguments), timeout, false))
+    Ok(add(op, cx, cx.window_context(this), (handler, arguments), timeout, false))
 }
 
 /// `setInterval`: a timer of the window that repeats, its id.
@@ -35,18 +36,44 @@ pub(crate) fn set_interval<'gc, O: OpFront>(
     timeout: i32,
     arguments: Option<O::Rest>,
 ) -> Result<i32, ApiError> {
-    Ok(add(op, cx, this, (handler, arguments), timeout, true))
+    Ok(add(op, cx, cx.window_context(this), (handler, arguments), timeout, true))
+}
+
+/// A worker's global's `setTimeout`: a timer of its execution context.
+pub(crate) fn worker_set_timeout<'gc, O: OpFront>(
+    op: &mut O,
+    cx: &ApiCx<'_, 'gc>,
+    this: Gc<'gc, WorkerGlobalScope>,
+    handler: Callback<O::Callback>,
+    timeout: i32,
+    arguments: Option<O::Rest>,
+) -> Result<i32, ApiError> {
+    let context = cx.worker_global_context(this);
+    Ok(add(op, cx, context, (handler, arguments), timeout, false))
+}
+
+/// A worker's global's `setInterval`.
+pub(crate) fn worker_set_interval<'gc, O: OpFront>(
+    op: &mut O,
+    cx: &ApiCx<'_, 'gc>,
+    this: Gc<'gc, WorkerGlobalScope>,
+    handler: Callback<O::Callback>,
+    timeout: i32,
+    arguments: Option<O::Rest>,
+) -> Result<i32, ApiError> {
+    let context = cx.worker_global_context(this);
+    Ok(add(op, cx, context, (handler, arguments), timeout, true))
 }
 
 fn add<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
-    window: Gc<'gc, Window>,
+    context: Gc<'gc, ExecutionContext>,
     (handler, arguments): (Callback<O::Callback>, Option<O::Rest>),
     timeout: i32,
     repeat: bool,
 ) -> i32 {
-    let timer = cx.add_timer(cx.window_context(window), timeout.into(), repeat);
+    let timer = cx.add_timer(context, timeout.into(), repeat);
     op.store_callback(cx, cx.timer_callback_edge(timer), handler);
     if let Some(arguments) = arguments {
         op.store_rest(cx, cx.timer_arguments_edge(timer), arguments);
@@ -62,6 +89,16 @@ pub(crate) fn clear_timer<'gc>(
     id: i32,
 ) -> Result<(), ApiError> {
     cx.remove_timer(cx.window_context(this), id);
+    Ok(())
+}
+
+/// A worker's global's `clearTimeout` and `clearInterval`.
+pub(crate) fn worker_clear_timer<'gc>(
+    cx: &ApiCx<'_, 'gc>,
+    this: Gc<'gc, WorkerGlobalScope>,
+    id: i32,
+) -> Result<(), ApiError> {
+    cx.remove_timer(cx.worker_global_context(this), id);
     Ok(())
 }
 

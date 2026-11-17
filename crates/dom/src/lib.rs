@@ -104,6 +104,7 @@ mod url;
 mod user_action;
 mod wake_lock;
 mod window;
+mod worker;
 mod worker_global;
 
 pub use abort::{AbortAlgorithm, AbortController, AbortSignalData, DependentRef};
@@ -140,6 +141,7 @@ pub use event::{
     ShadowPath, TargetRef, TargetRoot,
 };
 pub use execution_context::ExecutionContext;
+pub use worker::WorkerObjectData;
 pub use worker_global::WorkerGlobalScope;
 pub use fetch::{
     FetchHostRequest, FetchRecord, FetchRequest, FetchState, Referrer, Request, RequestCache,

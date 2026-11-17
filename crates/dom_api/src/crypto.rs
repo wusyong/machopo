@@ -26,7 +26,15 @@ pub(crate) fn window_crypto<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, Window>,
 ) -> Result<Gc<'gc, Crypto>, ApiError> {
-    Ok(cx.window_crypto(this))
+    Ok(cx.context_crypto(cx.window_context(this)))
+}
+
+/// A worker's global's `crypto`: its execution context's, as a window's.
+pub(crate) fn worker_crypto<'gc>(
+    cx: &ApiCx<'_, 'gc>,
+    this: Gc<'gc, dom::WorkerGlobalScope>,
+) -> Result<Gc<'gc, Crypto>, ApiError> {
+    Ok(cx.context_crypto(cx.worker_global_context(this)))
 }
 
 /// `getRandomValues(array)`: fills an integer typed array with random
@@ -96,6 +104,22 @@ fn uuid(random: &[u8]) -> String {
 pub(crate) fn structured_clone<'gc>(
     cx: &ApiCx<'_, 'gc>,
     _: Gc<'gc, Window>,
+    value: CloneParam<'_, 'gc>,
+) -> Result<(SerializedMessage, Vec<Gc<'gc, dom::EventTargetImpl>>), ApiError> {
+    clone(cx, value)
+}
+
+/// A worker's global's `structuredClone`, as a window's.
+pub(crate) fn worker_structured_clone<'gc>(
+    cx: &ApiCx<'_, 'gc>,
+    _: Gc<'gc, dom::WorkerGlobalScope>,
+    value: CloneParam<'_, 'gc>,
+) -> Result<(SerializedMessage, Vec<Gc<'gc, dom::EventTargetImpl>>), ApiError> {
+    clone(cx, value)
+}
+
+fn clone<'gc>(
+    cx: &ApiCx<'_, 'gc>,
     value: CloneParam<'_, 'gc>,
 ) -> Result<(SerializedMessage, Vec<Gc<'gc, dom::EventTargetImpl>>), ApiError> {
     let ports = value

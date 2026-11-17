@@ -1606,6 +1606,19 @@ pub trait OpFront: FrontTypes {
         None
     }
 
+    /// The host of the dedicated workers the call's realm makes
+    /// (`new Worker()`, `postMessage()`, `terminate()`), if the engine was
+    /// given one.
+    fn worker_host(&mut self) -> Option<&mut dyn crate::WorkerHost> {
+        None
+    }
+
+    /// The host the call's realm sends to the realm that made it, if it is
+    /// a dedicated worker's (`postMessage()`, `close()` of its global).
+    fn worker_global_host(&mut self) -> Option<&mut dyn crate::WorkerGlobalHost> {
+        None
+    }
+
     /// The call's result: kept, and made the engine's value after the
     /// operation (`Front::finish`), unless it needs nothing of the engine.
     fn ret_undefined(&mut self);
@@ -4652,6 +4665,28 @@ impl ObjectType for dom::Window {
     }
 }
 
+impl ObjectType for dom::WorkerGlobalScope {
+    type Ref<'gc> = Gc<'gc, dom::WorkerGlobalScope>;
+
+    #[inline]
+    fn this<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, _: usize) -> Self::Ref<'gc> {
+        op.this_as::<dom::WorkerGlobalScope>(cx)
+            .expect("the front end's checks: `this` is a worker's global")
+    }
+
+    fn object<'gc>(global: Self::Ref<'gc>) -> ObjectRef<'gc> {
+        ObjectRef::WorkerGlobal(global)
+    }
+
+    fn take_arg<F: Front>(front: &mut F, index: usize, interface: &str) -> Option<Option<F::Node>> {
+        front.object_arg::<dom::WorkerGlobalScope>(index, interface)
+    }
+
+    fn arg<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, taken: &O::Node) -> Self::Ref<'gc> {
+        op.object::<dom::WorkerGlobalScope>(cx, taken)
+    }
+}
+
 /// `ErrorEvent`'s objects: events with an error's data (an event's
 /// interface is its data's, `interface_of`).
 pub struct ErrorEventObject;
@@ -4994,6 +5029,29 @@ impl ObjectType for MessageEventObject {
 
     fn object<'gc>(event: Self::Ref<'gc>) -> ObjectRef<'gc> {
         ObjectRef::Event(event)
+    }
+}
+
+/// `Worker`'s objects: event targets with a worker's data.
+pub struct WorkerObject;
+
+impl ObjectType for WorkerObject {
+    type Ref<'gc> = Gc<'gc, dom::EventTargetImpl>;
+
+    #[inline]
+    fn this<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, _: usize) -> Self::Ref<'gc> {
+        let worker = op
+            .this_as::<dom::EventTargetImpl>(cx)
+            .expect("the front end's checks: `this` is an event target");
+        debug_assert!(
+            cx.is_worker(worker),
+            "the front end's checks: `this` is a `Worker`"
+        );
+        worker
+    }
+
+    fn object<'gc>(worker: Self::Ref<'gc>) -> ObjectRef<'gc> {
+        ObjectRef::EventTarget(worker)
     }
 }
 
@@ -6855,6 +6913,9 @@ pub fn interface_of<'gc>(cx: &ApiCx<'_, 'gc>, object: ObjectRef<'gc>) -> usize {
         ObjectRef::EventTarget(target) if cx.is_network_information(target) => {
             const { crate::declare::interface_index("NetworkInformation") }
         }
+        ObjectRef::EventTarget(target) if cx.is_worker(target) => {
+            const { crate::declare::interface_index("Worker") }
+        }
         ObjectRef::EventTarget(target) if cx.is_message_port(target) => {
             const { crate::declare::interface_index("MessagePort") }
         }
@@ -6876,9 +6937,10 @@ pub fn interface_of<'gc>(cx: &ApiCx<'_, 'gc>, object: ObjectRef<'gc>) -> usize {
         ObjectRef::MessageChannel(_) => const { crate::declare::interface_index("MessageChannel") },
         ObjectRef::Window(_) => const { crate::declare::interface_index("Window") },
         // Its realm's global object, which the engine makes with the realm
-        // as a window's; `EventTarget` while the table has no interface of
-        // a worker's global.
-        ObjectRef::WorkerGlobal(_) => const { crate::declare::interface_index("EventTarget") },
+        // as a window's.
+        ObjectRef::WorkerGlobal(_) => {
+            const { crate::declare::interface_index("DedicatedWorkerGlobalScope") }
+        }
         ObjectRef::Location(_) => const { crate::declare::interface_index("Location") },
         ObjectRef::History(_) => const { crate::declare::interface_index("History") },
         ObjectRef::Navigator(_) => const { crate::declare::interface_index("Navigator") },

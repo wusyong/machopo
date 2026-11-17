@@ -25,6 +25,9 @@ fn interfaces_have_their_parents_and_kinds_parents_first() {
             "MessageEvent",
             "MessageChannel",
             "MessagePort",
+            "Worker",
+            "WorkerGlobalScope",
+            "DedicatedWorkerGlobalScope",
             "CSS",
             "MediaQueryList",
             "MediaQueryListEvent",
@@ -423,6 +426,9 @@ fn interfaces_have_their_parents_and_kinds_parents_first() {
                 | "NodeIterator"
                 | "TreeWalker"
                 | "Selection"
+                | "Worker"
+                | "WorkerGlobalScope"
+                | "DedicatedWorkerGlobalScope"
         );
         assert_eq!(desc.node, node, "{}", desc.name);
         assert!(node || desc.kinds.is_empty(), "{}", desc.name);
@@ -431,8 +437,9 @@ fn interfaces_have_their_parents_and_kinds_parents_first() {
 
 /// An interface accepts its own kinds and its descendants'.
 /// Each interface in the globals WebIDL's `[Exposed]` names: every one in a
-/// window's; a worker's, those the specs' IDL exposes in `Worker` too
-/// (`*` included), none of a document's.
+/// window's but a worker's globals' own; a worker's, those the specs' IDL
+/// exposes in `Worker` too (`*` included), none of a document's;
+/// `DedicatedWorkerGlobalScope` in a dedicated worker's alone.
 #[test]
 fn interfaces_are_exposed_in_their_globals() {
     let mut in_workers: Vec<_> = INTERFACES
@@ -453,6 +460,7 @@ fn interfaces_are_exposed_in_their_globals() {
             "CustomEvent",
             "DOMRect",
             "DOMRectReadOnly",
+            "DedicatedWorkerGlobalScope",
             "ErrorEvent",
             "Event",
             "EventTarget",
@@ -480,10 +488,23 @@ fn interfaces_are_exposed_in_their_globals() {
             "TextMetrics",
             "URL",
             "URLSearchParams",
+            "Worker",
+            "WorkerGlobalScope",
         ]
     );
-    assert!(INTERFACES.iter().all(|desc| desc.exposed.window));
-    assert!(!INTERFACES.iter().any(|desc| desc.exposed.dedicated_worker));
+    // Every one in a window's but a worker's globals' own.
+    let not_in_windows: Vec<_> = INTERFACES
+        .iter()
+        .filter(|desc| !desc.exposed.window)
+        .map(|desc| desc.name)
+        .collect();
+    assert_eq!(not_in_windows, ["WorkerGlobalScope", "DedicatedWorkerGlobalScope"]);
+    let dedicated_only: Vec<_> = INTERFACES
+        .iter()
+        .filter(|desc| desc.exposed.dedicated_worker)
+        .map(|desc| desc.name)
+        .collect();
+    assert_eq!(dedicated_only, ["DedicatedWorkerGlobalScope"]);
     let node = interface("Node").exposed;
     assert!(node.window && !node.in_dedicated_worker());
 }

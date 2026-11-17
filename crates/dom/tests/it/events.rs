@@ -120,6 +120,7 @@ fn every_target_holds_listeners() {
             TargetRef::WorkerGlobal(cx.create_worker_global(
                 url::Url::parse("https://example.test/w.js").unwrap(),
                 url::Url::parse("https://example.test/").unwrap().origin(),
+                dom::DomString::new(""),
             )),
         ];
         for target in targets {

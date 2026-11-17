@@ -147,6 +147,23 @@ pub(crate) fn set_port_message_handler<'gc, O: OpFront, const T: NameId>(
     Ok(())
 }
 
+/// A worker's global's handler of `T`.
+pub(crate) fn worker_global_handler<'gc, const T: NameId>(
+    cx: &ApiCx<'_, 'gc>,
+    this: Gc<'gc, dom::WorkerGlobalScope>,
+) -> Result<HandlerValue<'gc>, ApiError> {
+    Ok(current_value(cx, TargetRef::WorkerGlobal(this), T))
+}
+
+pub(crate) fn set_worker_global_handler<'gc, O: OpFront, const T: NameId>(
+    op: &mut O,
+    cx: &ApiCx<'_, 'gc>,
+    this: Gc<'gc, dom::WorkerGlobalScope>,
+    value: Option<Callback<O::Callback>>,
+) -> Result<(), ApiError> {
+    set_handler(op, cx, TargetRef::WorkerGlobal(this), T, value)
+}
+
 pub(crate) fn window_handler<'gc, const T: NameId>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, Window>,
