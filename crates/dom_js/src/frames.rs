@@ -358,6 +358,7 @@ pub(crate) fn discard_child(scope: &mut Scope<'_, '_, '_>, document: &NodeRoot) 
         return;
     };
     let removed = state.frames.remove(frame);
+    terminate_workers(state, removed.iter().map(|frame| &frame.document));
     if let Some(sink) = &state.frames.load_sink {
         for removed in &removed {
             sink.frame_gone(removed.id);
@@ -370,12 +371,37 @@ pub(crate) fn discard_child(scope: &mut Scope<'_, '_, '_>, document: &NodeRoot) 
     }
 }
 
+/// The dedicated workers of `documents`' windows, terminated: their
+/// documents gone (HTML terminates a discarded document's workers, Blink's
+/// `DedicatedWorker::ContextDestroyed`); their `Worker`s get nothing more.
+pub(crate) fn terminate_workers<'a>(
+    state: &mut crate::state::State,
+    documents: impl IntoIterator<Item = &'a NodeRoot>,
+) {
+    let crate::state::State { caches, dom, .. } = state;
+    let host = caches.worker_host.as_deref();
+    dom.mutate(|cx| {
+        for document in documents {
+            let Some(window) = cx.window_of(document.get(cx.gc)) else {
+                continue;
+            };
+            for worker in cx.context_workers(cx.window_context(window)) {
+                if let Some(host) = host {
+                    host.terminate_worker(cx.worker_id(worker));
+                }
+                cx.terminate_worker_object(worker);
+            }
+        }
+    });
+}
+
 /// The frames inside child frame `frame`'s document, as it navigates to
 /// another (Blink's `FrameLoader::DetachChildren`): gone as a removed
 /// iframe's are, `frame` itself kept.
 pub(crate) fn discard_descendants(scope: &mut Scope<'_, '_, '_>, frame: FrameId) {
     let (state, _) = scope.state_mut();
     let removed = state.frames.remove_descendants(frame);
+    terminate_workers(state, removed.iter().map(|frame| &frame.document));
     if let Some(sink) = &state.frames.load_sink {
         for removed in &removed {
             sink.frame_gone(removed.id);

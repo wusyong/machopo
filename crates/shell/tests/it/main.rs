@@ -58,3 +58,4 @@ mod web_animations;
 mod webdriver;
 mod wheel;
 mod windowless;
+mod workers;

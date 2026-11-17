@@ -235,6 +235,23 @@ impl V8Engine {
             .collect()
     }
 
+    /// The `Worker` of the worker numbered `id` (not terminated), and the
+    /// realm of the frame whose window's it is.
+    fn worker_object(
+        &mut self,
+        id: u64,
+    ) -> Option<(v8::Global<v8::Context>, Persistent<dom::EventTargetImpl>)> {
+        let frames = self.frames_as_made();
+        let dom = &self.state().dom;
+        dom.read(|cx| {
+            frames.iter().find_map(|(_, context, document)| {
+                let window = cx.window_of(document.get(cx.gc))?;
+                let worker = cx.context_worker(cx.window_context(window), id)?;
+                Some((context.clone(), Persistent::new(cx.gc, worker)))
+            })
+        })
+    }
+
     /// Whether `test` holds of a frame's window.
     fn any_window(
         &mut self,
@@ -547,6 +564,16 @@ impl ScriptEngine for V8Engine {
         {
             let mut scope = state::scope(scope).expect("the engine's DOM");
             let (parent, owner) = place.clone().unwrap_or((None, None));
+            // The documents gone: the frame's before, and with a new
+            // top-level one every frame's; their workers with them.
+            let state = scope.state_mut().0;
+            let gone: Vec<NodeRoot> = state
+                .frames
+                .iter()
+                .filter(|before| place.is_none() || before.id == frame)
+                .map(|before| before.document.clone())
+                .collect();
+            crate::frames::terminate_workers(state, &gone);
             if place.is_none() {
                 scope.state_mut().0.frames.clear_children();
             }
@@ -1452,6 +1479,62 @@ impl ScriptEngine for V8Engine {
                 crate::window::notify_intersection_observers(scope, context);
             });
             self.perform_microtask_checkpoint();
+        }
+    }
+
+    fn set_worker_host(&mut self, host: Box<dyn dom_api::WorkerHost>) {
+        self.state().caches.worker_host = Some(host);
+    }
+
+    fn worker_message(&mut self, id: u64, message: dom::SerializedMessage) {
+        let Some((_, worker)) = self.worker_object(id) else {
+            return;
+        };
+        self.state()
+            .dom
+            .mutate(|cx| cx.post_worker_object_message(worker.get(cx.gc), message));
+    }
+
+    fn worker_error(&mut self, id: u64, error: &dom_api::WorkerError) {
+        let Some((context, worker)) = self.worker_object(id) else {
+            return;
+        };
+        self.in_context(&context, |scope| {
+            if let Some(mut scope) = state::scope(scope) {
+                dom_api::worker_error(&mut Host { scope: &mut scope }, &worker, error);
+                state::report(&mut scope);
+            }
+        });
+    }
+
+    fn worker_script_failed(&mut self, id: u64) {
+        let Some((context, worker)) = self.worker_object(id) else {
+            return;
+        };
+        self.in_context(&context, |scope| {
+            if let Some(mut scope) = state::scope(scope) {
+                let target = dom::TargetRoot::EventTarget(worker.clone());
+                dom_api::fire_event(
+                    &mut Host { scope: &mut scope },
+                    &target,
+                    dom::names::event::ERROR,
+                    false,
+                    false,
+                );
+                let (state, _) = scope.state_mut();
+                state
+                    .dom
+                    .mutate(|cx| cx.terminate_worker_object(worker.get(cx.gc)));
+                state::report(&mut scope);
+            }
+        });
+    }
+
+    fn worker_closed(&mut self, id: u64) {
+        if let Some((_, worker)) = self.worker_object(id) {
+            self.state()
+                .dom
+                .mutate(|cx| cx.terminate_worker_object(worker.get(cx.gc)));
         }
     }
 

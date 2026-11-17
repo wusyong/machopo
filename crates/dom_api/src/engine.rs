@@ -486,6 +486,40 @@ pub trait ScriptEngine: ParserHost {
     /// ask, if anything (web tests only).
     fn take_harness_results(&mut self) -> Option<String>;
 
+    /// What starts the dedicated workers its realms make and carries what
+    /// goes to them (`new Worker()` throws `NotSupportedError` without
+    /// one).
+    fn set_worker_host(&mut self, host: Box<dyn crate::WorkerHost>) {
+        let _ = host;
+    }
+
+    /// `message` from the worker numbered `id`: a task of its `Worker`'s
+    /// realm, a `message` event at the `Worker` as it runs. Nothing if the
+    /// `Worker` was terminated.
+    fn worker_message(&mut self, id: u64, message: dom::SerializedMessage) {
+        let _ = (id, message);
+    }
+
+    /// What the worker numbered `id` threw and its global didn't cancel: an
+    /// `error` event at its `Worker`, reported at its realm's global if not
+    /// canceled (`worker_error`).
+    fn worker_error(&mut self, id: u64, error: &crate::WorkerError) {
+        let _ = (id, error);
+    }
+
+    /// The worker numbered `id` closed itself (`close()`): its `Worker`
+    /// gets nothing more of it, and isn't kept alive by it any more.
+    fn worker_closed(&mut self, id: u64) {
+        let _ = id;
+    }
+
+    /// The script of the worker numbered `id` couldn't be had (HTML's "run
+    /// a worker": an `error` event at its `Worker`, which gets nothing more
+    /// of it).
+    fn worker_script_failed(&mut self, id: u64) {
+        let _ = id;
+    }
+
     /// Whether the host is waiting for its next task (`idle`) or in one,
     /// though not in script, for DevTools' `Profiler` to tell the two
     /// apart (`(idle)`, `(program)`), as Blink tells V8's inspector around

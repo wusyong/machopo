@@ -39,10 +39,12 @@ pub mod url_fixup;
 pub mod windowless;
 
 /// The renderer's script engines (its `ScriptEngineFactory`): V8, and
-/// wasmtime for a document that declares its scripts wasm.
+/// wasmtime for a document that declares its scripts wasm; V8 for a
+/// dedicated worker's.
 pub const SCRIPT_ENGINES: browser::ScriptEngineFactory = browser::ScriptEngineFactory {
     engine: dom_js::V8Engine::boxed,
     wasm_engine: Some(dom_wasm::WasmEngine::boxed),
+    worker_engine: Some(dom_js::V8WorkerEngine::boxed),
 };
 
 /// URLs pass through; anything else is a file path, which becomes a

@@ -142,6 +142,7 @@ pub enum WorkerCall {
     Terminate(u64),
     PostToOwner(Vec<u8>),
     Close,
+    Error(dom_api::WorkerError),
 }
 
 /// One call of a timer's callback: its number, its arguments' (their
@@ -972,6 +973,14 @@ impl dom_api::WorkerGlobalHost for TestFront<'_> {
             .calls
             .push(WorkerCall::Close);
     }
+
+    fn report_error(&self, error: dom_api::WorkerError) {
+        self.listeners
+            .workers
+            .borrow_mut()
+            .calls
+            .push(WorkerCall::Error(error));
+    }
 }
 
 impl OpFront for TestFront<'_> {
@@ -987,6 +996,12 @@ impl OpFront for TestFront<'_> {
 
     fn ret_any<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, edge: &'gc elise::JsEdge) {
         self.ret = Some(Ret::Any(edge.embedder_word(cx.gc)));
+    }
+
+    /// As `ret_any`: the tests' engine word (0 for none, which the engine
+    /// gives as null).
+    fn ret_any_or_null<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, edge: &'gc elise::JsEdge) {
+        self.ret_any(cx, edge);
     }
 
     fn same_callback(

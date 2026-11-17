@@ -49,7 +49,8 @@ fn custom_events_carry_a_detail() {
 }
 
 /// `new ErrorEvent()`: its members as given, in their names' order, their
-/// defaults empty, 0 and undefined; untrusted, not cancelable unless asked.
+/// defaults empty, 0 and null (`error`: Blink's `ErrorEvent::error` gives
+/// null when none was given); untrusted, not cancelable unless asked.
 #[test]
 fn error_events_are_made_from_their_init() {
     let mut env = Env::window("about:blank");
@@ -64,7 +65,7 @@ fn error_events_are_made_from_their_init() {
             ),
             (
                 "var d = new ErrorEvent('error'); [JSON.stringify(d.message), JSON.stringify(d.filename), d.lineno, d.colno, \
-                  d.error === undefined].join()",
+                  d.error === null].join()",
                 "\"\",\"\",0,0,true",
             ),
             (

@@ -111,6 +111,10 @@ pub struct ScriptEngineFactory {
     /// `dom_wasm::WasmEngine`; with none, such a document is as any other
     /// (its wasm scripts don't run).
     pub wasm_engine: Option<fn(dom_api::EngineSettings) -> Box<dyn dom_api::ScriptEngine>>,
+    /// A dedicated worker's engine (`dom_api::WorkerEngine`), made on the
+    /// worker's thread, such as `dom_js::V8WorkerEngine`; with none,
+    /// `new Worker()` makes one that never runs (an `error` at it).
+    pub worker_engine: Option<fn(dom_api::EngineSettings) -> Box<dyn dom_api::WorkerEngine>>,
 }
 
 /// Spawns the renderer's threads: the compositor thread (`Compositor`,
@@ -212,6 +216,9 @@ struct RenderThread {
     text: TextContext,
     /// The thread the DOM's `toBlob` files are encoded on, once one is.
     canvas_encoder: CanvasEncoder,
+    /// The dedicated workers its documents made (`worker_thread`): the
+    /// engine starts them through its host of them.
+    workers: Rc<crate::worker_thread::Workers>,
     to_browser: Sender<RendererHostMsg>,
     /// The widget, until the first document's frame takes it: the frame's
     /// from then on (`widget`).
@@ -373,6 +380,9 @@ struct RenderThread {
 /// agent outlives the thread's own field in the engine's DevTools queue.
 impl Drop for RenderThread {
     fn drop(&mut self) {
+        // The workers end first, their threads waited for (each lets go
+        // of its own engine, on itself).
+        self.workers.terminate_all();
         self.dom_agent.dom_gone();
         self.css_agent.dom_gone();
         self.overlay_agent.dom_gone();
@@ -417,6 +427,13 @@ impl RenderThread {
         Self {
             text: TextContext::new(flags.test_fonts),
             canvas_encoder: CanvasEncoder::new(scheduler.clone()),
+            workers: Rc::new(crate::worker_thread::Workers::new(
+                script_engine.worker_engine,
+                dom_api::EngineSettings {
+                    web_tests: flags.web_tests,
+                },
+                scheduler.clone(),
+            )),
             to_browser,
             widget: Some(FrameWidget::new(layer_tree_host)),
             visual_properties: VisualProperties::default(),
@@ -587,12 +604,43 @@ impl RenderThread {
         tracing::debug!("renderer main thread exiting");
     }
 
+    /// What the dedicated worker numbered `id` sent its `Worker`, given to
+    /// the engine (a message a task of the `Worker`'s realm, an error an
+    /// event at it now, script run: what it reported sent, as after the
+    /// platform's tasks); one that is no more, forgotten.
+    fn worker_event(&mut self, id: u64, event: crate::worker_thread::WorkerEvent) {
+        use crate::worker_thread::WorkerEvent;
+        let Some(engine) = self.engine.as_mut() else {
+            return;
+        };
+        match event {
+            WorkerEvent::Message(message) => engine.worker_message(id, message),
+            WorkerEvent::Error(error) => {
+                engine.worker_error(id, &error);
+                self.send_harness_results();
+            }
+            WorkerEvent::Closed => {
+                engine.worker_closed(id);
+                self.workers.forget(id);
+            }
+            WorkerEvent::ScriptFailed => {
+                engine.worker_script_failed(id);
+                self.workers.forget(id);
+                self.send_harness_results();
+            }
+        }
+    }
+
     /// Returns false on shutdown.
     fn run_task(&mut self, task: MainThreadTask) -> bool {
         match task {
             MainThreadTask::Browser(msg) => self.handle_message(msg),
             MainThreadTask::CanvasEncoded { id, file } => {
                 self.canvas_encoded(id, file);
+                true
+            }
+            MainThreadTask::Worker { id, event } => {
+                self.worker_event(id, event);
                 true
             }
             MainThreadTask::DevTools(queued) => {
@@ -1520,7 +1568,7 @@ fn sooner_ms(a: Option<f64>, b: Option<f64>) -> Option<f64> {
 /// console messages: one that is nothing (`console.log("")`, an array too
 /// long to write) isn't printed, as Chrome's isn't. Never stdout:
 /// `--automation-pipe` writes its messages there.
-pub(super) fn print_console(kind: &str, text: &str, url: &str, line: u32) {
+pub(crate) fn print_console(kind: &str, text: &str, url: &str, line: u32) {
     if text.is_empty() {
         return;
     }

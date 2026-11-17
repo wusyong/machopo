@@ -29,6 +29,12 @@ pub(crate) enum MainThreadTask {
     CanvasEncoded { id: u64, file: Option<Vec<u8>> },
     /// What the browser asked of the page's DevTools sessions.
     DevTools(DevToolsQueued),
+    /// From the thread of the dedicated worker numbered `id`: what it
+    /// sends its `Worker` (`worker_thread`).
+    Worker {
+        id: u64,
+        event: crate::worker_thread::WorkerEvent,
+    },
 }
 
 /// The scheduler's task queues (Blink's task queues by type), each in the
@@ -47,15 +53,19 @@ pub(crate) enum TaskQueue {
     DevTools,
     /// The canvas encoder's files.
     Canvas,
+    /// What dedicated workers send their `Worker`s (Blink posts them to
+    /// the posted message task source's queue).
+    Worker,
 }
 
 impl TaskQueue {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::Browser,
         Self::Rendering,
         Self::Input,
         Self::DevTools,
         Self::Canvas,
+        Self::Worker,
     ];
 
     fn index(self) -> usize {
@@ -69,7 +79,7 @@ pub(crate) struct TaskQueues(u8);
 
 impl TaskQueues {
     /// The event loop's: every queue.
-    pub(crate) const ALL: Self = Self(0b1_1111);
+    pub(crate) const ALL: Self = Self(0b11_1111);
     /// DevTools' alone.
     pub(crate) const DEVTOOLS: Self = Self(1 << TaskQueue::DevTools as u8);
     /// The rendering's alone.
@@ -93,7 +103,7 @@ struct Queued {
 
 #[derive(Default)]
 struct State {
-    queues: [VecDeque<Queued>; 5],
+    queues: [VecDeque<Queued>; 6],
     /// The next task's number, from 1: 0 is what was put back first
     /// (`put_back`).
     next: u64,
@@ -176,6 +186,16 @@ impl MainThreadScheduler {
             ToMainThread::Input { .. } => TaskQueue::Input,
         };
         let _ = self.post(queue, MainThreadTask::Compositor(task), false);
+    }
+
+    /// What the dedicated worker numbered `id` sends its `Worker`, from its
+    /// thread; dropped once the main thread has gone.
+    pub(crate) fn post_worker(&self, id: u64, event: crate::worker_thread::WorkerEvent) {
+        let _ = self.post(
+            TaskQueue::Worker,
+            MainThreadTask::Worker { id, event },
+            false,
+        );
     }
 
     /// The canvas encoder's file of the `toBlob` call `id`.
@@ -428,6 +448,7 @@ mod tests {
                 "raster failed".to_owned()
             }
             MainThreadTask::CanvasEncoded { id, .. } => format!("canvas {id}"),
+            MainThreadTask::Worker { id, .. } => format!("worker {id}"),
             MainThreadTask::DevTools(DevToolsQueued::Message { message, .. }) => {
                 format!("devtools {message}")
             }

@@ -1425,6 +1425,19 @@ fn report(
         }
         None => Reported::NotCanceled,
     };
+    // A worker's, not canceled: its `Worker`'s too (HTML's "report an
+    // exception" of a worker's global).
+    if reported == Reported::NotCanceled
+        && matches!(at, Some(dom::GlobalRoot::WorkerGlobal(_)))
+        && let Some(host) = scope.state().0.caches.worker_global_host.as_deref()
+    {
+        host.report_error(dom_api::WorkerError {
+            message: thrown.info.message.to_string(),
+            filename: thrown.info.filename.to_string(),
+            lineno: thrown.info.lineno,
+            colno: thrown.info.colno,
+        });
+    }
     if reported != Reported::Canceled {
         let ErrorInfo {
             message,

@@ -43,6 +43,9 @@ pub struct PostedMessage {
     /// The ports transferred with it, new ones taking the place of those
     /// shipped, entangled as they were.
     ports: Member<HeapVector<EventTargetImpl>>,
+    /// The `Worker` it is for, from its worker; none: for the global of the
+    /// execution context whose queue it is in.
+    target: Member<EventTargetImpl>,
     /// When it was posted (the DOM's clock) and its task's number
     /// (`tasks`).
     queued: Cell<f64>,
@@ -417,6 +420,23 @@ impl<'gc> Cx<'_, 'gc> {
         self.queue_posted_message(self.worker_global_context(global), message);
     }
 
+    /// A message posted to `worker` by its worker
+    /// (`DedicatedWorkerGlobalScope.postMessage`): a task of the posted
+    /// message task source of `worker`'s realm, for it, of no origin and no
+    /// source.
+    pub fn post_worker_object_message(
+        &self,
+        worker: Gc<'gc, EventTargetImpl>,
+        payload: SerializedMessage,
+    ) {
+        let Some(context) = self.target_context(TargetRef::EventTarget(worker)) else {
+            return;
+        };
+        let message = self.posted_message(payload, DomString::new(""), None, &[]);
+        message.target.set(self.gc, Some(worker));
+        self.queue_posted_message(context, message);
+    }
+
     fn queue_posted_message(
         &self,
         context: Gc<'gc, crate::ExecutionContext>,
@@ -449,6 +469,7 @@ impl<'gc> Cx<'_, 'gc> {
                 origin: LocalExternal::new(origin),
                 source,
                 ports: Some(ports),
+                target: None,
                 queued: Cell::new(queued),
                 number: Cell::new(number),
             },
@@ -513,7 +534,12 @@ impl<'gc> Cx<'_, 'gc> {
         let (message, target) = match port {
             None => {
                 let queue = context.posted_messages.get(self.gc)?;
-                (queue.remove(self.gc, 0), self.context_target(context))
+                let message = queue.remove(self.gc, 0);
+                let target = match message.target.get(self.gc) {
+                    Some(worker) => TargetRef::EventTarget(worker),
+                    None => self.context_target(context),
+                };
+                (message, target)
             }
             Some(port) => {
                 let queue = self.port_data(port)?.queue.get(self.gc)?;

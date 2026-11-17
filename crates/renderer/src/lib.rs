@@ -52,6 +52,7 @@ mod svg_image;
 mod task_queue;
 #[cfg(test)]
 mod testing;
+mod worker_thread;
 
 pub use compositor::{CompositorGone, CompositorSender};
 pub use render_thread::{

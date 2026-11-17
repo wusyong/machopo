@@ -8,14 +8,16 @@
 //! posts a task to the worker's thread and calls `WorkerThread::Terminate`
 //! there and then; what comes back is the host's to deliver.
 
-use dom::{EventTargetImpl, SerializedMessage, WorkerGlobalScope};
+use dom::{EventTargetImpl, GlobalRef, SerializedMessage, TargetRef, WorkerGlobalScope};
+use elise::Persistent;
+
 use elise::Gc;
 use url::Url;
 
 use crate::css_style_sheet::dom_error;
 use crate::interfaces::WorkerOptions;
 use crate::message::MessageParam;
-use crate::typed::{DomStr, OpFront};
+use crate::typed::{DomStr, OpFront, ScriptHost};
 use crate::{ApiCx, ApiError, ExceptionName};
 
 /// A dedicated worker to start (HTML's "run a worker"'s inputs).
@@ -58,6 +60,61 @@ pub trait WorkerGlobalHost {
 
     /// The worker closed itself (`close()`): it runs no more tasks.
     fn close(&self);
+
+    /// What the worker's script threw, its global's `onerror` didn't
+    /// cancel (HTML's "report an exception" of a worker's): for its
+    /// `Worker`'s `error` event.
+    fn report_error(&self, error: WorkerError);
+}
+
+/// An uncaught exception of a worker, as it goes to its `Worker` (an
+/// `ErrorEvent`'s parts; `error` is null on that side).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkerError {
+    pub message: String,
+    pub filename: String,
+    pub lineno: u32,
+    pub colno: u32,
+}
+
+/// What the worker of `worker` threw and its global didn't cancel (HTML's
+/// "run a worker"'s error reporting): an `ErrorEvent` fired at `worker`,
+/// cancelable, its `error` null; not canceled, reported at its realm's
+/// global as if thrown there (no value). Nothing for one terminated.
+pub fn worker_error<H: ScriptHost>(
+    host: &mut H,
+    worker: &Persistent<EventTargetImpl>,
+    error: &WorkerError,
+) {
+    let info = dom::ErrorInfo {
+        message: dom::DomString::new(&error.message),
+        filename: dom::DomString::new(&error.filename),
+        lineno: error.lineno,
+        colno: error.colno,
+    };
+    let event = host.mutate(|cx| {
+        let worker = worker.get(cx.gc);
+        if cx.worker_terminated(worker) {
+            return None;
+        }
+        let context = cx.target_context(TargetRef::EventTarget(worker));
+        let event = cx.create_error_event(&info, context);
+        Some(Persistent::new(cx.gc, event))
+    });
+    let Some(event) = event else {
+        return;
+    };
+    let target = host.read(|cx| cx.root_target(TargetRef::EventTarget(worker.get(cx.gc))));
+    if !crate::dispatch(host, &target, &event) {
+        return;
+    }
+    let global = host.read(|cx| {
+        cx.target_window(TargetRef::EventTarget(worker.get(cx.gc)))
+            .map(|window| cx.root_global(GlobalRef::Window(window)))
+    });
+    if let Some(global) = global {
+        crate::report_exception(host, &global, &info, None);
+    }
 }
 
 /// `new Worker(scriptURL, options)`: the URL parsed against the current

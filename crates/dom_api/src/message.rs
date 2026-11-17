@@ -398,6 +398,15 @@ pub fn run_posted_message<H: ScriptHost>(host: &mut H, global: &GlobalRoot) -> b
         let Some((target, payload, origin, source, ports)) = taken else {
             return false;
         };
+        // For a `Worker` terminated meanwhile: dropped (HTML's
+        // `terminate()` empties its port's message queue).
+        let terminated = host.read(|cx| match target.get(cx.gc) {
+            TargetRef::EventTarget(worker) => cx.is_worker(worker) && cx.worker_terminated(worker),
+            _ => false,
+        });
+        if terminated {
+            return true;
+        }
         let value = payload.and_then(|payload| host.deserialize_message(global, payload, &ports));
         let error = value.is_none();
         let event = host.mutate_storing(|cx, store| {

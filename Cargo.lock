@@ -3999,6 +3999,7 @@ dependencies = [
  "computed_style",
  "crossbeam-channel",
  "css",
+ "data-url",
  "dom",
  "dom_api",
  "encoding_rs",

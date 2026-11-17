@@ -206,6 +206,8 @@ impl RenderThread {
         engine
             .dom_mut()
             .set_agent(&self.user_agent, self.automation);
+        // `new Worker()`'s, on the thread's workers.
+        engine.set_worker_host(self.workers.host());
         engine.set_console_sink(Box::new(|message| {
             let kind = if message.uncaught {
                 "uncaught"

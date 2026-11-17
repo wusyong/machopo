@@ -292,6 +292,8 @@ STATICS_ALLOWED = {
         "whether the process's trace records: the trace is a process's (Perfetto's session, as V8's platform), so "
         "a renderer in a process of its own has its own flag, set as its own trace starts",
     ("crates/bindings/src/v8_text.rs", "ASCII_SCANS"): "tests' counters (thread-local)",
+    ("crates/renderer/src/worker_thread.rs", "ENGINE_GONE"):
+        "a unit test's flag, set as its worker's engine goes (its module is the tests')",
     ("crates/bindings/src/unified_heap.rs", "RECEIVER_UNWRAPS"): "tests' counters (thread-local)",
     ("crates/bindings/src/isolate_state.rs", "INFO_SCOPES"): "tests' counters (thread-local)",
     ("crates/bindings/src/isolate_state.rs", "INFO_HANDLES"): "tests' counters (thread-local)",

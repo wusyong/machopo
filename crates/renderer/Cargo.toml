@@ -28,6 +28,8 @@ compositor.workspace = true
 dom_api.workspace = true
 # The DOM's document, styled and laid out (`frame_view`).
 dom.workspace = true
+# A dedicated worker's script of a `data:` URL, decoded here (`worker_thread`).
+data-url.workspace = true
 style.workspace = true
 computed_style.workspace = true
 html.workspace = true

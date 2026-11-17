@@ -58,6 +58,10 @@ pub struct ExecutionContext {
     pub(crate) message_ports: Member<HeapVector<crate::EventTargetImpl>>,
     /// Its `fetch()`s in flight (`fetch`), in the order made.
     pub(crate) fetches: Member<HeapVector<crate::FetchRecord>>,
+    /// Its `Worker`s not terminated (`worker`): alive till then, as their
+    /// workers run till then (Chrome's `DedicatedWorker::
+    /// HasPendingActivity`), found by their workers' numbers.
+    pub(crate) workers: Member<HeapVector<crate::EventTargetImpl>>,
     /// The blob reads queued (`text()`, `arrayBuffer()`, `bytes()`), by
     /// their promises' numbers, what each resolves with (`blob`); taken
     /// and put back.
@@ -89,6 +93,7 @@ impl<'gc> Cx<'_, 'gc> {
                 posted_messages: None,
                 message_ports: None,
                 fetches: None,
+                workers: None,
                 blob_reads: LocalExternal::new(Cell::new(Vec::new())),
                 crypto: None,
                 performance: None,

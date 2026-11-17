@@ -626,6 +626,8 @@ impl RenderThread {
         self.fetches.clear();
         self.script_fetches.clear();
         self.css_refetches.clear();
+        // Its documents' workers with them.
+        self.workers.terminate_running();
         self.popup = None;
         self.popup_closed_by_press = None;
         self.under_mouse_pre_paints = None;

@@ -1,22 +1,28 @@
 //! A dedicated worker's engine (`V8WorkerEngine`): its realm's global a
 //! worker's global, with the interfaces a dedicated worker has (and none a
 //! window alone has), its members the global's own; its timers and the
-//! messages its `Worker` posts are its tasks; what it posts and `close()`
-//! go to its host; what it throws reaches its `onerror`; its script stops
-//! from another thread.
+//! messages its `Worker` posts are its tasks; what it posts, `close()` and
+//! what it throws that its `onerror` doesn't cancel go to its host; its
+//! script stops from another thread. And a window's side (`V8Engine`): a
+//! `Worker` starts, posts and terminates through the window's workers'
+//! host; what its worker sends comes to it as its realm's tasks.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use dom_api::{ClassicScript, EngineSettings, WorkerEngine, WorkerGlobalHost};
-use dom_js::V8WorkerEngine;
+use dom_api::{
+    ClassicScript, EngineSettings, ScriptEngine, WorkerEngine, WorkerError, WorkerGlobalHost,
+    WorkerHost, WorkerStart,
+};
+use dom_js::{V8Engine, V8WorkerEngine};
 
 /// What the worker sent its host.
 #[derive(Default)]
 struct Sent {
     messages: Vec<dom::SerializedMessage>,
     closed: bool,
+    errors: Vec<dom_api::WorkerError>,
 }
 
 struct Host(Rc<RefCell<Sent>>);
@@ -28,6 +34,10 @@ impl WorkerGlobalHost for Host {
 
     fn close(&self) {
         self.0.borrow_mut().closed = true;
+    }
+
+    fn report_error(&self, error: dom_api::WorkerError) {
+        self.0.borrow_mut().errors.push(error);
     }
 }
 
@@ -231,4 +241,252 @@ fn a_worker_s_script_stops_from_another_thread() {
     done.recv_timeout(Duration::from_secs(10))
         .expect("its script stopped");
     thread.join().unwrap();
+}
+
+/// What its script throws and its `onerror` doesn't cancel goes to its
+/// host, for its `Worker`; what it cancels doesn't.
+#[test]
+fn a_worker_s_uncaught_errors_go_to_its_host() {
+    let (mut engine, sent) = worker();
+    run(
+        &mut engine,
+        "onerror = (message) => message.includes('canceled'); \
+         setTimeout(() => { throw new Error('canceled'); }, 0); \
+         throw new TypeError('reported');",
+    );
+    run_tasks_until(&mut engine, |engine| engine.until_next_task().is_none());
+    assert_eq!(
+        sent.borrow().errors,
+        [WorkerError {
+            message: "Uncaught TypeError: reported".to_owned(),
+            filename: "https://example.test/w.js".to_owned(),
+            lineno: 1,
+            colno: 109,
+        }]
+    );
+}
+
+/// What a window's workers' host was asked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Asked {
+    Start(WorkerStart),
+    Post(u64, Vec<u8>),
+    Terminate(u64),
+}
+
+/// A window's workers' host: it numbers its workers from 1, and keeps the
+/// messages posted to them whole (`posted`), to give back as theirs.
+#[derive(Default)]
+struct Workers {
+    asked: RefCell<Vec<Asked>>,
+    posted: RefCell<Vec<dom::SerializedMessage>>,
+}
+
+struct OwnerHost(Rc<Workers>);
+
+impl WorkerHost for OwnerHost {
+    fn start_worker(&self, start: WorkerStart) -> u64 {
+        let mut asked = self.0.asked.borrow_mut();
+        asked.push(Asked::Start(start));
+        u64::try_from(
+            asked
+                .iter()
+                .filter(|asked| matches!(asked, Asked::Start(_)))
+                .count(),
+        )
+        .unwrap()
+    }
+
+    fn post_to_worker(&self, id: u64, message: dom::SerializedMessage) {
+        self.0
+            .asked
+            .borrow_mut()
+            .push(Asked::Post(id, message.bytes.clone()));
+        self.0.posted.borrow_mut().push(message);
+    }
+
+    fn terminate_worker(&self, id: u64) {
+        self.0.asked.borrow_mut().push(Asked::Terminate(id));
+    }
+}
+
+/// A window's engine at `https://example.test/page.html`, with a workers'
+/// host.
+fn page() -> (V8Engine, Rc<Workers>) {
+    let mut engine = V8Engine::new(EngineSettings { web_tests: true });
+    engine
+        .create_window(
+            engine.top_frame(),
+            "https://example.test/page.html",
+            Instant::now(),
+        )
+        .expect("a window");
+    let workers = Rc::new(Workers::default());
+    engine.set_worker_host(Box::new(OwnerHost(workers.clone())));
+    (engine, workers)
+}
+
+fn page_result(engine: &mut V8Engine, source: &str) -> String {
+    engine.run_classic_script(
+        engine.top_frame(),
+        &ClassicScript {
+            source: &format!(
+                "try {{ testRunner.reportHarnessResults(String({source})); }} \
+                 catch (e) {{ testRunner.reportHarnessResults('threw ' + e); }}"
+            ),
+            url: "https://example.test/page.html",
+            base_url: None,
+            line: 1,
+            muted: false,
+            use_credentials: false,
+        },
+    );
+    engine.take_harness_results().expect("a result")
+}
+
+/// `new Worker()` starts its worker through the window's host; what the
+/// worker posts is a `message` at the `Worker` as its realm's task, `null`
+/// its source and empty its origin; what it threw an `error` at the
+/// `Worker`, and at the window if that isn't canceled.
+#[test]
+fn a_window_s_worker_hears_from_its_worker() {
+    let (mut engine, workers) = page();
+    assert_eq!(
+        page_result(
+            &mut engine,
+            "(() => { globalThis.got = []; \
+               globalThis.worker = new Worker('w.js', { name: 'fib' }); \
+               worker.onmessage = e => got.push('message ' + e.data.n + ' ' + (e.source === null) + ' ' + JSON.stringify(e.origin)); \
+               worker.onerror = e => { got.push('worker error ' + e.message + ' ' + e.lineno + ' ' + e.error); \
+                 if (e.message.includes('handled')) e.preventDefault(); }; \
+               onerror = message => got.push('window error ' + message); \
+               worker.postMessage({ n: 40 }); return typeof worker; })()"
+        ),
+        "object"
+    );
+    let origin = url::Url::parse("https://example.test/").unwrap().origin();
+    assert!(matches!(
+        &workers.asked.borrow()[..],
+        [Asked::Start(start), Asked::Post(1, _)]
+            if start.url.as_str() == "https://example.test/w.js"
+                && start.name == "fib"
+                && start.owner_origin == Some(origin)
+    ));
+    // What it posted comes back as its worker's.
+    let message = workers.posted.borrow_mut().pop().unwrap();
+    engine.worker_message(1, message);
+    engine.run_due_tasks();
+    for (message, lineno) in [("Uncaught Error: handled", 2), ("Uncaught Error: boom", 3)] {
+        engine.worker_error(
+            1,
+            &WorkerError {
+                message: message.to_owned(),
+                filename: "https://example.test/w.js".to_owned(),
+                lineno,
+                colno: 7,
+            },
+        );
+    }
+    // A worker that isn't the window's: nothing.
+    engine.worker_error(
+        2,
+        &WorkerError {
+            message: "elsewhere".to_owned(),
+            filename: String::new(),
+            lineno: 0,
+            colno: 0,
+        },
+    );
+    assert_eq!(
+        page_result(&mut engine, "got.join('|')"),
+        "message 40 true \"\"|worker error Uncaught Error: handled 2 null|\
+         worker error Uncaught Error: boom 3 null|window error Uncaught Error: boom"
+    );
+}
+
+/// After `terminate()`, its host terminates its worker once, nothing more
+/// is posted to it, and nothing of it comes to the `Worker`, even what it
+/// sent before (HTML's: its port's queue emptied); after its worker closed
+/// itself, nothing comes either.
+#[test]
+fn a_terminated_worker_is_heard_no_more() {
+    let (mut engine, workers) = page();
+    page_result(
+        &mut engine,
+        "(() => { globalThis.got = []; \
+           globalThis.a = new Worker('a.js'); a.onmessage = e => got.push('a ' + e.data); \
+           globalThis.b = new Worker('b.js'); b.onmessage = e => got.push('b ' + e.data); \
+           a.postMessage('x'); b.postMessage('y'); })()",
+    );
+    let y = workers.posted.borrow_mut().pop().unwrap();
+    let x = workers.posted.borrow_mut().pop().unwrap();
+    // `a`'s message queued, then `a` terminated before it ran.
+    engine.worker_message(1, x);
+    page_result(
+        &mut engine,
+        "(a.terminate(), a.terminate(), a.postMessage('late'))",
+    );
+    engine.run_due_tasks();
+    // `b` closed itself: its later message is no more its `Worker`'s.
+    engine.worker_closed(2);
+    engine.worker_message(2, y);
+    engine.worker_error(
+        2,
+        &WorkerError {
+            message: "late".to_owned(),
+            filename: String::new(),
+            lineno: 0,
+            colno: 0,
+        },
+    );
+    engine.run_due_tasks();
+    assert_eq!(page_result(&mut engine, "got.length"), "0");
+    assert_eq!(
+        workers
+            .asked
+            .borrow()
+            .iter()
+            .filter(|asked| !matches!(asked, Asked::Start(_)))
+            .cloned()
+            .collect::<Vec<_>>()
+            .iter()
+            .map(|asked| match asked {
+                Asked::Post(id, _) => format!("post {id}"),
+                Asked::Terminate(id) => format!("terminate {id}"),
+                Asked::Start(_) => unreachable!(),
+            })
+            .collect::<Vec<_>>(),
+        ["post 1", "post 2", "terminate 1"]
+    );
+}
+
+/// A document's workers end with it: an iframe's as it is removed, a
+/// window's as its frame gets another document.
+#[test]
+fn a_document_s_workers_end_with_it() {
+    let (mut engine, workers) = page();
+    page_result(
+        &mut engine,
+        "(() => { document.append(document.createElement('html')); \
+           const f = document.createElement('iframe'); document.documentElement.append(f); \
+           globalThis.inner = new f.contentWindow.Worker('inner.js'); \
+           globalThis.outer = new Worker('outer.js'); f.remove(); })()",
+    );
+    let ended = |workers: &Workers| {
+        workers
+            .asked
+            .borrow()
+            .iter()
+            .filter_map(|asked| match asked {
+                Asked::Terminate(id) => Some(*id),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    // The iframe's (the first made) ended; the window's runs on.
+    assert_eq!(ended(&workers), [1]);
+    engine
+        .create_window(engine.top_frame(), "https://example.test/next.html", Instant::now())
+        .expect("a window");
+    assert_eq!(ended(&workers), [1, 2]);
 }

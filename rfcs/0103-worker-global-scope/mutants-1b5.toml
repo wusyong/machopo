@@ -1,0 +1,151 @@
+# 1b-5: dedicated workers' threads in the renderer (worker_thread), and the
+# page's side of them (dom's Worker registry and messages for a Worker,
+# dom_api's worker_error, dom_js's V8Engine and its documents' workers).
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "worker::"]
+timeout = 900
+
+[[mutant]]
+name = "a worker's script isn't stopped"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''        if let Some(terminate) = terminator.as_ref() {
+            terminate();
+        }'''
+to = '''        if let Some(terminate) = terminator.as_ref().filter(|_| false) {
+            terminate();
+        }'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "workers::"]
+
+[[mutant]]
+name = "a message isn't posted to its worker"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''            let _ = worker.tasks.send(WorkerTask::Message(message));'''
+to = '''            let _ = (&worker.tasks, message);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "workers::"]
+
+[[mutant]]
+name = "a worker's message isn't posted to its owner"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''            .post_worker(self.id, WorkerEvent::Message(message));'''
+to = '''            .post_worker(self.id, WorkerEvent::Closed);
+        let _ = message;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "workers::"]
+
+[[mutant]]
+name = "a worker's close() closes nothing"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''        self.closing.set(true);'''
+to = '''        let _ = &self.closing;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "workers::"]
+
+[[mutant]]
+name = "a worker's error isn't posted to its owner"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''            .post_worker(self.id, WorkerEvent::Error(error));'''
+to = '''            .post_worker(self.id, WorkerEvent::Closed);
+        let _ = error;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "workers::"]
+
+[[mutant]]
+name = "a message a worker got isn't its task"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''            Some(WorkerTask::Message(message)) => engine.post_message(message),'''
+to = '''            Some(WorkerTask::Message(_)) => {}'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "workers::"]
+
+[[mutant]]
+name = "the renderer waits for no worker's thread"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''        for thread in self.threads.borrow_mut().drain(..) {
+            let _ = thread.join();
+        }'''
+to = '''        self.threads.borrow_mut().clear();'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "worker_thread"]
+
+[[mutant]]
+name = "a worker's failed script isn't heard of"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            WorkerEvent::ScriptFailed => {
+                engine.worker_script_failed(id);'''
+to = '''            WorkerEvent::ScriptFailed => {
+                let _ = id;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "workers::"]
+
+[[mutant]]
+name = "what a worker's error made reported isn't sent"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                engine.worker_script_failed(id);
+                self.workers.forget(id);
+                self.send_harness_results();'''
+to = '''                engine.worker_script_failed(id);
+                self.workers.forget(id);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "workers::"]
+
+[[mutant]]
+name = "a worker's message is for the window"
+file = "crates/dom/src/message.rs"
+from = '''        message.target.set(self.gc, Some(worker));'''
+to = '''        let _ = worker;'''
+
+[[mutant]]
+name = "a terminated worker is found"
+file = "crates/dom/src/worker.rs"
+from = '''            .find(|&worker| self.worker_id(worker) == id)'''
+to = '''            .find(|&worker| self.worker_id(worker) == id || self.worker_terminated(worker))'''
+
+[[mutant]]
+name = "a terminated worker's message is dispatched"
+file = "crates/dom_api/src/message.rs"
+from = '''            TargetRef::EventTarget(worker) => cx.is_worker(worker) && cx.worker_terminated(worker),'''
+to = '''            TargetRef::EventTarget(_) => false,'''
+
+[[mutant]]
+name = "a worker's error isn't reported at the window"
+file = "crates/dom_api/src/worker.rs"
+from = '''    if let Some(global) = global {
+        crate::report_exception(host, &global, &info, None);
+    }'''
+to = '''    let _ = global;'''
+
+[[mutant]]
+name = "a canceled worker's error is reported at the window"
+file = "crates/dom_api/src/worker.rs"
+from = '''    if !crate::dispatch(host, &target, &event) {
+        return;
+    }'''
+to = '''    crate::dispatch(host, &target, &event);'''
+
+[[mutant]]
+name = "a worker's uncaught error isn't its host's"
+file = "crates/dom_js/src/listeners.rs"
+from = '''        host.report_error(dom_api::WorkerError {'''
+to = '''        let _ = host;
+        drop(dom_api::WorkerError {'''
+
+[[mutant]]
+name = "a closed worker is heard from"
+file = "crates/dom_js/src/engine.rs"
+from = '''            self.state()
+                .dom
+                .mutate(|cx| cx.terminate_worker_object(worker.get(cx.gc)));
+        }
+    }
+
+    fn run_posted_messages'''
+to = '''            let _ = worker;
+        }
+    }
+
+    fn run_posted_messages'''
+
+[[mutant]]
+name = "an iframe's workers outlive it"
+file = "crates/dom_js/src/frames.rs"
+from = '''    let removed = state.frames.remove(frame);
+    terminate_workers(state, removed.iter().map(|frame| &frame.document));'''
+to = '''    let removed = state.frames.remove(frame);'''
+
+[[mutant]]
+name = "a window's workers outlive its document"
+file = "crates/dom_js/src/engine.rs"
+from = '''            crate::frames::terminate_workers(state, &gone);'''
+to = '''            let _ = (state, gone);'''

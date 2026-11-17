@@ -311,6 +311,7 @@
 - DOM 的 `new DOMRectReadOnly(...)` 做出的 rect 標成 `DOMRect`（`dom_api` 的 `geometry::construct_read_only_rect` 的 `read_only`）：建構子的 wrapper 是建構的呼叫自己做的，prototype 照 `new.target`，不經過照 `read_only` 選 interface（`typed::interface_of`）的那一步，wrapper 之後一直留著；`DOMRect` 的 setter 由 V8 的 signature 擋掉不是 `DOMRect` 的物件。`read_only` 只對 DOM 做的、之後才包 wrapper 的 rect 有作用（`fromRect`、observer 的 entry），它們有測試。
 - DOM 回頭呼叫 script 的入口在被打斷時直接回來（`dom_js` 的 `listeners.rs` 的 `call_callback`、`call_handler`，`handlers.rs` 的 `compile_event_handler`，`front.rs` 的 `upgrade_element`、`call_lifecycle_callback`、`settle_promises`，`frames.rs` 的 `run_classic_script`）：拿掉時下一個 callback 照樣被呼叫，但前一個被打斷時已經再要求了打斷（`bindings::stop_again`），它在函式的入口就停下，看不到差別。留著是照 V8 的約定（打斷之後 embedder 不再進 V8，`--strict-termination-checks`），和 Blink 的 listener 的入口一樣（`JSBasedEventListener::Invoke`）；也省下建 wrapper、編譯 handler 的工夫。
 - DOM 的 event target 參數是 worker 的 global 時當成它（`dom_js` 的 `info_front.rs` 的 `target`）：worker 有的成員沒有收 event target 參數的（收它的只有 `MouseEvent`、`FocusEvent` 的 init 的 `relatedTarget`，只在 window），window 的 realm 拿不到 worker 的 global，拿掉這一層走不到。之後 worker 有的成員收 event target 時才看得出來。
+- DOM 照編號找執行環境的 `Worker`（`dom` 的 `worker.rs` 的 `context_worker`）改成結束了的也算：清單只有沒結束的（`terminate_worker_object` 把它拿掉），結果一樣。
 
 - debug build 比對 fast path 和 tree builder 的結果時，不比 input 的型別（`html` 的 `fast_path_build::same_tree` 的 `input_kind`）：兩邊屬性一樣時，只有 fast path 把 input 建錯才會型別不同，檢查就是為了抓這個；fast path 建對時拿掉它結果一樣。fast path 照屬性建 input 的型別由 `html` 的 `fast_path::inputs_are_made_of_their_types` 直接比兩種 parser 的結果守著。
 

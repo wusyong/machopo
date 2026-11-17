@@ -36,7 +36,44 @@ impl<'gc> Cx<'_, 'gc> {
             },
         );
         target.worker.set(self.gc, Some(data));
+        let workers = match context.workers.get(self.gc) {
+            Some(workers) => workers,
+            None => {
+                let workers = elise::HeapVector::new(self.gc, 1);
+                context.workers.set(self.gc, Some(workers));
+                workers
+            }
+        };
+        workers.push(self.gc, target);
         target
+    }
+
+    /// `context`'s `Worker`s not terminated, in the order made.
+    pub fn context_workers(
+        &self,
+        context: Gc<'gc, ExecutionContext>,
+    ) -> Vec<Gc<'gc, EventTargetImpl>> {
+        context
+            .workers
+            .get(self.gc)
+            .map_or_else(Vec::new, |workers| {
+                (0..workers.len())
+                    .filter_map(|index| workers.get(self.gc, index))
+                    .collect()
+            })
+    }
+
+    /// `context`'s `Worker` of the worker numbered `id`, if it isn't
+    /// terminated.
+    pub fn context_worker(
+        &self,
+        context: Gc<'gc, ExecutionContext>,
+        id: u64,
+    ) -> Option<Gc<'gc, EventTargetImpl>> {
+        let workers = context.workers.get(self.gc)?;
+        (0..workers.len())
+            .filter_map(|index| workers.get(self.gc, index))
+            .find(|&worker| self.worker_id(worker) == id)
     }
 
     /// Whether `target` is a `Worker`.
@@ -58,9 +95,23 @@ impl<'gc> Cx<'_, 'gc> {
         self.worker_data(worker).terminated.get()
     }
 
-    /// `worker` is terminated: for good.
+    /// `worker` is terminated: for good, no more its realm's (nothing of
+    /// its worker comes to it).
     pub fn terminate_worker_object(&self, worker: Gc<'gc, EventTargetImpl>) {
         self.worker_data(worker).terminated.set(true);
+        let workers = self
+            .target_context(crate::TargetRef::EventTarget(worker))
+            .and_then(|context| context.workers.get(self.gc));
+        if let Some(workers) = workers {
+            let index = (0..workers.len()).find(|&index| {
+                workers
+                    .get(self.gc, index)
+                    .is_some_and(|w| Gc::ptr_eq(w, worker))
+            });
+            if let Some(index) = index {
+                workers.remove(self.gc, index);
+            }
+        }
     }
 
     fn worker_data(&self, worker: Gc<'gc, EventTargetImpl>) -> Gc<'gc, WorkerObjectData> {

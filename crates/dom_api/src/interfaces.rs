@@ -788,7 +788,9 @@ crate::declare! {
         // WebIDL `unsigned long`.
         attribute lineno: u32, get = event::lineno;
         attribute colno: u32, get = event::colno;
-        attribute error: Any, get = event::error;
+        // Null when not given (Blink's `ErrorEvent::error`): a worker's
+        // error at its `Worker`, an event constructed without one.
+        attribute error: AnyOrNull, get = event::error;
     }
 
     dictionary ErrorEventInit {

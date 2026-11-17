@@ -13,7 +13,7 @@
 | 1b-2：`dom` 的 worker 的 global（自己的執行環境、event target），執行環境的 timer 和 task | 做完（第 14、15 條） | 2026-11-17 |
 | 1b-3：`dom_api` 的 `Worker`、`WorkerGlobalScope`、`DedicatedWorkerGlobalScope` 和 worker 也有的 timer 等成員 | 做完（第 16、17 條） | 2026-11-17 |
 | 1b-4：worker 的 engine（`dom_api` 的 trait、`dom_js` 的實作，global 照 exposed 建） | 做完（第 18 條） | 2026-11-17 |
-| 1b-5：`renderer` 的 worker 的 thread 和 event loop、兩個方向的 `postMessage`、`terminate()`、`close()`、`onerror` | 還沒開始 | |
+| 1b-5：`renderer` 的 worker 的 thread 和 event loop、兩個方向的 `postMessage`、`terminate()`、`close()`、`onerror` | 做完（第 19 條；主 script 暫時只有 `data:` 的網址） | 2026-11-17 |
 | 1b-6：Browser 的登記和主 script 的載入、子資源的請求帶 client、`importScripts()` | 還沒開始 | |
 | 1b-7：WPT 的 `workers/`、情境、`about:demo`、文件、整個階段的檢查 | 還沒開始 | |
 | 2：worker 裡的 `fetch()`、`MessagePort` 跨 thread、module worker | 還沒開始 | |
@@ -30,6 +30,7 @@
 | 1b-2：worker 的 global 的執行環境回答它自己的 URL、base URL 和 origin；它的 timer、task、port 的訊息是它的執行環境的，和同一個 `Dom` 裡的 window 分開；它是自己的 event target | `cargo test -p dom --test it worker_global::`、`events::every_target_holds_listeners`、`tasks::` |
 | 1b-3：`new Worker()` 照 realm 的 base URL 解析網址、帶名稱和 realm 的 origin 當場請 host 啟動 worker，錯的網址、`type` 和沒有 host 時丟對的例外；`postMessage()`、`terminate()` 當場經過 host；worker 的 global 的 timer、`name`、`self`、`crypto`、`postMessage()`、`close()` | `cargo test -p dom_api --test it worker::`、`cargo test -p dom --test it worker::`；表的 `table::` 測試 |
 | 1b-4：worker 的 engine 的 realm 的 global 是 worker 的 global，只有 dedicated worker 有的 interface，`[Global]` 的成員是 global 自己的；它的 timer、`Worker` 送來的訊息是它的 task，送出的和 `close()` 經過 host，例外到它的 `onerror`（`OnErrorEventHandler` 的呼叫方式），script 之後 microtask checkpoint，從別的 thread 打斷得了 | `cargo test -p dom_js --test it worker::` |
+| 1b-5：整個瀏覽器裡 `data:` 網址的 worker：兩個方向的訊息、例外到 `Worker` 和 window、`terminate()` 停得了跑不停的、`close()` 之後沒有、script 拿不到時 `Worker` 上是 `error`、renderer 結束時等 worker 的 thread；文件不在時它的 worker 結束 | `cargo test -p shell --test it workers::`、`cargo test -p dom_js --test it worker::`、`cargo test -p renderer --lib worker_thread` |
 
 ## 做過的檢查
 
@@ -118,4 +119,14 @@
 - 找到、留給 1b-7 的：沒有 window 的執行環境裡，一般的 target 的 task 和 UA 的 timer 被丟掉（`dom` 的 `push_target_task`、`add_target_timer` 照執行環境的 window 的文件排）：worker 裡 `FileReader` 的事件、`AbortSignal.timeout()`、`Blob` 的 `text()` 等現在不會完成。要讓 task 的元素可以沒有；1b-7 跑 WPT 的 worker variant 時看用到的有哪些再改。
 - WPT（`python3 scripts/test.py wpt dom/events/ html/webappapis/timers/ webmessaging/ html/webappapis/scripting/ html/webappapis/microtask-queuing/ dom/abort/ url/idlharness.any.js FileAPI/`）：3324 個檢查，和預期不同的 4 個是 1a 記下的 `scrollend` 那幾個（Mac 上 `navigator.platform` 的關係），和這次無關。
 - 跑過的：`cargo test -p dom -p dom_api -p dom_js -p dom_wasm -p renderer -p bindings` 都通過。
+
+### 1b-5：renderer 的 worker 的 thread（2026-11-17，macOS，Apple Silicon）
+
+- 5a（頁面那一側）：`dom` 的執行環境留著沒結束的 `Worker`（照編號找：`context_worker`、`context_workers`；結束時拿掉，「已決定的事項」第 19 條），posted message 可以指定 `Worker` 當 target（`post_worker_object_message`）；`dom_api` 的 `WorkerGlobalHost::report_error`、`WorkerError`、`worker_error`（`Worker` 上可以取消的 `ErrorEvent`，`error` 是 null，沒被取消時在它的 realm 的 global 回報），結束了的 `Worker` 的訊息不分派（HTML：`terminate()` 清空它的 port 的佇列）；`ScriptEngine` 多了 `set_worker_host`、`worker_message`、`worker_error`、`worker_closed`、`worker_script_failed`（`V8Engine` 照 frame 的 window 的執行環境找 `Worker`）；worker 那一側沒被取消的例外交給 host。`ErrorEvent.error` 沒給時是 null（`AnyOrNull`；Blink 的 `ErrorEvent::error` 也是：WPT 的 `workers/Worker_ErrorEvent_error.htm` 要 null），`dom_js` 原本測 `new ErrorEvent('x').error === undefined` 的那一條改成 null。
+- 5b（renderer）：`worker_thread.rs`（「已決定的事項」第 11 條）：每個 worker 一條 thread（`DedicatedWorker thread`）、自己的 engine（`ScriptEngineFactory::worker_engine`，shell 給 `dom_js::V8WorkerEngine`），一個 channel（訊息、結束），loop 等 channel 和 engine 的下一個 task；送給 `Worker` 的經過 main thread 的 scheduler 的新 queue（`TaskQueue::Worker`、`MainThreadTask::Worker`），render thread 交給 engine，例外和 script 拿不到之後送出 harness 的結果；`terminate()`（第 12 條）：設旗標、呼叫 engine 的 terminator、送結束的 task；`close()`：這個 task 之後 loop 結束、告訴 `Worker`；文件不在時（iframe 拿掉、frame 換文件、最上層換文件，`dom_js` 的 `frames::terminate_workers`）、換 engine、renderer 結束時結束 worker，renderer 結束時等每條 thread；主 script 只有 `data:` 的網址（`data-url`，origin 是 opaque 的），其他的是 `Worker` 上的 `error`（1b-6 經過 Browser 抓）。
+- 新的測試：`shell` 的 `workers::`（6 個：兩個方向的訊息、例外到 `Worker` 和 window、`terminate()` 跑不停的 worker、`close()`、script 拿不到、renderer 結束時跑不停的 worker）；`dom_js` 的 `worker::a_worker_s_uncaught_errors_go_to_its_host`、`a_window_s_worker_hears_from_its_worker`、`a_terminated_worker_is_heard_no_more`、`a_document_s_workers_end_with_it`；`renderer` 的 `worker_thread::tests::the_renderer_waits_for_its_workers_threads`（假的 engine 放掉時要 100 ms：mutation test 沒抓到的那一條補的）。
+- 找到的問題：`shell` 的「script 拿不到」的測試第一次通過、之後一直逾時：render thread 處理 worker 的 task 時派了事件，但沒有像其他跑 script 的地方那樣送出 harness 的結果；第一次通過是因為頁面載入完的那個 task 剛好在它後面、順便送了。改成處理例外和 script 拿不到之後送；測試改成在 `load` 之後才建 `Worker`，不靠時序。
+- mutation test（`rfcs/0103-worker-global-scope/mutants-1b5.toml`）：18 條。第一次 13 條抓到、1 條卡住（`Worker` 送出的訊息變成結束：頁面一直等，算抓到）、1 條編不過（改寫之後卡住：打斷不了跑不停的 worker，renderer 結束時一直等它的 thread，算抓到）、3 條沒抓到：「renderer 不等 worker 的 thread」（補了上面的 `renderer` 的測試，重跑抓到）、「script 拿不到之後不送 harness 的結果」（測試照時序有時通過，改成 `load` 之後建 `Worker`，重跑抓到）、「照編號找 `Worker` 時結束了的也算」（等價：清單只有沒結束的，記進 `docs/test-gaps.md`）。
+- WPT（`python3 scripts/test.py wpt html/webappapis/ dom/events/ webmessaging/ FileAPI/ netinfo/ geolocation/ screen-wake-lock/` 和預期結果提到 worker 的幾份）：3828 個檢查，和預期不同的 90 個：4 個是 1a 記下的 `scrollend`；86 個是 worker 的 variant（`.any.worker.html`、`Worker-read-file-constructor.worker.html` 等）從 ERROR 變成 TIMEOUT。原因：`Worker` 有了，但 http 的 script 還不抓（1b-6），`Worker` 上的 `error` 在 worker 送出第一個訊息之前到，testharness.js 留著它等 worker 開始（`RemoteContext::remote_error` 的 `early_exception`），一直等不到。這是 1b-6 之前的暫時狀態，預期結果在 1b-7 跑 worker 的 variant 時一起更新。
+- 跑過的：`cargo test -p dom -p dom_api -p dom_js -p dom_wasm -p renderer -p shell -p browser` 都通過。
 
