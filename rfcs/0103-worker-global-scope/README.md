@@ -1,0 +1,232 @@
+# RFC 0103：worker 的執行環境：Window 以外的 global，和 dedicated worker
+
+- 開始日期：2026-11-17
+- 狀態：📝 草稿
+- 細節：`details.md`
+
+## 摘要
+
+machopo 的每個 realm 的 global 都是 Window，`dom_api` 的成員也都假設「現在的 realm 有一個 window」。這份 RFC 先把「執行環境」從 Window 分出來（Blink 的 `ExecutionContext`：timer、task、訊息、`fetch()` 這些不需要文件的狀態），讓宣告表寫明每個 interface 在哪些 global 有，再做 dedicated worker：自己的 thread、自己的 V8 isolate、自己的 DOM heap，global 是 `DedicatedWorkerGlobalScope`。
+
+2026-11-17 決定了 1a 開始前要決定的三件事（「已決定的事項」）；1b 的還是當天的看法，沒有確認。
+
+## 動機
+
+**現況**。沒有任何一種 worker：`new Worker(...)` 是 `ReferenceError`。程式裡「global 是 Window」的假設有三層：
+
+- `dom` 的 `Window`（`crates/dom/src/window.rs`）同時放著文件才有的狀態（`document`、`history`、animation frame、observer）和任何執行環境都要的狀態（timer、listener、排著的訊息、message port、進行中的 `fetch()`、blob 的讀取、`crypto`、`performance`、time origin）。
+- `dom_api` 的成員向 front 要「現在的 realm 的 window」（`OpFront::current_window`，`crates/dom_api/src/typed.rs`）來建物件、排 task：28 個檔案、50 處（`details.md` 的「現況的調查」）。其中 `AbortController`、`Request`、`Response`、`URL`、`Event`、`MessageChannel`、`FileReader` 在規範裡 worker 也有。
+- `dom_js` 建 realm 時 global 一律用宣告表的 `Window` 的 template，再把表上每個 interface 裝上去（`crates/dom_js/src/window.rs` 的 `create_window_realm`、`crates/dom_js/src/templates.rs` 的 `install`）。宣告表沒有「這個 interface 在哪些 global 有」的寫法。
+
+**風險**。之後要補很多 DOM API，每補一個就多一處這樣的假設；worker 越晚做，要回頭改的成員越多。先把執行環境分出來、表上有地方寫 exposed，之後每個新的 API 一開始就寫對。
+
+**使用量**（chromestatus.com，2026-11-15，Chrome 的 page load 比例）：啟動過 dedicated worker 的 22%，被 service worker 控制的 19%，啟動過 shared worker 的 3%。web-features 沒有 dedicated worker 的計數，所以 `python3 scripts/features.py` 的清單把它列在沒有使用量的那一節。
+
+**目標**：
+
+1. 執行環境和 Window 分開：不需要文件的狀態和它們的操作，Window 和 worker 的 global 共用一份實作。
+2. 宣告表寫明 exposed；每種 global 只裝它有的 interface。
+3. dedicated worker：`new Worker(url)`（classic script）、兩個方向的 `postMessage`、`onmessage`、`onerror`、`terminate()`、`close()`、`self`、timer、`console`、`importScripts()`。worker 裡忙等不擋住頁面。
+4. WPT 的 `.any.js` 測試的 worker variant 跑得起來：現在這些 variant 在 `tests/wpt/metadata/` 裡標成預期失敗，理由是「machopo has no workers」。
+
+**不在範圍內**：
+
+- shared worker、service worker、worklet（「之後的可能」）。
+- `OffscreenCanvas`、`SharedArrayBuffer` 和 `Atomics.wait`（要 cross-origin isolation）、`FileReaderSync`。
+- wasm 文件的 worker：worker 的 script 是 JS。
+- worker 的 DevTools（`Target` 的 worker session）。
+
+**要解決的限制**（`docs/limitations.md`）：
+
+- 「事件」的 `MessageChannel` 和 `MessagePort` 那一條：兩個 port 都在同一個 renderer 的同一條 thread 上。port 傳給 worker 時要跨 thread（第 2 階段）。
+- `docs/limitations.md` 沒有一條專門寫「沒有 worker」，只在「Bindings 和 DOM API」的 `Blob` 那一條順帶提到（`FileReaderSync`）。做完時在那一節加一條，寫 worker 有什麼、還沒有什麼。
+
+## 設計概要
+
+網頁的作者看到的：
+
+```js
+// 頁面
+const worker = new Worker("work.js");
+worker.onmessage = (e) => console.log(e.data);
+worker.postMessage({ n: 40 });
+
+// work.js
+importScripts("fib.js");
+self.onmessage = (e) => self.postMessage(fib(e.data.n));
+```
+
+worker 的 script 在另一條 thread 上跑：它算很久的時候，頁面照樣捲動、照樣跑自己的 script。worker 裡沒有 `document`、`window`，`self` 是 `DedicatedWorkerGlobalScope`；`setTimeout`、`console`、`URL`、`AbortController`、`Event`、`EventTarget` 這些照樣有。
+
+之後改這部分程式的人看到的：
+
+- 表上的 interface 多一個 exposed 的寫法，沒寫的只在 Window 有。成員的函式拿到的是執行環境，不是 window；要 window 的成員在表上標明，而且只能在只有 Window 有的 interface 上，放錯是編譯錯誤（「已決定的事項」第 2 條）。
+- timer、訊息、`fetch()` 的狀態不再是 `Window` 的欄位，是執行環境的；`Window` 和 worker 的 global 各有一個。
+
+## 詳細設計
+
+以下是方向，細節在每個階段開始前決定（「待決定」）。
+
+### 執行環境（`dom`）
+
+`dom` 多一個 GC 型別，暫名 `GlobalScope`（Blink 的 `ExecutionContext`），放不需要文件的狀態；`Window` 拿著一個，worker 的 global（暫名 `WorkerGlobalScope`）也拿著一個。`Window` 現在的欄位怎麼分，見 `details.md` 的「`Window` 的狀態分到哪裡」。task 的挑選（`Cx::next_task`）、timer 的到期、訊息的佇列改成對執行環境做。
+
+### 宣告表的 exposed（`dom_api`）
+
+`declare!` 的 interface 多一個屬性，寫它在哪些 global 有（WebIDL 的 `[Exposed]`：`Window`、`Worker`、`DedicatedWorker`），沒寫的只在 Window 有；個別的成員需要時也可以寫。產生的 `InterfaceDesc` 帶著它。`DedicatedWorkerGlobalScope`、`WorkerGlobalScope`、`Worker`、`WorkerNavigator`、`WorkerLocation` 是表上新的 interface。
+
+成員拿不到 window 由型別保證（「已決定的事項」第 2 條）。怎麼寫是 2026-11-17 的看法，1a 的第一步用原型確認：
+
+- 現在成員的函式經過 front 的操作那一側拿 window：`OpFront::current_window`（`crates/dom_api/src/typed.rs`），表上標了 `#[front]` 的成員都拿得到（`crates/dom_api/src/interfaces.rs` 有 470 個），標了 `#[realm]` 的拿到的是 `this` 的 relevant realm 的（3 個，`Blob` 的讀取）。
+- 改成：`OpFront` 給成員的只有執行環境（現在的 realm 的，或 `#[realm]` 時 `this` 的 relevant realm 的）。要 window 的成員在表上另外標明（暫名 `#[window]`），由 `declare!` 產生的程式拿 window、當成參數交給它的函式；成員的函式自己沒有辦法向 front 要 window。
+- `#[window]` 寫在 exposed 不只 Window 的 interface 的成員上時，`declare!` 報錯，指到表上那一行。「放錯」因此是表的編譯錯誤，不是執行時的例外。
+- 另一個寫法是把 `OpFront` 拆成兩個 trait、讓 `declare!` 照 exposed 給不同的型別。它要替每個 front 多一個型別或一層轉交（`OpFront` 的實作有四個：`dom_js` 的、`dom_wasm` 的和兩個測試用的），所以看法是用上面那個；原型發現上面那個擋不住時再比。
+
+### global 照表建（`dom_js`）
+
+建 realm 時照 global 的種類選 template、只裝 exposed 包含它的 interface。interface 的 template 還是每個 isolate 一份；worker 的 isolate 只建它用得到的。
+
+### worker 的 thread（`renderer`）
+
+每個 dedicated worker 一條 thread（Chromium 的名字是 `DedicatedWorker thread`），由擁有它的文件所在的 renderer 的 main thread 建。那條 thread 上有自己的 V8 isolate、自己的 `Dom`（elise 的 heap；`Dom` 不是 `Send`，名稱表是 thread-local）和 `dom_js` 的 engine 狀態，跑一個比 main thread 簡單的 event loop：等訊息和 timer，一次跑一個 task、之後 microtask checkpoint。
+
+renderer 這一側的規則（`docs/architecture.md` 的「Process 的邊界」）不變：worker 的 thread 在 renderer 這一側，它和 main thread 之間是 renderer 內部的 channel，不是 `protocol` 的 message；不加整個 process 共用的可變狀態。
+
+`dom_api` 的 `ScriptEngine` 是照 frame 和文件設計的（建 window、當 parser 的 host、收輸入、拿 layout）。worker 用另一個小的介面：建 global、跑 classic script、跑到期的 task、收訊息、結束。
+
+### 訊息
+
+`postMessage` 的訊息已經是可以跨 thread 的資料：`dom` 的 `SerializedMessage` 是 engine 序列化的 bytes 加上 `Box<dyn Any + Send>`（`crates/dom/src/message.rs`；V8 的 `ValueSerializer`，`crates/dom_js/src/serialize.rs`）。`Worker` 和 worker 的 global 之間是一對隱含的 port：一邊序列化、經過 channel、另一邊在自己的 realm 反序列化，發 `MessageEvent`。
+
+`MessagePort` 傳進 worker（transfer）要讓 port 的兩端在不同的 thread 上，現在的 port 直接把訊息排進對方的佇列。這是第 2 階段。
+
+### 載入 script
+
+worker 的主 script 和 `importScripts()` 的 script 經過 Browser 的 `net` 載入，和頁面的子資源一樣。`importScripts()` 是同步的：worker 的 thread 要能自己等回應，不能靠 main thread 轉交（main thread 忙的時候 worker 會卡住）。現在子資源的回應（`RendererMsg::ResourceResponse`）只送到 renderer 的 main thread 的 scheduler；worker 怎麼拿到自己的請求通道是「待決定」第 5 條。
+
+### 結束
+
+`worker.terminate()`、worker 自己的 `close()`、擁有它的文件被丟棄時 worker 結束。`terminate()` 要能打斷正在跑的 script（V8 的 `IsolateHandle::terminate_execution` 可以從別的 thread 呼叫）；之後那條 thread 照順序放掉 engine、`Dom` 和 isolate，再結束。
+
+### 測試
+
+- **重構的階段（1a）**：行為不變，現有的 `cargo test -p dom`、`-p dom_api`、`-p dom_js` 和相關的 WPT 目錄（timer、訊息、`fetch`、abort）是回歸檢查；exposed 的表另外寫 `dom_api` 的測試（每個 interface 的 exposed 和規範一致的抽查、Window 才有的 interface 不裝在 worker 的 global 上）。
+- **worker（1b 起）**：WPT 的 `workers/` 裡 dedicated worker 的目錄，和 `.any.js` 測試的 worker variant：加進 `tests/wpt/include.txt`、拿掉對應的預期失敗。WPT 沒有涵蓋的（thread 的結束順序、`terminate()` 打斷忙等的 script、文件丟棄時 worker 跟著結束）寫 `dom_js` 和 `renderer` 的整合測試。
+- **情境**：一份「worker 忙等的時候頁面照樣捲動、按鈕照樣有反應」的情境（`tests/scenarios/`）。
+- **mutation test**：每個階段照 `docs/testing.md` 的「Mutation test」跑。
+- **只能靠審查的**：isolate、heap 和 thread 的放掉順序裡 `unsafe` 的論證（`crates/bindings/soundness.md`）；記進 `docs/test-gaps.md`。
+
+### 分階段
+
+| 階段 | 做什麼 | 做完時看得到什麼 |
+| --- | --- | --- |
+| 1a | 執行環境從 `Window` 分出來；宣告表的 exposed；global 照表建。都在 main thread 上 | 行為不變；表上每個 interface 有 exposed |
+| 1b | dedicated worker：thread、isolate、`Dom`、`DedicatedWorkerGlobalScope`，classic script、`postMessage`、timer、`console`、`importScripts()`、`terminate()`、`close()`、`onerror` | 上面的例子跑得起來；WPT 的 worker variant 開始跑 |
+| 2 | worker 裡的 `fetch()`、`MessagePort` 跨 thread、module worker（`type: "module"`）、巢狀的 worker、`WorkerNavigator`、`WorkerLocation`、`performance` | 常見的函式庫的 worker 用法 |
+
+1a 自己就有價值：它定下之後每個 API 怎麼寫。它做完先 merge（「已決定的事項」第 3 條）。
+
+## 缺點
+
+- 每個 worker 一個 V8 isolate 和一個 heap：記憶體和啟動時間都比「同一個 isolate 裡多一個 realm」多。Chromium 也是這個成本。
+- `dom` 多一層：讀 timer、訊息的地方從 `Window` 多走一步到執行環境。
+- 1a 是動到很多檔案的重構，期間和其他正在做的 DOM API 的工作容易衝突。
+- thread 之間的結束順序是新的一類錯誤（worker 還在跑時文件被丟棄、`terminate()` 和訊息同時到）。
+
+## 理由和其他做法
+
+**執行環境怎麼表示**：
+
+| 做法 | 優點 | 缺點 |
+| --- | --- | --- |
+| A：分出共用的 `GlobalScope`，`Window` 和 worker 的 global 各拿一個（Blink 的 `ExecutionContext`，那邊是兩者繼承它） | 一份實作；成員的函式從型別就看得出要不要文件 | 重構的範圍最大 |
+| B：worker 的 global 是沒有文件的 `Window` | 改得最少 | `Window` 的每個成員都要想「沒有文件怎麼辦」；型別擋不住在 worker 裡碰 `document` |
+| C：另寫一個 `WorkerGlobalScope`，timer、訊息各自一份 | 不動現有的 `Window` | 兩份實作會走偏；`current_window` 的每一處都要分兩種情況 |
+
+2026-11-17 決定：A（「已決定的事項」第 1 條）。
+
+**worker 也有的 interface 的成員碰了 window，怎麼發現**：
+
+| 做法 | 怎麼做 | 優點 | 缺點 |
+| --- | --- | --- | --- |
+| 2A：型別保證 | front 給成員的介面分成兩層：都有的（拿執行環境）和只有 Window 的 interface 的成員才有的（拿 window）；`declare!` 照 exposed 決定每個成員的函式拿到哪一層 | 放錯是編譯錯誤，不用靠測試 | 要改 `declare!` 和 `OpFront` |
+| 2B：執行時檢查（Blink） | `current_window` 照舊回傳「可能沒有」，worker 裡是沒有；每一處自己處理 | 不用新的機制 | 放錯要到 worker 裡跑到那一行才知道 |
+| 2C：2B 加上一個掃過宣告表的測試 | 對每個 worker 也有的 interface 的每個成員，在 worker 的 realm 裡呼叫一次，不能丟「沒有 window」 | 不改型別 | 測試要替每個成員造參數；只測得到造得出來的呼叫 |
+
+2026-11-17 決定：2A，2C 是退路（「已決定的事項」第 2 條）。
+
+**worker 在哪裡跑**：
+
+| 做法 | 優點 | 缺點 |
+| --- | --- | --- |
+| A：自己的 thread、isolate 和 heap（Chromium） | 真的平行；worker 當掉或卡住不影響頁面的 script | 記憶體、啟動時間 |
+| B：和頁面同一條 thread、另一個 realm | 最省、最簡單 | worker 忙的時候頁面卡住，違反網頁對 worker 的期待 |
+
+2026-11-17 的看法：A。
+
+不做會怎樣：用到 worker 的網站在 `new Worker` 就丟例外；之後補的每個 API 都繼續假設 global 是 Window，worker 越晚做越貴。
+
+## 先例
+
+Chromium（Blink 和 content），2026-11-17 對照 `main` 的 `0889dbff0b08`，檔案和原文的出處在 `details.md` 的「Chromium 的對應」：
+
+- **執行環境**：`ExecutionContext` 是「script 可以執行的環境」，放 window 和 worker 共同的東西（解析相對網址的 base URL、security context、暫停和結束、console）。`LocalDOMWindow` 和 `WorkerOrWorkletGlobalScope` 都**繼承**它；API 的函式收 `ExecutionContext&`（`DOMTimer::setTimeout(ScriptState*, ExecutionContext&, ...)`）。timer 的表不是它的欄位，是掛在它上面的 `Supplement<ExecutionContext>`（`DOMTimerCoordinator`）。**照做**；Rust 和 elise 的 GC 型別沒有繼承，「繼承」換成「各拿著一個共用的部分」。
+- **exposed**：IDL 的 `[Exposed]` 寫 global 的名字：`Window` 是 `Exposed=Window`，`WorkerGlobalScope` 是 `Exposed=Worker`，`DedicatedWorkerGlobalScope` 是 `Exposed=DedicatedWorker`，`AbortController` 是 `Exposed=(Window,Worker,ShadowRealm)`；`setTimeout` 這些在 mixin `WindowOrWorkerGlobalScope`（`Exposed=(Window,Worker)`）上，C++ 也有同名的類別讓兩種 global 繼承。**照做**，寫在宣告表上。
+- **thread**：dedicated worker 是「in-process worker」，一定和啟動它的文件在同一個 renderer process。`WorkerThread` 在 `WorkerBackingThread` 上跑，後者是「帶著 Oilpan 和 V8 的 thread」：isolate 用那條 thread 自己的 `CppHeap` 建。**照做**（elise 的 heap）。
+- **兩條 thread 之間**：文件那一側是 `DedicatedWorkerMessagingProxy`，worker 那一側是 `DedicatedWorkerObjectProxy`，互相 `PostCrossThreadTask`；worker 還沒準備好時送來的訊息先排著（`queued_early_tasks_`）。**照做**。
+- **Browser 知道每個 dedicated worker**：`DedicatedWorker::Start` 向 Browser 要一個 `DedicatedWorkerHost`（`CreateWorkerHost`，帶著 script 的網址和 credentials mode），Browser 開始載入主 script（`WorkerScriptFetcher`），再回到 renderer 的 `OnScriptLoadStarted` 繼續；host 也替 worker 建子資源用的 network factory、記著它的 storage key 和擁有它的文件。照不照做是「待決定」第 4 條。
+- **worker 自己載入子資源**：「All worker subresources … are fetched off-the-main-thread」。`WebWorkerFetchContext` 在 main thread 建、交給 worker、在 worker 的 thread 上初始化，用來在那條 thread 上建 `URLLoader`；`importScripts()` 是 `WorkerClassicScriptLoader::LoadSynchronously`。**照做**（「待決定」第 5 條的看法）。
+- **只有 window 能用的地方**：執行時轉型，`DynamicTo<LocalDOMWindow>(context)` 在不是 window 時得到 null，型別不擋。照不照做是「待決定」第 2 條。
+- **結束**：`WorkerThread::Terminate` 排一個結束的 task，排著的其他 task 不再跑；正在跑的 script 過了 2 秒（`kForcibleTerminationDelay`）還沒停，就 `Isolate::TerminateExecution()`。**照做**；等多久是「待決定」第 8 條的一部分。
+
+Firefox 和 Servo 也是每個 worker 一條 thread、自己的 JS runtime（這一句是起草時記得的，沒有對照原始碼）。
+
+## 已決定的事項
+
+2026-11-17：
+
+1. **執行環境從 `Window` 分出來，兩種 global 各拿著一個共用的部分**（「理由和其他做法」的 A）。`dom` 多一個 GC 型別（暫名 `GlobalScope`），放不需要文件的狀態和它們的操作；`Window` 和 worker 的 global 各拿著一個。不選 B（worker 的 global 是沒有文件的 `Window`）：`Window` 的每個成員都要處理沒有文件的情形，型別擋不住在 worker 裡碰文件。不選 C（另寫一個 worker 的 global，timer 和訊息各自一份）：兩份實作要一起維護，`current_window` 的每一處都要分兩種情況。理由：這是唯一讓「一個 API 在 worker 能不能用」由型別決定的做法，也和 Blink 的分法一樣（`ExecutionContext`，那邊是兩者繼承它）；代價是 1a 的重構最大。
+2. **worker 也有的 interface 的成員拿不到 window，由型別保證**（「待決定」原本的第 2 條的 2A）。exposed 寫在宣告表的 interface 上，個別的成員需要時也可以寫；front 給成員的介面分成兩層，都有的拿執行環境，只有 Window 的 interface 的成員拿得到 window，`declare!` 照 exposed 決定每個成員拿到哪一層，放錯是編譯錯誤。不選 2B（只在執行時檢查，Blink 的 `DynamicTo<LocalDOMWindow>`）：放錯要在 worker 裡跑到那一行才知道。2C（2B 加上掃過宣告表的測試）是退路：1a 的原型做不出合理的寫法時用它，那時回來改這一條。
+3. **1a 做完先自己 merge 回 `main`**，不等 1b（`rfcs/README.md` 的「流程」的階段的 merge）。1a 是重構、行為不變；merge 之後新的 API 馬上照新的規則寫，和其他 DOM 的工作衝突的時間最短。不選「等 1b 一起」：branch 活得久，期間每個新加的 API 都要再改一次。代價是 `main` 上有一段時間執行環境分出來了、還沒有第二種 global 在用。
+
+## 待決定
+
+1a 開始前決定的三條都決定了：
+
+1. （已決定，見「已決定的事項」第 1 條。）
+2. （已決定，見「已決定的事項」第 2 條；比較過的三個做法在「理由和其他做法」。）
+3. （已決定，見「已決定的事項」第 3 條。）
+
+1b 開始前決定：
+
+4. **誰建 worker、Browser 知不知道**：renderer 的 main thread 直接建 thread（Browser 不知道），或照 Chromium 先向 Browser 登記（`DedicatedWorkerHost`：Browser 開始載入主 script、給 worker 子資源的通道、記著它屬於哪個文件）。看法：照 Chromium 登記，但 Browser 那一側只做載入和通道；理由是 worker 的請求通道（第 5 條）本來就要由 Browser 給，之後 storage 的 key 和 service worker 也掛在這裡。
+5. **worker 的請求通道**：worker 的 thread 自己有一條到 Browser 的請求通道（啟動時多給一端，或執行中向 Browser 要），或經過 main thread 轉交。看法：自己有一條；它要過 process 的邊界，照 `docs/architecture.md` 的「Process 的邊界」的規則 5 設計。
+6. **worker 的 engine 的介面**：`dom_api` 裡另一個 trait，或擴充 `ScriptEngine`。看法：另一個小的 trait。
+7. **event loop 放在哪**：`renderer` 的新模組，或新的 crate。看法：`renderer` 的新模組。
+8. **結束的順序**：`terminate()`、`close()`、文件丟棄、renderer 結束各自怎麼收尾，還在路上的訊息和回應怎麼處理。要寫成 `crates/bindings/soundness.md` 的論證。
+
+怎麼回答：第 5、8 條可以先做一個不合併的原型（一條 thread、一個 isolate、跑一段 script 再結束）。
+
+## 之後的可能
+
+接著這份做的：
+
+- **shared worker**：好幾個文件共用一個 worker，要由 Browser 找到或建立它，port 要跨 renderer。
+- **service worker**：要攔截網路請求，還要先有 cookie、HTTP cache 和持久的儲存；另一份 RFC，排在那些之後。
+- **worklet**（`AudioWorklet`、CSS 的 paint worklet）、`OffscreenCanvas`、worker 的 DevTools session、`FileReaderSync`。
+- **wasm 文件的 worker**。
+
+### 架構上可能要先做的事（2026-11-17 的評估）
+
+起這份 RFC 時，一起評估了「哪些缺口拖越久、要回頭改的程式越多」。結論記在這裡，讓之後排 RFC 的順序時有依據；寫在這裡不代表已經決定要做，也不是決定好的順序。依據是 `docs/architecture.md`、`docs/limitations.md` 和幾次搜尋，不是逐行審過程式碼。
+
+| # | 缺口 | 為什麼拖了會變貴 | 2026-11-17 的現況 |
+| --- | --- | --- | --- |
+| 1 | 執行環境不只有 Window | 每加一個 API 就多一處「global 是 Window」的假設 | 這份 RFC |
+| 2 | frame 樹和導覽由 Browser 擁有 | 子 frame 的歷史、`sandbox`、cookie 算哪個網站、權限、跨源的 `postMessage`、site isolation 都建在它上面。Chromium 當年 frame 也是 renderer 內部的，後來為了跨 process 的 iframe 才把 frame 樹和導覽搬到 Browser | Browser 不知道子 frame，子 frame 的導覽由 renderer 自己載入（`docs/limitations.md` 的「iframe」） |
+| 3 | layout 的座標模型和分段 | 每個只照物理方向寫的 layout 功能，之後都要補邏輯方向（`direction`、`writing-mode`）和斷開的情形（multi-column、列印）。Blink 重寫成 LayoutNG 的原因之一是舊的 layout 補不上分段 | 沒有 `direction`、`writing-mode`，multi-column 只有一部分；layout 建在 taffy 上。先要一份評估：taffy 的 fork 撐不撐得起 |
+| 4 | renderer 真的拆成 process 跑一次 | 邊界只有靜態檢查（`sanity.py boundary`），沒有實際跑過；每加一則訊息就多一個沒驗證過的假設 | `ipc` 只有時鐘；`gfx::FontData`、`ImageData` 不能序列化；tile 的 texture 還是同步呼叫 Viz（`docs/architecture.md` 的「Process 的邊界」的例外 1） |
+| 5 | 載入是串流的 | incremental parsing、`fetch()` 的 streams、影音、server-sent events 都要網路到 renderer 的資料管道 | 導覽、iframe、`fetch()` 的 body 都是一次收完（`docs/limitations.md` 的「Parser 和載入」） |
+| 6 | 持久資料的 key | cookie、HTTP cache、`localStorage`、IndexedDB 要用同一把 key（origin 加最上層的網站） | 都還沒有，所以還沒有債；第一份儲存的 RFC 定下來 |
+
+當時的看法：1、2、3 先做（3 先做評估），4 的價值高、成本也最高，現有的靜態檢查已經擋住大部分的退化，排在 2 之後；5、6 在用到它們的功能的 RFC 裡定。往上加的功能（CSS 的 property、顏色、小的 API、`XMLHttpRequest`、Web Storage）晚做不會變貴，可以排在 1、2 之後。
