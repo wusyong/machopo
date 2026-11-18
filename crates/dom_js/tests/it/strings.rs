@@ -513,8 +513,18 @@ fn a_new_string_is_made_with_no_scope() {
         env.eval(setup);
         let (scopes_before, handles_before, cached_before) =
             (scopes(), handles(), env.cached_strings());
+        let made_before = env.wrappers_made();
         env.eval(&format!("out = {source};"));
-        assert_eq!(scopes(), scopes_before, "{source}: no scope");
+        if crate::env::v8_gcs_at_its_own_times() {
+            // A GC in the call may drop a wrapper the call then makes
+            // again (`e.style`'s), in a scope of its own.
+            assert!(
+                scopes() - scopes_before <= env.wrappers_made() - made_before,
+                "{source}: no scope but for a wrapper made again"
+            );
+        } else {
+            assert_eq!(scopes(), scopes_before, "{source}: no scope");
+        }
         assert_eq!(handles(), handles_before + 1, "{source}: V8 asked once");
         // (Under V8's stress flags a GC may run here and collect an
         // earlier case's string: the cache drops its entry as this one
@@ -534,9 +544,17 @@ fn a_new_string_is_made_with_no_scope() {
         }
         assert_eq!(env.eval("out"), value, "{source}");
         // Again: a cached one is found, the others made again.
-        let handles_before = handles();
+        let (scopes_before, handles_before, made_before) =
+            (scopes(), handles(), env.wrappers_made());
         env.eval(&format!("out = {source};"));
-        assert_eq!(scopes(), scopes_before, "{source}: no scope again");
+        if crate::env::v8_gcs_at_its_own_times() {
+            assert!(
+                scopes() - scopes_before <= env.wrappers_made() - made_before,
+                "{source}: no scope again but for a wrapper made again"
+            );
+        } else {
+            assert_eq!(scopes(), scopes_before, "{source}: no scope again");
+        }
         assert_eq!(
             handles(),
             handles_before + u64::from(!cached),
