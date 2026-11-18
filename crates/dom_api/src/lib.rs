@@ -146,9 +146,9 @@ pub use declare::{
 pub use document::{document_title, set_page_visible};
 pub use dom_api_macros::declare;
 pub use engine::{
-    ClassicScript, ConsoleMessage, ConsoleSink, DevToolsFrameIds, DevToolsInterrupter,
-    DevToolsObjects, DevToolsPage, DevToolsQueue, DevToolsQueued, DevToolsSend, EngineSettings,
-    LoadSink, ScriptEngine, WasmScript, WorkerEngine, WorkerGlobalParams,
+    ClassicScript, ConsoleMessage, ConsoleSink, DevToolsInterrupter, DevToolsObjects, DevToolsPage,
+    DevToolsQueue, DevToolsQueued, DevToolsSend, EngineSettings, LoadSink, ScriptEngine,
+    WasmScript, WorkerEngine, WorkerGlobalParams,
 };
 pub use event::{cancel as cancel_event, coarsen};
 pub use event_target::{dispatch, fire_event};
@@ -156,8 +156,9 @@ pub use exception::{ApiError, DomException, ExceptionName, LEGACY_CODES, legacy_
 pub use fetch::{FetchedResponse, did_receive_response};
 pub use focus::{flush_autofocus_candidates, focus_fixup, set_initial_focus, set_page_focused};
 pub use frame::{
-    ChildNavigation, FrameId, FrameRequest, child_windows, documents_in_tree_order,
-    frame_tree_walks_for_testing, named_child_windows, origin, same_origin, update_elements,
+    ChildNavigation, FrameId, FrameRequest, FrameToken, child_windows, documents_in_tree_order,
+    frame_tree_walks_for_testing, named_child_windows, new_frame_token, origin, same_origin,
+    update_elements,
 };
 pub use history::{
     can_have_url_rewritten, indicated_element, restore_history, traverse_within_document,

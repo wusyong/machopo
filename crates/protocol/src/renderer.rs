@@ -250,7 +250,7 @@ pub enum RendererMsg {
     /// id: drawn by the browser when it made the tab (Chromium's
     /// `devtools_main_frame_token`, in the view's creation parameters), and
     /// sent first to every renderer the tab has, so it stays the same.
-    DevToolsMainFrameToken(String),
+    DevToolsMainFrameToken(crate::FrameToken),
     /// `blink.mojom.Widget::WasHidden`: the tab isn't shown (another tab is
     /// the current one). The compositor asks for no `BeginFrame`s, so there
     /// are no main frames and no animation frame callbacks.
@@ -466,6 +466,21 @@ pub enum RendererHostMsg {
     /// `location.reload()`: the browser loads the current entry again, as
     /// its own reload does.
     Reload,
+    /// `FrameHost::CreateChildFrame`: the renderer made child frame `frame`
+    /// of `parent` (an iframe inserted), at once and on its own, as script
+    /// reads its window next. The browser's frame tree takes it.
+    DidCreateChildFrame {
+        parent: crate::FrameToken,
+        frame: crate::FrameToken,
+    },
+    /// `FrameHost::Detach`: child frame `frame` has gone, and the frames in
+    /// it with it: its iframe was removed, or the document it was in was
+    /// navigated from (once for each frame that document had). The only
+    /// way the browser's frame tree loses a frame, but for a renderer that
+    /// has gone.
+    DidDetachFrame {
+        frame: crate::FrameToken,
+    },
     /// `WidgetHost::SetCursor`: what the pointer looks like over the page.
     SetCursor(CursorType),
     /// `ChromeClient::OpenPopupMenu` with an `ExternalPopupMenu`: a

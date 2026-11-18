@@ -3383,6 +3383,74 @@ document.querySelector('base').setAttribute('href', '/later/');
         web_contents.shutdown();
     }
 
+    /// The browser hears of each child frame as the renderer makes it, by
+    /// its token and its parent's (the main frame's for an iframe of the
+    /// page), and of its going, once, the frames in it with it: its iframe
+    /// removed, or the page navigated from.
+    #[test]
+    fn the_browser_hears_of_child_frames_coming_and_going() {
+        let html = format!(
+            "{}<iframe srcdoc=\"<iframe></iframe>\"></iframe><iframe id=g></iframe>",
+            after_load("document.getElementById('g').remove(); report('removed');")
+        );
+        let server = server(&[("/", Route::ok("text/html", html))]);
+        let (mut web_contents, host_rx) = tab();
+        let main = web_contents.devtools_frame_token();
+        web_contents.navigate(server.url("/"));
+        let (mut made, mut gone) = (Vec::new(), Vec::new());
+        assert_eq!(
+            wait_for(&mut web_contents, &host_rx, |msg| match msg {
+                RendererHostMsg::DidCreateChildFrame { parent, frame } => {
+                    made.push((*parent, *frame));
+                    None
+                }
+                RendererHostMsg::DidDetachFrame { frame } => {
+                    gone.push(*frame);
+                    None
+                }
+                RendererHostMsg::OpenUrl { url, .. } if url.contains("/report?") => {
+                    Some(url.split_once("/report?").expect("a report").1.to_owned())
+                }
+                _ => None,
+            }),
+            "removed"
+        );
+        // The iframe with `srcdoc`, the other, and the one in the first's
+        // document as it was parsed.
+        let [
+            (first_parent, first),
+            (other_parent, other),
+            (inner_parent, inner),
+        ] = made[..]
+        else {
+            panic!("{made:?}");
+        };
+        assert_eq!(
+            (first_parent, other_parent, inner_parent),
+            (main, main, first)
+        );
+        assert!(
+            first != other && first != inner && other != inner,
+            "{made:?}"
+        );
+        assert_eq!(gone, [other], "the removed iframe's frame");
+        // The report navigates the page: its frame goes, the one in it with
+        // it.
+        let detached = wait_for(&mut web_contents, &host_rx, |msg| match msg {
+            RendererHostMsg::DidDetachFrame { frame } => Some(*frame),
+            RendererHostMsg::DidCreateChildFrame { frame, .. } => panic!("{frame:?} made"),
+            _ => None,
+        });
+        assert_eq!(detached, first);
+        let more = wait_for(&mut web_contents, &host_rx, |msg| match msg {
+            RendererHostMsg::DidDetachFrame { frame } => Some(Some(*frame)),
+            RendererHostMsg::DidFinishLoad { .. } => Some(None),
+            _ => None,
+        });
+        assert_eq!(more, None, "no frame but the page's is told gone");
+        web_contents.shutdown();
+    }
+
     /// A child frame's navigation to a fragment happens in it (its own
     /// `hashchange`), but isn't in the session history; its navigation to
     /// another document is the renderer's to load. The browser hears of

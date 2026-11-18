@@ -242,6 +242,9 @@ impl FrameDocument {
 #[derive(Default)]
 pub(super) struct ChildFrames {
     frames: HashMap<FrameId, (FrameId, NodeRoot)>,
+    /// Each one's token, the engine's: what the browser and DevTools call
+    /// it.
+    tokens: HashMap<FrameId, protocol::FrameToken>,
     documents: Vec<FrameDocument>,
     /// A child frame's `src` being fetched: its frame, the URL, when its
     /// navigation started (its next document's time origin), and what its
@@ -272,11 +275,25 @@ impl ChildFrames {
             at = at.saturating_add(1);
         }
         self.frames.retain(|id, _| !gone.contains(id));
+        self.tokens.retain(|id, _| !gone.contains(id));
         self.documents
             .retain(|document| !gone.contains(&document.frame));
         self.fetches.retain(|_, (id, ..)| !gone.contains(id));
         self.commits.retain(|(id, _, _)| !gone.contains(id));
         self.creation_stacks.retain(|id, _| !gone.contains(id));
+    }
+
+    /// Child frame `frame`'s token.
+    pub(super) fn token(&self, frame: FrameId) -> Option<protocol::FrameToken> {
+        self.tokens.get(&frame).copied()
+    }
+
+    /// The child frame whose token is `token`.
+    pub(super) fn of_token(&self, token: protocol::FrameToken) -> Option<FrameId> {
+        self.tokens
+            .iter()
+            .find(|(_, known)| **known == token)
+            .map(|(frame, _)| *frame)
     }
 
     /// `frame`'s navigation started: one it started before doesn't
@@ -338,16 +355,14 @@ fn set_document_metadata(
 /// `navigation_id` as DevTools tells them; none before DevTools gave the
 /// frame its token.
 fn main_frame_info(
-    token: &str,
+    token: Option<protocol::FrameToken>,
     navigation_id: u64,
     url: &Url,
     mime_type: &str,
     source: &Rc<str>,
     resources: &Rc<FrameResources>,
 ) -> Option<FrameInfo> {
-    if token.is_empty() {
-        return None;
-    }
+    let token = token?;
     // As Blink's `SecurityOrigin::ToRawString`: an opaque one's scheme
     // and host are empty.
     let origin = match url.origin() {
@@ -355,7 +370,7 @@ fn main_frame_info(
         url::Origin::Opaque(_) => "://".to_owned(),
     };
     Some(FrameInfo {
-        id: token.to_owned(),
+        id: token.to_string(),
         parent_id: None,
         loader_id: navigation_id.to_string(),
         document: navigation_id,
@@ -497,7 +512,7 @@ impl RenderThread {
         // with it.
         if !self.devtools_sessions.is_empty()
             && let Some(main) = main_frame_info(
-                &self.devtools_main_frame_token,
+                self.devtools_main_frame_token,
                 navigation_id,
                 &document_url,
                 mime_type,
@@ -699,10 +714,26 @@ impl RenderThread {
                 match request {
                     FrameRequest::Created {
                         frame,
+                        token,
                         parent,
                         owner,
                         document,
                     } => {
+                        // The browser's frame tree takes it, whatever the
+                        // renderer does with it: it hears of its going.
+                        let top = self.document.as_ref().map(|next| next.frame);
+                        let parent_token = if Some(parent) == top {
+                            self.devtools_main_frame_token
+                        } else {
+                            self.children.token(parent)
+                        };
+                        if let Some(parent) = parent_token {
+                            let _ = self.to_browser.send(RendererHostMsg::DidCreateChildFrame {
+                                parent,
+                                frame: token,
+                            });
+                        }
+                        self.children.tokens.insert(frame, token);
                         let document_id = self.new_document_id();
                         let Some((dom, next)) = engine_frame(&mut self.engine) else {
                             continue;
@@ -779,7 +810,10 @@ impl RenderThread {
                         request_id,
                     } => self.fetch_sent(frame, request, request_id),
                     FrameRequest::CancelFetch { id } => self.cancel_fetch(id),
-                    FrameRequest::Removed { frame } => {
+                    FrameRequest::Removed { frame, token } => {
+                        let _ = self
+                            .to_browser
+                            .send(RendererHostMsg::DidDetachFrame { frame: token });
                         self.blob_urls.revoke_frame(frame);
                         self.cancel_fetches_of_gone_documents();
                         if let Some((_, next)) = engine_frame(&mut self.engine) {
@@ -2031,7 +2065,7 @@ impl RenderThread {
     pub(super) fn frame_info(&self) -> Option<FrameInfo> {
         let next = self.document.as_ref()?;
         main_frame_info(
-            &self.devtools_main_frame_token,
+            self.devtools_main_frame_token,
             next.navigation_id,
             &next.url,
             &next.mime_type,
@@ -2125,7 +2159,10 @@ impl RenderThread {
             .iter()
             .map(|(frame, _)| self.frame_id(*frame))
             .collect();
-        let main = self.devtools_main_frame_token.clone();
+        let main = self
+            .devtools_main_frame_token
+            .map(|token| token.to_string())
+            .unwrap_or_default();
         let Some(engine) = self.engine.as_mut() else {
             return Vec::new();
         };
@@ -3801,8 +3838,7 @@ impl RenderThread {
     fn request_frame(&mut self, frame: FrameId, request: &ResourceRequest) -> Option<RequestFrame> {
         let top = self.document.as_ref().map(|next| next.frame);
         let frame_id = if Some(frame) == top {
-            let token = &self.devtools_main_frame_token;
-            (!token.is_empty()).then(|| token.clone())?
+            self.devtools_main_frame_token?.to_string()
         } else {
             self.frame_id(frame)
         };

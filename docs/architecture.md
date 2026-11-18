@@ -46,7 +46,7 @@ Input 和 `BeginFrame` 先到 compositor thread：它能處理的捲動不經過
 
 Renderer 的 compositor 直接把 frame 送給 Viz，不經過 Browser，這點和 Chromium 相同。
 
-**machopodriver** 是另一個 process，對應 chromedriver：它提供 WebDriver 的 HTTP API（`WebDriverServer` thread，hyper 和單執行緒的 tokio），依序處理指令（`WebDriverDispatcher`），每個 session 啟動一個 `machopo --automation-pipe`，經過 stdin 和 stdout 送照 CDP 格式的訊息（`protocol::automation`，讀的是 `MachopoPipeReader`）。machopo 和 machopodriver 之間不是 renderer 的邊界：訊息只到 Browser 的 UI thread，要 DOM 的（執行 script、找元素、讀元素，`protocol::webdriver`）再由 Browser 經過 `protocol` 的 renderer 訊息轉過去，renderer 在 main thread 上照規範的演算法做（不注入 JS），元素參照是 renderer 的前綴、document 的 id 和 `NodeId` 拼成的字串，不存表；在子 frame 裡做時帶 frame 的 id（renderer 的前綴和 frame 的號碼，frame 導覽時不變，Chromium 的 frame token），找 frame 走 frame tree。情境的執行器用同一套訊息、同一個 host（`automation_session`），在同一個 process 裡經過 channel。machopo 的 log 和網頁的輸出（`console.log`、沒接住的例外）因此都在 stderr：stdout 是 pipe 的。
+**machopodriver** 是另一個 process，對應 chromedriver：它提供 WebDriver 的 HTTP API（`WebDriverServer` thread，hyper 和單執行緒的 tokio），依序處理指令（`WebDriverDispatcher`），每個 session 啟動一個 `machopo --automation-pipe`，經過 stdin 和 stdout 送照 CDP 格式的訊息（`protocol::automation`，讀的是 `MachopoPipeReader`）。machopo 和 machopodriver 之間不是 renderer 的邊界：訊息只到 Browser 的 UI thread，要 DOM 的（執行 script、找元素、讀元素，`protocol::webdriver`）再由 Browser 經過 `protocol` 的 renderer 訊息轉過去，renderer 在 main thread 上照規範的演算法做（不注入 JS），元素參照是 renderer 的前綴、document 的 id 和 `NodeId` 拼成的字串，不存表；在子 frame 裡做時帶 frame 的 id（frame 的 token：engine 建 frame 時抽的 128 bit，寫成 32 個大寫 hex，和主 frame 的一樣；frame 導覽時不變，Chromium 的 frame token），renderer 照它記著的子 frame 找。情境的執行器用同一套訊息、同一個 host（`automation_session`），在同一個 process 裡經過 channel。machopo 的 log 和網頁的輸出（`console.log`、沒接住的例外）因此都在 stderr：stdout 是 pipe 的。
 
 ### Process 的邊界
 

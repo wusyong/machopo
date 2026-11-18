@@ -9,8 +9,8 @@ use std::time::Instant;
 use bindings::V8PerIsolateData;
 use dom::{Dom, NodeId, NodeRoot, Window};
 use dom_api::{
-    ClassicScript, ConsoleMessage, ConsoleSink, DevToolsFrameIds, DevToolsInterrupter,
-    DevToolsQueue, DevToolsSend, DocumentReadiness, EngineSettings, ScriptEngine,
+    ClassicScript, ConsoleMessage, ConsoleSink, DevToolsInterrupter, DevToolsQueue, DevToolsSend,
+    DocumentReadiness, EngineSettings, ScriptEngine,
 };
 use elise::Persistent;
 
@@ -150,6 +150,7 @@ impl V8Engine {
     fn reuse_initial_window(
         &mut self,
         frame: dom_api::FrameId,
+        token: Option<dom_api::FrameToken>,
         context: &v8::Global<v8::Context>,
         url: &str,
         time_origin: Instant,
@@ -177,6 +178,7 @@ impl V8Engine {
         });
         state.frames.set(crate::frames::Frame::new(
             frame,
+            token,
             context.clone(),
             document.clone(),
             document_id,
@@ -453,8 +455,10 @@ impl ScriptEngine for V8Engine {
         if let Some((parent, owner, context)) = initial
             && self.inherits_origin(parent, url)
         {
+            let token = self.state().frames.token(frame);
             return Some(self.reuse_initial_window(
                 frame,
+                token,
                 &context,
                 url,
                 time_origin,
@@ -550,12 +554,9 @@ impl ScriptEngine for V8Engine {
             if let Some(before) = before.as_ref().filter(|_| place.is_some()) {
                 crate::devtools::realm_destroyed(scope, before);
             }
-            crate::devtools::realm_created(
-                &mut state::scope(scope).expect("the engine's DOM"),
-                context,
-                frame,
-                &document,
-            );
+            let mut state_scope = state::scope(scope).expect("the engine's DOM");
+            let token = state_scope.state().0.frames.token(frame);
+            crate::devtools::realm_created(&mut state_scope, context, frame, token, &document);
             if web_tests && place.is_none() {
                 install_test_runner(scope, global);
             }
@@ -577,8 +578,12 @@ impl ScriptEngine for V8Engine {
             if place.is_none() {
                 scope.state_mut().0.frames.clear_children();
             }
+            let token = (frame != crate::frames::TOP)
+                .then(|| scope.state_mut().0.frames.token(frame))
+                .flatten();
             scope.state_mut().0.frames.set(crate::frames::Frame::new(
                 frame,
+                token,
                 global_context.clone(),
                 document.clone(),
                 document_id,
@@ -1621,8 +1626,8 @@ impl ScriptEngine for V8Engine {
         self.data.set_idle(idle);
     }
 
-    fn set_devtools_frame_ids(&mut self, ids: DevToolsFrameIds) {
-        self.state().devtools_frame_ids = Some(ids);
+    fn set_main_frame_token(&mut self, token: dom_api::FrameToken) {
+        self.state().frames.main_token = Some(token);
     }
 
     fn devtools_attach(&mut self, session: String, send: DevToolsSend) {

@@ -10,7 +10,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use dom_api::{DevToolsQueued, EngineSettings, FrameId, ScriptEngine};
+use dom_api::{DevToolsQueued, EngineSettings, ScriptEngine};
 use protocol::renderer::{RendererHostMsg, RendererMsg};
 use url::Url;
 
@@ -97,9 +97,9 @@ impl RenderThread {
             return self.document_frame_infos();
         }
         let mut frames = Vec::new();
-        if !self.devtools_main_frame_token.is_empty() {
+        if let Some(token) = self.devtools_main_frame_token {
             frames.push(FrameInfo {
-                id: self.devtools_main_frame_token.clone(),
+                id: token.to_string(),
                 parent_id: None,
                 // No navigation's: theirs start at 1, so its first
                 // document's is told as navigated.
@@ -229,7 +229,9 @@ impl RenderThread {
             cannot_render: Cell::new(false),
         }));
         self.scheduler.set_interrupter(interrupter);
-        engine.set_devtools_frame_ids(self.devtools_frame_ids(engine.top_frame()));
+        if let Some(token) = self.devtools_main_frame_token {
+            engine.set_main_frame_token(token);
+        }
         for session in &self.devtools_sessions {
             engine.devtools_attach(session.clone(), devtools_send(&self.to_browser, session));
         }
@@ -238,21 +240,6 @@ impl RenderThread {
             self.page_agent.any_enabled(),
         );
         engine
-    }
-
-    /// What DevTools calls the engine's frames: the top-level one the
-    /// browser's main frame token (none until told), a child one as
-    /// WebDriver does (`frame_id`).
-    pub(super) fn devtools_frame_ids(&self, top: FrameId) -> dom_api::DevToolsFrameIds {
-        let main = self.devtools_main_frame_token.clone();
-        let prefix = self.webdriver_state.prefix;
-        Box::new(move |frame| {
-            if frame == top {
-                (!main.is_empty()).then(|| main.clone())
-            } else {
-                Some(super::webdriver_commands::child_frame_id(prefix, frame))
-            }
-        })
     }
 
     /// The loop waits for its next task (`idle`), or has one: the engine's

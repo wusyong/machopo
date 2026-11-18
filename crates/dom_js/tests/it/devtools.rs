@@ -13,7 +13,7 @@ use std::time::Instant;
 
 use dom_api::{
     ClassicScript, DevToolsPage, DevToolsQueue, DevToolsQueued, EngineSettings, FrameId,
-    FrameRequest, ScriptEngine,
+    FrameRequest, FrameToken, ScriptEngine,
 };
 use dom_js::V8Engine;
 use serde_json::{Value, json};
@@ -25,18 +25,15 @@ struct Inspected {
     next_id: u64,
 }
 
+/// The main frame's token the browser gives the engine here.
+const TOP_TOKEN: FrameToken = FrameToken([0xAA; 16]);
+
 impl Inspected {
-    /// Its frames named `top`, and `child <n>`.
+    /// Its top-level frame's token `TOP_TOKEN`; a child frame's, the one
+    /// the engine drew.
     fn new() -> Self {
         let mut engine = V8Engine::new(EngineSettings::default());
-        let top = engine.top_frame();
-        engine.set_devtools_frame_ids(Box::new(move |frame: FrameId| {
-            Some(if frame == top {
-                "top".to_owned()
-            } else {
-                format!("child {}", frame.0)
-            })
-        }));
+        engine.set_main_frame_token(TOP_TOKEN);
         let sent: Rc<RefCell<Vec<Value>>> = Rc::default();
         let to = sent.clone();
         engine.devtools_attach(
@@ -133,7 +130,7 @@ fn each_frames_realm_is_told_as_it_comes_and_goes() {
         .unwrap();
     assert_eq!(
         contexts(&page.events()),
-        ["created top https://example.test 1"]
+        [format!("created {TOP_TOKEN} https://example.test 1")]
     );
 
     // An iframe's initial `about:blank`, of its parent's origin.
@@ -142,13 +139,14 @@ fn each_frames_realm_is_told_as_it_comes_and_goes() {
         "document.appendChild(document.createElement('html'));
          document.documentElement.appendChild(document.createElement('iframe'));",
     );
-    let child = match page.engine.take_frame_requests().as_slice() {
-        [FrameRequest::Created { frame, .. }] => *frame,
+    let (child, token) = match page.engine.take_frame_requests().as_slice() {
+        [FrameRequest::Created { frame, token, .. }] => (*frame, *token),
         requests => panic!("{requests:?}"),
     };
+    assert_ne!(token, TOP_TOKEN);
     assert_eq!(
         contexts(&page.events()),
-        [format!("created child {} https://example.test 2", child.0)]
+        [format!("created {token} https://example.test 2")]
     );
     // Its document of another origin, in a realm of its own: the one
     // before has gone. An opaque origin is "://", as Chrome gives it.
@@ -157,10 +155,7 @@ fn each_frames_realm_is_told_as_it_comes_and_goes() {
         .unwrap();
     assert_eq!(
         contexts(&page.events()),
-        [
-            "destroyed 2".to_owned(),
-            format!("created child {} :// 3", child.0)
-        ]
+        ["destroyed 2".to_owned(), format!("created {token} :// 3")]
     );
     // The iframe gone takes its realm.
     page.run(top, "document.querySelector('iframe').remove();");
@@ -183,7 +178,10 @@ fn each_frames_realm_is_told_as_it_comes_and_goes() {
         .unwrap();
     assert_eq!(
         contexts(&page.events()),
-        ["cleared", "created top https://other.test 4"]
+        [
+            "cleared".to_owned(),
+            format!("created {TOP_TOKEN} https://other.test 4")
+        ]
     );
 }
 
@@ -201,16 +199,16 @@ fn a_child_frames_navigation_takes_its_frames() {
     let iframe = "document.appendChild(document.createElement('html'));
          document.documentElement.appendChild(document.createElement('iframe'));";
     page.run(top, iframe);
-    let child = match page.engine.take_frame_requests().as_slice() {
-        [FrameRequest::Created { frame, .. }] => *frame,
+    let (child, token) = match page.engine.take_frame_requests().as_slice() {
+        [FrameRequest::Created { frame, token, .. }] => (*frame, *token),
         requests => panic!("{requests:?}"),
     };
     page.engine
         .create_window(child, "https://other.test/", Instant::now())
         .unwrap();
     page.run(child, iframe);
-    let grandchild = match page.engine.take_frame_requests().as_slice() {
-        [FrameRequest::Created { frame, .. }] => *frame,
+    let (grandchild, grandchild_token) = match page.engine.take_frame_requests().as_slice() {
+        [FrameRequest::Created { frame, token, .. }] => (*frame, *token),
         requests => panic!("{requests:?}"),
     };
     page.events();
@@ -222,12 +220,13 @@ fn a_child_frames_navigation_takes_its_frames() {
         [
             "destroyed 4".to_owned(),
             "destroyed 3".to_owned(),
-            format!("created child {} https://third.test 5", child.0)
+            format!("created {token} https://third.test 5")
         ]
     );
     assert!(
         page.engine.take_frame_requests().iter().any(
-            |request| matches!(request, FrameRequest::Removed { frame } if *frame == grandchild)
+            |request| matches!(request, FrameRequest::Removed { frame, token }
+                if *frame == grandchild && *token == grandchild_token)
         ),
         "the host removes the grandchild's frame"
     );

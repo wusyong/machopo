@@ -11,4 +11,5 @@
 
 mod automation;
 mod boundary;
+mod frame_token;
 mod network;

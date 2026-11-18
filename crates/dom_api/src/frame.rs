@@ -13,13 +13,26 @@
 
 use dom::{ElementChange, FrameOwnerChange, NodeRoot, QualName, QuirksMode, TargetRoot, names};
 
+pub use protocol::FrameToken;
+
 use crate::ScriptHost;
 
-/// A browsing context's number, the engine's (Chrome's `FrameToken`): the
-/// window its realm has changes as it navigates, the number stays. The
-/// host names a frame by it.
+/// A browsing context's number, the engine's and its host's: the window
+/// its realm has changes as it navigates, the number stays. Outside the
+/// renderer a frame is known by its token instead (`FrameToken`), which
+/// the engine keeps with it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FrameId(pub u64);
+
+/// A new child frame's token: 128 random bits from the operating system,
+/// as the browser's main frame token is (Chromium's frame tokens are
+/// `base::UnguessableToken`s), so that a page can't guess another frame's.
+pub fn new_frame_token() -> FrameToken {
+    let mut bytes = [0u8; 16];
+    // Chromium can't go on without them either (BoringSSL aborts).
+    getrandom::fill(&mut bytes).expect("the operating system gives random numbers");
+    FrameToken(bytes)
+}
 
 /// What a child browsing context navigates to (HTML's "process the iframe
 /// attributes").
@@ -39,9 +52,10 @@ pub enum ChildNavigation {
 #[derive(Debug, Clone)]
 pub enum FrameRequest {
     /// `frame` was made, the child of `parent`, for iframe `owner`: its
-    /// initial `about:blank`, `document`.
+    /// initial `about:blank`, `document`; its token `token`.
     Created {
         frame: FrameId,
+        token: FrameToken,
         parent: FrameId,
         owner: NodeRoot,
         document: NodeRoot,
@@ -52,8 +66,10 @@ pub enum FrameRequest {
         frame: FrameId,
         navigation: ChildNavigation,
     },
-    /// `frame` went (its iframe was removed), with the frames in it.
-    Removed { frame: FrameId },
+    /// `frame`, whose token was `token`, went with the frames in it: its
+    /// iframe was removed, or the document it was in was navigated from
+    /// (one for each frame that document had).
+    Removed { frame: FrameId, token: FrameToken },
     /// Script navigated `frame` (`location`, `history`): to another
     /// document, its host loads it (the top-level frame's, the browser);
     /// within its document, it happened (the host scrolls, the top-level

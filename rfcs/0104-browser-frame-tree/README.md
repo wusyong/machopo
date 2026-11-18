@@ -1,8 +1,9 @@
 # RFC 0104：frame 樹和每個 frame 的導覽由 Browser 擁有
 
 - 開始日期：2026-11-18
-- 狀態：👍 已接受：2026-11-18
+- 狀態：🚧 已排程：2026-11-18（第 1 階段；第 2 到 4 階段的問題到那個階段開始前再決定）
 - 細節：`details.md`
+- 進度：`progress.md`
 
 ## 摘要
 
@@ -88,12 +89,13 @@ renderer 這一側其實已經很完整：子 frame 有自己的 realm 和 `Wind
 
 ### frame 樹（`browser`）
 
-- 每個 `WebContents` 一棵 `FrameTree`，節點是 `FrameTreeNode`：frame 的 id、父節點、子節點（照建立的順序）、名稱、目前的文件（網址、Browser 自己算的 origin、是不是初始的空白文件、是不是錯誤頁）、進行中的 `NavigationRequest`（最多一個）。
-- 主 frame 是根節點。`WebContents` 現在自己拿著的網址、DevTools 的 token、進行中的導覽搬到根節點上；`WebContents::url()` 等照舊回答主 frame 的。
-- renderer → Browser 的新訊息：建立子 frame（父 frame、新 frame 的 id、名稱）、子 frame 被移除、名稱改了。建立是 renderer 發起的：iframe 插入時 script 馬上要拿到 `contentWindow`，不能等 Browser。
+- 每個 `WebContents` 一棵 `FrameTree`，節點是 `FrameTreeNode`：frame 的 id（`protocol` 的 `FrameToken`，第 3 條）、父節點、子節點（照建立的順序）。第 2 階段加上目前的文件（網址、Browser 自己算的 origin、是不是初始的空白文件、是不是錯誤頁）和進行中的 `NavigationRequest`（最多一個），第 3 階段加上歷史要用的鍵（第 8、5 條）。
+- 主 frame 是根節點，它的 id 就是現在 DevTools 的主 frame 的 token，由 Browser 抽。網址列的網址（Chromium 的 visible URL）和標題留在 `WebContents`；進行中的導覽第 2 階段搬到節點上（第 8 條）。
+- 子 frame 的 id 由 engine 建子 frame 時抽（第 4 條），engine 內部的 `FrameId` 照舊當索引。
+- renderer → Browser 的新訊息：`DidCreateChildFrame { parent, frame }` 和 `DidDetachFrame { frame }`，後者拿掉那個 frame 和它的子樹（第 5 條）。建立是 renderer 發起的：iframe 插入時 script 馬上要拿到 `contentWindow`，不能等 Browser。
 - 一個 renderer 的訊息照順序到（RFC 0004：控制通道只有一條），所以 Browser 一定先聽到某個 frame 建立，才聽到它的導覽。
-- 某個 frame commit 新文件時，Browser 丟掉它底下所有的子節點和它們進行中的導覽（舊文件的 iframe 都不在了）。renderer 重開時整棵樹重建。
-- Browser 檢查：父 frame 存在、新的 id 沒有用過、被移除的 frame 存在而且不是根。不合的訊息照 Chromium 的 `ReportBadMessage` 處理（現在 renderer 是 thread：記錯誤、結束那個 renderer，分頁顯示 sad tab）。
+- 子節點只在 renderer 送 `DidDetachFrame` 時拿掉，Browser 不在 commit 時自己推斷：renderer 換文件時本來就對舊文件的每個子 frame 送一次（第 6 條）。renderer 重開時，Browser 把樹清回只剩根節點。
+- Browser 檢查：父 frame 存在、新的 id 沒有用過、被移除的 frame 存在而且不是根。不合的訊息照 Chromium 的 `bad_message::ReceivedBadMessage` 處理：記錯誤、結束那個 renderer，分頁顯示 sad tab（第 7 條）。
 
 ### 導覽（`browser`、`protocol`、`renderer`）
 
@@ -124,7 +126,7 @@ renderer 這一側其實已經很完整：子 frame 有自己的 realm 和 `Wind
 
 - 跟著 `NavigationRequest` 走的事件（`Page.frameStartedNavigating`、`Page.navigatedWithinDocument`、`Network` 的文件請求）子 frame 的也由 Browser 發。
 - frame 的樹和它的事件（`Page.getFrameTree`、`frameAttached`、`frameNavigated`、`frameDetached`）現在由 renderer 的 Page agent 發，先不動。
-- 子 frame 的 id 的寫法會變（「已決定的事項」第 2 條），machopodriver 拿到的字串跟著變；它只把字串原樣帶回來，不解析。
+- 子 frame 的 `frameId` 和 WebDriver 的 frame 參照，第 1 階段就換成 `FrameToken` 的寫法（32 個大寫 hex，和主 frame 的一樣；第 8 條），machopodriver 拿到的字串跟著變：它只把字串原樣帶回來，不解析。WebDriver 從 id 找 frame 改成在 renderer 記著的子 frame 裡找：renderer 收到 `FrameRequest::Created` 時，把 token 和那個 frame 的父 frame、iframe 記在一起（2026-11-18 實作時定的：DevTools 和 WebDriver 讀 id 的地方不能改 engine，而 `Removed` 送到 renderer 時 engine 已經沒有那個 frame 了），engine 的介面只多了 `set_main_frame_token`。元素和文件的參照照舊用 renderer 的前綴。
 - `DidFinishLoad`、標題、testharness 的結果照舊只有主 frame 的（RFC 0009 的 `details.md` 第 6 節）。
 
 ### 測試
@@ -140,9 +142,9 @@ renderer 這一側其實已經很完整：子 frame 有自己的 realm 和 `Wind
 
 每個階段做完，`main` 上的行為和文件要一致，可以單獨 merge。
 
-1. **Browser 的 frame 樹**：協定裡 frame 的 id 的型別；建立、移除、改名的訊息；Browser 的 `FrameTree` 和檢查；主 frame 的狀態搬到根節點。子 frame 的載入還是 renderer 做，使用者看不出差別。frame 的 id 照「已決定的事項」第 2 條。
+1. **Browser 的 frame 樹**：協定裡 frame 的 id 的型別；建立、移除的訊息；Browser 的 `FrameTree`、檢查和壞掉的訊息的處理；DevTools 和 WebDriver 的 frame 的 id 換成 token。子 frame 的載入還是 renderer 做，使用者看不出差別。決定是「已決定的事項」第 2 到 8 條。分三段：1a 是 `FrameToken`、engine 抽 id、renderer 送兩則訊息、DevTools 和 WebDriver 的 id；1b 是 Browser 的 `FrameTree`、檢查和壞掉的訊息；1c 是整個階段的檢查和文件。
 2. **子 frame 的導覽經過 Browser**：開始導覽的訊息、每個節點的 `NavigationRequest`、`CommitNavigation` 帶 frame、子 frame 的錯誤頁、拿掉 renderer 自己載入的那條路、DevTools 的導覽事件。開始前要決定：`about:blank` 和 `srcdoc` 的導覽經不經過 Browser；Browser 沒有結果的導覽怎麼告訴 renderer；DevTools 的事件怎麼分。
-3. **joint session history**：entry 的樹、子 frame 的分類、traversal、子 frame 的 `pushState`、回到 entry 時子 frame 照 entry 載入。開始前要決定：frame 的鍵怎麼算；reload 時子 frame 怎麼辦。
+3. **joint session history**：entry 的樹、子 frame 的分類、traversal、子 frame 的 `pushState`、回到 entry 時子 frame 照 entry 載入、frame 的名稱（第 5 條）。開始前要決定：frame 的鍵怎麼算（連同名稱怎麼送）；reload 時子 frame 怎麼辦。
 4. **收尾**：Browser 對 renderer 回報的檢查補齊、WPT 的目錄、文件、RFC 改寫成完成的樣子。
 
 第 2、3 階段都會再分小段，到時候才分。
@@ -180,6 +182,12 @@ renderer 這一側其實已經很完整：子 frame 有自己的 realm 和 `Wind
 
 1. **做法是 A，樹、導覽、歷史都在這一份做**（2026-11-18）：Browser 的 frame 樹、每個 frame 的 `NavigationRequest`、joint session history 都搬到 Browser，照「分階段」的四個階段在同一份 RFC 裡做完，歷史不拆成另一份。理由：既然要重構就一次做完；子 frame 的導覽是最容易出錯的部分，不分兩次改。不選 B（只做樹）：要看回應的檢查還在 renderer，之後還要再搬一次導覽。不選 C（都留在 renderer）：違反 RFC 0019 的第 6 條，對之後的功能沒有幫助。不選「A，但歷史另開 RFC」：entry 的設計要回頭配合前兩個階段。
 2. **子 frame 的 id 由 renderer 抽**（I1，2026-11-18）：renderer 建子 frame 時抽一個 128 bit 的亂數當它的 id，在建立的訊息裡告訴 Browser；主 frame 的照舊由 Browser 抽。id 跨過那個 frame 自己的導覽，DevTools 的 `frameId` 和 WebDriver 的 frame 參照直接用它，和主 frame 的 token 同一種寫法（取代 RFC 0021 第 24 條的「renderer 的前綴加號碼」，「跨過 frame 自己的導覽」照舊）。Browser 的樹以分頁為範圍，重複的 id 是壞掉的訊息：renderer 自己挑的 id 只影響它自己的分頁。之後 frame 搬到別的 renderer 時 id 不變，由 Browser 告訴新的 renderer。不選 I2（照舊的前綴加號碼）：前綴的意思是「哪個 renderer」，frame 搬到別的 renderer 之後就不對，到時要再改一次對外的字串。不選 I3（Browser 發，Chromium 的做法：renderer 同步向 Browser 的 IO thread 要，`RenderMessageFilter::GenerateSingleFrameRoutingInfo`）：machopo 的 renderer 現在沒有任何地方同步等 Browser 的回覆，要先做那套機制（或預發一批、再處理用完的情況），換來的只是 Browser 不必檢查重複；之後有了同步的請求，要改成 I3 只動抽 id 的地方，型別和用法不變。
+3. **frame 的 id 是 `protocol` 的 `FrameToken`：16 個 byte 的值**（2026-11-18，第 1 階段開始前）：主 frame 和子 frame 共用；只在給 DevTools 和 WebDriver 時寫成 32 個大寫 hex（和現在主 frame 的 token 一樣）。現在以 `String` 傳的 `RendererMsg::DevToolsMainFrameToken` 也改用它。理由：格式由型別保證，收的一方只要檢查認不認得；當樹和歷史的鍵時是固定大小、`Copy`、不用配置。Chromium 的 frame token 是 `base::UnguessableToken`（128 bit 的值），只在給 DevTools 時轉成字串。不選照舊用 `String`：每次都要檢查長度和字元，當鍵要配置。
+4. **子 frame 的 token 在 engine 建子 frame 時抽**（T1，2026-11-18，第 1 階段開始前）：`dom_js` 的 `frames::create_child` 用 `dom_api` 的小函式（`dom_api` 已經依賴 `getrandom`）抽一個，存在 engine 的 `Frame` 上，`FrameRequest::Created` 帶給 renderer。engine 內部的 `FrameId`（u64 的號碼）照舊是 engine 和 renderer 內部的索引，`FrameToken` 只用在對外（Browser、DevTools、WebDriver）。理由：DevTools 在建 frame 的當下就要 id（`devtools::realm_created`），那時 renderer 還沒收到 `Created`；id 和 frame 的其他資料放在同一個擁有者身上。Chromium 也分對外的 `LocalFrameToken` 和內部的 id。不選 T2（renderer 收到 `Created` 才抽）：DevTools 當下拿不到，要一張 renderer 和 engine 共用、執行時借用檢查的表；不選 T3（renderer 給 engine 抽 id 的 closure）：只是把一個 `getrandom` 繞到 renderer 再繞回來。
+5. **兩則新訊息：`DidCreateChildFrame { parent, frame }`、`DidDetachFrame { frame }`；名稱第 3 階段才送**（2026-11-18，第 1 階段開始前）：detach 一個 frame 時，它的子樹一起拿掉，一棵子樹一則訊息。理由：renderer 現在就只對直接的子 frame 排 `Removed`、子孫跟著走（`frames::discard_descendants`）；Chromium 的 `FrameHost::Detach` 也是。名稱（iframe 的 `name`）在第 3 階段的歷史之前沒有地方用到，frame 的鍵（Chromium 的 unique name）到時一起設計，所以 RFC 原本排在第 1 階段的「改名」移到第 3 階段。不選每個被拿掉的 frame 各送一則：renderer 要先展開子樹，訊息變多。
+6. **子節點只照 renderer 的 `DidDetachFrame` 拿掉，Browser 不在 commit 時推斷**（2026-11-18，第 1 階段開始前）：renderer 換文件時本來就會對舊文件的每個直接子 frame 送 detach；renderer 重開時 Browser 把樹清回只剩根節點。理由：「建立和移除只有 renderer 說了才算」一條規則，Browser 才能把「拿掉不存在的 frame」一律當成壞掉的訊息；第 1 階段子 frame 的 commit Browser 也看不到。Chromium（2026-11-18 讀 `content/browser/renderer_host/`）：子 `FrameTreeNode` 由目前文件的 `RenderFrameHost` 擁有；清掉子節點的 `ResetChildren()` 只在 `RenderFrameHostImpl` 刪掉時、renderer 掛掉時（`RenderProcessGone`）和嵌入另一棵樹的特例呼叫，commit 的路上沒有；正規的移除是 renderer 的 `Detach`。不選 Browser 在 commit 時自己清（RFC 原本寫的）：第 1 階段推不出子 frame 的；也不選兩者都做：同一件事兩個來源，後到的一則要放寬檢查。
+7. **renderer 送來不合理的訊息時，Browser 結束那個 renderer**（2026-11-18，第 1 階段開始前）：記一行 error（哪一種壞訊息）、`RenderProcessHost::kill`、分頁標成 crashed（sad tab、DevTools 的 `targetCrashed`），樹清回只剩根節點；用一個小函式做（Chromium 的 `bad_message::ReceivedBadMessage`），之後收的一方的各種檢查都用它。第 1 階段的範圍是 `DidCreateChildFrame`（父 frame 不在、id 用過）和 `DidDetachFrame`（不在、是主 frame）；現有的寬鬆處理（例如不認得 id 的 `DidCommitNavigation` 當成新的 entry）到第 2 階段改導覽時一起改。理由：現在壞訊息只可能是 machopo 自己的 bug，結束 renderer 讓它立刻浮出來，兩棵樹也不會繼續錯下去；Chromium 的 `RenderFrameHostImpl::Detach()` 對 detach 主 frame 就是報 bad message。不選記 log、忽略：兩棵樹悄悄地不一致，拆 process 之後被攻破的 renderer 可以故意弄錯 Browser 的樹；不選 debug build 先 panic：「Browser 擋得住壞訊息」的測試寫不了。
+8. **第 1 階段的節點只放結構；DevTools 和 WebDriver 的 frame 的 id 第 1 階段就換**（2026-11-18，第 1 階段開始前）：節點有 id、父節點、子節點；根節點的 id 就是主 frame 的 token。目前的文件（網址、origin）和進行中的導覽第 2 階段才放上節點，那時 Browser commit 每個 frame，所有節點都有；網址列的網址和標題留在 `WebContents`（Chromium 的 visible URL 也是從 `NavigationController` 算的，不是 frame 的屬性）。子 frame 的 `frameId`、WebDriver 的 frame 參照在第 1 階段換成 `FrameToken` 的寫法；WebDriver 的 renderer 前綴照舊用在元素和文件的參照。理由：第 1 階段子 frame 的網址 Browser 不知道，同一個欄位一半可信、一半是空的容易誤用；同一個 frame 不要有兩種 id，而 `shell`、`browser`、`driver` 的測試和 wptrunner 都只把 id 原樣傳回去，沒有依賴舊的格式。不選第 1 階段就把網址和導覽搬到節點（RFC 原本寫的）；也不選 id 第 2 階段才換：renderer 裡兩種 id 並存一段時間。
 
 ## 待決定
 

@@ -308,9 +308,10 @@ struct RenderThread {
     page_focused: bool,
     /// The last `DocumentId` given (`new_document_id`).
     last_document_id: u64,
-    /// What DevTools calls the main frame
-    /// (`RendererMsg::DevToolsMainFrameToken`); empty until told.
-    devtools_main_frame_token: String,
+    /// The main frame's token, the browser's
+    /// (`RendererMsg::DevToolsMainFrameToken`): what DevTools calls it, and
+    /// the browser's frame tree its child frames' parent; none until told.
+    devtools_main_frame_token: Option<protocol::FrameToken>,
     /// The input the compositor thread handed on and the main thread
     /// hasn't taken yet (what `isInputPending()` reads).
     pending_input: PendingUserInput,
@@ -399,11 +400,11 @@ impl RenderThread {
         script_engine: ScriptEngineFactory,
     ) -> Self {
         let _span = trace_event::info_event!("RenderThread::new");
-        let frame_id_prefix = webdriver::new_frame_id_prefix();
+        let id_prefix = webdriver::new_id_prefix();
         let log_agent = Rc::new(log_agent::LogAgent::new(to_browser.clone()));
         let network_agent = Rc::new(network_agent::NetworkAgent::new(
             to_browser.clone(),
-            frame_id_prefix,
+            id_prefix,
             log_agent.clone(),
         ));
         let page_agent = Rc::new(page_agent::PageAgent::new(
@@ -415,7 +416,7 @@ impl RenderThread {
             to_browser.clone(),
             dom_agent.clone(),
             page_agent.clone(),
-            frame_id_prefix,
+            id_prefix,
         ));
         let overlay_agent = Rc::new(overlay_agent::OverlayAgent::new(
             to_browser.clone(),
@@ -470,12 +471,12 @@ impl RenderThread {
             page_hidden: false,
             page_focused: false,
             last_document_id: 0,
-            devtools_main_frame_token: String::new(),
+            devtools_main_frame_token: None,
             pending_input,
             clock: Clock::new(),
             frame_redirects: std::collections::HashMap::new(),
             script_engine,
-            webdriver_state: webdriver::WebDriverState::new(frame_id_prefix),
+            webdriver_state: webdriver::WebDriverState::new(id_prefix),
             devtools_sessions: Vec::new(),
             page_agent,
             network_agent,
@@ -981,13 +982,10 @@ impl RenderThread {
                 unreachable!("RendererSender puts DevTools' in the DevTools queue")
             }
             RendererMsg::DevToolsMainFrameToken(token) => {
-                self.devtools_main_frame_token = token;
+                self.devtools_main_frame_token = Some(token);
                 // The realms made from now on are told by it.
-                if let Some(top) = self.engine.as_ref().map(|engine| engine.top_frame()) {
-                    let ids = self.devtools_frame_ids(top);
-                    if let Some(engine) = &mut self.engine {
-                        engine.set_devtools_frame_ids(ids);
-                    }
+                if let Some(engine) = &mut self.engine {
+                    engine.set_main_frame_token(token);
                 }
             }
             RendererMsg::WasHidden => self.set_page_visible(false),

@@ -7,7 +7,7 @@
 //! the isolate's state: a call that inserts an iframe makes its realm.
 
 use dom::{NodeId, NodeRoot, Window};
-use dom_api::{ChildNavigation, FrameId, FrameRequest};
+use dom_api::{ChildNavigation, FrameId, FrameRequest, FrameToken};
 
 use crate::state::Scope;
 use crate::window::create_window_realm;
@@ -19,6 +19,9 @@ pub(crate) const TOP: FrameId = FrameId(0);
 /// iframe (none for the top-level one).
 pub(crate) struct Frame {
     pub(crate) id: FrameId,
+    /// Its token, drawn as it was made: none for the top-level frame, whose
+    /// is the browser's (`Frames::main_token`).
+    token: Option<FrameToken>,
     pub(crate) context: v8::Global<v8::Context>,
     pub(crate) document: NodeRoot,
     document_id: NodeId,
@@ -35,6 +38,9 @@ pub(crate) struct Frames {
     frames: Vec<Frame>,
     /// The last number given (the top-level one's is 0).
     last: u64,
+    /// The top-level frame's token, once the browser told it
+    /// (`ScriptEngine::set_main_frame_token`).
+    pub(crate) main_token: Option<FrameToken>,
     /// The opaque origins made, numbered.
     opaque: u64,
     /// What the host is to do, in order.
@@ -47,6 +53,14 @@ pub(crate) struct Frames {
 impl Frames {
     pub(crate) fn get(&self, id: FrameId) -> Option<&Frame> {
         self.frames.iter().find(|frame| frame.id == id)
+    }
+
+    /// The token of frame `id`, the browser's for the top-level one.
+    pub(crate) fn token(&self, id: FrameId) -> Option<FrameToken> {
+        if id == TOP {
+            return self.main_token;
+        }
+        self.get(id)?.token
     }
 
     /// The frames, in the order they were made (the top-level one first):
@@ -83,8 +97,17 @@ impl Frames {
         }
     }
 
-    /// The child frames gone (the top-level frame has a new document).
+    /// The child frames gone (the top-level frame has a new document): the
+    /// host told of those of its document.
     pub(crate) fn clear_children(&mut self) {
+        for child in self.frames.iter().filter(|frame| frame.parent == Some(TOP)) {
+            if let Some(token) = child.token {
+                self.requests.push(FrameRequest::Removed {
+                    frame: child.id,
+                    token,
+                });
+            }
+        }
         self.frames.retain(|frame| frame.id == TOP);
     }
 
@@ -132,6 +155,7 @@ impl Frames {
 impl Frame {
     pub(crate) fn new(
         id: FrameId,
+        token: Option<FrameToken>,
         context: v8::Global<v8::Context>,
         document: NodeRoot,
         document_id: NodeId,
@@ -141,6 +165,7 @@ impl Frame {
     ) -> Self {
         Self {
             id,
+            token,
             context,
             document,
             document_id,
@@ -193,6 +218,7 @@ pub(crate) fn create_child(scope: &mut Scope<'_, '_, '_>, owner: &NodeRoot) -> O
     let global = v8::Global::new(scope.scope(), context);
     let (document, document_id) = window_document(scope, context);
     let id = scope.state_mut().0.frames.next_id();
+    let token = dom_api::new_frame_token();
     // The inspector hears of it, of its parent's origin.
     let parent_document = {
         let (state, _) = scope.state();
@@ -200,7 +226,7 @@ pub(crate) fn create_child(scope: &mut Scope<'_, '_, '_>, owner: &NodeRoot) -> O
             .dom
             .read(|cx| cx.root(cx.document_of(owner.get(cx.gc))))
     };
-    crate::devtools::realm_created(scope, context, id, &parent_document);
+    crate::devtools::realm_created(scope, context, id, Some(token), &parent_document);
     let (state, _) = scope.state_mut();
     // The page's system focus, its parent's (as `create_window`'s window
     // gets the engine's): a window that stays when it navigates to its
@@ -215,6 +241,7 @@ pub(crate) fn create_child(scope: &mut Scope<'_, '_, '_>, owner: &NodeRoot) -> O
     });
     state.frames.set(Frame::new(
         id,
+        Some(token),
         global,
         document.clone(),
         document_id,
@@ -224,6 +251,7 @@ pub(crate) fn create_child(scope: &mut Scope<'_, '_, '_>, owner: &NodeRoot) -> O
     ));
     state.frames.requests.push(FrameRequest::Created {
         frame: id,
+        token,
         parent,
         owner: owner.clone(),
         document: document.clone(),
@@ -376,7 +404,11 @@ pub(crate) fn send_fetches(scope: &mut Scope<'_, '_, '_>) {
 pub(crate) fn discard_child(scope: &mut Scope<'_, '_, '_>, document: &NodeRoot) {
     let (state, _) = scope.state_mut();
     let id = state.dom.read(|cx| cx.node_id(document.get(cx.gc)));
-    let Some(frame) = state.frames.of_document(id).map(|frame| frame.id) else {
+    let Some((frame, token)) = state
+        .frames
+        .of_document(id)
+        .and_then(|frame| Some((frame.id, frame.token?)))
+    else {
         return;
     };
     let removed = state.frames.remove(frame);
@@ -386,7 +418,10 @@ pub(crate) fn discard_child(scope: &mut Scope<'_, '_, '_>, document: &NodeRoot) 
             sink.frame_gone(removed.id);
         }
     }
-    state.frames.requests.push(FrameRequest::Removed { frame });
+    state
+        .frames
+        .requests
+        .push(FrameRequest::Removed { frame, token });
     // Their realms have gone for the inspector too.
     for removed in &removed {
         crate::devtools::realm_destroyed(scope.scope(), &removed.context);
@@ -434,10 +469,12 @@ pub(crate) fn discard_descendants(scope: &mut Scope<'_, '_, '_>, frame: FrameId)
         .iter()
         .filter(|removed| removed.parent == Some(frame))
     {
-        state
-            .frames
-            .requests
-            .push(FrameRequest::Removed { frame: child.id });
+        if let Some(token) = child.token {
+            state.frames.requests.push(FrameRequest::Removed {
+                frame: child.id,
+                token,
+            });
+        }
     }
     for removed in &removed {
         crate::devtools::realm_destroyed(scope.scope(), &removed.context);

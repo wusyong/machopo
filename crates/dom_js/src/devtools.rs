@@ -72,12 +72,14 @@ impl bindings::devtools::Queue for Queue {
 
 /// Tells the inspector of `context`, the realm made for `frame`, whose
 /// document has the origin `origin_of` has (an initial `about:blank`'s,
-/// its parent's): for the frame DevTools calls it by, the top-level one's
+/// its parent's): for the frame DevTools calls it by, its `token` (none
+/// for the top-level one before the browser told it), the top-level one's
 /// where a command that names no context runs.
 pub(crate) fn realm_created(
     scope: &mut Scope<'_, '_, '_>,
     context: v8::Local<'_, v8::Context>,
     frame: FrameId,
+    token: Option<dom_api::FrameToken>,
     origin_of: &NodeRoot,
 ) {
     let (origin, frame_id) = {
@@ -90,8 +92,7 @@ pub(crate) fn realm_created(
                 Some(origin @ url::Origin::Tuple(..)) => origin.ascii_serialization(),
                 _ => "://".to_owned(),
             });
-        let frame_id = state.devtools_frame_ids.as_ref().and_then(|ids| ids(frame));
-        (origin, frame_id)
+        (origin, token.map(|token| token.to_string()))
     };
     bindings::devtools::context_created(
         scope.scope(),

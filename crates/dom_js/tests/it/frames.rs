@@ -1177,3 +1177,82 @@ fn a_new_nodes_wrapper_is_of_its_documents_realm() {
          theirs,theirs,ours,theirs,ours,theirs,ours,theirs,theirs,ours / true / true"
     );
 }
+
+/// The frames made, each with its token, in order.
+fn created(requests: &[FrameRequest]) -> Vec<(dom_api::FrameId, dom_api::FrameToken)> {
+    requests
+        .iter()
+        .filter_map(|request| match request {
+            FrameRequest::Created { frame, token, .. } => Some((*frame, *token)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The frames gone, each with its token, in order.
+fn removed(requests: &[FrameRequest]) -> Vec<(dom_api::FrameId, dom_api::FrameToken)> {
+    requests
+        .iter()
+        .filter_map(|request| match request {
+            FrameRequest::Removed { frame, token } => Some((*frame, *token)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Each child frame has a token of its own, the browser's name for it; a
+/// frame that goes is told with its token, once, the frames in it with it:
+/// its iframe removed, or the document it was in navigated from (a child
+/// frame's, or the top-level frame's, one for each frame it had).
+#[test]
+fn a_frame_goes_with_its_token() {
+    let mut engine = engine();
+    run(
+        &mut engine,
+        "var f = document.body.appendChild(document.createElement('iframe'));
+         var g = document.body.appendChild(document.createElement('iframe'));
+         f.contentDocument.body.appendChild(f.contentDocument.createElement('iframe'));",
+    );
+    let made = created(&engine.take_frame_requests());
+    let [(f, f_token), (g, g_token), (_, inner)] = made[..] else {
+        panic!("{made:?}");
+    };
+    assert!(
+        f_token != g_token && f_token != inner && g_token != inner,
+        "{made:?}"
+    );
+    // Removed with the one in it: one for the two.
+    run(&mut engine, "f.remove();");
+    assert_eq!(
+        removed(&engine.take_frame_requests()),
+        [(f, f_token)],
+        "the frame in it goes with it"
+    );
+    // A child frame navigated: the frames of its document go, it stays.
+    run(
+        &mut engine,
+        "g.contentDocument.body.appendChild(g.contentDocument.createElement('iframe'));",
+    );
+    let [(in_g, in_g_token)] = created(&engine.take_frame_requests())[..] else {
+        panic!("one frame made");
+    };
+    engine
+        .create_window(g, "https://other.test/", Instant::now())
+        .expect("its frame");
+    assert_eq!(removed(&engine.take_frame_requests()), [(in_g, in_g_token)]);
+    // The top-level frame navigated: its frames go, each told.
+    run(
+        &mut engine,
+        "document.body.appendChild(document.createElement('iframe'));",
+    );
+    let [(h, h_token)] = created(&engine.take_frame_requests())[..] else {
+        panic!("one frame made");
+    };
+    engine
+        .create_window(engine.top_frame(), "https://example.test/b", Instant::now())
+        .expect("a window");
+    assert_eq!(
+        removed(&engine.take_frame_requests()),
+        [(g, g_token), (h, h_token)]
+    );
+}

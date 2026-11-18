@@ -122,10 +122,12 @@ fn every_frame_has_a_context_that_goes_with_its_document() {
         (&main["origin"], &child["origin"]),
         (&json!(origin), &json!(origin))
     );
+    // A child frame's id is its token, as the main frame's is.
     assert!(
         child["auxData"]["frameId"]
             .as_str()
-            .is_some_and(|id| id.contains('.')),
+            .and_then(protocol::FrameToken::parse)
+            .is_some(),
         "{child}"
     );
     let (main, child) = (main["id"].as_i64().unwrap(), child["id"].as_i64().unwrap());

@@ -1,7 +1,7 @@
 //! WebDriver in the renderer (`RendererMsg::WebDriver`, with
 //! `RendererFlags::automation` only): what the renderer keeps for it (its
-//! prefix of frame ids and element references, the scripts that haven't
-//! settled) and the protocol's errors; `webdriver_commands` does each command's
+//! prefix of element references, the scripts that haven't settled) and
+//! the protocol's errors; `webdriver_commands` does each command's
 //! work in the frame the driver names.
 
 use std::collections::HashMap;
@@ -66,7 +66,8 @@ pub(super) const BOOLEAN_ATTRIBUTES: &[&str] = &[
 
 /// What the renderer keeps for WebDriver.
 pub(super) struct WebDriverState {
-    /// This renderer's, in each of its references and frame ids.
+    /// This renderer's, in each of its references (a frame's id is its
+    /// token).
     pub(super) prefix: u64,
     /// The scripts that haven't settled, by request, with the document
     /// they run in.
@@ -78,14 +79,15 @@ pub(super) struct WebDriverState {
     pub(super) documents: HashMap<DocumentId, dom_api::FrameId>,
 }
 
-/// A renderer's prefix of its child frames' ids: random enough that no two
-/// renderers share one.
-pub(super) fn new_frame_id_prefix() -> u64 {
+/// A renderer's prefix of the ids it gives out (WebDriver's element
+/// references, DevTools' request and style sheet ids): random enough that
+/// no two renderers share one.
+pub(super) fn new_id_prefix() -> u64 {
     RandomState::new().hash_one(std::time::SystemTime::now())
 }
 
 impl WebDriverState {
-    /// With the renderer's `prefix` (its frame ids' too).
+    /// With the renderer's `prefix`.
     pub(super) fn new(prefix: u64) -> Self {
         Self {
             prefix,

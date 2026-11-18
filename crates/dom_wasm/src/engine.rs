@@ -16,9 +16,9 @@ use std::time::{Duration, Instant};
 use dom::{Dom, NodeId, NodeRoot, Window};
 use dom_api::typed::ScriptHost;
 use dom_api::{
-    ApiCx, ConsoleMessage, ConsoleSink, DevToolsFrameIds, DevToolsInterrupter, DevToolsObjects,
-    DevToolsPage, DevToolsQueue, DevToolsSend, DocumentReadiness, EngineSettings, FrameId,
-    FrameLayout, LayoutCell, ScriptEngine, WasmScript,
+    ApiCx, ConsoleMessage, ConsoleSink, DevToolsInterrupter, DevToolsObjects, DevToolsPage,
+    DevToolsQueue, DevToolsSend, DocumentReadiness, EngineSettings, FrameId, FrameLayout,
+    LayoutCell, ScriptEngine, WasmScript,
 };
 use elise::Persistent;
 use wasmtime::component::{Component, Linker};
@@ -1138,7 +1138,8 @@ impl ScriptEngine for WasmEngine {
 
     fn set_idle(&mut self, _: bool) {}
 
-    fn set_devtools_frame_ids(&mut self, _: DevToolsFrameIds) {}
+    // No inspector, and no child frame: the token names nothing here.
+    fn set_main_frame_token(&mut self, _: dom_api::FrameToken) {}
 
     // No inspector: DevTools' sessions hear nothing of script here.
     fn devtools_attach(&mut self, _: String, _: DevToolsSend) {}

@@ -526,11 +526,12 @@ pub trait ScriptEngine: ParserHost {
     /// each task. Not while script runs.
     fn set_idle(&mut self, idle: bool);
 
-    /// What DevTools calls the frames (`Page.Frame`'s `id`), the host's:
-    /// each realm is told to the engine's inspector with its frame's, as
-    /// it is made (replaces the ones before; realms made already keep
-    /// theirs).
-    fn set_devtools_frame_ids(&mut self, ids: DevToolsFrameIds);
+    /// The top-level frame's token, the browser's: what DevTools calls it
+    /// (`Page.Frame`'s `id`), as it does a child frame by the token the
+    /// engine drew for it. Each realm is told to the engine's inspector
+    /// with its frame's as it is made: those of the top-level frame made
+    /// before this have none.
+    fn set_main_frame_token(&mut self, token: crate::FrameToken);
 
     /// A DevTools session of the browser's `session` for the engine's
     /// frames, whose answers and events go to `send`, as JSON (V8's
@@ -695,10 +696,6 @@ pub trait WorkerEngine {
         None
     }
 }
-
-/// What DevTools calls a frame: `None` for one it has no name for (the
-/// top-level one before the browser named it).
-pub type DevToolsFrameIds = Box<dyn Fn(crate::FrameId) -> Option<String>>;
 
 /// Where a DevTools session's answers and events go, as JSON
 /// ([`ScriptEngine::devtools_attach`]).

@@ -1309,7 +1309,7 @@ impl AutomationSession {
     fn know_target(&mut self, contents: &WebContents) -> String {
         self.targets
             .entry(contents.tab())
-            .or_insert_with(|| contents.devtools_frame_token().to_owned())
+            .or_insert_with(|| contents.devtools_frame_token().to_string())
             .clone()
     }
 

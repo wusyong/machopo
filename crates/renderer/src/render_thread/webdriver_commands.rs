@@ -295,19 +295,19 @@ impl RenderThread {
         })
     }
 
-    /// The id of child frame `frame`, for the browser and the driver: this
-    /// renderer's prefix, and the engine's number for it (the same as its
-    /// documents change, as WebDriver's browsing context is).
+    /// The id of child frame `frame`, for the browser and the driver: its
+    /// token (the same as its documents change, as WebDriver's browsing
+    /// context is). Empty for none the renderer was told of.
     pub(super) fn frame_id(&self, frame: FrameId) -> String {
-        child_frame_id(self.webdriver_state.prefix, frame)
+        self.children
+            .token(frame)
+            .map(|token| token.to_string())
+            .unwrap_or_default()
     }
 
     /// The child frame `id` names, if it is one of this renderer's.
     fn frame_id_of(&self, id: &str) -> Option<FrameId> {
-        let (prefix, number) = id.split_once('.')?;
-        let number = number.strip_prefix('f')?;
-        let (prefix, number) = (u64::from_str_radix(prefix, 16).ok()?, number.parse().ok()?);
-        (prefix == self.webdriver_state.prefix).then_some(FrameId(number))
+        self.children.of_token(protocol::FrameToken::parse(id)?)
     }
 
     /// Switch To Frame's work in the page: the child frame of the context's
@@ -684,13 +684,4 @@ fn text(answer: WebDriverAnswer) -> WebDriverValue {
         WebDriverAnswer::Text(None) => WebDriverValue::Null,
         other => unreachable!("a text query answers with text, not {other:?}"),
     }
-}
-
-/// The id of child frame `frame` of a renderer whose prefix is `prefix`
-/// (`RenderThread::frame_id`): WebDriver's, and DevTools'. The `f`
-/// keeps it apart from a document's token (`prefix.<document>`, an
-/// element's reference without its node), whose numbers are counted apart
-/// and meet the frames'.
-pub(super) fn child_frame_id(prefix: u64, frame: FrameId) -> String {
-    format!("{prefix:016x}.f{}", frame.0)
 }

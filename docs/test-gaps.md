@@ -276,6 +276,7 @@
 
 **DOM、bindings 和 script**
 
+- renderer 收到主 frame 的 token 時，如果 engine 已經在，當場告訴它（`render_thread.rs` 處理 `RendererMsg::DevToolsMainFrameToken` 的 `set_main_frame_token`）：拿掉也一樣。Browser 對每個 renderer 送的第一則訊息就是這個 token，比任何文件都早，那時 engine 還沒建；engine 建好時才拿到 token 的那條（`devtools.rs` 的 `make_engine`）有測試守著。留著是為了不依賴訊息的順序。
 - DOM 的 collection 往回走時停在 root（`dom` 的 `collection_previous` 的 `parent` 的條件）：往回走只從快取的元素走到它之前、已經在 collection 裡的元素（或從最後一個走到它），永遠不會走過第一個元素，所以走不到 root 的 parent，拿掉條件結果一樣；它讓這個函式本身照「在 root 之內」的意思，之後有走過第一個元素的呼叫時才看得出來。
 - trace 裡 rAF callback 之後的 microtask checkpoint 移到 `FireAnimationFrame` 的 span 外面（`dom_api` 的 `run_animation_frame_callbacks`）：V8 的 engine 在 callback 回來時就跑了 checkpoint（`dom_js` 的 `run_callback`），在 span 裡面，之後這一次已經沒有東西可跑。wasm 的 engine 或不先跑 checkpoint 的 engine 才看得出來。
 - DOM 的 idle callback 的 timeout 不看到期了沒有（`dom` 的 `take_due_idle_timeout` 的 `due <= now`）：只有最早的 timeout 到期了才會叫它（`dom_api` 的 `timer::run_next_due` 先問 `next_idle_timeout`），它拿的就是那一個。

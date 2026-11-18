@@ -5,7 +5,6 @@ use crossbeam_channel::Sender;
 use gfx::{RectF, Size};
 use ipc::TimeTicks;
 use net::{LoadHandle, NetworkContext};
-use protocol::TabId;
 use protocol::network::{LoadResult, RedirectInfo, RequestDestination, ResourceRequest};
 use protocol::renderer::{
     NavigationLoad, NavigationTimingType, RedirectHop, RendererHostMsg, RendererMsg,
@@ -15,6 +14,7 @@ use protocol::viz::{
     BeginFrameArgs, BeginFrameObserver, DisplayMsg, FrameSinkId, LocalSurfaceId,
     SharedImageInterface, SurfaceId, VizMsg,
 };
+use protocol::{FrameToken, TabId};
 
 use crate::debug_urls::{DebugUrl, debug_url};
 use crate::navigation_controller::{NavigationController, NavigationType};
@@ -59,7 +59,7 @@ pub struct WebContents {
     /// What DevTools calls the tab and its main frame (its target id):
     /// random, so a page can't guess it (Chromium's frame tokens are
     /// `base::UnguessableToken`s); each of its renderers is told it.
-    devtools_frame_token: String,
+    devtools_frame_token: FrameToken,
     /// The frame sink its renderer submits to: a new one for each renderer,
     /// so what the one before still sends (it isn't waited for) goes to a
     /// sink Viz has forgotten.
@@ -151,12 +151,12 @@ impl Launch {
     }
 }
 
-/// A tab's id for DevTools: 128 bits of the operating system's random
-/// numbers, as 32 hex digits, as long as Chrome's.
-fn devtools_frame_token() -> String {
+/// A tab's main frame token, its id for DevTools: 128 bits of the
+/// operating system's random numbers, as Chrome's.
+fn devtools_frame_token() -> FrameToken {
     let mut bytes = [0u8; 16];
     getrandom::fill(&mut bytes).expect("the operating system gives random numbers");
-    bytes.iter().map(|byte| format!("{byte:02X}")).collect()
+    FrameToken(bytes)
 }
 
 /// `content::OpenURLParams`: a link to open in another tab.
@@ -211,9 +211,7 @@ impl WebContents {
         };
         let process = launch.process(tab, frame_sink_id, &viz, &network)?;
         let devtools_frame_token = devtools_frame_token();
-        process.send(RendererMsg::DevToolsMainFrameToken(
-            devtools_frame_token.clone(),
-        ));
+        process.send(RendererMsg::DevToolsMainFrameToken(devtools_frame_token));
         Ok(Self {
             tab,
             devtools_frame_token,
@@ -247,9 +245,10 @@ impl WebContents {
         self.tab
     }
 
-    /// What DevTools calls the tab and its main frame: its target id.
-    pub fn devtools_frame_token(&self) -> &str {
-        &self.devtools_frame_token
+    /// The main frame's token: what DevTools calls the tab and its main
+    /// frame (its target id, written as `FrameToken` writes it).
+    pub fn devtools_frame_token(&self) -> FrameToken {
+        self.devtools_frame_token
     }
 
     /// The frame sink this tab's renderer submits to: another once a
@@ -476,7 +475,7 @@ impl WebContents {
         ));
         self.crashed = false;
         self.process.send(RendererMsg::DevToolsMainFrameToken(
-            self.devtools_frame_token.clone(),
+            self.devtools_frame_token,
         ));
         self.process
             .send(RendererMsg::UpdateVisualProperties(self.visual_properties));
@@ -926,6 +925,9 @@ impl WebContents {
                 self.input_in_flight = 0;
             }
             RendererHostMsg::RendererReady => {}
+            // The browser keeps no frame tree yet.
+            RendererHostMsg::DidCreateChildFrame { .. }
+            | RendererHostMsg::DidDetachFrame { .. } => {}
         }
     }
 
