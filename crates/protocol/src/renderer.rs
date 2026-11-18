@@ -541,9 +541,13 @@ pub enum RendererHostMsg {
     /// `BlobURLStore::Register` (`URL.createObjectURL`): `url` stands for
     /// a blob of `bytes` and `mime_type` (its type, maybe empty), for this
     /// renderer's subresources and for any navigation, until revoked or
-    /// the renderer goes. Sent before any load of it, on the same channel.
-    /// Handled on the IO thread.
+    /// the renderer goes, or the dedicated worker that registered it
+    /// (`worker`, its thread sending it; none: the main thread's) does
+    /// (`DedicatedWorkerGone`; one the browser doesn't know as the
+    /// renderer's registers nothing). Sent before any load of it, on the
+    /// same channel. Handled on the IO thread.
     RegisterBlobUrl {
+        worker: Option<u64>,
         url: String,
         mime_type: String,
         bytes: Arc<[u8]>,

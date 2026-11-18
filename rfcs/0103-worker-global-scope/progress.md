@@ -16,9 +16,9 @@
 | 1b-5：`renderer` 的 worker 的 thread 和 event loop、兩個方向的 `postMessage`、`terminate()`、`close()`、`onerror` | 做完（第 19 條；主 script 暫時只有 `data:` 的網址） | 2026-11-17 |
 | 1b-6：Browser 的登記和主 script 的載入、子資源的請求帶 client、`importScripts()` | 做完（第 20 條） | 2026-11-17 |
 | 1b-7：WPT 的 `workers/`、情境、`about:demo`、文件、整個階段的檢查 | 做完（第 21、22 條） | 2026-11-18 |
-| 2：worker 裡的 `fetch()`、`MessagePort` 跨 thread、module worker、巢狀的 worker、`WorkerNavigator`、`WorkerLocation`、`performance` | 做中：2a 做完 | |
+| 2：worker 裡的 `fetch()`、`MessagePort` 跨 thread、module worker、巢狀的 worker、`WorkerNavigator`、`WorkerLocation`、`performance` | 做中：2a、2b 做完 | |
 | 2a：worker 裡的 `location`、`navigator`、`performance` | 做完（第 23 到 26 條） | 2026-11-18 |
-| 2b：worker 裡的 `fetch()`、worker 建的 blob URL | 還沒開始 | |
+| 2b：worker 裡的 `fetch()`、worker 建的 blob URL | 做完（第 27、28 條） | 2026-11-18 |
 | 2c：`MessagePort` 跨 thread | 還沒開始 | |
 | 2d：worker 裡建的 worker | 還沒開始 | |
 | 2e：module worker | 還沒開始 | |
@@ -180,3 +180,15 @@
   - `dom_api` 的 `table::members_are_exposed_in_their_interface_s_globals_or_fewer`，`dom_api_macros` 的成員的 exposed 的 4 個（只能比 interface 少、只標在 attribute 和 method 上、overload 一樣、描述帶著成員自己的）。
 - mutation test（`rfcs/0103-worker-global-scope/mutants-2a.toml`，21 條）：全部抓到。第一次 11 條裡「renderer 太晚記 time origin」沒抓到（`data:` 的 script 載入太快，晚記也差不多），測試改成用慢的 script 之後抓到；之後加的成員的 exposed 的 8 條和 User Timing 的 2 條都抓到。
 - 跑過的：`cargo test -p dom -p dom_api -p dom_api_macros -p dom_js -p dom_wasm -p renderer`、`shell` 的 `workers::`、sanity 的每一項。`cargo test --workspace`、fmt、clippy 等第 2 階段做完時跑。
+
+### 2b：worker 的 `fetch()`、worker 建的 blob URL（2026-11-18，macOS，Apple Silicon）
+
+- 第 27 條：`dom` 的 `FetchRecord` 記執行環境（原本記 window），`FetchRequest` 的文件是 `Option`（沒有是 worker 的）；`dom_api` 的 `fetch()` 分成 window 和 worker 的兩個入口、共用 `fetch::start`，`did_receive_response` 收 `dom::GlobalRoot`。`dom_js` 在 worker 的 isolate 裡把請求和取消交給 `WorkerGlobalHost`（`start_fetch`、`cancel_fetch`），`WorkerEngine::fetch_response` 在 worker 的 realm 裡 settle。`renderer` 的 worker 的 thread 送 `FetchResource`（帶 worker），記著 request id 對到哪個 `fetch()`，回應和 redirect 在它的 loop 裡處理；`importScripts()` 等待時到的別的回答留到之後（原本丟掉）。`FetchResource` 的轉換和回應的轉換搬到 `loader.rs`，window 和 worker 共用。
+- 第 28 條：`dom` 的 `register_context_blob_url` 也替 worker 的 global 排（沒有文件），`dom_js` 交給 `WorkerGlobalHost::register_blob_url`、`revoke_blob_url`；`renderer` 的 worker 的 thread 送 `RegisterBlobUrl`（多了 `worker`），撤銷當場送（worker 的 `fetch()` 在呼叫時就送出，之前要求的載入都在前面）。Browser 的 IO thread 記著每個 worker 登記的網址，`DedicatedWorkerGone` 時撤銷（載入的和導覽的都撤銷），不認得的 worker 的登記不收。
+- WPT：`workers/data-url.html` 不再 `disabled`；21 個目錄用 `MACHOPO_UPDATE_EXPECTATIONS` 重寫。worker 的 variant 跑得到之後多出來的失敗都對照過：idlharness 的（`FileAPI/`、`WebCryptoAPI/`、`hr-time/`、`netinfo/`、`performance-timeline/`）和 `url/` 的和 window 的一樣，只多了 worker 才有的 `FileReaderSync` 和下一點的問題；`importscripts_mime_local` 的 blob URL 照 1b 定的不檢查 MIME type（和 `data:` 的一樣）；`data-url.html` 只剩 IndexedDB。過時的註解改成真正的原因。重寫時又動到 `dom/events/scrolling/` 的幾份（Mac 上的結果），還原。WPT_RESULTS
+- WPT 找到、留到 2f 的：worker 的 global 上，`WorkerGlobalScope` 的成員是 global 自己的 property，WebIDL 要它們在 `WorkerGlobalScope.prototype` 上（只有 `DedicatedWorkerGlobalScope` 是 `[Global]`）；idlharness 的 `WorkerGlobalScope interface: attribute crypto`、`performance` 因此失敗。1b-4 為了讓 `self`、`setTimeout` 在 global 上這樣裝的，要改宣告表和 template 的裝法。
+- 新的測試：
+  - `dom_js` 的 `worker::a_worker_s_fetch_goes_to_its_host`（請求的內容、回應、網路錯誤、abort）、`a_worker_s_blob_urls_go_to_its_host`；
+  - `shell` 的 `workers::a_worker_s_fetch_and_blob_urls`（自己的 origin、CORS、`no-cors`，worker 建的 blob URL 給它的 `fetch()`、`importScripts()` 和頁面的 `fetch()`，worker 結束之後頁面抓不到）、`a_worker_s_aborted_fetch_has_its_load_closed`、`a_worker_s_fetch_is_redirected_and_answered_while_it_imports`。
+- mutation test（`rfcs/0103-worker-global-scope/mutants-2b.toml`，14 條）：第一次 10 條抓到，「renderer 不取消 worker 中止的 `fetch()`」沒抓到：頁面回報後就結束，renderer 結束時 Browser 也會關掉載入；測試改成頁面待到 server 本來會回應之後，抓到。剩下的 3 條和它一起重跑，都抓到。沒寫成 mutant 的：Browser 收到 worker 的撤銷時從那個 worker 的清單拿掉（不拿掉的話 worker 結束時再撤銷一次已經撤銷的網址，結果一樣，等價）。Browser 不收不認得的 worker 的登記：拿掉時沒有測試失敗，記進 `docs/test-gaps.md` 的「只靠審查」。
+- 跑過的：`cargo test -p dom -p dom_api -p dom_js -p dom_wasm -p renderer -p browser -p protocol`、`shell` 的 `workers::`、sanity 的每一項。`browser` 的 `navigation::a_srcdoc_document_commits_with_nothing_else_to_wake_the_renderer` 在和其他 crate 一起跑時失敗一次（等 title 的 5 秒期限過了，那次 `browser` 的整合測試整體跑了 8 秒，平常 4.9 秒），之後單獨連跑 15 次、整個 `browser` 的整合測試連跑 3 次都通過：和 RFC 0102 記下的負載重時超過期限是同一個，和這一段的改動無關（它不經過 worker、`fetch()` 或 blob URL）。`cargo test --workspace`、fmt、clippy 等第 2 階段做完時跑。

@@ -197,19 +197,23 @@ impl<'gc> Cx<'_, 'gc> {
     }
 
     /// `url` stands for `data` now, for as long as `context`'s realm lives
-    /// (`BlobUrlRequest::Register`, for its global's document); nothing
-    /// for a context of no document.
+    /// (`BlobUrlRequest::Register`, for its global's document, or for a
+    /// worker's global).
     pub fn register_context_blob_url(
         &self,
         context: Gc<'gc, ExecutionContext>,
         url: String,
         data: crate::BlobData,
     ) {
-        let Some(document) = self.context_document(context) else {
-            return;
+        let document = match context.worker.get(self.gc) {
+            Some(_) => None,
+            None => match self.context_document(context) {
+                Some(document) => Some(self.node_id(document)),
+                None => return,
+            },
         };
         self.request_blob_url(crate::BlobUrlRequest::Register {
-            document: self.node_id(document),
+            document,
             url,
             data,
         });

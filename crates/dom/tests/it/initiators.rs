@@ -32,7 +32,7 @@ fn page<'gc>(cx: &Cx<'_, 'gc>) -> NodeRef<'gc> {
 fn fetch(id: u64) -> FetchHostRequest {
     FetchHostRequest::Start(FetchRequest {
         id,
-        document: dom::NodeId::from_raw(1),
+        document: Some(dom::NodeId::from_raw(1)),
         url: "https://example.test/data".into(),
         method: "GET".into(),
         headers: Vec::new(),

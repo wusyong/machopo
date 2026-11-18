@@ -602,9 +602,9 @@ impl ScriptEngine for V8Engine {
         for fetch in fetches {
             let request = match fetch {
                 dom::FetchHostRequest::Start(request) => {
-                    let Some(frame) = state
-                        .frames
-                        .of_document(request.document)
+                    let Some(frame) = request
+                        .document
+                        .and_then(|document| state.frames.of_document(document))
                         .map(|frame| frame.id)
                     else {
                         continue;
@@ -626,7 +626,7 @@ impl ScriptEngine for V8Engine {
             frames.into_iter().find_map(|(_, context, document)| {
                 dom.read(|cx| {
                     let window = cx.window_of(document.get(cx.gc))?;
-                    cx.window_fetch(window, id).map(|_| ())
+                    cx.context_fetch(cx.window_context(window), id).map(|_| ())
                 })
                 .map(|()| context)
             })

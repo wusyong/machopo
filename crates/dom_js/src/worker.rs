@@ -279,6 +279,22 @@ impl WorkerEngine for V8WorkerEngine {
             .mutate(|cx| cx.post_worker_global_message(global.get(cx.gc), message));
     }
 
+    fn fetch_response(&mut self, id: u64, response: Result<dom_api::FetchedResponse, ()>) {
+        let Some(global) = self.global.clone() else {
+            return;
+        };
+        let global = dom::GlobalRoot::WorkerGlobal(global);
+        self.in_realm(|scope| {
+            let Some(mut scope) = state::scope(scope) else {
+                return;
+            };
+            let mut host = crate::listeners::Host { scope: &mut scope };
+            dom_api::did_receive_response(&mut host, &global, id, response);
+            state::report(&mut scope);
+        });
+        self.perform_microtask_checkpoint();
+    }
+
     fn until_next_task(&mut self) -> Option<Duration> {
         let global = self.global.clone()?;
         self.state()

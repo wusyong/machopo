@@ -29,6 +29,12 @@ struct Sent {
     scripts: HashMap<String, dom_api::ImportedScript>,
     /// The URLs it fetched, in order.
     fetched: Vec<String>,
+    /// The `fetch()`es it started, in order.
+    fetches: Vec<dom::FetchRequest>,
+    /// What it asked of its host of its `fetch()`es and blob URLs, in
+    /// order: `cancel <id>`, `register <url> <type> <bytes>`,
+    /// `revoke <url>`.
+    asked: Vec<String>,
 }
 
 struct Host(Rc<RefCell<Sent>>);
@@ -50,6 +56,26 @@ impl WorkerGlobalHost for Host {
         let mut sent = self.0.borrow_mut();
         sent.fetched.push(url.to_string());
         sent.scripts.get(url.as_str()).cloned()
+    }
+
+    fn start_fetch(&self, request: &dom::FetchRequest) {
+        self.0.borrow_mut().fetches.push(request.clone());
+    }
+
+    fn cancel_fetch(&self, id: u64) {
+        self.0.borrow_mut().asked.push(format!("cancel {id}"));
+    }
+
+    fn register_blob_url(&self, url: &str, data: &dom::BlobData) {
+        let bytes = String::from_utf8_lossy(&data.shared_bytes()).into_owned();
+        self.0
+            .borrow_mut()
+            .asked
+            .push(format!("register {url} {} {bytes}", data.type_()));
+    }
+
+    fn revoke_blob_url(&self, url: &str) {
+        self.0.borrow_mut().asked.push(format!("revoke {url}"));
     }
 }
 
@@ -867,4 +893,83 @@ fn a_document_s_workers_end_with_it() {
         )
         .expect("a window");
     assert_eq!(ended(&workers), [1, 2]);
+}
+
+/// A worker's `fetch()` goes to its host as the call returns, of no
+/// document, as the worker's origin; its response settles its promise as
+/// a task of the worker's, a network error rejects it, and an abort
+/// cancels its request and rejects it with the reason.
+#[test]
+fn a_worker_s_fetch_goes_to_its_host() {
+    let (mut engine, sent) = worker();
+    run(
+        &mut engine,
+        "globalThis.got = []; \
+         fetch('a?x', { method: 'POST', body: 'hi' }) \
+           .then(r => r.text().then(t => got.push(`${r.status} ${r.url} ${t}`))); \
+         fetch('b').catch(e => got.push(e.name)); \
+         globalThis.c = new AbortController(); \
+         fetch('c', { signal: c.signal }).catch(e => got.push(e.name));",
+    );
+    let fetches = sent.borrow().fetches.clone();
+    let asked: Vec<_> = fetches
+        .iter()
+        .map(|request| {
+            let body = request.body.as_deref().map(String::from_utf8_lossy);
+            format!(
+                "{} {} {:?} {} {body:?}",
+                request.method, request.url, request.document, request.initiator
+            )
+        })
+        .collect();
+    assert_eq!(
+        asked,
+        [
+            "POST https://example.test/a?x None https://example.test Some(\"hi\")",
+            "GET https://example.test/b None https://example.test None",
+            "GET https://example.test/c None https://example.test None",
+        ]
+    );
+    run(&mut engine, "c.abort();");
+    assert_eq!(
+        sent.borrow().asked,
+        [format!("cancel {}", fetches[2].id)]
+    );
+    engine.fetch_response(
+        fetches[0].id,
+        Ok(dom_api::FetchedResponse {
+            tainting: protocol::network::ResponseTainting::Basic,
+            url: "https://example.test/a?x".to_owned(),
+            redirected: false,
+            status: 201,
+            status_text: "Created".to_owned(),
+            headers: Vec::new(),
+            body: std::sync::Arc::from(&b"there"[..]),
+        }),
+    );
+    engine.fetch_response(fetches[1].id, Err(()));
+    // Aborted: no more of it.
+    engine.fetch_response(fetches[2].id, Err(()));
+    assert_eq!(
+        result(&mut engine, "got.join()"),
+        "AbortError,201 https://example.test/a?x there,TypeError"
+    );
+}
+
+/// A blob URL the worker makes goes to its host with the blob's type and
+/// bytes, and so does its revoke; another origin's isn't revoked.
+#[test]
+fn a_worker_s_blob_urls_go_to_its_host() {
+    let (mut engine, sent) = worker();
+    let url = result(
+        &mut engine,
+        "(() => { const url = URL.createObjectURL(new Blob(['hi'], { type: 'text/plain' })); \
+           URL.revokeObjectURL('blob:https://other.test/1'); \
+           URL.revokeObjectURL(url); return url; })()",
+    );
+    assert!(url.starts_with("blob:https://example.test/"), "{url}");
+    assert_eq!(
+        sent.borrow().asked,
+        [format!("register {url} text/plain hi"), format!("revoke {url}")]
+    );
 }

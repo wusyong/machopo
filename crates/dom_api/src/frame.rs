@@ -108,13 +108,17 @@ pub fn update_elements<H: ScriptHost>(host: &mut H) {
                 document,
                 url,
                 data,
-            } => {
-                let document =
-                    host.read(|cx| cx.node_by_id(document).map(|document| cx.root(document)));
-                if let Some(document) = document {
-                    host.register_blob_url(&document, &url, &data);
+            } => match document {
+                Some(document) => {
+                    let document =
+                        host.read(|cx| cx.node_by_id(document).map(|document| cx.root(document)));
+                    if let Some(document) = document {
+                        host.register_blob_url(Some(&document), &url, &data);
+                    }
                 }
-            }
+                // A worker's global's.
+                None => host.register_blob_url(None, &url, &data),
+            },
             dom::BlobUrlRequest::Revoke { url } => host.revoke_blob_url(&url),
         }
     }

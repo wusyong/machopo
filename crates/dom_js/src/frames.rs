@@ -283,11 +283,18 @@ pub(crate) fn navigate(
 /// A blob URL of the realm of the frame showing `document`: the host told.
 pub(crate) fn register_blob_url(
     scope: &mut Scope<'_, '_, '_>,
-    document: &NodeRoot,
+    document: Option<&NodeRoot>,
     url: &str,
     data: &dom::BlobData,
 ) {
     let (state, _) = scope.state_mut();
+    // A worker's global's: its host's.
+    let Some(document) = document else {
+        if let Some(host) = state.caches.worker_global_host.as_deref() {
+            host.register_blob_url(url, data);
+        }
+        return;
+    };
     let id = state.dom.read(|cx| cx.node_id(document.get(cx.gc)));
     let Some(frame) = state.frames.of_document(id).map(|frame| frame.id) else {
         return;
@@ -305,6 +312,11 @@ pub(crate) fn register_blob_url(
 /// A blob URL revoked: the host told.
 pub(crate) fn revoke_blob_url(scope: &mut Scope<'_, '_, '_>, url: &str) {
     let (state, _) = scope.state_mut();
+    // A worker's: its host's.
+    if let Some(host) = state.caches.worker_global_host.as_deref() {
+        host.revoke_blob_url(url);
+        return;
+    }
     match &state.frames.load_sink {
         Some(sink) => sink.revoke_blob_url(url),
         None => state.frames.requests.push(FrameRequest::RevokeBlobUrl {
@@ -319,6 +331,16 @@ pub(crate) fn revoke_blob_url(scope: &mut Scope<'_, '_, '_>, url: &str) {
 /// they wait for the host's next look (`take_frame_requests`).
 pub(crate) fn send_fetches(scope: &mut Scope<'_, '_, '_>) {
     let (state, _) = scope.state_mut();
+    // A worker's: sent by its host now.
+    if let Some(host) = state.caches.worker_global_host.as_deref() {
+        for fetch in state.dom.mutate(|cx| cx.take_fetch_requests()) {
+            match fetch {
+                dom::FetchHostRequest::Start(request) => host.start_fetch(&request),
+                dom::FetchHostRequest::Cancel(id) => host.cancel_fetch(id),
+            }
+        }
+        return;
+    }
     if state.frames.load_sink.is_none() {
         return;
     }
@@ -326,9 +348,9 @@ pub(crate) fn send_fetches(scope: &mut Scope<'_, '_, '_>) {
     for fetch in fetches {
         let request = match fetch {
             dom::FetchHostRequest::Start(request) => {
-                let Some(frame) = state
-                    .frames
-                    .of_document(request.document)
+                let Some(frame) = request
+                    .document
+                    .and_then(|document| state.frames.of_document(document))
                     .map(|frame| frame.id)
                 else {
                     continue;

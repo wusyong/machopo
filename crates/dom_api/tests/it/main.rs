@@ -985,6 +985,14 @@ impl dom_api::WorkerGlobalHost for TestFront<'_> {
     fn fetch_script(&self, _: &url::Url) -> Option<dom_api::ImportedScript> {
         None
     }
+
+    fn start_fetch(&self, _: &dom::FetchRequest) {}
+
+    fn cancel_fetch(&self, _: u64) {}
+
+    fn register_blob_url(&self, _: &str, _: &dom::BlobData) {}
+
+    fn revoke_blob_url(&self, _: &str) {}
 }
 
 impl OpFront for TestFront<'_> {

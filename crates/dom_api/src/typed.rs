@@ -1987,10 +1987,15 @@ pub trait ScriptHost {
         None
     }
 
-    /// `url` stands for `data` (a blob URL `document`'s realm made, File
-    /// API's blob URL store's entry): the host keeps it, for as long as the
-    /// realm lives. Nothing by default.
-    fn register_blob_url(&mut self, document: &dom::NodeRoot, url: &str, data: &dom::BlobData) {
+    /// `url` stands for `data` (a blob URL `document`'s realm made, or with
+    /// none the worker's global's; File API's blob URL store's entry): the
+    /// host keeps it, for as long as the realm lives. Nothing by default.
+    fn register_blob_url(
+        &mut self,
+        document: Option<&dom::NodeRoot>,
+        url: &str,
+        data: &dom::BlobData,
+    ) {
         let _ = (document, url, data);
     }
 

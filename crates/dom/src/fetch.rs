@@ -1,17 +1,17 @@
 //! Fetch's `Request` (Blink's `core/fetch/request.h`, with its
 //! `FetchRequestData`) and `Response` (`response.h`, with its
 //! `FetchResponseData`): what the DOM keeps of them, and a `fetch()`
-//! in flight (`FetchRecord`, which its window keeps until its response
-//! comes or it is aborted; Blink's `FetchManager::Loader`). A body is whole
-//! bytes, shared (`Arc<[u8]>`, as a `Blob`'s), read at most once (no
-//! streams). Fetch's algorithms are `dom_api`'s.
+//! in flight (`FetchRecord`, which its execution context keeps until its
+//! response comes or it is aborted; Blink's `FetchManager::Loader`). A
+//! body is whole bytes, shared (`Arc<[u8]>`, as a `Blob`'s), read at most
+//! once (no streams). Fetch's algorithms are `dom_api`'s.
 
 use std::cell::Cell;
 use std::sync::Arc;
 
 use elise::{Gc, GcObject, HeapVector, JsEdge, LocalExternal, Member};
 
-use crate::{Cx, EventTargetImpl, Headers, Window, sites};
+use crate::{Cx, EventTargetImpl, Headers, sites};
 
 /// Fetch's response type (`Response.type`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -185,13 +185,14 @@ pub struct Response {
     wrapper: JsEdge,
 }
 
-/// A `fetch()` in flight: its window (its request's realm's), its number
+/// A `fetch()` in flight: its execution context (its request's realm's,
+/// a window's or a worker's), its number
 /// (what the host's request and its response go by), its promise's number,
 /// its request's signal, and what its response is made with (its redirect
 /// mode and credentials mode).
 #[derive(GcObject)]
 pub struct FetchRecord {
-    window: Member<Window>,
+    context: Member<crate::ExecutionContext>,
     signal: Member<EventTargetImpl>,
     id: Cell<u64>,
     promise: Cell<u64>,
@@ -201,11 +202,12 @@ pub struct FetchRecord {
 
 /// A `fetch()`'s request for the host to send (Fetch's "fetch", the parts
 /// the network takes): its number, its document's (the one whose window
-/// fetches), and the request; the body as the request had it.
+/// fetches; none for a worker's, its engine's one global), and the request;
+/// the body as the request had it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FetchRequest {
     pub id: u64,
-    pub document: crate::NodeId,
+    pub document: Option<crate::NodeId>,
     pub url: String,
     pub method: String,
     /// One per name, the values joined (Blink's `FetchHeaderList` sends
@@ -215,7 +217,8 @@ pub struct FetchRequest {
     pub mode: RequestMode,
     pub credentials: RequestCredentials,
     pub redirect: RequestRedirect,
-    /// The document's origin, serialized (`null` for an opaque one).
+    /// The fetching global's origin, serialized (`null` for an opaque
+    /// one).
     pub initiator: String,
 }
 
@@ -357,12 +360,12 @@ impl<'gc> Cx<'_, 'gc> {
         response.signal.set(self.gc, Some(signal));
     }
 
-    /// A new `fetch()` of `window`'s in flight, its request's signal
-    /// `signal`, its promise `promise`: its window keeps it, and the
-    /// signal's abort algorithms have it. Its number is the DOM's next.
+    /// A new `fetch()` of `context`'s in flight, its request's signal
+    /// `signal`, its promise `promise`: its execution context keeps it, and
+    /// the signal's abort algorithms have it. Its number is the DOM's next.
     pub fn add_fetch(
         &self,
-        window: Gc<'gc, Window>,
+        context: Gc<'gc, crate::ExecutionContext>,
         signal: Gc<'gc, EventTargetImpl>,
         promise: u64,
         redirect: RequestRedirect,
@@ -372,7 +375,7 @@ impl<'gc> Cx<'_, 'gc> {
         let record = self.gc.alloc_in(
             &sites::OTHER,
             FetchRecordInit {
-                window: Some(window),
+                context: Some(context),
                 signal: Some(signal),
                 id: Cell::new(id),
                 promise: Cell::new(promise),
@@ -380,13 +383,11 @@ impl<'gc> Cx<'_, 'gc> {
                 credentials: Cell::new(index_of(&CREDENTIALS, credentials)),
             },
         );
-        let fetches = match self.window_context(window).fetches.get(self.gc) {
+        let fetches = match context.fetches.get(self.gc) {
             Some(fetches) => fetches,
             None => {
                 let fetches = HeapVector::new(self.gc, 1);
-                self.window_context(window)
-                    .fetches
-                    .set(self.gc, Some(fetches));
+                context.fetches.set(self.gc, Some(fetches));
                 fetches
             }
         };
@@ -404,28 +405,31 @@ impl<'gc> Cx<'_, 'gc> {
         }
     }
 
-    pub fn fetch_window(&self, record: Gc<'gc, FetchRecord>) -> Gc<'gc, Window> {
-        record.window.get(self.gc).expect("a fetch's window")
+    pub fn fetch_context(&self, record: Gc<'gc, FetchRecord>) -> Gc<'gc, crate::ExecutionContext> {
+        record.context.get(self.gc).expect("a fetch's execution context")
     }
 
     pub fn fetch_signal(&self, record: Gc<'gc, FetchRecord>) -> Gc<'gc, EventTargetImpl> {
         record.signal.get(self.gc).expect("a fetch's signal")
     }
 
-    /// `window`'s fetch in flight numbered `id`, if it has it.
-    pub fn window_fetch(&self, window: Gc<'gc, Window>, id: u64) -> Option<Gc<'gc, FetchRecord>> {
-        let fetches = self.window_context(window).fetches.get(self.gc)?;
+    /// `context`'s fetch in flight numbered `id`, if it has it.
+    pub fn context_fetch(
+        &self,
+        context: Gc<'gc, crate::ExecutionContext>,
+        id: u64,
+    ) -> Option<Gc<'gc, FetchRecord>> {
+        let fetches = context.fetches.get(self.gc)?;
         (0..fetches.len())
             .filter_map(|index| fetches.get(self.gc, index))
             .find(|record| record.id.get() == id)
     }
 
     /// `record` no longer in flight (its response came, or it was
-    /// aborted): its window lets it go, its signal's algorithms too.
-    /// Whether it was in flight.
+    /// aborted): its execution context lets it go, its signal's
+    /// algorithms too. Whether it was in flight.
     pub fn finish_fetch(&self, record: Gc<'gc, FetchRecord>) -> bool {
-        let window = self.fetch_window(record);
-        let Some(fetches) = self.window_context(window).fetches.get(self.gc) else {
+        let Some(fetches) = self.fetch_context(record).fetches.get(self.gc) else {
             return false;
         };
         let Some(index) = (0..fetches.len()).find(|&index| {

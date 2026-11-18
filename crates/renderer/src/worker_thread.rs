@@ -24,10 +24,13 @@
 //! `importScripts()` asks the browser itself, as a load of the worker's
 //! (`FetchResource` of it), and waits for the answer (Blink's
 //! `WorkerClassicScriptLoader::LoadSynchronously`), its other tasks kept
-//! for after.
+//! for after. A `fetch()` goes the same way, its answer a task of the
+//! worker's (Blink's `FetchManager` on the worker's thread); a blob URL the
+//! worker makes the browser hears of from its thread too, and lets go of
+//! as the worker goes (its `BlobURLStore`'s).
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvError, RecvTimeoutError, Sender};
@@ -322,6 +325,11 @@ struct GlobalHost {
     /// The last of its loads' request ids, from 1 (the browser knows them
     /// as the worker's).
     last_request: Cell<u64>,
+    /// Its `fetch()`es on their way: each one's number by its request id.
+    /// Shared with its loop, which hands their answers to its engine.
+    fetches: Rc<RefCell<HashMap<u64, u64>>>,
+    /// The blob URLs it registered and hasn't revoked.
+    blob_urls: RefCell<HashSet<String>>,
     /// Set by `close()`: its loop ends after the task that closed it.
     closing: Rc<Cell<bool>>,
     shared: Arc<Shared>,
@@ -332,12 +340,7 @@ impl GlobalHost {
     /// else comes meanwhile put off. None if the worker is stopped first
     /// (its load closed).
     fn load(&self, request: ResourceRequest) -> Option<LoadResult> {
-        let request_id = self
-            .last_request
-            .get()
-            .checked_add(1)
-            .expect("fewer than 2^64 loads");
-        self.last_request.set(request_id);
+        let request_id = self.next_request_id();
         let worker = Some(self.id);
         let _ = self.to_browser.send(RendererHostMsg::FetchResource {
             request_id,
@@ -360,8 +363,12 @@ impl GlobalHost {
                             .to_browser
                             .send(RendererHostMsg::FollowRedirect { request_id, worker });
                     }
-                    // Another load's, over.
-                    _ => {}
+                    // Another load's (a `fetch()`'s): for after.
+                    msg => self
+                        .inbox
+                        .put_off
+                        .borrow_mut()
+                        .push_back(WorkerTask::Browser(Box::new(msg))),
                 },
                 Ok(task @ WorkerTask::Stop) => {
                     self.inbox.put_off.borrow_mut().push_back(task);
@@ -380,6 +387,16 @@ impl GlobalHost {
             .to_browser
             .send(RendererHostMsg::CancelResource { request_id, worker });
         None
+    }
+
+    fn next_request_id(&self) -> u64 {
+        let request_id = self
+            .last_request
+            .get()
+            .checked_add(1)
+            .expect("fewer than 2^64 loads");
+        self.last_request.set(request_id);
+        request_id
     }
 }
 
@@ -415,6 +432,59 @@ impl dom_api::WorkerGlobalHost for GlobalHost {
             url: script.url.into(),
             muted: script.tainting == ResponseTainting::Opaque,
         })
+    }
+
+    fn start_fetch(&self, request: &dom::FetchRequest) {
+        if self.shared.stopping() {
+            return;
+        }
+        let request_id = self.next_request_id();
+        self.fetches.borrow_mut().insert(request_id, request.id);
+        let _ = self.to_browser.send(RendererHostMsg::FetchResource {
+            request_id,
+            worker: Some(self.id),
+            request: crate::loader::fetch_resource_request(request),
+        });
+    }
+
+    fn cancel_fetch(&self, id: u64) {
+        let request_id = {
+            let mut fetches = self.fetches.borrow_mut();
+            let Some(request_id) = fetches
+                .iter()
+                .find(|&(_, &fetch)| fetch == id)
+                .map(|(&request_id, _)| request_id)
+            else {
+                return;
+            };
+            fetches.remove(&request_id);
+            request_id
+        };
+        let _ = self.to_browser.send(RendererHostMsg::CancelResource {
+            request_id,
+            worker: Some(self.id),
+        });
+    }
+
+    /// Before any load of it, on the same channel.
+    fn register_blob_url(&self, url: &str, data: &dom::BlobData) {
+        self.blob_urls.borrow_mut().insert(url.to_owned());
+        let _ = self.to_browser.send(RendererHostMsg::RegisterBlobUrl {
+            worker: Some(self.id),
+            url: url.to_owned(),
+            mime_type: data.type_().to_owned(),
+            bytes: data.shared_bytes(),
+        });
+    }
+
+    /// At once: its loads asked for before it went already (a `fetch()` is
+    /// sent as it is called, `importScripts()` waits for its script).
+    fn revoke_blob_url(&self, url: &str) {
+        if self.blob_urls.borrow_mut().remove(url) {
+            let _ = self.to_browser.send(RendererHostMsg::RevokeBlobUrl {
+                url: url.to_owned(),
+            });
+        }
     }
 }
 
@@ -509,13 +579,16 @@ fn run(thread: WorkerThread) {
         start.owner_origin.clone().unwrap_or_else(|| url.origin())
     };
     let closing = Rc::new(Cell::new(false));
+    let fetches = Rc::new(RefCell::new(HashMap::new()));
     let host = GlobalHost {
         id,
         scheduler: scheduler.clone(),
-        to_browser,
+        to_browser: to_browser.clone(),
         inbox: inbox.clone(),
         origin: origin.ascii_serialization(),
         last_request: Cell::new(0),
+        fetches: fetches.clone(),
+        blob_urls: RefCell::new(HashSet::new()),
         closing: closing.clone(),
         shared: shared.clone(),
     };
@@ -569,8 +642,28 @@ fn run(thread: WorkerThread) {
         match task {
             Some(WorkerTask::Message(message)) => engine.post_message(message),
             Some(WorkerTask::Stop) => break,
-            // An answer to a load it no longer waits for.
-            Some(WorkerTask::Browser(_)) | None => {}
+            Some(WorkerTask::Browser(msg)) => match *msg {
+                // A `fetch()`'s: its promise settled.
+                RendererMsg::ResourceResponse {
+                    request_id, result, ..
+                } => {
+                    let fetch = fetches.borrow_mut().remove(&request_id);
+                    if let Some(fetch) = fetch {
+                        engine.fetch_response(fetch, crate::loader::fetched_response(&result));
+                    }
+                }
+                RendererMsg::ReceivedRedirect { request_id, .. }
+                    if fetches.borrow().contains_key(&request_id) =>
+                {
+                    let _ = to_browser.send(RendererHostMsg::FollowRedirect {
+                        request_id,
+                        worker: Some(id),
+                    });
+                }
+                // An answer to a load it no longer waits for.
+                _ => {}
+            },
+            None => {}
         }
     }
     if closing.get() && !shared.stopping() {
@@ -659,6 +752,8 @@ mod tests {
         }
 
         fn post_message(&mut self, _: dom::SerializedMessage) {}
+
+        fn fetch_response(&mut self, _: u64, _: Result<dom_api::FetchedResponse, ()>) {}
 
         fn until_next_task(&mut self) -> Option<std::time::Duration> {
             None

@@ -1,0 +1,111 @@
+# 2b: a worker's `fetch()` and the blob URLs it makes.
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "worker::"]
+timeout = 900
+
+[[mutant]]
+name = "a worker's fetch isn't sent"
+file = "crates/dom_js/src/frames.rs"
+from = '''                dom::FetchHostRequest::Start(request) => host.start_fetch(&request),'''
+to = '''                dom::FetchHostRequest::Start(request) => drop(request),'''
+
+[[mutant]]
+name = "a worker's aborted fetch isn't cancelled"
+file = "crates/dom_js/src/frames.rs"
+from = '''                dom::FetchHostRequest::Cancel(id) => host.cancel_fetch(id),'''
+to = '''                dom::FetchHostRequest::Cancel(id) => drop(id),'''
+
+[[mutant]]
+name = "a worker's fetch is of no origin"
+file = "crates/dom_api/src/fetch.rs"
+from = '''    let initiator = Some(cx.worker_global_origin(this).clone());'''
+to = '''    let initiator = None.filter(|_: &url::Origin| cx.worker_global_origin(this).is_tuple());'''
+
+[[mutant]]
+name = "a worker's fetch response settles nothing"
+file = "crates/dom_js/src/worker.rs"
+from = '''            dom_api::did_receive_response(&mut host, &global, id, response);'''
+to = '''            drop((&mut host, &global, id, response));'''
+
+[[mutant]]
+name = "a worker's blob URL isn't queued"
+file = "crates/dom/src/execution_context.rs"
+from = '''            Some(_) => None,'''
+to = '''            Some(_) => return,'''
+
+[[mutant]]
+name = "a worker's blob URL isn't registered"
+file = "crates/dom_js/src/frames.rs"
+from = '''            host.register_blob_url(url, data);'''
+to = '''            drop((url, data));'''
+
+[[mutant]]
+name = "a worker's revoke goes to the frames"
+file = "crates/dom_js/src/frames.rs"
+from = '''    if let Some(host) = state.caches.worker_global_host.as_deref() {
+        host.revoke_blob_url(url);
+        return;
+    }'''
+to = '''    if let Some(host) = state.caches.worker_global_host.as_deref().filter(|_| false) {
+        host.revoke_blob_url(url);
+        return;
+    }'''
+
+[[mutant]]
+name = "the renderer drops a worker's fetch response"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''                        engine.fetch_response(fetch, crate::loader::fetched_response(&result));'''
+to = '''                        drop((fetch, result));'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "workers::"]
+
+[[mutant]]
+name = "the renderer doesn't follow a worker's fetch's redirect"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''                    if fetches.borrow().contains_key(&request_id) =>'''
+to = '''                    if fetches.borrow().contains_key(&request_id) && false =>'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "workers::a_worker_s_fetch"]
+
+[[mutant]]
+name = "a worker waiting for an import drops another load's answer"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''                    msg => self
+                        .inbox
+                        .put_off
+                        .borrow_mut()
+                        .push_back(WorkerTask::Browser(Box::new(msg))),'''
+to = '''                    msg => drop(msg),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "workers::a_worker_s_fetch"]
+
+[[mutant]]
+name = "the renderer doesn't cancel a worker's aborted fetch"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''        let _ = self.to_browser.send(RendererHostMsg::CancelResource {
+            request_id,
+            worker: Some(self.id),
+        });
+    }'''
+to = '''        drop(request_id);
+    }'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "workers::a_worker_s_aborted"]
+
+[[mutant]]
+name = "the renderer registers a worker's blob URL as the main thread's"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''        let _ = self.to_browser.send(RendererHostMsg::RegisterBlobUrl {
+            worker: Some(self.id),'''
+to = '''        let _ = self.to_browser.send(RendererHostMsg::RegisterBlobUrl {
+            worker: None,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "workers::a_worker_s_fetch_and"]
+
+[[mutant]]
+name = "the browser keeps a gone worker's blob URLs"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                                for url in worker_blob_urls.remove(&worker).unwrap_or_default() {'''
+to = '''                                for url in worker_blob_urls.remove(&worker).unwrap_or_default().into_iter().filter(|_| false) {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "workers::a_worker_s_fetch_and"]
+
+[[mutant]]
+name = "the browser doesn't register a worker's blob URL"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                                Some(worker) if workers.contains(&worker) => {'''
+to = '''                                Some(worker) if !workers.contains(&worker) => {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "workers::a_worker_s_fetch_and"]

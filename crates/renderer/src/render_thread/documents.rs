@@ -3501,11 +3501,15 @@ impl RenderThread {
     /// response the engine's by its number (`fetch_answered`); a blob
     /// URL revoked before is a network error, now.
     fn start_fetch(&mut self, frame: FrameId, request: dom::FetchRequest) {
+        // A frame's are its document's (a worker's go from its thread).
+        let Some(document) = request.document else {
+            return;
+        };
         if fetch_of_revoked_blob(&self.blob_urls, &request) {
             self.fetch_went_nowhere(request.id);
             return;
         }
-        let resource = fetch_resource_request(&request);
+        let resource = crate::loader::fetch_resource_request(&request);
         // Script asked: its stack, if DevTools wants it (none: no one it
         // names).
         let fetch = request.id;
@@ -3519,8 +3523,7 @@ impl RenderThread {
                 .wants_stacks()
                 .then_some(Initiator::Script(stack))
         });
-        self.fetches
-            .insert(request_id, (request.id, request.document));
+        self.fetches.insert(request_id, (request.id, document));
     }
 
     /// A `fetch()` the load sink sent as script called it
@@ -3529,13 +3532,16 @@ impl RenderThread {
     /// that asked; one it sent nowhere (a revoked blob URL's) a network
     /// error now.
     fn fetch_sent(&mut self, frame: FrameId, request: dom::FetchRequest, request_id: Option<u64>) {
+        let Some(document) = request.document else {
+            return;
+        };
         let Some(request_id) = request_id else {
             self.fetch_went_nowhere(request.id);
             return;
         };
         let fetch = request.id;
         if self.network_agent.enabled() {
-            let resource = fetch_resource_request(&request);
+            let resource = crate::loader::fetch_resource_request(&request);
             let initiator = self
                 .engine
                 .as_mut()
@@ -3551,7 +3557,7 @@ impl RenderThread {
                     .will_send(request_id, &resource, at, initiator.as_ref());
             }
         }
-        self.fetches.insert(request_id, (fetch, request.document));
+        self.fetches.insert(request_id, (fetch, document));
     }
 
     /// The `fetch()` numbered `fetch` went nowhere (a revoked blob URL): a
@@ -3612,19 +3618,7 @@ impl RenderThread {
     /// The response to a `fetch()` of the DOM's, or its network error:
     /// its promise settled, as a task of its own (this one).
     fn fetch_answered(&mut self, id: u64, result: &LoadResult) {
-        let response = match result {
-            Ok(response) => Ok(dom_api::FetchedResponse {
-                tainting: response.tainting,
-                url: response.url.clone(),
-                redirected: response.redirected,
-                status: response.status,
-                status_text: response.status_text.clone(),
-                headers: response.headers.clone(),
-                body: Arc::from(&response.body[..]),
-            }),
-            // Script learns no more of why (Fetch's network error).
-            Err(_) => Err(()),
-        };
+        let response = crate::loader::fetched_response(result);
         let Some(engine) = &mut self.engine else {
             return;
         };
@@ -4151,7 +4145,7 @@ impl dom_api::LoadSink for RendererLoadSink {
         if fetch_of_revoked_blob(&self.blob_urls, request) {
             return None;
         }
-        let resource = fetch_resource_request(request);
+        let resource = crate::loader::fetch_resource_request(request);
         let request_id = self.ids.next();
         self.ids.sent(request_id, &resource);
         let _ = self.to_browser.send(RendererHostMsg::FetchResource {
@@ -4181,32 +4175,6 @@ impl dom_api::LoadSink for RendererLoadSink {
 /// error, without asking.
 fn fetch_of_revoked_blob(blob_urls: &crate::loader::BlobUrls, request: &dom::FetchRequest) -> bool {
     Url::parse(&request.url).is_ok_and(|url| url.scheme() == "blob" && blob_urls.is_revoked(&url))
-}
-
-/// The network service's request for a `fetch()`'s.
-fn fetch_resource_request(request: &dom::FetchRequest) -> ResourceRequest {
-    let mut resource = ResourceRequest::new(&request.url, RequestDestination::Empty);
-    resource.method.clone_from(&request.method);
-    resource.headers.clone_from(&request.headers);
-    resource.initiator = Some(request.initiator.clone());
-    resource.body = request.body.as_ref().map(|body| body.to_vec());
-    resource.redirect = match request.redirect {
-        dom::RequestRedirect::Follow => protocol::network::RedirectMode::Follow,
-        dom::RequestRedirect::Error => protocol::network::RedirectMode::Error,
-        dom::RequestRedirect::Manual => protocol::network::RedirectMode::Manual,
-    };
-    resource.mode = match request.mode {
-        dom::RequestMode::SameOrigin => RequestMode::SameOrigin,
-        dom::RequestMode::NoCors => RequestMode::NoCors,
-        // A `Request` script makes is never `navigate`.
-        dom::RequestMode::Cors | dom::RequestMode::Navigate => RequestMode::Cors,
-    };
-    resource.credentials = match request.credentials {
-        dom::RequestCredentials::Omit => CredentialsMode::Omit,
-        dom::RequestCredentials::SameOrigin => CredentialsMode::SameOrigin,
-        dom::RequestCredentials::Include => CredentialsMode::Include,
-    };
-    resource
 }
 
 /// What a subresource that failed is named by, in `DidFinishLoad`: where

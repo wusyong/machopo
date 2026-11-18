@@ -67,9 +67,10 @@ pub(crate) struct FrameState {
 #[derive(Debug, Clone)]
 pub enum BlobUrlRequest {
     /// `url` stands for `data` now, for as long as `document`'s realm (the
-    /// one that made it) lives.
+    /// one that made it) lives; none: a worker's global's, for as long as
+    /// the worker does.
     Register {
-        document: NodeId,
+        document: Option<NodeId>,
         url: String,
         data: crate::BlobData,
     },

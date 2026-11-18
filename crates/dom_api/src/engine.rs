@@ -606,6 +606,11 @@ pub trait WorkerEngine {
     /// it as it runs.
     fn post_message(&mut self, message: dom::SerializedMessage);
 
+    /// The response to its `fetch()` numbered `id` (`Err` a network
+    /// error), in a task of its own: its promise settled, a microtask
+    /// checkpoint after. Nothing if it was aborted.
+    fn fetch_response(&mut self, id: u64, response: Result<crate::FetchedResponse, ()>);
+
     /// How long until it has a task to run (none with none: it waits for a
     /// message).
     fn until_next_task(&mut self) -> Option<std::time::Duration>;

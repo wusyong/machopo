@@ -285,6 +285,8 @@ crate::declare! {
         method clearTimeout(id?: i32) = timer::worker_clear_timer;
         method clearInterval(id?: i32) = timer::worker_clear_timer;
         method structuredClone(value: CloneValue) -> Cloned = crypto::worker_structured_clone;
+        #[front]
+        method fetch(input: RequestInfo, init?: RequestInit) -> PendingPromise<Response> = fetch::worker_fetch;
         #[calls_script]
         method importScripts(urls?: Strings) = worker::import_scripts;
     }

@@ -1,10 +1,11 @@
-//! Fetch's `fetch()` from a window (https://fetch.spec.whatwg.org/#fetch-method,
-//! Blink's `global_fetch.cc` and `FetchManager`): a new `Request` of its
-//! arguments, then a `FetchRecord` in the window, and its request queued
-//! for the host (`FetchHostRequest::Start`), which the engine hands it as a
-//! frame request once the task is over (so the request goes as the task
-//! ends, not as `fetch()` is called, as Chrome's does). The response comes
-//! back in a task of its own (`did_receive_response`). Another origin's
+//! Fetch's `fetch()` from a window or a worker's global
+//! (https://fetch.spec.whatwg.org/#fetch-method, Blink's `global_fetch.cc`
+//! and `FetchManager`): a new `Request` of its arguments, then a
+//! `FetchRecord` in the global's execution context, and its request queued
+//! for the host (`FetchHostRequest::Start`), which the engine hands its
+//! host before the call returns (a window's frame's load sink, a worker's
+//! global's host). The response comes back in a task of its own
+//! (`did_receive_response`). Another origin's
 //! resource goes by CORS, in the network service (which a renderer can't
 //! skip): the response comes filtered for its tainting.
 //!
@@ -15,8 +16,9 @@
 use std::sync::Arc;
 
 use dom::{
-    EventTargetImpl, FetchHostRequest, FetchRecord, FetchRequest, HeadersGuard, ObjectRef,
-    RequestCredentials, RequestRedirect, ResponseData, ResponseType, Window,
+    EventTargetImpl, ExecutionContext, FetchHostRequest, FetchRecord, FetchRequest, GlobalRoot,
+    HeadersGuard, NodeId, ObjectRef, RequestCredentials, RequestRedirect, ResponseData,
+    ResponseType, Window, WorkerGlobalScope,
 };
 use elise::{Gc, Persistent};
 use protocol::header_list;
@@ -47,9 +49,7 @@ fn failed_to_fetch() -> ApiError {
     ApiError::type_error("Failed to fetch")
 }
 
-/// `window.fetch(input, init)`: a new `Request` of them (its errors
-/// reject), then the request queued for the host, if machopo may send it; the
-/// promise's number, pending.
+/// `window.fetch(input, init)`: of its document, as its origin.
 pub(crate) fn fetch<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
@@ -57,7 +57,38 @@ pub(crate) fn fetch<'gc, O: OpFront>(
     input: RequestInput<'_, 'gc>,
     init: &RequestInit<O::Node>,
 ) -> Result<u64, ApiError> {
-    let request = crate::request::new_request(op, cx, cx.window_context(this), input, init)?;
+    let document = cx.window_document(this);
+    let initiator = crate::frame::origin(cx, document);
+    let client = (Some(cx.node_id(document)), initiator);
+    start(op, cx, cx.window_context(this), client, input, init)
+}
+
+/// A worker's global's `fetch(input, init)`: of no document, as the
+/// worker's origin.
+pub(crate) fn worker_fetch<'gc, O: OpFront>(
+    op: &mut O,
+    cx: &ApiCx<'_, 'gc>,
+    this: Gc<'gc, WorkerGlobalScope>,
+    input: RequestInput<'_, 'gc>,
+    init: &RequestInit<O::Node>,
+) -> Result<u64, ApiError> {
+    let initiator = Some(cx.worker_global_origin(this).clone());
+    start(op, cx, cx.worker_global_context(this), (None, initiator), input, init)
+}
+
+/// `fetch(input, init)` of `context`'s global, of its document (if a
+/// window's) and as its origin (`client`): a new `Request` of them (its
+/// errors reject), then the request queued for the host, if machopo may
+/// send it; the promise's number, pending.
+fn start<'gc, O: OpFront>(
+    op: &mut O,
+    cx: &ApiCx<'_, 'gc>,
+    context: Gc<'gc, ExecutionContext>,
+    client: (Option<NodeId>, Option<url::Origin>),
+    input: RequestInput<'_, 'gc>,
+    init: &RequestInit<O::Node>,
+) -> Result<u64, ApiError> {
+    let request = crate::request::new_request(op, cx, context, input, init)?;
     let signal = cx.request_signal(request);
     // Aborted already: the promise rejects with the reason, nothing goes.
     if cx.abort_reason(signal).is_some() {
@@ -87,18 +118,18 @@ pub(crate) fn fetch<'gc, O: OpFront>(
         }
         headers
     });
-    let document = cx.window_document(this);
-    let initiator = match crate::frame::origin(cx, document) {
+    let (document, origin) = client;
+    let initiator = match origin {
         Some(origin) if origin.is_tuple() => origin.ascii_serialization(),
         _ => "null".to_owned(),
     };
     let promise = cx.new_promise_number();
-    let record = cx.add_fetch(this, signal, promise, data.redirect, data.credentials);
+    let record = cx.add_fetch(context, signal, promise, data.redirect, data.credentials);
     // (Making the `Request` moved the input's body: script can't reach
     // this one.)
     cx.request_fetch(FetchHostRequest::Start(FetchRequest {
         id: cx.fetch_state(record).id,
-        document: cx.node_id(document),
+        document,
         url: data.url,
         method: data.method,
         headers,
@@ -135,9 +166,9 @@ pub(crate) fn abort_fetch<H: ScriptHost>(
     }
 }
 
-/// The response to `window`'s fetch numbered `id` came (Fetch's "fetch
+/// The response to `global`'s fetch numbered `id` came (Fetch's "fetch
 /// response handover"; `Err` a network error), in a task of its own in the
-/// window's realm: its promise resolves with a new `Response` of its
+/// global's realm: its promise resolves with a new `Response` of its
 /// tainting (a basic or CORS one: `Set-Cookie` filtered out, its headers
 /// immutable, a null body for a null body status; a CORS one keeping the
 /// headers the server exposes to a request of its credentials mode
@@ -147,20 +178,19 @@ pub(crate) fn abort_fetch<H: ScriptHost>(
 /// error rejects it with a `TypeError`. Nothing if it was aborted.
 pub fn did_receive_response<H: ScriptHost>(
     host: &mut H,
-    window: &Persistent<Window>,
+    global: &GlobalRoot,
     id: u64,
     response: Result<FetchedResponse, ()>,
 ) {
     let settled = host.mutate(|cx| {
-        let window = window.get(cx.gc);
-        let record = cx.window_fetch(window, id)?;
+        let context = cx.global_context(global.get(cx.gc));
+        let record = cx.context_fetch(context, id)?;
         cx.finish_fetch(record);
         let state = cx.fetch_state(record);
         let signal = cx.fetch_signal(record);
         let Ok(response) = response else {
             return Some((state.promise, None));
         };
-        let context = cx.window_context(window);
         let response = make_response(cx, context, state.redirect, state.credentials, response);
         if cx.with_response_data(response, |data| {
             matches!(data.response_type, ResponseType::Basic | ResponseType::Cors)

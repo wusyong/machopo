@@ -2,7 +2,8 @@
 //! `ResourceFetcher` handing loads to the frame's `URLLoaderFactory`): their
 //! ids, unique in the renderer, so a response for a document that has gone
 //! is recognised and dropped. And the blob URLs the renderer's realms
-//! registered (`BlobUrls`). And which responses no classic script is.
+//! registered (`BlobUrls`). And which responses no classic script is, and
+//! what a `fetch()` sends and gets, a window's or a worker's.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -11,7 +12,9 @@ use std::rc::Rc;
 use base::SequenceNumber;
 use crossbeam_channel::Sender;
 use dom_api::FrameId;
-use protocol::network::ResourceRequest;
+use protocol::network::{
+    CredentialsMode, LoadResult, RedirectMode, RequestDestination, RequestMode, ResourceRequest,
+};
 use protocol::renderer::RendererHostMsg;
 
 /// The next request id, shared by everything in the renderer that sends
@@ -96,6 +99,7 @@ impl BlobUrls {
     ) {
         self.state.borrow_mut().live.insert(url.to_owned(), owner);
         let _ = self.to_browser.send(RendererHostMsg::RegisterBlobUrl {
+            worker: None,
             url: url.to_owned(),
             mime_type: mime_type.to_owned(),
             bytes,
@@ -145,6 +149,49 @@ impl BlobUrls {
     }
 }
 
+/// The network service's request for a `fetch()`'s.
+pub(crate) fn fetch_resource_request(request: &dom::FetchRequest) -> ResourceRequest {
+    let mut resource = ResourceRequest::new(&request.url, RequestDestination::Empty);
+    resource.method.clone_from(&request.method);
+    resource.headers.clone_from(&request.headers);
+    resource.initiator = Some(request.initiator.clone());
+    resource.body = request.body.as_ref().map(|body| body.to_vec());
+    resource.redirect = match request.redirect {
+        dom::RequestRedirect::Follow => RedirectMode::Follow,
+        dom::RequestRedirect::Error => RedirectMode::Error,
+        dom::RequestRedirect::Manual => RedirectMode::Manual,
+    };
+    resource.mode = match request.mode {
+        dom::RequestMode::SameOrigin => RequestMode::SameOrigin,
+        dom::RequestMode::NoCors => RequestMode::NoCors,
+        // A `Request` script makes is never `navigate`.
+        dom::RequestMode::Cors | dom::RequestMode::Navigate => RequestMode::Cors,
+    };
+    resource.credentials = match request.credentials {
+        dom::RequestCredentials::Omit => CredentialsMode::Omit,
+        dom::RequestCredentials::SameOrigin => CredentialsMode::SameOrigin,
+        dom::RequestCredentials::Include => CredentialsMode::Include,
+    };
+    resource
+}
+
+/// A `fetch()`'s response as the DOM takes it, or a network error, of
+/// which script learns no more (Fetch's).
+pub(crate) fn fetched_response(result: &LoadResult) -> Result<dom_api::FetchedResponse, ()> {
+    match result {
+        Ok(response) => Ok(dom_api::FetchedResponse {
+            tainting: response.tainting,
+            url: response.url.clone(),
+            redirected: response.redirected,
+            status: response.status,
+            status_text: response.status_text.clone(),
+            headers: response.headers.clone(),
+            body: std::sync::Arc::from(&response.body[..]),
+        }),
+        Err(_) => Err(()),
+    }
+}
+
 /// Whether `headers` (names lowercase) say `X-Content-Type-Options:
 /// nosniff`: the first value's first item, without regard to ASCII case
 /// (Fetch's "determine nosniff", Blink's `ParseContentTypeOptionsHeader`).
@@ -188,6 +235,7 @@ mod tests {
             .try_iter()
             .map(|msg| match msg {
                 RendererHostMsg::RegisterBlobUrl {
+                    worker: None,
                     url,
                     mime_type,
                     bytes,

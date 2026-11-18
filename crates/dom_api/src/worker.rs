@@ -73,6 +73,23 @@ pub trait WorkerGlobalHost {
     /// none if it couldn't be had (a network error, a status that isn't
     /// ok, a MIME type no script is).
     fn fetch_script(&self, url: &Url) -> Option<ImportedScript>;
+
+    /// A `fetch()`'s request, sent now (its document none: the worker's);
+    /// its response comes back as a task of the worker's
+    /// (`WorkerEngine::fetch_response`).
+    fn start_fetch(&self, request: &dom::FetchRequest);
+
+    /// The `fetch()` numbered `id` aborted: its request cancelled, if it is
+    /// still on its way. No response comes.
+    fn cancel_fetch(&self, id: u64);
+
+    /// `url` stands for `data` (`URL.createObjectURL` in the worker), for
+    /// its loads and its page's, until revoked or the worker ends.
+    fn register_blob_url(&self, url: &str, data: &dom::BlobData);
+
+    /// `url` revoked (`URL.revokeObjectURL` in the worker), if the worker
+    /// registered it: no load after it gets it.
+    fn revoke_blob_url(&self, url: &str);
 }
 
 /// A script `importScripts()` fetched.

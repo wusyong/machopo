@@ -202,7 +202,12 @@ impl<'s> ScriptHost for Host<'_, '_, 's, '_> {
         crate::frames::navigate(self.scope, document, navigation);
     }
 
-    fn register_blob_url(&mut self, document: &dom::NodeRoot, url: &str, data: &dom::BlobData) {
+    fn register_blob_url(
+        &mut self,
+        document: Option<&dom::NodeRoot>,
+        url: &str,
+        data: &dom::BlobData,
+    ) {
         crate::frames::register_blob_url(self.scope, document, url, data);
     }
 

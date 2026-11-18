@@ -120,8 +120,11 @@ impl RenderProcessHost {
                     // The renderer's loads still loading.
                     let loads = Loads::default();
                     // Its dedicated workers, which may load (Chromium's
-                    // `DedicatedWorkerHost`s, each a `URLLoaderFactory`).
+                    // `DedicatedWorkerHost`s, each a `URLLoaderFactory`),
+                    // and the blob URLs each registered (its
+                    // `BlobURLStore`'s), which go with it.
                     let mut workers = HashSet::new();
+                    let mut worker_blob_urls: HashMap<u64, Vec<String>> = HashMap::new();
                     while let Ok(msg) = from_renderer.recv() {
                         let fetch = |load, request| {
                             fetch_for_renderer(
@@ -159,6 +162,12 @@ impl RenderProcessHost {
                             // Its loads close with it.
                             RendererHostMsg::DedicatedWorkerGone { worker } => {
                                 workers.remove(&worker);
+                                // Revoked, as a revoke of each: for loads
+                                // here, for navigations on the UI thread.
+                                for url in worker_blob_urls.remove(&worker).unwrap_or_default() {
+                                    network.revoke_blob_url(renderer_id, &url);
+                                    on_message(tab, RendererHostMsg::RevokeBlobUrl { url });
+                                }
                                 let mut loads = loads.lock().expect("the loads");
                                 let ended: Vec<LoadKey> = loads
                                     .keys()
@@ -176,13 +185,27 @@ impl RenderProcessHost {
                             // pipe of its own, its messages kept in order
                             // with the loads by an associated interface).
                             RendererHostMsg::RegisterBlobUrl {
+                                worker,
                                 url,
                                 mime_type,
                                 bytes,
-                            } => network.register_blob_url(renderer_id, &url, mime_type, bytes),
+                            } => match worker {
+                                None => {
+                                    network.register_blob_url(renderer_id, &url, mime_type, bytes);
+                                }
+                                // One it didn't make, or gone: nothing.
+                                Some(worker) if workers.contains(&worker) => {
+                                    network.register_blob_url(renderer_id, &url, mime_type, bytes);
+                                    worker_blob_urls.entry(worker).or_default().push(url);
+                                }
+                                Some(_) => {}
+                            },
                             // For loads here; the UI thread forgets it after
                             // the navigations asked for before.
                             RendererHostMsg::RevokeBlobUrl { url } => {
+                                for urls in worker_blob_urls.values_mut() {
+                                    urls.retain(|registered| *registered != url);
+                                }
                                 network.revoke_blob_url(renderer_id, &url);
                                 on_message(tab, RendererHostMsg::RevokeBlobUrl { url });
                             }

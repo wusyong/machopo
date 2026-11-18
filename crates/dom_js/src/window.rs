@@ -400,7 +400,8 @@ pub fn fetch_response(
     let Some(window) = window_of(&mut scope, context) else {
         return;
     };
-    dom_api::did_receive_response(&mut Host { scope: &mut scope }, &window, id, response);
+    let global = dom::GlobalRoot::Window(window);
+    dom_api::did_receive_response(&mut Host { scope: &mut scope }, &global, id, response);
     state::report(&mut scope);
 }
 

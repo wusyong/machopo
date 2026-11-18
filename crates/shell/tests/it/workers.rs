@@ -427,3 +427,109 @@ fn a_busy_worker_ends_with_the_renderer() {
         "started"
     );
 }
+
+/// A worker's `fetch()`: its own origin's, another's by CORS (as its
+/// origin) and `no-cors` (opaque); a blob URL it makes is had by its
+/// `fetch()`, its `importScripts()` and its page's `fetch()`, until the
+/// worker goes (the browser lets go of its URLs then).
+#[test]
+fn a_worker_s_fetch_and_blob_urls() {
+    assert_eq!(
+        report_served(
+            "const w = new Worker('/w.js'); \
+             w.onmessage = async e => { \
+               const [got, url] = e.data; \
+               const page = await (await fetch(url)).text(); \
+               w.terminate(); \
+               const after = await fetch(url).then(() => 'had', e => e.name); \
+               report([...got, page, after].join(' | ')); };",
+            |other| {
+                let worker = format!(
+                    "(async () => {{ \
+                       const own = await (await fetch('/data.txt')).text(); \
+                       const cors = await (await fetch('{other}/cors.txt')).text(); \
+                       const opaque = (await fetch('{other}/opaque.txt', {{ mode: 'no-cors' }})).type; \
+                       const url = URL.createObjectURL(new Blob(['from the worker'])); \
+                       const blob = await (await fetch(url)).text(); \
+                       importScripts(URL.createObjectURL( \
+                         new Blob(['self.imported = 1;'], {{ type: 'text/javascript' }}))); \
+                       postMessage([[own, cors, opaque, blob, self.imported], url]); \
+                     }})();"
+                );
+                vec![
+                    ("/w.js", js(&worker)),
+                    ("/data.txt", Route::ok("text/plain", "own")),
+                ]
+            },
+            &[
+                (
+                    "/cors.txt",
+                    Route::ok("text/plain", "cors").with_header("Access-Control-Allow-Origin", "*"),
+                ),
+                ("/opaque.txt", Route::ok("text/plain", "opaque")),
+            ],
+        ),
+        "own | cors | opaque | from the worker | 1 | from the worker | TypeError"
+    );
+}
+
+/// An aborted `fetch()` of a worker's has its load closed, and rejects.
+/// The page stays past when the server would have answered (the renderer
+/// ending would close the load too).
+#[test]
+fn a_worker_s_aborted_fetch_has_its_load_closed() {
+    let (report, server) = run_served(
+        "const w = new Worker('/w.js');          w.onmessage = e => setTimeout(() => report(e.data), 2500);",
+        |_| {
+            vec![
+                (
+                    "/w.js",
+                    js("const c = new AbortController(); \
+                        fetch('/slow.txt', { signal: c.signal }).then( \
+                          () => postMessage('had'), e => postMessage(e.name)); \
+                        setTimeout(() => c.abort(), 200);"),
+                ),
+                (
+                    "/slow.txt",
+                    Route::ok("text/plain", "late").with_delay(Duration::from_secs(2)),
+                ),
+            ]
+        },
+        &[],
+    );
+    assert_eq!(report, "AbortError");
+    assert!(server.wait_for_abandoned("/slow.txt", Duration::from_secs(2)));
+}
+
+/// A worker's `fetch()` follows a redirect; one answered while the worker
+/// waits for an import is had after it.
+#[test]
+fn a_worker_s_fetch_is_redirected_and_answered_while_it_imports() {
+    assert_eq!(
+        report_served(
+            "const w = new Worker('/w.js'); w.onmessage = e => report(e.data);",
+            |_| {
+                vec![
+                    (
+                        "/w.js",
+                        js("fetch('/moved').then(r => r.text().then(t => \
+                              postMessage([r.redirected, r.url.endsWith('/data.txt'), t, \
+                                self.imported].join()))); \
+                            importScripts('/slow.js');"),
+                    ),
+                    (
+                        "/moved",
+                        Route::new(302, "").with_header("Location", "/data.txt"),
+                    ),
+                    ("/data.txt", Route::ok("text/plain", "here")),
+                    (
+                        "/slow.js",
+                        js("self.imported = 1;").with_delay(Duration::from_millis(500)),
+                    ),
+                ]
+            },
+            &[],
+        ),
+        "true,true,here,1"
+    );
+}
