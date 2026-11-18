@@ -322,7 +322,6 @@ struct RenderThread {
     clock: Clock,
     /// The redirects of the child frames' navigations in flight, by
     /// request: their navigation timing counts them.
-    frame_redirects: std::collections::HashMap<u64, Vec<protocol::renderer::RedirectHop>>,
     script_engine: ScriptEngineFactory,
     /// WebDriver's references and the scripts it waits for.
     webdriver_state: webdriver::WebDriverState,
@@ -478,7 +477,6 @@ impl RenderThread {
             begin_navigation_ids: base::SequenceNumber::starting_at(1),
             pending_input,
             clock: Clock::new(),
-            frame_redirects: std::collections::HashMap::new(),
             script_engine,
             webdriver_state: webdriver::WebDriverState::new(id_prefix),
             devtools_sessions: Vec::new(),
@@ -766,6 +764,7 @@ impl RenderThread {
         loaded: Option<&protocol::renderer::NavigationLoad>,
         navigation_type: protocol::renderer::NavigationTimingType,
         time_origin: f64,
+        no_referrer: bool,
     ) -> NavigationTiming {
         use protocol::renderer::NavigationTimingType;
         let url = Url::parse(url).unwrap_or_else(|_| Url::parse("about:blank").unwrap());
@@ -774,8 +773,7 @@ impl RenderThread {
             timing: loaded.timing,
             response_end: loaded.response_end,
             redirects: &loaded.redirects,
-            // The browser's: a request of no referrer policy of its own.
-            no_referrer: false,
+            no_referrer,
             protocol: &loaded.protocol,
             status: loaded.status,
             mime_type,
@@ -816,60 +814,15 @@ impl RenderThread {
         timing
     }
 
-    /// A child frame's new document's navigation timing, from its own
-    /// load (the renderer's), its `redirects` and what `navigation` is; a
-    /// failed one's as a document that wasn't loaded.
-    pub(super) fn child_timing(
-        &self,
-        result: &LoadResult,
-        redirects: &[protocol::renderer::RedirectHop],
-        navigation: ChildNavigationTiming,
-        time_origin: f64,
-    ) -> NavigationTiming {
-        let clock = self.clock;
-        let at =
-            |time: ipc::TimeTicks| clock.before_now(ipc::TimeTicks::now().saturating_since(time));
-        let url = result
-            .as_ref()
-            .ok()
-            .and_then(|response| Url::parse(&response.url).ok());
-        let load = match (result, &url) {
-            (Ok(response), Some(url)) => Some(crate::navigation_timing::DocumentLoad {
-                url,
-                timing: response.timing,
-                response_end: response
-                    .timing
-                    .map_or_else(ipc::TimeTicks::now, |timing| timing.response_end),
-                redirects,
-                no_referrer: navigation.no_referrer,
-                protocol: &response.protocol,
-                status: response.status,
-                mime_type: &response.mime_type,
-                content_encoding: response
-                    .headers
-                    .iter()
-                    .find(|(name, _)| name == "content-encoding")
-                    .map(|(_, value)| value.as_str()),
-                encoded_body_size: response.encoded_body_length,
-                decoded_body_size: u64::try_from(response.body.len()).unwrap_or(u64::MAX),
-            }),
-            _ => None,
-        };
-        crate::navigation_timing::network_timing(
-            load,
-            navigation.navigation_type,
-            time_origin,
-            at,
-            crate::navigation_timing::randomized_confidence(),
-        )
-    }
-
     /// Returns false on shutdown.
     fn handle_message(&mut self, msg: RendererMsg) -> bool {
         match msg {
             RendererMsg::CommitNavigation {
+                frame,
                 navigation_id,
+                begin_id,
                 url,
+                error_page,
                 mime_type,
                 charset,
                 content_language,
@@ -884,28 +837,64 @@ impl RenderThread {
                     .before_now(ipc::TimeTicks::now().saturating_since(navigation_start));
                 // The log names the document by it.
                 let loaded_url = url.clone();
+                // An error page's is a URL of no origin's, the browser still
+                // hearing of the one that failed.
+                let document_url = if error_page {
+                    protocol::renderer::ERROR_PAGE_URL.to_owned()
+                } else {
+                    url.clone()
+                };
+                let main_frame = Some(frame) == self.devtools_main_frame_token;
+                let no_referrer = !main_frame && self.child_no_referrer_of(frame, begin_id);
                 let timing = self.commit_timing(
-                    &url,
+                    &document_url,
                     &mime_type,
                     body.len(),
                     loaded.as_deref(),
                     navigation_type,
                     time_origin,
+                    no_referrer,
                 );
-                self.commit_navigation(
-                    navigation_id,
-                    url,
-                    &mime_type,
-                    charset.as_deref(),
-                    content_language.as_deref(),
-                    &body,
-                    &history,
-                    time_origin,
-                    timing,
-                );
+                let committed = if main_frame {
+                    self.commit_navigation(
+                        navigation_id,
+                        document_url,
+                        url,
+                        &mime_type,
+                        charset.as_deref(),
+                        content_language.as_deref(),
+                        &body,
+                        &history,
+                        time_origin,
+                        timing,
+                    );
+                    true
+                } else {
+                    let Ok(document_url) = Url::parse(&document_url) else {
+                        return true;
+                    };
+                    self.commit_child_navigation(
+                        frame,
+                        begin_id,
+                        documents::ChildDocument {
+                            url: document_url,
+                            mime_type: &mime_type,
+                            charset: charset.as_deref(),
+                            body: &body,
+                        },
+                        documents::ChildCommit {
+                            time_origin,
+                            timing,
+                            content_language: content_language.as_deref(),
+                            navigation_id,
+                            token: frame,
+                            url,
+                        },
+                    )
+                };
                 // The rest of the request the browser told DevTools of, now
                 // that its document is here.
-                if let Some(loaded) = loaded {
+                if committed && let Some(loaded) = loaded {
                     self.network_agent.did_commit_navigation(
                         navigation_id,
                         &body,
@@ -921,6 +910,7 @@ impl RenderThread {
                     }
                 }
             }
+            RendererMsg::NavigationDropped { frame, id } => self.navigation_dropped(frame, id),
             RendererMsg::CommitSameDocumentNavigation {
                 navigation_id,
                 document,
@@ -1076,15 +1066,17 @@ impl RenderThread {
     }
 
     /// `RenderFrameImpl::CommitNavigation`: decode and parse the body into
-    /// a new document, which replaces the old one, then ask for its
-    /// subresources. A commit older than the document shown is dropped:
-    /// the browser starts navigations in order, but their responses
-    /// arrive in any order.
+    /// a new document at `url`, which replaces the old one, then ask for
+    /// its subresources; the browser hears it committed `reported_url`
+    /// (an error page's, the URL that failed). A commit older than the
+    /// document shown is dropped: the browser starts navigations in order,
+    /// but their responses arrive in any order.
     #[allow(clippy::too_many_arguments)]
     fn commit_navigation(
         &mut self,
         navigation_id: u64,
         url: String,
+        reported_url: String,
         mime_type: &str,
         charset: Option<&str>,
         content_language: Option<&str>,
@@ -1108,6 +1100,7 @@ impl RenderThread {
         self.commit_document_navigation(
             navigation_id,
             url,
+            reported_url,
             mime_type,
             charset,
             content_language,
@@ -1432,12 +1425,6 @@ impl RenderThread {
     /// load the renderer cancelled is no longer the browser's, which
     /// ignores the answer.
     fn did_receive_redirect(&mut self, request_id: u64, redirect: &RedirectInfo) {
-        if self.is_child_fetch(request_id) {
-            self.frame_redirects
-                .entry(request_id)
-                .or_default()
-                .push(protocol::renderer::RedirectHop::of(redirect));
-        }
         self.network_agent.did_redirect(request_id, redirect);
         let _ = self.to_browser.send(RendererHostMsg::FollowRedirect {
             request_id,
@@ -1475,7 +1462,6 @@ impl RenderThread {
         // The `fetch()`es script sent since the loop last looked
         // (`FrameRequest::FetchSent`): this may be one's response.
         self.handle_frame_requests();
-        let redirects = self.frame_redirects.remove(&request_id).unwrap_or_default();
         self.network_agent.did_finish(request_id, &result);
         let url = self.next_request_id.answered(request_id);
         // DevTools' `CSS`'s: a sheet's text, its alone.
@@ -1486,7 +1472,7 @@ impl RenderThread {
         }
         self.log_load(request_id, url.as_deref(), &result);
         self.record_resource(request_id, url.as_deref(), &result);
-        self.resource(request_id, url.as_deref(), &result, &redirects);
+        self.resource(request_id, url.as_deref(), &result);
     }
 
     /// `WidgetBase::BeginMainFrame`: the compositor asks for a main frame,
@@ -1617,15 +1603,6 @@ fn sooner(a: Option<Duration>, b: Option<Duration>) -> Option<Duration> {
         (Some(a), Some(b)) => Some(a.min(b)),
         (a, b) => a.or(b),
     }
-}
-
-/// What a child frame's navigation timing reads of its navigation: its
-/// type (a reload's, its document's `location.reload()`), and whether its
-/// iframe's referrer policy is `no-referrer`.
-#[derive(Debug, Clone, Copy)]
-pub(super) struct ChildNavigationTiming {
-    pub(super) navigation_type: NavigationType,
-    pub(super) no_referrer: bool,
 }
 
 /// The pointer's move, waiting for the next main frame.

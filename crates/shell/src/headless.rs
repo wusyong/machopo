@@ -47,10 +47,14 @@ enum Event {
     Viz(VizMsg),
     /// From a renderer: the tab's, or one it ended.
     Host(browser::RendererId, RendererHostMsg),
-    /// The navigation reached a redirect.
-    Redirected(u64, RedirectInfo),
-    /// The navigation loaded, or failed.
-    Completed(u64, LoadResult),
+    /// What a renderer's IO thread found bad.
+    Bad(browser::RendererId, browser::BadMessageReason),
+    /// A frame's navigation reached a redirect.
+    Redirected(protocol::FrameToken, u64, RedirectInfo),
+    /// A frame's navigation loaded, or failed.
+    Completed(protocol::FrameToken, u64, LoadResult),
+    /// What headless doesn't look at.
+    Other,
 }
 
 /// Navigates a new tab to `url` and returns the frame Viz draws once the
@@ -251,14 +255,18 @@ fn drive(
         Box::new(move |_tab, event| {
             let _ = events_tx.send(match event {
                 ContentsEvent::Renderer { renderer, msg } => Event::Host(renderer, msg),
+                ContentsEvent::BadMessage { renderer, reason } => Event::Bad(renderer, reason),
                 ContentsEvent::NavigationRedirected {
+                    frame,
                     navigation_id,
                     redirect,
-                } => Event::Redirected(navigation_id, redirect),
+                } => Event::Redirected(frame, navigation_id, redirect),
                 ContentsEvent::NavigationCompleted {
+                    frame,
                     navigation_id,
                     result,
-                } => Event::Completed(navigation_id, result),
+                } => Event::Completed(frame, navigation_id, result),
+                ContentsEvent::NavigationStarted(_) => Event::Other,
             });
         }),
     )
@@ -385,12 +393,18 @@ fn drive(
                 | VizMsg::RegisterFrameSinkId(..)
                 | VizMsg::InvalidateFrameSinkId(_),
             )) => {}
-            Ok(Event::Redirected(navigation_id, redirect)) => {
-                web_contents.on_navigation_redirected(navigation_id, &redirect);
+            Ok(Event::Redirected(frame, navigation_id, redirect)) => {
+                web_contents.on_navigation_redirected(frame, navigation_id, &redirect);
             }
-            Ok(Event::Completed(navigation_id, result)) => {
-                web_contents.on_navigation_completed(navigation_id, result);
+            Ok(Event::Completed(frame, navigation_id, result)) => {
+                web_contents.on_navigation_completed(frame, navigation_id, result);
             }
+            Ok(Event::Bad(renderer, reason)) => {
+                if web_contents.is_current_renderer(renderer) {
+                    web_contents.received_bad_message(reason);
+                }
+            }
+            Ok(Event::Other) => {}
             // What a renderer the tab ended still sent counts for nothing.
             Ok(Event::Host(renderer, _)) if !web_contents.is_current_renderer(renderer) => {}
             Ok(Event::Host(_, msg)) => {

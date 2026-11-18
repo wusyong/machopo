@@ -4,11 +4,11 @@ use base::SequenceNumber;
 use crossbeam_channel::Sender;
 use gfx::{RectF, Size};
 use ipc::TimeTicks;
-use net::{LoadHandle, NetworkContext};
+use net::NetworkContext;
 use protocol::network::{LoadResult, RedirectInfo, RequestDestination, ResourceRequest};
 use protocol::renderer::{
-    BeginNavigationKind, NavigationLoad, NavigationTimingType, RedirectHop, RendererHostMsg,
-    RendererMsg, VisualProperties, WindowOpenDisposition,
+    BeginNavigationKind, HistoryEntryParams, NavigationLoad, NavigationTimingType, RedirectHop,
+    RendererHostMsg, RendererMsg, VisualProperties, WindowOpenDisposition,
 };
 use protocol::viz::{
     BeginFrameArgs, BeginFrameObserver, DisplayMsg, FrameSinkId, LocalSurfaceId,
@@ -21,7 +21,8 @@ use crate::frame_tree::FrameTree;
 
 use crate::debug_urls::{DebugUrl, debug_url};
 use crate::navigation_controller::{NavigationController, NavigationType};
-use crate::render_process_host::{CommittedDocument, Committer};
+use crate::navigation_request::{Loading, NavigationRequest};
+use crate::render_process_host::{CommittedDocument, Committer, is_file_url};
 use crate::{RenderProcessHost, RendererFlags, RendererId, ScriptEngineFactory};
 
 /// What a tab's other threads have for its UI thread: the embedder posts
@@ -29,10 +30,10 @@ use crate::{RenderProcessHost, RendererFlags, RendererId, ScriptEngineFactory};
 /// messages to [`WebContents::on_renderer_message`], if
 /// [`WebContents::is_current_renderer`] says they count; a navigation's
 /// redirect to [`WebContents::on_navigation_redirected`] and its end to
-/// [`WebContents::on_navigation_completed`]), as Chromium's
-/// IPC and its `NavigationURLLoader` post to the UI thread. A navigation's
-/// events aren't renderer messages: a renderer mustn't be able to send
-/// them.
+/// [`WebContents::on_navigation_completed`]; a bad message to
+/// [`WebContents::received_bad_message`]), as Chromium's IPC and its
+/// `NavigationURLLoader` post to the UI thread. A navigation's events
+/// aren't renderer messages: a renderer mustn't be able to send them.
 #[derive(Debug)]
 pub enum ContentsEvent {
     /// From one of the tab's renderers, through its IO thread: the one it
@@ -41,20 +42,46 @@ pub enum ContentsEvent {
         renderer: RendererId,
         msg: RendererHostMsg,
     },
-    /// Navigation `navigation_id` reached a redirect and waits there
-    /// (`NavigationURLLoaderDelegate::OnRequestRedirected`), from the
+    /// What one of the tab's renderers sent its IO thread that the browser
+    /// can't take: the tab ends it, if it is the one the tab has.
+    BadMessage {
+        renderer: RendererId,
+        reason: BadMessageReason,
+    },
+    /// A navigation started, on the UI thread, for those that watch
+    /// (DevTools' `frameStartedNavigating` and its request, Chromium's
+    /// `WebContentsObserver::DidStartNavigation`).
+    NavigationStarted(NavigationStarted),
+    /// Navigation `navigation_id` of `frame` reached a redirect and waits
+    /// there (`NavigationURLLoaderDelegate::OnRequestRedirected`), from the
     /// network service's thread.
     NavigationRedirected {
+        frame: FrameToken,
         navigation_id: u64,
         redirect: RedirectInfo,
     },
-    /// Navigation `navigation_id` loaded, or failed
+    /// Navigation `navigation_id` of `frame` loaded, or failed
     /// (`NavigationURLLoaderDelegate::OnResponseStarted`,
     /// `OnRequestFailed`): it commits on the UI thread.
     NavigationCompleted {
+        frame: FrameToken,
         navigation_id: u64,
         result: LoadResult,
     },
+}
+
+/// A navigation as it started: of `frame` (the main frame's, if
+/// `main_frame`), to `url`; who asked, as DevTools' `Network.Initiator`
+/// (JSON) if the renderer said; whether it loads anything (not a page of
+/// the browser's own).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NavigationStarted {
+    pub frame: FrameToken,
+    pub main_frame: bool,
+    pub navigation_id: u64,
+    pub url: String,
+    pub devtools_initiator: Option<String>,
+    pub loads: bool,
 }
 
 /// Called on the thread an event comes from (the renderer's IO thread, the
@@ -86,12 +113,9 @@ pub struct WebContents {
     window_screen_rect: Option<RectF>,
     /// Numbers the navigations started from 1: each gets a larger id.
     navigation_ids: SequenceNumber<u64>,
-    /// The last of them that loads a document (not a traversal within
-    /// the document shown).
+    /// The last of them that loads a document in the main frame (not a
+    /// traversal within the document shown, nor a child frame's).
     document_navigation_id: u64,
-    /// That navigation, until it commits or the next one starts
-    /// (`NavigationRequest`).
-    navigation: Option<PendingNavigation>,
     controller: NavigationController,
     /// The URL to show: the latest navigation's while it loads, then the
     /// committed one (Chromium's visible URL).
@@ -116,15 +140,12 @@ pub struct WebContents {
     input_in_flight: u32,
 }
 
-/// A navigation loading (`NavigationRequest`): its load (none for a
-/// `blob:` URL's, answered at once), and how its document commits.
-struct PendingNavigation {
-    id: u64,
-    load: Option<LoadHandle>,
-    committer: Committer,
-    url: String,
-    /// The redirects it followed, for Navigation Timing.
-    redirects: Vec<RedirectHop>,
+/// What the renderer said of a navigation it asked for: its number for
+/// it, and who asked, for DevTools. Nothing for the browser's own.
+#[derive(Debug, Default)]
+struct Asked {
+    begin_id: Option<u64>,
+    devtools_initiator: Option<String>,
 }
 
 /// What launches this tab's renderers.
@@ -155,7 +176,13 @@ impl Launch {
             network.clone(),
             Box::new(move |tab, renderer, msg| {
                 let on_event = on_event.lock().unwrap_or_else(|e| e.into_inner());
-                on_event(tab, ContentsEvent::Renderer { renderer, msg });
+                on_event(
+                    tab,
+                    match msg {
+                        Ok(msg) => ContentsEvent::Renderer { renderer, msg },
+                        Err(reason) => ContentsEvent::BadMessage { renderer, reason },
+                    },
+                );
             }),
         )
     }
@@ -232,7 +259,6 @@ impl WebContents {
             viz,
             navigation_ids: SequenceNumber::starting_at(1),
             document_navigation_id: 0,
-            navigation: None,
             controller: NavigationController::default(),
             visual_properties: VisualProperties {
                 viewport_size: Size::new(0, 0),
@@ -326,8 +352,8 @@ impl WebContents {
     /// Whether navigation `navigation_id` is on its way: loading, not yet
     /// committed (a page of the browser's own commits as it starts).
     pub fn is_navigating(&self, navigation_id: u64) -> bool {
-        self.navigation
-            .as_ref()
+        self.frame_tree
+            .navigation(self.frame_tree.root())
             .is_some_and(|navigation| navigation.id == navigation_id)
     }
 
@@ -350,7 +376,7 @@ impl WebContents {
                 self.crashed = true;
                 self.frame_tree.reset();
             }
-            None => self.begin_navigation(url, NavigationType::NewEntry),
+            None => self.begin_navigation(url, NavigationType::NewEntry, Asked::default()),
         }
     }
 
@@ -359,7 +385,7 @@ impl WebContents {
     /// no going back to it. What starts a tab that something drives (`machopo
     /// --automation-pipe`), as Chrome's new tab has its `about:blank`.
     pub fn navigate_initial(&mut self, url: impl Into<String>) {
-        self.begin_navigation(url.into(), NavigationType::Initial);
+        self.begin_navigation(url.into(), NavigationType::Initial, Asked::default());
     }
 
     /// `NavigationController::GoBack`. False if there is nothing back.
@@ -375,9 +401,13 @@ impl WebContents {
 
     /// `NavigationController::Reload`: loads the entry shown again.
     pub fn reload(&mut self) {
+        self.reload_as(Asked::default());
+    }
+
+    fn reload_as(&mut self, asked: Asked) {
         if let Some(current) = self.controller.current_index() {
             let url = self.controller.entries()[current].url.clone();
-            self.begin_navigation(url, NavigationType::Reload);
+            self.begin_navigation(url, NavigationType::Reload, asked);
         }
     }
 
@@ -406,20 +436,25 @@ impl WebContents {
                         history,
                     });
             }
-            _ => self.begin_navigation(url, kind),
+            _ => self.begin_navigation(url, kind, Asked::default()),
         }
         true
     }
 
     /// `RenderFrameHostImpl::BeginNavigation`: frame `frame` of the page is
-    /// to have another document, as frame `initiator` asked. A frame the
-    /// tab doesn't have is a bad message. What a page may not navigate a
-    /// frame to (`page_may_navigate_to`) goes nowhere.
+    /// to have another document, as frame `initiator` asked; `id` the
+    /// renderer's number for it. A frame the tab doesn't have is a bad
+    /// message. What a page may not navigate a frame to
+    /// (`page_may_navigate_to`), and a child frame's reload before the
+    /// browser loaded it anything, go nowhere: the renderer hears it is
+    /// dropped (`NavigationDropped`).
     fn begin_renderer_navigation(
         &mut self,
         frame: FrameToken,
         initiator: FrameToken,
+        id: u64,
         kind: &BeginNavigationKind,
+        devtools_initiator: Option<&str>,
     ) {
         if !self.frame_tree.contains(frame) {
             return self.received_bad_message(BadMessageReason::NavigationOfUnknownFrame);
@@ -427,33 +462,58 @@ impl WebContents {
         if !self.frame_tree.contains(initiator) {
             return self.received_bad_message(BadMessageReason::NavigationByUnknownFrame);
         }
-        if frame != self.frame_tree.root() {
-            // A child frame's document is still its renderer's to load.
-            tracing::warn!(?frame, "a child frame's navigation through the browser");
-            return;
-        }
-        match kind {
-            BeginNavigationKind::To { url, replace } => {
-                if let Err(why) = self.page_may_navigate_to(url, true) {
+        let main_frame = frame == self.frame_tree.root();
+        let asked = Asked {
+            begin_id: Some(id),
+            devtools_initiator: devtools_initiator.map(String::from),
+        };
+        let (url, navigation_type) = match kind {
+            BeginNavigationKind::To { url, .. } => {
+                let local = self.frame_tree.may_open_local_files(initiator);
+                if let Err(why) = self.page_may_navigate_to(url, main_frame, local) {
                     tracing::warn!(%url, why, "a page's navigation goes nowhere");
-                    return;
+                    return self.dropped(frame, id);
                 }
-                let kind = if *replace {
-                    NavigationType::Replace
-                } else {
-                    NavigationType::NewEntry
-                };
-                self.begin_navigation(url.clone(), kind);
+                (url.clone(), NavigationTimingType::Navigate)
             }
-            BeginNavigationKind::Reload => self.reload(),
+            BeginNavigationKind::Reload if main_frame => return self.reload_as(asked),
+            BeginNavigationKind::Reload => match self.frame_tree.url(frame) {
+                Some(url) => (url.to_owned(), NavigationTimingType::Reload),
+                None => return self.dropped(frame, id),
+            },
+        };
+        if main_frame {
+            let kind = match kind {
+                BeginNavigationKind::To { replace: true, .. } => NavigationType::Replace,
+                _ => NavigationType::NewEntry,
+            };
+            return self.begin_navigation(url, kind, asked);
         }
+        // A child frame's isn't in the session history yet.
+        let navigation_id = self.navigation_ids.get_next();
+        self.start_navigation(
+            frame,
+            navigation_id,
+            url,
+            asked,
+            HistoryEntryParams::default(),
+            navigation_type,
+            TimeTicks::now(),
+        );
+    }
+
+    /// The renderer's navigation `id` of `frame` won't commit.
+    fn dropped(&self, frame: FrameToken, id: u64) {
+        self.process
+            .send(RendererMsg::NavigationDropped { frame, id });
     }
 
     /// `RenderFrameHostImpl::OpenURL`: a link the renderer followed to a new
     /// tab, which the embedder opens (`take_opened`), if a page may
     /// navigate a main frame there.
     fn open_url(&mut self, url: &str, disposition: WindowOpenDisposition) {
-        if let Err(why) = self.page_may_navigate_to(url, true) {
+        let local = self.process.can_request(url);
+        if let Err(why) = self.page_may_navigate_to(url, true, local) {
             tracing::warn!(%url, why, "a page's new tab goes nowhere");
             return;
         }
@@ -464,19 +524,24 @@ impl WebContents {
     }
 
     /// Whether a page may navigate a frame to `url` (the main frame, or a
-    /// new tab's, if `main_frame`): the browser's checks of what any
-    /// renderer asks, in one place. Only schemes the browser loads are
-    /// navigated to; Chromium hands others (`mailto:`) to the system,
-    /// which isn't done yet. A `data:` URL is loaded, but not for a page's
-    /// main frame, here or in a new tab (Chromium's
-    /// `DataUrlNavigationThrottle`: a page that makes its own URL is a
-    /// phishing tool); child frames and the user's navigations may have
-    /// one. Of `about:` URLs a page may navigate to `about:blank`, and a
-    /// child frame to `about:srcdoc`: the browser's own pages and its debug
-    /// URLs are the user's alone, so that no page can crash the GPU. It
-    /// may not open a local file unless it shows one, as it may not load
-    /// one.
-    fn page_may_navigate_to(&self, url: &str, main_frame: bool) -> Result<(), &'static str> {
+    /// new tab's, if `main_frame`), as a document that may open local files
+    /// if `local` asked: the browser's checks of what any renderer asks,
+    /// in one place. Only schemes the browser loads are navigated to;
+    /// Chromium hands others (`mailto:`) to the system, which isn't done
+    /// yet. A `data:` URL is loaded, but not for a page's main frame, here
+    /// or in a new tab (Chromium's `DataUrlNavigationThrottle`: a page that
+    /// makes its own URL is a phishing tool); child frames and the user's
+    /// navigations may have one. Of `about:` URLs a page may navigate to
+    /// `about:blank`, and a child frame to `about:srcdoc`: the browser's own
+    /// pages and its debug URLs are the user's alone, so that no page can
+    /// crash the GPU. A local file only a local file's document may open,
+    /// as Blink's `SecurityOrigin::CanDisplay` has it.
+    fn page_may_navigate_to(
+        &self,
+        url: &str,
+        main_frame: bool,
+        local: bool,
+    ) -> Result<(), &'static str> {
         let (scheme, rest) = url.split_once(':').unwrap_or((url, ""));
         match scheme.to_ascii_lowercase().as_str() {
             "http" | "https" | "file" | "blob" => {}
@@ -494,8 +559,8 @@ impl WebContents {
             }
             _ => return Err("no handler for the scheme"),
         }
-        if !self.process.can_request(url) {
-            return Err("the renderer may not open local files");
+        if is_file_url(url) && !local {
+            return Err("only a local file's document may open local files");
         }
         Ok(())
     }
@@ -562,7 +627,9 @@ impl WebContents {
         }
     }
 
-    fn begin_navigation(&mut self, url: String, kind: NavigationType) {
+    /// The main frame's navigation to `url`, a new entry or another of
+    /// the session history's (`kind`).
+    fn begin_navigation(&mut self, url: String, kind: NavigationType, asked: Asked) {
         // The new document's time origin (HR-Time), whatever starts it.
         let navigation_start = ipc::TimeTicks::now();
         if self.crashed {
@@ -570,15 +637,6 @@ impl WebContents {
         }
         let navigation_id = self.navigation_ids.get_next();
         self.document_navigation_id = navigation_id;
-        // The navigation it replaces stops loading (Chromium resets its
-        // `NavigationRequest`): left at a redirect, it would wait for good.
-        if let Some(load) = self
-            .navigation
-            .take()
-            .and_then(|navigation| navigation.load)
-        {
-            load.cancel();
-        }
         let history = self.controller.entry_params(kind);
         self.controller.did_start(navigation_id, kind);
         tracing::info!(%url, navigation_id, ?kind, "navigate");
@@ -590,21 +648,78 @@ impl WebContents {
                 NavigationTimingType::Navigate
             }
         };
-        let committer = self
-            .process
-            .committer(history, navigation_start, navigation_type);
-        if let Some(markup) = crate::loader::about_page(&url) {
-            committer.commit(navigation_id, CommittedDocument::page(url, markup.into()));
+        self.start_navigation(
+            self.frame_tree.root(),
+            navigation_id,
+            url,
+            asked,
+            history,
+            navigation_type,
+            navigation_start,
+        );
+    }
+
+    /// `frame`'s `NavigationRequest`, navigation `navigation_id` to `url`:
+    /// loaded, then committed (`on_navigation_completed`), a page of the
+    /// browser's own at once. The frame's navigation before stops (Chromium
+    /// resets its `NavigationRequest`), the renderer told if it asked for
+    /// it.
+    #[expect(clippy::too_many_arguments, reason = "a navigation has that many parts")]
+    fn start_navigation(
+        &mut self,
+        frame: FrameToken,
+        navigation_id: u64,
+        url: String,
+        asked: Asked,
+        history: HistoryEntryParams,
+        navigation_type: NavigationTimingType,
+        navigation_start: TimeTicks,
+    ) {
+        let main_frame = frame == self.frame_tree.root();
+        let page = crate::loader::about_page(&url);
+        self.post(ContentsEvent::NavigationStarted(NavigationStarted {
+            frame,
+            main_frame,
+            navigation_id,
+            url: url.clone(),
+            devtools_initiator: asked.devtools_initiator,
+            loads: page.is_none(),
+        }));
+        let committer = self.process.committer(
+            frame,
+            asked.begin_id,
+            history,
+            navigation_start,
+            navigation_type,
+        );
+        if let Some(markup) = page {
+            if let Some(before) = self.frame_tree.take_any_navigation(frame) {
+                self.replaced(frame, before);
+            }
+            let document = CommittedDocument::page(url, markup.into());
+            self.commit(frame, navigation_id, committer, document);
             return;
         }
-        let request = ResourceRequest::new(url.clone(), RequestDestination::Document);
-        self.navigation = Some(PendingNavigation {
+        let destination = if main_frame {
+            RequestDestination::Document
+        } else {
+            RequestDestination::Iframe
+        };
+        let request = ResourceRequest::new(url.clone(), destination);
+        let navigation = NavigationRequest {
             id: navigation_id,
-            load: None,
-            committer,
+            begin_id: asked.begin_id,
             url,
             redirects: Vec::new(),
-        });
+            committer,
+            load: Loading::default(),
+        };
+        match self.frame_tree.set_navigation(frame, navigation) {
+            Ok(Some(before)) => self.replaced(frame, before),
+            Ok(None) => {}
+            // Its frame went.
+            Err(_) => return,
+        }
         // Its redirects and its end, to the UI thread (`NavigationURLLoader`
         // tells its `NavigationRequest`).
         let post = {
@@ -619,6 +734,7 @@ impl WebContents {
             let post = post.clone();
             move |result| {
                 post(ContentsEvent::NavigationCompleted {
+                    frame,
                     navigation_id,
                     result,
                 });
@@ -633,44 +749,95 @@ impl WebContents {
             request,
             move |redirect| {
                 post(ContentsEvent::NavigationRedirected {
+                    frame,
                     navigation_id,
                     redirect,
                 });
             },
             completed,
         );
-        if let Some(navigation) = &mut self.navigation {
-            navigation.load = Some(load);
+        if let Some(navigation) = self.frame_tree.navigation_mut(frame, navigation_id) {
+            navigation.load.set(load);
         }
     }
 
-    /// Navigation `navigation_id` reached a redirect
+    /// `before`, `frame`'s navigation, stops for another: its load goes with
+    /// it, and the renderer hears that one it asked for won't commit.
+    fn replaced(&self, frame: FrameToken, before: NavigationRequest) {
+        if let Some(id) = before.begin_id {
+            self.dropped(frame, id);
+        }
+    }
+
+    /// `event` to the UI thread, as the network's are.
+    fn post(&self, event: ContentsEvent) {
+        let on_event = self
+            .launch
+            .on_event
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        on_event(self.tab, event);
+    }
+
+    /// `frame` commits `document`, navigation `navigation_id`'s, through
+    /// `committer`, which is the frame's as the renderer reports it
+    /// committed. Whether the renderer may read local files goes with it
+    /// (`ChildProcessSecurityPolicy::GrantCommitURL`), before the renderer
+    /// has it: the main frame's new document decides, its child frames
+    /// going with the one before; a child frame's local one lets it too.
+    fn commit(
+        &mut self,
+        frame: FrameToken,
+        navigation_id: u64,
+        committer: Committer,
+        document: CommittedDocument,
+    ) {
+        let local = document.is_local();
+        if frame == self.frame_tree.root() {
+            self.process.set_file_access(local);
+        } else if local {
+            self.process.set_file_access(true);
+        }
+        self.frame_tree.committing(frame, navigation_id, local);
+        committer.commit(navigation_id, document);
+    }
+
+    /// Navigation `navigation_id` of `frame` reached a redirect
     /// (`NavigationRequest::OnRequestRedirected`, on the UI thread): it
     /// goes on, unless another navigation has replaced it (its load was
-    /// cancelled then).
-    pub fn on_navigation_redirected(&mut self, navigation_id: u64, redirect: &RedirectInfo) {
-        if let Some(navigation) = &mut self.navigation
-            && navigation.id == navigation_id
-            && let Some(load) = &navigation.load
-        {
+    /// cancelled then), or its frame went.
+    pub fn on_navigation_redirected(
+        &mut self,
+        frame: FrameToken,
+        navigation_id: u64,
+        redirect: &RedirectInfo,
+    ) {
+        if let Some(navigation) = self.frame_tree.navigation_mut(frame, navigation_id) {
             navigation.redirects.push(RedirectHop::of(redirect));
-            load.follow_redirect();
+            navigation.load.follow_redirect();
         }
     }
 
-    /// Navigation `navigation_id` loaded, or failed
+    /// Navigation `navigation_id` of `frame` loaded, or failed
     /// (`NavigationRequest::OnResponseStarted`, `OnRequestFailed`, on the UI
     /// thread): its document, or the error page, commits, unless another
-    /// navigation has replaced it.
-    pub fn on_navigation_completed(&mut self, navigation_id: u64, result: LoadResult) {
-        let Some(navigation) = self
-            .navigation
-            .take_if(|navigation| navigation.id == navigation_id)
-        else {
+    /// navigation has replaced it, or its frame went.
+    pub fn on_navigation_completed(
+        &mut self,
+        frame: FrameToken,
+        navigation_id: u64,
+        result: LoadResult,
+    ) {
+        let Some(navigation) = self.frame_tree.take_navigation(frame, navigation_id) else {
             return;
         };
-        let committer = navigation.committer;
-        match result {
+        let NavigationRequest {
+            committer,
+            url,
+            redirects,
+            ..
+        } = navigation;
+        let document = match result {
             Ok(response) => {
                 let content_language = response
                     .headers
@@ -691,29 +858,26 @@ impl WebContents {
                         .timing
                         .map_or_else(TimeTicks::now, |timing| timing.response_end),
                     timing: response.timing,
-                    redirects: navigation.redirects,
+                    redirects,
                     protocol: response.protocol.clone(),
                     content_encoding,
                 };
-                committer.commit(
-                    navigation_id,
-                    CommittedDocument {
-                        url: response.url,
-                        mime_type: response.mime_type,
-                        charset: response.charset,
-                        content_language,
-                        body: response.body,
-                        loaded: Some(loaded),
-                    },
-                );
+                CommittedDocument {
+                    url: response.url,
+                    mime_type: response.mime_type,
+                    charset: response.charset,
+                    content_language,
+                    body: response.body,
+                    loaded: Some(loaded),
+                    error_page: false,
+                }
             }
             Err(error) => {
-                let url = navigation.url;
                 tracing::warn!(%url, code = error.code.name(), detail = %error.detail, "navigation failed");
-                let page = crate::loader::error_page(&error);
-                committer.commit(navigation_id, CommittedDocument::page(url, page));
+                CommittedDocument::error_page(url, crate::loader::error_page(&error))
             }
-        }
+        };
+        self.commit(frame, navigation_id, committer, document);
     }
 
     /// `RenderWidgetHostImpl::SynchronizeVisualProperties`. Allocates a new
@@ -906,7 +1070,17 @@ impl WebContents {
                 self.title = title.clone();
                 self.controller.set_title(title);
             }
-            RendererHostMsg::DidCommitNavigation { navigation_id, url } => {
+            RendererHostMsg::DidCommitNavigation {
+                frame,
+                navigation_id,
+                url,
+            } => {
+                if let Err(reason) = self.frame_tree.did_commit(*frame, *navigation_id, url) {
+                    return self.received_bad_message(reason);
+                }
+                if *frame != self.frame_tree.root() {
+                    return;
+                }
                 self.url = Some(url.clone());
                 self.controller.did_commit(*navigation_id, url.clone());
                 // The entries may have changed since the navigation
@@ -936,7 +1110,8 @@ impl WebContents {
             RendererHostMsg::SameDocumentNavigationFailed { navigation_id } => {
                 if let Some(index) = self.controller.did_fail_same_document(*navigation_id) {
                     let url = self.controller.entries()[index].url.clone();
-                    self.begin_navigation(url, NavigationType::HistoryIndex(index));
+                    let kind = NavigationType::HistoryIndex(index);
+                    self.begin_navigation(url, kind, Asked::default());
                 }
             }
             RendererHostMsg::GoToEntryAtOffset(offset) => {
@@ -950,9 +1125,16 @@ impl WebContents {
             RendererHostMsg::BeginNavigation {
                 frame,
                 initiator,
+                id,
                 kind,
-                ..
-            } => self.begin_renderer_navigation(*frame, *initiator, kind),
+                devtools_initiator,
+            } => self.begin_renderer_navigation(
+                *frame,
+                *initiator,
+                *id,
+                kind,
+                devtools_initiator.as_deref(),
+            ),
             RendererHostMsg::OpenUrl { url, disposition } => self.open_url(url, *disposition),
             // The embedder shows it.
             RendererHostMsg::SetCursor(_)
@@ -1014,7 +1196,7 @@ impl WebContents {
     /// The renderer sent what the browser can't take
     /// (`bad_message::ReceivedBadMessage`): it is ended, as `about:crash`
     /// ends it, the tab's sad tab showing; nothing more from it counts.
-    fn received_bad_message(&mut self, reason: BadMessageReason) {
+    pub fn received_bad_message(&mut self, reason: BadMessageReason) {
         tracing::error!(?reason, "the renderer sent a bad message; ending it");
         self.process.kill();
         self.crashed = true;
@@ -1023,13 +1205,9 @@ impl WebContents {
     }
 
     pub fn shutdown(&mut self) {
-        if let Some(load) = self
-            .navigation
-            .take()
-            .and_then(|navigation| navigation.load)
-        {
-            load.cancel();
-        }
+        // Every frame's navigation stops.
+        drop(self.frame_tree.take_any_navigation(self.frame_tree.root()));
+        self.frame_tree.reset();
         self.process.shutdown();
         // No renderer is launched again: the messages' way out goes, its
         // last message (`RendererGone`) delivered as the threads ended.

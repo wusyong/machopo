@@ -26,7 +26,6 @@ use crossbeam_channel::Sender;
 use gfx::{Color, PointF, Rect, RectF, Size, SizeF};
 use protocol::TabId;
 use protocol::input::{InputEvent, Modifiers, MouseButton, ScrollDelta};
-use protocol::network::RedirectInfo;
 use protocol::renderer::{CursorType, PopupMenuResult, RendererHostMsg, WindowOpenDisposition};
 use protocol::viz::{
     CompositorFrameSinkSender, FrameSinkId, LocalSurfaceId, SharedImageInterface, VizMsg,
@@ -1473,35 +1472,36 @@ impl BrowserView {
                 self.on_renderer_message(tab, &msg);
                 Some(msg)
             }
+            ContentsEvent::BadMessage { renderer, reason } => {
+                if let Some(contents) = self.contents_mut(tab)
+                    && contents.is_current_renderer(renderer)
+                {
+                    contents.received_bad_message(reason);
+                }
+                None
+            }
+            // For DevTools.
+            ContentsEvent::NavigationStarted(_) => None,
             ContentsEvent::NavigationRedirected {
+                frame,
                 navigation_id,
                 redirect,
             } => {
-                self.on_navigation_redirected(tab, navigation_id, &redirect);
+                if let Some(contents) = self.contents_mut(tab) {
+                    contents.on_navigation_redirected(frame, navigation_id, &redirect);
+                }
                 None
             }
             ContentsEvent::NavigationCompleted {
+                frame,
                 navigation_id,
                 result,
             } => {
                 if let Some(contents) = self.contents_mut(tab) {
-                    contents.on_navigation_completed(navigation_id, result);
+                    contents.on_navigation_completed(frame, navigation_id, result);
                 }
                 None
             }
-        }
-    }
-
-    /// `tab`'s navigation `navigation_id` reached a redirect, on the UI
-    /// thread.
-    pub fn on_navigation_redirected(
-        &mut self,
-        tab: TabId,
-        navigation_id: u64,
-        redirect: &RedirectInfo,
-    ) {
-        if let Some(contents) = self.contents_mut(tab) {
-            contents.on_navigation_redirected(navigation_id, redirect);
         }
     }
 

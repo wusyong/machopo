@@ -7,9 +7,11 @@ use base::AtomicSequenceNumber;
 use bytes::Bytes;
 use crossbeam_channel::Sender;
 use net::{LoadHandle, NetworkContext};
-use protocol::TabId;
 use protocol::input::InputEvent;
-use protocol::network::{LoadResult, NetError, NetErrorCode, ResourceRequest};
+use protocol::network::{
+    LoadResult, NetError, NetErrorCode, RequestDestination, ResourceRequest,
+};
+use protocol::{FrameToken, TabId};
 use protocol::renderer::{
     CompositorMsg, HistoryEntryParams, NavigationLoad, NavigationTimingType, RendererHostMsg,
     RendererMsg,
@@ -21,6 +23,8 @@ use protocol::viz::{
 use renderer::{
     CompositorSender, RendererEndpoints, RendererFlags, RendererSender, ScriptEngineFactory,
 };
+
+use crate::bad_message::BadMessageReason;
 
 /// `content::RenderProcessHost`. For now the "process" is a thread in this
 /// process; launching a real child process would carry the same messages
@@ -70,7 +74,9 @@ impl RenderProcessHost {
     /// `script_engine` makes (which a renderer process of its own would
     /// pick itself). `on_message` runs on the IO thread for every message
     /// the renderer sends, with the renderer's id, except subresource
-    /// requests, which the IO thread passes to `network` itself.
+    /// requests, which the IO thread passes to `network` itself; or for
+    /// one the IO thread found bad (`Err`), which the UI thread ends the
+    /// renderer for.
     #[allow(clippy::too_many_arguments)]
     pub fn launch(
         tab: TabId,
@@ -80,7 +86,9 @@ impl RenderProcessHost {
         viz: Sender<VizMsg>,
         gpu: Option<Arc<dyn SharedImageInterface>>,
         network: NetworkContext,
-        on_message: Box<dyn Fn(TabId, RendererId, RendererHostMsg) + Send>,
+        on_message: Box<
+            dyn Fn(TabId, RendererId, Result<RendererHostMsg, BadMessageReason>) + Send,
+        >,
     ) -> std::io::Result<Self> {
         let (to_renderer, to_compositor, from_browser) = renderer::channel();
         let (to_browser, from_renderer) = crossbeam_channel::unbounded();
@@ -116,7 +124,7 @@ impl RenderProcessHost {
             let to_renderer = to_renderer.clone();
             let file_access = file_access.clone();
             let forwarding = forwarding.clone();
-            let on_message = move |tab, msg| {
+            let forward = move |tab, msg: Result<RendererHostMsg, BadMessageReason>| {
                 if forwarding.load(Ordering::Acquire) {
                     on_message(tab, RendererId(renderer_id), msg);
                 }
@@ -124,6 +132,7 @@ impl RenderProcessHost {
             std::thread::Builder::new()
                 .name("Chrome_IOThread".into())
                 .spawn(move || {
+                    let on_message = |tab, msg| forward(tab, Ok(msg));
                     // The renderer's loads still loading.
                     let loads = Loads::default();
                     // Its dedicated workers, which may load (Chromium's
@@ -151,7 +160,20 @@ impl RenderProcessHost {
                                 request,
                             } => {
                                 let load = LoadKey::Resource { worker, request_id };
-                                if worker.is_some_and(|worker| !workers.contains(&worker)) {
+                                // The browser loads every frame's document,
+                                // as a navigation: a renderer asking for one
+                                // is bad (the network service's "frame
+                                // destination requires kNavigate mode").
+                                if matches!(
+                                    request.destination,
+                                    RequestDestination::Document | RequestDestination::Iframe
+                                ) {
+                                    let _ = to_renderer.send(load.answer(Err(NetError::new(
+                                        NetErrorCode::AccessDenied,
+                                        request.url,
+                                    ))));
+                                    forward(tab, Err(BadMessageReason::DocumentRequest));
+                                } else if worker.is_some_and(|worker| !workers.contains(&worker)) {
                                     // One it didn't make, or gone.
                                     let _ = to_renderer.send(load.answer(Err(NetError::new(
                                         NetErrorCode::AccessDenied,
@@ -314,25 +336,35 @@ impl RenderProcessHost {
         }
     }
 
-    /// Whether the renderer may ask for `url`, to load or to navigate to
-    /// (`ChildProcessSecurityPolicy::CanRequestURL`): a local file only
-    /// while it shows one.
+    /// Whether the renderer may ask for `url`, to load or to navigate a new
+    /// tab to (`ChildProcessSecurityPolicy::CanRequestURL`): a local file
+    /// only while one of its frames shows one.
     pub(crate) fn can_request(&self, url: &str) -> bool {
         !is_file_url(url) || self.file_access.load(Ordering::Relaxed)
     }
 
-    /// A sender another thread can commit a navigation to an entry with
-    /// `history` through, together with the policy that goes with the
-    /// committed document.
+    /// Whether the renderer may read local files: while it shows one
+    /// (`ChildProcessSecurityPolicy::GrantRequestScheme`), as Chromium
+    /// allows `file:` subresources only from `file:` documents.
+    pub(crate) fn set_file_access(&self, may: bool) {
+        self.file_access.store(may, Ordering::Relaxed);
+    }
+
+    /// What commits navigation `frame`'s document of a navigation (the
+    /// renderer's `begin_id`, if it asked for it), to an entry with
+    /// `history`.
     pub(crate) fn committer(
         &self,
+        frame: FrameToken,
+        begin_id: Option<u64>,
         history: HistoryEntryParams,
         navigation_start: ipc::TimeTicks,
         navigation_type: NavigationTimingType,
     ) -> Committer {
         Committer {
             to_renderer: self.to_renderer.clone(),
-            file_access: self.file_access.clone(),
+            frame,
+            begin_id,
             history,
             navigation_start,
             navigation_type,
@@ -359,10 +391,11 @@ impl Drop for RenderProcessHost {
     }
 }
 
-/// Commits a navigation from whatever thread its response arrives on.
+/// Commits a frame's navigation.
 pub(crate) struct Committer {
     to_renderer: RendererSender,
-    file_access: Arc<AtomicBool>,
+    frame: FrameToken,
+    begin_id: Option<u64>,
     history: HistoryEntryParams,
     /// When the navigation started (`NavigationRequest`'s
     /// `navigation_start`).
@@ -380,10 +413,12 @@ pub(crate) struct CommittedDocument {
     /// What its load took; none for a page of the browser's own or an
     /// error page.
     pub(crate) loaded: Option<NavigationLoad>,
+    /// The browser's error page for `url`.
+    pub(crate) error_page: bool,
 }
 
 impl CommittedDocument {
-    /// A page the browser made (`about:`, an error page): HTML, no load.
+    /// A page the browser made (`about:`): HTML, no load.
     pub(crate) fn page(url: String, markup: String) -> Self {
         Self {
             url,
@@ -392,20 +427,33 @@ impl CommittedDocument {
             content_language: None,
             body: markup.into(),
             loaded: None,
+            error_page: false,
         }
+    }
+
+    /// The error page for `url`, which failed to load.
+    pub(crate) fn error_page(url: String, markup: String) -> Self {
+        Self {
+            error_page: true,
+            ..Self::page(url, markup)
+        }
+    }
+
+    /// Whether it may open local files: a local file (not an error page
+    /// for one).
+    pub(crate) fn is_local(&self) -> bool {
+        !self.error_page && is_file_url(&self.url)
     }
 }
 
 impl Committer {
     pub(crate) fn commit(self, navigation_id: u64, document: CommittedDocument) {
-        // `ChildProcessSecurityPolicy::GrantRequestScheme`: a renderer may
-        // read local files only while it shows a local file, as Chromium
-        // allows `file:` subresources only from `file:` documents.
-        self.file_access
-            .store(is_file_url(&document.url), Ordering::Relaxed);
         let _ = self.to_renderer.send(RendererMsg::CommitNavigation {
+            frame: self.frame,
             navigation_id,
+            begin_id: self.begin_id,
             url: document.url,
+            error_page: document.error_page,
             mime_type: document.mime_type,
             charset: document.charset,
             content_language: document.content_language,
@@ -510,7 +558,7 @@ fn fetch_for_renderer(
     held.insert(load, handle);
 }
 
-fn is_file_url(url: &str) -> bool {
+pub(crate) fn is_file_url(url: &str) -> bool {
     url.get(..5)
         .is_some_and(|scheme| scheme.eq_ignore_ascii_case("file:"))
 }

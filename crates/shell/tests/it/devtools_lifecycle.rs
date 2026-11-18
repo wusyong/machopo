@@ -266,6 +266,7 @@ fn an_iframe_that_stays_blank_has_loaded() {
         [
             "child frameAttached",
             "child init",
+            "child frameStartedNavigating",
             "child frameStartedLoading",
             "child init",
             "child frameNavigated",
@@ -597,6 +598,7 @@ fn the_child_frames_are_told() {
         [
             "frameAttached",
             "init",
+            "frameStartedNavigating",
             "frameStartedLoading",
             "init",
             "frameNavigated",

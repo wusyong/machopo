@@ -22,6 +22,7 @@ mod debug_urls;
 mod frame_tree;
 pub mod loader;
 mod navigation_controller;
+mod navigation_request;
 mod render_process_host;
 mod user_agent;
 mod web_contents;
@@ -34,5 +35,6 @@ pub use render_process_host::{RenderProcessHost, RendererId};
 pub use renderer::{RendererFlags, ScriptEngineFactory};
 pub use user_agent::user_agent;
 pub use web_contents::{
-    ContentsEvent, ContentsEventCallback, MAX_TITLE_CHARS, OpenUrlParams, WebContents,
+    ContentsEvent, ContentsEventCallback, MAX_TITLE_CHARS, NavigationStarted, OpenUrlParams,
+    WebContents,
 };

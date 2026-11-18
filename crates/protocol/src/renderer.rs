@@ -105,19 +105,35 @@ pub struct HistoryEntryParams {
     pub length: u32,
 }
 
+/// The URL an error page's document has (Chromium's
+/// `kUnreachableWebDataURL`): a scheme no one loads, so its origin is
+/// opaque, and no other document is of it. The browser's address bar and
+/// session history keep the URL that failed.
+pub const ERROR_PAGE_URL: &str = "chrome-error://chromewebdata/";
+
 /// Browser -> Renderer (`content.mojom.Frame`, `blink.mojom.Widget`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RendererMsg {
-    /// `CommitNavigation`: the browser has fetched the response and the
-    /// renderer should show it. Chromium streams the body through a data
+    /// `CommitNavigation`: the browser has fetched the response and frame
+    /// `frame` should show it. Chromium streams the body through a data
     /// pipe; here it arrives whole.
     CommitNavigation {
+        frame: crate::FrameToken,
         /// Increases with every navigation the browser starts. Responses
         /// arrive in any order, so the renderer drops a commit older than
         /// the one it shows.
         navigation_id: u64,
-        /// The final URL, after redirects.
+        /// The renderer's own number for it (`BeginNavigation`'s), if the
+        /// renderer asked for it: a frame that asked again since takes
+        /// only the later one's.
+        begin_id: Option<u64>,
+        /// The final URL, after redirects; a failed navigation's URL, for
+        /// an error page.
         url: String,
+        /// The document is the browser's error page for `url`: it commits
+        /// at `ERROR_PAGE_URL` (an opaque origin, so that no other document
+        /// may read why the load failed), and tells the browser of `url`.
+        error_page: bool,
         mime_type: String,
         /// The `charset` of the response's `Content-Type`, if any.
         charset: Option<String>,
@@ -142,6 +158,11 @@ pub enum RendererMsg {
         /// How the navigation came about.
         navigation_type: NavigationTimingType,
     },
+    /// `NavigationClient`'s disconnection, as Chromium's renderer hears it
+    /// (`RenderFrameImpl::OnDroppedNavigation`): the navigation of `frame`
+    /// the renderer asked for as `id` (`BeginNavigation`'s) won't commit,
+    /// the browser didn't take it. The frame no longer waits for it.
+    NavigationDropped { frame: crate::FrameToken, id: u64 },
     /// `CommitSameDocumentNavigation` of a history traversal: back or
     /// forward to an entry of the document shown, `document` (the
     /// `navigation_id` that committed it). The renderer changes the URL,
@@ -432,7 +453,11 @@ pub enum CursorType {
 pub enum RendererHostMsg {
     /// Renderer main thread finished initialising (V8 is up).
     RendererReady,
+    /// `DidCommitNavigation`: frame `frame` shows the document of the
+    /// browser's navigation `navigation_id` (`CommitNavigation`'s), at
+    /// `url` (a failed one's, for an error page).
     DidCommitNavigation {
+        frame: crate::FrameToken,
         navigation_id: u64,
         url: String,
     },
@@ -468,12 +493,16 @@ pub enum RendererHostMsg {
     /// another document, as script or a link in frame `initiator` asked
     /// (HTML's source document's; `frame` itself for a reload). The
     /// browser decides whether, loads it and has the frame commit it; `id`
-    /// is the renderer's own number for the request.
+    /// is the renderer's own number for the request. `devtools_initiator`:
+    /// who asked, as DevTools' `Network.Initiator` (JSON), while DevTools
+    /// has `Network` on in the renderer (`BeginNavigationParams::
+    /// devtools_initiator`); the browser tells DevTools of the request.
     BeginNavigation {
         frame: crate::FrameToken,
         initiator: crate::FrameToken,
         id: u64,
         kind: BeginNavigationKind,
+        devtools_initiator: Option<String>,
     },
     /// `FrameHost::OpenURL`: a link followed to a new tab, which the
     /// browser decides whether to open.

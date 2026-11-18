@@ -77,7 +77,7 @@
 - 同時對同一個 HTTPS 伺服器發出的請求，在第一條連線由 ALPN 確認是 HTTP/2 之前各開一條連線，最後都走同一條、其他的關掉（hyper-util 的連線池；Chrome 的 `SpdySessionPool` 等第一條）。
 - 沒有 `Content-Type` 時，只分辨 markup 和純文字，不像 Chromium 那樣完整地 sniff。
 - DNS 失敗是從 hyper-util 的錯誤訊息辨認的（它沒有專用的錯誤型別）；升級 reqwest 時，`net` 的 `connection_failures` 測試會告訴我們它還對不對。
-- 讀本機檔案的權限只看目前的 document 是不是 `file:`；Chromium 還會依 origin 做更細的限制。
+- 導覽到 `file:` 只看發起導覽的文件是不是 `file:`（`file:` 文件裡的子 frame 一開始的 `about:blank` 也算）；子資源讀本機檔案看整個 renderer：main frame 的文件是 `file:`、或子 frame commit 了 `file:` 的文件之後都可以，main frame 換成不是 `file:` 的文件時收回。Chromium 還會依 origin 做更細的限制。
 - `file:` 的目錄是一份簡單的清單（上一層和每個項目的連結，目錄在前、照名稱排序），沒有 Chrome 那份的大小、修改時間和排序的按鈕；沒有尾端斜線的目錄網址不轉到有斜線的（Chrome 會），連結都是完整的網址。
 - frame 不在了時，它還在路上的 `fetch()` 不取消：回應來了找不到 window，丟掉（Chrome 取消請求）。
 
@@ -391,16 +391,16 @@
 
 ## iframe
 
-iframe 照同源、同 process 的情形做：有自己的 browsing context、window 和 document，照 `src`、`srcdoc` 由 renderer 載入，畫在 iframe 裡，接收點擊和滾輪。
+iframe 照同源、同 process 的情形做：有自己的 browsing context、window 和 document，`src` 由 browser 載入（`srcdoc`、`about:blank` 由 renderer 自己 commit），畫在 iframe 裡，接收點擊和滾輪。
 
 - iframe 是 replaced element（300×150 加上 2px 的邊框，`width`、`height`、`frameborder`），子 frame 照 iframe 的內容框跑 style、layout，畫在內容框裡，點擊和滾輪會進子 frame，滾輪捲到底往外層傳；鍵盤從 focus 的元素（沒有時從最後按下滑鼠的元素，或 focused frame）往外捲。
 - `<body>` 的 `marginwidth`、`leftmargin`（左右）、`marginheight`、`topmargin`（上下）照 Chrome 是 presentational hint：兩個一起出現時後寫的贏（HTML 的「The page」是 `marginwidth`、`marginheight` 贏；Chrome 152 和 machopo 一樣），`rightmargin`、`bottommargin` 照 Chrome 不算。iframe 的 `marginwidth`、`marginheight` 不傳給子 frame 的 body：子 frame 的 body 照樣是預設的 8px margin（WPT 的 `body-margin-*` 有 8 個是預期的失敗）。
 - 子 frame 不 throttle：每個 main frame 都看每個子 frame 要不要更新，看不見的、跨源的也一樣（Chromium 會 throttle 看不見的跨源 frame；同一個 process 裡 `display: none` 的 frame 不 throttle，和 machopo 一樣）。
 - 跨源的 window 和它的 `location` 只碰得到規範允許的成員（`postMessage`、`closed`、`frames`、`length`、`parent`、`top`、`location.href` 的設定和 `replace()` 等），其他的是 `SecurityError`。其中 `close()`、`blur()` 什麼都不做，`opener` 一律是 `null`（沒有 `window.open`）。
 - 跨網站的 iframe 和頁面在同一個 renderer，只靠 security token 擋住互相存取（Chromium 的 site isolation 放在別的 process）。
-- 子 frame 的導覽由 renderer 自己載入（一種子資源），browser 不知道子 frame：沒有子 frame 的歷史。子 frame 裡導覽到自己的 `#fragment`（連結、`location.hash`）照樣捲動、改網址、分派 `popstate` 和 `hashchange`，但不進 session history；導覽到別的文件（點連結、`location.href = …`）由 renderer 載入、換掉子 frame 的文件（舊的文件裡的 frame 跟著不在），一樣不進 session history。
-- `javascript:` 的 `src` 不執行（當成一般的網址抓取，失敗）。`loading`、`sandbox`、`allow` 都還沒有（sandbox 的 iframe 照樣跑 script，裡面的 `loading="lazy"` 的圖照樣等到接近 viewport 才載入；`name` 的名稱給 window 的具名屬性和連結的 `target`，沒有 `window.name`）；`referrerpolicy` 只用在子 frame 的 navigation timing（`no-referrer` 時 redirect 的 `Timing-Allow-Origin` 只認 `*`；machopo 的請求都不送 `Referer`）。
-- 載入失敗（網路錯誤、被擋下）的子 frame 是一份空的 document，沒有錯誤的說明（Chromium 是錯誤頁）。
+- 子 frame 導覽到別的文件（`src`、點連結、`location.href = …`、`location.reload()`）由 browser 載入、換掉子 frame 的文件（舊的文件裡的 frame 跟著不在），但不進 session history：沒有子 frame 的歷史。子 frame 的 `about:blank`、`srcdoc` 由 renderer 自己 commit，browser 不知道：它的 frame 樹上記的還是之前的文件。子 frame 裡導覽到自己的 `#fragment`（連結、`location.hash`）照樣捲動、改網址、分派 `popstate` 和 `hashchange`，但不進 session history，browser 也不知道：子 frame 的 `location.reload()` 載入 browser 記的網址，之後的 `#fragment`、`pushState` 不算。
+- `javascript:` 的 `src` 不執行（commit 一份空的文件，網址是那個 `javascript:` 網址）。`loading`、`sandbox`、`allow` 都還沒有（sandbox 的 iframe 照樣跑 script，裡面的 `loading="lazy"` 的圖照樣等到接近 viewport 才載入；`name` 的名稱給 window 的具名屬性和連結的 `target`，沒有 `window.name`）；`referrerpolicy` 只用在子 frame 的 navigation timing（`no-referrer` 時 redirect 的 `Timing-Allow-Origin` 只認 `*`；machopo 的請求都不送 `Referer`）。
+- 載入失敗（網路錯誤）的子 frame 是錯誤頁，和 main frame 的一樣：文件的網址是 `chrome-error://chromewebdata/`（opaque 的 origin，父 frame 讀不到它），browser 記著失敗的網址。頁面不准的導覽（不是 `file:` 的文件要開 `file:`、browser 不載入的 scheme）什麼都不載入：iframe 留著原本的文件，父文件的 `load` 不等它。
 - `window[i]` 和集合的 indexed property 一樣只能讀：設定、刪除、`Object.defineProperty` 會在 global 上建一般的屬性（規範是失敗）。
 - `srcdoc` 的子 frame 在插入它的 script 跑完之前就載完、iframe 的 `load` 已經分派了；Chrome 之後才載入，script 之後加的 listener 等得到（WPT 的 `css/cssom-view/cssom-geometryutils-lifecycle.html` TIMEOUT）。
 

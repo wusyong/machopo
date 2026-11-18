@@ -21,4 +21,11 @@ pub enum BadMessageReason {
     NavigationOfUnknownFrame,
     /// A navigation a frame the tab doesn't have asked for.
     NavigationByUnknownFrame,
+    /// A commit in a frame the tab doesn't have.
+    CommitOfUnknownFrame,
+    /// A request for a document (`RequestDestination::Document` or
+    /// `Iframe`) as a subresource: the browser loads every frame's
+    /// documents (network service's "frame destination requires kNavigate
+    /// mode").
+    DocumentRequest,
 }

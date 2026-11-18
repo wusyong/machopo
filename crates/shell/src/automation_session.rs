@@ -1175,13 +1175,58 @@ impl AutomationSession {
     ) {
         // Its start first.
         self.changes(browser);
-        let frame_id = self.target(tab);
+        let main_frame_id = self.target(tab);
         match event {
-            ContentsEvent::Renderer { .. } => {}
+            ContentsEvent::Renderer { .. } | ContentsEvent::BadMessage { .. } => {}
+            // The main frame's as the session sees its loader change
+            // (`changes`), in order with what started it.
+            ContentsEvent::NavigationStarted(started) if started.main_frame => {}
+            ContentsEvent::NavigationStarted(started) => {
+                let frame_id = started.frame.to_string();
+                self.to_pages(
+                    tab,
+                    |attached| attached.page,
+                    EventKind::FrameStartedNavigating {
+                        frame_id: frame_id.clone(),
+                        url: started.url.clone(),
+                        loader_id: started.navigation_id.to_string(),
+                        navigation_type: "differentDocument".into(),
+                    },
+                );
+                if started.loads {
+                    // As the renderer said who asked, if it did.
+                    let initiator = started
+                        .devtools_initiator
+                        .as_deref()
+                        .and_then(|initiator| serde_json::from_str::<Value>(initiator).ok())
+                        .unwrap_or_else(|| json!({ "type": "other" }));
+                    let request =
+                        ResourceRequest::new(started.url.clone(), RequestDestination::Iframe);
+                    self.to_network(
+                        tab,
+                        "Network.requestWillBeSent",
+                        json!({
+                            "requestId": started.navigation_id.to_string(),
+                            "loaderId": started.navigation_id.to_string(),
+                            "documentURL": started.url,
+                            "request": request_json(&request, 0),
+                            "timestamp": TimeTicks::now().as_secs_f64(),
+                            "wallTime": wall_time(),
+                            "initiator": initiator,
+                            "redirectHasExtraInfo": false,
+                            "type": "Document",
+                            "frameId": frame_id,
+                            "hasUserGesture": false,
+                        }),
+                    );
+                }
+            }
             ContentsEvent::NavigationRedirected {
+                frame,
                 navigation_id,
                 redirect,
             } => {
+                let frame_id = frame.to_string();
                 let request = {
                     let mut request = ResourceRequest::new(
                         redirect.new_url.clone(),
@@ -1210,9 +1255,11 @@ impl AutomationSession {
                 );
             }
             ContentsEvent::NavigationCompleted {
+                frame,
                 navigation_id,
                 result: Ok(response),
             } => {
+                let frame_id = frame.to_string();
                 let timestamp = response
                     .timing
                     .map_or_else(TimeTicks::now, |timing| timing.receive_headers_end);
@@ -1230,9 +1277,12 @@ impl AutomationSession {
                     }),
                 );
                 // Its response came: ready to commit.
-                self.navigation_ready(tab, *navigation_id, None);
+                if frame_id == main_frame_id {
+                    self.navigation_ready(tab, *navigation_id, None);
+                }
             }
             ContentsEvent::NavigationCompleted {
+                frame,
                 navigation_id,
                 result: Err(error),
             } => {
@@ -1249,7 +1299,9 @@ impl AutomationSession {
                     }),
                 );
                 // Its error page commits.
-                self.navigation_ready(tab, *navigation_id, Some(error_text));
+                if frame.to_string() == main_frame_id {
+                    self.navigation_ready(tab, *navigation_id, Some(error_text));
+                }
             }
         }
     }

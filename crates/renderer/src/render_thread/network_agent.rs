@@ -1,9 +1,9 @@
 //! DevTools' `Network` domain as the renderer answers it (Blink's
 //! `InspectorNetworkAgent`): for each session that turned `Network` on, the
-//! requests the renderer sends (subresources, `fetch()`, iframes'
-//! documents) as they go, redirect and end, and their bodies, kept for
-//! `Network.getResponseBody`. The browser tells of the main frame's
-//! navigations (the renderer, of their end); it answers the commands that
+//! requests the renderer sends (subresources, `fetch()`) as they go,
+//! redirect and end, and their bodies, kept for `Network.getResponseBody`.
+//! The browser tells of every frame's navigations (the renderer, of their
+//! end); it answers the commands that
 //! are only its own (cookies, the cache, network conditions) and passes the
 //! rest on.
 //!
@@ -19,7 +19,7 @@ use bytes::Bytes;
 use crossbeam_channel::Sender;
 use ipc::TimeTicks;
 use protocol::devtools_network::{priority, request_json, resource_type, response_json, wall_time};
-use protocol::network::{LoadResult, NetError, RedirectInfo, RequestDestination, ResourceRequest};
+use protocol::network::{LoadResult, NetError, RedirectInfo, ResourceRequest};
 use protocol::renderer::{NavigationLoad, RendererHostMsg};
 use serde_json::{Value, json};
 
@@ -40,8 +40,7 @@ const DEFAULT_RESOURCE_BUFFER_SIZE: usize = 20_000_000;
 /// Where a request was sent from, as DevTools names it.
 pub(crate) struct RequestFrame {
     pub(crate) frame_id: String,
-    /// The document's loader (for an iframe's document's own request, the
-    /// request's: `NetworkAgent::request_id`).
+    /// The document's loader: the navigation that brought it.
     pub(crate) loader_id: String,
     pub(crate) document_url: String,
 }
@@ -199,8 +198,7 @@ impl NetworkAgent {
         }
     }
 
-    /// What DevTools calls the renderer's request `request_id` (also the
-    /// loader of the iframe document it brings).
+    /// What DevTools calls the renderer's request `request_id`.
     pub(crate) fn request_id(&self, request_id: u64) -> String {
         format!("{:016x}.{request_id}", self.prefix)
     }
@@ -221,12 +219,7 @@ impl NetworkAgent {
         }
         let id = self.request_id(request_id);
         let kind = resource_type(request.destination);
-        let loader_id = if request.destination == RequestDestination::Iframe {
-            // An iframe's document: its request is its loader.
-            id.clone()
-        } else {
-            frame.loader_id
-        };
+        let loader_id = frame.loader_id;
         let initiator = Initiator::to_json(initiator);
         let (timestamp, wall_time) = (TimeTicks::now().as_secs_f64(), wall_time());
         let mut sessions_told = Vec::new();
@@ -672,7 +665,7 @@ fn base64(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use protocol::network::{NetErrorCode, ResponseTainting};
+    use protocol::network::{NetErrorCode, RequestDestination, ResponseTainting};
 
     use super::*;
 
@@ -752,8 +745,7 @@ mod tests {
     /// A request is told from its frame and document, with who asked,
     /// under the renderer's id; its redirect under the same, its end with
     /// its response, its data and its length; its body kept, as text or
-    /// base64, and for `Page.getResourceContent` by its frame and URL. An
-    /// iframe's document's request is its own loader.
+    /// base64, and for `Page.getResourceContent` by its frame and URL.
     #[test]
     fn a_request_is_told_as_it_goes_and_ends() {
         let (agent, from) = agent();
@@ -844,13 +836,6 @@ mod tests {
             Some(json!({ "content": "/wAQ", "base64Encoded": true }))
         );
 
-        let child = ResourceRequest::new("https://a.test/f.html", RequestDestination::Iframe);
-        agent.will_send(9, &child, frame(), None);
-        let params = sent(&from)[0].1["params"].clone();
-        assert_eq!(
-            (&params["type"], &params["loaderId"]),
-            (&json!("Document"), &params["requestId"])
-        );
     }
 
     /// A failure and a cancel end in `loadingFailed`, told apart; a

@@ -906,6 +906,13 @@ fn frames_coming_and_going_are_told() {
     let attached = page.event("Page.frameAttached")["params"].clone();
     assert_eq!(attached["parentFrameId"], target.as_str(), "{attached}");
     let child = attached["frameId"].clone();
+    // The browser's of its navigation, the loader its document's.
+    let started = page.event("Page.frameStartedNavigating")["params"].clone();
+    assert_eq!(
+        (&started["frameId"], &started["url"]),
+        (&child, &json!(server.url("/child"))),
+        "{started}"
+    );
     // Its document, not the initial `about:blank` before it.
     let navigated = page.event("Page.frameNavigated")["params"]["frame"].clone();
     assert_eq!(
@@ -914,6 +921,7 @@ fn frames_coming_and_going_are_told() {
         "{navigated}"
     );
     assert_eq!(navigated["id"], child, "{navigated}");
+    assert_eq!(navigated["loaderId"], started["loaderId"], "{navigated}");
     evaluate(
         &mut page,
         "document.querySelector('iframe').remove(); 0",

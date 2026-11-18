@@ -137,18 +137,27 @@ fn renderer_message(
         ContentsEvent::Renderer { renderer, msg } => {
             web_contents.is_current_renderer(renderer).then_some(msg)
         }
+        ContentsEvent::BadMessage { renderer, reason } => {
+            if web_contents.is_current_renderer(renderer) {
+                web_contents.received_bad_message(reason);
+            }
+            None
+        }
+        ContentsEvent::NavigationStarted(_) => None,
         ContentsEvent::NavigationRedirected {
+            frame,
             navigation_id,
             redirect,
         } => {
-            web_contents.on_navigation_redirected(navigation_id, &redirect);
+            web_contents.on_navigation_redirected(frame, navigation_id, &redirect);
             None
         }
         ContentsEvent::NavigationCompleted {
+            frame,
             navigation_id,
             result,
         } => {
-            web_contents.on_navigation_completed(navigation_id, result);
+            web_contents.on_navigation_completed(frame, navigation_id, result);
             None
         }
     }
@@ -524,9 +533,9 @@ fn next_commit(
         let msg = next_message(web_contents, host_rx, TIMEOUT).expect("renderer answers");
         web_contents.on_renderer_message(&msg);
         match msg {
-            RendererHostMsg::DidCommitNavigation { navigation_id, url } => {
-                committed = Some((navigation_id, url))
-            }
+            RendererHostMsg::DidCommitNavigation {
+                navigation_id, url, ..
+            } => committed = Some((navigation_id, url)),
             RendererHostMsg::UpdateTitle(title) => {
                 let (id, url) = committed.expect("commit before title");
                 return (id, url, title);
@@ -603,16 +612,13 @@ fn held_redirect(
             ContentsEvent::NavigationRedirected {
                 navigation_id,
                 redirect,
+                ..
             } => return (navigation_id, redirect),
-            ContentsEvent::Renderer { renderer, msg } => {
-                if web_contents.is_current_renderer(renderer) {
+            event => {
+                if let Some(msg) = renderer_message(web_contents, event) {
                     web_contents.on_renderer_message(&msg);
                 }
             }
-            ContentsEvent::NavigationCompleted {
-                navigation_id,
-                result,
-            } => web_contents.on_navigation_completed(navigation_id, result),
         }
     }
 }
@@ -627,6 +633,7 @@ fn held_completion(
             ContentsEvent::NavigationCompleted {
                 navigation_id,
                 result,
+                ..
             } => return (navigation_id, result),
             event => {
                 if let Some(msg) = renderer_message(web_contents, event) {
@@ -649,7 +656,8 @@ fn a_replaced_navigations_end_commits_nothing() {
     web_contents.navigate(server.url("/a"));
     let (a, a_result) = held_completion(&mut web_contents, &host_rx);
     web_contents.navigate(server.url("/b"));
-    web_contents.on_navigation_completed(a, a_result);
+    let main = web_contents.devtools_frame_token();
+    web_contents.on_navigation_completed(main, a, a_result);
     let (_, committed, title) = next_commit(&mut web_contents, &host_rx);
     assert_eq!(
         (committed.as_str(), title.as_str()),
@@ -682,7 +690,8 @@ fn a_navigation_waits_at_a_redirect_for_the_tab() {
     let (other, other_redirect) = held_redirect(&mut web_contents, &host_rx);
     assert_ne!(other, old);
     // The replaced navigation's redirect: neither it nor the latest goes on.
-    web_contents.on_navigation_redirected(old, &old_redirect);
+    let main = web_contents.devtools_frame_token();
+    web_contents.on_navigation_redirected(main, old, &old_redirect);
     std::thread::sleep(Duration::from_millis(300));
     assert!(!requested("/new"), "the replaced navigation went on");
     assert!(
@@ -690,7 +699,7 @@ fn a_navigation_waits_at_a_redirect_for_the_tab() {
         "the latest went on before its redirect was"
     );
 
-    web_contents.on_navigation_redirected(other, &other_redirect);
+    web_contents.on_navigation_redirected(main, other, &other_redirect);
     let (_, committed, title) = next_commit(&mut web_contents, &host_rx);
     assert_eq!(
         (committed.as_str(), title.as_str()),
@@ -1029,6 +1038,7 @@ fn page_navigates(web_contents: &mut WebContents, url: &str) {
             url: url.into(),
             replace: false,
         },
+        devtools_initiator: None,
     });
 }
 
@@ -2295,6 +2305,59 @@ document.querySelector('base').setAttribute('href', '/later/');
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A local file's child frame may open another, its parent asking (the
+    /// error page of one that isn't there opens none); the renderer reads
+    /// local files while it shows one, and no longer once its main frame
+    /// shows a web page.
+    #[test]
+    fn a_local_files_child_frame_opens_local_files() {
+        let dir = std::env::temp_dir().join(format!("machopo-child-files-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let url = |name: &str| browser::loader::file_url(&dir.join(name)).unwrap();
+        std::fs::write(dir.join("s.css"), "div { color: green }").unwrap();
+        std::fs::write(
+            dir.join("one.html"),
+            "<!DOCTYPE html><iframe src=two.html></iframe><iframe src=missing.html></iframe>",
+        )
+        .unwrap();
+        std::fs::write(dir.join("two.html"), "<!DOCTYPE html><link rel=stylesheet href=s.css>")
+            .unwrap();
+        let web_page = format!("<!DOCTYPE html><link rel=stylesheet href='{}'>", url("s.css"));
+        let server = server(&[("/", Route::ok("text/html", web_page))]);
+        let (mut web_contents, host_rx) = tab();
+        let main = web_contents.devtools_frame_token();
+        let failed = |web_contents: &mut WebContents| {
+            let latest = web_contents.latest_navigation_id();
+            wait_for(web_contents, &host_rx, |msg| match msg {
+                RendererHostMsg::DidFinishLoad {
+                    navigation_id,
+                    failed_subresources,
+                    ..
+                } if *navigation_id == latest => Some(failed_subresources.clone()),
+                _ => None,
+            })
+        };
+        web_contents.navigate(url("one.html"));
+        let mut children = HashMap::new();
+        while children.len() < 2 {
+            let (child, committed) =
+                wait_for(&mut web_contents, &host_rx, |msg| child_commit(main, msg));
+            children.insert(committed, child);
+        }
+        let opens = |name: &str| {
+            web_contents
+                .frame_tree()
+                .may_open_local_files(children[&url(name)])
+        };
+        assert!(opens("two.html"));
+        assert!(!opens("missing.html"), "an error page");
+        assert!(failed(&mut web_contents).is_empty());
+        web_contents.navigate(server.url("/"));
+        assert_eq!(failed(&mut web_contents), [url("s.css")]);
+        web_contents.shutdown();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_new_document_resets_the_cursor() {
         let server = server(&[
@@ -3510,6 +3573,254 @@ document.querySelector('base').setAttribute('href', '/later/');
         web_contents.shutdown();
     }
 
+    /// Waits for `wanted`, handing every event on as the embedder does;
+    /// with it, the navigations that started meanwhile, as the embedder
+    /// hears of them.
+    fn wait_with_starts<T>(
+        web_contents: &mut WebContents,
+        host_rx: &Receiver<ContentsEvent>,
+        mut wanted: impl FnMut(&RendererHostMsg) -> Option<T>,
+    ) -> (T, Vec<browser::NavigationStarted>) {
+        let mut started = Vec::new();
+        loop {
+            let event = host_rx.recv_timeout(TIMEOUT).expect("events come");
+            if let ContentsEvent::NavigationStarted(navigation) = &event {
+                started.push(navigation.clone());
+            }
+            if let Some(msg) = renderer_message(web_contents, event) {
+                web_contents.on_renderer_message(&msg);
+                if let Some(found) = wanted(&msg) {
+                    return (found, started);
+                }
+            }
+        }
+    }
+
+    /// The child frame `msg` tells the browser it committed, and the URL.
+    fn child_commit(main: protocol::FrameToken, msg: &RendererHostMsg) -> Option<(protocol::FrameToken, String)> {
+        match msg {
+            RendererHostMsg::DidCommitNavigation { frame, url, .. } if *frame != main => {
+                Some((*frame, url.clone()))
+            }
+            _ => None,
+        }
+    }
+
+    /// A child frame's document is the browser's to load, as its iframe's
+    /// `src` asks (`BeginNavigation` of it, its parent asking): its
+    /// navigation starts (for DevTools), it commits in the child frame, and
+    /// the frame tree has its URL. Its parent's `load` waits for it.
+    #[test]
+    fn a_child_frames_document_is_the_browsers_to_load() {
+        let html = format!(
+            "{}<iframe src=/child></iframe>",
+            after_load("report(document.querySelector('iframe').contentDocument.title)")
+        );
+        let server = server(&[
+            ("/", Route::ok("text/html", html)),
+            ("/child", Route::ok("text/html", "<title>child</title>")),
+        ]);
+        let (mut web_contents, host_rx) = tab();
+        let main = web_contents.devtools_frame_token();
+        web_contents.navigate(server.url("/"));
+        let mut asked = None;
+        let ((child, url), started) = wait_with_starts(&mut web_contents, &host_rx, |msg| {
+            if let RendererHostMsg::BeginNavigation {
+                frame, initiator, ..
+            } = msg
+                && *frame != main
+            {
+                asked = Some((*frame, *initiator));
+            }
+            child_commit(main, msg)
+        });
+        assert_eq!(url, server.url("/child"));
+        assert_eq!(asked, Some((child, main)), "its parent asked");
+        assert_eq!(web_contents.frame_tree().url(child), Some(url.as_str()));
+        let navigation = started
+            .iter()
+            .find(|navigation| navigation.frame == child)
+            .expect("its navigation started");
+        assert!(!navigation.main_frame && navigation.loads, "{navigation:?}");
+        assert_eq!(navigation.url, url);
+        // Not the tab's: its URL and history are its main frame's.
+        assert_eq!(web_contents.url(), Some(server.url("/").as_str()));
+        assert_eq!(history(&web_contents), (vec![server.url("/")], Some(0)));
+        assert_eq!(report(&mut web_contents, &host_rx), "child");
+        web_contents.shutdown();
+    }
+
+    /// What a page may not navigate a child frame to goes nowhere, and its
+    /// parent's `load` doesn't wait for it (`NavigationDropped`): a web
+    /// page's child frame opens no local file. A `data:` URL it may have.
+    #[test]
+    fn a_child_frames_navigation_the_browser_refuses_goes_nowhere() {
+        // Nothing else runs once the browser has refused it: what ends the
+        // wait is the renderer hearing of it.
+        let refused = "<!DOCTYPE html><script>onload = () => location.href = '/report?loaded'</script>\
+                       <iframe src=file:///etc/hosts></iframe>";
+        let data = "<!DOCTYPE html><iframe src='data:text/html,<title>d</title>'></iframe>";
+        let server = server(&[("/", Route::ok("text/html", refused)), ("/data", Route::ok("text/html", data))]);
+        let (mut web_contents, host_rx) = tab();
+        let main = web_contents.devtools_frame_token();
+        web_contents.navigate(server.url("/"));
+        let (report, started) = wait_with_starts(&mut web_contents, &host_rx, |msg| {
+            assert!(child_commit(main, msg).is_none(), "{msg:?}");
+            reported(msg)
+        });
+        assert_eq!(report, "loaded");
+        assert!(
+            started.iter().all(|navigation| !navigation.url.starts_with("file:")),
+            "{started:?}"
+        );
+        web_contents.navigate(server.url("/data"));
+        let (_, url) = wait_for(&mut web_contents, &host_rx, |msg| child_commit(main, msg));
+        assert_eq!(url, "data:text/html,<title>d</title>");
+        web_contents.shutdown();
+    }
+
+    /// A child frame's failed navigation commits the error page, of no
+    /// origin: its parent, of the origin that failed, can't read it. The
+    /// browser hears of the URL that failed.
+    #[test]
+    fn a_child_frames_failed_navigation_commits_an_error_page_of_no_origin() {
+        let html = format!(
+            "{}<iframe src=/loop></iframe>",
+            after_load("report(`${document.querySelector('iframe').contentDocument === null}`)")
+        );
+        // Redirected for good: `ERR_TOO_MANY_REDIRECTS`, of the parent's
+        // origin.
+        let server = server(&[
+            ("/", Route::ok("text/html", html)),
+            ("/loop", Route::redirect(302, "/loop")),
+        ]);
+        let failed = server.url("/loop");
+        let (mut web_contents, host_rx) = tab();
+        let main = web_contents.devtools_frame_token();
+        web_contents.navigate(server.url("/"));
+        let (child, url) = wait_for(&mut web_contents, &host_rx, |msg| child_commit(main, msg));
+        assert_eq!(url, failed);
+        assert_eq!(web_contents.frame_tree().url(child), Some(failed.as_str()));
+        assert!(!web_contents.frame_tree().may_open_local_files(child));
+        assert_eq!(report(&mut web_contents, &host_rx), "true");
+        web_contents.shutdown();
+    }
+
+    /// A child frame's `location.reload()` is the browser's to load, from
+    /// the URL it has for the frame: its document loaded again, a reload.
+    #[test]
+    fn a_child_frames_reload_goes_through_the_browser() {
+        let child = "<script>onload = () => {\
+                       if (performance.getEntriesByType('navigation')[0].type == 'reload')\
+                         parent.report('reloaded');\
+                     }</script>";
+        let html = format!(
+            "{}<iframe src=/child></iframe>",
+            after_load("document.querySelector('iframe').contentWindow.location.reload()")
+        );
+        let server = server(&[
+            ("/", Route::ok("text/html", html)),
+            ("/child", Route::ok("text/html", child)),
+        ]);
+        let (mut web_contents, host_rx) = tab();
+        let main = web_contents.devtools_frame_token();
+        web_contents.navigate(server.url("/"));
+        let mut reloads = 0;
+        let report = wait_for(&mut web_contents, &host_rx, |msg| {
+            if let RendererHostMsg::BeginNavigation {
+                frame,
+                kind: BeginNavigationKind::Reload,
+                ..
+            } = msg
+                && *frame != main
+            {
+                reloads += 1;
+            }
+            reported(msg)
+        });
+        assert_eq!(report, "reloaded");
+        assert_eq!(reloads, 1);
+        let loads = server.requests().iter().filter(|r| r.target == "/child").count();
+        assert_eq!(loads, 2);
+        web_contents.shutdown();
+    }
+
+    /// The browser drops a child frame's navigation another of its own
+    /// replaced (`NavigationDropped`): the frame waits for the later
+    /// still, and its parent's `load` with it.
+    #[test]
+    fn a_replaced_child_navigation_dropped_leaves_the_later() {
+        let html = format!(
+            "{}<iframe src=/slow></iframe><script>document.querySelector('iframe').src = '/b'</script>",
+            after_load("report(document.querySelector('iframe').contentDocument.title)")
+        );
+        let server = server(&[
+            ("/", Route::ok("text/html", html)),
+            (
+                "/slow",
+                Route::ok("text/html", "<title>slow</title>").with_delay(Duration::from_millis(300)),
+            ),
+            (
+                "/b",
+                Route::ok("text/html", "<title>b</title>").with_delay(Duration::from_millis(100)),
+            ),
+        ]);
+        let (mut web_contents, host_rx) = tab();
+        web_contents.navigate(server.url("/"));
+        assert_eq!(report(&mut web_contents, &host_rx), "b");
+        web_contents.shutdown();
+    }
+
+    /// A child frame that asked for another navigation since takes only
+    /// the later one's commit: one the browser sent before it heard of the
+    /// later is dropped, whatever comes of it.
+    #[test]
+    fn a_child_frame_commits_its_latest_navigation_alone() {
+        // `/b` asked for while `/a` loads (which the page's `load` waits for).
+        let html = "<!DOCTYPE html><iframe src=/a></iframe>\
+                    <script>setTimeout(() => document.querySelector('iframe').src = '/b', 50)</script>";
+        let server = server(&[
+            ("/", Route::ok("text/html", html)),
+            ("/a", Route::ok("text/html", "<title>a</title>").with_delay(Duration::from_millis(300))),
+            ("/b", Route::ok("text/html", "<title>b</title>")),
+        ]);
+        let (mut web_contents, host_rx) = tab();
+        let main = web_contents.devtools_frame_token();
+        web_contents.navigate(server.url("/"));
+        // The renderer's ask for `/b` and `/a`'s end, held.
+        let mut a = None;
+        let mut b = None;
+        while a.is_none() || b.is_none() {
+            let event = host_rx.recv_timeout(TIMEOUT).expect("events come");
+            match event {
+                ContentsEvent::NavigationCompleted { frame, .. } if frame != main => a = Some(event),
+                ContentsEvent::Renderer {
+                    msg: ref msg @ RendererHostMsg::BeginNavigation { frame, .. },
+                    ..
+                } if frame != main && b.is_none() && !matches!(
+                    msg,
+                    RendererHostMsg::BeginNavigation { kind: BeginNavigationKind::To { url, .. }, .. }
+                        if url.ends_with("/a")
+                ) =>
+                {
+                    b = Some(msg.clone())
+                }
+                event => {
+                    if let Some(msg) = renderer_message(&mut web_contents, event) {
+                        assert!(child_commit(main, &msg).is_none(), "{msg:?}");
+                        web_contents.on_renderer_message(&msg);
+                    }
+                }
+            }
+        }
+        // `/a` commits as the browser knows of no other; then `/b` is asked.
+        assert!(renderer_message(&mut web_contents, a.unwrap()).is_none());
+        web_contents.on_renderer_message(&b.unwrap());
+        let (_, url) = wait_for(&mut web_contents, &host_rx, |msg| child_commit(main, msg));
+        assert_eq!(url, server.url("/b"));
+        web_contents.shutdown();
+    }
+
     /// What the frame tree can't take is a bad message: the renderer is
     /// ended, as `about:crash` ends it, its tab crashed, the tree the main
     /// frame alone; the next navigation launches another renderer, whose
@@ -3534,7 +3845,7 @@ document.querySelector('base').setAttribute('href', '/later/');
         // A parent not there, a token in use, a frame not there gone, the
         // main frame gone, a navigation of or by a frame not there: each to
         // the renderer of the time.
-        let bads: [fn(protocol::FrameToken, protocol::FrameToken) -> RendererHostMsg; 6] = [
+        let bads: [fn(protocol::FrameToken, protocol::FrameToken) -> RendererHostMsg; 7] = [
             |_, _| RendererHostMsg::DidCreateChildFrame {
                 parent: protocol::FrameToken([0xEE; 16]),
                 frame: protocol::FrameToken([0xEF; 16]),
@@ -3553,12 +3864,20 @@ document.querySelector('base').setAttribute('href', '/later/');
                 initiator: main,
                 id: 1,
                 kind: BeginNavigationKind::Reload,
+                devtools_initiator: None,
             },
             |main, _| RendererHostMsg::BeginNavigation {
                 frame: main,
                 initiator: protocol::FrameToken([0xEE; 16]),
                 id: 1,
                 kind: BeginNavigationKind::Reload,
+                devtools_initiator: None,
+            },
+            // A commit in a frame not there.
+            |_, _| RendererHostMsg::DidCommitNavigation {
+                frame: protocol::FrameToken([0xEE; 16]),
+                navigation_id: 1,
+                url: "https://a.test/".into(),
             },
         ];
         for bad in bads {
@@ -3658,9 +3977,9 @@ document.querySelector('base').setAttribute('href', '/later/');
     }
 
     /// A child frame's navigation to a fragment happens in it (its own
-    /// `hashchange`), but isn't in the session history; its navigation to
-    /// another document is the renderer's to load. The browser hears of
-    /// neither.
+    /// `hashchange`), and the browser doesn't hear of it; its navigation
+    /// to another document is the browser's to load (`BeginNavigation` of
+    /// the child frame, asked by it). Neither is in the session history.
     #[test]
     fn a_child_frame_s_location() {
         let child = "<script>\
@@ -3671,17 +3990,36 @@ document.querySelector('base').setAttribute('href', '/later/');
         let server = server(&[("/", Route::ok("text/html", html))]);
         let (mut web_contents, host_rx) = tab();
         let url = server.url("/");
+        let main = web_contents.devtools_frame_token();
         web_contents.navigate(&url);
+        let mut asked = Vec::new();
         assert_eq!(
-            wait_for(&mut web_contents, &host_rx, |msg| match msg {
-                RendererHostMsg::DidCommitSameDocumentNavigation { url, .. } => {
-                    panic!("the browser heard of {url}")
+            wait_for(&mut web_contents, &host_rx, |msg| {
+                // The main frame's report.
+                if let Some(report) = reported(msg) {
+                    return Some(report);
                 }
-                _ => reported(msg)
-                    .or_else(|| { asked_url(msg).map(|url| panic!("the browser heard of {url}")) }),
+                match msg {
+                    RendererHostMsg::DidCommitSameDocumentNavigation { url, .. } => {
+                        panic!("the browser heard of {url}")
+                    }
+                    RendererHostMsg::BeginNavigation {
+                        frame,
+                        initiator,
+                        kind: BeginNavigationKind::To { url, .. },
+                        ..
+                    } => {
+                        assert_ne!(*frame, main, "{url}");
+                        assert_eq!(initiator, frame, "{url}");
+                        asked.push(url.clone());
+                        None
+                    }
+                    _ => None,
+                }
             }),
             "child-x"
         );
+        assert_eq!(asked, [server.url("/elsewhere")]);
         assert_eq!(history(&web_contents), (vec![url], Some(0)));
         web_contents.shutdown();
     }
@@ -4325,8 +4663,8 @@ mod query_element {
             viz.run_until(web_contents, &host_rx, "the click's acks", |_, msg| {
                 match msg {
                     Some(RendererHostMsg::InputEventAck { .. }) => acks += 1,
-                    Some(msg) => opened.extend(asked_url(msg).map(str::to_owned)),
-                    None => {}
+                    Some(RendererHostMsg::OpenUrl { url, .. }) => opened.push(url.clone()),
+                    _ => {}
                 }
                 acks == 2
             });
@@ -4357,7 +4695,7 @@ mod query_element {
             "the child frame scrolled to #t"
         );
         // A link to another document, just below `#t`: the child frame
-        // navigates there, the tab doesn't.
+        // navigates there (the browser loads it), the tab doesn't.
         click(&mut web_contents, 30.0, 20.0, MouseButton::Left, 6);
         drop(click);
         assert_eq!(opened, [server.url("/child#t")], "only the new tab's");
