@@ -22,6 +22,9 @@ use crate::navigation_request::NavigationRequest;
 struct FrameTreeNode {
     parent: Option<FrameToken>,
     children: Vec<FrameToken>,
+    /// Its place in the tab's session history (`unique_name`): empty for
+    /// the main frame.
+    unique_name: String,
     /// Its document's URL, as the renderer last committed one the browser
     /// loaded (a failed one's for an error page); none before (its initial
     /// `about:blank`). The `about:` documents a child frame's renderer
@@ -71,10 +74,11 @@ impl CommittedOrigin {
 }
 
 impl FrameTreeNode {
-    fn new(parent: Option<FrameToken>, origin: CommittedOrigin) -> Self {
+    fn new(parent: Option<FrameToken>, unique_name: String, origin: CommittedOrigin) -> Self {
         Self {
             parent,
             children: Vec::new(),
+            unique_name,
             url: None,
             origin: origin.origin,
             local: origin.local,
@@ -135,6 +139,18 @@ impl FrameTree {
     /// asks for to a `file:` URL): it is one, or has its origin from one.
     pub fn may_open_local_files(&self, frame: FrameToken) -> bool {
         self.nodes.get(&frame).is_some_and(|node| node.local)
+    }
+
+    /// `frame`'s place in the tab's session history, which a frame of a
+    /// later document at the same place has too (Chromium's unique name):
+    /// empty for the main frame.
+    pub fn unique_name(&self, frame: FrameToken) -> Option<&str> {
+        self.nodes.get(&frame).map(|node| node.unique_name.as_str())
+    }
+
+    /// Every frame's unique name.
+    pub(crate) fn unique_names(&self) -> impl Iterator<Item = &str> {
+        self.nodes.values().map(|node| node.unique_name.as_str())
     }
 
     /// `frame`'s document's origin, as the browser knows it.
@@ -298,16 +314,25 @@ impl FrameTree {
     }
 
     /// `frame` was made, the last child of `parent`
-    /// (`FrameTreeNode::AddChild`). A parent the tree doesn't have, or a
-    /// token one of its frames has already, is a bad message.
+    /// (`FrameTreeNode::AddChild`), named `name`, by script running if
+    /// `created_by_script`: its unique name comes of them. A parent the
+    /// tree doesn't have, or a token one of its frames has already, is a
+    /// bad message.
     pub fn add_child(
         &mut self,
         parent: FrameToken,
         frame: FrameToken,
+        name: &str,
+        created_by_script: bool,
     ) -> Result<(), BadMessageReason> {
         if self.nodes.contains_key(&frame) {
             return Err(BadMessageReason::FrameTokenInUse);
         }
+        if !self.nodes.contains_key(&parent) {
+            return Err(BadMessageReason::FrameParentUnknown);
+        }
+        let unique_name =
+            crate::unique_name::for_new_child(self, parent, name, created_by_script);
         let Some(node) = self.nodes.get_mut(&parent) else {
             return Err(BadMessageReason::FrameParentUnknown);
         };
@@ -318,7 +343,7 @@ impl FrameTree {
             local: node.local,
         };
         self.nodes
-            .insert(frame, FrameTreeNode::new(Some(parent), origin));
+            .insert(frame, FrameTreeNode::new(Some(parent), unique_name, origin));
         Ok(())
     }
 
@@ -355,7 +380,7 @@ impl FrameTree {
             .get_mut(&self.root)
             .and_then(|root| root.navigation.take());
         self.nodes.clear();
-        let mut root = FrameTreeNode::new(None, CommittedOrigin::opaque());
+        let mut root = FrameTreeNode::new(None, String::new(), CommittedOrigin::opaque());
         root.navigation = navigation;
         self.nodes.insert(self.root, root);
     }
@@ -399,10 +424,10 @@ mod tests {
         let mut tree = FrameTree::new(token(0));
         assert_eq!(tree.root(), token(0));
         assert_eq!(tree.len(), 1);
-        tree.add_child(token(0), token(1)).unwrap();
-        tree.add_child(token(0), token(2)).unwrap();
-        tree.add_child(token(1), token(3)).unwrap();
-        tree.add_child(token(3), token(4)).unwrap();
+        tree.add_child(token(0), token(1), "", false).unwrap();
+        tree.add_child(token(0), token(2), "", false).unwrap();
+        tree.add_child(token(1), token(3), "", false).unwrap();
+        tree.add_child(token(3), token(4), "", false).unwrap();
         assert_eq!(tree.children(token(0)), [token(1), token(2)]);
         assert_eq!(tree.children(token(1)), [token(3)]);
         assert_eq!(tree.parent(token(4)), Some(token(3)));
@@ -415,7 +440,7 @@ mod tests {
         }
         assert_eq!(tree.len(), 2);
         // Gone, its token may be made again.
-        tree.add_child(token(2), token(1)).unwrap();
+        tree.add_child(token(2), token(1), "", false).unwrap();
         assert_eq!(tree.parent(token(1)), Some(token(2)));
         tree.reset();
         assert_eq!(tree.len(), 1);
@@ -439,7 +464,7 @@ mod tests {
         tree.did_commit(token(0), 1, "file:///a.html").unwrap();
         assert_eq!(tree.url(token(0)), Some("file:///a.html"));
         assert!(tree.may_open_local_files(token(0)));
-        tree.add_child(token(0), token(1)).unwrap();
+        tree.add_child(token(0), token(1), "", false).unwrap();
         assert!(tree.may_open_local_files(token(1)), "its parent's");
         assert_eq!(tree.url(token(1)), None);
         // A commit the browser didn't send (another number) isn't local.
@@ -456,7 +481,7 @@ mod tests {
         assert!(!tree.may_open_local_files(token(0)));
         assert_eq!(tree.origin(token(0)), Some(&web));
         assert_ne!(tree.origin(token(1)), Some(&web), "an opaque one");
-        tree.add_child(token(0), token(2)).unwrap();
+        tree.add_child(token(0), token(2), "", false).unwrap();
         assert!(!tree.may_open_local_files(token(2)), "its parent's");
         assert_eq!(tree.origin(token(2)), Some(&web), "its parent's");
         // Its iframe's `srcdoc`, a child frame's alone.
@@ -485,7 +510,7 @@ mod tests {
     #[test]
     fn a_document_navigates_within_itself_as_html_lets_it() {
         let mut tree = FrameTree::new(token(0));
-        tree.add_child(token(0), token(1)).unwrap();
+        tree.add_child(token(0), token(1), "", false).unwrap();
         let cases = [
             (token(1), "about:blank#x", true),
             (token(1), "about:blank?q", false),
@@ -545,17 +570,17 @@ mod tests {
     #[test]
     fn what_the_tree_cant_take_is_a_bad_message() {
         let mut tree = FrameTree::new(token(0));
-        tree.add_child(token(0), token(1)).unwrap();
+        tree.add_child(token(0), token(1), "", false).unwrap();
         assert_eq!(
-            tree.add_child(token(9), token(2)),
+            tree.add_child(token(9), token(2), "", false),
             Err(BadMessageReason::FrameParentUnknown)
         );
         assert_eq!(
-            tree.add_child(token(0), token(1)),
+            tree.add_child(token(0), token(1), "", false),
             Err(BadMessageReason::FrameTokenInUse)
         );
         assert_eq!(
-            tree.add_child(token(1), token(0)),
+            tree.add_child(token(1), token(0), "", false),
             Err(BadMessageReason::FrameTokenInUse)
         );
         assert_eq!(

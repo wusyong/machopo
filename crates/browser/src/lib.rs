@@ -24,6 +24,7 @@ pub mod loader;
 mod navigation_controller;
 mod navigation_request;
 mod render_process_host;
+mod unique_name;
 mod user_agent;
 mod web_contents;
 

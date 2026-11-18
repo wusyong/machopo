@@ -514,10 +514,15 @@ pub enum RendererHostMsg {
     },
     /// `FrameHost::CreateChildFrame`: the renderer made child frame `frame`
     /// of `parent` (an iframe inserted), at once and on its own, as script
-    /// reads its window next. The browser's frame tree takes it.
+    /// reads its window next. The browser's frame tree takes it. `name`:
+    /// its iframe's `name` then (its name from now on; empty without one);
+    /// `created_by_script`: script running inserted it (not the parser).
+    /// What its place in the session history goes by comes of them.
     DidCreateChildFrame {
         parent: crate::FrameToken,
         frame: crate::FrameToken,
+        name: String,
+        created_by_script: bool,
     },
     /// `FrameHost::DidChangeSrcDoc`: child frame `frame`'s iframe's `srcdoc`
     /// is `srcdoc` now (empty without one), as the frame was made and as

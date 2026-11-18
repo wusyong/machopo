@@ -3481,7 +3481,7 @@ document.querySelector('base').setAttribute('href', '/later/');
         let (mut made, mut gone) = (Vec::new(), Vec::new());
         assert_eq!(
             wait_for(&mut web_contents, &host_rx, |msg| match msg {
-                RendererHostMsg::DidCreateChildFrame { parent, frame } => {
+                RendererHostMsg::DidCreateChildFrame { parent, frame, .. } => {
                     made.push((*parent, *frame));
                     None
                 }
@@ -3926,6 +3926,46 @@ document.querySelector('base').setAttribute('href', '/later/');
         web_contents.shutdown();
     }
 
+    /// The renderer tells the browser each child frame's name as it is
+    /// made (its iframe's `name` then) and whether script made it, which
+    /// its unique name comes of: a parser's iframe's its name, a nameless
+    /// one's its path, script's a random one.
+    #[test]
+    fn a_child_frame_is_told_with_its_name() {
+        let html = "<!DOCTYPE html><iframe name=a></iframe><iframe></iframe>\
+                    <script>document.body.append(document.createElement('iframe'));\
+                    document.querySelector('iframe').name = 'renamed';</script>";
+        let server = server(&[("/", Route::ok("text/html", html))]);
+        let (mut web_contents, host_rx) = tab();
+        web_contents.navigate(server.url("/"));
+        let mut made = Vec::new();
+        wait_for(&mut web_contents, &host_rx, |msg| {
+            if let RendererHostMsg::DidCreateChildFrame {
+                frame,
+                name,
+                created_by_script,
+                ..
+            } = msg
+            {
+                made.push((*frame, name.clone(), *created_by_script));
+            }
+            (made.len() == 3).then_some(())
+        });
+        let told: Vec<(&str, bool)> = made
+            .iter()
+            .map(|(_, name, script)| (name.as_str(), *script))
+            .collect();
+        assert_eq!(told, [("a", false), ("", false), ("", true)]);
+        let tree = web_contents.frame_tree();
+        let names: Vec<&str> = made
+            .iter()
+            .map(|(frame, ..)| tree.unique_name(*frame).unwrap())
+            .collect();
+        assert_eq!(names[..2], ["a", "<!--framePath //<!--frame1-->-->"]);
+        assert!(names[2].starts_with("<!--dynamicFrame"), "{}", names[2]);
+        web_contents.shutdown();
+    }
+
     /// The browser drops a child frame's navigation another of its own
     /// replaced (`NavigationDropped`): the frame waits for the later
     /// still, and its parent's `load` with it.
@@ -4038,10 +4078,14 @@ document.querySelector('base').setAttribute('href', '/later/');
             |_, _| RendererHostMsg::DidCreateChildFrame {
                 parent: protocol::FrameToken([0xEE; 16]),
                 frame: protocol::FrameToken([0xEF; 16]),
+                name: String::new(),
+                created_by_script: false,
             },
             |main, child| RendererHostMsg::DidCreateChildFrame {
                 parent: main,
                 frame: child,
+                name: String::new(),
+                created_by_script: false,
             },
             |_, _| RendererHostMsg::DidDetachFrame {
                 frame: protocol::FrameToken([0xEE; 16]),

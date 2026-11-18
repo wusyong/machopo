@@ -774,6 +774,8 @@ impl RenderThread {
                         parent,
                         owner,
                         document,
+                        name,
+                        created_by_script,
                     } => {
                         // The browser's frame tree takes it, whatever the
                         // renderer does with it: it hears of its going.
@@ -787,6 +789,8 @@ impl RenderThread {
                             let _ = self.to_browser.send(RendererHostMsg::DidCreateChildFrame {
                                 parent,
                                 frame: token,
+                                name,
+                                created_by_script,
                             });
                         }
                         self.children.tokens.insert(frame, token);

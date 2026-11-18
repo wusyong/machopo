@@ -52,13 +52,17 @@ pub enum ChildNavigation {
 #[derive(Debug, Clone)]
 pub enum FrameRequest {
     /// `frame` was made, the child of `parent`, for iframe `owner`: its
-    /// initial `about:blank`, `document`; its token `token`.
+    /// initial `about:blank`, `document`; its token `token`; its name, its
+    /// iframe's `name` then; whether script running made it (not the
+    /// parser).
     Created {
         frame: FrameId,
         token: FrameToken,
         parent: FrameId,
         owner: NodeRoot,
         document: NodeRoot,
+        name: String,
+        created_by_script: bool,
     },
     /// `frame` is to navigate (its host loads the document and makes it
     /// its active one: `ScriptEngine::create_window`).

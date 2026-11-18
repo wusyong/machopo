@@ -1257,8 +1257,16 @@ impl WebContents {
                 self.frame_tree.reset();
             }
             RendererHostMsg::RendererReady => {}
-            RendererHostMsg::DidCreateChildFrame { parent, frame } => {
-                if let Err(reason) = self.frame_tree.add_child(*parent, *frame) {
+            RendererHostMsg::DidCreateChildFrame {
+                parent,
+                frame,
+                name,
+                created_by_script,
+            } => {
+                if let Err(reason) =
+                    self.frame_tree
+                        .add_child(*parent, *frame, name, *created_by_script)
+                {
                     self.received_bad_message(reason);
                 }
             }

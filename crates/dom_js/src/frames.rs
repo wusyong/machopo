@@ -208,6 +208,10 @@ pub(crate) fn create_child(scope: &mut Scope<'_, '_, '_>, owner: &NodeRoot) -> O
             .read(|cx| cx.node_id(cx.document_of(owner.get(cx.gc))));
         state.frames.of_document(document)?.id
     };
+    // Script on the stack made it, not the parser (Blink's
+    // `is_created_by_script`), before any of its own realm's.
+    let created_by_script = v8::StackTrace::current_stack_trace(scope.scope(), 1)
+        .is_some_and(|stack| stack.get_frame_count() > 0);
     let context = create_window_realm(scope.scope(), "about:blank", None);
     // Its initial `about:blank`'s origin, its parent's.
     let token = {
@@ -254,12 +258,22 @@ pub(crate) fn create_child(scope: &mut Scope<'_, '_, '_>, owner: &NodeRoot) -> O
             true,
         )
     });
+    // Its name, its iframe's now (HTML gives the attribute to the
+    // navigable as it is made alone); whether script made it, as Blink's
+    // `is_created_by_script` (script on the stack).
+    let name = state.dom.read(|cx| {
+        cx.attribute_value_by_id(owner.get(cx.gc), dom::names::local::NAME)
+            .map(|name| name.borrow().to_string())
+            .unwrap_or_default()
+    });
     state.frames.requests.push(FrameRequest::Created {
         frame: id,
         token,
         parent,
         owner: owner.clone(),
         document: document.clone(),
+        name,
+        created_by_script,
     });
     // Its layout is there for what script reads of it next.
     if let Some(mut layout) = state.layout.take() {

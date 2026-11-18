@@ -17,7 +17,11 @@
 | 2d：`about:blank`、`about:srcdoc` 和 `DidChangeSrcDoc` | 完成 | 2026-11-18 |
 | 2e：子 frame 同一份文件內的導覽的回報 | 完成 | 2026-11-19 |
 | 2f：第 2 階段的檢查和文件 | 完成 | 2026-11-19 |
-| 3：joint session history | | |
+| 3a：iframe 的名稱和 unique name | 完成 | 2026-11-19 |
+| 3b：entry 的樹、子 frame 跨文件的導覽進歷史 | | |
+| 3c：子 frame 同一份文件內的導覽進歷史 | | |
+| 3d：上一頁、下一頁跨 frame 走 | | |
+| 3e：第 3 階段的檢查和文件 | | |
 | 4：收尾 | | |
 
 ## 驗收
@@ -106,3 +110,12 @@
 - **`test.py scenarios --window`**（階段驗收）：69 份全部通過，截圖看過 `frames`（`file:` 的頁面裡的子 frame 和孫 frame）。
 - **文件**：RFC 的「分階段」和「導覽」的設計照第 17 到 25 條補上做的時候的細節；`docs/architecture.md`、`docs/limitations.md`、`docs/test-gaps.md`、`crates/shell/README.md`、`crates/dom/README.md` 在各段已經更新，再看過一遍沒有過時的說法。
 - **之後**：`test.py` 的 `matrix`、`fuzz` 照 CLAUDE.md 由 CI 跑（這個階段沒有動到 GC）。
+
+### 3a（2026-11-19，macOS、Apple M4）
+
+- **決定的事**：第 26 到 28 條（unique name 照 Chromium 的演算法在 Browser 算；重新整理時子 frame 照 `src`；`window.name` 不在第 3 階段做，名稱只在建立時送）。查證時發現 iframe 的 `name` 屬性之後再改不會改 frame 的名稱（Blink、HTML 都是），改名只有 `window.name`，所以 3a 原本要決定的「改名的訊息」不需要了。
+- **做了什麼**：`DidCreateChildFrame` 多帶 `name`（iframe 那時的 `name`）和 `created_by_script`（dom_js 在建立子 frame 時看 V8 的 stack 上有沒有 script，Blink 的 `is_created_by_script`）；`FrameRequest::Created` 帶著它們。`browser` 的 `unique_name` 模組照 Blink 的 `UniqueNameHelper`：名稱在整頁沒有重複（不是 `_blank`）就是它，否則是 `<!--framePath //…/<!--frameN-->-->`（父 frame 往上的 unique name，到第一個路徑或 main frame 為止，加父 frame 現在的子 frame 數），還重複就加 `<!--framePosition-…`（一路到 main frame 的位置）和編號；超過 80 個 byte 的名稱換成雜湊；script 建的是 `<!--dynamicFrame` 加隨機的 128 bit。節點建立時算好，之後不變（沒有改名）。
+- **和 Chromium 不同的地方**：長名稱的雜湊是標準函式庫的 64 bit（`DefaultHasher`），Blink 是 SHA-256：machopo 沒有可以直接用的 SHA-256（rustls 帶的 aws-lc-rs 沒有公開它的 hash），而雜湊只為了不讓很長的名稱佔歷史的記憶體，兩個名稱撞了時第二個照樣檢查到重複、改用路徑，結果還是唯一的。
+- **新的測試**：`browser` 的 `unique_name::tests::a_frame_is_its_name_or_its_path`、`long_names_are_hashed_and_scripts_frames_random`（Blink 的格式：名稱、重複和 `_blank` 改用路徑、孫 frame 接著父 frame 的路徑或名稱、子 frame 拿掉之後撞到的路徑加位置和編號、長名稱的雜湊、script 的隨機名稱）；`links::a_child_frame_is_told_with_its_name`（parser 建的有名稱的、沒名稱的，script 建的；之後改 `name` 不影響）。
+- **mutation test**（10 個，全部抓到）：重複的名稱照樣用、`_blank` 當名稱、script 的 frame 用路徑、剛好 80 個 byte 的名稱也雜湊、路徑越過上一個路徑往上找、路徑的 frame 數一律是 0、撞到的路徑不加位置（`unique_name` 的單元測試）；browser 當成都是 parser 建的、renderer 不送名稱、dom_js 當成都不是 script 建的（`browser` 的新測試）。
+- **跑過的檢查**：`cargo test -p dom_api -p dom_js -p protocol -p browser -p renderer -p shell -p driver` 全部通過。
