@@ -32,6 +32,10 @@ pub struct WorkerStart {
     /// The origin of the realm that made it: what its script is fetched
     /// for (same-origin), and its own but for a `data:` URL's.
     pub owner_origin: Option<url::Origin>,
+    /// A module worker's (`type: "module"`): the credentials mode its
+    /// script graph is fetched with (`WorkerOptions`' `credentials`, by
+    /// CORS); none: a classic worker's.
+    pub module: Option<dom::ScriptCors>,
 }
 
 /// What starts the dedicated workers a realm makes and carries what goes to
@@ -89,6 +93,13 @@ pub trait WorkerGlobalHost {
     /// The `fetch()` numbered `id` aborted: its request cancelled, if it is
     /// still on its way. No response comes.
     fn cancel_fetch(&self, id: u64);
+
+    /// A module the worker's realm asks for: fetched by CORS with
+    /// `credentials`, for its owner's origin if `outside` (one of its
+    /// module worker's graph: HTML's outside settings), else its own (an
+    /// `import()`'s), its request's number given; its response comes back
+    /// as a task of the worker's (`WorkerEngine::module_fetched`).
+    fn start_module_fetch(&self, url: &Url, credentials: dom::ScriptCors, outside: bool) -> u64;
 
     /// `url` stands for `data` (`URL.createObjectURL` in the worker), for
     /// its loads and its page's, until revoked or the worker ends.
@@ -194,9 +205,10 @@ pub(crate) fn fire_worker_error<H: ScriptHost>(
 /// `new Worker(scriptURL, options)`: the URL parsed against the current
 /// realm's API base URL (a `SyntaxError` if it doesn't parse), a new
 /// `Worker` of the realm, its worker started by the host (a
-/// `NotSupportedError` if the engine was given none). `type: "module"` is
-/// a `NotSupportedError`: only classic workers run; a `type` of neither is
-/// WebIDL's `TypeError` of an enum's value.
+/// `NotSupportedError` if the engine was given none), classic or a module
+/// worker (`type: "module"`, its graph fetched with `credentials`); a
+/// `type` or `credentials` of none of their values is WebIDL's `TypeError`
+/// of an enum's value.
 pub(crate) fn construct<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
@@ -206,20 +218,26 @@ pub(crate) fn construct<'gc, O: OpFront>(
     let context = op
         .current_context(cx)
         .ok_or_else(|| dom_error(ExceptionName::NotSupported, "Workers can't be made here."))?;
-    match options.r#type.as_str() {
-        "classic" => {}
-        "module" => {
-            return Err(dom_error(
-                ExceptionName::NotSupported,
-                "Module workers aren't supported.",
-            ));
+    // In the dictionary's order (WebIDL converts its members by name).
+    let credentials = match options.credentials.as_str() {
+        "same-origin" => dom::ScriptCors::Anonymous,
+        "include" => dom::ScriptCors::UseCredentials,
+        "omit" => dom::ScriptCors::Omit,
+        other => {
+            return Err(ApiError::Type(format!(
+                "Failed to construct 'Worker': The provided value '{other}' is not a valid enum value of type RequestCredentials."
+            )));
         }
+    };
+    let module = match options.r#type.as_str() {
+        "classic" => None,
+        "module" => Some(credentials),
         other => {
             return Err(ApiError::Type(format!(
                 "Failed to construct 'Worker': The provided value '{other}' is not a valid enum value of type WorkerType."
             )));
         }
-    }
+    };
     let base = cx.context_base_url(context);
     let url = Url::options()
         .base_url(base.as_ref())
@@ -234,6 +252,7 @@ pub(crate) fn construct<'gc, O: OpFront>(
         url,
         name: options.name.clone(),
         owner_origin: cx.context_origin(context),
+        module,
     };
     let host = op
         .worker_host()
@@ -279,8 +298,9 @@ pub(crate) fn terminate<'gc, O: OpFront>(
     Ok(())
 }
 
-/// `importScripts(...urls)`: each URL parsed against the worker's API base
-/// URL first (a `SyntaxError` if one doesn't parse, nothing fetched), then
+/// `importScripts(...urls)`: a `TypeError` in a module worker (HTML's);
+/// else each URL parsed against the worker's API base URL first (a
+/// `SyntaxError` if one doesn't parse, nothing fetched), then
 /// each fetched and run in turn (`ScriptHost::import_script`), what one
 /// throws, or that it couldn't be had, ending it there.
 pub(crate) fn import_scripts<H: ScriptHost>(
@@ -288,10 +308,18 @@ pub(crate) fn import_scripts<H: ScriptHost>(
     this: Persistent<WorkerGlobalScope>,
     urls: Vec<String>,
 ) -> Result<(), ApiError> {
-    let base = host.read(|cx| {
-        let context = cx.global_context(GlobalRef::WorkerGlobal(this.get(cx.gc)));
-        cx.context_base_url(context)
+    let (base, module) = host.read(|cx| {
+        let global = this.get(cx.gc);
+        let context = cx.global_context(GlobalRef::WorkerGlobal(global));
+        (cx.context_base_url(context), cx.worker_global_is_module(global))
     });
+    // HTML: a module worker's global imports no classic scripts.
+    if module {
+        return Err(ApiError::Type(
+            "Failed to execute 'importScripts' on 'WorkerGlobalScope': Module scripts don't support importScripts()."
+                .to_owned(),
+        ));
+    }
     let parsed = urls
         .iter()
         .map(|url| {

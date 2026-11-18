@@ -1745,10 +1745,7 @@ impl RenderThread {
         fetching.initiator = initiator;
         if let Some(cors) = request.cors {
             fetching.mode = RequestMode::Cors;
-            fetching.credentials = match cors {
-                dom::ScriptCors::Anonymous => CredentialsMode::SameOrigin,
-                dom::ScriptCors::UseCredentials => CredentialsMode::Include,
-            };
+            fetching.credentials = crate::loader::script_credentials(cors);
         }
         self.send_request_with_initiator(frame, fetching, |this| this.initiator(frame, &asker))
     }
@@ -3684,7 +3681,7 @@ impl RenderThread {
         // A script the DOM queued: handed back, its turn a task of its own.
         if let Some(fetching) = self.script_fetches.remove(&request_id) {
             if fetching.module {
-                let module = module_loaded(result);
+                let module = crate::loader::module_loaded(result);
                 if module.is_none() {
                     self.note_failed(fetching.frame, failed_url(result, asked));
                 }
@@ -4185,24 +4182,6 @@ fn failed_url(result: &LoadResult, asked: Option<&str>) -> String {
         Ok(response) => response.url.clone(),
         Err(error) => asked.map_or_else(|| error.detail.clone(), str::to_owned),
     }
-}
-
-/// A module's response as HTML's "fetch a single module script" takes it:
-/// none for a failed load (a network error, a CORS failure), a status
-/// that isn't ok, or a MIME type that isn't JavaScript's; else its text,
-/// UTF-8, and its URL after redirects (its base URL).
-fn module_loaded(result: &LoadResult) -> Option<dom_api::module::FetchedModule> {
-    let response = result.as_ref().ok()?;
-    if !(200..300).contains(&response.status)
-        || !dom_api::is_javascript_mime_type(&response.mime_type)
-    {
-        return None;
-    }
-    let (source, _) = encoding_rs::UTF_8.decode_with_bom_removal(&response.body);
-    Some(dom_api::module::FetchedModule {
-        url: Url::parse(&response.url).ok()?,
-        source: source.into_owned(),
-    })
 }
 
 /// A sheet's text, decoded: none for a failed load, an error status, or

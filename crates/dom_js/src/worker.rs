@@ -77,6 +77,30 @@ impl V8WorkerEngine {
         })
     }
 
+    /// Its module worker's graph, if it was fetched since the last ask:
+    /// run if it can be (HTML's "run a worker": a module script with no
+    /// error to rethrow, its evaluation's rejection reported at the
+    /// global; a microtask checkpoint after). Whether it ran.
+    fn module_graph_done(&mut self) -> Option<bool> {
+        let done = self.state().worker_realm.as_mut()?.graph.take()?;
+        let (Some(root), None) = (done.root, done.parse_error) else {
+            return Some(false);
+        };
+        self.in_realm(|scope| {
+            if let Some(mut scope) = state::scope(scope) {
+                let _entry = bindings::trace::enter_script();
+                crate::modules::run_module_script(
+                    &mut scope,
+                    &crate::modules::Realm::Worker,
+                    root.index(),
+                );
+                state::report(&mut scope);
+            }
+        });
+        self.perform_microtask_checkpoint();
+        Some(true)
+    }
+
     /// A microtask checkpoint (HTML's "clean up after running script"),
     /// the mutation observers' delivery queued first.
     fn perform_microtask_checkpoint(&mut self) {
@@ -173,6 +197,9 @@ fn create_worker_realm<'s>(
                 dom::DomString::new(&params.name),
             );
             cx.set_context_time_origin(cx.worker_global_context(global), params.time_origin);
+            if params.module {
+                cx.set_worker_global_module(global);
+            }
             wrap_new_object(&mut no_gc, cx, proxy, dom::ObjectRef::WorkerGlobal(global));
             Persistent::new(cx.gc, global)
         })
@@ -263,13 +290,17 @@ impl WorkerEngine for V8WorkerEngine {
             .dom
             .set_agent(&params.user_agent, params.webdriver);
         let web_tests = self.settings.web_tests;
-        let isolate = self.data.isolate();
-        v8::scope!(let scope, isolate);
-        let bootstrap = v8::Local::new(scope, &self.bootstrap);
-        let scope = &mut v8::ContextScope::new(scope, bootstrap);
-        let (context, global) = create_worker_realm(scope, params, web_tests);
-        self.context = Some(v8::Global::new(scope, context));
-        self.global = Some(global);
+        let (context, global) = {
+            let isolate = self.data.isolate();
+            v8::scope!(let scope, isolate);
+            let bootstrap = v8::Local::new(scope, &self.bootstrap);
+            let scope = &mut v8::ContextScope::new(scope, bootstrap);
+            let (context, global) = create_worker_realm(scope, params, web_tests);
+            (v8::Global::new(scope, context), global)
+        };
+        self.context = Some(context.clone());
+        self.global = Some(global.clone());
+        self.state().worker_realm = Some(crate::modules::WorkerRealm::new(context, global));
     }
 
     fn run_classic_script(&mut self, script: &ClassicScript<'_>) -> bool {
@@ -446,5 +477,48 @@ impl WorkerEngine for V8WorkerEngine {
                 .dom
                 .mutate(|cx| cx.terminate_worker_object(worker.get(cx.gc)));
         }
+    }
+
+    fn run_module_graph(
+        &mut self,
+        url: &url::Url,
+        root: dom_api::module::FetchedModule,
+        credentials: dom::ScriptCors,
+    ) -> Option<bool> {
+        self.in_realm(|scope| {
+            let Some(mut scope) = state::scope(scope) else {
+                return;
+            };
+            crate::modules::with_modules(
+                &mut scope,
+                &crate::modules::Realm::Worker,
+                false,
+                dom::LoadInitiator::Other,
+                |map, _, host| map.fetch_worker_tree(host, url.clone(), root, credentials),
+            );
+            state::report(&mut scope);
+        })?;
+        self.module_graph_done()
+    }
+
+    fn module_fetched(
+        &mut self,
+        id: u64,
+        response: Option<dom_api::module::FetchedModule>,
+    ) -> Option<bool> {
+        let found = self
+            .in_realm(|scope| {
+                let mut scope = state::scope(scope)?;
+                let found = crate::modules::module_fetched(&mut scope, id, response);
+                state::report(&mut scope);
+                Some(found)
+            })
+            .flatten()
+            .unwrap_or(false);
+        // A task's end: an `import()` it settled reacts now.
+        if found {
+            self.perform_microtask_checkpoint();
+        }
+        self.module_graph_done()
     }
 }

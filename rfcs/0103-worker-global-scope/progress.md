@@ -16,12 +16,12 @@
 | 1b-5：`renderer` 的 worker 的 thread 和 event loop、兩個方向的 `postMessage`、`terminate()`、`close()`、`onerror` | 做完（第 19 條；主 script 暫時只有 `data:` 的網址） | 2026-11-17 |
 | 1b-6：Browser 的登記和主 script 的載入、子資源的請求帶 client、`importScripts()` | 做完（第 20 條） | 2026-11-17 |
 | 1b-7：WPT 的 `workers/`、情境、`about:demo`、文件、整個階段的檢查 | 做完（第 21、22 條） | 2026-11-18 |
-| 2：worker 裡的 `fetch()`、`MessagePort` 跨 thread、module worker、巢狀的 worker、`WorkerNavigator`、`WorkerLocation`、`performance` | 做中：2a 到 2d 做完 | |
+| 2：worker 裡的 `fetch()`、`MessagePort` 跨 thread、module worker、巢狀的 worker、`WorkerNavigator`、`WorkerLocation`、`performance` | 做中：2a 到 2e 做完 | |
 | 2a：worker 裡的 `location`、`navigator`、`performance` | 做完（第 23 到 26 條） | 2026-11-18 |
 | 2b：worker 裡的 `fetch()`、worker 建的 blob URL | 做完（第 27、28 條） | 2026-11-18 |
 | 2c：`MessagePort` 跨 thread | 做完（第 29 到 31 條） | 2026-11-18 |
 | 2d：worker 裡建的 worker | 做完（第 32 到 34 條） | 2026-11-18 |
-| 2e：module worker | 還沒開始 | |
+| 2e：module worker | 做完（第 35 到 37 條） | 2026-11-18 |
 | 2f：WPT、文件、整個階段的檢查 | 還沒開始 | |
 
 ## 驗收
@@ -218,4 +218,18 @@
 - 新的測試：`shell` 的 `workers::a_worker_s_worker_talks_to_it_while_the_page_is_busy`（頁面忙 1.5 秒的期間子 worker 回答它的 worker）、`a_worker_s_worker_s_error_goes_up`（在 worker 的 `Worker` 上、worker 的 global、頁面的 `Worker`；script 不能 parse 時是一般的 `error`）、`a_worker_s_workers_end_with_it`（`terminate()` 和 `close()`）、`a_busy_worker_s_worker_ends_with_the_renderer`、`a_worker_and_its_worker_talk_through_a_port`。
 - mutation test（`rfcs/0103-worker-global-scope/mutants-2d.toml`，10 條）：都抓到。其中「worker 結束時不結束它建的 worker」是卡住（超過 900 秒，照 `docs/testing.md` 的規則算抓到）：子 worker 一直跑，測試等不到結束。
 - 跑過的：`cargo test -p dom -p dom_api -p dom_js -p dom_wasm -p renderer`、`shell` 的 `workers::`（26 個）、sanity 的每一項。`cargo test --workspace`、fmt、clippy 等第 2 階段做完時跑。
+
+### 2e：module worker、worker 裡的 `import()`（2026-11-18，macOS，Apple Silicon）
+
+- 第 35 條：`WorkerOptions` 多了 `credentials`（`same-origin`、`include`、`omit`，`dom::ScriptCors` 多了 `Omit`），`WorkerStart::module` 帶 module worker 的 credentials mode；renderer 送 `DedicatedWorkerCreated` 的請求照它的 credentials（模式和 classic 一樣是 same-origin），worker 的 thread 收到主 script 後照 module script 檢查（`loader::module_loaded`，從 `documents.rs` 搬來共用：status ok、JavaScript 的 MIME type），交給 `WorkerEngine::run_module_graph`。graph 還沒好時 `Worker` 送來的訊息留著，好了才送；module 抓不到或不能 parse 時和 classic 的 script 拿不到一樣（`Worker` 上的 `error`）。
+- 第 36 條：`dom_api::module::Modulator` 多了 `fetch_worker_tree`（根已經抓好，放進 map，再抓它 import 的）和 `GraphFor::Worker`。`dom_js` 的 `modules.rs` 的函式改收 `Realm`（frame 的文件，或 worker），worker 的 module 狀態在 `State::worker_realm`（context、global、module、graph 好了的結果）；worker 的 `ModuleHost::fetch` 經過 `WorkerGlobalHost::start_module_fetch`（新的），renderer 的 worker 的 thread 送 `FetchResource`、記著哪些 request 是 module 的，回應在它的 loop 裡交給 `WorkerEngine::module_fetched`。`import()` 照 context 找 realm，worker 的也行（原本一律 reject）。
+- 第 37 條：`import.meta.url`、top-level `await` 和 window 的一樣；module worker 的 global 記著是 module 的（`Cx::set_worker_global_module`），`importScripts()` 丟 `TypeError`。
+- WPT 找到、修好的兩件：module worker 的根原本用 CORS 抓，跨源的 module worker 載入成功（`workers/same-origin-check.sub.html`）；HTML 的「fetch a single module script」在 worker 的根用 same-origin，改了。module worker 的 graph 的靜態 import 原本照 worker 自己的 origin 抓，`data:` 的 module worker（opaque origin）import 頁面同源、沒有 CORS header 的 module 時失敗（`workers/modules/dedicated-worker-import-data-url*.html`）；HTML 照 outside settings（建它的一方）抓，`import()` 才照 worker 自己的，`start_module_fetch` 多了 `outside`（`ModuleHost::fetch` 的 `delays_load`：不是 `import()` 的 graph）。
+- WPT：`workers/modules/` 不再整個 `disabled`，`shared-worker-*` 一個一個 `disabled`。`workers/`、`html/semantics/scripting-1/the-script-element/` 裡等 module worker 和 worker 的 `import()` 的 21 項從失敗變成通過，預期結果重寫；還失敗的都寫了原因（`window.open`、CSP、`Referer`、cookie、XHR、`import.meta.resolve` 的函式沒有 `name` 而且可以當 constructor）。`dynamic-import/microtasks/basic.any.worker.html` 的最後一項和 window 的一樣是 known intermittent（兩個測試在同一毫秒裡用同一個 `Date.now()` 當 module 的網址，worker 裡更常碰到：更新後連跑兩次都失敗、之後連跑三次都通過）。不更新地連跑兩次 `workers/`、`html/semantics/scripting-1/the-script-element/`、`webmessaging/`（3103 項檢查），除了它都和預期一樣。
+- 新的測試：
+  - `dom_api` 的 `module::tests::a_worker_tree_from_its_root`、`worker::a_worker_that_can_t_start_throws`（`type`、`credentials`）；
+  - `dom_js` 的 `worker::a_module_worker_runs_its_graph`、`a_module_worker_s_graph_that_can_t_run`、`a_worker_imports_modules`；
+  - `shell` 的 `workers::a_module_worker_s_graph_is_fetched_and_run`、`a_module_worker_whose_graph_fails_errs`（import 不在、根不是 JavaScript、根是別的 origin 的）、`a_worker_imports_a_module`、`a_data_module_worker_imports_for_its_page`。
+- mutation test（`rfcs/0103-worker-global-scope/mutants-2e.toml`，16 條）：第一次 15 條抓到；「module worker 的根用 CORS 抓」沒抓到（WPT 的 `same-origin-check.sub.html` 抓得到，Rust 的測試沒有跨源的 module worker），`a_module_worker_whose_graph_fails_errs` 補上別的 origin、給了 `Access-Control-Allow-Origin` 的根，重跑抓到。
+- 跑過的：`cargo test -p dom -p dom_api -p dom_js -p dom_wasm -p renderer`、`shell` 的 `workers::` 和 `script`、sanity 的每一項。`cargo test --workspace`、fmt、clippy 等第 2 階段做完時跑。
 

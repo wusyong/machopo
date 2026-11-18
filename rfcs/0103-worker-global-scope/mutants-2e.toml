@@ -1,0 +1,136 @@
+# 2e: module workers, and import() in a worker.
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "worker::"]
+timeout = 900
+
+[[mutant]]
+name = "a worker's graph's root isn't in the map"
+file = "crates/dom_api/src/module.rs"
+from = '''        self.map.insert(url.clone(), Entry::Fetched(module));
+        let linker = self.new_linker(GraphFor::Worker, credentials);'''
+to = '''        let linker = self.new_linker(GraphFor::Worker, credentials);'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--lib", "module::"]
+
+[[mutant]]
+name = "a worker's graph isn't linked"
+file = "crates/dom_api/src/module.rs"
+from = '''        if let GraphFor::Script(_) | GraphFor::Worker = target {'''
+to = '''        if let GraphFor::Script(_) = target {'''
+
+[[mutant]]
+name = "a worker's graph is run before its imports come"
+file = "crates/dom_api/src/module.rs"
+from = '''        self.fetch_descendants(host, linker, module);
+        let done = self.check_done(host, linker);
+        let mut finished: Vec<Finished> = done.into_iter().collect();
+        finished.extend(self.run(host));
+        finished
+    }
+
+    /// HTML "fetch an inline module script graph": `source`, in the'''
+to = '''        let done = self.check_done(host, linker);
+        self.fetch_descendants(host, linker, module);
+        let mut finished: Vec<Finished> = done.into_iter().collect();
+        finished.extend(self.run(host));
+        finished
+    }
+
+    /// HTML "fetch an inline module script graph": `source`, in the'''
+
+[[mutant]]
+name = "a module worker's graph is never told done"
+file = "crates/dom_js/src/modules.rs"
+from = '''                            worker.graph = Some(done);'''
+to = '''                            drop(done);'''
+
+[[mutant]]
+name = "a module worker's graph with a parse error runs"
+file = "crates/dom_js/src/worker.rs"
+from = '''        let (Some(root), None) = (done.root, done.parse_error) else {'''
+to = '''        let (Some(root), _) = (done.root, done.parse_error) else {'''
+
+[[mutant]]
+name = "a worker's module isn't fetched"
+file = "crates/dom_js/src/modules.rs"
+from = '''                    .map_or(0, |host| host.start_module_fetch(url, credentials, delays_load));'''
+to = '''                    .map_or(0, |_| 0);'''
+
+[[mutant]]
+name = "a worker's import() finds no realm"
+file = "crates/dom_js/src/modules.rs"
+from = '''    if worker.is_some_and(|worker| v8::Local::new(scope, &worker) == context) {'''
+to = '''    if worker.is_some_and(|worker| v8::Local::new(scope, &worker) != context) {'''
+
+[[mutant]]
+name = "a worker's module response finds no realm"
+file = "crates/dom_js/src/modules.rs"
+from = '''            Some(worker) if fetching(&worker.modules) => Some(Realm::Worker),'''
+to = '''            Some(worker) if fetching(&worker.modules) && false => Some(Realm::Worker),'''
+
+[[mutant]]
+name = "importScripts() runs in a module worker"
+file = "crates/dom_api/src/worker.rs"
+from = '''    if module {
+        return Err(ApiError::Type('''
+to = '''    if module && false {
+        return Err(ApiError::Type('''
+
+[[mutant]]
+name = "a module worker's global isn't one"
+file = "crates/dom_js/src/worker.rs"
+from = '''            if params.module {
+                cx.set_worker_global_module(global);
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "a module worker's static imports are its own origin's"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''        request.initiator = Some(if outside {'''
+to = '''        request.initiator = Some(if !outside {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "workers::a_data_module_worker"]
+
+[[mutant]]
+name = "a module worker's root is fetched by CORS"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''        Some(credentials) => {
+            request.mode = RequestMode::SameOrigin;'''
+to = '''        Some(credentials) => {
+            request.mode = RequestMode::Cors;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "workers::a_module_worker"]
+
+[[mutant]]
+name = "a module worker's root isn't checked as a module"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''            crate::loader::module_loaded(&result).map(|root| MainScript::Module(root, credentials))'''
+to = '''            worker_script(&result).map(|script| MainScript::Module(dom_api::module::FetchedModule { url: script.url, source: script.source }, credentials))'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "workers::a_module_worker_whose"]
+
+[[mutant]]
+name = "a module worker's response isn't handed on"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''                    } else if module_fetches.borrow_mut().remove(&request_id) {'''
+to = '''                    } else if module_fetches.borrow_mut().remove(&request_id) && false {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "workers::a_module_worker_s_graph"]
+
+[[mutant]]
+name = "what a module worker's Worker posts early is lost"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''                            Some(true) => {
+                                for message in early.take().into_iter().flatten() {
+                                    engine.post_message(message);
+                                }
+                            }'''
+to = '''                            Some(true) => {
+                                drop(early.take());
+                            }'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "workers::a_module_worker_s_graph"]
+
+[[mutant]]
+name = "a module worker whose import failed runs on"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''                            Some(false) => {
+                                failed = true;
+                                break;
+                            }'''
+to = '''                            Some(false) => {}'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "workers::a_module_worker_whose"]

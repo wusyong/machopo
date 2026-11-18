@@ -6,7 +6,9 @@
 //! browser loads, `importScripts()`'s too: same-origin, redirects followed,
 //! lax of MIME types as Chrome is. Message ports go to and from workers,
 //! the two of a channel then on two threads. A worker makes workers of its
-//! own, which talk to it while the page is busy, and end with it.
+//! own, which talk to it while the page is busy, and end with it. A
+//! module worker's graph its thread fetches, run once it is all there; a
+//! worker's `import()` too.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -725,3 +727,110 @@ fn a_worker_and_its_worker_talk_through_a_port() {
         "through"
     );
 }
+
+/// A module worker: its root the browser loads, its imports its thread
+/// does (relative to the root); what its `Worker` posted before the graph
+/// ran comes after; top-level `await`.
+#[test]
+fn a_module_worker_s_graph_is_fetched_and_run() {
+    assert_eq!(
+        report_served(
+            "const w = new Worker('/m/w.mjs', { type: 'module' }); \
+             w.onmessage = e => report(e.data); w.postMessage('early');",
+            |_| {
+                vec![
+                    (
+                        "/m/w.mjs",
+                        js("import { x } from './a.mjs'; await 0; \
+                            onmessage = e => postMessage(x + ' ' + e.data + ' ' + import.meta.url);"),
+                    ),
+                    (
+                        "/m/a.mjs",
+                        js("export const x = 'a';").with_delay(Duration::from_millis(200)),
+                    ),
+                ]
+            },
+            &[],
+        )
+        .replace(|c: char| c.is_ascii_digit(), ""),
+        "a early http://...:/m/w.mjs"
+    );
+}
+
+/// A module worker whose graph can't run is a plain `error` at its
+/// `Worker`: an import not there, a root that isn't JavaScript, a root of
+/// another origin (same-origin, as a classic worker's, its CORS header
+/// notwithstanding).
+#[test]
+fn a_module_worker_whose_graph_fails_errs() {
+    assert_eq!(
+        report_served(
+            "const w = new Worker(OTHER + '/w.mjs', { type: 'module' }); \
+             w.onerror = e => report(e.constructor.name); \
+             w.onmessage = () => report('ran');",
+            |_| Vec::new(),
+            &[(
+                "/w.mjs",
+                js("postMessage(1);").with_header("Access-Control-Allow-Origin", "*"),
+            )],
+        ),
+        "Event"
+    );
+    for (root, body) in [
+        ("/w.mjs", js("import './gone.mjs';")),
+        ("/w.mjs", Route::ok("text/plain", "postMessage(1);")),
+    ] {
+        assert_eq!(
+            report_served(
+                "const w = new Worker('/w.mjs', { type: 'module' }); \
+                 w.onerror = e => report(e.constructor.name); \
+                 w.onmessage = () => report('ran');",
+                move |_| vec![(root, body)],
+                &[],
+            ),
+            "Event"
+        );
+    }
+}
+
+/// `import()` in a classic worker, through its thread's loads.
+#[test]
+fn a_worker_imports_a_module() {
+    assert_eq!(
+        report_served(
+            "const w = new Worker('/w.js'); w.onmessage = e => report(e.data);",
+            |_| {
+                vec![
+                    (
+                        "/w.js",
+                        js("import('./m.mjs').then(m => postMessage(m.y), e => postMessage(String(e)));"),
+                    ),
+                    ("/m.mjs", js("export const y = 'imported';")),
+                ]
+            },
+            &[],
+        ),
+        "imported"
+    );
+}
+
+/// A module worker of a `data:` URL (an opaque origin) imports for its
+/// page's origin (HTML's outside settings): a module of the page's origin
+/// without CORS headers is had; its `import()` is its own (CORS fails).
+#[test]
+fn a_data_module_worker_imports_for_its_page() {
+    assert_eq!(
+        report_served(
+            "const source = `import { x } from '${location.origin}/a.mjs'; \
+               import('${location.origin}/a.mjs?again').then(() => postMessage(x + ' imported'), \
+                 () => postMessage(x + ' refused'));`; \
+             const w = new Worker('data:text/javascript,' + encodeURIComponent(source), \
+               { type: 'module' }); \
+             w.onmessage = e => report(e.data); w.onerror = () => report('error');",
+            |_| vec![("/a.mjs", js("export const x = 'a';"))],
+            &[],
+        ),
+        "a refused"
+    );
+}
+

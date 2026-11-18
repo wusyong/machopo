@@ -90,6 +90,7 @@ fn a_worker_starts_its_worker() {
             url: url::Url::parse("https://example.test/dir/w.js").unwrap(),
             name: "fib".to_owned(),
             owner_origin: Some(origin),
+            module: None,
         })]
     );
     dom.read(|cx| {
@@ -108,10 +109,10 @@ fn a_worker_starts_its_worker() {
     assert!(matches!(&calls(&dom)[..], [WorkerCall::Start(start)] if start.name.is_empty()));
 }
 
-/// A URL that doesn't parse is a `SyntaxError`, `type: "module"` a
-/// `NotSupportedError`, a `type` of neither WebIDL's `TypeError`, a realm
-/// whose engine has no workers' host a `NotSupportedError`: none starts a
-/// worker.
+/// A URL that doesn't parse is a `SyntaxError`, a `type` or `credentials`
+/// of none of their values WebIDL's `TypeError`, a realm whose engine has
+/// no workers' host a `NotSupportedError`: none starts a worker. A module
+/// worker starts with its graph's credentials mode.
 #[test]
 fn a_worker_that_can_t_start_throws() {
     let mut dom = page(true);
@@ -119,13 +120,16 @@ fn a_worker_that_can_t_start_throws() {
         dom_error(construct(&mut dom, &[Arg::Str("https://[")])),
         ExceptionName::Syntax
     );
-    assert_eq!(
-        dom_error(construct(
+    assert!(matches!(
+        construct(
             &mut dom,
-            &[Arg::Str("w.js"), Arg::StrDict(vec![("type", "module")])]
-        )),
-        ExceptionName::NotSupported
-    );
+            &[
+                Arg::Str("w.js"),
+                Arg::StrDict(vec![("type", "module"), ("credentials", "all")])
+            ]
+        ),
+        Err(ApiError::Type(_))
+    ));
     assert!(matches!(
         construct(
             &mut dom,
@@ -139,7 +143,20 @@ fn a_worker_that_can_t_start_throws() {
         &[Arg::Str("w.js"), Arg::StrDict(vec![("type", "classic")])],
     )
     .unwrap();
-    assert_eq!(calls(&dom).len(), 1);
+    assert!(matches!(&calls(&dom)[..], [WorkerCall::Start(start)] if start.module.is_none()));
+    for (credentials, mode) in [
+        (None, dom::ScriptCors::Anonymous),
+        (Some("omit"), dom::ScriptCors::Omit),
+        (Some("include"), dom::ScriptCors::UseCredentials),
+    ] {
+        let mut options = vec![("type", "module")];
+        options.extend(credentials.map(|value| ("credentials", value)));
+        construct(&mut dom, &[Arg::Str("w.js"), Arg::StrDict(options)]).unwrap();
+        assert!(
+            matches!(&calls(&dom)[..], [WorkerCall::Start(start)] if start.module == Some(mode)),
+            "{credentials:?}"
+        );
+    }
     let mut unhosted = page(false);
     assert_eq!(
         dom_error(construct(&mut unhosted, &[Arg::Str("w.js")])),

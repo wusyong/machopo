@@ -258,6 +258,7 @@ crate::declare! {
     }
 
     dictionary WorkerOptions {
+        credentials: String = String::from("same-origin"),
         name: String = String::new(),
         r#type: String = String::from("classic"),
     }

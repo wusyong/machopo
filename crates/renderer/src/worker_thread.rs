@@ -366,12 +366,18 @@ struct GlobalHost {
     inbox: Rc<Inbox>,
     /// Its origin, serialized: its loads' initiator.
     origin: String,
+    /// The origin of the realm that made it, serialized: its module
+    /// worker's graph's loads' (HTML's outside settings).
+    owner_origin: String,
     /// The last of its loads' request ids, from 1 (the browser knows them
     /// as the worker's).
     last_request: Cell<u64>,
     /// Its `fetch()`es on their way: each one's number by its request id.
     /// Shared with its loop, which hands their answers to its engine.
     fetches: Rc<RefCell<HashMap<u64, u64>>>,
+    /// Its modules on their way, by request id (the module map's numbers
+    /// for them), shared with its loop as `fetches`.
+    module_fetches: Rc<RefCell<HashSet<u64>>>,
     /// The blob URLs it registered and hasn't revoked.
     blob_urls: RefCell<HashSet<String>>,
     /// Set by `close()`: its loop ends after the task that closed it.
@@ -491,6 +497,32 @@ impl dom_api::WorkerGlobalHost for GlobalHost {
             worker: Some(self.id),
             request: crate::loader::fetch_resource_request(request),
         });
+    }
+
+    /// By CORS, for a `script` (HTML's "fetch a single module script":
+    /// the destination of a module worker's descendants is `worker`, as
+    /// Fetch's script-like ones go alike here), its owner's origin or its
+    /// own the initiator.
+    fn start_module_fetch(&self, url: &url::Url, credentials: dom::ScriptCors, outside: bool) -> u64 {
+        let request_id = self.next_request_id();
+        if self.shared.stopping() {
+            return request_id;
+        }
+        let mut request = ResourceRequest::new(url.as_str(), RequestDestination::Script);
+        request.mode = RequestMode::Cors;
+        request.credentials = crate::loader::script_credentials(credentials);
+        request.initiator = Some(if outside {
+            self.owner_origin.clone()
+        } else {
+            self.origin.clone()
+        });
+        self.module_fetches.borrow_mut().insert(request_id);
+        let _ = self.to_browser.send(RendererHostMsg::FetchResource {
+            request_id,
+            worker: Some(self.id),
+            request,
+        });
+        request_id
     }
 
     fn cancel_fetch(&self, id: u64) {
@@ -623,9 +655,21 @@ fn run(thread: WorkerThread) {
     if shared.stopping() {
         return;
     }
-    let Some(WorkerScript { source, url, .. }) = worker_script(&result) else {
+    // A classic worker's script, or a module worker's graph's root (as a
+    // module script is taken: a JavaScript MIME type, whatever its URL).
+    let main = match start.module {
+        None => worker_script(&result).map(MainScript::Classic),
+        Some(credentials) => {
+            crate::loader::module_loaded(&result).map(|root| MainScript::Module(root, credentials))
+        }
+    };
+    let Some(main) = main else {
         owner.post(&scheduler, id, WorkerEvent::ScriptFailed);
         return;
+    };
+    let url = match &main {
+        MainScript::Classic(script) => script.url.clone(),
+        MainScript::Module(root, _) => root.url.clone(),
     };
     // HTML's "set up a worker environment settings object": a `data:`
     // URL's worker is of an opaque origin; another its owner's.
@@ -636,6 +680,7 @@ fn run(thread: WorkerThread) {
     };
     let closing = Rc::new(Cell::new(false));
     let fetches = Rc::new(RefCell::new(HashMap::new()));
+    let module_fetches = Rc::new(RefCell::new(HashSet::new()));
     let host = GlobalHost {
         id,
         owner,
@@ -643,8 +688,13 @@ fn run(thread: WorkerThread) {
         to_browser: to_browser.clone(),
         inbox: inbox.clone(),
         origin: origin.ascii_serialization(),
+        owner_origin: start
+            .owner_origin
+            .as_ref()
+            .map_or_else(|| "null".to_owned(), url::Origin::ascii_serialization),
         last_request: Cell::new(0),
         fetches: fetches.clone(),
+        module_fetches: module_fetches.clone(),
         blob_urls: RefCell::new(HashSet::new()),
         closing: closing.clone(),
         shared: shared.clone(),
@@ -657,6 +707,7 @@ fn run(thread: WorkerThread) {
             time_origin,
             user_agent: agent.user_agent.clone(),
             webdriver: agent.webdriver,
+            module: start.module.is_some(),
         },
         Box::new(host),
     );
@@ -670,23 +721,32 @@ fn run(thread: WorkerThread) {
         Owner::Worker(id),
     ));
     engine.set_worker_host(workers.host());
-    let parsed = engine.run_classic_script(&ClassicScript {
-        source: &source,
-        url: url.as_str(),
-        base_url: None,
-        line: 1,
-        muted: false,
-        use_credentials: false,
-    });
-    // A script that didn't parse: as one that couldn't be had (HTML's "run
-    // a worker": a plain `error` at its `Worker`, and it runs no more).
-    if !parsed {
+    // Run (`Some(true)`), not runnable (`Some(false)`: HTML's "run a worker"
+    // fires a plain `error` at its `Worker`, and it runs no more), or a
+    // module graph whose modules are yet to come (none).
+    let ran = match main {
+        MainScript::Classic(script) => Some(engine.run_classic_script(&ClassicScript {
+            source: &script.source,
+            url: script.url.as_str(),
+            base_url: None,
+            line: 1,
+            muted: false,
+            use_credentials: false,
+        })),
+        MainScript::Module(root, credentials) => engine.run_module_graph(&start.url, root, credentials),
+    };
+    if ran == Some(false) {
         owner.post(&scheduler, id, WorkerEvent::ScriptFailed);
         return;
     }
-    for message in early {
-        engine.post_message(message);
+    // What its `Worker` posted waits for its script to have run.
+    let mut early = Some(early);
+    if ran == Some(true) {
+        for message in early.take().into_iter().flatten() {
+            engine.post_message(message);
+        }
     }
+    let mut failed = false;
     loop {
         if shared.stopping() || closing.get() {
             break;
@@ -707,7 +767,10 @@ fn run(thread: WorkerThread) {
             },
         };
         match task {
-            Some(WorkerTask::Message(message)) => engine.post_message(message),
+            Some(WorkerTask::Message(message)) => match &mut early {
+                Some(early) => early.push(message),
+                None => engine.post_message(message),
+            },
             Some(WorkerTask::Stop) => break,
             // Run with its tasks, next round.
             Some(WorkerTask::PortMessages) => {}
@@ -733,10 +796,26 @@ fn run(thread: WorkerThread) {
                     let fetch = fetches.borrow_mut().remove(&request_id);
                     if let Some(fetch) = fetch {
                         engine.fetch_response(fetch, crate::loader::fetched_response(&result));
+                    } else if module_fetches.borrow_mut().remove(&request_id) {
+                        let module = crate::loader::module_loaded(&result);
+                        // Its graph, if it was the last of it.
+                        match engine.module_fetched(request_id, module) {
+                            Some(true) => {
+                                for message in early.take().into_iter().flatten() {
+                                    engine.post_message(message);
+                                }
+                            }
+                            Some(false) => {
+                                failed = true;
+                                break;
+                            }
+                            None => {}
+                        }
                     }
                 }
                 RendererMsg::ReceivedRedirect { request_id, .. }
-                    if fetches.borrow().contains_key(&request_id) =>
+                    if fetches.borrow().contains_key(&request_id)
+                        || module_fetches.borrow().contains(&request_id) =>
                 {
                     let _ = to_browser.send(RendererHostMsg::FollowRedirect {
                         request_id,
@@ -752,18 +831,40 @@ fn run(thread: WorkerThread) {
     // The workers it made end with it (HTML: no owner left; Blink's
     // `DedicatedWorker::Dispose` terminates each), before its engine goes.
     workers.terminate_all();
-    if closing.get() && !shared.stopping() {
+    if failed {
+        owner.post(&scheduler, id, WorkerEvent::ScriptFailed);
+    } else if closing.get() && !shared.stopping() {
         owner.post(&scheduler, id, WorkerEvent::Closed);
     }
 }
 
-/// The request for the main script of the worker `start` makes (HTML's
-/// "fetch a classic worker script"): same-origin with its owner, of
-/// credentials same-origin, for a `worker`.
+/// A worker's main script, as it came: a classic script, or a module
+/// worker's graph's root and the credentials mode of its descendants.
+enum MainScript {
+    Classic(WorkerScript),
+    Module(dom_api::module::FetchedModule, dom::ScriptCors),
+}
+
+/// The request for the main script of the worker `start` makes, for a
+/// `worker`, same-origin with its owner: a classic one's of credentials
+/// same-origin (HTML's "fetch a classic worker script"), a module
+/// worker's of its `credentials` ("fetch a module worker script graph"'s
+/// root).
 fn script_request(start: &WorkerStart) -> ResourceRequest {
     let mut request = ResourceRequest::new(start.url.as_str(), RequestDestination::Worker);
-    request.mode = RequestMode::SameOrigin;
-    request.credentials = CredentialsMode::SameOrigin;
+    match start.module {
+        None => {
+            request.mode = RequestMode::SameOrigin;
+            request.credentials = CredentialsMode::SameOrigin;
+        }
+        // HTML's "fetch a module worker script graph": its root
+        // same-origin too ("fetch a single module script" of a worker's
+        // top level), with its `credentials`.
+        Some(credentials) => {
+            request.mode = RequestMode::SameOrigin;
+            request.credentials = crate::loader::script_credentials(credentials);
+        }
+    }
     request.initiator = Some(
         start
             .owner_origin
@@ -887,6 +988,7 @@ mod tests {
             url: url::Url::parse("data:text/javascript,").unwrap(),
             name: String::new(),
             owner_origin: None,
+            module: None,
         });
         workers.terminate_all();
         assert!(ENGINE_GONE.load(Ordering::Acquire));

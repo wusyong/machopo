@@ -48,11 +48,15 @@ pub struct ScriptRequest {
 
 /// A `crossorigin` attribute's credentials mode (HTML's CORS settings
 /// attribute: `use-credentials`, ASCII case-insensitively, or anonymous,
-/// any other value).
+/// any other value), or a module worker's (`WorkerOptions`' `credentials`,
+/// which may omit them too).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScriptCors {
+    /// Same-origin.
     Anonymous,
     UseCredentials,
+    /// None at all: a module worker's `credentials: "omit"`.
+    Omit,
 }
 
 /// A script the host is to fetch (`Dom::take_script_fetches`): its number,

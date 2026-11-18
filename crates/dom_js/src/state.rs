@@ -116,6 +116,9 @@ pub(crate) struct State {
     /// The browsing contexts: their realms and documents (`frames`).
     /// Before the DOM: their roots go first.
     pub(crate) frames: crate::frames::Frames,
+    /// A worker's isolate's realm, for its modules (`modules`); none in a
+    /// page's. Before the DOM, as `frames`.
+    pub(crate) worker_realm: Option<crate::modules::WorkerRealm>,
     /// The DOM: each operation borrows it from the isolate (`Front::read`,
     /// `Front::mutate`); V8's major GCs between them (`EmbedderHeapState`).
     /// Last, as fields drop in order: the roots above (the frame's, in
@@ -280,6 +283,7 @@ pub(crate) fn install(isolate: &mut v8::Isolate, kind: GlobalKind) {
             devtools_frame_ids: None,
             layout: Box::new(std::cell::Cell::new(None)),
             frames: crate::frames::Frames::default(),
+            worker_realm: None,
         },
     );
     // A delete, a define or a prototype set across origins: a

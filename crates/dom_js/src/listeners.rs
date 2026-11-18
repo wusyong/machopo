@@ -182,7 +182,7 @@ impl<'s> ScriptHost for Host<'_, '_, 's, '_> {
 
     fn run_module_script(&mut self, document: &dom::NodeRoot, root: u32) {
         run_script(self.scope, |scope| {
-            crate::modules::run_module_script(scope, document, root)
+            crate::modules::run_module_script(scope, &crate::modules::Realm::Document(document.clone()), root)
         });
     }
 

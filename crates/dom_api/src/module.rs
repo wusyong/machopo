@@ -64,10 +64,11 @@ pub enum ModuleParseError {
 pub trait ModuleHost {
     /// Starts fetching the module at `url`, by CORS with `credentials`;
     /// the request's id, whose response comes back through
-    /// [`Modulator::fetched`]. `delays_load`: whether the document's
-    /// `load` waits for it (a script's graph's modules; an `import()`'s
-    /// don't, as in Blink). `importer`: the module whose `import` it is,
-    /// `None` for a graph's root.
+    /// [`Modulator::fetched`]. `delays_load`: whether it is of a script's
+    /// graph, not an `import()`'s: a document's `load` waits for it (as in
+    /// Blink), a module worker's is fetched for its owner (HTML's outside
+    /// settings, as its root is). `importer`: the module whose `import` it
+    /// is, `None` for a graph's root.
     fn fetch(
         &mut self,
         url: &Url,
@@ -115,6 +116,9 @@ pub enum GraphFor {
     /// `ModulePreloadIfNeeded` (`Modulator::FetchSingle`); its descendants
     /// are fetched when a graph needs them.
     Preload(u64),
+    /// A module worker's script graph (`Modulator::fetch_worker_tree`):
+    /// its realm's one.
+    Worker,
 }
 
 /// A graph whose fetch has finished, for who asked for it: its root,
@@ -208,6 +212,31 @@ impl Modulator {
         entry.incomplete = 1;
         self.fetch_single(host, url, linker, None);
         self.run(host)
+    }
+
+    /// HTML "fetch a module worker script graph", its root fetched already
+    /// (the browser loads a worker's main script, as Chromium's
+    /// `WorkerScriptFetcher`): `root` goes in the map as the module at
+    /// `url` (its request's URL; the response's is its base URL), and its
+    /// descendants are fetched by CORS with `credentials`.
+    pub fn fetch_worker_tree(
+        &mut self,
+        host: &mut dyn ModuleHost,
+        url: Url,
+        root: FetchedModule,
+        credentials: CredentialsMode,
+    ) -> Vec<Finished> {
+        let module = self.create(host, &root.source, &root.url, &root.url, 1, credentials);
+        self.map.insert(url.clone(), Entry::Fetched(module));
+        let linker = self.new_linker(GraphFor::Worker, credentials);
+        let entry = self.linkers.get_mut(&linker).expect("just made");
+        entry.visited.insert(url);
+        entry.root = Some(module);
+        self.fetch_descendants(host, linker, module);
+        let done = self.check_done(host, linker);
+        let mut finished: Vec<Finished> = done.into_iter().collect();
+        finished.extend(self.run(host));
+        finished
     }
 
     /// HTML "fetch an inline module script graph": `source`, in the
@@ -304,7 +333,7 @@ impl Modulator {
             Some(Entry::Fetched(module)) => self.arrived.push_back((linker, Some(*module))),
             None => {
                 let entry = &self.linkers[&linker];
-                let delays_load = matches!(entry.target, GraphFor::Script(_));
+                let delays_load = matches!(entry.target, GraphFor::Script(_) | GraphFor::Worker);
                 let request_id = host.fetch(&url, delays_load, entry.credentials, importer);
                 self.fetches
                     .insert(request_id, (url.clone(), entry.credentials));
@@ -443,7 +472,7 @@ impl Modulator {
                 self.set_requests(host, module);
             }
         }
-        if let GraphFor::Script(_) = target {
+        if let GraphFor::Script(_) | GraphFor::Worker = target {
             host.link(root, parse_error);
         }
         Some(Finished {
@@ -967,6 +996,51 @@ mod tests {
             Some(vec![done(2, 1)])
         );
         assert_eq!(modulator.fetched(&mut host, 101, None), None, "not twice");
+    }
+
+    /// A module worker's graph: its root, fetched already, compiled with
+    /// its response's URL as its base and in the map under the URL asked
+    /// for (an `import()` of it fetches nothing); its descendants fetched
+    /// with its credentials mode; linked once they are there.
+    #[test]
+    fn a_worker_tree_from_its_root() {
+        let include = CredentialsMode::UseCredentials;
+        let mut modulator = Modulator::default();
+        let mut host = Host::default();
+        let root = FetchedModule {
+            url: url("new/w.mjs"),
+            source: "./dep.mjs".into(),
+        };
+        assert_eq!(
+            modulator.fetch_worker_tree(&mut host, url("w.mjs"), root, include),
+            []
+        );
+        assert_eq!(host.compiled[0].1, url("new/w.mjs"));
+        assert_eq!(host.fetched, [url("new/dep.mjs")]);
+        assert_eq!(host.credentials, [include]);
+        assert_eq!(
+            answer(&mut modulator, &mut host, "new/dep.mjs", Some("")),
+            [Finished {
+                target: GraphFor::Worker,
+                root: Some(ModuleScriptId::new(0)),
+                parse_error: None,
+            }]
+        );
+        assert_eq!(host.links, [(0, None)]);
+        modulator.fetch_tree(&mut host, url("w.mjs"), GraphFor::Import(1), SAME);
+        assert_eq!(host.fetched.len(), 1, "in the map");
+        // One with no imports is done at once.
+        let mut modulator = Modulator::default();
+        let root = FetchedModule {
+            url: url("v.mjs"),
+            source: String::new(),
+        };
+        assert_eq!(
+            modulator
+                .fetch_worker_tree(&mut host, url("v.mjs"), root, SAME)
+                .len(),
+            1
+        );
     }
 
     /// A graph's modules are all fetched with its root's credentials mode

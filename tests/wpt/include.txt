@@ -65,8 +65,8 @@ resize-observer/
 # `foreignObject`, and a `filter` on a `<tspan>`.
 intersection-observer/
 
-# Dedicated workers, those made in a worker too. Shared and service
-# workers and module workers don't run (`disabled`); what a dedicated
+# Dedicated workers, classic and module ones, those made in a worker too.
+# Shared and service workers don't run (`disabled`); what a dedicated
 # worker doesn't have yet (XHR) fails.
 workers/
 

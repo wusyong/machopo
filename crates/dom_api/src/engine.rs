@@ -583,6 +583,8 @@ pub struct WorkerGlobalParams {
     /// (its `navigator`'s, as a window's are the host's: `Dom::set_agent`).
     pub user_agent: String,
     pub webdriver: bool,
+    /// A module worker's (`type: "module"`): `importScripts()` throws.
+    pub module: bool,
 }
 
 /// A dedicated worker's engine, on the worker's thread (Blink's
@@ -660,6 +662,37 @@ pub trait WorkerEngine {
     /// (`ScriptEngine::worker_script_failed`'s).
     fn worker_script_failed(&mut self, id: u64) {
         let _ = id;
+    }
+
+    /// A module worker's script graph (HTML's "fetch a module worker
+    /// script graph"): its root its main script, fetched (by the browser)
+    /// as `url`, its descendants through its host
+    /// (`WorkerGlobalHost::start_module_fetch`) with `credentials`. What
+    /// became of it, if it is done now: `Some(true)` run (evaluated, a
+    /// microtask checkpoint after), `Some(false)` a module failed to fetch
+    /// or parse (HTML's "run a worker": an `error` at its `Worker`, and it
+    /// runs no more); none: its modules are yet to come (`module_fetched`).
+    fn run_module_graph(
+        &mut self,
+        url: &url::Url,
+        root: crate::module::FetchedModule,
+        credentials: dom::ScriptCors,
+    ) -> Option<bool> {
+        let _ = (url, root, credentials);
+        Some(false)
+    }
+
+    /// A module its realm asked for (`WorkerGlobalHost::start_module_fetch`'s
+    /// `id`), fetched (none: it failed): its graphs move on, an `import()`'s
+    /// settled, in a task of its own. What became of its module worker's
+    /// graph, as `run_module_graph`'s, if it is done now.
+    fn module_fetched(
+        &mut self,
+        id: u64,
+        response: Option<crate::module::FetchedModule>,
+    ) -> Option<bool> {
+        let _ = (id, response);
+        None
     }
 }
 

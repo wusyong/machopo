@@ -4,7 +4,9 @@
 //! messages its `Worker` posts are its tasks; what it posts, `close()` and
 //! what it throws that its `onerror` doesn't cancel go to its host; its
 //! script stops from another thread; `importScripts()` runs the scripts
-//! its host fetches, in turn. And a window's side (`V8Engine`): a
+//! its host fetches, in turn. A module worker's graph: its root given,
+//! its imports fetched through its host, run once they are all there;
+//! `import()` in either kind. And a window's side (`V8Engine`): a
 //! `Worker` starts, posts and terminates through the window's workers'
 //! host; what its worker sends comes to it as its realm's tasks.
 
@@ -35,6 +37,9 @@ struct Sent {
     /// order: `cancel <id>`, `register <url> <type> <bytes>`,
     /// `revoke <url>`.
     asked: Vec<String>,
+    /// The modules it asked for, in order (their request ids from 1), their
+    /// credentials modes, and whether for its owner.
+    modules: Vec<(String, dom::ScriptCors, bool)>,
 }
 
 struct Host(Rc<RefCell<Sent>>);
@@ -77,6 +82,12 @@ impl WorkerGlobalHost for Host {
     fn revoke_blob_url(&self, url: &str) {
         self.0.borrow_mut().asked.push(format!("revoke {url}"));
     }
+
+    fn start_module_fetch(&self, url: &url::Url, credentials: dom::ScriptCors, outside: bool) -> u64 {
+        let mut sent = self.0.borrow_mut();
+        sent.modules.push((url.to_string(), credentials, outside));
+        sent.modules.len() as u64
+    }
 }
 
 /// `source` is the script at `url` (of muted errors if `muted`).
@@ -100,6 +111,15 @@ fn worker() -> (V8WorkerEngine, Rc<RefCell<Sent>>) {
 /// A worker's engine, its global of `url`, named `fib`, its time origin
 /// `time_origin`, and what it sends.
 fn worker_of(url: &str, time_origin: Instant) -> (V8WorkerEngine, Rc<RefCell<Sent>>) {
+    worker_of_kind(url, time_origin, false)
+}
+
+/// `worker_of`, a module worker's if `module`.
+fn worker_of_kind(
+    url: &str,
+    time_origin: Instant,
+    module: bool,
+) -> (V8WorkerEngine, Rc<RefCell<Sent>>) {
     let mut engine = V8WorkerEngine::new(EngineSettings { web_tests: true });
     let sent = Rc::new(RefCell::new(Sent::default()));
     let url = url::Url::parse(url).unwrap();
@@ -111,6 +131,7 @@ fn worker_of(url: &str, time_origin: Instant) -> (V8WorkerEngine, Rc<RefCell<Sen
             time_origin,
             user_agent: "Machopo/1".to_owned(),
             webdriver: false,
+            module,
         },
         Box::new(Host(sent.clone())),
     );
@@ -973,3 +994,97 @@ fn a_worker_s_blob_urls_go_to_its_host() {
         [format!("register {url} text/plain hi"), format!("revoke {url}")]
     );
 }
+
+/// The module at `url` of `source`, as its fetch gives it.
+fn module(url: &str, source: &str) -> dom_api::module::FetchedModule {
+    dom_api::module::FetchedModule {
+        url: url::Url::parse(url).unwrap(),
+        source: source.to_owned(),
+    }
+}
+
+/// A module worker's graph: its root (redirected: its imports resolve
+/// against where it ended up) runs once its import has come through its
+/// host, with the worker's credentials mode; top-level `await`,
+/// `import.meta.url`; `importScripts()` is a `TypeError` in it.
+#[test]
+fn a_module_worker_runs_its_graph() {
+    let (mut engine, sent) = worker_of_kind("https://example.test/w.mjs", Instant::now(), true);
+    let root = module(
+        "https://example.test/new/w.mjs",
+        "import { x } from './a.mjs'; await 0; \
+         let imported; try { importScripts('c.js'); } catch (e) { imported = e.name; } \
+         testRunner.reportHarnessResults([x, import.meta.url, imported].join());",
+    );
+    let url = url::Url::parse("https://example.test/w.mjs").unwrap();
+    assert_eq!(
+        engine.run_module_graph(&url, root, dom::ScriptCors::UseCredentials),
+        None
+    );
+    assert_eq!(
+        sent.borrow().modules,
+        [(
+            "https://example.test/new/a.mjs".to_owned(),
+            dom::ScriptCors::UseCredentials,
+            true
+        )]
+    );
+    assert!(sent.borrow().fetched.is_empty());
+    assert_eq!(engine.take_harness_results(), None, "not run yet");
+    let a = module("https://example.test/new/a.mjs", "export const x = 1;");
+    assert_eq!(engine.module_fetched(1, Some(a)), Some(true));
+    assert_eq!(
+        engine.take_harness_results().as_deref(),
+        Some("1,https://example.test/new/w.mjs,TypeError")
+    );
+    // Not again.
+    assert_eq!(engine.module_fetched(1, None), None);
+}
+
+/// A module worker's graph that can't run: one of its modules failed to
+/// fetch, or one doesn't parse (its root at once).
+#[test]
+fn a_module_worker_s_graph_that_can_t_run() {
+    let url = url::Url::parse("https://example.test/w.mjs").unwrap();
+    let (mut engine, _) = worker_of_kind(url.as_str(), Instant::now(), true);
+    let root = module(url.as_str(), "import './gone.mjs';");
+    assert_eq!(engine.run_module_graph(&url, root, dom::ScriptCors::Anonymous), None);
+    assert_eq!(engine.module_fetched(1, None), Some(false));
+    let (mut engine, _) = worker_of_kind(url.as_str(), Instant::now(), true);
+    let root = module(url.as_str(), "export {");
+    assert_eq!(
+        engine.run_module_graph(&url, root, dom::ScriptCors::Anonymous),
+        Some(false)
+    );
+}
+
+/// `import()` in a classic worker: its graph fetched through the host,
+/// resolved against the script's URL; settled as it comes (a failed one
+/// rejected); what the worker's graph is isn't touched.
+#[test]
+fn a_worker_imports_modules() {
+    let (mut engine, sent) = worker();
+    run(
+        &mut engine,
+        "const got = []; \
+         import('./m.mjs').then(m => got.push(m.y)); \
+         import('./gone.mjs').catch(e => got.push(e.name)); \
+         import('lodash').catch(e => got.push('bare ' + e.name));",
+    );
+    assert_eq!(
+        sent.borrow()
+            .modules
+            .iter()
+            .map(|(url, _, outside)| (url.as_str(), *outside))
+            .collect::<Vec<_>>(),
+        [
+            ("https://example.test/m.mjs", false),
+            ("https://example.test/gone.mjs", false)
+        ]
+    );
+    let m = module("https://example.test/m.mjs", "export const y = 2;");
+    assert_eq!(engine.module_fetched(1, Some(m)), None);
+    assert_eq!(engine.module_fetched(2, None), None);
+    assert_eq!(result(&mut engine, "got.join()"), "bare TypeError,2,TypeError");
+}
+

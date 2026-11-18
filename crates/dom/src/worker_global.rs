@@ -6,6 +6,8 @@
 //! from its document (its URL, its origin) it has itself, given as the
 //! worker's script is fetched (HTML's "run a worker").
 
+use std::cell::Cell;
+
 use elise::{Gc, GcObject, HeapVector, JsEdge, LocalExternal, Member};
 
 use url::Url;
@@ -25,6 +27,8 @@ pub struct WorkerGlobalScope {
     origin: LocalExternal<url::Origin>,
     /// Its name (`new Worker(url, { name })`, `self.name`).
     name: LocalExternal<DomString>,
+    /// A module worker's (HTML's worker global scope's type `module`).
+    module: Cell<bool>,
     /// Its `location` and `navigator`, once asked for.
     pub(crate) location: Member<crate::Location>,
     pub(crate) navigator: Member<crate::Navigator>,
@@ -50,6 +54,7 @@ impl<'gc> Cx<'_, 'gc> {
                 url: LocalExternal::new(url),
                 origin: LocalExternal::new(origin),
                 name: LocalExternal::new(name),
+                module: Cell::new(false),
                 location: None,
                 navigator: None,
                 listeners: None,
@@ -84,6 +89,16 @@ impl<'gc> Cx<'_, 'gc> {
     /// `global`'s name.
     pub fn worker_global_name(&self, global: Gc<'gc, WorkerGlobalScope>) -> &'gc DomString {
         global.into_ref().name.get()
+    }
+
+    /// `global` is a module worker's (its type `module`), as it is made.
+    pub fn set_worker_global_module(&self, global: Gc<'gc, WorkerGlobalScope>) {
+        global.module.set(true);
+    }
+
+    /// Whether `global` is a module worker's.
+    pub fn worker_global_is_module(&self, global: Gc<'gc, WorkerGlobalScope>) -> bool {
+        global.module.get()
     }
 
     pub(crate) fn worker_global_wrapper_edge(

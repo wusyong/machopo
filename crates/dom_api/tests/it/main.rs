@@ -995,6 +995,10 @@ impl dom_api::WorkerGlobalHost for TestFront<'_> {
     fn register_blob_url(&self, _: &str, _: &dom::BlobData) {}
 
     fn revoke_blob_url(&self, _: &str) {}
+
+    fn start_module_fetch(&self, _: &url::Url, _: dom::ScriptCors, _: bool) -> u64 {
+        0
+    }
 }
 
 impl OpFront for TestFront<'_> {
