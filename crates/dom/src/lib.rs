@@ -442,6 +442,9 @@ pub struct DocumentData {
     pub(crate) canvas_fonts: External<Cell<Option<Box<canvas::CanvasFontCache>>>>,
     /// The `<iframe>` whose content document it is (`frame`).
     pub(crate) frame_owner: Member<Node>,
+    /// The document it has its origin from, if not its URL or its iframe's
+    /// (`frame`'s `set_origin_source`).
+    pub(crate) origin_source: Member<Node>,
     /// Discarded: its browsing context went (`frame`).
     pub(crate) discarded: Cell<bool>,
     /// A top-level document's: the document of its frame tree's focused

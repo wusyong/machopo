@@ -439,10 +439,19 @@ impl CommittedDocument {
         }
     }
 
-    /// Whether it may open local files: a local file (not an error page
-    /// for one).
-    pub(crate) fn is_local(&self) -> bool {
-        !self.error_page && is_file_url(&self.url)
+    /// Its origin, as its URL's (an error page's, opaque), and whether it
+    /// may open local files: a local file (not an error page for one).
+    pub(crate) fn origin(&self) -> crate::frame_tree::CommittedOrigin {
+        if self.error_page {
+            return crate::frame_tree::CommittedOrigin::opaque();
+        }
+        crate::frame_tree::CommittedOrigin {
+            origin: url::Url::parse(&self.url).map_or_else(
+                |_| crate::frame_tree::CommittedOrigin::opaque().origin,
+                |url| url.origin(),
+            ),
+            local: is_file_url(&self.url),
+        }
     }
 }
 

@@ -519,8 +519,18 @@ pub(crate) fn set_security_token(
         context.set_security_token(token);
         return;
     }
-    let text = match url::Url::parse(url).map(|url| url.origin()) {
-        Ok(origin) if origin.is_tuple() => origin.ascii_serialization(),
+    set_origin_token(scope, context, url::Url::parse(url).ok().map(|url| url.origin()));
+}
+
+/// `context`'s security token: `origin`'s (a new one for an opaque
+/// origin, as for none).
+pub(crate) fn set_origin_token(
+    scope: &mut Scope<'_, '_, '_>,
+    context: v8::Local<'_, v8::Context>,
+    origin: Option<url::Origin>,
+) {
+    let text = match origin {
+        Some(origin) if origin.is_tuple() => origin.ascii_serialization(),
         // An opaque origin's text has a space, which no tuple origin's has.
         _ => {
             let (state, _) = scope.state_mut();

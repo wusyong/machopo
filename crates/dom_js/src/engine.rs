@@ -592,6 +592,40 @@ impl ScriptEngine for V8Engine {
         Some(document)
     }
 
+    /// As the DOM's, and the realm's security token follows: that of the
+    /// realm of `source`'s origin's document, if a frame shows it still
+    /// (an opaque origin is that realm's alone), else its origin's.
+    fn inherit_origin(&mut self, frame: dom_api::FrameId, document: &NodeRoot, source: &NodeRoot) {
+        let Some((context, _)) = self.frame_context_and_document(frame) else {
+            return;
+        };
+        let state = self.state();
+        let (origin_document, origin) = state.dom.mutate(|cx| {
+            cx.set_origin_source(document.get(cx.gc), source.get(cx.gc));
+            let origin_document = cx.origin_document(source.get(cx.gc));
+            (cx.node_id(origin_document), cx.document_origin(origin_document))
+        });
+        let shown = state
+            .frames
+            .of_document(origin_document)
+            .map(|shown| shown.context.clone());
+        let isolate = self.data.isolate();
+        v8::scope!(let scope, isolate);
+        let context = v8::Local::new(scope, &context);
+        let scope = &mut v8::ContextScope::new(scope, context);
+        match shown {
+            Some(shown) => {
+                let shown = v8::Local::new(scope, &shown);
+                let token = shown.get_security_token(scope);
+                context.set_security_token(token);
+            }
+            None => {
+                let mut scope = state::scope(scope).expect("the engine's DOM");
+                crate::frames::set_origin_token(&mut scope, context, origin);
+            }
+        }
+    }
+
     fn take_frame_requests(&mut self) -> Vec<dom_api::FrameRequest> {
         let state = self.state();
         // The `fetch()`s since: their documents' frames' requests now.

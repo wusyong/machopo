@@ -2072,3 +2072,64 @@ fn fetch() {
         "200 basic application/json {\"a\":[1]}, AbortError true, text/x blob, revoked TypeError"
     );
 }
+
+/// A document at `about:blank` has its origin from the one that navigated
+/// its frame there (HTML's initiator origin), in the DOM and in V8 alike: a
+/// child frame of another origin that navigates itself or its sibling to it
+/// has it be of that origin, which their parent can't reach; one its
+/// parent navigates there is its parent's.
+#[test]
+fn about_blank_has_its_initiators_origin() {
+    use std::collections::HashMap;
+
+    use net::test_server::{Route, TestServer};
+    let network = net::NetworkContextParams {
+        host_resolver_rules: net::HostMappingRules::parse("MAP other.test 127.0.0.1").unwrap(),
+        ..Default::default()
+    };
+    let page = r#"<!DOCTYPE html>
+<iframe id=other></iframe><iframe id=same src=/child.html></iframe><iframe id=third></iframe>
+<script>
+other.src = location.href.replace('127.0.0.1', 'other.test') + 'child.html';
+// Its document through the DOM, and its window's members through V8.
+const reached = f => {
+  let document = f.contentDocument !== null;
+  let window;
+  try { window = typeof f.contentWindow.document === 'object'; } catch { window = false; }
+  return `${document} ${window}`;
+};
+let pending = 3;
+const done = () => {
+  if (--pending) return;
+  testRunner.reportHarnessResults(`other ${reached(other)}, same ${reached(same)}, third ${reached(third)}`);
+};
+// Each to `about:blank`: the same origin's by this document; the third by
+// the other origin's, which is still there; the other origin's by itself.
+same.onload = () => { same.onload = done; same.src = 'about:blank'; };
+onmessage = e => {
+  if (e.source !== other.contentWindow) return;
+  third.onload = () => {
+    done();
+    other.onload = done;
+    other.contentWindow.postMessage('itself', '*');
+  };
+  other.contentWindow.postMessage('third', '*');
+};
+</script>"#;
+    let child = r#"<!DOCTYPE html><script>
+onmessage = e => {
+  if (e.data == 'third') parent.frames[2].location.href = 'about:blank';
+  else location.href = 'about:blank';
+};
+onload = () => parent.postMessage('ready', '*');
+</script>"#;
+    let server = TestServer::start(HashMap::from([
+        ("/".to_owned(), Route::ok("text/html", page)),
+        ("/child.html".to_owned(), Route::ok("text/html", child)),
+    ]))
+    .unwrap();
+    assert_eq!(
+        headless::run_testharness(&server.url("/"), Duration::from_secs(30), network).unwrap(),
+        "other false false, same true true, third false false"
+    );
+}

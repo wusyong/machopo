@@ -27,24 +27,54 @@ struct FrameTreeNode {
     /// `about:blank`). The `about:` documents a child frame's renderer
     /// commits itself aren't told.
     url: Option<String>,
+    /// Its document's origin: its URL's, or the one it has from another
+    /// document (an `about:blank`'s initiator's, an `about:srcdoc`'s
+    /// parent's, a child frame's initial `about:blank`'s parent's); an
+    /// error page's is opaque.
+    origin: url::Origin,
     /// Its document may open local files: it is one (not an error page), or
     /// has its origin from one (Blink's `SecurityOrigin::
-    /// CanLoadLocalResources`): a child frame's initial `about:blank` its
-    /// parent's.
+    /// CanLoadLocalResources`), as its origin. (A local file's origin is
+    /// opaque, which doesn't say it is one.)
     local: bool,
+    /// Its iframe's `srcdoc`, as the renderer last told
+    /// (`DidChangeSrcDoc`): what its `about:srcdoc` documents are.
+    srcdoc: String,
     /// The navigation the browser sent the renderer to commit last, and
-    /// whether its document is local: what it reports committing.
-    committing: Option<(u64, bool)>,
+    /// what its document is: what the renderer reports committing.
+    committing: Option<(u64, CommittedOrigin)>,
     navigation: Option<NavigationRequest>,
 }
 
+/// A document's origin, and whether it may open local files.
+#[derive(Debug, Clone)]
+pub(crate) struct CommittedOrigin {
+    pub(crate) origin: url::Origin,
+    pub(crate) local: bool,
+}
+
+impl CommittedOrigin {
+    /// One of no other document's origin, that opens no local files (an
+    /// error page's).
+    pub(crate) fn opaque() -> Self {
+        Self {
+            origin: url::Url::parse("about:blank")
+                .expect("about:blank")
+                .origin(),
+            local: false,
+        }
+    }
+}
+
 impl FrameTreeNode {
-    fn new(parent: Option<FrameToken>, local: bool) -> Self {
+    fn new(parent: Option<FrameToken>, origin: CommittedOrigin) -> Self {
         Self {
             parent,
             children: Vec::new(),
             url: None,
-            local,
+            origin: origin.origin,
+            local: origin.local,
+            srcdoc: String::new(),
             committing: None,
             navigation: None,
         }
@@ -103,6 +133,43 @@ impl FrameTree {
         self.nodes.get(&frame).is_some_and(|node| node.local)
     }
 
+    /// `frame`'s document's origin, as the browser knows it.
+    pub fn origin(&self, frame: FrameToken) -> Option<&url::Origin> {
+        self.nodes.get(&frame).map(|node| &node.origin)
+    }
+
+    /// `frame`'s document's origin and whether it may open local files,
+    /// for a document that has them from it.
+    pub(crate) fn committed_origin(&self, frame: FrameToken) -> Option<CommittedOrigin> {
+        let node = self.nodes.get(&frame)?;
+        Some(CommittedOrigin {
+            origin: node.origin.clone(),
+            local: node.local,
+        })
+    }
+
+    /// `frame`'s iframe's `srcdoc`, as the renderer last told.
+    pub fn srcdoc(&self, frame: FrameToken) -> Option<&str> {
+        self.nodes.get(&frame).map(|node| node.srcdoc.as_str())
+    }
+
+    /// `frame`'s iframe's `srcdoc` is `srcdoc` now (`DidChangeSrcDoc`). A
+    /// frame the tree doesn't have, or the main frame (which has no
+    /// iframe), is a bad message.
+    pub(crate) fn set_srcdoc(
+        &mut self,
+        frame: FrameToken,
+        srcdoc: &str,
+    ) -> Result<(), BadMessageReason> {
+        match self.nodes.get_mut(&frame) {
+            Some(node) if node.parent.is_some() => {
+                srcdoc.clone_into(&mut node.srcdoc);
+                Ok(())
+            }
+            _ => Err(BadMessageReason::SrcdocOfUnknownFrame),
+        }
+    }
+
     /// `frame`'s navigation on its way.
     pub(crate) fn navigation(&self, frame: FrameToken) -> Option<&NavigationRequest> {
         self.nodes.get(&frame)?.navigation.as_ref()
@@ -155,17 +222,23 @@ impl FrameTree {
     }
 
     /// The browser sends `frame` navigation `navigation_id`'s document to
-    /// commit, a local one if `local`: as the renderer reports it
-    /// committed (`did_commit`), it is the frame's.
-    pub(crate) fn committing(&mut self, frame: FrameToken, navigation_id: u64, local: bool) {
+    /// commit, of `origin`: as the renderer reports it committed
+    /// (`did_commit`), it is the frame's.
+    pub(crate) fn committing(
+        &mut self,
+        frame: FrameToken,
+        navigation_id: u64,
+        origin: CommittedOrigin,
+    ) {
         if let Some(node) = self.nodes.get_mut(&frame) {
-            node.committing = Some((navigation_id, local));
+            node.committing = Some((navigation_id, origin));
         }
     }
 
     /// `frame` shows navigation `navigation_id`'s document, at `url`
     /// (`DidCommitNavigation`). A frame the tree doesn't have is a bad
-    /// message. One the browser didn't send isn't local.
+    /// message. One the browser didn't send is of an opaque origin and
+    /// isn't local.
     pub(crate) fn did_commit(
         &mut self,
         frame: FrameToken,
@@ -175,10 +248,12 @@ impl FrameTree {
         let Some(node) = self.nodes.get_mut(&frame) else {
             return Err(BadMessageReason::CommitOfUnknownFrame);
         };
-        node.local = node
+        let origin = node
             .committing
             .take_if(|(id, _)| *id == navigation_id)
-            .is_some_and(|(_, local)| local);
+            .map_or_else(CommittedOrigin::opaque, |(_, origin)| origin);
+        node.origin = origin.origin;
+        node.local = origin.local;
         node.url = Some(url.to_owned());
         Ok(())
     }
@@ -209,9 +284,12 @@ impl FrameTree {
         };
         node.children.push(frame);
         // Its initial `about:blank` has its parent's origin.
-        let local = node.local;
+        let origin = CommittedOrigin {
+            origin: node.origin.clone(),
+            local: node.local,
+        };
         self.nodes
-            .insert(frame, FrameTreeNode::new(Some(parent), local));
+            .insert(frame, FrameTreeNode::new(Some(parent), origin));
         Ok(())
     }
 
@@ -248,7 +326,7 @@ impl FrameTree {
             .get_mut(&self.root)
             .and_then(|root| root.navigation.take());
         self.nodes.clear();
-        let mut root = FrameTreeNode::new(None, false);
+        let mut root = FrameTreeNode::new(None, CommittedOrigin::opaque());
         root.navigation = navigation;
         self.nodes.insert(self.root, root);
     }
@@ -301,7 +379,11 @@ mod tests {
         let mut tree = FrameTree::new(token(0));
         assert_eq!(tree.url(token(0)), None);
         assert!(!tree.may_open_local_files(token(0)));
-        tree.committing(token(0), 1, true);
+        let local = CommittedOrigin {
+            origin: url::Url::parse("file:///a.html").unwrap().origin(),
+            local: true,
+        };
+        tree.committing(token(0), 1, local);
         tree.did_commit(token(0), 1, "file:///a.html").unwrap();
         assert_eq!(tree.url(token(0)), Some("file:///a.html"));
         assert!(tree.may_open_local_files(token(0)));
@@ -309,14 +391,32 @@ mod tests {
         assert!(tree.may_open_local_files(token(1)), "its parent's");
         assert_eq!(tree.url(token(1)), None);
         // A commit the browser didn't send (another number) isn't local.
-        tree.committing(token(1), 2, true);
+        tree.committing(token(1), 2, tree.committed_origin(token(0)).unwrap());
         tree.did_commit(token(1), 3, "file:///b.html").unwrap();
         assert!(!tree.may_open_local_files(token(1)));
-        tree.committing(token(0), 4, false);
+        let web = url::Url::parse("https://a.test/").unwrap().origin();
+        let committed = CommittedOrigin {
+            origin: web.clone(),
+            local: false,
+        };
+        tree.committing(token(0), 4, committed);
         tree.did_commit(token(0), 4, "https://a.test/").unwrap();
         assert!(!tree.may_open_local_files(token(0)));
+        assert_eq!(tree.origin(token(0)), Some(&web));
+        assert_ne!(tree.origin(token(1)), Some(&web), "an opaque one");
         tree.add_child(token(0), token(2)).unwrap();
         assert!(!tree.may_open_local_files(token(2)), "its parent's");
+        assert_eq!(tree.origin(token(2)), Some(&web), "its parent's");
+        // Its iframe's `srcdoc`, a child frame's alone.
+        assert_eq!(tree.srcdoc(token(2)), Some(""));
+        tree.set_srcdoc(token(2), "<p>x").unwrap();
+        assert_eq!(tree.srcdoc(token(2)), Some("<p>x"));
+        for frame in [token(0), token(9)] {
+            assert_eq!(
+                tree.set_srcdoc(frame, "y"),
+                Err(BadMessageReason::SrcdocOfUnknownFrame)
+            );
+        }
         assert_eq!(
             tree.did_commit(token(9), 5, "https://a.test/"),
             Err(BadMessageReason::CommitOfUnknownFrame)

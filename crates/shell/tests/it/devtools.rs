@@ -1072,3 +1072,37 @@ fn the_frames_are_there_while_paused() {
     page.call(None, "Debugger.resume", json!({}));
     page.answer(paused);
 }
+
+/// The main frame's `about:blank` its page navigated it to has the page's
+/// origin (HTML's initiator origin): what it posts comes from it, not from
+/// an opaque origin (`null`).
+#[test]
+fn a_pages_about_blank_has_its_origin() {
+    let server = server(&[("/", Route::ok("text/html", "<!DOCTYPE html>page"))]);
+    let machopo = Machopo::start();
+    let (mut page, _) = page(&machopo);
+    page.call(None, "Page.enable", json!({}));
+    load(&mut page, &server.url("/"));
+    evaluate(&mut page, "location.href = 'about:blank'; 0", None);
+    loop {
+        let navigated = page.event("Page.frameNavigated");
+        if navigated["params"]["frame"]["url"] == "about:blank" {
+            break;
+        }
+    }
+    let posted = page.call(
+        None,
+        "Runtime.evaluate",
+        json!({
+            "expression": "new Promise(resolve => { onmessage = e => resolve(e.origin); postMessage('x', '*'); })",
+            "awaitPromise": true,
+            "returnByValue": true,
+        }),
+    );
+    let page_origin = server.url("/");
+    assert_eq!(
+        posted["result"]["result"]["value"],
+        json!(page_origin.trim_end_matches('/')),
+        "{posted}"
+    );
+}

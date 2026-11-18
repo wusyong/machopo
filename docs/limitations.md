@@ -391,18 +391,17 @@
 
 ## iframe
 
-iframe 照同源、同 process 的情形做：有自己的 browsing context、window 和 document，`src` 由 browser 載入（`srcdoc`、`about:blank` 由 renderer 自己 commit），畫在 iframe 裡，接收點擊和滾輪。
+iframe 照同源、同 process 的情形做：有自己的 browsing context、window 和 document，`src`、`srcdoc`、`about:blank` 由 browser 載入或 commit（一開始的 `about:blank` 照 HTML 不導覽），畫在 iframe 裡，接收點擊和滾輪。
 
 - iframe 是 replaced element（300×150 加上 2px 的邊框，`width`、`height`、`frameborder`），子 frame 照 iframe 的內容框跑 style、layout，畫在內容框裡，點擊和滾輪會進子 frame，滾輪捲到底往外層傳；鍵盤從 focus 的元素（沒有時從最後按下滑鼠的元素，或 focused frame）往外捲。
 - `<body>` 的 `marginwidth`、`leftmargin`（左右）、`marginheight`、`topmargin`（上下）照 Chrome 是 presentational hint：兩個一起出現時後寫的贏（HTML 的「The page」是 `marginwidth`、`marginheight` 贏；Chrome 152 和 machopo 一樣），`rightmargin`、`bottommargin` 照 Chrome 不算。iframe 的 `marginwidth`、`marginheight` 不傳給子 frame 的 body：子 frame 的 body 照樣是預設的 8px margin（WPT 的 `body-margin-*` 有 8 個是預期的失敗）。
 - 子 frame 不 throttle：每個 main frame 都看每個子 frame 要不要更新，看不見的、跨源的也一樣（Chromium 會 throttle 看不見的跨源 frame；同一個 process 裡 `display: none` 的 frame 不 throttle，和 machopo 一樣）。
 - 跨源的 window 和它的 `location` 只碰得到規範允許的成員（`postMessage`、`closed`、`frames`、`length`、`parent`、`top`、`location.href` 的設定和 `replace()` 等），其他的是 `SecurityError`。其中 `close()`、`blur()` 什麼都不做，`opener` 一律是 `null`（沒有 `window.open`）。
 - 跨網站的 iframe 和頁面在同一個 renderer，只靠 security token 擋住互相存取（Chromium 的 site isolation 放在別的 process）。
-- 子 frame 導覽到別的文件（`src`、點連結、`location.href = …`、`location.reload()`）由 browser 載入、換掉子 frame 的文件（舊的文件裡的 frame 跟著不在），但不進 session history：沒有子 frame 的歷史。子 frame 的 `about:blank`、`srcdoc` 由 renderer 自己 commit，browser 不知道：它的 frame 樹上記的還是之前的文件。子 frame 裡導覽到自己的 `#fragment`（連結、`location.hash`）照樣捲動、改網址、分派 `popstate` 和 `hashchange`，但不進 session history，browser 也不知道：子 frame 的 `location.reload()` 載入 browser 記的網址，之後的 `#fragment`、`pushState` 不算。
+- 子 frame 導覽到別的文件（`src`、點連結、`location.href = …`、`location.reload()`）由 browser 載入、換掉子 frame 的文件（舊的文件裡的 frame 跟著不在），但不進 session history：沒有子 frame 的歷史。`about:blank` 的 origin 照 HTML 是發起導覽的文件的，`srcdoc` 的是父 frame 的；`about:srcdoc` 只有和父 frame 同源的文件能叫子 frame 導覽過去（或同源的 `srcdoc` 重新載入自己，Chromium 的規則），其他的是錯誤頁。子 frame 裡導覽到自己的 `#fragment`（連結、`location.hash`）照樣捲動、改網址、分派 `popstate` 和 `hashchange`，但不進 session history，browser 也不知道：子 frame 的 `location.reload()` 載入 browser 記的網址，之後的 `#fragment`、`pushState` 不算。
 - `javascript:` 的 `src` 不執行（commit 一份空的文件，網址是那個 `javascript:` 網址）。`loading`、`sandbox`、`allow` 都還沒有（sandbox 的 iframe 照樣跑 script，裡面的 `loading="lazy"` 的圖照樣等到接近 viewport 才載入；`name` 的名稱給 window 的具名屬性和連結的 `target`，沒有 `window.name`）；`referrerpolicy` 只用在子 frame 的 navigation timing（`no-referrer` 時 redirect 的 `Timing-Allow-Origin` 只認 `*`；machopo 的請求都不送 `Referer`）。
 - 載入失敗（網路錯誤）的子 frame 是錯誤頁，和 main frame 的一樣：文件的網址是 `chrome-error://chromewebdata/`（opaque 的 origin，父 frame 讀不到它），browser 記著失敗的網址。頁面不准的導覽（不是 `file:` 的文件要開 `file:`、browser 不載入的 scheme）什麼都不載入：iframe 留著原本的文件，父文件的 `load` 不等它。
 - `window[i]` 和集合的 indexed property 一樣只能讀：設定、刪除、`Object.defineProperty` 會在 global 上建一般的屬性（規範是失敗）。
-- `srcdoc` 的子 frame 在插入它的 script 跑完之前就載完、iframe 的 `load` 已經分派了；Chrome 之後才載入，script 之後加的 listener 等得到（WPT 的 `css/cssom-view/cssom-geometryutils-lifecycle.html` TIMEOUT）。
 
 ## 連結導航和 hit testing
 

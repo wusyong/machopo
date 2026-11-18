@@ -349,13 +349,20 @@ impl<'gc> Cx<'_, 'gc> {
             .get(self.gc)
     }
 
-    /// The document whose URL gives `document` its origin: itself, or for
-    /// an `about:` document of a child frame (its initial `about:blank`, an
-    /// `about:srcdoc`), its iframe's document's, as its creator's (HTML's).
+    /// The document whose URL gives `document` its origin: the one it has
+    /// it from (`set_origin_source`), itself, or for an `about:` document
+    /// of a child frame (its initial `about:blank`, an `about:srcdoc`), its
+    /// iframe's document's, as its creator's (HTML's).
     pub fn origin_document(&self, document: NodeRef<'gc>) -> NodeRef<'gc> {
         let mut at = document;
         // A frame tree is fewer than u16::MAX deep.
         for _ in 0..u16::MAX {
+            if let Some(source) = self
+                .document_data(at)
+                .and_then(|data| data.into_ref().origin_source.get(self.gc))
+            {
+                return source;
+            }
             let about = self
                 .document_url(at)
                 .and_then(|url| url::Url::parse(&url.to_str()).ok())
@@ -366,6 +373,19 @@ impl<'gc> Cx<'_, 'gc> {
             }
         }
         at
+    }
+
+    /// `document` has its origin from `source` (HTML's: an `about:blank`
+    /// navigated to has its initiator's), as `source` has it now: its
+    /// `origin_document` is `source`'s from now on.
+    pub fn set_origin_source(&self, document: NodeRef<'gc>, source: NodeRef<'gc>) {
+        let source = self.origin_document(source);
+        if Gc::ptr_eq(source, document) {
+            return;
+        }
+        self.ensure_document_data(document)
+            .origin_source
+            .set(self.gc, Some(source));
     }
 
     /// `document`'s origin, as its URL's (`origin_document`'s): none

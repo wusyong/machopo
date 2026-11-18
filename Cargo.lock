@@ -376,6 +376,7 @@ dependencies = [
  "protocol",
  "renderer",
  "tracing",
+ "url",
  "viz",
 ]
 

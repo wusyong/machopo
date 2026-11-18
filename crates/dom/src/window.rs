@@ -1363,6 +1363,7 @@ pub(crate) fn new_document_data<'gc>() -> DocumentDataInit<'gc> {
         auto_sizes_observer: None,
         canvas_fonts: elise::External::new(Cell::new(None)),
         frame_owner: None,
+        origin_source: None,
         discarded: Cell::new(false),
         focused_frame: None,
         live_ranges: None,

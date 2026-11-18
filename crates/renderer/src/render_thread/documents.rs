@@ -260,12 +260,15 @@ pub(super) struct ChildFrames {
 }
 
 /// A child frame's navigation the renderer asked the browser for: its
-/// number for it (`BeginNavigation`'s id), and whether its iframe's
-/// referrer policy was `no-referrer` (what its navigation timing reads of
-/// its response's `Timing-Allow-Origin`).
+/// number for it (`BeginNavigation`'s id), whether its iframe's referrer
+/// policy was `no-referrer` (what its navigation timing reads of its
+/// response's `Timing-Allow-Origin`), and where its origin comes from.
 pub(super) struct ChildNavigationRequest {
     begin_id: u64,
     no_referrer: bool,
+    /// For one to `about:blank`: the initiator's document, which its
+    /// document has its origin from (`about_blank_origin_source`).
+    origin_source: Option<NodeRoot>,
 }
 
 /// A child frame's document as the browser sent it: its URL (an error
@@ -289,6 +292,8 @@ pub(super) struct ChildCommit<'a> {
     pub(super) navigation_id: u64,
     pub(super) token: protocol::FrameToken,
     pub(super) url: String,
+    /// The document it has its origin from, if not its URL or its parent.
+    pub(super) origin_source: Option<NodeRoot>,
 }
 
 impl ChildFrames {
@@ -493,6 +498,7 @@ impl RenderThread {
         navigation_id: u64,
         url: String,
         reported_url: String,
+        origin_source: Option<NodeRoot>,
         mime_type: &str,
         charset: Option<&str>,
         content_language: Option<&str>,
@@ -508,7 +514,12 @@ impl RenderThread {
         let wasm = self.script_engine.wasm_engine.is_some()
             && mime_type == "text/html"
             && encoding::declares_wasm_scripts(body);
-        let replaced = (self.engine.is_some() && self.engine_is_wasm != wasm).then(|| {
+        let replacing = self.engine.is_some() && self.engine_is_wasm != wasm;
+        // The initiator's document is the engine before's, which goes with
+        // its DOM (what the renderer holds of it let go first): no other
+        // document is of its origin then.
+        let origin_source = origin_source.filter(|_| !replacing);
+        let replaced = replacing.then(|| {
             let previous = self.document.as_ref().map(|next| next.url.clone());
             (previous, self.replace_engine(wasm))
         });
@@ -574,6 +585,9 @@ impl RenderThread {
         let document = engine
             .create_window(top, document_url.as_str(), origin)
             .expect("the top-level frame is the engine's");
+        if let Some(source) = &origin_source {
+            engine.inherit_origin(top, &document, source);
+        }
         let document_node = engine.dom_mut().read(|cx| cx.node_id(document.get(cx.gc)));
         self.dom_agent.document_committed(document_node);
         engine.set_navigation_timing(
@@ -671,6 +685,7 @@ impl RenderThread {
         self.overlay_agent.dom_gone();
         self.document = None;
         self.children = ChildFrames::default();
+        self.main_origin_source = None;
         // What was asked for its documents: a response still to come is
         // no one's (the next DOM's nodes are numbered from the start).
         self.images.clear();
@@ -883,12 +898,16 @@ impl RenderThread {
         initiator: FrameId,
         kind: protocol::renderer::BeginNavigationKind,
     ) {
+        let origin_source = self.about_blank_origin_source(initiator, &kind);
         let (Some(frame), Some(initiator)) = (self.frame_token(frame), self.frame_token(initiator))
         else {
             tracing::warn!(?kind, "a navigation of a frame the browser doesn't know");
             return;
         };
         let id = self.begin_navigation_ids.get_next();
+        if let Some(source) = origin_source {
+            self.main_origin_source = Some((id, source));
+        }
         let _ = self.to_browser.send(RendererHostMsg::BeginNavigation {
             frame,
             initiator,
@@ -1102,31 +1121,35 @@ impl RenderThread {
     /// (`navigate_child_to`); `srcdoc`'s markup and `about:blank` committed
     /// here.
     fn navigate_child(&mut self, frame: FrameId, navigation: ChildNavigation) {
-        match navigation {
-            ChildNavigation::Src(src) => {
-                let Some(parent) = self.children.frames.get(&frame).map(|(parent, _)| *parent)
-                else {
-                    return;
-                };
-                self.navigate_child_to(frame, parent, &src, false, true);
-            }
-            ChildNavigation::Srcdoc(markup) => {
-                let url = Url::parse("about:srcdoc").expect("about:srcdoc");
-                self.queue_child_commit(frame, url, markup);
-            }
-            ChildNavigation::AboutBlank => {
-                let url = Url::parse("about:blank").expect("about:blank");
-                self.queue_child_commit(frame, url, String::new());
-            }
+        let Some(parent) = self.children.frames.get(&frame).map(|(parent, _)| *parent) else {
+            return;
+        };
+        // The browser has its iframe's `srcdoc` as it is now, which an
+        // `about:srcdoc` document is (Blink tells it as the frame is made
+        // and as the attribute changes, each of which navigates it).
+        let srcdoc = match &navigation {
+            ChildNavigation::Srcdoc(markup) => markup.clone(),
+            ChildNavigation::Src(_) | ChildNavigation::AboutBlank => String::new(),
+        };
+        if let Some(token) = self.children.token(frame) {
+            let _ = self
+                .to_browser
+                .send(RendererHostMsg::DidChangeSrcDoc { frame: token, srcdoc });
         }
+        let src = match navigation {
+            ChildNavigation::Src(src) => src,
+            ChildNavigation::Srcdoc(_) => "about:srcdoc".to_owned(),
+            ChildNavigation::AboutBlank => "about:blank".to_owned(),
+        };
+        self.navigate_child_to(frame, parent, &src, false, true);
     }
 
     /// Child frame `frame`'s navigation to `src`, as `initiator` asked (its
     /// iframe, if `by_iframe`: its `src`): to a fragment of the document it
     /// shows, its URL is that, scrolled there (HTML's navigate to a
-    /// fragment); an `about:` URL commits here (a `javascript:` one empty);
-    /// any other the browser loads (`BeginNavigation`), the frame loading
-    /// until it commits or is dropped.
+    /// fragment); a `javascript:` one commits an empty document here; any
+    /// other the browser loads or commits (`BeginNavigation`), the frame
+    /// loading until it commits or is dropped.
     fn navigate_child_to(
         &mut self,
         frame: FrameId,
@@ -1143,7 +1166,7 @@ impl RenderThread {
         }
         // A `javascript:` one isn't run: an empty document commits, as its
         // load failed when the renderer fetched it.
-        if matches!(url.scheme(), "about" | "javascript") {
+        if url.scheme() == "javascript" {
             self.queue_child_commit(frame, url, String::new());
             return;
         }
@@ -1161,16 +1184,8 @@ impl RenderThread {
     }
 
     /// Child frame `frame`'s document loaded again (`location.reload()`):
-    /// one the browser loaded by the browser, from the URL it has; an
-    /// `about:` one here.
+    /// by the browser, from the URL it has.
     fn reload_child(&mut self, frame: FrameId) {
-        let Some(url) = self.doc(frame).map(|next| next.url.clone()) else {
-            return;
-        };
-        if url.scheme() == "about" {
-            self.queue_child_commit(frame, url, String::new());
-            return;
-        }
         let kind = protocol::renderer::BeginNavigationKind::Reload;
         self.begin_child_navigation(frame, frame, kind, None);
     }
@@ -1190,6 +1205,7 @@ impl RenderThread {
             tracing::warn!(?kind, "a navigation of a frame the browser doesn't know");
             return;
         };
+        let origin_source = self.about_blank_origin_source(initiator, &kind);
         let begin_id = self.begin_navigation_ids.get_next();
         self.children.navigating(frame);
         self.children.navigations.insert(
@@ -1197,6 +1213,7 @@ impl RenderThread {
             ChildNavigationRequest {
                 begin_id,
                 no_referrer,
+                origin_source,
             },
         );
         // DevTools hears of the frame, loading, before the browser tells
@@ -1209,6 +1226,24 @@ impl RenderThread {
             kind,
             devtools_initiator,
         });
+    }
+
+    /// The document whose origin a navigation `kind` as `initiator` asked
+    /// commits with, as it is as it is asked for: `initiator`'s, for one
+    /// to `about:blank` (HTML's initiator origin; Chromium's
+    /// `origin_to_commit`, taken as the navigation starts). An opaque one
+    /// is that document's alone, which a value through the browser and
+    /// back wouldn't be.
+    fn about_blank_origin_source(
+        &self,
+        initiator: FrameId,
+        kind: &protocol::renderer::BeginNavigationKind,
+    ) -> Option<NodeRoot> {
+        let protocol::renderer::BeginNavigationKind::To { url, .. } = kind else {
+            return None;
+        };
+        let blank = Url::parse(url).is_ok_and(|url| url.scheme() == "about" && url.path() == "blank");
+        blank.then(|| self.doc(initiator).map(|next| next.document.clone()))?
     }
 
     /// Who asked for child frame `frame`'s navigation, as DevTools'
@@ -1247,7 +1282,11 @@ impl RenderThread {
             tracing::debug!(url = %document.url, "dropping a stale commit of a child frame");
             return false;
         }
-        self.children.navigations.remove(&frame);
+        let asked = self.children.navigations.remove(&frame);
+        let navigation = ChildCommit {
+            origin_source: asked.and_then(|asked| asked.origin_source),
+            ..navigation
+        };
         self.commit_child(
             frame,
             document.url,
@@ -1400,6 +1439,12 @@ impl RenderThread {
         let Some(document) = engine.create_window(frame, url.as_str(), now) else {
             return;
         };
+        if let Some(source) = navigation
+            .as_ref()
+            .and_then(|navigation| navigation.origin_source.as_ref())
+        {
+            engine.inherit_origin(frame, &document, source);
+        }
         engine.set_navigation_timing(
             frame,
             crate::navigation_timing::document_timing(&timing, time_origin, self.clock.now()),

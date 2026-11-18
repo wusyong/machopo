@@ -136,6 +136,17 @@ pub trait ScriptEngine: ParserHost {
         time_origin: Instant,
     ) -> Option<NodeRoot>;
 
+    /// `document`, `frame`'s, just made (`create_window`), has its origin
+    /// from `source` (HTML's: an `about:blank` its initiator navigated it
+    /// to), as `source` has it now, before any of its script runs. The
+    /// DOM's origin by default; an engine whose realms have their own say
+    /// (V8's security tokens) has them follow.
+    fn inherit_origin(&mut self, frame: crate::FrameId, document: &NodeRoot, source: &NodeRoot) {
+        let _ = frame;
+        self.dom_mut()
+            .mutate(|cx| cx.set_origin_source(document.get(cx.gc), source.get(cx.gc)));
+    }
+
     /// What the engine asks the host to do for its frames since the last
     /// time (a child made, to navigate, gone, a `fetch()` to send), in
     /// order, taken.

@@ -8,6 +8,7 @@
 
 | 項目 | 為什麼測不到 | 現在靠什麼 | 之後怎麼處理 |
 | --- | --- | --- | --- |
+| 頁面換 engine（wasm 文件和 JS 文件之間）的那次 commit 不用發起者的文件當 origin 的來源（`renderer` 的 `commit_document_navigation` 的 `replacing`）：那份文件是舊的 engine 的，renderer 拿著的要在它的 heap 之前放掉 | 要 wasm 的文件把 main frame 導覽到 `about:blank` 才走得到，沒有這樣的測試；拿掉時沒有測試失敗 | 審查；renderer 換 engine 時放掉它拿著的 DOM 的其他東西（`replace_engine`）有測試 | 補一份 wasm 的文件導覽到 `about:blank` 的情境（`wasm_documents`） |
 | renderer 送出文件的請求（`FetchResource` 的 destination 是 `Document` 或 `Iframe`）時，IO thread 回錯誤、叫 UI thread 結束它（`browser` 的 `render_process_host.rs`、`ContentsEvent::BadMessage`） | renderer 不會送：所有 frame 的文件都由 browser 載入，測試沒有辦法讓真的 renderer 送一則 | 審查；UI thread 收到 `BadMessage` 之後的處理和其他壞掉的訊息同一個函式（`received_bad_message`，`a_bad_message_ends_the_renderer` 守著） | 拆成 process、有能直接寫 renderer 的通道的測試工具時，補一則假的文件請求 |
 | renderer 結束時，main frame 進行中的導覽留著（`browser` 的 `FrameTree::reset`）：它的結束照樣到 UI thread，`Page.navigate` 等的回答等得到 | 拿掉時載入被取消、不再回報，只有「renderer 在 main frame 載入中結束、DevTools 正等著 `Page.navigate`」看得出來，沒有這樣的測試 | 審查；和之前的行為一樣（之前 main frame 的導覽不放在樹上，renderer 結束時不碰它） | `shell` 的 DevTools 測試加一份：`Page.navigate` 到一個慢的頁，回答之前 `about:crash` |
 | 直接開的視窗照 `--ui-layout=sidebar` 從側邊欄開始（`shell` 的 `window.rs` 的 `App` 的 `ui_layout`，開視窗時交給 `BrowserView::set_ui_layout`） | 自動化的 pipe 和情境一律從橫式開始，不接受這個選項；`--window` 的情境也是經過 pipe | 審查；選項的解析有 `machopo` 的單元測試（`the_ui_layout_of_a_window`），側邊欄本身由快捷鍵切過去的測試和情境（`sidebar`）守 | 情境能從側邊欄開始時（之後要讓自動化從側邊欄開始，加 capability 或情境的設定），補一份 |
@@ -282,6 +283,7 @@
 - 同一個 frame 的導覽被另一個取代時，browser 告訴 renderer 舊的被丟掉了（`web_contents.rs` 的 `replaced`）：拿掉也一樣。取代它的導覽是 renderer 自己請求的時候，renderer 已經只等新的，舊的編號的 `NavigationDropped` 本來就不理；browser 自己發起、取代 renderer 請求的子 frame 導覽（子 frame 的上一頁、下一頁）還沒有。
 - 子 frame commit 了 `file:` 的文件時讓 renderer 讀本機檔案（`web_contents.rs` 的 `commit` 的 `else if local`）：拿掉也一樣。子 frame 的文件要是 `file:`，發起的文件就要是 `file:`，一路往上，main frame 一開始就是 `file:` 的文件，已經給過了；之後子 frame 有 browser 自己發起的導覽（上一頁、下一頁）時才看得出來。
 - DevTools 只在 main frame 的導覽收到回應時回答等著的 `Page.navigate`（`automation_session.rs` 的 `navigation_ready` 前的 `frame_id == main_frame_id`）：拿掉也一樣。`navigation_ready` 照導覽的 id 找等著的 `Page.navigate`，子 frame 的導覽的 id 不會是它等的。
+- 導覽到 `about:srcdoc` 時，frame 已經是 `about:srcdoc`、發起者和它同源也放行（`web_contents.rs` 的 `may_commit_srcdoc` 的 `reloads`，Chromium 的第三條）：拿掉也一樣。`srcdoc` 的文件現在一律是父 frame 的 origin，和它同源的發起者也和父 frame 同源，下一條規則已經放行；有 `sandbox`（`srcdoc` 和父 frame 不同源）之後才看得出來。
 - headless 不理會分頁結束了的 renderer 的訊息（`shell` 的 `headless.rs` 的 `is_current_renderer`）：拿掉也一樣。headless 只有一個 renderer、不會重開；它被結束（壞掉的訊息）之後，headless 只能等到期限，那時處理不處理它之前送的訊息，結果都一樣。留著是為了和其他外層程式同一條規則。
 - renderer 收到主 frame 的 token 時，如果 engine 已經在，當場告訴它（`render_thread.rs` 處理 `RendererMsg::DevToolsMainFrameToken` 的 `set_main_frame_token`）：拿掉也一樣。Browser 對每個 renderer 送的第一則訊息就是這個 token，比任何文件都早，那時 engine 還沒建；engine 建好時才拿到 token 的那條（`devtools.rs` 的 `make_engine`）有測試守著。留著是為了不依賴訊息的順序。
 - DOM 的 collection 往回走時停在 root（`dom` 的 `collection_previous` 的 `parent` 的條件）：往回走只從快取的元素走到它之前、已經在 collection 裡的元素（或從最後一個走到它），永遠不會走過第一個元素，所以走不到 root 的 parent，拿掉條件結果一樣；它讓這個函式本身照「在 root 之內」的意思，之後有走過第一個元素的呼叫時才看得出來。

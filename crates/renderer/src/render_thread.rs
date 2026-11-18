@@ -314,6 +314,10 @@ struct RenderThread {
     /// Numbers the navigations asked of the browser (`BeginNavigation`),
     /// from 1.
     begin_navigation_ids: base::SequenceNumber<u64>,
+    /// The top-level frame's latest navigation to `about:blank` it asked
+    /// for, by its number, and the document its document is to have its
+    /// origin from (the initiator's).
+    main_origin_source: Option<(u64, dom::NodeRoot)>,
     devtools_main_frame_token: Option<protocol::FrameToken>,
     /// The input the compositor thread handed on and the main thread
     /// hasn't taken yet (what `isInputPending()` reads).
@@ -475,6 +479,7 @@ impl RenderThread {
             last_document_id: 0,
             devtools_main_frame_token: None,
             begin_navigation_ids: base::SequenceNumber::starting_at(1),
+            main_origin_source: None,
             pending_input,
             clock: Clock::new(),
             script_engine,
@@ -856,10 +861,14 @@ impl RenderThread {
                     no_referrer,
                 );
                 let committed = if main_frame {
+                    let origin_source = begin_id
+                        .and_then(|id| self.main_origin_source.take_if(|(asked, _)| *asked == id))
+                        .map(|(_, source)| source);
                     self.commit_navigation(
                         navigation_id,
                         document_url,
                         url,
+                        origin_source,
                         &mime_type,
                         charset.as_deref(),
                         content_language.as_deref(),
@@ -889,6 +898,7 @@ impl RenderThread {
                             navigation_id,
                             token: frame,
                             url,
+                            origin_source: None,
                         },
                     )
                 };
@@ -1077,6 +1087,7 @@ impl RenderThread {
         navigation_id: u64,
         url: String,
         reported_url: String,
+        origin_source: Option<dom::NodeRoot>,
         mime_type: &str,
         charset: Option<&str>,
         content_language: Option<&str>,
@@ -1101,6 +1112,7 @@ impl RenderThread {
             navigation_id,
             url,
             reported_url,
+            origin_source,
             mime_type,
             charset,
             content_language,

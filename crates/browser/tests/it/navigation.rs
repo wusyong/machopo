@@ -3554,6 +3554,11 @@ document.querySelector('base').setAttribute('href', '/later/');
                     *made = Some(*frame);
                     None
                 }
+                // The child frame's `srcdoc`'s.
+                RendererHostMsg::BeginNavigation {
+                    kind: BeginNavigationKind::To { url, .. },
+                    ..
+                } if url == "about:srcdoc" => None,
                 RendererHostMsg::BeginNavigation {
                     frame,
                     initiator,
@@ -3745,6 +3750,109 @@ document.querySelector('base').setAttribute('href', '/later/');
         web_contents.shutdown();
     }
 
+    /// A child frame's `srcdoc` is the browser's to commit: the renderer
+    /// tells it the attribute as it navigates the frame by it
+    /// (`DidChangeSrcDoc`), and asks for `about:srcdoc`, its parent
+    /// asking; the document is of its parent's origin. Changed, the new
+    /// one commits; taken away, the frame goes to `about:blank`, the
+    /// browser told it is empty.
+    #[test]
+    fn a_child_frames_srcdoc_is_the_browsers_to_commit() {
+        let html = format!(
+            "{}<iframe srcdoc='<title>one</title>'></iframe>",
+            after_load(
+                "const f = document.querySelector('iframe');\
+                 const titles = [f.contentDocument.title];\
+                 f.onload = () => {\
+                   titles.push(f.contentDocument.title || f.contentDocument.URL);\
+                   if (titles.length == 2) f.removeAttribute('srcdoc');\
+                   else report(titles.join(','));\
+                 };\
+                 f.srcdoc = '<title>two</title>';"
+            )
+        );
+        let server = server(&[("/", Route::ok("text/html", html))]);
+        let (mut web_contents, host_rx) = tab();
+        let main = web_contents.devtools_frame_token();
+        web_contents.navigate(server.url("/"));
+        let mut told = Vec::new();
+        // Its first `srcdoc`, its parent's origin.
+        let (child, url) = wait_for(&mut web_contents, &host_rx, |msg| {
+            if let RendererHostMsg::DidChangeSrcDoc { srcdoc, .. } = msg {
+                told.push(srcdoc.clone());
+            }
+            child_commit(main, msg)
+        });
+        assert_eq!(url, "about:srcdoc");
+        let tree = web_contents.frame_tree();
+        assert_eq!(tree.origin(child), tree.origin(main), "its parent's");
+        assert!(tree.origin(main).is_some_and(url::Origin::is_tuple));
+        let mut committed = vec![(child, url)];
+        let report = wait_for(&mut web_contents, &host_rx, |msg| {
+            match msg {
+                RendererHostMsg::DidChangeSrcDoc { srcdoc, .. } => told.push(srcdoc.clone()),
+                RendererHostMsg::DidCommitNavigation { frame, url, .. } if *frame != main => {
+                    committed.push((*frame, url.clone()));
+                }
+                _ => {}
+            }
+            reported(msg)
+        });
+        assert_eq!(report, "one,two,about:blank");
+        assert_eq!(told, ["<title>one</title>", "<title>two</title>", ""]);
+        let urls: Vec<&str> = committed.iter().map(|(_, url)| url.as_str()).collect();
+        assert_eq!(urls, ["about:srcdoc", "about:srcdoc", "about:blank"]);
+        let tree = web_contents.frame_tree();
+        assert_eq!(tree.srcdoc(child), Some(""));
+        assert_eq!(tree.url(child), Some("about:blank"));
+        assert_eq!(tree.origin(child), tree.origin(main), "its parent's, who asked");
+        web_contents.shutdown();
+    }
+
+    /// A child frame's `about:srcdoc` is its parent's content: a frame of
+    /// another origin may not have it commit (Chromium's
+    /// `CheckAboutSrcDoc`), which commits the error page instead, of no
+    /// origin. Its parent's origin may.
+    #[test]
+    fn a_frame_of_another_origin_may_not_navigate_to_about_srcdoc() {
+        // The `data:` frame is of an opaque origin: it may navigate its
+        // sibling, but not to its `srcdoc`.
+        let html = "<!DOCTYPE html><iframe srcdoc='<title>s</title>'></iframe>\
+                    <iframe src=\"data:text/html,<script>onload = () => parent.frames[0].location.href = 'about:srcdoc'</script>\"></iframe>";
+        let server = server(&[("/", Route::ok("text/html", html))]);
+        let (mut web_contents, host_rx) = tab();
+        let main = web_contents.devtools_frame_token();
+        web_contents.navigate(server.url("/"));
+        let mut commits: HashMap<protocol::FrameToken, usize> = HashMap::new();
+        let srcdoc = wait_for(&mut web_contents, &host_rx, |msg| {
+            let (frame, url) = child_commit(main, msg)?;
+            let count = commits.entry(frame).or_default();
+            *count += 1;
+            (url == "about:srcdoc" && *count == 2).then_some(frame)
+        });
+        let tree = web_contents.frame_tree();
+        assert_ne!(tree.origin(srcdoc), tree.origin(main), "the error page's");
+        assert!(tree.origin(srcdoc).is_some_and(|origin| !origin.is_tuple()));
+        web_contents.shutdown();
+    }
+
+    /// The main frame's `about:blank` the page navigated it to has the
+    /// page's origin (HTML's initiator origin), as the browser knows it.
+    #[test]
+    fn a_pages_about_blank_has_its_origin() {
+        let server = server(&[("/", Route::ok("text/html", after_load("location.href = 'about:blank'")))]);
+        let (mut web_contents, host_rx) = tab();
+        let main = web_contents.devtools_frame_token();
+        web_contents.navigate(server.url("/"));
+        wait_for(&mut web_contents, &host_rx, |msg| match msg {
+            RendererHostMsg::DidCommitNavigation { url, .. } if url == "about:blank" => Some(()),
+            _ => None,
+        });
+        let page = url::Url::parse(&server.url("/")).unwrap().origin();
+        assert_eq!(web_contents.frame_tree().origin(main), Some(&page));
+        web_contents.shutdown();
+    }
+
     /// The browser drops a child frame's navigation another of its own
     /// replaced (`NavigationDropped`): the frame waits for the later
     /// still, and its parent's `load` with it.
@@ -3845,7 +3953,7 @@ document.querySelector('base').setAttribute('href', '/later/');
         // A parent not there, a token in use, a frame not there gone, the
         // main frame gone, a navigation of or by a frame not there: each to
         // the renderer of the time.
-        let bads: [fn(protocol::FrameToken, protocol::FrameToken) -> RendererHostMsg; 7] = [
+        let bads: [fn(protocol::FrameToken, protocol::FrameToken) -> RendererHostMsg; 9] = [
             |_, _| RendererHostMsg::DidCreateChildFrame {
                 parent: protocol::FrameToken([0xEE; 16]),
                 frame: protocol::FrameToken([0xEF; 16]),
@@ -3878,6 +3986,15 @@ document.querySelector('base').setAttribute('href', '/later/');
                 frame: protocol::FrameToken([0xEE; 16]),
                 navigation_id: 1,
                 url: "https://a.test/".into(),
+            },
+            // The `srcdoc` of a frame not there, or of the main frame.
+            |_, _| RendererHostMsg::DidChangeSrcDoc {
+                frame: protocol::FrameToken([0xEE; 16]),
+                srcdoc: String::new(),
+            },
+            |main, _| RendererHostMsg::DidChangeSrcDoc {
+                frame: main,
+                srcdoc: String::new(),
             },
         ];
         for bad in bads {
@@ -4002,6 +4119,15 @@ document.querySelector('base').setAttribute('href', '/later/');
                 match msg {
                     RendererHostMsg::DidCommitSameDocumentNavigation { url, .. } => {
                         panic!("the browser heard of {url}")
+                    }
+                    // Its `srcdoc`'s, its parent asking.
+                    RendererHostMsg::BeginNavigation {
+                        initiator,
+                        kind: BeginNavigationKind::To { url, .. },
+                        ..
+                    } if url == "about:srcdoc" => {
+                        assert_eq!(*initiator, main);
+                        None
                     }
                     RendererHostMsg::BeginNavigation {
                         frame,

@@ -517,6 +517,14 @@ pub enum RendererHostMsg {
         parent: crate::FrameToken,
         frame: crate::FrameToken,
     },
+    /// `FrameHost::DidChangeSrcDoc`: child frame `frame`'s iframe's `srcdoc`
+    /// is `srcdoc` now (empty without one), as the frame was made and as
+    /// the attribute changes: the browser keeps it, for the frame's
+    /// `about:srcdoc` documents to commit.
+    DidChangeSrcDoc {
+        frame: crate::FrameToken,
+        srcdoc: String,
+    },
     /// `FrameHost::Detach`: child frame `frame` has gone, and the frames in
     /// it with it: its iframe was removed, or the document it was in was
     /// navigated from (once for each frame that document had). The only

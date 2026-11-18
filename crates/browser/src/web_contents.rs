@@ -5,7 +5,9 @@ use crossbeam_channel::Sender;
 use gfx::{RectF, Size};
 use ipc::TimeTicks;
 use net::NetworkContext;
-use protocol::network::{LoadResult, RedirectInfo, RequestDestination, ResourceRequest};
+use protocol::network::{
+    LoadResult, NetError, NetErrorCode, RedirectInfo, RequestDestination, ResourceRequest,
+};
 use protocol::renderer::{
     BeginNavigationKind, HistoryEntryParams, NavigationLoad, NavigationTimingType, RedirectHop,
     RendererHostMsg, RendererMsg, VisualProperties, WindowOpenDisposition,
@@ -17,7 +19,7 @@ use protocol::viz::{
 use protocol::{FrameToken, TabId};
 
 use crate::bad_message::BadMessageReason;
-use crate::frame_tree::FrameTree;
+use crate::frame_tree::{CommittedOrigin, FrameTree};
 
 use crate::debug_urls::{DebugUrl, debug_url};
 use crate::navigation_controller::{NavigationController, NavigationType};
@@ -145,6 +147,9 @@ pub struct WebContents {
 #[derive(Debug, Default)]
 struct Asked {
     begin_id: Option<u64>,
+    /// The frame that asked: an `about:blank` it navigates to has its
+    /// document's origin.
+    initiator: Option<FrameToken>,
     devtools_initiator: Option<String>,
 }
 
@@ -465,6 +470,7 @@ impl WebContents {
         let main_frame = frame == self.frame_tree.root();
         let asked = Asked {
             begin_id: Some(id),
+            initiator: Some(initiator),
             devtools_initiator: devtools_initiator.map(String::from),
         };
         let (url, navigation_type) = match kind {
@@ -542,21 +548,16 @@ impl WebContents {
         main_frame: bool,
         local: bool,
     ) -> Result<(), &'static str> {
-        let (scheme, rest) = url.split_once(':').unwrap_or((url, ""));
+        let scheme = url.split_once(':').map_or(url, |(scheme, _)| scheme);
         match scheme.to_ascii_lowercase().as_str() {
             "http" | "https" | "file" | "blob" => {}
             "data" if main_frame => return Err("a page may not navigate to a data: URL"),
             "data" => {}
-            "about" => {
-                // HTML's "matches about:blank" (and about:srcdoc): the
-                // path alone, a query or fragment after it.
-                let path = rest.split(['?', '#']).next().unwrap_or_default();
-                match path {
-                    "blank" => {}
-                    "srcdoc" if !main_frame => {}
-                    _ => return Err("a page may not navigate to that about: URL"),
-                }
-            }
+            "about" => match crate::loader::about_path(url) {
+                Some("blank") => {}
+                Some("srcdoc") if !main_frame => {}
+                _ => return Err("a page may not navigate to that about: URL"),
+            },
             _ => return Err("no handler for the scheme"),
         }
         if is_file_url(url) && !local {
@@ -676,7 +677,7 @@ impl WebContents {
         navigation_start: TimeTicks,
     ) {
         let main_frame = frame == self.frame_tree.root();
-        let page = crate::loader::about_page(&url);
+        let page = self.about_document(frame, &url, asked.initiator);
         self.post(ContentsEvent::NavigationStarted(NavigationStarted {
             frame,
             main_frame,
@@ -692,12 +693,11 @@ impl WebContents {
             navigation_start,
             navigation_type,
         );
-        if let Some(markup) = page {
+        if let Some((document, origin)) = page {
             if let Some(before) = self.frame_tree.take_any_navigation(frame) {
                 self.replaced(frame, before);
             }
-            let document = CommittedDocument::page(url, markup.into());
-            self.commit(frame, navigation_id, committer, document);
+            self.commit(frame, navigation_id, committer, document, Some(origin));
             return;
         }
         let destination = if main_frame {
@@ -761,6 +761,68 @@ impl WebContents {
         }
     }
 
+    /// The document of `frame`'s navigation to `url`, as `initiator` asked,
+    /// if it loads nothing (Chromium's `NeedsUrlLoader`), and its origin:
+    /// `about:blank`'s empty, of the initiator's origin (an opaque one
+    /// for one the browser starts); a child frame's `about:srcdoc`, its
+    /// iframe's `srcdoc`, of its parent's origin, if it may have it
+    /// (`may_commit_srcdoc`), else the error page; the main frame's other
+    /// built-in pages, of no origin. `None` for any other URL.
+    fn about_document(
+        &self,
+        frame: FrameToken,
+        url: &str,
+        initiator: Option<FrameToken>,
+    ) -> Option<(CommittedDocument, CommittedOrigin)> {
+        let main_frame = frame == self.frame_tree.root();
+        let page = |markup: &str| CommittedDocument::page(url.to_owned(), markup.to_owned());
+        match crate::loader::about_path(url)? {
+            "blank" => {
+                let origin = initiator
+                    .and_then(|initiator| self.frame_tree.committed_origin(initiator))
+                    .unwrap_or_else(CommittedOrigin::opaque);
+                Some((page(""), origin))
+            }
+            "srcdoc" if !main_frame => {
+                if initiator.is_some_and(|initiator| !self.may_commit_srcdoc(frame, initiator)) {
+                    tracing::warn!(url, "a navigation to about:srcdoc the page may not make");
+                    let error = NetError::new(NetErrorCode::InvalidUrl, url);
+                    let page = crate::loader::error_page(&error);
+                    let document = CommittedDocument::error_page(url.to_owned(), page);
+                    return Some((document, CommittedOrigin::opaque()));
+                }
+                let parent = self.frame_tree.parent(frame)?;
+                let origin = self.frame_tree.committed_origin(parent)?;
+                Some((page(self.frame_tree.srcdoc(frame)?), origin))
+            }
+            _ if main_frame => {
+                let markup = crate::loader::about_page(url)?;
+                Some((page(markup), CommittedOrigin::opaque()))
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether `initiator` may have child frame `frame` commit its
+    /// `about:srcdoc` (Chromium's `NavigationRequest::CheckAboutSrcDoc`):
+    /// its content is its parent's, so an initiator of its parent's origin
+    /// may, or one of its own origin while it shows one already (it
+    /// reloads). Any other may not: HTML has no navigations to it.
+    fn may_commit_srcdoc(&self, frame: FrameToken, initiator: FrameToken) -> bool {
+        let tree = &self.frame_tree;
+        let Some(by) = tree.origin(initiator) else {
+            return false;
+        };
+        let reloads = tree
+            .url(frame)
+            .is_some_and(|url| crate::loader::about_path(url) == Some("srcdoc"))
+            && tree.origin(frame) == Some(by);
+        let parents = tree
+            .parent(frame)
+            .is_some_and(|parent| tree.origin(parent) == Some(by));
+        reloads || parents
+    }
+
     /// `before`, `frame`'s navigation, stops for another: its load goes with
     /// it, and the renderer hears that one it asked for won't commit.
     fn replaced(&self, frame: FrameToken, before: NavigationRequest) {
@@ -781,24 +843,28 @@ impl WebContents {
 
     /// `frame` commits `document`, navigation `navigation_id`'s, through
     /// `committer`, which is the frame's as the renderer reports it
-    /// committed. Whether the renderer may read local files goes with it
-    /// (`ChildProcessSecurityPolicy::GrantCommitURL`), before the renderer
-    /// has it: the main frame's new document decides, its child frames
-    /// going with the one before; a child frame's local one lets it too.
+    /// committed: of `origin` if it has one from another document, else
+    /// its URL's (an error page's, opaque). Whether the renderer may read
+    /// local files goes with it (`ChildProcessSecurityPolicy::
+    /// GrantCommitURL`), before the renderer has it: the main frame's new
+    /// document decides, its child frames going with the one before; a
+    /// child frame's local one lets it too.
     fn commit(
         &mut self,
         frame: FrameToken,
         navigation_id: u64,
         committer: Committer,
         document: CommittedDocument,
+        origin: Option<CommittedOrigin>,
     ) {
-        let local = document.is_local();
+        let origin = origin.unwrap_or_else(|| document.origin());
+        let local = origin.local;
         if frame == self.frame_tree.root() {
             self.process.set_file_access(local);
         } else if local {
             self.process.set_file_access(true);
         }
-        self.frame_tree.committing(frame, navigation_id, local);
+        self.frame_tree.committing(frame, navigation_id, origin);
         committer.commit(navigation_id, document);
     }
 
@@ -877,7 +943,7 @@ impl WebContents {
                 CommittedDocument::error_page(url, crate::loader::error_page(&error))
             }
         };
-        self.commit(frame, navigation_id, committer, document);
+        self.commit(frame, navigation_id, committer, document, None);
     }
 
     /// `RenderWidgetHostImpl::SynchronizeVisualProperties`. Allocates a new
@@ -1182,6 +1248,11 @@ impl WebContents {
             RendererHostMsg::RendererReady => {}
             RendererHostMsg::DidCreateChildFrame { parent, frame } => {
                 if let Err(reason) = self.frame_tree.add_child(*parent, *frame) {
+                    self.received_bad_message(reason);
+                }
+            }
+            RendererHostMsg::DidChangeSrcDoc { frame, srcdoc } => {
+                if let Err(reason) = self.frame_tree.set_srcdoc(*frame, srcdoc) {
                     self.received_bad_message(reason);
                 }
             }

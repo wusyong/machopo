@@ -298,6 +298,71 @@ fn a_document_navigated_from_is_no_longer_fully_active() {
     assert_eq!(log(&mut engine), "null / NotAllowedError");
 }
 
+/// A document may have its origin from another (an `about:blank` from
+/// its initiator, `ScriptEngine::inherit_origin`), as that one has it:
+/// from another origin's, it is of that origin, in the DOM and in V8; from
+/// an `about:srcdoc`, it is of the srcdoc's parent's, whatever comes of the
+/// srcdoc after.
+#[test]
+fn a_document_has_its_origin_from_the_one_it_inherits() {
+    let mut engine = engine();
+    run(
+        &mut engine,
+        "var other = document.body.appendChild(document.createElement('iframe'));
+         var srcdoc = document.body.appendChild(document.createElement('iframe'));
+         var blank = document.body.appendChild(document.createElement('iframe'));
+         var again = document.body.appendChild(document.createElement('iframe'));
+         0",
+    );
+    let requests = engine.take_frame_requests();
+    let frames: Vec<_> = requests
+        .iter()
+        .filter_map(|request| match request {
+            FrameRequest::Created { frame, .. } => Some(*frame),
+            _ => None,
+        })
+        .collect();
+    let [other, srcdoc, blank, again] = frames[..] else {
+        panic!("{requests:?}");
+    };
+    let FrameRequest::Created { owner, .. } = &requests[0] else {
+        unreachable!("the first is made");
+    };
+    let other_document = engine
+        .create_window(other, "https://other.test/", Instant::now())
+        .expect("its frame");
+    let srcdoc_document = engine
+        .create_window(srcdoc, "about:srcdoc", Instant::now())
+        .expect("its frame");
+    let blank_document = engine
+        .create_window(blank, "about:blank", Instant::now())
+        .expect("its frame");
+    engine.inherit_origin(blank, &blank_document, &other_document);
+    let again_document = engine
+        .create_window(again, "about:blank", Instant::now())
+        .expect("its frame");
+    engine.inherit_origin(again, &again_document, &srcdoc_document);
+    // The srcdoc's frame goes elsewhere: what has its origin from it keeps
+    // its parent's.
+    engine.create_window(srcdoc, "https://third.test/", Instant::now());
+    let origins = engine.dom_mut().read(|cx| {
+        let top = cx.document_of(owner.get(cx.gc));
+        let other = other_document.get(cx.gc);
+        [
+            dom_api::same_origin(cx, blank_document.get(cx.gc), top),
+            dom_api::same_origin(cx, blank_document.get(cx.gc), other),
+            dom_api::same_origin(cx, again_document.get(cx.gc), top),
+        ]
+    });
+    assert_eq!(origins, [false, true, true]);
+    run(
+        &mut engine,
+        "var error = f => { try { f(); return 'no error'; } catch (e) { return e.constructor.name; } };
+         log.push(error(() => blank.contentWindow.document), error(() => again.contentWindow.document.URL));",
+    );
+    assert_eq!(log(&mut engine), "DOMException / no error");
+}
+
 /// A child's realm reaches its parent's as their documents' origins are
 /// the same (an initial `about:blank` its parent's); one of another
 /// origin gets a `SecurityError` (`cross_origin`).

@@ -23,6 +23,8 @@ net.workspace = true
 protocol.workspace = true
 renderer.workspace = true
 tracing.workspace = true
+# Each frame's document's origin.
+url.workspace = true
 crossbeam-channel.workspace = true
 # A tab's DevTools id, which a page can't guess.
 getrandom.workspace = true
