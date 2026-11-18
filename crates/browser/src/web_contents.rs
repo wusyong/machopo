@@ -60,7 +60,12 @@ pub struct WebContents {
     /// random, so a page can't guess it (Chromium's frame tokens are
     /// `base::UnguessableToken`s); each of its renderers is told it.
     devtools_frame_token: String,
+    /// The frame sink its renderer submits to: a new one for each renderer,
+    /// so what the one before still sends (it isn't waited for) goes to a
+    /// sink Viz has forgotten.
     frame_sink_id: FrameSinkId,
+    /// Numbers the renderers' frame sinks from 1.
+    sink_ids: SequenceNumber<u32>,
     process: RenderProcessHost,
     network: NetworkContext,
     /// For the debug URLs that act on Viz.
@@ -186,16 +191,17 @@ impl WebContents {
         network: NetworkContext,
         on_event: ContentsEventCallback,
     ) -> std::io::Result<Self> {
-        // One renderer "process" per tab, one frame sink per renderer
-        // (client 0 is the browser's own).
+        // One renderer "process" at a time per tab, one frame sink per
+        // renderer (client 0 is the browser's own).
         #[expect(
             clippy::arithmetic_side_effects,
             reason = "tab ids count the tabs opened: far fewer than u32::MAX"
         )]
         let client_id = tab.0 + 1;
+        let mut sink_ids = SequenceNumber::starting_at(1);
         let frame_sink_id = FrameSinkId {
             client_id,
-            sink_id: 1,
+            sink_id: sink_ids.get_next(),
         };
         let launch = Launch {
             flags,
@@ -212,6 +218,7 @@ impl WebContents {
             tab,
             devtools_frame_token,
             frame_sink_id,
+            sink_ids,
             process,
             network,
             viz,
@@ -245,7 +252,8 @@ impl WebContents {
         &self.devtools_frame_token
     }
 
-    /// The frame sink this tab's renderer submits to.
+    /// The frame sink this tab's renderer submits to: another once a
+    /// renderer is launched again.
     pub fn frame_sink_id(&self) -> FrameSinkId {
         self.frame_sink_id
     }
@@ -435,38 +443,43 @@ impl WebContents {
     }
 
     /// `RenderFrameHostManager`'s new process for a navigation after a
-    /// crash: the same tab and frame sink, the size and visibility it had.
-    /// Viz forgets the sink and its surface first, so the old renderer's
-    /// last frame doesn't show until the new one draws (Chromium's new
-    /// process has a new sink), then sends `BeginFrame`s to the new one; a
-    /// newer `LocalSurfaceId` keeps a late frame of the old one out.
+    /// crash: the same tab, the size and visibility it had, and a new frame
+    /// sink, as Chromium's new process has. Viz forgets the old sink and its
+    /// surface, so the old renderer's last frame doesn't show until the new
+    /// one draws, and what the old renderer still sends (it isn't waited
+    /// for: it may hang) is dropped: an answer to a `BeginFrame`, or that
+    /// it wants none, would otherwise stand for the new one's. Viz hears of
+    /// the new sink before the new renderer hears anything.
     fn relaunch(&mut self) {
-        let process =
-            match self
-                .launch
-                .process(self.tab, self.frame_sink_id, &self.viz, &self.network)
-            {
-                Ok(process) => process,
-                Err(e) => {
-                    tracing::error!("failed to launch a renderer again: {e}");
-                    return;
-                }
-            };
+        let frame_sink_id = FrameSinkId {
+            client_id: self.frame_sink_id.client_id,
+            sink_id: self.sink_ids.get_next(),
+        };
+        let process = match self
+            .launch
+            .process(self.tab, frame_sink_id, &self.viz, &self.network)
+        {
+            Ok(process) => process,
+            Err(e) => {
+                tracing::error!("failed to launch a renderer again: {e}");
+                return;
+            }
+        };
         std::mem::replace(&mut self.process, process).abandon();
+        let _ = self
+            .viz
+            .send(VizMsg::InvalidateFrameSinkId(self.frame_sink_id));
+        self.frame_sink_id = frame_sink_id;
+        let _ = self.viz.send(VizMsg::RegisterFrameSinkId(
+            self.frame_sink_id,
+            self.begin_frame_observer(),
+        ));
         self.crashed = false;
         self.process.send(RendererMsg::DevToolsMainFrameToken(
             self.devtools_frame_token.clone(),
         ));
-        let props = &mut self.visual_properties;
-        #[expect(
-            clippy::arithmetic_side_effects,
-            reason = "one per resize or relaunch of the tab: far fewer than u32::MAX"
-        )]
-        {
-            props.local_surface_id.parent_sequence_number += 1;
-        }
         self.process
-            .send(RendererMsg::UpdateVisualProperties(*props));
+            .send(RendererMsg::UpdateVisualProperties(self.visual_properties));
         if let Some(window_screen_rect) = self.window_screen_rect {
             self.process
                 .send(RendererMsg::UpdateScreenRects { window_screen_rect });
@@ -477,13 +490,6 @@ impl WebContents {
         if self.focused {
             self.process.send(RendererMsg::SetFocus(true));
         }
-        let _ = self
-            .viz
-            .send(VizMsg::InvalidateFrameSinkId(self.frame_sink_id));
-        let _ = self.viz.send(VizMsg::RegisterFrameSinkId(
-            self.frame_sink_id,
-            self.begin_frame_observer(),
-        ));
     }
 
     fn begin_navigation(&mut self, url: String, kind: NavigationType) {

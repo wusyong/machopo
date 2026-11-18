@@ -103,8 +103,13 @@ where
                             display.request_copy_of_output(request)
                         }
                         VizMsg::Display(DisplayMsg::Shutdown) => break 'run,
-                        VizMsg::RegisterFrameSinkId(sink, observer) => begin_frames
-                            .add_client(sink, Box::new(move |args| observer.on_begin_frame(args))),
+                        VizMsg::RegisterFrameSinkId(sink, observer) => {
+                            display.add_frame_sink(sink);
+                            begin_frames.add_client(
+                                sink,
+                                Box::new(move |args| observer.on_begin_frame(args)),
+                            );
+                        }
                         VizMsg::InvalidateFrameSinkId(sink) => {
                             begin_frames.remove_client(sink);
                             display.remove_frame_sink(sink);

@@ -334,6 +334,50 @@ impl DrivenViz {
     }
 }
 
+/// A renderer launched again has a frame sink of its own: Viz forgets the
+/// old one and hears of the new one before anything from the new renderer,
+/// which comes only on the new sink. What the old renderer still sends (it
+/// isn't waited for) is on a sink Viz has forgotten, so it can't stand for
+/// the new one's answers.
+#[test]
+fn a_renderer_launched_again_has_a_frame_sink_of_its_own() {
+    let (mut web_contents, _host_rx, viz_rx, _begin_frames) = tab_with_viz();
+    web_contents.resize(gfx::Size::new(200, 200), 1.0);
+    let old = web_contents.frame_sink_id();
+    // Gone as far as the tab knows, though its threads still run.
+    web_contents.on_renderer_message(&RendererHostMsg::RendererGone);
+    web_contents.navigate("about:blank");
+    let new = web_contents.frame_sink_id();
+    assert_ne!(new, old);
+    let (mut invalidated, mut registered) = (false, false);
+    let deadline = std::time::Instant::now() + TIMEOUT;
+    loop {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        match viz_rx
+            .recv_timeout(left)
+            .expect("the new renderer asks Viz")
+        {
+            VizMsg::InvalidateFrameSinkId(sink) => {
+                assert_eq!(sink, old);
+                assert!(!registered, "the old sink goes first");
+                invalidated = true;
+            }
+            VizMsg::RegisterFrameSinkId(sink, _) => {
+                assert_eq!(sink, new);
+                assert!(invalidated);
+                registered = true;
+            }
+            VizMsg::FrameSink(sink, _) if sink == new => {
+                assert!(registered, "Viz hears of the sink first");
+                break;
+            }
+            VizMsg::FrameSink(sink, _) => assert_eq!(sink, old),
+            _ => {}
+        }
+    }
+    web_contents.shutdown();
+}
+
 /// A renderer given a viewport before it has a document asks for a frame.
 /// The main frame for it has nothing to update, and must still end, or
 /// the compositor never answers that `BeginFrame` and nothing is drawn
@@ -1080,7 +1124,7 @@ mod links {
     /// it.
     /// `about:crash` ends the renderer, and nothing more comes from it; the
     /// tab stays, and its next navigation launches another renderer, with
-    /// the history it had and a newer surface for Viz.
+    /// the history it had and a frame sink of its own.
     #[test]
     fn the_next_navigation_after_a_crash_launches_a_renderer() {
         let server = server(&[("/", Route::ok("text/html", page(&["/a"])))]);
@@ -1098,7 +1142,10 @@ mod links {
         assert!(!web_contents.is_crashed());
         wait_until_loaded(&mut web_contents, &host_rx);
         assert_eq!(history(&web_contents), (vec![server.url("/")], Some(0)));
-        assert!(web_contents.surface_id().local_surface_id > before.local_surface_id);
+        assert_ne!(
+            web_contents.surface_id().frame_sink_id,
+            before.frame_sink_id
+        );
         // A renderer that goes on its own: the same.
         web_contents.on_renderer_message(&RendererHostMsg::RendererGone);
         assert!(web_contents.is_crashed());

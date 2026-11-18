@@ -376,7 +376,9 @@ fn drive(
                     frames_drawn = usize::wrapping_add(frames_drawn, 1);
                 }
             }
-            // Headless has one tab, its client from the start.
+            // Headless has one tab, its client from the start: it navigates
+            // once, and a renderer gone ends the run, so none is launched
+            // again with a sink of its own.
             Ok(Event::Viz(
                 VizMsg::Display(_)
                 | VizMsg::RegisterFrameSinkId(..)

@@ -88,9 +88,9 @@ struct Window {
     viz_tx: Sender<VizMsg>,
     /// The renderers' `BeginFrame`s, sent back to back as Viz messages are
     /// read (not from another thread: a frame must be readable as soon as
-    /// the message that follows it on the host channel is). Shared with the
-    /// view's `TabFactory`.
-    begin_frames: Rc<RefCell<BeginFrameSource>>,
+    /// the message that follows it on the host channel is). The tabs'
+    /// sinks come and go as Viz messages, as `BrowserWindow`'s do.
+    begin_frames: BeginFrameSource,
     /// The tabs the view closed, in order.
     closed: Rc<RefCell<Vec<TabId>>>,
     frame_time: f64,
@@ -126,8 +126,7 @@ impl Window {
     ) -> Self {
         let (viz_tx, viz) = unbounded::<VizMsg>();
         let (host_tx, host) = unbounded();
-        let begin_frames = Rc::new(RefCell::new(BeginFrameSource::new()));
-        let web_contents = start_contents(TabId(0), &viz_tx, &host_tx, &begin_frames);
+        let web_contents = start_contents(TabId(0), &viz_tx, &host_tx);
         let closed = Rc::default();
         let clipboard = SharedClipboard::default();
         let mut view = BrowserView::new(
@@ -141,7 +140,6 @@ impl Window {
         view.set_tab_factory(Box::new(TestTabs {
             viz: viz_tx.clone(),
             host: host_tx.clone(),
-            begin_frames: begin_frames.clone(),
             closed: Rc::clone(&closed),
         }));
         view.resize(size, scale);
@@ -151,7 +149,7 @@ impl Window {
             host_tx,
             viz,
             viz_tx,
-            begin_frames,
+            begin_frames: BeginFrameSource::new(),
             closed,
             frame_time: 0.0,
             display: Display::new(
@@ -168,12 +166,7 @@ impl Window {
         let mut window = Self::open(window_size(scale), scale);
         window.view.set_layout(Some(side_by_side_layout(overlap)));
         window.load(first);
-        let contents = start_contents(
-            SECOND,
-            &window.viz_tx,
-            &window.host_tx,
-            &window.begin_frames,
-        );
+        let contents = start_contents(SECOND, &window.viz_tx, &window.host_tx);
         window.view.add_web_view(contents);
         let second_contents = window.view.contents_mut(SECOND).unwrap();
         second_contents.navigate(second);
@@ -293,17 +286,17 @@ impl Window {
     /// (`submit`).
     fn viz_message(&mut self, msg: VizMsg) -> Option<FrameSinkId> {
         match &msg {
-            VizMsg::FrameSink(sink, msg) => self.begin_frames.borrow_mut().did_receive(*sink, msg),
-            // A renderer launched again after one has gone: its old
-            // surface goes.
+            VizMsg::FrameSink(sink, msg) => self.begin_frames.did_receive(*sink, msg),
+            // A tab closed, or a renderer launched again after one has
+            // gone: its old sink and surface go.
             VizMsg::InvalidateFrameSinkId(sink) => {
-                self.begin_frames.borrow_mut().remove_client(*sink);
+                self.begin_frames.remove_client(*sink);
                 self.display.remove_frame_sink(*sink);
             }
             VizMsg::RegisterFrameSinkId(sink, observer) => {
                 let observer = observer.clone();
+                self.display.add_frame_sink(*sink);
                 self.begin_frames
-                    .borrow_mut()
                     .add_client(*sink, Box::new(move |args| observer.on_begin_frame(args)));
             }
             _ => {}
@@ -314,9 +307,8 @@ impl Window {
     }
 
     fn send_begin_frames(&mut self) {
-        let mut begin_frames = self.begin_frames.borrow_mut();
-        if begin_frames.wants_begin_frame() {
-            begin_frames.issue(self.frame_time);
+        if self.begin_frames.wants_begin_frame() {
+            self.begin_frames.issue(self.frame_time);
             self.frame_time += 1000.0 / 60.0;
         }
     }
@@ -478,41 +470,33 @@ impl Window {
     }
 }
 
-/// The window's tabs, as `BrowserWindow`'s are made, with the test's
-/// `BeginFrameSource` for Viz.
+/// The window's tabs, as `BrowserWindow`'s are made: Viz hears of their
+/// sinks.
 struct TestTabs {
     viz: Sender<VizMsg>,
     host: Sender<(TabId, ContentsEvent)>,
-    begin_frames: Rc<RefCell<BeginFrameSource>>,
     closed: Rc<RefCell<Vec<TabId>>>,
 }
 
 impl TabFactory for TestTabs {
     fn create(&mut self, tab: TabId) -> Result<WebContents, String> {
-        Ok(start_contents(
-            tab,
-            &self.viz,
-            &self.host,
-            &self.begin_frames,
-        ))
+        Ok(start_contents(tab, &self.viz, &self.host))
     }
 
     fn destroy(&mut self, mut contents: WebContents) {
         self.closed.borrow_mut().push(contents.tab());
-        self.begin_frames
-            .borrow_mut()
-            .remove_client(contents.frame_sink_id());
+        let sink = contents.frame_sink_id();
         contents.shutdown();
+        let _ = self.viz.send(VizMsg::InvalidateFrameSinkId(sink));
     }
 }
 
 /// Starts `tab`'s renderer, its frames going to `viz` and its messages to
-/// `host`, and has `begin_frames` send it `BeginFrame`s.
+/// `host`, and tells Viz of its sink, to send it `BeginFrame`s.
 fn start_contents(
     tab: TabId,
     viz: &Sender<VizMsg>,
     host: &Sender<(TabId, ContentsEvent)>,
-    begin_frames: &RefCell<BeginFrameSource>,
 ) -> WebContents {
     let host = host.clone();
     let contents = WebContents::new(
@@ -541,10 +525,10 @@ fn start_contents(
         }),
     )
     .expect("renderer starts");
-    begin_frames.borrow_mut().add_client(
+    let _ = viz.send(VizMsg::RegisterFrameSinkId(
         contents.frame_sink_id(),
-        Box::new(contents.begin_frame_sender()),
-    );
+        contents.begin_frame_observer(),
+    ));
     contents
 }
 

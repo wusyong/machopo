@@ -45,6 +45,10 @@ pub enum CopyFailure {
 /// output (one window).
 pub struct Display<R: DirectRenderer> {
     root_frame_sink: FrameSinkId,
+    /// The other clients that may submit (`FrameSinkManagerImpl`'s
+    /// registered sinks): a frame from any other sink is dropped, as one
+    /// from a renderer that has been replaced.
+    frame_sinks: HashSet<FrameSinkId>,
     surfaces: SurfaceManager,
     aggregator: SurfaceAggregator,
     /// The sinks the last frame drawn embedded: a new frame from one of
@@ -63,6 +67,7 @@ impl<R: DirectRenderer> Display<R> {
     pub fn new(renderer: R, root_frame_sink: FrameSinkId) -> Self {
         Self {
             root_frame_sink,
+            frame_sinks: HashSet::new(),
             surfaces: SurfaceManager::default(),
             aggregator: SurfaceAggregator::default(),
             embedded: HashSet::new(),
@@ -72,16 +77,27 @@ impl<R: DirectRenderer> Display<R> {
         }
     }
 
-    /// `sink`'s new frame, once checked: a frame whose resources aren't
-    /// what they say is dropped, and the last one stays (Chromium reports
-    /// the client's bad message and ends its process; here a client is a
-    /// thread of the same process, so such a frame is machopo's own bug).
+    /// `sink` may submit frames (`RegisterFrameSinkId`).
+    pub fn add_frame_sink(&mut self, sink: FrameSinkId) {
+        self.frame_sinks.insert(sink);
+    }
+
+    /// `sink`'s new frame, once checked: a frame from a sink that isn't the
+    /// root or registered is dropped (Chromium's comes on a pipe closed with
+    /// its sink), and so is a frame whose resources aren't what they say,
+    /// the last one staying (Chromium reports the client's bad message and
+    /// ends its process; here a client is a thread of the same process, so
+    /// such a frame is machopo's own bug).
     pub fn submit_compositor_frame(
         &mut self,
         sink: FrameSinkId,
         local_surface_id: LocalSurfaceId,
         frame: CompositorFrame,
     ) {
+        if sink != self.root_frame_sink && !self.frame_sinks.contains(&sink) {
+            tracing::debug!(?sink, "viz: dropping a frame of a sink it doesn't know");
+            return;
+        }
         if let Some(bad) = bad_resource(&frame) {
             tracing::error!(?sink, bad, "viz: dropping a frame");
             return;
@@ -122,6 +138,7 @@ impl<R: DirectRenderer> Display<R> {
     /// `sink` has gone: its surface goes, and the next draw shows what is
     /// left (`SurfaceManager::InvalidateFrameSinkId`).
     pub fn remove_frame_sink(&mut self, sink: FrameSinkId) {
+        self.frame_sinks.remove(&sink);
         self.surfaces.remove(sink);
         self.embedded.remove(&sink);
         self.needs_draw = true;
@@ -300,11 +317,32 @@ mod tests {
             sink_id: 1,
         };
         let mut display = Display::new(Renderer::default(), ROOT);
+        display.add_frame_sink(tab);
         display.submit_compositor_frame(tab, LocalSurfaceId::default(), frame(Color::WHITE));
         assert!(display.surfaces.latest(tab).is_some());
         display.remove_frame_sink(tab);
         assert!(display.surfaces.latest(tab).is_none());
         assert!(display.needs_draw());
+    }
+
+    /// Only the root and the registered sinks submit: the frames of a sink
+    /// not registered yet, or no longer (a renderer that has been
+    /// replaced), are dropped.
+    #[test]
+    fn a_frame_of_a_sink_it_doesnt_know_is_dropped() {
+        let tab = FrameSinkId {
+            client_id: 2,
+            sink_id: 1,
+        };
+        let mut display = Display::new(Renderer::default(), ROOT);
+        display.submit_compositor_frame(tab, LocalSurfaceId::default(), frame(Color::WHITE));
+        assert!(display.surfaces.latest(tab).is_none(), "not registered yet");
+        display.add_frame_sink(tab);
+        display.submit_compositor_frame(tab, LocalSurfaceId::default(), frame(Color::WHITE));
+        assert!(display.surfaces.latest(tab).is_some());
+        display.remove_frame_sink(tab);
+        display.submit_compositor_frame(tab, LocalSurfaceId::default(), frame(Color::WHITE));
+        assert!(display.surfaces.latest(tab).is_none(), "removed");
     }
 
     /// A frame whose pixels don't fit their resource's size, or a size
@@ -480,6 +518,7 @@ mod tests {
                 default_background_color: Color::WHITE,
             },
         });
+        display.add_frame_sink(tab);
         display.submit_compositor_frame(ROOT, LocalSurfaceId::default(), root);
         assert!(display.draw_and_swap());
         assert!(!display.needs_draw());

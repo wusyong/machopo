@@ -1401,6 +1401,7 @@ mod drawing_tests {
                 },
             ],
         );
+        display.add_frame_sink(tab);
         display.submit_compositor_frame(SINK, LocalSurfaceId::default(), root);
         display.submit_compositor_frame(
             tab,
