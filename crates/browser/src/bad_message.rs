@@ -32,6 +32,9 @@ pub enum BadMessageReason {
     /// A `srcdoc` of a frame the tab doesn't have as a child frame
     /// (Chromium's `RFH_OWNER_PROPERTY`).
     SrcdocOfUnknownFrame,
+    /// A scroll restoration mode (`UpdateState`) of a frame the tab
+    /// doesn't have (Chromium's comes from the frame's own host).
+    StateOfUnknownFrame,
     /// A request for a document (`RequestDestination::Document` or
     /// `Iframe`) as a subresource: the browser loads every frame's
     /// documents (network service's "frame destination requires kNavigate

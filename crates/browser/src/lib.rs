@@ -30,7 +30,7 @@ mod web_contents;
 
 pub use bad_message::BadMessageReason;
 pub use frame_tree::FrameTree;
-pub use navigation_controller::{NavigationController, NavigationEntry};
+pub use navigation_controller::{FrameNavigationEntry, NavigationController, NavigationEntry};
 pub use net::{HostMapping, HostMappingRules, NetworkContext, NetworkContextParams};
 pub use render_process_host::{RenderProcessHost, RendererId};
 pub use renderer::{RendererFlags, ScriptEngineFactory};

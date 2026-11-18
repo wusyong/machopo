@@ -299,6 +299,8 @@ pub(super) struct ChildCommit<'a> {
     pub(super) url: String,
     /// The document it has its origin from, if not its URL or its parent.
     pub(super) origin_source: Option<NodeRoot>,
+    /// Its item's state, and where its entry is in the session history.
+    pub(super) history: protocol::renderer::HistoryEntryParams,
 }
 
 impl ChildFrames {
@@ -946,8 +948,7 @@ impl RenderThread {
     /// `LocalFrameHost`), as do a traversal and a scroll restoration mode
     /// (its session history), but a child frame's to an `about:` URL, which
     /// commits here; one within the document scrolls to the fragment, if
-    /// it is to, and the browser hears of the top-level frame's (a child
-    /// frame's isn't in the session history).
+    /// it is to, and the browser hears of it.
     fn frame_navigated(
         &mut self,
         frame: FrameId,
@@ -1024,12 +1025,14 @@ impl RenderThread {
                     .to_browser
                     .send(RendererHostMsg::GoToEntryAtOffset(delta));
             }
-            FrameNavigation::ScrollRestoration { manual } if top => {
-                let _ = self.to_browser.send(RendererHostMsg::UpdateState {
-                    manual_scroll_restoration: manual,
-                });
+            FrameNavigation::ScrollRestoration { manual } => {
+                if let Some(frame) = self.frame_token(frame) {
+                    let _ = self.to_browser.send(RendererHostMsg::UpdateState {
+                        frame,
+                        manual_scroll_restoration: manual,
+                    });
+                }
             }
-            FrameNavigation::ScrollRestoration { .. } => {}
         }
     }
 
@@ -1488,6 +1491,20 @@ impl RenderThread {
             document_encoding,
             content_language,
         );
+        // Where its entry is in the session history (every frame's), and
+        // its item's state.
+        if let Some(navigation) = &navigation {
+            let history = &navigation.history;
+            engine.set_session_history(dom::SessionHistory {
+                index: history.index,
+                length: history.length,
+            });
+            engine.restore_history(
+                frame,
+                history.state.clone(),
+                history.manual_scroll_restoration,
+            );
+        }
         let mut parser = if url.as_str() == "about:srcdoc" {
             Parser::new_srcdoc(engine.dom_mut(), &document)
         } else {

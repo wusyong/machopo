@@ -457,6 +457,15 @@ impl CommittedDocument {
 }
 
 impl Committer {
+    /// Where its entry is in the session history as it commits, and how
+    /// many entries there are then (Chromium's
+    /// `UpdateHistoryParamsInCommitNavigationParams`, as `CommitNavigation`
+    /// is sent): what changed since it started counts.
+    pub(crate) fn set_history_place(&mut self, (index, length): (u32, u32)) {
+        self.history.index = index;
+        self.history.length = length;
+    }
+
     pub(crate) fn commit(self, navigation_id: u64, document: CommittedDocument) {
         let _ = self.to_renderer.send(RendererMsg::CommitNavigation {
             frame: self.frame,

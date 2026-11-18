@@ -410,8 +410,9 @@ impl WebContents {
     }
 
     fn reload_as(&mut self, asked: Asked) {
-        if let Some(current) = self.controller.current_index() {
-            let url = self.controller.entries()[current].url.clone();
+        let current = self.controller.current_index();
+        if let Some(entry) = current.and_then(|current| self.controller.entry(current)) {
+            let url = entry.url().to_owned();
             self.begin_navigation(url, NavigationType::Reload, asked);
         }
     }
@@ -426,12 +427,15 @@ impl WebContents {
             return false;
         };
         let kind = NavigationType::HistoryIndex(index);
-        let url = self.controller.entries()[index].url.clone();
+        let Some(url) = self.controller.entry(index).map(|entry| entry.url().to_owned()) else {
+            return false;
+        };
+        let root = self.frame_tree.root();
         match self.controller.current_document() {
             Some(document) if !self.crashed && self.controller.is_same_document(index) => {
                 let navigation_id = self.navigation_ids.get_next();
-                let history = self.controller.entry_params(kind);
-                self.controller.did_start(navigation_id, kind);
+                let history = self.controller.entry_params(&self.frame_tree, root, kind);
+                self.controller.did_start(navigation_id, root, kind);
                 tracing::info!(%url, navigation_id, "navigate within the document");
                 self.process
                     .send(RendererMsg::CommitSameDocumentNavigation {
@@ -495,14 +499,32 @@ impl WebContents {
             };
             return self.begin_navigation(url, kind, asked);
         }
-        // A child frame's isn't in the session history yet.
+        // A child frame's next document is a new entry, but in place of
+        // the document it replaces if asked, and of its first: its initial
+        // `about:blank`'s or another `about:blank`'s (Chromium's
+        // `ShouldReplaceCurrentEntryForNavigationFromInitialEmptyDocumentOrEntry`,
+        // by `has_committed_real_load` as it was), or one of the initial
+        // entry.
+        let kind = match kind {
+            BeginNavigationKind::Reload => NavigationType::Reload,
+            BeginNavigationKind::To { replace, .. }
+                if *replace
+                    || !self.frame_tree.has_committed_real_load(frame)
+                    || self.controller.is_initial() =>
+            {
+                NavigationType::Replace
+            }
+            BeginNavigationKind::To { .. } => NavigationType::NewEntry,
+        };
         let navigation_id = self.navigation_ids.get_next();
+        let history = self.controller.entry_params(&self.frame_tree, frame, kind);
+        self.controller.did_start(navigation_id, frame, kind);
         self.start_navigation(
             frame,
             navigation_id,
             url,
             asked,
-            HistoryEntryParams::default(),
+            history,
             navigation_type,
             TimeTicks::now(),
         );
@@ -638,8 +660,9 @@ impl WebContents {
         }
         let navigation_id = self.navigation_ids.get_next();
         self.document_navigation_id = navigation_id;
-        let history = self.controller.entry_params(kind);
-        self.controller.did_start(navigation_id, kind);
+        let root = self.frame_tree.root();
+        let history = self.controller.entry_params(&self.frame_tree, root, kind);
+        self.controller.did_start(navigation_id, root, kind);
         tracing::info!(%url, navigation_id, ?kind, "navigate");
         self.url = Some(url.clone());
         let navigation_type = match kind {
@@ -868,6 +891,10 @@ impl WebContents {
             self.process.set_file_access(true);
         }
         self.frame_tree.committing(frame, navigation_id, origin);
+        let mut committer = committer;
+        if let Some(place) = self.controller.commit_place(navigation_id) {
+            committer.set_history_place(place);
+        }
         committer.commit(navigation_id, document);
     }
 
@@ -1147,13 +1174,14 @@ impl WebContents {
                 if let Err(reason) = self.frame_tree.did_commit(*frame, *navigation_id, url) {
                     return self.received_bad_message(reason);
                 }
-                if *frame != self.frame_tree.root() {
-                    return;
+                if *frame == self.frame_tree.root() {
+                    self.url = Some(url.clone());
                 }
-                self.url = Some(url.clone());
-                self.controller.did_commit(*navigation_id, url.clone());
+                self.controller
+                    .did_commit(&self.frame_tree, *frame, *navigation_id, url.clone());
                 // The entries may have changed since the navigation
-                // started (the old document's `pushState`).
+                // started (the old document's `pushState`), and a child
+                // frame's new entry is every frame's.
                 let (index, length) = self.controller.offset_and_length();
                 self.process
                     .send(RendererMsg::SetHistoryOffsetAndLength { index, length });
@@ -1178,6 +1206,7 @@ impl WebContents {
                         .controller
                         .did_commit_history_same_document(*id, url.clone()),
                     None => self.controller.did_commit_same_document(
+                        &self.frame_tree,
                         url.clone(),
                         *replace,
                         state.clone(),
@@ -1185,8 +1214,11 @@ impl WebContents {
                 }
             }
             RendererHostMsg::SameDocumentNavigationFailed { navigation_id } => {
-                if let Some(index) = self.controller.did_fail_same_document(*navigation_id) {
-                    let url = self.controller.entries()[index].url.clone();
+                let index = self.controller.did_fail_same_document(*navigation_id);
+                if let Some((index, entry)) =
+                    index.and_then(|index| Some((index, self.controller.entry(index)?)))
+                {
+                    let url = entry.url().to_owned();
                     let kind = NavigationType::HistoryIndex(index);
                     self.begin_navigation(url, kind, Asked::default());
                 }
@@ -1195,10 +1227,18 @@ impl WebContents {
                 self.go_to_offset(*offset as isize);
             }
             RendererHostMsg::UpdateState {
+                frame,
                 manual_scroll_restoration,
-            } => self
-                .controller
-                .set_manual_scroll_restoration(*manual_scroll_restoration),
+            } => {
+                if !self.frame_tree.contains(*frame) {
+                    return self.received_bad_message(BadMessageReason::StateOfUnknownFrame);
+                }
+                self.controller.set_manual_scroll_restoration(
+                    &self.frame_tree,
+                    *frame,
+                    *manual_scroll_restoration,
+                );
+            }
             RendererHostMsg::BeginNavigation {
                 frame,
                 initiator,

@@ -2239,13 +2239,12 @@ impl AutomationSession {
                 let controller = contents.controller();
                 let entries = controller
                     .entries()
-                    .iter()
                     .enumerate()
                     .map(|(index, entry)| NavigationEntry {
                         id: index as u64,
-                        url: entry.url.clone(),
-                        user_typed_url: entry.url.clone(),
-                        title: entry.title.clone(),
+                        url: entry.url().to_owned(),
+                        user_typed_url: entry.url().to_owned(),
+                        title: entry.title().to_owned(),
                         transition_type: "typed".into(),
                     })
                     .collect();
@@ -2261,7 +2260,7 @@ impl AutomationSession {
                 let current = controller.current_index();
                 let entry = usize::try_from(params.entry_id)
                     .ok()
-                    .filter(|index| *index < controller.entries().len());
+                    .filter(|index| *index < controller.entry_count());
                 let (Some(current), Some(entry)) = (current, entry) else {
                     return Err(Error::new(SERVER_ERROR, "No entry with passed id"));
                 };

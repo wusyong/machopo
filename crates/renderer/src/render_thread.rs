@@ -900,6 +900,7 @@ impl RenderThread {
                             token: frame,
                             url,
                             origin_source: None,
+                            history,
                         },
                     )
                 };

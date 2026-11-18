@@ -486,9 +486,11 @@ pub enum RendererHostMsg {
     /// `FrameHost::GoToEntryAtOffset`: `history.go(offset)` (and `back`,
     /// `forward`), within range as the renderer knew it.
     GoToEntryAtOffset(i32),
-    /// `FrameHost::UpdateState`: script changed the current entry's scroll
-    /// restoration mode (`history.scrollRestoration`).
+    /// `FrameHost::UpdateState`: script in `frame` changed its item's
+    /// scroll restoration mode in the current entry
+    /// (`history.scrollRestoration`).
     UpdateState {
+        frame: crate::FrameToken,
         manual_scroll_restoration: bool,
     },
     /// `FrameHost::BeginNavigation`: a frame of the page is to have

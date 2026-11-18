@@ -1,37 +1,200 @@
 //! `content::NavigationController`: a tab's session history, the list of
-//! entries back and forward go through.
+//! entries back and forward go through. Each entry is a tree of its frames'
+//! places (Chromium's `NavigationEntryImpl::TreeNode`), a frame's matched by
+//! its unique name; what a place has (`FrameNavigationEntry`) is the
+//! controller's, by its item sequence number, so entries that have one (a
+//! frame that didn't navigate between them) see it change as one. Chromium
+//! shares a `FrameNavigationEntry` by `scoped_refptr`; here the controller is
+//! its one owner, and drops what no entry has any more (`sweep`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
+use base::SequenceNumber;
+use protocol::FrameToken;
 use protocol::renderer::HistoryEntryParams;
 
-/// `content::NavigationEntry`: one page in the history.
+use crate::frame_tree::FrameTree;
+
+/// `content::FrameNavigationEntry`: a frame's history item, which the
+/// entries it is in share.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct NavigationEntry {
+pub struct FrameNavigationEntry {
+    /// Its item sequence number: the controller's name for it.
+    pub item: u64,
     /// The URL committed, after redirects.
     pub url: String,
-    pub title: String,
-    /// The document it is an entry of: the id of the navigation that
+    /// The document it is an item of: the id of the navigation that
     /// committed that document (Chromium's document sequence number).
-    /// Entries a document made of itself (a fragment, `pushState`) share
-    /// it; back and forward between them don't load anything.
+    /// Items a document made of itself (a fragment, `pushState`) share it;
+    /// back and forward between them don't load anything.
     pub document: u64,
     /// The classic history API's state, as the renderer serialized it;
     /// `None` is `null` (part of Chromium's `PageState`).
     pub state: Option<Vec<u8>>,
     /// Its scroll restoration mode is `"manual"`.
     pub manual_scroll_restoration: bool,
+}
+
+/// A frame's place in an entry: its item, and its child frames' places.
+#[derive(Debug, Clone)]
+struct TreeNode {
+    /// The frame's unique name: empty for the main frame.
+    unique_name: String,
+    item: u64,
+    children: Vec<TreeNode>,
+}
+
+impl TreeNode {
+    fn new(unique_name: String, item: u64) -> Self {
+        Self {
+            unique_name,
+            item,
+            children: Vec::new(),
+        }
+    }
+
+    /// The place `path` (unique names, from this one's children down) leads
+    /// to.
+    fn find(&self, path: &[&str]) -> Option<&Self> {
+        path.iter().try_fold(self, |node, name| {
+            node.children.iter().find(|child| child.unique_name == *name)
+        })
+    }
+
+    fn find_mut(&mut self, path: &[&str]) -> Option<&mut Self> {
+        path.iter().try_fold(self, |node, name| {
+            node.children
+                .iter_mut()
+                .find(|child| child.unique_name == *name)
+        })
+    }
+
+    /// The place at `path` is `item`'s, a new document's (its frames'
+    /// places go): added under its parent's if there is none. False if its
+    /// parent has no place (Chromium's `AddOrUpdateFrameEntry` finding no
+    /// parent `TreeNode`).
+    fn place(&mut self, path: &[&str], item: u64) -> bool {
+        let Some((name, parent)) = path.split_last() else {
+            self.item = item;
+            self.children.clear();
+            return true;
+        };
+        let Some(parent) = self.find_mut(parent) else {
+            return false;
+        };
+        match parent
+            .children
+            .iter_mut()
+            .find(|child| child.unique_name == *name)
+        {
+            Some(node) => {
+                node.item = item;
+                node.children.clear();
+            }
+            None => parent.children.push(Self::new((*name).to_owned(), item)),
+        }
+        true
+    }
+
+    /// A copy with only the places of `frame`'s frames there are now, as
+    /// `frame` is this one's (Chromium's `CloneAndReplace` leaving out
+    /// "subframe history items that do not correspond to frames actually in
+    /// the current page").
+    fn clone_live(&self, tree: &FrameTree, frame: FrameToken) -> Self {
+        let children = self
+            .children
+            .iter()
+            .filter_map(|child| {
+                let live = tree
+                    .children(frame)
+                    .iter()
+                    .find(|live| tree.unique_name(**live) == Some(child.unique_name.as_str()))?;
+                Some(child.clone_live(tree, *live))
+            })
+            .collect();
+        Self {
+            unique_name: self.unique_name.clone(),
+            item: self.item,
+            children,
+        }
+    }
+
+    fn items(&self, into: &mut HashSet<u64>) {
+        into.insert(self.item);
+        for child in &self.children {
+            child.items(into);
+        }
+    }
+}
+
+/// One page in the history: its frames' places, and what it has of the
+/// main frame's document.
+#[derive(Debug, Clone)]
+struct Entry {
+    title: String,
     /// The tab's first document's, which the next new entry takes the
     /// place of (Chromium's `NavigationEntryImpl::IsInitialEntry`: a new
     /// tab's `about:blank` isn't something to go back to).
-    pub initial: bool,
+    initial: bool,
+    root: TreeNode,
+}
+
+/// `content::NavigationEntry`: one page in the history, as its controller
+/// has it.
+#[derive(Debug, Clone, Copy)]
+pub struct NavigationEntry<'a> {
+    controller: &'a NavigationController,
+    entry: &'a Entry,
+}
+
+impl<'a> NavigationEntry<'a> {
+    /// The main frame's URL.
+    pub fn url(&self) -> &'a str {
+        &self.root().url
+    }
+
+    pub fn title(&self) -> &'a str {
+        &self.entry.title
+    }
+
+    /// Whether it is the tab's first document's, which the next new entry
+    /// takes the place of.
+    pub fn is_initial(&self) -> bool {
+        self.entry.initial
+    }
+
+    /// The main frame's item.
+    pub fn root(&self) -> &'a FrameNavigationEntry {
+        self.controller.item(self.entry.root.item)
+    }
+
+    /// The item of the frame whose unique name is `unique_name` (empty for
+    /// the main frame), if the entry has a place for it.
+    pub fn frame(&self, unique_name: &str) -> Option<&'a FrameNavigationEntry> {
+        let mut nodes = vec![&self.entry.root];
+        while let Some(node) = nodes.pop() {
+            if node.unique_name == unique_name {
+                return Some(self.controller.item(node.item));
+            }
+            nodes.extend(&node.children);
+        }
+        None
+    }
+
+    /// How many frames it has a place for, the main frame's included.
+    pub fn frame_count(&self) -> usize {
+        let mut items = HashSet::new();
+        self.entry.root.items(&mut items);
+        items.len()
+    }
 }
 
 /// What a navigation does to the history once it commits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NavigationType {
     /// A new entry after the current one, dropping those forward of it: a
-    /// URL typed or given, or a link followed.
+    /// URL typed or given, or a link followed. A child frame's has the
+    /// current one's places of the other frames there are.
     NewEntry,
     /// Back or forward to the entry at this index (Chromium's history
     /// navigation): loading it again, or, for an entry of the document
@@ -39,25 +202,52 @@ pub(crate) enum NavigationType {
     HistoryIndex(usize),
     /// The current entry, loaded again.
     Reload,
-    /// A new document in the current entry's place (`location.replace`).
+    /// A new document in the current entry's place (`location.replace`);
+    /// a child frame's, in its place in the current entry.
     Replace,
     /// The tab's first document, as an initial entry.
     Initial,
 }
 
+/// A navigation started and not committed yet: whose, and what it does.
+#[derive(Debug, Clone, Copy)]
+struct Pending {
+    frame: FrameToken,
+    kind: NavigationType,
+}
+
 #[derive(Debug, Default)]
 pub struct NavigationController {
-    entries: Vec<NavigationEntry>,
+    entries: Vec<Entry>,
+    /// Every item an entry has a place for, by item sequence number.
+    items: HashMap<u64, FrameNavigationEntry>,
+    item_numbers: SequenceNumber<u64>,
     /// The entry shown; `None` before the first commit.
     current: Option<usize>,
     /// Navigations started and not committed yet, by id (ids grow with
     /// each one started).
-    pending: BTreeMap<u64, NavigationType>,
+    pending: BTreeMap<u64, Pending>,
 }
 
 impl NavigationController {
-    pub fn entries(&self) -> &[NavigationEntry] {
-        &self.entries
+    /// The entries, the first first.
+    pub fn entries(&self) -> impl ExactSizeIterator<Item = NavigationEntry<'_>> {
+        self.entries.iter().map(|entry| NavigationEntry {
+            controller: self,
+            entry,
+        })
+    }
+
+    /// The entry at `index`, if there is one.
+    pub fn entry(&self, index: usize) -> Option<NavigationEntry<'_>> {
+        self.entries.get(index).map(|entry| NavigationEntry {
+            controller: self,
+            entry,
+        })
+    }
+
+    pub fn entry_count(&self) -> usize {
+        self.entries.len()
     }
 
     /// The index of the entry shown (`GetLastCommittedEntryIndex`).
@@ -65,12 +255,31 @@ impl NavigationController {
         self.current
     }
 
+    /// Whether the entry shown is the tab's first document's, which the
+    /// next new entry takes the place of.
+    pub(crate) fn is_initial(&self) -> bool {
+        self.current
+            .is_some_and(|current| self.entries[current].initial)
+    }
+
+    /// An item an entry has a place for: there is one, as `sweep` keeps
+    /// every item a place has.
+    fn item(&self, item: u64) -> &FrameNavigationEntry {
+        &self.items[&item]
+    }
+
     /// Where back and forward count from (`GetCurrentEntryIndex`): the
     /// entry the latest navigation goes to if that is a history one,
     /// else the one shown. Going back twice quickly goes back two.
     fn base_index(&self) -> Option<usize> {
         match self.pending.last_key_value() {
-            Some((_, NavigationType::HistoryIndex(index))) => Some(*index),
+            Some((
+                _,
+                Pending {
+                    kind: NavigationType::HistoryIndex(index),
+                    ..
+                },
+            )) => Some(*index),
             _ => self.current,
         }
     }
@@ -90,41 +299,73 @@ impl NavigationController {
         self.index_for_offset(1).is_some()
     }
 
-    pub(crate) fn did_start(&mut self, navigation_id: u64, kind: NavigationType) {
-        self.pending.insert(navigation_id, kind);
+    /// `frame`'s navigation `navigation_id` started, to do `kind` as it
+    /// commits.
+    pub(crate) fn did_start(&mut self, navigation_id: u64, frame: FrameToken, kind: NavigationType) {
+        self.pending.insert(navigation_id, Pending { frame, kind });
     }
 
-    /// What the renderer is told of the entry a navigation of `kind` will
-    /// commit to, as things are now: its state, and its place.
-    pub(crate) fn entry_params(&self, kind: NavigationType) -> HistoryEntryParams {
+    /// What the renderer is told of the item `frame`'s navigation of
+    /// `kind` will commit to, as things are now: its state, and its entry's
+    /// place.
+    pub(crate) fn entry_params(
+        &self,
+        tree: &FrameTree,
+        frame: FrameToken,
+        kind: NavigationType,
+    ) -> HistoryEntryParams {
         let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
         let len = self.entries.len();
-        let (entry, index, length) = match (kind, self.current) {
-            (NavigationType::HistoryIndex(index), _) if index < len => {
-                (Some(&self.entries[index]), index, len)
-            }
-            (NavigationType::Reload, Some(current)) => (Some(&self.entries[current]), current, len),
-            (NavigationType::Replace, Some(current)) => (None, current, len),
+        let item_in = |index: usize| {
+            let path = path(tree, frame)?;
+            let node = self.entries[index].root.find(&path)?;
+            Some(self.item(node.item))
+        };
+        let item = match (kind, self.current) {
+            (NavigationType::HistoryIndex(index), _) if index < len => item_in(index),
+            (NavigationType::Reload, Some(current)) => item_in(current),
+            _ => None,
+        };
+        let (index, length) = self.place(kind);
+        HistoryEntryParams {
+            state: item.and_then(|item| item.state.clone()),
+            manual_scroll_restoration: item.is_some_and(|item| item.manual_scroll_restoration),
+            index: count(index),
+            length: count(length),
+        }
+    }
+
+    /// Where the entry navigation `navigation_id` commits to will be, and
+    /// how many entries there will be, as things are now: for its commit,
+    /// what changed since it started counted. None for a navigation not
+    /// pending.
+    pub(crate) fn commit_place(&self, navigation_id: u64) -> Option<(u32, u32)> {
+        let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+        let (index, length) = self.place(self.pending.get(&navigation_id)?.kind);
+        Some((count(index), count(length)))
+    }
+
+    /// Where the entry a navigation of `kind` commits to will be, and how
+    /// many entries there will be then, as things are now.
+    fn place(&self, kind: NavigationType) -> (usize, usize) {
+        let len = self.entries.len();
+        match (kind, self.current) {
+            (NavigationType::HistoryIndex(index), _) if index < len => (index, len),
+            (NavigationType::Reload | NavigationType::Replace, Some(current)) => (current, len),
             (NavigationType::NewEntry, Some(current)) if self.entries[current].initial => {
-                (None, current, len)
+                (current, len)
             }
             (_, current) => {
                 #[expect(
                     clippy::arithmetic_side_effects,
                     reason = "an index of the entries, a Vec's (at most isize::MAX), and one past it"
                 )]
-                let (index, len) = {
+                let place = {
                     let index = current.map_or(0, |current| current + 1);
                     (index, index + 1)
                 };
-                (None, index, len)
+                place
             }
-        };
-        HistoryEntryParams {
-            state: entry.and_then(|entry| entry.state.clone()),
-            manual_scroll_restoration: entry.is_some_and(|entry| entry.manual_scroll_restoration),
-            index: count(index),
-            length: count(length),
         }
     }
 
@@ -135,104 +376,196 @@ impl NavigationController {
         (count(self.current.unwrap_or(0)), count(self.entries.len()))
     }
 
-    /// Whether the entry at `index` is one of the document shown, which a
-    /// traversal reaches without loading anything.
+    /// Whether the entry at `index` is one of the main frame's document
+    /// shown, which a traversal reaches without loading anything.
     pub(crate) fn is_same_document(&self, index: usize) -> bool {
-        match (self.current, self.entries.get(index)) {
-            (Some(current), Some(entry)) => entry.document == self.entries[current].document,
+        match (self.current_document(), self.entry(index)) {
+            (Some(document), Some(entry)) => entry.root().document == document,
             _ => false,
         }
     }
 
-    /// The document shown: its entry's `document`.
+    /// The main frame's document shown: its item's `document`.
     pub(crate) fn current_document(&self) -> Option<u64> {
-        self.current.map(|current| self.entries[current].document)
+        let current = self.entry(self.current?)?;
+        Some(current.root().document)
     }
 
-    /// `RendererDidNavigate`: `navigation_id` committed at `url`. The
-    /// renderer drops commits older than the document it shows, so every
-    /// navigation started before this one is over too.
-    pub(crate) fn did_commit(&mut self, navigation_id: u64, url: String) {
-        let kind = self.pending.get(&navigation_id).copied();
-        // Those after this one stay: none if it is the last there can be.
-        self.pending = match navigation_id.checked_add(1) {
-            Some(after) => self.pending.split_off(&after),
-            None => BTreeMap::new(),
-        };
+    /// `RendererDidNavigate`: `frame` of `tree` committed navigation
+    /// `navigation_id` at `url`. The renderer drops commits older than the
+    /// document a frame shows, so every navigation of the frame started
+    /// before this one is over too; the main frame's, every frame's (they
+    /// went with its document).
+    pub(crate) fn did_commit(
+        &mut self,
+        tree: &FrameTree,
+        frame: FrameToken,
+        navigation_id: u64,
+        url: String,
+    ) {
+        let main_frame = frame == tree.root();
+        let kind = self.pending.remove(&navigation_id).map(|pending| pending.kind);
+        self.pending
+            .retain(|id, pending| *id > navigation_id || !(main_frame || pending.frame == frame));
+        if main_frame {
+            self.did_commit_main_frame(kind, navigation_id, url);
+        } else {
+            self.did_commit_child_frame(tree, frame, kind, navigation_id, url);
+        }
+        self.sweep();
+    }
+
+    fn did_commit_main_frame(&mut self, kind: Option<NavigationType>, navigation_id: u64, url: String) {
         // A new document: the entry it commits to is its, keeping its
         // state (a reload, a traversal).
-        let new = || NavigationEntry {
-            url: url.clone(),
-            document: navigation_id,
-            ..NavigationEntry::default()
-        };
         match (kind, self.current) {
             (Some(NavigationType::HistoryIndex(index)), _) if index < self.entries.len() => {
-                let entry = &mut self.entries[index];
-                entry.url = url;
-                entry.document = navigation_id;
+                // Its frames' places stay: what its new document's frames
+                // are restored from.
+                let item = self.entries[index].root.item;
+                self.loaded_again(item, url, navigation_id);
                 self.current = Some(index);
             }
             (Some(NavigationType::Reload), Some(current)) => {
-                let entry = &mut self.entries[current];
-                entry.url = url;
-                entry.document = navigation_id;
+                // Its new document's frames load by their `src`, each
+                // taking its place again.
+                let root = &mut self.entries[current].root;
+                root.children.clear();
+                let item = root.item;
+                self.loaded_again(item, url, navigation_id);
             }
-            (Some(NavigationType::Replace), Some(current)) => self.entries[current] = new(),
+            (Some(NavigationType::Replace), Some(current)) => {
+                self.entries[current] = self.new_entry(url, navigation_id, false);
+            }
             (Some(NavigationType::NewEntry), Some(current)) if self.entries[current].initial => {
-                self.entries[current] = new();
+                self.entries[current] = self.new_entry(url, navigation_id, false);
             }
-            (Some(NavigationType::Initial), _) => self.push(NavigationEntry {
-                initial: true,
-                ..new()
-            }),
+            (Some(NavigationType::Initial), _) => {
+                let entry = self.new_entry(url, navigation_id, true);
+                self.push(entry);
+            }
             (None, _) => {
                 tracing::warn!(navigation_id, %url, "a commit for no navigation the browser started");
-                self.push(new());
+                let entry = self.new_entry(url, navigation_id, false);
+                self.push(entry);
             }
-            _ => self.push(new()),
+            _ => {
+                let entry = self.new_entry(url, navigation_id, false);
+                self.push(entry);
+            }
         }
     }
 
-    /// `RendererDidNavigateToSameDocument`: the document shown navigated
-    /// within itself (a fragment, `pushState`), nothing loaded: a new entry
-    /// of the same document, with the current one's title and scroll
-    /// restoration mode, or, if `replace`, the current one's new URL and
+    /// A child frame's new document (Chromium's `NEW_SUBFRAME` and
+    /// `AUTO_SUBFRAME`): a new entry, the current one's but for the frame's
+    /// place, or the frame's place in the current one. Nothing for a frame
+    /// whose parent has no place in it (Chromium's neither), or with no
+    /// entry yet.
+    fn did_commit_child_frame(
+        &mut self,
+        tree: &FrameTree,
+        frame: FrameToken,
+        kind: Option<NavigationType>,
+        navigation_id: u64,
+        url: String,
+    ) {
+        let (Some(current), Some(path)) = (self.current, path(tree, frame)) else {
+            return;
+        };
+        match kind {
+            Some(NavigationType::NewEntry) => {
+                let item = self.new_item(url, navigation_id);
+                let base = &self.entries[current];
+                let mut root = base.root.clone_live(tree, tree.root());
+                if !root.place(&path, item) {
+                    return;
+                }
+                let entry = Entry {
+                    title: base.title.clone(),
+                    initial: false,
+                    root,
+                };
+                self.push(entry);
+            }
+            // Its document loaded again: its item has it.
+            Some(NavigationType::Reload)
+                if self.entries[current].root.find(&path).is_some() =>
+            {
+                let node = self.entries[current]
+                    .root
+                    .find_mut(&path)
+                    .expect("found above");
+                node.children.clear();
+                let item = node.item;
+                self.loaded_again(item, url, navigation_id);
+            }
+            // A replacement, the frame's first document, its renderer's own
+            // (a `javascript:` URL's).
+            _ => {
+                let item = self.new_item(url, navigation_id);
+                self.entries[current].root.place(&path, item);
+            }
+        }
+    }
+
+    /// `RendererDidNavigateToSameDocument`: the main frame's document
+    /// navigated within itself (a fragment, `pushState`), nothing loaded:
+    /// a new entry of the same document, the current one's but for the
+    /// main frame's item, with the current one's title and scroll
+    /// restoration mode; or, if `replace`, the current item's new URL and
     /// state.
     pub(crate) fn did_commit_same_document(
         &mut self,
+        tree: &FrameTree,
         url: String,
         replace: bool,
         state: Option<Vec<u8>>,
     ) {
-        match self.current {
-            Some(current) if replace => {
-                let entry = &mut self.entries[current];
-                entry.url = url;
-                entry.state = state;
-            }
-            current => {
-                let base = current.map(|current| self.entries[current].clone());
-                let base = base.unwrap_or_default();
-                self.push(NavigationEntry {
-                    url,
-                    title: base.title,
-                    document: base.document,
-                    state,
-                    manual_scroll_restoration: base.manual_scroll_restoration,
-                    initial: false,
-                });
-            }
+        let Some(current) = self.current else {
+            let entry = self.new_entry(url, 0, false);
+            self.items
+                .get_mut(&entry.root.item)
+                .expect("just made")
+                .state = state;
+            return self.push(entry);
+        };
+        let base = &self.entries[current];
+        let before = self.item(base.root.item).clone();
+        if replace {
+            let item = self.items.get_mut(&before.item).expect("an entry's");
+            item.url = url;
+            item.state = state;
+            return;
         }
+        let mut root = base.root.clone_live(tree, tree.root());
+        let title = base.title.clone();
+        let item = self.item_numbers.get_next();
+        self.items.insert(
+            item,
+            FrameNavigationEntry {
+                item,
+                url,
+                document: before.document,
+                state,
+                manual_scroll_restoration: before.manual_scroll_restoration,
+            },
+        );
+        root.item = item;
+        self.push(Entry {
+            title,
+            initial: false,
+            root,
+        });
     }
 
-    /// The traversal `navigation_id` within the document committed at
-    /// `url` (`DidCommitSameDocumentNavigation` of a history navigation):
-    /// its entry is the current one.
+    /// The traversal `navigation_id` within the main frame's document
+    /// committed at `url` (`DidCommitSameDocumentNavigation` of a history
+    /// navigation): its entry is the current one.
     pub(crate) fn did_commit_history_same_document(&mut self, navigation_id: u64, url: String) {
-        match self.pending.remove(&navigation_id) {
+        match self.pending.remove(&navigation_id).map(|pending| pending.kind) {
             Some(NavigationType::HistoryIndex(index)) if index < self.entries.len() => {
-                self.entries[index].url = url;
+                let item = self.entries[index].root.item;
+                self.items.get_mut(&item).expect("an entry's").url = url;
                 self.current = Some(index);
             }
             other => {
@@ -249,17 +582,31 @@ impl NavigationController {
     /// `navigation_id` was for: the entry to load instead, if it is still
     /// there.
     pub(crate) fn did_fail_same_document(&mut self, navigation_id: u64) -> Option<usize> {
-        match self.pending.remove(&navigation_id) {
+        match self.pending.remove(&navigation_id).map(|pending| pending.kind) {
             Some(NavigationType::HistoryIndex(index)) if index < self.entries.len() => Some(index),
             _ => None,
         }
     }
 
-    /// The current entry's scroll restoration mode (`UpdateState`).
-    pub(crate) fn set_manual_scroll_restoration(&mut self, manual: bool) {
-        if let Some(current) = self.current {
-            self.entries[current].manual_scroll_restoration = manual;
-        }
+    /// `frame`'s scroll restoration mode in the current entry
+    /// (`UpdateState`): nothing for a frame with no place there (one
+    /// showing its initial `about:blank`).
+    pub(crate) fn set_manual_scroll_restoration(
+        &mut self,
+        tree: &FrameTree,
+        frame: FrameToken,
+        manual: bool,
+    ) {
+        let Some(current) = self.current else {
+            return;
+        };
+        let Some(node) = path(tree, frame).and_then(|path| self.entries[current].root.find(&path).map(|node| node.item)) else {
+            return;
+        };
+        self.items
+            .get_mut(&node)
+            .expect("an entry's")
+            .manual_scroll_restoration = manual;
     }
 
     /// The title of the entry shown.
@@ -269,8 +616,41 @@ impl NavigationController {
         }
     }
 
+    /// A new item of a new document.
+    fn new_item(&mut self, url: String, document: u64) -> u64 {
+        let item = self.item_numbers.get_next();
+        self.items.insert(
+            item,
+            FrameNavigationEntry {
+                item,
+                url,
+                document,
+                ..FrameNavigationEntry::default()
+            },
+        );
+        item
+    }
+
+    /// An entry of the main frame's new document alone.
+    fn new_entry(&mut self, url: String, document: u64, initial: bool) -> Entry {
+        let item = self.new_item(url, document);
+        Entry {
+            title: String::new(),
+            initial,
+            root: TreeNode::new(String::new(), item),
+        }
+    }
+
+    /// `item`'s frame has its document again, a new one: the entries that
+    /// have it have it.
+    fn loaded_again(&mut self, item: u64, url: String, document: u64) {
+        let item = self.items.get_mut(&item).expect("an entry's");
+        item.url = url;
+        item.document = document;
+    }
+
     /// A new entry after the current one; the ones forward of it go.
-    fn push(&mut self, entry: NavigationEntry) {
+    fn push(&mut self, entry: Entry) {
         #[expect(
             clippy::arithmetic_side_effects,
             reason = "the current entry's index, one of a Vec's: one past it fits"
@@ -279,90 +659,130 @@ impl NavigationController {
         self.entries.truncate(keep);
         // A history navigation pending to an entry that just went can't
         // commit as one any more.
-        for kind in self.pending.values_mut() {
-            if matches!(kind, NavigationType::HistoryIndex(index) if *index >= keep) {
-                *kind = NavigationType::NewEntry;
+        for pending in self.pending.values_mut() {
+            if matches!(pending.kind, NavigationType::HistoryIndex(index) if index >= keep) {
+                pending.kind = NavigationType::NewEntry;
             }
         }
         let index = self.entries.len();
         self.entries.push(entry);
         self.current = Some(index);
     }
+
+    /// Drops the items no entry has a place for any more (an entry gone,
+    /// a place another item took): what Chromium's `scoped_refptr`s do as
+    /// the last goes. Once a commit, through every entry's places.
+    fn sweep(&mut self) {
+        let mut kept = HashSet::new();
+        for entry in &self.entries {
+            entry.root.items(&mut kept);
+        }
+        self.items.retain(|item, _| kept.contains(item));
+    }
+}
+
+/// `frame`'s place in `tree`: the unique names from the main frame's
+/// children down to it (none for the main frame). None for a frame not in
+/// it.
+fn path(tree: &FrameTree, frame: FrameToken) -> Option<Vec<&str>> {
+    let mut path = Vec::new();
+    let mut at = frame;
+    while let Some(parent) = tree.parent(at) {
+        path.push(tree.unique_name(at)?);
+        at = parent;
+    }
+    (at == tree.root()).then(|| {
+        path.reverse();
+        path
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    const MAIN: FrameToken = FrameToken([0; 16]);
+
+    fn token(n: u8) -> FrameToken {
+        FrameToken([n; 16])
+    }
+
     fn urls(controller: &NavigationController) -> Vec<&str> {
-        controller
-            .entries()
-            .iter()
-            .map(|entry| entry.url.as_str())
-            .collect()
+        controller.entries().map(|entry| entry.url()).collect()
+    }
+
+    /// The main frame's navigation `id`, of `kind`, committed at `url`.
+    fn commit(
+        controller: &mut NavigationController,
+        tree: &FrameTree,
+        id: u64,
+        kind: NavigationType,
+        url: &str,
+    ) {
+        controller.did_start(id, MAIN, kind);
+        controller.did_commit(tree, MAIN, id, url.into());
     }
 
     /// `a`, `b`, `c` committed in turn, as navigations 1 to 3.
-    fn three() -> NavigationController {
+    fn three() -> (NavigationController, FrameTree) {
+        let tree = FrameTree::new(MAIN);
         let mut controller = NavigationController::default();
         for (id, url) in [(1, "a"), (2, "b"), (3, "c")] {
-            controller.did_start(id, NavigationType::NewEntry);
-            controller.did_commit(id, url.into());
+            commit(&mut controller, &tree, id, NavigationType::NewEntry, url);
         }
-        controller
+        (controller, tree)
     }
 
     #[test]
     fn new_entries_go_after_the_current_one() {
+        let tree = FrameTree::new(MAIN);
         let mut controller = NavigationController::default();
         assert!(!controller.can_go_back() && !controller.can_go_forward());
-        controller.did_start(1, NavigationType::NewEntry);
+        controller.did_start(1, MAIN, NavigationType::NewEntry);
         assert_eq!(controller.current_index(), None);
-        controller.did_commit(1, "a".into());
+        controller.did_commit(&tree, MAIN, 1, "a".into());
         controller.set_title("A".into());
-        assert_eq!(controller.entries()[0].title, "A");
-        let mut controller = three();
+        assert_eq!(controller.entries().next().map(|e| e.title()), Some("A"));
+        let (mut controller, tree) = three();
         assert_eq!(urls(&controller), ["a", "b", "c"]);
         assert_eq!(controller.current_index(), Some(2));
         assert!(controller.can_go_back() && !controller.can_go_forward());
         // Back to `b`, then a new page: `c` goes.
-        controller.did_start(4, NavigationType::HistoryIndex(1));
-        controller.did_commit(4, "b".into());
+        commit(&mut controller, &tree, 4, NavigationType::HistoryIndex(1), "b");
         assert!(controller.can_go_forward());
-        controller.did_start(5, NavigationType::NewEntry);
-        controller.did_commit(5, "d".into());
+        commit(&mut controller, &tree, 5, NavigationType::NewEntry, "d");
         assert_eq!(urls(&controller), ["a", "b", "d"]);
         assert!(!controller.can_go_forward());
+        // `c`'s item went with it.
+        assert_eq!(controller.items.len(), 3);
     }
 
     #[test]
     fn back_and_forward_move_through_the_entries() {
-        let mut controller = three();
+        let (mut controller, tree) = three();
         assert_eq!(controller.index_for_offset(-1), Some(1));
-        controller.did_start(4, NavigationType::HistoryIndex(1));
+        controller.did_start(4, MAIN, NavigationType::HistoryIndex(1));
         // Pending: a second back counts from where the first goes.
         assert_eq!(controller.index_for_offset(-1), Some(0));
-        controller.did_start(5, NavigationType::HistoryIndex(0));
+        controller.did_start(5, MAIN, NavigationType::HistoryIndex(0));
         assert_eq!(controller.index_for_offset(-1), None);
         // The later one commits; the earlier one never will.
-        controller.did_commit(5, "a".into());
+        controller.did_commit(&tree, MAIN, 5, "a".into());
         assert_eq!(controller.current_index(), Some(0));
         assert_eq!(urls(&controller), ["a", "b", "c"]);
         assert_eq!(controller.index_for_offset(2), Some(2));
         // A redirect on the way changes the entry's URL.
-        controller.did_start(6, NavigationType::HistoryIndex(2));
-        controller.did_commit(6, "c2".into());
+        commit(&mut controller, &tree, 6, NavigationType::HistoryIndex(2), "c2");
         assert_eq!(urls(&controller), ["a", "b", "c2"]);
         assert_eq!(controller.current_index(), Some(2));
     }
 
     #[test]
     fn reload_keeps_the_entry_and_same_document_adds_one() {
-        let mut controller = three();
-        controller.did_start(4, NavigationType::Reload);
-        controller.did_commit(4, "c".into());
+        let (mut controller, tree) = three();
+        commit(&mut controller, &tree, 4, NavigationType::Reload, "c");
         assert_eq!(urls(&controller), ["a", "b", "c"]);
-        controller.did_commit_same_document("c#x".into(), false, None);
+        controller.did_commit_same_document(&tree, "c#x".into(), false, None);
         assert_eq!(urls(&controller), ["a", "b", "c", "c#x"]);
         assert_eq!(controller.current_index(), Some(3));
     }
@@ -372,21 +792,18 @@ mod tests {
     /// yet, it is the first.
     #[test]
     fn replace_takes_the_current_entry_s_place() {
-        let mut controller = three();
-        controller.did_start(4, NavigationType::HistoryIndex(1));
-        controller.did_commit(4, "b".into());
+        let (mut controller, tree) = three();
+        commit(&mut controller, &tree, 4, NavigationType::HistoryIndex(1), "b");
         controller.set_title("B".into());
-        controller.did_start(5, NavigationType::Replace);
-        controller.did_commit(5, "r".into());
+        commit(&mut controller, &tree, 5, NavigationType::Replace, "r");
         assert_eq!(urls(&controller), ["a", "r", "c"]);
         assert_eq!(controller.current_index(), Some(1));
-        assert_eq!(controller.entries()[1].title, "");
-        controller.did_commit_same_document("r#x".into(), true, None);
+        assert_eq!(controller.entry(1).map(|e| e.title()), Some(""));
+        controller.did_commit_same_document(&tree, "r#x".into(), true, None);
         assert_eq!(urls(&controller), ["a", "r#x", "c"]);
         assert_eq!(controller.current_index(), Some(1));
         let mut empty = NavigationController::default();
-        empty.did_start(1, NavigationType::Replace);
-        empty.did_commit(1, "a".into());
+        commit(&mut empty, &tree, 1, NavigationType::Replace, "a");
         assert_eq!(urls(&empty), ["a"]);
     }
 
@@ -394,23 +811,26 @@ mod tests {
     /// place; another kind of navigation keeps it.
     #[test]
     fn a_new_entry_takes_the_initial_entry_s_place() {
+        let tree = FrameTree::new(MAIN);
         let mut controller = NavigationController::default();
-        controller.did_start(1, NavigationType::Initial);
-        assert_eq!(controller.entry_params(NavigationType::Initial).index, 0);
-        controller.did_commit(1, "about:blank".into());
+        controller.did_start(1, MAIN, NavigationType::Initial);
+        assert_eq!(
+            controller
+                .entry_params(&tree, MAIN, NavigationType::Initial)
+                .index,
+            0
+        );
+        controller.did_commit(&tree, MAIN, 1, "about:blank".into());
         assert_eq!(urls(&controller), ["about:blank"]);
-        assert!(controller.entries()[0].initial);
-        controller.did_start(2, NavigationType::Reload);
-        controller.did_commit(2, "about:blank".into());
-        assert!(controller.entries()[0].initial);
-        let params = controller.entry_params(NavigationType::NewEntry);
+        assert!(controller.is_initial());
+        commit(&mut controller, &tree, 2, NavigationType::Reload, "about:blank");
+        assert!(controller.is_initial());
+        let params = controller.entry_params(&tree, MAIN, NavigationType::NewEntry);
         assert_eq!((params.index, params.length), (0, 1));
-        controller.did_start(3, NavigationType::NewEntry);
-        controller.did_commit(3, "a".into());
+        commit(&mut controller, &tree, 3, NavigationType::NewEntry, "a");
         assert_eq!(urls(&controller), ["a"]);
-        assert!(!controller.entries()[0].initial);
-        controller.did_start(4, NavigationType::NewEntry);
-        controller.did_commit(4, "b".into());
+        assert!(!controller.is_initial());
+        commit(&mut controller, &tree, 4, NavigationType::NewEntry, "b");
         assert_eq!(urls(&controller), ["a", "b"]);
     }
 
@@ -420,28 +840,32 @@ mod tests {
     /// old one, so they are loaded again.
     #[test]
     fn entries_know_their_document_and_state() {
+        let tree = FrameTree::new(MAIN);
         let mut controller = NavigationController::default();
-        controller.did_start(1, NavigationType::NewEntry);
-        controller.did_commit(1, "a".into());
-        controller.set_manual_scroll_restoration(true);
-        controller.did_commit_same_document("a#x".into(), false, Some(vec![1]));
-        let entries = controller.entries();
-        assert_eq!((entries[0].document, entries[1].document), (1, 1));
-        assert_eq!(entries[1].state, Some(vec![1]));
-        assert!(entries[1].manual_scroll_restoration);
+        commit(&mut controller, &tree, 1, NavigationType::NewEntry, "a");
+        controller.set_manual_scroll_restoration(&tree, MAIN, true);
+        controller.did_commit_same_document(&tree, "a#x".into(), false, Some(vec![1]));
+        let root = |controller: &NavigationController, index| {
+            controller.entry(index).expect("an entry").root().clone()
+        };
+        assert_eq!(
+            (root(&controller, 0).document, root(&controller, 1).document),
+            (1, 1)
+        );
+        assert_eq!(root(&controller, 1).state, Some(vec![1]));
+        assert!(root(&controller, 1).manual_scroll_restoration);
         assert!(controller.is_same_document(0));
-        controller.did_commit_same_document("a#y".into(), true, Some(vec![2]));
+        controller.did_commit_same_document(&tree, "a#y".into(), true, Some(vec![2]));
         assert_eq!(urls(&controller), ["a", "a#y"]);
-        assert_eq!(controller.entries()[1].state, Some(vec![2]));
-        controller.did_start(2, NavigationType::Reload);
-        controller.did_commit(2, "a#y".into());
-        assert_eq!(controller.entries()[1].document, 2);
-        assert_eq!(controller.entries()[1].state, Some(vec![2]));
+        assert_eq!(root(&controller, 1).state, Some(vec![2]));
+        commit(&mut controller, &tree, 2, NavigationType::Reload, "a#y");
+        assert_eq!(root(&controller, 1).document, 2);
+        assert_eq!(root(&controller, 1).state, Some(vec![2]));
         assert!(!controller.is_same_document(0));
         assert_eq!(controller.current_document(), Some(2));
         assert_eq!(controller.offset_and_length(), (1, 2));
         let params = |kind| {
-            let p = controller.entry_params(kind);
+            let p = controller.entry_params(&tree, MAIN, kind);
             (p.state, p.manual_scroll_restoration, p.index, p.length)
         };
         assert_eq!(params(NavigationType::Reload), (Some(vec![2]), true, 1, 2));
@@ -449,9 +873,8 @@ mod tests {
         assert_eq!(params(NavigationType::NewEntry), (None, false, 2, 3));
         assert_eq!(params(NavigationType::Replace), (None, false, 1, 2));
         // A new document's entry has no state.
-        controller.did_start(3, NavigationType::NewEntry);
-        controller.did_commit(3, "b".into());
-        let b = &controller.entries()[2];
+        commit(&mut controller, &tree, 3, NavigationType::NewEntry, "b");
+        let b = root(&controller, 2);
         assert_eq!(
             (b.document, b.state.clone(), b.manual_scroll_restoration),
             (3, None, false)
@@ -463,35 +886,205 @@ mod tests {
     /// back its entry, to load instead.
     #[test]
     fn traversals_within_the_document() {
+        let tree = FrameTree::new(MAIN);
         let mut controller = NavigationController::default();
-        controller.did_start(1, NavigationType::NewEntry);
-        controller.did_commit(1, "a".into());
-        controller.did_commit_same_document("a#x".into(), false, None);
-        controller.did_start(2, NavigationType::HistoryIndex(0));
+        commit(&mut controller, &tree, 1, NavigationType::NewEntry, "a");
+        controller.did_commit_same_document(&tree, "a#x".into(), false, None);
+        controller.did_start(2, MAIN, NavigationType::HistoryIndex(0));
         assert_eq!(controller.index_for_offset(1), Some(1));
         controller.did_commit_history_same_document(2, "a".into());
         assert_eq!(controller.current_index(), Some(0));
-        controller.did_start(3, NavigationType::HistoryIndex(1));
+        controller.did_start(3, MAIN, NavigationType::HistoryIndex(1));
         assert_eq!(controller.did_fail_same_document(3), Some(1));
         assert_eq!(controller.current_index(), Some(0));
         assert_eq!(controller.did_fail_same_document(3), None);
         // Loaded instead: a new document, of that entry only.
-        controller.did_start(4, NavigationType::HistoryIndex(1));
-        controller.did_commit(4, "a#x".into());
+        commit(&mut controller, &tree, 4, NavigationType::HistoryIndex(1), "a#x");
         assert_eq!(controller.current_document(), Some(4));
         assert!(!controller.is_same_document(0));
     }
 
     #[test]
     fn a_history_navigation_to_a_dropped_entry_becomes_a_new_one() {
-        let mut controller = three();
+        let (mut controller, tree) = three();
         // Forward is pending when a same-document navigation drops that
         // entry: it commits as a new one instead of an index that's gone.
-        controller.did_start(4, NavigationType::HistoryIndex(1));
-        controller.did_commit(4, "b".into());
-        controller.did_start(5, NavigationType::HistoryIndex(2));
-        controller.did_commit_same_document("b#x".into(), false, None);
-        controller.did_commit(5, "c".into());
+        commit(&mut controller, &tree, 4, NavigationType::HistoryIndex(1), "b");
+        controller.did_start(5, MAIN, NavigationType::HistoryIndex(2));
+        controller.did_commit_same_document(&tree, "b#x".into(), false, None);
+        controller.did_commit(&tree, MAIN, 5, "c".into());
         assert_eq!(urls(&controller), ["a", "b", "b#x", "c"]);
+    }
+
+    /// A tree of the main frame with child frames 1 and 2, and 3 in 1.
+    fn frames() -> FrameTree {
+        let mut tree = FrameTree::new(MAIN);
+        tree.add_child(MAIN, token(1), "one", false).expect("made");
+        tree.add_child(MAIN, token(2), "two", false).expect("made");
+        tree.add_child(token(1), token(3), "three", false)
+            .expect("made");
+        tree
+    }
+
+    /// Child frame `frame`'s navigation `id`, of `kind`, committed at `url`.
+    fn commit_child(
+        controller: &mut NavigationController,
+        tree: &FrameTree,
+        frame: FrameToken,
+        id: u64,
+        kind: NavigationType,
+        url: &str,
+    ) {
+        controller.did_start(id, frame, kind);
+        controller.did_commit(tree, frame, id, url.into());
+    }
+
+    fn child_url<'a>(controller: &'a NavigationController, index: usize, name: &str) -> Option<&'a str> {
+        let entry = controller.entry(index)?;
+        entry.frame(name).map(|item| item.url.as_str())
+    }
+
+    /// A child frame's first document is a place in the current entry; a
+    /// later one is a new entry, the current one's but for its place (and
+    /// its frames'), its other frames' items shared with it; a replacement
+    /// or a reload stays in its place.
+    #[test]
+    fn a_child_frame_s_documents_are_in_the_history() {
+        let mut tree = frames();
+        let mut controller = NavigationController::default();
+        commit(&mut controller, &tree, 1, NavigationType::NewEntry, "a");
+        // Its parent's first, then its own, as Chromium's `AUTO_SUBFRAME`s.
+        for (id, frame, url) in [(2, 1, "one"), (3, 2, "two"), (4, 3, "three")] {
+            commit_child(&mut controller, &tree, token(frame), id, NavigationType::Replace, url);
+        }
+        assert_eq!(controller.entry_count(), 1);
+        assert_eq!(controller.entry(0).map(|e| e.frame_count()), Some(4));
+        assert_eq!(child_url(&controller, 0, "three"), Some("three"));
+        // A frame whose parent has no place: none.
+        tree.add_child(token(2), token(4), "four", false)
+            .expect("made");
+        tree.add_child(token(4), token(5), "five", false)
+            .expect("made");
+        commit_child(&mut controller, &tree, token(5), 5, NavigationType::Replace, "five");
+        assert_eq!(child_url(&controller, 0, "five"), None);
+        commit_child(&mut controller, &tree, token(5), 50, NavigationType::NewEntry, "five");
+        assert_eq!(controller.entry_count(), 1);
+        // Frame 1's next document: a new entry; frame 3's place went with
+        // its document, frame 2's is the one before's.
+        commit_child(&mut controller, &tree, token(1), 6, NavigationType::NewEntry, "one2");
+        assert_eq!(controller.entry_count(), 2);
+        assert_eq!(controller.offset_and_length(), (1, 2));
+        assert_eq!(urls(&controller), ["a", "a"]);
+        assert_eq!(child_url(&controller, 0, "one"), Some("one"));
+        assert_eq!(child_url(&controller, 1, "one"), Some("one2"));
+        assert_eq!(child_url(&controller, 1, "three"), None);
+        let item = |controller: &NavigationController, index: usize, name| {
+            controller
+                .entry(index)
+                .and_then(|e| e.frame(name))
+                .map(|i| i.item)
+        };
+        assert_eq!(item(&controller, 0, "two"), item(&controller, 1, "two"));
+        assert_eq!(item(&controller, 0, ""), item(&controller, 1, ""));
+        // Frame 2's state changes in both.
+        controller.set_manual_scroll_restoration(&tree, token(2), true);
+        let manual = |controller: &NavigationController, index: usize, name| {
+            controller
+                .entry(index)
+                .and_then(|e| e.frame(name))
+                .is_some_and(|i| i.manual_scroll_restoration)
+        };
+        assert!(manual(&controller, 0, "two") && manual(&controller, 1, "two"));
+        assert!(!manual(&controller, 1, ""));
+        // A replacement, and a reload: the place, the entry kept. A reload
+        // keeps the item and its state.
+        commit_child(&mut controller, &tree, token(2), 7, NavigationType::Reload, "two");
+        assert_eq!(item(&controller, 1, "two"), item(&controller, 0, "two"));
+        assert!(manual(&controller, 1, "two"));
+        // Frame 1's reload: frame 3's place goes with its document.
+        commit_child(&mut controller, &tree, token(3), 70, NavigationType::Replace, "three2");
+        assert_eq!(child_url(&controller, 1, "three"), Some("three2"));
+        commit_child(&mut controller, &tree, token(1), 71, NavigationType::Reload, "one2");
+        assert_eq!(child_url(&controller, 1, "three"), None);
+        assert_eq!(child_url(&controller, 1, "one"), Some("one2"));
+        commit_child(&mut controller, &tree, token(2), 8, NavigationType::Replace, "two2");
+        assert_eq!(controller.entry_count(), 2);
+        assert_eq!(child_url(&controller, 1, "two"), Some("two2"));
+        assert_eq!(child_url(&controller, 0, "two"), Some("two"));
+        let params = controller.entry_params(&tree, token(2), NavigationType::NewEntry);
+        assert_eq!((params.index, params.length), (2, 3));
+        // A frame gone: a new entry has no place for it.
+        tree.remove(token(2)).expect("there");
+        commit_child(&mut controller, &tree, token(1), 9, NavigationType::NewEntry, "one3");
+        assert_eq!(child_url(&controller, 2, "two"), None);
+        assert_eq!(child_url(&controller, 1, "two"), Some("two2"));
+        // The main frame's reload: its new document's frames take their
+        // places again.
+        commit(&mut controller, &tree, 10, NavigationType::Reload, "a");
+        assert_eq!(controller.entry(2).map(|e| e.frame_count()), Some(1));
+        assert_eq!(controller.entry(1).map(|e| e.frame_count()), Some(3));
+    }
+
+    /// What no entry has a place for goes: an entry gone, a place another
+    /// item took.
+    #[test]
+    fn items_go_with_their_last_place() {
+        let tree = frames();
+        let mut controller = NavigationController::default();
+        commit(&mut controller, &tree, 1, NavigationType::NewEntry, "a");
+        commit_child(&mut controller, &tree, token(1), 2, NavigationType::Replace, "one");
+        commit_child(&mut controller, &tree, token(1), 3, NavigationType::Replace, "one2");
+        assert_eq!(controller.items.len(), 2);
+        commit_child(&mut controller, &tree, token(1), 4, NavigationType::NewEntry, "one3");
+        assert_eq!(controller.items.len(), 3);
+        // Back to the first: its frames' places stay, to restore them from.
+        commit(&mut controller, &tree, 5, NavigationType::HistoryIndex(0), "a");
+        assert_eq!(child_url(&controller, 0, "one"), Some("one2"));
+        commit(&mut controller, &tree, 6, NavigationType::NewEntry, "b");
+        // `one3`'s entry went; `a` and `one2` are the first entry's.
+        assert_eq!(controller.items.len(), 3);
+        assert_eq!(urls(&controller), ["a", "b"]);
+        // The main frame's new entry within its document keeps its frames'
+        // places.
+        commit_child(&mut controller, &tree, token(1), 7, NavigationType::Replace, "one4");
+        controller.did_commit_same_document(&tree, "b#x".into(), false, None);
+        assert_eq!(urls(&controller), ["a", "b", "b#x"]);
+        assert_eq!(child_url(&controller, 2, "one"), Some("one4"));
+    }
+
+    /// A commit's place is as things are as it is sent: a child frame's
+    /// new entry after the one the main frame's `pushState` made since its
+    /// navigation started.
+    #[test]
+    fn a_commit_s_place_is_as_it_commits() {
+        let tree = frames();
+        let mut controller = NavigationController::default();
+        commit(&mut controller, &tree, 1, NavigationType::NewEntry, "a");
+        controller.did_start(2, token(1), NavigationType::NewEntry);
+        controller.did_start(3, token(2), NavigationType::Replace);
+        assert_eq!(controller.commit_place(2), Some((1, 2)));
+        controller.did_commit_same_document(&tree, "a#x".into(), false, None);
+        assert_eq!(controller.commit_place(2), Some((2, 3)));
+        assert_eq!(controller.commit_place(3), Some((1, 2)));
+        assert_eq!(controller.commit_place(4), None);
+    }
+
+    /// A commit is the end of its frame's navigations started before it,
+    /// not another frame's; the main frame's, of every frame's.
+    #[test]
+    fn a_commit_ends_its_frame_s_older_navigations() {
+        let tree = frames();
+        let mut controller = NavigationController::default();
+        commit(&mut controller, &tree, 1, NavigationType::NewEntry, "a");
+        controller.did_start(2, token(1), NavigationType::Replace);
+        controller.did_start(3, token(2), NavigationType::Replace);
+        controller.did_start(4, token(1), NavigationType::Replace);
+        controller.did_commit(&tree, token(1), 4, "one".into());
+        assert_eq!(controller.pending.keys().copied().collect::<Vec<_>>(), [3]);
+        controller.did_start(5, token(2), NavigationType::Replace);
+        controller.did_start(6, MAIN, NavigationType::NewEntry);
+        controller.did_start(7, token(2), NavigationType::Replace);
+        controller.did_commit(&tree, MAIN, 6, "b".into());
+        assert_eq!(controller.pending.keys().copied().collect::<Vec<_>>(), [7]);
     }
 }

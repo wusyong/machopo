@@ -1243,7 +1243,7 @@ mod links {
     fn history(web_contents: &WebContents) -> (Vec<String>, Option<usize>) {
         let controller = web_contents.controller();
         (
-            controller.entries().iter().map(|e| e.url.clone()).collect(),
+            controller.entries().map(|e| e.url().to_owned()).collect(),
             controller.current_index(),
         )
     }
@@ -4074,7 +4074,7 @@ document.querySelector('base').setAttribute('href', '/later/');
         // A parent not there, a token in use, a frame not there gone, the
         // main frame gone, a navigation of or by a frame not there: each to
         // the renderer of the time.
-        let bads: [fn(protocol::FrameToken, protocol::FrameToken) -> RendererHostMsg; 11] = [
+        let bads: [fn(protocol::FrameToken, protocol::FrameToken) -> RendererHostMsg; 12] = [
             |_, _| RendererHostMsg::DidCreateChildFrame {
                 parent: protocol::FrameToken([0xEE; 16]),
                 frame: protocol::FrameToken([0xEF; 16]),
@@ -4136,6 +4136,11 @@ document.querySelector('base').setAttribute('href', '/later/');
                 replace: false,
                 state: None,
                 navigation_id: None,
+            },
+            // A scroll restoration mode of a frame not there.
+            |_, _| RendererHostMsg::UpdateState {
+                frame: protocol::FrameToken([0xEE; 16]),
+                manual_scroll_restoration: true,
             },
         ];
         for bad in bads {
@@ -4625,8 +4630,146 @@ document.querySelector('base').setAttribute('href', '/later/');
             &host_rx,
             "popstate-null-/-true_mode-manual",
         );
-        let entries = web_contents.controller().entries();
-        assert!(entries[0].manual_scroll_restoration && !entries[1].manual_scroll_restoration);
+        let controller = web_contents.controller();
+        let manual = |index| {
+            controller
+                .entry(index)
+                .is_some_and(|entry| entry.root().manual_scroll_restoration)
+        };
+        assert!(manual(0) && !manual(1));
+        web_contents.shutdown();
+    }
+
+    /// A child frame's documents are in the session history: its first in
+    /// the current entry, a later one a new entry (`history.length` the
+    /// tab's in every frame), a replacement and a reload in its place, a
+    /// reload with its item's scroll restoration mode, which is the
+    /// frame's own. In the initial entry, each takes the place of the one
+    /// before.
+    #[test]
+    fn a_child_frames_documents_are_in_the_history() {
+        a_child_frames_documents_are_in_the_history_from(false);
+        a_child_frames_documents_are_in_the_history_from(true);
+    }
+
+    /// A child frame's new entry after one the main frame's `pushState`
+    /// made after the browser sent its commit (the renderer busy with
+    /// script as it came): every frame's `history.length` counts both once
+    /// the browser has the commit (`SetHistoryOffsetAndLength`; the
+    /// commit's own was as the browser sent it).
+    #[test]
+    fn a_child_frames_new_entry_counts_the_entries_made_meanwhile() {
+        let html = format!(
+            "{}<iframe src=/a></iframe>",
+            logging(
+                "onfocus = () => note(`len-${history.length}-${frames[0].history.length}`);
+                 frames[0].location.href = '/slow';
+                 setTimeout(() => {
+                   const end = performance.now() + 1000;
+                   while (performance.now() < end) {}
+                   history.pushState(null, '', '/p');
+                 });"
+            )
+        );
+        let server = server(&[
+            ("/", Route::ok("text/html", html)),
+            ("/a", Route::ok("text/html", "a")),
+            (
+                "/slow",
+                Route::ok(
+                    "text/html",
+                    "<script>onload = () => parent.note('loaded')</script>",
+                )
+                .with_delay(Duration::from_millis(100)),
+            ),
+        ]);
+        let (mut web_contents, host_rx) = tab();
+        web_contents.navigate(server.url("/"));
+        logged_until(&mut web_contents, &host_rx, "loaded");
+        assert_eq!(web_contents.controller().entry_count(), 3);
+        // After the browser's answer to the commit, which went first.
+        web_contents.set_focus(true);
+        logged_until(&mut web_contents, &host_rx, "loaded_len-3-3");
+        web_contents.shutdown();
+    }
+
+    fn a_child_frames_documents_are_in_the_history_from(initial: bool) {
+        let html = format!(
+            "{}<iframe src=/a></iframe>",
+            logging("frames[0].location.href = '/b';")
+        );
+        let server = server(&[
+            ("/", Route::ok("text/html", html)),
+            (
+                "/a",
+                Route::ok(
+                    "text/html",
+                    "<script>onload = () => parent.note('a-' + history.length)</script>",
+                ),
+            ),
+            (
+                "/b",
+                Route::ok(
+                    "text/html",
+                    "<script>onload = () => { parent.note('b-' + history.length); location.replace('/c'); }</script>",
+                ),
+            ),
+            (
+                "/c",
+                Route::ok(
+                    "text/html",
+                    "<script>onload = () => {\
+                       if (performance.getEntriesByType('navigation')[0].type == 'reload') {\
+                         parent.note(`reload-${history.scrollRestoration}-${history.length}`);\
+                       } else {\
+                         history.scrollRestoration = 'manual';\
+                         parent.note(`c-${history.length}-${parent.history.length}`);\
+                         location.reload();\
+                       }\
+                     }</script>",
+                ),
+            ),
+        ]);
+        let (mut web_contents, host_rx) = tab();
+        if initial {
+            web_contents.navigate_initial(server.url("/"));
+            logged_until(
+                &mut web_contents,
+                &host_rx,
+                "a-1_b-1_c-1-1_reload-manual-1",
+            );
+            assert_eq!(web_contents.controller().entry_count(), 1);
+            return web_contents.shutdown();
+        }
+        web_contents.navigate(server.url("/"));
+        logged_until(
+            &mut web_contents,
+            &host_rx,
+            "a-1_b-2_c-2-2_reload-manual-2",
+        );
+        let main = web_contents.devtools_frame_token();
+        let tree = web_contents.frame_tree();
+        let child = tree.children(main)[0];
+        let name = tree.unique_name(child).expect("there").to_owned();
+        let controller = web_contents.controller();
+        let urls: Vec<(&str, Option<&str>)> = controller
+            .entries()
+            .map(|entry| {
+                (
+                    entry.url(),
+                    entry.frame(&name).map(|item| item.url.as_str()),
+                )
+            })
+            .collect();
+        let (top, a, c) = (server.url("/"), server.url("/a"), server.url("/c"));
+        assert_eq!(
+            urls,
+            [(top.as_str(), Some(a.as_str())), (top.as_str(), Some(c.as_str()))]
+        );
+        assert_eq!(controller.current_index(), Some(1));
+        let entry = controller.entry(1).expect("there");
+        let child_item = entry.frame(&name).expect("there");
+        assert!(child_item.manual_scroll_restoration && !entry.root().manual_scroll_restoration);
         web_contents.shutdown();
     }
 }

@@ -30,6 +30,11 @@ struct FrameTreeNode {
     /// `about:blank`). The `about:` documents a child frame's renderer
     /// commits itself aren't told.
     url: Option<String>,
+    /// It committed a document not at `about:blank` (Chromium's
+    /// `has_committed_real_load`): till then its next document takes its
+    /// place in the session history, as one replacing its initial
+    /// `about:blank` does.
+    committed_real_load: bool,
     /// Its document's origin: its URL's, or the one it has from another
     /// document (an `about:blank`'s initiator's, an `about:srcdoc`'s
     /// parent's, a child frame's initial `about:blank`'s parent's); an
@@ -80,6 +85,7 @@ impl FrameTreeNode {
             children: Vec::new(),
             unique_name,
             url: None,
+            committed_real_load: false,
             origin: origin.origin,
             local: origin.local,
             srcdoc: String::new(),
@@ -133,6 +139,14 @@ impl FrameTree {
     /// not in the tree, or before one the browser loaded commits.
     pub fn url(&self, frame: FrameToken) -> Option<&str> {
         self.nodes.get(&frame)?.url.as_deref()
+    }
+
+    /// Whether `frame` committed a document not at `about:blank`: a frame
+    /// not in the tree hasn't.
+    pub fn has_committed_real_load(&self, frame: FrameToken) -> bool {
+        self.nodes
+            .get(&frame)
+            .is_some_and(|node| node.committed_real_load)
     }
 
     /// Whether `frame`'s document may open local files (a navigation it
@@ -275,6 +289,7 @@ impl FrameTree {
         node.origin = origin.origin;
         node.local = origin.local;
         node.url = Some(url.to_owned());
+        node.committed_real_load |= crate::loader::about_path(url) != Some("blank");
         Ok(())
     }
 
@@ -498,6 +513,14 @@ mod tests {
             tree.did_commit(token(9), 5, "https://a.test/"),
             Err(BadMessageReason::CommitOfUnknownFrame)
         );
+        // Its first document not at `about:blank`, whatever comes after.
+        assert!(!tree.has_committed_real_load(token(2)));
+        tree.did_commit(token(2), 6, "about:blank#x").unwrap();
+        assert!(!tree.has_committed_real_load(token(2)));
+        tree.did_commit(token(2), 7, "about:srcdoc").unwrap();
+        assert!(tree.has_committed_real_load(token(2)));
+        tree.did_commit(token(2), 8, "about:blank").unwrap();
+        assert!(tree.has_committed_real_load(token(2)));
         tree.reset();
         assert_eq!(tree.url(token(0)), None);
     }
