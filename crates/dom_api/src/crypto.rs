@@ -99,30 +99,32 @@ fn uuid(random: &[u8]) -> String {
 }
 
 /// `structuredClone(value, options)`: the value serialized (with its
-/// transfer list) by the front end, its ports shipped (new ones take their
-/// places, as a message's), deserialized in the current realm.
+/// transfer list) by the front end, its ports shipped and received at once
+/// (new ones of the current realm take their places, as a message's),
+/// deserialized in the current realm.
 pub(crate) fn structured_clone<'gc>(
     cx: &ApiCx<'_, 'gc>,
-    _: Gc<'gc, Window>,
+    this: Gc<'gc, Window>,
     value: CloneParam<'_, 'gc>,
 ) -> Result<(SerializedMessage, Vec<Gc<'gc, dom::EventTargetImpl>>), ApiError> {
-    clone(cx, value)
+    clone(cx, cx.window_context(this), value)
 }
 
 /// A worker's global's `structuredClone`, as a window's.
 pub(crate) fn worker_structured_clone<'gc>(
     cx: &ApiCx<'_, 'gc>,
-    _: Gc<'gc, dom::WorkerGlobalScope>,
+    this: Gc<'gc, dom::WorkerGlobalScope>,
     value: CloneParam<'_, 'gc>,
 ) -> Result<(SerializedMessage, Vec<Gc<'gc, dom::EventTargetImpl>>), ApiError> {
-    clone(cx, value)
+    clone(cx, cx.worker_global_context(this), value)
 }
 
 fn clone<'gc>(
     cx: &ApiCx<'_, 'gc>,
+    context: Gc<'gc, dom::ExecutionContext>,
     value: CloneParam<'_, 'gc>,
 ) -> Result<(SerializedMessage, Vec<Gc<'gc, dom::EventTargetImpl>>), ApiError> {
-    let ports = value
+    let ends: Vec<_> = value
         .ports
         .iter()
         .map(|&port| cx.ship_message_port(port))
@@ -131,7 +133,8 @@ fn clone<'gc>(
         .payload
         .take()
         .ok_or_else(|| ApiError::type_error("structuredClone: its value is taken"))?;
-    Ok((payload, ports))
+    // Received at once, where it was called.
+    Ok((payload, cx.receive_message_ports(context, ends)))
 }
 
 #[cfg(test)]

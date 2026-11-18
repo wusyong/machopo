@@ -20,6 +20,7 @@ fn message() -> SerializedMessage {
     SerializedMessage {
         bytes: Vec::new(),
         transferred: None,
+        ports: Vec::new(),
     }
 }
 
@@ -47,10 +48,10 @@ fn tasks_run_in_the_order_queued_across_their_sources() {
     dom.mutate(|cx| {
         let (window, document) = window(cx);
         let element = cx.create_element(document, QualName::html("p"));
-        cx.post_window_message(window, message(), DomString::new(""), None, &[]);
+        cx.post_window_message(window, message(), DomString::new(""), None);
         cx.add_timer(cx.window_context(window), 0.0, false);
         cx.queue_element_task(element, names::event::SELECT);
-        cx.post_window_message(window, message(), DomString::new(""), None, &[]);
+        cx.post_window_message(window, message(), DomString::new(""), None);
         let mut order = Vec::new();
         while let Some(queue) = next(cx, window) {
             order.push(queue);
@@ -143,12 +144,12 @@ fn a_pass_runs_what_was_queued_before_it() {
     let mut dom = Dom::new();
     dom.mutate(|cx| {
         let (window, _) = window(cx);
-        cx.post_window_message(window, message(), DomString::new(""), None, &[]);
+        cx.post_window_message(window, message(), DomString::new(""), None);
         cx.begin_task_pass();
         assert_eq!(next(cx, window), Some(TaskQueue::Message));
         take(cx, window, TaskQueue::Message);
         // Its listener posts another.
-        cx.post_window_message(window, message(), DomString::new(""), None, &[]);
+        cx.post_window_message(window, message(), DomString::new(""), None);
         assert_eq!(next(cx, window), None, "held back for the next pass");
         assert!(cx.take_posted_message(cx.window_context(window)).is_none());
         cx.end_task_pass(&[cx.window_context(window)]);
@@ -170,14 +171,14 @@ fn the_flag_says_a_task_may_be_queued() {
     assert!(!dom.has_queued_tasks(), "a timer waits for its time");
     dom.mutate(|cx| {
         let window = window.get(cx.gc);
-        cx.post_window_message(window, message(), DomString::new(""), None, &[]);
+        cx.post_window_message(window, message(), DomString::new(""), None);
     });
     assert!(dom.has_queued_tasks());
     dom.mutate(|cx| {
         let window = window.get(cx.gc);
         cx.begin_task_pass();
         take(cx, window, TaskQueue::Message);
-        cx.post_window_message(window, message(), DomString::new(""), None, &[]);
+        cx.post_window_message(window, message(), DomString::new(""), None);
         cx.end_task_pass(&[cx.window_context(window)]);
     });
     assert!(dom.has_queued_tasks(), "one held back");

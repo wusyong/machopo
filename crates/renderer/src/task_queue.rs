@@ -36,6 +36,9 @@ pub(crate) enum MainThreadTask {
         id: u64,
         event: crate::worker_thread::WorkerEvent,
     },
+    /// From another thread: the DOM's message ports may have messages
+    /// (`dom::PortWaker`), which the loop runs as it runs the DOM's tasks.
+    PortMessages,
 }
 
 /// The scheduler's task queues (Blink's task queues by type), each in the
@@ -203,6 +206,30 @@ impl MainThreadScheduler {
             MainThreadTask::Worker { id, event },
             false,
         );
+    }
+
+    /// What wakes the main thread for its ports' messages from workers'
+    /// threads (a task in the queue of what workers send).
+    pub(crate) fn port_waker(self: &Arc<Self>) -> dom::PortWaker {
+        let scheduler = Arc::downgrade(self);
+        Arc::new(move || {
+            if let Some(scheduler) = scheduler.upgrade() {
+                let _ = scheduler.post(TaskQueue::Worker, MainThreadTask::PortMessages, false);
+            }
+        })
+    }
+
+    /// What wakes worker `id`'s thread for its ports' messages from other
+    /// threads; nothing once it is no more.
+    pub(crate) fn worker_port_waker(self: &Arc<Self>, id: u64) -> dom::PortWaker {
+        let scheduler = Arc::downgrade(self);
+        Arc::new(move || {
+            if let Some(scheduler) = scheduler.upgrade()
+                && let Some(tasks) = scheduler.lock_routes().get(&id)
+            {
+                let _ = tasks.send(crate::worker_thread::WorkerTask::PortMessages);
+            }
+        })
     }
 
     /// What the browser sends worker `id` goes to `tasks`, its thread's,
@@ -500,6 +527,7 @@ mod tests {
             }
             MainThreadTask::CanvasEncoded { id, .. } => format!("canvas {id}"),
             MainThreadTask::Worker { id, .. } => format!("worker {id}"),
+            MainThreadTask::PortMessages => "ports".to_owned(),
             MainThreadTask::DevTools(DevToolsQueued::Message { message, .. }) => {
                 format!("devtools {message}")
             }

@@ -67,7 +67,7 @@ intersection-observer/
 
 # Dedicated workers. Shared and service workers, module workers and
 # workers made in a worker don't run (`disabled`); what a dedicated worker
-# doesn't have yet (`fetch()`, XHR, a `MessagePort` to or from it) fails.
+# doesn't have yet (XHR) fails.
 workers/
 
 # The navigator's Network Information, Geolocation and Screen Wake Lock.
@@ -789,13 +789,28 @@ fetch/api/request/
 fetch/api/redirect/
 fetch/api/abort/
 
-# Web messaging: a window's `postMessage` and `MessageEvent`. The
-# directories that post between windows without workers or another origin,
-# whole (most of their files run; what needs those or a canvas fails in its
-# expectations), and the top-level files that do the same.
+# Web messaging: a window's `postMessage`, `MessageEvent`, and
+# `MessageChannel`'s ports, in a window or a worker and between the two.
+# The directories that post between windows without another origin, whole
+# (most of their files run; what needs that or a canvas fails in its
+# expectations), the channels' (their `close` event `disabled`), and the
+# top-level files that do the same.
 webmessaging/with-options/
 webmessaging/with-ports/
 webmessaging/without-ports/
+webmessaging/Channel_postMessage_Blob.any.js
+webmessaging/Channel_postMessage_DataCloneErr.any.js
+webmessaging/Channel_postMessage_clone_port.any.js
+webmessaging/Channel_postMessage_clone_port_error.any.js
+webmessaging/Channel_postMessage_event_properties.any.js
+webmessaging/Channel_postMessage_ports_readonly_array.any.js
+webmessaging/Channel_postMessage_target_source.any.js
+webmessaging/Channel_postMessage_with_transfer_entangled.any.js
+webmessaging/Channel_postMessage_with_transfer_incoming_messages.any.js
+webmessaging/Channel_postMessage_with_transfer_outgoing_messages.any.js
+webmessaging/MessagePort_initial_disabled.any.js
+webmessaging/MessagePort_onmessage_start.any.js
+webmessaging/message-channels/
 webmessaging/MessageEvent.any.js
 webmessaging/MessageEvent-trusted.window.js
 webmessaging/MessageEvent_properties.htm

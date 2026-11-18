@@ -164,21 +164,22 @@ fn a_worker_posts_and_terminates_through_its_host() {
         &[Arg::Str("hi")],
     )
     .unwrap();
-    assert_eq!(calls(&dom), [WorkerCall::Post(1, b"hi".to_vec())]);
+    assert_eq!(calls(&dom), [WorkerCall::Post(1, b"hi".to_vec(), 0)]);
 
     let port = dom.read(|cx| {
         let channel = cx.create_message_channel(None);
         Rc::new(cx.root_object(ObjectRef::EventTarget(cx.message_channel_ports(channel).0)))
     });
-    let transferred = call(
+    // A port goes with the message: its end.
+    call(
         &mut dom,
         &worker,
         "Worker",
         "postMessage",
         &[Arg::Str("port"), Arg::Object(port)],
-    );
-    assert!(matches!(transferred, Err(ApiError::Dom(e)) if e.name == ExceptionName::DataClone));
-    assert!(calls(&dom).is_empty());
+    )
+    .unwrap();
+    assert_eq!(calls(&dom), [WorkerCall::Post(1, b"port".to_vec(), 1)]);
 
     call(&mut dom, &worker, "Worker", "terminate", &[]).unwrap();
     call(&mut dom, &worker, "Worker", "terminate", &[]).unwrap();
@@ -325,14 +326,14 @@ fn a_worker_s_global_s_own_members() {
         let channel = cx.create_message_channel(None);
         Rc::new(cx.root_object(ObjectRef::EventTarget(cx.message_channel_ports(channel).0)))
     });
-    let transferred = call(
+    call(
         &mut dom,
         &global,
         "DedicatedWorkerGlobalScope",
         "postMessage",
         &[Arg::Str("port"), Arg::Object(port)],
-    );
-    assert!(matches!(transferred, Err(ApiError::Dom(e)) if e.name == ExceptionName::DataClone));
+    )
+    .unwrap();
     call(
         &mut dom,
         &global,
@@ -343,6 +344,10 @@ fn a_worker_s_global_s_own_members() {
     .unwrap();
     assert_eq!(
         calls(&dom),
-        [WorkerCall::PostToOwner(b"done".to_vec()), WorkerCall::Close]
+        [
+            WorkerCall::PostToOwner(b"done".to_vec(), 0),
+            WorkerCall::PostToOwner(b"port".to_vec(), 1),
+            WorkerCall::Close
+        ]
     );
 }

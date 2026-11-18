@@ -74,6 +74,7 @@ mod language;
 mod lists;
 mod media_query;
 mod message;
+mod message_pipe;
 mod mutation;
 pub mod names;
 mod navigator;
@@ -179,6 +180,7 @@ pub use message::{
     MessageChannel, MessageEventData, MessageEventInit, MessagePort, PostedMessage,
     SerializedMessage, TakenMessage,
 };
+pub use message_pipe::{PortEnd, PortWaker};
 pub use mutation::{MutationKind, MutationObserver, MutationRecord, ObserveOptions};
 pub use navigator::{Navigator, Scheduling, UserActivation};
 pub use numbers::{number_to_string, parse_float};
@@ -843,6 +845,9 @@ struct Changes {
     task_sequence: Cell<u64>,
     tasks_queued: Cell<bool>,
     task_limit: Cell<Option<u64>>,
+    /// What wakes this DOM's thread for its ports' messages from other
+    /// threads (`Dom::set_port_waker`).
+    port_waker: Option<message_pipe::PortWaker>,
     /// The documents whose window's `load` task ran, until the host takes
     /// them (`Dom::take_loaded_documents`).
     loaded_documents: Cell<Vec<NodeId>>,
@@ -943,6 +948,15 @@ impl Dom {
             thread: PhantomData,
             origin: Instant::now(),
         }
+    }
+
+    /// What wakes this DOM's thread when one of its message ports may have
+    /// a message from another thread, or stopped waiting for one: the
+    /// host's, which has the thread look at its tasks (`next_task`). For
+    /// the ports made from now on, and those that come in messages. A DOM
+    /// whose ports stay on its thread needs none.
+    pub fn set_port_waker(&mut self, waker: message_pipe::PortWaker) {
+        self.changes.port_waker = Some(waker);
     }
 
     /// Runs an operation: a binding's call. The heap may collect first.

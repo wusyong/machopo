@@ -2078,6 +2078,7 @@ pub(crate) fn history_state<'s>(
                 dom::SerializedMessage {
                     bytes,
                     transferred: None,
+                    ports: Vec::new(),
                 },
                 Vec::new(),
             )
@@ -2123,6 +2124,7 @@ fn entry_detail<'s>(
                 dom::SerializedMessage {
                     bytes,
                     transferred: None,
+                    ports: Vec::new(),
                 },
                 Vec::new(),
             )

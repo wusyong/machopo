@@ -6,12 +6,14 @@
 //! task of its own (the posted message task source).
 //!
 //! A message port is an event target that is nothing else
-//! (`EventTargetImpl`) with a port's data: the window it belongs to, the
-//! port it is entangled with, its port message queue (enabled by `start()`
-//! or `onmessage`), and whether it was closed or shipped (transferred in a
-//! message: a new port takes its place, entangled as it was, with its
-//! queue). One entangled and enabled is in its window's list of ports,
-//! which keeps it alive while messages may come (Blink's
+//! (`EventTargetImpl`) with a port's data: the execution context it
+//! belongs to, its end of the pipe it shares with the port it is entangled
+//! with (`message_pipe`: its port message queue is there), whether its
+//! queue is enabled (by `start()` or `onmessage`), and whether it was
+//! closed or shipped (transferred in a message: its end goes with the
+//! message, and a new port takes its place where it is delivered, its
+//! messages still waiting). One enabled with its end, and messages still
+//! to come, is in its context's list of ports, which keeps it alive (Blink's
 //! `MessagePort::HasPendingActivity`).
 
 use std::any::Any;
@@ -19,14 +21,18 @@ use std::cell::Cell;
 
 use elise::{Erased, External, Gc, GcObject, HeapVector, JsEdge, LocalExternal, Member};
 
+use crate::message_pipe::{Home, PortEnd};
 use crate::{Cx, DomString, Event, EventTargetImpl, TargetRef, Window, sites};
 
-/// A message's serialization: the engine's bytes (V8's `ValueSerializer`'s)
-/// and what it transfers with them (`ArrayBuffer`s' backing stores), which
-/// only the engine reads.
+/// A message's serialization: the engine's bytes (V8's `ValueSerializer`'s),
+/// what it transfers with them (`ArrayBuffer`s' backing stores), which only
+/// the engine reads, and the ends of the ports shipped with it, in the
+/// order the serialization numbers them. All of it may go to another
+/// thread.
 pub struct SerializedMessage {
     pub bytes: Vec<u8>,
     pub transferred: Option<Box<dyn Any + Send>>,
+    pub ports: Vec<PortEnd>,
 }
 
 /// A message waiting to be delivered (HTML's message of a posted message
@@ -40,9 +46,6 @@ pub struct PostedMessage {
     origin: LocalExternal<DomString>,
     /// The poster's window (a `MessageEvent`'s `source`); none for a port's.
     source: Member<Window>,
-    /// The ports transferred with it, new ones taking the place of those
-    /// shipped, entangled as they were.
-    ports: Member<HeapVector<EventTargetImpl>>,
     /// The `Worker` it is for, from its worker; none: for the global of the
     /// execution context whose queue it is in.
     target: Member<EventTargetImpl>,
@@ -56,12 +59,11 @@ pub struct PostedMessage {
 #[derive(GcObject)]
 pub struct MessagePort {
     /// Its relevant global's execution context: the one its messages are
-    /// tasks of (none while it travels in a message).
+    /// tasks of.
     owner: Member<crate::ExecutionContext>,
-    /// The port it is entangled with, if any.
-    entangled: Member<EventTargetImpl>,
-    /// Its port message queue.
-    queue: Member<HeapVector<PostedMessage>>,
+    /// Its end of its pipe: none once it was shipped or closed. Dropped
+    /// with it if it is collected, which closes it.
+    end: External<Cell<Option<PortEnd>>>,
     /// `ENABLED`, `CLOSED`, `SHIPPED`.
     state: Cell<u8>,
 }
@@ -82,7 +84,7 @@ pub struct MessageEventData {
 const ENABLED: u8 = 1 << 0;
 /// `close()`d: it gets no message again.
 const CLOSED: u8 = 1 << 1;
-/// Transferred in a message: a new port took its place.
+/// Transferred in a message: its end went with it.
 const SHIPPED: u8 = 1 << 2;
 
 /// A `MessageChannel` (HTML's): its two ports, entangled.
@@ -171,18 +173,29 @@ impl<'gc> Cx<'_, 'gc> {
         list_items(self, data.ports.get(self.gc))
     }
 
-    /// A new message port of `owner` (HTML's), entangled with nothing yet.
-    pub fn create_message_port(
+    /// Where this DOM's ports are: its thread, and what wakes it
+    /// (`Dom::set_port_waker`).
+    fn port_home(&self) -> Home {
+        Home {
+            thread: std::thread::current().id(),
+            waker: self.changes.port_waker.clone(),
+        }
+    }
+
+    /// A new message port of `owner` (HTML's) with `end`, which is now
+    /// here.
+    fn new_message_port(
         &self,
         owner: Option<Gc<'gc, crate::ExecutionContext>>,
+        end: PortEnd,
     ) -> Gc<'gc, EventTargetImpl> {
+        end.set_home(Some(self.port_home()));
         let target = self.create_event_target();
         let port = self.gc.alloc_in(
             &sites::OTHER,
             MessagePortInit {
                 owner,
-                entangled: None,
-                queue: None,
+                end: External::new(Cell::new(Some(end))),
                 state: Cell::new(0),
             },
         );
@@ -195,11 +208,11 @@ impl<'gc> Cx<'_, 'gc> {
         &self,
         owner: Option<Gc<'gc, crate::ExecutionContext>>,
     ) -> Gc<'gc, MessageChannel> {
+        let (one, two) = PortEnd::pair();
         let (one, two) = (
-            self.create_message_port(owner),
-            self.create_message_port(owner),
+            self.new_message_port(owner, one),
+            self.new_message_port(owner, two),
         );
-        self.entangle(one, two);
         self.gc.alloc_in(
             &sites::OTHER,
             MessageChannelInit {
@@ -228,16 +241,21 @@ impl<'gc> Cx<'_, 'gc> {
         &channel.into_ref().wrapper
     }
 
-    fn entangle(&self, one: Gc<'gc, EventTargetImpl>, two: Gc<'gc, EventTargetImpl>) {
-        for (port, other) in [(one, two), (two, one)] {
-            if let Some(data) = self.port_data(port) {
-                data.entangled.set(self.gc, Some(other));
-            }
-        }
-    }
-
     fn port_data(&self, target: Gc<'gc, EventTargetImpl>) -> Option<Gc<'gc, MessagePort>> {
         target.port.get(self.gc)
+    }
+
+    /// `f` of `data`'s end, if it has one.
+    fn with_port_end<R>(
+        &self,
+        data: Gc<'gc, MessagePort>,
+        f: impl FnOnce(&PortEnd) -> R,
+    ) -> Option<R> {
+        let cell = data.into_ref().end.get();
+        let end = cell.take()?;
+        let result = f(&end);
+        cell.set(Some(end));
+        Some(result)
     }
 
     /// Whether `target` is a message port.
@@ -274,11 +292,12 @@ impl<'gc> Cx<'_, 'gc> {
         self.keep_port(port, data);
     }
 
-    /// `port`, enabled and entangled, in its owner's list of ports: alive
+    /// `port`, enabled, with its end, in its owner's list of ports: alive
     /// while messages may come, its queue looked at.
     fn keep_port(&self, port: Gc<'gc, EventTargetImpl>, data: Gc<'gc, MessagePort>) {
         let state = data.state.get();
-        if state & ENABLED == 0 || state & CLOSED != 0 || data.entangled.get(self.gc).is_none() {
+        if state & ENABLED == 0 || state & CLOSED != 0 || self.with_port_end(data, |_| ()).is_none()
+        {
             return;
         }
         let Some(owner) = data.owner.get(self.gc) else {
@@ -316,81 +335,46 @@ impl<'gc> Cx<'_, 'gc> {
         }
     }
 
-    /// `port`'s `close()` (HTML's: closed, disentangled): neither end gets
-    /// a message again.
+    /// `port`'s `close()` (HTML's: closed, disentangled): its end closed,
+    /// so neither port gets a message again (the other once it took those
+    /// that came before).
     pub fn close_message_port(&self, port: Gc<'gc, EventTargetImpl>) {
         let Some(data) = self.port_data(port) else {
             return;
         };
         data.state.set(data.state.get() | CLOSED);
-        self.disentangle(port);
-    }
-
-    /// `port` and the port it is entangled with, disentangled: `port`
-    /// (closed) out of its window's list, the other once its queue's
-    /// messages, which were sent before, are delivered (HTML's: they
-    /// stay in its queue).
-    fn disentangle(&self, port: Gc<'gc, EventTargetImpl>) {
-        let Some(data) = self.port_data(port) else {
-            return;
-        };
-        if let Some(other) = data.entangled.get(self.gc) {
-            if let Some(other_data) = self.port_data(other) {
-                other_data.entangled.set(self.gc, None);
-            }
-            self.forget_port_if_done(other);
-        }
-        data.entangled.set(self.gc, None);
         self.forget_port(port);
+        drop(data.into_ref().end.get().take());
     }
 
-    /// `port`, entangled with none and with no message left, out of its
-    /// window's list.
-    fn forget_port_if_done(&self, port: Gc<'gc, EventTargetImpl>) {
+    /// `port` shipped in a message (HTML's transfer steps): its end, for
+    /// the message, its messages not delivered yet waiting there; `port`
+    /// is detached. (An end of no pipe for one already shipped or closed,
+    /// which the serializer turns down.)
+    pub fn ship_message_port(&self, port: Gc<'gc, EventTargetImpl>) -> PortEnd {
         let Some(data) = self.port_data(port) else {
-            return;
+            return PortEnd::pair().0;
         };
-        let waiting = data
-            .queue
-            .get(self.gc)
-            .is_some_and(|queue| !queue.is_empty());
-        if data.entangled.get(self.gc).is_none() && !waiting {
-            self.forget_port(port);
-        }
-    }
-
-    /// `port` shipped in a message (HTML's transfer steps): a new port of
-    /// no window yet takes its place, entangled with its other end, with
-    /// its queue (its messages not delivered yet); `port` is detached.
-    pub fn ship_message_port(&self, port: Gc<'gc, EventTargetImpl>) -> Gc<'gc, EventTargetImpl> {
-        let shipped = self.create_message_port(None);
-        let (Some(data), Some(new)) = (self.port_data(port), self.port_data(shipped)) else {
-            return shipped;
-        };
-        new.queue.set(self.gc, data.queue.get(self.gc));
-        data.queue.set(self.gc, None);
-        let other = data.entangled.get(self.gc);
         self.forget_port(port);
-        data.entangled.set(self.gc, None);
         data.state.set(data.state.get() | SHIPPED);
-        if let Some(other) = other {
-            self.entangle(shipped, other);
-        }
-        shipped
+        let Some(end) = data.into_ref().end.get().take() else {
+            return PortEnd::pair().0;
+        };
+        end.set_home(None);
+        end
     }
 
-    /// `ports`, shipped in a message, now `context`'s (HTML's transfer-receiving
-    /// steps).
-    fn receive_ports(
+    /// The ports shipped as `ends`, now `context`'s (HTML's
+    /// transfer-receiving steps): new ports with them, entangled as they
+    /// were.
+    pub fn receive_message_ports(
         &self,
         context: Gc<'gc, crate::ExecutionContext>,
-        ports: &[Gc<'gc, EventTargetImpl>],
-    ) {
-        for &port in ports {
-            if let Some(data) = self.port_data(port) {
-                data.owner.set(self.gc, Some(context));
-            }
-        }
+        ends: Vec<PortEnd>,
+    ) -> Vec<Gc<'gc, EventTargetImpl>> {
+        ends.into_iter()
+            .map(|end| self.new_message_port(Some(context), end))
+            .collect()
     }
 
     /// A message posted to `window` (`window.postMessage`), from `source`
@@ -402,9 +386,8 @@ impl<'gc> Cx<'_, 'gc> {
         payload: SerializedMessage,
         origin: DomString,
         source: Option<Gc<'gc, Window>>,
-        ports: &[Gc<'gc, EventTargetImpl>],
     ) {
-        let message = self.posted_message(payload, origin, source, ports);
+        let message = self.posted_message(payload, origin, source);
         self.queue_posted_message(self.window_context(window), message);
     }
 
@@ -416,7 +399,7 @@ impl<'gc> Cx<'_, 'gc> {
         global: Gc<'gc, crate::WorkerGlobalScope>,
         payload: SerializedMessage,
     ) {
-        let message = self.posted_message(payload, DomString::new(""), None, &[]);
+        let message = self.posted_message(payload, DomString::new(""), None);
         self.queue_posted_message(self.worker_global_context(global), message);
     }
 
@@ -432,7 +415,7 @@ impl<'gc> Cx<'_, 'gc> {
         let Some(context) = self.target_context(TargetRef::EventTarget(worker)) else {
             return;
         };
-        let message = self.posted_message(payload, DomString::new(""), None, &[]);
+        let message = self.posted_message(payload, DomString::new(""), None);
         message.target.set(self.gc, Some(worker));
         self.queue_posted_message(context, message);
     }
@@ -458,9 +441,7 @@ impl<'gc> Cx<'_, 'gc> {
         payload: SerializedMessage,
         origin: DomString,
         source: Option<Gc<'gc, Window>>,
-        ports: &[Gc<'gc, EventTargetImpl>],
     ) -> Gc<'gc, PostedMessage> {
-        let ports = self.port_list(ports);
         let (queued, number) = self.stamp_queued_task();
         self.gc.alloc_in(
             &sites::OTHER,
@@ -468,7 +449,6 @@ impl<'gc> Cx<'_, 'gc> {
                 payload: External::new(Cell::new(Some(payload))),
                 origin: LocalExternal::new(origin),
                 source,
-                ports: Some(ports),
                 target: None,
                 queued: Cell::new(queued),
                 number: Cell::new(number),
@@ -476,34 +456,25 @@ impl<'gc> Cx<'_, 'gc> {
         )
     }
 
-    /// A message posted through `port` (its `postMessage`): in the port
-    /// message queue of the port it is entangled with; none if it is
-    /// entangled with none (closed, or never: the message is lost).
-    pub fn post_port_message(
-        &self,
-        port: Gc<'gc, EventTargetImpl>,
-        payload: SerializedMessage,
-        ports: &[Gc<'gc, EventTargetImpl>],
-    ) {
-        let Some(target) = self
-            .port_data(port)
-            .and_then(|data| data.entangled.get(self.gc))
-        else {
+    /// A message posted through `port` (its `postMessage`): in the pipe,
+    /// for the port it is entangled with. Lost if that one is closed, if
+    /// `port` has no end (closed, or shipped), or if it ships the port it
+    /// is for (HTML's "doomed": the pipe closes).
+    pub fn post_port_message(&self, port: Gc<'gc, EventTargetImpl>, payload: SerializedMessage) {
+        let Some(data) = self.port_data(port) else {
             return;
         };
-        let Some(data) = self.port_data(target) else {
-            return;
-        };
-        let message = self.posted_message(payload, DomString::new(""), None, ports);
-        let queue = match data.queue.get(self.gc) {
-            Some(queue) => queue,
-            None => {
-                let queue = HeapVector::new(self.gc, 1);
-                data.queue.set(self.gc, Some(queue));
-                queue
+        let lost = self.with_port_end(data, |end| {
+            if payload
+                .ports
+                .iter()
+                .any(|shipped| end.is_entangled_with(shipped))
+            {
+                return Some(payload);
             }
-        };
-        queue.push(self.gc, message);
+            end.post(payload, || self.stamp_queued_task()).err()
+        });
+        drop(lost);
     }
 
     /// Whether `context` has a message to deliver: one posted to it, or one
@@ -517,21 +488,22 @@ impl<'gc> Cx<'_, 'gc> {
                 .into_iter()
                 .any(|port| {
                     self.port_data(port)
-                        .and_then(|data| data.queue.get(self.gc))
-                        .is_some_and(|queue| !queue.is_empty())
+                        .and_then(|data| self.with_port_end(data, PortEnd::has_message))
+                        .unwrap_or(false)
                 })
     }
 
     /// `context`'s next message, taken: the first posted, of those posted
     /// to it and those in its enabled ports' queues (the port it is for,
     /// the target), that the host's pass lets run (`tasks`); its payload,
-    /// origin, source and ports (now the window's).
+    /// origin, source and ports (new ones of `context`, with the ends it
+    /// shipped).
     pub fn take_posted_message(
         &self,
         context: Gc<'gc, crate::ExecutionContext>,
     ) -> Option<TakenMessage<'gc>> {
         let (port, _) = self.first_message(context)?;
-        let (message, target) = match port {
+        let (mut payload, origin, source, target) = match port {
             None => {
                 let queue = context.posted_messages.get(self.gc)?;
                 let message = queue.remove(self.gc, 0);
@@ -539,24 +511,35 @@ impl<'gc> Cx<'_, 'gc> {
                     Some(worker) => TargetRef::EventTarget(worker),
                     None => self.context_target(context),
                 };
-                (message, target)
+                (
+                    message.payload.get().take(),
+                    message.origin.get().clone(),
+                    message.source.get(self.gc),
+                    target,
+                )
             }
             Some(port) => {
-                let queue = self.port_data(port)?.queue.get(self.gc)?;
-                let message = queue.remove(self.gc, 0);
-                // Disentangled, its last message: no more to come.
-                self.forget_port_if_done(port);
-                (message, TargetRef::EventTarget(port))
+                let data = self.port_data(port)?;
+                // (Let go once it has no more to come: `first_message`.)
+                let payload = self.with_port_end(data, PortEnd::take)?;
+                (
+                    payload,
+                    DomString::new(""),
+                    None,
+                    TargetRef::EventTarget(port),
+                )
             }
         };
-        let ports = list_items(self, message.ports.get(self.gc));
-        self.receive_ports(context, &ports);
+        let ends = payload
+            .as_mut()
+            .map(|payload| std::mem::take(&mut payload.ports))
+            .unwrap_or_default();
         Some(TakenMessage {
             target,
-            payload: message.payload.get().take(),
-            origin: message.origin.get().clone(),
-            source: message.source.get(self.gc),
-            ports,
+            payload,
+            origin,
+            source,
+            ports: self.receive_message_ports(context, ends),
         })
     }
 }
@@ -569,37 +552,50 @@ impl<'gc> Cx<'_, 'gc> {
         context: Gc<'gc, crate::ExecutionContext>,
     ) -> Option<(f64, u64)> {
         self.first_message(context)
-            .map(|(_, message)| (message.queued.get(), message.number.get()))
+            .map(|(_, (queued, number))| (queued, number))
     }
 
     /// `context`'s first message to deliver: of the first in its own queue
     /// and those in its enabled ports' (the port), the lowest numbered, if
-    /// the host's pass lets it run.
+    /// the host's pass lets it run. The messages that came to its ports
+    /// from other threads are numbered now, as tasks of this DOM's; its
+    /// ports that get no message again go out of its list.
     fn first_message(
         &self,
         context: Gc<'gc, crate::ExecutionContext>,
-    ) -> Option<(Option<Gc<'gc, EventTargetImpl>>, Gc<'gc, PostedMessage>)> {
+    ) -> Option<(Option<Gc<'gc, EventTargetImpl>>, (f64, u64))> {
         let own = context
             .posted_messages
             .get(self.gc)
             .and_then(|queue| queue.get(self.gc, 0))
-            .map(|message| (None, message));
-        let ports = list_items(self, context.message_ports.get(self.gc))
-            .into_iter()
-            .filter_map(|port| {
-                let message = self.port_data(port)?.queue.get(self.gc)?.get(self.gc, 0)?;
-                Some((Some(port), message))
+            .map(|message| (None, (message.queued.get(), message.number.get())));
+        let mut ports = Vec::new();
+        for port in list_items(self, context.message_ports.get(self.gc)) {
+            let Some(data) = self.port_data(port) else {
+                continue;
+            };
+            let first = self.with_port_end(data, |end| {
+                if end.is_done() {
+                    return None;
+                }
+                Some(end.first_stamp(|| self.stamp_queued_task()))
             });
+            match first.flatten() {
+                Some(Some(stamp)) => ports.push((Some(port), stamp)),
+                Some(None) => {}
+                None => self.forget_port(port),
+            }
+        }
         own.into_iter()
             .chain(ports)
-            .filter(|(_, message)| self.task_may_run(message.number.get()))
-            .min_by_key(|(_, message)| message.number.get())
+            .filter(|&(_, (_, number))| self.task_may_run(number))
+            .min_by_key(|&(_, (_, number))| number)
     }
 }
 
 /// A message taken to be delivered (`Cx::take_posted_message`).
 pub struct TakenMessage<'gc> {
-    /// The window or the port it is for.
+    /// The global, the `Worker` or the port it is for.
     pub target: TargetRef<'gc>,
     pub payload: Option<SerializedMessage>,
     pub origin: DomString,

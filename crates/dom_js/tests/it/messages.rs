@@ -169,8 +169,8 @@ fn a_message_to_a_child_frame() {
 
 /// A channel's ports: a message waits until its port is started
 /// (`start()`, or `onmessage` set); none after `close()`; a port
-/// transferred in a message works where it went, the one sent detached (a
-/// `DataCloneError` sent again).
+/// transferred in a message, or by `structuredClone`, works where it went,
+/// the one sent detached (a `DataCloneError` sent again).
 #[test]
 fn a_channels_ports() {
     let mut engine = engine();
@@ -233,6 +233,18 @@ fn a_channels_ports() {
     assert_eq!(log(&mut engine), "DataCloneError");
     engine.run_posted_messages();
     assert_eq!(log(&mut engine), "options 1");
+    // `structuredClone`'s transfer: a new port, here, entangled as it was.
+    run(
+        &mut engine,
+        "var g = new MessageChannel();
+         var [h] = structuredClone([g.port1], {transfer: [g.port1]});
+         log.push(h instanceof MessagePort, h !== g.port1);
+         h.onmessage = m => log.push('cloned got ' + m.data);
+         g.port2.postMessage('hi');",
+    );
+    assert_eq!(log(&mut engine), "true / true");
+    engine.run_posted_messages();
+    assert_eq!(log(&mut engine), "cloned got hi");
 }
 
 /// `new MessageEvent(type, init)`: its `data` (null without one),

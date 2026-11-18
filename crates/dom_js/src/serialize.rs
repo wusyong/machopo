@@ -413,7 +413,11 @@ pub(crate) fn serialize_message<'s>(
     let transferred =
         (!stores.is_empty()).then(|| Box::new(Transferred(stores)) as Box<dyn Any + Send>);
     Some((
-        SerializedMessage { bytes, transferred },
+        SerializedMessage {
+            bytes,
+            transferred,
+            ports: Vec::new(),
+        },
         ports.into_iter().map(|(_, port)| port).collect(),
     ))
 }

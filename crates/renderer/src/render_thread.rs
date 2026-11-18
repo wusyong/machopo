@@ -648,6 +648,8 @@ impl RenderThread {
                 self.worker_event(id, event);
                 true
             }
+            // Run with the DOM's tasks, as the loop next does.
+            MainThreadTask::PortMessages => true,
             MainThreadTask::DevTools(queued) => {
                 self.run_devtools_task(queued);
                 true

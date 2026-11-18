@@ -52,6 +52,22 @@ pub struct MessageParam<'a, 'gc> {
     target_origin: Option<&'a str>,
 }
 
+impl<'gc> MessageParam<'_, 'gc> {
+    /// The message, taken, with the ends of the ports it transfers: those
+    /// are shipped (detached) whether or not it goes anywhere (HTML's
+    /// transfer steps come with its serialization).
+    pub(crate) fn ship(&self, cx: &ApiCx<'_, 'gc>) -> Option<SerializedMessage> {
+        let ends: Vec<_> = self
+            .ports
+            .iter()
+            .map(|&port| cx.ship_message_port(port))
+            .collect();
+        let mut payload = self.payload.take()?;
+        payload.ports = ends;
+        Some(payload)
+    }
+}
+
 impl ArgType for WindowMessage {
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = false;
@@ -169,12 +185,7 @@ pub(crate) fn window_post_message<'gc>(
                 .origin(),
         ),
     };
-    let ports: Vec<_> = message
-        .ports
-        .iter()
-        .map(|&port| cx.ship_message_port(port))
-        .collect();
-    let Some(payload) = message.payload.take() else {
+    let Some(payload) = message.ship(cx) else {
         return Ok(());
     };
     // Not of that origin: the message is lost (the ports with it).
@@ -184,7 +195,7 @@ pub(crate) fn window_post_message<'gc>(
         return Ok(());
     }
     let origin = incumbent.map_or_else(|| "null".to_owned(), |origin| origin.ascii_serialization());
-    cx.post_window_message(this, payload, DomString::new(&origin), window, &ports);
+    cx.post_window_message(this, payload, DomString::new(&origin), window);
     Ok(())
 }
 
@@ -196,13 +207,8 @@ pub(crate) fn port_post_message<'gc>(
     this: Gc<'gc, EventTargetImpl>,
     message: MessageParam<'_, 'gc>,
 ) -> Result<(), ApiError> {
-    let ports: Vec<_> = message
-        .ports
-        .iter()
-        .map(|&port| cx.ship_message_port(port))
-        .collect();
-    if let Some(payload) = message.payload.take() {
-        cx.post_port_message(this, payload, &ports);
+    if let Some(payload) = message.ship(cx) {
+        cx.post_port_message(this, payload);
     }
     Ok(())
 }

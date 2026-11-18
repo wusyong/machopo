@@ -316,6 +316,7 @@
 - DOM 照編號找執行環境的 `Worker`（`dom` 的 `worker.rs` 的 `context_worker`）改成結束了的也算：清單只有沒結束的（`terminate_worker_object` 把它拿掉），結果一樣。
 
 - debug build 比對 fast path 和 tree builder 的結果時，不比 input 的型別（`html` 的 `fast_path_build::same_tree` 的 `input_kind`）：兩邊屬性一樣時，只有 fast path 把 input 建錯才會型別不同，檢查就是為了抓這個；fast path 建對時拿掉它結果一樣。fast path 照屬性建 input 的型別由 `html` 的 `fast_path::inputs_are_made_of_their_types` 直接比兩種 parser 的結果守著。
+- port 傳到訊息裡時不清掉 pipe 那一端原本的 thread（`dom` 的 `ship_message_port` 的 `set_home(None)`）：它在路上時，原本那條 thread 送的訊息當場照那邊的順序編號、別的 thread 送的或另一端關掉時叫醒原本那條 thread，但到了新的地方 `receive_message_ports` 一律重設 thread、清掉編號，所以多的只是一次沒事的叫醒；沒送到的話那一端被丟掉，也一樣。
 
 **style 和 CSS**
 

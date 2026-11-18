@@ -22,6 +22,7 @@ mod initiators;
 mod intersection;
 mod kinds;
 mod language;
+mod message_ports;
 mod mutation;
 mod names;
 mod probes;

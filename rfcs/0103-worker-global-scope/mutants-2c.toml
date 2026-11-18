@@ -1,0 +1,144 @@
+# 2c: message ports across threads.
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "message_ports::"]
+timeout = 900
+
+[[mutant]]
+name = "a message to a closed end isn't given back"
+file = "crates/dom/src/message_pipe.rs"
+from = '''            if other.closed {
+                return Err(message);
+            }'''
+to = '''            if other.closed && message.bytes.is_empty() {
+                return Err(message);
+            }'''
+
+[[mutant]]
+name = "a closed end keeps the messages that wait for it"
+file = "crates/dom/src/message_pipe.rs"
+from = '''            let lost = std::mem::take(&mut end.queue);'''
+to = '''            let lost = VecDeque::<Queued>::new();'''
+
+[[mutant]]
+name = "a closed end doesn't wake the other's thread"
+file = "crates/dom/src/message_pipe.rs"
+from = '''        drop(lost);
+        if let Some(waker) = waker {
+            waker();
+        }'''
+to = '''        drop((lost, waker));'''
+
+[[mutant]]
+name = "a message from another thread doesn't wake its port's"
+file = "crates/dom/src/message_pipe.rs"
+from = '''        if let Some(waker) = waker {
+            waker();
+        }
+        Ok(())'''
+to = '''        drop(waker);
+        Ok(())'''
+
+[[mutant]]
+name = "a message on its port's thread is numbered when it is looked at"
+file = "crates/dom/src/message_pipe.rs"
+from = '''                stamp: here.then(stamp),'''
+to = '''                stamp: if here { drop(stamp); None } else { None },'''
+
+[[mutant]]
+name = "a shipped port's messages keep the numbers of the DOM it left"
+file = "crates/dom/src/message_pipe.rs"
+from = '''        for queued in &mut end.queue {
+            queued.stamp = None;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a message from another thread is never numbered"
+file = "crates/dom/src/message_pipe.rs"
+from = '''            queued.stamp = Some(stamp());'''
+to = '''            queued.stamp = None.map(|()| stamp());'''
+
+[[mutant]]
+name = "a port is never done"
+file = "crates/dom/src/message_pipe.rs"
+from = '''        ends[self.side].queue.is_empty() && ends[self.other()].closed'''
+to = '''        ends[self.side].queue.is_empty() && ends[self.other()].closed && self.side > 1'''
+
+[[mutant]]
+name = "a port shipped through its own pipe isn't doomed"
+file = "crates/dom/src/message_pipe.rs"
+from = '''        Arc::ptr_eq(&self.pipe, &other.pipe) && self.side != other.side'''
+to = '''        Arc::ptr_eq(&self.pipe, &other.pipe) && self.side == other.side'''
+
+[[mutant]]
+name = "close() doesn't close the port's end"
+file = "crates/dom/src/message.rs"
+from = '''        drop(data.into_ref().end.get().take());'''
+to = ''''''
+
+[[mutant]]
+name = "a new port isn't home"
+file = "crates/dom/src/message.rs"
+from = '''        end.set_home(Some(self.port_home()));
+        let target = self.create_event_target();'''
+to = '''        let target = self.create_event_target();'''
+
+[[mutant]]
+name = "a done port isn't let go"
+file = "crates/dom/src/message.rs"
+from = '''                None => self.forget_port(port),'''
+to = '''                None => {}'''
+
+[[mutant]]
+name = "a shipped end stays home"
+file = "crates/dom/src/message.rs"
+from = '''        end.set_home(None);
+        end'''
+to = '''        end'''
+
+[[mutant]]
+name = "the main thread's DOM gets no port waker"
+file = "crates/dom_js/src/engine.rs"
+from = '''        if let Some(waker) = host.port_waker() {
+            self.state().dom.set_port_waker(waker);
+        }
+        self.state().caches.worker_host = Some(host);'''
+to = '''        self.state().caches.worker_host = Some(host);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "workers::a_port_s_message_from"]
+
+[[mutant]]
+name = "a worker's DOM gets no port waker"
+file = "crates/dom_js/src/worker.rs"
+from = '''        if let Some(waker) = host.port_waker() {
+            self.state().dom.set_port_waker(waker);
+        }
+        self.state().caches.worker_global_host = Some(host);'''
+to = '''        self.state().caches.worker_global_host = Some(host);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "workers::two_workers"]
+
+[[mutant]]
+name = "the main thread's port waker posts nothing"
+file = "crates/renderer/src/task_queue.rs"
+from = '''                let _ = scheduler.post(TaskQueue::Worker, MainThreadTask::PortMessages, false);'''
+to = '''                drop(scheduler);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "workers::a_port_s_message_from"]
+
+[[mutant]]
+name = "a worker's port waker sends nothing"
+file = "crates/renderer/src/task_queue.rs"
+from = '''                let _ = tasks.send(crate::worker_thread::WorkerTask::PortMessages);'''
+to = '''                drop(tasks);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "workers::two_workers"]
+
+[[mutant]]
+name = "a message's ports don't go with it"
+file = "crates/dom_api/src/message.rs"
+from = '''        payload.ports = ends;'''
+to = '''        drop(ends);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "workers::ports_go"]
+
+[[mutant]]
+name = "structuredClone's ports aren't received"
+file = "crates/dom_api/src/crypto.rs"
+from = '''    Ok((payload, cx.receive_message_ports(context, ends)))'''
+to = '''    Ok((payload, cx.receive_message_ports(context, ends).into_iter().skip(1).collect()))'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "messages::"]

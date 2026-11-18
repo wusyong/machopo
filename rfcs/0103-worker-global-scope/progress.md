@@ -16,10 +16,10 @@
 | 1b-5：`renderer` 的 worker 的 thread 和 event loop、兩個方向的 `postMessage`、`terminate()`、`close()`、`onerror` | 做完（第 19 條；主 script 暫時只有 `data:` 的網址） | 2026-11-17 |
 | 1b-6：Browser 的登記和主 script 的載入、子資源的請求帶 client、`importScripts()` | 做完（第 20 條） | 2026-11-17 |
 | 1b-7：WPT 的 `workers/`、情境、`about:demo`、文件、整個階段的檢查 | 做完（第 21、22 條） | 2026-11-18 |
-| 2：worker 裡的 `fetch()`、`MessagePort` 跨 thread、module worker、巢狀的 worker、`WorkerNavigator`、`WorkerLocation`、`performance` | 做中：2a、2b 做完 | |
+| 2：worker 裡的 `fetch()`、`MessagePort` 跨 thread、module worker、巢狀的 worker、`WorkerNavigator`、`WorkerLocation`、`performance` | 做中：2a、2b、2c 做完 | |
 | 2a：worker 裡的 `location`、`navigator`、`performance` | 做完（第 23 到 26 條） | 2026-11-18 |
 | 2b：worker 裡的 `fetch()`、worker 建的 blob URL | 做完（第 27、28 條） | 2026-11-18 |
-| 2c：`MessagePort` 跨 thread | 還沒開始 | |
+| 2c：`MessagePort` 跨 thread | 做完（第 29 到 31 條） | 2026-11-18 |
 | 2d：worker 裡建的 worker | 還沒開始 | |
 | 2e：module worker | 還沒開始 | |
 | 2f：WPT、文件、整個階段的檢查 | 還沒開始 | |
@@ -185,10 +185,26 @@
 
 - 第 27 條：`dom` 的 `FetchRecord` 記執行環境（原本記 window），`FetchRequest` 的文件是 `Option`（沒有是 worker 的）；`dom_api` 的 `fetch()` 分成 window 和 worker 的兩個入口、共用 `fetch::start`，`did_receive_response` 收 `dom::GlobalRoot`。`dom_js` 在 worker 的 isolate 裡把請求和取消交給 `WorkerGlobalHost`（`start_fetch`、`cancel_fetch`），`WorkerEngine::fetch_response` 在 worker 的 realm 裡 settle。`renderer` 的 worker 的 thread 送 `FetchResource`（帶 worker），記著 request id 對到哪個 `fetch()`，回應和 redirect 在它的 loop 裡處理；`importScripts()` 等待時到的別的回答留到之後（原本丟掉）。`FetchResource` 的轉換和回應的轉換搬到 `loader.rs`，window 和 worker 共用。
 - 第 28 條：`dom` 的 `register_context_blob_url` 也替 worker 的 global 排（沒有文件），`dom_js` 交給 `WorkerGlobalHost::register_blob_url`、`revoke_blob_url`；`renderer` 的 worker 的 thread 送 `RegisterBlobUrl`（多了 `worker`），撤銷當場送（worker 的 `fetch()` 在呼叫時就送出，之前要求的載入都在前面）。Browser 的 IO thread 記著每個 worker 登記的網址，`DedicatedWorkerGone` 時撤銷（載入的和導覽的都撤銷），不認得的 worker 的登記不收。
-- WPT：`workers/data-url.html` 不再 `disabled`；21 個目錄用 `MACHOPO_UPDATE_EXPECTATIONS` 重寫。worker 的 variant 跑得到之後多出來的失敗都對照過：idlharness 的（`FileAPI/`、`WebCryptoAPI/`、`hr-time/`、`netinfo/`、`performance-timeline/`）和 `url/` 的和 window 的一樣，只多了 worker 才有的 `FileReaderSync` 和下一點的問題；`importscripts_mime_local` 的 blob URL 照 1b 定的不檢查 MIME type（和 `data:` 的一樣）；`data-url.html` 只剩 IndexedDB。過時的註解改成真正的原因。重寫時又動到 `dom/events/scrolling/` 的幾份（Mac 上的結果），還原。WPT_RESULTS
+- WPT：`workers/data-url.html` 不再 `disabled`；21 個目錄用 `MACHOPO_UPDATE_EXPECTATIONS` 重寫。worker 的 variant 跑得到之後多出來的失敗都對照過：idlharness 的（`FileAPI/`、`WebCryptoAPI/`、`hr-time/`、`netinfo/`、`performance-timeline/`）和 `url/` 的和 window 的一樣，只多了 worker 才有的 `FileReaderSync` 和下一點的問題；`importscripts_mime_local` 的 blob URL 照 1b 定的不檢查 MIME type（和 `data:` 的一樣）；`data-url.html` 只剩 IndexedDB。過時的註解改成真正的原因。重寫時又動到 `dom/events/scrolling/` 的幾份（Mac 上的結果），還原。之後不更新地連跑兩次（21 個目錄，22785 項檢查）：預期外的只有 Mac 上 4 個 `scrollend` 的 pass（之前就有），和 `fetch/api/basic/keepalive` 的 worker 的測試通過一次（worker 送出 keepalive 的請求後馬上 `close()`，Browser 在 `DedicatedWorkerGone` 時關掉它的載入，請求有沒有先到 server 看時間；Chrome 讓 keepalive 的請求在 worker 結束後繼續），標成 known intermittent，原因寫在它的 `.ini`。
 - WPT 找到、留到 2f 的：worker 的 global 上，`WorkerGlobalScope` 的成員是 global 自己的 property，WebIDL 要它們在 `WorkerGlobalScope.prototype` 上（只有 `DedicatedWorkerGlobalScope` 是 `[Global]`）；idlharness 的 `WorkerGlobalScope interface: attribute crypto`、`performance` 因此失敗。1b-4 為了讓 `self`、`setTimeout` 在 global 上這樣裝的，要改宣告表和 template 的裝法。
 - 新的測試：
   - `dom_js` 的 `worker::a_worker_s_fetch_goes_to_its_host`（請求的內容、回應、網路錯誤、abort）、`a_worker_s_blob_urls_go_to_its_host`；
   - `shell` 的 `workers::a_worker_s_fetch_and_blob_urls`（自己的 origin、CORS、`no-cors`，worker 建的 blob URL 給它的 `fetch()`、`importScripts()` 和頁面的 `fetch()`，worker 結束之後頁面抓不到）、`a_worker_s_aborted_fetch_has_its_load_closed`、`a_worker_s_fetch_is_redirected_and_answered_while_it_imports`。
 - mutation test（`rfcs/0103-worker-global-scope/mutants-2b.toml`，14 條）：第一次 10 條抓到，「renderer 不取消 worker 中止的 `fetch()`」沒抓到：頁面回報後就結束，renderer 結束時 Browser 也會關掉載入；測試改成頁面待到 server 本來會回應之後，抓到。剩下的 3 條和它一起重跑，都抓到。沒寫成 mutant 的：Browser 收到 worker 的撤銷時從那個 worker 的清單拿掉（不拿掉的話 worker 結束時再撤銷一次已經撤銷的網址，結果一樣，等價）。Browser 不收不認得的 worker 的登記：拿掉時沒有測試失敗，記進 `docs/test-gaps.md` 的「只靠審查」。
 - 跑過的：`cargo test -p dom -p dom_api -p dom_js -p dom_wasm -p renderer -p browser -p protocol`、`shell` 的 `workers::`、sanity 的每一項。`browser` 的 `navigation::a_srcdoc_document_commits_with_nothing_else_to_wake_the_renderer` 在和其他 crate 一起跑時失敗一次（等 title 的 5 秒期限過了，那次 `browser` 的整合測試整體跑了 8 秒，平常 4.9 秒），之後單獨連跑 15 次、整個 `browser` 的整合測試連跑 3 次都通過：和 RFC 0102 記下的負載重時超過期限是同一個，和這一段的改動無關（它不經過 worker、`fetch()` 或 blob URL）。`cargo test --workspace`、fmt、clippy 等第 2 階段做完時跑。
+
+### 2c：`MessagePort` 跨 thread（2026-11-18，macOS，Apple Silicon）
+
+- 第 29 條：`dom` 多一個 `message_pipe.rs`：兩端共用的 pipe（`Arc<Mutex<..>>`），每端一個訊息的佇列、關了沒有、它的 port 在哪條 thread（thread 和 waker）。`MessagePort` 的資料只剩執行環境、它的那一端（`External`，port 被收掉時跟著 drop）和狀態，原本互指的 `entangled` 和 GC 裡的 queue 拿掉；`PostedMessage` 不再帶 port，`SerializedMessage` 多了 `ports`（一起傳的 port 的那一端）。同一條 thread 上送的訊息當場照那個 DOM 的順序編號（和原本一樣），別的 thread 送來的在收的 thread 第一次看時才編號；port 傳出去時佇列裡的編號清掉，到了新的 DOM 再編。`Dom::set_port_waker`：`dom_api` 的兩個 host 多了 `port_waker`（預設沒有），`dom_js` 拿到 host 時交給 `Dom`；`renderer` 的 main thread 的 waker 在 scheduler 的 worker 的佇列放一個 `PortMessages` 的 task，worker 的經過 scheduler 的 route 送 `WorkerTask::PortMessages`（worker 不在時什麼都不做）。`dom_api` 的 `MessageParam::ship` 把 port 的那一端放進訊息（`Worker.postMessage`、worker 的 `postMessage`、window 的、port 的都是，訊息沒送到也照樣 detach），原本 worker 那兩處的 `DataCloneError` 拿掉；`structuredClone` 的 transfer 當場在同一個 realm 收下（原本收到的 port 沒有執行環境）。
+- 第 30 條：一端 drop 時記下關了、丟掉等它的訊息（鎖放開之後）、叫醒另一端的 thread（不是同一條 thread 時）；另一端在執行環境看清單時（`first_message`）知道不會再有訊息，從清單拿掉。HTML 的 doomed（port 傳給它自己配對的那一個）：訊息丟掉，pipe 跟著關掉。
+- 實作時找到的：第 31 條原本把 `structuredClone` 的 `transfer` 列為先不做，它其實原本就有，更正在 RFC 裡。
+- WPT：`webmessaging/` 上層的 `Channel_*.any.js`、`MessagePort_*.any.js`（12 個，連同 worker 的 variant）和 `message-channels/` 加進清單，`message-channels/close-event/` `disabled`（`MessagePort` 的 `close` 事件，machopo 沒有，Chrome 也還在 flag 後面）。第一次不更新地跑 `webmessaging/`、`workers/`、`html/infrastructure/safe-passing-of-structured-data/`、`html/webappapis/structured-clone/`：`workers/` 裡 9 項 unexpected pass（`Worker-messageport.html`、`Worker-multi-port.html`、`Worker-termination-with-port-messages.html`、`abrupt-completion.html` 的 dedicated worker、`semantics/structured-clone/dedicated.html` 的 `MessagePort` 等三項）；新加的檔案失敗的只有 `Blob` 不能 clone（`Channel_postMessage_Blob`）、`MessageEvent.userActivation`（tentative）和在 worker 裡建 worker（`message-channels/worker*.any.worker.html`，2d），預期結果寫上原因。之後不更新地連跑兩次（4 個目錄，2167 項檢查），都和預期一樣。
+- 新的測試：
+  - `dom` 的 `message_ports::`（兩條 thread 上各一個 DOM：port 帶著還沒送的訊息過去、之後的訊息叫醒收的 thread；另一端 `close()` 或 DOM 不在時之前到的照樣送、之後放掉；port 被收掉時關掉那一端；doomed；沒送到的訊息裡的 port 關掉；傳過去的訊息照新的 DOM 的順序編號）；
+  - `dom_js` 的 `messages::a_channels_ports` 多了 `structuredClone` 的 transfer；
+  - `dom_api` 的 `worker::` 改成 port 跟著訊息交給 host；
+  - `shell` 的 `workers::ports_go_to_and_from_a_worker`（port 帶著之前的訊息進 worker、在那裡回答，worker 建的 port 傳回頁面）、`two_workers_talk_through_a_port_while_the_page_is_busy`（頁面忙 1.5 秒的期間兩個 worker 直接互傳）、`a_port_s_message_from_a_worker_wakes_the_page`。
+- mutation test（`rfcs/0103-worker-global-scope/mutants-2c.toml`，19 條）：第一次 15 條抓到，4 條沒抓到。「同一條 thread 上的 port 訊息看的時候才編號」：沒有測試比它和 window 的訊息的先後，補 `dom` 的 `message_ports::a_message_on_its_port_s_thread_is_numbered_as_it_is_posted`；「main thread 的 DOM 沒有 waker」「main thread 的 waker 什麼都不送」：頁面還有別的事會叫醒它，`ports_go_to_and_from_a_worker` 照樣通過，補 `shell` 的 `workers::a_port_s_message_from_a_worker_wakes_the_page`（worker 300 ms 後才從 port 送，頁面要在 100 ms 內收到；連跑 5 次通過），兩條的測試指令改成它。三條重跑都抓到。「port 傳出去時不清掉原本的 thread」是等價的（多的只是一次沒事的叫醒），記進 `docs/test-gaps.md` 的「等價、不用處理的 mutation」。
+- 跑過的：`cargo test -p dom -p dom_api -p dom_js -p dom_wasm -p renderer`（`renderer` 的 scheduler 的測試的 `kind` 補上 `PortMessages`）、`shell` 的 `workers::`、sanity 的每一項。`cargo test --workspace`、fmt、clippy 等第 2 階段做完時跑。
+- 寫 `shell` 的測試時：頁面和 worker 之間，不同 port（和 `Worker` 自己的）的訊息誰先到不一定（規範不保證，Chrome 也一樣），測試一開始照某個順序寫的，改成不看順序。
+

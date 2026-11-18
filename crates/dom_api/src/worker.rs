@@ -49,6 +49,13 @@ pub trait WorkerHost {
     /// The worker `id` terminated (`Worker.terminate()`): its script
     /// stopped at once, nothing more of it delivered.
     fn terminate_worker(&self, id: u64);
+
+    /// What wakes the realm's thread for its message ports' messages from
+    /// workers' threads (`dom::Dom::set_port_waker`); none if no port of
+    /// its goes to another thread.
+    fn port_waker(&self) -> Option<dom::PortWaker> {
+        None
+    }
 }
 
 /// What carries what a dedicated worker's global sends to the realm that
@@ -90,6 +97,13 @@ pub trait WorkerGlobalHost {
     /// `url` revoked (`URL.revokeObjectURL` in the worker), if the worker
     /// registered it: no load after it gets it.
     fn revoke_blob_url(&self, url: &str);
+
+    /// What wakes the worker's thread for its message ports' messages from
+    /// other threads (`dom::Dom::set_port_waker`); none if no port of its
+    /// goes to another thread.
+    fn port_waker(&self) -> Option<dom::PortWaker> {
+        None
+    }
 }
 
 /// A script `importScripts()` fetched.
@@ -216,27 +230,20 @@ pub(crate) fn construct<'gc, O: OpFront>(
 }
 
 /// `Worker.postMessage(message, transfer)`: the message serialized (by the
-/// front end, in the current realm) given to the host for the worker;
-/// nothing once it was terminated. Message ports can't go to a worker yet
-/// (they would be another thread's): a `DataCloneError`.
+/// front end, in the current realm), the ports it transfers shipped with
+/// it, given to the host for the worker; lost once it was terminated.
 pub(crate) fn post_message<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, EventTargetImpl>,
     message: MessageParam<'_, 'gc>,
 ) -> Result<(), ApiError> {
-    if !message.ports.is_empty() {
-        return Err(dom_error(
-            ExceptionName::DataClone,
-            "A MessagePort can't be transferred to a worker.",
-        ));
-    }
+    let Some(payload) = message.ship(cx) else {
+        return Ok(());
+    };
     if cx.worker_terminated(this) {
         return Ok(());
     }
-    let Some(payload) = message.payload.take() else {
-        return Ok(());
-    };
     if let Some(host) = op.worker_host() {
         host.post_to_worker(cx.worker_id(this), payload);
     }
@@ -345,20 +352,15 @@ pub(crate) fn name<'gc>(
 }
 
 /// `DedicatedWorkerGlobalScope.postMessage(message, transfer)`: the
-/// message given to the host for the worker's `Worker`.
+/// message, the ports it transfers shipped with it, given to the host for
+/// the worker's `Worker`.
 pub(crate) fn global_post_message<'gc, O: OpFront>(
     op: &mut O,
-    _: &ApiCx<'_, 'gc>,
+    cx: &ApiCx<'_, 'gc>,
     _: Gc<'gc, WorkerGlobalScope>,
     message: MessageParam<'_, 'gc>,
 ) -> Result<(), ApiError> {
-    if !message.ports.is_empty() {
-        return Err(dom_error(
-            ExceptionName::DataClone,
-            "A MessagePort can't be transferred out of a worker.",
-        ));
-    }
-    let Some(payload) = message.payload.take() else {
+    let Some(payload) = message.ship(cx) else {
         return Ok(());
     };
     if let Some(host) = op.worker_global_host() {

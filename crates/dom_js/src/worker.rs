@@ -206,6 +206,9 @@ impl WorkerEngine for V8WorkerEngine {
         params: dom_api::WorkerGlobalParams,
         host: Box<dyn dom_api::WorkerGlobalHost>,
     ) {
+        if let Some(waker) = host.port_waker() {
+            self.state().dom.set_port_waker(waker);
+        }
         self.state().caches.worker_global_host = Some(host);
         self.state()
             .dom

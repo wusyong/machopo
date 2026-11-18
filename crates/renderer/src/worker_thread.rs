@@ -68,6 +68,9 @@ pub(crate) enum WorkerTask {
     /// (`RendererMsg::DedicatedWorkerScript`), or a load's response or
     /// redirect. Boxed: much bigger than the others, and rare.
     Browser(Box<RendererMsg>),
+    /// From another thread: its DOM's message ports may have messages
+    /// (`dom::PortWaker`), which its loop runs as it runs its tasks.
+    PortMessages,
 }
 
 /// What a worker's thread and the main thread share: whether it is to stop,
@@ -283,6 +286,10 @@ impl dom_api::WorkerHost for WorkersHost {
     fn terminate_worker(&self, id: u64) {
         self.0.terminate(id);
     }
+
+    fn port_waker(&self) -> Option<dom::PortWaker> {
+        Some(self.0.scheduler.port_waker())
+    }
 }
 
 /// A worker's tasks as its thread takes them: those it put off while it
@@ -377,6 +384,8 @@ impl GlobalHost {
                 Ok(task @ WorkerTask::Message(_)) => {
                     self.inbox.put_off.borrow_mut().push_back(task);
                 }
+                // Its ports are looked at once its loop runs its tasks.
+                Ok(WorkerTask::PortMessages) => {}
                 Err(_) => break,
             }
             if self.shared.stopping() {
@@ -486,6 +495,10 @@ impl dom_api::WorkerGlobalHost for GlobalHost {
             });
         }
     }
+
+    fn port_waker(&self) -> Option<dom::PortWaker> {
+        Some(self.scheduler.worker_port_waker(self.id))
+    }
 }
 
 /// The browser's user agent string and whether automation controls it
@@ -561,6 +574,8 @@ fn run(thread: WorkerThread) {
                 }
             }
             Ok(WorkerTask::Message(message)) => early.push(message),
+            // It has no port yet.
+            Ok(WorkerTask::PortMessages) => {}
             Ok(WorkerTask::Stop) | Err(_) => return,
         }
     };
@@ -642,6 +657,8 @@ fn run(thread: WorkerThread) {
         match task {
             Some(WorkerTask::Message(message)) => engine.post_message(message),
             Some(WorkerTask::Stop) => break,
+            // Run with its tasks, next round.
+            Some(WorkerTask::PortMessages) => {}
             Some(WorkerTask::Browser(msg)) => match *msg {
                 // A `fetch()`'s: its promise settled.
                 RendererMsg::ResourceResponse {

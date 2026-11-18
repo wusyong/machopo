@@ -138,9 +138,10 @@ pub struct WorkerLog {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkerCall {
     Start(dom_api::WorkerStart),
-    Post(u64, Vec<u8>),
+    /// The worker, the message's bytes and how many ports it ships.
+    Post(u64, Vec<u8>, usize),
     Terminate(u64),
-    PostToOwner(Vec<u8>),
+    PostToOwner(Vec<u8>, usize),
     Close,
     Error(dom_api::WorkerError),
 }
@@ -774,6 +775,7 @@ impl<'d> Front for TestFront<'d> {
         let message = dom::SerializedMessage {
             bytes,
             transferred: None,
+            ports: Vec::new(),
         };
         Some((message, ports))
     }
@@ -945,7 +947,7 @@ impl dom_api::WorkerHost for TestFront<'_> {
             .workers
             .borrow_mut()
             .calls
-            .push(WorkerCall::Post(id, message.bytes));
+            .push(WorkerCall::Post(id, message.bytes, message.ports.len()));
     }
 
     fn terminate_worker(&self, id: u64) {
@@ -963,7 +965,7 @@ impl dom_api::WorkerGlobalHost for TestFront<'_> {
             .workers
             .borrow_mut()
             .calls
-            .push(WorkerCall::PostToOwner(message.bytes));
+            .push(WorkerCall::PostToOwner(message.bytes, message.ports.len()));
     }
 
     fn close(&self) {

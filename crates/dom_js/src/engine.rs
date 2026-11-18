@@ -1483,6 +1483,9 @@ impl ScriptEngine for V8Engine {
     }
 
     fn set_worker_host(&mut self, host: Box<dyn dom_api::WorkerHost>) {
+        if let Some(waker) = host.port_waker() {
+            self.state().dom.set_port_waker(waker);
+        }
         self.state().caches.worker_host = Some(host);
     }
 

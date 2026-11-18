@@ -17,6 +17,7 @@ fn message() -> SerializedMessage {
     SerializedMessage {
         bytes: Vec::new(),
         transferred: None,
+        ports: Vec::new(),
     }
 }
 
@@ -99,7 +100,7 @@ fn a_worker_s_global_delivers_its_ports_messages() {
         let (one, two) = cx.message_channel_ports(channel);
         cx.start_message_port(two);
         assert!(!cx.has_posted_message(context));
-        cx.post_port_message(one, message(), &[]);
+        cx.post_port_message(one, message());
         assert!(cx.has_posted_message(context));
         let next = cx
             .next_task(context, cx.dom_now() + 1.0)

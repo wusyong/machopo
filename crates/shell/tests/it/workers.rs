@@ -4,7 +4,8 @@
 //! one after its task; a script that can't be had is an `error` at its
 //! `Worker`; the renderer ends with a worker still busy. Their scripts the
 //! browser loads, `importScripts()`'s too: same-origin, redirects followed,
-//! lax of MIME types as Chrome is.
+//! lax of MIME types as Chrome is. Message ports go to and from workers,
+//! the two of a channel then on two threads.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -531,5 +532,71 @@ fn a_worker_s_fetch_is_redirected_and_answered_while_it_imports() {
             &[],
         ),
         "true,true,here,1"
+    );
+}
+
+/// A port goes to a worker with what was posted to it before (in order),
+/// answers there; one the worker makes comes back to the page and talks
+/// from the worker's thread. (Two ports' messages come in no order.)
+#[test]
+fn ports_go_to_and_from_a_worker() {
+    assert_eq!(
+        report(
+            "const got = []; let back; \
+             const done = () => got.length === 3 && back && report(got.join() + ' ' + back); \
+             const w = worker(`onmessage = e => { \
+               const port = e.ports[0]; \
+               port.onmessage = m => port.postMessage(m.data * 2); \
+               const back = new MessageChannel(); \
+               postMessage('back', [back.port1]); \
+               back.port2.postMessage('from the worker'); };`); \
+             const c = new MessageChannel(); \
+             c.port1.postMessage(1); c.port1.postMessage(2); \
+             w.postMessage('port', [c.port2]); \
+             c.port1.onmessage = e => { got.push(e.data); \
+               if (got.length === 2) c.port1.postMessage(3); done(); }; \
+             w.onmessage = e => e.ports[0].onmessage = m => { back = m.data; done(); };"
+        ),
+        "2,4,6 from the worker"
+    );
+}
+
+/// Two workers given the two ports of a channel talk through it while the
+/// page is busy: nothing goes through the main thread.
+#[test]
+fn two_workers_talk_through_a_port_while_the_page_is_busy() {
+    assert_eq!(
+        report(
+            "const a = worker(`onmessage = e => { const port = e.ports[0]; \
+               port.onmessage = m => postMessage([m.data, performance.timeOrigin + performance.now()]); \
+               port.postMessage('ping'); };`); \
+             const b = worker(`onmessage = e => { const port = e.ports[0]; \
+               port.onmessage = m => port.postMessage(m.data === 'ping' ? 'pong' : 'what'); };`); \
+             const c = new MessageChannel(); \
+             a.postMessage('', [c.port1]); b.postMessage('', [c.port2]); \
+             const until = performance.now() + 1500; \
+             while (performance.now() < until) {} \
+             const busy = performance.timeOrigin + until; \
+             a.onmessage = e => report([e.data[0], e.data[1] < busy].join());"
+        ),
+        "pong,true"
+    );
+}
+
+/// A worker's message through a port wakes the page at once, nothing else
+/// of the page's to run meanwhile: it comes well before the page would
+/// have looked again.
+#[test]
+fn a_port_s_message_from_a_worker_wakes_the_page() {
+    assert_eq!(
+        report(
+            "const w = worker(`onmessage = e => setTimeout(() => \
+               e.ports[0].postMessage(performance.timeOrigin + performance.now()), 300);`); \
+             const c = new MessageChannel(); \
+             w.postMessage('', [c.port2]); \
+             c.port1.onmessage = e => \
+               report(performance.timeOrigin + performance.now() - e.data < 100 ? 'woken' : 'late');"
+        ),
+        "woken"
     );
 }
