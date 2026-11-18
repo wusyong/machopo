@@ -134,6 +134,9 @@ where
                     reported = true;
                 }
             }
+            // Before the thread ends, so the process exits with nothing
+            // on the GPU and no device.
+            display.shutdown();
             tracing::debug!("viz: thread exiting");
         })
 }
@@ -186,6 +189,48 @@ mod tests {
                 pixels: frame.background_color.premultiplied().to_vec(),
             })
         }
+    }
+
+    /// Counts the times it is shut down.
+    struct ShutDown(Arc<AtomicU32>);
+
+    impl DirectRenderer for ShutDown {
+        fn resize(&mut self, _: Size) {}
+        fn draw_frame(&mut self, _: &AggregatedFrame<'_>) {}
+        fn shutdown(&mut self) {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "a test's count: far from wrapping"
+            )]
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// The renderer is shut down as the thread ends, told to or with no
+    /// one left to send it anything.
+    #[test]
+    fn the_renderer_is_shut_down_as_viz_ends() {
+        let root = FrameSinkId {
+            client_id: 0,
+            sink_id: 1,
+        };
+        let shut_down = Arc::new(AtomicU32::new(0));
+        for told in [true, false] {
+            let (tx, rx) = unbounded();
+            let renderer = ShutDown(shut_down.clone());
+            let thread =
+                spawn_viz_compositor_thread(rx, root, BeginFrameSource::new(), move || {
+                    Ok(renderer)
+                })
+                .unwrap();
+            if told {
+                tx.send(VizMsg::Display(DisplayMsg::Shutdown)).unwrap();
+            } else {
+                drop(tx);
+            }
+            thread.join().unwrap();
+        }
+        assert_eq!(shut_down.load(Ordering::Relaxed), 2);
     }
 
     #[test]
