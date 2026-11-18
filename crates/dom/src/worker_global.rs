@@ -22,8 +22,9 @@ pub struct WorkerGlobalScope {
     /// Its URL (HTML's worker global scope's url): its script's response's
     /// URL, its API base URL.
     url: LocalExternal<Url>,
-    /// Its origin (HTML's worker's settings object's): its owner's for a
-    /// script of a `data:` URL, an opaque one, else its URL's.
+    /// Its origin (HTML's worker's settings object's): an opaque one for a
+    /// script of a `data:` URL, else the origin of the realm that made it
+    /// (its URL's if that has none).
     origin: LocalExternal<url::Origin>,
     /// Its name (`new Worker(url, { name })`, `self.name`).
     name: LocalExternal<DomString>,
