@@ -371,11 +371,10 @@
   - 沒有「用掉」activation：machopo 還沒有需要它的 API（`window.open`、全螢幕、控制項的 popup），activation 在期限內一直有效。
   - 狀態只在 renderer 的 DOM 裡（每個 window 一份），browser 不知道（Chromium 在 browser 也有一份，給跨 process 的 frame 和 browser 自己的檢查）；multi-process、跨 process 的 iframe 或 browser 要擋 popup 時要補上同步。
 - `postMessage`：
-  - 只能給同一個 renderer 裡、同源的 window（自己、子 frame、`parent`、`top`）；跨源的 window 連 `postMessage` 也碰不到（見「iframe」）。
+  - 只能給同一個分頁裡的 window（自己、子 frame、`parent`、`top`，跨源的也可以）：沒有 `window.open` 和 `opener`，碰不到別的分頁的。
   - transfer 只有 `MessagePort` 和 `ArrayBuffer`：machopo 還沒有其他能 transfer 的平台物件（`ImageBitmap`、`OffscreenCanvas`、`ReadableStream`……），放進 transfer list 是 `DataCloneError`（不是能 transfer 的型別）。port 只能 transfer 給同一個 renderer 裡碰得到的 window（同上）和 dedicated worker。
   - 兩個 port 各自在對方的 pipe 裡沒送到的訊息裡（A 的 port 送給 B、B 那一對的另一個 port 再送給 A 那一對、兩則都沒人收）時，兩個 pipe 互相拿著，`close()` 另外兩個 port 也不會放掉，記憶體要等 renderer 結束才回來。
   - 規範的 incumbent（`MessageEvent.source`、`origin` 和 `targetOrigin: "/"` 用的「呼叫的一方」）用 V8 的 entered context 近似：一般的情況（一份文件的 script 呼叫另一個 window 的 `postMessage`）一樣；別的 realm 的函式被呼叫、再由它呼叫 `postMessage` 時，用的是外層進入的那個 realm（Chromium 用 V8 的 `GetIncumbentContext`）。
-  - `source` 是 `Window`（沒有 `WindowProxy`，見「iframe」）。
   - `data` 第一次讀時才反序列化；序列化用的是「for storage」，不能複製的在 `postMessage` 時就丟 `DataCloneError`，所以 `messageerror` 不會發生。
   - 只有 JS 有：`postMessage` 和 `MessageEvent.data`、`initMessageEvent` 的 `data`；`MessageChannel`、`MessagePort`、`MessageEvent.ports`、`structuredClone()` 也是。
 - `MessageChannel` 和 `MessagePort`：兩個 port 共用一個 pipe（Chromium 的 mojo 的 pipe 那樣，同一條 thread 上的也是），可以在同一個 renderer 的不同 thread 上（頁面和它的 worker、兩個 worker），不能跨 renderer：之後拆 process、port 要跨 renderer 時，pipe 要換成經過 IPC 的。start 過、另一端還開著的 port 活到 `close()`、它的 document 被丟棄或它的 worker 結束（和 Chrome 一樣，兩個都沒人拿著也不會被收掉）；另一端 `close()`、被收掉、它的 worker 結束時，這一端收完之前到的訊息就放掉。沒有 port 的 `close` 事件（`onclose`；Chrome 也還放在 flag 後面）、`BroadcastChannel`。
@@ -394,13 +393,13 @@
 
 iframe 照同源、同 process 的情形做：有自己的 browsing context、window 和 document，照 `src`、`srcdoc` 由 renderer 載入，畫在 iframe 裡，接收點擊和滾輪。
 
-- iframe 是 replaced element（300×150 加上 2px 的邊框，`width`、`height`、`frameborder`），子 frame 照 iframe 的內容框跑 style、layout，畫在內容框裡，點擊和滾輪會進子 frame，滾輪捲到底往外層傳；鍵盤從 focus 的元素（沒有時從最後按下滑鼠的元素，或 focused frame）往外捲。子 frame 裡的連結只有連到自己的 `#fragment` 會捲動，換頁、`javascript:` 和開新分頁都沒有作用。
+- iframe 是 replaced element（300×150 加上 2px 的邊框，`width`、`height`、`frameborder`），子 frame 照 iframe 的內容框跑 style、layout，畫在內容框裡，點擊和滾輪會進子 frame，滾輪捲到底往外層傳；鍵盤從 focus 的元素（沒有時從最後按下滑鼠的元素，或 focused frame）往外捲。
 - `<body>` 的 `marginwidth`、`leftmargin`（左右）、`marginheight`、`topmargin`（上下）照 Chrome 是 presentational hint：兩個一起出現時後寫的贏（HTML 的「The page」是 `marginwidth`、`marginheight` 贏；Chrome 152 和 machopo 一樣），`rightmargin`、`bottommargin` 照 Chrome 不算。iframe 的 `marginwidth`、`marginheight` 不傳給子 frame 的 body：子 frame 的 body 照樣是預設的 8px margin（WPT 的 `body-margin-*` 有 8 個是預期的失敗）。
 - 子 frame 不 throttle：每個 main frame 都看每個子 frame 要不要更新，看不見的、跨源的也一樣（Chromium 會 throttle 看不見的跨源 frame；同一個 process 裡 `display: none` 的 frame 不 throttle，和 machopo 一樣）。
-- 跨源的 window 什麼都碰不了（security token 擋下所有存取，`TypeError`；把自己的 realm 的成員用在它身上也一樣，例如 `getSelection.call(other)`）：規範允許的少數成員（`postMessage`、`closed`、`frames`、`length`、`parent`、`top` 等）也不行。
+- 跨源的 window 和它的 `location` 只碰得到規範允許的成員（`postMessage`、`closed`、`frames`、`length`、`parent`、`top`、`location.href` 的設定和 `replace()` 等），其他的是 `SecurityError`。其中 `close()`、`blur()` 什麼都不做，`opener` 一律是 `null`（沒有 `window.open`）。
 - 跨網站的 iframe 和頁面在同一個 renderer，只靠 security token 擋住互相存取（Chromium 的 site isolation 放在別的 process）。
 - 子 frame 的導覽由 renderer 自己載入（一種子資源），browser 不知道子 frame：沒有子 frame 的歷史。子 frame 裡導覽到自己的 `#fragment`（連結、`location.hash`）照樣捲動、改網址、分派 `popstate` 和 `hashchange`，但不進 session history；導覽到別的文件（點連結、`location.href = …`）由 renderer 載入、換掉子 frame 的文件（舊的文件裡的 frame 跟著不在），一樣不進 session history。
-- `javascript:` 的 `src` 不執行（當成一般的網址抓取，失敗）。`loading`、`sandbox`、`allow` 都還沒有（sandbox 的 iframe 照樣跑 script，裡面的 `loading="lazy"` 的圖照樣等到接近 viewport 才載入；`name` 只是屬性的 reflection，名稱給 window 的具名屬性，沒有 `window.name`）；`referrerpolicy` 只用在子 frame 的 navigation timing（`no-referrer` 時 redirect 的 `Timing-Allow-Origin` 只認 `*`；machopo 的請求都不送 `Referer`）。
+- `javascript:` 的 `src` 不執行（當成一般的網址抓取，失敗）。`loading`、`sandbox`、`allow` 都還沒有（sandbox 的 iframe 照樣跑 script，裡面的 `loading="lazy"` 的圖照樣等到接近 viewport 才載入；`name` 的名稱給 window 的具名屬性和連結的 `target`，沒有 `window.name`）；`referrerpolicy` 只用在子 frame 的 navigation timing（`no-referrer` 時 redirect 的 `Timing-Allow-Origin` 只認 `*`；machopo 的請求都不送 `Referer`）。
 - 載入失敗（網路錯誤、被擋下）的子 frame 是一份空的 document，沒有錯誤的說明（Chromium 是錯誤頁）。
 - `window[i]` 和集合的 indexed property 一樣只能讀：設定、刪除、`Object.defineProperty` 會在 global 上建一般的屬性（規範是失敗）。
 - `srcdoc` 的子 frame 在插入它的 script 跑完之前就載完、iframe 的 `load` 已經分派了；Chrome 之後才載入，script 之後加的 listener 等得到（WPT 的 `css/cssom-view/cssom-geometryutils-lifecycle.html` TIMEOUT）。
@@ -413,10 +412,10 @@ iframe 照同源、同 process 的情形做：有自己的 browsing context、wi
 - `Location` 物件的 `[[PreventExtensions]]` 照一般物件（`Object.preventExtensions(location)` 成功，HTML 是 `TypeError`）：V8 的 template 做不到；`[[SetPrototypeOf]]` 照 HTML 不能換 prototype（`set_immutable_proto`）。沒有 `ancestorOrigins`（要 `DOMStringList`）。
 - `location` 的導覽：不分派 `beforeunload`（`pagehide`、`unload` 在下一份文件 commit 時發，見 Navigation Timing 那一條）；`javascript:` 網址的結果是字串時不取代 document（和連結一樣）；不帶 referrer。交給 browser 的時間是 task 結束時（Chromium 是呼叫的當下），看不出差別。
 - 導覽到同一份文件的 `#fragment` 之後，捲動等到 event loop 的最上層才排定、下一個 frame 才捲：同一個 task 裡接著讀 `scrollY` 還是舊的位置（HTML 的「navigate to a fragment」當場捲動，Chrome 也是；WPT 的 `location_hash.html` 的 srcdoc iframe 那項）。script 寫捲動位置的路已經有了，之後可以改成在導覽的當下捲動。
-- 連結只有 `<a href>`，沒有 `<area>`；`mailto:` 之類交給系統的 scheme 不開，只記 log。頁面的連結和 `location` 不能導覽到 `data:` 網址（這個分頁和新分頁都不行，Chrome 也擋；iframe 和自動化的導覽可以），但 Chrome 會在 console 報錯，machopo 只記 log。
-- 連結開在哪裡只看它自己的 `target`：`<base target>` 只是 `HTMLBaseElement.target` 反映的 attribute，沒有自己 `target` 的連結不照它開（HTML 的「get an element's target」、Chrome 會）。`target` 是名字時一律開新分頁：沒有具名的 frame（WPT 的 `the-base-element/base_multiple.html` 因此逾時）。
+- 沒有 image map：`<area>` 是連結（`click()` 會導覽），但 `<img usemap>` 不把點擊分給它；`mailto:` 之類交給系統的 scheme 不開，只記 log。頁面的連結和 `location` 不能導覽到 `data:` 網址（這個分頁和新分頁都不行，Chrome 也擋；iframe 和自動化的導覽可以），但 Chrome 會在 console 報錯，machopo 只記 log。
+- 連結有 `target` 屬性時就用它的值，空字串也算（照 HTML 的「get an element's target」，在自己的 frame 開），不改看 `<base target>`：WPT 的 `the-base-element/base_multiple.html` 預期 `target=""` 的連結照 `<base target>` 開，是預期的失敗。
 - 滑鼠離開視窗、或移到工具列和分頁列上時，頁面收不到：hover 留在最後的元素上，也不發 `mouseout`、`mouseleave`（Chrome 會）。要等下一次滑鼠在頁面上移動。
-- 連結開新分頁：沒有 `window.open`；有名字的 target 每次都開新分頁，不重用；Shift+點擊開新分頁而不是新視窗，Alt+點擊照一般的點擊（沒有下載）；script 自己觸發的點擊（`dispatchEvent`）不開新分頁，它的 `target="_blank"` 什麼都不做（沒有使用者手勢的概念，Chrome 會封鎖這種彈出視窗）；iframe 裡的連結照舊不導覽。右鍵有 `contextmenu`，但沒有選單。
+- 連結開新分頁：沒有 `window.open`；`target` 的名字沒有 frame 用時開新分頁，每次都開新的、不重用；Shift+點擊開新分頁而不是新視窗，Alt+點擊照一般的點擊（沒有下載）；script 自己觸發的點擊（`dispatchEvent`）不開新分頁，它的 `target="_blank"` 什麼都不做，不看有沒有 user activation（Chrome 封鎖的是沒有 activation 的彈出視窗）。右鍵有 `contextmenu`，但沒有選單。
 - 游標照 `cursor` 的關鍵字（Blink 的 `EventHandler::SelectCursor`）：`url()` 的游標圖片不載入，用它後面的關鍵字；`image-set()` 照 Chrome 只收 `url()` 的選項、和 `url()` 一樣不載入；沒有 `light-dark()`（有它的宣告整條無效，Chrome 收）。`auto` 在連結上是手指、在選得到的文字（`user-select` 不是 `none`）上是 I 形，雖然 machopo 還不能選取頁面的文字；文字欄位的 I 形來自 UA stylesheet 的 `cursor: text`（machopo 沒有 contenteditable）。`::before`、`::after` 的文字照產生它的元素的 `cursor`（Chrome 照 pseudo-element 自己的）。按著按鈕拖曳時照滑鼠底下的元素（Chrome 在拖曳選取時一直是 I 形）；捲軸上沒有自己的游標。滑鼠不動、底下的東西變了時，下一次 pre-paint 之後更新（Blink 用 50ms 的 timer）。
 - Hit testing（點擊和 `elementFromPoint` 都是）：text run 的範圍用字型的 ascent 和 descent。
 - 新的 document 的第一個 frame 畫出來之前，點擊還是送給上一份（照 compositor 畫的是哪一份），上一份已經丟棄了，所以點擊沒有作用。輸入的 hit test 先把 lifecycle 更新到 pre-paint（和 Blink 一樣），script 剛改的東西照它現在的位置。

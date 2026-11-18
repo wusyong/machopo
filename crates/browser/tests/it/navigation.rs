@@ -3385,7 +3385,8 @@ document.querySelector('base').setAttribute('href', '/later/');
 
     /// A child frame's navigation to a fragment happens in it (its own
     /// `hashchange`), but isn't in the session history; its navigation to
-    /// another document is ignored: not supported yet.
+    /// another document is the renderer's to load. The browser hears of
+    /// neither.
     #[test]
     fn a_child_frame_s_location() {
         let child = "<script>\
