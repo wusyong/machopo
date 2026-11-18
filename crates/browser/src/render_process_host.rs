@@ -43,6 +43,13 @@ pub struct RenderProcessHost {
     forwarding: Arc<AtomicBool>,
 }
 
+/// Which renderer a message came from (Chromium's `ChildProcessHost` id):
+/// a tab heeds its own renderer's alone (`WebContents::is_current_renderer`),
+/// so what one it replaced or ended still sends counts for nothing, as a
+/// gone process's messages reach no one in Chromium.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RendererId(u64);
+
 /// The next renderer's number (Chromium's `ChildProcessHost` id), which
 /// its blob URLs are registered under: unique among this browser's.
 static RENDERER_IDS: AtomicSequenceNumber<u64> = AtomicSequenceNumber::<u64>::starting_at(1);
@@ -62,8 +69,8 @@ impl RenderProcessHost {
     /// Launches the renderer, with `flags` and the script engine
     /// `script_engine` makes (which a renderer process of its own would
     /// pick itself). `on_message` runs on the IO thread for every message
-    /// the renderer sends, except subresource requests, which the IO
-    /// thread passes to `network` itself.
+    /// the renderer sends, with the renderer's id, except subresource
+    /// requests, which the IO thread passes to `network` itself.
     #[allow(clippy::too_many_arguments)]
     pub fn launch(
         tab: TabId,
@@ -73,7 +80,7 @@ impl RenderProcessHost {
         viz: Sender<VizMsg>,
         gpu: Option<Arc<dyn SharedImageInterface>>,
         network: NetworkContext,
-        on_message: Box<dyn Fn(TabId, RendererHostMsg) + Send>,
+        on_message: Box<dyn Fn(TabId, RendererId, RendererHostMsg) + Send>,
     ) -> std::io::Result<Self> {
         let (to_renderer, to_compositor, from_browser) = renderer::channel();
         let (to_browser, from_renderer) = crossbeam_channel::unbounded();
@@ -111,7 +118,7 @@ impl RenderProcessHost {
             let forwarding = forwarding.clone();
             let on_message = move |tab, msg| {
                 if forwarding.load(Ordering::Acquire) {
-                    on_message(tab, msg);
+                    on_message(tab, RendererId(renderer_id), msg);
                 }
             };
             std::thread::Builder::new()
@@ -254,6 +261,11 @@ impl RenderProcessHost {
     /// Its number, which its blob URLs are registered under.
     pub(crate) fn renderer_id(&self) -> u64 {
         self.renderer_id
+    }
+
+    /// Which renderer it is, as its messages say.
+    pub(crate) fn id(&self) -> RendererId {
+        RendererId(self.renderer_id)
     }
 
     /// Ends the renderer at once, as `chrome://kill` does, and passes on

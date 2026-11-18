@@ -704,7 +704,7 @@ impl ApplicationHandler<ShellEvent> for App {
             ShellEvent::FromContents(tab, event) => {
                 let event = *event;
                 // A navigation's, to DevTools before the tab goes on with it.
-                if !matches!(event, ContentsEvent::Renderer(_))
+                if !matches!(event, ContentsEvent::Renderer { .. })
                     && let Some(session) = self.session.as_mut()
                 {
                     session.on_contents_event(tab, &event, &running.browser);

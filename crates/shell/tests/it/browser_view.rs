@@ -1343,6 +1343,46 @@ fn a_hidden_tab_asks_for_no_frames() {
     window.close();
 }
 
+/// What a renderer the tab ended sent counts for nothing: the view hands
+/// it to no one, while the tab shows its sad tab, or once another renderer
+/// took its place.
+#[test]
+fn an_ended_renderers_late_message_counts_for_nothing() {
+    let server = server(&[("/", "<!DOCTYPE html><iframe></iframe>")]);
+    let mut window = Window::open(Size::new(400, 300), 1.0);
+    window.view.navigate(&server.url("/"));
+    // Its child frame's coming, held back.
+    let start = Instant::now();
+    let (tab, renderer, held) = loop {
+        while let Ok(msg) = window.viz.try_recv() {
+            window.viz_message(msg);
+        }
+        window.send_begin_frames();
+        if let Ok((tab, event)) = window.host.recv_timeout(Duration::from_millis(5)) {
+            match event {
+                ContentsEvent::Renderer {
+                    renderer,
+                    msg: msg @ RendererHostMsg::DidCreateChildFrame { .. },
+                } => break (tab, renderer, msg),
+                event => {
+                    window.view.on_contents_event(tab, event);
+                }
+            }
+        }
+        assert!(start.elapsed() < TIMEOUT, "the renderer tells");
+    };
+    let late = |msg: &RendererHostMsg| ContentsEvent::Renderer {
+        renderer,
+        msg: msg.clone(),
+    };
+    window.view.navigate("about:crash");
+    assert!(window.view.on_contents_event(tab, late(&held)).is_none());
+    window.shortcut("r");
+    window.until_loaded();
+    assert!(window.view.on_contents_event(tab, late(&held)).is_none());
+    window.close();
+}
+
 /// A tab whose renderer has gone shows its sad tab, the last one too;
 /// its button, or reloading, launches another renderer. A tab behind shows
 /// its own once shown.

@@ -229,7 +229,7 @@ pub fn drive<T>(
                     return Ended::RendererGone;
                 };
                 // A navigation's, to DevTools before the tab goes on with it.
-                if !matches!(event, ContentsEvent::Renderer(_)) {
+                if !matches!(event, ContentsEvent::Renderer { .. }) {
                     session.on_contents_event(tab, &event, browser);
                 }
                 let Some(msg) = browser.view_mut().on_contents_event(tab, event) else {

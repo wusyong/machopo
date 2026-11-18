@@ -1452,14 +1452,24 @@ impl BrowserView {
     }
 
     /// An event of `tab`'s, on the UI thread: handed to the tab, and the
-    /// renderer's message returned, if it is one.
+    /// renderer's message returned, if it is one that counts (its renderer
+    /// the tab's, not one it ended or replaced).
     pub fn on_contents_event(
         &mut self,
         tab: TabId,
         event: ContentsEvent,
     ) -> Option<RendererHostMsg> {
         match event {
-            ContentsEvent::Renderer(msg) => {
+            ContentsEvent::Renderer { renderer, msg } => {
+                // A closed tab's renderer's go on (its `RendererGone` ends
+                // what waited for the tab): the tab has nothing left to be
+                // misled.
+                if self
+                    .contents(tab)
+                    .is_some_and(|contents| !contents.is_current_renderer(renderer))
+                {
+                    return None;
+                }
                 self.on_renderer_message(tab, &msg);
                 Some(msg)
             }

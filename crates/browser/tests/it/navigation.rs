@@ -127,13 +127,16 @@ fn tab_with_viz_colors(
 
 /// The renderer's message `event` is, or `None` for a navigation's
 /// redirect or end, which the tab follows or commits (as the embedder
-/// hands it over).
+/// hands it over), and for a message of a renderer the tab ended or
+/// replaced, which counts for nothing.
 fn renderer_message(
     web_contents: &mut WebContents,
     event: ContentsEvent,
 ) -> Option<RendererHostMsg> {
     match event {
-        ContentsEvent::Renderer(msg) => Some(msg),
+        ContentsEvent::Renderer { renderer, msg } => {
+            web_contents.is_current_renderer(renderer).then_some(msg)
+        }
         ContentsEvent::NavigationRedirected {
             navigation_id,
             redirect,
@@ -588,7 +591,11 @@ fn held_redirect(
                 navigation_id,
                 redirect,
             } => return (navigation_id, redirect),
-            ContentsEvent::Renderer(msg) => web_contents.on_renderer_message(&msg),
+            ContentsEvent::Renderer { renderer, msg } => {
+                if web_contents.is_current_renderer(renderer) {
+                    web_contents.on_renderer_message(&msg);
+                }
+            }
             ContentsEvent::NavigationCompleted {
                 navigation_id,
                 result,
@@ -3501,9 +3508,6 @@ document.querySelector('base').setAttribute('href', '/later/');
             web_contents.on_renderer_message(&bad);
             assert!(web_contents.is_crashed(), "{bad:?}");
             assert_eq!(web_contents.frame_tree().len(), 1, "{bad:?}");
-            // What the renderer ended sent before counts for nothing.
-            web_contents.on_renderer_message(&RendererHostMsg::DidDetachFrame { frame: child });
-            assert!(web_contents.is_crashed());
             web_contents.reload();
             assert!(!web_contents.is_crashed());
             let child_again = made(&mut web_contents);
@@ -3512,6 +3516,52 @@ document.querySelector('base').setAttribute('href', '/later/');
             wait_until_loaded(&mut web_contents, &host_rx);
             child = child_again;
         }
+        web_contents.shutdown();
+    }
+
+    /// A message of a renderer the tab ended counts for nothing, handed on
+    /// however late: while the tab has no other, and after the next
+    /// navigation launched another, whose messages count.
+    #[test]
+    fn an_ended_renderers_late_messages_count_for_nothing() {
+        let server = server(&[(
+            "/",
+            Route::ok("text/html", "<!DOCTYPE html><iframe></iframe>".to_owned()),
+        )]);
+        let (mut web_contents, host_rx) = tab();
+        web_contents.navigate(server.url("/"));
+        // Its child frame's coming, not handed on yet.
+        let (old, late) = loop {
+            match host_rx.recv_timeout(TIMEOUT).expect("the renderer tells") {
+                ContentsEvent::Renderer {
+                    renderer,
+                    msg: msg @ RendererHostMsg::DidCreateChildFrame { .. },
+                } => break (renderer, msg),
+                event => {
+                    if let Some(msg) = renderer_message(&mut web_contents, event) {
+                        web_contents.on_renderer_message(&msg);
+                    }
+                }
+            }
+        };
+        assert!(web_contents.is_current_renderer(old));
+        web_contents.navigate("about:crash");
+        assert!(!web_contents.is_current_renderer(old), "ended");
+        let event = |msg: &RendererHostMsg| ContentsEvent::Renderer {
+            renderer: old,
+            msg: msg.clone(),
+        };
+        assert!(renderer_message(&mut web_contents, event(&late)).is_none());
+        web_contents.reload();
+        assert!(!web_contents.is_current_renderer(old), "replaced");
+        assert!(renderer_message(&mut web_contents, event(&late)).is_none());
+        // The new renderer's count: its child frame is the tree's.
+        let new = wait_for(&mut web_contents, &host_rx, |msg| match msg {
+            RendererHostMsg::DidCreateChildFrame { frame, .. } => Some(*frame),
+            _ => None,
+        });
+        let main = web_contents.devtools_frame_token();
+        assert_eq!(web_contents.frame_tree().children(main), [new]);
         web_contents.shutdown();
     }
 

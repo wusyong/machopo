@@ -11,7 +11,12 @@
 | 1a：`FrameToken`、engine 抽 id、renderer 送建立和 detach 的訊息、DevTools 和 WebDriver 的 frame 的 id | 完成 | 2026-11-18 |
 | 1b：Browser 的 `FrameTree`、檢查、壞掉的訊息 | 完成 | 2026-11-18 |
 | 1c：第 1 階段的檢查和文件 | 完成 | 2026-11-18 |
-| 2：子 frame 的導覽經過 Browser | | |
+| 2a：renderer 的訊息帶著 renderer 的身分 | 完成 | 2026-11-18 |
+| 2b：`BeginNavigation`、`NavigationDropped`、網址的檢查（主 frame 的路） | | |
+| 2c：子 frame 一般的導覽經過 Browser | | |
+| 2d：`about:blank`、`about:srcdoc` 和 `DidChangeSrcDoc` | | |
+| 2e：子 frame 同一份文件內的導覽的回報 | | |
+| 2f：第 2 階段的檢查和文件 | | |
 | 3：joint session history | | |
 | 4：收尾 | | |
 
@@ -47,3 +52,11 @@
 - **情境**：`python3 scripts/test.py scenarios frames iframes iframe-loads frame-input sad-tab navigation` 9 個執行全部通過；階段驗收時在真的視窗裡跑 `--window frames iframes iframe-loads frame-input sad-tab` 5 個全部通過，看過 `sad-tab` 的截圖。
 - **WPT**（WebDriver 的 frame 參照換了寫法，經過 machopodriver 跑）：`python3 scripts/test.py wpt html/semantics/embedded-content/the-iframe-element/ html/browsers/history/the-location-interface/ html/browsers/windows/`：74 個測試、334 項檢查，沒有非預期的結果。
 - **sanity**：`deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs` 通過。
+
+### 2a（2026-11-18，macOS、Apple M4）
+
+- **做了什麼**：`browser` 加 `RendererId`；`RenderProcessHost` 交出訊息時帶著它，`ContentsEvent::Renderer` 變成 `{ renderer, msg }`。`WebContents::is_current_renderer`：是目前的 renderer、而且它還沒結束（`about:crash`、壞掉的訊息、`RendererGone` 之後到下一次導覽重開之前都算結束）。外層程式（`BrowserView::on_contents_event`、headless）把訊息交給分頁之前先問它，不算數的丟掉，之後的 DevTools、游標、popup 也就看不到；第 1 階段只對建立和 detach 的 crashed 判斷拿掉。
+- **找到的問題**：一開始 `BrowserView` 在分頁已經關掉時也把訊息丟掉，關掉的分頁的 renderer 結束時的 `RendererGone` 就到不了 DevTools 的 session，還在等的 `Page.navigate` 永遠沒有回答（`shell` 的 `devtools_lifecycle::flat_sessions_detach` 每次都逾時）。改成分頁還在、而且不是目前的 renderer 才丟。
+- **新的測試**：`browser` 的 `links::an_ended_renderers_late_messages_count_for_nothing`（抓住舊 renderer 的一則訊息，`about:crash` 之後和重新整理、新的 renderer 開始之後再交，都不算數；新的 renderer 的訊息照樣算）；`shell` 的 `browser_view::an_ended_renderers_late_message_counts_for_nothing`（同樣的情境經過 `BrowserView`）。`browser` 的 `a_bad_message_ends_the_renderer` 拿掉直接呼叫 `on_renderer_message` 模擬舊訊息的那一段（新的測試用真的舊訊息驗）。
+- **mutation test**（6 個）：抓到 5 個：結束了的 renderer 的訊息照樣算、被取代的 renderer 的訊息照樣算、每個 renderer 的訊息都說是同一個 renderer（`browser` 的新測試）；`BrowserView` 把結束了的 renderer 的訊息交下去（`shell` 的新測試）、`BrowserView` 連關掉的分頁的 renderer 的訊息也丟掉（`devtools_lifecycle::flat_sessions_detach`）。沒抓到 1 個：headless 不過濾，是等價的（記進 `docs/test-gaps.md`）。
+- **跑過的檢查**：`cargo test -p browser -p shell -p driver` 全部通過。

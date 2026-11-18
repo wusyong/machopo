@@ -1177,7 +1177,7 @@ impl AutomationSession {
         self.changes(browser);
         let frame_id = self.target(tab);
         match event {
-            ContentsEvent::Renderer(_) => {}
+            ContentsEvent::Renderer { .. } => {}
             ContentsEvent::NavigationRedirected {
                 navigation_id,
                 redirect,

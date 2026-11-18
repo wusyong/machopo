@@ -22,11 +22,12 @@ use crate::frame_tree::FrameTree;
 use crate::debug_urls::{DebugUrl, debug_url};
 use crate::navigation_controller::{NavigationController, NavigationType};
 use crate::render_process_host::{CommittedDocument, Committer};
-use crate::{RenderProcessHost, RendererFlags, ScriptEngineFactory};
+use crate::{RenderProcessHost, RendererFlags, RendererId, ScriptEngineFactory};
 
 /// What a tab's other threads have for its UI thread: the embedder posts
 /// each to the UI thread and hands it to the tab there (the renderer's
-/// messages to [`WebContents::on_renderer_message`], a navigation's
+/// messages to [`WebContents::on_renderer_message`], if
+/// [`WebContents::is_current_renderer`] says they count; a navigation's
 /// redirect to [`WebContents::on_navigation_redirected`] and its end to
 /// [`WebContents::on_navigation_completed`]), as Chromium's
 /// IPC and its `NavigationURLLoader` post to the UI thread. A navigation's
@@ -34,8 +35,12 @@ use crate::{RenderProcessHost, RendererFlags, ScriptEngineFactory};
 /// them.
 #[derive(Debug)]
 pub enum ContentsEvent {
-    /// From the tab's renderer, through its IO thread.
-    Renderer(RendererHostMsg),
+    /// From one of the tab's renderers, through its IO thread: the one it
+    /// has, or one it ended or replaced, whose messages count for nothing.
+    Renderer {
+        renderer: RendererId,
+        msg: RendererHostMsg,
+    },
     /// Navigation `navigation_id` reached a redirect and waits there
     /// (`NavigationURLLoaderDelegate::OnRequestRedirected`), from the
     /// network service's thread.
@@ -148,9 +153,9 @@ impl Launch {
             viz.clone(),
             self.gpu.clone(),
             network.clone(),
-            Box::new(move |tab, msg| {
+            Box::new(move |tab, renderer, msg| {
                 let on_event = on_event.lock().unwrap_or_else(|e| e.into_inner());
-                on_event(tab, ContentsEvent::Renderer(msg));
+                on_event(tab, ContentsEvent::Renderer { renderer, msg });
             }),
         )
     }
@@ -254,6 +259,14 @@ impl WebContents {
     /// frame (its target id, written as `FrameToken` writes it).
     pub fn devtools_frame_token(&self) -> FrameToken {
         self.frame_tree.root()
+    }
+
+    /// Whether a message from `renderer` counts: the tab's renderer's, while
+    /// it is there. One it replaced, or ended (`about:crash`, a bad message),
+    /// may still have sent some, which the embedder hasn't handed on yet:
+    /// those count for nothing, nor does anything after it has gone.
+    pub fn is_current_renderer(&self, renderer: RendererId) -> bool {
+        renderer == self.process.id() && !self.crashed
     }
 
     /// The tab's frames: the main frame, and the child frames its renderer
@@ -939,10 +952,6 @@ impl WebContents {
                 self.frame_tree.reset();
             }
             RendererHostMsg::RendererReady => {}
-            // A renderer ended: what it sent before is nothing now.
-            RendererHostMsg::DidCreateChildFrame { .. }
-            | RendererHostMsg::DidDetachFrame { .. }
-                if self.crashed => {}
             RendererHostMsg::DidCreateChildFrame { parent, frame } => {
                 if let Err(reason) = self.frame_tree.add_child(*parent, *frame) {
                     self.received_bad_message(reason);

@@ -276,7 +276,7 @@
 
 **DOM、bindings 和 script**
 
-- Browser 不處理已經結束的 renderer 送來的子 frame 的建立和 detach（`browser` 的 `WebContents::on_renderer_message` 的 `if self.crashed`）：拿掉也一樣。那些訊息這時接不上樹（樹已經清回只剩主 frame），會被當成壞掉的訊息，而壞訊息的處理（結束 renderer、標成 crashed、清樹）對已經結束的 renderer 什麼都沒改，只多記一行 error。
+- headless 不理會分頁結束了的 renderer 的訊息（`shell` 的 `headless.rs` 的 `is_current_renderer`）：拿掉也一樣。headless 只有一個 renderer、不會重開；它被結束（壞掉的訊息）之後，headless 只能等到期限，那時處理不處理它之前送的訊息，結果都一樣。留著是為了和其他外層程式同一條規則。
 - renderer 收到主 frame 的 token 時，如果 engine 已經在，當場告訴它（`render_thread.rs` 處理 `RendererMsg::DevToolsMainFrameToken` 的 `set_main_frame_token`）：拿掉也一樣。Browser 對每個 renderer 送的第一則訊息就是這個 token，比任何文件都早，那時 engine 還沒建；engine 建好時才拿到 token 的那條（`devtools.rs` 的 `make_engine`）有測試守著。留著是為了不依賴訊息的順序。
 - DOM 的 collection 往回走時停在 root（`dom` 的 `collection_previous` 的 `parent` 的條件）：往回走只從快取的元素走到它之前、已經在 collection 裡的元素（或從最後一個走到它），永遠不會走過第一個元素，所以走不到 root 的 parent，拿掉條件結果一樣；它讓這個函式本身照「在 root 之內」的意思，之後有走過第一個元素的呼叫時才看得出來。
 - trace 裡 rAF callback 之後的 microtask checkpoint 移到 `FireAnimationFrame` 的 span 外面（`dom_api` 的 `run_animation_frame_callbacks`）：V8 的 engine 在 callback 回來時就跑了 checkpoint（`dom_js` 的 `run_callback`），在 span 裡面，之後這一次已經沒有東西可跑。wasm 的 engine 或不先跑 checkpoint 的 engine 才看得出來。

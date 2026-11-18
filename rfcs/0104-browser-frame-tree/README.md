@@ -1,7 +1,7 @@
 # RFC 0104：frame 樹和每個 frame 的導覽由 Browser 擁有
 
 - 開始日期：2026-11-18
-- 狀態：🚧 已排程：2026-11-18（第 1 階段做完了；第 2 到 4 階段的問題到那個階段開始前再決定）
+- 狀態：🚧 已排程：2026-11-18（第 1 階段做完了；第 2 階段的決定定了，開始做；第 3、4 階段的問題到那個階段開始前再決定）
 - 細節：`details.md`
 - 進度：`progress.md`
 
@@ -99,17 +99,19 @@ renderer 這一側其實已經很完整：子 frame 有自己的 realm 和 `Wind
 
 ### 導覽（`browser`、`protocol`、`renderer`）
 
-- renderer 要某個 frame 換文件時，送「開始導覽」（Chromium 的 `BeginNavigation`）：哪個 frame、網址、是不是 replace、是不是 reload、發起的 frame。子 frame 現在的 `FetchResource`（`RequestDestination::Iframe`）拿掉；主 frame 現在的 `OpenUrl { CurrentTab }` 併進同一則訊息。
-- Browser 在那個節點上建 `NavigationRequest`（現在的 `PendingNavigation` 加上 frame 和發起者）：
-  1. 檢查網址：現在 `WebContents::open_url` 的那幾條，照 frame 分（例如頁面不能把主 frame 導覽到 `data:`，子 frame 可以）。
-  2. 載入：`net` 的請求，`RequestDestination` 照 frame 是 `Document` 或 `Iframe`；redirect 回到 UI thread 決定。
+- renderer 的訊息帶著送出它的 renderer（`ContentsEvent::Renderer` 多帶 `RenderProcessHost` 的編號），`WebContents` 只處理目前那個 renderer 的：被結束或放棄的 renderer 晚到的訊息都不算（第 9 條）。
+- renderer 要某個 frame 換文件時送 `BeginNavigation { frame, initiator, kind }`（Chromium 的 `BeginNavigation`），主 frame 和子 frame 同一則：`kind` 是「到某個網址（取代目前的 entry 與否）」或「重新載入」，帶著 renderer 給的編號；`initiator` 是發起的 frame，Browser 從自己的樹查它的 origin。主 frame 現在的 `OpenUrl { CurrentTab }` 和 `Reload` 併進來，`OpenUrl` 只留給開新分頁；子 frame 現在的 `FetchResource`（`RequestDestination::Iframe`）拿掉（第 10 條）。
+- 不是初始的 `about:blank` 和 `about:srcdoc` 也經過 Browser，不發網路請求、直接 commit；`srcdoc` 的內容由 renderer 用 `DidChangeSrcDoc { frame, srcdoc }` 告訴 Browser（iframe 的屬性改了、或建立時就有），記在節點上，commit 時帶回去。只差 `#fragment` 的導覽留在 renderer（第 11 條）。
+- Browser 在那個節點上建 `NavigationRequest`（現在的 `PendingNavigation` 加上 frame、發起者和 renderer 的編號）：
+  1. 檢查網址：scheme 的白名單（`http`、`https`、`file`、`about`、`blob`，子 frame 加上 `data:`；頁面能導覽到的 `about:` 只有 `about:blank`、`about:srcdoc`）；`file:` 要發起的 frame 目前的文件是 `file:`（第 14 條）。
+  2. 載入：`net` 的請求，`RequestDestination` 照 frame 是 `Document` 或 `Iframe`；redirect 回到 UI thread 決定。`about:` 的不發請求。
   3. 回應到了：之後的檢查（`X-Frame-Options` 等）掛在這裡。
-  4. 叫那個 frame commit：`CommitNavigation` 多一個 frame 的 id。失敗時 commit 錯誤頁（`loader::error_page`，和主 frame 同一份）。
-- renderer commit 之後回報（`DidCommitNavigation` 帶 frame 的 id），Browser 更新節點和歷史。
-- 一個 frame 同時只有一個導覽：新的取消舊的；父 frame commit 新文件時，子孫的導覽全部取消。
-- 父文件的 `load` 等子 frame：renderer 記著「這個 frame 有導覽在 Browser 那邊」，直到 commit 到了，或 Browser 說這次導覽沒有結果（被擋下、被取消）。後者是一則新的 Browser → renderer 訊息。
-- 導覽的 id 照舊是每個分頁一個序列，子 frame 的也從它拿。DevTools 的 loader id 就是它，主 frame 和子 frame 一致。
-- 同一份文件內的導覽照舊由 renderer 先做，回報多一個 frame 的 id。Browser 檢查回報的網址和那個 frame 現在的文件同源（現在不檢查）。
+  4. 叫那個 frame commit：同一則 `CommitNavigation` 多帶 `frame` 和 renderer 的編號；Navigation Timing 的載入資料主 frame 和子 frame 都由 Browser 給。失敗時 commit 錯誤頁（`loader::error_page`），帶著「這是錯誤頁」的旗標，renderer 給它 opaque 的 origin，主 frame 的也一樣（第 13 條）。
+- 沒有結果的導覽（網址的檢查沒過、被同一個 frame 更新的導覽取代），Browser 送 `NavigationDropped { frame, id }`，用 renderer 的編號對上是哪一次。renderer 送出 `BeginNavigation` 之後到 commit 或「丟掉了」之前，那個 frame 算在載入中，父文件的 `load` 等它（第 12 條）。
+- renderer commit 之後回報（`DidCommitNavigation` 帶 frame），Browser 更新節點目前的文件（網址、origin、是不是錯誤頁）；歷史第 3 階段才照 frame 記。一個 renderer 裡任何 frame commit 了 `file:` 的文件，子資源讀 `file:` 的旗標就設起來（第 14 條）。
+- 一個 frame 同時只有一個導覽：新的取消舊的；某個 frame 被 detach 時，它和子孫的導覽全部取消。
+- 導覽的 id 照舊是每個分頁一個序列，子 frame 的也從它拿。DevTools 的 `loaderId` 就是它，主 frame 和子 frame 一致；`frameStartedNavigating` 和文件的 `Network` 事件改由 Browser 發，所有 frame（第 15 條）。
+- 同一份文件內的導覽照舊由 renderer 先做，每個 frame 都送 `DidCommitSameDocumentNavigation`（多帶 frame）：子 frame 的 Browser 只更新節點的網址（重新載入時用它），不進歷史；網址要和那個 frame 目前的文件同源，不同源是壞掉的訊息（第 16 條）。
 
 ### session history（`browser`、`dom`、`dom_api`）
 
@@ -143,7 +145,7 @@ renderer 這一側其實已經很完整：子 frame 有自己的 realm 和 `Wind
 每個階段做完，`main` 上的行為和文件要一致，可以單獨 merge。
 
 1. **Browser 的 frame 樹**：協定裡 frame 的 id 的型別；建立、移除的訊息；Browser 的 `FrameTree`、檢查和壞掉的訊息的處理；DevTools 和 WebDriver 的 frame 的 id 換成 token。子 frame 的載入還是 renderer 做，使用者看不出差別。決定是「已決定的事項」第 2 到 8 條。分三段：1a 是 `FrameToken`、engine 抽 id、renderer 送兩則訊息、DevTools 和 WebDriver 的 id；1b 是 Browser 的 `FrameTree`、檢查和壞掉的訊息；1c 是整個階段的檢查和文件。
-2. **子 frame 的導覽經過 Browser**：開始導覽的訊息、每個節點的 `NavigationRequest`、`CommitNavigation` 帶 frame、子 frame 的錯誤頁、拿掉 renderer 自己載入的那條路、DevTools 的導覽事件。開始前要決定：`about:blank` 和 `srcdoc` 的導覽經不經過 Browser；Browser 沒有結果的導覽怎麼告訴 renderer；DevTools 的事件怎麼分。
+2. **子 frame 的導覽經過 Browser**：開始導覽的訊息、每個節點的 `NavigationRequest`、`CommitNavigation` 帶 frame、子 frame 的錯誤頁、拿掉 renderer 自己載入的那條路、DevTools 的導覽事件。決定是「已決定的事項」第 9 到 16 條。分六段：2a 是 renderer 的訊息帶著 renderer 的身分；2b 是 `BeginNavigation`、`NavigationDropped` 和網址的檢查，先只換主 frame 的路（行為不變）；2c 是子 frame 一般的導覽經過 Browser（commit 帶 frame、Navigation Timing、錯誤頁和 opaque 的 origin、`file:` 的權限、DevTools 的事件），拿掉 renderer 自己載入的路；2d 是 `about:blank`、`about:srcdoc` 和 `DidChangeSrcDoc`；2e 是子 frame 同一份文件內的導覽的回報和同源的檢查；2f 是整個階段的檢查和文件。
 3. **joint session history**：entry 的樹、子 frame 的分類、traversal、子 frame 的 `pushState`、回到 entry 時子 frame 照 entry 載入、frame 的名稱（第 5 條）。開始前要決定：frame 的鍵怎麼算（連同名稱怎麼送）；reload 時子 frame 怎麼辦。
 4. **收尾**：Browser 對 renderer 回報的檢查補齊、WPT 的目錄、文件、RFC 改寫成完成的樣子。
 
@@ -188,14 +190,18 @@ renderer 這一側其實已經很完整：子 frame 有自己的 realm 和 `Wind
 6. **子節點只照 renderer 的 `DidDetachFrame` 拿掉，Browser 不在 commit 時推斷**（2026-11-18，第 1 階段開始前）：renderer 換文件時本來就會對舊文件的每個直接子 frame 送 detach；renderer 重開時 Browser 把樹清回只剩根節點。理由：「建立和移除只有 renderer 說了才算」一條規則，Browser 才能把「拿掉不存在的 frame」一律當成壞掉的訊息；第 1 階段子 frame 的 commit Browser 也看不到。Chromium（2026-11-18 讀 `content/browser/renderer_host/`）：子 `FrameTreeNode` 由目前文件的 `RenderFrameHost` 擁有；清掉子節點的 `ResetChildren()` 只在 `RenderFrameHostImpl` 刪掉時、renderer 掛掉時（`RenderProcessGone`）和嵌入另一棵樹的特例呼叫，commit 的路上沒有；正規的移除是 renderer 的 `Detach`。不選 Browser 在 commit 時自己清（RFC 原本寫的）：第 1 階段推不出子 frame 的；也不選兩者都做：同一件事兩個來源，後到的一則要放寬檢查。
 7. **renderer 送來不合理的訊息時，Browser 結束那個 renderer**（2026-11-18，第 1 階段開始前）：記一行 error（哪一種壞訊息）、`RenderProcessHost::kill`、分頁標成 crashed（sad tab、DevTools 的 `targetCrashed`），樹清回只剩根節點；用一個小函式做（Chromium 的 `bad_message::ReceivedBadMessage`），之後收的一方的各種檢查都用它。第 1 階段的範圍是 `DidCreateChildFrame`（父 frame 不在、id 用過）和 `DidDetachFrame`（不在、是主 frame）；現有的寬鬆處理（例如不認得 id 的 `DidCommitNavigation` 當成新的 entry）到第 2 階段改導覽時一起改。理由：現在壞訊息只可能是 machopo 自己的 bug，結束 renderer 讓它立刻浮出來，兩棵樹也不會繼續錯下去；Chromium 的 `RenderFrameHostImpl::Detach()` 對 detach 主 frame 就是報 bad message。不選記 log、忽略：兩棵樹悄悄地不一致，拆 process 之後被攻破的 renderer 可以故意弄錯 Browser 的樹；不選 debug build 先 panic：「Browser 擋得住壞訊息」的測試寫不了。
 8. **第 1 階段的節點只放結構；DevTools 和 WebDriver 的 frame 的 id 第 1 階段就換**（2026-11-18，第 1 階段開始前）：節點有 id、父節點、子節點；根節點的 id 就是主 frame 的 token。目前的文件（網址、origin）和進行中的導覽第 2 階段才放上節點，那時 Browser commit 每個 frame，所有節點都有；網址列的網址和標題留在 `WebContents`（Chromium 的 visible URL 也是從 `NavigationController` 算的，不是 frame 的屬性）。子 frame 的 `frameId`、WebDriver 的 frame 參照在第 1 階段換成 `FrameToken` 的寫法；WebDriver 的 renderer 前綴照舊用在元素和文件的參照。理由：第 1 階段子 frame 的網址 Browser 不知道，同一個欄位一半可信、一半是空的容易誤用；同一個 frame 不要有兩種 id，而 `shell`、`browser`、`driver` 的測試和 wptrunner 都只把 id 原樣傳回去，沒有依賴舊的格式。不選第 1 階段就把網址和導覽搬到節點（RFC 原本寫的）；也不選 id 第 2 階段才換：renderer 裡兩種 id 並存一段時間。
+9. **renderer 的訊息帶著 renderer 的身分**（2026-11-18，第 2 階段開始前）：`ContentsEvent::Renderer` 多帶送出它的 renderer 的編號（`RenderProcessHost` 的），`WebContents` 只處理目前那個 renderer 的，`RendererGone` 也是；取代第 1 階段「crashed 的期間不處理建立和 detach」的判斷。理由：被結束或放棄的 renderer 之前送出、已經排在外層程式的佇列裡的訊息，不管什麼時候被處理都不算，沒有時序上的漏洞；第 2 階段之後晚到的 commit 更危險。Chromium 每個 renderer process 一條 IPC 通道，process 不在了，晚到的訊息找不到收的人。不選「重開前先把舊的佇列處理完」：佇列在外層程式手上，`WebContents` 碰不到；不選維持現狀。
+10. **一則 `BeginNavigation { frame, initiator, kind }` 給所有 frame**（2026-11-18，第 2 階段開始前）：`kind` 是「到網址（取代與否）」或「重新載入」；主 frame 的 `OpenUrl { CurrentTab }`、`Reload` 併進來，`OpenUrl` 只留給開新分頁。`initiator` 只帶發起的 frame 的 token，Browser 從自己的樹查 origin，不相信 renderer 說的 origin。理由：任何 frame 換文件都經過同一個 `NavigationRequest`；`file:` 的檢查和之後的安全檢查都要發起者。Chromium 的 `FrameHost::BeginNavigation` 主 frame 和子 frame 共用，參數帶 `initiator_frame_token` 和 `initiator_origin`。不選主 frame 照舊、子 frame 另一則（兩條路、檢查寫兩次）；不選在 `OpenUrl` 上加 frame（一則訊息兩個意思）；不選不帶發起者（父 frame 改 `src` 時 Browser 只看得到 iframe 裡的文件）。
+11. **不是初始的 `about:blank` 和 `about:srcdoc` 也經過 Browser，`srcdoc` 的內容記在 Browser 的節點上；只差 `#fragment` 的導覽留在 renderer**（2026-11-18，第 2 階段開始前）：Browser 不發網路請求、直接叫 frame commit；renderer 在 iframe 的 `srcdoc` 屬性改了（和建立時就有）時送 `DidChangeSrcDoc { frame, srcdoc }`，commit 時 Browser 帶著節點上的值。Chromium（2026-11-18 查過）：`NavigationRequest::NeedsUrlLoader()` 對 `about:` 的網址和同一份文件內的導覽回 false，`BeginNavigationImpl()`「不需要網路請求，所以馬上 commit」；`CommitNavigationParams::srcdoc_value` 從 `frame_tree_node_->srcdoc_value()` 拿，節點上的值由 `LocalFrameHost::DidChangeSrcDoc` 告訴 Browser；同步的初始 `about:blank` 是 renderer 先 commit、Browser 事後補（`CreateForSynchronousRendererCommit`）。不選 `about:blank`、`srcdoc` 留在 renderer（兩條 commit 的路，歷史和 DevTools 要另外處理）；不選 `srcdoc` 的內容跟著 `BeginNavigation` 帶上去（Browser 自己發起的 srcdoc 導覽，例如第 3 階段的上一頁、重新整理，拿不到內容）。
+12. **沒有結果的導覽，Browser 送 `NavigationDropped { frame, id }`**（2026-11-18，第 2 階段開始前）：`BeginNavigation` 帶 renderer 給的編號，`CommitNavigation` 帶回它（renderer 發起的才有），「丟掉了」也帶它；renderer 送出之後到 commit 或「丟掉了」之前，那個 frame 算載入中，父文件的 `load` 等它。renderer 要取消時不另外送訊息：新的 `BeginNavigation` 取代舊的，frame 被 detach 時它的導覽跟著取消。理由：父文件的 `load` 照 HTML 要等 iframe，Browser 決定不 commit 時 renderer 要知道；同一個 frame 連續發起兩次時要對得上是哪一次。Chromium（2026-11-18 查過）：renderer 的 `RenderFrameImpl::OnDroppedNavigation()`「renderer 發起、進行中的導覽被 Browser 丟掉時呼叫」，每次導覽一條 `NavigationClient` 通道，renderer 關掉它就是取消。不選只帶 frame 的「丟掉了」（連續兩次時對錯）；不選不送（父文件的 `load` 不等 iframe）。
+13. **同一則 `CommitNavigation` 多帶 frame；子 frame 也用主 frame 的錯誤頁，錯誤頁的 origin 是 opaque 的**（2026-11-18，第 2 階段開始前）：commit 多帶 `frame` 和第 12 條的編號，歷史的參數第 2 階段只對主 frame 有意義；Navigation Timing 的載入資料主 frame 和子 frame 都由 Browser 給。失敗時 commit `loader::error_page`，帶「這是錯誤頁」的旗標，renderer 給文件 opaque 的 origin；主 frame 的錯誤頁也改成這樣，網址列和歷史照舊顯示原本的網址。理由：一條 commit 的路；錯誤頁不讓同源的父 frame 讀到失敗的原因。Chromium：`CommitNavigation` 是 frame 的介面上的方法，主 frame 和子 frame 共用；錯誤頁以 `chrome-error://chromewebdata` commit，那個網址不進 `NavigationEntry`（`special_case_urls.md`）。不選子 frame 另一則 commit；不選錯誤頁的 origin 照失敗的網址（同源的父 frame 讀得到）；不選子 frame 照舊 commit 空的文件（使用者看到一片空白）。
+14. **網址的檢查照 frame 分：scheme 的規則搬到 Browser 一個地方；導覽到 `file:` 看發起的文件，子資源的 `file:` 看整個 renderer**（2026-11-18，第 2 階段開始前）：scheme 的白名單所有 frame 一樣（`http`、`https`、`file`、`about`、`blob`；子 frame 加 `data:`，頁面把主 frame 導覽到 `data:` 照舊不行）；頁面能導覽到的 `about:` 只有 `about:blank`、`about:srcdoc`，debug URL 照舊只有使用者自己輸入時才算。導覽到 `file:` 要發起的 frame 目前的文件是 `file:`；子資源讀 `file:` 照舊是整個 renderer 一個旗標，改成任何 frame commit 了 `file:` 就設（現在只看主 frame）。理由：第 2 階段起 Browser 知道每個 frame 目前的文件，照發起者判斷比較準，也不用相信 renderer；子資源的請求不帶 frame。Chromium（2026-11-18 查過）是同樣的兩層：Blink 照發起的文件的 origin 擋（`SecurityOrigin::CanDisplay`、`CanLoadLocalResources`），Browser 照 process 授權（`ChildProcessSecurityPolicy`：「看 Browser 是否曾經叫這個 process 載入過 `file://`」）；machopo 把照文件的那層放在 Browser。不選照舊全部看主 frame 的旗標（`file:` 的頁面裡 `http` 的 iframe 也能開 `file:`）。
+15. **跟著導覽走的 DevTools 事件改由 Browser 發，跟著文件走的留在 renderer**（2026-11-18，第 2 階段開始前）：Browser 發所有 frame 的 `Page.frameStartedNavigating` 和文件的 `Network` 事件，`loaderId` 是 Browser 的導覽 id，renderer 的 `frameNavigated` 用 commit 帶來的同一個 id；`frameAttached`、`frameNavigated`、`frameDetached`、`frameStartedLoading`、`frameStoppedLoading`、`lifecycleEvent`、`getFrameTree` 留在 renderer。Chrome（2026-11-18 查過）：Browser 的 `PageHandler::DidStartNavigating` 發 `frameStartedNavigating`、`NetworkHandler::NavigationRequestWillBeSent` 發文件的 `requestWillBeSent`（`loaderId` 和 `requestId` 是導覽的 token），都不限主 frame；`frameStartedLoading`、`frameStoppedLoading` 也由 Browser 發；Blink 的 `InspectorPageAgent` 發 `frameAttached`、`frameNavigated`、`lifecycleEvent`、`navigatedWithinDocument`，回答 `getFrameTree`；`frameDetached` 兩邊都發。不選連載入狀態也搬到 Browser（要多做 Browser 的載入狀態，和這次無關，留到「之後的可能」）。
+16. **子 frame 同一份文件內的導覽在第 2 階段就告訴 Browser，只更新節點的網址**（2026-11-18，第 2 階段開始前）：每個 frame 都送 `DidCommitSameDocumentNavigation`（多帶 frame）；主 frame 的照舊（網址、歷史），子 frame 的只更新 Browser 節點目前的網址，第 3 階段才進歷史；新的網址要和那個 frame 目前的文件同源，不同源是壞掉的訊息（主 frame 的也一起補上）。DevTools 的 `navigatedWithinDocument` 子 frame 的也由 Browser 發（machopo 現在主 frame 的做法；Chrome 是 renderer 發，這次不改）。理由：第 2 階段起子 frame 的重新載入由 Browser 用節點的網址發起，沒聽到 `pushState`、`#fragment` 就會用舊的網址，比現在差。不選第 3 階段才送。
 
 ## 待決定
 
 接受這份 RFC 前要決定的都定了。各階段開始前要決定的事列在「分階段」，到時候才問、寫進「已決定的事項」。
-
-第 2 階段開始前要一起看的（2026-11-18，1b 實作時發現）：
-
-- **舊 renderer 留在佇列裡的訊息**：renderer 結束時（`about:crash`、壞掉的訊息），它之前送出、已經排進 Browser 的佇列（`ContentsEvent`）的訊息還在。Browser 在 crashed 的期間不處理其中的建立和 detach；但如果下一次導覽先被處理、新的 renderer 已經開始，那些舊的訊息就會被當成新 renderer 送的，接不上樹的會把新的 renderer 也當成壞掉的結束掉。現在 renderer 的訊息不帶「是哪個 renderer 送的」（`RenderProcessHost` 的 `forwarding` 只擋住結束之後才送的）。第 2 階段的導覽訊息更多，要決定：訊息帶著 renderer 的身分（Chromium 的訊息經過那個 process 自己的 mojo 通道，通道斷了就收不到），或 Browser 在重開前先把舊的佇列處理完。
 
 ## 之後的可能
 

@@ -45,7 +45,8 @@ const FRAME_TIMEOUT: Duration = Duration::from_secs(30);
 /// their order and lets one `recv` wait for either.
 enum Event {
     Viz(VizMsg),
-    Host(RendererHostMsg),
+    /// From a renderer: the tab's, or one it ended.
+    Host(browser::RendererId, RendererHostMsg),
     /// The navigation reached a redirect.
     Redirected(u64, RedirectInfo),
     /// The navigation loaded, or failed.
@@ -249,7 +250,7 @@ fn drive(
         network,
         Box::new(move |_tab, event| {
             let _ = events_tx.send(match event {
-                ContentsEvent::Renderer(msg) => Event::Host(msg),
+                ContentsEvent::Renderer { renderer, msg } => Event::Host(renderer, msg),
                 ContentsEvent::NavigationRedirected {
                     navigation_id,
                     redirect,
@@ -390,7 +391,9 @@ fn drive(
             Ok(Event::Completed(navigation_id, result)) => {
                 web_contents.on_navigation_completed(navigation_id, result);
             }
-            Ok(Event::Host(msg)) => {
+            // What a renderer the tab ended still sent counts for nothing.
+            Ok(Event::Host(renderer, _)) if !web_contents.is_current_renderer(renderer) => {}
+            Ok(Event::Host(_, msg)) => {
                 web_contents.on_renderer_message(&msg);
                 match msg {
                     RendererHostMsg::UpdateTitle(t) => title = Some(t),
