@@ -23,6 +23,12 @@ pub enum BadMessageReason {
     NavigationByUnknownFrame,
     /// A commit in a frame the tab doesn't have.
     CommitOfUnknownFrame,
+    /// A navigation within the document of a frame the tab doesn't have.
+    SameDocumentOfUnknownFrame,
+    /// A navigation within a document to a URL it can't have without
+    /// loading another (HTML's "can have its URL rewritten"; Chromium's
+    /// `cross_origin_same_document`).
+    SameDocumentToAnotherUrl,
     /// A `srcdoc` of a frame the tab doesn't have as a child frame
     /// (Chromium's `RFH_OWNER_PROPERTY`).
     SrcdocOfUnknownFrame,

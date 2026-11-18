@@ -258,6 +258,31 @@ impl FrameTree {
         Ok(())
     }
 
+    /// `frame`'s document navigated within itself to `url`
+    /// (`DidCommitSameDocumentNavigation`): its URL now. A frame the tree
+    /// doesn't have, or a URL its document can't have without loading
+    /// another (`can_have_url_rewritten`, against the URL the tree has;
+    /// before any, its initial `about:blank`), is a bad message.
+    pub(crate) fn did_commit_same_document(
+        &mut self,
+        frame: FrameToken,
+        url: &str,
+    ) -> Result<(), BadMessageReason> {
+        let Some(node) = self.nodes.get_mut(&frame) else {
+            return Err(BadMessageReason::SameDocumentOfUnknownFrame);
+        };
+        let current = node.url.as_deref().unwrap_or("about:blank");
+        let rewritable = match (url::Url::parse(current), url::Url::parse(url)) {
+            (Ok(current), Ok(target)) => can_have_url_rewritten(&current, &target),
+            _ => false,
+        };
+        if !rewritable {
+            return Err(BadMessageReason::SameDocumentToAnotherUrl);
+        }
+        node.url = Some(url.to_owned());
+        Ok(())
+    }
+
     /// How many frames there are, the main frame's included.
     pub fn len(&self) -> usize {
         self.nodes.len()
@@ -330,6 +355,29 @@ impl FrameTree {
         root.navigation = navigation;
         self.nodes.insert(self.root, root);
     }
+}
+
+/// HTML's "can have its URL rewritten": a document at `document` may take
+/// `target` as its URL without loading another (the renderer checks the
+/// same, Blink's `CanChangeToUrlForHistoryApi`; the browser checks what it
+/// is told): the same scheme, credentials, host and port; a web page's any
+/// path and query; a local file's its path; any other's only its fragment.
+pub(crate) fn can_have_url_rewritten(document: &url::Url, target: &url::Url) -> bool {
+    if document.scheme() != target.scheme()
+        || document.username() != target.username()
+        || document.password() != target.password()
+        || document.host() != target.host()
+        || document.port() != target.port()
+    {
+        return false;
+    }
+    if matches!(target.scheme(), "http" | "https") {
+        return true;
+    }
+    if target.scheme() == "file" {
+        return document.path() == target.path();
+    }
+    document.path() == target.path() && document.query() == target.query()
 }
 
 #[cfg(test)]
@@ -423,6 +471,53 @@ mod tests {
         );
         tree.reset();
         assert_eq!(tree.url(token(0)), None);
+    }
+
+    /// A frame's document within itself takes what HTML lets it: any path
+    /// and query of a web page's origin, a local file's fragment and
+    /// query, another URL's fragment alone (an initial `about:blank`'s as
+    /// `about:blank`'s); anything else, and a frame not there, is a bad
+    /// message, which leaves its URL as it was.
+    #[test]
+    fn a_document_navigates_within_itself_as_html_lets_it() {
+        let mut tree = FrameTree::new(token(0));
+        tree.add_child(token(0), token(1)).unwrap();
+        let cases = [
+            (token(1), "about:blank#x", true),
+            (token(1), "about:blank?q", false),
+            (token(0), "about:blank", true),
+        ];
+        for (frame, url, ok) in cases {
+            assert_eq!(tree.did_commit_same_document(frame, url).is_ok(), ok, "{url}");
+        }
+        tree.did_commit(token(0), 1, "https://a.test/p?q#f").unwrap();
+        tree.did_commit(token(1), 2, "file:///d/f.html").unwrap();
+        let cases = [
+            (token(0), "https://a.test/other?r", true),
+            (token(0), "https://b.test/other", false),
+            (token(0), "http://a.test/other", false),
+            (token(0), "https://u@a.test/other", false),
+            (token(0), "https://a.test:8443/other", false),
+            (token(1), "file:///d/f.html?x#y", true),
+            (token(1), "file:///d/g.html", false),
+            (token(9), "https://a.test/", false),
+        ];
+        for (frame, url, ok) in cases {
+            assert_eq!(tree.did_commit_same_document(frame, url).is_ok(), ok, "{url}");
+        }
+        assert_eq!(tree.url(token(0)), Some("https://a.test/other?r"));
+        assert_eq!(tree.url(token(1)), Some("file:///d/f.html?x#y"));
+        assert_eq!(
+            tree.did_commit_same_document(token(9), "https://a.test/"),
+            Err(BadMessageReason::SameDocumentOfUnknownFrame)
+        );
+        assert_eq!(
+            tree.did_commit_same_document(token(0), "https://b.test/"),
+            Err(BadMessageReason::SameDocumentToAnotherUrl)
+        );
+        tree.did_commit(token(1), 3, "data:text/html,x").unwrap();
+        assert!(tree.did_commit_same_document(token(1), "data:text/html,x#f").is_ok());
+        assert!(tree.did_commit_same_document(token(1), "data:text/html,y").is_err());
     }
 
     /// What the tree can't take: a parent it doesn't have, a token in use

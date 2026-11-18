@@ -1106,3 +1106,40 @@ fn a_pages_about_blank_has_its_origin() {
         "{posted}"
     );
 }
+
+/// A child frame's navigation within its document is told as the main
+/// frame's is (`Page.navigatedWithinDocument`, the browser's), by the
+/// child frame's id: to a fragment, and through the history API.
+#[test]
+fn a_child_frames_navigation_within_its_document_is_told() {
+    let server = server(&[
+        ("/", Route::ok("text/html", "<!DOCTYPE html><iframe src=/child></iframe>")),
+        ("/child", Route::ok("text/html", "<!DOCTYPE html>child")),
+    ]);
+    let machopo = Machopo::start();
+    let (mut page, target) = page(&machopo);
+    page.call(None, "Page.enable", json!({}));
+    load(&mut page, &server.url("/"));
+    let attached = page.event("Page.frameAttached")["params"].clone();
+    let child = attached["frameId"].clone();
+    assert_ne!(child, json!(target));
+    evaluate(
+        &mut page,
+        "const w = document.querySelector('iframe').contentWindow;
+         w.location.hash = 'x'; w.history.pushState(null, '', '/pushed'); 0",
+        None,
+    );
+    let told: Vec<(Value, Value, Value)> = (0..2)
+        .map(|_| {
+            let params = page.event("Page.navigatedWithinDocument")["params"].clone();
+            (params["frameId"].clone(), params["url"].clone(), params["navigationType"].clone())
+        })
+        .collect();
+    assert_eq!(
+        told,
+        [
+            (child.clone(), json!(server.url("/child#x")), json!("fragment")),
+            (child, json!(server.url("/pushed")), json!("historyApi")),
+        ]
+    );
+}

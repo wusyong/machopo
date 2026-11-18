@@ -271,6 +271,11 @@ pub(super) struct ChildNavigationRequest {
     origin_source: Option<NodeRoot>,
 }
 
+/// The navigation id a document the renderer committed itself (a child
+/// frame's `javascript:` `src`'s) is told by: none of the browser's, which
+/// count from 1.
+const RENDERER_COMMIT: u64 = 0;
+
 /// A child frame's document as the browser sent it: its URL (an error
 /// page's own), its type and its bytes.
 pub(super) struct ChildDocument<'a> {
@@ -984,10 +989,13 @@ impl RenderThread {
                 if scroll {
                     self.scroll_to_fragment(frame);
                 }
-                if top {
+                // Every frame's: a child frame's URL is the browser's too
+                // (what its reload loads).
+                if let Some(frame) = self.frame_token(frame) {
                     let _ =
                         self.to_browser
                             .send(RendererHostMsg::DidCommitSameDocumentNavigation {
+                                frame,
                                 url,
                                 replace,
                                 state,
@@ -1103,14 +1111,17 @@ impl RenderThread {
             self.scroll_to_fragment(frame);
         }
         self.request_main_frame();
-        let _ = self
-            .to_browser
-            .send(RendererHostMsg::DidCommitSameDocumentNavigation {
-                url: new_url.into(),
-                replace: false,
-                state: None,
-                navigation_id: Some(navigation_id),
-            });
+        if let Some(token) = self.frame_token(frame) {
+            let _ = self
+                .to_browser
+                .send(RendererHostMsg::DidCommitSameDocumentNavigation {
+                    frame: token,
+                    url: new_url.into(),
+                    replace: false,
+                    state: None,
+                    navigation_id: Some(navigation_id),
+                });
+        }
         self.handle_frame_requests();
         self.request_next_frame_if_dom_changed();
         self.send_harness_results();
@@ -1371,7 +1382,18 @@ impl RenderThread {
     pub(super) fn run_child_commits(&mut self) {
         while let Some((frame, url, markup)) = self.children.commits.pop_front() {
             let _task = trace_event::trace_event!("ThreadControllerImpl::RunTask");
+            let reported = url.to_string();
             self.commit_child(frame, url, "text/html", None, markup.as_bytes(), None);
+            // The browser hears of it as of a commit it didn't send (Chromium's
+            // renderer's synchronous commit, which the browser hears of
+            // after): its URL is the frame's.
+            if let Some(token) = self.children.token(frame) {
+                let _ = self.to_browser.send(RendererHostMsg::DidCommitNavigation {
+                    frame: token,
+                    navigation_id: RENDERER_COMMIT,
+                    url: reported,
+                });
+            }
             self.send_harness_results();
         }
     }

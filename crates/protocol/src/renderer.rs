@@ -461,15 +461,17 @@ pub enum RendererHostMsg {
         navigation_id: u64,
         url: String,
     },
-    /// `DidCommitSameDocumentNavigation`: the document shown navigated
-    /// within itself, without loading anything (to a fragment: a link,
-    /// `location.hash`; `history.pushState`); its URL is now `url`.
+    /// `DidCommitSameDocumentNavigation`: the document frame `frame` shows
+    /// navigated within itself, without loading anything (to a fragment: a
+    /// link, `location.hash`; `history.pushState`); its URL is now `url`.
     /// `replace`: the session history's current entry takes it, rather
     /// than a new one (`location.replace("#x")`, the same URL again,
     /// `replaceState`). `state`: the entry's (`None` is `null`).
     /// `navigation_id`: the browser's history traversal it was
-    /// (`CommitSameDocumentNavigation`), if it was one.
+    /// (`CommitSameDocumentNavigation`), if it was one. A child frame's
+    /// isn't in the session history: the browser has its URL.
     DidCommitSameDocumentNavigation {
+        frame: crate::FrameToken,
         url: String,
         replace: bool,
         state: Option<Vec<u8>>,

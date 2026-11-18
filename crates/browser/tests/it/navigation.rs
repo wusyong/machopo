@@ -3853,6 +3853,51 @@ document.querySelector('base').setAttribute('href', '/later/');
         web_contents.shutdown();
     }
 
+    /// A child frame's navigation within its document is the browser's to
+    /// know: its node has the URL, which its reload loads (its document's
+    /// `pushState` and fragment too).
+    #[test]
+    fn a_child_frames_reload_loads_the_url_it_has_within_its_document() {
+        // Once reloaded, it reports where it is: `/child` again, if the
+        // browser didn't have the URL.
+        let child = "<script>onload = () => {\
+                       if (location.pathname == '/pushed') return parent.report(location.hash);\
+                       if (parent.loaded) return parent.report('reloaded at ' + location.pathname);\
+                       parent.loaded = true;\
+                       history.pushState(null, '', '/pushed#p'); location.reload();\
+                     }</script>";
+        let html = format!("{}<iframe src=/child></iframe>", after_load(""));
+        let server = server(&[
+            ("/", Route::ok("text/html", html)),
+            ("/child", Route::ok("text/html", child)),
+            ("/pushed", Route::ok("text/html", child)),
+        ]);
+        let (mut web_contents, host_rx) = tab();
+        web_contents.navigate(server.url("/"));
+        assert_eq!(report(&mut web_contents, &host_rx), "#p");
+        web_contents.shutdown();
+    }
+
+    /// The renderer tells the browser of the empty document a child
+    /// frame's `javascript:` `src` commits (as of a commit the browser
+    /// didn't send): the frame's URL, of no origin.
+    #[test]
+    fn a_child_frames_javascript_src_is_told() {
+        let server = server(&[(
+            "/",
+            Route::ok("text/html", "<!DOCTYPE html><iframe src=\"javascript:'x'\"></iframe>"),
+        )]);
+        let (mut web_contents, host_rx) = tab();
+        let main = web_contents.devtools_frame_token();
+        web_contents.navigate(server.url("/"));
+        let (child, url) = wait_for(&mut web_contents, &host_rx, |msg| child_commit(main, msg));
+        assert_eq!(url, "javascript:'x'");
+        let tree = web_contents.frame_tree();
+        assert_eq!(tree.url(child), Some("javascript:'x'"));
+        assert!(tree.origin(child).is_some_and(|origin| !origin.is_tuple()));
+        web_contents.shutdown();
+    }
+
     /// The browser drops a child frame's navigation another of its own
     /// replaced (`NavigationDropped`): the frame waits for the later
     /// still, and its parent's `load` with it.
@@ -3953,7 +3998,7 @@ document.querySelector('base').setAttribute('href', '/later/');
         // A parent not there, a token in use, a frame not there gone, the
         // main frame gone, a navigation of or by a frame not there: each to
         // the renderer of the time.
-        let bads: [fn(protocol::FrameToken, protocol::FrameToken) -> RendererHostMsg; 9] = [
+        let bads: [fn(protocol::FrameToken, protocol::FrameToken) -> RendererHostMsg; 11] = [
             |_, _| RendererHostMsg::DidCreateChildFrame {
                 parent: protocol::FrameToken([0xEE; 16]),
                 frame: protocol::FrameToken([0xEF; 16]),
@@ -3995,6 +4040,22 @@ document.querySelector('base').setAttribute('href', '/later/');
             |main, _| RendererHostMsg::DidChangeSrcDoc {
                 frame: main,
                 srcdoc: String::new(),
+            },
+            // A navigation within a document of a frame not there, or to a
+            // URL of another origin.
+            |_, _| RendererHostMsg::DidCommitSameDocumentNavigation {
+                frame: protocol::FrameToken([0xEE; 16]),
+                url: "about:blank#x".into(),
+                replace: false,
+                state: None,
+                navigation_id: None,
+            },
+            |main, _| RendererHostMsg::DidCommitSameDocumentNavigation {
+                frame: main,
+                url: "https://elsewhere.test/".into(),
+                replace: false,
+                state: None,
+                navigation_id: None,
             },
         ];
         for bad in bads {
@@ -4094,9 +4155,9 @@ document.querySelector('base').setAttribute('href', '/later/');
     }
 
     /// A child frame's navigation to a fragment happens in it (its own
-    /// `hashchange`), and the browser doesn't hear of it; its navigation
-    /// to another document is the browser's to load (`BeginNavigation` of
-    /// the child frame, asked by it). Neither is in the session history.
+    /// `hashchange`), the browser told its URL; its navigation to another
+    /// document is the browser's to load (`BeginNavigation` of the child
+    /// frame, asked by it). Neither is in the session history.
     #[test]
     fn a_child_frame_s_location() {
         let child = "<script>\
@@ -4110,6 +4171,7 @@ document.querySelector('base').setAttribute('href', '/later/');
         let main = web_contents.devtools_frame_token();
         web_contents.navigate(&url);
         let mut asked = Vec::new();
+        let mut within = Vec::new();
         assert_eq!(
             wait_for(&mut web_contents, &host_rx, |msg| {
                 // The main frame's report.
@@ -4117,8 +4179,10 @@ document.querySelector('base').setAttribute('href', '/later/');
                     return Some(report);
                 }
                 match msg {
-                    RendererHostMsg::DidCommitSameDocumentNavigation { url, .. } => {
-                        panic!("the browser heard of {url}")
+                    RendererHostMsg::DidCommitSameDocumentNavigation { frame, url, .. } => {
+                        assert_ne!(*frame, main, "{url}");
+                        within.push(url.clone());
+                        None
                     }
                     // Its `srcdoc`'s, its parent asking.
                     RendererHostMsg::BeginNavigation {
@@ -4146,6 +4210,7 @@ document.querySelector('base').setAttribute('href', '/later/');
             "child-x"
         );
         assert_eq!(asked, [server.url("/elsewhere")]);
+        assert_eq!(within, ["about:srcdoc#x"]);
         assert_eq!(history(&web_contents), (vec![url], Some(0)));
         web_contents.shutdown();
     }

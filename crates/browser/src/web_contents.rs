@@ -1156,11 +1156,19 @@ impl WebContents {
                     .send(RendererMsg::SetHistoryOffsetAndLength { index, length });
             }
             RendererHostMsg::DidCommitSameDocumentNavigation {
+                frame,
                 url,
                 replace,
                 state,
                 navigation_id,
             } => {
+                if let Err(reason) = self.frame_tree.did_commit_same_document(*frame, url) {
+                    return self.received_bad_message(reason);
+                }
+                // A child frame's isn't in the session history yet.
+                if *frame != self.frame_tree.root() {
+                    return;
+                }
                 self.url = Some(url.clone());
                 match navigation_id {
                     Some(id) => self

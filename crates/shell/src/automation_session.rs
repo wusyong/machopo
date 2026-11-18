@@ -45,7 +45,7 @@ use browser::{ContentsEvent, WebContents};
 use crossbeam_channel::Sender;
 use gfx::{PointF, RectF};
 use ipc::TimeTicks;
-use protocol::TabId;
+use protocol::{FrameToken, TabId};
 use protocol::automation::{
     self, CaptureResult, Command, DispatchKeyEvent, DispatchMouseEvent, Error, Event, EventKind,
     INVALID_PARAMS, METHOD_NOT_FOUND, Message, Method, NavigateResult, NavigationEntry,
@@ -315,9 +315,9 @@ pub struct AutomationSession {
     /// What started a tab's next loader, if the session did it
     /// (`frameStartedNavigating`'s `navigationType`).
     starting: HashMap<TabId, &'static str>,
-    /// Each tab's URL as last committed, to tell a fragment from the
-    /// history API in `navigatedWithinDocument`.
-    committed: HashMap<TabId, String>,
+    /// Each frame's URL as last committed, by its tab, to tell a fragment
+    /// from the history API in `navigatedWithinDocument`.
+    committed: HashMap<(TabId, FrameToken), String>,
     /// The tabs whose renderer has gone, as last told (`targetCrashed`).
     crashed: Vec<TabId>,
     /// Each tab's latest navigation that has loaded (`DidFinishLoad`).
@@ -869,10 +869,9 @@ impl AutomationSession {
     ) {
         // A link followed, `location`: a navigation the page started.
         self.changes(browser);
-        let frame_id = self.target_id(tab).unwrap_or_default();
         match msg {
-            RendererHostMsg::DidCommitNavigation { url, .. } => {
-                self.committed.insert(tab, url.clone());
+            RendererHostMsg::DidCommitNavigation { frame, url, .. } => {
+                self.committed.insert((tab, *frame), url.clone());
             }
             RendererHostMsg::DidFinishLoad { navigation_id, .. } => {
                 let loaded = self.loaded.entry(tab).or_default();
@@ -887,9 +886,18 @@ impl AutomationSession {
                 }
             }
             RendererHostMsg::DidCommitSameDocumentNavigation {
-                url, navigation_id, ..
+                frame,
+                url,
+                navigation_id,
+                ..
             } => {
-                let before = self.committed.insert(tab, url.clone()).unwrap_or_default();
+                let before = self
+                    .committed
+                    .insert((tab, *frame), url.clone())
+                    .unwrap_or_default();
+                // Whichever frame's (the browser's for a child frame too;
+                // Chrome's renderer tells it).
+                let frame_id = frame.to_string();
                 let navigation_type = if navigation_id.is_some() {
                     // Back or forward between the document's entries.
                     "other"
@@ -1529,7 +1537,7 @@ impl AutomationSession {
         }
         for gone in self.tabs.clone().iter().filter(|tab| !now.contains(tab)) {
             self.loaders.remove(gone);
-            self.committed.remove(gone);
+            self.committed.retain(|(tab, _), _| tab != gone);
             self.loaded.remove(gone);
             self.crashed.retain(|known| known != gone);
         }
