@@ -835,7 +835,6 @@ mod tests {
             agent.kept_content("s", "F", "https://a.test/i.png"),
             Some(json!({ "content": "/wAQ", "base64Encoded": true }))
         );
-
     }
 
     /// A failure and a cancel end in `loadingFailed`, told apart; a

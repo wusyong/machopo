@@ -106,12 +106,12 @@ renderer 這一側其實已經很完整：子 frame 有自己的 realm 和 `Wind
   1. 檢查網址：scheme 的白名單（`http`、`https`、`file`、`about`、`blob`，子 frame 加上 `data:`；頁面能導覽到的 `about:` 只有 `about:blank`、`about:srcdoc`）；`file:` 要發起的 frame 目前的文件是 `file:`（第 14 條）。
   2. 載入：`net` 的請求，`RequestDestination` 照 frame 是 `Document` 或 `Iframe`；redirect 回到 UI thread 決定。`about:` 的不發請求。
   3. 回應到了：之後的檢查（`X-Frame-Options` 等）掛在這裡。
-  4. 叫那個 frame commit：同一則 `CommitNavigation` 多帶 `frame` 和 renderer 的編號；Navigation Timing 的載入資料主 frame 和子 frame 都由 Browser 給。失敗時 commit 錯誤頁（`loader::error_page`），帶著「這是錯誤頁」的旗標，renderer 給它 opaque 的 origin，主 frame 的也一樣（第 13 條）。
+  4. 叫那個 frame commit：同一則 `CommitNavigation` 多帶 `frame` 和 renderer 的編號；Navigation Timing 的載入資料主 frame 和子 frame 都由 Browser 給。失敗時 commit 錯誤頁（`loader::error_page`），帶著「這是錯誤頁」的旗標，renderer 給它 opaque 的 origin（文件的網址是 `chrome-error://chromewebdata/`，第 21 條），主 frame 的也一樣（第 13 條）。導覽到 `about:srcdoc` 照 Chromium 的四條規則檢查，不放行的 commit 錯誤頁（第 23 條）；`about:blank` 的文件是發起的文件的 origin，renderer 在請求導覽時記下發起的文件（第 24 條）。
 - 沒有結果的導覽（網址的檢查沒過、被同一個 frame 更新的導覽取代），Browser 送 `NavigationDropped { frame, id }`，用 renderer 的編號對上是哪一次。renderer 送出 `BeginNavigation` 之後到 commit 或「丟掉了」之前，那個 frame 算在載入中，父文件的 `load` 等它（第 12 條）。
-- renderer commit 之後回報（`DidCommitNavigation` 帶 frame），Browser 更新節點目前的文件（網址、origin、是不是錯誤頁）；歷史第 3 階段才照 frame 記。一個 renderer 裡任何 frame commit 了 `file:` 的文件，子資源讀 `file:` 的旗標就設起來（第 14 條）。
+- renderer commit 之後回報（`DidCommitNavigation` 帶 frame），Browser 更新節點目前的文件（網址、origin、是不是錯誤頁）；歷史第 3 階段才照 frame 記。一個 renderer 裡任何 frame commit 了 `file:` 的文件，子資源讀 `file:` 的旗標就設起來（第 14 條；做的時候在送出 commit 時決定：main frame 的新文件決定，子 frame 的本機文件只會加上，見 progress 的 2c）。
 - 一個 frame 同時只有一個導覽：新的取消舊的；某個 frame 被 detach 時，它和子孫的導覽全部取消。
 - 導覽的 id 照舊是每個分頁一個序列，子 frame 的也從它拿。DevTools 的 `loaderId` 就是它，主 frame 和子 frame 一致；`frameStartedNavigating` 和文件的 `Network` 事件改由 Browser 發，所有 frame（第 15 條）。
-- 同一份文件內的導覽照舊由 renderer 先做，每個 frame 都送 `DidCommitSameDocumentNavigation`（多帶 frame）：子 frame 的 Browser 只更新節點的網址（重新載入時用它），不進歷史；網址要和那個 frame 目前的文件同源，不同源是壞掉的訊息（第 16 條）。
+- 同一份文件內的導覽照舊由 renderer 先做，每個 frame 都送 `DidCommitSameDocumentNavigation`（多帶 frame）：子 frame 的 Browser 只更新節點的網址（重新載入時用它），不進歷史；網址要和那個 frame 目前的文件同源，不同源是壞掉的訊息（第 16 條；照 HTML 的「can have its URL rewritten」比對節點的網址，第 25 條）。
 
 ### session history（`browser`、`dom`、`dom_api`）
 
@@ -145,7 +145,7 @@ renderer 這一側其實已經很完整：子 frame 有自己的 realm 和 `Wind
 每個階段做完，`main` 上的行為和文件要一致，可以單獨 merge。
 
 1. **Browser 的 frame 樹**：協定裡 frame 的 id 的型別；建立、移除的訊息；Browser 的 `FrameTree`、檢查和壞掉的訊息的處理；DevTools 和 WebDriver 的 frame 的 id 換成 token。子 frame 的載入還是 renderer 做，使用者看不出差別。決定是「已決定的事項」第 2 到 8 條。分三段：1a 是 `FrameToken`、engine 抽 id、renderer 送兩則訊息、DevTools 和 WebDriver 的 id；1b 是 Browser 的 `FrameTree`、檢查和壞掉的訊息；1c 是整個階段的檢查和文件。
-2. **子 frame 的導覽經過 Browser**：開始導覽的訊息、每個節點的 `NavigationRequest`、`CommitNavigation` 帶 frame、子 frame 的錯誤頁、拿掉 renderer 自己載入的那條路、DevTools 的導覽事件。決定是「已決定的事項」第 9 到 16 條。分六段：2a 是 renderer 的訊息帶著 renderer 的身分；2b 是 `BeginNavigation` 和網址的檢查，先只換主 frame 的路（網頁能導覽到的 `about:` 只剩 `about:blank`，其他行為不變）；2c 是子 frame 一般的導覽經過 Browser（commit 帶 frame 和 renderer 的編號、`NavigationDropped`、Navigation Timing、錯誤頁和 opaque 的 origin、`file:` 照發起的文件檢查的權限、DevTools 的事件），拿掉 renderer 自己載入的路（`NavigationDropped` 和 `file:` 的檢查原本排在 2b：主 frame 的導覽用不到前者，後者要 Browser 知道子 frame 的網址，2026-11-18 做 2b 時移過來）；2d 是 `about:blank`、`about:srcdoc` 和 `DidChangeSrcDoc`；2e 是子 frame 同一份文件內的導覽的回報和同源的檢查；2f 是整個階段的檢查和文件。
+2. **子 frame 的導覽經過 Browser**：開始導覽的訊息、每個節點的 `NavigationRequest`、`CommitNavigation` 帶 frame、子 frame 的錯誤頁、拿掉 renderer 自己載入的那條路、DevTools 的導覽事件。決定是「已決定的事項」第 9 到 16 條，各段開始前的是第 17 到 25 條。分六段：2a 是 renderer 的訊息帶著 renderer 的身分；2b 是 `BeginNavigation` 和網址的檢查，先只換主 frame 的路（網頁能導覽到的 `about:` 只剩 `about:blank`，其他行為不變）；2c 是子 frame 一般的導覽經過 Browser（commit 帶 frame 和 renderer 的編號、`NavigationDropped`、Navigation Timing、錯誤頁和 opaque 的 origin、`file:` 照發起的文件檢查的權限、DevTools 的事件），拿掉 renderer 自己載入的路（`NavigationDropped` 和 `file:` 的檢查原本排在 2b：主 frame 的導覽用不到前者，後者要 Browser 知道子 frame 的網址，2026-11-18 做 2b 時移過來）；2d 是 `about:blank`、`about:srcdoc` 和 `DidChangeSrcDoc`，節點記 origin，`about:blank` 照發起者繼承 origin（第 23、24 條）；2e 是子 frame 同一份文件內的導覽的回報和網址的檢查（第 25 條）；2f 是整個階段的檢查和文件。
 3. **joint session history**：entry 的樹、子 frame 的分類、traversal、子 frame 的 `pushState`、回到 entry 時子 frame 照 entry 載入、frame 的名稱（第 5 條）。開始前要決定：frame 的鍵怎麼算（連同名稱怎麼送）；reload 時子 frame 怎麼辦。
 4. **收尾**：Browser 對 renderer 回報的檢查補齊、WPT 的目錄、文件、RFC 改寫成完成的樣子。
 

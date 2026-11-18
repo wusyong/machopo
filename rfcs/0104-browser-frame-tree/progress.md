@@ -16,7 +16,7 @@
 | 2c：子 frame 一般的導覽經過 Browser、`NavigationDropped`、`file:` 照發起的文件檢查 | 完成 | 2026-11-18 |
 | 2d：`about:blank`、`about:srcdoc` 和 `DidChangeSrcDoc` | 完成 | 2026-11-18 |
 | 2e：子 frame 同一份文件內的導覽的回報 | 完成 | 2026-11-19 |
-| 2f：第 2 階段的檢查和文件 | | |
+| 2f：第 2 階段的檢查和文件 | 完成 | 2026-11-19 |
 | 3：joint session history | | |
 | 4：收尾 | | |
 
@@ -97,3 +97,12 @@
 - **新的測試**：`browser` 的 `links::a_child_frames_reload_loads_the_url_it_has_within_its_document`（`pushState` 之後重新載入，載入的是新的網址；網址沒記下時回報重新載入到哪，不會一直重新載入）、`a_child_frames_javascript_src_is_told`；`a_bad_message_ends_the_renderer` 加兩則（同一份文件內的導覽給不在的 frame、到別的 origin）；`frame_tree::tests::a_document_navigates_within_itself_as_html_lets_it`。`shell` 的 `devtools::a_child_frames_navigation_within_its_document_is_told`。照新的行為改寫：`links::a_child_frame_s_location`（子 frame 的 `#fragment` 現在告訴 browser）。
 - **mutation test**（11 個，全部抓到）：同一份文件內什麼網址都收、一開始的 `about:blank` 沒有網址可比、別的 port 算同一份文件、本機檔案的 path 可以改、網頁的 path 不能改（`frame_tree` 的單元測試）；新的網址沒記下、分頁不檢查、子 frame 的進了分頁的歷史、renderer 只回報最上層的、renderer 不回報 `javascript:` 的 commit（`browser` 的測試）；DevTools 把子 frame 的當成 main frame 的（`shell` 的新測試）。「新的網址沒記下」、「分頁不檢查」、「renderer 只回報最上層的」第一次跑時，重新載入的測試在實作壞掉時一直重新載入、要等 mutate 的 900 秒上限才停（那一輪被中途停掉，停下時留在檔案裡的那一個 mutant 照 mutate 存的原檔還原了）；改成重新載入一次就回報，再跑都在幾秒內抓到。
 - **跑過的檢查**：`cargo test -p protocol -p browser -p renderer -p shell -p driver` 全部通過；`test.py scenarios` 的 `frames`、`frame-input`、`iframe-loads`、`iframes`、`navigation`、`link-tabs` 通過；`test.py wpt` 的 `html/`、`navigation-timing/`、`hr-time/`、`intersection-observer/`、`webmessaging/`、`css/cssom-view/`：不預期的只有之前就有的 `html/rendering/widgets/` 的兩份。
+
+### 2f：第 2 階段的檢查（2026-11-19，macOS、Apple M4）
+
+- **`cargo fmt --check`**：2b 到 2e 改到的檔案的排版，照 `cargo fmt` 改了。
+- **clippy**（`--workspace --all-targets -- -D warnings`）：三處，都改了寫法、沒有加 `#[expect]`：renderer 的 `commit_timing` 有 8 個參數（`no_referrer` 只在有載入資料時有意義，和它併成 `Option<(&NavigationLoad, bool)>`）；`FrameTree::set_navigation` 的錯誤是整個 `NavigationRequest`（呼叫的地方不用它，改成 `FrameGone`，導覽跟著丟掉）；IO thread 的 callback 的型別太長（`RendererMessageCallback`）。
+- **`cargo test --workspace`**：全部通過（`bindings` 的 `gc_platform` 印出的兩個 panic 是測試刻意的）。
+- **`test.py scenarios --window`**（階段驗收）：69 份全部通過，截圖看過 `frames`（`file:` 的頁面裡的子 frame 和孫 frame）。
+- **文件**：RFC 的「分階段」和「導覽」的設計照第 17 到 25 條補上做的時候的細節；`docs/architecture.md`、`docs/limitations.md`、`docs/test-gaps.md`、`crates/shell/README.md`、`crates/dom/README.md` 在各段已經更新，再看過一遍沒有過時的說法。
+- **之後**：`test.py` 的 `matrix`、`fuzz` 照 CLAUDE.md 由 CI 跑（這個階段沒有動到 GC）。

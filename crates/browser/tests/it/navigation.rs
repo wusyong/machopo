@@ -2320,9 +2320,15 @@ document.querySelector('base').setAttribute('href', '/later/');
             "<!DOCTYPE html><iframe src=two.html></iframe><iframe src=missing.html></iframe>",
         )
         .unwrap();
-        std::fs::write(dir.join("two.html"), "<!DOCTYPE html><link rel=stylesheet href=s.css>")
-            .unwrap();
-        let web_page = format!("<!DOCTYPE html><link rel=stylesheet href='{}'>", url("s.css"));
+        std::fs::write(
+            dir.join("two.html"),
+            "<!DOCTYPE html><link rel=stylesheet href=s.css>",
+        )
+        .unwrap();
+        let web_page = format!(
+            "<!DOCTYPE html><link rel=stylesheet href='{}'>",
+            url("s.css")
+        );
         let server = server(&[("/", Route::ok("text/html", web_page))]);
         let (mut web_contents, host_rx) = tab();
         let main = web_contents.devtools_frame_token();
@@ -3602,7 +3608,10 @@ document.querySelector('base').setAttribute('href', '/later/');
     }
 
     /// The child frame `msg` tells the browser it committed, and the URL.
-    fn child_commit(main: protocol::FrameToken, msg: &RendererHostMsg) -> Option<(protocol::FrameToken, String)> {
+    fn child_commit(
+        main: protocol::FrameToken,
+        msg: &RendererHostMsg,
+    ) -> Option<(protocol::FrameToken, String)> {
         match msg {
             RendererHostMsg::DidCommitNavigation { frame, url, .. } if *frame != main => {
                 Some((*frame, url.clone()))
@@ -3665,7 +3674,10 @@ document.querySelector('base').setAttribute('href', '/later/');
         let refused = "<!DOCTYPE html><script>onload = () => location.href = '/report?loaded'</script>\
                        <iframe src=file:///etc/hosts></iframe>";
         let data = "<!DOCTYPE html><iframe src='data:text/html,<title>d</title>'></iframe>";
-        let server = server(&[("/", Route::ok("text/html", refused)), ("/data", Route::ok("text/html", data))]);
+        let server = server(&[
+            ("/", Route::ok("text/html", refused)),
+            ("/data", Route::ok("text/html", data)),
+        ]);
         let (mut web_contents, host_rx) = tab();
         let main = web_contents.devtools_frame_token();
         web_contents.navigate(server.url("/"));
@@ -3675,7 +3687,9 @@ document.querySelector('base').setAttribute('href', '/later/');
         });
         assert_eq!(report, "loaded");
         assert!(
-            started.iter().all(|navigation| !navigation.url.starts_with("file:")),
+            started
+                .iter()
+                .all(|navigation| !navigation.url.starts_with("file:")),
             "{started:?}"
         );
         web_contents.navigate(server.url("/data"));
@@ -3745,7 +3759,11 @@ document.querySelector('base').setAttribute('href', '/later/');
         });
         assert_eq!(report, "reloaded");
         assert_eq!(reloads, 1);
-        let loads = server.requests().iter().filter(|r| r.target == "/child").count();
+        let loads = server
+            .requests()
+            .iter()
+            .filter(|r| r.target == "/child")
+            .count();
         assert_eq!(loads, 2);
         web_contents.shutdown();
     }
@@ -3805,7 +3823,11 @@ document.querySelector('base').setAttribute('href', '/later/');
         let tree = web_contents.frame_tree();
         assert_eq!(tree.srcdoc(child), Some(""));
         assert_eq!(tree.url(child), Some("about:blank"));
-        assert_eq!(tree.origin(child), tree.origin(main), "its parent's, who asked");
+        assert_eq!(
+            tree.origin(child),
+            tree.origin(main),
+            "its parent's, who asked"
+        );
         web_contents.shutdown();
     }
 
@@ -3840,7 +3862,10 @@ document.querySelector('base').setAttribute('href', '/later/');
     /// page's origin (HTML's initiator origin), as the browser knows it.
     #[test]
     fn a_pages_about_blank_has_its_origin() {
-        let server = server(&[("/", Route::ok("text/html", after_load("location.href = 'about:blank'")))]);
+        let server = server(&[(
+            "/",
+            Route::ok("text/html", after_load("location.href = 'about:blank'")),
+        )]);
         let (mut web_contents, host_rx) = tab();
         let main = web_contents.devtools_frame_token();
         web_contents.navigate(server.url("/"));
@@ -3885,7 +3910,10 @@ document.querySelector('base').setAttribute('href', '/later/');
     fn a_child_frames_javascript_src_is_told() {
         let server = server(&[(
             "/",
-            Route::ok("text/html", "<!DOCTYPE html><iframe src=\"javascript:'x'\"></iframe>"),
+            Route::ok(
+                "text/html",
+                "<!DOCTYPE html><iframe src=\"javascript:'x'\"></iframe>",
+            ),
         )]);
         let (mut web_contents, host_rx) = tab();
         let main = web_contents.devtools_frame_token();
@@ -3911,7 +3939,8 @@ document.querySelector('base').setAttribute('href', '/later/');
             ("/", Route::ok("text/html", html)),
             (
                 "/slow",
-                Route::ok("text/html", "<title>slow</title>").with_delay(Duration::from_millis(300)),
+                Route::ok("text/html", "<title>slow</title>")
+                    .with_delay(Duration::from_millis(300)),
             ),
             (
                 "/b",
@@ -3934,7 +3963,10 @@ document.querySelector('base').setAttribute('href', '/later/');
                     <script>setTimeout(() => document.querySelector('iframe').src = '/b', 50)</script>";
         let server = server(&[
             ("/", Route::ok("text/html", html)),
-            ("/a", Route::ok("text/html", "<title>a</title>").with_delay(Duration::from_millis(300))),
+            (
+                "/a",
+                Route::ok("text/html", "<title>a</title>").with_delay(Duration::from_millis(300)),
+            ),
             ("/b", Route::ok("text/html", "<title>b</title>")),
         ]);
         let (mut web_contents, host_rx) = tab();
@@ -3946,15 +3978,19 @@ document.querySelector('base').setAttribute('href', '/later/');
         while a.is_none() || b.is_none() {
             let event = host_rx.recv_timeout(TIMEOUT).expect("events come");
             match event {
-                ContentsEvent::NavigationCompleted { frame, .. } if frame != main => a = Some(event),
+                ContentsEvent::NavigationCompleted { frame, .. } if frame != main => {
+                    a = Some(event)
+                }
                 ContentsEvent::Renderer {
                     msg: ref msg @ RendererHostMsg::BeginNavigation { frame, .. },
                     ..
-                } if frame != main && b.is_none() && !matches!(
-                    msg,
-                    RendererHostMsg::BeginNavigation { kind: BeginNavigationKind::To { url, .. }, .. }
-                        if url.ends_with("/a")
-                ) =>
+                } if frame != main
+                    && b.is_none()
+                    && !matches!(
+                        msg,
+                        RendererHostMsg::BeginNavigation { kind: BeginNavigationKind::To { url, .. }, .. }
+                            if url.ends_with("/a")
+                    ) =>
                 {
                     b = Some(msg.clone())
                 }

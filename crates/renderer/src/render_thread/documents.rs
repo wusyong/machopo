@@ -1143,9 +1143,10 @@ impl RenderThread {
             ChildNavigation::Src(_) | ChildNavigation::AboutBlank => String::new(),
         };
         if let Some(token) = self.children.token(frame) {
-            let _ = self
-                .to_browser
-                .send(RendererHostMsg::DidChangeSrcDoc { frame: token, srcdoc });
+            let _ = self.to_browser.send(RendererHostMsg::DidChangeSrcDoc {
+                frame: token,
+                srcdoc,
+            });
         }
         let src = match navigation {
             ChildNavigation::Src(src) => src,
@@ -1253,7 +1254,8 @@ impl RenderThread {
         let protocol::renderer::BeginNavigationKind::To { url, .. } = kind else {
             return None;
         };
-        let blank = Url::parse(url).is_ok_and(|url| url.scheme() == "about" && url.path() == "blank");
+        let blank =
+            Url::parse(url).is_ok_and(|url| url.scheme() == "about" && url.path() == "blank");
         blank.then(|| self.doc(initiator).map(|next| next.document.clone()))?
     }
 

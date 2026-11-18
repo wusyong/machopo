@@ -665,7 +665,10 @@ impl WebContents {
     /// browser's own at once. The frame's navigation before stops (Chromium
     /// resets its `NavigationRequest`), the renderer told if it asked for
     /// it.
-    #[expect(clippy::too_many_arguments, reason = "a navigation has that many parts")]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a navigation has that many parts"
+    )]
     fn start_navigation(
         &mut self,
         frame: FrameToken,

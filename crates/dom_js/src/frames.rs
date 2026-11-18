@@ -519,7 +519,11 @@ pub(crate) fn set_security_token(
         context.set_security_token(token);
         return;
     }
-    set_origin_token(scope, context, url::Url::parse(url).ok().map(|url| url.origin()));
+    set_origin_token(
+        scope,
+        context,
+        url::Url::parse(url).ok().map(|url| url.origin()),
+    );
 }
 
 /// `context`'s security token: `origin`'s (a new one for an opaque

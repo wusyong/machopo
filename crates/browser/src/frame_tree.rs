@@ -46,6 +46,10 @@ struct FrameTreeNode {
     navigation: Option<NavigationRequest>,
 }
 
+/// The frame isn't in the tree: it went.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FrameGone;
+
 /// A document's origin, and whether it may open local files.
 #[derive(Debug, Clone)]
 pub(crate) struct CommittedOrigin {
@@ -189,16 +193,16 @@ impl FrameTree {
     }
 
     /// `frame`'s navigation is `navigation` now: the one before, which it
-    /// replaces, returned (its load stops as it goes). Nothing for a frame
-    /// not in the tree (it went), `navigation` returned.
+    /// replaces, returned (its load stops as it goes). An error for a frame
+    /// not in the tree (it went), `navigation` going with it.
     pub(crate) fn set_navigation(
         &mut self,
         frame: FrameToken,
         navigation: NavigationRequest,
-    ) -> Result<Option<NavigationRequest>, NavigationRequest> {
+    ) -> Result<Option<NavigationRequest>, FrameGone> {
         match self.nodes.get_mut(&frame) {
             Some(node) => Ok(node.navigation.replace(navigation)),
-            None => Err(navigation),
+            None => Err(FrameGone),
         }
     }
 
@@ -488,9 +492,14 @@ mod tests {
             (token(0), "about:blank", true),
         ];
         for (frame, url, ok) in cases {
-            assert_eq!(tree.did_commit_same_document(frame, url).is_ok(), ok, "{url}");
+            assert_eq!(
+                tree.did_commit_same_document(frame, url).is_ok(),
+                ok,
+                "{url}"
+            );
         }
-        tree.did_commit(token(0), 1, "https://a.test/p?q#f").unwrap();
+        tree.did_commit(token(0), 1, "https://a.test/p?q#f")
+            .unwrap();
         tree.did_commit(token(1), 2, "file:///d/f.html").unwrap();
         let cases = [
             (token(0), "https://a.test/other?r", true),
@@ -503,7 +512,11 @@ mod tests {
             (token(9), "https://a.test/", false),
         ];
         for (frame, url, ok) in cases {
-            assert_eq!(tree.did_commit_same_document(frame, url).is_ok(), ok, "{url}");
+            assert_eq!(
+                tree.did_commit_same_document(frame, url).is_ok(),
+                ok,
+                "{url}"
+            );
         }
         assert_eq!(tree.url(token(0)), Some("https://a.test/other?r"));
         assert_eq!(tree.url(token(1)), Some("file:///d/f.html?x#y"));
@@ -516,8 +529,14 @@ mod tests {
             Err(BadMessageReason::SameDocumentToAnotherUrl)
         );
         tree.did_commit(token(1), 3, "data:text/html,x").unwrap();
-        assert!(tree.did_commit_same_document(token(1), "data:text/html,x#f").is_ok());
-        assert!(tree.did_commit_same_document(token(1), "data:text/html,y").is_err());
+        assert!(
+            tree.did_commit_same_document(token(1), "data:text/html,x#f")
+                .is_ok()
+        );
+        assert!(
+            tree.did_commit_same_document(token(1), "data:text/html,y")
+                .is_err()
+        );
     }
 
     /// What the tree can't take: a parent it doesn't have, a token in use

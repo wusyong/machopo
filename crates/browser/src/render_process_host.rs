@@ -8,10 +8,7 @@ use bytes::Bytes;
 use crossbeam_channel::Sender;
 use net::{LoadHandle, NetworkContext};
 use protocol::input::InputEvent;
-use protocol::network::{
-    LoadResult, NetError, NetErrorCode, RequestDestination, ResourceRequest,
-};
-use protocol::{FrameToken, TabId};
+use protocol::network::{LoadResult, NetError, NetErrorCode, RequestDestination, ResourceRequest};
 use protocol::renderer::{
     CompositorMsg, HistoryEntryParams, NavigationLoad, NavigationTimingType, RendererHostMsg,
     RendererMsg,
@@ -20,6 +17,7 @@ use protocol::viz::{
     BeginFrameArgs, CompositorFrameSinkSender, ContextLostObserver, FrameSinkId,
     SharedImageInterface, VizMsg,
 };
+use protocol::{FrameToken, TabId};
 use renderer::{
     CompositorSender, RendererEndpoints, RendererFlags, RendererSender, ScriptEngineFactory,
 };
@@ -46,6 +44,11 @@ pub struct RenderProcessHost {
     /// killed, so nothing it still sends is taken for its successor's.
     forwarding: Arc<AtomicBool>,
 }
+
+/// Called on a renderer's IO thread with each message it sends the UI
+/// thread, by the renderer's id; or with what makes one bad (`Err`).
+pub type RendererMessageCallback =
+    Box<dyn Fn(TabId, RendererId, Result<RendererHostMsg, BadMessageReason>) + Send>;
 
 /// Which renderer a message came from (Chromium's `ChildProcessHost` id):
 /// a tab heeds its own renderer's alone (`WebContents::is_current_renderer`),
@@ -86,9 +89,7 @@ impl RenderProcessHost {
         viz: Sender<VizMsg>,
         gpu: Option<Arc<dyn SharedImageInterface>>,
         network: NetworkContext,
-        on_message: Box<
-            dyn Fn(TabId, RendererId, Result<RendererHostMsg, BadMessageReason>) + Send,
-        >,
+        on_message: RendererMessageCallback,
     ) -> std::io::Result<Self> {
         let (to_renderer, to_compositor, from_browser) = renderer::channel();
         let (to_browser, from_renderer) = crossbeam_channel::unbounded();

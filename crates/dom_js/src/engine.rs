@@ -603,7 +603,10 @@ impl ScriptEngine for V8Engine {
         let (origin_document, origin) = state.dom.mutate(|cx| {
             cx.set_origin_source(document.get(cx.gc), source.get(cx.gc));
             let origin_document = cx.origin_document(source.get(cx.gc));
-            (cx.node_id(origin_document), cx.document_origin(origin_document))
+            (
+                cx.node_id(origin_document),
+                cx.document_origin(origin_document),
+            )
         });
         let shown = state
             .frames

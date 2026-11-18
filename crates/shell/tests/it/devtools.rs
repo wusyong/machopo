@@ -1113,7 +1113,10 @@ fn a_pages_about_blank_has_its_origin() {
 #[test]
 fn a_child_frames_navigation_within_its_document_is_told() {
     let server = server(&[
-        ("/", Route::ok("text/html", "<!DOCTYPE html><iframe src=/child></iframe>")),
+        (
+            "/",
+            Route::ok("text/html", "<!DOCTYPE html><iframe src=/child></iframe>"),
+        ),
         ("/child", Route::ok("text/html", "<!DOCTYPE html>child")),
     ]);
     let machopo = Machopo::start();
@@ -1132,13 +1135,21 @@ fn a_child_frames_navigation_within_its_document_is_told() {
     let told: Vec<(Value, Value, Value)> = (0..2)
         .map(|_| {
             let params = page.event("Page.navigatedWithinDocument")["params"].clone();
-            (params["frameId"].clone(), params["url"].clone(), params["navigationType"].clone())
+            (
+                params["frameId"].clone(),
+                params["url"].clone(),
+                params["navigationType"].clone(),
+            )
         })
         .collect();
     assert_eq!(
         told,
         [
-            (child.clone(), json!(server.url("/child#x")), json!("fragment")),
+            (
+                child.clone(),
+                json!(server.url("/child#x")),
+                json!("fragment")
+            ),
             (child, json!(server.url("/pushed")), json!("historyApi")),
         ]
     );

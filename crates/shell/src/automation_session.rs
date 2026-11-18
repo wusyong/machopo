@@ -45,7 +45,6 @@ use browser::{ContentsEvent, WebContents};
 use crossbeam_channel::Sender;
 use gfx::{PointF, RectF};
 use ipc::TimeTicks;
-use protocol::{FrameToken, TabId};
 use protocol::automation::{
     self, CaptureResult, Command, DispatchKeyEvent, DispatchMouseEvent, Error, Event, EventKind,
     INVALID_PARAMS, METHOD_NOT_FOUND, Message, Method, NavigateResult, NavigationEntry,
@@ -58,6 +57,7 @@ use protocol::network::{RequestDestination, ResourceRequest};
 use protocol::renderer::RendererHostMsg;
 use protocol::viz::{CopyOutputRequest, CopyOutputResult, DisplayMsg, VizMsg};
 use protocol::webdriver::{ErrorKind, Locator, WebDriverCommand, WebDriverError, WebDriverValue};
+use protocol::{FrameToken, TabId};
 use serde_json::{Value, json};
 use url::Url;
 use winit::keyboard::{Key, ModifiersState};

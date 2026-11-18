@@ -758,34 +758,36 @@ impl RenderThread {
         }
     }
 
-    /// The main frame's new document's navigation timing, from what the
-    /// browser told of its load; its network's times marked in the trace,
-    /// as Blink's `DocumentLoadTiming` marks them.
+    /// A frame's new document's navigation timing, from what the browser
+    /// told of its load (`loaded`, and whether its iframe's referrer policy
+    /// was `no-referrer` as it asked for it); its network's times marked in
+    /// the trace, as Blink's `DocumentLoadTiming` marks them.
     fn commit_timing(
         &self,
         url: &str,
         mime_type: &str,
         decoded_body_size: usize,
-        loaded: Option<&protocol::renderer::NavigationLoad>,
+        loaded: Option<(&protocol::renderer::NavigationLoad, bool)>,
         navigation_type: protocol::renderer::NavigationTimingType,
         time_origin: f64,
-        no_referrer: bool,
     ) -> NavigationTiming {
         use protocol::renderer::NavigationTimingType;
         let url = Url::parse(url).unwrap_or_else(|_| Url::parse("about:blank").unwrap());
-        let load = loaded.map(|loaded| crate::navigation_timing::DocumentLoad {
-            url: &url,
-            timing: loaded.timing,
-            response_end: loaded.response_end,
-            redirects: &loaded.redirects,
-            no_referrer,
-            protocol: &loaded.protocol,
-            status: loaded.status,
-            mime_type,
-            content_encoding: loaded.content_encoding.as_deref(),
-            encoded_body_size: loaded.encoded_body_length,
-            decoded_body_size: u64::try_from(decoded_body_size).unwrap_or(u64::MAX),
-        });
+        let load = loaded.map(
+            |(loaded, no_referrer)| crate::navigation_timing::DocumentLoad {
+                url: &url,
+                timing: loaded.timing,
+                response_end: loaded.response_end,
+                redirects: &loaded.redirects,
+                no_referrer,
+                protocol: &loaded.protocol,
+                status: loaded.status,
+                mime_type,
+                content_encoding: loaded.content_encoding.as_deref(),
+                encoded_body_size: loaded.encoded_body_length,
+                decoded_body_size: u64::try_from(decoded_body_size).unwrap_or(u64::MAX),
+            },
+        );
         let navigation_type = match navigation_type {
             NavigationTimingType::Navigate => NavigationType::Navigate,
             NavigationTimingType::Reload => NavigationType::Reload,
@@ -855,10 +857,9 @@ impl RenderThread {
                     &document_url,
                     &mime_type,
                     body.len(),
-                    loaded.as_deref(),
+                    loaded.as_deref().map(|loaded| (loaded, no_referrer)),
                     navigation_type,
                     time_origin,
-                    no_referrer,
                 );
                 let committed = if main_frame {
                     let origin_source = begin_id
