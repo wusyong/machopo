@@ -7,8 +7,8 @@ use ipc::TimeTicks;
 use net::{LoadHandle, NetworkContext};
 use protocol::network::{LoadResult, RedirectInfo, RequestDestination, ResourceRequest};
 use protocol::renderer::{
-    NavigationLoad, NavigationTimingType, RedirectHop, RendererHostMsg, RendererMsg,
-    VisualProperties, WindowOpenDisposition,
+    BeginNavigationKind, NavigationLoad, NavigationTimingType, RedirectHop, RendererHostMsg,
+    RendererMsg, VisualProperties, WindowOpenDisposition,
 };
 use protocol::viz::{
     BeginFrameArgs, BeginFrameObserver, DisplayMsg, FrameSinkId, LocalSurfaceId,
@@ -411,48 +411,93 @@ impl WebContents {
         true
     }
 
-    /// `RenderFrameHostImpl::OpenURL`: a link the renderer followed, here
-    /// or to a new tab, which the embedder opens (`take_opened`). It may
-    /// not open a local file unless it shows one, as it may not load one:
-    /// in a new tab neither, as this tab's renderer asks.
-    /// Only schemes the browser loads are navigated to; Chromium hands
-    /// others (`mailto:`) to the system, which isn't done yet. A `data:`
-    /// URL is loaded, but not for a page, here or in a new tab
-    /// (Chromium's `DataUrlNavigationThrottle`: a page that makes its own
-    /// URL is a phishing tool); child frames and the user's navigations
-    /// may have one. A debug URL is navigated to like any other, not
-    /// handled: only the user's own navigations handle them, so that no
-    /// page can crash the GPU.
-    fn open_url(&mut self, url: &str, disposition: WindowOpenDisposition, replace: bool) {
-        let scheme = url.split(':').next().unwrap_or("").to_ascii_lowercase();
-        match scheme.as_str() {
-            "http" | "https" | "file" | "about" | "blob" => {}
-            "data" => {
-                tracing::warn!(%url, "a page may not navigate to a data: URL");
-                return;
+    /// `RenderFrameHostImpl::BeginNavigation`: frame `frame` of the page is
+    /// to have another document, as frame `initiator` asked. A frame the
+    /// tab doesn't have is a bad message. What a page may not navigate a
+    /// frame to (`page_may_navigate_to`) goes nowhere.
+    fn begin_renderer_navigation(
+        &mut self,
+        frame: FrameToken,
+        initiator: FrameToken,
+        kind: &BeginNavigationKind,
+    ) {
+        if !self.frame_tree.contains(frame) {
+            return self.received_bad_message(BadMessageReason::NavigationOfUnknownFrame);
+        }
+        if !self.frame_tree.contains(initiator) {
+            return self.received_bad_message(BadMessageReason::NavigationByUnknownFrame);
+        }
+        if frame != self.frame_tree.root() {
+            // A child frame's document is still its renderer's to load.
+            tracing::warn!(?frame, "a child frame's navigation through the browser");
+            return;
+        }
+        match kind {
+            BeginNavigationKind::To { url, replace } => {
+                if let Err(why) = self.page_may_navigate_to(url, true) {
+                    tracing::warn!(%url, why, "a page's navigation goes nowhere");
+                    return;
+                }
+                let kind = if *replace {
+                    NavigationType::Replace
+                } else {
+                    NavigationType::NewEntry
+                };
+                self.begin_navigation(url.clone(), kind);
             }
-            _ => {
-                tracing::warn!(%url, "no handler for the link's scheme");
-                return;
+            BeginNavigationKind::Reload => self.reload(),
+        }
+    }
+
+    /// `RenderFrameHostImpl::OpenURL`: a link the renderer followed to a new
+    /// tab, which the embedder opens (`take_opened`), if a page may
+    /// navigate a main frame there.
+    fn open_url(&mut self, url: &str, disposition: WindowOpenDisposition) {
+        if let Err(why) = self.page_may_navigate_to(url, true) {
+            tracing::warn!(%url, why, "a page's new tab goes nowhere");
+            return;
+        }
+        self.opened.push(OpenUrlParams {
+            url: url.to_owned(),
+            disposition,
+        });
+    }
+
+    /// Whether a page may navigate a frame to `url` (the main frame, or a
+    /// new tab's, if `main_frame`): the browser's checks of what any
+    /// renderer asks, in one place. Only schemes the browser loads are
+    /// navigated to; Chromium hands others (`mailto:`) to the system,
+    /// which isn't done yet. A `data:` URL is loaded, but not for a page's
+    /// main frame, here or in a new tab (Chromium's
+    /// `DataUrlNavigationThrottle`: a page that makes its own URL is a
+    /// phishing tool); child frames and the user's navigations may have
+    /// one. Of `about:` URLs a page may navigate to `about:blank`, and a
+    /// child frame to `about:srcdoc`: the browser's own pages and its debug
+    /// URLs are the user's alone, so that no page can crash the GPU. It
+    /// may not open a local file unless it shows one, as it may not load
+    /// one.
+    fn page_may_navigate_to(&self, url: &str, main_frame: bool) -> Result<(), &'static str> {
+        let (scheme, rest) = url.split_once(':').unwrap_or((url, ""));
+        match scheme.to_ascii_lowercase().as_str() {
+            "http" | "https" | "file" | "blob" => {}
+            "data" if main_frame => return Err("a page may not navigate to a data: URL"),
+            "data" => {}
+            "about" => {
+                // HTML's "matches about:blank" (and about:srcdoc): the
+                // path alone, a query or fragment after it.
+                let path = rest.split(['?', '#']).next().unwrap_or_default();
+                match path {
+                    "blank" => {}
+                    "srcdoc" if !main_frame => {}
+                    _ => return Err("a page may not navigate to that about: URL"),
+                }
             }
+            _ => return Err("no handler for the scheme"),
         }
         if !self.process.can_request(url) {
-            tracing::warn!(%url, "the renderer may not open local files");
-            return;
+            return Err("the renderer may not open local files");
         }
-        if disposition != WindowOpenDisposition::CurrentTab {
-            self.opened.push(OpenUrlParams {
-                url: url.to_owned(),
-                disposition,
-            });
-            return;
-        }
-        let kind = if replace {
-            NavigationType::Replace
-        } else {
-            NavigationType::NewEntry
-        };
-        self.begin_navigation(url.to_owned(), kind);
+        Ok(())
     }
 
     /// The links followed to new tabs since last asked, in order.
@@ -902,12 +947,13 @@ impl WebContents {
             } => self
                 .controller
                 .set_manual_scroll_restoration(*manual_scroll_restoration),
-            RendererHostMsg::OpenUrl {
-                url,
-                disposition,
-                replace,
-            } => self.open_url(url, *disposition, *replace),
-            RendererHostMsg::Reload => self.reload(),
+            RendererHostMsg::BeginNavigation {
+                frame,
+                initiator,
+                kind,
+                ..
+            } => self.begin_renderer_navigation(*frame, *initiator, kind),
+            RendererHostMsg::OpenUrl { url, disposition } => self.open_url(url, *disposition),
             // The embedder shows it.
             RendererHostMsg::SetCursor(_)
             | RendererHostMsg::TakeFocus { .. }

@@ -11,7 +11,7 @@ use browser::{ContentsEvent, NetworkContext, NetworkContextParams, OpenUrlParams
 use crossbeam_channel::{Receiver, RecvTimeoutError, unbounded};
 use net::test_server::{Route, TestServer, unused_port};
 use protocol::TabId;
-use protocol::renderer::{RendererHostMsg, WindowOpenDisposition};
+use protocol::renderer::{BeginNavigationKind, RendererHostMsg, WindowOpenDisposition};
 use protocol::viz::{
     CompositorFrameSinkMsg, ContextLostObserver, DisplayMsg, Mailbox, SharedImage,
     SharedImageInterface, VizMsg,
@@ -151,6 +151,19 @@ fn renderer_message(
             web_contents.on_navigation_completed(navigation_id, result);
             None
         }
+    }
+}
+
+/// The URL `msg` asks to navigate to: a frame of the tab's
+/// (`BeginNavigation`), or a new tab (`OpenUrl`).
+fn asked_url(msg: &RendererHostMsg) -> Option<&str> {
+    match msg {
+        RendererHostMsg::BeginNavigation {
+            kind: BeginNavigationKind::To { url, .. },
+            ..
+        }
+        | RendererHostMsg::OpenUrl { url, .. } => Some(url),
+        _ => None,
     }
 }
 
@@ -965,7 +978,6 @@ fn a_link_to_a_new_tab_is_handed_to_the_embedder() {
         web_contents.on_renderer_message(&RendererHostMsg::OpenUrl {
             url: url.into(),
             disposition,
-            replace: false,
         });
     };
     open(
@@ -1005,21 +1017,31 @@ fn a_link_to_a_new_tab_is_handed_to_the_embedder() {
     assert_eq!(web_contents.take_opened(), []);
 }
 
+/// The main frame's navigation `url` as the page asks for it
+/// (`BeginNavigation`, the main frame asking).
+fn page_navigates(web_contents: &mut WebContents, url: &str) {
+    let main = web_contents.devtools_frame_token();
+    web_contents.on_renderer_message(&RendererHostMsg::BeginNavigation {
+        frame: main,
+        initiator: main,
+        id: 1,
+        kind: BeginNavigationKind::To {
+            url: url.into(),
+            replace: false,
+        },
+    });
+}
+
 /// A page may not navigate to a `data:` URL, here or in a new tab
 /// (Chromium's `DataUrlNavigationThrottle`); the user may.
 #[test]
 fn a_page_may_not_navigate_to_a_data_url() {
     let (mut web_contents, _host_rx, _viz_rx, _begin_frames) = tab_with_viz();
-    for disposition in [
-        WindowOpenDisposition::CurrentTab,
-        WindowOpenDisposition::NewForegroundTab,
-    ] {
-        web_contents.on_renderer_message(&RendererHostMsg::OpenUrl {
-            url: "data:text/html,x".into(),
-            disposition,
-            replace: false,
-        });
-    }
+    page_navigates(&mut web_contents, "data:text/html,x");
+    web_contents.on_renderer_message(&RendererHostMsg::OpenUrl {
+        url: "data:text/html,x".into(),
+        disposition: WindowOpenDisposition::NewForegroundTab,
+    });
     assert_eq!(web_contents.latest_navigation_id(), 0);
     assert_eq!(web_contents.take_opened(), []);
     web_contents.navigate("data:text/html,x");
@@ -1027,18 +1049,24 @@ fn a_page_may_not_navigate_to_a_data_url() {
     web_contents.shutdown();
 }
 
-/// A link to `about:gpucrash` is navigated to like any other URL (and
-/// fails): a page can't crash the GPU (Chromium's debug URLs are only
-/// for explicit navigations).
+/// Of `about:` URLs a page may navigate its main frame to `about:blank`
+/// alone: not to the browser's own pages, nor to its debug URLs (so that
+/// no page can crash the GPU: Chromium's are only for the user's own
+/// navigations), nor to `about:srcdoc`, a child frame's.
 #[test]
-fn a_link_to_the_gpu_crash_url_is_only_a_navigation() {
+fn a_page_may_navigate_to_about_blank_alone() {
     let (mut web_contents, _host_rx, viz_rx, _begin_frames) = tab_with_viz();
-    web_contents.on_renderer_message(&RendererHostMsg::OpenUrl {
-        url: "about:gpucrash".into(),
-        disposition: WindowOpenDisposition::CurrentTab,
-        replace: false,
-    });
-    assert_eq!(web_contents.latest_navigation_id(), 1);
+    for url in [
+        "about:gpucrash",
+        "about:crash",
+        "about:demo",
+        "about:srcdoc",
+        "about:BLANK",
+    ] {
+        page_navigates(&mut web_contents, url);
+        assert_eq!(web_contents.latest_navigation_id(), 0, "{url}");
+        assert!(!web_contents.is_crashed(), "{url}");
+    }
     let sent: Vec<VizMsg> = viz_rx.try_iter().collect();
     assert!(
         !sent
@@ -1046,6 +1074,8 @@ fn a_link_to_the_gpu_crash_url_is_only_a_navigation() {
             .any(|msg| matches!(msg, VizMsg::Display(DisplayMsg::LoseContext))),
         "{sent:?}"
     );
+    page_navigates(&mut web_contents, "about:blank#top");
+    assert_eq!(web_contents.latest_navigation_id(), 1);
     web_contents.shutdown();
 }
 
@@ -1197,10 +1227,7 @@ mod links {
     }
 
     fn opened(msg: &RendererHostMsg) -> Option<String> {
-        match msg {
-            RendererHostMsg::OpenUrl { url, .. } => Some(url.clone()),
-            _ => None,
-        }
+        asked_url(msg).map(str::to_owned)
     }
 
     fn history(web_contents: &WebContents) -> (Vec<String>, Option<usize>) {
@@ -2418,12 +2445,7 @@ document.querySelector('base').setAttribute('href', '/later/');
                 .any(|m| matches!(m, RendererHostMsg::SetCursor(CursorType::Hand))),
             "{others:?}"
         );
-        assert!(
-            !others
-                .iter()
-                .any(|m| matches!(m, RendererHostMsg::OpenUrl { .. })),
-            "{others:?}"
-        );
+        assert!(!others.iter().any(|m| asked_url(m).is_some()), "{others:?}");
 
         web_contents.resize(gfx::Size::new(200, 200), 1.0);
         viz.run_until(&mut web_contents, &host_rx, "a frame", |viz, _| {
@@ -2431,12 +2453,9 @@ document.querySelector('base').setAttribute('href', '/later/');
         });
         click(&mut web_contents, 10.0, 10.0);
         let next = server.url("/next");
-        viz.run_until(
-            &mut web_contents,
-            &host_rx,
-            "the link",
-            |_, msg| matches!(msg, Some(RendererHostMsg::OpenUrl { url, .. }) if *url == next),
-        );
+        viz.run_until(&mut web_contents, &host_rx, "the link", |_, msg| {
+            msg.and_then(asked_url) == Some(next.as_str())
+        });
         web_contents.shutdown();
     }
 
@@ -2515,12 +2534,7 @@ document.querySelector('base').setAttribute('href', '/later/');
         click(&mut web_contents, 10.0, 10.0);
         let (acks, others) = until_acks(&mut viz, &mut web_contents, &host_rx, 2);
         assert_eq!(acks, [None, None], "the old document is gone");
-        assert!(
-            !others
-                .iter()
-                .any(|m| matches!(m, RendererHostMsg::OpenUrl { .. })),
-            "{others:?}"
-        );
+        assert!(!others.iter().any(|m| asked_url(m).is_some()), "{others:?}");
 
         viz.held = false;
         viz.until_loaded(&mut web_contents, &host_rx);
@@ -2715,7 +2729,7 @@ document.querySelector('base').setAttribute('href', '/later/');
             if let Some(RendererHostMsg::InputEventAck { frame_token }) = msg {
                 acks.push(*frame_token);
             }
-            matches!(msg, Some(RendererHostMsg::OpenUrl { url, .. }) if *url == far)
+            msg.and_then(asked_url) == Some(far.as_str())
         });
         assert_eq!(acks, [], "they all wait for a frame");
         assert_eq!(web_contents.input_in_flight(), 3, "in flight until drawn");
@@ -2759,10 +2773,7 @@ document.querySelector('base').setAttribute('href', '/later/');
         let (_, others) = until_acks(&mut viz, &mut web_contents, &host_rx, 2);
         let opened: Vec<_> = others
             .iter()
-            .filter_map(|m| match m {
-                RendererHostMsg::OpenUrl { url, .. } => Some(url.clone()),
-                _ => None,
-            })
+            .filter_map(|m| asked_url(m).map(str::to_owned))
             .collect();
         assert_eq!(opened, [server.url("/inner")]);
         web_contents.shutdown();
@@ -2797,12 +2808,9 @@ document.querySelector('base').setAttribute('href', '/later/');
         viz.until_loaded(&mut web_contents, &host_rx);
         click(&mut web_contents, 10.0, 10.0);
         let top = server.url("/top");
-        viz.run_until(
-            &mut web_contents,
-            &host_rx,
-            "the top link",
-            |_, msg| matches!(msg, Some(RendererHostMsg::OpenUrl { url, .. }) if *url == top),
-        );
+        viz.run_until(&mut web_contents, &host_rx, "the top link", |_, msg| {
+            msg.and_then(asked_url) == Some(top.as_str())
+        });
         web_contents.shutdown();
     }
 
@@ -2855,12 +2863,9 @@ document.querySelector('base').setAttribute('href', '/later/');
         viz.until_loaded(&mut web_contents, &host_rx);
         click(&mut web_contents, 10.0, 10.0);
         let top = server.url("/top");
-        viz.run_until(
-            &mut web_contents,
-            &host_rx,
-            "the top link",
-            |_, msg| matches!(msg, Some(RendererHostMsg::OpenUrl { url, .. }) if *url == top),
-        );
+        viz.run_until(&mut web_contents, &host_rx, "the top link", |_, msg| {
+            msg.and_then(asked_url) == Some(top.as_str())
+        });
         web_contents.shutdown();
     }
 
@@ -2903,21 +2908,13 @@ document.querySelector('base').setAttribute('href', '/later/');
         click(&mut web_contents, 10.0, 10.0);
         viz.held = false;
         let (_, others) = until_acks(&mut viz, &mut web_contents, &host_rx, 2);
-        assert!(
-            !others
-                .iter()
-                .any(|m| matches!(m, RendererHostMsg::OpenUrl { .. })),
-            "{others:?}"
-        );
+        assert!(!others.iter().any(|m| asked_url(m).is_some()), "{others:?}");
         viz.until_loaded(&mut web_contents, &host_rx);
         click(&mut web_contents, 10.0, 10.0);
         let top = server.url("/top");
-        viz.run_until(
-            &mut web_contents,
-            &host_rx,
-            "the top link",
-            |_, msg| matches!(msg, Some(RendererHostMsg::OpenUrl { url, .. }) if *url == top),
-        );
+        viz.run_until(&mut web_contents, &host_rx, "the top link", |_, msg| {
+            msg.and_then(asked_url) == Some(top.as_str())
+        });
         web_contents.shutdown();
     }
 
@@ -3002,9 +2999,9 @@ document.querySelector('base').setAttribute('href', '/later/');
         click(&mut web_contents, 10.0, 60.0);
         let (_, others) = until_acks(&mut viz, &mut web_contents, &host_rx, 2);
         assert!(
-            others.iter().any(
-                |m| matches!(m, RendererHostMsg::OpenUrl { url, .. } if *url == server.url("/far"))
-            ),
+            others
+                .iter()
+                .any(|m| asked_url(m) == Some(server.url("/far").as_str())),
             "{others:?}"
         );
         web_contents.shutdown();
@@ -3062,9 +3059,9 @@ document.querySelector('base').setAttribute('href', '/later/');
         click(&mut web_contents, 10.0, 120.0);
         let (_, others) = until_acks(&mut viz, &mut web_contents, &host_rx, 2);
         assert!(
-            others.iter().any(
-                |m| matches!(m, RendererHostMsg::OpenUrl { url, .. } if *url == server.url("/inner"))
-            ),
+            others
+                .iter()
+                .any(|m| asked_url(m) == Some(server.url("/inner").as_str())),
             "{others:?}"
         );
         web_contents.shutdown();
@@ -3194,16 +3191,17 @@ document.querySelector('base').setAttribute('href', '/later/');
         }
     }
 
+    /// The query of a report (`msg` asking to navigate to `/report?…`).
+    fn reported(msg: &RendererHostMsg) -> Option<String> {
+        let url = asked_url(msg)?;
+        Some(url.split_once("/report?")?.1.to_owned())
+    }
+
     /// What the page reported: the query of the next navigation it asked
     /// for to `/report?…` (script's titles don't reach the browser, its
     /// navigations do). The messages before go to `web_contents`.
     fn report(web_contents: &mut WebContents, host_rx: &Receiver<ContentsEvent>) -> String {
-        wait_for(web_contents, host_rx, |msg| match msg {
-            RendererHostMsg::OpenUrl { url, .. } if url.contains("/report?") => {
-                Some(url.split_once("/report?").expect("a report").1.to_owned())
-            }
-            _ => None,
-        })
+        wait_for(web_contents, host_rx, reported)
     }
 
     /// A page that defines `report(text)`, reports `hashchange`
@@ -3367,7 +3365,14 @@ document.querySelector('base').setAttribute('href', '/later/');
         web_contents.navigate(&url);
         assert_eq!(wait_for(&mut web_contents, &host_rx, committed), url);
         wait_for(&mut web_contents, &host_rx, |msg| {
-            matches!(msg, RendererHostMsg::Reload).then_some(())
+            matches!(
+                msg,
+                RendererHostMsg::BeginNavigation {
+                    kind: BeginNavigationKind::Reload,
+                    ..
+                }
+            )
+            .then_some(())
         });
         assert_eq!(wait_for(&mut web_contents, &host_rx, committed), url);
         assert_eq!(history(&web_contents), (vec![url], Some(0)));
@@ -3415,10 +3420,7 @@ document.querySelector('base').setAttribute('href', '/later/');
                     gone.push(*frame);
                     None
                 }
-                RendererHostMsg::OpenUrl { url, .. } if url.contains("/report?") => {
-                    Some(url.split_once("/report?").expect("a report").1.to_owned())
-                }
-                _ => None,
+                _ => reported(msg),
             }),
             "removed"
         );
@@ -3464,6 +3466,50 @@ document.querySelector('base').setAttribute('href', '/later/');
         web_contents.shutdown();
     }
 
+    /// A navigation the page asks for tells the browser which frame asked:
+    /// a child frame's link to `_top` navigates the main frame, the child
+    /// frame asking; the main frame's own `location`, the main frame.
+    #[test]
+    fn a_navigation_tells_the_browser_who_asked() {
+        let child = "<a id=up href=/next target=_top></a>\
+                     <script>onload = () => document.getElementById('up').click()</script>";
+        let html = format!("<!DOCTYPE html><iframe srcdoc=\"{child}\"></iframe>");
+        let server = server(&[
+            ("/", Route::ok("text/html", html)),
+            (
+                "/next",
+                Route::ok("text/html", after_load("location.href = '/last';")),
+            ),
+        ]);
+        let (mut web_contents, host_rx) = tab();
+        let main = web_contents.devtools_frame_token();
+        web_contents.navigate(server.url("/"));
+        let mut made = None;
+        let asked = |web_contents: &mut WebContents, made: &mut Option<protocol::FrameToken>| {
+            wait_for(web_contents, &host_rx, |msg| match msg {
+                RendererHostMsg::DidCreateChildFrame { frame, .. } => {
+                    *made = Some(*frame);
+                    None
+                }
+                RendererHostMsg::BeginNavigation {
+                    frame,
+                    initiator,
+                    kind: BeginNavigationKind::To { url, .. },
+                    ..
+                } => Some((*frame, *initiator, url.clone())),
+                _ => None,
+            })
+        };
+        let (frame, initiator, url) = asked(&mut web_contents, &mut made);
+        assert_eq!(url, server.url("/next"));
+        assert_eq!(frame, main);
+        assert_eq!(Some(initiator), made, "the child frame asked");
+        let (frame, initiator, url) = asked(&mut web_contents, &mut made);
+        assert_eq!(url, server.url("/last"));
+        assert_eq!((frame, initiator), (main, main));
+        web_contents.shutdown();
+    }
+
     /// What the frame tree can't take is a bad message: the renderer is
     /// ended, as `about:crash` ends it, its tab crashed, the tree the main
     /// frame alone; the next navigation launches another renderer, whose
@@ -3486,8 +3532,9 @@ document.querySelector('base').setAttribute('href', '/later/');
         let mut child = made(&mut web_contents);
         wait_until_loaded(&mut web_contents, &host_rx);
         // A parent not there, a token in use, a frame not there gone, the
-        // main frame gone: each to the renderer of the time.
-        let bads: [fn(protocol::FrameToken, protocol::FrameToken) -> RendererHostMsg; 4] = [
+        // main frame gone, a navigation of or by a frame not there: each to
+        // the renderer of the time.
+        let bads: [fn(protocol::FrameToken, protocol::FrameToken) -> RendererHostMsg; 6] = [
             |_, _| RendererHostMsg::DidCreateChildFrame {
                 parent: protocol::FrameToken([0xEE; 16]),
                 frame: protocol::FrameToken([0xEF; 16]),
@@ -3500,6 +3547,19 @@ document.querySelector('base').setAttribute('href', '/later/');
                 frame: protocol::FrameToken([0xEE; 16]),
             },
             |main, _| RendererHostMsg::DidDetachFrame { frame: main },
+            // A navigation of a frame not there, or asked by one.
+            |main, _| RendererHostMsg::BeginNavigation {
+                frame: protocol::FrameToken([0xEE; 16]),
+                initiator: main,
+                id: 1,
+                kind: BeginNavigationKind::Reload,
+            },
+            |main, _| RendererHostMsg::BeginNavigation {
+                frame: main,
+                initiator: protocol::FrameToken([0xEE; 16]),
+                id: 1,
+                kind: BeginNavigationKind::Reload,
+            },
         ];
         for bad in bads {
             let bad = bad(main, child);
@@ -3614,12 +3674,11 @@ document.querySelector('base').setAttribute('href', '/later/');
         web_contents.navigate(&url);
         assert_eq!(
             wait_for(&mut web_contents, &host_rx, |msg| match msg {
-                RendererHostMsg::OpenUrl { url, .. } if url.contains("/report?") => {
-                    Some(url.split_once("/report?").expect("a report").1.to_owned())
+                RendererHostMsg::DidCommitSameDocumentNavigation { url, .. } => {
+                    panic!("the browser heard of {url}")
                 }
-                RendererHostMsg::DidCommitSameDocumentNavigation { url, .. }
-                | RendererHostMsg::OpenUrl { url, .. } => panic!("the browser heard of {url}"),
-                _ => None,
+                _ => reported(msg)
+                    .or_else(|| { asked_url(msg).map(|url| panic!("the browser heard of {url}")) }),
             }),
             "child-x"
         );
@@ -3631,11 +3690,10 @@ document.querySelector('base').setAttribute('href', '/later/');
     /// The browser opens no such scheme, so reporting doesn't navigate
     /// (`report`'s `/report?` does, which would race with traversals).
     fn logged(web_contents: &mut WebContents, host_rx: &Receiver<ContentsEvent>) -> String {
-        wait_for(web_contents, host_rx, |msg| match msg {
-            RendererHostMsg::OpenUrl { url, .. } => {
-                url.strip_prefix("machoporeport:").map(str::to_owned)
-            }
-            _ => None,
+        wait_for(web_contents, host_rx, |msg| {
+            asked_url(msg)
+                .and_then(|url| url.strip_prefix("machoporeport:"))
+                .map(str::to_owned)
         })
     }
 
@@ -3910,7 +3968,7 @@ document.querySelector('base').setAttribute('href', '/later/');
         let mut held = Vec::new();
         loop {
             let msg = next_message(&mut web_contents, &host_rx, TIMEOUT).expect("renderer answers");
-            let pushed = matches!(&msg, RendererHostMsg::OpenUrl { url, .. } if url == "machoporeport:pushed");
+            let pushed = asked_url(&msg) == Some("machoporeport:pushed");
             held.push(msg);
             if pushed {
                 break;
@@ -4267,8 +4325,8 @@ mod query_element {
             viz.run_until(web_contents, &host_rx, "the click's acks", |_, msg| {
                 match msg {
                     Some(RendererHostMsg::InputEventAck { .. }) => acks += 1,
-                    Some(RendererHostMsg::OpenUrl { url, .. }) => opened.push(url.clone()),
-                    _ => {}
+                    Some(msg) => opened.extend(asked_url(msg).map(str::to_owned)),
+                    None => {}
                 }
                 acks == 2
             });
@@ -4774,7 +4832,7 @@ mod query_element {
         viz.run_until(&mut web_contents, &host_rx, "the click's acks", |_, msg| {
             match msg {
                 Some(RendererHostMsg::InputEventAck { .. }) => acks += 1,
-                Some(RendererHostMsg::OpenUrl { .. }) => followed = true,
+                Some(msg) if asked_url(msg).is_some() => followed = true,
                 _ => {}
             }
             acks == 2

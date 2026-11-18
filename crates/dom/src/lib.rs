@@ -153,7 +153,8 @@ pub use file_reader::{
 pub use flat::FlatChildren;
 pub use form::{FormAssociation, FormItem, PastNames, RadioList, disabled_walks, form_walks};
 pub use frame::{
-    BlobUrlRequest, ElementChange, FrameNavigation, FrameOwnerChange, NavigationRequest,
+    BlobUrlRequest, ElementChange, FrameNavigation, FrameOwnerChange, NavigationInitiator,
+    NavigationRequest,
 };
 pub use geolocation::{GeoRequest, Geolocation, GeolocationPositionError, GeolocationStep};
 pub use headers::{Headers, HeadersGuard};

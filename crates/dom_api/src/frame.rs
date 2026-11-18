@@ -70,12 +70,14 @@ pub enum FrameRequest {
     /// iframe was removed, or the document it was in was navigated from
     /// (one for each frame that document had).
     Removed { frame: FrameId, token: FrameToken },
-    /// Script navigated `frame` (`location`, `history`): to another
-    /// document, its host loads it (the top-level frame's, the browser);
-    /// within its document, it happened (the host scrolls, the top-level
-    /// frame's session history hears of it).
+    /// Script navigated `frame` (`location`, `history`), as script in
+    /// `initiator` asked (`frame` itself for what isn't asked by another):
+    /// to another document, its host loads it (the top-level frame's, the
+    /// browser); within its document, it happened (the host scrolls, the
+    /// top-level frame's session history hears of it).
     Navigation {
         frame: FrameId,
+        initiator: FrameId,
         navigation: dom::FrameNavigation,
     },
     /// Script in `frame`'s realm made `url` a blob URL for `data`

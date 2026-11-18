@@ -412,7 +412,7 @@ iframe 照同源、同 process 的情形做：有自己的 browsing context、wi
 - `Location` 物件的 `[[PreventExtensions]]` 照一般物件（`Object.preventExtensions(location)` 成功，HTML 是 `TypeError`）：V8 的 template 做不到；`[[SetPrototypeOf]]` 照 HTML 不能換 prototype（`set_immutable_proto`）。沒有 `ancestorOrigins`（要 `DOMStringList`）。
 - `location` 的導覽：不分派 `beforeunload`（`pagehide`、`unload` 在下一份文件 commit 時發，見 Navigation Timing 那一條）；`javascript:` 網址的結果是字串時不取代 document（和連結一樣）；不帶 referrer。交給 browser 的時間是 task 結束時（Chromium 是呼叫的當下），看不出差別。
 - 導覽到同一份文件的 `#fragment` 之後，捲動等到 event loop 的最上層才排定、下一個 frame 才捲：同一個 task 裡接著讀 `scrollY` 還是舊的位置（HTML 的「navigate to a fragment」當場捲動，Chrome 也是；WPT 的 `location_hash.html` 的 srcdoc iframe 那項）。script 寫捲動位置的路已經有了，之後可以改成在導覽的當下捲動。
-- 沒有 image map：`<area>` 是連結（`click()` 會導覽），但 `<img usemap>` 不把點擊分給它；`mailto:` 之類交給系統的 scheme 不開，只記 log。頁面的連結和 `location` 不能導覽到 `data:` 網址（這個分頁和新分頁都不行，Chrome 也擋；iframe 和自動化的導覽可以），但 Chrome 會在 console 報錯，machopo 只記 log。
+- 沒有 image map：`<area>` 是連結（`click()` 會導覽），但 `<img usemap>` 不把點擊分給它；`mailto:` 之類交給系統的 scheme 不開，只記 log。頁面的連結和 `location` 不能導覽到 `data:` 網址（這個分頁和新分頁都不行，Chrome 也擋；iframe 和自動化的導覽可以），`about:` 只能到 `about:blank`（`about:demo` 和 debug URL 只有使用者自己輸入的才開，Chrome 也不讓網頁開 `chrome:` 的頁），但 Chrome 會在 console 報錯，machopo 只記 log。
 - 連結有 `target` 屬性時就用它的值，空字串也算（照 HTML 的「get an element's target」，在自己的 frame 開），不改看 `<base target>`：WPT 的 `the-base-element/base_multiple.html` 預期 `target=""` 的連結照 `<base target>` 開，是預期的失敗。
 - 滑鼠離開視窗、或移到工具列和分頁列上時，頁面收不到：hover 留在最後的元素上，也不發 `mouseout`、`mouseleave`（Chrome 會）。要等下一次滑鼠在頁面上移動。
 - 連結開新分頁：沒有 `window.open`；`target` 的名字沒有 frame 用時開新分頁，每次都開新的、不重用；Shift+點擊開新分頁而不是新視窗，Alt+點擊照一般的點擊（沒有下載）；script 自己觸發的點擊（`dispatchEvent`）不開新分頁，它的 `target="_blank"` 什麼都不做，不看有沒有 user activation（Chrome 封鎖的是沒有 activation 的彈出視窗）。右鍵有 `contextmenu`，但沒有選單。

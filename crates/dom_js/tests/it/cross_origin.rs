@@ -102,6 +102,7 @@ fn navigations(engine: &mut V8Engine) -> Vec<(FrameId, String)> {
             | FrameRequest::Navigation {
                 frame,
                 navigation: FrameNavigation::To { url, .. },
+                ..
             } => Some((frame, url)),
             _ => None,
         })

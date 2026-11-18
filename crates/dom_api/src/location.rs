@@ -5,7 +5,7 @@
 //! worker's (HTML's `WorkerLocation`) has the getters alone, of its
 //! global's URL.
 
-use dom::{FrameNavigation, Location, NodeRef};
+use dom::{FrameNavigation, Location, NavigationInitiator, NodeRef};
 use elise::Gc;
 use url::{Url, quirks};
 
@@ -35,14 +35,27 @@ fn blank() -> Url {
 }
 
 /// HTML's Location-object navigate: the relevant document's frame
-/// navigates to `url`; before the document is completely loaded (as
-/// without a user's gesture: machopo has none) it replaces the current entry.
-fn navigate<'gc>(cx: &ApiCx<'_, 'gc>, this: Gc<'gc, Location>, url: Url, replace: bool) {
+/// navigates to `url`, asked for by `by` (the incumbent realm, if known);
+/// before the document is completely loaded (as without a user's gesture:
+/// machopo has none) it replaces the current entry.
+fn navigate<'gc>(
+    cx: &ApiCx<'_, 'gc>,
+    this: Gc<'gc, Location>,
+    url: Url,
+    replace: bool,
+    by: Option<Gc<'gc, dom::ExecutionContext>>,
+) {
     let Some(document) = relevant_document(cx, this) else {
         return;
     };
     let replace = replace || !cx.is_completely_loaded(document);
-    crate::history::navigate(cx, document, url, replace);
+    // The setters but `href`'s are the same origin's alone: one of the
+    // location's document's origin asks, which it stands for.
+    let initiator = by.map_or(
+        NavigationInitiator::Document(document),
+        NavigationInitiator::Context,
+    );
+    crate::history::navigate(cx, document, url, replace, initiator);
 }
 
 fn get<'gc>(cx: &ApiCx<'_, 'gc>, this: Gc<'gc, Location>, part: fn(&Url) -> &str) -> DomStr<'gc> {
@@ -58,7 +71,7 @@ fn set<'gc>(cx: &ApiCx<'_, 'gc>, this: Gc<'gc, Location>, set: impl FnOnce(&mut 
     }
     let mut copy = url_of(cx, this);
     if set(&mut copy) {
-        navigate(cx, this, copy, false);
+        navigate(cx, this, copy, false, None);
     }
 }
 
@@ -105,7 +118,7 @@ pub(crate) fn set_href<'gc, O: OpFront>(
         return Ok(());
     }
     let url = parse_relative_to_entry(op, cx, this, url)?;
-    navigate(cx, this, url, false);
+    navigate(cx, this, url, false, op.current_context(cx));
     Ok(())
 }
 
@@ -120,7 +133,7 @@ pub(crate) fn replace<'gc, O: OpFront>(
         return Ok(());
     }
     let url = parse_relative_to_entry(op, cx, this, url)?;
-    navigate(cx, this, url, true);
+    navigate(cx, this, url, true, op.current_context(cx));
     Ok(())
 }
 

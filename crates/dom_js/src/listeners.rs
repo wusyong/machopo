@@ -202,8 +202,13 @@ impl<'s> ScriptHost for Host<'_, '_, 's, '_> {
         crate::frames::navigate_child(self.scope, owner, navigation);
     }
 
-    fn navigate(&mut self, document: &dom::NodeRoot, navigation: dom::FrameNavigation) {
-        crate::frames::navigate(self.scope, document, navigation);
+    fn navigate(
+        &mut self,
+        document: &dom::NodeRoot,
+        initiator: &dom::NodeRoot,
+        navigation: dom::FrameNavigation,
+    ) {
+        crate::frames::navigate(self.scope, document, initiator, navigation);
     }
 
     fn register_blob_url(

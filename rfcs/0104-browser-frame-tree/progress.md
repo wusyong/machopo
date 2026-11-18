@@ -12,8 +12,8 @@
 | 1b：Browser 的 `FrameTree`、檢查、壞掉的訊息 | 完成 | 2026-11-18 |
 | 1c：第 1 階段的檢查和文件 | 完成 | 2026-11-18 |
 | 2a：renderer 的訊息帶著 renderer 的身分 | 完成 | 2026-11-18 |
-| 2b：`BeginNavigation`、`NavigationDropped`、網址的檢查（主 frame 的路） | | |
-| 2c：子 frame 一般的導覽經過 Browser | | |
+| 2b：`BeginNavigation`、網址的檢查（主 frame 的路） | 完成 | 2026-11-18 |
+| 2c：子 frame 一般的導覽經過 Browser、`NavigationDropped`、`file:` 照發起的文件檢查 | | |
 | 2d：`about:blank`、`about:srcdoc` 和 `DidChangeSrcDoc` | | |
 | 2e：子 frame 同一份文件內的導覽的回報 | | |
 | 2f：第 2 階段的檢查和文件 | | |
@@ -60,3 +60,12 @@
 - **新的測試**：`browser` 的 `links::an_ended_renderers_late_messages_count_for_nothing`（抓住舊 renderer 的一則訊息，`about:crash` 之後和重新整理、新的 renderer 開始之後再交，都不算數；新的 renderer 的訊息照樣算）；`shell` 的 `browser_view::an_ended_renderers_late_message_counts_for_nothing`（同樣的情境經過 `BrowserView`）。`browser` 的 `a_bad_message_ends_the_renderer` 拿掉直接呼叫 `on_renderer_message` 模擬舊訊息的那一段（新的測試用真的舊訊息驗）。
 - **mutation test**（6 個）：抓到 5 個：結束了的 renderer 的訊息照樣算、被取代的 renderer 的訊息照樣算、每個 renderer 的訊息都說是同一個 renderer（`browser` 的新測試）；`BrowserView` 把結束了的 renderer 的訊息交下去（`shell` 的新測試）、`BrowserView` 連關掉的分頁的 renderer 的訊息也丟掉（`devtools_lifecycle::flat_sessions_detach`）。沒抓到 1 個：headless 不過濾，是等價的（記進 `docs/test-gaps.md`）。
 - **跑過的檢查**：`cargo test -p browser -p shell -p driver` 全部通過。
+
+### 2b（2026-11-18，macOS、Apple M4）
+
+- **做了什麼**：DOM 的導覽請求記下發起它的文件（`NavigationRequest::initiator`；`location` 的 `href`、`replace()` 是呼叫它的 script 的 realm 的文件，其他的 setter 只有同源的 script 能呼叫，就是 `Location` 自己的文件；連結是連結所在的文件），engine 把它換成 frame 交給 host，沒有 frame 顯示它時到別的文件的導覽不做。`OpenUrl` 只剩新分頁（`WindowOpenDisposition` 拿掉 `CurrentTab`），主 frame 的導覽和重新整理都是 `BeginNavigation { frame, initiator, id, kind }`（`Reload` 這則訊息拿掉），`id` 是 renderer 自己的編號。Browser 收到時：frame 或 initiator 不在樹上是壞掉的訊息（`NavigationOfUnknownFrame`、`NavigationByUnknownFrame`）；網址照第 14 條的 scheme 規則（`page_may_navigate_to`：`http:`、`https:`、`file:`、`blob:`；`data:` 不給 main frame；`about:` 只收 `blank`，子 frame 再加 `srcdoc`；`file:` 照舊看 renderer 能不能讀），新分頁也照它檢查。子 frame 的 `BeginNavigation` 現在不會送來（2c 才送），送來時只記 warn。
+- **行為的改變**：網頁不能再導覽到 `about:blank` 以外的 `about:`（之前擋的只是 debug URL；`about:demo` 現在也只有使用者自己輸入的才開），`docs/limitations.md` 寫了。
+- **移到 2c 的**：`NavigationDropped` 和 commit 帶回 renderer 的編號（主 frame 的導覽沒有人用到它們，子 frame 的導覽經過 Browser 時才需要）；`file:` 照發起的文件檢查（Browser 要知道子 frame 的網址，2c 才有）。
+- **新的測試**：`browser` 的 `a_navigation_tells_the_browser_who_asked`（子 frame 的 `_top` 連結，initiator 是子 frame 的 token；main frame 的 `location.href` 是 main frame 自己）、`a_page_may_navigate_to_about_blank_alone`（取代 GPU 的那一份：`about:gpucrash`、`crash`、`demo`、`srcdoc`、`BLANK` 都擋，`about:blank#top` 可以）；`a_bad_message_ends_the_renderer` 加兩則（導覽不在的 frame、由不在的 frame 發起）；`a_page_may_not_navigate_to_a_data_url` 改成經過 `BeginNavigation`；`location_reload_loads_the_entry_again` 等 `BeginNavigation` 的 `Reload`。`dom_js` 的 `links::a_navigation_says_who_asked`（自己的連結、子 frame 的 `_top` 連結、top 的 script 導覽子 frame、子 frame 的 script 導覽 top、子 frame 的 script 先拿掉自己的 iframe 再導覽 top 時什麼都不送）。其他測試照新的訊息改寫（`asked_url`）。
+- **mutation test**（14 個，全部抓到）：realm 被當成被導覽的文件、`href` 和 `replace()` 忘了呼叫的 realm、連結被當成被導覽的 frame 發起的（`dom_js` 的新測試）；沒有 frame 顯示的文件照樣導覽（同一個測試的最後一段，加了之後另外跑）；renderer 說是被導覽的 frame 發起的、main frame 的重新整理沒送到 Browser、導覽不在的 frame 和由不在的 frame 發起的照收、main frame 可以導覽到 `data:`、`about:srcdoc`、任何 `about:`、`about:blank#…` 不算 `about:blank`、新分頁不檢查（`browser` 的測試）。
+- **跑過的檢查**：`cargo test -p dom -p dom_api -p dom_js -p dom_wasm -p protocol -p renderer -p browser -p shell -p driver` 全部通過；`test.py wpt` 的 `html/browsers/history/`、`html/browsers/browsing-the-web/`、`the-iframe-element/`、`the-base-element/`：222 個測試、694 個檢查，沒有不預期的結果。

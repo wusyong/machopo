@@ -44,8 +44,14 @@ fn without_fragment(url: &Url) -> Url {
 /// document's URL, as HTML's navigate makes it). To a fragment of the
 /// document: navigated now (its URL, its target element, its history's
 /// state `null`; `hashchange` queued if the fragment changed; `popstate`
-/// as the call ends); else the host navigates.
-pub(crate) fn navigate<'gc>(cx: &ApiCx<'_, 'gc>, document: NodeRef<'gc>, url: Url, replace: bool) {
+/// as the call ends); else the host navigates, as `initiator` asked.
+pub(crate) fn navigate<'gc>(
+    cx: &ApiCx<'_, 'gc>,
+    document: NodeRef<'gc>,
+    url: Url,
+    replace: bool,
+    initiator: dom::NavigationInitiator<'gc>,
+) {
     let current = document_url(cx, document);
     let replace = replace || current.as_ref() == Some(&url);
     if let Some(current) = current
@@ -75,8 +81,9 @@ pub(crate) fn navigate<'gc>(cx: &ApiCx<'_, 'gc>, document: NodeRef<'gc>, url: Ur
         );
         return;
     }
-    cx.request_navigation(
+    cx.request_navigation_from(
         document,
+        initiator,
         FrameNavigation::To {
             url: url.into(),
             replace,
@@ -562,12 +569,13 @@ pub(crate) fn run_hash_change<H: ScriptHost>(
 /// navigate`).
 pub(crate) fn update_navigations<H: ScriptHost>(host: &mut H) {
     for request in host.mutate(|cx| cx.take_navigation_requests()) {
-        let Some((document, window)) = host.read(|cx| {
+        let Some((document, initiator, window)) = host.read(|cx| {
             let document = cx.node_by_id(request.document)?;
+            let initiator = cx.node_by_id(request.initiator)?;
             let window = cx
                 .window_of(document)
                 .map(|window| Persistent::new(cx.gc, window));
-            Some((cx.root(document), window))
+            Some((cx.root(document), cx.root(initiator), window))
         }) else {
             continue;
         };
@@ -580,7 +588,7 @@ pub(crate) fn update_navigations<H: ScriptHost>(host: &mut H) {
         {
             fire_pop_state(host, window);
         }
-        host.navigate(&document, request.navigation);
+        host.navigate(&document, &initiator, request.navigation);
     }
 }
 

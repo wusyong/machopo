@@ -120,7 +120,9 @@ fn following_hyperlinks() {
             .take_frame_requests()
             .into_iter()
             .filter_map(|request| match request {
-                FrameRequest::Navigation { frame, navigation } => Some((frame, navigation)),
+                FrameRequest::Navigation {
+                    frame, navigation, ..
+                } => Some((frame, navigation)),
                 _ => None,
             })
             .collect::<Vec<_>>()
@@ -213,4 +215,93 @@ fn document_title() {
     );
     // No head: nothing.
     assert_eq!(page.eval("var h = document.implementation.createHTMLDocument(''); h.head.remove(); h.title = 'y'; h.title"), "");
+}
+
+/// Who asked for a navigation (HTML's source document), as the host is
+/// told it: a hyperlink's frame, wherever it navigates; the frame whose
+/// script set `location.href` or called `replace()`, whichever frame's
+/// location it was.
+#[test]
+fn a_navigation_says_who_asked() {
+    let mut page = Page::new("https://example.test/a/b.html");
+    page.load();
+    page.eval("var f = document.body.appendChild(document.createElement('iframe')); 0");
+    let child = page
+        .engine
+        .take_frame_requests()
+        .into_iter()
+        .find_map(|request| match request {
+            FrameRequest::Created { frame, .. } => Some(frame),
+            _ => None,
+        })
+        .expect("the iframe's frame");
+    let top = page.engine.top_frame();
+    let asked = |page: &mut Page, source: &str| {
+        page.eval(source);
+        page.engine
+            .take_frame_requests()
+            .into_iter()
+            .filter_map(|request| match request {
+                FrameRequest::Navigation {
+                    frame,
+                    initiator,
+                    navigation: FrameNavigation::To { .. },
+                } => Some((frame, initiator)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        asked(
+            &mut page,
+            "var a = document.body.appendChild(document.createElement('a')); \
+             a.href = 'c.html'; a.click()"
+        ),
+        [(top, top)]
+    );
+    // The child frame's link to the top-level frame: the child asked.
+    assert_eq!(
+        asked(
+            &mut page,
+            "var c = f.contentDocument.body.appendChild(f.contentDocument.createElement('a')); \
+             c.href = 'https://example.test/g'; c.target = '_top'; c.click()"
+        ),
+        [(top, child)]
+    );
+    // The top-level frame's script navigating the child frame.
+    assert_eq!(
+        asked(
+            &mut page,
+            "f.contentWindow.location.href = 'https://example.test/h'; \
+             f.contentWindow.location.replace('https://example.test/i')"
+        ),
+        [(child, top), (child, top)]
+    );
+    // The child frame's script navigating the top-level frame.
+    page.engine.run_classic_script(
+        child,
+        &dom_api::ClassicScript {
+            source: "top.location.href = '/j'",
+            url: "about:blank",
+            base_url: None,
+            line: 1,
+            muted: false,
+            use_credentials: false,
+        },
+    );
+    assert_eq!(asked(&mut page, "0"), [(top, child)]);
+    // The child frame's script, its iframe gone first: no frame shows the
+    // document that asks, which navigates nothing.
+    page.engine.run_classic_script(
+        child,
+        &dom_api::ClassicScript {
+            source: "const t = top; frameElement.remove(); t.location.href = '/k'",
+            url: "about:blank",
+            base_url: None,
+            line: 1,
+            muted: false,
+            use_credentials: false,
+        },
+    );
+    assert_eq!(asked(&mut page, "0"), []);
 }

@@ -17,4 +17,8 @@ pub enum BadMessageReason {
     /// The main frame gone, as a child frame goes (Chromium's
     /// `RFH_DETACH_MAIN_FRAME`).
     DetachMainFrame,
+    /// A navigation of a frame the tab doesn't have.
+    NavigationOfUnknownFrame,
+    /// A navigation a frame the tab doesn't have asked for.
+    NavigationByUnknownFrame,
 }

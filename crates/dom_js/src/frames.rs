@@ -295,22 +295,36 @@ pub(crate) fn navigate_child(
         .push(FrameRequest::Navigate { frame, navigation });
 }
 
-/// The frame showing `document` navigated, or is to (`FrameNavigation`):
-/// the host told.
+/// The frame showing `document` navigated, or is to (`FrameNavigation`),
+/// as the frame showing `initiator` asked: the host told. One to another
+/// document that a document no frame shows now asked for goes nowhere
+/// (HTML navigates from a fully active document alone).
 pub(crate) fn navigate(
     scope: &mut Scope<'_, '_, '_>,
     document: &NodeRoot,
+    initiator: &NodeRoot,
     navigation: dom::FrameNavigation,
 ) {
     let (state, _) = scope.state_mut();
-    let id = state.dom.read(|cx| cx.node_id(document.get(cx.gc)));
+    let (id, by) = state.dom.read(|cx| {
+        (
+            cx.node_id(document.get(cx.gc)),
+            cx.node_id(initiator.get(cx.gc)),
+        )
+    });
     let Some(frame) = state.frames.of_document(id).map(|frame| frame.id) else {
         return;
     };
-    state
-        .frames
-        .requests
-        .push(FrameRequest::Navigation { frame, navigation });
+    let initiator = match state.frames.of_document(by) {
+        Some(initiator) => initiator.id,
+        None if matches!(navigation, dom::FrameNavigation::To { .. }) => return,
+        None => frame,
+    };
+    state.frames.requests.push(FrameRequest::Navigation {
+        frame,
+        initiator,
+        navigation,
+    });
 }
 
 /// A blob URL of the realm of the frame showing `document`: the host told.

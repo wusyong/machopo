@@ -338,10 +338,21 @@ pub struct QueriedElement {
     pub text: String,
 }
 
-/// `WindowOpenDisposition`: where a followed link opens.
+/// What a renderer's navigation is (`BeginNavigation`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BeginNavigationKind {
+    /// To `url` (a link followed, `location`), its entry taking the
+    /// current one's place in the session history if `replace`
+    /// (`location.replace`; Chromium's `should_replace_current_entry`).
+    To { url: String, replace: bool },
+    /// The frame's document loaded again (`location.reload()`), as the
+    /// browser's own reload does.
+    Reload,
+}
+
+/// `WindowOpenDisposition`: where a followed link opens, out of its tab.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WindowOpenDisposition {
-    CurrentTab,
     /// A new tab, shown.
     NewForegroundTab,
     /// A new tab, behind the one shown.
@@ -453,19 +464,23 @@ pub enum RendererHostMsg {
     UpdateState {
         manual_scroll_restoration: bool,
     },
-    /// `FrameHost::OpenURL`: a link was followed, or script navigated
-    /// (`location`), to another document, or, opening a new tab, to any.
-    /// The browser decides whether to navigate there. `replace`: the new
-    /// document takes the current entry's place in the session history
-    /// (`location.replace`; Chromium's `should_replace_current_entry`).
+    /// `FrameHost::BeginNavigation`: a frame of the page is to have
+    /// another document, as script or a link in frame `initiator` asked
+    /// (HTML's source document's; `frame` itself for a reload). The
+    /// browser decides whether, loads it and has the frame commit it; `id`
+    /// is the renderer's own number for the request.
+    BeginNavigation {
+        frame: crate::FrameToken,
+        initiator: crate::FrameToken,
+        id: u64,
+        kind: BeginNavigationKind,
+    },
+    /// `FrameHost::OpenURL`: a link followed to a new tab, which the
+    /// browser decides whether to open.
     OpenUrl {
         url: String,
         disposition: WindowOpenDisposition,
-        replace: bool,
     },
-    /// `location.reload()`: the browser loads the current entry again, as
-    /// its own reload does.
-    Reload,
     /// `FrameHost::CreateChildFrame`: the renderer made child frame `frame`
     /// of `parent` (an iframe inserted), at once and on its own, as script
     /// reads its window next. The browser's frame tree takes it.

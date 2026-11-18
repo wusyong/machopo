@@ -136,11 +136,13 @@ impl ScriptHost for Host<'_> {
 
     /// The window's document navigated, or is to (a link followed, a form
     /// submitted, a fragment gone to): the host told.
-    fn navigate(&mut self, document: &NodeRoot, navigation: dom::FrameNavigation) {
+    fn navigate(&mut self, document: &NodeRoot, _: &NodeRoot, navigation: dom::FrameNavigation) {
         let id = self.dom().read(|cx| cx.node_id(document.get(cx.gc)));
         if self.top == Some(id) {
+            // The one frame: whatever asked is in it.
             self.requests.push(dom_api::FrameRequest::Navigation {
                 frame: TOP,
+                initiator: TOP,
                 navigation,
             });
         }

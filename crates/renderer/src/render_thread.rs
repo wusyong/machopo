@@ -311,6 +311,9 @@ struct RenderThread {
     /// The main frame's token, the browser's
     /// (`RendererMsg::DevToolsMainFrameToken`): what DevTools calls it, and
     /// the browser's frame tree its child frames' parent; none until told.
+    /// Numbers the navigations asked of the browser (`BeginNavigation`),
+    /// from 1.
+    begin_navigation_ids: base::SequenceNumber<u64>,
     devtools_main_frame_token: Option<protocol::FrameToken>,
     /// The input the compositor thread handed on and the main thread
     /// hasn't taken yet (what `isInputPending()` reads).
@@ -472,6 +475,7 @@ impl RenderThread {
             page_focused: false,
             last_document_id: 0,
             devtools_main_frame_token: None,
+            begin_navigation_ids: base::SequenceNumber::starting_at(1),
             pending_input,
             clock: Clock::new(),
             frame_redirects: std::collections::HashMap::new(),

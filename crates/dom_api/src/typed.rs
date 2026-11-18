@@ -2013,9 +2013,16 @@ pub trait ScriptHost {
     }
 
     /// The frame showing `document` is to navigate (or did, within the
-    /// document: `FrameNavigation`): its host told. Nothing by default.
-    fn navigate(&mut self, document: &dom::NodeRoot, navigation: dom::FrameNavigation) {
-        let _ = (document, navigation);
+    /// document: `FrameNavigation`), as `initiator` asked (`document`
+    /// itself for what isn't asked by another): its host told. Nothing by
+    /// default.
+    fn navigate(
+        &mut self,
+        document: &dom::NodeRoot,
+        initiator: &dom::NodeRoot,
+        navigation: dom::FrameNavigation,
+    ) {
+        let _ = (document, initiator, navigation);
     }
 
     /// `event`'s state (a `PopStateEvent`'s the UA fires) is `history`'s

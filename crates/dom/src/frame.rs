@@ -79,11 +79,22 @@ pub enum BlobUrlRequest {
 }
 
 /// A navigation script asked for (`location`, `history`): of the frame
-/// showing `document`.
+/// showing `document`, asked for by `initiator`'s (HTML's source
+/// document; `document` itself for what isn't asked by another).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NavigationRequest {
     pub document: NodeId,
+    pub initiator: NodeId,
     pub navigation: FrameNavigation,
+}
+
+/// Who asked for a navigation (HTML's source document): a document (a
+/// hyperlink's), or the realm whose script asked (`location`'s, the
+/// incumbent's), whose document the DOM finds itself.
+#[derive(Debug, Clone, Copy)]
+pub enum NavigationInitiator<'gc> {
+    Document(NodeRef<'gc>),
+    Context(Gc<'gc, crate::ExecutionContext>),
 }
 
 /// What a frame's navigation is, for its host.
@@ -259,10 +270,32 @@ impl<'gc> Cx<'_, 'gc> {
     /// Location-object navigate): recorded for the engine, which looks
     /// once the operation is over (`Microtasks::frames`).
     pub fn request_navigation(&self, document: NodeRef<'gc>, navigation: FrameNavigation) {
+        self.request_navigation_from(
+            document,
+            NavigationInitiator::Document(document),
+            navigation,
+        );
+    }
+
+    /// `request_navigation`, asked for by `initiator`: a realm that isn't a
+    /// window's (a worker's) stands for `document` itself.
+    pub fn request_navigation_from(
+        &self,
+        document: NodeRef<'gc>,
+        initiator: NavigationInitiator<'gc>,
+        navigation: FrameNavigation,
+    ) {
+        let initiator = match initiator {
+            NavigationInitiator::Document(initiator) => initiator,
+            NavigationInitiator::Context(context) => self
+                .context_window(context)
+                .map_or(document, |window| self.window_document(window)),
+        };
         let state = &self.changes.frames;
         let mut navigations = state.navigations.take();
         navigations.push(NavigationRequest {
             document: self.node_id(document),
+            initiator: self.node_id(initiator),
             navigation,
         });
         state.navigations.set(navigations);

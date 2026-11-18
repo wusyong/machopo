@@ -407,7 +407,8 @@ pub(crate) fn follow_hyperlink<H: ScriptHost>(
             ),
             (None, Some(chosen)) => {
                 let replace = !trusted && !cx.is_completely_loaded(chosen);
-                crate::history::navigate(cx, chosen, url, replace);
+                let by = dom::NavigationInitiator::Document(document);
+                crate::history::navigate(cx, chosen, url, replace, by);
             }
             (None, None) if trusted => cx.request_navigation(
                 document,
