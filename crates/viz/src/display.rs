@@ -26,6 +26,9 @@ pub trait DirectRenderer {
     /// Loses the GPU device as a driver reset would (`about:gpucrash`);
     /// the next draw makes a new one.
     fn lose_context(&mut self) {}
+    /// Viz is ending: what was submitted to the GPU is finished, and the
+    /// device let go if nothing else draws with it.
+    fn shutdown(&mut self) {}
 }
 
 /// Why a renderer has no copy of the frame it was given.
@@ -100,6 +103,13 @@ impl<R: DirectRenderer> Display<R> {
     pub fn lose_context(&mut self) {
         self.renderer.lose_context();
         self.needs_draw = true;
+    }
+
+    /// Viz is ending: the renderer finishes what it gave the GPU and lets
+    /// the device go (Chromium's display, destroyed, takes its output
+    /// surface and GPU context with it).
+    pub fn shutdown(&mut self) {
+        self.renderer.shutdown();
     }
 
     /// Hands a copy of the next frame drawn to `request`: one is drawn even

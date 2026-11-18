@@ -579,6 +579,15 @@ impl DirectRenderer for WgpuRenderer {
         self.context.lose();
     }
 
+    /// Clients put no more shared images on the device, the GPU finishes
+    /// what this renderer gave it, and the device is no longer the
+    /// process's: it goes when this renderer does, unless another holds it.
+    fn shutdown(&mut self) {
+        self.shared_images.set_gpu(None);
+        self.context.finish();
+        GpuContext::release_shared(&self.context);
+    }
+
     fn draw_frame(&mut self, frame: &AggregatedFrame<'_>) {
         let _ = self.draw(frame, false);
     }
@@ -1469,6 +1478,30 @@ mod drawing_tests {
         let a = WgpuRenderer::offscreen(Size::new(1, 1), GpuSharedImages::new()).unwrap();
         let b = WgpuRenderer::offscreen(Size::new(2, 2), GpuSharedImages::new()).unwrap();
         assert!(Arc::ptr_eq(&a.context, &b.context));
+    }
+
+    /// Shut down as Viz ends, a renderer is done with the process's device:
+    /// its clients put nothing more on it, the next renderer makes another,
+    /// and the device goes with the last renderer that holds it.
+    #[test]
+    fn a_renderer_shut_down_lets_the_process_device_go() {
+        let _gpu = gpu();
+        let images = GpuSharedImages::new();
+        let mut a = WgpuRenderer::offscreen(Size::new(1, 1), images.clone()).unwrap();
+        let b = WgpuRenderer::offscreen(Size::new(1, 1), GpuSharedImages::new()).unwrap();
+        let device = Arc::downgrade(&a.context);
+        a.shutdown();
+        assert!(
+            images
+                .create_shared_image(Size::new(1, 1), &[0; 4])
+                .is_none()
+        );
+        let c = WgpuRenderer::offscreen(Size::new(1, 1), GpuSharedImages::new()).unwrap();
+        assert!(!Arc::ptr_eq(&b.context, &c.context), "a new device");
+        drop(a);
+        assert!(device.upgrade().is_some(), "the other renderer's still");
+        drop(b);
+        assert!(device.upgrade().is_none(), "gone with the last renderer");
     }
 
     /// Counts the times it is told.

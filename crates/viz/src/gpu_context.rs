@@ -218,6 +218,11 @@ fn texture_bytes(size: Size) -> usize {
     size.checked_byte_size().unwrap_or(usize::MAX)
 }
 
+/// The process's device. A static is never dropped, so the Viz thread lets
+/// it go as it ends (`release_shared`), having waited for the GPU: a device
+/// still working as the process exits runs under the C++ destructors
+/// `exit` runs. Mesa's lavapipe compiles shaders with LLVM on its own
+/// threads as it draws, and LLVM's globals torn down under them crashed it.
 static SHARED: Mutex<Option<Arc<GpuContext>>> = Mutex::new(None);
 
 impl GpuContext {
@@ -264,6 +269,27 @@ impl GpuContext {
         let context = Arc::new(Self::new(surface, generation)?);
         *shared = Some(context.clone());
         Ok(context)
+    }
+
+    /// The process is done drawing on `context`: it is no longer the
+    /// process's device, and goes with the last renderer that holds it. A
+    /// renderer made after this makes a new one.
+    pub(crate) fn release_shared(context: &Arc<Self>) {
+        let mut shared = SHARED.lock().unwrap_or_else(|e| e.into_inner());
+        if shared
+            .as_ref()
+            .is_some_and(|shared| Arc::ptr_eq(shared, context))
+        {
+            *shared = None;
+        }
+    }
+
+    /// Waits until the GPU has done everything submitted to the device.
+    pub(crate) fn finish(&self) {
+        if let Err(err) = self.device.poll(wgpu::PollType::wait_indefinitely()) {
+            // A lost device has nothing more to do.
+            tracing::debug!(%err, "viz: waiting for the GPU to finish");
+        }
     }
 
     /// A new device, on the adapter [`AdapterPreference::from_env`] picks
