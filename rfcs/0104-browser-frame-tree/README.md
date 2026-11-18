@@ -1,7 +1,7 @@
 # RFC 0104：frame 樹和每個 frame 的導覽由 Browser 擁有
 
 - 開始日期：2026-11-18
-- 狀態：🚧 已排程：2026-11-18（第 1 階段；第 2 到 4 階段的問題到那個階段開始前再決定）
+- 狀態：🚧 已排程：2026-11-18（第 1 階段做完了；第 2 到 4 階段的問題到那個階段開始前再決定）
 - 細節：`details.md`
 - 進度：`progress.md`
 
@@ -192,6 +192,10 @@ renderer 這一側其實已經很完整：子 frame 有自己的 realm 和 `Wind
 ## 待決定
 
 接受這份 RFC 前要決定的都定了。各階段開始前要決定的事列在「分階段」，到時候才問、寫進「已決定的事項」。
+
+第 2 階段開始前要一起看的（2026-11-18，1b 實作時發現）：
+
+- **舊 renderer 留在佇列裡的訊息**：renderer 結束時（`about:crash`、壞掉的訊息），它之前送出、已經排進 Browser 的佇列（`ContentsEvent`）的訊息還在。Browser 在 crashed 的期間不處理其中的建立和 detach；但如果下一次導覽先被處理、新的 renderer 已經開始，那些舊的訊息就會被當成新 renderer 送的，接不上樹的會把新的 renderer 也當成壞掉的結束掉。現在 renderer 的訊息不帶「是哪個 renderer 送的」（`RenderProcessHost` 的 `forwarding` 只擋住結束之後才送的）。第 2 階段的導覽訊息更多，要決定：訊息帶著 renderer 的身分（Chromium 的訊息經過那個 process 自己的 mojo 通道，通道斷了就收不到），或 Browser 在重開前先把舊的佇列處理完。
 
 ## 之後的可能
 

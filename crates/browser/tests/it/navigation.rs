@@ -3386,7 +3386,7 @@ document.querySelector('base').setAttribute('href', '/later/');
     /// The browser hears of each child frame as the renderer makes it, by
     /// its token and its parent's (the main frame's for an iframe of the
     /// page), and of its going, once, the frames in it with it: its iframe
-    /// removed, or the page navigated from.
+    /// removed, or the page navigated from. Its frame tree follows.
     #[test]
     fn the_browser_hears_of_child_frames_coming_and_going() {
         let html = format!(
@@ -3434,6 +3434,11 @@ document.querySelector('base').setAttribute('href', '/later/');
             "{made:?}"
         );
         assert_eq!(gone, [other], "the removed iframe's frame");
+        let tree = web_contents.frame_tree();
+        assert_eq!(tree.root(), main);
+        assert_eq!(tree.children(main), [first]);
+        assert_eq!(tree.children(first), [inner]);
+        assert_eq!(tree.len(), 3);
         // The report navigates the page: its frame goes, the one in it with
         // it.
         let detached = wait_for(&mut web_contents, &host_rx, |msg| match msg {
@@ -3442,12 +3447,103 @@ document.querySelector('base').setAttribute('href', '/later/');
             _ => None,
         });
         assert_eq!(detached, first);
+        assert_eq!(web_contents.frame_tree().len(), 1, "the main frame alone");
         let more = wait_for(&mut web_contents, &host_rx, |msg| match msg {
             RendererHostMsg::DidDetachFrame { frame } => Some(Some(*frame)),
             RendererHostMsg::DidFinishLoad { .. } => Some(None),
             _ => None,
         });
         assert_eq!(more, None, "no frame but the page's is told gone");
+        web_contents.shutdown();
+    }
+
+    /// What the frame tree can't take is a bad message: the renderer is
+    /// ended, as `about:crash` ends it, its tab crashed, the tree the main
+    /// frame alone; the next navigation launches another renderer, whose
+    /// frames are told again.
+    #[test]
+    fn a_bad_message_ends_the_renderer() {
+        let server = server(&[(
+            "/",
+            Route::ok("text/html", "<!DOCTYPE html><iframe></iframe>".to_owned()),
+        )]);
+        let (mut web_contents, host_rx) = tab();
+        let main = web_contents.devtools_frame_token();
+        let made = |web_contents: &mut WebContents| {
+            wait_for(web_contents, &host_rx, |msg| match msg {
+                RendererHostMsg::DidCreateChildFrame { frame, .. } => Some(*frame),
+                _ => None,
+            })
+        };
+        web_contents.navigate(server.url("/"));
+        let mut child = made(&mut web_contents);
+        wait_until_loaded(&mut web_contents, &host_rx);
+        // A parent not there, a token in use, a frame not there gone, the
+        // main frame gone: each to the renderer of the time.
+        let bads: [fn(protocol::FrameToken, protocol::FrameToken) -> RendererHostMsg; 4] = [
+            |_, _| RendererHostMsg::DidCreateChildFrame {
+                parent: protocol::FrameToken([0xEE; 16]),
+                frame: protocol::FrameToken([0xEF; 16]),
+            },
+            |main, child| RendererHostMsg::DidCreateChildFrame {
+                parent: main,
+                frame: child,
+            },
+            |_, _| RendererHostMsg::DidDetachFrame {
+                frame: protocol::FrameToken([0xEE; 16]),
+            },
+            |main, _| RendererHostMsg::DidDetachFrame { frame: main },
+        ];
+        for bad in bads {
+            let bad = bad(main, child);
+            assert!(!web_contents.is_crashed());
+            assert_eq!(web_contents.frame_tree().children(main), [child]);
+            web_contents.on_renderer_message(&bad);
+            assert!(web_contents.is_crashed(), "{bad:?}");
+            assert_eq!(web_contents.frame_tree().len(), 1, "{bad:?}");
+            // What the renderer ended sent before counts for nothing.
+            web_contents.on_renderer_message(&RendererHostMsg::DidDetachFrame { frame: child });
+            assert!(web_contents.is_crashed());
+            web_contents.reload();
+            assert!(!web_contents.is_crashed());
+            let child_again = made(&mut web_contents);
+            assert_ne!(child_again, child, "a new renderer's own");
+            assert_eq!(web_contents.frame_tree().children(main), [child_again]);
+            wait_until_loaded(&mut web_contents, &host_rx);
+            child = child_again;
+        }
+        web_contents.shutdown();
+    }
+
+    /// A renderer gone takes its frames with it, whatever ended it
+    /// (`about:crash`, or on its own): the tree is the main frame alone,
+    /// until the next renderer tells of its own.
+    #[test]
+    fn a_renderer_gone_takes_its_frames() {
+        let server = server(&[(
+            "/",
+            Route::ok("text/html", "<!DOCTYPE html><iframe></iframe>".to_owned()),
+        )]);
+        let (mut web_contents, host_rx) = tab();
+        let main = web_contents.devtools_frame_token();
+        let made = |web_contents: &mut WebContents| {
+            wait_for(web_contents, &host_rx, |msg| match msg {
+                RendererHostMsg::DidCreateChildFrame { frame, .. } => Some(*frame),
+                _ => None,
+            })
+        };
+        web_contents.navigate(server.url("/"));
+        let child = made(&mut web_contents);
+        wait_until_loaded(&mut web_contents, &host_rx);
+        assert_eq!(web_contents.frame_tree().children(main), [child]);
+        web_contents.navigate("about:crash");
+        assert_eq!(web_contents.frame_tree().len(), 1);
+        web_contents.reload();
+        let child = made(&mut web_contents);
+        wait_until_loaded(&mut web_contents, &host_rx);
+        assert_eq!(web_contents.frame_tree().children(main), [child]);
+        web_contents.on_renderer_message(&RendererHostMsg::RendererGone);
+        assert_eq!(web_contents.frame_tree().len(), 1);
         web_contents.shutdown();
     }
 

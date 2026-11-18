@@ -150,7 +150,6 @@ impl V8Engine {
     fn reuse_initial_window(
         &mut self,
         frame: dom_api::FrameId,
-        token: Option<dom_api::FrameToken>,
         context: &v8::Global<v8::Context>,
         url: &str,
         time_origin: Instant,
@@ -178,7 +177,6 @@ impl V8Engine {
         });
         state.frames.set(crate::frames::Frame::new(
             frame,
-            token,
             context.clone(),
             document.clone(),
             document_id,
@@ -455,10 +453,8 @@ impl ScriptEngine for V8Engine {
         if let Some((parent, owner, context)) = initial
             && self.inherits_origin(parent, url)
         {
-            let token = self.state().frames.token(frame);
             return Some(self.reuse_initial_window(
                 frame,
-                token,
                 &context,
                 url,
                 time_origin,
@@ -578,12 +574,8 @@ impl ScriptEngine for V8Engine {
             if place.is_none() {
                 scope.state_mut().0.frames.clear_children();
             }
-            let token = (frame != crate::frames::TOP)
-                .then(|| scope.state_mut().0.frames.token(frame))
-                .flatten();
             scope.state_mut().0.frames.set(crate::frames::Frame::new(
                 frame,
-                token,
                 global_context.clone(),
                 document.clone(),
                 document_id,

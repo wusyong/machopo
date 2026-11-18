@@ -60,7 +60,7 @@ impl FrameToken {
             return None;
         }
         let mut bytes = [0u8; 16];
-        for (byte, pair) in bytes.iter_mut().zip(digits.chunks_exact(2)) {
+        for (byte, pair) in bytes.iter_mut().zip(digits.as_chunks::<2>().0) {
             let pair = std::str::from_utf8(pair).ok()?;
             // `from_str_radix` takes a sign, which isn't a digit.
             if !pair.bytes().all(|digit| digit.is_ascii_hexdigit()) {

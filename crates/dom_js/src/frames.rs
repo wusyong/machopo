@@ -83,11 +83,13 @@ impl Frames {
     }
 
     /// `frame`'s realm and document are these now (a new one's, or one it
-    /// navigated to): its modules the realm's, kept if the realm is (the
+    /// navigated to): its token the one it had (a frame's own as it
+    /// navigates), its modules the realm's, kept if the realm is (the
     /// initial `about:blank`'s window reused).
     pub(crate) fn set(&mut self, mut frame: Frame) {
         match self.frames.iter_mut().find(|old| old.id == frame.id) {
             Some(old) => {
+                frame.token = old.token;
                 if old.context == frame.context {
                     frame.modules = old.modules.take();
                 }
@@ -153,9 +155,10 @@ impl Frames {
 }
 
 impl Frame {
+    /// A frame with no token of its own yet: the top-level one, or one
+    /// navigating (`Frames::set` keeps its token).
     pub(crate) fn new(
         id: FrameId,
-        token: Option<FrameToken>,
         context: v8::Global<v8::Context>,
         document: NodeRoot,
         document_id: NodeId,
@@ -165,7 +168,7 @@ impl Frame {
     ) -> Self {
         Self {
             id,
-            token,
+            token: None,
             context,
             document,
             document_id,
@@ -239,16 +242,18 @@ pub(crate) fn create_child(scope: &mut Scope<'_, '_, '_>, owner: &NodeRoot) -> O
         // Its page's visibility too.
         cx.set_page_hidden(window, parent.is_some_and(|parent| cx.page_hidden(parent)));
     });
-    state.frames.set(Frame::new(
-        id,
-        Some(token),
-        global,
-        document.clone(),
-        document_id,
-        Some(parent),
-        Some(owner.clone()),
-        true,
-    ));
+    state.frames.set(Frame {
+        token: Some(token),
+        ..Frame::new(
+            id,
+            global,
+            document.clone(),
+            document_id,
+            Some(parent),
+            Some(owner.clone()),
+            true,
+        )
+    });
     state.frames.requests.push(FrameRequest::Created {
         frame: id,
         token,

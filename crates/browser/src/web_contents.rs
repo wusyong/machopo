@@ -16,6 +16,9 @@ use protocol::viz::{
 };
 use protocol::{FrameToken, TabId};
 
+use crate::bad_message::BadMessageReason;
+use crate::frame_tree::FrameTree;
+
 use crate::debug_urls::{DebugUrl, debug_url};
 use crate::navigation_controller::{NavigationController, NavigationType};
 use crate::render_process_host::{CommittedDocument, Committer};
@@ -56,10 +59,12 @@ pub type ContentsEventCallback = Box<dyn Fn(TabId, ContentsEvent) + Send>;
 /// `content::WebContents`: one tab.
 pub struct WebContents {
     tab: TabId,
-    /// What DevTools calls the tab and its main frame (its target id):
-    /// random, so a page can't guess it (Chromium's frame tokens are
-    /// `base::UnguessableToken`s); each of its renderers is told it.
-    devtools_frame_token: FrameToken,
+    /// The tab's frames, as its renderer told of them; the main frame's
+    /// token (the root's) is what DevTools calls the tab and its main
+    /// frame (its target id): random, so a page can't guess it (Chromium's
+    /// frame tokens are `base::UnguessableToken`s), the same for each of
+    /// its renderers, which are told it first.
+    frame_tree: FrameTree,
     /// The frame sink its renderer submits to: a new one for each renderer,
     /// so what the one before still sends (it isn't waited for) goes to a
     /// sink Viz has forgotten.
@@ -214,7 +219,7 @@ impl WebContents {
         process.send(RendererMsg::DevToolsMainFrameToken(devtools_frame_token));
         Ok(Self {
             tab,
-            devtools_frame_token,
+            frame_tree: FrameTree::new(devtools_frame_token),
             frame_sink_id,
             sink_ids,
             process,
@@ -248,7 +253,13 @@ impl WebContents {
     /// The main frame's token: what DevTools calls the tab and its main
     /// frame (its target id, written as `FrameToken` writes it).
     pub fn devtools_frame_token(&self) -> FrameToken {
-        self.devtools_frame_token
+        self.frame_tree.root()
+    }
+
+    /// The tab's frames: the main frame, and the child frames its renderer
+    /// told of.
+    pub fn frame_tree(&self) -> &FrameTree {
+        &self.frame_tree
     }
 
     /// The frame sink this tab's renderer submits to: another once a
@@ -324,6 +335,7 @@ impl WebContents {
                 tracing::warn!(url, "ending the renderer");
                 self.process.kill();
                 self.crashed = true;
+                self.frame_tree.reset();
             }
             None => self.begin_navigation(url, NavigationType::NewEntry),
         }
@@ -464,6 +476,8 @@ impl WebContents {
                 return;
             }
         };
+        // The frame tree is the main frame alone already: it was reset as
+        // the renderer before went. The new one tells of its frames.
         std::mem::replace(&mut self.process, process).abandon();
         let _ = self
             .viz
@@ -474,9 +488,8 @@ impl WebContents {
             self.begin_frame_observer(),
         ));
         self.crashed = false;
-        self.process.send(RendererMsg::DevToolsMainFrameToken(
-            self.devtools_frame_token,
-        ));
+        self.process
+            .send(RendererMsg::DevToolsMainFrameToken(self.frame_tree.root()));
         self.process
             .send(RendererMsg::UpdateVisualProperties(self.visual_properties));
         if let Some(window_screen_rect) = self.window_screen_rect {
@@ -923,12 +936,35 @@ impl WebContents {
             RendererHostMsg::RendererGone => {
                 self.crashed = true;
                 self.input_in_flight = 0;
+                self.frame_tree.reset();
             }
             RendererHostMsg::RendererReady => {}
-            // The browser keeps no frame tree yet.
+            // A renderer ended: what it sent before is nothing now.
             RendererHostMsg::DidCreateChildFrame { .. }
-            | RendererHostMsg::DidDetachFrame { .. } => {}
+            | RendererHostMsg::DidDetachFrame { .. }
+                if self.crashed => {}
+            RendererHostMsg::DidCreateChildFrame { parent, frame } => {
+                if let Err(reason) = self.frame_tree.add_child(*parent, *frame) {
+                    self.received_bad_message(reason);
+                }
+            }
+            RendererHostMsg::DidDetachFrame { frame } => {
+                if let Err(reason) = self.frame_tree.remove(*frame) {
+                    self.received_bad_message(reason);
+                }
+            }
         }
+    }
+
+    /// The renderer sent what the browser can't take
+    /// (`bad_message::ReceivedBadMessage`): it is ended, as `about:crash`
+    /// ends it, the tab's sad tab showing; nothing more from it counts.
+    fn received_bad_message(&mut self, reason: BadMessageReason) {
+        tracing::error!(?reason, "the renderer sent a bad message; ending it");
+        self.process.kill();
+        self.crashed = true;
+        self.input_in_flight = 0;
+        self.frame_tree.reset();
     }
 
     pub fn shutdown(&mut self) {
