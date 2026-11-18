@@ -1,0 +1,56 @@
+# Temporary: machopo sometimes ends with SIGSEGV on the Linux runner, after
+# the pipe closes (shell's tests that check it ends well fail, a different
+# one each time). This runs shell's tests over and over with core dumps on,
+# and prints every thread's backtrace from each core. Only on this branch.
+name: SIGSEGV cores
+
+on:
+  push:
+    branches: [segv-core]
+
+env:
+  CARGO_TERM_COLOR: always
+  # As ci.yml's, so its cache is used: no debug info, but the symbols stay.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+
+jobs:
+  cores:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+        with:
+          cache: linux-debug
+          gpu: "true"
+      - run: sudo apt-get install -y -q --no-install-recommends gdb
+      - run: cargo test -p shell --test it --no-run
+      - name: Run shell's tests until machopo dumps cores
+        run: |
+          mkdir -p /tmp/cores
+          # The crashing thread's name and the process id.
+          sudo sysctl -w kernel.core_pattern=/tmp/cores/core.%e.%p
+          ulimit -c unlimited
+          for i in $(seq 1 40); do
+            echo "run $i"
+            cargo test -q -p shell --test it 2>&1 \
+              | grep -E "test result|FAILED|panicked at|signal" || true
+            n=$(find /tmp/cores -name 'core.*' | wc -l)
+            if [ "$n" -gt 0 ]; then
+              echo "$n cores after run $i"
+              ls -la /tmp/cores
+              [ "$n" -ge 3 ] && break
+            fi
+          done
+      - name: Backtraces
+        if: always()
+        run: |
+          shopt -s nullglob
+          cores=(/tmp/cores/core.*)
+          [ ${#cores[@]} -gt 0 ] || { echo "no cores"; exit 0; }
+          for core in "${cores[@]}"; do
+            echo "===== $core"
+            gdb -batch -nx -ex 'set pagination off' -ex 'info threads' \
+              -ex 'thread apply all bt' target/debug/machopo "$core" 2>&1 \
+              | grep -v '^\[New LWP' | head -3000
+          done
