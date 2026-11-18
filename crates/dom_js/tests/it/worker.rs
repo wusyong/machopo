@@ -83,7 +83,12 @@ impl WorkerGlobalHost for Host {
         self.0.borrow_mut().asked.push(format!("revoke {url}"));
     }
 
-    fn start_module_fetch(&self, url: &url::Url, credentials: dom::ScriptCors, outside: bool) -> u64 {
+    fn start_module_fetch(
+        &self,
+        url: &url::Url,
+        credentials: dom::ScriptCors,
+        outside: bool,
+    ) -> u64 {
         let mut sent = self.0.borrow_mut();
         sent.modules.push((url.to_string(), credentials, outside));
         sent.modules.len() as u64
@@ -173,8 +178,9 @@ fn run_tasks_until(engine: &mut V8WorkerEngine, mut done: impl FnMut(&mut V8Work
 }
 
 /// `self` is the global, a `DedicatedWorkerGlobalScope` and a
-/// `WorkerGlobalScope`; their members are its own properties (WebIDL's
-/// `[Global]`); it has no `window`, `document`, `Image` or `Node`; what is
+/// `WorkerGlobalScope`; the first's members are its own properties
+/// (WebIDL's `[Global]`), the second's its prototype's; it has no
+/// `window`, `document`, `Image` or `Node`; what is
 /// made of its realm is of its execution context (`AbortSignal.any()`).
 #[test]
 fn a_worker_s_global_is_its_realm_s() {
@@ -185,15 +191,19 @@ fn a_worker_s_global_is_its_realm_s() {
             "[self === globalThis, self instanceof DedicatedWorkerGlobalScope, \
              self instanceof WorkerGlobalScope, self instanceof EventTarget, name, \
              Object.hasOwn(self, 'postMessage'), Object.hasOwn(self, 'setTimeout'), \
-             Object.hasOwn(self, 'self'), typeof queueMicrotask, typeof window, \
+             Object.hasOwn(self, 'self'), \
+             Object.hasOwn(WorkerGlobalScope.prototype, 'setTimeout'), \
+             Object.hasOwn(WorkerGlobalScope.prototype, 'self'), \
+             typeof setTimeout, typeof queueMicrotask, typeof window, \
              typeof document, typeof Image, typeof Node, typeof NodeFilter, \
              AbortSignal.any([]).aborted].join()"
         ),
-        "true,true,true,true,fib,true,true,true,function,undefined,undefined,undefined,undefined,undefined,false"
+        "true,true,true,true,fib,true,false,false,true,true,function,function,undefined,undefined,undefined,undefined,undefined,false"
     );
 }
 
-/// `name` is `[Replaceable]`: script's own value replaces it.
+/// `name` and `performance` are `[Replaceable]`: script's own value
+/// replaces them.
 #[test]
 fn a_worker_s_name_is_replaceable() {
     let (mut engine, _) = worker();
@@ -203,6 +213,14 @@ fn a_worker_s_name_is_replaceable() {
             "[name, (name = 'other', name), typeof Object.getOwnPropertyDescriptor(self, 'name').value].join()"
         ),
         "fib,other,string"
+    );
+    // `performance` too (HR Time's), the global's own once set.
+    assert_eq!(
+        result(
+            &mut engine,
+            "[typeof performance, (performance = 1, performance), Object.hasOwn(self, 'performance')].join()"
+        ),
+        "object,1,true"
     );
 }
 
@@ -546,7 +564,10 @@ fn what_a_worker_s_onerror_throws_goes_to_its_host() {
         .iter()
         .map(|error| error.message.clone())
         .collect();
-    assert_eq!(messages, ["Uncaught Error: in onerror", "Uncaught Error: first"]);
+    assert_eq!(
+        messages,
+        ["Uncaught Error: in onerror", "Uncaught Error: first"]
+    );
 }
 
 /// `importScripts()` runs what its host fetched, in turn, in its realm,
@@ -952,10 +973,7 @@ fn a_worker_s_fetch_goes_to_its_host() {
         ]
     );
     run(&mut engine, "c.abort();");
-    assert_eq!(
-        sent.borrow().asked,
-        [format!("cancel {}", fetches[2].id)]
-    );
+    assert_eq!(sent.borrow().asked, [format!("cancel {}", fetches[2].id)]);
     engine.fetch_response(
         fetches[0].id,
         Ok(dom_api::FetchedResponse {
@@ -991,7 +1009,10 @@ fn a_worker_s_blob_urls_go_to_its_host() {
     assert!(url.starts_with("blob:https://example.test/"), "{url}");
     assert_eq!(
         sent.borrow().asked,
-        [format!("register {url} text/plain hi"), format!("revoke {url}")]
+        [
+            format!("register {url} text/plain hi"),
+            format!("revoke {url}")
+        ]
     );
 }
 
@@ -1048,7 +1069,10 @@ fn a_module_worker_s_graph_that_can_t_run() {
     let url = url::Url::parse("https://example.test/w.mjs").unwrap();
     let (mut engine, _) = worker_of_kind(url.as_str(), Instant::now(), true);
     let root = module(url.as_str(), "import './gone.mjs';");
-    assert_eq!(engine.run_module_graph(&url, root, dom::ScriptCors::Anonymous), None);
+    assert_eq!(
+        engine.run_module_graph(&url, root, dom::ScriptCors::Anonymous),
+        None
+    );
     assert_eq!(engine.module_fetched(1, None), Some(false));
     let (mut engine, _) = worker_of_kind(url.as_str(), Instant::now(), true);
     let root = module(url.as_str(), "export {");
@@ -1059,8 +1083,9 @@ fn a_module_worker_s_graph_that_can_t_run() {
 }
 
 /// `import()` in a classic worker: its graph fetched through the host,
-/// resolved against the script's URL; settled as it comes (a failed one
-/// rejected); what the worker's graph is isn't touched.
+/// resolved against the script's URL (`about:blank`'s for a muted one);
+/// settled as it comes (a failed one rejected); what the worker's graph is
+/// isn't touched.
 #[test]
 fn a_worker_imports_modules() {
     let (mut engine, sent) = worker();
@@ -1085,6 +1110,19 @@ fn a_worker_imports_modules() {
     let m = module("https://example.test/m.mjs", "export const y = 2;");
     assert_eq!(engine.module_fetched(1, Some(m)), None);
     assert_eq!(engine.module_fetched(2, None), None);
-    assert_eq!(result(&mut engine, "got.join()"), "bare TypeError,2,TypeError");
+    assert_eq!(
+        result(&mut engine, "got.join()"),
+        "bare TypeError,2,TypeError"
+    );
+    // From another origin's script (muted), against `about:blank`: a
+    // relative specifier resolves to nothing, and nothing is fetched.
+    script(
+        &sent,
+        "https://other.test/x.js",
+        "import('./n.mjs').catch(e => got.push('muted ' + e.name));",
+        true,
+    );
+    run(&mut engine, "importScripts('https://other.test/x.js');");
+    assert_eq!(result(&mut engine, "got.pop()"), "muted TypeError");
+    assert_eq!(sent.borrow().modules.len(), 2);
 }
-

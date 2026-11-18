@@ -1,0 +1,48 @@
+# 2f: WorkerGlobalScope's members on its prototype; what WPT found.
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "worker::", "scripts::"]
+timeout = 900
+
+[[mutant]]
+name = "WorkerGlobalScope is [Global] again"
+file = "crates/dom_api/src/interfaces.rs"
+from = '''    #[exposed(Worker)]
+    interface WorkerGlobalScope : EventTarget'''
+to = '''    #[global]
+    #[exposed(Worker)]
+    interface WorkerGlobalScope : EventTarget'''
+
+[[mutant]]
+name = "an ancestor's members are all on each object"
+file = "crates/dom_js/src/templates.rs"
+from = '''            named: NamedCalls::default(),
+            only_unforgeable: true,
+            kind,'''
+to = '''            named: NamedCalls::default(),
+            only_unforgeable: false,
+            kind,'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it"]
+
+[[mutant]]
+name = "a worker's performance isn't replaceable"
+file = "crates/dom_api/src/interfaces.rs"
+from = '''        #[replaceable]
+        attribute performance: Performance, get = performance::worker_performance;'''
+to = '''        attribute performance: Performance, get = performance::worker_performance;'''
+
+[[mutant]]
+name = "a muted classic script's import() has its own base URL"
+file = "crates/dom_js/src/frames.rs"
+from = '''    if script.muted {
+        "about:blank"
+    } else {'''
+to = '''    if script.muted && false {
+        "about:blank"
+    } else {'''
+
+[[mutant]]
+name = "a muted imported script's import() has its own base URL"
+file = "crates/dom_js/src/worker.rs"
+from = '''        let base_url = if script.muted {
+            "about:blank"'''
+to = '''        let base_url = if script.muted && false {
+            "about:blank"'''

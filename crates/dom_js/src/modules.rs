@@ -19,12 +19,12 @@ use std::collections::HashMap;
 
 use bindings::{ModuleRecords, PromiseResolvers, ScriptLocation};
 use dom::{LoadInitiator, NodeRoot, ScriptCors, ScriptRequest, names};
-use elise::Persistent;
 use dom_api::module::{
     CompiledModule, FetchedModule, Finished, GraphFor, Modulator, ModuleHost, ModuleParseError,
     ModuleRequest, ModuleScriptId,
 };
 use dom_api::{ModuleSource, ModuleStart};
+use elise::Persistent;
 use url::Url;
 
 use crate::state::Scope;
@@ -102,7 +102,9 @@ impl ModuleHost for Host<'_, '_, '_, '_> {
                     .caches
                     .worker_global_host
                     .as_deref()
-                    .map_or(0, |host| host.start_module_fetch(url, credentials, delays_load));
+                    .map_or(0, |host| {
+                        host.start_module_fetch(url, credentials, delays_load)
+                    });
             }
         };
         let request = ScriptRequest {
@@ -632,32 +634,38 @@ pub(crate) fn start_graph(scope: &mut Scope<'_, '_, '_>, document: &NodeRoot, st
             .pending_script_element(start.key)
             .map_or(LoadInitiator::Other, LoadInitiator::Element)
     };
-    with_modules(scope, &Realm::Document(document.clone()), false, root, |map, _, host| {
-        match start.source {
-            ModuleSource::External(url) => match Url::parse(&url) {
-                Ok(url) => {
-                    map.fetch_tree(host, url, GraphFor::Script(start.key), start.credentials)
+    with_modules(
+        scope,
+        &Realm::Document(document.clone()),
+        false,
+        root,
+        |map, _, host| {
+            match start.source {
+                ModuleSource::External(url) => match Url::parse(&url) {
+                    Ok(url) => {
+                        map.fetch_tree(host, url, GraphFor::Script(start.key), start.credentials)
+                    }
+                    Err(_) => Vec::new(),
+                },
+                ModuleSource::Inline { source, url, line } => {
+                    // Its base URL the document's.
+                    let Some(base) = base_url else {
+                        return Vec::new();
+                    };
+                    let url = Url::parse(&url).unwrap_or_else(|_| base.clone());
+                    map.fetch_inline_tree(
+                        host,
+                        &source,
+                        &url,
+                        &base,
+                        line,
+                        start.key,
+                        start.credentials,
+                    )
                 }
-                Err(_) => Vec::new(),
-            },
-            ModuleSource::Inline { source, url, line } => {
-                // Its base URL the document's.
-                let Some(base) = base_url else {
-                    return Vec::new();
-                };
-                let url = Url::parse(&url).unwrap_or_else(|_| base.clone());
-                map.fetch_inline_tree(
-                    host,
-                    &source,
-                    &url,
-                    &base,
-                    line,
-                    start.key,
-                    start.credentials,
-                )
             }
-        }
-    });
+        },
+    );
 }
 
 /// HTML's processing of a `<link rel=modulepreload>` (Blink's
@@ -709,9 +717,13 @@ pub(crate) fn preload(scope: &mut Scope<'_, '_, '_>, link: &NodeRoot) {
     let Some((document, url, credentials, link)) = found else {
         return;
     };
-    with_modules(scope, &Realm::Document(document), false, root, |map, _, host| {
-        map.fetch_tree(host, url, GraphFor::Preload(link), credentials)
-    });
+    with_modules(
+        scope,
+        &Realm::Document(document),
+        false,
+        root,
+        |map, _, host| map.fetch_tree(host, url, GraphFor::Preload(link), credentials),
+    );
 }
 
 /// The destination a `<link>`'s `as` names (its keyword), none for a
@@ -766,8 +778,11 @@ pub(crate) fn module_fetched(
 ) -> bool {
     let realm = {
         let (state, _) = scope.state();
-        let fetching =
-            |modules: &Option<Box<RealmModules>>| modules.as_ref().is_some_and(|modules| modules.map.is_fetching(key));
+        let fetching = |modules: &Option<Box<RealmModules>>| {
+            modules
+                .as_ref()
+                .is_some_and(|modules| modules.map.is_fetching(key))
+        };
         match &state.worker_realm {
             Some(worker) if fetching(&worker.modules) => Some(Realm::Worker),
             _ => state
@@ -814,7 +829,9 @@ pub(crate) fn run_module_script(scope: &mut Scope<'_, '_, '_>, realm: &Realm, ro
         realm.and_then(|(context, modules)| {
             Some((
                 context.clone(),
-                modules?.records.evaluation(index(ModuleScriptId::new(root))),
+                modules?
+                    .records
+                    .evaluation(index(ModuleScriptId::new(root))),
             ))
         })
     };

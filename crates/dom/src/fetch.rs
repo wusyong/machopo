@@ -406,7 +406,10 @@ impl<'gc> Cx<'_, 'gc> {
     }
 
     pub fn fetch_context(&self, record: Gc<'gc, FetchRecord>) -> Gc<'gc, crate::ExecutionContext> {
-        record.context.get(self.gc).expect("a fetch's execution context")
+        record
+            .context
+            .get(self.gc)
+            .expect("a fetch's execution context")
     }
 
     pub fn fetch_signal(&self, record: Gc<'gc, FetchRecord>) -> Gc<'gc, EventTargetImpl> {

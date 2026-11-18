@@ -10,10 +10,10 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::mpsc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
+use base::AtomicSequenceNumber;
 use compositor::{CompositorReceiver, CompositorSender, ToMainThread};
 use dom_api::{DevToolsInterrupter, DevToolsQueued};
 use protocol::renderer::RendererMsg;
@@ -144,9 +144,19 @@ pub struct MainThreadScheduler {
     /// browser, bound on its thread). A lock of its own: a worker's thread
     /// is told while the main thread waits on `state`.
     worker_routes: Mutex<HashMap<u64, mpsc::Sender<crate::worker_thread::WorkerTask>>>,
-    /// The last dedicated worker's number, from 1: the renderer's, as any
+    /// The dedicated workers' numbers, from 1: the renderer's, as any
     /// thread may make one (a worker makes its own).
-    last_worker: AtomicU64,
+    worker_ids: WorkerIds,
+}
+
+/// The renderer's dedicated workers' numbers, from 1.
+#[derive(Debug)]
+struct WorkerIds(AtomicSequenceNumber<u64>);
+
+impl Default for WorkerIds {
+    fn default() -> Self {
+        Self(AtomicSequenceNumber::<u64>::starting_at(1))
+    }
 }
 
 impl MainThreadScheduler {
@@ -273,8 +283,7 @@ impl MainThreadScheduler {
 
     /// A new dedicated worker's number, from 1, of whichever thread makes it.
     pub(crate) fn next_worker_id(&self) -> u64 {
-        let last = self.last_worker.fetch_add(1, Ordering::Relaxed);
-        last.checked_add(1).expect("fewer than 2^64 workers")
+        self.worker_ids.0.get_next()
     }
 
     /// The canvas encoder's file of the `toBlob` call `id`.

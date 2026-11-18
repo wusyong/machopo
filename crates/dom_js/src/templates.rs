@@ -79,12 +79,12 @@ fn make_template<'s>(
         let parent = template_of(scope, parent);
         template.inherit(parent);
     }
-    // The ancestors with members on each object, their templates, and
-    // whether only their unforgeable ones are: V8 doesn't apply a parent's
-    // instance template to a child's instances, so each object gets them
-    // from its own (as Blink's generated bindings install them). Of a
-    // `[Global]` interface's `[Global]` ancestor (`WorkerGlobalScope` of
-    // `DedicatedWorkerGlobalScope`), all are the global's own.
+    // The ancestors with unforgeable members, their templates: V8 doesn't
+    // apply a parent's instance template to a child's instances, so each
+    // object gets them from its own (as Blink's generated bindings install
+    // them). Their other members are their prototypes', which the child's
+    // inherits (a `[Global]` interface's ancestors' too: WebIDL puts only
+    // its own on the global).
     let mut own_ancestors = Vec::new();
     let mut ancestor = desc.parent;
     while let Some(name) = ancestor {
@@ -92,14 +92,12 @@ fn make_template<'s>(
             .iter()
             .position(|desc| desc.name == name)
             .expect("a parent of the table");
-        let all = desc.global && INTERFACES[index].global;
-        if all
-            || INTERFACES[index]
-                .members
-                .iter()
-                .any(|member| member.unforgeable)
+        if INTERFACES[index]
+            .members
+            .iter()
+            .any(|member| member.unforgeable)
         {
-            own_ancestors.push((index, self::template(scope, index), !all));
+            own_ancestors.push((index, self::template(scope, index)));
         }
         ancestor = INTERFACES[index].parent;
     }
@@ -143,7 +141,7 @@ fn make_template<'s>(
         named,
         ..
     } = members;
-    for (ancestor, ancestor_template, only_unforgeable) in own_ancestors {
+    for (ancestor, ancestor_template) in own_ancestors {
         let signature = v8::Signature::new(scope, ancestor_template);
         let mut members = Members {
             scope: &mut *scope,
@@ -157,7 +155,7 @@ fn make_template<'s>(
             setters: Vec::new(),
             pairs: None,
             named: NamedCalls::default(),
-            only_unforgeable,
+            only_unforgeable: true,
             kind,
         };
         dom_api::visit_typed(&mut members);

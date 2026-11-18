@@ -263,11 +263,11 @@ crate::declare! {
         r#type: String = String::from("classic"),
     }
 
-    // HTML's: a worker's global (`dom::WorkerGlobalScope`); its members are
-    // the global object's own, as a window's. Of `WindowOrWorkerGlobalScope`
-    // the members a window has too (its timers, `structuredClone`,
-    // `crypto`), its execution context's.
-    #[global]
+    // HTML's: a worker's global (`dom::WorkerGlobalScope`); not `[Global]`
+    // itself, its members are its prototype's, which the global's inherits
+    // (`DedicatedWorkerGlobalScope`'s are the global's own). Of
+    // `WindowOrWorkerGlobalScope` the members a window has too (its timers,
+    // `structuredClone`, `crypto`), its execution context's.
     #[exposed(Worker)]
     interface WorkerGlobalScope : EventTarget [type = dom::WorkerGlobalScope] {
         attribute self: WorkerGlobalScope, get = worker::global_self;
@@ -276,6 +276,7 @@ crate::declare! {
         attribute crypto: Crypto, get = crypto::worker_crypto;
         attribute location: WorkerLocation, get = worker::location;
         attribute navigator: WorkerNavigator, get = worker::navigator;
+        #[replaceable]
         attribute performance: Performance, get = performance::worker_performance;
         #[front]
         method setTimeout(handler: TimerHandler, timeout?: i32, arguments?: Rest) -> i32 =

@@ -909,3 +909,26 @@ fn module_preloads() {
         "error s.css / load p.mjs / error gone.mjs / load second.mjs / p ran"
     );
 }
+
+/// `import()` from another origin's classic script (muted errors): its base
+/// URL `about:blank` (HTML's "create a classic script"), so a relative
+/// specifier resolves to nothing, rejected at once, nothing fetched.
+#[test]
+fn a_muted_scripts_import_has_no_base_url() {
+    let mut engine = engine();
+    let frame = engine.top_frame();
+    engine.run_classic_script(
+        frame,
+        &ClassicScript {
+            source: "import('./m.mjs').catch(e => log.push(e.name));",
+            url: "https://other.test/x.js",
+            base_url: None,
+            line: 1,
+            muted: true,
+            use_credentials: false,
+        },
+    );
+    engine.perform_microtask_checkpoint();
+    assert!(fetches(&mut engine).is_empty());
+    assert_eq!(log(&mut engine), "TypeError");
+}

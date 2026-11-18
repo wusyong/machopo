@@ -521,11 +521,8 @@ pub(crate) fn run_classic_script(
     // Muted, it isn't "shared cross-origin": V8's messages of its errors
     // say so, and they are reported sanitized (`listeners::Thrown`).
     // Its base URL and fetch options, which an `import()` in it takes.
-    let options = bindings::script_options(
-        scope,
-        script.base_url.unwrap_or(script.url),
-        Some(credentials_of(script)),
-    );
+    let options =
+        bindings::script_options(scope, import_base_url(script), Some(credentials_of(script)));
     let origin = v8::ScriptOrigin::new(
         scope,
         name.into(),
@@ -547,6 +544,17 @@ pub(crate) fn run_classic_script(
     drop(span);
     if ran.is_none() {
         crate::listeners::report_caught(scope, crate::listeners::ReportAt::Global(global));
+    }
+}
+
+/// The base URL a classic script's `import()` resolves against: muted,
+/// `about:blank` (HTML's "create a classic script": nothing of another
+/// origin's URL to resolve against); else its base URL.
+pub(crate) fn import_base_url<'a>(script: &dom_api::ClassicScript<'a>) -> &'a str {
+    if script.muted {
+        "about:blank"
+    } else {
+        script.base_url.unwrap_or(script.url)
     }
 }
 

@@ -669,7 +669,7 @@ impl ScriptEngine for V8Engine {
         // Its base URL and fetch options, which an `import()` in it takes.
         let options = bindings::script_options(
             scope,
-            script.base_url.unwrap_or(script.url),
+            crate::frames::import_base_url(script),
             Some(crate::frames::credentials_of(script)),
         );
         let origin = v8::ScriptOrigin::new(

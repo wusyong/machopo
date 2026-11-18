@@ -215,6 +215,34 @@ pub(crate) fn is_blocked_as_script(essence: &str) -> bool {
         || essence == "text/csv"
 }
 
+/// A module's response as HTML's "fetch a single module script" takes it:
+/// none for a failed load (a network error, a CORS failure), a status
+/// that isn't ok, or a MIME type that isn't JavaScript's; else its text,
+/// UTF-8, and its URL after redirects (its base URL).
+pub(crate) fn module_loaded(result: &LoadResult) -> Option<dom_api::module::FetchedModule> {
+    let response = result.as_ref().ok()?;
+    if !(200..300).contains(&response.status)
+        || !dom_api::is_javascript_mime_type(&response.mime_type)
+    {
+        return None;
+    }
+    let (source, _) = encoding_rs::UTF_8.decode_with_bom_removal(&response.body);
+    Some(dom_api::module::FetchedModule {
+        url: url::Url::parse(&response.url).ok()?,
+        source: source.into_owned(),
+    })
+}
+
+/// The credentials mode of a script's request by CORS (a `crossorigin`
+/// attribute's, a module worker's `credentials`).
+pub(crate) fn script_credentials(cors: dom::ScriptCors) -> CredentialsMode {
+    match cors {
+        dom::ScriptCors::Anonymous => CredentialsMode::SameOrigin,
+        dom::ScriptCors::UseCredentials => CredentialsMode::Include,
+        dom::ScriptCors::Omit => CredentialsMode::Omit,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,33 +307,5 @@ mod tests {
         );
         assert!(urls.is_revoked(&"blob:null/4".parse().unwrap()));
         assert!(!urls.is_revoked(&"blob:null/2".parse().unwrap()));
-    }
-}
-
-/// A module's response as HTML's "fetch a single module script" takes it:
-/// none for a failed load (a network error, a CORS failure), a status
-/// that isn't ok, or a MIME type that isn't JavaScript's; else its text,
-/// UTF-8, and its URL after redirects (its base URL).
-pub(crate) fn module_loaded(result: &LoadResult) -> Option<dom_api::module::FetchedModule> {
-    let response = result.as_ref().ok()?;
-    if !(200..300).contains(&response.status)
-        || !dom_api::is_javascript_mime_type(&response.mime_type)
-    {
-        return None;
-    }
-    let (source, _) = encoding_rs::UTF_8.decode_with_bom_removal(&response.body);
-    Some(dom_api::module::FetchedModule {
-        url: url::Url::parse(&response.url).ok()?,
-        source: source.into_owned(),
-    })
-}
-
-/// The credentials mode of a script's request by CORS (a `crossorigin`
-/// attribute's, a module worker's `credentials`).
-pub(crate) fn script_credentials(cors: dom::ScriptCors) -> CredentialsMode {
-    match cors {
-        dom::ScriptCors::Anonymous => CredentialsMode::SameOrigin,
-        dom::ScriptCors::UseCredentials => CredentialsMode::Include,
-        dom::ScriptCors::Omit => CredentialsMode::Omit,
     }
 }

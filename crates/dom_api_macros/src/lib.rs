@@ -417,7 +417,10 @@ impl Parse for InterfaceDef {
         while !body.is_empty() {
             let mut attrs = body.call(Attribute::parse_outer)?;
             let mut exposed = None;
-            if let Some(at) = attrs.iter().position(|attr| attr.path().is_ident("exposed")) {
+            if let Some(at) = attrs
+                .iter()
+                .position(|attr| attr.path().is_ident("exposed"))
+            {
                 let attr = attrs.remove(at);
                 if !body.peek(kw::attribute) && !body.peek(kw::method) {
                     return Err(syn::Error::new_spanned(
@@ -469,8 +472,7 @@ impl Parse for InterfaceDef {
 
 /// The globals an `#[exposed(..)]` names, each one of `GLOBALS`.
 fn globals(attr: &Attribute) -> syn::Result<Vec<Ident>> {
-    let globals =
-        attr.parse_args_with(Punctuated::<Ident, Token![,]>::parse_separated_nonempty)?;
+    let globals = attr.parse_args_with(Punctuated::<Ident, Token![,]>::parse_separated_nonempty)?;
     for global in &globals {
         if !GLOBALS.iter().any(|name| global == name) {
             return Err(syn::Error::new(
@@ -1293,9 +1295,10 @@ fn check(table: &Table) -> syn::Result<()> {
             // WebIDL: a member is exposed in no global its interface isn't
             // in (a dedicated worker's is a worker's).
             let outside = exposed.iter().flatten().find(|global| {
-                !interface.exposed.iter().any(|of| {
-                    of == *global || (of == "Worker" && *global == "DedicatedWorker")
-                })
+                !interface
+                    .exposed
+                    .iter()
+                    .any(|of| of == *global || (of == "Worker" && *global == "DedicatedWorker"))
             });
             if let Some(global) = outside {
                 fail(syn::Error::new(
@@ -3032,7 +3035,9 @@ mod tests {
     #[test]
     fn exposed_marks_an_interface_an_attribute_or_a_method() {
         assert_eq!(
-            error("#[exposed(Window, Worker)] interface A [] { #[exposed(Window)] const A: u32 = 1; }"),
+            error(
+                "#[exposed(Window, Worker)] interface A [] { #[exposed(Window)] const A: u32 = 1; }"
+            ),
             "`#[exposed(..)]` marks an interface, an attribute or a method"
         );
         assert_eq!(

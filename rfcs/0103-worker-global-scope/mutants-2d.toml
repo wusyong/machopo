@@ -54,8 +54,8 @@ to = '''            Owner::Worker(_) => self.0.scheduler.port_waker(),'''
 [[mutant]]
 name = "every worker is numbered 1"
 file = "crates/renderer/src/task_queue.rs"
-from = '''        let last = self.last_worker.fetch_add(1, Ordering::Relaxed);'''
-to = '''        let last = self.last_worker.fetch_add(0, Ordering::Relaxed);'''
+from = '''        self.worker_ids.0.get_next()'''
+to = '''        self.worker_ids.0.get_next().min(1)'''
 
 [[mutant]]
 name = "a worker's worker's error is reported at no global"

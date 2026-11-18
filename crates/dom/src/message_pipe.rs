@@ -86,7 +86,10 @@ impl PortEnd {
     }
 
     fn lock(&self) -> MutexGuard<'_, [EndState; 2]> {
-        self.pipe.ends.lock().unwrap_or_else(PoisonError::into_inner)
+        self.pipe
+            .ends
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     fn other(&self) -> usize {

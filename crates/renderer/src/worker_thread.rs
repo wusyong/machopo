@@ -241,7 +241,8 @@ impl Workers {
         let id = self.scheduler.next_worker_id();
         let Some(engine) = self.engine else {
             // No engine for workers: as a script that couldn't be had.
-            self.home.post(&self.scheduler, id, WorkerEvent::ScriptFailed);
+            self.home
+                .post(&self.scheduler, id, WorkerEvent::ScriptFailed);
             return id;
         };
         let (tasks, from_owner) = std::sync::mpsc::channel();
@@ -291,7 +292,8 @@ impl Workers {
             }
             Err(error) => {
                 tracing::warn!(%error, "no thread for a worker");
-                self.home.post(&self.scheduler, id, WorkerEvent::ScriptFailed);
+                self.home
+                    .post(&self.scheduler, id, WorkerEvent::ScriptFailed);
             }
         }
         id
@@ -503,7 +505,12 @@ impl dom_api::WorkerGlobalHost for GlobalHost {
     /// the destination of a module worker's descendants is `worker`, as
     /// Fetch's script-like ones go alike here), its owner's origin or its
     /// own the initiator.
-    fn start_module_fetch(&self, url: &url::Url, credentials: dom::ScriptCors, outside: bool) -> u64 {
+    fn start_module_fetch(
+        &self,
+        url: &url::Url,
+        credentials: dom::ScriptCors,
+        outside: bool,
+    ) -> u64 {
         let request_id = self.next_request_id();
         if self.shared.stopping() {
             return request_id;
@@ -733,7 +740,9 @@ fn run(thread: WorkerThread) {
             muted: false,
             use_credentials: false,
         })),
-        MainScript::Module(root, credentials) => engine.run_module_graph(&start.url, root, credentials),
+        MainScript::Module(root, credentials) => {
+            engine.run_module_graph(&start.url, root, credentials)
+        }
     };
     if ran == Some(false) {
         owner.post(&scheduler, id, WorkerEvent::ScriptFailed);

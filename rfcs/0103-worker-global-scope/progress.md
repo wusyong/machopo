@@ -16,13 +16,13 @@
 | 1b-5：`renderer` 的 worker 的 thread 和 event loop、兩個方向的 `postMessage`、`terminate()`、`close()`、`onerror` | 做完（第 19 條；主 script 暫時只有 `data:` 的網址） | 2026-11-17 |
 | 1b-6：Browser 的登記和主 script 的載入、子資源的請求帶 client、`importScripts()` | 做完（第 20 條） | 2026-11-17 |
 | 1b-7：WPT 的 `workers/`、情境、`about:demo`、文件、整個階段的檢查 | 做完（第 21、22 條） | 2026-11-18 |
-| 2：worker 裡的 `fetch()`、`MessagePort` 跨 thread、module worker、巢狀的 worker、`WorkerNavigator`、`WorkerLocation`、`performance` | 做中：2a 到 2e 做完 | |
+| 2：worker 裡的 `fetch()`、`MessagePort` 跨 thread、module worker、巢狀的 worker、`WorkerNavigator`、`WorkerLocation`、`performance` | 做完（2a 到 2f） | 2026-11-18 |
 | 2a：worker 裡的 `location`、`navigator`、`performance` | 做完（第 23 到 26 條） | 2026-11-18 |
 | 2b：worker 裡的 `fetch()`、worker 建的 blob URL | 做完（第 27、28 條） | 2026-11-18 |
 | 2c：`MessagePort` 跨 thread | 做完（第 29 到 31 條） | 2026-11-18 |
 | 2d：worker 裡建的 worker | 做完（第 32 到 34 條） | 2026-11-18 |
 | 2e：module worker | 做完（第 35 到 37 條） | 2026-11-18 |
-| 2f：WPT、文件、整個階段的檢查 | 還沒開始 | |
+| 2f：WPT、文件、整個階段的檢查 | 做完（第 38 條） | 2026-11-18 |
 
 ## 驗收
 
@@ -232,4 +232,13 @@
   - `shell` 的 `workers::a_module_worker_s_graph_is_fetched_and_run`、`a_module_worker_whose_graph_fails_errs`（import 不在、根不是 JavaScript、根是別的 origin 的）、`a_worker_imports_a_module`、`a_data_module_worker_imports_for_its_page`。
 - mutation test（`rfcs/0103-worker-global-scope/mutants-2e.toml`，16 條）：第一次 15 條抓到；「module worker 的根用 CORS 抓」沒抓到（WPT 的 `same-origin-check.sub.html` 抓得到，Rust 的測試沒有跨源的 module worker），`a_module_worker_whose_graph_fails_errs` 補上別的 origin、給了 `Access-Control-Allow-Origin` 的根，重跑抓到。
 - 跑過的：`cargo test -p dom -p dom_api -p dom_js -p dom_wasm -p renderer`、`shell` 的 `workers::` 和 `script`、sanity 的每一項。`cargo test --workspace`、fmt、clippy 等第 2 階段做完時跑。
+
+### 2f：WPT、文件、整個階段的檢查（2026-11-18，macOS，Apple Silicon）
+
+- 第 38 條：宣告表的 `WorkerGlobalScope` 不再是 `#[global]`，`dom_js` 的 template 只把祖先的 unforgeable 成員裝在每個物件上（原本 `[Global]` 的 `[Global]` 祖先的成員全部裝在子的 instance 上）。開始前先實驗過：拿掉之後 `dom_js`、`dom_api` 的測試只有寫著舊行為的那一個失敗。`worker::a_worker_s_global_is_its_realm_s` 改成檢查 `setTimeout`、`self` 在 `WorkerGlobalScope.prototype` 上、不是 global 自己的。
+- WPT 找到、修好的：worker 的 `performance` 少了 HR Time 的 `[Replaceable]`（window 的有），補上；muted 的 classic script（別的 origin 的、沒有 `crossorigin` 的 `<script>`，和跨源的 `importScripts()`）裡的 `import()` 原本照它自己的網址解析，HTML 的「create a classic script」給它 `about:blank`（`frames::import_base_url`，window 和 worker 共用；`importScripts()` 的另外判斷）。
+- WPT：之前一起標成「needs what machopo doesn't have (postMessage, workers, crypto...)」的 15 個拿掉 `disabled` 重跑：5 個通過（`checkpoint-after-workerglobalscope-onerror*.html`、`shared-dependency-repeated-import.https.html` 兩個、`alpha/base-url-worker.sub.html`），修好上面一點之後 `alpha/base-url-worker-importScripts.html` 和 `alpha/base-url.sub.html`（window 的）也通過；其他的寫上真正的原因（cookie、tentative 的 `import defer`、timer 的字串 handler 的 `import()` 照文件的 base URL、跨源的 `Location` 設 prototype 時丟 `SecurityError`、`document.domain`）。清單裡有 worker variant 的 114 項不更新地跑一次（18565 項檢查）：只有 idlharness 的 `WorkerGlobalScope interface: attribute crypto`、`self must inherit property "performance"` 從失敗變成通過（和之前就有的 Mac 上 `scrollend` 的 pass），`attribute performance` 補上 `[Replaceable]` 之後也通過；兩份 idlharness 的過時註解拿掉。
+- 新的測試：`dom_js` 的 `scripts::a_muted_scripts_import_has_no_base_url`、`worker::a_worker_imports_modules` 多了 muted 的 `importScripts()`、`worker::a_worker_s_name_is_replaceable` 多了 `performance`。
+- mutation test（`rfcs/0103-worker-global-scope/mutants-2f.toml`，5 條）：第一次 4 條抓到；「祖先的成員全部裝在每個物件上」沒抓到：只影響有 unforgeable 成員的祖先（`Event` 的 `isTrusted` 等），`worker::`、`scripts::` 碰不到，這一條改用整個 `dom_js` 的測試重跑，抓到。
+- 整個階段的檢查：`cargo fmt`（改了 12 個檔案的排版）；clippy 找到的：`first_message` 的回傳型別太複雜（`TaskStamp`）、`dom` 的 `message_ports` 測試的計數器用 `fetch_add`（`#[expect]`，寫明理由）、worker 的編號改用 `base::AtomicSequenceNumber`（原本是 `fetch_add` 再 `checked_add`；`mutants-2d.toml` 的那一條跟著改）、`loader.rs` 的兩個函式搬到 test module 之前。之後 `cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通過；`cargo test --workspace` 通過（56 組，沒有失敗）；`test.py scenarios --window` 的 69 個情境都通過，`demo-worker` 的截圖正常；sanity 的每一項通過。
 

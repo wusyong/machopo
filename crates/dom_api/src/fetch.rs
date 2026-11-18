@@ -73,7 +73,14 @@ pub(crate) fn worker_fetch<'gc, O: OpFront>(
     init: &RequestInit<O::Node>,
 ) -> Result<u64, ApiError> {
     let initiator = Some(cx.worker_global_origin(this).clone());
-    start(op, cx, cx.worker_global_context(this), (None, initiator), input, init)
+    start(
+        op,
+        cx,
+        cx.worker_global_context(this),
+        (None, initiator),
+        input,
+        init,
+    )
 }
 
 /// `fetch(input, init)` of `context`'s global, of its document (if a

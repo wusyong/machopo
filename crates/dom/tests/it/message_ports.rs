@@ -32,6 +32,7 @@ fn counted() -> (Dom, Arc<AtomicUsize>) {
     let woken = Arc::new(AtomicUsize::new(0));
     dom.set_port_waker(Arc::new({
         let woken = woken.clone();
+        #[expect(clippy::disallowed_methods, reason = "a test's count of a few wakes")]
         move || {
             woken.fetch_add(1, Ordering::SeqCst);
         }
@@ -80,11 +81,15 @@ fn a_port_s_messages_follow_it_to_another_thread() {
             let port = cx.receive_message_ports(context, vec![end])[0];
             cx.start_message_port(port);
             assert_eq!(
-                cx.next_task(context, cx.dom_now() + 1.0).map(|task| task.queue),
+                cx.next_task(context, cx.dom_now() + 1.0)
+                    .map(|task| task.queue),
                 Some(TaskQueue::Message)
             );
             assert_eq!(take_all(cx, context, port), [1, 2]);
-            (Persistent::new(cx.gc, context), Persistent::new(cx.gc, port))
+            (
+                Persistent::new(cx.gc, context),
+                Persistent::new(cx.gc, port),
+            )
         });
         to_here.send(()).unwrap();
         wait.recv().unwrap();
@@ -148,7 +153,10 @@ fn a_port_whose_other_end_closed_gets_what_came_before() {
         });
         drop(port);
         here.collect();
-        assert!(here.read(|cx| weak.get(cx.gc).is_none()), "drop_dom: {drop_dom}");
+        assert!(
+            here.read(|cx| weak.get(cx.gc).is_none()),
+            "drop_dom: {drop_dom}"
+        );
     }
 }
 
@@ -162,7 +170,10 @@ fn a_collected_port_closes_its_end() {
         let channel = cx.create_message_channel(Some(context));
         let (one, _) = cx.message_channel_ports(channel);
         cx.start_message_port(one);
-        (Persistent::new(cx.gc, context), WeakPersistent::new(cx.gc, one))
+        (
+            Persistent::new(cx.gc, context),
+            WeakPersistent::new(cx.gc, one),
+        )
     });
     dom.collect();
     // Kept by its context's list till it looks.
@@ -188,7 +199,10 @@ fn a_port_shipped_through_its_own_pipe_is_lost() {
         cx.post_port_message(one, message(6, vec![end]));
         assert!(!cx.has_posted_message(context));
         assert!(cx.next_task(context, cx.dom_now() + 1.0).is_none());
-        (Persistent::new(cx.gc, context), WeakPersistent::new(cx.gc, one))
+        (
+            Persistent::new(cx.gc, context),
+            WeakPersistent::new(cx.gc, one),
+        )
     });
     dom.collect();
     assert!(dom.read(|cx| weak.get(cx.gc).is_none()));

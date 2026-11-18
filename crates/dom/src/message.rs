@@ -563,7 +563,7 @@ impl<'gc> Cx<'_, 'gc> {
     fn first_message(
         &self,
         context: Gc<'gc, crate::ExecutionContext>,
-    ) -> Option<(Option<Gc<'gc, EventTargetImpl>>, (f64, u64))> {
+    ) -> Option<(Option<Gc<'gc, EventTargetImpl>>, TaskStamp)> {
         let own = context
             .posted_messages
             .get(self.gc)
@@ -592,6 +592,9 @@ impl<'gc> Cx<'_, 'gc> {
             .min_by_key(|&(_, (_, number))| number)
     }
 }
+
+/// When a task was queued (the DOM's clock) and its number (`tasks`).
+type TaskStamp = (f64, u64);
 
 /// A message taken to be delivered (`Cx::take_posted_message`).
 pub struct TakenMessage<'gc> {

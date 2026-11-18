@@ -803,7 +803,9 @@ fn a_worker_imports_a_module() {
                 vec![
                     (
                         "/w.js",
-                        js("import('./m.mjs').then(m => postMessage(m.y), e => postMessage(String(e)));"),
+                        js(
+                            "import('./m.mjs').then(m => postMessage(m.y), e => postMessage(String(e)));",
+                        ),
                     ),
                     ("/m.mjs", js("export const y = 'imported';")),
                 ]
@@ -833,4 +835,3 @@ fn a_data_module_worker_imports_for_its_page() {
         "a refused"
     );
 }
-

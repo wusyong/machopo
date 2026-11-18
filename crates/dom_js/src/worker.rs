@@ -125,7 +125,11 @@ pub(crate) fn worker_error_in(
     error: &dom_api::WorkerError,
 ) {
     if let Some(mut scope) = state::scope(scope) {
-        dom_api::worker_error(&mut crate::listeners::Host { scope: &mut scope }, worker, error);
+        dom_api::worker_error(
+            &mut crate::listeners::Host { scope: &mut scope },
+            worker,
+            error,
+        );
         state::report(&mut scope);
     }
 }
@@ -242,7 +246,14 @@ pub(crate) fn import_script(
         ) else {
             return Err(ImportError::Failed);
         };
-        let options = bindings::script_options(tc, &script.url, Some("same-origin"));
+        // Its base URL, which an `import()` in it takes: muted, `about:blank`
+        // (HTML's "create a classic script").
+        let base_url = if script.muted {
+            "about:blank"
+        } else {
+            script.url.as_str()
+        };
+        let options = bindings::script_options(tc, base_url, Some("same-origin"));
         let origin = v8::ScriptOrigin::new(
             tc,
             name.into(),
@@ -316,7 +327,7 @@ impl WorkerEngine for V8WorkerEngine {
             let line_offset = i32::try_from(script.line.saturating_sub(1)).unwrap_or(i32::MAX);
             let options = bindings::script_options(
                 scope,
-                script.base_url.unwrap_or(script.url),
+                crate::frames::import_base_url(script),
                 Some(crate::frames::credentials_of(script)),
             );
             let origin = v8::ScriptOrigin::new(

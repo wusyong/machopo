@@ -311,7 +311,10 @@ pub(crate) fn import_scripts<H: ScriptHost>(
     let (base, module) = host.read(|cx| {
         let global = this.get(cx.gc);
         let context = cx.global_context(GlobalRef::WorkerGlobal(global));
-        (cx.context_base_url(context), cx.worker_global_is_module(global))
+        (
+            cx.context_base_url(context),
+            cx.worker_global_is_module(global),
+        )
     });
     // HTML: a module worker's global imports no classic scripts.
     if module {
