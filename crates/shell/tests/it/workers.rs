@@ -5,7 +5,8 @@
 //! `Worker`; the renderer ends with a worker still busy. Their scripts the
 //! browser loads, `importScripts()`'s too: same-origin, redirects followed,
 //! lax of MIME types as Chrome is. Message ports go to and from workers,
-//! the two of a channel then on two threads.
+//! the two of a channel then on two threads. A worker makes workers of its
+//! own, which talk to it while the page is busy, and end with it.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -598,5 +599,129 @@ fn a_port_s_message_from_a_worker_wakes_the_page() {
                report(performance.timeOrigin + performance.now() - e.data < 100 ? 'woken' : 'late');"
         ),
         "woken"
+    );
+}
+
+/// The source of a worker that makes a worker of `source` (a `data:` URL)
+/// as it starts, as `inner`, then runs `then`.
+fn nested(source: &str, then: &str) -> String {
+    format!(
+        "const inner = new Worker('data:text/javascript,' + encodeURIComponent({source:?})); {then}"
+    )
+}
+
+/// A worker's worker talks to it while the page is busy: its thread hears
+/// from it, not the main thread. Its location is its own, its name the one
+/// its worker gave it.
+#[test]
+fn a_worker_s_worker_talks_to_it_while_the_page_is_busy() {
+    let source = nested(
+        "onmessage = e => postMessage([e.data + ' back', name, location.protocol]);",
+        "inner.onmessage = e => postMessage([...e.data, performance.timeOrigin + performance.now()]); \
+         onmessage = () => inner.postMessage('there');",
+    );
+    assert_eq!(
+        report(&format!(
+            "const w = worker({source:?}); \
+             w.onmessage = e => report([e.data[0], e.data[1], e.data[2], e.data[3] < busy].join()); \
+             w.postMessage(''); \
+             const until = performance.now() + 1500; \
+             while (performance.now() < until) {{}} \
+             const busy = performance.timeOrigin + until;"
+        )),
+        "there back,,data:,true"
+    );
+}
+
+/// What a worker's worker throws is an `error` at its `Worker` in the
+/// worker; not canceled there, the worker's global reports it, and, not
+/// canceled there either, so does the page's `Worker`. One whose script
+/// doesn't parse is a plain `error` there.
+#[test]
+fn a_worker_s_worker_s_error_goes_up() {
+    let source = nested(
+        "throw new Error('deep');",
+        "let seen = ''; inner.onerror = e => { seen = e.message; }; \
+         onerror = message => { postMessage('global ' + message + ' after ' + seen); return true; };",
+    );
+    assert_eq!(
+        report(&format!(
+            "const w = worker({source:?}); w.onmessage = e => report(e.data);"
+        )),
+        "global Uncaught Error: deep after Uncaught Error: deep"
+    );
+    // Canceled nowhere: at the page's `Worker` too.
+    let source = nested("throw new Error('deep');", "");
+    assert_eq!(
+        report(&format!(
+            "const w = worker({source:?}); w.onerror = e => {{ report(e.message); return false; }};"
+        )),
+        "Uncaught Error: deep"
+    );
+    // A script that doesn't parse: a plain `error` at its `Worker`.
+    let source = nested("(", "inner.onerror = e => postMessage(e.constructor.name);");
+    assert_eq!(
+        report(&format!(
+            "const w = worker({source:?}); w.onmessage = e => report(e.data);"
+        )),
+        "Event"
+    );
+}
+
+/// A worker terminated, or closing itself, ends the workers it made: the
+/// one ticking through a port of the page's stops.
+#[test]
+fn a_worker_s_workers_end_with_it() {
+    for end in ["w.terminate()", "w.postMessage('close')"] {
+        let source = nested(
+            "onmessage = e => { const port = e.ports[0]; \
+               setInterval(() => port.postMessage('tick'), 5); };",
+            "onmessage = e => { if (e.data === 'close') close(); \
+               else inner.postMessage('', [e.ports[0]]); };",
+        );
+        assert_eq!(
+            report(&format!(
+                "const w = worker({source:?}); const c = new MessageChannel(); \
+                 w.postMessage('', [c.port2]); let ticks = 0; \
+                 c.port1.onmessage = () => {{ if (++ticks !== 3) return; \
+                   {end}; setTimeout(() => {{ const at = ticks; \
+                     setTimeout(() => report(ticks - at < 2 ? 'stopped' : 'went on'), 300); }}, 100); }};"
+            )),
+            "stopped",
+            "{end}"
+        );
+    }
+}
+
+/// The renderer ends with a worker's worker busy forever: each thread waits
+/// for those it made, which stop at once.
+#[test]
+fn a_busy_worker_s_worker_ends_with_the_renderer() {
+    let source = nested(
+        "postMessage('started'); for (;;);",
+        "inner.onmessage = e => postMessage(e.data);",
+    );
+    assert_eq!(
+        report(&format!(
+            "const w = worker({source:?}); w.onmessage = e => report(e.data);"
+        )),
+        "started"
+    );
+}
+
+/// A port between a worker and its worker: a message through it wakes the
+/// worker's thread.
+#[test]
+fn a_worker_and_its_worker_talk_through_a_port() {
+    let source = nested(
+        "onmessage = e => setTimeout(() => e.ports[0].postMessage('through'), 100);",
+        "const c = new MessageChannel(); inner.postMessage('', [c.port2]); \
+         c.port1.onmessage = e => postMessage(e.data);",
+    );
+    assert_eq!(
+        report(&format!(
+            "const w = worker({source:?}); w.onmessage = e => report(e.data);"
+        )),
+        "through"
     );
 }

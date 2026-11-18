@@ -2004,6 +2004,14 @@ pub trait ScriptHost {
         let _ = url;
     }
 
+    /// What a worker's global reported and didn't cancel, not thrown by
+    /// its own script (the error of a worker it made): for its own
+    /// `Worker`, through the worker's host (HTML's "report an exception" of
+    /// a worker's global). Nothing by default.
+    fn report_to_worker_owner(&mut self, info: &dom::ErrorInfo) {
+        let _ = info;
+    }
+
     /// The frame showing `document` is to navigate (or did, within the
     /// document: `FrameNavigation`): its host told. Nothing by default.
     fn navigate(&mut self, document: &dom::NodeRoot, navigation: dom::FrameNavigation) {

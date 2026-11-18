@@ -1,23 +1,28 @@
 //! Dedicated workers: each its own thread (Blink's `DedicatedWorkerThread`,
 //! over a `WorkerBackingThread` of its own), its own engine (an isolate, a
-//! DOM), and a small event loop of its own; and the page's side of them
-//! (Blink's `DedicatedWorkerMessagingProxy`), on the main thread, which the
-//! page's engine starts them through (`dom_api::WorkerHost`).
+//! DOM), and a small event loop of its own; and the side of them of the
+//! thread that made them (Blink's `DedicatedWorkerMessagingProxy`): the
+//! main thread, whose page's engine starts them through
+//! (`dom_api::WorkerHost`), or a worker's, whose engine starts its own (a
+//! nested worker), each thread's `Workers`.
 //!
 //! What goes to a worker (a message, the order to stop) is a task of its
 //! thread's, in a channel; what it sends its `Worker` (a message, an error,
-//! that it closed, that its script couldn't be had) is a task of the main
-//! thread's (`MainThreadScheduler::post_worker`), as Blink's worker posts a
-//! cross-thread task to its parent's. `terminate()` stops its script at
-//! once (V8's `TerminateExecution`, from the main thread) and its loop
-//! ends; the thread lets go of its engine, DOM and isolate in that order,
-//! on itself. A worker runs till it is terminated, closes itself, its
-//! document goes or the renderer does (Chrome's `DedicatedWorker::
-//! HasPendingActivity`): the renderer waits for each thread as it ends.
+//! that it closed, that its script couldn't be had) is a task of the thread
+//! that made it (`Owner`: the main thread's scheduler's, or that worker's
+//! channel), as Blink's worker posts a cross-thread task to its parent's.
+//! `terminate()` stops its script at once (V8's `TerminateExecution`, from
+//! the thread that made it) and its loop ends; the thread stops the
+//! workers it made and waits for their threads, then lets go of its engine,
+//! DOM and isolate in that order, on itself. A worker runs till it is
+//! terminated, closes itself, the worker that made it ends, its document
+//! goes or the renderer does (Chrome's `DedicatedWorker::
+//! HasPendingActivity`): the renderer waits for the threads it made as it
+//! ends, each of them for its own.
 //!
 //! Its script the browser loads (Chromium's `DedicatedWorkerHost` fetches
-//! it, `WorkerMainScriptLoader` hands it to the worker): the main thread
-//! tells the browser of the worker as it starts it
+//! it, `WorkerMainScriptLoader` hands it to the worker): the thread that
+//! made it tells the browser of the worker as it starts it
 //! (`DedicatedWorkerCreated`), and the answer goes straight to the worker's
 //! thread (`MainThreadScheduler`'s routes), which waits for it before it
 //! runs anything, what its `Worker` posts meanwhile kept for after.
@@ -46,7 +51,7 @@ use protocol::renderer::{RendererHostMsg, RendererMsg};
 
 use crate::task_queue::MainThreadScheduler;
 
-/// What a worker sends its `Worker`, as a task of the main thread's.
+/// What a worker sends its `Worker`, as a task of the thread that made it.
 pub(crate) enum WorkerEvent {
     Message(dom::SerializedMessage),
     /// What its script threw and its `onerror` didn't cancel.
@@ -71,6 +76,35 @@ pub(crate) enum WorkerTask {
     /// From another thread: its DOM's message ports may have messages
     /// (`dom::PortWaker`), which its loop runs as it runs its tasks.
     PortMessages,
+    /// What the worker it made numbered `id` sends its `Worker`. Boxed, as
+    /// `Browser`.
+    Child { id: u64, event: Box<WorkerEvent> },
+}
+
+/// The thread that made a worker, which hears from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Owner {
+    /// The main thread: a task of its scheduler's.
+    Main,
+    /// The worker numbered so: a task in its channel (through the
+    /// scheduler's routes: none once it is no more).
+    Worker(u64),
+}
+
+impl Owner {
+    /// `event` of the worker `id` to this thread.
+    fn post(self, scheduler: &MainThreadScheduler, id: u64, event: WorkerEvent) {
+        match self {
+            Self::Main => scheduler.post_worker(id, event),
+            Self::Worker(owner) => scheduler.send_worker_task(
+                owner,
+                WorkerTask::Child {
+                    id,
+                    event: Box::new(event),
+                },
+            ),
+        }
+    }
 }
 
 /// What a worker's thread and the main thread share: whether it is to stop,
@@ -106,9 +140,9 @@ struct Running {
     shared: Arc<Shared>,
 }
 
-/// The renderer's dedicated workers, on its main thread: the page's engine
-/// starts and stops them through it (`host`); the render thread hears from
-/// them, and ends them with their documents and with itself.
+/// The dedicated workers a thread made, on it: its engine starts and stops
+/// them through it (`host`); the thread hears from them, and ends them as
+/// their documents go (the main thread's) and as it does.
 pub(crate) struct Workers {
     /// What makes a worker's engine (on its thread); none: workers can't
     /// be made.
@@ -121,8 +155,8 @@ pub(crate) struct Workers {
     /// The browser's end: told of each worker as it starts and goes; what
     /// a worker's thread asks of it goes there too.
     to_browser: BrowserSender<RendererHostMsg>,
-    /// The last worker's number, from 1.
-    last_id: Cell<u64>,
+    /// The thread they are of, which hears from them.
+    home: Owner,
     running: RefCell<HashMap<u64, Running>>,
     /// The workers' threads, joined as the renderer goes (each ends soon
     /// after it is stopped).
@@ -136,6 +170,7 @@ impl Workers {
         agent: Agent,
         scheduler: Arc<MainThreadScheduler>,
         to_browser: BrowserSender<RendererHostMsg>,
+        home: Owner,
     ) -> Self {
         Self {
             engine,
@@ -143,13 +178,13 @@ impl Workers {
             agent,
             scheduler,
             to_browser,
-            last_id: Cell::new(0),
+            home,
             running: RefCell::new(HashMap::new()),
             threads: RefCell::new(Vec::new()),
         }
     }
 
-    /// The page's engine's host of them: an `Rc` of the same, as the render
+    /// Their thread's engine's host of them: an `Rc` of the same, as the
     /// thread needs them too (to end them as their documents go and as it
     /// does).
     pub(crate) fn host(self: &Rc<Self>) -> Box<dyn dom_api::WorkerHost> {
@@ -202,15 +237,11 @@ impl Workers {
     }
 
     fn start(&self, start: WorkerStart) -> u64 {
-        let id = self
-            .last_id
-            .get()
-            .checked_add(1)
-            .expect("fewer than 2^64 workers");
-        self.last_id.set(id);
+        // The renderer's: the browser and the routes know it by it.
+        let id = self.scheduler.next_worker_id();
         let Some(engine) = self.engine else {
             // No engine for workers: as a script that couldn't be had.
-            self.scheduler.post_worker(id, WorkerEvent::ScriptFailed);
+            self.home.post(&self.scheduler, id, WorkerEvent::ScriptFailed);
             return id;
         };
         let (tasks, from_owner) = std::sync::mpsc::channel();
@@ -226,6 +257,7 @@ impl Workers {
                 let settings = self.settings;
                 let agent = self.agent.clone();
                 let to_browser = self.to_browser.clone();
+                let owner = self.home;
                 move || {
                     run(WorkerThread {
                         id,
@@ -238,6 +270,7 @@ impl Workers {
                         shared,
                         to_browser,
                         scheduler,
+                        owner,
                     });
                 }
             });
@@ -258,7 +291,7 @@ impl Workers {
             }
             Err(error) => {
                 tracing::warn!(%error, "no thread for a worker");
-                self.scheduler.post_worker(id, WorkerEvent::ScriptFailed);
+                self.home.post(&self.scheduler, id, WorkerEvent::ScriptFailed);
             }
         }
         id
@@ -271,7 +304,7 @@ impl Workers {
     }
 }
 
-/// The page's engine's host of the workers (`Workers::host`).
+/// A thread's engine's host of the workers it makes (`Workers::host`).
 struct WorkersHost(Rc<Workers>);
 
 impl dom_api::WorkerHost for WorkersHost {
@@ -288,7 +321,10 @@ impl dom_api::WorkerHost for WorkersHost {
     }
 
     fn port_waker(&self) -> Option<dom::PortWaker> {
-        Some(self.0.scheduler.port_waker())
+        Some(match self.0.home {
+            Owner::Main => self.0.scheduler.port_waker(),
+            Owner::Worker(id) => self.0.scheduler.worker_port_waker(id),
+        })
     }
 }
 
@@ -319,10 +355,11 @@ impl Inbox {
     }
 }
 
-/// A worker's global's host, on its thread: what it sends goes to the main
-/// thread for its `Worker`, what it loads to the browser.
+/// A worker's global's host, on its thread: what it sends goes to the
+/// thread that made it for its `Worker`, what it loads to the browser.
 struct GlobalHost {
     id: u64,
+    owner: Owner,
     scheduler: Arc<MainThreadScheduler>,
     to_browser: BrowserSender<RendererHostMsg>,
     /// Its tasks, which it waits on for a load.
@@ -381,7 +418,7 @@ impl GlobalHost {
                     self.inbox.put_off.borrow_mut().push_back(task);
                     break;
                 }
-                Ok(task @ WorkerTask::Message(_)) => {
+                Ok(task @ (WorkerTask::Message(_) | WorkerTask::Child { .. })) => {
                     self.inbox.put_off.borrow_mut().push_back(task);
                 }
                 // Its ports are looked at once its loop runs its tasks.
@@ -411,8 +448,8 @@ impl GlobalHost {
 
 impl dom_api::WorkerGlobalHost for GlobalHost {
     fn post_to_owner(&self, message: dom::SerializedMessage) {
-        self.scheduler
-            .post_worker(self.id, WorkerEvent::Message(message));
+        self.owner
+            .post(&self.scheduler, self.id, WorkerEvent::Message(message));
     }
 
     fn close(&self) {
@@ -420,8 +457,8 @@ impl dom_api::WorkerGlobalHost for GlobalHost {
     }
 
     fn report_error(&self, error: WorkerError) {
-        self.scheduler
-            .post_worker(self.id, WorkerEvent::Error(error));
+        self.owner
+            .post(&self.scheduler, self.id, WorkerEvent::Error(error));
     }
 
     /// `no-cors`, credentials same-origin, for a `script` (HTML's "fetch a
@@ -522,12 +559,15 @@ struct WorkerThread {
     shared: Arc<Shared>,
     to_browser: BrowserSender<RendererHostMsg>,
     scheduler: Arc<MainThreadScheduler>,
+    /// The thread that made it.
+    owner: Owner,
 }
 
 /// A worker's thread: its engine made, its global, its script run, then
-/// its loop (its tasks due, the messages from its `Worker`) till it is
-/// stopped or closes itself; its engine let go of as it ends, on this
-/// thread.
+/// its loop (its tasks due, the messages from its `Worker`, what the
+/// workers it made send) till it is stopped or closes itself; the workers
+/// it made stopped and their threads waited for, and its engine let go of,
+/// as it ends, on this thread.
 fn run(thread: WorkerThread) {
     let WorkerThread {
         id,
@@ -540,6 +580,7 @@ fn run(thread: WorkerThread) {
         shared,
         to_browser,
         scheduler,
+        owner,
     } = thread;
     let inbox = Rc::new(Inbox {
         from_owner,
@@ -574,8 +615,8 @@ fn run(thread: WorkerThread) {
                 }
             }
             Ok(WorkerTask::Message(message)) => early.push(message),
-            // It has no port yet.
-            Ok(WorkerTask::PortMessages) => {}
+            // It has no port, nor worker, yet.
+            Ok(WorkerTask::PortMessages | WorkerTask::Child { .. }) => {}
             Ok(WorkerTask::Stop) | Err(_) => return,
         }
     };
@@ -583,7 +624,7 @@ fn run(thread: WorkerThread) {
         return;
     }
     let Some(WorkerScript { source, url, .. }) = worker_script(&result) else {
-        scheduler.post_worker(id, WorkerEvent::ScriptFailed);
+        owner.post(&scheduler, id, WorkerEvent::ScriptFailed);
         return;
     };
     // HTML's "set up a worker environment settings object": a `data:`
@@ -597,6 +638,7 @@ fn run(thread: WorkerThread) {
     let fetches = Rc::new(RefCell::new(HashMap::new()));
     let host = GlobalHost {
         id,
+        owner,
         scheduler: scheduler.clone(),
         to_browser: to_browser.clone(),
         inbox: inbox.clone(),
@@ -613,11 +655,21 @@ fn run(thread: WorkerThread) {
             origin,
             name: start.name.clone(),
             time_origin,
-            user_agent: agent.user_agent,
+            user_agent: agent.user_agent.clone(),
             webdriver: agent.webdriver,
         },
         Box::new(host),
     );
+    // The workers it makes, its thread hearing from them.
+    let workers = Rc::new(Workers::new(
+        Some(make),
+        settings,
+        agent,
+        scheduler.clone(),
+        to_browser.clone(),
+        Owner::Worker(id),
+    ));
+    engine.set_worker_host(workers.host());
     let parsed = engine.run_classic_script(&ClassicScript {
         source: &source,
         url: url.as_str(),
@@ -629,7 +681,7 @@ fn run(thread: WorkerThread) {
     // A script that didn't parse: as one that couldn't be had (HTML's "run
     // a worker": a plain `error` at its `Worker`, and it runs no more).
     if !parsed {
-        scheduler.post_worker(id, WorkerEvent::ScriptFailed);
+        owner.post(&scheduler, id, WorkerEvent::ScriptFailed);
         return;
     }
     for message in early {
@@ -659,6 +711,20 @@ fn run(thread: WorkerThread) {
             Some(WorkerTask::Stop) => break,
             // Run with its tasks, next round.
             Some(WorkerTask::PortMessages) => {}
+            // What a worker it made sends its `Worker`, as the main thread
+            // takes it (`RenderThread::worker_event`).
+            Some(WorkerTask::Child { id: child, event }) => match *event {
+                WorkerEvent::Message(message) => engine.worker_message(child, message),
+                WorkerEvent::Error(error) => engine.worker_error(child, &error),
+                WorkerEvent::Closed => {
+                    engine.worker_closed(child);
+                    workers.forget(child);
+                }
+                WorkerEvent::ScriptFailed => {
+                    engine.worker_script_failed(child);
+                    workers.forget(child);
+                }
+            },
             Some(WorkerTask::Browser(msg)) => match *msg {
                 // A `fetch()`'s: its promise settled.
                 RendererMsg::ResourceResponse {
@@ -683,8 +749,11 @@ fn run(thread: WorkerThread) {
             None => {}
         }
     }
+    // The workers it made end with it (HTML: no owner left; Blink's
+    // `DedicatedWorker::Dispose` terminates each), before its engine goes.
+    workers.terminate_all();
     if closing.get() && !shared.stopping() {
-        scheduler.post_worker(id, WorkerEvent::Closed);
+        owner.post(&scheduler, id, WorkerEvent::Closed);
     }
 }
 
@@ -812,6 +881,7 @@ mod tests {
             Agent::default(),
             Arc::new(MainThreadScheduler::default()),
             crossbeam_channel::unbounded().0,
+            Owner::Main,
         ));
         workers.host().start_worker(WorkerStart {
             url: url::Url::parse("data:text/javascript,").unwrap(),

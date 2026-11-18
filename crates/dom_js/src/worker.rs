@@ -67,6 +67,16 @@ impl V8WorkerEngine {
         Some(f(scope))
     }
 
+    /// The `Worker` of its realm for the worker it made numbered `id`, if
+    /// it is still there.
+    fn worker_object(&mut self, id: u64) -> Option<Persistent<dom::EventTargetImpl>> {
+        let global = self.global.clone()?;
+        self.state().dom.read(|cx| {
+            let worker = cx.context_worker(cx.worker_global_context(global.get(cx.gc)), id)?;
+            Some(Persistent::new(cx.gc, worker))
+        })
+    }
+
     /// A microtask checkpoint (HTML's "clean up after running script"),
     /// the mutation observers' delivery queued first.
     fn perform_microtask_checkpoint(&mut self) {
@@ -78,6 +88,45 @@ impl V8WorkerEngine {
             let _entry = bindings::trace::enter_script();
             scope.perform_microtask_checkpoint();
         });
+    }
+}
+
+/// What the worker of `worker` (a `Worker` of the realm `scope` is in)
+/// threw: an `error` event at it, reported at the realm's global if not
+/// canceled (`dom_api::worker_error`). A page's and a worker's engine's
+/// alike.
+pub(crate) fn worker_error_in(
+    scope: &mut v8::PinScope<'_, '_>,
+    worker: &Persistent<dom::EventTargetImpl>,
+    error: &dom_api::WorkerError,
+) {
+    if let Some(mut scope) = state::scope(scope) {
+        dom_api::worker_error(&mut crate::listeners::Host { scope: &mut scope }, worker, error);
+        state::report(&mut scope);
+    }
+}
+
+/// The script of the worker of `worker` (a `Worker` of the realm `scope`
+/// is in) couldn't be had: a plain `error` event at it, which gets nothing
+/// more of it.
+pub(crate) fn worker_script_failed_in(
+    scope: &mut v8::PinScope<'_, '_>,
+    worker: &Persistent<dom::EventTargetImpl>,
+) {
+    if let Some(mut scope) = state::scope(scope) {
+        let target = dom::TargetRoot::EventTarget(worker.clone());
+        dom_api::fire_event(
+            &mut crate::listeners::Host { scope: &mut scope },
+            &target,
+            dom::names::event::ERROR,
+            false,
+            false,
+        );
+        let (state, _) = scope.state_mut();
+        state
+            .dom
+            .mutate(|cx| cx.terminate_worker_object(worker.get(cx.gc)));
+        state::report(&mut scope);
     }
 }
 
@@ -359,5 +408,43 @@ impl WorkerEngine for V8WorkerEngine {
 
     fn take_harness_results(&mut self) -> Option<String> {
         self.state().harness_results.take()
+    }
+
+    fn set_worker_host(&mut self, host: Box<dyn dom_api::WorkerHost>) {
+        if let Some(waker) = host.port_waker() {
+            self.state().dom.set_port_waker(waker);
+        }
+        self.state().caches.worker_host = Some(host);
+    }
+
+    fn worker_message(&mut self, id: u64, message: dom::SerializedMessage) {
+        let Some(worker) = self.worker_object(id) else {
+            return;
+        };
+        self.state()
+            .dom
+            .mutate(|cx| cx.post_worker_object_message(worker.get(cx.gc), message));
+    }
+
+    fn worker_error(&mut self, id: u64, error: &dom_api::WorkerError) {
+        let Some(worker) = self.worker_object(id) else {
+            return;
+        };
+        self.in_realm(|scope| worker_error_in(scope, &worker, error));
+    }
+
+    fn worker_script_failed(&mut self, id: u64) {
+        let Some(worker) = self.worker_object(id) else {
+            return;
+        };
+        self.in_realm(|scope| worker_script_failed_in(scope, &worker));
+    }
+
+    fn worker_closed(&mut self, id: u64) {
+        if let Some(worker) = self.worker_object(id) {
+            self.state()
+                .dom
+                .mutate(|cx| cx.terminate_worker_object(worker.get(cx.gc)));
+        }
     }
 }

@@ -438,6 +438,7 @@ impl RenderThread {
                 },
                 scheduler.clone(),
                 to_browser.clone(),
+                crate::worker_thread::Owner::Main,
             )),
             to_browser,
             widget: Some(FrameWidget::new(layer_tree_host)),

@@ -10,6 +10,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::mpsc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -143,6 +144,9 @@ pub struct MainThreadScheduler {
     /// browser, bound on its thread). A lock of its own: a worker's thread
     /// is told while the main thread waits on `state`.
     worker_routes: Mutex<HashMap<u64, mpsc::Sender<crate::worker_thread::WorkerTask>>>,
+    /// The last dedicated worker's number, from 1: the renderer's, as any
+    /// thread may make one (a worker makes its own).
+    last_worker: AtomicU64,
 }
 
 impl MainThreadScheduler {
@@ -257,9 +261,20 @@ impl MainThreadScheduler {
 
     /// `msg` to worker `id`'s thread; dropped if it is no more.
     fn post_to_worker(&self, id: u64, msg: RendererMsg) {
+        self.send_worker_task(id, crate::worker_thread::WorkerTask::Browser(Box::new(msg)));
+    }
+
+    /// `task` to worker `id`'s thread; dropped if it is no more.
+    pub(crate) fn send_worker_task(&self, id: u64, task: crate::worker_thread::WorkerTask) {
         if let Some(tasks) = self.lock_routes().get(&id) {
-            let _ = tasks.send(crate::worker_thread::WorkerTask::Browser(Box::new(msg)));
+            let _ = tasks.send(task);
         }
+    }
+
+    /// A new dedicated worker's number, from 1, of whichever thread makes it.
+    pub(crate) fn next_worker_id(&self) -> u64 {
+        let last = self.last_worker.fetch_add(1, Ordering::Relaxed);
+        last.checked_add(1).expect("fewer than 2^64 workers")
     }
 
     /// The canvas encoder's file of the `toBlob` call `id`.

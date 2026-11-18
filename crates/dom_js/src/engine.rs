@@ -1503,10 +1503,7 @@ impl ScriptEngine for V8Engine {
             return;
         };
         self.in_context(&context, |scope| {
-            if let Some(mut scope) = state::scope(scope) {
-                dom_api::worker_error(&mut Host { scope: &mut scope }, &worker, error);
-                state::report(&mut scope);
-            }
+            crate::worker::worker_error_in(scope, &worker, error);
         });
     }
 
@@ -1515,21 +1512,7 @@ impl ScriptEngine for V8Engine {
             return;
         };
         self.in_context(&context, |scope| {
-            if let Some(mut scope) = state::scope(scope) {
-                let target = dom::TargetRoot::EventTarget(worker.clone());
-                dom_api::fire_event(
-                    &mut Host { scope: &mut scope },
-                    &target,
-                    dom::names::event::ERROR,
-                    false,
-                    false,
-                );
-                let (state, _) = scope.state_mut();
-                state
-                    .dom
-                    .mutate(|cx| cx.terminate_worker_object(worker.get(cx.gc)));
-                state::report(&mut scope);
-            }
+            crate::worker::worker_script_failed_in(scope, &worker);
         });
     }
 

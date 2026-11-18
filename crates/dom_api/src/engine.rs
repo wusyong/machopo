@@ -629,6 +629,38 @@ pub trait WorkerEngine {
     /// What `testRunner.reportHarnessResults` was given since the last
     /// ask, if anything (web tests only).
     fn take_harness_results(&mut self) -> Option<String>;
+
+    /// What starts the dedicated workers its realm makes (a worker made in
+    /// a worker: HTML's nested worker) and carries what goes to them, as a
+    /// page's engine's (`ScriptEngine::set_worker_host`): `new Worker()`
+    /// throws `NotSupportedError` without one.
+    fn set_worker_host(&mut self, host: Box<dyn crate::WorkerHost>) {
+        let _ = host;
+    }
+
+    /// `message` from the worker it made numbered `id`
+    /// (`ScriptEngine::worker_message`'s).
+    fn worker_message(&mut self, id: u64, message: dom::SerializedMessage) {
+        let _ = (id, message);
+    }
+
+    /// What the worker it made numbered `id` threw
+    /// (`ScriptEngine::worker_error`'s).
+    fn worker_error(&mut self, id: u64, error: &crate::WorkerError) {
+        let _ = (id, error);
+    }
+
+    /// The worker it made numbered `id` closed itself
+    /// (`ScriptEngine::worker_closed`'s).
+    fn worker_closed(&mut self, id: u64) {
+        let _ = id;
+    }
+
+    /// The script of the worker it made numbered `id` couldn't be had
+    /// (`ScriptEngine::worker_script_failed`'s).
+    fn worker_script_failed(&mut self, id: u64) {
+        let _ = id;
+    }
 }
 
 /// What DevTools calls a frame: `None` for one it has no name for (the

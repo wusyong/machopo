@@ -215,6 +215,17 @@ impl<'s> ScriptHost for Host<'_, '_, 's, '_> {
         crate::frames::revoke_blob_url(self.scope, url);
     }
 
+    fn report_to_worker_owner(&mut self, info: &dom::ErrorInfo) {
+        if let Some(host) = self.scope.state().0.caches.worker_global_host.as_deref() {
+            host.report_error(dom_api::WorkerError {
+                message: info.message.to_string(),
+                filename: info.filename.to_string(),
+                lineno: info.lineno,
+                colno: info.colno,
+            });
+        }
+    }
+
     fn copy_history_state(
         &mut self,
         event: &Persistent<dom::Event>,

@@ -1,0 +1,70 @@
+# 2d: workers made in a worker.
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "workers::a_worker_"]
+timeout = 900
+
+[[mutant]]
+name = "what a worker's worker sends goes nowhere"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''            Self::Worker(owner) => scheduler.send_worker_task(
+                owner,
+                WorkerTask::Child {
+                    id,
+                    event: Box::new(event),
+                },
+            ),'''
+to = '''            Self::Worker(owner) => drop((owner, id, event)),'''
+
+[[mutant]]
+name = "a worker's worker's message is dropped"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''                WorkerEvent::Message(message) => engine.worker_message(child, message),'''
+to = '''                WorkerEvent::Message(message) => drop((child, message)),'''
+
+[[mutant]]
+name = "a worker's worker's error is dropped"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''                WorkerEvent::Error(error) => engine.worker_error(child, &error),'''
+to = '''                WorkerEvent::Error(error) => drop((child, error)),'''
+
+[[mutant]]
+name = "a worker's worker's failed script is no error"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''                    engine.worker_script_failed(child);'''
+to = ''''''
+
+[[mutant]]
+name = "a worker's workers outlive it"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''    workers.terminate_all();
+    if closing.get() && !shared.stopping() {'''
+to = '''    if closing.get() && !shared.stopping() {'''
+
+[[mutant]]
+name = "a worker's engine has no host for workers"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''    engine.set_worker_host(workers.host());'''
+to = '''    drop(workers.host());'''
+
+[[mutant]]
+name = "a worker's host of workers wakes the main thread for its ports"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''            Owner::Worker(id) => self.0.scheduler.worker_port_waker(id),'''
+to = '''            Owner::Worker(_) => self.0.scheduler.port_waker(),'''
+
+[[mutant]]
+name = "every worker is numbered 1"
+file = "crates/renderer/src/task_queue.rs"
+from = '''        let last = self.last_worker.fetch_add(1, Ordering::Relaxed);'''
+to = '''        let last = self.last_worker.fetch_add(0, Ordering::Relaxed);'''
+
+[[mutant]]
+name = "a worker's worker's error is reported at no global"
+file = "crates/dom_api/src/worker.rs"
+from = '''            Some(global) => GlobalRef::WorkerGlobal(global),'''
+to = '''            Some(_) => return None,'''
+
+[[mutant]]
+name = "a worker's worker's error stops at the worker's global"
+file = "crates/dom_api/src/worker.rs"
+from = '''        host.report_to_worker_owner(info);'''
+to = ''''''

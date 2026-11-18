@@ -169,12 +169,25 @@ pub(crate) fn fire_worker_error<H: ScriptHost>(
     if !crate::dispatch(host, &target, &event) {
         return;
     }
+    // A window's, or a worker's global for a worker it made.
     let global = host.read(|cx| {
-        cx.target_window(TargetRef::EventTarget(worker.get(cx.gc)))
-            .map(|window| cx.root_global(GlobalRef::Window(window)))
+        let target = TargetRef::EventTarget(worker.get(cx.gc));
+        let global = match cx
+            .target_context(target)
+            .and_then(|context| cx.context_worker_global(context))
+        {
+            Some(global) => GlobalRef::WorkerGlobal(global),
+            None => GlobalRef::Window(cx.target_window(target)?),
+        };
+        Some(cx.root_global(global))
     });
-    if let Some(global) = global {
-        crate::report_exception(host, &global, info, None);
+    let Some(global) = global else {
+        return;
+    };
+    let reported = crate::report_exception(host, &global, info, None);
+    // A worker's global, not canceled: on up to its own `Worker`.
+    if reported != crate::Reported::Canceled && matches!(global, dom::GlobalRoot::WorkerGlobal(_)) {
+        host.report_to_worker_owner(info);
     }
 }
 

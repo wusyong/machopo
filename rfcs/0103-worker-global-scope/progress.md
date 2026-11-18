@@ -16,11 +16,11 @@
 | 1b-5：`renderer` 的 worker 的 thread 和 event loop、兩個方向的 `postMessage`、`terminate()`、`close()`、`onerror` | 做完（第 19 條；主 script 暫時只有 `data:` 的網址） | 2026-11-17 |
 | 1b-6：Browser 的登記和主 script 的載入、子資源的請求帶 client、`importScripts()` | 做完（第 20 條） | 2026-11-17 |
 | 1b-7：WPT 的 `workers/`、情境、`about:demo`、文件、整個階段的檢查 | 做完（第 21、22 條） | 2026-11-18 |
-| 2：worker 裡的 `fetch()`、`MessagePort` 跨 thread、module worker、巢狀的 worker、`WorkerNavigator`、`WorkerLocation`、`performance` | 做中：2a、2b、2c 做完 | |
+| 2：worker 裡的 `fetch()`、`MessagePort` 跨 thread、module worker、巢狀的 worker、`WorkerNavigator`、`WorkerLocation`、`performance` | 做中：2a 到 2d 做完 | |
 | 2a：worker 裡的 `location`、`navigator`、`performance` | 做完（第 23 到 26 條） | 2026-11-18 |
 | 2b：worker 裡的 `fetch()`、worker 建的 blob URL | 做完（第 27、28 條） | 2026-11-18 |
 | 2c：`MessagePort` 跨 thread | 做完（第 29 到 31 條） | 2026-11-18 |
-| 2d：worker 裡建的 worker | 還沒開始 | |
+| 2d：worker 裡建的 worker | 做完（第 32 到 34 條） | 2026-11-18 |
 | 2e：module worker | 還沒開始 | |
 | 2f：WPT、文件、整個階段的檢查 | 還沒開始 | |
 
@@ -207,4 +207,15 @@
 - mutation test（`rfcs/0103-worker-global-scope/mutants-2c.toml`，19 條）：第一次 15 條抓到，4 條沒抓到。「同一條 thread 上的 port 訊息看的時候才編號」：沒有測試比它和 window 的訊息的先後，補 `dom` 的 `message_ports::a_message_on_its_port_s_thread_is_numbered_as_it_is_posted`；「main thread 的 DOM 沒有 waker」「main thread 的 waker 什麼都不送」：頁面還有別的事會叫醒它，`ports_go_to_and_from_a_worker` 照樣通過，補 `shell` 的 `workers::a_port_s_message_from_a_worker_wakes_the_page`（worker 300 ms 後才從 port 送，頁面要在 100 ms 內收到；連跑 5 次通過），兩條的測試指令改成它。三條重跑都抓到。「port 傳出去時不清掉原本的 thread」是等價的（多的只是一次沒事的叫醒），記進 `docs/test-gaps.md` 的「等價、不用處理的 mutation」。
 - 跑過的：`cargo test -p dom -p dom_api -p dom_js -p dom_wasm -p renderer`（`renderer` 的 scheduler 的測試的 `kind` 補上 `PortMessages`）、`shell` 的 `workers::`、sanity 的每一項。`cargo test --workspace`、fmt、clippy 等第 2 階段做完時跑。
 - 寫 `shell` 的測試時：頁面和 worker 之間，不同 port（和 `Worker` 自己的）的訊息誰先到不一定（規範不保證，Chrome 也一樣），測試一開始照某個順序寫的，改成不看順序。
+
+### 2d：worker 裡建的 worker（2026-11-18，macOS，Apple Silicon）
+
+- 第 32 條：`renderer` 的 `Workers` 記它在哪條 thread 上（`Owner`：main thread，或第幾個 worker），每個 worker 的 thread 跑 script 之前建自己的一份，交給它的 engine（`WorkerEngine::set_worker_host`）；worker 的 thread 送給 `Worker` 的經過 `Owner::post`，main thread 的照舊是 scheduler 的 task，worker 的是它的 channel 的 `WorkerTask::Child`（經過 scheduler 的 route，那個 worker 不在時丟掉），在它的 loop 裡交給它的 engine（`worker_message`、`worker_error`、`worker_closed`、`worker_script_failed`，`dom_js` 和頁面的 engine 共用 `worker_error_in`、`worker_script_failed_in`）；`importScripts()` 等待時到的留到之後。worker 的編號改成 scheduler 的 `AtomicU64`（`next_worker_id`）。worker 的 thread 的 `WorkersHost::port_waker` 是那個 worker 的。
+- 第 33 條：worker 的 loop 結束後先 `terminate_all` 它建的 worker（打斷、告訴 Browser、等它們的 thread），再送 `Closed`、放掉自己的 engine。
+- 第 34 條：Browser 不用改。
+- 實作時找到的：worker 的 `Worker` 物件上沒被取消的 `error`，原本只在 window 的 global 回報（`fire_worker_error` 找 `target_window`），在 worker 裡什麼都不做；改成照 `Worker` 的執行環境找 global，是 worker 的 global 時，再沒被取消就經過 `ScriptHost::report_to_worker_owner`（新的，`dom_js` 交給 `WorkerGlobalHost::report_error`）往上交給它自己的 `Worker`（HTML 的 report an exception）。
+- WPT：`workers/` 的 6 個 `nested_worker*` 不再 `disabled`；`nested_worker_sync_xhr` 失敗（子 worker 用 sync XHR，worker 還沒有 XHR），其他通過；`semantics/multiple-workers/003.html`、`baseurl/alpha/worker-in-worker.html`、`webmessaging/message-channels/worker*.any.worker.html` 從失敗變成通過，它們的 `.ini` 拿掉。不更新地連跑兩次 `workers/`、`webmessaging/`、`html/infrastructure/safe-passing-of-structured-data/`（1876 項檢查），都和預期一樣。
+- 新的測試：`shell` 的 `workers::a_worker_s_worker_talks_to_it_while_the_page_is_busy`（頁面忙 1.5 秒的期間子 worker 回答它的 worker）、`a_worker_s_worker_s_error_goes_up`（在 worker 的 `Worker` 上、worker 的 global、頁面的 `Worker`；script 不能 parse 時是一般的 `error`）、`a_worker_s_workers_end_with_it`（`terminate()` 和 `close()`）、`a_busy_worker_s_worker_ends_with_the_renderer`、`a_worker_and_its_worker_talk_through_a_port`。
+- mutation test（`rfcs/0103-worker-global-scope/mutants-2d.toml`，10 條）：都抓到。其中「worker 結束時不結束它建的 worker」是卡住（超過 900 秒，照 `docs/testing.md` 的規則算抓到）：子 worker 一直跑，測試等不到結束。
+- 跑過的：`cargo test -p dom -p dom_api -p dom_js -p dom_wasm -p renderer`、`shell` 的 `workers::`（26 個）、sanity 的每一項。`cargo test --workspace`、fmt、clippy 等第 2 階段做完時跑。
 

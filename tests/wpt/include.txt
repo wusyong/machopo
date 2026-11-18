@@ -65,9 +65,9 @@ resize-observer/
 # `foreignObject`, and a `filter` on a `<tspan>`.
 intersection-observer/
 
-# Dedicated workers. Shared and service workers, module workers and
-# workers made in a worker don't run (`disabled`); what a dedicated worker
-# doesn't have yet (XHR) fails.
+# Dedicated workers, those made in a worker too. Shared and service
+# workers and module workers don't run (`disabled`); what a dedicated
+# worker doesn't have yet (XHR) fails.
 workers/
 
 # The navigator's Network Information, Geolocation and Screen Wake Lock.
