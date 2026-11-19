@@ -9,12 +9,12 @@
 
 use protocol::network::{
     CredentialsMode, NetError, NetErrorCode, RedirectMode, RequestDestination, RequestMode,
-    ResourceRequest, ResourceResponse, ResponseTainting, cors_unsafe_request_header_names,
-    is_cors_safelisted_method,
+    ResourceRequest, ResponseTainting, cors_unsafe_request_header_names, is_cors_safelisted_method,
 };
 use url::Url;
 
 use crate::http::RawResponse;
+use crate::url_loader::Response;
 
 /// A request's CORS state across its redirects.
 pub(crate) struct Cors<'r> {
@@ -275,12 +275,12 @@ impl<'r> Cors<'r> {
     /// it, so DevTools there sees the response as it came; but an opaque
     /// `fetch()`'s body stays here: no script may read it, and machopo has no
     /// opaque response blocking to keep a renderer from it otherwise.
-    pub(crate) fn filter(&self, mut response: ResourceResponse) -> ResourceResponse {
+    pub(crate) fn filter(&self, mut response: Response) -> Response {
         response.head.tainting = self.tainting;
         if self.tainting == ResponseTainting::Opaque
             && self.request.destination == RequestDestination::Empty
         {
-            response.body.clear();
+            response.body.discard();
         }
         response
     }

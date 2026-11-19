@@ -381,7 +381,10 @@ async fn run(
                 tell: &mut **tell,
                 state,
             });
-            let result = url_loader::load(&transport, &request, redirects).await;
+            let result = match url_loader::load(&transport, &request, redirects).await {
+                Ok(response) => collect(response).await,
+                Err(err) => Err(err),
+            };
             if let Err(err) = &result {
                 log_failure(&request, err);
             }
@@ -401,50 +404,78 @@ async fn run(
             };
             let status = match result {
                 Ok(response) => stream_body(response, &mut *client).await,
-                Err(err) => {
-                    log_failure(&request, &err);
-                    CompletionStatus {
-                        error: Some(err),
-                        encoded_body_length: 0,
-                        completion_time: TimeTicks::now(),
-                    }
-                }
+                Err(err) => CompletionStatus {
+                    error: Some(err),
+                    encoded_body_length: 0,
+                    completion_time: TimeTicks::now(),
+                },
             };
+            if let Some(err) = &status.error {
+                log_failure(&request, err);
+            }
             client.on_complete(status);
         }
     }
 }
 
+/// `response` with all of its body, read into one buffer.
+async fn collect(response: url_loader::Response) -> LoadResult {
+    let url_loader::Response {
+        mut head,
+        mut body,
+        local,
+    } = response;
+    let mut pieces = Vec::new();
+    while let Some(piece) = body.next().await? {
+        pieces.push(piece);
+    }
+    let end = TimeTicks::now();
+    if let Some(timing) = &mut head.timing {
+        // A local scheme's response is timed whole: no head before the body.
+        if local {
+            timing.receive_headers_end = end;
+        }
+        timing.response_end = end;
+    }
+    Ok(ResourceResponse {
+        head,
+        encoded_body_length: body.encoded_length(),
+        body: url_loader::concat(pieces),
+    })
+}
+
 /// Tells `client` of `response`'s head and writes its body into the pipe
-/// it reads; how that ended.
+/// it reads, as it comes; how that ended.
 async fn stream_body(
-    response: ResourceResponse,
+    response: url_loader::Response,
     client: &mut dyn UrlLoaderClient,
 ) -> CompletionStatus {
-    let ResourceResponse {
-        head,
-        encoded_body_length,
-        body,
-    } = response;
+    let url_loader::Response { head, mut body, .. } = response;
     let url = head.url.clone();
-    let completion_time = head
-        .timing
-        .map_or_else(TimeTicks::now, |timing| timing.response_end);
     let (mut producer, consumer) = data_pipe::create(BODY_PIPE_CAPACITY);
     client.on_receive_response(head, consumer);
-    // A reader that went stops the load (Chromium's `URLLoader` fails it as
-    // the body's consumer closes).
-    let error = producer.write(body).await.err().map(|data_pipe::Closed| {
-        NetError::new(
-            NetErrorCode::Failed,
-            format!("{url}: the body's reader went"),
-        )
-    });
+    let error = loop {
+        let piece = match body.next().await {
+            Ok(Some(piece)) => piece,
+            Ok(None) => break None,
+            Err(err) => break Some(err),
+        };
+        // A reader that went stops the load (Chromium's `URLLoader` fails it
+        // as the body's consumer closes).
+        if let Err(data_pipe::Closed) = producer.write(piece).await {
+            break Some(NetError::new(
+                NetErrorCode::Failed,
+                format!("{url}: the body's reader went"),
+            ));
+        }
+    };
+    // The body is over: the reader finds the pipe's end before the end is
+    // told.
     drop(producer);
     CompletionStatus {
         error,
-        encoded_body_length,
-        completion_time,
+        encoded_body_length: body.encoded_length(),
+        completion_time: TimeTicks::now(),
     }
 }
 

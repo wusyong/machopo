@@ -23,6 +23,8 @@ pub struct Route {
     pub delay: Duration,
     /// How long to wait between the head and the body.
     pub body_delay: Duration,
+    /// How far into the body to stop for a while, and for how long.
+    pub body_pause: Option<(usize, Duration)>,
     /// No `Content-Length`: the body ends where the connection does,
     /// closed (over HTTPS) without TLS's close_notify, as Python's `ssl`
     /// (wptserve) does.
@@ -41,6 +43,7 @@ impl Route {
             body: body.into(),
             delay: Duration::ZERO,
             body_delay: Duration::ZERO,
+            body_pause: None,
             close_delimited: false,
             corrupt_after_body: false,
         }
@@ -69,6 +72,12 @@ impl Route {
     /// See [`body_delay`](Self::body_delay).
     pub fn with_body_delay(mut self, delay: Duration) -> Self {
         self.body_delay = delay;
+        self
+    }
+
+    /// See [`body_pause`](Self::body_pause).
+    pub fn with_pause_in_body(mut self, at: usize, pause: Duration) -> Self {
+        self.body_pause = Some((at, pause));
         self
     }
 
@@ -416,7 +425,16 @@ fn serve(
         std::thread::sleep(route.body_delay);
     }
     if !head_only {
-        let _ = stream.write_all(&route.body);
+        let (first, rest) = match route.body_pause {
+            Some((at, _)) => route.body.split_at(at.min(route.body.len())),
+            None => (&route.body[..], &[][..]),
+        };
+        let _ = stream.write_all(first);
+        if let Some((_, pause)) = route.body_pause {
+            let _ = stream.flush();
+            std::thread::sleep(pause);
+        }
+        let _ = stream.write_all(rest);
     }
     let _ = stream.flush();
     Some(route.clone())

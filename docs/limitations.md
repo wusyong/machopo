@@ -73,7 +73,7 @@
 - 沒有擋 Fetch 的 bad port（`fetch` 到 port 13、25 等照樣去連）：在 Windows 上連 localhost 那些 port 的請求可能等很久才結束，WPT 的 `request-bad-port.any.js` 在 Windows 上等到逾時。
 - `fetch()`、module script、`modulepreload` 和帶 `crossorigin` 的 classic script 跨源時照 CORS；preflight 不快取：不是 simple 的跨源請求每次都先送 `OPTIONS`（Chrome 照 `Access-Control-Max-Age` 快取，預設 5 秒）。preflight 不帶 `Referer`（machopo 都不送）。沒有 cookie，`credentials` 只改變 CORS 要求對方的條件。
 - HTTP/1 的回應的 status text 是 status 標準的 reason phrase（reqwest 不留伺服器給的）；HTTP/2 沒有 reason phrase，是空字串。request header 的名稱送出時一律小寫（hyper 的 HTTP/1），Chrome 照 script 給的大小寫。沒有 `Accept-Language`。request header 的值有控制字元（tab 以外 0x20 以下的 byte，Fetch 允許）時送不出去，是網路錯誤：hyper 的 `http` crate 不接受（WPT 的 `header-values-normalize.any.js`、`cors-preflight-not-cors-safelisted.any.js`）。伺服器回 421（Misdirected Request）時不換一條連線重送（Chrome 會，WPT 的 `request-upload-421.any.js`）。`fetch()` 的 `Origin` 不看 referrer policy（`no-referrer` 時 Chrome 送 `null`）。伺服器在 204、205、304 的回應後面多送 body（HTTP 不允許）時，hyper 照樣重用那條連線，下一個用到它的請求把殘留的 bytes 當成回應解析而失敗；Chrome 發現回應之後還有資料就不重用（`HttpStreamParser`）。WPT 的 `response-null-body.any.js` 因此不穩定，寫成 `disabled`。
-- `Accept-Encoding` 只有 `gzip, deflate, br`（Chrome 還有 `zstd`），`net` 自己解壓（收完整份 body 之後）。
+- `Accept-Encoding` 只有 `gzip, deflate, br`（Chrome 還有 `zstd`），`net` 自己解壓。
 - 同時對同一個 HTTPS 伺服器發出的請求，在第一條連線由 ALPN 確認是 HTTP/2 之前各開一條連線，最後都走同一條、其他的關掉（hyper-util 的連線池；Chrome 的 `SpdySessionPool` 等第一條）。
 - 沒有 `Content-Type` 時，只分辨 markup 和純文字，不像 Chromium 那樣完整地 sniff。
 - DNS 失敗是從 hyper-util 的錯誤訊息辨認的（它沒有專用的錯誤型別）；升級 reqwest 時，`net` 的 `connection_failures` 測試會告訴我們它還對不對。

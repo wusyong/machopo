@@ -1,38 +1,44 @@
 //! `file:` URLs (`FileURLLoader`), and converting between them and paths.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use protocol::network::{
-    LoadResult, NetError, NetErrorCode, ResourceResponse, ResponseHead, ResponseTainting,
-};
+use bytes::Bytes;
+use protocol::network::{NetError, NetErrorCode, ResponseHead, ResponseTainting};
 use url::Url;
 
 use crate::mime;
+use crate::url_loader::{Body, Response};
 
-pub(crate) async fn load(url: Url) -> LoadResult {
+/// How much of a file each read takes, on a blocking thread.
+const READ_SIZE: usize = 64 * 1024;
+
+/// The file `url` is for, opened, or the page listing the directory it is
+/// for. Its contents come as they are read.
+pub(crate) async fn load(url: Url) -> Result<Response, NetError> {
     let Some(path) = file_path(url.as_str()) else {
         return Err(NetError::new(NetErrorCode::InvalidUrl, url.as_str()));
     };
-    let read = {
+    let opened = {
         let path = path.clone();
         tokio::task::spawn_blocking(move || match path.is_dir() {
-            true => directory_listing(&path).map(|page| (page, true)),
-            false => std::fs::read(path).map(|body| (body, false)),
+            true => directory_listing(&path).map(|page| (Body::whole(page.into()), true)),
+            false => std::fs::File::open(&path).map(|file| {
+                let body = Body::file(FileBody {
+                    file: Some(file),
+                    path,
+                });
+                (body, false)
+            }),
         })
         .await
     };
-    let (body, is_dir) = match read {
-        Ok(Ok(read)) => read,
-        Ok(Err(err)) => {
-            let code = match err.kind() {
-                std::io::ErrorKind::PermissionDenied => NetErrorCode::AccessDenied,
-                _ => NetErrorCode::FileNotFound,
-            };
-            return Err(NetError::new(code, format!("{}: {err}", path.display())));
-        }
+    let (body, is_dir) = match opened {
+        Ok(Ok(opened)) => opened,
+        Ok(Err(err)) => return Err(file_error(&path, &err)),
         Err(join) => return Err(NetError::new(NetErrorCode::Failed, join.to_string())),
     };
-    Ok(ResourceResponse {
+    Ok(Response {
         head: ResponseHead {
             url: url.into(),
             status: 200,
@@ -52,9 +58,59 @@ pub(crate) async fn load(url: Url) -> LoadResult {
             protocol: "file".to_owned(),
             encoded_headers_length: 0,
         },
-        encoded_body_length: 0,
-        body: body.into(),
+        body,
+        local: true,
     })
+}
+
+/// A file's contents, read a piece at a time on a blocking thread
+/// (`FileURLLoader`'s reads into its data pipe).
+pub(crate) struct FileBody {
+    /// Until it was read to its end.
+    file: Option<std::fs::File>,
+    path: PathBuf,
+}
+
+impl FileBody {
+    /// The next piece of the file; `None` at its end.
+    pub(crate) async fn next(&mut self) -> Result<Option<Bytes>, NetError> {
+        let Some(mut file) = self.file.take() else {
+            return Ok(None);
+        };
+        let (file, read) = tokio::task::spawn_blocking(move || {
+            let mut piece = vec![0; READ_SIZE];
+            let read = loop {
+                match file.read(&mut piece) {
+                    Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
+                    read => break read,
+                }
+            };
+            let read = read.map(|length| {
+                piece.truncate(length);
+                piece
+            });
+            (file, read)
+        })
+        .await
+        .map_err(|join| NetError::new(NetErrorCode::Failed, join.to_string()))?;
+        match read {
+            Ok(piece) if piece.is_empty() => Ok(None),
+            Ok(piece) => {
+                self.file = Some(file);
+                Ok(Some(piece.into()))
+            }
+            Err(err) => Err(file_error(&self.path, &err)),
+        }
+    }
+}
+
+/// A file that can't be opened or read, as Chromium names it.
+fn file_error(path: &Path, err: &std::io::Error) -> NetError {
+    let code = match err.kind() {
+        std::io::ErrorKind::PermissionDenied => NetErrorCode::AccessDenied,
+        _ => NetErrorCode::FileNotFound,
+    };
+    NetError::new(code, format!("{}: {err}", path.display()))
 }
 
 /// A page listing the directory at `path` (Chrome's `FileURLDirectoryLoader`,

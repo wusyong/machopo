@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
+use bytes::Bytes;
 use ipc::TimeTicks;
 use protocol::network::{LoadTiming, NetError, NetErrorCode, TimeSpan};
 use url::Url;
@@ -18,7 +19,8 @@ use crate::NetworkContextParams;
 use crate::content_encoding;
 use crate::host_mapping::{HostMapping, HostMappingRules};
 
-/// A response as the wire gave it, before `URLLoader` looks at it.
+/// A response as the wire gave it, before `URLLoader` looks at it: its
+/// head, and its body to come.
 pub(crate) struct RawResponse {
     pub(crate) status: u16,
     /// The status's canonical reason phrase (reqwest keeps no other), or ""
@@ -26,15 +28,14 @@ pub(crate) struct RawResponse {
     pub(crate) status_text: String,
     /// Names lowercase, in order.
     pub(crate) headers: Vec<(String, String)>,
-    pub(crate) body: Vec<u8>,
+    pub(crate) body: HttpBody,
+    /// Up to the head: `response_end` is when it came.
     pub(crate) timing: LoadTiming,
     pub(crate) remote_address: Option<SocketAddr>,
     /// `http/1.1`, `h2`... (`ResourceResponse::protocol`).
     pub(crate) protocol: &'static str,
-    /// The bytes the head and the body took on the wire (the body before
-    /// `Content-Encoding` was undone).
+    /// The bytes the head took on the wire.
     pub(crate) encoded_headers_length: u64,
-    pub(crate) encoded_body_length: u64,
 }
 
 impl RawResponse {
@@ -92,8 +93,8 @@ impl HttpTransport {
     /// A request of `url` by `method` (a token) with `headers` (script's),
     /// `accept` as `Accept` unless they have one, and `body`. A `POST` or
     /// `PUT` without a body says `Content-Length: 0` (Fetch's
-    /// "HTTP-network-or-cache fetch"). The response's body is read unless
-    /// `read_body` is false (a preflight's: it is left empty).
+    /// "HTTP-network-or-cache fetch"). Answers once the response's head has
+    /// come; its body comes as it is read.
     pub(crate) async fn send(
         &self,
         method: &str,
@@ -101,7 +102,6 @@ impl HttpTransport {
         accept: &str,
         headers: &[(String, String)],
         body: Option<&[u8]>,
-        read_body: bool,
     ) -> Result<RawResponse, NetError> {
         let client = self
             .client
@@ -189,30 +189,15 @@ impl HttpTransport {
                 )
             })
             .collect();
-        let mut response = response;
-        let mut body = Vec::new();
-        // A preflight's body isn't read (Chromium doesn't either): one that
-        // never ends mustn't stall the request. Dropping the response
-        // closes the connection.
-        if read_body {
-            loop {
-                match response.chunk().await {
-                    Ok(Some(chunk)) => body.extend_from_slice(&chunk),
-                    Ok(None) => break,
-                    // Servers that end such a body by closing the connection
-                    // without TLS's close_notify (Python's `ssl`, so wptserve)
-                    // are common; Chromium takes the body as complete, and so
-                    // do we. A body with a length still has to have all of it.
-                    Err(e) if close_delimited && is_unexpected_eof(&e) => break,
-                    Err(e) => return Err(net_error(url, &e)),
-                }
-            }
-        }
-        let encoded_body_length = u64::try_from(body.len()).unwrap_or(u64::MAX);
-        let content_encoding = headers_value(&headers, "content-encoding");
-        let body = content_encoding::decode(content_encoding.as_deref(), body).map_err(|e| {
-            NetError::new(NetErrorCode::ContentDecodingFailed, format!("{url}: {e}"))
-        })?;
+        let decoder =
+            content_encoding::Decoder::new(headers_value(&headers, "content-encoding").as_deref());
+        let body = HttpBody {
+            response: Some(response),
+            url: url.clone(),
+            close_delimited,
+            decoder,
+            encoded_length: 0,
+        };
         let encoded_headers_length = head_length(&status_text, &headers);
         let (dns, connect) = connection_timing(connecting);
         let timing = LoadTiming {
@@ -220,7 +205,7 @@ impl HttpTransport {
             dns,
             connect,
             receive_headers_end,
-            response_end: TimeTicks::now(),
+            response_end: receive_headers_end,
         };
         Ok(RawResponse {
             status,
@@ -231,8 +216,73 @@ impl HttpTransport {
             remote_address,
             protocol,
             encoded_headers_length,
-            encoded_body_length,
         })
+    }
+}
+
+/// A response's body, read from the wire a piece at a time as it comes,
+/// its codings undone (`HttpStreamParser::ReadResponseBody`, then the
+/// `SourceStream`s). Dropping it before its end closes the connection
+/// (HTTP/1) or the stream (HTTP/2): a preflight's and a redirect's aren't
+/// read.
+pub(crate) struct HttpBody {
+    /// Until the body is over.
+    response: Option<reqwest::Response>,
+    url: Url,
+    /// HTTP/1 with neither a length nor chunks: the body ends where the
+    /// connection does.
+    close_delimited: bool,
+    decoder: content_encoding::Decoder,
+    /// How many bytes came on the wire so far, before decoding.
+    encoded_length: u64,
+}
+
+impl HttpBody {
+    /// The next piece of the body, decoded; `None` once it is over.
+    pub(crate) async fn next(&mut self) -> Result<Option<Bytes>, NetError> {
+        while let Some(response) = &mut self.response {
+            let chunk = match response.chunk().await {
+                Ok(chunk) => chunk,
+                // Servers that end such a body by closing the connection
+                // without TLS's close_notify (Python's `ssl`, so wptserve)
+                // are common; Chromium takes the body as complete, and so
+                // do we. A body with a length still has to have all of it.
+                Err(e) if self.close_delimited && is_unexpected_eof(&e) => None,
+                Err(e) => {
+                    self.response = None;
+                    return Err(net_error(&self.url, &e));
+                }
+            };
+            let decoded = match chunk {
+                Some(chunk) => {
+                    self.encoded_length = self
+                        .encoded_length
+                        .saturating_add(u64::try_from(chunk.len()).unwrap_or(u64::MAX));
+                    self.decoder.push(chunk)
+                }
+                None => {
+                    self.response = None;
+                    self.decoder.finish()
+                }
+            };
+            let decoded = decoded.map_err(|e| {
+                self.response = None;
+                NetError::new(
+                    NetErrorCode::ContentDecodingFailed,
+                    format!("{}: {e}", self.url),
+                )
+            })?;
+            if !decoded.is_empty() {
+                return Ok(Some(decoded));
+            }
+        }
+        Ok(None)
+    }
+
+    /// The bytes the body took on the wire so far (before `Content-Encoding`
+    /// was undone): all of them, once it is over.
+    pub(crate) fn encoded_length(&self) -> u64 {
+        self.encoded_length
     }
 }
 

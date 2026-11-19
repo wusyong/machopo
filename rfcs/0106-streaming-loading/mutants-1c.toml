@@ -1,0 +1,178 @@
+# Step 1c: a body read a piece at a time as it comes: HTTP's decoded as it
+# comes (`content_encoding::Decoder`), sniffed from its first 1024 bytes
+# without a `Content-Type`, a file's read in pieces.
+test = ["sh", "-c", "cargo test -q -p net"]
+timeout = 600
+
+[[mutant]]
+name = "an unknown coding still decodes the rest"
+file = "crates/net/src/content_encoding.rs"
+from = '''                    codings.clear();'''
+to = '''                    {}'''
+
+[[mutant]]
+name = "an empty body is decoded"
+file = "crates/net/src/content_encoding.rs"
+from = '''        if !self.started {
+            return Ok(Bytes::new());'''
+to = '''        if false {
+            return Ok(Bytes::new());'''
+
+[[mutant]]
+name = "codings undone first first"
+file = "crates/net/src/content_encoding.rs"
+from = '''        for coding in self.codings.iter_mut().rev() {
+            let decoded = coding.push(data.as_deref().unwrap_or(&piece))?;'''
+to = '''        for coding in self.codings.iter_mut() {
+            let decoded = coding.push(data.as_deref().unwrap_or(&piece))?;'''
+
+[[mutant]]
+name = "inflating stops with its output full"
+file = "crates/net/src/content_encoding.rs"
+from = '''                    if (input.is_empty() && room_left) || (consumed == 0 && produced == 0) {'''
+to = '''                    if (input.is_empty() || room_left) || (consumed == 0 && produced == 0) {'''
+
+[[mutant]]
+name = "a gzip trailer isn't checked"
+file = "crates/net/src/content_encoding.rs"
+from = '''                if crc != self.crc.sum() || length != self.crc.amount() {'''
+to = '''                if false {'''
+
+[[mutant]]
+name = "a gzip stream ends without its trailer"
+file = "crates/net/src/content_encoding.rs"
+from = '''                self.stage = GzipStage::Trailer;'''
+to = '''                self.stage = GzipStage::Done;'''
+
+[[mutant]]
+name = "a gzip header's name keeps its end"
+file = "crates/net/src/content_encoding.rs"
+from = '''            at = at.saturating_add(end).saturating_add(1);'''
+to = '''            at = at.saturating_add(end);'''
+
+[[mutant]]
+name = "a gzip header's extra data isn't skipped"
+file = "crates/net/src/content_encoding.rs"
+from = '''            .saturating_add(usize::from(u16::from_le_bytes([low, high])));'''
+to = '''            .saturating_add(0 * usize::from(u16::from_le_bytes([low, high])));'''
+
+[[mutant]]
+name = "a gzip header's CRC isn't skipped"
+file = "crates/net/src/content_encoding.rs"
+from = '''        at = at.saturating_add(2);
+    }
+    Ok((data.len() >= at).then_some(at))'''
+to = '''        at = at.saturating_add(0);
+    }
+    Ok((data.len() >= at).then_some(at))'''
+
+[[mutant]]
+name = "deflate is always zlib's"
+file = "crates/net/src/content_encoding.rs"
+from = '''                    .insert(Inflate::new(is_zlib_header(cmf, flg)))'''
+to = '''                    .insert(Inflate::new(is_zlib_header(cmf, flg) || true))'''
+
+[[mutant]]
+name = "what follows a brotli stream is an error"
+file = "crates/net/src/content_encoding.rs"
+from = '''                        Ok(0) => break,'''
+to = '''                        Ok(0) => return Err("after the end".into()),'''
+
+[[mutant]]
+name = "a stream cut short is fine"
+file = "crates/net/src/content_encoding.rs"
+from = '''            false => Err(format!("{name} doesn't decode: it ends before its stream")),'''
+to = '''            false => Ok(Vec::new()),'''
+
+[[mutant]]
+name = "the wire's bytes aren't counted"
+file = "crates/net/src/http.rs"
+from = '''                        .saturating_add(u64::try_from(chunk.len()).unwrap_or(u64::MAX));'''
+to = '''                        .saturating_add(0);'''
+
+[[mutant]]
+name = "an HTTP body's end isn't decoded"
+file = "crates/net/src/http.rs"
+from = '''                    self.response = None;
+                    self.decoder.finish()'''
+to = '''                    self.response = None;
+                    Ok(Bytes::new())'''
+
+[[mutant]]
+name = "a body that ends with the connection is an error"
+file = "crates/net/src/http.rs"
+from = '''                Err(e) if self.close_delimited && is_unexpected_eof(&e) => None,'''
+to = '''                Err(e) if false && is_unexpected_eof(&e) => None,'''
+
+[[mutant]]
+name = "nothing is read to sniff"
+file = "crates/net/src/url_loader.rs"
+from = '''            let start = body.read_ahead(SNIFF_LENGTH).await?;'''
+to = '''            let start = Bytes::new();'''
+
+[[mutant]]
+name = "all of the body is read to sniff"
+file = "crates/net/src/url_loader.rs"
+from = '''        while read < length {'''
+to = '''        while read < usize::MAX {'''
+
+[[mutant]]
+name = "more than 1024 bytes are sniffed"
+file = "crates/net/src/url_loader.rs"
+from = '''            let sniffed = &start[..start.len().min(SNIFF_LENGTH)];'''
+to = '''            let sniffed = &start[..];'''
+
+[[mutant]]
+name = "what was sniffed is lost"
+file = "crates/net/src/url_loader.rs"
+from = '''        self.ahead = (!ahead.is_empty()).then(|| ahead.clone());'''
+to = '''        self.ahead = None;'''
+
+[[mutant]]
+name = "a discarded body is given"
+file = "crates/net/src/url_loader.rs"
+from = '''        self.ahead = None;
+        self.discarded = true;'''
+to = '''        self.discarded = false;'''
+
+[[mutant]]
+name = "a discarded body isn't read"
+file = "crates/net/src/url_loader.rs"
+from = '''            while self.read().await?.is_some() {}'''
+to = '''            '''
+
+[[mutant]]
+name = "a redirect's body is read"
+file = "crates/net/src/url_loader.rs"
+from = '''        match redirect_target(&url, &raw)? {'''
+to = '''        let mut raw = raw; if redirect_target(&url, &raw)?.is_some() { while raw.body.next().await?.is_some() {} } match redirect_target(&url, &raw)? {'''
+
+[[mutant]]
+name = "a whole local response is timed from its head"
+file = "crates/net/src/lib.rs"
+from = '''        if local {'''
+to = '''        if false && local {'''
+
+[[mutant]]
+name = "a whole response ends at its head"
+file = "crates/net/src/lib.rs"
+from = '''        timing.response_end = end;'''
+to = '''        let _ = end;'''
+
+[[mutant]]
+name = "a body's error isn't told"
+file = "crates/net/src/lib.rs"
+from = '''            Err(err) => break Some(err),'''
+to = '''            Err(_) => break None,'''
+
+[[mutant]]
+name = "a file is read whole"
+file = "crates/net/src/file.rs"
+from = '''            let mut piece = vec![0; READ_SIZE];'''
+to = '''            let mut piece = vec![0; 64 * READ_SIZE];'''
+
+[[mutant]]
+name = "a file stops after its first piece"
+file = "crates/net/src/file.rs"
+from = '''                self.file = Some(file);'''
+to = '''                drop(file);'''

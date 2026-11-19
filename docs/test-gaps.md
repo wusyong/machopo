@@ -257,6 +257,7 @@
 - DOM 的 `normalize` 跳過已經併進前一個的 text：它已經沒有 parent，下一個兄弟是 none，什麼都不做；`getElementsByClassName` 的 class 名稱去掉重複：每個都要有，重複的只是多比一次。
 - DOM 的 `assigned_nodes` 先看 `is_slot`，改成只看在不在 shadow tree 裡：在 shadow tree 裡、不是 slot 的元素沒有 `SlotData`，清單也是空的，只是多重算一次分配。
 - DOM 的 intersection observer 在有 observer 追蹤 visibility 時，paint 換了就重算（renderer 的 `compute_intersections` 的狀態裡的 `last_paint`）：拿掉也一樣，DOM 的 frame 只要 restyle 就重新 layout、重新 pre-paint，paint 變了時 pre-paint 的計數已經變了。有只改 paint、不重新 layout 的東西（canvas 畫了新的內容）時這條才要守：照 `shell` 的 `what_covers_a_tracked_target` 寫一個那樣的情況。
+- `net` 解 `Content-Encoding` 時，輸入用完、輸出滿了也接著 inflate（`content_encoding.rs` 的 `Inflate::push` 的 `room_left`）：拿掉也一樣，flate2 的 miniz_oxide 輸出滿了就不再吃輸入，這時留在它裡面的只有一段沒複製完的 match（最多 258 bytes），下一段 body 或結尾時交出，不會少，只是晚一段才寫進管道。
 
 
 - DOM 的 heap 的一步（`dom` 的 `Dom::advance_marking`、`dom_js` 的 `State` 的 `EmbedderHeapState::advance`，一路到 `bindings` 的 `StateHeap`、`Marking::advance`、V8 的 patch 的 `CppHeap::AdvanceMarking`）一律回報做完：V8 的三個呼叫的地方（增量的步驟、停頓裡的閉包、minor GC）都不看 `AdvanceMarking` 的回傳值，能不能收尾只問 `IsMarkingDone`，也就是 heap 的 marker 清空了沒有（`is_done`，有自己的測試）。回傳值之後被 V8 用到時要補測試。

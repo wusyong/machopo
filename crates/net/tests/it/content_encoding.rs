@@ -101,6 +101,19 @@ fn a_body_that_doesnt_decode_is_a_network_error() {
     assert_eq!(error.code, NetErrorCode::ContentDecodingFailed);
 }
 
+/// The body is over before its coding's stream is.
+#[test]
+fn a_body_cut_short_is_a_network_error() {
+    let compressed = gzip(b"hello, world");
+    let server = server(&[(
+        "/short",
+        Route::ok("text/plain", &compressed[..compressed.len() - 4])
+            .with_header("Content-Encoding", "gzip"),
+    )]);
+    let error = get(&server.url("/short")).unwrap_err();
+    assert_eq!(error.code, NetErrorCode::ContentDecodingFailed);
+}
+
 #[test]
 fn a_coding_not_offered_is_left_as_it_came() {
     let server = server(&[(

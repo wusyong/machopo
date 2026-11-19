@@ -88,6 +88,31 @@ fn error_statuses_still_have_a_body() {
     assert_eq!(response.body, &b"not found"[..]);
 }
 
+/// A body that comes in pieces is answered whole, once all of it came.
+#[test]
+fn a_body_in_pieces_is_answered_whole() {
+    let server = server(&[(
+        "/page",
+        Route::ok("text/plain", "first|second").with_pause_in_body(6, Duration::from_millis(100)),
+    )]);
+    let network = NetworkContext::start(params()).unwrap();
+    let response = fetch(&network, &server.url("/page"), RequestDestination::Document).unwrap();
+    assert_eq!(response.body, &b"first|second"[..]);
+    assert_eq!(response.encoded_body_length, 12);
+}
+
+/// Only the first 1024 bytes are sniffed (`net::kMaxBytesToSniff`).
+#[test]
+fn missing_content_type_is_sniffed_from_the_start() {
+    let mut late_markup = vec![b' '; 1024];
+    late_markup.extend_from_slice(b"<html>");
+    let server = server(&[("/late", Route::new(200, late_markup.clone()))]);
+    let network = NetworkContext::start(params()).unwrap();
+    let response = fetch(&network, &server.url("/late"), RequestDestination::Document).unwrap();
+    assert_eq!(response.head.mime_type, "text/plain");
+    assert_eq!(response.body, late_markup);
+}
+
 #[test]
 fn missing_content_type_is_sniffed() {
     let server = server(&[
@@ -760,6 +785,7 @@ fn no_cors_and_same_origin_modes() {
     .unwrap();
     assert_eq!(opaque.head.tainting, ResponseTainting::Opaque);
     assert_eq!((opaque.head.status, opaque.body.len()), (200, 0));
+    assert_eq!(opaque.encoded_body_length, 6, "read, though not given");
     assert!(
         opaque
             .head
