@@ -187,6 +187,27 @@ fn percentages_are_of_the_scrollport_and_the_end_inset_gives_way() {
     assert_eq!(c.inset, [Some(20.0), None, Some(130.0), Some(200.0)]);
 }
 
+/// With no room for both its left and right insets, the end one by its
+/// containing block's direction gives way: the right, the left in `rtl`.
+#[test]
+fn the_end_inset_by_the_containing_blocks_direction_gives_way() {
+    for (dir, inset) in [
+        ("ltr", [None, Some(60.0), None, Some(240.0)]),
+        ("rtl", [None, Some(200.0), None, Some(100.0)]),
+    ] {
+        let laid = lay_out(&format!(
+            r#"<body style="margin: 0">
+            <div dir={dir} style="overflow: auto; height: 200px; width: 400px">
+                <div style="position: sticky; left: 240px; right: 200px; width: 100px;
+                  height: 50px"></div>
+                <div style="width: 1000px; height: 10px"></div>
+            </div>"#
+        ));
+        // 240px and 200px leave a 100px box 140px short in 400px.
+        assert_eq!(laid.sticky.boxes[0].inset, inset, "{dir}");
+    }
+}
+
 #[test]
 fn a_box_in_a_sticky_box_moves_with_its_containing_block() {
     let laid = lay_out(

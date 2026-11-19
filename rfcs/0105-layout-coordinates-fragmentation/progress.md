@@ -16,7 +16,7 @@
 | 2a style：`direction`、`unicode-bidi`、`dir`、`:dir()` | 完成 | 2026-11-19 |
 | 2b 邏輯屬性照 `direction`、layout 用 `direction` | 完成 | 2026-11-19 |
 | 2c `unicode-bidi` 在 inline 內容裡 | 完成 | 2026-11-19 |
-| 2d 捲動的原點、sticky、`text-overflow`、`<select>` | | |
+| 2d 捲動的原點、sticky、`text-overflow`、`<select>` | 完成 | 2026-11-19 |
 | 2e 第 2 階段的檢查和文件 | | |
 
 ## 驗收
@@ -163,4 +163,17 @@ macOS、Apple M4，2026-11-19。
 - `docs/limitations.md`：拿掉捲動的原點那一條。
 - mutation test（`mutants-2d1.toml`）31 個，全部抓到：捲動容器的 20 個第一輪沒抓到 3 個（列的 `wrap-reverse`、子元素的上 margin、上面的內容裁掉），視窗的 11 個沒抓到 3 個（compositor 給 sticky 的視窗位移、文件的 canvas 和子 frame 的視窗的原點：沒有原點不是 0 的測試），都補了測試。commit 時算的範圍改變的那一條（原點變了也算整個重畫）拿掉了：原點變時 main thread 的位置跟著變，畫出來的一樣，捲動的範圍另外比。
 - 跑過：`cargo test -p layout -p paint -p renderer -p compositor -p dom_api`；`test.py scenarios position-sticky scroll-anchoring sidebar-scroll wheel rtl-scroll`（6 次）；`test.py wpt` 的 `css/cssom-view/`、`css-overflow`、`CSS2`、`css-writing-modes`、`css-position`、`css-flexbox`、`css-scroll-anchoring`、`css-text`、`html/rendering/`、`html/dom/elements/global-attributes/`（17278 項，意外的結果都是 macOS 上已知的）；`sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs。
+
+### 2d：`text-overflow`、sticky、`<select>`（第二部分）
+
+macOS、Apple M4，2026-11-19。
+
+- `text-overflow` 和 line clamp 的省略號照段落的方向（parley 的 `is_rtl`）放在行的結尾（第 20 條）：`truncate_line` 把 `rtl` 的行鏡射（x 換成 -x）成從右邊溢出的行，用同一套算法截；run 的看得到的部分從 `visible_start` 起（`TextFragment` 多了 `hidden_before`、`visible_start`：左邊截掉的 glyph 不畫、不打得到，底線從截的地方開始）。line clamp 的行照它離起點那一邊多遠往起點移，空白的那一行的省略號在它的起點（`rtl` 是右邊）。
+- sticky 的左右 inset 都放不下時照 containing block 的方向讓結尾那一邊（第 21 條）。
+- `<select>` 的下拉清單照 select 的方向對齊（`right_aligned`），protocol 的 `MenuItem` 多了 `rtl`（每個 option、optgroup 的 computed `direction`，`dom_api` 的 `PopupItem` 帶著它的節點），shell 照它把文字和縮排放在起點那一邊、段落方向照它（第 22 條）。
+- 新的測試：`layout` 的 `text_overflow::an_rtl_line_is_cut_on_its_left`、`an_rtl_line_clamps_ellipsis_is_on_the_left`、`sticky::the_end_inset_by_the_containing_blocks_direction_gives_way`；`paint` 的 `what_text_overflow_hides_on_the_left_is_not_painted`、`what_text_overflow_hides_on_the_left_is_not_hit`；`shell` 的 `popup_menu::tests::a_right_to_left_list_and_its_items`、`browser_view::a_right_to_left_dropdown`。
+- WPT：變成通過的 `text-overflow-ellipsis-rtl-001`、`text-overflow-011`、`html/rendering/widgets/input-text-overflow-ellipsis-rtl`、`line-clamp/webkit-line-clamp-014`（第一部分找到的 2b 留下的那份）、`position-sticky-horizontal-rtl-overconstrained`，拿掉 `.ini`；變成失敗的 `input-text-overflow-ellipsis-rtl-scrolled`：machopo 不能捲文字框的值，和 `ltr` 的那份一樣（原本碰巧對），標成預期失敗。
+- `docs/limitations.md`：`text-overflow` 只剩橫排；sticky 只剩沒有 writing mode；`<select>` 拿掉「頁面沒有 `direction`」。
+- mutation test（`mutants-2d2.toml`）21 個：19 個抓到（第一輪沒抓到的 6 個補了測試：兩個 run 的 `rtl` 行、空白的 `rtl` 截行、左邊截掉的 glyph 和底線、截掉的 run 的 hit test、選單標籤的段落方向）；2 個是等價的（`rtl` 的 run 的 cluster 邊界多一個左邊界：它等於 run 的結尾，只有整個 run 放得下時用得到，那時前面已經整個留下，差別只在誤差容許值以內；compositor 的 hit 範圍裡截掉的 run 的位置：run 一定在它的 block 或行內盒子的範圍裡，範圍是聯集，結果一樣）。
+- 跑過：`cargo test -p layout -p paint -p renderer -p dom_api -p protocol`、`cargo test -p shell --lib` 和 `shell` 的 `browser_view::a_right_to_left_dropdown`；`test.py wpt css/css-overflow/ css/css-position/sticky/ html/rendering/widgets/ css/css-text/ css/CSS2/`；`test.py scenarios position-sticky line-clamp rtl-scroll`；`sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs。
 

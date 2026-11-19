@@ -125,6 +125,21 @@ fn what_text_overflow_hides_is_not_hit() {
     assert_eq!(page.at(75.0, 105.0), Some("block2"));
 }
 
+/// An `rtl` line is cut on its left: its text is hit where it shows, on
+/// the right.
+#[test]
+fn what_text_overflow_hides_on_the_left_is_not_hit() {
+    let page = lay_out(&format!(
+        "{RESET}<body id=body>
+         <div id=block dir=rtl style='width: 100px; height: 100px; font: 20px/1 Ahem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap'>XXXXXXXX</div>"
+    ));
+    // The block is under its text too: the text node is what tells the
+    // run's box (its glyphs as painted) apart.
+    let text = |x: f32, y: f32| page.hit_with(&Default::default(), x, y).text;
+    assert!(text(50.0, 5.0).is_some(), "its text, on the right");
+    assert!(text(50.0, 50.0).is_none(), "below the line");
+}
+
 /// A float is hit before the blocks around it, whose backgrounds it is
 /// painted over, and before them as a whole: what is in it before the
 /// block after it (CSS 2 Appendix E, backwards).

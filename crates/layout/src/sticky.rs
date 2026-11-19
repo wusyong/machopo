@@ -12,7 +12,7 @@
 //! offsets, which [`StickyPositions::offsets`] works out from the rects
 //! again (Blink's `ComputeStickyOffset`), with no walk of the fragments.
 
-use computed_style::{LengthPercentageOrAuto, PseudoId};
+use computed_style::{Direction, LengthPercentageOrAuto, PseudoId};
 use gfx::NodeId;
 use gfx::{PointF, RectF, SizeF};
 use rustc_hash::FxHashMap;
@@ -290,7 +290,8 @@ impl StickyPositions {
             LengthPercentageOrAuto::LengthPercentage(v) => Some(v.resolve(base)),
         };
         // Both insets of an axis where there isn't room for both: the end
-        // one gives way.
+        // one gives way, by the containing block's direction (the left in
+        // `rtl`; Blink's `UpdateStickyPositionConstraints`).
         let axis = |min: Option<f32>, max: Option<f32>, available: f32, size: f32| match (min, max)
         {
             (Some(min), Some(max)) => {
@@ -307,7 +308,12 @@ impl StickyPositions {
         ];
         let [top, right, bottom, left] = resolved_inset;
         let (top, bottom) = axis(top, bottom, constraining.height, fragment.size.height);
-        let (left, right) = axis(left, right, constraining.width, fragment.size.width);
+        let (left, right) = if block.style.rare_inherited.direction == Direction::Rtl {
+            let (right, left) = axis(right, left, constraining.width, fragment.size.width);
+            (left, right)
+        } else {
+            axis(left, right, constraining.width, fragment.size.width)
+        };
         StickyConstraints {
             key: (node, fragment.pseudo),
             scroller: scroller.element,

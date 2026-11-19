@@ -201,3 +201,68 @@ fn only_a_cut_run_has_its_clusters_and_glyphs_placed() {
     assert_eq!((update.clusters_placed, update.glyphs_placed), (10, 10));
     assert_eq!(clusters_made(&view), [true, false, false]);
 }
+
+/// The runs of the first line of `id` as painted, from the page's left:
+/// where the visible part starts, how wide it is and how many glyphs are
+/// painted.
+fn visible(laid: &crate::page::Laid, id: &str, line: usize) -> Vec<(f32, f32, usize)> {
+    let origin = laid.rect(id);
+    laid.fragment(id).lines[line]
+        .runs
+        .iter()
+        .map(|run| {
+            let count = run.glyphs().count();
+            let painted = run.hidden_from.unwrap_or(count) - run.hidden_before;
+            (
+                origin.x + run.x + run.visible_start,
+                run.visible_advance,
+                painted,
+            )
+        })
+        .collect()
+}
+
+/// An `rtl` line overflows on its left, its end: it is cut there, from the
+/// left, and the ellipsis goes at the left edge (Blink truncates by the
+/// line's base direction).
+#[test]
+fn an_rtl_line_is_cut_on_its_left() {
+    let laid = crate::page::lay_out(&format!(
+        "{AHEM}<div id=a class=e dir=rtl>XXXXXXXX</div>
+         <div id=b class=e dir=rtl>XXXX XXXX</div>
+         <div id=c class=e dir=rtl>XXXX<span>XXXX</span></div>"
+    ));
+    // 160px from 60px left of the block: the right four squares kept.
+    assert_eq!(visible(&laid, "a", 0), [(20.0, 80.0, 4), (0.0, 20.0, 1)]);
+    // The second word's four squares, the first word and the space hidden.
+    assert_eq!(visible(&laid, "b", 0), [(20.0, 80.0, 4), (0.0, 20.0, 1)]);
+    // From the left: the block's run, on the left, hidden; the span's
+    // kept, the ellipsis left of it.
+    assert_eq!(
+        visible(&laid, "c", 0),
+        [(-60.0, 0.0, 0), (20.0, 80.0, 4), (0.0, 20.0, 1)]
+    );
+}
+
+/// A line clamp's ellipsis goes at the end of its last line's text: the
+/// left in `rtl`; a line aligned to its end moves toward its start (right)
+/// to leave it room.
+#[test]
+fn an_rtl_line_clamps_ellipsis_is_on_the_left() {
+    let laid = crate::page::lay_out(&format!(
+        "{AHEM}<style>.c {{ display: -webkit-box; -webkit-box-orient: vertical;
+           -webkit-line-clamp: 1; direction: rtl }}</style>
+         <div id=start class=c>XX<br>XX</div>
+         <div id=end class=c style='text-align: left'>XX<br>XX</div>
+         <div id=blank class=c><br>XX</div>"
+    ));
+    // At the right (its start), the ellipsis left of it.
+    assert_eq!(
+        visible(&laid, "start", 0),
+        [(60.0, 40.0, 2), (40.0, 20.0, 1)]
+    );
+    // At the left, moved right by the ellipsis's width.
+    assert_eq!(visible(&laid, "end", 0), [(20.0, 40.0, 2), (0.0, 20.0, 1)]);
+    // A blank line: the ellipsis where it starts, the right.
+    assert_eq!(visible(&laid, "blank", 0), [(80.0, 20.0, 1)]);
+}

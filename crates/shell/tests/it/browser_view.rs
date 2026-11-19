@@ -1786,6 +1786,34 @@ fn a_press_that_keeps_the_focus_closes_the_dropdown() {
     window.close();
 }
 
+/// A right-to-left select's dropdown is aligned to its right, and each
+/// item goes its own option's way.
+#[test]
+fn a_right_to_left_dropdown() {
+    let mut window = Window::open(window_size(1.0), 1.0);
+    let server = server(&[(
+        "/",
+        "<!DOCTYPE html><style>html, body { margin: 0 }
+         select { display: block; width: 100px; height: 20px }</style>
+         <select dir=rtl><option>one</option><option dir=ltr>two</option></select>",
+    )]);
+    window.load(&server.url("/"));
+    window.click(10.0, TOP + 10.0);
+    let mut shown = None;
+    window.until(|msg| match msg {
+        RendererHostMsg::ShowPopupMenu(menu) => {
+            shown = Some(menu.clone());
+            true
+        }
+        _ => false,
+    });
+    let menu = shown.expect("shown");
+    assert!(menu.right_aligned);
+    let rtl: Vec<bool> = menu.items.iter().map(|item| item.rtl).collect();
+    assert_eq!(rtl, [true, false]);
+    window.close();
+}
+
 /// A list box of three rows and five options; whether it scrolled, and
 /// what is selected, in `#out` at each change.
 const LIST_BOX: &str = "<!DOCTYPE html><style>html, body { margin: 0 }

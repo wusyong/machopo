@@ -1319,7 +1319,7 @@ impl<V: FnMut(&Target<'_>) -> bool> Walker<'_, V> {
                     // font's ascent and descent around the baseline.
                     LinePart::Run(run) => Some((
                         RectF::new(
-                            run.x,
+                            run.x + run.visible_start,
                             run.baseline - run.ascent,
                             run.visible_advance,
                             run.ascent + run.descent,

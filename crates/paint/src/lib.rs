@@ -2744,7 +2744,7 @@ impl Painter<'_> {
                     LinePart::InlineBox(b) if hittable(&b.style) => Some((b.rect, &b.style)),
                     LinePart::Run(run) if hittable(&run.style) => Some((
                         RectF::new(
-                            run.x,
+                            run.x + run.visible_start,
                             run.baseline - run.ascent,
                             run.visible_advance,
                             run.ascent + run.descent,
@@ -3128,7 +3128,7 @@ impl Painter<'_> {
         let (ids, positions) = (&mut self.glyph_ids, &mut self.glyph_positions);
         ids.clear();
         positions.clear();
-        run.for_each_glyph(run.hidden_from.unwrap_or(usize::MAX), |id, at| {
+        run.for_each_visible_glyph(|id, at| {
             ids.push(glyph_id(id));
             positions.push(PointF::new(origin.x + at.x, origin.y + at.y + shift));
         });
@@ -3137,7 +3137,7 @@ impl Painter<'_> {
         }
         let (ids, positions): (Arc<[u16]>, Arc<[PointF]>) =
             (Arc::from(&ids[..]), Arc::from(&positions[..]));
-        let x = origin.x + run.x;
+        let x = origin.x + run.x + run.visible_start;
         let place = (x, baseline - run.ascent, run.visible_advance);
         let decorations = style.rare_inherited.applied_text_decorations.clone();
         let lines = |line: text_decoration::Line| {

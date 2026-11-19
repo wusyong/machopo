@@ -1,0 +1,139 @@
+# Stage 2d, its second part: text-overflow and line clamp's ellipsis by the
+# paragraph's direction, sticky's insets by the containing block's, the
+# select's dropdown by the select's and its items'.
+test = ["sh", "-c", "cargo test -q -p layout --test it -- text_overflow:: line_clamp:: sticky::"]
+timeout = 900
+
+[[mutant]]
+name = "every line ends on the right"
+file = "crates/layout/src/text.rs"
+from = '''            let rtl = self.layout.is_rtl();'''
+to = '''            let rtl = false;'''
+
+[[mutant]]
+name = "an rtl line's end edge on the right"
+file = "crates/layout/src/text.rs"
+from = '''                origin.x + metrics.inline_min_coord'''
+to = '''                origin.x + metrics.inline_max_coord'''
+
+[[mutant]]
+name = "an rtl line never overflows"
+file = "crates/layout/src/text.rs"
+from = '''                start < line_end - BREAK_TOLERANCE'''
+to = '''                false'''
+
+[[mutant]]
+name = "an rtl line truncated unmirrored"
+file = "crates/layout/src/text.rs"
+from = '''    let mirror = |x: f32| if rtl { -x } else { x };'''
+to = '''    let mirror = |x: f32| x;'''
+
+[[mutant]]
+name = "an rtl line's children from the right"
+file = "crates/layout/src/text.rs"
+from = '''        (0..children.len()).collect()'''
+to = '''        (0..children.len()).rev().collect()'''
+
+[[mutant]]
+name = "an rtl run's clusters from their left edges"
+file = "crates/layout/src/text.rs"
+from = '''                sorted.remove(0);'''
+to = ''''''
+
+[[mutant]]
+name = "an rtl run's left glyphs painted"
+file = "crates/layout/src/text.rs"
+from = '''            fragment.hidden_before = before;'''
+to = ''''''
+
+[[mutant]]
+name = "an rtl run's visible part from its start"
+file = "crates/layout/src/text.rs"
+from = '''            fragment.visible_start = cut - fragment.x;'''
+to = ''''''
+
+[[mutant]]
+name = "an rtl ellipsis right of the cut"
+file = "crates/layout/src/text.rs"
+from = '''    let x = if rtl { -x - ellipsis.advance } else { x };'''
+to = '''    let x = if rtl { -x } else { x };'''
+
+[[mutant]]
+name = "an rtl clamped line moves by its offset"
+file = "crates/layout/src/text.rs"
+from = '''                    free - metrics.offset'''
+to = '''                    metrics.offset'''
+
+[[mutant]]
+name = "an rtl clamped line moves left"
+file = "crates/layout/src/text.rs"
+from = '''                    let shift = if rtl { -shift } else { shift };'''
+to = ''''''
+
+[[mutant]]
+name = "a blank rtl clamped line's ellipsis right of its start"
+file = "crates/layout/src/text.rs"
+from = '''                        start - ellipsis.advance'''
+to = '''                        start'''
+
+[[mutant]]
+name = "the glyphs hidden before are painted"
+file = "crates/layout/src/fragment.rs"
+from = '''            if index >= self.hidden_before {'''
+to = '''            if index >= 0 {'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it"]
+
+[[mutant]]
+name = "decorations from the run's start"
+file = "crates/paint/src/lib.rs"
+from = '''        let x = origin.x + run.x + run.visible_start;'''
+to = '''        let x = origin.x + run.x;'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it"]
+
+[[mutant]]
+name = "a truncated run hit from its start"
+file = "crates/paint/src/hit_test.rs"
+from = '''                            run.x + run.visible_start,'''
+to = '''                            run.x,'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it"]
+
+[[mutant]]
+name = "a truncated run in the hit regions from its start"
+file = "crates/paint/src/lib.rs"
+from = '''                            run.x + run.visible_start,'''
+to = '''                            run.x,'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it"]
+
+[[mutant]]
+name = "sticky's right gives way in rtl"
+file = "crates/layout/src/sticky.rs"
+from = '''        let (left, right) = if block.style.rare_inherited.direction == Direction::Rtl {'''
+to = '''        let (left, right) = if block.style.rare_inherited.direction != block.style.rare_inherited.direction {'''
+
+[[mutant]]
+name = "the list at the select's left"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                    right_aligned: rtl(&style),'''
+to = '''                    right_aligned: false,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::a_right_to_left_dropdown"]
+
+[[mutant]]
+name = "every item left to right"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                                .is_some_and(|style| rtl(&style)),'''
+to = '''                                .is_some_and(|_| false),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::a_right_to_left_dropdown"]
+
+[[mutant]]
+name = "an rtl item drawn from the left"
+file = "crates/shell/src/popup_menu.rs"
+from = '''            let x = if item.rtl {'''
+to = '''            let x = if !item.rtl && item.rtl {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "--", "popup_menu"]
+
+[[mutant]]
+name = "an rtl item's label laid out left to right"
+file = "crates/shell/src/popup_menu.rs"
+from = '''        parley::BaseDirection::Rtl'''
+to = '''        parley::BaseDirection::Ltr'''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "--", "popup_menu"]

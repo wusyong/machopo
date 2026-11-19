@@ -325,6 +325,10 @@ pub struct MenuItem {
     /// An option that can be picked (one disabled, or in a disabled
     /// optgroup, can't).
     pub enabled: bool,
+    /// Its `direction` is right to left (`blink.mojom.MenuItem`'s
+    /// `text_direction`): its label goes from the right, as a paragraph of
+    /// that direction.
+    pub rtl: bool,
 }
 
 /// `blink.mojom.MenuItem::Type`, the kinds a select's list has.

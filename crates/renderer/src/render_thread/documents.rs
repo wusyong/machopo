@@ -3011,6 +3011,9 @@ impl RenderThread {
                 let bounds = frame.client_rects(select).first().copied()?;
                 let style = frame.computed_style(cx, node)?;
                 let (items, selected) = dom_api::popup_items(&dom_api::ApiCx::new(cx), node);
+                let rtl = |style: &computed_style::ComputedStyle| {
+                    style.rare_inherited.direction == computed_style::Direction::Rtl
+                };
                 Some(PopupMenu {
                     bounds,
                     font_size: style.font.size,
@@ -3025,11 +3028,14 @@ impl RenderThread {
                                 dom_api::PopupItemKind::Separator => MenuItemKind::Separator,
                             },
                             enabled: item.enabled,
+                            rtl: cx
+                                .node_by_id(item.node)
+                                .and_then(|item| frame.computed_style(cx, item))
+                                .is_some_and(|style| rtl(&style)),
                         })
                         .collect(),
                     selected,
-                    // machopo's pages have no `direction` yet.
-                    right_aligned: false,
+                    right_aligned: rtl(&style),
                 })
             })
         });

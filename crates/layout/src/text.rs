@@ -278,6 +278,8 @@ fn substitute_fragment(
         x: 0.0,
         advance: 0.0,
         hidden_from: None,
+        hidden_before: 0,
+        visible_start: 0.0,
         visible_advance: 0.0,
         baseline: 0.0,
         ascent: 0.0,
@@ -349,25 +351,35 @@ enum LineChild {
     Atomic(usize),
 }
 
-/// Ends a line that overflows its block's content box (whose right edge
-/// is `right`) with `ellipsis` (Blink's `LineTruncator::TruncateLine`):
-/// from the last child back, one wholly outside the box is hidden; the
-/// first with room for the ellipsis after it is where the ellipsis goes,
-/// a run cut at the last cluster that leaves that room, and the rest
-/// hidden. The first child keeps at least one cluster, or an atomic inline
+/// Ends a line that overflows its block's content box at its end edge
+/// `edge` (its right, or its left if `rtl`) with `ellipsis` (Blink's
+/// `LineTruncator::TruncateLine`, by the line's base direction): from the
+/// child at the end back, one wholly outside the box is hidden; the first
+/// with room for the ellipsis after it is where the ellipsis goes, a run
+/// cut at the last cluster that leaves that room, and the rest hidden. The
+/// child at the start keeps at least one cluster, or an atomic inline
 /// whole: the first character is clipped, not ellipsed (css-overflow 4).
 /// The ellipsis goes after the runs (painted over them) and is attributed
 /// to the child it follows, so it is hit as that text is. Adds the glyphs
 /// it places to `glyphs`.
+///
+/// An `rtl` line is worked out mirrored (`x` as `-x`): its end is then on
+/// the right, as a `ltr` line's.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the line's parts, as `fragments` has them"
+)]
 fn truncate_line(
     ellipsis: &TextFragment,
-    right: f32,
+    edge: f32,
+    rtl: bool,
     baseline: f32,
     children: &[(LineChild, f32, f32)],
     runs: &mut Vec<TextFragment>,
     atomic_inlines: &mut [AtomicInline],
     glyphs: &mut usize,
 ) {
+    let mirror = |x: f32| if rtl { -x } else { x };
     let mut hide = |runs: &mut Vec<TextFragment>, child: LineChild| match child {
         LineChild::Run(run) => {
             runs[run].hidden_from = Some(0);
@@ -375,9 +387,20 @@ fn truncate_line(
         }
         LineChild::Atomic(atomic) => atomic_inlines[atomic].hidden = true,
     };
+    let right = mirror(edge);
+    // From the end back: the last child first (the first, in `rtl`).
+    let order: Vec<usize> = if rtl {
+        (0..children.len()).collect()
+    } else {
+        (0..children.len()).rev().collect()
+    };
+    let start = order.last().copied();
     let mut placed = None;
-    for (index, &(child, left, child_right)) in children.iter().enumerate().rev() {
-        let first = index == 0;
+    for index in order {
+        let (child, a, b) = children[index];
+        // Its edges toward the start and toward the end, mirrored.
+        let (left, child_right) = if rtl { (-b, -a) } else { (a, b) };
+        let first = Some(index) == start;
         let mut space = right - left;
         if space <= 0.0 {
             if !first {
@@ -402,23 +425,40 @@ fn truncate_line(
                 continue;
             }
         };
-        // Where each cluster starts (each ends where the next starts).
+        // Where each cluster starts toward the end (each ends where the
+        // next starts), mirrored: in order from the start.
         let fragment = &runs[run];
-        let starts: Vec<f32> = if fragment.clusters().is_empty() {
-            let starts: Vec<f32> = fragment.glyphs().map(|(_, p)| p.x).collect();
-            *glyphs = glyphs.saturating_add(starts.len());
-            starts
+        let mut starts: Vec<f32> = if fragment.clusters().is_empty() {
+            let xs: Vec<f32> = fragment.glyphs().map(|(_, p)| p.x).collect();
+            *glyphs = glyphs.saturating_add(xs.len());
+            // A glyph's start toward the end is its right in `rtl`.
+            let advance = fragment.x + fragment.advance;
+            let mut ends: Vec<f32> = xs.iter().skip(1).copied().collect();
+            ends.push(advance);
+            if rtl { ends } else { xs }
         } else {
-            fragment
-                .clusters()
-                .iter()
-                .map(|c| fragment.x + c.x)
-                .collect()
-        };
+            let clusters = fragment.clusters();
+            let edges: Vec<f32> = clusters.iter().map(|c| fragment.x + c.x).collect();
+            if rtl {
+                // The other edges of the clusters: where the next (to the
+                // right) starts, the run's end for the last.
+                let mut sorted = edges.clone();
+                sorted.sort_by(f32::total_cmp);
+                sorted.remove(0);
+                sorted.push(fragment.x + fragment.advance);
+                sorted
+            } else {
+                edges
+            }
+        }
+        .into_iter()
+        .map(mirror)
+        .collect();
+        starts.sort_by(f32::total_cmp);
         let limit = left + space;
         let end = |n: usize| starts.get(n).copied().unwrap_or(child_right);
-        // The clusters end further right one after another: the most that
-        // fit are the first from the end that do.
+        // The clusters end further toward the end one after another: the
+        // most that fit are the first from the end that do.
         let mut fit = (1..=starts.len())
             .rev()
             .find(|&n| end(n) <= limit)
@@ -430,19 +470,28 @@ fn truncate_line(
             }
             fit = fit.checked_sub(1).unwrap_or(1);
         }
-        let cut = end(fit);
+        let cut = mirror(end(fit));
         let fragment = &mut runs[run];
         let xs: Vec<f32> = fragment.glyphs().map(|(_, p)| p.x).collect();
         *glyphs = glyphs.saturating_add(xs.len());
-        fragment.hidden_from = Some(xs.iter().filter(|&&x| x < cut).count());
-        fragment.visible_advance = cut - fragment.x;
-        placed = Some((child, cut));
+        let before = xs.iter().filter(|&&x| x < cut).count();
+        if rtl {
+            fragment.hidden_before = before;
+            fragment.visible_start = cut - fragment.x;
+            fragment.visible_advance = fragment.x + fragment.advance - cut;
+        } else {
+            fragment.hidden_from = Some(before);
+            fragment.visible_advance = cut - fragment.x;
+        }
+        placed = Some((child, mirror(cut)));
         break;
     }
     let Some((child, x)) = placed else {
         return;
     };
     let mut ellipsis = ellipsis.clone();
+    // Its start toward the start at `x`, mirrored.
+    let x = if rtl { -x - ellipsis.advance } else { x };
     ellipsis.translate(PointF::new(x, baseline));
     (ellipsis.node, ellipsis.pseudo) = match child {
         LineChild::Run(run) => (runs[run].node, runs[run].pseudo),
@@ -2050,11 +2099,22 @@ impl InlineContent {
             // line moves over by what the ellipsis takes, as far as there is
             // room. The lines after it are hidden.
             let clamped = self.clamp == Some(index);
+            // The line's end: its right, its left in `rtl` (the paragraph's
+            // direction, Blink's `LineInfo::BaseDirection`).
+            let rtl = self.layout.is_rtl();
             if clamped && let Some(ellipsis) = &self.ellipsis {
                 let free =
                     metrics.inline_max_coord - metrics.inline_min_coord - (content_end - start);
-                if metrics.offset > 0.0 && free > 0.0 {
-                    let shift = metrics.offset / free * free.min(ellipsis.advance);
+                // Toward the start, as far as the line was aligned away
+                // from it: left, right in `rtl`.
+                let away = if rtl {
+                    free - metrics.offset
+                } else {
+                    metrics.offset
+                };
+                if away > 0.0 && free > 0.0 {
+                    let shift = away / free * free.min(ellipsis.advance);
+                    let shift = if rtl { -shift } else { shift };
                     let by = PointF::new(-shift, 0.0);
                     for run in &mut runs {
                         run.translate(by);
@@ -2080,28 +2140,40 @@ impl InlineContent {
                     self.inline_box_fragment(line_box, baseline, (top, top + metrics.line_height))
                 })
                 .collect();
-            // The line's end: the block's content box, or the floats beside
-            // it.
-            let line_end = origin.x + metrics.inline_max_coord;
+            // The line's end edge: the block's content box, or the floats
+            // beside it.
+            let line_end = if rtl {
+                origin.x + metrics.inline_min_coord
+            } else {
+                origin.x + metrics.inline_max_coord
+            };
+            let overflows = if rtl {
+                start < line_end - BREAK_TOLERANCE
+            } else {
+                content_end > line_end + BREAK_TOLERANCE
+            };
             if let Some(ellipsis) = &self.ellipsis
                 && (clamped
                     || (self.truncates
                         && matches!(self.broken.as_ref().map(|b| b.0), Some(Some(_)))
-                        && content_end > line_end + BREAK_TOLERANCE))
+                        && overflows))
             {
                 truncate_line(
                     ellipsis,
                     line_end,
+                    rtl,
                     baseline,
                     &children,
                     &mut runs,
                     &mut atomic_inlines,
                     &mut text.glyphs,
                 );
-                // A blank clamped line has the ellipsis where it starts.
+                // A blank clamped line has the ellipsis where it starts
+                // (its right in `rtl`).
                 if clamped && children.is_empty() {
                     let mut ellipsis = ellipsis.clone();
-                    ellipsis.translate(PointF::new(start, baseline));
+                    let x = if rtl { start - ellipsis.advance } else { start };
+                    ellipsis.translate(PointF::new(x, baseline));
                     runs.push(ellipsis);
                 }
             }
@@ -2320,6 +2392,8 @@ impl InlineContent {
             x,
             advance,
             hidden_from: None,
+            hidden_before: 0,
+            visible_start: 0.0,
             visible_advance: advance,
             baseline: origin.y + glyph_run.baseline(),
             ascent: run_metrics.ascent,

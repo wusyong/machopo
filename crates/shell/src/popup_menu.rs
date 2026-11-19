@@ -354,12 +354,13 @@ impl PopupMenu {
             };
             let layout = label(text, item, self.font_size);
             let top = row.y + ((row.height - layout.height()) / 2.0).round();
-            ui_text::paint_glyphs(
-                &mut list,
-                &layout,
-                PointF::new(row.x + PADDING_X + indent, top),
-                color,
-            );
+            // From its start: the right for a right-to-left item.
+            let x = if item.rtl {
+                row.right() - PADDING_X - indent - layout.width()
+            } else {
+                row.x + PADDING_X + indent
+            };
+            ui_text::paint_glyphs(&mut list, &layout, PointF::new(x, top), color);
         }
         list.finalize();
         list
@@ -372,12 +373,18 @@ fn pickable(item: &MenuItem) -> bool {
     item.kind == MenuItemKind::Option && item.enabled
 }
 
-/// An item's label on one line: a group's in bold.
+/// An item's label on one line, a paragraph of its direction: a group's in
+/// bold.
 fn label(contexts: &mut TextContexts, item: &MenuItem, size: f32) -> parley::Layout<()> {
     let text = &item.label;
     let mut builder = contexts
         .layouts
         .ranged_builder(&mut contexts.fonts, text, 1.0, true);
+    builder.set_base_direction(if item.rtl {
+        parley::BaseDirection::Rtl
+    } else {
+        parley::BaseDirection::Ltr
+    });
     builder.push_default(ui_text::font_family());
     builder.push_default(StyleProperty::FontSize(size));
     if item.kind == MenuItemKind::Group {
@@ -404,6 +411,7 @@ mod tests {
             label: label.to_owned(),
             kind,
             enabled,
+            rtl: false,
         }
     }
 
@@ -576,6 +584,86 @@ mod tests {
         assert_eq!(p.scroll(), 6, "the selected one shown");
         p.key("Home", false);
         assert_eq!(p.scroll(), 0);
+    }
+
+    /// A right-to-left select's list is at its right edge; a right-to-left
+    /// item's label goes from the row's right, a left-to-right one's from
+    /// its left, whatever the select's direction.
+    #[test]
+    fn a_right_to_left_list_and_its_items() {
+        let rtl_menu = |items: Vec<MenuItem>| protocol::renderer::PopupMenu {
+            right_aligned: true,
+            ..menu(items, None)
+        };
+        let new = |items: Vec<MenuItem>, anchor: RectF| {
+            PopupMenu::new(
+                TabId(1),
+                rtl_menu(items),
+                anchor,
+                WINDOW,
+                &mut TextContexts::new(true),
+            )
+        };
+        // Wider than the select: it reaches left from the select's right.
+        let p = new(
+            vec![option("a long label")],
+            RectF::new(500.0, 50.0, 10.0, 20.0),
+        );
+        assert_eq!(p.rect().right(), 510.0);
+        assert!(p.rect().width > 10.0);
+        let rtl = MenuItem {
+            rtl: true,
+            ..option("a")
+        };
+        let mut p = new(vec![rtl, option("b")], RectF::new(100.0, 50.0, 300.0, 20.0));
+        let list = p.paint(&mut TextContexts::new(true));
+        // In the list's space, 300 wide.
+        let starts: Vec<f32> = list
+            .ops()
+            .iter()
+            .filter_map(|op| match op {
+                PaintOp::DrawGlyphs { positions, .. } => positions.first().map(|at| at.x),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(starts.len(), 2);
+        assert!(starts[0] > 250.0, "from the right: {starts:?}");
+        assert!(starts[1] < 50.0, "from the left: {starts:?}");
+        // A label is a paragraph of its item's direction: "a!" right to
+        // left has its "!" on the left.
+        let rtl = MenuItem {
+            rtl: true,
+            ..option("a!")
+        };
+        let mut p = new(
+            vec![rtl, option("a!")],
+            RectF::new(100.0, 50.0, 300.0, 20.0),
+        );
+        let list = p.paint(&mut TextContexts::new(true));
+        // Each glyph and where it is, a row's runs together.
+        let mut placed: Vec<(f32, f32, u16)> = list
+            .ops()
+            .iter()
+            .filter_map(|op| match op {
+                PaintOp::DrawGlyphs {
+                    glyphs, positions, ..
+                } => Some(
+                    glyphs
+                        .iter()
+                        .zip(positions.iter())
+                        .map(|(&id, at)| (at.y, at.x, id))
+                        .collect::<Vec<_>>(),
+                ),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        placed.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+        let (first, second) = placed.split_at(2);
+        let ids = |row: &[(f32, f32, u16)]| row.iter().map(|g| g.2).collect::<Vec<_>>();
+        let mut reversed = ids(second);
+        reversed.reverse();
+        assert_eq!(ids(first), reversed);
     }
 
     /// Its picture: the border, the rows' text, the highlighted row.

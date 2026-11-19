@@ -351,6 +351,39 @@ fn what_text_overflow_hides_is_not_painted() {
     assert_eq!(texts, [(1, 30.0), (3, 50.0), (1, 110.0)]);
 }
 
+/// An `rtl` line is cut on its left: the glyphs left of the cut aren't
+/// painted, the run's decorations start at the cut, and the ellipsis is
+/// left of it.
+#[test]
+fn what_text_overflow_hides_on_the_left_is_not_painted() {
+    let artifact = paint_html(
+        "<style>html, body { margin: 0 }</style>
+         <div dir=rtl style='margin-left: 30px; width: 100px; font: 20px/1 Ahem; overflow: hidden;
+                     text-overflow: ellipsis; white-space: nowrap;
+                     text-decoration: underline'>XXXXXXXX</div>",
+    );
+    let texts: Vec<(usize, f32)> = artifact
+        .items
+        .iter()
+        .filter_map(|item| match &item.op {
+            PaintOp::DrawGlyphs {
+                glyphs, positions, ..
+            } => Some((glyphs.len(), positions[0].x)),
+            _ => None,
+        })
+        .collect();
+    // The right four squares, then the ellipsis at the block's left.
+    assert_eq!(texts, [(4, 50.0), (1, 30.0)]);
+    let underline = artifact
+        .items
+        .iter()
+        .find_map(|item| match (&item.kind, &item.op) {
+            (DisplayItemKind::TextDecoration, PaintOp::DrawRect { rect, .. }) => Some(rect.x),
+            _ => None,
+        });
+    assert_eq!(underline, Some(50.0));
+}
+
 #[test]
 fn text_after_all_backgrounds_with_decorations_around_it() {
     let artifact = paint_html(

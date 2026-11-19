@@ -393,6 +393,18 @@ impl TextFragment {
     /// first `count` glyphs, placed as asked: paint places every glyph of
     /// every run in each paint, so this is a plain loop (Blink's
     /// `ShapeResult::ForEachGlyph`).
+    /// Each glyph `text-overflow` doesn't hide (`hidden_before`,
+    /// `hidden_from`), as [`Self::for_each_glyph`].
+    pub fn for_each_visible_glyph(&self, mut f: impl FnMut(u32, PointF)) {
+        let mut index = 0_usize;
+        self.for_each_glyph(self.hidden_from.unwrap_or(usize::MAX), |id, at| {
+            if index >= self.hidden_before {
+                f(id, at);
+            }
+            index = index.saturating_add(1);
+        });
+    }
+
     pub fn for_each_glyph(&self, count: usize, mut f: impl FnMut(u32, PointF)) {
         let (x, baseline) = (self.x, self.baseline);
         match &self.glyphs {
@@ -546,12 +558,15 @@ pub struct TextFragment {
     pub x: f32,
     pub advance: f32,
     /// What `text-overflow` hides: the glyphs (`Self::glyphs`) from this
-    /// one on aren't
-    /// painted or hit, and the decorations stop at `visible_advance`
-    /// (`advance` without it). The geometry stays: layout queries see the
-    /// run as if it weren't truncated (Blink's hidden-for-paint item next
-    /// to its truncated copy).
+    /// one on, and before `hidden_before` (a line truncated on its left,
+    /// in `rtl`), aren't painted or hit, and the decorations go from
+    /// `visible_start` (from `x`) for `visible_advance` (`advance` without
+    /// it). The geometry stays: layout queries see the run as if it
+    /// weren't truncated (Blink's hidden-for-paint item next to its
+    /// truncated copy).
     pub hidden_from: Option<usize>,
+    pub hidden_before: usize,
+    pub visible_start: f32,
     pub visible_advance: f32,
     pub baseline: f32,
     /// Font metrics for decorations, in px: ascent and descent from the

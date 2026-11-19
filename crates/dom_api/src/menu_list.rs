@@ -254,6 +254,9 @@ pub struct PopupItem {
     pub label: String,
     pub kind: PopupItemKind,
     pub enabled: bool,
+    /// The option, optgroup or `<hr>`: whose style says which way its
+    /// label goes.
+    pub node: dom::NodeId,
 }
 
 /// A label as the popup shows it: ASCII whitespace stripped and collapsed
@@ -288,6 +291,7 @@ pub fn popup_items<'gc>(
                     label: popup_label(&cx.option_display_label(item)),
                     kind: PopupItemKind::Option,
                     enabled: !cx.option_disabled(item),
+                    node: cx.node_id(item),
                 }
             } else if cx.is_optgroup(item) {
                 let label = cx
@@ -298,12 +302,14 @@ pub fn popup_items<'gc>(
                     label: popup_label(&label),
                     kind: PopupItemKind::Group,
                     enabled: cx.attribute_value_by_id(item, local::DISABLED).is_none(),
+                    node: cx.node_id(item),
                 }
             } else {
                 PopupItem {
                     label: String::new(),
                     kind: PopupItemKind::Separator,
                     enabled: false,
+                    node: cx.node_id(item),
                 }
             }
         })
