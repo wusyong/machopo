@@ -15,22 +15,34 @@
 //! as any block container), sizes the rows from the cells, and places the
 //! row groups, rows and cells itself. Where css-tables 3 leaves things
 //! open, it does what Chrome (Blink's LayoutNG) does, as the comments say.
+//!
+//! The sizing is along the table's inline and block directions: a width is
+//! an inline size, a height a block size, a column's place an offset along
+//! the inline direction and a row's along the block. The parts are placed
+//! in those and turned physical by the table's writing direction once the
+//! box they are in has its size (Blink's builders keep logical offsets
+//! until then): a cell in its row and a row in its row group at once, the
+//! captions and row groups when the table has its own.
 
 use std::sync::Arc;
 
 use computed_style::{
     BorderCollapse, BorderStyle, BoxSizing, CaptionSide, ComputedStyle, Display, LengthPercentage,
     LengthPercentageOrAuto, LengthPercentageOrNone, Size, TableDisplay, TableLayout, VerticalAlign,
-    Visibility,
+    Visibility, WritingDirectionMode,
 };
 use dom::{Cx, NodeRef, QualifiedName};
-use gfx::{PointF, RectF};
+use gfx::{PointF, SizeF};
 use taffy::{
     AvailableSpace, AxisStaticPosition, LayoutInput, LayoutOutput, LayoutPartialTree, OofCandidate,
     OofCandidates, OofPositioningArea, RequestedAxis, ResolveOrZero, RunMode, SizingMode,
     compute_leaf_layout, compute_oof_layout,
 };
 
+use crate::logical::{
+    BoxStrut, LogicalOffset, LogicalRect, LogicalSize, PhysicalSide, WritingModeConverter,
+    start_sides, to_physical_delta,
+};
 use crate::text::{AtomicInlines, Edge, InlineItem, relative_offset};
 use crate::{
     BoxRole, BoxTree, Child, CollapsedBorder, CollapsedBorders, ContentContext, LayoutBox,
@@ -467,6 +479,9 @@ struct GridSection {
 /// they are laid out, each cell in its slots (HTML's "forming a table";
 /// Blink's `TableGroupedChildren` and `TableNode::GetColumnCount`).
 struct Grid {
+    /// The table's: its parts are placed by it (`writing-mode` doesn't
+    /// apply to row groups, rows and columns).
+    writing_direction: WritingDirectionMode,
     captions: Vec<usize>,
     sections: Vec<GridSection>,
     /// Whether a cell starts in each column: one where none does is merged
@@ -895,6 +910,21 @@ fn column_locations(
 }
 
 /// What laying a table's grid out found, from its grid's border box.
+/// A caption or row group placed in its table before the table has its
+/// size: its offset in the table's border box, logical, turned physical
+/// once the table's size is known.
+struct Pending {
+    index: usize,
+    offset: LogicalOffset,
+    size: taffy::Size<f32>,
+    /// Its own `position: relative`, physical.
+    by: PointF,
+    /// A caption's edges; `None` for a row group, which has none.
+    edge: Option<Edge>,
+    /// The out-of-flow boxes it passes up, from its border box's corner.
+    candidates: OofCandidates,
+}
+
 struct GridLayout {
     /// The grid's content box's height.
     height: f32,
@@ -1082,6 +1112,7 @@ impl BoxTree {
         starts.resize(count, false);
         defs.resize(count, None);
         Grid {
+            writing_direction: self.boxes[index].style.writing_direction(),
             captions,
             sections,
             starts,
@@ -1211,19 +1242,24 @@ impl BoxTree {
 
     /// Where `grid`'s column groups and columns are, the groups first (they
     /// are painted under the columns), its columns at `locations` in the
-    /// grid's content box, which is at `origin` in the table: across its
-    /// row groups, which are placed.
+    /// grid's content box, which is at `origin` in the table (`converter`
+    /// turns its places physical): across its row groups, which are placed.
     fn table_columns(
         &self,
         grid: &Grid,
         locations: &[(f32, f32)],
-        origin: PointF,
+        origin: LogicalOffset,
+        converter: &WritingModeConverter,
     ) -> Vec<TableColumn> {
         let (mut top, mut bottom) = (f32::INFINITY, f32::NEG_INFINITY);
         for section in &grid.sections {
             let layout = &self.boxes[section.index].layout;
-            top = top.min(layout.location.y);
-            bottom = bottom.max(layout.location.y + layout.size.height);
+            let size = SizeF::new(layout.size.width, layout.size.height);
+            let at = converter
+                .to_logical_offset(PointF::new(layout.location.x, layout.location.y), size)
+                .block_offset;
+            top = top.min(at);
+            bottom = bottom.max(at + converter.to_logical_size(size).block_size);
         }
         if grid.column_boxes.is_empty() || top > bottom {
             return Vec::new();
@@ -1240,7 +1276,10 @@ impl BoxTree {
                     node: b.node,
                     style: b.style.clone(),
                     group: column.group,
-                    rect: RectF::new(origin.x + left, top, right - left, bottom - top),
+                    rect: converter.to_physical_rect(LogicalRect::new(
+                        LogicalOffset::new(origin.inline_offset + left, top),
+                        LogicalSize::new(right - left, bottom - top),
+                    )),
                 })
             })
             .collect();
@@ -1518,8 +1557,14 @@ impl BoxTree {
             run_mode == RunMode::ComputeSize && inputs.axis == RequestedAxis::Horizontal;
         let mut baseline = None;
         let mut candidates = OofCandidates::new();
-        let mut table_columns = Vec::new();
-        let mut collapsed_borders = None;
+        let writing_direction = grid.writing_direction;
+        let inset_strut = BoxStrut::from_physical(crate::physical_sides(inset), writing_direction);
+        // The captions and row groups, placed once the table has its size.
+        let mut pending = Vec::new();
+        // The columns at their offsets in the grid's content box, and where
+        // that is in the table: for the columns' boxes and the collapsed
+        // borders, once the row groups are placed.
+        let mut placed_columns = None;
         // Its border box as its content has it, which a size it is given
         // (an out-of-flow table's `width`, a flex item's) can't shrink.
         let mut measured = taffy::Size::ZERO;
@@ -1576,7 +1621,10 @@ impl BoxTree {
                 let mut y = 0.0;
                 for side in [CaptionSide::Top, CaptionSide::Bottom] {
                     if side == CaptionSide::Bottom {
-                        let origin = PointF::new(inset.left, y + inset.top);
+                        let origin = LogicalOffset::new(
+                            inset_strut.inline_start,
+                            y + inset_strut.block_start,
+                        );
                         let layout = self.lay_out_grid(
                             &grid,
                             &sizing,
@@ -1585,14 +1633,13 @@ impl BoxTree {
                             spacing.vertical,
                             grid_min_height,
                             css_height.is_some(),
-                            perform.then_some((origin, &mut candidates)),
+                            perform.then_some((origin, &mut pending)),
                         );
-                        baseline = layout.baseline.map(|baseline| origin.y + baseline);
+                        baseline = layout
+                            .baseline
+                            .map(|baseline| origin.block_offset + baseline);
                         if perform {
-                            table_columns = self.table_columns(&grid, &locations, origin);
-                            collapsed_borders = borders.as_ref().map(|borders| {
-                                Arc::new(self.collapsed_borders(borders, &grid, &locations, origin))
-                            });
+                            placed_columns = Some((locations.clone(), origin));
                             // A cell all of whose columns are collapsed is
                             // hidden (Blink's `is_hidden_due_to_layout`).
                             for cell in grid.cells() {
@@ -1621,7 +1668,13 @@ impl BoxTree {
                     }
                     for &caption in &grid.captions {
                         if self.boxes[caption].style.caption_side == side {
-                            y += self.lay_out_caption(caption, width, y, perform, &mut candidates);
+                            y += self.lay_out_caption(
+                                caption,
+                                writing_direction,
+                                width,
+                                y,
+                                perform.then_some(&mut pending),
+                            );
                         }
                     }
                 }
@@ -1639,6 +1692,34 @@ impl BoxTree {
         if !perform {
             return output;
         }
+        let converter = WritingModeConverter::new(
+            writing_direction,
+            SizeF::new(output.size.width, output.size.height),
+        );
+        for placed in pending {
+            let size = SizeF::new(placed.size.width, placed.size.height);
+            let at = converter.to_physical_offset(placed.offset, size);
+            let location = taffy::Point {
+                x: at.x + placed.by.x,
+                y: at.y + placed.by.y,
+            };
+            match &placed.edge {
+                Some(edge) => self.place(placed.index, location, placed.size, edge),
+                None => self.set_part_layout(placed.index, location, placed.size),
+            }
+            let mut theirs = placed.candidates;
+            theirs.translate(location);
+            candidates.append(&mut theirs);
+        }
+        let (table_columns, collapsed_borders) = match placed_columns {
+            Some((locations, origin)) => (
+                self.table_columns(&grid, &locations, origin, &converter),
+                borders.as_ref().map(|borders| {
+                    Arc::new(self.collapsed_borders(borders, &grid, &locations, origin, &converter))
+                }),
+            ),
+            None => (Vec::new(), None),
+        };
         self.boxes[index].table_baseline = baseline;
         self.boxes[index].table_columns = table_columns;
         self.boxes[index].collapsed_border = table_border;
@@ -1651,7 +1732,10 @@ impl BoxTree {
                     index,
                     child,
                     order,
-                    PointF::new(inset.left, inset.top),
+                    converter.to_physical_offset(
+                        LogicalOffset::new(inset_strut.inline_start, inset_strut.block_start),
+                        SizeF::new(0.0, 0.0),
+                    ),
                 ));
             }
         }
@@ -1674,17 +1758,19 @@ impl BoxTree {
         output
     }
 
-    /// Lays caption `index` out as wide as its table, `width`, at `y`
-    /// (placed there if `perform`, passing up its out-of-flow boxes into
-    /// `candidates`), and returns its margin box's height.
+    /// Lays caption `index` out as wide as its table, `width`, at `y` along
+    /// its block direction (placed there if laid out for real, in
+    /// `pending`, with the out-of-flow boxes it passes up), and returns its
+    /// margin box's height.
     fn lay_out_caption(
         &mut self,
         index: usize,
+        writing_direction: WritingDirectionMode,
         width: f32,
         y: f32,
-        perform: bool,
-        candidates: &mut OofCandidates,
+        pending: Option<&mut Vec<Pending>>,
     ) -> f32 {
+        let perform = pending.is_some();
         let style = self.boxes[index].style.clone();
         // `auto` margins are 0.
         let edge = Edge::of(&style, width);
@@ -1719,16 +1805,16 @@ impl BoxTree {
                 vertical_margins_are_collapsible: taffy::Line::FALSE,
             },
         );
-        if perform {
-            let by = relative_offset(&style, width, None);
-            let location = taffy::Point {
-                x: m.left + by.x,
-                y: y + m.top + by.y,
-            };
-            self.place(index, location, output.size, &edge);
-            let mut theirs = output.oof_candidates.take();
-            theirs.translate(location);
-            candidates.append(&mut theirs);
+        if let Some(pending) = pending {
+            let margin = BoxStrut::from_physical(m, writing_direction);
+            pending.push(Pending {
+                index,
+                offset: LogicalOffset::new(margin.inline_start, y + margin.block_start),
+                size: output.size,
+                by: relative_offset(&style, width, None),
+                edge: Some(edge),
+                candidates: output.oof_candidates.take(),
+            });
         }
         output.size.height + m.top + m.bottom
     }
@@ -1772,10 +1858,11 @@ impl BoxTree {
     /// (its table's `height`: what is over goes to the row groups and
     /// their rows, Blink's `DistributeTableBlockSizeToSections`), each
     /// cell's content aligned in it by its `vertical-align`. Laid out for
-    /// real (`place`: where the grid's content box is in the table, and the
-    /// out-of-flow boxes passed up), the row groups, rows and cells are
-    /// placed; a cell whose content needs its final height is laid out
-    /// again at it (`definite`: the table has a `height`).
+    /// real (`place`: where the grid's content box is in the table, and
+    /// where the row groups go, with the out-of-flow boxes they pass up),
+    /// the rows and cells are placed, and the row groups in `place`; a cell
+    /// whose content needs its final height is laid out again at it
+    /// (`definite`: the table has a `height`).
     #[allow(clippy::too_many_arguments)]
     fn lay_out_grid(
         &mut self,
@@ -1786,8 +1873,9 @@ impl BoxTree {
         spacing: f32,
         min_height: f32,
         definite: bool,
-        mut place: Option<(PointF, &mut OofCandidates)>,
+        mut place: Option<(LogicalOffset, &mut Vec<Pending>)>,
     ) -> GridLayout {
+        let writing_direction = grid.writing_direction;
         // The rows go from the first column's left edge to the last one's
         // right edge (Blink's: the outer border spacing isn't in them).
         // A table without columns has its rows as wide as its content box
@@ -1997,9 +2085,27 @@ impl BoxTree {
                 });
                 baseline = Some(y + row_y[r] + b);
             }
-            if let Some((origin, candidates)) = place.as_mut() {
+            if let Some((origin, pending)) = place.as_mut() {
+                let physical = |inline_size: f32, block_size: f32| {
+                    let size =
+                        LogicalSize::new(inline_size, block_size).to_physical(writing_direction);
+                    taffy::Size {
+                        width: size.width,
+                        height: size.height,
+                    }
+                };
+                let section_size = physical(row_width, height);
+                let in_section = WritingModeConverter::new(
+                    writing_direction,
+                    SizeF::new(section_size.width, section_size.height),
+                );
                 let mut section_candidates = OofCandidates::new();
                 for (r, row) in section.rows.iter().enumerate() {
+                    let size = physical(row_width, heights[r]);
+                    let in_row = WritingModeConverter::new(
+                        writing_direction,
+                        SizeF::new(size.width, size.height),
+                    );
                     let mut row_candidates = OofCandidates::new();
                     for laid in cells.iter().filter(|c| c.row == r).map(|c| &c.laid) {
                         // One in a collapsed row is 0 tall, whatever it
@@ -2012,6 +2118,7 @@ impl BoxTree {
                         };
                         let mut theirs = self.place_cell(
                             laid,
+                            &in_row,
                             placed_span(placed, &laid.cell, left),
                             cell_height,
                             baselines[r],
@@ -2020,30 +2127,29 @@ impl BoxTree {
                         );
                         row_candidates.append(&mut theirs);
                     }
-                    let size = taffy::Size {
-                        width: row_width,
-                        height: heights[r],
-                    };
-                    let location =
-                        self.place_part(row.index, PointF::new(0.0, row_y[r]), size, row_width);
+                    let at = in_section.to_physical_offset(
+                        LogicalOffset::new(0.0, row_y[r]),
+                        SizeF::new(size.width, size.height),
+                    );
+                    let location = self.place_part(row.index, at, size, row_width);
                     self.boxes[row.index].hidden = collapsed[r];
                     let mut unclaimed = self.claim_out_of_flow(row.index, row_candidates, size);
                     unclaimed.translate(location);
                     section_candidates.append(&mut unclaimed);
                 }
-                let size = taffy::Size {
-                    width: row_width,
-                    height,
-                };
-                let location = self.place_part(
-                    section.index,
-                    PointF::new(origin.x + left, origin.y + y),
-                    size,
-                    width,
-                );
-                let mut unclaimed = self.claim_out_of_flow(section.index, section_candidates, size);
-                unclaimed.translate(location);
-                candidates.append(&mut unclaimed);
+                let candidates =
+                    self.claim_out_of_flow(section.index, section_candidates, section_size);
+                pending.push(Pending {
+                    index: section.index,
+                    offset: LogicalOffset::new(
+                        origin.inline_offset + left,
+                        origin.block_offset + y,
+                    ),
+                    size: section_size,
+                    by: relative_offset(&self.boxes[section.index].style, width, None),
+                    edge: None,
+                    candidates,
+                });
             }
             if shown_rows {
                 y += height + spacing;
@@ -2060,7 +2166,8 @@ impl BoxTree {
         }
     }
 
-    /// Places cell `laid` in its row at `(x, cell_width)` (narrower than it
+    /// Places cell `laid` in its row (`in_row` turns its place there
+    /// physical) at `(x, cell_width)` along the inline direction (narrower than it
     /// was laid out if it spans collapsed columns), `height` tall (its
     /// row's, or its rows'), its content aligned by its `vertical-align`
     /// (`baseline` is its row's), its percentages of `width`; returns the
@@ -2076,6 +2183,7 @@ impl BoxTree {
     fn place_cell(
         &mut self,
         laid: &LaidOutCell,
+        in_row: &WritingModeConverter,
         (x, cell_width): (f32, f32),
         height: f32,
         baseline: Option<f32>,
@@ -2142,9 +2250,11 @@ impl BoxTree {
         }
         .max(0.0);
         let by = relative_offset(&style, width, None);
+        let size = in_row.to_physical_size(LogicalSize::new(cell_width, height));
+        let at = in_row.to_physical_offset(LogicalOffset::new(x, 0.0), size);
         let location = taffy::Point {
-            x: x + by.x,
-            y: by.y,
+            x: at.x + by.x,
+            y: at.y + by.y,
         };
         let edge = Edge {
             margin: computed_style::Sides::all(0.0),
@@ -2154,8 +2264,8 @@ impl BoxTree {
             index,
             location,
             taffy::Size {
-                width: cell_width,
-                height,
+                width: size.width,
+                height: size.height,
             },
             &edge,
         );
@@ -2171,9 +2281,13 @@ impl BoxTree {
             || b.children
                 .iter()
                 .any(|&child| !self.boxes[usize::from(child)].style.is_out_of_flow());
+        let moved = to_physical_delta(
+            style.writing_direction(),
+            LogicalOffset::new(0.0, if in_flow { shift } else { 0.0 }),
+        );
         theirs.translate(taffy::Point {
-            x: location.x,
-            y: location.y + if in_flow { shift } else { 0.0 },
+            x: location.x + moved.x,
+            y: location.y + moved.y,
         });
         theirs
     }
@@ -2194,6 +2308,18 @@ impl BoxTree {
             x: at.x + by.x,
             y: at.y + by.y,
         };
+        self.set_part_layout(index, location, size);
+        location
+    }
+
+    /// Gives row group or row `index` its `location` and `size`: no
+    /// padding, border or margins. Its fragment is made again.
+    fn set_part_layout(
+        &mut self,
+        index: usize,
+        location: taffy::Point<f32>,
+        size: taffy::Size<f32>,
+    ) {
         let b = &mut self.boxes[index];
         b.layout = taffy::Layout {
             location,
@@ -2204,7 +2330,6 @@ impl BoxTree {
             ..b.layout
         };
         b.needs_fragment = true;
-        location
     }
 
     /// The heights of `section`'s rows (Blink's `ComputeRowBlockSize`):
@@ -2382,19 +2507,24 @@ impl BoxTree {
         }
     }
 
-    /// Moves cell `index`'s content down by `shift` from where its layout
-    /// put it: its in-flow children by what they aren't moved already, its
-    /// lines when its fragment is made.
+    /// Moves cell `index`'s content by `shift` along its block direction
+    /// from where its layout put it: its in-flow children by what they
+    /// aren't moved already, its lines when its fragment is made.
     pub(crate) fn shift_content(&mut self, index: usize, shift: f32) {
         let delta = shift - self.boxes[index].content_shift;
         if delta == 0.0 {
             return;
         }
+        let moved = to_physical_delta(
+            self.boxes[index].style.writing_direction(),
+            LogicalOffset::new(0.0, delta),
+        );
         let children = self.boxes[index].children.clone();
         for child in children {
             let b = &mut self.boxes[usize::from(child)];
             if !b.style.is_out_of_flow() {
-                b.layout.location.y += delta;
+                b.layout.location.x += moved.x;
+                b.layout.location.y += moved.y;
             }
         }
         let b = &mut self.boxes[index];
@@ -2677,17 +2807,30 @@ fn wins(style: BorderStyle, width: f32, edge: &CollapsedEdge) -> bool {
 
 /// A table's collapsed borders (css-tables 3, "Border conflict
 /// resolution"; Blink's `TableBorders`): for each slot of its grid, the
-/// edge on its left and the edge on its top, with one more row and column
-/// for the right and bottom edges of the last ones.
+/// edge on its inline-start side and the edge on its block-start side,
+/// with one more row and column for the inline-end and block-end edges of
+/// the last ones. Which side of a box's style an edge takes is the table's
+/// writing direction's.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct TableBorders {
     pub(crate) rows: usize,
     pub(crate) columns: usize,
+    writing_direction: WritingDirectionMode,
     edges: Vec<CollapsedEdge>,
 }
 
+/// The side of its style a box gives an edge on its own `side`.
+fn edge_side(side: PhysicalSide) -> EdgeSide {
+    match side {
+        PhysicalSide::Top => EdgeSide::Top,
+        PhysicalSide::Right => EdgeSide::Right,
+        PhysicalSide::Bottom => EdgeSide::Bottom,
+        PhysicalSide::Left => EdgeSide::Left,
+    }
+}
+
 impl TableBorders {
-    fn new(rows: usize, columns: usize) -> Self {
+    fn new(rows: usize, columns: usize, writing_direction: WritingDirectionMode) -> Self {
         let edge = CollapsedEdge {
             style: None,
             side: EdgeSide::Top,
@@ -2703,6 +2846,7 @@ impl TableBorders {
         Self {
             rows,
             columns,
+            writing_direction,
             edges: vec![edge; len],
         }
     }
@@ -2715,17 +2859,17 @@ impl TableBorders {
         (row * (self.columns + 1) + column) * 2
     }
 
-    /// The edge on the left of the slot at `row`, `column`.
-    pub(crate) fn left(&self, row: usize, column: usize) -> &CollapsedEdge {
+    /// The edge on the inline-start side of the slot at `row`, `column`.
+    pub(crate) fn inline_start(&self, row: usize, column: usize) -> &CollapsedEdge {
         &self.edges[self.index(row, column)]
     }
 
-    /// The edge on the top of the slot at `row`, `column`.
+    /// The edge on the block-start side of the slot at `row`, `column`.
     #[expect(
         clippy::arithmetic_side_effects,
         reason = "an index of a slot's two edges, the second within edges too"
     )]
-    pub(crate) fn top(&self, row: usize, column: usize) -> &CollapsedEdge {
+    pub(crate) fn block_start(&self, row: usize, column: usize) -> &CollapsedEdge {
         &self.edges[self.index(row, column) + 1]
     }
 
@@ -2761,17 +2905,18 @@ impl TableBorders {
                 };
             }
         };
+        let (inline_start, block_start) = start_sides(self.writing_direction);
         for c in column..column + colspan {
-            let top = self.index(row, c) + 1;
-            take(self, top, EdgeSide::Top);
-            let bottom = self.index(row + rowspan, c) + 1;
-            take(self, bottom, EdgeSide::Bottom);
+            let start = self.index(row, c) + 1;
+            take(self, start, edge_side(block_start));
+            let end = self.index(row + rowspan, c) + 1;
+            take(self, end, edge_side(block_start.opposite()));
         }
         for r in row..row + rowspan {
-            let left = self.index(r, column);
-            take(self, left, EdgeSide::Left);
-            let right = self.index(r, column + colspan);
-            take(self, right, EdgeSide::Right);
+            let start = self.index(r, column);
+            take(self, start, edge_side(inline_start));
+            let end = self.index(r, column + colspan);
+            take(self, end, edge_side(inline_start.opposite()));
         }
         if cell && (rowspan > 1 || colspan > 1) {
             let mut inner = Vec::new();
@@ -2809,21 +2954,26 @@ impl TableBorders {
         let rowspan = rowspan.min(self.rows.saturating_sub(row));
         let colspan = colspan.min(self.columns.saturating_sub(column));
         let width = |edge: &CollapsedEdge| if edge.can_paint() { edge.width() } else { 0.0 };
-        let mut border = computed_style::Sides::all(0.0f32);
+        let mut border = BoxStrut::default();
         for r in row..row + rowspan {
-            border.left = border.left.max(width(self.left(r, column)));
-            border.right = border.right.max(width(self.left(r, column + colspan)));
+            border.inline_start = border.inline_start.max(width(self.inline_start(r, column)));
+            border.inline_end = border
+                .inline_end
+                .max(width(self.inline_start(r, column + colspan)));
         }
         for c in column..column + colspan {
-            border.top = border.top.max(width(self.top(row, c)));
-            border.bottom = border.bottom.max(width(self.top(row + rowspan, c)));
+            border.block_start = border.block_start.max(width(self.block_start(row, c)));
+            border.block_end = border
+                .block_end
+                .max(width(self.block_start(row + rowspan, c)));
         }
-        computed_style::Sides {
-            top: border.top / 2.0,
-            right: border.right / 2.0,
-            bottom: border.bottom / 2.0,
-            left: border.left / 2.0,
+        BoxStrut {
+            inline_start: border.inline_start / 2.0,
+            inline_end: border.inline_end / 2.0,
+            block_start: border.block_start / 2.0,
+            block_end: border.block_end / 2.0,
         }
+        .to_physical(self.writing_direction)
     }
 
     /// The table's borders, the half of its outermost edges.
@@ -2859,33 +3009,135 @@ impl BoxTree {
 
     /// `borders` as paint draws them, `grid`'s, its columns at `locations`
     /// in its content box, which is at `origin` in the table, its row
-    /// groups and rows placed (Blink's `CollapsedTableBordersGeometry`).
+    /// groups and rows placed (Blink's `CollapsedTableBordersGeometry`):
+    /// lines across the screen and down it, the grid's rows and columns
+    /// turned physical by `converter`, the table's (the grid's last lines
+    /// first along an axis that runs from the right or bottom; its rows
+    /// across the screen in a vertical table).
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "a physical line or slot is within the grid's, the extra line's slots unread"
+    )]
     fn collapsed_borders(
         &self,
         borders: &TableBorders,
         grid: &Grid,
         locations: &[(f32, f32)],
-        origin: PointF,
+        origin: LogicalOffset,
+        converter: &WritingModeConverter,
     ) -> CollapsedBorders {
-        // Only room asked for: saturating changes nothing it holds.
-        let mut row_offsets = Vec::with_capacity(borders.rows.saturating_add(1));
+        // The lines between the rows, along the block direction, and the
+        // columns, along the inline. Only room asked for: saturating
+        // changes nothing it holds.
+        let mut block_lines = Vec::with_capacity(borders.rows.saturating_add(1));
         for section in &grid.sections {
-            let at = self.boxes[section.index].layout.location.y;
+            let at = self.boxes[section.index].layout.location;
             for row in &section.rows {
                 let layout = &self.boxes[row.index].layout;
-                row_offsets.push(at + layout.location.y);
-                if row_offsets.len() == borders.rows {
-                    row_offsets.push(at + layout.location.y + layout.size.height);
+                let size = SizeF::new(layout.size.width, layout.size.height);
+                let start = converter
+                    .to_logical_offset(
+                        PointF::new(at.x + layout.location.x, at.y + layout.location.y),
+                        size,
+                    )
+                    .block_offset;
+                block_lines.push(start);
+                if block_lines.len() == borders.rows {
+                    block_lines.push(start + converter.to_logical_size(size).block_size);
                 }
             }
         }
-        let mut column_offsets: Vec<f32> = locations.iter().map(|l| origin.x + l.0).collect();
-        if let Some(last) = locations.last() {
-            column_offsets.push(origin.x + last.0 + last.1);
-        }
-        let edges = borders
-            .edges
+        let mut inline_lines: Vec<f32> = locations
             .iter()
+            .map(|l| origin.inline_offset + l.0)
+            .collect();
+        if let Some(last) = locations.last() {
+            inline_lines.push(origin.inline_offset + last.0 + last.1);
+        }
+        let writing_direction = borders.writing_direction;
+        let horizontal = writing_direction.is_horizontal();
+        let (inline_start, block_start) = start_sides(writing_direction);
+        let on_screen =
+            |line: LogicalOffset| converter.to_physical_offset(line, SizeF::new(0.0, 0.0));
+        let block_lines: Vec<PointF> = block_lines
+            .into_iter()
+            .map(|b| on_screen(LogicalOffset::new(0.0, b)))
+            .collect();
+        let inline_lines: Vec<PointF> = inline_lines
+            .into_iter()
+            .map(|i| on_screen(LogicalOffset::new(i, 0.0)))
+            .collect();
+        // The lines down the screen (at an x) and across it (at a y), and
+        // whether each axis runs from its far side.
+        let (mut column_offsets, x_reversed, mut row_offsets, y_reversed): (
+            Vec<f32>,
+            _,
+            Vec<f32>,
+            _,
+        ) = if horizontal {
+            (
+                inline_lines.iter().map(|p| p.x).collect(),
+                inline_start == PhysicalSide::Right,
+                block_lines.iter().map(|p| p.y).collect(),
+                block_start == PhysicalSide::Bottom,
+            )
+        } else {
+            (
+                block_lines.iter().map(|p| p.x).collect(),
+                block_start == PhysicalSide::Right,
+                inline_lines.iter().map(|p| p.y).collect(),
+                inline_start == PhysicalSide::Bottom,
+            )
+        };
+        if x_reversed {
+            column_offsets.reverse();
+        }
+        if y_reversed {
+            row_offsets.reverse();
+        }
+        let (rows, columns) = if horizontal {
+            (borders.rows, borders.columns)
+        } else {
+            (borders.columns, borders.rows)
+        };
+        let unfilled = CollapsedEdge {
+            style: None,
+            side: EdgeSide::Top,
+            box_order: 0,
+        };
+        // Each slot's left edge, then its top, from the logical grid: the
+        // edge on the line it is on, beside the slot it is beside.
+        let mut edges = Vec::with_capacity(borders.edges.len());
+        for row in 0..=rows {
+            for column in 0..=columns {
+                let line_x = if x_reversed { columns - column } else { column };
+                let line_y = if y_reversed { rows - row } else { row };
+                let left = (row < rows).then(|| {
+                    let beside = if y_reversed { rows - 1 - row } else { row };
+                    if horizontal {
+                        borders.inline_start(beside, line_x)
+                    } else {
+                        borders.block_start(line_x, beside)
+                    }
+                });
+                let top = (column < columns).then(|| {
+                    let beside = if x_reversed {
+                        columns - 1 - column
+                    } else {
+                        column
+                    };
+                    if horizontal {
+                        borders.block_start(line_y, beside)
+                    } else {
+                        borders.inline_start(beside, line_y)
+                    }
+                });
+                edges.push(left.unwrap_or(&unfilled));
+                edges.push(top.unwrap_or(&unfilled));
+            }
+        }
+        let edges = edges
+            .into_iter()
             .map(|edge| {
                 let color = edge.style.as_deref().map_or(gfx::Color::TRANSPARENT, |s| {
                     let c = &s.border_color;
@@ -2905,8 +3157,8 @@ impl BoxTree {
             })
             .collect();
         CollapsedBorders {
-            rows: borders.rows,
-            columns: borders.columns,
+            rows,
+            columns,
             edges,
             row_offsets,
             column_offsets,
@@ -2924,7 +3176,7 @@ impl BoxTree {
     fn table_borders(&self, index: usize, grid: &Grid) -> TableBorders {
         let rows = grid.sections.iter().map(|s| s.rows.len()).sum();
         let columns = grid.starts.len();
-        let mut borders = TableBorders::new(rows, columns);
+        let mut borders = TableBorders::new(rows, columns, grid.writing_direction);
         let mut order = 0;
         let style = |i: usize| self.boxes[i].style.clone();
         let mut start = 0;

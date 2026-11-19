@@ -1058,3 +1058,96 @@ fn collapsed_borders() {
     assert_eq!(sides("hc"), [0.0; 4]);
     assert_eq!(sides("next"), [5.0, 5.0, 5.0, 0.0]);
 }
+
+/// Collapsed borders as paint draws them: the lines between the rows and
+/// the columns, from the table's border box, and each slot's left and top
+/// edges, with one more row and column for the right and bottom ones.
+#[test]
+fn collapsed_borders_lines_and_edges() {
+    let laid = lay_out(&format!(
+        "{AHEM}<table id=t style='border-collapse: collapse'>
+           <tr><td style='border-left: 6px solid; border-top: 2px solid'>X</td>
+             <td style='border-right: 4px solid'>X</td></tr>
+           <tr><td style='border-bottom: 8px solid'>X</td><td>XX</td></tr></table>"
+    ));
+    let borders = laid.fragments["t"].collapsed_borders.clone().unwrap();
+    assert_eq!((borders.rows, borders.columns), (2, 2));
+    // In by the table's halves of its outer edges, 1px on top and 3px on
+    // the left: rows 21px and 24px tall, columns 23px and 40px wide.
+    assert_eq!(borders.row_offsets, [1.0, 22.0, 46.0]);
+    assert_eq!(borders.column_offsets, [3.0, 26.0, 66.0]);
+    let widths: Vec<f32> = borders.edges.iter().map(|edge| edge.width).collect();
+    // A slot's left edge, then its top one.
+    let slot = |row: usize, column: usize| (row * 3 + column) * 2;
+    let mut expected = vec![0.0; 18];
+    expected[slot(0, 0)] = 6.0;
+    expected[slot(0, 0) + 1] = 2.0;
+    expected[slot(0, 2)] = 4.0;
+    expected[slot(2, 0) + 1] = 8.0;
+    assert_eq!(widths, expected);
+}
+
+/// The columns' boxes span the row groups, from the first's start to the
+/// last's end.
+#[test]
+fn column_boxes_span_the_row_groups() {
+    let laid = lay_out(&format!(
+        "{AHEM}<table id=t><col><tbody><tr><td>X</td></tr></tbody>
+           <tbody><tr><td>X</td></tr></tbody></table>"
+    ));
+    // The `<col>` and the column group the parser puts it in.
+    let columns = &laid.fragments["t"].columns;
+    assert_eq!(columns.len(), 2);
+    for column in columns {
+        assert_eq!(column.rect, RectF::new(0.0, 0.0, 20.0, 40.0));
+    }
+}
+
+/// A caption's margins: its top one above it, its bottom one between it
+/// and the grid.
+#[test]
+fn a_captions_margins() {
+    let laid = lay_out(&format!(
+        "{AHEM}<table><caption id=c style='margin: 3px 0 7px'>X</caption>
+           <tr><td id=cell>X</td></tr></table>"
+    ));
+    assert_eq!(laid.rect("c").y, 3.0);
+    assert_eq!(laid.rect("cell").y, 30.0);
+}
+
+/// Out-of-flow boxes in a caption, and the table's own, whose containing
+/// block is outside it, go up from where they would have been: in the
+/// caption where it is, and at the table's content box's start.
+#[test]
+fn a_tables_and_its_captions_out_of_flow_boxes_go_up() {
+    let laid = lay_out(&format!(
+        "{AHEM}<div style='position: relative'><table><tr><td>X</td></tr>
+           <caption style='caption-side: bottom'>X<span id=in-caption
+             style='position: absolute'></span></caption></table></div>
+         <div id=cb style='position: relative'><div style='display: table;
+           border-left: 2px solid; border-top: 6px solid; padding: 5px'><div id=own
+             style='position: absolute; width: 1px; height: 1px'></div><div
+             style='display: table-cell'>X</div></div></div>"
+    ));
+    // After the caption's X, below the row.
+    assert_eq!(
+        (laid.rect("in-caption").x, laid.rect("in-caption").y),
+        (20.0, 20.0)
+    );
+    let cb = laid.rect("cb");
+    assert_eq!((laid.rect("own").x, laid.rect("own").y - cb.y), (7.0, 11.0));
+}
+
+/// An inline-table's baseline is its first row's from its own top: below
+/// its padding.
+#[test]
+fn an_inline_tables_baseline_is_below_its_padding() {
+    let laid = lay_out(&format!(
+        "{AHEM}<div id=line><table style='display: inline-table; padding-top: 10px'>
+           <tr><td>X</td></tr></table><span id=after style='display: inline-block;
+             width: 10px; height: 10px'></span></div>"
+    ));
+    // The cell's baseline 10px of padding and 16px of ascent down: the
+    // inline-block's bottom there.
+    assert_eq!(laid.rect("after").y - laid.rect("line").y, 16.0);
+}

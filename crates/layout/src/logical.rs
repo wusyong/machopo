@@ -141,8 +141,9 @@ impl BoxStrut {
     }
 }
 
+/// A side of a box on the screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PhysicalSide {
+pub(crate) enum PhysicalSide {
     Top,
     Right,
     Bottom,
@@ -150,7 +151,7 @@ enum PhysicalSide {
 }
 
 impl PhysicalSide {
-    fn opposite(self) -> Self {
+    pub(crate) fn opposite(self) -> Self {
         match self {
             Self::Top => Self::Bottom,
             Self::Right => Self::Left,
@@ -162,7 +163,7 @@ impl PhysicalSide {
 
 /// The physical sides the inline-start and block-start sides are on
 /// (CSS Writing Modes 4 § 6.4's table).
-fn start_sides(writing_direction: WritingDirectionMode) -> (PhysicalSide, PhysicalSide) {
+pub(crate) fn start_sides(writing_direction: WritingDirectionMode) -> (PhysicalSide, PhysicalSide) {
     let ltr = writing_direction.is_ltr();
     match writing_direction.writing_mode {
         WritingMode::HorizontalTb if ltr => (PhysicalSide::Left, PhysicalSide::Top),
@@ -268,6 +269,27 @@ impl WritingModeConverter {
             self.to_logical_size(size),
         )
     }
+}
+
+/// How far something moved by `by` along the inline and block directions
+/// moves on the screen: a distance, not a place, so no box's size comes
+/// in.
+pub(crate) fn to_physical_delta(
+    writing_direction: WritingDirectionMode,
+    by: LogicalOffset,
+) -> PointF {
+    let along = |side: PhysicalSide, v: f32| match side {
+        PhysicalSide::Left => PointF::new(v, 0.0),
+        PhysicalSide::Right => PointF::new(-v, 0.0),
+        PhysicalSide::Top => PointF::new(0.0, v),
+        PhysicalSide::Bottom => PointF::new(0.0, -v),
+    };
+    let (inline_start, block_start) = start_sides(writing_direction);
+    let (inline, block) = (
+        along(inline_start, by.inline_offset),
+        along(block_start, by.block_offset),
+    );
+    PointF::new(inline.x + block.x, inline.y + block.y)
 }
 
 /// Where a box's content box has its top left, from its border box's: its
@@ -470,6 +492,30 @@ mod tests {
         ]) {
             assert_eq!(
                 content_box_origin(mode(writing_mode, direction), border_box, inset, 5.0),
+                PointF::new(expected.0, expected.1),
+                "{writing_mode:?} {direction:?}"
+            );
+        }
+    }
+
+    /// 3 along the inline direction and 5 along the block: toward each
+    /// mode's inline-end and block-end sides.
+    #[test]
+    fn deltas_point_toward_the_end_sides() {
+        for ((writing_mode, direction), expected) in ALL.into_iter().zip([
+            (3.0, 5.0),
+            (-3.0, 5.0),
+            (-5.0, 3.0),
+            (-5.0, -3.0),
+            (5.0, 3.0),
+            (5.0, -3.0),
+            (-5.0, 3.0),
+            (-5.0, -3.0),
+            (5.0, -3.0),
+            (5.0, 3.0),
+        ]) {
+            assert_eq!(
+                to_physical_delta(mode(writing_mode, direction), LogicalOffset::new(3.0, 5.0)),
                 PointF::new(expected.0, expected.1),
                 "{writing_mode:?} {direction:?}"
             );

@@ -1,0 +1,126 @@
+# Stage 1c: tables in logical coordinates (`layout`'s `table.rs`): the
+# parts' places, the captions and row groups once the table has its size,
+# the static positions, `vertical-align`'s shift, the columns' boxes and
+# the collapsed borders.
+test = ["cargo", "test", "-q", "-p", "layout"]
+timeout = 900
+
+[[mutant]]
+name = "a cell placed along its row's block direction"
+file = "crates/layout/src/table.rs"
+from = '''let at = in_row.to_physical_offset(LogicalOffset::new(x, 0.0), size);'''
+to = '''let at = in_row.to_physical_offset(LogicalOffset::new(0.0, x), size);'''
+
+[[mutant]]
+name = "a cell's size swapped"
+file = "crates/layout/src/table.rs"
+from = '''let size = in_row.to_physical_size(LogicalSize::new(cell_width, height));'''
+to = '''let size = in_row.to_physical_size(LogicalSize::new(height, cell_width));'''
+
+[[mutant]]
+name = "a row placed along its row group's inline direction"
+file = "crates/layout/src/table.rs"
+from = '''LogicalOffset::new(0.0, row_y[r]),'''
+to = '''LogicalOffset::new(row_y[r], 0.0),'''
+
+[[mutant]]
+name = "a row group not past the border spacing"
+file = "crates/layout/src/table.rs"
+from = '''                        origin.inline_offset + left,'''
+to = '''                        origin.inline_offset,'''
+
+[[mutant]]
+name = "a caption below its block-end margin"
+file = "crates/layout/src/table.rs"
+from = '''offset: LogicalOffset::new(margin.inline_start, y + margin.block_start),'''
+to = '''offset: LogicalOffset::new(margin.inline_start, y + margin.block_end),'''
+
+[[mutant]]
+name = "a caption or row group not moved by its position: relative"
+file = "crates/layout/src/table.rs"
+from = '''x: at.x + placed.by.x,'''
+to = '''x: at.x,'''
+
+[[mutant]]
+name = "a caption's or row group's out-of-flow boxes left at its corner"
+file = "crates/layout/src/table.rs"
+from = '''            theirs.translate(location);'''
+to = '''            theirs.translate(taffy::Point::ZERO);'''
+
+[[mutant]]
+name = "the table's own out-of-flow boxes start at the inline start twice"
+file = "crates/layout/src/table.rs"
+from = '''LogicalOffset::new(inset_strut.inline_start, inset_strut.block_start),'''
+to = '''LogicalOffset::new(inset_strut.inline_start, inset_strut.inline_start),'''
+
+[[mutant]]
+name = "vertical-align moves the children across"
+file = "crates/layout/src/table.rs"
+from = '''b.layout.location.y += moved.y;'''
+to = '''b.layout.location.y += moved.x;'''
+
+[[mutant]]
+name = "a cell's out-of-flow boxes not moved with its content"
+file = "crates/layout/src/table.rs"
+from = '''y: location.y + moved.y,'''
+to = '''y: location.y,'''
+
+[[mutant]]
+name = "the columns' boxes end where the last row group starts"
+file = "crates/layout/src/table.rs"
+from = '''bottom = bottom.max(at + converter.to_logical_size(size).block_size);'''
+to = '''bottom = bottom.max(at);'''
+
+[[mutant]]
+name = "a block-end edge takes the block-start side's border"
+file = "crates/layout/src/table.rs"
+from = '''take(self, end, edge_side(block_start.opposite()));'''
+to = '''take(self, end, edge_side(block_start));'''
+
+[[mutant]]
+name = "an inline-end edge takes the inline-start side's border"
+file = "crates/layout/src/table.rs"
+from = '''take(self, end, edge_side(inline_start.opposite()));'''
+to = '''take(self, end, edge_side(inline_start));'''
+
+[[mutant]]
+name = "a cell's inline-end collapsed border is its inline-start's"
+file = "crates/layout/src/table.rs"
+from = '''inline_end: border.inline_end / 2.0,'''
+to = '''inline_end: border.inline_start / 2.0,'''
+
+[[mutant]]
+name = "the columns run from the right"
+file = "crates/layout/src/table.rs"
+from = '''inline_start == PhysicalSide::Right,'''
+to = '''inline_start == PhysicalSide::Left,'''
+
+[[mutant]]
+name = "a vertical edge beside the row from the other end"
+file = "crates/layout/src/table.rs"
+from = '''let beside = if y_reversed { rows - 1 - row } else { row };'''
+to = '''let beside = if y_reversed { row } else { rows - 1 - row };'''
+
+[[mutant]]
+name = "the last row's block-end line where it starts"
+file = "crates/layout/src/table.rs"
+from = '''block_lines.push(start + converter.to_logical_size(size).block_size);'''
+to = '''block_lines.push(start);'''
+
+[[mutant]]
+name = "a top border taken as the bottom one"
+file = "crates/layout/src/table.rs"
+from = '''PhysicalSide::Top => EdgeSide::Top,'''
+to = '''PhysicalSide::Top => EdgeSide::Bottom,'''
+
+[[mutant]]
+name = "a vertical line from the other end"
+file = "crates/layout/src/table.rs"
+from = '''let line_x = if x_reversed { columns - column } else { column };'''
+to = '''let line_x = if x_reversed { column } else { columns - column };'''
+
+[[mutant]]
+name = "the table's baseline from its border box's block start"
+file = "crates/layout/src/table.rs"
+from = '''.map(|baseline| origin.block_offset + baseline);'''
+to = '''.map(|baseline| baseline);'''

@@ -85,7 +85,7 @@ RFC 0103 的「架構上可能要先做的事」第 3 個：每個只照物理�
 
 做法定了（第 1 條）；每個階段開始前，只決定那個階段要決定的事：
 
-1. **邏輯的型別和轉換**，machopo 自己的演算法改用邏輯座標，現有的行為不變（只有 `horizontal-tb`、`ltr`）。決定是「已決定的事項」第 2 到 4 條。分五段：1a 是型別和 converter；1b 是 inline 的行在 box 裡的位置（第 5 條）；1c 是 table；1d 是 float、list marker、line clamp、置中、slider 的 thumb；1e 是整個階段的檢查和文件。
+1. **邏輯的型別和轉換**，machopo 自己的演算法改用邏輯座標，現有的行為不變（只有 `horizontal-tb`、`ltr`）。決定是「已決定的事項」第 2 到 4 條。分五段：1a 是型別和 converter；1b 是 inline 的行在 box 裡的位置（第 5 條）；1c 是 table，連 collapsed border（第 6 條）；1d 是 float、list marker、line clamp、置中、slider 的 thumb；1e 是整個階段的檢查和文件。
 2. （第 2 階段開始前決定做不做）接上 taffy 已經有的 `direction: rtl` 和 style 的 `direction`、`unicode-bidi`，machopo 自己的部分照邏輯座標鏡射。
 3. 入口的 break token 和「一個 box 好幾個 fragment」，先不分段。
 
@@ -120,6 +120,7 @@ RFC 0103 的「架構上可能要先做的事」第 3 個：每個只照物理�
 3. **machopo 自己的演算法裡面用邏輯座標，做完時換成物理的寫進 taffy 的 `Layout`**（2026-11-19，第 1 階段開始前）：inline（行和 atomic inline）、table、float、list marker、line clamp、置中、slider 的 thumb，各自在知道自己的 box 大小時用 `WritingModeConverter` 換一次，像每個演算法有一個自己的 builder；`Layout`、`fragment()` 和 fragment tree 照舊是物理的，taffy 那一側不動。理由：中間共用的 `Layout` 是 taffy 的、物理的，taffy 放的和 machopo 放的子元素同一種座標，layout 到 fragment 之間讀 `Layout.location` 的程式（baseline、line clamp、table 的 row 位置）只看到一種。Chromium 只在建 `PhysicalBoxFragment` 時換一次（`BoxFragmentBuilder` 存邏輯的位移），machopo 換的地方多幾個，但用同一個 converter、同一種寫法。不選另外存邏輯的位移、在 `fragment()` 統一換：`fragment()` 要分辨每個位置是哪一種，中間讀 `Layout.location` 的程式同時看到兩種；不選連 taffy 的輸出都換成邏輯的存：從物理換成邏輯也要父 box 的大小，taffy 寫子元素時它還沒定，每個 box 要換兩次。
 4. **第 1 階段分五段；行為不變靠現有的測試和 converter 的單元測試，`rtl` 和直排的路記進 `docs/test-gaps.md`**（2026-11-19，第 1 階段開始前）：1a 是型別和 converter（`computed_style` 的 `WritingMode`、`WritingDirectionMode`、`writing_direction()`，`layout` 的邏輯幾何型別和 `WritingModeConverter`，8 種組合的單元測試，還沒有程式用）；1b 是 inline 的行在 box 裡的位置（第 5 條）；1c 是 table；1d 是 float、list marker、line clamp、置中、slider 的 thumb；1e 是整個階段的檢查和文件。只有橫排、`ltr` 時 converter 原樣複製，inline 和 block 寫反了現有的測試抓得到，`rtl` 該翻的地方沒翻抓不到：演算法有沒有在對的地方呼叫 converter，第 2 階段接上 `direction: rtl` 時才有真的測試，期間靠審查，mutation test 把翻轉的錯誤記成等價。不選現在就讓測試對單一 box 設 `rtl` 或 `vertical-lr`、手算預期的位置：沒有能跑 `rtl` 的 machopo 對照，算錯了反而鎖住錯的行為；float 的 `left` 是物理的，規則多；第 2 階段之後這些大多換成 WPT 的。
 5. **inline 分兩層換，1b 只做行在 box 裡的那一層**（2026-11-19，1b 開始前）：內容區的起點用 `BoxStrut` 的 inline-start、block-start，經過 box 的 converter 換成物理的（`content_box_origin`）；行從內容區的 block-start 往下排（parley 的 `block_min_coord`），行裡面的東西（run、inline box、decoration、ellipsis、atomic inline）照 parley 的位置，從內容區的 line-left 量。橫排時這和每一行各自經過 converter、行裡面的東西相對於那一行再加回去的位置一樣，但逐行換要先加再減 `block_min_coord`，浮點數多一次捨入，行為就不是完全不變了（2026-11-19 做 1b 時改的）；直排時再換成逐行經過 converter。行裡面那一層的轉軸（直排時對調）留給直排的文字：parley 不會直排，那一層現在用不到、也測不到。照 Blink 的 `FragmentItemsBuilder::ConvertToPhysical`：行用 box 的 writing direction 換，行裡面的東西用行的 writing mode 加上固定的 `ltr` 換，因為 bidi 之後它們的位置是視覺的、由左到右量；所以 `rtl` 時行裡面不翻，parley 給的位置已經是這樣。不選兩層都做：直排時位置換對了、字還是 parley 排的橫排，那一層全部測不到，`LineFragment` 的每個欄位都要改；不選 1b 跳過 inline：內容區的起點、atomic inline 的 margin、第一行的 baseline 會一直照物理方向寫。
+6. **1c：table 全部換，連 collapsed border；直排才需要的新東西留給 `writing-mode`**（2026-11-19，1c 開始前）：caption、row group、row、cell 的位置，out-of-flow box 的靜態位置，`vertical-align` 的位移（`shift_content`），欄的背景，和 collapsed border 都用邏輯座標。row 放 cell、row group 放 row 時外層的大小已經知道，馬上換成物理的；table 放 caption 和 row group 時 table 的大小還沒定，先記下邏輯的位置，table 的大小定了再一起換（Blink 的 builder 存邏輯的位移也是為了這個）。collapsed border 照 Blink 的 `TableBorders`：格子的邊是 inline-start 和 block-start 的，每條邊取它的來源的 style 的哪一個物理的邊照 table 的 writing direction 決定；給 paint 的照舊是物理的格線，layout 把邏輯的格子照 writing direction 翻轉、轉置成物理的，paint 不用改。大小的算法不改名：width 就是 inline size、height 就是 block size，模組的開頭寫明。第 1 階段做完時，machopo 自己的 layout 裡沒有只照物理方向寫的現有程式；直排才需要的新東西不在這一階段：inline 行裡面那一層（第 5 條）和 taffy 的輸入輸出的轉置，parley 不會直排、style 也還不解析 `writing-mode`，寫了沒有輸入走得到，留給 `writing-mode` 的 RFC（「之後的可能」）。不選只換放置、collapsed border 留到 `rtl`：它正是只照物理方向寫的現有程式，越晚改越貴；不選連直排的新東西一起做：測不到，真的做直排時多半要照當時的需要重寫。
 
 ## 待決定
 
@@ -132,6 +133,6 @@ RFC 0103 的「架構上可能要先做的事」第 3 個：每個只照物理�
 ## 之後的可能
 
 - `direction: rtl` 和 bidi（style 的 `direction`、`unicode-bidi`、`:dir()`，parley 的 L1 規則和行內的方向覆寫）。
-- `writing-mode` 和直排的文字（parley 沒有直排的 shaping，要另外想辦法或等上游）。
+- `writing-mode` 和直排的文字（parley 沒有直排的 shaping，要另外想辦法或等上游）。要接手第 1 階段留下的：inline 行裡面那一層（每一行經過 converter，行裡面的東西照行的 writing mode 加上 `ltr` 換，第 5 條），和 taffy 的 block、flex、grid 在 writing mode 的根轉置輸入輸出（第 1 條）。
 - multi-column、列印和 `@page`。
 - 在 taffy 的上游做 writing mode（#752），有了就拿掉 machopo 的轉置那一層。
