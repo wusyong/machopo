@@ -1,0 +1,124 @@
+# Step 1a: the data pipe (`ipc::data_pipe`).
+test = ["sh", "-c", "cargo test -q -p ipc --test it -- data_pipe::"]
+timeout = 300
+
+[[mutant]]
+name = "a write ignores what is unread"
+file = "crates/ipc/src/data_pipe.rs"
+from = '''                let room = state.capacity.saturating_sub(state.unread);'''
+to = '''                let room = state.capacity;'''
+
+[[mutant]]
+name = "a write goes in whole"
+file = "crates/ipc/src/data_pipe.rs"
+from = '''                    let part = if data.len() > room {'''
+to = '''                    let part = if false {'''
+
+[[mutant]]
+name = "a read takes a whole chunk"
+file = "crates/ipc/src/data_pipe.rs"
+from = '''            let part = if front.len() > max {'''
+to = '''            let part = if false {'''
+
+[[mutant]]
+name = "a read of nothing"
+file = "crates/ipc/src/data_pipe.rs"
+from = '''        let max = max.max(1);'''
+to = '''        let max = max;'''
+
+[[mutant]]
+name = "a read frees no room"
+file = "crates/ipc/src/data_pipe.rs"
+from = '''        self.unread -= part.len();'''
+to = '''        let _ = part;'''
+
+[[mutant]]
+name = "a read wakes no write"
+file = "crates/ipc/src/data_pipe.rs"
+from = '''            state.taken(&part);
+            part
+        };
+        self.shared.writable.notify_one();'''
+to = '''            state.taken(&part);
+            part
+        };'''
+
+[[mutant]]
+name = "a write to a closed pipe goes on"
+file = "crates/ipc/src/data_pipe.rs"
+from = '''                if state.consumer_closed {
+                    return Err(Closed);
+                }'''
+to = ''''''
+
+[[mutant]]
+name = "the consumer is told of every write"
+file = "crates/ipc/src/data_pipe.rs"
+from = '''        if !std::mem::take(&mut self.armed) {
+            return None;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "an empty read asks for nothing"
+file = "crates/ipc/src/data_pipe.rs"
+from = '''                state.armed = true;
+                return Read::Empty;'''
+to = '''                return Read::Empty;'''
+
+[[mutant]]
+name = "watching an empty pipe asks for nothing"
+file = "crates/ipc/src/data_pipe.rs"
+from = '''            state.armed = !readable;'''
+to = '''            state.armed = false;'''
+
+[[mutant]]
+name = "watching says nothing of what is there"
+file = "crates/ipc/src/data_pipe.rs"
+from = '''        if readable {
+            on_readable();
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "the producer's end isn't one"
+file = "crates/ipc/src/data_pipe.rs"
+from = '''            state.producer_closed = true;'''
+to = ''''''
+
+[[mutant]]
+name = "the producer's end isn't told"
+file = "crates/ipc/src/data_pipe.rs"
+from = '''            state.producer_closed = true;
+            state.wake_consumer()'''
+to = '''            state.producer_closed = true;
+            None::<OnReadable>'''
+
+[[mutant]]
+name = "a write doesn't tell the consumer"
+file = "crates/ipc/src/data_pipe.rs"
+from = '''                    state.push(part);
+                    Some(state.wake_consumer())'''
+to = '''                    state.push(part);
+                    Some(None::<OnReadable>)'''
+
+[[mutant]]
+name = "the consumer's going isn't one"
+file = "crates/ipc/src/data_pipe.rs"
+from = '''            state.consumer_closed = true;'''
+to = ''''''
+
+[[mutant]]
+name = "the consumer's going wakes no write"
+file = "crates/ipc/src/data_pipe.rs"
+from = '''            state.on_readable = None;
+        }
+        self.shared.writable.notify_one();'''
+to = '''            state.on_readable = None;
+        }'''
+
+[[mutant]]
+name = "a zero capacity"
+file = "crates/ipc/src/data_pipe.rs"
+from = '''            capacity: capacity.max(1),'''
+to = '''            capacity,'''

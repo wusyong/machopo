@@ -9,4 +9,5 @@
     reason = "tests"
 )]
 
+mod data_pipe;
 mod time_ticks;

@@ -2280,9 +2280,11 @@ dependencies = [
 name = "ipc"
 version = "0.0.1"
 dependencies = [
+ "bytes",
  "rustix 1.1.5",
  "serde",
  "serde_json",
+ "tokio",
  "windows-sys 0.61.2",
 ]
 
