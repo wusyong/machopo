@@ -22,7 +22,9 @@
 | 3c：子 frame 同一份文件內的導覽進歷史 | 完成 | 2026-11-19 |
 | 3d：上一頁、下一頁跨 frame 走 | 完成 | 2026-11-19 |
 | 3e：第 3 階段的檢查和文件 | 完成 | 2026-11-19 |
-| 4：收尾 | | |
+| 4a：commit 的回報的檢查 | 完成 | 2026-11-19 |
+| 4b：WPT 的目錄 | | |
+| 4c：文件、RFC 和第 4 階段的檢查 | | |
 
 ## 驗收
 
@@ -155,3 +157,12 @@
 - **`test.py scenarios --window`**（階段驗收）：69 份全部通過，截圖看過 `frames`（子 frame 和孫 frame 的第一份文件併進目前的 entry，返回鍵是灰的）。
 - **文件**：RFC 的「session history」的設計照第 29 到 32 條補上做的時候的細節，「分階段」寫上各段開始前的決定；`docs/architecture.md`、`docs/limitations.md`、`docs/test-gaps.md`、`crates/dom/README.md`、`crates/dom_api/README.md` 在各段已經更新，再看過一遍沒有過時的說法。
 - **之後**：`test.py` 的 `matrix`、`fuzz` 照 CLAUDE.md 由 CI 跑（這個階段沒有動到 GC）。
+
+### 4a（2026-11-19，macOS、Apple M4）
+
+- **分段**：第 4 階段分成 4a（commit 的回報的檢查）、4b（WPT 的目錄）、4c（文件、RFC 改寫成完成的樣子、整個階段的檢查）。
+- **決定的事**：第 33 條（`DidCommitNavigation` 要對上 Browser 送出、還沒回報的 commit，網址也要一樣；第 7 條原本排在第 2 階段、漏掉的）。
+- **做了什麼**：`FrameTree` 的節點記著送出 commit 還沒回報的導覽（`Committing`：編號、網址、origin），可以有好幾個；回報要對上其中一個（`CommitOfNoNavigation`）、網址一樣（`CommitOfAnotherUrl`），對上時比它舊的一起清掉；renderer 自己的 commit（`RENDERER_COMMIT`，搬到 `protocol`）只收子 frame 的 `javascript:` 網址。原本對不上的當成 opaque 的文件照收。
+- **新的測試**：`frame_tree::tests::a_commit_is_one_the_browser_sent`（沒送的編號、別的 frame 的、別的網址、比它舊的清掉、renderer 自己的 commit 的 main frame 和別的網址）；`a_frames_document_is_what_it_committed` 改成先送再回報；`links::a_bad_message_ends_the_renderer` 加上沒送的 commit、main frame 的 renderer 自己的 commit、子 frame 不是 `javascript:` 的。
+- **mutation test**（7 個，全部抓到）：main frame 的 renderer 自己的 commit 照收、它的任何網址照收、沒送的照收（單元測試和 `a_bad_message_ends_the_renderer`）、別的網址照收、比它舊的留著（單元測試）；browser 不記送出的網址（`a_link_navigates_and_history_goes_back_and_forward`：每一個 commit 都對不上）。
+- **跑過的檢查**：`cargo test -p browser -p renderer -p shell -p protocol` 全部通過；`test.py wpt html/browsers/ html/semantics/embedded-content/the-iframe-element/ html/semantics/document-metadata/the-base-element/` 沒有意外的結果（redirect、錯誤頁、`blob:`、`data:` 的 commit 都對得上）；`sanity.py` 的七項通過。

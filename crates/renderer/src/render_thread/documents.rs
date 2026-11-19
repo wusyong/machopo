@@ -276,10 +276,7 @@ pub(super) struct ChildNavigationRequest {
     origin_source: Option<NodeRoot>,
 }
 
-/// The navigation id a document the renderer committed itself (a child
-/// frame's `javascript:` `src`'s) is told by: none of the browser's, which
-/// count from 1.
-const RENDERER_COMMIT: u64 = 0;
+use protocol::renderer::RENDERER_COMMIT;
 
 /// A child frame's document as the browser sent it: its URL (an error
 /// page's own), its type and its bytes.

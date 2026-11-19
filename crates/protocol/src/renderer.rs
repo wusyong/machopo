@@ -449,6 +449,11 @@ pub enum CursorType {
     Grabbing,
 }
 
+/// The navigation id a document the renderer committed itself (a child
+/// frame's `javascript:` `src`'s) is told by (`DidCommitNavigation`): none
+/// of the browser's, which count from 1.
+pub const RENDERER_COMMIT: u64 = 0;
+
 /// Renderer -> Browser (`content.mojom.FrameHost`, `blink.mojom.WidgetHost`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RendererHostMsg {
@@ -456,7 +461,8 @@ pub enum RendererHostMsg {
     RendererReady,
     /// `DidCommitNavigation`: frame `frame` shows the document of the
     /// browser's navigation `navigation_id` (`CommitNavigation`'s), at
-    /// `url` (a failed one's, for an error page).
+    /// `url` (a failed one's, for an error page), or of its own
+    /// (`RENDERER_COMMIT`).
     DidCommitNavigation {
         frame: crate::FrameToken,
         navigation_id: u64,

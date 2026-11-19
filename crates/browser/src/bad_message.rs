@@ -35,6 +35,14 @@ pub enum BadMessageReason {
     /// A scroll restoration mode (`UpdateState`) of a frame the tab
     /// doesn't have (Chromium's comes from the frame's own host).
     StateOfUnknownFrame,
+    /// A commit of a navigation the browser didn't send the frame to commit
+    /// (or has heard of), or the renderer's own of something but a child
+    /// frame's `javascript:` URL (Chromium's
+    /// `RFH_NO_MATCHING_NAVIGATION_REQUEST_ON_COMMIT`).
+    CommitOfNoNavigation,
+    /// A commit at another URL than the browser sent (Chromium's
+    /// `RFH_ERROR_PAGE_URL_MISMATCH`, and its process lock's check).
+    CommitOfAnotherUrl,
     /// A request for a document (`RequestDestination::Document` or
     /// `Iframe`) as a subresource: the browser loads every frame's
     /// documents (network service's "frame destination requires kNavigate

@@ -4075,7 +4075,7 @@ document.querySelector('base').setAttribute('href', '/later/');
         // A parent not there, a token in use, a frame not there gone, the
         // main frame gone, a navigation of or by a frame not there: each to
         // the renderer of the time.
-        let bads: [fn(protocol::FrameToken, protocol::FrameToken) -> RendererHostMsg; 12] = [
+        let bads: [fn(protocol::FrameToken, protocol::FrameToken) -> RendererHostMsg; 15] = [
             |_, _| RendererHostMsg::DidCreateChildFrame {
                 parent: protocol::FrameToken([0xEE; 16]),
                 frame: protocol::FrameToken([0xEF; 16]),
@@ -4144,6 +4144,24 @@ document.querySelector('base').setAttribute('href', '/later/');
             |_, _| RendererHostMsg::UpdateState {
                 frame: protocol::FrameToken([0xEE; 16]),
                 manual_scroll_restoration: true,
+            },
+            // A commit of a navigation the browser didn't send, the
+            // renderer's own of the main frame, one at another URL than
+            // sent (the browser's navigation ids are far from this one).
+            |main, _| RendererHostMsg::DidCommitNavigation {
+                frame: main,
+                navigation_id: 1 << 40,
+                url: "https://a.test/".into(),
+            },
+            |main, _| RendererHostMsg::DidCommitNavigation {
+                frame: main,
+                navigation_id: protocol::renderer::RENDERER_COMMIT,
+                url: "javascript:1".into(),
+            },
+            |_, child| RendererHostMsg::DidCommitNavigation {
+                frame: child,
+                navigation_id: protocol::renderer::RENDERER_COMMIT,
+                url: "https://a.test/".into(),
             },
         ];
         for bad in bads {

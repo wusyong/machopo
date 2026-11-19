@@ -53,10 +53,19 @@ struct FrameTreeNode {
     /// Its iframe's `srcdoc`, as the renderer last told
     /// (`DidChangeSrcDoc`): what its `about:srcdoc` documents are.
     srcdoc: String,
-    /// The navigation the browser sent the renderer to commit last, and
-    /// what its document is: what the renderer reports committing.
-    committing: Option<(u64, CommittedOrigin)>,
+    /// The navigations the browser sent the renderer to commit and it
+    /// hasn't reported committing, oldest first (Chromium's
+    /// `navigation_requests_`): a commit reported is one of them.
+    committing: Vec<Committing>,
     navigation: Option<NavigationRequest>,
+}
+
+/// A navigation sent to commit: its document's URL and origin.
+#[derive(Debug)]
+struct Committing {
+    navigation_id: u64,
+    url: String,
+    origin: CommittedOrigin,
 }
 
 /// The frame isn't in the tree: it went.
@@ -95,7 +104,7 @@ impl FrameTreeNode {
             origin: origin.origin,
             local: origin.local,
             srcdoc: String::new(),
-            committing: None,
+            committing: Vec::new(),
             navigation: None,
         }
     }
@@ -276,23 +285,33 @@ impl FrameTree {
     }
 
     /// The browser sends `frame` navigation `navigation_id`'s document to
-    /// commit, of `origin`: as the renderer reports it committed
-    /// (`did_commit`), it is the frame's.
+    /// commit, at `url` (a failed one's, for an error page), of `origin`:
+    /// as the renderer reports it committed (`did_commit`), it is the
+    /// frame's.
     pub(crate) fn committing(
         &mut self,
         frame: FrameToken,
         navigation_id: u64,
+        url: &str,
         origin: CommittedOrigin,
     ) {
         if let Some(node) = self.nodes.get_mut(&frame) {
-            node.committing = Some((navigation_id, origin));
+            node.committing.push(Committing {
+                navigation_id,
+                url: url.to_owned(),
+                origin,
+            });
         }
     }
 
     /// `frame` shows navigation `navigation_id`'s document, at `url`
-    /// (`DidCommitNavigation`). A frame the tree doesn't have is a bad
-    /// message. One the browser didn't send is of an opaque origin and
-    /// isn't local.
+    /// (`DidCommitNavigation`): one the browser sent it to commit, at that
+    /// URL (the renderer drops those sent before as it commits a later
+    /// one, so they go), or a child frame's own `javascript:` URL's
+    /// (`RENDERER_COMMIT`), of an opaque origin. Anything else, or a frame
+    /// the tree doesn't have, is a bad message (Chromium's
+    /// `RFH_NO_MATCHING_NAVIGATION_REQUEST_ON_COMMIT`; the URL as the
+    /// process lock it has isn't here).
     pub(crate) fn did_commit(
         &mut self,
         frame: FrameToken,
@@ -302,10 +321,27 @@ impl FrameTree {
         let Some(node) = self.nodes.get_mut(&frame) else {
             return Err(BadMessageReason::CommitOfUnknownFrame);
         };
-        let origin = node
-            .committing
-            .take_if(|(id, _)| *id == navigation_id)
-            .map_or_else(CommittedOrigin::opaque, |(_, origin)| origin);
+        let origin = if navigation_id == protocol::renderer::RENDERER_COMMIT {
+            let javascript = url
+                .split_once(':')
+                .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("javascript"));
+            if node.parent.is_none() || !javascript {
+                return Err(BadMessageReason::CommitOfNoNavigation);
+            }
+            CommittedOrigin::opaque()
+        } else {
+            let Some(at) = node
+                .committing
+                .iter()
+                .position(|sent| sent.navigation_id == navigation_id)
+            else {
+                return Err(BadMessageReason::CommitOfNoNavigation);
+            };
+            if node.committing[at].url != url {
+                return Err(BadMessageReason::CommitOfAnotherUrl);
+            }
+            node.committing.drain(..=at).last().expect("one at `at`").origin
+        };
         node.origin = origin.origin;
         node.local = origin.local;
         node.url = Some(url.to_owned());
@@ -494,27 +530,27 @@ mod tests {
             origin: url::Url::parse("file:///a.html").unwrap().origin(),
             local: true,
         };
-        tree.committing(token(0), 1, local);
+        tree.committing(token(0), 1, "file:///a.html", local);
         tree.did_commit(token(0), 1, "file:///a.html").unwrap();
         assert_eq!(tree.url(token(0)), Some("file:///a.html"));
         assert!(tree.may_open_local_files(token(0)));
         tree.add_child(token(0), token(1), "", false).unwrap();
         assert!(tree.may_open_local_files(token(1)), "its parent's");
         assert_eq!(tree.url(token(1)), None);
-        // A commit the browser didn't send (another number) isn't local.
-        tree.committing(token(1), 2, tree.committed_origin(token(0)).unwrap());
-        tree.did_commit(token(1), 3, "file:///b.html").unwrap();
-        assert!(!tree.may_open_local_files(token(1)));
+        let parents = tree.committed_origin(token(0)).unwrap();
+        tree.committing(token(1), 2, "file:///b.html", parents);
+        tree.did_commit(token(1), 2, "file:///b.html").unwrap();
+        assert!(tree.may_open_local_files(token(1)), "as sent");
         let web = url::Url::parse("https://a.test/").unwrap().origin();
         let committed = CommittedOrigin {
             origin: web.clone(),
             local: false,
         };
-        tree.committing(token(0), 4, committed);
+        tree.committing(token(0), 4, "https://a.test/", committed);
         tree.did_commit(token(0), 4, "https://a.test/").unwrap();
         assert!(!tree.may_open_local_files(token(0)));
         assert_eq!(tree.origin(token(0)), Some(&web));
-        assert_ne!(tree.origin(token(1)), Some(&web), "an opaque one");
+        assert_ne!(tree.origin(token(1)), Some(&web), "a local file's");
         tree.add_child(token(0), token(2), "", false).unwrap();
         assert!(!tree.may_open_local_files(token(2)), "its parent's");
         assert_eq!(tree.origin(token(2)), Some(&web), "its parent's");
@@ -534,14 +570,71 @@ mod tests {
         );
         // Its first document not at `about:blank`, whatever comes after.
         assert!(!tree.has_committed_real_load(token(2)));
-        tree.did_commit(token(2), 6, "about:blank#x").unwrap();
+        commit(&mut tree, token(2), 6, "about:blank#x");
         assert!(!tree.has_committed_real_load(token(2)));
-        tree.did_commit(token(2), 7, "about:srcdoc").unwrap();
+        commit(&mut tree, token(2), 7, "about:srcdoc");
         assert!(tree.has_committed_real_load(token(2)));
-        tree.did_commit(token(2), 8, "about:blank").unwrap();
+        commit(&mut tree, token(2), 8, "about:blank");
         assert!(tree.has_committed_real_load(token(2)));
         tree.reset();
         assert_eq!(tree.url(token(0)), None);
+    }
+
+    /// A commit reported is one the browser sent the frame, at the URL it
+    /// sent (those sent before it go: the renderer dropped them), or a
+    /// child frame's own `javascript:` URL's, of an opaque origin;
+    /// anything else is a bad message.
+    #[test]
+    fn a_commit_is_one_the_browser_sent() {
+        let mut tree = FrameTree::new(token(0));
+        tree.add_child(token(0), token(1), "", false).unwrap();
+        let web = |url: &str| CommittedOrigin {
+            origin: url::Url::parse(url).unwrap().origin(),
+            local: false,
+        };
+        tree.committing(token(0), 1, "https://a.test/", web("https://a.test/"));
+        tree.committing(token(0), 2, "https://b.test/", web("https://b.test/"));
+        assert_eq!(
+            tree.did_commit(token(0), 3, "https://a.test/"),
+            Err(BadMessageReason::CommitOfNoNavigation)
+        );
+        assert_eq!(
+            tree.did_commit(token(1), 1, "https://a.test/"),
+            Err(BadMessageReason::CommitOfNoNavigation),
+            "another frame's"
+        );
+        assert_eq!(
+            tree.did_commit(token(0), 2, "https://a.test/"),
+            Err(BadMessageReason::CommitOfAnotherUrl)
+        );
+        tree.did_commit(token(0), 2, "https://b.test/").unwrap();
+        assert_eq!(tree.url(token(0)), Some("https://b.test/"));
+        assert!(tree.origin(token(0)).is_some_and(|origin| origin.is_tuple()));
+        for (id, url) in [(1, "https://a.test/"), (2, "https://b.test/")] {
+            assert_eq!(
+                tree.did_commit(token(0), id, url),
+                Err(BadMessageReason::CommitOfNoNavigation),
+                "{id}: gone"
+            );
+        }
+        // The renderer's own: a child frame's `javascript:` URL alone.
+        let renderer = protocol::renderer::RENDERER_COMMIT;
+        for (frame, url) in [(token(0), "javascript:1"), (token(1), "https://a.test/")] {
+            assert_eq!(
+                tree.did_commit(frame, renderer, url),
+                Err(BadMessageReason::CommitOfNoNavigation),
+                "{url}"
+            );
+        }
+        tree.did_commit(token(1), renderer, "JavaScript:1").unwrap();
+        assert!(tree.origin(token(1)).is_some_and(|origin| !origin.is_tuple()));
+    }
+
+    /// The browser sent `frame` navigation `id` to commit at `url`, of an
+    /// opaque origin, and the renderer committed it.
+    fn commit(tree: &mut FrameTree, frame: FrameToken, id: u64, url: &str) {
+        tree.committing(frame, id, url, CommittedOrigin::opaque());
+        tree.did_commit(frame, id, url).unwrap();
     }
 
     /// A frame's document within itself takes what HTML lets it: any path
@@ -565,9 +658,8 @@ mod tests {
                 "{url}"
             );
         }
-        tree.did_commit(token(0), 1, "https://a.test/p?q#f")
-            .unwrap();
-        tree.did_commit(token(1), 2, "file:///d/f.html").unwrap();
+        commit(&mut tree, token(0), 1, "https://a.test/p?q#f");
+        commit(&mut tree, token(1), 2, "file:///d/f.html");
         let cases = [
             (token(0), "https://a.test/other?r", true),
             (token(0), "https://b.test/other", false),
@@ -595,7 +687,7 @@ mod tests {
             tree.did_commit_same_document(token(0), "https://b.test/"),
             Err(BadMessageReason::SameDocumentToAnotherUrl)
         );
-        tree.did_commit(token(1), 3, "data:text/html,x").unwrap();
+        commit(&mut tree, token(1), 3, "data:text/html,x");
         assert!(
             tree.did_commit_same_document(token(1), "data:text/html,x#f")
                 .is_ok()

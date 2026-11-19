@@ -947,7 +947,8 @@ impl WebContents {
         } else if local {
             self.process.set_file_access(true);
         }
-        self.frame_tree.committing(frame, navigation_id, origin);
+        self.frame_tree
+            .committing(frame, navigation_id, &document.url, origin);
         let mut committer = committer;
         if let Some(place) = self.controller.commit_place(navigation_id) {
             committer.set_history_place(place);
