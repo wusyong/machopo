@@ -23,7 +23,7 @@
 | 3d：上一頁、下一頁跨 frame 走 | 完成 | 2026-11-19 |
 | 3e：第 3 階段的檢查和文件 | 完成 | 2026-11-19 |
 | 4a：commit 的回報的檢查 | 完成 | 2026-11-19 |
-| 4b：WPT 的目錄 | | |
+| 4b：WPT 的目錄 | 完成 | 2026-11-19 |
 | 4c：文件、RFC 和第 4 階段的檢查 | | |
 
 ## 驗收
@@ -166,3 +166,14 @@
 - **新的測試**：`frame_tree::tests::a_commit_is_one_the_browser_sent`（沒送的編號、別的 frame 的、別的網址、比它舊的清掉、renderer 自己的 commit 的 main frame 和別的網址）；`a_frames_document_is_what_it_committed` 改成先送再回報；`links::a_bad_message_ends_the_renderer` 加上沒送的 commit、main frame 的 renderer 自己的 commit、子 frame 不是 `javascript:` 的。
 - **mutation test**（7 個，全部抓到）：main frame 的 renderer 自己的 commit 照收、它的任何網址照收、沒送的照收（單元測試和 `a_bad_message_ends_the_renderer`）、別的網址照收、比它舊的留著（單元測試）；browser 不記送出的網址（`a_link_navigates_and_history_goes_back_and_forward`：每一個 commit 都對不上）。
 - **跑過的檢查**：`cargo test -p browser -p renderer -p shell -p protocol` 全部通過；`test.py wpt html/browsers/ html/semantics/embedded-content/the-iframe-element/ html/semantics/document-metadata/the-base-element/` 沒有意外的結果（redirect、錯誤頁、`blob:`、`data:` 的 commit 都對得上）；`sanity.py` 的七項通過。
+
+### 4b（2026-11-19，macOS、Apple M4）
+
+- **決定的事**：第 34 條（WPT 加上和這份 RFC 直接相關的五個目錄，整個；`the-iframe-element` 照舊逐檔）。
+- **做了什麼**：`tests/wpt/include.txt` 加上 `joint-session-history/`、`the-session-history-of-browsing-contexts/`、`overlapping-navigations-and-traversals/`、`navigating-across-documents/`、`nested-browsing-contexts/`，失敗的寫成預期結果，逾時的標 `disabled` 和原因（分組：`pageshow`、表單送出、`window.open`、子 frame 的 `javascript:` 網址的結果、`Referer`、`ImageData` 的 clone、`pageswap`、`window.name`、沒連上文件的 `<a>`、跨 origin 的 fragment 導覽的 `load`、上一頁接著下一頁）。原本因為「子 frame 不能換文件、沒有自己的歷史」標 `disabled` 的 32 個重新跑：21 個跑完（記下結果），其他照真正的原因重新標（`window.open` 的是 ERROR，不用標）。
+- **找到的 bug**（跑 WPT 時）：
+  - 上一頁、下一頁沒有 frame 要動時重新載入 main frame（3d 照 `DetermineActionForHistoryNavigation` 的重新整理那一條做的）：`overlapping-navigations-and-traversals` 的測試在走過被拿掉的 iframe 留下的 entry 時，測試頁自己重新載入（ERROR）。照 Chromium 的 `NavigateToExistingPendingEntry` 改：沒有 frame 要動時只換目前的 entry、告訴 renderer 位置（crbug.com/705550）；目標就是目前的 entry 時（`back()` 接著 `forward()`）停掉所有 frame 的載入、什麼都不做（`StopLoading`），renderer 請求的收到 `NavigationDropped`，等著 commit 的從 controller 拿掉。查了 wpt.fyi：Edge（Chromium）在這個目錄的結果和 machopo 現在的一樣（跨文件的那組通過、同一份文件內的那組逾時）。
+  - 上一頁、下一頁重新載入的文件換了新的文件序號，同一份文件的其他項目還是舊的，之後到它們時又重新載入（main frame 原本就是這樣）：`same-document-traversal-cross-document-traversal.html` 逾時（Edge 通過）。照 Blink 還原 `HistoryItem` 的文件序號：歷史載入時，同一份文件的項目一起換成新的序號（序號 0 的除外）；重新整理照舊是新的文件。這個測試現在整個通過。
+- **新的測試**：`navigation_controller::tests::back_and_forward_to_an_entry_of_frames_gone_move_nothing`、`traversals_within_the_document`（歷史載入之後同一份文件、重新整理之後不是）、`back_and_forward_load_a_document_of_no_number_again`（序號 0 的不合併）；`links::back_and_forward_keep_a_documents_items_and_stop_at_the_current_entry`、`back_over_a_frame_gone_moves_the_entry_alone`（什麼都不載入、目前的 entry 換了、renderer 知道位置：`history.forward()` 在範圍裡）。
+- **mutation test**（8 個，第一次漏掉 3 個，補了測試之後全部抓到）：歷史載入只換自己的項目（單元測試和 `back_and_forward_keep_a_documents_items…`）、序號 0 的也合併（第一次漏，補了單元測試）、沒有 frame 要動時不換目前的 entry（單元測試；`web_contents` 那一側第一次漏，WPT 看不出來：兩種都不載入，補了 `back_over_a_frame_gone…`）、不告訴 renderer 位置（第一次漏，同一個測試的 `history.forward()` 抓到）、回到目前的 entry 時照樣導覽、停掉時不從 controller 拿掉（`back_and_forward_keep_a_documents_items…`）。
+- **跑過的檢查**：`cargo test -p browser -p renderer -p shell` 全部通過；`test.py wpt html/browsers/` 沒有意外的結果。

@@ -336,6 +336,11 @@ impl NavigationController {
         self.index_for_offset(1).is_some()
     }
 
+    /// Navigation `navigation_id` stopped: it won't commit.
+    pub(crate) fn did_stop(&mut self, navigation_id: u64) {
+        self.pending.remove(&navigation_id);
+    }
+
     /// `frame`'s navigation `navigation_id` started, to do `kind` as it
     /// commits.
     pub(crate) fn did_start(
@@ -458,7 +463,7 @@ impl NavigationController {
                 // Its frames' places stay: what its new document's frames
                 // are restored from.
                 let item = self.entries[index].root.item;
-                self.loaded_again(item, url, navigation_id);
+                self.loaded_back(item, url, navigation_id);
                 self.current = Some(index);
             }
             (Some(NavigationType::Reload), Some(current)) => {
@@ -538,7 +543,7 @@ impl NavigationController {
                     .find(&path)
                     .expect("found above")
                     .item;
-                self.loaded_again(item, url, navigation_id);
+                self.loaded_back(item, url, navigation_id);
                 self.current = Some(index);
             }
             // Its document loaded again: its item has it.
@@ -738,10 +743,12 @@ impl NavigationController {
     /// frames in it; one at the same item, its frames looked at; one at an
     /// item of the same document traverses within it, its frames looked at
     /// too; one at another document loads it again, the frames in it going
-    /// with the one it shows. An item of no document the browser committed (an initial
-    /// `about:blank`'s, a `javascript:` URL's: 0) is loaded again. None at
-    /// all (the main frame's own item, a frame of the same name nowhere)
-    /// is the main frame's load, as Chromium's.
+    /// with the one it shows. An item of no document the browser committed
+    /// (an initial `about:blank`'s, a `javascript:` URL's: 0) is loaded
+    /// again. None at all (the entry's frames that differ gone:
+    /// crbug.com/705550, or the current entry itself) is
+    /// for the entry to be the current one, nothing loaded
+    /// (`go_to_entry_in_place`).
     pub(crate) fn frames_to_navigate(
         &self,
         tree: &FrameTree,
@@ -771,10 +778,17 @@ impl NavigationController {
                 _ => loads.push((frame, HistoryLoad::DifferentDocument)),
             }
         }
-        if loads.is_empty() {
-            loads.push((tree.root(), HistoryLoad::DifferentDocument));
-        }
         loads
+    }
+
+    /// Back or forward to the entry at `index` with no frame to move
+    /// (`frames_to_navigate` found none): it is the current one, the
+    /// documents shown kept (Chromium's "redundant" same-document
+    /// navigation of the main frame, which fires nothing).
+    pub(crate) fn go_to_entry_in_place(&mut self, index: usize) {
+        if index < self.entries.len() {
+            self.current = Some(index);
+        }
     }
 
     /// `frame`'s scroll restoration mode in the current entry
@@ -831,6 +845,23 @@ impl NavigationController {
             initial,
             root: TreeNode::new(String::new(), item),
         }
+    }
+
+    /// `item`'s document loaded back or forward, as `document`: what Blink
+    /// has of its item (its document sequence number) is the new one's, so
+    /// the items of the document it was are of this one, traversals within
+    /// it (Chromium's history load restoring the `HistoryItem`). Not those
+    /// of no document the browser committed (0), which are no one document.
+    fn loaded_back(&mut self, item: u64, url: String, document: u64) {
+        let before = self.item(item).document;
+        if before != 0 {
+            for other in self.items.values_mut() {
+                if other.document == before {
+                    other.document = document;
+                }
+            }
+        }
+        self.loaded_again(item, url, document);
     }
 
     /// `item`'s frame has its document again, a new one: the entries that
@@ -1119,7 +1150,9 @@ mod tests {
         assert_eq!(controller.did_fail_same_document(3), Some((MAIN, 1)));
         assert_eq!(controller.current_index(), Some(0));
         assert_eq!(controller.did_fail_same_document(3), None);
-        // Loaded instead: a new document, of that entry only.
+        // Loaded instead: the new document is the one its items were of,
+        // the other entry's too (Blink restores the item's document
+        // sequence number); a reload's isn't.
         commit(
             &mut controller,
             &tree,
@@ -1127,8 +1160,9 @@ mod tests {
             NavigationType::HistoryIndex(1),
             "a#x",
         );
-        assert_eq!(document(&controller, 1), 4);
-        assert_ne!(document(&controller, 0), document(&controller, 1));
+        assert_eq!((document(&controller, 0), document(&controller, 1)), (4, 4));
+        commit(&mut controller, &tree, 5, NavigationType::Reload, "a#x");
+        assert_eq!((document(&controller, 0), document(&controller, 1)), (4, 5));
     }
 
     #[test]
@@ -1482,11 +1516,8 @@ mod tests {
             controller.frames_to_navigate(&tree, 0, none),
             [(MAIN, HistoryLoad::DifferentDocument)]
         );
-        // The same entry: nothing moves, so the main frame loads it.
-        assert_eq!(
-            controller.frames_to_navigate(&tree, 1, none),
-            [(MAIN, HistoryLoad::DifferentDocument)]
-        );
+        // The current entry: nothing to move.
+        assert_eq!(controller.frames_to_navigate(&tree, 1, none), []);
         // A new child frame's item: in its parent's entry, if that is
         // there and has one.
         let entry_0_place = controller.item_for_new_child_frame(&tree, token(3), entry_0);
@@ -1531,6 +1562,36 @@ mod tests {
         );
     }
 
+    /// An entry whose frames that differ are gone moves nothing: it is the
+    /// current one, nothing loaded.
+    #[test]
+    fn back_and_forward_to_an_entry_of_frames_gone_move_nothing() {
+        let mut tree = frames();
+        let mut controller = NavigationController::default();
+        commit(&mut controller, &tree, 1, NavigationType::NewEntry, "a");
+        commit_child(
+            &mut controller,
+            &tree,
+            token(2),
+            2,
+            NavigationType::Replace,
+            "two",
+        );
+        commit_child(
+            &mut controller,
+            &tree,
+            token(2),
+            3,
+            NavigationType::NewEntry,
+            "two2",
+        );
+        tree.remove(token(2)).expect("there");
+        assert_eq!(controller.frames_to_navigate(&tree, 0, |_| None), []);
+        controller.go_to_entry_in_place(0);
+        assert_eq!(controller.current_index(), Some(0));
+        assert_eq!(controller.entry_count(), 2);
+    }
+
     /// An item of no document the browser committed (an initial
     /// `about:blank`'s) is loaded again; a frame the entry has no place
     /// for stays.
@@ -1546,6 +1607,18 @@ mod tests {
             controller.frames_to_navigate(&tree, 0, |_| None),
             [(token(2), HistoryLoad::DifferentDocument)]
         );
+        // Its load: the other frames' items of no number stay so.
+        controller.did_start(4, token(2), NavigationType::HistoryIndex(0));
+        controller.did_commit(&tree, token(2), 4, "about:blank#x".into());
+        let document = |index: usize, name| {
+            controller
+                .entry(index)
+                .and_then(|e| e.frame(name))
+                .map(|i| i.document)
+        };
+        assert_eq!(document(0, "two"), Some(4));
+        assert_eq!(document(1, "one"), Some(0));
+        assert_eq!(document(1, "two"), Some(0));
     }
 
     /// What no entry has a place for goes: an entry gone, a place another

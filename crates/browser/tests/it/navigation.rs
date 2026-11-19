@@ -4750,6 +4750,99 @@ document.querySelector('base').setAttribute('href', '/later/');
         web_contents.shutdown();
     }
 
+    /// Back to an entry that differs only in a child frame gone: nothing
+    /// loads, the entry is the current one, and the renderer knows its
+    /// place (`history.forward()` is in range, and goes there too).
+    #[test]
+    fn back_over_a_frame_gone_moves_the_entry_alone() {
+        let html = format!(
+            "{}<iframe src=/a name=kid></iframe>",
+            logging(
+                "onfocus = () => { history.forward(); note('forward'); };
+                 const kid = document.querySelector('iframe');
+                 kid.onload = () => setTimeout(() => { kid.remove(); note('removed'); });
+                 frames.kid.location.href = '/b';"
+            )
+        );
+        let server = server(&[
+            ("/", Route::ok("text/html", html)),
+            ("/a", Route::ok("text/html", child_logging("a", ""))),
+            ("/b", Route::ok("text/html", child_logging("b", ""))),
+        ]);
+        let (mut web_contents, host_rx) = tab();
+        web_contents.navigate(server.url("/"));
+        let log = "kid-a-navigate_kid-b-navigate_removed";
+        logged_until(&mut web_contents, &host_rx, log);
+        assert_eq!(history(&web_contents).1, Some(1));
+        assert!(web_contents.go_back());
+        assert_eq!(history(&web_contents).1, Some(0));
+        web_contents.set_focus(true);
+        logged_until(&mut web_contents, &host_rx, &format!("{log}_forward"));
+        assert_eq!(history(&web_contents).1, Some(1));
+        assert_eq!(loads_of_the_page(&server), 1);
+        web_contents.shutdown();
+    }
+
+    /// A document back or forward loaded is the one its items were of:
+    /// traversals within it after. Back then forward before the back
+    /// commits: forward is to the current entry, so the frames stop loading
+    /// and nothing else happens (as in Chromium).
+    #[test]
+    fn back_and_forward_keep_a_documents_items_and_stop_at_the_current_entry() {
+        let html = format!(
+            "{}<iframe src=/a name=kid></iframe>",
+            logging(
+                "onfocus = () => note(`focus-${frames.length}`);
+                 frames.kid.location.search = '?1';"
+            )
+        );
+        let server = server(&[
+            ("/", Route::ok("text/html", html)),
+            (
+                "/a",
+                Route::ok(
+                    "text/html",
+                    child_logging(
+                        "a",
+                        "if (location.search == '?1') setTimeout(() => { location.hash = '#2'; parent.note('hashed'); });",
+                    ),
+                )
+                .with_delay(Duration::from_millis(100)),
+            ),
+        ]);
+        let (mut web_contents, host_rx) = tab();
+        web_contents.navigate(server.url("/"));
+        logged_until(
+            &mut web_contents,
+            &host_rx,
+            "kid-a-navigate_kid-a-navigate_pop-#2_hashed",
+        );
+        // Entries: `/a`, `/a?1`, `/a?1#2`. Back twice: within `/a?1`, then
+        // `/a` loads. Forward: `/a?1` loads; forward again, its `#2` is
+        // within it, the document it loaded being the one its items were of.
+        let mut log = "kid-a-navigate_kid-a-navigate_pop-#2_hashed".to_owned();
+        for (step, then, index) in [
+            (-1, "pop-", 1),
+            (-1, "kid-a-back_forward", 0),
+            (1, "kid-a-back_forward", 1),
+            (1, "pop-#2", 2),
+        ] {
+            assert!(web_contents.go_to_offset(step));
+            log = format!("{log}_{then}");
+            logged_until(&mut web_contents, &host_rx, &log);
+            assert_eq!(history(&web_contents).1, Some(index), "{log}");
+        }
+        // Back two and forward two at once: the second is to the current
+        // entry, so the first's load stops and nothing else happens.
+        assert!(web_contents.go_to_offset(-2));
+        assert!(web_contents.go_to_offset(2));
+        assert!(web_contents.controller().can_go_back(), "nothing pending");
+        web_contents.set_focus(true);
+        logged_until(&mut web_contents, &host_rx, &format!("{log}_focus-1"));
+        assert_eq!(history(&web_contents).1, Some(2));
+        web_contents.shutdown();
+    }
+
     /// Back to an entry whose main frame's document loads again: its child
     /// frames made before its `load` are what the entry has for them, a
     /// back-forward load; one whose `src` is set after has its `src`.

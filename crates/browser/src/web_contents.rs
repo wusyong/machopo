@@ -423,12 +423,20 @@ impl WebContents {
     /// of it (the renderer fires `popstate`), else loads the item again,
     /// its state with it; those within their documents first, as Chromium
     /// sends them. There is no back-forward cache, and the scroll position
-    /// isn't restored. After a crash, the main frame loads it. False if
-    /// there is no such entry.
+    /// isn't restored. With no frame to move (those that differ gone), it is
+    /// the current entry, nothing loaded, the renderer told its place. To
+    /// the current entry itself (back, then forward, before the first
+    /// commits), every frame stops loading and nothing else happens
+    /// (Chromium's `NavigateToExistingPendingEntry` drops it so). After a
+    /// crash, the main frame loads it. False if there is no such entry.
     pub fn go_to_offset(&mut self, offset: isize) -> bool {
         let Some(index) = self.controller.index_for_offset(offset) else {
             return false;
         };
+        if !self.crashed && self.controller.current_index() == Some(index) {
+            self.stop_loading();
+            return true;
+        }
         let root = self.frame_tree.root();
         let loads = if self.crashed {
             vec![(root, HistoryLoad::DifferentDocument)]
@@ -437,6 +445,13 @@ impl WebContents {
             self.controller
                 .frames_to_navigate(tree, index, |frame| tree.history_place(frame))
         };
+        if loads.is_empty() {
+            self.controller.go_to_entry_in_place(index);
+            let (index, length) = self.controller.offset_and_length();
+            self.process
+                .send(RendererMsg::SetHistoryOffsetAndLength { index, length });
+            return true;
+        }
         let (within, loading): (Vec<_>, Vec<_>) = loads
             .into_iter()
             .partition(|(_, load)| *load == HistoryLoad::SameDocument);
@@ -908,6 +923,18 @@ impl WebContents {
 
     /// `before`, `frame`'s navigation, stops for another: its load goes with
     /// it, and the renderer hears that one it asked for won't commit.
+    /// `FrameTree::StopLoading`: every frame's navigation on its way stops,
+    /// the renderer told of those it asked for, and the session history
+    /// forgets them.
+    fn stop_loading(&mut self) {
+        for frame in self.frame_tree.frames() {
+            if let Some(navigation) = self.frame_tree.take_any_navigation(frame) {
+                self.controller.did_stop(navigation.id);
+                self.replaced(frame, navigation);
+            }
+        }
+    }
+
     fn replaced(&self, frame: FrameToken, before: NavigationRequest) {
         if let Some(id) = before.begin_id {
             self.dropped(frame, id);

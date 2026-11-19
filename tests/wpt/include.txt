@@ -884,6 +884,15 @@ url/javascript-urls.window.js
 html/browsers/history/the-history-interface/
 html/browsers/browsing-the-web/history-traversal/
 
+# The joint session history, child frames' navigations and traversals,
+# and nested browsing contexts: the directories whole, but for what is
+# `disabled`.
+html/browsers/history/joint-session-history/
+html/browsers/history/the-session-history-of-browsing-contexts/
+html/browsers/browsing-the-web/overlapping-navigations-and-traversals/
+html/browsers/browsing-the-web/navigating-across-documents/
+html/browsers/windows/nested-browsing-contexts/
+
 # CSSOM View: the whole of `css/cssom-view/` rather than file by file, but
 # for what is `disabled`.
 css/cssom-view/

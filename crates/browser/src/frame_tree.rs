@@ -132,6 +132,11 @@ impl FrameTree {
         self.root
     }
 
+    /// Every frame's token, in no order.
+    pub(crate) fn frames(&self) -> Vec<FrameToken> {
+        self.nodes.keys().copied().collect()
+    }
+
     /// Whether `frame` is one of the tree's.
     pub fn contains(&self, frame: FrameToken) -> bool {
         self.nodes.contains_key(&frame)
@@ -340,7 +345,11 @@ impl FrameTree {
             if node.committing[at].url != url {
                 return Err(BadMessageReason::CommitOfAnotherUrl);
             }
-            node.committing.drain(..=at).last().expect("one at `at`").origin
+            node.committing
+                .drain(..=at)
+                .last()
+                .expect("one at `at`")
+                .origin
         };
         node.origin = origin.origin;
         node.local = origin.local;
@@ -609,7 +618,10 @@ mod tests {
         );
         tree.did_commit(token(0), 2, "https://b.test/").unwrap();
         assert_eq!(tree.url(token(0)), Some("https://b.test/"));
-        assert!(tree.origin(token(0)).is_some_and(|origin| origin.is_tuple()));
+        assert!(
+            tree.origin(token(0))
+                .is_some_and(|origin| origin.is_tuple())
+        );
         for (id, url) in [(1, "https://a.test/"), (2, "https://b.test/")] {
             assert_eq!(
                 tree.did_commit(token(0), id, url),
@@ -627,7 +639,10 @@ mod tests {
             );
         }
         tree.did_commit(token(1), renderer, "JavaScript:1").unwrap();
-        assert!(tree.origin(token(1)).is_some_and(|origin| !origin.is_tuple()));
+        assert!(
+            tree.origin(token(1))
+                .is_some_and(|origin| !origin.is_tuple())
+        );
     }
 
     /// The browser sent `frame` navigation `id` to commit at `url`, of an
