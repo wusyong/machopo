@@ -367,8 +367,7 @@ pub(crate) fn follow_hyperlink<H: ScriptHost>(
         let element = element.get(cx.gc);
         let document = cx.document_of(element);
         let anchor = cx.qualified_name(element) == Some(QualifiedName::html(names::local::A));
-        if !(anchor || cx.is_connected(element)) || !crate::history::is_fully_active(cx, document)
-        {
+        if !(anchor || cx.is_connected(element)) || !crate::history::is_fully_active(cx, document) {
             return;
         }
         let Some(url) = link_href(cx, element).and_then(|href| {

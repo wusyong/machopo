@@ -1460,11 +1460,7 @@ impl RenderThread {
     /// When the first iframe's `load` for a navigation within a
     /// cross-origin document is due, on the clock.
     pub(super) fn owner_loads_due(&self) -> Option<f64> {
-        self.children
-            .owner_loads
-            .values()
-            .copied()
-            .reduce(f64::min)
+        self.children.owner_loads.values().copied().reduce(f64::min)
     }
 
     /// Fires the iframes' `load`s that are due, for the frames still there
@@ -1480,7 +1476,12 @@ impl RenderThread {
             .collect();
         for frame in due {
             self.children.owner_loads.remove(&frame);
-            let Some(owner) = self.children.frames.get(&frame).map(|(_, owner)| owner.clone()) else {
+            let Some(owner) = self
+                .children
+                .frames
+                .get(&frame)
+                .map(|(_, owner)| owner.clone())
+            else {
                 continue;
             };
             if let Some(engine) = &mut self.engine {
