@@ -382,9 +382,13 @@ impl Animation {
         let (start, end) = self.interval();
         let rate = self.playback.playback_rate;
         // A finished one holds its end, but still has its start time; a
-        // paused or pending one has none.
+        // paused or pending one has none. Never after now, as a `finish`
+        // event's: a frame within the tolerance before the end has reached
+        // it, and its events then go at now, the transition's before the
+        // `finish` (Blink queues the finish notification after the
+        // update that sends them).
         let at = |elapsed: f64| match self.playback.start_time {
-            Some(origin) if rate != 0.0 => origin + (self.timing.delay + elapsed) / rate,
+            Some(origin) if rate != 0.0 => (origin + (self.timing.delay + elapsed) / rate).min(now),
             _ => now,
         };
         // Its playback's direction, and the times of the interval's ends

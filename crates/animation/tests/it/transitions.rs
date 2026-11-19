@@ -486,3 +486,27 @@ fn events_go_in_order() {
     );
     assert_eq!(TransitionEventKind::End.name(), "transitionend");
 }
+
+/// A frame within the tolerance before a transition's end has reached it:
+/// its `transitionend` goes at that frame's time, as the `finish` event
+/// does, and so before it.
+#[test]
+fn an_end_reached_within_the_tolerance_goes_before_the_finish() {
+    let mut e = Element::new(styled(0.0, "width", 0.3, 0.0));
+    e.change(styled(100.0, "width", 0.3, 0.0), 1000.0);
+    e.tick(1010.0);
+    e.events.clear();
+    let now = 1000.0 + 300.0 - 0.0004;
+    e.tick(now);
+    let mut events = std::mem::take(&mut e.events);
+    events.sort_by(|a, b| a.dispatch_order(b));
+    let order: Vec<_> = events
+        .iter()
+        .map(|event| match event {
+            AnimationEvent::Transition(t) => (Some(t.kind), t.scheduled_time),
+            AnimationEvent::Playback(p) => (None, p.scheduled_time),
+            AnimationEvent::Animation(a) => panic!("no CSS animations here: {a:?}"),
+        })
+        .collect();
+    assert_eq!(order, [(Some(End), now), (None, now)]);
+}
