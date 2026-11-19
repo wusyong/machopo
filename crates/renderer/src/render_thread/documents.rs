@@ -108,6 +108,10 @@ pub(super) struct FrameDocument {
     resources: Rc<FrameResources>,
     /// A child frame's initial `about:blank`, which no navigation brought.
     initial: bool,
+    /// Back or forward loaded it (Blink's `kBackForward` load): until its
+    /// `load`, a new child frame's first document is the session
+    /// history's (`is_history_navigation_in_new_child_frame`).
+    history_load: bool,
     /// The URLs of its subresources that failed to load, or whose content
     /// was of no use (an image that doesn't decode, a script of no
     /// JavaScript type, a `<link>`'s `href` that doesn't parse), until its
@@ -227,6 +231,7 @@ impl FrameDocument {
             loader_id: None,
             resources: Rc::default(),
             initial: false,
+            history_load: false,
             failed: Vec::new(),
         }
     }
@@ -653,6 +658,7 @@ impl RenderThread {
         self.children = ChildFrames::default();
         self.document = Some(FrameDocument {
             navigation_id,
+            history_load: timing.navigation_type == dom::NavigationType::BackForward,
             ..FrameDocument::new(
                 top,
                 None,
@@ -925,6 +931,7 @@ impl RenderThread {
             id,
             kind,
             devtools_initiator: None,
+            history_in_new_child_frame: false,
         });
     }
 
@@ -1078,16 +1085,21 @@ impl RenderThread {
     /// another document by now, the browser loads the entry.
     pub(super) fn commit_same_document_traversal(
         &mut self,
+        token: protocol::FrameToken,
         navigation_id: u64,
         document: u64,
         url: &str,
         history: protocol::renderer::HistoryEntryParams,
     ) {
-        let frame = self
-            .document
-            .as_ref()
-            .filter(|next| next.navigation_id == document)
-            .map(|next| next.frame);
+        let frame = if self.devtools_main_frame_token == Some(token) {
+            self.document.as_ref().map(|next| next.frame)
+        } else {
+            self.children.of_token(token)
+        };
+        let frame = frame.filter(|frame| {
+            self.doc(*frame)
+                .is_some_and(|next| next.navigation_id == document)
+        });
         let (Some(frame), Ok(new_url), Some(engine)) = (frame, Url::parse(url), &mut self.engine)
         else {
             let _ = self
@@ -1195,29 +1207,59 @@ impl RenderThread {
         } else {
             None
         };
+        let history = by_iframe && self.is_history_navigation_in_new_child_frame(frame);
         let kind = protocol::renderer::BeginNavigationKind::To {
             url: url.into(),
             replace,
         };
-        self.begin_child_navigation(frame, initiator, kind, devtools_initiator);
+        self.begin_child_navigation(frame, initiator, kind, devtools_initiator, history);
+    }
+
+    /// Whether child frame `frame`'s navigation by its iframe is the
+    /// session history's (Blink's `IsBackForwardNavigationInProgress`): it
+    /// shows its initial `about:blank` still, and its parent's document,
+    /// back or forward loaded, hasn't had its `load` yet. A frame script
+    /// makes after isn't.
+    fn is_history_navigation_in_new_child_frame(&mut self, frame: FrameId) -> bool {
+        let Some(parent) = self.children.frames.get(&frame).map(|(parent, _)| *parent) else {
+            return false;
+        };
+        if !self.doc(frame).is_none_or(|next| next.initial) {
+            return false;
+        }
+        let Some(document) = self
+            .doc(parent)
+            .filter(|next| next.history_load)
+            .map(|next| next.document.clone())
+        else {
+            return false;
+        };
+        let Some(engine) = self.engine.as_mut() else {
+            return false;
+        };
+        !engine
+            .dom_mut()
+            .read(|cx| cx.is_completely_loaded(document.get(cx.gc)))
     }
 
     /// Child frame `frame`'s document loaded again (`location.reload()`):
     /// by the browser, from the URL it has.
     fn reload_child(&mut self, frame: FrameId) {
         let kind = protocol::renderer::BeginNavigationKind::Reload;
-        self.begin_child_navigation(frame, frame, kind, None);
+        self.begin_child_navigation(frame, frame, kind, None, false);
     }
 
     /// The browser's `BeginNavigation` of child frame `frame`: it loads
     /// until the browser commits it, or drops it; one started before
-    /// doesn't commit.
+    /// doesn't commit. The session history's for a new frame if
+    /// `history_in_new_child_frame`.
     fn begin_child_navigation(
         &mut self,
         frame: FrameId,
         initiator: FrameId,
         kind: protocol::renderer::BeginNavigationKind,
         devtools_initiator: Option<String>,
+        history_in_new_child_frame: bool,
     ) {
         let no_referrer = self.child_no_referrer(frame);
         let (Some(token), Some(by)) = (self.frame_token(frame), self.frame_token(initiator)) else {
@@ -1244,6 +1286,7 @@ impl RenderThread {
             id: begin_id,
             kind,
             devtools_initiator,
+            history_in_new_child_frame,
         });
     }
 
@@ -1542,8 +1585,16 @@ impl RenderThread {
         let loader_id = navigation
             .as_ref()
             .map(|navigation| navigation.navigation_id.to_string());
+        let (navigation_id, history_load) = navigation.as_ref().map_or((0, false), |navigation| {
+            (
+                navigation.navigation_id,
+                navigation.timing.navigation_type == dom::NavigationType::BackForward,
+            )
+        });
         self.children.documents.push(FrameDocument {
             loader_id,
+            navigation_id,
+            history_load,
             ..FrameDocument::new(
                 frame,
                 Some((parent, owner)),

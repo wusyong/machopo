@@ -164,7 +164,7 @@ pub enum RendererMsg {
     /// the browser didn't take it. The frame no longer waits for it.
     NavigationDropped { frame: crate::FrameToken, id: u64 },
     /// `CommitSameDocumentNavigation` of a history traversal: back or
-    /// forward to an entry of the document shown, `document` (the
+    /// forward to an entry of the document `frame` shows, `document` (the
     /// `navigation_id` that committed it). The renderer changes the URL,
     /// the state and its place in the session history, and fires
     /// `popstate`, and `hashchange` if the fragment changed; answered with
@@ -172,6 +172,7 @@ pub enum RendererMsg {
     /// `SameDocumentNavigationFailed` if it shows another document by then
     /// (Chromium's `CommitResult::RestartCrossDocument`).
     CommitSameDocumentNavigation {
+        frame: crate::FrameToken,
         navigation_id: u64,
         document: u64,
         url: String,
@@ -507,6 +508,12 @@ pub enum RendererHostMsg {
         id: u64,
         kind: BeginNavigationKind,
         devtools_initiator: Option<String>,
+        /// A new child frame's first navigation, by its iframe, while its
+        /// parent's document back or forward loaded is loading (Blink's
+        /// `is_history_navigation_in_new_child_frame`): the browser loads
+        /// what the session history has for the frame there, if it has
+        /// any, instead.
+        history_in_new_child_frame: bool,
     },
     /// `FrameHost::OpenURL`: a link followed to a new tab, which the
     /// browser decides whether to open.

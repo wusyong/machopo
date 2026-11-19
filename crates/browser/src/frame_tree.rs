@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use protocol::FrameToken;
 
 use crate::bad_message::BadMessageReason;
+use crate::navigation_controller::HistoryPlace;
 use crate::navigation_request::NavigationRequest;
 
 /// A frame of the tree: its parent (none for the main frame) and its
@@ -35,6 +36,10 @@ struct FrameTreeNode {
     /// place in the session history, as one replacing its initial
     /// `about:blank` does.
     committed_real_load: bool,
+    /// Where its document is in the session history, as it last committed
+    /// one (Chromium's `nav_entry_id`, `last_committed_frame_entry`): none
+    /// before, or for one with no place there.
+    history_place: Option<HistoryPlace>,
     /// Its document's origin: its URL's, or the one it has from another
     /// document (an `about:blank`'s initiator's, an `about:srcdoc`'s
     /// parent's, a child frame's initial `about:blank`'s parent's); an
@@ -86,6 +91,7 @@ impl FrameTreeNode {
             unique_name,
             url: None,
             committed_real_load: false,
+            history_place: None,
             origin: origin.origin,
             local: origin.local,
             srcdoc: String::new(),
@@ -139,6 +145,20 @@ impl FrameTree {
     /// not in the tree, or before one the browser loaded commits.
     pub fn url(&self, frame: FrameToken) -> Option<&str> {
         self.nodes.get(&frame)?.url.as_deref()
+    }
+
+    /// Where `frame`'s document is in the session history, as it last
+    /// committed one.
+    pub(crate) fn history_place(&self, frame: FrameToken) -> Option<HistoryPlace> {
+        self.nodes.get(&frame)?.history_place
+    }
+
+    /// `frame`'s document, just committed, is at `place` in the session
+    /// history.
+    pub(crate) fn set_history_place(&mut self, frame: FrameToken, place: Option<HistoryPlace>) {
+        if let Some(node) = self.nodes.get_mut(&frame) {
+            node.history_place = place;
+        }
     }
 
     /// Whether `frame` committed a document not at `about:blank`: a frame

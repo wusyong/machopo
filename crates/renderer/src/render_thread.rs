@@ -924,12 +924,13 @@ impl RenderThread {
             }
             RendererMsg::NavigationDropped { frame, id } => self.navigation_dropped(frame, id),
             RendererMsg::CommitSameDocumentNavigation {
+                frame,
                 navigation_id,
                 document,
                 url,
                 history,
             } => {
-                self.commit_same_document_traversal(navigation_id, document, &url, history);
+                self.commit_same_document_traversal(frame, navigation_id, document, &url, history);
             }
             RendererMsg::SetHistoryOffsetAndLength { index, length } => {
                 if let Some(engine) = &mut self.engine {

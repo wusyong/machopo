@@ -1039,6 +1039,7 @@ fn page_navigates(web_contents: &mut WebContents, url: &str) {
             replace: false,
         },
         devtools_initiator: None,
+        history_in_new_child_frame: false,
     });
 }
 
@@ -4098,6 +4099,7 @@ document.querySelector('base').setAttribute('href', '/later/');
                 id: 1,
                 kind: BeginNavigationKind::Reload,
                 devtools_initiator: None,
+                history_in_new_child_frame: false,
             },
             |main, _| RendererHostMsg::BeginNavigation {
                 frame: main,
@@ -4105,6 +4107,7 @@ document.querySelector('base').setAttribute('href', '/later/');
                 id: 1,
                 kind: BeginNavigationKind::Reload,
                 devtools_initiator: None,
+                history_in_new_child_frame: false,
             },
             // A commit in a frame not there.
             |_, _| RendererHostMsg::DidCommitNavigation {
@@ -4664,6 +4667,114 @@ document.querySelector('base').setAttribute('href', '/later/');
     fn a_child_frames_documents_are_in_the_history() {
         a_child_frames_documents_are_in_the_history_from(false);
         a_child_frames_documents_are_in_the_history_from(true);
+    }
+
+    /// A child frame's script: `onload` tells its parent `<path>-<the
+    /// navigation's type>`, `popstate` `pop-<its fragment>`; on a load not
+    /// back or forward, `after` runs.
+    fn child_logging(path: &str, after: &str) -> String {
+        format!(
+            "<script>\
+               const type = performance.getEntriesByType('navigation')[0].type;\
+               addEventListener('popstate', () => parent.note(`pop-${{location.hash}}`));\
+               onload = () => {{\
+                 parent.note(`${{frameElement.name}}-{path}-${{type}}`);\
+                 if (type != 'back_forward') {{ {after} }}\
+               }};\
+             </script>"
+        )
+    }
+
+    /// Back and forward move the frames at another item than the entry's:
+    /// a child frame within its document (its `popstate`, none of the main
+    /// frame's), or its document loaded again, a back-forward load; the
+    /// main frame stays.
+    #[test]
+    fn back_and_forward_move_a_child_frame() {
+        let html = format!(
+            "{}<iframe src=/a name=kid></iframe>",
+            logging("frames.kid.location.href = '/b';")
+        );
+        let server = server(&[
+            ("/", Route::ok("text/html", html)),
+            ("/a", Route::ok("text/html", child_logging("a", ""))),
+            (
+                "/b",
+                Route::ok(
+                    "text/html",
+                    child_logging("b", "history.pushState(null, '', '#p'); parent.note('pushed');"),
+                ),
+            ),
+        ]);
+        let (mut web_contents, host_rx) = tab();
+        web_contents.navigate(server.url("/"));
+        let mut log = "kid-a-navigate_kid-b-navigate_pushed".to_owned();
+        logged_until(&mut web_contents, &host_rx, &log);
+        assert_eq!(history(&web_contents).1, Some(2));
+        for (back, then, index) in [
+            (true, "pop-", 1),
+            (true, "kid-a-back_forward", 0),
+            (false, "kid-b-back_forward", 1),
+        ] {
+            assert!(if back {
+                web_contents.go_back()
+            } else {
+                web_contents.go_forward()
+            });
+            log = format!("{log}_{then}");
+            logged_until(&mut web_contents, &host_rx, &log);
+            assert_eq!(history(&web_contents).1, Some(index), "{then}");
+        }
+        assert_eq!(loads_of_the_page(&server), 1);
+        web_contents.shutdown();
+    }
+
+    /// Back to an entry whose main frame's document loads again: its child
+    /// frames made before its `load` are what the entry has for them, a
+    /// back-forward load; one whose `src` is set after has its `src`.
+    #[test]
+    fn back_restores_the_child_frames_of_the_entry() {
+        let html = format!(
+            "{}<iframe src=/a name=kid></iframe><iframe name=late></iframe>",
+            logging(
+                "const back = performance.getEntriesByType('navigation')[0].type == 'back_forward';
+                 note(`top-${back}`);
+                 document.querySelector('[name=late]').src = back ? '/a' : '/b';
+                 if (!back) frames.kid.location.href = '/b';"
+            )
+        );
+        let server = server(&[
+            ("/", Route::ok("text/html", html)),
+            ("/a", Route::ok("text/html", child_logging("a", ""))),
+            ("/b", Route::ok("text/html", child_logging("b", ""))),
+            ("/other", Route::ok("text/html", "other")),
+        ]);
+        let (mut web_contents, host_rx) = tab();
+        web_contents.navigate(server.url("/"));
+        // The two child frames' `/b` load in either order.
+        let mut log = logged(&mut web_contents, &host_rx);
+        while log.split('_').count() < 4 {
+            log = logged(&mut web_contents, &host_rx);
+        }
+        let mut notes: Vec<&str> = log.split('_').collect();
+        notes.sort_unstable();
+        assert_eq!(
+            notes,
+            ["kid-a-navigate", "kid-b-navigate", "late-b-navigate", "top-false"]
+        );
+        web_contents.navigate(server.url("/other"));
+        assert_eq!(
+            wait_for(&mut web_contents, &host_rx, committed),
+            server.url("/other")
+        );
+        assert!(web_contents.go_back());
+        logged_until(
+            &mut web_contents,
+            &host_rx,
+            "kid-b-back_forward_top-true_late-a-navigate",
+        );
+        assert_eq!(history(&web_contents).1, Some(1));
+        web_contents.shutdown();
     }
 
     /// A child frame's `pushState` is a new entry, every frame's

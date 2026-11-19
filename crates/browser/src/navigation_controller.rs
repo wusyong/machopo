@@ -141,6 +141,10 @@ impl TreeNode {
 /// main frame's document.
 #[derive(Debug, Clone)]
 struct Entry {
+    /// Its own number, which no other entry has (Chromium's
+    /// `NavigationEntry::GetUniqueID`): what a frame's document committed
+    /// in (`HistoryPlace::entry`).
+    id: u64,
     title: String,
     /// The tab's first document's, which the next new entry takes the
     /// place of (Chromium's `NavigationEntryImpl::IsInitialEntry`: a new
@@ -219,6 +223,27 @@ pub(crate) enum NavigationType {
     Initial,
 }
 
+/// Where a frame's document committed in the session history: the entry,
+/// and its item there (with its document), as the frame tree keeps it for
+/// the frame (Chromium's `RenderFrameHostImpl::nav_entry_id` and
+/// `last_committed_frame_entry`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct HistoryPlace {
+    pub(crate) entry: u64,
+    pub(crate) item: u64,
+    pub(crate) document: u64,
+}
+
+/// What back or forward does to a frame (Chromium's
+/// `HistoryNavigationAction`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HistoryLoad {
+    /// A traversal within the document it shows.
+    SameDocument,
+    /// Its entry's document loaded again.
+    DifferentDocument,
+}
+
 /// A navigation started and not committed yet: whose, and what it does.
 #[derive(Debug, Clone, Copy)]
 struct Pending {
@@ -229,6 +254,7 @@ struct Pending {
 #[derive(Debug, Default)]
 pub struct NavigationController {
     entries: Vec<Entry>,
+    entry_ids: SequenceNumber<u64>,
     /// Every item an entry has a place for, by item sequence number.
     items: HashMap<u64, FrameNavigationEntry>,
     item_numbers: SequenceNumber<u64>,
@@ -386,21 +412,6 @@ impl NavigationController {
         (count(self.current.unwrap_or(0)), count(self.entries.len()))
     }
 
-    /// Whether the entry at `index` is one of the main frame's document
-    /// shown, which a traversal reaches without loading anything.
-    pub(crate) fn is_same_document(&self, index: usize) -> bool {
-        match (self.current_document(), self.entry(index)) {
-            (Some(document), Some(entry)) => entry.root().document == document,
-            _ => false,
-        }
-    }
-
-    /// The main frame's document shown: its item's `document`.
-    pub(crate) fn current_document(&self) -> Option<u64> {
-        let current = self.entry(self.current?)?;
-        Some(current.root().document)
-    }
-
     /// `RendererDidNavigate`: `frame` of `tree` committed navigation
     /// `navigation_id` at `url`. The renderer drops commits older than the
     /// document a frame shows, so every navigation of the frame started
@@ -491,11 +502,30 @@ impl NavigationController {
                     return;
                 }
                 let entry = Entry {
+                    id: self.entry_ids.get_next(),
                     title: base.title.clone(),
                     initial: false,
                     root,
                 };
                 self.push(entry);
+            }
+            // Back or forward to its item in the entry at `index`: the
+            // current entry now (Chromium's `RendererDidNavigateAutoSubframe`
+            // of a history navigation); its frames' places stay, what its
+            // new document's frames are restored from.
+            Some(NavigationType::HistoryIndex(index))
+                if self
+                    .entries
+                    .get(index)
+                    .is_some_and(|entry| entry.root.find(&path).is_some()) =>
+            {
+                let item = self.entries[index]
+                    .root
+                    .find(&path)
+                    .expect("found above")
+                    .item;
+                self.loaded_again(item, url, navigation_id);
+                self.current = Some(index);
             }
             // Its document loaded again: its item has it.
             Some(NavigationType::Reload)
@@ -585,7 +615,9 @@ impl NavigationController {
         if !root.place_keeping(&path, item, true) {
             return self.sweep();
         }
+        let id = self.entry_ids.get_next();
         self.push(Entry {
+            id,
             title,
             initial: false,
             root,
@@ -593,14 +625,24 @@ impl NavigationController {
         self.sweep();
     }
 
-    /// The traversal `navigation_id` within the main frame's document
-    /// committed at `url` (`DidCommitSameDocumentNavigation` of a history
-    /// navigation): its entry is the current one.
-    pub(crate) fn did_commit_history_same_document(&mut self, navigation_id: u64, url: String) {
+    /// The traversal `navigation_id` within `frame`'s document committed
+    /// at `url` (`DidCommitSameDocumentNavigation` of a history
+    /// navigation): its entry is the current one, the frame's item there
+    /// at `url`.
+    pub(crate) fn did_commit_history_same_document(
+        &mut self,
+        tree: &FrameTree,
+        frame: FrameToken,
+        navigation_id: u64,
+        url: String,
+    ) {
         match self.pending.remove(&navigation_id).map(|pending| pending.kind) {
             Some(NavigationType::HistoryIndex(index)) if index < self.entries.len() => {
-                let item = self.entries[index].root.item;
-                self.items.get_mut(&item).expect("an entry's").url = url;
+                let node = path(tree, frame)
+                    .and_then(|path| self.entries[index].root.find(&path).map(|node| node.item));
+                if let Some(item) = node {
+                    self.items.get_mut(&item).expect("an entry's").url = url;
+                }
                 self.current = Some(index);
             }
             other => {
@@ -614,13 +656,102 @@ impl NavigationController {
     }
 
     /// The renderer showed another document than the traversal
-    /// `navigation_id` was for: the entry to load instead, if it is still
-    /// there.
-    pub(crate) fn did_fail_same_document(&mut self, navigation_id: u64) -> Option<usize> {
-        match self.pending.remove(&navigation_id).map(|pending| pending.kind) {
-            Some(NavigationType::HistoryIndex(index)) if index < self.entries.len() => Some(index),
+    /// `navigation_id` was for: the frame, and the entry whose item it
+    /// loads instead, if it is still there.
+    pub(crate) fn did_fail_same_document(&mut self, navigation_id: u64) -> Option<(FrameToken, usize)> {
+        match self.pending.remove(&navigation_id) {
+            Some(Pending {
+                frame,
+                kind: NavigationType::HistoryIndex(index),
+            }) if index < self.entries.len() => Some((frame, index)),
             _ => None,
         }
+    }
+
+    /// `frame`'s item in the entry at `index`, if it has a place there.
+    pub(crate) fn item_at(
+        &self,
+        tree: &FrameTree,
+        frame: FrameToken,
+        index: usize,
+    ) -> Option<&FrameNavigationEntry> {
+        let path = path(tree, frame)?;
+        let node = self.entries.get(index)?.root.find(&path)?;
+        Some(self.item(node.item))
+    }
+
+    /// Where `frame`'s document is in the current entry, for its node to
+    /// keep as what it committed: none for a frame with no place there.
+    pub(crate) fn current_place(&self, tree: &FrameTree, frame: FrameToken) -> Option<HistoryPlace> {
+        let entry = &self.entries[self.current?];
+        let path = path(tree, frame)?;
+        let item = self.item(entry.root.find(&path)?.item);
+        Some(HistoryPlace {
+            entry: entry.id,
+            item: item.item,
+            document: item.document,
+        })
+    }
+
+    /// A new child frame `frame`'s document as the session history has it
+    /// (Chromium's `StartHistoryNavigationInNewSubframe`): its item in the
+    /// entry `entry` its parent's document committed in, and that entry's
+    /// index, if that is still there and has a place for it.
+    pub(crate) fn item_for_new_child_frame(
+        &self,
+        tree: &FrameTree,
+        frame: FrameToken,
+        entry: u64,
+    ) -> Option<(usize, &FrameNavigationEntry)> {
+        let index = self.entries.iter().position(|it| it.id == entry)?;
+        Some((index, self.item_at(tree, frame, index)?))
+    }
+
+    /// Back or forward to the entry at `index`: the frames of `tree` it
+    /// moves and how (Chromium's `FindFramesToNavigate` and
+    /// `DetermineActionForHistoryNavigation`), each frame's own item as
+    /// `committed` has it (else the current entry's). From the main frame
+    /// down: a frame the entry has no place for stays as it is, and the
+    /// frames in it; one at the same item, its frames looked at; one at an
+    /// item of the same document traverses within it, its frames looked at
+    /// too; one at another document loads it again, the frames in it going
+    /// with the one it shows. An item of no document the browser committed (an initial
+    /// `about:blank`'s, a `javascript:` URL's: 0) is loaded again. None at
+    /// all (the main frame's own item, a frame of the same name nowhere)
+    /// is the main frame's load, as Chromium's.
+    pub(crate) fn frames_to_navigate(
+        &self,
+        tree: &FrameTree,
+        index: usize,
+        committed: impl Fn(FrameToken) -> Option<HistoryPlace>,
+    ) -> Vec<(FrameToken, HistoryLoad)> {
+        let mut loads = Vec::new();
+        let mut frames = vec![tree.root()];
+        while let Some(frame) = frames.pop() {
+            let Some(new) = self.item_at(tree, frame, index) else {
+                continue;
+            };
+            let old = committed(frame)
+                .map(|place| (place.item, place.document))
+                .or_else(|| {
+                    let item = self.item_at(tree, frame, self.current?)?;
+                    Some((item.item, item.document))
+                });
+            match old {
+                Some((item, _)) if item == new.item => {
+                    frames.extend(tree.children(frame).iter().rev());
+                }
+                Some((_, document)) if document == new.document && document != 0 => {
+                    loads.push((frame, HistoryLoad::SameDocument));
+                    frames.extend(tree.children(frame).iter().rev());
+                }
+                _ => loads.push((frame, HistoryLoad::DifferentDocument)),
+            }
+        }
+        if loads.is_empty() {
+            loads.push((tree.root(), HistoryLoad::DifferentDocument));
+        }
+        loads
     }
 
     /// `frame`'s scroll restoration mode in the current entry
@@ -670,6 +801,7 @@ impl NavigationController {
     fn new_entry(&mut self, url: String, document: u64, initial: bool) -> Entry {
         let item = self.new_item(url, document);
         Entry {
+            id: self.entry_ids.get_next(),
             title: String::new(),
             initial,
             root: TreeNode::new(String::new(), item),
@@ -740,6 +872,11 @@ mod tests {
 
     fn token(n: u8) -> FrameToken {
         FrameToken([n; 16])
+    }
+
+    /// The main frame's document in the entry at `index`.
+    fn document(controller: &NavigationController, index: usize) -> u64 {
+        controller.entry(index).expect("an entry").root().document
     }
 
     fn urls(controller: &NavigationController) -> Vec<&str> {
@@ -889,15 +1026,15 @@ mod tests {
         );
         assert_eq!(root(&controller, 1).state, Some(vec![1]));
         assert!(root(&controller, 1).manual_scroll_restoration);
-        assert!(controller.is_same_document(0));
+        assert_eq!(document(&controller, 0), document(&controller, 1));
         controller.did_commit_same_document(&tree, MAIN, "a#y".into(), true, Some(vec![2]));
         assert_eq!(urls(&controller), ["a", "a#y"]);
         assert_eq!(root(&controller, 1).state, Some(vec![2]));
         commit(&mut controller, &tree, 2, NavigationType::Reload, "a#y");
         assert_eq!(root(&controller, 1).document, 2);
         assert_eq!(root(&controller, 1).state, Some(vec![2]));
-        assert!(!controller.is_same_document(0));
-        assert_eq!(controller.current_document(), Some(2));
+        assert_ne!(document(&controller, 0), document(&controller, 1));
+        assert_eq!(document(&controller, 1), 2);
         assert_eq!(controller.offset_and_length(), (1, 2));
         let params = |kind| {
             let p = controller.entry_params(&tree, MAIN, kind);
@@ -927,16 +1064,16 @@ mod tests {
         controller.did_commit_same_document(&tree, MAIN, "a#x".into(), false, None);
         controller.did_start(2, MAIN, NavigationType::HistoryIndex(0));
         assert_eq!(controller.index_for_offset(1), Some(1));
-        controller.did_commit_history_same_document(2, "a".into());
+        controller.did_commit_history_same_document(&tree, MAIN, 2, "a".into());
         assert_eq!(controller.current_index(), Some(0));
         controller.did_start(3, MAIN, NavigationType::HistoryIndex(1));
-        assert_eq!(controller.did_fail_same_document(3), Some(1));
+        assert_eq!(controller.did_fail_same_document(3), Some((MAIN, 1)));
         assert_eq!(controller.current_index(), Some(0));
         assert_eq!(controller.did_fail_same_document(3), None);
         // Loaded instead: a new document, of that entry only.
         commit(&mut controller, &tree, 4, NavigationType::HistoryIndex(1), "a#x");
-        assert_eq!(controller.current_document(), Some(4));
-        assert!(!controller.is_same_document(0));
+        assert_eq!(document(&controller, 1), 4);
+        assert_ne!(document(&controller, 0), document(&controller, 1));
     }
 
     #[test]
@@ -1109,6 +1246,118 @@ mod tests {
         assert_eq!(controller.entry_count(), 2);
         assert_eq!(child_url(&controller, 1, "one"), Some("one"));
         assert_eq!(controller.items.len(), 5);
+    }
+
+    /// Back or forward: the frames at another item than the entry's, from
+    /// the main frame down, each by the item it committed last; a frame's
+    /// commit of its item there makes that entry the current one. A new
+    /// child frame's item is its parent's entry's.
+    #[test]
+    fn back_and_forward_move_the_frames_at_another_item() {
+        let tree = frames();
+        let mut controller = NavigationController::default();
+        commit(&mut controller, &tree, 1, NavigationType::NewEntry, "a");
+        for (id, frame, url) in [(2, 1, "one"), (3, 2, "two"), (4, 3, "three")] {
+            commit_child(&mut controller, &tree, token(frame), id, NavigationType::Replace, url);
+        }
+        commit_child(&mut controller, &tree, token(1), 5, NavigationType::NewEntry, "one2");
+        controller.did_commit_same_document(&tree, token(2), "two#x".into(), false, None);
+        let current = |controller: &NavigationController, frame| controller.current_place(&tree, frame);
+        let none = |_| None;
+        // Entry 1 from 2: frame 2 within its document.
+        assert_eq!(
+            controller.frames_to_navigate(&tree, 1, none),
+            [(token(2), HistoryLoad::SameDocument)]
+        );
+        // Entry 0 from 2: frame 1 loads again (frame 3 with it), frame 2
+        // within its document.
+        assert_eq!(
+            controller.frames_to_navigate(&tree, 0, none),
+            [
+                (token(1), HistoryLoad::DifferentDocument),
+                (token(2), HistoryLoad::SameDocument)
+            ]
+        );
+        // Frame 2 at entry 0's item already (a traversal half done): frame
+        // 1 alone.
+        let entry_0 = controller.entry(0).map(|e| e.entry.id).expect("there");
+        let two = controller.item_at(&tree, token(2), 0).expect("there").clone();
+        let committed = |frame| {
+            (frame == token(2)).then_some(HistoryPlace {
+                entry: entry_0,
+                item: two.item,
+                document: two.document,
+            })
+        };
+        assert_eq!(
+            controller.frames_to_navigate(&tree, 0, committed),
+            [(token(1), HistoryLoad::DifferentDocument)]
+        );
+        // Frame 1's load of its item there: entry 0 the current one, its
+        // item kept, the place of frame 3 under it too.
+        controller.did_start(6, token(1), NavigationType::HistoryIndex(0));
+        controller.did_commit(&tree, token(1), 6, "one".into());
+        assert_eq!(controller.current_index(), Some(0));
+        assert_eq!(controller.entry_count(), 3);
+        assert_eq!(child_url(&controller, 0, "three"), Some("three"));
+        assert_eq!(current(&controller, token(1)).map(|p| p.document), Some(6));
+        // The main frame at another item: it alone.
+        commit(&mut controller, &tree, 7, NavigationType::NewEntry, "b");
+        assert_eq!(
+            controller.frames_to_navigate(&tree, 0, none),
+            [(MAIN, HistoryLoad::DifferentDocument)]
+        );
+        // The same entry: nothing moves, so the main frame loads it.
+        assert_eq!(
+            controller.frames_to_navigate(&tree, 1, none),
+            [(MAIN, HistoryLoad::DifferentDocument)]
+        );
+        // A new child frame's item: in its parent's entry, if that is
+        // there and has one.
+        let entry_0_place = controller.item_for_new_child_frame(&tree, token(3), entry_0);
+        assert_eq!(entry_0_place.map(|(index, item)| (index, item.url.as_str())), Some((0, "three")));
+        let entry_1 = controller.entry(1).map(|e| e.entry.id).expect("there");
+        assert_eq!(
+            controller.item_for_new_child_frame(&tree, token(3), entry_1),
+            None
+        );
+        assert_eq!(controller.item_for_new_child_frame(&tree, token(3), 999), None);
+    }
+
+    /// A frame traversing within its document has its frames looked at
+    /// too: the main frame and a child frame both within theirs.
+    #[test]
+    fn back_and_forward_move_the_frames_in_one_traversing() {
+        let tree = frames();
+        let mut controller = NavigationController::default();
+        commit(&mut controller, &tree, 1, NavigationType::NewEntry, "a");
+        commit_child(&mut controller, &tree, token(1), 2, NavigationType::Replace, "one");
+        controller.did_commit_same_document(&tree, MAIN, "a#x".into(), false, None);
+        controller.did_commit_same_document(&tree, token(1), "one#y".into(), false, None);
+        assert_eq!(
+            controller.frames_to_navigate(&tree, 0, |_| None),
+            [
+                (MAIN, HistoryLoad::SameDocument),
+                (token(1), HistoryLoad::SameDocument)
+            ]
+        );
+    }
+
+    /// An item of no document the browser committed (an initial
+    /// `about:blank`'s) is loaded again; a frame the entry has no place
+    /// for stays.
+    #[test]
+    fn back_and_forward_load_a_document_of_no_number_again() {
+        let tree = frames();
+        let mut controller = NavigationController::default();
+        commit(&mut controller, &tree, 1, NavigationType::NewEntry, "a");
+        controller.did_commit_same_document(&tree, token(2), "about:blank#x".into(), true, None);
+        controller.did_commit_same_document(&tree, token(2), "about:blank#y".into(), false, None);
+        controller.did_commit_same_document(&tree, token(1), "about:blank#z".into(), true, None);
+        assert_eq!(
+            controller.frames_to_navigate(&tree, 0, |_| None),
+            [(token(2), HistoryLoad::DifferentDocument)]
+        );
     }
 
     /// What no entry has a place for goes: an entry gone, a place another

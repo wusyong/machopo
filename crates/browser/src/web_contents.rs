@@ -22,7 +22,7 @@ use crate::bad_message::BadMessageReason;
 use crate::frame_tree::{CommittedOrigin, FrameTree};
 
 use crate::debug_urls::{DebugUrl, debug_url};
-use crate::navigation_controller::{NavigationController, NavigationType};
+use crate::navigation_controller::{HistoryLoad, NavigationController, NavigationType};
 use crate::navigation_request::{Loading, NavigationRequest};
 use crate::render_process_host::{CommittedDocument, Committer, is_file_url};
 use crate::{RenderProcessHost, RendererFlags, RendererId, ScriptEngineFactory};
@@ -417,37 +417,75 @@ impl WebContents {
         }
     }
 
-    /// Goes to the entry `offset` steps away (`GoToOffset`): within the
-    /// document shown if it is one of its entries (the renderer fires
-    /// `popstate`), else loading it again, its state with it; there is no
-    /// back-forward cache, and the scroll position isn't restored. False
-    /// if there is no such entry.
+    /// Goes to the entry `offset` steps away (`GoToOffset`): each frame
+    /// the entry has at another item than the one it shows
+    /// (`frames_to_navigate`) traverses within its document if the item is
+    /// of it (the renderer fires `popstate`), else loads the item again,
+    /// its state with it; those within their documents first, as Chromium
+    /// sends them. There is no back-forward cache, and the scroll position
+    /// isn't restored. After a crash, the main frame loads it. False if
+    /// there is no such entry.
     pub fn go_to_offset(&mut self, offset: isize) -> bool {
         let Some(index) = self.controller.index_for_offset(offset) else {
             return false;
         };
-        let kind = NavigationType::HistoryIndex(index);
-        let Some(url) = self.controller.entry(index).map(|entry| entry.url().to_owned()) else {
-            return false;
-        };
         let root = self.frame_tree.root();
-        match self.controller.current_document() {
-            Some(document) if !self.crashed && self.controller.is_same_document(index) => {
-                let navigation_id = self.navigation_ids.get_next();
-                let history = self.controller.entry_params(&self.frame_tree, root, kind);
-                self.controller.did_start(navigation_id, root, kind);
-                tracing::info!(%url, navigation_id, "navigate within the document");
-                self.process
-                    .send(RendererMsg::CommitSameDocumentNavigation {
-                        navigation_id,
-                        document,
-                        url,
-                        history,
-                    });
+        let loads = if self.crashed {
+            vec![(root, HistoryLoad::DifferentDocument)]
+        } else {
+            let tree = &self.frame_tree;
+            self.controller
+                .frames_to_navigate(tree, index, |frame| tree.history_place(frame))
+        };
+        let (within, loading): (Vec<_>, Vec<_>) = loads
+            .into_iter()
+            .partition(|(_, load)| *load == HistoryLoad::SameDocument);
+        for (frame, load) in within.into_iter().chain(loading) {
+            let Some(item) = self.controller.item_at(&self.frame_tree, frame, index) else {
+                continue;
+            };
+            let (url, document) = (item.url.clone(), item.document);
+            if load == HistoryLoad::DifferentDocument {
+                self.history_load(frame, index, url, Asked::default());
+                continue;
             }
-            _ => self.begin_navigation(url, kind, Asked::default()),
+            let kind = NavigationType::HistoryIndex(index);
+            let navigation_id = self.navigation_ids.get_next();
+            let history = self.controller.entry_params(&self.frame_tree, frame, kind);
+            self.controller.did_start(navigation_id, frame, kind);
+            tracing::info!(%url, navigation_id, "navigate within the document");
+            self.process
+                .send(RendererMsg::CommitSameDocumentNavigation {
+                    frame,
+                    navigation_id,
+                    document,
+                    url,
+                    history,
+                });
         }
         true
+    }
+
+    /// `frame`'s navigation to its item in the entry at `index`, at `url`,
+    /// loading its document again (a history navigation): the main frame's
+    /// as `begin_navigation`'s.
+    fn history_load(&mut self, frame: FrameToken, index: usize, url: String, asked: Asked) {
+        let kind = NavigationType::HistoryIndex(index);
+        if frame == self.frame_tree.root() {
+            return self.begin_navigation(url, kind, asked);
+        }
+        let navigation_id = self.navigation_ids.get_next();
+        let history = self.controller.entry_params(&self.frame_tree, frame, kind);
+        self.controller.did_start(navigation_id, frame, kind);
+        self.start_navigation(
+            frame,
+            navigation_id,
+            url,
+            asked,
+            history,
+            NavigationTimingType::BackForward,
+            TimeTicks::now(),
+        );
     }
 
     /// `RenderFrameHostImpl::BeginNavigation`: frame `frame` of the page is
@@ -464,6 +502,7 @@ impl WebContents {
         id: u64,
         kind: &BeginNavigationKind,
         devtools_initiator: Option<&str>,
+        history_in_new_child_frame: bool,
     ) {
         if !self.frame_tree.contains(frame) {
             return self.received_bad_message(BadMessageReason::NavigationOfUnknownFrame);
@@ -477,6 +516,24 @@ impl WebContents {
             initiator: Some(initiator),
             devtools_initiator: devtools_initiator.map(String::from),
         };
+        // A new child frame of a document back or forward loaded: what the
+        // session history has for it in the entry its parent's document is
+        // of, if any (Chromium's `StartHistoryNavigationInNewSubframe`),
+        // the history's own, not checked as what a page asks is.
+        if history_in_new_child_frame && !self.frame_tree.has_committed_real_load(frame) {
+            let restored = self
+                .frame_tree
+                .parent(frame)
+                .and_then(|parent| self.frame_tree.history_place(parent))
+                .and_then(|place| {
+                    self.controller
+                        .item_for_new_child_frame(&self.frame_tree, frame, place.entry)
+                })
+                .map(|(index, item)| (index, item.url.clone()));
+            if let Some((index, url)) = restored {
+                return self.history_load(frame, index, url, asked);
+            }
+        }
         let (url, navigation_type) = match kind {
             BeginNavigationKind::To { url, .. } => {
                 let local = self.frame_tree.may_open_local_files(initiator);
@@ -1179,6 +1236,8 @@ impl WebContents {
                 }
                 self.controller
                     .did_commit(&self.frame_tree, *frame, *navigation_id, url.clone());
+                let place = self.controller.current_place(&self.frame_tree, *frame);
+                self.frame_tree.set_history_place(*frame, place);
                 // The entries may have changed since the navigation
                 // started (the old document's `pushState`), and a child
                 // frame's new entry is every frame's.
@@ -1200,9 +1259,12 @@ impl WebContents {
                     self.url = Some(url.clone());
                 }
                 match navigation_id {
-                    Some(id) => self
-                        .controller
-                        .did_commit_history_same_document(*id, url.clone()),
+                    Some(id) => self.controller.did_commit_history_same_document(
+                        &self.frame_tree,
+                        *frame,
+                        *id,
+                        url.clone(),
+                    ),
                     None => self.controller.did_commit_same_document(
                         &self.frame_tree,
                         *frame,
@@ -1211,15 +1273,17 @@ impl WebContents {
                         state.clone(),
                     ),
                 }
+                let place = self.controller.current_place(&self.frame_tree, *frame);
+                self.frame_tree.set_history_place(*frame, place);
             }
             RendererHostMsg::SameDocumentNavigationFailed { navigation_id } => {
-                let index = self.controller.did_fail_same_document(*navigation_id);
-                if let Some((index, entry)) =
-                    index.and_then(|index| Some((index, self.controller.entry(index)?)))
-                {
-                    let url = entry.url().to_owned();
-                    let kind = NavigationType::HistoryIndex(index);
-                    self.begin_navigation(url, kind, Asked::default());
+                let failed = self.controller.did_fail_same_document(*navigation_id);
+                let load = failed.and_then(|(frame, index)| {
+                    let item = self.controller.item_at(&self.frame_tree, frame, index)?;
+                    Some((frame, index, item.url.clone()))
+                });
+                if let Some((frame, index, url)) = load {
+                    self.history_load(frame, index, url, Asked::default());
                 }
             }
             RendererHostMsg::GoToEntryAtOffset(offset) => {
@@ -1244,12 +1308,14 @@ impl WebContents {
                 id,
                 kind,
                 devtools_initiator,
+                history_in_new_child_frame,
             } => self.begin_renderer_navigation(
                 *frame,
                 *initiator,
                 *id,
                 kind,
                 devtools_initiator.as_deref(),
+                *history_in_new_child_frame,
             ),
             RendererHostMsg::OpenUrl { url, disposition } => self.open_url(url, *disposition),
             // The embedder shows it.
