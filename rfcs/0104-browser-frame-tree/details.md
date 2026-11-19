@@ -125,8 +125,8 @@
 
 這份接著或取代的：
 
-- **RFC 0009** 的第 22 條（iframe 的 `src` 由 renderer 載入、Browser 不知道子 frame）：第 2 階段取代。它的「和 Chromium 不同的地方」的「iframe 的導覽由誰負責」「子 frame 的錯誤頁」兩列，和「之後的可能」的 3a，就是這份。`details.md` 的第 7 節（協定帶 frame 的 id、不假設 frame 都在同一個 renderer）照舊是前提。
-- **RFC 0019** 的第 6 條（session history 由 Browser 擁有，entry 記 document 的序號）：照舊，擴到每個 frame。第 38 條（子 frame 的 `pushState` 留在 renderer、`length` 和 `back()` 是主 frame 的）：第 3 階段取代。
+- **RFC 0009** 的第 22 條（iframe 的 `src` 由 renderer 載入、Browser 不知道子 frame）：第 2 階段取代了。它的「和 Chromium 不同的地方」的「iframe 的導覽由誰負責」「子 frame 的錯誤頁」兩列，和「之後的可能」的 3a，就是這份。`details.md` 的第 7 節（協定帶 frame 的 id、不假設 frame 都在同一個 renderer）照舊是前提。
+- **RFC 0019** 的第 6 條（session history 由 Browser 擁有，entry 記 document 的序號）：照舊，擴到每個 frame。第 38 條（子 frame 的 `pushState` 留在 renderer、`length` 和 `back()` 是主 frame 的）：第 3 階段取代了。
 - **RFC 0021** 的第 24 條（frame 的 id 是 renderer 的前綴加號碼，跨過 frame 自己的導覽）：「跨過 frame 自己的導覽」照舊；id 的寫法由這份的第 2 條取代。
 - **RFC 0004**：訊息照舊是 `protocol` 的 serde enum、一個 renderer 一條控制通道、收的一方檢查每個欄位。site isolation 在它的「之後的可能」，這份不做。
 - **RFC 0103** 的「架構上可能要先做的事」第 2 項。

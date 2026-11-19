@@ -347,7 +347,7 @@ impl FrameTree {
             }
             node.committing
                 .drain(..=at)
-                .last()
+                .next_back()
                 .expect("one at `at`")
                 .origin
         };
