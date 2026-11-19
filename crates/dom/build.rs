@@ -396,7 +396,7 @@ fn main() {
     // labelable alone, which is only asked of later), the counts of
     // iframes and bases.
     let mut made_with_more: Vec<bool> = form_kinds.iter().map(|kind| kind & !2 != 0).collect();
-    for name in ["template", "iframe", "base"] {
+    for name in ["template", "iframe", "base", "bdi"] {
         made_with_more[numbers_of(&names, name)] = true;
     }
     writeln!(

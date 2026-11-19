@@ -23,6 +23,7 @@ use selectors::parser::{Combinator, Component, Selector};
 pub(crate) fn pseudo_class_state(class: &PseudoClass) -> u16 {
     match class {
         PseudoClass::Hover => AttributeChanges::HOVER,
+        PseudoClass::Dir(_) => AttributeChanges::DIRECTIONALITY,
         PseudoClass::Active => AttributeChanges::ACTIVE,
         PseudoClass::Focus => AttributeChanges::FOCUS,
         PseudoClass::FocusWithin => AttributeChanges::FOCUS_WITHIN,
@@ -52,7 +53,7 @@ pub(crate) fn pseudo_class_state(class: &PseudoClass) -> u16 {
 /// input's `type` decides which apply).
 pub(crate) fn pseudo_class_attributes(class: &PseudoClass) -> &'static [NameId] {
     use names::local::{
-        CHECKED, DISABLED, HREF, LANG, MULTIPLE, NAME, OPEN, PLACEHOLDER, READONLY, REQUIRED,
+        CHECKED, DIR, DISABLED, HREF, LANG, MULTIPLE, NAME, OPEN, PLACEHOLDER, READONLY, REQUIRED,
         SELECTED, SIZE, TYPE, VALUE,
     };
     match class {
@@ -60,6 +61,9 @@ pub(crate) fn pseudo_class_attributes(class: &PseudoClass) -> &'static [NameId] 
         PseudoClass::Open => &[OPEN],
         PseudoClass::InternalListBox => &[MULTIPLE, SIZE],
         PseudoClass::Lang(_) => &[LANG],
+        // An ancestor's too (`for_descendants`); text below an `auto` one
+        // restyles the elements whose directionality it changes (`dom`).
+        PseudoClass::Dir(_) => &[DIR],
         PseudoClass::Checked => &[TYPE],
         // A progress's `value`; a radio button's group by its name.
         PseudoClass::Indeterminate => &[TYPE, VALUE, NAME],

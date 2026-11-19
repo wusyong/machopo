@@ -262,10 +262,11 @@ pub struct Node {
     /// (`text_control::TEXTAREA_CHILDREN`): the byte is full. In the
     /// padding after `name`: the flag word is full.
     scope: Cell<u8>,
-    /// The layout tree's flags past the flag word's
-    /// (`LayoutTreeFlags::CONTROL_STATE_CHANGED`), in the padding too: a
-    /// node is 54 bytes of fields in its 56.
-    layout_more: Cell<u8>,
+    /// The bits past the flag word, in the padding too (a node is 54 bytes
+    /// of fields in its 56): the layout tree's flag
+    /// `LayoutTreeFlags::CONTROL_STATE_CHANGED` (`style::CONTROL_STATE`),
+    /// and an element's directionality (`directionality`'s two).
+    more: Cell<u8>,
     /// The bits of its subtree's attribute names and classes (`bloom`,
     /// Blink's `attribute_or_class_bloom_`): room the ring of previous
     /// siblings left.
@@ -1197,7 +1198,7 @@ impl<'gc> Cx<'_, 'gc> {
                 flags: Cell::new(kind.raw() | style::NEW),
                 scope: Cell::new(0),
                 bloom: Cell::new(0),
-                layout_more: Cell::new(0),
+                more: Cell::new(0),
                 name: Cell::new(QualifiedName::NONE.raw()),
                 attributes: None,
                 data: None,
@@ -1477,6 +1478,9 @@ impl<'gc> Cx<'_, 'gc> {
         }
         if local == names::local::IFRAME {
             self.iframe_made();
+        }
+        if local == names::local::BDI {
+            self.bdi_made(element);
         }
         if local == names::local::BASE {
             self.base_made();

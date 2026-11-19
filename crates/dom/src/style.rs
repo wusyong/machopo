@@ -70,6 +70,9 @@ pub(crate) const FOCUS_WITHIN: u32 = 1 << 5;
 pub(crate) const FOCUS_VISIBLE: u32 = 1 << 6;
 pub(crate) const FOCUS_BITS: u32 = FOCUS_CHAIN | FOCUSED | FOCUS_WITHIN | FOCUS_VISIBLE;
 /// Where a node's `StyleFlags` and `LayoutTreeFlags` are in its flags.
+/// `LayoutTreeFlags::CONTROL_STATE_CHANGED`, in `Node::more`.
+const CONTROL_STATE: u8 = 1;
+
 const STYLE_SHIFT: u32 = 12;
 const LAYOUT_SHIFT: u32 = 20;
 /// A new node's: it was never styled.
@@ -79,6 +82,9 @@ pub(crate) const NEW: u32 = StyleFlags::NEEDS_STYLE_RECALC.0 << STYLE_SHIFT;
 const CLASS_ATTRIBUTE: QualifiedName = QualifiedName::plain(names::CLASS);
 const ID_ATTRIBUTE: QualifiedName = QualifiedName::plain(names::ID);
 pub(crate) const STYLE_ATTRIBUTE: QualifiedName = QualifiedName::plain(names::local::STYLE);
+const DIR_ATTRIBUTE: QualifiedName = QualifiedName::plain(names::local::DIR);
+const VALUE_ATTRIBUTE: QualifiedName = QualifiedName::plain(names::local::VALUE);
+const TYPE_ATTRIBUTE: QualifiedName = QualifiedName::plain(names::local::TYPE);
 
 /// The elements whose sheets are their document's: HTML's and SVG's
 /// `<style>`, and `<link>`.
@@ -165,8 +171,8 @@ impl LayoutTreeFlags {
     pub const CHILD_NEEDS_UPDATE: Self = Self(1 << 4);
     /// A state its native look shows changed (checked, disabled,
     /// hovered...: `AttributeChanges::LOOK`): painted again (Blink's
-    /// `LayoutTheme::ControlStateChanged`). In `Node::layout_more`, not
-    /// the flag word.
+    /// `LayoutTheme::ControlStateChanged`). In `Node::more`
+    /// (`CONTROL_STATE`), not the flag word.
     pub const CONTROL_STATE_CHANGED: Self = Self(1 << 5);
     /// Those in the flag word.
     const ALL: u32 = (1 << 5) - 1;
@@ -236,6 +242,9 @@ impl AttributeChanges {
     /// `:required`, `:optional`: DevTools forced one or stopped (the DOM's
     /// changes of them are of attributes).
     pub const REQUIRED: u16 = 1 << 14;
+    /// `:dir()`: its directionality changed other than by its own `dir`
+    /// (an `auto` element's text, a parent's, its value).
+    pub const DIRECTIONALITY: u16 = 1 << 15;
     /// The states a form control's native look shows (`ControlState`'s:
     /// hovered, pressed and focused as itself, checked, indeterminate,
     /// disabled as its control).
@@ -655,14 +664,14 @@ impl<'gc> Cx<'_, 'gc> {
     pub fn layout_tree_flags(&self, node: NodeRef<'gc>) -> LayoutTreeFlags {
         LayoutTreeFlags(
             ((node.flags.get() >> LAYOUT_SHIFT) & LayoutTreeFlags::ALL)
-                | (u32::from(node.layout_more.get()) << 5),
+                | (u32::from(node.more.get() & CONTROL_STATE) << 5),
         )
     }
 
     pub fn clear_layout_tree_flags(&self, node: NodeRef<'gc>) {
         node.flags
             .set(node.flags.get() & !(LayoutTreeFlags::ALL << LAYOUT_SHIFT));
-        node.layout_more.set(0);
+        node.more.set(node.more.get() & !CONTROL_STATE);
     }
 
     /// The style phase's: `node`'s computed style changed, for layout.
@@ -844,7 +853,7 @@ impl<'gc> Cx<'_, 'gc> {
     pub(crate) fn mark_layout(&self, node: NodeRef<'gc>, flags: LayoutTreeFlags) {
         let node = self.flagged_for(node);
         if flags.0 & LayoutTreeFlags::CONTROL_STATE_CHANGED.0 != 0 {
-            node.layout_more.set(1);
+            node.more.set(node.more.get() | CONTROL_STATE);
         }
         self.set_flags(node, (flags.0 & LayoutTreeFlags::ALL) << LAYOUT_SHIFT);
         let child_needs = LayoutTreeFlags::CHILD_NEEDS_UPDATE.0 << LAYOUT_SHIFT;
@@ -1061,6 +1070,7 @@ impl<'gc> Cx<'_, 'gc> {
             self.inserted_connected(parent, node, previous, next);
         }
         self.form_inserted(parent, node, next);
+        self.directionality_inserted(parent, node);
     }
 
     fn inserted_connected(
@@ -1171,6 +1181,7 @@ impl<'gc> Cx<'_, 'gc> {
             self.removed_connected(parent, node, previous, next);
         }
         self.form_removed(parent, node, next, connected);
+        self.directionality_removed(parent, node);
     }
 
     fn removed_connected(
@@ -1297,9 +1308,20 @@ impl<'gc> Cx<'_, 'gc> {
         if name == AUTOFOCUS_ATTRIBUTE && new.is_some() {
             self.see(crate::form::AUTOFOCUS_SEEN);
         }
+        if name == DIR_ATTRIBUTE {
+            self.dir_changed(element, new);
+        }
         // A plain name's number is its local name's: one read of a table.
         if names::form_kind(name.raw()) & crate::form::CONTROL_ATTRIBUTE != 0 {
             self.control_attribute_changed(element, name.raw(), new.is_some());
+        }
+        // After the input's type above: an input's value and type decide
+        // its directionality if `auto`.
+        if name == VALUE_ATTRIBUTE {
+            self.directionality_value_changed(element);
+        }
+        if name == TYPE_ATTRIBUTE {
+            self.directionality_type_changed(element);
         }
         if self.is_connected(element) {
             // The same id set again leaves the tables as they are (Blink's
@@ -1687,6 +1709,9 @@ impl<'gc> Cx<'_, 'gc> {
     /// styled whole anyway.
     pub(crate) fn state_changed(&self, element: NodeRef<'gc>, state: u16) {
         self.tree_changed();
+        if state & AttributeChanges::VALUE != 0 {
+            self.directionality_value_changed(element);
+        }
         if !self.is_connected(element) {
             return;
         }
@@ -1748,6 +1773,9 @@ impl<'gc> Cx<'_, 'gc> {
         self.tree_changed();
         if self.dom_changes_wanted() {
             self.note_character_data(node);
+        }
+        if self.kind(node) == NodeKind::Text {
+            self.directionality_data_changed(node);
         }
         if !self.is_connected(node) {
             return;

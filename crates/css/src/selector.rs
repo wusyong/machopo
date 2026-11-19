@@ -180,6 +180,10 @@ pub enum PseudoClass {
     WindowInactive,
     /// `:lang()`'s language ranges, as written.
     Lang(Box<[LangRange]>),
+    /// `:dir()`'s identifier, as written: `ltr` or `rtl` (ASCII
+    /// case-insensitively) matches an element of that directionality, any
+    /// other nothing (selectors-4; Blink's `kPseudoDir`).
+    Dir(Box<str>),
     /// `:-internal-list-box`: a `<select>` shown as a list box, not a menu
     /// list. The UA stylesheet's only (Blink's `kPseudoListBox`).
     InternalListBox,
@@ -224,6 +228,11 @@ impl ToCss for PseudoClass {
                 return dest.write_str(":-internal-multi-select-focus");
             }
             _ => {}
+        }
+        if let Self::Dir(direction) = self {
+            dest.write_str(":dir(")?;
+            cssparser::serialize_identifier(direction, dest)?;
+            return dest.write_str(")");
         }
         if let Self::Lang(ranges) = self {
             dest.write_str(":lang(")?;
@@ -587,7 +596,7 @@ impl<'i> selectors::parser::Parser<'i> for SelectorParser {
             })
     }
 
-    /// `:lang()`, with a comma-separated list of identifiers and strings
+    /// `:dir()`, with an identifier; `:lang()`, with a comma-separated list of identifiers and strings
     /// (selectors-4; Blink's `CSSSelectorParser::ConsumePseudo` takes the
     /// list too).
     fn parse_non_ts_functional_pseudo_class<'t>(
@@ -596,6 +605,10 @@ impl<'i> selectors::parser::Parser<'i> for SelectorParser {
         parser: &mut Parser<'i, 't>,
         _after_part: bool,
     ) -> Result<PseudoClass, cssparser::ParseError<'i, Self::Error>> {
+        if name.eq_ignore_ascii_case("dir") {
+            let direction = parser.expect_ident()?;
+            return Ok(PseudoClass::Dir(direction.as_ref().into()));
+        }
         if !name.eq_ignore_ascii_case("lang") {
             return Err(parser.new_custom_error(
                 SelectorParseErrorKind::UnsupportedPseudoClassOrElement(name),

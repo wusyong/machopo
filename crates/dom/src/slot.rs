@@ -99,7 +99,7 @@ impl<'gc> Cx<'_, 'gc> {
     }
 
     /// `root`'s slots in tree order, its list made again if stale.
-    fn slots_of(&self, root: NodeRef<'gc>) -> Vec<NodeRef<'gc>> {
+    pub(crate) fn slots_of(&self, root: NodeRef<'gc>) -> Vec<NodeRef<'gc>> {
         let data = self.shadow_data(root).expect("a shadow root's data");
         let data = data.into_ref();
         if data.slot_state.get() & SLOTS_STALE != 0 || data.slots.get(self.gc).is_none() {

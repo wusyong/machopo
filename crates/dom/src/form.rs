@@ -104,6 +104,10 @@ pub(crate) const AUTOFOCUS_SEEN: u16 = 1 << 12;
 /// `<meta http-equiv="content-language">` (`language`; few pages have one,
 /// most a `<meta>`).
 pub(crate) const PRAGMAS_SEEN: u16 = 1 << 13;
+/// An element was given a `dir` attribute, or a `<bdi>` was made: what is
+/// inserted, removed and changed is looked at for directionality
+/// (`directionality`); until then every element's is `ltr`.
+pub(crate) const DIRS_SEEN: u16 = 1 << 14;
 
 /// `FormAssociation::ancestor_disabled`'s.
 const UNKNOWN: u8 = 0;

@@ -273,6 +273,13 @@ impl Element for StyleElement<'_, '_> {
                 let language = self.language();
                 ranges.iter().any(|range| range.matches(&language))
             }
+            PseudoClass::Dir(direction) => {
+                let ours = match self.cx.directionality(self.node) {
+                    computed_style::Direction::Ltr => "ltr",
+                    computed_style::Direction::Rtl => "rtl",
+                };
+                direction.eq_ignore_ascii_case(ours)
+            }
             PseudoClass::Hover => self.cx.is_hovered(self.node),
             PseudoClass::Active => self.cx.is_active(self.node),
             PseudoClass::Focus => self.cx.is_focused(self.node),

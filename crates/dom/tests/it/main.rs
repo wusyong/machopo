@@ -12,6 +12,7 @@ mod attributes;
 mod bloom;
 mod collection;
 mod custom_elements;
+mod directionality;
 mod editing;
 mod events;
 mod frames;

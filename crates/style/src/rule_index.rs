@@ -150,8 +150,11 @@ impl Features {
                 Component::NonTSPseudoClass(css::selector::PseudoClass::WindowInactive) => {
                     self.window_inactive = true;
                 }
-                Component::NonTSPseudoClass(class @ css::selector::PseudoClass::Lang(_)) => {
-                    // An ancestor's `lang` decides it.
+                Component::NonTSPseudoClass(
+                    class @ (css::selector::PseudoClass::Lang(_)
+                    | css::selector::PseudoClass::Dir(_)),
+                ) => {
+                    // An ancestor's `lang` or `dir` decides it.
                     self.attributes
                         .extend(crate::invalidation::pseudo_class_attributes(class));
                 }

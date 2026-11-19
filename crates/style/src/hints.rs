@@ -213,7 +213,9 @@ pub(crate) fn declarations<'gc>(
 /// rules go with): `ltr` and `rtl` its `direction`, another value `ltr`
 /// on a `<body>`; `auto` its `unicode-bidi`, `isolate` (`plaintext` for a
 /// search, telephone, URL or email field), but a `<bdo>`'s, `<textarea>`'s
-/// and `<pre>`'s, which the UA stylesheet has.
+/// and `<pre>`'s, which the UA stylesheet has. An `auto` one (a `<bdi>`
+/// without a valid `dir` too) has the `direction` of its directionality,
+/// its text's (Blink's `StyleResolver::MatchPresentationalHints`).
 fn dir_declarations<'gc>(
     cx: &Cx<'_, 'gc>,
     element: NodeRef<'gc>,
@@ -228,14 +230,17 @@ fn dir_declarations<'gc>(
     if name.namespace() != names::HTML_NAMESPACE {
         return;
     }
-    let Some(dir) = cx.attribute_value_by_id(element, local::DIR) else {
-        return;
-    };
-    let dir = dir.borrow().to_str().into_owned();
     let direction = |direction| Declaration {
         id: LonghandId::Direction,
         value: Value::Direction(direction),
     };
+    if cx.is_dir_auto(element) {
+        out.push(direction(cx.directionality(element)));
+    }
+    let Some(dir) = cx.attribute_value_by_id(element, local::DIR) else {
+        return;
+    };
+    let dir = dir.borrow().to_str().into_owned();
     if dir.eq_ignore_ascii_case("auto") {
         if [local::BDO, local::TEXTAREA, local::PRE].contains(&name.local()) {
             return;

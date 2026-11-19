@@ -121,6 +121,40 @@ fn dir_maps_to_direction_and_unicode_bidi() {
     assert_eq!(style(&mut page, "in"), (Ltr, Normal));
 }
 
+/// `dir=auto` (and a `<bdi>`) has the `direction` of its text, styled
+/// again as its text changes: two alike but for their text don't share
+/// a style; a rule for the element after one sees its new direction, and
+/// after a telephone field that is one no more.
+#[test]
+fn dir_auto_is_its_texts_direction() {
+    use computed_style::Direction::{Ltr, Rtl};
+    let mut page = Page::new(
+        "<!doctype html><style>#a:dir(rtl) + p, #tel:dir(ltr) + span { color: green }</style>\
+         <div id=a dir=auto>a</div><p id=after></p><div id=b dir=auto>\u{5d0}</div>\
+         <bdi id=bdi>\u{5d0}</bdi><div dir=rtl><input id=tel type=tel><span id=s></span></div>",
+    );
+    let direction = |page: &mut Page, id: &str| page.style(id).rare_inherited.direction;
+    assert_eq!(direction(&mut page, "a"), Ltr);
+    assert_eq!(
+        direction(&mut page, "b"),
+        Rtl,
+        "not the style of the one alike"
+    );
+    assert_eq!(direction(&mut page, "bdi"), Rtl);
+    assert_ne!(page.style("after").color, GREEN);
+    page.with("a", |cx, a| {
+        let text = cx.first_child(a).unwrap();
+        cx.replace_data(text, 0, 1, "\u{5d0}");
+    });
+    page.recalc();
+    assert_eq!(direction(&mut page, "a"), Rtl);
+    assert_eq!(page.style("after").color, GREEN, "the rule after it");
+    assert_eq!(page.style("s").color, GREEN);
+    page.with("tel", |cx, tel| cx.set_attribute(tel, "type", "text"));
+    page.recalc();
+    assert_ne!(page.style("s").color, GREEN, "the field is rtl now");
+}
+
 #[test]
 fn a_tables_attributes_style_its_cells_again() {
     let mut page = Page::new(

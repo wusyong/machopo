@@ -13,7 +13,7 @@
 | 1c table，連 collapsed border | 完成 | 2026-11-19 |
 | 1d float、list marker、line clamp、置中、slider 的 thumb | 完成 | 2026-11-19 |
 | 1e 第 1 階段的檢查和文件 | 完成 | 2026-11-19 |
-| 2a style：`direction`、`unicode-bidi`、`dir`、`:dir()` | 進行中 | |
+| 2a style：`direction`、`unicode-bidi`、`dir`、`:dir()` | 完成 | 2026-11-19 |
 | 2b layout 用 `direction` | | |
 | 2c `unicode-bidi` 在 inline 內容裡 | | |
 | 2d 捲動的原點、sticky、`text-overflow`、`<select>` | | |
@@ -97,3 +97,16 @@ macOS、Apple M4，2026-11-19。
 - 新的測試：`style` 的 `hints::dir_maps_to_direction_and_unicode_bidi`。
 - mutation test（`mutants-2a2.toml`）10 個，全部抓到（先把測試裡幾個元素搬到 `rtl` 的元素裡：在 `ltr` 的 parent 底下，`dir=ltr`、`input[type=tel]` 的 `ltr` 拿掉了也一樣）。
 - 跑過：`cargo test -p style -p css -p style_resolver`；`test.py wpt html/rendering/ css/css-pseudo/`（另外 61 個意外通過的 subtest 是 macOS 上已知的、和這裡無關的那兩份）。
+
+### 2a：style（第三部分：directionality 的快取、`:dir()`、`dir=auto` 的方向）
+
+macOS、Apple M4，2026-11-19。
+
+- `dom` 的 `directionality.rs`：directionality 快取在 node 的 padding 裡的那個 byte（原本只放 layout 的一個旗標，改名 `more`），連同「自己或祖先是 `auto`」的旗標（Blink 的 `CachedDirectionality`、`kSelfOrAncestorHasDirAutoAttribute`）。插入、移除、`dir` 改變時從那個元素往下重算，方向沒變的地方停下；`auto` 的元素底下的文字改了（插入、移除、`data_changed`）往上找最近的 `auto` 元素重算；表單控制項的值（`state_changed` 的 `VALUE`、`value` attribute）和 `<input>` 的 `type` 也是。沒有 `dir`、沒做過 `<bdi>` 的頁面（`form::DIRS_SEEN`）只多看一個 word。`dir=auto` 的 `<input>`（text、search、tel、url、email、password、hidden 和按鈕類）、`<textarea>` 照值；沒有合法 `dir` 的 telephone 欄位是 `ltr`；shadow tree 的最上層和裡面的 slot 照 host。方向變了的元素：`:dir()` 的狀態改變（`AttributeChanges::DIRECTIONALITY`，Blink 的 `PseudoStateChanged(kPseudoDir)`），`auto` 的再整個重算（hint 的 `direction`）；`dir` 自己改了的走 attribute 的路（子樹和兄弟本來就重算）。
+- `:dir()`：照 Blink 收任何一個 identifier、照寫的序列化，`ltr`、`rtl` 才比對得到；失效照 `:lang()`（`dir` 改了重算子樹），其他改變方向的路由 DOM 標記。
+- `dir=auto`（和沒有合法 `dir` 的 `<bdi>`）的 hint 照 directionality 給 `direction`（Blink 的 `StyleResolver::MatchPresentationalHints`）。
+- 測試找到的錯誤：host 的方向改了，往下走到方向沒變的元素就停，裡面的 slot（照 host、不照 parent）沒有跟著改；改成 host 的方向變了時把它的 slot 也排進去（`slots_of`）。改 `dir` 的路原本先把元素標成整個重算，attribute 的路就以為不用再標兄弟，`:not(:dir(ltr)) + div` 沒更新（WPT 的 `dir-style-03b`）；改成方向的改變當成 `:dir()` 的狀態改變、`dir` 的路不另外標。
+- WPT：HTML 的 directionality 和 `:dir()` 的 127 份（`dir-tests.txt`）加進 `include.txt`，282 項照預期：沒過的寫在 `.ini`：`innerText` 的 setter（machopo 沒有）、巢狀 `<span>` 那一行和參考頁差幾個像素（`dir-style-01a`、`01b`）、slot 的 `dir=auto` 不看 assigned node（`docs/limitations.md`）、layout 還沒有 bidi（`dir_auto-*` 的 reftest，2b、2c）。
+- 新的測試：`dom` 的 `directionality::`（7 個：繼承、移動、`auto` 的文字、`<bdi>`、表單控制項、shadow tree 和 slot、標記 style）；`style` 的 `hints::dir_auto_is_its_texts_direction`（兩個只差文字的 `dir=auto` 不共用 style、文字改了之後的兄弟規則、telephone 欄位改 `type` 之後的兄弟規則）。
+- mutation test（`mutants-2a3.toml`）16 個，全部抓到（第一輪 3 個沒抓到：slot 的那個補了測試，也因此找到上面的錯誤；另外兩個是多餘的程式，拿掉了：matched properties cache 的 hash 加上方向（比對時 hint 本來就逐一比內容），`:dir()` 在組合子左邊也收狀態（每條改變方向的路本來就讓後面的兄弟重算：`auto` 的元素整個重算、祖先是 `auto` 的那棵子樹整個重算、`dir` 和 telephone 欄位的 `type` 走 attribute 的路））。
+- 跑過：`cargo test -p dom -p style -p dom_api`；`test.py wpt` 的 `dir-tests.txt`、`html/canvas/element/text/`、`html/canvas/offscreen/text/`。

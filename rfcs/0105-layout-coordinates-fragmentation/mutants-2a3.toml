@@ -1,0 +1,106 @@
+# Stage 2a, its third part: directionality cached on elements and kept up
+# (`dom`'s `directionality.rs` and its hooks), `:dir()`, and `dir=auto`'s
+# `direction`. `dir-tests.txt` lists the WPT tests of HTML's
+# directionality and `:dir()` that run.
+test = ["sh", "-c", "cargo test -q -p dom --test it directionality:: && cargo test -q -p style --test it hints:: && python3 scripts/test.py wpt $(cat rfcs/0105-layout-coordinates-fragmentation/dir-tests.txt)"]
+timeout = 900
+
+[[mutant]]
+name = "a bdi made isn't auto until inserted"
+file = "crates/dom/src/directionality.rs"
+from = '''        element.more.set(element.more.get() | AUTO_SCOPE);'''
+to = '''        let _ = element;'''
+
+[[mutant]]
+name = "a bdi without dir isn't auto"
+file = "crates/dom/src/directionality.rs"
+from = '''None => self.is_html_named(element, names::local::BDI),'''
+to = '''None => false,'''
+
+[[mutant]]
+name = "an element moved keeps its directionality"
+file = "crates/dom/src/directionality.rs"
+from = '''            self.update_directionality(node, true);'''
+to = '''            let _ = node;'''
+
+[[mutant]]
+name = "a node moved leaves the auto element above as it was"
+file = "crates/dom/src/directionality.rs"
+from = '''        if !(element && self.skipped_by_auto(node)) {
+            self.directionality_text_changed(parent);'''
+to = '''        if !(element && self.skipped_by_auto(node)) {
+            let _ = parent;'''
+
+[[mutant]]
+name = "a dir changed leaves the auto element above as it was"
+file = "crates/dom/src/directionality.rs"
+from = '''        if let Some(parent) = self.parent(element) {
+            self.directionality_text_changed(parent);'''
+to = '''        if let Some(parent) = self.parent(element) {
+            let _ = parent;'''
+
+[[mutant]]
+name = "only an auto element itself is in an auto scope"
+file = "crates/dom/src/directionality.rs"
+from = '''auto || parent_element.is_some_and(|parent| parent.more.get() & AUTO_SCOPE != 0);'''
+to = '''auto;'''
+
+[[mutant]]
+name = "a telephone field inherits"
+file = "crates/dom/src/directionality.rs"
+from = '''_ if self.input_kind(element) == Some(crate::input::InputKind::Tel) => Direction::Ltr,'''
+to = ''''''
+
+[[mutant]]
+name = "the top of a shadow tree takes nothing from its host"
+file = "crates/dom/src/directionality.rs"
+from = '''} else if let Some(root) = parent.filter(|&parent| self.is_shadow_root(parent)) {'''
+to = '''} else if let Some(root) = parent.filter(|_| false) {'''
+
+[[mutant]]
+name = "a slot takes its parent's, not its host's"
+file = "crates/dom/src/directionality.rs"
+from = '''if self.is_html_named(element, names::local::SLOT)'''
+to = '''if self.is_html_named(element, names::local::SLOT) && false'''
+
+[[mutant]]
+name = "a change of directionality not a :dir() state change"
+file = "crates/dom/src/directionality.rs"
+from = '''self.state_changed(element, crate::AttributeChanges::DIRECTIONALITY);'''
+to = ''''''
+
+[[mutant]]
+name = "an auto element not styled again for its direction"
+file = "crates/dom/src/directionality.rs"
+from = '''                    self.set_needs_style_recalc(element);'''
+to = ''''''
+
+[[mutant]]
+name = "a textarea's value doesn't count"
+file = "crates/dom/src/directionality.rs"
+from = '''return Some(self.textarea_value(element));'''
+to = '''return None;'''
+
+[[mutant]]
+name = "text data changes not looked at"
+file = "crates/dom/src/style.rs"
+from = '''            self.directionality_data_changed(node);'''
+to = ''''''
+
+[[mutant]]
+name = "an input's type changes not looked at"
+file = "crates/dom/src/style.rs"
+from = '''            self.directionality_type_changed(element);'''
+to = ''''''
+
+[[mutant]]
+name = "dir=auto has no direction"
+file = "crates/style/src/hints.rs"
+from = '''        out.push(direction(cx.directionality(element)));'''
+to = ''''''
+
+[[mutant]]
+name = ":dir(rtl) matches ltr"
+file = "crates/style/src/selector.rs"
+from = '''                    computed_style::Direction::Rtl => "rtl",'''
+to = '''                    computed_style::Direction::Rtl => "ltr",'''
