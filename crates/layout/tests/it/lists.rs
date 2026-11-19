@@ -138,6 +138,18 @@ fn an_outside_marker_without_a_line_is_at_the_content_box() {
     );
 }
 
+/// In `rtl` the marker goes on the right of the first line, past its
+/// inline-start: the list item's content box's right edge.
+#[test]
+fn an_outside_marker_is_on_the_right_in_rtl() {
+    let laid = lay_out(&format!(
+        "{AHEM}<ol dir=rtl style='width: 200px'><li id=a>XX</ol>"
+    ));
+    // The item 200px wide (past the list's 100px of left padding here).
+    assert_eq!(laid.laid.rect("a").width, 200.0);
+    assert_eq!(laid.marker("a").unwrap().offset.x, 200.0);
+}
+
 /// An inside marker is the list item's first inline box, on its first
 /// line; `list-style-type: none`, or `::marker { content: none }`, shows
 /// none; `::marker`'s `content` takes the place of the type's.

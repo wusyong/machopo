@@ -2569,15 +2569,18 @@ impl BoxTree {
     ) -> OofCandidate {
         let style = &self.boxes[usize::from(child)].taffy_style;
         let justify_items = self.boxes[parent].taffy_style.justify_items;
-        let ltr = taffy::Direction::Ltr;
+        let (own, container) = (
+            crate::taffy_direction(&self.boxes[usize::from(child)].style),
+            crate::taffy_direction(&self.boxes[parent].style),
+        );
         let justify = style
             .justify_self
             .unwrap_or(justify_items)
-            .resolve_self_relative(ltr, ltr, true);
+            .resolve_self_relative(own, container, true);
         let align = style
             .align_self
             .unwrap_or(taffy::AlignItems::NORMAL)
-            .resolve_self_relative(ltr, ltr, false);
+            .resolve_self_relative(own, container, false);
         let line = |v: f32| taffy::Line { start: v, end: v };
         #[expect(
             clippy::cast_possible_truncation,
@@ -2589,7 +2592,11 @@ impl BoxTree {
             order,
             position: style.position,
             static_position: taffy::Point {
-                x: AxisStaticPosition::from_alignment(justify, line(at.x), false),
+                x: AxisStaticPosition::from_alignment(
+                    justify,
+                    line(at.x),
+                    container == taffy::Direction::Rtl,
+                ),
                 y: AxisStaticPosition::from_alignment(align, line(at.y), false),
             },
         }

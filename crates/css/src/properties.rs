@@ -1348,9 +1348,24 @@ impl LonghandId {
         let margin = [MarginTop, MarginRight, MarginBottom, MarginLeft];
         let padding = [PaddingTop, PaddingRight, PaddingBottom, PaddingLeft];
         let inset = [Top, Right, Bottom, Left];
-        let width = [BorderTopWidth, BorderRightWidth, BorderBottomWidth, BorderLeftWidth];
-        let style = [BorderTopStyle, BorderRightStyle, BorderBottomStyle, BorderLeftStyle];
-        let color = [BorderTopColor, BorderRightColor, BorderBottomColor, BorderLeftColor];
+        let width = [
+            BorderTopWidth,
+            BorderRightWidth,
+            BorderBottomWidth,
+            BorderLeftWidth,
+        ];
+        let style = [
+            BorderTopStyle,
+            BorderRightStyle,
+            BorderBottomStyle,
+            BorderLeftStyle,
+        ];
+        let color = [
+            BorderTopColor,
+            BorderRightColor,
+            BorderBottomColor,
+            BorderLeftColor,
+        ];
         // The corner between a block side and an inline side.
         let corner = |block: Side, inline: Side| {
             let (vertical, horizontal) = if matches!(block, Side::Top | Side::Bottom) {
@@ -1365,7 +1380,13 @@ impl LonghandId {
                 _ => BorderBottomRightRadius,
             }
         };
-        let size = |inline: Self, block: Self| if horizontal { (inline, block) } else { (block, inline) };
+        let size = |inline: Self, block: Self| {
+            if horizontal {
+                (inline, block)
+            } else {
+                (block, inline)
+            }
+        };
         match self {
             MarginBlockStart => pick(block_start, margin),
             MarginBlockEnd => pick(block_end, margin),

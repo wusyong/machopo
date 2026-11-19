@@ -206,7 +206,7 @@ impl KeyframeEffect {
     /// element's writing direction (its base style's; a new base makes a
     /// new effect).
     pub fn new(source: KeyframeSource, keyframes: &[Keyframe], easing: &EasingFunction) -> Self {
-        let writing_direction = source.base.logical_writing_direction();
+        let writing_direction = source.base.writing_direction();
         let mut properties: Vec<(LonghandId, Vec<PropertyKeyframe>)> = Vec::new();
         for keyframe in keyframes {
             for id in &keyframe.properties {

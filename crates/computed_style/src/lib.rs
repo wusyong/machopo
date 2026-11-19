@@ -3342,17 +3342,11 @@ impl ComputedStyle {
         }
     }
 
-    /// Its writing mode and direction. Always `horizontal-tb` and `ltr`:
-    /// neither `writing-mode` nor `direction` is parsed yet, and this is
-    /// the one place layout asks.
+    /// Its writing mode and direction: its `direction`, in horizontal
+    /// writing (there is no `writing-mode`). What layout lays it out by,
+    /// and its flow-relative properties (`margin-inline-start` and the
+    /// like) map by; the one place either asks.
     pub fn writing_direction(&self) -> WritingDirectionMode {
-        WritingDirectionMode::default()
-    }
-
-    /// The writing direction its flow-relative properties (`margin-inline-start`
-    /// and the like) map by: its `direction`, in horizontal writing
-    /// (there is no `writing-mode`).
-    pub fn logical_writing_direction(&self) -> WritingDirectionMode {
         WritingDirectionMode::new(WritingMode::HorizontalTb, self.rare_inherited.direction)
     }
 

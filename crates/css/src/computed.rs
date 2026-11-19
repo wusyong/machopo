@@ -99,7 +99,7 @@ pub fn is_layout_dependent(property: &str) -> bool {
 /// ResolveDirectionAwareProperty`); `None` for any other name.
 pub fn physical_property(property: &str, style: &ComputedStyle) -> Option<&'static str> {
     let id = LonghandId::from_name(property)?;
-    let physical = id.physical_for(style.logical_writing_direction());
+    let physical = id.physical_for(style.writing_direction());
     (physical != id).then(|| physical.name())
 }
 
@@ -459,7 +459,7 @@ fn longhand_to_css(style: &ComputedStyle, id: LonghandId, dest: &mut String) {
         LengthPercentageOrAuto::LengthPercentage(value) => length_percentage(value, dest),
     };
     // A flow-relative longhand's value is its physical one's.
-    match id.physical_for(style.logical_writing_direction()) {
+    match id.physical_for(style.writing_direction()) {
         crate::properties::logical_longhands!() => unreachable!("mapped to a physical longhand"),
         Display => dest.push_str(display_name(style.display)),
         Position => dest.push_str(position_name(style.position)),

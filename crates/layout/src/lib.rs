@@ -1865,15 +1865,20 @@ impl BoxTree {
                     // `align-self` (`normal` for `auto`), as taffy's block
                     // layout aligns a block's out-of-flow children.
                     let style = &self.boxes[usize::from(id)].taffy_style;
-                    let ltr = taffy::Direction::Ltr;
+                    // Its own direction and its container's: `self-start`
+                    // is its own start.
+                    let (own, container) = (
+                        taffy_direction(&self.boxes[usize::from(id)].style),
+                        taffy_direction(&self.boxes[index].style),
+                    );
                     let justify = style
                         .justify_self
                         .unwrap_or(justify_items)
-                        .resolve_self_relative(ltr, ltr, true);
+                        .resolve_self_relative(own, container, true);
                     let align = style
                         .align_self
                         .unwrap_or(taffy::AlignItems::NORMAL)
-                        .resolve_self_relative(ltr, ltr, false);
+                        .resolve_self_relative(own, container, false);
                     let rect = statics[i];
                     candidates.push(OofCandidate {
                         node: id,
@@ -1890,7 +1895,7 @@ impl BoxTree {
                                     start: rect.x,
                                     end: rect.x + rect.width,
                                 },
-                                false,
+                                container == taffy::Direction::Rtl,
                             ),
                             y: AxisStaticPosition::from_alignment(
                                 align,
@@ -2832,6 +2837,14 @@ impl BoxTree {
 /// width again below the lowest float. None if no float is beside it.
 /// The slots are of the box's border box; a line's room is kept to the
 /// content box when it is worked out from them.
+/// `style`'s `direction`, as taffy has it.
+pub(crate) fn taffy_direction(style: &ComputedStyle) -> taffy::Direction {
+    match style.rare_inherited.direction {
+        computed_style::Direction::Ltr => taffy::Direction::Ltr,
+        computed_style::Direction::Rtl => taffy::Direction::Rtl,
+    }
+}
+
 /// A taffy size's value along the block axis: the vertical one in
 /// `horizontal` writing.
 fn block_axis<T>(horizontal: bool, size: taffy::Size<T>) -> T {
@@ -3558,6 +3571,7 @@ fn taffy_style(style: &ComputedStyle, calcs: &CalcValues) -> taffy::Style {
         }
     };
     let mut taffy_style = taffy::Style {
+        direction: taffy_direction(style),
         display: match style.display {
             Display::Flex | Display::InlineFlex | Display::WebkitBox | Display::WebkitInlineBox => {
                 taffy::Display::Flex

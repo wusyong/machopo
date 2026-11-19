@@ -884,6 +884,12 @@ impl InlineContent {
         let families = &cx.families;
         let root = text_style(container, 0, block);
         let mut builder = cx.layout.tree_builder(&mut cx.fonts, 1.0, true, &root);
+        // The paragraph's direction is its block's (not its first strong
+        // character's, parley's default).
+        builder.set_base_direction(match container.rare_inherited.direction {
+            computed_style::Direction::Ltr => parley::BaseDirection::Ltr,
+            computed_style::Direction::Rtl => parley::BaseDirection::Rtl,
+        });
         // The block's families are the root style's too: a line with
         // nothing on it is as high as the block's font.
         builder.push_default(StyleProperty::FontFamilyIds(Cow::Borrowed(
@@ -1565,13 +1571,19 @@ impl InlineContent {
             .map(|line| line.metrics().baseline)
     }
 
-    /// Where the first line as broken last starts (past the floats beside
-    /// it, before its alignment's offset), and its baseline, from the
-    /// content box's corner; `None` with no lines.
+    /// Where the first line as broken last starts (its inline-start edge:
+    /// its left, or its right in a right-to-left paragraph, past the
+    /// floats beside it, before its alignment's offset), and its
+    /// baseline, from the content box's corner; `None` with no lines.
     pub(crate) fn first_line(&self) -> Option<(f32, f32)> {
         self.layout.lines().next().map(|line| {
             let metrics = line.metrics();
-            (metrics.inline_min_coord, metrics.baseline)
+            let start = if self.layout.is_rtl() {
+                metrics.inline_max_coord
+            } else {
+                metrics.inline_min_coord
+            };
+            (start, metrics.baseline)
         })
     }
 

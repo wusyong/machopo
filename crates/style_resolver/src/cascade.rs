@@ -316,7 +316,7 @@ pub fn cascade_declarations(
     applies: fn(LonghandId) -> bool,
     animated_font_size: Option<f32>,
 ) -> Cascaded {
-    let parents = parent.logical_writing_direction();
+    let parents = parent.writing_direction();
     let (cascaded, flow_relative) = cascade_as(
         blocks,
         parent,
@@ -326,7 +326,7 @@ pub fn cascade_declarations(
         animated_font_size,
         parents,
     );
-    let own = cascaded.style.logical_writing_direction();
+    let own = cascaded.style.writing_direction();
     if !flow_relative || own == parents {
         return cascaded;
     }

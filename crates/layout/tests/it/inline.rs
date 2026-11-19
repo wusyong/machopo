@@ -238,7 +238,7 @@ fn a_line_breaks_after_a_soft_hyphen_with_a_hyphen() {
          <div style='width: 60px'>XXX&shy;X</div>
          <div style='width: 100px; hyphens: none'>XXX&shy;XXX</div>
          <div style='width: 100px; text-align: right'>XXX&shy;XXX</div>
-         <div style='width: 100px'>&#x200F;XXX&shy;XXX</div>
+         <div style='width: 100px; direction: rtl'>XXX&shy;XXX</div>
          <div style='width: 100px'><span style='font-size: 10px'>XXXXXXXXX&shy;XX</span></div>
          <div style='width: 100px'>X<span style='font-size: 10px'>XXXXXXX&shy;XXX</span></div>
          <div style='width: 100px'><span style='position: relative; left: 5px; top: 2px'>XXX&shy;XXX</span></div>
@@ -266,8 +266,8 @@ fn a_line_breaks_after_a_soft_hyphen_with_a_hyphen() {
     // Aligned with the hyphen.
     assert_eq!(l[7].rect, RectF::new(20.0, 140.0, 80.0, 20.0));
     assert_eq!(l[7].glyph_x, [20.0, 40.0, 60.0, 80.0, 80.0]);
-    // In a right-to-left paragraph (a right-to-left mark first) the hyphen
-    // goes on the left of the line's text.
+    // In a right-to-left paragraph the hyphen goes on the left of the
+    // line's text.
     assert_eq!(l[9].rect, RectF::new(20.0, 180.0, 80.0, 20.0));
     assert_eq!(l[9].glyph_x.last(), Some(&20.0));
     assert_eq!(l[9].glyph_x[..3], [40.0, 60.0, 80.0]);

@@ -13,6 +13,7 @@ mod block;
 mod calc;
 mod caret;
 mod contain;
+mod direction;
 mod flex;
 mod float;
 mod font_features;

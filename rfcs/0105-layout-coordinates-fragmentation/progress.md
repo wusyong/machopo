@@ -14,7 +14,7 @@
 | 1d float、list marker、line clamp、置中、slider 的 thumb | 完成 | 2026-11-19 |
 | 1e 第 1 階段的檢查和文件 | 完成 | 2026-11-19 |
 | 2a style：`direction`、`unicode-bidi`、`dir`、`:dir()` | 完成 | 2026-11-19 |
-| 2b 邏輯屬性照 `direction`、layout 用 `direction` | 進行中 | |
+| 2b 邏輯屬性照 `direction`、layout 用 `direction` | 完成 | 2026-11-19 |
 | 2c `unicode-bidi` 在 inline 內容裡 | | |
 | 2d 捲動的原點、sticky、`text-overflow`、`<select>` | | |
 | 2e 第 2 階段的檢查和文件 | | |
@@ -122,3 +122,18 @@ macOS、Apple M4，2026-11-19。
 - 新的測試：`style` 的 `logical::inline_start_is_the_right_in_rtl`（元素自己的和繼承的 `rtl`、圓角、CSSOM、UA 樣式的清單和 `<dd>`）、`css_animations::a_flow_relative_keyframe_animates_by_the_elements_direction`、`css_animations::a_flow_relative_transition_is_by_the_elements_direction`。keyframe 的那個測試先找到了錯誤：keyframe 在 `KeyframeEffect::new` 照 `ltr` 換成物理的。
 - mutation test（`mutants-2b1.toml`）10 個，全部抓到（第一輪動畫的 `visit` 那個沒抓到：它收到的已經是物理的 id，改回原本的 `physical()`、拿掉那一條；highlight 的 cascade 也只看非邏輯的屬性，照舊用 `physical()`）。
 - 跑過：`cargo test -p css -p style -p style_resolver -p animation -p dom_api -p layout`。
+
+### 2b：layout 用 `direction`（第二部分）
+
+macOS、Apple M4，2026-11-19。
+
+- `ComputedStyle::writing_direction()` 讀 `direction`（橫排）：第 1 階段寫好的 `rtl` 那一半開始用到（table 的欄從右排、collapsed border 翻轉、range 的 thumb 從右邊開始、float 和 inline 內容區的起點）。
+- parley 的段落方向照 inline 內容所在的 block 的 `direction`：原本沒設，是 parley 的 `Auto`（第一個強方向的字），`ltr` 的頁面裡希伯來文的段落被排成 `rtl`，和 CSS、Chrome 不同。`text-align: start`、`end` 跟著段落的方向。
+- taffy 的 `Style::direction` 照 `direction`；從 inline 內容往上交的、table 自己的 out-of-flow box 的靜態位置照 containing block 的方向對齊（原本寫死 `ltr`），`self-start` 照它自己的。
+- outside marker 放在第一行的 inline-start（`rtl` 是行的右邊，`InlineContent::first_line`）。
+- 改的測試：`inline::a_line_breaks_after_a_soft_hyphen_with_a_hyphen` 的 `rtl` 段落原本靠開頭的 RLM 讓 parley 自動判斷，改成寫 `direction: rtl`（照 CSS，那一段本來是 `ltr` 的段落）。
+- 新的測試：`layout` 的 `direction::`（段落的方向是 block 的、flex 和 table 從右排、靜態位置在右邊）、`lists::an_outside_marker_is_on_the_right_in_rtl`。
+- WPT（`css/CSS2/`、`css-text`、`css-tables`、`css-lists`、`css-position`、`css-flexbox`、`css-grid`、`css-align`、`css-logical`、`html/rendering/` 和 `dir-tests.txt`，23989 項）：變成通過的 `css-tables/paint/col-paint-htb-rtl`（第 1 階段 table 的 `rtl` 第一次有真的測試）、`CSS2/floats/floats-wrap-bfc-with-margin-005`、`css-lists/list-style-type-string-002`、`003`、`007`、`input-text-overflow-ellipsis-rtl-scrolled`，拿掉 `.ini`；變成失敗的 `html/rendering/widgets/input-text-overflow-ellipsis-rtl`：值從左邊溢出，`text-overflow` 只截右邊溢出的，和參考頁一樣（mismatch），標成預期失敗，`text-overflow` 照方向截斷在 2d。8 份 `.ini` 的說明原本寫 machopo 沒有 `rtl`，看過之後改成實際的原因（被 float 切開的字分成兩段排、multi-column、`unicode-bidi`、直排、marker 的位置還沒查）。另外兩份意外通過（`floats-clear/clear-on-parent-and-child`、`margin-padding-clear/margin-collapse-009`）在上一個 commit 就是，是 macOS 上已知的不一致。
+- `docs/test-gaps.md`「只靠審查」的那一條只剩直排；`docs/limitations.md` 的 table 那一條拿掉「欄一律從左排」那一句。
+- mutation test（`mutants-2b2.toml`）7 個，全部抓到。
+- 跑過：`cargo test -p layout -p paint`；`test.py reftest text/ inline/ tables/ floats/ position/`（34 個）。

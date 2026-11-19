@@ -1,0 +1,49 @@
+# Stage 2b, its second part: layout reads `direction` (`writing_direction`,
+# parley's paragraph direction, taffy's `direction`, static positions,
+# the first line's inline-start).
+test = ["sh", "-c", "cargo test -q -p layout --test it -- direction:: lists::"]
+timeout = 900
+
+[[mutant]]
+name = "layout reads ltr whatever the direction"
+file = "crates/computed_style/src/lib.rs"
+from = '''        WritingDirectionMode::new(WritingMode::HorizontalTb, self.rare_inherited.direction)'''
+to = '''        WritingDirectionMode::default()'''
+
+[[mutant]]
+name = "an rtl paragraph laid out ltr"
+file = "crates/layout/src/text.rs"
+from = '''            computed_style::Direction::Rtl => parley::BaseDirection::Rtl,'''
+to = '''            computed_style::Direction::Rtl => parley::BaseDirection::Ltr,'''
+
+[[mutant]]
+name = "taffy told ltr for rtl"
+file = "crates/layout/src/lib.rs"
+from = '''        computed_style::Direction::Rtl => taffy::Direction::Rtl,'''
+to = '''        computed_style::Direction::Rtl => taffy::Direction::Ltr,'''
+
+[[mutant]]
+name = "taffy's style without the direction"
+file = "crates/layout/src/lib.rs"
+from = '''        direction: taffy_direction(style),'''
+to = ''''''
+
+[[mutant]]
+name = "a static position passed up from inline content aligned ltr"
+file = "crates/layout/src/lib.rs"
+from = '''                                container == taffy::Direction::Rtl,'''
+to = '''                                false,'''
+
+[[mutant]]
+name = "a table's out-of-flow box aligned ltr"
+file = "crates/layout/src/table.rs"
+from = '''                    container == taffy::Direction::Rtl,'''
+to = '''                    false,'''
+
+[[mutant]]
+name = "an rtl first line starting on its left"
+file = "crates/layout/src/text.rs"
+from = '''                metrics.inline_max_coord
+            } else {'''
+to = '''                metrics.inline_min_coord
+            } else {'''
