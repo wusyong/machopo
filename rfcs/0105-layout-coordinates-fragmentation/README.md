@@ -1,12 +1,13 @@
 # RFC 0105：layout 的座標模型和分段
 
 - 開始日期：2026-11-19
-- 狀態：⏸️ 延後：2026-11-19（評估的結論：現在的架構不會卡死 `direction: rtl`、`writing-mode`、分段，只是越晚做越貴；要做其中任何一個時再回來，從「待決定」記下的看法開始）
+- 狀態：🚧 已排程：2026-11-19
+- 進度：`progress.md`
 - 細節：`details.md`
 
 ## 摘要
 
-machopo 的 layout 現在整條假設 `writing-mode: horizontal-tb`、`direction: ltr`，也沒有分段（一個 box 只有一個 fragment）。這份 RFC 先評估：之後要加 `direction: rtl`、`writing-mode`（直排）、multi-column 和列印時，layout 的座標要用什麼模型、分段要用什麼機制，以及建在 taffy 的 fork 上撐不撐得起。草稿列出選項和建議；照 Blink LayoutNG 的做法，建議 machopo 自己的 layout 用邏輯座標寫、在 fragment 建好時一次換成物理座標，分段用 break token，taffy 留著負責 flex、grid 和 block 的演算法（直排經過轉置的那一層），分段等到要做 multi-column 時再決定 block layout 要不要自己寫。
+machopo 的 layout 現在整條假設 `writing-mode: horizontal-tb`、`direction: ltr`，也沒有分段（一個 box 只有一個 fragment）。這份 RFC 先評估：之後要加 `direction: rtl`、`writing-mode`（直排）、multi-column 和列印時，layout 的座標要用什麼模型、分段要用什麼機制，以及建在 taffy 的 fork 上撐不撐得起。選了 B（「已決定的事項」第 1 條）：照 Blink LayoutNG 的做法，machopo 自己的 layout 用邏輯座標寫、在 fragment 建好時一次換成物理座標，分段用 break token，taffy 長期留著負責 flex、grid 和 block 的演算法（直排經過轉置的那一層），分段等到要做 multi-column 時，再決定在 taffy 的上游做、只在 machopo 自己的接縫上斷，還是把 block layout 換成自己寫的。
 
 ## 動機
 
@@ -60,11 +61,11 @@ RFC 0103 的「架構上可能要先做的事」第 3 個：每個只照物理�
 - **A：維持物理座標，需要時在邊界轉換**。taffy 照舊；`direction: rtl` 用 taffy 已經有的；直排照 Blitz 在每個 writing mode 的根轉置輸入輸出；分段之後在 machopo 自己的 block 和 inline 上加。
   - 優點：現在幾乎不用改；RTL 很快能接上。
   - 缺點：machopo 自己寫的部分（inline、table、out-of-flow 的接法、sticky、list marker、overflow）每個都要各自補 RTL 和直排的分支；Gecko 在 reflow 時存物理的位置，vertical-rl 要事後修正（`nsBlockFrame` 的假的 container 大小），Servo 在 fragment 建立時就換、還沒拿到父 frame 的大小，直排的 block 方向至今沒做完。分段沒有地方接，到時候整條入口都要改。
-- **B（建議）：machopo 自己的 layout 用邏輯座標，fragment 建好時換成物理的；taffy 留著，經過一層接上**。照 Blink LayoutNG：
+- **B（選了，第 1 條）：machopo 自己的 layout 用邏輯座標，fragment 建好時換成物理的；taffy 留著，經過一層接上**。照 Blink LayoutNG：
   - 邏輯的型別（`LogicalSize`、`LogicalOffset`、`LogicalRect`、writing mode 和 direction 合成一個值、`WritingModeConverter`）放在 machopo；
   - machopo 自己的演算法（inline、table、定位、float 的接法）和 fragment 的 builder 用邏輯座標，builder 存邏輯的子位移，父 fragment 的大小定了才一次換成物理的（Blink 不用事後修正，正是因為這樣）；
   - taffy 的 flex、grid、block 照舊用，RTL 直接設 taffy 的 `direction`，直排在 writing mode 的根轉置（Blitz 的做法，也是上游現在給的答案），之後上游的 #752 進來就換掉這一層；
-  - 入口多一個 break token、fragment 可以有好幾個，先一律不分段；真的分段到做 multi-column 時決定（block layout 可能要自己寫，見「待決定」）。
+  - 入口多一個 break token、fragment 可以有好幾個，先一律不分段；真的分段到做 multi-column 時，在第 1 條的三條路裡選。
   - 優點：之後的每個功能只寫一份；轉換只在一個地方；和 Chromium 同一個模型，查 Blink 的程式能直接對照；taffy 留著，不用一次重寫 flex 和 grid。
   - 缺點：要先改現有的 inline、table 和 fragment builder 的寫法（約 500 處物理的欄位，大多在 `layout` 裡）；taffy 那一層要維護轉置；taffy 本身還是物理的，它的 block 不能分段。
 - **C：整個換成自己寫的、LayoutNG 那樣的演算法**（block、flex、grid 都自己寫，邏輯座標和 break token 從頭就有）。
@@ -82,10 +83,10 @@ RFC 0103 的「架構上可能要先做的事」第 3 個：每個只照物理�
 
 ### 分階段
 
-等第一條決定之後再分。初步：
+做法定了（第 1 條）；每個階段開始前，只決定那個階段要決定的事：
 
 1. 邏輯的型別和轉換、fragment builder 改成存邏輯的位移，現有的行為不變（只有 `horizontal-tb`、`ltr`）。
-2. （可選）接上 taffy 已經有的 `direction: rtl` 和 style 的 `direction`、`unicode-bidi`，machopo 自己的部分照邏輯座標鏡射。
+2. （第 2 階段開始前決定做不做）接上 taffy 已經有的 `direction: rtl` 和 style 的 `direction`、`unicode-bidi`，machopo 自己的部分照邏輯座標鏡射。
 3. 入口的 break token 和「一個 box 好幾個 fragment」，先不分段。
 
 直排、multi-column、列印各自另開 RFC。
@@ -98,7 +99,7 @@ RFC 0103 的「架構上可能要先做的事」第 3 個：每個只照物理�
 
 ## 理由和其他做法
 
-建議 B（第 1 條還沒決定）。完整的比較在 `details.md`。不做的話，之後每個 layout 功能都只照物理方向寫，等到要做 RTL、直排、multi-column 時，要回頭改的就是全部（Blink 的舊 layout 正是這樣才重寫）。
+選 B（第 1 條）。完整的比較在 `details.md`。不做的話，之後每個 layout 功能都只照物理方向寫，等到要做 RTL、直排、multi-column 時，要回頭改的就是全部（Blink 的舊 layout 正是這樣才重寫）。
 
 ## 先例
 
@@ -109,20 +110,21 @@ RFC 0103 的「架構上可能要先做的事」第 3 個：每個只照物理�
 
 ## 已決定的事項
 
-無。
+1. **做法是 B，長期留著 taffy；分段到時候在三條路裡選**（2026-11-19）：machopo 自己的 layout 用邏輯座標，fragment 建好時換成物理的，入口帶 break token；flex、grid、block 的演算法照舊交給 taffy，經過一層接上（RTL 設 taffy 的 `direction`，直排在 writing mode 的根轉置）。第 1 階段的邏輯型別、builder 存邏輯的位移，和第 3 階段的 break token、一個 box 好幾個 fragment，下面三條分段的路都需要。分段到要做 multi-column 或列印時（另一份 RFC）在三條路裡選：
+   1. 在 taffy 的上游加分段：最乾淨，taffy 的 block、flex、grid 都能斷開；但上游沒有人提過，要自己提案、自己做，時程不在 machopo 手上。能走的話優先走這條。
+   2. 只在 machopo 自己的接縫上分段：inline 的行之間、machopo 控制的 block 子元素之間可以斷，taffy 排的部分當成不能斷的整塊。做得出來，但 flex、grid 或 taffy 的 block 裡面要斷開時不對，multi-column 和列印的品質有上限。
+   3. 把 block 換成自己寫的：分段最需要 block（Blink 的分段也是一個演算法一個演算法換上去的，Chrome 102 到 108），flex、grid 照舊用 taffy。
+
+   不選 A：machopo 自己寫的部分（inline、table、sticky、list marker、可捲動的範圍）每個都要各自補 RTL 和直排的分支，分段沒有地方接。不選 C 當長期的目標（自己寫整套 LayoutNG 那樣的 layout，最接近 Chromium、分段和直排沒有限制）：要自己寫、自己維護 block、flex、grid，taffy 已經做好、上游持續在改的部分全部重來；B 的第一段和 C 的一樣，真的需要時第 3 條路就是往 C 走一部分。D 不單獨選：上游的 writing mode 還沒有維護者回覆，可以和 B 並行，上游有了就換掉轉置那一層。延後時（同一天）的評估是現在的架構不會卡死這些功能、只是越晚做越貴：會變貴的正是 machopo 自己寫、只照物理方向的部分，所以現在就做。
 
 ## 待決定
 
-延後時（2026-11-19）的看法，回來時從這裡開始：
-
-- **不會卡死**：`direction: rtl` taffy 已經有，接上就好；直排有 Blitz 證明過的轉置做法，taffy 的上游也往這個方向走；分段 taffy 沒有，之後把 block 換成自己寫的再加，成本變高但做得到（Blink 也是後來補上的）。會慢慢變貴的是 machopo 自己寫、只照物理方向的部分（inline、table、sticky、list marker、可捲動的範圍），每多一個這類功能，之後要回頭改的就多一份。
-- **最正確的目標是 C**（自己寫 LayoutNG 那樣的 layout：分段是每個演算法的一部分、正交的 writing mode 在 constraint space 裡處理、和 Blink 一對一對照、只有一套座標），**照 B 的階段漸進過去**：先做邏輯的型別、constraint space、break token 的入口、builder 存邏輯的位移（這些 C 也要），再照需要一個演算法一個演算法換成自己寫的（分段最需要 block，先換它），taffy 全部換完就拿掉（瀏覽器 UI 的 `crates/ui` 照舊可以用 taffy）。Blink 的分段也是一個演算法一個演算法換上去的（Chrome 102 到 108）。
 - taffy 現在負責 block（margin collapsing、大小的限制、固有大小）、flex、grid、out-of-flow、float 的排列、replaced element 的大小，和 box 的快取、遞迴的骨架；machopo 自己寫的是 inline 和文字（parley）、table、sticky、list marker、可捲動的範圍、fragment tree。
 
 還沒回答的：
 
-1. 選哪個做法（A、B、C、D；上面的看法是 C 為目標、經過 B）。
-2. 選 B 時：block layout 要不要為了分段自己寫（taffy 沒有分段），還是先在 taffy 的 block 外面包一層、只在 machopo 自己的 inline 和 block 的接縫上停下；第一段要不要順便接上 `direction: rtl`。
+1. 第 1 階段：邏輯的型別放哪裡、叫什麼，writing mode 和 direction 怎麼合成一個值；fragment builder 從哪裡開始換寫法；行為不變怎麼守。
+2. 第 2 階段做不做（接上 `direction: rtl`），第 2 階段開始前決定。
 
 ## 之後的可能
 
