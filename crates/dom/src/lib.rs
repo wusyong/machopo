@@ -491,6 +491,9 @@ pub struct DocumentData {
     pub(crate) target_element: Member<Node>,
     /// Its `load` event fired (`history`'s `is_completely_loaded`).
     pub(crate) completely_loaded: Cell<bool>,
+    /// It is HTML's initial `about:blank`: a child frame's first document,
+    /// made with it (`history`'s `is_initial_about_blank`).
+    pub(crate) initial_about_blank: Cell<bool>,
     /// Its base URL as last worked out (`base`).
     pub(crate) base_url: LocalExternal<base::BaseUrlCell>,
     /// An `about:blank` document's about base URL (HTML's), its creator's

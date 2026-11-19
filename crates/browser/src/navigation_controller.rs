@@ -74,9 +74,17 @@ impl TreeNode {
     /// parent has no place (Chromium's `AddOrUpdateFrameEntry` finding no
     /// parent `TreeNode`).
     fn place(&mut self, path: &[&str], item: u64) -> bool {
+        self.place_keeping(path, item, false)
+    }
+
+    /// `place`, its frames' places kept if `keep_children` (the same
+    /// document's item: Chromium's `clone_children_of_target`).
+    fn place_keeping(&mut self, path: &[&str], item: u64, keep_children: bool) -> bool {
         let Some((name, parent)) = path.split_last() else {
             self.item = item;
-            self.children.clear();
+            if !keep_children {
+                self.children.clear();
+            }
             return true;
         };
         let Some(parent) = self.find_mut(parent) else {
@@ -89,7 +97,9 @@ impl TreeNode {
         {
             Some(node) => {
                 node.item = item;
-                node.children.clear();
+                if !keep_children {
+                    node.children.clear();
+                }
             }
             None => parent.children.push(Self::new((*name).to_owned(), item)),
         }
@@ -508,35 +518,57 @@ impl NavigationController {
         }
     }
 
-    /// `RendererDidNavigateToSameDocument`: the main frame's document
-    /// navigated within itself (a fragment, `pushState`), nothing loaded:
-    /// a new entry of the same document, the current one's but for the
-    /// main frame's item, with the current one's title and scroll
-    /// restoration mode; or, if `replace`, the current item's new URL and
-    /// state.
+    /// `RendererDidNavigateToSameDocument`: `frame`'s document navigated
+    /// within itself (a fragment, `pushState`), nothing loaded: a new entry,
+    /// the current one's but for the frame's item, an item of the same
+    /// document with the current one's scroll restoration mode (its frames'
+    /// places kept, the entry's title too); or, if `replace`, the current
+    /// item's new URL and state. A frame with no place in the current entry
+    /// (on its initial `about:blank`, its document the browser's 0: none it
+    /// committed) gets one, if its parent has one.
     pub(crate) fn did_commit_same_document(
         &mut self,
         tree: &FrameTree,
+        frame: FrameToken,
         url: String,
         replace: bool,
         state: Option<Vec<u8>>,
     ) {
+        let Some(path) = path(tree, frame) else {
+            return;
+        };
         let Some(current) = self.current else {
-            let entry = self.new_entry(url, 0, false);
-            self.items
-                .get_mut(&entry.root.item)
-                .expect("just made")
-                .state = state;
-            return self.push(entry);
+            if path.is_empty() {
+                let entry = self.new_entry(url, 0, false);
+                self.items
+                    .get_mut(&entry.root.item)
+                    .expect("just made")
+                    .state = state;
+                self.push(entry);
+            }
+            return;
         };
         let base = &self.entries[current];
-        let before = self.item(base.root.item).clone();
-        if replace {
-            let item = self.items.get_mut(&before.item).expect("an entry's");
-            item.url = url;
-            item.state = state;
-            return;
+        let before = base
+            .root
+            .find(&path)
+            .map(|node| self.item(node.item).clone());
+        match before {
+            Some(before) if replace => {
+                let item = self.items.get_mut(&before.item).expect("an entry's");
+                item.url = url;
+                item.state = state;
+                return;
+            }
+            None if replace => {
+                let item = self.new_item(url, 0);
+                self.items.get_mut(&item).expect("just made").state = state;
+                self.entries[current].root.place(&path, item);
+                return self.sweep();
+            }
+            _ => {}
         }
+        let before = before.unwrap_or_default();
         let mut root = base.root.clone_live(tree, tree.root());
         let title = base.title.clone();
         let item = self.item_numbers.get_next();
@@ -550,12 +582,15 @@ impl NavigationController {
                 manual_scroll_restoration: before.manual_scroll_restoration,
             },
         );
-        root.item = item;
+        if !root.place_keeping(&path, item, true) {
+            return self.sweep();
+        }
         self.push(Entry {
             title,
             initial: false,
             root,
         });
+        self.sweep();
     }
 
     /// The traversal `navigation_id` within the main frame's document
@@ -782,7 +817,7 @@ mod tests {
         let (mut controller, tree) = three();
         commit(&mut controller, &tree, 4, NavigationType::Reload, "c");
         assert_eq!(urls(&controller), ["a", "b", "c"]);
-        controller.did_commit_same_document(&tree, "c#x".into(), false, None);
+        controller.did_commit_same_document(&tree, MAIN, "c#x".into(), false, None);
         assert_eq!(urls(&controller), ["a", "b", "c", "c#x"]);
         assert_eq!(controller.current_index(), Some(3));
     }
@@ -799,7 +834,7 @@ mod tests {
         assert_eq!(urls(&controller), ["a", "r", "c"]);
         assert_eq!(controller.current_index(), Some(1));
         assert_eq!(controller.entry(1).map(|e| e.title()), Some(""));
-        controller.did_commit_same_document(&tree, "r#x".into(), true, None);
+        controller.did_commit_same_document(&tree, MAIN, "r#x".into(), true, None);
         assert_eq!(urls(&controller), ["a", "r#x", "c"]);
         assert_eq!(controller.current_index(), Some(1));
         let mut empty = NavigationController::default();
@@ -844,7 +879,7 @@ mod tests {
         let mut controller = NavigationController::default();
         commit(&mut controller, &tree, 1, NavigationType::NewEntry, "a");
         controller.set_manual_scroll_restoration(&tree, MAIN, true);
-        controller.did_commit_same_document(&tree, "a#x".into(), false, Some(vec![1]));
+        controller.did_commit_same_document(&tree, MAIN, "a#x".into(), false, Some(vec![1]));
         let root = |controller: &NavigationController, index| {
             controller.entry(index).expect("an entry").root().clone()
         };
@@ -855,7 +890,7 @@ mod tests {
         assert_eq!(root(&controller, 1).state, Some(vec![1]));
         assert!(root(&controller, 1).manual_scroll_restoration);
         assert!(controller.is_same_document(0));
-        controller.did_commit_same_document(&tree, "a#y".into(), true, Some(vec![2]));
+        controller.did_commit_same_document(&tree, MAIN, "a#y".into(), true, Some(vec![2]));
         assert_eq!(urls(&controller), ["a", "a#y"]);
         assert_eq!(root(&controller, 1).state, Some(vec![2]));
         commit(&mut controller, &tree, 2, NavigationType::Reload, "a#y");
@@ -889,7 +924,7 @@ mod tests {
         let tree = FrameTree::new(MAIN);
         let mut controller = NavigationController::default();
         commit(&mut controller, &tree, 1, NavigationType::NewEntry, "a");
-        controller.did_commit_same_document(&tree, "a#x".into(), false, None);
+        controller.did_commit_same_document(&tree, MAIN, "a#x".into(), false, None);
         controller.did_start(2, MAIN, NavigationType::HistoryIndex(0));
         assert_eq!(controller.index_for_offset(1), Some(1));
         controller.did_commit_history_same_document(2, "a".into());
@@ -911,7 +946,7 @@ mod tests {
         // entry: it commits as a new one instead of an index that's gone.
         commit(&mut controller, &tree, 4, NavigationType::HistoryIndex(1), "b");
         controller.did_start(5, MAIN, NavigationType::HistoryIndex(2));
-        controller.did_commit_same_document(&tree, "b#x".into(), false, None);
+        controller.did_commit_same_document(&tree, MAIN, "b#x".into(), false, None);
         controller.did_commit(&tree, MAIN, 5, "c".into());
         assert_eq!(urls(&controller), ["a", "b", "b#x", "c"]);
     }
@@ -1025,6 +1060,57 @@ mod tests {
         assert_eq!(controller.entry(1).map(|e| e.frame_count()), Some(3));
     }
 
+    /// A child frame's navigation within its document: a new entry, the
+    /// current one's but for its item (of the same document, with its
+    /// mode; its frames' places kept), or, replacing, its item changed in
+    /// every entry that has it. One with no place gets one.
+    #[test]
+    fn a_child_frame_s_navigations_within_its_document() {
+        let tree = frames();
+        let mut controller = NavigationController::default();
+        commit(&mut controller, &tree, 1, NavigationType::NewEntry, "a");
+        controller.did_commit_same_document(&tree, token(2), "about:blank#x".into(), true, Some(vec![2]));
+        assert_eq!(controller.entry_count(), 1);
+        let frame = |controller: &NavigationController, index: usize, name: &str| {
+            controller
+                .entry(index)
+                .and_then(|e| e.frame(name).cloned())
+        };
+        let two = frame(&controller, 0, "two").expect("placed");
+        assert_eq!(
+            (two.url.as_str(), two.document, two.state),
+            ("about:blank#x", 0, Some(vec![2]))
+        );
+        commit_child(&mut controller, &tree, token(1), 2, NavigationType::Replace, "one");
+        commit_child(&mut controller, &tree, token(3), 3, NavigationType::Replace, "three");
+        controller.set_manual_scroll_restoration(&tree, token(1), true);
+        controller.did_commit_same_document(&tree, token(1), "one#y".into(), false, Some(vec![1]));
+        assert_eq!(controller.entry_count(), 2);
+        assert_eq!(controller.current_index(), Some(1));
+        let one = frame(&controller, 1, "one").expect("there");
+        assert_eq!(
+            (one.url.as_str(), one.document, one.state, one.manual_scroll_restoration),
+            ("one#y", 2, Some(vec![1]), true)
+        );
+        assert_eq!(child_url(&controller, 0, "one"), Some("one"));
+        assert_eq!(child_url(&controller, 1, "three"), Some("three"));
+        assert_eq!(
+            frame(&controller, 1, "two").map(|i| i.item),
+            frame(&controller, 0, "two").map(|i| i.item)
+        );
+        // Frame 2's `replaceState`: both entries' item.
+        controller.did_commit_same_document(&tree, token(2), "about:blank#z".into(), true, None);
+        assert_eq!(child_url(&controller, 0, "two"), Some("about:blank#z"));
+        assert_eq!(controller.entry_count(), 2);
+        // Back, then a child frame's new entry: the one forward goes, and
+        // its items.
+        commit(&mut controller, &tree, 4, NavigationType::HistoryIndex(0), "a");
+        controller.did_commit_same_document(&tree, token(3), "three#w".into(), false, None);
+        assert_eq!(controller.entry_count(), 2);
+        assert_eq!(child_url(&controller, 1, "one"), Some("one"));
+        assert_eq!(controller.items.len(), 5);
+    }
+
     /// What no entry has a place for goes: an entry gone, a place another
     /// item took.
     #[test]
@@ -1047,7 +1133,7 @@ mod tests {
         // The main frame's new entry within its document keeps its frames'
         // places.
         commit_child(&mut controller, &tree, token(1), 7, NavigationType::Replace, "one4");
-        controller.did_commit_same_document(&tree, "b#x".into(), false, None);
+        controller.did_commit_same_document(&tree, MAIN, "b#x".into(), false, None);
         assert_eq!(urls(&controller), ["a", "b", "b#x"]);
         assert_eq!(child_url(&controller, 2, "one"), Some("one4"));
     }
@@ -1063,7 +1149,7 @@ mod tests {
         controller.did_start(2, token(1), NavigationType::NewEntry);
         controller.did_start(3, token(2), NavigationType::Replace);
         assert_eq!(controller.commit_place(2), Some((1, 2)));
-        controller.did_commit_same_document(&tree, "a#x".into(), false, None);
+        controller.did_commit_same_document(&tree, MAIN, "a#x".into(), false, None);
         assert_eq!(controller.commit_place(2), Some((2, 3)));
         assert_eq!(controller.commit_place(3), Some((1, 2)));
         assert_eq!(controller.commit_place(4), None);

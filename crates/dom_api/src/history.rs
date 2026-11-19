@@ -41,7 +41,8 @@ fn without_fragment(url: &Url) -> Url {
 
 /// HTML's navigate of `document`'s frame to `url` (absolute already), its
 /// entry replacing the current one if `replace` (or if `url` is the
-/// document's URL, as HTML's navigate makes it). To a fragment of the
+/// document's URL, or the document is the initial `about:blank`, as HTML's
+/// navigate makes it). To a fragment of the
 /// document: navigated now (its URL, its target element, its history's
 /// state `null`; `hashchange` queued if the fragment changed; `popstate`
 /// as the call ends); else the host navigates, as `initiator` asked.
@@ -53,7 +54,8 @@ pub(crate) fn navigate<'gc>(
     initiator: dom::NavigationInitiator<'gc>,
 ) {
     let current = document_url(cx, document);
-    let replace = replace || current.as_ref() == Some(&url);
+    let replace =
+        replace || current.as_ref() == Some(&url) || cx.is_initial_about_blank(document);
     if let Some(current) = current
         && url.fragment().is_some()
         && without_fragment(&url) == without_fragment(&current)
@@ -67,7 +69,7 @@ pub(crate) fn navigate<'gc>(
             }
         }
         if !replace {
-            push_entry(cx, document);
+            cx.push_session_history_entry();
         }
         cx.request_navigation(
             document,
@@ -89,15 +91,6 @@ pub(crate) fn navigate<'gc>(
             replace,
         },
     );
-}
-
-/// A new entry of `document` after the current one: the top-level
-/// document's is in the session history (a child frame's isn't, as the
-/// host keeps it).
-fn push_entry<'gc>(cx: &ApiCx<'_, 'gc>, document: NodeRef<'gc>) {
-    if cx.frame_owner(document).is_none() {
-        cx.push_session_history_entry();
-    }
 }
 
 /// `document`'s target element for `url`'s fragment (HTML's; `:target`),
@@ -343,8 +336,9 @@ pub(crate) fn replace_state<'gc>(
 /// HTML's shared history push/replace state steps (`data` serialized
 /// already, as Blink's `History::pushState` does first), then its URL and
 /// history update steps: the document's URL is `url` (resolved against
-/// the document's), its history's state `data`, and the host told. No
-/// scrolling, no events.
+/// the document's), its history's state `data`, and the host told; the
+/// initial `about:blank`'s entry replaced, not pushed. No scrolling, no
+/// events.
 fn push_or_replace<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, History>,
@@ -380,8 +374,9 @@ fn push_or_replace<'gc>(
     };
     cx.set_document_url(document, new_url.as_str());
     cx.set_history_state(this, Some(data.to_vec()));
+    let replace = replace || cx.is_initial_about_blank(document);
     if !replace {
-        push_entry(cx, document);
+        cx.push_session_history_entry();
     }
     cx.request_navigation(
         document,

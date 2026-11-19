@@ -278,6 +278,77 @@ fn history_members() {
     );
 }
 
+/// A child frame's entries are the page's: its `pushState` and its
+/// navigation to a fragment add one to every frame's `history.length`,
+/// but on its initial `about:blank`, whose entry they take the place of.
+#[test]
+fn a_child_frames_entries_are_the_pages() {
+    let mut page = Page::new("https://example.test/a/b.html");
+    page.load();
+    page.engine.set_session_history(SessionHistory {
+        index: 0,
+        length: 1,
+    });
+    page.eval("var f = document.body.appendChild(document.createElement('iframe')); 0");
+    let child = page
+        .engine
+        .take_frame_requests()
+        .into_iter()
+        .find_map(|request| match request {
+            FrameRequest::Created { frame, .. } => Some(frame),
+            _ => None,
+        })
+        .expect("the iframe's frame");
+    // Completely loaded (as Chromium's initial empty document is), so that
+    // `location`'s navigations aren't replacements for that.
+    page.engine.document_ready(child, DocumentReadiness::Loaded);
+    assert_eq!(
+        page.eval(
+            "f.contentWindow.history.pushState(1, ''); f.contentWindow.location.hash = 'x'; \
+             [history.length, f.contentWindow.history.length].join()"
+        ),
+        "1,1"
+    );
+    let replaced: Vec<bool> = page
+        .navigations()
+        .into_iter()
+        .filter_map(|navigation| match navigation {
+            FrameNavigation::SameDocument { replace, .. } => Some(replace),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(replaced, [true, true]);
+    page.eval("f.contentWindow.location.href = 'z.html'; 0");
+    assert_eq!(
+        page.navigations(),
+        [to("https://example.test/a/z.html", true)]
+    );
+    // Its next document isn't the initial `about:blank` (completely loaded,
+    // as `location`'s navigations take the entry's place before).
+    drop(
+        page.engine
+            .create_window(child, "https://example.test/c", Instant::now())
+            .expect("a window"),
+    );
+    page.engine.document_ready(child, DocumentReadiness::Loaded);
+    assert_eq!(
+        page.eval(
+            "f.contentWindow.history.pushState(1, ''); f.contentWindow.location.hash = 'x'; \
+             [history.length, f.contentWindow.history.length].join()"
+        ),
+        "3,3"
+    );
+    let replaced: Vec<bool> = page
+        .navigations()
+        .into_iter()
+        .filter_map(|navigation| match navigation {
+            FrameNavigation::SameDocument { replace, .. } => Some(replace),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(replaced, [false, false]);
+}
+
 /// The host's traversal: the URL, the entry's state (`popstate`'s, the
 /// same object as `history.state`) and mode, `:target`, `hashchange` if
 /// the fragment changed; a new document's state restored at its commit.

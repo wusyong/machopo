@@ -148,10 +148,10 @@ impl<'gc> Cx<'_, 'gc> {
         });
     }
 
-    /// The top-level document added an entry after the current one
+    /// A document of the page added an entry after the current one
     /// (`pushState`, a fragment's navigation), which the browser hears of
     /// after: the current one now, those forward of it gone (Blink's
-    /// renderer counts it as well).
+    /// renderer counts it as well, `IncreaseHistoryListFromNavigation`).
     pub fn push_session_history_entry(&self) {
         let index = self.session_history().index.saturating_add(1);
         self.changes.session_history.set(SessionHistory {
@@ -251,6 +251,20 @@ impl<'gc> Cx<'_, 'gc> {
     pub fn set_completely_loaded(&self, document: NodeRef<'gc>) {
         self.ensure_document_data(document)
             .completely_loaded
+            .set(true);
+    }
+
+    /// Whether `document` is HTML's initial `about:blank` (a child frame's
+    /// first document, made with it): its frame's navigations, and its
+    /// own within it, take its entry's place.
+    pub fn is_initial_about_blank(&self, document: NodeRef<'gc>) -> bool {
+        self.document_data(document)
+            .is_some_and(|data| data.initial_about_blank.get())
+    }
+
+    pub fn set_initial_about_blank(&self, document: NodeRef<'gc>) {
+        self.ensure_document_data(document)
+            .initial_about_blank
             .set(true);
     }
 

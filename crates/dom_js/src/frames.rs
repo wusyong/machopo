@@ -245,6 +245,7 @@ pub(crate) fn create_child(scope: &mut Scope<'_, '_, '_>, owner: &NodeRoot) -> O
         cx.set_page_focused(window, focused);
         // Its page's visibility too.
         cx.set_page_hidden(window, parent.is_some_and(|parent| cx.page_hidden(parent)));
+        cx.set_initial_about_blank(document.get(cx.gc));
     });
     state.frames.set(Frame {
         token: Some(token),

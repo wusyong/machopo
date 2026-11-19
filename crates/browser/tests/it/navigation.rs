@@ -4242,7 +4242,8 @@ document.querySelector('base').setAttribute('href', '/later/');
     /// A child frame's navigation to a fragment happens in it (its own
     /// `hashchange`), the browser told its URL; its navigation to another
     /// document is the browser's to load (`BeginNavigation` of the child
-    /// frame, asked by it). Neither is in the session history.
+    /// frame, asked by it). The fragment's is an entry of the session
+    /// history, the child frame's.
     #[test]
     fn a_child_frame_s_location() {
         let child = "<script>\
@@ -4296,7 +4297,21 @@ document.querySelector('base').setAttribute('href', '/later/');
         );
         assert_eq!(asked, [server.url("/elsewhere")]);
         assert_eq!(within, ["about:srcdoc#x"]);
-        assert_eq!(history(&web_contents), (vec![url], Some(0)));
+        // `/elsewhere` may have committed since, an entry after.
+        let child = web_contents.frame_tree().children(main)[0];
+        let name = web_contents
+            .frame_tree()
+            .unique_name(child)
+            .expect("there")
+            .to_owned();
+        let controller = web_contents.controller();
+        assert!(controller.entries().all(|entry| entry.url() == url));
+        let fragments: Vec<Option<&str>> = controller
+            .entries()
+            .take(2)
+            .map(|entry| entry.frame(&name).map(|item| item.url.as_str()))
+            .collect();
+        assert_eq!(fragments, [Some("about:srcdoc"), Some("about:srcdoc#x")]);
         web_contents.shutdown();
     }
 
@@ -4460,9 +4475,8 @@ document.querySelector('base').setAttribute('href', '/later/');
         web_contents.shutdown();
     }
 
-    /// `history.back()` from script, a child frame's too (the main
-    /// frame's session history, where the child frame's own `pushState`
-    /// isn't), after a
+    /// `history.back()` from script, a child frame's too (the tab's
+    /// session history, the child frame's own `pushState` in it), after a
     /// `pushState` in the same task: back to the entry before it (and its
     /// fragment, so `hashchange` too).
     #[test]
@@ -4483,13 +4497,13 @@ document.querySelector('base').setAttribute('href', '/later/');
         ]);
         let (mut web_contents, host_rx) = tab();
         web_contents.navigate(server.url("/"));
-        assert_eq!(logged(&mut web_contents, &host_rx), "len-3");
+        assert_eq!(logged(&mut web_contents, &host_rx), "len-4");
         logged_until(
             &mut web_contents,
             &host_rx,
-            "len-3_popstate-1-/one-true_hashchange-two-one",
+            "len-4_popstate-1-/one-true_hashchange-two-one",
         );
-        assert_eq!(history(&web_contents).1, Some(1));
+        assert_eq!(history(&web_contents).1, Some(2));
         assert_eq!(loads_of_the_page(&server), 1);
         web_contents.shutdown();
     }
@@ -4650,6 +4664,69 @@ document.querySelector('base').setAttribute('href', '/later/');
     fn a_child_frames_documents_are_in_the_history() {
         a_child_frames_documents_are_in_the_history_from(false);
         a_child_frames_documents_are_in_the_history_from(true);
+    }
+
+    /// A child frame's `pushState` is a new entry, every frame's
+    /// `history.length` counting it, its `replaceState` its item in it; on
+    /// its initial `about:blank` one takes the entry's place, its frame's
+    /// place in it.
+    #[test]
+    fn a_child_frames_push_state_is_in_the_history() {
+        let html = format!(
+            "{}<iframe src=/a></iframe><iframe></iframe>",
+            logging(
+                "frames[0].history.pushState({n: 1}, '', '/a2');
+                 frames[1].history.pushState({n: 2}, '');
+                 frames[0].history.replaceState({n: 3}, '', '/a3');
+                 report(`len-${history.length}-${frames[0].history.length}-${frames[1].history.length}`);"
+            )
+        );
+        let server = server(&[
+            ("/", Route::ok("text/html", html)),
+            ("/a", Route::ok("text/html", "a")),
+        ]);
+        let (mut web_contents, host_rx) = tab();
+        web_contents.navigate(server.url("/"));
+        assert_eq!(logged(&mut web_contents, &host_rx), "len-2-2-2");
+        let main = web_contents.devtools_frame_token();
+        let tree = web_contents.frame_tree();
+        let names: Vec<String> = tree
+            .children(main)
+            .iter()
+            .map(|child| tree.unique_name(*child).expect("there").to_owned())
+            .collect();
+        let controller = web_contents.controller();
+        let urls: Vec<(Option<&str>, Option<&str>)> = controller
+            .entries()
+            .map(|entry| {
+                (
+                    entry.frame(&names[0]).map(|item| item.url.as_str()),
+                    entry.frame(&names[1]).map(|item| item.url.as_str()),
+                )
+            })
+            .collect();
+        let (a, a3) = (server.url("/a"), server.url("/a3"));
+        assert_eq!(
+            urls,
+            [
+                (Some(a.as_str()), None),
+                (Some(a3.as_str()), Some("about:blank"))
+            ]
+        );
+        let entry = controller.entry(1).expect("there");
+        let states: Vec<bool> = [&names[0], &names[1]]
+            .iter()
+            .map(|name| entry.frame(name).is_some_and(|item| item.state.is_some()))
+            .collect();
+        assert_eq!(states, [true, true]);
+        assert_ne!(
+            entry.frame(&names[0]).map(|item| item.state.clone()),
+            controller
+                .entry(0)
+                .and_then(|entry| entry.frame(&names[0]))
+                .map(|item| item.state.clone())
+        );
+        web_contents.shutdown();
     }
 
     /// A child frame's new entry after one the main frame's `pushState`

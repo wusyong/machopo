@@ -366,12 +366,12 @@ fn a_childs_location_navigates_it() {
         navigations(&mut engine),
         [(other, "https://other.test/x/k.html".to_owned())]
     );
-    // A child's entries aren't the session history's (its host's).
+    // A child's entries are the page's session history's.
     run(
         &mut engine,
         "f0.contentWindow.history.pushState(null, ''); log.push(history.length);",
     );
-    assert_eq!(log(&mut engine), "1");
+    assert_eq!(log(&mut engine), "2");
     engine.take_frame_requests();
     run(&mut engine, "location.href = 'l.html';");
     let top = engine.top_frame();

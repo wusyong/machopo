@@ -1196,17 +1196,16 @@ impl WebContents {
                 if let Err(reason) = self.frame_tree.did_commit_same_document(*frame, url) {
                     return self.received_bad_message(reason);
                 }
-                // A child frame's isn't in the session history yet.
-                if *frame != self.frame_tree.root() {
-                    return;
+                if *frame == self.frame_tree.root() {
+                    self.url = Some(url.clone());
                 }
-                self.url = Some(url.clone());
                 match navigation_id {
                     Some(id) => self
                         .controller
                         .did_commit_history_same_document(*id, url.clone()),
                     None => self.controller.did_commit_same_document(
                         &self.frame_tree,
+                        *frame,
                         url.clone(),
                         *replace,
                         state.clone(),
