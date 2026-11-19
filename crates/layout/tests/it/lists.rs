@@ -125,6 +125,19 @@ fn an_outside_marker_is_below_the_items_padding_and_border() {
     assert_eq!(laid.marker("a").unwrap().offset.y, 13.0);
 }
 
+/// Without a line, the marker is at the start and top of the list item's
+/// content box.
+#[test]
+fn an_outside_marker_without_a_line_is_at_the_content_box() {
+    let laid = lay_out(&format!(
+        "{AHEM}<ol><li id=a style='padding: 7px 0 0 3px'></ol>"
+    ));
+    assert_eq!(
+        laid.marker("a").unwrap().offset,
+        PointF::new(3.0 - 60.0, 7.0)
+    );
+}
+
 /// An inside marker is the list item's first inline box, on its first
 /// line; `list-style-type: none`, or `::marker { content: none }`, shows
 /// none; `::marker`'s `content` takes the place of the type's.

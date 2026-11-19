@@ -11,7 +11,7 @@
 | 1a 型別和 converter | 完成 | 2026-11-19 |
 | 1b inline 的行在 box 裡的位置 | 完成 | 2026-11-19 |
 | 1c table，連 collapsed border | 完成 | 2026-11-19 |
-| 1d float、list marker、line clamp、置中、slider 的 thumb | | |
+| 1d float、list marker、line clamp、置中、slider 的 thumb | 完成 | 2026-11-19 |
 | 1e 第 1 階段的檢查和文件 | | |
 
 ## 驗收
@@ -50,3 +50,12 @@ macOS、Apple M4，2026-11-19。
 - mutation test（`mutants-1c.toml`）20 個，全部抓到（第一輪 9 個沒抓到，都是 layout 的測試沒有直接檢查的資料：collapsed border 的格線、欄的背景、caption 的 margin 和 out-of-flow box、table 自己的 out-of-flow box、baseline；補了上面的測試之後抓到）。
 - 找到的遺漏：第 4 條要記進 `docs/test-gaps.md` 的 `rtl` 和直排的路，1a、1b 時漏記了，這一段補上（「只靠審查」）。
 - 跑過：`cargo test -p layout`（480 個）、`cargo test -p paint`；`test.py reftest tables/`（11 個）、`test.py wpt css/css-tables/ css/CSS2/tables/`（1665 個，和預期一樣）。
+
+### 1d：float、list marker、line clamp、置中、slider 的 thumb
+
+macOS、Apple M4，2026-11-19。
+
+- list marker 照第一行的起點和 baseline（沒有行時照內容區的 inline-start、block-start）用邏輯的位移，經過 list item 的 converter；float 從內容區的起點（`content_box_origin`）放；按鈕和文字欄位的內容沿 block 方向置中；range 的 thumb 沿 inline 方向移；line clamp 的位置、每個 block 的 block size 和容器的 block size 沿 block 方向（容器自己的大小用它的 output，它的 layout 還沒設）。atomic inline 和 float 在行間的位置是 parley 給的，屬於行裡面那一層（第 5 條），沒有換。
+- 新的測試：`lists::an_outside_marker_without_a_line_is_at_the_content_box`、`form_controls::a_buttons_block_children_are_centered_with_their_margins`、`line_clamp::nested_blocks_end_with_the_clamped_line_from_their_own_tops`、`paint` 的 `theme::a_ranges_thumb_keeps_to_its_tracks_content_box_and_its_margins`（thumb 的位置只有 paint 看得到：值的那一段畫到 thumb 的中間）。都是 mutation test 沒抓到之後補的。
+- mutation test（`mutants-1d.toml`）18 個，全部抓到（第一輪 6 個沒抓到，補了上面的測試之後抓到；range 的三個用 `paint` 的測試）。
+- 跑過：`cargo test -p layout`、`cargo test -p paint`；`test.py reftest floats/ generated/ block/ inline/`（24 個，和預期一樣）；`test.py wpt css/css-overflow/ css/css-lists/ css/CSS2/floats/ html/rendering/widgets/`：66 個結果和預期不同：整份的 5 個（`text-overflow-012`、`text-overflow-022` 失敗，`CSS2/floats/new-fc-beside-adjoining-float`、`CSS2/floats/new-fc-separates-from-float-2`、`text-overflow-020` 意外通過），subtest 61 個（`button-layout/display-other` 和 `baseline-alignment-and-overflow.tentative` 意外通過）；這 7 份在 `main`（`2e74f30`，0105 之前）上跑結果完全一樣：這台 macOS 和預期結果對不上，不是這份 RFC 造成的，沒有在這裡改預期結果。

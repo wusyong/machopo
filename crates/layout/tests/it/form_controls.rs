@@ -261,6 +261,17 @@ fn a_buttons_content_is_centered_in_it() {
     assert_eq!(from_top("small", "small-text"), 3.0);
 }
 
+/// A button's block children are centered with their margins: as the
+/// margin box they make together.
+#[test]
+fn a_buttons_block_children_are_centered_with_their_margins() {
+    let r = lay_out(
+        "<button style='height: 40px' id=b><div style='height: 10px; margin-bottom: 6px' id=c></div></button>",
+    );
+    // (34 − 16) / 2 below the content box's top, 3px down.
+    assert_eq!(r["c"].y - r["b"].y, 12.0);
+}
+
 /// In a block a button's `auto` width is fit-content, whatever its
 /// `display`, and it is a flow root (Chrome 152): beside a float, around
 /// its own; a flex or grid container stretches it, and out of flow it is

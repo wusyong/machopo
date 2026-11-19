@@ -89,6 +89,9 @@ use computed_style::{
 use gfx::{NodeId, NodeIdHashMap, NodeIdHashSet, PointF, SizeF};
 
 use crate::calc::CalcValues;
+use crate::logical::{
+    BoxStrut, LogicalOffset, LogicalSize, WritingModeConverter, to_physical_delta,
+};
 use taffy::{
     AvailableSpace, AxisStaticPosition, BlockContext, BlockFormattingContext, Cache, CacheTree,
     DetailedGridInfo, DetailedLayoutInfo, FloatIntrinsicWidthCalculator, Layout,
@@ -1519,18 +1522,40 @@ impl BoxTree {
     /// the content box without one (Blink's `LayoutOutsideListMarker`,
     /// placed by `ListMarker`).
     fn marker_link(&mut self, index: usize, marker: taffy::NodeId) -> FragmentLink {
-        let layout = self.boxes[index].layout;
-        let content = PointF::new(
-            layout.border.left + layout.padding.left,
-            layout.border.top + layout.padding.top,
-        );
-        let size = self.boxes[usize::from(marker)].layout.size;
+        let b = &self.boxes[index];
+        let (layout, writing_direction) = (b.layout, b.style.writing_direction());
+        let item = WritingModeConverter::new(writing_direction, physical_size(layout.size));
+        let m = &self.boxes[usize::from(marker)];
+        let size = physical_size(m.layout.size);
+        let own_converter = WritingModeConverter::new(m.style.writing_direction(), size);
+        let point = SizeF::new(0.0, 0.0);
         let at = match (self.first_line(index), self.first_line(marker.into())) {
-            (Some(line), Some(own)) => PointF::new(line.x, line.y - own.y),
-            _ => content,
+            (Some(line), Some(own)) => {
+                let line = item.to_logical_offset(line, point);
+                let own = own_converter.to_logical_offset(own, point);
+                LogicalOffset::new(line.inline_offset, line.block_offset - own.block_offset)
+            }
+            _ => {
+                let inset = BoxStrut::from_physical(
+                    Sides {
+                        top: layout.border.top + layout.padding.top,
+                        right: layout.border.right + layout.padding.right,
+                        bottom: layout.border.bottom + layout.padding.bottom,
+                        left: layout.border.left + layout.padding.left,
+                    },
+                    writing_direction,
+                );
+                LogicalOffset::new(inset.inline_start, inset.block_start)
+            }
         };
+        // Its inline-end there.
+        let inline_size = item.to_logical_size(size).inline_size;
+        let offset = item.to_physical_offset(
+            LogicalOffset::new(at.inline_offset - inline_size, at.block_offset),
+            size,
+        );
         FragmentLink {
-            offset: PointF::new(at.x - size.width, at.y),
+            offset,
             fragment: self.fragment(marker),
         }
     }
@@ -1757,25 +1782,38 @@ impl BoxTree {
         if inputs.run_mode == RunMode::PerformLayout {
             // Its fragments are made from these lines, beside these floats.
             inline.keep_laid_out();
-            self.place_floats(&inline, output.size.width, inset);
+            self.place_floats(index, &inline, physical_size(output.size), inset);
             output.oof_candidates = self.passed_up(index, &inline, &output, inset);
         }
         self.boxes[index].inline = Some(inline);
         output
     }
 
-    /// Puts the floats of `inline`, laid out for real, where its lines
-    /// placed them: from the border box, `width` wide, its content box
-    /// `inset` into it.
-    fn place_floats(&mut self, inline: &InlineContent, width: f32, inset: taffy::Rect<f32>) {
-        let content_width = (width - inset.left - inset.right).max(0.0);
+    /// Puts the floats of box `index`'s `inline`, laid out for real, where
+    /// its lines placed them: from its border box, `size` big, its content
+    /// box `inset` into it (the lines place them from the content box's top
+    /// left, as parley lays out horizontal lines only).
+    fn place_floats(
+        &mut self,
+        index: usize,
+        inline: &InlineContent,
+        size: SizeF,
+        inset: taffy::Rect<f32>,
+    ) {
+        let content_width = (size.width - inset.left - inset.right).max(0.0);
+        let origin = logical::content_box_origin(
+            self.boxes[index].style.writing_direction(),
+            size,
+            physical_sides(inset),
+            0.0,
+        );
         for (float, at) in inline.floats() {
             let b = &mut self.boxes[usize::from(float)];
             // Its own `position: relative` too, as for an atomic inline.
             let by = relative_offset(&b.style, content_width, inline.height());
             b.layout.location = taffy::Point {
-                x: inset.left + at.x + b.layout.margin.left + by.x,
-                y: inset.top + at.y + b.layout.margin.top + by.y,
+                x: origin.x + at.x + b.layout.margin.left + by.x,
+                y: origin.y + at.y + b.layout.margin.top + by.y,
             };
         }
     }
@@ -2164,13 +2202,23 @@ impl BoxTree {
         output: &mut LayoutOutput,
     ) {
         let style = &self.boxes[index].taffy_style;
-        let inset = content_box_inset(style, inputs.parent_size.width);
+        let writing_direction = self.boxes[index].style.writing_direction();
+        let inset = BoxStrut::from_physical(
+            physical_sides(content_box_inset(style, inputs.parent_size.width)),
+            writing_direction,
+        );
         let mut find = ClampFind {
             remaining: lines,
             point: None,
             more: false,
         };
-        self.find_clamp_point(index, 0.0, inset.top, &mut find);
+        self.find_clamp_point(
+            index,
+            physical_size(output.size),
+            0.0,
+            inset.block_start,
+            &mut find,
+        );
         let point = find.point.filter(|_| find.more);
         let mut changed = Vec::new();
         self.set_clamp_point(
@@ -2200,54 +2248,95 @@ impl BoxTree {
             chain.push(i);
             next = self.boxes[i].parent.filter(|&parent| parent != index);
         }
-        let tops: Vec<f32> = (0..chain.len())
-            .map(|k| {
-                chain[k..]
-                    .iter()
-                    .map(|&i| self.boxes[i].layout.location.y)
-                    .sum()
+        // Each one's block offset in its parent (the container's size is
+        // its output's: its layout isn't set yet).
+        let offsets: Vec<f32> = chain
+            .iter()
+            .map(|&i| {
+                let b = &self.boxes[i];
+                let parent = b.parent.expect("a box below the container");
+                let parent_size = if parent == index {
+                    physical_size(output.size)
+                } else {
+                    physical_size(self.boxes[parent].layout.size)
+                };
+                WritingModeConverter::new(writing_direction, parent_size)
+                    .to_logical_offset(
+                        PointF::new(b.layout.location.x, b.layout.location.y),
+                        physical_size(b.layout.size),
+                    )
+                    .block_offset
             })
+            .collect();
+        let tops: Vec<f32> = (0..chain.len())
+            .map(|k| offsets[k..].iter().sum())
             .collect();
         for (&i, top) in chain.iter().zip(tops) {
             let layout = &mut self.boxes[i].layout;
-            bottom += layout.padding.bottom + layout.border.bottom;
-            layout.size.height = bottom - top;
+            let padding =
+                BoxStrut::from_physical(physical_sides(layout.padding), writing_direction);
+            let border = BoxStrut::from_physical(physical_sides(layout.border), writing_direction);
+            bottom += padding.block_end + border.block_end;
+            let size = LogicalSize::from_physical(physical_size(layout.size), writing_direction);
+            let size =
+                LogicalSize::new(size.inline_size, bottom - top).to_physical(writing_direction);
+            layout.size = taffy::Size {
+                width: size.width,
+                height: size.height,
+            };
             self.boxes[i].needs_fragment = true;
         }
+        // Its block size, unless it has one of its own: along the block
+        // axis, which is the vertical one in horizontal writing.
+        let horizontal = writing_direction.is_horizontal();
         let style = &self.boxes[index].taffy_style;
-        let parent = inputs.parent_size.height;
+        let parent = block_axis(horizontal, inputs.parent_size);
         let calc = |_, _| 0.0;
-        if inputs.known_dimensions.height.is_some()
-            || style.size.height.maybe_resolve(parent, calc).is_some()
+        if block_axis(horizontal, inputs.known_dimensions).is_some()
+            || block_axis(horizontal, style.size)
+                .maybe_resolve(parent, calc)
+                .is_some()
         {
             return;
         }
         let extra = if style.box_sizing == taffy::BoxSizing::ContentBox {
-            inset.top + inset.bottom
+            inset.block_start + inset.block_end
         } else {
             0.0
         };
-        let min = style.min_size.height.maybe_resolve(parent, calc);
-        let max = style.max_size.height.maybe_resolve(parent, calc);
-        let mut height = bottom + inset.bottom;
+        let min = block_axis(horizontal, style.min_size).maybe_resolve(parent, calc);
+        let max = block_axis(horizontal, style.max_size).maybe_resolve(parent, calc);
+        let mut height = bottom + inset.block_end;
         if let Some(max) = max {
             height = height.min(max + extra);
         }
         if let Some(min) = min {
             height = height.max(min + extra);
         }
-        output.size.height = height;
+        if horizontal {
+            output.size.height = height;
+        } else {
+            output.size.width = height;
+        }
     }
 
-    /// Where [`Self::clamp_lines`] clamps in box `index`, whose border box
-    /// is `top` and content box `content_top` down the container's border
-    /// box, and whether something comes after it.
+    /// Where [`Self::clamp_lines`] clamps in box `index`, `size` big, whose
+    /// border box is `top` and content box `content_top` along the block
+    /// direction from the container's border box's block start, and
+    /// whether something comes after it.
     #[expect(
         clippy::arithmetic_side_effects,
         reason = "find.remaining starts at the clamp's count of lines, at least 1, and loses \
                   only fewer lines than it has: remaining - 1 < count"
     )]
-    fn find_clamp_point(&self, index: usize, top: f32, content_top: f32, find: &mut ClampFind) {
+    fn find_clamp_point(
+        &self,
+        index: usize,
+        size: SizeF,
+        top: f32,
+        content_top: f32,
+        find: &mut ClampFind,
+    ) {
         if find.more {
             return;
         }
@@ -2265,12 +2354,20 @@ impl BoxTree {
             }
             return;
         }
+        let writing_direction = b.style.writing_direction();
+        let converter = WritingModeConverter::new(writing_direction, size);
         for &child in &b.children {
             let c = &self.boxes[usize::from(child)];
             if in_same_block_formatting_context(c) {
-                let top = top + c.layout.location.y;
-                let content_top = top + c.layout.border.top + c.layout.padding.top;
-                self.find_clamp_point(usize::from(child), top, content_top, find);
+                let size = physical_size(c.layout.size);
+                let location = PointF::new(c.layout.location.x, c.layout.location.y);
+                let top = top + converter.to_logical_offset(location, size).block_offset;
+                let border =
+                    BoxStrut::from_physical(physical_sides(c.layout.border), writing_direction);
+                let padding =
+                    BoxStrut::from_physical(physical_sides(c.layout.padding), writing_direction);
+                let content_top = top + border.block_start + padding.block_start;
+                self.find_clamp_point(usize::from(child), size, top, content_top, find);
             } else if find.point.is_some() && !c.style.is_out_of_flow() {
                 // Content of its own after the clamped line.
                 find.more = true;
@@ -2334,20 +2431,35 @@ impl BoxTree {
     /// the track's start and its end less the thumb's size (Blink's
     /// `LayoutSliderTrack::UpdateLayout`), the track `output` as laid out.
     fn place_slider_thumbs(&mut self, index: usize, width: Option<f32>, output: &LayoutOutput) {
-        let inset = content_box_inset(&self.boxes[index].taffy_style, width);
-        let room = output.size.width - inset.left - inset.right;
+        let writing_direction = self.boxes[index].style.writing_direction();
+        let inset = BoxStrut::from_physical(
+            physical_sides(content_box_inset(&self.boxes[index].taffy_style, width)),
+            writing_direction,
+        );
+        let size = LogicalSize::from_physical(physical_size(output.size), writing_direction);
+        // Along the inline direction: a range is as its text would run.
+        let room = size.inline_size - inset.inline_start - inset.inline_end;
         let children = self.boxes[index].children.clone();
         for child in children {
             let b = &mut self.boxes[usize::from(child)];
             if let Some(ratio) = b.slider_ratio {
-                let thumb = b.layout.size.width + b.layout.margin.left + b.layout.margin.right;
-                b.layout.location.x += ratio * (room - thumb).max(0.0);
+                let size =
+                    LogicalSize::from_physical(physical_size(b.layout.size), writing_direction);
+                let margin =
+                    BoxStrut::from_physical(physical_sides(b.layout.margin), writing_direction);
+                let thumb = size.inline_size + margin.inline_start + margin.inline_end;
+                let moved = to_physical_delta(
+                    writing_direction,
+                    LogicalOffset::new(ratio * (room - thumb).max(0.0), 0.0),
+                );
+                b.layout.location.x += moved.x;
+                b.layout.location.y += moved.y;
             }
         }
     }
 
     /// HTML's button layout, and a text field's: box `index`'s content
-    /// (its lines, or its in-flow children) moved down to the middle of its
+    /// (its lines, or its in-flow children) moved along its block direction to the middle of its
     /// content box, `output` as laid out, `inset` its border and padding;
     /// where it doesn't fit, at its top if `safe` (a button's, as
     /// Chrome's), else in the middle still (a text field's).
@@ -2359,8 +2471,12 @@ impl BoxTree {
         safe: bool,
     ) {
         let b = &self.boxes[index];
-        let top = inset.top;
-        let room = output.size.height - inset.top - inset.bottom;
+        let writing_direction = b.style.writing_direction();
+        let size = physical_size(output.size);
+        let converter = WritingModeConverter::new(writing_direction, size);
+        let inset = BoxStrut::from_physical(physical_sides(inset), writing_direction);
+        let top = inset.block_start;
+        let room = converter.to_logical_size(size).block_size - inset.block_start - inset.block_end;
         let height = match &b.inline {
             Some(inline) => inline.lines_height().unwrap_or(0.0),
             None => b
@@ -2369,7 +2485,14 @@ impl BoxTree {
                 .map(|&id| &self.boxes[usize::from(id)])
                 .filter(|child| !child.style.is_out_of_flow())
                 .map(|child| {
-                    child.layout.location.y + child.layout.size.height + child.layout.margin.bottom
+                    let size = physical_size(child.layout.size);
+                    let location = child.layout.location;
+                    let at = converter.to_logical_offset(PointF::new(location.x, location.y), size);
+                    let margin = BoxStrut::from_physical(
+                        physical_sides(child.layout.margin),
+                        writing_direction,
+                    );
+                    at.block_offset + converter.to_logical_size(size).block_size + margin.block_end
                         - top
                 })
                 .fold(0.0, f32::max),
@@ -2709,6 +2832,17 @@ impl BoxTree {
 /// width again below the lowest float. None if no float is beside it.
 /// The slots are of the box's border box; a line's room is kept to the
 /// content box when it is worked out from them.
+/// A taffy size's value along the block axis: the vertical one in
+/// `horizontal` writing.
+fn block_axis<T>(horizontal: bool, size: taffy::Size<T>) -> T {
+    if horizontal { size.height } else { size.width }
+}
+
+/// A taffy size, as a size on the screen.
+fn physical_size(size: taffy::Size<f32>) -> SizeF {
+    SizeF::new(size.width, size.height)
+}
+
 /// A taffy rect's sides, as values per physical side.
 fn physical_sides(rect: taffy::Rect<f32>) -> Sides<f32> {
     Sides {

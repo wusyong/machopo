@@ -1,0 +1,121 @@
+# Stage 1d: list markers, floats, the centering of a button's content,
+# a range's thumb and line clamp in logical coordinates (`layout`'s
+# `lib.rs`).
+test = ["cargo", "test", "-q", "-p", "layout"]
+timeout = 900
+
+[[mutant]]
+name = "a marker's baseline not on the line's"
+file = "crates/layout/src/lib.rs"
+from = '''LogicalOffset::new(line.inline_offset, line.block_offset - own.block_offset)'''
+to = '''LogicalOffset::new(line.inline_offset, line.block_offset)'''
+
+[[mutant]]
+name = "a marker without a line at the content box's inline start twice"
+file = "crates/layout/src/lib.rs"
+from = '''LogicalOffset::new(inset.inline_start, inset.block_start)'''
+to = '''LogicalOffset::new(inset.inline_start, inset.inline_start)'''
+
+[[mutant]]
+name = "a marker's inline start at the line's start"
+file = "crates/layout/src/lib.rs"
+from = '''LogicalOffset::new(at.inline_offset - inline_size, at.block_offset),'''
+to = '''LogicalOffset::new(at.inline_offset, at.block_offset),'''
+
+[[mutant]]
+name = "floats placed from the border box"
+file = "crates/layout/src/lib.rs"
+from = '''x: origin.x + at.x + b.layout.margin.left + by.x,'''
+to = '''x: at.x + b.layout.margin.left + by.x,'''
+
+[[mutant]]
+name = "a button's content centered from the border box's block start"
+file = "crates/layout/src/lib.rs"
+from = '''let top = inset.block_start;'''
+to = '''let top = 0.0;'''
+
+[[mutant]]
+name = "a button's children's height without their block-end margins"
+file = "crates/layout/src/lib.rs"
+from = '''+ margin.block_end'''
+to = ''''''
+
+[[mutant]]
+name = "a button's room with its block-start inset only"
+file = "crates/layout/src/lib.rs"
+from = '''let room = converter.to_logical_size(size).block_size - inset.block_start - inset.block_end;'''
+to = '''let room = converter.to_logical_size(size).block_size - inset.block_start;'''
+
+[[mutant]]
+name = "a range's room with its inline-start inset only"
+# Only paint sees where a thumb is: its value's part ends at its middle.
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "range"]
+file = "crates/layout/src/lib.rs"
+from = '''let room = size.inline_size - inset.inline_start - inset.inline_end;'''
+to = '''let room = size.inline_size - inset.inline_start;'''
+
+[[mutant]]
+name = "a range's thumb without its inline-end margin"
+# Only paint sees where a thumb is: its value's part ends at its middle.
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "range"]
+file = "crates/layout/src/lib.rs"
+from = '''let thumb = size.inline_size + margin.inline_start + margin.inline_end;'''
+to = '''let thumb = size.inline_size + margin.inline_start;'''
+
+[[mutant]]
+name = "a range's thumb moved along the block direction"
+# Only paint sees where a thumb is: its value's part ends at its middle.
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "range"]
+file = "crates/layout/src/lib.rs"
+from = '''LogicalOffset::new(ratio * (room - thumb).max(0.0), 0.0),'''
+to = '''LogicalOffset::new(0.0, ratio * (room - thumb).max(0.0)),'''
+
+[[mutant]]
+name = "line clamp from the container's border box"
+file = "crates/layout/src/lib.rs"
+from = '''            inset.block_start,
+'''
+to = '''            0.0,
+'''
+
+[[mutant]]
+name = "the clamped blocks' tops only their own offsets"
+file = "crates/layout/src/lib.rs"
+from = '''.map(|k| offsets[k..].iter().sum())'''
+to = '''.map(|k| offsets[k])'''
+
+[[mutant]]
+name = "the clamped blocks end without their padding and border"
+file = "crates/layout/src/lib.rs"
+from = '''bottom += padding.block_end + border.block_end;'''
+to = '''bottom += 0.0;'''
+
+[[mutant]]
+name = "the clamped blocks' block size set as their inline size"
+file = "crates/layout/src/lib.rs"
+from = '''                LogicalSize::new(size.inline_size, bottom - top).to_physical(writing_direction);'''
+to = '''                LogicalSize::new(bottom - top, size.block_size).to_physical(writing_direction);'''
+
+[[mutant]]
+name = "the clamp container ends without its block-end inset"
+file = "crates/layout/src/lib.rs"
+from = '''let mut height = bottom + inset.block_end;'''
+to = '''let mut height = bottom;'''
+
+[[mutant]]
+name = "a nested block's content top without its padding"
+file = "crates/layout/src/lib.rs"
+from = '''let content_top = top + border.block_start + padding.block_start;'''
+to = '''let content_top = top + border.block_start;'''
+
+[[mutant]]
+name = "a nested block's top without its offset"
+file = "crates/layout/src/lib.rs"
+from = '''let top = top + converter.to_logical_offset(location, size).block_offset;'''
+to = '''let top = top;'''
+
+[[mutant]]
+name = "the block axis is the inline one"
+file = "crates/layout/src/lib.rs"
+from = '''if horizontal { size.height } else { size.width }'''
+to = '''if horizontal { size.width } else { size.height }'''

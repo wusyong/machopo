@@ -453,3 +453,27 @@ fn menu_lists() {
     let scaled = paint_scaled(html, Pointer::default(), 2.0);
     assert_eq!(described(&scaled, "plain")[2], "stroke #000000 1 path");
 }
+
+/// A range's thumb moves across its track's content box, less its own
+/// margins: its value's part, up to the thumb's middle, shows where.
+#[test]
+fn a_ranges_thumb_keeps_to_its_tracks_content_box_and_its_margins() {
+    let p = paint(
+        "<style>input { margin: 0 }
+           .t::-webkit-slider-thumb { appearance: none; width: 30px; height: 4px }
+           #m::-webkit-slider-thumb { margin-right: 10px }
+           #p::-webkit-slider-runnable-track { padding-right: 20px }</style>
+         <div><input type=range value=25 id=m class=t></div>
+         <div><input type=range value=25 id=p class=t></div>",
+        Pointer::default(),
+    );
+    // A quarter of (129 − 30 − 10) in, and of (129 − 20 − 30).
+    assert_eq!(
+        described(&p, "m")[1],
+        format!("fill #0075ff rrect {}x8 r4", 15.0 + 0.25 * (129.0 - 40.0))
+    );
+    assert_eq!(
+        described(&p, "p")[1],
+        format!("fill #0075ff rrect {}x8 r4", 15.0 + 0.25 * (109.0 - 30.0))
+    );
+}

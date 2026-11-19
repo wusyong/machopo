@@ -146,6 +146,19 @@ fn the_blocks_around_the_clamped_line_end_with_it() {
     assert_eq!(laid.rect("a").height, 52.0);
 }
 
+/// Each block around the clamped line ends with it from its own top: its
+/// offset in its parent and theirs, up to the container.
+#[test]
+fn nested_blocks_end_with_the_clamped_line_from_their_own_tops() {
+    let laid = lay_out(&format!(
+        "{CLAMP}<div class=clamp>X<div id=b style='padding-top: 4px'><div id=c
+           style='padding-top: 6px'>X<br>X</div></div></div>"
+    ));
+    // `b` at 20, `c` 4 into it, its line 6 into `c`, to 50.
+    assert_eq!(laid.rect("c").height, 26.0);
+    assert_eq!(laid.rect("b").height, 30.0);
+}
+
 /// The ellipsis is placed before the line is aligned: a right-aligned line
 /// moves left by its width, as far as there is room.
 #[test]
