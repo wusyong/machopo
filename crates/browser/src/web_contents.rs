@@ -1021,32 +1021,32 @@ impl WebContents {
         let document = match result {
             Ok(response) => {
                 let content_language = response
-                    .headers
+                    .head.headers
                     .iter()
                     .find(|(name, _)| name == "content-language")
                     .map(|(_, value)| value.clone());
                 let content_encoding = response
-                    .headers
+                    .head.headers
                     .iter()
                     .find(|(name, _)| name == "content-encoding")
                     .map(|(_, value)| value.clone());
                 let loaded = NavigationLoad {
-                    status: response.status,
-                    status_text: response.status_text.clone(),
-                    encoded_headers_length: response.encoded_headers_length,
+                    status: response.head.status,
+                    status_text: response.head.status_text.clone(),
+                    encoded_headers_length: response.head.encoded_headers_length,
                     encoded_body_length: response.encoded_body_length,
                     response_end: response
-                        .timing
+                        .head.timing
                         .map_or_else(TimeTicks::now, |timing| timing.response_end),
-                    timing: response.timing,
+                    timing: response.head.timing,
                     redirects,
-                    protocol: response.protocol.clone(),
+                    protocol: response.head.protocol.clone(),
                     content_encoding,
                 };
                 CommittedDocument {
-                    url: response.url,
-                    mime_type: response.mime_type,
-                    charset: response.charset,
+                    url: response.head.url,
+                    mime_type: response.head.mime_type,
+                    charset: response.head.charset,
                     content_language,
                     body: response.body,
                     loaded: Some(loaded),

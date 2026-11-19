@@ -315,6 +315,7 @@ impl NetworkAgent {
             }
         };
         let end = response
+            .head
             .timing
             .map_or_else(TimeTicks::now, |timing| timing.response_end);
         self.tell(
@@ -324,11 +325,11 @@ impl NetworkAgent {
                 "requestId": known.id,
                 "loaderId": known.loader_id,
                 "timestamp": response
-                    .timing
+                    .head.timing
                     .map_or(end, |timing| timing.receive_headers_end)
                     .as_secs_f64(),
                 "type": known.kind,
-                "response": response_json(response),
+                "response": response_json(&response.head),
                 "hasExtraInfo": false,
                 "frameId": known.frame_id,
             }),
@@ -353,12 +354,12 @@ impl NetworkAgent {
                 "requestId": known.id,
                 "timestamp": end.as_secs_f64(),
                 "encodedDataLength": response
-                    .encoded_headers_length
+                    .head.encoded_headers_length
                     .saturating_add(response.encoded_body_length),
             }),
         );
-        let text = is_text(&response.mime_type) && std::str::from_utf8(&response.body).is_ok();
-        let url = response.url.split('#').next().unwrap_or_default();
+        let text = is_text(&response.head.mime_type) && std::str::from_utf8(&response.body).is_ok();
+        let url = response.head.url.split('#').next().unwrap_or_default();
         let mut sessions = self.sessions.borrow_mut();
         for session in &known.sessions {
             if let Some(state) = sessions.get_mut(session) {
@@ -709,18 +710,20 @@ mod tests {
 
     fn response(url: &str, mime_type: &str, body: &[u8]) -> protocol::network::ResourceResponse {
         protocol::network::ResourceResponse {
-            url: url.into(),
-            status: 200,
-            status_text: "OK".into(),
-            redirected: false,
-            tainting: ResponseTainting::Basic,
-            mime_type: mime_type.into(),
-            charset: None,
-            headers: Vec::new(),
-            timing: None,
-            remote_address: None,
-            protocol: "http/1.1".into(),
-            encoded_headers_length: 10,
+            head: protocol::network::ResponseHead {
+                url: url.into(),
+                status: 200,
+                status_text: "OK".into(),
+                redirected: false,
+                tainting: ResponseTainting::Basic,
+                mime_type: mime_type.into(),
+                charset: None,
+                headers: Vec::new(),
+                timing: None,
+                remote_address: None,
+                protocol: "http/1.1".into(),
+                encoded_headers_length: 10,
+            },
             encoded_body_length: 3,
             body: Bytes::copy_from_slice(body),
         }
@@ -760,7 +763,7 @@ mod tests {
         let redirect = RedirectInfo {
             new_url: "https://a.test/t.css".into(),
             new_method: "GET".into(),
-            response: response("https://a.test/s.css", "text/html", b""),
+            response: response("https://a.test/s.css", "text/html", b"").head,
         };
         agent.did_redirect(7, &redirect);
         agent.did_finish(

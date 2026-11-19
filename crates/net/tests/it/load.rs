@@ -55,12 +55,17 @@ fn http_response_with_charset_and_headers() {
     )]);
     let network = NetworkContext::start(params()).unwrap();
     let response = fetch(&network, &server.url("/page"), RequestDestination::Document).unwrap();
-    assert_eq!(response.status, 200);
-    assert_eq!(response.url, server.url("/page"));
-    assert_eq!(response.mime_type, "text/html");
-    assert_eq!(response.charset.as_deref(), Some("Shift_JIS"));
+    assert_eq!(response.head.status, 200);
+    assert_eq!(response.head.url, server.url("/page"));
+    assert_eq!(response.head.mime_type, "text/html");
+    assert_eq!(response.head.charset.as_deref(), Some("Shift_JIS"));
     assert_eq!(response.body, &b"<p>hi"[..]);
-    assert!(response.headers.contains(&("x-test".into(), "1".into())));
+    assert!(
+        response
+            .head
+            .headers
+            .contains(&("x-test".into(), "1".into()))
+    );
 
     // What we sent: an Accept for the destination, and the User-Agent the
     // network service was started with (the browser's).
@@ -79,7 +84,7 @@ fn error_statuses_still_have_a_body() {
         RequestDestination::Document,
     )
     .unwrap();
-    assert_eq!(response.status, 404);
+    assert_eq!(response.head.status, 404);
     assert_eq!(response.body, &b"not found"[..]);
 }
 
@@ -96,9 +101,9 @@ fn missing_content_type_is_sniffed() {
         RequestDestination::Document,
     )
     .unwrap();
-    assert_eq!(markup.mime_type, "text/html");
+    assert_eq!(markup.head.mime_type, "text/html");
     let text = fetch(&network, &server.url("/text"), RequestDestination::Document).unwrap();
-    assert_eq!(text.mime_type, "text/plain");
+    assert_eq!(text.head.mime_type, "text/plain");
 }
 
 #[test]
@@ -115,7 +120,7 @@ fn redirects_are_followed_and_keep_the_fragment() {
         RequestDestination::Document,
     )
     .unwrap();
-    assert_eq!(response.url, server.url("/c?x=1#top"));
+    assert_eq!(response.head.url, server.url("/c?x=1#top"));
     assert_eq!(response.body, &b"end"[..]);
     let targets: Vec<_> = server.requests().into_iter().map(|r| r.target).collect();
     // The fragment never goes on the wire.
@@ -149,7 +154,7 @@ fn redirect_limits() {
         RequestDestination::Document,
     )
     .unwrap();
-    assert_eq!((stay.status, &stay.body[..]), (302, &b"stay"[..]));
+    assert_eq!((stay.head.status, &stay.body[..]), (302, &b"stay"[..]));
 }
 
 #[test]
@@ -187,7 +192,7 @@ fn files_and_other_schemes() {
 
     let url = net::file_url(&css).unwrap();
     let response = fetch(&network, &url, RequestDestination::Style).unwrap();
-    assert_eq!(response.mime_type, "text/css");
+    assert_eq!(response.head.mime_type, "text/css");
     assert_eq!(response.body, &b"p {}"[..]);
 
     let missing = fetch(
@@ -206,7 +211,7 @@ fn files_and_other_schemes() {
         RequestDestination::Document,
     )
     .unwrap();
-    assert_eq!(listing.mime_type, "text/html");
+    assert_eq!(listing.head.mime_type, "text/html");
     let page = String::from_utf8(listing.body.to_vec()).unwrap();
     let sub = page.find(">sub/</a>").expect("the directory");
     let file = page.find(">a b.css</a>").expect("the file");
@@ -327,7 +332,10 @@ fn additional_trust_anchors() {
     let network = NetworkContext::start(web_test_params()).unwrap();
     let url = server.url_for_host("www.web-platform.test", "/page");
     let response = fetch(&network, &url, RequestDestination::Document).unwrap();
-    assert_eq!((response.status, &response.body[..]), (200, &b"secure"[..]));
+    assert_eq!(
+        (response.head.status, &response.body[..]),
+        (200, &b"secure"[..])
+    );
 
     // The certificate is still checked: its names don't include the
     // address.
@@ -424,9 +432,9 @@ fn a_fetch_sends_its_headers() {
         ("Accept".into(), "text/x-machopo".into()),
     ];
     let response = load(&network, request).unwrap();
-    assert_eq!(response.url, server.url("/plain"));
-    assert!(response.redirected);
-    assert_eq!(response.status_text, "OK");
+    assert_eq!(response.head.url, server.url("/plain"));
+    assert!(response.head.redirected);
+    assert_eq!(response.head.status_text, "OK");
     let plain = server
         .requests()
         .into_iter()
@@ -436,7 +444,7 @@ fn a_fetch_sends_its_headers() {
     // Latin-1 on the wire, which the server reads back as such.
     assert_eq!(plain.header("x-one"), Some("caf\u{e9}"));
     let response = fetch(&network, &server.url("/plain"), RequestDestination::Empty).unwrap();
-    assert!(!response.redirected);
+    assert!(!response.head.redirected);
     let plain = server.requests().pop().unwrap();
     assert_eq!(plain.header("accept"), Some("*/*"));
 }
@@ -510,6 +518,7 @@ fn cors_requests() {
     let cors = |path: &str| script(other.url(path), &origin, RequestMode::Cors);
     let names = |response: &protocol::network::ResourceResponse| -> Vec<String> {
         response
+            .head
             .headers
             .iter()
             .map(|(name, _)| name.clone())
@@ -521,7 +530,7 @@ fn cors_requests() {
     );
     assert!(load(&network, cors("/elsewhere")).is_err());
     let open = load(&network, cors("/open")).unwrap();
-    assert_eq!(open.tainting, ResponseTainting::Cors);
+    assert_eq!(open.head.tainting, ResponseTainting::Cors);
     assert_eq!(open.body, &b"open"[..]);
     assert_eq!(
         names(&open),
@@ -749,14 +758,19 @@ fn no_cors_and_same_origin_modes() {
         script(other.url("/data"), &origin, RequestMode::NoCors),
     )
     .unwrap();
-    assert_eq!(opaque.tainting, ResponseTainting::Opaque);
-    assert_eq!((opaque.status, opaque.body.len()), (200, 0));
-    assert!(opaque.headers.contains(&("x-secret".into(), "1".into())));
+    assert_eq!(opaque.head.tainting, ResponseTainting::Opaque);
+    assert_eq!((opaque.head.status, opaque.body.len()), (200, 0));
+    assert!(
+        opaque
+            .head
+            .headers
+            .contains(&("x-secret".into(), "1".into()))
+    );
     let mut image = script(other.url("/data"), &origin, RequestMode::NoCors);
     image.destination = RequestDestination::Image;
     let image = load(&network, image).unwrap();
     assert_eq!(
-        (image.tainting, &image.body[..]),
+        (image.head.tainting, &image.body[..]),
         (ResponseTainting::Opaque, b"secret".as_slice())
     );
     assert!(
@@ -781,7 +795,7 @@ fn no_cors_and_same_origin_modes() {
         script("data:,x".into(), &origin, RequestMode::SameOrigin),
     )
     .unwrap();
-    assert_eq!(data.tainting, ResponseTainting::Basic);
+    assert_eq!(data.head.tainting, ResponseTainting::Basic);
     assert_eq!(other.requests().len(), sent);
     let mine = load(
         &network,
@@ -789,7 +803,7 @@ fn no_cors_and_same_origin_modes() {
     )
     .unwrap();
     assert_eq!(
-        (mine.tainting, &mine.body[..]),
+        (mine.head.tainting, &mine.body[..]),
         (ResponseTainting::Basic, b"mine".as_slice())
     );
     // CORS is only for HTTP(S): a `file:` URL is an error in `cors` mode,
@@ -811,7 +825,7 @@ fn no_cors_and_same_origin_modes() {
     )
     .unwrap();
     assert_eq!(
-        (data.tainting, &data.body[..]),
+        (data.head.tainting, &data.body[..]),
         (ResponseTainting::Basic, b"x".as_slice())
     );
     assert_eq!(page.requests().pop().unwrap().header("origin"), None);
@@ -886,10 +900,10 @@ fn cors_redirects() {
     )
     .unwrap();
     assert_eq!(
-        (away.tainting, &away.body[..]),
+        (away.head.tainting, &away.body[..]),
         (ResponseTainting::Cors, b"other".as_slice())
     );
-    assert!(away.redirected);
+    assert!(away.head.redirected);
     assert_eq!(
         other.requests().pop().unwrap().header("origin"),
         Some(mine_origin.as_str())
@@ -958,9 +972,9 @@ fn a_data_url_has_a_content_type() {
         RequestDestination::Empty,
     )
     .unwrap();
-    assert_eq!(response.status_text, "OK");
+    assert_eq!(response.head.status_text, "OK");
     assert_eq!(
-        response.headers,
+        response.head.headers,
         [(
             "content-type".to_owned(),
             "text/plain;charset=utf-8".to_owned()
@@ -978,7 +992,7 @@ fn a_location_is_utf_8() {
     ]);
     let network = NetworkContext::start(params()).unwrap();
     let response = fetch(&network, &server.url("/moved"), RequestDestination::Empty).unwrap();
-    assert_eq!(response.url, server.url("/caf%C3%A9"));
+    assert_eq!(response.head.url, server.url("/caf%C3%A9"));
     assert_eq!(response.body, &b"here"[..]);
 }
 
@@ -1007,6 +1021,7 @@ fn a_request_has_a_method_and_a_body() {
     assert_eq!(
         load(&network, send(url.clone(), "PUT", None))
             .unwrap()
+            .head
             .status,
         200
     );
@@ -1131,9 +1146,9 @@ fn redirect_modes() {
     let mut manual = ResourceRequest::new(server.url("/moved"), RequestDestination::Empty);
     manual.redirect = RedirectMode::Manual;
     let response = load(&network, manual).unwrap();
-    assert_eq!(response.status, 302);
-    assert_eq!(response.url, server.url("/moved"));
-    assert!(!response.redirected);
+    assert_eq!(response.head.status, 302);
+    assert_eq!(response.head.url, server.url("/moved"));
+    assert!(!response.head.redirected);
     // A redirect status without a `Location` is one too.
     let mut error = ResourceRequest::new(server.url("/nowhere"), RequestDestination::Empty);
     error.redirect = RedirectMode::Error;
@@ -1162,7 +1177,7 @@ fn origin_and_head() {
         .collect();
     assert_eq!(origins, [Some(origin), None, None, None]);
     let data = load(&network, send("data:,body".into(), "HEAD", None)).unwrap();
-    assert_eq!(data.status, 200);
+    assert_eq!(data.head.status, 200);
     assert_eq!(data.body, &b""[..]);
     assert_eq!(
         load(&network, send("data:,body".into(), "POST", None))

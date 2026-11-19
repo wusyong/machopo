@@ -96,7 +96,6 @@ fn a_load_waits_at_a_redirect_until_it_is_followed() {
     assert_eq!(response.url, server.url("/a"));
     assert_eq!(response.status, 302);
     assert!(response.headers.contains(&("x-hop".into(), "a".into())));
-    assert!(response.body.is_empty());
     assert!(
         response.timing.unwrap().connect.is_some(),
         "{:?}",
@@ -111,7 +110,7 @@ fn a_load_waits_at_a_redirect_until_it_is_followed() {
     load.handle.follow_redirect();
     let response = load.result().unwrap();
     assert_eq!(&response.body[..], b"b");
-    assert!(response.redirected);
+    assert!(response.head.redirected);
     assert_eq!(paths(&server), ["/a", "/b"]);
 }
 

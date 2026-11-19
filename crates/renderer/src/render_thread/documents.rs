@@ -3890,12 +3890,12 @@ impl RenderThread {
         // page's DOM (Blink's `ImageResourceContent` makes an `SVGImage` for
         // its MIME type), kept by the frame.
         let image = result.as_ref().ok().and_then(|response| {
-            if response.mime_type == "image/svg+xml" {
+            if response.head.mime_type == "image/svg+xml" {
                 let (dom, frame) = engine_frame(&mut self.engine)?;
                 let image = SvgImage::new(
                     dom,
                     &mut frame.token,
-                    response.charset.as_deref(),
+                    response.head.charset.as_deref(),
                     &response.body,
                 )?;
                 let natural = image.natural();
@@ -3912,7 +3912,7 @@ impl RenderThread {
         };
         let origin_clean = !matches!(
             result,
-            Ok(response) if response.tainting == ResponseTainting::Opaque
+            Ok(response) if response.head.tainting == ResponseTainting::Opaque
         );
         let decoded = image.is_some();
         engine
@@ -4415,7 +4415,7 @@ impl RenderThread {
         let base = result
             .as_ref()
             .ok()
-            .and_then(|response| Url::parse(&response.url).ok())
+            .and_then(|response| Url::parse(&response.head.url).ok())
             .map(|url| {
                 let referrer = url.to_string();
                 css::UrlContext::new(url, &referrer)
@@ -4432,7 +4432,7 @@ impl RenderThread {
         // CORS allowed; of a network error (a CORS failure among them), if
         // it asked its own origin.
         let origin_clean = match result {
-            Ok(response) => response.tainting != ResponseTainting::Opaque,
+            Ok(response) => response.head.tainting != ResponseTainting::Opaque,
             Err(_) => sheet.url.scheme() == "data" || sheet.url.origin() == next.url.origin(),
         };
         let Some(engine) = &mut self.engine else {
@@ -4451,7 +4451,7 @@ impl RenderThread {
         let base = result
             .as_ref()
             .ok()
-            .and_then(|response| Url::parse(&response.url).ok())
+            .and_then(|response| Url::parse(&response.head.url).ok())
             .map(|url| {
                 let referrer = url.to_string();
                 css::UrlContext::new(url, &referrer)
@@ -4506,10 +4506,11 @@ impl RenderThread {
 /// redirects.
 fn wasm_loaded(result: &LoadResult) -> Option<(Vec<u8>, String)> {
     let response = result.as_ref().ok()?;
-    if !(200..300).contains(&response.status) || response.mime_type != "application/wasm" {
+    if !(200..300).contains(&response.head.status) || response.head.mime_type != "application/wasm"
+    {
         return None;
     }
-    Some((response.body.to_vec(), response.url.clone()))
+    Some((response.body.to_vec(), response.head.url.clone()))
 }
 
 /// A classic script's response as HTML's "fetch a classic script" takes
@@ -4527,19 +4528,19 @@ fn script_loaded(
     document_encoding: &'static encoding_rs::Encoding,
 ) -> Option<dom::LoadedScript> {
     let response = result.as_ref().ok()?;
-    if !(200..300).contains(&response.status) {
+    if !(200..300).contains(&response.head.status) {
         return None;
     }
-    if crate::loader::is_blocked_as_script(&response.mime_type) {
+    if crate::loader::is_blocked_as_script(&response.head.mime_type) {
         return None;
     }
     let fallback = charset
         .and_then(|label| encoding_rs::Encoding::for_label(label.trim().as_bytes()))
         .unwrap_or(document_encoding);
     Some(dom::LoadedScript {
-        source: encoding::decode_script(response.charset.as_deref(), &response.body, fallback),
-        url: response.url.clone(),
-        muted: response.tainting == ResponseTainting::Opaque,
+        source: encoding::decode_script(response.head.charset.as_deref(), &response.body, fallback),
+        url: response.head.url.clone(),
+        muted: response.head.tainting == ResponseTainting::Opaque,
     })
 }
 
@@ -4597,7 +4598,7 @@ fn fetch_of_revoked_blob(blob_urls: &crate::loader::BlobUrls, request: &dom::Fet
 /// if none came.
 fn failed_url(result: &LoadResult, asked: Option<&str>) -> String {
     match result {
-        Ok(response) => response.url.clone(),
+        Ok(response) => response.head.url.clone(),
         Err(error) => asked.map_or_else(|| error.detail.clone(), str::to_owned),
     }
 }
@@ -4610,14 +4611,14 @@ fn stylesheet_text(
     document_encoding: &'static encoding_rs::Encoding,
 ) -> Option<String> {
     let response = result.as_ref().ok()?;
-    if !(200..300).contains(&response.status) {
+    if !(200..300).contains(&response.head.status) {
         return None;
     }
-    if response.mime_type != "text/css" && !quirks {
+    if response.head.mime_type != "text/css" && !quirks {
         return None;
     }
     Some(encoding::decode_stylesheet(
-        response.charset.as_deref(),
+        response.head.charset.as_deref(),
         &response.body,
         document_encoding,
     ))

@@ -1,0 +1,65 @@
+# Step 1b: `net`'s `UrlLoaderClient` (`NetworkContext::load`): the head
+# with the body's data pipe, then the end.
+test = ["sh", "-c", "cargo test -q -p net --test it -- client::"]
+timeout = 600
+
+[[mutant]]
+name = "the body isn't written"
+file = "crates/net/src/lib.rs"
+from = '''    let error = producer.write(body).await.err().map(|data_pipe::Closed| {'''
+to = '''    let error = Some(body).filter(|_| false).map(|_| {'''
+
+[[mutant]]
+name = "a reader that went is no error"
+file = "crates/net/src/lib.rs"
+from = '''    let error = producer.write(body).await.err().map(|data_pipe::Closed| {'''
+to = '''    let error = producer.write(body).await.ok().and(None).map(|()| {'''
+
+[[mutant]]
+name = "the end tells no body length"
+file = "crates/net/src/lib.rs"
+from = '''    CompletionStatus {
+        error,
+        encoded_body_length,
+        completion_time,
+    }'''
+to = '''    let _ = encoded_body_length;
+    CompletionStatus {
+        error,
+        encoded_body_length: 0,
+        completion_time,
+    }'''
+
+[[mutant]]
+name = "every load waits at redirects"
+file = "crates/net/src/lib.rs"
+from = '''                let redirects = (at_redirects == AtRedirects::Wait).then(|| Redirects {'''
+to = '''                let redirects = (at_redirects == at_redirects).then(|| Redirects {'''
+
+[[mutant]]
+name = "no load waits at redirects"
+file = "crates/net/src/lib.rs"
+from = '''                let redirects = (at_redirects == AtRedirects::Wait).then(|| Redirects {'''
+to = '''                let redirects = (at_redirects != at_redirects).then(|| Redirects {'''
+
+[[mutant]]
+name = "the end isn't told"
+file = "crates/net/src/lib.rs"
+from = '''            client.on_complete(status);'''
+to = '''            let _ = status;'''
+
+[[mutant]]
+name = "a failed load's end is a success"
+file = "crates/net/src/lib.rs"
+from = '''                    CompletionStatus {
+                        error: Some(err),'''
+to = '''                    CompletionStatus {
+                        error: None.filter(|_: &NetError| err.code == err.code),'''
+
+[[mutant]]
+name = "the pipe never ends"
+file = "crates/net/src/lib.rs"
+from = '''    drop(producer);
+    CompletionStatus {'''
+to = '''    std::mem::forget(producer);
+    CompletionStatus {'''

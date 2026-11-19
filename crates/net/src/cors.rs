@@ -276,7 +276,7 @@ impl<'r> Cors<'r> {
     /// `fetch()`'s body stays here: no script may read it, and machopo has no
     /// opaque response blocking to keep a renderer from it otherwise.
     pub(crate) fn filter(&self, mut response: ResourceResponse) -> ResourceResponse {
-        response.tainting = self.tainting;
+        response.head.tainting = self.tainting;
         if self.tainting == ResponseTainting::Opaque
             && self.request.destination == RequestDestination::Empty
         {

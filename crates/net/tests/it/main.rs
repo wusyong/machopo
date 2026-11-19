@@ -9,6 +9,7 @@
     reason = "tests"
 )]
 
+mod client;
 mod content_encoding;
 mod load;
 mod redirects;

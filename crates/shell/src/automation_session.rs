@@ -1269,6 +1269,7 @@ impl AutomationSession {
             } => {
                 let frame_id = frame.to_string();
                 let timestamp = response
+                    .head
                     .timing
                     .map_or_else(TimeTicks::now, |timing| timing.receive_headers_end);
                 self.to_network(
@@ -1279,7 +1280,7 @@ impl AutomationSession {
                         "loaderId": navigation_id.to_string(),
                         "timestamp": timestamp.as_secs_f64(),
                         "type": "Document",
-                        "response": response_json(response),
+                        "response": response_json(&response.head),
                         "hasExtraInfo": false,
                         "frameId": frame_id,
                     }),

@@ -3,7 +3,9 @@
 //! forgiving base64, the MIME type before the comma, `text/plain;
 //! charset=US-ASCII` when there is none).
 
-use protocol::network::{LoadResult, NetError, NetErrorCode, ResourceResponse, ResponseTainting};
+use protocol::network::{
+    LoadResult, NetError, NetErrorCode, ResourceResponse, ResponseHead, ResponseTainting,
+};
 use url::Url;
 
 pub(crate) fn load(url: &Url) -> LoadResult {
@@ -15,21 +17,23 @@ pub(crate) fn load(url: &Url) -> LoadResult {
         .map_err(|e| invalid(format!("{url}: {e:?}")))?;
     let mime = data.mime_type();
     Ok(ResourceResponse {
-        url: url.as_str().to_owned(),
-        status: 200,
-        // Fetch's "scheme fetch" of a `data:` URL: "OK", and the MIME type
-        // as its `Content-Type`.
-        status_text: "OK".to_owned(),
-        redirected: false,
-        tainting: ResponseTainting::Basic,
-        mime_type: format!("{}/{}", mime.type_, mime.subtype),
-        charset: mime.get_parameter("charset").map(str::to_owned),
-        headers: vec![("content-type".to_owned(), mime.to_string())],
-        // Timed by whoever loaded it.
-        timing: None,
-        remote_address: None,
-        protocol: "data".to_owned(),
-        encoded_headers_length: 0,
+        head: ResponseHead {
+            url: url.as_str().to_owned(),
+            status: 200,
+            // Fetch's "scheme fetch" of a `data:` URL: "OK", and the MIME type
+            // as its `Content-Type`.
+            status_text: "OK".to_owned(),
+            redirected: false,
+            tainting: ResponseTainting::Basic,
+            mime_type: format!("{}/{}", mime.type_, mime.subtype),
+            charset: mime.get_parameter("charset").map(str::to_owned),
+            headers: vec![("content-type".to_owned(), mime.to_string())],
+            // Timed by whoever loaded it.
+            timing: None,
+            remote_address: None,
+            protocol: "data".to_owned(),
+            encoded_headers_length: 0,
+        },
         encoded_body_length: 0,
         body: body.into(),
     })
@@ -46,20 +50,20 @@ mod tests {
     #[test]
     fn base64_and_percent_encoded() {
         let response = load("data:application/wasm;base64,AGFzbQEAAAA=").unwrap();
-        assert_eq!(response.mime_type, "application/wasm");
+        assert_eq!(response.head.mime_type, "application/wasm");
         assert_eq!(response.body, &b"\0asm\x01\0\0\0"[..]);
-        assert_eq!(response.status, 200);
+        assert_eq!(response.head.status, 200);
         let response = load("data:text/html;charset=UTF-8,%3Cp%3Eh%C3%A9").unwrap();
-        assert_eq!(response.mime_type, "text/html");
-        assert_eq!(response.charset.as_deref(), Some("UTF-8"));
+        assert_eq!(response.head.mime_type, "text/html");
+        assert_eq!(response.head.charset.as_deref(), Some("UTF-8"));
         assert_eq!(response.body, "<p>hé".as_bytes());
     }
 
     #[test]
     fn defaults_and_errors() {
         let response = load("data:,hello#fragment").unwrap();
-        assert_eq!(response.mime_type, "text/plain");
-        assert_eq!(response.charset.as_deref(), Some("US-ASCII"));
+        assert_eq!(response.head.mime_type, "text/plain");
+        assert_eq!(response.head.charset.as_deref(), Some("US-ASCII"));
         assert_eq!(response.body, &b"hello"[..]);
         // No comma; base64 that doesn't decode.
         assert_eq!(

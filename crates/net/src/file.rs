@@ -2,7 +2,9 @@
 
 use std::path::{Path, PathBuf};
 
-use protocol::network::{LoadResult, NetError, NetErrorCode, ResourceResponse, ResponseTainting};
+use protocol::network::{
+    LoadResult, NetError, NetErrorCode, ResourceResponse, ResponseHead, ResponseTainting,
+};
 use url::Url;
 
 use crate::mime;
@@ -31,23 +33,25 @@ pub(crate) async fn load(url: Url) -> LoadResult {
         Err(join) => return Err(NetError::new(NetErrorCode::Failed, join.to_string())),
     };
     Ok(ResourceResponse {
-        url: url.into(),
-        status: 200,
-        status_text: String::new(),
-        redirected: false,
-        tainting: ResponseTainting::Basic,
-        mime_type: match is_dir {
-            true => "text/html",
-            false => mime::for_extension(path.extension().and_then(|e| e.to_str())),
-        }
-        .to_owned(),
-        charset: None,
-        headers: Vec::new(),
-        // Timed by whoever loaded it.
-        timing: None,
-        remote_address: None,
-        protocol: "file".to_owned(),
-        encoded_headers_length: 0,
+        head: ResponseHead {
+            url: url.into(),
+            status: 200,
+            status_text: String::new(),
+            redirected: false,
+            tainting: ResponseTainting::Basic,
+            mime_type: match is_dir {
+                true => "text/html",
+                false => mime::for_extension(path.extension().and_then(|e| e.to_str())),
+            }
+            .to_owned(),
+            charset: None,
+            headers: Vec::new(),
+            // Timed by whoever loaded it.
+            timing: None,
+            remote_address: None,
+            protocol: "file".to_owned(),
+            encoded_headers_length: 0,
+        },
         encoded_body_length: 0,
         body: body.into(),
     })

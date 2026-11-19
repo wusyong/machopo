@@ -18,8 +18,8 @@ use std::sync::{Arc, Mutex};
 use bytes::Bytes;
 
 use protocol::network::{
-    LoadResult, NetError, NetErrorCode, ResourceRequest, ResourceResponse, ResponseTainting,
-    parse_single_range,
+    LoadResult, NetError, NetErrorCode, ResourceRequest, ResourceResponse, ResponseHead,
+    ResponseTainting, parse_single_range,
 };
 use url::Url;
 
@@ -184,19 +184,21 @@ impl BlobUrlRegistry {
         let (essence, charset) = mime::parse_content_type(&mime_type)
             .unwrap_or_else(|| (mime::sniff(&body).to_owned(), None));
         Ok(ResourceResponse {
-            url: request.url.clone(),
-            status,
-            status_text: status_text.to_owned(),
-            redirected: false,
-            tainting: ResponseTainting::Basic,
-            mime_type: essence,
-            charset,
-            headers,
-            // Timed by whoever loaded it.
-            timing: None,
-            remote_address: None,
-            protocol: "blob".to_owned(),
-            encoded_headers_length: 0,
+            head: ResponseHead {
+                url: request.url.clone(),
+                status,
+                status_text: status_text.to_owned(),
+                redirected: false,
+                tainting: ResponseTainting::Basic,
+                mime_type: essence,
+                charset,
+                headers,
+                // Timed by whoever loaded it.
+                timing: None,
+                remote_address: None,
+                protocol: "blob".to_owned(),
+                encoded_headers_length: 0,
+            },
             encoded_body_length: 0,
             body,
         })
@@ -236,13 +238,13 @@ mod tests {
     fn a_blob_url_gives_its_blob() {
         let registry = registry();
         let response = registry.load(&get(URL), Some(1)).unwrap();
-        assert_eq!(response.status, 200);
-        assert_eq!(response.status_text, "OK");
+        assert_eq!(response.head.status, 200);
+        assert_eq!(response.head.status_text, "OK");
         assert_eq!(response.body, &b"hello"[..]);
-        assert_eq!(response.mime_type, "text/plain");
-        assert_eq!(response.charset.as_deref(), Some("utf-8"));
+        assert_eq!(response.head.mime_type, "text/plain");
+        assert_eq!(response.head.charset.as_deref(), Some("utf-8"));
         assert_eq!(
-            response.headers,
+            response.head.headers,
             [
                 ("content-length".to_owned(), "5".to_owned()),
                 (
@@ -304,7 +306,7 @@ mod tests {
         let body = |range: &str| {
             registry.load(&ranged(range), Some(1)).map(|response| {
                 (
-                    response.status,
+                    response.head.status,
                     String::from_utf8(response.body.to_vec()).unwrap(),
                 )
             })
@@ -319,9 +321,10 @@ mod tests {
         assert!(body("bytes=3-1").is_err());
         assert!(body("lines=1-2").is_err());
         let response = registry.load(&ranged("bytes=1-3"), Some(1)).unwrap();
-        assert_eq!(response.status_text, "Partial Content");
+        assert_eq!(response.head.status_text, "Partial Content");
         assert!(
             response
+                .head
                 .headers
                 .contains(&("content-range".to_owned(), "bytes 1-3/5".to_owned()))
         );

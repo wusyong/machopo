@@ -5,7 +5,7 @@
 use ipc::TimeTicks;
 use protocol::network::{
     LoadResult, LoadTiming, NetError, NetErrorCode, RedirectInfo, RedirectMode, RequestDestination,
-    ResourceRequest, ResourceResponse, ResponseTainting, is_forbidden_method,
+    ResourceRequest, ResourceResponse, ResponseHead, ResponseTainting, is_forbidden_method,
     is_forbidden_request_header,
 };
 use url::Url;
@@ -23,7 +23,7 @@ const MAX_REDIRECTS: usize = 20;
 pub(crate) async fn load(
     transport: &HttpTransport,
     request: &ResourceRequest,
-    mut redirects: Option<Redirects>,
+    mut redirects: Option<Redirects<'_>>,
 ) -> LoadResult {
     let mut url = Url::parse(&request.url)
         .map_err(|e| NetError::new(NetErrorCode::InvalidUrl, format!("{}: {e}", request.url)))?;
@@ -70,7 +70,7 @@ pub(crate) async fn load(
     let start = TimeTicks::now();
     let local = |response: LoadResult| {
         response.map(|mut response| {
-            response.timing = Some(local_timing(start));
+            response.head.timing = Some(local_timing(start));
             response
         })
     };
@@ -146,8 +146,7 @@ pub(crate) async fn load(
                     headers.retain(|(name, _)| !name.eq_ignore_ascii_case("authorization"));
                 }
                 if let Some(redirects) = &mut redirects {
-                    let mut response = finish(url.clone(), raw, hops > 0);
-                    response.body.clear();
+                    let response = finish(url.clone(), raw, hops > 0).head;
                     redirects
                         .wait_at(RedirectInfo {
                             new_url: next.to_string(),
@@ -279,18 +278,20 @@ fn finish(url: Url, mut raw: RawResponse, redirected: bool) -> ResourceResponse 
         None => (mime::sniff(&raw.body).to_owned(), None),
     };
     ResourceResponse {
-        url: url.into(),
-        status: raw.status,
-        status_text: raw.status_text,
-        redirected,
-        tainting: ResponseTainting::Basic,
-        mime_type,
-        charset,
-        headers: raw.headers,
-        timing: Some(raw.timing),
-        remote_address: raw.remote_address,
-        protocol: raw.protocol.to_owned(),
-        encoded_headers_length: raw.encoded_headers_length,
+        head: ResponseHead {
+            url: url.into(),
+            status: raw.status,
+            status_text: raw.status_text,
+            redirected,
+            tainting: ResponseTainting::Basic,
+            mime_type,
+            charset,
+            headers: raw.headers,
+            timing: Some(raw.timing),
+            remote_address: raw.remote_address,
+            protocol: raw.protocol.to_owned(),
+            encoded_headers_length: raw.encoded_headers_length,
+        },
         encoded_body_length: raw.encoded_body_length,
         body: raw.body.into(),
     }

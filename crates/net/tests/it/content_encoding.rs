@@ -53,11 +53,13 @@ fn a_gzipped_body_is_undone_and_its_headers_and_size_kept() {
     assert_eq!(&response.body[..], text.as_bytes());
     assert!(
         response
+            .head
             .headers
             .contains(&("content-encoding".into(), "gzip".into()))
     );
     assert!(
         response
+            .head
             .headers
             .contains(&("content-length".into(), compressed.len().to_string()))
     );
@@ -65,11 +67,12 @@ fn a_gzipped_body_is_undone_and_its_headers_and_size_kept() {
     // "HTTP/1.1 200 OK", and each header the server sent, as lines.
     let head: usize = "HTTP/1.1 200 OK\r\n\r\n".len()
         + response
+            .head
             .headers
             .iter()
             .map(|(name, value)| name.len() + value.len() + 4)
             .sum::<usize>();
-    assert_eq!(response.encoded_headers_length, head as u64);
+    assert_eq!(response.head.encoded_headers_length, head as u64);
     assert_eq!(
         server.requests()[0].header("accept-encoding"),
         Some("gzip, deflate, br")
@@ -114,7 +117,7 @@ fn a_local_scheme_takes_nothing_on_the_wire() {
     let response = get("data:text/plain,hi").unwrap();
     assert_eq!(
         (
-            response.encoded_headers_length,
+            response.head.encoded_headers_length,
             response.encoded_body_length
         ),
         (0, 0)

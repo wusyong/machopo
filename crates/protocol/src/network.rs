@@ -327,10 +327,10 @@ pub fn is_cors_safelisted_method(method: &str) -> bool {
     matches!(method, "GET" | "HEAD" | "POST")
 }
 
-/// `network::mojom::URLResponseHead` plus the whole body. Chromium streams
-/// the body through a data pipe; here it arrives in one piece.
+/// A response without its body (`network::mojom::URLResponseHead`): what
+/// a load tells of first, the body following through a data pipe.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ResourceResponse {
+pub struct ResponseHead {
     /// The final URL, after redirects.
     pub url: String,
     /// The HTTP status; 200 for `file:`.
@@ -354,6 +354,8 @@ pub struct ResourceResponse {
     pub headers: Vec<(String, String)>,
     /// When the parts of the request it answers happened (the last one,
     /// after redirects); none for a response the renderer made up itself.
+    /// Told before the body came, its `response_end` is when the head
+    /// came: the end is the load's [`CompletionStatus`]'s.
     pub timing: Option<LoadTiming>,
     /// The server's address, for HTTP (`URLResponseHead::remote_endpoint`).
     pub remote_address: Option<SocketAddr>,
@@ -366,6 +368,14 @@ pub struct ResourceResponse {
     /// headers aren't counted as such); 0 when it didn't come over the
     /// network.
     pub encoded_headers_length: u64,
+}
+
+/// A response with the whole of its body, for those who take it in one
+/// piece (subresources, `fetch()`): its head, and what
+/// [`CompletionStatus`] would tell of the body.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResourceResponse {
+    pub head: ResponseHead,
     /// The bytes its body took on the wire, before `Content-Encoding` was
     /// undone (`encoded_body_length`); 0 when it didn't come over the
     /// network.
@@ -373,6 +383,23 @@ pub struct ResourceResponse {
     /// Shared, not copied, with whoever else keeps it (DevTools' record of
     /// the response).
     pub body: Bytes,
+}
+
+/// How a load ended (`network::URLLoaderCompletionStatus`): told last,
+/// after the body's data pipe was closed, or instead of a response that
+/// never came.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompletionStatus {
+    /// Why it stopped short: before a response (none came), or with the
+    /// body only partly through.
+    pub error: Option<NetError>,
+    /// The bytes the body took on the wire, before `Content-Encoding` was
+    /// undone (`encoded_body_length`); 0 when it didn't come over the
+    /// network.
+    pub encoded_body_length: u64,
+    /// When the load ended (`completion_time`): the whole body had come,
+    /// or it failed.
+    pub completion_time: TimeTicks,
 }
 
 /// A redirect a load reached and waits at until told to follow it
@@ -385,8 +412,8 @@ pub struct RedirectInfo {
     /// The next request's method: a `POST` may become a `GET`.
     pub new_method: String,
     /// The redirect itself, as the server sent it (not filtered for the
-    /// initiator), with an empty body.
-    pub response: ResourceResponse,
+    /// initiator); its body isn't read.
+    pub response: ResponseHead,
 }
 
 /// When the parts of one request happened (`net::LoadTimingInfo`), on the

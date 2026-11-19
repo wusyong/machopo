@@ -180,12 +180,12 @@ pub(crate) fn fetch_resource_request(request: &dom::FetchRequest) -> ResourceReq
 pub(crate) fn fetched_response(result: &LoadResult) -> Result<dom_api::FetchedResponse, ()> {
     match result {
         Ok(response) => Ok(dom_api::FetchedResponse {
-            tainting: response.tainting,
-            url: response.url.clone(),
-            redirected: response.redirected,
-            status: response.status,
-            status_text: response.status_text.clone(),
-            headers: response.headers.clone(),
+            tainting: response.head.tainting,
+            url: response.head.url.clone(),
+            redirected: response.head.redirected,
+            status: response.head.status,
+            status_text: response.head.status_text.clone(),
+            headers: response.head.headers.clone(),
             body: std::sync::Arc::from(&response.body[..]),
         }),
         Err(_) => Err(()),
@@ -221,14 +221,14 @@ pub(crate) fn is_blocked_as_script(essence: &str) -> bool {
 /// UTF-8, and its URL after redirects (its base URL).
 pub(crate) fn module_loaded(result: &LoadResult) -> Option<dom_api::module::FetchedModule> {
     let response = result.as_ref().ok()?;
-    if !(200..300).contains(&response.status)
-        || !dom_api::is_javascript_mime_type(&response.mime_type)
+    if !(200..300).contains(&response.head.status)
+        || !dom_api::is_javascript_mime_type(&response.head.mime_type)
     {
         return None;
     }
     let (source, _) = encoding_rs::UTF_8.decode_with_bom_removal(&response.body);
     Some(dom_api::module::FetchedModule {
-        url: url::Url::parse(&response.url).ok()?,
+        url: url::Url::parse(&response.head.url).ok()?,
         source: source.into_owned(),
     })
 }

@@ -901,27 +901,27 @@ struct WorkerScript {
 /// the response's charset; HTML decodes it as UTF-8 whatever it says).
 fn worker_script(result: &LoadResult) -> Option<WorkerScript> {
     let response = result.as_ref().ok()?;
-    if !(200..300).contains(&response.status) {
+    if !(200..300).contains(&response.head.status) {
         return None;
     }
-    let url = url::Url::parse(&response.url).ok()?;
-    let mime = response.mime_type.as_str();
+    let url = url::Url::parse(&response.head.url).ok()?;
+    let mime = response.head.mime_type.as_str();
     if !matches!(url.scheme(), "data" | "blob")
         && (crate::loader::is_blocked_as_script(mime)
-            || (crate::loader::is_nosniff(&response.headers)
+            || (crate::loader::is_nosniff(&response.head.headers)
                 && !dom_api::is_javascript_mime_type(mime)))
     {
         return None;
     }
     let source = crate::encoding::decode_script(
-        response.charset.as_deref(),
+        response.head.charset.as_deref(),
         &response.body,
         encoding_rs::UTF_8,
     );
     Some(WorkerScript {
         source,
         url,
-        tainting: response.tainting,
+        tainting: response.head.tainting,
     })
 }
 

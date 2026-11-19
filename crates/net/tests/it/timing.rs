@@ -55,7 +55,7 @@ fn address(server: &TestServer) -> SocketAddr {
 }
 
 fn timing_of(response: &ResourceResponse) -> LoadTiming {
-    response.timing.expect("a load is timed")
+    response.head.timing.expect("a load is timed")
 }
 
 /// Each part comes after the one before it, all within `[from, to]`.
@@ -87,7 +87,7 @@ fn a_request_that_opens_a_connection_times_it_and_one_that_reuses_it_doesnt() {
     let second = get(&network, &url);
     let after = TimeTicks::now();
 
-    let (first_timing, second_timing) = (first.timing.unwrap(), second.timing.unwrap());
+    let (first_timing, second_timing) = (first.head.timing.unwrap(), second.head.timing.unwrap());
     let requests = server.requests();
     assert_eq!(
         requests.iter().map(|r| r.connection).collect::<Vec<_>>(),
@@ -105,8 +105,8 @@ fn a_request_that_opens_a_connection_times_it_and_one_that_reuses_it_doesnt() {
     assert_eq!((second_timing.dns, second_timing.connect), (None, None));
     assert_in_order(&second_timing, first_timing.response_end, after);
     for response in [&first, &second] {
-        assert_eq!(response.remote_address, Some(address(&server)));
-        assert_eq!(response.protocol, "http/1.1");
+        assert_eq!(response.head.remote_address, Some(address(&server)));
+        assert_eq!(response.head.protocol, "http/1.1");
     }
 }
 
@@ -168,8 +168,8 @@ fn a_local_scheme_is_timed_as_a_whole_and_named() {
     let network = network();
     let before = TimeTicks::now();
     let response = get(&network, "data:text/plain,hi");
-    assert_eq!(response.protocol, "data");
-    assert_eq!(response.remote_address, None);
+    assert_eq!(response.head.protocol, "data");
+    assert_eq!(response.head.remote_address, None);
     assert_eq!(
         (timing_of(&response).dns, timing_of(&response).connect),
         (None, None)
@@ -185,7 +185,7 @@ fn a_local_scheme_is_timed_as_a_whole_and_named() {
     let before = TimeTicks::now();
     let response = get(&network, &net::file_url(&path).unwrap());
     let _ = std::fs::remove_file(&path);
-    assert_eq!(response.protocol, "file");
+    assert_eq!(response.head.protocol, "file");
     assert_in_order(&timing_of(&response), before, TimeTicks::now());
 
     let url = "blob:http://timing.test/1";
@@ -197,6 +197,6 @@ fn a_local_scheme_is_timed_as_a_whole_and_named() {
             Some(1),
         )
         .unwrap();
-    assert_eq!(response.protocol, "blob");
+    assert_eq!(response.head.protocol, "blob");
     assert_in_order(&timing_of(&response), before, TimeTicks::now());
 }

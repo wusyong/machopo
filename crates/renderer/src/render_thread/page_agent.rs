@@ -75,9 +75,9 @@ impl FrameResources {
         let without_fragment = |url: &str| url.split('#').next().unwrap_or(url).to_owned();
         let resource = match result {
             Ok(response) => FrameResource {
-                url: without_fragment(&response.url),
+                url: without_fragment(&response.head.url),
                 kind,
-                mime_type: response.mime_type.clone(),
+                mime_type: response.head.mime_type.clone(),
                 content_size: response.body.len(),
                 failed: false,
             },

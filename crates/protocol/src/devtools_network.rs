@@ -6,7 +6,7 @@
 use ipc::TimeTicks;
 use serde_json::{Value, json};
 
-use crate::network::{LoadTiming, RequestDestination, ResourceRequest, ResourceResponse, TimeSpan};
+use crate::network::{LoadTiming, RequestDestination, ResourceRequest, ResponseHead, TimeSpan};
 
 /// `Network.ResourceType` of a request for `destination`.
 pub fn resource_type(destination: RequestDestination) -> &'static str {
@@ -81,31 +81,31 @@ pub fn request_json(request: &ResourceRequest, max_post_data_size: usize) -> Val
     json
 }
 
-/// `Network.Response` of `response`.
-pub fn response_json(response: &ResourceResponse) -> Value {
+/// `Network.Response` of a response's `head`.
+pub fn response_json(head: &ResponseHead) -> Value {
     let mut json = json!({
-        "url": response.url,
-        "status": response.status,
-        "statusText": response.status_text,
-        "headers": headers_json(&response.headers),
-        "mimeType": response.mime_type,
-        "charset": response.charset.clone().unwrap_or_default(),
-        "connectionReused": response.timing.is_some_and(|timing| timing.connect.is_none())
-            && !response.protocol.is_empty()
-            && response.remote_address.is_some(),
+        "url": head.url,
+        "status": head.status,
+        "statusText": head.status_text,
+        "headers": headers_json(&head.headers),
+        "mimeType": head.mime_type,
+        "charset": head.charset.clone().unwrap_or_default(),
+        "connectionReused": head.timing.is_some_and(|timing| timing.connect.is_none())
+            && !head.protocol.is_empty()
+            && head.remote_address.is_some(),
         "connectionId": 0,
         "fromDiskCache": false,
         "fromServiceWorker": false,
         "fromPrefetchCache": false,
-        "encodedDataLength": response.encoded_headers_length,
-        "protocol": response.protocol,
-        "securityState": security_state(&response.url),
+        "encodedDataLength": head.encoded_headers_length,
+        "protocol": head.protocol,
+        "securityState": security_state(&head.url),
     });
-    if let Some(address) = response.remote_address {
+    if let Some(address) = head.remote_address {
         json["remoteIPAddress"] = address.ip().to_string().into();
         json["remotePort"] = address.port().into();
     }
-    if let Some(timing) = response.timing {
+    if let Some(timing) = head.timing {
         json["timing"] = timing_json(&timing);
         json["responseTime"] = (wall_time() * 1000.0).into();
     }

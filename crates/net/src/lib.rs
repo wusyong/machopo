@@ -4,9 +4,12 @@
 //!
 //! Everything runs on one thread, `NetworkService`, with a tokio runtime on
 //! it, so neither the UI thread nor a renderer ever waits on the network.
-//! [`NetworkContext`] is the handle callers keep; its [`fetch`] answers
-//! through a callback that runs on that thread, and gives a [`LoadHandle`]
-//! that can cancel the load.
+//! [`NetworkContext`] is the handle callers keep. Its [`load`] tells a
+//! [`UrlLoaderClient`] of the load as it goes (Chromium's
+//! `URLLoaderClient`): the response's head with a data pipe its body comes
+//! through, then how it ended. Its [`fetch`] answers once, with the whole
+//! body, for those who take it in one piece. Both call back on that
+//! thread, and give a [`LoadHandle`] that can cancel the load.
 //!
 //! Two layers, as in Chromium's `//net`:
 //! - [`url_loader`] (`URLRequest`): the scheme, following redirects, and
@@ -22,6 +25,7 @@
 //! extra trusted roots, so WPT's domains reach the local wptserve over
 //! HTTPS. A browser window starts with the default, empty params.
 //!
+//! [`load`]: NetworkContext::load
 //! [`fetch`]: NetworkContext::fetch
 
 #![cfg_attr(
@@ -48,21 +52,72 @@ mod url_loader;
 
 use std::sync::{Arc, Mutex};
 
-use protocol::network::{LoadResult, RedirectInfo, ResourceRequest};
+use ipc::TimeTicks;
+use ipc::data_pipe;
+use protocol::network::{
+    CompletionStatus, LoadResult, NetError, NetErrorCode, RedirectInfo, ResourceRequest,
+    ResourceResponse, ResponseHead,
+};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::AbortHandle;
 
 pub use file::{file_path, file_url};
 pub use host_mapping::{HostMapping, HostMappingRules};
 
+/// The most of a response's body written and not yet read: Chromium's
+/// default (`network::features::GetDataPipeDefaultAllocationSize`).
+pub const BODY_PIPE_CAPACITY: usize = 512 * 1024;
+
 type Done = Box<dyn FnOnce(LoadResult) + Send>;
 type OnRedirect = Box<dyn FnMut(RedirectInfo) + Send>;
 
+/// `network::mojom::URLLoaderClient`: what hears of a load started with
+/// [`NetworkContext::load`], on the `NetworkService` thread, in order: the
+/// redirects it waits at (if it does), then the response's head and the
+/// body's data pipe, then how it ended; or, for a load that produced no
+/// response, only how it ended. A cancelled load tells nothing more.
+pub trait UrlLoaderClient: Send {
+    /// A redirect the load waits at (`OnReceiveRedirect`), for a load that
+    /// waits at redirects ([`AtRedirects::Wait`]), until its handle's
+    /// [`follow_redirect`](LoadHandle::follow_redirect).
+    fn on_receive_redirect(&mut self, redirect: RedirectInfo);
+    /// The response's head (`OnReceiveResponse`), filtered for its
+    /// initiator, and the data pipe its body comes through: the body is
+    /// over when the pipe is ([`data_pipe::Read::Done`]). Dropping `body`
+    /// stops the load.
+    fn on_receive_response(&mut self, head: ResponseHead, body: data_pipe::Consumer);
+    /// How it ended (`OnComplete`): after the body's pipe was closed, with
+    /// an error if the body didn't all come; or instead of a response.
+    fn on_complete(&mut self, status: CompletionStatus);
+}
+
+/// What a load does at a redirect it would follow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AtRedirects {
+    /// Follows it, telling no one.
+    Follow,
+    /// Tells of it and waits until its handle follows it.
+    Wait,
+}
+
+/// Who hears of a load.
+enum Listener {
+    /// [`NetworkContext::fetch`]'s and `fetch_with_redirects`': once, with
+    /// the whole body.
+    Whole {
+        on_redirect: Option<OnRedirect>,
+        done: Done,
+    },
+    /// [`NetworkContext::load`]'s.
+    Client {
+        client: Box<dyn UrlLoaderClient>,
+        at_redirects: AtRedirects,
+    },
+}
+
 struct Job {
     request: ResourceRequest,
-    /// For a load that waits at each redirect.
-    on_redirect: Option<OnRedirect>,
-    done: Done,
+    listener: Listener,
     state: Arc<Mutex<LoadState>>,
 }
 
@@ -77,12 +132,12 @@ struct LoadState {
 }
 
 /// Where a load that waits at redirects tells of one.
-struct Redirects {
-    tell: OnRedirect,
+struct Redirects<'a> {
+    tell: &'a mut (dyn FnMut(RedirectInfo) + Send),
     state: Arc<Mutex<LoadState>>,
 }
 
-impl Redirects {
+impl Redirects<'_> {
     /// Tells of `redirect` and waits until the load's handle follows it.
     async fn wait_at(&mut self, redirect: RedirectInfo) {
         let (follow, followed) = oneshot::channel();
@@ -188,18 +243,12 @@ impl NetworkContext {
                         if state.cancelled {
                             continue;
                         }
-                        let (request, done) = (job.request, job.done);
-                        let redirects = job.on_redirect.map(|tell| Redirects {
-                            tell,
-                            state: job.state.clone(),
-                        });
-                        let task = tokio::spawn(async move {
-                            let result = url_loader::load(&transport, &request, redirects).await;
-                            if let Err(err) = &result {
-                                tracing::debug!(url = %request.url, code = err.code.name(), detail = %err.detail, "load failed");
-                            }
-                            done(result);
-                        });
+                        let task = tokio::spawn(run(
+                            transport,
+                            job.request,
+                            job.listener,
+                            job.state.clone(),
+                        ));
                         state.task = Some(task.abort_handle());
                     }
                 });
@@ -210,6 +259,24 @@ impl NetworkContext {
         })
     }
 
+    /// Loads `request`, telling `client` of it as it goes (Chromium's
+    /// `URLLoaderFactory::CreateLoaderAndStart`), on the `NetworkService`
+    /// thread, unless the handle cancels it first. Never blocks.
+    pub fn load(
+        &self,
+        request: ResourceRequest,
+        at_redirects: AtRedirects,
+        client: impl UrlLoaderClient + 'static,
+    ) -> LoadHandle {
+        self.start_load(
+            request,
+            Listener::Client {
+                client: Box::new(client),
+                at_redirects,
+            },
+        )
+    }
+
     /// Loads `request` and calls `done` with the result, on the
     /// `NetworkService` thread, unless the handle cancels it first. Never
     /// blocks. It follows redirects by itself.
@@ -218,7 +285,13 @@ impl NetworkContext {
         request: ResourceRequest,
         done: impl FnOnce(LoadResult) + Send + 'static,
     ) -> LoadHandle {
-        self.start_load(request, None, Box::new(done))
+        self.start_load(
+            request,
+            Listener::Whole {
+                on_redirect: None,
+                done: Box::new(done),
+            },
+        )
     }
 
     /// Like [`fetch`](Self::fetch), but the load stops at each redirect it
@@ -232,20 +305,20 @@ impl NetworkContext {
         on_redirect: impl FnMut(RedirectInfo) + Send + 'static,
         done: impl FnOnce(LoadResult) + Send + 'static,
     ) -> LoadHandle {
-        self.start_load(request, Some(Box::new(on_redirect)), Box::new(done))
+        self.start_load(
+            request,
+            Listener::Whole {
+                on_redirect: Some(Box::new(on_redirect)),
+                done: Box::new(done),
+            },
+        )
     }
 
-    fn start_load(
-        &self,
-        request: ResourceRequest,
-        on_redirect: Option<OnRedirect>,
-        done: Done,
-    ) -> LoadHandle {
+    fn start_load(&self, request: ResourceRequest, listener: Listener) -> LoadHandle {
         let state = Arc::new(Mutex::new(LoadState::default()));
         let job = Job {
             request,
-            on_redirect,
-            done,
+            listener,
             state: state.clone(),
         };
         if self.jobs.send(job).is_err() {
@@ -285,8 +358,96 @@ impl NetworkContext {
     pub fn load_blob_url(&self, request: &ResourceRequest, requester: Option<u64>) -> LoadResult {
         let start = ipc::TimeTicks::now();
         self.blob_urls.load(request, requester).map(|mut response| {
-            response.timing = Some(url_loader::local_timing(start));
+            response.head.timing = Some(url_loader::local_timing(start));
             response
         })
     }
+}
+
+/// One load's task on the `NetworkService` thread: loads `request` and tells
+/// its listener.
+async fn run(
+    transport: http::HttpTransport,
+    request: ResourceRequest,
+    listener: Listener,
+    state: Arc<Mutex<LoadState>>,
+) {
+    match listener {
+        Listener::Whole {
+            mut on_redirect,
+            done,
+        } => {
+            let redirects = on_redirect.as_mut().map(|tell| Redirects {
+                tell: &mut **tell,
+                state,
+            });
+            let result = url_loader::load(&transport, &request, redirects).await;
+            if let Err(err) = &result {
+                log_failure(&request, err);
+            }
+            done(result);
+        }
+        Listener::Client {
+            mut client,
+            at_redirects,
+        } => {
+            let result = {
+                let mut tell = |redirect| client.on_receive_redirect(redirect);
+                let redirects = (at_redirects == AtRedirects::Wait).then(|| Redirects {
+                    tell: &mut tell,
+                    state,
+                });
+                url_loader::load(&transport, &request, redirects).await
+            };
+            let status = match result {
+                Ok(response) => stream_body(response, &mut *client).await,
+                Err(err) => {
+                    log_failure(&request, &err);
+                    CompletionStatus {
+                        error: Some(err),
+                        encoded_body_length: 0,
+                        completion_time: TimeTicks::now(),
+                    }
+                }
+            };
+            client.on_complete(status);
+        }
+    }
+}
+
+/// Tells `client` of `response`'s head and writes its body into the pipe
+/// it reads; how that ended.
+async fn stream_body(
+    response: ResourceResponse,
+    client: &mut dyn UrlLoaderClient,
+) -> CompletionStatus {
+    let ResourceResponse {
+        head,
+        encoded_body_length,
+        body,
+    } = response;
+    let url = head.url.clone();
+    let completion_time = head
+        .timing
+        .map_or_else(TimeTicks::now, |timing| timing.response_end);
+    let (mut producer, consumer) = data_pipe::create(BODY_PIPE_CAPACITY);
+    client.on_receive_response(head, consumer);
+    // A reader that went stops the load (Chromium's `URLLoader` fails it as
+    // the body's consumer closes).
+    let error = producer.write(body).await.err().map(|data_pipe::Closed| {
+        NetError::new(
+            NetErrorCode::Failed,
+            format!("{url}: the body's reader went"),
+        )
+    });
+    drop(producer);
+    CompletionStatus {
+        error,
+        encoded_body_length,
+        completion_time,
+    }
+}
+
+fn log_failure(request: &ResourceRequest, err: &NetError) {
+    tracing::debug!(url = %request.url, code = err.code.name(), detail = %err.detail, "load failed");
 }

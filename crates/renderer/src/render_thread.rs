@@ -1458,14 +1458,14 @@ impl RenderThread {
     /// (`FrameConsole::DidFailLoading`; a cancelled one isn't answered).
     fn log_load(&self, request_id: u64, url: Option<&str>, result: &LoadResult) {
         let text = match result {
-            Ok(response) if response.status >= 400 => {
-                status_message(response.status, &response.status_text)
+            Ok(response) if response.head.status >= 400 => {
+                status_message(response.head.status, &response.head.status_text)
             }
             Ok(_) => return,
             Err(error) => format!("Failed to load resource: net::{}", error.code.name()),
         };
         let url = match result {
-            Ok(response) => response.url.clone(),
+            Ok(response) => response.head.url.clone(),
             Err(_) => url.unwrap_or_default().to_owned(),
         };
         self.log_agent.add(log_agent::LogEntry::network(
