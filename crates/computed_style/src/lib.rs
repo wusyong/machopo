@@ -1331,6 +1331,53 @@ pub enum Direction {
     Rtl,
 }
 
+/// Which way lines stack and which way they run: `writing-mode`'s values
+/// (CSS Writing Modes 4 § 3.1; Blink's `WritingMode`). machopo's pages
+/// have only `horizontal-tb` yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WritingMode {
+    /// Lines run left to right (for `ltr`) and stack top to bottom.
+    #[default]
+    HorizontalTb,
+    /// Lines run top to bottom and stack right to left.
+    VerticalRl,
+    /// Lines run top to bottom and stack left to right.
+    VerticalLr,
+    /// As `vertical-rl`, with all the text set sideways.
+    SidewaysRl,
+    /// Lines run bottom to top and stack left to right, the text set
+    /// sideways.
+    SidewaysLr,
+}
+
+/// A box's writing mode and direction, which together say where its
+/// inline and block directions point physically (Blink's
+/// `WritingDirectionMode`): what layout's logical coordinates are turned
+/// physical by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct WritingDirectionMode {
+    pub writing_mode: WritingMode,
+    pub direction: Direction,
+}
+
+impl WritingDirectionMode {
+    pub const fn new(writing_mode: WritingMode, direction: Direction) -> Self {
+        Self {
+            writing_mode,
+            direction,
+        }
+    }
+
+    /// Its inline direction is horizontal: lines run across, stack down.
+    pub fn is_horizontal(self) -> bool {
+        self.writing_mode == WritingMode::HorizontalTb
+    }
+
+    pub fn is_ltr(self) -> bool {
+        self.direction == Direction::Ltr
+    }
+}
+
 /// A canvas's `textBaseline`: which line of the text is at the `y` it is
 /// drawn at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -3274,6 +3321,13 @@ impl ComputedStyle {
             display: Display::Block,
             ..Self::inherit(parent)
         }
+    }
+
+    /// Its writing mode and direction. Always `horizontal-tb` and `ltr`:
+    /// neither `writing-mode` nor `direction` is parsed yet, and this is
+    /// the one place layout asks.
+    pub fn writing_direction(&self) -> WritingDirectionMode {
+        WritingDirectionMode::default()
     }
 
     /// Whether this element's box is a stacking context (no positioning

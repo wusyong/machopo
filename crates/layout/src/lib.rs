@@ -63,6 +63,7 @@ mod font_features;
 mod fragment;
 mod geometry;
 mod list_items;
+mod logical;
 mod platform_fonts;
 mod replaced;
 mod scroll_anchor;

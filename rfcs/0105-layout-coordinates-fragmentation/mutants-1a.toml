@@ -1,0 +1,57 @@
+# Stage 1a: the logical geometry and its converter (`layout`'s `logical.rs`).
+test = ["cargo", "test", "-q", "-p", "layout", "--lib", "logical::"]
+timeout = 600
+
+[[mutant]]
+name = "rtl in horizontal-tb not mirrored"
+file = "crates/layout/src/logical.rs"
+from = '''            WritingMode::HorizontalTb => PointF::new(from_right(inline), block),'''
+to = '''            WritingMode::HorizontalTb => PointF::new(inline, block),'''
+
+[[mutant]]
+name = "the far edge forgets the inner size"
+file = "crates/layout/src/logical.rs"
+from = '''        let from_bottom = |at: f32| outer.height - at - inner_size.height;'''
+to = '''        let from_bottom = |at: f32| outer.height - at;'''
+
+[[mutant]]
+name = "sideways-lr's inline start on top"
+file = "crates/layout/src/logical.rs"
+from = '''        WritingMode::SidewaysLr if ltr => (PhysicalSide::Bottom, PhysicalSide::Left),'''
+to = '''        WritingMode::SidewaysLr if ltr => (PhysicalSide::Top, PhysicalSide::Left),'''
+
+[[mutant]]
+name = "strut's inline end read from the wrong side"
+file = "crates/layout/src/logical.rs"
+from = '''            inline_end: side(inline_start.opposite()),'''
+to = '''            inline_end: side(block_start.opposite()),'''
+
+[[mutant]]
+name = "strut back to physical mixes block start and end"
+file = "crates/layout/src/logical.rs"
+from = '''            } else if side == block_start {'''
+to = '''            } else if side != block_start {'''
+
+[[mutant]]
+name = "vertical sizes not swapped"
+file = "crates/layout/src/logical.rs"
+from = '''            SizeF::new(self.block_size, self.inline_size)'''
+to = '''            SizeF::new(self.inline_size, self.block_size)'''
+
+[[mutant]]
+name = "back to logical without swapping the axes back"
+file = "crates/layout/src/logical.rs"
+from = '''            LogicalOffset::new(back.y, back.x)'''
+to = '''            LogicalOffset::new(back.x, back.y)'''
+
+[[mutant]]
+name = "a rect's offset turned with its logical size"
+file = "crates/layout/src/logical.rs"
+from = '''        let at = self.to_physical_offset(rect.offset, size);'''
+to = '''        let at = self.to_physical_offset(rect.offset, SizeF::new(rect.size.inline_size, rect.size.block_size));'''
+
+[[mutant]]
+name = "inline sum takes a block side"
+file = "crates/layout/src/logical.rs"
+from = '''        self.inline_start + self.inline_end'''
+to = '''        self.inline_start + self.block_end'''
