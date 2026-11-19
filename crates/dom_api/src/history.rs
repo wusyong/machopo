@@ -54,8 +54,7 @@ pub(crate) fn navigate<'gc>(
     initiator: dom::NavigationInitiator<'gc>,
 ) {
     let current = document_url(cx, document);
-    let replace =
-        replace || current.as_ref() == Some(&url) || cx.is_initial_about_blank(document);
+    let replace = replace || current.as_ref() == Some(&url) || cx.is_initial_about_blank(document);
     if let Some(current) = current
         && url.fragment().is_some()
         && without_fragment(&url) == without_fragment(&current)

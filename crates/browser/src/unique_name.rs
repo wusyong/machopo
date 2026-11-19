@@ -87,9 +87,9 @@ fn candidate(tree: &FrameTree, parent: FrameToken) -> String {
     ancestors.reverse();
     let mut joined: Vec<&str> = ancestors;
     if let Some(first) = joined.first_mut()
-        && is_frame_path(first)
+        && let Some(path) = frame_path(first)
     {
-        *first = &first[FRAME_PATH_PREFIX.len()..first.len() - SUFFIX.len()];
+        *first = path;
     }
     format!(
         "{FRAME_PATH_PREFIX}{}/<!--frame{}{SUFFIX}{SUFFIX}",
@@ -122,9 +122,15 @@ fn frame_position(tree: &FrameTree, parent: FrameToken) -> String {
 }
 
 fn is_frame_path(name: &str) -> bool {
-    name.starts_with(FRAME_PATH_PREFIX)
-        && name.ends_with(SUFFIX)
-        && FRAME_PATH_PREFIX.len() + SUFFIX.len() < name.len()
+    frame_path(name).is_some()
+}
+
+/// The path a frame path's name is of (`<!--framePath <path>-->`), if it
+/// is one.
+fn frame_path(name: &str) -> Option<&str> {
+    name.strip_prefix(FRAME_PATH_PREFIX)?
+        .strip_suffix(SUFFIX)
+        .filter(|path| !path.is_empty())
 }
 
 #[cfg(test)]
@@ -150,9 +156,18 @@ mod tests {
         let mut tree = FrameTree::new(token(0));
         assert_eq!(tree.unique_name(token(0)), Some(""));
         assert_eq!(add(&mut tree, 0, 1, "a"), "a");
-        assert_eq!(add(&mut tree, 0, 2, "a"), "<!--framePath //<!--frame1-->-->");
-        assert_eq!(add(&mut tree, 0, 3, "_blank"), "<!--framePath //<!--frame2-->-->");
-        assert_eq!(add(&mut tree, 1, 4, ""), "<!--framePath //a/<!--frame0-->-->");
+        assert_eq!(
+            add(&mut tree, 0, 2, "a"),
+            "<!--framePath //<!--frame1-->-->"
+        );
+        assert_eq!(
+            add(&mut tree, 0, 3, "_blank"),
+            "<!--framePath //<!--frame2-->-->"
+        );
+        assert_eq!(
+            add(&mut tree, 1, 4, ""),
+            "<!--framePath //a/<!--frame0-->-->"
+        );
         assert_eq!(
             add(&mut tree, 2, 5, ""),
             "<!--framePath //<!--frame1-->/<!--frame0-->-->"
@@ -164,10 +179,7 @@ mod tests {
             "<!--framePath //<!--frame2-->-->\
              <!--framePosition-2/0-->"
         );
-        assert_eq!(
-            add(&mut tree, 0, 7, ""),
-            "<!--framePath //<!--frame3-->-->"
-        );
+        assert_eq!(add(&mut tree, 0, 7, ""), "<!--framePath //<!--frame3-->-->");
     }
 
     /// A long name is hashed, the same each time; one script made is
@@ -179,14 +191,20 @@ mod tests {
         let hashed = add(&mut tree, 0, 1, &long);
         assert!(hashed.starts_with("<!--frameHash"), "{hashed}");
         assert_eq!(hashed, frame_hash(&long));
-        assert_eq!(add(&mut tree, 0, 2, &"x".repeat(MAX_REQUESTED_NAME_SIZE)).len(), 80);
+        assert_eq!(
+            add(&mut tree, 0, 2, &"x".repeat(MAX_REQUESTED_NAME_SIZE)).len(),
+            80
+        );
         tree.add_child(token(0), token(3), "a", true).unwrap();
         tree.add_child(token(0), token(4), "a", true).unwrap();
         let (three, four) = (
             tree.unique_name(token(3)).unwrap(),
             tree.unique_name(token(4)).unwrap(),
         );
-        assert!(three.starts_with(DYNAMIC_FRAME_MARKER) && three.ends_with(SUFFIX), "{three}");
+        assert!(
+            three.starts_with(DYNAMIC_FRAME_MARKER) && three.ends_with(SUFFIX),
+            "{three}"
+        );
         assert_ne!(three, four);
     }
 }

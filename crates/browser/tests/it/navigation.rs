@@ -4702,7 +4702,10 @@ document.querySelector('base').setAttribute('href', '/later/');
                 "/b",
                 Route::ok(
                     "text/html",
-                    child_logging("b", "history.pushState(null, '', '#p'); parent.note('pushed');"),
+                    child_logging(
+                        "b",
+                        "history.pushState(null, '', '#p'); parent.note('pushed');",
+                    ),
                 ),
             ),
         ]);
@@ -4760,7 +4763,12 @@ document.querySelector('base').setAttribute('href', '/later/');
         notes.sort_unstable();
         assert_eq!(
             notes,
-            ["kid-a-navigate", "kid-b-navigate", "late-b-navigate", "top-false"]
+            [
+                "kid-a-navigate",
+                "kid-b-navigate",
+                "late-b-navigate",
+                "top-false"
+            ]
         );
         web_contents.navigate(server.url("/other"));
         assert_eq!(
@@ -4921,20 +4929,12 @@ document.querySelector('base').setAttribute('href', '/later/');
         let (mut web_contents, host_rx) = tab();
         if initial {
             web_contents.navigate_initial(server.url("/"));
-            logged_until(
-                &mut web_contents,
-                &host_rx,
-                "a-1_b-1_c-1-1_reload-manual-1",
-            );
+            logged_until(&mut web_contents, &host_rx, "a-1_b-1_c-1-1_reload-manual-1");
             assert_eq!(web_contents.controller().entry_count(), 1);
             return web_contents.shutdown();
         }
         web_contents.navigate(server.url("/"));
-        logged_until(
-            &mut web_contents,
-            &host_rx,
-            "a-1_b-2_c-2-2_reload-manual-2",
-        );
+        logged_until(&mut web_contents, &host_rx, "a-1_b-2_c-2-2_reload-manual-2");
         let main = web_contents.devtools_frame_token();
         let tree = web_contents.frame_tree();
         let child = tree.children(main)[0];
@@ -4952,7 +4952,10 @@ document.querySelector('base').setAttribute('href', '/later/');
         let (top, a, c) = (server.url("/"), server.url("/a"), server.url("/c"));
         assert_eq!(
             urls,
-            [(top.as_str(), Some(a.as_str())), (top.as_str(), Some(c.as_str()))]
+            [
+                (top.as_str(), Some(a.as_str())),
+                (top.as_str(), Some(c.as_str()))
+            ]
         );
         assert_eq!(controller.current_index(), Some(1));
         let entry = controller.entry(1).expect("there");

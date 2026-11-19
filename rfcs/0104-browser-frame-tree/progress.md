@@ -21,7 +21,7 @@
 | 3b：entry 的樹、子 frame 跨文件的導覽進歷史 | 完成 | 2026-11-19 |
 | 3c：子 frame 同一份文件內的導覽進歷史 | 完成 | 2026-11-19 |
 | 3d：上一頁、下一頁跨 frame 走 | 完成 | 2026-11-19 |
-| 3e：第 3 階段的檢查和文件 | | |
+| 3e：第 3 階段的檢查和文件 | 完成 | 2026-11-19 |
 | 4：收尾 | | |
 
 ## 驗收
@@ -146,3 +146,12 @@
 - **新的測試**：`browser` 的 `navigation_controller::tests::back_and_forward_move_the_frames_at_another_item`（子 frame 重新載入、子 frame 同一份文件內、只動一半的 traversal 照 frame 自己的項目、子 frame 的歷史 commit 讓 entry 成為目前的、main frame 的項目不同時只動它、沒有要動的時重新載入 main frame、新的子 frame 照父 frame 的 entry 的 id 找項目）、`back_and_forward_move_the_frames_in_one_traversing`、`back_and_forward_load_a_document_of_no_number_again`（文件序號 0 的重新載入、entry 沒有位置的不動）；原本的單元測試改成新的 API。`links::back_and_forward_move_a_child_frame`（子 frame 的 `popstate`、main frame 沒有，子 frame 重新載入是 `back_forward`，前進回來）、`back_restores_the_child_frames_of_the_entry`（main frame 重新載入時 parser 建的 iframe 照 entry 還原，`load` 之後才設 `src` 的照 `src`）。
 - **mutation test**（19 個，18 個抓到，1 個等價）：同一個項目不往下看、文件序號 0 的也在同一份文件內 traverse、同一份文件的也重新載入、沒有要動的時什麼都不做、frame 自己的項目換成目前的 entry 的、entry 沒有位置的也重新載入、子 frame 的歷史 commit 當成取代、不讓那個 entry 成為目前的、新的子 frame 用目前的 entry 找項目（單元測試）；同一份文件內 traverse 的不往下看（單元測試，也是跑 WPT 時找到的那個 bug）；全部重新載入、子 frame 重新載入不是 `back_forward`、節點不記同一份文件內的 commit 的位置、renderer 的子 frame 的文件不記導覽的編號、renderer 只在最上層的文件裡 traverse（`back_and_forward_move_a_child_frame`）；節點不記跨文件的 commit 的位置、browser 不還原、renderer 在父文件 `load` 之後也標記（`back_restores_the_child_frames_of_the_entry`）。等價的：renderer 在任何載入的文件裡都標記（記在 `docs/test-gaps.md`）。同一節原本等子 frame 的上一頁、下一頁才看得出來的兩條（`replaced` 的 `NavigationDropped`、子 frame 的 `file:` 授權）重新看過，還是等價，改寫了理由。
 - **跑過的檢查**：`cargo test -p browser -p protocol -p renderer -p shell -p dom_js` 全部通過；`test.py wpt html/browsers/history/the-history-interface/ html/browsers/browsing-the-web/history-traversal/ html/browsers/history/the-location-interface/` 沒有意外的結果。
+
+### 3e：第 3 階段的檢查（2026-11-19，macOS、Apple M4）
+
+- **`cargo fmt --check`**：3a 到 3d 改到的檔案的排版，照 `cargo fmt` 改了。
+- **clippy**（`--workspace --all-targets -- -D warnings`）：`unique_name` 切掉 `framePath` 前後綴的兩處長度運算（`arithmetic_side_effects`），改成 `strip_prefix`、`strip_suffix`（`frame_path`），不用算長度、沒有加 `#[expect]`。
+- **`cargo test --workspace`**：全部通過（57 個測試 binary、4132 個測試；`bindings` 的 `gc_platform` 印出的兩個 panic 是測試刻意的）。
+- **`test.py scenarios --window`**（階段驗收）：69 份全部通過，截圖看過 `frames`（子 frame 和孫 frame 的第一份文件併進目前的 entry，返回鍵是灰的）。
+- **文件**：RFC 的「session history」的設計照第 29 到 32 條補上做的時候的細節，「分階段」寫上各段開始前的決定；`docs/architecture.md`、`docs/limitations.md`、`docs/test-gaps.md`、`crates/dom/README.md`、`crates/dom_api/README.md` 在各段已經更新，再看過一遍沒有過時的說法。
+- **之後**：`test.py` 的 `matrix`、`fuzz` 照 CLAUDE.md 由 CI 跑（這個階段沒有動到 GC）。

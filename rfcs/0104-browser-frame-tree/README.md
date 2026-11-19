@@ -115,13 +115,14 @@ renderer 這一側其實已經很完整：子 frame 有自己的 realm 和 `Wind
 
 ### session history（`browser`、`dom`、`dom_api`）
 
-- `NavigationEntry` 從「一個網址」變成一棵 `FrameNavigationEntry` 的樹，每個 frame 一個：網址、`history.state`、捲動還原的模式、item 的序號、document 的序號（現在的 `document` 欄位）。
+- `NavigationEntry` 從「一個網址」變成一棵 `FrameNavigationEntry` 的樹，每個 frame 一個：網址、`history.state`、捲動還原的模式、item 的序號、document 的序號（現在的 `document` 欄位）。樹的節點只記 unique name 和 item 的序號，項目由 `NavigationController` 照序號擁有、entry 之間共用（第 29 條）；`state` 和捲動模式是項目裡分開的欄位（第 30 條）。
 - commit 時照 Chromium 的分類：
   - 主 frame：和現在一樣（新的 entry、取代、reload、回到既有的 entry）。
-  - 子 frame 建立之後的第一次導覽：併進目前的 entry，不多一個 entry（上一頁不會回到「iframe 還沒載入」的狀態）。
-  - 子 frame 之後的導覽：複製目前的 entry、換掉那個 frame 的那一格，當成新的 entry（前進的 entry 照舊丟掉）。
-- 上一頁、下一頁：比較目標 entry 和現在的樹，找出要動的 frame。item 的序號不同、document 的序號相同的，送同一份文件內的 traversal；document 的序號不同的，那個 frame 重新載入，它底下的不用看（新文件會自己建）。
-- 回到某個 entry、或重新整理之後，新文件建出來的子 frame 照 entry 裡記的網址載入，不是照 `src`。要一個「同一個位置的 frame」的鍵（Chromium 的 unique name）。
+  - 子 frame 建立之後的第一次導覽：併進目前的 entry，不多一個 entry（上一頁不會回到「iframe 還沒載入」的狀態）。做的時候照 Chromium：還沒 commit 過 `about:blank` 以外的文件（`has_committed_real_load`）、要求取代、分頁的第一個 entry 裡的，都放進目前的 entry 裡它的位置，重新載入也是；commit 的 index 和 length 在送出 commit 時算（3b）。
+  - 子 frame 之後的導覽：複製目前的 entry、換掉那個 frame 的那一格，當成新的 entry（前進的 entry 照舊丟掉）。複製時只留現在還在的 frame 的位置。
+  - 同一份文件內的導覽（任何 frame 的 fragment、`pushState`）：新的 entry 換成同一份文件的新項目，它底下的位置留著；initial about:blank 上的由 renderer 改成取代（第 31 條）。
+- 上一頁、下一頁：比較目標 entry 和現在的樹，找出要動的 frame。item 的序號不同、document 的序號相同的，送同一份文件內的 traversal（也往下看）；document 的序號不同的，那個 frame 重新載入，它底下的不用看（新文件會自己建）。現在的項目是 frame 自己最後 commit 的（第 32 條）。
+- 上一頁、下一頁之後，新文件在 `load` 之前建出來的子 frame 照 entry 裡記的網址載入，不是照 `src`（renderer 標記、Browser 照父 frame 的 entry 找，第 32 條）；重新整理照 `src`（第 27 條）。要一個「同一個位置的 frame」的鍵（Chromium 的 unique name，第 26 條）。
 - `history.length`、`history.go()` 在每個 frame 都照整個分頁的清單。
 
 ### DevTools 和自動化（`shell`、`renderer`）
@@ -146,7 +147,7 @@ renderer 這一側其實已經很完整：子 frame 有自己的 realm 和 `Wind
 
 1. **Browser 的 frame 樹**：協定裡 frame 的 id 的型別；建立、移除的訊息；Browser 的 `FrameTree`、檢查和壞掉的訊息的處理；DevTools 和 WebDriver 的 frame 的 id 換成 token。子 frame 的載入還是 renderer 做，使用者看不出差別。決定是「已決定的事項」第 2 到 8 條。分三段：1a 是 `FrameToken`、engine 抽 id、renderer 送兩則訊息、DevTools 和 WebDriver 的 id；1b 是 Browser 的 `FrameTree`、檢查和壞掉的訊息；1c 是整個階段的檢查和文件。
 2. **子 frame 的導覽經過 Browser**：開始導覽的訊息、每個節點的 `NavigationRequest`、`CommitNavigation` 帶 frame、子 frame 的錯誤頁、拿掉 renderer 自己載入的那條路、DevTools 的導覽事件。決定是「已決定的事項」第 9 到 16 條，各段開始前的是第 17 到 25 條。分六段：2a 是 renderer 的訊息帶著 renderer 的身分；2b 是 `BeginNavigation` 和網址的檢查，先只換主 frame 的路（網頁能導覽到的 `about:` 只剩 `about:blank`，其他行為不變）；2c 是子 frame 一般的導覽經過 Browser（commit 帶 frame 和 renderer 的編號、`NavigationDropped`、Navigation Timing、錯誤頁和 opaque 的 origin、`file:` 照發起的文件檢查的權限、DevTools 的事件），拿掉 renderer 自己載入的路（`NavigationDropped` 和 `file:` 的檢查原本排在 2b：主 frame 的導覽用不到前者，後者要 Browser 知道子 frame 的網址，2026-11-18 做 2b 時移過來）；2d 是 `about:blank`、`about:srcdoc` 和 `DidChangeSrcDoc`，節點記 origin，`about:blank` 照發起者繼承 origin（第 23、24 條）；2e 是子 frame 同一份文件內的導覽的回報和網址的檢查（第 25 條）；2f 是整個階段的檢查和文件。
-3. **joint session history**：entry 的樹、子 frame 的分類、traversal、子 frame 的 `pushState`、回到 entry 時子 frame 照 entry 載入、frame 的名稱（第 5 條）。開始前決定的是第 26、27 條。分五段：3a 是 iframe 的名稱和 unique name；3b 是 entry 變成一棵樹、子 frame 跨文件的導覽進歷史（第一次併進目前的 entry，之後的是新的 entry），`history.length` 照整個分頁；3c 是子 frame 同一份文件內的導覽進歷史；3d 是上一頁、下一頁跨 frame 走（同一份文件內的 traversal 帶 frame、重新載入的 frame、新的子 frame 照 entry 還原）；3e 是整個階段的檢查和文件。
+3. **joint session history**：entry 的樹、子 frame 的分類、traversal、子 frame 的 `pushState`、回到 entry 時子 frame 照 entry 載入、frame 的名稱（第 5 條）。開始前決定的是第 26、27 條，各段開始前的是第 28 到 32 條。分五段：3a 是 iframe 的名稱和 unique name；3b 是 entry 變成一棵樹、子 frame 跨文件的導覽進歷史（第一次併進目前的 entry，之後的是新的 entry），`history.length` 照整個分頁；3c 是子 frame 同一份文件內的導覽進歷史；3d 是上一頁、下一頁跨 frame 走（同一份文件內的 traversal 帶 frame、重新載入的 frame、新的子 frame 照 entry 還原）；3e 是整個階段的檢查和文件。
 4. **收尾**：Browser 對 renderer 回報的檢查補齊、WPT 的目錄、文件、RFC 改寫成完成的樣子。
 
 第 2、3 階段都會再分小段，到時候才分。

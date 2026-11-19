@@ -57,7 +57,9 @@ impl TreeNode {
     /// to.
     fn find(&self, path: &[&str]) -> Option<&Self> {
         path.iter().try_fold(self, |node, name| {
-            node.children.iter().find(|child| child.unique_name == *name)
+            node.children
+                .iter()
+                .find(|child| child.unique_name == *name)
         })
     }
 
@@ -111,17 +113,16 @@ impl TreeNode {
     /// "subframe history items that do not correspond to frames actually in
     /// the current page").
     fn clone_live(&self, tree: &FrameTree, frame: FrameToken) -> Self {
-        let children = self
-            .children
-            .iter()
-            .filter_map(|child| {
-                let live = tree
-                    .children(frame)
-                    .iter()
-                    .find(|live| tree.unique_name(**live) == Some(child.unique_name.as_str()))?;
-                Some(child.clone_live(tree, *live))
-            })
-            .collect();
+        let children =
+            self.children
+                .iter()
+                .filter_map(|child| {
+                    let live = tree.children(frame).iter().find(|live| {
+                        tree.unique_name(**live) == Some(child.unique_name.as_str())
+                    })?;
+                    Some(child.clone_live(tree, *live))
+                })
+                .collect();
         Self {
             unique_name: self.unique_name.clone(),
             item: self.item,
@@ -337,7 +338,12 @@ impl NavigationController {
 
     /// `frame`'s navigation `navigation_id` started, to do `kind` as it
     /// commits.
-    pub(crate) fn did_start(&mut self, navigation_id: u64, frame: FrameToken, kind: NavigationType) {
+    pub(crate) fn did_start(
+        &mut self,
+        navigation_id: u64,
+        frame: FrameToken,
+        kind: NavigationType,
+    ) {
         self.pending.insert(navigation_id, Pending { frame, kind });
     }
 
@@ -425,7 +431,10 @@ impl NavigationController {
         url: String,
     ) {
         let main_frame = frame == tree.root();
-        let kind = self.pending.remove(&navigation_id).map(|pending| pending.kind);
+        let kind = self
+            .pending
+            .remove(&navigation_id)
+            .map(|pending| pending.kind);
         self.pending
             .retain(|id, pending| *id > navigation_id || !(main_frame || pending.frame == frame));
         if main_frame {
@@ -436,7 +445,12 @@ impl NavigationController {
         self.sweep();
     }
 
-    fn did_commit_main_frame(&mut self, kind: Option<NavigationType>, navigation_id: u64, url: String) {
+    fn did_commit_main_frame(
+        &mut self,
+        kind: Option<NavigationType>,
+        navigation_id: u64,
+        url: String,
+    ) {
         // A new document: the entry it commits to is its, keeping its
         // state (a reload, a traversal).
         match (kind, self.current) {
@@ -528,9 +542,7 @@ impl NavigationController {
                 self.current = Some(index);
             }
             // Its document loaded again: its item has it.
-            Some(NavigationType::Reload)
-                if self.entries[current].root.find(&path).is_some() =>
-            {
+            Some(NavigationType::Reload) if self.entries[current].root.find(&path).is_some() => {
                 let node = self.entries[current]
                     .root
                     .find_mut(&path)
@@ -636,7 +648,11 @@ impl NavigationController {
         navigation_id: u64,
         url: String,
     ) {
-        match self.pending.remove(&navigation_id).map(|pending| pending.kind) {
+        match self
+            .pending
+            .remove(&navigation_id)
+            .map(|pending| pending.kind)
+        {
             Some(NavigationType::HistoryIndex(index)) if index < self.entries.len() => {
                 let node = path(tree, frame)
                     .and_then(|path| self.entries[index].root.find(&path).map(|node| node.item));
@@ -658,7 +674,10 @@ impl NavigationController {
     /// The renderer showed another document than the traversal
     /// `navigation_id` was for: the frame, and the entry whose item it
     /// loads instead, if it is still there.
-    pub(crate) fn did_fail_same_document(&mut self, navigation_id: u64) -> Option<(FrameToken, usize)> {
+    pub(crate) fn did_fail_same_document(
+        &mut self,
+        navigation_id: u64,
+    ) -> Option<(FrameToken, usize)> {
         match self.pending.remove(&navigation_id) {
             Some(Pending {
                 frame,
@@ -682,7 +701,11 @@ impl NavigationController {
 
     /// Where `frame`'s document is in the current entry, for its node to
     /// keep as what it committed: none for a frame with no place there.
-    pub(crate) fn current_place(&self, tree: &FrameTree, frame: FrameToken) -> Option<HistoryPlace> {
+    pub(crate) fn current_place(
+        &self,
+        tree: &FrameTree,
+        frame: FrameToken,
+    ) -> Option<HistoryPlace> {
         let entry = &self.entries[self.current?];
         let path = path(tree, frame)?;
         let item = self.item(entry.root.find(&path)?.item);
@@ -766,7 +789,9 @@ impl NavigationController {
         let Some(current) = self.current else {
             return;
         };
-        let Some(node) = path(tree, frame).and_then(|path| self.entries[current].root.find(&path).map(|node| node.item)) else {
+        let Some(node) = path(tree, frame)
+            .and_then(|path| self.entries[current].root.find(&path).map(|node| node.item))
+        else {
             return;
         };
         self.items
@@ -920,7 +945,13 @@ mod tests {
         assert_eq!(controller.current_index(), Some(2));
         assert!(controller.can_go_back() && !controller.can_go_forward());
         // Back to `b`, then a new page: `c` goes.
-        commit(&mut controller, &tree, 4, NavigationType::HistoryIndex(1), "b");
+        commit(
+            &mut controller,
+            &tree,
+            4,
+            NavigationType::HistoryIndex(1),
+            "b",
+        );
         assert!(controller.can_go_forward());
         commit(&mut controller, &tree, 5, NavigationType::NewEntry, "d");
         assert_eq!(urls(&controller), ["a", "b", "d"]);
@@ -944,7 +975,13 @@ mod tests {
         assert_eq!(urls(&controller), ["a", "b", "c"]);
         assert_eq!(controller.index_for_offset(2), Some(2));
         // A redirect on the way changes the entry's URL.
-        commit(&mut controller, &tree, 6, NavigationType::HistoryIndex(2), "c2");
+        commit(
+            &mut controller,
+            &tree,
+            6,
+            NavigationType::HistoryIndex(2),
+            "c2",
+        );
         assert_eq!(urls(&controller), ["a", "b", "c2"]);
         assert_eq!(controller.current_index(), Some(2));
     }
@@ -965,7 +1002,13 @@ mod tests {
     #[test]
     fn replace_takes_the_current_entry_s_place() {
         let (mut controller, tree) = three();
-        commit(&mut controller, &tree, 4, NavigationType::HistoryIndex(1), "b");
+        commit(
+            &mut controller,
+            &tree,
+            4,
+            NavigationType::HistoryIndex(1),
+            "b",
+        );
         controller.set_title("B".into());
         commit(&mut controller, &tree, 5, NavigationType::Replace, "r");
         assert_eq!(urls(&controller), ["a", "r", "c"]);
@@ -995,7 +1038,13 @@ mod tests {
         controller.did_commit(&tree, MAIN, 1, "about:blank".into());
         assert_eq!(urls(&controller), ["about:blank"]);
         assert!(controller.is_initial());
-        commit(&mut controller, &tree, 2, NavigationType::Reload, "about:blank");
+        commit(
+            &mut controller,
+            &tree,
+            2,
+            NavigationType::Reload,
+            "about:blank",
+        );
         assert!(controller.is_initial());
         let params = controller.entry_params(&tree, MAIN, NavigationType::NewEntry);
         assert_eq!((params.index, params.length), (0, 1));
@@ -1071,7 +1120,13 @@ mod tests {
         assert_eq!(controller.current_index(), Some(0));
         assert_eq!(controller.did_fail_same_document(3), None);
         // Loaded instead: a new document, of that entry only.
-        commit(&mut controller, &tree, 4, NavigationType::HistoryIndex(1), "a#x");
+        commit(
+            &mut controller,
+            &tree,
+            4,
+            NavigationType::HistoryIndex(1),
+            "a#x",
+        );
         assert_eq!(document(&controller, 1), 4);
         assert_ne!(document(&controller, 0), document(&controller, 1));
     }
@@ -1081,7 +1136,13 @@ mod tests {
         let (mut controller, tree) = three();
         // Forward is pending when a same-document navigation drops that
         // entry: it commits as a new one instead of an index that's gone.
-        commit(&mut controller, &tree, 4, NavigationType::HistoryIndex(1), "b");
+        commit(
+            &mut controller,
+            &tree,
+            4,
+            NavigationType::HistoryIndex(1),
+            "b",
+        );
         controller.did_start(5, MAIN, NavigationType::HistoryIndex(2));
         controller.did_commit_same_document(&tree, MAIN, "b#x".into(), false, None);
         controller.did_commit(&tree, MAIN, 5, "c".into());
@@ -1111,7 +1172,11 @@ mod tests {
         controller.did_commit(tree, frame, id, url.into());
     }
 
-    fn child_url<'a>(controller: &'a NavigationController, index: usize, name: &str) -> Option<&'a str> {
+    fn child_url<'a>(
+        controller: &'a NavigationController,
+        index: usize,
+        name: &str,
+    ) -> Option<&'a str> {
         let entry = controller.entry(index)?;
         entry.frame(name).map(|item| item.url.as_str())
     }
@@ -1127,7 +1192,14 @@ mod tests {
         commit(&mut controller, &tree, 1, NavigationType::NewEntry, "a");
         // Its parent's first, then its own, as Chromium's `AUTO_SUBFRAME`s.
         for (id, frame, url) in [(2, 1, "one"), (3, 2, "two"), (4, 3, "three")] {
-            commit_child(&mut controller, &tree, token(frame), id, NavigationType::Replace, url);
+            commit_child(
+                &mut controller,
+                &tree,
+                token(frame),
+                id,
+                NavigationType::Replace,
+                url,
+            );
         }
         assert_eq!(controller.entry_count(), 1);
         assert_eq!(controller.entry(0).map(|e| e.frame_count()), Some(4));
@@ -1137,13 +1209,34 @@ mod tests {
             .expect("made");
         tree.add_child(token(4), token(5), "five", false)
             .expect("made");
-        commit_child(&mut controller, &tree, token(5), 5, NavigationType::Replace, "five");
+        commit_child(
+            &mut controller,
+            &tree,
+            token(5),
+            5,
+            NavigationType::Replace,
+            "five",
+        );
         assert_eq!(child_url(&controller, 0, "five"), None);
-        commit_child(&mut controller, &tree, token(5), 50, NavigationType::NewEntry, "five");
+        commit_child(
+            &mut controller,
+            &tree,
+            token(5),
+            50,
+            NavigationType::NewEntry,
+            "five",
+        );
         assert_eq!(controller.entry_count(), 1);
         // Frame 1's next document: a new entry; frame 3's place went with
         // its document, frame 2's is the one before's.
-        commit_child(&mut controller, &tree, token(1), 6, NavigationType::NewEntry, "one2");
+        commit_child(
+            &mut controller,
+            &tree,
+            token(1),
+            6,
+            NavigationType::NewEntry,
+            "one2",
+        );
         assert_eq!(controller.entry_count(), 2);
         assert_eq!(controller.offset_and_length(), (1, 2));
         assert_eq!(urls(&controller), ["a", "a"]);
@@ -1170,16 +1263,44 @@ mod tests {
         assert!(!manual(&controller, 1, ""));
         // A replacement, and a reload: the place, the entry kept. A reload
         // keeps the item and its state.
-        commit_child(&mut controller, &tree, token(2), 7, NavigationType::Reload, "two");
+        commit_child(
+            &mut controller,
+            &tree,
+            token(2),
+            7,
+            NavigationType::Reload,
+            "two",
+        );
         assert_eq!(item(&controller, 1, "two"), item(&controller, 0, "two"));
         assert!(manual(&controller, 1, "two"));
         // Frame 1's reload: frame 3's place goes with its document.
-        commit_child(&mut controller, &tree, token(3), 70, NavigationType::Replace, "three2");
+        commit_child(
+            &mut controller,
+            &tree,
+            token(3),
+            70,
+            NavigationType::Replace,
+            "three2",
+        );
         assert_eq!(child_url(&controller, 1, "three"), Some("three2"));
-        commit_child(&mut controller, &tree, token(1), 71, NavigationType::Reload, "one2");
+        commit_child(
+            &mut controller,
+            &tree,
+            token(1),
+            71,
+            NavigationType::Reload,
+            "one2",
+        );
         assert_eq!(child_url(&controller, 1, "three"), None);
         assert_eq!(child_url(&controller, 1, "one"), Some("one2"));
-        commit_child(&mut controller, &tree, token(2), 8, NavigationType::Replace, "two2");
+        commit_child(
+            &mut controller,
+            &tree,
+            token(2),
+            8,
+            NavigationType::Replace,
+            "two2",
+        );
         assert_eq!(controller.entry_count(), 2);
         assert_eq!(child_url(&controller, 1, "two"), Some("two2"));
         assert_eq!(child_url(&controller, 0, "two"), Some("two"));
@@ -1187,7 +1308,14 @@ mod tests {
         assert_eq!((params.index, params.length), (2, 3));
         // A frame gone: a new entry has no place for it.
         tree.remove(token(2)).expect("there");
-        commit_child(&mut controller, &tree, token(1), 9, NavigationType::NewEntry, "one3");
+        commit_child(
+            &mut controller,
+            &tree,
+            token(1),
+            9,
+            NavigationType::NewEntry,
+            "one3",
+        );
         assert_eq!(child_url(&controller, 2, "two"), None);
         assert_eq!(child_url(&controller, 1, "two"), Some("two2"));
         // The main frame's reload: its new document's frames take their
@@ -1206,27 +1334,50 @@ mod tests {
         let tree = frames();
         let mut controller = NavigationController::default();
         commit(&mut controller, &tree, 1, NavigationType::NewEntry, "a");
-        controller.did_commit_same_document(&tree, token(2), "about:blank#x".into(), true, Some(vec![2]));
+        controller.did_commit_same_document(
+            &tree,
+            token(2),
+            "about:blank#x".into(),
+            true,
+            Some(vec![2]),
+        );
         assert_eq!(controller.entry_count(), 1);
         let frame = |controller: &NavigationController, index: usize, name: &str| {
-            controller
-                .entry(index)
-                .and_then(|e| e.frame(name).cloned())
+            controller.entry(index).and_then(|e| e.frame(name).cloned())
         };
         let two = frame(&controller, 0, "two").expect("placed");
         assert_eq!(
             (two.url.as_str(), two.document, two.state),
             ("about:blank#x", 0, Some(vec![2]))
         );
-        commit_child(&mut controller, &tree, token(1), 2, NavigationType::Replace, "one");
-        commit_child(&mut controller, &tree, token(3), 3, NavigationType::Replace, "three");
+        commit_child(
+            &mut controller,
+            &tree,
+            token(1),
+            2,
+            NavigationType::Replace,
+            "one",
+        );
+        commit_child(
+            &mut controller,
+            &tree,
+            token(3),
+            3,
+            NavigationType::Replace,
+            "three",
+        );
         controller.set_manual_scroll_restoration(&tree, token(1), true);
         controller.did_commit_same_document(&tree, token(1), "one#y".into(), false, Some(vec![1]));
         assert_eq!(controller.entry_count(), 2);
         assert_eq!(controller.current_index(), Some(1));
         let one = frame(&controller, 1, "one").expect("there");
         assert_eq!(
-            (one.url.as_str(), one.document, one.state, one.manual_scroll_restoration),
+            (
+                one.url.as_str(),
+                one.document,
+                one.state,
+                one.manual_scroll_restoration
+            ),
             ("one#y", 2, Some(vec![1]), true)
         );
         assert_eq!(child_url(&controller, 0, "one"), Some("one"));
@@ -1241,7 +1392,13 @@ mod tests {
         assert_eq!(controller.entry_count(), 2);
         // Back, then a child frame's new entry: the one forward goes, and
         // its items.
-        commit(&mut controller, &tree, 4, NavigationType::HistoryIndex(0), "a");
+        commit(
+            &mut controller,
+            &tree,
+            4,
+            NavigationType::HistoryIndex(0),
+            "a",
+        );
         controller.did_commit_same_document(&tree, token(3), "three#w".into(), false, None);
         assert_eq!(controller.entry_count(), 2);
         assert_eq!(child_url(&controller, 1, "one"), Some("one"));
@@ -1258,11 +1415,26 @@ mod tests {
         let mut controller = NavigationController::default();
         commit(&mut controller, &tree, 1, NavigationType::NewEntry, "a");
         for (id, frame, url) in [(2, 1, "one"), (3, 2, "two"), (4, 3, "three")] {
-            commit_child(&mut controller, &tree, token(frame), id, NavigationType::Replace, url);
+            commit_child(
+                &mut controller,
+                &tree,
+                token(frame),
+                id,
+                NavigationType::Replace,
+                url,
+            );
         }
-        commit_child(&mut controller, &tree, token(1), 5, NavigationType::NewEntry, "one2");
+        commit_child(
+            &mut controller,
+            &tree,
+            token(1),
+            5,
+            NavigationType::NewEntry,
+            "one2",
+        );
         controller.did_commit_same_document(&tree, token(2), "two#x".into(), false, None);
-        let current = |controller: &NavigationController, frame| controller.current_place(&tree, frame);
+        let current =
+            |controller: &NavigationController, frame| controller.current_place(&tree, frame);
         let none = |_| None;
         // Entry 1 from 2: frame 2 within its document.
         assert_eq!(
@@ -1281,7 +1453,10 @@ mod tests {
         // Frame 2 at entry 0's item already (a traversal half done): frame
         // 1 alone.
         let entry_0 = controller.entry(0).map(|e| e.entry.id).expect("there");
-        let two = controller.item_at(&tree, token(2), 0).expect("there").clone();
+        let two = controller
+            .item_at(&tree, token(2), 0)
+            .expect("there")
+            .clone();
         let committed = |frame| {
             (frame == token(2)).then_some(HistoryPlace {
                 entry: entry_0,
@@ -1315,13 +1490,19 @@ mod tests {
         // A new child frame's item: in its parent's entry, if that is
         // there and has one.
         let entry_0_place = controller.item_for_new_child_frame(&tree, token(3), entry_0);
-        assert_eq!(entry_0_place.map(|(index, item)| (index, item.url.as_str())), Some((0, "three")));
+        assert_eq!(
+            entry_0_place.map(|(index, item)| (index, item.url.as_str())),
+            Some((0, "three"))
+        );
         let entry_1 = controller.entry(1).map(|e| e.entry.id).expect("there");
         assert_eq!(
             controller.item_for_new_child_frame(&tree, token(3), entry_1),
             None
         );
-        assert_eq!(controller.item_for_new_child_frame(&tree, token(3), 999), None);
+        assert_eq!(
+            controller.item_for_new_child_frame(&tree, token(3), 999),
+            None
+        );
     }
 
     /// A frame traversing within its document has its frames looked at
@@ -1331,7 +1512,14 @@ mod tests {
         let tree = frames();
         let mut controller = NavigationController::default();
         commit(&mut controller, &tree, 1, NavigationType::NewEntry, "a");
-        commit_child(&mut controller, &tree, token(1), 2, NavigationType::Replace, "one");
+        commit_child(
+            &mut controller,
+            &tree,
+            token(1),
+            2,
+            NavigationType::Replace,
+            "one",
+        );
         controller.did_commit_same_document(&tree, MAIN, "a#x".into(), false, None);
         controller.did_commit_same_document(&tree, token(1), "one#y".into(), false, None);
         assert_eq!(
@@ -1367,13 +1555,40 @@ mod tests {
         let tree = frames();
         let mut controller = NavigationController::default();
         commit(&mut controller, &tree, 1, NavigationType::NewEntry, "a");
-        commit_child(&mut controller, &tree, token(1), 2, NavigationType::Replace, "one");
-        commit_child(&mut controller, &tree, token(1), 3, NavigationType::Replace, "one2");
+        commit_child(
+            &mut controller,
+            &tree,
+            token(1),
+            2,
+            NavigationType::Replace,
+            "one",
+        );
+        commit_child(
+            &mut controller,
+            &tree,
+            token(1),
+            3,
+            NavigationType::Replace,
+            "one2",
+        );
         assert_eq!(controller.items.len(), 2);
-        commit_child(&mut controller, &tree, token(1), 4, NavigationType::NewEntry, "one3");
+        commit_child(
+            &mut controller,
+            &tree,
+            token(1),
+            4,
+            NavigationType::NewEntry,
+            "one3",
+        );
         assert_eq!(controller.items.len(), 3);
         // Back to the first: its frames' places stay, to restore them from.
-        commit(&mut controller, &tree, 5, NavigationType::HistoryIndex(0), "a");
+        commit(
+            &mut controller,
+            &tree,
+            5,
+            NavigationType::HistoryIndex(0),
+            "a",
+        );
         assert_eq!(child_url(&controller, 0, "one"), Some("one2"));
         commit(&mut controller, &tree, 6, NavigationType::NewEntry, "b");
         // `one3`'s entry went; `a` and `one2` are the first entry's.
@@ -1381,7 +1596,14 @@ mod tests {
         assert_eq!(urls(&controller), ["a", "b"]);
         // The main frame's new entry within its document keeps its frames'
         // places.
-        commit_child(&mut controller, &tree, token(1), 7, NavigationType::Replace, "one4");
+        commit_child(
+            &mut controller,
+            &tree,
+            token(1),
+            7,
+            NavigationType::Replace,
+            "one4",
+        );
         controller.did_commit_same_document(&tree, MAIN, "b#x".into(), false, None);
         assert_eq!(urls(&controller), ["a", "b", "b#x"]);
         assert_eq!(child_url(&controller, 2, "one"), Some("one4"));

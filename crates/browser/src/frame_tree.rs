@@ -366,8 +366,7 @@ impl FrameTree {
         if !self.nodes.contains_key(&parent) {
             return Err(BadMessageReason::FrameParentUnknown);
         }
-        let unique_name =
-            crate::unique_name::for_new_child(self, parent, name, created_by_script);
+        let unique_name = crate::unique_name::for_new_child(self, parent, name, created_by_script);
         let Some(node) = self.nodes.get_mut(&parent) else {
             return Err(BadMessageReason::FrameParentUnknown);
         };
