@@ -342,7 +342,6 @@
 - 宣告表和規範的 WebIDL 刻意不同的地方：Chrome 才有的 `onmousewheel`、`document.body` 沒有 setter…；`GlobalEventHandlers` 在 `Element` 上。
 - `getClientRects`、`getBoundingClientRect` 從 layout 的 fragment 算：在行上沒有 box 的 inline 元素沒有 rect，例如空的 inline 元素（行框是空的時候）、`<br>`、包著 block 的 inline 元素（Chrome 給在那個位置、大小為 0 的 rect）。WPT 的 `getBoundingClientRect-empty-inline-002`、`getClientRects-br-htb-ltr`、`getClientRects-inline-with-block-child` 因此失敗（baseline）。頁面捲動之後，fixed 盒子裡的元素（不是 fixed 盒子自己）的 rect 多扣了捲動的距離（捲 15px 時 405 變成 390，Chrome 152 照樣是 405），`layerY` 也跟著差這麼多。
 - 沒有 `scrollend` 事件，也沒有 visual viewport 和它的 `scroll` 事件。
-- 捲動的原點都在左上：往上、往左溢出的內容（flex 的 `column-reverse`、`row-reverse`）捲不到，也不算進 `scrollWidth`、`scrollHeight`。Chrome 把這種捲動容器的原點放到另一端，`scrollTop` 是負的。WPT 的 `scrollWidthHeight-flex-column-padding-001` 因此失敗（baseline）。
 - `behavior: 'smooth'`（`ScrollToOptions`、`ScrollIntoViewOptions`）和 CSS 的 `scroll-behavior` 沒有作用：script 的捲動都是 instant。`scrollIntoView` 不看 `scroll-margin` 和 `scroll-padding`（machopo 沒有這兩個 property），也只有水平的文字（`block` 是垂直、`inline` 是水平）。`scroll`、`scrollTo`、`scrollBy`、`scrollIntoView` 回傳的 promise 在 microtask 裡就 resolve、值是 `undefined`；Chrome 在下一個 task 裡 resolve、值是 `ScrollResult`。沒有 `scroll-snap`。
 - `offsetParent` 是 flat tree 裡最近的有定位的祖先，否則 `body`、`table`、`td`、`th`（不是元素所在之外的 closed shadow tree 裡的）；`position: fixed` 的元素和沒有盒子的、根元素、body 元素是 `null`，和 CSSOM View 一樣。
 - Geometry Interfaces 只有 rect（`DOMRectReadOnly`、`DOMRect`、`DOMRectList`），沒有 `DOMPoint`、`DOMQuad`、`DOMMatrix`。

@@ -179,6 +179,10 @@ pub struct ScrollNode {
     pub scroll_translation: TransformNodeId,
     /// The scrollable overflow's size.
     pub contents: SizeF,
+    /// How far it reaches left and up past the container's padding box:
+    /// the scroll origin (`layout::scroll_origin`), which the scroll
+    /// offsets are from.
+    pub origin: PointF,
     /// Whether the user can scroll each axis (`auto` / `scroll`).
     pub user_scrollable_x: bool,
     pub user_scrollable_y: bool,

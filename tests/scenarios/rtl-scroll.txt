@@ -1,0 +1,8 @@
+# An rtl page and an rtl scroll container start at their right edges, at
+# 0, and the compositor scrolls them left from there: negative offsets.
+navigate pages/rtl-scroll.html
+wait-loaded
+wheel #box -40 0
+wait-text #status "page 0, box -40"
+wheel-at 300 400 -60 0
+wait-text #status "page -60, box -40"

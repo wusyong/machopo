@@ -895,8 +895,12 @@ impl PrePaint {
     pub fn unscrolled(&self, composited: &NodeIdHashSet) -> PrePaint {
         let mut trees = self.trees.clone();
         for (_, node) in self.trees.scroll_nodes() {
+            // At the scroll origin: the compositor's position, from the
+            // scrollable overflow's left and top, takes the offset and the
+            // origin.
             if composited.contains(&node.element) {
-                trees.transform[node.scroll_translation.0].matrix = Transform::IDENTITY;
+                trees.transform[node.scroll_translation.0].matrix =
+                    Transform::translate(node.origin.x, node.origin.y);
             }
         }
         // The sticky boxes the compositor moves as their scrollports
@@ -1366,6 +1370,7 @@ impl PrePaint {
                     .copied()
                     .unwrap_or(PointF::new(0.0, 0.0));
                 let translation = Transform::translate(-snap_to(at.x, dsf), -snap_to(at.y, dsf));
+                let overflow = layout::scrollable_overflow(fragment);
                 contents.transform = self.transform_node(
                     key(NodeRole::ScrollTranslation),
                     local.transform,
@@ -1390,7 +1395,8 @@ impl PrePaint {
                         overflow_clip: contents.clip,
                         effect: local.effect,
                         scroll_translation: contents.transform,
-                        contents: layout::scrollable_overflow(fragment),
+                        contents: overflow.size(),
+                        origin: PointF::new(-overflow.x, -overflow.y),
                         user_scrollable_x: style.overflow_x.user_scrollable(),
                         user_scrollable_y: style.overflow_y.user_scrollable(),
                     },
@@ -1649,6 +1655,7 @@ impl PrePaint {
                 effect: contents.effect,
                 scroll_translation: state.transform,
                 contents: frame.document_size,
+                origin: layout::document_origin(&frame.layout_view),
                 user_scrollable_x: frame.user_scrollable_x,
                 user_scrollable_y: frame.user_scrollable_y,
             },
@@ -1690,6 +1697,13 @@ impl PrePaint {
             &context,
         );
     }
+}
+
+/// The document's canvas, `size` from where it starts: left of the
+/// viewport's origin in an `rtl` document (`layout::document_origin`).
+pub(crate) fn document_canvas(layout_view: &BoxFragment, size: SizeF) -> RectF {
+    let origin = layout::document_origin(layout_view);
+    RectF::new(-origin.x, -origin.y, size.width, size.height)
 }
 
 /// Paints the fragment tree. `document_size` is the canvas the document
@@ -1849,12 +1863,7 @@ impl Painter<'_> {
                 DisplayItemKind::DocumentBackground,
                 &source.style,
                 &geometry,
-                Some(RectF::new(
-                    0.0,
-                    0.0,
-                    document_size.width,
-                    document_size.height,
-                )),
+                Some(document_canvas(layout_view, document_size)),
                 state,
             );
             self.skip_background = source.node;
@@ -2709,12 +2718,7 @@ impl Painter<'_> {
         if let Some(frame) = pre.child_frame(fragment).filter(|_| visible) {
             let outer = self.hit_testable;
             self.hit_testable &= hittable(&fragment.style);
-            let canvas = RectF::new(
-                0.0,
-                0.0,
-                frame.document_size.width,
-                frame.document_size.height,
-            );
+            let canvas = document_canvas(&frame.layout_view, frame.document_size);
             let scroll = Some(frame.scroll);
             self.push_hit(
                 canvas,

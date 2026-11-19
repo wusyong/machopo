@@ -38,6 +38,9 @@ pub(crate) struct CommitState {
     pub document_id: DocumentId,
     /// The viewport's scroll offset, CSS px.
     pub root_scroll_offset: PointF,
+    /// Where the document starts: the root scroll offset less this is the
+    /// shown part's start in the document.
+    pub root_scroll_origin: PointF,
     /// The viewport as a scroller; `None` until the main thread has laid
     /// a document out, and for hosts that don't scroll.
     pub viewport_scroll_node: Option<ScrollNode>,
@@ -329,6 +332,7 @@ struct LayerTreeImpl {
     local_surface_id: LocalSurfaceId,
     document_id: DocumentId,
     viewport_scroll_node: Option<ScrollNode>,
+    root_scroll_origin: PointF,
     #[allow(dead_code)]
     source_frame_number: u64,
 }
@@ -534,6 +538,7 @@ impl LayerTreeHostImpl {
             local_surface_id: state.local_surface_id,
             document_id: state.document_id,
             viewport_scroll_node: state.viewport_scroll_node,
+            root_scroll_origin: state.root_scroll_origin,
             source_frame_number: state.source_frame_number,
         });
     }
@@ -564,7 +569,7 @@ impl LayerTreeHostImpl {
             return Damage::Full;
         }
         let scale = state.device_scale_factor;
-        let offsets = self.drawn_scroll_offsets(scale);
+        let offsets = self.drawn_scroll_offsets(scale, previous.root_scroll_origin);
         let drawn_scroll = self.scroll_offset_in_pixels(previous);
         let mut damage = Damage::None;
         for (was, is) in previous.layers.iter().zip(layers) {
@@ -748,10 +753,10 @@ impl LayerTreeHostImpl {
         let Some(tree) = self.active_tree.as_ref() else {
             return ScrollHitTest::MainThread { blocking: true };
         };
-        let offset = self.scroll.current();
+        let offset = Self::viewport_offset(self.scroll.current(), tree);
         let at = PointF::new(point.x + offset.x, point.y + offset.y);
         tree.property_trees
-            .scroll_hit_test(at, &self.drawn_scroll_offsets(tree.device_scale_factor))
+            .scroll_hit_test(at, &self.drawn_offsets(tree))
     }
 
     /// Which frame input at `point` (viewport CSS px) is for, in the active
@@ -761,10 +766,10 @@ impl LayerTreeHostImpl {
         let Some(tree) = self.active_tree.as_ref() else {
             return crate::InputAttribution::TargetedFrame(None);
         };
-        let offset = self.scroll.current();
+        let offset = Self::viewport_offset(self.scroll.current(), tree);
         let at = PointF::new(point.x + offset.x, point.y + offset.y);
         tree.property_trees
-            .frame_attribution(at, &self.drawn_scroll_offsets(tree.device_scale_factor))
+            .frame_attribution(at, &self.drawn_offsets(tree))
     }
 
     /// Whether the active tree's page may have `wheel` listeners: the
@@ -854,9 +859,9 @@ impl LayerTreeHostImpl {
     /// device pixels as paint snaps the ones it paints, so a layer lands
     /// where it would have been painted; and the viewport's, as drawn, for
     /// the sticky boxes that stick in it ([`ElementId::VIEWPORT`]).
-    fn drawn_scroll_offsets(&self, scale: f32) -> ScrollOffsets {
+    fn drawn_scroll_offsets(&self, scale: f32, origin: PointF) -> ScrollOffsets {
         let snap = |v: f32| (v * scale).round() / scale;
-        let viewport = self.scroll.current();
+        let viewport = sub(self.scroll.current(), origin);
         self.scroll_offsets()
             .into_iter()
             .chain([(ElementId::VIEWPORT, viewport)])
@@ -873,10 +878,22 @@ impl LayerTreeHostImpl {
             .collect()
     }
 
+    /// [`Self::drawn_scroll_offsets`] for `tree`.
+    fn drawn_offsets(&self, tree: &LayerTreeImpl) -> ScrollOffsets {
+        self.drawn_scroll_offsets(tree.device_scale_factor, tree.root_scroll_origin)
+    }
+
+    /// Where the part of `tree`'s document the viewport shows starts: the
+    /// viewport's position `scroll` (from the document's start) less the
+    /// scroll origin.
+    fn viewport_offset(scroll: PointF, tree: &LayerTreeImpl) -> PointF {
+        sub(scroll, tree.root_scroll_origin)
+    }
+
     /// The viewport's offset in `tree`'s physical pixels, snapped to whole
     /// ones so tiles land on the pixel grid.
     fn scroll_offset_in_pixels(&self, tree: &LayerTreeImpl) -> PointF {
-        let offset = self.scroll.current();
+        let offset = Self::viewport_offset(self.scroll.current(), tree);
         let scale = tree.device_scale_factor;
         PointF::new((offset.x * scale).round(), (offset.y * scale).round())
     }
@@ -937,7 +954,7 @@ impl LayerTreeHostImpl {
             return;
         };
         let visible = self.visible_rect(tree);
-        let offsets = self.drawn_scroll_offsets(tree.device_scale_factor);
+        let offsets = self.drawn_offsets(tree);
         let scroll = self.scroll_offset_in_pixels(tree);
         self.tiles_prepared_for = Some((PointF::new(visible.x, visible.y), self.scroll_offsets()));
         let interest = visible.inset(-visible.width.max(visible.height));
@@ -1271,7 +1288,7 @@ impl LayerTreeHostImpl {
         let viewport = RectF::from_size(tree.viewport_size.to_f32());
         let visible = self.visible_rect(tree);
         let scroll = self.scroll_offset_in_pixels(tree);
-        let offsets = self.drawn_scroll_offsets(tree.device_scale_factor);
+        let offsets = self.drawn_offsets(tree);
         let mut quads = Vec::new();
         let mut resources = Vec::new();
         // The picture layers drawn over the surface layers, front to back.
@@ -1445,6 +1462,10 @@ impl LayerTreeHostImpl {
             }],
         })
     }
+}
+
+fn sub(a: PointF, b: PointF) -> PointF {
+    PointF::new(a.x - b.x, a.y - b.y)
 }
 
 #[cfg(test)]
@@ -2469,6 +2490,25 @@ mod tests {
         assert_eq!(ys, [-58.0, 6.0, 70.0]);
     }
 
+    /// The root scroll offset is a position from the document's start: with
+    /// the document starting 200px above the viewport's origin (its scroll
+    /// origin), a position of 450 shows from 250.
+    #[test]
+    fn the_root_scroll_offset_is_from_the_scroll_origin() {
+        let (mut host, frames) = tall_layer();
+        host.set_root_scroll_origin(gfx::PointF::new(0.0, 200.0));
+        host.composite();
+        host.set_root_scroll_offset(gfx::PointF::new(0.0, 450.0));
+        host.composite();
+
+        let frames = frames.lock().unwrap();
+        let pass = frames[1].root_pass().unwrap();
+        let mut ys: Vec<f32> = pass.quad_list.iter().map(|q| q.rect.y).collect();
+        ys.sort_by(f32::total_cmp);
+        ys.dedup();
+        assert_eq!(ys, [-58.0, 6.0, 70.0]);
+    }
+
     /// A layer fixed to the viewport stays where it is drawn while the
     /// rest scrolls, with no commit and no raster of its own.
     #[test]
@@ -2521,10 +2561,25 @@ mod tests {
     }
 
     /// A sticky box's layer moves as the compositor scrolls: its
-    /// translation node works out how far it sticks, with no commit.
+    /// translation node works out how far it sticks, with no commit; with
+    /// the viewport's position from a document starting above it (a scroll
+    /// origin) too.
     #[test]
     fn a_sticky_layer_sticks_as_the_compositor_scrolls() {
+        for origin in [0.0, 200.0] {
+            // Where it was laid out, scrolled 10 short of sticking, then
+            // stuck at the top.
+            assert_eq!(sticky_bar(origin), [[50.0], [40.0], [0.0]], "{origin}");
+        }
+    }
+
+    /// Where the bar of `a_sticky_layer_sticks_as_the_compositor_scrolls`
+    /// is drawn in each of its three frames, with the document starting
+    /// `origin` above the viewport's origin.
+    fn sticky_bar(origin: f32) -> Vec<Vec<f32>> {
         let (mut host, frames) = tall_layer();
+        host.set_root_scroll_origin(gfx::PointF::new(0.0, origin));
+        host.set_root_scroll_offset(gfx::PointF::new(0.0, origin));
         let tall = PictureLayer {
             id: LayerId(1),
             bounds: SizeF::new(100.0, 2000.0),
@@ -2566,9 +2621,9 @@ mod tests {
         };
         host.set_layers(vec![tall, bar], trees);
         host.composite();
-        host.set_root_scroll_offset(gfx::PointF::new(0.0, 10.0));
+        host.set_root_scroll_offset(gfx::PointF::new(0.0, origin + 10.0));
         host.composite();
-        host.set_root_scroll_offset(gfx::PointF::new(0.0, 250.0));
+        host.set_root_scroll_offset(gfx::PointF::new(0.0, origin + 250.0));
         assert!(!host.needs_commit(), "the compositor scrolls on its own");
         host.composite();
 
@@ -2584,11 +2639,7 @@ mod tests {
             ys.dedup();
             ys
         };
-        // Where it was laid out, scrolled 10 short of sticking, then
-        // stuck at the top.
-        assert_eq!(bar_at(&frames[0]), [50.0]);
-        assert_eq!(bar_at(&frames[1]), [40.0]);
-        assert_eq!(bar_at(&frames[2]), [0.0]);
+        frames.iter().map(bar_at).collect()
     }
 
     #[test]

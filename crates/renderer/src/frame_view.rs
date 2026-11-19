@@ -78,6 +78,9 @@ pub(crate) struct FrameView {
     paint_dirty: bool,
     /// The scroll containers that were layers at the last paint.
     composited: dom::NodeIdHashSet,
+    /// Their scroll origins: the compositor's positions are their offsets
+    /// and these (`layout::scroll_origin`).
+    composited_origins: dom::NodeIdHashMap<gfx::PointF>,
     /// How far the sticky boxes stuck when it was last painted.
     painted_sticky: paint::StickyOffsets,
     /// The DOM's count of its wheel listeners' changes the compositor's
@@ -303,6 +306,7 @@ impl FrameView {
             needs_pre_paint: true,
             paint_dirty: true,
             composited: dom::NodeIdHashSet::default(),
+            composited_origins: dom::NodeIdHashMap::default(),
             painted_sticky: paint::StickyOffsets::default(),
             wheel_listeners_version: None,
             scroll_target: None,
@@ -482,12 +486,12 @@ impl FrameView {
                             && child
                                 .scroll
                                 .viewport_node
-                                .is_some_and(|node| node.user_scrollable_horizontal),
+                                .is_some_and(|node| node.node.user_scrollable_horizontal),
                         user_scrollable_y: !child.scrolling_off
                             && child
                                 .scroll
                                 .viewport_node
-                                .is_some_and(|node| node.user_scrollable_vertical),
+                                .is_some_and(|node| node.node.user_scrollable_vertical),
                         scroll: child.scroll.containers.clone(),
                         document_size: child.document_size,
                     },
@@ -1011,11 +1015,14 @@ impl FrameView {
         let fragment = box_tree.layout(viewport);
         self.document_size = layout::document_size(&fragment);
         // What can be scrolled may have changed.
-        self.scroll.viewport_node = Some(scroll::viewport_scroll_node(
-            viewport,
-            self.document_size,
-            box_tree.viewport_overflow(),
-        ));
+        self.scroll.viewport_node = Some(scroll::Scroller {
+            node: scroll::viewport_scroll_node(
+                viewport,
+                self.document_size,
+                box_tree.viewport_overflow(),
+            ),
+            origin: layout::document_origin(&fragment),
+        });
         self.scroll.clamp(&fragment);
         self.scroll
             .set_sticky(layout::StickyPositions::new(&fragment, viewport));
@@ -1105,12 +1112,13 @@ impl FrameView {
         // The paint alone: what goes to the compositor after it is the
         // lifecycle's own step, as Chrome's `PushPaintArtifactToCompositor`.
         let paint_tree = trace_event::trace_event!("LocalFrameView::PaintTree");
-        let composited: dom::NodeIdHashSet = pre
+        let composited_origins: dom::NodeIdHashMap<gfx::PointF> = pre
             .trees
             .scroll_nodes()
             .filter(|(id, _)| layers[id.0])
-            .map(|(_, node)| node.element)
+            .map(|(_, node)| (node.element, node.origin))
             .collect();
+        let composited: dom::NodeIdHashSet = composited_origins.keys().copied().collect();
         // The containers that are layers are painted unscrolled: the
         // compositor moves them by their offsets; so are the sticky boxes
         // it moves.
@@ -1186,6 +1194,7 @@ impl FrameView {
         }));
         self.painted_sticky = sticky;
         self.composited = composited;
+        self.composited_origins = composited_origins;
         self.paint_dirty = false;
         self.canvas_textures.clear();
     }
@@ -1873,16 +1882,33 @@ impl FrameView {
     /// The viewport as a scroller, for the compositor; `None` before the
     /// first layout.
     pub(crate) fn viewport_scroll_node(&self) -> Option<ScrollNode> {
-        self.scroll.viewport_node
+        self.scroll.viewport_node.map(|viewport| viewport.node)
+    }
+
+    /// The viewport's scroll origin (`layout::document_origin`), for the
+    /// compositor: its position is the offset and this.
+    pub(crate) fn viewport_scroll_origin(&self) -> gfx::PointF {
+        self.scroll
+            .viewport_node
+            .map_or(gfx::PointF::new(0.0, 0.0), |viewport| viewport.origin)
     }
 
     /// The offsets of the scroll containers that are layers, for the
     /// compositor, which moves them.
     pub(crate) fn compositor_scroll_offsets(&self) -> compositor::ScrollOffsets {
-        self.scroll_offsets()
-            .into_iter()
-            .filter(|(element, _)| self.composited.contains(element))
-            .map(|(element, offset)| (compositing::element_id(element), offset))
+        // The compositor's positions are from the scrollable overflow's
+        // left and top: the offsets and the scroll origins (Blink's
+        // `ScrollPosition`, which cc takes), one that never moved too.
+        let offsets = self.scroll_offsets();
+        self.composited_origins
+            .iter()
+            .map(|(element, origin)| {
+                let offset = offsets.get(element).copied().unwrap_or_default();
+                (
+                    compositing::element_id(*element),
+                    gfx::PointF::new(offset.x + origin.x, offset.y + origin.y),
+                )
+            })
             .collect()
     }
 
@@ -3829,6 +3855,41 @@ mod tests {
                 .map(|node| cx.node_id(node))
                 .collect()
         })
+    }
+
+    /// A composited `rtl` container goes to the compositor at its scroll
+    /// origin: painted from its overflow's left, its scroll translation's
+    /// offset the origin, and its position the offset and the origin (cc's
+    /// scroll position), one never scrolled too.
+    #[test]
+    fn an_rtl_container_goes_to_the_compositor_at_its_origin() {
+        let mut page = Page::new(
+            "<!doctype html><body style='margin: 0'>\
+             <div id=box style='direction: rtl; overflow: auto; width: 100px; height: 50px'>\
+             <div id=in style='width: 300px; height: 10px'></div></div>",
+        );
+        let output = page.update(SIZE, 1.0);
+        let document = page.view.document.clone();
+        let container = chain(&page, &document, "in")[1];
+        let element = compositing::element_id(container);
+        assert_eq!(
+            page.view.compositor_scroll_offsets().get(&element),
+            Some(&PointF::new(200.0, 0.0))
+        );
+        let translation = output
+            .property_trees
+            .transform
+            .iter()
+            .find(|node| node.scroll == Some(element))
+            .expect("composited");
+        assert_eq!(translation.offset, PointF::new(200.0, 0.0));
+        let document_node = page.view.document_node;
+        page.view
+            .scroll_to(document_node, container, PointF::new(-30.0, 0.0));
+        assert_eq!(
+            page.view.compositor_scroll_offsets().get(&element),
+            Some(&PointF::new(170.0, 0.0))
+        );
     }
 
     /// A key scrolls one box: the first around the chain that can move

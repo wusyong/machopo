@@ -255,8 +255,7 @@ impl StickyPositions {
         // that is its containing block, else its padding box less its
         // padding.
         let padding_box = if scrolls {
-            let overflow = crate::scrollable_overflow(block);
-            RectF::new(0.0, 0.0, overflow.width, overflow.height)
+            crate::scrollable_overflow(block)
         } else {
             RectF::new(
                 block_at.x + b.left,

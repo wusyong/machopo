@@ -5755,3 +5755,9 @@ css/css-writing-modes/bidi-unset-009.html
 css/css-writing-modes/bidi-unset-010.html
 css/css-writing-modes/unicode-bidi-parsing-001.html
 css/css-writing-modes/unicode-bidi-parsing-002.html
+
+# Scroll containers whose scroll origin is at their end (`rtl`): their
+# offsets from it, what overflows toward the start.
+css/css-overflow/overflow-rtl-scroll-left.html
+css/css-overflow/scrollbar-gutter-rtl-002.html
+css/css-overflow/single-axis-overflow-clip-rtl.html

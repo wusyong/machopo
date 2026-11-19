@@ -1434,11 +1434,9 @@ impl<V: FnMut(&Target<'_>) -> bool> Walker<'_, V> {
             .and_then(|link| link.fragment.node);
         self.found(Target {
             text: None,
-            rect: RRectF::from_rect(RectF::new(
-                0.0,
-                0.0,
-                frame.document_size.width,
-                frame.document_size.height,
+            rect: RRectF::from_rect(crate::document_canvas(
+                &frame.layout_view,
+                frame.document_size,
             )),
             state: frame.state,
             node: root,

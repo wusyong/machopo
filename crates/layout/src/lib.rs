@@ -3313,39 +3313,159 @@ fn grid_line(line: &GridLine) -> taffy::GridPlacement<String> {
 }
 
 /// The document's size for the layer: the viewport, grown to include every
-/// box and line, except what a clipping box hides. Transforms are not
-/// taken into account.
+/// box and line, except what a clipping box hides, from its scroll origin
+/// (`document_origin`): what is past the start of an axis (the left, but
+/// the right of an `rtl` document) can't be scrolled to and isn't
+/// counted. Transforms are not taken into account.
 pub fn document_size(layout_view: &BoxFragment) -> SizeF {
-    let mut size = layout_view.size;
-    extend_overflow(layout_view, PointF::new(0.0, 0.0), &mut size);
-    size
+    document_rect(layout_view).size()
+}
+
+/// Where the document starts: how far it reaches left of the viewport's
+/// origin, in an `rtl` document (Blink's `LayoutView` scroll origin, from
+/// the direction the root element gives the viewport). The viewport's
+/// scroll offset is from there (`scrollX`: negative toward the left).
+pub fn document_origin(layout_view: &BoxFragment) -> PointF {
+    if !rtl_document(layout_view) {
+        return PointF::new(0.0, 0.0);
+    }
+    let rect = document_rect(layout_view);
+    PointF::new(-rect.x, -rect.y)
+}
+
+/// Whether the viewport takes `rtl` from the root element (Blink's
+/// `Document::PropagateStyleToViewport`).
+fn rtl_document(layout_view: &BoxFragment) -> bool {
+    layout_view
+        .children
+        .first()
+        .filter(|link| link.fragment.role == BoxRole::RootElement)
+        .is_some_and(|link| {
+            link.fragment.style.rare_inherited.direction == computed_style::Direction::Rtl
+        })
+}
+
+/// The document's rect, from the viewport's origin (`document_size`).
+fn document_rect(layout_view: &BoxFragment) -> gfx::RectF {
+    let mut reach = Reach::of(PointF::new(0.0, 0.0), layout_view.size);
+    extend_overflow(layout_view, PointF::new(0.0, 0.0), &mut reach);
+    if rtl_document(layout_view) {
+        reach.right = reach.right.min(layout_view.size.width);
+    } else {
+        reach.left = reach.left.max(0.0);
+    }
+    reach.top = reach.top.max(0.0);
+    gfx::RectF::new(
+        reach.left,
+        reach.top,
+        reach.right - reach.left,
+        reach.bottom - reach.top,
+    )
+}
+
+/// How far something reaches on each side, from some origin.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Reach {
+    left: f32,
+    top: f32,
+    right: f32,
+    bottom: f32,
+}
+
+impl Reach {
+    pub(crate) fn of(at: PointF, size: SizeF) -> Self {
+        Self {
+            left: at.x,
+            top: at.y,
+            right: at.x + size.width,
+            bottom: at.y + size.height,
+        }
+    }
+
+    fn add(&mut self, other: Self) {
+        self.left = self.left.min(other.left);
+        self.top = self.top.min(other.top);
+        self.right = self.right.max(other.right);
+        self.bottom = self.bottom.max(other.bottom);
+    }
+}
+
+/// Which of the axes of `style`'s box have its scroll origin at their
+/// end, horizontal first: its content overflows toward their start, and
+/// what is past their end can't be scrolled to (Blink's
+/// `LayoutBox::HasLeftOverflow`, `HasTopOverflow`): an `rtl` box's
+/// horizontal axis; a flex container's main axis if reversed and its cross
+/// axis if it wraps in reverse, the horizontal one mirrored again by `rtl`
+/// (`LayoutFlexibleBox`'s).
+pub fn reversed_axes(style: &ComputedStyle) -> (bool, bool) {
+    let rtl = style.rare_inherited.direction == computed_style::Direction::Rtl;
+    // Horizontal, reversed, wrapped in reverse.
+    let flex = if style.display.is_webkit_box() {
+        Some((
+            style.rare.box_orient == computed_style::BoxOrient::Horizontal,
+            style.rare.box_direction == computed_style::BoxDirection::Reverse,
+            false,
+        ))
+    } else if style.display.is_flex() {
+        use computed_style::FlexDirection;
+        Some((
+            matches!(
+                style.flex_direction,
+                FlexDirection::Row | FlexDirection::RowReverse
+            ),
+            matches!(
+                style.flex_direction,
+                FlexDirection::RowReverse | FlexDirection::ColumnReverse
+            ),
+            style.flex_wrap == computed_style::FlexWrap::WrapReverse,
+        ))
+    } else {
+        None
+    };
+    match flex {
+        None => (rtl, false),
+        Some((row, reversed, wrap_reversed)) => (
+            (if row { reversed } else { wrap_reversed }) != rtl,
+            if row { wrap_reversed } else { reversed },
+        ),
+    }
 }
 
 /// A box's scrollable overflow (css-overflow 3), from its padding box's
 /// origin, as Blink's `ScrollableOverflowCalculator` computes it: the
 /// padding box, grown to include its children's border boxes (and what
 /// overflows them, unless they clip it) and its in-flow content (the lines
-/// and the children's margin boxes) with the end padding around it: a
-/// child's negative margin takes the padding in. Transforms are not taken into account.
-pub fn scrollable_overflow(fragment: &BoxFragment) -> SizeF {
+/// and the children's margin boxes) with the padding at its end around it
+/// (at its start on an axis whose scroll origin is at the end,
+/// `reversed_axes`): a child's negative margin takes the padding in. What
+/// is past an axis's start (its end, if reversed) can't be scrolled to and
+/// is left out. Transforms are not taken into account.
+pub fn scrollable_overflow(fragment: &BoxFragment) -> gfx::RectF {
     let (b, p) = (&fragment.border, &fragment.padding);
-    let mut overflow = SizeF::new(
+    let padding_box = SizeF::new(
         fragment.size.width - b.left - b.right,
         fragment.size.height - b.top - b.bottom,
     );
+    let mut overflow = Reach::of(PointF::new(0.0, 0.0), padding_box);
     // A box of auto height ends where its content does: a child's margin
     // box sticks out of it only if its block-end margin collapsed through
     // (margin collapsing), and is then this box's own margin, outside it.
     // Blink carries that on in the margin strut, not the in-flow bounds.
     let padding_end =
-        (fragment.style.height == computed_style::Size::Auto).then_some(overflow.height);
+        (fragment.style.height == computed_style::Size::Auto).then_some(padding_box.height);
     // The in-flow content's bounds (Blink's `AddInflowBounds`), from the
     // padding box's origin.
     let origin = PointF::new(-b.left, -b.top);
-    let mut inflow = SizeF::new(0.0, 0.0);
+    let mut inflow: Option<Reach> = None;
+    let mut add_inflow = |reach: Reach| match &mut inflow {
+        Some(inflow) => inflow.add(reach),
+        None => inflow = Some(reach),
+    };
     for line in &fragment.lines {
-        inflow.width = inflow.width.max(origin.x + line.rect.right());
-        inflow.height = inflow.height.max(origin.y + line.rect.bottom());
+        add_inflow(Reach::of(
+            PointF::new(origin.x + line.rect.x, origin.y + line.rect.y),
+            line.rect.size(),
+        ));
     }
     for child in &fragment.children {
         let at = PointF::new(origin.x + child.offset.x, origin.y + child.offset.y);
@@ -3376,26 +3496,71 @@ pub fn scrollable_overflow(fragment: &BoxFragment) -> SizeF {
         if let Some(end) = padding_end {
             margin_end = margin_end.min(end.max(border_end));
         }
-        inflow.width = inflow
-            .width
-            .max(at.x + child.size.width + child.margin.right);
-        inflow.height = inflow.height.max(margin_end);
+        add_inflow(Reach {
+            left: at.x - child.margin.left,
+            top: at.y - child.margin.top,
+            right: at.x + child.size.width + child.margin.right,
+            bottom: margin_end,
+        });
         extend_overflow(child, at, &mut overflow);
     }
-    overflow.width = overflow.width.max(inflow.width + p.right);
-    overflow.height = overflow.height.max(inflow.height + p.bottom);
-    overflow
+    let (left_reversed, top_reversed) = reversed_axes(&fragment.style);
+    if let Some(mut inflow) = inflow {
+        if left_reversed {
+            inflow.left -= p.left;
+        } else {
+            inflow.right += p.right;
+        }
+        if top_reversed {
+            inflow.top -= p.top;
+        } else {
+            inflow.bottom += p.bottom;
+        }
+        overflow.add(inflow);
+    }
+    // What can't be scrolled to.
+    if left_reversed {
+        overflow.right = overflow.right.min(padding_box.width);
+    } else {
+        overflow.left = overflow.left.max(0.0);
+    }
+    if top_reversed {
+        overflow.bottom = overflow.bottom.min(padding_box.height);
+    } else {
+        overflow.top = overflow.top.max(0.0);
+    }
+    gfx::RectF::new(
+        overflow.left,
+        overflow.top,
+        overflow.right - overflow.left,
+        overflow.bottom - overflow.top,
+    )
 }
 
-/// Grows `size` (from some origin) to include `fragment`'s border box at
+/// Where a scroll container's content starts: how far its scrollable
+/// overflow reaches left and up past its padding box (Blink's
+/// `ScrollableArea::ScrollOrigin`). Its scroll offset is from there
+/// (`scrollLeft`, `scrollTop`: negative toward the start, from an origin
+/// at the end); the compositor's position, from the overflow's left and
+/// top, is the offset and the origin. None but on an axis whose scroll
+/// origin is at the end.
+pub fn scroll_origin(fragment: &BoxFragment) -> PointF {
+    let (left_reversed, top_reversed) = reversed_axes(&fragment.style);
+    if !left_reversed && !top_reversed {
+        return PointF::new(0.0, 0.0);
+    }
+    let overflow = scrollable_overflow(fragment);
+    PointF::new(-overflow.x, -overflow.y)
+}
+
+/// Grows `reach` (from some origin) to include `fragment`'s border box at
 /// `origin`, and its lines and descendants unless it clips them.
-fn extend_overflow(fragment: &BoxFragment, origin: PointF, size: &mut SizeF) {
+fn extend_overflow(fragment: &BoxFragment, origin: PointF, reach: &mut Reach) {
     if fragment.fixed_to_viewport {
         return;
     }
     if fragment.size.width > 0.0 || fragment.size.height > 0.0 {
-        size.width = size.width.max(origin.x + fragment.size.width);
-        size.height = size.height.max(origin.y + fragment.size.height);
+        reach.add(Reach::of(origin, fragment.size));
     }
     // What a box clips, or with layout containment holds as ink overflow
     // (css-contain 2), reaches nowhere outside it.
@@ -3405,12 +3570,14 @@ fn extend_overflow(fragment: &BoxFragment, origin: PointF, size: &mut SizeF) {
         return;
     }
     for line in &fragment.lines {
-        size.width = size.width.max(origin.x + line.rect.right());
-        size.height = size.height.max(origin.y + line.rect.bottom());
+        reach.add(Reach::of(
+            PointF::new(origin.x + line.rect.x, origin.y + line.rect.y),
+            line.rect.size(),
+        ));
     }
     for child in &fragment.children {
         let offset = PointF::new(origin.x + child.offset.x, origin.y + child.offset.y);
-        extend_overflow(&child.fragment, offset, size);
+        extend_overflow(&child.fragment, offset, reach);
     }
 }
 

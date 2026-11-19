@@ -493,7 +493,11 @@ pub(super) fn update_lifecycle_and_layers(
     let host = &mut widget.layer_tree_host;
     host.set_scroll_offsets(view.compositor_scroll_offsets());
     host.set_background_color(gfx::Color::WHITE);
-    host.set_root_scroll_offset(view.viewport_scroll_offset());
+    // The compositor's position, from the document's start: the offset and
+    // the scroll origin (cc's scroll position).
+    let (offset, origin) = (view.viewport_scroll_offset(), view.viewport_scroll_origin());
+    host.set_root_scroll_offset(gfx::PointF::new(offset.x + origin.x, offset.y + origin.y));
+    host.set_root_scroll_origin(origin);
     host.set_document_id(view.document_id());
     host.set_viewport_scroll_node(view.viewport_scroll_node());
     drop(update_layers);

@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<!-- An rtl page wider than the window, for rtl-scroll.txt: it starts at
+     its right edge, and so does #box, an rtl scroll container wider
+     inside; #status says where each is after a wheel. -->
+<html dir="rtl">
+<title>rtl scroll</title>
+<style>
+  html, body { margin: 0 }
+  #page { width: 3000px; height: 2000px }
+  #box { width: 200px; height: 100px; overflow: auto; background-color: #e8f0fe }
+  #wide { width: 1000px; height: 50px }
+</style>
+<div id="page">
+  <div id="box"><div id="wide"></div></div>
+  <p id="status">no wheel yet</p>
+</div>
+<script>
+  const status = document.getElementById('status');
+  const box = document.getElementById('box');
+  const report = () => {
+    status.textContent = `page ${Math.round(scrollX)}, box ${Math.round(box.scrollLeft)}`;
+  };
+  addEventListener('scroll', report);
+  box.addEventListener('scroll', report);
+</script>

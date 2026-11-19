@@ -522,7 +522,7 @@ fn find_box(
                 padding: [p.top, p.right, p.bottom, p.left],
                 margin: [m.top, m.right, m.bottom, m.left],
                 inset: used_inset(fragment, parent),
-                scroll_size: crate::scrollable_overflow(fragment),
+                scroll_size: crate::scrollable_overflow(fragment).size(),
                 scroll,
             }),
         });

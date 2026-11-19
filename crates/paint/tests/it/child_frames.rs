@@ -110,6 +110,50 @@ fn a_child_frame_is_painted_in_its_iframe() {
     assert_eq!(paint::element_bounds(&page, &pre, frames.id("c")), None);
 }
 
+/// An `rtl` child frame's document reaches left of its viewport's origin:
+/// its canvas starts there, and its viewport's scroll node has that as its
+/// scroll origin.
+#[test]
+fn an_rtl_child_frames_canvas_starts_at_its_origin() {
+    let mut frames = Frames::new();
+    let page = frames.lay_out(PAGE, VIEWPORT);
+    let child = frames.lay_out(
+        "<html dir=rtl style='background: lime'><body style='margin: 0'>\
+         <div style='width: 300px; height: 10px'></div>",
+        SizeF::new(100.0, 60.0),
+    );
+    assert_eq!(layout::document_size(&child), SizeF::new(300.0, 60.0));
+    let child_frames = ChildFrames::from_iter([(
+        frames.id("f"),
+        frames.child_frame(&child, PointF::new(0.0, 0.0)),
+    )]);
+    let pre = paint::pre_paint_frame_tree(
+        &page,
+        &Default::default(),
+        &Default::default(),
+        &child_frames,
+        1.0,
+        PointF::new(0.0, 0.0),
+        None,
+    );
+    let artifact = paint::paint(&page, &pre, layout::document_size(&page), &());
+    let canvas = fills(&pre, &artifact)
+        .into_iter()
+        .find(|&(kind, _, color)| kind == DisplayItemKind::DocumentBackground && color == LIME)
+        .map(|(_, rect, _)| rect);
+    assert_eq!(canvas, Some(RectF::new(8.0 - 200.0, 18.0, 300.0, 60.0)));
+    let document = frame_document(&frames, &child);
+    let viewport = pre
+        .trees
+        .scroll_nodes()
+        .find(|(_, node)| node.element == document)
+        .map(|(_, node)| (node.contents, node.origin));
+    assert_eq!(
+        viewport,
+        Some((SizeF::new(300.0, 60.0), PointF::new(200.0, 0.0)))
+    );
+}
+
 /// A `visibility: hidden` iframe shows nothing of its child frame, which
 /// isn't hit either (Chrome's `LayoutEmbeddedContent` paints and hits
 /// nothing then).

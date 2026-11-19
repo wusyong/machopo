@@ -1,0 +1,197 @@
+# Stage 2d, its first part: scrollable overflow toward the start, and the
+# scroll origin (main thread offsets from it, compositor positions), the
+# viewport's too.
+test = ["sh", "-c", "cargo test -q -p layout --test it -- block:: && cargo test -q -p renderer --lib -- scroll:: frame_view:: && cargo test -q -p compositor --lib -- layer_tree_host_impl::"]
+timeout = 900
+
+[[mutant]]
+name = "an rtl box's origin at the left"
+file = "crates/layout/src/lib.rs"
+from = '''        None => (rtl, false),'''
+to = '''        None => (false, false),'''
+
+[[mutant]]
+name = "a flex container's horizontal axis not mirrored by rtl"
+file = "crates/layout/src/lib.rs"
+from = '''            (if row { reversed } else { wrap_reversed }) != rtl,'''
+to = '''            if row { reversed } else { wrap_reversed },'''
+
+[[mutant]]
+name = "wrap-reverse doesn't reverse a row's cross axis"
+file = "crates/layout/src/lib.rs"
+from = '''            if row { wrap_reversed } else { reversed },'''
+to = '''            if row { false } else { reversed },'''
+
+[[mutant]]
+name = "a -webkit-box never reversed"
+file = "crates/layout/src/lib.rs"
+from = '''            style.rare.box_direction == computed_style::BoxDirection::Reverse,'''
+to = '''            false,'''
+
+[[mutant]]
+name = "a child's start margin isn't content"
+file = "crates/layout/src/lib.rs"
+from = '''            left: at.x - child.margin.left,'''
+to = '''            left: at.x,'''
+
+[[mutant]]
+name = "a child's top margin isn't content"
+file = "crates/layout/src/lib.rs"
+from = '''            top: at.y - child.margin.top,'''
+to = '''            top: at.y,'''
+
+[[mutant]]
+name = "no start padding on the left"
+file = "crates/layout/src/lib.rs"
+from = '''            inflow.left -= p.left;'''
+to = ''''''
+
+[[mutant]]
+name = "no start padding on the top"
+file = "crates/layout/src/lib.rs"
+from = '''            inflow.top -= p.top;'''
+to = ''''''
+
+[[mutant]]
+name = "past a reversed axis's end counted"
+file = "crates/layout/src/lib.rs"
+from = '''        overflow.right = overflow.right.min(padding_box.width);'''
+to = ''''''
+
+[[mutant]]
+name = "past an axis's start counted"
+file = "crates/layout/src/lib.rs"
+from = '''        overflow.left = overflow.left.max(0.0);'''
+to = ''''''
+
+[[mutant]]
+name = "past a reversed vertical axis's end counted"
+file = "crates/layout/src/lib.rs"
+from = '''        overflow.bottom = overflow.bottom.min(padding_box.height);'''
+to = ''''''
+
+[[mutant]]
+name = "above the top counted"
+file = "crates/layout/src/lib.rs"
+from = '''        overflow.top = overflow.top.max(0.0);'''
+to = ''''''
+
+[[mutant]]
+name = "paint's scroll node without the origin"
+file = "crates/paint/src/lib.rs"
+from = '''                        origin: PointF::new(-overflow.x, -overflow.y),'''
+to = '''                        origin: PointF::new(0.0, 0.0),'''
+
+[[mutant]]
+name = "a composited container painted from its padding box"
+file = "crates/paint/src/lib.rs"
+from = '''                    Transform::translate(node.origin.x, node.origin.y);'''
+to = '''                    Transform::IDENTITY;'''
+
+[[mutant]]
+name = "the main thread clamps positions"
+file = "crates/renderer/src/scroll.rs"
+from = '''        let at = add(offset, self.origin);'''
+to = '''        let at = offset;'''
+
+[[mutant]]
+name = "the wheel moves positions"
+file = "crates/renderer/src/scroll.rs"
+from = '''        let mut at = add(*offset, self.origin);'''
+to = '''        let mut at = *offset;'''
+
+[[mutant]]
+name = "the wheel's position kept as the offset"
+file = "crates/renderer/src/scroll.rs"
+from = '''        *offset = sub(at, self.origin);'''
+to = '''        *offset = at;'''
+
+[[mutant]]
+name = "a container's origin at its padding box"
+file = "crates/renderer/src/scroll.rs"
+from = '''    let origin = PointF::new(-overflow.x, -overflow.y);'''
+to = '''    let origin = PointF::new(0.0, -overflow.y);'''
+
+[[mutant]]
+name = "the commit sends offsets as positions"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                    gfx::PointF::new(offset.x + origin.x, offset.y + origin.y),'''
+to = '''                    gfx::PointF::new(offset.x, offset.y + origin.y),'''
+
+[[mutant]]
+name = "scrollIntoView's inline start the left in rtl"
+file = "crates/renderer/src/scroll.rs"
+from = '''    if style.rare_inherited.direction != computed_style::Direction::Rtl {'''
+to = '''    if style.rare_inherited.direction == style.rare_inherited.direction {'''
+test = ["python3", "scripts/test.py", "wpt", "css/cssom-view/scrollIntoView-horizontal-tb-writing-mode-and-rtl-direction.html"]
+
+[[mutant]]
+name = "an rtl document's origin at the left"
+file = "crates/layout/src/lib.rs"
+from = '''    if !rtl_document(layout_view) {'''
+to = '''    if true {'''
+
+[[mutant]]
+name = "an rtl document's right of the viewport counted"
+file = "crates/layout/src/lib.rs"
+from = '''        reach.right = reach.right.min(layout_view.size.width);'''
+to = ''''''
+
+[[mutant]]
+name = "an ltr document's left of the viewport counted"
+file = "crates/layout/src/lib.rs"
+from = '''        reach.left = reach.left.max(0.0);'''
+to = ''''''
+
+[[mutant]]
+name = "the compositor shows from the viewport's position"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''        sub(scroll, tree.root_scroll_origin)'''
+to = '''        scroll'''
+
+[[mutant]]
+name = "the compositor's drawn viewport offset is its position"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''        let viewport = sub(self.scroll.current(), origin);'''
+to = '''        let viewport = sub(self.scroll.current(), PointF::new(0.0, 0.0 * origin.y));'''
+
+[[mutant]]
+name = "the commit sends the viewport's offset as its position"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''    host.set_root_scroll_offset(gfx::PointF::new(offset.x + origin.x, offset.y + origin.y));'''
+to = '''    host.set_root_scroll_offset(gfx::PointF::new(offset.x, offset.y + origin.y));'''
+test = ["python3", "scripts/test.py", "scenarios", "rtl-scroll"]
+
+[[mutant]]
+name = "the commit sends no viewport origin"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''    host.set_root_scroll_origin(origin);'''
+to = ''''''
+test = ["python3", "scripts/test.py", "scenarios", "rtl-scroll"]
+
+[[mutant]]
+name = "the document's canvas from the viewport's origin"
+file = "crates/paint/src/lib.rs"
+from = '''    let origin = layout::document_origin(layout_view);'''
+to = '''    let origin = PointF::new(0.0, layout::document_origin(layout_view).y);'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it"]
+
+[[mutant]]
+name = "a child frame's viewport without its origin"
+file = "crates/paint/src/lib.rs"
+from = '''                origin: layout::document_origin(&frame.layout_view),'''
+to = '''                origin: PointF::new(0.0, 0.0),'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it"]
+
+[[mutant]]
+name = "the viewport's scroll into view from the left in rtl"
+file = "crates/renderer/src/scroll.rs"
+from = '''                    physical(params, &root.fragment.style)'''
+to = '''                    params'''
+
+[[mutant]]
+name = "the main thread's viewport has no origin"
+file = "crates/renderer/src/frame_view.rs"
+from = '''            origin: layout::document_origin(&fragment),'''
+to = '''            origin: PointF::new(0.0, 0.0),'''
+test = ["python3", "scripts/test.py", "scenarios", "rtl-scroll"]

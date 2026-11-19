@@ -210,9 +210,9 @@ impl Place {
     /// border box, down to where what overflows it ends unless it clips
     /// that (`extend_overflow` stops there).
     fn bounds(&self, fragment: &BoxFragment) -> RectF {
-        let mut overflow = gfx::SizeF::new(0.0, 0.0);
+        let mut overflow = crate::Reach::of(PointF::new(0.0, 0.0), gfx::SizeF::new(0.0, 0.0));
         crate::extend_overflow(fragment, PointF::new(0.0, 0.0), &mut overflow);
-        let height = fragment.size.height.max(overflow.height);
+        let height = fragment.size.height.max(overflow.bottom);
         self.to_root.map_rect(RectF::new(
             self.offset.x,
             self.offset.y,

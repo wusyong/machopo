@@ -53,7 +53,7 @@ pub(crate) struct ScrollState {
     pub(crate) containers: ScrollOffsets,
     /// The viewport as a scroller, from the last layout; `None` before the
     /// first, when nothing can scroll.
-    pub(crate) viewport_node: Option<ScrollNode>,
+    pub(crate) viewport_node: Option<Scroller>,
     /// What moved since the last scroll steps, in the order it first did,
     /// each once: the viewport (`None`) or a container (Blink's
     /// `Document::EnqueueScrollEventForNode`, its per-frame queue).
@@ -96,6 +96,42 @@ pub(crate) fn viewport_scroll_node(
         bounds: document,
         user_scrollable_horizontal: overflow.0 != Overflow::Hidden,
         user_scrollable_vertical: overflow.1 != Overflow::Hidden,
+    }
+}
+
+/// A scroller as the main thread scrolls it (Blink's `ScrollableArea`):
+/// the compositor's math, on positions from the scrollable overflow's left
+/// and top (`ScrollNode`), and the scroll origin, which the main thread's
+/// offsets are from (`ScrollOffset`, `scrollLeft`: negative toward the
+/// start of an axis whose origin is at its end, `layout::scroll_origin`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Scroller {
+    pub(crate) node: ScrollNode,
+    pub(crate) origin: PointF,
+}
+
+impl Scroller {
+    /// `offset` within what can be scrolled: from `-origin` to the
+    /// compositor's farthest position less the origin. As it is if it is
+    /// (the position and back would be off in its last bits).
+    pub(crate) fn clamp(&self, offset: PointF) -> PointF {
+        let at = add(offset, self.origin);
+        let clamped = self.node.clamp_scroll_offset(at);
+        if clamped == at {
+            offset
+        } else {
+            sub(clamped, self.origin)
+        }
+    }
+
+    /// `ScrollNode::scroll_by` on an offset from the origin.
+    fn scroll_by(&self, offset: &mut PointF, rest: &mut PointF) -> bool {
+        let mut at = add(*offset, self.origin);
+        if !self.node.scroll_by(&mut at, rest) {
+            return false;
+        }
+        *offset = sub(at, self.origin);
+        true
     }
 }
 
@@ -193,7 +229,7 @@ impl ScrollState {
     pub(crate) fn scroll_by(
         &mut self,
         target: Option<NodeId>,
-        scroller: &ScrollNode,
+        scroller: &Scroller,
         rest: &mut PointF,
     ) -> bool {
         let mut offset = match target {
@@ -216,7 +252,7 @@ impl ScrollState {
     /// that is gone is dropped.
     pub(crate) fn clamp(&mut self, view: &BoxFragment) {
         if let Some(node) = self.viewport_node {
-            self.move_viewport(node.clamp_scroll_offset(self.viewport));
+            self.move_viewport(node.clamp(self.viewport));
         }
         let mut containers = NodeIdHashMap::default();
         container_nodes(view, &mut containers);
@@ -225,7 +261,7 @@ impl ScrollState {
         let offsets: Vec<(NodeId, PointF)> =
             self.containers.iter().map(|(e, o)| (*e, *o)).collect();
         for (element, offset) in offsets {
-            self.move_container(element, containers[&element].clamp_scroll_offset(offset));
+            self.move_container(element, containers[&element].clamp(offset));
         }
     }
 
@@ -245,7 +281,7 @@ impl ScrollState {
                 let Some(node) = self.viewport_node else {
                     return false;
                 };
-                self.set_viewport(node.clamp_scroll_offset(offset))
+                self.set_viewport(node.clamp(offset))
             }
             Some(element) => {
                 let mut containers = NodeIdHashMap::default();
@@ -253,7 +289,7 @@ impl ScrollState {
                 let Some(&node) = containers.get(&element) else {
                     return false;
                 };
-                self.set_container(element, node.clamp_scroll_offset(offset))
+                self.set_container(element, node.clamp(offset))
             }
         }
     }
@@ -270,7 +306,7 @@ impl ScrollState {
         view: &BoxFragment,
         point: PointF,
         delta: PointF,
-        child_frame: &mut dyn FnMut(NodeId, NodeId, &ScrollNode, &mut PointF) -> bool,
+        child_frame: &mut dyn FnMut(NodeId, NodeId, &Scroller, &mut PointF) -> bool,
     ) -> Scrolled {
         let mut scrolled = Scrolled::default();
         let mut rest = delta;
@@ -281,7 +317,10 @@ impl ScrollState {
         let mut node = paint::hit_test(view, pre, at).scroll.map(|id| id.0);
         while let Some(index) = node {
             let n = pre.trees.scroll(paint::ScrollNodeId(index));
-            let scroller = compositing::scroll_node(n);
+            let scroller = Scroller {
+                node: compositing::scroll_node(n),
+                origin: n.origin,
+            };
             scrolled.containers |= match n.frame {
                 None => self.scroll_by(Some(n.element), &scroller, &mut rest),
                 Some(iframe) => child_frame(iframe, n.element, &scroller, &mut rest),
@@ -307,7 +346,7 @@ impl ScrollState {
         chain: &[NodeId],
         key: ScrollKey,
         shift: bool,
-        child_frame: &mut dyn FnMut(NodeId, NodeId, &ScrollNode, &mut PointF) -> bool,
+        child_frame: &mut dyn FnMut(NodeId, NodeId, &Scroller, &mut PointF) -> bool,
     ) -> Scrolled {
         let mut scrolled = Scrolled::default();
         let mut node = chain.iter().find_map(|id| {
@@ -318,8 +357,11 @@ impl ScrollState {
         });
         while let Some(index) = node {
             let n = pre.trees.scroll(paint::ScrollNodeId(index));
-            let scroller = compositing::scroll_node(n);
-            let mut step = key_scroll_delta(key, shift, &scroller);
+            let scroller = Scroller {
+                node: compositing::scroll_node(n),
+                origin: n.origin,
+            };
+            let mut step = key_scroll_delta(key, shift, &scroller.node);
             let moved = match n.frame {
                 None => self.scroll_by(Some(n.element), &scroller, &mut step),
                 Some(iframe) => child_frame(iframe, n.element, &scroller, &mut step),
@@ -331,7 +373,7 @@ impl ScrollState {
             node = n.parent.map(|p| p.0);
         }
         if let Some(viewport) = self.viewport_node {
-            let mut step = key_scroll_delta(key, shift, &viewport);
+            let mut step = key_scroll_delta(key, shift, &viewport.node);
             scrolled.viewport = self.scroll_by(None, &viewport, &mut step);
         }
         scrolled
@@ -349,7 +391,7 @@ impl ScrollState {
         containers: &[(ElementId, PointF)],
     ) {
         if let Some(node) = self.viewport_node {
-            self.set_viewport(node.clamp_scroll_offset(add(self.viewport, viewport)));
+            self.set_viewport(node.clamp(add(self.viewport, viewport)));
         }
         if containers.is_empty() {
             return;
@@ -364,7 +406,7 @@ impl ScrollState {
                 continue;
             };
             let offset = self.containers.get(&element).copied().unwrap_or_default();
-            self.set_container(element, node.clamp_scroll_offset(add(offset, *delta)));
+            self.set_container(element, node.clamp(add(offset, *delta)));
         }
     }
 
@@ -386,6 +428,13 @@ impl ScrollState {
         let mut scrolls = true;
         let rect = self.bring_into_view(view, target, inner, params, &mut scrolls)?;
         if scrolls && let Some(viewport) = self.viewport_node {
+            // The viewport's direction is the root element's.
+            let params = match view.children.first() {
+                Some(root) if root.fragment.role == layout::BoxRole::RootElement => {
+                    physical(params, &root.fragment.style)
+                }
+                _ => params,
+            };
             self.set_viewport(expose(self.viewport, rect, &viewport, params));
         }
         Some(rect.offset(-self.viewport.x, -self.viewport.y))
@@ -436,7 +485,12 @@ impl ScrollState {
         let offset = if *scrolls {
             // From the padding box, unscrolled.
             let in_content = found.offset(-fragment.border.left, -fragment.border.top);
-            let offset = expose(current, in_content, &node, params);
+            let offset = expose(
+                current,
+                in_content,
+                &node,
+                physical(params, &fragment.style),
+            );
             self.set_container(element, offset);
             *scrolls = !params.nearest_only;
             offset
@@ -454,12 +508,34 @@ fn add(a: PointF, b: PointF) -> PointF {
     PointF::new(a.x + b.x, a.y + b.y)
 }
 
+fn sub(a: PointF, b: PointF) -> PointF {
+    PointF::new(a.x - b.x, a.y - b.y)
+}
+
+/// `params` with its inline start and end as the left and right of a
+/// scroller of `style`: the other way round in `rtl` (Blink's
+/// `ScrollAlignment` made physical by the scroller's writing direction).
+fn physical(
+    params: ScrollIntoViewParams,
+    style: &computed_style::ComputedStyle,
+) -> ScrollIntoViewParams {
+    if style.rare_inherited.direction != computed_style::Direction::Rtl {
+        return params;
+    }
+    let inline = match params.inline {
+        ScrollAlignment::Start => ScrollAlignment::End,
+        ScrollAlignment::End => ScrollAlignment::Start,
+        other => other,
+    };
+    ScrollIntoViewParams { inline, ..params }
+}
+
 /// The offset that shows `rect` (in the scroller's content, unscrolled)
 /// as `params` asks (Blink's `GetScrollOffsetToExpose`), clamped to what
 /// `node` can scroll, whatever the user may.
-fn expose(current: PointF, rect: RectF, node: &ScrollNode, params: ScrollIntoViewParams) -> PointF {
-    let port = node.container_bounds;
-    node.clamp_scroll_offset(PointF::new(
+fn expose(current: PointF, rect: RectF, node: &Scroller, params: ScrollIntoViewParams) -> PointF {
+    let port = node.node.container_bounds;
+    node.clamp(PointF::new(
         expose_axis(current.x, port.width, rect.x, rect.width, params.inline),
         expose_axis(current.y, port.height, rect.y, rect.height, params.block),
     ))
@@ -512,9 +588,10 @@ fn in_lines(fragment: &BoxFragment, target: NodeId) -> Option<RectF> {
 }
 
 /// The element and its scroller if `fragment` is a scroll container: its
-/// padding box over its scrollable overflow. The one whose `overflow` went
-/// to the viewport isn't: layout made its own `visible`.
-fn scroll_container(fragment: &BoxFragment) -> Option<(NodeId, ScrollNode)> {
+/// padding box over its scrollable overflow, from its origin. The one
+/// whose `overflow` went to the viewport isn't: layout made its own
+/// `visible`.
+fn scroll_container(fragment: &BoxFragment) -> Option<(NodeId, Scroller)> {
     if !fragment.style.is_scroll_container() {
         return None;
     }
@@ -523,17 +600,19 @@ fn scroll_container(fragment: &BoxFragment) -> Option<(NodeId, ScrollNode)> {
         fragment.size.width - b.left - b.right,
         fragment.size.height - b.top - b.bottom,
     );
+    let overflow = layout::scrollable_overflow(fragment);
     let node = ScrollNode {
         container_bounds: port,
-        bounds: layout::scrollable_overflow(fragment),
+        bounds: overflow.size(),
         user_scrollable_horizontal: fragment.style.overflow_x.user_scrollable(),
         user_scrollable_vertical: fragment.style.overflow_y.user_scrollable(),
     };
-    Some((fragment.node?, node))
+    let origin = PointF::new(-overflow.x, -overflow.y);
+    Some((fragment.node?, Scroller { node, origin }))
 }
 
 /// Each scroll container's scroller.
-fn container_nodes(fragment: &BoxFragment, out: &mut NodeIdHashMap<ScrollNode>) {
+fn container_nodes(fragment: &BoxFragment, out: &mut NodeIdHashMap<Scroller>) {
     if let Some((element, node)) = scroll_container(fragment) {
         out.insert(element, node);
     }
@@ -577,7 +656,10 @@ mod tests {
     /// the viewport's `overflow`: nothing scrolled yet.
     fn laid_out(size: SizeF, overflow: (Overflow, Overflow)) -> ScrollState {
         ScrollState {
-            viewport_node: Some(viewport_scroll_node(VIEWPORT, size, overflow)),
+            viewport_node: Some(Scroller {
+                node: viewport_scroll_node(VIEWPORT, size, overflow),
+                origin: PointF::new(0.0, 0.0),
+            }),
             ..Default::default()
         }
     }
@@ -659,6 +741,85 @@ mod tests {
         assert_eq!(state.viewport, PointF::new(0.0, 950.0));
         let mut fresh = ScrollState::default();
         assert!(!fresh.scroll_to(&view, None, PointF::new(0.0, 10.0)));
+    }
+
+    /// An `rtl` container's offsets are from its scroll origin at the
+    /// right: it starts there (no offset), and goes as far as its content
+    /// reaches left (negative), whoever scrolls it: script, the wheel, the
+    /// compositor, scrolling into view.
+    #[test]
+    fn an_rtl_container_scrolls_from_its_origin_at_the_right() {
+        let (view, ids, size, overflow) = lay_out(
+            "<style>html, body { margin: 0 }</style>
+             <div id=box style='direction: rtl; width: 100px; height: 50px; overflow: auto'><div
+               style='width: 300px; height: 10px'><span id=start>x</span></div></div>",
+        );
+        let box_ = ids["box"];
+        let mut state = laid_out(size, overflow);
+        let to = |state: &mut ScrollState, x: f32| {
+            state.scroll_to(&view, Some(box_), PointF::new(x, 0.0));
+            state.containers[&box_].x
+        };
+        assert_eq!(to(&mut state, -50.0), -50.0);
+        assert_eq!(to(&mut state, -1000.0), -200.0);
+        assert_eq!(to(&mut state, 30.0), 0.0, "nothing past the origin");
+        // The wheel: left is negative.
+        let pre = paint::pre_paint(&view, &state.containers, 1.0);
+        state.wheel(
+            &pre,
+            &view,
+            PointF::new(10.0, 10.0),
+            PointF::new(-150.0, 0.0),
+            &mut |_, _, _, _| unreachable!("no child frames"),
+        );
+        assert_eq!(state.containers[&box_].x, -150.0);
+        state.apply_compositor_delta(
+            &view,
+            PointF::new(0.0, 0.0),
+            &[(compositing::element_id(box_), PointF::new(-100.0, 0.0))],
+        );
+        assert_eq!(state.containers[&box_].x, -200.0);
+        // The span at the content's right end, its start: back to the
+        // origin.
+        state.scroll_into_view(&view, ids["start"], None, IN_CONTAINER);
+        assert_eq!(state.containers[&box_].x, 0.0);
+    }
+
+    /// An `rtl` document's viewport scrolls from its origin at the right,
+    /// as far left as the document reaches; scrolling into view takes its
+    /// inline start for the right.
+    #[test]
+    fn an_rtl_documents_viewport_scrolls_from_the_right() {
+        let (view, ids, size, overflow) = lay_out(
+            "<html dir=rtl><body style='margin: 0'><div style='width: 1000px; height: 10px'><span
+               id=far style='margin-right: 500px'>x</span></div>",
+        );
+        let mut state = ScrollState {
+            viewport_node: Some(Scroller {
+                node: viewport_scroll_node(VIEWPORT, size, overflow),
+                origin: layout::document_origin(&view),
+            }),
+            ..Default::default()
+        };
+        assert!(state.scroll_to(&view, None, PointF::new(-100.0, 0.0)));
+        assert_eq!(state.viewport, PointF::new(-100.0, 0.0));
+        state.scroll_to(&view, None, PointF::new(-5000.0, 0.0));
+        assert_eq!(state.viewport, PointF::new(-800.0, 0.0));
+        state.scroll_to(&view, None, PointF::new(50.0, 0.0));
+        assert_eq!(state.viewport, PointF::new(0.0, 0.0));
+        // The span's right 500px left of the document's right edge: its
+        // start (the right) at the viewport's right.
+        let params = ScrollIntoViewParams {
+            block: ScrollAlignment::Start,
+            inline: ScrollAlignment::Start,
+            nearest_only: false,
+        };
+        state.scroll_into_view(&view, ids["far"], None, params);
+        assert!(
+            (state.viewport.x + 500.0).abs() < 0.01,
+            "{:?}",
+            state.viewport
+        );
     }
 
     #[test]
@@ -994,7 +1155,7 @@ mod tests {
         );
         assert_eq!(overflow, (Overflow::Hidden, Overflow::Hidden));
         let state = laid_out(size, overflow);
-        let viewport = state.viewport_node.expect("laid out");
+        let viewport = state.viewport_node.expect("laid out").node;
         assert!(!viewport.user_scrollable_vertical && !viewport.user_scrollable_horizontal);
     }
 
@@ -1006,7 +1167,7 @@ mod tests {
         );
         assert_eq!(overflow, (Overflow::Hidden, Overflow::Hidden));
         let mut state = laid_out(size, overflow);
-        let viewport = state.viewport_node.expect("laid out");
+        let viewport = state.viewport_node.expect("laid out").node;
         assert!(!viewport.user_scrollable_vertical && !viewport.user_scrollable_horizontal);
         assert_eq!(
             wheel(&mut state, &view, (10.0, 10.0), 50.0),

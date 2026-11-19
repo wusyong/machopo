@@ -94,6 +94,10 @@ pub struct LayerTreeHost<P> {
     document_id: DocumentId,
     /// The viewport's scroll offset, CSS px.
     pub(crate) root_scroll_offset: PointF,
+    /// Where the document starts, left of and above the viewport's origin
+    /// (Blink's scroll origin): `root_scroll_offset` is from the document's
+    /// start, so the part of it shown starts at it less this.
+    root_scroll_origin: PointF,
     /// The viewport as a scroller, for the impl side to scroll it.
     viewport_scroll_node: Option<ScrollNode>,
     needs_commit: bool,
@@ -114,6 +118,7 @@ impl<P> LayerTreeHost<P> {
             local_surface_id: LocalSurfaceId::default(),
             document_id: DocumentId::default(),
             root_scroll_offset: PointF::new(0.0, 0.0),
+            root_scroll_origin: PointF::new(0.0, 0.0),
             viewport_scroll_node: None,
             needs_commit: false,
             source_frame_number: 0,
@@ -178,6 +183,17 @@ impl<P> LayerTreeHost<P> {
         self.root_scroll_offset = offset;
     }
 
+    /// Where the document starts, as the viewport's scroll origin (how far
+    /// it reaches left of and above the viewport's origin): the root
+    /// scroll offset is from there. A change commits, as the layers'
+    /// places in the document do.
+    pub fn set_root_scroll_origin(&mut self, origin: PointF) {
+        if origin != self.root_scroll_origin {
+            self.root_scroll_origin = origin;
+            self.set_needs_commit();
+        }
+    }
+
     /// What the impl side may scroll the viewport over. A change commits:
     /// the impl side clamps what it scrolled to the node of each commit,
     /// as the main thread will clamp it.
@@ -234,6 +250,7 @@ impl<P> LayerTreeHost<P> {
             local_surface_id: self.local_surface_id,
             document_id: self.document_id,
             root_scroll_offset: self.root_scroll_offset,
+            root_scroll_origin: self.root_scroll_origin,
             viewport_scroll_node: self.viewport_scroll_node,
             source_frame_number: self.source_frame_number,
             swap_promises: Vec::new(),

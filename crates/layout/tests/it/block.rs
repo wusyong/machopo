@@ -178,7 +178,7 @@ fn scrollable_overflow_of_a_scroll_container() {
     let scroller = &laid.view.children[0].fragment.children[0].fragment.children[0].fragment;
     assert_eq!(scroller.size, SizeF::new(124.0, 74.0));
     assert_eq!(
-        layout::scrollable_overflow(scroller),
+        layout::scrollable_overflow(scroller).size(),
         SizeF::new(120.0, 320.0)
     );
     // Content that fits: just the padding box.
@@ -188,8 +188,98 @@ fn scrollable_overflow_of_a_scroll_container() {
     );
     let scroller = &laid.view.children[0].fragment.children[0].fragment.children[0].fragment;
     assert_eq!(
-        layout::scrollable_overflow(scroller),
+        layout::scrollable_overflow(scroller).size(),
         SizeF::new(100.0, 50.0)
+    );
+}
+
+/// An axis whose scroll origin is at its end (an `rtl` box's horizontal
+/// one, a flex container's reversed axes) has its content overflow toward
+/// its start, with the start padding around it, and the scroll origin
+/// past it; what is past an axis's start (its end if reversed) can't be
+/// scrolled to and isn't counted.
+#[test]
+fn scrollable_overflow_toward_the_start() {
+    let laid = lay_out(
+        "<style>html, body { margin: 0 } .s { width: 100px; height: 50px; overflow: auto }
+           i { display: block; flex: none; width: 300px; height: 80px }</style>
+         <div id=rtl class=s style='direction: rtl; padding: 0 10px'><i></i></div>
+         <div id=row class=s style='display: flex; flex-direction: row-reverse'><i></i></div>
+         <div id=rtl_row class=s style='display: flex; direction: rtl'><i></i></div>
+         <div id=column class=s style='display: flex; flex-direction: column-reverse'><i></i></div>
+         <div id=wrap class=s style='display: flex; flex-flow: column wrap-reverse'><i></i></div>
+         <div id=ltr class=s><i style='margin-left: -50px'></i></div>
+         <div id=rtl_past class=s style='direction: rtl'><i style='width: 50px;
+           margin-right: -80px'></i></div>
+         <div id=box class=s style='display: -webkit-box; -webkit-box-direction: reverse'><i></i></div>
+         <div id=column_padded class=s style='display: flex; flex-direction: column-reverse;
+           padding-top: 5px'><i></i></div>
+         <div id=rtl_margin class=s style='direction: rtl'><i style='margin-left: 20px'></i></div>
+         <div id=column_past class=s style='display: flex; flex-direction: column-reverse'><i
+           style='position: relative; top: 100px'></i></div>
+         <div id=row_wrap class=s style='display: flex; flex-wrap: wrap-reverse'><i></i></div>
+         <div id=column_margin class=s style='display: flex; flex-direction: column-reverse'><i
+           style='margin-top: 10px'></i></div>
+         <div id=above class=s><i style='position: relative; top: -60px'></i></div>",
+    );
+    let overflow = |id: &str| layout::scrollable_overflow(laid.fragment(id));
+    let origin = |id: &str| layout::scroll_origin(laid.fragment(id));
+    // The child's 300px from 110px left of the content box's right, then
+    // the 10px start padding.
+    assert_eq!(overflow("rtl"), r(-200.0, 0.0, 320.0, 80.0));
+    assert_eq!(origin("rtl"), gfx::PointF::new(200.0, 0.0));
+    assert_eq!(overflow("row"), r(-200.0, 0.0, 300.0, 80.0));
+    assert_eq!(overflow("rtl_row"), r(-200.0, 0.0, 300.0, 80.0));
+    assert_eq!(overflow("column"), r(0.0, -30.0, 300.0, 80.0));
+    assert_eq!(origin("column"), gfx::PointF::new(0.0, 30.0));
+    assert_eq!(overflow("wrap"), r(-200.0, 0.0, 300.0, 80.0));
+    // Past the start, and past an rtl box's end: not counted.
+    assert_eq!(overflow("ltr"), r(0.0, 0.0, 250.0, 80.0));
+    assert_eq!(origin("ltr"), gfx::PointF::new(0.0, 0.0));
+    assert_eq!(overflow("rtl_past"), r(0.0, 0.0, 100.0, 80.0));
+    assert_eq!(overflow("box"), r(-200.0, 0.0, 300.0, 80.0));
+    // The item from 25px above the padding box (its bottom at the content
+    // box's), and the 5px of start padding above it.
+    assert_eq!(overflow("column_padded"), r(0.0, -30.0, 300.0, 85.0));
+    // A start margin (the left in rtl) is in-flow content too.
+    assert_eq!(overflow("rtl_margin"), r(-220.0, 0.0, 320.0, 80.0));
+    // Moved down past the end of a reversed axis: not counted.
+    assert_eq!(overflow("column_past"), r(0.0, 0.0, 300.0, 50.0));
+    // A row wrapped in reverse: its lines from the bottom up.
+    assert_eq!(overflow("row_wrap"), r(0.0, -30.0, 300.0, 80.0));
+    assert_eq!(overflow("column_margin"), r(0.0, -40.0, 300.0, 90.0));
+    // Above the top of an axis from the top: not counted.
+    assert_eq!(overflow("above"), r(0.0, 0.0, 300.0, 50.0));
+}
+
+/// An `rtl` document reaches left of the viewport's origin, its scroll
+/// origin past what is there; an `ltr` one's left of it isn't counted, nor
+/// an `rtl` one's right of the viewport.
+#[test]
+fn an_rtl_document_reaches_left() {
+    let rtl = lay_out(
+        "<html dir=rtl><body style='margin: 0'><div style='width: 2000px; height: 10px'></div>
+         <div style='width: 10px; margin-right: -500px'></div>",
+    );
+    let past = 2000.0 - VIEWPORT.width;
+    assert_eq!(
+        layout::document_origin(&rtl.view),
+        gfx::PointF::new(past, 0.0)
+    );
+    assert_eq!(
+        layout::document_size(&rtl.view),
+        SizeF::new(2000.0, VIEWPORT.height)
+    );
+    let ltr = lay_out(
+        "<body style='margin: 0'><div style='width: 2000px; height: 10px; margin-left: -300px'>",
+    );
+    assert_eq!(
+        layout::document_origin(&ltr.view),
+        gfx::PointF::new(0.0, 0.0)
+    );
+    assert_eq!(
+        layout::document_size(&ltr.view),
+        SizeF::new(1700.0, VIEWPORT.height)
     );
 }
 
@@ -217,7 +307,7 @@ fn scrollable_overflow_pads_the_margin_boxes() {
         let box_ = first(&lay_out(&negative.replace("OVERFLOW", overflow)));
         assert_eq!(box_.size, SizeF::new(60.0, 60.0), "{overflow}");
         assert_eq!(
-            layout::scrollable_overflow(&box_),
+            layout::scrollable_overflow(&box_).size(),
             SizeF::new(60.0, 60.0),
             "{overflow}"
         );
@@ -251,7 +341,10 @@ fn scrollable_overflow_pads_the_margin_boxes() {
          <div style='width: 40px; height: 20px; padding: 0 5px 5px 0; overflow: auto;
            font: 20px/1 Ahem'>XX XX XX</div>",
     ));
-    assert_eq!(layout::scrollable_overflow(&box_), SizeF::new(45.0, 65.0));
+    assert_eq!(
+        layout::scrollable_overflow(&box_).size(),
+        SizeF::new(45.0, 65.0)
+    );
     // A fixed height the child overflows: its margin is in the overflow.
     let box_ = first(&lay_out(&collapsing.replace("PADDING", "height: 50px")));
     assert_eq!(layout::scrollable_overflow(&box_).height, 120.0);
@@ -276,7 +369,10 @@ fn scrollable_overflow_doesnt_pad_an_absolute_box() {
          </div>";
     // The absolute box's border box ends at 310 down and 160 across.
     let box_ = first(&lay_out(&page.replace("CHILD", "")));
-    assert_eq!(layout::scrollable_overflow(&box_), SizeF::new(160.0, 310.0));
+    assert_eq!(
+        layout::scrollable_overflow(&box_).size(),
+        SizeF::new(160.0, 310.0)
+    );
     // An in-flow box further down: 10 + 20 + 400, padded.
     let box_ = first(&lay_out(
         &page.replace("CHILD", "<div style='height: 400px'></div>"),
