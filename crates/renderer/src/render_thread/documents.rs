@@ -262,7 +262,17 @@ pub(super) struct ChildFrames {
     /// The stack of the script whose iframe made each frame, if DevTools
     /// wanted it then (`Page.frameAttached`'s).
     creation_stacks: HashMap<FrameId, Rc<str>>,
+    /// When each frame's iframe fires `load` for a navigation within its
+    /// document that another origin asked for (`owner_load_later`), on
+    /// the clock.
+    owner_loads: HashMap<FrameId, f64>,
 }
+
+/// How long after a navigation within a cross-origin child frame's
+/// document its iframe fires `load` (Blink's
+/// `cross_origin_load_event_delay`): one for navigations in a row, as the
+/// later of cross-document ones would cancel the earlier.
+const OWNER_LOAD_DELAY_MS: f64 = 100.0;
 
 /// A child frame's navigation the renderer asked the browser for: its
 /// number for it (`BeginNavigation`'s id), whether its iframe's referrer
@@ -1190,6 +1200,7 @@ impl RenderThread {
             return;
         };
         if url.fragment().is_some() && self.navigate_to_fragment(frame, &url) {
+            self.owner_load_later(frame, initiator);
             return;
         }
         // A `javascript:` one isn't run: an empty document commits, as its
@@ -1418,6 +1429,67 @@ impl RenderThread {
     fn queue_child_commit(&mut self, frame: FrameId, url: Url, markup: String) {
         self.children.navigating(frame);
         self.children.commits.push_back((frame, url, markup));
+    }
+
+    /// Child frame `frame` navigated within its completely loaded document
+    /// as `initiator` asked: if `initiator`'s document is of another
+    /// origin, its iframe fires `load` a while after (the last of such
+    /// navigations in a row's), as it would for another document, so that
+    /// `initiator` can't tell which the URL was (Blink's
+    /// `DocumentLoader::CommitSameDocumentNavigation`, crbug.com/1248444).
+    fn owner_load_later(&mut self, frame: FrameId, initiator: FrameId) {
+        let (Some(document), Some(by)) = (
+            self.doc(frame).map(|next| next.document.clone()),
+            self.doc(initiator).map(|next| next.document.clone()),
+        ) else {
+            return;
+        };
+        let Some(engine) = &mut self.engine else {
+            return;
+        };
+        let other_origin = engine.dom_mut().read(|cx| {
+            let document = document.get(cx.gc);
+            cx.is_completely_loaded(document) && !dom_api::same_origin(cx, document, by.get(cx.gc))
+        });
+        if other_origin {
+            let due = self.clock.now() + OWNER_LOAD_DELAY_MS;
+            self.children.owner_loads.insert(frame, due);
+        }
+    }
+
+    /// When the first iframe's `load` for a navigation within a
+    /// cross-origin document is due, on the clock.
+    pub(super) fn owner_loads_due(&self) -> Option<f64> {
+        self.children
+            .owner_loads
+            .values()
+            .copied()
+            .reduce(f64::min)
+    }
+
+    /// Fires the iframes' `load`s that are due, for the frames still there
+    /// (`owner_load_later`); a gone frame's goes as it comes due.
+    pub(super) fn fire_due_owner_loads(&mut self) {
+        let now = self.clock.now();
+        let due: Vec<FrameId> = self
+            .children
+            .owner_loads
+            .iter()
+            .filter(|(_, due)| **due <= now)
+            .map(|(frame, _)| *frame)
+            .collect();
+        for frame in due {
+            self.children.owner_loads.remove(&frame);
+            let Some(owner) = self.children.frames.get(&frame).map(|(_, owner)| owner.clone()) else {
+                continue;
+            };
+            if let Some(engine) = &mut self.engine {
+                let _task = trace_event::trace_event!("ThreadControllerImpl::RunTask");
+                engine.fire_event(&owner, dom::names::event::LOAD);
+            }
+            self.handle_frame_requests();
+            self.send_harness_results();
+        }
     }
 
     /// Whether a child frame's `about:` document waits to commit: the loop

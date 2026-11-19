@@ -537,6 +537,7 @@ impl RenderThread {
             }
             self.blink_caret();
             self.intersections_due_now();
+            self.fire_due_owner_loads();
             // What the loop does between tasks, each a span of its own
             // where it may take time: none of it is a task's.
             let _between = trace_event::trace_event!("RenderThread::between_tasks");
@@ -1128,10 +1129,14 @@ impl RenderThread {
 
     /// How long until an idle period has a callback to run, or can start
     /// for one, or the first intersection observation held back by its
-    /// `delay` is due (zero if one is), or `None` if neither.
+    /// `delay` is due, or an iframe's `load` for a navigation within a
+    /// cross-origin document (zero if one is), or `None` if none.
     fn until_idle_or_intersections(&mut self) -> Option<Duration> {
         let now = self.clock.now();
-        let due = sooner_ms(self.idle_wake(), self.intersections_due);
+        let due = sooner_ms(
+            sooner_ms(self.idle_wake(), self.intersections_due),
+            self.owner_loads_due(),
+        );
         Some(Duration::from_secs_f64((due? - now).max(0.0) / 1000.0))
     }
 

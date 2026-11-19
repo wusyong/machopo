@@ -4687,6 +4687,81 @@ document.querySelector('base').setAttribute('href', '/later/');
         a_child_frames_documents_are_in_the_history_from(true);
     }
 
+    /// An iframe's `src` to a fragment of its document: the iframe fires
+    /// `load` a while after if the document is of another origin than its
+    /// parent's (once for navigations in a row, as in Chromium:
+    /// crbug.com/1248444), none if of its own.
+    #[test]
+    fn a_cross_origin_frames_fragment_navigation_fires_its_iframes_load() {
+        let other = server(&[("/c", Route::ok("text/html", "c"))]);
+        let html = |src: &str| {
+            format!(
+                "{}<iframe src={src}></iframe>",
+                logging(&format!(
+                    "const f = document.querySelector('iframe'); let loads = 0;
+                     const start = performance.now();
+                     f.onload = () => {{ loads++; note(`load-${{performance.now() - start < 600}}`); }};
+                     f.src = '{src}#x'; f.src = '{src}#y';
+                     setTimeout(() => note(`early-${{loads}}`), 50);
+                     setTimeout(() => note(`late-${{loads}}`), 1000);"
+                ))
+            )
+        };
+        let cross = other.url("/c");
+        let page = server(&[
+            ("/cross", Route::ok("text/html", html(&cross))),
+            ("/same", Route::ok("text/html", html("/c"))),
+            ("/c", Route::ok("text/html", "c")),
+        ]);
+        // Not at once (a task due before it runs first), but on time with
+        // nothing else to run.
+        for (path, expected) in [
+            ("/cross", "early-0_load-true_late-1"),
+            ("/same", "early-0_late-0"),
+        ] {
+            let (mut web_contents, host_rx) = tab();
+            web_contents.navigate(page.url(path));
+            logged_until(&mut web_contents, &host_rx, expected);
+            web_contents.shutdown();
+        }
+        // Its document still loading: its own `load` alone.
+        let slow = server(&[
+            (
+                "/c",
+                Route::ok(
+                    "text/html",
+                    "<script>parent.postMessage('parsed', '*')</script><img src=/img>",
+                ),
+            ),
+            (
+                "/img",
+                Route::ok("image/png", "x").with_delay(Duration::from_millis(400)),
+            ),
+        ]);
+        let src = slow.url("/c");
+        let loading = server(&[(
+            "/",
+            Route::ok(
+                "text/html",
+                format!(
+                    "{}<iframe src={src}></iframe><script>
+                       const f = document.querySelector('iframe'); let loads = 0;
+                       f.onload = () => loads++;
+                       onmessage = () => {{
+                         f.src = '{src}#x';
+                         setTimeout(() => note(`loading-${{loads}}`), 1000);
+                       }};
+                     </script>",
+                    logging("")
+                ),
+            ),
+        )]);
+        let (mut web_contents, host_rx) = tab();
+        web_contents.navigate(loading.url("/"));
+        assert_eq!(logged(&mut web_contents, &host_rx), "loading-1");
+        web_contents.shutdown();
+    }
+
     /// A child frame's script: `onload` tells its parent `<path>-<the
     /// navigation's type>`, `popstate` `pop-<its fragment>`; on a load not
     /// back or forward, `after` runs.
