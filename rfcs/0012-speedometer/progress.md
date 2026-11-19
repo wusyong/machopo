@@ -161,6 +161,12 @@
 
 新的在前。2026-10-13 的盤點時，Complex-DOM 和 NewsSite 在 kun 上還少算了用 `var()` 的 style 和 `::before`、`::after` 的 box，那時以前的比較表裡它們的比值偏低；「2d-2 之後的 trace」的 `ParseHTML` 被高估，以最後一次為準。
 
+### frame 樹和每個 frame 的導覽搬到 Browser 之後（2026-11-19，macOS Apple Silicon，接電源）
+
+使用者要求量的（RFC 0104 做完、merge 回 `main` 之前，branch 的 `9691a36`）。`bench.py speedometer`（20 個 default suite，各 10 個 iteration），macOS 26.6.2、Apple M4（10 核，macOS 不能綁核心），machopo 的 `perf` profile，Chrome for Testing 152.0.7977.82。20 個都有效。各 suite 的中位數合計：machopo 624.8 ms、Chrome 414.0 ms，比值的幾何平均 **1.48**。差最多的：Editor-TipTap 2.06、TodoMVC-WebComponents 1.77、NewsSite-Nuxt 1.75、TodoMVC-Lit-Complex-DOM 1.73、TodoMVC-Svelte-Complex-DOM 1.65；最少的：Editor-CodeMirror 1.22、TodoMVC-React-Redux 1.23、TodoMVC-JavaScript-ES5 1.24。這台上一次量是 2026-10-11（換 DOM 之前），之後的都在 Fedora 和 Windows 上，所以不和以前的比。
+
+接著用 `bench.py speedometer --against main` 在同一台上比（`main` 是 `e89d51c`，已經有 RFC 0104 的第 1、2 階段：子 frame 的導覽經過 Browser；比的是第 3、4 階段，joint session history 和 commit 的檢查；current 是 `9691a36` 加上只改文件的工作目錄），各 3 次輪流、每次 10 個 iteration：20 個 suite 的 current / against 的幾何平均 **1.001**（+0.1%），每個 suite 都在 −1.9%（Charts-observable-plot）到 +1.7%（TodoMVC-Backbone）之間，兩邊的 95% 區間都重疊，看不出變化。peak memory 每個 suite −8.0% 到 +3.8%。
+
 ### binding 的 front 只拿 callback 的 info 之後，和之前比（2026-11-11，Fedora 44）
 
 使用者要求量的（RFC 0097 第 2、3 段）。`bench.py speedometer --against 0097-baseline`（`main` 的 `272ffe1` 加上 `0097` 的 rusty_v8 的 pin，本地的 `7194a4f`：工具要兩個版本釘同樣的 `../third_party`，fork 的改動向下相容）對 `6db8168`，各 3 次輪流、每次 10 個 iteration。20 個 suite 的 current / against 的幾何平均 0.991（−0.9%）；各 suite 的中位數加起來 984.2 → 976.1 ms。17 個 suite 變快、3 個變慢（`TodoMVC-WebComponents` +2.1%、`Editor-CodeMirror` +1.0%、`React-Stockcharts-SVG` +0.1%），最多的是 `TodoMVC-Angular-Complex-DOM`、`TodoMVC-Vue` −2.6%；多數 suite 兩邊的 95% 區間重疊。peak memory −5.9% 到 +3.4%。沒有和 Chrome 同一輪跑。
