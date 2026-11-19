@@ -420,6 +420,9 @@ fn document_boxes<'gc>(dom: Reader<'_, 'gc>, document: NodeRef<'gc>) -> Document
                 (viewport(style.overflow_x), viewport(style.overflow_y))
             },
         ),
+        viewport_direction: root
+            .and_then(style)
+            .map_or(Default::default(), |style| style.rare_inherited.direction),
     }
 }
 
@@ -627,6 +630,7 @@ impl BoxTree {
             body: self.document.body,
             propagated: self.document.propagated,
             viewport_overflow: self.document.viewport_overflow,
+            viewport_direction: self.document.viewport_direction,
         };
         let mut cx = BuildContext::new(dom, &document_boxes, text, &walk.rebuild);
         // Outer boxes first: one collected again keeps the inner ones,

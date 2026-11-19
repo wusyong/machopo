@@ -199,6 +199,10 @@ struct DocumentBoxes {
     /// `visible` (see [`BoxTree::build`]).
     propagated: Option<NodeId>,
     viewport_overflow: (Overflow, Overflow),
+    /// The root element's `direction`, which the viewport takes (Blink's
+    /// `Document::PropagateStyleToViewport`): the root element's box is
+    /// placed from the viewport's right in `rtl`.
+    viewport_direction: computed_style::Direction,
 }
 
 struct LayoutBox {
@@ -782,10 +786,11 @@ impl BoxTree {
     /// A tree of only the `LayoutView`, for what `document` says of the
     /// whole document's boxes.
     fn empty(document: DocumentBoxes) -> Self {
-        let view_style = ComputedStyle {
+        let mut view_style = ComputedStyle {
             display: Display::Block,
             ..ComputedStyle::initial()
         };
+        view_style.rare_inherited_mut().direction = document.viewport_direction;
         let calcs = CalcValues::default();
         Self {
             boxes: vec![LayoutBox::new(

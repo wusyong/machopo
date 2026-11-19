@@ -1,0 +1,10 @@
+# about:demo's right-to-left part: an rtl paragraph and its ellipsis on the
+# left, and an rtl scroller that starts at its right edge and scrolls left,
+# to a negative scrollLeft.
+window size=800x600
+navigate about:demo
+wait-loaded
+scroll-to #rtl-note
+screenshot rtl
+wheel #rtl-scroller -40 0
+wait-text #rtl-scroll-note "scrollLeft is -40."

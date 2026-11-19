@@ -17,7 +17,7 @@
 | 2b 邏輯屬性照 `direction`、layout 用 `direction` | 完成 | 2026-11-19 |
 | 2c `unicode-bidi` 在 inline 內容裡 | 完成 | 2026-11-19 |
 | 2d 捲動的原點、sticky、`text-overflow`、`<select>` | 完成 | 2026-11-19 |
-| 2e 第 2 階段的檢查和文件 | | |
+| 2e 第 2 階段的檢查和文件 | 完成 | 2026-11-19 |
 
 ## 驗收
 
@@ -26,6 +26,12 @@
 | 邏輯和物理的換算在每種 writing mode 和 direction 都對（位移、大小、rect、四邊、距離、內容區的起點） | `cargo test -p layout --lib logical::` |
 | 第 1 階段之後，橫排、`ltr` 的排版和改之前一樣 | `cargo test -p layout`、`cargo test -p paint`；`python3 scripts/test.py reftest inline/ text/ block/ position/ tables/ floats/ generated/`；`python3 scripts/test.py wpt css/css-tables/ css/CSS2/tables/` |
 | collapsed border 給 paint 的格線和每條邊 | `cargo test -p layout --test it tables::collapsed_borders_lines_and_edges` |
+| `direction`、`unicode-bidi` 的解析和 computed value，`dir`、`<bdi>`、`<bdo>` 的 hint，directionality、`:dir()`、`dir=auto` | `cargo test -p style -p css -p dom`；`python3 scripts/test.py wpt html/dom/elements/global-attributes/ html/rendering/bidi-rendering/ css/css-writing-modes/` |
+| 邏輯屬性照元素的 `direction` 對應（cascade、`getComputedStyle`、動畫） | `cargo test -p style --test it logical::`；`python3 scripts/test.py wpt css/css-logical/` |
+| layout 照 `direction`：段落、flex、grid、table 的欄、marker、靜態位置、視窗照根元素的方向 | `cargo test -p layout --test it direction:: lists:: tables:: block::an_rtl_document_reaches_left` |
+| bidi：`unicode-bidi` 的控制字元、強制換行、行內盒子的邊界在重排之後照方向擺 | `cargo test -p layout --test it direction:: text_rects::`；`python3 scripts/test.py wpt css/CSS2/bidi-text/` |
+| 捲動的原點：`rtl` 和 flex 反過來的軸往起點捲（容器和視窗），`scrollLeft` 是負的，commit 換成 position | `cargo test -p layout --test it block::`；`cargo test -p renderer --lib scroll::`；`cargo test -p compositor --lib`；`python3 scripts/test.py scenarios rtl-scroll direction`；`python3 scripts/test.py wpt css/cssom-view/` |
+| `text-overflow`、line clamp 的省略號、sticky 的 inset、`<select>` 的清單照方向 | `cargo test -p layout --test it text_overflow:: line_clamp:: sticky::`；`cargo test -p shell --lib popup_menu`；`cargo test -p shell --test it browser_view::a_right_to_left_dropdown` |
 
 ## 做過的檢查
 
@@ -176,4 +182,15 @@ macOS、Apple M4，2026-11-19。
 - `docs/limitations.md`：`text-overflow` 只剩橫排；sticky 只剩沒有 writing mode；`<select>` 拿掉「頁面沒有 `direction`」。
 - mutation test（`mutants-2d2.toml`）21 個：19 個抓到（第一輪沒抓到的 6 個補了測試：兩個 run 的 `rtl` 行、空白的 `rtl` 截行、左邊截掉的 glyph 和底線、截掉的 run 的 hit test、選單標籤的段落方向）；2 個是等價的（`rtl` 的 run 的 cluster 邊界多一個左邊界：它等於 run 的結尾，只有整個 run 放得下時用得到，那時前面已經整個留下，差別只在誤差容許值以內；compositor 的 hit 範圍裡截掉的 run 的位置：run 一定在它的 block 或行內盒子的範圍裡，範圍是聯集，結果一樣）。
 - 跑過：`cargo test -p layout -p paint -p renderer -p dom_api -p protocol`、`cargo test -p shell --lib` 和 `shell` 的 `browser_view::a_right_to_left_dropdown`；`test.py wpt css/css-overflow/ css/css-position/sticky/ html/rendering/widgets/ css/css-text/ css/CSS2/`；`test.py scenarios position-sticky line-clamp rtl-scroll`；`sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs。
+
+### 2e：第 2 階段的檢查和文件
+
+macOS、Apple M4，2026-11-19。
+
+- `cargo test --workspace`（4193 個）、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通過；clippy 找到的兩處（`cascade` 裡多餘的 `clone`、bidi 控制字元那個太複雜的 tuple 型別，改成 `Insertion` 的別名）修好了。
+- `test.py scenarios --window`：70 次全部通過（真的視窗）。
+- `about:demo` 加了由右到左的那一段（`rtl` 的段落和 `<bdi>`、左邊的省略號、從右邊開始的捲動容器、`rtl` 的 select），情境 `direction` 捲它、讀回負的 `scrollLeft`。
+- 檢查 `.ini` 裡寫 machopo 沒有 `direction`、`:dir()`、bidi 的說明時找到：視窗沒有照根元素的 `direction`（Blink 的 `Document::PropagateStyleToViewport`），`rtl` 的文件裡比視窗寬的根元素從左邊排，往左溢出的捲不到。改成 `LayoutView` 照根元素的 `direction`（`DocumentBoxes` 的 `viewport_direction`，變了整個重建），`start-edge-in-block-layout-direction` 的 Horizontal RTL 通過了。其他變成通過的：`scrollWidthHeight-negative-margin-002`（同名的 `ltr`、`rtl` 子測試現在結果一樣，拿掉 `disabled`）、`shadow-directionality-001`、`002`、`variable-presentation-attribute` 的 `direction`、`getComputedStyle-insets-fixed`、`-absolute` 的 `rtl` 那幾項；還沒過的改寫原因（`li-text-align` 只剩 `text-align: match-parent`、`list-marker-symbol-bidi` 只剩 `rtl` 清單裡 `plaintext` 的項目）。跑過的 WPT（`css/CSS2/`、`css-position`、`css-writing-modes`、`css-overflow`、`cssom-view`、`css-flexbox`、`css-grid`、`css-text`、`css-tables`、`css-lists`、`css-logical`、`css-scroll-anchoring`、`css-shadow`、`css-variables`、`cssom`、`css-pseudo`、`html/rendering/`、`html/dom/elements/global-attributes/`，32473 項）沒有意外的失敗，意外通過的都是 macOS 上已知的。
+- `docs/test-gaps.md`：「等價、不用處理的 mutation」加上 2c、2d 的 5 個；拿掉「絕對定位盒子的 resolved `left` 改成取 layout 的位置」那一條：`rtl` 的 containing block 裡被忽略的是 `left`，不再等價，`shell` 的 `geometry::absolute_boxes_and_their_insets` 加了 `rtl` 的情況守著。
+- mutation test（`mutants-2e.toml`）3 個，全部抓到：視窗照根元素的方向（兩個）、絕對定位盒子的 resolved `left`。
 

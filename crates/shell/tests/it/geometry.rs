@@ -953,8 +953,11 @@ fn absolute_boxes_and_their_insets() {
   /* Over-constrained: `bottom` is ignored, so it keeps its own value. */
   #over { position: absolute; top: 10px; bottom: 20px; height: 40px; width: 10px }
   #flow { height: 10px }
+  /* In rtl, `left` is ignored, and keeps its own value too. */
+  #rtl-over { position: absolute; top: 0; left: 30px; right: 40px; width: 10px; height: 10px }
 </style>
 <div id="cb"><div id="deep"><div id="abs"></div><div id="over"></div></div><div id="rel"></div><div id="flow"></div></div>
+<div id="rtl-cb" dir="rtl" style="position: relative; width: 300px; height: 20px"><div id="rtl-over"></div></div>
 <script>
 onload = () => {
   const log = [];
@@ -969,6 +972,8 @@ onload = () => {
   log.push(flow.position, flow.top, flow.left);
   const over = getComputedStyle(at('over'));
   log.push(over.top, over.bottom, at('over').offsetTop);
+  const rtlOver = getComputedStyle(at('rtl-over'));
+  log.push(rtlOver.left, rtlOver.right, at('rtl-over').offsetLeft);
   testRunner.reportHarnessResults(log.join(' / '));
 };
 </script>"#,
@@ -976,7 +981,7 @@ onload = () => {
     assert_eq!(
         report(&url),
         "cb / 62 / 3 / 50 / absolute / 3px / 62px / 198px / 147px / 4px / 5px / cb / \
-         static / auto / auto / 10px / 20px / 10"
+         static / auto / auto / 10px / 20px / 10 / 30px / 40px / 250"
     );
 }
 

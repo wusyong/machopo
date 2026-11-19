@@ -2893,6 +2893,20 @@ fn bidi_controls(style: &ComputedStyle) -> Option<(&'static str, &'static str)> 
     })
 }
 
+/// A bidi control to insert: at a byte of the text, in a slot among the
+/// tags there (0 before them all, `2t + 1` right before tag `t`, `2t + 2`
+/// right after it, `usize::MAX` after them all), in order among those in
+/// the slot (outer embeddings' openings before inner ones' and closings
+/// after), with its run's style and element.
+type Insertion<'a> = (
+    usize,
+    usize,
+    usize,
+    &'static str,
+    &'a Arc<ComputedStyle>,
+    Option<Owner>,
+);
+
 /// `text` with the bidi control characters of the inline elements'
 /// `unicode-bidi` around their content (before an element's start tag,
 /// after its end tag: its edges are inside), and of the block's
@@ -2995,18 +3009,7 @@ fn insert_bidi_controls<'a>(
     if embeddings.is_empty() {
         return (text, runs, tags);
     }
-    // What goes where: at a byte of the text, in a slot among the tags
-    // there (0 before them all, `2t + 1` right before tag `t`, `2t + 2`
-    // right after it, `usize::MAX` after them all), outer embeddings'
-    // openings before inner ones' and closings after.
-    let mut inserted: Vec<(
-        usize,
-        usize,
-        usize,
-        &'static str,
-        &'a Arc<ComputedStyle>,
-        Option<Owner>,
-    )> = Vec::new();
+    let mut inserted: Vec<Insertion<'a>> = Vec::new();
     let tag_slot = |tag: usize, after: bool| {
         tag.saturating_mul(2)
             .saturating_add(1)

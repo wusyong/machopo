@@ -270,6 +270,14 @@ fn an_rtl_document_reaches_left() {
         layout::document_size(&rtl.view),
         SizeF::new(2000.0, VIEWPORT.height)
     );
+    // The root element wider than the viewport: placed from its right, as
+    // the viewport takes the root's direction.
+    let wide = lay_out("<html id=html_root dir=rtl style='width: 2000px'><body style='margin: 0'>");
+    assert_eq!(wide.rect("html_root").x, VIEWPORT.width - 2000.0);
+    assert_eq!(
+        layout::document_origin(&wide.view),
+        gfx::PointF::new(1200.0, 0.0)
+    );
     let ltr = lay_out(
         "<body style='margin: 0'><div style='width: 2000px; height: 10px; margin-left: -300px'>",
     );

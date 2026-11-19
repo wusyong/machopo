@@ -1,0 +1,23 @@
+# Stage 2e: what its checks found, the viewport taking the root element's
+# direction.
+test = ["sh", "-c", "cargo test -q -p layout --test it -- block::"]
+timeout = 900
+
+[[mutant]]
+name = "the viewport ltr whatever the root's direction"
+file = "crates/layout/src/lib.rs"
+from = '''        view_style.rare_inherited_mut().direction = document.viewport_direction;'''
+to = ''''''
+
+[[mutant]]
+name = "the viewport's direction never the root's"
+file = "crates/layout/src/tree_builder.rs"
+from = '''            .map_or(Default::default(), |style| style.rare_inherited.direction),'''
+to = '''            .map_or(Default::default(), |_| Default::default()),'''
+
+[[mutant]]
+name = "an absolute box's resolved left where it sits"
+file = "crates/layout/src/geometry.rs"
+from = '''            computed(style.inset.left, width).unwrap_or(left),'''
+to = '''            left,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "geometry::absolute_boxes_and_their_insets"]

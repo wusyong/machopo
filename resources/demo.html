@@ -215,6 +215,23 @@
       <p id="ellipsis-note" style="width: 24em; overflow: hidden; white-space: nowrap; text-overflow: ellipsis">
          This line is too long for its box: it is cut where the ellipsis fits
          (text-overflow: ellipsis), and the rest of it isn't painted or hit.</p>
+      <!-- Right to left (direction, unicode-bidi, the scroll origin). -->
+      <div id="rtl-note" dir="rtl" style="width: 24em">
+        <p>שלום: this paragraph is right to left (dir=rtl). Its lines start on the
+           right, and an English phrase in it, <bdi>like this one</bdi>, reads left to
+           right inside it.</p>
+        <p style="overflow: hidden; white-space: nowrap; text-overflow: ellipsis">
+           A line too long for its right-to-left box is cut at its end, the left.</p>
+        <div id="rtl-scroller" style="overflow: auto; height: 3em; background: #e8f0fe"
+             onscroll="document.getElementById('rtl-scroll-note').textContent =
+               'scrollLeft is ' + Math.round(this.scrollLeft) + '.'">
+          <div style="width: 48em">This box is wider than its right-to-left scroller: it
+            starts at its right edge (scrollLeft 0) and scrolls left, to negative
+            offsets.</div></div>
+        <p><span id="rtl-scroll-note">Not scrolled yet.</span>
+           <select id="rtl-select"><option>One</option><option>Two</option></select>
+           The select's list opens at its right edge.</p>
+      </div>
       <div id="float-note" style="width: 24em">
         <span style="float: left; width: 4em; height: 3em; margin: 0.2em 0.5em 0 0; background: #3a3"></span>
         This text goes around the green square, which floats left (float: left):

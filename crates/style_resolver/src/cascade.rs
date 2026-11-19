@@ -321,7 +321,7 @@ pub fn cascade_declarations(
         blocks,
         parent,
         root_font_size,
-        env.clone(),
+        env,
         applies,
         animated_font_size,
         parents,

@@ -356,7 +356,6 @@
 - `layout` 給 parley 的 variation 在 `font-variation-settings` 自己設了 `opsz` 時不另外加字級的 `opsz`（`font_features.rs` 的 `variations`）：設定排在後面、後面的贏，兩個都給結果一樣；照樣不加，不依賴 shaper 取哪一個。
 - parley fork 的軟連字號：新的一行把「上一個 atom 是軟連字號」重設回 `Break`（`LineState::reset`；斷在軟連字號之後，下一行從那裡的狀態開始，但一行的第一個 atom 和開頭的元素邊緣都在 x 是 0 的地方，那裡不記斷點）；連字號的前進量乘上 display scale（machopo 的排版的 scale 是 1）；`ResolvedStyle::check` 比較 `SoftHyphens`（只有 `RangedBuilder` 用它，machopo 用 ranged builder 的 `shape_line` 一律給 `Break`）；min/max-content 的量測在 `hyphens: none` 的軟連字號之後只在 `overflow-wrap: anywhere` 時斷（拿掉 `NoBreak` 的條件也不斷，`anywhere` 本來就在每個 atom 之前斷，量到的最寬的一段一樣）。
 - IFC 的 measure 在知道寬度時回傳那個寬度（taffy 的 leaf 在知道寬度時不看 measure 回傳的寬度）。
-- 絕對定位盒子的 resolved `top` 和 `left` 改成取 layout 算出來的位置（`layout::geometry` 的 `used_inset`：machopo 只有 horizontal-tb、ltr，`top` 和 `left` 一定是被採用的那一邊，給了值就擺在那裡，兩者相等；同一行的 `right` 和 `bottom` 不等價，由 `shell` 的 `absolute_boxes_and_their_insets` 抓到）。
 - `layout` 的 `compute_box` 在量大小時（不是 `PerformLayout`）也呼叫 taffy 的 `compute_oof_layout`（taffy 的 block、flex、grid 只在 `PerformLayout` 時設 `oof_positioning_area`，量大小時它是 `None`，`compute_oof_layout` 直接 return；照 taffy 自己的 `TaffyTree` 只在 `PerformLayout` 呼叫）。
 - 只有 float（和 out-of-flow 盒子、會摺掉的空白）的內容也照行內內容排（`layout` 的 `set_content` 的 `only_floats`：Blink 就是在沒有行的 inline formatting context 裡放它們，位置和 taffy 的 block layout 放的一樣，交給 taffy 只省下 parley 的 layout）。
 - `InlineContent` 放 float 時也用斷行的快取（`break_lines` 的 `!places`：快取的 key 是 `PerformLayout` 時包含自己的 float 的區段，下一次排版傳進來的只有外面的 float，對不上；只有大小是 0、不留區段的 float 對得上，它放不放只差在 `clear` 和「不比前面的 float 高」的邊界情況。照樣在放 float 時不用快取，意思清楚，不依賴 key 的這個細節）。
@@ -378,6 +377,10 @@
 - parley fork 查斷行表時，交給 ICU4X 的字一律從文字開頭看起（`line_table.rs` 不記前一個字的開頭）：ICU4X 看到的上下文只多不少，結果一樣，只是比較慢。照樣只從前一個字開始。
 - `layout` 的 `TextContext` 不關掉字的界線（`set_word_boundaries(false)`）：machopo 不讀 parley 的字的界線，只是分析比較慢；測試看不到。之後若有算分析次數或時間的計數，再補。
 - parley fork 判斷字型的規則和空白時，chained context 的 backtrack 不倒過來（`space.rs` 的 `chained`）：backtrack 有兩格以上時規則就有三格以上，有空白就一律當成跨過空白，順序看不出差別；只有一格時倒不倒都一樣。照樣倒過來，位置的順序和比對的順序一致。
+- 行內元素的 bidi 控制字元裡，結尾的放在它的結束 tag 之前或之後（`layout` 的 `insert_bidi_controls` 的 tag 的 slot）：結果一樣，行內盒子的邊界在 bidi 重排之後照元素的方向重新擺（`place_line`），和邊界拿到的 level 無關；照 Blink 的順序（PDI 在結束 tag 之後）留著。
+- 強制換行之前關掉 embedding 的順序（`insert_bidi_controls` 的 `usize::MAX` 那一格的 `order`）：UBA 的 X8 在段落分隔字元結束所有的 embedding，關掉的字元的順序不影響任何字元；照 Blink 由內到外留著。
+- 一行只有 bidi 控制字元時不算內容（`InlineContent::holds_content`、`static_positions` 跳過控制字元的 run）：控制字元只插在一段裡有字元的元素周圍，和那些字元在同一行（換行的機會不在它們和內容之間），碰不到；留著擋之後的改動。
+- `rtl` 的行截斷時，run 的 cluster 邊界多算一個左邊界（`truncate_line` 的 `sorted.remove(0)`）：多出來的邊界等於 run 的結尾，只有整個 run 放得下時用得到，那時前面已經整個留下；差別只在 `BREAK_TOLERANCE` 以內。
 
 **paint、raster、compositor 和 Viz**
 
@@ -393,6 +396,7 @@
 - `paint` 的 hit test 在背景階段不跳過 float（float 的階段在背景階段之前，點在 float 上一定先在那裡找到，不在 float 上的背景階段也找不到它）。
 - `paint` 的 `PaintController` 照元素找上一次 paint 的盒子時不排除 pseudo-element 的（`by_node`：pseudo-element 的盒子的 style 和元素的不是同一個 `Arc`，接著比對 style 一定不同，只是少搬一次、照樣重畫，結果一樣；元素和 pseudo-element 哪個留在表裡又看 `HashMap` 的順序，寫成測試也抓不穩）。
 - raster invalidation 的 item 序號不在每個 chunk 重新算（`raster_invalidator` 的 `ordinals.clear()`：前面的 chunk 裡同一個元素和種類的 item 數變了時，後面的 chunk 的 item 對不上、多 raster 一次，不會少；要前面的 chunk 多一個同元素、同種類的 item，後面的 chunk 又不動，沒有構造出這樣的頁面）、一個舊的 chunk 只對上一個新的（`matched` 的篩選：要一個新的 chunk 的 id 剛好是另一個新 chunk 整段搬自的舊 chunk 的，前者照樣逐個比、後者沒變，結果一樣）。
+- 截斷的 run 在給 compositor 的 hit 範圍裡的位置（`paint` 的 `push_hit` 用 `visible_start`）：run 一定在它的 block 或行內盒子的範圍裡（`text-overflow` 要 block 裁切內容），範圍是聯集，結果一樣。
 
 **renderer、browser 和自動化**
 
