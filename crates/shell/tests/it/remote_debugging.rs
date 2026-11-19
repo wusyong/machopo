@@ -298,12 +298,20 @@ impl Client {
     }
 
     /// The answer to the command `id`, the events before it kept.
+    #[track_caller]
     pub(crate) fn answer(&mut self, id: u64) -> Value {
         if let Some(at) = self.events.iter().position(|message| message["id"] == id) {
             return self.events.remove(at);
         }
+        let start = Instant::now();
         loop {
-            let message = self.read().expect("an answer");
+            let message = match self.next_message() {
+                Ok(message) => message,
+                Err(why) => panic!(
+                    "{}",
+                    self.missed(&format!("the answer to {id}"), start, &why)
+                ),
+            };
             if message["id"] == id {
                 return message;
             }
@@ -313,17 +321,43 @@ impl Client {
 
     /// The next message, or `None` once the connection has closed.
     pub(crate) fn read(&mut self) -> Option<Value> {
+        self.next_message().ok()
+    }
+
+    /// The next message, or why there is none: the connection closed, or
+    /// its read failed (timed out: `TIMEOUT` went by with nothing).
+    fn next_message(&mut self) -> Result<Value, String> {
         loop {
             match self.socket.read() {
-                Ok(Frame::Text(text)) => return Some(serde_json::from_str(&text).unwrap()),
-                Ok(Frame::Close(_)) | Err(_) => return None,
+                Ok(Frame::Text(text)) => return Ok(serde_json::from_str(&text).unwrap()),
+                Ok(Frame::Close(_)) => return Err("closed".to_owned()),
+                Err(e) => return Err(format!("read failed: {e}")),
                 Ok(_) => {}
             }
         }
     }
 
+    /// What a test failing to get `wanted` is told, so that a failure in
+    /// CI says what was waited for, how long, why it stopped and what came
+    /// meanwhile: the messages kept unread, by method (or answer id).
+    fn missed(&self, wanted: &str, start: Instant, why: &str) -> String {
+        let kept: Vec<String> = self
+            .events
+            .iter()
+            .map(|message| match message["method"].as_str() {
+                Some(method) => method.to_owned(),
+                None => format!("answer {}", message["id"]),
+            })
+            .collect();
+        format!(
+            "no {wanted} after {:.1?} ({why}); kept unread: {kept:?}",
+            start.elapsed()
+        )
+    }
+
     /// The first event named `method`, kept or to come; the others are
-    /// kept.
+    /// kept. A failure points at the caller's line.
+    #[track_caller]
     pub(crate) fn event(&mut self, method: &str) -> Value {
         if let Some(at) = self
             .events
@@ -332,10 +366,12 @@ impl Client {
         {
             return self.events.remove(at);
         }
+        let start = Instant::now();
         loop {
-            let event = self
-                .read()
-                .unwrap_or_else(|| panic!("closed before {method}"));
+            let event = match self.next_message() {
+                Ok(event) => event,
+                Err(why) => panic!("{}", self.missed(method, start, &why)),
+            };
             if event["method"] == method {
                 return event;
             }
