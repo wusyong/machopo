@@ -11,7 +11,7 @@
 | 1a：data pipe（`ipc::data_pipe`） | 完成 | 2026-11-20 |
 | 1b：回應分成 head 和 body，`net` 的 `URLLoaderClient`，`fetch(done)` 照舊 | 完成 | 2026-11-20 |
 | 1c：HTTP 的 body 一段一段讀、解壓、sniff，`file:` 一段一段讀、`data:` 走管道 | 完成 | 2026-11-20 |
-| 1d：第 1 階段的檢查和文件 | 未開始 | |
+| 1d：第 1 階段的檢查和文件 | 完成 | 2026-11-20 |
 | 2：Browser 提早 commit | 未開始 | |
 | 3：renderer 邊收邊 parse | 未開始 | |
 | 4：舊畫面的時限、檢查和文件 | 未開始 | |
@@ -60,3 +60,12 @@ macOS、Apple M4，2026-11-20。
 - 新的測試：`client.rs` 8 個（head 在 body 之前、分段、壓縮的分段、解不開的、沒有 `Content-Type` 的短 body 和長 body、redirect 的 body 不等、`file:` 分段），`load.rs` 2 個（分段的 body 整份交回、只 sniff 1024 bytes），`content_encoding.rs` 1 個（截斷的 gzip），`content_encoding` 的單元測試改成每份都整份和一個 byte 一個 byte 各解一次、比對，加了 5 個（輸出超過一次的空間、截斷、之後多出來的、gzip header 的選用欄位、zlib header 的判斷）；opaque 的 `fetch()` 檢查照樣讀了 body。
 - mutation test（`mutants-1c.toml`）27 個，26 個抓到。第一輪沒抓到 4 個：gzip header 的 extra 不跳過（測試的 extra 裡沒有 0，接著找檔名的 0 時把它吃掉了，結果一樣；extra 裡放一個 0）、HTTP 的 body 結尾不 `finish`（沒有截斷的壓縮 body 的 HTTP 測試，補了）、丟棄的 body 不讀（沒檢查傳輸的大小，補了）、inflate 在輸入用完、輸出滿了時就停：等價，記進 `docs/test-gaps.md` 的「等價、不用處理的 mutation」（miniz_oxide 輸出滿了就不再吃輸入，留著的最多是一段 258 bytes 的 match，下一段交出）。
 - 跑過的檢查：`cargo test -p net -p browser`、`cargo clippy -p net --all-targets -- -D warnings`、`cargo check --workspace --all-targets`；`sanity.py` 的 `numerics`、`deps`、`tests`、`docs`、`boundary`、`unsafe`、`spans`。
+
+### 1d：第 1 階段的檢查和文件
+
+macOS、Apple M4，2026-11-20。
+
+- `cargo test --workspace`：4232 個通過、0 個失敗、1 個 ignored。`cargo clippy --workspace --all-targets -- -D warnings` 沒有警告。`cargo fmt --check` 抓到 `browser` 的 `web_contents.rs` 三處讀 `.head` 的欄位的換行（1b 機械地加上的），照 rustfmt 改了。
+- `test.py wpt fetch/api/basic/ fetch/api/redirect/ navigation-timing/`：`fetch/` 的都照預期。`navigation-timing/` 有 4 份意外通過（`nav2-test-document-replaced.html`、`nav2-test-timing-persistent.html` 的 Part 2、`nav2-test-navigation-type-backforward.html`、`test-navigation-type-backforward.html`），單獨重跑一次結果一樣。它們要 iframe 用 `location.href` 導覽到別的文件（`.ini` 寫著 machopo 不會），是前一份做 session history 和子 frame 導覽的 RFC 做到的、那時沒跑這個目錄，和這個階段的改動無關；預期結果還沒更新。
+- 文件：這個階段改到的行為（`Content-Encoding`、sniff、redirect 的 body、`file:` 的讀法）在 `docs/` 和 crate 的 README 裡 grep 過，`docs/architecture.md` 的 `net` 那一列和 `docs/limitations.md` 在 1c 改好了，其他的描述照樣成立。畫面上看不出差別（導覽照舊收完整份 body 才 commit），沒有新的情境。
+- 跑過的檢查：`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。

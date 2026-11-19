@@ -1021,12 +1021,14 @@ impl WebContents {
         let document = match result {
             Ok(response) => {
                 let content_language = response
-                    .head.headers
+                    .head
+                    .headers
                     .iter()
                     .find(|(name, _)| name == "content-language")
                     .map(|(_, value)| value.clone());
                 let content_encoding = response
-                    .head.headers
+                    .head
+                    .headers
                     .iter()
                     .find(|(name, _)| name == "content-encoding")
                     .map(|(_, value)| value.clone());
@@ -1036,7 +1038,8 @@ impl WebContents {
                     encoded_headers_length: response.head.encoded_headers_length,
                     encoded_body_length: response.encoded_body_length,
                     response_end: response
-                        .head.timing
+                        .head
+                        .timing
                         .map_or_else(TimeTicks::now, |timing| timing.response_end),
                     timing: response.head.timing,
                     redirects,
