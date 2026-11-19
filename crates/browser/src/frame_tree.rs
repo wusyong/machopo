@@ -15,7 +15,7 @@ use protocol::FrameToken;
 
 use crate::bad_message::BadMessageReason;
 use crate::navigation_controller::HistoryPlace;
-use crate::navigation_request::NavigationRequest;
+use crate::navigation_request::{DocumentLoad, NavigationRequest};
 
 /// A frame of the tree: its parent (none for the main frame) and its
 /// child frames, in the order they were made; its document, and its
@@ -58,6 +58,9 @@ struct FrameTreeNode {
     /// `navigation_requests_`): a commit reported is one of them.
     committing: Vec<Committing>,
     navigation: Option<NavigationRequest>,
+    /// The load of the document last sent to commit, while its body still
+    /// comes: it stops as another commits or the frame goes.
+    document_load: Option<DocumentLoad>,
 }
 
 /// A navigation sent to commit: its document's URL and origin.
@@ -106,6 +109,7 @@ impl FrameTreeNode {
             srcdoc: String::new(),
             committing: Vec::new(),
             navigation: None,
+            document_load: None,
         }
     }
 }
@@ -307,6 +311,33 @@ impl FrameTree {
                 origin,
             });
         }
+    }
+
+    /// `load` is that of the document `frame` was last sent to commit,
+    /// whose body still comes; it goes if the frame has.
+    pub(crate) fn set_document_load(&mut self, frame: FrameToken, load: DocumentLoad) {
+        if let Some(node) = self.nodes.get_mut(&frame) {
+            node.document_load = Some(load);
+        }
+    }
+
+    /// `frame`'s document's load taken out, whichever it is: another
+    /// document commits.
+    pub(crate) fn take_any_document_load(&mut self, frame: FrameToken) -> Option<DocumentLoad> {
+        self.nodes.get_mut(&frame)?.document_load.take()
+    }
+
+    /// `frame`'s document's load taken out, if it is navigation
+    /// `navigation_id`'s: it ended.
+    pub(crate) fn take_document_load(
+        &mut self,
+        frame: FrameToken,
+        navigation_id: u64,
+    ) -> Option<DocumentLoad> {
+        self.nodes
+            .get_mut(&frame)?
+            .document_load
+            .take_if(|load| load.navigation_id() == navigation_id)
     }
 
     /// `frame` shows navigation `navigation_id`'s document, at `url`

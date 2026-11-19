@@ -419,7 +419,11 @@ impl NetworkAgent {
             return;
         }
         let id = navigation_id.to_string();
-        let end = loaded.response_end.as_secs_f64();
+        let (end, encoded_body_length) = loaded.end.as_ref().map_or_else(
+            || (TimeTicks::now(), 0),
+            |end| (end.completion_time, end.encoded_body_length),
+        );
+        let end = end.as_secs_f64();
         if !body.is_empty() {
             self.tell(
                 &sessions,
@@ -428,7 +432,7 @@ impl NetworkAgent {
                     "requestId": id,
                     "timestamp": end,
                     "dataLength": body.len(),
-                    "encodedDataLength": loaded.encoded_body_length,
+                    "encodedDataLength": encoded_body_length,
                 }),
             );
         }
@@ -440,7 +444,7 @@ impl NetworkAgent {
                 "timestamp": end,
                 "encodedDataLength": loaded
                     .encoded_headers_length
-                    .saturating_add(loaded.encoded_body_length),
+                    .saturating_add(encoded_body_length),
             }),
         );
         let text = is_text(mime_type) && std::str::from_utf8(body).is_ok();

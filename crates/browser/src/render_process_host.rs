@@ -410,7 +410,10 @@ pub(crate) struct CommittedDocument {
     pub(crate) mime_type: String,
     pub(crate) charset: Option<String>,
     pub(crate) content_language: Option<String>,
+    /// The body's first bytes, or all of it without a `body_pipe`.
     pub(crate) body: Bytes,
+    /// The rest of the body, for one that came over the network.
+    pub(crate) body_pipe: Option<ipc::data_pipe::Consumer>,
     /// What its load took; none for a page of the browser's own or an
     /// error page.
     pub(crate) loaded: Option<NavigationLoad>,
@@ -427,6 +430,7 @@ impl CommittedDocument {
             charset: None,
             content_language: None,
             body: markup.into(),
+            body_pipe: None,
             loaded: None,
             error_page: false,
         }
@@ -466,7 +470,14 @@ impl Committer {
         self.history.length = length;
     }
 
-    pub(crate) fn commit(self, navigation_id: u64, document: CommittedDocument) {
+    /// Sends the commit; what tells the renderer how its load ended, if it
+    /// hasn't yet, comes back.
+    pub(crate) fn commit(self, navigation_id: u64, document: CommittedDocument) -> LoadCompleter {
+        let completer = LoadCompleter {
+            to_renderer: self.to_renderer.clone(),
+            frame: self.frame,
+            navigation_id,
+        };
         let _ = self.to_renderer.send(RendererMsg::CommitNavigation {
             frame: self.frame,
             navigation_id,
@@ -477,10 +488,30 @@ impl Committer {
             charset: document.charset,
             content_language: document.content_language,
             body: document.body,
+            body_pipe: document.body_pipe,
             history: self.history,
             navigation_start: self.navigation_start,
             loaded: document.loaded.map(Box::new),
             navigation_type: self.navigation_type,
+        });
+        completer
+    }
+}
+
+/// Tells the renderer how the load of a document it was sent to commit
+/// ended (`URLLoaderClient::OnComplete`), through the renderer it went to.
+pub(crate) struct LoadCompleter {
+    to_renderer: RendererSender,
+    frame: FrameToken,
+    navigation_id: u64,
+}
+
+impl LoadCompleter {
+    pub(crate) fn complete(self, status: protocol::network::CompletionStatus) {
+        let _ = self.to_renderer.send(RendererMsg::NavigationLoadCompleted {
+            frame: self.frame,
+            navigation_id: self.navigation_id,
+            status,
         });
     }
 }

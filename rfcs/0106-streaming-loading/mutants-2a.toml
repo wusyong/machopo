@@ -1,0 +1,86 @@
+# Step 2a: the browser commits a navigation with its response's head and
+# its body's start, the rest through the body's pipe; it keeps the load
+# and tells the renderer how it ended; the renderer waits for the body and
+# the end before it commits.
+test = ["sh", "-c", "cargo test -q -p browser --test it body::"]
+timeout = 600
+
+[[mutant]]
+name = "the commit doesn't wait for the body's start"
+file = "crates/browser/src/web_contents.rs"
+from = '''        while !response.done && response.start_length < BODY_START_LENGTH {'''
+to = '''        while false {'''
+
+[[mutant]]
+name = "the commit carries no pipe"
+file = "crates/browser/src/web_contents.rs"
+from = '''            body_pipe: (!done).then_some(body),'''
+to = '''            body_pipe: None,'''
+
+[[mutant]]
+name = "a committed document's load isn't kept"
+file = "crates/browser/src/web_contents.rs"
+from = '''        if !ended {
+            self.frame_tree'''
+to = '''        if false {
+            self.frame_tree'''
+
+[[mutant]]
+name = "the renderer isn't told how a committed document's load ended"
+file = "crates/browser/src/web_contents.rs"
+from = '''            load.complete(status);
+            return;'''
+to = '''            drop((load, status));
+            return;'''
+
+[[mutant]]
+name = "a load that ends before it commits commits without its end"
+file = "crates/browser/src/web_contents.rs"
+from = '''            navigation.end = Some(status);'''
+to = '''            drop(status);'''
+
+[[mutant]]
+name = "the document before stops before the commit that replaces it"
+file = "crates/browser/src/web_contents.rs"
+from = '''        let before = self.frame_tree.take_any_document_load(frame);'''
+to = '''        drop(self.frame_tree.take_any_document_load(frame));
+        let before = ();'''
+
+[[mutant]]
+name = "the renderer doesn't wait for the load's end"
+file = "crates/renderer/src/render_thread/body_loader.rs"
+from = '''        self.pipe.is_none()
+            && self'''
+to = '''        self.pipe.is_none()
+            || self'''
+
+[[mutant]]
+name = "the renderer drops what its pipe brings"
+file = "crates/renderer/src/render_thread/body_loader.rs"
+from = '''                Read::Data(data) => self.body.push(data),'''
+to = '''                Read::Data(data) => drop(data),'''
+
+[[mutant]]
+name = "the renderer doesn't watch the pipe"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                        pipe.watch(self.scheduler.body_waker(frame, navigation_id));'''
+to = '''                        let _ = (pipe, self.scheduler.body_waker(frame, navigation_id));'''
+
+[[mutant]]
+name = "a commit at once leaves the frame's waiting one"
+file = "crates/renderer/src/render_thread/body_loader.rs"
+from = '''            .retain(|loader| loader.frame() != frame || loader.navigation_id() > navigation_id);'''
+to = '''            .retain(|_| true);'''
+
+[[mutant]]
+name = "a waiting commit doesn't replace the frame's one before"
+file = "crates/renderer/src/render_thread/body_loader.rs"
+from = '''        self.0.retain(|other| other.frame() != frame);
+        self.0.push(loader);'''
+to = '''        self.0.push(loader);'''
+
+[[mutant]]
+name = "a load's end is not kept for the commit"
+file = "crates/renderer/src/render_thread/body_loader.rs"
+from = '''            loaded.end = Some(status);'''
+to = '''            drop(status);'''

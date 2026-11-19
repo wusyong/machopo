@@ -447,6 +447,9 @@ pub struct TimeSpan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NetErrorCode {
     Failed,
+    /// The load was stopped: a committed document's, as another commits
+    /// in its frame or the frame goes.
+    Aborted,
     FileNotFound,
     AccessDenied,
     InvalidUrl,
@@ -473,6 +476,7 @@ impl NetErrorCode {
     pub fn name(self) -> &'static str {
         match self {
             Self::Failed => "ERR_FAILED",
+            Self::Aborted => "ERR_ABORTED",
             Self::FileNotFound => "ERR_FILE_NOT_FOUND",
             Self::AccessDenied => "ERR_ACCESS_DENIED",
             Self::InvalidUrl => "ERR_INVALID_URL",

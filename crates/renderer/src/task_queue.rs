@@ -40,6 +40,14 @@ pub(crate) enum MainThreadTask {
     /// From another thread: the DOM's message ports may have messages
     /// (`dom::PortWaker`), which the loop runs as it runs the DOM's tasks.
     PortMessages,
+    /// From the network service's thread: the body of the document
+    /// navigation `navigation_id` sent `frame` to commit has more in its
+    /// pipe, or its pipe is over (the pipe's watcher, Blink's
+    /// `NavigationBodyLoader::OnReadable`).
+    NavigationBody {
+        frame: protocol::FrameToken,
+        navigation_id: u64,
+    },
 }
 
 /// The scheduler's task queues (Blink's task queues by type), each in the
@@ -220,6 +228,31 @@ impl MainThreadScheduler {
             MainThreadTask::Worker { id, event },
             false,
         );
+    }
+
+    /// What the pipe of the body of the document navigation
+    /// `navigation_id` sent `frame` calls as it has more: a task in the
+    /// browser's queue, after the commit that brought it (once the
+    /// renderer is a process, the pipe's signal comes as the IPC
+    /// channel's messages do); dropped once the main thread has gone.
+    pub(crate) fn body_waker(
+        self: &Arc<Self>,
+        frame: protocol::FrameToken,
+        navigation_id: u64,
+    ) -> impl Fn() + Send + Sync + 'static {
+        let scheduler = Arc::downgrade(self);
+        move || {
+            if let Some(scheduler) = scheduler.upgrade() {
+                let _ = scheduler.post(
+                    TaskQueue::Browser,
+                    MainThreadTask::NavigationBody {
+                        frame,
+                        navigation_id,
+                    },
+                    false,
+                );
+            }
+        }
     }
 
     /// What wakes the main thread for its ports' messages from workers'
@@ -552,6 +585,9 @@ mod tests {
             MainThreadTask::CanvasEncoded { id, .. } => format!("canvas {id}"),
             MainThreadTask::Worker { id, .. } => format!("worker {id}"),
             MainThreadTask::PortMessages => "ports".to_owned(),
+            MainThreadTask::NavigationBody { navigation_id, .. } => {
+                format!("navigation body {navigation_id}")
+            }
             MainThreadTask::DevTools(DevToolsQueued::Message { message, .. }) => {
                 format!("devtools {message}")
             }

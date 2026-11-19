@@ -53,7 +53,7 @@ use protocol::automation::{
 };
 use protocol::devtools_network::{request_json, response_json, wall_time};
 use protocol::input::{InputEvent, KeyboardEvent, Modifiers, MouseButton, ScrollDelta};
-use protocol::network::{RequestDestination, ResourceRequest};
+use protocol::network::{CompletionStatus, RequestDestination, ResourceRequest, ResourceResponse};
 use protocol::renderer::RendererHostMsg;
 use protocol::viz::{CopyOutputRequest, CopyOutputResult, DisplayMsg, VizMsg};
 use protocol::webdriver::{ErrorKind, Locator, WebDriverCommand, WebDriverError, WebDriverValue};
@@ -1262,14 +1262,19 @@ impl AutomationSession {
                     }),
                 );
             }
-            ContentsEvent::NavigationCompleted {
+            ContentsEvent::NavigationResponseStarted {
                 frame,
                 navigation_id,
-                result: Ok(response),
+                head,
+                ..
+            }
+            | ContentsEvent::NavigationBlobLoaded {
+                frame,
+                navigation_id,
+                result: Ok(ResourceResponse { head, .. }),
             } => {
                 let frame_id = frame.to_string();
-                let timestamp = response
-                    .head
+                let timestamp = head
                     .timing
                     .map_or_else(TimeTicks::now, |timing| timing.receive_headers_end);
                 self.to_network(
@@ -1280,7 +1285,7 @@ impl AutomationSession {
                         "loaderId": navigation_id.to_string(),
                         "timestamp": timestamp.as_secs_f64(),
                         "type": "Document",
-                        "response": response_json(&response.head),
+                        "response": response_json(head),
                         "hasExtraInfo": false,
                         "frameId": frame_id,
                     }),
@@ -1291,6 +1296,14 @@ impl AutomationSession {
                 }
             }
             ContentsEvent::NavigationCompleted {
+                frame,
+                navigation_id,
+                status:
+                    CompletionStatus {
+                        error: Some(error), ..
+                    },
+            }
+            | ContentsEvent::NavigationBlobLoaded {
                 frame,
                 navigation_id,
                 result: Err(error),
@@ -1307,11 +1320,13 @@ impl AutomationSession {
                         "canceled": false,
                     }),
                 );
-                // Its error page commits.
+                // Its error page commits, if no response came.
                 if frame.to_string() == main_frame_id {
                     self.navigation_ready(tab, *navigation_id, Some(error_text));
                 }
             }
+            ContentsEvent::NavigationBodyReadable { .. }
+            | ContentsEvent::NavigationCompleted { .. } => {}
         }
     }
 

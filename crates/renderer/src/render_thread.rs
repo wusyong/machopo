@@ -27,6 +27,7 @@ use crate::navigation_timing::NavigationTiming;
 use crate::pending_user_input::{Pending, PendingUserInput};
 use crate::task_queue::{MainThreadScheduler, MainThreadTask, RendererReceiver, TaskQueues};
 
+mod body_loader;
 mod css_agent;
 mod devtools;
 mod documents;
@@ -335,6 +336,9 @@ struct RenderThread {
     /// the compositor and DevTools ask of it, which script paused takes some
     /// of too.
     scheduler: Arc<MainThreadScheduler>,
+    /// The documents the browser sent to commit whose bodies are still
+    /// coming.
+    body_loaders: body_loader::BodyLoaders,
     /// The DOM's document committed (`render_thread::next`): before
     /// the engine, as fields drop in order and its roots go before their
     /// heap.
@@ -493,6 +497,7 @@ impl RenderThread {
             css_refetches: std::collections::HashMap::new(),
             overlay_agent,
             scheduler,
+            body_loaders: body_loader::BodyLoaders::default(),
             engine: None,
             engine_is_wasm: false,
             images: std::collections::HashMap::new(),
@@ -660,6 +665,16 @@ impl RenderThread {
             }
             // Run with the DOM's tasks, as the loop next does.
             MainThreadTask::PortMessages => true,
+            MainThreadTask::NavigationBody {
+                frame,
+                navigation_id,
+            } => {
+                if let Some(loader) = self.body_loaders.get_mut(frame, navigation_id) {
+                    loader.read();
+                }
+                self.commit_if_ready(frame, navigation_id);
+                true
+            }
             MainThreadTask::DevTools(queued) => {
                 self.run_devtools_task(queued);
                 true
@@ -778,14 +793,17 @@ impl RenderThread {
             |(loaded, no_referrer)| crate::navigation_timing::DocumentLoad {
                 url: &url,
                 timing: loaded.timing,
-                response_end: loaded.response_end,
+                response_end: loaded
+                    .end
+                    .as_ref()
+                    .map_or_else(ipc::TimeTicks::now, |end| end.completion_time),
                 redirects: &loaded.redirects,
                 no_referrer,
                 protocol: &loaded.protocol,
                 status: loaded.status,
                 mime_type,
                 content_encoding: loaded.content_encoding.as_deref(),
-                encoded_body_size: loaded.encoded_body_length,
+                encoded_body_size: loaded.end.as_ref().map_or(0, |end| end.encoded_body_length),
                 decoded_body_size: u64::try_from(decoded_body_size).unwrap_or(u64::MAX),
             },
         );
@@ -822,6 +840,116 @@ impl RenderThread {
         timing
     }
 
+    /// Commits `commit`'s document with its whole `body`
+    /// (`RenderFrameImpl::CommitNavigation`, once its body has come).
+    fn commit_navigation_body(&mut self, commit: body_loader::NavigationCommit, body: bytes::Bytes) {
+        let body_loader::NavigationCommit {
+            frame,
+            navigation_id,
+            begin_id,
+            url,
+            error_page,
+            mime_type,
+            charset,
+            content_language,
+            history,
+            navigation_start,
+            loaded,
+            navigation_type,
+        } = commit;
+        let time_origin = self
+            .clock
+            .before_now(ipc::TimeTicks::now().saturating_since(navigation_start));
+        // The log names the document by it.
+        let loaded_url = url.clone();
+        // An error page's is a URL of no origin's, the browser still
+        // hearing of the one that failed.
+        let document_url = if error_page {
+            protocol::renderer::ERROR_PAGE_URL.to_owned()
+        } else {
+            url.clone()
+        };
+        let main_frame = Some(frame) == self.devtools_main_frame_token;
+        let no_referrer = !main_frame && self.child_no_referrer_of(frame, begin_id);
+        let timing = self.commit_timing(
+            &document_url,
+            &mime_type,
+            body.len(),
+            loaded.as_deref().map(|loaded| (loaded, no_referrer)),
+            navigation_type,
+            time_origin,
+        );
+        let committed = if main_frame {
+            let origin_source = begin_id
+                .and_then(|id| self.main_origin_source.take_if(|(asked, _)| *asked == id))
+                .map(|(_, source)| source);
+            self.commit_navigation(
+                navigation_id,
+                document_url,
+                url,
+                origin_source,
+                &mime_type,
+                charset.as_deref(),
+                content_language.as_deref(),
+                &body,
+                &history,
+                time_origin,
+                timing,
+            );
+            true
+        } else {
+            let Ok(document_url) = Url::parse(&document_url) else {
+                return;
+            };
+            self.commit_child_navigation(
+                frame,
+                begin_id,
+                documents::ChildDocument {
+                    url: document_url,
+                    mime_type: &mime_type,
+                    charset: charset.as_deref(),
+                    body: &body,
+                },
+                documents::ChildCommit {
+                    time_origin,
+                    timing,
+                    content_language: content_language.as_deref(),
+                    navigation_id,
+                    token: frame,
+                    url,
+                    origin_source: None,
+                    history,
+                },
+            )
+        };
+        // The rest of the request the browser told DevTools of, now
+        // that its document is here.
+        if committed && let Some(loaded) = loaded {
+            self.network_agent.did_commit_navigation(
+                navigation_id,
+                &body,
+                &mime_type,
+                &loaded,
+            );
+            if loaded.status >= 400 {
+                self.log_agent.add(log_agent::LogEntry::network(
+                    status_message(loaded.status, &loaded.status_text),
+                    loaded_url,
+                    navigation_id.to_string(),
+                ));
+            }
+        }
+    }
+
+    /// The document navigation `navigation_id` sent `frame` commits if its
+    /// body is all in and its load has ended.
+    fn commit_if_ready(&mut self, frame: protocol::FrameToken, navigation_id: u64) {
+        if let Some(loader) = self.body_loaders.take_ready(frame, navigation_id) {
+            let (commit, body) = loader.finish();
+            self.commit_navigation_body(commit, body);
+        }
+    }
+
     /// Returns false on shutdown.
     fn handle_message(&mut self, msg: RendererMsg) -> bool {
         match msg {
@@ -835,93 +963,48 @@ impl RenderThread {
                 charset,
                 content_language,
                 body,
+                body_pipe,
                 history,
                 navigation_start,
                 loaded,
                 navigation_type,
             } => {
-                let time_origin = self
-                    .clock
-                    .before_now(ipc::TimeTicks::now().saturating_since(navigation_start));
-                // The log names the document by it.
-                let loaded_url = url.clone();
-                // An error page's is a URL of no origin's, the browser still
-                // hearing of the one that failed.
-                let document_url = if error_page {
-                    protocol::renderer::ERROR_PAGE_URL.to_owned()
-                } else {
-                    url.clone()
-                };
-                let main_frame = Some(frame) == self.devtools_main_frame_token;
-                let no_referrer = !main_frame && self.child_no_referrer_of(frame, begin_id);
-                let timing = self.commit_timing(
-                    &document_url,
-                    &mime_type,
-                    body.len(),
-                    loaded.as_deref().map(|loaded| (loaded, no_referrer)),
+                let commit = body_loader::NavigationCommit {
+                    frame,
+                    navigation_id,
+                    begin_id,
+                    url,
+                    error_page,
+                    mime_type,
+                    charset,
+                    content_language,
+                    history,
+                    navigation_start,
+                    loaded,
                     navigation_type,
-                    time_origin,
-                );
-                let committed = if main_frame {
-                    let origin_source = begin_id
-                        .and_then(|id| self.main_origin_source.take_if(|(asked, _)| *asked == id))
-                        .map(|(_, source)| source);
-                    self.commit_navigation(
-                        navigation_id,
-                        document_url,
-                        url,
-                        origin_source,
-                        &mime_type,
-                        charset.as_deref(),
-                        content_language.as_deref(),
-                        &body,
-                        &history,
-                        time_origin,
-                        timing,
-                    );
-                    true
-                } else {
-                    let Ok(document_url) = Url::parse(&document_url) else {
-                        return true;
-                    };
-                    self.commit_child_navigation(
-                        frame,
-                        begin_id,
-                        documents::ChildDocument {
-                            url: document_url,
-                            mime_type: &mime_type,
-                            charset: charset.as_deref(),
-                            body: &body,
-                        },
-                        documents::ChildCommit {
-                            time_origin,
-                            timing,
-                            content_language: content_language.as_deref(),
-                            navigation_id,
-                            token: frame,
-                            url,
-                            origin_source: None,
-                            history,
-                        },
-                    )
                 };
-                // The rest of the request the browser told DevTools of, now
-                // that its document is here.
-                if committed && let Some(loaded) = loaded {
-                    self.network_agent.did_commit_navigation(
-                        navigation_id,
-                        &body,
-                        &mime_type,
-                        &loaded,
-                    );
-                    if loaded.status >= 400 {
-                        self.log_agent.add(log_agent::LogEntry::network(
-                            status_message(loaded.status, &loaded.status_text),
-                            loaded_url,
-                            navigation_id.to_string(),
-                        ));
+                let mut loader = body_loader::BodyLoader::new(commit, body, body_pipe);
+                loader.read();
+                if loader.is_ready() {
+                    self.body_loaders.forget_before(frame, navigation_id);
+                    let (commit, body) = loader.finish();
+                    self.commit_navigation_body(commit, body);
+                } else {
+                    if let Some(pipe) = loader.pipe_mut() {
+                        pipe.watch(self.scheduler.body_waker(frame, navigation_id));
                     }
+                    self.body_loaders.wait(loader);
                 }
+            }
+            RendererMsg::NavigationLoadCompleted {
+                frame,
+                navigation_id,
+                status,
+            } => {
+                if let Some(loader) = self.body_loaders.get_mut(frame, navigation_id) {
+                    loader.completed(status);
+                }
+                self.commit_if_ready(frame, navigation_id);
             }
             RendererMsg::NavigationDropped { frame, id } => self.navigation_dropped(frame, id),
             RendererMsg::CommitSameDocumentNavigation {

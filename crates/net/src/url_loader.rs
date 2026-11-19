@@ -142,7 +142,7 @@ impl Body {
 }
 
 /// `pieces` as one, copying only if there is more than one.
-pub(crate) fn concat(mut pieces: Vec<Bytes>) -> Bytes {
+pub fn concat(mut pieces: Vec<Bytes>) -> Bytes {
     match pieces.len() {
         0 => Bytes::new(),
         1 => pieces.swap_remove(0),

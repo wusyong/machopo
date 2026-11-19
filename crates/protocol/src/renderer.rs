@@ -7,21 +7,20 @@ use gfx::{Color, RectF, Size};
 use serde::{Deserialize, Serialize};
 
 use crate::input::InputEvent;
-use crate::network::{LoadResult, LoadTiming, RedirectInfo, ResourceRequest};
+use crate::network::{CompletionStatus, LoadResult, LoadTiming, RedirectInfo, ResourceRequest};
 
-/// What a navigation's load took (Chromium's `URLResponseHead` and
-/// `URLLoaderCompletionStatus`, the part DevTools' `Network.dataReceived`
-/// and `loadingFinished` tell): the bytes its head and body took on the
-/// wire, and when it ended; and its status, which the page's log tells of
-/// when it is 400 or more. With what Navigation Timing reads of it
-/// (Chromium's `NavigationTiming` in `CommitNavigationParams`).
+/// What a navigation's load took, as far as its head (Chromium's
+/// `URLResponseHead`, the part DevTools' `Network.responseReceived` tells):
+/// the bytes its head took on the wire, and its status, which the page's
+/// log tells of when it is 400 or more. With what Navigation Timing reads
+/// of it (Chromium's `NavigationTiming` in `CommitNavigationParams`). The
+/// bytes its body took and when it ended come once it has
+/// ([`CompletionStatus`], `URLLoaderCompletionStatus`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NavigationLoad {
     pub status: u16,
     pub status_text: String,
     pub encoded_headers_length: u64,
-    pub encoded_body_length: u64,
-    pub response_end: ipc::TimeTicks,
     /// When the parts of the last request happened (after the redirects).
     pub timing: Option<LoadTiming>,
     /// The redirects it followed, in order.
@@ -30,6 +29,9 @@ pub struct NavigationLoad {
     pub protocol: String,
     /// The response's `Content-Encoding`, as sent, if any.
     pub content_encoding: Option<String>,
+    /// How it ended, if it had by the time it committed; else
+    /// [`RendererMsg::NavigationLoadCompleted`] tells later.
+    pub end: Option<CompletionStatus>,
 }
 
 /// One redirect of a navigation: the URL it was the response to, when the
@@ -112,11 +114,11 @@ pub struct HistoryEntryParams {
 pub const ERROR_PAGE_URL: &str = "chrome-error://chromewebdata/";
 
 /// Browser -> Renderer (`content.mojom.Frame`, `blink.mojom.Widget`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Not `Clone`: a commit carries its body's data pipe.
+#[derive(Debug, Serialize, Deserialize)]
 pub enum RendererMsg {
-    /// `CommitNavigation`: the browser has fetched the response and frame
-    /// `frame` should show it. Chromium streams the body through a data
-    /// pipe; here it arrives whole.
+    /// `CommitNavigation`: the browser has the response's head and the
+    /// start of its body, and frame `frame` should show it.
     CommitNavigation {
         frame: crate::FrameToken,
         /// Increases with every navigation the browser starts. Responses
@@ -141,7 +143,18 @@ pub enum RendererMsg {
         /// `ResourceResponse::HttpContentLanguage`): the document's content
         /// language comes from it.
         content_language: Option<String>,
+        /// The body's first bytes (1024, or all of it if it is shorter),
+        /// or the whole body if it has no `body_pipe`.
         body: Bytes,
+        /// The rest of the body, as it comes (Chromium's `response_body`,
+        /// a data pipe's consumer handle): a document that came over the
+        /// network has one, which may be over already; a page of the
+        /// browser's own, an error page or a blob's comes whole. It
+        /// doesn't cross a process yet: one of its own would have it as a
+        /// handle in shared memory alongside the message, as Mojo's
+        /// messages carry handles.
+        #[serde(skip)]
+        body_pipe: Option<ipc::data_pipe::Consumer>,
         /// The entry it commits to, as the navigation started.
         history: HistoryEntryParams,
         /// When the navigation started (`CommonNavigationParams::
@@ -157,6 +170,16 @@ pub enum RendererMsg {
         loaded: Option<Box<NavigationLoad>>,
         /// How the navigation came about.
         navigation_type: NavigationTimingType,
+    },
+    /// `URLLoaderClient::OnComplete` of the load of the document navigation
+    /// `navigation_id` committed in `frame`, which hadn't ended when it
+    /// committed: its body is all in its pipe, or stopped short with an
+    /// error. Chromium's network service tells the renderer directly; here
+    /// the browser, which keeps the load, passes it on.
+    NavigationLoadCompleted {
+        frame: crate::FrameToken,
+        navigation_id: u64,
+        status: CompletionStatus,
     },
     /// `NavigationClient`'s disconnection, as Chromium's renderer hears it
     /// (`RenderFrameImpl::OnDroppedNavigation`): the navigation of `frame`

@@ -15,7 +15,6 @@ use crossbeam_channel::unbounded;
 use gfx::Size;
 use protocol::TabId;
 use protocol::input::InputEvent;
-use protocol::network::{LoadResult, RedirectInfo};
 use protocol::renderer::RendererHostMsg;
 use protocol::viz::{CompositorFrameSinkMsg, CopyOutputRequest, SharedImageInterface, VizMsg};
 use viz::{BeginFrameSource, Display, GpuSharedImages, WgpuRenderer};
@@ -49,10 +48,8 @@ enum Event {
     Host(browser::RendererId, RendererHostMsg),
     /// What a renderer's IO thread found bad.
     Bad(browser::RendererId, browser::BadMessageReason),
-    /// A frame's navigation reached a redirect.
-    Redirected(protocol::FrameToken, u64, RedirectInfo),
-    /// A frame's navigation loaded, or failed.
-    Completed(protocol::FrameToken, u64, LoadResult),
+    /// A frame's navigation's redirect, response, body's data or end.
+    Navigation(ContentsEvent),
     /// What headless doesn't look at.
     Other,
 }
@@ -256,17 +253,8 @@ fn drive(
             let _ = events_tx.send(match event {
                 ContentsEvent::Renderer { renderer, msg } => Event::Host(renderer, msg),
                 ContentsEvent::BadMessage { renderer, reason } => Event::Bad(renderer, reason),
-                ContentsEvent::NavigationRedirected {
-                    frame,
-                    navigation_id,
-                    redirect,
-                } => Event::Redirected(frame, navigation_id, redirect),
-                ContentsEvent::NavigationCompleted {
-                    frame,
-                    navigation_id,
-                    result,
-                } => Event::Completed(frame, navigation_id, result),
                 ContentsEvent::NavigationStarted(_) => Event::Other,
+                event => Event::Navigation(event),
             });
         }),
     )
@@ -393,12 +381,7 @@ fn drive(
                 | VizMsg::RegisterFrameSinkId(..)
                 | VizMsg::InvalidateFrameSinkId(_),
             )) => {}
-            Ok(Event::Redirected(frame, navigation_id, redirect)) => {
-                web_contents.on_navigation_redirected(frame, navigation_id, &redirect);
-            }
-            Ok(Event::Completed(frame, navigation_id, result)) => {
-                web_contents.on_navigation_completed(frame, navigation_id, result);
-            }
+            Ok(Event::Navigation(event)) => web_contents.on_navigation_event(event),
             Ok(Event::Bad(renderer, reason)) => {
                 if web_contents.is_current_renderer(renderer) {
                     web_contents.received_bad_message(reason);

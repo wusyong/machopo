@@ -6,7 +6,8 @@ use gfx::{RectF, Size};
 use ipc::TimeTicks;
 use net::NetworkContext;
 use protocol::network::{
-    LoadResult, NetError, NetErrorCode, RedirectInfo, RequestDestination, ResourceRequest,
+    CompletionStatus, LoadResult, NetError, NetErrorCode, RedirectInfo, RequestDestination,
+    ResourceRequest, ResponseHead,
 };
 use protocol::renderer::{
     BeginNavigationKind, HistoryEntryParams, NavigationLoad, NavigationTimingType, RedirectHop,
@@ -23,7 +24,7 @@ use crate::frame_tree::{CommittedOrigin, FrameTree};
 
 use crate::debug_urls::{DebugUrl, debug_url};
 use crate::navigation_controller::{HistoryLoad, NavigationController, NavigationType};
-use crate::navigation_request::{Loading, NavigationRequest};
+use crate::navigation_request::{DocumentLoad, Loading, NavigationRequest, NavigationResponse};
 use crate::render_process_host::{CommittedDocument, Committer, is_file_url};
 use crate::{RenderProcessHost, RendererFlags, RendererId, ScriptEngineFactory};
 
@@ -31,8 +32,11 @@ use crate::{RenderProcessHost, RendererFlags, RendererId, ScriptEngineFactory};
 /// each to the UI thread and hands it to the tab there (the renderer's
 /// messages to [`WebContents::on_renderer_message`], if
 /// [`WebContents::is_current_renderer`] says they count; a navigation's
-/// redirect to [`WebContents::on_navigation_redirected`] and its end to
-/// [`WebContents::on_navigation_completed`]; a bad message to
+/// redirect to [`WebContents::on_navigation_redirected`], its response to
+/// [`WebContents::on_navigation_response_started`], its body's data to
+/// [`WebContents::on_navigation_body_readable`] and its end to
+/// [`WebContents::on_navigation_completed`], a blob URL's whole to
+/// [`WebContents::on_navigation_blob_loaded`]; a bad message to
 /// [`WebContents::received_bad_message`]), as Chromium's IPC and its
 /// `NavigationURLLoader` post to the UI thread. A navigation's events
 /// aren't renderer messages: a renderer mustn't be able to send them.
@@ -62,15 +66,80 @@ pub enum ContentsEvent {
         navigation_id: u64,
         redirect: RedirectInfo,
     },
-    /// Navigation `navigation_id` of `frame` loaded, or failed
-    /// (`NavigationURLLoaderDelegate::OnResponseStarted`,
-    /// `OnRequestFailed`): it commits on the UI thread.
+    /// Navigation `navigation_id` of `frame` has its response's head
+    /// (`NavigationURLLoaderDelegate::OnResponseStarted`), and its body's
+    /// pipe: it commits on the UI thread once it has the body's start.
+    NavigationResponseStarted {
+        frame: FrameToken,
+        navigation_id: u64,
+        head: ResponseHead,
+        body: ipc::data_pipe::Consumer,
+    },
+    /// More of the body of navigation `navigation_id` of `frame` may be
+    /// read, while it hasn't committed: its pipe's watcher's, from the
+    /// network service's thread.
+    NavigationBodyReadable { frame: FrameToken, navigation_id: u64 },
+    /// The load of navigation `navigation_id` of `frame` ended
+    /// (`URLLoaderClient::OnComplete`): without a response, it failed
+    /// (`OnRequestFailed`), and its error page commits; else its body is
+    /// all in its pipe, or stopped short.
     NavigationCompleted {
+        frame: FrameToken,
+        navigation_id: u64,
+        status: CompletionStatus,
+    },
+    /// Navigation `navigation_id` of `frame` to a blob URL has its blob,
+    /// whole, or failed (`BlobURLLoaderFactory`): it commits on the UI
+    /// thread.
+    NavigationBlobLoaded {
         frame: FrameToken,
         navigation_id: u64,
         result: LoadResult,
     },
 }
+
+/// A navigation's load's client (`NavigationURLLoaderImpl`), on the network
+/// service's thread: what it hears, posted to the UI thread.
+struct NavigationClient {
+    frame: FrameToken,
+    navigation_id: u64,
+    post: Poster,
+}
+
+/// Posts an event to the UI thread, from any thread.
+type Poster = Arc<dyn Fn(ContentsEvent) + Send + Sync>;
+
+impl net::UrlLoaderClient for NavigationClient {
+    fn on_receive_redirect(&mut self, redirect: RedirectInfo) {
+        (self.post)(ContentsEvent::NavigationRedirected {
+            frame: self.frame,
+            navigation_id: self.navigation_id,
+            redirect,
+        });
+    }
+
+    fn on_receive_response(&mut self, head: ResponseHead, body: ipc::data_pipe::Consumer) {
+        (self.post)(ContentsEvent::NavigationResponseStarted {
+            frame: self.frame,
+            navigation_id: self.navigation_id,
+            head,
+            body,
+        });
+    }
+
+    fn on_complete(&mut self, status: CompletionStatus) {
+        (self.post)(ContentsEvent::NavigationCompleted {
+            frame: self.frame,
+            navigation_id: self.navigation_id,
+            status,
+        });
+    }
+}
+
+/// How many of a body's first bytes a navigation waits for before it
+/// commits (all of a shorter one): what the renderer chooses the engine
+/// and the encoding by, as `net::kMaxBytesToSniff`.
+const BODY_START_LENGTH: usize = 1024;
 
 /// A navigation as it started: of `frame` (the main frame's, if
 /// `main_frame`), to `url`; who asked, as DevTools' `Network.Initiator`
@@ -811,6 +880,8 @@ impl WebContents {
             redirects: Vec::new(),
             committer,
             load: Loading::default(),
+            response: None,
+            end: None,
         };
         match self.frame_tree.set_navigation(frame, navigation) {
             Ok(Some(before)) => self.replaced(frame, before),
@@ -818,45 +889,39 @@ impl WebContents {
             // Its frame went.
             Err(_) => return,
         }
-        // Its redirects and its end, to the UI thread (`NavigationURLLoader`
-        // tells its `NavigationRequest`).
-        let post = {
-            let on_event = self.launch.on_event.clone();
-            let tab = self.tab;
-            move |event| {
-                let on_event = on_event.lock().unwrap_or_else(|e| e.into_inner());
-                on_event(tab, event);
-            }
-        };
-        let completed = {
-            let post = post.clone();
-            move |result| {
-                post(ContentsEvent::NavigationCompleted {
-                    frame,
-                    navigation_id,
-                    result,
-                });
-            }
-        };
-        // A blob URL's blob, as it is now (`BlobURLLoaderFactory`).
+        // A blob URL's blob, as it is now (`BlobURLLoaderFactory`), whole.
         if crate::render_process_host::is_blob_url(&request.url) {
-            completed(self.network.load_blob_url(&request, None));
+            let result = self.network.load_blob_url(&request, None);
+            (self.poster())(ContentsEvent::NavigationBlobLoaded {
+                frame,
+                navigation_id,
+                result,
+            });
             return;
         }
-        let load = self.network.fetch_with_redirects(
-            request,
-            move |redirect| {
-                post(ContentsEvent::NavigationRedirected {
-                    frame,
-                    navigation_id,
-                    redirect,
-                });
-            },
-            completed,
-        );
+        // Its redirects, its response and its end, to the UI thread
+        // (`NavigationURLLoader` tells its `NavigationRequest`).
+        let client = NavigationClient {
+            frame,
+            navigation_id,
+            post: self.poster(),
+        };
+        let load = self
+            .network
+            .load(request, net::AtRedirects::Wait, client);
         if let Some(navigation) = self.frame_tree.navigation_mut(frame, navigation_id) {
             navigation.load.set(load);
         }
+    }
+
+    /// What posts an event to the UI thread, as the network's are.
+    fn poster(&self) -> Poster {
+        let on_event = self.launch.on_event.clone();
+        let tab = self.tab;
+        Arc::new(move |event| {
+            let on_event = on_event.lock().unwrap_or_else(|e| e.into_inner());
+            on_event(tab, event);
+        })
     }
 
     /// The document of `frame`'s navigation to `url`, as `initiator` asked,
@@ -966,7 +1031,7 @@ impl WebContents {
         committer: Committer,
         document: CommittedDocument,
         origin: Option<CommittedOrigin>,
-    ) {
+    ) -> crate::render_process_host::LoadCompleter {
         let origin = origin.unwrap_or_else(|| document.origin());
         let local = origin.local;
         if frame == self.frame_tree.root() {
@@ -976,11 +1041,53 @@ impl WebContents {
         }
         self.frame_tree
             .committing(frame, navigation_id, &document.url, origin);
+        let before = self.frame_tree.take_any_document_load(frame);
         let mut committer = committer;
         if let Some(place) = self.controller.commit_place(navigation_id) {
             committer.set_history_place(place);
         }
-        committer.commit(navigation_id, document);
+        let completer = committer.commit(navigation_id, document);
+        // The document before is no more: its body stops, and the renderer
+        // hears it was aborted after the commit that takes its place (it
+        // would commit what it has of it, else).
+        drop(before);
+        completer
+    }
+
+    /// One of a navigation's events (its redirect, response, body's data,
+    /// end, or a blob URL's whole), on the UI thread, to the method that
+    /// takes it; any other is no navigation's, and is left.
+    pub fn on_navigation_event(&mut self, event: ContentsEvent) {
+        match event {
+            ContentsEvent::NavigationRedirected {
+                frame,
+                navigation_id,
+                redirect,
+            } => self.on_navigation_redirected(frame, navigation_id, &redirect),
+            ContentsEvent::NavigationResponseStarted {
+                frame,
+                navigation_id,
+                head,
+                body,
+            } => self.on_navigation_response_started(frame, navigation_id, head, body),
+            ContentsEvent::NavigationBodyReadable {
+                frame,
+                navigation_id,
+            } => self.on_navigation_body_readable(frame, navigation_id),
+            ContentsEvent::NavigationCompleted {
+                frame,
+                navigation_id,
+                status,
+            } => self.on_navigation_completed(frame, navigation_id, status),
+            ContentsEvent::NavigationBlobLoaded {
+                frame,
+                navigation_id,
+                result,
+            } => self.on_navigation_blob_loaded(frame, navigation_id, result),
+            ContentsEvent::Renderer { .. }
+            | ContentsEvent::BadMessage { .. }
+            | ContentsEvent::NavigationStarted(_) => {}
+        }
     }
 
     /// Navigation `navigation_id` of `frame` reached a redirect
@@ -999,11 +1106,174 @@ impl WebContents {
         }
     }
 
-    /// Navigation `navigation_id` of `frame` loaded, or failed
-    /// (`NavigationRequest::OnResponseStarted`, `OnRequestFailed`, on the UI
-    /// thread): its document, or the error page, commits, unless another
-    /// navigation has replaced it, or its frame went.
+    /// Navigation `navigation_id` of `frame` has its response's head
+    /// (`NavigationRequest::OnResponseStarted`, on the UI thread): it
+    /// commits once it has the body's first bytes, or all of a shorter
+    /// one, unless another navigation has replaced it (its load was
+    /// cancelled then), or its frame went.
+    pub fn on_navigation_response_started(
+        &mut self,
+        frame: FrameToken,
+        navigation_id: u64,
+        head: ResponseHead,
+        mut body: ipc::data_pipe::Consumer,
+    ) {
+        let post = self.poster();
+        let Some(navigation) = self.frame_tree.navigation_mut(frame, navigation_id) else {
+            return;
+        };
+        body.watch(move || {
+            post(ContentsEvent::NavigationBodyReadable {
+                frame,
+                navigation_id,
+            });
+        });
+        navigation.response = Some(NavigationResponse {
+            head,
+            body,
+            start: Vec::new(),
+            start_length: 0,
+            done: false,
+        });
+        self.read_body_start(frame, navigation_id);
+    }
+
+    /// More of the body of navigation `navigation_id` of `frame` may be
+    /// read: it commits if it has its start now.
+    pub fn on_navigation_body_readable(&mut self, frame: FrameToken, navigation_id: u64) {
+        self.read_body_start(frame, navigation_id);
+    }
+
+    /// Reads the start of the body of navigation `navigation_id` of
+    /// `frame`, if it is still on its way, and commits it once it is in.
+    fn read_body_start(&mut self, frame: FrameToken, navigation_id: u64) {
+        let Some(navigation) = self.frame_tree.navigation_mut(frame, navigation_id) else {
+            return;
+        };
+        let Some(response) = &mut navigation.response else {
+            return;
+        };
+        while !response.done && response.start_length < BODY_START_LENGTH {
+            match response
+                .body
+                .read(BODY_START_LENGTH.saturating_sub(response.start_length))
+            {
+                ipc::data_pipe::Read::Data(data) => {
+                    response.start_length = response.start_length.saturating_add(data.len());
+                    response.start.push(data);
+                }
+                ipc::data_pipe::Read::Empty => return,
+                ipc::data_pipe::Read::Done => response.done = true,
+            }
+        }
+        self.commit_response(frame, navigation_id);
+    }
+
+    /// The load of navigation `navigation_id` of `frame` ended: without a
+    /// response, it failed (`NavigationRequest::OnRequestFailed`), and its
+    /// error page commits; with one before it committed, it commits with
+    /// what came; after, the renderer hears how it ended. Unless another
+    /// navigation has replaced it, another document has committed in the
+    /// frame since, or its frame went.
     pub fn on_navigation_completed(
+        &mut self,
+        frame: FrameToken,
+        navigation_id: u64,
+        status: CompletionStatus,
+    ) {
+        if let Some(load) = self.frame_tree.take_document_load(frame, navigation_id) {
+            load.complete(status);
+            return;
+        }
+        let Some(navigation) = self.frame_tree.navigation_mut(frame, navigation_id) else {
+            return;
+        };
+        if navigation.response.is_some() {
+            // The body is all in its pipe by now: read the rest of its
+            // start.
+            navigation.end = Some(status);
+            self.read_body_start(frame, navigation_id);
+            return;
+        }
+        let Some(navigation) = self.frame_tree.take_navigation(frame, navigation_id) else {
+            return;
+        };
+        let error = status.error.unwrap_or_else(|| {
+            NetError::new(NetErrorCode::Failed, "the load ended without a response")
+        });
+        tracing::warn!(url = %navigation.url, code = error.code.name(), detail = %error.detail, "navigation failed");
+        let document = CommittedDocument::error_page(
+            navigation.url.clone(),
+            crate::loader::error_page(&error),
+        );
+        self.commit(frame, navigation_id, navigation.committer, document, None);
+    }
+
+    /// Navigation `navigation_id` of `frame`, which has its response and
+    /// the start of its body, commits: its load, if it hasn't ended, kept
+    /// until it does.
+    fn commit_response(&mut self, frame: FrameToken, navigation_id: u64) {
+        let Some(navigation) = self.frame_tree.take_navigation(frame, navigation_id) else {
+            return;
+        };
+        let NavigationRequest {
+            committer,
+            redirects,
+            load,
+            response,
+            end,
+            ..
+        } = navigation;
+        let Some(response) = response else {
+            return;
+        };
+        let NavigationResponse {
+            head,
+            body,
+            start,
+            done,
+            ..
+        } = response;
+        let header = |name: &str| {
+            head.headers
+                .iter()
+                .find(|(header, _)| header == name)
+                .map(|(_, value)| value.clone())
+        };
+        let content_language = header("content-language");
+        let content_encoding = header("content-encoding");
+        let ended = end.is_some();
+        let loaded = NavigationLoad {
+            status: head.status,
+            status_text: head.status_text.clone(),
+            encoded_headers_length: head.encoded_headers_length,
+            timing: head.timing,
+            redirects,
+            protocol: head.protocol.clone(),
+            content_encoding,
+            end,
+        };
+        let document = CommittedDocument {
+            url: head.url,
+            mime_type: head.mime_type,
+            charset: head.charset,
+            content_language,
+            body: net::concat(start),
+            body_pipe: (!done).then_some(body),
+            loaded: Some(loaded),
+            error_page: false,
+        };
+        let completer = self.commit(frame, navigation_id, committer, document, None);
+        if !ended {
+            self.frame_tree
+                .set_document_load(frame, DocumentLoad::new(navigation_id, load, completer));
+        }
+    }
+
+    /// Navigation `navigation_id` of `frame` to a blob URL has its blob,
+    /// whole, or failed (on the UI thread): it commits, unless another
+    /// navigation has replaced it, or its frame went.
+    pub fn on_navigation_blob_loaded(
         &mut self,
         frame: FrameToken,
         navigation_id: u64,
@@ -1020,38 +1290,35 @@ impl WebContents {
         } = navigation;
         let document = match result {
             Ok(response) => {
-                let content_language = response
-                    .head
+                let head = response.head;
+                let content_language = head
                     .headers
                     .iter()
                     .find(|(name, _)| name == "content-language")
                     .map(|(_, value)| value.clone());
-                let content_encoding = response
-                    .head
-                    .headers
-                    .iter()
-                    .find(|(name, _)| name == "content-encoding")
-                    .map(|(_, value)| value.clone());
                 let loaded = NavigationLoad {
-                    status: response.head.status,
-                    status_text: response.head.status_text.clone(),
-                    encoded_headers_length: response.head.encoded_headers_length,
-                    encoded_body_length: response.encoded_body_length,
-                    response_end: response
-                        .head
-                        .timing
-                        .map_or_else(TimeTicks::now, |timing| timing.response_end),
-                    timing: response.head.timing,
+                    status: head.status,
+                    status_text: head.status_text.clone(),
+                    encoded_headers_length: head.encoded_headers_length,
+                    timing: head.timing,
                     redirects,
-                    protocol: response.head.protocol.clone(),
-                    content_encoding,
+                    protocol: head.protocol.clone(),
+                    content_encoding: None,
+                    end: Some(CompletionStatus {
+                        error: None,
+                        encoded_body_length: response.encoded_body_length,
+                        completion_time: head
+                            .timing
+                            .map_or_else(TimeTicks::now, |timing| timing.response_end),
+                    }),
                 };
                 CommittedDocument {
-                    url: response.head.url,
-                    mime_type: response.head.mime_type,
-                    charset: response.head.charset,
+                    url: head.url,
+                    mime_type: head.mime_type,
+                    charset: head.charset,
                     content_language,
                     body: response.body,
+                    body_pipe: None,
                     loaded: Some(loaded),
                     error_page: false,
                 }

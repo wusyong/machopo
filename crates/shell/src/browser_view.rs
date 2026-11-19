@@ -1482,23 +1482,10 @@ impl BrowserView {
             }
             // For DevTools.
             ContentsEvent::NavigationStarted(_) => None,
-            ContentsEvent::NavigationRedirected {
-                frame,
-                navigation_id,
-                redirect,
-            } => {
+            // A navigation's.
+            event => {
                 if let Some(contents) = self.contents_mut(tab) {
-                    contents.on_navigation_redirected(frame, navigation_id, &redirect);
-                }
-                None
-            }
-            ContentsEvent::NavigationCompleted {
-                frame,
-                navigation_id,
-                result,
-            } => {
-                if let Some(contents) = self.contents_mut(tab) {
-                    contents.on_navigation_completed(frame, navigation_id, result);
+                    contents.on_navigation_event(event);
                 }
                 None
             }

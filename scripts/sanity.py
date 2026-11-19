@@ -252,6 +252,12 @@ PROTOCOL_NOT_SERIALIZABLE = re.compile(
     r"serde\(skip\)|\bArc<dyn\b|\bBox<dyn\b|\bRc<|\bWeak<|\bfn\(|\bimpl\s+Fn|\bdyn\s+Fn"
 )
 PROTOCOL_ALLOWED = {
+    "crates/protocol/src/renderer.rs": {
+        # Exception 7: a navigation's body's data pipe, in its commit (a
+        # handle in shared memory alongside the message, as Mojo's, once
+        # the renderer is a process).
+        "#[serde(skip)]": "exception 7: the body's data pipe in `CommitNavigation`",
+    },
     "crates/protocol/src/viz.rs": {
         # Exception 1: the shared image's backing, the GPU texture Viz made
         # for a tile (RFC 0004's step 1 makes it a mailbox table).
