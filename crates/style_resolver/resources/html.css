@@ -496,10 +496,12 @@ input[type=password i] {
 }
 
 /* A text control's placeholder, its UA shadow tree's element (whose
-   `display` the control sets: shown while the value is empty) */
+   `display` the control sets: shown while the value is empty); its
+   direction is the control's, whatever a page says */
 ::-webkit-input-placeholder {
   -webkit-text-security: none;
   color: #757575;
+  direction: inherit !important;
   pointer-events: none !important;
   text-overflow: inherit;
   line-height: initial;

@@ -180,6 +180,17 @@ fn a_color_changes_a_brs_style_in_place() {
     page.check();
 }
 
+/// A `<br>` in a block whose `unicode-bidi` adds bidi controls around its
+/// content (of no element and no text, like the newline) has its own
+/// newline's run changed in place.
+#[test]
+fn a_brs_style_in_place_past_bidi_controls() {
+    let mut page =
+        Page::new("<body><p id=p style='unicode-bidi: bidi-override'>One<br id=br>two</p></body>");
+    assert_eq!(set_style(&mut page, "br", "color: green"), update(0, 0, 1));
+    page.check();
+}
+
 /// A style changed in place reaches the hyphen a soft hyphen ends a line
 /// with: it takes its run's style and element as the lines are made into
 /// fragments, and no text node's part.

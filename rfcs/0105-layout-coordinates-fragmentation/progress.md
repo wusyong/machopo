@@ -15,7 +15,7 @@
 | 1e 第 1 階段的檢查和文件 | 完成 | 2026-11-19 |
 | 2a style：`direction`、`unicode-bidi`、`dir`、`:dir()` | 完成 | 2026-11-19 |
 | 2b 邏輯屬性照 `direction`、layout 用 `direction` | 完成 | 2026-11-19 |
-| 2c `unicode-bidi` 在 inline 內容裡 | | |
+| 2c `unicode-bidi` 在 inline 內容裡 | 完成 | 2026-11-19 |
 | 2d 捲動的原點、sticky、`text-overflow`、`<select>` | | |
 | 2e 第 2 階段的檢查和文件 | | |
 
@@ -137,3 +137,16 @@ macOS、Apple M4，2026-11-19。
 - `docs/test-gaps.md`「只靠審查」的那一條只剩直排；`docs/limitations.md` 的 table 那一條拿掉「欄一律從左排」那一句。
 - mutation test（`mutants-2b2.toml`）7 個，全部抓到。
 - 跑過：`cargo test -p layout -p paint`；`test.py reftest text/ inline/ tables/ floats/ position/`（34 個）。
+
+### 2c：`unicode-bidi` 在 inline 內容裡
+
+macOS、Apple M4，2026-11-19。
+
+- 建 inline 內容時照元素的 `unicode-bidi` 和 `direction` 在它的開頭、結尾插入 bidi 控制字元（block 的 `bidi-override`、`isolate-override` 套在整段上），強制換行前後關掉、重開，一段裡沒有字元的元素不插（第 12、16 條）；控制字元是自己的 run，沒有 DOM 的來源，不畫、不算內容，text 節點的對應跳過它們（插在一個 run 中間時切開那個 run）。`unicode-bidi: plaintext` 的 block 的段落方向是 parley 的 `Auto`（第 14 條）。
+- 行內元素的邊界照元素的方向給寬度（第 13 條），parley 排好一行之後照視覺順序重新擺每個 glyph run、atomic inline 和行內的 out-of-flow 盒子，盒子在這一行最左邊的項目前面加它左邊的邊界、最右邊的後面加右邊的（第 15 條）。先試過 A（改 parley 的 fork，開頭的邊界拿後面那段內容的 level，照 level 的奇偶決定邊界在哪一邊）：bidi 的 WPT 結果一樣，但內容和元素方向相反的盒子跨行時邊界在相反的一邊、巢狀而且方向混合的 embedding 拿錯 level，改成 B，fork 的 commit 沒有 push、丟掉了。
+- `::placeholder` 的 UA 樣式加上 `direction: inherit !important`（Blink 的 `html.css`）：2b 讓 layout 照 `direction` 之後，`css-pseudo/placeholder-excluded-properties` 的 placeholder 跟著頁面的 `direction: rtl` 靠右。
+- 補測試時找到、修好的：強制換行沒有關掉、重開 embedding（`<br>` 之後的內容掉出元素的 isolate）；只有控制字元的行有一行的高度（只放 out-of-flow 盒子的 `<span dir=rtl>`、`<br>` 結尾的 `<span dir=rtl>` 之後多一行）；保留的換行在 run 中間時，插入的控制字元落在 run 裡面，切 run 的字串時 panic（WPT 的 `content-175`、`marker-content-018`、`firefox-bug-1904419` crash）；行內的 out-of-flow 盒子的靜態位置照 parley 放的位置，不照重擺之後的。
+- 新的測試：`layout` 的 `direction::`（`unicode-bidi` 的每個值、block 的 override、`plaintext`、邊界在它那一邊、跨行的 `rtl` 盒子、控制字元不算內容、強制換行之後的 embedding）、`text_rects::past_bidi_controls_around_a_newline`、`update::a_brs_style_in_place_past_bidi_controls`。
+- WPT：`css/CSS2/bidi-text/`、`html/rendering/bidi-rendering/` 和 css-writing-modes 的 `bidi-*`、`unicode-bidi-*`（85 份）加進 `include.txt`；沒過的 21 份寫在 `.ini`：被 bidi 拆成不相連的幾段的盒子畫成一個（`bidi-001` 到 `bidi-011`）、`plaintext` 的 `<br>` 不分段、`ch` 單位、`innerText`、`bidi-glyph-mirroring-002` 的希伯來字之後差一個像素（還沒查）。變成通過的 `css-text/word-break/word-break-break-all-004`、`word-break-normal-ar-000`、`html/dom/elements/global-attributes/dir_auto-isolate`，拿掉 `.ini`；另外 6 份 `dir_auto-*` 的 `.ini` 原本寫 layout 沒有 bidi，改成實際的原因（`plaintext` 整段當成一段）。跑過的目錄（`css/CSS2/`、`css-text`、`css-inline`、`css-writing-modes`、`css-pseudo`、`html/rendering/`、`html/dom/elements/global-attributes/`，12547 項）沒有意外的失敗；意外通過的 6 份是 macOS 上已知的不一致（之前的 commit 就是）。
+- mutation test（`mutants-2c.toml`）37 個：33 個抓到；沒抓到的 4 個：3 個是等價的（close 控制字元在它的 tag 之前或之後：邊界照方向重擺，和它的 level 無關；強制換行前關掉 embedding 的順序：UBA 的 X8 在段落分隔字元結束所有 embedding；只有控制字元的行：控制字元只插在有內容的地方，和那些內容在同一行，碰不到）、1 個補了測試（切開的 run 的字元的對應：`text_rects::past_bidi_controls_around_a_newline`）。第一輪的 8 個沒抓到的另外補了測試（override 和 isolate-override 要有左到右的文字才和 embed 不同、`<br>` 在 block 的 override 裡、右邊的 margin 和只有一邊的邊界要後面還有東西）。
+- 跑過：`cargo test -p layout -p paint -p style -p style_resolver`；`test.py reftest text/ inline/ floats/ position/`（31 個）；`sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs。

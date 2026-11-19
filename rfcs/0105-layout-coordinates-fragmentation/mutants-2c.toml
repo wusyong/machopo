@@ -1,0 +1,230 @@
+# Stage 2c: `unicode-bidi` as bidi controls in the text, and inline boxes'
+# edges placed after bidi reordering.
+test = ["sh", "-c", "cargo test -q -p layout --test it -- direction:: inline:: update:: text_rects:: && cargo test -q -p paint --test it"]
+timeout = 900
+
+[[mutant]]
+name = "embed adds nothing"
+file = "crates/layout/src/text.rs"
+from = '''        UnicodeBidi::Embed => (pick("\u{202A}", "\u{202B}"), "\u{202C}"),'''
+to = '''        UnicodeBidi::Embed => return None,'''
+
+[[mutant]]
+name = "isolate adds nothing"
+file = "crates/layout/src/text.rs"
+from = '''        UnicodeBidi::Isolate => (pick("\u{2066}", "\u{2067}"), "\u{2069}"),'''
+to = '''        UnicodeBidi::Isolate => return None,'''
+
+[[mutant]]
+name = "an override only embeds"
+file = "crates/layout/src/text.rs"
+from = '''        UnicodeBidi::BidiOverride => (pick("\u{202D}", "\u{202E}"), "\u{202C}"),'''
+to = '''        UnicodeBidi::BidiOverride => (pick("\u{202A}", "\u{202B}"), "\u{202C}"),'''
+
+[[mutant]]
+name = "isolate-override only isolates"
+file = "crates/layout/src/text.rs"
+from = '''            pick("\u{2066}\u{202D}", "\u{2067}\u{202E}"),
+            "\u{202C}\u{2069}",'''
+to = '''            pick("\u{2066}", "\u{2067}"),
+            "\u{2069}",'''
+
+[[mutant]]
+name = "an inline plaintext adds nothing"
+file = "crates/layout/src/text.rs"
+from = '''        UnicodeBidi::Plaintext => ("\u{2068}", "\u{2069}"),'''
+to = '''        UnicodeBidi::Plaintext => return None,'''
+
+[[mutant]]
+name = "controls always left to right"
+file = "crates/layout/src/text.rs"
+from = '''    let pick = |ltr: &'static str, rtl_one: &'static str| if rtl { rtl_one } else { ltr };'''
+to = '''    let pick = |ltr: &'static str, _rtl_one: &'static str| ltr;'''
+
+[[mutant]]
+name = "a plaintext block's direction is its own"
+file = "crates/layout/src/text.rs"
+from = '''            _ if container.unicode_bidi == UnicodeBidi::Plaintext => parley::BaseDirection::Auto,'''
+to = ''''''
+
+[[mutant]]
+name = "controls are content"
+file = "crates/layout/src/text.rs"
+from = '''                source.is_none() && text[range.clone()].chars().all(is_bidi_control)'''
+to = '''                false'''
+
+[[mutant]]
+name = "a line of controls holds content"
+file = "crates/layout/src/text.rs"
+from = '''                PositionedLayoutItem::GlyphRun(glyph_run) => !self.is_control(&glyph_run),'''
+to = '''                PositionedLayoutItem::GlyphRun(_) => true,'''
+
+[[mutant]]
+name = "any run of a newline without a node is a break"
+file = "crates/layout/src/text.rs"
+from = '''                node.is_none() && source.is_none() && text[range.clone()] == *"\n"'''
+to = '''                node.is_none() && source.is_none()'''
+
+[[mutant]]
+name = "edges sized as ltr"
+file = "crates/layout/src/text.rs"
+from = '''                left: start != is_rtl(&elements[element].style),'''
+to = '''                left: start,'''
+
+[[mutant]]
+name = "no left margin placed"
+file = "crates/layout/src/text.rs"
+from = '''                    pos += edge.margin.left;'''
+to = ''''''
+
+[[mutant]]
+name = "no left border and padding placed"
+file = "crates/layout/src/text.rs"
+from = '''                    pos += edge.border.left + edge.padding.left;'''
+to = ''''''
+
+[[mutant]]
+name = "no right padding and border placed"
+file = "crates/layout/src/text.rs"
+from = '''                    pos += edge.padding.right + edge.border.right;'''
+to = ''''''
+
+[[mutant]]
+name = "no right margin placed"
+file = "crates/layout/src/text.rs"
+from = '''                    pos += edge.margin.right;'''
+to = ''''''
+
+[[mutant]]
+name = "items stay where parley put them"
+file = "crates/layout/src/text.rs"
+from = '''            shift[unit] = pos - x;'''
+to = ''''''
+
+[[mutant]]
+name = "an empty box isn't placed"
+file = "crates/layout/src/text.rs"
+from = '''                .any(|&(unit, ..)| within[unit].contains(&element))'''
+to = '''                .any(|_| true)'''
+
+[[mutant]]
+name = "a left edge before the rightmost"
+file = "crates/layout/src/text.rs"
+from = '''                if span(element).is_some_and(|span| span.1 == at) && has(element, true) {'''
+to = '''                if span(element).is_some_and(|span| span.2 == at) && has(element, true) {'''
+
+[[mutant]]
+name = "either edge is both"
+file = "crates/layout/src/text.rs"
+from = '''                .any(|&(_, _, of, is_left, _)| of == element && is_left == left)'''
+to = '''                .any(|&(_, _, of, is_left, _)| of == element && (is_left || !left))'''
+
+[[mutant]]
+name = "hanging white space before a right edge"
+file = "crates/layout/src/text.rs"
+from = '''                    let width = glyph_run.advance().min(content_end - glyph_run.offset());'''
+to = '''                    let width = glyph_run.advance();'''
+
+[[mutant]]
+name = "a line starting with an edge starts after it"
+file = "crates/layout/src/text.rs"
+from = '''                    line_left = line_left.min(inline_box.x);'''
+to = ''''''
+
+[[mutant]]
+name = "the box's left not at its left edge"
+file = "crates/layout/src/text.rs"
+from = '''                                line_box.left = line_box.left.min(origin.x + edge_x);'''
+to = ''''''
+
+[[mutant]]
+name = "the box's right not at its right edge"
+file = "crates/layout/src/text.rs"
+from = '''                                line_box.right = line_box.right.max(origin.x + edge_x);'''
+to = ''''''
+
+[[mutant]]
+name = "borders drawn by start and end"
+file = "crates/layout/src/text.rs"
+from = '''        let (left_edge, right_edge) = (line_box.left_edge, line_box.right_edge);'''
+to = '''        let (left_edge, right_edge) = (line_box.first, line_box.last);'''
+
+[[mutant]]
+name = "a shifted run cut where it was"
+file = "crates/layout/src/text.rs"
+from = '''                            content_end + dx,'''
+to = '''                            content_end,'''
+
+[[mutant]]
+name = "what follows an element's start tag isn't in it"
+file = "crates/layout/src/text.rs"
+from = '''                start.is_none_or(|start| start < seq) && end.is_none_or(|end| seq <= end)'''
+to = '''                start.is_none_or(|start| start < seq) && end.is_none_or(|end| seq < end)'''
+
+[[mutant]]
+name = "a placeholder takes the page's direction"
+file = "crates/style_resolver/resources/html.css"
+from = '''  direction: inherit !important;
+  pointer-events: none !important;'''
+to = '''  pointer-events: none !important;'''
+test = ["python3", "scripts/test.py", "wpt", "css/css-pseudo/placeholder-excluded-properties.html"]
+
+[[mutant]]
+name = "a block's ltr override embeds"
+file = "crates/layout/src/text.rs"
+from = '''            controls: (if rtl { "\u{202E}" } else { "\u{202D}" }, "\u{202C}"),'''
+to = '''            controls: (if rtl { "\u{202E}" } else { "\u{202A}" }, "\u{202C}"),'''
+
+[[mutant]]
+name = "a forced break ends no embedding"
+file = "crates/layout/src/text.rs"
+from = '''    for (newline, _) in text.match_indices('\n') {'''
+to = '''    for (newline, _) in text.match_indices('\u{0}') {'''
+
+[[mutant]]
+name = "controls around nothing"
+file = "crates/layout/src/text.rs"
+from = '''            if start >= end {'''
+to = '''            if start > end {'''
+
+[[mutant]]
+name = "embeddings open again innermost first"
+file = "crates/layout/src/text.rs"
+from = '''                _ => (0, depth),'''
+to = '''                _ => (0, usize::MAX.saturating_sub(depth)),'''
+
+[[mutant]]
+name = "embeddings closed before a break outermost first"
+file = "crates/layout/src/text.rs"
+from = '''                _ => (usize::MAX, usize::MAX.saturating_sub(depth)),'''
+to = '''                _ => (usize::MAX, depth),'''
+
+[[mutant]]
+name = "a close control before its tag"
+file = "crates/layout/src/text.rs"
+from = '''            .saturating_add(usize::from(after))'''
+to = '''            .saturating_add(0)'''
+
+[[mutant]]
+name = "text at a control's byte stays before it"
+file = "crates/layout/src/text.rs"
+from = '''                None => byte < text.len(),'''
+to = '''                None => false,'''
+
+[[mutant]]
+name = "a run isn't cut where a control goes inside it"
+file = "crates/layout/src/text.rs"
+from = '''            if from < at && at < range.end {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "a run's characters shifted as its start"
+file = "crates/layout/src/text.rs"
+from = '''                let by: u32 = base::numerics::saturated_cast(shift_at(*byte as usize, None));'''
+to = '''                let by: u32 = base::numerics::saturated_cast(shift_at(range.start, None));'''
+
+[[mutant]]
+name = "a static position where parley put it"
+file = "crates/layout/src/text.rs"
+from = '''                                        origin.x + inline_box.x + placement.shift[at],'''
+to = '''                                        origin.x + inline_box.x,'''

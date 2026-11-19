@@ -21,7 +21,7 @@ use std::sync::{Arc, OnceLock};
 
 use computed_style::{
     ComputedStyle, Display, FontStyle, Hyphens, LengthPercentage, LengthPercentageOrAuto,
-    LineHeight, OverflowWrap, Position, PseudoId, Sides, TextAlign, TextTransform,
+    LineHeight, OverflowWrap, Position, PseudoId, Sides, TextAlign, TextTransform, UnicodeBidi,
     WhiteSpaceCollapse, WordBreak,
 };
 use gfx::NodeId;
@@ -653,6 +653,20 @@ pub(crate) struct InlineContent {
     text_indent: LengthPercentage,
     /// The inline elements with an edge here, in tree order.
     elements: Vec<InlineElement>,
+    /// Where each element starts and ends among the tags (its start and
+    /// end tags' indexes; `None`: before this content, after it), the
+    /// tags' bytes in the text, and each run's first byte by its brush:
+    /// what is in which element, in the text's order, which a line's
+    /// visual order (bidi) doesn't keep.
+    element_spans: Vec<(Option<usize>, Option<usize>)>,
+    tag_bytes: Vec<usize>,
+    run_starts: Vec<usize>,
+    /// Whether each run, by its brush, is bidi control characters
+    /// (`insert_bidi_controls`): read by the bidi algorithm, not content
+    /// (Blink's opaque `kBidiControl` items): not drawn, hit or counted.
+    controls: Vec<bool>,
+    /// Each parley inline box's tag, by its id.
+    box_tags: Vec<usize>,
     /// What each parley inline box is, by its id.
     boxes: Vec<BoxItem>,
     /// The atomic inlines' boxes, in order.
@@ -663,9 +677,6 @@ pub(crate) struct InlineContent {
     /// The floats here, in order, with their margin boxes as last laid
     /// out and where the lines last placed them, from the content box.
     floats: Vec<InlineFloat>,
-    /// Elements that started before this content (a block inside them
-    /// split them), outermost first.
-    open_at_start: Vec<usize>,
     /// What percentages in the edges resolve against: the containing
     /// block's width the boxes were last sized in, or 0 with none.
     percent_base: f32,
@@ -732,8 +743,14 @@ struct InlineFloat {
 }
 
 enum BoxItem {
-    /// An element's start or end edge.
-    Edge { element: usize, start: bool },
+    /// An element's start or end edge, and whether it is on its box's
+    /// left side: an `ltr` element's start edge, an `rtl` one's end edge
+    /// (CSS 2 § 8.6).
+    Edge {
+        element: usize,
+        start: bool,
+        left: bool,
+    },
     /// An atomic inline, by its index in `atomics`: its margin box is the
     /// parley box.
     Atomic(usize),
@@ -777,8 +794,9 @@ impl InlineContent {
         editor: bool,
     ) -> Option<Self> {
         let (text, runs, tags) = collapse_white_space(items)?;
-        // A `<br>`'s run: of no text node, in no element (a pseudo-
-        // element's is in its element); one each, in order.
+        let (text, runs, tags) = insert_bidi_controls(container, items, text, runs, tags);
+        // A `<br>`'s run: its newline, of no text node, in no element (a
+        // pseudo-element's is in its element); one each, in order.
         #[expect(
             clippy::cast_possible_truncation,
             reason = "a byte offset into the text, and a run of it: past u32 only past 4 GB of text"
@@ -786,7 +804,9 @@ impl InlineContent {
         let breaks: Vec<(u32, u32, NodeId)> = runs
             .iter()
             .enumerate()
-            .filter(|(_, (_, _, node, source))| node.is_none() && source.is_none())
+            .filter(|(_, (range, _, node, source))| {
+                node.is_none() && source.is_none() && text[range.clone()] == *"\n"
+            })
             .map(|(brush, (range, ..))| (range.start as u32, brush as u32))
             .zip(items.iter().filter_map(|item| match item {
                 InlineItem::Break(_, br) => Some(*br),
@@ -819,6 +839,32 @@ impl InlineContent {
                 });
             }
         }
+        let mut element_spans = vec![(None, None); elements.len()];
+        for (index, &(_, item)) in tags.iter().enumerate() {
+            let (node, open) = match &items[item] {
+                InlineItem::Open(node, _) => (*node, true),
+                InlineItem::Close(node, _) => (*node, false),
+                _ => continue,
+            };
+            let element = elements
+                .iter()
+                .position(|e| e.node == node)
+                .expect("listed above");
+            if open {
+                element_spans[element].0 = Some(index);
+            } else {
+                element_spans[element].1 = Some(index);
+            }
+        }
+        let tag_bytes: Vec<usize> = tags.iter().map(|&(byte, _)| byte).collect();
+        let run_starts: Vec<usize> = runs.iter().map(|(range, ..)| range.start).collect();
+        // (Not a text node's own: those come back to the DOM.)
+        let controls: Vec<bool> = runs
+            .iter()
+            .map(|(range, _, _, source)| {
+                source.is_none() && text[range.clone()].chars().all(is_bidi_control)
+            })
+            .collect();
         // `vertical-align` as parley has it, resolved before the builder
         // borrows `cx` (a percentage of a `normal` line height needs the
         // font): each inline element's and each atomic inline's. The
@@ -886,7 +932,11 @@ impl InlineContent {
         let mut builder = cx.layout.tree_builder(&mut cx.fonts, 1.0, true, &root);
         // The paragraph's direction is its block's (not its first strong
         // character's, parley's default).
+        // `unicode-bidi: plaintext` takes its text's first strong
+        // character's, for the whole content (not each paragraph between
+        // forced breaks, as css-writing-modes and Chrome have it).
         builder.set_base_direction(match container.rare_inherited.direction {
+            _ if container.unicode_bidi == UnicodeBidi::Plaintext => parley::BaseDirection::Auto,
             computed_style::Direction::Ltr => parley::BaseDirection::Ltr,
             computed_style::Direction::Rtl => parley::BaseDirection::Rtl,
         });
@@ -915,10 +965,11 @@ impl InlineContent {
         // lines are broken, once percentages have something to resolve
         // against.
         let mut boxes = Vec::new();
+        let mut box_tags = Vec::new();
         let mut atomics = Vec::new();
         let mut out_of_flow = Vec::new();
         let mut floats = Vec::new();
-        for &(byte_index, item) in &tags {
+        for (tag, &(byte_index, item)) in tags.iter().enumerate() {
             let enclosing = open.last().map_or(&**container, |&e| &*elements[e].style);
             push_runs(
                 &mut builder,
@@ -950,6 +1001,7 @@ impl InlineContent {
                         vertical_align: atomic_aligns[atomics.len()],
                     });
                     boxes.push(BoxItem::Atomic(atomics.len()));
+                    box_tags.push(tag);
                     atomics.push(*id);
                     continue;
                 }
@@ -964,6 +1016,7 @@ impl InlineContent {
                         vertical_align: VerticalAlign::BASELINE,
                     });
                     boxes.push(BoxItem::OutOfFlow(out_of_flow.len()));
+                    box_tags.push(tag);
                     out_of_flow.push((*id, style.original_display));
                     continue;
                 }
@@ -978,6 +1031,7 @@ impl InlineContent {
                         vertical_align: VerticalAlign::BASELINE,
                     });
                     boxes.push(BoxItem::Float(floats.len()));
+                    box_tags.push(tag);
                     floats.push(InlineFloat {
                         id: *id,
                         margin_box: SizeF::new(0.0, 0.0),
@@ -1008,7 +1062,12 @@ impl InlineContent {
                 baseline: None,
                 vertical_align: VerticalAlign::BASELINE,
             });
-            boxes.push(BoxItem::Edge { element, start });
+            boxes.push(BoxItem::Edge {
+                element,
+                start,
+                left: start != is_rtl(&elements[element].style),
+            });
+            box_tags.push(tag);
             if !start {
                 builder.pop_style_span();
             }
@@ -1036,11 +1095,15 @@ impl InlineContent {
             text_align: container.text_align,
             text_indent: container.rare_inherited.text_indent,
             elements,
+            element_spans,
+            tag_bytes,
+            run_starts,
+            controls,
+            box_tags,
             boxes,
             atomics,
             out_of_flow,
             floats,
-            open_at_start,
             percent_base: 0.0,
             sized_for: None,
             height: None,
@@ -1198,9 +1261,9 @@ impl InlineContent {
         for index in 0..boxes {
             self.layout.edit_inline_box(index, |inline_box| {
                 let (width, height, baseline) = match &self.boxes[box_index(inline_box.id)] {
-                    BoxItem::Edge { element, start } => {
+                    BoxItem::Edge { element, left, .. } => {
                         let edge = Edge::of(&self.elements[*element].style, self.percent_base);
-                        (if *start { edge.start() } else { edge.end() }, 0.0, None)
+                        (edge.side(*left), 0.0, None)
                     }
                     BoxItem::Atomic(index) => {
                         let laid = atomics.lay_out(self.atomics[*index], space, self.height);
@@ -1240,9 +1303,8 @@ impl InlineContent {
         for index in 0..boxes {
             self.layout.edit_inline_box(index, |inline_box| {
                 inline_box.width = match &self.boxes[box_index(inline_box.id)] {
-                    BoxItem::Edge { element, start } => {
-                        let edge = Edge::of(&self.elements[*element].style, 0.0);
-                        if *start { edge.start() } else { edge.end() }
+                    BoxItem::Edge { element, left, .. } => {
+                        Edge::of(&self.elements[*element].style, 0.0).side(*left)
                     }
                     BoxItem::Atomic(index) => atomics.width(self.atomics[*index], space),
                     BoxItem::OutOfFlow(_) | BoxItem::Float(_) => 0.0,
@@ -1599,7 +1661,7 @@ impl InlineContent {
     fn holds_content(&self, line: &parley::Line<'_, u32>) -> bool {
         line.break_reason() == parley::BreakReason::Explicit
             || line.items().any(|item| match item {
-                PositionedLayoutItem::GlyphRun(_) => true,
+                PositionedLayoutItem::GlyphRun(glyph_run) => !self.is_control(&glyph_run),
                 PositionedLayoutItem::InlineBox(inline_box) => {
                     matches!(self.boxes[box_index(inline_box.id)], BoxItem::Atomic(_))
                 }
@@ -1627,6 +1689,176 @@ impl InlineContent {
             .chain(self.breaks.iter().map(|&(.., br)| br))
     }
 
+    /// Whether `glyph_run` is bidi control characters, not content.
+    fn is_control(&self, glyph_run: &parley::GlyphRun<'_, u32>) -> bool {
+        self.controls
+            .get(glyph_run.style().brush as usize)
+            .copied()
+            .unwrap_or(false)
+    }
+
+    /// Where run `brush` is among the tags: after those at or before its
+    /// first byte.
+    fn run_seq(&self, brush: usize) -> usize {
+        let start = self.run_starts[brush];
+        self.tag_bytes.partition_point(|&byte| byte <= start)
+    }
+
+    /// The elements that hold what is at `seq` among the tags (their start
+    /// tag before it, their end tag not), outermost first.
+    fn holding(&self, seq: usize) -> Vec<usize> {
+        let mut within: Vec<usize> = (0..self.elements.len())
+            .filter(|&element| {
+                let (start, end) = self.element_spans[element];
+                start.is_none_or(|start| start < seq) && end.is_none_or(|end| seq <= end)
+            })
+            .collect();
+        within.sort_by(|&a, &b| {
+            let ((a_start, a_end), (b_start, b_end)) =
+                (self.element_spans[a], self.element_spans[b]);
+            a_start
+                .cmp(&b_start)
+                .then(b_end.is_none().cmp(&a_end.is_none()))
+                .then(b_end.cmp(&a_end))
+        });
+        within
+    }
+
+    /// Whether element `outer`'s tags are around `inner`'s (or it is
+    /// `inner`): before this content counts as first, after it as last.
+    fn contains(&self, outer: usize, inner: usize) -> bool {
+        let ((outer_start, outer_end), (inner_start, inner_end)) =
+            (self.element_spans[outer], self.element_spans[inner]);
+        let starts_before = match (outer_start, inner_start) {
+            (None, _) => true,
+            (Some(_), None) => false,
+            (Some(outer), Some(inner)) => outer <= inner,
+        };
+        let ends_after = match (outer_end, inner_end) {
+            (None, _) => true,
+            (Some(_), None) => false,
+            (Some(outer), Some(inner)) => outer >= inner,
+        };
+        starts_before && ends_after
+    }
+
+    /// Where `line`'s content goes once bidi has reordered it, as Blink's
+    /// `InlineLayoutStateStack::ComputeInlinePositions` places it: in
+    /// visual order from the line's left, each box's left edge before the
+    /// leftmost of what it holds on the line, its right edge after the
+    /// rightmost. Which edges a box has on the line is by its direction
+    /// (its start edge on its left in `ltr`, `BoxData::has_line_left_edge`),
+    /// not where parley put them: parley reorders an edge with the text
+    /// around it, which an `embed` or `isolate` box's start edge is outside
+    /// of. The edges were sized by the same sides, so the line is as long.
+    /// White space hanging past the line's content's end is removed, before
+    /// a right edge.
+    fn place_line(&self, line: &parley::Line<'_, u32>) -> LinePlacement {
+        let (_, content_end) = line_content(line.metrics(), self.layout.is_rtl());
+        let count = line.items().count();
+        let mut shift = vec![0.0; count];
+        let mut within: Vec<Vec<usize>> = vec![Vec::new(); count];
+        // The runs and atomic inlines in visual order: the item, its x
+        // and width.
+        let mut units: Vec<(usize, f32, f32)> = Vec::new();
+        // The edges: the item, its box id and element, whether it is its
+        // left edge, and its x.
+        let mut edges_met: Vec<(usize, usize, usize, bool, f32)> = Vec::new();
+        let mut line_left = f32::INFINITY;
+        for (index, item) in line.items().enumerate() {
+            match item {
+                PositionedLayoutItem::GlyphRun(glyph_run) => {
+                    if self.is_control(&glyph_run) {
+                        continue;
+                    }
+                    within[index] = self.holding(self.run_seq(glyph_run.style().brush as usize));
+                    let width = glyph_run.advance().min(content_end - glyph_run.offset());
+                    units.push((index, glyph_run.offset(), width.max(0.0)));
+                    line_left = line_left.min(glyph_run.offset());
+                }
+                PositionedLayoutItem::InlineBox(inline_box) => {
+                    let id = box_index(inline_box.id);
+                    match &self.boxes[id] {
+                        BoxItem::Atomic(_) => {
+                            within[index] = self.holding(self.box_tags[id]);
+                            units.push((index, inline_box.x, inline_box.width));
+                        }
+                        BoxItem::Edge { element, left, .. } => {
+                            edges_met.push((index, id, *element, *left, inline_box.x));
+                        }
+                        // Where it would be: an inline-level one's static position.
+                        BoxItem::OutOfFlow(_) => {
+                            within[index] = self.holding(self.box_tags[id]);
+                            units.push((index, inline_box.x, 0.0));
+                        }
+                        BoxItem::Float(_) => continue,
+                    }
+                    line_left = line_left.min(inline_box.x);
+                }
+            }
+        }
+        // A box holding nothing on the line is where its first edge is.
+        for &(index, id, element, _, x) in &edges_met {
+            if units
+                .iter()
+                .any(|&(unit, ..)| within[unit].contains(&element))
+            {
+                continue;
+            }
+            let mut holding = self.holding(self.box_tags[id]);
+            holding.push(element);
+            within[index] = holding;
+            let at = units.partition_point(|&(unit, ..)| unit < index);
+            units.insert(at, (index, x, 0.0));
+        }
+        // Each box's leftmost and rightmost unit.
+        let mut spans: Vec<(usize, usize, usize)> = Vec::new();
+        for (at, &(unit, ..)) in units.iter().enumerate() {
+            for &element in &within[unit] {
+                match spans.iter_mut().find(|span| span.0 == element) {
+                    Some(span) => span.2 = at,
+                    None => spans.push((element, at, at)),
+                }
+            }
+        }
+        let span = |element: usize| spans.iter().find(|span| span.0 == element).copied();
+        let has = |element: usize, left: bool| {
+            edges_met
+                .iter()
+                .any(|&(_, _, of, is_left, _)| of == element && is_left == left)
+        };
+        let mut edges: Vec<(usize, Option<f32>, Option<f32>)> = Vec::new();
+        let mut pos = line_left;
+        for (at, &(unit, x, width)) in units.iter().enumerate() {
+            for &element in &within[unit] {
+                if span(element).is_some_and(|span| span.1 == at) && has(element, true) {
+                    let edge = Edge::of(&self.elements[element].style, self.percent_base);
+                    pos += edge.margin.left;
+                    edges.push((element, Some(pos), None));
+                    pos += edge.border.left + edge.padding.left;
+                }
+            }
+            shift[unit] = pos - x;
+            pos += width;
+            for &element in within[unit].iter().rev() {
+                if span(element).is_some_and(|span| span.2 == at) && has(element, false) {
+                    let edge = Edge::of(&self.elements[element].style, self.percent_base);
+                    pos += edge.padding.right + edge.border.right;
+                    match edges.iter_mut().find(|placed| placed.0 == element) {
+                        Some(placed) => placed.2 = Some(pos),
+                        None => edges.push((element, None, Some(pos))),
+                    }
+                    pos += edge.margin.right;
+                }
+            }
+        }
+        LinePlacement {
+            shift,
+            within,
+            edges,
+        }
+    }
+
     /// The lines as broken last, offset by `origin` (the content box's
     /// position in the fragment), where each atomic inline's margin box is,
     /// in order, and the text's clusters and glyphs placed meanwhile.
@@ -1634,38 +1866,50 @@ impl InlineContent {
         let mut lines = Vec::new();
         let mut text = TextPlaced::default();
         let mut placed = vec![origin; self.atomics.len()];
-        // Elements whose box goes on past the current line, outermost
-        // first.
-        let mut open: Vec<usize> = self.open_at_start.clone();
-        // How far `position: relative` moves what is in the open elements
+        // How far `position: relative` moves what is in elements
         // (css-position 3, "relative positioning"): theirs added up.
-        let moved = |open: &[usize]| {
-            open.iter().fold(PointF::new(0.0, 0.0), |sum, &element| {
-                let by = relative_offset(
-                    &self.elements[element].style,
-                    self.percent_base,
-                    self.height,
-                );
-                PointF::new(sum.x + by.x, sum.y + by.y)
-            })
+        let offsets: Vec<PointF> = self
+            .elements
+            .iter()
+            .map(|element| relative_offset(&element.style, self.percent_base, self.height))
+            .collect();
+        let moved = |elements: &[usize]| {
+            elements
+                .iter()
+                .fold(PointF::new(0.0, 0.0), |sum, &element| {
+                    PointF::new(sum.x + offsets[element].x, sum.y + offsets[element].y)
+                })
+        };
+        // An element's box moves with it and the elements it is in.
+        let box_moved = |element: usize| {
+            let within: Vec<usize> = (0..self.elements.len())
+                .filter(|&outer| self.contains(outer, element))
+                .collect();
+            moved(&within)
+        };
+        // The line's box of `element`, made as something of it is first met
+        // (outermost first: what a run or an atomic inline is in is
+        // listed so), before the runs so far.
+        let line_box = |boxes: &mut Vec<LineBox>, element: usize, runs: usize| -> usize {
+            if let Some(at) = boxes.iter().position(|b| b.element == element) {
+                return at;
+            }
+            boxes.push(LineBox {
+                moved: box_moved(element),
+                paint_before: runs,
+                ..LineBox::continued(element)
+            });
+            boxes.len().saturating_sub(1)
         };
         for line in self.layout.lines() {
             let metrics = line.metrics();
             let top = origin.y + metrics.block_min_coord;
             let baseline = origin.y + metrics.baseline;
-            // Where the line's content ends: white space hanging past it
-            // is removed (css-text phase II), so it gets no decorations
-            // and is in no inline box.
-            // A line broken after a soft hyphen ends with a hyphen, which
-            // parley leaves room for at its end: on the left of its items
-            // in a right-to-left paragraph.
-            let hyphen_room = if self.layout.is_rtl() {
-                metrics.hyphen_advance
-            } else {
-                0.0
-            };
-            let mut start = origin.x + metrics.inline_min_coord + metrics.offset - hyphen_room;
-            let mut content_end = start + metrics.advance - metrics.hanging_advance;
+            // White space hanging past the content's end gets no
+            // decorations and is in no inline box.
+            let (line_start, line_end) = line_content(metrics, self.layout.is_rtl());
+            let mut start = origin.x + line_start;
+            let mut content_end = origin.x + line_end;
             // The run the soft hyphen ending the line is in, and its
             // baseline; the hyphen goes past the line's text on its end
             // side (the paragraph's direction).
@@ -1677,55 +1921,64 @@ impl InlineContent {
             // The line's in-flow children in order, for `text-overflow`:
             // each run and atomic inline, with its left and right edges.
             let mut children: Vec<(LineChild, f32, f32)> = Vec::new();
-            let mut boxes: Vec<LineBox> = open
-                .iter()
-                .enumerate()
-                .map(|(i, &element)| LineBox {
-                    moved: moved(&open[..=i]),
-                    ..LineBox::continued(element)
-                })
-                .collect();
-            for item in line.items() {
+            // In the line's visual order, which bidi may have reordered: what
+            // a run or an atomic inline is in, its elements, is by where it
+            // is in the text.
+            let mut boxes: Vec<LineBox> = Vec::new();
+            let placement = self.place_line(&line);
+            for (index, item) in line.items().enumerate() {
+                let (within, dx) = (&placement.within[index], placement.shift[index]);
                 match item {
                     PositionedLayoutItem::GlyphRun(glyph_run) => {
+                        if self.is_control(&glyph_run) {
+                            continue;
+                        }
                         if metrics.hyphen_advance > 0.0 {
-                            let left = origin.x + glyph_run.offset();
+                            let left = origin.x + glyph_run.offset() + dx;
                             text_left = text_left.min(left);
                             text_right = text_right.max(left + glyph_run.advance());
                             if hyphen.is_none() && ends_with(&glyph_run, text_end) {
                                 let brush = glyph_run.style().brush as usize;
                                 let baseline = origin.y + glyph_run.baseline();
-                                hyphen = Some((brush, baseline, moved(&open)));
+                                hyphen = Some((brush, baseline, moved(within)));
                             }
                         }
-                        let mut run = self.text_fragment(&glyph_run, origin, content_end);
-                        for line_box in boxes.iter_mut().filter(|b| open.contains(&b.element)) {
-                            let of = self.elements[line_box.element].node;
+                        let mut run = self.text_fragment(
+                            &glyph_run,
+                            PointF::new(origin.x + dx, origin.y),
+                            content_end + dx,
+                        );
+                        for &element in within {
+                            let at = line_box(&mut boxes, element, runs.len());
+                            let of = self.elements[element].node;
                             let own = run.node == Some(of.node) && run.pseudo == of.pseudo;
-                            line_box.cover(&run, own);
+                            boxes[at].cover(&run, own);
                         }
                         // The boxes are moved as a whole, after this.
-                        run.translate(moved(&open));
+                        run.translate(moved(within));
                         children.push((LineChild::Run(runs.len()), run.x, run.x + run.advance));
                         runs.push(run);
                     }
                     PositionedLayoutItem::InlineBox(inline_box) => {
-                        let x = origin.x + inline_box.x;
-                        let (element, start) = match &self.boxes[box_index(inline_box.id)] {
-                            BoxItem::Edge { element, start } => (*element, *start),
+                        let x = origin.x + inline_box.x + dx;
+                        let (element, start, left) = match &self.boxes[box_index(inline_box.id)] {
+                            BoxItem::Edge {
+                                element,
+                                start,
+                                left,
+                            } => (*element, *start, *left),
                             // Not on the line: its containing block lays
                             // it out, or the line breaking placed it.
                             BoxItem::OutOfFlow(_) | BoxItem::Float(_) => continue,
                             BoxItem::Atomic(index) => {
-                                let by = moved(&open);
+                                let by = moved(within);
                                 placed[*index] =
                                     PointF::new(x + by.x, origin.y + inline_box.y + by.y);
                                 // The elements around it widen to its margin box.
-                                for line_box in
-                                    boxes.iter_mut().filter(|b| open.contains(&b.element))
-                                {
-                                    line_box.left = line_box.left.min(x);
-                                    line_box.right = line_box.right.max(x + inline_box.width);
+                                for &element in within {
+                                    let at = line_box(&mut boxes, element, runs.len());
+                                    boxes[at].left = boxes[at].left.min(x);
+                                    boxes[at].right = boxes[at].right.max(x + inline_box.width);
                                 }
                                 children.push((
                                     LineChild::Atomic(atomic_inlines.len()),
@@ -1741,20 +1994,26 @@ impl InlineContent {
                                 continue;
                             }
                         };
-                        let edge = Edge::of(&self.elements[element].style, self.percent_base);
+                        let at = line_box(&mut boxes, element, runs.len());
+                        let line_box = &mut boxes[at];
                         if start {
-                            open.push(element);
-                            let mut line_box = LineBox::started(element, runs.len());
-                            line_box.moved = moved(&open);
-                            line_box.left = x + edge.margin.left;
-                            line_box.right = line_box.right.max(line_box.left);
-                            boxes.push(line_box);
+                            line_box.first = true;
                         } else {
-                            open.retain(|&e| e != element);
-                            if let Some(line_box) = boxes.iter_mut().find(|b| b.element == element)
-                            {
-                                line_box.last = true;
-                                line_box.right = x + inline_box.width - edge.margin.right;
+                            line_box.last = true;
+                        }
+                        // A left edge starts the box where it was placed, a
+                        // right one ends it.
+                        let placed = placement.edges.iter().find(|placed| placed.0 == element);
+                        if left {
+                            line_box.left_edge = true;
+                            if let Some(&(_, Some(edge_x), _)) = placed {
+                                line_box.left = line_box.left.min(origin.x + edge_x);
+                                line_box.right = line_box.right.max(line_box.left);
+                            }
+                        } else {
+                            line_box.right_edge = true;
+                            if let Some(&(_, _, Some(edge_x))) = placed {
+                                line_box.right = line_box.right.max(origin.x + edge_x);
                                 line_box.left = line_box.left.min(line_box.right);
                             }
                         }
@@ -1980,9 +2239,12 @@ impl InlineContent {
             let top = origin.y + metrics.block_min_coord;
             // Whether something in flow comes before, on this line.
             let mut content = false;
-            for item in line.items() {
+            let placement = self.place_line(&line);
+            for (at, item) in line.items().enumerate() {
                 match item {
-                    PositionedLayoutItem::GlyphRun(_) => content = true,
+                    PositionedLayoutItem::GlyphRun(glyph_run) => {
+                        content |= !self.is_control(&glyph_run);
+                    }
                     PositionedLayoutItem::InlineBox(inline_box) => {
                         match self.boxes[box_index(inline_box.id)] {
                             BoxItem::Atomic(_) => content = true,
@@ -1991,7 +2253,7 @@ impl InlineContent {
                                 let inline_level = !self.out_of_flow[index].1.is_block_level();
                                 positions[index] = if inline_level {
                                     RectF::new(
-                                        origin.x + inline_box.x,
+                                        origin.x + inline_box.x + placement.shift[at],
                                         top,
                                         0.0,
                                         metrics.line_height,
@@ -2090,15 +2352,16 @@ impl InlineContent {
         let (ascent, descent) = line_box
             .metrics
             .unwrap_or((baseline - line_top, line_bottom - baseline));
+        let (left_edge, right_edge) = (line_box.left_edge, line_box.right_edge);
         let border = Sides {
             top: style.border_width.top,
             bottom: style.border_width.bottom,
-            left: if line_box.first {
+            left: if left_edge {
                 style.border_width.left
             } else {
                 0.0
             },
-            right: if line_box.last {
+            right: if right_edge {
                 style.border_width.right
             } else {
                 0.0
@@ -2114,16 +2377,8 @@ impl InlineContent {
         };
         let at = line_box.moved;
         let padding = Sides {
-            left: if line_box.first {
-                edge.padding.left
-            } else {
-                0.0
-            },
-            right: if line_box.last {
-                edge.padding.right
-            } else {
-                0.0
-            },
+            left: if left_edge { edge.padding.left } else { 0.0 },
+            right: if right_edge { edge.padding.right } else { 0.0 },
             ..edge.padding
         };
         InlineBoxFragment {
@@ -2215,14 +2470,45 @@ impl Edge {
         )
     }
 
-    /// The start edge's width (left: horizontal LTR only).
-    fn start(&self) -> f32 {
+    /// An edge's width: its left side's if `left`, else its right's.
+    fn side(&self, left: bool) -> f32 {
+        if left { self.left() } else { self.right() }
+    }
+
+    fn left(&self) -> f32 {
         self.margin.left + self.border.left + self.padding.left
     }
 
-    fn end(&self) -> f32 {
+    fn right(&self) -> f32 {
         self.padding.right + self.border.right + self.margin.right
     }
+}
+
+/// Whether `style`'s `direction` is `rtl`: its start edge on the right.
+fn is_rtl(style: &ComputedStyle) -> bool {
+    style.rare_inherited.direction == computed_style::Direction::Rtl
+}
+
+/// Where a line's content starts and ends, where parley put it: white
+/// space hanging past its end is removed (css-text phase II). A line broken
+/// after a soft hyphen ends with a hyphen, which parley leaves room for at
+/// its end: on the left of its items in a right-to-left paragraph.
+fn line_content(metrics: &parley::LineMetrics, rtl: bool) -> (f32, f32) {
+    let hyphen_room = if rtl { metrics.hyphen_advance } else { 0.0 };
+    let start = metrics.inline_min_coord + metrics.offset - hyphen_room;
+    (start, start + metrics.advance - metrics.hanging_advance)
+}
+
+/// A line's content placed after bidi reordering (`place_line`).
+struct LinePlacement {
+    /// How far each of the line's items moves from where parley put it.
+    shift: Vec<f32>,
+    /// The elements holding each run and atomic inline (and each box
+    /// holding nothing but its edges, at its first edge), outermost first.
+    within: Vec<Vec<usize>>,
+    /// Each box with an edge on the line: where its border box starts,
+    /// with its left edge here, and ends, with its right one.
+    edges: Vec<(usize, Option<f32>, Option<f32>)>,
 }
 
 /// An element's box on the line being built.
@@ -2231,6 +2517,11 @@ struct LineBox {
     /// Whether the element starts / ends on this line.
     first: bool,
     last: bool,
+    /// Whether an edge of it is on its left / right side on this line:
+    /// that side's border and padding are drawn (bidi may have put either
+    /// edge on either side).
+    left_edge: bool,
+    right_edge: bool,
     /// The border box's horizontal extent so far.
     left: f32,
     right: f32,
@@ -2249,21 +2540,15 @@ struct LineBox {
 }
 
 impl LineBox {
-    /// For an element that starts on this line, before run `paint_before`.
-    fn started(element: usize, paint_before: usize) -> Self {
-        Self {
-            first: true,
-            paint_before,
-            ..Self::continued(element)
-        }
-    }
-
-    /// For an element carried over from the line before: it paints first.
+    /// For element `element`, met on the line: its edges set `first` and
+    /// `last`.
     fn continued(element: usize) -> Self {
         Self {
             element,
             first: false,
             last: false,
+            left_edge: false,
+            right_edge: false,
             left: f32::INFINITY,
             right: f32::NEG_INFINITY,
             metrics: None,
@@ -2331,16 +2616,17 @@ fn push_runs<'a>(
             reason = "a style per run of the text: fewer than 2^32"
         )]
         let brush = index as u32;
-        if std::ptr::eq(&**style, enclosing) {
-            builder.push_style_modification_span(&[
+        let properties = if std::ptr::eq(&**style, enclosing) {
+            vec![
                 StyleProperty::Brush(brush),
                 StyleProperty::VerticalAlign(VerticalAlign::BASELINE),
-            ]);
+            ]
         } else {
             let mut properties = text_properties(style, brush, block, families);
             properties.push(StyleProperty::VerticalAlign(VerticalAlign::BASELINE));
-            builder.push_style_modification_span(&properties);
-        }
+            properties
+        };
+        builder.push_style_modification_span(&properties);
         builder.push_text(&text[range]);
         builder.pop_style_span();
         styles.push((style.clone(), node));
@@ -2352,7 +2638,7 @@ fn push_runs<'a>(
 /// node): each character the run kept, by its byte offset in the processed
 /// text, and its UTF-16 offset in the data, in order; white space that
 /// collapsed away has none. And the data's length in UTF-16.
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct TextSource {
     node: NodeId,
     /// Each kept character's byte offset, and where it starts and ends in
@@ -2506,6 +2792,251 @@ impl TextSource {
 /// Where each open and close tag sits in the processed text: a byte offset,
 /// and the tag's index in the items.
 type Tags = Vec<(usize, usize)>;
+
+/// Whether `c` is one of the bidi control characters
+/// [`insert_bidi_controls`] puts in the text.
+fn is_bidi_control(c: char) -> bool {
+    matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
+/// The bidi control characters an inline element's `unicode-bidi` puts
+/// around its content, by its `direction` (css-writing-modes 4's table;
+/// Blink's `InlineItemsBuilder::EnterBidiContext`): those before its
+/// start, those after its end; none for `normal`.
+fn bidi_controls(style: &ComputedStyle) -> Option<(&'static str, &'static str)> {
+    let rtl = style.rare_inherited.direction == computed_style::Direction::Rtl;
+    let pick = |ltr: &'static str, rtl_one: &'static str| if rtl { rtl_one } else { ltr };
+    Some(match style.unicode_bidi {
+        UnicodeBidi::Normal => return None,
+        UnicodeBidi::Embed => (pick("\u{202A}", "\u{202B}"), "\u{202C}"),
+        UnicodeBidi::Isolate => (pick("\u{2066}", "\u{2067}"), "\u{2069}"),
+        UnicodeBidi::BidiOverride => (pick("\u{202D}", "\u{202E}"), "\u{202C}"),
+        UnicodeBidi::IsolateOverride => (
+            pick("\u{2066}\u{202D}", "\u{2067}\u{202E}"),
+            "\u{202C}\u{2069}",
+        ),
+        UnicodeBidi::Plaintext => ("\u{2068}", "\u{2069}"),
+    })
+}
+
+/// `text` with the bidi control characters of the inline elements'
+/// `unicode-bidi` around their content (before an element's start tag,
+/// after its end tag: its edges are inside), and of the block's
+/// `bidi-override` or `isolate-override` around all of it (Blink's
+/// `InlineItemsBuilder::EnterBidiContext`, `EnterBlock`): each a run of its
+/// own, in the element's style (the block's: in none), of no text, which
+/// the bidi algorithm reads and nothing maps back to the DOM. A forced
+/// break ends a paragraph and the embeddings in it: they are closed before
+/// it and opened again after it (css-writing-modes 3, "bidi embedding
+/// breaks"; Blink's `AppendForcedBreak`). Between two forced breaks an
+/// element holding no character there gets none: an empty embedding moves
+/// nothing, and parley gives a line of controls alone the height of text
+/// (Blink takes such a line for empty, `LineInfo::IsEmptyLine`). The runs
+/// and tags after one move along.
+fn insert_bidi_controls<'a>(
+    container: &'a Arc<ComputedStyle>,
+    items: &'a [InlineItem],
+    text: String,
+    runs: Runs<'a>,
+    tags: Tags,
+) -> (String, Runs<'a>, Tags) {
+    // Each embedding: where it starts and ends in the text, its tags (none
+    // for the block's, and for an element open before this content or
+    // after it), its controls, style and element. The block's first, then
+    // in the order they open: outer before inner.
+    struct Embedding<'a> {
+        start: (usize, Option<usize>),
+        end: (usize, Option<usize>),
+        controls: (&'static str, &'static str),
+        style: &'a Arc<ComputedStyle>,
+        owner: Option<Owner>,
+    }
+    let mut embeddings: Vec<Embedding<'a>> = Vec::new();
+    if matches!(
+        container.unicode_bidi,
+        UnicodeBidi::BidiOverride | UnicodeBidi::IsolateOverride
+    ) {
+        let rtl = container.rare_inherited.direction == computed_style::Direction::Rtl;
+        embeddings.push(Embedding {
+            start: (0, None),
+            end: (text.len(), None),
+            controls: (if rtl { "\u{202E}" } else { "\u{202D}" }, "\u{202C}"),
+            style: container,
+            owner: None,
+        });
+    }
+    // The elements open, as their start tags are met.
+    let mut open: Vec<usize> = Vec::new();
+    for (index, &(at, item)) in tags.iter().enumerate() {
+        match &items[item] {
+            InlineItem::Open(owner, style) => {
+                if let Some(controls) = bidi_controls(style) {
+                    open.push(embeddings.len());
+                    embeddings.push(Embedding {
+                        start: (at, Some(index)),
+                        end: (text.len(), None),
+                        controls,
+                        style,
+                        owner: Some(*owner),
+                    });
+                }
+            }
+            InlineItem::Close(owner, style) => {
+                if bidi_controls(style).is_none() {
+                    continue;
+                }
+                match open
+                    .iter()
+                    .rposition(|&e| embeddings[e].owner == Some(*owner))
+                {
+                    Some(at_open) => {
+                        let e = open.remove(at_open);
+                        embeddings[e].end = (at, Some(index));
+                    }
+                    // Open before this content: from its start, outside
+                    // those opened in it.
+                    None => {
+                        let controls = bidi_controls(style).unwrap_or(("", ""));
+                        let first =
+                            usize::from(!embeddings.is_empty() && embeddings[0].owner.is_none());
+                        embeddings.insert(
+                            first,
+                            Embedding {
+                                start: (0, None),
+                                end: (at, Some(index)),
+                                controls,
+                                style,
+                                owner: Some(*owner),
+                            },
+                        );
+                        for e in &mut open {
+                            *e = e.saturating_add(1);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    if embeddings.is_empty() {
+        return (text, runs, tags);
+    }
+    // What goes where: at a byte of the text, in a slot among the tags
+    // there (0 before them all, `2t + 1` right before tag `t`, `2t + 2`
+    // right after it, `usize::MAX` after them all), outer embeddings'
+    // openings before inner ones' and closings after.
+    let mut inserted: Vec<(
+        usize,
+        usize,
+        usize,
+        &'static str,
+        &'a Arc<ComputedStyle>,
+        Option<Owner>,
+    )> = Vec::new();
+    let tag_slot = |tag: usize, after: bool| {
+        tag.saturating_mul(2)
+            .saturating_add(1)
+            .saturating_add(usize::from(after))
+    };
+    // The paragraphs, between forced breaks.
+    let mut paragraphs: Vec<(usize, usize)> = Vec::new();
+    let mut from = 0;
+    for (newline, _) in text.match_indices('\n') {
+        paragraphs.push((from, newline));
+        from = newline.saturating_add(1);
+    }
+    paragraphs.push((from, text.len()));
+    for (depth, embedding) in embeddings.iter().enumerate() {
+        let (open, close) = embedding.controls;
+        for &(from, to) in &paragraphs {
+            let start = embedding.start.0.max(from);
+            let end = embedding.end.0.min(to);
+            if start >= end {
+                continue;
+            }
+            let (slot, order) = match embedding.start {
+                (at, Some(tag)) if at == start => (tag_slot(tag, false), 0),
+                _ => (0, depth),
+            };
+            inserted.push((start, slot, order, open, embedding.style, embedding.owner));
+            let (slot, order) = match embedding.end {
+                (at, Some(tag)) if at == end => (tag_slot(tag, true), 0),
+                _ => (usize::MAX, usize::MAX.saturating_sub(depth)),
+            };
+            inserted.push((end, slot, order, close, embedding.style, embedding.owner));
+        }
+    }
+    if inserted.is_empty() {
+        return (text, runs, tags);
+    }
+    inserted.sort_by_key(|&(at, slot, order, ..)| (at, slot, order));
+    // The bytes inserted before each insertion, and in all.
+    let mut before: Vec<usize> = Vec::with_capacity(inserted.len().saturating_add(1));
+    before.push(0);
+    for &(.., control, _, _) in &inserted {
+        before.push(
+            before
+                .last()
+                .map_or(0, |&sum| sum.saturating_add(control.len())),
+        );
+    }
+    // The bytes inserted at or before each point: a text byte comes after
+    // every insertion at its offset, a tag after those in slots before it.
+    let shift_at = |byte: usize, tag: Option<usize>| -> usize {
+        let first = inserted.partition_point(|&(at, ..)| at < byte);
+        let at_byte = inserted[first..]
+            .iter()
+            .take_while(|&&(at, ..)| at == byte)
+            .filter(|&&(_, slot, ..)| match tag {
+                Some(tag) => slot <= tag_slot(tag, false),
+                None => byte < text.len(),
+            })
+            .count();
+        before[first.saturating_add(at_byte)]
+    };
+    let mut new_text = String::with_capacity(text.len().saturating_add(16));
+    let mut new_runs: Runs<'a> = Vec::with_capacity(runs.len().saturating_add(inserted.len()));
+    let mut copied = 0;
+    for &(at, _, _, control, style, owner) in &inserted {
+        new_text.push_str(&text[copied..at]);
+        copied = at;
+        let start = new_text.len();
+        new_text.push_str(control);
+        new_runs.push((start..new_text.len(), style, owner, None));
+    }
+    new_text.push_str(&text[copied..]);
+    for (range, style, owner, source) in runs {
+        let source = source.map(|mut source| {
+            for (byte, ..) in &mut source.chars {
+                let by: u32 = base::numerics::saturated_cast(shift_at(*byte as usize, None));
+                *byte = byte.saturating_add(by);
+            }
+            source
+        });
+        // Cut where controls go inside it, around a forced break (a
+        // preserved newline); the pieces keep its source.
+        let mut from = range.start;
+        let mut source = source;
+        for &(at, ..) in &inserted {
+            if from < at && at < range.end {
+                let start = from.saturating_add(shift_at(from, None));
+                let end = start.saturating_add(at.saturating_sub(from));
+                new_runs.push((start..end, style, owner, source.clone()));
+                from = at;
+            }
+        }
+        let start = from.saturating_add(shift_at(from, None));
+        let end = start.saturating_add(range.end.saturating_sub(from));
+        new_runs.push((start..end, style, owner, source.take()));
+    }
+    new_runs.sort_by_key(|(range, ..)| range.start);
+    let new_tags = tags
+        .iter()
+        .enumerate()
+        .map(|(index, &(at, item))| (at.saturating_add(shift_at(at, Some(index))), item))
+        .collect();
+    (new_text, new_runs, new_tags)
+}
 
 /// css-text's white space processing, phase I, across element boundaries
 /// (like Blink's `InlineItemsBuilder`): the text for parley, where `\n` is

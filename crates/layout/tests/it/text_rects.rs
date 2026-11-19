@@ -282,3 +282,19 @@ fn transformed_and_scrolled() {
         [RectF::new(0.0, 0.0, 20.0, 20.0)]
     );
 }
+
+/// A run of text cut by the bidi controls around a forced break (an
+/// isolate closed before a preserved newline and opened again after it)
+/// keeps where its characters are in the data.
+#[test]
+fn past_bidi_controls_around_a_newline() {
+    let html = "<div style='white-space: pre'><span id=s dir=rtl>XX\nXX</span></div>";
+    assert_eq!(
+        rects(html, "s", 0, 3, 5),
+        [RectF::new(0.0, 20.0, 40.0, 20.0)]
+    );
+    assert_eq!(
+        rects(html, "s", 0, 0, 1),
+        [RectF::new(0.0, 0.0, 20.0, 20.0)]
+    );
+}

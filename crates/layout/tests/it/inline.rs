@@ -632,7 +632,7 @@ fn bold_is_synthesized_on_a_lighter_face() {
 
 /// Each line's inline boxes in LayoutView coordinates: the rect, and
 /// whether the start and end borders are drawn there.
-fn inline_boxes(view: &BoxFragment) -> Vec<Vec<(RectF, bool, bool)>> {
+pub(crate) fn inline_boxes(view: &BoxFragment) -> Vec<Vec<(RectF, bool, bool)>> {
     fn walk(fragment: &BoxFragment, origin: PointF, out: &mut Vec<Vec<(RectF, bool, bool)>>) {
         for line in &fragment.lines {
             out.push(
