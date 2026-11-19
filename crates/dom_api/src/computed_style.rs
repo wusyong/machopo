@@ -195,7 +195,7 @@ pub(crate) fn property_value<'gc>(
     }
     // A flow-relative property resolves as its physical one (Blink's
     // `ResolveDirectionAwareProperty`).
-    let property = style_resolver::physical_property(property).unwrap_or(property);
+    let property = style_resolver::physical_property(property, &style).unwrap_or(property);
     // A pseudo-element's are its computed values: its box isn't looked up
     // (Chrome resolves them from it, as an element's).
     if style_resolver::is_layout_dependent(property) && target == StyleTarget::Element {

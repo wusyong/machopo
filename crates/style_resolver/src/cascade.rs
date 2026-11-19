@@ -302,7 +302,12 @@ pub struct Cascaded {
 }
 
 /// The cascade of `blocks` (sorted), as [`cascade_blocks`] says, short of
-/// the adjustments.
+/// the adjustments. A flow-relative longhand sets the physical one of the
+/// element's writing direction (Blink's `CSSDirectionAwareResolver`): it
+/// is taken to be its parent's, and the cascade done again if the
+/// element's own `direction` turns out another and a flow-relative
+/// declaration was mapped by the wrong one (Blink cascades `direction`
+/// first, as a high-priority property).
 pub fn cascade_declarations(
     blocks: &[Block<'_>],
     parent: &ComputedStyle,
@@ -311,6 +316,44 @@ pub fn cascade_declarations(
     applies: fn(LonghandId) -> bool,
     animated_font_size: Option<f32>,
 ) -> Cascaded {
+    let parents = parent.logical_writing_direction();
+    let (cascaded, flow_relative) = cascade_as(
+        blocks,
+        parent,
+        root_font_size,
+        env.clone(),
+        applies,
+        animated_font_size,
+        parents,
+    );
+    let own = cascaded.style.logical_writing_direction();
+    if !flow_relative || own == parents {
+        return cascaded;
+    }
+    cascade_as(
+        blocks,
+        parent,
+        root_font_size,
+        env,
+        applies,
+        animated_font_size,
+        own,
+    )
+    .0
+}
+
+/// [`cascade_declarations`] with the flow-relative longhands mapped by
+/// `writing_direction`; whether one was declared.
+fn cascade_as(
+    blocks: &[Block<'_>],
+    parent: &ComputedStyle,
+    root_font_size: f32,
+    env: Environment,
+    applies: fn(LonghandId) -> bool,
+    animated_font_size: Option<f32>,
+    writing_direction: computed_style::WritingDirectionMode,
+) -> (Cascaded, bool) {
+    let mut flow_relative = false;
     // Each property's winning declaration (Blink's `CascadeMap`): the
     // first met from the highest priority down, as a block has each
     // property at most once for each importance. A flow-relative property
@@ -332,7 +375,8 @@ pub fn cascade_declarations(
     for (priority, block, important, _) in blocks.iter().rev() {
         let author = author_levels.contains(&priority.level);
         for declaration in block.declarations(*important).rev() {
-            let id = declaration.id.physical();
+            let id = declaration.id.physical_for(writing_direction);
+            flow_relative |= id != declaration.id;
             let winner = &mut winners[id.index()];
             if winner.is_none() && applies(id) {
                 *winner = Some((declaration, author));
@@ -353,9 +397,12 @@ pub fn cascade_declarations(
     style.variables = compute_custom_properties(&parent.variables, &custom);
     let variables = style.variables.clone();
     let mut substituted: Vec<(Arc<UnparsedValue>, Option<Vec<Declaration>>)> = Vec::new();
-    let mut apply = |style: &mut ComputedStyle, declaration: &Declaration, cx: &ComputeContext| {
+    let mut apply = |style: &mut ComputedStyle,
+                     id: LonghandId,
+                     declaration: &Declaration,
+                     cx: &ComputeContext| {
         let Value::Unparsed(unparsed) = &declaration.value else {
-            properties::apply(style, declaration, parent, cx);
+            properties::apply(style, id, declaration, parent, cx);
             return;
         };
         // A shorthand's longhands share one value: substitute and parse it
@@ -380,7 +427,7 @@ pub fn cascade_declarations(
         // cascade started (inherited, or initial), as only the winning
         // declaration of each property is applied.
         if let Some(resolved) = resolved {
-            properties::apply(style, resolved, parent, cx);
+            properties::apply(style, id, resolved, parent, cx);
         }
     };
     let viewport_used = std::cell::Cell::new(false);
@@ -400,7 +447,7 @@ pub fn cascade_declarations(
             style.font_mut().size = font_size;
         }
     } else if let Some((declaration, ..)) = winners[LonghandId::FontSize.index()] {
-        apply(&mut style, declaration, &font_cx);
+        apply(&mut style, LonghandId::FontSize, declaration, &font_cx);
     }
     for index in declared.iter() {
         let Some((declaration, _)) = winners[index] else {
@@ -413,7 +460,7 @@ pub fn cascade_declarations(
             font_size: style.font.size,
             ..font_cx
         };
-        apply(&mut style, declaration, &cx);
+        apply(&mut style, LonghandId::ALL[index], declaration, &cx);
     }
     properties::finish(&mut style, parent);
     // What the author set of a form control's background and border
@@ -429,7 +476,7 @@ pub fn cascade_declarations(
         }
     }
     style.has_viewport_units = viewport_used.get();
-    Cascaded { style, author }
+    (Cascaded { style, author }, flow_relative)
 }
 
 /// The longhands a cascade has a winning declaration for (Blink's

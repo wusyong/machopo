@@ -1302,48 +1302,105 @@ impl LonghandId {
         }
     }
 
-    /// The physical longhand a flow-relative one maps to, and itself for
-    /// any other. machopo has only `writing-mode: horizontal-tb` and
-    /// `direction: ltr`, so block-start is top, inline-start is left (a
-    /// corner's block side first: start-end is the top right) and the
-    /// inline size is the width (Blink's `CSSDirectionAwareResolver`
-    /// for those).
+    /// The physical longhand a flow-relative one sets with `ltr`
+    /// horizontal text, itself for any other: what the property is, as
+    /// far as its type and group go ([`Self::physical_for`] maps an
+    /// element's).
     pub fn physical(self) -> Self {
+        self.physical_for(computed_style::WritingDirectionMode::default())
+    }
+
+    /// The physical longhand a flow-relative one sets on an element of
+    /// `writing_direction` (css-logical's mapping, Blink's
+    /// `CSSDirectionAwareResolver`), itself for any other.
+    pub fn physical_for(self, writing_direction: computed_style::WritingDirectionMode) -> Self {
+        use computed_style::{Direction, WritingMode};
+        #[derive(Clone, Copy, PartialEq)]
+        enum Side {
+            Top,
+            Right,
+            Bottom,
+            Left,
+        }
+        let opposite = |side| match side {
+            Side::Top => Side::Bottom,
+            Side::Right => Side::Left,
+            Side::Bottom => Side::Top,
+            Side::Left => Side::Right,
+        };
+        let ltr = writing_direction.direction == Direction::Ltr;
+        let (inline_start, block_start) = match writing_direction.writing_mode {
+            WritingMode::HorizontalTb => (if ltr { Side::Left } else { Side::Right }, Side::Top),
+            WritingMode::VerticalRl | WritingMode::SidewaysRl => {
+                (if ltr { Side::Top } else { Side::Bottom }, Side::Right)
+            }
+            WritingMode::VerticalLr => (if ltr { Side::Top } else { Side::Bottom }, Side::Left),
+            WritingMode::SidewaysLr => (if ltr { Side::Bottom } else { Side::Top }, Side::Left),
+        };
+        let (inline_end, block_end) = (opposite(inline_start), opposite(block_start));
+        let horizontal = writing_direction.writing_mode == WritingMode::HorizontalTb;
+        let pick = |side: Side, [top, right, bottom, left]: [Self; 4]| match side {
+            Side::Top => top,
+            Side::Right => right,
+            Side::Bottom => bottom,
+            Side::Left => left,
+        };
+        let margin = [MarginTop, MarginRight, MarginBottom, MarginLeft];
+        let padding = [PaddingTop, PaddingRight, PaddingBottom, PaddingLeft];
+        let inset = [Top, Right, Bottom, Left];
+        let width = [BorderTopWidth, BorderRightWidth, BorderBottomWidth, BorderLeftWidth];
+        let style = [BorderTopStyle, BorderRightStyle, BorderBottomStyle, BorderLeftStyle];
+        let color = [BorderTopColor, BorderRightColor, BorderBottomColor, BorderLeftColor];
+        // The corner between a block side and an inline side.
+        let corner = |block: Side, inline: Side| {
+            let (vertical, horizontal) = if matches!(block, Side::Top | Side::Bottom) {
+                (block, inline)
+            } else {
+                (inline, block)
+            };
+            match (vertical, horizontal) {
+                (Side::Top, Side::Left) => BorderTopLeftRadius,
+                (Side::Top, _) => BorderTopRightRadius,
+                (_, Side::Left) => BorderBottomLeftRadius,
+                _ => BorderBottomRightRadius,
+            }
+        };
+        let size = |inline: Self, block: Self| if horizontal { (inline, block) } else { (block, inline) };
         match self {
-            MarginBlockStart => MarginTop,
-            MarginBlockEnd => MarginBottom,
-            MarginInlineStart => MarginLeft,
-            MarginInlineEnd => MarginRight,
-            PaddingBlockStart => PaddingTop,
-            PaddingBlockEnd => PaddingBottom,
-            PaddingInlineStart => PaddingLeft,
-            PaddingInlineEnd => PaddingRight,
-            InsetBlockStart => Top,
-            InsetBlockEnd => Bottom,
-            InsetInlineStart => Left,
-            InsetInlineEnd => Right,
-            BorderBlockStartWidth => BorderTopWidth,
-            BorderBlockEndWidth => BorderBottomWidth,
-            BorderInlineStartWidth => BorderLeftWidth,
-            BorderInlineEndWidth => BorderRightWidth,
-            BorderBlockStartStyle => BorderTopStyle,
-            BorderBlockEndStyle => BorderBottomStyle,
-            BorderInlineStartStyle => BorderLeftStyle,
-            BorderInlineEndStyle => BorderRightStyle,
-            BorderBlockStartColor => BorderTopColor,
-            BorderBlockEndColor => BorderBottomColor,
-            BorderInlineStartColor => BorderLeftColor,
-            BorderInlineEndColor => BorderRightColor,
-            BorderStartStartRadius => BorderTopLeftRadius,
-            BorderStartEndRadius => BorderTopRightRadius,
-            BorderEndStartRadius => BorderBottomLeftRadius,
-            BorderEndEndRadius => BorderBottomRightRadius,
-            InlineSize => Width,
-            BlockSize => Height,
-            MinInlineSize => MinWidth,
-            MinBlockSize => MinHeight,
-            MaxInlineSize => MaxWidth,
-            MaxBlockSize => MaxHeight,
+            MarginBlockStart => pick(block_start, margin),
+            MarginBlockEnd => pick(block_end, margin),
+            MarginInlineStart => pick(inline_start, margin),
+            MarginInlineEnd => pick(inline_end, margin),
+            PaddingBlockStart => pick(block_start, padding),
+            PaddingBlockEnd => pick(block_end, padding),
+            PaddingInlineStart => pick(inline_start, padding),
+            PaddingInlineEnd => pick(inline_end, padding),
+            InsetBlockStart => pick(block_start, inset),
+            InsetBlockEnd => pick(block_end, inset),
+            InsetInlineStart => pick(inline_start, inset),
+            InsetInlineEnd => pick(inline_end, inset),
+            BorderBlockStartWidth => pick(block_start, width),
+            BorderBlockEndWidth => pick(block_end, width),
+            BorderInlineStartWidth => pick(inline_start, width),
+            BorderInlineEndWidth => pick(inline_end, width),
+            BorderBlockStartStyle => pick(block_start, style),
+            BorderBlockEndStyle => pick(block_end, style),
+            BorderInlineStartStyle => pick(inline_start, style),
+            BorderInlineEndStyle => pick(inline_end, style),
+            BorderBlockStartColor => pick(block_start, color),
+            BorderBlockEndColor => pick(block_end, color),
+            BorderInlineStartColor => pick(inline_start, color),
+            BorderInlineEndColor => pick(inline_end, color),
+            BorderStartStartRadius => corner(block_start, inline_start),
+            BorderStartEndRadius => corner(block_start, inline_end),
+            BorderEndStartRadius => corner(block_end, inline_start),
+            BorderEndEndRadius => corner(block_end, inline_end),
+            InlineSize => size(Width, Height).0,
+            BlockSize => size(Width, Height).1,
+            MinInlineSize => size(MinWidth, MinHeight).0,
+            MinBlockSize => size(MinWidth, MinHeight).1,
+            MaxInlineSize => size(MaxWidth, MaxHeight).0,
+            MaxBlockSize => size(MaxWidth, MaxHeight).1,
             _ => self,
         }
     }
@@ -4369,15 +4426,16 @@ macro_rules! set_rare {
     }};
 }
 
-/// Applies one declaration on top of `style`.
+/// Applies one declaration on top of `style`, as `id`: the longhand it
+/// sets, a flow-relative one's physical one for the element
+/// ([`LonghandId::physical_for`]).
 pub fn apply(
     style: &mut ComputedStyle,
+    id: LonghandId,
     declaration: &Declaration,
     parent: &ComputedStyle,
     cx: &ComputeContext,
 ) {
-    // A flow-relative longhand sets its physical one.
-    let id = declaration.id.physical();
     if let Value::Unparsed(_) = declaration.value {
         unreachable!("{id:?}'s value is substituted before it is applied");
     }

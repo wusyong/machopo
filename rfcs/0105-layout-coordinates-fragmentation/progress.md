@@ -14,7 +14,7 @@
 | 1d float、list marker、line clamp、置中、slider 的 thumb | 完成 | 2026-11-19 |
 | 1e 第 1 階段的檢查和文件 | 完成 | 2026-11-19 |
 | 2a style：`direction`、`unicode-bidi`、`dir`、`:dir()` | 完成 | 2026-11-19 |
-| 2b layout 用 `direction` | | |
+| 2b 邏輯屬性照 `direction`、layout 用 `direction` | 進行中 | |
 | 2c `unicode-bidi` 在 inline 內容裡 | | |
 | 2d 捲動的原點、sticky、`text-overflow`、`<select>` | | |
 | 2e 第 2 階段的檢查和文件 | | |
@@ -110,3 +110,15 @@ macOS、Apple M4，2026-11-19。
 - 新的測試：`dom` 的 `directionality::`（7 個：繼承、移動、`auto` 的文字、`<bdi>`、表單控制項、shadow tree 和 slot、標記 style）；`style` 的 `hints::dir_auto_is_its_texts_direction`（兩個只差文字的 `dir=auto` 不共用 style、文字改了之後的兄弟規則、telephone 欄位改 `type` 之後的兄弟規則）。
 - mutation test（`mutants-2a3.toml`）16 個，全部抓到（第一輪 3 個沒抓到：slot 的那個補了測試，也因此找到上面的錯誤；另外兩個是多餘的程式，拿掉了：matched properties cache 的 hash 加上方向（比對時 hint 本來就逐一比內容），`:dir()` 在組合子左邊也收狀態（每條改變方向的路本來就讓後面的兄弟重算：`auto` 的元素整個重算、祖先是 `auto` 的那棵子樹整個重算、`dir` 和 telephone 欄位的 `type` 走 attribute 的路））。
 - 跑過：`cargo test -p dom -p style -p dom_api`；`test.py wpt` 的 `dir-tests.txt`、`html/canvas/element/text/`、`html/canvas/offscreen/text/`。
+
+### 2b：邏輯屬性照 `direction`（第一部分：style）
+
+macOS、Apple M4，2026-11-19。
+
+- `css` 的 `LonghandId::physical_for`：照 writing direction（四種 writing mode、兩種 direction）把邏輯屬性對應到物理的（Blink 的 `CSSDirectionAwareResolver`）；`physical()` 是 `ltr` 橫排的那個，只用在分類（型別、logical group）。
+- cascade（`style_resolver` 的 `cascade_declarations`）：先照 parent 的方向對應，元素自己的 `direction` 不同、又有邏輯屬性的宣告時，照自己的方向再 cascade 一次（Blink 先 cascade `direction`；只有方向和 parent 不同、又有邏輯屬性的元素多做一次）。`apply` 改成收物理的 id。`getComputedStyle` 的邏輯屬性（`physical_property`、computed value）、keyframe（`KeyframeEffect::new`，照元素的 base style；base 換了 effect 就重建）和 `transition-property` 也照元素的方向。
+- UA 樣式：inline 方向的照 Blink 改回邏輯屬性（`dd`、清單、`blockquote`、`figure`、`fieldset`、`legend`、search 欄位的清除鈕、`optgroup` 裡的 option）；block 方向的照舊寫成上下（只有橫排）。
+- WPT：`css/css-logical/` 的 27 個 `direction: rtl` 的 subtest 變成通過，更新了 7 份 `.ini` 和 8 份的說明。`css/css-transitions/`、`css/css-animations/`、`web-animations/`（8723 項）、`test.py reftest generated/ block/` 照預期。
+- 新的測試：`style` 的 `logical::inline_start_is_the_right_in_rtl`（元素自己的和繼承的 `rtl`、圓角、CSSOM、UA 樣式的清單和 `<dd>`）、`css_animations::a_flow_relative_keyframe_animates_by_the_elements_direction`、`css_animations::a_flow_relative_transition_is_by_the_elements_direction`。keyframe 的那個測試先找到了錯誤：keyframe 在 `KeyframeEffect::new` 照 `ltr` 換成物理的。
+- mutation test（`mutants-2b1.toml`）10 個，全部抓到（第一輪動畫的 `visit` 那個沒抓到：它收到的已經是物理的 id，改回原本的 `physical()`、拿掉那一條；highlight 的 cascade 也只看非邏輯的屬性，照舊用 `physical()`）。
+- 跑過：`cargo test -p css -p style -p style_resolver -p animation -p dom_api -p layout`。

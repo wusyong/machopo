@@ -202,12 +202,15 @@ impl KeyframeEffect {
     /// css-animations 1); without one at 0% or 100%, the base style is
     /// there, with `easing` (the animation's `animation-timing-function`),
     /// as is a keyframe's that declares none. A property that doesn't
-    /// animate is left out.
+    /// animate is left out. A flow-relative one is the physical one of the
+    /// element's writing direction (its base style's; a new base makes a
+    /// new effect).
     pub fn new(source: KeyframeSource, keyframes: &[Keyframe], easing: &EasingFunction) -> Self {
+        let writing_direction = source.base.logical_writing_direction();
         let mut properties: Vec<(LonghandId, Vec<PropertyKeyframe>)> = Vec::new();
         for keyframe in keyframes {
             for id in &keyframe.properties {
-                let id = id.physical();
+                let id = id.physical_for(writing_direction);
                 if id.animation_type() == AnimationType::NotAnimatable {
                     continue;
                 }

@@ -79,8 +79,11 @@ fn matching_transitions(style: &ComputedStyle) -> Vec<(LonghandId, usize)> {
     let mut matched: Vec<(LonghandId, usize)> = Vec::new();
     // Where each property is in `matched`: `all` lists every one.
     let mut at: Vec<Option<usize>> = Vec::new();
+    // A flow-relative one names the physical one of the element's writing
+    // direction.
+    let writing_direction = style.logical_writing_direction();
     let mut add = |id: LonghandId, i: usize| {
-        let id = id.physical();
+        let id = id.physical_for(writing_direction);
         if id.animation_type() == AnimationType::NotAnimatable {
             return;
         }

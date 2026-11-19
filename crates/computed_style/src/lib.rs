@@ -3349,6 +3349,13 @@ impl ComputedStyle {
         WritingDirectionMode::default()
     }
 
+    /// The writing direction its flow-relative properties (`margin-inline-start`
+    /// and the like) map by: its `direction`, in horizontal writing
+    /// (there is no `writing-mode`).
+    pub fn logical_writing_direction(&self) -> WritingDirectionMode {
+        WritingDirectionMode::new(WritingMode::HorizontalTb, self.rare_inherited.direction)
+    }
+
     /// Whether this element's box is a stacking context (no positioning
     /// yet): `opacity < 1`, a transform, a `clip-path` (css-masking 1), a
     /// `filter` or `isolation: isolate` (filter-effects 1, compositing 1),

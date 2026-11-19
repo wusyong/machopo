@@ -414,6 +414,34 @@ fn keyframes_cascade_and_the_last_one_wins() {
     assert_eq!(page.value("t", "color"), "rgb(128, 0, 128)");
 }
 
+/// A flow-relative property animates the physical one of the element's
+/// direction: the right in `rtl`.
+#[test]
+fn a_flow_relative_keyframe_animates_by_the_elements_direction() {
+    let mut page = Page::timed(
+        "<style>@keyframes k { to { margin-inline-start: 30px } }
+         #t { direction: rtl; animation: k 1s linear }</style><div id=t></div>",
+    );
+    page.frame(500.0);
+    assert_eq!(page.value("t", "margin-right"), "15px");
+    assert_eq!(page.value("t", "margin-left"), "0px");
+}
+
+/// A flow-relative property's transition is the physical one's of the
+/// element's direction.
+#[test]
+fn a_flow_relative_transition_is_by_the_elements_direction() {
+    let mut page = Page::timed(
+        "<style>#t { direction: rtl; transition: margin-inline-start 1s linear }
+         #t.on { margin-inline-start: 100px }</style><div id=t></div>",
+    );
+    page.set_time(1000.0);
+    page.set_class("t", "on");
+    page.frame(1000.0);
+    page.frame(1500.0);
+    assert_eq!(page.value("t", "margin-right"), "50px");
+}
+
 #[test]
 fn keyframes_are_computed_on_the_element() {
     let mut page = Page::timed(

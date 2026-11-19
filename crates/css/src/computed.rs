@@ -93,13 +93,14 @@ pub fn is_layout_dependent(property: &str) -> bool {
     )
 }
 
-/// The physical longhand's name for a flow-relative one (`margin-left`
-/// for `margin-inline-start`), whose resolved value is that one's (Blink's
-/// `CSSProperty::ResolveDirectionAwareProperty`); `None` for any other
-/// name.
-pub fn physical_property(property: &str) -> Option<&'static str> {
+/// The physical longhand's name for a flow-relative one on an element of
+/// `style` (`margin-left` for `margin-inline-start` in `ltr`), whose
+/// resolved value is that one's (Blink's `CSSProperty::
+/// ResolveDirectionAwareProperty`); `None` for any other name.
+pub fn physical_property(property: &str, style: &ComputedStyle) -> Option<&'static str> {
     let id = LonghandId::from_name(property)?;
-    (id.physical() != id).then(|| id.physical().name())
+    let physical = id.physical_for(style.logical_writing_direction());
+    (physical != id).then(|| physical.name())
 }
 
 /// `transform`'s resolved value: its functions as one matrix, the
@@ -458,7 +459,7 @@ fn longhand_to_css(style: &ComputedStyle, id: LonghandId, dest: &mut String) {
         LengthPercentageOrAuto::LengthPercentage(value) => length_percentage(value, dest),
     };
     // A flow-relative longhand's value is its physical one's.
-    match id.physical() {
+    match id.physical_for(style.logical_writing_direction()) {
         crate::properties::logical_longhands!() => unreachable!("mapped to a physical longhand"),
         Display => dest.push_str(display_name(style.display)),
         Position => dest.push_str(position_name(style.position)),

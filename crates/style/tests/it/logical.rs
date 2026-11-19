@@ -1,7 +1,8 @@
 //! Flow-relative (logical) properties: each its own property, which the
-//! cascade maps to a physical one (machopo has only `horizontal-tb` and `ltr`:
-//! block-start is top, inline-start is left) and weighs against it in
-//! declaration order; CSSOM reads them back as written.
+//! cascade maps to a physical one by the element's `direction` (only
+//! horizontal writing: block-start is top, inline-start is left in `ltr`
+//! and right in `rtl`) and weighs against it in declaration order; CSSOM
+//! reads them back as written.
 
 use computed_style::ComputedStyle;
 use style_resolver::CssPropertyValueSet;
@@ -399,16 +400,19 @@ fn computed_style_lists_and_resolves_them() {
         assert!(names.contains(&name), "{name}");
     }
     assert_eq!(
-        style_resolver::physical_property("Margin-Inline-Start"),
+        style_resolver::physical_property("Margin-Inline-Start", &ComputedStyle::initial()),
         Some("margin-left")
     );
     assert_eq!(
-        style_resolver::physical_property("max-block-size"),
+        style_resolver::physical_property("max-block-size", &ComputedStyle::initial()),
         Some("max-height")
     );
-    assert_eq!(style_resolver::physical_property("margin-left"), None);
     assert_eq!(
-        style_resolver::physical_property("margin-inline"),
+        style_resolver::physical_property("margin-left", &ComputedStyle::initial()),
+        None
+    );
+    assert_eq!(
+        style_resolver::physical_property("margin-inline", &ComputedStyle::initial()),
         None,
         "a shorthand"
     );
@@ -417,4 +421,44 @@ fn computed_style_lists_and_resolves_them() {
     assert!(!style_resolver::is_layout_dependent(
         "border-inline-start-width"
     ));
+}
+
+/// In `rtl`, inline-start is the right and inline-end the left: on an
+/// element whose own `direction` is `rtl` (not its parent's), and on one
+/// that inherits it; a corner's inline side follows; CSSOM resolves them
+/// so; the UA stylesheet's (a list's indent, a `<dd>`'s) are on the right.
+#[test]
+fn inline_start_is_the_right_in_rtl() {
+    let styles = styles(
+        "<!DOCTYPE html><style>
+           .l { margin-inline-start: 3px; padding-inline-end: 4px; inset-inline-start: 5px;
+                border-start-end-radius: 6px; border-inline-start: 1px solid }
+         </style>
+         <div id=own class=l style='direction: rtl'></div>
+         <div style='direction: rtl'><div id=inherits class=l></div></div>
+         <div id=ltr class=l></div>
+         <div dir=rtl><ul id=ul></ul><dl><dd id=dd></dd></dl></div>",
+    );
+    for id in ["own", "inherits"] {
+        let style = &styles[id];
+        assert_eq!(value(style, "margin-right"), "3px", "{id}");
+        assert_eq!(value(style, "margin-left"), "0px", "{id}");
+        assert_eq!(value(style, "padding-left"), "4px", "{id}");
+        assert_eq!(value(style, "right"), "5px", "{id}");
+        assert_eq!(value(style, "border-top-left-radius"), "6px", "{id}");
+        assert_eq!(value(style, "border-right-width"), "1px", "{id}");
+        assert_eq!(value(style, "margin-inline-start"), "3px", "{id}");
+        assert_eq!(
+            style_resolver::physical_property("margin-inline-start", style),
+            Some("margin-right"),
+            "{id}"
+        );
+    }
+    // The UA stylesheet's are flow-relative too.
+    assert_eq!(value(&styles["ul"], "padding-right"), "40px");
+    assert_eq!(value(&styles["ul"], "padding-left"), "0px");
+    assert_eq!(value(&styles["dd"], "margin-right"), "40px");
+    let ltr = &styles["ltr"];
+    assert_eq!(value(ltr, "margin-left"), "3px");
+    assert_eq!(value(ltr, "border-top-right-radius"), "6px");
 }

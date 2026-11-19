@@ -1,0 +1,66 @@
+# Stage 2b, its first part: flow-relative properties mapped by the
+# element's `direction` (`css`'s `physical_for`, `style_resolver`'s
+# cascade, CSSOM, animations, keyframes and `transition-property`) and the
+# UA stylesheet's inline-axis ones.
+test = ["sh", "-c", "cargo test -q -p style --test it -- logical:: css_animations:: && python3 scripts/test.py wpt css/css-logical/"]
+timeout = 900
+
+[[mutant]]
+name = "inline-start is the left in rtl"
+file = "crates/css/src/properties.rs"
+from = '''WritingMode::HorizontalTb => (if ltr { Side::Left } else { Side::Right }, Side::Top),'''
+to = '''WritingMode::HorizontalTb => (Side::Left, Side::Top),'''
+
+[[mutant]]
+name = "a top left corner taken as the top right"
+file = "crates/css/src/properties.rs"
+from = '''(Side::Top, Side::Left) => BorderTopLeftRadius,'''
+to = '''(Side::Top, Side::Left) => BorderTopRightRadius,'''
+
+[[mutant]]
+name = "no second cascade for an element's own direction"
+file = "crates/style_resolver/src/cascade.rs"
+from = '''if !flow_relative || own == parents {'''
+to = '''if true {'''
+
+[[mutant]]
+name = "flow-relative declarations never noted"
+file = "crates/style_resolver/src/cascade.rs"
+from = '''flow_relative |= id != declaration.id;'''
+to = '''flow_relative |= false;'''
+
+[[mutant]]
+name = "the cascade maps by ltr"
+file = "crates/style_resolver/src/cascade.rs"
+from = '''let id = declaration.id.physical_for(writing_direction);'''
+to = '''let id = declaration.id.physical();'''
+
+[[mutant]]
+name = "CSSOM resolves a flow-relative name by ltr"
+file = "crates/css/src/computed.rs"
+from = '''    let physical = id.physical_for(style.logical_writing_direction());'''
+to = '''    let physical = id.physical();'''
+
+[[mutant]]
+name = "a flow-relative computed value read by ltr"
+file = "crates/css/src/computed.rs"
+from = '''    match id.physical_for(style.logical_writing_direction()) {'''
+to = '''    match id.physical() {'''
+
+[[mutant]]
+name = "a list's indent on the left"
+file = "crates/style_resolver/resources/html.css"
+from = '''  padding-inline-start: 40px;'''
+to = '''  padding-left: 40px;'''
+
+[[mutant]]
+name = "a keyframe's flow-relative property by ltr"
+file = "crates/animation/src/css_animation.rs"
+from = '''                let id = id.physical_for(writing_direction);'''
+to = '''                let id = id.physical();'''
+
+[[mutant]]
+name = "transition-property's flow-relative name by ltr"
+file = "crates/animation/src/transition.rs"
+from = '''        let id = id.physical_for(writing_direction);'''
+to = '''        let id = id.physical();'''

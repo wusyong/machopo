@@ -6,8 +6,9 @@
  * `svg|`.
  *
  * Deviations, until the missing features exist:
- * - Logical properties (`margin-block`, `padding-inline-start`, ...) are
- *   written as their physical equivalents for horizontal left-to-right text.
+ * - The block axis's logical properties (`margin-block-start`, ...) are
+ *   written as their physical equivalents for horizontal text (there is no
+ *   `writing-mode`); the inline axis's are Blink's.
  * - `text-decoration` only sets the line (no color or style).
  * - `th`'s and `caption`'s `text-align` is `center`: Chrome's
  *   `-internal-center` and `-webkit-center` also center block children.
@@ -82,8 +83,8 @@ input[type=tel i] {
 }
 
 blockquote, figure {
-  margin-left: 40px;
-  margin-right: 40px;
+  margin-inline-start: 40px;
+  margin-inline-end: 40px;
 }
 
 listing, plaintext, pre, xmp {
@@ -274,11 +275,11 @@ dir, dl, menu, ol, ul {
 }
 
 dd {
-  margin-left: 40px;
+  margin-inline-start: 40px;
 }
 
 dir, menu, ol, ul {
-  padding-left: 40px;
+  padding-inline-start: 40px;
 }
 
 /* Tables (Chrome's rules: no `border-color`, which is `currentColor`; the
@@ -362,14 +363,14 @@ fieldset, details, summary {
 }
 
 fieldset {
-  margin-left: 2px;
-  margin-right: 2px;
+  margin-inline-start: 2px;
+  margin-inline-end: 2px;
   padding: 0.35em 0.75em 0.625em;
 }
 
 legend {
-  padding-left: 2px;
-  padding-right: 2px;
+  padding-inline-start: 2px;
+  padding-inline-end: 2px;
 }
 
 /* Form controls (Chrome's rules). Their native looks are `appearance`'s;
@@ -576,7 +577,7 @@ input::-webkit-search-cancel-button {
   appearance: auto;
   display: block;
   flex: none;
-  margin-left: 1px;
+  margin-inline-start: 1px;
   opacity: 0;
   pointer-events: none;
 }
@@ -678,7 +679,7 @@ option {
 }
 
 select optgroup option {
-  padding-left: 20px;
+  padding-inline-start: 20px;
   font-weight: normal;
 }
 
