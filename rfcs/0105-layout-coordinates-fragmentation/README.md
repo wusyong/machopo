@@ -85,7 +85,7 @@ RFC 0103 的「架構上可能要先做的事」第 3 個：每個只照物理�
 
 做法定了（第 1 條）；每個階段開始前，只決定那個階段要決定的事：
 
-1. **邏輯的型別和轉換**，machopo 自己的演算法改用邏輯座標，現有的行為不變（只有 `horizontal-tb`、`ltr`）。決定是「已決定的事項」第 2 到 4 條。分五段：1a 是型別和 converter；1b 是 inline 的行在 box 裡的位置（第 5 條）；1c 是 table，連 collapsed border（第 6 條）；1d 是 float、list marker、line clamp、置中、slider 的 thumb；1e 是整個階段的檢查和文件。
+1. **邏輯的型別和轉換**（2026-11-19 做完），machopo 自己的演算法改用邏輯座標，現有的行為不變（只有 `horizontal-tb`、`ltr`）。決定是「已決定的事項」第 2 到 4 條。分五段：1a 是型別和 converter；1b 是 inline 的行在 box 裡的位置（第 5 條）；1c 是 table，連 collapsed border（第 6 條）；1d 是 float、list marker、line clamp、置中、slider 的 thumb；1e 是整個階段的檢查和文件。
 2. （第 2 階段開始前決定做不做）接上 taffy 已經有的 `direction: rtl` 和 style 的 `direction`、`unicode-bidi`，machopo 自己的部分照邏輯座標鏡射。
 3. 入口的 break token 和「一個 box 好幾個 fragment」，先不分段。
 

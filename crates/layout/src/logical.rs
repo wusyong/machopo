@@ -205,7 +205,7 @@ impl WritingModeConverter {
 
     /// Where something of physical size `inner_size` at `offset` has its
     /// top left.
-    pub(crate) fn to_physical_offset(&self, offset: LogicalOffset, inner_size: SizeF) -> PointF {
+    pub(crate) fn to_physical_offset(self, offset: LogicalOffset, inner_size: SizeF) -> PointF {
         let outer = self.outer_size;
         // From the far edge, for the axes that run right to left or bottom
         // to top.
@@ -231,7 +231,7 @@ impl WritingModeConverter {
 
     /// The logical offset of something of physical size `inner_size`
     /// whose top left is at `offset`.
-    pub(crate) fn to_logical_offset(&self, offset: PointF, inner_size: SizeF) -> LogicalOffset {
+    pub(crate) fn to_logical_offset(self, offset: PointF, inner_size: SizeF) -> LogicalOffset {
         // Every case of `to_physical_offset` is its own inverse once the
         // axes are swapped back: measuring from the far edge twice is
         // measuring from the near one.
@@ -248,21 +248,21 @@ impl WritingModeConverter {
         }
     }
 
-    pub(crate) fn to_physical_size(&self, size: LogicalSize) -> SizeF {
+    pub(crate) fn to_physical_size(self, size: LogicalSize) -> SizeF {
         size.to_physical(self.writing_direction)
     }
 
-    pub(crate) fn to_logical_size(&self, size: SizeF) -> LogicalSize {
+    pub(crate) fn to_logical_size(self, size: SizeF) -> LogicalSize {
         LogicalSize::from_physical(size, self.writing_direction)
     }
 
-    pub(crate) fn to_physical_rect(&self, rect: LogicalRect) -> RectF {
+    pub(crate) fn to_physical_rect(self, rect: LogicalRect) -> RectF {
         let size = self.to_physical_size(rect.size);
         let at = self.to_physical_offset(rect.offset, size);
         RectF::new(at.x, at.y, size.width, size.height)
     }
 
-    pub(crate) fn to_logical_rect(&self, rect: RectF) -> LogicalRect {
+    pub(crate) fn to_logical_rect(self, rect: RectF) -> LogicalRect {
         let size = rect.size();
         LogicalRect::new(
             self.to_logical_offset(PointF::new(rect.x, rect.y), size),

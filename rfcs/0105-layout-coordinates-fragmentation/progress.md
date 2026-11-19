@@ -12,12 +12,15 @@
 | 1b inline 的行在 box 裡的位置 | 完成 | 2026-11-19 |
 | 1c table，連 collapsed border | 完成 | 2026-11-19 |
 | 1d float、list marker、line clamp、置中、slider 的 thumb | 完成 | 2026-11-19 |
-| 1e 第 1 階段的檢查和文件 | | |
+| 1e 第 1 階段的檢查和文件 | 完成 | 2026-11-19 |
 
 ## 驗收
 
 | 項目 | 怎麼驗證 |
 | --- | --- |
+| 邏輯和物理的換算在每種 writing mode 和 direction 都對（位移、大小、rect、四邊、距離、內容區的起點） | `cargo test -p layout --lib logical::` |
+| 第 1 階段之後，橫排、`ltr` 的排版和改之前一樣 | `cargo test -p layout`、`cargo test -p paint`；`python3 scripts/test.py reftest inline/ text/ block/ position/ tables/ floats/ generated/`；`python3 scripts/test.py wpt css/css-tables/ css/CSS2/tables/` |
+| collapsed border 給 paint 的格線和每條邊 | `cargo test -p layout --test it tables::collapsed_borders_lines_and_edges` |
 
 ## 做過的檢查
 
@@ -59,3 +62,11 @@ macOS、Apple M4，2026-11-19。
 - 新的測試：`lists::an_outside_marker_without_a_line_is_at_the_content_box`、`form_controls::a_buttons_block_children_are_centered_with_their_margins`、`line_clamp::nested_blocks_end_with_the_clamped_line_from_their_own_tops`、`paint` 的 `theme::a_ranges_thumb_keeps_to_its_tracks_content_box_and_its_margins`（thumb 的位置只有 paint 看得到：值的那一段畫到 thumb 的中間）。都是 mutation test 沒抓到之後補的。
 - mutation test（`mutants-1d.toml`）18 個，全部抓到（第一輪 6 個沒抓到，補了上面的測試之後抓到；range 的三個用 `paint` 的測試）。
 - 跑過：`cargo test -p layout`、`cargo test -p paint`；`test.py reftest floats/ generated/ block/ inline/`（24 個，和預期一樣）；`test.py wpt css/css-overflow/ css/css-lists/ css/CSS2/floats/ html/rendering/widgets/`：66 個結果和預期不同：整份的 5 個（`text-overflow-012`、`text-overflow-022` 失敗，`CSS2/floats/new-fc-beside-adjoining-float`、`CSS2/floats/new-fc-separates-from-float-2`、`text-overflow-020` 意外通過），subtest 61 個（`button-layout/display-other` 和 `baseline-alignment-and-overflow.tentative` 意外通過）；這 7 份在 `main`（`2e74f30`，0105 之前）上跑結果完全一樣：這台 macOS 和預期結果對不上，不是這份 RFC 造成的，沒有在這裡改預期結果。
+
+### 1e：第 1 階段的檢查和文件
+
+macOS、Apple M4，2026-11-19。
+
+- `docs/architecture.md`：「要注意的地方」加上 layout 的座標（新的 layout 功能用 inline 和 block 的方向寫、子元素在 box 的大小定了才換成物理的、writing direction 只從 `writing_direction()` 拿），「和 Chromium 刻意不同的地方」加上換算的位置。
+- `cargo test --workspace --no-fail-fast`：55 個 test binary 通過，`shell` 的 `web_animations::ready_then_the_end` 在整套一起跑時失敗一次（單獨跑 5 次都通過）：`finish` 先、`transitionend` 後。原因（和這份 RFC 無關，`animation` 原本的）：動畫在離結束 1µs 以內就算結束（`reached`，照 Blink 的 `IsWithinAnimationTimeTolerance`），這時 `finish` 的事件時間夾到 `now`（`Animation::notify`），比結束時間早一點，`transitionend` 的是結束時間本身、沒有夾，排序（時間先、transition 在 playback 之前）就把 `finish` 排到前面；frame 落在結束前 1µs 以內時才會，負載下 frame 的時間不規則。暫時的測試確認：結束前 0.0004ms 的 frame，`finish` 是 1299.9996、`transitionend` 是 1300.0。修法另外做（在 `main` 上，不在這份 RFC）。
+- `cargo fmt --check` 通過；`cargo clippy --workspace --all-targets -- -D warnings`：`WritingModeConverter` 的 `to_*` 改成取 `self`（它是 `Copy`），之後通過。
