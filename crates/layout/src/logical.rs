@@ -12,7 +12,7 @@
     not(test),
     expect(
         dead_code,
-        reason = "the algorithms that place in logical coordinates take these up one by one"
+        reason = "the algorithms that place in logical coordinates take the rest up one by one"
     )
 )]
 
@@ -270,6 +270,30 @@ impl WritingModeConverter {
     }
 }
 
+/// Where a box's content box has its top left, from its border box's: its
+/// border and padding (`inset`, per physical side) in from its
+/// inline-start and block-start sides, and `block_shift` further along
+/// the block direction (content moved down as a whole, as a button's
+/// centered), turned physical by its writing direction.
+pub(crate) fn content_box_origin(
+    writing_direction: WritingDirectionMode,
+    border_box: SizeF,
+    inset: Sides<f32>,
+    block_shift: f32,
+) -> PointF {
+    let inset = BoxStrut::from_physical(inset, writing_direction);
+    let size = LogicalSize::from_physical(border_box, writing_direction);
+    let content = LogicalRect::new(
+        LogicalOffset::new(inset.inline_start, inset.block_start + block_shift),
+        LogicalSize::new(
+            (size.inline_size - inset.inline_sum()).max(0.0),
+            (size.block_size - inset.block_sum() - block_shift).max(0.0),
+        ),
+    );
+    let rect = WritingModeConverter::new(writing_direction, border_box).to_physical_rect(content);
+    PointF::new(rect.x, rect.y)
+}
+
 #[cfg(test)]
 mod tests {
     use computed_style::Direction;
@@ -416,6 +440,39 @@ mod tests {
             assert_eq!(strut.to_physical(writing_direction), sides);
             assert_eq!(strut.inline_sum(), inline_start + inline_end);
             assert_eq!(strut.block_sum(), block_start + block_end);
+        }
+    }
+
+    /// Border and padding of 1, 2, 3, 4 on the top, right, bottom and left
+    /// of a 100x200 box, content moved 5 along the block direction: the
+    /// content box's top left is in by its sides, shifted only when its
+    /// block-start side is on the left or top.
+    #[test]
+    fn content_boxes_start_in_from_their_start_sides() {
+        let inset = Sides {
+            top: 1.0,
+            right: 2.0,
+            bottom: 3.0,
+            left: 4.0,
+        };
+        let border_box = SizeF::new(100.0, 200.0);
+        for ((writing_mode, direction), expected) in ALL.into_iter().zip([
+            (4.0, 6.0),
+            (4.0, 6.0),
+            (4.0, 1.0),
+            (4.0, 1.0),
+            (9.0, 1.0),
+            (9.0, 1.0),
+            (4.0, 1.0),
+            (4.0, 1.0),
+            (9.0, 1.0),
+            (9.0, 1.0),
+        ]) {
+            assert_eq!(
+                content_box_origin(mode(writing_mode, direction), border_box, inset, 5.0),
+                PointF::new(expected.0, expected.1),
+                "{writing_mode:?} {direction:?}"
+            );
         }
     }
 }

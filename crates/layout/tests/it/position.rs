@@ -295,6 +295,21 @@ fn absolute_boxes_in_an_atomic_inline_go_up_through_the_line() {
     assert_eq!(laid.rects["static-pos"], RectF::new(40.0, 20.0, 10.0, 10.0));
 }
 
+/// The static position passed up from an atomic inline is in from its
+/// padding and border: from its content box's top left.
+#[test]
+fn absolute_boxes_go_up_from_inside_an_atomic_inlines_padding() {
+    let laid = lay_out(
+        "<style>body { margin: 0 } div { font: 20px/1 Ahem }</style>
+         <div id=cb style='position: relative; width: 200px; height: 100px'>XX<span
+           style='display: inline-block; padding: 7px 0 1px 3px'>Y<div
+             id=static-pos style='position: absolute; width: 10px; height: 10px'></div></span></div>",
+    );
+    // Below the inline-block's line ("Y", 20px tall, 7px down), at its
+    // content box's left (3px in from the inline-block at 40).
+    assert_eq!(laid.rects["static-pos"], RectF::new(43.0, 27.0, 10.0, 10.0));
+}
+
 /// An absolutely positioned box inside a float in a line, whose
 /// containing block is outside it, goes up through the line too, from
 /// where the float was placed.

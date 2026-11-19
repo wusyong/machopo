@@ -1,0 +1,59 @@
+# Stage 1b: an inline formatting context's content box origin through the
+# converter (`layout`'s `content_origin`, `passed_up`, `first_line`, and
+# `logical::content_box_origin`).
+test = ["cargo", "test", "-q", "-p", "layout"]
+timeout = 900
+
+[[mutant]]
+name = "the style's writing direction is vertical"
+file = "crates/computed_style/src/lib.rs"
+from = '''        WritingDirectionMode::default()'''
+to = '''        WritingDirectionMode::new(WritingMode::VerticalLr, Direction::Ltr)'''
+
+[[mutant]]
+name = "content box origin not shifted"
+file = "crates/layout/src/logical.rs"
+from = '''        LogicalOffset::new(inset.inline_start, inset.block_start + block_shift),'''
+to = '''        LogicalOffset::new(inset.inline_start, inset.block_start),'''
+
+[[mutant]]
+name = "content block size keeps the shift"
+file = "crates/layout/src/logical.rs"
+from = '''            (size.block_size - inset.block_sum() - block_shift).max(0.0),'''
+to = '''            (size.block_size - inset.block_sum()).max(0.0),'''
+
+[[mutant]]
+name = "lines start inside the border only"
+file = "crates/layout/src/lib.rs"
+from = '''        left: border.left + padding.left,'''
+to = '''        left: border.left,'''
+
+[[mutant]]
+name = "lines start below the border only"
+file = "crates/layout/src/lib.rs"
+from = '''        top: border.top + padding.top,'''
+to = '''        top: border.top,'''
+
+[[mutant]]
+name = "an inline formatting context's lines read as vertical"
+file = "crates/layout/src/lib.rs"
+from = '''        b.style.writing_direction(),'''
+to = '''        computed_style::WritingDirectionMode::new(computed_style::WritingMode::VerticalLr, computed_style::Direction::Ltr),'''
+
+[[mutant]]
+name = "static positions in a vertical box"
+file = "crates/layout/src/lib.rs"
+from = '''            self.boxes[index].style.writing_direction(),'''
+to = '''            computed_style::WritingDirectionMode::new(computed_style::WritingMode::VerticalLr, computed_style::Direction::Ltr),'''
+
+[[mutant]]
+name = "static positions' inset top from the bottom"
+file = "crates/layout/src/lib.rs"
+from = '''        top: rect.top,'''
+to = '''        top: rect.bottom,'''
+
+[[mutant]]
+name = "first line's baseline from the border box's top"
+file = "crates/layout/src/lib.rs"
+from = '''                .map(|(start, baseline)| PointF::new(origin.x + start, origin.y + baseline));'''
+to = '''                .map(|(start, baseline)| PointF::new(origin.x + start, baseline));'''

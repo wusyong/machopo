@@ -1541,13 +1541,10 @@ impl BoxTree {
     fn first_line(&self, index: usize) -> Option<PointF> {
         let b = &self.boxes[index];
         if let Some(inline) = &b.inline {
-            let (border, padding) = (b.layout.border, b.layout.padding);
-            return inline.first_line().map(|(start, baseline)| {
-                PointF::new(
-                    border.left + padding.left + start,
-                    border.top + padding.top + b.content_shift + baseline,
-                )
-            });
+            let origin = content_origin(b);
+            return inline
+                .first_line()
+                .map(|(start, baseline)| PointF::new(origin.x + start, origin.y + baseline));
         }
         if b.replaced.is_some() {
             return None;
@@ -1579,7 +1576,6 @@ impl BoxTree {
             border,
             ..
         } = self.boxes[index].layout;
-        let shift = self.boxes[index].content_shift;
         let width = size.width - padding.left - padding.right - border.left - border.right;
         let width = width.max(0.0);
         let (laid_out_at, beside) = inline.laid_out();
@@ -1596,10 +1592,7 @@ impl BoxTree {
             let update = &mut self.last_layout;
             update.lines_broken_for_fragments = update.lines_broken_for_fragments.wrapping_add(1);
         }
-        let (lines, placed, text) = inline.fragments(PointF::new(
-            border.left + padding.left,
-            border.top + padding.top + shift,
-        ));
+        let (lines, placed, text) = inline.fragments(content_origin(&self.boxes[index]));
         self.count_text_placed(text);
         for (&atomic, placed_at) in inline.atomics().iter().zip(placed) {
             let b = &mut self.boxes[usize::from(atomic)];
@@ -1810,7 +1803,12 @@ impl BoxTree {
         if inline.out_of_flow().next().is_none() && !from_atomics {
             return candidates;
         }
-        let origin = PointF::new(inset.left, inset.top);
+        let origin = logical::content_box_origin(
+            self.boxes[index].style.writing_direction(),
+            SizeF::new(output.size.width, output.size.height),
+            physical_sides(inset),
+            0.0,
+        );
         let width = (output.size.width - inset.left - inset.right).max(0.0);
         let statics = inline.static_positions(origin, width);
         let placed = if from_atomics {
@@ -2711,6 +2709,42 @@ impl BoxTree {
 /// width again below the lowest float. None if no float is beside it.
 /// The slots are of the box's border box; a line's room is kept to the
 /// content box when it is worked out from them.
+/// A taffy rect's sides, as values per physical side.
+fn physical_sides(rect: taffy::Rect<f32>) -> Sides<f32> {
+    Sides {
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        left: rect.left,
+    }
+}
+
+/// Where box `b`'s content box has its top left in its border box, as laid
+/// out: its inline formatting context's lines go from there (line boxes
+/// stack from the content box's block-start side; what is on a line is
+/// placed from the line's left, horizontally, as parley lays out only
+/// horizontal lines).
+fn content_origin(b: &LayoutBox) -> PointF {
+    let Layout {
+        size,
+        padding,
+        border,
+        ..
+    } = b.layout;
+    let inset = Sides {
+        top: border.top + padding.top,
+        right: border.right + padding.right,
+        bottom: border.bottom + padding.bottom,
+        left: border.left + padding.left,
+    };
+    logical::content_box_origin(
+        b.style.writing_direction(),
+        SizeF::new(size.width, size.height),
+        inset,
+        b.content_shift,
+    )
+}
+
 fn float_bands(ctx: &BlockContext<'_>, inset: taffy::Rect<f32>) -> FloatBands {
     let top = inset.top;
     if !ctx.has_active_floats(top) {

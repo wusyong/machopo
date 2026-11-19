@@ -351,6 +351,7 @@
 
 **layout**
 
+- 從 inline 內容往上交的 out-of-flow box 的靜態位置用別的 writing mode 算內容區的起點（`layout` 的 `passed_up` 的 `content_box_origin`）：內容區的左上角在每種 writing mode 都是邊框和 padding 往內的同一點，writing mode 只決定 `block_shift` 往哪個方向移，這裡不移（`0.0`）。有移的 `content_origin` 用別的 writing mode 時有測試失敗。
 - `layout` 給 parley 的 variation 在 `font-variation-settings` 自己設了 `opsz` 時不另外加字級的 `opsz`（`font_features.rs` 的 `variations`）：設定排在後面、後面的贏，兩個都給結果一樣；照樣不加，不依賴 shaper 取哪一個。
 - parley fork 的軟連字號：新的一行把「上一個 atom 是軟連字號」重設回 `Break`（`LineState::reset`；斷在軟連字號之後，下一行從那裡的狀態開始，但一行的第一個 atom 和開頭的元素邊緣都在 x 是 0 的地方，那裡不記斷點）；連字號的前進量乘上 display scale（machopo 的排版的 scale 是 1）；`ResolvedStyle::check` 比較 `SoftHyphens`（只有 `RangedBuilder` 用它，machopo 用 ranged builder 的 `shape_line` 一律給 `Break`）；min/max-content 的量測在 `hyphens: none` 的軟連字號之後只在 `overflow-wrap: anywhere` 時斷（拿掉 `NoBreak` 的條件也不斷，`anywhere` 本來就在每個 atom 之前斷，量到的最寬的一段一樣）。
 - IFC 的 measure 在知道寬度時回傳那個寬度（taffy 的 leaf 在知道寬度時不看 measure 回傳的寬度）。
