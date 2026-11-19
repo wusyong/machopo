@@ -589,8 +589,8 @@ impl TextFragment {
     /// starts (a point inside a cluster takes all of it), else the run's
     /// end; a point in white space that collapsed away is where the next
     /// character is. White space that hangs past the line has no room. An
-    /// empty range is where its point is. Left to right only, as machopo lays
-    /// out.
+    /// empty range is where its point is. The clusters are in visual
+    /// order: a right-to-left run's last character first.
     pub fn x_range(&self, start: u32, end: u32) -> (f32, f32) {
         let source = self
             .source

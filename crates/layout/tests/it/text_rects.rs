@@ -160,7 +160,7 @@ fn a_long_text_over_lines() {
     );
 }
 
-/// Right-to-left text (by its characters: machopo has no `direction`): its
+/// Right-to-left text (by its characters, in a left-to-right paragraph): its
 /// runs' clusters come in visual order, the text's last first, and each is
 /// where its character is in the data.
 #[test]

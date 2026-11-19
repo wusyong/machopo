@@ -1,21 +1,21 @@
 # RFC 0105：layout 的座標模型和分段
 
 - 開始日期：2026-11-19
-- 狀態：🚧 已排程：2026-11-19
+- 狀態：✅ 已完成：2026-11-19
 - 進度：`progress.md`
 - 細節：`details.md`
 
 ## 摘要
 
-machopo 的 layout 現在整條假設 `writing-mode: horizontal-tb`、`direction: ltr`，也沒有分段（一個 box 只有一個 fragment）。這份 RFC 先評估：之後要加 `direction: rtl`、`writing-mode`（直排）、multi-column 和列印時，layout 的座標要用什麼模型、分段要用什麼機制，以及建在 taffy 的 fork 上撐不撐得起。選了 B（「已決定的事項」第 1 條）：照 Blink LayoutNG 的做法，machopo 自己的 layout 用邏輯座標寫、在 fragment 建好時一次換成物理座標，分段用 break token，taffy 長期留著負責 flex、grid 和 block 的演算法（直排經過轉置的那一層），分段等到要做 multi-column 時，再決定在 taffy 的上游做、只在 machopo 自己的接縫上斷，還是把 block layout 換成自己寫的。
+machopo 的 layout 原本整條假設 `writing-mode: horizontal-tb`、`direction: ltr`，也沒有分段。這份 RFC 定下座標模型（第 1 條）：照 Blink LayoutNG，machopo 自己的 layout 用邏輯座標寫、做完時一次換成物理的，taffy 長期留著負責 block、flex、grid。做了兩個階段：第 1 階段把 machopo 自己的演算法（inline、table、float、list marker、line clamp、置中、slider 的 thumb）改成邏輯座標，行為不變；第 2 階段接上 `direction: rtl`：style（`direction`、`unicode-bidi`、`dir`、`<bdi>`、`<bdo>`、`:dir()`、`dir=auto`）、邏輯屬性照元素的方向、layout 照方向、inline 的 bidi、捲動的原點（容器和視窗）、`text-overflow`、sticky、`<select>` 的清單。分段（入口的 break token、一個 box 好幾個 fragment）移到 multi-column 的 RFC，和分段走哪一條路一起決定（第 23 條）。
 
 ## 動機
 
 RFC 0103 的「架構上可能要先做的事」第 3 個：每個只照物理方向寫的 layout 功能，之後都要補邏輯方向和斷開的情形。Blink 重寫成 LayoutNG 的原因之一就是舊的 layout 補不上分段（`details.md` 的「Blink LayoutNG」）。現在 layout 的程式還不算多，越晚定，要回頭改的越多。
 
-### 現況
+### 開始時的狀況
 
-2026-11-19 讀程式得到的（逐項的位置在 `details.md` 的「machopo 現在的 layout」）：
+2026-11-19 開始時讀程式得到的（逐項的位置在 `details.md` 的「machopo 現在的 layout」）：
 
 - **整條都是物理座標**。box tree 存 taffy 的 `Style`、`Layout`、`Cache`；fragment tree（照 Blink 的 `PhysicalBoxFragment`）存物理的大小、上右下左的 margin、border、padding 和相對父 fragment 的位移；paint、hit test、捲動、CSSOM 都讀物理的。`layout` 裡 `.left`、`.right`、`.top`、`.bottom` 約 500 處、`.width`、`.height` 約 470 處，paint 裡各約 190、280 處。
 - **style 在 cascade 時就把邏輯屬性換成物理的**（「machopo 只有 `horizontal-tb` 和 `ltr`，block-start 是 top、inline-start 是 left」）；`direction`、`unicode-bidi`、`writing-mode`、`text-orientation`、`column-*`（`column-gap` 以外）、`break-*`、`orphans`、`widows`、`box-decoration-break`、`@page` 都沒有。
@@ -27,79 +27,73 @@ RFC 0103 的「架構上可能要先做的事」第 3 個：每個只照物理�
 
 ### 目標
 
-1. 定下 layout 的座標模型：演算法用什麼座標寫、什麼時候換成物理座標、paint 以後的部分要不要動。
-2. 定下分段的機制：一個 box 怎麼有好幾個 fragment、layout 怎麼在 fragmentainer 的邊界停下再接著排。
-3. 定下和 taffy 的關係：哪些演算法繼續用 taffy、哪些自己寫、要不要在上游做。
-4. 照定下的方向排出之後的 RFC（`direction: rtl`、`writing-mode`、multi-column、列印）的順序，以及這份 RFC 自己先做的那一小段（如果有）。
+1. 定下 layout 的座標模型（第 1 到 3 條）：machopo 自己的演算法用邏輯座標，做完時換成物理的；fragment tree、paint、hit test、捲動、CSSOM 照舊是物理的。
+2. 定下和 taffy 的關係（第 1 條）：taffy 長期留著負責 block、flex、grid，`rtl` 用 taffy 的 `direction`，直排之後經過轉置那一層。
+3. 接上 `direction: rtl`（第 7 條）。
+4. 分段的機制（入口的 break token、一個 box 好幾個 fragment）：移到 multi-column 的 RFC（第 23 條）。
 
 ### 不在範圍內
 
-- 真的做出 `direction: rtl`、`writing-mode`、multi-column、列印：這份只定模型，各自之後的 RFC 做（第一段可能順便接上 taffy 已經有的 `direction`，見「分階段」）。
+- `writing-mode`（直排）、multi-column、列印和 `@page`、分段：各自另開 RFC。
 - 直排的文字 shaping（parley 沒有）。
-- `@page`、列印的 UI。
 
-### 要解決的限制
+### 解決的限制
 
-這份本身不刪 `docs/limitations.md` 的條目；之後的 RFC 照它定的模型做的時候刪（「只有由左到右」那一條、table 的欄從左排、sticky 沒有 `direction`、float 沒有 `inline-start`、`text-overflow` 只有橫排、捲動的原點在左上、`:dir()`）。
+`docs/limitations.md` 拿掉的：「只有由左到右」（inline box 的開頭邊界一律是左邊）、table 的欄從左排、sticky 沒有 `direction`、`text-overflow` 只有由左到右、捲動的原點在左上（容器和視窗）、`<select>` 的清單一律對齊左邊、`:dir()`、`direction` 和 `unicode-bidi` layout 不看。
 
 ## 設計概要
 
-對之後改 layout 的人（照「已決定的事項」定下來之後）：
+對之後改 layout 的人：
 
-- 新的 layout 功能用 inline 和 block 的方向寫（`LogicalSize`、`LogicalOffset`、writing mode 跟著 constraint space 走），不寫 left、top。
-- 一個 box 排好時，它的子 fragment 的位移先是邏輯的，等它自己的大小定了，一次換成物理的（Blink 的 `PhysicalBoxFragment` 的建構子）；fragment tree、paint、hit test、捲動、CSSOM 照舊是物理的。
-- layout 的入口多一個 break token（先一律是沒有），fragment 可以有好幾個；要做 multi-column 時再把分段接上。
+- 新的 layout 功能用 inline 和 block 的方向寫（`layout::logical` 的 `LogicalSize`、`LogicalOffset`、`LogicalRect`、`BoxStrut`，方向從 `ComputedStyle::writing_direction()` 拿），不寫 left、top；一個 box 的子位移先是邏輯的，等它自己的大小定了，經過 `WritingModeConverter` 一次換成物理的。
+- `direction` 照 CSS 和 Blink：段落的方向是 block 的；`unicode-bidi` 是插進文字裡的 bidi 控制字元；行內盒子的邊界在 bidi 重排之後照元素的方向擺；可捲動範圍可以往起點延伸，main thread 的 scroll offset 從原點量（`scrollLeft` 可以是負的），compositor 的 position 從範圍的起點量。
+- 一個 box 現在只有一個 fragment，入口沒有 break token；新的程式盡量不要再加「一個 box 一個 fragment」的假設（`docs/architecture.md`），multi-column 時再接上分段。
 
-對網頁的作者：這份本身沒有看得到的改變（除非第一段接上 `direction: rtl`）。
+對網頁的作者：`direction: rtl` 和 bidi 照 Chrome（限制在 `docs/limitations.md`）。
 
 ## 詳細設計
 
-草稿：列選項，細節等決定之後才寫。三家怎麼做、machopo 和 taffy、parley 的現況在 `details.md`。
+三家怎麼做、machopo 和 taffy、parley 開始時的狀況在 `details.md`。
 
-### 選項
+### 座標模型
 
-- **A：維持物理座標，需要時在邊界轉換**。taffy 照舊；`direction: rtl` 用 taffy 已經有的；直排照 Blitz 在每個 writing mode 的根轉置輸入輸出；分段之後在 machopo 自己的 block 和 inline 上加。
-  - 優點：現在幾乎不用改；RTL 很快能接上。
-  - 缺點：machopo 自己寫的部分（inline、table、out-of-flow 的接法、sticky、list marker、overflow）每個都要各自補 RTL 和直排的分支；Gecko 在 reflow 時存物理的位置，vertical-rl 要事後修正（`nsBlockFrame` 的假的 container 大小），Servo 在 fragment 建立時就換、還沒拿到父 frame 的大小，直排的 block 方向至今沒做完。分段沒有地方接，到時候整條入口都要改。
-- **B（選了，第 1 條）：machopo 自己的 layout 用邏輯座標，fragment 建好時換成物理的；taffy 留著，經過一層接上**。照 Blink LayoutNG：
-  - 邏輯的型別（`LogicalSize`、`LogicalOffset`、`LogicalRect`、writing mode 和 direction 合成一個值、`WritingModeConverter`）放在 machopo；
-  - machopo 自己的演算法（inline、table、定位、float 的接法）和 fragment 的 builder 用邏輯座標，builder 存邏輯的子位移，父 fragment 的大小定了才一次換成物理的（Blink 不用事後修正，正是因為這樣）；
-  - taffy 的 flex、grid、block 照舊用，RTL 直接設 taffy 的 `direction`，直排在 writing mode 的根轉置（Blitz 的做法，也是上游現在給的答案），之後上游的 #752 進來就換掉這一層；
-  - 入口多一個 break token、fragment 可以有好幾個，先一律不分段；真的分段到做 multi-column 時，在第 1 條的三條路裡選。
-  - 優點：之後的每個功能只寫一份；轉換只在一個地方；和 Chromium 同一個模型，查 Blink 的程式能直接對照；taffy 留著，不用一次重寫 flex 和 grid。
-  - 缺點：要先改現有的 inline、table 和 fragment builder 的寫法（約 500 處物理的欄位，大多在 `layout` 裡）；taffy 那一層要維護轉置；taffy 本身還是物理的，它的 block 不能分段。
-- **C：整個換成自己寫的、LayoutNG 那樣的演算法**（block、flex、grid 都自己寫，邏輯座標和 break token 從頭就有）。
-  - 優點：最接近 Chromium，分段和直排沒有限制。
-  - 缺點：成本最高，等於重寫 layout；taffy 的 flex、grid 現在 WPT 的通過率要重新追。
-- **D：在 taffy 的上游做**（#752 的 writing mode 和分段）。
-  - 優點：社群一起維護。
-  - 缺點：writing mode 的提案還沒有維護者回覆，分段上游沒有人提過；時程不在 machopo 手上，fork 要盡量小（CLAUDE.md）。可以和 B 並行：B 的轉置那一層是上游現在建議的做法，上游有了就換。
+- 方向的型別在 `computed_style`（`WritingMode`、`WritingDirectionMode`），幾何的在 `layout::logical`（第 2 條）。`WritingModeConverter` 照 Blink：給外層的大小，把邏輯的位移、大小、rect、四邊換成物理的，反過來也行。
+- machopo 自己的演算法裡面用邏輯座標，做完時換成物理的寫進 taffy 的 `Layout`（第 3 條）：inline 的內容區的起點和第一行的 baseline（第 5 條）、table 的 cell、row、row group、caption 和 collapsed border（第 6 條，邏輯的格子給 paint 時翻轉、轉置成物理的格線）、float 的起點、list marker、line clamp、置中、range 的 thumb。行裡面那一層（parley 給的位置）照舊是物理的，直排時再換（第 5 條）。
+- taffy 照舊是物理的：`rtl` 設它的 `direction`（block、flex、grid、out-of-flow 照它鏡射）。
 
-比較的細節（每個選項要改的範圍、和三家的對照）在 `details.md` 的「做法的比較」。
+### `direction: rtl`
+
+- style：`direction`（繼承）、`unicode-bidi`（不繼承，在 `ComputedStyle` 本身）；HTML 的 `dir` 照 Blink 是 presentational hint（第 9 條），UA 樣式照 Blink 的 `html.css` 給 bidi 的規則；directionality 快取在元素上，`:dir()` 和 `dir=auto` 照它（第 10 條）。邏輯屬性在 cascade 時照元素自己的方向對應（第 11 條）。
+- layout：段落的方向是 block 的（`plaintext` 是第一個強方向字元的，整個當成一段，第 14 條）；flex、grid、table 從右排；靜態位置、outside marker 在 inline-start；視窗照根元素的方向（`Document::PropagateStyleToViewport`）。
+- inline 的 bidi：`unicode-bidi` 照 Blink 在文字裡插入 bidi 控制字元（第 12 條），強制換行前後關掉、重開，一段裡沒有字元的元素不插（第 16 條）；行內盒子的邊界照元素的方向給 parley 斷行，parley 重排一行之後照視覺順序重新擺（第 13、15 條，Blink 的 `ComputeInlinePositions`）。
+- 捲動：可捲動範圍是從 padding box 量的矩形，往起點延伸的軸照 style（Blink 的 `HasLeftOverflow`、`HasTopOverflow`），起點那一側加 padding、捲不到的裁掉（第 18 條）；main thread 存從原點量的 scroll offset，commit 時加上原點給 compositor（第 17 條）；視窗也一樣（第 19 條）。`scrollIntoView` 的 inline 的 start、end 照捲動容器的方向。
+- `text-overflow` 和 line clamp 的省略號在行的結尾（第 20 條）、sticky 的 inset 放不下時讓結尾那一邊（第 21 條）、`<select>` 的清單對齊 select 的起點、項目照自己的方向（第 22 條）。
 
 ### 測試
 
-評估本身沒有程式。定下來之後：邏輯和物理的轉換照 Blink 的 `WritingModeConverter` 的情況寫單元測試（四種 writing mode 乘兩種 direction）；換寫法的那一段要和現在的 reftest、WPT 結果一樣（行為不變）。
+邏輯和物理的換算照 Blink 的 `WritingModeConverter` 寫單元測試（五種 writing mode 乘兩種 direction）；第 1 階段的行為不變由現有的 reftest、WPT 守著；第 2 階段的行為由 `layout`、`style`、`dom`、`renderer`、`compositor`、`paint`、`shell` 的測試，WPT 的 bidi、directionality、`css-logical`、`cssom-view`、`css-overflow`，和情境 `rtl-scroll`、`direction` 守著。驗收表和檢查在 `progress.md`，每一段的 mutation test 的 spec 是這個資料夾的 `mutants-*.toml`。
 
 ### 分階段
 
-做法定了（第 1 條）；每個階段開始前，只決定那個階段要決定的事：
-
-1. **邏輯的型別和轉換**（2026-11-19 做完），machopo 自己的演算法改用邏輯座標，現有的行為不變（只有 `horizontal-tb`、`ltr`）。決定是「已決定的事項」第 2 到 4 條。分五段：1a 是型別和 converter；1b 是 inline 的行在 box 裡的位置（第 5 條）；1c 是 table，連 collapsed border（第 6 條）；1d 是 float、list marker、line clamp、置中、slider 的 thumb；1e 是整個階段的檢查和文件。
-2. **接上 `direction: rtl`**（2026-11-19 做完；第 7 條）：taffy 已經有的 `direction` 和 style 的 `direction`、`unicode-bidi`，machopo 自己的部分照邏輯座標鏡射。分五段（第 8 條）：2a 是 style；2b 是 layout 用 `direction`；2c 是 `unicode-bidi` 在 inline 內容裡；2d 是捲動的原點、sticky、`text-overflow`、`<select>` 的下拉清單；2e 是整個階段的檢查和文件。
-3. 入口的 break token 和「一個 box 好幾個 fragment」，先不分段。
-
-直排、multi-column、列印各自另開 RFC。
+1. **邏輯的型別和轉換**（2026-11-19 做完）：machopo 自己的演算法改用邏輯座標，行為不變。分五段（第 4 條）：1a 型別和 converter；1b inline 的行在 box 裡的位置；1c table，連 collapsed border；1d float、list marker、line clamp、置中、slider 的 thumb；1e 檢查和文件。
+2. **接上 `direction: rtl`**（2026-11-19 做完；第 7 條）：分五段（第 8 條）：2a style；2b 邏輯屬性和 layout 用 `direction`；2c `unicode-bidi` 在 inline 內容裡；2d 捲動的原點、sticky、`text-overflow`、`<select>`；2e 檢查和文件。
+3. 入口的 break token 和「一個 box 好幾個 fragment」：移到 multi-column 的 RFC（第 23 條）。
 
 ## 缺點
 
-- 第一段是只改寫法、行為不變的大改動，期間和其他 layout 的工作會衝突。
-- 兩種座標並存（layout 裡邏輯的、之後物理的），邊界要守住，不然又會在某處偷偷假設物理方向。
-- taffy 照舊是物理的，直排要靠轉置那一層；上游方向改了要跟。
+- 兩種座標並存（machopo 的演算法裡是邏輯的、fragment 之後是物理的），邊界要守住，不然又會在某處偷偷假設物理方向。
+- 行裡面那一層（parley 的位置）和 taffy 照舊是物理的，直排要另外換和轉置。
+- 分段還沒有地方接；之後的 layout 程式可能又假設「一個 box 一個 fragment」。
 
 ## 理由和其他做法
 
-選 B（第 1 條）。完整的比較在 `details.md`。不做的話，之後每個 layout 功能都只照物理方向寫，等到要做 RTL、直排、multi-column 時，要回頭改的就是全部（Blink 的舊 layout 正是這樣才重寫）。
+選 B（第 1 條）：之後的每個 layout 功能只寫一份，轉換只在一個地方，和 Chromium 同一個模型，taffy 留著不用重寫 flex、grid。比較過的做法（完整的在 `details.md` 的「做法的比較」）：
+
+- **A：維持物理座標，需要時在邊界轉換**：machopo 自己寫的部分（inline、table、sticky、list marker、可捲動的範圍）每個都要各自補 `rtl` 和直排的分支；Gecko 存物理的位置、vertical-rl 要事後修正，Servo 在 fragment 建立時就換、直排的 block 方向至今沒做完；分段沒有地方接。
+- **C：整個換成自己寫的、LayoutNG 那樣的演算法**：最接近 Chromium，但等於重寫 layout，taffy 的 flex、grid 的 WPT 通過率要重新追；當成分段的三條路之一保留（第 1 條）。
+- **D：在 taffy 的上游做**（writing mode 的 #752 和分段）：時程不在 machopo 手上；B 的轉置那一層是上游現在建議的做法，上游有了就換。
+
+做的時候換掉的做法：行內盒子的邊界先試過改 parley 的 fork、照 bidi level 決定邊界在哪一邊（第 15 條不選的那個）；捲動的位移先記成兩邊都存 position，同一天改成 main thread 存 scroll offset（第 17 條）。
 
 ## 先例
 
@@ -138,17 +132,15 @@ RFC 0103 的「架構上可能要先做的事」第 3 個：每個只照物理�
 21. **sticky 的左右 inset 都放不下時，照 containing block 的方向讓結尾那一邊**（2026-11-19，2d 第二部分）：`ltr` 的 containing block 讓 `right`，`rtl` 的讓 `left`；上下照舊讓 `bottom`（只有橫排）。照 Chromium 的 `LayoutBoxModelObject::UpdateStickyPositionConstraints` 和 css-position 3（起點那一邊優先，照 containing block 的書寫方向）。不選照 sticky 元素自己的方向：和 Chromium、規範都不同。
 22. **`<select>` 的下拉清單照 select 的方向對齊，每個項目照它自己的方向**（2026-11-19，2d 第二部分）：清單照 select 的 `direction` 對齊它的右邊（`right_aligned`），protocol 的 `MenuItem` 帶每個 option（或 optgroup）的 computed `direction`，shell 照它把文字和縮排放在起點那一邊、段落方向也照它。照 Chromium 的 `ExternalPopupMenu`（`right_aligned` 和 `MenuItem` 的 `text_direction`）。不選所有項目照 select 的方向：option 自己的 `dir` 和 select 不同時和 Chromium 不同。
 
+23. **第 3 階段（入口的 break token、一個 box 好幾個 fragment）移到 multi-column 的 RFC，這份在第 2 階段結束**（2026-11-19，第 3 階段開始前）：break token 和好幾個 fragment，和分段走第 1 條的哪一條路一起決定、一起做。理由：沒有東西會產生第二個 fragment，現在搭的骨架只走得到「一個」的路，測試證明不了它對，mutation test 大多會是等價的；token 的形狀取決於還沒選的路（在 taffy 的上游做，token 進 taffy；只在 machopo 的接縫斷，只在 inline、table 那一層；自己寫 block，入口整個換掉），Blink 先搭骨架是因為它自己寫 block，入口在自己手上。補救：`docs/architecture.md` 提醒新的程式不要再加「一個 box 一個 fragment」的假設。不選照原計畫現在做（骨架測不到、形狀可能要重做）；不選只做讀 fragment 的那一側（CSSOM、paint、hit test 處理一個節點好幾個 fragment：一樣沒有第二個 fragment 可以測）。
+
 ## 待決定
-
-- taffy 現在負責 block（margin collapsing、大小的限制、固有大小）、flex、grid、out-of-flow、float 的排列、replaced element 的大小，和 box 的快取、遞迴的骨架；machopo 自己寫的是 inline 和文字（parley）、table、sticky、list marker、可捲動的範圍、fragment tree。
-
-還沒回答的：
 
 無。
 
 ## 之後的可能
 
-- `direction: rtl` 和 bidi（style 的 `direction`、`unicode-bidi`、`:dir()`，parley 的 L1 規則和行內的方向覆寫）。
-- `writing-mode` 和直排的文字（parley 沒有直排的 shaping，要另外想辦法或等上游）。要接手第 1 階段留下的：inline 行裡面那一層（每一行經過 converter，行裡面的東西照行的 writing mode 加上 `ltr` 換，第 5 條），和 taffy 的 block、flex、grid 在 writing mode 的根轉置輸入輸出（第 1 條）。
-- multi-column、列印和 `@page`。
+- `writing-mode` 和直排的文字（parley 沒有直排的 shaping，要另外想辦法或等上游）：行裡面那一層（每一行經過 converter，行的位置和 atomic inline、float 在行間的位置）、taffy 的轉置那一層，和第 1 階段留給直排的新東西。
+- multi-column、列印和 `@page`，連同分段：入口的 break token、一個 box 好幾個 fragment，在第 1 條的三條路裡選（第 23 條）。
 - 在 taffy 的上游做 writing mode（#752），有了就拿掉 machopo 的轉置那一層。
+- bidi 還沒做到的（`docs/limitations.md`）：被 bidi 拆成不相連的幾段的行內盒子做成好幾個 fragment；`plaintext` 每一段各自的方向；`text-align: match-parent`。
