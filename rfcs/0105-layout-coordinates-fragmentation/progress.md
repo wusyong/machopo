@@ -13,6 +13,11 @@
 | 1c table，連 collapsed border | 完成 | 2026-11-19 |
 | 1d float、list marker、line clamp、置中、slider 的 thumb | 完成 | 2026-11-19 |
 | 1e 第 1 階段的檢查和文件 | 完成 | 2026-11-19 |
+| 2a style：`direction`、`unicode-bidi`、`dir`、`:dir()` | 進行中 | |
+| 2b layout 用 `direction` | | |
+| 2c `unicode-bidi` 在 inline 內容裡 | | |
+| 2d 捲動的原點、sticky、`text-overflow`、`<select>` | | |
+| 2e 第 2 階段的檢查和文件 | | |
 
 ## 驗收
 
@@ -70,3 +75,13 @@ macOS、Apple M4，2026-11-19。
 - `docs/architecture.md`：「要注意的地方」加上 layout 的座標（新的 layout 功能用 inline 和 block 的方向寫、子元素在 box 的大小定了才換成物理的、writing direction 只從 `writing_direction()` 拿），「和 Chromium 刻意不同的地方」加上換算的位置。
 - `cargo test --workspace --no-fail-fast`：55 個 test binary 通過，`shell` 的 `web_animations::ready_then_the_end` 在整套一起跑時失敗一次（單獨跑 5 次都通過）：`finish` 先、`transitionend` 後。原因（和這份 RFC 無關，`animation` 原本的）：動畫在離結束 1µs 以內就算結束（`reached`，照 Blink 的 `IsWithinAnimationTimeTolerance`），這時 `finish` 的事件時間夾到 `now`（`Animation::notify`），比結束時間早一點，`transitionend` 的是結束時間本身、沒有夾，排序（時間先、transition 在 playback 之前）就把 `finish` 排到前面；frame 落在結束前 1µs 以內時才會，負載下 frame 的時間不規則。暫時的測試確認：結束前 0.0004ms 的 frame，`finish` 是 1299.9996、`transitionend` 是 1300.0。修法另外做（在 `main` 上，不在這份 RFC）。
 - `cargo fmt --check` 通過；`cargo clippy --workspace --all-targets -- -D warnings`：`WritingModeConverter` 的 `to_*` 改成取 `self`（它是 `Copy`），之後通過。
+
+### 2a：style（第一部分：`direction`、`unicode-bidi` 的解析和 computed value）
+
+macOS、Apple M4，2026-11-19。2a 分三部分做：兩個 property；`dir` 的 hint、`<bdi>`、`<bdo>`、`dir=auto` 的方向；DOM 的 directionality 快取和 `:dir()`。
+
+- `direction`（繼承，在 `RareInherited`）、`unicode-bidi`（不繼承，在 `RareNonInherited`，6 個值和 Chrome 還收的 `-webkit-isolate`、`-webkit-isolate-override`、`-webkit-plaintext`）：解析、computed value、序列化、不能動畫、`::marker` 收它們。邏輯屬性的對應和 layout 還不看它們（2b）。
+- WPT：`css/css-writing-modes/parsing/` 的 `direction-*`、`unicode-bidi-*` 6 份加進 `include.txt`，全部通過；`marker-supported-properties`、`marker-supported-properties-in-animation`、`serialize-values` 的 14 個 subtest 和 `serialize-all-longhands` 變成通過，更新了預期結果。
+- 新的測試：`style` 的 `computed::direction_inherits_and_unicode_bidi_doesnt`（繼承、`unset`、`inherit`、舊的名字）。
+- mutation test（`mutants-2a1.toml`）9 個，全部抓到（第一輪「`direction` 不算繼承的」沒抓到：繼承是整組 `RareInherited` 一起複製的，`is_inherited` 只影響 `unset`，補了 `direction: unset` 之後抓到）。
+- 跑過：`cargo test -p css -p computed_style -p style -p style_resolver -p dom_api`；`test.py wpt css/css-pseudo/ css/cssom/`。

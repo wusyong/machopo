@@ -5524,3 +5524,11 @@ css/css-pseudo/placeholder-inherit.html
 css/css-pseudo/placeholder-input-dynamic-crash.html
 css/css-pseudo/placeholder-input-number.html
 css/css-pseudo/placeholder-vertical-align.html
+
+# `direction` and `unicode-bidi`: their parsing and computed values.
+css/css-writing-modes/parsing/direction-computed.html
+css/css-writing-modes/parsing/direction-invalid.html
+css/css-writing-modes/parsing/direction-valid.html
+css/css-writing-modes/parsing/unicode-bidi-computed.html
+css/css-writing-modes/parsing/unicode-bidi-invalid.html
+css/css-writing-modes/parsing/unicode-bidi-valid.html

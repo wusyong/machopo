@@ -149,6 +149,8 @@ pub(crate) fn value_to_css(value: &Value, dest: &mut String) {
         Value::FontSynthesis(v) => keyword(dest, crate::font_features::auto_or_none(*v)),
         Value::LineHeight(v) => v.to_css(dest),
         Value::TextAlign(v) => keyword(dest, text_align_name(*v)),
+        Value::Direction(v) => keyword(dest, direction_name(*v)),
+        Value::UnicodeBidi(v) => keyword(dest, unicode_bidi_name(*v)),
         Value::VerticalAlign(v) => keyword(dest, vertical_align_name(*v)),
         Value::WhiteSpaceCollapse(v) => keyword(dest, white_space_collapse_name(*v)),
         Value::TextWrapMode(v) => keyword(dest, text_wrap_mode_name(*v)),
@@ -1132,6 +1134,25 @@ pub(crate) fn font_style_name(style: FontStyle) -> &'static str {
         FontStyle::Normal => "normal",
         FontStyle::Italic => "italic",
         FontStyle::Oblique => "oblique",
+    }
+}
+
+pub(crate) fn direction_name(direction: computed_style::Direction) -> &'static str {
+    match direction {
+        computed_style::Direction::Ltr => "ltr",
+        computed_style::Direction::Rtl => "rtl",
+    }
+}
+
+pub(crate) fn unicode_bidi_name(value: computed_style::UnicodeBidi) -> &'static str {
+    use computed_style::UnicodeBidi::*;
+    match value {
+        Normal => "normal",
+        Embed => "embed",
+        Isolate => "isolate",
+        BidiOverride => "bidi-override",
+        IsolateOverride => "isolate-override",
+        Plaintext => "plaintext",
     }
 }
 

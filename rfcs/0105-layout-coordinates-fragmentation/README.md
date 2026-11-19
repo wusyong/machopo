@@ -86,7 +86,7 @@ RFC 0103 的「架構上可能要先做的事」第 3 個：每個只照物理�
 做法定了（第 1 條）；每個階段開始前，只決定那個階段要決定的事：
 
 1. **邏輯的型別和轉換**（2026-11-19 做完），machopo 自己的演算法改用邏輯座標，現有的行為不變（只有 `horizontal-tb`、`ltr`）。決定是「已決定的事項」第 2 到 4 條。分五段：1a 是型別和 converter；1b 是 inline 的行在 box 裡的位置（第 5 條）；1c 是 table，連 collapsed border（第 6 條）；1d 是 float、list marker、line clamp、置中、slider 的 thumb；1e 是整個階段的檢查和文件。
-2. （第 2 階段開始前決定做不做）接上 taffy 已經有的 `direction: rtl` 和 style 的 `direction`、`unicode-bidi`，machopo 自己的部分照邏輯座標鏡射。
+2. **接上 `direction: rtl`**（第 7 條）：taffy 已經有的 `direction` 和 style 的 `direction`、`unicode-bidi`，machopo 自己的部分照邏輯座標鏡射。分五段（第 8 條）：2a 是 style；2b 是 layout 用 `direction`；2c 是 `unicode-bidi` 在 inline 內容裡；2d 是捲動的原點、sticky、`text-overflow`、`<select>` 的下拉清單；2e 是整個階段的檢查和文件。
 3. 入口的 break token 和「一個 box 好幾個 fragment」，先不分段。
 
 直排、multi-column、列印各自另開 RFC。
@@ -121,6 +121,10 @@ RFC 0103 的「架構上可能要先做的事」第 3 個：每個只照物理�
 4. **第 1 階段分五段；行為不變靠現有的測試和 converter 的單元測試，`rtl` 和直排的路記進 `docs/test-gaps.md`**（2026-11-19，第 1 階段開始前）：1a 是型別和 converter（`computed_style` 的 `WritingMode`、`WritingDirectionMode`、`writing_direction()`，`layout` 的邏輯幾何型別和 `WritingModeConverter`，8 種組合的單元測試，還沒有程式用）；1b 是 inline 的行在 box 裡的位置（第 5 條）；1c 是 table；1d 是 float、list marker、line clamp、置中、slider 的 thumb；1e 是整個階段的檢查和文件。只有橫排、`ltr` 時 converter 原樣複製，inline 和 block 寫反了現有的測試抓得到，`rtl` 該翻的地方沒翻抓不到：演算法有沒有在對的地方呼叫 converter，第 2 階段接上 `direction: rtl` 時才有真的測試，期間靠審查，mutation test 把翻轉的錯誤記成等價。不選現在就讓測試對單一 box 設 `rtl` 或 `vertical-lr`、手算預期的位置：沒有能跑 `rtl` 的 machopo 對照，算錯了反而鎖住錯的行為；float 的 `left` 是物理的，規則多；第 2 階段之後這些大多換成 WPT 的。
 5. **inline 分兩層換，1b 只做行在 box 裡的那一層**（2026-11-19，1b 開始前）：內容區的起點用 `BoxStrut` 的 inline-start、block-start，經過 box 的 converter 換成物理的（`content_box_origin`）；行從內容區的 block-start 往下排（parley 的 `block_min_coord`），行裡面的東西（run、inline box、decoration、ellipsis、atomic inline）照 parley 的位置，從內容區的 line-left 量。橫排時這和每一行各自經過 converter、行裡面的東西相對於那一行再加回去的位置一樣，但逐行換要先加再減 `block_min_coord`，浮點數多一次捨入，行為就不是完全不變了（2026-11-19 做 1b 時改的）；直排時再換成逐行經過 converter。行裡面那一層的轉軸（直排時對調）留給直排的文字：parley 不會直排，那一層現在用不到、也測不到。照 Blink 的 `FragmentItemsBuilder::ConvertToPhysical`：行用 box 的 writing direction 換，行裡面的東西用行的 writing mode 加上固定的 `ltr` 換，因為 bidi 之後它們的位置是視覺的、由左到右量；所以 `rtl` 時行裡面不翻，parley 給的位置已經是這樣。不選兩層都做：直排時位置換對了、字還是 parley 排的橫排，那一層全部測不到，`LineFragment` 的每個欄位都要改；不選 1b 跳過 inline：內容區的起點、atomic inline 的 margin、第一行的 baseline 會一直照物理方向寫。
 6. **1c：table 全部換，連 collapsed border；直排才需要的新東西留給 `writing-mode`**（2026-11-19，1c 開始前）：caption、row group、row、cell 的位置，out-of-flow box 的靜態位置，`vertical-align` 的位移（`shift_content`），欄的背景，和 collapsed border 都用邏輯座標。row 放 cell、row group 放 row 時外層的大小已經知道，馬上換成物理的；table 放 caption 和 row group 時 table 的大小還沒定，先記下邏輯的位置，table 的大小定了再一起換（Blink 的 builder 存邏輯的位移也是為了這個）。collapsed border 照 Blink 的 `TableBorders`：格子的邊是 inline-start 和 block-start 的，每條邊取它的來源的 style 的哪一個物理的邊照 table 的 writing direction 決定；給 paint 的照舊是物理的格線，layout 把邏輯的格子照 writing direction 翻轉、轉置成物理的，paint 不用改。大小的算法不改名：width 就是 inline size、height 就是 block size，模組的開頭寫明。第 1 階段做完時，machopo 自己的 layout 裡沒有只照物理方向寫的現有程式；直排才需要的新東西不在這一階段：inline 行裡面那一層（第 5 條）和 taffy 的輸入輸出的轉置，parley 不會直排、style 也還不解析 `writing-mode`，寫了沒有輸入走得到，留給 `writing-mode` 的 RFC（「之後的可能」）。不選只換放置、collapsed border 留到 `rtl`：它正是只照物理方向寫的現有程式，越晚改越貴；不選連直排的新東西一起做：測不到，真的做直排時多半要照當時的需要重寫。
+7. **做第 2 階段：接上 `direction: rtl`**（2026-11-19，第 1 階段做完時）：style 解析 `direction`（和 `unicode-bidi`，做到哪裡在那一段開始前決定），HTML 的 `dir` 對應到它，`:dir()`；parley 拿到段落的方向，taffy 設 `direction`；第 1 階段照 `ltr` 留下的地方補上。理由：阿拉伯文、希伯來文的頁面要它，第 1 階段只靠審查的 `rtl` 那一半有了真的測試，剛寫好的程式回頭改最便宜。不選先做第 3 階段（break token 的入口）：現在沒有功能用到它；不選做到第 1 階段就收尾：第 2、3 階段的設計在這份裡，拆出去要搬。
+8. **第 2 階段分五段**（2026-11-19，第 2 階段開始前）：2a 是 style（`direction`、`unicode-bidi`，HTML 的 `dir` 照 Blink 的 presentational hint 對應，`<bdi>`、`<bdo>`，`:dir()`；`writing_direction()` 這一段照舊回答 `ltr`）；2b 是 layout 用 `direction`（`writing_direction()` 讀 style，parley 的段落方向，taffy 的 `direction`，`text-align: start`、`end`，第 1 階段照 `ltr` 留下的靜態位置的對齊和 marker 的 inline-start）；2c 是 `unicode-bidi` 在 inline 內容裡的作用（要 parley 支援，做到哪裡在那一段開始前決定）；2d 是其他用到方向的地方（捲動的原點、sticky、`text-overflow`、`<select>` 的下拉清單）；2e 是整個階段的檢查和文件。理由：混排的文字和 `rtl` 的捲動容器是 `rtl` 的頁面最常碰到的，只做段落的方向排出來的頁面還是錯的。不選只做 style、layout 和收尾：`<bdi>` 這類 embedding 和捲動的起點都不對；不選把 parley 那段放到最後：`text-overflow` 碰到 bidi 的情況要回頭補。
+9. **HTML 的 `dir` 照 Blink 用 presentational hint**（2026-11-19，2a 開始前）：`dir=ltr`、`rtl` 給 `direction`，除了 `<bdi>`、`<bdo>`、`<output>` 都再給 `unicode-bidi: isolate`；不合法的 `dir` 在 `<body>` 給 `ltr`；`dir=auto` 只給 `unicode-bidi`（isolate，`textarea`、`pre` 和文字類的 `input` 給 plaintext），`direction` 在算 style 時照 DOM 的 directionality 決定。照 Chromium 的 `HTMLElement::CollectStyleForPresentationAttribute`。理由：和作者的 CSS、使用者樣式、UA 樣式的層級和 Chrome 一樣；只在元素自己的 attribute 變了時重算；`hints.rs` 已經有這個機制。不選 HTML 規範的 UA 樣式（`[dir]:dir(rtl) { direction: rtl }` 這些）：層級比 presentational hint 低，和 Chrome 不同，而且 `:dir()` 的比對進到每個頁面的 style。
+10. **directionality 照 Blink 快取在元素上**（2026-11-19，2a 開始前）：元素存著算好的 directionality，和「自己或祖先有 `dir=auto`」的旗標；`dir` 改了、`dir=auto` 的元素裡的文字改了、子節點進出時，照 HTML 的「directionality 可能改變」更新，方向真的變了的元素才讓它和後代的 `:dir()`、`dir=auto` 的 `direction` 重算；沒有旗標的子樹改文字直接跳過。`unicode-bidi` 照 Chrome 收 6 個值（`normal`、`embed`、`isolate`、`bidi-override`、`isolate-override`、`plaintext`），2a 只存下來，作用在 2c。照 Chromium 的 `Element::CachedDirectionality`、`kSelfOrAncestorHasDirAutoAttribute`、`Element::UpdateDirectionalityAndDescendant`。理由：比對是 O(1)，成本只落在真的有 `dir=auto` 的子樹。不選不快取、比對時現算：每次比對往上走、每次重算 `dir=auto` 都重掃文字，而且改文字這條熱的路上每次都要往上找。
 
 ## 待決定
 
@@ -128,7 +132,7 @@ RFC 0103 的「架構上可能要先做的事」第 3 個：每個只照物理�
 
 還沒回答的：
 
-1. 第 2 階段做不做（接上 `direction: rtl`），第 2 階段開始前決定。
+1. 2c 開始前：`unicode-bidi` 在 inline 內容裡做到哪裡、parley 怎麼改。
 
 ## 之後的可能
 

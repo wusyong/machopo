@@ -1322,13 +1322,26 @@ pub enum TextRendering {
     GeometricPrecision,
 }
 
-/// Which way text runs: `direction`'s values (machopo's pages have no
-/// `direction` yet; a canvas's comes from its `dir` attributes).
+/// Which way text runs: `direction`'s values (a canvas's comes from its
+/// `dir` attributes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Direction {
     #[default]
     Ltr,
     Rtl,
+}
+
+/// How an inline element's text takes part in the paragraph's bidi
+/// (`unicode-bidi`, css-writing-modes 4 § 2.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UnicodeBidi {
+    #[default]
+    Normal,
+    Embed,
+    Isolate,
+    BidiOverride,
+    IsolateOverride,
+    Plaintext,
 }
 
 /// Which way lines stack and which way they run: `writing-mode`'s values
@@ -2679,6 +2692,7 @@ pub struct RareNonInherited {
     /// `-webkit-line-clamp`: `None` is `none`, else at least 1.
     pub line_clamp: Option<u32>,
     pub contain: Contain,
+    pub unicode_bidi: UnicodeBidi,
     /// `clip`: `None` is `auto`.
     pub clip: Option<ClipRect>,
     pub clip_path: ClipPath,
@@ -2753,6 +2767,7 @@ pub struct RareInherited {
     pub text_indent: LengthPercentage,
     pub word_break: WordBreak,
     pub overflow_wrap: OverflowWrap,
+    pub direction: Direction,
     /// The decorations drawn on this element's text: its ancestors', then
     /// its own if it has a `text-decoration-line` (Blink's
     /// `AppliedTextDecorations`).
@@ -3153,6 +3168,7 @@ impl ComputedStyle {
                 tab_size: TabSize::Spaces(8.0),
                 text_indent: LengthPercentage::Px(0.0),
                 word_break: WordBreak::Normal,
+                direction: Direction::Ltr,
                 overflow_wrap: OverflowWrap::Normal,
                 applied_text_decorations: Arc::new([]),
                 text_shadow: Arc::new([]),
@@ -3215,6 +3231,7 @@ impl ComputedStyle {
                 box_ordinal_group: 1,
                 line_clamp: None,
                 contain: Contain::NONE,
+                unicode_bidi: UnicodeBidi::Normal,
                 clip: None,
                 clip_path: ClipPath::None,
                 text_decoration_style: TextDecorationStyle::Solid,

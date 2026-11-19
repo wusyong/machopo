@@ -1,0 +1,67 @@
+# Stage 2a, its first part: `direction` and `unicode-bidi` parsed and
+# computed (`css`, `computed_style`).
+test = ["sh", "-c", "cargo test -q -p style --test it computed::direction && python3 scripts/test.py wpt css/css-writing-modes/parsing/ css/css-pseudo/parsing/marker-supported-properties.html css/css-pseudo/parsing/marker-supported-properties-in-animation.html css/cssom/serialize-values.html"]
+timeout = 900
+
+[[mutant]]
+name = "rtl parsed as ltr"
+file = "crates/css/src/properties.rs"
+from = '''                    "rtl" => computed_style::Direction::Rtl,'''
+to = '''                    "rtl" => computed_style::Direction::Ltr,'''
+
+[[mutant]]
+name = "plaintext parsed as normal"
+file = "crates/css/src/properties.rs"
+from = '''                    "plaintext" => computed_style::UnicodeBidi::Plaintext,'''
+to = '''                    "plaintext" => computed_style::UnicodeBidi::Normal,'''
+
+[[mutant]]
+name = "the old -webkit-isolate not taken"
+file = "crates/css/src/properties.rs"
+from = '''                    "-webkit-isolate" => computed_style::UnicodeBidi::Isolate,'''
+to = ''''''
+
+[[mutant]]
+name = "direction not inherited"
+file = "crates/css/src/properties.rs"
+from = '''                | TextAlign
+                | Direction
+                | WhiteSpaceCollapse'''
+to = '''                | TextAlign
+                | WhiteSpaceCollapse'''
+
+[[mutant]]
+name = "direction not applied"
+file = "crates/css/src/properties.rs"
+from = '''        (Direction, Value::Direction(v)) => style.rare_inherited_mut().direction = v,'''
+to = '''        (Direction, Value::Direction(_)) => {}'''
+
+[[mutant]]
+name = "unicode-bidi's inherit not copied"
+file = "crates/css/src/properties.rs"
+from = '''        UnicodeBidi => to.rare_mut().unicode_bidi = from.rare.unicode_bidi,'''
+to = '''        UnicodeBidi => {}'''
+
+[[mutant]]
+name = "direction not for markers"
+file = "crates/css/src/properties.rs"
+from = '''                | OverflowWrap
+                | Direction
+                | UnicodeBidi
+                | TextShadow'''
+to = '''                | OverflowWrap
+                | UnicodeBidi
+                | TextShadow'''
+
+[[mutant]]
+name = "rtl's computed value written as ltr"
+file = "crates/css/src/serialize.rs"
+from = '''        computed_style::Direction::Rtl => "rtl",'''
+to = '''        computed_style::Direction::Rtl => "ltr",'''
+
+[[mutant]]
+name = "direction animatable"
+file = "crates/css/src/interpolate.rs"
+from = '''            | Direction
+            | UnicodeBidi => AnimationType::NotAnimatable,'''
+to = '''            | UnicodeBidi => AnimationType::NotAnimatable,'''

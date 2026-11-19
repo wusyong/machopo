@@ -60,7 +60,10 @@ impl LonghandId {
             | AnimationRangeStart
             | AnimationRangeEnd
             // css-contain 2: not animatable, so keyframes leave it out.
-            | Contain => AnimationType::NotAnimatable,
+            | Contain
+            // css-writing-modes 4: not animatable.
+            | Direction
+            | UnicodeBidi => AnimationType::NotAnimatable,
             Top
             | Right
             | Bottom
@@ -263,6 +266,8 @@ discrete!(
     Arc<[computed_style::FontFamily]>,
     computed_style::FontStyle,
     computed_style::TextAlign,
+    computed_style::Direction,
+    computed_style::UnicodeBidi,
     computed_style::WhiteSpaceCollapse,
     computed_style::TextWrapMode,
     computed_style::TextTransform,
@@ -1756,6 +1761,8 @@ fn visit(id: LonghandId, from: &ComputedStyle, to: &ComputedStyle, op: Op<'_>) -
         FontSynthesisSmallCaps => field!(font.synthesis_small_caps),
         LineHeight => field!(line_height),
         TextAlign => field!(text_align),
+        Direction => field!(rare_inherited.direction),
+        UnicodeBidi => field!(rare.unicode_bidi),
         VerticalAlign => field!(vertical_align),
         WhiteSpaceCollapse => field!(white_space_collapse),
         TextWrapMode => field!(text_wrap_mode),

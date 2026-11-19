@@ -186,6 +186,8 @@ pub enum LonghandId {
     FontSynthesisSmallCaps,
     LineHeight,
     TextAlign,
+    Direction,
+    UnicodeBidi,
     VerticalAlign,
     WhiteSpaceCollapse,
     TextWrapMode,
@@ -530,7 +532,7 @@ impl LonghandId {
     }
 
     /// Every longhand, in declaration order.
-    pub const ALL: [Self; 249] = [
+    pub const ALL: [Self; 251] = [
         Display,
         BoxSizing,
         Position,
@@ -665,6 +667,8 @@ impl LonghandId {
         FontSynthesisSmallCaps,
         LineHeight,
         TextAlign,
+        Direction,
+        UnicodeBidi,
         VerticalAlign,
         WhiteSpaceCollapse,
         TextWrapMode,
@@ -919,6 +923,8 @@ impl LonghandId {
             "font-synthesis-small-caps" => FontSynthesisSmallCaps,
             "line-height" => LineHeight,
             "text-align" => TextAlign,
+            "direction" => Direction,
+            "unicode-bidi" => UnicodeBidi,
             "vertical-align" => VerticalAlign,
             "white-space-collapse" => WhiteSpaceCollapse,
             "text-wrap-mode" => TextWrapMode,
@@ -1176,6 +1182,8 @@ impl LonghandId {
             FontSynthesisSmallCaps => "font-synthesis-small-caps",
             LineHeight => "line-height",
             TextAlign => "text-align",
+            Direction => "direction",
+            UnicodeBidi => "unicode-bidi",
             VerticalAlign => "vertical-align",
             WhiteSpaceCollapse => "white-space-collapse",
             TextWrapMode => "text-wrap-mode",
@@ -1441,6 +1449,8 @@ impl LonghandId {
                 | TabSize
                 | WordBreak
                 | OverflowWrap
+                | Direction
+                | UnicodeBidi
                 | TextShadow
                 | Content
                 | TransitionProperty
@@ -1511,6 +1521,7 @@ impl LonghandId {
                 | FontSynthesisSmallCaps
                 | LineHeight
                 | TextAlign
+                | Direction
                 | WhiteSpaceCollapse
                 | TextWrapMode
                 | TextTransform
@@ -1942,6 +1953,28 @@ impl LonghandId {
                     "left" => computed_style::TextAlign::Left,
                     "right" => computed_style::TextAlign::Right,
                     "center" => computed_style::TextAlign::Center,
+                    _ => return None,
+                })
+            })?),
+            Direction => Value::Direction(parse_keyword(input, |k| {
+                Some(match_ignore_ascii_case! { k,
+                    "ltr" => computed_style::Direction::Ltr,
+                    "rtl" => computed_style::Direction::Rtl,
+                    _ => return None,
+                })
+            })?),
+            UnicodeBidi => Value::UnicodeBidi(parse_keyword(input, |k| {
+                Some(match_ignore_ascii_case! { k,
+                    "normal" => computed_style::UnicodeBidi::Normal,
+                    "embed" => computed_style::UnicodeBidi::Embed,
+                    "isolate" => computed_style::UnicodeBidi::Isolate,
+                    "bidi-override" => computed_style::UnicodeBidi::BidiOverride,
+                    "isolate-override" => computed_style::UnicodeBidi::IsolateOverride,
+                    "plaintext" => computed_style::UnicodeBidi::Plaintext,
+                    // Chrome's old names, which it still takes.
+                    "-webkit-isolate" => computed_style::UnicodeBidi::Isolate,
+                    "-webkit-isolate-override" => computed_style::UnicodeBidi::IsolateOverride,
+                    "-webkit-plaintext" => computed_style::UnicodeBidi::Plaintext,
                     _ => return None,
                 })
             })?),
@@ -2944,6 +2977,8 @@ pub enum Value {
     FontSynthesis(bool),
     LineHeight(LineHeightValue),
     TextAlign(computed_style::TextAlign),
+    Direction(computed_style::Direction),
+    UnicodeBidi(computed_style::UnicodeBidi),
     /// A keyword; a length is `LengthPercentage`.
     VerticalAlign(computed_style::VerticalAlign),
     WhiteSpaceCollapse(computed_style::WhiteSpaceCollapse),
@@ -4648,6 +4683,8 @@ pub fn apply(
         }
         (LineHeight, Value::LineHeight(v)) => style.line_height = v.compute(cx),
         (TextAlign, Value::TextAlign(v)) => style.text_align = v,
+        (Direction, Value::Direction(v)) => style.rare_inherited_mut().direction = v,
+        (UnicodeBidi, Value::UnicodeBidi(v)) => style.rare_mut().unicode_bidi = v,
         (VerticalAlign, Value::VerticalAlign(v)) => style.vertical_align = v,
         (VerticalAlign, Value::LengthPercentage(v)) => {
             style.vertical_align = computed_style::VerticalAlign::Length(v.compute(cx));
@@ -5095,6 +5132,8 @@ fn copy(id: LonghandId, from: &ComputedStyle, to: &mut ComputedStyle) {
         }
         LineHeight => to.line_height = from.line_height,
         TextAlign => to.text_align = from.text_align,
+        Direction => to.rare_inherited_mut().direction = from.rare_inherited.direction,
+        UnicodeBidi => to.rare_mut().unicode_bidi = from.rare.unicode_bidi,
         VerticalAlign => to.vertical_align = from.vertical_align,
         WhiteSpaceCollapse => to.white_space_collapse = from.white_space_collapse,
         TextWrapMode => to.text_wrap_mode = from.text_wrap_mode,

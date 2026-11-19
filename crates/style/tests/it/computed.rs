@@ -67,6 +67,36 @@ fn the_list_is_the_longhands_in_name_order() {
 
 /// Lengths are absolute, percentages stay percentages, and keywords stay
 /// keywords (the computed value, not the used one).
+/// `direction` inherits (`unset` too) and `unicode-bidi` doesn't; Chrome's old
+/// `-webkit-` names of `unicode-bidi`'s values are taken.
+#[test]
+fn direction_inherits_and_unicode_bidi_doesnt() {
+    let html = r#"<style>
+      #a { direction: rtl; unicode-bidi: -webkit-isolate }
+      #c { unicode-bidi: -webkit-isolate-override }
+      #d { unicode-bidi: -webkit-plaintext }
+      #e { unicode-bidi: inherit }
+      #f { direction: unset }
+    </style><div id=a><span id=b></span><span id=e></span><span id=f></span></div><p id=c><p id=d>"#;
+    let styles = styles(html);
+    let v = |id: &str, property: &str| {
+        computed_value(styles.get(id).expect("styled"), property).expect("supported")
+    };
+    assert_eq!(v("a", "direction"), "rtl");
+    assert_eq!(v("b", "direction"), "rtl");
+    assert_eq!(v("c", "direction"), "ltr");
+    assert_eq!(v("f", "direction"), "rtl", "`unset` inherits it");
+    assert_eq!(v("a", "unicode-bidi"), "isolate");
+    assert_eq!(v("b", "unicode-bidi"), "normal");
+    assert_eq!(v("c", "unicode-bidi"), "isolate-override");
+    assert_eq!(v("d", "unicode-bidi"), "plaintext");
+    assert_eq!(
+        v("e", "unicode-bidi"),
+        "isolate",
+        "`inherit` takes the parent's"
+    );
+}
+
 #[test]
 fn lengths_are_absolute_and_percentages_stay() {
     let html = r#"<style>

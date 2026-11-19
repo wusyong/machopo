@@ -31,16 +31,16 @@ use crate::properties::{LonghandId, Shorthand};
 use crate::property_set::{CssPropertyValueSet, is_custom_property_name};
 use crate::serialize::{
     border_collapse_name, border_style_name, box_sizing_name, caption_side_name, clear_name,
-    content, content_alignment_name, counter_changes, counter_reset, display_name,
+    content, content_alignment_name, counter_changes, counter_reset, direction_name, display_name,
     empty_cells_name, fill_rule_name, flex_direction_name, flex_wrap_name, float_name,
     font_smoothing_name, font_style_name, forced_color_adjust_name, hyphens_name,
     item_alignment_name, list_style_position_name, list_style_type, outline_style_name,
     overflow_anchor_name, overflow_wrap_name, percent_to_css, pointer_events_name, position_name,
     resize_name, scroll_behavior_name, stroke_linecap_name, stroke_linejoin_name,
     table_layout_name, text_align_name, text_decoration_line_to_css, text_overflow_name,
-    text_rendering_name, text_transform_name, text_wrap_mode_name, user_modify_name,
-    user_select_name, vertical_align_name, visibility_name, white_space_collapse_name,
-    word_break_name,
+    text_rendering_name, text_transform_name, text_wrap_mode_name, unicode_bidi_name,
+    user_modify_name, user_select_name, vertical_align_name, visibility_name,
+    white_space_collapse_name, word_break_name,
 };
 use crate::svg::{d_to_css, url_to_css};
 use crate::values::write_number;
@@ -691,6 +691,8 @@ fn longhand_to_css(style: &ComputedStyle, id: LonghandId, dest: &mut String) {
             computed_style::LineHeight::Px(px) => px_to_css(px, dest),
         },
         TextAlign => dest.push_str(text_align_name(style.text_align)),
+        Direction => dest.push_str(direction_name(style.rare_inherited.direction)),
+        UnicodeBidi => dest.push_str(unicode_bidi_name(style.rare.unicode_bidi)),
         VerticalAlign => match style.vertical_align {
             computed_style::VerticalAlign::Length(length) => length_percentage(length, dest),
             keyword => dest.push_str(vertical_align_name(keyword)),
