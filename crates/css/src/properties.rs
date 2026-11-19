@@ -4684,7 +4684,7 @@ pub fn apply(
         (LineHeight, Value::LineHeight(v)) => style.line_height = v.compute(cx),
         (TextAlign, Value::TextAlign(v)) => style.text_align = v,
         (Direction, Value::Direction(v)) => style.rare_inherited_mut().direction = v,
-        (UnicodeBidi, Value::UnicodeBidi(v)) => style.rare_mut().unicode_bidi = v,
+        (UnicodeBidi, Value::UnicodeBidi(v)) => style.unicode_bidi = v,
         (VerticalAlign, Value::VerticalAlign(v)) => style.vertical_align = v,
         (VerticalAlign, Value::LengthPercentage(v)) => {
             style.vertical_align = computed_style::VerticalAlign::Length(v.compute(cx));
@@ -5133,7 +5133,7 @@ fn copy(id: LonghandId, from: &ComputedStyle, to: &mut ComputedStyle) {
         LineHeight => to.line_height = from.line_height,
         TextAlign => to.text_align = from.text_align,
         Direction => to.rare_inherited_mut().direction = from.rare_inherited.direction,
-        UnicodeBidi => to.rare_mut().unicode_bidi = from.rare.unicode_bidi,
+        UnicodeBidi => to.unicode_bidi = from.unicode_bidi,
         VerticalAlign => to.vertical_align = from.vertical_align,
         WhiteSpaceCollapse => to.white_space_collapse = from.white_space_collapse,
         TextWrapMode => to.text_wrap_mode = from.text_wrap_mode,

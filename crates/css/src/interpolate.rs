@@ -1762,7 +1762,7 @@ fn visit(id: LonghandId, from: &ComputedStyle, to: &ComputedStyle, op: Op<'_>) -
         LineHeight => field!(line_height),
         TextAlign => field!(text_align),
         Direction => field!(rare_inherited.direction),
-        UnicodeBidi => field!(rare.unicode_bidi),
+        UnicodeBidi => field!(unicode_bidi),
         VerticalAlign => field!(vertical_align),
         WhiteSpaceCollapse => field!(white_space_collapse),
         TextWrapMode => field!(text_wrap_mode),

@@ -80,8 +80,20 @@ macOS、Apple M4，2026-11-19。
 
 macOS、Apple M4，2026-11-19。2a 分三部分做：兩個 property；`dir` 的 hint、`<bdi>`、`<bdo>`、`dir=auto` 的方向；DOM 的 directionality 快取和 `:dir()`。
 
-- `direction`（繼承，在 `RareInherited`）、`unicode-bidi`（不繼承，在 `RareNonInherited`，6 個值和 Chrome 還收的 `-webkit-isolate`、`-webkit-isolate-override`、`-webkit-plaintext`）：解析、computed value、序列化、不能動畫、`::marker` 收它們。邏輯屬性的對應和 layout 還不看它們（2b）。
+- `direction`（繼承，在 `RareInherited`）、`unicode-bidi`（不繼承，在 `ComputedStyle` 本身：UA 樣式給多數 block 元素 `isolate`，放在 `RareNonInherited` 的話每個都要複製那一組，第二部分時 `style_groups` 的測試抓到之後搬的；6 個值和 Chrome 還收的 `-webkit-isolate`、`-webkit-isolate-override`、`-webkit-plaintext`）：解析、computed value、序列化、不能動畫、`::marker` 收它們。邏輯屬性的對應和 layout 還不看它們（2b）。
 - WPT：`css/css-writing-modes/parsing/` 的 `direction-*`、`unicode-bidi-*` 6 份加進 `include.txt`，全部通過；`marker-supported-properties`、`marker-supported-properties-in-animation`、`serialize-values` 的 14 個 subtest 和 `serialize-all-longhands` 變成通過，更新了預期結果。
 - 新的測試：`style` 的 `computed::direction_inherits_and_unicode_bidi_doesnt`（繼承、`unset`、`inherit`、舊的名字）。
 - mutation test（`mutants-2a1.toml`）9 個，全部抓到（第一輪「`direction` 不算繼承的」沒抓到：繼承是整組 `RareInherited` 一起複製的，`is_inherited` 只影響 `unset`，補了 `direction: unset` 之後抓到）。
 - 跑過：`cargo test -p css -p computed_style -p style -p style_resolver -p dom_api`；`test.py wpt css/css-pseudo/ css/cssom/`。
+
+### 2a：style（第二部分：`dir` 的 hint 和 UA 樣式的 bidi 規則）
+
+macOS、Apple M4，2026-11-19。
+
+- `style` 的 `hints.rs` 的 `dir_declarations`：每個 HTML 元素的 `dir`，`ltr`、`rtl` 給 `direction`，不合法的值在 `<body>` 給 `ltr`，`auto` 給 `unicode-bidi`（`isolate`；search、tel、url、email 的 `<input>` 給 `plaintext`；`<bdo>`、`<textarea>`、`<pre>` 的由 UA 樣式給）。`dir=auto` 照 directionality 給的 `direction` 在第三部分（要 directionality 的快取和失效）。
+- UA 樣式（`style_resolver` 的 `html.css`）照 Blink 的 `html.css` 加上 bidi 的規則：一串 block 元素、`<bdi>`、`<output>`、`[dir=ltr i]`、`[dir=rtl i]`、`[dir=auto i]` 是 `isolate`，`<bdo>` 是 `isolate-override`，`dir=auto` 的 `<textarea>`、`<pre>` 是 `plaintext`，`input[type=tel i]` 是 `direction: ltr`；`::marker` 照 HTML 的 UA 樣式是 `isolate`（拿掉了「`::marker` 沒有 `unicode-bidi`」的偏差）。
+- `unicode-bidi` 從 `RareNonInherited` 搬到 `ComputedStyle` 本身：UA 樣式給多數 block 元素 `isolate` 之後，`style_groups::a_group_is_shared_until_one_of_its_properties_is_set` 失敗（每個 `div`、`p` 都複製了 rare 那一組）。
+- WPT：`html/rendering/bidi-rendering/unicode-bidi-ua-rules.html`（130 個 subtest）、`slot-direction.window.js`、`html/rendering/non-replaced-elements/flow-content-0/search-styles.html` 加進 `include.txt`，全部通過；`css/css-pseudo/marker-default-styles.html` 的 8 個 subtest 變成通過，整份通過了，`.ini` 拿掉。`bidi-rendering/slot-no-isolate-001.html`（reftest）要 layout 做 bidi，還沒加。
+- 新的測試：`style` 的 `hints::dir_maps_to_direction_and_unicode_bidi`。
+- mutation test（`mutants-2a2.toml`）10 個，全部抓到（先把測試裡幾個元素搬到 `rtl` 的元素裡：在 `ltr` 的 parent 底下，`dir=ltr`、`input[type=tel]` 的 `ltr` 拿掉了也一樣）。
+- 跑過：`cargo test -p style -p css -p style_resolver`；`test.py wpt html/rendering/ css/css-pseudo/`（另外 61 個意外通過的 subtest 是 macOS 上已知的、和這裡無關的那兩份）。

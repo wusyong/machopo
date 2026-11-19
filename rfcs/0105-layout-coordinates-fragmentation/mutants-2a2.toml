@@ -1,0 +1,69 @@
+# Stage 2a, its second part: the `dir` attribute's hints (`style`'s
+# `hints.rs`) and the UA stylesheet's bidi rules.
+test = ["sh", "-c", "cargo test -q -p style --test it hints::dir && python3 scripts/test.py wpt css/css-pseudo/marker-default-styles.html html/rendering/bidi-rendering/unicode-bidi-ua-rules.html html/rendering/non-replaced-elements/flow-content-0/search-styles.html"]
+timeout = 900
+
+[[mutant]]
+name = "dir=rtl gives ltr"
+file = "crates/style/src/hints.rs"
+from = '''        out.push(direction(Direction::Rtl));'''
+to = '''        out.push(direction(Direction::Ltr));'''
+
+[[mutant]]
+name = "dir=ltr gives nothing"
+file = "crates/style/src/hints.rs"
+from = '''    } else if dir.eq_ignore_ascii_case("ltr") {
+        out.push(direction(Direction::Ltr));'''
+to = '''    } else if dir.eq_ignore_ascii_case("ltr") {'''
+
+[[mutant]]
+name = "a bogus dir on a body gives nothing"
+file = "crates/style/src/hints.rs"
+from = '''    } else if name.local() == local::BODY {'''
+to = '''    } else if name.local() == local::HTML {'''
+
+[[mutant]]
+name = "a textarea's dir=auto hint isolates it"
+file = "crates/style/src/hints.rs"
+from = '''if [local::BDO, local::TEXTAREA, local::PRE].contains(&name.local()) {'''
+to = '''if [local::BDO, local::PRE].contains(&name.local()) {'''
+
+[[mutant]]
+name = "a search field's dir=auto isolates it"
+file = "crates/style/src/hints.rs"
+from = '''["search", "tel", "url", "email"]'''
+to = '''["tel", "url", "email"]'''
+
+[[mutant]]
+name = "an element with dir not isolated"
+file = "crates/style_resolver/resources/html.css"
+from = '''output, [dir=ltr i], [dir=rtl i], [dir=auto i] {'''
+to = '''output, [dir=auto i] {'''
+
+[[mutant]]
+name = "bdo not overriding"
+file = "crates/style_resolver/resources/html.css"
+from = '''  unicode-bidi: isolate-override;'''
+to = '''  unicode-bidi: isolate;'''
+
+[[mutant]]
+name = "a textarea with dir=auto not plaintext"
+file = "crates/style_resolver/resources/html.css"
+from = '''textarea[dir=auto i], pre[dir=auto i] {'''
+to = '''pre[dir=auto i] {'''
+
+[[mutant]]
+name = "a telephone field not ltr"
+file = "crates/style_resolver/resources/html.css"
+from = '''input[type=tel i] {
+  direction: ltr;
+}'''
+to = '''input[type=tel i] {
+}'''
+
+[[mutant]]
+name = "a marker not isolated"
+file = "crates/style_resolver/resources/html.css"
+from = '''::marker {
+  unicode-bidi: isolate;'''
+to = '''::marker {'''

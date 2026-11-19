@@ -5525,7 +5525,11 @@ css/css-pseudo/placeholder-input-dynamic-crash.html
 css/css-pseudo/placeholder-input-number.html
 css/css-pseudo/placeholder-vertical-align.html
 
-# `direction` and `unicode-bidi`: their parsing and computed values.
+# `direction` and `unicode-bidi`: their parsing and computed values, and
+# the `dir` attribute's and the UA stylesheet's bidi rules.
+html/rendering/bidi-rendering/slot-direction.window.js
+html/rendering/bidi-rendering/unicode-bidi-ua-rules.html
+html/rendering/non-replaced-elements/flow-content-0/search-styles.html
 css/css-writing-modes/parsing/direction-computed.html
 css/css-writing-modes/parsing/direction-invalid.html
 css/css-writing-modes/parsing/direction-valid.html

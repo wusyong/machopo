@@ -74,6 +74,53 @@ fn an_editing_hosts_long_words_wrap() {
     assert_eq!(wrap(&mut page, "f"), OverflowWrap::BreakWord);
 }
 
+/// `dir`: `ltr` and `rtl` give `direction` (another value `ltr` on a
+/// `<body>` only), below the rules; with `auto` and either, the UA
+/// stylesheet isolates the element, `<bdo>` overrides, and `auto` makes a
+/// search field and a `<textarea>` plaintext; a telephone field is `ltr`
+/// in any; styled again as it changes.
+#[test]
+fn dir_maps_to_direction_and_unicode_bidi() {
+    use computed_style::{Direction, UnicodeBidi};
+    let mut page = Page::new(
+        "<!doctype html><html dir=rtl><style>.l { direction: ltr }</style>\
+         <body id=body dir=bogus><div id=r dir=rtl><span id=in>x</span><div id=l dir=LTR></div>\
+         <span id=rs dir=rtl></span><input id=tel type=tel></div><div id=b dir=bogus></div>\
+         <p id=rule class=l dir=rtl></p><span id=plain></span><span id=auto dir=auto></span>\
+         <input id=search type=search dir=auto><input id=text dir=auto>\
+         <textarea id=area dir=auto></textarea><bdo id=bdo dir=rtl></bdo><bdi id=bdi></bdi>",
+    );
+    let style = |page: &mut Page, id: &str| {
+        let style = page.style(id);
+        (style.rare_inherited.direction, style.unicode_bidi)
+    };
+    use Direction::{Ltr, Rtl};
+    use UnicodeBidi::*;
+    for (id, want) in [
+        ("r", (Rtl, Isolate)),
+        ("in", (Rtl, Normal)),
+        ("l", (Ltr, Isolate)),
+        ("rs", (Rtl, Isolate)),
+        ("b", (Ltr, Isolate)),
+        ("rule", (Ltr, Isolate)),
+        ("plain", (Ltr, Normal)),
+        ("auto", (Ltr, Isolate)),
+        ("search", (Ltr, Plaintext)),
+        ("text", (Ltr, Isolate)),
+        ("area", (Ltr, Plaintext)),
+        ("bdo", (Rtl, IsolateOverride)),
+        ("bdi", (Ltr, Isolate)),
+        ("tel", (Ltr, Normal)),
+    ] {
+        assert_eq!(style(&mut page, id), want, "{id}");
+    }
+    // The `<html>`'s `rtl` not inherited: a bogus `dir` on a `<body>` is `ltr`.
+    assert_eq!(style(&mut page, "body"), (Ltr, Normal));
+    page.with("r", |cx, r| cx.set_attribute(r, "dir", "ltr"));
+    page.recalc();
+    assert_eq!(style(&mut page, "in"), (Ltr, Normal));
+}
+
 #[test]
 fn a_tables_attributes_style_its_cells_again() {
     let mut page = Page::new(

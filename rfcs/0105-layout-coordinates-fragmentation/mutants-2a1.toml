@@ -39,7 +39,7 @@ to = '''        (Direction, Value::Direction(_)) => {}'''
 [[mutant]]
 name = "unicode-bidi's inherit not copied"
 file = "crates/css/src/properties.rs"
-from = '''        UnicodeBidi => to.rare_mut().unicode_bidi = from.rare.unicode_bidi,'''
+from = '''        UnicodeBidi => to.unicode_bidi = from.unicode_bidi,'''
 to = '''        UnicodeBidi => {}'''
 
 [[mutant]]

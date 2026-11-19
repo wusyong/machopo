@@ -692,7 +692,7 @@ fn longhand_to_css(style: &ComputedStyle, id: LonghandId, dest: &mut String) {
         },
         TextAlign => dest.push_str(text_align_name(style.text_align)),
         Direction => dest.push_str(direction_name(style.rare_inherited.direction)),
-        UnicodeBidi => dest.push_str(unicode_bidi_name(style.rare.unicode_bidi)),
+        UnicodeBidi => dest.push_str(unicode_bidi_name(style.unicode_bidi)),
         VerticalAlign => match style.vertical_align {
             computed_style::VerticalAlign::Length(length) => length_percentage(length, dest),
             keyword => dest.push_str(vertical_align_name(keyword)),

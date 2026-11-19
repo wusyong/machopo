@@ -195,6 +195,7 @@ pub(crate) fn declarations<'gc>(
             value: css::properties::Value::OverflowWrap(computed_style::OverflowWrap::BreakWord),
         });
     }
+    dir_declarations(cx, element, &mut hints);
     (!hints.is_empty()).then(|| {
         let mut set = CssPropertyValueSet::from_declarations(hints);
         // A `background`'s `url()` against the document's URL.
@@ -205,6 +206,65 @@ pub(crate) fn declarations<'gc>(
         }
         (Arc::new(set), digest(cx, element))
     })
+}
+
+/// An HTML element's `dir` (Blink's `HTMLElement::
+/// CollectStyleForPresentationAttribute`, which the UA stylesheet's bidi
+/// rules go with): `ltr` and `rtl` its `direction`, another value `ltr`
+/// on a `<body>`; `auto` its `unicode-bidi`, `isolate` (`plaintext` for a
+/// search, telephone, URL or email field), but a `<bdo>`'s, `<textarea>`'s
+/// and `<pre>`'s, which the UA stylesheet has.
+fn dir_declarations<'gc>(
+    cx: &Cx<'_, 'gc>,
+    element: NodeRef<'gc>,
+    out: &mut Vec<css::properties::Declaration>,
+) {
+    use computed_style::{Direction, UnicodeBidi};
+    use css::properties::{Declaration, LonghandId, Value};
+    use names::local;
+    let Some(name) = cx.qualified_name(element) else {
+        return;
+    };
+    if name.namespace() != names::HTML_NAMESPACE {
+        return;
+    }
+    let Some(dir) = cx.attribute_value_by_id(element, local::DIR) else {
+        return;
+    };
+    let dir = dir.borrow().to_str().into_owned();
+    let direction = |direction| Declaration {
+        id: LonghandId::Direction,
+        value: Value::Direction(direction),
+    };
+    if dir.eq_ignore_ascii_case("auto") {
+        if [local::BDO, local::TEXTAREA, local::PRE].contains(&name.local()) {
+            return;
+        }
+        let plaintext = name.local() == local::INPUT
+            && cx
+                .attribute_value_by_id(element, local::TYPE)
+                .is_some_and(|kind| {
+                    let kind = kind.borrow();
+                    let kind = kind.to_str();
+                    ["search", "tel", "url", "email"]
+                        .iter()
+                        .any(|text| kind.eq_ignore_ascii_case(text))
+                });
+        out.push(Declaration {
+            id: LonghandId::UnicodeBidi,
+            value: Value::UnicodeBidi(if plaintext {
+                UnicodeBidi::Plaintext
+            } else {
+                UnicodeBidi::Isolate
+            }),
+        });
+    } else if dir.eq_ignore_ascii_case("ltr") {
+        out.push(direction(Direction::Ltr));
+    } else if dir.eq_ignore_ascii_case("rtl") {
+        out.push(direction(Direction::Rtl));
+    } else if name.local() == local::BODY {
+        out.push(direction(Direction::Ltr));
+    }
 }
 
 /// An SVG element's presentation attributes as declarations (`None` for

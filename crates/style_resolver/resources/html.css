@@ -12,7 +12,6 @@
  * - `th`'s and `caption`'s `text-align` is `center`: Chrome's
  *   `-internal-center` and `-webkit-center` also center block children.
  * - No quirks-mode rules (a table's font and `white-space` not inherited).
- * - `::marker` has no `unicode-bidi`.
  * - `fieldset` gets no border: its `legend` isn't laid out on it.
  * - Form controls: Chrome's `light-dark()` colors are their light ones;
  *   no `text-shadow` or `writing-mode`; an `<input>` has no
@@ -58,6 +57,28 @@ header, hr, legend, listing, main, p, plaintext, pre, search, xmp {
 blockquote, figure, listing, p, plaintext, pre, xmp {
   margin-top: 1em;
   margin-bottom: 1em;
+}
+
+/* Bidi (the HTML standard's "Bidirectional text"): with the `dir`
+   attribute's hints, which give `direction`. */
+address, blockquote, center, div, figure, figcaption, footer, form, header, hr,
+legend, listing, main, p, plaintext, pre, summary, xmp, article, aside, h1, h2,
+h3, h4, h5, h6, hgroup, nav, section, search, table, caption, colgroup, col,
+thead, tbody, tfoot, tr, td, th, dir, dd, dl, dt, menu, ol, ul, li, bdi,
+output, [dir=ltr i], [dir=rtl i], [dir=auto i] {
+  unicode-bidi: isolate;
+}
+
+bdo, bdo[dir] {
+  unicode-bidi: isolate-override;
+}
+
+textarea[dir=auto i], pre[dir=auto i] {
+  unicode-bidi: plaintext;
+}
+
+input[type=tel i] {
+  direction: ltr;
 }
 
 blockquote, figure {
@@ -236,6 +257,7 @@ dir, menu, ul {
 }
 
 ::marker {
+  unicode-bidi: isolate;
   font-variant-numeric: tabular-nums;
   white-space: pre;
   text-transform: none;

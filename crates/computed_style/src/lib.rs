@@ -2692,7 +2692,6 @@ pub struct RareNonInherited {
     /// `-webkit-line-clamp`: `None` is `none`, else at least 1.
     pub line_clamp: Option<u32>,
     pub contain: Contain,
-    pub unicode_bidi: UnicodeBidi,
     /// `clip`: `None` is `auto`.
     pub clip: Option<ClipRect>,
     pub clip_path: ClipPath,
@@ -3020,6 +3019,9 @@ pub struct ComputedStyle {
     pub inside_blocking_wheel_event_handler: bool,
     pub border_collapse: BorderCollapse,
     pub caption_side: CaptionSide,
+    /// Not in a group: the UA stylesheet sets it on most block elements
+    /// (`isolate`), which would copy the group for each.
+    pub unicode_bidi: UnicodeBidi,
     pub empty_cells: EmptyCells,
     /// The inherited properties most elements leave as their parent's:
     /// shared with it until one is set (Blink's `StyleRareInheritedData`).
@@ -3160,6 +3162,7 @@ impl ComputedStyle {
             inside_blocking_wheel_event_handler: false,
             border_collapse: BorderCollapse::Separate,
             caption_side: CaptionSide::Top,
+            unicode_bidi: UnicodeBidi::Normal,
             empty_cells: EmptyCells::Show,
             rare_inherited: Arc::new(RareInherited {
                 list_style_type: ListStyleType::Disc,
@@ -3231,7 +3234,6 @@ impl ComputedStyle {
                 box_ordinal_group: 1,
                 line_clamp: None,
                 contain: Contain::NONE,
-                unicode_bidi: UnicodeBidi::Normal,
                 clip: None,
                 clip_path: ClipPath::None,
                 text_decoration_style: TextDecorationStyle::Solid,
