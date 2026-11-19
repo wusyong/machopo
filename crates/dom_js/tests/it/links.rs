@@ -178,11 +178,18 @@ fn following_hyperlinks() {
         &page.navigations()[..],
         [FrameNavigation::SameDocument { url, .. }] if url == "https://example.test/a/b.html#f"
     ));
-    // Disconnected, or a click canceled: nothing.
+    // Disconnected: an `<a>` follows it all the same (HTML's "cannot
+    // navigate" is for other elements), an `<area>` doesn't; a click
+    // canceled: nothing.
+    assert_eq!(
+        followed(&mut page, "a.remove(); a.href = 'd.html'; a.click()"),
+        [(top, to("https://example.test/a/d.html", false))]
+    );
     assert_eq!(
         followed(
             &mut page,
-            "a.remove(); a.click(); document.body.append(a); a.onclick = (e) => e.preventDefault(); a.click()"
+            "var area = document.createElement('area'); area.href = 'd.html'; area.click(); \
+             document.body.append(a); a.onclick = (e) => e.preventDefault(); a.click()"
         ),
         []
     );

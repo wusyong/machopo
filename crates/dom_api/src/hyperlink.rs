@@ -352,8 +352,10 @@ fn chosen_document<'gc>(
 /// the user clicked (script's clicks open none: with no user activation
 /// to allow it, Chrome blocks such a popup), in the background for a
 /// middle button or the platform's new-tab key, in the foreground with
-/// Shift too or else. Not for one disconnected or of a document not fully
-/// active; navigated before the document is completely loaded, without
+/// Shift too or else. Not for one of a document not fully active, nor for
+/// a disconnected one but an HTML `<a>` (HTML's "cannot navigate"; Blink's
+/// `HTMLAnchorElementBase::HandleClick` stops a disconnected `<area>`
+/// alone); navigated before the document is completely loaded, without
 /// the user, it replaces the entry. Recorded, as `location`'s are: the
 /// engine does it once the call (or the input's dispatch) is over.
 pub(crate) fn follow_hyperlink<H: ScriptHost>(
@@ -364,7 +366,9 @@ pub(crate) fn follow_hyperlink<H: ScriptHost>(
     host.mutate(|cx| {
         let element = element.get(cx.gc);
         let document = cx.document_of(element);
-        if !cx.is_connected(element) || !crate::history::is_fully_active(cx, document) {
+        let anchor = cx.qualified_name(element) == Some(QualifiedName::html(names::local::A));
+        if !(anchor || cx.is_connected(element)) || !crate::history::is_fully_active(cx, document)
+        {
             return;
         }
         let Some(url) = link_href(cx, element).and_then(|href| {
