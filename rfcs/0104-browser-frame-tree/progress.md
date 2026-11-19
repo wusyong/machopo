@@ -72,5 +72,5 @@ macOS、Apple M4，2026-11-18 到 2026-11-19。
 ### 跑過的檢查
 
 - 每個階段做完時：`cargo test --workspace`、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`python3 scripts/test.py scenarios --window`（69 份）。clippy 找到的都改了寫法、沒有加 `#[expect]`：`FrameToken::parse` 的 `as_chunks`、`dom_js` 的 `Frame::new` 的參數（1c）；`commit_timing` 的參數、`set_navigation` 的錯誤型別、IO thread 的 callback 的型別（2f）；`unique_name` 的長度運算（3e）；`drain` 的 `next_back`（4c）。
-- 最後（4c）：真視窗的情境（`scenarios --window`）第一次跑時螢幕鎖住，視窗畫不出 frame，大多是「no frame was drawn」而失敗（環境的問題，3e 時 69 份全部通過），停掉了，要在螢幕解鎖時重跑。`cargo test --workspace` 4136 個通過（57 個測試 binary；`bindings` 的 `gc_platform` 印出的兩個 panic 是測試刻意的），fmt、clippy 通過；`test.py wpt html/browsers/` 沒有不預期的結果；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs` 通過。
+- 最後（4c）：真視窗的情境（`scenarios --window`）第一次跑時螢幕鎖住，視窗畫不出 frame，大多是「no frame was drawn」而失敗（環境的問題），停掉了；解鎖之後（merge 回 `main` 之後、`cargo clean` 重編）重跑，69 份全部通過，截圖看過 `frames`。`cargo test --workspace` 4136 個通過（57 個測試 binary；`bindings` 的 `gc_platform` 印出的兩個 panic 是測試刻意的），fmt、clippy 通過；`test.py wpt html/browsers/` 沒有不預期的結果；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs` 通過。
 - 沒有動到 GC：`matrix`、`fuzz` 照 CLAUDE.md 由每週的 CI 跑。
