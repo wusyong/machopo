@@ -18,10 +18,21 @@ use protocol::viz::{
     RenderPassId, ResourceId, SharedQuadState, TransferableResource,
 };
 
+use crate::display::SharedImageHandle;
+
 /// Latest frame per frame sink (`viz::SurfaceManager`, much simplified).
 #[derive(Default)]
 pub struct SurfaceManager {
-    surfaces: HashMap<FrameSinkId, (LocalSurfaceId, CompositorFrame)>,
+    surfaces: HashMap<FrameSinkId, Surface>,
+}
+
+struct Surface {
+    local_surface_id: LocalSurfaceId,
+    frame: CompositorFrame,
+    /// The shared images the frame's resources name, held while the frame
+    /// is (Chromium's `DisplayResourceProvider` locks what a frame uses):
+    /// one its client has destroyed since is still what this frame draws.
+    images: HashMap<ResourceId, SharedImageHandle>,
 }
 
 impl SurfaceManager {
@@ -32,18 +43,32 @@ impl SurfaceManager {
         sink: FrameSinkId,
         local_surface_id: LocalSurfaceId,
         frame: CompositorFrame,
+        images: HashMap<ResourceId, SharedImageHandle>,
     ) -> bool {
-        if let Some((current, _)) = self.surfaces.get(&sink)
-            && local_surface_id < *current
+        if let Some(current) = self.surfaces.get(&sink)
+            && local_surface_id < current.local_surface_id
         {
             return false;
         }
-        self.surfaces.insert(sink, (local_surface_id, frame));
+        self.surfaces.insert(
+            sink,
+            Surface {
+                local_surface_id,
+                frame,
+                images,
+            },
+        );
         true
     }
 
     pub fn latest(&self, sink: FrameSinkId) -> Option<&CompositorFrame> {
-        self.surfaces.get(&sink).map(|(_, f)| f)
+        self.surfaces.get(&sink).map(|surface| &surface.frame)
+    }
+
+    /// The shared image `sink`'s latest frame holds for its resource
+    /// `resource`.
+    fn image(&self, sink: FrameSinkId, resource: ResourceId) -> Option<&SharedImageHandle> {
+        self.surfaces.get(&sink)?.images.get(&resource)
     }
 
     pub fn remove(&mut self, sink: FrameSinkId) {
@@ -58,6 +83,9 @@ pub struct AggregatedFrame<'a> {
     pub render_pass_list: Vec<CompositorRenderPass>,
     /// By the aggregated ids the quads use.
     pub resources: HashMap<ResourceId, &'a TransferableResource>,
+    /// The shared images of those resources whose client made them by
+    /// `CreateSharedImage`, by the same ids.
+    pub images: HashMap<ResourceId, &'a SharedImageHandle>,
     pub background_color: Color,
     /// Size the root client produced the frame for, physical pixels.
     pub size_in_pixels: Size,
@@ -88,6 +116,7 @@ struct Output<'a> {
     quads: Vec<DrawQuad>,
     shared_quad_states: Vec<SharedQuadState>,
     resources: HashMap<ResourceId, &'a TransferableResource>,
+    images: HashMap<ResourceId, &'a SharedImageHandle>,
     embedded: HashSet<FrameSinkId>,
     /// The ids used this time; the rest are dropped after.
     used_ids: HashMap<(FrameSinkId, ResourceId), ResourceId>,
@@ -108,6 +137,7 @@ impl SurfaceAggregator {
             quads: Vec::new(),
             shared_quad_states: Vec::new(),
             resources: HashMap::new(),
+            images: HashMap::new(),
             embedded: HashSet::new(),
             used_ids: HashMap::new(),
         };
@@ -135,6 +165,7 @@ impl SurfaceAggregator {
                 quad_list: out.quads,
             }],
             resources: out.resources,
+            images: out.images,
             background_color: frame.metadata.root_background_color,
             size_in_pixels: frame.size_in_pixels(),
             embedded: out.embedded,
@@ -229,6 +260,9 @@ impl SurfaceAggregator {
                     };
                     let id = self.aggregated_id(sink, resource_id, out);
                     out.resources.insert(id, resource);
+                    if let Some(image) = manager.image(sink, resource_id) {
+                        out.images.insert(id, image);
+                    }
                     let index = *states
                         .entry(quad.shared_quad_state)
                         .or_insert_with(|| push_state(out, quad_clip, quad_rounded, quad_opacity));
@@ -393,7 +427,7 @@ mod tests {
     }
 
     fn submit(manager: &mut SurfaceManager, sink: FrameSinkId, frame: CompositorFrame) {
-        manager.submit(sink, LocalSurfaceId::default(), frame);
+        manager.submit(sink, LocalSurfaceId::default(), frame, HashMap::new());
     }
 
     /// The aggregated quads: rect, clip, and what they draw.

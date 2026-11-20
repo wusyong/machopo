@@ -54,6 +54,12 @@ where
                 }
             };
             let mut display = Display::new(renderer, root_frame_sink);
+            // The clients, for what Viz tells each besides its
+            // `BeginFrame`s.
+            let mut clients: std::collections::HashMap<
+                FrameSinkId,
+                protocol::viz::BeginFrameObserver,
+            > = std::collections::HashMap::new();
             let start = Instant::now();
             let mut next_begin_frame = start;
             // When the last `BeginFrame` went out, and whether it has been
@@ -96,6 +102,29 @@ where
                         ) => display.submit_compositor_frame(sink, local_surface_id, frame),
                         VizMsg::FrameSink(_, CompositorFrameSinkMsg::SetNeedsBeginFrame(_))
                         | VizMsg::FrameSink(_, CompositorFrameSinkMsg::DidNotProduceFrame) => {}
+                        VizMsg::FrameSink(
+                            sink,
+                            CompositorFrameSinkMsg::CreateSharedImage {
+                                mailbox,
+                                size,
+                                pixels,
+                            },
+                        ) => {
+                            display.create_shared_image(sink, mailbox, size, &pixels);
+                            // The buffer is the client's again, whether or
+                            // not an image came of it: let go here before
+                            // the client hears.
+                            drop(pixels);
+                            if let Some(client) = clients.get(&sink) {
+                                client.on_pixels_returned(mailbox);
+                            }
+                        }
+                        VizMsg::FrameSink(
+                            sink,
+                            CompositorFrameSinkMsg::DestroySharedImage { mailbox },
+                        ) => {
+                            display.destroy_shared_image(sink, mailbox);
+                        }
                         VizMsg::Display(DisplayMsg::Resize(size)) => display.resize(size),
                         VizMsg::Display(DisplayMsg::ForceRedraw) => display.set_needs_draw(),
                         VizMsg::Display(DisplayMsg::LoseContext) => display.lose_context(),
@@ -105,6 +134,7 @@ where
                         VizMsg::Display(DisplayMsg::Shutdown) => break 'run,
                         VizMsg::RegisterFrameSinkId(sink, observer) => {
                             display.add_frame_sink(sink);
+                            clients.insert(sink, observer.clone());
                             begin_frames.add_client(
                                 sink,
                                 Box::new(move |args| observer.on_begin_frame(args)),
@@ -112,6 +142,7 @@ where
                         }
                         VizMsg::InvalidateFrameSinkId(sink) => {
                             begin_frames.remove_client(sink);
+                            clients.remove(&sink);
                             display.remove_frame_sink(sink);
                         }
                     }
@@ -121,6 +152,7 @@ where
                         Err(TryRecvError::Disconnected) => break 'run,
                     };
                 }
+                display.flush_shared_images();
                 if display.needs_draw() {
                     display.draw_and_swap();
                 }
@@ -298,6 +330,51 @@ mod tests {
         while frames.try_recv().is_ok() {}
         std::thread::sleep(BEGIN_FRAME_INTERVAL * 6);
         assert!(frames.try_recv().is_err(), "no BeginFrame after it went");
+        tx.send(VizMsg::Display(DisplayMsg::Shutdown)).unwrap();
+        thread.join().unwrap();
+    }
+
+    /// The pixels a client sends for a shared image come back to it once
+    /// Viz has done with them, taken or not: by then Viz holds the buffer
+    /// no more, and the client may draw into it again.
+    #[test]
+    fn a_shared_images_pixels_come_back_to_its_client() {
+        use protocol::viz::Mailbox;
+        let (tx, rx) = unbounded();
+        let root = FrameSinkId {
+            client_id: 0,
+            sink_id: 1,
+        };
+        let thread =
+            spawn_viz_compositor_thread(rx, root, BeginFrameSource::new(), || Ok(Copying)).unwrap();
+        let tab = FrameSinkId {
+            client_id: 2,
+            sink_id: 1,
+        };
+        let pixels: Arc<[u8]> = Arc::from([0u8; 4]);
+        // How many hold the buffer as the client is told: its own alone,
+        // so it may draw into it again.
+        let (returned_tx, returned) = unbounded();
+        let held = Arc::downgrade(&pixels);
+        let observer = BeginFrameObserver::new(|_| {}).with_pixels_returned(move |mailbox| {
+            let _ = returned_tx.send((mailbox, held.strong_count()));
+        });
+        tx.send(VizMsg::RegisterFrameSinkId(tab, observer)).unwrap();
+        for mailbox in [Mailbox(1), Mailbox(2)] {
+            tx.send(VizMsg::FrameSink(
+                tab,
+                CompositorFrameSinkMsg::CreateSharedImage {
+                    mailbox,
+                    size: gfx::Size::new(1, 1),
+                    pixels: pixels.clone(),
+                },
+            ))
+            .unwrap();
+            assert_eq!(
+                returned.recv_timeout(Duration::from_secs(10)),
+                Ok((mailbox, 1))
+            );
+        }
         tx.send(VizMsg::Display(DisplayMsg::Shutdown)).unwrap();
         thread.join().unwrap();
     }

@@ -273,6 +273,8 @@ PROTOCOL_ALLOWED = {
         "send: Option<Arc<dyn Fn(BeginFrameArgs) + Send + Sync>>,": "browser and Viz",
         "pub fn new(send: impl Fn(BeginFrameArgs) + Send + Sync + 'static) -> Self {":
             "browser and Viz",
+        "pixels_returned: Option<Arc<dyn Fn(Mailbox) + Send + Sync>>,": "browser and Viz",
+        "returned: impl Fn(Mailbox) + Send + Sync + 'static,": "browser and Viz",
     },
 }
 

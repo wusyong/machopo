@@ -29,7 +29,7 @@ use protocol::viz::{
 };
 use wgpu::util::DeviceExt;
 
-use crate::display::{CopyFailure, DirectRenderer};
+use crate::display::{CopyFailure, DirectRenderer, SharedImageHandle};
 use crate::gpu_context::GpuContext;
 use crate::surface_aggregator::AggregatedFrame;
 
@@ -170,8 +170,10 @@ impl GpuSharedImages {
     }
 }
 
-impl SharedImageInterface for GpuSharedImages {
-    fn create_shared_image(&self, size: Size, pixels: &[u8]) -> Option<SharedImage> {
+impl GpuSharedImages {
+    /// `pixels` on the device as a shared image's texture, if there is a
+    /// device and they are a texture's of `size` it can make.
+    fn upload(&self, size: Size, pixels: &[u8]) -> Option<SharedImageBacking> {
         let gpu = self.gpu.read().unwrap_or_else(|e| e.into_inner()).clone()?;
         // Not one Viz can make (the GPU process checks a client's too).
         if size.is_empty() || !crate::display::pixels_fit(size, pixels.len()) {
@@ -187,12 +189,18 @@ impl SharedImageInterface for GpuSharedImages {
             None => gpu.upload(size, pixels),
         };
         drop(write);
-        let mailbox = Mailbox(self.mailboxes.get_next());
-        let backing = SharedImageBacking {
+        Some(SharedImageBacking {
             generation: gpu.generation,
             uploaded,
             pool: Arc::downgrade(&gpu.pool),
-        };
+        })
+    }
+}
+
+impl SharedImageInterface for GpuSharedImages {
+    fn create_shared_image(&self, size: Size, pixels: &[u8]) -> Option<SharedImage> {
+        let backing = self.upload(size, pixels)?;
+        let mailbox = Mailbox(self.mailboxes.get_next());
         Some(SharedImage::new(mailbox, Arc::new(backing)))
     }
 
@@ -498,6 +506,16 @@ impl WgpuRenderer {
             if self.resources.contains_key(id) {
                 continue;
             }
+            // A shared image its client made by a message: what the
+            // frame holds of Viz's own table.
+            if let Some(image) = frame.images.get(id) {
+                if let Some(backing) = image.downcast_ref::<SharedImageBacking>()
+                    && backing.generation == self.context.generation
+                {
+                    self.resources.insert(*id, backing.uploaded.clone());
+                }
+                continue;
+            }
             if let Some(image) = &res.shared_image {
                 // One made on a lost device isn't drawn: its client is
                 // making it again on this one.
@@ -572,6 +590,15 @@ impl DirectRenderer for WgpuRenderer {
                 }
             }
         }
+    }
+
+    fn create_shared_image(&mut self, size: Size, pixels: &[u8]) -> Option<SharedImageHandle> {
+        let backing: SharedImageHandle = Arc::new(self.shared_images.upload(size, pixels)?);
+        Some(backing)
+    }
+
+    fn flush_shared_images(&mut self) {
+        self.shared_images.flush();
     }
 
     fn lose_context(&mut self) {
@@ -1281,6 +1308,41 @@ mod drawing_tests {
         assert_within_1(px(&copy, 1, 0), [128, 0, 127, 255]); // red@50% over blue
         assert_within_1(px(&copy, 1, 3), [255, 127, 127, 255]); // red@50% over white
         assert_eq!(px(&copy, 3, 3), [255, 255, 255, 255]); // background
+    }
+
+    /// A shared image a client made by a message is drawn by the frame
+    /// that names its mailbox, with no pixels in the frame.
+    #[test]
+    fn a_shared_image_made_by_a_message_is_drawn() {
+        let _gpu = gpu();
+        let size = Size::new(2, 2);
+        let mut f = frame(
+            size,
+            SharedQuadState::default(),
+            vec![DrawQuad {
+                rect: RectF::new(0.0, 0.0, 2.0, 2.0),
+                shared_quad_state: 0,
+                material: Material::Texture {
+                    resource_id: ResourceId(7),
+                    tex_coord_rect: RectF::new(0.0, 0.0, 2.0, 2.0),
+                    nearest_neighbor: true,
+                },
+            }],
+        );
+        f.resource_list.push(TransferableResource {
+            id: ResourceId(7),
+            size,
+            format: ResourceFormat::Rgba8Premul,
+            pixels: Arc::from([]),
+            shared_image: Some(SharedImage::from_mailbox(Mailbox(3))),
+        });
+        let mut display = display(size);
+        display.create_shared_image(SINK, Mailbox(3), size, &[0, 0, 255, 255].repeat(4));
+        display.flush_shared_images();
+        display.submit_compositor_frame(SINK, LocalSurfaceId::default(), f);
+        let copy = draw(&mut display);
+        assert_eq!(px(&copy, 0, 0), [0, 0, 255, 255]);
+        assert_eq!(px(&copy, 1, 1), [0, 0, 255, 255]);
     }
 
     /// A texture scaled up is sampled bilinearly (a canvas's), clamped at

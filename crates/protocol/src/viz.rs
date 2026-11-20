@@ -87,6 +87,16 @@ impl SharedImage {
         }
     }
 
+    /// The shared image a client made as `mailbox`
+    /// (`CompositorFrameSinkMsg::CreateSharedImage`): a frame names it by
+    /// that alone.
+    pub fn from_mailbox(mailbox: Mailbox) -> Self {
+        Self {
+            mailbox,
+            backing: None,
+        }
+    }
+
     /// What the interface that made it put behind it.
     pub fn backing<T: Any>(&self) -> Option<&T> {
         self.backing.as_deref()?.downcast_ref()
@@ -282,6 +292,24 @@ pub enum CompositorFrameSinkMsg {
     /// The answer to a `BeginFrame` that produced no frame
     /// (`DidNotProduceFrame`), so the source may send the next.
     DidNotProduceFrame,
+    /// Pixels to put on the GPU as the shared image `mailbox`, a number of
+    /// the client's own (`SharedImageInterface::CreateSharedImage` with
+    /// pixels; Chromium's client makes the mailbox too): tightly packed
+    /// RGBA, premultiplied, `size` of them. Sent as soon as they are drawn,
+    /// before the frame that shows them, which names the mailbox alone; the
+    /// channel keeps the two in order, so there are no sync tokens. Viz
+    /// hands the buffer back once the pixels are on the GPU
+    /// ([`BeginFrameObserver::on_pixels_returned`]): the client draws its next
+    /// into it. The `Arc` stands in for a piece of a shared-memory region.
+    CreateSharedImage {
+        mailbox: Mailbox,
+        size: Size,
+        pixels: Arc<[u8]>,
+    },
+    /// The client is done with the shared image `mailbox`
+    /// (`DestroySharedImage`). Viz lets its texture go once no frame it
+    /// holds draws it.
+    DestroySharedImage { mailbox: Mailbox },
 }
 
 /// `viz::BeginFrameArgs`: a frame is due. Viz sends it to the clients that
@@ -355,12 +383,34 @@ impl std::fmt::Debug for CopyOutputRequest {
 pub struct BeginFrameObserver {
     #[serde(skip)]
     send: Option<Arc<dyn Fn(BeginFrameArgs) + Send + Sync>>,
+    #[serde(skip)]
+    pixels_returned: Option<Arc<dyn Fn(Mailbox) + Send + Sync>>,
 }
 
 impl BeginFrameObserver {
     pub fn new(send: impl Fn(BeginFrameArgs) + Send + Sync + 'static) -> Self {
         Self {
             send: Some(Arc::new(send)),
+            pixels_returned: None,
+        }
+    }
+
+    /// Also told when the pixels of a shared image the client made have
+    /// gone to the GPU, and their buffer is the client's again.
+    #[must_use]
+    pub fn with_pixels_returned(
+        mut self,
+        returned: impl Fn(Mailbox) + Send + Sync + 'static,
+    ) -> Self {
+        self.pixels_returned = Some(Arc::new(returned));
+        self
+    }
+
+    /// The pixels `CreateSharedImage` brought for `mailbox` are on the GPU
+    /// (or weren't taken): Viz holds their buffer no more.
+    pub fn on_pixels_returned(&self, mailbox: Mailbox) {
+        if let Some(returned) = &self.pixels_returned {
+            returned(mailbox);
         }
     }
 

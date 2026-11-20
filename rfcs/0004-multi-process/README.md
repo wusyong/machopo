@@ -167,8 +167,14 @@ Browser process                                Renderer process
 
 共用記憶體，Viz 上傳（T1，第 23 條；Chromium 在 OOP-R 之前的 one-copy raster）。tile 和 canvas 的快照都走這條路：
 
-- compositor 照舊 raster 成 CPU 像素，寫進 Browser 配給它的可寫的 region（renderer 留著一個池子重複用）。frame 的 `TransferableResource` 帶 mailbox 和 region 的編號、位置和長度；Viz 經過 Browser 的表找到那一塊，複製出像素、上傳，以 mailbox 為 key 記著 texture。
-- 生命週期改成明確的訊息：Viz 用完時送 `ReturnResources`，compositor 丟掉 tile 時送 `DestroySharedImage`。現在的參考計數是它們在同一個 process 裡的替代。單一 process 的模式照舊用 `Arc`，但走同一組訊息。
+- **三則訊息**（第 24 條，Chromium 的 `SharedImageInterface` 的形狀）：
+  - `CreateSharedImage`（編號、大小、像素的緩衝區）：raster 畫好一塊就送，不等 frame。編號（mailbox）由 renderer 自己取，Viz 照送的 frame sink 和編號記著 texture。
+  - 「緩衝區還你了」：Viz 把像素交給 GPU 之後送回，那一塊回到 renderer 的池子。
+  - `DestroySharedImage`（編號）：tile 不要了。Viz 等沒有 frame 在用、而且收到它，才回收 texture。
+- frame 的 resource 只帶編號。訊息在同一條通道上照順序到，「建立」一定在用它的 frame 之前，不需要 Chromium 的 sync token。
+- **像素只複製一次**（和改之前一樣）：compositor 有一個緩衝區的池子，raster 直接畫進池子的一塊，那一塊的擁有權跟著「建立」交給 Viz，Viz 交給 GPU 的那一次是唯一的複製。單一 process 時一塊是一段共用的記憶體（`Arc`），跨 process 時是 Browser 配給它的 region 的一段（第 22 條的池子），步驟相同；跨 process 時 Viz 從共用記憶體用指標直接複製進 GPU 給的緩衝區，不先複製到自己的記憶體（共用記憶體不能當成 slice 交給 wgpu）。畫出來是單一顏色的 tile 不上傳，那一塊當場回池子。
+- **有計數守著**：tile 的像素每複製一次就計一次，測試確認次數等於上傳的 tile 的數量，單一 process 和跨 process 都是；多一次複製時測試失敗。第 3 階段的驗收包含跨 process 的這一項。
+- GPU 遺失時 Viz 手上的 texture 都沒了：Browser 照舊送 `ContextLost`，compositor 忘掉所有編號、重新畫、重新送「建立」。
 - renderer 碰不到 GPU，之後的 sandbox 可以鎖得最緊。
 
 ### 啟動
@@ -273,7 +279,7 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
 - **兩種模式要一起維護**：平常開發跑的是單一 process，IPC 那條路要等 CI 的多 process 測試才看得到壞掉。
 - **renderer 要共用記憶體得問 Browser**：要新的一塊時要等回覆（「待決定」）。
 - 每個 renderer 多一份記憶體（V8 isolate、字型、raster 的快取）、一條 IO thread 和啟動時間。
-- tile 經過共用記憶體再由 Viz 上傳，compositor 到 Viz 也多一次 IO thread 的轉手；比現在多零到兩次複製，看做到哪裡（「待決定」）。
+- tile 經過共用記憶體再由 Viz 上傳，compositor 到 Viz 也多一次 IO thread 的轉手；像素的複製還是一次（「tile 交接」）。
 - **做完還沒有 sandbox**：這份做完到 sandbox 的 RFC 做完之間，renderer 是獨立的 process 但沒有被關起來。穩定性拿到了，安全上最大的那一塊還沒有（「動機」）。
 
 ## 理由和其他做法
@@ -344,6 +350,8 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
 
 23. **tile 經過共用記憶體交給 Viz，Viz 上傳**（2026-11-20，T1，「tile 交接」）：compositor 照舊用 CPU 畫，像素寫進 Browser 配給它的 region（第 22 條的池子），frame 的 resource 帶 mailbox 和 region 的編號、位置和長度；Viz 複製出來、上傳，生命週期用 `ReturnResources` 和 `DestroySharedImage` 兩則訊息。canvas 的快照一樣。2026-11-20 的盤點確認 renderer 這一側沒有 wgpu，raster 是 vello_cpu 畫的 CPU 像素，所以 raster 的位置不用動。對照 Chromium：OOP-R 之前是這樣（one-copy raster），現在是 OOP-R（T3）。不選 T2（renderer 自己上傳、交出 texture）和 T3（OOP-R），理由在「理由和其他做法」。之後做 GPU raster 時換成 T3：那時過邊界的是 display list 不是像素，這一段本來就要重來（「之後的可能」）。
 
+24. **tile 畫好就送「建立」的訊息，像素只複製一次、有計數守著**（2026-11-20，第 1 階段的 1b，「tile 交接」）：三則訊息（`CreateSharedImage`、緩衝區還回來、`DestroySharedImage`），編號由 renderer 取；raster 直接畫進要交出去的緩衝區，Viz 交給 GPU 是唯一的一次複製，測試用計數確認。對照 Chromium：`SharedImageInterface::CreateSharedImage` 是 client 取 mailbox、送一則訊息給 GPU process，frame 帶 mailbox 和 sync token（不同通道之間排順序用；這裡是同一條通道，不需要），用完 `DestroySharedImage`。不選像素跟著 frame 送（起草時的寫法）：少一種訊息，但上傳全部擠在收到 frame 的那一刻，捲動時新的 tile 多，那個 frame 要等它們都上傳完才能畫。不選先多複製一次、量過再省（2026-11-20 起先的建議）：使用者的意見是這種事之後容易忘記；raster 本來就畫進呼叫的一方給的緩衝區，直接做成一次不比多複製難多少，計數讓它之後不會悄悄變回去。
+
 ## 待決定
 
 排程之前：
@@ -362,7 +370,6 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
 
 設計：
 
-- **Viz 讀 tile 的像素要複製幾次**：共用記憶體不能當成 slice 交給 wgpu（「`ipc` crate」），要用指標複製出來。現在是一次：raster 的像素交給 wgpu 時複製進它等著送出的緩衝區。T1 最多變成三次（raster 的緩衝區 → region → Viz 自己的記憶體 → wgpu 的緩衝區），最少可以還是一次：raster 直接畫進 region（vello_cpu 要能畫進別人給的記憶體），Viz 用指標直接複製進 wgpu 給的已經 map 好的緩衝區。一塊 256×256 的 tile 是 256 KiB，原型量到這個大小複製一次約 25 µs；捲動時一個 frame 新畫 20 塊的話，每多一次複製約 0.5 ms。做第 1 階段時先做最簡單的、量過再決定省哪一次。
 - **renderer 向 Browser 要共用記憶體時怎麼不卡住 compositor**：只發生在池子不夠的時候。可以做的：一次要一大塊、renderer 自己切；池子快用完就先要；要的時候不停下來等。還有 Browser 什麼時候收回一塊。
 - **單一 process 時要不要連 Browser 的 IO thread 也拿掉**：處理訊息的邏輯抽成物件之後（「架構」）做得到：renderer 拿到的「送訊息的東西」在這個模式直接呼叫那個物件，由它交給網路或叫醒 UI thread，中間沒有佇列也沒有 thread。每個分頁少一條 thread，renderer 到 UI thread、到網路各少一次轉手。代價：Browser 的邏輯在 renderer 的 thread 上跑（main thread 和 worker 可能同時送，要加鎖；它 panic 時倒的是 renderer 的 thread）；`RendererGone` 改成靠最後一個 sender 被丟掉來報告；「從通道讀出來、交給物件」那一段只剩多 process 的測試跑得到。那條 thread 現在就在，不是這份加的成本，所以先量每則訊息的那一次轉手占多少再決定。比過的做法見 `details.md` 的「比過的做法」。
 - **renderer 不能讓 Browser 當掉**：惡意的 renderer 最容易走的三條路，接上 renderer 的那一步要一起處理。

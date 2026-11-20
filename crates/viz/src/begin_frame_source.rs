@@ -67,6 +67,8 @@ impl BeginFrameSource {
             | CompositorFrameSinkMsg::DidNotProduceFrame => {
                 client.pending = false;
             }
+            CompositorFrameSinkMsg::CreateSharedImage { .. }
+            | CompositorFrameSinkMsg::DestroySharedImage { .. } => {}
         }
     }
 

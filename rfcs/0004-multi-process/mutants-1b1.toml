@@ -1,0 +1,79 @@
+# Step 1b-1: Viz keeps each client's shared images by the client's own
+# numbers (`CreateSharedImage`, `DestroySharedImage`), hands the pixels'
+# buffer back, and a frame draws what it names of its client's.
+test = ["sh", "-c", "cargo test -q -p viz --lib -- shared_image"]
+timeout = 1800
+
+[[mutant]]
+name = "a frame draws another client's shared image of the same number"
+file = "crates/viz/src/display.rs"
+from = '''                let image = self.shared_images.get(&(sink, mailbox))?;'''
+to = '''                let image = self.shared_images.iter().find(|((_, m), _)| *m == mailbox).map(|(_, i)| i)?;'''
+
+[[mutant]]
+name = "a sink that may not submit makes shared images"
+file = "crates/viz/src/display.rs"
+from = '''            tracing::debug!(?sink, "viz: no shared image for a sink it doesn't know");
+            return;'''
+to = '''            tracing::debug!(?sink, "viz: no shared image for a sink it doesn't know");'''
+
+[[mutant]]
+name = "pixels that aren't a texture's make a shared image"
+file = "crates/viz/src/display.rs"
+from = '''        if size.is_empty() || !pixels_fit(size, pixels.len()) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a shared image is made twice"
+file = "crates/viz/src/display.rs"
+from = '''        if self.shared_images.contains_key(&(sink, mailbox)) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a destroyed shared image stays its client's"
+file = "crates/viz/src/display.rs"
+from = '''        self.shared_images.remove(&(sink, mailbox));'''
+to = '''        '''
+
+[[mutant]]
+name = "a client gone leaves its shared images"
+file = "crates/viz/src/display.rs"
+from = '''        self.shared_images.retain(|(owner, _), _| *owner != sink);'''
+to = '''        '''
+
+[[mutant]]
+name = "shared images are flushed with none made"
+file = "crates/viz/src/display.rs"
+from = '''        if std::mem::take(&mut self.shared_images_made) {'''
+to = '''        if std::mem::take(&mut self.shared_images_made) || true {'''
+
+[[mutant]]
+name = "shared images are never flushed"
+file = "crates/viz/src/display.rs"
+from = '''        if std::mem::take(&mut self.shared_images_made) {'''
+to = '''        if std::mem::take(&mut self.shared_images_made) && false {'''
+
+[[mutant]]
+name = "a frame holds none of its shared images"
+file = "crates/viz/src/surface_aggregator.rs"
+from = '''                    if let Some(image) = manager.image(sink, resource_id) {'''
+to = '''                    if let Some(image) = manager.image(sink, resource_id).filter(|_| false) {'''
+
+[[mutant]]
+name = "the client isn't told its pixels came back"
+file = "crates/viz/src/thread.rs"
+from = '''                                client.on_pixels_returned(mailbox);'''
+to = '''                                let _ = client;'''
+
+[[mutant]]
+name = "Viz still holds the buffer as it tells the client"
+file = "crates/viz/src/thread.rs"
+from = '''                            drop(pixels);
+                            if let Some(client) = clients.get(&sink) {'''
+to = '''                            if let Some(client) = clients.get(&sink) {'''
+
+[[mutant]]
+name = "the renderer doesn't draw a frame's shared images"
+file = "crates/viz/src/wgpu_renderer.rs"
+from = '''            if let Some(image) = frame.images.get(id) {'''
+to = '''            if let Some(image) = frame.images.get(id).filter(|_| false) {'''

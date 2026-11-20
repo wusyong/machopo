@@ -1,10 +1,17 @@
-use std::collections::HashSet;
+use std::any::Any;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use gfx::Size;
 use protocol::viz::{
     CompositorFrame, CopyOutputRequest, CopyOutputResult, FrameSinkId, LocalSurfaceId,
-    MAX_TEXTURE_SIZE,
+    MAX_TEXTURE_SIZE, Mailbox,
 };
+
+/// A shared image as its renderer keeps it (its texture): what Viz's table
+/// and the frames that draw it hold. The renderer that made it knows what
+/// is behind it; it never leaves Viz.
+pub type SharedImageHandle = Arc<dyn Any + Send + Sync>;
 
 use crate::surface_aggregator::{AggregatedFrame, SurfaceAggregator, SurfaceManager};
 
@@ -23,6 +30,16 @@ pub trait DirectRenderer {
         self.draw_frame(frame);
         Err(CopyFailure::Unsupported)
     }
+    /// Puts `pixels` (tightly packed RGBA, premultiplied, of `size`, which
+    /// the caller has checked) on the GPU as a shared image. `None` if
+    /// there is no GPU to put them on (none yet, or a lost one not made
+    /// again yet), or the renderer keeps no shared images.
+    fn create_shared_image(&mut self, _size: Size, _pixels: &[u8]) -> Option<SharedImageHandle> {
+        None
+    }
+    /// Sends the GPU what the shared images made since the last call were
+    /// made from: after a batch of them, not each.
+    fn flush_shared_images(&mut self) {}
     /// Loses the GPU device as a driver reset would (`about:gpucrash`);
     /// the next draw makes a new one.
     fn lose_context(&mut self) {}
@@ -55,6 +72,14 @@ pub struct Display<R: DirectRenderer> {
     /// them is drawn too.
     embedded: HashSet<FrameSinkId>,
     renderer: R,
+    /// The shared images each client made (`CreateSharedImage`) and hasn't
+    /// destroyed, by the client's sink and its own number for each
+    /// (Chromium's `SharedImageManager`, by mailbox): a client names its
+    /// own alone. A frame holds those it draws too, so one destroyed is
+    /// still drawn until its client's next frame.
+    shared_images: HashMap<(FrameSinkId, Mailbox), SharedImageHandle>,
+    /// Whether a shared image was made since the last flush.
+    shared_images_made: bool,
     needs_draw: bool,
     /// Answered by the next draw.
     copy_requests: Vec<CopyOutputRequest>,
@@ -72,6 +97,8 @@ impl<R: DirectRenderer> Display<R> {
             aggregator: SurfaceAggregator::default(),
             embedded: HashSet::new(),
             renderer,
+            shared_images: HashMap::new(),
+            shared_images_made: false,
             needs_draw: false,
             copy_requests: Vec::new(),
         }
@@ -102,11 +129,80 @@ impl<R: DirectRenderer> Display<R> {
             tracing::error!(?sink, bad, "viz: dropping a frame");
             return;
         }
-        if self.surfaces.submit(sink, local_surface_id, frame)
+        // What the frame draws of its client's shared images, held with
+        // it. A mailbox the client made no image for (one of a lost GPU,
+        // or a bad one) has none, and its quads draw nothing.
+        let images = frame
+            .resource_list
+            .iter()
+            .filter_map(|resource| {
+                let mailbox = resource.shared_image.as_ref()?.mailbox;
+                let image = self.shared_images.get(&(sink, mailbox))?;
+                Some((resource.id, image.clone()))
+            })
+            .collect();
+        if self.surfaces.submit(sink, local_surface_id, frame, images)
             && (sink == self.root_frame_sink || self.embedded.contains(&sink))
         {
             self.needs_draw = true;
         }
+    }
+
+    /// `sink`'s `CreateSharedImage`: `pixels` on the GPU as its `mailbox`.
+    /// Not made, and the pixels dropped, if the sink isn't one that may
+    /// submit, the pixels aren't those of a texture of `size` Viz can make,
+    /// the client has an image of that number already, or there is no GPU
+    /// (its client hears of a new one, and makes its images again).
+    pub fn create_shared_image(
+        &mut self,
+        sink: FrameSinkId,
+        mailbox: Mailbox,
+        size: Size,
+        pixels: &[u8],
+    ) {
+        if sink != self.root_frame_sink && !self.frame_sinks.contains(&sink) {
+            tracing::debug!(?sink, "viz: no shared image for a sink it doesn't know");
+            return;
+        }
+        if size.is_empty() || !pixels_fit(size, pixels.len()) {
+            tracing::error!(
+                ?sink,
+                ?size,
+                bytes = pixels.len(),
+                "viz: not a shared image's pixels"
+            );
+            return;
+        }
+        if self.shared_images.contains_key(&(sink, mailbox)) {
+            tracing::error!(?sink, ?mailbox, "viz: a shared image made twice");
+            return;
+        }
+        if let Some(image) = self.renderer.create_shared_image(size, pixels) {
+            self.shared_images.insert((sink, mailbox), image);
+            self.shared_images_made = true;
+        }
+    }
+
+    /// `sink`'s `DestroySharedImage`: its `mailbox` is its client's no
+    /// more. A frame that draws it holds it until it is replaced.
+    pub fn destroy_shared_image(&mut self, sink: FrameSinkId, mailbox: Mailbox) {
+        self.shared_images.remove(&(sink, mailbox));
+    }
+
+    /// After a batch of messages: what the shared images made in it were
+    /// made from goes to the GPU, once.
+    pub fn flush_shared_images(&mut self) {
+        if std::mem::take(&mut self.shared_images_made) {
+            self.renderer.flush_shared_images();
+        }
+    }
+
+    /// How many shared images Viz keeps for `sink`.
+    pub fn shared_image_count(&self, sink: FrameSinkId) -> usize {
+        self.shared_images
+            .keys()
+            .filter(|(owner, _)| *owner == sink)
+            .count()
     }
 
     pub fn resize(&mut self, size: Size) {
@@ -140,6 +236,8 @@ impl<R: DirectRenderer> Display<R> {
     pub fn remove_frame_sink(&mut self, sink: FrameSinkId) {
         self.frame_sinks.remove(&sink);
         self.surfaces.remove(sink);
+        // Its shared images go with it (its channel to the GPU closed).
+        self.shared_images.retain(|(owner, _), _| *owner != sink);
         self.embedded.remove(&sink);
         self.needs_draw = true;
     }
@@ -549,5 +647,156 @@ mod tests {
         assert!(display.draw_and_swap());
         display.submit_compositor_frame(ROOT, LocalSurfaceId::default(), frame(Color::WHITE));
         assert!(!display.needs_draw());
+    }
+
+    /// A renderer that keeps shared images as numbers, from 1 in the order
+    /// made, and notes which each frame it draws holds.
+    #[derive(Default)]
+    struct Images {
+        no_gpu: bool,
+        made: Vec<std::sync::Weak<u32>>,
+        flushed: u32,
+        drawn: Vec<Vec<u32>>,
+    }
+
+    impl DirectRenderer for Images {
+        fn resize(&mut self, _: Size) {}
+        fn draw_frame(&mut self, frame: &AggregatedFrame<'_>) {
+            let mut held: Vec<u32> = frame
+                .images
+                .values()
+                .map(|image| *image.downcast_ref::<u32>().unwrap())
+                .collect();
+            held.sort_unstable();
+            self.drawn.push(held);
+        }
+        fn create_shared_image(&mut self, _: Size, _: &[u8]) -> Option<SharedImageHandle> {
+            if self.no_gpu {
+                return None;
+            }
+            let image = Arc::new(u32::try_from(self.made.len()).unwrap() + 1);
+            self.made.push(Arc::downgrade(&image));
+            Some(image)
+        }
+        fn flush_shared_images(&mut self) {
+            self.flushed += 1;
+        }
+    }
+
+    const TAB: FrameSinkId = FrameSinkId {
+        client_id: 1,
+        sink_id: 1,
+    };
+    const PIXEL: Size = Size::new(1, 1);
+
+    /// A frame with a texture quad for each of `mailboxes`, its resources
+    /// numbered from 1.
+    fn frame_of(mailboxes: &[u64]) -> CompositorFrame {
+        use protocol::viz::{ResourceFormat, ResourceId, SharedImage, TransferableResource};
+        let mut frame = frame(Color::WHITE);
+        for (index, &mailbox) in mailboxes.iter().enumerate() {
+            let id = ResourceId(index as u64 + 1);
+            frame.resource_list.push(TransferableResource {
+                id,
+                size: PIXEL,
+                format: ResourceFormat::Rgba8Premul,
+                pixels: Arc::from([]),
+                shared_image: Some(SharedImage::from_mailbox(Mailbox(mailbox))),
+            });
+            frame.render_pass_list[0].quad_list.push(DrawQuad {
+                rect: RectF::new(0.0, 0.0, 1.0, 1.0),
+                shared_quad_state: 0,
+                material: Material::Texture {
+                    resource_id: id,
+                    tex_coord_rect: RectF::new(0.0, 0.0, 1.0, 1.0),
+                    nearest_neighbor: true,
+                },
+            });
+        }
+        frame
+    }
+
+    /// A frame draws the shared images its client made, by the client's
+    /// numbers for them: not one the client made none for, nor another
+    /// client's of the same number.
+    #[test]
+    fn a_frame_draws_its_own_clients_shared_images() {
+        let mut display = Display::new(Images::default(), ROOT);
+        display.add_frame_sink(TAB);
+        display.create_shared_image(TAB, Mailbox(5), PIXEL, &[0; 4]);
+        display.create_shared_image(ROOT, Mailbox(7), PIXEL, &[0; 4]);
+        assert_eq!(
+            (
+                display.shared_image_count(TAB),
+                display.shared_image_count(ROOT)
+            ),
+            (1, 1)
+        );
+        // The root's 5 is the tab's, and its 6 no one's.
+        display.submit_compositor_frame(ROOT, LocalSurfaceId::default(), frame_of(&[5, 6, 7]));
+        display.draw_and_swap();
+        assert_eq!(display.renderer().drawn, [vec![2]]);
+    }
+
+    /// A shared image its client destroyed is still what the frame that
+    /// draws it draws; it goes when that frame is replaced. A client that
+    /// goes takes its shared images with it.
+    #[test]
+    fn a_destroyed_shared_image_lasts_as_long_as_the_frame_that_draws_it() {
+        let mut display = Display::new(Images::default(), ROOT);
+        display.create_shared_image(ROOT, Mailbox(1), PIXEL, &[0; 4]);
+        display.submit_compositor_frame(ROOT, LocalSurfaceId::default(), frame_of(&[1]));
+        display.destroy_shared_image(ROOT, Mailbox(1));
+        assert_eq!(display.shared_image_count(ROOT), 0);
+        display.draw_and_swap();
+        assert_eq!(display.renderer().drawn, [vec![1]]);
+        assert!(display.renderer().made[0].upgrade().is_some());
+        // A later frame names it, and gets none: it is the client's no more.
+        display.submit_compositor_frame(ROOT, LocalSurfaceId::default(), frame_of(&[1]));
+        display.draw_and_swap();
+        assert_eq!(display.renderer().drawn, [vec![1], vec![]]);
+        assert!(display.renderer().made[0].upgrade().is_none());
+
+        display.add_frame_sink(TAB);
+        display.create_shared_image(TAB, Mailbox(1), PIXEL, &[0; 4]);
+        display.remove_frame_sink(TAB);
+        assert_eq!(display.shared_image_count(TAB), 0);
+        assert!(display.renderer().made[1].upgrade().is_none());
+    }
+
+    /// No shared image is made for a sink that may not submit, of pixels
+    /// that aren't a texture's of the size, of a number the client has an
+    /// image of already, or with no GPU. Those made in a batch are flushed
+    /// once.
+    #[test]
+    fn the_shared_images_that_arent_made() {
+        let mut display = Display::new(Images::default(), ROOT);
+        display.create_shared_image(TAB, Mailbox(1), PIXEL, &[0; 4]);
+        display.create_shared_image(ROOT, Mailbox(1), PIXEL, &[0; 3]);
+        display.create_shared_image(ROOT, Mailbox(1), Size::new(0, 1), &[]);
+        display.create_shared_image(ROOT, Mailbox(1), Size::new(MAX_TEXTURE_SIZE + 1, 1), &[]);
+        assert!(display.renderer().made.is_empty());
+        display.flush_shared_images();
+        assert_eq!(display.renderer().flushed, 0);
+
+        display.create_shared_image(ROOT, Mailbox(1), PIXEL, &[0; 4]);
+        display.create_shared_image(ROOT, Mailbox(1), PIXEL, &[0; 4]);
+        display.create_shared_image(ROOT, Mailbox(2), PIXEL, &[0; 4]);
+        assert_eq!(display.renderer().made.len(), 2);
+        display.flush_shared_images();
+        display.flush_shared_images();
+        assert_eq!(display.renderer().flushed, 1);
+
+        let mut display = Display::new(
+            Images {
+                no_gpu: true,
+                ..Images::default()
+            },
+            ROOT,
+        );
+        display.create_shared_image(ROOT, Mailbox(1), PIXEL, &[0; 4]);
+        assert_eq!(display.shared_image_count(ROOT), 0);
+        display.flush_shared_images();
+        assert_eq!(display.renderer().flushed, 0);
     }
 }

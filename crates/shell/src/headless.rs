@@ -376,6 +376,21 @@ fn drive(
                     frames_drawn = usize::wrapping_add(frames_drawn, 1);
                 }
             }
+            Ok(Event::Viz(VizMsg::FrameSink(
+                sink,
+                CompositorFrameSinkMsg::CreateSharedImage {
+                    mailbox,
+                    size,
+                    pixels,
+                },
+            ))) => {
+                display.create_shared_image(sink, mailbox, size, &pixels);
+                display.flush_shared_images();
+            }
+            Ok(Event::Viz(VizMsg::FrameSink(
+                sink,
+                CompositorFrameSinkMsg::DestroySharedImage { mailbox },
+            ))) => display.destroy_shared_image(sink, mailbox),
             // Headless has one tab, its client from the start: it navigates
             // once, and a renderer gone ends the run, so none is launched
             // again with a sink of its own.
