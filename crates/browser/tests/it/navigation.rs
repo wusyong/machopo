@@ -613,7 +613,10 @@ fn held_redirect(
 
 /// The next response a navigation of the tab has, held: the tab isn't
 /// told of it (nor of what of its body comes after).
-fn held_response(web_contents: &mut WebContents, host_rx: &Receiver<ContentsEvent>) -> ContentsEvent {
+fn held_response(
+    web_contents: &mut WebContents,
+    host_rx: &Receiver<ContentsEvent>,
+) -> ContentsEvent {
     loop {
         match host_rx.recv_timeout(TIMEOUT).expect("the response comes") {
             event @ ContentsEvent::NavigationResponseStarted { .. } => return event,
@@ -6125,7 +6128,10 @@ mod body {
             "/",
             Route::ok("text/html", body).with_pause_in_body(2000, Duration::from_millis(500)),
         )]);
-        assert_eq!(title_of(&server.url("/")), format!("{length},{length},true"));
+        assert_eq!(
+            title_of(&server.url("/")),
+            format!("{length},{length},true")
+        );
     }
 
     /// One that another replaced while its body still came commits
@@ -6182,7 +6188,10 @@ mod body {
         web_contents.on_navigation_event(a);
         web_contents.navigate("about:demo");
         let (_, committed, title) = next_commit(&mut web_contents, &host_rx);
-        assert_eq!((committed.as_str(), title.as_str()), ("about:demo", "machopo demo"));
+        assert_eq!(
+            (committed.as_str(), title.as_str()),
+            ("about:demo", "machopo demo")
+        );
         let until = std::time::Instant::now() + Duration::from_secs(2);
         while let Some(left) = until.checked_duration_since(std::time::Instant::now()) {
             let Ok(msg) = next_message(&mut web_contents, &host_rx, left) else {
@@ -6252,7 +6261,10 @@ document.addEventListener('readystatechange', () => {
             Route::ok("text/html", deflate_cut_short(page.as_bytes()))
                 .with_header("Content-Encoding", "deflate"),
         )]);
-        assert_eq!(title_after(&server.url("/"), "start"), "interactive,complete");
+        assert_eq!(
+            title_after(&server.url("/"), "start"),
+            "interactive,complete"
+        );
     }
 
     /// One whose body fails before its start is in commits what came, not
@@ -6266,7 +6278,10 @@ document.addEventListener('readystatechange', () => {
         let (mut web_contents, host_rx) = tab();
         web_contents.navigate(server.url("/"));
         let (id, committed, title) = next_commit(&mut web_contents, &host_rx);
-        assert_eq!((committed.as_str(), title.as_str()), (server.url("/").as_str(), ""));
+        assert_eq!(
+            (committed.as_str(), title.as_str()),
+            (server.url("/").as_str(), "")
+        );
         loop {
             let msg = next_message(&mut web_contents, &host_rx, TIMEOUT).expect("its load ends");
             web_contents.on_renderer_message(&msg);
@@ -6336,7 +6351,11 @@ document.addEventListener('readystatechange', () => {
             }
         };
         assert_eq!(title, "interactive,complete");
-        assert!(started.elapsed() < Duration::from_secs(4), "{:?}", started.elapsed());
+        assert!(
+            started.elapsed() < Duration::from_secs(4),
+            "{:?}",
+            started.elapsed()
+        );
         web_contents.shutdown();
     }
 

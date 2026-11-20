@@ -79,7 +79,10 @@ impl Drop for DocumentLoad {
         // Stopped before it ended (its load cancelled as `load` goes).
         if let Some(completer) = self.completer.take() {
             completer.complete(CompletionStatus {
-                error: Some(NetError::new(NetErrorCode::Aborted, "the document's load stopped")),
+                error: Some(NetError::new(
+                    NetErrorCode::Aborted,
+                    "the document's load stopped",
+                )),
                 encoded_body_length: 0,
                 completion_time: ipc::TimeTicks::now(),
             });

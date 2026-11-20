@@ -989,7 +989,10 @@ mod tests {
             told,
             [
                 ("Network.dataReceived".to_owned(), json!(["1", null, null])),
-                ("Network.loadingFinished".to_owned(), json!(["1", null, null])),
+                (
+                    "Network.loadingFinished".to_owned(),
+                    json!(["1", null, null])
+                ),
                 ("Network.dataReceived".to_owned(), json!(["2", null, null])),
                 (
                     "Network.loadingFailed".to_owned(),

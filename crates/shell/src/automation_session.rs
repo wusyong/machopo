@@ -1337,7 +1337,8 @@ impl AutomationSession {
             ContentsEvent::NavigationCompleted { navigation_id, .. } => {
                 self.responded.remove(&(tab, *navigation_id));
             }
-            ContentsEvent::NavigationBodyReadable { .. } | ContentsEvent::NavigationBlobLoaded { .. } => {}
+            ContentsEvent::NavigationBodyReadable { .. }
+            | ContentsEvent::NavigationBlobLoaded { .. } => {}
         }
     }
 

@@ -842,7 +842,11 @@ impl RenderThread {
 
     /// Commits `commit`'s document with its whole `body`
     /// (`RenderFrameImpl::CommitNavigation`, once its body has come).
-    fn commit_navigation_body(&mut self, commit: body_loader::NavigationCommit, body: bytes::Bytes) {
+    fn commit_navigation_body(
+        &mut self,
+        commit: body_loader::NavigationCommit,
+        body: bytes::Bytes,
+    ) {
         let body_loader::NavigationCommit {
             frame,
             navigation_id,
@@ -932,12 +936,8 @@ impl RenderThread {
         // The rest of the request the browser told DevTools of, now
         // that its document is here.
         if committed && let Some(loaded) = loaded {
-            self.network_agent.did_commit_navigation(
-                navigation_id,
-                &body,
-                &mime_type,
-                &loaded,
-            );
+            self.network_agent
+                .did_commit_navigation(navigation_id, &body, &mime_type, &loaded);
             if loaded.status >= 400 {
                 self.log_agent.add(log_agent::LogEntry::network(
                     status_message(loaded.status, &loaded.status_text),

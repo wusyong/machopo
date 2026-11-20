@@ -53,7 +53,7 @@
 - processing instruction 序列化成 `<?target data>`（html5ever 的寫法），HTML 新的規則是 `<?target data?>`；parser 也還照舊把 `<?…>` 當成註解（`tests/wpt/tree-construction-expectations.txt`）。
 - 沒有 Trusted Types（`innerHTML` 等收一般的字串）、Sanitizer API（`setHTML`、`setHTMLUnsafe` 的 `sanitizer` 選項），也沒有 declarative shadow DOM（`setHTMLUnsafe` 的 `<template shadowrootmode>` 照一般的 `<template>` parse）。
 - XHTML 用 HTML parser：只處理了 CDATA，其他 XML 語法（例如自己關閉的非 void 元素）照 HTML 的規則解析。
-- Body 一次收完，沒有串流，也還沒有 incremental parsing。WPT 裡靠伺服器分段送出、在兩段之間動 DOM 的測試因此不穩定（`moving-between-documents/` 的 external move-back，`.ini` 標成 `[PASS, FAIL]`）。
+- 文件的 body 一段一段經過管道到 renderer，但 renderer 收齊了才 parse，還沒有 incremental parsing。WPT 裡靠伺服器分段送出、在兩段之間動 DOM 的測試因此不穩定（`moving-between-documents/` 的 external move-back，`.ini` 標成 `[PASS, FAIL]`）。
 - 文件的 body 收到一半出錯（解不開、連線斷了）或被停下時，留下收到的部分，照 HTML 的「abort a parser」：readyState 到 `complete`，不發 `DOMContentLoaded` 和 `load`。Chrome 只有停止載入時這樣（`Document::CancelParsing`），body 出錯時 readyState 一直是 `loading`。中止時 parser 照輸入的結尾收尾（html5ever 沒有 abort，規範只把開著的元素 pop 掉），開頭沒有 `<html>` 時照樣補上 `<html>`、`<head>`、`<body>`。
 - 停止載入（上一頁再下一頁、回到同一筆紀錄）停下每個 frame 還在路上的導覽和 body 還在來的文件，但不停文件已經開始的子資源（Chrome 的 `StopAllLoaders` 連子資源一起停）；沒有停止按鈕和 `window.stop()`。
 - 沒有宣告編碼時，只分辨「合法的 UTF-8」和「其他」（其他一律 windows-1252），沒有完整的編碼偵測。
@@ -322,7 +322,7 @@
 - Window 的具名屬性（HTML 的 named access on the `Window` object）照 Chrome 152：任何元素（包括 SVG）的 `id`，HTML 的 `embed`、`form`、`img`、`object` 的 `name`，有 `name` 的 iframe 給它的子 frame 的 window。machopo 沒有 `window.name`：子 frame 的名稱一直是 iframe 的 `name` 屬性，子 frame 自己改不了；`<object>` 沒有子 frame（Chrome 的 `<object data>` 有，名稱給它的 window）。
 - `Performance` 有 `now()`、`timeOrigin`、User Timing、Performance Timeline 的 `getEntries*` 和 `PerformanceObserver`、Navigation Timing（`navigation` 的 entry、`performance.timing`、`performance.navigation`）：沒有 `toJSON()`（`Performance`、entry 和 Navigation Timing 的物件都沒有），也沒有 `crossOriginIsolated`；entry 沒有 `id`、`navigationId`；沒有 Resource Timing（子資源的 entry、`setResourceTimingBufferSize`）。buffer 沒有上限（規範和 Chrome 也沒有），所以 observer 的 `droppedEntriesCount` 一律是 0。`PerformanceObserver.supportedEntryTypes` 只有 machopo 產生的種類（Chrome 列出它所有的），觀察其他種類時照 Chrome 的訊息在 console 警告；script 的呼叫引起的 console 警告（這裡的和其他的）沒有 script 的網址和行號（Chrome 帶著呼叫的位置）。Navigation Timing 和 Chrome 152 不同的地方：
   - 離開文件時照 Chrome 先發它的 `pagehide`、`unload`，再發它的子 frame 的（HTML 的 "unload a document and its descendants" 先等子 frame）：`pagehide` 是一般的 `Event`（machopo 沒有 `PageTransitionEvent`，沒有 `persisted`），中間不發 `visibilitychange`（Chrome 發），也沒有 `beforeunload`；`unload` 在下一份文件 commit 時才發（Chrome 也是），初始的 `about:blank` 不發。
-  - 文件要等整個 body 到了才 commit，`responseEnd` 從一開始就有值（Chrome 邊收邊 parse，收完才有）。
+  - renderer 等整個 body 到了才建立文件，`responseEnd` 從一開始就有值（Chrome 邊收邊 parse，收完才有）。
   - `fetchStart` 和之後沒有用到的連線的時間通常是 0：browser 一開始導覽就發請求，在 0.1 ms 以內（Chrome 有幾毫秒）。
   - machopo 量不到送出請求的那一刻，也分不開 TLS：`requestStart` 是連線結束（重用的連線是 `fetchStart`），HTTPS 的 `secureConnectionStart` 是 `connectStart`。
   - `serverTiming` 一律是空的（不解析 `Server-Timing`），而且每次讀是同一個凍結的陣列（Chrome 每次是新的）。

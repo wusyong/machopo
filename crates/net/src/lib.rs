@@ -62,8 +62,8 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::AbortHandle;
 
 pub use file::{file_path, file_url};
-pub use url_loader::concat;
 pub use host_mapping::{HostMapping, HostMappingRules};
+pub use url_loader::concat;
 
 /// The most of a response's body written and not yet read: Chromium's
 /// default (`network::features::GetDataPipeDefaultAllocationSize`).

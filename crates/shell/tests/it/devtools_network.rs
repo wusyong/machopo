@@ -235,7 +235,10 @@ fn a_document_whose_body_stops_short_fails_once() {
     assert_eq!(ends.len(), 1, "{events:#?}");
     assert_eq!(ends[0]["method"], "Network.loadingFailed");
     assert_eq!(
-        (&ends[0]["params"]["errorText"], &ends[0]["params"]["canceled"]),
+        (
+            &ends[0]["params"]["errorText"],
+            &ends[0]["params"]["canceled"]
+        ),
         (&json!("net::ERR_CONTENT_DECODING_FAILED"), &json!(false))
     );
     of(&events, "Network.dataReceived", &id);

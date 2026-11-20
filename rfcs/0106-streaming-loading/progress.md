@@ -14,7 +14,7 @@
 | 1d：第 1 階段的檢查和文件 | 完成 | 2026-11-20 |
 | 2a：`CommitNavigation` 帶開頭和管道、Browser 收到 head 和開頭的 1024 bytes 就 commit、結束轉告 renderer；renderer 讀到結尾才 parse | 完成 | 2026-11-20 |
 | 2b：收到一半的錯誤（中止 parser）、取消、DevTools 和 Navigation Timing 的時機 | 完成 | 2026-11-20 |
-| 2c：第 2 階段的檢查和文件 | 未開始 | |
+| 2c：第 2 階段的檢查和文件 | 完成 | 2026-11-20 |
 | 3：renderer 邊收邊 parse | 未開始 | |
 | 4：舊畫面的時限、檢查和文件 | 未開始 | |
 
@@ -100,3 +100,13 @@ macOS、Apple M4，2026-11-20。
 - mutation test（`mutants-2b.toml`）12 個，11 個抓到（「中止的文件不變成 `complete`」第一次寫成少一個 `match` 的分支、編不過，改了單獨重跑）。沒抓到的：子 frame 丟掉比它的文件舊的 commit，和 2a 的 `forget_before` 互相備援、各自拿掉都一樣（記進 `docs/test-gaps.md` 的「等價、不用處理的 mutation」）；兩個都拿掉時的子 frame 的情況（Browser 發起的子 frame 導覽在 body 還在來時被取代）沒有測試，記進「能補、還沒補的測試空缺」。
 - `test.py wpt navigation-timing/ html/browsers/browsing-the-web/navigating-across-documents/`：照預期，只有 1d 記下的那 4 份意外通過。
 - 跑過的檢查：`cargo test -p protocol -p net -p browser -p renderer -p shell -p dom_api`（1322 個）、`cargo check --workspace --all-targets`；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。
+
+### 2c：第 2 階段的檢查和文件
+
+macOS、Apple M4，2026-11-20。
+
+- `cargo test --workspace`：4246 個通過、0 個失敗、1 個 ignored。
+- `cargo fmt --check` 抓到 2a、2b 寫的九個檔案的換行（`browser`、`net`、`renderer`、`shell`），照 rustfmt 改了。
+- `cargo clippy --workspace --all-targets -- -D warnings` 抓到 `shell` 的 `headless` 的 `Event`：帶著 `ContentsEvent` 的那一種比其他的大（`large_enum_variant`，導覽的 head 在裡面）。照視窗那一層的 `FromContents` 改成 `Box<ContentsEvent>`；改了之後沒有警告，`cargo test -p shell` 通過（718 個）。
+- 文件：grep 過 `docs/` 和 crate 的 README 裡導覽的 body 的描述。`docs/limitations.md` 有兩處還寫著 body 一次收完、要收完才 commit，改成現在的行為：body 經過管道到 renderer，renderer 收齊了才 parse、建立文件。`docs/architecture.md` 和其他的描述在 2a、2b 改好了。畫面上看不出差別，沒有新的情境。
+- 跑過的檢查：`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。

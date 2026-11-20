@@ -132,7 +132,11 @@ impl BodyLoaders {
 
     /// The commit of navigation `navigation_id` in `frame` waiting for its
     /// body, if it is.
-    pub(super) fn get_mut(&mut self, frame: FrameToken, navigation_id: u64) -> Option<&mut BodyLoader> {
+    pub(super) fn get_mut(
+        &mut self,
+        frame: FrameToken,
+        navigation_id: u64,
+    ) -> Option<&mut BodyLoader> {
         self.0
             .iter_mut()
             .find(|loader| loader.frame() == frame && loader.navigation_id() == navigation_id)
@@ -140,7 +144,11 @@ impl BodyLoaders {
 
     /// The commit of navigation `navigation_id` in `frame`, taken out if it
     /// is ready.
-    pub(super) fn take_ready(&mut self, frame: FrameToken, navigation_id: u64) -> Option<BodyLoader> {
+    pub(super) fn take_ready(
+        &mut self,
+        frame: FrameToken,
+        navigation_id: u64,
+    ) -> Option<BodyLoader> {
         let at = self.0.iter().position(|loader| {
             loader.frame() == frame && loader.navigation_id() == navigation_id && loader.is_ready()
         })?;

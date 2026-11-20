@@ -78,7 +78,10 @@ pub enum ContentsEvent {
     /// More of the body of navigation `navigation_id` of `frame` may be
     /// read, while it hasn't committed: its pipe's watcher's, from the
     /// network service's thread.
-    NavigationBodyReadable { frame: FrameToken, navigation_id: u64 },
+    NavigationBodyReadable {
+        frame: FrameToken,
+        navigation_id: u64,
+    },
     /// The load of navigation `navigation_id` of `frame` ended
     /// (`URLLoaderClient::OnComplete`): without a response, it failed
     /// (`OnRequestFailed`), and its error page commits; else its body is
@@ -906,9 +909,7 @@ impl WebContents {
             navigation_id,
             post: self.poster(),
         };
-        let load = self
-            .network
-            .load(request, net::AtRedirects::Wait, client);
+        let load = self.network.load(request, net::AtRedirects::Wait, client);
         if let Some(navigation) = self.frame_tree.navigation_mut(frame, navigation_id) {
             navigation.load.set(load);
         }

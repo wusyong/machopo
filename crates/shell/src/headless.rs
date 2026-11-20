@@ -49,7 +49,8 @@ enum Event {
     /// What a renderer's IO thread found bad.
     Bad(browser::RendererId, browser::BadMessageReason),
     /// A frame's navigation's redirect, response, body's data or end.
-    Navigation(ContentsEvent),
+    /// Boxed: a navigation's response is much bigger than the other events.
+    Navigation(Box<ContentsEvent>),
     /// What headless doesn't look at.
     Other,
 }
@@ -254,7 +255,7 @@ fn drive(
                 ContentsEvent::Renderer { renderer, msg } => Event::Host(renderer, msg),
                 ContentsEvent::BadMessage { renderer, reason } => Event::Bad(renderer, reason),
                 ContentsEvent::NavigationStarted(_) => Event::Other,
-                event => Event::Navigation(event),
+                event => Event::Navigation(Box::new(event)),
             });
         }),
     )
@@ -381,7 +382,7 @@ fn drive(
                 | VizMsg::RegisterFrameSinkId(..)
                 | VizMsg::InvalidateFrameSinkId(_),
             )) => {}
-            Ok(Event::Navigation(event)) => web_contents.on_navigation_event(event),
+            Ok(Event::Navigation(event)) => web_contents.on_navigation_event(*event),
             Ok(Event::Bad(renderer, reason)) => {
                 if web_contents.is_current_renderer(renderer) {
                     web_contents.received_bad_message(reason);
