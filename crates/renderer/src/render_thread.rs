@@ -97,6 +97,62 @@ pub struct RendererFlags {
     /// (Chromium's `RendererPreferences::caret_blink_interval`); `None`:
     /// it doesn't blink, as in web tests.
     pub caret_blink_interval: Option<std::time::Duration>,
+    /// How long the parser parses at a time once its document has its
+    /// body, and how much text it is given at a time.
+    pub parser_budget: ParserBudget,
+}
+
+/// How long a document's parser parses before it lets the loop's other
+/// work (input, frames, timers) run, once the document has its body
+/// (Blink's `HTMLDocumentParser::PumpTokenizer` budgets), and how much of
+/// the document's text it is given at a time: it can only stop between
+/// those slices (html5ever's tokenizer takes all it has).
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub struct ParserBudget {
+    /// The budget of the parser's first `long_after` runs past their first.
+    pub budget: std::time::Duration,
+    /// The budget after: the rest of the page in larger runs.
+    pub long_budget: std::time::Duration,
+    pub long_after: u32,
+    /// The most bytes of text the parser is given at a time.
+    pub slice_bytes: usize,
+}
+
+impl Default for ParserBudget {
+    /// Blink's on the desktop: 10 ms for the first 6 runs after the first,
+    /// 500 ms after; slices of about a millisecond's parsing.
+    fn default() -> Self {
+        Self {
+            budget: std::time::Duration::from_millis(10),
+            long_budget: std::time::Duration::from_millis(500),
+            long_after: 6,
+            slice_bytes: 16 * 1024,
+        }
+    }
+}
+
+impl ParserBudget {
+    /// One that lets other work run after each slice of `slice_bytes`, as
+    /// tests want: what they see doesn't depend on the machine's speed
+    /// (Blink's `HTMLParserYieldAndDelayOftenForTesting`).
+    pub fn yield_every_slice(slice_bytes: usize) -> Self {
+        Self {
+            budget: std::time::Duration::ZERO,
+            long_budget: std::time::Duration::ZERO,
+            long_after: 0,
+            slice_bytes,
+        }
+    }
+
+    /// The budget of a run after the parser let other work run `yielded`
+    /// times.
+    pub(crate) fn of_run(&self, yielded: u32) -> std::time::Duration {
+        if yielded <= self.long_after {
+            self.budget
+        } else {
+            self.long_budget
+        }
+    }
 }
 
 /// Makes the script engine, on the renderer's main thread (an engine
@@ -237,6 +293,8 @@ struct RenderThread {
     /// there is one to blink (Blink's `FrameCaret::caret_blink_timer_`).
     caret_blink_interval: Option<Duration>,
     next_caret_blink: Option<Instant>,
+    /// `RendererFlags::parser_budget`.
+    parser_budget: ParserBudget,
     /// The frame's pre-paint count, the DOM's intersection observations'
     /// version and, while an observer tracks visibility, the last paint,
     /// when the intersections were last computed: they are again only once
@@ -455,6 +513,7 @@ impl RenderThread {
             last_main_frame: 0.0,
             idle_period_end: None,
             caret_blink_interval: flags.caret_blink_interval.filter(|i| !i.is_zero()),
+            parser_budget: flags.parser_budget,
             next_caret_blink: None,
             intersections_computed: None,
             intersections_due: None,
@@ -552,6 +611,8 @@ impl RenderThread {
             // The DOM's tasks that are due (timers, element tasks,
             // messages), in the order they were queued.
             self.run_due_tasks();
+            // The parsers that let the rest run parse on, a run each.
+            self.parse_on();
             self.run_intersection_task();
             self.start_image_fetches();
             self.start_script_fetches();
@@ -1291,6 +1352,10 @@ impl RenderThread {
         if self.child_commits_due() {
             return Some(Duration::ZERO);
         }
+        // A parser to parse on.
+        if self.parse_due() {
+            return Some(Duration::ZERO);
+        }
         // The document's timers.
         let next = self
             .engine
@@ -1698,6 +1763,17 @@ mod tests {
     fn the_flags_can_cross_a_process() {
         fn crosses<T: serde::Serialize + serde::de::DeserializeOwned + Send + 'static>() {}
         crosses::<RendererFlags>();
+    }
+
+    /// Blink's budgets on the desktop: 10 ms for a run after each of the
+    /// first 6 yields (and the first run), 500 ms after.
+    #[test]
+    fn the_parsers_budget_grows_after_six_yields() {
+        let budget = ParserBudget::default();
+        assert_eq!(budget.of_run(0), Duration::from_millis(10));
+        assert_eq!(budget.of_run(6), Duration::from_millis(10));
+        assert_eq!(budget.of_run(7), Duration::from_millis(500));
+        assert_eq!(ParserBudget::yield_every_slice(64).of_run(0), Duration::ZERO);
     }
 
     #[test]

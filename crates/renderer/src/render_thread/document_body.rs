@@ -188,3 +188,73 @@ fn concat(mut pieces: Vec<Bytes>) -> Bytes {
         _ => Bytes::from(pieces.concat()),
     }
 }
+
+/// A document's markup its parser hasn't been given yet, in the pieces it
+/// came in: given a slice at a time, so the parser can stop between them
+/// (Blink's parser takes its input a token at a time).
+#[derive(Default)]
+pub(super) struct ParserInput {
+    pieces: std::collections::VecDeque<String>,
+    /// How much of the first piece was given.
+    at: usize,
+}
+
+impl ParserInput {
+    pub(super) fn push(&mut self, markup: String) {
+        if !markup.is_empty() {
+            self.pieces.push_back(markup);
+        }
+    }
+
+    pub(super) fn is_empty(&self) -> bool {
+        self.pieces.is_empty()
+    }
+
+    /// `give` the next slice: at most `max` bytes of whole characters (one
+    /// character, if it is longer). False if there is none.
+    pub(super) fn give(&mut self, max: usize, give: impl FnOnce(&str)) -> bool {
+        let Some(first) = self.pieces.front() else {
+            return false;
+        };
+        let mut end = self.at.saturating_add(max).min(first.len());
+        while !first.is_char_boundary(end) {
+            end = end.saturating_sub(1);
+        }
+        if end <= self.at {
+            end = first[self.at..]
+                .chars()
+                .next()
+                .map_or(first.len(), |c| self.at.saturating_add(c.len_utf8()));
+        }
+        give(&first[self.at..end]);
+        if end == first.len() {
+            self.pieces.pop_front();
+            self.at = 0;
+        } else {
+            self.at = end;
+        }
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Given in slices of whole characters, the pieces' text as it was.
+    #[test]
+    fn input_is_given_in_slices_of_whole_characters() {
+        let mut input = ParserInput::default();
+        input.push("ab中".to_owned());
+        input.push(String::new());
+        input.push("cdef".to_owned());
+        let mut slices = Vec::new();
+        while input.give(3, |slice| slices.push(slice.to_owned())) {}
+        assert_eq!(slices, ["ab", "中", "cde", "f"]);
+        assert!(input.is_empty());
+        // Narrower than a character: the character.
+        input.push("中".to_owned());
+        assert!(input.give(1, |slice| assert_eq!(slice, "中")));
+        assert!(!input.give(1, |_| unreachable!()));
+    }
+}

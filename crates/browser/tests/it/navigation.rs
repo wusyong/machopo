@@ -73,6 +73,20 @@ fn tab_with_viz_gpu(
     tab_with_viz_colors(wait, automation, gpu, gfx::SystemColors::DEFAULT)
 }
 
+/// [`tab`], whose renderer's parser has `parser_budget`.
+fn tab_with_parser_budget(
+    parser_budget: browser::ParserBudget,
+) -> (WebContents, Receiver<ContentsEvent>) {
+    let (web_contents, host_rx, _, _) = tab_with_flags(
+        false,
+        false,
+        None,
+        gfx::SystemColors::DEFAULT,
+        parser_budget,
+    );
+    (web_contents, host_rx)
+}
+
 /// [`tab_with_viz_gpu`], whose renderer has `system_colors` as the
 /// platform's.
 fn tab_with_viz_colors(
@@ -80,6 +94,22 @@ fn tab_with_viz_colors(
     automation: bool,
     gpu: Option<Arc<dyn SharedImageInterface>>,
     system_colors: gfx::SystemColors,
+) -> (
+    WebContents,
+    Receiver<ContentsEvent>,
+    Receiver<VizMsg>,
+    BeginFrameSource,
+) {
+    tab_with_flags(wait, automation, gpu, system_colors, Default::default())
+}
+
+/// [`tab_with_viz_colors`], whose renderer's parser has `parser_budget`.
+fn tab_with_flags(
+    wait: bool,
+    automation: bool,
+    gpu: Option<Arc<dyn SharedImageInterface>>,
+    system_colors: gfx::SystemColors,
+    parser_budget: browser::ParserBudget,
 ) -> (
     WebContents,
     Receiver<ContentsEvent>,
@@ -99,6 +129,7 @@ fn tab_with_viz_colors(
             system_colors,
             num_raster_threads: None,
             caret_blink_interval: None,
+            parser_budget,
         },
         browser::ScriptEngineFactory {
             engine: dom_js::V8Engine::boxed,
@@ -6139,20 +6170,25 @@ mod body {
 
     /// What came of a body is parsed before the rest comes: its first
     /// script runs then, `DOMContentLoaded` waits for the end.
-    ///
-    /// The tab's renderer has started first (its first document): a
-    /// commit to one starting waits for it, which the pause may not
-    /// outlast.
     #[test]
     fn a_body_is_parsed_as_it_comes() {
-        let server = server(&[
-            ("/warm", Route::ok("text/html", "<title>warm</title>")),
-            ("/", timed_page()),
-        ]);
+        let server = server(&[("/warm", warm()), ("/", timed_page())]);
+        assert_eq!(title_once_warm(&server, "/"), "true,true");
+    }
+
+    /// A page to navigate to first, titled `warm`.
+    fn warm() -> Route {
+        Route::ok("text/html", "<title>warm</title>")
+    }
+
+    /// The first title of `path` of `server` in a tab whose renderer has
+    /// started first (`/warm`, its first document): a commit to one
+    /// starting waits for it, which a pause in the body may not outlast.
+    fn title_once_warm(server: &TestServer, path: &str) -> String {
         let (mut web_contents, host_rx) = tab();
         web_contents.navigate(server.url("/warm"));
         next_commit(&mut web_contents, &host_rx);
-        web_contents.navigate(server.url("/"));
+        web_contents.navigate(server.url(path));
         let title = loop {
             let msg = next_message(&mut web_contents, &host_rx, TIMEOUT).expect("renderer answers");
             web_contents.on_renderer_message(&msg);
@@ -6164,7 +6200,7 @@ mod body {
             }
         };
         web_contents.shutdown();
-        assert_eq!(title, "true,true");
+        title
     }
 
     /// A child frame's too.
@@ -6205,6 +6241,56 @@ mod body {
             ),
         ]);
         assert_eq!(title_of(&server.url("/")), "true");
+    }
+
+    /// The title a tab whose parser lets other work run after each slice
+    /// of 64 bytes has once it has navigated to `url`.
+    fn title_yielding(url: &str) -> String {
+        let (mut web_contents, host_rx) =
+            tab_with_parser_budget(browser::ParserBudget::yield_every_slice(64));
+        web_contents.navigate(url);
+        let title = loop {
+            let msg = next_message(&mut web_contents, &host_rx, TIMEOUT).expect("renderer answers");
+            web_contents.on_renderer_message(&msg);
+            if let RendererHostMsg::UpdateTitle(title) = msg
+                && !title.is_empty()
+            {
+                break title;
+            }
+        };
+        web_contents.shutdown();
+        title
+    }
+
+    /// A page whose first script, then `tail`, logs what runs: a timer it
+    /// sets, and its last script, past more than a slice of `<p>`s.
+    fn timer_or_script(head: bool) -> String {
+        let first = "<script>window.log = []; setTimeout(() => log.push('timer'));</script>";
+        let filler = "<p>x</p>".repeat(64);
+        let last = "<script>log.push('script'); \
+                    onload = () => document.title = log.join();</script>";
+        if head {
+            format!("<!DOCTYPE html><head>{first}<!--{filler}-->{last}</head>")
+        } else {
+            format!("<!DOCTYPE html><body>{first}{filler}{last}")
+        }
+    }
+
+    /// Once the document has its body, its parser lets other work run
+    /// past its budget, even of a body that came at once: a timer runs
+    /// between two scripts (Blink's `HTMLDocumentParser::PumpTokenizer`).
+    #[test]
+    fn a_parser_lets_timers_run_between_its_slices() {
+        let server = server(&[("/", Route::ok("text/html", timer_or_script(false)))]);
+        assert_eq!(title_yielding(&server.url("/")), "timer,script");
+    }
+
+    /// Not before: the head is parsed in one go, its sheets and scripts
+    /// found at once.
+    #[test]
+    fn a_parser_doesnt_let_other_work_run_in_the_head() {
+        let server = server(&[("/", Route::ok("text/html", timer_or_script(true)))]);
+        assert_eq!(title_yielding(&server.url("/")), "script,timer");
     }
 
     /// Its load ends after it commits: by its `load`, Navigation Timing

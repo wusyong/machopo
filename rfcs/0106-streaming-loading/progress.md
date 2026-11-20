@@ -16,7 +16,7 @@
 | 2b：收到一半的錯誤（中止 parser）、取消、DevTools 和 Navigation Timing 的時機 | 完成 | 2026-11-20 |
 | 2c：第 2 階段的檢查和文件 | 完成 | 2026-11-20 |
 | 3a：renderer 收到 commit 就建文件、邊收邊 parse（文件拿著管道和解碼器、parser 等下一段、等 script 時照讀）、編碼照開頭、Navigation Timing 和 DevTools 的結束、有 `<body>` 才畫 | 完成 | 2026-11-20 |
-| 3b：parser 的時間預算（切片、超過預算或有輸入就讓出、進了 `<body>` 才讓出） | 未開始 | |
+| 3b：parser 的時間預算（切片、超過預算或有輸入就讓出、進了 `<body>` 才讓出） | 完成 | 2026-11-20 |
 | 3c：開頭 1024 bytes 的測試、`moving-between-documents/` 等 WPT 的預期結果、第 3 階段的檢查和文件 | 未開始 | |
 | 4：舊畫面的時限、檢查和文件 | 未開始 | |
 
@@ -34,6 +34,7 @@
 | 有 `<body>` 才畫：只有 `<head>` 的文件不畫、有了 body 之後 body 還沒收完也畫 | `cargo test -p shell --test it drawn` |
 | 解碼：字元切在兩段之間、BOM 自己一段、開頭結尾被切斷的字元照樣是 UTF-8、開頭之後的字元不改變編碼；XHTML 的 CDATA 標記切在兩段之間、純文字只有一個 `<pre>` | `cargo test -p renderer --lib encoding:: document::` |
 | DevTools 和 trace：每段一個 `dataReceived`、結束時 `loadingFinished`；被中止的文件的原文是收到的部分；trace 的 `responseEnd` 在 body 收完時、時間在 `fetchStart` 和 `domInteractive` 之間 | `cargo test -p renderer --lib network_agent::`、`cargo test -p shell --test it devtools trace::marks` |
+| parser 的預算：有了 body 之後讓出（每片都讓出的 parser，body 裡的計時器在兩個 script 之間跑）、`<head>` 裡不讓出、讓出之前至少 parse 一片、預算在讓出 6 次之後變大；文字照整個字元切片 | `cargo test -p browser --test it body::`、`cargo test -p renderer --lib budget input_is_given` |
 | `Content-Encoding` 一段一段解，一次給一個 byte 和整份一樣：gzip 的 header（選用的欄位）和 trailer（CRC、長度）、`deflate` 的 zlib 和 raw、brotli、截斷和之後多出來的 | `cargo test -p net --lib content_encoding::` |
 
 ## 做過的檢查
@@ -131,3 +132,16 @@ macOS、Apple M4，2026-11-20。
 - `docs/test-gaps.md`：拿掉 2b 記的子 frame 的舊 commit 換回去的空缺（renderer 收到就 commit，沒有等著的舊 commit 了），`forget_before` 和子 frame 的舊 commit 的等價改寫成只剩子 frame 的那個判斷；1024 bytes 的開頭那一列改成看得出來、還沒有測試。
 - `test.py wpt navigation-timing/ html/browsers/browsing-the-web/navigating-across-documents/ html/semantics/scripting-1/the-script-element/ html/dom/documents/dom-tree-accessors/ html/syntax/`：沒有失敗，25 份意外通過：1d 記下的 `navigation-timing/` 那 4 份；`moving-between-documents/` 的 18 份（`before-prepare-*-success-empty-src-*` 四份和 move-back 的那些，原本因為一次 parse 而失敗或不穩定）；`replace-before-load/` 的 `iframe-src.html`、`history-pushstate.html`；`nav2-test-response-end-and-duration-before-during-and-after-load-event.html`（`responseEnd` 在 `load` 之前是 0）。預期結果還沒更新。
 - 跑過的檢查：`cargo test -p browser -p renderer -p shell -p dom -p dom_api -p dom_js -p dom_wasm`（2095 個）、`cargo check --workspace --all-targets`；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。
+
+### 3b：parser 的時間預算
+
+macOS、Apple M4，2026-11-20。
+
+- 決定了第 18 條（讓出之後在 loop 的每一輪的 task 之間接著 parse）。對照了 Blink main 的 `HTMLDocumentParser::PumpTokenizer`：時間預算 10 ms，讓出 6 次之後 500 ms（桌面版；Android 是 2 次、50 ms）；每個 token 之後檢查，`ShouldYieldForHighPriorityWork` 也讓出，只在 `HaveExitedHeader` 之後；body 裡的 parser-blocking script 跑完時預算縮成已用的加 10 ms；測試用的 `HTMLParserYieldAndDelayOftenForTesting`。
+- `RendererFlags::parser_budget`（`ParserBudget`：預算、之後的預算、幾次之後、每片的大小；預設照 Blink 桌面版、每片 16 KiB，`yield_every_slice` 給測試）。文件的 `ParserInput` 存著還沒交給 parser 的文字，`advance_document` 一次給一片（整個字元），至少 parse 過一片之後，有 body、超過預算或 Input 的 queue 有 task 時讓出，記下 `parse_due`；loop 在 `run_due_tasks` 之後 `parse_on`，有要接著 parse 的時候不睡；`read_body` 遇到要接著 parse 的不在那個 task 裡 parse。
+- 找到的 bug（3a 帶進來的）：parser 讀完收到的、停下來等其餘的 body 時，沒有開始它做出的元素要的載入，`<link>` 的 sheet 要等 loop 那一輪最後才開始；compositor 的 frame 排在同一批、先跑時，文件先排版了沒有 sheet 的樣子。`browser` 的 `a_child_frame_waits_for_its_stylesheets` 約六次失敗一次（子 frame 的 body 一次到、結束晚一點到）。停下來等和讓出時都先 `handle_frame_requests`、`start_loads`（`parser_stopped`），之後連跑 20 次整套沒有失敗。寫了一份計時的測試想穩定地抓它，但排不出 frame 和那個 task 的順序（拿掉修正照樣通過），拿掉了，記進 `docs/test-gaps.md`。
+- 找到的 bug（寫的時候）：預算是 0 時，一次 run 一開始就讓出、一片都沒給，parser 永遠不前進（新的測試逾時）：改成至少給過一片才讓出（Blink 在一個 token 之後才檢查）。
+- 新的測試：`browser` 的 `body` 模組 2 個（每 64 bytes 讓出的 parser，body 裡第一個 script 排的計時器比最後一個 script 先跑；同樣的在 `<head>` 裡不讓出）；`renderer` 的單元測試 2 個（預算 6 次之後變大、文字照整個字元切片）。暖身的導覽抽成 `title_once_warm`。
+- mutation test（`mutants-3b.toml`）11 個，8 個抓到。沒抓到的三個記進 `docs/test-gaps.md` 的「能補、還沒補的測試空缺」：有輸入等著時讓出（輸入要在 parser 的一次 run 裡排進 queue，而文件畫出來之前的輸入照樣丟掉，要 `DrivenViz` 的測試）；body 裡的 script 之後縮短預算（測試的預算是 0）；已經要接著 parse 的不被收到的資料推動（parse 的內容一樣，只有和計時器的先後不同）。
+- `test.py wpt navigation-timing/ html/browsers/browsing-the-web/navigating-across-documents/ html/semantics/scripting-1/the-script-element/ html/dom/documents/dom-tree-accessors/ html/syntax/ html/webappapis/timers/`：沒有失敗。意外通過一次 23 份、一次 25 份（和 3a 的同一組）：其中有的有時照舊失敗，更新預期結果之前要重複跑、找出原因。
+- 跑過的檢查：`cargo test -p browser -p renderer -p shell -p dom_api`（1235 個）、`browser` 的整套連跑 20 次、`cargo check --workspace --all-targets`；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。

@@ -33,7 +33,7 @@ pub use frame_tree::FrameTree;
 pub use navigation_controller::{FrameNavigationEntry, NavigationController, NavigationEntry};
 pub use net::{HostMapping, HostMappingRules, NetworkContext, NetworkContextParams};
 pub use render_process_host::{RenderProcessHost, RendererId};
-pub use renderer::{RendererFlags, ScriptEngineFactory};
+pub use renderer::{ParserBudget, RendererFlags, ScriptEngineFactory};
 pub use user_agent::user_agent;
 pub use web_contents::{
     ContentsEvent, ContentsEventCallback, MAX_TITLE_CHARS, NavigationStarted, OpenUrlParams,

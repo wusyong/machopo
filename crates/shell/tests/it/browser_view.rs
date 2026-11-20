@@ -511,6 +511,7 @@ fn start_contents(
             system_colors: gfx::SystemColors::DEFAULT,
             num_raster_threads: None,
             caret_blink_interval: None,
+            parser_budget: Default::default(),
         },
         shell::SCRIPT_ENGINES,
         viz.clone(),

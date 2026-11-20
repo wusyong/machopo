@@ -1,0 +1,93 @@
+# Step 3b: the parser's budget. The document's text is given to the parser
+# a slice at a time; once the document has its body, a run past its budget
+# (or with input waiting) lets the loop's other work run, after it gave at
+# least a slice, and the loop parses on in its next turn; the budget grows
+# after six yields, and is cut after a script in the body.
+test = ["sh", "-c", "cargo test -q -p browser --test it body:: && cargo test -q -p renderer --lib -- budget input_is_given"]
+timeout = 900
+
+[[mutant]]
+name = "the parser never lets other work run"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                        if gave
+                            && next.body_parsed
+                            && (started.elapsed() >= budget || input_waits)'''
+to = '''                        if false
+                            && next.body_parsed
+                            && (started.elapsed() >= budget || input_waits)'''
+
+[[mutant]]
+name = "the parser lets other work run in the head"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                        if gave
+                            && next.body_parsed
+                            && (started.elapsed() >= budget || input_waits)'''
+to = '''                        if gave
+                            && true
+                            && (started.elapsed() >= budget || input_waits)'''
+
+[[mutant]]
+name = "a run lets other work run before it gave a slice"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                        if gave
+                            && next.body_parsed'''
+to = '''                        if true
+                            && next.body_parsed'''
+
+[[mutant]]
+name = "input waiting doesn't make it let other work run"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                            && (started.elapsed() >= budget || input_waits)'''
+to = '''                            && (started.elapsed() >= budget || (input_waits && false))'''
+
+[[mutant]]
+name = "a script in the body doesn't cut the budget"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                    budget = budget.min(started.elapsed().saturating_add(self.parser_budget.budget));'''
+to = '''                    let _ = &mut budget;'''
+
+[[mutant]]
+name = "a parser that let other work run isn't parsed on"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            let _task = trace_event::trace_event!("HTMLDocumentParser::PumpTokenizer");
+            self.advance_document(frame);'''
+to = '''            let _task = trace_event::trace_event!("HTMLDocumentParser::PumpTokenizer");
+            let _ = frame;'''
+
+[[mutant]]
+name = "the loop sleeps with a parser to parse on"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        if self.parse_due() {
+            return Some(Duration::ZERO);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "the text is given whole"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                            next.input.give(slice, |text| parser.push(text));'''
+to = '''                            next.input.give(usize::MAX - slice, |text| parser.push(text));'''
+
+[[mutant]]
+name = "a parser to parse on is parsed by what comes"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        if self.doc(frame).is_some_and(|next| !next.parse_due) {
+            self.advance_document(frame);
+        }'''
+to = '''        self.advance_document(frame);'''
+
+[[mutant]]
+name = "the budget doesn't grow"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        if yielded <= self.long_after {'''
+to = '''        if yielded <= u32::MAX {'''
+
+[[mutant]]
+name = "a slice ends in a character"
+file = "crates/renderer/src/render_thread/document_body.rs"
+from = '''        while !first.is_char_boundary(end) {
+            end = end.saturating_sub(1);
+        }'''
+to = '''        while end < first.len() && false {
+            end = end.saturating_sub(1);
+        }'''

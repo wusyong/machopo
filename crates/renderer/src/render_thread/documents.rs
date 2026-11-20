@@ -31,10 +31,11 @@ use protocol::renderer::{
 };
 use url::Url;
 
-use super::document_body::{BodyRead, DocumentBody, NavigationBody};
+use super::document_body::{BodyRead, DocumentBody, NavigationBody, ParserInput};
 use super::network_agent::RequestFrame;
 use super::page_agent::{FrameInfo, FrameResources};
 use super::{RenderThread, SwapPromise};
+use crate::task_queue::TaskQueues;
 use crate::frame_view::{Frame, FrameView};
 use crate::initiator::Initiator;
 use crate::pending_user_input::PendingUserInputMonitor;
@@ -63,6 +64,12 @@ pub(super) struct FrameDocument {
     /// then, or the parser's end, it isn't rendered (Blink's
     /// `Document::ShouldScheduleLayout`), so the page before stays.
     body_parsed: bool,
+    /// What came of its body that its parser hasn't been given yet.
+    input: ParserInput,
+    /// How many times its parser let the loop's other work run, and
+    /// whether it is to parse on in the loop's next turn (`parse_on`).
+    yields: u32,
+    parse_due: bool,
     /// Its window's time origin, on the renderer's clock.
     time_origin: f64,
     /// HTML's "pending parsing-blocking script", and its "list of scripts
@@ -229,6 +236,9 @@ impl FrameDocument {
             parser,
             body: None,
             body_parsed: false,
+            input: ParserInput::default(),
+            yields: 0,
+            parse_due: false,
             time_origin: 0.0,
             blocking_script: None,
             deferred_scripts: std::collections::VecDeque::new(),
@@ -1758,7 +1768,7 @@ impl RenderThread {
         let last = body.pipe_mut().is_none();
         let length = start.len();
         let markup = body.take(start, last);
-        self.body_data(frame, length, &markup);
+        self.body_data(frame, length, markup);
         self.read_body(frame);
     }
 
@@ -1795,7 +1805,7 @@ impl RenderThread {
             match body.read(left) {
                 BodyRead::Data(length, markup) => {
                     read = read.saturating_add(length);
-                    self.body_data(frame, length, &markup);
+                    self.body_data(frame, length, markup);
                 }
                 BodyRead::Waiting => {
                     if let Some(token) = token
@@ -1806,7 +1816,7 @@ impl RenderThread {
                     break;
                 }
                 BodyRead::Over(markup) => {
-                    self.body_data(frame, 0, &markup);
+                    self.body_data(frame, 0, markup);
                     break;
                 }
             }
@@ -1818,20 +1828,58 @@ impl RenderThread {
         {
             self.body_ended(frame);
         }
-        self.advance_document(frame);
+        // A parser that let other work run parses what came in the loop's
+        // next turn (Blink's parser, once scheduled, isn't pumped by what
+        // comes).
+        if self.doc(frame).is_some_and(|next| !next.parse_due) {
+            self.advance_document(frame);
+        }
+    }
+
+    /// A parser stopped for now (it let other work run, or waits for the
+    /// rest of its body): what its elements asked for starts, the frames
+    /// its iframes made and the loads of its `<link>`s first, so the sheets
+    /// block its rendering before a frame comes.
+    fn parser_stopped(&mut self) {
+        self.handle_frame_requests();
+        self.start_loads();
+    }
+
+    /// Whether a document's parser is to parse on in the loop's turn.
+    pub(super) fn parse_due(&self) -> bool {
+        self.document
+            .iter()
+            .chain(&self.children.documents)
+            .any(|next| next.parse_due)
+    }
+
+    /// The documents whose parsers let the loop's other work run parse on,
+    /// each for a run of its budget (Blink's
+    /// `HTMLDocumentParser::DeferredPumpTokenizerIfPossible`).
+    pub(super) fn parse_on(&mut self) {
+        let due: Vec<FrameId> = self
+            .document
+            .iter()
+            .chain(&self.children.documents)
+            .filter(|next| next.parse_due)
+            .map(|next| next.frame)
+            .collect();
+        for frame in due {
+            let _task = trace_event::trace_event!("HTMLDocumentParser::PumpTokenizer");
+            self.advance_document(frame);
+            self.send_harness_results();
+        }
     }
 
     /// `length` bytes of `frame`'s document's body came, which make
     /// `markup`: it goes to the end of its parser's input, and DevTools
     /// hears of the bytes of a document it loaded (`Network.dataReceived`,
     /// Blink's `probe::DidReceiveData`).
-    fn body_data(&mut self, frame: FrameId, length: usize, markup: &str) {
+    fn body_data(&mut self, frame: FrameId, length: usize, markup: String) {
         let Some(next) = self.doc_mut(frame) else {
             return;
         };
-        if let Some(parser) = &mut next.parser {
-            parser.push(markup);
-        }
+        next.input.push(markup);
         let navigation_id = next.navigation_id;
         let loaded = next.body.as_ref().is_some_and(|body| body.loaded().is_some());
         if loaded && length > 0 {
@@ -1973,6 +2021,19 @@ impl RenderThread {
     /// run after parsing (`run_deferred_scripts`), one that waits for
     /// no parser queued in the DOM.
     pub(super) fn advance_document(&mut self, frame: FrameId) {
+        // This run's budget, once the document has its body.
+        let started = std::time::Instant::now();
+        let parser_budget = self.parser_budget;
+        let mut budget = match self.doc_mut(frame) {
+            Some(next) => {
+                next.parse_due = false;
+                parser_budget.of_run(next.yields)
+            }
+            None => return,
+        };
+        // Whether the run has given the parser a slice: it lets other work
+        // run only after (Blink's, after a token).
+        let mut gave = false;
         loop {
             self.start_loads();
             self.handle_frame_requests();
@@ -1993,6 +2054,11 @@ impl RenderThread {
                     return;
                 };
                 self.execute_parser_script(frame, script);
+                // Having run a script in the body, it is to let other work
+                // run soon (Blink's `kHaveTokensAfterScript`).
+                if self.doc(frame).is_some_and(|next| next.body_parsed) {
+                    budget = budget.min(started.elapsed().saturating_add(self.parser_budget.budget));
+                }
                 continue;
             }
             let Some(next) = self.doc_mut(frame) else {
@@ -2013,12 +2079,38 @@ impl RenderThread {
             self.note_body_parsed(frame);
             match state {
                 ParserState::NeedsInput => {
+                    let input_waits = self.scheduler.has_task(TaskQueues::INPUT);
+                    let slice = self.parser_budget.slice_bytes;
+                    let Some(next) = self.doc_mut(frame) else {
+                        return;
+                    };
+                    if !next.input.is_empty() {
+                        // Its run's budget spent, or input waiting, it lets
+                        // the loop's other work run, once it has its body
+                        // (Blink's `PumpTokenizer`); else the next slice.
+                        if gave
+                            && next.body_parsed
+                            && (started.elapsed() >= budget || input_waits)
+                        {
+                            next.yields = next.yields.saturating_add(1);
+                            next.parse_due = true;
+                        } else {
+                            next.input.give(slice, |text| parser.push(text));
+                            gave = true;
+                        }
+                        let yielded = next.parse_due;
+                        next.parser = Some(parser);
+                        if yielded {
+                            self.parser_stopped();
+                            return;
+                        }
+                        continue;
+                    }
                     // The rest of its body is still to come: the parser
                     // waits for it (`read_body`).
-                    if let Some(next) = self.doc_mut(frame)
-                        && next.body.is_some()
-                    {
+                    if next.body.is_some() {
                         next.parser = Some(parser);
+                        self.parser_stopped();
                         return;
                     }
                     if let Some(engine) = self.engine.take() {

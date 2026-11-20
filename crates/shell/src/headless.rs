@@ -245,6 +245,7 @@ fn drive(
             num_raster_threads,
             // A web test's: no blinking, so each frame comes out the same.
             caret_blink_interval: None,
+            parser_budget: Default::default(),
         },
         script_engine,
         viz_tx,

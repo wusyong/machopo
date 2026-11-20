@@ -97,6 +97,8 @@ impl TaskQueues {
     pub(crate) const DEVTOOLS: Self = Self(1 << TaskQueue::DevTools as u8);
     /// The rendering's alone.
     pub(crate) const RENDERING: Self = Self(1 << TaskQueue::Rendering as u8);
+    /// The input's alone.
+    pub(crate) const INPUT: Self = Self(1 << TaskQueue::Input as u8);
     /// Script paused's: DevTools' and the rendering's, which run no script.
     pub(crate) const PAUSED: Self =
         Self((1 << TaskQueue::DevTools as u8) | (1 << TaskQueue::Rendering as u8));
