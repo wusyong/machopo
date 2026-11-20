@@ -34,6 +34,8 @@ pub struct Options {
     /// The network service's: the user agent is the browser's whatever it
     /// says; web tests map WPT's domains and trust its root certificate.
     pub network: NetworkContextParams,
+    /// Where what the window's tabs keep is; by default in memory.
+    pub profile: browser::Profile,
 }
 
 pub struct BrowserWindow {
@@ -88,6 +90,7 @@ impl BrowserWindow {
             viz: viz_tx.clone(),
             gpu: gpu.clone(),
             network,
+            profile: options.profile,
             on_message: Arc::new(Mutex::new(on_message)),
         };
         // Registered with Viz before it starts: the message waits for it.
@@ -157,6 +160,12 @@ struct WindowTabs {
     viz: Sender<VizMsg>,
     gpu: Option<Arc<dyn SharedImageInterface>>,
     network: NetworkContext,
+    /// The window's profile, its folder the window's while it is up.
+    #[expect(
+        dead_code,
+        reason = "held for its folder's lock; nothing is kept in it yet"
+    )]
+    profile: browser::Profile,
     /// Shared by every tab's renderer.
     on_message: Arc<Mutex<ContentsEventCallback>>,
 }
@@ -220,6 +229,7 @@ mod tests {
                 ..Default::default()
             })
             .unwrap(),
+            profile: browser::Profile::in_memory(),
             on_message: Arc::new(Mutex::new(Box::new(|_, _| {}))),
         };
         let contents = tabs.create(TabId(3)).unwrap();

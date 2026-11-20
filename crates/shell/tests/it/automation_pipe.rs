@@ -2659,3 +2659,27 @@ fn the_profile_tells_waiting_from_rendering() {
     assert!(program >= 10, "(idle) {idle}, (program) {program}");
     assert!(browser.end().success());
 }
+
+/// A profile's folder is one machopo's at a time: a second one given it
+/// doesn't start, and says why; the first goes on.
+#[test]
+fn a_second_machopo_on_a_profiles_folder_doesnt_start() {
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("shell-profile-in-use");
+    let _ = std::fs::remove_dir_all(&dir);
+    let dir_arg = dir.to_str().expect("UTF-8");
+    let mut first = Browser::start_with(&["--user-data-dir", dir_arg]);
+    let session = first.attach();
+    // Its folder is made and locked by now.
+    first.navigate(&session, "about:blank");
+    let second = Process::new(env!("CARGO_BIN_EXE_machopo"))
+        .args(["--automation-pipe", "--user-data-dir", dir_arg])
+        .stdin(Stdio::null())
+        .output()
+        .expect("machopo runs");
+    assert!(!second.status.success());
+    let said = String::from_utf8_lossy(&second.stderr);
+    assert!(said.contains("in use by another machopo"), "{said}");
+    assert!(said.contains(dir_arg), "{said}");
+    first.navigate(&session, "about:blank");
+    assert!(first.end().success());
+}

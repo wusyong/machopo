@@ -11,7 +11,9 @@
 | 1a：`site` crate：`Site`（HTML 的「obtain a site」）和 registrable domain（`psl`） | 完成 | 2026-11-20 |
 | 1b：`StorageKey`，frame 樹在文件 commit 時算出每個 frame 的 key | 完成 | 2026-11-20 |
 | 1c：DevTools 的 `domainAndRegistry`，第 1 階段的檢查和文件 | 完成 | 2026-11-20 |
-| 2：profile 和磁碟 | 未開始 | |
+| 2a：profile 的資料夾（位置、`--user-data-dir`、哪些模式寫磁碟、同一個資料夾開兩次） | 完成 | 2026-11-20 |
+| 2b：磁碟上的儲存（格式、讀寫的介面） | 未開始 | |
+| 2c：第 2 階段的檢查和文件 | 未開始 | |
 | 3：Web Storage | 未開始 | |
 | 4：`net` 的 cookie | 未開始 | |
 | 5：cookie 到 DOM 和自動化 | 未開始 | |
@@ -25,6 +27,8 @@
 | 網站：同一個 registrable domain 的 host 是同一個、不看 port、scheme 不同就不同、沒有 registrable domain 的 host 自己是網站、opaque 的 origin 只和自己相等 | `cargo test -p site` |
 | storage key：最上層的 frame 是第一方；別的網站的 frame 是第三方，嵌在不同的最上層網站底下各是一個 key；中間隔著別的網站的 frame 時是第三方；opaque 的 origin 和 opaque 的最上層是第三方 | `cargo test -p site` |
 | DevTools 的 `domainAndRegistry`：frame 的網址的 host 的 registrable domain（private 的後綴也算），位址、public suffix 本身、單一 label、沒有 host 的是空的 | `cargo test -p renderer --lib page_agent::`；`cargo test -p shell --test it a_frames_domain_and_registry` |
+| profile：只在記憶體的沒有資料夾；資料夾沒有就建、鎖檔寫著是誰的；同時只給一個（clone 都放掉之後才放開），被用著是 `InUse`、訊息說資料夾和 `--user-data-dir`；建不出來的是錯誤；各平台預設的資料夾（空的、相對的 `XDG_CONFIG_HOME` 不算） | `cargo test -p browser --test it profile::` |
+| 哪個 profile：視窗預設是使用者的、自動化在記憶體、`--user-data-dir` 的照啟動時的工作目錄；第二個 machopo 開同一個資料夾時拒絕啟動，第一個照常 | `cargo test -p shell --bin machopo -- user_data`；`cargo test -p shell --test it a_second_machopo` |
 | frame 樹的 key：文件 commit 時、子 frame 建立時（parent 的 origin）照它所在的 frame 算，最上層的網站是 main frame 的；重設之後是 opaque 的 | `cargo test -p browser --lib frame_tree::` |
 
 ## 做過的檢查
@@ -65,3 +69,16 @@ macOS、Apple M4，2026-11-20。
 - 文件：`docs/limitations.md` 拿掉 `domainAndRegistry` 一律是空的；IntersectionObserver 那一條原因裡的「沒有 public suffix list 判斷 site」改成「判斷遮擋時不分 site」（還是不分）。
 - 第 1 階段的檢查：`cargo test --workspace` 4285 個通過、0 個失敗、1 個 ignored；`cargo clippy --workspace --all-targets -- -D warnings` 沒有警告；`cargo fmt --check` 抓到 1c 的 DevTools 測試的一行，照 rustfmt 改了。畫面上看不出差別（只有 DevTools 的欄位），沒有新的情境。
 - 跑過的檢查：`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。
+
+### 2a：profile 的資料夾
+
+macOS、Apple M4，2026-11-20。
+
+- 決定了第 5 條（人用的視窗預設寫進平台的使用者資料夾，自動化和測試在記憶體）和第 6 條（第二個 machopo 拒絕啟動）。對照了 Chromium 的 User Data Directory 文件（各平台的位置、`--user-data-dir`、Linux 的 `XDG_CONFIG_HOME`）、chromedriver 的 `chrome_launcher.cc`（沒給 `--user-data-dir` 時每個 session 一個暫時的資料夾）和 `ProcessSingleton`。
+- `browser`：`Profile`（`in_memory`、`open`、`dir`；`Clone`，資料夾的鎖跟著最後一個放掉：Chromium 的 `Profile` 比它的視窗活得久，之後存資料的 thread 也拿著它），鎖是標準庫的 `File::try_lock`，鎖檔寫著 process 的 id（Windows 上鎖著的檔案可能讀不到，訊息就不帶 id）；`ProfileError`；`default_user_data_dir`、`user_data_dir_on`（從環境變數算，沒有加依賴）、`Platform`。
+- `shell`：`machopo --user-data-dir DIR`（說明和 usage），`profile_dir`（選資料夾）和 `profile`（打開；拿不到就印出原因、結束），`window::run` 的參數收成 `window::Options`（clippy 的參數上限），`browser_window::Options` 和 `automation_pipe::Options` 帶 profile，`WindowTabs` 拿著它。還沒有東西存進去。
+- 新的測試：`browser` 的 `profile.rs` 5 個；`shell` 的 `main` 1 個（選項和選資料夾）、`help_mentions_every_option` 加上 `--user-data-dir`；`shell` 的 `automation_pipe` 1 個（第二個 machopo 開同一個資料夾時失敗、說出原因，第一個照常）。選資料夾的測試不打開它：mutant 弄壞「自動化在記憶體」時不會在家目錄建出資料夾（跑完確認過沒有）。
+- mutation test（`mutants-2a.toml`）10 個，全部抓到（「被用著的資料夾照樣打開」第一次寫成編不過的，改了單獨重跑）。
+- 文件：`docs/architecture.md` 的 `browser`、`crates/shell/README.md` 的自動化的 pipe、`docs/limitations.md`（第二個 machopo 拒絕啟動；環境沒說使用者的資料夾時視窗的 profile 在記憶體）。
+- 改到視窗那一層（`window.rs`、`browser_window.rs`），跑了 `test.py scenarios --window`：72 次，0 個失敗（`caret` 照舊跳過），pipe 的 `--window` 也通過；家目錄底下沒有建出 profile 的資料夾（自動化在記憶體）。
+- 跑過的檢查：`cargo test -p browser -p shell`（906 個）、`cargo clippy -p browser -p shell --all-targets -- -D warnings`；`sanity.py` 的 `deps`、`unsafe`、`tests`、`numerics`、`boundary`、`docs`。

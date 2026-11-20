@@ -194,6 +194,8 @@ struct App {
     ui_theme: Option<ColorMode>,
     test_fonts: bool,
     num_raster_threads: Option<usize>,
+    /// The window's profile (`--user-data-dir`, or the user's own).
+    profile: browser::Profile,
     proxy: EventLoopProxy<ShellEvent>,
     running: Option<Running>,
     error: Option<String>,
@@ -329,6 +331,7 @@ impl App {
                 network,
                 num_raster_threads: self.num_raster_threads,
                 caret_blink_interval,
+                profile: self.profile.clone(),
             },
             size,
             scale,
@@ -791,18 +794,36 @@ impl ApplicationHandler<ShellEvent> for App {
     }
 }
 
-/// Opens a window at `url`, until it is closed; or, with `pipe` (the
-/// network settings `--automation-pipe --window` gives), lets the pipe
-/// drive the window until its input ends, or `Browser.close`.
-pub fn run(
-    url: String,
-    ui_layout: UiLayout,
-    ui_theme: Option<ColorMode>,
-    test_fonts: bool,
-    num_raster_threads: Option<usize>,
-    pipe: Option<NetworkContextParams>,
-    remote_debugging: Option<devtools_http_handler::Options>,
-) -> Result<(), String> {
+/// What `run` opens a window with.
+pub struct Options {
+    pub url: String,
+    /// `--ui-layout`.
+    pub ui_layout: UiLayout,
+    /// `--ui-theme`; `None`: the system's.
+    pub ui_theme: Option<ColorMode>,
+    pub test_fonts: bool,
+    pub num_raster_threads: Option<usize>,
+    /// The network settings `--automation-pipe --window` gives: the pipe
+    /// drives the window.
+    pub pipe: Option<NetworkContextParams>,
+    pub remote_debugging: Option<devtools_http_handler::Options>,
+    pub profile: browser::Profile,
+}
+
+/// Opens a window at `options.url`, until it is closed; or, with
+/// `options.pipe`, lets the pipe drive the window until its input ends, or
+/// `Browser.close`.
+pub fn run(options: Options) -> Result<(), String> {
+    let Options {
+        url,
+        ui_layout,
+        ui_theme,
+        test_fonts,
+        num_raster_threads,
+        pipe,
+        remote_debugging,
+        profile,
+    } = options;
     let event_loop = EventLoop::<ShellEvent>::with_user_event()
         .build()
         .map_err(|e| format!("event loop: {e}"))?;
@@ -812,6 +833,7 @@ pub fn run(
         ui_theme,
         test_fonts,
         num_raster_threads,
+        profile,
         proxy: event_loop.create_proxy(),
         running: None,
         error: None,

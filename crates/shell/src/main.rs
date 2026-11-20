@@ -53,12 +53,13 @@ const DEFAULT_LOG_FILTER: &str = "info,wgpu_core=warn,wgpu_hal=warn,naga=warn";
 
 const USAGE: &str = "\
 usage: machopo [--ui-layout LAYOUT] [--ui-theme THEME] [--test-fonts]
-           [--num-raster-threads N] [--remote-debugging-port PORT
-           [--remote-allow-origins ORIGINS]] [URL|PATH]
+           [--num-raster-threads N] [--user-data-dir DIR]
+           [--remote-debugging-port PORT [--remote-allow-origins ORIGINS]]
+           [URL|PATH]
        machopo --automation-pipe [--window | --scale F] [--host-resolver-rules RULES]
            [--additional-trust-anchors PEM] [--test-fonts]
-           [--num-raster-threads N] [--remote-debugging-port PORT
-           [--remote-allow-origins ORIGINS]]
+           [--num-raster-threads N] [--user-data-dir DIR]
+           [--remote-debugging-port PORT [--remote-allow-origins ORIGINS]]
 
 Options that take a value take it as --name VALUE or --name=VALUE.";
 
@@ -117,6 +118,13 @@ Options:
   --additional-trust-anchors PEM
                       With --automation-pipe: trust the root certificates in
                       the PEM file too, as web tests do WPT's.
+  --user-data-dir DIR Keep the profile (what pages store) in the folder DIR,
+                      made if it isn't there, as Chrome's switch. Without
+                      it a window's is the user's own
+                      ({default_profile}), and
+                      --automation-pipe's is in memory, gone as it ends.
+                      Only one machopo has a folder at a time: a second one
+                      doesn't start.
   --remote-debugging-port PORT
                       In a window or with --automation-pipe: serve the
                       DevTools protocol on 127.0.0.1:PORT (0: a free port),
@@ -164,6 +172,10 @@ Environment:
 Keyboard and mouse shortcuts in the window: see crates/shell/README.md.",
         threads =
             std::thread::available_parallelism().map_or(1, |n| n.get().saturating_sub(1).max(1)),
+        default_profile = browser::default_user_data_dir().map_or_else(
+            || "nowhere here: the environment doesn't say where".to_owned(),
+            |dir| dir.display().to_string()
+        ),
     )
 }
 
@@ -186,6 +198,8 @@ struct Args {
     num_raster_threads: Option<usize>,
     /// `--remote-debugging-port` and `--remote-allow-origins`.
     remote_debugging: Option<devtools_http_handler::Options>,
+    /// `--user-data-dir`.
+    user_data_dir: Option<PathBuf>,
 }
 
 /// `--automation-pipe`, and the settings that go with it.
@@ -226,6 +240,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
     let mut num_raster_threads = None;
     let mut remote_debugging_port = None;
     let mut remote_allow_origins = None;
+    let mut user_data_dir = None;
     let mut it = args.into_iter();
     while let Some(arg) = it.next() {
         // `--name=value`, as Chrome's switches are written (and the tools
@@ -292,6 +307,13 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
             "--remote-allow-origins" => {
                 remote_allow_origins = Some(value("--remote-allow-origins")?);
             }
+            "--user-data-dir" => {
+                let v = value("--user-data-dir")?;
+                if v.is_empty() {
+                    return Err("--user-data-dir wants a folder".into());
+                }
+                user_data_dir = Some(PathBuf::from(v));
+            }
             "-h" | "--help" => return Ok(Command::Help),
             s if s.starts_with('-') => return Err(format!("unknown option {s:?}")),
             _ if url.is_none() => url = Some(arg),
@@ -354,6 +376,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
         test_fonts,
         num_raster_threads,
         remote_debugging,
+        user_data_dir,
         automation_pipe: automation_pipe.then_some(AutomationPipe {
             window: pipe_window,
             scale,
@@ -378,6 +401,35 @@ fn network_params(pipe: &AutomationPipe) -> Result<NetworkContextParams, String>
             .map_err(|e| format!("{}: {e}", path.display()))?;
     }
     Ok(params)
+}
+
+/// The folder of the profile `args` ask for: `--user-data-dir`'s, as the
+/// working directory has it now; without it the user's own for a window
+/// (none where the environment doesn't say where the user's files are),
+/// and none for what is driven through the pipe. None: a profile in
+/// memory.
+fn profile_dir(args: &Args) -> Option<PathBuf> {
+    match &args.user_data_dir {
+        Some(dir) => Some(std::path::absolute(dir).unwrap_or_else(|_| dir.clone())),
+        None if args.automation_pipe.is_some() => None,
+        None => browser::default_user_data_dir(),
+    }
+}
+
+/// The profile `args` ask for (`profile_dir`), its folder opened.
+fn profile(args: &Args) -> Result<browser::Profile, browser::ProfileError> {
+    match profile_dir(args) {
+        Some(dir) => browser::Profile::open(dir),
+        None => {
+            if args.automation_pipe.is_none() {
+                tracing::warn!(
+                    "the environment doesn't say where the user's files are: nothing pages store \
+                     is kept (--user-data-dir says where)"
+                );
+            }
+            Ok(browser::Profile::in_memory())
+        }
+    }
 }
 
 fn main() -> ExitCode {
@@ -426,23 +478,32 @@ fn main() -> ExitCode {
     // every level (but no events): each record would be made, html5ever's
     // for every token it parses, only to be dropped.
     tracing_log::log::set_max_level(log_records);
+    let profile = match profile(&args) {
+        Ok(profile) => profile,
+        Err(e) => {
+            eprintln!("machopo: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     let result = match &args.automation_pipe {
         Some(pipe) => match network_params(pipe) {
-            Ok(network) if pipe.window => window::run(
-                args.url,
-                UiLayout::Horizontal,
-                Some(ColorMode::Light),
-                args.test_fonts,
-                args.num_raster_threads,
-                Some(network),
-                args.remote_debugging,
-            ),
+            Ok(network) if pipe.window => window::run(window::Options {
+                url: args.url,
+                ui_layout: UiLayout::Horizontal,
+                ui_theme: Some(ColorMode::Light),
+                test_fonts: args.test_fonts,
+                num_raster_threads: args.num_raster_threads,
+                pipe: Some(network),
+                remote_debugging: args.remote_debugging,
+                profile,
+            }),
             Ok(network) => automation_pipe::run(automation_pipe::Options {
                 scale: pipe.scale,
                 test_fonts: args.test_fonts,
                 network,
                 num_raster_threads: args.num_raster_threads,
                 remote_debugging: args.remote_debugging,
+                profile,
                 ..Default::default()
             }),
             Err(e) => {
@@ -450,15 +511,16 @@ fn main() -> ExitCode {
                 return ExitCode::from(2);
             }
         },
-        None => window::run(
-            args.url,
-            args.ui_layout,
-            args.ui_theme,
-            args.test_fonts,
-            args.num_raster_threads,
-            None,
-            args.remote_debugging,
-        ),
+        None => window::run(window::Options {
+            url: args.url,
+            ui_layout: args.ui_layout,
+            ui_theme: args.ui_theme,
+            test_fonts: args.test_fonts,
+            num_raster_threads: args.num_raster_threads,
+            pipe: None,
+            remote_debugging: args.remote_debugging,
+            profile,
+        }),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -520,6 +582,29 @@ mod tests {
         assert_eq!(args.num_raster_threads, None);
         assert_eq!(parse(&["x", "--help"]), Ok(Command::Help));
         assert_eq!(parse(&["-h"]), Ok(Command::Help));
+    }
+
+    /// `--user-data-dir` names a folder, in a window or with the pipe;
+    /// without it a window has the user's own, the pipe one in memory.
+    #[test]
+    fn the_user_data_dir() {
+        assert_eq!(run(&[]).user_data_dir, None);
+        let dir = run(&["--user-data-dir", "profile"]).user_data_dir;
+        assert_eq!(dir, Some(PathBuf::from("profile")));
+        let absolute = std::env::temp_dir().join("p");
+        let flag = format!("--user-data-dir={}", absolute.display());
+        let piped = run(&["--automation-pipe", &flag]);
+        assert_eq!(piped.user_data_dir.as_ref(), Some(&absolute));
+        assert!(parse(&["--user-data-dir="]).is_err());
+        assert!(parse(&["--user-data-dir"]).is_err());
+        assert_eq!(profile_dir(&run(&["--automation-pipe"])), None);
+        assert_eq!(profile_dir(&run(&[])), browser::default_user_data_dir());
+        // As the working directory has it as machopo starts.
+        assert_eq!(
+            profile_dir(&run(&["--user-data-dir", "profile"])),
+            Some(std::env::current_dir().unwrap().join("profile"))
+        );
+        assert_eq!(profile_dir(&piped), Some(absolute));
     }
 
     #[test]
@@ -703,6 +788,7 @@ mod tests {
             "--host-resolver-rules",
             "--additional-trust-anchors",
             "--num-raster-threads",
+            "--user-data-dir",
             "--help",
         ] {
             assert!(help.contains(option), "{option}");

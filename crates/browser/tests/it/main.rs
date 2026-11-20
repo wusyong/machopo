@@ -10,3 +10,4 @@
 )]
 
 mod navigation;
+mod profile;

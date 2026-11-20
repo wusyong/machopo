@@ -37,6 +37,9 @@ pub struct Options {
     /// `--remote-debugging-port`: other clients too, over HTTP and
     /// websockets.
     pub remote_debugging: Option<devtools_http_handler::Options>,
+    /// `--user-data-dir`'s; in memory without it, each run alone with its
+    /// own (as chromedriver gives each session a new folder).
+    pub profile: browser::Profile,
 }
 
 impl Default for Options {
@@ -50,6 +53,7 @@ impl Default for Options {
             network: NetworkContextParams::default(),
             num_raster_threads: None,
             remote_debugging: None,
+            profile: browser::Profile::in_memory(),
         }
     }
 }
@@ -150,6 +154,7 @@ pub fn run(options: Options) -> Result<(), String> {
             num_raster_threads: options.num_raster_threads,
             // A web test's: no blinking, so each frame is the same.
             caret_blink_interval: None,
+            profile: options.profile,
         },
         size,
         options.scale,

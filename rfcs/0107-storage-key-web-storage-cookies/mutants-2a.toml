@@ -1,0 +1,76 @@
+# Step 2a: a profile, in memory or in a folder only one machopo has at a
+# time (its lock file says whose); the platforms' default folders; which
+# profile each way of starting machopo has (--user-data-dir's, a window's
+# the user's own, the pipe's in memory).
+test = ["sh", "-c", "cargo test -q -p browser --test it profile:: && cargo test -q -p shell --bin machopo -- user_data && cargo test -q -p shell --test it a_second_machopo"]
+timeout = 1200
+
+[[mutant]]
+name = "a folder another machopo has is opened"
+file = "crates/browser/src/profile.rs"
+from = '''        match lock.try_lock() {'''
+to = '''        match Ok::<(), std::fs::TryLockError>(()) {'''
+
+[[mutant]]
+name = "the lock file doesn't say whose it is"
+file = "crates/browser/src/profile.rs"
+from = '''            .and_then(|()| write!(lock, "{}", std::process::id()))'''
+to = '''            .and_then(|()| write!(lock, ""))'''
+
+[[mutant]]
+name = "the folder isn't made"
+file = "crates/browser/src/profile.rs"
+from = '''        std::fs::create_dir_all(&path).map_err(io(&path))?;'''
+to = '''        let _ = io;'''
+
+[[mutant]]
+name = "an empty variable is a place"
+file = "crates/browser/src/profile.rs"
+from = '''            .filter(|value| !value.is_empty())'''
+to = '''            .filter(|_| true)'''
+
+[[mutant]]
+name = "a relative XDG_CONFIG_HOME is taken"
+file = "crates/browser/src/profile.rs"
+from = '''                .filter(|path| path.is_absolute())'''
+to = '''                .filter(|_| true)'''
+
+[[mutant]]
+name = "Linux's folder is ~/machopo"
+file = "crates/browser/src/profile.rs"
+from = '''                .or_else(|| Some(dir("HOME")?.join(".config")))?;'''
+to = '''                .or_else(|| dir("HOME"))?;'''
+
+[[mutant]]
+name = "Windows' folder has no User Data"
+file = "crates/browser/src/profile.rs"
+from = '''        Platform::Windows => Some(dir("LOCALAPPDATA")?.join("machopo").join("User Data")),'''
+to = '''        Platform::Windows => Some(dir("LOCALAPPDATA")?.join("machopo")),'''
+
+[[mutant]]
+name = "the pipe has the user's own profile"
+file = "crates/shell/src/main.rs"
+from = '''        None if args.automation_pipe.is_some() => None,'''
+to = '''        None if false => None,'''
+
+[[mutant]]
+name = "a relative folder isn't the working directory's"
+file = "crates/shell/src/main.rs"
+from = '''        Some(dir) => Some(std::path::absolute(dir).unwrap_or_else(|_| dir.clone())),'''
+to = '''        Some(dir) => Some(dir.clone()),'''
+
+[[mutant]]
+name = "machopo starts on a folder in use"
+file = "crates/shell/src/main.rs"
+from = '''        Err(e) => {
+            eprintln!("machopo: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let result = match &args.automation_pipe {'''
+to = '''        Err(e) => {
+            eprintln!("machopo: {e}");
+            browser::Profile::in_memory()
+        }
+    };
+    let result = match &args.automation_pipe {'''
