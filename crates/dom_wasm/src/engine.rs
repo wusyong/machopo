@@ -579,7 +579,12 @@ impl ScriptEngine for WasmEngine {
         };
         self.dom().mutate(|cx| {
             if let Some(window) = cx.window_of(document.get(cx.gc)) {
-                cx.navigation_body_ended(window, response_end, encoded_body_size, decoded_body_size);
+                cx.navigation_body_ended(
+                    window,
+                    response_end,
+                    encoded_body_size,
+                    decoded_body_size,
+                );
             }
         });
     }

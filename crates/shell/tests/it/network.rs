@@ -299,7 +299,11 @@ fn a_document_is_drawn_before_its_body_has_all_come() {
     )]);
     let frame = render(&server.url("/"));
     assert_eq!(pixel(&frame, 10, 30), GREEN);
-    assert!(frame.frames_drawn >= 2, "drawn {} times", frame.frames_drawn);
+    assert!(
+        frame.frames_drawn >= 2,
+        "drawn {} times",
+        frame.frames_drawn
+    );
 }
 
 /// The parser's scripts wait for the stylesheets the parser's `<link>`s

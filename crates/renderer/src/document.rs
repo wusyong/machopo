@@ -12,9 +12,13 @@ pub(crate) enum MarkupFilter {
     Html,
     /// The end of what came that may be the start of a CDATA marker, held
     /// for what comes next.
-    Xhtml { held: String },
+    Xhtml {
+        held: String,
+    },
     /// Whether the `<pre>` has gone.
-    Text { started: bool },
+    Text {
+        started: bool,
+    },
 }
 
 const CDATA_START: &str = "<![CDATA[";
@@ -135,7 +139,11 @@ mod tests {
     fn plain_text_is_not_parsed_as_markup() {
         let mut dom = dom::Dom::new();
         let mut filter = MarkupFilter::new("text/plain");
-        let markup = [filter.push("<title>t", false), filter.push("</title>\nx", true)].concat();
+        let markup = [
+            filter.push("<title>t", false),
+            filter.push("</title>\nx", true),
+        ]
+        .concat();
         let document = html::parser::parse_document(&mut dom, &markup, true);
         let dump = html::parser::dump_children(&mut dom, &document.root());
         assert!(

@@ -1,0 +1,11 @@
+# Step 3c: the browser commits with the body's first 1024 bytes, which the
+# renderer decides the engine and the encoding by: a server that pauses
+# within them changes neither.
+test = ["sh", "-c", "cargo test -q -p browser --test it the_encoding_is && cargo test -q -p shell --test it the_engine_is"]
+timeout = 900
+
+[[mutant]]
+name = "the commit doesn't wait for the body's start"
+file = "crates/browser/src/web_contents.rs"
+from = '''        while !response.done && response.start_length < BODY_START_LENGTH {'''
+to = '''        while false {'''

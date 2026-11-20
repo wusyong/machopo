@@ -6293,6 +6293,25 @@ mod body {
         assert_eq!(title_yielding(&server.url("/")), "script,timer");
     }
 
+    /// The encoding is the one the body's start declares, its first 1024
+    /// bytes whatever pause comes in them: a `<meta charset>` after a
+    /// pause still decodes what follows.
+    #[test]
+    fn the_encoding_is_the_one_the_bodys_start_declares_across_a_pause() {
+        let doctype = b"<!DOCTYPE html>";
+        let page = [
+            &doctype[..],
+            b"<meta charset=windows-1252><title>caf\xE9</title>",
+        ]
+        .concat();
+        let server = server(&[(
+            "/",
+            Route::ok("text/html", page)
+                .with_pause_in_body(doctype.len(), Duration::from_millis(300)),
+        )]);
+        assert_eq!(title_of(&server.url("/")), "café");
+    }
+
     /// Its load ends after it commits: by its `load`, Navigation Timing
     /// has the body's size and when it ended, after the pause in it (a
     /// script at its end may run before: as in Chrome, they are 0 till

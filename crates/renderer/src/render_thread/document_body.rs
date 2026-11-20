@@ -84,7 +84,11 @@ impl DocumentBody {
     /// The body of a document of `mime_type` whose transport said
     /// `charset`, decoded as `body`'s start says, and that start, none of
     /// it taken yet.
-    pub(super) fn new(mime_type: &str, charset: Option<&str>, body: NavigationBody) -> (Self, Bytes) {
+    pub(super) fn new(
+        mime_type: &str,
+        charset: Option<&str>,
+        body: NavigationBody,
+    ) -> (Self, Bytes) {
         let NavigationBody {
             start,
             pipe,

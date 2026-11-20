@@ -226,3 +226,29 @@ fn the_todomvc_scenarios_of_both_apps_are_the_same_steps() {
     }
     assert_eq!(js.len(), wasm.len());
 }
+
+/// The engine is the one the body's start declares, its first 1024 bytes
+/// whatever pause comes in them: a page whose server pauses before its
+/// `<meta>` is a wasm document still, whose JS doesn't run.
+#[test]
+fn the_engine_is_the_one_the_bodys_start_declares_across_a_pause() {
+    use std::collections::HashMap;
+    use std::time::Duration;
+
+    use net::test_server::{Route, TestServer};
+    let doctype = "<!DOCTYPE html>";
+    let page = |meta: &str| {
+        format!("{doctype}{meta}<title>wasm</title><script>document.title = 'js';</script>")
+    };
+    let paused = |meta: &str| {
+        Route::ok("text/html", page(meta))
+            .with_pause_in_body(doctype.len(), Duration::from_millis(300))
+    };
+    let server = TestServer::start(HashMap::from([
+        ("/wasm".to_owned(), paused(META)),
+        ("/js".to_owned(), paused("")),
+    ]))
+    .expect("the test server starts");
+    assert_eq!(render(&server.url("/wasm")).title.as_deref(), Some("wasm"));
+    assert_eq!(render(&server.url("/js")).title.as_deref(), Some("js"));
+}

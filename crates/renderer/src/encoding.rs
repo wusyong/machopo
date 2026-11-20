@@ -460,7 +460,10 @@ mod tests {
         );
         assert_eq!(html(meta), BIG5);
         // An unknown label in the header is skipped.
-        assert_eq!(document_encoding("text/html", Some("bogus"), meta, false).0, BIG5);
+        assert_eq!(
+            document_encoding("text/html", Some("bogus"), meta, false).0,
+            BIG5
+        );
     }
 
     #[test]
@@ -561,7 +564,14 @@ mod tests {
     #[test]
     fn a_body_decodes_as_it_comes() {
         // A character cut between two pieces is decoded whole.
-        let (text, encoding) = decode_in_pieces("text/html", &["<p>中".as_bytes(), &"文".as_bytes()[..1], &"文".as_bytes()[1..]]);
+        let (text, encoding) = decode_in_pieces(
+            "text/html",
+            &[
+                "<p>中".as_bytes(),
+                &"文".as_bytes()[..1],
+                &"文".as_bytes()[1..],
+            ],
+        );
         assert_eq!((text.as_str(), encoding), ("<p>中文", UTF_8));
         // The BOM, skipped, may come in a piece of its own.
         let (text, encoding) = decode_in_pieces("text/html", &[b"\xEF\xBB", b"\xBFok"]);
@@ -570,7 +580,10 @@ mod tests {
         // is all the body.
         let cut = &"中".as_bytes()[..2];
         assert_eq!(document_encoding("text/html", None, cut, true).0, UTF_8);
-        assert_eq!(document_encoding("text/html", None, cut, false).0, WINDOWS_1252);
+        assert_eq!(
+            document_encoding("text/html", None, cut, false).0,
+            WINDOWS_1252
+        );
         // What comes after the start doesn't change the encoding: an
         // undeclared page whose start is ASCII stays UTF-8.
         let start = vec![b'a'; PRESCAN_BYTES];

@@ -35,11 +35,11 @@ use super::document_body::{BodyRead, DocumentBody, NavigationBody, ParserInput};
 use super::network_agent::RequestFrame;
 use super::page_agent::{FrameInfo, FrameResources};
 use super::{RenderThread, SwapPromise};
-use crate::task_queue::TaskQueues;
 use crate::frame_view::{Frame, FrameView};
 use crate::initiator::Initiator;
 use crate::pending_user_input::PendingUserInputMonitor;
 use crate::svg_image::SvgImage;
+use crate::task_queue::TaskQueues;
 use crate::{document, encoding};
 
 /// A committed document of the DOM: its navigation and URL, its
@@ -1881,7 +1881,10 @@ impl RenderThread {
         };
         next.input.push(markup);
         let navigation_id = next.navigation_id;
-        let loaded = next.body.as_ref().is_some_and(|body| body.loaded().is_some());
+        let loaded = next
+            .body
+            .as_ref()
+            .is_some_and(|body| body.loaded().is_some());
         if loaded && length > 0 {
             self.network_agent
                 .navigation_data_received(navigation_id, length);
@@ -2057,7 +2060,8 @@ impl RenderThread {
                 // Having run a script in the body, it is to let other work
                 // run soon (Blink's `kHaveTokensAfterScript`).
                 if self.doc(frame).is_some_and(|next| next.body_parsed) {
-                    budget = budget.min(started.elapsed().saturating_add(self.parser_budget.budget));
+                    budget =
+                        budget.min(started.elapsed().saturating_add(self.parser_budget.budget));
                 }
                 continue;
             }
@@ -2088,9 +2092,7 @@ impl RenderThread {
                         // Its run's budget spent, or input waiting, it lets
                         // the loop's other work run, once it has its body
                         // (Blink's `PumpTokenizer`); else the next slice.
-                        if gave
-                            && next.body_parsed
-                            && (started.elapsed() >= budget || input_waits)
+                        if gave && next.body_parsed && (started.elapsed() >= budget || input_waits)
                         {
                             next.yields = next.yields.saturating_add(1);
                             next.parse_due = true;
@@ -3334,7 +3336,9 @@ impl RenderThread {
     /// Whether a sheet that blocks rendering is loading, or the parser
     /// hasn't made the body yet: no frame till then.
     pub(super) fn render_blocked(&self) -> bool {
-        self.document.as_ref().is_some_and(FrameDocument::render_blocked)
+        self.document
+            .as_ref()
+            .is_some_and(FrameDocument::render_blocked)
     }
 
     /// A child frame's view told whether a sheet blocks its rendering, as

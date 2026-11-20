@@ -314,8 +314,8 @@ html/semantics/scripting-1/the-script-element/svg-script-fragment-parsed-not-exe
 # left out, for `document.write` (`load-error-events-3.html` and the three
 # `*-insertion-point*` ones). `moving-between-documents/`, whose helper's
 # iframe says it is ready with `postMessage`, came in whole with it
-# (2026-10-10): 44 of its 56 tests pass whole, the twelve external
-# move-back ones only usually (machopo parses a response whole; their `.ini`).
+# (2026-10-10). With the body parsed as it comes (2026-11-20) all of its
+# tests pass, the two after-prepare iframe ones only usually (their `.ini`).
 html/semantics/scripting-1/the-script-element/async_003.htm
 html/semantics/scripting-1/the-script-element/async_004.htm
 html/semantics/scripting-1/the-script-element/async_005.htm

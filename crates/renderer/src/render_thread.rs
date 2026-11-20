@@ -27,9 +27,9 @@ use crate::navigation_timing::NavigationTiming;
 use crate::pending_user_input::{Pending, PendingUserInput};
 use crate::task_queue::{MainThreadScheduler, MainThreadTask, RendererReceiver, TaskQueues};
 
-mod document_body;
 mod css_agent;
 mod devtools;
+mod document_body;
 mod documents;
 mod dom_agent;
 mod log_agent;
@@ -1773,7 +1773,10 @@ mod tests {
         assert_eq!(budget.of_run(0), Duration::from_millis(10));
         assert_eq!(budget.of_run(6), Duration::from_millis(10));
         assert_eq!(budget.of_run(7), Duration::from_millis(500));
-        assert_eq!(ParserBudget::yield_every_slice(64).of_run(0), Duration::ZERO);
+        assert_eq!(
+            ParserBudget::yield_every_slice(64).of_run(0),
+            Duration::ZERO
+        );
     }
 
     #[test]

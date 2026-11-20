@@ -119,7 +119,6 @@
 
 | 項目 | 為什麼還沒有測試 | 現在靠什麼 | 之後怎麼處理 |
 | --- | --- | --- | --- |
-| 導覽等 body 開頭的 1024 bytes 才 commit（`browser` 的 `web_contents.rs` 的 `read_body_start`；拿掉就只帶 head 和管道） | renderer 照 commit 帶來的開頭決定 engine 和編碼，從外面看得出來了，但還沒有測試 | 審查 | 伺服器在開頭之內停一陣子的 wasm 文件和 `<meta charset>` 的頁面各一份測試 |
 | 子 frame 的文件在 parser 做出 body 之前不畫（`renderer` 的 `documents.rs` 的 `commit_child` 裡 commit 時的 `update_child_blocking`；拿掉就先畫出只有 `<head>` 的文件） | headless 的 `render` 只回最後一張 frame 和畫了幾張，parent 的 frame 照樣在畫，看不出子 frame 在暫停的期間畫了什麼 | 審查；main frame 的同樣的判斷有 `shell` 的 `a_document_is_drawn_once_it_has_a_body` | 情境裡在子 frame 的 body 暫停時截圖，或 headless 記下每一張 frame 在某一點的顏色 |
 | parser 停下（讓出、或等其餘的 body）時馬上開始它做出的元素要的載入（`renderer` 的 `documents.rs` 的 `parser_stopped`；拿掉時 `<link>` 的 sheet 要等 loop 那一輪最後的 `request_next_frame_if_dom_changed` 才開始） | 只有 compositor 的 frame 和停下的那個 task 排在同一批、在那之前跑時，才先排版了沒有 sheet 的文件；測試排不出那個順序 | `browser` 的 `a_child_frame_waits_for_its_stylesheets` 碰巧排到時失敗（拿掉時約六次一次） | 測試能讓 compositor 的 frame 排在 commit 之後、結束之前的 hook，或 headless 記下每一張 frame 用到的 sheet |
 | parser 在有輸入等著時讓出（`renderer` 的 `documents.rs` 的 `advance_document` 的 `input_waits`，Blink 的 `ShouldYieldForHighPriorityWork`；拿掉就只看預算） | 輸入要在 parser 的一次 run 裡排進 Input 的 queue，而新文件畫出來之前對著舊畫面的輸入照樣丟掉：要 `browser` 的測試用 `DrivenViz` 先畫出文件，再在 script 忙的時候送一個按鍵 | 審查 | `browser` 的測試：預算很大、每片很小的 parser，body 裡第一個 script 忙 300 ms，這段時間送 `keydown`，之後的 script 在 `keydown` 之後跑 |

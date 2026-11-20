@@ -17,7 +17,7 @@
 | 2c：第 2 階段的檢查和文件 | 完成 | 2026-11-20 |
 | 3a：renderer 收到 commit 就建文件、邊收邊 parse（文件拿著管道和解碼器、parser 等下一段、等 script 時照讀）、編碼照開頭、Navigation Timing 和 DevTools 的結束、有 `<body>` 才畫 | 完成 | 2026-11-20 |
 | 3b：parser 的時間預算（切片、超過預算或有輸入就讓出、進了 `<body>` 才讓出） | 完成 | 2026-11-20 |
-| 3c：開頭 1024 bytes 的測試、`moving-between-documents/` 等 WPT 的預期結果、第 3 階段的檢查和文件 | 未開始 | |
+| 3c：開頭 1024 bytes 的測試、`moving-between-documents/` 等 WPT 的預期結果、第 3 階段的檢查和文件 | 完成 | 2026-11-20 |
 | 4：舊畫面的時限、檢查和文件 | 未開始 | |
 
 ## 驗收
@@ -35,6 +35,7 @@
 | 解碼：字元切在兩段之間、BOM 自己一段、開頭結尾被切斷的字元照樣是 UTF-8、開頭之後的字元不改變編碼；XHTML 的 CDATA 標記切在兩段之間、純文字只有一個 `<pre>` | `cargo test -p renderer --lib encoding:: document::` |
 | DevTools 和 trace：每段一個 `dataReceived`、結束時 `loadingFinished`；被中止的文件的原文是收到的部分；trace 的 `responseEnd` 在 body 收完時、時間在 `fetchStart` 和 `domInteractive` 之間 | `cargo test -p renderer --lib network_agent::`、`cargo test -p shell --test it devtools trace::marks` |
 | parser 的預算：有了 body 之後讓出（每片都讓出的 parser，body 裡的計時器在兩個 script 之間跑）、`<head>` 裡不讓出、讓出之前至少 parse 一片、預算在讓出 6 次之後變大；文字照整個字元切片 | `cargo test -p browser --test it body::`、`cargo test -p renderer --lib budget input_is_given` |
+| 開頭的 1024 bytes：伺服器在開頭之內停一陣子，engine（wasm 的 `<meta>`）和編碼（`<meta charset>`）照樣是開頭說的 | `cargo test -p browser --test it the_encoding_is`、`cargo test -p shell --test it the_engine_is` |
 | `Content-Encoding` 一段一段解，一次給一個 byte 和整份一樣：gzip 的 header（選用的欄位）和 trailer（CRC、長度）、`deflate` 的 zlib 和 raw、brotli、截斷和之後多出來的 | `cargo test -p net --lib content_encoding::` |
 
 ## 做過的檢查
@@ -145,3 +146,14 @@ macOS、Apple M4，2026-11-20。
 - mutation test（`mutants-3b.toml`）11 個，8 個抓到。沒抓到的三個記進 `docs/test-gaps.md` 的「能補、還沒補的測試空缺」：有輸入等著時讓出（輸入要在 parser 的一次 run 裡排進 queue，而文件畫出來之前的輸入照樣丟掉，要 `DrivenViz` 的測試）；body 裡的 script 之後縮短預算（測試的預算是 0）；已經要接著 parse 的不被收到的資料推動（parse 的內容一樣，只有和計時器的先後不同）。
 - `test.py wpt navigation-timing/ html/browsers/browsing-the-web/navigating-across-documents/ html/semantics/scripting-1/the-script-element/ html/dom/documents/dom-tree-accessors/ html/syntax/ html/webappapis/timers/`：沒有失敗。意外通過一次 23 份、一次 25 份（和 3a 的同一組）：其中有的有時照舊失敗，更新預期結果之前要重複跑、找出原因。
 - 跑過的檢查：`cargo test -p browser -p renderer -p shell -p dom_api`（1235 個）、`browser` 的整套連跑 20 次、`cargo check --workspace --all-targets`；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。
+
+### 3c：開頭的測試、WPT 的預期結果、第 3 階段的檢查
+
+macOS、Apple M4，2026-11-20。
+
+- 新的測試：`browser` 的 `the_encoding_is_the_one_the_bodys_start_declares_across_a_pause`（`<!DOCTYPE html>` 之後停 300 ms，再來 `<meta charset=windows-1252>`）、`shell` 的 `the_engine_is_the_one_the_bodys_start_declares_across_a_pause`（同樣停在 wasm 的 `<meta>` 之前，JS 不跑；沒有 `<meta>` 的跑）。2a 沒抓到的「commit 不等 body 的開頭」現在抓到了（`mutants-3c.toml`，1 個，抓到）；`docs/test-gaps.md` 拿掉那一列。
+- WPT 的預期結果：`navigation-timing/`、`replace-before-load/`、`moving-between-documents/` 連跑 10 次。每次都通過的 23 份更新了預期結果（`moving-between-documents/` 的 18 份的 `.ini` 拿掉，剩 after-prepare 的兩份 known intermittent；`navigation-timing/` 的 4 份拿掉、`nav2-test-timing-persistent.html` 剩 Part 1，註解改成它失敗的原因：`redirectStart` 是 0，還沒查）。`tests/wpt/include.txt` 的那段註解跟著改。
+- 不穩定的三份：`replace-before-load/` 的 `history-pushstate.html`（10 次通過 1 次）、`history-pushstate-during-load.html`（4 次）、`iframe-src.html`（13 次 2 次），原本都是 FAIL。查了 `history-pushstate*`：子 frame 收到開頭就 parse，`pushState` 在 commit 的那個 task 裡就跑，renderer 自己加上那一筆；browser 聽到子 frame 的 commit 時回的 `SetHistoryOffsetAndLength` 是加上之前的長度，比 `pushState` 晚到時把 `history.length` 蓋回去（`web_contents.rs` 的 `DidCommitNavigation`）。session history 的同步，不在這份 RFC 的範圍：標成 `[FAIL, PASS]`、附上原因，`iframe-src.html` 推測是同一個原因；記進 `docs/limitations.md` 的 `history`。
+- `cargo test --workspace`：4260 個通過、0 個失敗、1 個 ignored。`cargo clippy --workspace --all-targets -- -D warnings` 沒有警告。`cargo fmt --check` 抓到 3a、3b 寫的 8 個檔案的換行，照 rustfmt 改了。
+- `test.py wpt navigation-timing/ html/browsers/browsing-the-web/navigating-across-documents/ html/semantics/scripting-1/the-script-element/`：更新之後 0 個意外的結果。
+- 跑過的檢查：`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。
