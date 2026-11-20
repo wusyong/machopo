@@ -1,0 +1,12 @@
+# A page whose body comes in two parts, three seconds apart (its server
+# pauses before the second paragraph): what came first is parsed and drawn
+# while the rest is still to come (the page still loading), and the rest is
+# added once it comes.
+navigate-paused pages/streaming.html 1744 3000
+wait-text #state "still loading: loading"
+screenshot first-part
+capture first-part
+wait-text #second "This came after the pause."
+expect-differs first-part
+wait-text #state "loaded"
+screenshot whole

@@ -481,16 +481,21 @@ fn a_drawn_document_blocked_by_a_sheet_after_isnt_shown_empty() {
     web_contents.resize(gfx::Size::new(200, 200), 1.0);
     let mut viz = DrivenViz::new(viz_rx, begin_frames);
     web_contents.navigate(server.url("/"));
-    viz.run_until(&mut web_contents, &host_rx, "the sheet added", |_, msg| {
-        matches!(msg, Some(RendererHostMsg::UpdateTitle(title)) if title == "added")
-    });
+    viz.run_until(
+        &mut web_contents,
+        &host_rx,
+        "the sheet added",
+        |_, msg| matches!(msg, Some(RendererHostMsg::UpdateTitle(title)) if title == "added"),
+    );
     // Past the delay, while the sheet blocks it.
     let until = std::time::Instant::now() + delay * 2;
     viz.run_until(&mut web_contents, &host_rx, "the delay", |_, _| {
         std::time::Instant::now() >= until
     });
     assert!(
-        viz.frames.iter().all(|token| !viz.resources[token].is_empty()),
+        viz.frames
+            .iter()
+            .all(|token| !viz.resources[token].is_empty()),
         "no empty frame"
     );
     web_contents.shutdown();
@@ -2637,7 +2642,10 @@ document.querySelector('base').setAttribute('href', '/later/');
             ("/", Route::ok("text/html", page)),
             (
                 "/b",
-                Route::ok("text/html", "<!DOCTYPE html><link rel=stylesheet href=/slow.css>b"),
+                Route::ok(
+                    "text/html",
+                    "<!DOCTYPE html><link rel=stylesheet href=/slow.css>b",
+                ),
             ),
             (
                 "/slow.css",

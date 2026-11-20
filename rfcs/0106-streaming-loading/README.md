@@ -1,25 +1,26 @@
 # RFC 0106：串流的載入
 
 - 開始日期：2026-11-20
-- 狀態：🚧 已排程：2026-11-20
+- 狀態：✅ 已完成：2026-11-20
 - 細節：`details.md`
+- 進度和驗收：`progress.md`
 
 ## 摘要
 
-現在每一層都等整份 body 收完才用：`net` 把回應接成一個 `Vec`、Browser 在回應結束才 commit、renderer 一次解碼、一次餵給 parser。這份做一條從網路到 renderer、有背壓的資料管道（Chromium 的 data pipe），讓文件和 iframe 收到 header 和 body 的開頭就 commit、邊收邊 parse、parse 到一半就能畫；子資源和 `fetch()` 照舊整份收完，之後的 RFC 建在同一條管道上。設計的決定在「已決定的事項」，分成四個階段做（「分階段」）。
+原本每一層都等整份 body 收完才用：`net` 把回應接成一個 `Vec`、Browser 在回應結束才 commit、renderer 一次解碼、一次餵給 parser。這份做了一條從網路到 renderer、有背壓的資料管道（Chromium 的 data pipe），文件和 iframe 收到 header 和 body 開頭的 1024 bytes 就 commit、邊收邊 parse，有了 `<body>` 就畫，parser 照 Blink 的時間預算讓出；新文件畫不了時舊的畫面最多留 4 秒。子資源和 `fetch()` 照舊整份收完，之後的 RFC 建在同一條管道上。設計的決定在「已決定的事項」，分四個階段做完（「分階段」）。
 
 ## 動機
 
-RFC 0103 的「架構上可能要先做的事」第 5 個：incremental parsing、`fetch()` 的 streams、影音、server-sent events 都要一條從網路到 renderer 的資料管道，現在沒有；拆 process（RFC 0004）時要跨 process 的也是這條管道（Chromium 的 Mojo data pipe）。先在單一 process 裡把管道的介面定下來，之後拆 process 只換它的實作。
+RFC 0103 的「架構上可能要先做的事」第 5 個：incremental parsing、`fetch()` 的 streams、影音、server-sent events 都要一條從網路到 renderer 的資料管道，原本沒有；拆 process（RFC 0004）時要跨 process 的也是這條管道（Chromium 的 Mojo data pipe）。先在單一 process 裡把管道的介面定下來，之後拆 process 只換它的實作。
 
-### 現況
+### 開始時的狀況
 
 2026-11-20 讀程式得到的（逐項的位置在 `details.md` 的「machopo 現在的載入」）：
 
 - **網路**：`net` 在一個 tokio 的 current-thread runtime 上，一塊一塊讀 HTTP 的 body，但全部接到同一個 `Vec`，收完才解 `Content-Encoding`（flate2、brotli 的 `read_to_end`）、沒有 `Content-Type` 時照整份 body sniff MIME。API 只有「做完時」的 callback（`LoadResult`），沒有「收到 header」、「收到一段」。沒有 HTTP cache。`file:` 一次讀完。
 - **導覽**：Browser 在回應結束時才 commit（`on_navigation_completed`），`CommitNavigation` 帶著整份 body（`Bytes`）。iframe 經過 Browser 的 frame 樹，走同一條路。
-- **renderer**：照開頭的 1024 bytes 決定 JS 或 wasm 的 engine；`decode_document` 一次解碼成一個 `String`（編碼：BOM、HTTP 的 `charset`、`<meta>` 的 prescan，都沒有時看整份 body 是不是合法的 UTF-8）；`parser.push` 一次推進去。parser 本身已經是 html5ever 的 `Tokenizer` 加 `BufferQueue`，能一段一段餵（`crates/html` 的測試 `input_may_come_in_pieces`），但 `advance_document` 第一次收到 `NeedsInput` 就當成結尾、呼叫 `finish()`。parse 在 commit 的那個 task 裡同步跑完（遇到要等的外部 script 才停），中間沒有畫面。
-- **子資源**：圖片、樣式、script、worker 的 script、`fetch()`、`importScripts()` 都是一則 `ResourceResponse` 帶整份 body；圖片收完才解碼，`fetch()` 的 body 是 `Arc<[u8]>`，沒有 `ReadableStream`（RFC 0027 的第 4 條選了整份收完，把串流留給這裡）。
+- **renderer**：照開頭的 1024 bytes 決定 JS 或 wasm 的 engine；`decode_document` 一次解碼成一個 `String`（編碼：BOM、HTTP 的 `charset`、`<meta>` 的 prescan，都沒有時看整份 body 是不是合法的 UTF-8）；`parser.push` 一次推進去。parser 本身已經是 html5ever 的 `Tokenizer` 加 `BufferQueue`，能一段一段餵，但 `advance_document` 第一次收到 `NeedsInput` 就當成結尾、呼叫 `finish()`。parse 在 commit 的那個 task 裡同步跑完（遇到要等的外部 script 才停），中間沒有畫面。
+- **子資源**：圖片、樣式、script、worker 的 script、`fetch()`、`importScripts()` 都是一則 `ResourceResponse` 帶整份 body。
 - **跨 process**：`ipc` 只有時鐘。RFC 0004 定了「大的資料放在 Browser 配的共用記憶體」，data pipe 在它的「之後的可能」。
 
 ### 目標
@@ -32,13 +33,14 @@ RFC 0103 的「架構上可能要先做的事」第 5 個：incremental parsing�
 
 - 拆 process 本身（RFC 0004）：這份只讓管道的介面能換成共用記憶體。
 - HTTP cache、cookie。
-- `document.write`（limitations 裡另一個原因：parser 和 script 用 `RefCell` 共用 DOM）：串流之後才有意義，另外做。
+- `document.write`（parser 和 script 用 `RefCell` 共用 DOM）：另外做。
 - `fetch()` 的 `response.body`（`ReadableStream`，Streams API）、圖片的漸進解碼、script 邊下載邊編譯：子資源照舊整份收完（第 1 條），各自之後的 RFC 建在這條管道上。
 - 影音、server-sent events、WebSocket。
+- session history 的同步（子 frame 載入中的 `pushState` 和 browser 送來的 `history.length`，「之後的可能」）。
 
-### 要解決的限制
+### 解決的限制
 
-`docs/limitations.md` 的：「Parser 和載入」的「Body 一次收完，沒有串流，也還沒有 incremental parsing」、iframe 的 HTML 一次解析整份 body（`moving-between-documents/` 的四份失敗）、「網路」的 `net` 收完整份 body 才解壓、「Script」的一次 parse 整個回應。「Bindings」的 `fetch()` 等整份 body、沒有 `ReadableStream` 不在這份（第 1 條）。
+`docs/limitations.md` 原本的：「Parser 和載入」的 body 一次收完、沒有 incremental parsing；iframe 的 HTML 一次解析整份 body（`moving-between-documents/` 的四份失敗、十二份不穩定）；「網路」的 `net` 收完整份 body 才解壓；Navigation Timing 的 `responseEnd` 從一開始就有值。`fetch()` 等整份 body、沒有 `ReadableStream` 不在這份（第 1 條），照舊是限制。
 
 ## 設計概要
 
@@ -46,52 +48,39 @@ RFC 0103 的「架構上可能要先做的事」第 5 個：incremental parsing�
 
 一次導覽的資料這樣走（每一步的理由在「已決定的事項」）：
 
-1. `net` 讀 socket、解 `Content-Encoding`，寫進一條 data pipe（`Producer`，滿了就等：背壓）；收到 header（沒有 `Content-Type` 時 sniff 完）就 `on_response(head, consumer)`，結束時 `on_complete(status)`（第 2、4 條）。
-2. Browser 從管道讀出開頭的 1024 bytes（或到結尾），和 head、管道的 `Consumer` 一起放進 `CommitNavigation`（第 3 條）。
-3. renderer 照那一段選 engine、決定編碼、建文件（第 3、5 條），之後管道有資料時排一個 task：讀一段、用 encoding_rs 的 `Decoder` 解、切成小片推給 parser，超過時間預算或有輸入時讓出（第 6 條）；管道結束、`on_complete` 來了才 `finish()`，`DOMContentLoaded`、`load` 照舊在那之後。
-4. 有了 `<body>`、擋住 render 的 sheet 都到了才畫第一次；在那之前顯示舊的畫面，最多 4 秒（第 6、7 條）。
+1. `net` 讀 socket、一段一段解 `Content-Encoding`，寫進一條 data pipe（`ipc::data_pipe`，512 KiB，滿了就等：背壓）；收到 header（沒有 `Content-Type` 時 sniff 完開頭的 1024 bytes）就 `on_receive_response(head, consumer)`，結束時 `on_complete(status)`（第 2、4、9 條）。
+2. Browser 從管道讀出開頭的 1024 bytes（或到結尾），和 head、管道的 `Consumer` 一起放進 `CommitNavigation`（第 3、10 條）；commit 之後照樣拿著 load，結束時轉告 renderer，frame 換了文件、被停止或不在了就停下它（第 11、15 條）。有 head 就 commit，之後的錯誤留下收到的部分（第 12 條）；不經過網路的文件整份帶著（第 13 條）。
+3. renderer 收到 commit 就建文件，照那一段選 engine、決定編碼（第 3、5 條）；其餘的 body 由文件拿著（第 16 條），管道有資料時排一個 task：一次最多讀 1 MiB、用 encoding_rs 的 `Decoder` 解，放進文件的 parser 輸入，parser 等 script 時也照讀（第 17 條）。parser 一次拿 16 KiB，有了 body 之後超過預算（10 ms，讓出 6 次之後 500 ms）或有輸入等著就讓出，loop 的下一輪接著 parse（第 6、18 條）；管道結束、結束的消息也到了才 `finish()`，`DOMContentLoaded`、`load` 在那之後；body 出錯或被停下時照規範中止 parser（第 14 條）。Navigation Timing 的 `responseEnd` 和 body 的大小、DevTools 的 `loadingFinished` 在結束時。
+4. 有了 `<body>`、擋住 render 的 sheet 都到了才畫第一次；在那之前顯示舊的畫面，最多 4 秒，之後是只有背景的空 frame（第 6、7、19 條）。
 
-子資源和 `fetch()` 用的 `fetch(done)` 和它共用同一個 loader，body 收完才回答，對它們和現在一樣。
+子資源和 `fetch()` 用的 `fetch(done)` 和它共用同一個 loader，body 收完才回答，對它們和原本一樣。
 
 ## 詳細設計
 
-每一條的決定和理由在「已決定的事項」，每個階段的細節到那個階段開始時再定。Chromium、Servo、Gecko 怎麼做在 `details.md`。
-
-### 要決定的事（依序）
-
-1. ~~範圍~~：文件和 iframe（第 1 條）。
-2. ~~資料管道的模型~~：照 Chromium 的 data pipe（第 2 條）。
-3. ~~commit 的時機~~：收到 header 和 body 開頭的 1024 bytes（或結尾）就 commit（第 3 條）。
-4. ~~網路那一側~~：照 Chromium 的 `URLLoaderClient`（第 4 條）。
-5. ~~編碼~~：commit 時照開頭的 1024 bytes 決定，之後用 encoding_rs 的 `Decoder` 一段一段解（第 5 條）。
-6. ~~parser 什麼時候讓出、畫面什麼時候畫~~：照 Blink 的時間預算，進了 `<body>` 才讓出（第 6 條）。
-7. ~~子資源和 `fetch()`~~：照舊整份收完（第 1 條），走包在新的 API 上的 `fetch(done)`（第 4 條）。
-8. ~~換頁時新文件第一次畫之前顯示什麼~~：舊的畫面，最多 4 秒（第 7 條）。
+每一條的決定和理由在「已決定的事項」；Chromium、Servo、Gecko 怎麼做在 `details.md`；每一段做了什麼、找到的 bug、測試和 mutation test 在 `progress.md`。
 
 ### 測試
 
-`net` 的測試伺服器已經能延遲 head 和 body（`Route::with_body_delay`）；`browser` 的 `navigation.rs` 端到端的測試；`html/semantics/scripting-1/the-script-element/moving-between-documents/` 裡因為一次 parse 而不穩定、失敗的那幾份。
+`net` 的測試伺服器能延遲 head、在 body 的某個 byte 停一陣子（`Route::with_pause_in_body`）；`browser` 的 `navigation.rs` 的 `body` 模組端到端地測導覽的 body，`DrivenViz` 測畫面；`shell` 的 headless 測第一次畫，情境的 `navigate-paused` 用同一個測試伺服器在視窗裡看邊收邊畫（第 20 條）；WPT 的 `moving-between-documents/`、`navigation-timing/`。驗收的清單在 `progress.md`。
 
 ### 分階段
 
-每個階段做完，載入都照常能用；每個階段裡的段落和那一段要決定的事（管道的容量、一次讀多少、切片的大小……），到那個階段開始時再列。
-
-1. **資料管道和 `net`**：單一 process 的 data pipe 放在 `ipc`（`ipc::data_pipe`：Chromium 的 data pipe 在 Mojo，拆 process 時在這裡換實作）；`net` 改成 `on_response(head, consumer)`、`on_complete(status)`（第 4 條），`Content-Encoding` 一段一段解、沒有 `Content-Type` 時先存開頭的 1024 bytes sniff、`file:` 一段一段讀；`fetch(done)` 包在上面。Browser 和 renderer 的行為不變。
-2. **Browser 提早 commit**：收到 head 和開頭的 1024 bytes（或結尾）就 commit，`CommitNavigation` 帶著那一段和管道的 `Consumer`（第 3 條），iframe 一樣；導覽的取消、commit 之後收到一半的錯誤、DevTools 的 `Network` 事件（`dataReceived`、`loadingFinished`）的時機。renderer 這時先把管道讀到結尾，照舊一次 parse。
-3. **renderer 邊收邊 parse**：管道有資料時排 task 讀、串流的 `Decoder`（第 5 條）；`advance_document` 收到 `NeedsInput` 時等下一段、管道結束才 `finish()`；時間預算、進了 `<body>` 才讓出、第一次畫要有 `<body>`（第 6 條）；`DOMContentLoaded`、`load` 的時機；DevTools 的文件原文邊收邊留；`moving-between-documents/` 的四份。
-4. **舊畫面的時限、檢查和文件**：commit 之後 4 秒還畫不了就送空的 frame（第 7 條）；`<head>` 先到、body 晚到的頁面先畫出前一段的情境（`net` 的測試伺服器延遲 body）；`docs/limitations.md`、`docs/test-gaps.md`、`docs/architecture.md`；整套的檢查。
+1. **資料管道和 `net`**（2026-11-20 做完）：`ipc::data_pipe`；`net` 的 `load`、`URLLoaderClient`，`Content-Encoding` 一段一段解、sniff 只看開頭、`file:` 一段一段讀；`fetch(done)` 包在上面。Browser 和 renderer 的行為不變。分四段：1a data pipe；1b 回應分成 head 和 body；1c body 一段一段讀；1d 檢查和文件。
+2. **Browser 提早 commit**（2026-11-20 做完）：收到 head 和開頭的 1024 bytes（或結尾）就 commit，帶著那一段和管道，iframe 一樣；結束轉告 renderer；收到一半的錯誤中止 parser、停止載入停下 body 還在來的文件、DevTools 的時機。renderer 這時先把管道讀到結尾，照舊一次 parse。分三段：2a 提早 commit；2b 收到一半停下、停止、DevTools；2c 檢查和文件。
+3. **renderer 邊收邊 parse**（2026-11-20 做完）：文件拿著管道和解碼器、parser 等下一段、等 script 時照讀、有 `<body>` 才畫；parser 的時間預算；`moving-between-documents/` 等 WPT。分三段：3a 邊收邊 parse；3b 時間預算；3c 開頭的測試、WPT 的預期結果、檢查。
+4. **舊畫面的時限、檢查和文件**（2026-11-20 做完）：4a commit 之後 4 秒還畫不了就送空的 frame；4b body 晚到的情境、整份的檢查和文件。
 
 ## 缺點
 
-串流之後，載入的每一步都多了「還沒收完」的狀態：parser 停在一半、script 在文件還沒收完時執行、`DOMContentLoaded` 和 `load` 的時機、取消和錯誤在中途發生，要測的情況變多；管道有背壓之後，renderer 不讀時網路也停，忘了讀會卡住載入。
+串流之後，載入的每一步都多了「還沒收完」的狀態：parser 停在一半、script 在文件還沒收完時執行、`DOMContentLoaded` 和 `load` 的時機、取消和錯誤在中途發生，要測的情況變多；管道有背壓之後，renderer 不讀時網路也停，忘了讀會卡住載入（renderer 等 script 時照樣讀，第 17 條）。parser 在 loop 的固定位置接著 parse，不是 scheduler 的 task（第 18 條），之後 scheduler 有了優先順序時要搬。子 frame 的 script 在 commit 的那個 task 裡就跑，讓 session history 的 `history.length` 和 browser 的同步的競爭變得常見（`docs/limitations.md` 的 `history`）。
 
 ## 理由和其他做法
 
-不做的話：大的文件要整份收完才看得到、記憶體裡同時有好幾份；`fetch()` 永遠沒有 streams；拆 process 時大的 body 每次整份複製。
+不做的話：大的文件要整份收完才看得到、記憶體裡同時有好幾份；`fetch()` 永遠沒有 streams；拆 process 時大的 body 每次整份複製。各條的其他做法在「已決定的事項」。
 
 ## 先例
 
-`details.md` 的「其他實作」：Chromium（Mojo data pipe、`NavigationBodyLoader`、`HTMLDocumentParser` 的時間預算、`TextResourceDecoder`、`BodyStreamBuffer`）、Servo（html5ever 的 `Tokenizer` 一段一段餵、`NetworkDecoderState`）、Gecko（另一個 thread 上的 stream parser、推測的 parse）。
+`details.md` 的「其他實作」：Chromium（Mojo data pipe、`NavigationBodyLoader`、`HTMLDocumentParser` 的時間預算、`TextResourceDecoder`、`BodyStreamBuffer`、`kNewContentRenderingDelay`）、Servo（html5ever 的 `Tokenizer` 一段一段餵、`NetworkDecoderState`）、Gecko（另一個 thread 上的 stream parser、推測的 parse）。
 
 ## 已決定的事項
 
@@ -114,10 +103,11 @@ RFC 0103 的「架構上可能要先做的事」第 5 個：incremental parsing�
 17. **parser 等 script 時照樣讀管道**（2026-11-20，第 3 階段）：parser 停在 parser-blocking 的 script 時，管道有資料照樣讀、解碼，放進 parser 輸入的尾端（html5ever 的 `BufferQueue`），script 跑完接著 parse。網路不因為慢的 script 停下，`responseEnd` 和 DevTools 的 `dataReceived` 照網路的時間；之後的 preload scanner 要的內容已經在手上。parser 停著時解好的文字留在記憶體裡，最多一份 body（和整份收完才 parse 時一樣）。對照 Chromium：`HTMLDocumentParser` 等 script 時照樣 `AppendBytes`、解碼、放進 input，preload scanner 掃這一段。不選 parser 停著時不讀、讓管道的背壓停下網路：記憶體有上限，但慢的 script 讓整份文件的下載跟著停（伺服器那一端可能逾時、`responseEnd` 變晚），有 preload scanner 時要改回來。
 18. **parser 讓出之後，在 loop 的每一輪的 task 之間接著 parse 一段**（2026-11-20，第 3 階段）：讓出的文件記著要接著 parse，renderer 的 loop 每一輪在 scheduler 的 task（Browser 的訊息、輸入、compositor 的 frame）和 DOM 的 task（計時器、元素的 task）之後，替它 parse 一段（到預算用完、要等 script 或沒有收到的了），還有要接著 parse 的時候 loop 不睡（和子 frame 的 `srcdoc` commit 一樣）。讓出之後輸入、frame 和計時器都在兩段之間輪到（`setTimeout(0)` 比後面的 script 先跑）。對照 Chromium：`HTMLDocumentParser::SchedulePumpTokenizer` 把下一段排在文件的 loading task runner，scheduler 讓計時器、輸入、rendering 在兩段之間輪到；這裡是 loop 裡的固定位置，之後 scheduler 有了優先順序時再搬進去。不選排成 scheduler 的 task（Browser 的 queue，和 `NavigationBody` 一樣）：寫法一致，但 loop 先做完 scheduler 的 task 才跑 DOM 的 task，parser 一直有下一段時計時器要等到 parse 完，和 Chrome、規範的 task 順序都不同。
 19. **4 秒到了送出的空 frame 只放行輸入**（2026-11-20，第 4 階段）：空 frame 只畫背景（空文件畫的 canvas 的白色），帶新文件的 `DocumentId`，之後的輸入交給新文件；等著 frame 的輸入的 ack 跟著它放行，截圖（`RequestVisualState`）和 `DidFinishLoad` 照舊等新文件真的畫出來的 frame。等待的時間由 `RendererFlags` 給，測試設得很短。對照 Chromium：`RenderWidgetHostImpl::ClearDisplayedGraphics` 讓 view 露出背景色、通知 renderer，也放行等著的輸入。不選所有等 frame 的都跟著它：寫法最簡單，但 4 秒之後的截圖是空白，WebDriver 和 reftest 可能在 sheet 到之前就拿到結果。不選 4 秒之後不再擋、照現在的 DOM 畫：先畫出沒有樣式的內容，Chromium 不這樣做。
+20. **body 晚到的情境用測試伺服器**（2026-11-20，第 4 階段）：情境加一個指令（`navigate-paused <檔案> <bytes> <ms>`），runner 用 `net::test_server` 在本機起一個 HTTP 伺服器送那個檔案，送到第 `<bytes>` 個 byte 停 `<ms>`，再導覽過去；沒有平台視窗和 `--window` 都能跑，`--window` 的截圖看得到先畫出的前一段。只改測試用的 runner 和情境的 README。對照 Chromium：它的 `EmbeddedTestServer` 有 `/slow` 這類給測試的路徑，瀏覽器本身沒有。`about:demo` 不加示範：人開視窗時沒有會停的伺服器。不選不寫情境：最省，但邊收邊畫只有 headless 和 `browser` 的測試看得到，真的視窗裡沒有驗收。不選瀏覽器內建一個慢慢送 body 的 debug 網址：人開視窗也看得到，但要在正式的網路程式加一條假的路。
 
 ## 待決定
 
-每個階段開始時列那一段要決定的事（「分階段」）。
+無。
 
 ## 之後的可能
 
@@ -126,3 +116,6 @@ RFC 0103 的「架構上可能要先做的事」第 5 個：incremental parsing�
 - 拆 process 時把管道換成共用記憶體裡的 ring（RFC 0004）。
 - paint holding（最上層的 compositor commit 延到 FCP 或 500 ms），和 Paint Timing 一起（第 7 條）。
 - server-sent events、影音的 `Range` 讀取、`Blob.stream()`、`Request.body` 的上傳串流。
+- session history 的同步：子 frame 載入中的 `pushState` 被 browser 送來的 `SetHistoryOffsetAndLength` 蓋回去（WPT 的 `replace-before-load/` 的三份不穩定）。
+- parser 的接著 parse 搬進 scheduler，有了優先順序之後照 Blink 排在 loading task runner（第 18 條）；parser 在 token 之間檢查預算（html5ever 現在只在 script 停）。
+- 舊畫面的時限搬到 browser（Chromium 的 `RenderWidgetHostImpl`），拆 process 時一起看（第 7 條）。

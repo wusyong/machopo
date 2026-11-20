@@ -80,6 +80,15 @@ pub enum Command {
     /// As if typed in the address field: a URL, or a path relative to the
     /// scenario's file.
     Navigate(String),
+    /// `Navigate` to the file at `path` (relative to the scenario's), served
+    /// over HTTP by a server of the scenario's own that stops for `pause`
+    /// once it has sent `at` bytes of it: a page whose body comes in two
+    /// parts.
+    NavigatePaused {
+        path: String,
+        at: usize,
+        pause: Duration,
+    },
     /// Until the latest navigation started has loaded.
     WaitLoaded,
     /// The primary button down and up.
@@ -239,6 +248,21 @@ fn parse_command(name: &str, rest: &str) -> Result<Vec<Command>, String> {
     };
     let command = match name {
         "navigate" => Command::Navigate(nonempty("a URL or a path")?),
+        "navigate-paused" => {
+            let words: Vec<&str> = rest.split_whitespace().collect();
+            let [path, at, ms] = words[..] else {
+                return Err("needs a path, a count of bytes and milliseconds".into());
+            };
+            let whole = |word: &str| {
+                word.parse::<u64>()
+                    .map_err(|_| format!("{word:?} isn't a whole number"))
+            };
+            Command::NavigatePaused {
+                path: path.to_owned(),
+                at: usize::try_from(whole(at)?).map_err(|_| format!("{at} bytes is too many"))?,
+                pause: Duration::from_millis(whole(ms)?),
+            }
+        }
         "wait-loaded" => {
             no_arguments()?;
             Command::WaitLoaded
@@ -713,6 +737,18 @@ mod tests {
     }
 
     #[test]
+    fn a_page_navigated_to_paused() {
+        assert_eq!(
+            commands("navigate-paused pages/a.html 2048 3000"),
+            [Command::NavigatePaused {
+                path: "pages/a.html".into(),
+                at: 2048,
+                pause: Duration::from_secs(3),
+            }]
+        );
+    }
+
+    #[test]
     fn steps_keep_their_lines() {
         let steps = parse("# comment\n\nnavigate about:demo\n  wait-loaded  \n")
             .unwrap()
@@ -990,6 +1026,11 @@ mod tests {
         assert_eq!(error("fly").message, "unknown command `fly`");
         for bad in [
             "navigate",
+            "navigate-paused",
+            "navigate-paused a.html 10",
+            "navigate-paused a.html x 10",
+            "navigate-paused a.html 10 -1",
+            "navigate-paused a.html 10 1.5",
             "wait-loaded now",
             "click",
             "click-at 1",

@@ -173,6 +173,7 @@ pub fn run(steps: &[Step], context: &Context, client: &Client) -> Result<(), Fai
         captures: HashMap::new(),
         before_input: None,
         frames: Vec::new(),
+        servers: Vec::new(),
     };
     // The steps that run here, with this platform's shortcuts.
     let mut platform = Platform::All;
@@ -233,6 +234,9 @@ struct Runner<'a> {
     /// The iframes, one in each child frame from the document shown, whose
     /// document selectors pick in (`frame`).
     frames: Vec<String>,
+    /// The servers of the pages `navigate-paused` went to, kept for the
+    /// scenario: their pages may still be loading at its end.
+    servers: Vec<net::test_server::TestServer>,
 }
 
 impl Runner<'_> {
@@ -240,6 +244,28 @@ impl Runner<'_> {
         match command {
             Command::Navigate(url) => {
                 let url = self.resolve(url);
+                self.call(
+                    Method::MachopoNavigateFromAddressBar(Navigate { url }),
+                    "navigate",
+                )
+                .map(drop)
+            }
+            Command::NavigatePaused { path, at, pause } => {
+                let file = self.context.base.join(path);
+                let body = std::fs::read(&file)
+                    .map_err(|e| format!("can't read {}: {e}", file.display()))?;
+                let mime_type = match file.extension().and_then(|e| e.to_str()) {
+                    Some("html" | "htm") => "text/html",
+                    _ => "text/plain",
+                };
+                let route =
+                    net::test_server::Route::ok(mime_type, body).with_pause_in_body(*at, *pause);
+                let server = net::test_server::TestServer::start(
+                    [("/".to_owned(), route)].into_iter().collect(),
+                )
+                .map_err(|e| format!("the page's server didn't start: {e}"))?;
+                let url = server.url("/");
+                self.servers.push(server);
                 self.call(
                     Method::MachopoNavigateFromAddressBar(Navigate { url }),
                     "navigate",

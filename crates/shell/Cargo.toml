@@ -68,6 +68,8 @@ http-body-util.workspace = true
 tokio-tungstenite.workspace = true
 futures-util.workspace = true
 percent-encoding.workspace = true
+# The server of a scenario's page whose body pauses (`navigate-paused`).
+net.workspace = true
 
 # The system's double-click interval (`mouse`): a safe class method.
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -82,5 +84,4 @@ base.workspace = true
 # Its statistics, for the test that machopo's Rust allocations are mimalloc's
 # (only test builds have the feature).
 mimalloc = { workspace = true, features = ["extended"] }
-net.workspace = true
 driver.workspace = true
