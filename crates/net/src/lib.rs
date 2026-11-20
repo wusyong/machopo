@@ -24,8 +24,7 @@
 //! whose persistent cookies are in the profile's `Cookies` database. No
 //! HTTP cache.
 //!
-//! [`NetworkContextParams`] has the profile's folder, the cookie policy,
-//! and, for web tests, host mapping rules and extra trusted roots, so
+//! [`NetworkContextParams`] has the profile's folder and, for web tests, host mapping rules and extra trusted roots, so
 //! WPT's domains reach the local wptserve over HTTPS.
 //!
 //! [`load`]: NetworkContext::load
@@ -210,12 +209,6 @@ pub struct NetworkContextParams {
     /// Certificates are still verified: their chain has to reach one of
     /// these or a system root, and their name has to match.
     pub additional_trust_anchors: Vec<Vec<u8>>,
-    /// Chromium's cookie policy, its defaults (`--allow-third-party-cookies`):
-    /// a third party's cookies are sent and kept, and a cookie without
-    /// `SameSite` goes with a top-level navigation of any method in its
-    /// first two minutes (Lax-allowing-unsafe). Off: machopo's own, a third
-    /// party's are neither, and `Lax` is `Lax`.
-    pub allow_third_party_cookies: bool,
     /// The profile's folder (`NetworkContextFilePaths::data_directory`):
     /// persistent cookies are kept in its `Cookies` database. None: in
     /// memory alone.
@@ -280,7 +273,7 @@ impl NetworkContext {
                 runtime.block_on(async move {
                     let transport = http::HttpTransport::new(&params);
                     // The context's cookies, which its loads share.
-                    let cookies = cookies::CookieJar::new(params.allow_third_party_cookies, store);
+                    let cookies = cookies::CookieJar::new(store);
                     while let Some(job) = rx.recv().await {
                         let job = match job {
                             Job::Load(load) => load,

@@ -27,7 +27,6 @@ fn http() -> CookieOptions {
     CookieOptions {
         include_httponly: true,
         same_site_context: SameSiteCookieContext::SameSiteStrict,
-        lax_allow_unsafe: false,
     }
 }
 

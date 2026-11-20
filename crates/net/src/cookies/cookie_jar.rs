@@ -34,12 +34,6 @@ pub(crate) struct CookieJar {
     /// without one); `loading` has them until then.
     loaded: Arc<tokio::sync::OnceCell<()>>,
     loading: Arc<Mutex<Option<Loaded>>>,
-    /// Chromium's cookie policy (`--allow-third-party-cookies`): a third
-    /// party's cookies are sent and kept, and a cookie without `SameSite`
-    /// is Lax-allowing-unsafe for two minutes. Without it, machopo's own: a
-    /// third party's are neither, and `Lax` is `Lax` (the strict end RFC
-    /// 6265bis permits, and recommends for third parties).
-    allow_third_party_cookies: bool,
 }
 
 /// The `SameSite` context of a hop of a request to `url`, of `method`
@@ -221,6 +215,25 @@ pub(crate) enum CookieManagerCall {
     },
 }
 
+/// Whether the cookie policy lets a hop to `url`, first party to
+/// `site_for_cookies`, have `cookie` (`CookieSettings::IsCookieAccessible`
+/// with third-party cookies blocked): a first party's (schemeless, as
+/// Chromium's third-party check is) always; a third party's only if it is
+/// partitioned (it goes only with requests of the top-level site it was
+/// set in). Chromium lets a third party's through by default; machopo
+/// doesn't, as Safari doesn't.
+fn accessible(cookie: &CanonicalCookie, url: &Url, site_for_cookies: &SiteForCookies) -> bool {
+    cookie.is_partitioned() || site_for_cookies.is_first_party_schemeless(url)
+}
+
+/// The options cookies of a hop are read or written in.
+fn options(context: SameSiteCookieContext) -> CookieOptions {
+    CookieOptions {
+        include_httponly: true,
+        same_site_context: context,
+    }
+}
+
 /// The site of the top-level frame of a hop to `url`: a main frame
 /// navigation's, its URL's at each hop (its `IsolationInfo` is redone at a
 /// redirect); another request's, the browser's. None if it is opaque.
@@ -272,13 +285,9 @@ impl Hop {
 }
 
 impl CookieJar {
-    /// A jar of Chromium's cookie policy if `allow_third_party_cookies`,
-    /// else of machopo's: empty, or, given a store, its persistent cookies
-    /// written to it and the ones it had loaded in once they come.
-    pub(crate) fn new(
-        allow_third_party_cookies: bool,
-        store: Option<(Box<dyn PersistentCookieStore>, Loaded)>,
-    ) -> Self {
+    /// A jar: empty, or, given a store, its persistent cookies written to
+    /// it and the ones it had loaded in once they come.
+    pub(crate) fn new(store: Option<(Box<dyn PersistentCookieStore>, Loaded)>) -> Self {
         let (monster, loading) = match store {
             Some((store, loaded)) => (CookieMonster::with_store(store), Some(loaded)),
             None => (CookieMonster::new(), None),
@@ -287,7 +296,6 @@ impl CookieJar {
             monster: Arc::new(Mutex::new(monster)),
             loaded: Arc::default(),
             loading: Arc::new(Mutex::new(loading)),
-            allow_third_party_cookies,
         }
     }
 
@@ -317,32 +325,6 @@ impl CookieJar {
         self.monster.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Whether the policy lets a hop to `url`, first party to
-    /// `site_for_cookies`, have `cookie` (`CookieSettings::IsCookieAccessible`):
-    /// a first party's (schemeless, as Chromium's third-party check is)
-    /// always; a third party's if it is partitioned (it goes only with
-    /// requests of the top-level site it was set in), or with Chromium's
-    /// policy.
-    fn accessible(
-        &self,
-        cookie: &CanonicalCookie,
-        url: &Url,
-        site_for_cookies: &SiteForCookies,
-    ) -> bool {
-        self.allow_third_party_cookies
-            || cookie.is_partitioned()
-            || site_for_cookies.is_first_party_schemeless(url)
-    }
-
-    /// The options cookies of a hop to `url` are read or written in.
-    fn options(&self, context: SameSiteCookieContext) -> CookieOptions {
-        CookieOptions {
-            include_httponly: true,
-            same_site_context: context,
-            lax_allow_unsafe: self.allow_third_party_cookies,
-        }
-    }
-
     /// The `Cookie` header's value for a hop of a request to `url`, of
     /// `method`, from where `trusted` says (none for a request without
     /// them: the browser's own, which carry no cookies), if it sends any:
@@ -360,13 +342,13 @@ impl CookieJar {
         let context = context_for_request(url, &hop.site_for_cookies, trusted, method);
         let cookies = self.monster().get_cookie_list_with_options(
             url,
-            &self.options(context),
+            &options(context),
             hop.partition_key.as_ref(),
             Time::now(),
         );
         let cookies: Vec<CanonicalCookie> = cookies
             .into_iter()
-            .filter(|cookie| self.accessible(cookie, url, &hop.site_for_cookies))
+            .filter(|cookie| accessible(cookie, url, &hop.site_for_cookies))
             .collect();
         (!cookies.is_empty()).then(|| CanonicalCookie::build_cookie_line(&cookies))
     }
@@ -451,10 +433,7 @@ impl CookieJar {
             }
             ScriptCookies::Enabled { url, trusted, done } => {
                 let site_for_cookies = site_for_cookies_at(&url, &trusted);
-                done(
-                    self.allow_third_party_cookies
-                        || site_for_cookies.is_first_party_schemeless(&url),
-                );
+                done(site_for_cookies.is_first_party_schemeless(&url));
             }
         }
     }
@@ -466,7 +445,7 @@ impl CookieJar {
         let hop = Hop::new(url, trusted);
         let options = CookieOptions {
             include_httponly: false,
-            ..self.options(context_for_script(url, &hop.site_for_cookies))
+            ..options(context_for_script(url, &hop.site_for_cookies))
         };
         let cookies = self.monster().get_cookie_list_with_options(
             url,
@@ -476,7 +455,7 @@ impl CookieJar {
         );
         let cookies: Vec<CanonicalCookie> = cookies
             .into_iter()
-            .filter(|cookie| self.accessible(cookie, url, &hop.site_for_cookies))
+            .filter(|cookie| accessible(cookie, url, &hop.site_for_cookies))
             .collect();
         CanonicalCookie::build_cookie_line(&cookies)
     }
@@ -489,7 +468,7 @@ impl CookieJar {
         let hop = Hop::new(url, trusted);
         let options = CookieOptions {
             include_httponly: false,
-            ..self.options(context_for_script(url, &hop.site_for_cookies))
+            ..options(context_for_script(url, &hop.site_for_cookies))
         };
         let cookie = CanonicalCookie::create(
             url,
@@ -500,7 +479,7 @@ impl CookieJar {
             CookieSourceType::Script,
         );
         if let Ok(cookie) = cookie
-            && self.accessible(&cookie, url, &hop.site_for_cookies)
+            && accessible(&cookie, url, &hop.site_for_cookies)
         {
             let _ = self.monster().set_canonical_cookie(cookie, url, &options);
         }
@@ -522,7 +501,7 @@ impl CookieJar {
             return;
         };
         let hop = Hop::new(url, trusted);
-        let options = self.options(context_for_response(url, &hop.site_for_cookies, trusted));
+        let options = options(context_for_response(url, &hop.site_for_cookies, trusted));
         let server_time = headers
             .iter()
             .find(|(name, _)| name == "date")
@@ -539,7 +518,7 @@ impl CookieJar {
                 CookieSourceType::Http,
             );
             if let Ok(cookie) = cookie
-                && self.accessible(&cookie, url, &hop.site_for_cookies)
+                && accessible(&cookie, url, &hop.site_for_cookies)
             {
                 // A cookie the context or the jar refuses is dropped, as
                 // Chromium's (it tells DevTools why; machopo doesn't yet).
@@ -581,7 +560,7 @@ mod tests {
     #[test]
     fn a_hop_waits_for_the_databases_cookies() {
         let (send, loaded) = oneshot::channel();
-        let jar = CookieJar::new(false, Some((Box::new(NoStore), loaded)));
+        let jar = CookieJar::new(Some((Box::new(NoStore), loaded)));
         let url = Url::parse("https://a.example/").unwrap();
         let mut context = Context::from_waker(Waker::noop());
         let mut waiting = pin!(jar.wait_for_load());
@@ -611,7 +590,7 @@ mod tests {
     /// that site's requests.
     #[test]
     fn a_navigations_partition_is_its_hops() {
-        let jar = CookieJar::new(false, None);
+        let jar = CookieJar::new(None);
         let url = Url::parse("https://a.example/").unwrap();
         let from_b = TrustedParams {
             site_for_cookies: Some("https://b.example".to_owned()),
@@ -636,11 +615,11 @@ mod tests {
     #[test]
     fn nothing_to_wait_for_without_a_database() {
         let mut context = Context::from_waker(Waker::noop());
-        let jar = CookieJar::new(false, None);
+        let jar = CookieJar::new(None);
         assert!(pin!(jar.wait_for_load()).poll(&mut context).is_ready());
         let (send, loaded) = oneshot::channel::<Vec<CanonicalCookie>>();
         drop(send);
-        let jar = CookieJar::new(false, Some((Box::new(NoStore), loaded)));
+        let jar = CookieJar::new(Some((Box::new(NoStore), loaded)));
         assert!(pin!(jar.wait_for_load()).poll(&mut context).is_ready());
     }
 }

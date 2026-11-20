@@ -12,8 +12,9 @@ pub enum SameSiteCookieContext {
     /// `CROSS_SITE`: only `SameSite=None` cookies.
     CrossSite,
     /// `SAME_SITE_LAX_METHOD_UNSAFE`: a top-level navigation to the site
-    /// with an unsafe method (`POST`): only cookies without `SameSite` less
-    /// than two minutes old, besides `None` ones ("Lax-allowing-unsafe").
+    /// with an unsafe method (`POST`): `None` cookies alone, as without
+    /// Lax-allowing-unsafe (Chromium's lets cookies without `SameSite` less
+    /// than two minutes old through too).
     SameSiteLaxMethodUnsafe,
     /// `SAME_SITE_LAX`: a top-level navigation to the site from another one,
     /// with a safe method: `Lax` cookies too. Enough to set any cookie.
@@ -23,35 +24,23 @@ pub enum SameSiteCookieContext {
 }
 
 /// What a cookie is read or written in (`net::CookieOptions`, the part
-/// machopo has). The default is script's, cross-site, without
-/// Lax-allowing-unsafe: machopo's default cookie policy, the strict end
-/// RFC 6265bis permits (Chromium's has it; machopo's has it only when
-/// third-party cookies are let through, as all of Chromium's defaults).
+/// machopo has). The default is script's, cross-site. There is no
+/// Lax-allowing-unsafe (Chromium's two minutes in which a cookie without
+/// `SameSite` goes with a top-level navigation of any method): `Lax` is
+/// `Lax`, the strict end RFC 6265bis permits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CookieOptions {
     /// Whether `HttpOnly` cookies are read and written: HTTP's, not script's
     /// (the opposite of `exclude_httponly`).
     pub include_httponly: bool,
     pub same_site_context: SameSiteCookieContext,
-    /// Whether a cookie without `SameSite` goes with a top-level navigation
-    /// of an unsafe method while it is less than
-    /// [`LAX_ALLOW_UNSAFE_MAX_AGE_SECONDS`] old ("Lax-allowing-unsafe", RFC
-    /// 6265bis's optional compatibility mode): yes in Chromium, unless
-    /// `kSameSiteDefaultChecksMethodRigorously` is on (off by default); in
-    /// machopo, only with Chromium's cookie policy.
-    pub lax_allow_unsafe: bool,
 }
-
-/// How long a cookie without `SameSite` is "Lax-allowing-unsafe" for, in
-/// seconds (`kLaxAllowUnsafeMaxAge`, two minutes).
-pub const LAX_ALLOW_UNSAFE_MAX_AGE_SECONDS: i64 = 120;
 
 impl Default for CookieOptions {
     fn default() -> Self {
         Self {
             include_httponly: false,
             same_site_context: SameSiteCookieContext::CrossSite,
-            lax_allow_unsafe: false,
         }
     }
 }
@@ -63,7 +52,6 @@ impl CookieOptions {
         Self {
             include_httponly: true,
             same_site_context: SameSiteCookieContext::SameSiteStrict,
-            lax_allow_unsafe: true,
         }
     }
 }

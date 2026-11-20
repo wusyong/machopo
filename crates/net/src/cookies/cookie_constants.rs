@@ -5,8 +5,9 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CookieSameSite {
     /// None, or one with a value it doesn't know (`Extended`, empty, ...):
-    /// treated as `Lax`, but a cookie less than two minutes old goes with
-    /// a top-level navigation of an unsafe method too ("Lax-allowing-unsafe").
+    /// treated as `Lax` (without Chromium's Lax-allowing-unsafe: two
+    /// minutes in which it goes with a top-level navigation of an unsafe
+    /// method too).
     Unspecified,
     /// `SameSite=None`: sent cross-site as well; it has to be `Secure`.
     NoRestriction,

@@ -6,9 +6,7 @@ use url::Url;
 
 use super::cookie_constants::{CookiePrefix, CookieSameSite, CookieSourceScheme, CookieSourceType};
 use super::cookie_inclusion_status::{CookieInclusionStatus, ExclusionReason};
-use super::cookie_options::{
-    CookieOptions, LAX_ALLOW_UNSAFE_MAX_AGE_SECONDS, SameSiteCookieContext,
-};
+use super::cookie_options::{CookieOptions, SameSiteCookieContext};
 use super::cookie_partition_key::CookiePartitionKey;
 use super::cookie_util::{self, CookieAccessScheme};
 use super::parsed_cookie::ParsedCookie;
@@ -59,9 +57,6 @@ enum EffectiveSameSite {
     NoRestriction,
     LaxMode,
     StrictMode,
-    /// A cookie without `SameSite` less than two minutes old: `Lax`, but
-    /// it also goes with a top-level navigation of an unsafe method.
-    LaxModeAllowUnsafe,
 }
 
 /// Chromium's `base::StringToInt64`: the number, if all of `text` is one in
@@ -545,20 +540,12 @@ impl CanonicalCookie {
             && cookie_util::is_on_path(&secure_cookie.path, &self.path)
     }
 
-    /// Its SameSite as applied at `now` (`GetEffectiveSameSite`, with
-    /// Chromium's default, non-legacy, access semantics).
-    fn effective_same_site(&self, options: &CookieOptions, now: Time) -> EffectiveSameSite {
+    /// Its SameSite as applied (`GetEffectiveSameSite`, with Chromium's
+    /// default, non-legacy, access semantics).
+    fn effective_same_site(&self) -> EffectiveSameSite {
         match self.same_site {
-            CookieSameSite::Unspecified => {
-                let recently_created = options.lax_allow_unsafe
-                    && now.saturating_micros_since(self.creation)
-                        <= LAX_ALLOW_UNSAFE_MAX_AGE_SECONDS.saturating_mul(1_000_000);
-                if recently_created {
-                    EffectiveSameSite::LaxModeAllowUnsafe
-                } else {
-                    EffectiveSameSite::LaxMode
-                }
-            }
+            // `Lax` by default, without Chromium's Lax-allowing-unsafe.
+            CookieSameSite::Unspecified => EffectiveSameSite::LaxMode,
             CookieSameSite::NoRestriction => EffectiveSameSite::NoRestriction,
             CookieSameSite::LaxMode => EffectiveSameSite::LaxMode,
             CookieSameSite::StrictMode => EffectiveSameSite::StrictMode,
@@ -602,11 +589,11 @@ impl CanonicalCookie {
         // get `Lax` ones, intentionally.
         let context = options.same_site_context;
         if context < SameSiteCookieContext::SameSiteLax {
-            match self.effective_same_site(options, self.creation) {
+            match self.effective_same_site() {
                 EffectiveSameSite::StrictMode => {
                     status.add_exclusion_reason(ExclusionReason::SameSiteStrict);
                 }
-                EffectiveSameSite::LaxMode | EffectiveSameSite::LaxModeAllowUnsafe => {
+                EffectiveSameSite::LaxMode => {
                     status.add_exclusion_reason(if self.same_site == CookieSameSite::Unspecified {
                         ExclusionReason::SameSiteUnspecifiedTreatedAsLax
                     } else {
@@ -619,8 +606,7 @@ impl CanonicalCookie {
         status
     }
 
-    /// Whether it is sent to `url`, in `options`, at `now`
-    /// (`IncludeForRequestURL`): `HttpOnly` only where `options` include
+    /// Whether it is sent to `url`, in `options` (`IncludeForRequestURL`): `HttpOnly` only where `options` include
     /// them, `Secure` only to a secure or trustworthy URL, to a host its
     /// domain matches and a path on its path, by its SameSite and the
     /// context's, and a `SameSite=None` one only if `Secure`. Expiry is the
@@ -629,7 +615,6 @@ impl CanonicalCookie {
         &self,
         url: &Url,
         options: &CookieOptions,
-        now: Time,
     ) -> CookieInclusionStatus {
         let mut status = CookieInclusionStatus::default();
         if self.http_only && !options.include_httponly {
@@ -650,7 +635,7 @@ impl CanonicalCookie {
             status.add_exclusion_reason(ExclusionReason::NotOnPath);
         }
         let context = options.same_site_context;
-        match self.effective_same_site(options, now) {
+        match self.effective_same_site() {
             EffectiveSameSite::StrictMode if context < SameSiteCookieContext::SameSiteStrict => {
                 status.add_exclusion_reason(ExclusionReason::SameSiteStrict);
             }
@@ -660,11 +645,6 @@ impl CanonicalCookie {
                 } else {
                     ExclusionReason::SameSiteLax
                 });
-            }
-            EffectiveSameSite::LaxModeAllowUnsafe
-                if context < SameSiteCookieContext::SameSiteLaxMethodUnsafe =>
-            {
-                status.add_exclusion_reason(ExclusionReason::SameSiteUnspecifiedTreatedAsLax);
             }
             _ => {}
         }

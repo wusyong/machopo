@@ -33,7 +33,7 @@ pub use cookie_monster::{
     MAX_COOKIES, PER_PARTITION_DOMAIN_MAX_COOKIE_BYTES, PER_PARTITION_DOMAIN_MAX_COOKIES,
     PURGE_COOKIES, PersistentCookieStore, SAFE_FROM_GLOBAL_PURGE_DAYS,
 };
-pub use cookie_options::{CookieOptions, LAX_ALLOW_UNSAFE_MAX_AGE_SECONDS, SameSiteCookieContext};
+pub use cookie_options::{CookieOptions, SameSiteCookieContext};
 pub use cookie_partition_key::CookiePartitionKey;
 pub use cookie_util::parse_cookie_expiration_time;
 pub use parsed_cookie::{

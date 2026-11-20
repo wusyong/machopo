@@ -1,0 +1,31 @@
+# Third-party cookies blocked, no flag; no Lax-allowing-unsafe (decision 24):
+# what is left of the policy, written anew.
+test = [
+    "sh", "-c",
+    "cargo test -q -p net --test it -- cookies:: cookie_loads:: && cargo test -q -p browser --test it cookies::",
+]
+timeout = 1800
+
+[[mutant]]
+name = "a third party has unpartitioned cookies"
+file = "crates/net/src/cookies/cookie_jar.rs"
+from = '''    cookie.is_partitioned() || site_for_cookies.is_first_party_schemeless(url)'''
+to = '''    cookie.is_partitioned() || site_for_cookies.is_first_party_schemeless(url) || true'''
+
+[[mutant]]
+name = "a third party has no partitioned cookies"
+file = "crates/net/src/cookies/cookie_jar.rs"
+from = '''    cookie.is_partitioned() || site_for_cookies.is_first_party_schemeless(url)'''
+to = '''    site_for_cookies.is_first_party_schemeless(url)'''
+
+[[mutant]]
+name = "cookies are enabled for a third party"
+file = "crates/net/src/cookies/cookie_jar.rs"
+from = '''                done(site_for_cookies.is_first_party_schemeless(&url));'''
+to = '''                done(true);'''
+
+[[mutant]]
+name = "a cookie without SameSite is None"
+file = "crates/net/src/cookies/canonical_cookie.rs"
+from = '''            CookieSameSite::Unspecified => EffectiveSameSite::LaxMode,'''
+to = '''            CookieSameSite::Unspecified => EffectiveSameSite::NoRestriction,'''

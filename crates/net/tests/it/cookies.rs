@@ -98,7 +98,6 @@ fn http() -> CookieOptions {
     CookieOptions {
         include_httponly: true,
         same_site_context: SameSiteCookieContext::SameSiteStrict,
-        lax_allow_unsafe: true,
     }
 }
 
@@ -1230,36 +1229,20 @@ fn same_site_when_sending() {
     assert_eq!(line(&mut jar, SameSiteCookieContext::CrossSite), "none=3");
 }
 
+/// No Lax-allowing-unsafe (Chromium's two minutes in which a cookie
+/// without `SameSite` goes with a top-level navigation of any method): a
+/// cross-site navigation of an unsafe method gets `SameSite=None` cookies
+/// alone, however new the others.
 #[test]
-fn lax_allowing_unsafe_for_two_minutes() {
+fn an_unsafe_navigation_gets_no_lax_cookies() {
     let unsafe_navigation = in_context(SameSiteCookieContext::SameSiteLaxMethodUnsafe);
     let mut jar = Jar::new();
     jar.set("https://example.com/", "default=1");
     jar.set("https://example.com/", "lax=2; SameSite=Lax");
-    // Made at 1; two minutes on, still.
-    jar.now = 1 + 120;
+    jar.set("https://example.com/", "none=3; SameSite=None; Secure");
     assert_eq!(
         jar.line_with("https://example.com/", &unsafe_navigation),
-        "default=1"
-    );
-    // Not without the feature.
-    let rigorous = CookieOptions {
-        lax_allow_unsafe: false,
-        ..unsafe_navigation
-    };
-    assert_eq!(jar.line_with("https://example.com/", &rigorous), "");
-    // Not cross-site.
-    assert_eq!(
-        jar.line_with(
-            "https://example.com/",
-            &in_context(SameSiteCookieContext::CrossSite)
-        ),
-        ""
-    );
-    jar.now = 1 + 121;
-    assert_eq!(
-        jar.line_with("https://example.com/", &unsafe_navigation),
-        ""
+        "none=3"
     );
 }
 
@@ -1322,15 +1305,12 @@ fn listing_and_deleting() {
     assert_eq!(names(&mut jar), Vec::<String>::new());
 }
 
-/// The default options are script's, cross-site, without
-/// Lax-allowing-unsafe: machopo's default cookie policy, RFC 6265bis's
-/// strict end (Chromium's has it on).
+/// The default options are script's, cross-site.
 #[test]
 fn the_default_options_are_strict() {
     let options = CookieOptions::default();
     assert!(!options.include_httponly);
     assert_eq!(options.same_site_context, SameSiteCookieContext::CrossSite);
-    assert!(!options.lax_allow_unsafe);
 }
 
 // --- CanonicalCookie::create_sanitized ------------------------------------

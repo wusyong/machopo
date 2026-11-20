@@ -1,8 +1,8 @@
 //! Cookies on loads: each hop sends the jar's cookies its URL gets, and
 //! keeps what its response sets, by the request's trusted params (the
 //! browser's), its credentials mode, the `SameSite` context they make and
-//! the cookie policy (machopo's: no third party's; or Chromium's, with
-//! `allow_third_party_cookies`). `a.localhost` and `b.localhost` are two
+//! the cookie policy (no third party's but partitioned ones).
+//! `a.localhost` and `b.localhost` are two
 //! sites, both trustworthy, so `Secure` cookies are set over HTTP.
 
 use std::collections::HashMap;
@@ -13,15 +13,14 @@ use net::test_server::{Route, TestServer};
 use net::{HostMappingRules, NetworkContext, NetworkContextParams};
 use protocol::network::{CredentialsMode, RequestDestination, ResourceRequest, TrustedParams};
 
-fn network(allow_third_party_cookies: bool) -> NetworkContext {
-    network_in(allow_third_party_cookies, None)
+fn network() -> NetworkContext {
+    network_in(None)
 }
 
 /// A network context whose cookies are kept in the folder `dir`, if any.
-fn network_in(allow_third_party_cookies: bool, dir: Option<&std::path::Path>) -> NetworkContext {
+fn network_in(dir: Option<&std::path::Path>) -> NetworkContext {
     NetworkContext::start(NetworkContextParams {
         host_resolver_rules: HostMappingRules::parse("MAP *.localhost 127.0.0.1").unwrap(),
-        allow_third_party_cookies,
         data_directory: dir.map(std::path::Path::to_path_buf),
         ..Default::default()
     })
@@ -139,7 +138,7 @@ fn sent(server: &TestServer, target: &str) -> String {
 /// credentials.
 #[test]
 fn a_first_partys_cookies_are_kept_and_sent() {
-    let (network, server) = (network(false), server());
+    let (network, server) = (network(), server());
     let a = |path: &str| server.url_for_host("a.localhost", path);
     load(
         &network,
@@ -178,7 +177,7 @@ fn a_first_partys_cookies_are_kept_and_sent() {
 /// to another (its response tainted).
 #[test]
 fn same_origin_credentials_go_to_the_initiators_origin_alone() {
-    let (network, server) = (network(false), server());
+    let (network, server) = (network(), server());
     load(
         &network,
         request(
@@ -203,108 +202,78 @@ fn same_origin_credentials_go_to_the_initiators_origin_alone() {
 
 /// `SameSite` by the context: a main frame's navigation from another site
 /// gets `Lax` and unspecified ones with a safe method, not `Strict`; with
-/// an unsafe one, `None` ones alone (no Lax-allowing-unsafe in machopo's
-/// policy, but with Chromium's for a cookie two minutes old). The
+/// an unsafe one, `None` ones alone (no Lax-allowing-unsafe). The
 /// browser's own navigation (no initiator) gets them all.
 #[test]
 fn same_site_by_the_requests_context() {
-    for allow in [false, true] {
-        let (network, server) = (network(allow), server());
-        let a = |path: &str| server.url_for_host("a.localhost", path);
-        load(
-            &network,
-            request(a("/set"), Some(first_party("a.localhost"))),
-        );
-        let navigation = |initiator: Option<&str>| TrustedParams {
-            site_for_cookies: None,
-            top_frame_site: None,
-            initiator: initiator.map(|site| format!("http://{site}")),
-            is_main_frame_navigation: true,
-        };
-        load(
-            &network,
-            request(a("/echo"), Some(navigation(Some("b.localhost")))),
-        );
-        assert_eq!(
-            sent(&server, "/echo"),
-            "lax none unspecified",
-            "allow {allow}"
-        );
-        let mut posted = request(a("/echo"), Some(navigation(Some("b.localhost"))));
-        posted.method = "POST".to_owned();
-        load(&network, posted);
-        assert_eq!(
-            sent(&server, "/echo"),
-            if allow { "none unspecified" } else { "none" },
-            "allow {allow}"
-        );
-        load(&network, request(a("/echo"), Some(navigation(None))));
-        assert_eq!(
-            sent(&server, "/echo"),
-            "lax none strict unspecified",
-            "allow {allow}"
-        );
-        // A subresource of a same-site page from another site's initiator:
-        // cross-site, `None` ones alone.
-        let mut from_b = first_party("a.localhost");
-        from_b.initiator = Some("http://b.localhost".to_owned());
-        load(&network, request(a("/echo"), Some(from_b)));
-        assert_eq!(sent(&server, "/echo"), "none", "allow {allow}");
-    }
+    let (network, server) = (network(), server());
+    let a = |path: &str| server.url_for_host("a.localhost", path);
+    load(
+        &network,
+        request(a("/set"), Some(first_party("a.localhost"))),
+    );
+    let navigation = |initiator: Option<&str>| TrustedParams {
+        site_for_cookies: None,
+        top_frame_site: None,
+        initiator: initiator.map(|site| format!("http://{site}")),
+        is_main_frame_navigation: true,
+    };
+    load(
+        &network,
+        request(a("/echo"), Some(navigation(Some("b.localhost")))),
+    );
+    assert_eq!(sent(&server, "/echo"), "lax none unspecified");
+    let mut posted = request(a("/echo"), Some(navigation(Some("b.localhost"))));
+    posted.method = "POST".to_owned();
+    load(&network, posted);
+    assert_eq!(sent(&server, "/echo"), "none");
+    load(&network, request(a("/echo"), Some(navigation(None))));
+    assert_eq!(sent(&server, "/echo"), "lax none strict unspecified");
+    // A subresource of a same-site page from another site's initiator:
+    // cross-site, `None` ones alone.
+    let mut from_b = first_party("a.localhost");
+    from_b.initiator = Some("http://b.localhost".to_owned());
+    load(&network, request(a("/echo"), Some(from_b)));
+    assert_eq!(sent(&server, "/echo"), "none");
 }
 
 /// A third party's request (its site for cookies another site, or null)
-/// sends no cookies and keeps none in machopo's policy; in Chromium's,
-/// `SameSite=None` ones go and are kept. One without trusted params has
-/// none in either.
+/// sends no cookies and keeps none, `SameSite=None` ones neither. One
+/// without trusted params has none either.
 #[test]
 fn a_third_partys_cookies_by_the_policy() {
-    for allow in [false, true] {
-        let (network, server) = (network(allow), server());
-        let a = |path: &str| server.url_for_host("a.localhost", path);
+    let (network, server) = (network(), server());
+    let a = |path: &str| server.url_for_host("a.localhost", path);
+    load(
+        &network,
+        request(a("/set"), Some(first_party("a.localhost"))),
+    );
+    let third_party = |site_for_cookies: Option<&str>| TrustedParams {
+        site_for_cookies: site_for_cookies.map(str::to_owned),
+        top_frame_site: Some("http://b.localhost".to_owned()),
+        initiator: Some("http://b.localhost".to_owned()),
+        is_main_frame_navigation: false,
+    };
+    for site_for_cookies in [Some("http://b.localhost"), None] {
         load(
             &network,
-            request(a("/set"), Some(first_party("a.localhost"))),
+            request(a("/echo"), Some(third_party(site_for_cookies))),
         );
-        let third_party = |site_for_cookies: Option<&str>| TrustedParams {
-            site_for_cookies: site_for_cookies.map(str::to_owned),
-            top_frame_site: Some("http://b.localhost".to_owned()),
-            initiator: Some("http://b.localhost".to_owned()),
-            is_main_frame_navigation: false,
-        };
-        for site_for_cookies in [Some("http://b.localhost"), None] {
-            load(
-                &network,
-                request(a("/echo"), Some(third_party(site_for_cookies))),
-            );
-            assert_eq!(
-                sent(&server, "/echo"),
-                if allow { "none" } else { "" },
-                "allow {allow}, {site_for_cookies:?}"
-            );
-        }
-        // A request without trusted params (the browser's own) has none,
-        // whatever the policy.
-        load(&network, request(a("/echo"), None));
-        assert_eq!(sent(&server, "/echo"), "", "allow {allow}");
-        load(
-            &network,
-            request(a("/third"), Some(third_party(Some("http://b.localhost")))),
-        );
-        load(
-            &network,
-            request(a("/echo"), Some(first_party("a.localhost"))),
-        );
-        assert_eq!(
-            sent(&server, "/echo"),
-            if allow {
-                "lax none strict third unspecified"
-            } else {
-                "lax none strict unspecified"
-            },
-            "allow {allow}"
-        );
+        assert_eq!(sent(&server, "/echo"), "", "{site_for_cookies:?}");
     }
+    // A request without trusted params (the browser's own) has none,
+    // as any.
+    load(&network, request(a("/echo"), None));
+    assert_eq!(sent(&server, "/echo"), "");
+    load(
+        &network,
+        request(a("/third"), Some(third_party(Some("http://b.localhost")))),
+    );
+    load(
+        &network,
+        request(a("/echo"), Some(first_party("a.localhost"))),
+    );
+    assert_eq!(sent(&server, "/echo"), "lax none strict unspecified");
 }
 
 /// A third party's request in `top`'s top-level frame (its site for
@@ -326,7 +295,7 @@ fn a_profiles_persistent_cookies_outlast_its_network_context() {
     let (dir, server) = (scratch("outlast"), server());
     let a = |path: &str| server.url_for_host("a.localhost", path);
     {
-        let network = network_in(false, Some(&dir));
+        let network = network_in(Some(&dir));
         load(
             &network,
             request(a("/persistent"), Some(first_party("a.localhost"))),
@@ -338,7 +307,7 @@ fn a_profiles_persistent_cookies_outlast_its_network_context() {
         assert_eq!(sent(&server, "/echo"), "kept session");
     }
     // Script's first read waits for them too.
-    let network = network_in(false, Some(&dir));
+    let network = network_in(Some(&dir));
     assert_eq!(
         script_cookies(&network, &a("/"), first_party("a.localhost")),
         "kept=1"
@@ -350,60 +319,42 @@ fn a_profiles_persistent_cookies_outlast_its_network_context() {
     assert_eq!(sent(&server, "/echo"), "kept");
 }
 
-/// A third party's `Partitioned` cookie is kept, in either policy, in the
-/// partition of its top-level site: it goes with that site's third-party
-/// requests alone, not another's nor the first party's own, and is kept in
-/// it in the profile's folder too. An unpartitioned one is the policy's.
+/// A third party's `Partitioned` cookie is kept in the partition of its
+/// top-level site: it goes with that site's third-party requests alone,
+/// not another's nor the first party's own, and is kept in it in the
+/// profile's folder too. An unpartitioned one isn't kept.
 #[test]
 fn a_third_partys_partitioned_cookies_are_its_top_level_sites() {
-    for allow in [false, true] {
-        let (dir, server) = (scratch(&format!("partitioned-{allow}")), server());
-        let a = |path: &str| server.url_for_host("a.localhost", path);
-        {
-            let network = network_in(allow, Some(&dir));
-            load(
-                &network,
-                request(a("/partitioned"), Some(embedded_in("b.localhost"))),
-            );
-            load(
-                &network,
-                request(a("/echo"), Some(embedded_in("b.localhost"))),
-            );
-            assert_eq!(
-                sent(&server, "/echo"),
-                if allow { "chip plain" } else { "chip" },
-                "allow {allow}"
-            );
-            load(
-                &network,
-                request(a("/echo"), Some(embedded_in("c.localhost"))),
-            );
-            assert_eq!(
-                sent(&server, "/echo"),
-                if allow { "plain" } else { "" },
-                "allow {allow}"
-            );
-            load(
-                &network,
-                request(a("/echo"), Some(first_party("a.localhost"))),
-            );
-            assert_eq!(
-                sent(&server, "/echo"),
-                if allow { "plain" } else { "" },
-                "allow {allow}"
-            );
-        }
-        let network = network_in(allow, Some(&dir));
+    let (dir, server) = (scratch("partitioned"), server());
+    let a = |path: &str| server.url_for_host("a.localhost", path);
+    {
+        let network = network_in(Some(&dir));
+        load(
+            &network,
+            request(a("/partitioned"), Some(embedded_in("b.localhost"))),
+        );
         load(
             &network,
             request(a("/echo"), Some(embedded_in("b.localhost"))),
         );
-        assert_eq!(
-            sent(&server, "/echo"),
-            if allow { "chip plain" } else { "chip" },
-            "allow {allow}"
+        assert_eq!(sent(&server, "/echo"), "chip");
+        load(
+            &network,
+            request(a("/echo"), Some(embedded_in("c.localhost"))),
         );
+        assert_eq!(sent(&server, "/echo"), "");
+        load(
+            &network,
+            request(a("/echo"), Some(first_party("a.localhost"))),
+        );
+        assert_eq!(sent(&server, "/echo"), "");
     }
+    let network = network_in(Some(&dir));
+    load(
+        &network,
+        request(a("/echo"), Some(embedded_in("b.localhost"))),
+    );
+    assert_eq!(sent(&server, "/echo"), "chip");
 }
 
 /// A partition minds whether a frame of another site is between: what a
@@ -411,28 +362,22 @@ fn a_third_partys_partitioned_cookies_are_its_top_level_sites() {
 /// from a frame of another site in that page.
 #[test]
 fn a_partition_minds_a_cross_site_ancestor() {
-    for allow in [false, true] {
-        let (network, server) = (network(allow), server());
-        let b = |path: &str| server.url_for_host("b.localhost", path);
-        load(
-            &network,
-            request(b("/partitioned"), Some(first_party("b.localhost"))),
-        );
-        load(
-            &network,
-            request(b("/echo"), Some(first_party("b.localhost"))),
-        );
-        assert_eq!(sent(&server, "/echo"), "chip plain", "allow {allow}");
-        load(
-            &network,
-            request(b("/echo"), Some(embedded_in("b.localhost"))),
-        );
-        assert_eq!(
-            sent(&server, "/echo"),
-            if allow { "plain" } else { "" },
-            "allow {allow}"
-        );
-    }
+    let (network, server) = (network(), server());
+    let b = |path: &str| server.url_for_host("b.localhost", path);
+    load(
+        &network,
+        request(b("/partitioned"), Some(first_party("b.localhost"))),
+    );
+    load(
+        &network,
+        request(b("/echo"), Some(first_party("b.localhost"))),
+    );
+    assert_eq!(sent(&server, "/echo"), "chip plain");
+    load(
+        &network,
+        request(b("/echo"), Some(embedded_in("b.localhost"))),
+    );
+    assert_eq!(sent(&server, "/echo"), "");
 }
 
 /// What script reads at `url` from where `trusted` says, waiting for it.
@@ -458,7 +403,7 @@ fn script_enabled(network: &NetworkContext, url: &str, trusted: TrustedParams) -
 /// one over an `HttpOnly` one.
 #[test]
 fn script_reads_and_sets_a_first_partys_cookies() {
-    let (network, server) = (network(false), server());
+    let (network, server) = (network(), server());
     let a = |path: &str| server.url_for_host("a.localhost", path);
     load(
         &network,
@@ -511,52 +456,36 @@ fn script_reads_and_sets_a_first_partys_cookies() {
     assert!(sent(&server, "/echo").contains("only"));
 }
 
-/// A third party's script: in machopo's policy it reads and sets none but
-/// `Partitioned` ones, and cookies aren't enabled; in Chromium's, its
-/// `SameSite=None` ones too, and they are. A first party's are enabled in
-/// both.
+/// A third party's script reads and sets none but `Partitioned` ones, and
+/// cookies aren't enabled for it; a first party's are.
 #[test]
 fn a_third_partys_script_by_the_policy() {
-    for allow in [false, true] {
-        let (network, server) = (network(allow), server());
-        let a = server.url_for_host("a.localhost", "/");
-        let in_b = || embedded_in("b.localhost");
-        // A first party's `SameSite=None` cookie: a third party's script
-        // reads it only in Chromium's policy.
-        network.set_cookie_from_script(
-            url::Url::parse(&a).unwrap(),
-            first_party("a.localhost"),
-            "first=1; SameSite=None; Secure".to_owned(),
-        );
-        for line in [
-            "none=1; SameSite=None; Secure",
-            "chip=1; SameSite=None; Secure; Partitioned",
-            "lax=1",
-        ] {
-            network.set_cookie_from_script(url::Url::parse(&a).unwrap(), in_b(), line.to_owned());
-        }
-        let read = script_cookies(&network, &a, in_b());
-        assert_eq!(
-            read,
-            if allow {
-                "first=1; none=1; chip=1"
-            } else {
-                "chip=1"
-            },
-            "allow {allow}"
-        );
-        // The partitioned one is of b's top-level site alone.
-        assert_eq!(
-            script_cookies(&network, &a, first_party("a.localhost")),
-            if allow { "first=1; none=1" } else { "first=1" },
-            "allow {allow}"
-        );
-        assert_eq!(script_enabled(&network, &a, in_b()), allow, "allow {allow}");
-        assert!(
-            script_enabled(&network, &a, first_party("a.localhost")),
-            "allow {allow}"
-        );
+    let (network, server) = (network(), server());
+    let a = server.url_for_host("a.localhost", "/");
+    let in_b = || embedded_in("b.localhost");
+    // A first party's `SameSite=None` cookie: a third party's script
+    // doesn't read it.
+    network.set_cookie_from_script(
+        url::Url::parse(&a).unwrap(),
+        first_party("a.localhost"),
+        "first=1; SameSite=None; Secure".to_owned(),
+    );
+    for line in [
+        "none=1; SameSite=None; Secure",
+        "chip=1; SameSite=None; Secure; Partitioned",
+        "lax=1",
+    ] {
+        network.set_cookie_from_script(url::Url::parse(&a).unwrap(), in_b(), line.to_owned());
     }
+    let read = script_cookies(&network, &a, in_b());
+    assert_eq!(read, "chip=1");
+    // The partitioned one is of b's top-level site alone.
+    assert_eq!(
+        script_cookies(&network, &a, first_party("a.localhost")),
+        "first=1"
+    );
+    assert!(!script_enabled(&network, &a, in_b()));
+    assert!(script_enabled(&network, &a, first_party("a.localhost")));
 }
 
 fn waited<T: Send + 'static>(call: impl FnOnce(Box<dyn FnOnce(T) + Send>)) -> T {
@@ -586,7 +515,7 @@ fn the_browsers_cookie_calls() {
     use net::cookies::{
         CanonicalCookie, CookieDeletionFilter, CookieSameSite, PartitionFilter, Time,
     };
-    let (network, server) = (network(false), server());
+    let (network, server) = (network(), server());
     let a = |path: &str| server.url_for_host("a.localhost", path);
     load(
         &network,

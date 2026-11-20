@@ -541,9 +541,7 @@ impl CookieMonster {
             if cookie
                 .partition_key()
                 .is_some_and(|key| Some(key) != partition_key)
-                || !cookie
-                    .include_for_request_url(url, options, now)
-                    .is_include()
+                || !cookie.include_for_request_url(url, options).is_include()
             {
                 continue;
             }
