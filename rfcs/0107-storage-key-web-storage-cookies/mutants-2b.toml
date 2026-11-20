@@ -1,0 +1,63 @@
+# Step 2b: a profile's database (sql): in memory or a file in its
+# folder, set up as Chromium's (exclusive locking, a truncated rollback
+# journal, no wait on a lock), its schema brought to its version a
+# migration at a time, a file that isn't a database put aside.
+test = ["cargo", "test", "-q", "-p", "sql"]
+timeout = 600
+
+[[mutant]]
+name = "locking isn't exclusive"
+file = "crates/sql/src/lib.rs"
+from = '''        connection.pragma_update(None, "locking_mode", "EXCLUSIVE")?;'''
+to = '''        connection.pragma_update(None, "locking_mode", "NORMAL")?;'''
+
+[[mutant]]
+name = "the journal is deleted, not truncated"
+file = "crates/sql/src/lib.rs"
+from = '''"PRAGMA journal_mode=TRUNCATE"'''
+to = '''"PRAGMA journal_mode=DELETE"'''
+
+[[mutant]]
+name = "the lock isn't taken at open"
+file = "crates/sql/src/lib.rs"
+from = '''        let _: i64 =
+            connection.query_row("SELECT count(*) FROM sqlite_master", [], |row| row.get(0))?;'''
+to = ''''''
+
+[[mutant]]
+name = "a locked database is waited for"
+file = "crates/sql/src/lib.rs"
+from = '''        connection.busy_timeout(std::time::Duration::ZERO)?;'''
+to = '''        connection.busy_timeout(std::time::Duration::from_secs(5))?;'''
+
+[[mutant]]
+name = "a damaged file isn't made again"
+file = "crates/sql/src/lib.rs"
+from = '''            Err(Error::Sqlite(error)) if is_corrupt(&error) => {'''
+to = '''            Err(Error::Sqlite(error)) if is_corrupt(&error) && false => {'''
+
+[[mutant]]
+name = "a newer schema is taken"
+file = "crates/sql/src/lib.rs"
+from = '''        if version > known {'''
+to = '''        if version > u32::MAX - 1 {'''
+
+[[mutant]]
+name = "every migration runs again"
+file = "crates/sql/src/lib.rs"
+from = '''        for (at, migration) in (version..known).zip(migrations.iter().skip(done)) {'''
+to = '''        for (at, migration) in (0..known).zip(migrations.iter().skip(done - done)) {'''
+
+[[mutant]]
+name = "the version isn't kept"
+file = "crates/sql/src/lib.rs"
+from = '''            transaction.pragma_update(None, "user_version", at.saturating_add(1))?;'''
+to = '''            let _ = at;'''
+
+[[mutant]]
+name = "a migration isn't one transaction"
+file = "crates/sql/src/lib.rs"
+from = '''            let transaction = self.connection.transaction()?;
+            transaction.execute_batch(migration)?;'''
+to = '''            self.connection.execute_batch(migration)?;
+            let transaction = self.connection.transaction()?;'''

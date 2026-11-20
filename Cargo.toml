@@ -23,6 +23,7 @@ viz = { path = "crates/viz" }
 bindings = { path = "crates/bindings" }
 ipc = { path = "crates/ipc" }
 site = { path = "crates/site" }
+sql = { path = "crates/sql" }
 # The DOM's GC: machopo's own project (not a fork), next to the repo at the
 # commit `third_party.toml` pins; its docs are in ../third_party/elise/docs.
 elise = { path = "../third_party/elise/crates/elise" }
@@ -164,6 +165,8 @@ url = "2"
 # The public suffix list, compiled in: what a host's registrable domain is
 # (`site`). A new list is a new version of it.
 psl = "2"
+# SQLite, its source built in: the profile's databases (`sql`).
+rusqlite = { version = "0.43", features = ["bundled"] }
 # `data:` URLs, by the Fetch Standard's processor (`net`).
 data-url = "0.3"
 encoding_rs = "0.8"

@@ -436,4 +436,4 @@
 - DOM 的 autofocus 處理過之後仍收候選（`dom_api` 的 `autofocus_inserted` 不看 processed flag）：`flush_autofocus_candidates` 只在還沒處理時看候選（`has_autofocus_candidates`），處理時清掉清單，之後收進來的永遠不會被用到，只是最上層的文件多留幾個 id；照規範的步驟留著。
 - `net` 的 `URLRequest` 擋不是 token 的 method（reqwest 的 `Method::from_bytes` 也拒絕，錯誤一樣；不依賴它而留著）。
 - `net` 的 CORS 判斷 basic 時看 tainting 還是 basic（`cors.rs` 的 `start`：tainting 只在跨源的網址變成 `cors` 或 `opaque`，之後回到自己的 origin 一定是從那個網址轉回來，那次 redirect 就 taint 了 origin，「沒有 taint」已經排除它；照規範的兩個條件留著）。
-
+- `sql` 打開資料庫時明確讀一次 schema（`Database::set_up` 的 `SELECT count(*) FROM sqlite_master`，Chromium 的 `sql::Database::Open` 也強制讀）：在它之前的 `PRAGMA journal_mode=TRUNCATE` 在準備時就讀了 schema，同樣拿到 exclusive 的鎖、找出不是資料庫或 schema 壞掉的檔案，拿掉結果一樣；留著是不依賴 SQLite 準備那一句時順便讀 schema。

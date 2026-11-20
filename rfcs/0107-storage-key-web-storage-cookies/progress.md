@@ -12,7 +12,7 @@
 | 1b：`StorageKey`，frame 樹在文件 commit 時算出每個 frame 的 key | 完成 | 2026-11-20 |
 | 1c：DevTools 的 `domainAndRegistry`，第 1 階段的檢查和文件 | 完成 | 2026-11-20 |
 | 2a：profile 的資料夾（位置、`--user-data-dir`、哪些模式寫磁碟、同一個資料夾開兩次） | 完成 | 2026-11-20 |
-| 2b：磁碟上的儲存（格式、讀寫的介面） | 未開始 | |
+| 2b：磁碟上的儲存（格式、讀寫的介面） | 完成 | 2026-11-20 |
 | 2c：第 2 階段的檢查和文件 | 未開始 | |
 | 3：Web Storage | 未開始 | |
 | 4：`net` 的 cookie | 未開始 | |
@@ -29,6 +29,7 @@
 | DevTools 的 `domainAndRegistry`：frame 的網址的 host 的 registrable domain（private 的後綴也算），位址、public suffix 本身、單一 label、沒有 host 的是空的 | `cargo test -p renderer --lib page_agent::`；`cargo test -p shell --test it a_frames_domain_and_registry` |
 | profile：只在記憶體的沒有資料夾；資料夾沒有就建、鎖檔寫著是誰的；同時只給一個（clone 都放掉之後才放開），被用著是 `InUse`、訊息說資料夾和 `--user-data-dir`；建不出來的是錯誤；各平台預設的資料夾（空的、相對的 `XDG_CONFIG_HOME` 不算） | `cargo test -p browser --test it profile::` |
 | 哪個 profile：視窗預設是使用者的、自動化在記憶體、`--user-data-dir` 的照啟動時的工作目錄；第二個 machopo 開同一個資料夾時拒絕啟動，第一個照常 | `cargo test -p shell --bin machopo -- user_data`；`cargo test -p shell --test it a_second_machopo` |
+| 資料庫：記憶體和 profile 的資料夾，關掉再開還在；照 Chromium 的預設（`truncate` 的 journal、exclusive locking、被鎖住時馬上失敗）；schema 只跑新的 migration、較新的拒絕、失敗的退回；不是資料庫和 schema 壞掉的檔案移到旁邊、重新開始 | `cargo test -p sql` |
 | frame 樹的 key：文件 commit 時、子 frame 建立時（parent 的 origin）照它所在的 frame 算，最上層的網站是 main frame 的；重設之後是 opaque 的 | `cargo test -p browser --lib frame_tree::` |
 
 ## 做過的檢查
@@ -82,3 +83,15 @@ macOS、Apple M4，2026-11-20。
 - 文件：`docs/architecture.md` 的 `browser`、`crates/shell/README.md` 的自動化的 pipe、`docs/limitations.md`（第二個 machopo 拒絕啟動；環境沒說使用者的資料夾時視窗的 profile 在記憶體）。
 - 改到視窗那一層（`window.rs`、`browser_window.rs`），跑了 `test.py scenarios --window`：72 次，0 個失敗（`caret` 照舊跳過），pipe 的 `--window` 也通過；家目錄底下沒有建出 profile 的資料夾（自動化在記憶體）。
 - 跑過的檢查：`cargo test -p browser -p shell`（906 個）、`cargo clippy -p browser -p shell --all-targets -- -D warnings`；`sanity.py` 的 `deps`、`unsafe`、`tests`、`numerics`、`boundary`、`docs`。
+
+### 2b：磁碟上的儲存
+
+macOS、Apple M4，2026-11-20。
+
+- 決定了第 7 條（SQLite，`rusqlite`）和第 8 條（新的 crate `sql`）。比了 `rusqlite` 0.43（release 第一次編 12.4 秒、多約 1.9 MB、一個 transaction 1 萬筆 32 ms）和 `redb` 5.0（4.9 秒、約 1.1 MB、105 ms）；讀了 Chromium 的 `DomStorageDatabase`（LevelDB 搬到 SQLite 的遷移）、`LocalStorageImpl`（成批寫：5 秒、每小時 60 次）、`SQLitePersistentCookieStore` 和 `sql::Database`。
+- 改了第 7 條：起草時寫了 WAL 模式，但 Chromium 的 `sql::Database` 的預設是 exclusive locking（編譯時就設、有 `static_assert`）、`journal_mode=TRUNCATE`、`synchronous` 用 SQLite 的預設，註解說 WAL 還在開發中；照這組改了，原文留下改的理由。
+- 新的 crate `sql`：`Database`（`open`、`migrate`、`version`、`connection`）、`Error`（`Sqlite`、`Newer`、`Io`），re-export `rusqlite`。被鎖住時不等（`rusqlite` 預設等 5 秒；SQLite 的 C API 和 Chromium 不等）。還沒有人用它。
+- 新的測試：`crates/sql/tests/it/database.rs` 的 6 個。
+- mutation test（`mutants-2b.toml`）9 個，8 個抓到。第一次的 spec 有一個 mutant 的原文和 rustfmt 排的對不上、一個編不過，改了重跑；「被鎖住時等」原本只會變慢，測試加上第二條連線 1 秒內就失敗。沒抓到的「打開時不讀 schema」是等價的：在它之前的 `PRAGMA journal_mode` 準備時就讀了 schema（補了一個 schema 壞掉的檔案的測試確認打開時就換掉；記進 `docs/test-gaps.md` 的「等價、不用處理的 mutation」）。
+- 文件：`crates/sql/README.md`、`docs/architecture.md` 的 crate 表。
+- 跑過的檢查：`cargo test -p sql`、`cargo clippy -p sql --all-targets -- -D warnings`；`sanity.py` 的 `deps`、`unsafe`、`tests`、`numerics`、`docs`。

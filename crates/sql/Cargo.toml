@@ -1,0 +1,19 @@
+[package]
+name = "sql"
+description = "The profile's databases (Chromium's //sql): SQLite, opened in a profile's folder or in memory, its schema's version kept."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# No doc examples: skip rustdoc's pass in `cargo test`.
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+rusqlite.workspace = true
+tracing.workspace = true
