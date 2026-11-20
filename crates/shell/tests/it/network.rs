@@ -264,6 +264,44 @@ fn a_stylesheet_blocks_rendering_until_it_loads() {
     assert_eq!(frame.frames_drawn, 1);
 }
 
+/// A document isn't drawn till its parser has made its body (Blink's
+/// `Document::ShouldScheduleLayout`): its head, which came a while before
+/// the rest, isn't drawn alone.
+#[test]
+fn a_document_is_drawn_once_it_has_a_body() {
+    let head = format!(
+        "<!DOCTYPE html><style>html {{ background: red }}</style><!--{}-->",
+        "x".repeat(2000)
+    );
+    let page = format!("{head}<body><style>html {{ background: green }}</style>");
+    let server = server(&[(
+        "/",
+        Route::ok("text/html", page).with_pause_in_body(head.len(), Duration::from_millis(500)),
+    )]);
+    let frame = render(&server.url("/"));
+    assert_eq!(pixel(&frame, 10, 10), GREEN);
+    assert_eq!(frame.frames_drawn, 1, "nothing drawn before the body");
+}
+
+/// Once it has its body, a document is drawn while the rest still comes:
+/// a frame shows what came before the pause.
+#[test]
+fn a_document_is_drawn_before_its_body_has_all_come() {
+    let start = format!(
+        "<!DOCTYPE html><style>html, body {{ margin: 0 }}</style><body>\
+         <div style='width: 20px; height: 20px; background: green'></div><!--{}-->",
+        "x".repeat(2000)
+    );
+    let page = format!("{start}<div style='width: 20px; height: 20px; background: green'></div>");
+    let server = server(&[(
+        "/",
+        Route::ok("text/html", page).with_pause_in_body(start.len(), Duration::from_millis(500)),
+    )]);
+    let frame = render(&server.url("/"));
+    assert_eq!(pixel(&frame, 10, 30), GREEN);
+    assert!(frame.frames_drawn >= 2, "drawn {} times", frame.frames_drawn);
+}
+
 /// The parser's scripts wait for the stylesheets the parser's `<link>`s
 /// load, of media that match (HTML's "a style sheet that is blocking
 /// scripts"): an inline one (the current script as it runs) sees `a.css`,

@@ -45,7 +45,9 @@ new PerformanceMark('made');
         .events
         .iter()
         .filter(|event| event.categories.iter().any(|c| c == "blink.user_timing"))
-        .partition(|event| NAVIGATION.contains(&event.name.as_str()));
+        .partition(|event| {
+            NAVIGATION.contains(&event.name.as_str()) || event.name == "responseEnd"
+        });
     // The page's document's: the last of each, in order, each an instant
     // on the thread's track, at their times.
     let start = navigation
@@ -53,8 +55,25 @@ new PerformanceMark('made');
         .rposition(|event| event.name == "navigationStart")
         .expect("the document's navigationStart");
     let navigation = &navigation[start..];
+    // The body's end, told once it has all come (Chrome's too), at when
+    // it came: after the fetch started, before the document is
+    // interactive, before its commit or after.
+    let (response_end, navigation): (Vec<&TrackEvent>, Vec<&TrackEvent>) = navigation
+        .iter()
+        .partition(|event| event.name == "responseEnd");
     let names: Vec<&str> = navigation.iter().map(|event| event.name.as_str()).collect();
     assert_eq!(names, NAVIGATION);
+    let time = |name: &str| {
+        navigation
+            .iter()
+            .find(|event| event.name == name)
+            .expect("the mark")
+            .time
+    };
+    let [response_end] = response_end[..] else {
+        panic!("{} responseEnd marks", response_end.len());
+    };
+    assert!(time("fetchStart") <= response_end.time && response_end.time <= time("domInteractive"));
     for pair in navigation.windows(2) {
         assert!(
             pair[0].time <= pair[1].time,
@@ -111,11 +130,10 @@ new PerformanceMark('made');
 }
 
 /// Navigation Timing's marks of a document, in the order they come
-/// (Blink's `DocumentLoadTiming` and `DocumentTiming`).
-const NAVIGATION: [&str; 11] = [
+/// (Blink's `DocumentLoadTiming` and `DocumentTiming`), and `responseEnd`.
+const NAVIGATION: [&str; 10] = [
     "navigationStart",
     "fetchStart",
-    "responseEnd",
     "commitNavigationEnd",
     "domLoading",
     "domInteractive",

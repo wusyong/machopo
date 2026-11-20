@@ -502,6 +502,29 @@ impl<'gc> Cx<'_, 'gc> {
         window.navigation_timing.set(Some(Box::new(timing)));
     }
 
+    /// `window`'s document's body has all come: its response ended at
+    /// `response_end` (since its time origin), `encoded_body_size` bytes
+    /// over the network that were `decoded_body_size` once their
+    /// `Content-Encoding` was undone (Blink's `DocumentLoader::
+    /// BodyLoadingFinished`). Nothing if its host gave it no navigation
+    /// timing.
+    pub fn navigation_body_ended(
+        &self,
+        window: Gc<'gc, Window>,
+        response_end: f64,
+        encoded_body_size: u64,
+        decoded_body_size: u64,
+    ) {
+        let cell = &*window.into_ref().navigation_timing;
+        let Some(mut timing) = cell.take() else {
+            return;
+        };
+        timing.response_end = Some(response_end);
+        timing.encoded_body_size = encoded_body_size;
+        timing.decoded_body_size = decoded_body_size;
+        cell.set(Some(timing));
+    }
+
     /// The navigation timing of `context`'s global's document, if it has
     /// one (a window's, its host gave it one).
     pub fn context_navigation_timing(

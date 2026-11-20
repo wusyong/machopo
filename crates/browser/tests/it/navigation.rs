@@ -6115,13 +6115,108 @@ mod body {
         assert_eq!(title_of(&server.url("/")), "short");
     }
 
-    /// Its load ends after it commits: Navigation Timing has the body's
-    /// size and when it ended, after the pause in it.
+    /// A page that times its scripts, the second after a pause of
+    /// `PAUSE_MS` in its body, and `DOMContentLoaded`: whether each of the
+    /// two came at least half as long after the first script ran (the
+    /// rest for a renderer slow to get to the first).
+    const TIMED: (&str, &str) = (
+        "<script>window.first = performance.now(); \
+         addEventListener('DOMContentLoaded', () => window.loaded = performance.now());</script>",
+        "<script>window.second = performance.now();</script>\
+         <script>onload = () => document.title = [second - first >= 500, \
+         loaded - first >= 500].join();</script>",
+    );
+    const PAUSE_MS: u64 = 1000;
+
+    /// A page `TIMED`, its body paused before its second script.
+    fn timed_page() -> Route {
+        let (before, after) = TIMED;
+        let start = page_ending(2000, before);
+        let at = start.len();
+        Route::ok("text/html", format!("{start}{after}"))
+            .with_pause_in_body(at, Duration::from_millis(PAUSE_MS))
+    }
+
+    /// What came of a body is parsed before the rest comes: its first
+    /// script runs then, `DOMContentLoaded` waits for the end.
+    ///
+    /// The tab's renderer has started first (its first document): a
+    /// commit to one starting waits for it, which the pause may not
+    /// outlast.
+    #[test]
+    fn a_body_is_parsed_as_it_comes() {
+        let server = server(&[
+            ("/warm", Route::ok("text/html", "<title>warm</title>")),
+            ("/", timed_page()),
+        ]);
+        let (mut web_contents, host_rx) = tab();
+        web_contents.navigate(server.url("/warm"));
+        next_commit(&mut web_contents, &host_rx);
+        web_contents.navigate(server.url("/"));
+        let title = loop {
+            let msg = next_message(&mut web_contents, &host_rx, TIMEOUT).expect("renderer answers");
+            web_contents.on_renderer_message(&msg);
+            if let RendererHostMsg::UpdateTitle(title) = msg
+                && !title.is_empty()
+                && title != "warm"
+            {
+                break title;
+            }
+        };
+        web_contents.shutdown();
+        assert_eq!(title, "true,true");
+    }
+
+    /// A child frame's too.
+    #[test]
+    fn a_child_frames_body_is_parsed_as_it_comes() {
+        let server = server(&[
+            (
+                "/",
+                Route::ok(
+                    "text/html",
+                    "<iframe src=/child onload='document.title = this.contentDocument.title'></iframe>",
+                ),
+            ),
+            ("/child", timed_page()),
+        ]);
+        assert_eq!(title_of(&server.url("/")), "true,true");
+    }
+
+    /// While the parser waits for a script, the body is read on (past what
+    /// its pipe holds): it has all come before the script runs.
+    #[test]
+    fn a_body_is_read_while_its_parser_waits_for_a_script() {
+        let page = page_ending(
+            0,
+            &format!(
+                "<script src=/slow.js></script><!--{}--><script>onload = () => \
+                 document.title = performance.getEntriesByType('navigation')[0].responseEnd \
+                 < ran;</script>",
+                "x".repeat(2 << 20)
+            ),
+        );
+        let server = server(&[
+            ("/", Route::ok("text/html", page)),
+            (
+                "/slow.js",
+                Route::ok("text/javascript", "window.ran = performance.now();")
+                    .with_delay(Duration::from_millis(1000)),
+            ),
+        ]);
+        assert_eq!(title_of(&server.url("/")), "true");
+    }
+
+    /// Its load ends after it commits: by its `load`, Navigation Timing
+    /// has the body's size and when it ended, after the pause in it (a
+    /// script at its end may run before: as in Chrome, they are 0 till
+    /// the end comes).
     #[test]
     fn the_load_ends_after_the_commit() {
-        let script = "<script>let e = performance.getEntriesByType('navigation')[0]; \
+        let script = "<script>onload = () => { \
+             let e = performance.getEntriesByType('navigation')[0]; \
              document.title = [e.encodedBodySize, e.decodedBodySize, \
-             e.responseEnd - e.responseStart >= 400].join();</script>";
+             e.responseEnd - e.responseStart >= 400].join(); };</script>";
         let body = page_ending(3000, script);
         let length = body.len();
         let server = server(&[(
@@ -6134,10 +6229,11 @@ mod body {
         );
     }
 
-    /// One that another replaced while its body still came commits
-    /// nothing, and the one after it does.
+    /// One that another replaced while its body still came parses no
+    /// more of it: it committed with its body's start (its title, at its
+    /// end, never comes), then the one after it commits.
     #[test]
-    fn a_navigation_replaced_while_its_body_comes_commits_nothing() {
+    fn a_navigation_replaced_while_its_body_comes_parses_no_more() {
         let server = server(&[
             (
                 "/a",
@@ -6151,32 +6247,48 @@ mod body {
         // Its response, and then its body's start: it commits.
         let a = held_response(&mut web_contents, &host_rx);
         web_contents.on_navigation_event(a);
+        let (_, committed, title) = next_commit(&mut web_contents, &host_rx);
+        assert_eq!(
+            (committed.as_str(), title.as_str()),
+            (server.url("/a").as_str(), "")
+        );
         web_contents.navigate(server.url("/b"));
         let (_, committed, title) = next_commit(&mut web_contents, &host_rx);
         assert_eq!(
             (committed.as_str(), title.as_str()),
             (server.url("/b").as_str(), "b")
         );
-        // Nothing else commits, though `/a`'s body would have come by
-        // then.
-        let until = std::time::Instant::now() + Duration::from_secs(3);
+        // Nothing else commits, nor is `/a`'s title parsed, though its
+        // body would have come by then.
+        nothing_more_of_a(&mut web_contents, &host_rx, Duration::from_secs(3));
+        web_contents.shutdown();
+    }
+
+    /// Over `time`, the renderer commits nothing more, and sets no title
+    /// `a`.
+    fn nothing_more_of_a(
+        web_contents: &mut WebContents,
+        host_rx: &Receiver<ContentsEvent>,
+        time: Duration,
+    ) {
+        let until = std::time::Instant::now() + time;
         while let Some(left) = until.checked_duration_since(std::time::Instant::now()) {
-            let Ok(msg) = next_message(&mut web_contents, &host_rx, left) else {
+            let Ok(msg) = next_message(web_contents, host_rx, left) else {
                 break;
             };
             web_contents.on_renderer_message(&msg);
             assert!(
-                !matches!(msg, RendererHostMsg::DidCommitNavigation { .. }),
+                !matches!(&msg, RendererHostMsg::DidCommitNavigation { .. })
+                    && !matches!(&msg, RendererHostMsg::UpdateTitle(title) if title == "a"),
                 "{msg:?}"
             );
         }
-        web_contents.shutdown();
     }
 
     /// One that a page of the browser's own replaced while its body still
-    /// came commits nothing: the page commits at once.
+    /// came parses no more of it: the page commits at once after it.
     #[test]
-    fn a_navigation_replaced_by_a_page_while_its_body_comes_commits_nothing() {
+    fn a_navigation_replaced_by_a_page_while_its_body_comes_parses_no_more() {
         let server = server(&[(
             "/a",
             Route::ok("text/html", page_ending(4000, "<title>a</title>"))
@@ -6186,23 +6298,18 @@ mod body {
         web_contents.navigate(server.url("/a"));
         let a = held_response(&mut web_contents, &host_rx);
         web_contents.on_navigation_event(a);
+        let (_, committed, title) = next_commit(&mut web_contents, &host_rx);
+        assert_eq!(
+            (committed.as_str(), title.as_str()),
+            (server.url("/a").as_str(), "")
+        );
         web_contents.navigate("about:demo");
         let (_, committed, title) = next_commit(&mut web_contents, &host_rx);
         assert_eq!(
             (committed.as_str(), title.as_str()),
             ("about:demo", "machopo demo")
         );
-        let until = std::time::Instant::now() + Duration::from_secs(2);
-        while let Some(left) = until.checked_duration_since(std::time::Instant::now()) {
-            let Ok(msg) = next_message(&mut web_contents, &host_rx, left) else {
-                break;
-            };
-            web_contents.on_renderer_message(&msg);
-            assert!(
-                !matches!(msg, RendererHostMsg::DidCommitNavigation { .. }),
-                "{msg:?}"
-            );
-        }
+        nothing_more_of_a(&mut web_contents, &host_rx, Duration::from_secs(2));
         web_contents.shutdown();
     }
 

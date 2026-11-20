@@ -1930,7 +1930,7 @@ impl<'gc> Cx<'_, 'gc> {
 
     /// HTML's "the body element" of `document`: its `<html>` document
     /// element's first `<body>` or `<frameset>` child.
-    fn body(&self, document: NodeRef<'gc>) -> Option<NodeRef<'gc>> {
+    pub fn body(&self, document: NodeRef<'gc>) -> Option<NodeRef<'gc>> {
         let is_html = |node: NodeRef<'gc>, locals: &[NameId]| {
             self.element_name(node).is_some_and(|name| {
                 name.namespace == names::HTML_NAMESPACE && locals.contains(&name.local)

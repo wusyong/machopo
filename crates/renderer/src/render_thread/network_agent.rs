@@ -403,13 +403,33 @@ impl NetworkAgent {
         );
     }
 
-    /// The main frame's navigation `navigation_id` committed its document,
-    /// `body`, of `mime_type`, its load as `loaded`: the rest of the request
-    /// the browser told of (`Network.dataReceived`, then `loadingFinished`,
-    /// or `loadingFailed` if its body stopped short, `canceled` if its load
-    /// was stopped, as Blink's `probe::DidFailLoading`; its id is the
-    /// navigation's), and each session keeps the body.
-    pub(crate) fn did_commit_navigation(
+    /// `length` more bytes came of the body of the document navigation
+    /// `navigation_id` committed (Blink's `probe::DidReceiveData`; its id
+    /// is the navigation's). How many came over the network only its end
+    /// tells (`navigation_finished`'s `encodedDataLength`).
+    pub(crate) fn navigation_data_received(&self, navigation_id: u64, length: usize) {
+        let sessions: Vec<String> = self.sessions.borrow().keys().cloned().collect();
+        if sessions.is_empty() {
+            return;
+        }
+        self.tell(
+            &sessions,
+            "Network.dataReceived",
+            &json!({
+                "requestId": navigation_id.to_string(),
+                "timestamp": TimeTicks::now().as_secs_f64(),
+                "dataLength": length,
+                "encodedDataLength": 0,
+            }),
+        );
+    }
+
+    /// The body of the document navigation `navigation_id` committed has
+    /// all come, `body`, of `mime_type`, and its load ended as `loaded`
+    /// says: `Network.loadingFinished`, or `loadingFailed` if its body
+    /// stopped short, `canceled` if its load was stopped, as Blink's
+    /// `probe::DidFailLoading`; each session keeps the body.
+    pub(crate) fn navigation_finished(
         &self,
         navigation_id: u64,
         body: &Bytes,
@@ -426,18 +446,6 @@ impl NetworkAgent {
             |end| (end.completion_time, end.encoded_body_length),
         );
         let end = end.as_secs_f64();
-        if !body.is_empty() {
-            self.tell(
-                &sessions,
-                "Network.dataReceived",
-                &json!({
-                    "requestId": id,
-                    "timestamp": end,
-                    "dataLength": body.len(),
-                    "encodedDataLength": encoded_body_length,
-                }),
-            );
-        }
         match loaded.end.as_ref().and_then(|end| end.error.as_ref()) {
             Some(error) => self.tell(
                 &sessions,
@@ -936,9 +944,6 @@ mod tests {
         assert!(sent(&from)[0].1.get("error").is_some());
     }
 
-    /// Stacks are wanted once a session asks (`Network.setAttachDebugStack`),
-    /// which it can't before turning `Network` on, and no more once it
-    /// goes.
     /// A navigation's load, as far as its head, that ended as `error`
     /// says.
     fn navigation_load(error: Option<NetErrorCode>) -> NavigationLoad {
@@ -958,9 +963,9 @@ mod tests {
         }
     }
 
-    /// A navigation's document is told of once committed: what of its body
-    /// came, then its end, a failure if its body stopped short (a load
-    /// stopped's canceled), as Blink's `probe::DidFailLoading`.
+    /// A navigation's document is told of as its body comes: each piece,
+    /// then its end, a failure if its body stopped short (a load stopped's
+    /// canceled), as Blink's `probe::DidFailLoading`.
     #[test]
     fn a_navigations_end_is_told_as_it_was() {
         let (agent, from) = agent();
@@ -972,7 +977,8 @@ mod tests {
             (2, Some(NetErrorCode::ContentDecodingFailed)),
             (3, Some(NetErrorCode::Aborted)),
         ] {
-            agent.did_commit_navigation(id, &body, "text/html", &navigation_load(error));
+            agent.navigation_data_received(id, body.len());
+            agent.navigation_finished(id, &body, "text/html", &navigation_load(error));
         }
         let told: Vec<(String, Value)> = sent(&from)
             .into_iter()
@@ -1007,6 +1013,9 @@ mod tests {
         );
     }
 
+    /// Stacks are wanted once a session asks (`Network.setAttachDebugStack`),
+    /// which it can't before turning `Network` on, and no more once it
+    /// goes.
     #[test]
     fn stacks_are_wanted_while_a_session_asks() {
         let (agent, from) = agent();

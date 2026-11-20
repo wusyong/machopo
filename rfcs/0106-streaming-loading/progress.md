@@ -15,7 +15,9 @@
 | 2a：`CommitNavigation` 帶開頭和管道、Browser 收到 head 和開頭的 1024 bytes 就 commit、結束轉告 renderer；renderer 讀到結尾才 parse | 完成 | 2026-11-20 |
 | 2b：收到一半的錯誤（中止 parser）、取消、DevTools 和 Navigation Timing 的時機 | 完成 | 2026-11-20 |
 | 2c：第 2 階段的檢查和文件 | 完成 | 2026-11-20 |
-| 3：renderer 邊收邊 parse | 未開始 | |
+| 3a：renderer 收到 commit 就建文件、邊收邊 parse（文件拿著管道和解碼器、parser 等下一段、等 script 時照讀）、編碼照開頭、Navigation Timing 和 DevTools 的結束、有 `<body>` 才畫 | 完成 | 2026-11-20 |
+| 3b：parser 的時間預算（切片、超過預算或有輸入就讓出、進了 `<body>` 才讓出） | 未開始 | |
+| 3c：開頭 1024 bytes 的測試、`moving-between-documents/` 等 WPT 的預期結果、第 3 階段的檢查和文件 | 未開始 | |
 | 4：舊畫面的時限、檢查和文件 | 未開始 | |
 
 ## 驗收
@@ -28,6 +30,10 @@
 | Browser 提早 commit：其餘的 body 經過管道到 renderer（子 frame 也是、比管道的容量大的也是）、短的整份帶著、結束在 commit 之後到（Navigation Timing 的 body 大小和 `responseEnd`）、body 還在來時被另一個導覽或 `about:` 的頁取代的不 commit、只等 head 的導覽被取代時不 commit | `cargo test -p browser --test it body::`、`a_replaced_navigations_response_commits_nothing` |
 | body 收到一半停下：出錯的留下收到的部分、中止 parser（readyState 到 `interactive`、`complete`，沒有 `DOMContentLoaded` 和 `load`）、一開始就出錯的照樣 commit（不是錯誤頁）、載入照樣結束（`DidFinishLoad`）、子 frame 的不擋住 parent 的 `load`、停止載入停下 body 還在來的文件 | `cargo test -p browser --test it body::` |
 | DevTools：body 出錯的導覽只有一個 `loadingFailed`（renderer 的，在收到的資料之後）、被停下的帶 `canceled`；頁面的 log 有「Failed to load resource: net::…」 | `cargo test -p renderer --lib network_agent::`、`cargo test -p shell --test it stops_short` |
+| 邊收邊 parse：收到的部分在其餘的到之前就 parse（main frame 和子 frame）、`DOMContentLoaded` 等到結尾、parser 等 script 時照樣讀管道（比管道的容量大的也讀完）、一個 task 讀不完的下一個 task 接著讀、被取代的文件不再 parse 其餘的；`load` 時 Navigation Timing 有 body 的大小和 `responseEnd` | `cargo test -p browser --test it body::` |
+| 有 `<body>` 才畫：只有 `<head>` 的文件不畫、有了 body 之後 body 還沒收完也畫 | `cargo test -p shell --test it drawn` |
+| 解碼：字元切在兩段之間、BOM 自己一段、開頭結尾被切斷的字元照樣是 UTF-8、開頭之後的字元不改變編碼；XHTML 的 CDATA 標記切在兩段之間、純文字只有一個 `<pre>` | `cargo test -p renderer --lib encoding:: document::` |
+| DevTools 和 trace：每段一個 `dataReceived`、結束時 `loadingFinished`；被中止的文件的原文是收到的部分；trace 的 `responseEnd` 在 body 收完時、時間在 `fetchStart` 和 `domInteractive` 之間 | `cargo test -p renderer --lib network_agent::`、`cargo test -p shell --test it devtools trace::marks` |
 | `Content-Encoding` 一段一段解，一次給一個 byte 和整份一樣：gzip 的 header（選用的欄位）和 trailer（CRC、長度）、`deflate` 的 zlib 和 raw、brotli、截斷和之後多出來的 | `cargo test -p net --lib content_encoding::` |
 
 ## 做過的檢查
@@ -110,3 +116,18 @@ macOS、Apple M4，2026-11-20。
 - `cargo clippy --workspace --all-targets -- -D warnings` 抓到 `shell` 的 `headless` 的 `Event`：帶著 `ContentsEvent` 的那一種比其他的大（`large_enum_variant`，導覽的 head 在裡面）。照視窗那一層的 `FromContents` 改成 `Box<ContentsEvent>`；改了之後沒有警告，`cargo test -p shell` 通過（718 個）。
 - 文件：grep 過 `docs/` 和 crate 的 README 裡導覽的 body 的描述。`docs/limitations.md` 有兩處還寫著 body 一次收完、要收完才 commit，改成現在的行為：body 經過管道到 renderer，renderer 收齊了才 parse、建立文件。`docs/architecture.md` 和其他的描述在 2a、2b 改好了。畫面上看不出差別，沒有新的情境。
 - 跑過的檢查：`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。
+
+### 3a：renderer 收到 commit 就建文件、邊收邊 parse
+
+macOS、Apple M4，2026-11-20。
+
+- 決定了第 16 條（其餘的 body 由文件擁有）和第 17 條（parser 等 script 時照樣讀管道）。對照了 Blink：`NavigationBodyLoader::ReadFromDataPipe` 一個 task 最多讀 `kMaxNumConsumedBytesInTask`（1 MiB），`DocumentLoader::BodyDataReceivedImpl` 每段 `probe::DidReceiveData`，`BodyLoadingFinished` 才設 `responseEnd`。
+- renderer：`body_loader` 換成 `document_body`。收到 `CommitNavigation` 就建文件，`DocumentBody`（管道、`DocumentDecoder`、`MarkupFilter`、load、收到的 bytes 和文字）放在 `FrameDocument` 裡。每段解碼之後放進 parser 輸入的尾端，parser 讀完收到的就等下一段；管道結束、結束的消息也到了才 `body_ended`：原文、Navigation Timing 的 `responseEnd` 和 body 的大小（新的 `ScriptEngine::navigation_body_ended`、`dom` 的 `Cx::navigation_body_ended`）、DevTools 的 `loadingFinished` 或 `loadingFailed`、log、trace 的 `responseEnd`、`aborted`。DevTools 的 `dataReceived` 每段一次（`encodedDataLength` 是 0）。`BodyLoaders`（`wait`、`forget_before`）拿掉。
+- 解碼：`decode_document` 換成 `DocumentDecoder`（照開頭決定編碼，之後用 encoding_rs 的 `Decoder` 一段一段解）；`markup_for` 換成 `MarkupFilter`（XHTML 的 CDATA 標記切在兩段之間時留著等下一段）。
+- 第一次畫：`FrameDocument::render_blocked` 加上「parser 還在、還沒做出 body」（Blink 的 `ShouldScheduleLayout`）；`dom` 的 `Cx::body` 改成 `pub`。子 frame 在 commit 和 parser 結束時更新 view 的 blocked。
+- 改了的測試：2a 的兩個「被取代的導覽不 commit」改成「commit 之後被取代的不再 parse 其餘的」（renderer 現在收到開頭就 commit；先等 `/a` commit 再導覽，原本 `navigate` 有時趕在 Browser 讀到開頭之前，`/a` 就不 commit）；`the_load_ends_after_the_commit` 改在 `load` 讀（body 結尾的 script 跑的時候結束還沒到，和 Chrome 一樣是 0）；`shell` 的 `devtools_network` 的 `dataReceived` 的 `encodedDataLength` 是 0；`trace` 的 `responseEnd` 只看時間在 `fetchStart` 和 `domInteractive` 之間（現在在 body 收完時發，順序看結束什麼時候到）。
+- 新的測試：`browser` 的 `body` 模組 3 個（main frame 和子 frame 邊收邊 parse、`DOMContentLoaded` 等到結尾；parser 等 script 時照樣讀完 2 MiB 的 body）；`shell` 3 個（只有 `<head>` 的文件不畫、有 body 之後 body 還沒收完也畫、被中止的文件的原文）；`renderer` 的單元測試 2 個（解碼一段一段來、XHTML 的 CDATA 標記）。main frame 的那一個先導覽到暖身的頁：新分頁的 renderer 還在啟動時，commit 等它，整份 body 在那之前就到了（第一個 script 在 514 ms 才跑）。
+- mutation test（`mutants-3a.toml`）19 個，17 個抓到。沒抓到的：子 frame 在 commit 時的 `update_child_blocking`（headless 看不出子 frame 中間畫了什麼，記進 `docs/test-gaps.md` 的「能補、還沒補的測試空缺」）；body 收完時告訴 `Page` agent（`tell_frames` 每個 task 之後和每則 DevTools 的訊息之前都跑，文件還在收時原文取自 body：那一行是多餘的，拿掉了，mutant 也拿掉；之後補的被中止的文件的原文的測試留著）。
+- `docs/test-gaps.md`：拿掉 2b 記的子 frame 的舊 commit 換回去的空缺（renderer 收到就 commit，沒有等著的舊 commit 了），`forget_before` 和子 frame 的舊 commit 的等價改寫成只剩子 frame 的那個判斷；1024 bytes 的開頭那一列改成看得出來、還沒有測試。
+- `test.py wpt navigation-timing/ html/browsers/browsing-the-web/navigating-across-documents/ html/semantics/scripting-1/the-script-element/ html/dom/documents/dom-tree-accessors/ html/syntax/`：沒有失敗，25 份意外通過：1d 記下的 `navigation-timing/` 那 4 份；`moving-between-documents/` 的 18 份（`before-prepare-*-success-empty-src-*` 四份和 move-back 的那些，原本因為一次 parse 而失敗或不穩定）；`replace-before-load/` 的 `iframe-src.html`、`history-pushstate.html`；`nav2-test-response-end-and-duration-before-during-and-after-load-event.html`（`responseEnd` 在 `load` 之前是 0）。預期結果還沒更新。
+- 跑過的檢查：`cargo test -p browser -p renderer -p shell -p dom -p dom_api -p dom_js -p dom_wasm`（2095 個）、`cargo check --workspace --all-targets`；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。

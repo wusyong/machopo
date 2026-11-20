@@ -91,7 +91,9 @@ pub(crate) struct DocumentLoad<'a> {
     /// Its final URL, after the redirects.
     pub(crate) url: &'a Url,
     pub(crate) timing: Option<LoadTiming>,
-    pub(crate) response_end: TimeTicks,
+    /// When its body ended, once it has all come (`responseEnd` is none
+    /// till then).
+    pub(crate) response_end: Option<TimeTicks>,
     pub(crate) redirects: &'a [RedirectHop],
     /// Whether its request's referrer policy is `no-referrer`: its origin
     /// then serializes as `null` (Fetch's "serializing a request origin"),
@@ -166,11 +168,13 @@ pub(crate) fn network_timing(
     } else {
         fetch_start
     });
-    timing.response_start = Some(
-        load.timing
-            .map_or_else(|| at(load.response_end), |t| at(t.receive_headers_end)),
-    );
-    timing.response_end = Some(at(load.response_end));
+    // With no times of its load (not over the network), its head came as
+    // it ended, or as it commits now.
+    timing.response_start = Some(load.timing.map_or_else(
+        || at(load.response_end.unwrap_or_else(TimeTicks::now)),
+        |t| at(t.receive_headers_end),
+    ));
+    timing.response_end = load.response_end.map(&at);
     let destination = load.url.origin();
     let same_origin =
         |hop: &RedirectHop| Url::parse(&hop.url).is_ok_and(|url| url.origin() == destination);
@@ -328,7 +332,7 @@ mod tests {
             let load = DocumentLoad {
                 url: &url,
                 timing: None,
-                response_end: base,
+                response_end: Some(base),
                 redirects: &hops,
                 no_referrer: false,
                 protocol: "h2",
@@ -399,7 +403,7 @@ mod tests {
         let load = |redirects| DocumentLoad {
             url: &url,
             timing: Some(load_timing(30, true, true, 40, 50)),
-            response_end: tick(base, 50),
+            response_end: Some(tick(base, 50)),
             redirects,
             no_referrer: false,
             protocol: "h2",

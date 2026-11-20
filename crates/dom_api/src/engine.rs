@@ -124,6 +124,18 @@ pub trait ScriptEngine: ParserHost {
     /// its events fire. Nothing for a frame that went.
     fn set_navigation_timing(&mut self, frame: crate::FrameId, timing: dom::NavigationTiming);
 
+    /// `frame`'s document's body has all come, after it committed: its
+    /// navigation timing's `responseEnd` (since its window's time origin)
+    /// and body sizes, which only the end tells (`Cx::
+    /// navigation_body_ended`). Nothing for a frame that went.
+    fn navigation_body_ended(
+        &mut self,
+        frame: crate::FrameId,
+        response_end: f64,
+        encoded_body_size: u64,
+        decoded_body_size: u64,
+    );
+
     /// `frame`'s new active document: a new realm whose global is a new
     /// window of a new HTML document at `url` (it replaces the one before;
     /// a child frame's is its iframe's content document), its time origin

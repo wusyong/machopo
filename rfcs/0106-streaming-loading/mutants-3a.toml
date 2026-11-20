@@ -1,0 +1,151 @@
+# Step 3a: the renderer commits a document as its body starts and parses
+# the rest as it comes: the document owns its body (pipe, decoder), the
+# parser waits for what is still to come, and the body is read while the
+# parser waits for a script; the encoding is the start's; Navigation
+# Timing's end and sizes, DevTools' data and the trace's `responseEnd`
+# come at the end; a document isn't drawn till its parser has made its
+# body.
+test = ["sh", "-c", "cargo test -q -p browser --test it body:: && cargo test -q -p renderer --lib -- encoding:: document:: network_agent:: && cargo test -q -p shell --test it -- drawn devtools trace::marks"]
+timeout = 1800
+
+[[mutant]]
+name = "the parser finishes when what came is parsed"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                    if let Some(next) = self.doc_mut(frame)
+                        && next.body.is_some()
+                    {'''
+to = '''                    if let Some(next) = self.doc_mut(frame)
+                        && false
+                    {'''
+
+[[mutant]]
+name = "what the pipe has isn't handed to the parser"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                    read = read.saturating_add(length);
+                    self.body_data(frame, length, &markup);'''
+to = '''                    read = read.saturating_add(length);
+                    self.body_data(frame, length, "");'''
+
+[[mutant]]
+name = "the pipe isn't watched"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                        pipe.watch(scheduler.body_waker(token, navigation_id));'''
+to = '''                        let _ = (pipe, token);'''
+
+[[mutant]]
+name = "what is past a task's bytes isn't read in another"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                if let Some(token) = token {
+                    (scheduler.body_waker(token, navigation_id))();
+                }'''
+to = '''                let _ = token;'''
+
+[[mutant]]
+name = "the body isn't read while the parser waits for a script"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            let navigation_id = next.navigation_id;
+            let Some(body) = &mut next.body else {
+                break;
+            };'''
+to = '''            let navigation_id = next.navigation_id;
+            if next.blocking_script.is_some() {
+                break;
+            }
+            let Some(body) = &mut next.body else {
+                break;
+            };'''
+
+[[mutant]]
+name = "the load's end doesn't end the body"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            body.completed(status);'''
+to = '''            let _ = status;'''
+
+[[mutant]]
+name = "the timing has no end"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            engine.navigation_body_ended(
+                frame,
+                response_end - time_origin,
+                end.encoded_body_length,
+                decoded,
+            );'''
+to = '''            let _ = (response_end, time_origin, decoded);'''
+
+[[mutant]]
+name = "the trace has no responseEnd"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                mark = "responseEnd",'''
+to = '''                mark = "responseEnded",'''
+
+[[mutant]]
+name = "an error at the end doesn't abort the parser"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        next.aborted = loaded.end.as_ref().is_some_and(|end| end.error.is_some());'''
+to = '''        next.aborted = false;'''
+
+[[mutant]]
+name = "DevTools doesn't hear the pieces"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        if loaded && length > 0 {'''
+to = '''        if loaded && length > usize::MAX - 1 {'''
+
+[[mutant]]
+name = "DevTools doesn't hear the end"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        self.network_agent
+            .navigation_finished(navigation_id, &finished.bytes, &mime_type, &loaded);'''
+to = '''        let _ = &mime_type;'''
+
+[[mutant]]
+name = "a document is drawn before its body"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            || (self.parser.is_some() && !self.body_parsed)'''
+to = ''''''
+
+[[mutant]]
+name = "a document isn't drawn till parsed"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        if let Some(next) = self.doc_mut(frame) {
+            next.body_parsed = true;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a start cut in a character isn't UTF-8"
+file = "crates/renderer/src/encoding.rs"
+from = '''        Err(error) => more && error.error_len().is_none(),'''
+to = '''        Err(_) => false,'''
+
+[[mutant]]
+name = "a character cut between pieces isn't held"
+file = "crates/renderer/src/encoding.rs"
+from = '''            let (result, read, _) = self.decoder.decode_to_string(rest, &mut text, last);'''
+to = '''            let (result, read, _) = self.decoder.decode_to_string(rest, &mut text, true);'''
+
+[[mutant]]
+name = "a BOM in pieces isn't skipped"
+file = "crates/renderer/src/encoding.rs"
+from = '''        self.bom = self.bom.saturating_sub(skip);'''
+to = '''        self.bom = 0;'''
+
+[[mutant]]
+name = "a CDATA marker cut between pieces stays"
+file = "crates/renderer/src/document.rs"
+from = '''                if !last {
+                    let keep = marker_start_at_end(&markup);'''
+to = '''                if false {
+                    let keep = marker_start_at_end(&markup);'''
+
+[[mutant]]
+name = "plain text has a pre each piece"
+file = "crates/renderer/src/document.rs"
+from = '''                if std::mem::replace(started, true) {'''
+to = '''                if false {'''
+
+[[mutant]]
+name = "a child frame's document is drawn before its body"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        // Not rendered till its parser has made its body.
+        self.update_child_blocking(frame);'''
+to = ''''''

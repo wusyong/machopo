@@ -27,7 +27,7 @@ use crate::navigation_timing::NavigationTiming;
 use crate::pending_user_input::{Pending, PendingUserInput};
 use crate::task_queue::{MainThreadScheduler, MainThreadTask, RendererReceiver, TaskQueues};
 
-mod body_loader;
+mod document_body;
 mod css_agent;
 mod devtools;
 mod documents;
@@ -336,9 +336,6 @@ struct RenderThread {
     /// the compositor and DevTools ask of it, which script paused takes some
     /// of too.
     scheduler: Arc<MainThreadScheduler>,
-    /// The documents the browser sent to commit whose bodies are still
-    /// coming.
-    body_loaders: body_loader::BodyLoaders,
     /// The DOM's document committed (`render_thread::next`): before
     /// the engine, as fields drop in order and its roots go before their
     /// heap.
@@ -497,7 +494,6 @@ impl RenderThread {
             css_refetches: std::collections::HashMap::new(),
             overlay_agent,
             scheduler,
-            body_loaders: body_loader::BodyLoaders::default(),
             engine: None,
             engine_is_wasm: false,
             images: std::collections::HashMap::new(),
@@ -669,10 +665,7 @@ impl RenderThread {
                 frame,
                 navigation_id,
             } => {
-                if let Some(loader) = self.body_loaders.get_mut(frame, navigation_id) {
-                    loader.read();
-                }
-                self.commit_if_ready(frame, navigation_id);
+                self.read_body_of(frame, navigation_id);
                 true
             }
             MainThreadTask::DevTools(queued) => {
@@ -782,7 +775,6 @@ impl RenderThread {
         &self,
         url: &str,
         mime_type: &str,
-        decoded_body_size: usize,
         loaded: Option<(&protocol::renderer::NavigationLoad, bool)>,
         navigation_type: protocol::renderer::NavigationTimingType,
         time_origin: f64,
@@ -793,18 +785,17 @@ impl RenderThread {
             |(loaded, no_referrer)| crate::navigation_timing::DocumentLoad {
                 url: &url,
                 timing: loaded.timing,
-                response_end: loaded
-                    .end
-                    .as_ref()
-                    .map_or_else(ipc::TimeTicks::now, |end| end.completion_time),
+                // The body's end and sizes come once it has all come
+                // (`body_ended`).
+                response_end: None,
                 redirects: &loaded.redirects,
                 no_referrer,
                 protocol: &loaded.protocol,
                 status: loaded.status,
                 mime_type,
                 content_encoding: loaded.content_encoding.as_deref(),
-                encoded_body_size: loaded.end.as_ref().map_or(0, |end| end.encoded_body_length),
-                decoded_body_size: u64::try_from(decoded_body_size).unwrap_or(u64::MAX),
+                encoded_body_size: 0,
+                decoded_body_size: 0,
             },
         );
         let navigation_type = match navigation_type {
@@ -840,14 +831,15 @@ impl RenderThread {
         timing
     }
 
-    /// Commits `commit`'s document with its whole `body`
-    /// (`RenderFrameImpl::CommitNavigation`, once its body has come).
+    /// Commits `commit`'s document (`RenderFrameImpl::CommitNavigation`):
+    /// it is parsed as its `body` comes.
     fn commit_navigation_body(
         &mut self,
-        commit: body_loader::NavigationCommit,
-        body: bytes::Bytes,
+        commit: document_body::NavigationCommit,
+        start: bytes::Bytes,
+        pipe: Option<ipc::data_pipe::Consumer>,
     ) {
-        let body_loader::NavigationCommit {
+        let document_body::NavigationCommit {
             frame,
             navigation_id,
             begin_id,
@@ -864,8 +856,6 @@ impl RenderThread {
         let time_origin = self
             .clock
             .before_now(ipc::TimeTicks::now().saturating_since(navigation_start));
-        // The log names the document by it.
-        let loaded_url = url.clone();
         // An error page's is a URL of no origin's, the browser still
         // hearing of the one that failed.
         let document_url = if error_page {
@@ -874,21 +864,25 @@ impl RenderThread {
             url.clone()
         };
         let main_frame = Some(frame) == self.devtools_main_frame_token;
-        // Its body stopped short: what came is parsed, and its parser
-        // aborted then.
-        let aborted = loaded
-            .as_ref()
-            .and_then(|loaded| loaded.end.as_ref())
-            .is_some_and(|end| end.error.is_some());
         let no_referrer = !main_frame && self.child_no_referrer_of(frame, begin_id);
         let timing = self.commit_timing(
             &document_url,
             &mime_type,
-            body.len(),
             loaded.as_deref().map(|loaded| (loaded, no_referrer)),
             navigation_type,
             time_origin,
         );
+        // The log names the document by it.
+        let status = loaded
+            .as_ref()
+            .map(|loaded| (loaded.status, loaded.status_text.clone()));
+        let body = document_body::NavigationBody {
+            start,
+            pipe,
+            loaded,
+            url: url.clone(),
+        };
+        let loaded_url = url.clone();
         let committed = if main_frame {
             let origin_source = begin_id
                 .and_then(|id| self.main_origin_source.take_if(|(asked, _)| *asked == id))
@@ -901,11 +895,10 @@ impl RenderThread {
                 &mime_type,
                 charset.as_deref(),
                 content_language.as_deref(),
-                &body,
+                body,
                 &history,
                 time_origin,
                 timing,
-                aborted,
             )
         } else {
             let Ok(document_url) = Url::parse(&document_url) else {
@@ -918,7 +911,7 @@ impl RenderThread {
                     url: document_url,
                     mime_type: &mime_type,
                     charset: charset.as_deref(),
-                    body: &body,
+                    body,
                 },
                 documents::ChildCommit {
                     time_origin,
@@ -929,42 +922,18 @@ impl RenderThread {
                     url,
                     origin_source: None,
                     history,
-                    aborted,
                 },
             )
         };
-        // The rest of the request the browser told DevTools of, now
-        // that its document is here.
-        if committed && let Some(loaded) = loaded {
-            self.network_agent
-                .did_commit_navigation(navigation_id, &body, &mime_type, &loaded);
-            if loaded.status >= 400 {
-                self.log_agent.add(log_agent::LogEntry::network(
-                    status_message(loaded.status, &loaded.status_text),
-                    loaded_url.clone(),
-                    navigation_id.to_string(),
-                ));
-            }
-            // A body that stopped short (Blink's `FrameConsole::
-            // DidFailLoading`; a load stopped isn't told).
-            if let Some(error) = loaded.end.as_ref().and_then(|end| end.error.as_ref())
-                && error.code != protocol::network::NetErrorCode::Aborted
-            {
-                self.log_agent.add(log_agent::LogEntry::network(
-                    format!("Failed to load resource: net::{}", error.code.name()),
-                    loaded_url,
-                    navigation_id.to_string(),
-                ));
-            }
-        }
-    }
-
-    /// The document navigation `navigation_id` sent `frame` commits if its
-    /// body is all in and its load has ended.
-    fn commit_if_ready(&mut self, frame: protocol::FrameToken, navigation_id: u64) {
-        if let Some(loader) = self.body_loaders.take_ready(frame, navigation_id) {
-            let (commit, body) = loader.finish();
-            self.commit_navigation_body(commit, body);
+        if committed
+            && let Some((status, status_text)) = status
+            && status >= 400
+        {
+            self.log_agent.add(log_agent::LogEntry::network(
+                status_message(status, &status_text),
+                loaded_url,
+                navigation_id.to_string(),
+            ));
         }
     }
 
@@ -987,7 +956,7 @@ impl RenderThread {
                 loaded,
                 navigation_type,
             } => {
-                let commit = body_loader::NavigationCommit {
+                let commit = document_body::NavigationCommit {
                     frame,
                     navigation_id,
                     begin_id,
@@ -1001,29 +970,13 @@ impl RenderThread {
                     loaded,
                     navigation_type,
                 };
-                let mut loader = body_loader::BodyLoader::new(commit, body, body_pipe);
-                loader.read();
-                if loader.is_ready() {
-                    self.body_loaders.forget_before(frame, navigation_id);
-                    let (commit, body) = loader.finish();
-                    self.commit_navigation_body(commit, body);
-                } else {
-                    if let Some(pipe) = loader.pipe_mut() {
-                        pipe.watch(self.scheduler.body_waker(frame, navigation_id));
-                    }
-                    self.body_loaders.wait(loader);
-                }
+                self.commit_navigation_body(commit, body, body_pipe);
             }
             RendererMsg::NavigationLoadCompleted {
                 frame,
                 navigation_id,
                 status,
-            } => {
-                if let Some(loader) = self.body_loaders.get_mut(frame, navigation_id) {
-                    loader.completed(status);
-                }
-                self.commit_if_ready(frame, navigation_id);
-            }
+            } => self.document_load_completed(frame, navigation_id, status),
             RendererMsg::NavigationDropped { frame, id } => self.navigation_dropped(frame, id),
             RendererMsg::CommitSameDocumentNavigation {
                 frame,
@@ -1196,11 +1149,10 @@ impl RenderThread {
         mime_type: &str,
         charset: Option<&str>,
         content_language: Option<&str>,
-        body: &[u8],
+        body: document_body::NavigationBody,
         history: &HistoryEntryParams,
         time_origin: f64,
         timing: NavigationTiming,
-        aborted: bool,
     ) -> bool {
         if self
             .document
@@ -1226,7 +1178,6 @@ impl RenderThread {
             history,
             time_origin,
             &timing,
-            aborted,
         );
         true
     }

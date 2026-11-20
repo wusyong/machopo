@@ -31,6 +31,7 @@ use protocol::renderer::{
 };
 use url::Url;
 
+use super::document_body::{BodyRead, DocumentBody, NavigationBody};
 use super::network_agent::RequestFrame;
 use super::page_agent::{FrameInfo, FrameResources};
 use super::{RenderThread, SwapPromise};
@@ -50,10 +51,20 @@ pub(super) struct FrameDocument {
     child_of: Option<(FrameId, NodeRoot)>,
     navigation_id: u64,
     url: Url,
-    /// Its MIME type and markup as they came, for DevTools.
+    /// Its MIME type and markup as they came, for DevTools (the markup
+    /// once its body has all come: its `body`'s until then).
     mime_type: String,
     source: Rc<str>,
     parser: Option<Parser<dyn ScriptEngine>>,
+    /// Its body, until it has all come and its load has ended: what of it
+    /// comes is handed to the parser, and the parser waits for the rest.
+    body: Option<DocumentBody>,
+    /// Its parser has made its body element (or a `<frameset>`): until
+    /// then, or the parser's end, it isn't rendered (Blink's
+    /// `Document::ShouldScheduleLayout`), so the page before stays.
+    body_parsed: bool,
+    /// Its window's time origin, on the renderer's clock.
+    time_origin: f64,
     /// HTML's "pending parsing-blocking script", and its "list of scripts
     /// that will execute when the document has finished parsing" (Blink's
     /// `HTMLParserScriptRunner`'s).
@@ -117,9 +128,10 @@ pub(super) struct FrameDocument {
     /// JavaScript type, a `<link>`'s `href` that doesn't parse), until its
     /// `DidFinishLoad` tells the browser.
     failed: Vec<String>,
-    /// Its body stopped short (an error, or its load was stopped): its
-    /// parser is aborted once what came is parsed (HTML's "abort a
-    /// parser"), so it is complete with no `DOMContentLoaded` or `load`.
+    /// Its body stopped short (an error, or its load was stopped), as its
+    /// load's end says: its parser is aborted once what came is parsed
+    /// (HTML's "abort a parser"), so it is complete with no
+    /// `DOMContentLoaded` or `load`.
     aborted: bool,
 }
 
@@ -215,6 +227,9 @@ impl FrameDocument {
             mime_type: mime_type.to_owned(),
             source,
             parser,
+            body: None,
+            body_parsed: false,
+            time_origin: 0.0,
             blocking_script: None,
             deferred_scripts: std::collections::VecDeque::new(),
             document,
@@ -243,6 +258,22 @@ impl FrameDocument {
 
     pub(super) fn navigation_id(&self) -> u64 {
         self.navigation_id
+    }
+
+    /// Whether it isn't to be rendered yet: a sheet that blocks rendering
+    /// is loading, or its parser is still to make its body (Blink's
+    /// `Document::ShouldScheduleLayout`).
+    fn render_blocked(&self) -> bool {
+        self.pending_sheets.values().any(|sheet| sheet.blocking)
+            || (self.parser.is_some() && !self.body_parsed)
+    }
+
+    /// Its markup as it came, so far while its body comes (a copy then,
+    /// each time DevTools' `Page` agent is told of the frames).
+    fn source(&self) -> Rc<str> {
+        self.body
+            .as_ref()
+            .map_or_else(|| self.source.clone(), |body| Rc::from(body.text()))
     }
 }
 
@@ -294,12 +325,12 @@ pub(super) struct ChildNavigationRequest {
 use protocol::renderer::RENDERER_COMMIT;
 
 /// A child frame's document as the browser sent it: its URL (an error
-/// page's own), its type and its bytes.
+/// page's own), its type and its body.
 pub(super) struct ChildDocument<'a> {
     pub(super) url: Url,
     pub(super) mime_type: &'a str,
     pub(super) charset: Option<&'a str>,
-    pub(super) body: &'a [u8],
+    pub(super) body: NavigationBody,
 }
 
 /// What a child frame's document the browser loaded commits with: its
@@ -318,9 +349,6 @@ pub(super) struct ChildCommit<'a> {
     pub(super) origin_source: Option<NodeRoot>,
     /// Its item's state, and where its entry is in the session history.
     pub(super) history: protocol::renderer::HistoryEntryParams,
-    /// Its body stopped short: its parser is aborted once what came is
-    /// parsed.
-    pub(super) aborted: bool,
 }
 
 impl ChildFrames {
@@ -533,11 +561,10 @@ impl RenderThread {
         mime_type: &str,
         charset: Option<&str>,
         content_language: Option<&str>,
-        body: &[u8],
+        body: NavigationBody,
         history: &protocol::renderer::HistoryEntryParams,
         time_origin: f64,
         timing: &crate::navigation_timing::NavigationTiming,
-        aborted: bool,
     ) {
         let _span = trace_event::info_event!("commit_navigation", %url);
         let document_id = self.new_document_id();
@@ -545,7 +572,7 @@ impl RenderThread {
         // parsed: a page whose engine is the other kind takes a new one.
         let wasm = self.script_engine.wasm_engine.is_some()
             && mime_type == "text/html"
-            && encoding::declares_wasm_scripts(body);
+            && encoding::declares_wasm_scripts(&body.start);
         let replacing = self.engine.is_some() && self.engine_is_wasm != wasm;
         // The initiator's document is the engine before's, which goes with
         // its DOM (what the renderer holds of it let go first): no other
@@ -565,9 +592,9 @@ impl RenderThread {
         engine.set_page_focused(self.page_focused);
         // And the page's visibility (a background tab opens hidden).
         engine.set_page_visible(!self.page_hidden);
-        let (text, document_encoding) = encoding::decode_document(mime_type, charset, body);
-        let markup = document::markup_for(mime_type, &text);
-        let source: Rc<str> = Rc::from(&*text);
+        let (body, start) = DocumentBody::new(mime_type, charset, body);
+        let document_encoding = body.encoding();
+        let source: Rc<str> = Rc::from("");
         let document_url =
             Url::parse(&url).unwrap_or_else(|_| Url::parse("about:blank").expect("about:blank"));
         // The browser's milliseconds since the clock's start, before it for
@@ -643,8 +670,7 @@ impl RenderThread {
             history.state.clone(),
             history.manual_scroll_restoration,
         );
-        let mut parser = Parser::new(engine.dom_mut(), &document);
-        parser.push(&markup);
+        let parser = Parser::new(engine.dom_mut(), &document);
         let node = engine.dom_mut().read(|cx| cx.node_id(document.get(cx.gc)));
         let view = FrameView::new(document.clone(), node, document_id, self.system_colors);
         match engine
@@ -679,7 +705,8 @@ impl RenderThread {
         self.document = Some(FrameDocument {
             navigation_id,
             history_load: timing.navigation_type == dom::NavigationType::BackForward,
-            aborted,
+            body: Some(body),
+            time_origin,
             ..FrameDocument::new(
                 top,
                 None,
@@ -702,7 +729,7 @@ impl RenderThread {
         // The pointer may have been over a link of the old document: the
         // arrow until it moves, or the new one is laid out under it.
         self.set_cursor(CursorType::Pointer);
-        self.advance_document(top);
+        self.start_body(top, start);
     }
 
     /// The page's engine replaced by one of the other kind (`wasm`: the
@@ -1529,7 +1556,13 @@ impl RenderThread {
         while let Some((frame, url, markup)) = self.children.commits.pop_front() {
             let _task = trace_event::trace_event!("ThreadControllerImpl::RunTask");
             let reported = url.to_string();
-            self.commit_child(frame, url, "text/html", None, markup.as_bytes(), None);
+            let body = NavigationBody {
+                start: bytes::Bytes::from(markup),
+                pipe: None,
+                loaded: None,
+                url: url.to_string(),
+            };
+            self.commit_child(frame, url, "text/html", None, body, None);
             // The browser hears of it as of a commit it didn't send (Chromium's
             // renderer's synchronous commit, which the browser hears of
             // after): its URL is the frame's.
@@ -1557,7 +1590,7 @@ impl RenderThread {
         url: Url,
         mime_type: &str,
         charset: Option<&str>,
-        body: &[u8],
+        body: NavigationBody,
         navigation: Option<ChildCommit<'_>>,
     ) {
         let _span = trace_event::info_event!("commit_child", %url, %mime_type);
@@ -1596,8 +1629,8 @@ impl RenderThread {
         let Some(engine) = &mut self.engine else {
             return;
         };
-        let (text, document_encoding) = encoding::decode_document(mime_type, charset, body);
-        let markup = document::markup_for(mime_type, &text);
+        let (body, start) = DocumentBody::new(mime_type, charset, body);
+        let document_encoding = body.encoding();
         // The document it shows unloaded first, its `unload` timed.
         let unloaded = engine
             .unload_document(frame)
@@ -1642,12 +1675,11 @@ impl RenderThread {
                 history.manual_scroll_restoration,
             );
         }
-        let mut parser = if url.as_str() == "about:srcdoc" {
+        let parser = if url.as_str() == "about:srcdoc" {
             Parser::new_srcdoc(engine.dom_mut(), &document)
         } else {
             Parser::new(engine.dom_mut(), &document)
         };
-        parser.push(&markup);
         let Some((dom, next)) = engine_frame(&mut self.engine) else {
             return;
         };
@@ -1679,30 +1711,31 @@ impl RenderThread {
         let loader_id = navigation
             .as_ref()
             .map(|navigation| navigation.navigation_id.to_string());
-        let (navigation_id, history_load, aborted) =
-            navigation.as_ref().map_or((0, false, false), |navigation| {
-                (
-                    navigation.navigation_id,
-                    navigation.timing.navigation_type == dom::NavigationType::BackForward,
-                    navigation.aborted,
-                )
-            });
+        let (navigation_id, history_load) = navigation.as_ref().map_or((0, false), |navigation| {
+            (
+                navigation.navigation_id,
+                navigation.timing.navigation_type == dom::NavigationType::BackForward,
+            )
+        });
         self.children.documents.push(FrameDocument {
             loader_id,
             navigation_id,
             history_load,
-            aborted,
+            body: Some(body),
+            time_origin,
             ..FrameDocument::new(
                 frame,
                 Some((parent, owner)),
                 url,
                 mime_type,
-                Rc::from(&*text),
+                Rc::from(""),
                 Some(parser),
                 document,
                 document_encoding,
             )
         });
+        // Not rendered till its parser has made its body.
+        self.update_child_blocking(frame);
         self.request_main_frame();
         // The browser hears of it before of the frames it makes.
         if let Some(navigation) = navigation {
@@ -1712,7 +1745,224 @@ impl RenderThread {
                 url: navigation.url,
             });
         }
+        self.start_body(frame, start);
+    }
+
+    /// `frame`'s document's body starts with `start` (all of it, if the
+    /// body has no pipe): it goes to the parser, then what the pipe has
+    /// now (`read_body`).
+    fn start_body(&mut self, frame: FrameId, start: bytes::Bytes) {
+        let Some(body) = self.doc_mut(frame).and_then(|next| next.body.as_mut()) else {
+            return;
+        };
+        let last = body.pipe_mut().is_none();
+        let length = start.len();
+        let markup = body.take(start, last);
+        self.body_data(frame, length, &markup);
+        self.read_body(frame);
+    }
+
+    /// What `frame`'s document's body's pipe has now, at most
+    /// `BYTES_PER_TASK` (the rest in a task of its own), each piece handed
+    /// to its parser (Blink's `NavigationBodyLoader::ReadFromDataPipe`),
+    /// the pipe watched once it has none; once the body has all come and
+    /// its load has ended, `body_ended`. Then the parser goes on, unless it
+    /// waits for a script (it parses what came after the script once the
+    /// script has run).
+    fn read_body(&mut self, frame: FrameId) {
+        use super::document_body::BYTES_PER_TASK;
+        let token = self.frame_token(frame);
+        // Its watcher's tasks are posted from the network service's thread.
+        let scheduler = Arc::clone(&self.scheduler);
+        let mut read = 0usize;
+        loop {
+            let Some(next) = self.doc_mut(frame) else {
+                return;
+            };
+            let navigation_id = next.navigation_id;
+            let Some(body) = &mut next.body else {
+                break;
+            };
+            let left = BYTES_PER_TASK.saturating_sub(read);
+            if left == 0 {
+                // Read on in a task of its own, as if the pipe had just
+                // become readable.
+                if let Some(token) = token {
+                    (scheduler.body_waker(token, navigation_id))();
+                }
+                break;
+            }
+            match body.read(left) {
+                BodyRead::Data(length, markup) => {
+                    read = read.saturating_add(length);
+                    self.body_data(frame, length, &markup);
+                }
+                BodyRead::Waiting => {
+                    if let Some(token) = token
+                        && let Some(pipe) = body.pipe_mut()
+                    {
+                        pipe.watch(scheduler.body_waker(token, navigation_id));
+                    }
+                    break;
+                }
+                BodyRead::Over(markup) => {
+                    self.body_data(frame, 0, &markup);
+                    break;
+                }
+            }
+        }
+        if self
+            .doc(frame)
+            .and_then(|next| next.body.as_ref())
+            .is_some_and(DocumentBody::is_over)
+        {
+            self.body_ended(frame);
+        }
         self.advance_document(frame);
+    }
+
+    /// `length` bytes of `frame`'s document's body came, which make
+    /// `markup`: it goes to the end of its parser's input, and DevTools
+    /// hears of the bytes of a document it loaded (`Network.dataReceived`,
+    /// Blink's `probe::DidReceiveData`).
+    fn body_data(&mut self, frame: FrameId, length: usize, markup: &str) {
+        let Some(next) = self.doc_mut(frame) else {
+            return;
+        };
+        if let Some(parser) = &mut next.parser {
+            parser.push(markup);
+        }
+        let navigation_id = next.navigation_id;
+        let loaded = next.body.as_ref().is_some_and(|body| body.loaded().is_some());
+        if loaded && length > 0 {
+            self.network_agent
+                .navigation_data_received(navigation_id, length);
+        }
+    }
+
+    /// The document `token`'s navigation `navigation_id` committed in it,
+    /// while its body comes: its frame.
+    fn frame_with_body(&self, token: protocol::FrameToken, navigation_id: u64) -> Option<FrameId> {
+        let frame = if Some(token) == self.devtools_main_frame_token {
+            self.document.as_ref()?.frame
+        } else {
+            self.children.of_token(token)?
+        };
+        self.doc(frame)
+            .filter(|next| next.navigation_id == navigation_id && next.body.is_some())
+            .map(|next| next.frame)
+    }
+
+    /// The pipe of the body of the document navigation `navigation_id`
+    /// committed in `token` has more, or is over (its watcher's task):
+    /// read. Nothing if that document has gone.
+    pub(super) fn read_body_of(&mut self, token: protocol::FrameToken, navigation_id: u64) {
+        if let Some(frame) = self.frame_with_body(token, navigation_id) {
+            self.read_body(frame);
+        }
+    }
+
+    /// The load of the document navigation `navigation_id` committed in
+    /// `token` ended as `status` (`NavigationLoadCompleted`): its body is
+    /// over once its pipe is too.
+    pub(super) fn document_load_completed(
+        &mut self,
+        token: protocol::FrameToken,
+        navigation_id: u64,
+        status: protocol::network::CompletionStatus,
+    ) {
+        let Some(frame) = self.frame_with_body(token, navigation_id) else {
+            return;
+        };
+        if let Some(body) = self.doc_mut(frame).and_then(|next| next.body.as_mut()) {
+            body.completed(status);
+        }
+        self.read_body(frame);
+    }
+
+    /// `frame`'s document's body has all come and its load has ended
+    /// (Blink's `DocumentLoader::BodyLoadingFinished`): its source is
+    /// whole, its navigation timing has its response's end and body sizes,
+    /// DevTools hears it finished (or failed: its parser is aborted once
+    /// what came is parsed), and the log has a body that stopped short.
+    fn body_ended(&mut self, frame: FrameId) {
+        let Some(next) = self.doc_mut(frame) else {
+            return;
+        };
+        let Some(body) = next.body.take() else {
+            return;
+        };
+        let finished = body.finish();
+        next.source = Rc::from(finished.text);
+        let navigation_id = next.navigation_id;
+        let time_origin = next.time_origin;
+        let mime_type = next.mime_type.clone();
+        let Some(loaded) = finished.loaded else {
+            return;
+        };
+        next.aborted = loaded.end.as_ref().is_some_and(|end| end.error.is_some());
+        if let Some(end) = &loaded.end
+            && let Some(engine) = &mut self.engine
+        {
+            let clock = self.clock;
+            let response_end =
+                clock.before_now(ipc::TimeTicks::now().saturating_since(end.completion_time));
+            // In machopo's trace too, a mark named as Chrome's
+            // (`DocumentLoadTiming::SetResponseEnd`), at its time.
+            tracing::trace!(
+                target: "blink.user_timing",
+                mark = "responseEnd",
+                ago_ns = base::numerics::saturated_cast::<i64, _>(
+                    (clock.now() - response_end) * 1e6
+                )
+            );
+            let decoded = u64::try_from(finished.bytes.len()).unwrap_or(u64::MAX);
+            engine.navigation_body_ended(
+                frame,
+                response_end - time_origin,
+                end.encoded_body_length,
+                decoded,
+            );
+        }
+        self.network_agent
+            .navigation_finished(navigation_id, &finished.bytes, &mime_type, &loaded);
+        // A body that stopped short (Blink's `FrameConsole::
+        // DidFailLoading`; a load stopped isn't told).
+        if let Some(error) = loaded.end.as_ref().and_then(|end| end.error.as_ref())
+            && error.code != protocol::network::NetErrorCode::Aborted
+        {
+            self.log_agent.add(super::log_agent::LogEntry::network(
+                format!("Failed to load resource: net::{}", error.code.name()),
+                finished.url,
+                navigation_id.to_string(),
+            ));
+        }
+    }
+
+    /// Whether `frame`'s document's parser has made its body element now:
+    /// once it has, the document may be rendered.
+    fn note_body_parsed(&mut self, frame: FrameId) {
+        let Some(document) = self
+            .doc(frame)
+            .filter(|next| !next.body_parsed)
+            .map(|next| next.document.clone())
+        else {
+            return;
+        };
+        let Some(engine) = &mut self.engine else {
+            return;
+        };
+        let parsed = engine
+            .dom_mut()
+            .read(|cx| cx.body(document.get(cx.gc)).is_some());
+        if !parsed {
+            return;
+        }
+        if let Some(next) = self.doc_mut(frame) {
+            next.body_parsed = true;
+        }
+        self.update_child_blocking(frame);
+        self.request_main_frame();
     }
 
     /// Parses the DOM's document until a script must be fetched or the
@@ -1760,13 +2010,25 @@ impl RenderThread {
             // DevTools' `Network` (kept only while a session has it on).
             let lines = parser.take_load_lines();
             self.keep_parser_lines(frame, lines);
+            self.note_body_parsed(frame);
             match state {
                 ParserState::NeedsInput => {
+                    // The rest of its body is still to come: the parser
+                    // waits for it (`read_body`).
+                    if let Some(next) = self.doc_mut(frame)
+                        && next.body.is_some()
+                    {
+                        next.parser = Some(parser);
+                        return;
+                    }
                     if let Some(engine) = self.engine.take() {
                         let (engine, lines) = parser.finish_taking_load_lines(engine);
                         self.engine = Some(engine);
                         self.keep_parser_lines(frame, lines);
                     }
+                    // Parsed: it may be rendered now, body or not.
+                    self.update_child_blocking(frame);
+                    self.request_main_frame();
                     self.handle_frame_requests();
                     // The `<link>`s the last of the input brought start
                     // loading first: the deferred scripts wait for them.
@@ -2557,7 +2819,7 @@ impl RenderThread {
             next.navigation_id,
             &next.url,
             &next.mime_type,
-            &next.source,
+            &next.source(),
             &next.resources,
         )
     }
@@ -2687,7 +2949,7 @@ impl RenderThread {
         let committed = self.doc(frame).map(|next| {
             (
                 next.mime_type.clone(),
-                next.source.clone(),
+                next.source(),
                 next.loader_id.clone(),
                 next.resources.clone(),
                 next.initial,
@@ -2977,12 +3239,10 @@ impl RenderThread {
         self.update_child_blocking(frame);
     }
 
-    /// Whether a sheet that blocks rendering is loading: no frame till
-    /// it is in.
+    /// Whether a sheet that blocks rendering is loading, or the parser
+    /// hasn't made the body yet: no frame till then.
     pub(super) fn render_blocked(&self) -> bool {
-        self.document
-            .as_ref()
-            .is_some_and(|next| next.pending_sheets.values().any(|sheet| sheet.blocking))
+        self.document.as_ref().is_some_and(FrameDocument::render_blocked)
     }
 
     /// A child frame's view told whether a sheet blocks its rendering, as
@@ -3003,8 +3263,7 @@ impl RenderThread {
     /// Whether `frame`'s document waits for a sheet that blocks its
     /// rendering (`render_blocked`'s, for any frame).
     fn frame_render_blocked(&self, frame: FrameId) -> bool {
-        self.doc(frame)
-            .is_some_and(|next| next.pending_sheets.values().any(|sheet| sheet.blocking))
+        self.doc(frame).is_some_and(FrameDocument::render_blocked)
     }
 
     /// The document of the DOM's frame, as the compositor knows it.

@@ -154,6 +154,32 @@ fn a_document_whose_body_stops_short_is_logged() {
     assert_eq!(entry["networkRequestId"], navigated["result"]["loaderId"]);
 }
 
+/// Its markup is what came (`Page.getResourceContent`), once what came is
+/// in: an aborted document has no `DOMContentLoaded` or `load` to tell the
+/// `Page` agent of it then.
+#[test]
+fn a_document_whose_body_stops_short_has_what_came_as_its_content() {
+    let html = "<!DOCTYPE html>part";
+    let server = server(&[(
+        "/",
+        Route::ok("text/html", deflate_cut_short(html.as_bytes()))
+            .with_header("Content-Encoding", "deflate"),
+    )]);
+    let machopo = Machopo::start();
+    let (mut page, target) = page(&machopo);
+    page.call(None, "Log.enable", json!({}));
+    page.call(None, "Page.enable", json!({}));
+    page.call(None, "Page.navigate", json!({ "url": server.url("/") }));
+    // Logged as its end comes.
+    next_entry(&mut page);
+    let got = page.call(
+        None,
+        "Page.getResourceContent",
+        json!({ "frameId": target, "url": server.url("/") }),
+    );
+    assert_eq!(got["result"]["content"], html, "{got}");
+}
+
 /// What machopo can't do, the renderer's `Network` and the browser's alike,
 /// is answered as an error and warned of in the session's log, if it has
 /// `Log` on.

@@ -8,44 +8,92 @@ use encoding_rs::{Encoding, UTF_8, UTF_16BE, UTF_16LE, WINDOWS_1252, X_USER_DEFI
 /// How far `<meta charset>` (and `<meta name="script">`) is looked for.
 pub(crate) const PRESCAN_BYTES: usize = 1024;
 
-/// A document's text and the encoding it was read in (which its
-/// stylesheets fall back to).
-pub(crate) fn decode_document(
-    mime_type: &str,
-    charset: Option<&str>,
-    body: &[u8],
-) -> (String, &'static Encoding) {
-    let (encoding, bom_len) = document_encoding(mime_type, charset, body);
-    let (text, _) = encoding.decode_without_bom_handling(&body[bom_len..]);
-    (text.into_owned(), encoding)
+/// A document's text as its body comes (Blink's `TextResourceDecoder`, which
+/// the document's parser feeds as the bytes come): in the encoding its start
+/// says, never another after, a character cut between two pieces decoded
+/// whole.
+pub(crate) struct DocumentDecoder {
+    decoder: encoding_rs::Decoder,
+    /// The BOM's bytes still to skip.
+    bom: usize,
+}
+
+impl DocumentDecoder {
+    /// The decoder of a document of `mime_type` whose transport said
+    /// `charset`, from `start`, its body's first `PRESCAN_BYTES` (or all of
+    /// a shorter one); `more`: more of it may come after.
+    pub(crate) fn new(mime_type: &str, charset: Option<&str>, start: &[u8], more: bool) -> Self {
+        let (encoding, bom) = document_encoding(mime_type, charset, start, more);
+        Self {
+            decoder: encoding.new_decoder_without_bom_handling(),
+            bom,
+        }
+    }
+
+    /// What the document's text is read in: its sheets' default.
+    pub(crate) fn encoding(&self) -> &'static Encoding {
+        self.decoder.encoding()
+    }
+
+    /// The text of the body's next `bytes` (`last`: the end of it); what
+    /// ends cut short of a character waits for the next.
+    pub(crate) fn decode(&mut self, bytes: &[u8], last: bool) -> String {
+        let skip = self.bom.min(bytes.len());
+        self.bom = self.bom.saturating_sub(skip);
+        let mut rest = &bytes[skip..];
+        let mut text = String::new();
+        loop {
+            // The most it may need; a length past what that counts
+            // goes in steps (`OutputFull` asks for room again).
+            let room = self
+                .decoder
+                .max_utf8_buffer_length(rest.len())
+                .unwrap_or(rest.len());
+            text.reserve(room);
+            let (result, read, _) = self.decoder.decode_to_string(rest, &mut text, last);
+            rest = &rest[read..];
+            if result == encoding_rs::CoderResult::InputEmpty {
+                return text;
+            }
+        }
+    }
 }
 
 /// HTML's "encoding sniffing algorithm", in order: a BOM, the transport's
 /// `charset`, `<meta charset>` in the first 1024 bytes, then a default.
+/// `start` is the body's start (`more`: more of it may come).
 ///
-/// The default: valid UTF-8 is read as UTF-8, anything else as
+/// The default: a start that is valid UTF-8 (all of it, but for a
+/// character `more` may finish) is read as UTF-8, anything else as
 /// windows-1252 (the standard's default for most locales, and what keeps
 /// the result independent of the machine). Chrome runs an encoding
-/// detector here, which says UTF-8 for such pages, and Firefox reads valid
-/// UTF-8 `file:`s as UTF-8; without this, an undeclared UTF-8 page would
-/// come out garbled. XHTML is XML, whose default is UTF-8.
+/// detector on the start here, which says UTF-8 for such pages, and
+/// Firefox reads valid UTF-8 `file:`s as UTF-8; without this, an
+/// undeclared UTF-8 page would come out garbled. XHTML is XML, whose
+/// default is UTF-8.
 fn document_encoding(
     mime_type: &str,
     charset: Option<&str>,
-    body: &[u8],
+    start: &[u8],
+    more: bool,
 ) -> (&'static Encoding, usize) {
-    if let Some((encoding, len)) = Encoding::for_bom(body) {
+    if let Some((encoding, len)) = Encoding::for_bom(start) {
         return (encoding, len);
     }
     if let Some(encoding) = charset.and_then(|label| Encoding::for_label(label.as_bytes())) {
         return (encoding, 0);
     }
     if mime_type == "text/html"
-        && let Some(encoding) = prescan(&body[..body.len().min(PRESCAN_BYTES)])
+        && let Some(encoding) = prescan(&start[..start.len().min(PRESCAN_BYTES)])
     {
         return (encoding, 0);
     }
-    if mime_type == "application/xhtml+xml" || std::str::from_utf8(body).is_ok() {
+    let utf8 = match std::str::from_utf8(start) {
+        Ok(_) => true,
+        // Cut off at its end: the rest of the character may come.
+        Err(error) => more && error.error_len().is_none(),
+    };
+    if mime_type == "application/xhtml+xml" || utf8 {
         return (UTF_8, 0);
     }
     (WINDOWS_1252, 0)
@@ -381,24 +429,38 @@ mod tests {
     use super::*;
 
     fn html(body: &[u8]) -> &'static Encoding {
-        document_encoding("text/html", None, body).0
+        document_encoding("text/html", None, body, false).0
+    }
+
+    /// The text of a body of `mime_type` that comes in `pieces`, and what
+    /// it was read in.
+    fn decode_in_pieces(mime_type: &str, pieces: &[&[u8]]) -> (String, &'static Encoding) {
+        let start: Vec<u8> = pieces.concat().into_iter().take(PRESCAN_BYTES).collect();
+        let whole = pieces.concat().len() <= PRESCAN_BYTES;
+        let mut decoder = DocumentDecoder::new(mime_type, None, &start, !whole);
+        let mut text = String::new();
+        for piece in pieces {
+            text.push_str(&decoder.decode(piece, false));
+        }
+        text.push_str(&decoder.decode(b"", true));
+        (text, decoder.encoding())
     }
 
     #[test]
     fn bom_beats_the_header_which_beats_meta() {
         let meta = b"<meta charset=big5>";
         assert_eq!(
-            document_encoding("text/html", Some("shift_jis"), meta).0,
+            document_encoding("text/html", Some("shift_jis"), meta, false).0,
             SHIFT_JIS
         );
         let with_bom = [&b"\xFF\xFE"[..], meta].concat();
         assert_eq!(
-            document_encoding("text/html", Some("shift_jis"), &with_bom),
+            document_encoding("text/html", Some("shift_jis"), &with_bom, false),
             (UTF_16LE, 2)
         );
         assert_eq!(html(meta), BIG5);
         // An unknown label in the header is skipped.
-        assert_eq!(document_encoding("text/html", Some("bogus"), meta).0, BIG5);
+        assert_eq!(document_encoding("text/html", Some("bogus"), meta, false).0, BIG5);
     }
 
     #[test]
@@ -489,11 +551,32 @@ mod tests {
         assert_eq!(html("<p>中文".as_bytes()), UTF_8);
         assert_eq!(html(b"<p>caf\xE9"), WINDOWS_1252);
         assert_eq!(
-            document_encoding("application/xhtml+xml", None, b"\xE9").0,
+            document_encoding("application/xhtml+xml", None, b"\xE9", false).0,
             UTF_8
         );
-        let (text, encoding) = decode_document("text/plain", None, b"caf\xE9");
+        let (text, encoding) = decode_in_pieces("text/plain", &[b"caf\xE9"]);
         assert_eq!((text.as_str(), encoding), ("café", WINDOWS_1252));
+    }
+
+    #[test]
+    fn a_body_decodes_as_it_comes() {
+        // A character cut between two pieces is decoded whole.
+        let (text, encoding) = decode_in_pieces("text/html", &["<p>中".as_bytes(), &"文".as_bytes()[..1], &"文".as_bytes()[1..]]);
+        assert_eq!((text.as_str(), encoding), ("<p>中文", UTF_8));
+        // The BOM, skipped, may come in a piece of its own.
+        let (text, encoding) = decode_in_pieces("text/html", &[b"\xEF\xBB", b"\xBFok"]);
+        assert_eq!((text.as_str(), encoding), ("ok", UTF_8));
+        // A start cut in a character is UTF-8 if more may come, not if it
+        // is all the body.
+        let cut = &"中".as_bytes()[..2];
+        assert_eq!(document_encoding("text/html", None, cut, true).0, UTF_8);
+        assert_eq!(document_encoding("text/html", None, cut, false).0, WINDOWS_1252);
+        // What comes after the start doesn't change the encoding: an
+        // undeclared page whose start is ASCII stays UTF-8.
+        let start = vec![b'a'; PRESCAN_BYTES];
+        let (text, encoding) = decode_in_pieces("text/html", &[&start, b"caf\xE9"]);
+        assert_eq!(encoding, UTF_8);
+        assert!(text.ends_with("caf\u{FFFD}"), "{text}");
     }
 
     #[test]

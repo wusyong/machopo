@@ -435,6 +435,23 @@ impl ScriptEngine for V8Engine {
         });
     }
 
+    fn navigation_body_ended(
+        &mut self,
+        frame: dom_api::FrameId,
+        response_end: f64,
+        encoded_body_size: u64,
+        decoded_body_size: u64,
+    ) {
+        let Some((_, document)) = self.frame_context_and_document(frame) else {
+            return;
+        };
+        self.dom_mut().mutate(|cx| {
+            if let Some(window) = cx.window_of(document.get(cx.gc)) {
+                cx.navigation_body_ended(window, response_end, encoded_body_size, decoded_body_size);
+            }
+        });
+    }
+
     fn create_window(
         &mut self,
         frame: dom_api::FrameId,

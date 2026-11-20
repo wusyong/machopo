@@ -616,10 +616,12 @@ fn a_navigation_is_told_by_the_browser_and_the_renderer() {
     let received = of(&events, "Network.responseReceived", &loader);
     assert_eq!(received["response"]["url"], server.url("/new").as_str());
     assert_eq!(received["response"]["mimeType"], "text/html");
+    // Its body as it came (here at once); what came over the network,
+    // only its end tells.
     let data = of(&events, "Network.dataReceived", &loader);
     assert_eq!(
         (&data["dataLength"], &data["encodedDataLength"]),
-        (&json!(html.len()), &json!(html.len()))
+        (&json!(html.len()), &json!(0))
     );
     let finished = of(&events, "Network.loadingFinished", &loader);
     assert!(finished["encodedDataLength"].as_u64() > Some(html.len() as u64));
