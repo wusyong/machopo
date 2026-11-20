@@ -671,10 +671,11 @@ impl RenderThread {
             content_language,
         );
         // Where its entry is in the session history, and its state.
-        engine.set_session_history(dom::SessionHistory {
-            index: history.index,
-            length: history.length,
-        });
+        engine.set_session_history(self.own_history_entries.place(
+            history.index,
+            history.length,
+            history.entries_heard,
+        ));
         engine.restore_history(
             top,
             history.state.clone(),
@@ -1063,6 +1064,9 @@ impl RenderThread {
                 // Every frame's: a child frame's URL is the browser's too
                 // (what its reload loads).
                 if let Some(frame) = self.frame_token(frame) {
+                    if !replace {
+                        self.own_history_entries.sent_one();
+                    }
                     let _ =
                         self.to_browser
                             .send(RendererHostMsg::DidCommitSameDocumentNavigation {
@@ -1166,6 +1170,9 @@ impl RenderThread {
                 .send(RendererHostMsg::SameDocumentNavigationFailed { navigation_id });
             return;
         };
+        // As the browser says: the new entries of the renderer's own it
+        // hears of before the traversal is in come before it, and it says
+        // where things are once it is (`SetHistoryOffsetAndLength`).
         engine.set_session_history(dom::SessionHistory {
             index: history.index,
             length: history.length,
@@ -1676,10 +1683,11 @@ impl RenderThread {
         // its item's state.
         if let Some(navigation) = &navigation {
             let history = &navigation.history;
-            engine.set_session_history(dom::SessionHistory {
-                index: history.index,
-                length: history.length,
-            });
+            engine.set_session_history(self.own_history_entries.place(
+                history.index,
+                history.length,
+                history.entries_heard,
+            ));
             engine.restore_history(
                 frame,
                 history.state.clone(),

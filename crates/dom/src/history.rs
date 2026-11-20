@@ -53,6 +53,25 @@ pub struct SessionHistory {
     pub length: u32,
 }
 
+impl SessionHistory {
+    /// This place after `count` new entries, each after the current one
+    /// (`pushState`, a fragment's navigation): the last of them current,
+    /// none forward of it (Blink's `IncreaseHistoryListFromNavigation`).
+    #[must_use]
+    pub fn after_new_entries(self, count: u64) -> Self {
+        if count == 0 {
+            return self;
+        }
+        let index = self
+            .index
+            .saturating_add(u32::try_from(count).unwrap_or(u32::MAX));
+        Self {
+            index,
+            length: index.saturating_add(1),
+        }
+    }
+}
+
 impl Default for SessionHistory {
     fn default() -> Self {
         Self {
@@ -153,11 +172,8 @@ impl<'gc> Cx<'_, 'gc> {
     /// after: the current one now, those forward of it gone (Blink's
     /// renderer counts it as well, `IncreaseHistoryListFromNavigation`).
     pub fn push_session_history_entry(&self) {
-        let index = self.session_history().index.saturating_add(1);
-        self.changes.session_history.set(SessionHistory {
-            index,
-            length: index.saturating_add(1),
-        });
+        let history = self.session_history().after_new_entries(1);
+        self.changes.session_history.set(history);
     }
 
     /// Makes `event` a `PopStateEvent` (its `state` the engine writes).

@@ -207,6 +207,12 @@ pub struct WebContents {
     /// The renderer has gone (`WebContents::IsCrashed`): the next
     /// navigation launches another.
     crashed: bool,
+    /// How many of the renderer's own new entries it has heard of
+    /// (`DidCommitSameDocumentNavigation`s neither `replace` nor a
+    /// traversal), which every place it gives the renderer says
+    /// (`entries_heard`): the renderer counts those it made after on top.
+    /// A new renderer's start again.
+    entries_heard: SequenceNumber<u64>,
     /// How to launch a renderer, again after one has gone.
     launch: Launch,
     /// Input events handed to the renderer that it (or its compositor) has
@@ -349,6 +355,7 @@ impl WebContents {
             visible: true,
             focused: false,
             crashed: false,
+            entries_heard: SequenceNumber::new(),
             launch,
             input_in_flight: 0,
         })
@@ -519,9 +526,7 @@ impl WebContents {
         };
         if loads.is_empty() {
             self.controller.go_to_entry_in_place(index);
-            let (index, length) = self.controller.offset_and_length();
-            self.process
-                .send(RendererMsg::SetHistoryOffsetAndLength { index, length });
+            self.send_history_offset_and_length();
             return true;
         }
         let (within, loading): (Vec<_>, Vec<_>) = loads
@@ -778,6 +783,7 @@ impl WebContents {
             self.begin_frame_observer(),
         ));
         self.crashed = false;
+        self.entries_heard = SequenceNumber::new();
         self.process
             .send(RendererMsg::DevToolsMainFrameToken(self.frame_tree.root()));
         self.process
@@ -1050,9 +1056,8 @@ impl WebContents {
             .committing(frame, navigation_id, &document.url, origin);
         let before = self.frame_tree.take_any_document_load(frame);
         let mut committer = committer;
-        if let Some(place) = self.controller.commit_place(navigation_id) {
-            committer.set_history_place(place);
-        }
+        let place = self.controller.commit_place(navigation_id);
+        committer.set_history_place(place, self.entries_heard.peek());
         let completer = committer.commit(navigation_id, document);
         // The document before is no more: its body stops, and the renderer
         // hears it was aborted after the commit that takes its place (it
@@ -1519,6 +1524,18 @@ impl WebContents {
             .send(RendererMsg::RequestVisualState { request_id });
     }
 
+    /// Tells the renderer where the current entry is and how many there
+    /// are (`SetHistoryOffsetAndLength`), as of the new entries of its own
+    /// it has heard of.
+    fn send_history_offset_and_length(&self) {
+        let (index, length) = self.controller.offset_and_length();
+        self.process.send(RendererMsg::SetHistoryOffsetAndLength {
+            index,
+            length,
+            entries_heard: self.entries_heard.peek(),
+        });
+    }
+
     /// Applies a renderer message to browser-side state. The embedder calls
     /// this on the UI thread after the IO thread forwarded it.
     pub fn on_renderer_message(&mut self, msg: &RendererHostMsg) {
@@ -1543,12 +1560,11 @@ impl WebContents {
                     .did_commit(&self.frame_tree, *frame, *navigation_id, url.clone());
                 let place = self.controller.current_place(&self.frame_tree, *frame);
                 self.frame_tree.set_history_place(*frame, place);
-                // The entries may have changed since the navigation
-                // started (the old document's `pushState`), and a child
-                // frame's new entry is every frame's.
-                let (index, length) = self.controller.offset_and_length();
-                self.process
-                    .send(RendererMsg::SetHistoryOffsetAndLength { index, length });
+                // The entries may have changed since the commit was sent
+                // (`pushState` as the renderer was busy with script when
+                // it came): the renderer counts on from here those of its
+                // own it made after the commit.
+                self.send_history_offset_and_length();
             }
             RendererHostMsg::DidCommitSameDocumentNavigation {
                 frame,
@@ -1557,6 +1573,9 @@ impl WebContents {
                 state,
                 navigation_id,
             } => {
+                if !replace && navigation_id.is_none() {
+                    self.entries_heard.get_next();
+                }
                 if let Err(reason) = self.frame_tree.did_commit_same_document(*frame, url) {
                     return self.received_bad_message(reason);
                 }
@@ -1564,12 +1583,18 @@ impl WebContents {
                     self.url = Some(url.clone());
                 }
                 match navigation_id {
-                    Some(id) => self.controller.did_commit_history_same_document(
-                        &self.frame_tree,
-                        *frame,
-                        *id,
-                        url.clone(),
-                    ),
+                    Some(id) => {
+                        self.controller.did_commit_history_same_document(
+                            &self.frame_tree,
+                            *frame,
+                            *id,
+                            url.clone(),
+                        );
+                        // The renderer took the place as the traversal
+                        // started; the new entries of its own heard of
+                        // since came before it.
+                        self.send_history_offset_and_length();
+                    }
                     None => self.controller.did_commit_same_document(
                         &self.frame_tree,
                         *frame,

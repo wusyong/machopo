@@ -464,10 +464,15 @@ impl Committer {
     /// Where its entry is in the session history as it commits, and how
     /// many entries there are then (Chromium's
     /// `UpdateHistoryParamsInCommitNavigationParams`, as `CommitNavigation`
-    /// is sent): what changed since it started counts.
-    pub(crate) fn set_history_place(&mut self, (index, length): (u32, u32)) {
-        self.history.index = index;
-        self.history.length = length;
+    /// is sent): what changed since it started counts, if it is pending
+    /// (`place`). `entries_heard`: of the renderer's own new entries, how
+    /// many the browser has heard of by then.
+    pub(crate) fn set_history_place(&mut self, place: Option<(u32, u32)>, entries_heard: u64) {
+        if let Some((index, length)) = place {
+            self.history.index = index;
+            self.history.length = length;
+        }
+        self.history.entries_heard = entries_heard;
     }
 
     /// Sends the commit; what tells the renderer how its load ended, if it

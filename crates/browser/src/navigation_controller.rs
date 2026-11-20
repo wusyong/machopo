@@ -379,6 +379,8 @@ impl NavigationController {
             manual_scroll_restoration: item.is_some_and(|item| item.manual_scroll_restoration),
             index: count(index),
             length: count(length),
+            // `WebContents`'s, which goes in as it commits.
+            entries_heard: 0,
         }
     }
 

@@ -105,6 +105,13 @@ pub struct HistoryEntryParams {
     /// The entry's index, and how many entries there are.
     pub index: u32,
     pub length: u32,
+    /// A commit's (`CommitNavigation`): how many of the renderer's own new
+    /// entries the browser had heard of as it worked `index` and `length`
+    /// out, as `SetHistoryOffsetAndLength` says. A traversal within the
+    /// document takes its place as it is: the new entries the browser hears
+    /// of before it is in come before it, and the browser says where things
+    /// are once it is.
+    pub entries_heard: u64,
 }
 
 /// The URL an error page's document has (Chromium's
@@ -203,8 +210,17 @@ pub enum RendererMsg {
     },
     /// `SetHistoryOffsetAndLength`: where the document's entry is in the
     /// session history now, and how many entries there are, once its
-    /// commit is in.
-    SetHistoryOffsetAndLength { index: u32, length: u32 },
+    /// commit is in. `entries_heard`: how many of the renderer's own new
+    /// entries (each a `DidCommitSameDocumentNavigation` neither `replace`
+    /// nor a traversal: `pushState`, a fragment's navigation) the browser
+    /// had heard of then; those it hadn't come after, and the renderer
+    /// counts them on (a place it takes as it is would drop them, those
+    /// script made as the place was on its way).
+    SetHistoryOffsetAndLength {
+        index: u32,
+        length: u32,
+        entries_heard: u64,
+    },
     /// A `FetchResource`'s load reached a redirect and waits there
     /// (`URLLoaderClient::OnReceiveRedirect`) until the renderer answers
     /// `FollowRedirect`.
@@ -503,7 +519,9 @@ pub enum RendererHostMsg {
     /// `replaceState`). `state`: the entry's (`None` is `null`).
     /// `navigation_id`: the browser's history traversal it was
     /// (`CommitSameDocumentNavigation`), if it was one. A child frame's
-    /// isn't in the session history: the browser has its URL.
+    /// isn't in the session history: the browser has its URL. One neither
+    /// `replace` nor a traversal is a new entry the renderer counted
+    /// itself, which the browser counts too (`entries_heard`).
     DidCommitSameDocumentNavigation {
         frame: crate::FrameToken,
         url: String,

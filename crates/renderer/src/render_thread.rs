@@ -271,6 +271,38 @@ pub fn spawn_renderer_main_thread(
         })
 }
 
+/// The session history's new entries the renderer made itself and told
+/// the browser of (`DidCommitSameDocumentNavigation` neither `replace` nor
+/// a traversal: `pushState`, a fragment's navigation), counted so that a
+/// place the browser gives keeps those it hadn't heard of as it gave it:
+/// the browser says how many it had (`entries_heard`), and the rest come
+/// after. Blink counts its own new entries too
+/// (`IncreaseHistoryListFromNavigation`) but takes a commit's place as it
+/// is, and the browser broadcasts to every renderer but the committing
+/// one; here every frame is in the one renderer, which hears of every
+/// commit, a child frame's too. Not the engine's: a new engine (a page of
+/// the other kind) doesn't start the count again, the browser's goes on.
+#[derive(Default)]
+struct OwnHistoryEntries {
+    sent: base::SequenceNumber<u64>,
+}
+
+impl OwnHistoryEntries {
+    /// One more is on its way to the browser.
+    fn sent_one(&mut self) {
+        self.sent.get_next();
+    }
+
+    /// The place the browser gave, `index` of `length` as it was when it
+    /// had heard of `heard` of them, with those it hadn't after it.
+    fn place(&self, index: u32, length: u32, heard: u64) -> dom::SessionHistory {
+        // The browser counts them as it has their messages, which were
+        // all sent before: it has never heard of more than were sent.
+        let unheard = self.sent.peek().saturating_sub(heard);
+        dom::SessionHistory { index, length }.after_new_entries(unheard)
+    }
+}
+
 /// Everything that lives on the renderer main thread.
 ///
 /// Field order is drop order: the document (which roots its nodes) must go
@@ -388,6 +420,7 @@ struct RenderThread {
     /// Numbers the navigations asked of the browser (`BeginNavigation`),
     /// from 1.
     begin_navigation_ids: base::SequenceNumber<u64>,
+    own_history_entries: OwnHistoryEntries,
     /// The top-level frame's latest navigation to `about:blank` it asked
     /// for, by its number, and the document its document is to have its
     /// origin from (the initiator's).
@@ -557,6 +590,7 @@ impl RenderThread {
             last_document_id: 0,
             devtools_main_frame_token: None,
             begin_navigation_ids: base::SequenceNumber::starting_at(1),
+            own_history_entries: OwnHistoryEntries::default(),
             main_origin_source: None,
             pending_input,
             clock: Clock::new(),
@@ -1067,9 +1101,19 @@ impl RenderThread {
             } => {
                 self.commit_same_document_traversal(frame, navigation_id, document, &url, history);
             }
-            RendererMsg::SetHistoryOffsetAndLength { index, length } => {
+            RendererMsg::SetHistoryOffsetAndLength {
+                index,
+                length,
+                entries_heard,
+            } => {
+                // The new entries script made in the tasks before this one
+                // go to the browser first, so they are counted among those
+                // it hadn't heard of (they wait for the loop's turn else,
+                // and this place would drop them).
+                self.handle_frame_requests();
+                let history = self.own_history_entries.place(index, length, entries_heard);
                 if let Some(engine) = &mut self.engine {
-                    engine.set_session_history(dom::SessionHistory { index, length });
+                    engine.set_session_history(history);
                 }
             }
             RendererMsg::ReceivedRedirect {

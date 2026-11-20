@@ -5275,6 +5275,297 @@ document.querySelector('base').setAttribute('href', '/later/');
         web_contents.shutdown();
     }
 
+    /// The renderer's messages, handed to `web_contents` until `hold`
+    /// picks one, which comes back with those after it until `last` picks
+    /// one (that one too), none of them handed over: the browser hears of
+    /// them later than the renderer sent them.
+    fn hold_from(
+        web_contents: &mut WebContents,
+        host_rx: &Receiver<ContentsEvent>,
+        mut hold: impl FnMut(&RendererHostMsg) -> bool,
+        mut last: impl FnMut(&RendererHostMsg) -> bool,
+    ) -> Vec<RendererHostMsg> {
+        loop {
+            let msg = next_message(web_contents, host_rx, TIMEOUT).expect("renderer answers");
+            if hold(&msg) {
+                let mut held = vec![msg];
+                while !last(held.last().expect("one at least")) {
+                    held.push(
+                        next_message(web_contents, host_rx, TIMEOUT).expect("renderer answers"),
+                    );
+                }
+                return held;
+            }
+            web_contents.on_renderer_message(&msg);
+        }
+    }
+
+    /// Whether `msg` is the commit of a document at `url`.
+    fn commits(msg: &RendererHostMsg, url: &str) -> bool {
+        matches!(msg, RendererHostMsg::DidCommitNavigation { url: at, .. } if at == url)
+    }
+
+    /// Whether `msg` is the renderer's navigation within a document to
+    /// `url` (`pushState`'s).
+    fn moves_within_to(msg: &RendererHostMsg, url: &str) -> bool {
+        matches!(
+            msg,
+            RendererHostMsg::DidCommitSameDocumentNavigation { url: at, .. } if at == url
+        )
+    }
+
+    /// Whether `msg` is the page's report of `text` (`logged`'s).
+    fn reports(msg: &RendererHostMsg, text: &str) -> bool {
+        asked_url(msg).and_then(|url| url.strip_prefix("machoporeport:")) == Some(text)
+    }
+
+    /// What the page reported first among `msgs`.
+    fn first_report(msgs: &[RendererHostMsg]) -> Option<&str> {
+        msgs.iter()
+            .find_map(|msg| asked_url(msg)?.strip_prefix("machoporeport:"))
+    }
+
+    /// A child frame's document calls `pushState` as it commits, its
+    /// script in the commit's task; the browser hears of the commit only
+    /// after the renderer counted the push, and the place it answers the
+    /// commit with comes after it: the renderer counts the push on top of
+    /// it rather than going back to the length before: `length` with the
+    /// push.
+    fn push_state_as_a_child_frame_commits(
+        web_contents: &mut WebContents,
+        host_rx: &Receiver<ContentsEvent>,
+        length: usize,
+    ) {
+        let html = format!(
+            "{}<iframe src=/a></iframe>",
+            logging(
+                "onfocus = () => note(`len-${history.length}-${frames[0].history.length}`);
+                 note('ready');"
+            )
+        );
+        let server = server(&[
+            ("/", Route::ok("text/html", html)),
+            (
+                "/a",
+                Route::ok(
+                    "text/html",
+                    "<script>history.pushState(null, '', '/a2');\
+                     onload = () => parent.note('loaded');</script>",
+                ),
+            ),
+        ]);
+        web_contents.navigate(server.url("/"));
+        let (a, a2) = (server.url("/a"), server.url("/a2"));
+        let held = hold_from(
+            web_contents,
+            host_rx,
+            |msg| commits(msg, &a),
+            |msg| moves_within_to(msg, &a2),
+        );
+        for msg in &held {
+            web_contents.on_renderer_message(msg);
+        }
+        logged_until(web_contents, host_rx, "loaded_ready");
+        assert_eq!(web_contents.controller().entry_count(), length);
+        web_contents.set_focus(true);
+        logged_until(
+            web_contents,
+            host_rx,
+            &format!("loaded_ready_len-{length}-{length}"),
+        );
+    }
+
+    #[test]
+    fn a_push_state_as_a_child_frame_commits_outlasts_the_commit_s_place() {
+        let (mut web_contents, host_rx) = tab();
+        push_state_as_a_child_frame_commits(&mut web_contents, &host_rx, 2);
+        web_contents.shutdown();
+    }
+
+    /// A new renderer's new entries are counted from none: the browser's
+    /// count of the one before's doesn't stand for them.
+    #[test]
+    fn a_new_renderer_s_new_entries_are_counted_from_none() {
+        let html = logging("history.pushState(null, '', '/p'); report('pushed');");
+        let server = server(&[("/", Route::ok("text/html", html))]);
+        let (mut web_contents, host_rx) = tab();
+        web_contents.navigate(server.url("/"));
+        assert_eq!(logged(&mut web_contents, &host_rx), "pushed");
+        web_contents.navigate("about:crash");
+        assert!(web_contents.is_crashed());
+        // The two entries before, the new page's and its child frame's
+        // push.
+        push_state_as_a_child_frame_commits(&mut web_contents, &host_rx, 4);
+        web_contents.shutdown();
+    }
+
+    /// A place the browser sends (`SetHistoryOffsetAndLength`) that comes
+    /// right after a task whose script called `pushState`, before the
+    /// renderer has told the browser of it: the push goes to the browser
+    /// first, and counts on top of the place.
+    #[test]
+    fn a_push_state_in_the_task_before_a_place_outlasts_it() {
+        let html = format!(
+            "{}<iframe src=/a></iframe>",
+            logging(
+                "onfocus = () => {
+                   const end = performance.now() + 200;
+                   while (performance.now() < end) {}
+                   history.pushState(null, '', '/p');
+                 };
+                 onblur = () => note(`len-${history.length}`);
+                 note('ready');"
+            )
+        );
+        let server = server(&[
+            ("/", Route::ok("text/html", html)),
+            ("/a", Route::ok("text/html", "a")),
+        ]);
+        let (mut web_contents, host_rx) = tab();
+        web_contents.navigate(server.url("/"));
+        let a = server.url("/a");
+        let held = hold_from(
+            &mut web_contents,
+            &host_rx,
+            |msg| commits(msg, &a),
+            |msg| reports(msg, "ready"),
+        );
+        // The commit's place goes as the renderer runs the script that
+        // pushes, and is there as that task ends.
+        web_contents.set_focus(true);
+        for msg in &held {
+            web_contents.on_renderer_message(msg);
+        }
+        web_contents.set_focus(false);
+        logged_until(&mut web_contents, &host_rx, "ready_len-2");
+        assert_eq!(web_contents.controller().entry_count(), 2);
+        web_contents.shutdown();
+    }
+
+    /// A commit the browser sends before it hears of the old document's
+    /// `pushState`: the new document counts the push from the start. What
+    /// the browser heard of before doesn't count as the renderer's new
+    /// entries: a `replaceState`, a traversal.
+    #[test]
+    fn a_commit_counts_the_new_entries_the_browser_has_not_heard_of() {
+        let html = logging(
+            "history.replaceState(null, '');
+             history.pushState(null, '', '/p');
+             history.back();
+             onfocus = () => history.pushState(null, '', '/q');",
+        );
+        let server = server(&[
+            ("/", Route::ok("text/html", html)),
+            (
+                "/b",
+                Route::ok(
+                    "text/html",
+                    "<script>location.href = 'machoporeport:len-' + history.length</script>",
+                ),
+            ),
+        ]);
+        let (mut web_contents, host_rx) = tab();
+        web_contents.navigate(server.url("/"));
+        logged_until(&mut web_contents, &host_rx, "popstate-null-/-true");
+        web_contents.set_focus(true);
+        let q = server.url("/q");
+        // The push is in, and the commit made before the browser hears of
+        // it: nothing after the push reaches the browser.
+        let mut held = hold_from(
+            &mut web_contents,
+            &host_rx,
+            |msg| moves_within_to(msg, &q),
+            |_| true,
+        );
+        web_contents.navigate(server.url("/b"));
+        while first_report(&held).is_none() {
+            held.push(
+                next_message(&mut web_contents, &host_rx, TIMEOUT).expect("renderer answers"),
+            );
+        }
+        // `/`, `/q` (`/p` gone as it came after `/`), `/b`.
+        assert_eq!(first_report(&held), Some("len-3"));
+        web_contents.shutdown();
+    }
+
+    /// A child frame's commit the browser sends before it hears of the
+    /// main frame's `pushState`: the child frame's document counts the
+    /// push from the start.
+    #[test]
+    fn a_child_frames_commit_counts_the_new_entries_the_browser_has_not_heard_of() {
+        let html = format!(
+            "{}<iframe src=/a></iframe>",
+            logging("frames[0].location.href = '/b'; history.pushState(null, '', '/p');")
+        );
+        let server = server(&[
+            ("/", Route::ok("text/html", html)),
+            ("/a", Route::ok("text/html", "a")),
+            (
+                "/b",
+                Route::ok(
+                    "text/html",
+                    "<script>location.href = 'machoporeport:len-' + history.length</script>",
+                ),
+            ),
+        ]);
+        let (mut web_contents, host_rx) = tab();
+        web_contents.navigate(server.url("/"));
+        let p = server.url("/p");
+        // The child frame's navigation starts; the push after it doesn't
+        // reach the browser, nor anything after it.
+        let mut held = hold_from(
+            &mut web_contents,
+            &host_rx,
+            |msg| moves_within_to(msg, &p),
+            |_| true,
+        );
+        while first_report(&held).is_none() {
+            held.push(
+                next_message(&mut web_contents, &host_rx, TIMEOUT).expect("renderer answers"),
+            );
+        }
+        assert_eq!(first_report(&held), Some("len-3"));
+        web_contents.shutdown();
+    }
+
+    /// A traversal within the document the browser starts before it hears
+    /// of a `pushState`: the renderer takes the traversal's place, and the
+    /// browser tells it where things are once the traversal is in, the push
+    /// before it.
+    #[test]
+    fn a_traversal_is_followed_by_the_place_after_it() {
+        let html = logging(
+            "history.pushState(null, '', '/p');
+             onfocus = () => history.pushState(null, '', '/q');
+             onblur = () => note(`len-${history.length}`);
+             note('ready');",
+        );
+        let server = server(&[("/", Route::ok("text/html", html))]);
+        let (mut web_contents, host_rx) = tab();
+        web_contents.navigate(server.url("/"));
+        logged_until(&mut web_contents, &host_rx, "ready");
+        web_contents.set_focus(true);
+        let q = server.url("/q");
+        let held = hold_from(
+            &mut web_contents,
+            &host_rx,
+            |msg| moves_within_to(msg, &q),
+            |_| true,
+        );
+        assert!(web_contents.go_back());
+        for msg in &held {
+            web_contents.on_renderer_message(msg);
+        }
+        logged_until(&mut web_contents, &host_rx, "ready_popstate-null-/-true");
+        web_contents.set_focus(false);
+        logged_until(
+            &mut web_contents,
+            &host_rx,
+            "ready_popstate-null-/-true_len-3",
+        );
+        web_contents.shutdown();
+    }
+
     fn a_child_frames_documents_are_in_the_history_from(initial: bool) {
         let html = format!(
             "{}<iframe src=/a></iframe>",
