@@ -1,18 +1,19 @@
 # RFC 0107：持久資料的 key，Web Storage 和 cookie
 
 - 開始日期：2026-11-20
-- 狀態：🚧 已排程：2026-11-20
+- 狀態：✅ 已完成：2026-11-20
+- 進度：`progress.md`
 - 細節：`details.md`
 
 ## 摘要
 
-machopo 現在不在磁碟上存任何東西，沒有 cookie、`localStorage`、`sessionStorage`，也算不出「網站」。這份先定下每種持久資料共用的基礎：網站的算法（public suffix list）、儲存的 key（origin 加最上層的網站，Chromium 的 `StorageKey`）、profile 的資料夾，和 renderer 同步讀 Browser 管的資料的路；再用兩種功能把它用過一遍：Web Storage（`localStorage`、`sessionStorage`、`storage` 事件）和 cookie（`Set-Cookie`、`Cookie`、`SameSite`、`document.cookie`、WebDriver 和 DevTools 的 cookie 命令）。HTTP cache、IndexedDB 之後建在同一套基礎上。範圍和 key 的形狀定了（第 1、2 條），其他的還在比較，見「要決定的事（依序）」。
+開始時 machopo 不在磁碟上存任何東西，沒有 cookie、`localStorage`、`sessionStorage`，也算不出「網站」。這份定下每種持久資料共用的基礎：網站的算法（public suffix list，新的 crate `site`）、儲存的 key（origin、最上層的網站和 ancestor chain bit，Chromium 的 `StorageKey`）、profile 的資料夾和磁碟上的格式（SQLite，新的 crate `sql`），和 renderer 同步讀 Browser 管的資料的路；再用兩種功能把它用過一遍：Web Storage（`localStorage`、`sessionStorage`、`storage` 事件）和 cookie（`Set-Cookie`、`Cookie`、`SameSite`、`Partitioned`、`document.cookie`、WebDriver 和 DevTools 的 cookie 命令）。第三方的 cookie 擋掉、沒有開關。HTTP cache、IndexedDB 之後建在同一套基礎上。
 
 ## 動機
 
 RFC 0103 的「架構上可能要先做的事」第 6 個：cookie、HTTP cache、`localStorage`、IndexedDB 要用同一把 key（origin 加最上層的網站），第一份儲存的 RFC 定下來；晚定的話，每種儲存各自長出一套「這份資料是誰的」，之後要一起改。另外，沒有 cookie 就不能登入任何網站，沒有 `localStorage` 的頁面很多一開就丟例外（它是 `window` 上的屬性，script 直接讀）。
 
-### 現況
+### 開始時的狀況
 
 2026-11-20 讀程式得到的（`main` 的 `e2d10d6`；逐項的位置在 `details.md` 的「machopo 現在的狀況」）：
 
@@ -31,90 +32,76 @@ RFC 0103 的「架構上可能要先做的事」第 6 個：cookie、HTTP cache�
 4. Web Storage 和 cookie 做到 WPT 的 `webstorage/`、`cookies/` 大部分通過，一般網站的登入和偏好設定能用。
 5. 之後的 HTTP cache、IndexedDB 不必再改 key 和 profile。
 
+結果：1 到 3、5 都做到。`webstorage/` 失敗的只剩 `window.open`、`BroadcastChannel`、單獨的 surrogate 和照 Chrome 的幾項；`cookies/` 89 份裡 43 份整份通過，失敗的多半卡在 machopo 沒有的 `window.open`、`WebSocket`、service worker、`self.origin`（`progress.md` 的「WPT」）。
+
 ### 不在範圍內
 
 - HTTP cache、IndexedDB、Cache Storage、service worker、`navigator.storage`（quota 的 API）。
 - Cookie Store API（非同步的 `cookieStore`）、Storage Access API、`Clear-Site-Data`。
 - 無痕模式、多個 profile、同步、清除瀏覽資料的 UI。
 - session restore（重開之後還原分頁和 `sessionStorage`）。
-- blob URL 照 key 分（現在照登記它的 renderer；「之後的可能」）。
+- blob URL 照 key 分（照登記它的 renderer；「之後的可能」）。
 
-### 要解決的限制
+### 解決的限制
 
-`docs/limitations.md` 的：「網路」的「沒有 cookie」那一半（HTTP cache 留著）；`navigator` 的 `cookieEnabled` 是 `false`；`fetch()` 的 `credentials`「因為沒有 cookie，只改變 CORS 要求對方的條件」；WebDriver 的沒有 cookie 指令；DevTools 的 frame 的 `domainAndRegistry` 一律是空的；CDP 的 cookie 命令一律是空的。
+`docs/limitations.md` 的：「網路」的「沒有 cookie」那一半（HTTP cache 留著）；`navigator` 的 `cookieEnabled` 是 `false`；`fetch()` 的 `credentials`「因為沒有 cookie，只改變 CORS 要求對方的條件」；WebDriver 的沒有 cookie 指令；DevTools 的 frame 的 `domainAndRegistry` 一律是空的；CDP 的 cookie 命令一律是空的。新的限制（第三方的 cookie 擋掉、cookie 存明文、`Priority` 不認等）寫在 `docs/limitations.md` 的「網路」「Bindings 和 DOM API」「WebDriver 和自動化」。
 
 ## 設計概要
 
-對網頁的作者：`localStorage.setItem("theme", "dark")` 之後，關掉 machopo 再開，同一個網站讀得回來；另一個分頁的同源文件收到 `storage` 事件。`sessionStorage` 只在那個分頁裡，分頁關了就沒了。伺服器的 `Set-Cookie` 留下來，之後對那個網站的請求帶 `Cookie`；`document.cookie` 讀得到不是 `HttpOnly` 的。嵌在別的網站裡的 iframe（第三方）有自己的一份儲存，和它自己當最上層時的不是同一份。
+對網頁的作者：`localStorage.setItem("theme", "dark")` 之後，關掉 machopo 再開，同一個網站讀得回來；另一個分頁的同源文件收到 `storage` 事件。`sessionStorage` 只在那個分頁裡，分頁關了就沒了。伺服器的 `Set-Cookie` 留下來，之後對那個網站的請求帶 `Cookie`；`document.cookie` 讀得到不是 `HttpOnly` 的。嵌在別的網站裡的 iframe（第三方）有自己的一份 Web Storage，和它自己當最上層時的不是同一份；它的 cookie 只有 `Partitioned` 的，照最上層的網站分開。
 
-對 machopo 的使用者：登入的狀態和網站的設定留在 profile 的資料夾裡；`--user-data-dir` 換一個資料夾。自動化和測試用暫時的 profile，每次從空的開始。
+對 machopo 的使用者：登入的狀態和網站的設定留在 profile 的資料夾裡；`--user-data-dir` 換一個資料夾。自動化和測試的 profile 只在記憶體，每次從空的開始。
 
-對之後改這部分程式的人：要存東西時，向 Browser 要「這個 frame 的 key」，不自己從網址算；renderer 送來的讀寫只帶 frame，Browser 用 frame 樹換成 key。
+對之後改這部分程式的人：要存東西時，向 Browser 要「這個 frame 的 key」，不自己從網址算；renderer 送來的讀寫只帶 frame 或 loader 的編號，Browser 換成 key 或請求的來歷。
 
 ## 詳細設計
 
-還是草稿：下面是 2026-11-20 的看法，還沒確認的寫在「要決定的事（依序）」和「待決定」。Chromium 怎麼做、machopo 現在的程式在 `details.md`。
+Chromium 怎麼做、開始時 machopo 的程式在 `details.md`；每個選擇的理由在「已決定的事項」。
 
 ### 基礎
 
-- **網站**：`Site`（Chromium 的 `net::SchemefulSite`）：opaque 的 origin 各自是一個網站；有網路 host 的 scheme 是 scheme 加 registrable domain（沒有 registrable domain 的，例如 IP 和 `localhost`，是 host），不看 port。registrable domain 要 public suffix list。
-- **key**：`StorageKey`（`blink::StorageKey`）：origin、最上層的網站、ancestor chain bit（origin 和最上層同一個網站，但中間隔著別的網站的 frame 時算第三方）。沒有 nonce（machopo 沒有 credentialless 的 iframe）。opaque 的 origin 的 key 不能序列化：它的儲存只在記憶體裡、跟著文件走。
-- **誰算**：Browser 在文件 commit 時從 frame 樹算出那個 frame 的 key（它的 origin、root 的網站、ancestor 之間的關係），記在 frame 的節點上。renderer 的儲存訊息只帶 frame 的 token。
-- **profile**：一個資料夾，裡面每種儲存各一份檔案。視窗模式用平台的使用者資料夾底下的 `machopo`（或 `--user-data-dir`）；headless、情境、`--automation-pipe`、測試預設只在記憶體裡。同一個 profile 同時只給一個 machopo（Chromium 的 `ProcessSingleton`）。
+- **網站**：`site::Site`（Chromium 的 `net::SchemefulSite`）：opaque 的 origin 各自是一個網站；有網路 host 的 scheme 是 scheme 加 registrable domain（`psl` crate，private 的後綴也算；沒有 registrable domain 的，例如 IP 和 `localhost`，是 host），不看 port。`SiteForCookies` 照 Chromium 的 `ComputeSiteForCookies`（第 3、4 條）。
+- **key**：`site::StorageKey`（`blink::StorageKey`）：origin、最上層的網站、ancestor chain bit（origin 和最上層同一個網站，但中間隔著別的網站的 frame 時算第三方）。沒有 nonce（machopo 沒有 credentialless 的 iframe）。opaque 的 origin 的 key 不序列化：它的儲存只在記憶體裡（第 2 條）。
+- **誰算**：Browser 的 frame 樹在文件 commit、子 frame 建立時算出那個 frame 的 key，記在 frame 的節點上。renderer 的 Web Storage 訊息只帶 frame 的 token；子資源請求帶 Browser 在 commit 時給的 loader 編號，IO thread 用它填上可信的來歷（文件的 origin、site for cookies、最上層的網站）、核對 `initiator`（第 10、16 條）。
+- **profile**：`browser::Profile`，一個資料夾，裡面每種儲存各一個 SQLite 資料庫（`sql` crate，設定照 Chromium 的 `sql::Database`）。視窗模式用平台的使用者資料夾底下的 `machopo`（或 `--user-data-dir`）；headless、情境、`--automation-pipe`、測試只在記憶體裡。同一個資料夾同時只給一個 machopo，第二個拒絕啟動（第 5 到 8 條）。
+- **同步等 Browser**：要同步問的訊息帶編號，回答不進 Browser 的 queue，放進 main thread 的 scheduler 裡等回答的位置，其他 task 照順序留著（第 9 條）。
 
 ### Web Storage
 
-照 Chromium 的 `CachedStorageArea`：文件第一次碰 `localStorage` 時，renderer 同步向 Browser 要整個 area（那個 key 的全部 key/value），之後的讀都在 renderer 自己的那一份上；寫先改自己的那一份、再告訴 Browser，Browser 寫進磁碟、通知其他看著同一個 area 的文件（它們更新自己的那一份、發 `storage` 事件）。每個 area 的上限是 10 MiB（Chromium 的 `kPerStorageAreaQuota`），超過丟 `QuotaExceededError`。`sessionStorage` 多一層：每個分頁一個 namespace，不寫磁碟。
-
-這是 renderer 的 main thread 第一次同步等 Browser：等的方式是「要決定的事（依序）」第 6 個。
+照 Chromium 的 `CachedStorageArea`：文件第一次碰 `localStorage` 時，renderer 同步向 Browser 要 area（Browser 照 frame 的 key 找；這個 renderer 還沒有時連同整份資料），renderer 照 area 的編號共用一份，讀都在它上面；寫先改自己的那一份、記成還沒確認，再告訴 Browser。Browser 的 `DomStorageContext`（自己的 thread、profile 的 `LocalStorage` 資料庫）照 Chromium 的延遲和速率成批寫進磁碟，把每個改動通知每個打開這個 area 的 renderer，renderer 對其他文件發 `storage` 事件（第 10、11、14 條）。每個 area 的上限 10 MiB，renderer 和 Browser 都守（第 13 條）。`sessionStorage` 由 Browser 留在記憶體裡、每個分頁一個 namespace，事件在 renderer 裡當場發（第 12 條）。
 
 ### cookie
 
-cookie 存在 `net` 那一側（Chromium 的 `CookieMonster` 在 network service）：每一跳請求（redirect 是 `net` 自己跟的）照網址、`SameSite`、`Secure`、credentials mode 決定帶哪些 `Cookie`，每個回應的 `Set-Cookie` 照 RFC 6265bis 和 Chromium 的規則收下，照舊不交給 renderer。要判斷 `SameSite` 和第三方，請求得帶著可信的來歷：最上層的網站、site for cookies、是不是 main frame 的導覽、發起者的網站。這些由 Browser 從 frame 樹填，不由 renderer 填：`FetchResource` 要帶 frame，Browser 核對 `initiator`。
+cookie 在 `net`（Chromium 的 `//net/cookies` 和 network service），自己照 RFC 6265bis 和 Chromium 寫（第 15 條）：`ParsedCookie`、`CanonicalCookie`、`CookieMonster`（上限和淘汰照 Chromium、不認 `Priority`，第 20 條）、`CookiePartitionKey`、`SqlitePersistentCookieStore`（profile 的 `Cookies` 資料庫，背景一次全讀、成批寫、值是明文，第 18、19 條）。`NetworkContext` 的 `CookieJar` 在每一跳請求照 Fetch 的 credentials 帶 `Cookie`、收 `Set-Cookie`，`SameSite` 的情境和分區照 Browser 填的可信參數算；第三方的請求只送只收 `Partitioned` 的，沒標 `SameSite` 的是 `Lax`，沒有開關、沒有 Lax-allowing-unsafe（第 17、24 條）。header 是 bytes，cookie 照 UTF-8 讀寫。
 
-`document.cookie` 同步向 Browser 問（Chromium 的 `RestrictedCookieManager::GetCookiesString` 是 `[Sync]`），`HttpOnly` 的不給；寫是送了就走。持久的 cookie 寫進 profile，session cookie 只在記憶體裡。
-
-### 要決定的事（依序）
-
-1. ~~範圍~~：基礎、Web Storage、cookie 都做，分階段（第 1 條）。
-2. ~~key 的形狀~~：第三方的儲存照最上層的網站分開（第 2 條）。
-3. ~~public suffix list 從哪來~~：`psl` crate（第 3 條）。
-4. ~~profile~~：位置和哪些模式寫磁碟（第 5 條）、第二個 machopo 拒絕啟動（第 6 條）。
-5. ~~磁碟上的格式~~：SQLite（第 7 條）。
-6. ~~renderer 怎麼同步等 Browser~~：回答走一般的訊息，到 scheduler 裡等回答的位置（第 9 條）。
-7. ~~Web Storage 的細節~~：~~`storage` 事件怎麼到其他分頁~~（第 11 條）、~~`sessionStorage` 的 namespace 跟著什麼~~（第 12 條）、~~上限怎麼算~~（第 13 條）。
-8. ~~cookie 的實作~~：自己照 RFC 6265bis 和 Chromium 寫（第 15 條）。
-9. ~~請求的來歷~~：每份文件一個 Browser 給的 loader 編號（第 16 條）。
-10. ~~第三方的 cookie~~：預設擋掉沒標 `Partitioned` 的，加一個照送的旗標（第 17 條）。
-11. ~~`document.cookie` 的同步讀~~：每次都問（第 22 條）。
-12. ~~自動化~~：WebDriver、CDP 的 `Network` 和 `Storage` 的 cookie（第 23 條）。
+`document.cookie` 每次讀都同步問（renderer → Browser 的 IO thread 照 loader 核對 → network thread），寫是送了就走、和讀走同一條路；`about:blank`、`srcdoc` 用建立它的文件的網址，cookie-averse 的文件讀到空的（第 22 條）。Browser 的 cookie 管理（Chromium 的 `CookieManager`）給 CDP 的 `Network` 和 `Storage` 的 cookie 命令用，machopodriver 的 WebDriver cookie 指令照 chromedriver 翻成 CDP（第 23 條）；machopodriver 自己的 `machopo/cookies/clear` 刪光 cookie，WPT 的 runner 每個測試之後用（第 25 條）。
 
 ### 測試
 
-- 網站和 key：單元測試（public suffix 的邊界情況、ancestor chain bit），Browser 的 frame 樹測試（巢狀的 iframe 的 key）。
-- Web Storage：WPT 的 `webstorage/`（54 份）；`browser` 的測試（兩個分頁的 `storage` 事件、第三方的 iframe 分開、重開之後還在）。
-- cookie：`net` 的測試伺服器（`Set-Cookie`、redirect 的每一跳、`SameSite`）；WPT 的 `cookies/`（約 89 份）和 `fetch/api/cors/` 裡因為沒有 cookie 而失敗的；`document.cookie` 的 `browser` 測試；machopodriver 的 cookie 指令（WPT 的 wdspec）。
-- 情境：`about:demo` 加一段記住設定的示範（改了之後重新載入還在）。
-- 只能靠審查的：renderer 不能宣稱別人的 key（Browser 那一側的檢查，測試用壞掉的訊息打）。
+- 網站和 key：`site` 的整合測試（public suffix 的邊界情況、ancestor chain bit、site for cookies），Browser 的 frame 樹的單元測試。
+- profile 和資料庫：`browser` 的 `profile`、`sql` 的整合測試，`shell` 的第二個 machopo。
+- Web Storage：WPT 的 `webstorage/`；`dom` 的 `storage`（area、還沒確認的改動、事件）、`browser` 的 `dom_storage`（兩個分頁的 `storage` 事件、第三方的 iframe 分開、上限、成批寫、重開之後還在）。
+- cookie：`net` 的 `cookies`、`cookie_monster`、`cookie_loads`（測試伺服器：`Set-Cookie`、redirect 的每一跳、`SameSite`、分區、資料庫）；`browser` 的 `cookies`（頁面、iframe、`document.cookie`）；`shell` 的 `devtools_cookies`、`webdriver`；WPT 的 `cookies/`、`fetch/api/cors/` 的 credentials 和 wdspec 的 5 個 cookie 目錄。
+- 驗收和結果在 `progress.md`。renderer 送來的壞掉的訊息（別的 frame、別的 origin 的 loader）由 `browser` 的單元測試打；只靠審查的寫在 `docs/test-gaps.md`。
+- 沒有新的情境：看得到的行為都在頁面裡、由 `browser` 的測試和 WPT 守。
 
 ### 分階段
 
-2026-11-20 的看法，每個階段開始時再定那一段要決定的事：
-
-1. **網站和 key**：public suffix list、`Site`、`StorageKey`，frame 樹在 commit 時算出每個 frame 的 key。看得到的只有 DevTools 的 `domainAndRegistry`。分三段：1a `site` crate 的 `Site` 和 registrable domain；1b `StorageKey`，frame 樹在 commit 時算；1c DevTools 的 `domainAndRegistry`、檢查和文件。
-2. **profile 和磁碟**：資料夾、`--user-data-dir`、哪些模式只在記憶體、磁碟上的格式和它的讀寫。
-3. **Web Storage**：同步等 Browser 的路、`localStorage`、`sessionStorage`、`storage` 事件、上限。分三段：3a 同步等 Browser 的路、Browser 的 storage thread 和資料庫、`Storage` 介面和 `localStorage`；3b `storage` 事件、`sessionStorage`；3c 上限、寫進磁碟的批次、WPT 的 `webstorage/`、檢查和文件。
-4. **`net` 的 cookie**：請求的來歷、cookie 的儲存、`Set-Cookie` 和 `Cookie`、`SameSite`、持久。分五段（2026-11-20 從四段改成五段：第三方的 cookie 預設擋，要和接上請求同一段做）：4a 請求的來歷（Browser 給的、renderer 宣稱不了的最上層的網站和 site for cookies，核對 `initiator`）；4b 解析 `Set-Cookie`、cookie 本身（`CanonicalCookie`）和記憶體裡的 store；4c 接上每一跳請求（`Cookie`、`Set-Cookie`）、`SameSite`、第三方的 cookie 的預設和照送的旗標、導覽的請求的可信參數；4d `Partitioned`、上限和淘汰、寫進 profile 的 `Cookies` 資料庫；4e WPT 的 `cookies/`、檢查和文件。
-5. **cookie 到 DOM 和自動化**：`document.cookie`、`navigator.cookieEnabled`、WebDriver、CDP。分三段（2026-11-20）：5a `document.cookie` 和 `navigator.cookieEnabled`；5b 自動化（WebDriver 的 cookie 指令、CDP 的 `Network` 的 cookie、testdriver）；5c WPT 的 `cookies/`（第 21 條）、檢查和文件。
+1. **網站和 key**：1a `site` crate 的 `Site` 和 registrable domain；1b `StorageKey`，frame 樹在 commit 時算；1c DevTools 的 `domainAndRegistry`、檢查和文件。
+2. **profile 和磁碟**：2a 資料夾、`--user-data-dir`、哪些模式只在記憶體；2b SQLite 和 `sql` crate；2c 檢查和文件。
+3. **Web Storage**：3a 同步等 Browser 的路、Browser 的 storage thread 和資料庫、`Storage` 介面和 `localStorage`；3b `storage` 事件、`sessionStorage`；3c 上限、寫進磁碟的批次、WPT 的 `webstorage/`、檢查和文件。
+4. **`net` 的 cookie**（2026-11-20 從四段改成五段：第三方的 cookie 預設擋，要和接上請求同一段做）：4a 請求的來歷（Browser 給的 loader，核對 `initiator`）；4b 解析 `Set-Cookie`、`CanonicalCookie` 和記憶體裡的 store；4c 接上每一跳請求、`SameSite`、第三方的 cookie、導覽的可信參數；4d `Partitioned`、上限和淘汰、profile 的 `Cookies` 資料庫；4e WPT 的 `cookies/` 的一部分、檢查和文件。
+5. **cookie 到 DOM 和自動化**：5a `document.cookie` 和 `navigator.cookieEnabled`；5b WebDriver 的 cookie 指令、CDP 的 `Network` 和 `Storage` 的 cookie；拿掉照送第三方 cookie 的旗標（第 24 條）；5c 整個 WPT 的 `cookies/`、runner 刪光 cookie（第 25 條）、檢查和文件。
 6. **檢查和文件**。
 
 ## 缺點
 
-- machopo 第一次有跨執行留下來的狀態：格式要能升級，壞掉的檔案要能處理，測試之間不能互相影響。
-- renderer 的 main thread 第一次同步等 Browser：Browser 卡住時頁面跟著卡住，拆 process 時要一個同步的 IPC。
+- machopo 第一次有跨執行留下來的狀態：格式要能升級（`sql` 的 migration），壞掉的檔案要能處理（移到旁邊、重新開始）。
+- renderer 的 main thread 第一次同步等 Browser（`localStorage` 第一次用、每次讀 `document.cookie`）：Browser 卡住時頁面跟著卡住，拆 process 時要一個同步的 IPC。
 - 每個請求都要帶著來歷，renderer 送來的要核對：漏了一條路，cookie 就送錯地方。
-- cookie 的規則多、而且各家不完全一樣（`SameSite` 的預設、第三方的 cookie），照 Chrome 做的那些之後會跟著 Chrome 變。
-- public suffix list 會過期，要定期更新。
+- 第三方的 cookie 擋掉、沒有開關：靠它的網站（iframe 裡的登入、某些 SSO、嵌入的付款和留言元件）不能用。
+- cookie 的規則多、而且各家不完全一樣，照 Chrome 做的那些（tab 算控制字元、沒有名稱的值裡有 `=`、上限）之後會跟著 Chrome 變。
+- public suffix list 跟著 `psl` crate 的版本，要定期升。
 
 ## 理由和其他做法
 
@@ -122,11 +109,11 @@ cookie 存在 `net` 那一側（Chromium 的 `CookieMonster` 在 network service
 
 - **只做基礎，不做功能**：key 和 profile 沒有被實際用過，設計對不對不知道。不選。
 - **只做 Web Storage 或只做 cookie**：比較小，但 cookie 的 key（網域，加上分區）和儲存的 key 不一樣，只做一種驗證不到另一半（第 1 條）。
-- 其他的比較在各條「要決定的事（依序）」定下來時寫進「已決定的事項」，完整的放 `details.md`。
+- 其他的比較在「已決定的事項」的各條，完整的在 `details.md`。
 
 ## 先例
 
-`details.md` 的「其他實作」：Chromium（`SchemefulSite`、`StorageKey`、`StoragePartition`、`CachedStorageArea` 和 `StorageArea`、`CookieMonster`、`RestrictedCookieManager`）。Firefox 和 WebKit 的做法還沒對著原始碼看，到用得到的階段再看。
+`details.md` 的「其他實作」：Chromium（`SchemefulSite`、`StorageKey`、`StoragePartition`、`CachedStorageArea` 和 `StorageArea`、`CookieMonster`、`RestrictedCookieManager`）。Firefox 和 WebKit 只對照了第三方 cookie 的預設和 cookie 的存法（第 19、20、24 條），沒有對著原始碼看。
 
 ## 已決定的事項
 
@@ -155,7 +142,7 @@ cookie 存在 `net` 那一側（Chromium 的 `CookieMonster` 在 network service
 
 16. **請求的來歷：每份文件一個 Browser 給的 loader 編號**（2026-11-20，第 4 階段）：Browser 在送 `CommitNavigation` 之前登記那份文件的 loader 的參數（文件的 origin、最上層的網站、site for cookies），給它一個編號，交給 IO thread，編號跟著 commit 送給 renderer；renderer 的子資源請求（`FetchResource`）帶著編號，IO thread 用編號查參數：`initiator` 和參數的 origin 對不上是壞掉的訊息，cookie 照參數決定。先登記、後送 commit，IO thread 收到新文件的第一個請求時一定查得到。renderer 自己 commit 的文件（`about:blank`、`srcdoc`、`javascript:`）和 dedicated worker 用建立它的文件的編號。對照 Chromium（2026-11-20 讀 `network_context.mojom`、`isolation_info.h`）：Browser 在 commit 時替每份文件建 `URLLoaderFactory`，`URLLoaderFactoryParams` 帶 `request_initiator_origin_lock` 和 `IsolationInfo`（frame 的 origin、最上層的 frame 的 origin、`SiteForCookies`），factory 跟著 commit 交給 renderer，network service 照它決定 cookie、核對請求的 `request_initiator`。不選 renderer 自己填最上層的網站和 site for cookies：最簡單，但被攻破的 renderer 可以宣稱自己是最上層的網站、拿到 `SameSite=Strict` 的 cookie，違反收的一方要驗證的規則。不選子資源的請求先繞到 UI thread、從 frame 樹拿參數：不用新的編號，但每個請求多一趟 UI thread（忙著畫畫面時載入跟著慢），也還是有 IO thread 比 UI thread 先收到新文件的請求的時序問題。
 
-17. **第三方的 cookie 預設擋掉，加一個照送的旗標**（2026-11-20，第 4 階段）：預設不送、也不收沒標 `Partitioned` 的第三方 cookie（請求的 site for cookies 是 null，或不是請求的網址的網站），`Partitioned`（CHIPS）的照最上層的網站分開，照收照送；沒標 `SameSite` 的是 `Lax`，不做 2 分鐘的 Lax-allowing-unsafe。打開照送的旗標時整組照 Chrome 現在的預設：第三方的 cookie 照送照收，沒標 `SameSite` 的是 `Lax` 加 2 分鐘的 Lax-allowing-unsafe（最上層的跨網站導覽不管 method 都帶上剛建立的）。旗標在 `NetworkContextParams`，`machopo` 的命令列和 WPT 的 runner 都能打開。理由（2026-11-20 讀 RFC 6265bis 的 editor's draft，2026-11-17 版）：§7.1 不規定做法，但 RECOMMENDED 瀏覽器採用在相容性容許的範圍內盡量嚴格的第三方 cookie 政策；§5.8.1、§7.2 容許瀏覽器完全不送 `Cookie`、套用自己的 cookie 政策；沒標 `SameSite` 的預設等同 `Lax`，§5.6.7.2 的 Lax-allowing-unsafe 是容許（MAY）的相容性例外、SHOULD 只用在 2 分鐘內建立的。WPT 兩種假設都有：`cookies/samesite/` 的 `verifySameSiteCookieState` 要 `SameSite=None` 的跨網站照送，`cookies/third-party-cookies/` 的（`.tentative`）要預設擋；Chrome 預設跑時後者失敗（它的 `-expected.txt`），另外用 `--test-third-party-cookie-phaseout` 的 virtual suite 跑，machopo 反過來：預設擋，`samesite/` 用照送的旗標跑。對照 Chromium（2026-11-20 讀 `net/base/features.cc`、`cookie_constants.cc`）：`kForceThirdPartyCookieBlocking` 預設關、`kSameSiteDefaultChecksMethodRigorously` 預設關（有 Lax-allowing-unsafe，`kLaxAllowUnsafeMaxAge` 2 分鐘）、`kCookieSameSiteConsidersRedirectChain` 預設關。不選照 Chrome 的預設：網站相容性最好，但只用到規範容許的最寬鬆那一端，第三方的 cookie 能跨網站認出使用者，而 machopo 的 storage 已經照最上層的網站分開。不選預設擋、沒有旗標：靠第三方 cookie 的網站沒有辦法用，WPT 的 `samesite/` 有一部分只能記成失敗。不選照 Chrome 但不做 Lax-allowing-unsafe：比照 Chrome 少一個特例，但預設仍然照送第三方 cookie。兩種模式下 Lax-allowing-unsafe 的取捨：照送的模式整組照 Chrome（WPT 的 `samesite/` 照 Chrome 寫），預設的模式照規範的基本行為，各自一致。
+17. **第三方的 cookie 預設擋掉，加一個照送的旗標**（2026-11-20，第 4 階段；旗標和 Lax-allowing-unsafe 那部分由第 24 條取代）：預設不送、也不收沒標 `Partitioned` 的第三方 cookie（請求的 site for cookies 是 null，或不是請求的網址的網站），`Partitioned`（CHIPS）的照最上層的網站分開，照收照送；沒標 `SameSite` 的是 `Lax`，不做 2 分鐘的 Lax-allowing-unsafe。打開照送的旗標時整組照 Chrome 現在的預設：第三方的 cookie 照送照收，沒標 `SameSite` 的是 `Lax` 加 2 分鐘的 Lax-allowing-unsafe（最上層的跨網站導覽不管 method 都帶上剛建立的）。旗標在 `NetworkContextParams`，`machopo` 的命令列和 WPT 的 runner 都能打開。理由（2026-11-20 讀 RFC 6265bis 的 editor's draft，2026-11-17 版）：§7.1 不規定做法，但 RECOMMENDED 瀏覽器採用在相容性容許的範圍內盡量嚴格的第三方 cookie 政策；§5.8.1、§7.2 容許瀏覽器完全不送 `Cookie`、套用自己的 cookie 政策；沒標 `SameSite` 的預設等同 `Lax`，§5.6.7.2 的 Lax-allowing-unsafe 是容許（MAY）的相容性例外、SHOULD 只用在 2 分鐘內建立的。WPT 兩種假設都有：`cookies/samesite/` 的 `verifySameSiteCookieState` 要 `SameSite=None` 的跨網站照送，`cookies/third-party-cookies/` 的（`.tentative`）要預設擋；Chrome 預設跑時後者失敗（它的 `-expected.txt`），另外用 `--test-third-party-cookie-phaseout` 的 virtual suite 跑，machopo 反過來：預設擋，`samesite/` 用照送的旗標跑。對照 Chromium（2026-11-20 讀 `net/base/features.cc`、`cookie_constants.cc`）：`kForceThirdPartyCookieBlocking` 預設關、`kSameSiteDefaultChecksMethodRigorously` 預設關（有 Lax-allowing-unsafe，`kLaxAllowUnsafeMaxAge` 2 分鐘）、`kCookieSameSiteConsidersRedirectChain` 預設關。不選照 Chrome 的預設：網站相容性最好，但只用到規範容許的最寬鬆那一端，第三方的 cookie 能跨網站認出使用者，而 machopo 的 storage 已經照最上層的網站分開。不選預設擋、沒有旗標：靠第三方 cookie 的網站沒有辦法用，WPT 的 `samesite/` 有一部分只能記成失敗。不選照 Chrome 但不做 Lax-allowing-unsafe：比照 Chrome 少一個特例，但預設仍然照送第三方 cookie。兩種模式下 Lax-allowing-unsafe 的取捨：照送的模式整組照 Chrome（WPT 的 `samesite/` 照 Chrome 寫），預設的模式照規範的基本行為，各自一致。
 
 18. **cookie 的資料庫在背景一次全讀**（2026-11-20，第 4 階段）：`net` 自己開 profile 的 `Cookies` 資料庫（路徑由 `NetworkContextParams` 帶進來），讀寫都在 `net` 的一個背景 thread 上，不卡住 `NetworkService` 的 tokio；啟動時在背景用一個查詢讀進所有沒過期的持久 cookie（所有網域、所有分區），讀完之前要讀或設 cookie 的那一跳等著，不帶 cookie 的請求照常跑；寫照 Chromium 的 `SQLitePersistentCookieStore` 成批（每 30 秒或 512 筆，結束時寫完）；session cookie 不寫。對照 Chromium（2026-11-20 讀 `sqlite_persistent_cookie_store.cc`、`cookie_monster.cc`）：背景的 sequence 上讀，請求要的網域先讀（`LoadCookiesForKey`，`CookieMonster` 的 `tasks_pending_for_key_` 讓那個網域的存取等它），其他網域在背景一批一批讀完（`ChainLoadCookies`），最後也全部在記憶體裡。不選照網域先讀：資料庫大、磁碟慢時第一個請求等得最少，但 jar 要記每個網域讀了沒、哪些存取在等哪個網域，多一種照網域查的 SQL；淘汰把資料庫壓在 3300 筆以內，全讀一次在 SSD 上是幾到幾十 ms，省下的時間少。之後第一個請求等太久時再改，讀寫的部分不用重寫。不選啟動時在 network thread 上同步讀：最簡單，但讀完之前 network thread 什麼都不能做，不帶 cookie 的請求也跟著等，而背景讀比它只多 `url_loader` 帶 cookie 前的一次等待。
 
@@ -163,7 +150,7 @@ cookie 存在 `net` 那一側（Chromium 的 `CookieMonster` 在 network service
 
 20. **cookie 的上限和淘汰照 Chromium，不認 `Priority`**（2026-11-20，第 4 階段）：數字照 Chromium 的 `CookieMonster`：每個 registrable domain 180 筆、超過時刪到 150 筆；全部 3300 筆、超過時刪 300 筆，最近 30 天用過的不刪；`Partitioned` 的每個分區的每個網域另外 180 筆、10 KiB。先刪過期的，再刪不是 `Secure` 的、最久沒用的，最後才刪 `Secure` 的。`Priority` 屬性不解析，全部當 Medium：Chrome 對不帶 `Priority` 的 cookie 就是這樣，也接近 Firefox（每個網域 180 筆，最久沒用的先刪）。對照 Chromium（2026-11-20 讀 `cookie_monster.cc` 的 `GarbageCollect`）：照優先權分六輪刪，每輪先保護 `Secure` 的，每種優先權留下配額（低 30、中 50、高 70）。不選照 Chromium 全做：和 Chrome 一模一樣，但 `Priority` 只有 Chromium 認，不在 RFC 6265bis 裡，Firefox 和 Safari 不理，多一個屬性、一欄資料和約一倍的淘汰程式，只在一個網域超過 180 筆時看得出差別；之後要加時照六輪補上。不選只照最久沒用的刪：最簡單，但不安全的網頁可以塞滿 cookie、擠掉 `Secure` 的，違反 RFC 6265bis 的「leave secure cookies alone」的用意。
 
-21. **WPT 的 `cookies/` 到第 5 階段才大量列進來**（2026-11-20，第 4 階段）：第 4 階段只列整份通過的 4 份（`path/match-segment-boundaries`、`path/non-ascii-path-attribute`、`value/value-overwrite`、`samesite-none-secure/`），更新因為有了 cookie 而通過的（`fetch/api/cors/cors-cookies*`、worker 和 dynamic import 的 credentials）；其他的等 `document.cookie` 和自動化的 cookie（testdriver 的 `delete_all_cookies`）做完再列，`samesite/` 的照送的 subsuite（第 17 條）等 machopo 有 `window.open`。2026-11-20 用預設的設定跑整個 `cookies/`：約 90 份只有那 4 份整份通過，其他的失敗在 `window.open`（`samesite/` 幾乎每份先開新視窗）、`document.cookie` 和 `delete_all_cookies`，都不是第 4 階段的事。對照 Chromium：整個 `cookies/` 在清單裡，失敗的留 baseline，`third-party-cookies/` 另外用 virtual suite 跑；machopo 的 subsuite 是 wptrunner 裡對應的機制（`hidpi/` 的 reftest 已經在用）。不選現在列整個 `cookies/`：進度看得到，但約 85 份的預期結果到第 5 階段幾乎都要重寫，約 20 份 timeout 的要標 `disabled`，`samesite/` 在 subsuite 裡照樣卡在 `window.open`。
+21. **WPT 的 `cookies/` 到第 5 階段才大量列進來**（2026-11-20，第 4 階段；`samesite/` 的 subsuite 由第 24 條取消，5c 列進整個目錄）：第 4 階段只列整份通過的 4 份（`path/match-segment-boundaries`、`path/non-ascii-path-attribute`、`value/value-overwrite`、`samesite-none-secure/`），更新因為有了 cookie 而通過的（`fetch/api/cors/cors-cookies*`、worker 和 dynamic import 的 credentials）；其他的等 `document.cookie` 和自動化的 cookie（testdriver 的 `delete_all_cookies`）做完再列，`samesite/` 的照送的 subsuite（第 17 條）等 machopo 有 `window.open`。2026-11-20 用預設的設定跑整個 `cookies/`：約 90 份只有那 4 份整份通過，其他的失敗在 `window.open`（`samesite/` 幾乎每份先開新視窗）、`document.cookie` 和 `delete_all_cookies`，都不是第 4 階段的事。對照 Chromium：整個 `cookies/` 在清單裡，失敗的留 baseline，`third-party-cookies/` 另外用 virtual suite 跑；machopo 的 subsuite 是 wptrunner 裡對應的機制（`hidpi/` 的 reftest 已經在用）。不選現在列整個 `cookies/`：進度看得到，但約 85 份的預期結果到第 5 階段幾乎都要重寫，約 20 份 timeout 的要標 `disabled`，`samesite/` 在 subsuite 裡照樣卡在 `window.open`。
 
 22. **`document.cookie` 每次讀都同步問**（2026-11-20，第 5 階段）：讀是一個同步的 IPC（renderer → Browser 的 IO thread → network thread），寫是送了就走；兩者走同一條路，讀一定看得到前面的寫。對照 Chromium（2026-11-20 讀 `cookie_jar.cc`、`restricted_cookie_manager.cc`）：`GetCookiesString` 是 `[Sync]`、`SetCookieFromString` 送了就走；加上每份文件一個共享記憶體裡的版本號（`kReduceCookieIPCs`），`RestrictedCookieManager` 在這份文件的 cookie 變動時加一，renderer 看版本沒變、自己的寫都套用了就用上一次的字串。不選版本號：大多數的讀不用 IPC，但要先有 `ipc` 的跨 process 共享記憶體和 `net` 的 cookie 變動通知（`CookieChangeDispatcher`）和照網址登記的聽眾，工作量是每次都問的好幾倍；正確性一樣，只差效能，等這兩樣有了（CDP 的 cookie 事件、Cookie Store API 也要）再加，讀之前多一個判斷，不用重寫。不選有變動時送訊息叫 renderer 丟掉快取：不正確，script 同步跑時網路回應改了 cookie，訊息還在佇列裡，讀到舊值。
 
@@ -175,7 +162,7 @@ cookie 存在 `net` 那一側（Chromium 的 `CookieMonster` 在 network service
 
 ## 待決定
 
-「要決定的事（依序）」的第 7 到 12 個，每個階段開始前定那一段的。
+沒有。
 
 ## 之後的可能
 
@@ -187,4 +174,4 @@ cookie 存在 `net` 那一側（Chromium 的 `CookieMonster` 在 network service
 - CDP 的 `DOMStorage` domain 和 `Storage.clearDataForOrigin`（DevTools 的 Application 面板，第 23 條）。
 - 清除資料的 UI、無痕模式。
 - 第二個 machopo 把網址交給已經開著同一個 profile 的那個（Chromium 的 `ProcessSingleton`，第 6 條）。
-- cookie 的值在磁碟上加密（Chromium 用作業系統的金鑰）。
+- `window.open` 之後：`sessionStorage` 複製給開出來的視窗（第 12 條），WPT 的 `cookies/samesite/` 大部分能跑。

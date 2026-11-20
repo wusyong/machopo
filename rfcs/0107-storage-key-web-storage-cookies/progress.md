@@ -2,7 +2,7 @@
 
 <!-- 排程（開始實作）時複製進 RFC 的資料夾。怎麼更新見 docs/README.md 的「完成一步時」和「一份 RFC 做完時」。設計理由寫在 README.md，目前仍然成立的限制寫在 docs/limitations.md。 -->
 
-開始日期：2026-11-20
+開始日期：2026-11-20。完成日期：2026-11-20（macOS，Apple M4）。
 
 ## 步驟
 
@@ -25,269 +25,88 @@
 | 5a：`document.cookie` 和 `navigator.cookieEnabled` | 完成 | 2026-11-20 |
 | 5b：自動化（WebDriver 的 cookie 指令、CDP 的 `Network` 的 cookie、testdriver） | 完成 | 2026-11-20 |
 | 5c：WPT 的 `cookies/`、第 5 階段的檢查和文件 | 完成 | 2026-11-20 |
-| 6：檢查和文件 | 未開始 | |
+| 6：檢查和文件 | 完成 | 2026-11-20 |
 
 ## 驗收
 
-| 項目 | 怎麼驗證 |
-| --- | --- |
-| registrable domain：public suffix 加一個 label（萬用字元和例外、punycode）、private 的後綴和不認得的頂層網域也算、public suffix 本身、IP 位址、有空的 label 的沒有、最後的點留著 | `cargo test -p site` |
-| 網站：同一個 registrable domain 的 host 是同一個、不看 port、scheme 不同就不同、沒有 registrable domain 的 host 自己是網站、opaque 的 origin 只和自己相等 | `cargo test -p site` |
-| storage key：最上層的 frame 是第一方；別的網站的 frame 是第三方，嵌在不同的最上層網站底下各是一個 key；中間隔著別的網站的 frame 時是第三方；opaque 的 origin 和 opaque 的最上層是第三方 | `cargo test -p site` |
-| DevTools 的 `domainAndRegistry`：frame 的網址的 host 的 registrable domain（private 的後綴也算），位址、public suffix 本身、單一 label、沒有 host 的是空的 | `cargo test -p renderer --lib page_agent::`；`cargo test -p shell --test it a_frames_domain_and_registry` |
-| profile：只在記憶體的沒有資料夾；資料夾沒有就建、鎖檔寫著是誰的；同時只給一個（clone 都放掉之後才放開），被用著是 `InUse`、訊息說資料夾和 `--user-data-dir`；建不出來的是錯誤；各平台預設的資料夾（空的、相對的 `XDG_CONFIG_HOME` 不算） | `cargo test -p browser --test it profile::` |
-| 哪個 profile：視窗預設是使用者的、自動化在記憶體、`--user-data-dir` 的照啟動時的工作目錄；第二個 machopo 開同一個資料夾時拒絕啟動，第一個照常 | `cargo test -p shell --bin machopo -- user_data`；`cargo test -p shell --test it a_second_machopo` |
-| 資料庫：記憶體和 profile 的資料夾，關掉再開還在；照 Chromium 的預設（`truncate` 的 journal、exclusive locking、被鎖住時馬上失敗）；schema 只跑新的 migration、較新的拒絕、失敗的退回；不是資料庫和 schema 壞掉的檔案移到旁邊、重新開始 | `cargo test -p sql` |
-| frame 樹的 key：文件 commit 時、子 frame 建立時（parent 的 origin）照它所在的 frame 算，最上層的網站是 main frame 的；重設之後是 opaque 的 | `cargo test -p browser --lib frame_tree::` |
-| 同步等 Browser：main thread 只拿自己的編號的回答，其他 task 照順序留著、別的呼叫的回答留給那個呼叫；Browser 說要結束或 main thread 不在了時放棄 | `cargo test -p renderer --lib task_queue` |
-| storage key 的序列化：照 Chromium 的 `StorageKey::Serialize`（origin 的網址、第三方的 `^0` 加最上層的網站或 `^31`），opaque 的 origin 和最上層的網站不寫 | `cargo test -p site` |
-| `localStorage` 的 area：一個 renderer 拿一次項目、之後只拿編號，別的 renderer 拿得到改過的、照 key 的順序；不是自己的 area 的改動不算；每個 key 一份（別的 origin、別的最上層的網站、中間隔著別的網站）；opaque 的 origin 沒有；忘掉之後重新拿；profile 的資料夾留著（關掉時等寫完），opaque 的最上層的網站只在記憶體 | `cargo test -p browser --test it dom_storage::` |
-| 頁面的 `localStorage`：成員（`length`、`key()`、`getItem` 等、named property 不蓋過成員、同一個物件）；另一個分頁讀得到、別的 origin 讀不到、opaque 的 origin 是 `SecurityError`；同一個 renderer 裡同 key 的文件共用、同步讀得到；不在 frame 裡的 window 是 null；profile 的資料夾留到下一次；換成 wasm 的 engine 再換回來之後照樣在 | `cargo test -p browser --test it dom_storage::`；`cargo test -p shell --test it local_storage_outlasts` |
-| `storage` 事件經過 Browser：每個打開這個 area 的 renderer 都收到改動（舊值、有沒有改到），做出改動的那個帶著它的 `Storage` 的編號；`sessionStorage` 的改動不通知 | `cargo test -p browser --test it dom_storage::` |
-| DOM 的 area：同一個 area 的 window 共用；改動在 Browser 傳回來之前算還沒確認，別的 renderer 在它之前的改動（同一個 key、或這裡的 clear 之前的任何改動）不套用，別人的 clear 留下這裡的 key；`storage` 事件排給那個 area 的每個 window、做出改動的除外，沒改到的不發；`sessionStorage` 的當場發；window 的 `storage` listener 要打開它的 area | `cargo test -p dom --test it storage::` |
-| 頁面的 `storage` 事件和 `sessionStorage`：別的分頁收到 `localStorage` 的事件（key、新舊值、做出改動的頁面的網址、自己的 `storageArea`、trusted、不 bubble），做出改動的 window 沒有；同一個分頁裡只有 `<body onstorage>` 的 iframe 也收得到（`sessionStorage` 的先到）；`sessionStorage` 每個分頁一份（同一個分頁的下一頁有、別的分頁和之後開的分頁沒有、不發到別的分頁），分頁關掉時拿掉 | `cargo test -p browser --test it dom_storage::` |
-| 上限：renderer 的（10 MiB，每個 UTF-16 code unit 算 2 bytes，只在項目變大時檢查；拿掉的、清掉的不再算；從 Browser 拿到的超過上限時改小照樣可以），超過丟 `QuotaExceededError`（code 22、是 `QuotaExceededError`）、不改，`localStorage` 和 `sessionStorage` 各算各的；Browser 的（多容許 100 KiB），超過時拒絕、只告訴做出改動的 renderer，renderer 改回 Browser 的值（後面還有這個 key 的改動時不改） | `cargo test -p dom --test it storage::`；`cargo test -p browser --test it dom_storage::` |
-| 成批寫進磁碟：到期之前檔案不變，到期時一起寫，結束時寫完；延遲是 5 秒和兩個速率限制中最長的，速率從 area 第一次有改動起算 | `cargo test -p browser --lib dom_storage`；`cargo test -p browser --test it dom_storage::` |
-| WPT：`webstorage/` 0 個意外的結果（`window.open`、`BroadcastChannel`、單獨的 surrogate 失敗；`set.window.js` 和 `storage_builtins.window.js` 失敗的項目和 Chrome 一樣）；`createEvent('StorageEvent')` | `python3 scripts/test.py wpt webstorage/ dom/nodes/Document-createEvent.https.html dom/events/EventTarget-dispatchEvent.html` |
-| site for cookies：最上層的 frame 是自己的網站；frame 和中間的每一層都是最上層的網站時是它，有一層不是、或有 opaque 的時是 null；網址照 scheme 比（`ws:` 算 `http:`、`wss:` 算 `https:`） | `cargo test -p site` |
-| 請求的來歷：每份文件 commit 時一個 Browser 給的 loader（文件的 origin、site for cookies、最上層的網站，照它所在的 frame 算）；IO thread 照編號核對（沒給的 loader、不是 worker 的 loader、`initiator` 不是 loader 的 origin、renderer 自己帶了可信的參數都是壞掉的訊息；opaque 的 `initiator` 照收），填上 loader 的可信參數；跨 origin 的 iframe 的圖片、iframe 一開始的 `about:blank` 的 `fetch()`、worker 的 `fetch()` 都經過各自的 loader | `cargo test -p browser --lib -- loader request_takes workers_request`；`cargo test -p browser --test it loaders::` |
-| cookie：解析 `Set-Cookie`（終止字元和控制字元整行拒絕、tab 也是，名稱和值的大小、屬性值太長只略過、沒有 `=` 的第一段是沒有名稱的值、屬性不分大小寫、最後一個算）；`Expires` 的日期（Chromium 的 `ParseCookieExpirationTime`）；cookie 本身（host-only 和 domain cookie、public suffix 和 IP 位址、預設的 path、`Max-Age` 先於 `Expires`、伺服器的時差、最多 400 天、`__Secure-`、`__Host-`、`__Http-` 前綴、`Secure` 只從安全的或可信的網址、`SameSite=None` 要 `Secure`、`Partitioned` 要 `Secure`）；store（同名同 domain 同 path 的取代、值一樣時留著建立的時間、過期的刪掉、script 蓋不了 `HttpOnly`、leave secure cookies alone、domain 和 path 的比對、`SameSite` 的設定和送出（沒有 Lax-allowing-unsafe）、送出的順序）；預設的選項是 script 的、跨網站的 | `cargo test -p net --test it cookies::`；`cargo test -p net --lib cookies` |
-| 請求的 cookie：每一跳送 jar 裡它拿得到的、留下回應設的（redirect 的也是）；沒有可信參數的（Browser 自己的）和 `omit` 的不送不留，`same-origin` 只到 initiator 的 origin；`SameSite` 照請求的情境（Chromium 的 `ComputeSameSiteContextForRequest`、`ForResponse`：別的網站發起的 main frame 導覽是 Lax、不安全的 method 只有 `None` 的，Browser 自己的導覽是 Strict，同一個網站的頁面裡別的網站發起的子資源是跨網站）；第三方（site for cookies 是別的網站或 null，不看 scheme）不送不留（`SameSite=None` 的也是）；導覽的可信參數（main frame 的是網址的網站，子 frame 的是 parent 的 loader 的，initiator 是發起的 frame 的 origin）；頁面設的 cookie 它的圖片送出、第三方的 iframe 設的不留 | `cargo test -p site`；`cargo test -p net --test it cookie_loads::`；`cargo test -p browser --lib -- navigations_params loaders_params`；`cargo test -p browser --test it cookies::`；`cargo test -p shell --bin machopo -- third_party_cookie` |
-| `Partitioned`：分區是最上層的網站和中間有沒有隔著別的網站（main frame 的導覽是自己的網址的網站、同網站的），cookie 只跟著那個分區的請求，同名同 domain 同 path 的在不同分區是不同的 cookie；請求有分區時才是分區的、要 `Secure`，沒有時照沒標的；第三方的 `Partitioned` cookie 照送照收 | `cargo test -p net --test it -- cookies:: cookie_monster:: cookie_loads::`；`cargo test -p net --lib cookie_jar` |
-| 上限和淘汰：一個 registrable domain 超過 180 筆時刪到 150（過期的先刪，再刪最久沒用的、不是 `Secure` 的在前），分區的 cookie 不算；全部超過 3300 筆時刪到 3000，最近 30 天用過的不刪，不是 `Secure` 的在前；分區的每個網域 180 筆、10 KiB；讀到的 cookie 隔一分鐘以上才記成用過 | `cargo test -p net --test it -- cookie_monster:: cookies::` |
-| `Cookies` 資料庫：持久的 cookie 每個欄位存回來一樣（分區也是），session 的和 opaque 分區的不寫；改動成批寫（30 秒、512 筆、結束時），讀的時候刪掉過期的、略過不是 cookie 的列；開不了時只在記憶體；請求等資料庫讀完才帶 cookie；network context 換一個之後持久的還在，profile 的資料夾經過 `StoragePartition` 交給 `net` | `cargo test -p net --lib -- sqlite_persistent cookie_jar`；`cargo test -p net --test it cookie_loads::`；`cargo test -p browser --test it cookies::` |
-| WPT：`cookies/` 整份通過的 4 份（path 的比對、非 ASCII 的 path、值的覆寫、`SameSite=None` 要 `Secure`）；帶 cookie 的 credentials（`cors-cookies`、`cors-cookies-redirect`、dedicated worker 的 credentials、dynamic import 的 credentials）0 個意外的結果 | `python3 scripts/test.py wpt cookies/ fetch/api/cors/ workers/modules/ html/semantics/scripting-1/the-script-element/module/dynamic-import/` |
-| `document.cookie`：讀的是 script 看得到的（沒有 `HttpOnly` 的），寫的跟著之後的請求送出、馬上讀得到，不能寫 `HttpOnly` 的或蓋過它；`about:blank` 的 iframe 用建立它的文件的網址（同一段 script 裡也是）；不在 browsing context 裡、拿出頁面的 frame 的、`file:` 的文件讀到空的、不丟錯；重開之後第一次讀也等資料庫；第三方照政策（預設只有 `Partitioned` 的） | `cargo test -p net --test it cookie_loads::`；`cargo test -p browser --test it cookies::` |
-| `navigator.cookieEnabled`：第一方是 true，第三方的 iframe 是 false；cookie-averse 的文件是 true | `cargo test -p net --test it cookie_loads::`；`cargo test -p browser --test it cookies::` |
-| script 的 cookie 經過文件的 loader：網址是 loader 的 origin 的才照它的可信參數；別的 origin、opaque 的 loader、沒給的 loader 是壞掉的訊息 | `cargo test -p browser --lib script_cookies` |
-| WPT：`document-cookie.html`、`cookie-enabled-noncookie-frame.html`、`set-and-delete-document-cookie.window.js`、`navigatorcookies-cookieenabled-true.html` 整份通過 | `python3 scripts/test.py wpt cookies/ html/dom/documents/resource-metadata-management/ html/webappapis/system-state-and-capabilities/the-navigator-object/` |
-| cookie 的零件（DevTools、自動化的）：host-only 的是網址的 host，有點開頭的 domain 是 domain cookie；path 照給的或網址的預設；`Secure` 的當成從安全的網址設的；`Set-Cookie` 寫不出的拒絕（`;`、終止字元、前後的空白、名稱裡的 `=`、不在其中的網域、相對的 path、前綴、讀起來像一對的沒有名字的值、沒有 `Secure` 的分區） | `cargo test -p net --test it cookies::a_cookie_from` |
-| Browser 的 cookie 管理：網址的 cookie 每種情境的、`HttpOnly` 的都算，含給的最上層 frame 的分區，每個一次，不記成用過；全部的；設的當成從自己的 `https:` 網址設的（`HttpOnly` 的也可以）；刪的照名稱、確切的 domain、path、分區 | `cargo test -p net --test it -- cookie_loads::the_browsers cookie_monster::an_all` |
-| CDP：`Network.getCookies`（分頁的 frame 的網址、或給的）、`getAllCookies`、`setCookie`、`setCookies`（全部或一個都不設）、`deleteCookies`（沒給分區時只刪沒分區的）、`clearBrowserCookies`，`Storage.getCookies`、`setCookies`、`clearCookies`；`Network.Cookie` 的欄位（`expires`、`session`、`size`、`sameSite` 只在有時、`partitionKey`）；參數做不出 cookie 時是錯誤 | `cargo test -p shell --test it devtools_cookies::` |
-| WebDriver：Get All、Get Named（`no such cookie`）、Add（目前的文件的網址，`sameSite` 不對是 `invalid argument`，網域不對或不是 `http:` 的文件是 `invalid cookie domain`）、Delete、Delete All Cookies；沒標 `SameSite` 的回報 `Lax`；WPT 的 wdspec 的 5 個目錄 | `cargo test -p shell --test it webdriver::cookies`；`python3 scripts/test.py wdspec /webdriver/tests/classic/add_cookie /webdriver/tests/classic/delete_all_cookies /webdriver/tests/classic/delete_cookie /webdriver/tests/classic/get_all_cookies /webdriver/tests/classic/get_named_cookie` |
+| 領域 | 項目 | 怎麼驗證 |
+| --- | --- | --- |
+| 網站和 key | registrable domain：public suffix 加一個 label（萬用字元和例外、punycode）、private 的後綴和不認得的頂層網域也算、public suffix 本身、IP 位址、有空的 label 的沒有、最後的點留著 | `cargo test -p site` |
+| 網站和 key | 網站：同一個 registrable domain 的 host 是同一個、不看 port、scheme 不同就不同、沒有 registrable domain 的 host 自己是網站、opaque 的 origin 只和自己相等 | `cargo test -p site` |
+| 網站和 key | site for cookies：最上層的 frame 是自己的網站；frame 和中間的每一層都是最上層的網站時是它，有一層不是、或有 opaque 的時是 null；網址照 scheme 比（`ws:` 算 `http:`、`wss:` 算 `https:`） | `cargo test -p site` |
+| 網站和 key | storage key：最上層的 frame 是第一方；別的網站的 frame 是第三方，嵌在不同的最上層網站底下各是一個 key；中間隔著別的網站的 frame 時是第三方；opaque 的 origin 和 opaque 的最上層是第三方 | `cargo test -p site` |
+| 網站和 key | storage key 的序列化：照 Chromium 的 `StorageKey::Serialize`（origin 的網址、第三方的 `^0` 加最上層的網站或 `^31`），opaque 的 origin 和最上層的網站不寫 | `cargo test -p site` |
+| 網站和 key | frame 樹的 key：文件 commit 時、子 frame 建立時（parent 的 origin）照它所在的 frame 算，最上層的網站是 main frame 的；重設之後是 opaque 的 | `cargo test -p browser --lib frame_tree::` |
+| 網站和 key | DevTools 的 `domainAndRegistry`：frame 的網址的 host 的 registrable domain（private 的後綴也算），位址、public suffix 本身、單一 label、沒有 host 的是空的 | `cargo test -p renderer --lib page_agent::`；`cargo test -p shell --test it a_frames_domain_and_registry` |
+| profile | profile：只在記憶體的沒有資料夾；資料夾沒有就建、鎖檔寫著是誰的；同時只給一個（clone 都放掉之後才放開），被用著是 `InUse`、訊息說資料夾和 `--user-data-dir`；建不出來的是錯誤；各平台預設的資料夾（空的、相對的 `XDG_CONFIG_HOME` 不算） | `cargo test -p browser --test it profile::` |
+| profile | 哪個 profile：視窗預設是使用者的、自動化在記憶體、`--user-data-dir` 的照啟動時的工作目錄；第二個 machopo 開同一個資料夾時拒絕啟動，第一個照常 | `cargo test -p shell --bin machopo -- user_data`；`cargo test -p shell --test it a_second_machopo` |
+| profile | 資料庫：記憶體和 profile 的資料夾，關掉再開還在；照 Chromium 的預設（`truncate` 的 journal、exclusive locking、被鎖住時馬上失敗）；schema 只跑新的 migration、較新的拒絕、失敗的退回；不是資料庫和 schema 壞掉的檔案移到旁邊、重新開始 | `cargo test -p sql` |
+| Web Storage | 同步等 Browser：main thread 只拿自己的編號的回答，其他 task 照順序留著、別的呼叫的回答留給那個呼叫；Browser 說要結束或 main thread 不在了時放棄 | `cargo test -p renderer --lib task_queue` |
+| Web Storage | `localStorage` 的 area：一個 renderer 拿一次項目、之後只拿編號，別的 renderer 拿得到改過的、照 key 的順序；不是自己的 area 的改動不算；每個 key 一份（別的 origin、別的最上層的網站、中間隔著別的網站）；opaque 的 origin 沒有；忘掉之後重新拿；profile 的資料夾留著（關掉時等寫完），opaque 的最上層的網站只在記憶體 | `cargo test -p browser --test it dom_storage::` |
+| Web Storage | 頁面的 `localStorage`：成員（`length`、`key()`、`getItem` 等、named property 不蓋過成員、同一個物件）；另一個分頁讀得到、別的 origin 讀不到、opaque 的 origin 是 `SecurityError`；同一個 renderer 裡同 key 的文件共用、同步讀得到；不在 frame 裡的 window 是 null；profile 的資料夾留到下一次；換成 wasm 的 engine 再換回來之後照樣在 | `cargo test -p browser --test it dom_storage::`；`cargo test -p shell --test it local_storage_outlasts` |
+| Web Storage | `storage` 事件經過 Browser：每個打開這個 area 的 renderer 都收到改動（舊值、有沒有改到），做出改動的那個帶著它的 `Storage` 的編號；`sessionStorage` 的改動不通知 | `cargo test -p browser --test it dom_storage::` |
+| Web Storage | DOM 的 area：同一個 area 的 window 共用；改動在 Browser 傳回來之前算還沒確認，別的 renderer 在它之前的改動（同一個 key、或這裡的 clear 之前的任何改動）不套用，別人的 clear 留下這裡的 key；`storage` 事件排給那個 area 的每個 window、做出改動的除外，沒改到的不發；`sessionStorage` 的當場發；window 的 `storage` listener 要打開它的 area | `cargo test -p dom --test it storage::` |
+| Web Storage | 頁面的 `storage` 事件和 `sessionStorage`：別的分頁收到 `localStorage` 的事件（key、新舊值、做出改動的頁面的網址、自己的 `storageArea`、trusted、不 bubble），做出改動的 window 沒有；同一個分頁裡只有 `<body onstorage>` 的 iframe 也收得到（`sessionStorage` 的先到）；`sessionStorage` 每個分頁一份（同一個分頁的下一頁有、別的分頁和之後開的分頁沒有、不發到別的分頁），分頁關掉時拿掉 | `cargo test -p browser --test it dom_storage::` |
+| Web Storage | 上限：renderer 的（10 MiB，每個 UTF-16 code unit 算 2 bytes，只在項目變大時檢查；拿掉的、清掉的不再算；從 Browser 拿到的超過上限時改小照樣可以），超過丟 `QuotaExceededError`（code 22、是 `QuotaExceededError`）、不改，`localStorage` 和 `sessionStorage` 各算各的；Browser 的（多容許 100 KiB），超過時拒絕、只告訴做出改動的 renderer，renderer 改回 Browser 的值（後面還有這個 key 的改動時不改） | `cargo test -p dom --test it storage::`；`cargo test -p browser --test it dom_storage::` |
+| Web Storage | 成批寫進磁碟：到期之前檔案不變，到期時一起寫，結束時寫完；延遲是 5 秒和兩個速率限制中最長的，速率從 area 第一次有改動起算 | `cargo test -p browser --lib dom_storage`；`cargo test -p browser --test it dom_storage::` |
+| Web Storage | WPT：`webstorage/` 0 個意外的結果（`window.open`、`BroadcastChannel`、單獨的 surrogate 失敗；`set.window.js` 和 `storage_builtins.window.js` 失敗的項目和 Chrome 一樣）；`createEvent('StorageEvent')` | `python3 scripts/test.py wpt webstorage/ dom/nodes/Document-createEvent.https.html dom/events/EventTarget-dispatchEvent.html` |
+| 請求的來歷 | 請求的來歷：每份文件 commit 時一個 Browser 給的 loader（文件的 origin、site for cookies、最上層的網站，照它所在的 frame 算）；IO thread 照編號核對（沒給的 loader、不是 worker 的 loader、`initiator` 不是 loader 的 origin、renderer 自己帶了可信的參數都是壞掉的訊息；opaque 的 `initiator` 照收），填上 loader 的可信參數；跨 origin 的 iframe 的圖片、iframe 一開始的 `about:blank` 的 `fetch()`、worker 的 `fetch()` 都經過各自的 loader | `cargo test -p browser --lib -- loader request_takes workers_request`；`cargo test -p browser --test it loaders::` |
+| cookie | cookie：解析 `Set-Cookie`（終止字元和控制字元整行拒絕、tab 也是，名稱和值的大小、屬性值太長只略過、沒有 `=` 的第一段是沒有名稱的值、屬性不分大小寫、最後一個算）；`Expires` 的日期（Chromium 的 `ParseCookieExpirationTime`）；cookie 本身（host-only 和 domain cookie、public suffix 和 IP 位址、預設的 path、`Max-Age` 先於 `Expires`、伺服器的時差、最多 400 天、`__Secure-`、`__Host-`、`__Http-` 前綴、`Secure` 只從安全的或可信的網址、`SameSite=None` 要 `Secure`、`Partitioned` 要 `Secure`）；store（同名同 domain 同 path 的取代、值一樣時留著建立的時間、過期的刪掉、script 蓋不了 `HttpOnly`、leave secure cookies alone、domain 和 path 的比對、`SameSite` 的設定和送出（沒有 Lax-allowing-unsafe）、送出的順序）；預設的選項是 script 的、跨網站的 | `cargo test -p net --test it cookies::`；`cargo test -p net --lib cookies` |
+| cookie | 請求的 cookie：每一跳送 jar 裡它拿得到的、留下回應設的（redirect 的也是）；沒有可信參數的（Browser 自己的）和 `omit` 的不送不留，`same-origin` 只到 initiator 的 origin；`SameSite` 照請求的情境（Chromium 的 `ComputeSameSiteContextForRequest`、`ForResponse`：別的網站發起的 main frame 導覽是 Lax、不安全的 method 只有 `None` 的，Browser 自己的導覽是 Strict，同一個網站的頁面裡別的網站發起的子資源是跨網站）；第三方（site for cookies 是別的網站或 null，不看 scheme）不送不留（`SameSite=None` 的也是）；導覽的可信參數（main frame 的是網址的網站，子 frame 的是 parent 的 loader 的，initiator 是發起的 frame 的 origin）；頁面設的 cookie 它的圖片送出、第三方的 iframe 設的不留 | `cargo test -p site`；`cargo test -p net --test it cookie_loads::`；`cargo test -p browser --lib -- navigations_params loaders_params`；`cargo test -p browser --test it cookies::` |
+| cookie | `Partitioned`：分區是最上層的網站和中間有沒有隔著別的網站（main frame 的導覽是自己的網址的網站、同網站的），cookie 只跟著那個分區的請求，同名同 domain 同 path 的在不同分區是不同的 cookie；請求有分區時才是分區的、要 `Secure`，沒有時照沒標的；第三方的 `Partitioned` cookie 照送照收 | `cargo test -p net --test it -- cookies:: cookie_monster:: cookie_loads::`；`cargo test -p net --lib cookie_jar` |
+| cookie | 上限和淘汰：一個 registrable domain 超過 180 筆時刪到 150（過期的先刪，再刪最久沒用的、不是 `Secure` 的在前），分區的 cookie 不算；全部超過 3300 筆時刪到 3000，最近 30 天用過的不刪，不是 `Secure` 的在前；分區的每個網域 180 筆、10 KiB；讀到的 cookie 隔一分鐘以上才記成用過 | `cargo test -p net --test it -- cookie_monster:: cookies::` |
+| cookie | `Cookies` 資料庫：持久的 cookie 每個欄位存回來一樣（分區也是），session 的和 opaque 分區的不寫；改動成批寫（30 秒、512 筆、結束時），讀的時候刪掉過期的、略過不是 cookie 的列；開不了時只在記憶體；請求等資料庫讀完才帶 cookie；network context 換一個之後持久的還在，profile 的資料夾經過 `StoragePartition` 交給 `net` | `cargo test -p net --lib -- sqlite_persistent cookie_jar`；`cargo test -p net --test it cookie_loads::`；`cargo test -p browser --test it cookies::` |
+| cookie | header：cookie 是 bytes（`Set-Cookie` 的值照 UTF-8 讀，`Cookie` 送 UTF-8 的 bytes）；回應裡不是 header 的那一行只丟掉那一行；`Content-Type` 是每個值裡最後一個能用的（`*/*` 不算，charset 留同一種的最後一個有的，引號裡的逗號不分開） | `cargo test -p net --test it -- cookie_loads::a_cookie_is_utf8_bytes load::the_last_usable`；`cargo test -p net --lib mime::` |
+| script 的 cookie | `document.cookie`：讀的是 script 看得到的（沒有 `HttpOnly` 的），寫的跟著之後的請求送出、馬上讀得到，不能寫 `HttpOnly` 的或蓋過它；`about:blank` 的 iframe 用建立它的文件的網址（同一段 script 裡也是）；不在 browsing context 裡、拿出頁面的 frame 的、`file:` 的文件讀到空的、不丟錯；重開之後第一次讀也等資料庫；第三方照政策（預設只有 `Partitioned` 的） | `cargo test -p net --test it cookie_loads::`；`cargo test -p browser --test it cookies::` |
+| script 的 cookie | `navigator.cookieEnabled`：第一方是 true，第三方的 iframe 是 false；cookie-averse 的文件是 true | `cargo test -p net --test it cookie_loads::`；`cargo test -p browser --test it cookies::` |
+| script 的 cookie | script 的 cookie 經過文件的 loader：網址是 loader 的 origin 的才照它的可信參數；別的 origin、opaque 的 loader、沒給的 loader 是壞掉的訊息 | `cargo test -p browser --lib script_cookies` |
+| 自動化 | cookie 的零件（DevTools、自動化的）：host-only 的是網址的 host，有點開頭的 domain 是 domain cookie；path 照給的或網址的預設；`Secure` 的當成從安全的網址設的；`Set-Cookie` 寫不出的拒絕（`;`、終止字元、前後的空白、名稱裡的 `=`、不在其中的網域、相對的 path、前綴、讀起來像一對的沒有名字的值、沒有 `Secure` 的分區） | `cargo test -p net --test it cookies::a_cookie_from` |
+| 自動化 | Browser 的 cookie 管理：網址的 cookie 每種情境的、`HttpOnly` 的都算，含給的最上層 frame 的分區，每個一次，不記成用過；全部的；設的當成從自己的 `https:` 網址設的（`HttpOnly` 的也可以）；刪的照名稱、確切的 domain、path、分區 | `cargo test -p net --test it -- cookie_loads::the_browsers cookie_monster::an_all` |
+| 自動化 | CDP：`Network.getCookies`（分頁的 frame 的網址、或給的）、`getAllCookies`、`setCookie`、`setCookies`（全部或一個都不設）、`deleteCookies`（沒給分區時只刪沒分區的）、`clearBrowserCookies`，`Storage.getCookies`、`setCookies`、`clearCookies`；`Network.Cookie` 的欄位（`expires`、`session`、`size`、`sameSite` 只在有時、`partitionKey`）；參數做不出 cookie 時是錯誤 | `cargo test -p shell --test it devtools_cookies::` |
+| 自動化 | WebDriver：Get All、Get Named（`no such cookie`）、Add（目前的文件的網址，`sameSite` 不對是 `invalid argument`，網域不對或不是 `http:` 的文件是 `invalid cookie domain`）、Delete、Delete All Cookies；沒標 `SameSite` 的回報 `Lax`；WPT 的 wdspec 的 5 個目錄 | `cargo test -p shell --test it webdriver::cookies`；`python3 scripts/test.py wdspec /webdriver/tests/classic/add_cookie /webdriver/tests/classic/delete_all_cookies /webdriver/tests/classic/delete_cookie /webdriver/tests/classic/get_all_cookies /webdriver/tests/classic/get_named_cookie` |
+| WPT 的 cookie | WPT：`cookies/` 整個目錄（89 份，43 份整份通過）、`fetch/api/cors/` 的 credentials、worker 和 dynamic import 的 credentials、`document-cookie.html`、`navigatorcookies-cookieenabled-true.html` 0 個意外的結果；runner 在每個測試之後用 machopodriver 的 `machopo/cookies/clear` 刪光 cookie（每個網站的，Delete All Cookies 只刪目前的文件的） | `python3 scripts/test.py wpt cookies/ fetch/api/cors/ workers/modules/ html/semantics/scripting-1/the-script-element/module/dynamic-import/ html/dom/documents/resource-metadata-management/ html/webappapis/system-state-and-capabilities/the-navigator-object/`；`cargo test -p shell --test it webdriver::clearing_cookies` |
 
 ## 做過的檢查
 
-每一步一段：日期和平台；新的測試；mutation test（弄壞了什麼、哪個測試失敗、沒抓到的和原因）；視窗裡的手動確認；找到的 bug；不穩定的測試；跑過的檢查和測試數字。
-
-### 1a：`site` crate 的 `Site` 和 registrable domain
-
 macOS、Apple M4，2026-11-20。
 
-- 決定了第 3 條（`psl` crate）和第 4 條（新的 crate `site`）。量了兩個 crate（README 的第 3 條），讀了 Chromium 的 `SchemefulSite::ObtainASite`（opaque 的照原樣；有網路 host 的 scheme 才查 registrable domain：http、https、ftp、ws、wss；沒有的用 host）和 `GetDomainAndRegistryImpl`（`INCLUDE_UNKNOWN_REGISTRIES`：不認得的頂層網域照樣當後綴）。
-- 試了 `psl` 2.1.258 的邊界：punycode 的後綴、萬用字元和例外都對；它不轉小寫、把 IP 位址的數字當 label（`127.0.0.1` 的「網域」是 `0.1`）、有空的 label 時給 `.com` 這樣的結果、最後的點留著（和 Chromium 一樣）。所以 `registrable_domain` 收 `url::Host`（位址直接沒有），自己擋空的 label。
-- 新的 crate `site`：`registrable_domain`、`Site`（`of`、`of_url`、`is_opaque`、`scheme`、`registrable_domain_or_host`、`serialize`）。opaque 的網站拿著那個 `url::OpaqueOrigin`，只和自己相等。WebSocket 的 scheme 不換成 http、https（Chromium 先換；machopo 還沒有 WebSocket），沒有測試釘住。
-- 新的測試：`crates/site/tests/it/site.rs` 的 8 個。
-- mutation test（`mutants-1a.toml`）7 個，全部抓到。
-- 文件：`crates/site/README.md`、`docs/architecture.md` 的 crate 表。行為還沒有變（還沒有人用這個 crate），沒有新的限制和情境。
-- 跑過的檢查：`cargo test -p site`、`cargo clippy -p site --all-targets -- -D warnings`；`sanity.py` 的 `deps`、`unsafe`、`tests`、`numerics`、`docs`。
+### 測試和 mutation test
 
-### 1b：`StorageKey`，frame 樹算每個 frame 的 key
+- 新的 crate `site`、`sql` 各有自己的整合測試；`net` 的 `cookies`、`cookie_monster`、`cookie_loads`，`browser` 的 `profile`、`dom_storage`、`loaders`、`cookies`，`dom` 的 `storage`，`shell` 的 `devtools_cookies` 是新的模組，`webdriver`、`load`、`devtools`、`automation_pipe` 和幾個 crate 的單元測試加了測試。
+- 每一段都照 `docs/testing.md` 跑了 mutation test（`python3 scripts/test.py mutate`，spec 是這個資料夾的 `mutants-*.toml`），共 258 個：等價的 3 個（`sql` 打開時不讀 schema、opaque 的文件也去問 `localStorage` 的 host、已經過期的 cookie 也存進去），只有送了不是自己的 frame 的 renderer 走得到的 1 個（不在的 frame 不回答），都記在 `docs/test-gaps.md`，其他都抓到。第一輪沒抓到的都補了測試或改了程式，主要是：
+  - 測試的值選得剛好讓 mutant 也對：同時到的兩個回答（`HashMap` 的順序剛好拿對，改成別的回答先到）、thread 結束前已經寫完、iframe 比 parent 先打開、改小之後剛好又在上限內、只在 IP 位址上測網域 cookie、存的那一列不是 `Secure` 被別的檢查擋掉、淘汰的第二輪沒有要刪的、提早淘汰時沒有東西可刪。
+  - 互相涵蓋、多餘的檢查：opaque 的 origin 和 opaque 的最上層網站、`is_fully_active` 本來就看 window、零件的名稱的 `=`（`check_name_value_pair` 已經擋）、main frame 的導覽的分區（`CookiePartitionKey::for_request` 拿掉了那個參數）；拿掉多的、mutant 改成弄壞剩下的。
+  - 外層的提前離開和內層的檢查一樣（淘汰的兩層上限）：一次弄壞兩層。
+- 只靠審查的：opaque 的文件的 `document.cookie` 丟 `SecurityError`、Browser 沒回答時讀到空的（`docs/test-gaps.md`）。沒有計數守著的優化：jar 的淘汰等最早的使用時間（同一份）。
+- `net` 的 cookie 的第一版（4b：`crates/net/src/cookies/` 的九個檔案和它的測試、`mutants-4b.toml`）由 subagent 照 Chromium 的 `parsed_cookie.cc`、`canonical_cookie.cc`、`cookie_util.cc` 和 RFC 6265bis 寫，在 session 裡對照 Chromium 審過、自己重跑了測試和 mutation test；審查時把 `CookieOptions` 的預設改成不做 Lax-allowing-unsafe。之後的實作照使用者的要求都在 session 裡寫。
+- 拿掉照送第三方 cookie 的旗標時（第 24 條），`mutants-4b.toml`、`mutants-4c.toml`、`mutants-5a.toml` 裡改的是被拿掉的程式的 mutant 照原樣留著，是當時的紀錄；留下來的規則由 `mutants-5-no-third-party.toml` 重新守住。
 
-macOS、Apple M4，2026-11-20。
+### 找到的 bug
 
-- 讀了 Chromium 的 `RenderFrameHostImpl::CalculateStorageKey`、`GetAncestorChainForStorageKeyCalculation`（從這個 frame 往上到最上層）和 `StorageKey` 的建構子：最上層的網站是最上層 frame 的 origin 的網站；這個 frame 和每個祖先都是那個網站時 ancestor chain bit 是 `kSameSite`；origin 或最上層的網站是 opaque 時是 `kCrossSite`。
-- `site`：`StorageKey`（`of_frame`、`first_party`、`origin`、`top_level_site`、`ancestor_chain_bit`、`is_third_party`）和 `AncestorChainBit`。
-- `browser`：`FrameTreeNode` 加上 `storage_key`，在 `did_commit`（新的 origin）、`add_child`（最初的 `about:blank` 拿 parent 的 origin）和 `reset`（opaque）時沿著 parent 往上算；`FrameTree::storage_key`。frame 換文件時它裡面的 frame 跟著不在，所以祖先的 origin 在子 frame 有文件的期間不變，不用重算。還沒有人用它。
-- 新的測試：`site` 的 `storage_key.rs` 4 個；`browser` 的 `frame_tree` 單元測試 1 個（main frame、同網站和別的網站的子 frame、中間隔著別的網站的孫 frame、重設）。
-- mutation test（`mutants-1b.toml`）8 個，全部抓到。第一輪 9 個抓到 6 個：「opaque 的 origin」和「opaque 的最上層網站」兩個判斷互相涵蓋（opaque 的網站只和自己相等，只有 opaque 的最上層 frame 自己要靠判斷擋），拿掉一個、加上註解，mutant 改成拿掉剩下那個；「只看 parent」時孫 frame 照樣是第三方、但最上層的網站錯了，測試補上檢查最上層的網站。
-- 跑過的檢查：`cargo test -p browser -p site`（187 個）、`cargo clippy -p site -p browser --all-targets -- -D warnings`；`sanity.py` 的 `deps`、`unsafe`、`tests`、`numerics`、`boundary`、`docs`。
+- 圖片的請求的 `initiator` 一直是最上層的文件的 origin（iframe 裡的也是），照新的核對會讓 renderer 被結束；改成圖片所在的文件的 origin。文件在 commit 的途中就 parse、裡面的 script 可能馬上發請求，所以文件的 loader 在建文件時就登記（4a）。
+- `browser` 的測試的分頁沒有 worker 的 engine，worker 不會跑；改成 V8 的（4a）。測試的分頁原本都是 `TabId(0)`，兩個分頁共用 `sessionStorage`；改成從計數器拿（3b）。
+- `initStorageEvent` 的 `storageArea` 參數讓 renderer panic（`dom::Storage` 沒有當參數用的轉換），同一個 machopo 裡的測試跟著 CRASH（3c，WPT 找到）。
+- 新 iframe 的第一份 `about:blank` 在建立它的 script 還在跑時沒有 loader；照 Chromium，經過建立者的文件問。script 寫的 cookie 原本在 network thread 的另一個 task 做，和之後的 load 的順序沒有保證；改成在主迴圈裡當場做（5a）。
+- `net` 的（5c，跑整個 WPT 的 `cookies/` 時找到，都不是 cookie 自己的邏輯）：`Set-Cookie` 的值照 Latin-1 存，script 讀到亂碼；回應裡有一行壞掉的 header 時 hyper 讓整個回應失敗；`Content-Type` 取第一個 header（`postToParent.py` 送 `application/json` 再送 `text/html`，iframe 的 script 不跑、測試 timeout）。
+- 起草時寫了 SQLite 的 WAL 模式，Chromium 的 `sql::Database` 其實是 exclusive locking、`journal_mode=TRUNCATE`；照它改了第 7 條（2b）。
 
-### 1c：DevTools 的 `domainAndRegistry`，第 1 階段的檢查
+### WPT
 
-macOS、Apple M4，2026-11-20。
+- 加進清單的：`webstorage/`（3c）、整個 `cookies/`（5c，取代第 4、5 階段先列的 6 份），wdspec 的 `add_cookie`、`delete_all_cookies`、`delete_cookie`、`get_all_cookies`、`get_named_cookie`（5b）。沒過的寫在 `.ini`：`window.open`（`samesite/` 幾乎每份、`webstorage/` 的 7 份）、`BroadcastChannel`、`WebSocket`、service worker、`self.origin`（`cookies/prefix/` 的 6 份去抓 `undefined/...`）、單獨的 surrogate、照 Chrome 的行為（`webstorage/set.window.js` 等和 Chrome 失敗的一樣；cookie 的 tab、沒有名稱而值裡有 `=` 的、不綁 port）、擋掉的第三方 cookie、user prompt、沒標 `SameSite` 的回報 `Lax`（chromedriver 一樣，WPT 期待 `None`）。
+- 變成通過的（拿掉或改了 `.ini`）：`fetch/api/cors/cors-cookies*`、worker 和 dynamic import 的 credentials、`navigatorcookies-cookieenabled-true.html`、`Document-createEvent.https.html` 的 `StorageEvent`、`workers/semantics/navigation/001.html`（之前就通過、預期結果沒更新）。
+- 試跑沒列的：`fetch/content-type/`（renderer 那一側的 `Response` 和 blob 的 type、script 的 MIME type 還有失敗）。
+- runner 的改變（第 25 條）：結果是預期的時候 wptrunner 不重開瀏覽器，在 `window.open` 停下、沒清 cookie 的測試把 cookie 留給之後的測試；machopo 的 executor 在每個測試之後用 machopodriver 的 `machopo/cookies/clear` 刪光。
 
-- 讀了 Blink 的 `InspectorPageAgent`：`setDomainAndRegistry(GetDomainAndRegistry(url.Host(), kIncludePrivateRegistries))`，用 frame 的網址（不是 origin）的 host。
-- `renderer` 的 `page_agent`：`domain_and_registry`（`site::registrable_domain`，位址和沒有 host 的是空的），取代寫死的空字串；`renderer` 依賴 `site`。
-- 新的測試：`page_agent` 的單元測試 1 個（網域、private 的後綴、不認得的頂層網域、位址、`localhost`、public suffix 本身、`about:`、`file:`、不是網址的）；`shell` 的 `devtools` 1 個（`--host-resolver-rules` 把 `www.example.co.uk` 對到測試伺服器，`Page.getFrameTree` 給 `example.co.uk`）。
-- mutation test（`mutants-1c.toml`）3 個，全部抓到。
-- 文件：`docs/limitations.md` 拿掉 `domainAndRegistry` 一律是空的；IntersectionObserver 那一條原因裡的「沒有 public suffix list 判斷 site」改成「判斷遮擋時不分 site」（還是不分）。
-- 第 1 階段的檢查：`cargo test --workspace` 4285 個通過、0 個失敗、1 個 ignored；`cargo clippy --workspace --all-targets -- -D warnings` 沒有警告；`cargo fmt --check` 抓到 1c 的 DevTools 測試的一行，照 rustfmt 改了。畫面上看不出差別（只有 DevTools 的欄位），沒有新的情境。
-- 跑過的檢查：`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。
+### 不穩定的測試
 
-### 2a：profile 的資料夾
+- `moving-between-documents/after-prepare-*` 和 `fetch/`、`workers/` 一起跑時偶爾整份 timeout（4e）：和 cookie 無關，原因是 wptserve 關掉 keep-alive 的連線不說；另一個 session 照 Chromium 的 `ShouldResendRequest` 在 `net` 重送，套進這個 branch（`835e4ff`），之後同樣的目錄跑兩次都沒有意外的結果。
+- `cookies/partitioned-cookies/partitioned-cookies-top-level-redirect.tentative`：頁面載入時把自己導覽走再導回來，machopodriver 的 Navigate 在第一份文件載入完就回答（chromedriver 等頁面自己開始的導覽也完成），harness 的 script 有時跑在要被換掉的文件裡。和 cookie 無關，`.ini` 標成 `[OK, ERROR]`。
+- `scenarios --window`：3a 時 `demo-script` 失敗 1 次（log 裡 Viz 一直是 `occluded`，視窗被蓋住）；5c 時整套跑兩次各 1 個失敗，第二次是 `demo-busy` 的「no frame was drawn」（第一次的沒有記下來），單獨跑 3 次都通過。錯誤和視窗被遮住時一樣，`demo-busy` 的那次原因沒有確認。
+- 另一個 worktree 和這裡共用 `target/` 時，cargo 用 workspace 裡的相對路徑命名輸出，別的 branch 編的 crate 蓋掉了這裡的（4e）：touch 改過的 crate 之後重編。
 
-macOS、Apple M4，2026-11-20。
+### 跑過的檢查
 
-- 決定了第 5 條（人用的視窗預設寫進平台的使用者資料夾，自動化和測試在記憶體）和第 6 條（第二個 machopo 拒絕啟動）。對照了 Chromium 的 User Data Directory 文件（各平台的位置、`--user-data-dir`、Linux 的 `XDG_CONFIG_HOME`）、chromedriver 的 `chrome_launcher.cc`（沒給 `--user-data-dir` 時每個 session 一個暫時的資料夾）和 `ProcessSingleton`。
-- `browser`：`Profile`（`in_memory`、`open`、`dir`；`Clone`，資料夾的鎖跟著最後一個放掉：Chromium 的 `Profile` 比它的視窗活得久，之後存資料的 thread 也拿著它），鎖是標準庫的 `File::try_lock`，鎖檔寫著 process 的 id（Windows 上鎖著的檔案可能讀不到，訊息就不帶 id）；`ProfileError`；`default_user_data_dir`、`user_data_dir_on`（從環境變數算，沒有加依賴）、`Platform`。
-- `shell`：`machopo --user-data-dir DIR`（說明和 usage），`profile_dir`（選資料夾）和 `profile`（打開；拿不到就印出原因、結束），`window::run` 的參數收成 `window::Options`（clippy 的參數上限），`browser_window::Options` 和 `automation_pipe::Options` 帶 profile，`WindowTabs` 拿著它。還沒有東西存進去。
-- 新的測試：`browser` 的 `profile.rs` 5 個；`shell` 的 `main` 1 個（選項和選資料夾）、`help_mentions_every_option` 加上 `--user-data-dir`；`shell` 的 `automation_pipe` 1 個（第二個 machopo 開同一個資料夾時失敗、說出原因，第一個照常）。選資料夾的測試不打開它：mutant 弄壞「自動化在記憶體」時不會在家目錄建出資料夾（跑完確認過沒有）。
-- mutation test（`mutants-2a.toml`）10 個，全部抓到（「被用著的資料夾照樣打開」第一次寫成編不過的，改了單獨重跑）。
-- 文件：`docs/architecture.md` 的 `browser`、`crates/shell/README.md` 的自動化的 pipe、`docs/limitations.md`（第二個 machopo 拒絕啟動；環境沒說使用者的資料夾時視窗的 profile 在記憶體）。
-- 改到視窗那一層（`window.rs`、`browser_window.rs`），跑了 `test.py scenarios --window`：72 次，0 個失敗（`caret` 照舊跳過），pipe 的 `--window` 也通過；家目錄底下沒有建出 profile 的資料夾（自動化在記憶體）。
-- 跑過的檢查：`cargo test -p browser -p shell`（906 個）、`cargo clippy -p browser -p shell --all-targets -- -D warnings`；`sanity.py` 的 `deps`、`unsafe`、`tests`、`numerics`、`boundary`、`docs`。
-
-### 2b：磁碟上的儲存
-
-macOS、Apple M4，2026-11-20。
-
-- 決定了第 7 條（SQLite，`rusqlite`）和第 8 條（新的 crate `sql`）。比了 `rusqlite` 0.43（release 第一次編 12.4 秒、多約 1.9 MB、一個 transaction 1 萬筆 32 ms）和 `redb` 5.0（4.9 秒、約 1.1 MB、105 ms）；讀了 Chromium 的 `DomStorageDatabase`（LevelDB 搬到 SQLite 的遷移）、`LocalStorageImpl`（成批寫：5 秒、每小時 60 次）、`SQLitePersistentCookieStore` 和 `sql::Database`。
-- 改了第 7 條：起草時寫了 WAL 模式，但 Chromium 的 `sql::Database` 的預設是 exclusive locking（編譯時就設、有 `static_assert`）、`journal_mode=TRUNCATE`、`synchronous` 用 SQLite 的預設，註解說 WAL 還在開發中；照這組改了，原文留下改的理由。
-- 新的 crate `sql`：`Database`（`open`、`migrate`、`version`、`connection`）、`Error`（`Sqlite`、`Newer`、`Io`），re-export `rusqlite`。被鎖住時不等（`rusqlite` 預設等 5 秒；SQLite 的 C API 和 Chromium 不等）。還沒有人用它。
-- 新的測試：`crates/sql/tests/it/database.rs` 的 6 個。
-- mutation test（`mutants-2b.toml`）9 個，8 個抓到。第一次的 spec 有一個 mutant 的原文和 rustfmt 排的對不上、一個編不過，改了重跑；「被鎖住時等」原本只會變慢，測試加上第二條連線 1 秒內就失敗。沒抓到的「打開時不讀 schema」是等價的：在它之前的 `PRAGMA journal_mode` 準備時就讀了 schema（補了一個 schema 壞掉的檔案的測試確認打開時就換掉；記進 `docs/test-gaps.md` 的「等價、不用處理的 mutation」）。
-- 文件：`crates/sql/README.md`、`docs/architecture.md` 的 crate 表。
-- 跑過的檢查：`cargo test -p sql`、`cargo clippy -p sql --all-targets -- -D warnings`；`sanity.py` 的 `deps`、`unsafe`、`tests`、`numerics`、`docs`。
-
-### 2c：第 2 階段的檢查和文件
-
-macOS、Apple M4，2026-11-20。
-
-- `cargo test --workspace`：4298 個通過、0 個失敗、1 個 ignored。`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 都沒有要改的。跑完之後家目錄底下沒有 profile 的資料夾（測試和自動化都在記憶體）。
-- 文件：在 `docs/`、crate 的 README 裡找寫到 profile 的地方。`docs/limitations.md` 的 `--remote-debugging-port` 不寫 `DevToolsActivePort` 的理由原本是「machopo 沒有 profile 的資料夾」，改成 Chrome 寫在 user data dir 裡、machopo 的自動化預設在記憶體。其他的在 2a、2b 改好了。畫面上看不出差別（還沒有東西存進 profile），沒有新的情境。
-- 跑過的檢查：`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。
-
-### 3a：同步等 Browser 的路、`localStorage`
-
-macOS、Apple M4，2026-11-20。
-
-- 決定了第 9 條（回答走一般的訊息，到 scheduler 裡等回答的位置）和第 10 條（renderer 照 Browser 給的 area 編號共用它的那一份）。
-- 新的東西：`protocol` 的 `OpenLocalStorage`、`LocalStorageOpened`、`ChangeStorage`、`ForgetStorageAreas`；`renderer` 的 `MainThreadScheduler::sync_call` 和 `RendererStorageHost`；`site` 的 `StorageKey::serialize`；`browser` 的 `DomStorageContext`（自己的 thread、profile 的 `LocalStorage` 資料庫）和 `StoragePartition`（`WebContents::new` 原本收 `NetworkContext`，改收它）；`dom` 的 `Storage`；`dom_api` 的 `Storage` 介面、`Window.localStorage`、`StorageHost`；`dom_js` 在呼叫結束前把改動交給 host。
-- 新的測試：`renderer` 的 `task_queue` 2 個、`site` 1 個、`browser` 的 `dom_storage` 8 個、`shell` 的 `browser_view` 1 個。
-- mutation test（`mutants-3a.toml`）23 個，抓到 21 個。第一次跑時「回答隨便拿一個」沒抓到：兩個回答幾乎同時到，`HashMap` 的順序剛好拿對；改成別的呼叫的回答先到、自己的晚 50 ms。「context 的 thread 結束時不等它」原本也沒抓到：最後一次同步的「打開」之後 thread 已經寫完了，改成之後再送 500 筆。「另一份文件打開時清空 renderer 的那一份」原本沒抓到：測試裡 iframe 比 parent 先打開，改成 parent 先寫。剩下的兩個：「不在的 frame 不回答」只有送了不是自己的 frame 的 renderer 走得到，記進 `docs/test-gaps.md` 的「只靠審查」；「opaque 的文件也去問 host」是等價的（Browser 照 frame 樹的 key 一樣不給），記進「等價、不用處理的 mutation」。scheduler 的測試在另一條 thread 上等、最多 10 秒，讓「回答進了 queue」這類 mutant 失敗而不是卡住。
-- 找到的問題：prototype 上有同名的成員時直接賦值（`localStorage.getItem = 'x'`）建出 own property、不經過 named setter（V8 的 non-masking interceptor）。WPT 的 `webstorage/set.window.js` 要它照樣存進 area、不建 own property；3c 跑 WPT 時對照 Chrome 的結果再決定，先記進 `docs/limitations.md`。
-- 文件：`docs/architecture.md` 的 crate 表（`StoragePartition`、`DomStorageContext`）和「Process 的邊界」（main thread 同步等 Browser）、`docs/limitations.md`（`localStorage` 的限制，`file:` 的頁面沒有）、`crates/dom_api/README.md`。
-- `python3 scripts/test.py scenarios --window`（改了 `shell` 的 `browser_window.rs`）：72 次，`demo-script` 失敗 1 次。那次的 log 最後是 Viz 的「can't draw, skipping frames」（`occluded`，視窗被別的視窗蓋住），之後沒有「drawing again」，畫面一直沒再畫，等待逾時。單獨在視窗裡連跑 4 次、不開視窗跑 1 次都通過（通過的那幾次一開始也有一兩次 `occluded`，之後接著畫）。原因是跑的期間視窗被蓋住，和這一段的改動無關（`demo-script` 不用 `localStorage`）。
-- 跑過的檢查：`cargo test` 的 `site`、`sql`、`protocol`、`dom`、`dom_api`、`dom_js`、`dom_wasm`、`renderer`、`browser`、`shell`；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。
-
-### 3b：`storage` 事件、`sessionStorage`
-
-macOS、Apple M4，2026-11-20。
-
-- 決定了第 11 條（`localStorage` 的 `storage` 事件都經過 Browser）和第 12 條（`sessionStorage` 由 Browser 留在記憶體裡，每個分頁一個 namespace）。讀了 Chromium 的 `cached_storage_area.cc`（`SetItem`、`KeyChanged`、`EnqueueStorageEvent`）和 `session_storage_impl.h`（`BackingMode`）。
-- 新的東西：`protocol` 的 `OpenStorageArea`（帶 `StorageKind`，取代 `OpenLocalStorage`）、`StorageAreaOpened`（原本的 `LocalStorageOpened`）、`StorageAreaChanged`，`ChangeStorage` 多了 `Storage` 的編號和文件的網址；`DomStorageContext` 留著每個 renderer 的通道、照分頁分 `sessionStorage` 的 namespace（`forget_namespace`，`WebContents::shutdown` 時）；`dom` 的 `sessionStorage`、還沒確認的改動、DOM 裡每個 `Storage` 的弱引用清單（發事件時走）、window 的 `storage` 事件的 task，加 `storage` listener（event handler 也是）時要求打開 area（Blink 的 `DOMWindowStorageController::DidAddEventListener`；WPT 的 iframe 只有 `<body onstorage>`）；`dom_api` 的 `sessionStorage`、`StorageEvent`（建構子、`initStorageEvent`）、`open_for_listeners`、`ScriptEngine::storage_area_changed`。`dom` 的 `dictionary_members.txt` 加了 `StorageEventInit` 的四個名稱。
-- 測試的分頁原本都是 `TabId(0)`，兩個分頁共用同一個 `sessionStorage` 的 namespace；`browser` 的測試改成每個分頁從計數器拿一個 id。
-- 新的測試：`dom` 的 `storage` 5 個，`browser` 的 `dom_storage` 5 個（2 個 context、3 個頁面）。
-- mutation test（`mutants-3b.toml`）17 個，第一次抓到 15 個。「這裡還沒確認的 clear 不擋別人的改動」和「分頁關掉之後 `sessionStorage` 還在」沒抓到：補了 `dom` 的測試（clear 之後別人的 set 不套）和頁面測試的最後一段（關掉的分頁的 namespace 是空的），重跑這兩個都抓到。
-- 文件：`docs/architecture.md` 的 crate 表（`DomStorageContext`）、`docs/limitations.md`（Web Storage 的限制；`storage` 從「從來不分派」的事件拿掉）、`crates/dom_api/README.md`。
-- 跑過的檢查：`cargo test` 的 `dom`、`dom_api`、`dom_js`、`dom_wasm`、`renderer`、`browser`、`protocol`、`shell`（1280 個通過）；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。沒有動到視窗那一層，沒有跑 `scenarios --window`。
-
-### 3c：上限、寫進磁碟的批次、WPT
-
-macOS、Apple M4，2026-11-20。
-
-- 決定了第 13 條（上限由 renderer 和 Browser 都守）和第 14 條（照 Chromium 成批寫進磁碟）。讀了 Chromium 的 `storage_area_map.cc`、`storage_area.mojom`、`local_storage_impl.cc`、`storage_area_impl.cc`。
-- `webstorage/` 加進 `tests/wpt/include.txt`。第一次跑 17 個意外的結果：`initStorageEvent` 的 `storageArea` 參數讓 renderer panic（`dom::Storage` 的 `ObjectType` 沒有當參數用的 `take_arg`、`arg`），同一個 machopo 裡跑的四個上限的測試跟著 CRASH；修了之後，上限的四個仍然 CRASH：還沒有上限，`while (true)` 一直寫到記憶體用完。做了上限之後剩下的都是預期的失敗，`.ini` 寫上原因：`window.open`（7 份，其中一份等它打開的視窗、逾時，`disabled`）、`BroadcastChannel`、單獨的 surrogate（machopo 的字串是 UTF-8）、`set.window.js` 的 12 項和 `storage_builtins.window.js` 的 2 項。
-- 3a 留下的「prototype 上有同名的成員時直接賦值建出 own property」：Chromium 的 `set.window-expected.txt` 和 `storage_builtins.window-expected.txt` 失敗的是同樣的項目、同樣的訊息（它的讀取給出項目、不是 prototype 的），machopo 不用改，`docs/limitations.md` 照這個寫。
-- `document.createEvent('StorageEvent')`（和它的大小寫）：`Document-createEvent.https.html` 的 6 項、`EventTarget-dispatchEvent.html` 的 1 項變成通過，`.ini` 更新了。
-- 新的東西：`protocol` 的 `PER_STORAGE_AREA_QUOTA`、`PER_STORAGE_AREA_OVER_QUOTA_ALLOWANCE`、`storage_quota_for`、`StorageAreaChangeFailed`；`dom` 的 area 記著用了多少（`Items`）、`storage_set` 超過上限時回 false、`storage_change_failed`；`browser` 的 `CommitOptions`、`DomStorageContext::with_commit_options`，每個 area 的一批和速率（`Batch`、`CommitRate`、`commit_delay`）。
-- 新的測試：`dom` 的 `storage` 2 個，`browser` 的單元測試 1 個（延遲和速率）、`dom_storage` 4 個（Browser 拒絕、到期才寫、速率、頁面的上限）。
-- mutation test（`mutants-3c.toml`）14 個，抓到 13 個；沒抓到的「超過上限的項目不能改小」是測試的值選得不好（改小之後剛好又在上限內），改成改小之後仍然超過，重跑抓到。「一批用一個 transaction」寫成的 mutant 編不過，而且從外面看不出差別，拿掉了。
-- 第 3 階段的檢查：`cargo test --workspace` 4327 個通過、0 個失敗、1 個 ignored，跑完之後家目錄底下沒有 profile 的資料夾；`cargo fmt --check` 抓到一個測試的換行，照 rustfmt 改了；`cargo clippy --workspace --all-targets -- -D warnings` 抓到兩個測試裡太長的型別（改成 type alias）和測試分頁的編號用了 `fetch_add`（改成 `base::AtomicSequenceNumber`）。
-- 文件：`docs/architecture.md`（`DomStorageContext` 的上限和批次）、`docs/limitations.md`、`crates/dom_api/README.md`（上限、`createEvent`）。
-
-### 4a：請求的來歷
-
-macOS、Apple M4，2026-11-20。
-
-- 決定了第 15 條（cookie 自己照 RFC 6265bis 和 Chromium 寫；讀了 `cookie_store` 0.22.1 的原始碼）和第 16 條（每份文件一個 Browser 給的 loader 編號；讀了 Chromium 的 `network_context.mojom` 的 `URLLoaderFactoryParams` 和 `isolation_info.h`）。
-- 新的東西：`site` 的 `SiteForCookies`（Chromium 的 `ComputeSiteForCookies`、`IsSchemefullyFirstParty`）；`protocol` 的 `ResourceRequest::trusted`（`TrustedParams`：site for cookies、最上層的網站），`CommitNavigation`、`FetchResource`、`DedicatedWorkerCreated` 帶 `loader`；`browser` 的 `FrameTree::loader_params`、`RenderProcessHost::register_loader`、IO thread 的 `check_request` 和四個新的 `BadMessageReason`；`renderer` 的 `DocumentLoaders`（文件 → loader，iframe 建立時它一開始的 `about:blank` 登記成 parent 的，換 engine 時清掉）、worker 的 `WorkerLoaders`；`dom` 的 `context_document_id`（只給文件的編號，不給文件本身）、`dom_api::WorkerStart::owner_document`。可信的參數 4b 才有人用（cookie），這一段看不出它們的效果，4b 的測試守它們。
-- 找到的問題：圖片的請求的 `initiator` 一直是最上層的文件的 origin（iframe 裡的圖片也是），照新的核對會讓 renderer 被結束；改成圖片所在的文件的 origin。主文件和子文件在 commit 的途中就開始 parse，裡面的 script 可能馬上發請求，所以文件的 loader 在建文件的當下就登記，不等 commit 結束。
-- `browser` 的測試建分頁時原本沒有 worker 的 engine（`worker_engine: None`），worker 不會跑；改成 V8 的，和 `shell` 一樣，`browser` 的測試照樣全部通過。
-- WPT：跑了 `workers/`、`fetch/api/basic/`、`fetch/api/cors/`、`fetch/api/redirect/`、`html/semantics/embedded-content/the-iframe-element/`、`html/browsers/browsing-the-web/navigating-across-documents/`、`webstorage/`，沒有 renderer 被結束。`workers/semantics/navigation/001.html` 意外通過，連跑 5 次都通過；在這一段之前的 commit（`df988a8`）上也通過，是之前就通過、預期結果沒更新，拿掉了它的 `.ini`。
-- 新的測試：`site` 的 `site_for_cookies` 2 個，`browser` 的單元測試 3 個（loader 的參數、請求的核對、worker 的請求），`browser` 的 `loaders` 1 個。
-- mutation test（`mutants-4a.toml`）12 個，抓到 11 個；沒抓到的「`ws:` 不算它的 `http:` 網站」是測試只測了 `wss:` 對 `https:`，補了 `ws:` 對 `http:`，重跑抓到。
-- 文件：`docs/architecture.md`（`RenderProcessHost` 的 loader）、`docs/limitations.md`（loader 留到 renderer 結束、opaque 的 `initiator` 照收）。
-- 跑過的檢查：`cargo test` 的 `site`、`dom_api`、`renderer`、`browser`、`shell`（1296 個通過）；`cargo fmt --check`；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。
-
-### 4b：解析 `Set-Cookie`、cookie 本身、記憶體裡的 store
-
-macOS、Apple M4，2026-11-20。
-
-- 決定了第 17 條（第三方的 cookie 預設擋，加照送的旗標；預設不做 Lax-allowing-unsafe）。讀了 RFC 6265bis 的 editor's draft（2026-11-17 版）的 §5.6.7、§5.8、§7，WPT 的 `cookies/samesite/` 和 `cookies/third-party-cookies/`，Chromium 的 `features.cc`、`cookie_constants.cc` 和它跑 `third-party-cookies/` 的 virtual suite。第 4 階段從四段改成五段（第三方的 cookie 預設擋，要和接上請求同一段做）。
-- 這一段由 subagent 寫（`crates/net/src/cookies/` 的九個檔案和 `crates/net/tests/it/cookies.rs`），照 Chromium 的 `parsed_cookie.cc`、`canonical_cookie.cc`、`cookie_util.cc`、`cookie_constants.cc` 和 RFC 6265bis；之後的實作照使用者的要求在 session 裡自己做。在 session 裡審了 `parsed_cookie.rs`（對照 `ParseTokenValuePairs`：屬性名稱或值的字元不合法時整行拒絕、值太長時只略過那個屬性）、`canonical_cookie.rs`（對照 `ParseExpiration`、`ValidateAndAdjustExpiryDate`、`IsSetPermittedInContext`、`IncludeForRequestURL`、`GetEffectiveSameSite`）和 `cookie_monster.rs`（對照 `SetCanonicalCookie`、`MaybeDeleteEquivalentCookieAndUpdateStatus`），自己重跑了測試、clippy、fmt 和 mutation test。
-- 審查改的：`CookieOptions` 的預設原本照 Chromium 做 Lax-allowing-unsafe，照第 17 條改成不做，加了守它的測試和 mutant。
-- 和 Chromium 不同、留著的（寫在程式的註解裡）：設 cookie 之前先刪掉那個網域已經過期的（Chromium 留到讀取或超過上限時；RFC 6265bis 容許隨時刪），所以過期的 `Secure` cookie 擋不住新的；`Partitioned` 一律檢查要 `Secure`（Chromium 只在請求有分區的 key 時檢查，frame 的請求都有）；沒有 host 的網址（`data:`）直接拒絕；`Set-Cookie` 的值收的是 `&str`（Chromium 收 bytes，不是 UTF-8 的 header 要看 4c 怎麼解碼）；網域照 `url::Host::parse` 正規化（Chromium 是 `CanonicalizeHost`）。沒做的：`Priority`、警告、`CookieAccessDelegate`、origin-bound cookie（預設關）、schemeless 的 `SameSite`、數量的上限和淘汰（4d）、分區的 key（4d）。
-- 和 RFC 6265bis 不同、照 Chromium 的（測試裡寫明）：值裡的 tab 拒絕；`=a=b` 拒絕（`kCookieParseRejectEmptyNameAmbiguous`）；`Max-Age=+5` 照收；1601 年以前的年份算過去；日要全是數字；取代時只有值一樣才留著建立的時間；有 `__Http-`、`__Host-Http-` 前綴。
-- 新的測試：`net` 的 `cookies` 52 個，單元測試 6 個（日期、分隔字元、`StringToInt64`、path 和 domain 的比對、子網域）。
-- mutation test（`mutants-4b.toml`，subagent 寫、在 session 裡加了一個預設選項的）26 個，抓到 25 個；沒抓到的「已經過期的 cookie 也存進去」是等價的（讀取和設定都先刪掉過期的），記進 `docs/test-gaps.md` 的「等價、不用處理的 mutation」。subagent 第一次跑時漏掉的兩個（`;\n` 的那一行、不在 label 的邊界上的 domain 比對）它補了測試。
-- 文件：`docs/architecture.md` 的 crate 表（`net` 的 `cookies`）、`crates/net/src/lib.rs` 的 crate 說明。
-- 跑過的檢查：`cargo test -p net`（32 個單元測試、110 個整合測試）、`cargo clippy -p net --all-targets -- -D warnings`、`cargo fmt --check`；`sanity.py` 的 `numerics`、`tests`、`docs`。
-
-### 4c：接上每一跳請求
-
-macOS、Apple M4，2026-11-20。
-
-- 照第 15 到 17 條做，沒有新的決定。照使用者的要求，這一段在 session 裡自己寫。
-- 新的東西：`protocol` 的 `TrustedParams` 加 `initiator`（cookie 的 initiator，和觸發 CORS 的 `ResourceRequest::initiator` 分開）和 `is_main_frame_navigation`；`site` 的 `SiteForCookies::is_first_party_schemeless`（Chromium 判斷第三方的 `IsFirstParty`）；`browser` 的 `FrameTree::navigation_params`，`WebContents` 開始導覽時填上；`net` 的 `CookieJar`（`URLRequestHttpJob` 的 cookie 步驟和 `CookieSettings`：每一跳的 site for cookies、`SameSite` 的情境、第三方的規則），`url_loader` 照 Fetch 的「include credentials」決定帶不帶；`NetworkContextParams::allow_third_party_cookies` 和 `machopo --allow-third-party-cookies`（視窗和自動化都收）。
-- 和 Chromium 不同、留著的（寫在程式的註解裡）：`Partitioned` 的 cookie 在 4d 照最上層的網站分開之前，一律當第三方的；不看 redirect 的路徑（Chromium 的 `kCookieSameSiteConsidersRedirectChain` 預設也關）；被拒絕的 cookie 不告訴 DevTools。
-- 新的測試：`net` 的 `cookie_loads` 4 個（兩種規則都跑），`browser` 的 `cookies` 1 個（頁面、它的圖片、第三方的 iframe、之後的導覽，兩種規則都跑），`browser` 的單元測試改寫一個、新增一個（導覽的參數），`site` 的 `site_for_cookies` 補了不看 scheme 的比對，`shell` 的 `the_third_party_cookie_policy`。
-- mutation test（`mutants-4c.toml`）15 個，抓到 14 個；沒抓到的「沒有可信參數的請求也有 cookie」是預設的規則下預設的參數本來就算第三方，補了照送的旗標時沒有可信參數的請求也不送的檢查，重跑抓到。
-- 文件：`docs/limitations.md`（cookie 的現況：預設擋第三方、嚴格的 Lax、旗標、`Partitioned` 當沒標的、只在記憶體、沒有上限、沒有 `document.cookie`；`credentials` 照 Fetch 帶 cookie）、`docs/architecture.md`（`net` 的 `CookieJar`、`WebContents` 的導覽的可信參數）。
-- 跑過的檢查：`cargo test` 的 `site`、`protocol`、`net`、`browser`、`shell`（1107 個通過）、`shell` 的 bin 測試（12 個）；`sanity.py` 見下。`scenarios --window`（改了 `window.rs`）在第 4 階段做完時跑。
-
-### 4d：`Partitioned`、上限和淘汰、`Cookies` 資料庫
-
-macOS、Apple M4，2026-11-20。
-
-- 決定了第 18 條（資料庫在背景一次全讀）、第 19 條（值存明文）和第 20 條（上限照 Chromium、不認 `Priority`）。讀了 Chromium 的 `sqlite_persistent_cookie_store.cc`、`cookie_monster.cc`（`GarbageCollect`、`PurgeLeastRecentMatches`、`GarbageCollectLeastRecentlyAccessed`、`GarbageCollectPartitionedCookies`、`InternalUpdateCookieAccessTime`）、`cookie_partition_key.cc`（`FromNetworkIsolationKey`）、`canonical_cookie.cc`（`Create` 怎麼收分區、`IsEquivalentForSecureCookieMatching`）和 `network_context.cc`。
-- 新的東西：`net` 的 `CookiePartitionKey`；`CanonicalCookie` 的分區（取代原本只記有沒有標 `Partitioned`）和 `from_storage`；`CookieMonster` 的分區、上限和淘汰、`PersistentCookieStore`、`load`、隔一分鐘才記成用過；`SqlitePersistentCookieStore`（自己的 thread、`CommitOptions`、`CookieStoreThread` 由 `NetworkContext` 留著，最後一個放掉時寫完、等它結束）；`CookieJar` 每一跳算分區、照每個 cookie 套政策（第三方的 `Partitioned` 照送照收）、`wait_for_load`；`NetworkContextParams::data_directory`；`browser` 的 `StoragePartition::new` 改收 `NetworkContextParams`，自己照 profile 啟動 network context（Chromium 的 `InitNetworkContext`），呼叫的地方跟著改。
-- 和 Chromium 不同、留著的（寫在程式的註解裡）：所有分區的 cookie 放在同一個網域底下（Chromium 每個分區一張表）；網域的淘汰只有 medium 的兩輪（全部當 medium，配額 50 永遠不會限制，刪到 150 就停）；最上層是 opaque 的時沒有分區（Chromium 給它一個只在記憶體的分區）；資料庫的時間是 Unix epoch 起的微秒、沒有 `encrypted_value`、`priority`、`has_expires`、`is_persistent`、`last_update_utc`，唯一的欄位是名稱、domain、path 和分區（沒有 scheme 和 port：scheme-bound、port-bound 的 cookie 預設關）；壞掉的列只略過、不刪。分區的 cookie 沒有跨網域的總數上限（和 Chromium 一樣）。
-- 4b 留下的差異改掉了：`Partitioned` 只在請求有分區時才檢查要 `Secure`。
-- 新的測試：`net` 的 `cookie_monster` 6 個（分區、網域的上限、`Secure` 最後刪、全部的上限、分區的上限、告訴 store 的事），`cookie_loads` 加 3 個（重開之後還在、第三方的分區、分區看中間有沒有隔著別的網站），`cookies` 改了 `Partitioned` 的測試、加了隔一分鐘才記成用過的；單元測試：資料庫 4 個（欄位存回來一樣、成批寫、過期的和不是 cookie 的列、開不了），`cookie_jar` 3 個（等資料庫讀完、沒有資料庫時不用等、導覽每一跳的分區）；`browser` 的 `cookies` 加 1 個（profile 的資料夾經過 `StoragePartition` 留下 cookie，連跑 20 次都通過：舊的 renderer 的 IO thread 在 `shutdown` 時 join，沒有留下 network context）。
-- mutation test（`mutants-4d.toml`）第一次 43 個，抓到 38 個。沒抓到的：「main frame 的導覽算第三方的分區」是等價的（main frame 的導覽的 site for cookies 本來就是它網址的網站），拿掉了 `CookiePartitionKey::for_request` 的 `main_frame_navigation` 參數；「存的分區的網站不檢查」是測試的那一列不是 `Secure`、被另一個檢查擋掉，改成 `Secure` 的；「網域的淘汰刪到分區的 cookie」是測試裡第二輪沒有要刪的，在會刪 `Secure` 的情境加了更舊的分區 cookie；「一個網域 180 筆就刪」「全部 3300 筆就刪」是外層的提前離開和內層的檢查一樣，只弄壞一個看不出來，改成一次弄壞兩層，全部的那個再把測試改成第 3300 筆在 31 天後才設（原本設下時每一筆都是最近用過的，提早淘汰也沒有東西可刪）。改完重跑整份 42 個，全部抓到。「jar 的淘汰等最早的使用時間」拿掉時結果一樣，記進 `docs/test-gaps.md` 的「沒有計數守著的優化」。
-- 文件：`docs/limitations.md`（cookie 的分區、存在 profile、明文、上限不認 `Priority`、讀完之前請求等著）、`docs/architecture.md`（`net` 的 cookie、`StoragePartition` 啟動 network context）、`docs/test-gaps.md`（jar 的淘汰等最早的使用時間的捷徑）。
-- 跑過的檢查：`cargo test` 的 `net`、`site`、`browser`、`shell`（1111 個通過）；`cargo clippy -p net -p browser -p shell --all-targets -- -D warnings`、`cargo fmt --check`；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。
-
-### 4e：WPT 的 `cookies/`、第 4 階段的檢查
-
-macOS、Apple M4，2026-11-20。
-
-- 決定了第 21 條（WPT 的 `cookies/` 到第 5 階段才大量列進來）。用預設的設定跑整個 `cookies/`（`test.py wpt --all cookies/`）：約 90 份裡整份通過的只有 4 份，其他的失敗在 `window.open`（`samesite/` 幾乎每份先開新視窗；machopo 沒有）、`document.cookie` 和 testdriver 的 `delete_all_cookies`（第 5 階段）。
-- WPT：`include.txt` 加了 `cookies/` 整份通過的 4 份；因為有了 cookie 而通過的拿掉了預期結果（`fetch/api/cors/cors-cookies.any.js`、`cors-cookies-redirect.any.js`、`workers/modules/dedicated-worker-options-credentials.html`、`dynamic-imports-credentials.sub.html`）；`dynamic-imports-credentials-setTimeout.sub.html` 留下的兩個失敗不是 cookie 的事（`setTimeout` 的字串建的 script 沒有繼承呼叫它的 script 的 fetch options），換了註解；`workers/same-site-cookies/` 的 `disabled` 原因改成 shared worker 和 `window.open`（拿掉之後試跑：都停在這兩個）。`script-crossorigin-network.sub.html` 和 `module/credentials.sub.html` 照樣失敗：它們用 `document.cookie` 設 cookie。
-- 找到的不穩定：`html/semantics/scripting-1/the-script-element/moving-between-documents/after-prepare-*` 和 `fetch/`、`workers/` 等一起跑時，每次有兩三份整份 timeout（60 秒，測試大約 6 秒就該結束），每次是不同的幾份，單獨跑都通過。在 4b 的 commit（`be3816f`，還沒有接上請求的 cookie）上用同樣的目錄跑兩次也一樣，所以和 cookie 無關。另一個 session 查出原因（wptserve 回完沒有長度的回應之後關掉連線、不說，hyper 把它放回連線池，下一個請求拿到就失敗，iframe 的導覽跟著失敗），照 Chromium 的 `ShouldResendRequest` 在 `net` 重送，在 5a 之後套進 0107（`835e4ff`）；套用之後用同樣的目錄跑兩次，都沒有意外的結果。（另一個 worktree 和這裡共用 `target/` 時，cargo 用 workspace 裡的相對路徑命名輸出，4b 編的 `site` 蓋掉了這裡的；touch 改過的 crate 之後重編。）
-- 第 4 階段的檢查：`cargo test --workspace`（4416 個通過、1 個 ignored；`bindings` 的 `gc_platform` 在 log 裡的兩個 panic 是測試故意讓 worker panic）、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`；`test.py scenarios --window`（4c 改了 `window.rs`）72 個都通過，看了截圖；`test.py wpt cookies/ fetch/api/cors/ workers/modules/ workers/same-site-cookies/ html/semantics/scripting-1/the-script-element/module/dynamic-import/` 0 個意外的結果。
-
-### 5a：`document.cookie` 和 `navigator.cookieEnabled`
-
-macOS、Apple M4，2026-11-20。
-
-- 決定了第 22 條（每次讀都同步問）。第 5 階段分成三段（RFC 的「分階段」）。讀了 Chromium 的 `cookie_jar.cc`、`restricted_cookie_manager.cc`（`ValidateAccessToCookiesAt`、`MakeOptionsForGet`、`MakeOptionsForSet`、`CookiesEnabledFor`）、`document.cc`（`cookie`、`setCookie`、`CookiesEnabled`）和 `document_init.cc`（`GetCookieUrl`）。
-- 新的東西：`protocol` 的 `GetCookies`、`SetCookie`、`CookiesEnabled` 和回答 `Cookies`、`CookiesEnabled`（main thread 等它，不排進 queue）；`browser` 的 IO thread 照 loader 核對（`check_cookie_access`，新的 `BadMessageReason` 兩種）、交給 `net`；`net` 的 `get_cookies_for_script`、`set_cookie_from_script`、`cookies_enabled_for`（script 的 `SameSite` 情境、不給不設 `HttpOnly`、分區、政策），在 network thread 的迴圈裡照順序做（之後的 load 看得到前面的寫）；`dom` 的 `queue_cookie_write`、`take_cookie_writes`（和 `localStorage` 的改動一起在操作結束前交給 host，共用 `STORAGE` 的旗標：u8 的旗標用完了）；`dom_api` 的 `CookieHost`、`ScriptHost::cookie_call` 和 `cookie.rs`（cookie-averse、opaque、cookie URL 是建立者的）；`dom_js` 的 cookie host；`renderer` 的 `RendererCookieHost`。
-- 找到的問題：新 iframe 的第一份 `about:blank` 在建立它的 script 還在跑時沒有 loader（renderer 在操作之後才登記父文件的）；照 Chromium「一開始的空文件用建立者的 factory」，經過建立者的文件問。script 的寫原本在 network thread 上另一個 task 做，和之後的 load 的順序沒有保證；改成在主迴圈裡當場做。
-- 和 Chromium 不同、留著的（寫在程式的註解或限制裡）：判斷的順序照 HTML（先 cookie-averse 再 opaque），`data:` 的文件讀到空的（Chrome 丟 `SecurityError`）；寫在操作結束時才送（Chrome 在 setter 裡送），讀都在操作之外，看得到。
-- 新的測試：`net` 的 `cookie_loads` 加 2 個（第一方的 script、第三方的 script 照政策），重開之後的測試加 script 的第一次讀；`browser` 的 `cookies` 加 2 個（`document.cookie` 和 `cookieEnabled`、`file:` 的頁面），單元測試 1 個（loader 的核對）。WPT 列進 `document-cookie.html`、`cookie-enabled-noncookie-frame.html`、`set-and-delete-document-cookie.window.js`，`navigatorcookies-cookieenabled-true.html` 拿掉了預期結果。
-- mutation test（`mutants-5a.toml`）22 個，抓到 21 個；沒抓到的「沒有 window 的文件也有 cookie」是 `is_fully_active` 本來就看 window，拿掉了多的檢查，改成弄壞 `is_fully_active` 的那一個，重跑抓到。測不到的兩處（opaque 的 `SecurityError`、壞掉的讀照樣回答）記進 `docs/test-gaps.md` 的「只靠審查」。
-- 文件：`docs/limitations.md`（`document.cookie` 每次問、cookie-averse 的文件、`cookieEnabled` 照政策）、`docs/architecture.md`（同步等 Browser 的呼叫、`net` 的 script 的 cookie、IO thread 的核對）、`docs/test-gaps.md`。
-- 跑過的檢查：`cargo test` 的 `protocol`、`net`、`dom`、`dom_api`、`dom_js`、`renderer`、`browser`、`shell`（2277 個通過）；這幾個 crate 的 `cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`；`test.py wpt cookies/ html/dom/documents/resource-metadata-management/ html/webappapis/system-state-and-capabilities/the-navigator-object/ fetch/api/cors/` 0 個意外的結果。
-
-### 5b：自動化的 cookie
-
-macOS、Apple M4，2026-11-20。
-
-- 決定了第 23 條（WebDriver、CDP 的 `Network` 和 `Storage` 的 cookie）。讀了 Chromium 的 `network_handler.cc`（`BuildCookie`、`MakeCookieFromProtocolValues`、`FilterCookies`、`GetCookies`、`SetCookie(s)`、`DeleteCookies`、`ClearBrowserCookies`）、`storage_handler.cc`、`canonical_cookie.cc` 的 `CreateSanitizedCookie`，和 chromedriver 的 `window_commands.cc`（`GetVisibleCookies`、`ExecuteAddCookie`、`ExecuteDeleteCookie`、`ExecuteDeleteAllCookies`、`CreateDictionaryFrom`）、`web_view_impl.cc`。
-- 新的東西：`net` 的 `CanonicalCookie::create_sanitized`（兩個新的 `ExclusionReason`：`InvalidPath`、`AttributeValueExceedsMaxSize`；前綴的檢查改成也收屬性的值，`is_prefix_valid_for`）、`CookieMonster::get_all_inclusive_cookie_list`（不記成用過）、`NetworkContext` 的 `get_cookie_list`、`get_all_cookies`、`set_canonical_cookies`、`delete_cookies` 和 `CookieDeletionFilter`、`PartitionFilter`（在 network thread 的迴圈裡照順序做，和 script 的一樣）；`browser` 的 `WebContents::network`、`frame_urls`；`shell` 的 `automation_cookies`（`Network` 和 `Storage` 的 9 個 cookie 命令，原本假的回答拿掉）；machopodriver 的 5 個 cookie 指令。
-- 和 Chromium、chromedriver 不同、留著的：`Network.setCookie` 的 `sourceScheme`、`sourcePort`、`priority` 不收（`priority` 一律 `Medium`）；沒有 DevTools 的 client 能不能碰那個網址的檢查（`CanAccessCookie`：machopo 的 client 都可以）；WebDriver 的 Get All Cookies 等等讀的是目前 browsing context 的文件的網址（chromedriver 一樣），沒標 `SameSite` 的回報 `Lax`（chromedriver 一樣，WPT 的 `get_all_cookies/get.py` 期待 `None`，記成預期的失敗）。
-- 寫的時候發現 `CookieOptions` 已經有 `make_all_inclusive()`，拿掉了自己多寫的一個。
-- 新的測試：`net` 的 `cookies` 加 1 個（零件做的 cookie）、`cookie_monster` 加 1 個（讀了不記成用過）、`cookie_loads` 加 1 個（Browser 的四種呼叫）；`shell` 的 `devtools_cookies` 2 個（頁面的、瀏覽器全部的），`webdriver` 加 2 個（5 個指令、網域 cookie），`devtools_network` 拿掉原本對假回答的檢查。WPT 的 wdspec 加了 `add_cookie`、`delete_all_cookies`、`delete_cookie`、`get_all_cookies`、`get_named_cookie`：失敗的是 `user_prompts.py`（machopo 沒有 alert 這類提示，和其他目錄一樣）和上面說的 `sameSite`。WPT 的 testdriver 經過這些指令：`cookies/samesite/get_all_cookies-default-samesite.html` 整份通過，`cookies/name/name.html`、`value/value.html` 大多通過（5c 再看）。
-- mutation test（`mutants-5b.toml`）第一次 33 個，抓到 28 個、1 個編不過：「刪某個分區時刪到任何分區」補了刪別的分區是 0 個的檢查；「零件的名稱可以有 `=`」是等價的（`check_name_value_pair` 本來就擋 `=`、`;` 和控制字元），拿掉多的檢查，改成兩個 mutant（名稱前後的空白、path 的 `;`）；「加的網域 cookie 變成 host-only」是 WebDriver 的測試只在 IP 位址上跑，加了帶 host 對應規則的 driver 和 `www.a.localhost` 的測試；「設不成的 cookie 不算錯」補了 `SameSite=None` 沒有 `Secure` 的檢查；編不過的那個是 mutant 寫錯，改了。重跑整份 34 個，全部抓到。
-- 文件：`docs/limitations.md`（machopodriver 和 CDP 的 cookie）、`docs/architecture.md`（`net` 的 cookie 管理）、`crates/shell/README.md`（CDP 的 cookie 命令）、`crates/driver/README.md`（有的指令、cookie）。
-- 跑過的檢查：`cargo test` 的 `net`、`browser`、`shell`、`driver`（1129 個通過）；這幾個 crate 的 `cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`；`test.py wdspec` 的 5 個 cookie 目錄 0 個意外的結果。
-
-### 拿掉照送第三方 cookie 的旗標
-
-macOS、Apple M4，2026-11-20。
-
-- 使用者決定拿掉 `--allow-third-party-cookies` 和它打開的那組（第三方的照送照收、2 分鐘的 Lax-allowing-unsafe），當成已知的限制：第 24 條（取代第 17 條的旗標和 Lax-allowing-unsafe、第 21 條的 `samesite/` 的 subsuite）。
-- 拿掉的：`NetworkContextParams::allow_third_party_cookies`、`CookieJar` 的政策欄位（`accessible`、`options` 改成不用 `self` 的函式）、`CookieOptions::lax_allow_unsafe` 和 `LAX_ALLOW_UNSAFE_MAX_AGE_SECONDS`、有效 `SameSite` 的 `LaxModeAllowUnsafe`（`include_for_request_url` 不再收 `now`），`shell` 的 `main.rs`、`window.rs` 回到 4c 之前（只有旗標的改動）。`SameSiteLaxMethodUnsafe` 的情境留著：它分出跨網站的 `POST` 導覽。之前的 `mutants-4b.toml`、`mutants-4c.toml`、`mutants-5a.toml` 裡有些 mutant 改的是拿掉的程式，是當時的紀錄，照原樣留著。
-- 測試：7 個兩種政策各跑一次的迴圈改成只跑這一種；`lax_allowing_unsafe_for_two_minutes` 換成 `an_unsafe_navigation_gets_no_lax_cookies`；`shell` 的旗標的測試跟著 `main.rs` 回到之前。
-- mutation test（`mutants-5-no-third-party.toml`，留下來的規則換了寫法）4 個，全部抓到。
-- 文件：`docs/limitations.md`（擋第三方 cookie、沒有開關、會壞的網站和 WPT）、`docs/architecture.md`。
-- 跑過的檢查：`cargo test` 的 `net`、`site`、`browser`、`shell`、`driver`（1143 個通過）；這幾個 crate 的 clippy、`cargo fmt --check`；`sanity.py` 的 7 項。`window.rs` 改了，`scenarios --window` 在第 5 階段的檢查（5c）跑。
-
-### 5c：WPT 的 `cookies/`、第 5 階段的檢查
-
-macOS、Apple M4，2026-11-20。
-
-- 照第 21 條把整個 `cookies/` 列進 `include.txt`（取代第 4、5 階段列的 6 份），用 `MACHOPO_UPDATE_EXPECTATIONS` 寫預期結果，每份 `.ini` 寫上原因。89 份裡 43 份整份通過。失敗的：`window.open`（`samesite/` 幾乎每份、`attributes/domain`、`secure-non-secure`、`ordering`、`scheme-bound-cookies`、`domain-attribute-idn-host`、`schemeful-iframe-subresource`、`schemeful-navigation`、`third-party-cookies`）；`WebSocket`（`secure/set-from-ws(s)`、`schemeful-websockets`）；service worker（`path/match-percent-encoded`）；`self.origin`（`prefix/` 的 6 份 `.header` 和 `Http` 的，測試去抓 `undefined/...`；`partitioned-cookies.tentative`、`third-party-cookie-heuristics` 另外還要 `window.open`）；照 Chrome 的行為（tab 算控制字元、沒有名稱而值裡有 `=` 的不設、不綁 port）；第 24 條擋掉的第三方 cookie（`multiple-samesite-attributes`、`iframe.document` 的跨網站子測試）。
-- 第一次跑整個目錄時找到、修好的三個 `net` 的問題（都不是 cookie 自己的邏輯）：
-  - cookie 的 header 是 bytes：`Set-Cookie` 的值原本照每個 byte 一個字元（Latin-1）存，script 讀到亂碼；改成把那些 bytes 照 UTF-8 讀，送 `Cookie` 時反過來（Chromium 存 bytes，script 照 UTF-8 讀）。`charset.html`、`value.html` 因此整份通過。
-  - 回應裡有一行不是 header（值裡有控制字元）時，hyper 讓整個回應失敗，`name-ctl`、`value-ctl`、`attributes-ctl` 的每個子測試都跟著失敗；打開 reqwest 的 `http1_ignore_invalid_headers_in_responses`，只丟掉那一行（Chromium 的 `HttpResponseHeaders` 一樣寬鬆）。
-  - `Content-Type` 原本取第一個 header：`cookies/resources/postToParent.py` 送兩個（先 `application/json`、後 `text/html`），iframe 被當成 JSON 顯示、script 不跑，`iframe.document`、`schemeful-subresource` 等 60 秒 timeout。改成照 Fetch 的「extract a MIME type」取每個值（逗號分開、引號裡的不算）裡最後一個能用的、`*/*` 不算，charset 留同一種的最後一個有的（Chromium 的 `GetMimeTypeAndCharset`）。試跑 `fetch/content-type/`（`--all`）：5 份都還有失敗（`Response` 的 `Content-Type` 和 blob 的 type、script 的 MIME type 是 renderer 那一側的），沒有列進來。
-- 找到的不穩定：`partitioned-cookies-top-level-redirect.tentative` 一次 ERROR、一次通過。頁面在載入時把自己導覽到別的網站（再導回來）；machopodriver 的 Navigate 在第一份文件載入完就回答（chromedriver 等頁面自己開始的導覽也完成），harness 的 script 有時跑在要被換掉的文件裡（「the document went away before the script settled」）。和 cookie 無關，`.ini` 標成 `[OK, ERROR]`，附上原因。
-- 新的測試：`net` 的 `cookie_loads` 加 1 個（UTF-8 的 cookie、有控制字元的 header 行），`load` 加 1 個（最後一個能用的 `Content-Type`），`mime` 的單元測試 1 個（引號外的逗號）。
-- mutation test（`mutants-5c.toml`）12 個，全部抓到（後 3 個是刪光 cookie 的指令和 runner：runner 不送時，`test.py wpt cookies/ fetch/api/cors/` 失敗）。
-- 文件：`docs/limitations.md`（tab、沒有名稱的 cookie、不綁 port）、`docs/architecture.md`（`net` 的 header 寬鬆、cookie 的 bytes、`Content-Type`）、`crates/driver/README.md`（machopodriver 自己的指令）、`tests/wpt/README.md`（runner 每個測試之後刪光 cookie）。
-- 第 5 階段的檢查：`cargo test --workspace`（4437 個通過、1 個 ignored）、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`（`mime.rs` 的 `i + 1` 補了帶理由的 `#[expect]`）；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。`test.py scenarios --window`（`window.rs` 改過）跑了兩次，每次 72 個裡 1 個失敗：第二次是 `demo-busy` 的「no frame was drawn: is the window hidden?」（第一次的是哪一個沒有記下來）。單獨跑 `demo-busy` 3 次都通過，看了截圖。這個錯誤是 Viz 一直沒畫出 frame，和 `docs/testing.md` 寫的視窗被遮住的情況一樣；原因還沒有確認。
-- 第一次跑 `test.py wpt cookies/ fetch/api/cors/` 有 3 個意外的結果：前面的 cookie 測試留下 cookie，被之後的測試讀到。`samesite/` 和 `scheme-bound-cookies` 在 `window.open` 那裡就停下，沒跑到清掉 cookie 的那一步；結果是預期的、不重開瀏覽器（`--no-restart-on-new-group`），所以同一個 machopo 之後的測試（`set-and-delete-document-cookie`、`cors-cookies`、`cors-cookies-redirect`）讀到它們的 cookie。試跑（`--all`）時這些是意外的結果，wptrunner 每次都重開瀏覽器，所以沒看到。決定了第 25 條：machopodriver 加 `POST /session/{sessionId}/machopo/cookies/clear`（`Network.clearBrowserCookies`），machopo 的 wptrunner 的 executor 在每個測試之後送它（新的 `wptrunner_machopo/executors.py`：wptrunner 把 executor 的 class pickle 給子 process，class 要在 module 的最上層）。之後 `test.py wpt cookies/ fetch/api/cors/ webstorage/ css/css-text/white-space/`（reftest 也經過新的 executor）0 個意外的結果。`shell` 的 `webdriver` 加 1 個測試（兩個網站的 cookie 都刪掉，Delete All Cookies 只刪目前的）；`cargo test -p driver -p shell`、這兩個 crate 的 clippy 和 `cargo fmt --check` 通過。
+- 每一段：改到的 crate 的 `cargo test`，`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`；改了 WPT 的清單或預期結果、或 `net` 的載入時跑相關目錄的 `test.py wpt`，wdspec 的 5 個 cookie 目錄跑了 `test.py wdspec`。
+- 每個階段做完時：`cargo test --workspace`（第 1 階段 4285 個、第 2 階段 4298 個、第 3 階段 4327 個、第 4 階段 4416 個、第 5 階段 4437 個通過，都是 1 個 ignored）、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`。clippy 找到的都改了寫法：測試裡太長的型別、分頁的編號用 `base::AtomicSequenceNumber`（3c）、`mime.rs` 的 `i + 1` 加帶理由的 `#[expect]`（5c）。跑完之後家目錄底下沒有 profile 的資料夾（測試和自動化都在記憶體）。
+- 真視窗的情境（`scenarios --window`，改了視窗那一層的 2a、3a、4c、拿掉旗標之後）：72 次；失敗的見上面的「不穩定的測試」。看了截圖。
+- 沒有動到 GC、V8 的程式和 fork：`matrix`、`fuzz` 照 CLAUDE.md 由每週的 CI 跑。
