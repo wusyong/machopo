@@ -11,6 +11,7 @@
 
 mod client;
 mod content_encoding;
+mod cookie_loads;
 mod cookies;
 mod load;
 mod redirects;

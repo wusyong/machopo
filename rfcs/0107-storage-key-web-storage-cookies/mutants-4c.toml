@@ -1,0 +1,116 @@
+# Step 4c: cookies on loads. Each hop sends the jar's cookies and keeps
+# its response's, by the request's trusted params (a navigation's the
+# browser fills by its frame and initiator), Fetch's credentials, the
+# SameSite context (Chromium's ComputeSameSiteContextForRequest and
+# ForResponse) and the cookie policy (no third party's, or Chromium's).
+test = [
+    "sh", "-c",
+    "cargo test -q -p site && cargo test -q -p net --test it cookie_loads:: && cargo test -q -p browser --lib -- navigations_params loaders_params && cargo test -q -p browser --test it cookies::",
+]
+timeout = 1800
+
+[[mutant]]
+name = "a hop sends no cookies"
+file = "crates/net/src/url_loader.rs"
+from = '''            sent.push(("cookie".to_owned(), cookie));'''
+to = '''            let _ = cookie;'''
+
+[[mutant]]
+name = "a hop keeps no cookies"
+file = "crates/net/src/url_loader.rs"
+from = '''            cookies.set_from_response(&url, request.trusted.as_ref(), &raw.headers);'''
+to = ''''''
+
+[[mutant]]
+name = "same-origin credentials go anywhere"
+file = "crates/net/src/url_loader.rs"
+from = '''                .is_none_or(|cors| cors.tainting == ResponseTainting::Basic),'''
+to = '''                .is_none_or(|_| true),'''
+
+[[mutant]]
+name = "omitted credentials are included"
+file = "crates/net/src/url_loader.rs"
+from = '''            protocol::network::CredentialsMode::Omit => false,'''
+to = '''            protocol::network::CredentialsMode::Omit => true,'''
+
+[[mutant]]
+name = "a request without trusted params has cookies"
+file = "crates/net/src/cookies/cookie_jar.rs"
+from = '''        let trusted = trusted?;
+        let site_for_cookies = site_for_cookies_at(url, trusted);'''
+to = '''        let default = TrustedParams::default();
+        let trusted = trusted.unwrap_or(&default);
+        let site_for_cookies = site_for_cookies_at(url, trusted);'''
+
+[[mutant]]
+name = "a third party's cookies are accessible"
+file = "crates/net/src/cookies/cookie_jar.rs"
+from = '''        self.allow_third_party_cookies || site_for_cookies.is_first_party_schemeless(url)'''
+to = '''        self.allow_third_party_cookies || site_for_cookies.is_first_party_schemeless(url) || true'''
+
+[[mutant]]
+name = "Chromium's policy keeps a third party's off"
+file = "crates/net/src/cookies/cookie_jar.rs"
+from = '''        self.allow_third_party_cookies || site_for_cookies.is_first_party_schemeless(url)'''
+to = '''        site_for_cookies.is_first_party_schemeless(url)'''
+
+[[mutant]]
+name = "Lax-allowing-unsafe always"
+file = "crates/net/src/cookies/cookie_jar.rs"
+from = '''            lax_allow_unsafe: self.allow_third_party_cookies,'''
+to = '''            lax_allow_unsafe: true,'''
+
+[[mutant]]
+name = "a cross-site initiator still makes it strict"
+file = "crates/net/src/cookies/cookie_jar.rs"
+from = '''    if same_site_initiator(url, trusted) {
+        return SameSiteCookieContext::SameSiteStrict;
+    }'''
+to = '''    if same_site_initiator(url, trusted) || true {
+        return SameSiteCookieContext::SameSiteStrict;
+    }'''
+
+[[mutant]]
+name = "a subresource from another site's initiator is lax"
+file = "crates/net/src/cookies/cookie_jar.rs"
+from = '''    if !trusted.is_main_frame_navigation {
+        return SameSiteCookieContext::CrossSite;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "an unsafe method is lax"
+file = "crates/net/src/cookies/cookie_jar.rs"
+from = '''        SameSiteCookieContext::SameSiteLaxMethodUnsafe
+    }'''
+to = '''        SameSiteCookieContext::SameSiteLax
+    }'''
+
+[[mutant]]
+name = "a main frame navigation's site for cookies is the browser's"
+file = "crates/net/src/cookies/cookie_jar.rs"
+from = '''    if trusted.is_main_frame_navigation {
+        return SiteForCookies::of_site(Site::of_url(url));
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "the third party check goes by scheme"
+file = "crates/site/src/lib.rs"
+from = '''            && other.registrable_domain_or_host() == site.registrable_domain_or_host()'''
+to = '''            && other == *site'''
+
+[[mutant]]
+name = "a navigation's initiator is lost"
+file = "crates/browser/src/frame_tree.rs"
+from = '''        params.initiator = initiator;
+        params'''
+to = '''        params.initiator = None;
+        let _ = initiator;
+        params'''
+
+[[mutant]]
+name = "a child frame's navigation is a main frame's"
+file = "crates/browser/src/web_contents.rs"
+from = '''                .navigation_params(frame, &url, asked.initiator),'''
+to = '''                .navigation_params(self.frame_tree.root(), &url, asked.initiator),'''

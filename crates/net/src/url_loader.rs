@@ -161,6 +161,7 @@ pub fn concat(mut pieces: Vec<Bytes>) -> Bytes {
 /// of each redirect it would follow and waiting there until it may.
 pub(crate) async fn load(
     transport: &HttpTransport,
+    cookies: &crate::cookies::CookieJar,
     request: &ResourceRequest,
     mut redirects: Option<Redirects<'_>>,
 ) -> Result<Response, NetError> {
@@ -235,6 +236,21 @@ pub(crate) async fn load(
         // Fetch's "append a request `Origin` header", afresh for each hop:
         // the tainting, and the origin, may change on a redirect.
         let mut sent = headers.clone();
+        // Fetch's "include credentials" for this hop: `include`, or
+        // `same-origin` while the response would be basic (of the
+        // initiator's origin, or the browser's own request).
+        let credentials = match request.credentials {
+            protocol::network::CredentialsMode::Include => true,
+            protocol::network::CredentialsMode::SameOrigin => cors
+                .as_ref()
+                .is_none_or(|cors| cors.tainting == ResponseTainting::Basic),
+            protocol::network::CredentialsMode::Omit => false,
+        };
+        if credentials
+            && let Some(cookie) = cookies.cookie_header(&url, request.trusted.as_ref(), &method)
+        {
+            sent.push(("cookie".to_owned(), cookie));
+        }
         if let Some(cors) = &cors {
             cors.add_origin(&method, &mut sent);
             // Fetch's "CORS-preflight fetch", for each hop that needs one
@@ -251,6 +267,12 @@ pub(crate) async fn load(
         let raw = transport
             .send(&method, &url, accept, &sent, body.as_deref())
             .await?;
+        // A redirect's cookies are kept too, before it is followed (or
+        // refused by CORS: the server set them all the same, as
+        // Chromium's `URLRequestHttpJob` keeps them before its checks).
+        if credentials {
+            cookies.set_from_response(&url, request.trusted.as_ref(), &raw.headers);
+        }
         if let Some(cors) = &cors {
             cors.check(&url, &raw)?;
         }

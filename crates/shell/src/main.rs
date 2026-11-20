@@ -53,12 +53,12 @@ const DEFAULT_LOG_FILTER: &str = "info,wgpu_core=warn,wgpu_hal=warn,naga=warn";
 
 const USAGE: &str = "\
 usage: machopo [--ui-layout LAYOUT] [--ui-theme THEME] [--test-fonts]
-           [--num-raster-threads N] [--user-data-dir DIR]
+           [--num-raster-threads N] [--user-data-dir DIR] [--allow-third-party-cookies]
            [--remote-debugging-port PORT [--remote-allow-origins ORIGINS]]
            [URL|PATH]
        machopo --automation-pipe [--window | --scale F] [--host-resolver-rules RULES]
            [--additional-trust-anchors PEM] [--test-fonts]
-           [--num-raster-threads N] [--user-data-dir DIR]
+           [--num-raster-threads N] [--user-data-dir DIR] [--allow-third-party-cookies]
            [--remote-debugging-port PORT [--remote-allow-origins ORIGINS]]
 
 Options that take a value take it as --name VALUE or --name=VALUE.";
@@ -125,6 +125,13 @@ Options:
                       --automation-pipe's is in memory, gone as it ends.
                       Only one machopo has a folder at a time: a second one
                       doesn't start.
+  --allow-third-party-cookies
+                      Chrome's cookie policy: a third party's cookies (a
+                      frame's or request's of another site than the page's)
+                      are sent and kept, and a cookie without SameSite goes
+                      with a top-level navigation of any method in its first
+                      two minutes. Without it, machopo's own: a third
+                      party's are neither, and SameSite=Lax is Lax.
   --remote-debugging-port PORT
                       In a window or with --automation-pipe: serve the
                       DevTools protocol on 127.0.0.1:PORT (0: a free port),
@@ -200,6 +207,8 @@ struct Args {
     remote_debugging: Option<devtools_http_handler::Options>,
     /// `--user-data-dir`.
     user_data_dir: Option<PathBuf>,
+    /// `--allow-third-party-cookies`.
+    allow_third_party_cookies: bool,
 }
 
 /// `--automation-pipe`, and the settings that go with it.
@@ -233,6 +242,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
     let mut ui_theme = None;
     let mut scale = None;
     let mut test_fonts = false;
+    let mut allow_third_party_cookies = false;
     let mut automation_pipe = false;
     let mut pipe_window = false;
     let mut host_resolver_rules = None;
@@ -284,6 +294,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
                 });
             }
             "--test-fonts" => test_fonts = true,
+            "--allow-third-party-cookies" => allow_third_party_cookies = true,
             "--num-raster-threads" => {
                 let v = value("--num-raster-threads")?;
                 let parsed = v.parse::<usize>().ok().filter(|n| *n > 0);
@@ -377,6 +388,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
         num_raster_threads,
         remote_debugging,
         user_data_dir,
+        allow_third_party_cookies,
         automation_pipe: automation_pipe.then_some(AutomationPipe {
             window: pipe_window,
             scale,
@@ -387,9 +399,16 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
 }
 
 /// The network service's settings `--automation-pipe`'s options ask for:
-/// the rules parsed, the certificates read.
-fn network_params(pipe: &AutomationPipe) -> Result<NetworkContextParams, String> {
-    let mut params = NetworkContextParams::default();
+/// the rules parsed, the certificates read; Chromium's cookie policy with
+/// `allow_third_party_cookies`.
+fn network_params(
+    pipe: &AutomationPipe,
+    allow_third_party_cookies: bool,
+) -> Result<NetworkContextParams, String> {
+    let mut params = NetworkContextParams {
+        allow_third_party_cookies,
+        ..NetworkContextParams::default()
+    };
     if let Some(rules) = &pipe.host_resolver_rules {
         params.host_resolver_rules =
             HostMappingRules::parse(rules).map_err(|e| format!("--host-resolver-rules: {e}"))?;
@@ -486,7 +505,7 @@ fn main() -> ExitCode {
         }
     };
     let result = match &args.automation_pipe {
-        Some(pipe) => match network_params(pipe) {
+        Some(pipe) => match network_params(pipe, args.allow_third_party_cookies) {
             Ok(network) if pipe.window => window::run(window::Options {
                 url: args.url,
                 ui_layout: UiLayout::Horizontal,
@@ -496,6 +515,7 @@ fn main() -> ExitCode {
                 pipe: Some(network),
                 remote_debugging: args.remote_debugging,
                 profile,
+                allow_third_party_cookies: args.allow_third_party_cookies,
             }),
             Ok(network) => automation_pipe::run(automation_pipe::Options {
                 scale: pipe.scale,
@@ -520,6 +540,7 @@ fn main() -> ExitCode {
             pipe: None,
             remote_debugging: args.remote_debugging,
             profile,
+            allow_third_party_cookies: args.allow_third_party_cookies,
         }),
     };
     match result {
@@ -762,7 +783,7 @@ mod tests {
             ..Default::default()
         };
         assert!(
-            network_params(&bad)
+            network_params(&bad, false)
                 .unwrap_err()
                 .starts_with("--host-resolver-rules: ")
         );
@@ -771,10 +792,25 @@ mod tests {
             ..Default::default()
         };
         assert!(
-            network_params(&missing)
+            network_params(&missing, false)
                 .unwrap_err()
                 .starts_with("no-such.pem: ")
         );
+    }
+
+    /// `--allow-third-party-cookies`: Chromium's cookie policy, in a window
+    /// and through the pipe; without it machopo's.
+    #[test]
+    fn the_third_party_cookie_policy() {
+        assert!(!run(&[]).allow_third_party_cookies);
+        let args = run(&["--allow-third-party-cookies"]);
+        assert!(args.allow_third_party_cookies);
+        let pipe = run(&["--automation-pipe", "--allow-third-party-cookies"]);
+        assert!(pipe.allow_third_party_cookies);
+        let params = network_params(pipe.automation_pipe.as_ref().unwrap(), true).unwrap();
+        assert!(params.allow_third_party_cookies);
+        let params = network_params(&AutomationPipe::default(), false).unwrap();
+        assert!(!params.allow_third_party_cookies);
     }
 
     #[test]
@@ -789,6 +825,7 @@ mod tests {
             "--additional-trust-anchors",
             "--num-raster-threads",
             "--user-data-dir",
+            "--allow-third-party-cookies",
             "--help",
         ] {
             assert!(help.contains(option), "{option}");

@@ -196,6 +196,8 @@ struct App {
     num_raster_threads: Option<usize>,
     /// The window's profile (`--user-data-dir`, or the user's own).
     profile: browser::Profile,
+    /// `--allow-third-party-cookies`.
+    allow_third_party_cookies: bool,
     proxy: EventLoopProxy<ShellEvent>,
     running: Option<Running>,
     error: Option<String>,
@@ -264,7 +266,8 @@ impl App {
             .with_title("machopo")
             .with_inner_size(LogicalSize::new(1024.0, 768.0));
         let pipe = self.automating.as_ref().and_then(|a| a.pending.as_ref());
-        let network = pipe.cloned().unwrap_or_default();
+        let mut network = pipe.cloned().unwrap_or_default();
+        network.allow_third_party_cookies |= self.allow_third_party_cookies;
         let automation = pipe.is_some();
         if automation {
             // Nothing covers it: a window hidden has no frames to read back.
@@ -808,6 +811,8 @@ pub struct Options {
     pub pipe: Option<NetworkContextParams>,
     pub remote_debugging: Option<devtools_http_handler::Options>,
     pub profile: browser::Profile,
+    /// `--allow-third-party-cookies`: Chromium's cookie policy.
+    pub allow_third_party_cookies: bool,
 }
 
 /// Opens a window at `options.url`, until it is closed; or, with
@@ -823,6 +828,7 @@ pub fn run(options: Options) -> Result<(), String> {
         pipe,
         remote_debugging,
         profile,
+        allow_third_party_cookies,
     } = options;
     let event_loop = EventLoop::<ShellEvent>::with_user_event()
         .build()
@@ -834,6 +840,7 @@ pub fn run(options: Options) -> Result<(), String> {
         test_fonts,
         num_raster_threads,
         profile,
+        allow_third_party_cookies,
         proxy: event_loop.create_proxy(),
         running: None,
         error: None,

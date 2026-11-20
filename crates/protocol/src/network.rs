@@ -48,8 +48,9 @@ pub enum RequestMode {
     Cors,
 }
 
-/// A request's credentials mode (`network::mojom::CredentialsMode`). machopo
-/// has no cookies: it only changes what CORS asks of the other origin.
+/// A request's credentials mode (`network::mojom::CredentialsMode`): whether
+/// cookies go with it and are taken from its responses (Fetch's "include
+/// credentials"), and what CORS asks of the other origin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CredentialsMode {
     Omit,
@@ -114,6 +115,17 @@ pub struct ResourceRequest {
 pub struct TrustedParams {
     pub site_for_cookies: Option<String>,
     pub top_frame_site: Option<String>,
+    /// The origin of the document that started it, serialized (`null` for
+    /// an opaque one): a subresource's, its loader's (the
+    /// `request_initiator` its lock checked); a navigation's, the frame's
+    /// that asked for it; none for one the browser starts itself (the
+    /// address typed), which is same-site with anything. Not the request's
+    /// `initiator`, which also makes it go by CORS.
+    pub initiator: Option<String>,
+    /// A navigation of the main frame (`is_main_frame_navigation`): its
+    /// site for cookies and top-level site are its URL's at each hop, and a
+    /// cross-site one still gets `Lax` cookies.
+    pub is_main_frame_navigation: bool,
 }
 
 impl ResourceRequest {

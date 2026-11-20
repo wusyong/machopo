@@ -881,7 +881,11 @@ impl WebContents {
         } else {
             RequestDestination::Iframe
         };
-        let request = ResourceRequest::new(url.clone(), destination);
+        let mut request = ResourceRequest::new(url.clone(), destination);
+        request.trusted = Some(
+            self.frame_tree
+                .navigation_params(frame, &url, asked.initiator),
+        );
         let navigation = NavigationRequest {
             id: navigation_id,
             begin_id: asked.begin_id,

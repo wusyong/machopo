@@ -794,6 +794,7 @@ mod tests {
                 trusted: TrustedParams {
                     site_for_cookies: Some("https://a.example".to_owned()),
                     top_frame_site: Some("https://a.example".to_owned()),
+                    ..TrustedParams::default()
                 },
             },
         );

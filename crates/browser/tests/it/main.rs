@@ -9,6 +9,7 @@
     reason = "tests"
 )]
 
+mod cookies;
 mod dom_storage;
 mod loaders;
 mod navigation;

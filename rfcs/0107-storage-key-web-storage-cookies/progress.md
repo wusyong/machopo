@@ -19,7 +19,7 @@
 | 3c：上限、寫進磁碟的批次、WPT 的 `webstorage/`、第 3 階段的檢查和文件 | 完成 | 2026-11-20 |
 | 4a：請求的來歷（Browser 給的最上層的網站和 site for cookies，核對 `initiator`） | 完成 | 2026-11-20 |
 | 4b：解析 `Set-Cookie`、cookie 本身（`CanonicalCookie`）、記憶體裡的 store | 完成 | 2026-11-20 |
-| 4c：接上每一跳請求、`SameSite`、第三方的 cookie 的預設和照送的旗標、導覽的可信參數 | 未開始 | |
+| 4c：接上每一跳請求、`SameSite`、第三方的 cookie 的預設和照送的旗標、導覽的可信參數 | 完成 | 2026-11-20 |
 | 4d：`Partitioned`、上限和淘汰、寫進 profile 的 `Cookies` 資料庫 | 未開始 | |
 | 4e：WPT 的 `cookies/`、第 4 階段的檢查和文件 | 未開始 | |
 | 5：cookie 到 DOM 和自動化 | 未開始 | |
@@ -50,6 +50,7 @@
 | site for cookies：最上層的 frame 是自己的網站；frame 和中間的每一層都是最上層的網站時是它，有一層不是、或有 opaque 的時是 null；網址照 scheme 比（`ws:` 算 `http:`、`wss:` 算 `https:`） | `cargo test -p site` |
 | 請求的來歷：每份文件 commit 時一個 Browser 給的 loader（文件的 origin、site for cookies、最上層的網站，照它所在的 frame 算）；IO thread 照編號核對（沒給的 loader、不是 worker 的 loader、`initiator` 不是 loader 的 origin、renderer 自己帶了可信的參數都是壞掉的訊息；opaque 的 `initiator` 照收），填上 loader 的可信參數；跨 origin 的 iframe 的圖片、iframe 一開始的 `about:blank` 的 `fetch()`、worker 的 `fetch()` 都經過各自的 loader | `cargo test -p browser --lib -- loader request_takes workers_request`；`cargo test -p browser --test it loaders::` |
 | cookie：解析 `Set-Cookie`（終止字元和控制字元整行拒絕、tab 也是，名稱和值的大小、屬性值太長只略過、沒有 `=` 的第一段是沒有名稱的值、屬性不分大小寫、最後一個算）；`Expires` 的日期（Chromium 的 `ParseCookieExpirationTime`）；cookie 本身（host-only 和 domain cookie、public suffix 和 IP 位址、預設的 path、`Max-Age` 先於 `Expires`、伺服器的時差、最多 400 天、`__Secure-`、`__Host-`、`__Http-` 前綴、`Secure` 只從安全的或可信的網址、`SameSite=None` 要 `Secure`、`Partitioned` 要 `Secure`）；store（同名同 domain 同 path 的取代、值一樣時留著建立的時間、過期的刪掉、script 蓋不了 `HttpOnly`、leave secure cookies alone、domain 和 path 的比對、`SameSite` 的設定和送出、Lax-allowing-unsafe 的 2 分鐘、送出的順序）；預設的選項不做 Lax-allowing-unsafe | `cargo test -p net --test it cookies::`；`cargo test -p net --lib cookies` |
+| 請求的 cookie：每一跳送 jar 裡它拿得到的、留下回應設的（redirect 的也是）；沒有可信參數的（Browser 自己的）和 `omit` 的不送不留，`same-origin` 只到 initiator 的 origin；`SameSite` 照請求的情境（Chromium 的 `ComputeSameSiteContextForRequest`、`ForResponse`：別的網站發起的 main frame 導覽是 Lax、不安全的 method 只有 `None` 的，Browser 自己的導覽是 Strict，同一個網站的頁面裡別的網站發起的子資源是跨網站）；第三方（site for cookies 是別的網站或 null，不看 scheme）預設不送不留，`--allow-third-party-cookies` 照 Chromium（`SameSite=None` 的送、留，Lax-allowing-unsafe 的 2 分鐘）；導覽的可信參數（main frame 的是網址的網站，子 frame 的是 parent 的 loader 的，initiator 是發起的 frame 的 origin）；頁面設的 cookie 它的圖片送出、第三方的 iframe 設的只在照送的旗標時留下 | `cargo test -p site`；`cargo test -p net --test it cookie_loads::`；`cargo test -p browser --lib -- navigations_params loaders_params`；`cargo test -p browser --test it cookies::`；`cargo test -p shell --bin machopo -- third_party_cookie` |
 
 ## 做過的檢查
 
@@ -189,3 +190,15 @@ macOS、Apple M4，2026-11-20。
 - mutation test（`mutants-4b.toml`，subagent 寫、在 session 裡加了一個預設選項的）26 個，抓到 25 個；沒抓到的「已經過期的 cookie 也存進去」是等價的（讀取和設定都先刪掉過期的），記進 `docs/test-gaps.md` 的「等價、不用處理的 mutation」。subagent 第一次跑時漏掉的兩個（`;\n` 的那一行、不在 label 的邊界上的 domain 比對）它補了測試。
 - 文件：`docs/architecture.md` 的 crate 表（`net` 的 `cookies`）、`crates/net/src/lib.rs` 的 crate 說明。
 - 跑過的檢查：`cargo test -p net`（32 個單元測試、110 個整合測試）、`cargo clippy -p net --all-targets -- -D warnings`、`cargo fmt --check`；`sanity.py` 的 `numerics`、`tests`、`docs`。
+
+### 4c：接上每一跳請求
+
+macOS、Apple M4，2026-11-20。
+
+- 照第 15 到 17 條做，沒有新的決定。照使用者的要求，這一段在 session 裡自己寫。
+- 新的東西：`protocol` 的 `TrustedParams` 加 `initiator`（cookie 的 initiator，和觸發 CORS 的 `ResourceRequest::initiator` 分開）和 `is_main_frame_navigation`；`site` 的 `SiteForCookies::is_first_party_schemeless`（Chromium 判斷第三方的 `IsFirstParty`）；`browser` 的 `FrameTree::navigation_params`，`WebContents` 開始導覽時填上；`net` 的 `CookieJar`（`URLRequestHttpJob` 的 cookie 步驟和 `CookieSettings`：每一跳的 site for cookies、`SameSite` 的情境、第三方的規則），`url_loader` 照 Fetch 的「include credentials」決定帶不帶；`NetworkContextParams::allow_third_party_cookies` 和 `machopo --allow-third-party-cookies`（視窗和自動化都收）。
+- 和 Chromium 不同、留著的（寫在程式的註解裡）：`Partitioned` 的 cookie 在 4d 照最上層的網站分開之前，一律當第三方的；不看 redirect 的路徑（Chromium 的 `kCookieSameSiteConsidersRedirectChain` 預設也關）；被拒絕的 cookie 不告訴 DevTools。
+- 新的測試：`net` 的 `cookie_loads` 4 個（兩種規則都跑），`browser` 的 `cookies` 1 個（頁面、它的圖片、第三方的 iframe、之後的導覽，兩種規則都跑），`browser` 的單元測試改寫一個、新增一個（導覽的參數），`site` 的 `site_for_cookies` 補了不看 scheme 的比對，`shell` 的 `the_third_party_cookie_policy`。
+- mutation test（`mutants-4c.toml`）15 個，抓到 14 個；沒抓到的「沒有可信參數的請求也有 cookie」是預設的規則下預設的參數本來就算第三方，補了照送的旗標時沒有可信參數的請求也不送的檢查，重跑抓到。
+- 文件：`docs/limitations.md`（cookie 的現況：預設擋第三方、嚴格的 Lax、旗標、`Partitioned` 當沒標的、只在記憶體、沒有上限、沒有 `document.cookie`；`credentials` 照 Fetch 帶 cookie）、`docs/architecture.md`（`net` 的 `CookieJar`、`WebContents` 的導覽的可信參數）。
+- 跑過的檢查：`cargo test` 的 `site`、`protocol`、`net`、`browser`、`shell`（1107 個通過）、`shell` 的 bin 測試（12 個）；`sanity.py` 見下。`scenarios --window`（改了 `window.rs`）在第 4 階段做完時跑。

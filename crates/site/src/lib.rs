@@ -258,6 +258,19 @@ impl SiteForCookies {
         self.0.as_ref()
     }
 
+    /// Whether `url` is first party to it whatever its scheme
+    /// (`IsFirstParty`, schemeless): of its registrable domain, or its host
+    /// if it has none. What says whether a request is a third party's, for
+    /// the cookie policy (Chromium's `CookieSettings`).
+    pub fn is_first_party_schemeless(&self, url: &Url) -> bool {
+        let Some(site) = &self.0 else {
+            return false;
+        };
+        let other = Site::of_url(url);
+        !other.is_opaque()
+            && other.registrable_domain_or_host() == site.registrable_domain_or_host()
+    }
+
     /// Whether `url` is first party to it, its scheme as well
     /// (`IsSchemefullyFirstParty`): of its site, `ws:` as `http:` and
     /// `wss:` as `https:`.

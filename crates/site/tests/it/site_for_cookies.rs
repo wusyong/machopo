@@ -45,6 +45,10 @@ fn a_url_is_first_party_to_its_own_site_scheme_and_all() {
     assert!(!site.is_first_party(&url("ws://a.example/")));
     assert!(!site.is_first_party(&url("https://b.example/")));
     assert!(!SiteForCookies::null().is_first_party(&url("https://a.example/")));
+    // Schemeless, for the cookie policy: of the registrable domain.
+    assert!(site.is_first_party_schemeless(&url("http://x.a.example/")));
+    assert!(!site.is_first_party_schemeless(&url("https://b.example/")));
+    assert!(!SiteForCookies::null().is_first_party_schemeless(&url("https://a.example/")));
     let http = SiteForCookies::of_site(Site::of_url(&url("http://a.example/")));
     assert!(http.is_first_party(&url("ws://a.example/socket")));
     assert!(!http.is_first_party(&url("wss://a.example/socket")));

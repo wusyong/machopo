@@ -88,6 +88,14 @@ pub(crate) struct CommittedOrigin {
     pub(crate) local: bool,
 }
 
+/// `origin` as a request's initiator says it: `null` for an opaque one.
+fn serialize_origin(origin: &url::Origin) -> String {
+    match origin {
+        origin @ url::Origin::Tuple(..) => origin.ascii_serialization(),
+        url::Origin::Opaque(_) => "null".to_owned(),
+    }
+}
+
 impl CommittedOrigin {
     /// One of no other document's origin, that opens no local files (an
     /// error page's).
@@ -256,8 +264,54 @@ impl FrameTree {
             trusted: protocol::network::TrustedParams {
                 site_for_cookies: site_for_cookies.site().map(Site::serialize),
                 top_frame_site: (!top_frame_site.is_opaque()).then(|| top_frame_site.serialize()),
+                initiator: Some(serialize_origin(origin)),
+                is_main_frame_navigation: false,
             },
         }
+    }
+
+    /// The trusted params of `frame`'s navigation to `url`, which the frame
+    /// `initiator` asked for (none: the browser's own, the address typed):
+    /// a main frame's is first party to `url`'s site, its top-level site
+    /// (as each hop's, which the network service works out); a child
+    /// frame's, to its parent's site for cookies, in the frames as they
+    /// are now (Chromium's `NavigationRequest` computes its
+    /// `IsolationInfo` from the parent's).
+    pub(crate) fn navigation_params(
+        &self,
+        frame: FrameToken,
+        url: &str,
+        initiator: Option<FrameToken>,
+    ) -> protocol::network::TrustedParams {
+        let initiator = initiator
+            .and_then(|initiator| self.nodes.get(&initiator))
+            .map(|node| serialize_origin(&node.origin));
+        let parent = self.nodes.get(&frame).and_then(|node| node.parent);
+        let Some(parent) =
+            parent.and_then(|parent| self.nodes.get(&parent).map(|node| (parent, node)))
+        else {
+            let site = url::Url::parse(url).map_or_else(
+                |_| {
+                    Site::of(
+                        &url::Url::parse("about:blank")
+                            .expect("about:blank")
+                            .origin(),
+                    )
+                },
+                |url| Site::of_url(&url),
+            );
+            let site_for_cookies = SiteForCookies::of_site(site.clone());
+            return protocol::network::TrustedParams {
+                site_for_cookies: site_for_cookies.site().map(Site::serialize),
+                top_frame_site: (!site.is_opaque()).then(|| site.serialize()),
+                initiator,
+                is_main_frame_navigation: true,
+            };
+        };
+        let (parent, parent_node) = parent;
+        let mut params = self.loader_params(parent, &parent_node.origin).trusted;
+        params.initiator = initiator;
+        params
     }
 
     /// `frame`'s document's origin and whether it may open local files,
@@ -640,32 +694,65 @@ mod tests {
     #[test]
     fn a_loaders_params_are_of_the_frames_its_document_is_in() {
         let origin = |url: &str| url::Url::parse(url).unwrap().origin();
+        let sites = |params: &LoaderParams| {
+            (
+                params.trusted.site_for_cookies.clone(),
+                params.trusted.top_frame_site.clone(),
+            )
+        };
+        let a = || Some("https://a.example".to_owned());
         let mut tree = FrameTree::new(token(0));
         commit_at(&mut tree, token(0), 1, "https://a.example/");
         let main = tree.loader_params(token(0), &origin("https://www.a.example/"));
         assert_eq!(main.origin, origin("https://www.a.example/"));
-        let first_party = protocol::network::TrustedParams {
-            site_for_cookies: Some("https://a.example".to_owned()),
-            top_frame_site: Some("https://a.example".to_owned()),
-        };
-        assert_eq!(main.trusted, first_party);
+        assert_eq!(sites(&main), (a(), a()));
+        // Its requests' initiator is its document's origin, none a
+        // navigation's.
+        assert_eq!(
+            main.trusted.initiator.as_deref(),
+            Some("https://www.a.example")
+        );
+        assert!(!main.trusted.is_main_frame_navigation);
         tree.add_child(token(0), token(1), "", false).unwrap();
         assert_eq!(
-            tree.loader_params(token(1), &origin("https://sub.a.example/"))
-                .trusted,
-            first_party
+            sites(&tree.loader_params(token(1), &origin("https://sub.a.example/"))),
+            (a(), a())
         );
         let third = tree.loader_params(token(1), &origin("https://b.example/"));
-        assert_eq!(third.trusted.site_for_cookies, None);
-        assert_eq!(third.trusted.top_frame_site, first_party.top_frame_site);
+        assert_eq!(sites(&third), (None, a()));
         // `a.example` in `b.example` in `a.example`: no site's first party.
         commit_at(&mut tree, token(1), 2, "https://b.example/");
         tree.add_child(token(1), token(2), "", false).unwrap();
         let below = tree.loader_params(token(2), &origin("https://a.example/"));
         assert_eq!(below.trusted.site_for_cookies, None);
-        // An opaque top-level frame: no site.
+        // An opaque top-level frame: no site; its initiator `null`.
         let opaque = tree.loader_params(token(0), &url::Url::parse("data:,").unwrap().origin());
-        assert_eq!(opaque.trusted, protocol::network::TrustedParams::default());
+        assert_eq!(sites(&opaque), (None, None));
+        assert_eq!(opaque.trusted.initiator.as_deref(), Some("null"));
+    }
+
+    /// A navigation's trusted params: a main frame's, first party to its
+    /// URL's site, which is its top-level site; a child frame's, its
+    /// parent's; the initiator the frame that asked for it, none for the
+    /// browser's own.
+    #[test]
+    fn a_navigations_params_are_of_its_frame_and_initiator() {
+        let mut tree = FrameTree::new(token(0));
+        commit_at(&mut tree, token(0), 1, "https://a.example/");
+        let main = tree.navigation_params(token(0), "https://www.b.example/x", None);
+        assert_eq!(main.site_for_cookies.as_deref(), Some("https://b.example"));
+        assert_eq!(main.top_frame_site.as_deref(), Some("https://b.example"));
+        assert_eq!(main.initiator, None);
+        assert!(main.is_main_frame_navigation);
+        tree.add_child(token(0), token(1), "", false).unwrap();
+        commit_at(&mut tree, token(1), 2, "https://c.example/");
+        let asked = tree.navigation_params(token(0), "https://b.example/", Some(token(1)));
+        assert_eq!(asked.initiator.as_deref(), Some("https://c.example"));
+        let child = tree.navigation_params(token(1), "https://d.example/", Some(token(0)));
+        assert_eq!(child.site_for_cookies.as_deref(), Some("https://a.example"));
+        assert_eq!(child.top_frame_site.as_deref(), Some("https://a.example"));
+        assert_eq!(child.initiator.as_deref(), Some("https://a.example"));
+        assert!(!child.is_main_frame_navigation);
     }
 
     /// Child frames hang from the frame they were made in, in the order

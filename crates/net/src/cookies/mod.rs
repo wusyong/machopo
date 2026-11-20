@@ -5,13 +5,15 @@
 //! features as they are on by default) and the draft differ, Chromium's,
 //! said where.
 //!
-//! What a request's SameSite context is ([`SameSiteCookieContext`]) is the
-//! caller's to work out, as are partition keys, persistence and how many
-//! cookies a domain may have.
+//! The network context's loads use them through its jar (`CookieJar`),
+//! which works out each hop's SameSite context from the request's trusted
+//! params and keeps to the cookie policy. Partition keys, persistence and
+//! how many cookies a domain may have are still to come.
 
 mod canonical_cookie;
 mod cookie_constants;
 mod cookie_inclusion_status;
+mod cookie_jar;
 mod cookie_monster;
 mod cookie_options;
 mod cookie_util;
@@ -21,6 +23,7 @@ mod time;
 pub use canonical_cookie::{CanonicalCookie, MAX_EXPIRY_DAYS};
 pub use cookie_constants::{CookieSameSite, CookieSourceScheme, CookieSourceType};
 pub use cookie_inclusion_status::{CookieInclusionStatus, ExclusionReason};
+pub(crate) use cookie_jar::CookieJar;
 pub use cookie_monster::CookieMonster;
 pub use cookie_options::{CookieOptions, LAX_ALLOW_UNSAFE_MAX_AGE_SECONDS, SameSiteCookieContext};
 pub use cookie_util::parse_cookie_expiration_time;

@@ -201,6 +201,12 @@ pub struct NetworkContextParams {
     /// Certificates are still verified: their chain has to reach one of
     /// these or a system root, and their name has to match.
     pub additional_trust_anchors: Vec<Vec<u8>>,
+    /// Chromium's cookie policy, its defaults (`--allow-third-party-cookies`):
+    /// a third party's cookies are sent and kept, and a cookie without
+    /// `SameSite` goes with a top-level navigation of any method in its
+    /// first two minutes (Lax-allowing-unsafe). Off: machopo's own, a third
+    /// party's are neither, and `Lax` is `Lax`.
+    pub allow_third_party_cookies: bool,
 }
 
 impl NetworkContextParams {
@@ -244,14 +250,18 @@ impl NetworkContext {
                     .expect("tokio runtime for the network service");
                 runtime.block_on(async move {
                     let transport = http::HttpTransport::new(&params);
+                    // The context's cookies, which its loads share.
+                    let cookies = cookies::CookieJar::new(params.allow_third_party_cookies);
                     while let Some(job) = rx.recv().await {
                         let transport = transport.clone();
+                        let cookies = cookies.clone();
                         let mut state = job.state.lock().expect("a load's state");
                         if state.cancelled {
                             continue;
                         }
                         let task = tokio::spawn(run(
                             transport,
+                            cookies,
                             job.request,
                             job.listener,
                             job.state.clone(),
@@ -375,6 +385,7 @@ impl NetworkContext {
 /// its listener.
 async fn run(
     transport: http::HttpTransport,
+    cookies: cookies::CookieJar,
     request: ResourceRequest,
     listener: Listener,
     state: Arc<Mutex<LoadState>>,
@@ -388,7 +399,7 @@ async fn run(
                 tell: &mut **tell,
                 state,
             });
-            let result = match url_loader::load(&transport, &request, redirects).await {
+            let result = match url_loader::load(&transport, &cookies, &request, redirects).await {
                 Ok(response) => collect(response).await,
                 Err(err) => Err(err),
             };
@@ -407,7 +418,7 @@ async fn run(
                     tell: &mut tell,
                     state,
                 });
-                url_loader::load(&transport, &request, redirects).await
+                url_loader::load(&transport, &cookies, &request, redirects).await
             };
             let status = match result {
                 Ok(response) => stream_body(response, &mut *client).await,
