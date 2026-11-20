@@ -2,6 +2,8 @@
 # workspace: Mach port channels, the rendezvous, shared memory by memory
 # entries, a child in a Seatbelt sandbox, and the timings the RFC asks for.
 #   CARGO_TARGET_DIR=../../../target/mp-prototype cargo run --release
+# and, for the control channel against other crates alone,
+#   CARGO_TARGET_DIR=../../../target/mp-prototype cargo run --release -- compare
 [workspace]
 
 [package]
@@ -12,6 +14,9 @@ publish = false
 
 [dependencies]
 crossbeam-channel = "0.5"
+# Measured against the prototype's own channel (`src/others.rs`).
+interprocess = "2.4"
+ipc-channel = "0.23"
 libc = "0.2"
 mach2 = "0.6"
 postcard = { version = "1", default-features = false, features = ["alloc"] }

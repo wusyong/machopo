@@ -21,6 +21,7 @@ CARGO_TARGET_DIR=../../../target/mp-prototype cargo run --release
 | `src/shm.rs` | Mach 的 memory entry：建立、map、另建唯讀的 entry；`RegionTable`（編號 → mapping，檢查位置和長度） |
 | `src/ring.rs` | 共用記憶體裡的 SPSC ring：一個 atomic 的計數和「我在睡」的旗標，位置各自留在自己的 process |
 | `src/main.rs` | host 和 child 的流程、每一節的情境和量測（最後兩節是同一個 process 裡的 crossbeam，和對方睡著時的來回） |
+| `src/others.rs` | 同一組訊息走別的 crate 的傳輸：`ipc-channel`（Servo 的，macOS 上也是 Mach 訊息）和 `interprocess`（local socket，這裡是 Unix domain socket）；`cargo run --release -- compare` 只跑控制通道和這一節 |
 | `src/sys.rs` | mach2 0.6.0 沒有宣告的：`mach_port_request_notification`、`mach_port_set_attributes`、`audit_token_to_pid`、`MAP_MEM_NAMED_CREATE`，和 `sandbox_init` |
 | `frames/` | machopo 的 compositor 對真的頁面送出的 4 個 frame（JSON），2026-11-20 用暫時加在 `protocol` 的鉤子抓的：1280×800 的視窗，`tests/sites/` 的 gutenberg、sqlite、todomvc 和 `about:demo`，載入和捲動 |
 
@@ -139,6 +140,35 @@ host 和 sandbox 裡的 renderer 之間，一去一回，各 20000 次：
 - 兩邊都醒著時，crossbeam 比 Mach 訊息快 20 倍，和醒著的 ring 一樣；大的資料差得更多，因為同一個 process 裡完全不用複製。這是單一 process 模式不走 IPC 的理由。
 - 對方睡著時兩者一樣：時間幾乎都花在把一條睡著的 thread 叫醒（約 24 µs），跨不跨 process 沒有差別。crossbeam 的接收端也是先空轉一下才睡，所以上一張表量到的是它還沒睡的情況。
 - 所以拆成 process 之後，一則訊息多出來的成本是編和解（真的 frame 約 4 µs）加上 kernel 裡的複製，叫醒 thread 的那一段本來就在付。
+
+### 和 ipc-channel、interprocess 比
+
+2026-11-21 加的：原型的效能夠不夠好，和做同一件事的兩個 crate 比。`ipc-channel` 0.23.1（Servo 的；macOS 上是 Mach 訊息，型別的 channel 用 postcard 編）和 `interprocess` 2.4.9（local socket，macOS 上是 Unix domain socket）。三種傳輸各開一個 child（都不進 sandbox：另外兩個要查的名字 sandbox 要另外開放），送同一組訊息、child 用同一段程式處理，所以差別只在傳輸。socket 上每則訊息前面放長度，小的訊息一次 `write`、讀的一端經過緩衝區。中位數，跑了兩次（差得多的寫範圍）：
+
+| | 原型（Mach 訊息） | ipc-channel | interprocess，系統預設的緩衝區（8 KiB） | interprocess，1 MiB 的緩衝區 |
+| --- | --- | --- | --- | --- |
+| 64 bytes 來回 | 4.25 µs | 4.3 到 4.4 µs | 4.3 到 4.4 µs | 4.2 µs |
+| 1 KiB 來回 | 4.8 到 4.9 µs | 4.8 到 5.0 µs | 4.5 到 4.8 µs | 4.75 µs |
+| 16 KiB 來回 | 7.8 到 8.0 µs | 6.2 到 7.8 µs | 22 µs | 9.0 µs |
+| 64 bytes 來回，對方睡著 | 18 到 24 µs | 26 µs | 28 到 30 µs | 28 µs |
+| 真的 frame（46 quad）編、送、解、回答 | 9.7 µs | 9.9 µs（自己編）；9.4 到 9.9 µs（它的型別 channel） | 10 到 11 µs | 10.8 µs |
+| 64 KiB 放在訊息裡 | 12.2 到 12.6 µs | 12.8 µs | 36 µs | 10.0 µs |
+| 1 MiB 放在訊息裡 | 100 到 104 µs | 100 到 103 µs | 430 µs | 41 µs |
+| 8 MiB 放在訊息裡 | 1050 µs | 1040 到 1060 µs | 3700 µs | 329 µs |
+
+大的資料各自最好的走法（送到對方複製進自己的記憶體、回答為止）：
+
+| | 原型：留著重複用的 region | ipc-channel：`IpcSharedMemory` | interprocess，1 MiB 的緩衝區：放在訊息裡 |
+| --- | --- | --- | --- |
+| 64 KiB | 6.1 到 6.5 µs | 13.2 到 13.5 µs | 10.0 µs |
+| 1 MiB | 35 到 37 µs | 125 到 131 µs | 41 µs |
+| 8 MiB | 322 到 331 µs | 1040 µs | 329 µs |
+
+- **小的訊息三者一樣**（machopo 的訊息都是這種：真的 frame 不到 3 KiB）：一去一回約 4.3 µs，一個 frame 約 10 µs。時間花在 kernel 和叫醒對方，不在哪個 crate。原型和 ipc-channel 走的是同一種 Mach 訊息，數字也一樣，原型沒有多花。
+- **大的資料，原型的 region 比 ipc-channel 快 2 到 3.5 倍**：`IpcSharedMemory::from_bytes` 每次新建一塊 region，和原型自己量的「每次新建一塊」（1 MiB 是 111 到 120 µs）同一回事。「大的資料走留著重複用的 region」這條決定在這裡看得到差別。
+- **socket 的緩衝區要調**：macOS 的預設是 8 KiB（`net.local.stream.sendspace`），超過的訊息要來回切換好幾次，16 KiB 慢 2.8 倍、1 MiB 慢 4 倍。調成 1 MiB（`SO_SNDBUF`、`SO_RCVBUF`）之後 16 KiB 和 Mach 訊息差不多。Linux 的控制通道是 Unix socket，要記得設。
+- **沒料到的**：調過緩衝區的 socket 送 1 MiB 只要 41 µs，和留著重複用的 region 差不多，比 Mach 訊息內嵌（100 µs）快 2.5 倍。socket 是 kernel 複製進去、複製出來各一次，讀的一端直接讀進自己重複用的緩衝區；Mach 訊息這一側多了組訊息的一次複製，而且原型和 ipc-channel 收到時每則都配置新的 `Vec`（猜是這個，沒有分開量）。這只在 macOS 上量過，Linux 的 socket 不一定一樣；region 另外的好處（大的資料不佔住控制通道、不用把 kernel 的緩衝區開大）不在這個數字裡。
+- 沒有比的：`ipc-channel` 的 `IpcSharedMemory` 收到之後可以直接讀、不複製出來，那樣它會更快；這裡照設計量（renderer 送來的一律先複製出來再用）。
 
 ### machopo 實際的訊息有多密
 

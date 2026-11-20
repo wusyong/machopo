@@ -117,6 +117,8 @@ Browser process                                Renderer process
 | 傳 handle | rustix 的 `sendmsg` 和 `ScmRights` | Mach 訊息裡的 port descriptor（memory entry 本身就是 port） | Browser 用 `DuplicateHandle` 複製進 renderer |
 | 發現對方不在了 | 讀到 EOF、讀寫錯誤 | kernel 的 dead-name 和 no-senders 通知 | 讀寫失敗、讀到 0 個位元組 |
 
+- **socket 的緩衝區要設**（Linux 的控制通道；2026-11-21 原型在 macOS 上量的，`prototype/` 的 README 的「和 ipc-channel、interprocess 比」）：Unix socket 預設的緩衝區小（macOS 是 8 KiB），超過的訊息要來回切換好幾次才送得完，16 KiB 來回慢 2.8 倍；建通道時用 `SO_SNDBUF`、`SO_RCVBUF` 設大（原型設 1 MiB 之後和 Mach 訊息差不多）。設多大在第 2 階段做 Linux 的平台層時量了再定（「待決定」的那一次量測）：至少要放得下門檻以下的訊息。
+
 **共用記憶體**：
 
 - **三種 region**：`ReadOnlySharedMemoryRegion`、`WritableSharedMemoryRegion`、`UnsafeSharedMemoryRegion`，名字和語意照 Chromium。可寫的能轉成唯讀的一次；唯讀的 handle 在 OS 那一層就不能拿來寫（Linux 的 `F_SEAL_FUTURE_WRITE`、macOS 另建一個只有 `VM_PROT_READ` 的 memory entry、Windows 複製 handle 時只給 `FILE_MAP_READ`）。大小建立時決定，不能改。
@@ -267,7 +269,7 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
 
 0. **整理邊界**（2026-10-06 做完，`progress.md`）：邊界的規則和檢查；修掉 context lost 的 observer、`RendererFlags` 的函式指標、能送給任何 `FrameSinkId` 的 sender。
 1. **message 化，還是單一 process**（2026-11-21 做完，分成 1a 到 1d，`progress.md`）：tile 的交接改成訊息（拿掉 `SharedImage` 的 backing，加上 `ReturnResources` / `DestroySharedImage`、Viz 的 mailbox 表）、`protocol` 的 bytes 型別；Browser 處理一個 renderer 的訊息的邏輯從 `Chrome_IOThread` 的迴圈抽成物件。現有的測試全部照舊通過。
-2. **`ipc` crate**：核心（先做，經過假通道就能測）、平台層、控制通道、帶 handle 的序列化、Browser 配共用記憶體和編號的表；用測試自己的 child process 測，包括惡意的對端。這個階段把驗證的工具架好（fuzz、loom 和 shuttle、Miri、Verus、TLA+ 的模型、`soundness.md`），核心的每一塊做完時它的那幾條性質就驗過。還沒接上 renderer。
+2. **`ipc` crate**：核心（先做，經過假通道就能測）、平台層（Linux 的那一層做完時量 socket 的緩衝區和大的資料的門檻，「待決定」）、控制通道、帶 handle 的序列化、Browser 配共用記憶體和編號的表；用測試自己的 child process 測，包括惡意的對端。這個階段把驗證的工具架好（fuzz、loom 和 shuttle、Miri、Verus、TLA+ 的模型、`soundness.md`），核心的每一塊做完時它的那幾條性質就驗過。還沒接上 renderer。
 3. **啟動 child process**（每個階段的驗收包含它那一塊的驗證；這個階段加的是 body 的管道和處理訊息的物件的 fuzz target；最後做 macOS 上 sandbox 的探測）：`--type=renderer`、renderer 的 IO thread、所有訊息走控制通道、tile 走共用記憶體、導覽的 body 的管道跨 process、process 當掉。最後量捲動時每個 frame 的延遲。
 
 ## 缺點
@@ -372,6 +374,7 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
   - ring：讀的一端醒著時來回 0.21 µs（Mach 訊息的 20 分之一），但它一睡，喚醒就是一則 Mach 訊息、成本一樣；連續一大批時快 6 到 11 倍；當管道送 16 MiB 是 0.31 ms，一段一段的 Mach 訊息是 1.47 ms（每秒 11 GiB）。
   - 和單一 process 的 crossbeam 比：兩邊都醒著時 crossbeam 來回 0.21 µs（訊息是搬的，不編不解不複製），Mach 訊息 4.2 µs；對方已經睡著時（隔 1 ms 才送）兩者都是約 24 µs，時間花在叫醒 thread，跨不跨 process 沒有差別。
   - machopo 實際的訊息有多密（單一 process 上量的，一個分頁照人的節奏操作）：閒置時 0 則；60 Hz 捲動時往 Browser 每秒 185 則、往 renderer 每秒 82 則，一個 frame 的幾則緊接著到、frame 和 frame 之間隔約 16 ms；載入時請求一口氣發出。讀通道的 thread 醒著的時間不到千分之一，緊接著到的訊息全部改走 ring 每秒省不到 0.4 ms。
+  - 和別的 crate 比（2026-11-21）：小的訊息（machopo 的都是）原型、`ipc-channel` 和 `interprocess` 一樣，來回約 4.3 µs、一個真的 frame 約 10 µs；大的資料原型的留著重複用的 region 比 `ipc-channel` 的 `IpcSharedMemory`（每次新建一塊）快 2 到 3.5 倍。調過緩衝區的 Unix socket 內嵌送 1 MiB 是 41 µs，和 region（36 µs）差不多，比 Mach 訊息內嵌（100 µs）快：macOS 的結論不變（控制通道是 Mach 訊息），Linux 上要重量（「待決定」的設計那一段）。
   - 沒有原型的：Linux 和 Windows 的平台層；送的時候不等、自己排隊的那一段；接上 machopo 之後捲動時的延遲。
 
 設計：
@@ -385,6 +388,7 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
 - **trace 怎麼收**：每個 process 各寫一個檔案（`MACHOPO_TRACE` 加上 pid）、之後合併，或 child 把 span 送回 Browser。Chromium 是每個 process 的 tracing service 把資料送回 Browser 合成一份。
 - **哪些模式預設多個 process**：看法是只有人用的視窗；headless、情境、`--automation-pipe` 和測試預設單一 process，CI 另外用多個 process 跑選定的幾套（下面的「哪幾套測試」）。
 - **Linux 和 Windows 怎麼把控制通道的一端交給 child**：std 的 `Command` 沒有安全的 API 指定要繼承哪個 fd 或 handle。選項：spawn 前短暫拿掉那個 fd 的 close-on-exec、用 command-fds 這類 crate、當成 child 的 stdin 傳、Windows 上照 Chromium 讓 handle 可以繼承並把數值放在命令列。
+- **Linux 上大的資料的門檻和 socket 的緩衝區**（2026-11-21，第 2 階段做 Linux 的平台層時量）：原型在 macOS 上量到，緩衝區設成 1 MiB 的 Unix socket 內嵌送 1 MiB 和留著重複用的 region 一樣快。在 Linux 上量同一組（64 KiB、1 MiB、8 MiB：socket 內嵌對 region），定兩件事：緩衝區設多大；64 KiB 的門檻在 Linux 上要不要不一樣。region 不在這個數字裡的理由不變：大的資料不佔住控制通道（frame 和輸入排在它後面）、不用把每個 renderer 在 kernel 裡的緩衝區開大；所以量到一樣快也不是把門檻拿掉的理由，只是門檻可以高一點。
 - **Linux 的 memfd 要不要加 `MFD_NOEXEC_SEAL`**：2026-11-17 的看法：加，kernel 不認得就不加，Chromium 也是。
 - **哪幾套測試在 CI 上用多個 process 跑**：WPT 可以。情境和 reftest 怎麼啟動、要全部還是一部分、多花多少時間，還沒確認。
 - **Browser 的 IO thread 要不要合成一條**（2026-11-20：第 3 階段決定，那時開得了多個 renderer process、可以量；合成一條之後那條 thread 比較忙，同時重量一次訊息的 ring 值不值得，第 19 條）：現在每個 renderer 一條，分頁多的時候 thread 跟著多；Chromium 是整個 process 一條處理所有通道。IO thread 的迴圈本來就不寫死成只等一條通道（「`ipc` crate」），合起來不用改設計；量到 thread 的數量是問題時再做。

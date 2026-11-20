@@ -5,6 +5,7 @@ compile_error!("the prototype is macOS's");
 
 mod channel;
 mod msg;
+mod others;
 mod rendezvous;
 mod ring;
 mod shm;
@@ -120,8 +121,9 @@ fn pattern(seed: u8, len: usize) -> Vec<u8> {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     match args.iter().find_map(|arg| arg.strip_prefix("--type=")) {
+        Some(kind @ ("ipc-channel" | "interprocess")) => others::child_main(kind, args.last().unwrap()),
         Some(kind) => child_main(kind, args.iter().any(|arg| arg == "--sandbox")),
-        None => host_main(),
+        None => host_main(args.iter().any(|arg| arg == "compare")),
     }
 }
 
@@ -227,6 +229,10 @@ fn child_main(kind: &str, sandbox: bool) {
     let may_attach = kind != "renderer";
     let mut channel = Channel::new(ports[0], ports[1], may_attach, true);
     channel.expect_peer(host_pid.cast_signed());
+    if kind == "link" {
+        others::serve_mach(&mut channel);
+        std::process::exit(0);
+    }
     let mut own = shm::RegionTable::default();
     let mut peers = shm::RegionTable::default();
     let mut direct: Option<Channel> = None;
@@ -535,11 +541,18 @@ impl Peer {
     }
 }
 
-fn host_main() {
+/// `compare`: only the control channel's timings and the same over other
+/// crates' transports.
+fn host_main(compare: bool) {
     let host = Host {
         rendezvous: rendezvous::Server::start().expect("the rendezvous server checks in"),
     };
     println!("host {}: rendezvous {}", std::process::id(), rendezvous::name_for(std::process::id()));
+    if compare {
+        channel_timings(&host);
+        others::timings(&host);
+        return;
+    }
     three_processes(&host);
     a_child_dies(&host);
     channel_timings(&host);
