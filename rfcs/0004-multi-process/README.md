@@ -1,7 +1,8 @@
 # RFC 0004：multi-process
 
 - 開始日期：2026-10-04
-- 狀態：⏸️ 延後：2026-10-06（第 8 條：預設單一 process，renderer 是 Browser process 裡的 thread；只做了第 0 步「整理邊界」，進度見 `progress.md`。IPC 的設計 2026-10-06 確定，2026-11-17 重新比過一次、改了 macOS 和 Windows 的平台層，整份改寫成現在的樣子；2026-11-20 把 sandbox 移到之後另一份 RFC（第 18 條）。排程之前先做「待決定」的前兩項：重新盤點和原型）
+- 狀態：🚧 已排程：2026-11-20（2026-10-06 延後、只做了第 0 步「整理邊界」；IPC 的設計 2026-11-17 重新比過、整份改寫；2026-11-20 重新盤點（`details.md` 的「現在的邊界」）、做了 macOS 的原型（`prototype/`）、照它的結果定了第 19 到 23 條，從第 1 階段開始做。進度見 `progress.md`）
+- 進度：`progress.md`
 - 細節：`details.md`
 
 原本是 MVP 選做的 P6（`rfcs/pre-rfcs/MVP.md` 的「里程碑」），2026-10-04 決定 MVP 到 P4 為止，改成這份 RFC。
@@ -15,31 +16,34 @@ IPC 自己做，照 Chromium 的 Mojo 的方向，但只取需要的部分：
 - 每個 renderer 一條控制通道，用 Chromium 在各平台用的 primitive：Linux 的 Unix socket、macOS 的 Mach port、Windows 的 named pipe。
 - 訊息照舊是 `protocol` 的 serde enum；大的資料放在共用記憶體。
 - 加上 Mojo 不能假設的限制：只有 Browser 建立共用記憶體；renderer 不能送 handle，用編號稱呼它拿到的記憶體。
-- 量過延遲之後，才決定要不要把小訊息也搬進共用記憶體裡的 ring。
+- 訊息都走控制通道，不另外做共用記憶體裡的 ring（原型量過，第 19 條）；之後要加時不用改訊息的格式和上層。
 
 Viz 留在 Browser process，不做 GPU process。單一 process 的模式留著，給 headless 和大部分的測試用，不付 IPC 的成本。
 
 ## 動機
 
-**現況**（2026-11-17，對照 `docs/architecture.md` 的「Process 的邊界」和 `docs/limitations.md` 的「隔離」）：
+**現況**（2026-11-20，對照 `docs/architecture.md` 的「Process 的邊界」和 `docs/limitations.md` 的「隔離」；每一條路的盤點在 `details.md` 的「現在的邊界」）：
 
 - renderer 是 Browser process 裡的 thread，每個分頁一組。沒有任何隔離：V8 沒開 sandbox，V8 或 DOM 的 heap 的記憶體錯誤能碰到整個 browser 的記憶體。
 - renderer 的 thread 結束時分頁顯示 sad tab、可以重新載入（`about:crash` 也在）；但記憶體耗盡、abort、記憶體錯誤這一類結束的是整個程式。
-- 邊界大致已經在了：Browser 和 renderer 之間只有 `protocol` 的 message，都能序列化；renderer 不碰檔案系統和網路；compositor 直接把 frame 送給 Viz。規則和檢查（`sanity.py boundary`）是這份的第 0 步做的，例外只剩一個。
+- 邊界大致已經在了：Browser 和 renderer 之間只有 `protocol` 的 message，都能序列化；renderer 不碰檔案系統和網路；compositor 直接把 frame 送給 Viz。規則和檢查（`sanity.py boundary`）是這份的第 0 步做的，例外剩兩個。main thread 同步等 Browser 的呼叫（`localStorage`、`document.cookie`）是帶編號的一般訊息，回答放進 scheduler 裡等回答的位置，本來就照 process 的邊界做。
 
 **還沒有的**：
 
-- **tile 的交接**（剩下的那個例外）：compositor 同步呼叫 Viz 的 `SharedImageInterface` 建 texture，backing 是 `Arc<dyn Any>`，生命週期靠參考計數。
+- **tile 的交接**（例外 1）：compositor 同步呼叫 Viz 的 `SharedImageInterface` 建 texture（tile 和 canvas 的快照），backing 是 `Arc<dyn Any>`，生命週期靠參考計數。
+- **導覽的 body 的管道**（例外 7）：`CommitNavigation` 帶著 body 其餘部分的 data pipe 的讀的一端，管道是同一個 process 裡的佇列。
+- **Browser 處理 renderer 的訊息的邏輯**寫在 `RenderProcessHost::launch` 裡 IO thread 的迴圈，換通道之前要先抽出來。
 - **IPC 本身**：跨 process 的通道和共用記憶體。
 - **啟動**：child process、命令列上的 `RendererFlags`、child 的 `main` 選 script engine。
-- **process 當掉**：現在只處理 thread 結束。
+- **process 當掉**：現在只處理 thread 結束；結束一個 renderer（壞訊息、`kill`）是請它的 thread 自己結束。
+- **trace**：`MACHOPO_TRACE` 是整個 process 一份，child 的 span 要另外收。
 
 **這份做完拿到什麼、拿不到什麼**：
 
 - 拿到：一個分頁當掉、吃光記憶體、記憶體出錯，不影響 Browser 和其他分頁；別的分頁的資料不在這個 renderer 的記憶體裡。
 - 拿不到：renderer 被攻破之後不能動使用者的電腦。獨立的 process 還是用使用者的身分在跑，照樣能開檔案、連網路；擋住它的是作業系統的 sandbox，那是之後的 RFC。拆 process 是 sandbox 的前提（sandbox 套在整個 process 上，Browser 自己需要檔案、網路和 GPU，不能被關起來），不是它的替代。
 
-**要解決的 `docs/limitations.md` 裡的限制**：「隔離」的第二、三條（renderer 出事時整個程式結束、`gfx::FontData` 和 `gfx::ImageData` 不能序列化）；`docs/architecture.md` 的「Process 的邊界」的例外 1。「隔離」的第一條（沒有任何隔離）做完時只能改寫，不能刪：renderer 是獨立的 process 了，但 V8 的 sandbox 和作業系統的 sandbox 都還沒有。`rfcs/` 以外的文件不寫這份的編號，做完時照這份清單刪掉或改寫。
+**要解決的 `docs/limitations.md` 裡的限制**：「隔離」的第二、三條（renderer 出事時整個程式結束、`gfx::FontData` 和 `gfx::ImageData` 不能序列化）；`docs/architecture.md` 的「Process 的邊界」的例外 1 和 7。「隔離」的第一條（沒有任何隔離）做完時只能改寫，不能刪：renderer 是獨立的 process 了，但 V8 的 sandbox 和作業系統的 sandbox 都還沒有。`rfcs/` 以外的文件不寫這份的編號，做完時照這份清單刪掉或改寫。
 
 目標：
 
@@ -93,9 +97,15 @@ Browser process                                Renderer process
 
 ### `ipc` crate
 
-現在只有時鐘（`TimeTicks`）；這份把 channel 和共用記憶體放進來。對應 Chromium 的 `base/memory/*shared_memory*` 和 `mojo/core` 的一部分。
+現在有時鐘（`TimeTicks`）和只在同一個 process 裡的 data pipe；這份把 channel 和共用記憶體放進來。對應 Chromium 的 `base/memory/*shared_memory*` 和 `mojo/core` 的一部分。
 
 裡面的東西（通道、region、編號的表、對收到的訊息的檢查）不分 Browser 和 child，任何一端都用同一套。這份只有 Browser 和 renderer 兩種 process，下面就用它們來講；之後多了別種 process 時（「之後的可能」），它們也要把 renderer 當成不可信的，用的是同樣的元件。
+
+**核心和平台層分開**（第 20 條；驗證靠這個分法，「要保證的性質」和「測試」）：
+
+- **核心**：訊息的框架和序號、目的地的分派、送出的佇列、region 的表和範圍的檢查、對收到的訊息的檢查、data pipe。不碰系統呼叫：它拿到的是「一塊記憶體」（位址和長度）和「位元組」，不知道那塊記憶體是哪個平台怎麼來的。三個平台用同一份；另有一個同一個 process 裡的假通道（兩端在兩條 thread 上，記憶體是一般配置的），讓核心整個在 Miri、loom 和 fuzz 底下跑得起來。核心只依賴 `base`，不知道 `protocol` 的型別（訊息對它是位元組）。
+- **平台層**：只做四件事：建通道的兩端和把一端交給 child、送和收帶 handle 的一則位元組、建和 map 共用記憶體、告訴核心對方不在了。裡面沒有判斷：要不要收、合不合法都是核心的事。每個平台一份，薄到可以逐行審。
+- `unsafe` 也照這樣分成兩種：核心的是對共用記憶體的指標存取，工具驗得到；平台層的是 FFI，工具驗不到，靠真的跨 process 的測試和審查。
 
 **平台層**（細節見 `details.md` 的「平台層」）：
 
@@ -124,24 +134,38 @@ Browser process                                Renderer process
 
 **控制通道**：
 
-- 一則訊息是長度、目的地的編號、序列化的內容；有權限的一端還可以附帶 handle。
+- 一則訊息是長度、目的地的編號、序號、序列化的內容；有權限的一端還可以附帶 handle。序號現在只用來檢查（每一端照送出的順序加一，收的一端看到不連續就是壞訊息）；留著它，是為了之後訊息分兩條路走時（「之後的可能」的 ring）排得回順序，不用改格式。
+- 上層只經過一個介面送和收訊息（目的地、內容、handle），不知道底下是哪一種傳輸。
 - 三個平台同一個形狀：IO thread 等「通道」和「喚醒」；送的時候不等，送不出去的自己排隊。這份每個 process 只有一條通道，但 IO thread 的迴圈不寫死成只等一條。
   - **Linux**：non-blocking 的 socket。handle 跟著同一次 `sendmsg` 送出；收的一端處理控制資料被截斷的情況，收到的 fd 用 `MSG_CMSG_CLOEXEC` 設成 close-on-exec。
-  - **macOS**：一則訊息是一則 Mach 訊息。IO thread 阻塞在 `mach_msg`，等一個 port set（通道的 receive port 加一個自己的喚醒用的 port）；送的 timeout 是 0。在通往對方的 send right 上登記 dead-name、在自己的 receive port 上登記 no-senders，任一個到了就當成斷線；通知只認 kernel 送的（訊息的 audit token），對方可以送一則 id 相同的訊息來假冒。
+  - **macOS**：一則訊息是一則 Mach 訊息；每一則都照 audit token 確認是那個 child 送的（第 22 條）。IO thread 阻塞在 `mach_msg`，等一個 port set（通道的 receive port 加一個自己的喚醒用的 port）；送的 timeout 是 0。在通往對方的 send right 上登記 dead-name、在自己的 receive port 上登記 no-senders，任一個到了就當成斷線；通知只認 kernel 送的（訊息的 audit token），對方可以送一則 id 相同的訊息來假冒。
   - **Windows**：overlapped 的 `ReadFile` / `WriteFile`，寫入一次只有一筆在進行。IO thread 等「讀完成」和「喚醒」兩個 event；結束時用 `CancelIoEx` 取消進行中的 I/O 再關 handle。Browser 送 handle 時自己用 `DuplicateHandle` 複製進 renderer 的 process，訊息只帶數值。
-- 序列化：serde，格式見「待決定」。Browser 新發出的 region 序列化成 handle 表的 index，handle 本身走帶外；其他時候 region 只是編號，和一般的欄位一樣。
+- 序列化：serde 加 postcard（第 22 條）。postcard 自己沒有巢狀深度的上限：會一層包一層的型別（下一條）的解碼自己數深度。Browser 新發出的 region 序列化成 handle 表的 index，handle 本身走帶外；其他時候 region 只是編號，和一般的欄位一樣。
 - 收的一端先檢查長度上限、目的地的編號（不認得的就是壞訊息）和 handle 的數量（對方沒有權限時只能是 0），再反序列化。反序列化時巢狀的深度有上限：訊息裡有可以一層包一層的型別（例如 `protocol::webdriver` 的 `WebDriverValue`，renderer 送的），不設限的話對方送一個巢狀很深的值就能讓收的一端 stack overflow，那不是 panic、接不住，整個 process 結束。不合的就當成對方壞掉，關掉通道（Chromium 的 `ReceivedBadMessage`）。
-
-**ring**（第二步，量過才決定做不做，見「分階段」）：每個方向一個放在共用記憶體裡的 SPSC ring，平常的訊息直接序列化進去、不經過系統呼叫，控制通道只用來喚醒睡著的一端和傳 handle。照 shmem-ipc 的 `ringbuf.rs` 的設計自己寫：共用記憶體裡只放一個 atomic 的計數，讀寫的位置各自留在自己的 process 裡，對方能弄壞的只有計數，每次讀都檢查它不超過容量。細節見 `details.md` 的「ring 的設計」。
 
 ### 大的資料
 
-- **`protocol` 加一個 bytes 的型別**（Chromium 的 `mojo_base::BigBuffer`）：單一 process 時是 `Arc<[u8]>`；跨 process 時小於門檻放在訊息裡，大於門檻放進共用記憶體。Browser 送的放進唯讀的 region、連 handle 一起交給 renderer；renderer 送的寫進 Browser 之前配給它的 region，訊息只帶編號、位置和長度。`CommitNavigation` 的 body 和子資源的回應用它。
+- **`protocol` 加一個 bytes 的型別**（Chromium 的 `mojo_base::BigBuffer`）：單一 process 時是 `Arc<[u8]>`；跨 process 時 64 KiB 以下放在訊息裡，以上放進共用記憶體（第 22 條）。兩個方向都走留著重複用的 region，不是每筆資料新建一塊（新建、map、第一次碰每一頁的成本比直接放在訊息裡還高）：Browser 送的寫進它給這個 renderer 的唯讀的 region，第一次用那一塊時連 handle 一起交出去，之後只帶編號、位置和長度，renderer 複製出來之後回報、Browser 才重複用那一段；renderer 送的寫進 Browser 之前配給它的 region，訊息只帶編號、位置和長度。macOS 上訊息一律內嵌在 Mach 訊息裡，不用 out-of-line 的 descriptor（64 KiB 以下兩者一樣快，以上已經走 region）。子資源的回應、worker 的主 script、blob 的內容（renderer 送的）和沒有 GPU 時 frame 的像素用它。導覽的 body 不用：它只有開頭在訊息裡，其餘走 data pipe（下一節）。
 - **從 renderer 來的大資料**：renderer 還能寫那塊記憶體，所以 Browser 一律先複製出來再用（Chromium 的 `BigBuffer` 的註解也警告這個 TOCTOU 的風險）。
+
+### 導覽的 body 的管道
+
+`CommitNavigation` 的 body 其餘的部分是一條 data pipe（`ipc::data_pipe`）。跨 process 時一段一段走控制通道，背壓用訊息（第 21 條）：
+
+| 步驟 | 單一 process | 跨 process |
+| --- | --- | --- |
+| 網路收到一段 | 寫進管道（Browser 的 network thread） | 一樣，寫進 Browser 這一側的管道 |
+| 交給 renderer | renderer 的 main thread 直接讀同一條管道 | Browser 的 IO thread 從那條管道讀出來，包成 body 的訊息（管道的編號、位元組）送進控制通道；renderer 的 IO thread 寫進 renderer 自己 process 裡的另一條管道，main thread 讀它 |
+| 背壓 | 管道滿了，network thread 的寫就等 | renderer 每讀走一些就回一則「這條管道我讀了多少」；Browser 送出去、對方還沒說讀了的量不超過管道的容量（512 KiB），到了就不再從自己的管道讀，那條管道滿了，network thread 的寫照樣等 |
+| 結尾和取消 | 寫的一端 drop 是結尾；讀的一端 drop 讓寫的一端失敗 | 各一則訊息：結尾、renderer 不要了 |
+
+- renderer 這一側看到的還是一條 `Consumer`：它由 renderer 的 IO thread 在收到 `CommitNavigation` 時建好、放進訊息，parser 的程式不用改。單一 process 的模式不變。
+- renderer 說它讀了的比 Browser 送的多，是壞訊息（checked 的運算）。renderer 的 IO thread 寫進自己的管道時一定有空間，因為 Browser 不會送超過。
+- body 和 frame、輸入排同一條控制通道：一段最多 64 KiB，原型量到一則約 10 µs。
 
 ### tile 交接
 
-還沒決定（「待決定」的 T1 到 T3）；2026-10-04 的看法是 T1，one-copy raster：
+共用記憶體，Viz 上傳（T1，第 23 條；Chromium 在 OOP-R 之前的 one-copy raster）。tile 和 canvas 的快照都走這條路：
 
 - compositor 照舊 raster 成 CPU 像素，寫進 Browser 配給它的可寫的 region（renderer 留著一個池子重複用）。frame 的 `TransferableResource` 帶 mailbox 和 region 的編號、位置和長度；Viz 經過 Browser 的表找到那一塊，複製出像素、上傳，以 mailbox 為 key 記著 texture。
 - 生命週期改成明確的訊息：Viz 用完時送 `ReturnResources`，compositor 丟掉 tile 時送 `DestroySharedImage`。現在的參考計數是它們在同一個 process 裡的替代。單一 process 的模式照舊用 `Arc`，但走同一組訊息。
@@ -168,7 +192,13 @@ sandbox 不在這份裡，但這份的設計要讓它之後鎖得緊：sandbox �
 
 它不需要：寫檔案、連網路、開 GPU、啟動其他 process、建立共用記憶體或任何有名字的 IPC 物件。這些三個平台都一樣。
 
-假設之後的 sandbox 照 Chromium 現在的做法，在 child 的 `main` 一開始、任何其他程式碼之前就套用，不先「暖機」再鎖（`details.md` 的「Seatbelt 的兩種套用時機」）。所以上面每一樣都要在 sandbox 裡面拿得到，不能靠「鎖之前先拿好」。macOS 上這一點由原型先驗證（「待決定」）。
+假設之後的 sandbox 照 Chromium 現在的做法，在 child 的 `main` 一開始、任何其他程式碼之前就套用，不先「暖機」再鎖（`details.md` 的「Seatbelt 的兩種套用時機」）。所以上面每一樣都要在 sandbox 裡面拿得到，不能靠「鎖之前先拿好」。
+
+這些條件驗證到哪裡：
+
+- **IPC 的那一半驗證過了**：原型的 child 一開始就進只開這三樣的 sandbox，rendezvous、控制通道、共用記憶體都可以（`prototype/README.md`）。
+- **renderer 自己的那一半還沒有**：原型的 child 很小，讀字型是直接打開一個檔案。machopo 真的 renderer 在 macOS 上經過 CoreText 列出系統的字型（fontique 的 `coretext` backend），CoreText 可能要連系統的字型服務，那就不是開放字型目錄能解決的；V8 的 JIT、wasmtime、elise 的 worker pool 在 `deny default` 底下各自要什麼，也還不知道。
+- **第 3 階段加一個只給測試用的探測**（2026-11-20，「測試」和「分階段」）：macOS 上讓真的 renderer process 在原型那份最緊的 profile 底下啟動、載入一個頁面，記下它被擋了什麼。不是做 sandbox：不出貨、不比較做法、只有 macOS。產出是一張「真的 renderer 在 sandbox 裡還需要這幾樣」的清單，是之後那份 RFC 的起點；清單裡有會改這份的設計的東西（例如字型要改由 Browser 交給 renderer，那是新的訊息和一塊共用記憶體）時，在這份裡就處理或記下，不等到下一份才回頭改。
 
 ### process 當掉
 
@@ -184,38 +214,66 @@ sad tab、重新載入和 `about:crash` 已經有了，現在由 renderer 的 th
 
 renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 佇列。Browser 這一側的 `Chrome_IOThread` 在這個模式也在（現在就是這樣），它等的是 crossbeam，推的是同一個處理訊息的物件（「架構」）；要不要連它也拿掉見「待決定」。
 
+### 要保證的性質
+
+`ipc` 要守住的事，一條一條列出來；每一條在「測試」的表裡對到驗證它的方法。完整的論證（假設、不變式、每一處 `unsafe`）寫在 `ipc` 自己的 `soundness.md`（做的時候新增，像 `bindings` 的）。
+
+1. **記憶體**：不管對方在共用記憶體裡寫什麼、在訊息裡給什麼編號、位置和長度，這一端讀寫的都在它自己 map 的那一塊裡面。
+2. **壞的輸入**：從通道讀到的任何位元組，結果只有兩種：照規則處理，或當成壞訊息關掉通道。不會 panic、卡住或 stack overflow，用掉的記憶體有上限。
+3. **handle**：沒有權限的一端送的訊息，不會讓收的一端留下任何 handle。
+4. **region 的歸屬**：一塊 region 只在建它時指定的那個 renderer 的表裡；收回之後不在任何表裡，不會交給別的 renderer。
+5. **不被卡住**：送訊息不等對方；對方不讀時，這一端的佇列到上限就關掉通道，不是一直長。
+6. **順序**：一條通道上，收的一端交出訊息的順序就是送的一端送的順序，不重複、不漏。
+7. **斷線**：對方不在了（結束、當掉、只關掉一半、送了壞訊息）時，這一端剛好報告一次，之後不再交出它的訊息。
+8. **同步的呼叫**：回答只到等它的那個呼叫；通道斷了時等的一方醒來、當成失敗。
+9. **data pipe**：讀到的位元組就是寫的、照順序、不重複；Browser 送出去、renderer 還沒說讀了的量不超過管道的容量；renderer 說讀了的比送的多是壞訊息。
+
+平台層守不住的寫成**假設**：kernel 照文件做的那幾件事（把唯讀的 handle map 成可寫會失敗、收到的 handle 是對方真的給的、訊息的來源認得出來、對方不在了一定通知）。每一條假設有一個真的跨 process 的測試，在那個平台上不成立時測試會失敗；原型在 macOS 上試過一遍（`prototype/README.md`）。
+
 ### 測試
+
+**每條性質用什麼驗證**（工具照 elise 的用法；`scripts/test.py` 加上跑它們的指令，`sanity.py` 檢查核心沒有碰系統呼叫）：
+
+| 方法 | 守哪幾條 | 怎麼做 | 什麼時候跑 |
+| --- | --- | --- | --- |
+| 單元測試和惡意的對端 | 全部 | 核心經過假通道測；測試扮演壞掉的 renderer：超過上限的長度、不認得的目的地、不連續的序號、附了 handle 的訊息、不在它的表裡的 region 編號（包括別的 renderer 的）、超出那一塊的範圍、反序列化失敗的內容、巢狀超過上限的值、超過上限的共用記憶體、寫到一半就斷線。Browser 都要關掉通道、報告 `RendererGone`，不能 panic、卡住或 stack overflow | `cargo test`，每次 |
+| 平台層的跨 process 測試 | 假設，和 1、3、7 | 測試自己啟動小的 child process：建立、map、傳 handle、唯讀和大小的保證（拿唯讀的 handle 試著寫入或 map 成可寫、試著縮小 region，都要失敗）、對方整個結束、只關掉收的一半、只丟掉送的一半。macOS 另外測 rendezvous（沒登記的 pid 拿不到、同一個 pid 拿不到第二次、請求比登記早到時等得到）和假冒 kernel 的通知（忽略） | `cargo test`；Linux 和 Windows 在每天的 CI，macOS 在本機 |
+| fuzz（cargo-fuzz） | 2，和 1、6、9 | 兩個 target：從「通道讀到的位元組」到「Browser 處理完這則訊息」的整條路（反序列化、分派、處理訊息的物件；惡意的 renderer 唯一碰得到 Browser 的路，那個物件不需要真的通道就能跑）；region 的參照 | 每週的 CI；改核心時在本機跑一段 |
+| loom、shuttle | 5、6、8、9 | 送出的佇列和它的鎖（好幾條 thread 同時送、對方同時斷線）、同步呼叫等回答的位置、body 的訊息和「讀了多少」的往返（兩端各一條 thread）。atomic 和鎖的型別在核心裡是抽象的，測試時換成 loom 的 | 每週的 CI；改到這幾處時在本機 |
+| TLA+ | 4、5、6、7、9 | 通道的協定的模型：兩端、有上限的佇列、任一端隨時斷線、region 的發出和收回、body 的管道的額度。TLC 檢查模型成立，再拿掉每一部分確認找得到反例 | 改協定時；模型和協定一起改 |
+| Verus | 1 | 範圍的檢查和位置的運算寫成純函式（輸入數字，回答合不合法），證明「檢查通過的範圍一定在那一塊裡面」和 data pipe 的額度的運算（送出的不超過容量、讀了的不超過送的） | 每週的 CI |
+| Miri | 1 | 核心的測試經過假通道在 Miri 底下跑：碰共用記憶體的 `unsafe` 沒有未定義的行為 | 每週的 CI |
+| mutation test | 每一個檢查 | 照 `docs/testing.md`：弄壞每個檢查，確認有測試失敗 | 每個階段 |
+
+**整個 machopo 的**：
 
 - **message 都能序列化**：`protocol` 的 `boundary` 測試在編譯時確認（已經有）；`SharedImage` 的 `#[serde(skip)]` 拿掉之後才算完整。
 - **單一 process 的測試照舊**：`DrivenViz`、reftest、`shell` 的端到端測試都不改，證明新的訊息（`ReturnResources`、`DestroySharedImage`）在同一個 process 裡行為一樣。
-- **`ipc` 的平台層**：三個平台各自測建立、map、傳 handle、唯讀和大小的保證（拿唯讀的 handle 試著寫入或 map 成可寫、試著縮小 region，都要失敗）；跨 process 的部分用測試自己啟動的小 child process。CI 每天在 Linux 和 Windows 上跑，macOS 在本機。macOS 另外測 rendezvous（沒登記的 pid 拿不到 port、同一個 pid 拿不到第二次、請求比登記早到時等得到）和兩種通知（對方整個結束、只關掉收的一半、只丟掉送的一半，都報告斷線）。
-- **惡意的對端**：測試扮演壞掉的 renderer，送超過上限的長度、不認得的目的地編號、附了 handle 的訊息、不在它的表裡的 region 編號（包括別的 renderer 的）、超出那一塊的位置和長度、反序列化失敗的內容、巢狀超過上限的值、超過上限的共用記憶體、寫到一半就斷線；macOS 上加上假冒 kernel 的通知。Browser 都要關掉通道、報告 `RendererGone`（假冒的通知是忽略），不能 panic、卡住或 stack overflow。另外確認 Browser 收回的 region 不會出現在別的 renderer 手上。
-- **fuzz renderer 送來的位元組**：從「控制通道讀到的位元組」到「Browser 處理完這則訊息」是惡意的 renderer 唯一碰得到 Browser 的路，整條放進一個 fuzz target（反序列化、目的地的分派、處理訊息的物件），不只測手寫的那幾種壞訊息。處理訊息的邏輯抽成物件（「架構」）之後，這個 target 不需要真的通道就能跑。
 - **整套的測試用多個 process 跑**：單一 process 的模式不經過 `ipc`，所以 CI 另外用多個 process 跑整套的測試。WPT 經過 machopodriver 啟動真的 `machopo`，讓它開 renderer process 就行；其他幾套見「待決定」。連啟動都算在內。
-- **跨 process 的端到端測試**（`cargo test` 裡的少數幾個）：啟動真的 child process，載入一個頁面、點一下、捲一下；`about:crash` 之後 Browser 還在、分頁是 sad tab、重新載入可以恢復。
-- **ring**（第二步）：協定用 loom 跑；讀取端用 fuzz，另一條 thread 同時亂寫共用記憶體裡的計數和內容。
-- **soundness**：`ipc` 的 `unsafe` 的論證寫在它的 README 的「`unsafe` 的論證」，mutation test 弄壞驗證的地方，確認測試抓得到。
+- **跨 process 的端到端測試**（`cargo test` 裡的少數幾個）：啟動真的 child process，載入一個頁面、點一下、捲一下；`about:crash` 之後 Browser 還在、分頁是 sad tab、重新載入可以恢復。另外確認 Browser 收回的 region 不會出現在別的 renderer 手上。
+- **sandbox 的探測**（只有 macOS，只給測試用；「為 sandbox 留的條件」）：一個只有測試會給的旗標讓 renderer process 一開始就進最緊的 profile（查 rendezvous 的名字、讀系統字型的目錄、讀執行檔），載入一個有文字、圖片和 script 的頁面。測試不要求它通過：它把被擋的東西（sandbox 的拒絕紀錄、頁面有沒有畫出來）寫成清單，清單記進 `progress.md`。之後清單變長時（renderer 多要了一樣東西）測試會失敗，要人看過才更新。
 - **只能手動確認的**：活動監視器裡的 process，記進 `docs/test-gaps.md` 的「只做過手動確認」。
+- **工具碰不到的**：平台層的 FFI 只有跨 process 的測試和審查；kernel 的行為是假設。記進 `docs/test-gaps.md`。
 
 ### 分階段
 
-排進某個階段時再確認。排程之前先做「待決定」的前兩項（重新盤點、原型）。
+排進某個階段時再確認。
 
 0. **整理邊界**（2026-10-06 做完，`progress.md`）：邊界的規則和檢查；修掉 context lost 的 observer、`RendererFlags` 的函式指標、能送給任何 `FrameSinkId` 的 sender。
-1. **message 化，還是單一 process**：tile 的交接改成訊息（拿掉 `SharedImage` 的 backing，加上 `ReturnResources` / `DestroySharedImage`、Viz 的 mailbox 表）、`protocol` 的 bytes 型別；Browser 處理一個 renderer 的訊息的邏輯從 `Chrome_IOThread` 的迴圈抽成物件。現有的測試全部照舊通過。
-2. **`ipc` crate（IPC 的第一步）**：平台層、控制通道、帶 handle 的序列化、Browser 配共用記憶體和編號的表；用測試自己的 child process 測，包括惡意的對端。還沒接上 renderer。
-3. **啟動 child process**：`--type=renderer`、renderer 的 IO thread、所有訊息走控制通道、tile 走共用記憶體、process 當掉。最後量捲動時每個 frame 的延遲，和一個高頻小訊息的 benchmark，給第 4 步用。
-4. **ring（IPC 的第二步）**：第 3 步量到控制通道的系統呼叫值得省時才做。平台層和上層都不變，只換傳輸的核心。
+1. **message 化，還是單一 process**（分段在開始時定，`progress.md`）：tile 的交接改成訊息（拿掉 `SharedImage` 的 backing，加上 `ReturnResources` / `DestroySharedImage`、Viz 的 mailbox 表）、`protocol` 的 bytes 型別；Browser 處理一個 renderer 的訊息的邏輯從 `Chrome_IOThread` 的迴圈抽成物件。現有的測試全部照舊通過。
+2. **`ipc` crate**：核心（先做，經過假通道就能測）、平台層、控制通道、帶 handle 的序列化、Browser 配共用記憶體和編號的表；用測試自己的 child process 測，包括惡意的對端。這個階段把驗證的工具架好（fuzz、loom 和 shuttle、Miri、Verus、TLA+ 的模型、`soundness.md`），核心的每一塊做完時它的那幾條性質就驗過。還沒接上 renderer。
+3. **啟動 child process**（每個階段的驗收包含它那一塊的驗證；這個階段加的是 body 的管道和處理訊息的物件的 fuzz target；最後做 macOS 上 sandbox 的探測）：`--type=renderer`、renderer 的 IO thread、所有訊息走控制通道、tile 走共用記憶體、導覽的 body 的管道跨 process、process 當掉。最後量捲動時每個 frame 的延遲。
 
 ## 缺點
 
-- **IPC 要自己維護**：平台層三套（控制通道、傳 handle、共用記憶體、啟動、發現對方不在了，三個平台各寫一套，不共用）、帶 handle 的序列化、之後的 ring，加上對惡意對端的驗證，都是 machopo 的程式。
+- **IPC 要自己維護**：平台層三套（控制通道、傳 handle、共用記憶體、啟動、發現對方不在了，三個平台各寫一套，不共用）、帶 handle 的序列化，加上對惡意對端的驗證，都是 machopo 的程式。
 - **多了 `unsafe`**：`ipc` 的平台層。Linux 大多有 rustix 的安全 API；macOS 上 Mach 沒有安全的包裝，port 的擁有權、訊息的組裝、memory entry 的建立和 map 全是 FFI；Windows 上建立兩端、overlapped 的讀寫和取消、共用記憶體、複製 handle 都是 FFI。Windows 不是平常驗收的平台，這些只有每天的 CI 和審查守著。
-- **安全的保證靠設計和測試**：對惡意 renderer 的防護靠測試、fuzz 和審查守住，沒有現成被大量使用的實作可以依靠。
+- **安全的保證靠設計和驗證**：對惡意 renderer 的防護沒有現成被大量使用的實作可以依靠，靠「要保證的性質」的每一條自己驗證。
+- **驗證的工具和工夫**：Miri 和 fuzz 要 nightly，Verus 有自己的 toolchain，TLA+ 要 TLC；machopo 多這幾樣要裝、要在 CI 上跑的東西。Verus 的證明和 TLA+ 的模型要跟著程式改。平台層這些工具都碰不到。
 - **兩種模式要一起維護**：平常開發跑的是單一 process，IPC 那條路要等 CI 的多 process 測試才看得到壞掉。
 - **renderer 要共用記憶體得問 Browser**：要新的一塊時要等回覆（「待決定」）。
 - 每個 renderer 多一份記憶體（V8 isolate、字型、raster 的快取）、一條 IO thread 和啟動時間。
-- tile 經過共用記憶體再由 Viz 上傳（T1 的話），compositor 到 Viz 也多一次 IO thread 的轉手；比現在多幾次複製要照現在的上傳方式重算（「待決定」）。
+- tile 經過共用記憶體再由 Viz 上傳，compositor 到 Viz 也多一次 IO thread 的轉手；比現在多零到兩次複製，看做到哪裡（「待決定」）。
 - **做完還沒有 sandbox**：這份做完到 sandbox 的 RFC 做完之間，renderer 是獨立的 process 但沒有被關起來。穩定性拿到了，安全上最大的那一塊還沒有（「動機」）。
 
 ## 理由和其他做法
@@ -236,6 +294,7 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
 - **Linux 的 socket**：stream、自己寫長度。不選 `SOCK_SEQPACKET`：訊息的大小受 socket 的 buffer 限制。
 - **誰能附 handle**：通道每一端各自的權限，renderer 那一端沒有。不選讓 renderer 把 handle 附在訊息上送回來（2026-10-06 原本的寫法）：Browser 本來就有每一塊，送回來只是多一類要驗證的輸入，三個平台各要一套。也不選寫死成「只有 Browser 能附」：之後別種 process 要交出自己才建得出來的東西時得拆掉重來。
 - **誰建立共用記憶體**：只有 Browser。不選讓 renderer 自己建（就我們的了解，Chromium 在 sandbox 允許的平台上這樣做，省掉向 Browser 要的那一次來回）：Browser 得驗證收到的每一塊，renderer 的 sandbox 也要多開權限。
+- **tile 怎麼交給 Viz**：共用記憶體、Viz 上傳（T1）。不選 renderer 自己上傳、交出 GPU 的 texture（T2，macOS 的 `IOSurface`）：renderer 要能開 GPU，sandbox 得開 IOKit，wgpu 沒有跨 process 共用 texture 的 API，三個平台三種做法。不選 renderer 只送 display list、raster 在 Viz 那一側（T3，OOP-R，Chromium 現在的做法）：display list、字型和圖片都要能序列化，raster 要搬家；machopo 是 CPU raster，現在換不到東西。
 - **process 的分法**：每個分頁一個 process。site isolation 要跨網站導航時換 process，先不做。
 - **單一 process 的模式要不要留**：留。Chromium 也有 `--single-process`；machopo 的測試大多靠它（`DrivenViz` 直接扮演 Viz），全部改成跨 process 會又慢又難控制時機。
 
@@ -246,7 +305,7 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
 - **Chromium**：Browser、Renderer、GPU、Network 和 utility process；同一個執行檔以 `--type=` 區分；renderer 在各平台的 sandbox 裡；renderer 當掉時顯示 sad tab。IPC 是 Mojo，core 現在是 ipcz。machopo 照它的啟動方式、sandbox 的形狀、各平台的 channel 和共用記憶體的做法、三種 region 和 `BigBuffer`；不做 GPU process 和介面層。
 - **Servo**：`--multiprocess` 時每個 pipeline 一個 content process，預設單一 process。IPC 是 ipc-channel，上面的 `generic_channel` 依模式選它或 crossbeam。machopo 照它「單一 process 時不序列化」的做法，不用 ipc-channel。
 - **Ladybird、Firefox、WebKit**：都是自己做薄的一層，沒有直接用 Mojo。Firefox 只拿 Mojo 的路由演算法；Ladybird 在 macOS 上 2026-03 從 socket 換成 Mach port；WebKit 給 GPU process 用的是共用記憶體裡的 ring 加 semaphore。
-- **shmem-ipc、Chromium 的 `ChannelLinux`**：給不可信的對端用的共用記憶體 ring，第二步的 ring 的先例。
+- **shmem-ipc、Chromium 的 `ChannelLinux`**：給不可信的對端用的共用記憶體 ring；這份沒有採用（第 19 條），之後要加時的先例。
 - **iceoryx2**：資料留在共用記憶體、只傳位置，是「renderer 用編號稱呼 region」同一個想法；它假設對端合作，這份加上了檢查。
 
 ## 已決定的事項
@@ -256,11 +315,11 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
 1. **IPC 自己做，照 Chromium 現在的方向**，不用 ipc-channel、iceoryx2，也不直接用 Mojo。表面上是 channel，共用記憶體是一級公民。2026-11-17 重新查過這些選項的現況，結論不變。
 2. **平台層的組合**（「`ipc` crate」的表；macOS 的部分 2026-11-17 改）：Linux 用 rustix 的 memfd 和 seal、memmap2；macOS 用 Mach 的 memory entry（原本是 rustix 的 POSIX shm）；Windows 用 windows-sys 的 pagefile section。Mach 的 FFI 用 mach2，版本和 wasmtime 的 fork 用的一樣。不用檔案撐共用記憶體。
 3. **控制通道**（macOS 和 Windows 的部分 2026-11-17 改）：Linux 用 std 的 `UnixStream::pair`；macOS 用 Mach port（原本和 Linux 一樣）；Windows 用 windows-sys 的 overlapped named pipe（原本用 interprocess）。兩端都由 Browser 建立。三個平台送的時候都不等、IO thread 都等「通道」和「喚醒」；macOS 上對方不在了靠 dead-name 和 no-senders 兩種通知，只認 kernel 送的。
-4. **IPC 分兩步**：第一步所有訊息走控制通道，大的資料放進共用記憶體；第二步把小訊息搬進共用記憶體裡的 ring。第二步要等第一步量過延遲才決定做不做，兩步用同一個平台層。
-5. **ring 照 shmem-ipc 的 `ringbuf.rs` 的設計自己寫**，不依賴那個 crate。
+4. ~~**IPC 分兩步**~~（第二步由第 19 條取消）：第一步所有訊息走控制通道，大的資料放進共用記憶體；第二步把小訊息搬進共用記憶體裡的 ring。第二步要等第一步量過延遲才決定做不做，兩步用同一個平台層。
+5. ~~**ring 照 shmem-ipc 的 `ringbuf.rs` 的設計自己寫**~~，不依賴那個 crate（第 19 條：訊息的 ring 不做；之後要做時照這一條）。
 6. **process 內的 channel 繼續用 crossbeam；renderer 加一條 IO thread**：IPC 收到的訊息由兩端的 IO thread 放進同一種 crossbeam channel，renderer 的 main thread 照舊只等它的 scheduler。
-7. **`ipc` 可以寫 `unsafe`**：只在平台層和 ring 的存取，每一處都有 `// SAFETY:`，論證寫在 `ipc` 的 README。2026-11-17 起 macOS 和 Windows 的平台層幾乎全是 FFI，範圍比原本估的大。
-8. **延後，預設單一 process**（2026-10-06）：拆 process、sandbox、IPC 都延後，只做第 0 步，把邊界守住。不選「繼續做」：先做 DOM API 和 CSSOM 等功能。
+7. **`ipc` 可以寫 `unsafe`**：只在平台層和共用記憶體的存取，每一處都有 `// SAFETY:`，論證寫在 `ipc` 的 `soundness.md`（第 20 條；原本在它的 README 的「`unsafe` 的論證」，做的時候搬過去，`CLAUDE.md` 和 `docs/README.md` 寫到它的地方跟著改）。2026-11-17 起 macOS 和 Windows 的平台層幾乎全是 FFI，範圍比原本估的大。
+8. **延後，預設單一 process**（2026-10-06；2026-11-20 排程，預設哪些模式用多個 process 在第 3 階段定）：拆 process、sandbox、IPC 都延後，只做第 0 步，把邊界守住。不選「繼續做」：先做 DOM API 和 CSSOM 等功能。
 9. **邊界的規則和檢查**：規則和例外寫在 `docs/architecture.md` 的「Process 的邊界」，`python3 scripts/sanity.py boundary` 和 `protocol` 的 `boundary` 測試檢查。和 Chromium 用 `DEPS`、`checkdeps` 守住邊界同一類。
 10. **第 0 步修掉小的例外，tile 的交接留給第 1 步**：小的修了同一個 process 的行為不變；tile 的交接牽涉共用記憶體的設計。
 11. **context lost 由 Browser 轉成訊息**：Browser 向 Viz 登記 observer，收到時送 `CompositorMsg::ContextLost`；renderer 不登記。
@@ -270,44 +329,53 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
 15. **單一 process 的模式不付 IPC 的成本，IPC 由多個 process 的整套測試守著**（2026-11-17）：renderer 是 thread 時訊息直接走 crossbeam，不序列化、不經過 `ipc`。IPC 那條路由 CI 用多個 process 跑整套的測試補上，至少是 WPT。
 16. **macOS 上 child 經過 rendezvous 拿到 port，照 Chromium 的 `MachPortRendezvous`**（2026-11-17，「啟動」）。之後 sandbox 的 profile 要開放查這一個名字；原本打算完全不開 bootstrap 的查詢。
 17. **renderer 不能送 handle，用編號稱呼 region**（2026-11-17，「`ipc` crate」的共用記憶體）。能不能附 handle 是通道每一端各自的權限，由 Browser 建通道時決定，renderer 那一端永遠沒有；這份只有 Browser 的那一端能附，所以 handle 只從 Browser 往 renderer 走。沒有權限的一端送來的訊息附了 handle 就是壞訊息。
-18. **sandbox 移出這份，之後另一份 RFC**（2026-11-20）：三個平台的作業系統的 sandbox 和 V8 的 sandbox 都不在這份裡；原本包含 macOS 的。不選「這份只做 macOS」：三個平台不一致，每個平台的機制也沒有比過選項。這份保留 sandbox 對設計的要求（「為 sandbox 留的條件」）和原型在 macOS 的 sandbox 裡驗證一次；做完時拿到的是穩定和分頁之間記憶體分開，不是安全上最大的那一塊（「動機」）。
+18. **sandbox 移出這份，之後另一份 RFC**（2026-11-20；同一天加上：第 3 階段在 macOS 上用最緊的 profile 探測真的 renderer 還需要什麼，只給測試用，「為 sandbox 留的條件」）：三個平台的作業系統的 sandbox 和 V8 的 sandbox 都不在這份裡；原本包含 macOS 的。不選「這份只做 macOS」：三個平台不一致，每個平台的機制也沒有比過選項。這份保留 sandbox 對設計的要求（「為 sandbox 留的條件」）和原型在 macOS 的 sandbox 裡驗證一次；做完時拿到的是穩定和分頁之間記憶體分開，不是安全上最大的那一塊（「動機」）。
+
+19. **訊息不走共用記憶體裡的 ring，都走控制通道**（2026-11-20，取代第 4 條的第二步和第 5 條）：原本的第二步（每個方向一個 SPSC ring，小訊息不經過系統呼叫）不做。留三個地方讓之後加得上去、不用回頭改：訊息的框架有序號；IO thread 的迴圈不寫死成只有一個來源；上層只經過一個送和收訊息的介面。理由（原型量的，`prototype/README.md`）：ring 只在讀的一端醒著時才快（來回 0.21 µs，Mach 訊息是 4.2 µs），它一睡，喚醒就是一則 Mach 訊息、成本一樣；machopo 照人的節奏操作時，閒置 0 則、60 Hz 捲動每秒 82 到 185 則，讀通道的 thread 醒著的時間不到千分之一，緊接著到的訊息全部改走 ring 每秒省不到 0.4 ms；對方睡著時，同一個 process 裡的 crossbeam 來回也要約 24 µs，時間花在叫醒 thread。對照 Chromium：macOS 上的訊息走 Mach 訊息，沒有 ring；`ChannelLinux` 的 ring 只有 Linux、預設關。不選照原本的寫法接上 machopo 之後再量、再決定：到時有真的捲動的數字，但這一項一直掛著，而原型的數字已經差了三個數量級。不選現在就做：多一整個階段，和 `ipc` 裡最需要驗證的一塊 `unsafe`，換不到看得出來的差別。之後訊息變密時（DevTools 開著、大量 `fetch()` 的頁面、Browser 的 IO thread 合成一條）再量。
+
+20. **`ipc` 留在 machopo 的 `crates/ipc`，照 elise 的做法驗證**（2026-11-20）：`ipc` 分成不碰系統呼叫的核心和只做四件事的平台層（「`ipc` crate」）；要守住的事列成「要保證的性質」，每一條對到方法（「測試」的表）：fuzz、loom 和 shuttle、TLA+、Verus、Miri、真的跨 process 的測試、mutation test；論證寫在 `ipc` 的 `soundness.md`，kernel 的行為寫成假設、每條有測試。工具由 machopo 的 `scripts/test.py` 跑、排進每週的 CI。對照 Chromium：Mojo 在它自己的 tree 裡（`//mojo`、`//third_party/ipcz`）；就我們的了解，`mojo/core` 有 channel 和訊息的 fuzzer，沒有形式化的證明。對照 elise：它是 machopo 旁邊的獨立專案，用的是同一組工具。不選像 elise 那樣放在旁邊的獨立專案：驗證的工具和 CI 不壓在 machopo 上、別的專案也能用，但接上 machopo 的階段 `ipc`、`protocol` 和 `browser` 會一起改，每次都是兩個 repo（先 push 它、再改 machopo 釘的 commit），在還沒定型時很頻繁。核心只依賴 `base`、不知道 `protocol`，之後要抽出去時抽得動。不選只做 fuzz 和惡意對端的測試（原本的寫法）：工夫最少，但漏喚醒、順序和斷線這類問題要靠窮舉才找得到，範圍的檢查值得一個證明。
+
+21. **導覽的 body 的管道一段一段走控制通道，背壓用訊息**（2026-11-20，「導覽的 body 的管道」）：Browser 的 IO thread 把 body 包成訊息送給 renderer，renderer 的 IO thread 寫進它自己 process 裡的管道；renderer 回報讀了多少，Browser 送出而還沒被讀的量不超過管道的容量。`ipc` 裡因此沒有任何共用記憶體裡的 ring。理由和第 19 條同一把尺（原型量的）：一則 64 KiB 的訊息約 10 µs，網路每秒 100 MB 時也只佔控制通道約 1.6% 的時間，輸入事件最多被擋十幾 µs；背壓只是幾則訊息；而 ring 是 `ipc` 裡最需要驗證的一種東西。對照 Chromium：Mojo 的 data pipe 是共用記憶體裡的 ring，`URLLoaderClient` 的 body 都走它。不選每條管道一塊共用記憶體裡的 ring（2026-11-20 起先的建議）：body 不佔控制通道、背壓是 ring 滿了，送 16 MiB 是 0.31 ms（走控制通道是 1.47 ms，每秒 11 GiB，比網路快得多）；但那兩個好處照量到的數字都很小，換來的是兩個 process 同時讀寫一塊記憶體的驗證（loom、fuzz、Verus）。之後量到需要時再換，介面不變（「之後的可能」）。
+
+22. **postcard、每則訊息比對 audit token、大的資料走留著重複用的 region**（2026-11-20，原型量過的三項，`prototype/README.md`）：
+    - **序列化用 postcard**：machopo 真的 frame 最多 46 個 quad，編 1.4 µs、解 2.3 µs；編出來的 1150 個 quad 的 frame 也只有編 26 µs、解 49 µs。起草時擔心它把整數一個一個編成不定長度、frame 大時太慢，量出來不成立。postcard 沒有巢狀深度的上限，會一層包一層的型別的解碼自己數深度，fuzz 守著。不選 bincode（就我們的了解 2025 年停止維護；ipc-channel 0.21 也換成 postcard）、Cap'n Proto 和 FlatBuffers（要 schema 和產生的程式，`protocol` 的 enum 要整個改寫）、固定長度的自訂格式（量不到需要）。
+    - **macOS 上每則訊息都比對 audit token**：原型每則都比對，成本已經在一則來回 4.2 µs 裡。對照 Chromium：也比對。不選只靠「send right 只交給那個 child」：比對幾乎不花時間，多一層。
+    - **大的資料走留著重複用的 region，門檻 64 KiB**：送 1 MiB 給對方、直到它複製出來，留著重複用的 region 是 36 µs，放在訊息裡 105 µs，每次新建一塊 region 120 µs（8 MiB 是 317、1050、956 µs）；64 KiB 時是 6 µs 對 12 µs。門檻照 Chromium 的 `BigBuffer`。不選每筆資料新建一塊 region（起草時「Browser 送的放進唯讀的 region、連 handle 一起交給 renderer」的寫法）：比放在訊息裡還慢。不選 Mach 的 out-of-line 記憶體：8 MiB 時和 region 一樣快，收的一方拿到自己的一份，但只有 macOS 有，三個平台要同一個設計。
+
+23. **tile 經過共用記憶體交給 Viz，Viz 上傳**（2026-11-20，T1，「tile 交接」）：compositor 照舊用 CPU 畫，像素寫進 Browser 配給它的 region（第 22 條的池子），frame 的 resource 帶 mailbox 和 region 的編號、位置和長度；Viz 複製出來、上傳，生命週期用 `ReturnResources` 和 `DestroySharedImage` 兩則訊息。canvas 的快照一樣。2026-11-20 的盤點確認 renderer 這一側沒有 wgpu，raster 是 vello_cpu 畫的 CPU 像素，所以 raster 的位置不用動。對照 Chromium：OOP-R 之前是這樣（one-copy raster），現在是 OOP-R（T3）。不選 T2（renderer 自己上傳、交出 texture）和 T3（OOP-R），理由在「理由和其他做法」。之後做 GPU raster 時換成 T3：那時過邊界的是 display list 不是像素，這一段本來就要重來（「之後的可能」）。
 
 ## 待決定
 
 排程之前：
 
-- **重新盤點**：這份的盤點是 2026-10-04 做的。之後多了分頁、worker、canvas 的 raster thread、DevTools，raster 從 Skia 換成 vello_cpu，所有模式都走 wgpu 和 shared image、上傳的路重做過。排程時照現在的程式重新看「還沒有的」和下面的 T，包括 `Chrome_IOThread` 現在管的東西（每個 renderer 的載入、worker 的登記和主 script、blob URL、壞訊息）要怎麼抽成物件（「架構」）。
-- **原型**：在 macOS 上做，可以是 machopo 以外的獨立 crate。到 2026-11-20 為止，這份的設計都還沒有程式驗證過。要回答的：
-  - 「為 sandbox 留的條件」成不成立：child 一開始就套一份最簡單的 Seatbelt profile（只開那一節列的東西），然後查 rendezvous 的名字、讀一個系統字型。正式的 sandbox 是之後的 RFC，這裡只確認這份的設計在 sandbox 裡跑得起來。
-  - 放三種 process，不是兩種：一個 host、兩種 child，兩個 child 之間有 host 建的直接通道、共用一塊 host 建的記憶體。「附 handle 是每一端的權限」「目的地是可以增加的編號」「檢查和表任何一端都能用」這三件事在這個最小的例子裡就會被逼出來，比接上 machopo 之後才發現便宜。
-  - 來回一則小訊息、送一塊大的資料、編和解一個真的 frame 各要多久；接上 machopo 之後再量捲動時每個 frame 多多少延遲。
+- ~~重新盤點~~：2026-11-20 做了，結果在 `details.md` 的「現在的邊界」和「要改的地方」。和 2026-10-04 比，新的工作是導覽的 body 的管道（例外 7）和 trace；同步的呼叫、worker 的訊息、Browser 的 frame 樹和 loader 的核對都已經照邊界做，不用改。renderer 這一側沒有 wgpu（raster 是 vello_cpu 畫的 CPU 像素），所以 T1 不用搬 raster。
+- ~~原型~~：2026-11-20 做了，在 `prototype/`（macOS，它的 README 有每一項的數字和沒做的部分）。結果：
+  - 「為 sandbox 留的條件」成立：child 一開始就進只開三樣東西的 sandbox（rendezvous 那一個名字、系統字型的目錄、自己的執行檔），rendezvous、控制通道、讀字型都可以，其他的（讀寫檔案、網路、啟動程式、查別的服務）都被擋。和假設不同的一點：sandbox 擋不住 renderer 自己建 memory entry，「只有 Browser 建立共用記憶體」在 macOS 上靠協定（renderer 的那一端不能附 right），不靠 sandbox。
+  - 三種 process（host、sandbox 裡的 renderer、另一種 child，兩個 child 之間有 host 建的直接通道和一塊 host 建的 region）跑得起來：「附 handle 是每一端的權限」「目的地是編號」「表和檢查任何一端都能用」都不用為第三種 process 改結構。壞的編號、超出的範圍、沒有權限的一端附的 right、假冒的 kernel 通知、把唯讀的 entry map 成可寫，都被擋下。
+  - 控制通道：一則小訊息來回 4.2 µs（中位數，p99 7.7 µs）；child 被 kill 之後 12 到 40 µs 內知道。
+  - frame：machopo 對真的頁面送的 frame 最多 46 個 quad，postcard 編出來不到 3 KiB，編 1.4 µs、解 2.3 µs，連送帶回答 8 µs，是一個 frame 的時間的 0.05%。
+  - 大的資料：留著重複用的 region 最快（1 MiB 是 36 µs，放在訊息裡是 105 µs）；每次新建一塊 region（120 µs）比放在訊息裡還慢。
+  - ring：讀的一端醒著時來回 0.21 µs（Mach 訊息的 20 分之一），但它一睡，喚醒就是一則 Mach 訊息、成本一樣；連續一大批時快 6 到 11 倍；當管道送 16 MiB 是 0.31 ms，一段一段的 Mach 訊息是 1.47 ms（每秒 11 GiB）。
+  - 和單一 process 的 crossbeam 比：兩邊都醒著時 crossbeam 來回 0.21 µs（訊息是搬的，不編不解不複製），Mach 訊息 4.2 µs；對方已經睡著時（隔 1 ms 才送）兩者都是約 24 µs，時間花在叫醒 thread，跨不跨 process 沒有差別。
+  - machopo 實際的訊息有多密（單一 process 上量的，一個分頁照人的節奏操作）：閒置時 0 則；60 Hz 捲動時往 Browser 每秒 185 則、往 renderer 每秒 82 則，一個 frame 的幾則緊接著到、frame 和 frame 之間隔約 16 ms；載入時請求一口氣發出。讀通道的 thread 醒著的時間不到千分之一，緊接著到的訊息全部改走 ring 每秒省不到 0.4 ms。
+  - 沒有原型的：Linux 和 Windows 的平台層；送的時候不等、自己排隊的那一段；接上 machopo 之後捲動時的延遲。
 
 設計：
 
-- **tile 怎麼交給 Viz**：
-  - **T1. 共用記憶體，Viz 上傳**（one-copy raster）：renderer 不碰 GPU，sandbox 最緊；raster 的位置不變。
-  - **T2. 跨 process 的 GPU texture**（macOS 的 `IOSurface`）：renderer 自己上傳，sandbox 得開 IOKit；wgpu 沒有跨 process 共用 texture 的 API。
-  - **T3. OOP-R**：renderer 送 display list，raster 在 Viz 那一側。Chromium 現在的做法，但 display list、字型和圖片都要能序列化。
-  - 2026-10-04 的看法：T1。要和 GPU raster 的方向一起看：做 GPU raster 的話 raster 得在 GPU 那一側，過邊界的是 display list 不是像素，就是 T3。
-- **Viz 讀 tile 的像素要複製幾次**：共用記憶體不能當成 slice 交給 wgpu（「`ipc` crate」），要用指標複製出來。現在上傳時 Viz 本來就留一份複製；raster 能不能直接畫進共用記憶體、整條路比現在多幾次複製，重新盤點時算。
+- **Viz 讀 tile 的像素要複製幾次**：共用記憶體不能當成 slice 交給 wgpu（「`ipc` crate」），要用指標複製出來。現在是一次：raster 的像素交給 wgpu 時複製進它等著送出的緩衝區。T1 最多變成三次（raster 的緩衝區 → region → Viz 自己的記憶體 → wgpu 的緩衝區），最少可以還是一次：raster 直接畫進 region（vello_cpu 要能畫進別人給的記憶體），Viz 用指標直接複製進 wgpu 給的已經 map 好的緩衝區。一塊 256×256 的 tile 是 256 KiB，原型量到這個大小複製一次約 25 µs；捲動時一個 frame 新畫 20 塊的話，每多一次複製約 0.5 ms。做第 1 階段時先做最簡單的、量過再決定省哪一次。
 - **renderer 向 Browser 要共用記憶體時怎麼不卡住 compositor**：只發生在池子不夠的時候。可以做的：一次要一大塊、renderer 自己切；池子快用完就先要；要的時候不停下來等。還有 Browser 什麼時候收回一塊。
 - **單一 process 時要不要連 Browser 的 IO thread 也拿掉**：處理訊息的邏輯抽成物件之後（「架構」）做得到：renderer 拿到的「送訊息的東西」在這個模式直接呼叫那個物件，由它交給網路或叫醒 UI thread，中間沒有佇列也沒有 thread。每個分頁少一條 thread，renderer 到 UI thread、到網路各少一次轉手。代價：Browser 的邏輯在 renderer 的 thread 上跑（main thread 和 worker 可能同時送，要加鎖；它 panic 時倒的是 renderer 的 thread）；`RendererGone` 改成靠最後一個 sender 被丟掉來報告；「從通道讀出來、交給物件」那一段只剩多 process 的測試跑得到。那條 thread 現在就在，不是這份加的成本，所以先量每則訊息的那一次轉手占多少再決定。比過的做法見 `details.md` 的「比過的做法」。
 - **renderer 不能讓 Browser 當掉**：惡意的 renderer 最容易走的三條路，接上 renderer 的那一步要一起處理。
   - 沒有上限的東西：Browser 收 renderer 訊息的佇列、Browser 送給卡住的 renderer 的佇列、一個 renderer 能要的共用記憶體（「`ipc` crate」）、反序列化的巢狀深度（同上）。各要定一個數字，超過就關掉那個 renderer。
   - 處理訊息時 panic：Rust 擋得住記憶體錯誤，擋不住 `unwrap` 和越界。處理 renderer 的訊息的程式遇到不合理的內容要走壞訊息的路（`browser` 的 `BadMessageReason`），不能 panic。
   - 壞的 frame：frame 是在 Browser 裡交給 GPU 的，而 wgpu 的驗證錯誤現在會結束整個程式。Viz 收到 frame 時的檢查要涵蓋所有會走到 wgpu 的值；這一項單一 process 時就可以開始做。
-- **同步的請求**：現在 renderer 沒有任何地方同步等 Browser 的回覆。之後有（`document.cookie`、同步的 XHR）時，main thread 要能等某一則回覆而不處理別的訊息；Mojo 為此有專門的機制。
+- **trace 怎麼收**：每個 process 各寫一個檔案（`MACHOPO_TRACE` 加上 pid）、之後合併，或 child 把 span 送回 Browser。Chromium 是每個 process 的 tracing service 把資料送回 Browser 合成一份。
+- **哪些模式預設多個 process**：看法是只有人用的視窗；headless、情境、`--automation-pipe` 和測試預設單一 process，CI 另外用多個 process 跑選定的幾套（下面的「哪幾套測試」）。
 - **Linux 和 Windows 怎麼把控制通道的一端交給 child**：std 的 `Command` 沒有安全的 API 指定要繼承哪個 fd 或 handle。選項：spawn 前短暫拿掉那個 fd 的 close-on-exec、用 command-fds 這類 crate、當成 child 的 stdin 傳、Windows 上照 Chromium 讓 handle 可以繼承並把數值放在命令列。
-- **macOS 上大的訊息怎麼送**：Chromium 是一頁以內內嵌，超過改用 out-of-line 的 descriptor。和 bytes 型別的門檻一起決定。
-- **macOS 上要不要每則訊息都比對 audit token**：Chromium 會；這份的 port 都由 Browser 建立、send right 只交給那個 child。
 - **Linux 的 memfd 要不要加 `MFD_NOEXEC_SEAL`**：2026-11-17 的看法：加，kernel 不認得就不加，Chromium 也是。
 - **哪幾套測試在 CI 上用多個 process 跑**：WPT 可以。情境和 reftest 怎麼啟動、要全部還是一部分、多花多少時間，還沒確認。
-- **序列化的格式**：看法：postcard（ipc-channel 0.21 也從 bincode 換成它）。要先量的是 frame：一個 `CompositorFrame` 有成百上千個矩形和矩陣，每個 frame 編一次、解一次，而 postcard 把整數一個一個編成不定長度；Mojo 的格式對整塊的數字幾乎是直接複製。原型時拿真的 frame 量編和解各要多久，太慢的話換固定長度的格式，或把大塊的數字當成位元組放。格式也要能設巢狀深度的上限（「`ipc` crate」的控制通道）。
-- **bytes 型別的門檻**：Chromium 的 `BigBuffer` 是 64 KB；量過再定。門檻也決定大的訊息會不會擋住小的：四種訊息共用一條通道和一把鎖，main thread 送一則很大的訊息時，compositor 的 frame 和輸入的回應排在後面，所以大的內容要盡量走共用記憶體。
 - **Browser 的 IO thread 要不要合成一條**：現在每個 renderer 一條，分頁多的時候 thread 跟著多；Chromium 是整個 process 一條處理所有通道。IO thread 的迴圈本來就不寫死成只等一條通道（「`ipc` crate」），合起來不用改設計；量到 thread 的數量是問題時再做。
-- **第二步（ring）的門檻**：第 3 步量到控制通道的系統呼叫占多少才值得做。
 - **背景 GC**：拆 process、有背景分頁時，V8 的 heap 在背景要不要 concurrent GC。
-- **什麼時候排**。
 
 ## 之後的可能
 
@@ -327,5 +395,7 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
 - **child 之間直接互通**（renderer 和 GPU process、renderer 和 Network process、跨 renderer 的 `MessagePort` 和 shared worker）：先由 Browser 轉送，量到太慢才加直接的通道。通道的兩端都由 Browser 建好再交出去，每對 process 之間一條；上面的每個對象是一個目的地的編號，由 Browser 向收的一方登記它代表誰、能做什麼。Chromium 是讓「拿到通道」本身代表權限（每個 frame、每個 worker 各一條 Mojo 的 pipe，renderer 直接對 Network process 送請求）；編號加登記是同一件事。不同通道之間的訊息沒有先後的保證，現在靠順序的檢查（先登記 worker、再替它送請求）到時要改寫。
 - **OOP-R（T3）**：raster 搬到 GPU 那一側，tile 不再經過 CPU；需要 display list、`gfx::FontData`、`gfx::ImageData` 能跨 process。
 - **macOS 上直接交 GPU 的 texture（T2）**：`IOSurface` 能換成 Mach port 放進訊息，傳遞這一段是現成的；wgpu 那一側的問題不變。
-- **data pipe**：串流的資料（子資源的回應、`fetch` 的 body）用共用記憶體裡的 ring 傳，Chromium 的 `URLLoaderClient` 就是這樣收 body；第二步的 ring 可以直接延伸。
+- **子資源的 body 也走 data pipe**：現在只有導覽的 body 是串流的，子資源和 `fetch()` 收齊才交給 renderer；Chromium 的 `URLLoaderClient` 收 body 都經過 data pipe。
+- **body 的管道換成共用記憶體裡的 ring**（第 21 條）：接上 machopo 之後量到大的頁面載入時控制通道被 body 佔住，才換；每條管道一塊 Browser 建的記憶體，Mojo 的 data pipe 的做法。`Producer` 和 `Consumer` 的介面不變。原型量到當管道送 16 MiB 是 0.31 ms（走控制通道是 1.47 ms）。
+- **訊息的 ring**（第 19 條）：訊息變密、量到控制通道的系統呼叫值得省時，每個方向加一個共用記憶體裡的 SPSC ring，照 `details.md` 的「ring 的設計」；帶 handle 的訊息照舊走控制通道，兩條路的先後靠訊息的序號排回來。原型的 `ring.rs` 是它最小的樣子。
 - **Mojo 式的介面**：訊息多到 enum 難以管理時，在 `ipc` 上面加介面和 `Remote` / `Receiver`。

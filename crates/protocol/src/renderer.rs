@@ -206,9 +206,9 @@ pub enum RendererMsg {
         /// a data pipe's consumer handle): a document that came over the
         /// network has one, which may be over already; a page of the
         /// browser's own, an error page or a blob's comes whole. It
-        /// doesn't cross a process yet: one of its own would have it as a
-        /// handle in shared memory alongside the message, as Mojo's
-        /// messages carry handles.
+        /// doesn't cross a process yet: to a renderer of its own the bytes
+        /// would go as messages, written into a pipe of that process which
+        /// whatever reads its channel puts here.
         #[serde(skip)]
         body_pipe: Option<ipc::data_pipe::Consumer>,
         /// The entry it commits to, as the navigation started.

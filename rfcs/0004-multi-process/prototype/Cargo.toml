@@ -1,0 +1,23 @@
+# A prototype for RFC 0004 (multi-process), macOS only, not part of machopo's
+# workspace: Mach port channels, the rendezvous, shared memory by memory
+# entries, a child in a Seatbelt sandbox, and the timings the RFC asks for.
+#   CARGO_TARGET_DIR=../../../target/mp-prototype cargo run --release
+[workspace]
+
+[package]
+name = "mp-prototype"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+crossbeam-channel = "0.5"
+libc = "0.2"
+mach2 = "0.6"
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+protocol = { path = "../../../crates/protocol" }
+
+[profile.release]
+debug = 1

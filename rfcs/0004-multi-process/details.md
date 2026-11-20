@@ -6,30 +6,46 @@
 
 ## 現在的邊界
 
-現況以 `docs/architecture.md` 的「Process 的邊界」為準：規則、`sanity.py boundary` 檢查什麼、剩下的例外（tile 的交接）和不算例外的東西都寫在那裡，這裡不重複。
+現況以 `docs/architecture.md` 的「Process 的邊界」為準：規則、`sanity.py boundary` 檢查什麼、剩下的例外和不算例外的東西都寫在那裡，這裡不重複。
 
-**2026-10-04 盤點之後變了的**（排程時要照現在的程式重新看，`README.md` 的「待決定」）：
+**2026-11-20 的盤點**（`main` 的 `dcd1b61`；2026-10-04 那一次之後，多了分頁、worker、Browser 擁有的 frame 樹、串流的載入、profile 和同步等 Browser 的呼叫）。renderer 和 Browser、Viz 之間的每一條路：
 
-- 多了分頁：每個分頁一組 renderer 的 thread，一個 `RenderProcessHost`；renderer 的 thread 結束時分頁顯示 sad tab。
-- renderer 裡多了 thread：dedicated worker、canvas 的 raster thread、canvas 的 encoder、raster worker。它們都在 renderer 這一側，不跨邊界；但 canvas 的快照和 tile 一樣要放上 GPU。
-- raster 從 Skia 換成 vello_cpu，圖片用 `image` 解碼；所有模式都經過 wgpu，tile 一律走 shared image，上傳改成一輪一次。
-- `protocol` 多了 DevTools 和自動化的訊息，都能序列化。
+| 路 | 現在 | 能不能直接過 process |
+| --- | --- | --- |
+| Browser → renderer 的訊息（`RendererMsg`，29 種） | Browser 的 thread 呼叫 `RendererSender::send`，它照訊息分到 main thread 的 queue、worker 的 thread、DevTools 的 queue，或同步呼叫等回答的位置 | 可以：分派已經在 renderer 這一側的 `RendererSender` 裡，renderer 的 IO thread 讀出訊息之後呼叫它 |
+| renderer → Browser 的訊息（`RendererHostMsg`，38 種） | crossbeam 到每個 renderer 一條的 `Chrome_IOThread` | 可以。但 Browser 對它們做的事（核對請求和 cookie 的 loader、子資源交給 `net`、登記 worker 和 blob URL、壞訊息、其餘轉給 UI thread）都寫在 `RenderProcessHost::launch` 裡那條 thread 的迴圈（約 360 行），要先抽成物件 |
+| 同步的呼叫（`OpenStorageArea`、`GetCookies`、`CookiesEnabled`） | 帶編號的一般訊息，回答放進 scheduler 裡等回答的位置，main thread 只等它 | 可以：設計時就照 process 的邊界做，回答由讀通道的 thread 放進同一個位置 |
+| compositor ↔ Viz 的訊息（`CompositorMsg` 3 種、`CompositorFrameSinkMsg` 3 種） | 綁著 `FrameSinkId` 的 sender；`BeginFrame` 是 Browser 建的 closure | 可以（經過 Browser 的 IO thread 轉手） |
+| tile 和 canvas 的快照上 GPU（例外 1） | compositor 同步呼叫 Viz 的 `SharedImageInterface::create_shared_image`（兩處：tile、canvas 的快照），`SharedImage` 的 backing 是 `Arc<dyn Any>`，生命週期靠參考計數；像素是 renderer 用 vello_cpu 畫的 CPU 記憶體，renderer 這一側沒有 wgpu | 不行 |
+| 導覽的 body（例外 7） | `CommitNavigation` 帶開頭的 1024 bytes 和其餘部分的 `ipc::data_pipe::Consumer`（`#[serde(skip)]`）；管道是同一個 process 裡一把鎖守著的佇列 | 不行 |
+| 子資源的回應、worker 的主 script | 收齊之後整份放在訊息裡（`LoadResult` 的 `Bytes`） | 可以，但大的每次整份複製進通道 |
+| blob 的內容 | `RegisterBlobUrl` 帶 `Arc<[u8]>`，renderer 送給 Browser | 可以，同上 |
+| 沒有 GPU 時的像素 | `TransferableResource::pixels` 的 `Arc<[u8]>` 跟著 frame | 可以，同上 |
+| 啟動 | `RendererFlags`（能序列化）、`RendererEndpoints`（channel 的一端和上面的 `SharedImageInterface`）、`ScriptEngineFactory`（函式） | flags 可以；其他兩樣由 child 的 `main` 和控制通道取代 |
+| 字型 | renderer 自己經過 fontique 讀系統的字型檔（`--test-fonts` 時是內建的） | 可以：child 自己讀。之後的 sandbox 要開放讀字型目錄，或改由 Browser 給 |
+| trace（`MACHOPO_TRACE`） | 整個 process 一份，每條 thread 的 span 寫進同一個檔案 | 不行：child 的 span 要另外收（每個 process 各寫一個檔案，或送回 Browser） |
 
-**依賴單一 process 的測試**：`browser` 的 `DrivenViz`（測試自己扮演 Viz）、headless、`FakeGpu`。它們直接傳 closure、`Arc` 和 process 內的 channel，所以保留單一 process 的模式，不把它們改成跨 process。
+**不跨邊界、但每個 process 會各有一份的**：V8 的 platform 和它的 thread、elise 的 worker pool、renderer 裡的 thread（compositor、raster worker、dedicated worker、canvas 的 raster 和 encoder）、名稱表和屬性值的表、字型的 collection 和 raster 的快取。Browser 那一側不變的：`net`（cookie、blob URL 的表）、`DomStorageContext`、profile 的資料夾（child 不開它）、DevTools 和自動化的 server。
+
+**依賴單一 process 的測試**：`browser` 的 `DrivenViz`（測試自己扮演 Viz）、headless、`FakeGpu`，和 `browser`、`shell` 在 process 裡建分頁的測試。它們直接傳 closure、`Arc` 和 process 內的 channel，所以保留單一 process 的模式，不把它們改成跨 process。
 
 ## 要改的地方
 
 | 東西 | 現在 | 改成 |
 | --- | --- | --- |
-| tile 的 `SharedImage` | compositor 同步呼叫 Viz 建 texture，backing 是 `Arc<dyn Any>` | mailbox 加上 region 的編號；Viz 收到時建 texture、記在 mailbox 表（T1 的話） |
+| tile 和 canvas 快照的 `SharedImage` | compositor 同步呼叫 Viz 建 texture，backing 是 `Arc<dyn Any>` | mailbox 加上 region 的編號；Viz 收到時建 texture、記在 mailbox 表（T1） |
 | tile 的生命週期 | 參考計數 | `ReturnResources`（Viz → compositor）和 `DestroySharedImage`（compositor → Viz） |
-| 大的位元組資料（`TransferableResource::pixels`、`CommitNavigation` 的 body、子資源的回應） | `Arc<[u8]>`、`Vec<u8>` 放在訊息裡 | `protocol` 的 bytes 型別：單一 process 時照舊，跨 process 時大的放進共用記憶體 |
+| 導覽的 body 的管道 | 同一個 process 裡的佇列，`Consumer` 放在 `CommitNavigation` 裡 | 一段一段走控制通道，renderer 回報讀了多少（`README.md` 的「導覽的 body 的管道」）；renderer 的 IO thread 寫進它自己 process 裡的管道 |
+| 大的位元組資料（子資源的回應、worker 的 script、blob 的內容、沒有 GPU 時的像素） | `Bytes`、`Arc<[u8]>` 放在訊息裡 | `protocol` 的 bytes 型別：單一 process 時照舊，跨 process 時大的放進共用記憶體 |
+| Browser 處理一個 renderer 的訊息 | `RenderProcessHost::launch` 裡 IO thread 的迴圈 | 一個只有「收到這則訊息」一個入口的物件，兩種模式共用 |
 | `BeginFrame` | Viz 呼叫 Browser 給的 closure，送進 compositor 的 channel | `RenderProcessHost` 讓 closure 寫進控制通道；renderer 不必改 |
 | compositor 送給 Viz | 綁著 `FrameSinkId` 的 `CompositorFrameSinkSender` | 經過控制通道到 Browser 的 IO thread，由它補上 `FrameSinkId` 轉給 Viz |
 | `RendererFlags` | 啟動 thread 時的參數 | 命令列 |
 | script engine | 啟動的一方給的 `ScriptEngineFactory` | child 的 `main` 選 |
 | `RendererGone` | renderer 的 thread 結束、channel 關閉 | 控制通道斷了，或 renderer 送了壞訊息 |
-| renderer 這一側 | 沒有 IO thread | 新的 IO thread 讀控制通道，放進 main thread 和 compositor 的 task queue |
+| 結束一個 renderer（`kill`、壞訊息） | 送 `Shutdown`、不再轉它的訊息；thread 自己結束 | 結束那個 process |
+| renderer 這一側 | 沒有 IO thread | 新的 IO thread 讀控制通道，呼叫 `RendererSender::send`（main thread、worker、DevTools、等回答的位置）和 compositor 的 queue |
+| trace | 一個 process、一個檔案 | 還沒決定（「待決定」） |
 
 ## 其他實作
 
@@ -276,7 +292,7 @@ renderer 這一側在單一 process 時本來就沒有 IO thread：crossbeam 是
 
 ringbuf、rtrb、crossbeam 的 `ArrayQueue` 是給同一個 process 的 thread 用的，信任 index；iceoryx2 的 lock-free queue 能放進共用記憶體，但威脅模型是互相合作的 process。shmem-ipc 的 `ringbuf.rs` 是為不可信的對端設計的，只有一個檔案、不依賴 Linux，所以照它的設計自己寫，不依賴那個 crate（它整體只支援 Linux、2022 年之後沒更新）。Chromium 的 `ChannelLinux` 和 WebKit 的 stream connection 是同一個想法的另外兩個實作。
 
-### tile 怎麼交給 Viz（還沒決定）
+### tile 怎麼交給 Viz（選了 T1，`README.md` 的第 23 條）
 
 - **T1. 共用記憶體，Viz 上傳**（one-copy raster；Chromium 在 OOP-R 之前的做法）：renderer 不碰 GPU，sandbox 最緊；raster 的位置不變。
 - **T2. 跨 process 的 GPU texture**（macOS 的 `IOSurface`）：renderer 自己上傳，要能存取 GPU，sandbox 得開 IOKit；wgpu 沒有跨 process 共用 texture 的 API，要動到 wgpu 的 Metal 層。
@@ -340,6 +356,8 @@ ringbuf、rtrb、crossbeam 的 `ArrayQueue` 是給同一個 process 的 thread �
 - 測試的腳本是 Python（`socket.send_fds`、`socket.recv_fds`），沒有放進 repo；Linux 上沒有跑。之後在 Linux 上要傳 socket 的 fd 時，先照同樣的測法測。
 
 ## ring 的設計
+
+訊息的 ring 沒有採用（`README.md` 的第 19 條）；body 的管道也不用 ring（第 21 條）。這一節留給之後要加的時候（`README.md` 的「之後的可能」）。
 
 ### shmem-ipc 的 `ringbuf.rs`
 
