@@ -48,3 +48,5 @@ encoding_rs.workspace = true
 # A navigation's randomized `confidence` (`navigation_timing`).
 getrandom.workspace = true
 url.workspace = true
+# A frame's registrable domain, for DevTools (`page_agent`).
+site.workspace = true

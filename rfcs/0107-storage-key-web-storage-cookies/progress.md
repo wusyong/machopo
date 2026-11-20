@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | 1a：`site` crate：`Site`（HTML 的「obtain a site」）和 registrable domain（`psl`） | 完成 | 2026-11-20 |
 | 1b：`StorageKey`，frame 樹在文件 commit 時算出每個 frame 的 key | 完成 | 2026-11-20 |
-| 1c：DevTools 的 `domainAndRegistry`，第 1 階段的檢查和文件 | 未開始 | |
+| 1c：DevTools 的 `domainAndRegistry`，第 1 階段的檢查和文件 | 完成 | 2026-11-20 |
 | 2：profile 和磁碟 | 未開始 | |
 | 3：Web Storage | 未開始 | |
 | 4：`net` 的 cookie | 未開始 | |
@@ -24,6 +24,7 @@
 | registrable domain：public suffix 加一個 label（萬用字元和例外、punycode）、private 的後綴和不認得的頂層網域也算、public suffix 本身、IP 位址、有空的 label 的沒有、最後的點留著 | `cargo test -p site` |
 | 網站：同一個 registrable domain 的 host 是同一個、不看 port、scheme 不同就不同、沒有 registrable domain 的 host 自己是網站、opaque 的 origin 只和自己相等 | `cargo test -p site` |
 | storage key：最上層的 frame 是第一方；別的網站的 frame 是第三方，嵌在不同的最上層網站底下各是一個 key；中間隔著別的網站的 frame 時是第三方；opaque 的 origin 和 opaque 的最上層是第三方 | `cargo test -p site` |
+| DevTools 的 `domainAndRegistry`：frame 的網址的 host 的 registrable domain（private 的後綴也算），位址、public suffix 本身、單一 label、沒有 host 的是空的 | `cargo test -p renderer --lib page_agent::`；`cargo test -p shell --test it a_frames_domain_and_registry` |
 | frame 樹的 key：文件 commit 時、子 frame 建立時（parent 的 origin）照它所在的 frame 算，最上層的網站是 main frame 的；重設之後是 opaque 的 | `cargo test -p browser --lib frame_tree::` |
 
 ## 做過的檢查
@@ -52,3 +53,15 @@ macOS、Apple M4，2026-11-20。
 - 新的測試：`site` 的 `storage_key.rs` 4 個；`browser` 的 `frame_tree` 單元測試 1 個（main frame、同網站和別的網站的子 frame、中間隔著別的網站的孫 frame、重設）。
 - mutation test（`mutants-1b.toml`）8 個，全部抓到。第一輪 9 個抓到 6 個：「opaque 的 origin」和「opaque 的最上層網站」兩個判斷互相涵蓋（opaque 的網站只和自己相等，只有 opaque 的最上層 frame 自己要靠判斷擋），拿掉一個、加上註解，mutant 改成拿掉剩下那個；「只看 parent」時孫 frame 照樣是第三方、但最上層的網站錯了，測試補上檢查最上層的網站。
 - 跑過的檢查：`cargo test -p browser -p site`（187 個）、`cargo clippy -p site -p browser --all-targets -- -D warnings`；`sanity.py` 的 `deps`、`unsafe`、`tests`、`numerics`、`boundary`、`docs`。
+
+### 1c：DevTools 的 `domainAndRegistry`，第 1 階段的檢查
+
+macOS、Apple M4，2026-11-20。
+
+- 讀了 Blink 的 `InspectorPageAgent`：`setDomainAndRegistry(GetDomainAndRegistry(url.Host(), kIncludePrivateRegistries))`，用 frame 的網址（不是 origin）的 host。
+- `renderer` 的 `page_agent`：`domain_and_registry`（`site::registrable_domain`，位址和沒有 host 的是空的），取代寫死的空字串；`renderer` 依賴 `site`。
+- 新的測試：`page_agent` 的單元測試 1 個（網域、private 的後綴、不認得的頂層網域、位址、`localhost`、public suffix 本身、`about:`、`file:`、不是網址的）；`shell` 的 `devtools` 1 個（`--host-resolver-rules` 把 `www.example.co.uk` 對到測試伺服器，`Page.getFrameTree` 給 `example.co.uk`）。
+- mutation test（`mutants-1c.toml`）3 個，全部抓到。
+- 文件：`docs/limitations.md` 拿掉 `domainAndRegistry` 一律是空的；IntersectionObserver 那一條原因裡的「沒有 public suffix list 判斷 site」改成「判斷遮擋時不分 site」（還是不分）。
+- 第 1 階段的檢查：`cargo test --workspace` 4285 個通過、0 個失敗、1 個 ignored；`cargo clippy --workspace --all-targets -- -D warnings` 沒有警告；`cargo fmt --check` 抓到 1c 的 DevTools 測試的一行，照 rustfmt 改了。畫面上看不出差別（只有 DevTools 的欄位），沒有新的情境。
+- 跑過的檢查：`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。

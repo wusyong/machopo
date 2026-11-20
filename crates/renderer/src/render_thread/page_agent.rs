@@ -147,9 +147,7 @@ impl FrameInfo {
             "id": self.id,
             "loaderId": self.loader_id,
             "url": url,
-            // machopo has no public suffix list: its registrable domain isn't
-            // known (Chrome's is empty for an IP address too).
-            "domainAndRegistry": "",
+            "domainAndRegistry": domain_and_registry(url),
             "securityOrigin": self.origin,
             "mimeType": self.mime_type,
             "secureContextType": self.secure_context,
@@ -576,6 +574,21 @@ fn subtree(frames: &[FrameInfo], frame: &FrameInfo, resources: bool) -> Value {
 
 /// Whether `origin` is the machine itself's (`localhost`, a loopback
 /// address), as Chrome's `securityOriginDetails` tells it.
+/// The registrable domain of `url`'s host, private suffixes included, as
+/// Blink's `InspectorPageAgent` tells a frame's: empty for an address, a
+/// public suffix itself, or a URL with no host.
+fn domain_and_registry(url: &str) -> String {
+    let Ok(parsed) = url::Url::parse(url) else {
+        return String::new();
+    };
+    let Some(url::Host::Domain(name)) = parsed.host() else {
+        return String::new();
+    };
+    site::registrable_domain(&url::Host::Domain(name))
+        .unwrap_or_default()
+        .to_owned()
+}
+
 fn is_localhost(origin: &str) -> bool {
     let Ok(url) = url::Url::parse(origin) else {
         return false;
@@ -591,6 +604,27 @@ fn is_localhost(origin: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A frame's `domainAndRegistry` is its URL's host's registrable
+    /// domain, as Chrome tells it: empty for an address, a public suffix
+    /// itself, a single label or no host.
+    #[test]
+    fn a_frames_domain_and_registry_is_its_registrable_domain() {
+        for (url, expected) in [
+            ("https://www.example.co.uk/a#b", "example.co.uk"),
+            ("https://x.alice.github.io/", "alice.github.io"),
+            ("http://www1.web-platform.test:8000/", "web-platform.test"),
+            ("http://127.0.0.1:8000/", ""),
+            ("http://[::1]/", ""),
+            ("http://localhost:3000/", ""),
+            ("https://github.io/", ""),
+            ("about:blank", ""),
+            ("file:///tmp/a.html", ""),
+            ("not a URL", ""),
+        ] {
+            assert_eq!(domain_and_registry(url), expected, "{url}");
+        }
+    }
 
     /// A URL loaded again takes its first load's place, as Blink's
     /// fetcher keeps one resource per URL; a failure is listed by the

@@ -718,6 +718,22 @@ fn a_heap_snapshot_has_the_dom() {
     );
 }
 
+/// A frame's `domainAndRegistry` is its URL's registrable domain (here a
+/// name the host resolver maps to the test server's address), as Chrome
+/// tells it.
+#[test]
+fn a_frames_domain_and_registry_is_its_registrable_domain() {
+    let server = server(&[("/", Route::ok("text/html", "<!DOCTYPE html>page"))]);
+    let machopo = Machopo::start_with(&["--host-resolver-rules", "MAP *.example.co.uk 127.0.0.1"]);
+    let (mut page, _) = page(&machopo);
+    load(&mut page, &server.url_for_host("www.example.co.uk", "/"));
+    let frames = page.call(None, "Page.getFrameTree", json!({}))["result"]["frameTree"].clone();
+    assert_eq!(
+        frames["frame"]["domainAndRegistry"], "example.co.uk",
+        "{frames}"
+    );
+}
+
 /// The page's frames, as `Page.getResourceTree` and `getFrameTree` give
 /// them: the main frame (the target's id, its document's URL, origin and
 /// MIME type, as secure as an HTTP page of the machine itself is) and its

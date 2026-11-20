@@ -4031,6 +4031,7 @@ dependencies = [
  "raster",
  "serde",
  "serde_json",
+ "site",
  "style",
  "trace_event",
  "tracing",

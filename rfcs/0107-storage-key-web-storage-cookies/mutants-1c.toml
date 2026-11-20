@@ -1,0 +1,29 @@
+# Step 1c: DevTools tells a frame's registrable domain
+# (`domainAndRegistry`), as Chrome: its URL's host's, empty for an
+# address or a URL with no host.
+test = ["sh", "-c", "cargo test -q -p renderer --lib page_agent:: && cargo test -q -p shell --test it a_frames_domain_and_registry"]
+timeout = 1200
+
+[[mutant]]
+name = "the frame's registrable domain isn't told"
+file = "crates/renderer/src/render_thread/page_agent.rs"
+from = '''            "domainAndRegistry": domain_and_registry(url),'''
+to = '''            "domainAndRegistry": "",'''
+
+[[mutant]]
+name = "a URL with no host name has one"
+file = "crates/renderer/src/render_thread/page_agent.rs"
+from = '''    let Some(url::Host::Domain(name)) = parsed.host() else {
+        return String::new();
+    };'''
+to = '''    let Some(url::Host::Domain(name)) = parsed.host().or(Some(url::Host::Domain("a.example"))) else {
+        return String::new();
+    };'''
+
+[[mutant]]
+name = "the registrable domain is the host"
+file = "crates/renderer/src/render_thread/page_agent.rs"
+from = '''    site::registrable_domain(&url::Host::Domain(name))
+        .unwrap_or_default()'''
+to = '''    Some(name)
+        .unwrap_or_default()'''
