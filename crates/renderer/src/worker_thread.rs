@@ -592,7 +592,7 @@ impl dom_api::WorkerGlobalHost for GlobalHost {
             worker: Some(self.id),
             url: url.to_owned(),
             mime_type: data.type_().to_owned(),
-            bytes: data.shared_bytes(),
+            bytes: data.shared_bytes().into(),
         });
     }
 

@@ -1294,7 +1294,7 @@ mod drawing_tests {
             id: ResourceId(7),
             size: Size::new(2, 2),
             format: ResourceFormat::Rgba8Premul,
-            pixels: Arc::from([0, 0, 255, 255].repeat(4)),
+            pixels: protocol::BigBuffer::from([0, 0, 255, 255].repeat(4)),
             shared_image: None,
         });
         let mut display = display(size);
@@ -1330,7 +1330,7 @@ mod drawing_tests {
             id: ResourceId(7),
             size,
             format: ResourceFormat::Rgba8Premul,
-            pixels: Arc::from([]),
+            pixels: protocol::BigBuffer::from([]),
             shared_image: Some(SharedImage::from_mailbox(Mailbox(3))),
         });
         let mut display = display(size);
@@ -1366,7 +1366,7 @@ mod drawing_tests {
             id: ResourceId(7),
             size,
             format: ResourceFormat::Rgba8Premul,
-            pixels: Arc::from([255, 0, 0, 255].repeat(4)),
+            pixels: protocol::BigBuffer::from([255, 0, 0, 255].repeat(4)),
             shared_image: Some(SharedImage::from_mailbox(Mailbox(4))),
         });
         let mut display = display(size);
@@ -1400,7 +1400,7 @@ mod drawing_tests {
                 id: ResourceId(7),
                 size: Size::new(2, 1),
                 format: ResourceFormat::Rgba8Premul,
-                pixels: Arc::from([255, 0, 0, 255, 0, 0, 255, 255]),
+                pixels: protocol::BigBuffer::from([255, 0, 0, 255, 0, 0, 255, 255]),
                 shared_image: None,
             });
             let mut display = display(size);
@@ -1728,7 +1728,7 @@ mod drawing_tests {
             id: ResourceId(7),
             size,
             format: ResourceFormat::Rgba8Premul,
-            pixels: Arc::from([]),
+            pixels: protocol::BigBuffer::from([]),
             shared_image: Some(SharedImage::from_mailbox(Mailbox(9))),
         });
         display.submit_compositor_frame(SINK, LocalSurfaceId::default(), f);

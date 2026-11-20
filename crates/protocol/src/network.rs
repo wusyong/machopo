@@ -4,7 +4,7 @@
 
 use std::net::SocketAddr;
 
-use bytes::Bytes;
+use crate::BigBuffer;
 use ipc::TimeTicks;
 use serde::{Deserialize, Serialize};
 
@@ -97,7 +97,7 @@ pub struct ResourceRequest {
     pub mode: RequestMode,
     pub credentials: CredentialsMode,
     /// Its body, whole; `None` for a null one.
-    pub body: Option<Vec<u8>>,
+    pub body: Option<BigBuffer>,
     pub redirect: RedirectMode,
     /// What only the browser gives a request (Chromium's
     /// `ResourceRequest::TrustedParams`): none from a renderer, whose
@@ -411,7 +411,7 @@ pub struct ResourceResponse {
     pub encoded_body_length: u64,
     /// Shared, not copied, with whoever else keeps it (DevTools' record of
     /// the response).
-    pub body: Bytes,
+    pub body: BigBuffer,
 }
 
 /// How a load ended (`network::URLLoaderCompletionStatus`): told last,

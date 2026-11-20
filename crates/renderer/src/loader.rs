@@ -126,7 +126,7 @@ impl BlobUrls {
             worker: None,
             url: url.to_owned(),
             mime_type: mime_type.to_owned(),
-            bytes,
+            bytes: bytes.into(),
         });
     }
 
@@ -179,7 +179,10 @@ pub(crate) fn fetch_resource_request(request: &dom::FetchRequest) -> ResourceReq
     resource.method.clone_from(&request.method);
     resource.headers.clone_from(&request.headers);
     resource.initiator = Some(request.initiator.clone());
-    resource.body = request.body.as_ref().map(|body| body.to_vec());
+    resource.body = request
+        .body
+        .as_ref()
+        .map(|body| protocol::BigBuffer::copy_from_slice(body));
     resource.redirect = match request.redirect {
         dom::RequestRedirect::Follow => RedirectMode::Follow,
         dom::RequestRedirect::Error => RedirectMode::Error,

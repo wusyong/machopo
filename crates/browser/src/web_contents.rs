@@ -1369,7 +1369,7 @@ impl WebContents {
                     mime_type: head.mime_type,
                     charset: head.charset,
                     content_language,
-                    body: response.body,
+                    body: response.body.into_bytes(),
                     body_pipe: None,
                     loaded: Some(loaded),
                     error_page: false,

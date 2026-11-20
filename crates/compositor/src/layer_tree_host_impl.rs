@@ -427,7 +427,7 @@ enum Rastered {
     Solid(Color, raster::CpuOnly),
     Pixels {
         size: Size,
-        pixels: Arc<[u8]>,
+        pixels: protocol::BigBuffer,
         shared_image: Option<protocol::viz::SharedImage>,
         image: Option<crate::ClientSharedImage>,
         cpu_only: raster::CpuOnly,
@@ -1026,9 +1026,9 @@ impl LayerTreeHostImpl {
                         let shared_image = image
                             .as_ref()
                             .map(|image| protocol::viz::SharedImage::from_mailbox(image.mailbox()));
-                        let pixels: Arc<[u8]> = match shared_image {
-                            Some(_) => Arc::from([]),
-                            None => Arc::from(snapshot.as_bytes()),
+                        let pixels = match shared_image {
+                            Some(_) => protocol::BigBuffer::new(),
+                            None => protocol::BigBuffer::copy_from_slice(snapshot.as_bytes()),
                         };
                         layer.resource = Some((
                             TransferableResource {
@@ -1159,7 +1159,7 @@ impl LayerTreeHostImpl {
                 let image = images.create(size, buffer);
                 return Rastered::Pixels {
                     size,
-                    pixels: Arc::from([]),
+                    pixels: protocol::BigBuffer::new(),
                     shared_image: Some(protocol::viz::SharedImage::from_mailbox(image.mailbox())),
                     image: Some(image),
                     cpu_only,
@@ -1179,7 +1179,7 @@ impl LayerTreeHostImpl {
                 // copied out of the buffer, and go with the frame.
                 Rastered::Pixels {
                     size,
-                    pixels: Arc::from(drawn),
+                    pixels: protocol::BigBuffer::copy_from_slice(drawn),
                     shared_image: None,
                     image: None,
                     cpu_only,

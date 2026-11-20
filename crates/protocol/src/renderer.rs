@@ -1,8 +1,6 @@
 //! Browser <-> Renderer messages.
 
-use std::sync::Arc;
-
-use bytes::Bytes;
+use crate::BigBuffer;
 use gfx::{Color, RectF, Size};
 use serde::{Deserialize, Serialize};
 
@@ -99,7 +97,7 @@ impl Default for VisualProperties {
 pub struct HistoryEntryParams {
     /// The classic history API's state, as the renderer's engine serialized
     /// it; `None` is `null`.
-    pub state: Option<Vec<u8>>,
+    pub state: Option<BigBuffer>,
     /// Its scroll restoration mode is `"manual"`.
     pub manual_scroll_restoration: bool,
     /// The entry's index, and how many entries there are.
@@ -201,7 +199,7 @@ pub enum RendererMsg {
         content_language: Option<String>,
         /// The body's first bytes (1024, or all of it if it is shorter),
         /// or the whole body if it has no `body_pipe`.
-        body: Bytes,
+        body: BigBuffer,
         /// The rest of the body, as it comes (Chromium's `response_body`,
         /// a data pipe's consumer handle): a document that came over the
         /// network has one, which may be over already; a page of the
@@ -622,7 +620,7 @@ pub enum RendererHostMsg {
         frame: crate::FrameToken,
         url: String,
         replace: bool,
-        state: Option<Vec<u8>>,
+        state: Option<BigBuffer>,
         navigation_id: Option<u64>,
     },
     /// The renderer shows another document than the one the browser's
@@ -790,7 +788,7 @@ pub enum RendererHostMsg {
         worker: Option<u64>,
         url: String,
         mime_type: String,
-        bytes: Arc<[u8]>,
+        bytes: BigBuffer,
     },
     /// `localStorage` or `sessionStorage` (`kind`) first used in frame
     /// `frame`'s document (Chromium's `StorageArea` bound for the frame's

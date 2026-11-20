@@ -109,7 +109,7 @@ fn a_post_sent_again_sends_its_body_again() {
     get(&network, &server.url("/a")).expect("the first load succeeds");
     let mut post = ResourceRequest::new(server.url("/b"), RequestDestination::Empty);
     post.method = "POST".into();
-    post.body = Some(b"x=1".to_vec());
+    post.body = Some(b"x=1".into());
     load(&network, post).expect("the POST succeeds");
 
     let requests = server.requests();

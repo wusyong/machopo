@@ -1063,7 +1063,7 @@ fn send(url: String, method: &str, body: Option<&str>) -> ResourceRequest {
     let mut request = ResourceRequest::new(url, RequestDestination::Empty);
     request.method = method.into();
     if let Some(body) = body {
-        request.body = Some(body.as_bytes().to_vec());
+        request.body = Some(body.as_bytes().to_vec().into());
         request.headers = vec![("Content-Type".into(), "text/plain".into())];
     }
     request

@@ -29,7 +29,7 @@ use crate::mime;
 struct Entry {
     owner: u64,
     mime_type: String,
-    bytes: Arc<[u8]>,
+    bytes: Bytes,
     /// Revoked for its renderer's loads; still there for a navigation it
     /// asked for before.
     revoked: bool,
@@ -51,7 +51,7 @@ fn key(url: &str) -> Option<String> {
 }
 
 impl BlobUrlRegistry {
-    pub(crate) fn register(&self, owner: u64, url: &str, mime_type: String, bytes: Arc<[u8]>) {
+    pub(crate) fn register(&self, owner: u64, url: &str, mime_type: String, bytes: Bytes) {
         let Some(key) = key(url) else {
             return;
         };
@@ -116,14 +116,13 @@ impl BlobUrlRegistry {
                 .ok_or_else(not_found)?;
             (entry.mime_type.clone(), entry.bytes.clone())
         };
-        // The response shares the blob's bytes, whole or a range of them.
-        let bytes = Bytes::from_owner(bytes);
         if request.method != "GET" {
             return Err(NetError::new(
                 NetErrorCode::Failed,
                 format!("{}: a blob URL takes only GET", request.url),
             ));
         }
+        // The response shares the blob's bytes, whole or a range of them.
         let full_length = bytes.len() as u64;
         let range = request
             .headers
@@ -200,7 +199,7 @@ impl BlobUrlRegistry {
                 encoded_headers_length: 0,
             },
             encoded_body_length: 0,
-            body,
+            body: body.into(),
         })
     }
 }
@@ -219,7 +218,7 @@ mod tests {
             1,
             URL,
             "text/plain;charset=utf-8".into(),
-            Arc::from(&b"hello"[..]),
+            Bytes::from_static(b"hello"),
         );
         registry
     }

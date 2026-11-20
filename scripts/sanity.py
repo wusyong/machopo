@@ -274,6 +274,19 @@ PROTOCOL_ALLOWED = {
     },
 }
 
+# In `protocol`, bytes that aren't a `BigBuffer`: every run of bytes in a
+# message is one, so that a large one can leave the message for shared
+# memory without each field having to ask. `big_buffer.rs` itself is
+# skipped. Lines (trimmed) allowed, by file, with why.
+PROTOCOL_RAW_BYTES = re.compile(r"\bVec<u8>|\[u8\]>|\bBytes\b")
+PROTOCOL_BIG_BUFFER = "crates/protocol/src/big_buffer.rs"
+PROTOCOL_BYTES_ALLOWED = {
+    "crates/protocol/src/viz.rs": {
+        "pixels: bytes::Bytes,": "`CreateSharedImage`'s: a tile's pixels have their own shared memory",
+        "pub pixels: Vec<u8>,": "`CopyOutputResult`'s: Viz to the browser, in one process",
+    },
+}
+
 # State shared by every renderer in the process: statics with interior
 # mutability on the renderer's side. Allowed, by (file, name), with why.
 MUTABLE_STATIC = re.compile(
@@ -359,11 +372,11 @@ STATICS_ALLOWED = {
 def cmd_boundary(args: argparse.Namespace) -> int:
     """The renderer stays behind the process boundary: its crates don't
     depend on the browser's nor reach Viz but through their frame sink and
-    messages, `protocol` has nothing that can't cross a process but the
-    exceptions listed, and the renderer's side keeps no state shared by
+    messages, `protocol` has nothing that can't cross a process and no bytes
+    but a `BigBuffer` but the exceptions listed, and the renderer's side keeps no state shared by
     every renderer but those listed. The rules are in docs/architecture.md,
-    in its section on the process boundary; the exceptions are `PROTOCOL_ALLOWED` and
-    `STATICS_ALLOWED` in this script, each with why. An exception that is
+    in its section on the process boundary; the exceptions are `PROTOCOL_ALLOWED`,
+    `PROTOCOL_BYTES_ALLOWED` and `STATICS_ALLOWED` in this script, each with why. An exception that is
     gone (fixed) fails too, until it is taken off its list."""
     problems = []
     for crate in sorted(RENDERER_SIDE):
@@ -396,6 +409,25 @@ def cmd_boundary(args: argparse.Namespace) -> int:
         for code in lines:
             if (rel, code) not in seen:
                 problems.append(f"{rel}: allowed `{code}` isn't there any more: take it off PROTOCOL_ALLOWED")
+
+    seen = set()
+    for path in sorted((ROOT / "crates" / "protocol" / "src").rglob("*.rs")):
+        rel = path.relative_to(ROOT).as_posix()
+        if rel == PROTOCOL_BIG_BUFFER:
+            continue
+        allowed = PROTOCOL_BYTES_ALLOWED.get(rel, {})
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            code = line.strip()
+            if code.startswith("//") or not PROTOCOL_RAW_BYTES.search(code):
+                continue
+            if code in allowed:
+                seen.add((rel, code))
+            else:
+                problems.append(f"{rel}:{number}: `{code}`: bytes in a message are a `BigBuffer`; see docs/architecture.md, \"process 的邊界\"")
+    for rel, lines in PROTOCOL_BYTES_ALLOWED.items():
+        for code in lines:
+            if (rel, code) not in seen:
+                problems.append(f"{rel}: allowed `{code}` isn't there any more: take it off PROTOCOL_BYTES_ALLOWED")
 
     found = set()
     for crate in sorted(RENDERER_SIDE):

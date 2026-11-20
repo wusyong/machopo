@@ -27,6 +27,7 @@
 )]
 
 pub mod automation;
+mod big_buffer;
 pub mod devtools_network;
 pub mod header_list;
 pub mod input;
@@ -35,6 +36,7 @@ pub mod renderer;
 pub mod viz;
 pub mod webdriver;
 
+pub use big_buffer::BigBuffer;
 use serde::{Deserialize, Serialize};
 
 /// Identifies one tab's renderer-side frame tree. Stand-in for the

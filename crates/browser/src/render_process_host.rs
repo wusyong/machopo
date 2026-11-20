@@ -511,7 +511,7 @@ impl Committer {
             mime_type: document.mime_type,
             charset: document.charset,
             content_language: document.content_language,
-            body: document.body,
+            body: document.body.into(),
             body_pipe: document.body_pipe,
             history: self.history,
             navigation_start: self.navigation_start,
@@ -733,13 +733,21 @@ impl IoThreadHost {
                 bytes,
             } => match worker {
                 None => {
-                    self.network
-                        .register_blob_url(self.renderer_id, &url, mime_type, bytes);
+                    self.network.register_blob_url(
+                        self.renderer_id,
+                        &url,
+                        mime_type,
+                        bytes.into_bytes(),
+                    );
                 }
                 // One it didn't make, or gone: nothing.
                 Some(worker) if self.workers.contains_key(&worker) => {
-                    self.network
-                        .register_blob_url(self.renderer_id, &url, mime_type, bytes);
+                    self.network.register_blob_url(
+                        self.renderer_id,
+                        &url,
+                        mime_type,
+                        bytes.into_bytes(),
+                    );
                     self.worker_blob_urls.entry(worker).or_default().push(url);
                 }
                 Some(_) => {}
@@ -1109,7 +1117,7 @@ mod tests {
             worker,
             url: url.to_owned(),
             mime_type: "text/plain".to_owned(),
-            bytes: Arc::from(&b"blob"[..]),
+            bytes: b"blob".into(),
         }
     }
 

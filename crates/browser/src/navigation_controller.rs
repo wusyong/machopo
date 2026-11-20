@@ -30,7 +30,7 @@ pub struct FrameNavigationEntry {
     pub document: u64,
     /// The classic history API's state, as the renderer serialized it;
     /// `None` is `null` (part of Chromium's `PageState`).
-    pub state: Option<Vec<u8>>,
+    pub state: Option<protocol::BigBuffer>,
     /// Its scroll restoration mode is `"manual"`.
     pub manual_scroll_restoration: bool,
 }
@@ -581,7 +581,7 @@ impl NavigationController {
         frame: FrameToken,
         url: String,
         replace: bool,
-        state: Option<Vec<u8>>,
+        state: Option<protocol::BigBuffer>,
     ) {
         let Some(path) = path(tree, frame) else {
             return;
@@ -1098,7 +1098,7 @@ mod tests {
         let mut controller = NavigationController::default();
         commit(&mut controller, &tree, 1, NavigationType::NewEntry, "a");
         controller.set_manual_scroll_restoration(&tree, MAIN, true);
-        controller.did_commit_same_document(&tree, MAIN, "a#x".into(), false, Some(vec![1]));
+        controller.did_commit_same_document(&tree, MAIN, "a#x".into(), false, Some(vec![1].into()));
         let root = |controller: &NavigationController, index| {
             controller.entry(index).expect("an entry").root().clone()
         };
@@ -1106,15 +1106,15 @@ mod tests {
             (root(&controller, 0).document, root(&controller, 1).document),
             (1, 1)
         );
-        assert_eq!(root(&controller, 1).state, Some(vec![1]));
+        assert_eq!(root(&controller, 1).state, Some(vec![1].into()));
         assert!(root(&controller, 1).manual_scroll_restoration);
         assert_eq!(document(&controller, 0), document(&controller, 1));
-        controller.did_commit_same_document(&tree, MAIN, "a#y".into(), true, Some(vec![2]));
+        controller.did_commit_same_document(&tree, MAIN, "a#y".into(), true, Some(vec![2].into()));
         assert_eq!(urls(&controller), ["a", "a#y"]);
-        assert_eq!(root(&controller, 1).state, Some(vec![2]));
+        assert_eq!(root(&controller, 1).state, Some(vec![2].into()));
         commit(&mut controller, &tree, 2, NavigationType::Reload, "a#y");
         assert_eq!(root(&controller, 1).document, 2);
-        assert_eq!(root(&controller, 1).state, Some(vec![2]));
+        assert_eq!(root(&controller, 1).state, Some(vec![2].into()));
         assert_ne!(document(&controller, 0), document(&controller, 1));
         assert_eq!(document(&controller, 1), 2);
         assert_eq!(controller.offset_and_length(), (1, 2));
@@ -1122,7 +1122,10 @@ mod tests {
             let p = controller.entry_params(&tree, MAIN, kind);
             (p.state, p.manual_scroll_restoration, p.index, p.length)
         };
-        assert_eq!(params(NavigationType::Reload), (Some(vec![2]), true, 1, 2));
+        assert_eq!(
+            params(NavigationType::Reload),
+            (Some(vec![2].into()), true, 1, 2)
+        );
         assert_eq!(params(NavigationType::HistoryIndex(0)), (None, true, 0, 2));
         assert_eq!(params(NavigationType::NewEntry), (None, false, 2, 3));
         assert_eq!(params(NavigationType::Replace), (None, false, 1, 2));
@@ -1375,7 +1378,7 @@ mod tests {
             token(2),
             "about:blank#x".into(),
             true,
-            Some(vec![2]),
+            Some(vec![2].into()),
         );
         assert_eq!(controller.entry_count(), 1);
         let frame = |controller: &NavigationController, index: usize, name: &str| {
@@ -1384,7 +1387,7 @@ mod tests {
         let two = frame(&controller, 0, "two").expect("placed");
         assert_eq!(
             (two.url.as_str(), two.document, two.state),
-            ("about:blank#x", 0, Some(vec![2]))
+            ("about:blank#x", 0, Some(vec![2].into()))
         );
         commit_child(
             &mut controller,
@@ -1403,7 +1406,13 @@ mod tests {
             "three",
         );
         controller.set_manual_scroll_restoration(&tree, token(1), true);
-        controller.did_commit_same_document(&tree, token(1), "one#y".into(), false, Some(vec![1]));
+        controller.did_commit_same_document(
+            &tree,
+            token(1),
+            "one#y".into(),
+            false,
+            Some(vec![1].into()),
+        );
         assert_eq!(controller.entry_count(), 2);
         assert_eq!(controller.current_index(), Some(1));
         let one = frame(&controller, 1, "one").expect("there");
@@ -1414,7 +1423,7 @@ mod tests {
                 one.state,
                 one.manual_scroll_restoration
             ),
-            ("one#y", 2, Some(vec![1]), true)
+            ("one#y", 2, Some(vec![1].into()), true)
         );
         assert_eq!(child_url(&controller, 0, "one"), Some("one"));
         assert_eq!(child_url(&controller, 1, "three"), Some("three"));

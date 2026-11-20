@@ -333,8 +333,6 @@ fn intersect(a: Option<RectF>, b: Option<RectF>) -> Option<RectF> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use protocol::viz::{CompositorFrameMetadata, ResourceFormat, SurfaceId};
 
     use super::*;
@@ -355,7 +353,7 @@ mod tests {
             id: ResourceId(id),
             size: Size::new(4, 4),
             format: ResourceFormat::Rgba8Premul,
-            pixels: Arc::from(vec![0; 64]),
+            pixels: protocol::BigBuffer::from(vec![0; 64]),
             shared_image: None,
         }
     }

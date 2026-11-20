@@ -1,0 +1,66 @@
+# Step 1c: `protocol::BigBuffer`, the bytes a message carries. It shares
+# what it is made from, and is written as one run of bytes.
+test = ["sh", "-c", "cargo test -q -p protocol --lib -- big_buffer"]
+timeout = 600
+
+[[mutant]]
+name = "written as a sequence of numbers"
+file = "crates/protocol/src/big_buffer.rs"
+from = '''        serializer.serialize_bytes(&self.0)'''
+to = '''        serializer.collect_seq(self.0.iter())'''
+
+[[mutant]]
+name = "a vector is copied"
+file = "crates/protocol/src/big_buffer.rs"
+from = '''        Self(Bytes::from(bytes))
+    }
+}
+
+/// The same allocation, held by one more count.'''
+to = '''        Self(Bytes::copy_from_slice(&bytes))
+    }
+}
+
+/// The same allocation, held by one more count.'''
+
+[[mutant]]
+name = "an Arc's bytes are copied"
+file = "crates/protocol/src/big_buffer.rs"
+from = '''        Self(Bytes::from_owner(bytes))'''
+to = '''        Self(Bytes::copy_from_slice(&bytes))'''
+
+[[mutant]]
+name = "the Bytes given back is a copy"
+file = "crates/protocol/src/big_buffer.rs"
+from = '''    pub fn into_bytes(self) -> Bytes {
+        self.0'''
+to = '''    pub fn into_bytes(self) -> Bytes {
+        Bytes::copy_from_slice(&self.0)'''
+
+[[mutant]]
+name = "a sequence of numbers reads as nothing"
+file = "crates/protocol/src/big_buffer.rs"
+from = '''                    bytes.push(byte);'''
+to = '''                    let _ = byte;'''
+
+[[mutant]]
+name = "its debug writes its bytes"
+file = "crates/protocol/src/big_buffer.rs"
+from = '''        write!(f, "BigBuffer({} bytes)", self.0.len())'''
+to = '''        write!(f, "BigBuffer({:?})", self.0)'''
+
+[[mutant]]
+name = "a history entry's state isn't given back to the engine"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            history.state.map(Vec::from),'''
+to = '''            None,'''
+test = ["sh", "-c", "cargo test -q -p shell --test it -- history"]
+timeout = 1800
+
+[[mutant]]
+name = "a fetch's body isn't sent"
+file = "crates/renderer/src/loader.rs"
+from = '''        .map(|body| protocol::BigBuffer::copy_from_slice(body));'''
+to = '''        .map(|_| protocol::BigBuffer::new());'''
+test = ["sh", "-c", "cargo test -q -p shell --test it -- fetch"]
+timeout = 1800

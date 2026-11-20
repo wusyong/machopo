@@ -145,7 +145,7 @@ fn a_redirect_says_what_the_next_request_is() {
     let network = network();
     let mut request = get(&server.url("/form"));
     request.method = "POST".into();
-    request.body = Some(b"x=1".to_vec());
+    request.body = Some(b"x=1".into());
     let load = start(&network, request);
     let redirect = load.next_redirect();
     assert_eq!(redirect.new_method, "GET", "a 303 goes on as a GET");

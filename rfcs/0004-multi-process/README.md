@@ -145,7 +145,7 @@ Browser process                                Renderer process
 
 ### 大的資料
 
-- **`protocol` 加一個 bytes 的型別**（Chromium 的 `mojo_base::BigBuffer`）：單一 process 時是 `Arc<[u8]>`；跨 process 時 64 KiB 以下放在訊息裡，以上放進共用記憶體（第 22 條）。兩個方向都走留著重複用的 region，不是每筆資料新建一塊（新建、map、第一次碰每一頁的成本比直接放在訊息裡還高）：Browser 送的寫進它給這個 renderer 的唯讀的 region，第一次用那一塊時連 handle 一起交出去，之後只帶編號、位置和長度，renderer 複製出來之後回報、Browser 才重複用那一段；renderer 送的寫進 Browser 之前配給它的 region，訊息只帶編號、位置和長度。macOS 上訊息一律內嵌在 Mach 訊息裡，不用 out-of-line 的 descriptor（64 KiB 以下兩者一樣快，以上已經走 region）。子資源的回應、worker 的主 script、blob 的內容（renderer 送的）和沒有 GPU 時 frame 的像素用它。導覽的 body 不用：它只有開頭在訊息裡，其餘走 data pipe（下一節）。
+- **`protocol` 加一個 bytes 的型別**（`protocol::BigBuffer`，Chromium 的 `mojo_base::BigBuffer`，第 25 條）：單一 process 時是 `Bytes`；跨 process 時 64 KiB 以下放在訊息裡，以上放進共用記憶體（第 22 條）。兩個方向都走留著重複用的 region，不是每筆資料新建一塊（新建、map、第一次碰每一頁的成本比直接放在訊息裡還高）：Browser 送的寫進它給這個 renderer 的唯讀的 region，第一次用那一塊時連 handle 一起交出去，之後只帶編號、位置和長度，renderer 複製出來之後回報、Browser 才重複用那一段；renderer 送的寫進 Browser 之前配給它的 region，訊息只帶編號、位置和長度。macOS 上訊息一律內嵌在 Mach 訊息裡，不用 out-of-line 的 descriptor（64 KiB 以下兩者一樣快，以上已經走 region）。跨邊界的訊息裡的位元組欄位都用它：子資源的回應、worker 的主 script、導覽的 body 放在訊息裡的那一段、blob 的內容和 request 的 body（renderer 送的）、history 的 state、沒有 GPU 時 frame 的像素。導覽的 body 不用：它只有開頭在訊息裡，其餘走 data pipe（下一節）。
 - **從 renderer 來的大資料**：renderer 還能寫那塊記憶體，所以 Browser 一律先複製出來再用（Chromium 的 `BigBuffer` 的註解也警告這個 TOCTOU 的風險）。
 
 ### 導覽的 body 的管道
@@ -351,6 +351,12 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
 23. **tile 經過共用記憶體交給 Viz，Viz 上傳**（2026-11-20，T1，「tile 交接」）：compositor 照舊用 CPU 畫，像素寫進 Browser 配給它的 region（第 22 條的池子），frame 的 resource 帶 mailbox 和 region 的編號、位置和長度；Viz 複製出來、上傳，生命週期用 `ReturnResources` 和 `DestroySharedImage` 兩則訊息。canvas 的快照一樣。2026-11-20 的盤點確認 renderer 這一側沒有 wgpu，raster 是 vello_cpu 畫的 CPU 像素，所以 raster 的位置不用動。對照 Chromium：OOP-R 之前是這樣（one-copy raster），現在是 OOP-R（T3）。不選 T2（renderer 自己上傳、交出 texture）和 T3（OOP-R），理由在「理由和其他做法」。之後做 GPU raster 時換成 T3：那時過邊界的是 display list 不是像素，這一段本來就要重來（「之後的可能」）。
 
 24. **tile 畫好就送「建立」的訊息，像素只複製一次、有計數守著**（2026-11-20，第 1 階段的 1b，「tile 交接」）：三則訊息（`CreateSharedImage`、緩衝區還回來、`DestroySharedImage`），編號由 renderer 取；raster 直接畫進要交出去的緩衝區，Viz 交給 GPU 是唯一的一次複製，測試用計數確認。對照 Chromium：`SharedImageInterface::CreateSharedImage` 是 client 取 mailbox、送一則訊息給 GPU process，frame 帶 mailbox 和 sync token（不同通道之間排順序用；這裡是同一條通道，不需要），用完 `DestroySharedImage`。不選像素跟著 frame 送（起草時的寫法）：少一種訊息，但上傳全部擠在收到 frame 的那一刻，捲動時新的 tile 多，那個 frame 要等它們都上傳完才能畫。不選先多複製一次、量過再省（2026-11-20 起先的建議）：使用者的意見是這種事之後容易忘記；raster 本來就畫進呼叫的一方給的緩衝區，直接做成一次不比多複製難多少，計數讓它之後不會悄悄變回去。
+
+25. **bytes 的型別是明確的 `protocol::BigBuffer`，跨邊界的訊息裡的位元組欄位都用它**（2026-11-21，第 1 階段的 1c，「大的資料」）：`BigBuffer` 包一個 `Bytes`，自己實作序列化；單一 process 時就是 `Bytes`，跨 process 時 `ipc` 在編碼期間決定放訊息裡還是放進 region（第 22 條）。
+    - **不選「不加型別，`ipc` 的序列化器攔 `serialize_bytes`」**：哪些欄位會走共用記憶體變成隱含的；`Vec<u8>` 在 serde 裡是一個一個 `u8` 的序列，攔不到，之後加的欄位會默默內嵌在訊息裡，沒有東西提醒。Chromium 也是明確的型別（mojom 裡宣告成 `BigBuffer` 的欄位才走共用記憶體）。
+    - **裡面是 `Bytes`，不是 `Arc<[u8]>`**：`Bytes` 能不複製地切片，`ResourceResponse` 和 DevTools 的紀錄已經靠它共用。
+    - **所有的位元組欄位都換，不只原本列的四種**：request 的 body（fetch 上傳的，大小沒有上限）和 history 的 state（通常小，頁面可以放很大的）也換。規則只有一句、`sanity.py boundary` 機械地擋；不選「小的留 `Vec<u8>`」，那要靠人判斷每個欄位夠不夠小。Chromium 這兩個是內嵌，大的 request body 另外走 blob 或 data pipe；machopo 沒有那幾套機制，走同一個型別。
+    - **兩個不換**（`sanity.py` 的允許清單，附理由）：`CreateSharedImage` 的像素走 tile 自己的共用記憶體（第 23、24 條）；`CopyOutputResult` 的像素是 Viz 給 Browser 的，兩者在同一個 process。
 
 ## 待決定
 

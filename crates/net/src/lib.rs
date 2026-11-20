@@ -500,7 +500,7 @@ impl NetworkContext {
     /// `URL.createObjectURL`'s `url` stands for a blob of `bytes` and
     /// `mime_type`, registered by renderer `owner` (a number unique among
     /// the renderers this context serves).
-    pub fn register_blob_url(&self, owner: u64, url: &str, mime_type: String, bytes: Arc<[u8]>) {
+    pub fn register_blob_url(&self, owner: u64, url: &str, mime_type: String, bytes: bytes::Bytes) {
         self.blob_urls.register(owner, url, mime_type, bytes);
     }
 
@@ -611,7 +611,7 @@ async fn collect(response: url_loader::Response) -> LoadResult {
     Ok(ResourceResponse {
         head,
         encoded_body_length: body.encoded_length(),
-        body: url_loader::concat(pieces),
+        body: url_loader::concat(pieces).into(),
     })
 }
 

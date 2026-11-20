@@ -230,7 +230,7 @@ impl NetworkAgent {
                     continue;
                 };
                 if let Some(body) = &request.body {
-                    state.post_data.insert(id.clone(), body.clone());
+                    state.post_data.insert(id.clone(), body.to_vec());
                 }
                 state.max_post_data_size
             };
@@ -366,7 +366,7 @@ impl NetworkAgent {
                 state.keep(
                     &known.id,
                     KeptBody {
-                        bytes: response.body.clone(),
+                        bytes: response.body.as_bytes().clone(),
                         text,
                         resource: Some((known.frame_id.clone(), url.to_owned())),
                     },
@@ -752,7 +752,7 @@ mod tests {
                 encoded_headers_length: 10,
             },
             encoded_body_length: 3,
-            body: Bytes::copy_from_slice(body),
+            body: protocol::BigBuffer::copy_from_slice(body),
         }
     }
 
@@ -885,7 +885,7 @@ mod tests {
         sent(&from);
         let mut post = ResourceRequest::new("https://a.test/post", RequestDestination::Empty);
         post.method = "POST".into();
-        post.body = Some(b"x=12345".to_vec());
+        post.body = Some(b"x=12345".into());
         agent.will_send(1, &post, frame(), None);
         let told = sent(&from);
         let of = |session: &str| {

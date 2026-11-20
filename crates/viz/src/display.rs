@@ -700,7 +700,7 @@ mod tests {
                 id,
                 size: PIXEL,
                 format: ResourceFormat::Rgba8Premul,
-                pixels: Arc::from([]),
+                pixels: protocol::BigBuffer::from([]),
                 shared_image: Some(SharedImage::from_mailbox(Mailbox(mailbox))),
             });
             frame.render_pass_list[0].quad_list.push(DrawQuad {

@@ -40,7 +40,7 @@ impl Response {
     pub(crate) fn whole(response: ResourceResponse) -> Self {
         Self {
             head: response.head,
-            body: Body::whole(response.body),
+            body: Body::whole(response.body.into_bytes()),
             local: false,
         }
     }

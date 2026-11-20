@@ -1103,7 +1103,7 @@ impl RenderThread {
                     loaded,
                     navigation_type,
                 };
-                self.commit_navigation_body(commit, body, body_pipe);
+                self.commit_navigation_body(commit, body.into_bytes(), body_pipe);
             }
             RendererMsg::NavigationLoadCompleted {
                 frame,

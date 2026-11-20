@@ -681,7 +681,7 @@ impl RenderThread {
         ));
         engine.restore_history(
             top,
-            history.state.clone(),
+            history.state.as_deref().map(<[u8]>::to_vec),
             history.manual_scroll_restoration,
         );
         let parser = Parser::new(engine.dom_mut(), &document);
@@ -1132,7 +1132,7 @@ impl RenderThread {
                                 frame,
                                 url,
                                 replace,
-                                state,
+                                state: state.map(protocol::BigBuffer::from),
                                 navigation_id: None,
                             });
                 }
@@ -1239,7 +1239,7 @@ impl RenderThread {
         if !engine.traverse_within_document(
             frame,
             url,
-            history.state,
+            history.state.map(Vec::from),
             history.manual_scroll_restoration,
         ) {
             let _ = self
@@ -1755,7 +1755,7 @@ impl RenderThread {
             ));
             engine.restore_history(
                 frame,
-                history.state.clone(),
+                history.state.as_deref().map(<[u8]>::to_vec),
                 history.manual_scroll_restoration,
             );
         }

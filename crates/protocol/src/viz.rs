@@ -7,6 +7,7 @@
 
 use std::sync::{Arc, Weak};
 
+use crate::BigBuffer;
 use base::numerics::saturated_cast;
 use gfx::{Color, RRectF, RectF, Size};
 use serde::{Deserialize, Serialize};
@@ -112,7 +113,7 @@ pub struct TransferableResource {
     pub format: ResourceFormat,
     /// Tightly packed rows (`stride == size.width * bytes_per_pixel`);
     /// empty with a shared image.
-    pub pixels: Arc<[u8]>,
+    pub pixels: BigBuffer,
     pub shared_image: Option<SharedImage>,
 }
 
