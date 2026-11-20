@@ -7,8 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use browser::{
-    CommitOptions, DomStorageContext, NetworkContext, NetworkContextParams, Profile,
-    StoragePartition, ToRenderer,
+    CommitOptions, DomStorageContext, NetworkContextParams, Profile, StoragePartition, ToRenderer,
 };
 use net::test_server::Route;
 use protocol::TabId;
@@ -424,11 +423,10 @@ pub(crate) fn titles_until(
 pub(crate) fn partition(profile: &Profile) -> StoragePartition {
     StoragePartition::new(
         profile,
-        NetworkContext::start(NetworkContextParams {
+        NetworkContextParams {
             user_agent: browser::user_agent(),
             ..Default::default()
-        })
-        .unwrap(),
+        },
     )
     .unwrap()
 }

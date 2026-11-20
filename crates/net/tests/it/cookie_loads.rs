@@ -14,12 +14,27 @@ use net::{HostMappingRules, NetworkContext, NetworkContextParams};
 use protocol::network::{CredentialsMode, RequestDestination, ResourceRequest, TrustedParams};
 
 fn network(allow_third_party_cookies: bool) -> NetworkContext {
+    network_in(allow_third_party_cookies, None)
+}
+
+/// A network context whose cookies are kept in the folder `dir`, if any.
+fn network_in(allow_third_party_cookies: bool, dir: Option<&std::path::Path>) -> NetworkContext {
     NetworkContext::start(NetworkContextParams {
         host_resolver_rules: HostMappingRules::parse("MAP *.localhost 127.0.0.1").unwrap(),
         allow_third_party_cookies,
+        data_directory: dir.map(std::path::Path::to_path_buf),
         ..Default::default()
     })
     .unwrap()
+}
+
+fn scratch(name: &str) -> std::path::PathBuf {
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("net-cookie-loads")
+        .join(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
 }
 
 fn server() -> TestServer {
@@ -41,6 +56,21 @@ fn server() -> TestServer {
             "/third",
             Route::ok("text/plain", "third")
                 .with_header("Set-Cookie", "third=1; SameSite=None; Secure"),
+        ),
+        (
+            "/persistent",
+            Route::ok("text/plain", "persistent")
+                .with_header("Set-Cookie", "kept=1; Max-Age=3600")
+                .with_header("Set-Cookie", "session=1"),
+        ),
+        (
+            "/partitioned",
+            Route::ok("text/plain", "partitioned")
+                .with_header(
+                    "Set-Cookie",
+                    "chip=1; SameSite=None; Secure; Partitioned; Max-Age=3600",
+                )
+                .with_header("Set-Cookie", "plain=1; SameSite=None; Secure; Max-Age=3600"),
         ),
     ];
     TestServer::start(
@@ -268,6 +298,129 @@ fn a_third_partys_cookies_by_the_policy() {
             } else {
                 "lax none strict unspecified"
             },
+            "allow {allow}"
+        );
+    }
+}
+
+/// A third party's request in `top`'s top-level frame (its site for
+/// cookies null).
+fn embedded_in(top: &str) -> TrustedParams {
+    TrustedParams {
+        site_for_cookies: None,
+        top_frame_site: Some(format!("http://{top}")),
+        initiator: Some(format!("http://{top}")),
+        is_main_frame_navigation: false,
+    }
+}
+
+/// The profile's folder keeps the persistent cookies: a network context
+/// started on it once the one before has gone sends them; not the session
+/// ones.
+#[test]
+fn a_profiles_persistent_cookies_outlast_its_network_context() {
+    let (dir, server) = (scratch("outlast"), server());
+    let a = |path: &str| server.url_for_host("a.localhost", path);
+    {
+        let network = network_in(false, Some(&dir));
+        load(
+            &network,
+            request(a("/persistent"), Some(first_party("a.localhost"))),
+        );
+        load(
+            &network,
+            request(a("/echo"), Some(first_party("a.localhost"))),
+        );
+        assert_eq!(sent(&server, "/echo"), "kept session");
+    }
+    let network = network_in(false, Some(&dir));
+    load(
+        &network,
+        request(a("/echo"), Some(first_party("a.localhost"))),
+    );
+    assert_eq!(sent(&server, "/echo"), "kept");
+}
+
+/// A third party's `Partitioned` cookie is kept, in either policy, in the
+/// partition of its top-level site: it goes with that site's third-party
+/// requests alone, not another's nor the first party's own, and is kept in
+/// it in the profile's folder too. An unpartitioned one is the policy's.
+#[test]
+fn a_third_partys_partitioned_cookies_are_its_top_level_sites() {
+    for allow in [false, true] {
+        let (dir, server) = (scratch(&format!("partitioned-{allow}")), server());
+        let a = |path: &str| server.url_for_host("a.localhost", path);
+        {
+            let network = network_in(allow, Some(&dir));
+            load(
+                &network,
+                request(a("/partitioned"), Some(embedded_in("b.localhost"))),
+            );
+            load(
+                &network,
+                request(a("/echo"), Some(embedded_in("b.localhost"))),
+            );
+            assert_eq!(
+                sent(&server, "/echo"),
+                if allow { "chip plain" } else { "chip" },
+                "allow {allow}"
+            );
+            load(
+                &network,
+                request(a("/echo"), Some(embedded_in("c.localhost"))),
+            );
+            assert_eq!(
+                sent(&server, "/echo"),
+                if allow { "plain" } else { "" },
+                "allow {allow}"
+            );
+            load(
+                &network,
+                request(a("/echo"), Some(first_party("a.localhost"))),
+            );
+            assert_eq!(
+                sent(&server, "/echo"),
+                if allow { "plain" } else { "" },
+                "allow {allow}"
+            );
+        }
+        let network = network_in(allow, Some(&dir));
+        load(
+            &network,
+            request(a("/echo"), Some(embedded_in("b.localhost"))),
+        );
+        assert_eq!(
+            sent(&server, "/echo"),
+            if allow { "chip plain" } else { "chip" },
+            "allow {allow}"
+        );
+    }
+}
+
+/// A partition minds whether a frame of another site is between: what a
+/// site's own page keeps in its partition doesn't go with its requests
+/// from a frame of another site in that page.
+#[test]
+fn a_partition_minds_a_cross_site_ancestor() {
+    for allow in [false, true] {
+        let (network, server) = (network(allow), server());
+        let b = |path: &str| server.url_for_host("b.localhost", path);
+        load(
+            &network,
+            request(b("/partitioned"), Some(first_party("b.localhost"))),
+        );
+        load(
+            &network,
+            request(b("/echo"), Some(first_party("b.localhost"))),
+        );
+        assert_eq!(sent(&server, "/echo"), "chip plain", "allow {allow}");
+        load(
+            &network,
+            request(b("/echo"), Some(embedded_in("b.localhost"))),
+        );
+        assert_eq!(
+            sent(&server, "/echo"),
+            if allow { "plain" } else { "" },
             "allow {allow}"
         );
     }

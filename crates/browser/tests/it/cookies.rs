@@ -4,22 +4,25 @@
 //! loads by its loader). A cross-site child frame's are a third party's:
 //! kept and sent only with Chromium's cookie policy.
 
-use browser::{NetworkContext, NetworkContextParams, Profile, StoragePartition};
+use browser::{NetworkContextParams, Profile, StoragePartition};
 use net::test_server::{Route, TestServer};
 
 use crate::dom_storage::titles_until;
 use crate::navigation::{server, tab_in};
 
 fn partition(allow_third_party_cookies: bool) -> StoragePartition {
+    partition_of(&Profile::in_memory(), allow_third_party_cookies)
+}
+
+fn partition_of(profile: &Profile, allow_third_party_cookies: bool) -> StoragePartition {
     StoragePartition::new(
-        &Profile::in_memory(),
-        NetworkContext::start(NetworkContextParams {
+        profile,
+        NetworkContextParams {
             user_agent: browser::user_agent(),
             host_resolver_rules: net::HostMappingRules::parse("MAP *.localhost 127.0.0.1").unwrap(),
             allow_third_party_cookies,
             ..Default::default()
-        })
-        .unwrap(),
+        },
     )
     .unwrap()
 }
@@ -85,4 +88,38 @@ onload = loaded;
         );
         web_contents.shutdown();
     }
+}
+
+/// A profile's folder keeps its persistent cookies: the storage of the
+/// profile opened again, once the one before has gone, sends them.
+#[test]
+fn a_profiles_cookies_outlast_its_storage() {
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("browser-cookies")
+        .join("outlast");
+    let _ = std::fs::remove_dir_all(&dir);
+    let server = server(&[
+        (
+            "/set",
+            Route::ok("text/html", "<script>document.title = 'set'</script>")
+                .with_header("Set-Cookie", "kept=1; Max-Age=3600"),
+        ),
+        (
+            "/check",
+            Route::ok("text/html", "<script>document.title = 'checked'</script>"),
+        ),
+    ]);
+    {
+        let profile = Profile::open(&dir).unwrap();
+        let (mut web_contents, host_rx) = tab_in(partition_of(&profile, false));
+        web_contents.navigate(server.url_for_host("a.localhost", "/set"));
+        titles_until(&mut web_contents, &host_rx, |title| title == "set");
+        web_contents.shutdown();
+    }
+    let profile = Profile::open(&dir).unwrap();
+    let (mut web_contents, host_rx) = tab_in(partition_of(&profile, false));
+    web_contents.navigate(server.url_for_host("a.localhost", "/check"));
+    titles_until(&mut web_contents, &host_rx, |title| title == "checked");
+    assert_eq!(sent(&server, "/check").as_deref(), Some("kept=1"));
+    web_contents.shutdown();
 }

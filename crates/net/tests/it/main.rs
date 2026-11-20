@@ -12,6 +12,7 @@
 mod client;
 mod content_encoding;
 mod cookie_loads;
+mod cookie_monster;
 mod cookies;
 mod load;
 mod redirects;

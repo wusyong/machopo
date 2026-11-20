@@ -11,7 +11,7 @@ use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use base::AtomicSequenceNumber;
-use browser::{ContentsEvent, NetworkContext, NetworkContextParams, WebContents};
+use browser::{ContentsEvent, NetworkContextParams, WebContents};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use gfx::{Color, PointF, Rect, RectF, Size, SizeF};
 use net::test_server::{Route, TestServer};
@@ -519,11 +519,10 @@ fn start_contents(
         None,
         browser::StoragePartition::new(
             &browser::Profile::in_memory(),
-            NetworkContext::start(NetworkContextParams {
+            NetworkContextParams {
                 user_agent: browser::user_agent(),
                 ..Default::default()
-            })
-            .expect("network service starts"),
+            },
         )
         .expect("the storage starts"),
         Box::new(move |tab, msg| {

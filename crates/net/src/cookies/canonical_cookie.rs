@@ -9,6 +9,7 @@ use super::cookie_inclusion_status::{CookieInclusionStatus, ExclusionReason};
 use super::cookie_options::{
     CookieOptions, LAX_ALLOW_UNSAFE_MAX_AGE_SECONDS, SameSiteCookieContext,
 };
+use super::cookie_partition_key::CookiePartitionKey;
 use super::cookie_util::{self, CookieAccessScheme};
 use super::parsed_cookie::ParsedCookie;
 use super::time::Time;
@@ -41,11 +42,11 @@ pub struct CanonicalCookie {
     secure: bool,
     http_only: bool,
     same_site: CookieSameSite,
-    /// `Partitioned` (CHIPS). Only kept: there are no partition keys yet,
-    /// so a partitioned cookie is kept and sent as if its partition were
-    /// the only one; it is never the same cookie as an unpartitioned one of
-    /// its name, domain and path.
-    partitioned: bool,
+    /// Its partition, if it is `Partitioned` (CHIPS) and was set by a
+    /// request that had one: it goes only with requests of that partition,
+    /// and is never the same cookie as one of its name, domain and path in
+    /// another (or in none).
+    partition_key: Option<CookiePartitionKey>,
     source_scheme: CookieSourceScheme,
     /// The port of the URL that set it (see `source_port`).
     source_port: Option<u16>,
@@ -101,13 +102,15 @@ impl CanonicalCookie {
     /// script gave `document.cookie`) sets from `url`, made at
     /// `creation_time` (`CanonicalCookie::Create`); or why it is none.
     /// `server_time` is the response's `Date`, if it had one: an `Expires`
-    /// is moved by how far the server's clock is from ours.
+    /// is moved by how far the server's clock is from ours. A `Partitioned`
+    /// one is kept in `partition_key`, the request's partition; without
+    /// one, it is an unpartitioned cookie (and needn't be `Secure`).
     ///
     /// This checks what the line can be on its own and for `url`: its
     /// domain (host-only, or a domain `url`'s host is in, of its site, not
     /// a public suffix; an IP address host takes no other), its path, its
     /// expiry (`Max-Age` before `Expires`, at most [`MAX_EXPIRY_DAYS`]
-    /// ahead), its name's prefix, `Partitioned`'s `Secure`, and a nameless
+    /// ahead), its name's prefix, a partitioned one's `Secure`, and a nameless
     /// cookie whose value would read as a prefixed name or as a name and a
     /// value (`=a=b`: Chromium's `kCookieParseRejectEmptyNameAmbiguous`, on
     /// by default; RFC 6265bis takes it). Whether `url` may set it (`Secure`
@@ -123,6 +126,7 @@ impl CanonicalCookie {
         cookie_line: &str,
         creation_time: Time,
         server_time: Option<Time>,
+        partition_key: Option<&CookiePartitionKey>,
         source_type: CookieSourceType,
     ) -> Result<Self, CookieInclusionStatus> {
         if url.host().is_none() {
@@ -151,10 +155,10 @@ impl CanonicalCookie {
         if !prefix_valid {
             status.add_exclusion_reason(ExclusionReason::InvalidPrefix);
         }
-        // `IsCookiePartitionedValid`. Chromium checks it when the request
-        // has a partition key, which a frame's always has: `Partitioned`
-        // has to be `Secure`, from a URL that may set a `Secure` cookie.
-        if parsed.is_partitioned()
+        // `IsCookiePartitionedValid`: a partitioned cookie has to be
+        // `Secure`, from a URL that may set a `Secure` cookie.
+        let partition_key = partition_key.filter(|_| parsed.is_partitioned());
+        if partition_key.is_some()
             && (!parsed.is_secure()
                 || cookie_util::provisional_access_scheme(url)
                     == CookieAccessScheme::NonCryptographic)
@@ -189,7 +193,7 @@ impl CanonicalCookie {
             secure: parsed.is_secure(),
             http_only: parsed.is_http_only(),
             same_site: parsed.same_site(),
-            partitioned: parsed.is_partitioned(),
+            partition_key: partition_key.cloned(),
             source_scheme,
             source_port,
             source_type,
@@ -224,6 +228,59 @@ impl CanonicalCookie {
     fn validate_and_adjust_expiry_date(expiry: Option<Time>, creation: Time) -> Option<Time> {
         let latest = creation.saturating_add_days(MAX_EXPIRY_DAYS);
         expiry.map(|expiry| expiry.min(latest))
+    }
+
+    /// A cookie as the cookie database kept it (`CanonicalCookie::FromStorage`),
+    /// if it is one [`create`](Self::create) could have made: a name and
+    /// value of a `Set-Cookie` line (not both empty, not too long, no
+    /// control character or `;`, a nameless one's value no name), a domain (`.` and a
+    /// host, or a host) and a path starting with `/`, an expiry no earlier
+    /// than its creation, a `SameSite=None` one `Secure`, a partitioned one
+    /// `Secure`.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a cookie's fields, as Chromium's FromStorage takes them"
+    )]
+    pub fn from_storage(
+        name: String,
+        value: String,
+        domain: String,
+        path: String,
+        creation: Time,
+        expiry: Option<Time>,
+        last_access: Time,
+        secure: bool,
+        http_only: bool,
+        same_site: CookieSameSite,
+        partition_key: Option<CookiePartitionKey>,
+        source_scheme: CookieSourceScheme,
+        source_port: Option<u16>,
+        source_type: CookieSourceType,
+    ) -> Option<Self> {
+        let canonical = super::parsed_cookie::check_name_value_pair(&name, &value).is_ok()
+            && (!name.is_empty() || !value.contains('='))
+            && !domain.is_empty()
+            && domain != "."
+            && path.starts_with('/')
+            && expiry.is_none_or(|expiry| expiry >= creation)
+            && (same_site != CookieSameSite::NoRestriction || secure)
+            && (partition_key.is_none() || secure);
+        canonical.then_some(Self {
+            name,
+            value,
+            domain,
+            path,
+            creation,
+            expiry,
+            last_access,
+            secure,
+            http_only,
+            same_site,
+            partition_key,
+            source_scheme,
+            source_port,
+            source_type,
+        })
     }
 
     /// The name; empty for a nameless cookie.
@@ -284,8 +341,19 @@ impl CanonicalCookie {
         self.same_site
     }
 
+    /// Whether it is kept in a partition (`IsPartitioned`).
     pub fn is_partitioned(&self) -> bool {
-        self.partitioned
+        self.partition_key.is_some()
+    }
+
+    pub fn partition_key(&self) -> Option<&CookiePartitionKey> {
+        self.partition_key.as_ref()
+    }
+
+    /// The bytes of its name and value (`NameValueSizeBytes`): what a
+    /// partition's domain may have 10 KiB of.
+    pub fn name_value_size_bytes(&self) -> usize {
+        self.name.len().saturating_add(self.value.len())
     }
 
     /// Whether it is a domain cookie (its domain starts with `.`), sent to
@@ -332,7 +400,7 @@ impl CanonicalCookie {
         self.name == other.name
             && self.domain == other.domain
             && self.path == other.path
-            && self.partitioned == other.partitioned
+            && self.partition_key == other.partition_key
     }
 
     /// Whether this cookie, set from an insecure URL, would overwrite or
@@ -343,7 +411,7 @@ impl CanonicalCookie {
     /// not off `/`.
     pub fn is_equivalent_for_secure_cookie_matching(&self, secure_cookie: &Self) -> bool {
         // Chromium doesn't special-case IP addresses here either.
-        self.partitioned == secure_cookie.partitioned
+        self.partition_key == secure_cookie.partition_key
             && self.name == secure_cookie.name
             && (cookie_util::is_subdomain_of(
                 self.domain_without_dot(),

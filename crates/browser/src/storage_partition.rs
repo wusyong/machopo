@@ -2,7 +2,7 @@
 //! `StoragePartition`): its network context (the cookies, the blob URLs)
 //! and its `localStorage`.
 
-use net::NetworkContext;
+use net::{NetworkContext, NetworkContextParams};
 
 use crate::{DomStorageContext, Profile};
 
@@ -13,10 +13,15 @@ pub struct StoragePartition {
 }
 
 impl StoragePartition {
-    /// `profile`'s, its requests on `network`.
-    pub fn new(profile: &Profile, network: NetworkContext) -> std::io::Result<Self> {
+    /// `profile`'s: its network context started with `network`'s params
+    /// (`StoragePartitionImpl::InitNetworkContext`), its cookies kept in
+    /// the profile's folder if it has one.
+    pub fn new(profile: &Profile, network: NetworkContextParams) -> std::io::Result<Self> {
         Ok(Self {
-            network,
+            network: NetworkContext::start(NetworkContextParams {
+                data_directory: profile.dir().map(std::path::Path::to_path_buf),
+                ..network
+            })?,
             dom_storage: DomStorageContext::new(profile)?,
         })
     }

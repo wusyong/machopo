@@ -29,6 +29,8 @@ reqwest.workspace = true
 rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs"] }
 # The public suffix list, for which domains a cookie can't be set on.
 site.workspace = true
+# The profile's `Cookies` database.
+sql.workspace = true
 tokio = { workspace = true, features = ["net", "time"] }
 tower-layer.workspace = true
 tower-service.workspace = true

@@ -2835,6 +2835,7 @@ dependencies = [
  "reqwest",
  "rustls",
  "site",
+ "sql",
  "tokio",
  "tower-layer",
  "tower-service",

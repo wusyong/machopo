@@ -246,6 +246,10 @@ pub(crate) async fn load(
                 .is_none_or(|cors| cors.tainting == ResponseTainting::Basic),
             protocol::network::CredentialsMode::Omit => false,
         };
+        if credentials {
+            // The profile's cookies first.
+            cookies.wait_for_load().await;
+        }
         if credentials
             && let Some(cookie) = cookies.cookie_header(&url, request.trusted.as_ref(), &method)
         {

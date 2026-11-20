@@ -19,12 +19,14 @@
 //!   reqwest type leaves the crate, so another transport can replace it
 //!   without changing callers.
 //!
-//! [`cookies`] (`//net/cookies`) is the cookie jar and the rules it keeps,
-//! not yet used by loads. No HTTP cache.
+//! [`cookies`] (`//net/cookies`) is the cookie jar and the rules it keeps;
+//! each hop of a load sends and keeps cookies through the context's jar,
+//! whose persistent cookies are in the profile's `Cookies` database. No
+//! HTTP cache.
 //!
-//! [`NetworkContextParams`] is for web tests only: host mapping rules and
-//! extra trusted roots, so WPT's domains reach the local wptserve over
-//! HTTPS. A browser window starts with the default, empty params.
+//! [`NetworkContextParams`] has the profile's folder, the cookie policy,
+//! and, for web tests, host mapping rules and extra trusted roots, so
+//! WPT's domains reach the local wptserve over HTTPS.
 //!
 //! [`load`]: NetworkContext::load
 //! [`fetch`]: NetworkContext::fetch
@@ -207,6 +209,10 @@ pub struct NetworkContextParams {
     /// first two minutes (Lax-allowing-unsafe). Off: machopo's own, a third
     /// party's are neither, and `Lax` is `Lax`.
     pub allow_third_party_cookies: bool,
+    /// The profile's folder (`NetworkContextFilePaths::data_directory`):
+    /// persistent cookies are kept in its `Cookies` database. None: in
+    /// memory alone.
+    pub data_directory: Option<std::path::PathBuf>,
 }
 
 impl NetworkContextParams {
@@ -235,12 +241,28 @@ impl NetworkContextParams {
 pub struct NetworkContext {
     jobs: mpsc::UnboundedSender<Job>,
     blob_urls: blob::BlobUrlRegistry,
+    /// The cookie database's thread: the last handle to go closes it, its
+    /// changes written, whether or not the `NetworkService` thread has let
+    /// the jar go by then.
+    _cookie_store: Option<Arc<cookies::sqlite_persistent_cookie_store::CookieStoreThread>>,
 }
 
 impl NetworkContext {
     /// Starts the `NetworkService` thread.
     pub fn start(params: NetworkContextParams) -> std::io::Result<Self> {
         let (jobs, mut rx) = mpsc::unbounded_channel::<Job>();
+        let (store, cookie_store) = match &params.data_directory {
+            Some(dir) => {
+                let (store, thread, loaded) = cookies::sqlite_persistent_cookie_store::open(
+                    dir,
+                    cookies::sqlite_persistent_cookie_store::CommitOptions::default(),
+                    None,
+                )?;
+                let store: Box<dyn cookies::PersistentCookieStore> = Box::new(store);
+                (Some((store, loaded)), Some(Arc::new(thread)))
+            }
+            None => (None, None),
+        };
         std::thread::Builder::new()
             .name("NetworkService".into())
             .spawn(move || {
@@ -251,7 +273,7 @@ impl NetworkContext {
                 runtime.block_on(async move {
                     let transport = http::HttpTransport::new(&params);
                     // The context's cookies, which its loads share.
-                    let cookies = cookies::CookieJar::new(params.allow_third_party_cookies);
+                    let cookies = cookies::CookieJar::new(params.allow_third_party_cookies, store);
                     while let Some(job) = rx.recv().await {
                         let transport = transport.clone();
                         let cookies = cookies.clone();
@@ -273,6 +295,7 @@ impl NetworkContext {
         Ok(Self {
             jobs,
             blob_urls: blob::BlobUrlRegistry::default(),
+            _cookie_store: cookie_store,
         })
     }
 

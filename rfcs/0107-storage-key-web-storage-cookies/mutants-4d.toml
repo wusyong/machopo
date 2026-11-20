@@ -1,0 +1,309 @@
+# Step 4d: partitioned cookies (CookiePartitionKey: the top-level site and
+# the ancestor chain bit), the jar's limits (a key's 180, the jar's 3300, a
+# partition's key's 180 and 10 KiB; the least recently used first, those
+# not Secure before), and the profile's Cookies database (read in all at
+# once in the background, a hop waiting for it; written in batches).
+test = [
+    "sh", "-c",
+    "cargo test -q -p net --lib cookies && cargo test -q -p net --test it cookie && cargo test -q -p browser --test it cookies::a_profiles",
+]
+timeout = 1800
+
+# --- The partition key ---------------------------------------------------
+
+[[mutant]]
+name = "every partition is same-site"
+file = "crates/net/src/cookies/cookie_partition_key.rs"
+from = '''        let ancestor_chain_bit = if site_for_cookies.is_first_party_schemeless(url) {'''
+to = '''        let ancestor_chain_bit = if true {'''
+
+[[mutant]]
+name = "a stored partition's site isn't checked"
+file = "crates/net/src/cookies/cookie_partition_key.rs"
+from = '''        if parsed.is_opaque() || parsed.serialize() != site {'''
+to = '''        if parsed.is_opaque() {'''
+
+[[mutant]]
+name = "an opaque partition is written"
+file = "crates/net/src/cookies/cookie_partition_key.rs"
+from = '''        (!self.site.is_opaque()).then(|| (self.site.serialize(), self.has_cross_site_ancestor()))'''
+to = '''        Some((self.site.serialize(), self.has_cross_site_ancestor()))'''
+
+# --- The cookie ----------------------------------------------------------
+
+[[mutant]]
+name = "an unpartitioned line is kept in the partition"
+file = "crates/net/src/cookies/canonical_cookie.rs"
+from = '''        let partition_key = partition_key.filter(|_| parsed.is_partitioned());'''
+to = '''        let partition_key = partition_key;'''
+
+[[mutant]]
+name = "Partitioned without a partition has to be Secure"
+file = "crates/net/src/cookies/canonical_cookie.rs"
+from = '''        if partition_key.is_some()'''
+to = '''        if parsed.is_partitioned()'''
+
+[[mutant]]
+name = "the same cookie in another partition replaces it"
+file = "crates/net/src/cookies/canonical_cookie.rs"
+from = '''            && self.partition_key == other.partition_key'''
+to = '''            && true'''
+
+[[mutant]]
+name = "a partitioned Secure cookie keeps unpartitioned ones out"
+file = "crates/net/src/cookies/canonical_cookie.rs"
+from = '''        self.partition_key == secure_cookie.partition_key'''
+to = '''        true'''
+
+[[mutant]]
+name = "a stored cookie may expire before it was made"
+file = "crates/net/src/cookies/canonical_cookie.rs"
+from = '''            && expiry.is_none_or(|expiry| expiry >= creation)'''
+to = '''            && true'''
+
+[[mutant]]
+name = "a stored SameSite=None cookie needn't be Secure"
+file = "crates/net/src/cookies/canonical_cookie.rs"
+from = '''            && (same_site != CookieSameSite::NoRestriction || secure)'''
+to = '''            && true'''
+
+[[mutant]]
+name = "a stored partitioned cookie needn't be Secure"
+file = "crates/net/src/cookies/canonical_cookie.rs"
+from = '''            && (partition_key.is_none() || secure);'''
+to = '''            && true;'''
+
+# --- The jar -------------------------------------------------------------
+
+[[mutant]]
+name = "a partitioned cookie goes with any request"
+file = "crates/net/src/cookies/cookie_monster.rs"
+from = '''                .is_some_and(|key| Some(key) != partition_key)'''
+to = '''                .is_some_and(|_| false)'''
+
+[[mutant]]
+name = "a read marks its use a second later"
+file = "crates/net/src/cookies/cookie_monster.rs"
+from = '''                >= ACCESS_UPDATE_THRESHOLD_SECONDS.saturating_mul(1_000_000)'''
+to = '''                > ACCESS_UPDATE_THRESHOLD_SECONDS.saturating_mul(1_000_000)'''
+
+[[mutant]]
+name = "a read marks its use every time"
+file = "crates/net/src/cookies/cookie_monster.rs"
+from = '''                >= ACCESS_UPDATE_THRESHOLD_SECONDS.saturating_mul(1_000_000)'''
+to = '''                >= 0'''
+
+[[mutant]]
+name = "the store isn't told of a use"
+file = "crates/net/src/cookies/cookie_monster.rs"
+from = '''                    store.update_cookie_access_time(cookie);'''
+to = '''                    let _ = store;'''
+
+[[mutant]]
+name = "a session cookie is written"
+file = "crates/net/src/cookies/cookie_monster.rs"
+from = '''        if sync_to_store
+            && cookie.is_persistent()'''
+to = '''        if sync_to_store'''
+
+[[mutant]]
+name = "a session cookie's deletion is written"
+file = "crates/net/src/cookies/cookie_monster.rs"
+from = '''            if entry.cookie.is_persistent()
+                && let Some(store) = store'''
+to = '''            if let Some(store) = store'''
+
+[[mutant]]
+name = "a deletion isn't written"
+file = "crates/net/src/cookies/cookie_monster.rs"
+from = '''                store.delete_cookie(&entry.cookie);'''
+to = ''''''
+
+[[mutant]]
+name = "loading writes the cookies back"
+file = "crates/net/src/cookies/cookie_monster.rs"
+from = '''            self.insert(key(cookie.domain()), cookie, None, false);'''
+to = '''            self.insert(key(cookie.domain()), cookie, None, true);'''
+
+[[mutant]]
+name = "a key's 180 cookies are cut"
+file = "crates/net/src/cookies/cookie_monster.rs"
+from = '''        if count(self) > DOMAIN_MAX_COOKIES {
+            self.delete_where(key, |e| {
+                !e.cookie.is_partitioned() && e.cookie.is_expired(now)
+            });
+            let count = count(self);
+            if count > DOMAIN_MAX_COOKIES {'''
+to = '''        if count(self) >= DOMAIN_MAX_COOKIES {
+            self.delete_where(key, |e| {
+                !e.cookie.is_partitioned() && e.cookie.is_expired(now)
+            });
+            let count = count(self);
+            if count >= DOMAIN_MAX_COOKIES {'''
+
+[[mutant]]
+name = "a key's purge cuts one fewer"
+file = "crates/net/src/cookies/cookie_monster.rs"
+from = '''pub const DOMAIN_PURGE_COOKIES: usize = 30;'''
+to = '''pub const DOMAIN_PURGE_COOKIES: usize = 29;'''
+
+[[mutant]]
+name = "a key's purge takes Secure cookies first round"
+file = "crates/net/src/cookies/cookie_monster.rs"
+from = '''                let deleted = self.purge_least_recent(key, purge_goal, true);'''
+to = '''                let deleted = self.purge_least_recent(key, purge_goal, false);'''
+
+[[mutant]]
+name = "a key's partitioned cookies are counted"
+file = "crates/net/src/cookies/cookie_monster.rs"
+from = '''                entries
+                    .iter()
+                    .filter(|e| !e.cookie.is_partitioned())
+                    .count()'''
+to = '''                entries.iter().count()'''
+
+[[mutant]]
+name = "a key's purge takes partitioned cookies"
+file = "crates/net/src/cookies/cookie_monster.rs"
+from = '''            .filter(|e| !e.cookie.is_partitioned())
+            .filter(|e| !protect_secure_cookies || !e.cookie.is_secure())'''
+to = '''            .filter(|e| !protect_secure_cookies || !e.cookie.is_secure())'''
+
+[[mutant]]
+name = "a key's purge takes the first set, used or not"
+file = "crates/net/src/cookies/cookie_monster.rs"
+from = '''            .filter(|e| !protect_secure_cookies || !e.cookie.is_secure())
+            .collect();
+        candidates.sort_by_key(|e| least_recently_used(e));'''
+to = '''            .filter(|e| !protect_secure_cookies || !e.cookie.is_secure())
+            .collect();'''
+
+[[mutant]]
+name = "the jar's 3300 cookies are cut"
+file = "crates/net/src/cookies/cookie_monster.rs"
+from = '''        if self.unpartitioned > MAX_COOKIES && self.earliest_access.is_none_or(|e| e < safe_date) {
+            let keys: Vec<String> = self.cookies.keys().cloned().collect();
+            for key in &keys {
+                self.delete_where(key, |e| {
+                    !e.cookie.is_partitioned() && e.cookie.is_expired(now)
+                });
+            }
+            if self.unpartitioned > MAX_COOKIES {'''
+to = '''        if self.unpartitioned >= MAX_COOKIES && self.earliest_access.is_none_or(|e| e < safe_date) {
+            let keys: Vec<String> = self.cookies.keys().cloned().collect();
+            for key in &keys {
+                self.delete_where(key, |e| {
+                    !e.cookie.is_partitioned() && e.cookie.is_expired(now)
+                });
+            }
+            if self.unpartitioned >= MAX_COOKIES {'''
+
+[[mutant]]
+name = "the jar's purge waits for a known earliest use"
+file = "crates/net/src/cookies/cookie_monster.rs"
+from = '''        if self.unpartitioned > MAX_COOKIES && self.earliest_access.is_none_or(|e| e < safe_date) {'''
+to = '''        if self.unpartitioned > MAX_COOKIES && self.earliest_access.is_some_and(|e| e < safe_date) {'''
+
+[[mutant]]
+name = "the jar's purge takes those used in the last 30 days"
+file = "crates/net/src/cookies/cookie_monster.rs"
+from = '''                .take_while(|(_, e)| e.cookie.last_access_date() < safe_date)'''
+to = '''                .take_while(|_| true)'''
+
+[[mutant]]
+name = "the jar's purge takes Secure cookies with the others"
+file = "crates/net/src/cookies/cookie_monster.rs"
+from = '''            all.into_iter().partition(|(_, e)| e.cookie.is_secure());'''
+to = '''            all.into_iter().partition(|_| false);'''
+
+[[mutant]]
+name = "a partition's 180 cookies are cut"
+file = "crates/net/src/cookies/cookie_monster.rs"
+from = '''            count > PER_PARTITION_DOMAIN_MAX_COOKIES'''
+to = '''            count >= PER_PARTITION_DOMAIN_MAX_COOKIES'''
+
+[[mutant]]
+name = "a partition has no byte limit"
+file = "crates/net/src/cookies/cookie_monster.rs"
+from = '''                || bytes > PER_PARTITION_DOMAIN_MAX_COOKIE_BYTES'''
+to = '''                || false'''
+
+[[mutant]]
+name = "a partition's purge takes another's"
+file = "crates/net/src/cookies/cookie_monster.rs"
+from = '''        let of_partition = |e: &Entry| e.cookie.partition_key() == Some(partition_key);'''
+to = '''        let of_partition = |e: &Entry| e.cookie.is_partitioned() || partition_key.site().is_opaque();'''
+
+# --- The database --------------------------------------------------------
+
+[[mutant]]
+name = "a batch is written at once"
+file = "crates/net/src/cookies/sqlite_persistent_cookie_store.rs"
+from = '''            ops.recv_timeout(options.interval.saturating_sub(since.elapsed()))'''
+to = '''            ops.recv_timeout(Duration::ZERO)'''
+
+[[mutant]]
+name = "a full batch waits for one more"
+file = "crates/net/src/cookies/sqlite_persistent_cookie_store.rs"
+from = '''                if pending.len() >= options.batch_size {'''
+to = '''                if pending.len() > options.batch_size {'''
+
+[[mutant]]
+name = "closing doesn't write the last batch"
+file = "crates/net/src/cookies/sqlite_persistent_cookie_store.rs"
+from = '''    write(&mut database, &mut pending);
+}'''
+to = '''    let _ = (write, database, pending);
+}'''
+
+[[mutant]]
+name = "expired rows are kept"
+file = "crates/net/src/cookies/sqlite_persistent_cookie_store.rs"
+from = '''        "DELETE FROM cookies WHERE expires_utc <= ?1",'''
+to = '''        "DELETE FROM cookies WHERE expires_utc <= ?1 AND 0",'''
+
+[[mutant]]
+name = "a use isn't written"
+file = "crates/net/src/cookies/sqlite_persistent_cookie_store.rs"
+from = '''                    "UPDATE cookies SET last_access_utc = ?6 WHERE host_key = ?1 AND \'''
+to = '''                    "UPDATE cookies SET last_access_utc = last_access_utc + 0 * ?6 WHERE host_key = ?1 AND \'''
+
+[[mutant]]
+name = "SameSite=Strict is written as Lax"
+file = "crates/net/src/cookies/sqlite_persistent_cookie_store.rs"
+from = '''        CookieSameSite::StrictMode => 2,'''
+to = '''        CookieSameSite::StrictMode => 1,'''
+
+# --- Loads ---------------------------------------------------------------
+
+[[mutant]]
+name = "a third party's partitioned cookie is the policy's"
+file = "crates/net/src/cookies/cookie_jar.rs"
+from = '''            || cookie.is_partitioned()'''
+to = '''            || false'''
+
+[[mutant]]
+name = "a navigation's top-level site is where it started"
+file = "crates/net/src/cookies/cookie_jar.rs"
+from = '''    let site = if trusted.is_main_frame_navigation {
+        Site::of_url(url)'''
+to = '''    let site = if false {
+        Site::of_url(url)'''
+
+[[mutant]]
+name = "a hop doesn't wait for the database"
+file = "crates/net/src/url_loader.rs"
+from = '''            cookies.wait_for_load().await;'''
+to = ''''''
+
+[[mutant]]
+name = "the network context doesn't keep the database thread"
+file = "crates/net/src/lib.rs"
+from = '''            _cookie_store: cookie_store,'''
+to = '''            _cookie_store: { drop(cookie_store); None },'''
+
+[[mutant]]
+name = "a profile's cookies are in memory"
+file = "crates/browser/src/storage_partition.rs"
+from = '''                data_directory: profile.dir().map(std::path::Path::to_path_buf),'''
+to = '''                data_directory: None,'''

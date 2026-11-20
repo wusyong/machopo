@@ -66,7 +66,7 @@ fn is_valid_cookie_value(value: &str) -> bool {
 
 /// `ParsedCookie::IsValidCookieNameValuePair`: not both empty, not too
 /// long together, and of characters a name and a value can have.
-fn check_name_value_pair(name: &str, value: &str) -> Result<(), ExclusionReason> {
+pub(super) fn check_name_value_pair(name: &str, value: &str) -> Result<(), ExclusionReason> {
     if name.is_empty() && value.is_empty() {
         return Err(ExclusionReason::NoCookieContent);
     }

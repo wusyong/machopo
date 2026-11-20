@@ -20,7 +20,7 @@
 | 4a：請求的來歷（Browser 給的最上層的網站和 site for cookies，核對 `initiator`） | 完成 | 2026-11-20 |
 | 4b：解析 `Set-Cookie`、cookie 本身（`CanonicalCookie`）、記憶體裡的 store | 完成 | 2026-11-20 |
 | 4c：接上每一跳請求、`SameSite`、第三方的 cookie 的預設和照送的旗標、導覽的可信參數 | 完成 | 2026-11-20 |
-| 4d：`Partitioned`、上限和淘汰、寫進 profile 的 `Cookies` 資料庫 | 未開始 | |
+| 4d：`Partitioned`、上限和淘汰、寫進 profile 的 `Cookies` 資料庫 | 完成 | 2026-11-20 |
 | 4e：WPT 的 `cookies/`、第 4 階段的檢查和文件 | 未開始 | |
 | 5：cookie 到 DOM 和自動化 | 未開始 | |
 | 6：檢查和文件 | 未開始 | |
@@ -51,6 +51,9 @@
 | 請求的來歷：每份文件 commit 時一個 Browser 給的 loader（文件的 origin、site for cookies、最上層的網站，照它所在的 frame 算）；IO thread 照編號核對（沒給的 loader、不是 worker 的 loader、`initiator` 不是 loader 的 origin、renderer 自己帶了可信的參數都是壞掉的訊息；opaque 的 `initiator` 照收），填上 loader 的可信參數；跨 origin 的 iframe 的圖片、iframe 一開始的 `about:blank` 的 `fetch()`、worker 的 `fetch()` 都經過各自的 loader | `cargo test -p browser --lib -- loader request_takes workers_request`；`cargo test -p browser --test it loaders::` |
 | cookie：解析 `Set-Cookie`（終止字元和控制字元整行拒絕、tab 也是，名稱和值的大小、屬性值太長只略過、沒有 `=` 的第一段是沒有名稱的值、屬性不分大小寫、最後一個算）；`Expires` 的日期（Chromium 的 `ParseCookieExpirationTime`）；cookie 本身（host-only 和 domain cookie、public suffix 和 IP 位址、預設的 path、`Max-Age` 先於 `Expires`、伺服器的時差、最多 400 天、`__Secure-`、`__Host-`、`__Http-` 前綴、`Secure` 只從安全的或可信的網址、`SameSite=None` 要 `Secure`、`Partitioned` 要 `Secure`）；store（同名同 domain 同 path 的取代、值一樣時留著建立的時間、過期的刪掉、script 蓋不了 `HttpOnly`、leave secure cookies alone、domain 和 path 的比對、`SameSite` 的設定和送出、Lax-allowing-unsafe 的 2 分鐘、送出的順序）；預設的選項不做 Lax-allowing-unsafe | `cargo test -p net --test it cookies::`；`cargo test -p net --lib cookies` |
 | 請求的 cookie：每一跳送 jar 裡它拿得到的、留下回應設的（redirect 的也是）；沒有可信參數的（Browser 自己的）和 `omit` 的不送不留，`same-origin` 只到 initiator 的 origin；`SameSite` 照請求的情境（Chromium 的 `ComputeSameSiteContextForRequest`、`ForResponse`：別的網站發起的 main frame 導覽是 Lax、不安全的 method 只有 `None` 的，Browser 自己的導覽是 Strict，同一個網站的頁面裡別的網站發起的子資源是跨網站）；第三方（site for cookies 是別的網站或 null，不看 scheme）預設不送不留，`--allow-third-party-cookies` 照 Chromium（`SameSite=None` 的送、留，Lax-allowing-unsafe 的 2 分鐘）；導覽的可信參數（main frame 的是網址的網站，子 frame 的是 parent 的 loader 的，initiator 是發起的 frame 的 origin）；頁面設的 cookie 它的圖片送出、第三方的 iframe 設的只在照送的旗標時留下 | `cargo test -p site`；`cargo test -p net --test it cookie_loads::`；`cargo test -p browser --lib -- navigations_params loaders_params`；`cargo test -p browser --test it cookies::`；`cargo test -p shell --bin machopo -- third_party_cookie` |
+| `Partitioned`：分區是最上層的網站和中間有沒有隔著別的網站（main frame 的導覽是自己的網址的網站、同網站的），cookie 只跟著那個分區的請求，同名同 domain 同 path 的在不同分區是不同的 cookie；請求有分區時才是分區的、要 `Secure`，沒有時照沒標的；第三方的 `Partitioned` cookie 兩種政策都照送照收 | `cargo test -p net --test it -- cookies:: cookie_monster:: cookie_loads::`；`cargo test -p net --lib cookie_jar` |
+| 上限和淘汰：一個 registrable domain 超過 180 筆時刪到 150（過期的先刪，再刪最久沒用的、不是 `Secure` 的在前），分區的 cookie 不算；全部超過 3300 筆時刪到 3000，最近 30 天用過的不刪，不是 `Secure` 的在前；分區的每個網域 180 筆、10 KiB；讀到的 cookie 隔一分鐘以上才記成用過 | `cargo test -p net --test it -- cookie_monster:: cookies::` |
+| `Cookies` 資料庫：持久的 cookie 每個欄位存回來一樣（分區也是），session 的和 opaque 分區的不寫；改動成批寫（30 秒、512 筆、結束時），讀的時候刪掉過期的、略過不是 cookie 的列；開不了時只在記憶體；請求等資料庫讀完才帶 cookie；network context 換一個之後持久的還在，profile 的資料夾經過 `StoragePartition` 交給 `net` | `cargo test -p net --lib -- sqlite_persistent cookie_jar`；`cargo test -p net --test it cookie_loads::`；`cargo test -p browser --test it cookies::` |
 
 ## 做過的檢查
 
@@ -202,3 +205,17 @@ macOS、Apple M4，2026-11-20。
 - mutation test（`mutants-4c.toml`）15 個，抓到 14 個；沒抓到的「沒有可信參數的請求也有 cookie」是預設的規則下預設的參數本來就算第三方，補了照送的旗標時沒有可信參數的請求也不送的檢查，重跑抓到。
 - 文件：`docs/limitations.md`（cookie 的現況：預設擋第三方、嚴格的 Lax、旗標、`Partitioned` 當沒標的、只在記憶體、沒有上限、沒有 `document.cookie`；`credentials` 照 Fetch 帶 cookie）、`docs/architecture.md`（`net` 的 `CookieJar`、`WebContents` 的導覽的可信參數）。
 - 跑過的檢查：`cargo test` 的 `site`、`protocol`、`net`、`browser`、`shell`（1107 個通過）、`shell` 的 bin 測試（12 個）；`sanity.py` 見下。`scenarios --window`（改了 `window.rs`）在第 4 階段做完時跑。
+
+### 4d：`Partitioned`、上限和淘汰、`Cookies` 資料庫
+
+macOS、Apple M4，2026-11-20。
+
+- 決定了第 18 條（資料庫在背景一次全讀）、第 19 條（值存明文）和第 20 條（上限照 Chromium、不認 `Priority`）。讀了 Chromium 的 `sqlite_persistent_cookie_store.cc`、`cookie_monster.cc`（`GarbageCollect`、`PurgeLeastRecentMatches`、`GarbageCollectLeastRecentlyAccessed`、`GarbageCollectPartitionedCookies`、`InternalUpdateCookieAccessTime`）、`cookie_partition_key.cc`（`FromNetworkIsolationKey`）、`canonical_cookie.cc`（`Create` 怎麼收分區、`IsEquivalentForSecureCookieMatching`）和 `network_context.cc`。
+- 新的東西：`net` 的 `CookiePartitionKey`；`CanonicalCookie` 的分區（取代原本只記有沒有標 `Partitioned`）和 `from_storage`；`CookieMonster` 的分區、上限和淘汰、`PersistentCookieStore`、`load`、隔一分鐘才記成用過；`SqlitePersistentCookieStore`（自己的 thread、`CommitOptions`、`CookieStoreThread` 由 `NetworkContext` 留著，最後一個放掉時寫完、等它結束）；`CookieJar` 每一跳算分區、照每個 cookie 套政策（第三方的 `Partitioned` 照送照收）、`wait_for_load`；`NetworkContextParams::data_directory`；`browser` 的 `StoragePartition::new` 改收 `NetworkContextParams`，自己照 profile 啟動 network context（Chromium 的 `InitNetworkContext`），呼叫的地方跟著改。
+- 和 Chromium 不同、留著的（寫在程式的註解裡）：所有分區的 cookie 放在同一個網域底下（Chromium 每個分區一張表）；網域的淘汰只有 medium 的兩輪（全部當 medium，配額 50 永遠不會限制，刪到 150 就停）；最上層是 opaque 的時沒有分區（Chromium 給它一個只在記憶體的分區）；資料庫的時間是 Unix epoch 起的微秒、沒有 `encrypted_value`、`priority`、`has_expires`、`is_persistent`、`last_update_utc`，唯一的欄位是名稱、domain、path 和分區（沒有 scheme 和 port：scheme-bound、port-bound 的 cookie 預設關）；壞掉的列只略過、不刪。分區的 cookie 沒有跨網域的總數上限（和 Chromium 一樣）。
+- 4b 留下的差異改掉了：`Partitioned` 只在請求有分區時才檢查要 `Secure`。
+- 新的測試：`net` 的 `cookie_monster` 6 個（分區、網域的上限、`Secure` 最後刪、全部的上限、分區的上限、告訴 store 的事），`cookie_loads` 加 3 個（重開之後還在、第三方的分區、分區看中間有沒有隔著別的網站），`cookies` 改了 `Partitioned` 的測試、加了隔一分鐘才記成用過的；單元測試：資料庫 4 個（欄位存回來一樣、成批寫、過期的和不是 cookie 的列、開不了），`cookie_jar` 3 個（等資料庫讀完、沒有資料庫時不用等、導覽每一跳的分區）；`browser` 的 `cookies` 加 1 個（profile 的資料夾經過 `StoragePartition` 留下 cookie，連跑 20 次都通過：舊的 renderer 的 IO thread 在 `shutdown` 時 join，沒有留下 network context）。
+- mutation test（`mutants-4d.toml`）第一次 43 個，抓到 38 個。沒抓到的：「main frame 的導覽算第三方的分區」是等價的（main frame 的導覽的 site for cookies 本來就是它網址的網站），拿掉了 `CookiePartitionKey::for_request` 的 `main_frame_navigation` 參數；「存的分區的網站不檢查」是測試的那一列不是 `Secure`、被另一個檢查擋掉，改成 `Secure` 的；「網域的淘汰刪到分區的 cookie」是測試裡第二輪沒有要刪的，在會刪 `Secure` 的情境加了更舊的分區 cookie；「一個網域 180 筆就刪」「全部 3300 筆就刪」是外層的提前離開和內層的檢查一樣，只弄壞一個看不出來，改成一次弄壞兩層，全部的那個再把測試改成第 3300 筆在 31 天後才設（原本設下時每一筆都是最近用過的，提早淘汰也沒有東西可刪）。改完重跑整份 42 個，全部抓到。「jar 的淘汰等最早的使用時間」拿掉時結果一樣，記進 `docs/test-gaps.md` 的「沒有計數守著的優化」。
+- 文件：`docs/limitations.md`（cookie 的分區、存在 profile、明文、上限不認 `Priority`、讀完之前請求等著）、`docs/architecture.md`（`net` 的 cookie、`StoragePartition` 啟動 network context）、`docs/test-gaps.md`（jar 的淘汰等最早的使用時間的捷徑）。
+- 跑過的檢查：`cargo test` 的 `net`、`site`、`browser`、`shell`（1111 個通過）；`cargo clippy -p net -p browser -p shell --all-targets -- -D warnings`、`cargo fmt --check`；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。
+

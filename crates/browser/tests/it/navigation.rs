@@ -8,8 +8,7 @@ use std::time::Duration;
 
 use base::AtomicSequenceNumber;
 use browser::{
-    ContentsEvent, NetworkContext, NetworkContextParams, OpenUrlParams, Profile, StoragePartition,
-    WebContents,
+    ContentsEvent, NetworkContextParams, OpenUrlParams, Profile, StoragePartition, WebContents,
 };
 use crossbeam_channel::{Receiver, RecvTimeoutError, unbounded};
 use net::test_server::{Route, TestServer, unused_port};
@@ -131,11 +130,10 @@ fn tab_with_viz_colors(
 fn in_memory() -> StoragePartition {
     StoragePartition::new(
         &Profile::in_memory(),
-        NetworkContext::start(NetworkContextParams {
+        NetworkContextParams {
             user_agent: browser::user_agent(),
             ..Default::default()
-        })
-        .expect("network service starts"),
+        },
     )
     .expect("the storage starts")
 }

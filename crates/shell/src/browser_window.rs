@@ -9,8 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use browser::{
-    ContentsEventCallback, NetworkContext, NetworkContextParams, RendererFlags, StoragePartition,
-    WebContents,
+    ContentsEventCallback, NetworkContextParams, RendererFlags, StoragePartition, WebContents,
 };
 use crossbeam_channel::Sender;
 use gfx::Size;
@@ -69,11 +68,10 @@ impl BrowserWindow {
         let (viz_tx, viz_rx) = crossbeam_channel::unbounded();
         // The one user agent: requests send it, and pages read it.
         let user_agent = browser::user_agent();
-        let network = NetworkContext::start(NetworkContextParams {
+        let network = NetworkContextParams {
             user_agent: user_agent.clone(),
             ..options.network
-        })
-        .map_err(|e| format!("start the network service: {e}"))?;
+        };
         let mut tabs = WindowTabs {
             flags: RendererFlags {
                 test_fonts: options.test_fonts,
@@ -91,7 +89,7 @@ impl BrowserWindow {
             viz: viz_tx.clone(),
             gpu: gpu.clone(),
             partition: StoragePartition::new(&options.profile, network)
-                .map_err(|e| format!("start the storage: {e}"))?,
+                .map_err(|e| format!("start the storage and the network service: {e}"))?,
             on_message: Arc::new(Mutex::new(on_message)),
         };
         // Registered with Viz before it starts: the message waits for it.
@@ -223,11 +221,10 @@ mod tests {
             gpu: None,
             partition: StoragePartition::new(
                 &browser::Profile::in_memory(),
-                NetworkContext::start(NetworkContextParams {
+                NetworkContextParams {
                     user_agent: browser::user_agent(),
                     ..Default::default()
-                })
-                .unwrap(),
+                },
             )
             .unwrap(),
             on_message: Arc::new(Mutex::new(Box::new(|_, _| {}))),

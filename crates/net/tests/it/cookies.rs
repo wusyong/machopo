@@ -4,11 +4,12 @@
 //! `cookies/` tests.
 
 use net::cookies::{
-    CanonicalCookie, CookieInclusionStatus, CookieMonster, CookieOptions, CookieSameSite,
-    CookieSourceScheme, CookieSourceType, ExclusionReason, MAX_COOKIE_ATTRIBUTE_VALUE_SIZE,
-    MAX_COOKIE_NAME_PLUS_VALUE_SIZE, ParsedCookie, SameSiteCookieContext, Time,
-    parse_cookie_expiration_time,
+    CanonicalCookie, CookieInclusionStatus, CookieMonster, CookieOptions, CookiePartitionKey,
+    CookieSameSite, CookieSourceScheme, CookieSourceType, ExclusionReason,
+    MAX_COOKIE_ATTRIBUTE_VALUE_SIZE, MAX_COOKIE_NAME_PLUS_VALUE_SIZE, ParsedCookie,
+    SameSiteCookieContext, Time, parse_cookie_expiration_time,
 };
+use site::{AncestorChainBit, Site};
 use url::Url;
 
 use ExclusionReason::*;
@@ -61,7 +62,20 @@ fn days_since_epoch(year: u32, month: u32, day: u32) -> i64 {
 }
 
 fn create(at_url: &str, line: &str) -> Result<CanonicalCookie, CookieInclusionStatus> {
-    CanonicalCookie::create(&url(at_url), line, at(0), None, CookieSourceType::Http)
+    CanonicalCookie::create(
+        &url(at_url),
+        line,
+        at(0),
+        None,
+        None,
+        CookieSourceType::Http,
+    )
+}
+
+/// The partition of a frame of another site in a top-level frame of
+/// `site`.
+fn partition(site: &str) -> CookiePartitionKey {
+    CookiePartitionKey::new(Site::of_url(&url(site)), AncestorChainBit::CrossSite)
 }
 
 fn created(at_url: &str, line: &str) -> CanonicalCookie {
@@ -129,7 +143,7 @@ impl Jar {
         } else {
             CookieSourceType::Script
         };
-        let cookie = CanonicalCookie::create(&url(at_url), line, at(self.now), None, source)?;
+        let cookie = CanonicalCookie::create(&url(at_url), line, at(self.now), None, None, source)?;
         self.monster
             .set_canonical_cookie(cookie, &url(at_url), options)
     }
@@ -155,7 +169,7 @@ impl Jar {
     /// for none.
     fn line_with(&mut self, to: &str, options: &CookieOptions) -> String {
         self.monster
-            .cookie_line_for(&url(to), options, at(self.now))
+            .cookie_line_for(&url(to), options, None, at(self.now))
             .unwrap_or_default()
     }
 
@@ -637,6 +651,7 @@ fn expires_moves_by_the_servers_clock_skew() {
         "a=b; Expires=Fri, 01 Jan 2038 00:00:00 GMT",
         utc(2030, 1, 1, 1, 0, 0),
         Some(utc(2030, 1, 1, 0, 0, 0)),
+        None,
         CookieSourceType::Http,
     )
     .unwrap();
@@ -649,6 +664,7 @@ fn expires_moves_by_the_servers_clock_skew() {
         "a=b; Expires=Wed, 02 Jan 2030 00:00:00 GMT",
         utc(2030, 1, 1, 1, 0, 0),
         Some(utc(2030, 1, 1, 0, 0, 0)),
+        None,
         CookieSourceType::Http,
     )
     .unwrap();
@@ -789,11 +805,34 @@ fn nameless_cookies() {
     );
 }
 
+/// A `Partitioned` cookie set by a request of a partition is kept in it,
+/// and has to be `Secure`, from a URL that may set one; set by a request
+/// without one, it is an unpartitioned cookie, `Secure` or not.
 #[test]
 fn partitioned_needs_secure_from_a_secure_url() {
-    let cookie = created("https://example.com/", "a=b; Secure; Partitioned");
+    let in_partition = |at_url: &str, line: &str| {
+        CanonicalCookie::create(
+            &url(at_url),
+            line,
+            at(0),
+            None,
+            Some(&partition("https://top.example")),
+            CookieSourceType::Http,
+        )
+    };
+    let cookie = in_partition("https://example.com/", "a=b; Secure; Partitioned").unwrap();
+    assert_eq!(
+        cookie.partition_key(),
+        Some(&partition("https://top.example"))
+    );
     assert!(cookie.is_partitioned());
-    created("http://localhost/", "a=b; Secure; Partitioned");
+    assert!(in_partition("http://localhost/", "a=b; Secure; Partitioned").is_ok());
+    let refused = |at_url: &str, line: &str| {
+        in_partition(at_url, line)
+            .unwrap_err()
+            .exclusion_reasons()
+            .to_vec()
+    };
     assert_eq!(
         refused("https://example.com/", "a=b; Partitioned"),
         [InvalidPartitioned]
@@ -802,6 +841,13 @@ fn partitioned_needs_secure_from_a_secure_url() {
         refused("http://example.com/", "a=b; Partitioned; Secure"),
         [InvalidPartitioned]
     );
+    // Not `Partitioned`: not in the partition.
+    let cookie = in_partition("https://example.com/", "a=b").unwrap();
+    assert_eq!(cookie.partition_key(), None);
+    // No partition: unpartitioned, and needn't be `Secure`.
+    let cookie = created("https://example.com/", "a=b; Partitioned");
+    assert!(!cookie.is_partitioned());
+    created("http://example.com/", "a=b; Partitioned");
 }
 
 #[test]
@@ -932,14 +978,31 @@ fn expired_cookies_go_when_read() {
     let target = url("https://example.com/");
     let cookies = jar
         .monster
-        .get_cookie_list_with_options(&target, &options, at(10));
+        .get_cookie_list_with_options(&target, &options, None, at(10));
     assert_eq!(CanonicalCookie::build_cookie_line(&cookies), "a=b; c=d");
-    assert_eq!(cookies[0].last_access_date(), at(10));
     let cookies = jar
         .monster
-        .get_cookie_list_with_options(&target, &options, at(11));
+        .get_cookie_list_with_options(&target, &options, None, at(11));
     assert_eq!(CanonicalCookie::build_cookie_line(&cookies), "c=d");
     assert_eq!(jar.monster.all_cookies(at(11)).len(), 1);
+}
+
+/// A cookie read is marked as used then, but not again within a minute of
+/// its last use (Chromium's `kDefaultAccessUpdateThresholdSeconds`).
+#[test]
+fn a_read_marks_its_use_a_minute_apart() {
+    let mut jar = Jar::new();
+    jar.set("https://example.com/", "a=b");
+    let target = url("https://example.com/");
+    let last_use = |jar: &mut Jar, now| {
+        jar.monster
+            .get_cookie_list_with_options(&target, &http(), None, at(now))[0]
+            .last_access_date()
+    };
+    assert_eq!(last_use(&mut jar, 60), at(1));
+    assert_eq!(last_use(&mut jar, 61), at(61));
+    assert_eq!(last_use(&mut jar, 120), at(61));
+    assert_eq!(last_use(&mut jar, 121), at(121));
 }
 
 #[test]
