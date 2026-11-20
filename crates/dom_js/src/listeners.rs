@@ -356,6 +356,15 @@ impl<'s> ScriptHost for Host<'_, '_, 's, '_> {
         crate::frames::open_storage_area(self.scope, document, kind)
     }
 
+    fn cookie_call(
+        &mut self,
+        document: &dom::NodeRoot,
+        url: &str,
+        call: dom_api::CookieCall,
+    ) -> dom_api::CookieReply {
+        crate::frames::cookie_call(self.scope, document, url, call)
+    }
+
     fn set_abort_reason(
         &mut self,
         signal: &Persistent<dom::EventTargetImpl>,

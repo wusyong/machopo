@@ -2287,6 +2287,16 @@ impl<'s, K: InfoKind<'s>> dom_api::typed::ScriptFront for InfoFront<'s, K> {
             .with_scope(|mut scope, _| crate::frames::open_storage_area(&mut scope, document, kind))
     }
 
+    fn cookie_call(
+        &mut self,
+        document: &dom::NodeRoot,
+        url: &str,
+        call: dom_api::CookieCall,
+    ) -> dom_api::CookieReply {
+        self.info
+            .with_scope(|mut scope, _| crate::frames::cookie_call(&mut scope, document, url, call))
+    }
+
     fn reject_promise_with_reason(&mut self, promise: u64, signal: &Persistent<EventTargetImpl>) {
         self.info.with_scope(|mut scope, _| {
             crate::listeners::reject_promise_with_reason(&mut scope, promise, signal);

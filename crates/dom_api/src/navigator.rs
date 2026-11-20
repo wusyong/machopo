@@ -155,14 +155,6 @@ pub(crate) fn on_line<'gc>(_: &ApiCx<'_, 'gc>, _: Gc<'gc, Navigator>) -> Result<
     Ok(true)
 }
 
-/// machopo keeps no cookies.
-pub(crate) fn cookie_enabled<'gc>(
-    _: &ApiCx<'_, 'gc>,
-    _: Gc<'gc, Navigator>,
-) -> Result<bool, ApiError> {
-    Ok(false)
-}
-
 /// The machine's logical cores, as Chrome reports them (WebIDL's
 /// `unsigned long long`, never past `u32`'s).
 pub(crate) fn hardware_concurrency<'gc>(

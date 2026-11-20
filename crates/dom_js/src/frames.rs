@@ -386,14 +386,40 @@ pub(crate) fn open_storage_area(
     state.storage_host.as_ref()?.open_storage_area(token, kind)
 }
 
-/// What the operation changed in Web Storage: the host told, in order;
-/// then the windows given `storage` listeners get their areas.
+/// `call` on the cookies of `document` at its cookie URL `url`, by the
+/// host's cookie host, which waits for the browser; none without one.
+pub(crate) fn cookie_call(
+    scope: &mut Scope<'_, '_, '_>,
+    document: &NodeRoot,
+    url: &str,
+    call: dom_api::CookieCall,
+) -> dom_api::CookieReply {
+    let (state, _) = scope.state();
+    let id = state.dom.read(|cx| cx.node_id(document.get(cx.gc)));
+    state
+        .cookie_host
+        .as_ref()
+        .map_or(dom_api::CookieReply::None, |host| {
+            call.on(host.as_ref(), id, url)
+        })
+}
+
+/// What the operation changed in Web Storage, and the cookies script set:
+/// the hosts told, in order; then the windows given `storage` listeners
+/// get their areas.
 pub(crate) fn send_storage_changes(scope: &mut Scope<'_, '_, '_>) {
     let (state, _) = scope.state_mut();
-    let changes = state.dom.mutate(|cx| cx.take_storage_changes());
+    let (changes, cookies) = state
+        .dom
+        .mutate(|cx| (cx.take_storage_changes(), cx.take_cookie_writes()));
     if let Some(host) = &state.storage_host {
         for change in changes {
             host.storage_changed(change);
+        }
+    }
+    if let Some(host) = &state.cookie_host {
+        for write in cookies {
+            host.set_cookie(write.document, &write.url, &write.line);
         }
     }
     dom_api::open_for_listeners(&mut crate::listeners::Host { scope });

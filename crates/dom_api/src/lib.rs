@@ -52,6 +52,7 @@ mod child_node;
 mod collection;
 mod computed_style;
 mod controls;
+mod cookie;
 mod css_namespace;
 mod css_style;
 mod css_style_sheet;
@@ -140,6 +141,7 @@ pub use animation::{notice_steps, settle_animation_notices, settle_started_anima
 pub use animation_frame::run_animation_frame_callbacks;
 pub use animations::{AnimationsUpdate, update_animations};
 pub use computed_style::{computed_style_for_devtools, computed_values_for_devtools};
+pub use cookie::{CookieCall, CookieHost, CookieReply};
 pub use declare::{
     Interface, InterfaceDesc, Member, MemberKind, Named, Param, TypeDesc, overload_interfaces,
     resolve_overload,

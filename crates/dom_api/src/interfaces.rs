@@ -43,14 +43,14 @@ use crate::typed::{
 use crate::window::NavigationUrl;
 use crate::{
     abort, activation, animation, animation_frame, animations, attr, blob, canvas, character_data,
-    child_node, collection, computed_style, crypto, css_namespace, css_style, css_style_sheet,
-    cssom, custom_elements, dataset, document, document_type, dom_implementation, effect, element,
-    event, event_target, fetch, file_reader, focus, forms, frame, geolocation, geometry, handlers,
-    headers, history, html, hyperlink, idle, image, intersection_observer, location, markup,
-    media_query_list, menu_list, message, mutation_observer, navigator, node, parent_node,
-    performance, query, range, reflect, request, resize_observer, response, script, scroll, select,
-    selection, shadow_root, slot, storage, svg, svg_geometry, table, text_control, timer,
-    token_list, traversal, ui_event, url, wake_lock, window, worker,
+    child_node, collection, computed_style, cookie, crypto, css_namespace, css_style,
+    css_style_sheet, cssom, custom_elements, dataset, document, document_type, dom_implementation,
+    effect, element, event, event_target, fetch, file_reader, focus, forms, frame, geolocation,
+    geometry, handlers, headers, history, html, hyperlink, idle, image, intersection_observer,
+    location, markup, media_query_list, menu_list, message, mutation_observer, navigator, node,
+    parent_node, performance, query, range, reflect, request, resize_observer, response, script,
+    scroll, select, selection, shadow_root, slot, storage, svg, svg_geometry, table, text_control,
+    timer, token_list, traversal, ui_event, url, wake_lock, window, worker,
 };
 
 crate::declare! {
@@ -1254,7 +1254,8 @@ crate::declare! {
         // NavigatorOnLine
         attribute onLine: bool, get = navigator::on_line;
         // NavigatorCookies
-        attribute cookieEnabled: bool, get = navigator::cookie_enabled;
+        #[calls_script]
+        attribute cookieEnabled: bool, get = cookie::cookie_enabled;
         // NavigatorConcurrentHardware
         attribute hardwareConcurrency: u32, get = navigator::hardware_concurrency;
         // NavigatorAutomationInformation (WebDriver's)
@@ -1918,6 +1919,9 @@ crate::declare! {
         #[front]
         attribute location: Option<Location>, get = window::document_location, set: NavigationUrl = window::set_document_location;
         attribute characterSet: DomString, get = document::character_set;
+        // HTML's: the browser's, through the host, which waits for a read.
+        #[calls_script]
+        attribute cookie: DomString, get = cookie::document_cookie, set = cookie::set_document_cookie;
         attribute charset: DomString, get = document::character_set;
         attribute inputEncoding: DomString, get = document::character_set;
         attribute contentType: DomString, get = document::content_type;

@@ -1,0 +1,178 @@
+# Step 5a: document.cookie and navigator.cookieEnabled. The DOM finds the
+# document's cookie URL (its creator's for about:blank and srcdoc) and asks
+# through it, a read waiting for the browser, a write queued and handed
+# over with localStorage's changes; the IO thread checks the loader and
+# the URL's origin; net reads and sets as script does (no HttpOnly, the
+# script SameSite context, the partition and the policy), in order with
+# the loads.
+test = [
+    "sh", "-c",
+    "cargo test -q -p net --test it cookie_loads:: && cargo test -q -p browser --lib script_cookies && cargo test -q -p browser --test it cookies::",
+]
+timeout = 1800
+
+# --- net -----------------------------------------------------------------
+
+[[mutant]]
+name = "script's context is strict across sites"
+file = "crates/net/src/cookies/cookie_jar.rs"
+from = '''    if site_for_cookies.is_first_party(url) {'''
+to = '''    if true {'''
+
+[[mutant]]
+name = "script reads HttpOnly cookies"
+file = "crates/net/src/cookies/cookie_jar.rs"
+from = '''    fn cookies_for_script(&self, url: &Url, trusted: &TrustedParams) -> String {
+        let hop = Hop::new(url, trusted);
+        let options = CookieOptions {
+            include_httponly: false,'''
+to = '''    fn cookies_for_script(&self, url: &Url, trusted: &TrustedParams) -> String {
+        let hop = Hop::new(url, trusted);
+        let options = CookieOptions {
+            include_httponly: true,'''
+
+[[mutant]]
+name = "script sets HttpOnly cookies"
+file = "crates/net/src/cookies/cookie_jar.rs"
+from = '''    fn set_from_script(&self, url: &Url, trusted: &TrustedParams, line: &str) {
+        let hop = Hop::new(url, trusted);
+        let options = CookieOptions {
+            include_httponly: false,'''
+to = '''    fn set_from_script(&self, url: &Url, trusted: &TrustedParams, line: &str) {
+        let hop = Hop::new(url, trusted);
+        let options = CookieOptions {
+            include_httponly: true,'''
+
+[[mutant]]
+name = "script reads what the policy keeps from it"
+file = "crates/net/src/cookies/cookie_jar.rs"
+from = '''            .filter(|cookie| self.accessible(cookie, url, &hop.site_for_cookies))
+            .collect();
+        CanonicalCookie::build_cookie_line(&cookies)'''
+to = '''            .collect();
+        CanonicalCookie::build_cookie_line(&cookies)'''
+
+[[mutant]]
+name = "script sets what the policy keeps from it"
+file = "crates/net/src/cookies/cookie_jar.rs"
+from = '''            CookieSourceType::Script,
+        );
+        if let Ok(cookie) = cookie
+            && self.accessible(&cookie, url, &hop.site_for_cookies)'''
+to = '''            CookieSourceType::Script,
+        );
+        if let Ok(cookie) = cookie'''
+
+[[mutant]]
+name = "cookies are enabled for a third party"
+file = "crates/net/src/cookies/cookie_jar.rs"
+from = '''                        || site_for_cookies.is_first_party_schemeless(&url),'''
+to = '''                        || true,'''
+
+[[mutant]]
+name = "Chromium's policy doesn't enable a third party's cookies"
+file = "crates/net/src/cookies/cookie_jar.rs"
+from = '''                    self.allow_third_party_cookies
+                        || site_for_cookies.is_first_party_schemeless(&url),'''
+to = '''                    site_for_cookies.is_first_party_schemeless(&url),'''
+
+[[mutant]]
+name = "script's cookies don't wait for the database"
+file = "crates/net/src/lib.rs"
+from = '''                                cookies.wait_for_load().await;
+                                cookies.answer_script(call);'''
+to = '''                                cookies.answer_script(call);'''
+
+# --- browser -------------------------------------------------------------
+
+[[mutant]]
+name = "an opaque origin's loader has cookies"
+file = "crates/browser/src/render_process_host.rs"
+from = '''    if !params.origin.is_tuple() {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "a URL of another origin has the loader's cookies"
+file = "crates/browser/src/render_process_host.rs"
+from = '''    if url.origin() != params.origin {'''
+to = '''    if false {'''
+
+# --- renderer ------------------------------------------------------------
+
+[[mutant]]
+name = "a cookie answer is a task"
+file = "crates/renderer/src/task_queue.rs"
+from = '''        | RendererMsg::Cookies { request_id, .. }
+        | RendererMsg::CookiesEnabled { request_id, .. } = msg'''
+to = '''        | RendererMsg::CookiesEnabled { request_id, .. } = msg'''
+
+[[mutant]]
+name = "a read is empty"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            Some(protocol::renderer::RendererMsg::Cookies { cookies, .. }) => cookies,'''
+to = '''            Some(protocol::renderer::RendererMsg::Cookies { .. }) => String::new(),'''
+
+[[mutant]]
+name = "a write isn't sent"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        if let Some(loader) = self.loaders.of(document) {
+            let _ = self.to_browser.send(RendererHostMsg::SetCookie {'''
+to = '''        if let Some(loader) = self.loaders.of(document).filter(|_| false) {
+            let _ = self.to_browser.send(RendererHostMsg::SetCookie {'''
+
+[[mutant]]
+name = "cookies are always enabled"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            Some(protocol::renderer::RendererMsg::CookiesEnabled { enabled: true, .. })'''
+to = '''            Some(protocol::renderer::RendererMsg::CookiesEnabled { .. })'''
+
+# --- DOM -----------------------------------------------------------------
+
+[[mutant]]
+name = "a document out of the page has cookies"
+file = "crates/dom_api/src/cookie.rs"
+from = '''    let in_context = crate::history::is_fully_active(cx, document);'''
+to = '''    let in_context = cx.window_of(document).is_some();'''
+
+[[mutant]]
+name = "a file: document isn't cookie-averse"
+file = "crates/dom_api/src/cookie.rs"
+from = '''        .filter(|url| matches!(url.scheme(), "http" | "https"));'''
+to = '''        .filter(|url| url.scheme() != "about");'''
+
+[[mutant]]
+name = "an about:blank document asks through itself"
+file = "crates/dom_api/src/cookie.rs"
+from = '''        through: cx.root(through),'''
+to = '''        through: cx.root(document),'''
+
+[[mutant]]
+name = "cookies aren't enabled for a cookie-averse document"
+file = "crates/dom_api/src/cookie.rs"
+from = '''        Access::Averse | Access::Opaque => Ok(true),'''
+to = '''        Access::Averse | Access::Opaque => Ok(false),'''
+
+[[mutant]]
+name = "a write isn't queued"
+file = "crates/dom_api/src/cookie.rs"
+from = '''            cx.queue_cookie_write(through.get(cx.gc), url, value.to_owned());'''
+to = '''            let _ = (through, url, value);'''
+
+[[mutant]]
+name = "the engine doesn't hand the writes over"
+file = "crates/dom_js/src/frames.rs"
+from = '''            host.set_cookie(write.document, &write.url, &write.line);'''
+to = '''            let _ = (host, write);'''
+
+[[mutant]]
+name = "a write doesn't ask the engine to hand it over"
+file = "crates/dom/src/storage.rs"
+from = '''            line,
+        });
+        state.set(writes);
+        self.changes
+            .microtasks
+            .set(self.changes.microtasks.get() | crate::Microtasks::STORAGE);'''
+to = '''            line,
+        });
+        state.set(writes);'''

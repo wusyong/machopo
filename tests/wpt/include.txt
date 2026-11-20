@@ -69,12 +69,16 @@ intersection-observer/
 webstorage/
 
 # HTTP cookies: the files that pass whole with cookies in requests and
-# responses alone. Most of the directory needs `document.cookie`,
-# testdriver's cookie actions or `window.open` (`samesite/`, nearly all).
+# responses, `document.cookie` and `navigator.cookieEnabled`. Most of the
+# directory needs testdriver's cookie actions or `window.open`
+# (`samesite/`, nearly all).
+cookies/cookie-enabled-noncookie-frame.html
+cookies/set-and-delete-document-cookie.window.js
 cookies/path/match-segment-boundaries.https.window.js
 cookies/path/non-ascii-path-attribute.https.window.js
 cookies/samesite-none-secure/
 cookies/value/value-overwrite.https.window.js
+html/dom/documents/resource-metadata-management/document-cookie.html
 
 # Dedicated workers, classic and module ones, those made in a worker too.
 # Shared and service workers don't run (`disabled`); what a dedicated

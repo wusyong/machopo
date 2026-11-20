@@ -5179,6 +5179,63 @@ impl dom_api::StorageHost for RendererStorageHost {
     }
 }
 
+/// What reads and writes the frames' cookies (Blink's `CookieJar` and the
+/// frame's `RestrictedCookieManager`), through each document's loader: a
+/// read is the answer the main thread waits for, every task left queued
+/// (`[Sync] GetCookiesString`); a write is sent as the engine hands it
+/// (`SetCookieFromString`). A document without a loader has no cookies.
+pub(super) struct RendererCookieHost {
+    pub(super) to_browser: crossbeam_channel::Sender<RendererHostMsg>,
+    pub(super) scheduler: std::sync::Arc<crate::task_queue::MainThreadScheduler>,
+    pub(super) loaders: crate::loader::DocumentLoaders,
+}
+
+impl dom_api::CookieHost for RendererCookieHost {
+    fn cookies(&self, document: dom::NodeId, url: &str) -> String {
+        let Some(loader) = self.loaders.of(document) else {
+            return String::new();
+        };
+        let reply = self.scheduler.sync_call(|request_id| {
+            let _ = self.to_browser.send(RendererHostMsg::GetCookies {
+                loader,
+                url: url.to_owned(),
+                request_id,
+            });
+        });
+        match reply {
+            Some(protocol::renderer::RendererMsg::Cookies { cookies, .. }) => cookies,
+            _ => String::new(),
+        }
+    }
+
+    fn set_cookie(&self, document: dom::NodeId, url: &str, line: &str) {
+        if let Some(loader) = self.loaders.of(document) {
+            let _ = self.to_browser.send(RendererHostMsg::SetCookie {
+                loader,
+                url: url.to_owned(),
+                line: line.to_owned(),
+            });
+        }
+    }
+
+    fn cookies_enabled(&self, document: dom::NodeId, url: &str) -> bool {
+        let Some(loader) = self.loaders.of(document) else {
+            return false;
+        };
+        let reply = self.scheduler.sync_call(|request_id| {
+            let _ = self.to_browser.send(RendererHostMsg::CookiesEnabled {
+                loader,
+                url: url.to_owned(),
+                request_id,
+            });
+        });
+        matches!(
+            reply,
+            Some(protocol::renderer::RendererMsg::CookiesEnabled { enabled: true, .. })
+        )
+    }
+}
+
 /// Whether `request` is of a blob URL revoked before the element or the
 /// call resolved it (in its task, before the browser heard): a network
 /// error, without asking.

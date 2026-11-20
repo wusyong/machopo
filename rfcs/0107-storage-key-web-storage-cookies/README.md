@@ -86,7 +86,7 @@ cookie 存在 `net` 那一側（Chromium 的 `CookieMonster` 在 network service
 8. ~~cookie 的實作~~：自己照 RFC 6265bis 和 Chromium 寫（第 15 條）。
 9. ~~請求的來歷~~：每份文件一個 Browser 給的 loader 編號（第 16 條）。
 10. ~~第三方的 cookie~~：預設擋掉沒標 `Partitioned` 的，加一個照送的旗標（第 17 條）。
-11. **`document.cookie` 的同步讀**：每次都問 Browser，或照 Chromium 留一個版本號、沒變就用上一次的。
+11. ~~`document.cookie` 的同步讀~~：每次都問（第 22 條）。
 12. **自動化**：WebDriver 的 cookie 指令、CDP 的 `Network.getCookies`、`setCookie`、`deleteCookies`、`clearBrowserCookies`，`DOMStorage` 和 `Storage` 做哪些。
 
 ### 測試
@@ -105,7 +105,7 @@ cookie 存在 `net` 那一側（Chromium 的 `CookieMonster` 在 network service
 2. **profile 和磁碟**：資料夾、`--user-data-dir`、哪些模式只在記憶體、磁碟上的格式和它的讀寫。
 3. **Web Storage**：同步等 Browser 的路、`localStorage`、`sessionStorage`、`storage` 事件、上限。分三段：3a 同步等 Browser 的路、Browser 的 storage thread 和資料庫、`Storage` 介面和 `localStorage`；3b `storage` 事件、`sessionStorage`；3c 上限、寫進磁碟的批次、WPT 的 `webstorage/`、檢查和文件。
 4. **`net` 的 cookie**：請求的來歷、cookie 的儲存、`Set-Cookie` 和 `Cookie`、`SameSite`、持久。分五段（2026-11-20 從四段改成五段：第三方的 cookie 預設擋，要和接上請求同一段做）：4a 請求的來歷（Browser 給的、renderer 宣稱不了的最上層的網站和 site for cookies，核對 `initiator`）；4b 解析 `Set-Cookie`、cookie 本身（`CanonicalCookie`）和記憶體裡的 store；4c 接上每一跳請求（`Cookie`、`Set-Cookie`）、`SameSite`、第三方的 cookie 的預設和照送的旗標、導覽的請求的可信參數；4d `Partitioned`、上限和淘汰、寫進 profile 的 `Cookies` 資料庫；4e WPT 的 `cookies/`、檢查和文件。
-5. **cookie 到 DOM 和自動化**：`document.cookie`、`navigator.cookieEnabled`、WebDriver、CDP。
+5. **cookie 到 DOM 和自動化**：`document.cookie`、`navigator.cookieEnabled`、WebDriver、CDP。分三段（2026-11-20）：5a `document.cookie` 和 `navigator.cookieEnabled`；5b 自動化（WebDriver 的 cookie 指令、CDP 的 `Network` 的 cookie、testdriver）；5c WPT 的 `cookies/`（第 21 條）、檢查和文件。
 6. **檢查和文件**。
 
 ## 缺點
@@ -165,6 +165,8 @@ cookie 存在 `net` 那一側（Chromium 的 `CookieMonster` 在 network service
 
 21. **WPT 的 `cookies/` 到第 5 階段才大量列進來**（2026-11-20，第 4 階段）：第 4 階段只列整份通過的 4 份（`path/match-segment-boundaries`、`path/non-ascii-path-attribute`、`value/value-overwrite`、`samesite-none-secure/`），更新因為有了 cookie 而通過的（`fetch/api/cors/cors-cookies*`、worker 和 dynamic import 的 credentials）；其他的等 `document.cookie` 和自動化的 cookie（testdriver 的 `delete_all_cookies`）做完再列，`samesite/` 的照送的 subsuite（第 17 條）等 machopo 有 `window.open`。2026-11-20 用預設的設定跑整個 `cookies/`：約 90 份只有那 4 份整份通過，其他的失敗在 `window.open`（`samesite/` 幾乎每份先開新視窗）、`document.cookie` 和 `delete_all_cookies`，都不是第 4 階段的事。對照 Chromium：整個 `cookies/` 在清單裡，失敗的留 baseline，`third-party-cookies/` 另外用 virtual suite 跑；machopo 的 subsuite 是 wptrunner 裡對應的機制（`hidpi/` 的 reftest 已經在用）。不選現在列整個 `cookies/`：進度看得到，但約 85 份的預期結果到第 5 階段幾乎都要重寫，約 20 份 timeout 的要標 `disabled`，`samesite/` 在 subsuite 裡照樣卡在 `window.open`。
 
+22. **`document.cookie` 每次讀都同步問**（2026-11-20，第 5 階段）：讀是一個同步的 IPC（renderer → Browser 的 IO thread → network thread），寫是送了就走；兩者走同一條路，讀一定看得到前面的寫。對照 Chromium（2026-11-20 讀 `cookie_jar.cc`、`restricted_cookie_manager.cc`）：`GetCookiesString` 是 `[Sync]`、`SetCookieFromString` 送了就走；加上每份文件一個共享記憶體裡的版本號（`kReduceCookieIPCs`），`RestrictedCookieManager` 在這份文件的 cookie 變動時加一，renderer 看版本沒變、自己的寫都套用了就用上一次的字串。不選版本號：大多數的讀不用 IPC，但要先有 `ipc` 的跨 process 共享記憶體和 `net` 的 cookie 變動通知（`CookieChangeDispatcher`）和照網址登記的聽眾，工作量是每次都問的好幾倍；正確性一樣，只差效能，等這兩樣有了（CDP 的 cookie 事件、Cookie Store API 也要）再加，讀之前多一個判斷，不用重寫。不選有變動時送訊息叫 renderer 丟掉快取：不正確，script 同步跑時網路回應改了 cookie，訊息還在佇列裡，讀到舊值。
+
 ## 待決定
 
 「要決定的事（依序）」的第 7 到 12 個，每個階段開始前定那一段的。
@@ -175,6 +177,7 @@ cookie 存在 `net` 那一側（Chromium 的 `CookieMonster` 在 network service
 - blob URL 照 key 分。
 - Cookie Store API、Storage Access API、`Clear-Site-Data`。
 - cookie 的值用作業系統的金鑰庫加密（Chromium 的 OSCrypt，第 19 條）。
+- `document.cookie` 的讀用共享記憶體的版本號省掉 IPC（Chromium 的 `kReduceCookieIPCs`，第 22 條）。
 - 清除資料的 UI、無痕模式。
 - 第二個 machopo 把網址交給已經開著同一個 profile 的那個（Chromium 的 `ProcessSingleton`，第 6 條）。
 - cookie 的值在磁碟上加密（Chromium 用作業系統的金鑰）。

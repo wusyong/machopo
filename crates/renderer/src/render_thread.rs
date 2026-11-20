@@ -1197,7 +1197,9 @@ impl RenderThread {
                 }
             }
             // The sender puts it aside for the call waiting for it.
-            RendererMsg::StorageAreaOpened { .. } => {}
+            RendererMsg::StorageAreaOpened { .. }
+            | RendererMsg::Cookies { .. }
+            | RendererMsg::CookiesEnabled { .. } => {}
             RendererMsg::StorageAreaChangeFailed { area, key, value } => {
                 if let Some(engine) = self.engine.as_mut() {
                     engine.storage_change_failed(area, &key, value);

@@ -22,7 +22,9 @@
 | 4c：接上每一跳請求、`SameSite`、第三方的 cookie 的預設和照送的旗標、導覽的可信參數 | 完成 | 2026-11-20 |
 | 4d：`Partitioned`、上限和淘汰、寫進 profile 的 `Cookies` 資料庫 | 完成 | 2026-11-20 |
 | 4e：WPT 的 `cookies/`、第 4 階段的檢查和文件 | 完成 | 2026-11-20 |
-| 5：cookie 到 DOM 和自動化 | 未開始 | |
+| 5a：`document.cookie` 和 `navigator.cookieEnabled` | 完成 | 2026-11-20 |
+| 5b：自動化（WebDriver 的 cookie 指令、CDP 的 `Network` 的 cookie、testdriver） | 未開始 | |
+| 5c：WPT 的 `cookies/`、第 5 階段的檢查和文件 | 未開始 | |
 | 6：檢查和文件 | 未開始 | |
 
 ## 驗收
@@ -55,6 +57,10 @@
 | 上限和淘汰：一個 registrable domain 超過 180 筆時刪到 150（過期的先刪，再刪最久沒用的、不是 `Secure` 的在前），分區的 cookie 不算；全部超過 3300 筆時刪到 3000，最近 30 天用過的不刪，不是 `Secure` 的在前；分區的每個網域 180 筆、10 KiB；讀到的 cookie 隔一分鐘以上才記成用過 | `cargo test -p net --test it -- cookie_monster:: cookies::` |
 | `Cookies` 資料庫：持久的 cookie 每個欄位存回來一樣（分區也是），session 的和 opaque 分區的不寫；改動成批寫（30 秒、512 筆、結束時），讀的時候刪掉過期的、略過不是 cookie 的列；開不了時只在記憶體；請求等資料庫讀完才帶 cookie；network context 換一個之後持久的還在，profile 的資料夾經過 `StoragePartition` 交給 `net` | `cargo test -p net --lib -- sqlite_persistent cookie_jar`；`cargo test -p net --test it cookie_loads::`；`cargo test -p browser --test it cookies::` |
 | WPT：`cookies/` 整份通過的 4 份（path 的比對、非 ASCII 的 path、值的覆寫、`SameSite=None` 要 `Secure`）；帶 cookie 的 credentials（`cors-cookies`、`cors-cookies-redirect`、dedicated worker 的 credentials、dynamic import 的 credentials）0 個意外的結果 | `python3 scripts/test.py wpt cookies/ fetch/api/cors/ workers/modules/ html/semantics/scripting-1/the-script-element/module/dynamic-import/` |
+| `document.cookie`：讀的是 script 看得到的（沒有 `HttpOnly` 的），寫的跟著之後的請求送出、馬上讀得到，不能寫 `HttpOnly` 的或蓋過它；`about:blank` 的 iframe 用建立它的文件的網址（同一段 script 裡也是）；不在 browsing context 裡、拿出頁面的 frame 的、`file:` 的文件讀到空的、不丟錯；重開之後第一次讀也等資料庫；第三方照政策（預設只有 `Partitioned` 的） | `cargo test -p net --test it cookie_loads::`；`cargo test -p browser --test it cookies::` |
+| `navigator.cookieEnabled`：第一方是 true，第三方的 iframe 只在照送的旗標時是 true；cookie-averse 的文件是 true | `cargo test -p net --test it cookie_loads::`；`cargo test -p browser --test it cookies::` |
+| script 的 cookie 經過文件的 loader：網址是 loader 的 origin 的才照它的可信參數；別的 origin、opaque 的 loader、沒給的 loader 是壞掉的訊息 | `cargo test -p browser --lib script_cookies` |
+| WPT：`document-cookie.html`、`cookie-enabled-noncookie-frame.html`、`set-and-delete-document-cookie.window.js`、`navigatorcookies-cookieenabled-true.html` 整份通過 | `python3 scripts/test.py wpt cookies/ html/dom/documents/resource-metadata-management/ html/webappapis/system-state-and-capabilities/the-navigator-object/` |
 
 ## 做過的檢查
 
@@ -228,4 +234,17 @@ macOS、Apple M4，2026-11-20。
 - WPT：`include.txt` 加了 `cookies/` 整份通過的 4 份；因為有了 cookie 而通過的拿掉了預期結果（`fetch/api/cors/cors-cookies.any.js`、`cors-cookies-redirect.any.js`、`workers/modules/dedicated-worker-options-credentials.html`、`dynamic-imports-credentials.sub.html`）；`dynamic-imports-credentials-setTimeout.sub.html` 留下的兩個失敗不是 cookie 的事（`setTimeout` 的字串建的 script 沒有繼承呼叫它的 script 的 fetch options），換了註解；`workers/same-site-cookies/` 的 `disabled` 原因改成 shared worker 和 `window.open`（拿掉之後試跑：都停在這兩個）。`script-crossorigin-network.sub.html` 和 `module/credentials.sub.html` 照樣失敗：它們用 `document.cookie` 設 cookie。
 - 找到的不穩定：`html/semantics/scripting-1/the-script-element/moving-between-documents/after-prepare-*` 和 `fetch/`、`workers/` 等一起跑時，每次有兩三份整份 timeout（60 秒，測試大約 6 秒就該結束），每次是不同的幾份，單獨跑都通過。在 4b 的 commit（`be3816f`，還沒有接上請求的 cookie）上用同樣的目錄跑兩次也一樣，所以和 cookie 無關；原因還沒查，這份 RFC 不處理，另外查。（另一個 worktree 和這裡共用 `target/` 時，cargo 用 workspace 裡的相對路徑命名輸出，4b 編的 `site` 蓋掉了這裡的；touch 改過的 crate 之後重編。）
 - 第 4 階段的檢查：`cargo test --workspace`（4416 個通過、1 個 ignored；`bindings` 的 `gc_platform` 在 log 裡的兩個 panic 是測試故意讓 worker panic）、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`；`test.py scenarios --window`（4c 改了 `window.rs`）72 個都通過，看了截圖；`test.py wpt cookies/ fetch/api/cors/ workers/modules/ workers/same-site-cookies/ html/semantics/scripting-1/the-script-element/module/dynamic-import/` 0 個意外的結果。
+
+### 5a：`document.cookie` 和 `navigator.cookieEnabled`
+
+macOS、Apple M4，2026-11-20。
+
+- 決定了第 22 條（每次讀都同步問）。第 5 階段分成三段（RFC 的「分階段」）。讀了 Chromium 的 `cookie_jar.cc`、`restricted_cookie_manager.cc`（`ValidateAccessToCookiesAt`、`MakeOptionsForGet`、`MakeOptionsForSet`、`CookiesEnabledFor`）、`document.cc`（`cookie`、`setCookie`、`CookiesEnabled`）和 `document_init.cc`（`GetCookieUrl`）。
+- 新的東西：`protocol` 的 `GetCookies`、`SetCookie`、`CookiesEnabled` 和回答 `Cookies`、`CookiesEnabled`（main thread 等它，不排進 queue）；`browser` 的 IO thread 照 loader 核對（`check_cookie_access`，新的 `BadMessageReason` 兩種）、交給 `net`；`net` 的 `get_cookies_for_script`、`set_cookie_from_script`、`cookies_enabled_for`（script 的 `SameSite` 情境、不給不設 `HttpOnly`、分區、政策），在 network thread 的迴圈裡照順序做（之後的 load 看得到前面的寫）；`dom` 的 `queue_cookie_write`、`take_cookie_writes`（和 `localStorage` 的改動一起在操作結束前交給 host，共用 `STORAGE` 的旗標：u8 的旗標用完了）；`dom_api` 的 `CookieHost`、`ScriptHost::cookie_call` 和 `cookie.rs`（cookie-averse、opaque、cookie URL 是建立者的）；`dom_js` 的 cookie host；`renderer` 的 `RendererCookieHost`。
+- 找到的問題：新 iframe 的第一份 `about:blank` 在建立它的 script 還在跑時沒有 loader（renderer 在操作之後才登記父文件的）；照 Chromium「一開始的空文件用建立者的 factory」，經過建立者的文件問。script 的寫原本在 network thread 上另一個 task 做，和之後的 load 的順序沒有保證；改成在主迴圈裡當場做。
+- 和 Chromium 不同、留著的（寫在程式的註解或限制裡）：判斷的順序照 HTML（先 cookie-averse 再 opaque），`data:` 的文件讀到空的（Chrome 丟 `SecurityError`）；寫在操作結束時才送（Chrome 在 setter 裡送），讀都在操作之外，看得到。
+- 新的測試：`net` 的 `cookie_loads` 加 2 個（第一方的 script、第三方的 script 照政策），重開之後的測試加 script 的第一次讀；`browser` 的 `cookies` 加 2 個（`document.cookie` 和 `cookieEnabled`、`file:` 的頁面），單元測試 1 個（loader 的核對）。WPT 列進 `document-cookie.html`、`cookie-enabled-noncookie-frame.html`、`set-and-delete-document-cookie.window.js`，`navigatorcookies-cookieenabled-true.html` 拿掉了預期結果。
+- mutation test（`mutants-5a.toml`）22 個，抓到 21 個；沒抓到的「沒有 window 的文件也有 cookie」是 `is_fully_active` 本來就看 window，拿掉了多的檢查，改成弄壞 `is_fully_active` 的那一個，重跑抓到。測不到的兩處（opaque 的 `SecurityError`、壞掉的讀照樣回答）記進 `docs/test-gaps.md` 的「只靠審查」。
+- 文件：`docs/limitations.md`（`document.cookie` 每次問、cookie-averse 的文件、`cookieEnabled` 照政策）、`docs/architecture.md`（同步等 Browser 的呼叫、`net` 的 script 的 cookie、IO thread 的核對）、`docs/test-gaps.md`。
+- 跑過的檢查：`cargo test` 的 `protocol`、`net`、`dom`、`dom_api`、`dom_js`、`renderer`、`browser`、`shell`（2277 個通過）；這幾個 crate 的 `cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`；`test.py wpt cookies/ html/dom/documents/resource-metadata-management/ html/webappapis/system-state-and-capabilities/the-navigator-object/ fetch/api/cors/` 0 個意外的結果。
 

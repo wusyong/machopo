@@ -208,6 +208,12 @@ impl RenderThread {
             to_browser: self.to_browser.clone(),
             scheduler: self.scheduler.clone(),
         }));
+        // `document.cookie`, a read waiting for the browser.
+        engine.set_cookie_host(Box::new(super::documents::RendererCookieHost {
+            to_browser: self.to_browser.clone(),
+            scheduler: self.scheduler.clone(),
+            loaders: self.loaders.clone(),
+        }));
         // What every frame's `navigator` answers, a new iframe's too.
         engine
             .dom_mut()

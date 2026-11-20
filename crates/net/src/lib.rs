@@ -60,7 +60,7 @@ use ipc::TimeTicks;
 use ipc::data_pipe;
 use protocol::network::{
     CompletionStatus, LoadResult, NetError, NetErrorCode, RedirectInfo, ResourceRequest,
-    ResourceResponse, ResponseHead,
+    ResourceResponse, ResponseHead, TrustedParams,
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::AbortHandle;
@@ -124,7 +124,13 @@ enum Listener {
     },
 }
 
-struct Job {
+/// What the `NetworkService` thread is given to do.
+enum Job {
+    Load(Load),
+    Cookies(cookies::ScriptCookies),
+}
+
+struct Load {
     request: ResourceRequest,
     listener: Listener,
     state: Arc<Mutex<LoadState>>,
@@ -275,6 +281,19 @@ impl NetworkContext {
                     // The context's cookies, which its loads share.
                     let cookies = cookies::CookieJar::new(params.allow_third_party_cookies, store);
                     while let Some(job) = rx.recv().await {
+                        let job = match job {
+                            Job::Load(load) => load,
+                            // Script's cookies here, in the order they
+                            // came with the loads: a load after a write
+                            // sends it, as the page expects. Until the
+                            // profile's cookies are in, this waits, and the
+                            // jobs after it too (just after the start).
+                            Job::Cookies(call) => {
+                                cookies.wait_for_load().await;
+                                cookies.answer_script(call);
+                                continue;
+                            }
+                        };
                         let transport = transport.clone();
                         let cookies = cookies.clone();
                         let mut state = job.state.lock().expect("a load's state");
@@ -356,15 +375,63 @@ impl NetworkContext {
 
     fn start_load(&self, request: ResourceRequest, listener: Listener) -> LoadHandle {
         let state = Arc::new(Mutex::new(LoadState::default()));
-        let job = Job {
+        let job = Job::Load(Load {
             request,
             listener,
             state: state.clone(),
-        };
+        });
         if self.jobs.send(job).is_err() {
             tracing::warn!("network service is gone; dropping request");
         }
         LoadHandle { state }
+    }
+
+    /// The cookies of `url` script sees (`document.cookie`'s getter,
+    /// `RestrictedCookieManager::GetCookiesString`), from where `trusted`
+    /// (a document's loader's) says, given to `done` on the
+    /// `NetworkService` thread, once the profile's cookies are in; an
+    /// empty string for none, or if the network service has gone.
+    pub fn get_cookies_for_script(
+        &self,
+        url: url::Url,
+        trusted: TrustedParams,
+        done: impl FnOnce(String) + Send + 'static,
+    ) {
+        self.send_cookies(cookies::ScriptCookies::Get {
+            url,
+            trusted,
+            done: Box::new(done),
+        });
+    }
+
+    /// Sets `line` as script sets it at `url` (`document.cookie`'s setter,
+    /// `SetCookieFromString`), from where `trusted` says: after the calls
+    /// before it, before those after.
+    pub fn set_cookie_from_script(&self, url: url::Url, trusted: TrustedParams, line: String) {
+        self.send_cookies(cookies::ScriptCookies::Set { url, trusted, line });
+    }
+
+    /// Whether the cookie policy lets a document at `url`, where `trusted`
+    /// says, have every cookie, not partitioned ones alone
+    /// (`navigator.cookieEnabled`, `CookiesEnabledFor`), given to `done` as
+    /// [`get_cookies_for_script`](Self::get_cookies_for_script)'s.
+    pub fn cookies_enabled_for(
+        &self,
+        url: url::Url,
+        trusted: TrustedParams,
+        done: impl FnOnce(bool) + Send + 'static,
+    ) {
+        self.send_cookies(cookies::ScriptCookies::Enabled {
+            url,
+            trusted,
+            done: Box::new(done),
+        });
+    }
+
+    fn send_cookies(&self, call: cookies::ScriptCookies) {
+        if self.jobs.send(Job::Cookies(call)).is_err() {
+            tracing::warn!("network service is gone; dropping script's cookies");
+        }
     }
 
     /// `URL.createObjectURL`'s `url` stands for a blob of `bytes` and

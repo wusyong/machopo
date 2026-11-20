@@ -1703,7 +1703,10 @@ impl WebContents {
             | RendererHostMsg::DedicatedWorkerGone { .. }
             | RendererHostMsg::RegisterBlobUrl { .. }
             | RendererHostMsg::ChangeStorage { .. }
-            | RendererHostMsg::ForgetStorageAreas => {}
+            | RendererHostMsg::ForgetStorageAreas
+            | RendererHostMsg::GetCookies { .. }
+            | RendererHostMsg::SetCookie { .. }
+            | RendererHostMsg::CookiesEnabled { .. } => {}
             // Revoked for its loads already; the navigations asked for
             // before it, which came before it, have their blob.
             RendererHostMsg::RevokeBlobUrl { url } => {

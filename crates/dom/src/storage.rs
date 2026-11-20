@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use elise::{Gc, GcObject, HeapVector, JsEdge, LocalExternal, Member, Persistent, WeakMember};
 
-use crate::{Cx, Window, sites};
+use crate::{Cx, NodeRef, Window, sites};
 
 #[derive(GcObject)]
 pub struct Storage {
@@ -180,13 +180,27 @@ impl Items {
     }
 }
 
-/// The areas by number, the changes the host has yet to take, the
-/// windows whose `storage` listeners want their areas opened, the last
-/// `Storage`'s number, and every `Storage`, weakly.
+/// A cookie script set (`document.cookie`'s setter): the host sends it to
+/// the browser as it does `localStorage`'s changes, before the call
+/// returns, in order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CookieWrite {
+    /// The document's number.
+    pub document: crate::NodeId,
+    /// Its cookie URL.
+    pub url: String,
+    pub line: String,
+}
+
+/// The areas by number, the changes the host has yet to take (and the
+/// cookies script set), the windows whose `storage` listeners want their
+/// areas opened, the last `Storage`'s number, and every `Storage`,
+/// weakly.
 #[derive(Default)]
 pub(crate) struct StorageAreas {
     areas: RefCell<HashMap<u64, Area>>,
     changes: Cell<Vec<StorageChange>>,
+    cookies: Cell<Vec<CookieWrite>>,
     listened: Cell<Vec<Persistent<Window>>>,
     sources: Cell<u64>,
     storages: Cell<Option<Persistent<HeapVector<StorageRef>>>>,
@@ -606,6 +620,28 @@ impl<'gc> Cx<'_, 'gc> {
     /// The changes made since the last time, in order, taken.
     pub fn take_storage_changes(&self) -> Vec<StorageChange> {
         self.changes.storage.changes.take()
+    }
+
+    /// Script set `line` as a cookie of `document`'s, at its cookie URL
+    /// `url`: queued for the host, which the engine hands it with the
+    /// storage changes (`take_cookie_writes`).
+    pub fn queue_cookie_write(&self, document: NodeRef<'gc>, url: String, line: String) {
+        let state = &self.changes.storage.cookies;
+        let mut writes = state.take();
+        writes.push(CookieWrite {
+            document: self.node_id(document),
+            url,
+            line,
+        });
+        state.set(writes);
+        self.changes
+            .microtasks
+            .set(self.changes.microtasks.get() | crate::Microtasks::STORAGE);
+    }
+
+    /// The cookies script set since the last time, in order, taken.
+    pub fn take_cookie_writes(&self) -> Vec<CookieWrite> {
+        self.changes.storage.cookies.take()
     }
 
     pub(crate) fn storage_wrapper_edge(&self, storage: Gc<'gc, Storage>) -> &'gc JsEdge {

@@ -123,3 +123,119 @@ fn a_profiles_cookies_outlast_its_storage() {
     assert_eq!(sent(&server, "/check").as_deref(), Some("kept=1"));
     web_contents.shutdown();
 }
+
+/// `document.cookie`: script reads the page's cookies but `HttpOnly` ones,
+/// and what it sets goes with the page's next request; an `about:blank`
+/// iframe's document reads its creator's; a document of no browsing
+/// context reads none, nor one of a frame taken out of the page. `navigator.cookieEnabled` is true at the top; in a
+/// third party's iframe, only with Chromium's policy, where its
+/// `document.cookie` reads the cookie it set.
+#[test]
+fn document_cookie_and_cookie_enabled() {
+    for allow in [false, true] {
+        let server = server(&[
+            (
+                "/page",
+                Route::ok(
+                    "text/html",
+                    r#"<!DOCTYPE html><script>
+const results = [];
+try {
+results.push(document.cookie);
+document.cookie = 'script=1';
+document.cookie = 'hidden=2';
+results.push(document.cookie);
+const blank = document.createElement('iframe');
+document.documentElement.append(blank);
+results.push(blank.contentDocument.cookie);
+results.push(document.implementation.createHTMLDocument('').cookie);
+results.push(navigator.cookieEnabled);
+fetch('/echo').then(() => {
+  const same = document.createElement('iframe');
+  same.src = '/echo';
+  same.onload = () => {
+    const detached = same.contentDocument;
+    results.push(detached.cookie);
+    same.remove();
+    results.push(detached.cookie);
+    const frame = document.createElement('iframe');
+    frame.src = `http://b.localhost:${location.port}/frame`;
+    frame.onload = () => { document.title = results.join('|'); };
+    document.documentElement.append(frame);
+  };
+  document.documentElement.append(same);
+});
+} catch (error) { document.title = `error|${error}`; }
+</script>"#,
+                )
+                .with_header("Set-Cookie", "http=1")
+                .with_header("Set-Cookie", "hidden=1; HttpOnly"),
+            ),
+            ("/echo", Route::ok("text/plain", "echo")),
+            ("/report", Route::ok("text/plain", "report")),
+            (
+                "/frame",
+                Route::ok(
+                    "text/html",
+                    r#"<script>
+let report;
+try {
+  document.cookie = 'third=1; SameSite=None; Secure';
+  report = `${navigator.cookieEnabled}:${document.cookie}`;
+} catch (error) { report = `error:${error}`; }
+const image = new Image();
+image.src = `/report?${report}`;
+document.documentElement.append(image);
+</script>"#,
+                ),
+            ),
+        ]);
+        let (mut web_contents, host_rx) = tab_in(partition(allow));
+        web_contents.navigate(server.url_for_host("a.localhost", "/page"));
+        let title = titles_until(&mut web_contents, &host_rx, |title| title.contains('|'));
+        assert_eq!(
+            title, "http=1|http=1; script=1|http=1; script=1||true|http=1; script=1|",
+            "allow {allow}"
+        );
+        let report = server
+            .requests()
+            .into_iter()
+            .find(|request| request.target.starts_with("/report?"))
+            .map(|request| request.target);
+        let third = if allow { "true:third=1" } else { "false:" };
+        assert_eq!(report, Some(format!("/report?{third}")), "allow {allow}");
+        assert_eq!(
+            sent(&server, "/echo").as_deref(),
+            Some("http=1; hidden=1; script=1"),
+            "allow {allow}"
+        );
+        web_contents.shutdown();
+    }
+}
+
+/// A `file:` page's document is cookie-averse: it reads no cookies and
+/// throws nothing, and `navigator.cookieEnabled` is true.
+#[test]
+fn a_file_pages_document_has_no_cookies() {
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("browser-cookies")
+        .join("file");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let page = dir.join("page.html");
+    std::fs::write(
+        &page,
+        r#"<script>
+try {
+  document.cookie = 'a=1';
+  document.title = `[${document.cookie}]:${navigator.cookieEnabled}`;
+} catch (error) { document.title = `error:${error}`; }
+</script>"#,
+    )
+    .unwrap();
+    let (mut web_contents, host_rx) = tab_in(partition(false));
+    web_contents.navigate(url::Url::from_file_path(&page).unwrap().to_string());
+    let title = titles_until(&mut web_contents, &host_rx, |title| !title.is_empty());
+    assert_eq!(title, "[]:true");
+    web_contents.shutdown();
+}

@@ -301,6 +301,14 @@ pub enum RendererMsg {
         request_id: u64,
         area: Option<OpenedStorageArea>,
     },
+    /// The answer to `RendererHostMsg::GetCookies` (`[Sync]
+    /// GetCookiesString`): the `Cookie` string script sees, empty for none.
+    /// Not a task: the main thread waits for it alone, as for
+    /// `StorageAreaOpened`.
+    Cookies { request_id: u64, cookies: String },
+    /// The answer to `RendererHostMsg::CookiesEnabled` (`[Sync]
+    /// CookiesEnabledFor`). Not a task, as `Cookies`.
+    CookiesEnabled { request_id: u64, enabled: bool },
     /// A change to the `localStorage` area `area`, which this renderer
     /// opened (`StorageAreaObserver::KeyChanged`, `KeyDeleted`,
     /// `AllDeleted`), in the order the browser made them: the value before
@@ -790,6 +798,33 @@ pub enum RendererHostMsg {
     OpenStorageArea {
         frame: crate::FrameToken,
         kind: StorageKind,
+        request_id: u64,
+    },
+    /// `document.cookie`'s getter, through the document's loader
+    /// (`RestrictedCookieManager::GetCookiesString`, the frame's): the
+    /// cookies of `url`, the document's cookie URL, that script sees, by
+    /// the loader's trusted params. Answered with `Cookies` of the same
+    /// `request_id`, which the main thread waits for. Handled on the IO
+    /// thread: `url` of another origin than the loader's is a bad message.
+    GetCookies {
+        loader: u64,
+        url: String,
+        request_id: u64,
+    },
+    /// `document.cookie`'s setter (`SetCookieFromString`): `line` set as
+    /// script sets it, at `url`, through `loader`, as `GetCookies`; not
+    /// answered. A later `GetCookies` sees it: they go the same way.
+    SetCookie {
+        loader: u64,
+        url: String,
+        line: String,
+    },
+    /// `navigator.cookieEnabled` (`CookiesEnabledFor`): whether the cookie
+    /// policy lets the document at `url` have unpartitioned cookies,
+    /// through `loader`, as `GetCookies`. Answered with `CookiesEnabled`.
+    CookiesEnabled {
+        loader: u64,
+        url: String,
         request_id: u64,
     },
     /// A change to the area `area` (`LocalStorageOpened`'s), which this

@@ -118,6 +118,30 @@ fn check_request(
     Ok(Some(params.trusted.clone()))
 }
 
+/// Where script's cookies of `url` (a document's cookie URL) are, through
+/// `loader` (`RestrictedCookieManager::ValidateAccessToCookiesAt`, with the
+/// loader as the frame's bound origin and context): the URL and the
+/// loader's trusted params, if the renderer was given the loader, its
+/// origin isn't opaque, and `url` is of it.
+fn check_cookie_access(
+    loaders: &Loaders,
+    loader: u64,
+    url: &str,
+) -> Result<(url::Url, TrustedParams), BadMessageReason> {
+    let params = loaders
+        .params
+        .get(&loader)
+        .ok_or(BadMessageReason::UnknownLoader)?;
+    if !params.origin.is_tuple() {
+        return Err(BadMessageReason::CookiesOfOpaqueOrigin);
+    }
+    let url = url::Url::parse(url).map_err(|_| BadMessageReason::CookieUrlMismatch)?;
+    if url.origin() != params.origin {
+        return Err(BadMessageReason::CookieUrlMismatch);
+    }
+    Ok((url, params.trusted.clone()))
+}
+
 /// Called on a renderer's IO thread with each message it sends the UI
 /// thread, by the renderer's id; or with what makes one bad (`Err`).
 pub type RendererMessageCallback =
@@ -367,6 +391,77 @@ impl RenderProcessHost {
                                 dom_storage.change(renderer_id, area, change, source, url);
                             }
                             RendererHostMsg::ForgetStorageAreas => dom_storage.forget(renderer_id),
+                            // Script's cookies, to the network service at
+                            // once, in order (the frame's
+                            // `RestrictedCookieManager`); a bad one answered
+                            // all the same, so the main thread waits no more.
+                            RendererHostMsg::GetCookies {
+                                loader,
+                                url,
+                                request_id,
+                            } => {
+                                let checked = check_cookie_access(
+                                    &loaders.lock().unwrap_or_else(PoisonError::into_inner),
+                                    loader,
+                                    &url,
+                                );
+                                let answer = to_renderer.clone();
+                                let done = move |cookies| {
+                                    let _ = answer.send(RendererMsg::Cookies {
+                                        request_id,
+                                        cookies,
+                                    });
+                                };
+                                match checked {
+                                    Ok((url, trusted)) => {
+                                        network.get_cookies_for_script(url, trusted, done);
+                                    }
+                                    Err(reason) => {
+                                        done(String::new());
+                                        forward(tab, Err(reason));
+                                    }
+                                }
+                            }
+                            RendererHostMsg::SetCookie { loader, url, line } => {
+                                let checked = check_cookie_access(
+                                    &loaders.lock().unwrap_or_else(PoisonError::into_inner),
+                                    loader,
+                                    &url,
+                                );
+                                match checked {
+                                    Ok((url, trusted)) => {
+                                        network.set_cookie_from_script(url, trusted, line);
+                                    }
+                                    Err(reason) => forward(tab, Err(reason)),
+                                }
+                            }
+                            RendererHostMsg::CookiesEnabled {
+                                loader,
+                                url,
+                                request_id,
+                            } => {
+                                let checked = check_cookie_access(
+                                    &loaders.lock().unwrap_or_else(PoisonError::into_inner),
+                                    loader,
+                                    &url,
+                                );
+                                let answer = to_renderer.clone();
+                                let done = move |enabled| {
+                                    let _ = answer.send(RendererMsg::CookiesEnabled {
+                                        request_id,
+                                        enabled,
+                                    });
+                                };
+                                match checked {
+                                    Ok((url, trusted)) => {
+                                        network.cookies_enabled_for(url, trusted, done);
+                                    }
+                                    Err(reason) => {
+                                        done(false);
+                                        forward(tab, Err(reason));
+                                    }
+                                }
+                            }
                             RendererHostMsg::FollowRedirect { request_id, worker } => {
                                 if let Some(load) = loads
                                     .lock()
@@ -878,5 +973,41 @@ mod tests {
             Err(BadMessageReason::WorkerLoaderMismatch)
         );
         assert_eq!(check_request(&loaders, &workers, Some(8), 1, &ok), Ok(None));
+    }
+
+    /// Script's cookies through a loader: of a URL of the loader's origin,
+    /// by its trusted params; of another origin (another port too), a URL
+    /// that isn't one, an opaque origin's loader or one not given are bad.
+    #[test]
+    fn script_cookies_are_of_the_loaders_origin() {
+        let loaders = loaders();
+        let checked = check_cookie_access(&loaders, 1, "https://a.example/p?q");
+        assert_eq!(
+            checked,
+            Ok((
+                url::Url::parse("https://a.example/p?q").unwrap(),
+                loaders.params[&1].trusted.clone()
+            ))
+        );
+        for url in [
+            "https://b.example/",
+            "https://a.example:444/",
+            "http://a.example/",
+            "a",
+        ] {
+            assert_eq!(
+                check_cookie_access(&loaders, 1, url),
+                Err(BadMessageReason::CookieUrlMismatch),
+                "{url}"
+            );
+        }
+        assert_eq!(
+            check_cookie_access(&loaders, 2, "https://a.example/"),
+            Err(BadMessageReason::CookiesOfOpaqueOrigin)
+        );
+        assert_eq!(
+            check_cookie_access(&loaders, 3, "https://a.example/"),
+            Err(BadMessageReason::UnknownLoader)
+        );
     }
 }

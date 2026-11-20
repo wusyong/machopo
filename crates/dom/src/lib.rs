@@ -209,8 +209,8 @@ pub use shadow::{
 pub use slot::SlotData;
 pub use step_range::{RangeKey, StepError};
 pub use storage::{
-    Storage, StorageChange, StorageEventData, StorageEventInfo, StorageEventValues, StorageKind,
-    StorageMutation,
+    CookieWrite, Storage, StorageChange, StorageEventData, StorageEventInfo, StorageEventValues,
+    StorageKind, StorageMutation,
 };
 pub use style_sheet::{CssStyleSheet, SheetContents, SheetMedia};
 pub use svg::{SvgAnimatedString, SvgMatrix, SvgPoint, SvgRect};
@@ -901,9 +901,11 @@ impl Microtasks {
     /// `FetchManager` starts its loader in the call;
     /// `Cx::take_fetch_requests`).
     pub(crate) const FETCHES: u8 = 1 << 6;
-    /// Not a microtask either: `localStorage` changed, which the engine
-    /// hands its host before the call returns (Blink's `CachedStorageArea`
-    /// tells the browser as it changes; `Cx::take_storage_changes`).
+    /// Not a microtask either: `localStorage` changed, or script set a
+    /// cookie, which the engine hands its host before the call returns
+    /// (Blink's `CachedStorageArea` tells the browser as it changes, its
+    /// `CookieJar` as it sets one; `Cx::take_storage_changes`,
+    /// `Cx::take_cookie_writes`).
     pub(crate) const STORAGE: u8 = 1 << 7;
 
     #[inline]

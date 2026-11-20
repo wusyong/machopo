@@ -101,6 +101,41 @@ fn same_site_initiator(url: &Url, trusted: &TrustedParams) -> bool {
     })
 }
 
+/// The `SameSite` context script reads and writes the cookies of `url` in
+/// (`ComputeSameSiteContextForScriptGet`, without an initiator, and
+/// `ForScriptSet`): strict if `url` is first party to the site for cookies
+/// (setting needs lax, which strict is too), else cross-site.
+fn context_for_script(url: &Url, site_for_cookies: &SiteForCookies) -> SameSiteCookieContext {
+    if site_for_cookies.is_first_party(url) {
+        SameSiteCookieContext::SameSiteStrict
+    } else {
+        SameSiteCookieContext::CrossSite
+    }
+}
+
+/// A call of script's on the jar (`RestrictedCookieManager`'s, with the
+/// script role), from where `trusted` (a document's loader's) says.
+pub(crate) enum ScriptCookies {
+    /// `document.cookie`'s getter: the cookie string, to `done`.
+    Get {
+        url: Url,
+        trusted: TrustedParams,
+        done: Box<dyn FnOnce(String) + Send>,
+    },
+    /// `document.cookie`'s setter.
+    Set {
+        url: Url,
+        trusted: TrustedParams,
+        line: String,
+    },
+    /// `navigator.cookieEnabled`.
+    Enabled {
+        url: Url,
+        trusted: TrustedParams,
+        done: Box<dyn FnOnce(bool) + Send>,
+    },
+}
+
 /// The site of the top-level frame of a hop to `url`: a main frame
 /// navigation's, its URL's at each hop (its `IsolationInfo` is redone at a
 /// redirect); another request's, the browser's. None if it is opaque.
@@ -249,6 +284,72 @@ impl CookieJar {
             .filter(|cookie| self.accessible(cookie, url, &hop.site_for_cookies))
             .collect();
         (!cookies.is_empty()).then(|| CanonicalCookie::build_cookie_line(&cookies))
+    }
+
+    /// Answers `call` (after [`wait_for_load`](Self::wait_for_load)).
+    pub(crate) fn answer_script(&self, call: ScriptCookies) {
+        match call {
+            ScriptCookies::Get { url, trusted, done } => {
+                done(self.cookies_for_script(&url, &trusted));
+            }
+            ScriptCookies::Set { url, trusted, line } => {
+                self.set_from_script(&url, &trusted, &line);
+            }
+            ScriptCookies::Enabled { url, trusted, done } => {
+                let site_for_cookies = site_for_cookies_at(&url, &trusted);
+                done(
+                    self.allow_third_party_cookies
+                        || site_for_cookies.is_first_party_schemeless(&url),
+                );
+            }
+        }
+    }
+
+    /// The cookie string script sees at `url`, from where `trusted` says
+    /// (`GetCookiesString`): the jar's cookies of the context and the
+    /// partition, but `HttpOnly` ones and those the policy keeps from it.
+    fn cookies_for_script(&self, url: &Url, trusted: &TrustedParams) -> String {
+        let hop = Hop::new(url, trusted);
+        let options = CookieOptions {
+            include_httponly: false,
+            ..self.options(context_for_script(url, &hop.site_for_cookies))
+        };
+        let cookies = self.monster().get_cookie_list_with_options(
+            url,
+            &options,
+            hop.partition_key.as_ref(),
+            Time::now(),
+        );
+        let cookies: Vec<CanonicalCookie> = cookies
+            .into_iter()
+            .filter(|cookie| self.accessible(cookie, url, &hop.site_for_cookies))
+            .collect();
+        CanonicalCookie::build_cookie_line(&cookies)
+    }
+
+    /// Sets `line` as script sets it at `url`, from where `trusted` says
+    /// (`SetCookieFromString`): not `HttpOnly`, nor over an `HttpOnly`
+    /// one; in the partition, if `Partitioned`; not if the policy keeps it
+    /// from script there.
+    fn set_from_script(&self, url: &Url, trusted: &TrustedParams, line: &str) {
+        let hop = Hop::new(url, trusted);
+        let options = CookieOptions {
+            include_httponly: false,
+            ..self.options(context_for_script(url, &hop.site_for_cookies))
+        };
+        let cookie = CanonicalCookie::create(
+            url,
+            line,
+            Time::now(),
+            None,
+            hop.partition_key.as_ref(),
+            CookieSourceType::Script,
+        );
+        if let Ok(cookie) = cookie
+            && self.accessible(&cookie, url, &hop.site_for_cookies)
+        {
+            let _ = self.monster().set_canonical_cookie(cookie, url, &options);
+        }
     }
 
     /// Keeps the cookies the `Set-Cookie` headers of the response of a hop

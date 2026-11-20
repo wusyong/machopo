@@ -60,4 +60,11 @@ pub enum BadMessageReason {
     /// A request with the params only the browser gives one (Chromium's
     /// `TRUSTED_PARAMS_FROM_UNTRUSTED_FACTORY`).
     TrustedParamsFromRenderer,
+    /// Script's cookies through the loader of a document of an opaque
+    /// origin, which has none (`RestrictedCookieManager`'s "Access is
+    /// denied in this context").
+    CookiesOfOpaqueOrigin,
+    /// Script's cookies of a URL of another origin than the loader's
+    /// (`RestrictedCookieManager`'s "Incorrect url origin").
+    CookieUrlMismatch,
 }

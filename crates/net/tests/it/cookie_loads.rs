@@ -58,6 +58,10 @@ fn server() -> TestServer {
                 .with_header("Set-Cookie", "third=1; SameSite=None; Secure"),
         ),
         (
+            "/http-only",
+            Route::ok("text/plain", "http-only").with_header("Set-Cookie", "only=1; HttpOnly"),
+        ),
+        (
             "/persistent",
             Route::ok("text/plain", "persistent")
                 .with_header("Set-Cookie", "kept=1; Max-Age=3600")
@@ -333,7 +337,12 @@ fn a_profiles_persistent_cookies_outlast_its_network_context() {
         );
         assert_eq!(sent(&server, "/echo"), "kept session");
     }
+    // Script's first read waits for them too.
     let network = network_in(false, Some(&dir));
+    assert_eq!(
+        script_cookies(&network, &a("/"), first_party("a.localhost")),
+        "kept=1"
+    );
     load(
         &network,
         request(a("/echo"), Some(first_party("a.localhost"))),
@@ -421,6 +430,130 @@ fn a_partition_minds_a_cross_site_ancestor() {
         assert_eq!(
             sent(&server, "/echo"),
             if allow { "plain" } else { "" },
+            "allow {allow}"
+        );
+    }
+}
+
+/// What script reads at `url` from where `trusted` says, waiting for it.
+fn script_cookies(network: &NetworkContext, url: &str, trusted: TrustedParams) -> String {
+    let (done, answered) = unbounded();
+    network.get_cookies_for_script(url::Url::parse(url).unwrap(), trusted, move |cookies| {
+        let _ = done.send(cookies);
+    });
+    answered.recv_timeout(Duration::from_secs(30)).unwrap()
+}
+
+fn script_enabled(network: &NetworkContext, url: &str, trusted: TrustedParams) -> bool {
+    let (done, answered) = unbounded();
+    network.cookies_enabled_for(url::Url::parse(url).unwrap(), trusted, move |enabled| {
+        let _ = done.send(enabled);
+    });
+    answered.recv_timeout(Duration::from_secs(30)).unwrap()
+}
+
+/// Script's cookies (`document.cookie`): a first party's reads every one
+/// of its URL but `HttpOnly` ones (of every `SameSite`), and what it sets
+/// it reads at once and its requests send; it sets no `HttpOnly` one, nor
+/// one over an `HttpOnly` one.
+#[test]
+fn script_reads_and_sets_a_first_partys_cookies() {
+    let (network, server) = (network(false), server());
+    let a = |path: &str| server.url_for_host("a.localhost", path);
+    load(
+        &network,
+        request(a("/set"), Some(first_party("a.localhost"))),
+    );
+    let set = |line: &str| {
+        network.set_cookie_from_script(
+            url::Url::parse(&a("/")).unwrap(),
+            first_party("a.localhost"),
+            line.to_owned(),
+        );
+    };
+    set("script=1");
+    set("strict=2; HttpOnly");
+    set("hidden=1; HttpOnly");
+    let names = |line: String| {
+        let mut names: Vec<String> = line
+            .split("; ")
+            .filter(|pair| !pair.is_empty())
+            .map(str::to_owned)
+            .collect();
+        names.sort_unstable();
+        names.join(" ")
+    };
+    assert_eq!(
+        names(script_cookies(
+            &network,
+            &a("/"),
+            first_party("a.localhost")
+        )),
+        "lax=1 none=1 script=1 strict=1 unspecified=1"
+    );
+    load(
+        &network,
+        request(a("/echo"), Some(first_party("a.localhost"))),
+    );
+    assert_eq!(sent(&server, "/echo"), "lax none script strict unspecified");
+
+    // Over an `HttpOnly` one: no.
+    load(
+        &network,
+        request(a("/http-only"), Some(first_party("a.localhost"))),
+    );
+    set("only=2");
+    assert!(!script_cookies(&network, &a("/"), first_party("a.localhost")).contains("only"));
+    load(
+        &network,
+        request(a("/echo"), Some(first_party("a.localhost"))),
+    );
+    assert!(sent(&server, "/echo").contains("only"));
+}
+
+/// A third party's script: in machopo's policy it reads and sets none but
+/// `Partitioned` ones, and cookies aren't enabled; in Chromium's, its
+/// `SameSite=None` ones too, and they are. A first party's are enabled in
+/// both.
+#[test]
+fn a_third_partys_script_by_the_policy() {
+    for allow in [false, true] {
+        let (network, server) = (network(allow), server());
+        let a = server.url_for_host("a.localhost", "/");
+        let in_b = || embedded_in("b.localhost");
+        // A first party's `SameSite=None` cookie: a third party's script
+        // reads it only in Chromium's policy.
+        network.set_cookie_from_script(
+            url::Url::parse(&a).unwrap(),
+            first_party("a.localhost"),
+            "first=1; SameSite=None; Secure".to_owned(),
+        );
+        for line in [
+            "none=1; SameSite=None; Secure",
+            "chip=1; SameSite=None; Secure; Partitioned",
+            "lax=1",
+        ] {
+            network.set_cookie_from_script(url::Url::parse(&a).unwrap(), in_b(), line.to_owned());
+        }
+        let read = script_cookies(&network, &a, in_b());
+        assert_eq!(
+            read,
+            if allow {
+                "first=1; none=1; chip=1"
+            } else {
+                "chip=1"
+            },
+            "allow {allow}"
+        );
+        // The partitioned one is of b's top-level site alone.
+        assert_eq!(
+            script_cookies(&network, &a, first_party("a.localhost")),
+            if allow { "first=1; none=1" } else { "first=1" },
+            "allow {allow}"
+        );
+        assert_eq!(script_enabled(&network, &a, in_b()), allow, "allow {allow}");
+        assert!(
+            script_enabled(&network, &a, first_party("a.localhost")),
             "allow {allow}"
         );
     }

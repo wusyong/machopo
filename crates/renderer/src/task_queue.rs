@@ -564,7 +564,10 @@ impl RendererSender {
             return Ok(());
         }
         // An answer the main thread waits for, not a task.
-        if let RendererMsg::StorageAreaOpened { request_id, .. } = msg {
+        if let RendererMsg::StorageAreaOpened { request_id, .. }
+        | RendererMsg::Cookies { request_id, .. }
+        | RendererMsg::CookiesEnabled { request_id, .. } = msg
+        {
             return scheduler.post_reply(request_id, msg);
         }
         let (queued, interrupt) = match msg {

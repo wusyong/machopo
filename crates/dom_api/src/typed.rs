@@ -558,6 +558,19 @@ pub trait ScriptFront: Front {
         unreachable!("a front end binding Web Storage asks the engine's storage host")
     }
 
+    /// `ScriptHost::cookie_call`, for `document.cookie` and
+    /// `navigator.cookieEnabled`.
+    fn cookie_call(
+        &mut self,
+        document: &NodeRoot,
+        url: &str,
+        call: crate::CookieCall,
+    ) -> crate::CookieReply {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
+        let _ = (document, url, call);
+        unreachable!("a front end binding cookies asks the engine's cookie host")
+    }
+
     /// `ScriptHost::call_node_filter`.
     fn call_node_filter(
         &mut self,
@@ -2206,6 +2219,19 @@ pub trait ScriptHost {
         None
     }
 
+    /// `call` on the cookies of `document` at its cookie URL `url`, by the
+    /// engine's cookie host, which waits for a read's answer
+    /// (`CookieHost`); none without one: no cookies.
+    fn cookie_call(
+        &mut self,
+        document: &NodeRoot,
+        url: &str,
+        call: crate::CookieCall,
+    ) -> crate::CookieReply {
+        let _ = (document, url, call);
+        crate::CookieReply::None
+    }
+
     /// The DOM's pending promise numbered `promise` rejected with
     /// `signal`'s abort reason (an aborted `fetch()`'s).
     fn reject_promise_with_reason(&mut self, promise: u64, signal: &Persistent<EventTargetImpl>) {
@@ -2477,6 +2503,15 @@ impl<F: ScriptFront> ScriptHost for FrontHost<'_, F> {
         kind: dom::StorageKind,
     ) -> Option<protocol::renderer::OpenedStorageArea> {
         self.0.open_storage_area(document, kind)
+    }
+
+    fn cookie_call(
+        &mut self,
+        document: &NodeRoot,
+        url: &str,
+        call: crate::CookieCall,
+    ) -> crate::CookieReply {
+        self.0.cookie_call(document, url, call)
     }
 
     fn reject_promise_with_reason(&mut self, promise: u64, signal: &Persistent<EventTargetImpl>) {

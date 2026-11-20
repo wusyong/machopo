@@ -1636,6 +1636,10 @@ impl ScriptEngine for V8Engine {
         self.state().storage_host = Some(host);
     }
 
+    fn set_cookie_host(&mut self, host: Box<dyn dom_api::CookieHost>) {
+        self.state().cookie_host = Some(host);
+    }
+
     fn storage_area_changed(
         &mut self,
         area: u64,

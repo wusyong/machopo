@@ -467,6 +467,12 @@ pub trait ScriptEngine: ParserHost {
         let _ = host;
     }
 
+    /// What reads and writes the frames' cookies (`CookieHost`), the
+    /// host's. An engine without `document.cookie` drops it.
+    fn set_cookie_host(&mut self, host: Box<dyn crate::CookieHost>) {
+        let _ = host;
+    }
+
     /// The browser's news of a change to the `localStorage` area `area`,
     /// which this engine's DOM opened (`dom`'s `storage_area_changed`):
     /// taken into the DOM's copy, `storage` events queued at its windows.
