@@ -8,6 +8,7 @@
 
 | 項目 | 為什麼測不到 | 現在靠什麼 | 之後怎麼處理 |
 | --- | --- | --- | --- |
+| event loop 等下一個 task 時，也照新文件畫不了的等待時間醒來（`renderer` 的 `until_next_due` 裡的 `new_content_due`） | 拿掉時空的 frame 要等 loop 為別的事醒來才送：被擋住的文件照樣有網路安靜的偵測、sheet 的回應這些叫醒 loop 的事，測試裡的時間差不出來 | 審查 | 測試能讓 renderer 除了這個計時之外沒有別的事可做（沒有 idleness 的計時、沒有 BeginFrame） |
 | layout 自己的演算法在直排時換成物理座標的那一半：inline 內容區的起點（`content_origin`）、table 的 caption、row group、row、cell 的位置、靜態位置、`vertical-align` 的位移、欄的背景，collapsed border 給 paint 的格線怎麼轉置（`layout` 的 `table.rs`） | style 還不解析 `writing-mode`，`ComputedStyle::writing_direction()` 一律是橫排：直排該轉的地方沒轉抓不到；mutation test 把這類錯誤記成等價。`rtl` 的那一半由 `layout` 的 `direction::`、`lists::` 和 WPT（`css-tables/paint/col-paint-htb-rtl` 這些）測 | 審查；converter、`content_box_origin`、`to_physical_delta` 自己在每種 writing mode 的單元測試（`logical::`） | 直排等 `writing-mode` 的 RFC |
 | event loop 等下一個 task 時，也照跨 origin 的子 frame 的 fragment 導覽之後要在 iframe 上發的 `load` 的時間醒來（`renderer` 的 `until_idle_or_intersections` 裡的 `owner_loads_due`） | 拿掉時 `load` 等到 loop 為別的事醒來才發：頁面剛載入完，loop 本來就會為 DevTools 的網路是否安靜（`next_idleness_due`）、caret、timer 醒來，在幾百 ms 內，測試看不出晚了 | 審查；`load` 發不發、什麼時候不發、有沒有延遲由 `browser` 的 `a_cross_origin_frames_fragment_navigation_fires_its_iframes_load` 守著 | 要守時：在沒有其他東西會叫醒 loop 的頁面（沒有 timer、沒有 caret、DevTools 的網路安靜早就過了）上量 `load` 和導覽之間隔多久 |
 | 頁面換 engine（wasm 文件和 JS 文件之間）的那次 commit 不用發起者的文件當 origin 的來源（`renderer` 的 `commit_document_navigation` 的 `replacing`）：那份文件是舊的 engine 的，renderer 拿著的要在它的 heap 之前放掉 | 要 wasm 的文件把 main frame 導覽到 `about:blank` 才走得到，沒有這樣的測試；拿掉時沒有測試失敗 | 審查；renderer 換 engine 時放掉它拿著的 DOM 的其他東西（`replace_engine`）有測試 | 補一份 wasm 的文件導覽到 `about:blank` 的情境（`wasm_documents`） |
@@ -426,6 +427,7 @@
 - renderer 在 DOM 的樹有任何改動之後都重算主 frame 的標題（`update_title` 看 `tree_version`：不只 `<title>` 改了的時候，子 frame 的文件的改動也算）：重算的標題和上次送的一樣，不會再送。
 - DevTools 的 `DOM.requestNode` 對不是物件的值回答別的錯誤文字（`dom_js` 的 `devtools_page` 的 `node_of_object`，`v8::Object` 的 `try_from` 失敗的那一支）：V8 的 inspector 只給物件 `objectId`，`unwrapObject` 拿回來的一定是物件，這一支走不到；留著是因為 `unwrapObject` 的型別是 `Value`。
 - dedicated worker 的 `importScripts()` 等載入時收到結束的 task 照樣停下（`renderer` 的 `worker_thread.rs` 的 `GlobalHost::load` 把它留給 loop）：拿掉時也一樣，`terminate()` 在送出結束的 task 之前就設了停下的旗標，等載入的迴圈每收到一個 task 都看旗標、loop 一開始也看，兩處都會停；留著是為了不靠設旗標和送 task 的先後。
+- 新文件畫不了的等待時間到時，只在它還被擋住時才要空的 frame（`renderer` 的 `new_content_rendering_timeout` 的 `render_blocked`）：等待在文件第一次畫出來時就停了，時間到時文件一定還沒畫出來；沒被擋住（例如分頁藏著、沒有 `BeginFrame`）時要了也只是 rendering update 走正常的那條路、清掉這個要求。
 
 **網路和載入**
 
@@ -434,3 +436,4 @@
 - DOM 的 autofocus 處理過之後仍收候選（`dom_api` 的 `autofocus_inserted` 不看 processed flag）：`flush_autofocus_candidates` 只在還沒處理時看候選（`has_autofocus_candidates`），處理時清掉清單，之後收進來的永遠不會被用到，只是最上層的文件多留幾個 id；照規範的步驟留著。
 - `net` 的 `URLRequest` 擋不是 token 的 method（reqwest 的 `Method::from_bytes` 也拒絕，錯誤一樣；不依賴它而留著）。
 - `net` 的 CORS 判斷 basic 時看 tainting 還是 basic（`cors.rs` 的 `start`：tainting 只在跨源的網址變成 `cors` 或 `opaque`，之後回到自己的 origin 一定是從那個網址轉回來，那次 redirect 就 taint 了 origin，「沒有 taint」已經排除它；照規範的兩個條件留著）。
+

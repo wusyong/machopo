@@ -512,6 +512,7 @@ fn start_contents(
             num_raster_threads: None,
             caret_blink_interval: None,
             parser_budget: Default::default(),
+            new_content_rendering_delay: browser::NEW_CONTENT_RENDERING_DELAY,
         },
         shell::SCRIPT_ENGINES,
         viz.clone(),

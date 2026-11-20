@@ -18,7 +18,8 @@
 | 3a：renderer 收到 commit 就建文件、邊收邊 parse（文件拿著管道和解碼器、parser 等下一段、等 script 時照讀）、編碼照開頭、Navigation Timing 和 DevTools 的結束、有 `<body>` 才畫 | 完成 | 2026-11-20 |
 | 3b：parser 的時間預算（切片、超過預算或有輸入就讓出、進了 `<body>` 才讓出） | 完成 | 2026-11-20 |
 | 3c：開頭 1024 bytes 的測試、`moving-between-documents/` 等 WPT 的預期結果、第 3 階段的檢查和文件 | 完成 | 2026-11-20 |
-| 4：舊畫面的時限、檢查和文件 | 未開始 | |
+| 4a：舊畫面的時限（commit 之後 4 秒還畫不了就送只有背景的空 frame，放行等著的輸入） | 完成 | 2026-11-20 |
+| 4b：`<head>` 先到、body 晚到的情境，整份 RFC 的檢查和文件 | 未開始 | |
 
 ## 驗收
 
@@ -36,6 +37,7 @@
 | DevTools 和 trace：每段一個 `dataReceived`、結束時 `loadingFinished`；被中止的文件的原文是收到的部分；trace 的 `responseEnd` 在 body 收完時、時間在 `fetchStart` 和 `domInteractive` 之間 | `cargo test -p renderer --lib network_agent::`、`cargo test -p shell --test it devtools trace::marks` |
 | parser 的預算：有了 body 之後讓出（每片都讓出的 parser，body 裡的計時器在兩個 script 之間跑）、`<head>` 裡不讓出、讓出之前至少 parse 一片、預算在讓出 6 次之後變大；文字照整個字元切片 | `cargo test -p browser --test it body::`、`cargo test -p renderer --lib budget input_is_given` |
 | 開頭的 1024 bytes：伺服器在開頭之內停一陣子，engine（wasm 的 `<meta>`）和編碼（`<meta charset>`）照樣是開頭說的 | `cargo test -p browser --test it the_encoding_is`、`cargo test -p shell --test it the_engine_is` |
+| 舊畫面的時限：畫不了的新文件在等待時間之後先顯示空的 frame（沒有 tile）、之後畫出來；等著 frame 的輸入的 ack 跟著空的 frame；畫出來過的文件之後被 sheet 擋住時不換成空的 | `cargo test -p browser --test it -- a_new_document_that_cant a_drawn_document_blocked an_ack_goes_with_the_empty` |
 | `Content-Encoding` 一段一段解，一次給一個 byte 和整份一樣：gzip 的 header（選用的欄位）和 trailer（CRC、長度）、`deflate` 的 zlib 和 raw、brotli、截斷和之後多出來的 | `cargo test -p net --lib content_encoding::` |
 
 ## 做過的檢查
@@ -157,3 +159,13 @@ macOS、Apple M4，2026-11-20。
 - `cargo test --workspace`：4260 個通過、0 個失敗、1 個 ignored。`cargo clippy --workspace --all-targets -- -D warnings` 沒有警告。`cargo fmt --check` 抓到 3a、3b 寫的 8 個檔案的換行，照 rustfmt 改了。
 - `test.py wpt navigation-timing/ html/browsers/browsing-the-web/navigating-across-documents/ html/semantics/scripting-1/the-script-element/`：更新之後 0 個意外的結果。
 - 跑過的檢查：`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。
+
+### 4a：舊畫面的時限
+
+macOS、Apple M4，2026-11-20。
+
+- 決定了第 19 條（空的 frame 只放行輸入）。對照了 Chromium 的 `RenderWidgetHostImpl`：`DidNavigate` 開始 `new_content_rendering_timeout_`（`blink::kNewContentRenderingDelay`，4 秒），到了 `ClearDisplayedGraphics`（`ResetFallbackToFirstNavigationSurface`，露出 view 的背景色；通知 renderer；放行等著的輸入）。
+- renderer：`RendererFlags::new_content_rendering_delay`（預設 `NEW_CONTENT_RENDERING_DELAY`，4 秒）。main frame 的文件 commit 時開始計時，第一次畫出來時停；時間到了還被擋住，下一個 main frame 送 `commit_empty_frame`：沒有 layer、白色的背景、新文件的 `DocumentId`、帶著等著的輸入的 ack；截圖和 `DidFinishLoad` 照舊等真正畫出來的 frame。loop 照這個時間醒來。
+- 新的測試：`browser` 3 個（畫不了的新文件在 300 ms 之後先來一張沒有 tile 的 frame、sheet 到了之後畫出來；畫出來過的文件之後被 sheet 擋住時不換成空的；點了改頁面又導覽的 click 的 ack 跟著空的 frame 到，不等 3 秒的 sheet）。`browser` 的測試的 `tab_with_flags` 多收等待時間。
+- mutation test（`mutants-4a.toml`）7 個，5 個抓到（「ack 跟著空的 frame」第一次沒抓到，補了 click 的那個測試）。沒抓到的：loop 照這個時間醒來（被擋住的文件照樣有網路安靜的偵測這些叫醒 loop 的事，記進 `docs/test-gaps.md` 的「只靠審查」）；時間到時只在被擋住時才要空的 frame（等待在第一次畫出來時就停了，記進「等價、不用處理的 mutation」）。原本還有一個「空的 frame 之後重設 `painted`」，新文件畫出來的一定是新的 output，那一行沒有作用，拿掉了。
+- 跑過的檢查：`cargo test -p browser -p renderer -p shell`（1013 個）、`cargo check --workspace --all-targets`；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。

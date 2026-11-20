@@ -83,6 +83,7 @@ fn tab_with_parser_budget(
         None,
         gfx::SystemColors::DEFAULT,
         parser_budget,
+        browser::NEW_CONTENT_RENDERING_DELAY,
     );
     (web_contents, host_rx)
 }
@@ -100,16 +101,26 @@ fn tab_with_viz_colors(
     Receiver<VizMsg>,
     BeginFrameSource,
 ) {
-    tab_with_flags(wait, automation, gpu, system_colors, Default::default())
+    tab_with_flags(
+        wait,
+        automation,
+        gpu,
+        system_colors,
+        Default::default(),
+        browser::NEW_CONTENT_RENDERING_DELAY,
+    )
 }
 
-/// [`tab_with_viz_colors`], whose renderer's parser has `parser_budget`.
+/// [`tab_with_viz_colors`], whose renderer's parser has `parser_budget`,
+/// and which shows a new document that can't be drawn empty after
+/// `new_content_rendering_delay`.
 fn tab_with_flags(
     wait: bool,
     automation: bool,
     gpu: Option<Arc<dyn SharedImageInterface>>,
     system_colors: gfx::SystemColors,
     parser_budget: browser::ParserBudget,
+    new_content_rendering_delay: Duration,
 ) -> (
     WebContents,
     Receiver<ContentsEvent>,
@@ -130,6 +141,7 @@ fn tab_with_flags(
             num_raster_threads: None,
             caret_blink_interval: None,
             parser_budget,
+            new_content_rendering_delay,
         },
         browser::ScriptEngineFactory {
             engine: dom_js::V8Engine::boxed,
@@ -376,6 +388,112 @@ impl DrivenViz {
             viz.loaded.contains(&latest)
         });
     }
+}
+
+/// A new document that can't be drawn (a sheet blocks it) leaves the page
+/// before shown for the tab's delay at most: then it shows empty (a frame
+/// with nothing but its background: no tiles), till the sheet comes and it
+/// is drawn (`RenderWidgetHostImpl::ClearDisplayedGraphics`).
+#[test]
+fn a_new_document_that_cant_be_drawn_shows_empty_after_the_delay() {
+    let delay = Duration::from_millis(300);
+    let sheet_delay = Duration::from_secs(3);
+    let server = server(&[
+        (
+            "/a",
+            Route::ok("text/html", "<!DOCTYPE html><p style='background: green'>a"),
+        ),
+        (
+            "/b",
+            Route::ok(
+                "text/html",
+                "<!DOCTYPE html><link rel=stylesheet href=/slow.css><p>b",
+            ),
+        ),
+        (
+            "/slow.css",
+            Route::ok("text/css", "p { background: green }").with_delay(sheet_delay),
+        ),
+    ]);
+    let (mut web_contents, host_rx, viz_rx, begin_frames) = tab_with_flags(
+        true,
+        false,
+        None,
+        gfx::SystemColors::DEFAULT,
+        Default::default(),
+        delay,
+    );
+    web_contents.resize(gfx::Size::new(200, 200), 1.0);
+    let mut viz = DrivenViz::new(viz_rx, begin_frames);
+    web_contents.navigate(server.url("/a"));
+    viz.until_loaded(&mut web_contents, &host_rx);
+    let drawn = |viz: &DrivenViz, at: usize| {
+        viz.frames[at..]
+            .iter()
+            .map(|token| !viz.resources[token].is_empty())
+            .collect::<Vec<bool>>()
+    };
+    assert!(drawn(&viz, 0).contains(&true), "`/a` is drawn");
+    let before = viz.frames.len();
+    let navigated = std::time::Instant::now();
+    web_contents.navigate(server.url("/b"));
+    viz.run_until(&mut web_contents, &host_rx, "an empty frame", |viz, _| {
+        viz.frames.len() > before
+    });
+    let shown = navigated.elapsed();
+    assert_eq!(drawn(&viz, before), [false], "an empty frame first");
+    assert!(
+        shown >= delay && shown < sheet_delay,
+        "after the delay, before the sheet: {shown:?}"
+    );
+    viz.until_loaded(&mut web_contents, &host_rx);
+    assert_eq!(drawn(&viz, before).last(), Some(&true), "then `/b`, drawn");
+    web_contents.shutdown();
+}
+
+/// A document drawn once stays shown when a sheet blocks it after: its
+/// delay ended as it was drawn.
+#[test]
+fn a_drawn_document_blocked_by_a_sheet_after_isnt_shown_empty() {
+    let delay = Duration::from_millis(500);
+    let page = "<!DOCTYPE html><p style='background: green'>a<script>\
+         onload = () => setTimeout(() => { \
+           const link = document.createElement('link'); \
+           link.rel = 'stylesheet'; link.href = '/slow.css'; \
+           document.head.append(link); \
+           setTimeout(() => document.title = 'added', 0); \
+         }, 50);</script>";
+    let server = server(&[
+        ("/", Route::ok("text/html", page)),
+        (
+            "/slow.css",
+            Route::ok("text/css", "p { color: green }").with_delay(Duration::from_secs(2)),
+        ),
+    ]);
+    let (mut web_contents, host_rx, viz_rx, begin_frames) = tab_with_flags(
+        true,
+        false,
+        None,
+        gfx::SystemColors::DEFAULT,
+        Default::default(),
+        delay,
+    );
+    web_contents.resize(gfx::Size::new(200, 200), 1.0);
+    let mut viz = DrivenViz::new(viz_rx, begin_frames);
+    web_contents.navigate(server.url("/"));
+    viz.run_until(&mut web_contents, &host_rx, "the sheet added", |_, msg| {
+        matches!(msg, Some(RendererHostMsg::UpdateTitle(title)) if title == "added")
+    });
+    // Past the delay, while the sheet blocks it.
+    let until = std::time::Instant::now() + delay * 2;
+    viz.run_until(&mut web_contents, &host_rx, "the delay", |_, _| {
+        std::time::Instant::now() >= until
+    });
+    assert!(
+        viz.frames.iter().all(|token| !viz.resources[token].is_empty()),
+        "no empty frame"
+    );
+    web_contents.shutdown();
 }
 
 /// A renderer launched again has a frame sink of its own: Viz forgets the
@@ -2502,6 +2620,65 @@ document.querySelector('base').setAttribute('href', '/later/');
             acks.len() == count
         });
         (acks, others)
+    }
+
+    /// An ack waiting for a frame goes with the empty one a new document
+    /// that can't be drawn shows after the delay (Chromium releases the
+    /// input then too), not with the frame after its sheet comes: the
+    /// click changed the page and navigated, and the new document's sheet
+    /// is slow.
+    #[test]
+    fn an_ack_goes_with_the_empty_frame_after_the_delay() {
+        let page = "<!DOCTYPE html><style>body { margin: 0 }</style>\
+             <div style='height: 100px'></div><script>\
+             onclick = () => { document.body.style.background = 'green'; \
+             location.href = '/b'; };</script>";
+        let server = server(&[
+            ("/", Route::ok("text/html", page)),
+            (
+                "/b",
+                Route::ok("text/html", "<!DOCTYPE html><link rel=stylesheet href=/slow.css>b"),
+            ),
+            (
+                "/slow.css",
+                Route::ok("text/css", "body { color: green }").with_delay(Duration::from_secs(3)),
+            ),
+        ]);
+        let (mut web_contents, host_rx, viz_rx, begin_frames) = tab_with_flags(
+            true,
+            false,
+            None,
+            gfx::SystemColors::DEFAULT,
+            Default::default(),
+            Duration::from_millis(300),
+        );
+        let mut viz = DrivenViz::new(viz_rx, begin_frames);
+        web_contents.resize(gfx::Size::new(200, 200), 1.0);
+        web_contents.navigate(server.url("/"));
+        viz.until_loaded(&mut web_contents, &host_rx);
+        // No frame till `/b` commits: the click's ack waits for one.
+        viz.hold(&mut web_contents, &host_rx);
+        let clicked = std::time::Instant::now();
+        click(&mut web_contents, 10.0, 10.0);
+        let b = server.url("/b");
+        let mut acks = 0;
+        viz.run_until(&mut web_contents, &host_rx, "`/b`'s commit", |_, msg| {
+            if let Some(RendererHostMsg::InputEventAck { .. }) = msg {
+                acks += 1;
+            }
+            matches!(msg, Some(RendererHostMsg::DidCommitNavigation { url, .. }) if *url == b)
+        });
+        viz.held = false;
+        while acks < 2 {
+            let (more, _) = until_acks(&mut viz, &mut web_contents, &host_rx, 1);
+            acks += more.len();
+        }
+        assert!(
+            clicked.elapsed() < Duration::from_secs(2),
+            "the ack waited for the sheet: {:?}",
+            clicked.elapsed()
+        );
+        web_contents.shutdown();
     }
 
     /// Input is aimed at the document the user sees, the one in the last

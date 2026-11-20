@@ -100,7 +100,15 @@ pub struct RendererFlags {
     /// How long the parser parses at a time once its document has its
     /// body, and how much text it is given at a time.
     pub parser_budget: ParserBudget,
+    /// How long after a main frame's document commits the page before it
+    /// stays shown while the new one can't be drawn (a sheet blocks it, or
+    /// its body hasn't begun): then the new one shows empty till it can.
+    pub new_content_rendering_delay: std::time::Duration,
 }
+
+/// Blink's `kNewContentRenderingDelay`, which the browser's
+/// `RenderWidgetHostImpl` waits before it clears the page shown.
+pub const NEW_CONTENT_RENDERING_DELAY: std::time::Duration = std::time::Duration::from_secs(4);
 
 /// How long a document's parser parses before it lets the loop's other
 /// work (input, frames, timers) run, once the document has its body
@@ -295,6 +303,13 @@ struct RenderThread {
     next_caret_blink: Option<Instant>,
     /// `RendererFlags::parser_budget`.
     parser_budget: ParserBudget,
+    /// `RendererFlags::new_content_rendering_delay`, and when it is up for
+    /// the main frame's document that committed, until it is drawn
+    /// (`RenderWidgetHostImpl::new_content_rendering_timeout_`); then,
+    /// still blocked, the next main frame shows it empty.
+    new_content_rendering_delay: Duration,
+    new_content_due: Option<Instant>,
+    empty_frame_wanted: bool,
     /// The frame's pre-paint count, the DOM's intersection observations'
     /// version and, while an observer tracks visibility, the last paint,
     /// when the intersections were last computed: they are again only once
@@ -514,6 +529,9 @@ impl RenderThread {
             idle_period_end: None,
             caret_blink_interval: flags.caret_blink_interval.filter(|i| !i.is_zero()),
             parser_budget: flags.parser_budget,
+            new_content_rendering_delay: flags.new_content_rendering_delay,
+            new_content_due: None,
+            empty_frame_wanted: false,
             next_caret_blink: None,
             intersections_computed: None,
             intersections_due: None,
@@ -596,6 +614,7 @@ impl RenderThread {
                 next = self.scheduler.try_next(TaskQueues::ALL);
             }
             self.blink_caret();
+            self.new_content_rendering_timeout();
             self.intersections_due_now();
             self.fire_due_owner_loads();
             // What the loop does between tasks, each a span of its own
@@ -1343,6 +1362,12 @@ impl RenderThread {
         let caret = self
             .next_caret_blink
             .map(|due| due.saturating_duration_since(now));
+        // The new document's delay.
+        let caret = sooner(
+            caret,
+            self.new_content_due
+                .map(|due| due.saturating_duration_since(now)),
+        );
         // A document's network may have been quiet long enough by then.
         let idle = self
             .next_idleness_due()
@@ -1377,6 +1402,30 @@ impl RenderThread {
             self.intersections_due = None;
             self.request_main_frame();
         }
+    }
+
+    /// The main frame's new document still can't be drawn when its delay
+    /// is up (`RenderWidgetHostImpl::ClearDisplayedGraphics`): the next main
+    /// frame shows it empty, in place of the page before.
+    fn new_content_rendering_timeout(&mut self) {
+        let Some(due) = self.new_content_due else {
+            return;
+        };
+        if Instant::now() < due {
+            return;
+        }
+        self.new_content_due = None;
+        if self.render_blocked() {
+            self.empty_frame_wanted = true;
+            self.request_main_frame();
+        }
+    }
+
+    /// The main frame's document committed: the page before stays shown
+    /// till it is drawn, for its delay at most.
+    fn start_new_content_rendering_timeout(&mut self) {
+        self.empty_frame_wanted = false;
+        self.new_content_due = Instant::now().checked_add(self.new_content_rendering_delay);
     }
 
     /// The caret shows or hides if it is time (Blink's `FrameCaret::

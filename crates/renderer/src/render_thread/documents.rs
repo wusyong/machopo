@@ -739,6 +739,7 @@ impl RenderThread {
         // The pointer may have been over a link of the old document: the
         // arrow until it moves, or the new one is laid out under it.
         self.set_cursor(CursorType::Pointer);
+        self.start_new_content_rendering_timeout();
         self.start_body(top, start);
     }
 
@@ -3362,6 +3363,33 @@ impl RenderThread {
         self.doc(frame).is_some_and(FrameDocument::render_blocked)
     }
 
+    /// The main frame's document, which can't be drawn yet, shown empty in
+    /// place of the page before (`RenderWidgetHostImpl::
+    /// ClearDisplayedGraphics`): no layers but the background, as the
+    /// document's, so input goes to it; the input waiting for a frame goes
+    /// with it, a visual state and the load's end wait for it to be drawn.
+    fn commit_empty_frame(&mut self) -> bool {
+        let Some((_, frame)) = engine_frame(&mut self.engine) else {
+            return false;
+        };
+        let Frame { view, widget, .. } = frame;
+        let host = &mut widget.layer_tree_host;
+        host.set_layers(
+            Vec::<compositor::Layer>::new(),
+            compositor::PropertyTrees::default(),
+        );
+        host.set_scroll_offsets(compositor::ScrollOffsets::default());
+        host.set_background_color(gfx::Color::WHITE);
+        host.set_root_scroll_offset(gfx::PointF::new(0.0, 0.0));
+        host.set_root_scroll_origin(gfx::PointF::new(0.0, 0.0));
+        host.set_document_id(view.document_id());
+        host.set_viewport_scroll_node(None);
+        let promises = std::mem::take(&mut widget.pending_input_acks);
+        let _span = trace_event::trace_event!("RenderWidgetHostImpl::ClearDisplayedGraphics");
+        widget.layer_tree_host.commit(promises);
+        true
+    }
+
     /// The document of the DOM's frame, as the compositor knows it.
     pub(super) fn frame_document_id(&mut self) -> Option<DocumentId> {
         engine_frame(&mut self.engine).map(|(_, frame)| frame.view.document_id())
@@ -3954,8 +3982,11 @@ impl RenderThread {
     pub(super) fn update_document_rendering(&mut self) -> bool {
         // A sheet's response asks for the next frame.
         if self.render_blocked() {
-            return false;
+            return std::mem::take(&mut self.empty_frame_wanted) && self.commit_empty_frame();
         }
+        // Drawn: the page before goes now.
+        self.new_content_due = None;
+        self.empty_frame_wanted = false;
         let (Some((dom, frame)), Some(next)) = (engine_frame(&mut self.engine), &mut self.document)
         else {
             return false;

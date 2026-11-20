@@ -1,0 +1,60 @@
+# Step 4a: a main frame's new document that can't be drawn leaves the page
+# before shown for the delay at most, then shows empty (its background
+# only, its document id, the input waiting going with it) till it is
+# drawn; the delay ends as it is drawn.
+test = ["sh", "-c", "cargo test -q -p browser --test it -- a_new_document_that_cant a_drawn_document_blocked an_ack_goes_with_the_empty"]
+timeout = 900
+
+[[mutant]]
+name = "the delay doesn't start at the commit"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        self.start_new_content_rendering_timeout();
+        self.start_body(top, start);'''
+to = '''        self.start_body(top, start);'''
+
+[[mutant]]
+name = "no empty frame is drawn"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            return std::mem::take(&mut self.empty_frame_wanted) && self.commit_empty_frame();'''
+to = '''            return false;'''
+
+[[mutant]]
+name = "the delay doesn't end as the document is drawn"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        // Drawn: the page before goes now.
+        self.new_content_due = None;'''
+to = '''        // Drawn: the page before goes now.'''
+
+[[mutant]]
+name = "the loop doesn't wake for the delay"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            self.new_content_due
+                .map(|due| due.saturating_duration_since(now)),'''
+to = '''            None,'''
+
+[[mutant]]
+name = "the empty frame keeps the page's layers"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        host.set_layers(
+            Vec::<compositor::Layer>::new(),
+            compositor::PropertyTrees::default(),
+        );'''
+to = ''''''
+
+[[mutant]]
+name = "the input waiting doesn't go with the empty frame"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        let promises = std::mem::take(&mut widget.pending_input_acks);
+        let _span = trace_event::trace_event!("RenderWidgetHostImpl::ClearDisplayedGraphics");'''
+to = '''        let promises = Vec::new();
+        let _span = trace_event::trace_event!("RenderWidgetHostImpl::ClearDisplayedGraphics");'''
+
+[[mutant]]
+name = "an empty frame is wanted though the document can be drawn"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        self.new_content_due = None;
+        if self.render_blocked() {
+            self.empty_frame_wanted = true;'''
+to = '''        self.new_content_due = None;
+        if true {
+            self.empty_frame_wanted = true;'''

@@ -56,6 +56,7 @@ mod worker_thread;
 
 pub use compositor::{CompositorGone, CompositorSender};
 pub use render_thread::{
-    ParserBudget, RendererEndpoints, RendererFlags, ScriptEngineFactory, spawn_renderer_main_thread,
+    NEW_CONTENT_RENDERING_DELAY, ParserBudget, RendererEndpoints, RendererFlags, ScriptEngineFactory,
+    spawn_renderer_main_thread,
 };
 pub use task_queue::{RendererGone, RendererReceiver, RendererSender, channel};

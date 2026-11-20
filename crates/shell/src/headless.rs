@@ -246,6 +246,7 @@ fn drive(
             // A web test's: no blinking, so each frame comes out the same.
             caret_blink_interval: None,
             parser_budget: Default::default(),
+            new_content_rendering_delay: browser::NEW_CONTENT_RENDERING_DELAY,
         },
         script_engine,
         viz_tx,
