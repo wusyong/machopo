@@ -60,6 +60,11 @@ impl HttpTransport {
         let mut builder = reqwest::Client::builder()
             // `URLLoader` follows redirects itself.
             .redirect(reqwest::redirect::Policy::none())
+            // A header line that isn't one (a control character in its
+            // value, no colon) is left out, not the whole response: Chromium
+            // takes it, as its `HttpResponseHeaders` are lenient, and its
+            // users (cookies) refuse what they can't use.
+            .http1_ignore_invalid_headers_in_responses(true)
             .connect_timeout(Duration::from_secs(30))
             .read_timeout(Duration::from_secs(60));
         if !params.user_agent.is_empty() {

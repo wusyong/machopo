@@ -20,6 +20,33 @@ pub(crate) fn parse_content_type(value: &str) -> Option<(String, Option<String>)
     Some((essence, charset))
 }
 
+/// A header's value split at its commas, but those in a quoted string
+/// (Fetch's "get, decode, and split"), each part trimmed.
+pub(crate) fn split_header_values(value: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let (mut start, mut quoted, mut escaped) = (0, false, false);
+    for (i, c) in value.char_indices() {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' if quoted => escaped = true,
+            '"' => quoted = !quoted,
+            ',' if !quoted => {
+                parts.push(value[start..i].trim());
+                #[expect(
+                    clippy::arithmetic_side_effects,
+                    reason = "i is the index of a byte of the string, below its length"
+                )]
+                {
+                    start = i + 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    parts.push(value[start..].trim());
+    parts
+}
+
 /// A server sent no usable `Content-Type`. Chromium sniffs the body
 /// (`net::SniffMimeType`); we only tell markup from text.
 pub(crate) fn sniff(body: &[u8]) -> &'static str {
@@ -69,6 +96,15 @@ mod tests {
         assert_eq!(parse_content_type("html"), None);
         assert_eq!(parse_content_type(""), None);
         assert_eq!(parse_content_type("text /html"), None);
+    }
+
+    #[test]
+    fn header_values_split_outside_quotes() {
+        assert_eq!(
+            split_header_values(r#"a/b; c="d,\"e,", f/g ,h"#),
+            [r#"a/b; c="d,\"e,""#, "f/g", "h"]
+        );
+        assert_eq!(split_header_values(""), [""]);
     }
 
     #[test]

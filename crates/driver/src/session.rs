@@ -64,7 +64,7 @@ use webdriver::response::{
 use crate::Options;
 use crate::actions::{self, Input, InputState, Viewport};
 use crate::error::{Failure, Result};
-use crate::http::Call;
+use crate::http::{Call, MachopoCommand, MachopoRoute};
 use crate::machopo::Machopo;
 
 /// WebDriver's default timeouts, in ms.
@@ -143,7 +143,7 @@ struct Dispatcher {
 }
 
 impl Dispatcher {
-    fn handle(&mut self, message: WebDriverMessage) -> Result<WebDriverResponse> {
+    fn handle(&mut self, message: WebDriverMessage<MachopoRoute>) -> Result<WebDriverResponse> {
         match message.command {
             WebDriverCommand::Status => {
                 let ready = self.session.is_none();
@@ -342,6 +342,12 @@ impl Dispatcher {
             }
             WebDriverCommand::DeleteCookies => {
                 session.delete_cookies(None)?;
+                Ok(WebDriverResponse::Void)
+            }
+            WebDriverCommand::Extension(MachopoCommand::ClearCookies) => {
+                session
+                    .page_call("Network.clearBrowserCookies", json!({}))?
+                    .map_err(|message| Failure::new(ErrorStatus::UnknownError, message))?;
                 Ok(WebDriverResponse::Void)
             }
             WebDriverCommand::GetElementProperty(element, name) => {

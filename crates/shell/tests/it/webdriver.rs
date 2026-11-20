@@ -1734,3 +1734,25 @@ fn an_added_cookie_of_a_domain_is_the_domains() {
     assert_eq!(session.get("/cookie/d")["value"], "1");
     session.delete();
 }
+
+/// machopodriver's own `machopo/cookies/clear` deletes every cookie, of
+/// every site: Delete All Cookies deletes the current document's alone.
+#[test]
+fn clearing_cookies_deletes_every_sites() {
+    let server = server(&[("/page", Route::ok("text/html", "<!DOCTYPE html>page"))]);
+    let addr = driver_with(&["--host-resolver-rules", "MAP *.localhost 127.0.0.1"]);
+    let (session, _) = Session::new(addr, json!({}));
+    for host in ["a.localhost", "b.localhost"] {
+        ok(session.navigate(&server.url_for_host(host, "/page")));
+        let cookie = json!({ "name": host, "value": "1" });
+        ok(session.call("POST", "/cookie", Some(json!({ "cookie": cookie }))));
+    }
+    ok(session.call("DELETE", "/cookie", None));
+    ok(session.navigate(&server.url_for_host("a.localhost", "/page")));
+    assert_eq!(session.get("/cookie").as_array().map(Vec::len), Some(1));
+    ok(session.call("POST", "/machopo/cookies/clear", Some(json!({}))));
+    assert_eq!(session.get("/cookie"), json!([]));
+    ok(session.navigate(&server.url_for_host("b.localhost", "/page")));
+    assert_eq!(session.get("/cookie"), json!([]));
+    session.delete();
+}

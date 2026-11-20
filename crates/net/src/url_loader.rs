@@ -437,10 +437,29 @@ pub(crate) fn local_timing(start: TimeTicks) -> LoadTiming {
     }
 }
 
-/// `Content-Type`'s MIME type and charset, if it has a usable one.
+/// `Content-Type`'s MIME type and charset, if it has a usable one (Fetch's
+/// "extract a MIME type", Chromium's `GetMimeTypeAndCharset`): of every
+/// value (each header's, split at the commas outside quotes), the last
+/// usable one but `*/*`, with the charset of the last of the same type
+/// that had one. A server that sends two (`application/json`, then
+/// `text/html`) gets the last.
 fn content_type(raw: &RawResponse) -> Option<(String, Option<String>)> {
-    raw.header("content-type")
-        .and_then(mime::parse_content_type)
+    let values = raw
+        .headers
+        .iter()
+        .filter(|(name, _)| name == "content-type")
+        .flat_map(|(_, value)| mime::split_header_values(value));
+    let mut found: Option<(String, Option<String>)> = None;
+    for (essence, charset) in values.filter_map(mime::parse_content_type) {
+        if essence == "*/*" {
+            continue;
+        }
+        found = Some(match found {
+            Some((previous, kept)) if previous == essence && charset.is_none() => (essence, kept),
+            _ => (essence, charset),
+        });
+    }
+    found
 }
 
 /// The final response: its head, once its type is known: from

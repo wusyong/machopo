@@ -67,6 +67,12 @@ fn server() -> TestServer {
                 .with_header("Set-Cookie", "session=1"),
         ),
         (
+            "/utf8",
+            Route::ok("text/plain", "utf8")
+                .with_header("Set-Cookie", "bad=a\u{1}b")
+                .with_header("Set-Cookie", "caf\u{e9}=th\u{e9}"),
+        ),
+        (
             "/partitioned",
             Route::ok("text/plain", "partitioned")
                 .with_header(
@@ -454,6 +460,45 @@ fn script_reads_and_sets_a_first_partys_cookies() {
         request(a("/echo"), Some(first_party("a.localhost"))),
     );
     assert!(sent(&server, "/echo").contains("only"));
+}
+
+/// A cookie's bytes are UTF-8, as a header carries them: a response's
+/// sets one, script reads it as UTF-8, and what script sets the next
+/// request sends as UTF-8 bytes. A header line with a control character
+/// is left out, not the response with it.
+#[test]
+fn a_cookie_is_utf8_bytes() {
+    let (network, server) = (network(), server());
+    let a = |path: &str| server.url_for_host("a.localhost", path);
+    load(
+        &network,
+        request(a("/utf8"), Some(first_party("a.localhost"))),
+    );
+    assert_eq!(
+        script_cookies(&network, &a("/"), first_party("a.localhost")),
+        "caf\u{e9}=th\u{e9}"
+    );
+    network.set_cookie_from_script(
+        url::Url::parse(&a("/")).unwrap(),
+        first_party("a.localhost"),
+        "na\u{ef}ve=1".to_owned(),
+    );
+    load(
+        &network,
+        request(a("/echo"), Some(first_party("a.localhost"))),
+    );
+    // The server reads each byte as a character.
+    let line = server
+        .requests()
+        .into_iter()
+        .rfind(|request| request.target == "/echo")
+        .and_then(|request| request.header("cookie").map(str::to_owned))
+        .unwrap_or_default();
+    let bytes: Vec<u8> = line.chars().map(|c| u8::try_from(c).unwrap()).collect();
+    assert_eq!(
+        String::from_utf8(bytes).unwrap(),
+        "caf\u{e9}=th\u{e9}; na\u{ef}ve=1"
+    );
 }
 
 /// A third party's script reads and sets none but `Partitioned` ones, and

@@ -1,6 +1,8 @@
 //! WebDriver's HTTP API: HTTP/1.1 with hyper, the routes and commands of
 //! the `webdriver` crate (`standard_routes`, `WebDriverMessage::from_http`),
-//! and the answers' JSON. The requests a page in a browser could send are
+//! and the answers' JSON, with machopodriver's own commands under
+//! `/session/{sessionId}/machopo/` (chromedriver's are under `goog/`).
+//! The requests a page in a browser could send are
 //! refused, as the crate's own server does: a `Host` other than this
 //! server (a domain that isn't `localhost`, or another port), any
 //! `Origin`, and a POST with a content type a form can send.
@@ -19,19 +21,59 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
+use serde_json::Value;
 use tokio::sync::oneshot;
 use url::{Host, Url};
 use webdriver::Parameters;
-use webdriver::command::WebDriverMessage;
-use webdriver::error::ErrorStatus;
-use webdriver::httpapi::{Route, VoidWebDriverExtensionRoute, standard_routes};
+use webdriver::command::{WebDriverCommand, WebDriverExtensionCommand, WebDriverMessage};
+use webdriver::error::{ErrorStatus, WebDriverResult};
+use webdriver::httpapi::{Route, WebDriverExtensionRoute, standard_routes};
 
 use crate::error::Failure;
+
+/// machopodriver's own commands (the `webdriver` crate's extension routes,
+/// as geckodriver's).
+#[derive(Clone, Debug, PartialEq)]
+pub enum MachopoRoute {
+    /// `POST /session/{sessionId}/machopo/cookies/clear`.
+    ClearCookies,
+}
+
+/// The command of a [`MachopoRoute`].
+#[derive(Clone, Debug)]
+pub enum MachopoCommand {
+    /// Deletes every cookie of the session's browser, of every site and
+    /// partition (CDP's `Network.clearBrowserCookies`): WPT's runner does
+    /// after each test, as Chromium's web tests do
+    /// (`WebTestControlHost::ResetBrowserAfterWebTest`). WebDriver's Delete
+    /// All Cookies deletes the current document's alone.
+    ClearCookies,
+}
+
+impl WebDriverExtensionRoute for MachopoRoute {
+    type Command = MachopoCommand;
+
+    fn command(
+        &self,
+        _: &Parameters,
+        _: &Value,
+    ) -> WebDriverResult<WebDriverCommand<MachopoCommand>> {
+        Ok(WebDriverCommand::Extension(match self {
+            Self::ClearCookies => MachopoCommand::ClearCookies,
+        }))
+    }
+}
+
+impl WebDriverExtensionCommand for MachopoCommand {
+    fn parameters_json(&self) -> Option<Value> {
+        None
+    }
+}
 
 /// A command for the dispatcher, and where its answer (the success's
 /// body, or the failure) goes.
 pub struct Call {
-    pub message: WebDriverMessage,
+    pub message: WebDriverMessage<MachopoRoute>,
     pub reply: oneshot::Sender<Result<String, Failure>>,
 }
 
@@ -42,13 +84,18 @@ enum Segment {
     Parameter(&'static str),
 }
 
-struct Routes(Vec<(Method, Vec<Segment>, Route<VoidWebDriverExtensionRoute>)>);
+struct Routes(Vec<(Method, Vec<Segment>, Route<MachopoRoute>)>);
 
 impl Routes {
     fn new() -> Self {
         Self(
-            standard_routes::<VoidWebDriverExtensionRoute>()
+            standard_routes::<MachopoRoute>()
                 .into_iter()
+                .chain([(
+                    Method::POST,
+                    "/session/{sessionId}/machopo/cookies/clear",
+                    Route::Extension(MachopoRoute::ClearCookies),
+                )])
                 .map(|(method, path, route)| {
                     let segments = path
                         .split('/')
@@ -71,7 +118,7 @@ impl Routes {
         &self,
         method: &Method,
         path: &str,
-    ) -> Result<(Route<VoidWebDriverExtensionRoute>, Parameters), Failure> {
+    ) -> Result<(Route<MachopoRoute>, Parameters), Failure> {
         let parts: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
         let mut known_path = false;
         for (route_method, segments, route) in &self.0 {

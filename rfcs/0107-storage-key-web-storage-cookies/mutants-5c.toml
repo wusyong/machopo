@@ -1,0 +1,86 @@
+# Step 5c: a cookie's bytes as a header carries them (a Set-Cookie value's
+# bytes read as UTF-8, a Cookie line's UTF-8 sent as its bytes), a
+# response's header line that isn't one left out, not the response, and a
+# response's type from the last usable Content-Type value.
+test = [
+    "sh", "-c",
+    "cargo test -q -p net --lib -- mime:: && cargo test -q -p net --test it -- cookie_loads::a_cookie_is_utf8_bytes load::the_last_usable",
+]
+timeout = 1800
+
+[[mutant]]
+name = "a Set-Cookie value is read as characters"
+file = "crates/net/src/cookies/cookie_jar.rs"
+from = '''                &from_header_value(line),'''
+to = '''                line,'''
+
+[[mutant]]
+name = "a Cookie line is sent as characters"
+file = "crates/net/src/cookies/cookie_jar.rs"
+from = '''        (!cookies.is_empty()).then(|| header_value(&CanonicalCookie::build_cookie_line(&cookies)))'''
+to = '''        (!cookies.is_empty()).then(|| CanonicalCookie::build_cookie_line(&cookies))'''
+
+[[mutant]]
+name = "a response with a header line that isn't one fails"
+file = "crates/net/src/http.rs"
+from = '''            .http1_ignore_invalid_headers_in_responses(true)'''
+to = '''            .http1_ignore_invalid_headers_in_responses(false)'''
+
+[[mutant]]
+name = "the first Content-Type is the type"
+file = "crates/net/src/url_loader.rs"
+from = '''        if essence == "*/*" {'''
+to = '''        if essence == "*/*" || found.is_some() {'''
+
+[[mutant]]
+name = "*/* is a type"
+file = "crates/net/src/url_loader.rs"
+from = '''        if essence == "*/*" {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a later value of the same type drops the charset"
+file = "crates/net/src/url_loader.rs"
+from = '''            Some((previous, kept)) if previous == essence && charset.is_none() => (essence, kept),'''
+to = '''            Some((previous, kept)) if false && previous == essence && charset.is_none() => (essence, kept),'''
+
+[[mutant]]
+name = "a Content-Type isn't split at commas"
+file = "crates/net/src/url_loader.rs"
+from = '''        .flat_map(|(_, value)| mime::split_header_values(value));'''
+to = '''        .map(|(_, value)| value.as_str());'''
+
+[[mutant]]
+name = "a quoted comma splits"
+file = "crates/net/src/mime.rs"
+from = '''            '"' => quoted = !quoted,'''
+to = '''            '"' => {}'''
+
+[[mutant]]
+name = "an escaped quote ends the quoted string"
+file = "crates/net/src/mime.rs"
+from = '''            '\\' if quoted => escaped = true,'''
+to = '''            '\\' if quoted => {}'''
+
+# --- WPT's runner deletes every cookie after each test -------------------
+
+[[mutant]]
+name = "machopodriver's clear deletes no cookie"
+file = "crates/driver/src/session.rs"
+from = '''                    .page_call("Network.clearBrowserCookies", json!({}))?'''
+to = '''                    .page_call("Network.getAllCookies", json!({}))?'''
+test = ["sh", "-c", "cargo test -q -p shell --test it -- webdriver::clearing_cookies"]
+
+[[mutant]]
+name = "machopodriver has no clear"
+file = "crates/driver/src/http.rs"
+from = '''                    "/session/{sessionId}/machopo/cookies/clear",'''
+to = '''                    "/session/{sessionId}/machopo/cookies/keep",'''
+test = ["sh", "-c", "cargo test -q -p shell --test it -- webdriver::clearing_cookies"]
+
+[[mutant]]
+name = "WPT's runner keeps the cookies"
+file = "tests/wpt/wptrunner_machopo/wptrunner_machopo/executors.py"
+from = '''                    "POST", "machopo/cookies/clear", {}'''
+to = '''                    "GET", "cookie", None'''
+test = ["sh", "-c", "caffeinate -i python3 scripts/test.py wpt cookies/ fetch/api/cors/"]

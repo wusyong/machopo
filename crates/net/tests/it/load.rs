@@ -74,6 +74,42 @@ fn http_response_with_charset_and_headers() {
     assert_eq!(request.header("user-agent"), Some(AGENT));
 }
 
+/// Of every `Content-Type` value (two headers, values split at commas),
+/// the last usable one but `*/*` is the type, with the charset of the
+/// last of that type that had one.
+#[test]
+fn the_last_usable_content_type_is_the_type() {
+    let server = server(&[
+        (
+            "/two",
+            Route::new(200, "<p>hi")
+                .with_header("Content-Type", "application/json")
+                .with_header("Content-Type", "text/html; charset=utf-8"),
+        ),
+        (
+            "/kept",
+            Route::new(200, "hi")
+                .with_header("Content-Type", "text/plain; charset=\"a,b\", nonsense")
+                .with_header("Content-Type", "text/plain, */*"),
+        ),
+        (
+            "/another",
+            Route::new(200, "hi")
+                .with_header("Content-Type", "text/plain; charset=Shift_JIS, text/css"),
+        ),
+    ]);
+    let network = NetworkContext::start(params()).unwrap();
+    let response = |path: &str| {
+        let head = fetch(&network, &server.url(path), RequestDestination::Document)
+            .unwrap()
+            .head;
+        (head.mime_type, head.charset)
+    };
+    assert_eq!(response("/two"), ("text/html".into(), Some("utf-8".into())));
+    assert_eq!(response("/kept"), ("text/plain".into(), Some("a,b".into())));
+    assert_eq!(response("/another"), ("text/css".into(), None));
+}
+
 #[test]
 fn error_statuses_still_have_a_body() {
     let server = server(&[]);

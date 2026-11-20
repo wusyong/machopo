@@ -71,12 +71,13 @@ def get_product():
 
     from wptrunner.browsers.base import OutputHandler, WebDriverBrowser, get_timeout_multiplier
     from wptrunner.executors.base import PytestExecutor
-    from wptrunner.executors.executorwebdriver import (
-        WebDriverCrashtestExecutor,
-        WebDriverRefTestExecutor,
-        WebDriverTestharnessExecutor,
-    )
     from wptrunner.products import Product
+
+    from .executors import (
+        MachopoCrashtestExecutor,
+        MachopoRefTestExecutor,
+        MachopoTestharnessExecutor,
+    )
 
     class MachopoBrowser(WebDriverBrowser):
         """machopodriver binds a free port itself (`--port 0`) and prints it;
@@ -142,9 +143,9 @@ def get_product():
         get_env_extras=lambda **kwargs: [],
         get_timeout_multiplier=get_timeout_multiplier,
         executor_classes={
-            "testharness": WebDriverTestharnessExecutor,
-            "reftest": WebDriverRefTestExecutor,
+            "testharness": MachopoTestharnessExecutor,
+            "reftest": MachopoRefTestExecutor,
             "wdspec": PytestExecutor,
-            "crashtest": WebDriverCrashtestExecutor,
+            "crashtest": MachopoCrashtestExecutor,
         },
     )

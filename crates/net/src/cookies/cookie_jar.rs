@@ -215,6 +215,24 @@ pub(crate) enum CookieManagerCall {
     },
 }
 
+/// A `Set-Cookie` header's value (each byte a character, as a header is
+/// read) as the cookie line it carries: its bytes as UTF-8 (Chromium
+/// keeps a cookie's bytes, and script reads them as UTF-8), what isn't
+/// UTF-8 replaced.
+fn from_header_value(value: &str) -> String {
+    let bytes: Vec<u8> = value
+        .chars()
+        .map(|c| u8::try_from(u32::from(c)).unwrap_or(b'?'))
+        .collect();
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// A `Cookie` line as the header carries it: its UTF-8 bytes, each a
+/// character (a header's value is bytes).
+fn header_value(line: &str) -> String {
+    line.bytes().map(char::from).collect()
+}
+
 /// Whether the cookie policy lets a hop to `url`, first party to
 /// `site_for_cookies`, have `cookie` (`CookieSettings::IsCookieAccessible`
 /// with third-party cookies blocked): a first party's (schemeless, as
@@ -350,7 +368,7 @@ impl CookieJar {
             .into_iter()
             .filter(|cookie| accessible(cookie, url, &hop.site_for_cookies))
             .collect();
-        (!cookies.is_empty()).then(|| CanonicalCookie::build_cookie_line(&cookies))
+        (!cookies.is_empty()).then(|| header_value(&CanonicalCookie::build_cookie_line(&cookies)))
     }
 
     /// Answers `call` (after [`wait_for_load`](Self::wait_for_load)).
@@ -511,7 +529,7 @@ impl CookieJar {
         for (_, line) in headers.iter().filter(|(name, _)| name == "set-cookie") {
             let cookie = CanonicalCookie::create(
                 url,
-                line,
+                &from_header_value(line),
                 now,
                 server_time,
                 hop.partition_key.as_ref(),

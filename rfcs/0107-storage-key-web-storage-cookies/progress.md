@@ -24,7 +24,7 @@
 | 4e：WPT 的 `cookies/`、第 4 階段的檢查和文件 | 完成 | 2026-11-20 |
 | 5a：`document.cookie` 和 `navigator.cookieEnabled` | 完成 | 2026-11-20 |
 | 5b：自動化（WebDriver 的 cookie 指令、CDP 的 `Network` 的 cookie、testdriver） | 完成 | 2026-11-20 |
-| 5c：WPT 的 `cookies/`、第 5 階段的檢查和文件 | 未開始 | |
+| 5c：WPT 的 `cookies/`、第 5 階段的檢查和文件 | 完成 | 2026-11-20 |
 | 6：檢查和文件 | 未開始 | |
 
 ## 驗收
@@ -276,3 +276,18 @@ macOS、Apple M4，2026-11-20。
 - 文件：`docs/limitations.md`（擋第三方 cookie、沒有開關、會壞的網站和 WPT）、`docs/architecture.md`。
 - 跑過的檢查：`cargo test` 的 `net`、`site`、`browser`、`shell`、`driver`（1143 個通過）；這幾個 crate 的 clippy、`cargo fmt --check`；`sanity.py` 的 7 項。`window.rs` 改了，`scenarios --window` 在第 5 階段的檢查（5c）跑。
 
+### 5c：WPT 的 `cookies/`、第 5 階段的檢查
+
+macOS、Apple M4，2026-11-20。
+
+- 照第 21 條把整個 `cookies/` 列進 `include.txt`（取代第 4、5 階段列的 6 份），用 `MACHOPO_UPDATE_EXPECTATIONS` 寫預期結果，每份 `.ini` 寫上原因。89 份裡 43 份整份通過。失敗的：`window.open`（`samesite/` 幾乎每份、`attributes/domain`、`secure-non-secure`、`ordering`、`scheme-bound-cookies`、`domain-attribute-idn-host`、`schemeful-iframe-subresource`、`schemeful-navigation`、`third-party-cookies`）；`WebSocket`（`secure/set-from-ws(s)`、`schemeful-websockets`）；service worker（`path/match-percent-encoded`）；`self.origin`（`prefix/` 的 6 份 `.header` 和 `Http` 的，測試去抓 `undefined/...`；`partitioned-cookies.tentative`、`third-party-cookie-heuristics` 另外還要 `window.open`）；照 Chrome 的行為（tab 算控制字元、沒有名稱而值裡有 `=` 的不設、不綁 port）；第 24 條擋掉的第三方 cookie（`multiple-samesite-attributes`、`iframe.document` 的跨網站子測試）。
+- 第一次跑整個目錄時找到、修好的三個 `net` 的問題（都不是 cookie 自己的邏輯）：
+  - cookie 的 header 是 bytes：`Set-Cookie` 的值原本照每個 byte 一個字元（Latin-1）存，script 讀到亂碼；改成把那些 bytes 照 UTF-8 讀，送 `Cookie` 時反過來（Chromium 存 bytes，script 照 UTF-8 讀）。`charset.html`、`value.html` 因此整份通過。
+  - 回應裡有一行不是 header（值裡有控制字元）時，hyper 讓整個回應失敗，`name-ctl`、`value-ctl`、`attributes-ctl` 的每個子測試都跟著失敗；打開 reqwest 的 `http1_ignore_invalid_headers_in_responses`，只丟掉那一行（Chromium 的 `HttpResponseHeaders` 一樣寬鬆）。
+  - `Content-Type` 原本取第一個 header：`cookies/resources/postToParent.py` 送兩個（先 `application/json`、後 `text/html`），iframe 被當成 JSON 顯示、script 不跑，`iframe.document`、`schemeful-subresource` 等 60 秒 timeout。改成照 Fetch 的「extract a MIME type」取每個值（逗號分開、引號裡的不算）裡最後一個能用的、`*/*` 不算，charset 留同一種的最後一個有的（Chromium 的 `GetMimeTypeAndCharset`）。試跑 `fetch/content-type/`（`--all`）：5 份都還有失敗（`Response` 的 `Content-Type` 和 blob 的 type、script 的 MIME type 是 renderer 那一側的），沒有列進來。
+- 找到的不穩定：`partitioned-cookies-top-level-redirect.tentative` 一次 ERROR、一次通過。頁面在載入時把自己導覽到別的網站（再導回來）；machopodriver 的 Navigate 在第一份文件載入完就回答（chromedriver 等頁面自己開始的導覽也完成），harness 的 script 有時跑在要被換掉的文件裡（「the document went away before the script settled」）。和 cookie 無關，`.ini` 標成 `[OK, ERROR]`，附上原因。
+- 新的測試：`net` 的 `cookie_loads` 加 1 個（UTF-8 的 cookie、有控制字元的 header 行），`load` 加 1 個（最後一個能用的 `Content-Type`），`mime` 的單元測試 1 個（引號外的逗號）。
+- mutation test（`mutants-5c.toml`）12 個，全部抓到（後 3 個是刪光 cookie 的指令和 runner：runner 不送時，`test.py wpt cookies/ fetch/api/cors/` 失敗）。
+- 文件：`docs/limitations.md`（tab、沒有名稱的 cookie、不綁 port）、`docs/architecture.md`（`net` 的 header 寬鬆、cookie 的 bytes、`Content-Type`）、`crates/driver/README.md`（machopodriver 自己的指令）、`tests/wpt/README.md`（runner 每個測試之後刪光 cookie）。
+- 第 5 階段的檢查：`cargo test --workspace`（4437 個通過、1 個 ignored）、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`（`mime.rs` 的 `i + 1` 補了帶理由的 `#[expect]`）；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。`test.py scenarios --window`（`window.rs` 改過）跑了兩次，每次 72 個裡 1 個失敗：第二次是 `demo-busy` 的「no frame was drawn: is the window hidden?」（第一次的是哪一個沒有記下來）。單獨跑 `demo-busy` 3 次都通過，看了截圖。這個錯誤是 Viz 一直沒畫出 frame，和 `docs/testing.md` 寫的視窗被遮住的情況一樣；原因還沒有確認。
+- 第一次跑 `test.py wpt cookies/ fetch/api/cors/` 有 3 個意外的結果：前面的 cookie 測試留下 cookie，被之後的測試讀到。`samesite/` 和 `scheme-bound-cookies` 在 `window.open` 那裡就停下，沒跑到清掉 cookie 的那一步；結果是預期的、不重開瀏覽器（`--no-restart-on-new-group`），所以同一個 machopo 之後的測試（`set-and-delete-document-cookie`、`cors-cookies`、`cors-cookies-redirect`）讀到它們的 cookie。試跑（`--all`）時這些是意外的結果，wptrunner 每次都重開瀏覽器，所以沒看到。決定了第 25 條：machopodriver 加 `POST /session/{sessionId}/machopo/cookies/clear`（`Network.clearBrowserCookies`），machopo 的 wptrunner 的 executor 在每個測試之後送它（新的 `wptrunner_machopo/executors.py`：wptrunner 把 executor 的 class pickle 給子 process，class 要在 module 的最上層）。之後 `test.py wpt cookies/ fetch/api/cors/ webstorage/ css/css-text/white-space/`（reftest 也經過新的 executor）0 個意外的結果。`shell` 的 `webdriver` 加 1 個測試（兩個網站的 cookie 都刪掉，Delete All Cookies 只刪目前的）；`cargo test -p driver -p shell`、這兩個 crate 的 clippy 和 `cargo fmt --check` 通過。
