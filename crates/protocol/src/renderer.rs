@@ -123,6 +123,25 @@ pub struct OpenedStorageArea {
     pub items: Option<Vec<(String, String)>>,
 }
 
+/// How many bytes an area's items may take (`kPerStorageAreaQuota`),
+/// counted as `storage_quota_for` counts them: what the renderer allows
+/// script.
+pub const PER_STORAGE_AREA_QUOTA: usize = 10 * 1024 * 1024;
+
+/// How many bytes more the browser allows an area
+/// (`kPerStorageAreaOverQuotaAllowance`): renderers that wrote at once, each
+/// within the quota as it saw the area.
+pub const PER_STORAGE_AREA_OVER_QUOTA_ALLOWANCE: usize = 100 * 1024;
+
+/// What an item of `key` and `value` takes of its area's quota: 2 bytes a
+/// UTF-16 code unit of each (Blink's `QuotaForString`).
+pub fn storage_quota_for(key: &str, value: &str) -> usize {
+    key.encode_utf16()
+        .count()
+        .saturating_add(value.encode_utf16().count())
+        .saturating_mul(2)
+}
+
 /// Which storage an area is of: `localStorage`'s (the profile's) or
 /// `sessionStorage`'s (the tab's).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -293,6 +312,16 @@ pub enum RendererMsg {
         changed: bool,
         url: String,
         source: Option<u64>,
+    },
+    /// The browser refused this renderer's change to the `localStorage`
+    /// area `area` (`ChangeStorage`'s, the first it hasn't told back): the
+    /// item would have grown past the area's quota and allowance (another
+    /// renderer filled it meanwhile). `key` is `value` in the browser's
+    /// area (`StorageAreaObserver::KeyChangeFailed`).
+    StorageAreaChangeFailed {
+        area: u64,
+        key: String,
+        value: Option<String>,
     },
     /// `UpdateVisualProperties`.
     UpdateVisualProperties(VisualProperties),

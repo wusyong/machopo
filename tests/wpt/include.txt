@@ -65,6 +65,9 @@ resize-observer/
 # `foreignObject`, and a `filter` on a `<tspan>`.
 intersection-observer/
 
+# Web Storage: localStorage, sessionStorage and their storage events.
+webstorage/
+
 # Dedicated workers, classic and module ones, those made in a worker too.
 # Shared and service workers don't run (`disabled`); what a dedicated
 # worker doesn't have yet (XHR) fails.

@@ -16,7 +16,7 @@
 | 2c：第 2 階段的檢查和文件 | 完成 | 2026-11-20 |
 | 3a：同步等 Browser 的路、Browser 的 storage thread 和資料庫、`Storage` 介面和 `localStorage` | 完成 | 2026-11-20 |
 | 3b：`storage` 事件、`sessionStorage` | 完成 | 2026-11-20 |
-| 3c：上限、寫進磁碟的批次、WPT 的 `webstorage/`、第 3 階段的檢查和文件 | 未開始 | |
+| 3c：上限、寫進磁碟的批次、WPT 的 `webstorage/`、第 3 階段的檢查和文件 | 完成 | 2026-11-20 |
 | 4：`net` 的 cookie | 未開始 | |
 | 5：cookie 到 DOM 和自動化 | 未開始 | |
 | 6：檢查和文件 | 未開始 | |
@@ -40,6 +40,9 @@
 | `storage` 事件經過 Browser：每個打開這個 area 的 renderer 都收到改動（舊值、有沒有改到），做出改動的那個帶著它的 `Storage` 的編號；`sessionStorage` 的改動不通知 | `cargo test -p browser --test it dom_storage::` |
 | DOM 的 area：同一個 area 的 window 共用；改動在 Browser 傳回來之前算還沒確認，別的 renderer 在它之前的改動（同一個 key、或這裡的 clear 之前的任何改動）不套用，別人的 clear 留下這裡的 key；`storage` 事件排給那個 area 的每個 window、做出改動的除外，沒改到的不發；`sessionStorage` 的當場發；window 的 `storage` listener 要打開它的 area | `cargo test -p dom --test it storage::` |
 | 頁面的 `storage` 事件和 `sessionStorage`：別的分頁收到 `localStorage` 的事件（key、新舊值、做出改動的頁面的網址、自己的 `storageArea`、trusted、不 bubble），做出改動的 window 沒有；同一個分頁裡只有 `<body onstorage>` 的 iframe 也收得到（`sessionStorage` 的先到）；`sessionStorage` 每個分頁一份（同一個分頁的下一頁有、別的分頁和之後開的分頁沒有、不發到別的分頁），分頁關掉時拿掉 | `cargo test -p browser --test it dom_storage::` |
+| 上限：renderer 的（10 MiB，每個 UTF-16 code unit 算 2 bytes，只在項目變大時檢查；拿掉的、清掉的不再算；從 Browser 拿到的超過上限時改小照樣可以），超過丟 `QuotaExceededError`（code 22、是 `QuotaExceededError`）、不改，`localStorage` 和 `sessionStorage` 各算各的；Browser 的（多容許 100 KiB），超過時拒絕、只告訴做出改動的 renderer，renderer 改回 Browser 的值（後面還有這個 key 的改動時不改） | `cargo test -p dom --test it storage::`；`cargo test -p browser --test it dom_storage::` |
+| 成批寫進磁碟：到期之前檔案不變，到期時一起寫，結束時寫完；延遲是 5 秒和兩個速率限制中最長的，速率從 area 第一次有改動起算 | `cargo test -p browser --lib dom_storage`；`cargo test -p browser --test it dom_storage::` |
+| WPT：`webstorage/` 0 個意外的結果（`window.open`、`BroadcastChannel`、單獨的 surrogate 失敗；`set.window.js` 和 `storage_builtins.window.js` 失敗的項目和 Chrome 一樣）；`createEvent('StorageEvent')` | `python3 scripts/test.py wpt webstorage/ dom/nodes/Document-createEvent.https.html dom/events/EventTarget-dispatchEvent.html` |
 
 ## 做過的檢查
 
@@ -137,3 +140,17 @@ macOS、Apple M4，2026-11-20。
 - mutation test（`mutants-3b.toml`）17 個，第一次抓到 15 個。「這裡還沒確認的 clear 不擋別人的改動」和「分頁關掉之後 `sessionStorage` 還在」沒抓到：補了 `dom` 的測試（clear 之後別人的 set 不套）和頁面測試的最後一段（關掉的分頁的 namespace 是空的），重跑這兩個都抓到。
 - 文件：`docs/architecture.md` 的 crate 表（`DomStorageContext`）、`docs/limitations.md`（Web Storage 的限制；`storage` 從「從來不分派」的事件拿掉）、`crates/dom_api/README.md`。
 - 跑過的檢查：`cargo test` 的 `dom`、`dom_api`、`dom_js`、`dom_wasm`、`renderer`、`browser`、`protocol`、`shell`（1280 個通過）；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。沒有動到視窗那一層，沒有跑 `scenarios --window`。
+
+### 3c：上限、寫進磁碟的批次、WPT
+
+macOS、Apple M4，2026-11-20。
+
+- 決定了第 13 條（上限由 renderer 和 Browser 都守）和第 14 條（照 Chromium 成批寫進磁碟）。讀了 Chromium 的 `storage_area_map.cc`、`storage_area.mojom`、`local_storage_impl.cc`、`storage_area_impl.cc`。
+- `webstorage/` 加進 `tests/wpt/include.txt`。第一次跑 17 個意外的結果：`initStorageEvent` 的 `storageArea` 參數讓 renderer panic（`dom::Storage` 的 `ObjectType` 沒有當參數用的 `take_arg`、`arg`），同一個 machopo 裡跑的四個上限的測試跟著 CRASH；修了之後，上限的四個仍然 CRASH：還沒有上限，`while (true)` 一直寫到記憶體用完。做了上限之後剩下的都是預期的失敗，`.ini` 寫上原因：`window.open`（7 份，其中一份等它打開的視窗、逾時，`disabled`）、`BroadcastChannel`、單獨的 surrogate（machopo 的字串是 UTF-8）、`set.window.js` 的 12 項和 `storage_builtins.window.js` 的 2 項。
+- 3a 留下的「prototype 上有同名的成員時直接賦值建出 own property」：Chromium 的 `set.window-expected.txt` 和 `storage_builtins.window-expected.txt` 失敗的是同樣的項目、同樣的訊息（它的讀取給出項目、不是 prototype 的），machopo 不用改，`docs/limitations.md` 照這個寫。
+- `document.createEvent('StorageEvent')`（和它的大小寫）：`Document-createEvent.https.html` 的 6 項、`EventTarget-dispatchEvent.html` 的 1 項變成通過，`.ini` 更新了。
+- 新的東西：`protocol` 的 `PER_STORAGE_AREA_QUOTA`、`PER_STORAGE_AREA_OVER_QUOTA_ALLOWANCE`、`storage_quota_for`、`StorageAreaChangeFailed`；`dom` 的 area 記著用了多少（`Items`）、`storage_set` 超過上限時回 false、`storage_change_failed`；`browser` 的 `CommitOptions`、`DomStorageContext::with_commit_options`，每個 area 的一批和速率（`Batch`、`CommitRate`、`commit_delay`）。
+- 新的測試：`dom` 的 `storage` 2 個，`browser` 的單元測試 1 個（延遲和速率）、`dom_storage` 4 個（Browser 拒絕、到期才寫、速率、頁面的上限）。
+- mutation test（`mutants-3c.toml`）14 個，抓到 13 個；沒抓到的「超過上限的項目不能改小」是測試的值選得不好（改小之後剛好又在上限內），改成改小之後仍然超過，重跑抓到。「一批用一個 transaction」寫成的 mutant 編不過，而且從外面看不出差別，拿掉了。
+- 第 3 階段的檢查：`cargo test --workspace` 4327 個通過、0 個失敗、1 個 ignored，跑完之後家目錄底下沒有 profile 的資料夾；`cargo fmt --check` 抓到一個測試的換行，照 rustfmt 改了；`cargo clippy --workspace --all-targets -- -D warnings` 抓到兩個測試裡太長的型別（改成 type alias）和測試分頁的編號用了 `fetch_add`（改成 `base::AtomicSequenceNumber`）。
+- 文件：`docs/architecture.md`（`DomStorageContext` 的上限和批次）、`docs/limitations.md`、`crates/dom_api/README.md`（上限、`createEvent`）。

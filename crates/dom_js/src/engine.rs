@@ -1650,6 +1650,12 @@ impl ScriptEngine for V8Engine {
         });
     }
 
+    fn storage_change_failed(&mut self, area: u64, key: &str, value: Option<String>) {
+        self.state()
+            .dom
+            .mutate(|cx| cx.storage_change_failed(area, key, value));
+    }
+
     fn run_element_tasks(&mut self) -> bool {
         let mut ran = false;
         for (_, context, _) in self.frames_as_made() {

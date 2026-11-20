@@ -4,9 +4,11 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use browser::{
-    DomStorageContext, NetworkContext, NetworkContextParams, Profile, StoragePartition, ToRenderer,
+    CommitOptions, DomStorageContext, NetworkContext, NetworkContextParams, Profile,
+    StoragePartition, ToRenderer,
 };
 use net::test_server::Route;
 use protocol::TabId;
@@ -34,6 +36,10 @@ fn origin(url: &str) -> Origin {
 fn first_party(url: &str) -> StorageKey {
     StorageKey::first_party(&origin(url))
 }
+
+/// A `StorageAreaChanged` a renderer was told: its area, change, old
+/// value, whether it changed anything, and source.
+type Told = (u64, StorageChange, Option<String>, bool, Option<u64>);
 
 /// A renderer as the context sees it: its number, and what it is told.
 struct Renderer {
@@ -88,7 +94,7 @@ impl Renderer {
 
     /// The changes it has been told of so far: each `StorageAreaChanged`'s
     /// area, change, old value, whether it changed, and source.
-    fn changes(&self) -> Vec<(u64, StorageChange, Option<String>, bool, Option<u64>)> {
+    fn changes(&self) -> Vec<Told> {
         let kept: Vec<RendererMsg> = self.kept.borrow_mut().drain(..).collect();
         kept.into_iter()
             .chain(self.told.try_iter())
@@ -772,4 +778,168 @@ fn a_tabs_session_storage_is_its_own() {
         )
         .unwrap();
     assert_eq!(session.items, items(&[]));
+}
+
+/// The browser takes an item within the quota and its allowance (one a
+/// renderer saw as within the quota, others writing too), and refuses one
+/// past it: the renderer that made it is told the key's value in the
+/// browser's area, and no other renderer hears of it.
+#[test]
+fn the_browser_refuses_an_item_past_the_quota_and_allowance() {
+    let context = DomStorageContext::new(&Profile::in_memory()).unwrap();
+    let key = first_party("https://a.example/");
+    let (one, two) = (Renderer::new(1), Renderer::new(2));
+    let area = one.open(&context, &key).unwrap().area;
+    two.open(&context, &key).unwrap();
+    // 10 MiB and 100 KiB, 2 bytes a character, with the one-character key.
+    let limit = (10 * 1024 * 1024 + 100 * 1024) / 2 - 1;
+    change(&context, 1, area, set("a", &"x".repeat(limit)));
+    change(&context, 1, area, set("b", "1"));
+    change(&context, 1, area, set("a", &"y".repeat(limit + 1)));
+    let refused = Renderer::new(3);
+    let opened = refused.open(&context, &key).unwrap().items.unwrap();
+    assert_eq!(opened.len(), 1);
+    assert_eq!(opened[0].1.len(), limit);
+    let told: Vec<RendererMsg> = one
+        .kept
+        .borrow_mut()
+        .drain(..)
+        .chain(one.told.try_iter())
+        .collect();
+    assert!(matches!(
+        told.as_slice(),
+        [
+            RendererMsg::StorageAreaChanged { changed: true, .. },
+            RendererMsg::StorageAreaChangeFailed { key: b, value: None, .. },
+            RendererMsg::StorageAreaChangeFailed { key: a, value: Some(_), .. },
+        ] if b == "b" && a == "a"
+    ));
+    assert_eq!(two.changes().len(), 1);
+}
+
+/// `localStorage`'s changes are written in a batch once its delay has
+/// passed: not before (the file as it was), all at once after; what is
+/// still to be written when the context goes is written then.
+#[test]
+fn changes_are_written_once_their_delay_has_passed() {
+    let dir = scratch("batch");
+    let key = first_party("https://a.example/");
+    let file = dir.join("LocalStorage");
+    let no_limits = |delay| CommitOptions {
+        delay,
+        max_commits_per_hour: 0,
+        max_bytes_per_hour: 0,
+    };
+    {
+        let profile = Profile::open(&dir).unwrap();
+        let context =
+            DomStorageContext::with_commit_options(&profile, no_limits(Duration::from_millis(300)))
+                .unwrap();
+        let area = open(&context, 1, &key).unwrap().area;
+        let before = std::fs::read(&file).unwrap();
+        change(&context, 1, area, set("a", "1"));
+        change(&context, 1, area, set("b", "2"));
+        // Opened after the changes: they have been taken, not written.
+        open(&context, 2, &key);
+        assert_eq!(std::fs::read(&file).unwrap(), before);
+        let deadline = std::time::Instant::now() + TIMEOUT;
+        while std::fs::read(&file).unwrap() == before {
+            assert!(std::time::Instant::now() < deadline, "the batch is written");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    {
+        let profile = Profile::open(&dir).unwrap();
+        let context =
+            DomStorageContext::with_commit_options(&profile, no_limits(Duration::from_secs(3600)))
+                .unwrap();
+        let area = open(&context, 1, &key).unwrap();
+        assert_eq!(area.items, items(&[("a", "1"), ("b", "2")]));
+        change(&context, 1, area.area, set("c", "3"));
+    }
+    let profile = Profile::open(&dir).unwrap();
+    let context = DomStorageContext::new(&profile).unwrap();
+    assert_eq!(
+        open(&context, 1, &key).unwrap().items,
+        items(&[("a", "1"), ("b", "2"), ("c", "3")])
+    );
+    drop(context);
+    drop(profile);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A page's item may grow only within the area's quota: past it
+/// `setItem` and a named property throw `QuotaExceededError` and change
+/// nothing; `localStorage` and `sessionStorage` each have their own.
+#[test]
+fn a_pages_item_grows_within_the_quota() {
+    let page = r#"<!DOCTYPE html><script>
+const big = 'x'.repeat(5 * 1024 * 1024 - 1);
+const out = [];
+for (const s of [localStorage, sessionStorage]) {
+  s.setItem('a', big);
+  for (const write of [() => s.setItem('b', 'y'), () => { s.b = 'y' }, () => s.setItem('a', big + 'x')]) {
+    try { write(); out.push('written'); } catch (e) { out.push(e.name + ' ' + e.code + ' ' + (e instanceof QuotaExceededError)); }
+  }
+  out.push(s.length, s.getItem('a').length);
+  // Smaller always.
+  s.setItem('a', 'small');
+  s.setItem('b', 'y');
+  out.push(s.length);
+}
+document.title = JSON.stringify(out);
+</script>"#;
+    let server = server(&[("/", Route::ok("text/html", page))]);
+    let (mut web_contents, host_rx) = tab_in(partition(&Profile::in_memory()));
+    web_contents.navigate(server.url("/"));
+    let refused = r#""QuotaExceededError 22 true""#;
+    let each = format!("{refused},{refused},{refused},1,5242879,2");
+    assert_eq!(
+        titles_until(&mut web_contents, &host_rx, |title| title.starts_with('[')),
+        format!("[{each},{each}]")
+    );
+    web_contents.shutdown();
+}
+
+/// An area that has committed at its rate's limit waits for the rest of
+/// the time the rate takes: here a commit a second, the first at once,
+/// the next not before a second has passed since the first change.
+#[test]
+fn an_areas_commits_keep_to_its_rate() {
+    let dir = scratch("rate");
+    let key = first_party("https://a.example/");
+    let file = dir.join("LocalStorage");
+    let profile = Profile::open(&dir).unwrap();
+    let context = DomStorageContext::with_commit_options(
+        &profile,
+        CommitOptions {
+            delay: Duration::ZERO,
+            max_commits_per_hour: 3600,
+            max_bytes_per_hour: 0,
+        },
+    )
+    .unwrap();
+    let area = open(&context, 1, &key).unwrap().area;
+    let wait_for_change = |before: &[u8]| {
+        let deadline = std::time::Instant::now() + TIMEOUT;
+        while std::fs::read(&file).unwrap() == before {
+            assert!(std::time::Instant::now() < deadline, "the batch is written");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    let start = std::time::Instant::now();
+    let empty = std::fs::read(&file).unwrap();
+    change(&context, 1, area, set("a", "1"));
+    wait_for_change(&empty);
+    let first = std::fs::read(&file).unwrap();
+    change(&context, 1, area, set("b", "2"));
+    wait_for_change(&first);
+    assert!(
+        start.elapsed() >= Duration::from_secs(1),
+        "{:?}",
+        start.elapsed()
+    );
+    drop(context);
+    drop(profile);
+    let _ = std::fs::remove_dir_all(&dir);
 }

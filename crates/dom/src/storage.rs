@@ -108,9 +108,76 @@ pub struct StorageEventValues {
 /// browser made before this one's, is not taken.
 #[derive(Default)]
 struct Area {
-    items: BTreeMap<String, String>,
+    items: Items,
     kind: Option<StorageKind>,
     pending: VecDeque<Option<String>>,
+    /// How many bytes its items may take (`Items::fits`), the host's.
+    quota: usize,
+}
+
+/// An area's items, and the bytes they take as Chromium counts them for
+/// its quota (`StorageAreaMap::quota_used_`).
+#[derive(Default)]
+struct Items {
+    map: BTreeMap<String, String>,
+    used: usize,
+}
+
+/// What `text` takes of an area's quota: 2 bytes a UTF-16 code unit
+/// (Blink's `QuotaForString`; the browser counts the same).
+fn quota_for(text: &str) -> usize {
+    text.encode_utf16().count().saturating_mul(2)
+}
+
+fn item_size(key: &str, value: &str) -> usize {
+    quota_for(key).saturating_add(quota_for(value))
+}
+
+impl Items {
+    fn new(items: Vec<(String, String)>) -> Self {
+        let mut new = Self::default();
+        for (key, value) in items {
+            new.insert(key, value);
+        }
+        new
+    }
+
+    /// Whether `key` may be set to `value` within `quota`: always if the
+    /// item doesn't grow (Blink's `StorageAreaMap::SetItemInternal`).
+    fn fits(&self, key: &str, value: &str, quota: usize) -> bool {
+        let old = self.map.get(key).map_or(0, |old| item_size(key, old));
+        let new = item_size(key, value);
+        new <= old || self.used.saturating_sub(old).saturating_add(new) <= quota
+    }
+
+    fn insert(&mut self, key: String, value: String) -> Option<String> {
+        let size = item_size(&key, &value);
+        let old = self.map.insert(key.clone(), value);
+        if let Some(old) = &old {
+            self.used = self.used.saturating_sub(item_size(&key, old));
+        }
+        self.used = self.used.saturating_add(size);
+        old
+    }
+
+    fn remove(&mut self, key: &str) -> Option<String> {
+        let old = self.map.remove(key)?;
+        self.used = self.used.saturating_sub(item_size(key, &old));
+        Some(old)
+    }
+
+    fn clear(&mut self) {
+        self.map.clear();
+        self.used = 0;
+    }
+
+    /// Only the items whose keys `keep` says.
+    fn retain(&mut self, mut keep: impl FnMut(&str) -> bool) {
+        let gone: Vec<String> = self.map.keys().filter(|key| !keep(key)).cloned().collect();
+        for key in gone {
+            self.remove(&key);
+        }
+    }
 }
 
 /// The areas by number, the changes the host has yet to take, the
@@ -140,20 +207,23 @@ impl<'gc> Cx<'_, 'gc> {
 
     /// `window`'s `Storage` of `kind` from now on: of the host's area
     /// `area`, with `items` if the DOM didn't have them (none: another
-    /// document's area, which the DOM has).
+    /// document's area, which the DOM has), whose items may take `quota`
+    /// bytes (`storage_set`).
     pub fn set_window_storage(
         &self,
         window: Gc<'gc, Window>,
         kind: StorageKind,
         area: u64,
         items: Option<Vec<(String, String)>>,
+        quota: usize,
     ) -> Gc<'gc, Storage> {
         {
             let mut areas = self.changes.storage.areas.borrow_mut();
             let entry = areas.entry(area).or_default();
             entry.kind = Some(kind);
+            entry.quota = quota;
             if let Some(items) = items {
-                entry.items = items.into_iter().collect();
+                entry.items = Items::new(items);
                 entry.pending.clear();
             }
         }
@@ -212,35 +282,44 @@ impl<'gc> Cx<'_, 'gc> {
 
     /// How many items its area has.
     pub fn storage_length(&self, storage: Gc<'gc, Storage>) -> usize {
-        self.with_area(storage.area.get(), |area| area.items.len())
+        self.with_area(storage.area.get(), |area| area.items.map.len())
     }
 
     /// The key of the item at `index`, in the order of the keys.
     pub fn storage_key(&self, storage: Gc<'gc, Storage>, index: usize) -> Option<String> {
         self.with_area(storage.area.get(), |area| {
-            area.items.keys().nth(index).cloned()
+            area.items.map.keys().nth(index).cloned()
         })
     }
 
     /// Every key, in order.
     pub fn storage_keys(&self, storage: Gc<'gc, Storage>) -> Vec<String> {
         self.with_area(storage.area.get(), |area| {
-            area.items.keys().cloned().collect()
+            area.items.map.keys().cloned().collect()
         })
     }
 
     pub fn storage_get(&self, storage: Gc<'gc, Storage>, key: &str) -> Option<String> {
-        self.with_area(storage.area.get(), |area| area.items.get(key).cloned())
+        self.with_area(storage.area.get(), |area| area.items.map.get(key).cloned())
     }
 
     /// `key`'s value set to `value`: nothing changes if it was that.
-    pub fn storage_set(&self, storage: Gc<'gc, Storage>, key: &str, value: &str) {
+    /// False, and nothing changes, if the item would grow past the area's
+    /// quota (HTML's `QuotaExceededError`).
+    #[must_use]
+    pub fn storage_set(&self, storage: Gc<'gc, Storage>, key: &str, value: &str) -> bool {
         let old = self.with_area(storage.area.get(), |area| {
-            if area.items.get(key).is_some_and(|old| old == value) {
-                return None;
+            if area.items.map.get(key).is_some_and(|old| old == value) {
+                return Ok(None);
             }
-            Some(area.items.insert(key.to_owned(), value.to_owned()))
+            if !area.items.fits(key, value, area.quota) {
+                return Err(());
+            }
+            Ok(Some(area.items.insert(key.to_owned(), value.to_owned())))
         });
+        let Ok(old) = old else {
+            return false;
+        };
         if let Some(old) = old {
             self.storage_changed_here(
                 storage,
@@ -251,6 +330,7 @@ impl<'gc> Cx<'_, 'gc> {
                 old,
             );
         }
+        true
     }
 
     /// `key`'s item removed: nothing changes if there was none.
@@ -270,7 +350,7 @@ impl<'gc> Cx<'_, 'gc> {
     /// Every item removed: nothing changes if there was none.
     pub fn storage_clear(&self, storage: Gc<'gc, Storage>) {
         let had = self.with_area(storage.area.get(), |area| {
-            let had = !area.items.is_empty();
+            let had = !area.items.map.is_empty();
             area.items.clear();
             had
         });
@@ -372,11 +452,14 @@ impl<'gc> Cx<'_, 'gc> {
                 StorageMutation::Clear => {
                     let kept: Vec<String> = entry
                         .items
+                        .map
                         .keys()
                         .filter(|key| pending(key))
                         .cloned()
                         .collect();
-                    entry.items.retain(|key, _| kept.contains(key));
+                    entry
+                        .items
+                        .retain(|key| kept.iter().any(|kept| kept == key));
                 }
             }
             true
@@ -395,6 +478,37 @@ impl<'gc> Cx<'_, 'gc> {
             kind: StorageKind::Local,
         };
         self.queue_storage_events(area, source, &event);
+    }
+
+    /// The browser refused a change made here to the area `area`, the
+    /// first not told back (the item would have grown past the browser's
+    /// quota, which allows a little more than this DOM's: another renderer
+    /// filled the `localStorage` area meanwhile): `key` is the browser's
+    /// `value` again, unless a later change made here is of it (Blink's
+    /// `KeyChangeFailed`).
+    pub fn storage_change_failed(&self, area: u64, key: &str, value: Option<String>) {
+        self.with_area(area, |entry| {
+            // A `sessionStorage` area's changes are this DOM's alone: none
+            // after it.
+            if entry.kind == Some(StorageKind::Local) {
+                entry.pending.pop_front();
+            }
+            if entry
+                .pending
+                .iter()
+                .any(|pending| pending.as_deref().is_none_or(|pending| pending == key))
+            {
+                return;
+            }
+            match value {
+                Some(value) => {
+                    entry.items.insert(key.to_owned(), value);
+                }
+                None => {
+                    entry.items.remove(key);
+                }
+            }
+        });
     }
 
     /// A `storage` event of `event` queued at each window whose `Storage`

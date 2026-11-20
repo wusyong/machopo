@@ -8582,6 +8582,15 @@ impl ObjectType for dom::Storage {
     fn object<'gc>(object: Self::Ref<'gc>) -> ObjectRef<'gc> {
         ObjectRef::Storage(object)
     }
+
+    /// `initStorageEvent`'s `storageArea`.
+    fn take_arg<F: Front>(front: &mut F, index: usize, interface: &str) -> Option<Option<F::Node>> {
+        front.object_arg::<dom::Storage>(index, interface)
+    }
+
+    fn arg<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, taken: &O::Node) -> Self::Ref<'gc> {
+        op.object::<dom::Storage>(cx, taken)
+    }
 }
 
 impl ObjectType for dom::AbortController {

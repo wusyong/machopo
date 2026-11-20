@@ -175,6 +175,7 @@ enum CreatedEvent {
     Custom,
     Text,
     Message,
+    Storage,
 }
 
 /// `createEvent(interface)`: a new event, not initialized (an
@@ -195,6 +196,7 @@ pub(crate) fn create_event<'gc>(
         "customevent" => CreatedEvent::Custom,
         "textevent" => CreatedEvent::Text,
         "messageevent" => CreatedEvent::Message,
+        "storageevent" => CreatedEvent::Storage,
         _ => return Err(ApiError::dom(ExceptionName::NotSupported)),
     };
     let event =
@@ -232,6 +234,9 @@ pub(crate) fn create_event<'gc>(
                 ports: Vec::new(),
             },
         ),
+        CreatedEvent::Storage => {
+            cx.set_storage_event_data(event, dom::StorageEventValues::default(), None);
+        }
     }
     Ok(event)
 }

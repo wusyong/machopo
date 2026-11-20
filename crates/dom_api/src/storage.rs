@@ -84,7 +84,13 @@ fn storage<H: ScriptHost>(
         return Err(denied());
     };
     Ok(Some(host.mutate(|cx| {
-        let storage = cx.set_window_storage(window.get(cx.gc), kind, opened.area, opened.items);
+        let storage = cx.set_window_storage(
+            window.get(cx.gc),
+            kind,
+            opened.area,
+            opened.items,
+            protocol::renderer::PER_STORAGE_AREA_QUOTA,
+        );
         Persistent::new(cx.gc, storage)
     })))
 }
@@ -293,7 +299,15 @@ pub(crate) fn set_item<'gc>(
     key: &str,
     value: &str,
 ) -> Result<(), ApiError> {
-    cx.storage_set(this, key, value);
+    if !cx.storage_set(this, key, value) {
+        // Chrome's message.
+        return Err(ApiError::Dom(DomException {
+            name: ExceptionName::QuotaExceeded,
+            message: format!(
+                "Failed to execute 'setItem' on 'Storage': Setting the value of '{key}' exceeded the quota."
+            ),
+        }));
+    }
     Ok(())
 }
 

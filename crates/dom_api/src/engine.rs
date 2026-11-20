@@ -483,6 +483,13 @@ pub trait ScriptEngine: ParserHost {
         let _ = (area, mutation, old_value, changed, url, source);
     }
 
+    /// The browser refused a change this engine's DOM made to the
+    /// `localStorage` area `area` (`dom`'s `storage_change_failed`): `key`
+    /// is `value` again. An engine without `localStorage` drops it.
+    fn storage_change_failed(&mut self, area: u64, key: &str, value: Option<String>) {
+        let _ = (area, key, value);
+    }
+
     /// Runs the frames' windows' element tasks, a window's after another's
     /// (`dom_api::run_element_tasks`: a text control's `select`), a
     /// microtask checkpoint after each: whether any ran.

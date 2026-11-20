@@ -1,0 +1,109 @@
+# Step 3c: Web Storage's quota (the renderer's, an item growing past it
+# refused; the browser's, with its allowance, a refused change told back
+# and taken) and localStorage's writes in batches (the delay, the rates,
+# what is left written as the context goes).
+test = [
+    "sh", "-c",
+    "cargo test -q -p dom --test it storage:: && cargo test -q -p browser --lib dom_storage && cargo test -q -p browser --test it dom_storage::",
+]
+timeout = 1800
+
+[[mutant]]
+name = "the renderer lets an item grow past the quota"
+file = "crates/dom/src/storage.rs"
+from = '''            if !area.items.fits(key, value, area.quota) {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "an item past the quota may not shrink"
+file = "crates/dom/src/storage.rs"
+from = '''        new <= old || self.used.saturating_sub(old).saturating_add(new) <= quota'''
+to = '''        self.used.saturating_sub(old).saturating_add(new) <= quota'''
+
+[[mutant]]
+name = "a removed item's bytes stay counted"
+file = "crates/dom/src/storage.rs"
+from = '''        let old = self.map.remove(key)?;
+        self.used = self.used.saturating_sub(item_size(key, &old));'''
+to = '''        let old = self.map.remove(key)?;'''
+
+[[mutant]]
+name = "a clear keeps the bytes counted"
+file = "crates/dom/src/storage.rs"
+from = '''        self.map.clear();
+        self.used = 0;'''
+to = '''        self.map.clear();'''
+
+[[mutant]]
+name = "a refused change stays pending"
+file = "crates/dom/src/storage.rs"
+from = '''            if entry.kind == Some(StorageKind::Local) {
+                entry.pending.pop_front();
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "a refused set doesn't throw"
+file = "crates/dom_api/src/storage.rs"
+from = '''    if !cx.storage_set(this, key, value) {'''
+to = '''    if !cx.storage_set(this, key, value) && false {'''
+
+[[mutant]]
+name = "the browser takes an item past the quota"
+file = "crates/browser/src/dom_storage.rs"
+from = '''                if !items.fits(key, value) {'''
+to = '''                if false {'''
+
+[[mutant]]
+name = "the browser allows no more than the quota"
+file = "crates/browser/src/dom_storage.rs"
+from = '''                <= PER_STORAGE_AREA_QUOTA.saturating_add(PER_STORAGE_AREA_OVER_QUOTA_ALLOWANCE)'''
+to = '''                <= PER_STORAGE_AREA_QUOTA'''
+
+[[mutant]]
+name = "a refused change isn't told"
+file = "crates/browser/src/dom_storage.rs"
+from = '''                        (areas.to_renderer)(RendererMsg::StorageAreaChangeFailed {'''
+to = '''                        let _ = (RendererMsg::StorageAreaChangeFailed {'''
+
+[[mutant]]
+name = "a change is written at once"
+file = "crates/browser/src/dom_storage.rs"
+from = '''                &self.options,
+                rate,
+                now.saturating_duration_since(rate.start),'''
+to = '''                &CommitOptions {
+                    delay: Duration::ZERO,
+                    max_commits_per_hour: 0,
+                    max_bytes_per_hour: 0,
+                },
+                rate,
+                now.saturating_duration_since(rate.start),'''
+
+[[mutant]]
+name = "what is left isn't written as the context goes"
+file = "crates/browser/src/dom_storage.rs"
+from = '''                    for key in keys {
+                        self.commit(&key);
+                    }
+                    return;'''
+to = '''                    let _ = keys;
+                    return;'''
+
+[[mutant]]
+name = "a commit isn't counted for the rate"
+file = "crates/browser/src/dom_storage.rs"
+from = '''            rate.commits = rate.commits.saturating_add(1);'''
+to = ''''''
+
+[[mutant]]
+name = "the rate's delay counts from no start"
+file = "crates/browser/src/dom_storage.rs"
+from = '''    let commits = time_needed(rate.commits, options.max_commits_per_hour).saturating_sub(elapsed);'''
+to = '''    let commits = time_needed(rate.commits, options.max_commits_per_hour);'''
+
+[[mutant]]
+name = "the bytes written don't hold commits back"
+file = "crates/browser/src/dom_storage.rs"
+from = '''    options.delay.max(commits).max(bytes)'''
+to = '''    options.delay.max(commits).max(bytes.min(Duration::ZERO))'''

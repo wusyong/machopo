@@ -82,7 +82,7 @@ cookie 存在 `net` 那一側（Chromium 的 `CookieMonster` 在 network service
 4. ~~profile~~：位置和哪些模式寫磁碟（第 5 條）、第二個 machopo 拒絕啟動（第 6 條）。
 5. ~~磁碟上的格式~~：SQLite（第 7 條）。
 6. ~~renderer 怎麼同步等 Browser~~：回答走一般的訊息，到 scheduler 裡等回答的位置（第 9 條）。
-7. **Web Storage 的細節**：~~`storage` 事件怎麼到其他分頁~~（第 11 條）、~~`sessionStorage` 的 namespace 跟著什麼~~（第 12 條）、上限怎麼算。
+7. **Web Storage 的細節**：~~`storage` 事件怎麼到其他分頁~~（第 11 條）、~~`sessionStorage` 的 namespace 跟著什麼~~（第 12 條）、~~上限怎麼算~~（第 13 條）。
 8. **cookie 的實作**：自己照 RFC 6265bis 和 Chromium 的 `CanonicalCookie` 寫，或用 `cookie_store` crate（reqwest 的 `cookies` 用的）。看 WPT 的 `cookies/` 要的行為它做不做得到。
 9. **請求的來歷**：`ResourceRequest` 加哪些欄位、誰填、Browser 怎麼核對 renderer 送來的。
 10. **第三方的 cookie**：照 Chrome 現在的預設（沒標 `Partitioned` 的第三方 cookie 照送，`SameSite` 預設 `Lax`），或一律擋掉、只留 `Partitioned`（CHIPS）的。
@@ -146,6 +146,10 @@ cookie 存在 `net` 那一側（Chromium 的 `CookieMonster` 在 network service
 11. **`localStorage` 的 `storage` 事件都經過 Browser**（2026-11-20，第 3 階段）：renderer 改了自己的那一份、把改動送給 Browser 時，記下還沒確認的改動；Browser 把每個改動（舊值、新值、做出改動的文件）通知每個打開這個 area 的 renderer，包括送出它的那個；renderer 收到後對這個 area 的每一份文件發 `storage` 事件，只跳過做出改動的那一份；別的 renderer 的改動才套進自己的那一份，自己對同一個 key 還有沒確認的改動時先不套（那個改動之後會蓋過它）。對照 Chromium（2026-11-20 讀 `cached_storage_area.cc`）：`SetItem` 送 `Put`、記下 pending mutation，`KeyChanged` 回來時拿掉自己的、別人的才套用（`MaybeApplyNonLocalMutationForKey`），`EnqueueStorageEvent` 跳過來源的那一份，同一個 renderer 的文件也等這一趟。不選同一個 renderer 裡的文件由 renderer 自己馬上發、Browser 只通知別的 renderer：同一個分頁裡快一點、少一則訊息，但有兩條發事件的路，兩個分頁同時改同一個 key 時彼此看到的順序可能不同。
 
 12. **`sessionStorage` 由 Browser 留在記憶體裡，每個分頁一個 namespace**（2026-11-20，第 3 階段）：打開的路和 `localStorage` 一樣（同步問，Browser 照 frame 的分頁找 namespace、照 frame 的 key 找 area），寫入照樣送給 Browser；`storage` 事件照 Chromium 在 renderer 裡當場排進（machopo 一個分頁一個 renderer，同一個分頁的文件都在裡面），不經過 Browser。renderer 當掉重開、頁面換 engine 時照樣在；分頁關掉時沒了；不寫磁碟。新分頁不複製（machopo 開新分頁只有連結的 `target=_blank`，等同 noopener，Chrome 這時也不複製；有 `window.open` 時再做）。對照 Chromium（2026-11-20 讀 `session_storage_impl.h`、`cached_storage_area.cc`）：每個 profile 一個 `SessionStorageImpl` 管所有 namespace，`BackingMode` 有只在記憶體、寫磁碟但開的時候清掉、寫磁碟並且還原（session restore）三種；`CachedStorageArea` 的 session storage 在 `SetItem` 時當場 `EnqueueStorageEvent`。不選只放在 renderer 的 DOM 裡：最簡單、不多任何訊息，但 renderer 當掉重開和換 engine 時同一個分頁的 `sessionStorage` 就不見了，跨 site 的 iframe 拆成別的 process 時也要重做。不選寫進磁碟：那是 session restore 用的，machopo 沒有，寫了沒有人讀。
+
+13. **Web Storage 的上限由 renderer 和 Browser 都守**（2026-11-20，第 3 階段）：每個 area 10 MiB，key 和 value 每個字元算 2 bytes（UTF-16），只在項目變大時檢查。renderer 在 `setItem` 時算，超過丟 `QuotaExceededError`、項目不改；Browser 照同樣的算法、多容許 100 KiB（幾個 renderer 同時寫），超過時拒絕那個改動，告訴做出改動的 renderer 把那個 key 改回 Browser 的值。`localStorage` 和 `sessionStorage` 各算各的。對照 Chromium（2026-11-20 讀 `storage_area_map.cc`、`storage_area.mojom`）：`kPerStorageAreaQuota` 是 10485760、`kPerStorageAreaOverQuotaAllowance` 是 102400，`QuotaForString` 是字元數乘 `sizeof(UChar)`，`SetItemInternal` 只在新的項目比舊的大時檢查；Browser 拒絕時送 `KeyChangeFailed`，renderer 照它改回。不選只在 renderer 守：最簡單，但 Browser 信任 renderer（違反收的一方要驗證的規則），兩個 renderer 同時寫時總和可能超過。不選只在 Browser 守：每個 `setItem` 都要同步問 Browser 才知道要不要丟錯，每次寫入多一趟同步的來回。
+
+14. **`localStorage` 成批寫進磁碟，照 Chromium 的延遲和速率限制**（2026-11-20，第 3 階段）：每個 area 的改動先放在一批裡，到期時在一個 transaction 裡寫進資料庫；等待的時間是三者中最長的：5 秒、每小時最多 60 次、每小時最多寫 10 MiB（從那個 area 第一次有改動起算）。`DomStorageContext` 結束時（machopo 關掉時）寫完還沒寫的；browser 當掉時，最後一批的改動會丟掉（和 Chrome 一樣）。延遲和速率可以由測試設定。打開 area 不受影響（項目在記憶體裡）。對照 Chromium（2026-11-20 讀 `local_storage_impl.cc`、`storage_area_impl.cc`）：`kCommitDefaultDelaySecs` 5 秒、`kMaxCommitsPerHour` 60、`kMaxBytesPerHour` 是 `kPerStorageAreaQuota`，`ComputeCommitDelay` 取預設的延遲和兩個 `RateLimiter` 的延遲中最大的，關閉時 `ScheduleImmediateCommit`。不選只有 5 秒的延遲、不限速率：少約五十行，但頁面一直寫時一小時最多寫 720 次。不選每個改動馬上寫：browser 當掉也不丟，但每個 `setItem` 都是一個 fsync 的 transaction，頁面連續寫一千次就是一千次磁碟同步，別的分頁第一次打開 storage 時要排在這些寫入後面同步等。
 
 ## 待決定
 
