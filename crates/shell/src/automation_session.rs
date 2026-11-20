@@ -370,15 +370,14 @@ pub struct AutomationSession {
 }
 
 /// The `Network` commands only the browser answers (Chromium's
-/// `NetworkHandler`: cookies, the cache, network conditions), as machopo can:
-/// what holds anyway succeeds (it keeps no cookies nor cache, and loads at
-/// full speed), what it can't do is an error. `None` for the others, which
-/// the renderer answers.
+/// `NetworkHandler`: the cache, network conditions; its cookies are
+/// `automation_cookies`'), as machopo can: what holds anyway succeeds (it
+/// keeps no cache, and loads at full speed), what it can't do is an error.
+/// `None` for the others, which the renderer answers.
 fn network_answer(name: &str, params: &Value) -> Option<Result<Value, Error>> {
     let cant = |what: &str| Err(Error::new(SERVER_ERROR, format!("machopo can't {what}")));
     Some(match name {
-        "Network.getCookies" | "Network.getAllCookies" => Ok(json!({ "cookies": [] })),
-        "Network.clearBrowserCache" | "Network.clearBrowserCookies" => Ok(json!({})),
+        "Network.clearBrowserCache" => Ok(json!({})),
         "Network.canClearBrowserCache" | "Network.canClearBrowserCookies" => {
             Ok(json!({ "result": true }))
         }
@@ -1857,6 +1856,24 @@ impl AutomationSession {
             _ => {}
         }
         if let Method::Other { name, params } = &command.method {
+            // Cookies: the session's tab's profile's, or (the browser's
+            // own session) the active tab's; all tabs share it.
+            if crate::automation_cookies::is_cookie_command(name) {
+                let contents = match &command.session_id {
+                    Some(session) => {
+                        let Some(attached) = self.session_of(client, session) else {
+                            return Dispatched::Now(Err(no_session()));
+                        };
+                        browser.view().contents(attached.tab)
+                    }
+                    None => Some(browser.view().web_contents()),
+                };
+                let Some(contents) = contents else {
+                    return Dispatched::Now(Err(no_target()));
+                };
+                crate::automation_cookies::run(name, params, contents, self.reply(client, command));
+                return Dispatched::Later;
+            }
             if let Some(answer) = network_answer(name, params) {
                 if let Err(error) = &answer {
                     self.warn(client, command, &format!("{name}: {}", error.message));

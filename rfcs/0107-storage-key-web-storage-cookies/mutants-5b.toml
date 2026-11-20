@@ -1,0 +1,238 @@
+# Step 5b: automation's cookies. net's cookie calls for the browser
+# (CookieManager: a URL's cookies of any context, all of them, set as from
+# their own https: URL, deleted by a filter) and a cookie from its parts
+# (CreateSanitizedCookie); the browser's CDP Network and Storage cookie
+# commands; machopodriver's five WebDriver cookie commands, as chromedriver.
+test = [
+    "sh", "-c",
+    "cargo test -q -p net --test it -- cookies::a_cookie_from cookie_monster:: cookie_loads::the_browsers && cargo test -q -p shell --test it -- devtools_cookies:: webdriver::cookies webdriver::an_added_cookie",
+]
+timeout = 1800
+
+# --- net -----------------------------------------------------------------
+
+[[mutant]]
+name = "an all-inclusive read leaves HttpOnly cookies out"
+file = "crates/net/src/cookies/cookie_options.rs"
+from = '''    pub fn make_all_inclusive() -> Self {
+        Self {
+            include_httponly: true,'''
+to = '''    pub fn make_all_inclusive() -> Self {
+        Self {
+            include_httponly: false,'''
+
+[[mutant]]
+name = "an all-inclusive read is strict no more"
+file = "crates/net/src/cookies/cookie_options.rs"
+from = '''            same_site_context: SameSiteCookieContext::SameSiteStrict,'''
+to = '''            same_site_context: SameSiteCookieContext::CrossSite,'''
+
+[[mutant]]
+name = "an all-inclusive read marks its use"
+file = "crates/net/src/cookies/cookie_monster.rs"
+from = '''            if update_access_time
+'''
+to = '''            if true
+'''
+
+[[mutant]]
+name = "a URL's cookies come twice"
+file = "crates/net/src/cookies/cookie_jar.rs"
+from = '''                        if !cookies.iter().any(|kept| kept.is_equivalent(&cookie)) {'''
+to = '''                        if true {'''
+
+[[mutant]]
+name = "a URL's cookies are of no partition"
+file = "crates/net/src/cookies/cookie_jar.rs"
+from = '''                        CookiePartitionKey::for_request(top_site.as_ref(), &site_for_cookies, url);'''
+to = '''                        CookiePartitionKey::for_request(None, &site_for_cookies, url);'''
+
+[[mutant]]
+name = "the browser sets cookies as from http:"
+file = "crates/net/src/cookies/cookie_jar.rs"
+from = '''                            "https://{}{}",'''
+to = '''                            "http://{}{}",'''
+
+[[mutant]]
+name = "the browser sets cookies as script"
+file = "crates/net/src/cookies/cookie_jar.rs"
+from = '''                                    &CookieOptions::make_all_inclusive(),'''
+to = '''                                    &CookieOptions::default(),'''
+
+[[mutant]]
+name = "a deletion takes any name"
+file = "crates/net/src/cookies/cookie_jar.rs"
+from = '''            .is_none_or(|name| cookie.name() == name)'''
+to = '''            .is_none_or(|_| true)'''
+
+[[mutant]]
+name = "a deletion takes any domain"
+file = "crates/net/src/cookies/cookie_jar.rs"
+from = '''                .is_none_or(|domain| cookie.domain() == domain)'''
+to = '''                .is_none_or(|_| true)'''
+
+[[mutant]]
+name = "a deletion takes any path"
+file = "crates/net/src/cookies/cookie_jar.rs"
+from = '''                .is_none_or(|path| cookie.path() == path)'''
+to = '''                .is_none_or(|_| true)'''
+
+[[mutant]]
+name = "a deletion of unpartitioned ones takes partitioned ones"
+file = "crates/net/src/cookies/cookie_jar.rs"
+from = '''                PartitionFilter::Unpartitioned => !cookie.is_partitioned(),'''
+to = '''                PartitionFilter::Unpartitioned => true,'''
+
+[[mutant]]
+name = "a deletion of a partition takes any"
+file = "crates/net/src/cookies/cookie_jar.rs"
+from = '''                PartitionFilter::Of(key) => cookie.partition_key() == Some(key),'''
+to = '''                PartitionFilter::Of(_) => true,'''
+
+[[mutant]]
+name = "a name of parts may have spaces around it"
+file = "crates/net/src/cookies/canonical_cookie.rs"
+from = '''        if trimmed(name) || trimmed(value) || terminated(path) || trimmed(path) {'''
+to = '''        if trimmed(value) || terminated(path) || trimmed(path) {'''
+
+[[mutant]]
+name = "a path of parts may have a ;"
+file = "crates/net/src/cookies/canonical_cookie.rs"
+from = '''        if trimmed(name) || trimmed(value) || terminated(path) || trimmed(path) {'''
+to = '''        if trimmed(name) || trimmed(value) || trimmed(path) {'''
+
+[[mutant]]
+name = "a path of parts may be relative"
+file = "crates/net/src/cookies/canonical_cookie.rs"
+from = '''        if !path.is_empty() {
+            if cookie_path != path {'''
+to = '''        if !path.is_empty() {
+            if false {'''
+
+[[mutant]]
+name = "a nameless cookie of parts may read as a pair"
+file = "crates/net/src/cookies/canonical_cookie.rs"
+from = '''        if name.is_empty() && value.contains('=') {
+            status.add_exclusion_reason(ExclusionReason::AmbiguousSerialization);
+        }
+        if partition_key.is_some()'''
+to = '''        if partition_key.is_some()'''
+
+[[mutant]]
+name = "a cookie of parts is HTTP's"
+file = "crates/net/src/cookies/canonical_cookie.rs"
+from = '''            source_type: CookieSourceType::Other,'''
+to = '''            source_type: CookieSourceType::Http,'''
+
+# --- the browser's CDP -----------------------------------------------------
+
+[[mutant]]
+name = "getCookies without URLs has none"
+file = "crates/shell/src/automation_cookies.rs"
+from = '''                None => contents
+                    .frame_urls()
+                    .iter()'''
+to = '''                None => contents
+                    .frame_urls()
+                    .iter()
+                    .take(0)'''
+
+[[mutant]]
+name = "an https: URL's cookie isn't set as secure"
+file = "crates/shell/src/automation_cookies.rs"
+from = '''        secure = secure || url.scheme() == "https";'''
+to = '''        secure = secure || false;'''
+
+[[mutant]]
+name = "a domain without a dot is a domain cookie's"
+file = "crates/shell/src/automation_cookies.rs"
+from = '''        None => std::mem::take(&mut normalized_domain),'''
+to = '''        None => normalized_domain.clone(),'''
+
+[[mutant]]
+name = "setCookies sets what it can"
+file = "crates/shell/src/automation_cookies.rs"
+from = '''                .and_then(|cookies| cookies.iter().map(cookie_from_params).collect());'''
+to = '''                .map(|cookies| cookies.iter().filter_map(|c| cookie_from_params(c).ok()).collect());'''
+
+[[mutant]]
+name = "deleteCookies without a partition deletes any"
+file = "crates/shell/src/automation_cookies.rs"
+from = '''        None => PartitionFilter::Unpartitioned,'''
+to = '''        None => PartitionFilter::Any,'''
+
+[[mutant]]
+name = "a cookie without SameSite says Lax"
+file = "crates/shell/src/automation_cookies.rs"
+from = '''        CookieSameSite::Unspecified => None,'''
+to = '''        CookieSameSite::Unspecified => Some("Lax"),'''
+
+[[mutant]]
+name = "every cookie is a session cookie"
+file = "crates/shell/src/automation_cookies.rs"
+from = '''        "session": !cookie.is_persistent(),'''
+to = '''        "session": true,'''
+
+[[mutant]]
+name = "the cookie commands are the renderer's"
+file = "crates/shell/src/automation_session.rs"
+from = '''            if crate::automation_cookies::is_cookie_command(name) {'''
+to = '''            if false {'''
+
+# --- machopodriver -------------------------------------------------------
+
+[[mutant]]
+name = "a cookie without SameSite says None"
+file = "crates/driver/src/session.rs"
+from = '''        same_site: Some(cookie["sameSite"].as_str().unwrap_or("Lax").to_owned()),'''
+to = '''        same_site: Some(cookie["sameSite"].as_str().unwrap_or("None").to_owned()),'''
+
+[[mutant]]
+name = "a session cookie has an expiry"
+file = "crates/driver/src/session.rs"
+from = '''        expiry: (!session).then(|| Date(u64::try_from(expiry).unwrap_or(0))),'''
+to = '''        expiry: Some(Date(u64::try_from(expiry).unwrap_or(0))).filter(|_| !session || true),'''
+
+[[mutant]]
+name = "a cookie may be added to any document"
+file = "crates/driver/src/session.rs"
+from = '''            .filter(|url| matches!(url.scheme(), "http" | "https"))
+            .ok_or_else(|| {'''
+to = '''            .ok_or_else(|| {'''
+
+[[mutant]]
+name = "a cookie may be added of any domain"
+file = "crates/driver/src/session.rs"
+from = '''            if !(host.eq_ignore_ascii_case(&bare)'''
+to = '''            if false && !(host.eq_ignore_ascii_case(&bare)'''
+
+[[mutant]]
+name = "an added cookie of a domain is host-only"
+file = "crates/driver/src/session.rs"
+from = '''            domain = format!(".{bare}");'''
+to = '''            domain = bare;'''
+
+[[mutant]]
+name = "any sameSite is taken"
+file = "crates/driver/src/session.rs"
+from = '''            && !matches!(same_site.as_str(), "Strict" | "Lax" | "None")'''
+to = '''            && false'''
+
+[[mutant]]
+name = "an expiry past a safe integer is taken"
+file = "crates/driver/src/session.rs"
+from = '''            .is_some_and(|expiry| expiry.0 > MAX_SAFE_INTEGER)'''
+to = '''            .is_some_and(|_| false)'''
+test = ["sh", "-c", "caffeinate -i python3 scripts/test.py wdspec /webdriver/tests/classic/add_cookie"]
+
+[[mutant]]
+name = "an unset cookie is no error"
+file = "crates/driver/src/session.rs"
+from = '''            Ok(answer) if answer["success"] == json!(true) => Ok(()),'''
+to = '''            Ok(_) => Ok(()),'''
+
+[[mutant]]
+name = "Delete Cookie deletes every one"
+file = "crates/driver/src/session.rs"
+from = '''            if name.is_some_and(|name| cookie["name"].as_str() != Some(name)) {'''
+to = '''            if name.is_some_and(|_| false) {'''

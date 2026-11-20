@@ -311,18 +311,37 @@ pub(crate) fn is_cookie_prefix_valid(
     url: &Url,
     cookie: &ParsedCookie,
 ) -> bool {
-    let secure = || {
-        cookie.is_secure() && provisional_access_scheme(url) != CookieAccessScheme::NonCryptographic
-    };
+    is_prefix_valid_for(
+        prefix,
+        url,
+        cookie.is_secure(),
+        cookie.is_http_only(),
+        cookie.domain().unwrap_or(""),
+        cookie.path(),
+    )
+}
+
+/// [`is_cookie_prefix_valid`] of a cookie's attributes as they are given
+/// (`IsCookiePrefixValid` with them, `CreateSanitizedCookie`'s): `domain`
+/// empty without one, `path` none without one.
+pub(crate) fn is_prefix_valid_for(
+    prefix: CookiePrefix,
+    url: &Url,
+    secure: bool,
+    http_only: bool,
+    domain: &str,
+    path: Option<&str>,
+) -> bool {
+    let secure =
+        || secure && provisional_access_scheme(url) != CookieAccessScheme::NonCryptographic;
     let host = || {
-        let domain = cookie.domain().unwrap_or("");
         secure()
-            && cookie.path() == Some("/")
+            && path == Some("/")
             && (domain.is_empty()
                 || (!matches!(url.host(), Some(Host::Domain(_)) | None)
                     && url.host_str() == Some(domain)))
     };
-    let http = || secure() && cookie.is_http_only();
+    let http = || secure() && http_only;
     match prefix {
         CookiePrefix::None => true,
         CookiePrefix::Secure => secure(),

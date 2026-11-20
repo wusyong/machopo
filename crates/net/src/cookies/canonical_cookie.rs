@@ -200,6 +200,128 @@ impl CanonicalCookie {
         })
     }
 
+    /// A cookie from its parts, as DevTools and automation give one
+    /// (`CanonicalCookie::CreateSanitizedCookie`): set from `url` (its host
+    /// the cookie's for a host-only one; a `Secure` one looks set from a
+    /// secure URL), made at `creation`; or why it is none. `name`, `value`
+    /// and `path` are what a `Set-Cookie` line could have (no `;`, no
+    /// terminator, nothing to trim; the name no `=`), `domain` is a
+    /// `Domain` attribute's (empty without one), `path` is kept if given
+    /// and absolute; the prefixes, a nameless cookie and a partitioned one
+    /// are checked as for a line. The expiry is cut to [`MAX_EXPIRY_DAYS`].
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a cookie's parts, as Chromium's CreateSanitizedCookie takes them"
+    )]
+    pub fn create_sanitized(
+        url: &Url,
+        name: &str,
+        value: &str,
+        domain: &str,
+        path: &str,
+        creation: Time,
+        expiry: Option<Time>,
+        secure: bool,
+        http_only: bool,
+        same_site: CookieSameSite,
+        partition_key: Option<&CookiePartitionKey>,
+    ) -> Result<Self, CookieInclusionStatus> {
+        let mut status = CookieInclusionStatus::default();
+        // `ParseTokenString` and `ParseValueString`: what a line would
+        // read back as the same. A name's or value's `;`, `=` (a name's)
+        // and control characters are `check_name_value_pair`'s.
+        let terminated = |text: &str| text.contains(['\r', '\n', '\0', ';']);
+        let trimmed = |text: &str| text.trim_matches([' ', '\t']) != text;
+        if trimmed(name) || trimmed(value) || terminated(path) || trimmed(path) {
+            status.add_exclusion_reason(ExclusionReason::DisallowedCharacter);
+        }
+        if let Err(reason) = super::parsed_cookie::check_name_value_pair(name, value) {
+            status.add_exclusion_reason(reason);
+        }
+        let domain_valid = !terminated(domain)
+            && !trimmed(domain)
+            && !domain.bytes().any(|b| b <= 0x1f || b == 0x7f);
+        if !domain_valid {
+            status.add_exclusion_reason(ExclusionReason::InvalidDomain);
+        }
+        if domain.len() > super::parsed_cookie::MAX_COOKIE_ATTRIBUTE_VALUE_SIZE {
+            status.add_exclusion_reason(ExclusionReason::AttributeValueExceedsMaxSize);
+        }
+        let domain_attribute = if domain_valid
+            && domain.len() <= super::parsed_cookie::MAX_COOKIE_ATTRIBUTE_VALUE_SIZE
+        {
+            domain
+        } else {
+            ""
+        };
+        let cookie_domain = if url.host().is_none() {
+            None
+        } else {
+            cookie_util::cookie_domain_with_string(url, domain_attribute, &mut status)
+        };
+        if cookie_domain.is_none() {
+            status.add_exclusion_reason(ExclusionReason::InvalidDomain);
+        }
+        let source_scheme = if secure || cookie_util::is_cryptographic(url) {
+            CookieSourceScheme::Secure
+        } else {
+            CookieSourceScheme::NonSecure
+        };
+        let source_port = cookie_util::port_adjusted_for_trustworthy_urls(url, secure);
+        let cookie_path = cookie_util::canon_path_with_string(url, path);
+        if !path.is_empty() {
+            if cookie_path != path {
+                status.add_exclusion_reason(ExclusionReason::InvalidPath);
+            } else if path.len() > super::parsed_cookie::MAX_COOKIE_ATTRIBUTE_VALUE_SIZE {
+                status.add_exclusion_reason(ExclusionReason::AttributeValueExceedsMaxSize);
+            }
+        }
+        let prefix_valid = if name.is_empty() {
+            !CookiePrefix::is_hidden_in(value)
+        } else {
+            cookie_util::is_prefix_valid_for(
+                CookiePrefix::of(name),
+                url,
+                secure,
+                http_only,
+                domain_attribute,
+                Some(&cookie_path),
+            )
+        };
+        if !prefix_valid {
+            status.add_exclusion_reason(ExclusionReason::InvalidPrefix);
+        }
+        if name.is_empty() && value.contains('=') {
+            status.add_exclusion_reason(ExclusionReason::AmbiguousSerialization);
+        }
+        if partition_key.is_some()
+            && (!secure
+                || cookie_util::provisional_access_scheme(url)
+                    == CookieAccessScheme::NonCryptographic)
+        {
+            status.add_exclusion_reason(ExclusionReason::InvalidPartitioned);
+        }
+        let (Some(domain), true) = (cookie_domain, status.is_include()) else {
+            return Err(status);
+        };
+        Ok(Self {
+            name: name.to_owned(),
+            value: value.to_owned(),
+            domain,
+            path: cookie_path,
+            creation,
+            expiry: Self::validate_and_adjust_expiry_date(expiry, creation),
+            last_access: creation,
+            secure,
+            http_only,
+            same_site,
+            partition_key: partition_key.cloned(),
+            source_scheme,
+            source_port,
+            source_type: CookieSourceType::Other,
+        })
+    }
+
     /// When a cookie parsed as `cookie` made at `current` expires, `None` for
     /// a session cookie (`CanonicalCookie::ParseExpiration`). `Max-Age`
     /// first: zero or less is the earliest time; a number too big is the

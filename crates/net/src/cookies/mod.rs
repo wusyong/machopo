@@ -26,7 +26,8 @@ mod time;
 pub use canonical_cookie::{CanonicalCookie, MAX_EXPIRY_DAYS};
 pub use cookie_constants::{CookieSameSite, CookieSourceScheme, CookieSourceType};
 pub use cookie_inclusion_status::{CookieInclusionStatus, ExclusionReason};
-pub(crate) use cookie_jar::{CookieJar, ScriptCookies};
+pub use cookie_jar::{CookieDeletionFilter, PartitionFilter};
+pub(crate) use cookie_jar::{CookieJar, CookieManagerCall, ScriptCookies};
 pub use cookie_monster::{
     ACCESS_UPDATE_THRESHOLD_SECONDS, CookieMonster, DOMAIN_MAX_COOKIES, DOMAIN_PURGE_COOKIES,
     MAX_COOKIES, PER_PARTITION_DOMAIN_MAX_COOKIE_BYTES, PER_PARTITION_DOMAIN_MAX_COOKIES,

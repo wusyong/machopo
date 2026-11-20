@@ -50,14 +50,15 @@ use protocol::automation::{
 use serde_json::{Map, Value, json};
 use webdriver::capabilities::{BrowserCapabilities, Capabilities, CapabilitiesMatching};
 use webdriver::command::{
-    ActionsParameters, JavascriptCommandParameters, LocatorParameters, NewSessionParameters,
-    TimeoutsParameters, WebDriverCommand, WebDriverMessage, WindowRectParameters,
+    ActionsParameters, AddCookieParameters, JavascriptCommandParameters, LocatorParameters,
+    NewSessionParameters, TimeoutsParameters, WebDriverCommand, WebDriverMessage,
+    WindowRectParameters,
 };
-use webdriver::common::FrameId;
+use webdriver::common::{Cookie, Date, FrameId};
 use webdriver::error::{ErrorStatus, WebDriverResult};
 use webdriver::response::{
-    CloseWindowResponse, NewSessionResponse, NewWindowResponse, TimeoutsResponse, ValueResponse,
-    WebDriverResponse, WindowRectResponse,
+    CloseWindowResponse, CookieResponse, CookiesResponse, NewSessionResponse, NewWindowResponse,
+    TimeoutsResponse, ValueResponse, WebDriverResponse, WindowRectResponse,
 };
 
 use crate::Options;
@@ -317,6 +318,31 @@ impl Dispatcher {
                         name,
                     }))
                     .map(value)
+            }
+            WebDriverCommand::GetCookies => Ok(WebDriverResponse::Cookies(CookiesResponse(
+                session.cookies()?.iter().map(webdriver_cookie).collect(),
+            ))),
+            WebDriverCommand::GetNamedCookie(name) => {
+                let cookies = session.cookies()?;
+                let cookie = cookies
+                    .iter()
+                    .find(|cookie| cookie["name"].as_str() == Some(name.as_str()))
+                    .ok_or_else(|| Failure::new(ErrorStatus::NoSuchCookie, "no such cookie"))?;
+                Ok(WebDriverResponse::Cookie(CookieResponse(webdriver_cookie(
+                    cookie,
+                ))))
+            }
+            WebDriverCommand::AddCookie(params) => {
+                session.add_cookie(params)?;
+                Ok(WebDriverResponse::Void)
+            }
+            WebDriverCommand::DeleteCookie(name) => {
+                session.delete_cookies(Some(&name))?;
+                Ok(WebDriverResponse::Void)
+            }
+            WebDriverCommand::DeleteCookies => {
+                session.delete_cookies(None)?;
+                Ok(WebDriverResponse::Void)
             }
             WebDriverCommand::GetElementProperty(element, name) => {
                 let frame = session.frame();
@@ -790,6 +816,150 @@ impl Session {
 
     /// Take Screenshot: the page's view, as the next frame that shows what
     /// it has done so far draws it; a PNG in base64.
+    /// The URL of the current browsing context's document (chromedriver's
+    /// `GetUrl` of the frame): what its cookies are of.
+    fn document_url(&mut self) -> Result<String> {
+        let url = self.webdriver(Method::MachopoExecuteScript(ExecuteScript {
+            frame: self.frame(),
+            script: "return document.URL".to_owned(),
+            args: Vec::new(),
+            is_async: false,
+        }))?;
+        Ok(url.as_str().unwrap_or_default().to_owned())
+    }
+
+    /// A CDP command of the window's page.
+    fn page_call(
+        &mut self,
+        name: &str,
+        params: Value,
+    ) -> Result<std::result::Result<Value, String>> {
+        let page = self.page();
+        let answer = self.machopo.call(
+            Some(&page),
+            Method::Other {
+                name: name.to_owned(),
+                params,
+            },
+        )?;
+        Ok(answer.map_err(|error| error.message))
+    }
+
+    /// The cookies of the current browsing context's document, as CDP's
+    /// `Network.Cookie`s (chromedriver's `GetVisibleCookies`: its URL's
+    /// `Network.getCookies`).
+    fn cookies(&mut self) -> Result<Vec<Value>> {
+        let url = self.document_url()?;
+        let answer = self
+            .page_call("Network.getCookies", json!({ "urls": [url] }))?
+            .map_err(|message| Failure::new(ErrorStatus::UnknownError, message))?;
+        Ok(answer["cookies"].as_array().cloned().unwrap_or_default())
+    }
+
+    /// Add Cookie (chromedriver's `ExecuteAddCookie`): of the current
+    /// browsing context's document's URL, which has to be `http:` or
+    /// `https:` (else `invalid cookie domain`), as `Network.setCookie`.
+    /// A domain (but an IP address) is one the URL's host is in, made a
+    /// domain cookie's (a leading dot); the path is `/` unless given;
+    /// `sameSite` is `Strict`, `Lax` or `None`; `expiry` a safe integer.
+    fn add_cookie(&mut self, cookie: AddCookieParameters) -> Result<()> {
+        let url = self.document_url()?;
+        let parsed = url::Url::parse(&url)
+            .ok()
+            .filter(|url| matches!(url.scheme(), "http" | "https"))
+            .ok_or_else(|| {
+                Failure::new(ErrorStatus::InvalidCookieDomain, "invalid cookie domain")
+            })?;
+        let mut domain = cookie.domain.clone().unwrap_or_default();
+        if !domain.is_empty() && domain.parse::<std::net::IpAddr>().is_err() {
+            let bare = domain.strip_prefix('.').unwrap_or(&domain).to_owned();
+            if bare.len() < 2 {
+                return Err(Failure::new(
+                    ErrorStatus::InvalidCookieDomain,
+                    "invalid 'domain'",
+                ));
+            }
+            let host = parsed.host_str().unwrap_or_default();
+            if !(host.eq_ignore_ascii_case(&bare)
+                || host
+                    .to_ascii_lowercase()
+                    .ends_with(&format!(".{}", bare.to_ascii_lowercase())))
+            {
+                return Err(Failure::new(
+                    ErrorStatus::InvalidCookieDomain,
+                    "Cookie 'domain' mismatch",
+                ));
+            }
+            domain = format!(".{bare}");
+        }
+        if let Some(same_site) = &cookie.sameSite
+            && !matches!(same_site.as_str(), "Strict" | "Lax" | "None")
+        {
+            return Err(Failure::new(
+                ErrorStatus::InvalidArgument,
+                "invalid 'sameSite'",
+            ));
+        }
+        const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
+        if cookie
+            .expiry
+            .as_ref()
+            .is_some_and(|expiry| expiry.0 > MAX_SAFE_INTEGER)
+        {
+            return Err(Failure::new(
+                ErrorStatus::InvalidArgument,
+                "invalid 'expiry'",
+            ));
+        }
+        let mut params = json!({
+            "name": cookie.name,
+            "value": cookie.value,
+            "url": url,
+            "domain": domain,
+            "path": cookie.path.unwrap_or_else(|| "/".to_owned()),
+            "secure": cookie.secure,
+            "httpOnly": cookie.httpOnly,
+        });
+        if let Some(same_site) = cookie.sameSite {
+            params["sameSite"] = json!(same_site);
+        }
+        if let Some(expiry) = cookie.expiry {
+            params["expires"] = json!(expiry.0);
+        }
+        match self.page_call("Network.setCookie", params)? {
+            Ok(answer) if answer["success"] == json!(true) => Ok(()),
+            _ => Err(Failure::new(
+                ErrorStatus::UnableToSetCookie,
+                "unable to set cookie",
+            )),
+        }
+    }
+
+    /// Delete Cookie (`name`) and Delete All Cookies (none): each of the
+    /// current browsing context's document's cookies of the name (or every
+    /// one), deleted by its domain, path and partition
+    /// (`Network.deleteCookies`, as chromedriver's `ExecuteDeleteCookie`).
+    fn delete_cookies(&mut self, name: Option<&str>) -> Result<()> {
+        let url = self.document_url()?;
+        for cookie in self.cookies()? {
+            if name.is_some_and(|name| cookie["name"].as_str() != Some(name)) {
+                continue;
+            }
+            let mut params = json!({
+                "name": cookie["name"],
+                "url": url,
+                "domain": cookie["domain"],
+                "path": cookie["path"],
+            });
+            if let Some(key) = cookie.get("partitionKey") {
+                params["partitionKey"] = key.clone();
+            }
+            self.page_call("Network.deleteCookies", params)?
+                .map_err(|message| Failure::new(ErrorStatus::UnknownError, message))?;
+        }
+        Ok(())
+    }
+
     fn screenshot(&mut self) -> Result<Value> {
         self.live_window_info()?;
         let page = self.page();
@@ -1219,6 +1389,36 @@ impl BrowserCapabilities for MachopoCapabilities {
     /// Other browsers' (`goog:chromeOptions`...) are no concern of machopo's.
     fn accept_custom(&mut self, _: &str, _: &Value, _: &Capabilities) -> WebDriverResult<bool> {
         Ok(true)
+    }
+}
+
+/// A CDP `Network.Cookie` as WebDriver serializes a cookie (chromedriver's
+/// `CreateDictionaryFrom`): `expiry` for a persistent one (0 past a safe
+/// integer), `sameSite` `Lax` for one without (its default).
+fn webdriver_cookie(cookie: &Value) -> Cookie {
+    let string = |name: &str| cookie[name].as_str().unwrap_or_default().to_owned();
+    let session = cookie["session"].as_bool().unwrap_or(false);
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "seconds truncated, as the spec's integer; range checked"
+    )]
+    let expiry = cookie["expires"].as_f64().unwrap_or(0.0) as i64;
+    let expiry = if (-(1 << 53)..(1 << 53)).contains(&expiry) {
+        expiry
+    } else {
+        0
+    };
+    let domain = string("domain");
+    let path = string("path");
+    Cookie {
+        name: string("name"),
+        value: string("value"),
+        path: (!path.is_empty()).then_some(path),
+        domain: (!domain.is_empty()).then_some(domain),
+        secure: cookie["secure"].as_bool().unwrap_or(false),
+        http_only: cookie["httpOnly"].as_bool().unwrap_or(false),
+        expiry: (!session).then(|| Date(u64::try_from(expiry).unwrap_or(0))),
+        same_site: Some(cookie["sameSite"].as_str().unwrap_or("Lax").to_owned()),
     }
 }
 

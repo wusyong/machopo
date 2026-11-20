@@ -38,3 +38,8 @@
 /webdriver/tests/classic/take_element_screenshot
 /webdriver/tests/classic/perform_actions
 /webdriver/tests/classic/release_actions
+/webdriver/tests/classic/add_cookie
+/webdriver/tests/classic/delete_all_cookies
+/webdriver/tests/classic/delete_cookie
+/webdriver/tests/classic/get_all_cookies
+/webdriver/tests/classic/get_named_cookie

@@ -87,7 +87,7 @@ cookie 存在 `net` 那一側（Chromium 的 `CookieMonster` 在 network service
 9. ~~請求的來歷~~：每份文件一個 Browser 給的 loader 編號（第 16 條）。
 10. ~~第三方的 cookie~~：預設擋掉沒標 `Partitioned` 的，加一個照送的旗標（第 17 條）。
 11. ~~`document.cookie` 的同步讀~~：每次都問（第 22 條）。
-12. **自動化**：WebDriver 的 cookie 指令、CDP 的 `Network.getCookies`、`setCookie`、`deleteCookies`、`clearBrowserCookies`，`DOMStorage` 和 `Storage` 做哪些。
+12. ~~自動化~~：WebDriver、CDP 的 `Network` 和 `Storage` 的 cookie（第 23 條）。
 
 ### 測試
 
@@ -167,6 +167,8 @@ cookie 存在 `net` 那一側（Chromium 的 `CookieMonster` 在 network service
 
 22. **`document.cookie` 每次讀都同步問**（2026-11-20，第 5 階段）：讀是一個同步的 IPC（renderer → Browser 的 IO thread → network thread），寫是送了就走；兩者走同一條路，讀一定看得到前面的寫。對照 Chromium（2026-11-20 讀 `cookie_jar.cc`、`restricted_cookie_manager.cc`）：`GetCookiesString` 是 `[Sync]`、`SetCookieFromString` 送了就走；加上每份文件一個共享記憶體裡的版本號（`kReduceCookieIPCs`），`RestrictedCookieManager` 在這份文件的 cookie 變動時加一，renderer 看版本沒變、自己的寫都套用了就用上一次的字串。不選版本號：大多數的讀不用 IPC，但要先有 `ipc` 的跨 process 共享記憶體和 `net` 的 cookie 變動通知（`CookieChangeDispatcher`）和照網址登記的聽眾，工作量是每次都問的好幾倍；正確性一樣，只差效能，等這兩樣有了（CDP 的 cookie 事件、Cookie Store API 也要）再加，讀之前多一個判斷，不用重寫。不選有變動時送訊息叫 renderer 丟掉快取：不正確，script 同步跑時網路回應改了 cookie，訊息還在佇列裡，讀到舊值。
 
+23. **自動化的 cookie：WebDriver、CDP 的 `Network` 和 `Storage`**（2026-11-20，第 5 階段）：machopodriver 的 WebDriver 的 5 個 cookie 指令（Get All、Get Named、Add、Delete、Delete All Cookies，WPT 的 testdriver 的 cookie 也是它們）照 chromedriver 翻成 CDP；machopo 的 Browser 回答 `Network.getCookies`、`getAllCookies`、`setCookie`、`setCookies`、`deleteCookies`、`clearBrowserCookies` 和 `Storage.getCookies`、`setCookies`、`clearCookies`，都經過 `net` 給 Browser 的 cookie 管理介面（Chromium 的 `network::mojom::CookieManager`）。對照 Chromium：chromedriver 的 cookie 指令用 `Network.getCookies`、`setCookie`、`deleteCookies`，`NetworkHandler` 和 `StorageHandler` 經過 storage partition 的 `CookieManager`。不選只做 WebDriver 和 chromedriver 用到的：WPT 需要的都有，但 DevTools 的 Cookies 面板少了清除和全部列出，Puppeteer、Playwright 的瀏覽器層 cookie（`Storage` 的那幾個）不能用；資料是同一份，多的只是入口。不選再加 `DOMStorage`（DevTools 的 Application 面板的 `localStorage`）和 `Storage.clearDataForOrigin`：要從 Browser 讀寫 `localStorage` 並推送變動的事件，是和 cookie 無關的另一塊工作，放進「之後的可能」。
+
 ## 待決定
 
 「要決定的事（依序）」的第 7 到 12 個，每個階段開始前定那一段的。
@@ -178,6 +180,7 @@ cookie 存在 `net` 那一側（Chromium 的 `CookieMonster` 在 network service
 - Cookie Store API、Storage Access API、`Clear-Site-Data`。
 - cookie 的值用作業系統的金鑰庫加密（Chromium 的 OSCrypt，第 19 條）。
 - `document.cookie` 的讀用共享記憶體的版本號省掉 IPC（Chromium 的 `kReduceCookieIPCs`，第 22 條）。
+- CDP 的 `DOMStorage` domain 和 `Storage.clearDataForOrigin`（DevTools 的 Application 面板，第 23 條）。
 - 清除資料的 UI、無痕模式。
 - 第二個 machopo 把網址交給已經開著同一個 profile 的那個（Chromium 的 `ProcessSingleton`，第 6 條）。
 - cookie 的值在磁碟上加密（Chromium 用作業系統的金鑰）。

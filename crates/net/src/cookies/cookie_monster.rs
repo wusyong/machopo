@@ -486,6 +486,38 @@ impl CookieMonster {
         partition_key: Option<&CookiePartitionKey>,
         now: Time,
     ) -> Vec<CanonicalCookie> {
+        self.cookie_list(url, options, partition_key, now, true)
+    }
+
+    /// The cookies of [`get_cookie_list_with_options`] for DevTools and
+    /// automation: every one `url` could get in any context (`HttpOnly`
+    /// too, of any `SameSite`), not marked as used (Chromium's
+    /// `CookieOptions::MakeAllInclusive`, `do_not_update_access_time`).
+    ///
+    /// [`get_cookie_list_with_options`]: Self::get_cookie_list_with_options
+    pub fn get_all_inclusive_cookie_list(
+        &mut self,
+        url: &Url,
+        partition_key: Option<&CookiePartitionKey>,
+        now: Time,
+    ) -> Vec<CanonicalCookie> {
+        self.cookie_list(
+            url,
+            &CookieOptions::make_all_inclusive(),
+            partition_key,
+            now,
+            false,
+        )
+    }
+
+    fn cookie_list(
+        &mut self,
+        url: &Url,
+        options: &CookieOptions,
+        partition_key: Option<&CookiePartitionKey>,
+        now: Time,
+        update_access_time: bool,
+    ) -> Vec<CanonicalCookie> {
         if !cookie_util::is_cookieable_scheme(url) {
             return Vec::new();
         }
@@ -516,8 +548,9 @@ impl CookieMonster {
                 continue;
             }
             // `InternalUpdateCookieAccessTime`.
-            if now.saturating_micros_since(cookie.last_access_date())
-                >= ACCESS_UPDATE_THRESHOLD_SECONDS.saturating_mul(1_000_000)
+            if update_access_time
+                && now.saturating_micros_since(cookie.last_access_date())
+                    >= ACCESS_UPDATE_THRESHOLD_SECONDS.saturating_mul(1_000_000)
             {
                 cookie.set_last_access_date(now);
                 if cookie.is_persistent()

@@ -136,6 +136,91 @@ pub(crate) enum ScriptCookies {
     },
 }
 
+/// Which partitions a deletion takes cookies of.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PartitionFilter {
+    /// Unpartitioned and partitioned ones alike.
+    Any,
+    /// Unpartitioned ones alone.
+    Unpartitioned,
+    /// Those of this partition alone.
+    Of(CookiePartitionKey),
+}
+
+/// Which cookies a deletion takes (`network::mojom::CookieDeletionFilter`,
+/// as DevTools fills it): those of every given part.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CookieDeletionFilter {
+    pub name: Option<String>,
+    /// The cookie's domain exactly (`.` and the domain for a domain
+    /// cookie).
+    pub domain: Option<String>,
+    pub path: Option<String>,
+    pub partition: PartitionFilter,
+}
+
+impl CookieDeletionFilter {
+    /// Every cookie (`ClearBrowserCookies`'s empty filter).
+    pub fn all() -> Self {
+        Self {
+            name: None,
+            domain: None,
+            path: None,
+            partition: PartitionFilter::Any,
+        }
+    }
+
+    fn matches(&self, cookie: &CanonicalCookie) -> bool {
+        self.name
+            .as_deref()
+            .is_none_or(|name| cookie.name() == name)
+            && self
+                .domain
+                .as_deref()
+                .is_none_or(|domain| cookie.domain() == domain)
+            && self
+                .path
+                .as_deref()
+                .is_none_or(|path| cookie.path() == path)
+            && match &self.partition {
+                PartitionFilter::Any => true,
+                PartitionFilter::Unpartitioned => !cookie.is_partitioned(),
+                PartitionFilter::Of(key) => cookie.partition_key() == Some(key),
+            }
+    }
+}
+
+/// A call of the browser's on the jar (`network::mojom::CookieManager`'s,
+/// for DevTools and automation): every cookie of any context, `HttpOnly`
+/// ones too.
+pub(crate) enum CookieManagerCall {
+    /// The cookies each of `urls` could get, in the partition of a frame of
+    /// it in a top-level frame at `top_frame` (if any) too
+    /// (`GetCookieList`, as DevTools' `CookieRetrieverNetworkService`):
+    /// each once.
+    GetList {
+        urls: Vec<Url>,
+        top_frame: Option<Url>,
+        done: Box<dyn FnOnce(Vec<CanonicalCookie>) + Send>,
+    },
+    /// Every cookie (`GetAllCookies`).
+    GetAll {
+        done: Box<dyn FnOnce(Vec<CanonicalCookie>) + Send>,
+    },
+    /// Sets each, as from its own `https:` URL (`SetCanonicalCookie` from
+    /// `cookie_util::SimulatedCookieSource`), in any context: whether each
+    /// was.
+    Set {
+        cookies: Vec<CanonicalCookie>,
+        done: Box<dyn FnOnce(Vec<bool>) + Send>,
+    },
+    /// Deletes those `filter` takes (`DeleteCookies`): how many.
+    Delete {
+        filter: CookieDeletionFilter,
+        done: Box<dyn FnOnce(usize) + Send>,
+    },
+}
+
 /// The site of the top-level frame of a hop to `url`: a main frame
 /// navigation's, its URL's at each hop (its `IsolationInfo` is redone at a
 /// redirect); another request's, the browser's. None if it is opaque.
@@ -284,6 +369,75 @@ impl CookieJar {
             .filter(|cookie| self.accessible(cookie, url, &hop.site_for_cookies))
             .collect();
         (!cookies.is_empty()).then(|| CanonicalCookie::build_cookie_line(&cookies))
+    }
+
+    /// Answers `call` (after [`wait_for_load`](Self::wait_for_load)).
+    pub(crate) fn answer_manager(&self, call: CookieManagerCall) {
+        let now = Time::now();
+        match call {
+            CookieManagerCall::GetList {
+                urls,
+                top_frame,
+                done,
+            } => {
+                let top_site = top_frame
+                    .as_ref()
+                    .map(Site::of_url)
+                    .filter(|site| !site.is_opaque());
+                let site_for_cookies = top_site
+                    .clone()
+                    .map_or_else(SiteForCookies::null, SiteForCookies::of_site);
+                let mut cookies: Vec<CanonicalCookie> = Vec::new();
+                let mut monster = self.monster();
+                for url in &urls {
+                    let partition_key =
+                        CookiePartitionKey::for_request(top_site.as_ref(), &site_for_cookies, url);
+                    for cookie in
+                        monster.get_all_inclusive_cookie_list(url, partition_key.as_ref(), now)
+                    {
+                        if !cookies.iter().any(|kept| kept.is_equivalent(&cookie)) {
+                            cookies.push(cookie);
+                        }
+                    }
+                }
+                drop(monster);
+                done(cookies);
+            }
+            CookieManagerCall::GetAll { done } => {
+                let cookies = self.monster().all_cookies(now);
+                done(cookies);
+            }
+            CookieManagerCall::Set { cookies, done } => {
+                let mut monster = self.monster();
+                let set = cookies
+                    .into_iter()
+                    .map(|cookie| {
+                        let source = Url::parse(&format!(
+                            "https://{}{}",
+                            cookie.domain_without_dot(),
+                            cookie.path()
+                        ));
+                        source.is_ok_and(|source| {
+                            monster
+                                .set_canonical_cookie(
+                                    cookie,
+                                    &source,
+                                    &CookieOptions::make_all_inclusive(),
+                                )
+                                .is_ok()
+                        })
+                    })
+                    .collect();
+                drop(monster);
+                done(set);
+            }
+            CookieManagerCall::Delete { filter, done } => {
+                let deleted = self
+                    .monster()
+                    .delete_matching(|cookie| filter.matches(cookie));
+                done(deleted);
+            }
+        }
     }
 
     /// Answers `call` (after [`wait_for_load`](Self::wait_for_load)).

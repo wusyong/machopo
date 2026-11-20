@@ -12,10 +12,17 @@ use serde_json::{Value, json};
 
 /// A driver for the `machopo` this test was built with.
 fn driver() -> SocketAddr {
+    driver_with(&[])
+}
+
+/// A driver whose machopos take `args` too.
+fn driver_with(args: &[&str]) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut binary_args = vec!["--test-fonts".to_owned()];
+    binary_args.extend(args.iter().map(|arg| (*arg).to_owned()));
     let options = driver::Options {
         binary: env!("CARGO_BIN_EXE_machopo").into(),
-        binary_args: vec!["--test-fonts".into()],
+        binary_args,
     };
     driver::start(listener, options).unwrap().addr()
 }
@@ -1622,5 +1629,108 @@ fn the_document_is_driven() {
         error(session.call("GET", &format!("/element/{count}/name"), None)),
         (404, "stale element reference".into())
     );
+    session.delete();
+}
+
+/// The current document's cookies: Get All and Get Named (`HttpOnly` ones
+/// too, `sameSite` `Lax` for one without; `no such cookie`), Add (of the
+/// document's URL, script reads it; a wrong `sameSite` is an `invalid
+/// argument`, a domain the host isn't in or a document not of `http:` an
+/// `invalid cookie domain`), Delete one and Delete All.
+#[test]
+fn cookies_are_read_added_and_deleted() {
+    let server = server(&[(
+        "/page",
+        Route::ok("text/html", "<!DOCTYPE html>page")
+            .with_header("Set-Cookie", "http=1; HttpOnly")
+            .with_header("Set-Cookie", "strict=2; SameSite=Strict"),
+    )]);
+    let addr = driver();
+    let (session, _) = Session::new(addr, json!({}));
+    ok(session.navigate(&server.url("/page")));
+    let names = |session: &Session| {
+        let mut names: Vec<String> = session
+            .get("/cookie")
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|cookie| cookie["name"].as_str().unwrap().to_owned())
+            .collect();
+        names.sort_unstable();
+        names
+    };
+    assert_eq!(names(&session), ["http", "strict"]);
+    let http = session.get("/cookie/http");
+    assert_eq!(http["value"], "1");
+    assert_eq!(http["httpOnly"], true);
+    assert_eq!(http["sameSite"], "Lax");
+    assert_eq!(http["path"], "/");
+    assert!(http.get("expiry").is_none(), "{http}");
+    assert_eq!(session.get("/cookie/strict")["sameSite"], "Strict");
+    assert_eq!(
+        error(session.call("GET", "/cookie/none", None)),
+        (404, "no such cookie".into())
+    );
+
+    let expiry = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 86_400;
+    let added = json!({ "name": "added", "value": "3", "expiry": expiry, "sameSite": "None", "secure": true });
+    ok(session.call("POST", "/cookie", Some(json!({ "cookie": added }))));
+    let cookie = session.get("/cookie/added");
+    assert_eq!(cookie["expiry"], expiry);
+    assert_eq!(cookie["sameSite"], "None");
+    assert_eq!(cookie["secure"], true);
+    let read = ok(session.call(
+        "POST",
+        "/execute/sync",
+        Some(json!({ "script": "return document.cookie", "args": [] })),
+    ));
+    assert!(read.as_str().unwrap().contains("added=3"), "{read}");
+    let wrong =
+        |cookie: Value| error(session.call("POST", "/cookie", Some(json!({ "cookie": cookie }))));
+    assert_eq!(
+        wrong(json!({ "name": "a", "value": "1", "sameSite": "Bogus" })),
+        (400, "invalid argument".into())
+    );
+    assert_eq!(
+        wrong(json!({ "name": "a", "value": "1", "domain": "example.com" })),
+        (400, "invalid cookie domain".into())
+    );
+
+    // One the browser refuses: `SameSite=None` without `Secure`.
+    assert_eq!(
+        wrong(json!({ "name": "a", "value": "1", "sameSite": "None" })),
+        (500, "unable to set cookie".into())
+    );
+
+    ok(session.call("DELETE", "/cookie/added", None));
+    assert_eq!(names(&session), ["http", "strict"]);
+    ok(session.call("DELETE", "/cookie", None));
+    assert_eq!(names(&session), Vec::<String>::new());
+
+    ok(session.navigate("about:blank"));
+    assert_eq!(
+        wrong(json!({ "name": "a", "value": "1" })),
+        (400, "invalid cookie domain".into())
+    );
+    session.delete();
+}
+
+/// Add Cookie of a domain the host is in: a domain cookie (a leading dot),
+/// which the host's subdomains see too.
+#[test]
+fn an_added_cookie_of_a_domain_is_the_domains() {
+    let server = server(&[("/page", Route::ok("text/html", "<!DOCTYPE html>page"))]);
+    let addr = driver_with(&["--host-resolver-rules", "MAP *.localhost 127.0.0.1"]);
+    let (session, _) = Session::new(addr, json!({}));
+    ok(session.navigate(&server.url_for_host("www.a.localhost", "/page")));
+    let cookie = json!({ "name": "d", "value": "1", "domain": "a.localhost" });
+    ok(session.call("POST", "/cookie", Some(json!({ "cookie": cookie }))));
+    assert_eq!(session.get("/cookie/d")["domain"], ".a.localhost");
+    ok(session.navigate(&server.url_for_host("other.a.localhost", "/page")));
+    assert_eq!(session.get("/cookie/d")["value"], "1");
     session.delete();
 }

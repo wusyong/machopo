@@ -23,7 +23,7 @@
 | 4d：`Partitioned`、上限和淘汰、寫進 profile 的 `Cookies` 資料庫 | 完成 | 2026-11-20 |
 | 4e：WPT 的 `cookies/`、第 4 階段的檢查和文件 | 完成 | 2026-11-20 |
 | 5a：`document.cookie` 和 `navigator.cookieEnabled` | 完成 | 2026-11-20 |
-| 5b：自動化（WebDriver 的 cookie 指令、CDP 的 `Network` 的 cookie、testdriver） | 未開始 | |
+| 5b：自動化（WebDriver 的 cookie 指令、CDP 的 `Network` 的 cookie、testdriver） | 完成 | 2026-11-20 |
 | 5c：WPT 的 `cookies/`、第 5 階段的檢查和文件 | 未開始 | |
 | 6：檢查和文件 | 未開始 | |
 
@@ -61,6 +61,10 @@
 | `navigator.cookieEnabled`：第一方是 true，第三方的 iframe 只在照送的旗標時是 true；cookie-averse 的文件是 true | `cargo test -p net --test it cookie_loads::`；`cargo test -p browser --test it cookies::` |
 | script 的 cookie 經過文件的 loader：網址是 loader 的 origin 的才照它的可信參數；別的 origin、opaque 的 loader、沒給的 loader 是壞掉的訊息 | `cargo test -p browser --lib script_cookies` |
 | WPT：`document-cookie.html`、`cookie-enabled-noncookie-frame.html`、`set-and-delete-document-cookie.window.js`、`navigatorcookies-cookieenabled-true.html` 整份通過 | `python3 scripts/test.py wpt cookies/ html/dom/documents/resource-metadata-management/ html/webappapis/system-state-and-capabilities/the-navigator-object/` |
+| cookie 的零件（DevTools、自動化的）：host-only 的是網址的 host，有點開頭的 domain 是 domain cookie；path 照給的或網址的預設；`Secure` 的當成從安全的網址設的；`Set-Cookie` 寫不出的拒絕（`;`、終止字元、前後的空白、名稱裡的 `=`、不在其中的網域、相對的 path、前綴、讀起來像一對的沒有名字的值、沒有 `Secure` 的分區） | `cargo test -p net --test it cookies::a_cookie_from` |
+| Browser 的 cookie 管理：網址的 cookie 每種情境的、`HttpOnly` 的都算，含給的最上層 frame 的分區，每個一次，不記成用過；全部的；設的當成從自己的 `https:` 網址設的（`HttpOnly` 的也可以）；刪的照名稱、確切的 domain、path、分區 | `cargo test -p net --test it -- cookie_loads::the_browsers cookie_monster::an_all` |
+| CDP：`Network.getCookies`（分頁的 frame 的網址、或給的）、`getAllCookies`、`setCookie`、`setCookies`（全部或一個都不設）、`deleteCookies`（沒給分區時只刪沒分區的）、`clearBrowserCookies`，`Storage.getCookies`、`setCookies`、`clearCookies`；`Network.Cookie` 的欄位（`expires`、`session`、`size`、`sameSite` 只在有時、`partitionKey`）；參數做不出 cookie 時是錯誤 | `cargo test -p shell --test it devtools_cookies::` |
+| WebDriver：Get All、Get Named（`no such cookie`）、Add（目前的文件的網址，`sameSite` 不對是 `invalid argument`，網域不對或不是 `http:` 的文件是 `invalid cookie domain`）、Delete、Delete All Cookies；沒標 `SameSite` 的回報 `Lax`；WPT 的 wdspec 的 5 個目錄 | `cargo test -p shell --test it webdriver::cookies`；`python3 scripts/test.py wdspec /webdriver/tests/classic/add_cookie /webdriver/tests/classic/delete_all_cookies /webdriver/tests/classic/delete_cookie /webdriver/tests/classic/get_all_cookies /webdriver/tests/classic/get_named_cookie` |
 
 ## 做過的檢查
 
@@ -232,7 +236,7 @@ macOS、Apple M4，2026-11-20。
 
 - 決定了第 21 條（WPT 的 `cookies/` 到第 5 階段才大量列進來）。用預設的設定跑整個 `cookies/`（`test.py wpt --all cookies/`）：約 90 份裡整份通過的只有 4 份，其他的失敗在 `window.open`（`samesite/` 幾乎每份先開新視窗；machopo 沒有）、`document.cookie` 和 testdriver 的 `delete_all_cookies`（第 5 階段）。
 - WPT：`include.txt` 加了 `cookies/` 整份通過的 4 份；因為有了 cookie 而通過的拿掉了預期結果（`fetch/api/cors/cors-cookies.any.js`、`cors-cookies-redirect.any.js`、`workers/modules/dedicated-worker-options-credentials.html`、`dynamic-imports-credentials.sub.html`）；`dynamic-imports-credentials-setTimeout.sub.html` 留下的兩個失敗不是 cookie 的事（`setTimeout` 的字串建的 script 沒有繼承呼叫它的 script 的 fetch options），換了註解；`workers/same-site-cookies/` 的 `disabled` 原因改成 shared worker 和 `window.open`（拿掉之後試跑：都停在這兩個）。`script-crossorigin-network.sub.html` 和 `module/credentials.sub.html` 照樣失敗：它們用 `document.cookie` 設 cookie。
-- 找到的不穩定：`html/semantics/scripting-1/the-script-element/moving-between-documents/after-prepare-*` 和 `fetch/`、`workers/` 等一起跑時，每次有兩三份整份 timeout（60 秒，測試大約 6 秒就該結束），每次是不同的幾份，單獨跑都通過。在 4b 的 commit（`be3816f`，還沒有接上請求的 cookie）上用同樣的目錄跑兩次也一樣，所以和 cookie 無關；原因還沒查，這份 RFC 不處理，另外查。（另一個 worktree 和這裡共用 `target/` 時，cargo 用 workspace 裡的相對路徑命名輸出，4b 編的 `site` 蓋掉了這裡的；touch 改過的 crate 之後重編。）
+- 找到的不穩定：`html/semantics/scripting-1/the-script-element/moving-between-documents/after-prepare-*` 和 `fetch/`、`workers/` 等一起跑時，每次有兩三份整份 timeout（60 秒，測試大約 6 秒就該結束），每次是不同的幾份，單獨跑都通過。在 4b 的 commit（`be3816f`，還沒有接上請求的 cookie）上用同樣的目錄跑兩次也一樣，所以和 cookie 無關。另一個 session 查出原因（wptserve 回完沒有長度的回應之後關掉連線、不說，hyper 把它放回連線池，下一個請求拿到就失敗，iframe 的導覽跟著失敗），照 Chromium 的 `ShouldResendRequest` 在 `net` 重送，在 5a 之後套進 0107（`835e4ff`）；套用之後用同樣的目錄跑兩次，都沒有意外的結果。（另一個 worktree 和這裡共用 `target/` 時，cargo 用 workspace 裡的相對路徑命名輸出，4b 編的 `site` 蓋掉了這裡的；touch 改過的 crate 之後重編。）
 - 第 4 階段的檢查：`cargo test --workspace`（4416 個通過、1 個 ignored；`bindings` 的 `gc_platform` 在 log 裡的兩個 panic 是測試故意讓 worker panic）、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`；`test.py scenarios --window`（4c 改了 `window.rs`）72 個都通過，看了截圖；`test.py wpt cookies/ fetch/api/cors/ workers/modules/ workers/same-site-cookies/ html/semantics/scripting-1/the-script-element/module/dynamic-import/` 0 個意外的結果。
 
 ### 5a：`document.cookie` 和 `navigator.cookieEnabled`
@@ -247,4 +251,17 @@ macOS、Apple M4，2026-11-20。
 - mutation test（`mutants-5a.toml`）22 個，抓到 21 個；沒抓到的「沒有 window 的文件也有 cookie」是 `is_fully_active` 本來就看 window，拿掉了多的檢查，改成弄壞 `is_fully_active` 的那一個，重跑抓到。測不到的兩處（opaque 的 `SecurityError`、壞掉的讀照樣回答）記進 `docs/test-gaps.md` 的「只靠審查」。
 - 文件：`docs/limitations.md`（`document.cookie` 每次問、cookie-averse 的文件、`cookieEnabled` 照政策）、`docs/architecture.md`（同步等 Browser 的呼叫、`net` 的 script 的 cookie、IO thread 的核對）、`docs/test-gaps.md`。
 - 跑過的檢查：`cargo test` 的 `protocol`、`net`、`dom`、`dom_api`、`dom_js`、`renderer`、`browser`、`shell`（2277 個通過）；這幾個 crate 的 `cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`；`test.py wpt cookies/ html/dom/documents/resource-metadata-management/ html/webappapis/system-state-and-capabilities/the-navigator-object/ fetch/api/cors/` 0 個意外的結果。
+
+### 5b：自動化的 cookie
+
+macOS、Apple M4，2026-11-20。
+
+- 決定了第 23 條（WebDriver、CDP 的 `Network` 和 `Storage` 的 cookie）。讀了 Chromium 的 `network_handler.cc`（`BuildCookie`、`MakeCookieFromProtocolValues`、`FilterCookies`、`GetCookies`、`SetCookie(s)`、`DeleteCookies`、`ClearBrowserCookies`）、`storage_handler.cc`、`canonical_cookie.cc` 的 `CreateSanitizedCookie`，和 chromedriver 的 `window_commands.cc`（`GetVisibleCookies`、`ExecuteAddCookie`、`ExecuteDeleteCookie`、`ExecuteDeleteAllCookies`、`CreateDictionaryFrom`）、`web_view_impl.cc`。
+- 新的東西：`net` 的 `CanonicalCookie::create_sanitized`（兩個新的 `ExclusionReason`：`InvalidPath`、`AttributeValueExceedsMaxSize`；前綴的檢查改成也收屬性的值，`is_prefix_valid_for`）、`CookieMonster::get_all_inclusive_cookie_list`（不記成用過）、`NetworkContext` 的 `get_cookie_list`、`get_all_cookies`、`set_canonical_cookies`、`delete_cookies` 和 `CookieDeletionFilter`、`PartitionFilter`（在 network thread 的迴圈裡照順序做，和 script 的一樣）；`browser` 的 `WebContents::network`、`frame_urls`；`shell` 的 `automation_cookies`（`Network` 和 `Storage` 的 9 個 cookie 命令，原本假的回答拿掉）；machopodriver 的 5 個 cookie 指令。
+- 和 Chromium、chromedriver 不同、留著的：`Network.setCookie` 的 `sourceScheme`、`sourcePort`、`priority` 不收（`priority` 一律 `Medium`）；沒有 DevTools 的 client 能不能碰那個網址的檢查（`CanAccessCookie`：machopo 的 client 都可以）；WebDriver 的 Get All Cookies 等等讀的是目前 browsing context 的文件的網址（chromedriver 一樣），沒標 `SameSite` 的回報 `Lax`（chromedriver 一樣，WPT 的 `get_all_cookies/get.py` 期待 `None`，記成預期的失敗）。
+- 寫的時候發現 `CookieOptions` 已經有 `make_all_inclusive()`，拿掉了自己多寫的一個。
+- 新的測試：`net` 的 `cookies` 加 1 個（零件做的 cookie）、`cookie_monster` 加 1 個（讀了不記成用過）、`cookie_loads` 加 1 個（Browser 的四種呼叫）；`shell` 的 `devtools_cookies` 2 個（頁面的、瀏覽器全部的），`webdriver` 加 2 個（5 個指令、網域 cookie），`devtools_network` 拿掉原本對假回答的檢查。WPT 的 wdspec 加了 `add_cookie`、`delete_all_cookies`、`delete_cookie`、`get_all_cookies`、`get_named_cookie`：失敗的是 `user_prompts.py`（machopo 沒有 alert 這類提示，和其他目錄一樣）和上面說的 `sameSite`。WPT 的 testdriver 經過這些指令：`cookies/samesite/get_all_cookies-default-samesite.html` 整份通過，`cookies/name/name.html`、`value/value.html` 大多通過（5c 再看）。
+- mutation test（`mutants-5b.toml`）第一次 33 個，抓到 28 個、1 個編不過：「刪某個分區時刪到任何分區」補了刪別的分區是 0 個的檢查；「零件的名稱可以有 `=`」是等價的（`check_name_value_pair` 本來就擋 `=`、`;` 和控制字元），拿掉多的檢查，改成兩個 mutant（名稱前後的空白、path 的 `;`）；「加的網域 cookie 變成 host-only」是 WebDriver 的測試只在 IP 位址上跑，加了帶 host 對應規則的 driver 和 `www.a.localhost` 的測試；「設不成的 cookie 不算錯」補了 `SameSite=None` 沒有 `Secure` 的檢查；編不過的那個是 mutant 寫錯，改了。重跑整份 34 個，全部抓到。
+- 文件：`docs/limitations.md`（machopodriver 和 CDP 的 cookie）、`docs/architecture.md`（`net` 的 cookie 管理）、`crates/shell/README.md`（CDP 的 cookie 命令）、`crates/driver/README.md`（有的指令、cookie）。
+- 跑過的檢查：`cargo test` 的 `net`、`browser`、`shell`、`driver`（1129 個通過）；這幾個 crate 的 `cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`；`test.py wdspec` 的 5 個 cookie 目錄 0 個意外的結果。
 

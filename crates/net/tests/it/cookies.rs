@@ -1332,3 +1332,149 @@ fn the_default_options_are_strict() {
     assert_eq!(options.same_site_context, SameSiteCookieContext::CrossSite);
     assert!(!options.lax_allow_unsafe);
 }
+
+// --- CanonicalCookie::create_sanitized ------------------------------------
+
+fn sanitized(
+    at_url: &str,
+    name: &str,
+    value: &str,
+    domain: &str,
+    path: &str,
+    secure: bool,
+    partition: Option<&CookiePartitionKey>,
+) -> Result<CanonicalCookie, Vec<ExclusionReason>> {
+    CanonicalCookie::create_sanitized(
+        &url(at_url),
+        name,
+        value,
+        domain,
+        path,
+        at(0),
+        Some(at(60)),
+        secure,
+        false,
+        CookieSameSite::LaxMode,
+        partition,
+    )
+    .map_err(|status| status.exclusion_reasons().to_vec())
+}
+
+/// A cookie from its parts (DevTools', automation's): the URL's host for a
+/// host-only one, a domain cookie's of a `Domain` it is in; the path
+/// given, or the URL's default; set as from a secure URL if `Secure`. What
+/// a `Set-Cookie` line couldn't say is refused: a `;`, a terminator or
+/// surrounding space in the name, value, path or domain, a `=` in the
+/// name, a domain the host isn't in, a relative path, a prefix without
+/// what it asks for, a nameless value that reads as a pair, a partitioned
+/// one not `Secure`.
+#[test]
+fn a_cookie_from_its_parts() {
+    let cookie = sanitized("http://www.a.example", "n", "v", "", "", false, None).unwrap();
+    assert_eq!(
+        (cookie.domain(), cookie.path(), cookie.source_scheme()),
+        ("www.a.example", "/", CookieSourceScheme::NonSecure)
+    );
+    assert_eq!(cookie.expiry_date(), Some(at(60)));
+    assert_eq!(cookie.source_type(), CookieSourceType::Other);
+    let cookie = sanitized(
+        "http://www.a.example",
+        "n",
+        "v",
+        ".a.example",
+        "/p",
+        true,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        (cookie.domain(), cookie.path(), cookie.source_scheme()),
+        (".a.example", "/p", CookieSourceScheme::Secure)
+    );
+    assert_eq!(cookie.source_port(), Some(443));
+    for (name, value, domain, path) in [
+        ("a;b", "v", "", ""),
+        (" n", "v", "", ""),
+        ("n=", "v", "", ""),
+        ("n", "v\n", "", ""),
+        ("n", "v ", "", ""),
+        ("n", "v", "", "/p;"),
+        ("n", "\u{1}", "", ""),
+    ] {
+        assert!(
+            sanitized("http://a.example", name, value, domain, path, false, None)
+                .unwrap_err()
+                .contains(&DisallowedCharacter),
+            "{name:?} {value:?} {path:?}"
+        );
+    }
+    assert!(
+        sanitized("http://a.example", "n", "v", "a.example\n", "", false, None)
+            .unwrap_err()
+            .contains(&InvalidDomain)
+    );
+    assert!(
+        sanitized("http://a.example", "n", "v", ".b.example", "", false, None)
+            .unwrap_err()
+            .contains(&InvalidDomain)
+    );
+    assert_eq!(
+        sanitized("http://a.example", "n", "v", "", "p", false, None).unwrap_err(),
+        [InvalidPath]
+    );
+    assert_eq!(
+        sanitized(
+            "http://a.example",
+            "n",
+            "v",
+            "",
+            &format!("/{}", "p".repeat(1024)),
+            false,
+            None
+        )
+        .unwrap_err(),
+        [AttributeValueExceedsMaxSize]
+    );
+    assert_eq!(
+        sanitized("http://a.example", "__Secure-n", "v", "", "", false, None).unwrap_err(),
+        [InvalidPrefix]
+    );
+    assert!(sanitized("https://a.example", "__Host-n", "v", "", "", true, None).is_ok());
+    assert_eq!(
+        sanitized("https://a.example", "__Host-n", "v", "", "/p", true, None).unwrap_err(),
+        [InvalidPrefix]
+    );
+    assert_eq!(
+        sanitized("http://a.example", "", "__Secure-n", "", "", false, None).unwrap_err(),
+        [InvalidPrefix]
+    );
+    assert_eq!(
+        sanitized("http://a.example", "", "a=b", "", "", false, None).unwrap_err(),
+        [AmbiguousSerialization]
+    );
+    let partition = partition("https://top.example");
+    assert_eq!(
+        sanitized(
+            "https://a.example",
+            "n",
+            "v",
+            "",
+            "",
+            false,
+            Some(&partition)
+        )
+        .unwrap_err(),
+        [InvalidPartitioned]
+    );
+    let cookie = sanitized(
+        "https://a.example",
+        "n",
+        "v",
+        "",
+        "",
+        true,
+        Some(&partition),
+    )
+    .unwrap();
+    assert_eq!(cookie.partition_key(), Some(&partition));
+}

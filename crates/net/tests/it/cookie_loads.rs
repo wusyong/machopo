@@ -558,3 +558,147 @@ fn a_third_partys_script_by_the_policy() {
         );
     }
 }
+
+fn waited<T: Send + 'static>(call: impl FnOnce(Box<dyn FnOnce(T) + Send>)) -> T {
+    let (done, answered) = unbounded();
+    call(Box::new(move |value| {
+        let _ = done.send(value);
+    }));
+    answered.recv_timeout(Duration::from_secs(30)).unwrap()
+}
+
+fn names_of(cookies: &[net::cookies::CanonicalCookie]) -> Vec<String> {
+    let mut names: Vec<String> = cookies
+        .iter()
+        .map(|cookie| cookie.name().to_owned())
+        .collect();
+    names.sort_unstable();
+    names
+}
+
+/// The browser's cookie calls (DevTools', automation's): a URL's cookies of
+/// any context (`HttpOnly` and `Strict` too), and of the partition of the
+/// top-level frame given, each once, not marked as used; every cookie;
+/// cookies set as from their own `https:` URL, each said set or not; and
+/// those a filter takes deleted (by name, exact domain, path, partition).
+#[test]
+fn the_browsers_cookie_calls() {
+    use net::cookies::{
+        CanonicalCookie, CookieDeletionFilter, CookieSameSite, PartitionFilter, Time,
+    };
+    let (network, server) = (network(false), server());
+    let a = |path: &str| server.url_for_host("a.localhost", path);
+    load(
+        &network,
+        request(a("/set"), Some(first_party("a.localhost"))),
+    );
+    load(
+        &network,
+        request(a("/http-only"), Some(first_party("a.localhost"))),
+    );
+    network.set_cookie_from_script(
+        url::Url::parse(&a("/")).unwrap(),
+        embedded_in("b.localhost"),
+        "chip=1; SameSite=None; Secure; Partitioned".to_owned(),
+    );
+    let url_a = url::Url::parse(&a("/")).unwrap();
+    let list = |top: Option<&str>| {
+        let urls = vec![url_a.clone(), url_a.clone()];
+        let top = top.map(|top| url::Url::parse(top).unwrap());
+        waited(|done| network.get_cookie_list(urls, top, done))
+    };
+    assert_eq!(
+        names_of(&list(None)),
+        ["lax", "none", "only", "strict", "unspecified"]
+    );
+    assert_eq!(
+        names_of(&list(Some("http://b.localhost/"))),
+        ["chip", "lax", "none", "only", "strict", "unspecified"]
+    );
+    let all: Vec<CanonicalCookie> = waited(|done| network.get_all_cookies(done));
+    assert_eq!(all.len(), 6);
+    // Read, not used: the times are as they were.
+    let again: Vec<CanonicalCookie> = waited(|done| network.get_all_cookies(done));
+    assert_eq!(all, again);
+
+    let set = |cookie| waited(|done| network.set_canonical_cookies(vec![cookie], done));
+    let made = |name: &str, http_only| {
+        CanonicalCookie::create_sanitized(
+            &url::Url::parse("http://a.localhost").unwrap(),
+            name,
+            "1",
+            "",
+            "",
+            Time::now(),
+            None,
+            false,
+            http_only,
+            CookieSameSite::StrictMode,
+            None,
+        )
+        .unwrap()
+    };
+    assert_eq!(set(made("devtools", true)), [true]);
+    load(
+        &network,
+        request(a("/echo"), Some(first_party("a.localhost"))),
+    );
+    assert!(sent(&server, "/echo").contains("devtools"));
+    // Over an `HttpOnly` one: they may (HTTP's context).
+    assert_eq!(set(made("only", false)), [true]);
+
+    let delete = |filter| waited(|done| network.delete_cookies(filter, done));
+    let filter = |name: Option<&str>, domain: Option<&str>, partition| CookieDeletionFilter {
+        name: name.map(str::to_owned),
+        domain: domain.map(str::to_owned),
+        path: None,
+        partition,
+    };
+    assert_eq!(
+        delete(filter(
+            Some("lax"),
+            Some(".a.localhost"),
+            PartitionFilter::Any
+        )),
+        0
+    );
+    assert_eq!(
+        delete(filter(
+            Some("lax"),
+            Some("a.localhost"),
+            PartitionFilter::Any
+        )),
+        1
+    );
+    assert_eq!(
+        delete(filter(Some("chip"), None, PartitionFilter::Unpartitioned)),
+        0
+    );
+    let partition = list(Some("http://b.localhost/"))
+        .into_iter()
+        .find(|cookie| cookie.name() == "chip")
+        .and_then(|cookie| cookie.partition_key().cloned())
+        .unwrap();
+    let other = net::cookies::CookiePartitionKey::new(
+        site::Site::of_url(&url::Url::parse("http://c.localhost").unwrap()),
+        site::AncestorChainBit::CrossSite,
+    );
+    assert_eq!(
+        delete(filter(Some("chip"), None, PartitionFilter::Of(other))),
+        0
+    );
+    assert_eq!(
+        delete(filter(Some("chip"), None, PartitionFilter::Of(partition))),
+        1
+    );
+    assert_eq!(
+        delete(CookieDeletionFilter {
+            path: Some("/p".to_owned()),
+            ..filter(None, None, PartitionFilter::Any)
+        }),
+        0
+    );
+    assert_eq!(delete(CookieDeletionFilter::all()), 5);
+    let all: Vec<CanonicalCookie> = waited(|done| network.get_all_cookies(done));
+    assert!(all.is_empty());
+}

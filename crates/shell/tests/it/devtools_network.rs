@@ -439,8 +439,9 @@ fn an_iframes_document_is_its_own_request() {
     assert_eq!(navigated["loaderId"], id, "{navigated}");
 }
 
-/// What holds in machopo anyway succeeds (no cache, no cookies, no service
-/// workers, the network as it is); what it can't do is an error.
+/// What holds in machopo anyway succeeds (no cache, no service workers,
+/// the network as it is); what it can't do is an error. Cookies are
+/// `devtools_cookies`'.
 #[test]
 fn commands_machopo_cant_carry_out_are_errors() {
     let server = server(&[("/", Route::ok("text/html", "<!DOCTYPE html>page"))]);
@@ -540,16 +541,7 @@ fn commands_machopo_cant_carry_out_are_errors() {
             }],
         }),
     );
-    assert_eq!(
-        ok(&mut page, "Network.getCookies", json!({})),
-        json!({ "cookies": [] })
-    );
-    assert_eq!(
-        ok(&mut page, "Network.getAllCookies", json!({})),
-        json!({ "cookies": [] })
-    );
     ok(&mut page, "Network.clearBrowserCache", json!({}));
-    ok(&mut page, "Network.clearBrowserCookies", json!({}));
     assert_eq!(
         ok(&mut page, "Network.canEmulateNetworkConditions", json!({})),
         json!({ "result": false })

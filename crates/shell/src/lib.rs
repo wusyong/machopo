@@ -14,6 +14,7 @@
 )]
 
 pub mod automation;
+mod automation_cookies;
 pub mod automation_pipe;
 pub mod automation_session;
 pub mod browser_view;

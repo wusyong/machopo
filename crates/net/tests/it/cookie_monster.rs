@@ -408,3 +408,25 @@ fn the_store_is_told_of_persistent_cookies() {
         Some("a=1".to_owned())
     );
 }
+
+/// DevTools' and automation's read (`MakeAllInclusive`): every cookie a URL
+/// could get, `HttpOnly` and `Strict` ones too, not marked as used.
+#[test]
+fn an_all_inclusive_read_marks_no_use() {
+    let mut jar = Jar::new();
+    jar.set(
+        1,
+        "https://a.example/",
+        "a=1; HttpOnly; SameSite=Strict",
+        None,
+    );
+    let read =
+        jar.monster
+            .get_all_inclusive_cookie_list(&url("https://a.example/"), None, at(1000));
+    assert_eq!(read.len(), 1);
+    assert_eq!(read[0].last_access_date(), at(1));
+    assert_eq!(
+        jar.monster.all_cookies(at(1000))[0].last_access_date(),
+        at(1)
+    );
+}

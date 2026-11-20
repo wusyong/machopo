@@ -15,6 +15,7 @@ mod browser_view;
 mod canvas;
 mod css_animations;
 mod devtools;
+mod devtools_cookies;
 mod devtools_css;
 mod devtools_dom;
 mod devtools_initiators;

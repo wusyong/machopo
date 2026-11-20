@@ -417,6 +417,28 @@ impl WebContents {
         self.url.as_deref()
     }
 
+    /// The network context of the tab's profile (its storage partition's):
+    /// what DevTools' and automation's cookie commands go through.
+    pub fn network(&self) -> &net::NetworkContext {
+        self.partition.network()
+    }
+
+    /// The URLs of the documents the tab's frames show, the main frame's
+    /// first (DevTools' `ComputeCookieURLs`); none for a frame that has
+    /// shown none of the browser's yet.
+    pub fn frame_urls(&self) -> Vec<String> {
+        let root = self.frame_tree.root();
+        let others = self
+            .frame_tree
+            .frames()
+            .into_iter()
+            .filter(|&frame| frame != root);
+        std::iter::once(root)
+            .chain(others)
+            .filter_map(|frame| self.frame_tree.url(frame).map(str::to_owned))
+            .collect()
+    }
+
     pub fn title(&self) -> &str {
         &self.title
     }

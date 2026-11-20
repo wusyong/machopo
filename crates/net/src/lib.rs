@@ -128,6 +128,7 @@ enum Listener {
 enum Job {
     Load(Load),
     Cookies(cookies::ScriptCookies),
+    Manager(cookies::CookieManagerCall),
 }
 
 struct Load {
@@ -293,6 +294,12 @@ impl NetworkContext {
                                 cookies.answer_script(call);
                                 continue;
                             }
+                            // The browser's, the same.
+                            Job::Manager(call) => {
+                                cookies.wait_for_load().await;
+                                cookies.answer_manager(call);
+                                continue;
+                            }
                         };
                         let transport = transport.clone();
                         let cookies = cookies.clone();
@@ -426,6 +433,69 @@ impl NetworkContext {
             trusted,
             done: Box::new(done),
         });
+    }
+
+    /// The cookies each of `urls` could get in any context (`HttpOnly`
+    /// ones too), in the partition of a frame of it in a top-level frame
+    /// at `top_frame` too, each once (`CookieManager::GetCookieList`, as
+    /// DevTools asks): given to `done` on the `NetworkService` thread,
+    /// once the profile's cookies are in; none if the network service has
+    /// gone.
+    pub fn get_cookie_list(
+        &self,
+        urls: Vec<url::Url>,
+        top_frame: Option<url::Url>,
+        done: impl FnOnce(Vec<cookies::CanonicalCookie>) + Send + 'static,
+    ) {
+        self.send_manager(cookies::CookieManagerCall::GetList {
+            urls,
+            top_frame,
+            done: Box::new(done),
+        });
+    }
+
+    /// Every cookie (`CookieManager::GetAllCookies`), as
+    /// [`get_cookie_list`](Self::get_cookie_list)'s.
+    pub fn get_all_cookies(
+        &self,
+        done: impl FnOnce(Vec<cookies::CanonicalCookie>) + Send + 'static,
+    ) {
+        self.send_manager(cookies::CookieManagerCall::GetAll {
+            done: Box::new(done),
+        });
+    }
+
+    /// Sets each of `cookies`, as from its own `https:` URL, in any context
+    /// (`SetCanonicalCookie`, as DevTools sets one): whether each was, to
+    /// `done`.
+    pub fn set_canonical_cookies(
+        &self,
+        cookies: Vec<cookies::CanonicalCookie>,
+        done: impl FnOnce(Vec<bool>) + Send + 'static,
+    ) {
+        self.send_manager(cookies::CookieManagerCall::Set {
+            cookies,
+            done: Box::new(done),
+        });
+    }
+
+    /// Deletes the cookies `filter` takes (`CookieManager::DeleteCookies`):
+    /// how many, to `done`.
+    pub fn delete_cookies(
+        &self,
+        filter: cookies::CookieDeletionFilter,
+        done: impl FnOnce(usize) + Send + 'static,
+    ) {
+        self.send_manager(cookies::CookieManagerCall::Delete {
+            filter,
+            done: Box::new(done),
+        });
+    }
+
+    fn send_manager(&self, call: cookies::CookieManagerCall) {
+        if self.jobs.send(Job::Manager(call)).is_err() {
+            tracing::warn!("network service is gone; dropping the browser's cookie call");
+        }
     }
 
     fn send_cookies(&self, call: cookies::ScriptCookies) {

@@ -29,6 +29,12 @@ pub enum ExclusionReason {
     DomainMismatch,
     /// The URL's path isn't on the cookie's (`EXCLUDE_NOT_ON_PATH`).
     NotOnPath,
+    /// A path given (to DevTools or automation) that isn't one a cookie
+    /// can have: not absolute (`EXCLUDE_INVALID_PATH`).
+    InvalidPath,
+    /// An attribute's value given longer than 1024 bytes
+    /// (`EXCLUDE_ATTRIBUTE_VALUE_EXCEEDS_MAX_SIZE`).
+    AttributeValueExceedsMaxSize,
     /// A `__Secure-`, `__Host-`, `__Http-` or `__Host-Http-` name without
     /// what the prefix asks for, or a nameless cookie whose value starts
     /// with one (`EXCLUDE_INVALID_PREFIX`).
