@@ -10,4 +10,5 @@
 )]
 
 mod data_pipe;
+mod frame_fuzz;
 mod time_ticks;

@@ -1,0 +1,144 @@
+# Step 2a: the channels' framing (`ipc::core::frame`). What a peer sends is
+# taken whole and in order or refused, and a refusal leaves nothing behind.
+test = ["sh", "-c", "cargo test -q -p ipc"]
+timeout = 600
+
+[[mutant]]
+name = "a length past the limit is taken"
+file = "crates/ipc/src/core/frame.rs"
+from = '''            if header.len > MAX_PAYLOAD_LEN {'''
+to = '''            if false && header.len > MAX_PAYLOAD_LEN {'''
+
+[[mutant]]
+name = "a length at the limit is refused"
+file = "crates/ipc/src/core/frame.rs"
+from = '''            if header.len > MAX_PAYLOAD_LEN {'''
+to = '''            if header.len >= MAX_PAYLOAD_LEN {'''
+
+[[mutant]]
+name = "the sequence number isn't checked"
+file = "crates/ipc/src/core/frame.rs"
+from = '''            if header.sequence != expected {'''
+to = '''            if false && header.sequence != expected {'''
+
+[[mutant]]
+name = "the sequence number due doesn't move"
+file = "crates/ipc/src/core/frame.rs"
+from = '''            self.next_sequence = expected.checked_add(1);'''
+to = '''            self.next_sequence = Some(expected);'''
+
+[[mutant]]
+name = "the last sequence number comes round"
+file = "crates/ipc/src/core/frame.rs"
+from = '''            self.next_sequence = expected.checked_add(1);'''
+to = '''            self.next_sequence = Some(expected.wrapping_add(1));'''
+
+[[mutant]]
+name = "a header may claim handles from an end that may attach none"
+file = "crates/ipc/src/core/frame.rs"
+from = '''            if header.handles != 0 && !self.peer_may_attach {'''
+to = '''            if false && header.handles != 0 && !self.peer_may_attach {'''
+
+[[mutant]]
+name = "handles beside a message that claims none are kept"
+file = "crates/ipc/src/core/frame.rs"
+from = '''        if !self.peer_may_attach && !self.handles.is_empty() {'''
+to = '''        if false && !self.peer_may_attach && !self.handles.is_empty() {'''
+
+[[mutant]]
+name = "a message may bring any number of handles"
+file = "crates/ipc/src/core/frame.rs"
+from = '''            if header.handles > MAX_HANDLES {'''
+to = '''            if false && header.handles > MAX_HANDLES {'''
+
+[[mutant]]
+name = "unclaimed handles pile up"
+file = "crates/ipc/src/core/frame.rs"
+from = '''        if self.handles.len() > (MAX_HANDLES as usize).saturating_mul(2) {'''
+to = '''        if false && self.handles.len() > (MAX_HANDLES as usize).saturating_mul(2) {'''
+
+[[mutant]]
+name = "a message's handles are the last read, not the first"
+file = "crates/ipc/src/core/frame.rs"
+from = '''            let handles = self.handles.drain(..count).collect();'''
+to = '''            let handles = self.handles.split_off(self.handles.len() - count).into();'''
+
+[[mutant]]
+name = "a bad message leaves its handles"
+file = "crates/ipc/src/core/frame.rs"
+from = '''            self.partial = Vec::new();
+            self.handles.clear();'''
+to = '''            self.partial = Vec::new();'''
+
+[[mutant]]
+name = "a bad message leaves its bytes"
+file = "crates/ipc/src/core/frame.rs"
+from = '''            self.partial = Vec::new();
+            self.handles.clear();'''
+to = '''            self.handles.clear();'''
+
+[[mutant]]
+name = "a bad message is forgotten"
+file = "crates/ipc/src/core/frame.rs"
+from = '''            self.failed = Some(bad);'''
+to = '''            let _ = bad;'''
+
+[[mutant]]
+name = "the whole of what was read is kept, not the unfinished rest"
+file = "crates/ipc/src/core/frame.rs"
+from = '''            self.partial.extend_from_slice(rest);'''
+to = '''            let _ = rest;
+            self.partial.extend_from_slice(bytes);'''
+
+[[mutant]]
+name = "room is made for what the header says"
+file = "crates/ipc/src/core/frame.rs"
+from = '''            self.partial.extend_from_slice(rest);'''
+to = '''            self.partial.reserve(MAX_PAYLOAD_LEN as usize);
+            self.partial.extend_from_slice(rest);'''
+
+[[mutant]]
+name = "what was given out stays in the buffer"
+file = "crates/ipc/src/core/frame.rs"
+from = '''            partial.drain(..taken);'''
+to = '''            let _ = taken;'''
+
+[[mutant]]
+name = "the encoder lets a payload past the limit through"
+file = "crates/ipc/src/core/frame.rs"
+from = '''            .filter(|&len| len <= MAX_PAYLOAD_LEN)'''
+to = '''            .filter(|&len| len <= MAX_PAYLOAD_LEN || true)'''
+
+[[mutant]]
+name = "the encoder refuses a payload at the limit"
+file = "crates/ipc/src/core/frame.rs"
+from = '''            .filter(|&len| len <= MAX_PAYLOAD_LEN)'''
+to = '''            .filter(|&len| len < MAX_PAYLOAD_LEN)'''
+
+[[mutant]]
+name = "the encoder lets any number of handles through"
+file = "crates/ipc/src/core/frame.rs"
+from = '''            .filter(|&handles| handles <= MAX_HANDLES)'''
+to = '''            .filter(|&handles| handles <= MAX_HANDLES || true)'''
+
+[[mutant]]
+name = "the encoder refuses as many handles as the limit"
+file = "crates/ipc/src/core/frame.rs"
+from = '''            .filter(|&handles| handles <= MAX_HANDLES)'''
+to = '''            .filter(|&handles| handles < MAX_HANDLES)'''
+
+[[mutant]]
+name = "the header's destination and handles change places"
+file = "crates/ipc/src/core/frame.rs"
+from = '''        out.extend_from_slice(&self.destination.to_le_bytes());
+        out.extend_from_slice(&self.sequence.to_le_bytes());
+        out.extend_from_slice(&self.handles.to_le_bytes());'''
+to = '''        out.extend_from_slice(&self.handles.to_le_bytes());
+        out.extend_from_slice(&self.sequence.to_le_bytes());
+        out.extend_from_slice(&self.destination.to_le_bytes());'''
+
+[[mutant]]
+name = "the header is big-endian"
+file = "crates/ipc/src/core/frame.rs"
+from = '''        out.extend_from_slice(&self.sequence.to_le_bytes());'''
+to = '''        out.extend_from_slice(&self.sequence.to_be_bytes());'''

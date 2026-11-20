@@ -17,7 +17,14 @@
 | 1b-3：拿掉舊的介面和交給 renderer 的 Viz 的物件，改 `FakeGpu`、`DrivenViz`，消掉例外 1 | 完成 | 2026-11-21 |
 | 1c：`protocol::BigBuffer`，跨邊界的訊息裡的位元組欄位都換成它，`sanity.py boundary` 擋裸的位元組 | 完成 | 2026-11-21 |
 | 1d：第 1 階段的檢查和文件 | 完成 | 2026-11-21 |
-| 2：`ipc` crate（核心、平台層、驗證的工具） | 未開始 | |
+| 2a：訊息的框架和對收到的位元組的檢查；同一個 process 裡的假通道；`sanity.py` 檢查核心沒有系統呼叫（單元測試、惡意的對端、fuzz、Miri） | 完成 | 2026-11-21 |
+| 2b：送出的佇列、目的地的分派、斷線只報告一次、同步呼叫等回答的位置（loom、shuttle） | 未開始 | |
+| 2c：region 的表和範圍的檢查、`BigBuffer` 帶 region 的序列化、留著重複用的池子（Verus、fuzz、Miri） | 未開始 | |
+| 2d：data pipe 的跨 process 版；通道協定的 TLA+ 模型（TLA+、loom、Verus） | 未開始 | |
+| 2e：macOS 的平台層（Mach 訊息、rendezvous、memory entry；跨 process 的測試） | 未開始 | |
+| 2f：Linux 的平台層；量 socket 的緩衝區和大的資料的門檻 | 未開始 | |
+| 2g：Windows 的平台層 | 未開始 | |
+| 2h：第 2 階段的檢查、`soundness.md`、`test.py` 的指令、文件；把 `test.py ipc` 的每一項排進每週的 CI（2a 起在本機跑） | 未開始 | |
 | 3：啟動 child process | 未開始 | |
 
 ## 驗收
@@ -36,6 +43,8 @@
 | 真的頁面走訊息這條路畫得出來；GPU 遺失時 compositor 銷毀原本的 shared image、重新建立 | `python3 scripts/test.py reftest`；`python3 scripts/test.py scenarios`；`cargo test -p browser --test it losing_the_gpu`；`cargo test -p shell` |
 | renderer 和瀏覽器介面的 compositor 都只經過訊息建立 shared image（有 GPU 才建）；frame 指到沒有人建立的編號時不畫，就算帶著像素 | `cargo test -p viz --lib a_shared_image`；`cargo test -p shell --test it the_toolbar_is_drawn_again_when_the_gpu_is_lost`；`cargo test -p browser --test it losing_the_gpu` |
 | `protocol` 的訊息裡的位元組都是 `BigBuffer`（兩個例外在允許清單）；它從 `Vec<u8>`、`Arc<[u8]>`、`Bytes` 建立都不複製，序列化成一整段位元組 | `python3 scripts/sanity.py boundary`；`cargo test -p protocol --lib big_buffer` |
+| 一則訊息的位元組（`ipc::core::frame`）：怎麼切交出來的都一樣、照順序各一次；長度超過上限、序號不連續、沒有權限的一端的 handle、太多或不夠的 handle 都是壞訊息；謊報的長度不佔記憶體；壞訊息之後什麼都不留；任何輸入都不 panic | `cargo test -p ipc`；`python3 scripts/test.py ipc fuzz`；`python3 scripts/test.py ipc miri` |
+| `ipc` 的核心不做系統呼叫、不分平台 | `python3 scripts/sanity.py deps` |
 
 ## 做過的檢查
 
@@ -128,3 +137,16 @@
 - 第 1 階段做完之後、第 2 階段開始之前量的：原型多一個 `compare` 模式（`prototype/src/others.rs`），同一組訊息走三種傳輸。結果在 `prototype/` 的 README 的「和 ipc-channel、interprocess 比」。
 - 小的訊息三者一樣；大的資料原型的 region 比 `ipc-channel` 快 2 到 3.5 倍；Unix socket 預設的緩衝區（8 KiB）讓超過的訊息慢 2.8 到 4 倍，設成 1 MiB 之後內嵌送 1 MiB 和 region 一樣快。
 - 寫進 RFC 的：「`ipc` crate」的平台層多一條「socket 的緩衝區要設」；「待決定」多一條「Linux 上大的資料的門檻和 socket 的緩衝區」，第 2 階段做 Linux 的平台層時量。沒有改任何已經定的事。
+
+### 2a：訊息的框架（2026-11-21，macOS、Apple M4）
+
+- **決定**：「已決定的事項」第 26 條（開頭 20 bytes、上限 128 MiB、照實際收到的量配置）。第 2 階段分成 2a 到 2h 八段，每段帶著自己的驗證工具。
+- **做了什麼**：`ipc` 的 `core`（`src/core/`）：`frame.rs` 的 `Encoder`（編號、寫開頭和內容，擋掉對方會拒絕的）和 `Decoder<H>`（`feed` 讀到的位元組和 handle，交出到齊的訊息；handle 的型別是泛型的）。讀進來的那一塊裡完整的訊息直接交出去、不複製，只有沒到齊的開頭留著。`fake.rs`（只在測試裡）：同一個 process 裡單向的假傳輸，照種子把位元組切成任意長度的段。
+- **`sanity.py deps`** 多一項：`src/core/` 裡不能提到 `rustix`、`libc`、`mach2`、`windows_sys`、`tokio`、`std::fs`／`net`／`os`／`process`／`env`、`extern "`、分平台的 `cfg`。故意在 `fake.rs` 放 `std::fs::read` 和 `#[cfg(unix)]`，兩行都被擋下來；拿掉之後通過。
+- **`test.py ipc`**（新的指令）：`fuzz` 跑 `crates/ipc/fuzz` 的每個 target，`miri` 在 Miri 底下跑核心的單元測試；用 elise 釘的同一個 nightly（`nightly-2026-10-01`，這台機器上已經有 Miri，不用另外裝）。
+- **測試**：`frame.rs` 的單元測試 14 個；`tests/it/frame_fuzz.rs` 是 fuzzer 和測試共用的檢查（種子和 `fuzz/regressions/` 的重播）。
+- **fuzz**：`frame` 跑 2 分鐘、1470 萬次，沒有發現問題。寫檢查時自己寫錯一條（「沒有權限的一端只要輸入裡有 handle 就一定失敗」：那一段沒被餵到時不成立），種子的測試當場抓到，改成每一段餵完就檢查。
+- **Miri**：13 個測試通過（`-Zmiri-strict-provenance`），約 5 分鐘；128 MiB 的那一個測試在 Miri 底下跳過。核心現在還沒有 `unsafe`，這一次是把工具架好。
+- **mutation test**（`mutants-2a.toml`）22 個，全部抓到：每個檢查拿掉和邊界差一、序號不前進和繞回來、handle 從後面拿、壞訊息之後留下位元組或 handle 或忘記、留整塊而不是沒到齊的、照開頭的長度先配置、交出去的不從緩衝區拿掉、`Encoder` 的四個、開頭的欄位換位置和位元組順序。跑完確認檔案都還原了。
+- **跑過的檢查**：`cargo test -p ipc`（單元 14 個、整合 20 個）；`cargo clippy -p ipc --all-targets -- -D warnings`、`cargo fmt --check`；`sanity.py` 的 7 項。別的 crate 沒有動。
+- **留給後面的**：目的地認不認得、送出的佇列、斷線（2b）；`test.py ipc` 還沒有排進 CI（記在 2h 的那一列和 `docs/testing.md`）。

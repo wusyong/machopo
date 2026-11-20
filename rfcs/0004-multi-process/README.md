@@ -360,6 +360,10 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
     - **所有的位元組欄位都換，不只原本列的四種**：request 的 body（fetch 上傳的，大小沒有上限）和 history 的 state（通常小，頁面可以放很大的）也換。規則只有一句、`sanity.py boundary` 機械地擋；不選「小的留 `Vec<u8>`」，那要靠人判斷每個欄位夠不夠小。Chromium 這兩個是內嵌，大的 request body 另外走 blob 或 data pipe；machopo 沒有那幾套機制，走同一個型別。
     - **兩個不換**（`sanity.py` 的允許清單，附理由）：`CreateSharedImage` 的像素走 tile 自己的共用記憶體（第 23、24 條）；`CopyOutputResult` 的像素是 Viz 給 Browser 的，兩者在同一個 process。
 
+26. **一則訊息的開頭固定 20 bytes，長度的上限 128 MiB，照實際收到的量配置**（2026-11-21，第 2 階段的 2a，「控制通道」）：開頭是長度（`u32`，開頭之後的位元組數）、目的地（`u32`）、序號（`u64`，每一端從 0 開始加一，不會繞回來）、handle 的數量（`u32`），little-endian。核心拿到的是「讀到的位元組」，自己切出訊息：socket 是串流，Mach 訊息一則就是一則，走同一段。
+    - **上限 128 MiB**：和 Chromium 同一級（舊的 IPC 128 MiB、Mojo 的 channel 256 MiB）。大的位元組資料是 `BigBuffer`、走 region，但字串不是（DevTools 和 WebDriver 的訊息裡 script 的原始碼、執行的結果可以到幾 MiB）。不選 16 MiB：沒有清單保證所有訊息都在它以下，正常的大訊息會被當成壞訊息、分頁掛掉，之後每加一種帶大字串的訊息都要記得這個上限。
+    - **不照開頭寫的長度先配置**：位元組到了多少緩衝區才長多少，謊報長度不花收的一端的記憶體；真的送滿時每個 renderer 最多讓 Browser 暫時拿著 128 MiB。上限是一個常數，之後量到訊息都很小，收緊只改它。
+
 ## 待決定
 
 排程之前：

@@ -21,6 +21,8 @@
                                        # mutation testing: break the code as SPEC lists, check a test fails
     python scripts/test.py cdp [CASE ...]
                                        # machopo's answers to DevTools' domains against Chrome's
+    python scripts/test.py ipc fuzz [--minutes M] | miri
+                                       # the channels' core: its fuzzers (cargo-fuzz), its tests under Miri
 
 `matrix` and `fuzz` link the debug V8 (V8's `DCHECK`s), in a target directory
 of their own; `scenarios --window` needs a display and a GPU. `scenarios` is a
@@ -1555,6 +1557,73 @@ def restore_originals() -> list[str]:
     return restored
 
 
+IPC_FUZZ = ROOT / "crates" / "ipc" / "fuzz"
+# The fuzzers there are (`[[bin]]`s of its Cargo.toml).
+IPC_FUZZ_TARGETS = ["frame"]
+
+
+def ipc_nightly() -> str:
+    """The nightly `ipc`'s fuzzers pin, which Miri runs on too."""
+    text = (IPC_FUZZ / "rust-toolchain.toml").read_text(encoding="utf-8")
+    return re.search(r'^channel\s*=\s*"([^"]+)"', text, re.M).group(1)
+
+
+def cmd_ipc(args: argparse.Namespace) -> int:
+    """The checks of `ipc`'s core that `cargo test` doesn't run.
+
+    `fuzz`: its fuzzers (`crates/ipc/fuzz`, cargo-fuzz on the nightly its
+    rust-toolchain.toml pins, with ASan), each for M minutes (default 5):
+    bytes as a peer might send them, against the checks of
+    `crates/ipc/tests/it/`. What they find stays in target/ipc-fuzz/, run
+    after run. On a failure it prints where the input is: put it in
+    crates/ipc/fuzz/regressions/ with the fix, and `cargo test -p ipc`
+    replays it. Needs `cargo install cargo-fuzz`. Built for this machine's
+    target, not the one cargo-fuzz defaults to (a prebuilt cargo-fuzz is
+    musl's, which ASan can't link).
+
+    `miri`: the core's unit tests under Miri (`rustup +<the nightly>
+    component add miri`), with strict provenance, in a target directory of
+    its own (target/miri).
+
+    Non-zero on a failure."""
+    if args.what == "miri":
+        env = dict(
+            os.environ,
+            MIRIFLAGS="-Zmiri-strict-provenance",
+            CARGO_TARGET_DIR=str(ROOT / "target" / "miri"),
+        )
+        command = ["cargo", f"+{ipc_nightly()}", "miri", "test", "-p", "ipc", "--lib", "core::"]
+        print(f"--- {' '.join(command)}", flush=True)
+        return subprocess.run(command, cwd=ROOT, env=env).returncode
+    work = ROOT / "target" / "ipc-fuzz"
+    out = subprocess.run(["rustc", "-vV"], cwd=IPC_FUZZ, capture_output=True, text=True, check=True).stdout
+    host = re.search(r"^host: (\S+)", out, re.M).group(1)
+    env = dict(os.environ, CARGO_TARGET_DIR=str(work / "build"))
+    failed = []
+    for target in IPC_FUZZ_TARGETS:
+        corpus, artifacts = work / target / "corpus", work / target / "artifacts"
+        for directory in (corpus, artifacts):
+            directory.mkdir(parents=True, exist_ok=True)
+        flags = [f"-max_total_time={int(args.minutes * 60)}", "-rss_limit_mb=4096", f"-artifact_prefix={artifacts}/"]
+        started = time.time()
+        print(f"--- fuzzing {target} for {args.minutes} minutes", flush=True)
+        command = ["cargo", "fuzz", "run", "--target", host, target, str(corpus), "--", *flags]
+        if subprocess.run(command, cwd=IPC_FUZZ, env=env).returncode == 0:
+            continue
+        failed.append(target)
+        found = [path for path in artifacts.iterdir() if path.stat().st_mtime >= started]
+        if found:
+            crash = max(found, key=lambda path: path.stat().st_mtime)
+            print(f"failing input: {crash}")
+            print("put it in crates/ipc/fuzz/regressions/ with the fix: cargo test -p ipc replays it")
+        else:
+            print("the fuzzer failed without leaving an input")
+    if failed:
+        print(f"failed: {', '.join(failed)}")
+        return 1
+    return 0
+
+
 def cmd_cdp(args: argparse.Namespace) -> int:
     """Sends the same DevTools commands to machopo and to Chrome for Testing
     (the version `bench.py` pins, downloaded the first time), on the same
@@ -1862,6 +1931,12 @@ def main() -> int:
 
     cdp = command("cdp", cmd_cdp, "machopo's answers to DevTools' domains against Chrome's")
     cdp.add_argument("cases", nargs="*", metavar="CASE", help="run only these cases (default: all)")
+
+    ipc = command("ipc", cmd_ipc, "the channels' core: its fuzzers, its tests under Miri")
+    ipc.add_argument("what", choices=["fuzz", "miri"], help="which check")
+    ipc.add_argument(
+        "--minutes", type=float, default=5, metavar="M", help="fuzz: how long each fuzzer runs (default 5)"
+    )
 
     mutate = command("mutate", cmd_mutate, "mutation testing: break the code as a spec file lists, check a test fails")
     mutate.add_argument("spec", nargs="?", metavar="SPEC", help="the TOML file that lists the mutants")

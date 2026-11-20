@@ -15,6 +15,7 @@ doctest = false
 workspace = true
 
 [dependencies]
+base.workspace = true
 bytes.workspace = true
 serde.workspace = true
 tokio.workspace = true

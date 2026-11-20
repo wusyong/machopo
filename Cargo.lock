@@ -2304,6 +2304,7 @@ dependencies = [
 name = "ipc"
 version = "0.0.1"
 dependencies = [
+ "base",
  "bytes",
  "rustix 1.1.5",
  "serde",

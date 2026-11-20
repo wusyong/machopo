@@ -1,0 +1,23 @@
+# ipc's fuzzers (cargo-fuzz): a workspace of its own, on the nightly its
+# rust-toolchain.toml pins. `python3 scripts/test.py ipc fuzz` runs them.
+[package]
+name = "ipc-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+ipc = { path = ".." }
+
+[[bin]]
+name = "frame"
+path = "fuzz_targets/frame.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

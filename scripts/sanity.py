@@ -126,13 +126,35 @@ def code_lines(path: Path):
         yield number, line.split("//", 1)[0]
 
 
+# What `ipc`'s core (`crates/ipc/src/core/`) must not name: a crate that
+# makes system calls, the parts of std that do, FFI, or `unsafe` FFI's
+# declarations. It is given bytes and handles and knows no platform, which
+# is what lets all of it run under Miri and a fuzzer.
+IPC_CORE = ROOT / "crates" / "ipc" / "src" / "core"
+IPC_CORE_FORBIDDEN = re.compile(
+    r"\b(?:rustix|libc|mach2|windows_sys|tokio)\b|\bstd::(?:fs|net|os|process|env)\b|\bextern\s+\"|\bcfg\s*\(\s*(?:unix|windows|target_os)"
+)
+
+
+def ipc_core_problems(root: Path = IPC_CORE) -> list[str]:
+    problems = []
+    if not root.is_dir():
+        return [f"{root.relative_to(ROOT).as_posix()}: ipc's core isn't there"]
+    for path in sorted(root.rglob("*.rs")):
+        for number, line in code_lines(path):
+            if m := IPC_CORE_FORBIDDEN.search(line):
+                problems.append(f"{path.relative_to(ROOT).as_posix()}:{number}: `{m.group(0)}` in ipc's core, which makes no system call and knows no platform")
+    return problems
+
+
 def cmd_deps(args: argparse.Namespace) -> int:
     """V8 stays in `bindings` and `dom_js` (and `gc_bench`): other
     crates don't depend on V8. wasmtime likewise stays in `dom_wasm`.
     `dom_js` has one front end (`front_problems`).
     The crates that pick an engine may depend on `dom_js`
     (`ENGINE_PICKERS` in this script). `ui` depends only on
-    `UI_DEPENDENCIES`."""
+    `UI_DEPENDENCIES`. `ipc`'s core names nothing that makes a system
+    call or tells platforms apart (`IPC_CORE_FORBIDDEN`)."""
     problems = []
     for manifest in sorted((ROOT / "crates").glob("*/Cargo.toml")):
         crate = manifest.parent.name
@@ -151,11 +173,12 @@ def cmd_deps(args: argparse.Namespace) -> int:
             problems.append(f"crates/{crate}/Cargo.toml: `{name}` in [{section}], but {crate} is engine-neutral")
 
     problems += front_problems()
+    problems += ipc_core_problems()
     for problem in problems:
         print(problem)
     if problems:
         return 1
-    print("V8 is confined to bindings, dom_js and gc_bench; dom_js has one front end; ui depends on no browser crate")
+    print("V8 is confined to bindings, dom_js and gc_bench; dom_js has one front end; ui depends on no browser crate; ipc's core makes no system call")
     return 0
 
 
