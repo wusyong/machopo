@@ -13,7 +13,7 @@
 | 1c：DevTools 的 `domainAndRegistry`，第 1 階段的檢查和文件 | 完成 | 2026-11-20 |
 | 2a：profile 的資料夾（位置、`--user-data-dir`、哪些模式寫磁碟、同一個資料夾開兩次） | 完成 | 2026-11-20 |
 | 2b：磁碟上的儲存（格式、讀寫的介面） | 完成 | 2026-11-20 |
-| 2c：第 2 階段的檢查和文件 | 未開始 | |
+| 2c：第 2 階段的檢查和文件 | 完成 | 2026-11-20 |
 | 3：Web Storage | 未開始 | |
 | 4：`net` 的 cookie | 未開始 | |
 | 5：cookie 到 DOM 和自動化 | 未開始 | |
@@ -95,3 +95,11 @@ macOS、Apple M4，2026-11-20。
 - mutation test（`mutants-2b.toml`）9 個，8 個抓到。第一次的 spec 有一個 mutant 的原文和 rustfmt 排的對不上、一個編不過，改了重跑；「被鎖住時等」原本只會變慢，測試加上第二條連線 1 秒內就失敗。沒抓到的「打開時不讀 schema」是等價的：在它之前的 `PRAGMA journal_mode` 準備時就讀了 schema（補了一個 schema 壞掉的檔案的測試確認打開時就換掉；記進 `docs/test-gaps.md` 的「等價、不用處理的 mutation」）。
 - 文件：`crates/sql/README.md`、`docs/architecture.md` 的 crate 表。
 - 跑過的檢查：`cargo test -p sql`、`cargo clippy -p sql --all-targets -- -D warnings`；`sanity.py` 的 `deps`、`unsafe`、`tests`、`numerics`、`docs`。
+
+### 2c：第 2 階段的檢查和文件
+
+macOS、Apple M4，2026-11-20。
+
+- `cargo test --workspace`：4298 個通過、0 個失敗、1 個 ignored。`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 都沒有要改的。跑完之後家目錄底下沒有 profile 的資料夾（測試和自動化都在記憶體）。
+- 文件：在 `docs/`、crate 的 README 裡找寫到 profile 的地方。`docs/limitations.md` 的 `--remote-debugging-port` 不寫 `DevToolsActivePort` 的理由原本是「machopo 沒有 profile 的資料夾」，改成 Chrome 寫在 user data dir 裡、machopo 的自動化預設在記憶體。其他的在 2a、2b 改好了。畫面上看不出差別（還沒有東西存進 profile），沒有新的情境。
+- 跑過的檢查：`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。
