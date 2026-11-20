@@ -1,4 +1,4 @@
-# RFC 0004 的細節：multi-process 和 sandbox
+# RFC 0004 的細節：multi-process
 
 這份是 `README.md` 的補充，放支撐它的細節：其他實作怎麼做、比過的做法的完整理由、平台層、實測。`README.md` 裡的結論和決定以那邊為準，這裡不重複。
 
@@ -43,18 +43,31 @@
 | macOS 上 child 怎麼連上 | rendezvous：一個 server，名字由 parent 的 pid 決定，靠 audit token 的 pid 發 port | 每個 child 一個帶亂數的名字，放在命令列，不驗證對方 | 查 bootstrap server 上的 port，server 照 pid 發 port | 照 Chromium |
 | 共用記憶體 | 唯讀、可寫、雙方可寫三種 region；`BigBuffer` 64 KB 以上自動改走；data pipe | `IpcSharedMemory`，對方拿到的是可寫的；`GenericSharedMemory` 在單一 process 時是 `Arc<Vec<u8>>` | — | 照 Chromium 的三種 region 和 `BigBuffer` |
 | 誰建立共用記憶體 | sandbox 不允許的平台由 Browser 代配，其他的 renderer 自己建（後半是就我們的了解） | 送的一端 | — | 只有 Browser |
-| handle 的方向 | 雙向，收的一端驗證 | 雙向 | 雙向 | 只從 Browser 往 renderer |
+| 誰能附 handle | 任何一端，收的一端驗證 | 任何一端 | 任何一端 | 每一端各自的權限；renderer 沒有，所以只從 Browser 往 renderer |
 | process 的分法 | site-per-process | 每個 pipeline（大致是每個網站） | — | 每個分頁 |
 | raster | OOP-R（GPU process）；早期 one-copy / zero-copy | WebRender 在主 process | — | renderer raster、共用記憶體、Viz 上傳（T1，看法） |
 | GPU | GPU process | 主 process | — | Browser process 的 Viz thread |
-| macOS sandbox | Seatbelt，child 一開始就套用 | gaol，應該是先連線再套用 | — | Seatbelt，child 一開始就套用 |
-| Linux sandbox | namespace + seccomp-bpf | gaol | — | 之後 |
-| Windows sandbox | restricted token、job、integrity level | 無 | — | 之後 |
-| 字型 | macOS 直接讀；Linux、Windows 有 font proxy | — | — | 直接讀（F1，看法） |
+| macOS sandbox | Seatbelt，child 一開始就套用 | gaol，應該是先連線再套用 | — | 之後另一份 RFC；這份的設計假設一開始就套用 |
+| Linux sandbox | namespace + seccomp-bpf | gaol | — | 之後另一份 RFC |
+| Windows sandbox | restricted token、job、integrity level | 無 | — | 之後另一份 RFC |
+| 字型 | macOS 直接讀；Linux、Windows 有 font proxy | — | — | 現在直接讀；有 sandbox 之後怎麼給，那份 RFC 決定 |
 | renderer 當掉 | sad tab | — | — | sad tab |
 | 單一 process 的模式 | `--single-process`（只給除錯），訊息照樣經過 Mojo | 預設，不序列化 | — | `--single-process`、headless 和測試的預設，不序列化 |
 
 「—」表示沒查。Servo 的 sandbox 和啟動以外的非 IPC 欄位是 2026-10-04 時的了解，沒有逐一查證。
+
+## Chromium 的 process
+
+2026-11-18 和 2026-11-20 對照 Chromium 的 `process_type.h`、`sandbox.mojom` 和 Rule of 2 的文件（連結在「參考資料」）。
+
+- **五種型別**：Browser（一個，不關進 sandbox）、Renderer（很多，照網站分）、GPU（一個，和顯示卡的驅動程式打交道，Viz 和 raster 也在裡面）、Utility（每個服務一個）、Zygote（只有 Linux 和 ChromeOS，renderer 從它 fork）。列舉裡的 plugin、worker、PPAPI 都標了 deprecated；worker 跑在 renderer 裡。
+- **Utility 裝的服務**：sandbox 的定義列了 32 種。主要的：Network、Audio、列印（compositor、backend）、CDM、硬體影片的解碼和編碼、語音辨識、裝置上的模型、Proxy 的解析，和只做運算、幾乎不給任何權限的一般服務。有些只在特定平台有。
+- **Rule of 2**：一段程式最多具備三項裡的兩項（原文「Pick no more than 2 of」）：不可信的輸入、不安全的實作語言、高的權限。
+  - 不安全的語言至少包括 C、C++ 和組合語言。Rust 列在安全的語言裡，但 `unsafe` 算是另一個不安全的子集，要小、包在安全的 API 後面、寫明理由。
+  - 高的權限包括以使用者的身分跑的 process，文件點名 Browser 和 GPU process；Network process 的權限略低但還是高。低的是關在 sandbox 裡的 utility 和 renderer。這一項和下一項是從頁面的摘要讀到的，沒有逐字對照。
+  - 三項都有時的做法：換成安全的語言；把解析搬進 sandbox 裡的 utility process，只把整理好的結果送回來；或確認輸入可信。
+- **renderer 怎麼連到 Network process**（就我們的了解，沒有對照原始碼）：Network process 只有一個，由 Browser 啟動。Browser 為每個 renderer（每個 frame、每個 worker）建一條 Mojo 的 pipe，一端連同「它代表哪個網站」的限制交給 Network process，另一端交給 renderer；之後 renderer 直接對 Network process 送子資源的請求，不經過 Browser。文件本身的載入一律由 Browser 發起。把網路搬出去之前，資源的載入是在 Browser 的 IO thread 上處理的，machopo 現在的 `Chrome_IOThread` 像那時的樣子。
+- **IO thread**：每個 process 一條，處理那個 process 所有的通道（就我們的了解）。machopo 是 Browser 裡每個 renderer 一條。
 
 ## Chromium 的 IPC
 
@@ -191,6 +204,16 @@
 - **B. 序列化、不經過 OS 的通道**（Chromium 的 `--single-process`，就我們的了解）：只多守住「實際送出的值經得起序列化」。
 - **C. 同一個 process 裡走真的控制通道和共用記憶體**：現有的測試都能守到 IPC，但每則訊息多編碼、解碼和系統呼叫，還多一種模式要維護。真的多 process 的測試守得比它完整。
 
+### 單一 process 時 Browser 的 IO thread
+
+renderer 這一側在單一 process 時本來就沒有 IO thread：crossbeam 是 process 裡的東西，每條 thread 直接等自己的佇列。Browser 這一側有，因為 UI thread 等的是視窗系統的 event loop，沒辦法同時等 crossbeam；而且子資源的請求不用吵醒 UI thread 就能交給網路。它轉給 UI thread 靠的是 Browser 給的 callback，那個 callback 把訊息塞進 event loop 並叫醒它，任何 thread 都能呼叫。
+
+- **留著 IO thread，邏輯抽成物件**：`README.md` 現在寫的。兩種模式都是「IO thread 讀出訊息、交給物件」，差別只在讀的是 crossbeam 還是 `ipc` 的通道。
+- **單一 process 時直接呼叫那個物件**（`README.md` 的「待決定」）：renderer 送訊息的那條 thread 自己呼叫，沒有 IO thread。邏輯還是只有一份。和 `BeginFrame` 的做法同一招：Browser 建好一個東西交給 renderer，裡面做什麼由 Browser 決定。
+- **每條 thread 各開一條通道、各自讀**（多 process 時也不要 IO thread）：不選。每條 thread 都得改成能等 kernel 的物件；不同通道之間訊息的先後沒有保證；main thread 忙的時候沒有人讀它那一條，對方死了也不知道。
+
+就我們的了解，Chromium 在把網路搬到獨立的 process 之前，也是用掛在 IO thread 上的 message filter 處理 renderer 的資源請求。
+
 ### macOS 的控制通道
 
 - **X. Unix socket 加 `SCM_RIGHTS`**（原本）：和 Linux 共用、都是安全的 API、child 繼承一個 fd 就好。不選：實測送出後馬上關掉的 socket fd 幾乎全壞（「macOS 上傳 fd 的實測」），之後只要有人在訊息裡帶 socket 就會默默出錯。
@@ -240,13 +263,14 @@
 
 考慮過把 socket 換成 `SOCK_SEQPACKET`（kernel 保留訊息的邊界，每則訊息和它的 fd 一起到）：一則訊息的大小受 socket 的 buffer 限制，renderer 送大的訊息給 Browser 時得自己分段，不如用 stream、自己寫長度。
 
-### handle 的方向和誰建立共用記憶體
+### 誰能附 handle 和誰建立共用記憶體
 
-- **只有 Browser 建立、handle 只往 renderer 走**：選這個。renderer 在訊息裡只寫編號，Browser 查自己的表。三個平台的檢查都一樣，只有「編號在不在表裡、範圍有沒有超出」。
+- **只有 Browser 建立；能不能附 handle 是通道每一端的權限，renderer 那一端沒有**：選這個。renderer 在訊息裡只寫編號，Browser 查自己的表。三個平台的檢查都一樣，只有「編號在不在表裡、範圍有沒有超出」。
+- **寫死成「只有 Browser 能附 handle」**：這份只有兩種 process 時結果一樣。不選：之後 GPU process 要交出只有它建得出來的緩衝區；Windows 上 child 之間不能直接複製 handle，要經過 Browser 轉手，也就是 Browser 要從那個 child 收 handle。做成每一端的權限，到時只是多開一個權限。
 - **renderer 把 handle 附在訊息上送回來**（原本）：Browser 要驗證收到的 handle：Linux 確認是 sealed 的 memfd，Windows 從 renderer 的 process 把 handle 拉過來、檢查型別，macOS 檢查 descriptor。每個 frame 還多一次傳 handle 的系統呼叫。
 - **renderer 自己建立**（就我們的了解，Chromium 在 sandbox 允許的平台上這樣做）：省掉向 Browser 要的那一次來回。不選：Browser 得驗證每一塊，renderer 的 sandbox 也要多開權限。
 
-向 Browser 要一塊時要等回覆，是「只有 Browser 建立」的成本，和 handle 的方向無關。
+向 Browser 要一塊時要等回覆，是「只有 Browser 建立」的成本，和誰能附 handle 無關。
 
 ### ring
 
@@ -258,7 +282,7 @@ ringbuf、rtrb、crossbeam 的 `ArrayQueue` 是給同一個 process 的 thread �
 - **T2. 跨 process 的 GPU texture**（macOS 的 `IOSurface`）：renderer 自己上傳，要能存取 GPU，sandbox 得開 IOKit；wgpu 沒有跨 process 共用 texture 的 API，要動到 wgpu 的 Metal 層。
 - **T3. OOP-R**：renderer 送 display list，raster 在 Viz（或之後的 GPU process）那一側。Chromium 現在的做法，但 display list、字型和圖片都要能序列化，raster 也要搬家。
 
-### 字型（還沒決定）
+### 字型（留給 sandbox 的 RFC）
 
 - **F1. sandbox 開放系統字型目錄的讀取**：Chromium 在 macOS 上的 renderer 也直接讀系統字型。
 - **F2. Browser 提供字型的服務**（Chromium 在 Linux 和 Windows 的 font proxy）：sandbox 更緊，但要做一個 IPC 服務，文字的函式庫要改成從它拿字型。
@@ -329,7 +353,7 @@ ringbuf、rtrb、crossbeam 的 `ArrayQueue` 是給同一個 process 的 thread �
 
 ### machopo 加上的部分
 
-- **訊息的框架**：ring 的項目是位元組；一則訊息是長度、目的地的標記、序號和內容。讀的時候先檢查長度不超過上限、也不超過目前可讀的量，複製到自己的記憶體之後才反序列化。
+- **訊息的框架**：ring 的項目是位元組；一則訊息是長度、目的地的編號、序號和內容。讀的時候先檢查長度不超過上限、也不超過目前可讀的量，複製到自己的記憶體之後才反序列化。
 - **喚醒**：共用記憶體裡加一個「我在睡」的旗標。接收端要睡之前設旗標、SeqCst fence、再檢查一次計數，還是空的才在控制通道上等；送的一端寫完、更新計數、fence 之後讀旗標，對方在睡才在控制通道上送一則喚醒。IO thread 只要等一個東西。
 - **序號**：Browser 送的帶 handle 的訊息走控制通道，其他走 ring；每則訊息帶序號，接收端照序號交出去。renderer 送的訊息不帶 handle，全部走 ring，不需要這一段。
 - **滿了**：Browser 往 renderer 送時 ring 滿了，先放在 Browser 自己的佇列裡；renderer 往 Browser 送時滿了就等。
@@ -338,16 +362,20 @@ ringbuf、rtrb、crossbeam 的 `ArrayQueue` 是給同一個 process 的 thread �
 
 ## Seatbelt 的兩種套用時機
 
+sandbox 不在這份 RFC 裡（`README.md` 的「已決定的事項」第 18 條）；這一節是之前查到的，留給之後那一份用，也說明這份的設計假設的是哪一種。
+
 - **暖機之後再鎖**（Chromium 舊的做法）：child 先正常啟動、載入會用到的系統函式庫和資源，再呼叫 `sandbox_init` 鎖住。profile 可以比較緊，但鎖之前跑過的程式碼不在 sandbox 裡，哪些東西要先暖機也難維護。
 - **一開始就鎖**（Chromium 現在的做法）：Browser 把 profile 和參數經過 pipe 交給 child，child 的 `main` 在執行其他程式碼之前就套用。profile 要允許之後會用到的東西（例如字型），但所有 renderer 的程式碼都在 sandbox 裡。
 
-`README.md` 照第二種。child 查 rendezvous server 時已經在 sandbox 裡，所以那個名字一定要寫進 profile；它是固定的前綴加 Browser 的 pid，pid 當成參數交給 profile。字型是另一個要讀的東西；之後加上 ICU data 時，profile 也要開放它。這三件事能不能同時成立還沒驗證（`README.md` 的「待決定」的原型）。
+`README.md` 的「為 sandbox 留的條件」假設第二種。child 查 rendezvous server 時已經在 sandbox 裡，所以那個名字一定要寫進 profile；它是固定的前綴加 Browser 的 pid，pid 當成參數交給 profile。字型是另一個要讀的東西；之後加上 ICU data 時，profile 也要開放它。這幾件事能不能同時成立還沒驗證（`README.md` 的「待決定」的原型）。
 
 ## 參考資料
 
 - Chromium 的 multi-process 架構：https://www.chromium.org/developers/design-documents/multi-process-architecture/
 - Chromium 的 macOS sandbox：https://chromium.googlesource.com/chromium/src/+/main/sandbox/mac/README.md
 - Chromium 的 sandbox 總覽：https://chromium.googlesource.com/chromium/src/+/main/docs/design/sandbox.md
+- Chromium 的 process 的型別：https://chromium.googlesource.com/chromium/src/+/main/content/public/common/process_type.h 、sandbox 的種類：https://chromium.googlesource.com/chromium/src/+/main/sandbox/policy/mojom/sandbox.mojom
+- Rule of 2：https://chromium.googlesource.com/chromium/src/+/main/docs/security/rule-of-2.md
 - ipcz：https://chromium.googlesource.com/chromium/src/+/main/third_party/ipcz/README.md
 - Mojo 的 Rust binding：https://chromium.googlesource.com/chromium/src/+/main/mojo/public/rust/README.md 、https://chromium.googlesource.com/chromium/src/+/main/mojo/public/rust/bindings/README.md （公告：https://groups.google.com/a/chromium.org/g/chromium-dev/c/UR0HRiRxrYI）
 - Chromium 的 Linux channel：https://chromium.googlesource.com/chromium/src/+/main/mojo/core/channel_linux.cc 、https://chromium.googlesource.com/chromium/src/+/main/mojo/public/cpp/platform/socket_utils_posix.cc

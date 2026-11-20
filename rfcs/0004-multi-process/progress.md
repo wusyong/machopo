@@ -1,4 +1,4 @@
-# RFC 0004 的進度：multi-process 和 sandbox
+# RFC 0004 的進度：multi-process
 
 <!-- 怎麼更新見 docs/README.md 的「完成一步時」和「一份 RFC 做完時」。設計理由寫在 README.md，目前仍然成立的限制寫在 docs/limitations.md。 -->
 
