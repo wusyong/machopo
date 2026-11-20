@@ -25,6 +25,8 @@
 | 字型 | renderer 自己經過 fontique 讀系統的字型檔（`--test-fonts` 時是內建的） | 可以：child 自己讀。之後的 sandbox 要開放讀字型目錄，或改由 Browser 給 |
 | trace（`MACHOPO_TRACE`） | 整個 process 一份，每條 thread 的 span 寫進同一個檔案 | 不行：child 的 span 要另外收（每個 process 各寫一個檔案，或送回 Browser） |
 
+**第 1 階段之後**（2026-11-21）：上表的「tile 和 canvas 的快照上 GPU」改成訊息（`CompositorFrameSinkMsg` 多了 `CreateSharedImage`、`DestroySharedImage`，`CompositorMsg` 多了 `SharedImagePixelsReturned`；像素還是同一個 process 裡共用的一塊，第 3 階段換成共用記憶體），例外 1 消掉；子資源的回應、blob 的內容、沒有 GPU 時的像素、request 的 body 和 history 的 state 都是 `protocol::BigBuffer`；`RendererEndpoints` 只剩 channel 的一端和「有沒有 GPU」；Browser 處理 renderer 的訊息的迴圈抽成 `IoThreadHost`。
+
 **不跨邊界、但每個 process 會各有一份的**：V8 的 platform 和它的 thread、elise 的 worker pool、renderer 裡的 thread（compositor、raster worker、dedicated worker、canvas 的 raster 和 encoder）、名稱表和屬性值的表、字型的 collection 和 raster 的快取。Browser 那一側不變的：`net`（cookie、blob URL 的表）、`DomStorageContext`、profile 的資料夾（child 不開它）、DevTools 和自動化的 server。
 
 **依賴單一 process 的測試**：`browser` 的 `DrivenViz`（測試自己扮演 Viz）、headless、`FakeGpu`，和 `browser`、`shell` 在 process 裡建分頁的測試。它們直接傳 closure、`Arc` 和 process 內的 channel，所以保留單一 process 的模式，不把它們改成跨 process。

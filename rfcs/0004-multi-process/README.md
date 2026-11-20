@@ -26,13 +26,13 @@ Viz 留在 Browser process，不做 GPU process。單一 process 的模式留著
 
 - renderer 是 Browser process 裡的 thread，每個分頁一組。沒有任何隔離：V8 沒開 sandbox，V8 或 DOM 的 heap 的記憶體錯誤能碰到整個 browser 的記憶體。
 - renderer 的 thread 結束時分頁顯示 sad tab、可以重新載入（`about:crash` 也在）；但記憶體耗盡、abort、記憶體錯誤這一類結束的是整個程式。
-- 邊界大致已經在了：Browser 和 renderer 之間只有 `protocol` 的 message，都能序列化；renderer 不碰檔案系統和網路；compositor 直接把 frame 送給 Viz。規則和檢查（`sanity.py boundary`）是這份的第 0 步做的，例外剩兩個。main thread 同步等 Browser 的呼叫（`localStorage`、`document.cookie`）是帶編號的一般訊息，回答放進 scheduler 裡等回答的位置，本來就照 process 的邊界做。
+- 邊界大致已經在了：Browser 和 renderer 之間只有 `protocol` 的 message，都能序列化；renderer 不碰檔案系統和網路；compositor 直接把 frame 送給 Viz。規則和檢查（`sanity.py boundary`）是這份的第 0 步做的，例外剩一個（例外 7）。main thread 同步等 Browser 的呼叫（`localStorage`、`document.cookie`）是帶編號的一般訊息，回答放進 scheduler 裡等回答的位置，本來就照 process 的邊界做。
+
+**第 1 階段做完的**（2026-11-21，還是單一 process）：tile 和 canvas 的快照經過訊息交給 Viz（`CreateSharedImage`、`DestroySharedImage`、「像素用完了」，Viz 照 frame sink 和編號記，renderer 不再拿到 Viz 的物件，例外 1 消掉）；訊息裡的位元組都是 `protocol::BigBuffer`；Browser 處理一個 renderer 的訊息的邏輯是一個物件（`IoThreadHost`），IO thread 只讀通道、交給它。
 
 **還沒有的**：
 
-- **tile 的交接**（例外 1）：compositor 同步呼叫 Viz 的 `SharedImageInterface` 建 texture（tile 和 canvas 的快照），backing 是 `Arc<dyn Any>`，生命週期靠參考計數。
 - **導覽的 body 的管道**（例外 7）：`CommitNavigation` 帶著 body 其餘部分的 data pipe 的讀的一端，管道是同一個 process 裡的佇列。
-- **Browser 處理 renderer 的訊息的邏輯**寫在 `RenderProcessHost::launch` 裡 IO thread 的迴圈，換通道之前要先抽出來。
 - **IPC 本身**：跨 process 的通道和共用記憶體。
 - **啟動**：child process、命令列上的 `RendererFlags`、child 的 `main` 選 script engine。
 - **process 當掉**：現在只處理 thread 結束；結束一個 renderer（壞訊息、`kill`）是請它的 thread 自己結束。
@@ -266,7 +266,7 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
 排進某個階段時再確認。
 
 0. **整理邊界**（2026-10-06 做完，`progress.md`）：邊界的規則和檢查；修掉 context lost 的 observer、`RendererFlags` 的函式指標、能送給任何 `FrameSinkId` 的 sender。
-1. **message 化，還是單一 process**（分段在開始時定，`progress.md`）：tile 的交接改成訊息（拿掉 `SharedImage` 的 backing，加上 `ReturnResources` / `DestroySharedImage`、Viz 的 mailbox 表）、`protocol` 的 bytes 型別；Browser 處理一個 renderer 的訊息的邏輯從 `Chrome_IOThread` 的迴圈抽成物件。現有的測試全部照舊通過。
+1. **message 化，還是單一 process**（2026-11-21 做完，分成 1a 到 1d，`progress.md`）：tile 的交接改成訊息（拿掉 `SharedImage` 的 backing，加上 `ReturnResources` / `DestroySharedImage`、Viz 的 mailbox 表）、`protocol` 的 bytes 型別；Browser 處理一個 renderer 的訊息的邏輯從 `Chrome_IOThread` 的迴圈抽成物件。現有的測試全部照舊通過。
 2. **`ipc` crate**：核心（先做，經過假通道就能測）、平台層、控制通道、帶 handle 的序列化、Browser 配共用記憶體和編號的表；用測試自己的 child process 測，包括惡意的對端。這個階段把驗證的工具架好（fuzz、loom 和 shuttle、Miri、Verus、TLA+ 的模型、`soundness.md`），核心的每一塊做完時它的那幾條性質就驗過。還沒接上 renderer。
 3. **啟動 child process**（每個階段的驗收包含它那一塊的驗證；這個階段加的是 body 的管道和處理訊息的物件的 fuzz target；最後做 macOS 上 sandbox 的探測）：`--type=renderer`、renderer 的 IO thread、所有訊息走控制通道、tile 走共用記憶體、導覽的 body 的管道跨 process、process 當掉。最後量捲動時每個 frame 的延遲。
 
