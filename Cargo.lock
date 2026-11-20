@@ -2830,6 +2830,7 @@ dependencies = [
  "crossbeam-channel",
  "data-url",
  "flate2",
+ "hyper",
  "ipc",
  "protocol",
  "reqwest",

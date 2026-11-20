@@ -32,6 +32,27 @@ pub struct Route {
     /// Over HTTPS, bytes that aren't TLS after the body: the client's read
     /// fails, but not because the connection ended.
     pub corrupt_after_body: bool,
+    /// Over HTTP, when the server reads the request and closes the
+    /// connection without answering.
+    pub unanswered: Unanswered,
+}
+
+/// When a route's request is read and its connection closed without an
+/// answer.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Unanswered {
+    #[default]
+    Never,
+    /// On a connection kept alive that answered a request before: a server
+    /// that closed it as the request came (wptserve closes one after a
+    /// response without a length, and doesn't say so).
+    OnReusedConnection,
+    /// Like `OnReusedConnection`, the request left unread: the connection
+    /// is reset, not closed (closing a socket with data yet to be read
+    /// resets it), as when a request reaches a connection the server has
+    /// closed. The request isn't recorded.
+    ResetOnReusedConnection,
+    Always,
 }
 
 impl Route {
@@ -46,6 +67,7 @@ impl Route {
             body_pause: None,
             close_delimited: false,
             corrupt_after_body: false,
+            unanswered: Unanswered::Never,
         }
     }
 
@@ -90,6 +112,12 @@ impl Route {
     /// See [`corrupt_after_body`](Self::corrupt_after_body).
     pub fn corrupt_after_body(mut self) -> Self {
         self.corrupt_after_body = true;
+        self
+    }
+
+    /// See [`unanswered`](Self::unanswered).
+    pub fn unanswered(mut self, when: Unanswered) -> Self {
+        self.unanswered = when;
         self
     }
 }
@@ -302,10 +330,12 @@ fn accept(mut stream: TcpStream, site: &Site, requests: &Mutex<Vec<Request>>, co
             let _ = probe.set_nonblocking(false);
             closed
         };
-        while let Some(route) = serve(&mut stream, site, requests, connection, &closed) {
-            if !site.keep_alive || route.close_delimited {
+        let mut reused = false;
+        while let Some(route) = serve(&mut stream, site, requests, connection, reused, &closed) {
+            if !site.keep_alive || route.close_delimited || resets_next(&stream, site) {
                 break;
             }
+            reused = true;
         }
         return;
     };
@@ -315,7 +345,7 @@ fn accept(mut stream: TcpStream, site: &Site, requests: &Mutex<Vec<Request>>, co
     let mut stream = rustls::StreamOwned::new(tls_connection, stream);
     // A handshake the client gives up on (a certificate it doesn't trust)
     // fails the first read, and nothing is recorded.
-    match serve(&mut stream, site, requests, connection, &|| false) {
+    match serve(&mut stream, site, requests, connection, false, &|| false) {
         Some(route) if route.corrupt_after_body => {
             // A whole application data record that doesn't decrypt, after
             // the client has had the head and the body: it fails reading
@@ -334,15 +364,50 @@ fn accept(mut stream: TcpStream, site: &Site, requests: &Mutex<Vec<Request>>, co
     }
 }
 
-/// Answers one request, which came on `connection`, with its route, which
-/// it returns (`None` if no request came): how the connection ends depends
-/// on it. Unless `closed` says the client gave up meanwhile: the request is
-/// then abandoned.
+/// Whether the next request on `stream`, which answered one before, is of
+/// a route that resets it: looked at without reading it, so that it stays
+/// unread as the connection is dropped. Waits for it to come.
+fn resets_next(stream: &TcpStream, site: &Site) -> bool {
+    let mut head = [0; 4096];
+    loop {
+        let Ok(length) = stream.peek(&mut head) else {
+            return false;
+        };
+        let peeked = &head[..length];
+        if length == 0 {
+            return false;
+        }
+        let Some(end) = peeked.iter().position(|&b| b == b'\n') else {
+            if length == head.len() {
+                return false;
+            }
+            // The rest of its line is still to come.
+            std::thread::sleep(Duration::from_millis(1));
+            continue;
+        };
+        let line = String::from_utf8_lossy(&peeked[..end]);
+        let mut words = line.split_whitespace();
+        let method = words.next().unwrap_or("GET");
+        let path = words.next().unwrap_or("/").split('?').next().unwrap_or("/");
+        let route = site
+            .routes
+            .get(&format!("{method} {path}"))
+            .or_else(|| site.routes.get(path));
+        return route.is_some_and(|route| route.unanswered == Unanswered::ResetOnReusedConnection);
+    }
+}
+
+/// Answers one request, which came on `connection` (`reused`: it answered
+/// one before), with its route, which it returns (`None` if no request
+/// came, or the route leaves it unanswered): how the connection ends
+/// depends on it. Unless `closed` says the client gave up meanwhile: the
+/// request is then abandoned.
 fn serve(
     stream: &mut (impl Read + Write),
     site: &Site,
     requests: &Mutex<Vec<Request>>,
     connection: u64,
+    reused: bool,
     closed: &dyn Fn() -> bool,
 ) -> Option<Route> {
     // A request's body is as long as its `Content-Length` says; once it is
@@ -402,6 +467,11 @@ fn serve(
         .get(&route_key)
         .or_else(|| site.routes.get(&path))
         .unwrap_or(&not_found);
+    match route.unanswered {
+        Unanswered::Always => return None,
+        Unanswered::OnReusedConnection if reused => return None,
+        _ => {}
+    }
     std::thread::sleep(route.delay);
     if closed() {
         requests.lock().unwrap()[index].abandoned = true;

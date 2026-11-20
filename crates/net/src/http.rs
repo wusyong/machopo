@@ -1,5 +1,6 @@
 //! The HTTP transport: one request out, one response back, over TCP
-//! (HTTP/1.1 or HTTP/2), timed. The only module that knows about reqwest.
+//! (HTTP/1.1 or HTTP/2), timed. The only module that knows about reqwest
+//! (and hyper, under it).
 
 use std::cell::RefCell;
 use std::error::Error as _;
@@ -149,8 +150,32 @@ impl HttpTransport {
         let request_start = TimeTicks::now();
         let (response, connecting) = CONNECTING
             .scope(RefCell::new(Connecting::default()), async {
-                let response = request.send().await;
-                (response, CONNECTING.with(|connecting| *connecting.borrow()))
+                let mut request = request;
+                loop {
+                    // The body is bytes: it always clones.
+                    let again = request.try_clone();
+                    let response = request.send().await;
+                    let connecting = CONNECTING.with(|connecting| *connecting.borrow());
+                    // A connection kept alive that the server closed as the
+                    // request went out on it: sent again, on another from
+                    // the pool (which may be closing too) or a new one
+                    // (Chromium's `HttpNetworkTransaction::
+                    // ShouldResendRequest`: a reused connection, no head
+                    // yet). One the request opened itself isn't: the
+                    // server closed it on purpose. So it ends, as
+                    // Chromium's does, once the pool runs out of the
+                    // connections it kept alive (each that failed is
+                    // dropped).
+                    match (response, again) {
+                        (Err(err), Some(again))
+                            if connecting.connect.is_none() && closed_before_answering(&err) =>
+                        {
+                            tracing::debug!(%url, error = %error_chain(&err), "sent again");
+                            request = again;
+                        }
+                        (response, _) => break (response, connecting),
+                    }
+                }
             })
             .await;
         let response = response.map_err(|e| net_error(url, &e))?;
@@ -402,6 +427,38 @@ where
             Ok(connection)
         })
     }
+}
+
+/// Whether the connection ended, or was reset, before the response's head
+/// came (Chromium's `ERR_EMPTY_RESPONSE`, `ERR_CONNECTION_CLOSED`,
+/// `ERR_CONNECTION_RESET`, `ERR_CONNECTION_ABORTED` and
+/// `ERR_SOCKET_NOT_CONNECTED`, which `HandleIOError` sends again on a
+/// reused connection). A server may close a connection it kept alive at
+/// any time, without saying so (wptserve does after a response without a
+/// length), while the client's pool still holds it.
+fn closed_before_answering(err: &reqwest::Error) -> bool {
+    if err.is_timeout() || err.is_connect() {
+        return false;
+    }
+    let mut source = err.source();
+    while let Some(e) = source {
+        if e.downcast_ref::<hyper::Error>()
+            .is_some_and(hyper::Error::is_incomplete_message)
+        {
+            return true;
+        }
+        if let Some(io) = e.downcast_ref::<std::io::Error>() {
+            use std::io::ErrorKind as K;
+            if matches!(
+                io.kind(),
+                K::ConnectionReset | K::ConnectionAborted | K::BrokenPipe | K::NotConnected
+            ) {
+                return true;
+            }
+        }
+        source = next_source(e);
+    }
+    false
 }
 
 /// Whether the connection ended without TLS's close_notify (rustls reports

@@ -16,4 +16,5 @@ mod cookie_monster;
 mod cookies;
 mod load;
 mod redirects;
+mod resend;
 mod timing;
