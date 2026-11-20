@@ -12,6 +12,7 @@
 use std::collections::HashMap;
 
 use protocol::FrameToken;
+use site::StorageKey;
 
 use crate::bad_message::BadMessageReason;
 use crate::navigation_controller::HistoryPlace;
@@ -45,6 +46,10 @@ struct FrameTreeNode {
     /// parent's, a child frame's initial `about:blank`'s parent's); an
     /// error page's is opaque.
     origin: url::Origin,
+    /// What its document's storage is kept by: its origin, the main
+    /// frame's site, and whether a frame of another site is between them
+    /// (`RenderFrameHostImpl::storage_key_`, worked out as it commits).
+    storage_key: StorageKey,
     /// Its document may open local files: it is one (not an error page), or
     /// has its origin from one (Blink's `SecurityOrigin::
     /// CanLoadLocalResources`), as its origin. (A local file's origin is
@@ -96,7 +101,12 @@ impl CommittedOrigin {
 }
 
 impl FrameTreeNode {
-    fn new(parent: Option<FrameToken>, unique_name: String, origin: CommittedOrigin) -> Self {
+    fn new(
+        parent: Option<FrameToken>,
+        unique_name: String,
+        origin: CommittedOrigin,
+        storage_key: StorageKey,
+    ) -> Self {
         Self {
             parent,
             children: Vec::new(),
@@ -105,6 +115,7 @@ impl FrameTreeNode {
             committed_real_load: false,
             history_place: None,
             origin: origin.origin,
+            storage_key,
             local: origin.local,
             srcdoc: String::new(),
             committing: Vec::new(),
@@ -208,6 +219,21 @@ impl FrameTree {
     /// `frame`'s document's origin, as the browser knows it.
     pub fn origin(&self, frame: FrameToken) -> Option<&url::Origin> {
         self.nodes.get(&frame).map(|node| &node.origin)
+    }
+
+    /// What `frame`'s document's storage is kept by.
+    pub fn storage_key(&self, frame: FrameToken) -> Option<&StorageKey> {
+        self.nodes.get(&frame).map(|node| &node.storage_key)
+    }
+
+    /// The key of a document of `origin` in `frame`, in the frames it is in
+    /// as they are (`RenderFrameHostImpl::CalculateStorageKey`): the
+    /// frames above it keep their documents while it has one, as a frame
+    /// whose document goes takes the frames in it with it.
+    fn storage_key_in(&self, frame: Option<FrameToken>, origin: &url::Origin) -> StorageKey {
+        let ancestors = std::iter::successors(frame, |at| self.nodes.get(at)?.parent)
+            .filter_map(|at| self.nodes.get(&at).map(|node| &node.origin));
+        StorageKey::of_frame(origin, ancestors)
     }
 
     /// `frame`'s document's origin and whether it may open local files,
@@ -382,7 +408,13 @@ impl FrameTree {
                 .expect("one at `at`")
                 .origin
         };
+        let parent = node.parent;
+        let storage_key = self.storage_key_in(parent, &origin.origin);
+        let Some(node) = self.nodes.get_mut(&frame) else {
+            return Err(BadMessageReason::CommitOfUnknownFrame);
+        };
         node.origin = origin.origin;
+        node.storage_key = storage_key;
         node.local = origin.local;
         node.url = Some(url.to_owned());
         node.committed_real_load |= crate::loader::about_path(url) != Some("blank");
@@ -452,8 +484,11 @@ impl FrameTree {
             origin: node.origin.clone(),
             local: node.local,
         };
-        self.nodes
-            .insert(frame, FrameTreeNode::new(Some(parent), unique_name, origin));
+        let storage_key = self.storage_key_in(Some(parent), &origin.origin);
+        self.nodes.insert(
+            frame,
+            FrameTreeNode::new(Some(parent), unique_name, origin, storage_key),
+        );
         Ok(())
     }
 
@@ -490,7 +525,9 @@ impl FrameTree {
             .get_mut(&self.root)
             .and_then(|root| root.navigation.take());
         self.nodes.clear();
-        let mut root = FrameTreeNode::new(None, String::new(), CommittedOrigin::opaque());
+        let origin = CommittedOrigin::opaque();
+        let storage_key = StorageKey::first_party(&origin.origin);
+        let mut root = FrameTreeNode::new(None, String::new(), origin, storage_key);
         root.navigation = navigation;
         self.nodes.insert(self.root, root);
     }
@@ -525,6 +562,52 @@ mod tests {
 
     fn token(n: u8) -> FrameToken {
         FrameToken([n; 16])
+    }
+
+    /// `frame` commits navigation `id`'s document at `url`, of `url`'s
+    /// origin.
+    fn commit_at(tree: &mut FrameTree, frame: FrameToken, id: u64, url: &str) {
+        let origin = CommittedOrigin {
+            origin: url::Url::parse(url).unwrap().origin(),
+            local: false,
+        };
+        tree.committing(frame, id, url, origin);
+        tree.did_commit(frame, id, url).unwrap();
+    }
+
+    /// Each frame's storage key is worked out as its document commits, and
+    /// as it is made (its initial `about:blank`'s, of its parent's origin):
+    /// of the main frame's site, and a third party's below a frame of
+    /// another site. The main frame alone again has an opaque one.
+    #[test]
+    fn each_frames_storage_key_is_of_the_frames_it_is_in() {
+        let mut tree = FrameTree::new(token(0));
+        assert!(tree.storage_key(token(0)).unwrap().is_third_party());
+        commit_at(&mut tree, token(0), 1, "https://a.example/");
+        let main = tree.storage_key(token(0)).unwrap().clone();
+        assert_eq!(
+            main,
+            StorageKey::first_party(&url::Url::parse("https://a.example/").unwrap().origin())
+        );
+        tree.add_child(token(0), token(1), "", false).unwrap();
+        assert_eq!(tree.storage_key(token(1)), Some(&main));
+        commit_at(&mut tree, token(1), 2, "https://b.example/");
+        let child = tree.storage_key(token(1)).unwrap();
+        assert!(child.is_third_party());
+        assert_eq!(child.top_level_site(), main.top_level_site());
+        // `a.example` again, in `b.example`: a third party's.
+        tree.add_child(token(1), token(2), "", false).unwrap();
+        commit_at(&mut tree, token(2), 3, "https://www.a.example/");
+        let grandchild = tree.storage_key(token(2)).unwrap();
+        assert!(grandchild.is_third_party());
+        assert_eq!(grandchild.top_level_site(), main.top_level_site());
+        // Of the main frame's site, in it directly: first party.
+        tree.add_child(token(0), token(3), "", false).unwrap();
+        commit_at(&mut tree, token(3), 4, "https://www.a.example/");
+        assert!(!tree.storage_key(token(3)).unwrap().is_third_party());
+        assert_eq!(tree.storage_key(token(9)), None);
+        tree.reset();
+        assert!(tree.storage_key(token(0)).unwrap().is_third_party());
     }
 
     /// Child frames hang from the frame they were made in, in the order

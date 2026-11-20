@@ -1,7 +1,9 @@
 //! What a document's data is kept by, for the browser, the network service
-//! and the renderer alike (the part of Chromium's `//net/base` both sides
-//! link): a host's registrable domain, by the public suffix list, and an
-//! origin's [`Site`] (HTML's "obtain a site", `net::SchemefulSite`).
+//! and the renderer alike (the part of Chromium's `//net/base` and
+//! `blink/public/common` both sides link): a host's registrable domain, by
+//! the public suffix list, an origin's [`Site`] (HTML's "obtain a site",
+//! `net::SchemefulSite`), and the [`StorageKey`] a frame's storage is kept
+//! by (`blink::StorageKey`).
 
 #![cfg_attr(
     test,
@@ -110,5 +112,85 @@ impl Site {
             Repr::Opaque(_) => "null".to_owned(),
             Repr::Tuple { scheme, host } => format!("{scheme}://{host}"),
         }
+    }
+}
+
+/// Whether a frame and every frame it is in are of its top-level site
+/// (Chromium's `blink::mojom::AncestorChainBit`): `a.example` in
+/// `b.example` in `a.example` is of the top-level site, but `b.example`
+/// can control it, so it is a third party's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AncestorChainBit {
+    SameSite,
+    CrossSite,
+}
+
+/// What a frame's storage is kept by (the Storage Standard's storage key,
+/// Chromium's `blink::StorageKey` with third-party storage partitioning,
+/// its default): its document's origin, the site of the top-level frame
+/// it is in, and whether a frame of another site is between them. A
+/// frame of another site than the top-level one's has storage of its own
+/// for each top-level site it is in. No nonce: machopo has no
+/// credentialless iframes.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StorageKey {
+    origin: Origin,
+    top_level_site: Site,
+    ancestor_chain_bit: AncestorChainBit,
+}
+
+impl StorageKey {
+    /// The key of a frame whose document is of `origin`, in frames of
+    /// `ancestors`' origins, its parent's first, the top-level frame's
+    /// last (none: it is the top-level frame), as Chromium's
+    /// `RenderFrameHostImpl::CalculateStorageKey`. The ancestor chain bit
+    /// is `SameSite` if the frame and each one it is in are of the
+    /// top-level site; if its origin or the top-level site is opaque, it
+    /// is `CrossSite`.
+    pub fn of_frame<'a>(origin: &Origin, ancestors: impl IntoIterator<Item = &'a Origin>) -> Self {
+        let ancestors: Vec<&Origin> = ancestors.into_iter().collect();
+        let top = ancestors.last().copied().unwrap_or(origin);
+        let top_level_site = Site::of(top);
+        // The frame and each one it is in. An opaque site is no other
+        // origin's: with an opaque origin or top-level site, only an opaque
+        // top-level frame itself is of it, which is cross-site all the same.
+        let all_of_the_top_level_site = std::iter::once(origin)
+            .chain(ancestors.iter().copied())
+            .all(|frame| Site::of(frame) == top_level_site);
+        let ancestor_chain_bit = if origin.is_tuple() && all_of_the_top_level_site {
+            AncestorChainBit::SameSite
+        } else {
+            AncestorChainBit::CrossSite
+        };
+        Self {
+            origin: origin.clone(),
+            top_level_site,
+            ancestor_chain_bit,
+        }
+    }
+
+    /// The key of a top-level frame whose document is of `origin`
+    /// (`StorageKey::CreateFirstParty`).
+    pub fn first_party(origin: &Origin) -> Self {
+        Self::of_frame(origin, [])
+    }
+
+    pub fn origin(&self) -> &Origin {
+        &self.origin
+    }
+
+    pub fn top_level_site(&self) -> &Site {
+        &self.top_level_site
+    }
+
+    pub fn ancestor_chain_bit(&self) -> AncestorChainBit {
+        self.ancestor_chain_bit
+    }
+
+    /// Whether it is a third party's (`StorageKey::IsThirdPartyContext`):
+    /// its origin isn't of the top-level site, or a frame of another site
+    /// is between them, or either is opaque.
+    pub fn is_third_party(&self) -> bool {
+        self.ancestor_chain_bit == AncestorChainBit::CrossSite
     }
 }

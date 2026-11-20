@@ -1,0 +1,57 @@
+# Step 1b: a frame's storage key (its origin, the top-level site, the
+# ancestor chain bit), worked out by the browser's frame tree as a
+# document commits, as a frame is made, and as the tree is reset.
+test = ["sh", "-c", "cargo test -q -p site && cargo test -q -p browser --lib frame_tree::"]
+timeout = 900
+
+[[mutant]]
+name = "the top-level site is the frame's own"
+file = "crates/site/src/lib.rs"
+from = '''        let top = ancestors.last().copied().unwrap_or(origin);'''
+to = '''        let top = origin;'''
+
+[[mutant]]
+name = "the frames between don't count"
+file = "crates/site/src/lib.rs"
+from = '''        let all_of_the_top_level_site = std::iter::once(origin)
+            .chain(ancestors.iter().copied())'''
+to = '''        let all_of_the_top_level_site = std::iter::once(origin)
+            .chain(ancestors.iter().copied().take(0))'''
+
+[[mutant]]
+name = "the frame itself doesn't count"
+file = "crates/site/src/lib.rs"
+from = '''        let all_of_the_top_level_site = std::iter::once(origin)
+            .chain(ancestors.iter().copied())'''
+to = '''        let all_of_the_top_level_site = std::iter::empty()
+            .chain(ancestors.iter().copied())'''
+
+[[mutant]]
+name = "an opaque origin is first party"
+file = "crates/site/src/lib.rs"
+from = '''        let ancestor_chain_bit = if origin.is_tuple() && all_of_the_top_level_site {'''
+to = '''        let ancestor_chain_bit = if all_of_the_top_level_site {'''
+
+[[mutant]]
+name = "a third party's key is first party"
+file = "crates/site/src/lib.rs"
+from = '''        self.ancestor_chain_bit == AncestorChainBit::CrossSite'''
+to = '''        self.ancestor_chain_bit != AncestorChainBit::CrossSite'''
+
+[[mutant]]
+name = "the key isn't worked out as a document commits"
+file = "crates/browser/src/frame_tree.rs"
+from = '''        node.storage_key = storage_key;'''
+to = '''        let _ = storage_key;'''
+
+[[mutant]]
+name = "a frame's key is worked out without the frames it is in"
+file = "crates/browser/src/frame_tree.rs"
+from = '''        let storage_key = self.storage_key_in(parent, &origin.origin);'''
+to = '''        let storage_key = self.storage_key_in(None.or(Some(frame)).filter(|_| parent.is_none()), &origin.origin);'''
+
+[[mutant]]
+name = "only the parent counts"
+file = "crates/browser/src/frame_tree.rs"
+from = '''        let ancestors = std::iter::successors(frame, |at| self.nodes.get(at)?.parent)'''
+to = '''        let ancestors = std::iter::successors(frame, |_| None)'''

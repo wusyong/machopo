@@ -25,6 +25,8 @@ renderer.workspace = true
 tracing.workspace = true
 # Each frame's document's origin.
 url.workspace = true
+# What a frame's storage is kept by (`FrameTree::storage_key`).
+site.workspace = true
 crossbeam-channel.workspace = true
 # A tab's DevTools id, which a page can't guess.
 getrandom.workspace = true

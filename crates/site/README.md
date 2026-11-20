@@ -1,6 +1,6 @@
 # site
 
-對應 Chromium 的 `//net/base` 裡 browser 和 renderer 兩邊都連結的那一部分：一份資料是「哪個網站的」。Browser、network service 和 renderer 都能用它；public suffix list（`psl` crate）只在這裡。
+對應 Chromium 的 `//net/base` 和 `blink/public/common` 裡 browser 和 renderer 兩邊都連結的那一部分：一份資料是「哪個網站的」。Browser、network service 和 renderer 都能用它；public suffix list（`psl` crate）只在這裡。
 
 ## `registrable_domain`
 
@@ -32,6 +32,20 @@ site.serialize();                         // "https://example.com"，opaque 的�
 - opaque 的 origin 的網站就是那個 origin：只和自己相等。`serialize()` 分不出兩個 opaque 的網站，不能拿來比。
 - `url` crate 只給 http、https、ftp、ws、wss 的網址 tuple origin，正好是 Chromium 會查 registrable domain 的那幾種 scheme；`file:` 的 origin 是 opaque 的。WebSocket 的 scheme 沒有換成 http、https（Chromium 在算網站之前先換）：machopo 還沒有 WebSocket。
 
+## `StorageKey`
+
+一個 frame 的儲存照什麼分（Storage Standard 的 storage key，Chromium 開著第三方儲存分區的 `blink::StorageKey`，現在是預設）：文件的 origin、最上層 frame 的網站，和 ancestor chain bit（`AncestorChainBit`：這個 frame 和它所在的每個 frame 都是最上層的網站時是 `SameSite`）。
+
+```rust
+// 這個 frame 的 origin，和它所在的 frame 的 origin：parent 的在前，最上層的在最後。
+let key = site::StorageKey::of_frame(&origin, [&parent, &top]);
+key.is_third_party(); // 不是最上層的網站、中間隔著別的網站的 frame，或是 opaque 的
+```
+
+- 照 `RenderFrameHostImpl::CalculateStorageKey` 算：`a.example` 嵌在 `b.example` 裡、`b.example` 又嵌在 `a.example` 裡，內層的那個也是第三方（`b.example` 控制得了它）。
+- 沒有 nonce（machopo 沒有 credentialless 的 iframe）。
+- 由 Browser 的 frame 樹算（`FrameTree::storage_key`），renderer 不自己算。
+
 ## 測試
 
-`cargo test -p site`：registrable domain（萬用字元和例外、punycode、private 的後綴、不認得的頂層網域、不是名稱的），網站（同一個 registrable domain 的 host、scheme、port、沒有 registrable domain 的 host、opaque 的 origin）。
+`cargo test -p site`：registrable domain（萬用字元和例外、punycode、private 的後綴、不認得的頂層網域、不是名稱的），網站（同一個 registrable domain 的 host、scheme、port、沒有 registrable domain 的 host、opaque 的 origin），storage key（最上層的、同一個網站的、別的網站的、中間隔著別的網站的、opaque 的）。

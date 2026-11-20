@@ -375,6 +375,7 @@ dependencies = [
  "net",
  "protocol",
  "renderer",
+ "site",
  "tracing",
  "url",
  "viz",

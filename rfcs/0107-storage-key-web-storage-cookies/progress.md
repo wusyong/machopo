@@ -9,7 +9,7 @@
 | 步驟 | 狀態 | 完成日期 |
 | --- | --- | --- |
 | 1a：`site` crate：`Site`（HTML 的「obtain a site」）和 registrable domain（`psl`） | 完成 | 2026-11-20 |
-| 1b：`StorageKey`，frame 樹在文件 commit 時算出每個 frame 的 key | 未開始 | |
+| 1b：`StorageKey`，frame 樹在文件 commit 時算出每個 frame 的 key | 完成 | 2026-11-20 |
 | 1c：DevTools 的 `domainAndRegistry`，第 1 階段的檢查和文件 | 未開始 | |
 | 2：profile 和磁碟 | 未開始 | |
 | 3：Web Storage | 未開始 | |
@@ -23,6 +23,8 @@
 | --- | --- |
 | registrable domain：public suffix 加一個 label（萬用字元和例外、punycode）、private 的後綴和不認得的頂層網域也算、public suffix 本身、IP 位址、有空的 label 的沒有、最後的點留著 | `cargo test -p site` |
 | 網站：同一個 registrable domain 的 host 是同一個、不看 port、scheme 不同就不同、沒有 registrable domain 的 host 自己是網站、opaque 的 origin 只和自己相等 | `cargo test -p site` |
+| storage key：最上層的 frame 是第一方；別的網站的 frame 是第三方，嵌在不同的最上層網站底下各是一個 key；中間隔著別的網站的 frame 時是第三方；opaque 的 origin 和 opaque 的最上層是第三方 | `cargo test -p site` |
+| frame 樹的 key：文件 commit 時、子 frame 建立時（parent 的 origin）照它所在的 frame 算，最上層的網站是 main frame 的；重設之後是 opaque 的 | `cargo test -p browser --lib frame_tree::` |
 
 ## 做過的檢查
 
@@ -39,3 +41,14 @@ macOS、Apple M4，2026-11-20。
 - mutation test（`mutants-1a.toml`）7 個，全部抓到。
 - 文件：`crates/site/README.md`、`docs/architecture.md` 的 crate 表。行為還沒有變（還沒有人用這個 crate），沒有新的限制和情境。
 - 跑過的檢查：`cargo test -p site`、`cargo clippy -p site --all-targets -- -D warnings`；`sanity.py` 的 `deps`、`unsafe`、`tests`、`numerics`、`docs`。
+
+### 1b：`StorageKey`，frame 樹算每個 frame 的 key
+
+macOS、Apple M4，2026-11-20。
+
+- 讀了 Chromium 的 `RenderFrameHostImpl::CalculateStorageKey`、`GetAncestorChainForStorageKeyCalculation`（從這個 frame 往上到最上層）和 `StorageKey` 的建構子：最上層的網站是最上層 frame 的 origin 的網站；這個 frame 和每個祖先都是那個網站時 ancestor chain bit 是 `kSameSite`；origin 或最上層的網站是 opaque 時是 `kCrossSite`。
+- `site`：`StorageKey`（`of_frame`、`first_party`、`origin`、`top_level_site`、`ancestor_chain_bit`、`is_third_party`）和 `AncestorChainBit`。
+- `browser`：`FrameTreeNode` 加上 `storage_key`，在 `did_commit`（新的 origin）、`add_child`（最初的 `about:blank` 拿 parent 的 origin）和 `reset`（opaque）時沿著 parent 往上算；`FrameTree::storage_key`。frame 換文件時它裡面的 frame 跟著不在，所以祖先的 origin 在子 frame 有文件的期間不變，不用重算。還沒有人用它。
+- 新的測試：`site` 的 `storage_key.rs` 4 個；`browser` 的 `frame_tree` 單元測試 1 個（main frame、同網站和別的網站的子 frame、中間隔著別的網站的孫 frame、重設）。
+- mutation test（`mutants-1b.toml`）8 個，全部抓到。第一輪 9 個抓到 6 個：「opaque 的 origin」和「opaque 的最上層網站」兩個判斷互相涵蓋（opaque 的網站只和自己相等，只有 opaque 的最上層 frame 自己要靠判斷擋），拿掉一個、加上註解，mutant 改成拿掉剩下那個；「只看 parent」時孫 frame 照樣是第三方、但最上層的網站錯了，測試補上檢查最上層的網站。
+- 跑過的檢查：`cargo test -p browser -p site`（187 個）、`cargo clippy -p site -p browser --all-targets -- -D warnings`；`sanity.py` 的 `deps`、`unsafe`、`tests`、`numerics`、`boundary`、`docs`。
