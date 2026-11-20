@@ -374,7 +374,7 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
 - **Linux 和 Windows 怎麼把控制通道的一端交給 child**：std 的 `Command` 沒有安全的 API 指定要繼承哪個 fd 或 handle。選項：spawn 前短暫拿掉那個 fd 的 close-on-exec、用 command-fds 這類 crate、當成 child 的 stdin 傳、Windows 上照 Chromium 讓 handle 可以繼承並把數值放在命令列。
 - **Linux 的 memfd 要不要加 `MFD_NOEXEC_SEAL`**：2026-11-17 的看法：加，kernel 不認得就不加，Chromium 也是。
 - **哪幾套測試在 CI 上用多個 process 跑**：WPT 可以。情境和 reftest 怎麼啟動、要全部還是一部分、多花多少時間，還沒確認。
-- **Browser 的 IO thread 要不要合成一條**：現在每個 renderer 一條，分頁多的時候 thread 跟著多；Chromium 是整個 process 一條處理所有通道。IO thread 的迴圈本來就不寫死成只等一條通道（「`ipc` crate」），合起來不用改設計；量到 thread 的數量是問題時再做。
+- **Browser 的 IO thread 要不要合成一條**（2026-11-20：第 3 階段決定，那時開得了多個 renderer process、可以量；合成一條之後那條 thread 比較忙，同時重量一次訊息的 ring 值不值得，第 19 條）：現在每個 renderer 一條，分頁多的時候 thread 跟著多；Chromium 是整個 process 一條處理所有通道。IO thread 的迴圈本來就不寫死成只等一條通道（「`ipc` crate」），合起來不用改設計；量到 thread 的數量是問題時再做。
 - **背景 GC**：拆 process、有背景分頁時，V8 的 heap 在背景要不要 concurrent GC。
 
 ## 之後的可能

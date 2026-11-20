@@ -222,275 +222,30 @@ impl RenderProcessHost {
         let renderer_id = RENDERER_IDS.get_next();
         let loaders = Arc::new(Mutex::new(Loaders::default()));
         let io_thread = {
-            let to_renderer = to_renderer.clone();
-            let file_access = file_access.clone();
             let forwarding = forwarding.clone();
-            let loaders = loaders.clone();
-            let forward = move |tab, msg: Result<RendererHostMsg, BadMessageReason>| {
-                if forwarding.load(Ordering::Acquire) {
-                    on_message(tab, RendererId(renderer_id), msg);
-                }
+            let mut host = IoThreadHost {
+                renderer_id,
+                network,
+                dom_storage,
+                to_renderer: to_renderer.clone(),
+                file_access: file_access.clone(),
+                loaders: loaders.clone(),
+                forward: Box::new(move |msg| {
+                    if forwarding.load(Ordering::Acquire) {
+                        on_message(tab, RendererId(renderer_id), msg);
+                    }
+                }),
+                loads: Loads::default(),
+                workers: HashMap::new(),
+                worker_blob_urls: HashMap::new(),
             };
             std::thread::Builder::new()
                 .name("Chrome_IOThread".into())
                 .spawn(move || {
-                    let on_message = |tab, msg| forward(tab, Ok(msg));
-                    // The renderer's loads still loading.
-                    let loads = Loads::default();
-                    // Its dedicated workers, which may load (Chromium's
-                    // `DedicatedWorkerHost`s, each a `URLLoaderFactory`),
-                    // and the blob URLs each registered (its
-                    // `BlobURLStore`'s), which go with it.
-                    let mut workers: HashMap<u64, Worker> = HashMap::new();
-                    let mut worker_blob_urls: HashMap<u64, Vec<String>> = HashMap::new();
                     while let Ok(msg) = from_renderer.recv() {
-                        let fetch = |load, request| {
-                            fetch_for_renderer(
-                                &network,
-                                renderer_id,
-                                &file_access,
-                                &to_renderer,
-                                &loads,
-                                load,
-                                request,
-                            );
-                        };
-                        match msg {
-                            RendererHostMsg::FetchResource {
-                                request_id,
-                                worker,
-                                loader,
-                                mut request,
-                            } => {
-                                let load = LoadKey::Resource { worker, request_id };
-                                let checked = check_request(
-                                    &loaders.lock().unwrap_or_else(PoisonError::into_inner),
-                                    &workers,
-                                    worker,
-                                    loader,
-                                    &request,
-                                );
-                                let trusted = match checked {
-                                    Ok(trusted) => trusted,
-                                    Err(reason) => {
-                                        let _ = to_renderer.send(load.answer(Err(NetError::new(
-                                            NetErrorCode::AccessDenied,
-                                            request.url,
-                                        ))));
-                                        forward(tab, Err(reason));
-                                        continue;
-                                    }
-                                };
-                                request.trusted = trusted;
-                                // The browser loads every frame's document,
-                                // as a navigation: a renderer asking for one
-                                // is bad (the network service's "frame
-                                // destination requires kNavigate mode").
-                                if matches!(
-                                    request.destination,
-                                    RequestDestination::Document | RequestDestination::Iframe
-                                ) {
-                                    let _ = to_renderer.send(load.answer(Err(NetError::new(
-                                        NetErrorCode::AccessDenied,
-                                        request.url,
-                                    ))));
-                                    forward(tab, Err(BadMessageReason::DocumentRequest));
-                                } else if request.trusted.is_none() {
-                                    // One it didn't make, or gone.
-                                    let _ = to_renderer.send(load.answer(Err(NetError::new(
-                                        NetErrorCode::AccessDenied,
-                                        request.url,
-                                    ))));
-                                } else {
-                                    fetch(load, request);
-                                }
-                            }
-                            RendererHostMsg::DedicatedWorkerCreated {
-                                worker,
-                                loader,
-                                mut request,
-                            } => {
-                                if workers.contains_key(&worker) {
-                                    continue;
-                                }
-                                let checked = check_request(
-                                    &loaders.lock().unwrap_or_else(PoisonError::into_inner),
-                                    &workers,
-                                    None,
-                                    loader,
-                                    &request,
-                                );
-                                match checked {
-                                    Ok(trusted) => {
-                                        request.trusted = trusted;
-                                        workers.insert(worker, Worker { loader });
-                                        fetch(LoadKey::WorkerScript(worker), request);
-                                    }
-                                    Err(reason) => forward(tab, Err(reason)),
-                                }
-                            }
-                            // Its loads close with it.
-                            RendererHostMsg::DedicatedWorkerGone { worker } => {
-                                workers.remove(&worker);
-                                // Revoked, as a revoke of each: for loads
-                                // here, for navigations on the UI thread.
-                                for url in worker_blob_urls.remove(&worker).unwrap_or_default() {
-                                    network.revoke_blob_url(renderer_id, &url);
-                                    on_message(tab, RendererHostMsg::RevokeBlobUrl { url });
-                                }
-                                let mut loads = loads.lock().expect("the loads");
-                                let ended: Vec<LoadKey> = loads
-                                    .keys()
-                                    .copied()
-                                    .filter(|load| load.worker() == Some(worker))
-                                    .collect();
-                                for load in ended {
-                                    if let Some(load) = loads.remove(&load) {
-                                        load.cancel();
-                                    }
-                                }
-                            }
-                            // Here, before any load that comes after it on
-                            // the channel (Chromium's `BlobURLStore` is a
-                            // pipe of its own, its messages kept in order
-                            // with the loads by an associated interface).
-                            RendererHostMsg::RegisterBlobUrl {
-                                worker,
-                                url,
-                                mime_type,
-                                bytes,
-                            } => match worker {
-                                None => {
-                                    network.register_blob_url(renderer_id, &url, mime_type, bytes);
-                                }
-                                // One it didn't make, or gone: nothing.
-                                Some(worker) if workers.contains_key(&worker) => {
-                                    network.register_blob_url(renderer_id, &url, mime_type, bytes);
-                                    worker_blob_urls.entry(worker).or_default().push(url);
-                                }
-                                Some(_) => {}
-                            },
-                            // For loads here; the UI thread forgets it after
-                            // the navigations asked for before.
-                            RendererHostMsg::RevokeBlobUrl { url } => {
-                                for urls in worker_blob_urls.values_mut() {
-                                    urls.retain(|registered| *registered != url);
-                                }
-                                network.revoke_blob_url(renderer_id, &url);
-                                on_message(tab, RendererHostMsg::RevokeBlobUrl { url });
-                            }
-                            // To the storage thread at once: after the
-                            // answer that gave the renderer the area (the
-                            // UI thread's), before any open after it.
-                            RendererHostMsg::ChangeStorage {
-                                area,
-                                change,
-                                source,
-                                url,
-                            } => {
-                                dom_storage.change(renderer_id, area, change, source, url);
-                            }
-                            RendererHostMsg::ForgetStorageAreas => dom_storage.forget(renderer_id),
-                            // Script's cookies, to the network service at
-                            // once, in order (the frame's
-                            // `RestrictedCookieManager`); a bad one answered
-                            // all the same, so the main thread waits no more.
-                            RendererHostMsg::GetCookies {
-                                loader,
-                                url,
-                                request_id,
-                            } => {
-                                let checked = check_cookie_access(
-                                    &loaders.lock().unwrap_or_else(PoisonError::into_inner),
-                                    loader,
-                                    &url,
-                                );
-                                let answer = to_renderer.clone();
-                                let done = move |cookies| {
-                                    let _ = answer.send(RendererMsg::Cookies {
-                                        request_id,
-                                        cookies,
-                                    });
-                                };
-                                match checked {
-                                    Ok((url, trusted)) => {
-                                        network.get_cookies_for_script(url, trusted, done);
-                                    }
-                                    Err(reason) => {
-                                        done(String::new());
-                                        forward(tab, Err(reason));
-                                    }
-                                }
-                            }
-                            RendererHostMsg::SetCookie { loader, url, line } => {
-                                let checked = check_cookie_access(
-                                    &loaders.lock().unwrap_or_else(PoisonError::into_inner),
-                                    loader,
-                                    &url,
-                                );
-                                match checked {
-                                    Ok((url, trusted)) => {
-                                        network.set_cookie_from_script(url, trusted, line);
-                                    }
-                                    Err(reason) => forward(tab, Err(reason)),
-                                }
-                            }
-                            RendererHostMsg::CookiesEnabled {
-                                loader,
-                                url,
-                                request_id,
-                            } => {
-                                let checked = check_cookie_access(
-                                    &loaders.lock().unwrap_or_else(PoisonError::into_inner),
-                                    loader,
-                                    &url,
-                                );
-                                let answer = to_renderer.clone();
-                                let done = move |enabled| {
-                                    let _ = answer.send(RendererMsg::CookiesEnabled {
-                                        request_id,
-                                        enabled,
-                                    });
-                                };
-                                match checked {
-                                    Ok((url, trusted)) => {
-                                        network.cookies_enabled_for(url, trusted, done);
-                                    }
-                                    Err(reason) => {
-                                        done(false);
-                                        forward(tab, Err(reason));
-                                    }
-                                }
-                            }
-                            RendererHostMsg::FollowRedirect { request_id, worker } => {
-                                if let Some(load) = loads
-                                    .lock()
-                                    .expect("the loads")
-                                    .get(&LoadKey::Resource { worker, request_id })
-                                {
-                                    load.follow_redirect();
-                                }
-                            }
-                            RendererHostMsg::CancelResource { request_id, worker } => {
-                                let load = loads
-                                    .lock()
-                                    .expect("the loads")
-                                    .remove(&LoadKey::Resource { worker, request_id });
-                                if let Some(load) = load {
-                                    load.cancel();
-                                }
-                            }
-                            msg => on_message(tab, msg),
-                        }
+                        host.on_message(msg);
                     }
-                    // Its loads go with it (its `URLLoader`s close), and
-                    // its blob URLs.
-                    for (_, load) in loads.lock().expect("the loads").drain() {
-                        load.cancel();
-                    }
-                    network.revoke_blob_urls_of(renderer_id);
-                    dom_storage.forget(renderer_id);
-                    on_message(tab, RendererHostMsg::RendererGone);
+                    host.on_channel_closed();
                 })?
         };
         Ok(Self {
@@ -814,6 +569,299 @@ impl LoadKey {
 /// `NetworkService` thread (taking out one that is over) share.
 type Loads = Arc<Mutex<HashMap<LoadKey, LoadHandle>>>;
 
+/// What the browser does with one renderer's messages before any reaches
+/// the UI thread (Chromium's `RenderProcessHostImpl::IOThreadHostImpl` and
+/// the interfaces bound on the IO thread: the renderer's
+/// `URLLoaderFactory`, its `BlobURLStore`, its frames'
+/// `RestrictedCookieManager`s): it checks each against what the browser
+/// gave the renderer, sends subresource requests, script's cookies and
+/// storage changes straight to their services, and passes the rest on.
+/// One way in, [`on_message`](Self::on_message): whatever reads the
+/// renderer's channel (a thread's queue now, a process's pipe later) hands
+/// each message here, and the checks are the same either way.
+struct IoThreadHost {
+    renderer_id: u64,
+    network: NetworkContext,
+    dom_storage: crate::dom_storage::DomStorageContext,
+    to_renderer: RendererSender,
+    file_access: Arc<AtomicBool>,
+    /// The loaders the browser gave the renderer's documents.
+    loaders: Arc<Mutex<Loaders>>,
+    /// To the UI thread: a message, or why one was bad.
+    forward: Box<dyn Fn(Result<RendererHostMsg, BadMessageReason>) + Send>,
+    /// The renderer's loads still loading.
+    loads: Loads,
+    /// Its dedicated workers, which may load (Chromium's
+    /// `DedicatedWorkerHost`s, each a `URLLoaderFactory`), and the blob
+    /// URLs each registered (its `BlobURLStore`'s), which go with it.
+    workers: HashMap<u64, Worker>,
+    worker_blob_urls: HashMap<u64, Vec<String>>,
+}
+
+impl IoThreadHost {
+    fn forward_on(&self, msg: RendererHostMsg) {
+        (self.forward)(Ok(msg));
+    }
+
+    fn fetch(&self, load: LoadKey, request: ResourceRequest) {
+        fetch_for_renderer(
+            &self.network,
+            self.renderer_id,
+            &self.file_access,
+            &self.to_renderer,
+            &self.loads,
+            load,
+            request,
+        );
+    }
+
+    /// A message from the renderer.
+    fn on_message(&mut self, msg: RendererHostMsg) {
+        match msg {
+            RendererHostMsg::FetchResource {
+                request_id,
+                worker,
+                loader,
+                mut request,
+            } => {
+                let load = LoadKey::Resource { worker, request_id };
+                let checked = check_request(
+                    &self.loaders.lock().unwrap_or_else(PoisonError::into_inner),
+                    &self.workers,
+                    worker,
+                    loader,
+                    &request,
+                );
+                let trusted = match checked {
+                    Ok(trusted) => trusted,
+                    Err(reason) => {
+                        let _ =
+                            self.to_renderer.send(load.answer(Err(NetError::new(
+                                NetErrorCode::AccessDenied,
+                                request.url,
+                            ))));
+                        (self.forward)(Err(reason));
+                        return;
+                    }
+                };
+                request.trusted = trusted;
+                // The browser loads every frame's document,
+                // as a navigation: a renderer asking for one
+                // is bad (the network service's "frame
+                // destination requires kNavigate mode").
+                if matches!(
+                    request.destination,
+                    RequestDestination::Document | RequestDestination::Iframe
+                ) {
+                    let _ = self.to_renderer.send(
+                        load.answer(Err(NetError::new(NetErrorCode::AccessDenied, request.url))),
+                    );
+                    (self.forward)(Err(BadMessageReason::DocumentRequest));
+                } else if request.trusted.is_none() {
+                    // One it didn't make, or gone.
+                    let _ = self.to_renderer.send(
+                        load.answer(Err(NetError::new(NetErrorCode::AccessDenied, request.url))),
+                    );
+                } else {
+                    self.fetch(load, request);
+                }
+            }
+            RendererHostMsg::DedicatedWorkerCreated {
+                worker,
+                loader,
+                mut request,
+            } => {
+                if self.workers.contains_key(&worker) {
+                    return;
+                }
+                let checked = check_request(
+                    &self.loaders.lock().unwrap_or_else(PoisonError::into_inner),
+                    &self.workers,
+                    None,
+                    loader,
+                    &request,
+                );
+                match checked {
+                    Ok(trusted) => {
+                        request.trusted = trusted;
+                        self.workers.insert(worker, Worker { loader });
+                        self.fetch(LoadKey::WorkerScript(worker), request);
+                    }
+                    Err(reason) => (self.forward)(Err(reason)),
+                }
+            }
+            // Its loads close with it.
+            RendererHostMsg::DedicatedWorkerGone { worker } => {
+                self.workers.remove(&worker);
+                // Revoked, as a revoke of each: for loads
+                // here, for navigations on the UI thread.
+                for url in self.worker_blob_urls.remove(&worker).unwrap_or_default() {
+                    self.network.revoke_blob_url(self.renderer_id, &url);
+                    self.forward_on(RendererHostMsg::RevokeBlobUrl { url });
+                }
+                let mut loads = self.loads.lock().expect("the loads");
+                let ended: Vec<LoadKey> = loads
+                    .keys()
+                    .copied()
+                    .filter(|load| load.worker() == Some(worker))
+                    .collect();
+                for load in ended {
+                    if let Some(load) = loads.remove(&load) {
+                        load.cancel();
+                    }
+                }
+            }
+            // Here, before any load that comes after it on
+            // the channel (Chromium's `BlobURLStore` is a
+            // pipe of its own, its messages kept in order
+            // with the loads by an associated interface).
+            RendererHostMsg::RegisterBlobUrl {
+                worker,
+                url,
+                mime_type,
+                bytes,
+            } => match worker {
+                None => {
+                    self.network
+                        .register_blob_url(self.renderer_id, &url, mime_type, bytes);
+                }
+                // One it didn't make, or gone: nothing.
+                Some(worker) if self.workers.contains_key(&worker) => {
+                    self.network
+                        .register_blob_url(self.renderer_id, &url, mime_type, bytes);
+                    self.worker_blob_urls.entry(worker).or_default().push(url);
+                }
+                Some(_) => {}
+            },
+            // For loads here; the UI thread forgets it after
+            // the navigations asked for before.
+            RendererHostMsg::RevokeBlobUrl { url } => {
+                for urls in self.worker_blob_urls.values_mut() {
+                    urls.retain(|registered| *registered != url);
+                }
+                self.network.revoke_blob_url(self.renderer_id, &url);
+                self.forward_on(RendererHostMsg::RevokeBlobUrl { url });
+            }
+            // To the storage thread at once: after the
+            // answer that gave the renderer the area (the
+            // UI thread's), before any open after it.
+            RendererHostMsg::ChangeStorage {
+                area,
+                change,
+                source,
+                url,
+            } => {
+                self.dom_storage
+                    .change(self.renderer_id, area, change, source, url);
+            }
+            RendererHostMsg::ForgetStorageAreas => self.dom_storage.forget(self.renderer_id),
+            // Script's cookies, to the network service at
+            // once, in order (the frame's
+            // `RestrictedCookieManager`); a bad one answered
+            // all the same, so the main thread waits no more.
+            RendererHostMsg::GetCookies {
+                loader,
+                url,
+                request_id,
+            } => {
+                let checked = check_cookie_access(
+                    &self.loaders.lock().unwrap_or_else(PoisonError::into_inner),
+                    loader,
+                    &url,
+                );
+                let answer = self.to_renderer.clone();
+                let done = move |cookies| {
+                    let _ = answer.send(RendererMsg::Cookies {
+                        request_id,
+                        cookies,
+                    });
+                };
+                match checked {
+                    Ok((url, trusted)) => {
+                        self.network.get_cookies_for_script(url, trusted, done);
+                    }
+                    Err(reason) => {
+                        done(String::new());
+                        (self.forward)(Err(reason));
+                    }
+                }
+            }
+            RendererHostMsg::SetCookie { loader, url, line } => {
+                let checked = check_cookie_access(
+                    &self.loaders.lock().unwrap_or_else(PoisonError::into_inner),
+                    loader,
+                    &url,
+                );
+                match checked {
+                    Ok((url, trusted)) => {
+                        self.network.set_cookie_from_script(url, trusted, line);
+                    }
+                    Err(reason) => (self.forward)(Err(reason)),
+                }
+            }
+            RendererHostMsg::CookiesEnabled {
+                loader,
+                url,
+                request_id,
+            } => {
+                let checked = check_cookie_access(
+                    &self.loaders.lock().unwrap_or_else(PoisonError::into_inner),
+                    loader,
+                    &url,
+                );
+                let answer = self.to_renderer.clone();
+                let done = move |enabled| {
+                    let _ = answer.send(RendererMsg::CookiesEnabled {
+                        request_id,
+                        enabled,
+                    });
+                };
+                match checked {
+                    Ok((url, trusted)) => {
+                        self.network.cookies_enabled_for(url, trusted, done);
+                    }
+                    Err(reason) => {
+                        done(false);
+                        (self.forward)(Err(reason));
+                    }
+                }
+            }
+            RendererHostMsg::FollowRedirect { request_id, worker } => {
+                if let Some(load) = self
+                    .loads
+                    .lock()
+                    .expect("the loads")
+                    .get(&LoadKey::Resource { worker, request_id })
+                {
+                    load.follow_redirect();
+                }
+            }
+            RendererHostMsg::CancelResource { request_id, worker } => {
+                let load = self
+                    .loads
+                    .lock()
+                    .expect("the loads")
+                    .remove(&LoadKey::Resource { worker, request_id });
+                if let Some(load) = load {
+                    load.cancel();
+                }
+            }
+            msg => self.forward_on(msg),
+        }
+    }
+
+    /// The renderer's channel closed (Chromium's `OnChannelError`): its
+    /// loads go with it (its `URLLoader`s close), and its blob URLs.
+    fn on_channel_closed(self) {
+        for (_, load) in self.loads.lock().expect("the loads").drain() {
+            load.cancel();
+        }
+        self.network.revoke_blob_urls_of(self.renderer_id);
+        self.dom_storage.forget(self.renderer_id);
+        self.forward_on(RendererHostMsg::RendererGone);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn fetch_for_renderer(
     network: &NetworkContext,
@@ -1009,5 +1057,142 @@ mod tests {
             check_cookie_access(&loaders, 3, "https://a.example/"),
             Err(BadMessageReason::UnknownLoader)
         );
+    }
+
+    /// An `IoThreadHost` with no renderer and no thread: what it passes
+    /// on, and the renderer's end of its queue (kept, so sends reach it).
+    fn io_thread_host() -> (
+        IoThreadHost,
+        crossbeam_channel::Receiver<Result<RendererHostMsg, BadMessageReason>>,
+        renderer::RendererReceiver,
+    ) {
+        let (to_renderer, _to_compositor, from_browser) = renderer::channel();
+        let (forward, forwarded) = crossbeam_channel::unbounded();
+        let host = IoThreadHost {
+            renderer_id: 7,
+            network: NetworkContext::start(net::NetworkContextParams::default()).unwrap(),
+            dom_storage: crate::dom_storage::DomStorageContext::new(&crate::Profile::in_memory())
+                .unwrap(),
+            to_renderer,
+            file_access: Arc::new(AtomicBool::new(false)),
+            loaders: Arc::new(Mutex::new(loaders())),
+            forward: Box::new(move |msg| {
+                let _ = forward.send(msg);
+            }),
+            loads: Loads::default(),
+            workers: HashMap::new(),
+            worker_blob_urls: HashMap::new(),
+        };
+        (host, forwarded, from_browser)
+    }
+
+    fn blob_loads(host: &IoThreadHost, url: &str) -> bool {
+        let request = ResourceRequest::new(url, RequestDestination::Empty);
+        host.network
+            .load_blob_url(&request, Some(host.renderer_id))
+            .is_ok()
+    }
+
+    fn register_blob(worker: Option<u64>, url: &str) -> RendererHostMsg {
+        RendererHostMsg::RegisterBlobUrl {
+            worker,
+            url: url.to_owned(),
+            mime_type: "text/plain".to_owned(),
+            bytes: Arc::from(&b"blob"[..]),
+        }
+    }
+
+    /// The host takes each message by its one way in, with no thread or
+    /// channel of the renderer's behind it. What isn't its to handle goes
+    /// on to the UI thread as it came; a request through a loader the
+    /// renderer wasn't given, one for a document, and a cookie read through
+    /// such a loader go on as the reasons they are bad.
+    #[test]
+    fn the_io_thread_host_passes_on_and_refuses() {
+        let (mut host, forwarded, _renderer) = io_thread_host();
+        host.on_message(RendererHostMsg::RendererReady);
+        assert!(matches!(
+            forwarded.try_recv(),
+            Ok(Ok(RendererHostMsg::RendererReady))
+        ));
+
+        host.on_message(RendererHostMsg::FetchResource {
+            request_id: 1,
+            worker: None,
+            loader: 9,
+            request: request(None),
+        });
+        assert_eq!(
+            forwarded.try_recv().unwrap().err(),
+            Some(BadMessageReason::UnknownLoader)
+        );
+
+        let document = ResourceRequest::new("https://a.example/", RequestDestination::Document);
+        host.on_message(RendererHostMsg::FetchResource {
+            request_id: 2,
+            worker: None,
+            loader: 1,
+            request: document,
+        });
+        assert_eq!(
+            forwarded.try_recv().unwrap().err(),
+            Some(BadMessageReason::DocumentRequest)
+        );
+
+        host.on_message(RendererHostMsg::GetCookies {
+            loader: 9,
+            url: "https://a.example/".to_owned(),
+            request_id: 3,
+        });
+        assert_eq!(
+            forwarded.try_recv().unwrap().err(),
+            Some(BadMessageReason::UnknownLoader)
+        );
+        // None of them left a load behind.
+        assert!(host.loads.lock().unwrap().is_empty());
+        assert!(forwarded.try_recv().is_err());
+    }
+
+    /// A worker's blob URLs go with it, each told to the UI thread; one
+    /// registered for a worker the renderer doesn't have registers nothing.
+    /// When the renderer's channel closes its blob URLs go, and the UI
+    /// thread is told the renderer has gone, last.
+    #[test]
+    fn the_io_thread_hosts_blob_urls() {
+        let (mut host, forwarded, _renderer) = io_thread_host();
+        let script = ResourceRequest::new("data:text/javascript,1", RequestDestination::Worker);
+        host.on_message(RendererHostMsg::DedicatedWorkerCreated {
+            worker: 1,
+            loader: 1,
+            request: script,
+        });
+        host.on_message(register_blob(Some(1), "blob:https://a.example/workers"));
+        host.on_message(register_blob(Some(5), "blob:https://a.example/no-ones"));
+        host.on_message(register_blob(None, "blob:https://a.example/documents"));
+        assert!(blob_loads(&host, "blob:https://a.example/workers"));
+        assert!(!blob_loads(&host, "blob:https://a.example/no-ones"));
+        assert!(blob_loads(&host, "blob:https://a.example/documents"));
+
+        host.on_message(RendererHostMsg::DedicatedWorkerGone { worker: 1 });
+        assert!(!blob_loads(&host, "blob:https://a.example/workers"));
+        assert!(blob_loads(&host, "blob:https://a.example/documents"));
+        assert!(matches!(
+            forwarded.try_recv(),
+            Ok(Ok(RendererHostMsg::RevokeBlobUrl { url })) if url == "blob:https://a.example/workers"
+        ));
+        assert!(forwarded.try_recv().is_err());
+
+        let network = host.network.clone();
+        host.on_channel_closed();
+        let request = ResourceRequest::new(
+            "blob:https://a.example/documents",
+            RequestDestination::Empty,
+        );
+        assert!(network.load_blob_url(&request, Some(7)).is_err());
+        assert!(matches!(
+            forwarded.try_recv(),
+            Ok(Ok(RendererHostMsg::RendererGone))
+        ));
+        assert!(forwarded.try_recv().is_err());
     }
 }

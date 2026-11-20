@@ -248,6 +248,55 @@ pub(crate) fn next_message(
     }
 }
 
+/// A renderer that ends on its own closes its channel, and the browser's
+/// IO thread tells the tab it has gone (`RendererGone`), after anything it
+/// sent before. Here the renderer's main thread ends as it makes its first
+/// document's engine, which panics.
+#[test]
+fn a_renderer_that_ends_on_its_own_is_reported_gone() {
+    let (viz_tx, _viz_rx) = unbounded::<VizMsg>();
+    let (host_tx, host_rx) = unbounded();
+    let mut web_contents = WebContents::new(
+        TabId(TAB_IDS.get_next()),
+        browser::RendererFlags {
+            test_fonts: false,
+            web_tests: false,
+            wait_for_all_pipeline_stages_before_draw: true,
+            automation: false,
+            user_agent: browser::user_agent(),
+            system_colors: gfx::SystemColors::DEFAULT,
+            num_raster_threads: None,
+            caret_blink_interval: None,
+            parser_budget: browser::ParserBudget::default(),
+            new_content_rendering_delay: Duration::ZERO,
+        },
+        browser::ScriptEngineFactory {
+            engine: |_| panic!("the engine of a test whose renderer ends on its own"),
+            wasm_engine: None,
+            worker_engine: None,
+        },
+        viz_tx,
+        None,
+        in_memory(),
+        Box::new(move |_tab, msg| {
+            let _ = host_tx.send(msg);
+        }),
+    )
+    .expect("renderer starts");
+    web_contents.navigate("data:text/html,page");
+    let gone = loop {
+        match next_message(&mut web_contents, &host_rx, Duration::from_secs(20)) {
+            Ok(RendererHostMsg::RendererGone) => break true,
+            Ok(msg) => web_contents.on_renderer_message(&msg),
+            Err(_) => break false,
+        }
+    };
+    assert!(gone, "the tab hears its renderer has gone");
+    web_contents.on_renderer_message(&RendererHostMsg::RendererGone);
+    assert!(web_contents.is_crashed());
+    web_contents.shutdown();
+}
+
 /// A fresh tab with a 200x200 viewport, and the channel its renderer's
 /// messages arrive on. The viewport matters to input: the renderer only
 /// takes a click aimed at a document it has drawn.

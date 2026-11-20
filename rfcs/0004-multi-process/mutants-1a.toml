@@ -1,0 +1,74 @@
+# Step 1a: what the browser does with a renderer's messages is an object
+# with one way in (`IoThreadHost::on_message`), which the IO thread's loop
+# hands each message to.
+test = ["sh", "-c", "cargo test -q -p browser --lib -- io_thread_host"]
+timeout = 1800
+
+[[mutant]]
+name = "the IO thread hands the host nothing"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                        host.on_message(msg);'''
+to = '''                        drop(msg);'''
+test = ["sh", "-c", "cargo test -q -p browser --test it -- loaders::"]
+
+[[mutant]]
+name = "the IO thread doesn't say the channel closed"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                    host.on_channel_closed();'''
+to = '''                    drop(host);'''
+test = ["sh", "-c", "cargo test -q -p browser --test it -- a_renderer_that_ends_on_its_own"]
+
+[[mutant]]
+name = "what the host doesn't handle goes nowhere"
+file = "crates/browser/src/render_process_host.rs"
+from = '''            msg => self.forward_on(msg),'''
+to = '''            _ => {}'''
+
+[[mutant]]
+name = "a renderer's request for a document isn't bad"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                    RequestDestination::Document | RequestDestination::Iframe
+                ) {'''
+to = '''                    RequestDestination::Document | RequestDestination::Iframe
+                ) && false {'''
+
+[[mutant]]
+name = "a bad cookie read isn't reported"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                        done(String::new());
+                        (self.forward)(Err(reason));'''
+to = '''                        done(String::new());'''
+
+[[mutant]]
+name = "a blob URL of no worker of the renderer's is registered"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                Some(worker) if self.workers.contains_key(&worker) => {'''
+to = '''                Some(worker) if !self.workers.contains_key(&worker) || true => {'''
+
+[[mutant]]
+name = "a worker gone leaves its blob URLs"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                for url in self.worker_blob_urls.remove(&worker).unwrap_or_default() {
+                    self.network.revoke_blob_url(self.renderer_id, &url);'''
+to = '''                for url in self.worker_blob_urls.remove(&worker).unwrap_or_default() {'''
+
+[[mutant]]
+name = "a worker gone doesn't tell the UI thread of its blob URLs"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                    self.network.revoke_blob_url(self.renderer_id, &url);
+                    self.forward_on(RendererHostMsg::RevokeBlobUrl { url });
+                }'''
+to = '''                    self.network.revoke_blob_url(self.renderer_id, &url);
+                }'''
+
+[[mutant]]
+name = "a closed channel leaves the renderer's blob URLs"
+file = "crates/browser/src/render_process_host.rs"
+from = '''        self.network.revoke_blob_urls_of(self.renderer_id);'''
+to = '''        '''
+
+[[mutant]]
+name = "a closed channel isn't the renderer gone"
+file = "crates/browser/src/render_process_host.rs"
+from = '''        self.forward_on(RendererHostMsg::RendererGone);'''
+to = '''        '''
