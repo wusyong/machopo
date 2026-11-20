@@ -16,6 +16,7 @@ workspace = true
 
 [dependencies]
 base.workspace = true
+bytes.workspace = true
 gfx.workspace = true
 protocol.workspace = true
 wgpu.workspace = true

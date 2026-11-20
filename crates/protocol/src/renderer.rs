@@ -522,6 +522,10 @@ pub enum WindowOpenDisposition {
 /// `blink.mojom.WidgetInputHandler` (here). One channel carries both.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CompositorMsg {
+    /// Viz has put the pixels of the shared image `mailbox` on the GPU and
+    /// holds their buffer no more (the client's `CreateSharedImage`): the
+    /// compositor draws another tile into it.
+    SharedImagePixelsReturned { mailbox: crate::viz::Mailbox },
     /// `CompositorFrameSinkClient::OnBeginFrame`: a frame is due, if the
     /// renderer asked for one. The compositor answers through its frame
     /// sink, with a frame or `DidNotProduceFrame`, after starting a main

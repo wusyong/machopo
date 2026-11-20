@@ -177,6 +177,12 @@ impl ProxyImpl {
         self.update_needs_begin_frame();
     }
 
+    /// Viz has done with the pixels of the shared image `mailbox`: their
+    /// buffer is the pool's again.
+    pub(crate) fn shared_image_pixels_returned(&mut self, mailbox: protocol::viz::Mailbox) {
+        self.host_impl.shared_image_pixels_returned(mailbox);
+    }
+
     /// `Scheduler::SetVisible`: hidden, it asks for no `BeginFrame`s, and
     /// the input acks waiting for a frame are answered without one; shown
     /// again, it draws what it has at the next one.

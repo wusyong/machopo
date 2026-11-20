@@ -342,10 +342,40 @@ pub fn playback_into(
     cache: &RasterCache,
     pixels: &mut Vec<u8>,
 ) -> Played {
-    // Rounded up, a negative or NaN one empty.
-    let size = Size::new(
+    let len = playback_size(params)
+        .checked_byte_size()
+        .expect("a tile's pixels fit a usize");
+    pixels.resize(len, 0);
+    playback_into_slice(list, ops, params, cache, pixels)
+}
+
+/// The size of what [`playback_into`] draws for `params`: its content
+/// rect's, rounded up, a negative or NaN one empty.
+pub fn playback_size(params: &PlaybackParams) -> Size {
+    Size::new(
         base::numerics::clamp_ceil(params.content_rect.width),
         base::numerics::clamp_ceil(params.content_rect.height),
+    )
+}
+
+/// [`playback_into`], into pixels someone else keeps (a buffer that goes to
+/// the GPU as it is): `pixels` are those of [`playback_size`].
+///
+/// # Panics
+///
+/// If `pixels` isn't that size's.
+pub fn playback_into_slice(
+    list: &DisplayItemList,
+    ops: &[usize],
+    params: &PlaybackParams,
+    cache: &RasterCache,
+    pixels: &mut [u8],
+) -> Played {
+    let size = playback_size(params);
+    assert_eq!(
+        Some(pixels.len()),
+        size.checked_byte_size(),
+        "the pixels are the size's"
     );
     let _span = trace_event::trace_event!(
         "raster::playback",
@@ -354,12 +384,6 @@ pub fn playback_into(
         ops = ops.len(),
         of = list.ops().len()
     );
-    // Every pixel is cleared before anything is drawn: what was there
-    // doesn't show.
-    let len = size
-        .checked_byte_size()
-        .expect("a tile's pixels fit a usize");
-    pixels.resize(len, 0);
     let mut cpu_only = CpuOnly::default();
     if size.is_empty() {
         return Played { size, cpu_only };

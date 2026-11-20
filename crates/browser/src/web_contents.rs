@@ -401,6 +401,13 @@ impl WebContents {
     /// (`VizMsg::RegisterFrameSinkId`).
     pub fn begin_frame_observer(&self) -> BeginFrameObserver {
         BeginFrameObserver::new(self.begin_frame_sender())
+            .with_pixels_returned(self.process.pixels_returned_sender())
+    }
+
+    /// Viz has done with the pixels of the tab's renderer's shared image
+    /// `mailbox`: for a Viz that isn't told through the observer.
+    pub fn shared_image_pixels_returned(&self, mailbox: protocol::viz::Mailbox) {
+        (self.process.pixels_returned_sender())(mailbox);
     }
 
     /// The surface the tab's frames go to, for the embedder to show

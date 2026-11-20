@@ -595,6 +595,7 @@ name = "compositor"
 version = "0.0.1"
 dependencies = [
  "base",
+ "bytes",
  "compositor_paint",
  "crossbeam-channel",
  "gfx",
@@ -5583,6 +5584,7 @@ version = "0.0.1"
 dependencies = [
  "base",
  "bytemuck",
+ "bytes",
  "crossbeam-channel",
  "gfx",
  "pollster",

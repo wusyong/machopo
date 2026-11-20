@@ -1,0 +1,94 @@
+# Step 1b-2: the compositor makes its shared images by messages; a tile is
+# drawn straight into a buffer of the pool, which goes to Viz as it is and
+# comes back; a tile released destroys its image.
+test = ["sh", "-c", "cargo test -q -p compositor --lib -- shared_image:: a_tiles_pixels_go a_released_tile_destroys a_one_color_tiles_buffer"]
+timeout = 1800
+
+[[mutant]]
+name = "a tile is drawn into the thread's buffer and copied"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                let mut buffer = images.take_buffer(len);
+                let raster::Played { cpu_only, .. } = raster::playback_into_slice(
+                    &job.list,
+                    &job.ops,
+                    &job.params,
+                    cache,
+                    buffer.pixels_mut(),
+                );'''
+to = '''                let mut buffer = images.take_buffer(len);
+                let raster::Played { cpu_only, .. } = TILE_PIXELS.with_borrow_mut(|scratch| {
+                    let played = raster::playback_into(&job.list, &job.ops, &job.params, cache, scratch);
+                    buffer.pixels_mut().copy_from_slice(scratch);
+                    played
+                });'''
+
+[[mutant]]
+name = "the message carries a copy of the buffer"
+file = "crates/compositor/src/shared_image.rs"
+from = '''        self.send_create(mailbox, size, Bytes::from_owner(Lent(buffer.0)))'''
+to = '''        self.send_create(mailbox, size, Bytes::copy_from_slice(&buffer.0))'''
+
+[[mutant]]
+name = "a buffer Viz still holds is drawn into"
+file = "crates/compositor/src/shared_image.rs"
+from = '''            .position(|buffer| buffer.len() == len && Arc::strong_count(buffer) == 1);'''
+to = '''            .position(|buffer| buffer.len() == len);'''
+
+[[mutant]]
+name = "a buffer of another length is taken"
+file = "crates/compositor/src/shared_image.rs"
+from = '''            .position(|buffer| buffer.len() == len && Arc::strong_count(buffer) == 1);'''
+to = '''            .position(|buffer| Arc::strong_count(buffer) == 1);'''
+
+[[mutant]]
+name = "a buffer handed back isn't the pool's"
+file = "crates/compositor/src/shared_image.rs"
+from = '''        if let Some(buffer) = returned {
+            self.put(buffer);
+        }'''
+to = '''        drop(returned);'''
+
+[[mutant]]
+name = "a one-color tile's buffer is lost"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                    images.recycle(buffer);
+                    return Rastered::Solid(color, cpu_only);'''
+to = '''                    drop(buffer);
+                    return Rastered::Solid(color, cpu_only);'''
+test = ["sh", "-c", "cargo test -q -p compositor --lib -- a_one_color_tiles_buffer"]
+
+[[mutant]]
+name = "a shared image let go isn't destroyed"
+file = "crates/compositor/src/shared_image.rs"
+from = '''        (self.images.send)(CompositorFrameSinkMsg::DestroySharedImage {
+            mailbox: self.mailbox,
+        });'''
+to = ''''''
+
+[[mutant]]
+name = "a tile doesn't hold its shared image"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                    shared_image,
+                },
+                image,
+            ));'''
+to = '''                    shared_image,
+                },
+                None,
+            ));'''
+
+[[mutant]]
+name = "the frame carries the tile's pixels"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                return Rastered::Pixels {
+                    size,
+                    pixels: Arc::from([]),'''
+to = '''                return Rastered::Pixels {
+                    size,
+                    pixels: Arc::from(vec![0u8; len]),'''
+
+[[mutant]]
+name = "the compositor ignores its pixels coming back"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''            images.pixels_returned(mailbox);'''
+to = '''            let _ = (images, mailbox);'''

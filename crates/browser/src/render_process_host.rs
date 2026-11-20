@@ -339,6 +339,17 @@ impl RenderProcessHost {
         }
     }
 
+    /// Tells the renderer's compositor that Viz has done with the pixels
+    /// of its shared image `mailbox`: for Viz, as `begin_frame_sender`.
+    pub fn pixels_returned_sender(
+        &self,
+    ) -> impl Fn(protocol::viz::Mailbox) + Send + Sync + 'static {
+        let to_compositor = self.to_compositor.clone();
+        move |mailbox| {
+            let _ = to_compositor.send(CompositorMsg::SharedImagePixelsReturned { mailbox });
+        }
+    }
+
     /// Whether the renderer may ask for `url`, to load or to navigate a new
     /// tab to (`ChildProcessSecurityPolicy::CanRequestURL`): a local file
     /// only while one of its frames shows one.

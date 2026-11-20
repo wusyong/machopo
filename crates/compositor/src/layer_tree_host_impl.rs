@@ -135,7 +135,16 @@ impl TilesPrepared {
 /// or nothing at all, keeps no pixels, here or in Viz.
 #[derive(Clone)]
 enum TileDrawInfo {
-    Resource(TransferableResource),
+    /// With the shared image it names, if the compositor made one by a
+    /// message: held while the tile is, and destroyed with its last holder.
+    Resource(
+        TransferableResource,
+        #[expect(
+            dead_code,
+            reason = "held for its drop, which destroys the shared image"
+        )]
+        Option<crate::ClientSharedImage>,
+    ),
     /// Drawn as a `SolidColor` quad; not at all if transparent.
     SolidColor(Color),
 }
@@ -287,7 +296,8 @@ impl PictureLayerImpl {
 /// once it is made (on the GPU, if there is one).
 struct TextureLayerImpl {
     layer: TextureLayer,
-    resource: Option<TransferableResource>,
+    /// With its shared image, as a tile's.
+    resource: Option<(TransferableResource, Option<crate::ClientSharedImage>)>,
 }
 
 /// `cc::LayerImpl`'s kinds.
@@ -401,6 +411,16 @@ thread_local! {
     static TILE_PIXELS: std::cell::RefCell<Vec<u8>> = std::cell::RefCell::default();
 }
 
+/// A canvas's snapshot's pixels as the bytes of a message: the snapshot's
+/// own, shared.
+struct SnapshotPixels(Arc<dyn AsRef<[u8]> + Send + Sync>);
+
+impl AsRef<[u8]> for SnapshotPixels {
+    fn as_ref(&self) -> &[u8] {
+        (*self.0).as_ref()
+    }
+}
+
 /// What a tile came out as: of one color, or its pixels, put on the GPU
 /// (then not kept) if there is one, by the thread that rastered it.
 enum Rastered {
@@ -409,6 +429,7 @@ enum Rastered {
         size: Size,
         pixels: Arc<[u8]>,
         shared_image: Option<protocol::viz::SharedImage>,
+        image: Option<crate::ClientSharedImage>,
         cpu_only: raster::CpuOnly,
     },
 }
@@ -625,6 +646,14 @@ impl LayerTreeHostImpl {
     /// tiles' shared images were on was lost. Every tile with a resource is
     /// rastered again at the next `prepare_tiles`, the ones of one color
     /// (no resource) stay, and all of the next frame is damaged.
+    /// Viz holds the buffer that went with the shared image `mailbox` no
+    /// more.
+    pub(crate) fn shared_image_pixels_returned(&self, mailbox: protocol::viz::Mailbox) {
+        if let Some(images) = &self.settings.shared_images {
+            images.pixels_returned(mailbox);
+        }
+    }
+
     pub(crate) fn did_lose_layer_tree_frame_sink(&mut self) {
         for tree in [&mut self.pending_tree, &mut self.active_tree]
             .into_iter()
@@ -634,7 +663,7 @@ impl LayerTreeHostImpl {
                 match layer {
                     LayerImpl::Picture(layer) => {
                         layer.tiling.tiles.retain(|_, tile| {
-                            !matches!(tile.draw_info, Some(TileDrawInfo::Resource(_)))
+                            !matches!(tile.draw_info, Some(TileDrawInfo::Resource(..)))
                         });
                     }
                     // Its snapshot is put on the new GPU at the next
@@ -988,23 +1017,39 @@ impl LayerTreeHostImpl {
                             .decoded
                             .expect("a texture layer's snapshot is decoded");
                         let id = ResourceId(self.resource_ids.get_next());
-                        let shared_image = self
-                            .settings
-                            .shared_image_interface
-                            .as_ref()
-                            .and_then(|gpu| gpu.create_shared_image(size, snapshot.as_bytes()));
-                        made_shared_images |= shared_image.is_some();
+                        // By a message, the snapshot's own pixels shared
+                        // with Viz, not copied.
+                        let image = self.settings.shared_images.as_ref().map(|images| {
+                            images.create_from(
+                                size,
+                                bytes::Bytes::from_owner(SnapshotPixels(snapshot.bytes.clone())),
+                            )
+                        });
+                        let shared_image = match &image {
+                            Some(image) => {
+                                Some(protocol::viz::SharedImage::from_mailbox(image.mailbox()))
+                            }
+                            None => self
+                                .settings
+                                .shared_image_interface
+                                .as_ref()
+                                .and_then(|gpu| gpu.create_shared_image(size, snapshot.as_bytes())),
+                        };
+                        made_shared_images |= image.is_none() && shared_image.is_some();
                         let pixels: Arc<[u8]> = match shared_image {
                             Some(_) => Arc::from([]),
                             None => Arc::from(snapshot.as_bytes()),
                         };
-                        layer.resource = Some(TransferableResource {
-                            id,
-                            size,
-                            format: ResourceFormat::Rgba8Premul,
-                            pixels,
-                            shared_image,
-                        });
+                        layer.resource = Some((
+                            TransferableResource {
+                                id,
+                                size,
+                                format: ResourceFormat::Rgba8Premul,
+                                pixels,
+                                shared_image,
+                            },
+                            image,
+                        ));
                     }
                     continue;
                 }
@@ -1097,7 +1142,40 @@ impl LayerTreeHostImpl {
         // Done with each tile where it was rastered: its pixels go to the
         // GPU, or into what is kept, right away, not all of a frame's at
         // once on this thread.
+        let images = self.settings.shared_images.as_ref();
         let raster = |job: &RasterJob| {
+            // Into a buffer of the pool, which goes to Viz as it is: the
+            // pixels aren't copied here.
+            if let Some(images) = images {
+                let size = raster::playback_size(&job.params);
+                let len = size
+                    .checked_byte_size()
+                    .expect("a tile's pixels fit a usize");
+                let mut buffer = images.take_buffer(len);
+                let raster::Played { cpu_only, .. } = raster::playback_into_slice(
+                    &job.list,
+                    &job.ops,
+                    &job.params,
+                    cache,
+                    buffer.pixels_mut(),
+                );
+                let scan = trace_event::trace_event!("TileManager::ScanTile");
+                let solid = TileDrawInfo::solid_color(buffer.pixels());
+                drop(scan);
+                if let Some(color) = solid {
+                    images.recycle(buffer);
+                    return Rastered::Solid(color, cpu_only);
+                }
+                let _upload = trace_event::trace_event!("TileManager::UploadTile");
+                let image = images.create(size, buffer);
+                return Rastered::Pixels {
+                    size,
+                    pixels: Arc::from([]),
+                    shared_image: Some(protocol::viz::SharedImage::from_mailbox(image.mailbox())),
+                    image: Some(image),
+                    cpu_only,
+                };
+            }
             TILE_PIXELS.with_borrow_mut(|buffer| {
                 let raster::Played { size, cpu_only } =
                     raster::playback_into(&job.list, &job.ops, &job.params, cache, buffer);
@@ -1120,6 +1198,7 @@ impl LayerTreeHostImpl {
                     size,
                     pixels,
                     shared_image,
+                    image: None,
                     cpu_only,
                 }
             })
@@ -1137,6 +1216,7 @@ impl LayerTreeHostImpl {
                 rastered,
                 Rastered::Pixels {
                     shared_image: Some(_),
+                    image: None,
                     ..
                 }
             )
@@ -1172,7 +1252,7 @@ impl LayerTreeHostImpl {
                 .get_mut(&job.tile)
                 .expect("a tile rastered is there");
             prepared.rastered = prepared.rastered.saturating_add(1);
-            let (size, pixels, shared_image) = match result {
+            let (size, pixels, shared_image, image) = match result {
                 Rastered::Solid(color, cpu_only) => {
                     prepared.solid = prepared.solid.saturating_add(1);
                     prepared.count(cpu_only);
@@ -1183,21 +1263,25 @@ impl LayerTreeHostImpl {
                     size,
                     pixels,
                     shared_image,
+                    image,
                     cpu_only,
                 } => {
                     prepared.count(cpu_only);
-                    (size, pixels, shared_image)
+                    (size, pixels, shared_image, image)
                 }
             };
             // Numbered here, in the order tiles are drawn.
             let id = ResourceId(self.resource_ids.get_next());
-            tile.draw_info = Some(TileDrawInfo::Resource(TransferableResource {
-                id,
-                size,
-                format: ResourceFormat::Rgba8Premul,
-                pixels,
-                shared_image,
-            }));
+            tile.draw_info = Some(TileDrawInfo::Resource(
+                TransferableResource {
+                    id,
+                    size,
+                    format: ResourceFormat::Rgba8Premul,
+                    pixels,
+                    shared_image,
+                },
+                image,
+            ));
         }
         if prepared.rastered > 0 || prepared.skipped > 0 {
             tracing::debug!(
@@ -1370,7 +1454,7 @@ impl LayerTreeHostImpl {
                 // `TextureLayerImpl::AppendQuads`: one quad, the snapshot
                 // scaled bilinearly into the layer's bounds.
                 LayerImpl::Texture(layer) => {
-                    let Some(resource) = &layer.resource else {
+                    let Some((resource, _)) = &layer.resource else {
                         continue;
                     };
                     let bounds = layer.layer.bounds;
@@ -1405,7 +1489,7 @@ impl LayerTreeHostImpl {
                 }
                 let r = tile.content_rect;
                 let material = match draw_info {
-                    TileDrawInfo::Resource(resource) => {
+                    TileDrawInfo::Resource(resource, _) => {
                         resources.push(resource.clone());
                         // Drawn 1:1: nearest keeps them pixel exact.
                         Material::Texture {
@@ -2773,6 +2857,205 @@ mod tests {
             // The top left pixel of every tile is the blue fill.
             assert_eq!(pixels[..4], [0, 0, 255, 255]);
         }
+    }
+
+    /// [`tall_layer`], whose compositor makes its shared images by messages
+    /// to Viz: the host, its frames, its shared images and what it sent.
+    #[expect(clippy::type_complexity, reason = "a test's four handles")]
+    fn tall_layer_sending() -> (
+        LayerTreeHost<SingleThreadProxy>,
+        Arc<Mutex<Vec<CompositorFrame>>>,
+        Arc<crate::SharedImages>,
+        Arc<Mutex<Vec<protocol::viz::CompositorFrameSinkMsg>>>,
+    ) {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let to = sent.clone();
+        let images = crate::SharedImages::new(move |msg| to.lock().unwrap().push(msg));
+        let frames = Arc::new(Mutex::new(Vec::new()));
+        let sink = frames.clone();
+        let mut host = LayerTreeHost::new_single_threaded(
+            LayerTreeSettings {
+                default_tile_size: 64,
+                shared_images: Some(images.clone()),
+                ..Default::default()
+            },
+            Box::new(move |_id: LocalSurfaceId, f: CompositorFrame| sink.lock().unwrap().push(f)),
+        );
+        let mut list = DisplayItemList::new();
+        list.push_op(PaintOp::DrawRect {
+            rect: RectF::new(0.0, 0.0, 100.0, 2000.0),
+            flags: PaintFlags::fill(Color::rgb(0, 0, 255)),
+        });
+        dots(&mut list, 100.0, 2000.0);
+        list.finalize();
+        host.set_root_layer(PictureLayer {
+            id: LayerId(1),
+            bounds: SizeF::new(100.0, 2000.0),
+            display_list: Arc::new(list),
+            contents_opaque: true,
+            background_color: Color::WHITE,
+            invalidation: None,
+            properties: Default::default(),
+        });
+        host.set_viewport_rect_and_scale(Size::new(100, 100), 1.0, LocalSurfaceId::default());
+        (host, frames, images, sent)
+    }
+
+    /// The `CreateSharedImage`s among `sent`: each one's mailbox and pixels.
+    fn created(
+        sent: &Mutex<Vec<protocol::viz::CompositorFrameSinkMsg>>,
+    ) -> Vec<(protocol::viz::Mailbox, bytes::Bytes)> {
+        sent.lock()
+            .unwrap()
+            .iter()
+            .filter_map(|msg| match msg {
+                protocol::viz::CompositorFrameSinkMsg::CreateSharedImage {
+                    mailbox,
+                    pixels,
+                    ..
+                } => Some((*mailbox, pixels.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A tile's pixels are copied nowhere on their way to Viz: it is drawn
+    /// straight into a buffer of the shared images' pool, not into the
+    /// thread's own buffer and then copied, and that buffer is what the
+    /// message carries. The frame names the tile's mailbox and has no
+    /// pixels. Buffers Viz has handed back are drawn into again.
+    #[test]
+    fn a_tiles_pixels_go_to_viz_uncopied() {
+        let (mut host, frames, images, sent) = tall_layer_sending();
+        host.composite();
+        let first = created(&sent);
+        assert_eq!(first.len(), host.host_impl().resident_tiles());
+        assert!(first.len() > 1);
+        // One buffer made for each, and nothing drawn anywhere else.
+        assert_eq!(images.buffers_made(), first.len());
+        super::TILE_PIXELS.with_borrow(|buffer| assert_eq!(buffer.capacity(), 0));
+        for (_, pixels) in &first {
+            // The top left pixel of every tile is the blue fill.
+            assert_eq!(pixels[..4], [0, 0, 255, 255]);
+        }
+        {
+            let frames = frames.lock().unwrap();
+            let resources = &frames[0].resource_list;
+            assert_eq!(resources.len(), 4);
+            for resource in resources {
+                assert!(resource.pixels.is_empty(), "{resource:?}");
+                let mailbox = resource
+                    .shared_image
+                    .as_ref()
+                    .expect("a shared image")
+                    .mailbox;
+                let (_, pixels) = first
+                    .iter()
+                    .find(|(made, _)| *made == mailbox)
+                    .expect("made");
+                assert_eq!(
+                    pixels.len(),
+                    (resource.size.width * resource.size.height * 4) as usize
+                );
+            }
+        }
+
+        // Viz gives them all back; the tiles further down are drawn into
+        // the same buffers.
+        let buffers: Vec<*const u8> = first.iter().map(|(_, pixels)| pixels.as_ptr()).collect();
+        sent.lock().unwrap().clear();
+        for (mailbox, pixels) in first {
+            drop(pixels);
+            host.host_impl().shared_image_pixels_returned(mailbox);
+        }
+        let made = images.buffers_made();
+        host.set_root_scroll_offset(gfx::PointF::new(0.0, 1500.0));
+        host.composite();
+        let second = created(&sent);
+        assert!(!second.is_empty());
+        assert!(
+            second
+                .iter()
+                .any(|(_, pixels)| buffers.contains(&pixels.as_ptr())),
+            "a buffer handed back is used again"
+        );
+        assert!(images.buffers_made() - made < second.len());
+        super::TILE_PIXELS.with_borrow(|buffer| assert_eq!(buffer.capacity(), 0));
+    }
+
+    /// A tile that comes out one color goes to Viz as no shared image, and
+    /// the buffer it was drawn into is the pool's again at once.
+    #[test]
+    fn a_one_color_tiles_buffer_is_the_pools_again() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let to = sent.clone();
+        let images = crate::SharedImages::new(move |msg| to.lock().unwrap().push(msg));
+        let mut host = LayerTreeHost::new_single_threaded(
+            LayerTreeSettings {
+                default_tile_size: 64,
+                shared_images: Some(images.clone()),
+                ..Default::default()
+            },
+            Box::new(|_: LocalSurfaceId, _: CompositorFrame| {}),
+        );
+        // Four tiles down, each all red but the last, which has a dot.
+        let mut list = DisplayItemList::new();
+        list.push_op(PaintOp::DrawRect {
+            rect: RectF::new(0.0, 0.0, 64.0, 256.0),
+            flags: PaintFlags::fill(Color::rgb(255, 0, 0)),
+        });
+        list.push_op(PaintOp::DrawRect {
+            rect: RectF::new(10.0, 200.0, 1.0, 1.0),
+            flags: PaintFlags::fill(Color::BLACK),
+        });
+        list.finalize();
+        host.set_root_layer(PictureLayer {
+            id: LayerId(1),
+            bounds: SizeF::new(64.0, 256.0),
+            display_list: Arc::new(list),
+            contents_opaque: false,
+            background_color: Color::TRANSPARENT,
+            invalidation: None,
+            properties: Default::default(),
+        });
+        host.set_viewport_rect_and_scale(Size::new(64, 256), 1.0, LocalSurfaceId::default());
+        host.composite();
+        assert_eq!(created(&sent).len(), 1, "the dotted tile alone");
+        // The three before it were drawn into one buffer, and the dotted
+        // one into it too.
+        assert_eq!(images.buffers_made(), 1);
+    }
+
+    /// A tile released tells Viz its shared image is done with.
+    #[test]
+    fn a_released_tile_destroys_its_shared_image() {
+        let (mut host, frames, _images, sent) = tall_layer_sending();
+        host.composite();
+        let first: Vec<_> = created(&sent)
+            .into_iter()
+            .map(|(mailbox, _)| mailbox)
+            .collect();
+        host.set_root_scroll_offset(gfx::PointF::new(0.0, 1500.0));
+        host.composite();
+        frames.lock().unwrap().clear();
+        let destroyed: Vec<_> = sent
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|msg| match msg {
+                protocol::viz::CompositorFrameSinkMsg::DestroySharedImage { mailbox } => {
+                    Some(*mailbox)
+                }
+                _ => None,
+            })
+            .collect();
+        // Only the tiles around 1500 are left.
+        assert!(
+            first.iter().all(|mailbox| destroyed.contains(mailbox)),
+            "{first:?} {destroyed:?}"
+        );
+        let alive = created(&sent).len() - destroyed.len();
+        assert_eq!(alive, host.host_impl().resident_tiles());
     }
 
     /// The shared images a frame's tiles need are all made before the

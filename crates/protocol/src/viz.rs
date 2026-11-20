@@ -300,11 +300,12 @@ pub enum CompositorFrameSinkMsg {
     /// channel keeps the two in order, so there are no sync tokens. Viz
     /// hands the buffer back once the pixels are on the GPU
     /// ([`BeginFrameObserver::on_pixels_returned`]): the client draws its next
-    /// into it. The `Arc` stands in for a piece of a shared-memory region.
+    /// into it. The bytes stand in for a piece of a shared-memory region:
+    /// shared with whoever drew them, not copied into the message.
     CreateSharedImage {
         mailbox: Mailbox,
         size: Size,
-        pixels: Arc<[u8]>,
+        pixels: bytes::Bytes,
     },
     /// The client is done with the shared image `mailbox`
     /// (`DestroySharedImage`). Viz lets its texture go once no frame it

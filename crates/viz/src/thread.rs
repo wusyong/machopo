@@ -352,6 +352,12 @@ mod tests {
             sink_id: 1,
         };
         let pixels: Arc<[u8]> = Arc::from([0u8; 4]);
+        struct Shared(Arc<[u8]>);
+        impl AsRef<[u8]> for Shared {
+            fn as_ref(&self) -> &[u8] {
+                &self.0
+            }
+        }
         // How many hold the buffer as the client is told: its own alone,
         // so it may draw into it again.
         let (returned_tx, returned) = unbounded();
@@ -366,7 +372,7 @@ mod tests {
                 CompositorFrameSinkMsg::CreateSharedImage {
                     mailbox,
                     size: gfx::Size::new(1, 1),
-                    pixels: pixels.clone(),
+                    pixels: bytes::Bytes::from_owner(Shared(pixels.clone())),
                 },
             ))
             .unwrap();

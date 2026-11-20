@@ -207,6 +207,14 @@ pub fn spawn_renderer_main_thread(
     // thread; it asks the main thread for main frames, and passes on the
     // input it doesn't handle, on the main queue, and acknowledges what it
     // handles to the browser itself.
+    // Tiles go to the GPU by messages to Viz, on the same channel as the
+    // frames that show them, if Viz has a GPU to put them on.
+    let shared_images = gpu.is_some().then(|| {
+        let viz = viz.clone();
+        compositor::SharedImages::new(move |msg| {
+            let _ = viz.send(msg);
+        })
+    });
     let frame_sink = ChannelLayerTreeFrameSink::new(viz);
     let defaults = LayerTreeSettings::default();
     // The input on its way to the main thread, counted as it is posted.
@@ -216,7 +224,7 @@ pub fn spawn_renderer_main_thread(
         LayerTreeSettings {
             wait_for_all_pipeline_stages_before_draw: flags
                 .wait_for_all_pipeline_stages_before_draw,
-            shared_image_interface: gpu,
+            shared_images,
             num_raster_threads: flags
                 .num_raster_threads
                 .unwrap_or(defaults.num_raster_threads),

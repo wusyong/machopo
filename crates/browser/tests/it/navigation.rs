@@ -369,6 +369,9 @@ struct DrivenViz {
     frames: Vec<u64>,
     /// The resources (rastered tiles) of each frame, by token.
     resources: HashMap<u64, Vec<u64>>,
+    /// The shared images the renderer made and hasn't destroyed, by its
+    /// numbers for them.
+    shared_images: HashSet<u64>,
     /// The navigations whose load finished, whichever wait saw it: a wait
     /// for something else takes the renderer's messages too.
     loaded: HashSet<u64>,
@@ -384,6 +387,7 @@ impl DrivenViz {
             held: false,
             frames: Vec::new(),
             resources: HashMap::new(),
+            shared_images: HashSet::new(),
             loaded: HashSet::new(),
         }
     }
@@ -425,6 +429,18 @@ impl DrivenViz {
                             );
                         }
                         self.begin_frames.did_receive(sink, &msg);
+                        match msg {
+                            // Taken, and its pixels' buffer handed back.
+                            CompositorFrameSinkMsg::CreateSharedImage { mailbox, pixels, .. } => {
+                                self.shared_images.insert(mailbox.0);
+                                drop(pixels);
+                                web_contents.shared_image_pixels_returned(mailbox);
+                            }
+                            CompositorFrameSinkMsg::DestroySharedImage { mailbox } => {
+                                self.shared_images.remove(&mailbox.0);
+                            }
+                            _ => {}
+                        }
                     }
                 }
                 recv(host_rx) -> event => {
@@ -1131,23 +1147,16 @@ fn the_gpu_crash_url_loses_the_gpu_and_navigates_nowhere() {
     web_contents.shutdown();
 }
 
-/// Viz's GPU, played by the test: a shared image is the pixels it was
-/// made from, remembered to see when it is let go; `lose` plays Viz
+/// Viz's GPU, played by the test: its being there has the renderer make
+/// shared images (by messages, which `DrivenViz` takes); `lose` plays Viz
 /// losing the device.
 #[derive(Default)]
 struct RecordingGpu {
     mailboxes: AtomicSequenceNumber<u64>,
-    made: Mutex<Vec<Weak<Vec<u8>>>>,
     observers: Mutex<Vec<Weak<dyn ContextLostObserver>>>,
 }
 
 impl RecordingGpu {
-    /// The shared images something still holds.
-    fn alive(&self) -> usize {
-        let made = self.made.lock().unwrap();
-        made.iter().filter(|image| image.strong_count() > 0).count()
-    }
-
     /// Tells the observers still there; how many.
     fn lose(&self) -> usize {
         let observers: Vec<_> = {
@@ -1164,7 +1173,6 @@ impl RecordingGpu {
 impl SharedImageInterface for RecordingGpu {
     fn create_shared_image(&self, _: gfx::Size, pixels: &[u8]) -> Option<SharedImage> {
         let pixels = Arc::new(pixels.to_vec());
-        self.made.lock().unwrap().push(Arc::downgrade(&pixels));
         let mailbox = Mailbox(self.mailboxes.get_next());
         Some(SharedImage::new(mailbox, pixels))
     }
@@ -1188,18 +1196,18 @@ fn losing_the_gpu_drops_the_renderers_shared_images() {
     web_contents.navigate("data:text/html,<p>tiles");
     let mut viz = DrivenViz::new(viz_rx, begin_frames);
     viz.until_loaded(&mut web_contents, &host_rx);
-    viz.run_until(&mut web_contents, &host_rx, "tiles on the GPU", |_, _| {
-        gpu.alive() > 0
+    viz.run_until(&mut web_contents, &host_rx, "tiles on the GPU", |viz, _| {
+        !viz.shared_images.is_empty()
     });
+    let before = viz.shared_images.clone();
     assert_eq!(gpu.lose(), 1, "only the browser watches the GPU");
-    let deadline = std::time::Instant::now() + TIMEOUT;
-    while gpu.alive() > 0 {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the compositor kept its shared images"
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    // Those it had are destroyed (and the tiles made again, as new ones).
+    viz.run_until(
+        &mut web_contents,
+        &host_rx,
+        "the shared images of the lost GPU to go",
+        |viz, _| before.is_disjoint(&viz.shared_images),
+    );
     web_contents.shutdown();
 }
 

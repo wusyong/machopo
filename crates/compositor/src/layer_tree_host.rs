@@ -22,6 +22,10 @@ pub struct LayerTreeSettings {
     /// `RasterContextProvider` and its `SharedImageInterface`); without one,
     /// or while it has no GPU, tiles keep their pixels.
     pub shared_image_interface: Option<Arc<dyn SharedImageInterface>>,
+    /// The compositor's shared images, made by messages to Viz: with them,
+    /// a tile is drawn into a buffer of their pool and goes to Viz as it
+    /// is, and `shared_image_interface` isn't used.
+    pub shared_images: Option<Arc<crate::SharedImages>>,
     /// Threads that raster tiles at once (cc's `--num-raster-threads`): a
     /// pool of its own, made when there are two tiles to raster; 1 (the
     /// default) rasters them on the compositor thread, without one. More
@@ -44,6 +48,7 @@ impl std::fmt::Debug for LayerTreeSettings {
                 "shared_image_interface",
                 &self.shared_image_interface.is_some(),
             )
+            .field("shared_images", &self.shared_images.is_some())
             .field("num_raster_threads", &self.num_raster_threads)
             .finish()
     }
@@ -55,6 +60,7 @@ impl Default for LayerTreeSettings {
             default_tile_size: 256,
             wait_for_all_pipeline_stages_before_draw: true,
             shared_image_interface: None,
+            shared_images: None,
             num_raster_threads: 1,
         }
     }

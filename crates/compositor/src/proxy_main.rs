@@ -95,6 +95,9 @@ impl CompositorReceiver {
                 CompositorTask::External(CompositorMsg::ContextLost) => {
                     proxy.did_lose_layer_tree_frame_sink()
                 }
+                CompositorTask::External(CompositorMsg::SharedImagePixelsReturned { mailbox }) => {
+                    proxy.shared_image_pixels_returned(mailbox)
+                }
                 CompositorTask::Commit(state) => proxy.commit(*state),
                 CompositorTask::BeginMainFrameAborted => proxy.begin_main_frame_aborted(),
                 CompositorTask::SetNeedsBeginMainFrame(needs) => {

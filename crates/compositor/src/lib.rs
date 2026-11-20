@@ -45,6 +45,7 @@ mod proxy_impl;
 mod proxy_main;
 mod scroll_node;
 mod scroll_utils;
+mod shared_image;
 mod single_thread_proxy;
 mod swap_promise;
 mod synced_scroll_offset;
@@ -62,5 +63,6 @@ pub use proxy_impl::{CompositorScrollDelta, InputAttribution, InputDispatch, ToM
 pub use proxy_main::{CompositorGone, CompositorReceiver, CompositorSender, ProxyMain, channel};
 pub use scroll_node::ScrollNode;
 pub use scroll_utils::{Key as ScrollKey, key_scroll_delta, wheel_scroll_delta};
+pub use shared_image::{ClientSharedImage, PixelBuffer, SharedImages};
 pub use single_thread_proxy::SingleThreadProxy;
 pub use swap_promise::SwapPromise;

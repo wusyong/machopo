@@ -386,6 +386,9 @@ fn drive(
             ))) => {
                 display.create_shared_image(sink, mailbox, size, &pixels);
                 display.flush_shared_images();
+                // The buffer is the renderer's again.
+                drop(pixels);
+                web_contents.shared_image_pixels_returned(mailbox);
             }
             Ok(Event::Viz(VizMsg::FrameSink(
                 sink,
