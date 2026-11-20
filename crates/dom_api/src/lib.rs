@@ -193,7 +193,7 @@ pub use script::{
     ModuleSource, ModuleStart, Prepared, is_javascript_mime_type, prepare_script,
     prepare_wasm_script, run_script_task, uses_credentials,
 };
-pub use storage::{OpenedStorageArea, StorageHost};
+pub use storage::{OpenedStorageArea, StorageHost, open_for_listeners};
 pub use text_control::run_element_tasks;
 pub use timer::{
     Reported, next_due, report_exception, run_due, run_next_due, run_task, until_next_due,

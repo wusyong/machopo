@@ -546,14 +546,16 @@ pub trait ScriptFront: Front {
         unreachable!("a front end binding `isInputPending` asks the engine's monitor")
     }
 
-    /// `ScriptHost::open_local_storage`, for `localStorage`.
-    fn open_local_storage(
+    /// `ScriptHost::open_storage_area`, for `localStorage` and
+    /// `sessionStorage`.
+    fn open_storage_area(
         &mut self,
         document: &NodeRoot,
+        kind: dom::StorageKind,
     ) -> Option<protocol::renderer::OpenedStorageArea> {
         const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
-        let _ = document;
-        unreachable!("a front end binding `localStorage` asks the engine's storage host")
+        let _ = (document, kind);
+        unreachable!("a front end binding Web Storage asks the engine's storage host")
     }
 
     /// `ScriptHost::call_node_filter`.
@@ -1819,6 +1821,22 @@ pub struct SignalObject<N>(pub N);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ViewObject<N>(pub N);
 
+/// An init dictionary's `storageArea` (`Storage?`, null by default) as the
+/// front end took it: a `Storage`'s wrapper, made the DOM's by
+/// `OpFront::object`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StorageAreaObject<N>(pub N);
+
+impl<F: DictFront> DictHandle<F> for Option<StorageAreaObject<F::Node>> {
+    fn read(front: &mut F, dict: &F::Dict, member: MemberName) -> Option<Option<Self>> {
+        Some(Some(
+            front
+                .dict_nullable_object::<dom::Storage>(dict, member, "Storage")?
+                .map(StorageAreaObject),
+        ))
+    }
+}
+
 /// An init dictionary's `relatedTarget` (`EventTarget?`, null by default)
 /// as the front end took it: a node's, a window's or a plain event
 /// target's wrapper, made the DOM's by `OpFront::target`.
@@ -2175,14 +2193,16 @@ pub trait ScriptHost {
         Vec::new()
     }
 
-    /// The `localStorage` of the frame showing `document`, opened by the
-    /// engine's storage host, which waits for it (`StorageHost`); none
-    /// without one, or if the document may have none.
-    fn open_local_storage(
+    /// The `localStorage` or `sessionStorage` (`kind`) of the frame
+    /// showing `document`, opened by the engine's storage host, which
+    /// waits for it (`StorageHost`); none without one, or if the document
+    /// may have none.
+    fn open_storage_area(
         &mut self,
         document: &NodeRoot,
+        kind: dom::StorageKind,
     ) -> Option<protocol::renderer::OpenedStorageArea> {
-        let _ = document;
+        let _ = (document, kind);
         None
     }
 
@@ -2451,11 +2471,12 @@ impl<F: ScriptFront> ScriptHost for FrontHost<'_, F> {
         self.0.pending_input(include_continuous)
     }
 
-    fn open_local_storage(
+    fn open_storage_area(
         &mut self,
         document: &NodeRoot,
+        kind: dom::StorageKind,
     ) -> Option<protocol::renderer::OpenedStorageArea> {
-        self.0.open_local_storage(document)
+        self.0.open_storage_area(document, kind)
     }
 
     fn reject_promise_with_reason(&mut self, promise: u64, signal: &Persistent<EventTargetImpl>) {
@@ -5076,6 +5097,29 @@ impl ObjectType for PopStateEventObject {
     }
 }
 
+/// `StorageEvent`'s objects: events with its data.
+pub struct StorageEventObject;
+
+impl ObjectType for StorageEventObject {
+    type Ref<'gc> = Gc<'gc, dom::Event>;
+
+    #[inline]
+    fn this<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, _: usize) -> Self::Ref<'gc> {
+        let event = op
+            .this_as::<dom::Event>(cx)
+            .expect("the front end's checks: `this` is an event");
+        debug_assert!(
+            cx.storage_event_data(event).is_some(),
+            "the front end's checks: `this` is a StorageEvent"
+        );
+        event
+    }
+
+    fn object<'gc>(event: Self::Ref<'gc>) -> ObjectRef<'gc> {
+        ObjectRef::Event(event)
+    }
+}
+
 /// `HashChangeEvent`'s objects: events with its data.
 pub struct HashChangeEventObject;
 
@@ -6975,6 +7019,8 @@ pub fn interface_of<'gc>(cx: &ApiCx<'_, 'gc>, object: ObjectRef<'gc>) -> usize {
                 const { crate::declare::interface_index("ProgressEvent") }
             } else if cx.hash_change_event_data(event).is_some() {
                 const { crate::declare::interface_index("HashChangeEvent") }
+            } else if cx.storage_event_data(event).is_some() {
+                const { crate::declare::interface_index("StorageEvent") }
             } else if let Some(data) = cx.animation_event_data(event) {
                 if data.transition {
                     const { crate::declare::interface_index("TransitionEvent") }

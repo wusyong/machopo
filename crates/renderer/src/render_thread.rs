@@ -1187,7 +1187,28 @@ impl RenderThread {
                 }
             }
             // The sender puts it aside for the call waiting for it.
-            RendererMsg::LocalStorageOpened { .. } => {}
+            RendererMsg::StorageAreaOpened { .. } => {}
+            RendererMsg::StorageAreaChanged {
+                area,
+                change,
+                old_value,
+                changed,
+                url,
+                source,
+            } => {
+                if let Some(engine) = self.engine.as_mut() {
+                    let mutation = match change {
+                        protocol::renderer::StorageChange::Set { key, value } => {
+                            dom::StorageMutation::Set { key, value }
+                        }
+                        protocol::renderer::StorageChange::Remove { key } => {
+                            dom::StorageMutation::Remove { key }
+                        }
+                        protocol::renderer::StorageChange::Clear => dom::StorageMutation::Clear,
+                    };
+                    engine.storage_area_changed(area, mutation, old_value, changed, url, source);
+                }
+            }
             RendererMsg::Shutdown => return false,
         }
         true

@@ -108,7 +108,9 @@ movementX
 movementY
 name
 newURL
+newValue
 oldURL
+oldValue
 once
 origin
 passive
@@ -132,6 +134,7 @@ startTime
 state
 status
 statusText
+storageArea
 subtree
 targetOrigin
 timelineTime
@@ -139,6 +142,7 @@ timeout
 top
 total
 type
+url
 view
 w
 which

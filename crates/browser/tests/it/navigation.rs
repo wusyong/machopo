@@ -23,6 +23,10 @@ use viz::BeginFrameSource;
 
 pub(crate) const TIMEOUT: Duration = Duration::from_secs(30);
 
+/// The test tabs' ids: each its own, as a window's tabs are (a tab's
+/// `sessionStorage` is its own).
+static TAB_IDS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 /// A fresh tab, the channel its renderer's messages arrive on, Viz's end
 /// of its frame sink, and the `BeginFrameSource` that paces it: for tests
 /// that play Viz themselves ([`DrivenViz`]).
@@ -156,7 +160,7 @@ fn tab_with_flags(
     let (viz_tx, viz_rx) = unbounded::<VizMsg>();
     let (host_tx, host_rx) = unbounded();
     let web_contents = WebContents::new(
-        TabId(0),
+        TabId(TAB_IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)),
         browser::RendererFlags {
             test_fonts: false,
             web_tests: false,

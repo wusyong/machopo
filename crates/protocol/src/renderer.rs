@@ -123,6 +123,14 @@ pub struct OpenedStorageArea {
     pub items: Option<Vec<(String, String)>>,
 }
 
+/// Which storage an area is of: `localStorage`'s (the profile's) or
+/// `sessionStorage`'s (the tab's).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum StorageKind {
+    Local,
+    Session,
+}
+
 /// A change a renderer made to a storage area (`StorageArea::Put`,
 /// `Delete`, `DeleteAll`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -261,14 +269,30 @@ pub enum RendererMsg {
     /// (`DedicatedWorkerCreated`'s), loaded, or why it wasn't (Chromium's
     /// `DedicatedWorkerHost`'s `WorkerScriptFetcher`).
     DedicatedWorkerScript { worker: u64, result: LoadResult },
-    /// The answer to `RendererHostMsg::OpenLocalStorage` (`StorageArea`'s
+    /// The answer to `RendererHostMsg::OpenStorageArea` (`StorageArea`'s
     /// binding and its `GetAll`): the frame's area, or none if its
     /// document may have none (an opaque origin's) or the frame has gone.
     /// Not a task of the main thread's: it waits for it alone, every other
     /// task left queued in order (a `[Sync]` call's reply).
-    LocalStorageOpened {
+    StorageAreaOpened {
         request_id: u64,
         area: Option<OpenedStorageArea>,
+    },
+    /// A change to the `localStorage` area `area`, which this renderer
+    /// opened (`StorageAreaObserver::KeyChanged`, `KeyDeleted`,
+    /// `AllDeleted`), in the order the browser made them: the value before
+    /// (none for `Clear`, or a key that had none), whether it changed
+    /// anything, and the URL of the document that made it. `source`: the
+    /// renderer's own number for the `Storage` that made it, if this
+    /// renderer did (`ChangeStorage`'s, which it has made in its copy
+    /// already).
+    StorageAreaChanged {
+        area: u64,
+        change: StorageChange,
+        old_value: Option<String>,
+        changed: bool,
+        url: String,
+        source: Option<u64>,
     },
     /// `UpdateVisualProperties`.
     UpdateVisualProperties(VisualProperties),
@@ -713,24 +737,29 @@ pub enum RendererHostMsg {
         mime_type: String,
         bytes: Arc<[u8]>,
     },
-    /// `localStorage` first used in frame `frame`'s document (Chromium's
-    /// `StorageArea` bound for the frame's storage key, then `GetAll`): the
-    /// browser works out the key from the frame, its document committed
-    /// before this on the channel, and answers `LocalStorageOpened` with
-    /// the same `request_id`, which the main thread waits for. Handled on
-    /// the UI thread, which has the frames.
-    OpenLocalStorage {
+    /// `localStorage` or `sessionStorage` (`kind`) first used in frame
+    /// `frame`'s document (Chromium's `StorageArea` bound for the frame's
+    /// storage key, and its tab's namespace for `sessionStorage`, then
+    /// `GetAll`): the browser works out the key from the frame, its
+    /// document committed before this on the channel, and answers
+    /// `StorageAreaOpened` with the same `request_id`, which the main
+    /// thread waits for. Handled on the UI thread, which has the frames.
+    OpenStorageArea {
         frame: crate::FrameToken,
+        kind: StorageKind,
         request_id: u64,
     },
     /// A change to the area `area` (`LocalStorageOpened`'s), which this
     /// renderer made to its own copy first (`StorageArea::Put`, `Delete`,
-    /// `DeleteAll`): sent after the answer that gave it the area. Handled
-    /// on the IO thread; one of an area that isn't the renderer's changes
-    /// nothing.
+    /// `DeleteAll`): sent after the answer that gave it the area, with the
+    /// renderer's number for the `Storage` that made it and its document's
+    /// URL (`StorageAreaSource`), for the `storage` events. Handled on the
+    /// IO thread; one of an area that isn't the renderer's changes nothing.
     ChangeStorage {
         area: u64,
         change: StorageChange,
+        source: u64,
+        url: String,
     },
     /// The renderer has none of its areas any more (its DOM replaced by
     /// another engine's): the next `OpenLocalStorage` of a frame gives the

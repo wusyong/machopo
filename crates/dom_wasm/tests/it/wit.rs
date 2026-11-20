@@ -119,6 +119,7 @@ fn a_guest_gets_the_plain_members() {
             "IdleDeadline",
             "Scheduling",
             "Storage",
+            "StorageEvent",
             "NetworkInformation",
             "Geolocation",
             "GeolocationPosition",

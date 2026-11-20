@@ -32,7 +32,7 @@ mod user_agent;
 mod web_contents;
 
 pub use bad_message::BadMessageReason;
-pub use dom_storage::{DomStorageContext, OpenReply};
+pub use dom_storage::{DomStorageContext, ToRenderer};
 pub use frame_tree::FrameTree;
 pub use navigation_controller::{FrameNavigationEntry, NavigationController, NavigationEntry};
 pub use net::{HostMapping, HostMappingRules, NetworkContext, NetworkContextParams};

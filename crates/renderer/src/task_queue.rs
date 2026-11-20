@@ -564,7 +564,7 @@ impl RendererSender {
             return Ok(());
         }
         // An answer the main thread waits for, not a task.
-        if let RendererMsg::LocalStorageOpened { request_id, .. } = msg {
+        if let RendererMsg::StorageAreaOpened { request_id, .. } = msg {
             return scheduler.post_reply(request_id, msg);
         }
         let (queued, interrupt) = match msg {
@@ -753,7 +753,7 @@ mod tests {
     }
 
     fn opened(request_id: u64, area: u64) -> RendererMsg {
-        RendererMsg::LocalStorageOpened {
+        RendererMsg::StorageAreaOpened {
             request_id,
             area: Some(protocol::renderer::OpenedStorageArea { area, items: None }),
         }
@@ -785,7 +785,7 @@ mod tests {
         });
         assert!(matches!(
             reply,
-            Some(RendererMsg::LocalStorageOpened {
+            Some(RendererMsg::StorageAreaOpened {
                 area: Some(protocol::renderer::OpenedStorageArea { area: 1, .. }),
                 ..
             })
@@ -797,7 +797,7 @@ mod tests {
         // The other answer was kept for its own call.
         assert!(matches!(
             within(move || scheduler.sync_call(|_| {})),
-            Some(RendererMsg::LocalStorageOpened {
+            Some(RendererMsg::StorageAreaOpened {
                 area: Some(protocol::renderer::OpenedStorageArea { area: 2, .. }),
                 ..
             })

@@ -35,10 +35,10 @@ use crate::typed::{
     PromiseOfUndefined, PromiseRejectionEventObject, RadioNodeListObject, RadioNodeListOrElement,
     ReaderResult, Records, RelatedTarget, RequestInfo, ResizeObserverCallback, Rest,
     RoundRectRadii, Sequence, Serialized, SignalMember, SignalObject, Slottables,
-    StaticRangeInitArg, StringOrNumber, StringPairs, Strings, TargetObject, TextEventObject,
-    TimelineArg, TimerHandler, TransitionEventObject, U16Default302, UiEventObject,
-    Uint8ClampedArray, UnrestrictedDouble, ViewObject, WakeLockSentinelObject, WhatToShow,
-    WheelEventObject, WorkerObject,
+    StaticRangeInitArg, StorageAreaObject, StorageEventObject, StringOrNumber, StringPairs,
+    Strings, TargetObject, TextEventObject, TimelineArg, TimerHandler, TransitionEventObject,
+    U16Default302, UiEventObject, Uint8ClampedArray, UnrestrictedDouble, ViewObject,
+    WakeLockSentinelObject, WhatToShow, WheelEventObject, WorkerObject,
 };
 use crate::window::NavigationUrl;
 use crate::{
@@ -1114,6 +1114,8 @@ crate::declare! {
         // Opened by the host, waiting for the browser, the first time.
         #[calls_script]
         attribute localStorage: Option<Storage>, get = storage::local_storage;
+        #[calls_script]
+        attribute sessionStorage: Option<Storage>, get = storage::session_storage;
         attribute customElements: CustomElementRegistry, get = custom_elements::registry;
         attribute crypto: Crypto, get = crypto::window_crypto;
         #[front]
@@ -1441,6 +1443,39 @@ crate::declare! {
         method deleter(key: DomString) = storage::remove_item;
         #[named(names)]
         method names() -> Strings = storage::names;
+    }
+
+    // A `storage` event: what changed in an area, and where.
+    interface StorageEvent : Event [type = StorageEventObject] {
+        #[front]
+        constructor(r#type: DomString, eventInitDict?: StorageEventInit) = storage::construct_storage_event;
+        attribute key: Option<DomString>, get = storage::event_key;
+        attribute oldValue: Option<DomString>, get = storage::event_old_value;
+        attribute newValue: Option<DomString>, get = storage::event_new_value;
+        attribute url: DomString, get = storage::event_url;
+        attribute storageArea: Option<Storage>, get = storage::event_storage_area;
+        method initStorageEvent(
+            r#type: DomString,
+            bubbles?: bool,
+            cancelable?: bool,
+            key?: Option<DomString>,
+            oldValue?: Option<DomString>,
+            newValue?: Option<DomString>,
+            url?: EmptyStringDefault,
+            storageArea?: Option<Storage>,
+        ) = storage::init_storage_event;
+    }
+
+    #[expect(non_snake_case, reason = "WebIDL's member names")]
+    dictionary StorageEventInit {
+        bubbles: bool = false,
+        cancelable: bool = false,
+        composed: bool = false,
+        key: Option<String> = None,
+        oldValue: Option<String> = None,
+        newValue: Option<String> = None,
+        url: String = String::new(),
+        storageArea: Option<StorageAreaObject<T::Node>> = None,
     }
 
     // Network Information's `connection`, with the members Chrome has on

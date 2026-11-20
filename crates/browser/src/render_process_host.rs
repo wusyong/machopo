@@ -245,8 +245,13 @@ impl RenderProcessHost {
                             // To the storage thread at once: after the
                             // answer that gave the renderer the area (the
                             // UI thread's), before any open after it.
-                            RendererHostMsg::ChangeStorage { area, change } => {
-                                dom_storage.change(renderer_id, area, change);
+                            RendererHostMsg::ChangeStorage {
+                                area,
+                                change,
+                                source,
+                                url,
+                            } => {
+                                dom_storage.change(renderer_id, area, change, source, url);
                             }
                             RendererHostMsg::ForgetStorageAreas => dom_storage.forget(renderer_id),
                             RendererHostMsg::FollowRedirect { request_id, worker } => {

@@ -1,44 +1,68 @@
-//! `localStorage` (https://html.spec.whatwg.org/#storage): a window's
-//! `Storage`, its area's items in the DOM (`dom`'s `storage`). The window
-//! gets it from the host the first time it is asked for, the host waiting
-//! for the browser (Blink's `CachedStorageArea` loads with a `[Sync]`
-//! `GetAll`); the members read and change the DOM's copy, and the engine
-//! hands the host what changed before the call returns.
+//! Web Storage (https://html.spec.whatwg.org/#storage): a window's
+//! `localStorage` and `sessionStorage`, each a `Storage`, its area's items
+//! in the DOM (`dom`'s `storage`). The window gets each from the host the
+//! first time it is asked for, or a `storage` listener is added to it, the
+//! host waiting for the browser (Blink's `CachedStorageArea` loads with a
+//! `[Sync]` `GetAll`); the members read and change the DOM's copy, and the
+//! engine hands the host what changed before the call returns. `storage`
+//! events are `StorageEvent`s, fired in tasks of their own.
 
-use dom::{DomString, Storage, Window};
+use dom::names;
+use dom::{
+    DomString, Event, EventFlags, Storage, StorageEventValues, StorageKind, TargetRoot, Window,
+};
 use elise::{Gc, Persistent};
 use protocol::FrameToken;
 pub use protocol::renderer::OpenedStorageArea;
 
 use crate::exception::{DomException, ExceptionName};
-use crate::typed::ScriptHost;
-use crate::{ApiCx, ApiError};
+use crate::interfaces::StorageEventInit;
+use crate::typed::{OpFront, ScriptHost, StorageAreaObject};
+use crate::{ApiCx, ApiError, dispatch};
 
-/// The host's side of `localStorage` (Blink's `StorageController` and the
+/// The host's side of Web Storage (Blink's `StorageController` and the
 /// areas' `mojom::StorageArea`s), the engine's to call.
 pub trait StorageHost {
-    /// Frame `frame`'s document opens its `localStorage`, waiting for the
-    /// answer: its area, with its items unless the DOM has the area
-    /// already; none if its document may have no storage.
-    fn open_local_storage(&self, frame: FrameToken) -> Option<OpenedStorageArea>;
+    /// Frame `frame`'s document opens its `localStorage` or
+    /// `sessionStorage` (`kind`), waiting for the answer: its area, with
+    /// its items unless the DOM has the area already; none if its document
+    /// may have no storage.
+    fn open_storage_area(&self, frame: FrameToken, kind: StorageKind) -> Option<OpenedStorageArea>;
 
     /// Script changed an area, which the DOM has already.
     fn storage_changed(&self, change: dom::StorageChange);
 }
 
-/// `localStorage`: the window's `Storage`, the same each time once it has
-/// one; the host opens its area the first time (HTML's "obtain a local
-/// storage bottle map"). A `SecurityError` if its document's origin is
-/// opaque or the host gives it none; null for a window shown in no frame
-/// any more (Blink's, for a window with no frame).
+/// `localStorage`: the window's, the same each time (`storage`).
 pub(crate) fn local_storage<H: ScriptHost>(
     host: &mut H,
     this: Persistent<Window>,
 ) -> Result<Option<Persistent<Storage>>, ApiError> {
+    storage(host, &this, StorageKind::Local)
+}
+
+/// `sessionStorage`: the window's, the same each time (`storage`).
+pub(crate) fn session_storage<H: ScriptHost>(
+    host: &mut H,
+    this: Persistent<Window>,
+) -> Result<Option<Persistent<Storage>>, ApiError> {
+    storage(host, &this, StorageKind::Session)
+}
+
+/// The window's `Storage` of `kind`, the same each time once it has one;
+/// the host opens its area the first time (HTML's "obtain a storage
+/// bottle map"). A `SecurityError` if its document's origin is opaque or
+/// the host gives it none; null for a window shown in no frame any more
+/// (Blink's, for a window with no frame).
+fn storage<H: ScriptHost>(
+    host: &mut H,
+    window: &Persistent<Window>,
+    kind: StorageKind,
+) -> Result<Option<Persistent<Storage>>, ApiError> {
     let (storage, document, active, opaque) = host.read(|cx| {
-        let window = this.get(cx.gc);
+        let window = window.get(cx.gc);
         let storage = cx
-            .window_local_storage(window)
+            .window_storage(window, kind)
             .map(|storage| Persistent::new(cx.gc, storage));
         let document = cx.window_document(window);
         let active = crate::history::is_fully_active(cx, document);
@@ -56,13 +80,178 @@ pub(crate) fn local_storage<H: ScriptHost>(
     if opaque {
         return Err(denied());
     }
-    let Some(opened) = host.open_local_storage(&document) else {
+    let Some(opened) = host.open_storage_area(&document, kind) else {
         return Err(denied());
     };
     Ok(Some(host.mutate(|cx| {
-        let storage = cx.set_window_local_storage(this.get(cx.gc), opened.area, opened.items);
+        let storage = cx.set_window_storage(window.get(cx.gc), kind, opened.area, opened.items);
         Persistent::new(cx.gc, storage)
     })))
+}
+
+/// The windows given `storage` listeners in the operation (`dom`'s
+/// `take_storage_listened`): their `localStorage` and `sessionStorage`
+/// opened, to hear of their changes (Blink's
+/// `DOMWindowStorageController::DidAddEventListener`); one that may have
+/// none goes without.
+pub fn open_for_listeners<H: ScriptHost>(host: &mut H) {
+    for window in host.mutate(|cx| cx.take_storage_listened()) {
+        for kind in [StorageKind::Local, StorageKind::Session] {
+            let _ = storage(host, &window, kind);
+        }
+    }
+}
+
+/// A `storage` event of `info` at `document`'s window (its task runs),
+/// its `storageArea` the window's `Storage` of the kind.
+pub(crate) fn run_storage_event<H: ScriptHost>(
+    host: &mut H,
+    document: &dom::NodeRoot,
+    info: dom::StorageEventInfo,
+) {
+    let Some((window, event)) = host.mutate(|cx| {
+        let window = cx.window_of(document.get(cx.gc))?;
+        let event = cx.create_event(
+            names::event::STORAGE,
+            EventFlags {
+                trusted: true,
+                ..EventFlags::default()
+            },
+            Some(cx.window_context(window)),
+        );
+        cx.set_storage_event_data(
+            event,
+            StorageEventValues {
+                key: info.key,
+                old_value: info.old_value,
+                new_value: info.new_value,
+                url: info.url,
+            },
+            cx.window_storage(window, info.kind),
+        );
+        Some((
+            Persistent::new(cx.gc, window),
+            Persistent::new(cx.gc, event),
+        ))
+    }) else {
+        return;
+    };
+    dispatch(host, &TargetRoot::Window(window), &event);
+}
+
+/// `new StorageEvent(type, eventInitDict)`.
+pub(crate) fn construct_storage_event<'gc, O: OpFront>(
+    op: &mut O,
+    cx: &ApiCx<'_, 'gc>,
+    event_type: &str,
+    init: &StorageEventInit<O::Node>,
+) -> Result<Gc<'gc, Event>, ApiError> {
+    let event = cx.create_event(
+        names::intern(event_type),
+        EventFlags {
+            bubbles: init.bubbles,
+            cancelable: init.cancelable,
+            composed: init.composed,
+            trusted: false,
+        },
+        op.current_context(cx),
+    );
+    let storage_area = init
+        .storageArea
+        .as_ref()
+        .map(|StorageAreaObject(storage)| op.object::<Storage>(cx, storage));
+    cx.set_storage_event_data(
+        event,
+        StorageEventValues {
+            key: init.key.clone(),
+            old_value: init.oldValue.clone(),
+            new_value: init.newValue.clone(),
+            url: init.url.clone(),
+        },
+        storage_area,
+    );
+    Ok(event)
+}
+
+/// `initStorageEvent(...)`: nothing while it is being dispatched.
+#[expect(clippy::too_many_arguments, reason = "HTML's arguments")]
+pub(crate) fn init_storage_event<'gc>(
+    cx: &ApiCx<'_, 'gc>,
+    this: Gc<'gc, Event>,
+    event_type: &str,
+    bubbles: bool,
+    cancelable: bool,
+    key: Option<&str>,
+    old_value: Option<&str>,
+    new_value: Option<&str>,
+    url: &str,
+    storage_area: Option<Gc<'gc, Storage>>,
+) -> Result<(), ApiError> {
+    if cx.event_state(this).dispatching {
+        return Ok(());
+    }
+    cx.init_event(this, names::intern(event_type), bubbles, cancelable);
+    cx.set_storage_event_data(
+        this,
+        StorageEventValues {
+            key: key.map(str::to_owned),
+            old_value: old_value.map(str::to_owned),
+            new_value: new_value.map(str::to_owned),
+            url: url.to_owned(),
+        },
+        storage_area,
+    );
+    Ok(())
+}
+
+fn event_values<'gc>(cx: &ApiCx<'_, 'gc>, event: Gc<'gc, Event>) -> &'gc StorageEventValues {
+    cx.storage_event_data(event)
+        .expect("the front end's checks: a StorageEvent")
+        .0
+}
+
+pub(crate) fn event_key<'gc>(
+    cx: &ApiCx<'_, 'gc>,
+    this: Gc<'gc, Event>,
+) -> Result<Option<DomString>, ApiError> {
+    Ok(event_values(cx, this).key.as_deref().map(DomString::new))
+}
+
+pub(crate) fn event_old_value<'gc>(
+    cx: &ApiCx<'_, 'gc>,
+    this: Gc<'gc, Event>,
+) -> Result<Option<DomString>, ApiError> {
+    Ok(event_values(cx, this)
+        .old_value
+        .as_deref()
+        .map(DomString::new))
+}
+
+pub(crate) fn event_new_value<'gc>(
+    cx: &ApiCx<'_, 'gc>,
+    this: Gc<'gc, Event>,
+) -> Result<Option<DomString>, ApiError> {
+    Ok(event_values(cx, this)
+        .new_value
+        .as_deref()
+        .map(DomString::new))
+}
+
+pub(crate) fn event_url<'gc>(
+    cx: &ApiCx<'_, 'gc>,
+    this: Gc<'gc, Event>,
+) -> Result<DomString, ApiError> {
+    Ok(DomString::new(&event_values(cx, this).url))
+}
+
+pub(crate) fn event_storage_area<'gc>(
+    cx: &ApiCx<'_, 'gc>,
+    this: Gc<'gc, Event>,
+) -> Result<Option<Gc<'gc, Storage>>, ApiError> {
+    Ok(cx
+        .storage_event_data(this)
+        .expect("the front end's checks: a StorageEvent")
+        .1)
 }
 
 fn denied() -> ApiError {

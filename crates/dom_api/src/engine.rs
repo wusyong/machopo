@@ -467,6 +467,22 @@ pub trait ScriptEngine: ParserHost {
         let _ = host;
     }
 
+    /// The browser's news of a change to the `localStorage` area `area`,
+    /// which this engine's DOM opened (`dom`'s `storage_area_changed`):
+    /// taken into the DOM's copy, `storage` events queued at its windows.
+    /// An engine without `localStorage` drops it.
+    fn storage_area_changed(
+        &mut self,
+        area: u64,
+        mutation: dom::StorageMutation,
+        old_value: Option<String>,
+        changed: bool,
+        url: String,
+        source: Option<u64>,
+    ) {
+        let _ = (area, mutation, old_value, changed, url, source);
+    }
+
     /// Runs the frames' windows' element tasks, a window's after another's
     /// (`dom_api::run_element_tasks`: a text control's `select`), a
     /// microtask checkpoint after each: whether any ran.

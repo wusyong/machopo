@@ -348,11 +348,12 @@ impl<'s> ScriptHost for Host<'_, '_, 's, '_> {
         pending_input(self.scope, include_continuous)
     }
 
-    fn open_local_storage(
+    fn open_storage_area(
         &mut self,
         document: &dom::NodeRoot,
+        kind: dom::StorageKind,
     ) -> Option<dom_api::OpenedStorageArea> {
-        crate::frames::open_local_storage(self.scope, document)
+        crate::frames::open_storage_area(self.scope, document, kind)
     }
 
     fn set_abort_reason(

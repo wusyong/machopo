@@ -5058,34 +5058,44 @@ pub(super) struct RendererStorageHost {
 }
 
 impl dom_api::StorageHost for RendererStorageHost {
-    fn open_local_storage(
+    fn open_storage_area(
         &self,
         frame: protocol::FrameToken,
+        kind: dom::StorageKind,
     ) -> Option<dom_api::OpenedStorageArea> {
+        let kind = match kind {
+            dom::StorageKind::Local => protocol::renderer::StorageKind::Local,
+            dom::StorageKind::Session => protocol::renderer::StorageKind::Session,
+        };
         let reply = self.scheduler.sync_call(|request_id| {
-            let _ = self
-                .to_browser
-                .send(RendererHostMsg::OpenLocalStorage { frame, request_id });
+            let _ = self.to_browser.send(RendererHostMsg::OpenStorageArea {
+                frame,
+                kind,
+                request_id,
+            });
         })?;
         match reply {
-            protocol::renderer::RendererMsg::LocalStorageOpened { area, .. } => area,
+            protocol::renderer::RendererMsg::StorageAreaOpened { area, .. } => area,
             _ => None,
         }
     }
 
     fn storage_changed(&self, change: dom::StorageChange) {
-        let (area, change) = match change {
-            dom::StorageChange::Set { area, key, value } => {
-                (area, protocol::renderer::StorageChange::Set { key, value })
+        let mutation = match change.mutation {
+            dom::StorageMutation::Set { key, value } => {
+                protocol::renderer::StorageChange::Set { key, value }
             }
-            dom::StorageChange::Remove { area, key } => {
-                (area, protocol::renderer::StorageChange::Remove { key })
+            dom::StorageMutation::Remove { key } => {
+                protocol::renderer::StorageChange::Remove { key }
             }
-            dom::StorageChange::Clear { area } => (area, protocol::renderer::StorageChange::Clear),
+            dom::StorageMutation::Clear => protocol::renderer::StorageChange::Clear,
         };
-        let _ = self
-            .to_browser
-            .send(RendererHostMsg::ChangeStorage { area, change });
+        let _ = self.to_browser.send(RendererHostMsg::ChangeStorage {
+            area: change.area,
+            change: mutation,
+            source: change.source,
+            url: change.url,
+        });
     }
 }
 

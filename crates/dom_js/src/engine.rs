@@ -1636,6 +1636,20 @@ impl ScriptEngine for V8Engine {
         self.state().storage_host = Some(host);
     }
 
+    fn storage_area_changed(
+        &mut self,
+        area: u64,
+        mutation: dom::StorageMutation,
+        old_value: Option<String>,
+        changed: bool,
+        url: String,
+        source: Option<u64>,
+    ) {
+        self.state().dom.mutate(|cx| {
+            cx.storage_area_changed(area, mutation, old_value, changed, url, source);
+        });
+    }
+
     fn run_element_tasks(&mut self) -> bool {
         let mut ran = false;
         for (_, context, _) in self.frames_as_made() {

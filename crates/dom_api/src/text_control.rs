@@ -294,6 +294,9 @@ pub fn run_element_task<H: ScriptHost>(host: &mut H, global: &GlobalRoot) -> boo
             (ElementTaskKind::HashChange(old_url, new_url), Some(element)) => {
                 crate::history::run_hash_change(host, &element, old_url, new_url);
             }
+            (ElementTaskKind::Storage(info), Some(element)) => {
+                crate::storage::run_storage_event(host, &element, info);
+            }
             (ElementTaskKind::PerformanceTimeline, _) => {
                 if let Some(performance) = &target {
                     crate::performance::notify(host, performance);
@@ -341,6 +344,7 @@ pub fn run_element_task<H: ScriptHost>(host: &mut H, global: &GlobalRoot) -> boo
                 | ElementTaskKind::Image(_)
                 | ElementTaskKind::Script
                 | ElementTaskKind::HashChange(..)
+                | ElementTaskKind::Storage(_)
                 | ElementTaskKind::WindowLoad,
                 None,
             ) => {}

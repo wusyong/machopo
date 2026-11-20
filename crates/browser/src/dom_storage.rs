@@ -1,9 +1,13 @@
-//! `localStorage`'s areas (Chromium's `LocalStorageImpl` in the storage
-//! service, `DOMStorageContextWrapper` the browser's handle on it): each
-//! storage key's items, kept on a thread of their own and in the profile's
-//! `LocalStorage` database, for the renderers that opened them. A renderer
-//! gets each area once, with its items, and keeps its own copy (Blink's
-//! `CachedStorageArea`): what it changes it changes first, then tells.
+//! Web Storage's areas (Chromium's `LocalStorageImpl` and
+//! `SessionStorageImpl` in the storage service, `DOMStorageContextWrapper`
+//! the browser's handle on them): each storage key's items in
+//! `localStorage`, kept on a thread of their own and in the profile's
+//! `LocalStorage` database, and in each tab's `sessionStorage`, in memory,
+//! for the renderers that opened them. A renderer gets each area once,
+//! with its items, and keeps its own copy (Blink's `CachedStorageArea`):
+//! what it changes it changes first, then tells; every renderer with a
+//! `localStorage` area is told what changes in it, for its `storage`
+//! events.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -11,7 +15,8 @@ use std::thread::JoinHandle;
 
 use base::SequenceNumber;
 use crossbeam_channel::{Receiver, Sender};
-use protocol::renderer::{OpenedStorageArea, StorageChange};
+use protocol::TabId;
+use protocol::renderer::{OpenedStorageArea, RendererMsg, StorageChange, StorageKind};
 use site::StorageKey;
 use sql::Database;
 use sql::rusqlite::params;
@@ -29,10 +34,13 @@ const MIGRATIONS: &[&str] = &["CREATE TABLE items (
         PRIMARY KEY (storage_key, key)
     ) WITHOUT ROWID;"];
 
-/// What answers an open: the area, or none.
-pub type OpenReply = Box<dyn FnOnce(Option<OpenedStorageArea>) + Send>;
+/// The way to a renderer's main thread, for the answers and the changes
+/// it is told of (the renderer's end of its `StorageArea` pipes).
+pub type ToRenderer = Arc<dyn Fn(RendererMsg) + Send + Sync>;
 
-/// The browser's handle on the profile's `localStorage`: clones share the
+/// The browser's handle on the profile's Web Storage: `localStorage`'s,
+/// and each tab's `sessionStorage` (Chromium's `SessionStorageImpl`, in
+/// memory alone: machopo has no session restore). Clones share the
 /// thread, which ends once the last has gone, what it was told written by
 /// then.
 #[derive(Clone)]
@@ -56,25 +64,39 @@ impl Drop for Shared {
     }
 }
 
+/// An area's place: a storage key's in `localStorage` (no namespace), or
+/// in a tab's `sessionStorage` namespace.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct AreaKey {
+    namespace: Option<TabId>,
+    key: StorageKey,
+}
+
 enum Task {
     Open {
         renderer: u64,
-        key: StorageKey,
-        reply: OpenReply,
+        to_renderer: ToRenderer,
+        area: AreaKey,
+        request_id: u64,
     },
     Change {
         renderer: u64,
         area: u64,
         change: StorageChange,
+        source: u64,
+        url: String,
     },
     Forget {
         renderer: u64,
     },
+    ForgetNamespace {
+        namespace: TabId,
+    },
 }
 
 impl DomStorageContext {
-    /// `profile`'s: on disk in its folder, if it has one (the database
-    /// opened as it is first needed), else in memory.
+    /// `profile`'s: `localStorage` on disk in its folder, if it has one
+    /// (the database opened as it is first needed), else in memory.
     pub fn new(profile: &Profile) -> std::io::Result<Self> {
         let (to_thread, tasks) = crossbeam_channel::unbounded();
         let profile = profile.clone();
@@ -89,24 +111,50 @@ impl DomStorageContext {
         })
     }
 
-    /// Renderer `renderer`'s frame of `key` opens its area: `reply` gets
-    /// it, with its items unless the renderer has it already, or none for
-    /// an opaque origin's key (no storage, HTML's `SecurityError`).
-    pub fn open(&self, renderer: u64, key: StorageKey, reply: OpenReply) {
+    /// Renderer `renderer`'s frame of `key` opens its area of `kind` (a
+    /// `sessionStorage`'s in tab `tab`'s namespace): the renderer is told
+    /// (`StorageAreaOpened`, numbered `request_id`) its area, with its
+    /// items unless it has it already, or none for an opaque origin's key
+    /// (no storage, HTML's `SecurityError`). It is told of the changes to
+    /// a `localStorage` area from then on, through `to_renderer`.
+    pub fn open(
+        &self,
+        renderer: u64,
+        to_renderer: ToRenderer,
+        kind: StorageKind,
+        tab: TabId,
+        key: StorageKey,
+        request_id: u64,
+    ) {
+        let namespace = match kind {
+            StorageKind::Local => None,
+            StorageKind::Session => Some(tab),
+        };
         self.send(Task::Open {
             renderer,
-            key,
-            reply,
+            to_renderer,
+            area: AreaKey { namespace, key },
+            request_id,
         });
     }
 
-    /// Renderer `renderer` changed its area `area`: nothing if it isn't
-    /// one the renderer opened.
-    pub fn change(&self, renderer: u64, area: u64, change: StorageChange) {
+    /// Renderer `renderer` changed its area `area`, its `Storage` numbered
+    /// `source` of the document at `url` did: nothing if it isn't one the
+    /// renderer opened.
+    pub fn change(
+        &self,
+        renderer: u64,
+        area: u64,
+        change: StorageChange,
+        source: u64,
+        url: String,
+    ) {
         self.send(Task::Change {
             renderer,
             area,
             change,
+            source,
+            url,
         });
     }
 
@@ -114,6 +162,11 @@ impl DomStorageContext {
     /// its DOM did): it opens them again.
     pub fn forget(&self, renderer: u64) {
         self.send(Task::Forget { renderer });
+    }
+
+    /// Tab `tab` has closed: its `sessionStorage` goes.
+    pub fn forget_namespace(&self, tab: TabId) {
+        self.send(Task::ForgetNamespace { namespace: tab });
     }
 
     fn send(&self, task: Task) {
@@ -129,18 +182,18 @@ struct LocalStorage {
     /// Opened as it is first needed: the profile's, or one in memory if
     /// that couldn't be opened.
     database: Option<Database>,
-    /// Each key's items, once a renderer opened it.
-    areas: HashMap<StorageKey, BTreeMap<String, String>>,
-    /// Each renderer's areas, by number and by key.
+    /// Each area's items, once a renderer opened it.
+    areas: HashMap<AreaKey, BTreeMap<String, String>>,
+    /// Each renderer's areas, by number and by place, and its way.
     renderers: HashMap<u64, RendererAreas>,
     /// The areas' numbers, from 1.
     area_ids: SequenceNumber<u64>,
 }
 
-#[derive(Default)]
 struct RendererAreas {
-    by_key: HashMap<StorageKey, u64>,
-    keys: HashMap<u64, StorageKey>,
+    to_renderer: ToRenderer,
+    by_key: HashMap<AreaKey, u64>,
+    keys: HashMap<u64, AreaKey>,
 }
 
 impl LocalStorage {
@@ -159,37 +212,60 @@ impl LocalStorage {
             match task {
                 Task::Open {
                     renderer,
-                    key,
-                    reply,
-                } => reply(self.open(renderer, key)),
+                    to_renderer,
+                    area,
+                    request_id,
+                } => {
+                    let opened = self.open(renderer, to_renderer.clone(), area);
+                    to_renderer(RendererMsg::StorageAreaOpened {
+                        request_id,
+                        area: opened,
+                    });
+                }
                 Task::Change {
                     renderer,
                     area,
                     change,
-                } => self.change(renderer, area, change),
+                    source,
+                    url,
+                } => self.change(renderer, area, change, source, url),
                 Task::Forget { renderer } => {
                     self.renderers.remove(&renderer);
                 }
+                Task::ForgetNamespace { namespace } => self.forget_namespace(namespace),
             }
         }
     }
 
-    fn open(&mut self, renderer: u64, key: StorageKey) -> Option<OpenedStorageArea> {
-        if !key.origin().is_tuple() {
+    fn open(
+        &mut self,
+        renderer: u64,
+        to_renderer: ToRenderer,
+        place: AreaKey,
+    ) -> Option<OpenedStorageArea> {
+        if !place.key.origin().is_tuple() {
             return None;
         }
-        let areas = self.renderers.entry(renderer).or_default();
-        if let Some(&area) = areas.by_key.get(&key) {
+        let areas = self
+            .renderers
+            .entry(renderer)
+            .or_insert_with(|| RendererAreas {
+                to_renderer: to_renderer.clone(),
+                by_key: HashMap::new(),
+                keys: HashMap::new(),
+            });
+        areas.to_renderer = to_renderer;
+        if let Some(&area) = areas.by_key.get(&place) {
             return Some(OpenedStorageArea { area, items: None });
         }
         let area = self.area_ids.get_next();
-        areas.by_key.insert(key.clone(), area);
-        areas.keys.insert(area, key.clone());
-        if !self.areas.contains_key(&key) {
-            let items = self.read(&key);
-            self.areas.insert(key.clone(), items);
+        areas.by_key.insert(place.clone(), area);
+        areas.keys.insert(area, place.clone());
+        if !self.areas.contains_key(&place) {
+            let items = self.read(&place);
+            self.areas.insert(place.clone(), items);
         }
-        let items = self.areas.get(&key).map_or_else(Vec::new, |items| {
+        let items = self.areas.get(&place).map_or_else(Vec::new, |items| {
             items
                 .iter()
                 .map(|(key, value)| (key.clone(), value.clone()))
@@ -201,8 +277,15 @@ impl LocalStorage {
         })
     }
 
-    fn change(&mut self, renderer: u64, area: u64, change: StorageChange) {
-        let Some(key) = self
+    fn change(
+        &mut self,
+        renderer: u64,
+        area: u64,
+        change: StorageChange,
+        source: u64,
+        url: String,
+    ) {
+        let Some(place) = self
             .renderers
             .get(&renderer)
             .and_then(|areas| areas.keys.get(&area))
@@ -210,23 +293,68 @@ impl LocalStorage {
         else {
             return;
         };
-        let items = self.areas.entry(key.clone()).or_default();
-        match &change {
+        let items = self.areas.entry(place.clone()).or_default();
+        let (old_value, changed) = match &change {
             StorageChange::Set { key, value } => {
-                items.insert(key.clone(), value.clone());
+                let old = items.insert(key.clone(), value.clone());
+                let changed = old.as_ref() != Some(value);
+                (old, changed)
             }
             StorageChange::Remove { key } => {
-                items.remove(key);
+                let old = items.remove(key);
+                let changed = old.is_some();
+                (old, changed)
             }
-            StorageChange::Clear => items.clear(),
+            StorageChange::Clear => {
+                let changed = !items.is_empty();
+                items.clear();
+                (None, changed)
+            }
+        };
+        if place.namespace.is_some() {
+            // `sessionStorage`'s events are the renderer's: the tab's
+            // documents are all in it.
+            return;
         }
-        self.write(&key, &change);
+        self.write(&place, &change);
+        // Every renderer with the area, the one that made the change too
+        // (its `Storage` told, to skip): each fires `storage` at its
+        // documents of the area (`StorageAreaObserver`).
+        for (&other, areas) in &self.renderers {
+            let Some(&their_area) = areas.by_key.get(&place) else {
+                continue;
+            };
+            (areas.to_renderer)(RendererMsg::StorageAreaChanged {
+                area: their_area,
+                change: change.clone(),
+                old_value: old_value.clone(),
+                changed,
+                url: url.clone(),
+                source: (other == renderer).then_some(source),
+            });
+        }
     }
 
-    /// `key`'s items on disk; none for a key that isn't kept there (an
-    /// opaque top-level site's).
-    fn read(&mut self, key: &StorageKey) -> BTreeMap<String, String> {
-        let Some(serialized) = key.serialize() else {
+    fn forget_namespace(&mut self, namespace: TabId) {
+        self.areas
+            .retain(|place, _| place.namespace != Some(namespace));
+        for areas in self.renderers.values_mut() {
+            areas
+                .by_key
+                .retain(|place, _| place.namespace != Some(namespace));
+            areas
+                .keys
+                .retain(|_, place| place.namespace != Some(namespace));
+        }
+    }
+
+    /// `place`'s items on disk; none for one that isn't kept there (a
+    /// `sessionStorage`'s, an opaque top-level site's).
+    fn read(&mut self, place: &AreaKey) -> BTreeMap<String, String> {
+        if place.namespace.is_some() {
+            return BTreeMap::new();
+        }
+        let Some(serialized) = place.key.serialize() else {
             return BTreeMap::new();
         };
         let connection = self.database().connection();
@@ -243,8 +371,8 @@ impl LocalStorage {
         })
     }
 
-    fn write(&mut self, key: &StorageKey, change: &StorageChange) {
-        let Some(serialized) = key.serialize() else {
+    fn write(&mut self, place: &AreaKey, change: &StorageChange) {
+        let Some(serialized) = place.key.serialize() else {
             return;
         };
         let connection = self.database().connection();

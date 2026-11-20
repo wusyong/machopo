@@ -15,7 +15,7 @@
 | 2b：磁碟上的儲存（格式、讀寫的介面） | 完成 | 2026-11-20 |
 | 2c：第 2 階段的檢查和文件 | 完成 | 2026-11-20 |
 | 3a：同步等 Browser 的路、Browser 的 storage thread 和資料庫、`Storage` 介面和 `localStorage` | 完成 | 2026-11-20 |
-| 3b：`storage` 事件、`sessionStorage` | 未開始 | |
+| 3b：`storage` 事件、`sessionStorage` | 完成 | 2026-11-20 |
 | 3c：上限、寫進磁碟的批次、WPT 的 `webstorage/`、第 3 階段的檢查和文件 | 未開始 | |
 | 4：`net` 的 cookie | 未開始 | |
 | 5：cookie 到 DOM 和自動化 | 未開始 | |
@@ -37,6 +37,9 @@
 | storage key 的序列化：照 Chromium 的 `StorageKey::Serialize`（origin 的網址、第三方的 `^0` 加最上層的網站或 `^31`），opaque 的 origin 和最上層的網站不寫 | `cargo test -p site` |
 | `localStorage` 的 area：一個 renderer 拿一次項目、之後只拿編號，別的 renderer 拿得到改過的、照 key 的順序；不是自己的 area 的改動不算；每個 key 一份（別的 origin、別的最上層的網站、中間隔著別的網站）；opaque 的 origin 沒有；忘掉之後重新拿；profile 的資料夾留著（關掉時等寫完），opaque 的最上層的網站只在記憶體 | `cargo test -p browser --test it dom_storage::` |
 | 頁面的 `localStorage`：成員（`length`、`key()`、`getItem` 等、named property 不蓋過成員、同一個物件）；另一個分頁讀得到、別的 origin 讀不到、opaque 的 origin 是 `SecurityError`；同一個 renderer 裡同 key 的文件共用、同步讀得到；不在 frame 裡的 window 是 null；profile 的資料夾留到下一次；換成 wasm 的 engine 再換回來之後照樣在 | `cargo test -p browser --test it dom_storage::`；`cargo test -p shell --test it local_storage_outlasts` |
+| `storage` 事件經過 Browser：每個打開這個 area 的 renderer 都收到改動（舊值、有沒有改到），做出改動的那個帶著它的 `Storage` 的編號；`sessionStorage` 的改動不通知 | `cargo test -p browser --test it dom_storage::` |
+| DOM 的 area：同一個 area 的 window 共用；改動在 Browser 傳回來之前算還沒確認，別的 renderer 在它之前的改動（同一個 key、或這裡的 clear 之前的任何改動）不套用，別人的 clear 留下這裡的 key；`storage` 事件排給那個 area 的每個 window、做出改動的除外，沒改到的不發；`sessionStorage` 的當場發；window 的 `storage` listener 要打開它的 area | `cargo test -p dom --test it storage::` |
+| 頁面的 `storage` 事件和 `sessionStorage`：別的分頁收到 `localStorage` 的事件（key、新舊值、做出改動的頁面的網址、自己的 `storageArea`、trusted、不 bubble），做出改動的 window 沒有；同一個分頁裡只有 `<body onstorage>` 的 iframe 也收得到（`sessionStorage` 的先到）；`sessionStorage` 每個分頁一份（同一個分頁的下一頁有、別的分頁和之後開的分頁沒有、不發到別的分頁），分頁關掉時拿掉 | `cargo test -p browser --test it dom_storage::` |
 
 ## 做過的檢查
 
@@ -122,3 +125,15 @@ macOS、Apple M4，2026-11-20。
 - 文件：`docs/architecture.md` 的 crate 表（`StoragePartition`、`DomStorageContext`）和「Process 的邊界」（main thread 同步等 Browser）、`docs/limitations.md`（`localStorage` 的限制，`file:` 的頁面沒有）、`crates/dom_api/README.md`。
 - `python3 scripts/test.py scenarios --window`（改了 `shell` 的 `browser_window.rs`）：72 次，`demo-script` 失敗 1 次。那次的 log 最後是 Viz 的「can't draw, skipping frames」（`occluded`，視窗被別的視窗蓋住），之後沒有「drawing again」，畫面一直沒再畫，等待逾時。單獨在視窗裡連跑 4 次、不開視窗跑 1 次都通過（通過的那幾次一開始也有一兩次 `occluded`，之後接著畫）。原因是跑的期間視窗被蓋住，和這一段的改動無關（`demo-script` 不用 `localStorage`）。
 - 跑過的檢查：`cargo test` 的 `site`、`sql`、`protocol`、`dom`、`dom_api`、`dom_js`、`dom_wasm`、`renderer`、`browser`、`shell`；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。
+
+### 3b：`storage` 事件、`sessionStorage`
+
+macOS、Apple M4，2026-11-20。
+
+- 決定了第 11 條（`localStorage` 的 `storage` 事件都經過 Browser）和第 12 條（`sessionStorage` 由 Browser 留在記憶體裡，每個分頁一個 namespace）。讀了 Chromium 的 `cached_storage_area.cc`（`SetItem`、`KeyChanged`、`EnqueueStorageEvent`）和 `session_storage_impl.h`（`BackingMode`）。
+- 新的東西：`protocol` 的 `OpenStorageArea`（帶 `StorageKind`，取代 `OpenLocalStorage`）、`StorageAreaOpened`（原本的 `LocalStorageOpened`）、`StorageAreaChanged`，`ChangeStorage` 多了 `Storage` 的編號和文件的網址；`DomStorageContext` 留著每個 renderer 的通道、照分頁分 `sessionStorage` 的 namespace（`forget_namespace`，`WebContents::shutdown` 時）；`dom` 的 `sessionStorage`、還沒確認的改動、DOM 裡每個 `Storage` 的弱引用清單（發事件時走）、window 的 `storage` 事件的 task，加 `storage` listener（event handler 也是）時要求打開 area（Blink 的 `DOMWindowStorageController::DidAddEventListener`；WPT 的 iframe 只有 `<body onstorage>`）；`dom_api` 的 `sessionStorage`、`StorageEvent`（建構子、`initStorageEvent`）、`open_for_listeners`、`ScriptEngine::storage_area_changed`。`dom` 的 `dictionary_members.txt` 加了 `StorageEventInit` 的四個名稱。
+- 測試的分頁原本都是 `TabId(0)`，兩個分頁共用同一個 `sessionStorage` 的 namespace；`browser` 的測試改成每個分頁從計數器拿一個 id。
+- 新的測試：`dom` 的 `storage` 5 個，`browser` 的 `dom_storage` 5 個（2 個 context、3 個頁面）。
+- mutation test（`mutants-3b.toml`）17 個，第一次抓到 15 個。「這裡還沒確認的 clear 不擋別人的改動」和「分頁關掉之後 `sessionStorage` 還在」沒抓到：補了 `dom` 的測試（clear 之後別人的 set 不套）和頁面測試的最後一段（關掉的分頁的 namespace 是空的），重跑這兩個都抓到。
+- 文件：`docs/architecture.md` 的 crate 表（`DomStorageContext`）、`docs/limitations.md`（Web Storage 的限制；`storage` 從「從來不分派」的事件拿掉）、`crates/dom_api/README.md`。
+- 跑過的檢查：`cargo test` 的 `dom`、`dom_api`、`dom_js`、`dom_wasm`、`renderer`、`browser`、`protocol`、`shell`（1280 個通過）；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。沒有動到視窗那一層，沒有跑 `scenarios --window`。

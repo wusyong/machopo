@@ -208,7 +208,10 @@ pub use shadow::{
 };
 pub use slot::SlotData;
 pub use step_range::{RangeKey, StepError};
-pub use storage::{Storage, StorageChange};
+pub use storage::{
+    Storage, StorageChange, StorageEventData, StorageEventInfo, StorageEventValues, StorageKind,
+    StorageMutation,
+};
 pub use style_sheet::{CssStyleSheet, SheetContents, SheetMedia};
 pub use svg::{SvgAnimatedString, SvgMatrix, SvgPoint, SvgRect};
 pub use svg_use::MAX_COPIES;

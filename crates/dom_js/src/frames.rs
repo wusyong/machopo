@@ -371,21 +371,23 @@ pub(crate) fn register_blob_url(
     }
 }
 
-/// The `localStorage` of the frame showing `document`, which the host's
-/// storage host opens, waiting for the browser; none without one, or for
-/// a document no frame shows.
-pub(crate) fn open_local_storage(
+/// The `localStorage` or `sessionStorage` (`kind`) of the frame showing
+/// `document`, which the host's storage host opens, waiting for the
+/// browser; none without one, or for a document no frame shows.
+pub(crate) fn open_storage_area(
     scope: &mut Scope<'_, '_, '_>,
     document: &NodeRoot,
+    kind: dom::StorageKind,
 ) -> Option<dom_api::OpenedStorageArea> {
     let (state, _) = scope.state();
     let id = state.dom.read(|cx| cx.node_id(document.get(cx.gc)));
     let frame = state.frames.of_document(id)?.id;
     let token = state.frames.token(frame)?;
-    state.storage_host.as_ref()?.open_local_storage(token)
+    state.storage_host.as_ref()?.open_storage_area(token, kind)
 }
 
-/// What the operation changed in `localStorage`: the host told, in order.
+/// What the operation changed in Web Storage: the host told, in order;
+/// then the windows given `storage` listeners get their areas.
 pub(crate) fn send_storage_changes(scope: &mut Scope<'_, '_, '_>) {
     let (state, _) = scope.state_mut();
     let changes = state.dom.mutate(|cx| cx.take_storage_changes());
@@ -394,6 +396,7 @@ pub(crate) fn send_storage_changes(scope: &mut Scope<'_, '_, '_>) {
             host.storage_changed(change);
         }
     }
+    dom_api::open_for_listeners(&mut crate::listeners::Host { scope });
 }
 
 /// A blob URL revoked: the host told.

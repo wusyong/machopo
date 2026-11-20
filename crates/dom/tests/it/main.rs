@@ -32,6 +32,7 @@ mod scripts;
 mod shadow;
 mod sheets;
 mod slot;
+mod storage;
 mod strings;
 mod style;
 mod svg_use;

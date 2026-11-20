@@ -1677,6 +1677,11 @@ impl<'gc> Cx<'_, 'gc> {
         );
         self.ensure_listeners(target).push(self.gc, listener);
         self.abort_listeners_changed(target, event_type);
+        if event_type == crate::names::event::STORAGE
+            && let TargetRef::Window(window) = target
+        {
+            self.storage_listened(window);
+        }
         if let TargetRef::EventTarget(target) = target {
             self.media_query_list_listened(target);
         }

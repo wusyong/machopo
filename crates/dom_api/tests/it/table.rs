@@ -63,6 +63,7 @@ fn interfaces_have_their_parents_and_kinds_parents_first() {
             "IdleDeadline",
             "Scheduling",
             "Storage",
+            "StorageEvent",
             "NetworkInformation",
             "Geolocation",
             "GeolocationPosition",
@@ -370,6 +371,7 @@ fn interfaces_have_their_parents_and_kinds_parents_first() {
                 | "IdleDeadline"
                 | "Scheduling"
                 | "Storage"
+                | "StorageEvent"
                 | "NetworkInformation"
                 | "Geolocation"
                 | "GeolocationPosition"

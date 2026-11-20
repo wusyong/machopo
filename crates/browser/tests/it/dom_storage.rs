@@ -3,10 +3,16 @@
 //! folder; and pages end to end.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
-use browser::{DomStorageContext, NetworkContext, NetworkContextParams, Profile, StoragePartition};
+use browser::{
+    DomStorageContext, NetworkContext, NetworkContextParams, Profile, StoragePartition, ToRenderer,
+};
 use net::test_server::Route;
-use protocol::renderer::{OpenedStorageArea, RendererHostMsg, StorageChange};
+use protocol::TabId;
+use protocol::renderer::{
+    OpenedStorageArea, RendererHostMsg, RendererMsg, StorageChange, StorageKind,
+};
 use site::StorageKey;
 use url::{Origin, Url};
 
@@ -29,17 +35,89 @@ fn first_party(url: &str) -> StorageKey {
     StorageKey::first_party(&origin(url))
 }
 
+/// A renderer as the context sees it: its number, and what it is told.
+struct Renderer {
+    id: u64,
+    to: ToRenderer,
+    told: crossbeam_channel::Receiver<RendererMsg>,
+    /// What it was told before an answer it waited for.
+    kept: std::cell::RefCell<Vec<RendererMsg>>,
+}
+
+impl Renderer {
+    fn new(id: u64) -> Self {
+        let (tell, told) = crossbeam_channel::unbounded();
+        Self {
+            id,
+            to: Arc::new(move |msg| {
+                let _ = tell.send(msg);
+            }),
+            told,
+            kept: std::cell::RefCell::default(),
+        }
+    }
+
+    /// What the context answers its frame of `key` in tab `tab`'s storage
+    /// of `kind`; what it was told before, kept.
+    fn open_kind(
+        &self,
+        context: &DomStorageContext,
+        kind: StorageKind,
+        tab: TabId,
+        key: &StorageKey,
+    ) -> Option<OpenedStorageArea> {
+        context.open(self.id, self.to.clone(), kind, tab, key.clone(), 77);
+        loop {
+            match self
+                .told
+                .recv_timeout(TIMEOUT)
+                .expect("the context answers")
+            {
+                RendererMsg::StorageAreaOpened {
+                    request_id: 77,
+                    area,
+                } => return area,
+                msg => self.kept.borrow_mut().push(msg),
+            }
+        }
+    }
+
+    fn open(&self, context: &DomStorageContext, key: &StorageKey) -> Option<OpenedStorageArea> {
+        self.open_kind(context, StorageKind::Local, TabId(0), key)
+    }
+
+    /// The changes it has been told of so far: each `StorageAreaChanged`'s
+    /// area, change, old value, whether it changed, and source.
+    fn changes(&self) -> Vec<(u64, StorageChange, Option<String>, bool, Option<u64>)> {
+        let kept: Vec<RendererMsg> = self.kept.borrow_mut().drain(..).collect();
+        kept.into_iter()
+            .chain(self.told.try_iter())
+            .filter_map(|msg| match msg {
+                RendererMsg::StorageAreaChanged {
+                    area,
+                    change,
+                    old_value,
+                    changed,
+                    url,
+                    source,
+                } => {
+                    assert_eq!(url, "https://a.example/page");
+                    Some((area, change, old_value, changed, source))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+}
+
 /// What the context answers renderer `renderer`'s frame of `key`.
 fn open(context: &DomStorageContext, renderer: u64, key: &StorageKey) -> Option<OpenedStorageArea> {
-    let (answer, answered) = crossbeam_channel::bounded(1);
-    context.open(
-        renderer,
-        key.clone(),
-        Box::new(move |area| {
-            let _ = answer.send(area);
-        }),
-    );
-    answered.recv_timeout(TIMEOUT).expect("the context answers")
+    Renderer::new(renderer).open(context, key)
+}
+
+/// Renderer `renderer`'s change, by its `Storage` 5 of a page.
+fn change(context: &DomStorageContext, renderer: u64, area: u64, made: StorageChange) {
+    context.change(renderer, area, made, 5, "https://a.example/page".to_owned());
 }
 
 fn set(key: &str, value: &str) -> StorageChange {
@@ -68,10 +146,11 @@ fn a_renderer_gets_an_areas_items_once() {
     let key = first_party("https://a.example/");
     let first = open(&context, 1, &key).unwrap();
     assert_eq!(first.items, items(&[]));
-    context.change(1, first.area, set("b", "2"));
-    context.change(1, first.area, set("a", "1"));
-    context.change(1, first.area, set("c", "3"));
-    context.change(
+    change(&context, 1, first.area, set("b", "2"));
+    change(&context, 1, first.area, set("a", "1"));
+    change(&context, 1, first.area, set("c", "3"));
+    change(
+        &context,
         1,
         first.area,
         StorageChange::Remove {
@@ -86,12 +165,12 @@ fn a_renderer_gets_an_areas_items_once() {
         })
     );
     // Not renderer 2's area, nor one there is.
-    context.change(2, first.area, set("x", "no"));
-    context.change(1, first.area.wrapping_add(100), set("x", "no"));
+    change(&context, 2, first.area, set("x", "no"));
+    change(&context, 1, first.area.wrapping_add(100), set("x", "no"));
     let second = open(&context, 2, &key).unwrap();
     assert_ne!(second.area, first.area);
     assert_eq!(second.items, items(&[("a", "1"), ("b", "2")]));
-    context.change(2, second.area, StorageChange::Clear);
+    change(&context, 2, second.area, StorageChange::Clear);
     assert_eq!(open(&context, 3, &key).unwrap().items, items(&[]));
 }
 
@@ -113,7 +192,7 @@ fn each_key_has_items_of_its_own() {
     for (index, key) in keys.iter().enumerate() {
         let area = open(&context, 1, key).unwrap();
         assert_eq!(area.items, items(&[]), "{key:?}");
-        context.change(1, area.area, set("k", &index.to_string()));
+        change(&context, 1, area.area, set("k", &index.to_string()));
     }
     for (index, key) in keys.iter().enumerate() {
         assert_eq!(
@@ -132,13 +211,13 @@ fn a_renderer_that_forgot_its_areas_gets_them_again() {
     let context = DomStorageContext::new(&Profile::in_memory()).unwrap();
     let key = first_party("https://a.example/");
     let area = open(&context, 1, &key).unwrap().area;
-    context.change(1, area, set("k", "v"));
+    change(&context, 1, area, set("k", "v"));
     context.forget(1);
     let again = open(&context, 1, &key).unwrap();
     assert_ne!(again.area, area);
     assert_eq!(again.items, items(&[("k", "v")]));
     // The old number is no area of the renderer's now.
-    context.change(1, area, set("k", "old"));
+    change(&context, 1, area, set("k", "old"));
     context.forget(1);
     assert_eq!(open(&context, 1, &key).unwrap().items, items(&[("k", "v")]));
 }
@@ -159,9 +238,10 @@ fn the_profiles_folder_keeps_the_items() {
         let profile = Profile::open(&dir).unwrap();
         let context = DomStorageContext::new(&profile).unwrap();
         let area = open(&context, 1, &key).unwrap().area;
-        context.change(1, area, set("kept", "yes"));
-        context.change(1, area, set("gone", "soon"));
-        context.change(
+        change(&context, 1, area, set("kept", "yes"));
+        change(&context, 1, area, set("gone", "soon"));
+        change(
+            &context,
             1,
             area,
             StorageChange::Remove {
@@ -169,13 +249,13 @@ fn the_profiles_folder_keeps_the_items() {
             },
         );
         let opaque = open(&context, 1, &in_opaque).unwrap();
-        context.change(1, opaque.area, set("kept", "no"));
+        change(&context, 1, opaque.area, set("kept", "no"));
         assert_eq!(
             open(&context, 2, &in_opaque).unwrap().items,
             items(&[("kept", "no")])
         );
         for index in 0..500 {
-            context.change(1, area, set(&format!("many {index:03}"), "v"));
+            change(&context, 1, area, set(&format!("many {index:03}"), "v"));
         }
     }
     assert!(dir.join("LocalStorage").is_file());
@@ -190,6 +270,128 @@ fn the_profiles_folder_keeps_the_items() {
         [&Url::parse("data:text/html,").unwrap().origin()],
     );
     assert_eq!(open(&context, 1, &other).unwrap().items, items(&[]));
+    drop(context);
+    drop(profile);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Every renderer with a `localStorage` area is told each change, in
+/// order: the value before, whether it changed anything; the one that
+/// made it with its `Storage`'s number. One that set a value it had, or
+/// removed or cleared nothing, is told it changed nothing.
+#[test]
+fn each_renderer_with_an_area_is_told_its_changes() {
+    let context = DomStorageContext::new(&Profile::in_memory()).unwrap();
+    let key = first_party("https://a.example/");
+    let (one, two, other) = (Renderer::new(1), Renderer::new(2), Renderer::new(3));
+    let area = one.open(&context, &key).unwrap().area;
+    let theirs = two.open(&context, &key).unwrap().area;
+    other
+        .open(&context, &first_party("https://b.example/"))
+        .unwrap();
+    change(&context, 1, area, set("k", "v"));
+    change(&context, 1, area, set("k", "v"));
+    change(&context, 1, area, set("k", "w"));
+    change(
+        &context,
+        1,
+        area,
+        StorageChange::Remove {
+            key: "k".to_owned(),
+        },
+    );
+    change(
+        &context,
+        1,
+        area,
+        StorageChange::Remove {
+            key: "k".to_owned(),
+        },
+    );
+    change(&context, 1, area, StorageChange::Clear);
+    // Its answer comes after the changes before it.
+    two.open(&context, &key);
+    let told = |area, source| {
+        vec![
+            (area, set("k", "v"), None, true, source),
+            (area, set("k", "v"), Some("v".to_owned()), false, source),
+            (area, set("k", "w"), Some("v".to_owned()), true, source),
+            (
+                area,
+                StorageChange::Remove {
+                    key: "k".to_owned(),
+                },
+                Some("w".to_owned()),
+                true,
+                source,
+            ),
+            (
+                area,
+                StorageChange::Remove {
+                    key: "k".to_owned(),
+                },
+                None,
+                false,
+                source,
+            ),
+            (area, StorageChange::Clear, None, false, source),
+        ]
+    };
+    assert_eq!(two.changes(), told(theirs, None));
+    assert_eq!(one.changes(), told(area, Some(5)));
+    assert_eq!(other.changes(), []);
+}
+
+/// Each tab has a `sessionStorage` of its own, a key's area in it apart
+/// from its `localStorage`; no renderer is told its changes; it lasts as
+/// long as its tab (a renderer launched again has it), not on disk.
+#[test]
+fn each_tab_has_a_session_storage_of_its_own() {
+    let dir = scratch("session");
+    let key = first_party("https://a.example/");
+    {
+        let profile = Profile::open(&dir).unwrap();
+        let context = DomStorageContext::new(&profile).unwrap();
+        let (one, two) = (Renderer::new(1), Renderer::new(2));
+        let session = |renderer: &Renderer, tab| {
+            renderer
+                .open_kind(&context, StorageKind::Session, TabId(tab), &key)
+                .unwrap()
+        };
+        let area = session(&one, 1).area;
+        change(&context, 1, area, set("tab", "one"));
+        assert_eq!(one.open(&context, &key).unwrap().items, items(&[]));
+        assert_eq!(session(&two, 2).items, items(&[]));
+        // Tab 1's renderer launched again.
+        context.forget(1);
+        let again = session(&Renderer::new(3), 1);
+        assert_eq!(again.items, items(&[("tab", "one")]));
+        assert_eq!(one.changes(), []);
+        context.forget_namespace(TabId(1));
+        assert_eq!(session(&Renderer::new(4), 1).items, items(&[]));
+        assert_eq!(session(&Renderer::new(5), 2).items, items(&[]));
+        let opaque = Url::parse("data:text/html,").unwrap().origin();
+        assert_eq!(
+            Renderer::new(6).open_kind(
+                &context,
+                StorageKind::Session,
+                TabId(1),
+                &StorageKey::first_party(&opaque)
+            ),
+            None
+        );
+        change(&context, 3, again.area, set("written", "no"));
+    }
+    let profile = Profile::open(&dir).unwrap();
+    let context = DomStorageContext::new(&profile).unwrap();
+    assert_eq!(
+        Renderer::new(1)
+            .open_kind(&context, StorageKind::Session, TabId(1), &key)
+            .unwrap()
+            .items,
+        items(&[])
+    );
+    assert_eq!(open(&context, 1, &key).unwrap().items, items(&[]));
     drop(context);
     drop(profile);
     let _ = std::fs::remove_dir_all(&dir);
@@ -407,4 +609,167 @@ onload = () => {
         "done null"
     );
     web_contents.shutdown();
+}
+
+/// A page that writes what `storage` events its window gets to its title,
+/// as JSON: each event's key, old and new value, URL's path, and which
+/// storage it is of.
+const LISTENER: &str = r#"<!DOCTYPE html><script>
+const seen = [];
+addEventListener('storage', (e) => {
+  seen.push([e.key, e.oldValue, e.newValue, new URL(e.url).pathname,
+    e.storageArea === localStorage ? 'local' : e.storageArea === sessionStorage ? 'session' : null,
+    e instanceof StorageEvent, e.isTrusted, e.bubbles, e.cancelable]);
+  document.title = JSON.stringify(seen);
+});
+document.title = 'listening';
+</script>"#;
+
+/// A `localStorage` change fires `storage` at the windows of its key in
+/// another tab (with the key, the values, the URL of the page that made
+/// it and its own `localStorage`), not at the window that made it; a
+/// change that changes nothing fires none; a clear's key and values are
+/// null.
+#[test]
+fn a_local_storage_change_fires_storage_in_another_tab() {
+    let server = server(&[
+        ("/listen", Route::ok("text/html", LISTENER)),
+        (
+            "/write",
+            Route::ok(
+                "text/html",
+                r#"<!DOCTYPE html><script>
+let own = 0;
+addEventListener('storage', () => own++);
+localStorage.k = 'v';
+localStorage.k = 'v';
+localStorage.setItem('k', 'w');
+localStorage.removeItem('missing');
+localStorage.clear();
+setTimeout(() => document.title = 'own ' + own, 300);
+</script>"#,
+            ),
+        ),
+    ]);
+    let partition = partition(&Profile::in_memory());
+    let (mut listener, listener_rx) = tab_in(partition.clone());
+    listener.navigate(server.url("/listen"));
+    titles_until(&mut listener, &listener_rx, |title| title == "listening");
+    let (mut writer, writer_rx) = tab_in(partition);
+    writer.navigate(server.url("/write"));
+    assert_eq!(
+        titles_until(&mut writer, &writer_rx, |title| title.starts_with("own")),
+        "own 0"
+    );
+    let event = |key: &str, old: &str, new: &str| {
+        format!(r#"[{key},{old},{new},"/write","local",true,true,false,false]"#)
+    };
+    let expected = format!(
+        "[{},{},{}]",
+        event(r#""k""#, "null", r#""v""#),
+        event(r#""k""#, r#""v""#, r#""w""#),
+        event("null", "null", "null"),
+    );
+    assert_eq!(
+        titles_until(&mut listener, &listener_rx, |title| title.len()
+            >= expected.len()),
+        expected
+    );
+    listener.shutdown();
+    writer.shutdown();
+}
+
+/// Within a tab, a window of the key that never read its storage hears of
+/// a change all the same, its `storage` listener (here a `<body
+/// onstorage>`) having opened it: of `localStorage` through the browser,
+/// of `sessionStorage` at once; the window that made the change doesn't.
+#[test]
+fn a_listener_opens_its_windows_storage_to_hear_of_changes() {
+    let page = r#"<!DOCTYPE html>
+<iframe srcdoc="<body onstorage=&quot;parent.seen.push([event.key, event.newValue, event.storageArea === localStorage ? 'local' : 'session'])&quot;>"></iframe>
+<script>
+window.seen = [];
+let own = 0;
+onstorage = () => own++;
+onload = () => {
+  localStorage.l = '1';
+  sessionStorage.s = '2';
+  setTimeout(() => document.title = JSON.stringify([seen, own]), 300);
+};
+</script>"#;
+    let server = server(&[("/", Route::ok("text/html", page))]);
+    let (mut web_contents, host_rx) = tab_in(partition(&Profile::in_memory()));
+    web_contents.navigate(server.url("/"));
+    let title = titles_until(&mut web_contents, &host_rx, |title| title.starts_with('['));
+    // The session one at once, the local one once the browser told back.
+    assert_eq!(title, r#"[[["s","2","session"],["l","1","local"]],0]"#);
+    web_contents.shutdown();
+}
+
+/// A tab's `sessionStorage` is its own: its next page of the origin has
+/// it, another tab of the profile doesn't (one opened after the change
+/// too), and a change in it fires no `storage` in another tab.
+#[test]
+fn a_tabs_session_storage_is_its_own() {
+    let server = server(&[
+        ("/listen", Route::ok("text/html", LISTENER)),
+        (
+            "/write",
+            Route::ok(
+                "text/html",
+                "<script>sessionStorage.mine = 'yes'; localStorage.done = '1'; document.title = 'written'</script>",
+            ),
+        ),
+        (
+            "/read",
+            Route::ok(
+                "text/html",
+                "<script>document.title = 'read ' + sessionStorage.mine + ' ' + sessionStorage.length</script>",
+            ),
+        ),
+    ]);
+    let partition = partition(&Profile::in_memory());
+    let partition_of_test = partition.clone();
+    let (mut listener, listener_rx) = tab_in(partition.clone());
+    listener.navigate(server.url("/listen"));
+    titles_until(&mut listener, &listener_rx, |title| title == "listening");
+    let (mut writer, writer_rx) = tab_in(partition.clone());
+    writer.navigate(server.url("/write"));
+    titles_until(&mut writer, &writer_rx, |title| title == "written");
+    writer.navigate(server.url("/read"));
+    assert_eq!(
+        titles_until(&mut writer, &writer_rx, |title| title.starts_with("read")),
+        "read yes 1"
+    );
+    // The listener hears of the `localStorage` change alone.
+    assert_eq!(
+        titles_until(&mut listener, &listener_rx, |title| title.starts_with('[')),
+        r#"[["done",null,"1","/write","local",true,true,false,false]]"#
+    );
+    listener.navigate(server.url("/read"));
+    assert_eq!(
+        titles_until(&mut listener, &listener_rx, |title| title
+            .starts_with("read")),
+        "read undefined 0"
+    );
+    let (mut later, later_rx) = tab_in(partition);
+    later.navigate(server.url("/read"));
+    assert_eq!(
+        titles_until(&mut later, &later_rx, |title| title.starts_with("read")),
+        "read undefined 0"
+    );
+    listener.shutdown();
+    let tab = writer.tab();
+    writer.shutdown();
+    later.shutdown();
+    // The closed tab's `sessionStorage` is gone with it.
+    let session = Renderer::new(1_000)
+        .open_kind(
+            partition_of_test.dom_storage(),
+            StorageKind::Session,
+            tab,
+            &StorageKey::first_party(&Url::parse(&server.url("/")).unwrap().origin()),
+        )
+        .unwrap();
+    assert_eq!(session.items, items(&[]));
 }

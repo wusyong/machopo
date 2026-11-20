@@ -28,8 +28,11 @@ pub struct Window {
     pub(crate) history: Member<crate::History>,
     /// Its `navigator`, once asked for.
     pub(crate) navigator: Member<crate::Navigator>,
-    /// Its `localStorage`, once it has one (`storage`).
+    /// Its `localStorage` and `sessionStorage`, once it has them
+    /// (`storage`), and the `storage` events queued at it, in order.
     pub(crate) local_storage: Member<crate::Storage>,
+    pub(crate) session_storage: Member<crate::Storage>,
+    pub(crate) storage_events: LocalExternal<Cell<Vec<crate::StorageEventInfo>>>,
     pub(crate) navigation_timing: LocalExternal<Cell<Option<Box<crate::NavigationTiming>>>>,
     /// The `hashchange`s queued, their URLs before and after, in order
     /// (`history`'s `queue_hash_change`); taken and put back.
@@ -142,6 +145,7 @@ pub(crate) const WAKE_LOCK: u8 = 11;
 const WINDOW_LOAD: u8 = 12;
 pub(crate) const BLOB_READ: u8 = 13;
 pub(crate) const WORKER_ERROR: u8 = 14;
+pub(crate) const STORAGE_EVENT: u8 = 15;
 
 /// What an element task does (`Cx::take_element_task`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -158,6 +162,9 @@ pub enum ElementTaskKind {
     /// A `hashchange` fired at the window (its document the task's
     /// element), from the first URL to the second.
     HashChange(DomString, DomString),
+    /// A `storage` event fired at the window (its document the task's
+    /// element).
+    Storage(crate::StorageEventInfo),
     /// A step of a `FileReader`'s read (the task's target), of the read the
     /// number names (`Cx::file_reader_reading`).
     FileRead(u64, crate::ReadStep),
@@ -286,6 +293,8 @@ impl<'gc> Cx<'_, 'gc> {
                 history: None,
                 navigator: None,
                 local_storage: None,
+                session_storage: None,
+                storage_events: LocalExternal::new(Cell::new(Vec::new())),
                 navigation_timing: LocalExternal::new(Cell::new(None)),
                 hash_changes: LocalExternal::new(Cell::new(Vec::new())),
                 listeners: None,
@@ -714,6 +723,11 @@ impl<'gc> Cx<'_, 'gc> {
                 answered: data & 1 == 1,
             },
             WINDOW_LOAD => ElementTaskKind::WindowLoad,
+            STORAGE_EVENT => ElementTaskKind::Storage(
+                self.context_window(context)
+                    .and_then(|window| self.take_storage_event(window))
+                    .expect("a storage event queued with its task: a window's"),
+            ),
             BLOB_READ => ElementTaskKind::BlobRead(data),
             WORKER_ERROR => ElementTaskKind::WorkerError(
                 task.target

@@ -10,7 +10,7 @@ use protocol::network::{
 };
 use protocol::renderer::{
     BeginNavigationKind, HistoryEntryParams, NavigationLoad, NavigationTimingType, RedirectHop,
-    RendererHostMsg, RendererMsg, VisualProperties, WindowOpenDisposition,
+    RendererHostMsg, RendererMsg, StorageKind, VisualProperties, WindowOpenDisposition,
 };
 use protocol::viz::{
     BeginFrameArgs, BeginFrameObserver, DisplayMsg, FrameSinkId, LocalSurfaceId,
@@ -1539,24 +1539,31 @@ impl WebContents {
         });
     }
 
-    /// The renderer's frame `frame` opens its document's `localStorage`
-    /// (`RenderFrameHostImpl::BindDomStorage` with the frame's storage
-    /// key, which the renderer doesn't say): the area goes to the renderer
-    /// as the answer `request_id` it waits for; none for a frame that has
-    /// gone (its iframe removed as the message came), which is to have its
-    /// answer all the same.
-    fn open_local_storage(&self, frame: FrameToken, request_id: u64) {
-        let to_renderer = self.process.sender();
-        let reply: crate::OpenReply = Box::new(move |area| {
-            let _ = to_renderer.send(RendererMsg::LocalStorageOpened { request_id, area });
+    /// The renderer's frame `frame` opens its document's `localStorage` or
+    /// `sessionStorage` (`kind`; `RenderFrameHostImpl::BindDomStorage` with
+    /// the frame's storage key, which the renderer doesn't say, and this
+    /// tab's namespace): the area goes to the renderer as the answer
+    /// `request_id` it waits for; none for a frame that has gone (its
+    /// iframe removed as the message came), which is to have its answer
+    /// all the same.
+    fn open_storage_area(&self, frame: FrameToken, kind: StorageKind, request_id: u64) {
+        let sender = self.process.sender();
+        let to_renderer: crate::ToRenderer = Arc::new(move |msg| {
+            let _ = sender.send(msg);
         });
         match self.frame_tree.storage_key(frame) {
-            Some(key) => {
-                self.partition
-                    .dom_storage()
-                    .open(self.process.renderer_id(), key.clone(), reply)
-            }
-            None => reply(None),
+            Some(key) => self.partition.dom_storage().open(
+                self.process.renderer_id(),
+                to_renderer,
+                kind,
+                self.tab,
+                key.clone(),
+                request_id,
+            ),
+            None => to_renderer(RendererMsg::StorageAreaOpened {
+                request_id,
+                area: None,
+            }),
         }
     }
 
@@ -1696,8 +1703,12 @@ impl WebContents {
                     .network()
                     .forget_blob_url(self.process.renderer_id(), url);
             }
-            RendererHostMsg::OpenLocalStorage { frame, request_id } => {
-                self.open_local_storage(*frame, *request_id);
+            RendererHostMsg::OpenStorageArea {
+                frame,
+                kind,
+                request_id,
+            } => {
+                self.open_storage_area(*frame, *kind, *request_id);
             }
             RendererHostMsg::DidFinishLoad {
                 failed_subresources,
@@ -1764,6 +1775,8 @@ impl WebContents {
         drop(self.frame_tree.take_any_navigation(self.frame_tree.root()));
         self.frame_tree.reset();
         self.process.shutdown();
+        // The tab's `sessionStorage` goes with it.
+        self.partition.dom_storage().forget_namespace(self.tab);
         // No renderer is launched again: the messages' way out goes, its
         // last message (`RendererGone`) delivered as the threads ended.
         *self

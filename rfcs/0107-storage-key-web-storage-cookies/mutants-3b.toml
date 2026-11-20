@@ -1,0 +1,123 @@
+# Step 3b: `storage` events and `sessionStorage`. The browser tells every
+# renderer with a `localStorage` area its changes (the one that made it
+# with its `Storage`'s number), keeps each tab's `sessionStorage` in
+# memory; the DOM takes the news in (not over a change made here and not
+# told back yet), fires `storage` at the windows of the area but the
+# source's (a `sessionStorage` change's at once), and a `storage`
+# listener opens its window's areas.
+test = [
+    "sh", "-c",
+    "cargo test -q -p dom --test it storage:: && cargo test -q -p browser --test it dom_storage::",
+]
+timeout = 1800
+
+[[mutant]]
+name = "a sessionStorage change fires nothing"
+file = "crates/dom/src/storage.rs"
+from = '''            self.queue_storage_events(area, Some(source), &event);
+        }'''
+to = '''            let _ = event;
+        }'''
+
+[[mutant]]
+name = "a localStorage change made here isn't pending"
+file = "crates/dom/src/storage.rs"
+from = '''                entry.pending.push_back(mutation.key().map(str::to_owned));'''
+to = ''''''
+
+[[mutant]]
+name = "a change told back stays pending"
+file = "crates/dom/src/storage.rs"
+from = '''                entry.pending.pop_front();'''
+to = ''''''
+
+[[mutant]]
+name = "a clear made here doesn't hold another's change back"
+file = "crates/dom/src/storage.rs"
+from = '''.any(|pending| pending.as_deref().is_none_or(|pending| pending == key))'''
+to = '''.any(|pending| pending.as_deref() == Some(key))'''
+
+[[mutant]]
+name = "another's clear clears the keys changed here"
+file = "crates/dom/src/storage.rs"
+from = '''                    entry.items.retain(|key, _| kept.contains(key));'''
+to = '''                    let _ = kept;
+                    entry.items.clear();'''
+
+[[mutant]]
+name = "the source's window gets its own event"
+file = "crates/dom/src/storage.rs"
+from = '''            if storage.area.get() != area || Some(storage.source.get()) == source {'''
+to = '''            if storage.area.get() != area {'''
+
+[[mutant]]
+name = "a change that changed nothing fires"
+file = "crates/dom/src/storage.rs"
+from = '''        if !known || !changed {'''
+to = '''        if !known {'''
+
+[[mutant]]
+name = "the browser's news is taken into a sessionStorage area"
+file = "crates/dom/src/storage.rs"
+from = '''            if entry.kind != Some(StorageKind::Local) {
+                return false;
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "a storage listener opens nothing"
+file = "crates/dom/src/event.rs"
+from = '''            self.storage_listened(window);'''
+to = ''''''
+
+[[mutant]]
+name = "the windows given listeners don't get their areas"
+file = "crates/dom_js/src/frames.rs"
+from = '''    dom_api::open_for_listeners(&mut crate::listeners::Host { scope });'''
+to = ''''''
+
+[[mutant]]
+name = "an event's storageArea is the other kind's"
+file = "crates/dom_api/src/storage.rs"
+from = '''            cx.window_storage(window, info.kind),'''
+to = '''            cx.window_storage(window, StorageKind::Local),'''
+
+[[mutant]]
+name = "the renderer that made a change isn't told it did"
+file = "crates/browser/src/dom_storage.rs"
+from = '''                source: (other == renderer).then_some(source),'''
+to = '''                source: None,'''
+
+[[mutant]]
+name = "a sessionStorage change is told to renderers"
+file = "crates/browser/src/dom_storage.rs"
+from = '''        if place.namespace.is_some() {
+            // `sessionStorage`'s events are the renderer's: the tab's
+            // documents are all in it.
+            return;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a value set again is told as a change"
+file = "crates/browser/src/dom_storage.rs"
+from = '''                let changed = old.as_ref() != Some(value);'''
+to = '''                let changed = true;'''
+
+[[mutant]]
+name = "a tab's sessionStorage lasts after it closes"
+file = "crates/browser/src/web_contents.rs"
+from = '''        self.partition.dom_storage().forget_namespace(self.tab);'''
+to = ''''''
+
+[[mutant]]
+name = "a tab's namespace is the profile's"
+file = "crates/browser/src/dom_storage.rs"
+from = '''            StorageKind::Session => Some(tab),'''
+to = '''            StorageKind::Session => Some(TabId(0)),'''
+
+[[mutant]]
+name = "the renderer drops the browser's news"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                    engine.storage_area_changed(area, mutation, old_value, changed, url, source);'''
+to = '''                    let _ = (engine, area, mutation, old_value, changed, url, source);'''
