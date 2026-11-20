@@ -22,6 +22,7 @@ compositor = { path = "crates/compositor" }
 viz = { path = "crates/viz" }
 bindings = { path = "crates/bindings" }
 ipc = { path = "crates/ipc" }
+site = { path = "crates/site" }
 # The DOM's GC: machopo's own project (not a fork), next to the repo at the
 # commit `third_party.toml` pins; its docs are in ../third_party/elise/docs.
 elise = { path = "../third_party/elise/crates/elise" }
@@ -160,6 +161,9 @@ flate2 = "1"
 brotli-decompressor = "6"
 tokio = { version = "1", features = ["rt", "sync"] }
 url = "2"
+# The public suffix list, compiled in: what a host's registrable domain is
+# (`site`). A new list is a new version of it.
+psl = "2"
 # `data:` URLs, by the Fetch Standard's processor (`net`).
 data-url = "0.3"
 encoding_rs = "0.8"

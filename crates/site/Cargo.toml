@@ -1,0 +1,19 @@
+[package]
+name = "site"
+description = "What a document's data is kept by: its site (HTML's \"obtain a site\", Chromium's net::SchemefulSite) and a host's registrable domain."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# No doc examples: skip rustdoc's pass in `cargo test`.
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+psl.workspace = true
+url.workspace = true

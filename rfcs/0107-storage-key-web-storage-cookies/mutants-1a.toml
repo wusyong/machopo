@@ -1,0 +1,49 @@
+# Step 1a: a host's registrable domain (the public suffix list's, private
+# part and unknown top-level domains included; none for what is no name)
+# and an origin's site (its scheme and registrable domain, or host).
+test = ["cargo", "test", "-q", "-p", "site"]
+timeout = 600
+
+[[mutant]]
+name = "a name with an empty label has a registrable domain"
+file = "crates/site/src/lib.rs"
+from = '''    if labels.split('.').any(str::is_empty) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "a name's last dot is an empty label"
+file = "crates/site/src/lib.rs"
+from = '''    let labels = name.strip_suffix('.').unwrap_or(name);'''
+to = '''    let labels = name;'''
+
+[[mutant]]
+name = "the registrable domain is the whole name"
+file = "crates/site/src/lib.rs"
+from = '''    name.get(name.len().checked_sub(length)?..)'''
+to = '''    name.get(length.saturating_sub(length)..)'''
+
+[[mutant]]
+name = "a site is its origin's host"
+file = "crates/site/src/lib.rs"
+from = '''                    Host::Domain(name) => registrable_domain(&Host::Domain(name.as_str()))
+                        .unwrap_or(name)'''
+to = '''                    Host::Domain(name) => None::<&str>
+                        .unwrap_or(name)'''
+
+[[mutant]]
+name = "a site has no scheme"
+file = "crates/site/src/lib.rs"
+from = '''                    scheme: scheme.as_str().into(),'''
+to = '''                    scheme: "https".into(),'''
+
+[[mutant]]
+name = "an opaque site is written as a tuple's"
+file = "crates/site/src/lib.rs"
+from = '''            Repr::Opaque(_) => "null".to_owned(),'''
+to = '''            Repr::Opaque(_) => "://".to_owned(),'''
+
+[[mutant]]
+name = "an opaque site isn't opaque"
+file = "crates/site/src/lib.rs"
+from = '''        matches!(self.0, Repr::Opaque(_))'''
+to = '''        !matches!(self.0, Repr::Opaque(_))'''

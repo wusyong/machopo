@@ -78,7 +78,7 @@ cookie 存在 `net` 那一側（Chromium 的 `CookieMonster` 在 network service
 
 1. ~~範圍~~：基礎、Web Storage、cookie 都做，分階段（第 1 條）。
 2. ~~key 的形狀~~：第三方的儲存照最上層的網站分開（第 2 條）。
-3. **public suffix list 從哪來**：`psl` crate（清單編進去，跟著 crate 的版本更新）、`publicsuffix` crate（執行時讀一份清單）、或把清單放進 repo 自己查（Chromium 把 `effective_tld_names.dat` 編成 DAFSA）。到第 1 階段比。
+3. ~~public suffix list 從哪來~~：`psl` crate（第 3 條）。
 4. **profile**：資料夾的位置和 `--user-data-dir`；哪些模式寫磁碟；同一個 profile 開第二個 machopo 時怎麼辦。
 5. **磁碟上的格式**：SQLite（`rusqlite`，帶 C 的原始碼；Chromium 的 cookie 用它）、純 Rust 的嵌入式資料庫、或自己的檔案格式（一份 area 一個檔案、整份重寫）。要比當掉時會不會壞、寫入的成本、依賴。
 6. **renderer 怎麼同步等 Browser**：訊息帶編號、main thread 在自己的 queue 上等那一則回答（其他 task 留著，和 worker 的 `importScripts` 一樣），或訊息帶一個回答用的 channel（不能序列化，是邊界的例外）。拆 process 時兩者都要換成同步的 IPC。
@@ -101,7 +101,7 @@ cookie 存在 `net` 那一側（Chromium 的 `CookieMonster` 在 network service
 
 2026-11-20 的看法，每個階段開始時再定那一段要決定的事：
 
-1. **網站和 key**：public suffix list、`Site`、`StorageKey`，frame 樹在 commit 時算出每個 frame 的 key。看得到的只有 DevTools 的 `domainAndRegistry`。
+1. **網站和 key**：public suffix list、`Site`、`StorageKey`，frame 樹在 commit 時算出每個 frame 的 key。看得到的只有 DevTools 的 `domainAndRegistry`。分三段：1a `site` crate 的 `Site` 和 registrable domain；1b `StorageKey`，frame 樹在 commit 時算；1c DevTools 的 `domainAndRegistry`、檢查和文件。
 2. **profile 和磁碟**：資料夾、`--user-data-dir`、哪些模式只在記憶體、磁碟上的格式和它的讀寫。
 3. **Web Storage**：同步等 Browser 的路、`localStorage`、`sessionStorage`、`storage` 事件、上限。
 4. **`net` 的 cookie**：請求的來歷、cookie 的儲存、`Set-Cookie` 和 `Cookie`、`SameSite`、持久。
@@ -132,10 +132,12 @@ cookie 存在 `net` 那一側（Chromium 的 `CookieMonster` 在 network service
 
 1. **範圍是基礎、Web Storage 和 cookie，分階段**（2026-11-20）：一份 RFC 定下網站、key、profile 和同步讀取的路，並用 Web Storage 和 cookie 兩種功能驗證。對照 Chromium：儲存用 `StorageKey`，cookie 照網域存、分區的另外帶最上層的網站，兩者都掛在 profile 的 `StoragePartition` 底下。不選只做 Web Storage、cookie 下一份再做：比較小，中途比較好插別的工作，但 cookie 那一半的 key 要到下一份才被實作驗證。不選只做 cookie：對網站的幫助最大，但驗證不到 `StorageKey`。
 2. **儲存的 key 是 origin、最上層的網站和 ancestor chain bit**（2026-11-20）：嵌在別的網站底下的第三方 iframe 有自己的一份儲存，和它自己當最上層時的、和嵌在另一個網站底下時的都不是同一份；origin 和最上層同一個網站、但中間隔著別的網站的 frame 時（ancestor chain bit）也算第三方。沒有 nonce（machopo 沒有 credentialless 的 iframe）。Browser 在文件 commit 時沿著 frame 樹算一次。對照 Chromium：`blink::StorageKey` 開著第三方儲存分區時的欄位（`origin_`、`top_level_site_`、`ancestor_chain_bit_`；`details.md`），現在是預設。不選只看 origin（Chrome 舊的行為）：最簡單，但第三方的 iframe 能用共用的儲存跨網站認出使用者，之後要分開時已經存在磁碟上的資料要搬或丟；現在還沒有任何存下來的資料，定成分開不用搬。cookie 的分區和之後的 HTTP cache 也用得到最上層的網站。
+3. **public suffix list 用 `psl` crate**（2026-11-20，第 1 階段）：清單由 crate 生成成程式碼，machopo 只呼叫它查 registrable domain，repo 裡不放清單；更新是升 crate 的版本（清單一變它就發版，`Cargo.lock` 釘住）。算網站時 private 的那一段也算（`github.io` 底下每個使用者一個網站），和 Chromium 的 `SchemefulSite` 用 `INCLUDE_PRIVATE_REGISTRIES` 一樣。2026-11-20 量的（Apple M4，`psl` 2.1.258）：release 第一次編 8 秒，執行檔多約 1 MB，不用在啟動時解析，查一次約 20 ns。對照 Chromium：自己的 repo 放一份 `effective_tld_names.dat`、編譯時轉成查詢用的結構，不靠外部的函式庫。不選 `publicsuffix` crate 加 repo 裡的清單檔（約 340 KB）：清單在自己手上、換清單不用等發版，但第一次用時解析約 11 ms、查一次約 66 ns，要多一個更新的腳本，crate 最後一版是 2024 年，而且既加依賴又要自己放清單。不選不加依賴、自己寫解析和查詢（最接近 Chromium）：規則不複雜（一般的後綴、萬用字元、例外，分 ICANN 和 private），但多一份要維護的程式，現成的已經做好。
+4. **網站和 key 的型別在新的 crate `site`**（2026-11-20，第 1 階段）：`Site`、`StorageKey` 和算網站的函式放在一個小 crate，依賴 `url` 和 `psl`；`net`（之後的 cookie）、`browser`（frame 樹）、`renderer`（DevTools 的 `domainAndRegistry`）都用它，`psl` 只進這一個 crate。對照 Chromium：`SchemefulSite` 在 `//net/base`、`StorageKey` 在 `blink/public/common`，都是 browser 和 renderer 兩邊連結的共用程式；machopo 沒有這樣的共用層，這個 crate 是那個角色。不選放進 `protocol`：三方本來都依賴它，但它只定義資料（相當於 `.mojom`），現在連 `url` 都不依賴，要多放「從 origin 算網站」的邏輯和兩個依賴。不選照 Chromium 的位置拆到 `net` 和 `browser`：renderer 照 process 的邊界不依賴 `net`，DevTools 的欄位要由 Browser 算好送過去，renderer 自己 commit 的 `about:blank`、`srcdoc` 還要另外處理。
 
 ## 待決定
 
-「要決定的事（依序）」的第 3 到 12 個，每個階段開始前定那一段的。
+「要決定的事（依序）」的第 4 到 12 個，每個階段開始前定那一段的。
 
 ## 之後的可能
 
