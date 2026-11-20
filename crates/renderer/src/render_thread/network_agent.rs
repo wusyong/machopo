@@ -405,8 +405,10 @@ impl NetworkAgent {
 
     /// The main frame's navigation `navigation_id` committed its document,
     /// `body`, of `mime_type`, its load as `loaded`: the rest of the request
-    /// the browser told of (`Network.dataReceived`, `loadingFinished`; its
-    /// id is the navigation's), and each session keeps the body.
+    /// the browser told of (`Network.dataReceived`, then `loadingFinished`,
+    /// or `loadingFailed` if its body stopped short, `canceled` if its load
+    /// was stopped, as Blink's `probe::DidFailLoading`; its id is the
+    /// navigation's), and each session keeps the body.
     pub(crate) fn did_commit_navigation(
         &self,
         navigation_id: u64,
@@ -436,17 +438,30 @@ impl NetworkAgent {
                 }),
             );
         }
-        self.tell(
-            &sessions,
-            "Network.loadingFinished",
-            &json!({
-                "requestId": id,
-                "timestamp": end,
-                "encodedDataLength": loaded
-                    .encoded_headers_length
-                    .saturating_add(encoded_body_length),
-            }),
-        );
+        match loaded.end.as_ref().and_then(|end| end.error.as_ref()) {
+            Some(error) => self.tell(
+                &sessions,
+                "Network.loadingFailed",
+                &json!({
+                    "requestId": id,
+                    "timestamp": end,
+                    "type": "Document",
+                    "errorText": format!("net::{}", error.code.name()),
+                    "canceled": error.code == protocol::network::NetErrorCode::Aborted,
+                }),
+            ),
+            None => self.tell(
+                &sessions,
+                "Network.loadingFinished",
+                &json!({
+                    "requestId": id,
+                    "timestamp": end,
+                    "encodedDataLength": loaded
+                        .encoded_headers_length
+                        .saturating_add(encoded_body_length),
+                }),
+            ),
+        }
         let text = is_text(mime_type) && std::str::from_utf8(body).is_ok();
         let mut on = self.sessions.borrow_mut();
         for state in on.values_mut() {
@@ -924,6 +939,71 @@ mod tests {
     /// Stacks are wanted once a session asks (`Network.setAttachDebugStack`),
     /// which it can't before turning `Network` on, and no more once it
     /// goes.
+    /// A navigation's load, as far as its head, that ended as `error`
+    /// says.
+    fn navigation_load(error: Option<NetErrorCode>) -> NavigationLoad {
+        NavigationLoad {
+            status: 200,
+            status_text: "OK".into(),
+            encoded_headers_length: 10,
+            timing: None,
+            redirects: Vec::new(),
+            protocol: "http/1.1".into(),
+            content_encoding: None,
+            end: Some(protocol::network::CompletionStatus {
+                error: error.map(|code| NetError::new(code, "")),
+                encoded_body_length: 4,
+                completion_time: TimeTicks::now(),
+            }),
+        }
+    }
+
+    /// A navigation's document is told of once committed: what of its body
+    /// came, then its end, a failure if its body stopped short (a load
+    /// stopped's canceled), as Blink's `probe::DidFailLoading`.
+    #[test]
+    fn a_navigations_end_is_told_as_it_was() {
+        let (agent, from) = agent();
+        agent.handle("s", &command("Network.enable", json!({})));
+        sent(&from);
+        let body = Bytes::from_static(b"<p>x");
+        for (id, error) in [
+            (1, None),
+            (2, Some(NetErrorCode::ContentDecodingFailed)),
+            (3, Some(NetErrorCode::Aborted)),
+        ] {
+            agent.did_commit_navigation(id, &body, "text/html", &navigation_load(error));
+        }
+        let told: Vec<(String, Value)> = sent(&from)
+            .into_iter()
+            .filter(|(to, _)| to == "s")
+            .map(|(_, message)| {
+                let params = &message["params"];
+                (
+                    message["method"].as_str().unwrap().to_owned(),
+                    json!([params["requestId"], params["errorText"], params["canceled"]]),
+                )
+            })
+            .collect();
+        assert_eq!(
+            told,
+            [
+                ("Network.dataReceived".to_owned(), json!(["1", null, null])),
+                ("Network.loadingFinished".to_owned(), json!(["1", null, null])),
+                ("Network.dataReceived".to_owned(), json!(["2", null, null])),
+                (
+                    "Network.loadingFailed".to_owned(),
+                    json!(["2", "net::ERR_CONTENT_DECODING_FAILED", false])
+                ),
+                ("Network.dataReceived".to_owned(), json!(["3", null, null])),
+                (
+                    "Network.loadingFailed".to_owned(),
+                    json!(["3", "net::ERR_ABORTED", true])
+                ),
+            ]
+        );
+    }
+
     #[test]
     fn stacks_are_wanted_while_a_session_asks() {
         let (agent, from) = agent();

@@ -117,6 +117,10 @@ pub(super) struct FrameDocument {
     /// JavaScript type, a `<link>`'s `href` that doesn't parse), until its
     /// `DidFinishLoad` tells the browser.
     failed: Vec<String>,
+    /// Its body stopped short (an error, or its load was stopped): its
+    /// parser is aborted once what came is parsed (HTML's "abort a
+    /// parser"), so it is complete with no `DOMContentLoaded` or `load`.
+    aborted: bool,
 }
 
 /// A `<link>`'s sheet being fetched: its element, whether it blocks
@@ -233,6 +237,7 @@ impl FrameDocument {
             initial: false,
             history_load: false,
             failed: Vec::new(),
+            aborted: false,
         }
     }
 
@@ -313,6 +318,9 @@ pub(super) struct ChildCommit<'a> {
     pub(super) origin_source: Option<NodeRoot>,
     /// Its item's state, and where its entry is in the session history.
     pub(super) history: protocol::renderer::HistoryEntryParams,
+    /// Its body stopped short: its parser is aborted once what came is
+    /// parsed.
+    pub(super) aborted: bool,
 }
 
 impl ChildFrames {
@@ -529,6 +537,7 @@ impl RenderThread {
         history: &protocol::renderer::HistoryEntryParams,
         time_origin: f64,
         timing: &crate::navigation_timing::NavigationTiming,
+        aborted: bool,
     ) {
         let _span = trace_event::info_event!("commit_navigation", %url);
         let document_id = self.new_document_id();
@@ -670,6 +679,7 @@ impl RenderThread {
         self.document = Some(FrameDocument {
             navigation_id,
             history_load: timing.navigation_type == dom::NavigationType::BackForward,
+            aborted,
             ..FrameDocument::new(
                 top,
                 None,
@@ -1334,9 +1344,10 @@ impl RenderThread {
 
     /// The browser's commit of child frame `token`'s navigation
     /// `navigation_id` (`CommitNavigation`), the renderer's `begin_id` if
-    /// it asked for it: nothing for a frame gone, or one that asked for
-    /// another since (or committed an `about:` document). Whether it
-    /// committed.
+    /// it asked for it: nothing for a frame gone, one that asked for
+    /// another since (or committed an `about:` document), or one that
+    /// shows a later navigation's document (an older commit whose body
+    /// stopped short as the later one replaced it). Whether it committed.
     pub(super) fn commit_child_navigation(
         &mut self,
         token: protocol::FrameToken,
@@ -1355,6 +1366,15 @@ impl RenderThread {
                 .is_none_or(|asked| asked.begin_id != begin_id)
         {
             tracing::debug!(url = %document.url, "dropping a stale commit of a child frame");
+            return false;
+        }
+        if self
+            .children
+            .documents
+            .iter()
+            .any(|next| next.frame == frame && next.navigation_id > navigation.navigation_id)
+        {
+            tracing::debug!(url = %document.url, "dropping a commit older than the child frame's document");
             return false;
         }
         let asked = self.children.navigations.remove(&frame);
@@ -1659,16 +1679,19 @@ impl RenderThread {
         let loader_id = navigation
             .as_ref()
             .map(|navigation| navigation.navigation_id.to_string());
-        let (navigation_id, history_load) = navigation.as_ref().map_or((0, false), |navigation| {
-            (
-                navigation.navigation_id,
-                navigation.timing.navigation_type == dom::NavigationType::BackForward,
-            )
-        });
+        let (navigation_id, history_load, aborted) =
+            navigation.as_ref().map_or((0, false, false), |navigation| {
+                (
+                    navigation.navigation_id,
+                    navigation.timing.navigation_type == dom::NavigationType::BackForward,
+                    navigation.aborted,
+                )
+            });
         self.children.documents.push(FrameDocument {
             loader_id,
             navigation_id,
             history_load,
+            aborted,
             ..FrameDocument::new(
                 frame,
                 Some((parent, owner)),
@@ -1748,7 +1771,11 @@ impl RenderThread {
                     // The `<link>`s the last of the input brought start
                     // loading first: the deferred scripts wait for them.
                     self.start_loads();
-                    self.document_parsed(frame);
+                    if self.doc(frame).is_some_and(|next| next.aborted) {
+                        self.document_aborted(frame);
+                    } else {
+                        self.document_parsed(frame);
+                    }
                     return;
                 }
                 ParserState::Script { element, line } => {
@@ -2135,6 +2162,43 @@ impl RenderThread {
         self.handle_frame_requests();
         self.send_harness_results();
         self.run_deferred_scripts(frame);
+    }
+
+    /// HTML's "abort a parser", once what came of the document's body is
+    /// parsed (it stopped short): interactive, then complete, with no
+    /// deferred scripts, `DOMContentLoaded` or `load` (Blink's
+    /// `Document::CancelParsing`, as a load stopped is). Its load is over
+    /// nonetheless: the browser hears so (`DidFinishLoad`, with the next
+    /// frame), and a child frame's parent no longer waits for it. (The
+    /// parser ends what it has as at the end of its input: html5ever has
+    /// no abort, which would only pop the elements open.)
+    fn document_aborted(&mut self, frame: FrameId) {
+        let Some(next) = self.doc_mut(frame) else {
+            return;
+        };
+        next.deferred_scripts.clear();
+        next.readiness = Readiness::Loaded;
+        let child_of = next.child_of.clone();
+        let Some(engine) = &mut self.engine else {
+            return;
+        };
+        engine.document_ready(frame, DocumentReadiness::Interactive);
+        self.handle_frame_requests();
+        let Some(engine) = &mut self.engine else {
+            return;
+        };
+        engine.document_ready(frame, DocumentReadiness::Aborted);
+        self.handle_frame_requests();
+        self.send_harness_results();
+        match child_of {
+            Some((parent, _)) => self.finish_load(parent),
+            None => {
+                if let Some(next) = &mut self.document {
+                    next.load_finished = true;
+                }
+            }
+        }
+        self.request_main_frame();
     }
 
     /// The document's deferred scripts run in order, each once fetched and

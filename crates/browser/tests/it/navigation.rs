@@ -6197,6 +6197,149 @@ mod body {
         web_contents.shutdown();
     }
 
+    /// `data` as a zlib stream (`Content-Encoding: deflate`) that stops
+    /// short: one stored block that isn't the last, and no more. It
+    /// decodes to `data`, then fails at its end.
+    fn deflate_cut_short(data: &[u8]) -> Vec<u8> {
+        let length = u16::try_from(data.len()).expect("a stored block's");
+        let mut stream = vec![0x78, 0x01, 0x00];
+        stream.extend(length.to_le_bytes());
+        stream.extend((!length).to_le_bytes());
+        stream.extend(data);
+        stream
+    }
+
+    /// What the document's script saw of its loading: its readiness as it
+    /// changed, and `DOMContentLoaded` and `load` if they came, as its
+    /// title once it is complete.
+    const READINESS: &str = "<title>start</title><script>
+let seen = [];
+document.addEventListener('DOMContentLoaded', () => seen.push('dcl'));
+addEventListener('load', () => seen.push('load'));
+document.addEventListener('readystatechange', () => {
+  seen.push(document.readyState);
+  if (document.readyState == 'complete') setTimeout(() => document.title = seen.join(), 100);
+});
+</script>";
+
+    /// The first title a fresh tab's document has once it has navigated
+    /// to `url` that isn't `before`.
+    fn title_after(url: &str, before: &str) -> String {
+        let (mut web_contents, host_rx) = tab();
+        web_contents.navigate(url);
+        let title = loop {
+            let msg = next_message(&mut web_contents, &host_rx, TIMEOUT).expect("renderer answers");
+            web_contents.on_renderer_message(&msg);
+            if let RendererHostMsg::UpdateTitle(title) = msg
+                && !title.is_empty()
+                && title != before
+            {
+                break title;
+            }
+        };
+        web_contents.shutdown();
+        title
+    }
+
+    /// A body that stops short with an error after its head keeps what
+    /// came, its parser aborted: interactive, then complete, with no
+    /// `DOMContentLoaded` or `load`.
+    #[test]
+    fn a_body_that_stops_short_keeps_what_came_and_aborts_its_parser() {
+        let page = format!("{READINESS}<p id=came>{}", "x".repeat(3000));
+        let server = server(&[(
+            "/",
+            Route::ok("text/html", deflate_cut_short(page.as_bytes()))
+                .with_header("Content-Encoding", "deflate"),
+        )]);
+        assert_eq!(title_after(&server.url("/"), "start"), "interactive,complete");
+    }
+
+    /// One whose body fails before its start is in commits what came, not
+    /// the error page: it has a head. Its load ends, as the browser hears.
+    #[test]
+    fn a_body_that_fails_at_once_commits_no_error_page() {
+        let server = server(&[(
+            "/",
+            Route::ok("text/html", "not gzip").with_header("Content-Encoding", "gzip"),
+        )]);
+        let (mut web_contents, host_rx) = tab();
+        web_contents.navigate(server.url("/"));
+        let (id, committed, title) = next_commit(&mut web_contents, &host_rx);
+        assert_eq!((committed.as_str(), title.as_str()), (server.url("/").as_str(), ""));
+        loop {
+            let msg = next_message(&mut web_contents, &host_rx, TIMEOUT).expect("its load ends");
+            web_contents.on_renderer_message(&msg);
+            if let RendererHostMsg::DidFinishLoad { navigation_id, .. } = msg {
+                assert_eq!(navigation_id, id);
+                break;
+            }
+        }
+        web_contents.shutdown();
+    }
+
+    /// A child frame's body that stops short doesn't hold up its parent's
+    /// `load`.
+    #[test]
+    fn a_child_frames_aborted_document_lets_its_parent_load() {
+        let server = server(&[
+            (
+                "/",
+                Route::ok(
+                    "text/html",
+                    "<iframe src=/child></iframe><script>onload = () => document.title = \
+                     'loaded ' + frames[0].document.readyState</script>",
+                ),
+            ),
+            (
+                "/child",
+                Route::ok("text/html", deflate_cut_short(b"<p>child"))
+                    .with_header("Content-Encoding", "deflate"),
+            ),
+        ]);
+        assert_eq!(title_of(&server.url("/")), "loaded complete");
+    }
+
+    /// Stopping the tab's loading stops a document whose body still comes:
+    /// it keeps what came, its parser aborted.
+    #[test]
+    fn stopping_stops_a_document_whose_body_still_comes() {
+        let page = format!("{READINESS}{}", page_ending(3000, "<p>late"));
+        let server = server(&[(
+            "/",
+            Route::ok("text/html", page).with_pause_in_body(2000, Duration::from_secs(5)),
+        )]);
+        let (mut web_contents, host_rx) = tab();
+        web_contents.navigate("about:demo");
+        next_commit(&mut web_contents, &host_rx);
+        web_contents.navigate(server.url("/"));
+        // Its head and the body's start come, and it commits.
+        let until = std::time::Instant::now() + Duration::from_millis(500);
+        while let Some(left) = until.checked_duration_since(std::time::Instant::now()) {
+            let Ok(event) = host_rx.recv_timeout(left) else {
+                break;
+            };
+            if let Some(msg) = renderer_message(&mut web_contents, event) {
+                web_contents.on_renderer_message(&msg);
+            }
+        }
+        // Back to the entry it shows: everything stops.
+        assert!(web_contents.go_to_offset(0));
+        let started = std::time::Instant::now();
+        let title = loop {
+            let msg = next_message(&mut web_contents, &host_rx, TIMEOUT).expect("renderer answers");
+            web_contents.on_renderer_message(&msg);
+            if let RendererHostMsg::UpdateTitle(title) = msg
+                && !["", "start", "machopo demo"].contains(&title.as_str())
+            {
+                break title;
+            }
+        };
+        assert_eq!(title, "interactive,complete");
+        assert!(started.elapsed() < Duration::from_secs(4), "{:?}", started.elapsed());
+        web_contents.shutdown();
+    }
+
     #[test]
     fn a_child_frames_body_comes_through_its_pipe() {
         let server = server(&[

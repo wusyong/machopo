@@ -200,6 +200,47 @@ fn requests_are_told_with_their_responses_and_bodies() {
     assert!(gone.get("error").is_some(), "{gone}");
 }
 
+/// A document whose body stops short after its head ends in one
+/// `loadingFailed`, the renderer's (its document committed), after what
+/// came of its body.
+#[test]
+fn a_document_whose_body_stops_short_fails_once() {
+    let server = server(&[(
+        "/",
+        Route::ok(
+            "text/html",
+            crate::devtools_log::deflate_cut_short(b"<!DOCTYPE html>part"),
+        )
+        .with_header("Content-Encoding", "deflate"),
+    )]);
+    let machopo = Machopo::start();
+    let (mut page, _) = page(&machopo);
+    page.call(None, "Network.enable", json!({}));
+    let navigated = page.call(None, "Page.navigate", json!({ "url": server.url("/") }));
+    let id = navigated["result"]["loaderId"].clone();
+    let mut events = network_events(&mut page, 1);
+    // Anything after it is told by now.
+    evaluate(&mut page, "0", None);
+    events.extend(page.take_events("Network."));
+    let ends: Vec<&Value> = events
+        .iter()
+        .filter(|event| {
+            event["params"]["requestId"] == id
+                && matches!(
+                    event["method"].as_str(),
+                    Some("Network.loadingFinished" | "Network.loadingFailed")
+                )
+        })
+        .collect();
+    assert_eq!(ends.len(), 1, "{events:#?}");
+    assert_eq!(ends[0]["method"], "Network.loadingFailed");
+    assert_eq!(
+        (&ends[0]["params"]["errorText"], &ends[0]["params"]["canceled"]),
+        (&json!("net::ERR_CONTENT_DECODING_FAILED"), &json!(false))
+    );
+    of(&events, "Network.dataReceived", &id);
+}
+
 /// A redirect is another `requestWillBeSent` of the same request, with the
 /// redirect's response; a load that fails, and one cancelled, end in
 /// `loadingFailed`.

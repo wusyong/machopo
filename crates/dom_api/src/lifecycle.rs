@@ -26,6 +26,10 @@ pub enum DocumentReadiness {
     /// Loaded (nothing more to wait for): complete, then the window's
     /// `load`.
     Loaded,
+    /// Its parser aborted, after interactive (HTML's "abort a parser":
+    /// its body stopped short, or its load was stopped): complete, with
+    /// no `load`.
+    Aborted,
 }
 
 /// HTML's "the end" at `readiness` for `document` (a window's): its
@@ -55,7 +59,7 @@ pub fn document_ready<H: ScriptHost>(
                 cx.set_ready_state(node, DocumentReadyState::Interactive);
                 mark(NavigationMilestone::DomInteractive);
             }
-            DocumentReadiness::Loaded => {
+            DocumentReadiness::Loaded | DocumentReadiness::Aborted => {
                 cx.set_ready_state(node, DocumentReadyState::Complete);
                 mark(NavigationMilestone::DomComplete);
             }
@@ -73,7 +77,7 @@ pub fn document_ready<H: ScriptHost>(
         });
     };
     match readiness {
-        DocumentReadiness::Interactive => {
+        DocumentReadiness::Interactive | DocumentReadiness::Aborted => {
             fire_event(host, &target, event::READYSTATECHANGE, false, false);
         }
         DocumentReadiness::ContentLoaded => {

@@ -1,0 +1,99 @@
+# Step 2b: a document whose body stops short (an error, or its load
+# stopped) keeps what came and its parser is aborted (interactive, then
+# complete, no DOMContentLoaded or load); stopping the tab's loading stops
+# a document whose body still comes; DevTools hears of a failure once, and
+# the page's log of an error.
+test = ["sh", "-c", "cargo test -q -p browser --test it body:: && cargo test -q -p renderer --lib network_agent:: && cargo test -q -p shell --test it stops_short"]
+timeout = 900
+
+[[mutant]]
+name = "a body that stops short isn't aborted"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            .is_some_and(|end| end.error.is_some());'''
+to = '''            .is_some_and(|_| false);'''
+
+[[mutant]]
+name = "an aborted document is parsed to its end"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                    if self.doc(frame).is_some_and(|next| next.aborted) {'''
+to = '''                    if false {'''
+
+[[mutant]]
+name = "an aborted document isn't interactive first"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        engine.document_ready(frame, DocumentReadiness::Interactive);
+        self.handle_frame_requests();
+        let Some(engine) = &mut self.engine else {
+            return;
+        };
+        engine.document_ready(frame, DocumentReadiness::Aborted);'''
+to = '''        engine.document_ready(frame, DocumentReadiness::Aborted);'''
+
+[[mutant]]
+name = "an aborted document isn't complete"
+file = "crates/dom_api/src/lifecycle.rs"
+from = '''            DocumentReadiness::Loaded | DocumentReadiness::Aborted => {
+                cx.set_ready_state(node, DocumentReadyState::Complete);'''
+to = '''            DocumentReadiness::Aborted => {}
+            DocumentReadiness::Loaded => {
+                cx.set_ready_state(node, DocumentReadyState::Complete);'''
+test = ["sh", "-c", "cargo test -q -p browser --test it body::"]
+
+[[mutant]]
+name = "an aborted child frame's parent waits on"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            Some((parent, _)) => self.finish_load(parent),'''
+to = '''            Some((parent, _)) => drop(parent),'''
+
+[[mutant]]
+name = "an aborted top-level document's load doesn't end"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                if let Some(next) = &mut self.document {
+                    next.load_finished = true;
+                }
+            }
+        }
+        self.request_main_frame();
+    }'''
+to = '''            }
+        }
+        self.request_main_frame();
+    }'''
+
+[[mutant]]
+name = "stopping leaves documents loading"
+file = "crates/browser/src/web_contents.rs"
+from = '''            drop(self.frame_tree.take_any_document_load(frame));'''
+to = '''            let _ = frame;'''
+
+[[mutant]]
+name = "DevTools hears a body that stopped short finished"
+file = "crates/renderer/src/render_thread/network_agent.rs"
+from = '''        match loaded.end.as_ref().and_then(|end| end.error.as_ref()) {'''
+to = '''        match None::<&NetError> {'''
+
+[[mutant]]
+name = "a stopped load isn't canceled for DevTools"
+file = "crates/renderer/src/render_thread/network_agent.rs"
+from = '''                    "canceled": error.code == protocol::network::NetErrorCode::Aborted,'''
+to = '''                    "canceled": false,'''
+
+[[mutant]]
+name = "a body that stopped short isn't logged"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                && error.code != protocol::network::NetErrorCode::Aborted
+            {'''
+to = '''                && false
+            {'''
+
+[[mutant]]
+name = "the browser's DevTools tells of a failure after a response too"
+file = "crates/shell/src/automation_session.rs"
+from = '''            } if !self.responded.remove(&(tab, *navigation_id)) => {'''
+to = '''            } if { self.responded.remove(&(tab, *navigation_id)); true } => {'''
+
+[[mutant]]
+name = "a child frame's older commit replaces its document"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            .any(|next| next.frame == frame && next.navigation_id > navigation.navigation_id)'''
+to = '''            .any(|_| false)'''

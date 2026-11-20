@@ -990,13 +990,19 @@ impl WebContents {
     /// it, and the renderer hears that one it asked for won't commit.
     /// `FrameTree::StopLoading`: every frame's navigation on its way stops,
     /// the renderer told of those it asked for, and the session history
-    /// forgets them.
+    /// forgets them; and every frame's document whose body still comes
+    /// stops loading.
     fn stop_loading(&mut self) {
         for frame in self.frame_tree.frames() {
             if let Some(navigation) = self.frame_tree.take_any_navigation(frame) {
                 self.controller.did_stop(navigation.id);
                 self.replaced(frame, navigation);
             }
+            // Its document's body, if it still comes, stops too: the
+            // renderer hears its load was aborted (Chromium's main frame's
+            // `RenderFrameHostManager::Stop`, which stops every frame's
+            // loading in the renderer).
+            drop(self.frame_tree.take_any_document_load(frame));
         }
     }
 

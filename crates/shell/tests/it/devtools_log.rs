@@ -121,6 +121,39 @@ fn a_document_not_found_is_logged() {
     assert_eq!(entry["networkRequestId"], navigated["result"]["loaderId"]);
 }
 
+/// `data` as a zlib stream (`Content-Encoding: deflate`) that stops short:
+/// one stored block that isn't the last, and no more.
+pub(crate) fn deflate_cut_short(data: &[u8]) -> Vec<u8> {
+    let length = u16::try_from(data.len()).expect("a stored block's");
+    let mut stream = vec![0x78, 0x01, 0x00];
+    stream.extend(length.to_le_bytes());
+    stream.extend((!length).to_le_bytes());
+    stream.extend(data);
+    stream
+}
+
+/// A document whose body stops short after its head is logged as failed,
+/// linked to its navigation (its document keeps what came).
+#[test]
+fn a_document_whose_body_stops_short_is_logged() {
+    let server = server(&[(
+        "/",
+        Route::ok("text/html", deflate_cut_short(b"<!DOCTYPE html>part"))
+            .with_header("Content-Encoding", "deflate"),
+    )]);
+    let machopo = Machopo::start();
+    let (mut page, _) = page(&machopo);
+    page.call(None, "Log.enable", json!({}));
+    let navigated = page.call(None, "Page.navigate", json!({ "url": server.url("/") }));
+    let entry = next_entry(&mut page);
+    assert_eq!(
+        entry["text"],
+        "Failed to load resource: net::ERR_CONTENT_DECODING_FAILED"
+    );
+    assert_eq!(entry["url"], server.url("/").as_str());
+    assert_eq!(entry["networkRequestId"], navigated["result"]["loaderId"]);
+}
+
 /// What machopo can't do, the renderer's `Network` and the browser's alike,
 /// is answered as an error and warned of in the session's log, if it has
 /// `Log` on.

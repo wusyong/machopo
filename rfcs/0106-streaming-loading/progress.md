@@ -13,7 +13,7 @@
 | 1c：HTTP 的 body 一段一段讀、解壓、sniff，`file:` 一段一段讀、`data:` 走管道 | 完成 | 2026-11-20 |
 | 1d：第 1 階段的檢查和文件 | 完成 | 2026-11-20 |
 | 2a：`CommitNavigation` 帶開頭和管道、Browser 收到 head 和開頭的 1024 bytes 就 commit、結束轉告 renderer；renderer 讀到結尾才 parse | 完成 | 2026-11-20 |
-| 2b：收到一半的錯誤（中止 parser）、取消、DevTools 和 Navigation Timing 的時機 | 未開始 | |
+| 2b：收到一半的錯誤（中止 parser）、取消、DevTools 和 Navigation Timing 的時機 | 完成 | 2026-11-20 |
 | 2c：第 2 階段的檢查和文件 | 未開始 | |
 | 3：renderer 邊收邊 parse | 未開始 | |
 | 4：舊畫面的時限、檢查和文件 | 未開始 | |
@@ -26,6 +26,8 @@
 | `net` 的 `load`：head 和 body 的管道、結束（錯誤、傳輸的大小、時間）、沒有回應的只有結束、body 沒人讀時等著、放掉管道就停、`HEAD`、等或自己跟 redirect、取消 | `cargo test -p net --test it client::` |
 | body 一段一段來：head 在 body 之前、收到一段交一段（壓縮的也是）、解不開的在 head 之後從結束來、沒有 `Content-Type` 時等開頭的 1024 bytes（或結尾）、redirect 的 body 不等、`file:` 分段讀；`fetch` 收齊才交回 | `cargo test -p net --test it client::`、`load::`、`content_encoding::` |
 | Browser 提早 commit：其餘的 body 經過管道到 renderer（子 frame 也是、比管道的容量大的也是）、短的整份帶著、結束在 commit 之後到（Navigation Timing 的 body 大小和 `responseEnd`）、body 還在來時被另一個導覽或 `about:` 的頁取代的不 commit、只等 head 的導覽被取代時不 commit | `cargo test -p browser --test it body::`、`a_replaced_navigations_response_commits_nothing` |
+| body 收到一半停下：出錯的留下收到的部分、中止 parser（readyState 到 `interactive`、`complete`，沒有 `DOMContentLoaded` 和 `load`）、一開始就出錯的照樣 commit（不是錯誤頁）、載入照樣結束（`DidFinishLoad`）、子 frame 的不擋住 parent 的 `load`、停止載入停下 body 還在來的文件 | `cargo test -p browser --test it body::` |
+| DevTools：body 出錯的導覽只有一個 `loadingFailed`（renderer 的，在收到的資料之後）、被停下的帶 `canceled`；頁面的 log 有「Failed to load resource: net::…」 | `cargo test -p renderer --lib network_agent::`、`cargo test -p shell --test it stops_short` |
 | `Content-Encoding` 一段一段解，一次給一個 byte 和整份一樣：gzip 的 header（選用的欄位）和 trailer（CRC、長度）、`deflate` 的 zlib 和 raw、brotli、截斷和之後多出來的 | `cargo test -p net --lib content_encoding::` |
 
 ## 做過的檢查
@@ -85,3 +87,16 @@ macOS、Apple M4，2026-11-20。
 - mutation test（`mutants-2a.toml`）12 個，9 個抓到。沒抓到的：commit 不等 body 的開頭（renderer 現在讀到結尾才用，看不出 commit 帶多少開頭；記進 `docs/test-gaps.md` 的「能補、還沒補的測試空缺」，renderer 邊收邊 parse 時補）；Browser 在 commit 之前聽到結束時記下它（走不到：`net` 先關掉管道才給結束，watcher 先排了讀的事件；記進「等價、不用處理的 mutation」）；馬上 commit 的不丟掉同一個 frame 等著的舊 commit（畫面一樣：main frame 丟掉比顯示中舊的 commit；但 DevTools 照樣收到舊的那份的 `loadingFinished`，記進「能補、還沒補的測試空缺」，2b 有 DevTools 的測試時補）。
 - `test.py wpt navigation-timing/ html/browsers/browsing-the-web/navigating-across-documents/`：照預期，只有 1d 記下的 `navigation-timing/` 那 4 份意外通過。
 - 跑過的檢查：`cargo test -p protocol -p net -p browser -p renderer -p shell`（1088 個）、`cargo check --workspace --all-targets`；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。
+
+### 2b：收到一半停下的 body、停止載入、DevTools
+
+macOS、Apple M4，2026-11-20。
+
+- 查了規範和 Blink（README 的第 14、15 條）：規範的「abort a parser」是 `interactive`、`complete`，不跑「the end」；Blink 停止載入（`StopAllLoaders` 的 `Document::CancelParsing`）結果一樣，body 出錯（`DocumentLoader::LoadFailed`）只 `StopParsing`，readyState 停在 `loading`；`FrameTreeNode::StopLoading` 的 main frame 叫 renderer 停下整棵 frame 樹。
+- renderer：結束帶著錯誤的 commit 是 `aborted`（main frame 經過 `commit_navigation`、子 frame 經過 `ChildCommit` 帶到 `FrameDocument`），parse 完收到的部分之後 `document_aborted`：`DocumentReadiness::Interactive`，再 `dom_api` 新的 `DocumentReadiness::Aborted`（`complete`、`readystatechange`、DOM complete 的時間，沒有 `load`），丟掉 `defer` 的 script，readiness 算 `Loaded`（子 frame 的 parent 不再等它），main frame 的 `DidFinishLoad` 跟著下一個 frame。parser 照輸入的結尾收尾（html5ever 沒有 abort；`docs/limitations.md`）。DevTools 的 `did_commit_navigation` 在收到的資料之後發 `loadingFailed`（`ERR_ABORTED` 帶 `canceled`），不是 `loadingFinished`；頁面的 log 照 `FrameConsole::DidFailLoading` 加一筆（被停下的不加）。
+- `commit_navigation` 回報有沒有 commit：丟掉的舊 commit 不再告訴 DevTools、也不先清掉 DevTools 留著的 body 和 log（原本丟掉之前就清了，清的是顯示中的文件的）。子 frame 也丟掉比它的文件舊的 commit（原本只看 renderer 自己請求的 `begin_id`）。
+- Browser：`stop_loading` 也放掉每個 frame 的 `DocumentLoad`（renderer 收到 `ERR_ABORTED`）。DevTools（`automation_session`）記著有 response 的導覽，之後的錯誤由 renderer 告訴，不再發第二個 `loadingFailed`。
+- 新的測試：`navigation.rs` 的 `body` 模組 4 個（收到一半出錯的留下收到的部分、中止 parser；一開始就出錯的不是錯誤頁、載入照樣結束；子 frame 的中止不擋住 parent 的 `load`；停止載入停下 body 還在來的文件，不等它的暫停）；`network_agent` 的單元測試 1 個（結束、失敗、被停下）；`shell` 的 `devtools_log` 和 `devtools_network` 各 1 個（log、只有一個 `loadingFailed`）。body 中途出錯的回應用手寫的 zlib stream（一個不是最後的 stored block，之後沒有了）。
+- mutation test（`mutants-2b.toml`）12 個，11 個抓到（「中止的文件不變成 `complete`」第一次寫成少一個 `match` 的分支、編不過，改了單獨重跑）。沒抓到的：子 frame 丟掉比它的文件舊的 commit，和 2a 的 `forget_before` 互相備援、各自拿掉都一樣（記進 `docs/test-gaps.md` 的「等價、不用處理的 mutation」）；兩個都拿掉時的子 frame 的情況（Browser 發起的子 frame 導覽在 body 還在來時被取代）沒有測試，記進「能補、還沒補的測試空缺」。
+- `test.py wpt navigation-timing/ html/browsers/browsing-the-web/navigating-across-documents/`：照預期，只有 1d 記下的那 4 份意外通過。
+- 跑過的檢查：`cargo test -p protocol -p net -p browser -p renderer -p shell -p dom_api`（1322 個）、`cargo check --workspace --all-targets`；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。

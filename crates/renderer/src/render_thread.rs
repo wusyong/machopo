@@ -870,6 +870,12 @@ impl RenderThread {
             url.clone()
         };
         let main_frame = Some(frame) == self.devtools_main_frame_token;
+        // Its body stopped short: what came is parsed, and its parser
+        // aborted then.
+        let aborted = loaded
+            .as_ref()
+            .and_then(|loaded| loaded.end.as_ref())
+            .is_some_and(|end| end.error.is_some());
         let no_referrer = !main_frame && self.child_no_referrer_of(frame, begin_id);
         let timing = self.commit_timing(
             &document_url,
@@ -895,8 +901,8 @@ impl RenderThread {
                 &history,
                 time_origin,
                 timing,
-            );
-            true
+                aborted,
+            )
         } else {
             let Ok(document_url) = Url::parse(&document_url) else {
                 return;
@@ -919,6 +925,7 @@ impl RenderThread {
                     url,
                     origin_source: None,
                     history,
+                    aborted,
                 },
             )
         };
@@ -934,6 +941,17 @@ impl RenderThread {
             if loaded.status >= 400 {
                 self.log_agent.add(log_agent::LogEntry::network(
                     status_message(loaded.status, &loaded.status_text),
+                    loaded_url.clone(),
+                    navigation_id.to_string(),
+                ));
+            }
+            // A body that stopped short (Blink's `FrameConsole::
+            // DidFailLoading`; a load stopped isn't told).
+            if let Some(error) = loaded.end.as_ref().and_then(|end| end.error.as_ref())
+                && error.code != protocol::network::NetErrorCode::Aborted
+            {
+                self.log_agent.add(log_agent::LogEntry::network(
+                    format!("Failed to load resource: net::{}", error.code.name()),
                     loaded_url,
                     navigation_id.to_string(),
                 ));
@@ -1166,8 +1184,8 @@ impl RenderThread {
     /// a new document at `url`, which replaces the old one, then ask for
     /// its subresources; the browser hears it committed `reported_url`
     /// (an error page's, the URL that failed). A commit older than the
-    /// document shown is dropped: the browser starts navigations in order,
-    /// but their responses arrive in any order.
+    /// document shown is dropped (false): the browser starts navigations
+    /// in order, but their responses arrive in any order.
     #[allow(clippy::too_many_arguments)]
     fn commit_navigation(
         &mut self,
@@ -1182,19 +1200,20 @@ impl RenderThread {
         history: &HistoryEntryParams,
         time_origin: f64,
         timing: NavigationTiming,
-    ) {
-        // The bodies DevTools kept and the messages logged are the old
-        // document's.
-        self.network_agent.main_frame_navigated();
-        self.log_agent.main_frame_navigated();
+        aborted: bool,
+    ) -> bool {
         if self
             .document
             .as_ref()
             .is_some_and(|next| next.navigation_id() > navigation_id)
         {
             tracing::debug!(%url, navigation_id, "dropping a stale commit");
-            return;
+            return false;
         }
+        // The bodies DevTools kept and the messages logged are the old
+        // document's.
+        self.network_agent.main_frame_navigated();
+        self.log_agent.main_frame_navigated();
         self.commit_document_navigation(
             navigation_id,
             url,
@@ -1207,7 +1226,9 @@ impl RenderThread {
             history,
             time_origin,
             &timing,
+            aborted,
         );
+        true
     }
 
     /// How long until an idle period has a callback to run, or can start

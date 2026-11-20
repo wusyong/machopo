@@ -333,6 +333,10 @@ pub struct AutomationSession {
     /// `Page.navigate`s, by tab and their navigation, answered as it is
     /// about to commit (Chromium's `PageHandler::Navigate`).
     navigates: Vec<(TabId, u64, Reply)>,
+    /// The navigations whose response has come, by tab, until their load
+    /// ends: one that fails after is the renderer's to tell of (its
+    /// document committed).
+    responded: std::collections::HashSet<(TabId, u64)>,
     /// From 1.
     query_ids: SequenceNumber<u64>,
     /// `Machopo.queryElement`s, by query id.
@@ -510,6 +514,7 @@ impl AutomationSession {
             loaded: HashMap::new(),
             loads: Vec::new(),
             navigates: Vec::new(),
+            responded: std::collections::HashSet::new(),
             restoring: HashSet::new(),
             restore_ids: SequenceNumber::starting_at(1),
             query_ids: SequenceNumber::starting_at(1),
@@ -1273,6 +1278,10 @@ impl AutomationSession {
                 navigation_id,
                 result: Ok(ResourceResponse { head, .. }),
             } => {
+                // A blob URL's has no end after it.
+                if matches!(event, ContentsEvent::NavigationResponseStarted { .. }) {
+                    self.responded.insert((tab, *navigation_id));
+                }
                 let frame_id = frame.to_string();
                 let timestamp = head
                     .timing
@@ -1307,7 +1316,7 @@ impl AutomationSession {
                 frame,
                 navigation_id,
                 result: Err(error),
-            } => {
+            } if !self.responded.remove(&(tab, *navigation_id)) => {
                 let error_text = format!("net::{}", error.code.name());
                 self.to_network(
                     tab,
@@ -1325,8 +1334,10 @@ impl AutomationSession {
                     self.navigation_ready(tab, *navigation_id, Some(error_text));
                 }
             }
-            ContentsEvent::NavigationBodyReadable { .. }
-            | ContentsEvent::NavigationCompleted { .. } => {}
+            ContentsEvent::NavigationCompleted { navigation_id, .. } => {
+                self.responded.remove(&(tab, *navigation_id));
+            }
+            ContentsEvent::NavigationBodyReadable { .. } | ContentsEvent::NavigationBlobLoaded { .. } => {}
         }
     }
 

@@ -119,8 +119,8 @@
 
 | 項目 | 為什麼還沒有測試 | 現在靠什麼 | 之後怎麼處理 |
 | --- | --- | --- | --- |
+| 子 frame 由 Browser 發起的導覽（上一頁、下一頁）在 body 還在來時被另一個馬上 commit 的導覽取代，舊的不換回去（`body_loader.rs` 的 `forget_before` 和 `documents.rs` 的 `commit_child_navigation` 比導覽的編號，兩者互相備援） | renderer 自己請求的子 frame 導覽有 `begin_id` 擋住舊的；Browser 發起、又要 body 慢慢來的子 frame 導覽要 session history 的測試配上暫停的伺服器，還沒有寫 | 審查；main frame 的同樣的情況有 `browser` 的 `a_navigation_replaced_by_a_page_while_its_body_comes_commits_nothing` | `browser` 的 history 測試加一份：子 frame 上一頁到 body 暫停的網址、接著再上一頁到 `about:blank`，之後子 frame 的 URL 不變 |
 | 導覽等 body 開頭的 1024 bytes 才 commit（`browser` 的 `web_contents.rs` 的 `read_body_start`；拿掉就只帶 head 和管道） | renderer 現在把管道讀到結尾、等到結束才建文件，commit 帶多少開頭從外面看不出來 | 審查 | renderer 邊收邊 parse 之後，engine 和編碼照 commit 帶來的開頭決定：伺服器在開頭之內停一陣子的 wasm 文件和 `<meta charset>` 的頁面各一份測試 |
-| renderer 馬上 commit 一份文件時，丟掉同一個 frame 還在等 body 的舊 commit（`render_thread/body_loader.rs` 的 `forget_before`） | 不丟時舊的那份之後拿到 `ERR_ABORTED` 的結束，照樣走 commit：main frame 丟掉比顯示中的舊的 commit，畫面一樣；但 DevTools 照樣收到它的 `dataReceived`、`loadingFinished`，`browser` 的測試看不到 DevTools 的事件 | 審查 | 導覽的取消和 DevTools 事件的時機有測試時，加一份：body 還在來的導覽被 `about:` 的頁取代，DevTools 不收到它的 `loadingFinished` |
 | wasm 文件的 script trap 之後，它的 Store 從 `StoreSet` 拿掉（`dom_wasm` 的 `engine.rs` 的 `turn`，和 listener trap 時的 `Host::call_listener`） | 不拿掉時 Store 只是留到換頁才丟（洩漏到那時候），engine 自己的清單已經沒有它，從外面看不出來 | 審查 | `StoreSet` 能數活著的 Store 時，在 trap 的測試裡斷言少一個 |
 | wasm 的 engine 轉給 `dom_api` 的那些方法（`dom_wasm` 的 `WasmEngine`：輸入、focus、文件的生命週期、元素的 task、動畫、WebDriver 的查詢和輸入、microtask checkpoint） | wasm 文件的情境走到載入、點連結的導覽、guest 的等待（`wasm-document`），滑鼠的點擊、一個按鍵（`wasm-listeners`），和互動的 TodoMVC（`todomvc-app-wasm`：文字欄位的輸入和 `change`、雙擊、滑鼠移過去、`blur`、`keypress`、`keyup`、連結改 fragment 的 `hashchange`、`load`）；捲動、滾輪、動畫、WebDriver 的輸入、頁面失去 focus 和可見性在 wasm 文件裡沒有測試 | 審查：每個和 `dom_js` 的 `V8Engine` 對應的方法呼叫同一個 `dom_api` 的函式 | 有頁面用到時照樣寫成 wasm 文件的情境 |
 | wasm 文件裡 DevTools 連著時的行為，和連著時換 engine（renderer 的 `replace_engine`：agent 記著的節點放掉、session 接到新的 engine） | 沒有 wasm 文件的 DevTools 測試；wasm 的 engine 沒有 inspector | 審查 | `shell` 的 DevTools 測試加一份：連著 `DOM` 的 session 從 JS 文件換到 wasm 文件再換回來 |
@@ -259,6 +259,7 @@
 - DOM 的 `normalize` 跳過已經併進前一個的 text：它已經沒有 parent，下一個兄弟是 none，什麼都不做；`getElementsByClassName` 的 class 名稱去掉重複：每個都要有，重複的只是多比一次。
 - DOM 的 `assigned_nodes` 先看 `is_slot`，改成只看在不在 shadow tree 裡：在 shadow tree 裡、不是 slot 的元素沒有 `SlotData`，清單也是空的，只是多重算一次分配。
 - DOM 的 intersection observer 在有 observer 追蹤 visibility 時，paint 換了就重算（renderer 的 `compute_intersections` 的狀態裡的 `last_paint`）：拿掉也一樣，DOM 的 frame 只要 restyle 就重新 layout、重新 pre-paint，paint 變了時 pre-paint 的計數已經變了。有只改 paint、不重新 layout 的東西（canvas 畫了新的內容）時這條才要守：照 `shell` 的 `what_covers_a_tracked_target` 寫一個那樣的情況。
+- renderer 馬上 commit 一份文件時，丟掉同一個 frame 還在等 body 的舊 commit（`render_thread/body_loader.rs` 的 `forget_before`），和子 frame 丟掉比它的文件舊的 commit（`documents.rs` 的 `commit_child_navigation`）：兩者互相備援，各自拿掉都一樣。不丟時舊的那份之後拿到 `ERR_ABORTED` 的結束，照樣走 commit，main frame 和子 frame 都丟掉比顯示中的舊的 commit（main frame 的不告訴 DevTools、不清它留著的）；只是它收到的 body 留到那時才放掉。兩個都拿掉時子 frame 會換回舊的文件，那個情況沒有測試（「能補、還沒補的測試空缺」）。
 - Browser 在導覽 commit 之前就聽到 load 的結束時記下它，跟著 commit 帶給 renderer（`web_contents.rs` 的 `on_navigation_completed` 的 `navigation.end`）：走不到。`net` 先關掉 body 的管道才告訴結束，管道的 watcher 在那之前就排了 `NavigationBodyReadable`，UI thread 照順序先讀到管道的結尾、commit 了；留著是因為走到時不能當成沒有 head 的失敗、給錯誤頁。
 - `net` 解 `Content-Encoding` 時，輸入用完、輸出滿了也接著 inflate（`content_encoding.rs` 的 `Inflate::push` 的 `room_left`）：拿掉也一樣，flate2 的 miniz_oxide 輸出滿了就不再吃輸入，這時留在它裡面的只有一段沒複製完的 match（最多 258 bytes），下一段 body 或結尾時交出，不會少，只是晚一段才寫進管道。
 
