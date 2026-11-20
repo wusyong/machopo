@@ -68,6 +68,14 @@ intersection-observer/
 # Web Storage: localStorage, sessionStorage and their storage events.
 webstorage/
 
+# HTTP cookies: the files that pass whole with cookies in requests and
+# responses alone. Most of the directory needs `document.cookie`,
+# testdriver's cookie actions or `window.open` (`samesite/`, nearly all).
+cookies/path/match-segment-boundaries.https.window.js
+cookies/path/non-ascii-path-attribute.https.window.js
+cookies/samesite-none-secure/
+cookies/value/value-overwrite.https.window.js
+
 # Dedicated workers, classic and module ones, those made in a worker too.
 # Shared and service workers don't run (`disabled`); what a dedicated
 # worker doesn't have yet (XHR) fails.

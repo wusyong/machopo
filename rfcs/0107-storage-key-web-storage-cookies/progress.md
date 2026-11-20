@@ -21,7 +21,7 @@
 | 4b：解析 `Set-Cookie`、cookie 本身（`CanonicalCookie`）、記憶體裡的 store | 完成 | 2026-11-20 |
 | 4c：接上每一跳請求、`SameSite`、第三方的 cookie 的預設和照送的旗標、導覽的可信參數 | 完成 | 2026-11-20 |
 | 4d：`Partitioned`、上限和淘汰、寫進 profile 的 `Cookies` 資料庫 | 完成 | 2026-11-20 |
-| 4e：WPT 的 `cookies/`、第 4 階段的檢查和文件 | 未開始 | |
+| 4e：WPT 的 `cookies/`、第 4 階段的檢查和文件 | 完成 | 2026-11-20 |
 | 5：cookie 到 DOM 和自動化 | 未開始 | |
 | 6：檢查和文件 | 未開始 | |
 
@@ -54,6 +54,7 @@
 | `Partitioned`：分區是最上層的網站和中間有沒有隔著別的網站（main frame 的導覽是自己的網址的網站、同網站的），cookie 只跟著那個分區的請求，同名同 domain 同 path 的在不同分區是不同的 cookie；請求有分區時才是分區的、要 `Secure`，沒有時照沒標的；第三方的 `Partitioned` cookie 兩種政策都照送照收 | `cargo test -p net --test it -- cookies:: cookie_monster:: cookie_loads::`；`cargo test -p net --lib cookie_jar` |
 | 上限和淘汰：一個 registrable domain 超過 180 筆時刪到 150（過期的先刪，再刪最久沒用的、不是 `Secure` 的在前），分區的 cookie 不算；全部超過 3300 筆時刪到 3000，最近 30 天用過的不刪，不是 `Secure` 的在前；分區的每個網域 180 筆、10 KiB；讀到的 cookie 隔一分鐘以上才記成用過 | `cargo test -p net --test it -- cookie_monster:: cookies::` |
 | `Cookies` 資料庫：持久的 cookie 每個欄位存回來一樣（分區也是），session 的和 opaque 分區的不寫；改動成批寫（30 秒、512 筆、結束時），讀的時候刪掉過期的、略過不是 cookie 的列；開不了時只在記憶體；請求等資料庫讀完才帶 cookie；network context 換一個之後持久的還在，profile 的資料夾經過 `StoragePartition` 交給 `net` | `cargo test -p net --lib -- sqlite_persistent cookie_jar`；`cargo test -p net --test it cookie_loads::`；`cargo test -p browser --test it cookies::` |
+| WPT：`cookies/` 整份通過的 4 份（path 的比對、非 ASCII 的 path、值的覆寫、`SameSite=None` 要 `Secure`）；帶 cookie 的 credentials（`cors-cookies`、`cors-cookies-redirect`、dedicated worker 的 credentials、dynamic import 的 credentials）0 個意外的結果 | `python3 scripts/test.py wpt cookies/ fetch/api/cors/ workers/modules/ html/semantics/scripting-1/the-script-element/module/dynamic-import/` |
 
 ## 做過的檢查
 
@@ -218,4 +219,13 @@ macOS、Apple M4，2026-11-20。
 - mutation test（`mutants-4d.toml`）第一次 43 個，抓到 38 個。沒抓到的：「main frame 的導覽算第三方的分區」是等價的（main frame 的導覽的 site for cookies 本來就是它網址的網站），拿掉了 `CookiePartitionKey::for_request` 的 `main_frame_navigation` 參數；「存的分區的網站不檢查」是測試的那一列不是 `Secure`、被另一個檢查擋掉，改成 `Secure` 的；「網域的淘汰刪到分區的 cookie」是測試裡第二輪沒有要刪的，在會刪 `Secure` 的情境加了更舊的分區 cookie；「一個網域 180 筆就刪」「全部 3300 筆就刪」是外層的提前離開和內層的檢查一樣，只弄壞一個看不出來，改成一次弄壞兩層，全部的那個再把測試改成第 3300 筆在 31 天後才設（原本設下時每一筆都是最近用過的，提早淘汰也沒有東西可刪）。改完重跑整份 42 個，全部抓到。「jar 的淘汰等最早的使用時間」拿掉時結果一樣，記進 `docs/test-gaps.md` 的「沒有計數守著的優化」。
 - 文件：`docs/limitations.md`（cookie 的分區、存在 profile、明文、上限不認 `Priority`、讀完之前請求等著）、`docs/architecture.md`（`net` 的 cookie、`StoragePartition` 啟動 network context）、`docs/test-gaps.md`（jar 的淘汰等最早的使用時間的捷徑）。
 - 跑過的檢查：`cargo test` 的 `net`、`site`、`browser`、`shell`（1111 個通過）；`cargo clippy -p net -p browser -p shell --all-targets -- -D warnings`、`cargo fmt --check`；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。
+
+### 4e：WPT 的 `cookies/`、第 4 階段的檢查
+
+macOS、Apple M4，2026-11-20。
+
+- 決定了第 21 條（WPT 的 `cookies/` 到第 5 階段才大量列進來）。用預設的設定跑整個 `cookies/`（`test.py wpt --all cookies/`）：約 90 份裡整份通過的只有 4 份，其他的失敗在 `window.open`（`samesite/` 幾乎每份先開新視窗；machopo 沒有）、`document.cookie` 和 testdriver 的 `delete_all_cookies`（第 5 階段）。
+- WPT：`include.txt` 加了 `cookies/` 整份通過的 4 份；因為有了 cookie 而通過的拿掉了預期結果（`fetch/api/cors/cors-cookies.any.js`、`cors-cookies-redirect.any.js`、`workers/modules/dedicated-worker-options-credentials.html`、`dynamic-imports-credentials.sub.html`）；`dynamic-imports-credentials-setTimeout.sub.html` 留下的兩個失敗不是 cookie 的事（`setTimeout` 的字串建的 script 沒有繼承呼叫它的 script 的 fetch options），換了註解；`workers/same-site-cookies/` 的 `disabled` 原因改成 shared worker 和 `window.open`（拿掉之後試跑：都停在這兩個）。`script-crossorigin-network.sub.html` 和 `module/credentials.sub.html` 照樣失敗：它們用 `document.cookie` 設 cookie。
+- 找到的不穩定：`html/semantics/scripting-1/the-script-element/moving-between-documents/after-prepare-*` 和 `fetch/`、`workers/` 等一起跑時，每次有兩三份整份 timeout（60 秒，測試大約 6 秒就該結束），每次是不同的幾份，單獨跑都通過。在 4b 的 commit（`be3816f`，還沒有接上請求的 cookie）上用同樣的目錄跑兩次也一樣，所以和 cookie 無關；原因還沒查，這份 RFC 不處理，另外查。（另一個 worktree 和這裡共用 `target/` 時，cargo 用 workspace 裡的相對路徑命名輸出，4b 編的 `site` 蓋掉了這裡的；touch 改過的 crate 之後重編。）
+- 第 4 階段的檢查：`cargo test --workspace`（4416 個通過、1 個 ignored；`bindings` 的 `gc_platform` 在 log 裡的兩個 panic 是測試故意讓 worker panic）、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`；`test.py scenarios --window`（4c 改了 `window.rs`）72 個都通過，看了截圖；`test.py wpt cookies/ fetch/api/cors/ workers/modules/ workers/same-site-cookies/ html/semantics/scripting-1/the-script-element/module/dynamic-import/` 0 個意外的結果。
 

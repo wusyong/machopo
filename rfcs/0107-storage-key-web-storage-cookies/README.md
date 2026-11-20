@@ -163,6 +163,8 @@ cookie 存在 `net` 那一側（Chromium 的 `CookieMonster` 在 network service
 
 20. **cookie 的上限和淘汰照 Chromium，不認 `Priority`**（2026-11-20，第 4 階段）：數字照 Chromium 的 `CookieMonster`：每個 registrable domain 180 筆、超過時刪到 150 筆；全部 3300 筆、超過時刪 300 筆，最近 30 天用過的不刪；`Partitioned` 的每個分區的每個網域另外 180 筆、10 KiB。先刪過期的，再刪不是 `Secure` 的、最久沒用的，最後才刪 `Secure` 的。`Priority` 屬性不解析，全部當 Medium：Chrome 對不帶 `Priority` 的 cookie 就是這樣，也接近 Firefox（每個網域 180 筆，最久沒用的先刪）。對照 Chromium（2026-11-20 讀 `cookie_monster.cc` 的 `GarbageCollect`）：照優先權分六輪刪，每輪先保護 `Secure` 的，每種優先權留下配額（低 30、中 50、高 70）。不選照 Chromium 全做：和 Chrome 一模一樣，但 `Priority` 只有 Chromium 認，不在 RFC 6265bis 裡，Firefox 和 Safari 不理，多一個屬性、一欄資料和約一倍的淘汰程式，只在一個網域超過 180 筆時看得出差別；之後要加時照六輪補上。不選只照最久沒用的刪：最簡單，但不安全的網頁可以塞滿 cookie、擠掉 `Secure` 的，違反 RFC 6265bis 的「leave secure cookies alone」的用意。
 
+21. **WPT 的 `cookies/` 到第 5 階段才大量列進來**（2026-11-20，第 4 階段）：第 4 階段只列整份通過的 4 份（`path/match-segment-boundaries`、`path/non-ascii-path-attribute`、`value/value-overwrite`、`samesite-none-secure/`），更新因為有了 cookie 而通過的（`fetch/api/cors/cors-cookies*`、worker 和 dynamic import 的 credentials）；其他的等 `document.cookie` 和自動化的 cookie（testdriver 的 `delete_all_cookies`）做完再列，`samesite/` 的照送的 subsuite（第 17 條）等 machopo 有 `window.open`。2026-11-20 用預設的設定跑整個 `cookies/`：約 90 份只有那 4 份整份通過，其他的失敗在 `window.open`（`samesite/` 幾乎每份先開新視窗）、`document.cookie` 和 `delete_all_cookies`，都不是第 4 階段的事。對照 Chromium：整個 `cookies/` 在清單裡，失敗的留 baseline，`third-party-cookies/` 另外用 virtual suite 跑；machopo 的 subsuite 是 wptrunner 裡對應的機制（`hidpi/` 的 reftest 已經在用）。不選現在列整個 `cookies/`：進度看得到，但約 85 份的預期結果到第 5 階段幾乎都要重寫，約 20 份 timeout 的要標 `disabled`，`samesite/` 在 subsuite 裡照樣卡在 `window.open`。
+
 ## 待決定
 
 「要決定的事（依序）」的第 7 到 12 個，每個階段開始前定那一段的。
