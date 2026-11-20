@@ -18,9 +18,10 @@
 | 3b：`storage` 事件、`sessionStorage` | 完成 | 2026-11-20 |
 | 3c：上限、寫進磁碟的批次、WPT 的 `webstorage/`、第 3 階段的檢查和文件 | 完成 | 2026-11-20 |
 | 4a：請求的來歷（Browser 給的最上層的網站和 site for cookies，核對 `initiator`） | 完成 | 2026-11-20 |
-| 4b：解析 `Set-Cookie`、記憶體裡的 store、每一跳帶 `Cookie`、`SameSite` | 未開始 | |
-| 4c：第三方的 cookie、`Partitioned`、上限和淘汰、寫進 profile 的 `Cookies` 資料庫 | 未開始 | |
-| 4d：WPT 的 `cookies/`、第 4 階段的檢查和文件 | 未開始 | |
+| 4b：解析 `Set-Cookie`、cookie 本身（`CanonicalCookie`）、記憶體裡的 store | 完成 | 2026-11-20 |
+| 4c：接上每一跳請求、`SameSite`、第三方的 cookie 的預設和照送的旗標、導覽的可信參數 | 未開始 | |
+| 4d：`Partitioned`、上限和淘汰、寫進 profile 的 `Cookies` 資料庫 | 未開始 | |
+| 4e：WPT 的 `cookies/`、第 4 階段的檢查和文件 | 未開始 | |
 | 5：cookie 到 DOM 和自動化 | 未開始 | |
 | 6：檢查和文件 | 未開始 | |
 
@@ -48,6 +49,7 @@
 | WPT：`webstorage/` 0 個意外的結果（`window.open`、`BroadcastChannel`、單獨的 surrogate 失敗；`set.window.js` 和 `storage_builtins.window.js` 失敗的項目和 Chrome 一樣）；`createEvent('StorageEvent')` | `python3 scripts/test.py wpt webstorage/ dom/nodes/Document-createEvent.https.html dom/events/EventTarget-dispatchEvent.html` |
 | site for cookies：最上層的 frame 是自己的網站；frame 和中間的每一層都是最上層的網站時是它，有一層不是、或有 opaque 的時是 null；網址照 scheme 比（`ws:` 算 `http:`、`wss:` 算 `https:`） | `cargo test -p site` |
 | 請求的來歷：每份文件 commit 時一個 Browser 給的 loader（文件的 origin、site for cookies、最上層的網站，照它所在的 frame 算）；IO thread 照編號核對（沒給的 loader、不是 worker 的 loader、`initiator` 不是 loader 的 origin、renderer 自己帶了可信的參數都是壞掉的訊息；opaque 的 `initiator` 照收），填上 loader 的可信參數；跨 origin 的 iframe 的圖片、iframe 一開始的 `about:blank` 的 `fetch()`、worker 的 `fetch()` 都經過各自的 loader | `cargo test -p browser --lib -- loader request_takes workers_request`；`cargo test -p browser --test it loaders::` |
+| cookie：解析 `Set-Cookie`（終止字元和控制字元整行拒絕、tab 也是，名稱和值的大小、屬性值太長只略過、沒有 `=` 的第一段是沒有名稱的值、屬性不分大小寫、最後一個算）；`Expires` 的日期（Chromium 的 `ParseCookieExpirationTime`）；cookie 本身（host-only 和 domain cookie、public suffix 和 IP 位址、預設的 path、`Max-Age` 先於 `Expires`、伺服器的時差、最多 400 天、`__Secure-`、`__Host-`、`__Http-` 前綴、`Secure` 只從安全的或可信的網址、`SameSite=None` 要 `Secure`、`Partitioned` 要 `Secure`）；store（同名同 domain 同 path 的取代、值一樣時留著建立的時間、過期的刪掉、script 蓋不了 `HttpOnly`、leave secure cookies alone、domain 和 path 的比對、`SameSite` 的設定和送出、Lax-allowing-unsafe 的 2 分鐘、送出的順序）；預設的選項不做 Lax-allowing-unsafe | `cargo test -p net --test it cookies::`；`cargo test -p net --lib cookies` |
 
 ## 做過的檢查
 
@@ -173,3 +175,17 @@ macOS、Apple M4，2026-11-20。
 - mutation test（`mutants-4a.toml`）12 個，抓到 11 個；沒抓到的「`ws:` 不算它的 `http:` 網站」是測試只測了 `wss:` 對 `https:`，補了 `ws:` 對 `http:`，重跑抓到。
 - 文件：`docs/architecture.md`（`RenderProcessHost` 的 loader）、`docs/limitations.md`（loader 留到 renderer 結束、opaque 的 `initiator` 照收）。
 - 跑過的檢查：`cargo test` 的 `site`、`dom_api`、`renderer`、`browser`、`shell`（1296 個通過）；`cargo fmt --check`；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。
+
+### 4b：解析 `Set-Cookie`、cookie 本身、記憶體裡的 store
+
+macOS、Apple M4，2026-11-20。
+
+- 決定了第 17 條（第三方的 cookie 預設擋，加照送的旗標；預設不做 Lax-allowing-unsafe）。讀了 RFC 6265bis 的 editor's draft（2026-11-17 版）的 §5.6.7、§5.8、§7，WPT 的 `cookies/samesite/` 和 `cookies/third-party-cookies/`，Chromium 的 `features.cc`、`cookie_constants.cc` 和它跑 `third-party-cookies/` 的 virtual suite。第 4 階段從四段改成五段（第三方的 cookie 預設擋，要和接上請求同一段做）。
+- 這一段由 subagent 寫（`crates/net/src/cookies/` 的九個檔案和 `crates/net/tests/it/cookies.rs`），照 Chromium 的 `parsed_cookie.cc`、`canonical_cookie.cc`、`cookie_util.cc`、`cookie_constants.cc` 和 RFC 6265bis；之後的實作照使用者的要求在 session 裡自己做。在 session 裡審了 `parsed_cookie.rs`（對照 `ParseTokenValuePairs`：屬性名稱或值的字元不合法時整行拒絕、值太長時只略過那個屬性）、`canonical_cookie.rs`（對照 `ParseExpiration`、`ValidateAndAdjustExpiryDate`、`IsSetPermittedInContext`、`IncludeForRequestURL`、`GetEffectiveSameSite`）和 `cookie_monster.rs`（對照 `SetCanonicalCookie`、`MaybeDeleteEquivalentCookieAndUpdateStatus`），自己重跑了測試、clippy、fmt 和 mutation test。
+- 審查改的：`CookieOptions` 的預設原本照 Chromium 做 Lax-allowing-unsafe，照第 17 條改成不做，加了守它的測試和 mutant。
+- 和 Chromium 不同、留著的（寫在程式的註解裡）：設 cookie 之前先刪掉那個網域已經過期的（Chromium 留到讀取或超過上限時；RFC 6265bis 容許隨時刪），所以過期的 `Secure` cookie 擋不住新的；`Partitioned` 一律檢查要 `Secure`（Chromium 只在請求有分區的 key 時檢查，frame 的請求都有）；沒有 host 的網址（`data:`）直接拒絕；`Set-Cookie` 的值收的是 `&str`（Chromium 收 bytes，不是 UTF-8 的 header 要看 4c 怎麼解碼）；網域照 `url::Host::parse` 正規化（Chromium 是 `CanonicalizeHost`）。沒做的：`Priority`、警告、`CookieAccessDelegate`、origin-bound cookie（預設關）、schemeless 的 `SameSite`、數量的上限和淘汰（4d）、分區的 key（4d）。
+- 和 RFC 6265bis 不同、照 Chromium 的（測試裡寫明）：值裡的 tab 拒絕；`=a=b` 拒絕（`kCookieParseRejectEmptyNameAmbiguous`）；`Max-Age=+5` 照收；1601 年以前的年份算過去；日要全是數字；取代時只有值一樣才留著建立的時間；有 `__Http-`、`__Host-Http-` 前綴。
+- 新的測試：`net` 的 `cookies` 52 個，單元測試 6 個（日期、分隔字元、`StringToInt64`、path 和 domain 的比對、子網域）。
+- mutation test（`mutants-4b.toml`，subagent 寫、在 session 裡加了一個預設選項的）26 個，抓到 25 個；沒抓到的「已經過期的 cookie 也存進去」是等價的（讀取和設定都先刪掉過期的），記進 `docs/test-gaps.md` 的「等價、不用處理的 mutation」。subagent 第一次跑時漏掉的兩個（`;\n` 的那一行、不在 label 的邊界上的 domain 比對）它補了測試。
+- 文件：`docs/architecture.md` 的 crate 表（`net` 的 `cookies`）、`crates/net/src/lib.rs` 的 crate 說明。
+- 跑過的檢查：`cargo test -p net`（32 個單元測試、110 個整合測試）、`cargo clippy -p net --all-targets -- -D warnings`、`cargo fmt --check`；`sanity.py` 的 `numerics`、`tests`、`docs`。

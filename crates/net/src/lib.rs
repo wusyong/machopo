@@ -19,7 +19,8 @@
 //!   reqwest type leaves the crate, so another transport can replace it
 //!   without changing callers.
 //!
-//! No cookies and no HTTP cache.
+//! [`cookies`] (`//net/cookies`) is the cookie jar and the rules it keeps,
+//! not yet used by loads. No HTTP cache.
 //!
 //! [`NetworkContextParams`] is for web tests only: host mapping rules and
 //! extra trusted roots, so WPT's domains reach the local wptserve over
@@ -41,6 +42,7 @@
 
 mod blob;
 mod content_encoding;
+pub mod cookies;
 mod cors;
 mod data;
 mod file;
@@ -61,6 +63,10 @@ use protocol::network::{
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::AbortHandle;
 
+pub use cookies::{
+    CanonicalCookie, CookieInclusionStatus, CookieMonster, CookieOptions, CookieSameSite,
+    CookieSourceType, ExclusionReason, ParsedCookie, SameSiteCookieContext,
+};
 pub use file::{file_path, file_url};
 pub use host_mapping::{HostMapping, HostMappingRules};
 pub use url_loader::concat;

@@ -1,0 +1,170 @@
+# Step 4b: cookies in net, after Chromium's //net/cookies: parsing a
+# Set-Cookie line (ParsedCookie), the Expires dates, the cookie itself
+# (CanonicalCookie: domain, path, expiry, prefixes, Secure, HttpOnly,
+# SameSite) and the jar in memory (CookieMonster: replacing, leaving
+# secure cookies alone, the order cookies are sent in). Written by a
+# subagent, reviewed and rerun in the session.
+test = ["cargo", "test", "-q", "-p", "net", "--test", "it", "cookies::"]
+timeout = 600
+
+[[mutant]]
+name = "terminators cut nothing"
+file = "crates/net/src/cookies/parsed_cookie.rs"
+from = '''        if cookie_line.bytes().any(|b| matches!(b, b'\n' | b'\r' | 0)) {'''
+to = '''        if cookie_line.bytes().any(|b| matches!(b, b'\r' | 0)) {'''
+
+[[mutant]]
+name = "tab is no control"
+file = "crates/net/src/cookies/parsed_cookie.rs"
+from = '''    byte <= 0x1f || byte == 0x7f'''
+to = '''    (byte <= 0x1f && byte != b'\t') || byte == 0x7f'''
+
+[[mutant]]
+name = "long attributes kept"
+file = "crates/net/src/cookies/parsed_cookie.rs"
+from = '''            if value.len() > MAX_COOKIE_ATTRIBUTE_VALUE_SIZE {'''
+to = '''            if value.len() > MAX_COOKIE_ATTRIBUTE_VALUE_SIZE + 1 {'''
+
+[[mutant]]
+name = "first pair without = is a name"
+file = "crates/net/src/cookies/parsed_cookie.rs"
+from = '''                None if is_first => ("", token_start),'''
+to = '''                None if is_first => (token, after_token),'''
+
+[[mutant]]
+name = "two-digit years not 19xx"
+file = "crates/net/src/cookies/cookie_util.rs"
+from = '''        70..=99 => year.saturating_add(1900),'''
+to = '''        70..=99 => year.saturating_add(2000),'''
+
+[[mutant]]
+name = "path match at any byte"
+file = "crates/net/src/cookies/cookie_util.rs"
+from = '''    after.is_empty() || cookie_path.ends_with('/') || after.starts_with('/')'''
+to = '''    true'''
+
+[[mutant]]
+name = "domain match any suffix"
+file = "crates/net/src/cookies/cookie_util.rs"
+from = '''    host == without_dot || (host.len() > domain.len() && host.ends_with(domain))'''
+to = '''    host == without_dot || host.ends_with(without_dot)'''
+
+[[mutant]]
+name = "host prefix without Path=/"
+file = "crates/net/src/cookies/cookie_util.rs"
+from = '''            && cookie.path() == Some("/")'''
+to = '''            && cookie.path() != Some("/a")'''
+
+[[mutant]]
+name = "no 443 for trustworthy secure"
+file = "crates/net/src/cookies/cookie_util.rs"
+from = '''        return Some(443);'''
+to = '''        return port;'''
+
+[[mutant]]
+name = "ambiguous nameless taken"
+file = "crates/net/src/cookies/canonical_cookie.rs"
+from = '''        if parsed.name().is_empty() && parsed.value().contains('=') {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "hidden prefix taken"
+file = "crates/net/src/cookies/canonical_cookie.rs"
+from = '''            !CookiePrefix::is_hidden_in(parsed.value())'''
+to = '''            true'''
+
+[[mutant]]
+name = "max-age 0 not expired"
+file = "crates/net/src/cookies/canonical_cookie.rs"
+from = '''                (seconds, true) if seconds <= 0 => return Some(Time::MIN),'''
+to = '''                (seconds, true) if seconds < 0 => return Some(Time::MIN),'''
+
+[[mutant]]
+name = "overflowing max-age ignored"
+file = "crates/net/src/cookies/canonical_cookie.rs"
+from = '''                (i64::MAX, false) => return Some(Time::MAX),'''
+to = '''                (i64::MAX, false) => {}'''
+
+[[mutant]]
+name = "no 400 day cap"
+file = "crates/net/src/cookies/canonical_cookie.rs"
+from = '''        expiry.map(|expiry| expiry.min(latest))'''
+to = '''        expiry.map(|expiry| expiry.min(latest.max(expiry)))'''
+
+[[mutant]]
+name = "expired only after expiry"
+file = "crates/net/src/cookies/canonical_cookie.rs"
+from = '''        self.expiry.is_some_and(|expiry| now >= expiry)'''
+to = '''        self.expiry.is_some_and(|expiry| now > expiry)'''
+
+[[mutant]]
+name = "lax-allowing-unsafe forever"
+file = "crates/net/src/cookies/canonical_cookie.rs"
+from = '''                        <= LAX_ALLOW_UNSAFE_MAX_AGE_SECONDS.saturating_mul(1_000_000);'''
+to = '''                        <= i64::MAX;'''
+
+[[mutant]]
+name = "lax-allowing-unsafe cross-site"
+file = "crates/net/src/cookies/canonical_cookie.rs"
+from = '''                if context < SameSiteCookieContext::SameSiteLaxMethodUnsafe =>'''
+to = '''                if context < SameSiteCookieContext::CrossSite =>'''
+
+[[mutant]]
+name = "None without Secure set"
+file = "crates/net/src/cookies/canonical_cookie.rs"
+from = '''            status.add_exclusion_reason(ExclusionReason::HttpOnly);
+        }
+        if self.same_site == CookieSameSite::NoRestriction && !self.secure {'''
+to = '''            status.add_exclusion_reason(ExclusionReason::HttpOnly);
+        }
+        if false {'''
+
+[[mutant]]
+name = "nameless sent as =value"
+file = "crates/net/src/cookies/canonical_cookie.rs"
+from = '''            if !cookie.name.is_empty() {'''
+to = '''            if true {'''
+
+[[mutant]]
+name = "insecure may overwrite secure"
+file = "crates/net/src/cookies/cookie_monster.rs"
+from = '''                && !allowed_to_set_secure_cookie'''
+to = '''                && false'''
+
+[[mutant]]
+name = "script overwrites HttpOnly"
+file = "crates/net/src/cookies/cookie_monster.rs"
+from = '''                if existing.is_http_only() && !options.include_httponly {'''
+to = '''                if false {'''
+
+[[mutant]]
+name = "always a new creation time"
+file = "crates/net/src/cookies/cookie_monster.rs"
+from = '''            if old.cookie.value() == cookie.value() {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "expired cookie stored"
+file = "crates/net/src/cookies/cookie_monster.rs"
+from = '''        if !already_expired {'''
+to = '''        if true {'''
+
+[[mutant]]
+name = "shorter paths first"
+file = "crates/net/src/cookies/cookie_monster.rs"
+from = '''                std::cmp::Reverse(entry.cookie.path().len()),'''
+to = '''                std::cmp::Reverse(0),'''
+
+[[mutant]]
+name = "expired ones kept at set"
+file = "crates/net/src/cookies/cookie_monster.rs"
+from = '''            entries.retain(|entry| !entry.cookie.is_expired(cookie.creation_date()));'''
+to = '''            entries.retain(|_| true);'''
+
+[[mutant]]
+name = "the default options allow Lax-allowing-unsafe"
+file = "crates/net/src/cookies/cookie_options.rs"
+from = '''            same_site_context: SameSiteCookieContext::CrossSite,
+            lax_allow_unsafe: false,'''
+to = '''            same_site_context: SameSiteCookieContext::CrossSite,
+            lax_allow_unsafe: true,'''

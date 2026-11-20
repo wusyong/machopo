@@ -438,4 +438,5 @@
 - `net` 的 `URLRequest` 擋不是 token 的 method（reqwest 的 `Method::from_bytes` 也拒絕，錯誤一樣；不依賴它而留著）。
 - `net` 的 CORS 判斷 basic 時看 tainting 還是 basic（`cors.rs` 的 `start`：tainting 只在跨源的網址變成 `cors` 或 `opaque`，之後回到自己的 origin 一定是從那個網址轉回來，那次 redirect 就 taint 了 origin，「沒有 taint」已經排除它；照規範的兩個條件留著）。
 - renderer 在文件的 origin 是 opaque 時不問 Browser、直接丟 `SecurityError`（`dom_api` 的 `storage::local_storage` 的 `opaque`）：Browser 照 frame 樹的 key 一樣不給 opaque 的 origin area，結果相同；留著是為了省掉一次同步的來回。
+- `net` 的 cookie 的 store 不存已經過期的 cookie（`CookieMonster::set_canonical_cookie` 的 `already_expired`）：每次讀取（`get_cookie_list_with_options`、`all_cookies`）和設定都先刪掉過期的，存進去的過期 cookie 從外面看不到；留著是照 Chromium 的 `SetCanonicalCookie`，不讓過期的佔位置。送出時的「`SameSite=None` 要 `Secure`」（`include_for_request_url`）也沒有做 mutation：這樣的 cookie 設不進去，只有之後 DevTools 和自動化直接放進去的才走得到。
 - `sql` 打開資料庫時明確讀一次 schema（`Database::set_up` 的 `SELECT count(*) FROM sqlite_master`，Chromium 的 `sql::Database::Open` 也強制讀）：在它之前的 `PRAGMA journal_mode=TRUNCATE` 在準備時就讀了 schema，同樣拿到 exclusive 的鎖、找出不是資料庫或 schema 壞掉的檔案，拿掉結果一樣；留著是不依賴 SQLite 準備那一句時順便讀 schema。
