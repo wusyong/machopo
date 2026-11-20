@@ -2278,6 +2278,14 @@ impl<'s, K: InfoKind<'s>> dom_api::typed::ScriptFront for InfoFront<'s, K> {
         })
     }
 
+    fn open_local_storage(
+        &mut self,
+        document: &dom::NodeRoot,
+    ) -> Option<dom_api::OpenedStorageArea> {
+        self.info
+            .with_scope(|mut scope, _| crate::frames::open_local_storage(&mut scope, document))
+    }
+
     fn reject_promise_with_reason(&mut self, promise: u64, signal: &Persistent<EventTargetImpl>) {
         self.info.with_scope(|mut scope, _| {
             crate::listeners::reject_promise_with_reason(&mut scope, promise, signal);

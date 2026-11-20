@@ -4,7 +4,6 @@ use base::SequenceNumber;
 use crossbeam_channel::Sender;
 use gfx::{RectF, Size};
 use ipc::TimeTicks;
-use net::NetworkContext;
 use protocol::network::{
     CompletionStatus, LoadResult, NetError, NetErrorCode, RedirectInfo, RequestDestination,
     ResourceRequest, ResponseHead,
@@ -26,7 +25,7 @@ use crate::debug_urls::{DebugUrl, debug_url};
 use crate::navigation_controller::{HistoryLoad, NavigationController, NavigationType};
 use crate::navigation_request::{DocumentLoad, Loading, NavigationRequest, NavigationResponse};
 use crate::render_process_host::{CommittedDocument, Committer, is_file_url};
-use crate::{RenderProcessHost, RendererFlags, RendererId, ScriptEngineFactory};
+use crate::{RenderProcessHost, RendererFlags, RendererId, ScriptEngineFactory, StoragePartition};
 
 /// What a tab's other threads have for its UI thread: the embedder posts
 /// each to the UI thread and hands it to the tab there (the renderer's
@@ -178,7 +177,8 @@ pub struct WebContents {
     /// Numbers the renderers' frame sinks from 1.
     sink_ids: SequenceNumber<u32>,
     process: RenderProcessHost,
-    network: NetworkContext,
+    /// The profile's storage: its network context and its `localStorage`.
+    partition: StoragePartition,
     /// For the debug URLs that act on Viz.
     viz: Sender<VizMsg>,
     visual_properties: VisualProperties,
@@ -246,7 +246,7 @@ impl Launch {
         tab: TabId,
         frame_sink_id: FrameSinkId,
         viz: &Sender<VizMsg>,
-        network: &NetworkContext,
+        partition: &StoragePartition,
     ) -> std::io::Result<RenderProcessHost> {
         let on_event = self.on_event.clone();
         RenderProcessHost::launch(
@@ -256,7 +256,7 @@ impl Launch {
             self.script_engine,
             viz.clone(),
             self.gpu.clone(),
-            network.clone(),
+            partition.clone(),
             Box::new(move |tab, renderer, msg| {
                 let on_event = on_event.lock().unwrap_or_else(|e| e.into_inner());
                 on_event(
@@ -308,7 +308,7 @@ impl WebContents {
         script_engine: ScriptEngineFactory,
         viz: Sender<VizMsg>,
         gpu: Option<Arc<dyn SharedImageInterface>>,
-        network: NetworkContext,
+        partition: StoragePartition,
         on_event: ContentsEventCallback,
     ) -> std::io::Result<Self> {
         // One renderer "process" at a time per tab, one frame sink per
@@ -329,7 +329,7 @@ impl WebContents {
             gpu,
             on_event: Arc::new(Mutex::new(on_event)),
         };
-        let process = launch.process(tab, frame_sink_id, &viz, &network)?;
+        let process = launch.process(tab, frame_sink_id, &viz, &partition)?;
         let devtools_frame_token = devtools_frame_token();
         process.send(RendererMsg::DevToolsMainFrameToken(devtools_frame_token));
         Ok(Self {
@@ -338,7 +338,7 @@ impl WebContents {
             frame_sink_id,
             sink_ids,
             process,
-            network,
+            partition,
             viz,
             navigation_ids: SequenceNumber::starting_at(1),
             document_navigation_id: 0,
@@ -763,7 +763,7 @@ impl WebContents {
         };
         let process = match self
             .launch
-            .process(self.tab, frame_sink_id, &self.viz, &self.network)
+            .process(self.tab, frame_sink_id, &self.viz, &self.partition)
         {
             Ok(process) => process,
             Err(e) => {
@@ -900,7 +900,7 @@ impl WebContents {
         }
         // A blob URL's blob, as it is now (`BlobURLLoaderFactory`), whole.
         if crate::render_process_host::is_blob_url(&request.url) {
-            let result = self.network.load_blob_url(&request, None);
+            let result = self.partition.network().load_blob_url(&request, None);
             (self.poster())(ContentsEvent::NavigationBlobLoaded {
                 frame,
                 navigation_id,
@@ -915,7 +915,10 @@ impl WebContents {
             navigation_id,
             post: self.poster(),
         };
-        let load = self.network.load(request, net::AtRedirects::Wait, client);
+        let load = self
+            .partition
+            .network()
+            .load(request, net::AtRedirects::Wait, client);
         if let Some(navigation) = self.frame_tree.navigation_mut(frame, navigation_id) {
             navigation.load.set(load);
         }
@@ -1536,6 +1539,27 @@ impl WebContents {
         });
     }
 
+    /// The renderer's frame `frame` opens its document's `localStorage`
+    /// (`RenderFrameHostImpl::BindDomStorage` with the frame's storage
+    /// key, which the renderer doesn't say): the area goes to the renderer
+    /// as the answer `request_id` it waits for; none for a frame that has
+    /// gone (its iframe removed as the message came), which is to have its
+    /// answer all the same.
+    fn open_local_storage(&self, frame: FrameToken, request_id: u64) {
+        let to_renderer = self.process.sender();
+        let reply: crate::OpenReply = Box::new(move |area| {
+            let _ = to_renderer.send(RendererMsg::LocalStorageOpened { request_id, area });
+        });
+        match self.frame_tree.storage_key(frame) {
+            Some(key) => {
+                self.partition
+                    .dom_storage()
+                    .open(self.process.renderer_id(), key.clone(), reply)
+            }
+            None => reply(None),
+        }
+    }
+
     /// Applies a renderer message to browser-side state. The embedder calls
     /// this on the UI thread after the IO thread forwarded it.
     pub fn on_renderer_message(&mut self, msg: &RendererHostMsg) {
@@ -1662,12 +1686,18 @@ impl WebContents {
             | RendererHostMsg::FollowRedirect { .. }
             | RendererHostMsg::DedicatedWorkerCreated { .. }
             | RendererHostMsg::DedicatedWorkerGone { .. }
-            | RendererHostMsg::RegisterBlobUrl { .. } => {}
+            | RendererHostMsg::RegisterBlobUrl { .. }
+            | RendererHostMsg::ChangeStorage { .. }
+            | RendererHostMsg::ForgetStorageAreas => {}
             // Revoked for its loads already; the navigations asked for
             // before it, which came before it, have their blob.
             RendererHostMsg::RevokeBlobUrl { url } => {
-                self.network
+                self.partition
+                    .network()
                     .forget_blob_url(self.process.renderer_id(), url);
+            }
+            RendererHostMsg::OpenLocalStorage { frame, request_id } => {
+                self.open_local_storage(*frame, *request_id);
             }
             RendererHostMsg::DidFinishLoad {
                 failed_subresources,

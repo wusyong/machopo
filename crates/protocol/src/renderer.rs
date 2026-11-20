@@ -114,6 +114,24 @@ pub struct HistoryEntryParams {
     pub entries_heard: u64,
 }
 
+/// A storage area as the browser opens it for a renderer: its number
+/// (each renderer's own, one for each storage key it has opened), and its
+/// items, if the renderer didn't have the area already.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenedStorageArea {
+    pub area: u64,
+    pub items: Option<Vec<(String, String)>>,
+}
+
+/// A change a renderer made to a storage area (`StorageArea::Put`,
+/// `Delete`, `DeleteAll`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StorageChange {
+    Set { key: String, value: String },
+    Remove { key: String },
+    Clear,
+}
+
 /// The URL an error page's document has (Chromium's
 /// `kUnreachableWebDataURL`): a scheme no one loads, so its origin is
 /// opaque, and no other document is of it. The browser's address bar and
@@ -243,6 +261,15 @@ pub enum RendererMsg {
     /// (`DedicatedWorkerCreated`'s), loaded, or why it wasn't (Chromium's
     /// `DedicatedWorkerHost`'s `WorkerScriptFetcher`).
     DedicatedWorkerScript { worker: u64, result: LoadResult },
+    /// The answer to `RendererHostMsg::OpenLocalStorage` (`StorageArea`'s
+    /// binding and its `GetAll`): the frame's area, or none if its
+    /// document may have none (an opaque origin's) or the frame has gone.
+    /// Not a task of the main thread's: it waits for it alone, every other
+    /// task left queued in order (a `[Sync]` call's reply).
+    LocalStorageOpened {
+        request_id: u64,
+        area: Option<OpenedStorageArea>,
+    },
     /// `UpdateVisualProperties`.
     UpdateVisualProperties(VisualProperties),
     /// `blink.mojom.Widget::UpdateScreenRects`: where the browser window
@@ -686,6 +713,30 @@ pub enum RendererHostMsg {
         mime_type: String,
         bytes: Arc<[u8]>,
     },
+    /// `localStorage` first used in frame `frame`'s document (Chromium's
+    /// `StorageArea` bound for the frame's storage key, then `GetAll`): the
+    /// browser works out the key from the frame, its document committed
+    /// before this on the channel, and answers `LocalStorageOpened` with
+    /// the same `request_id`, which the main thread waits for. Handled on
+    /// the UI thread, which has the frames.
+    OpenLocalStorage {
+        frame: crate::FrameToken,
+        request_id: u64,
+    },
+    /// A change to the area `area` (`LocalStorageOpened`'s), which this
+    /// renderer made to its own copy first (`StorageArea::Put`, `Delete`,
+    /// `DeleteAll`): sent after the answer that gave it the area. Handled
+    /// on the IO thread; one of an area that isn't the renderer's changes
+    /// nothing.
+    ChangeStorage {
+        area: u64,
+        change: StorageChange,
+    },
+    /// The renderer has none of its areas any more (its DOM replaced by
+    /// another engine's): the next `OpenLocalStorage` of a frame gives the
+    /// items again. Handled on the IO thread, before any `OpenLocalStorage`
+    /// after it.
+    ForgetStorageAreas,
     /// `BlobURLStore::Revoke`: `url`, which this renderer registered, no
     /// longer stands for its blob. Sent after the loads asked for before
     /// it. Handled on the IO thread.

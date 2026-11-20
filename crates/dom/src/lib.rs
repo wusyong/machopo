@@ -90,6 +90,7 @@ mod selection;
 mod shadow;
 mod slot;
 mod step_range;
+mod storage;
 mod string;
 mod style;
 mod style_sheet;
@@ -207,6 +208,7 @@ pub use shadow::{
 };
 pub use slot::SlotData;
 pub use step_range::{RangeKey, StepError};
+pub use storage::{Storage, StorageChange};
 pub use style_sheet::{CssStyleSheet, SheetContents, SheetMedia};
 pub use svg::{SvgAnimatedString, SvgMatrix, SvgPoint, SvgRect};
 pub use svg_use::MAX_COPIES;
@@ -863,6 +865,9 @@ struct Changes {
     /// host's (`Dom::set_agent`, `navigator`).
     user_agent: std::cell::RefCell<String>,
     webdriver: Cell<bool>,
+    /// The `localStorage` areas' items and their changes for the host
+    /// (`storage`).
+    storage: storage::StorageAreas,
 }
 
 /// The microtasks an operation asked the engine to queue
@@ -893,6 +898,10 @@ impl Microtasks {
     /// `FetchManager` starts its loader in the call;
     /// `Cx::take_fetch_requests`).
     pub(crate) const FETCHES: u8 = 1 << 6;
+    /// Not a microtask either: `localStorage` changed, which the engine
+    /// hands its host before the call returns (Blink's `CachedStorageArea`
+    /// tells the browser as it changes; `Cx::take_storage_changes`).
+    pub(crate) const STORAGE: u8 = 1 << 7;
 
     #[inline]
     pub fn is_empty(self) -> bool {
@@ -925,6 +934,10 @@ impl Microtasks {
 
     pub fn fetches(self) -> bool {
         self.0 & Self::FETCHES != 0
+    }
+
+    pub fn storage(self) -> bool {
+        self.0 & Self::STORAGE != 0
     }
 }
 

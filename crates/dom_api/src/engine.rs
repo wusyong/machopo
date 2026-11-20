@@ -460,6 +460,13 @@ pub trait ScriptEngine: ParserHost {
     /// thread (`InputMonitor`), the host's: replaces the one before.
     fn set_input_monitor(&mut self, monitor: Box<dyn crate::InputMonitor>);
 
+    /// What opens the frames' `localStorage` and hears what script changes
+    /// in it (`StorageHost`), the host's. An engine without `localStorage`
+    /// drops it.
+    fn set_storage_host(&mut self, host: Box<dyn crate::StorageHost>) {
+        let _ = host;
+    }
+
     /// Runs the frames' windows' element tasks, a window's after another's
     /// (`dom_api::run_element_tasks`: a text control's `select`), a
     /// microtask checkpoint after each: whether any ran.

@@ -28,6 +28,8 @@ pub struct Window {
     pub(crate) history: Member<crate::History>,
     /// Its `navigator`, once asked for.
     pub(crate) navigator: Member<crate::Navigator>,
+    /// Its `localStorage`, once it has one (`storage`).
+    pub(crate) local_storage: Member<crate::Storage>,
     pub(crate) navigation_timing: LocalExternal<Cell<Option<Box<crate::NavigationTiming>>>>,
     /// The `hashchange`s queued, their URLs before and after, in order
     /// (`history`'s `queue_hash_change`); taken and put back.
@@ -283,6 +285,7 @@ impl<'gc> Cx<'_, 'gc> {
                 location: None,
                 history: None,
                 navigator: None,
+                local_storage: None,
                 navigation_timing: LocalExternal::new(Cell::new(None)),
                 hash_changes: LocalExternal::new(Cell::new(Vec::new())),
                 listeners: None,

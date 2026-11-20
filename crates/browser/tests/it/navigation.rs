@@ -7,7 +7,10 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use base::AtomicSequenceNumber;
-use browser::{ContentsEvent, NetworkContext, NetworkContextParams, OpenUrlParams, WebContents};
+use browser::{
+    ContentsEvent, NetworkContext, NetworkContextParams, OpenUrlParams, Profile, StoragePartition,
+    WebContents,
+};
 use crossbeam_channel::{Receiver, RecvTimeoutError, unbounded};
 use net::test_server::{Route, TestServer, unused_port};
 use protocol::TabId;
@@ -18,7 +21,7 @@ use protocol::viz::{
 };
 use viz::BeginFrameSource;
 
-const TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A fresh tab, the channel its renderer's messages arrive on, Viz's end
 /// of its frame sink, and the `BeginFrameSource` that paces it: for tests
@@ -70,7 +73,13 @@ fn tab_with_viz_gpu(
     Receiver<VizMsg>,
     BeginFrameSource,
 ) {
-    tab_with_viz_colors(wait, automation, gpu, gfx::SystemColors::DEFAULT)
+    tab_with_viz_colors(
+        wait,
+        automation,
+        gpu,
+        gfx::SystemColors::DEFAULT,
+        in_memory(),
+    )
 }
 
 /// [`tab`], whose renderer's parser has `parser_budget`.
@@ -84,6 +93,7 @@ fn tab_with_parser_budget(
         gfx::SystemColors::DEFAULT,
         parser_budget,
         browser::NEW_CONTENT_RENDERING_DELAY,
+        in_memory(),
     );
     (web_contents, host_rx)
 }
@@ -95,6 +105,7 @@ fn tab_with_viz_colors(
     automation: bool,
     gpu: Option<Arc<dyn SharedImageInterface>>,
     system_colors: gfx::SystemColors,
+    partition: StoragePartition,
 ) -> (
     WebContents,
     Receiver<ContentsEvent>,
@@ -108,7 +119,21 @@ fn tab_with_viz_colors(
         system_colors,
         Default::default(),
         browser::NEW_CONTENT_RENDERING_DELAY,
+        partition,
     )
+}
+
+/// A new profile's storage, in memory.
+fn in_memory() -> StoragePartition {
+    StoragePartition::new(
+        &Profile::in_memory(),
+        NetworkContext::start(NetworkContextParams {
+            user_agent: browser::user_agent(),
+            ..Default::default()
+        })
+        .expect("network service starts"),
+    )
+    .expect("the storage starts")
 }
 
 /// [`tab_with_viz_colors`], whose renderer's parser has `parser_budget`,
@@ -121,6 +146,7 @@ fn tab_with_flags(
     system_colors: gfx::SystemColors,
     parser_budget: browser::ParserBudget,
     new_content_rendering_delay: Duration,
+    partition: StoragePartition,
 ) -> (
     WebContents,
     Receiver<ContentsEvent>,
@@ -150,11 +176,7 @@ fn tab_with_flags(
         },
         viz_tx,
         gpu,
-        NetworkContext::start(NetworkContextParams {
-            user_agent: browser::user_agent(),
-            ..Default::default()
-        })
-        .expect("network service starts"),
+        partition,
         Box::new(move |_tab, msg| {
             let _ = host_tx.send(msg);
         }),
@@ -209,7 +231,7 @@ fn asked_url(msg: &RendererHostMsg) -> Option<&str> {
 
 /// The renderer's next message within `timeout`, the tab following the
 /// redirects that come before it.
-fn next_message(
+pub(crate) fn next_message(
     web_contents: &mut WebContents,
     host_rx: &Receiver<ContentsEvent>,
     timeout: Duration,
@@ -241,8 +263,21 @@ fn tab_for_colors(
     automation: bool,
     system_colors: gfx::SystemColors,
 ) -> (WebContents, Receiver<ContentsEvent>) {
+    tab_in_partition(automation, system_colors, in_memory())
+}
+
+/// [`tab`], of the profile whose storage `partition` is.
+pub(crate) fn tab_in(partition: StoragePartition) -> (WebContents, Receiver<ContentsEvent>) {
+    tab_in_partition(false, gfx::SystemColors::DEFAULT, partition)
+}
+
+fn tab_in_partition(
+    automation: bool,
+    system_colors: gfx::SystemColors,
+    partition: StoragePartition,
+) -> (WebContents, Receiver<ContentsEvent>) {
     let (mut web_contents, host_rx, viz_rx, mut begin_frames) =
-        tab_with_viz_colors(true, automation, None, system_colors);
+        tab_with_viz_colors(true, automation, None, system_colors, partition);
     web_contents.resize(gfx::Size::new(200, 200), 1.0);
     // Viz, minus the drawing: frames are dropped, and `BeginFrame`s go to the
     // renderer back to back, as headless sends them.
@@ -422,6 +457,7 @@ fn a_new_document_that_cant_be_drawn_shows_empty_after_the_delay() {
         gfx::SystemColors::DEFAULT,
         Default::default(),
         delay,
+        in_memory(),
     );
     web_contents.resize(gfx::Size::new(200, 200), 1.0);
     let mut viz = DrivenViz::new(viz_rx, begin_frames);
@@ -477,6 +513,7 @@ fn a_drawn_document_blocked_by_a_sheet_after_isnt_shown_empty() {
         gfx::SystemColors::DEFAULT,
         Default::default(),
         delay,
+        in_memory(),
     );
     web_contents.resize(gfx::Size::new(200, 200), 1.0);
     let mut viz = DrivenViz::new(viz_rx, begin_frames);
@@ -697,7 +734,7 @@ fn navigate(url: &str) -> (String, String) {
     (committed, title)
 }
 
-fn server(routes: &[(&str, Route)]) -> TestServer {
+pub(crate) fn server(routes: &[(&str, Route)]) -> TestServer {
     TestServer::start(
         routes
             .iter()
@@ -2659,6 +2696,7 @@ document.querySelector('base').setAttribute('href', '/later/');
             gfx::SystemColors::DEFAULT,
             Default::default(),
             Duration::from_millis(300),
+            in_memory(),
         );
         let mut viz = DrivenViz::new(viz_rx, begin_frames);
         web_contents.resize(gfx::Size::new(200, 200), 1.0);

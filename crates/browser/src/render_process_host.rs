@@ -22,6 +22,7 @@ use renderer::{
     CompositorSender, RendererEndpoints, RendererFlags, RendererSender, ScriptEngineFactory,
 };
 
+use crate::StoragePartition;
 use crate::bad_message::BadMessageReason;
 
 /// `content::RenderProcessHost`. For now the "process" is a thread in this
@@ -88,9 +89,11 @@ impl RenderProcessHost {
         script_engine: ScriptEngineFactory,
         viz: Sender<VizMsg>,
         gpu: Option<Arc<dyn SharedImageInterface>>,
-        network: NetworkContext,
+        partition: StoragePartition,
         on_message: RendererMessageCallback,
     ) -> std::io::Result<Self> {
+        let network = partition.network().clone();
+        let dom_storage = partition.dom_storage().clone();
         let (to_renderer, to_compositor, from_browser) = renderer::channel();
         let (to_browser, from_renderer) = crossbeam_channel::unbounded();
         let file_access = Arc::new(AtomicBool::new(false));
@@ -239,6 +242,13 @@ impl RenderProcessHost {
                                 network.revoke_blob_url(renderer_id, &url);
                                 on_message(tab, RendererHostMsg::RevokeBlobUrl { url });
                             }
+                            // To the storage thread at once: after the
+                            // answer that gave the renderer the area (the
+                            // UI thread's), before any open after it.
+                            RendererHostMsg::ChangeStorage { area, change } => {
+                                dom_storage.change(renderer_id, area, change);
+                            }
+                            RendererHostMsg::ForgetStorageAreas => dom_storage.forget(renderer_id),
                             RendererHostMsg::FollowRedirect { request_id, worker } => {
                                 if let Some(load) = loads
                                     .lock()
@@ -266,6 +276,7 @@ impl RenderProcessHost {
                         load.cancel();
                     }
                     network.revoke_blob_urls_of(renderer_id);
+                    dom_storage.forget(renderer_id);
                     on_message(tab, RendererHostMsg::RendererGone);
                 })?
         };
@@ -284,6 +295,12 @@ impl RenderProcessHost {
     /// Its number, which its blob URLs are registered under.
     pub(crate) fn renderer_id(&self) -> u64 {
         self.renderer_id
+    }
+
+    /// Its way to the renderer's main thread, for what answers it from
+    /// another thread.
+    pub(crate) fn sender(&self) -> RendererSender {
+        self.to_renderer.clone()
     }
 
     /// Which renderer it is, as its messages say.

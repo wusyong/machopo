@@ -81,7 +81,7 @@ cookie 存在 `net` 那一側（Chromium 的 `CookieMonster` 在 network service
 3. ~~public suffix list 從哪來~~：`psl` crate（第 3 條）。
 4. ~~profile~~：位置和哪些模式寫磁碟（第 5 條）、第二個 machopo 拒絕啟動（第 6 條）。
 5. ~~磁碟上的格式~~：SQLite（第 7 條）。
-6. **renderer 怎麼同步等 Browser**：訊息帶編號、main thread 在自己的 queue 上等那一則回答（其他 task 留著，和 worker 的 `importScripts` 一樣），或訊息帶一個回答用的 channel（不能序列化，是邊界的例外）。拆 process 時兩者都要換成同步的 IPC。
+6. ~~renderer 怎麼同步等 Browser~~：回答走一般的訊息，到 scheduler 裡等回答的位置（第 9 條）。
 7. **Web Storage 的細節**：`storage` 事件怎麼到其他分頁、`sessionStorage` 的 namespace 跟著什麼（分頁；頁面開的新分頁要不要複製）、上限怎麼算。
 8. **cookie 的實作**：自己照 RFC 6265bis 和 Chromium 的 `CanonicalCookie` 寫，或用 `cookie_store` crate（reqwest 的 `cookies` 用的）。看 WPT 的 `cookies/` 要的行為它做不做得到。
 9. **請求的來歷**：`ResourceRequest` 加哪些欄位、誰填、Browser 怎麼核對 renderer 送來的。
@@ -103,7 +103,7 @@ cookie 存在 `net` 那一側（Chromium 的 `CookieMonster` 在 network service
 
 1. **網站和 key**：public suffix list、`Site`、`StorageKey`，frame 樹在 commit 時算出每個 frame 的 key。看得到的只有 DevTools 的 `domainAndRegistry`。分三段：1a `site` crate 的 `Site` 和 registrable domain；1b `StorageKey`，frame 樹在 commit 時算；1c DevTools 的 `domainAndRegistry`、檢查和文件。
 2. **profile 和磁碟**：資料夾、`--user-data-dir`、哪些模式只在記憶體、磁碟上的格式和它的讀寫。
-3. **Web Storage**：同步等 Browser 的路、`localStorage`、`sessionStorage`、`storage` 事件、上限。
+3. **Web Storage**：同步等 Browser 的路、`localStorage`、`sessionStorage`、`storage` 事件、上限。分三段：3a 同步等 Browser 的路、Browser 的 storage thread 和資料庫、`Storage` 介面和 `localStorage`；3b `storage` 事件、`sessionStorage`；3c 上限、寫進磁碟的批次、WPT 的 `webstorage/`、檢查和文件。
 4. **`net` 的 cookie**：請求的來歷、cookie 的儲存、`Set-Cookie` 和 `Cookie`、`SameSite`、持久。
 5. **cookie 到 DOM 和自動化**：`document.cookie`、`navigator.cookieEnabled`、WebDriver、CDP。
 6. **檢查和文件**。
@@ -139,9 +139,13 @@ cookie 存在 `net` 那一側（Chromium 的 `CookieMonster` 在 network service
 7. **磁碟上的儲存用 SQLite**（2026-11-20，第 2 階段）：`rusqlite`，連同 SQLite 的原始碼一起編（`bundled`），設定照 Chromium 的 `sql::Database` 的預設：exclusive locking（打開它的 process 之外沒有人能開）、`journal_mode=TRUNCATE`（rollback journal）、`synchronous` 用 SQLite 預設的 FULL。（同一天改的：原本寫 WAL 模式，那是起草時自己加的細節；Chromium 的註解說 WAL 還在開發中、正式的功能還不用，預設是上面這組。）當掉、斷電時檔案不壞，有 transaction；cookie 要照網域查、找過期的，有 SQL；格式幾十年沒有不相容的改動，換版本不用搬資料。2026-11-20 量的（Apple M4，`rusqlite` 0.43）：release 第一次編 12.4 秒，執行檔多約 1.9 MB，一個 transaction 寫 1 萬筆 32 ms。machopo 本來就要 C 的編譯器（mimalloc 等），不多新的建置需求。對照 Chromium：cookie 存在 SQLite（`SQLitePersistentCookieStore`）；`localStorage`、`sessionStorage` 原本在 LevelDB，現在的程式有從 LevelDB 搬到 SQLite 的遷移（`DomStorageDatabase`），收斂到 SQLite；`localStorage` 成批地寫（預設等 5 秒，每小時最多 60 次）。不選 `redb`（純 Rust 的 key-value 資料庫，release 4.9 秒、多約 1.1 MB、1 萬筆 105 ms）：不碰 C，但只有 key-value，cookie 的查詢要自己建索引，檔案格式在大版本之間改過（5.0 是 2026-11-18 才發的），長期放在使用者電腦上的資料要搬。不選自己的檔案格式（每個 area 一個檔案、整份寫進暫存檔再改名）：不加依賴，但防當機、格式的升級、cookie 的查詢都要自己寫和測，HTTP cache 還要再設計一次。
 8. **SQLite 包在新的 crate `sql`**（2026-11-20，第 2 階段）：包住 `rusqlite`（re-export 它，`rusqlite` 只是這個 crate 的依賴）：在 profile 的資料夾裡打開一個資料庫，只在記憶體的 profile 開在記憶體裡、走同一套程式；設定；schema 的版本和升級；壞掉的檔案。每種資料各開自己的檔案、在自己的 thread 上用自己的連線：cookie 在 `net` 的 network thread，Web Storage 在 Browser。對照 Chromium：`//sql` 是共用的包裝，每個功能各自的資料庫和 page cache（它的 `//sql` 文件寫的「full per-feature isolation」），cookie 是 `Cookies`、`localStorage` 是 `LocalStorage`。不選 `net` 和 `browser` 各自直接用 `rusqlite`：不多 crate，但開檔、設定、升級、記憶體和磁碟兩種 profile 要寫兩份。不選全部交給 `net`：SQLite 只在一處，但 Web Storage 和網路無關，它的讀寫和請求排在同一條 thread 上；Chromium 也放在另一個 storage service。
 
+9. **renderer 同步等 Browser 的回答走一般的訊息，到 scheduler 裡等回答的位置**（2026-11-20，第 3 階段）：要同步問的訊息帶一個編號，Browser 的回答是一則帶同一個編號的 `RendererMsg`，`RendererSender` 不把它放進 Browser 的 queue，而是放進 main thread 的 scheduler 裡一個等回答用的位置；main thread 只在那個位置上等，其他 queue 的 task 不動、順序不變；renderer 和 Browser 之間斷了時等的那一方醒來、當成失敗。訊息照樣可以序列化：拆 process 時由讀 IPC 的 thread 照樣分到那個位置，呼叫的地方不用改。`document.cookie` 的同步讀之後也走這條路。對照 Chromium：Mojo 的 `[Sync]` 呼叫擋住呼叫的 thread，只等那條 pipe 上的回答（和允許的同步呼叫），其他的非同步訊息照順序留在 queue 裡；`CachedStorageArea` 第一次用時同步的 `GetAll` 就是這樣。不選回答進 Browser 的 queue、main thread 從裡面挑（worker 的 `importScripts` 的做法）：main thread 有六個 queue，挑出來放著的 task 要照原本的先後放回去，scheduler 要多一個通用的放回去（現在只有 DevTools 的），程式比較多也比較容易弄亂順序，沒有換到什麼。不選訊息裡帶一個回答用的 channel：現在最省事、scheduler 不用改，但不能序列化，是 process 邊界的例外，拆 process 時每個呼叫的地方都要重寫。
+
+10. **renderer 照 Browser 給的 area 編號共用 `localStorage` 的那一份**（2026-11-20，第 3 階段）：文件第一次碰 `localStorage` 時同步送「打開」，只帶 frame 的 token；訊息照 IO thread 到 UI thread 的順序走，到的時候那份文件的 `DidCommitNavigation` 已經到了、frame 樹算好了 key。UI thread 查到 key 交給 storage thread，storage thread 回一個 area 的編號（每個 renderer、每個 key 一個），這個 renderer 還沒有這個 area 時順便帶上整份資料。renderer 照編號共用它的那一份（同一個分頁裡同 key 的文件寫了，另一份同步讀得到），之後的寫入帶著編號，從 IO thread 直接到 storage thread、不經過 UI thread。key 一直在 Browser 手上，renderer 宣稱不了別人的 key。對照 Chromium：也先在 UI thread 上經過 `RenderFrameHostImpl` 照 frame 的 key 打開 area，之後的讀寫直接走那條 pipe 到 storage service；renderer 的 `CachedStorageArea` 照 key 共用。不選 Browser 在 commit 時把 key 告訴 renderer、renderer 照 key 快取（Chromium 的 `commit_params` 的 `storage_key`）：renderer 已經有那個 area 時不用問，但 Browser 要在送 commit 之前就算好 key（現在是收到 `DidCommitNavigation` 才算），renderer 自己 commit 的文件（`about:blank`、`srcdoc`、`javascript:`）要自己算，Browser 還要核對 renderer 說的 key（Chromium 的 `CanAccessDataForOrigin`），只為了省下每份文件第一次用時的一次來回。
+
 ## 待決定
 
-「要決定的事（依序）」的第 6 到 12 個，每個階段開始前定那一段的。
+「要決定的事（依序）」的第 7 到 12 個，每個階段開始前定那一段的。
 
 ## 之後的可能
 

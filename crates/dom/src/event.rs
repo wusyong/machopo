@@ -325,6 +325,7 @@ pub enum ObjectRef<'gc> {
     GeolocationPositionError(Gc<'gc, crate::GeolocationPositionError>),
     WakeLock(Gc<'gc, crate::WakeLock>),
     Scheduling(Gc<'gc, crate::Scheduling>),
+    Storage(Gc<'gc, crate::Storage>),
     IdleDeadline(Gc<'gc, crate::IdleDeadline>),
     PerformanceTiming(Gc<'gc, crate::PerformanceTiming>),
     PerformanceObserverEntryList(Gc<'gc, crate::PerformanceObserverEntryList>),
@@ -397,6 +398,7 @@ impl<'gc> ObjectRef<'gc> {
             Self::GeolocationPositionError(object) => object.erase(),
             Self::WakeLock(object) => object.erase(),
             Self::Scheduling(object) => object.erase(),
+            Self::Storage(object) => object.erase(),
             Self::IdleDeadline(object) => object.erase(),
             Self::PerformanceTiming(object) => object.erase(),
             Self::PerformanceObserverEntryList(object) => object.erase(),
@@ -540,6 +542,12 @@ impl<'gc> From<Gc<'gc, crate::WakeLock>> for ObjectRef<'gc> {
 impl<'gc> From<Gc<'gc, crate::Scheduling>> for ObjectRef<'gc> {
     fn from(object: Gc<'gc, crate::Scheduling>) -> Self {
         Self::Scheduling(object)
+    }
+}
+
+impl<'gc> From<Gc<'gc, crate::Storage>> for ObjectRef<'gc> {
+    fn from(object: Gc<'gc, crate::Storage>) -> Self {
+        Self::Storage(object)
     }
 }
 
@@ -859,6 +867,7 @@ pub enum ObjectRoot {
     GeolocationPositionError(Persistent<crate::GeolocationPositionError>),
     WakeLock(Persistent<crate::WakeLock>),
     Scheduling(Persistent<crate::Scheduling>),
+    Storage(Persistent<crate::Storage>),
     IdleDeadline(Persistent<crate::IdleDeadline>),
     PerformanceTiming(Persistent<crate::PerformanceTiming>),
     PerformanceObserverEntryList(Persistent<crate::PerformanceObserverEntryList>),
@@ -932,6 +941,7 @@ impl ObjectRoot {
             }
             Self::WakeLock(root) => ObjectRef::WakeLock(root.get(cx)),
             Self::Scheduling(root) => ObjectRef::Scheduling(root.get(cx)),
+            Self::Storage(root) => ObjectRef::Storage(root.get(cx)),
             Self::IdleDeadline(root) => ObjectRef::IdleDeadline(root.get(cx)),
             Self::PerformanceTiming(root) => ObjectRef::PerformanceTiming(root.get(cx)),
             Self::PerformanceObserverEntryList(root) => {
@@ -2110,6 +2120,7 @@ impl<'gc> Cx<'_, 'gc> {
             }
             ObjectRef::WakeLock(wake_lock) => self.wake_lock_wrapper_edge(wake_lock),
             ObjectRef::Scheduling(scheduling) => self.scheduling_wrapper_edge(scheduling),
+            ObjectRef::Storage(storage) => self.storage_wrapper_edge(storage),
             ObjectRef::IdleDeadline(deadline) => self.idle_deadline_wrapper_edge(deadline),
             ObjectRef::PerformanceTiming(object) => self.performance_timing_wrapper_edge(object),
             ObjectRef::PerformanceObserverEntryList(object) => self.entry_list_wrapper_edge(object),
@@ -2220,6 +2231,7 @@ impl<'gc> Cx<'_, 'gc> {
             ObjectRef::Scheduling(scheduling) => {
                 ObjectRoot::Scheduling(Persistent::new(self.gc, scheduling))
             }
+            ObjectRef::Storage(storage) => ObjectRoot::Storage(Persistent::new(self.gc, storage)),
             ObjectRef::IdleDeadline(deadline) => {
                 ObjectRoot::IdleDeadline(Persistent::new(self.gc, deadline))
             }

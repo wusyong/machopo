@@ -8,6 +8,7 @@
 
 | 項目 | 為什麼測不到 | 現在靠什麼 | 之後怎麼處理 |
 | --- | --- | --- | --- |
+| Browser 照 frame 打開 `localStorage` 時，frame 不在樹上也回答（`browser` 的 `WebContents::open_local_storage` 的 `None` 那一支）：renderer 的 main thread 在等這個回答 | 正常的 renderer 在 iframe 的 `DidDetachFrame` 之前就送了「打開」，同一條 channel 照順序到，Browser 收到時 frame 一定還在；只有送了不是自己的 frame 的 renderer 走得到，測試做不出這樣的 renderer | 審查：每個「打開」都要有回答，不然那個 renderer 的 main thread 永遠等著 | renderer 拆成 process、有壞掉的 renderer 的測試工具時，用它送不存在的 frame |
 | event loop 等下一個 task 時，也照新文件畫不了的等待時間醒來（`renderer` 的 `until_next_due` 裡的 `new_content_due`） | 拿掉時空的 frame 要等 loop 為別的事醒來才送：被擋住的文件照樣有網路安靜的偵測、sheet 的回應這些叫醒 loop 的事，測試裡的時間差不出來 | 審查 | 測試能讓 renderer 除了這個計時之外沒有別的事可做（沒有 idleness 的計時、沒有 BeginFrame） |
 | layout 自己的演算法在直排時換成物理座標的那一半：inline 內容區的起點（`content_origin`）、table 的 caption、row group、row、cell 的位置、靜態位置、`vertical-align` 的位移、欄的背景，collapsed border 給 paint 的格線怎麼轉置（`layout` 的 `table.rs`） | style 還不解析 `writing-mode`，`ComputedStyle::writing_direction()` 一律是橫排：直排該轉的地方沒轉抓不到；mutation test 把這類錯誤記成等價。`rtl` 的那一半由 `layout` 的 `direction::`、`lists::` 和 WPT（`css-tables/paint/col-paint-htb-rtl` 這些）測 | 審查；converter、`content_box_origin`、`to_physical_delta` 自己在每種 writing mode 的單元測試（`logical::`） | 直排等 `writing-mode` 的 RFC |
 | event loop 等下一個 task 時，也照跨 origin 的子 frame 的 fragment 導覽之後要在 iframe 上發的 `load` 的時間醒來（`renderer` 的 `until_idle_or_intersections` 裡的 `owner_loads_due`） | 拿掉時 `load` 等到 loop 為別的事醒來才發：頁面剛載入完，loop 本來就會為 DevTools 的網路是否安靜（`next_idleness_due`）、caret、timer 醒來，在幾百 ms 內，測試看不出晚了 | 審查；`load` 發不發、什麼時候不發、有沒有延遲由 `browser` 的 `a_cross_origin_frames_fragment_navigation_fires_its_iframes_load` 守著 | 要守時：在沒有其他東西會叫醒 loop 的頁面（沒有 timer、沒有 caret、DevTools 的網路安靜早就過了）上量 `load` 和導覽之間隔多久 |
@@ -436,4 +437,5 @@
 - DOM 的 autofocus 處理過之後仍收候選（`dom_api` 的 `autofocus_inserted` 不看 processed flag）：`flush_autofocus_candidates` 只在還沒處理時看候選（`has_autofocus_candidates`），處理時清掉清單，之後收進來的永遠不會被用到，只是最上層的文件多留幾個 id；照規範的步驟留著。
 - `net` 的 `URLRequest` 擋不是 token 的 method（reqwest 的 `Method::from_bytes` 也拒絕，錯誤一樣；不依賴它而留著）。
 - `net` 的 CORS 判斷 basic 時看 tainting 還是 basic（`cors.rs` 的 `start`：tainting 只在跨源的網址變成 `cors` 或 `opaque`，之後回到自己的 origin 一定是從那個網址轉回來，那次 redirect 就 taint 了 origin，「沒有 taint」已經排除它；照規範的兩個條件留著）。
+- renderer 在文件的 origin 是 opaque 時不問 Browser、直接丟 `SecurityError`（`dom_api` 的 `storage::local_storage` 的 `opaque`）：Browser 照 frame 樹的 key 一樣不給 opaque 的 origin area，結果相同；留著是為了省掉一次同步的來回。
 - `sql` 打開資料庫時明確讀一次 schema（`Database::set_up` 的 `SELECT count(*) FROM sqlite_master`，Chromium 的 `sql::Database::Open` 也強制讀）：在它之前的 `PRAGMA journal_mode=TRUNCATE` 在準備時就讀了 schema，同樣拿到 exclusive 的鎖、找出不是資料庫或 schema 壞掉的檔案，拿掉結果一樣；留著是不依賴 SQLite 準備那一句時順便讀 schema。

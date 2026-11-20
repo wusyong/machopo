@@ -371,6 +371,31 @@ pub(crate) fn register_blob_url(
     }
 }
 
+/// The `localStorage` of the frame showing `document`, which the host's
+/// storage host opens, waiting for the browser; none without one, or for
+/// a document no frame shows.
+pub(crate) fn open_local_storage(
+    scope: &mut Scope<'_, '_, '_>,
+    document: &NodeRoot,
+) -> Option<dom_api::OpenedStorageArea> {
+    let (state, _) = scope.state();
+    let id = state.dom.read(|cx| cx.node_id(document.get(cx.gc)));
+    let frame = state.frames.of_document(id)?.id;
+    let token = state.frames.token(frame)?;
+    state.storage_host.as_ref()?.open_local_storage(token)
+}
+
+/// What the operation changed in `localStorage`: the host told, in order.
+pub(crate) fn send_storage_changes(scope: &mut Scope<'_, '_, '_>) {
+    let (state, _) = scope.state_mut();
+    let changes = state.dom.mutate(|cx| cx.take_storage_changes());
+    if let Some(host) = &state.storage_host {
+        for change in changes {
+            host.storage_changed(change);
+        }
+    }
+}
+
 /// A blob URL revoked: the host told.
 pub(crate) fn revoke_blob_url(scope: &mut Scope<'_, '_, '_>, url: &str) {
     let (state, _) = scope.state_mut();

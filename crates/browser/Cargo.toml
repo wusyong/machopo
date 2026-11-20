@@ -27,6 +27,8 @@ tracing.workspace = true
 url.workspace = true
 # What a frame's storage is kept by (`FrameTree::storage_key`).
 site.workspace = true
+# `localStorage`'s database (`DomStorageContext`).
+sql.workspace = true
 crossbeam-channel.workspace = true
 # A tab's DevTools id, which a page can't guess.
 getrandom.workspace = true

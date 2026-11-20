@@ -780,6 +780,9 @@ impl RenderThread {
             }
         }
         drop(engine);
+        // Its `localStorage` areas went with its DOM: the next engine's
+        // documents get them again.
+        let _ = self.to_browser.send(RendererHostMsg::ForgetStorageAreas);
         self.engine_is_wasm = wasm;
         self.engine = Some(self.make_engine());
         unloaded
@@ -5041,6 +5044,48 @@ impl dom_api::LoadSink for RendererLoadSink {
 
     fn frame_gone(&self, frame: FrameId) {
         self.blob_urls.revoke_frame(frame);
+    }
+}
+
+/// What opens the frames' `localStorage` and tells the browser what script
+/// changes in it (Blink's `StorageController` and its areas' pipes to the
+/// browser's `StorageArea`s): an area opened is the answer the main thread
+/// waits for, every task left queued (`[Sync] GetAll`); a change is sent
+/// as it is made (`Put`, `Delete`, `DeleteAll`).
+pub(super) struct RendererStorageHost {
+    pub(super) to_browser: crossbeam_channel::Sender<RendererHostMsg>,
+    pub(super) scheduler: std::sync::Arc<crate::task_queue::MainThreadScheduler>,
+}
+
+impl dom_api::StorageHost for RendererStorageHost {
+    fn open_local_storage(
+        &self,
+        frame: protocol::FrameToken,
+    ) -> Option<dom_api::OpenedStorageArea> {
+        let reply = self.scheduler.sync_call(|request_id| {
+            let _ = self
+                .to_browser
+                .send(RendererHostMsg::OpenLocalStorage { frame, request_id });
+        })?;
+        match reply {
+            protocol::renderer::RendererMsg::LocalStorageOpened { area, .. } => area,
+            _ => None,
+        }
+    }
+
+    fn storage_changed(&self, change: dom::StorageChange) {
+        let (area, change) = match change {
+            dom::StorageChange::Set { area, key, value } => {
+                (area, protocol::renderer::StorageChange::Set { key, value })
+            }
+            dom::StorageChange::Remove { area, key } => {
+                (area, protocol::renderer::StorageChange::Remove { key })
+            }
+            dom::StorageChange::Clear { area } => (area, protocol::renderer::StorageChange::Clear),
+        };
+        let _ = self
+            .to_browser
+            .send(RendererHostMsg::ChangeStorage { area, change });
     }
 }
 

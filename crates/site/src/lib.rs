@@ -193,4 +193,25 @@ impl StorageKey {
     pub fn is_third_party(&self) -> bool {
         self.ancestor_chain_bit == AncestorChainBit::CrossSite
     }
+
+    /// As storage on disk keeps it, in Chromium's `StorageKey::Serialize`
+    /// form: the origin's URL (`https://a.example/`); a third party's with
+    /// `^0` and the top-level site if that is another site
+    /// (`https://chat.example/^0https://a.example`), else with `^31` (a
+    /// frame of another site between them). None if the origin or the
+    /// top-level site is opaque: no other document is of it, and its
+    /// storage goes with it.
+    pub fn serialize(&self) -> Option<String> {
+        if !self.origin.is_tuple() || self.top_level_site.is_opaque() {
+            return None;
+        }
+        let origin = format!("{}/", self.origin.ascii_serialization());
+        Some(if self.ancestor_chain_bit == AncestorChainBit::SameSite {
+            origin
+        } else if Site::of(&self.origin) == self.top_level_site {
+            format!("{origin}^31")
+        } else {
+            format!("{origin}^0{}", self.top_level_site.serialize())
+        })
+    }
 }

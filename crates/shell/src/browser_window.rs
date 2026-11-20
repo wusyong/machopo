@@ -9,7 +9,8 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use browser::{
-    ContentsEventCallback, NetworkContext, NetworkContextParams, RendererFlags, WebContents,
+    ContentsEventCallback, NetworkContext, NetworkContextParams, RendererFlags, StoragePartition,
+    WebContents,
 };
 use crossbeam_channel::Sender;
 use gfx::Size;
@@ -89,8 +90,8 @@ impl BrowserWindow {
             },
             viz: viz_tx.clone(),
             gpu: gpu.clone(),
-            network,
-            profile: options.profile,
+            partition: StoragePartition::new(&options.profile, network)
+                .map_err(|e| format!("start the storage: {e}"))?,
             on_message: Arc::new(Mutex::new(on_message)),
         };
         // Registered with Viz before it starts: the message waits for it.
@@ -159,13 +160,9 @@ struct WindowTabs {
     flags: RendererFlags,
     viz: Sender<VizMsg>,
     gpu: Option<Arc<dyn SharedImageInterface>>,
-    network: NetworkContext,
-    /// The window's profile, its folder the window's while it is up.
-    #[expect(
-        dead_code,
-        reason = "held for its folder's lock; nothing is kept in it yet"
-    )]
-    profile: browser::Profile,
+    /// The window's profile's storage, which holds the profile (its
+    /// folder the window's while it is up).
+    partition: StoragePartition,
     /// Shared by every tab's renderer.
     on_message: Arc<Mutex<ContentsEventCallback>>,
 }
@@ -179,7 +176,7 @@ impl TabFactory for WindowTabs {
             crate::SCRIPT_ENGINES,
             self.viz.clone(),
             self.gpu.clone(),
-            self.network.clone(),
+            self.partition.clone(),
             Box::new(move |tab, msg| {
                 let on_message = on_message.lock().unwrap_or_else(|e| e.into_inner());
                 on_message(tab, msg);
@@ -224,12 +221,15 @@ mod tests {
             },
             viz,
             gpu: None,
-            network: NetworkContext::start(NetworkContextParams {
-                user_agent: browser::user_agent(),
-                ..Default::default()
-            })
+            partition: StoragePartition::new(
+                &browser::Profile::in_memory(),
+                NetworkContext::start(NetworkContextParams {
+                    user_agent: browser::user_agent(),
+                    ..Default::default()
+                })
+                .unwrap(),
+            )
             .unwrap(),
-            profile: browser::Profile::in_memory(),
             on_message: Arc::new(Mutex::new(Box::new(|_, _| {}))),
         };
         let contents = tabs.create(TabId(3)).unwrap();

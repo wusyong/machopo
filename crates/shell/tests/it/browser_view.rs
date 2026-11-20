@@ -517,11 +517,15 @@ fn start_contents(
         shell::SCRIPT_ENGINES,
         viz.clone(),
         None,
-        NetworkContext::start(NetworkContextParams {
-            user_agent: browser::user_agent(),
-            ..Default::default()
-        })
-        .expect("network service starts"),
+        browser::StoragePartition::new(
+            &browser::Profile::in_memory(),
+            NetworkContext::start(NetworkContextParams {
+                user_agent: browser::user_agent(),
+                ..Default::default()
+            })
+            .expect("network service starts"),
+        )
+        .expect("the storage starts"),
         Box::new(move |tab, msg| {
             let _ = host.send((tab, msg));
         }),
@@ -2167,5 +2171,52 @@ fn collapsed_the_sidebar_floats_over_the_page_from_the_left_edge() {
         window.view.web_view_bounds(TabId(0)),
         Some(RectF::new(268.0, 8.0, 524.0, 584.0))
     );
+    window.close();
+}
+
+/// What a page left in `localStorage` is there after the tab took the
+/// other engine for a wasm document and back: the renderer's new DOM gets
+/// its areas from the browser again.
+#[test]
+fn local_storage_outlasts_the_engine_taken_for_a_wasm_document() {
+    let server = TestServer::start(HashMap::from([
+        (
+            "/write".to_owned(),
+            Route::ok(
+                "text/html",
+                "<script>localStorage.kept = 'yes'; document.title = 'written'</script>",
+            ),
+        ),
+        (
+            "/wasm".to_owned(),
+            Route::ok(
+                "text/html",
+                r#"<!DOCTYPE html><meta name="script" content="wasm"><title>wasm</title>"#,
+            ),
+        ),
+        (
+            "/read".to_owned(),
+            Route::ok(
+                "text/html",
+                "<script>document.title = 'kept ' + localStorage.kept</script>",
+            ),
+        ),
+    ]))
+    .expect("the test server starts");
+    let mut window = Window::open(Size::new(400, 300), 1.0);
+    window.view.navigate(&server.url("/write"));
+    window.until(|msg| matches!(msg, RendererHostMsg::UpdateTitle(title) if title == "written"));
+    window.view.navigate(&server.url("/wasm"));
+    window.until(|msg| matches!(msg, RendererHostMsg::UpdateTitle(title) if title == "wasm"));
+    window.view.navigate(&server.url("/read"));
+    let mut title = String::new();
+    window.until(|msg| match msg {
+        RendererHostMsg::UpdateTitle(read) if read.starts_with("kept") => {
+            title.clone_from(read);
+            true
+        }
+        _ => false,
+    });
+    assert_eq!(title, "kept yes");
     window.close();
 }

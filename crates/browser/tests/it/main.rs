@@ -9,5 +9,6 @@
     reason = "tests"
 )]
 
+mod dom_storage;
 mod navigation;
 mod profile;

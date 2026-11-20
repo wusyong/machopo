@@ -1425,6 +1425,7 @@ pub fn erase(object: ObjectRef<'_>) -> elise::Gc<'_, elise::Erased> {
         ObjectRef::GeolocationPositionError(error) => error.erase(),
         ObjectRef::WakeLock(wake_lock) => wake_lock.erase(),
         ObjectRef::Scheduling(scheduling) => scheduling.erase(),
+        ObjectRef::Storage(storage) => storage.erase(),
         ObjectRef::PerformanceEntry(entry) => entry.erase(),
         ObjectRef::PerformanceObserver(observer) => observer.erase(),
         ObjectRef::PerformanceObserverEntryList(list) => list.erase(),

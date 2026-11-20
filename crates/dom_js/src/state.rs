@@ -101,6 +101,9 @@ pub(crate) struct State {
     /// What tells `isInputPending()` of the input waiting, the host's
     /// (`ScriptEngine::set_input_monitor`); none without one.
     pub(crate) input_monitor: Option<Box<dyn dom_api::InputMonitor>>,
+    /// What opens the frames' `localStorage` and hears its changes, the
+    /// host's (`ScriptEngine::set_storage_host`); none without one.
+    pub(crate) storage_host: Option<Box<dyn dom_api::StorageHost>>,
     /// The frame's layout, the host's (`ScriptEngine::set_layout`): lent to
     /// each operation by a move (`dom_api::ApiCx::with_layout_cell`).
     /// In a box of its own: in the state, beside the fields each call
@@ -275,6 +278,7 @@ pub(crate) fn install(isolate: &mut v8::Isolate, kind: GlobalKind) {
             webdriver_results: Vec::new(),
             when_defined: rustc_hash::FxHashMap::default(),
             input_monitor: None,
+            storage_host: None,
             layout: Box::new(std::cell::Cell::new(None)),
             frames: crate::frames::Frames::default(),
             worker_realm: None,
@@ -407,6 +411,11 @@ fn queue_microtasks(scope: &mut Scope<'_, '_, '_>, microtasks: dom::Microtasks) 
     // URLs the operation registered (`update_elements`).
     if microtasks.fetches() {
         crate::frames::send_fetches(scope);
+    }
+    // Nor what changed in `localStorage`: the host told before the call
+    // returns, in order.
+    if microtasks.storage() {
+        crate::frames::send_storage_changes(scope);
     }
 }
 

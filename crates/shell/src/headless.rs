@@ -10,7 +10,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use base::numerics::saturated_cast;
-use browser::{ContentsEvent, NetworkContext, NetworkContextParams, RendererFlags, WebContents};
+use browser::{
+    ContentsEvent, NetworkContext, NetworkContextParams, RendererFlags, StoragePartition,
+    WebContents,
+};
 use crossbeam_channel::unbounded;
 use gfx::Size;
 use protocol::TabId;
@@ -251,7 +254,8 @@ fn drive(
         script_engine,
         viz_tx,
         Some(shared_images as Arc<dyn SharedImageInterface>),
-        network,
+        StoragePartition::new(&browser::Profile::in_memory(), network)
+            .map_err(|e| format!("failed to start the storage: {e}"))?,
         Box::new(move |_tab, event| {
             let _ = events_tx.send(match event {
                 ContentsEvent::Renderer { renderer, msg } => Event::Host(renderer, msg),

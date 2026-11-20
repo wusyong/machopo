@@ -202,6 +202,11 @@ impl RenderThread {
             ids: self.next_request_id.clone(),
             blob_urls: self.blob_urls.clone(),
         }));
+        // `localStorage`, its areas opened waiting for the browser.
+        engine.set_storage_host(Box::new(super::documents::RendererStorageHost {
+            to_browser: self.to_browser.clone(),
+            scheduler: self.scheduler.clone(),
+        }));
         // What every frame's `navigator` answers, a new iframe's too.
         engine
             .dom_mut()

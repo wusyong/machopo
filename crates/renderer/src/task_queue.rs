@@ -124,6 +124,12 @@ struct State {
     next: u64,
     /// The main thread has gone: nothing is posted any more.
     closed: bool,
+    /// The browser's answers to the main thread's calls that wait
+    /// (`sync_call`), by number: not tasks, taken by the call alone.
+    replies: HashMap<u64, RendererMsg>,
+    /// The browser said to shut down: a call waiting gives up, for the
+    /// main thread to get to it.
+    shutting_down: bool,
 }
 
 impl State {
@@ -157,6 +163,19 @@ pub struct MainThreadScheduler {
     /// The dedicated workers' numbers, from 1: the renderer's, as any
     /// thread may make one (a worker makes its own).
     worker_ids: WorkerIds,
+    /// The numbers of the main thread's calls that wait for the browser
+    /// (`sync_call`), from 1.
+    call_ids: CallIds,
+}
+
+/// The numbers of the calls that wait, from 1.
+#[derive(Debug)]
+struct CallIds(AtomicSequenceNumber<u64>);
+
+impl Default for CallIds {
+    fn default() -> Self {
+        Self(AtomicSequenceNumber::<u64>::starting_at(1))
+    }
 }
 
 /// The renderer's dedicated workers' numbers, from 1.
@@ -393,6 +412,44 @@ impl MainThreadScheduler {
         }
     }
 
+    /// A call to the browser that waits for its answer (a mojo `[Sync]`
+    /// call): `send` sends the message with the number given, and the
+    /// main thread waits for the answer of that number, which the
+    /// browser's sender puts aside for it (`post_reply`), every task left
+    /// queued, in order. None if the renderer is shutting down or has
+    /// gone first: nothing will answer.
+    pub(crate) fn sync_call(&self, send: impl FnOnce(u64)) -> Option<RendererMsg> {
+        let id = self.call_ids.0.get_next();
+        send(id);
+        let mut state = self.lock();
+        loop {
+            if let Some(reply) = state.replies.remove(&id) {
+                return Some(reply);
+            }
+            if state.closed || state.shutting_down {
+                return None;
+            }
+            state = self
+                .ready
+                .wait(state)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
+    /// The browser's answer to the call numbered `id` (`sync_call`), for
+    /// that call alone.
+    fn post_reply(&self, id: u64, reply: RendererMsg) -> Result<(), RendererGone> {
+        {
+            let mut state = self.lock();
+            if state.closed {
+                return Err(RendererGone);
+            }
+            state.replies.insert(id, reply);
+        }
+        self.ready.notify_one();
+        Ok(())
+    }
+
     /// Whether a task waits in `queues`.
     pub(crate) fn has_task(&self, queues: TaskQueues) -> bool {
         self.lock().earliest(queues).is_some()
@@ -506,6 +563,10 @@ impl RendererSender {
             scheduler.post_to_worker(worker, msg);
             return Ok(());
         }
+        // An answer the main thread waits for, not a task.
+        if let RendererMsg::LocalStorageOpened { request_id, .. } = msg {
+            return scheduler.post_reply(request_id, msg);
+        }
         let (queued, interrupt) = match msg {
             RendererMsg::DevToolsAttach { session } => (DevToolsQueued::Attach(session), false),
             RendererMsg::DevToolsDetach { session } => (DevToolsQueued::Detach(session), false),
@@ -524,6 +585,7 @@ impl RendererSender {
                 let shutdown = matches!(msg, RendererMsg::Shutdown);
                 scheduler.post(TaskQueue::Browser, MainThreadTask::Browser(msg), false)?;
                 if shutdown {
+                    scheduler.lock().shutting_down = true;
                     scheduler.post(
                         TaskQueue::DevTools,
                         MainThreadTask::DevTools(DevToolsQueued::Quit),
@@ -676,6 +738,96 @@ mod tests {
             ))
         ));
         assert!(scheduler.next(TaskQueues::ALL, None).is_some());
+    }
+
+    /// What `f` returns on a thread of its own, which it does within 10
+    /// seconds: a call that never gives up fails the test, not hangs it.
+    fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+        let (done, returned) = crossbeam_channel::bounded(1);
+        std::thread::spawn(move || {
+            let _ = done.send(f());
+        });
+        returned
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the call returns")
+    }
+
+    fn opened(request_id: u64, area: u64) -> RendererMsg {
+        RendererMsg::LocalStorageOpened {
+            request_id,
+            area: Some(protocol::renderer::OpenedStorageArea { area, items: None }),
+        }
+    }
+
+    /// A call that waits takes its own answer alone: tasks posted before
+    /// and after it stay queued, in order, and another call's answer
+    /// stays for that call.
+    #[test]
+    fn a_call_that_waits_takes_its_answer_alone() {
+        let (sender, _compositor, receiver) = channel();
+        let scheduler = receiver.scheduler.clone();
+        sender.send(RendererMsg::WasHidden).unwrap();
+        // The next call's answer, there before this one's comes.
+        sender.send(opened(2, 2)).unwrap();
+        let reply = within({
+            let scheduler = scheduler.clone();
+            let sender = sender.clone();
+            move || {
+                scheduler.sync_call(|id| {
+                    assert_eq!(id, 1);
+                    std::thread::spawn(move || {
+                        std::thread::sleep(Duration::from_millis(50));
+                        sender.send(RendererMsg::WasShown).unwrap();
+                        sender.send(opened(id, 1)).unwrap();
+                    });
+                })
+            }
+        });
+        assert!(matches!(
+            reply,
+            Some(RendererMsg::LocalStorageOpened {
+                area: Some(protocol::renderer::OpenedStorageArea { area: 1, .. }),
+                ..
+            })
+        ));
+        let all: Vec<String> = std::iter::from_fn(|| scheduler.try_next(TaskQueues::ALL))
+            .map(|task| kind(&task))
+            .collect();
+        assert_eq!(all, ["browser", "browser"]);
+        // The other answer was kept for its own call.
+        assert!(matches!(
+            within(move || scheduler.sync_call(|_| {})),
+            Some(RendererMsg::LocalStorageOpened {
+                area: Some(protocol::renderer::OpenedStorageArea { area: 2, .. }),
+                ..
+            })
+        ));
+    }
+
+    /// A call waiting gives up once the browser says to shut down, or the
+    /// main thread has gone; an answer after that is no one's.
+    #[test]
+    fn a_call_gives_up_as_the_renderer_ends() {
+        let (sender, _compositor, receiver) = channel();
+        let scheduler = receiver.scheduler.clone();
+        let reply = within({
+            let scheduler = scheduler.clone();
+            move || {
+                scheduler.sync_call(|_| {
+                    std::thread::spawn(move || sender.send(RendererMsg::Shutdown).unwrap());
+                })
+            }
+        });
+        assert!(reply.is_none());
+        assert!(matches!(
+            scheduler.try_next(TaskQueues::ALL),
+            Some(MainThreadTask::Browser(RendererMsg::Shutdown))
+        ));
+
+        let (sender, _compositor, receiver) = channel();
+        let scheduler = receiver.scheduler.clone();
+        assert!(within(move || scheduler.sync_call(|_| scheduler.close())).is_none());
+        assert!(sender.send(opened(1, 1)).is_err());
     }
 
     /// A message to interrupt script calls the engine's interrupter, and is

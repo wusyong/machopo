@@ -14,7 +14,9 @@
 | 2a：profile 的資料夾（位置、`--user-data-dir`、哪些模式寫磁碟、同一個資料夾開兩次） | 完成 | 2026-11-20 |
 | 2b：磁碟上的儲存（格式、讀寫的介面） | 完成 | 2026-11-20 |
 | 2c：第 2 階段的檢查和文件 | 完成 | 2026-11-20 |
-| 3：Web Storage | 未開始 | |
+| 3a：同步等 Browser 的路、Browser 的 storage thread 和資料庫、`Storage` 介面和 `localStorage` | 完成 | 2026-11-20 |
+| 3b：`storage` 事件、`sessionStorage` | 未開始 | |
+| 3c：上限、寫進磁碟的批次、WPT 的 `webstorage/`、第 3 階段的檢查和文件 | 未開始 | |
 | 4：`net` 的 cookie | 未開始 | |
 | 5：cookie 到 DOM 和自動化 | 未開始 | |
 | 6：檢查和文件 | 未開始 | |
@@ -31,6 +33,10 @@
 | 哪個 profile：視窗預設是使用者的、自動化在記憶體、`--user-data-dir` 的照啟動時的工作目錄；第二個 machopo 開同一個資料夾時拒絕啟動，第一個照常 | `cargo test -p shell --bin machopo -- user_data`；`cargo test -p shell --test it a_second_machopo` |
 | 資料庫：記憶體和 profile 的資料夾，關掉再開還在；照 Chromium 的預設（`truncate` 的 journal、exclusive locking、被鎖住時馬上失敗）；schema 只跑新的 migration、較新的拒絕、失敗的退回；不是資料庫和 schema 壞掉的檔案移到旁邊、重新開始 | `cargo test -p sql` |
 | frame 樹的 key：文件 commit 時、子 frame 建立時（parent 的 origin）照它所在的 frame 算，最上層的網站是 main frame 的；重設之後是 opaque 的 | `cargo test -p browser --lib frame_tree::` |
+| 同步等 Browser：main thread 只拿自己的編號的回答，其他 task 照順序留著、別的呼叫的回答留給那個呼叫；Browser 說要結束或 main thread 不在了時放棄 | `cargo test -p renderer --lib task_queue` |
+| storage key 的序列化：照 Chromium 的 `StorageKey::Serialize`（origin 的網址、第三方的 `^0` 加最上層的網站或 `^31`），opaque 的 origin 和最上層的網站不寫 | `cargo test -p site` |
+| `localStorage` 的 area：一個 renderer 拿一次項目、之後只拿編號，別的 renderer 拿得到改過的、照 key 的順序；不是自己的 area 的改動不算；每個 key 一份（別的 origin、別的最上層的網站、中間隔著別的網站）；opaque 的 origin 沒有；忘掉之後重新拿；profile 的資料夾留著（關掉時等寫完），opaque 的最上層的網站只在記憶體 | `cargo test -p browser --test it dom_storage::` |
+| 頁面的 `localStorage`：成員（`length`、`key()`、`getItem` 等、named property 不蓋過成員、同一個物件）；另一個分頁讀得到、別的 origin 讀不到、opaque 的 origin 是 `SecurityError`；同一個 renderer 裡同 key 的文件共用、同步讀得到；不在 frame 裡的 window 是 null；profile 的資料夾留到下一次；換成 wasm 的 engine 再換回來之後照樣在 | `cargo test -p browser --test it dom_storage::`；`cargo test -p shell --test it local_storage_outlasts` |
 
 ## 做過的檢查
 
@@ -103,3 +109,16 @@ macOS、Apple M4，2026-11-20。
 - `cargo test --workspace`：4298 個通過、0 個失敗、1 個 ignored。`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 都沒有要改的。跑完之後家目錄底下沒有 profile 的資料夾（測試和自動化都在記憶體）。
 - 文件：在 `docs/`、crate 的 README 裡找寫到 profile 的地方。`docs/limitations.md` 的 `--remote-debugging-port` 不寫 `DevToolsActivePort` 的理由原本是「machopo 沒有 profile 的資料夾」，改成 Chrome 寫在 user data dir 裡、machopo 的自動化預設在記憶體。其他的在 2a、2b 改好了。畫面上看不出差別（還沒有東西存進 profile），沒有新的情境。
 - 跑過的檢查：`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。
+
+### 3a：同步等 Browser 的路、`localStorage`
+
+macOS、Apple M4，2026-11-20。
+
+- 決定了第 9 條（回答走一般的訊息，到 scheduler 裡等回答的位置）和第 10 條（renderer 照 Browser 給的 area 編號共用它的那一份）。
+- 新的東西：`protocol` 的 `OpenLocalStorage`、`LocalStorageOpened`、`ChangeStorage`、`ForgetStorageAreas`；`renderer` 的 `MainThreadScheduler::sync_call` 和 `RendererStorageHost`；`site` 的 `StorageKey::serialize`；`browser` 的 `DomStorageContext`（自己的 thread、profile 的 `LocalStorage` 資料庫）和 `StoragePartition`（`WebContents::new` 原本收 `NetworkContext`，改收它）；`dom` 的 `Storage`；`dom_api` 的 `Storage` 介面、`Window.localStorage`、`StorageHost`；`dom_js` 在呼叫結束前把改動交給 host。
+- 新的測試：`renderer` 的 `task_queue` 2 個、`site` 1 個、`browser` 的 `dom_storage` 8 個、`shell` 的 `browser_view` 1 個。
+- mutation test（`mutants-3a.toml`）23 個，抓到 21 個。第一次跑時「回答隨便拿一個」沒抓到：兩個回答幾乎同時到，`HashMap` 的順序剛好拿對；改成別的呼叫的回答先到、自己的晚 50 ms。「context 的 thread 結束時不等它」原本也沒抓到：最後一次同步的「打開」之後 thread 已經寫完了，改成之後再送 500 筆。「另一份文件打開時清空 renderer 的那一份」原本沒抓到：測試裡 iframe 比 parent 先打開，改成 parent 先寫。剩下的兩個：「不在的 frame 不回答」只有送了不是自己的 frame 的 renderer 走得到，記進 `docs/test-gaps.md` 的「只靠審查」；「opaque 的文件也去問 host」是等價的（Browser 照 frame 樹的 key 一樣不給），記進「等價、不用處理的 mutation」。scheduler 的測試在另一條 thread 上等、最多 10 秒，讓「回答進了 queue」這類 mutant 失敗而不是卡住。
+- 找到的問題：prototype 上有同名的成員時直接賦值（`localStorage.getItem = 'x'`）建出 own property、不經過 named setter（V8 的 non-masking interceptor）。WPT 的 `webstorage/set.window.js` 要它照樣存進 area、不建 own property；3c 跑 WPT 時對照 Chrome 的結果再決定，先記進 `docs/limitations.md`。
+- 文件：`docs/architecture.md` 的 crate 表（`StoragePartition`、`DomStorageContext`）和「Process 的邊界」（main thread 同步等 Browser）、`docs/limitations.md`（`localStorage` 的限制，`file:` 的頁面沒有）、`crates/dom_api/README.md`。
+- `python3 scripts/test.py scenarios --window`（改了 `shell` 的 `browser_window.rs`）：72 次，`demo-script` 失敗 1 次。那次的 log 最後是 Viz 的「can't draw, skipping frames」（`occluded`，視窗被別的視窗蓋住），之後沒有「drawing again」，畫面一直沒再畫，等待逾時。單獨在視窗裡連跑 4 次、不開視窗跑 1 次都通過（通過的那幾次一開始也有一兩次 `occluded`，之後接著畫）。原因是跑的期間視窗被蓋住，和這一段的改動無關（`demo-script` 不用 `localStorage`）。
+- 跑過的檢查：`cargo test` 的 `site`、`sql`、`protocol`、`dom`、`dom_api`、`dom_js`、`dom_wasm`、`renderer`、`browser`、`shell`；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。

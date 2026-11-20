@@ -1,0 +1,182 @@
+# Step 3a: the main thread's call that waits for the browser's answer
+# (the scheduler's place for answers), the browser's localStorage thread
+# (an area a renderer's once, with its items; on disk; each key's own),
+# the UI thread opening a frame's area by its key, the IO thread's
+# changes, and the DOM's `Storage` (the window's own, the renderer's copy
+# shared by a key's documents, the changes handed over as the call
+# returns).
+test = [
+    "sh", "-c",
+    "cargo test -q -p renderer --lib task_queue && cargo test -q -p site && cargo test -q -p browser --test it dom_storage:: && cargo test -q -p shell --test it local_storage_outlasts",
+]
+timeout = 1800
+
+[[mutant]]
+name = "a call takes any answer"
+file = "crates/renderer/src/task_queue.rs"
+from = '''            if let Some(reply) = state.replies.remove(&id) {
+                return Some(reply);
+            }'''
+to = '''            if let Some(&any) = state.replies.keys().next() {
+                return state.replies.remove(&any);
+            }'''
+
+[[mutant]]
+name = "a call doesn't give up as the renderer shuts down"
+file = "crates/renderer/src/task_queue.rs"
+from = '''                    scheduler.lock().shutting_down = true;'''
+to = ''''''
+
+[[mutant]]
+name = "a call doesn't give up once the main thread has gone"
+file = "crates/renderer/src/task_queue.rs"
+from = '''            if state.closed || state.shutting_down {'''
+to = '''            if state.shutting_down {'''
+
+[[mutant]]
+name = "an answer is a task"
+file = "crates/renderer/src/task_queue.rs"
+from = '''        if let RendererMsg::LocalStorageOpened { request_id, .. } = msg {
+            return scheduler.post_reply(request_id, msg);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a third party of the top-level site is written as another site's"
+file = "crates/site/src/lib.rs"
+from = '''        } else if Site::of(&self.origin) == self.top_level_site {'''
+to = '''        } else if Site::of(&self.origin) != self.top_level_site {'''
+
+[[mutant]]
+name = "a key of an opaque top-level site is written"
+file = "crates/site/src/lib.rs"
+from = '''        if !self.origin.is_tuple() || self.top_level_site.is_opaque() {'''
+to = '''        if !self.origin.is_tuple() {'''
+
+[[mutant]]
+name = "an opaque origin's key has an area"
+file = "crates/browser/src/dom_storage.rs"
+from = '''        if !key.origin().is_tuple() {
+            return None;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a renderer gets an area's items again"
+file = "crates/browser/src/dom_storage.rs"
+from = '''        if let Some(&area) = areas.by_key.get(&key) {
+            return Some(OpenedStorageArea { area, items: None });
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a change of another renderer's area is made"
+file = "crates/browser/src/dom_storage.rs"
+from = '''            .get(&renderer)
+            .and_then(|areas| areas.keys.get(&area))'''
+to = '''            .values()
+            .find_map(|areas| areas.keys.get(&area))'''
+
+[[mutant]]
+name = "a renderer's areas aren't forgotten"
+file = "crates/browser/src/dom_storage.rs"
+from = '''                Task::Forget { renderer } => {
+                    self.renderers.remove(&renderer);
+                }'''
+to = '''                Task::Forget { renderer } => {
+                    let _ = renderer;
+                }'''
+
+[[mutant]]
+name = "a key's items are read from no disk"
+file = "crates/browser/src/dom_storage.rs"
+from = '''            let items = self.read(&key);'''
+to = '''            let items = BTreeMap::new();'''
+
+[[mutant]]
+name = "a removed item stays on disk"
+file = "crates/browser/src/dom_storage.rs"
+from = '''                "DELETE FROM items WHERE storage_key = ?1 AND key = ?2",'''
+to = '''                "DELETE FROM items WHERE storage_key = ?1 AND key = ?2 AND 0",'''
+
+[[mutant]]
+name = "the context's thread isn't waited for as it goes"
+file = "crates/browser/src/dom_storage.rs"
+from = '''        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "the IO thread drops a renderer's changes"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                                dom_storage.change(renderer_id, area, change);'''
+to = '''                                let _ = (area, change);'''
+
+[[mutant]]
+name = "the IO thread doesn't forget a renderer's areas"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                            RendererHostMsg::ForgetStorageAreas => dom_storage.forget(renderer_id),'''
+to = '''                            RendererHostMsg::ForgetStorageAreas => {}'''
+
+[[mutant]]
+name = "the renderer doesn't say its DOM's areas went"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        let _ = self.to_browser.send(RendererHostMsg::ForgetStorageAreas);'''
+to = ''''''
+
+[[mutant]]
+name = "a frame that has gone isn't answered"
+file = "crates/browser/src/web_contents.rs"
+from = '''            None => reply(None),
+        }'''
+to = '''            None => drop(reply),
+        }'''
+
+[[mutant]]
+name = "the window's storage isn't the same each time"
+file = "crates/dom_api/src/storage.rs"
+from = '''    if storage.is_some() {
+        return Ok(storage);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "a gone frame's window asks for storage"
+file = "crates/dom_api/src/storage.rs"
+from = '''    if !active {
+        return Ok(None);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "an opaque origin's document asks the host"
+file = "crates/dom_api/src/storage.rs"
+from = '''    if opaque {
+        return Err(denied());
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "another document's open empties the renderer's copy"
+file = "crates/dom/src/storage.rs"
+from = '''            None => {
+                areas.entry(area).or_default();
+            }'''
+to = '''            None => {
+                areas.insert(area, BTreeMap::new());
+            }'''
+
+[[mutant]]
+name = "the changes aren't handed to the host"
+file = "crates/dom_js/src/state.rs"
+from = '''    if microtasks.storage() {
+        crate::frames::send_storage_changes(scope);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "an item removed isn't told"
+file = "crates/dom/src/storage.rs"
+from = '''        if self.with_items(storage, |items| items.remove(key).is_some()) {'''
+to = '''        if self.with_items(storage, |items| items.remove(key).is_some()) && false {'''

@@ -2849,6 +2849,7 @@ pub(crate) fn wrap_new_object<'gc, 's, N: WrapsNew<'s>>(
         ObjectRef::GeolocationPositionError(error) => no_gc.wrap(cx.gc, wrapper, error),
         ObjectRef::WakeLock(wake_lock) => no_gc.wrap(cx.gc, wrapper, wake_lock),
         ObjectRef::Scheduling(scheduling) => no_gc.wrap(cx.gc, wrapper, scheduling),
+        ObjectRef::Storage(storage) => no_gc.wrap(cx.gc, wrapper, storage),
         ObjectRef::PerformanceEntry(entry) => no_gc.wrap(cx.gc, wrapper, entry),
         ObjectRef::PerformanceObserver(observer) => no_gc.wrap(cx.gc, wrapper, observer),
         ObjectRef::PerformanceObserverEntryList(list) => no_gc.wrap(cx.gc, wrapper, list),

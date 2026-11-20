@@ -49,8 +49,8 @@ use crate::{
     headers, history, html, hyperlink, idle, image, intersection_observer, location, markup,
     media_query_list, menu_list, message, mutation_observer, navigator, node, parent_node,
     performance, query, range, reflect, request, resize_observer, response, script, scroll, select,
-    selection, shadow_root, slot, svg, svg_geometry, table, text_control, timer, token_list,
-    traversal, ui_event, url, wake_lock, window, worker,
+    selection, shadow_root, slot, storage, svg, svg_geometry, table, text_control, timer,
+    token_list, traversal, ui_event, url, wake_lock, window, worker,
 };
 
 crate::declare! {
@@ -1111,6 +1111,9 @@ crate::declare! {
         attribute location: Location, get = window::location, set: NavigationUrl = window::set_location;
         attribute history: History, get = history::window_history;
         attribute navigator: Navigator, get = navigator::window_navigator;
+        // Opened by the host, waiting for the browser, the first time.
+        #[calls_script]
+        attribute localStorage: Option<Storage>, get = storage::local_storage;
         attribute customElements: CustomElementRegistry, get = custom_elements::registry;
         attribute crypto: Crypto, get = crypto::window_crypto;
         #[front]
@@ -1419,6 +1422,25 @@ crate::declare! {
     interface Scheduling [type = dom::Scheduling] {
         #[calls_script]
         method isInputPending(isInputPendingOptions?: IsInputPendingOptions) -> bool = navigator::is_input_pending;
+    }
+
+    // A window's `localStorage`: its area's items, the keys also named
+    // properties (not overriding the members).
+    interface Storage [type = dom::Storage] {
+        attribute length: u32, get = storage::length;
+        method key(index: u32) -> Option<DomString> = storage::key;
+        method getItem(key: DomString) -> Option<DomString> = storage::get_item;
+        method setItem(key: DomString, value: DomString) = storage::set_item;
+        method removeItem(key: DomString) = storage::remove_item;
+        method clear() = storage::clear;
+        #[named(getter)]
+        method getter(key: DomString) -> Option<DomString> = storage::get_item;
+        #[named(setter)]
+        method setter(key: DomString, value: DomString) = storage::set_item;
+        #[named(deleter)]
+        method deleter(key: DomString) = storage::remove_item;
+        #[named(names)]
+        method names() -> Strings = storage::names;
     }
 
     // Network Information's `connection`, with the members Chrome has on

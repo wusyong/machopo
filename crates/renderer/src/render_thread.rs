@@ -1186,6 +1186,8 @@ impl RenderThread {
                     self.send_harness_results();
                 }
             }
+            // The sender puts it aside for the call waiting for it.
+            RendererMsg::LocalStorageOpened { .. } => {}
             RendererMsg::Shutdown => return false,
         }
         true

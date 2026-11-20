@@ -546,6 +546,16 @@ pub trait ScriptFront: Front {
         unreachable!("a front end binding `isInputPending` asks the engine's monitor")
     }
 
+    /// `ScriptHost::open_local_storage`, for `localStorage`.
+    fn open_local_storage(
+        &mut self,
+        document: &NodeRoot,
+    ) -> Option<protocol::renderer::OpenedStorageArea> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
+        let _ = document;
+        unreachable!("a front end binding `localStorage` asks the engine's storage host")
+    }
+
     /// `ScriptHost::call_node_filter`.
     fn call_node_filter(
         &mut self,
@@ -2165,6 +2175,17 @@ pub trait ScriptHost {
         Vec::new()
     }
 
+    /// The `localStorage` of the frame showing `document`, opened by the
+    /// engine's storage host, which waits for it (`StorageHost`); none
+    /// without one, or if the document may have none.
+    fn open_local_storage(
+        &mut self,
+        document: &NodeRoot,
+    ) -> Option<protocol::renderer::OpenedStorageArea> {
+        let _ = document;
+        None
+    }
+
     /// The DOM's pending promise numbered `promise` rejected with
     /// `signal`'s abort reason (an aborted `fetch()`'s).
     fn reject_promise_with_reason(&mut self, promise: u64, signal: &Persistent<EventTargetImpl>) {
@@ -2430,6 +2451,13 @@ impl<F: ScriptFront> ScriptHost for FrontHost<'_, F> {
         self.0.pending_input(include_continuous)
     }
 
+    fn open_local_storage(
+        &mut self,
+        document: &NodeRoot,
+    ) -> Option<protocol::renderer::OpenedStorageArea> {
+        self.0.open_local_storage(document)
+    }
+
     fn reject_promise_with_reason(&mut self, promise: u64, signal: &Persistent<EventTargetImpl>) {
         self.0.reject_promise_with_reason(promise, signal);
     }
@@ -2482,6 +2510,13 @@ impl<'gc, T> Unroot<'gc, T> for T {
 impl<'gc> Unroot<'gc, Option<NodeRef<'gc>>> for Option<NodeRoot> {
     fn unroot(self, cx: &ApiCx<'_, 'gc>) -> Option<NodeRef<'gc>> {
         self.map(|node| node.get(cx.gc))
+    }
+}
+
+/// An object that isn't a node, as its root.
+impl<'gc> Unroot<'gc, Option<Gc<'gc, dom::Storage>>> for Option<Persistent<dom::Storage>> {
+    fn unroot(self, cx: &ApiCx<'_, 'gc>) -> Option<Gc<'gc, dom::Storage>> {
+        self.map(|storage| storage.get(cx.gc))
     }
 }
 
@@ -6847,6 +6882,7 @@ pub fn realm_document<'gc>(cx: &dom::Cx<'_, 'gc>, object: ObjectRef<'gc>) -> Opt
         ObjectRef::Navigator(navigator) => cx.navigator_window(navigator),
         ObjectRef::UserActivation(activation) => Some(cx.user_activation_window(activation)),
         ObjectRef::Scheduling(scheduling) => Some(cx.scheduling_window(scheduling)),
+        ObjectRef::Storage(storage) => Some(cx.storage_window(storage)),
         ObjectRef::Geolocation(geolocation) => Some(cx.geolocation_window(geolocation)),
         ObjectRef::WakeLock(wake_lock) => Some(cx.wake_lock_window(wake_lock)),
         ObjectRef::PerformanceTiming(timing) => Some(cx.performance_timing_window(timing)),
@@ -7023,6 +7059,7 @@ pub fn interface_of<'gc>(cx: &ApiCx<'_, 'gc>, object: ObjectRef<'gc>) -> usize {
         }
         ObjectRef::WakeLock(_) => const { crate::declare::interface_index("WakeLock") },
         ObjectRef::Scheduling(_) => const { crate::declare::interface_index("Scheduling") },
+        ObjectRef::Storage(_) => const { crate::declare::interface_index("Storage") },
         ObjectRef::PerformanceEntry(entry) => match cx.performance_entry_type(entry) {
             dom::PerformanceEntryType::Mark => {
                 const { crate::declare::interface_index("PerformanceMark") }
@@ -8484,6 +8521,20 @@ impl ObjectType for dom::Scheduling {
 
     fn object<'gc>(object: Self::Ref<'gc>) -> ObjectRef<'gc> {
         ObjectRef::Scheduling(object)
+    }
+}
+
+impl ObjectType for dom::Storage {
+    type Ref<'gc> = Gc<'gc, dom::Storage>;
+
+    #[inline]
+    fn this<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, _: usize) -> Self::Ref<'gc> {
+        op.this_as::<dom::Storage>(cx)
+            .expect("the front end's checks: `this` is a storage")
+    }
+
+    fn object<'gc>(object: Self::Ref<'gc>) -> ObjectRef<'gc> {
+        ObjectRef::Storage(object)
     }
 }
 

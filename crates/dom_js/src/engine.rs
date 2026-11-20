@@ -1632,6 +1632,10 @@ impl ScriptEngine for V8Engine {
         self.state().input_monitor = Some(monitor);
     }
 
+    fn set_storage_host(&mut self, host: Box<dyn dom_api::StorageHost>) {
+        self.state().storage_host = Some(host);
+    }
+
     fn run_element_tasks(&mut self) -> bool {
         let mut ran = false;
         for (_, context, _) in self.frames_as_made() {

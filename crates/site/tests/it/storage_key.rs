@@ -70,3 +70,37 @@ fn opaque_origins_are_third_parties() {
     assert!(under_opaque.top_level_site().is_opaque());
     assert!(StorageKey::of_frame(&opaque, [&a]).is_third_party());
 }
+
+/// A key is written as Chromium writes it: the origin's URL, a third
+/// party's with its top-level site or the ancestor chain bit; one of an
+/// opaque origin or top-level site isn't written.
+#[test]
+fn a_key_is_written_as_chromium_writes_it() {
+    let top = origin("https://a.example/");
+    assert_eq!(
+        StorageKey::first_party(&origin("https://a.example:8443/"))
+            .serialize()
+            .as_deref(),
+        Some("https://a.example:8443/")
+    );
+    assert_eq!(
+        StorageKey::of_frame(&origin("https://sub.a.example/"), [&top])
+            .serialize()
+            .as_deref(),
+        Some("https://sub.a.example/")
+    );
+    let chat = origin("https://chat.example/");
+    assert_eq!(
+        StorageKey::of_frame(&chat, [&top]).serialize().as_deref(),
+        Some("https://chat.example/^0https://a.example")
+    );
+    assert_eq!(
+        StorageKey::of_frame(&top, [&chat, &top])
+            .serialize()
+            .as_deref(),
+        Some("https://a.example/^31")
+    );
+    let opaque = Url::parse("data:text/html,").unwrap().origin();
+    assert_eq!(StorageKey::first_party(&opaque).serialize(), None);
+    assert_eq!(StorageKey::of_frame(&top, [&opaque]).serialize(), None);
+}
