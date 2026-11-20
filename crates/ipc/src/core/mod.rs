@@ -5,7 +5,9 @@
 //! says one is, so the whole of it runs the same on all three, and under
 //! Miri and a fuzzer.
 
+pub mod channel;
 pub mod frame;
+mod sync;
 
 #[cfg(test)]
 mod fake;

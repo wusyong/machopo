@@ -203,6 +203,11 @@ trybuild = "1"
 ctor = { version = "1", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]
+# `ipc` swaps its locks for loom's or shuttle's with `--cfg ipc_loom` /
+# `--cfg ipc_shuttle`, to check what its threads share. Not `loom` itself:
+# tokio, which `ipc` depends on, reads that cfg too (it leaves modules out
+# and swaps code under it), and would be another tokio than the one shipped.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(ipc_loom)", "cfg(ipc_shuttle)"] }
 unsafe_op_in_unsafe_fn = "deny"
 # `unsafe` is confined to `bindings` (V8 FFI) and `ipc` (the channels' shared
 # memory), which opt back in at their crate roots. Everything else builds on

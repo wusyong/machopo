@@ -20,6 +20,14 @@ bytes.workspace = true
 serde.workspace = true
 tokio.workspace = true
 
+# The checks of what a channel's threads share, only when built with
+# `--cfg ipc_loom` / `--cfg ipc_shuttle` (`python3 scripts/test.py ipc
+# models`).
+[target.'cfg(ipc_loom)'.dependencies]
+loom = "0.7"
+[target.'cfg(ipc_shuttle)'.dependencies]
+shuttle = "0.9"
+
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true
 

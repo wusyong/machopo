@@ -18,7 +18,7 @@
 | 1c：`protocol::BigBuffer`，跨邊界的訊息裡的位元組欄位都換成它，`sanity.py boundary` 擋裸的位元組 | 完成 | 2026-11-21 |
 | 1d：第 1 階段的檢查和文件 | 完成 | 2026-11-21 |
 | 2a：訊息的框架和對收到的位元組的檢查；同一個 process 裡的假通道；`sanity.py` 檢查核心沒有系統呼叫（單元測試、惡意的對端、fuzz、Miri） | 完成 | 2026-11-21 |
-| 2b：送出的佇列、目的地的分派、斷線只報告一次、同步呼叫等回答的位置（loom、shuttle） | 未開始 | |
+| 2b：送出的佇列、目的地的分派、斷線只報告一次（loom、shuttle；同步呼叫等回答的位置留在 renderer，第 27 條） | 完成 | 2026-11-21 |
 | 2c：region 的表和範圍的檢查、`BigBuffer` 帶 region 的序列化、留著重複用的池子（Verus、fuzz、Miri） | 未開始 | |
 | 2d：data pipe 的跨 process 版；通道協定的 TLA+ 模型（TLA+、loom、Verus） | 未開始 | |
 | 2e：macOS 的平台層（Mach 訊息、rendezvous、memory entry；跨 process 的測試） | 未開始 | |
@@ -45,6 +45,7 @@
 | `protocol` 的訊息裡的位元組都是 `BigBuffer`（兩個例外在允許清單）；它從 `Vec<u8>`、`Arc<[u8]>`、`Bytes` 建立都不複製，序列化成一整段位元組 | `python3 scripts/sanity.py boundary`；`cargo test -p protocol --lib big_buffer` |
 | 一則訊息的位元組（`ipc::core::frame`）：怎麼切交出來的都一樣、照順序各一次；長度超過上限、序號不連續、沒有權限的一端的 handle、太多或不夠的 handle 都是壞訊息；謊報的長度不佔記憶體；壞訊息之後什麼都不留；任何輸入都不 panic | `cargo test -p ipc`；`python3 scripts/test.py ipc fuzz`；`python3 scripts/test.py ipc miri` |
 | `ipc` 的核心不做系統呼叫、不分平台 | `python3 scripts/sanity.py deps` |
+| 通道的兩側（`ipc::core::channel`）：送不等、照順序，好幾條 thread 同時送時線上的序號連續、訊息不互相插入；佇列超過上限就關掉通道；不認得的目的地和被拒絕的內容是壞訊息；結束只報告一次、理由是第一個，之後不交出訊息也送不出去 | `cargo test -p ipc`；`python3 scripts/test.py ipc models`；`python3 scripts/test.py ipc miri` |
 
 ## 做過的檢查
 
@@ -150,3 +151,14 @@
 - **mutation test**（`mutants-2a.toml`）22 個，全部抓到：每個檢查拿掉和邊界差一、序號不前進和繞回來、handle 從後面拿、壞訊息之後留下位元組或 handle 或忘記、留整塊而不是沒到齊的、照開頭的長度先配置、交出去的不從緩衝區拿掉、`Encoder` 的四個、開頭的欄位換位置和位元組順序。跑完確認檔案都還原了。
 - **跑過的檢查**：`cargo test -p ipc`（單元 14 個、整合 20 個）；`cargo clippy -p ipc --all-targets -- -D warnings`、`cargo fmt --check`；`sanity.py` 的 7 項。別的 crate 沒有動。
 - **留給後面的**：目的地認不認得、送出的佇列、斷線（2b）；`test.py ipc` 還沒有排進 CI（記在 2h 的那一列和 `docs/testing.md`）。
+
+### 2b：通道的兩側（2026-11-21，macOS、Apple M4）
+
+- **決定**：「已決定的事項」第 27 條（同步呼叫等回答的位置留在 renderer 的 scheduler）和第 28 條（送出的佇列上限 256 MiB，照位元組）。「測試」的表和性質 8 跟著改。
+- **做了什麼**：`ipc` 的 `core::channel`：`Transport`（平台那一層要實作的：不等的 `write` 和 `wake`）、`channel()` 給出 `Sender`（任何 thread，`send`、`flush`、`close`）和 `Receiver`（讀傳輸的那條 thread，`feed`、`peer_gone`、`woken`）。一把鎖守著訊息的編號和寫出去的順序。`core::frame` 的 `Decoder` 多 `try_feed`（`sink` 可以拒絕一則訊息），`BadMessage` 多 `UnknownDestination` 和 `Rejected`。`core::sync`：鎖的型別，照 cfg 換成 loom 或 shuttle 的。
+- **cfg 的名字是 `ipc_loom`、`ipc_shuttle`**，不是 elise 用的 `loom`、`shuttle`：`ipc` 依賴 tokio，tokio 自己認 `cfg(loom)`（1.54.1 的 `src/` 裡有 72 處，不限於測試：拿掉 `net` 等模組、換掉幾處實作）。用 `--cfg loom` 編得過（試過），但測到的是另一個 tokio。
+- **`test.py ipc models`**（新的）：loom 3 個模型、shuttle 2 個（各 10000 次隨機的排程），各用自己的 target 目錄。
+- **測試**：`channel.rs` 的單元測試 13 個；loom 和 shuttle 的模型共 5 個。Miri 底下 26 個通過。
+- **mutation test**（`mutants-2b.toml`）20 個，全部抓到：18 個是單元測試抓的（繞過佇列直接寫、上限不檢查和差一、關掉後留著等著的或它的計數、理由被後來的蓋掉、該叫醒的沒叫和不該叫的叫了、`flush` 不扣和不拿掉、沒有權限的一端送 handle、大的緩衝區留著、目的地差一、結束報告多次、讀到一半的不丟、結束後還送、別的 thread 關掉之後還交出訊息）；「鎖在編號和寫出之間放開」單元測試看不到，loom 和 shuttle 各抓到一次。跑完確認檔案都還原了。
+- **跑過的檢查**：`cargo test -p ipc`（單元 27 個、整合 20 個）；`test.py ipc models`、`test.py ipc miri`；`cargo clippy -p ipc --all-targets -- -D warnings`（一般的、`ipc_loom` 和 `ipc_shuttle` 的各一次）、`cargo fmt --check`；`sanity.py` 的 7 項。這一段沒有加 fuzz target：`Receiver` 在 `Decoder` 上面只多目的地的比較，從位元組到「Browser 處理完這則訊息」的那個 target 在第 3 階段。
+- **留給後面的**：`Transport` 的讀的一側（平台自己的迴圈）和 `wake` 怎麼實作在 2e 之後；region（2c）、data pipe（2d）。

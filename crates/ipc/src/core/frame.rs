@@ -43,6 +43,10 @@ pub enum BadMessage {
     MissingHandles { expected: u32, got: usize },
     /// The message after the last sequence number there is.
     SequenceSpent,
+    /// A destination this end has nothing at.
+    UnknownDestination { destination: u32 },
+    /// A payload whoever it was for could make nothing of.
+    Rejected,
 }
 
 impl fmt::Display for BadMessage {
@@ -58,6 +62,10 @@ impl fmt::Display for BadMessage {
                 write!(f, "{got} handles where {expected} were due")
             }
             Self::SequenceSpent => f.write_str("a message after the last sequence number"),
+            Self::UnknownDestination { destination } => {
+                write!(f, "a message for destination {destination}")
+            }
+            Self::Rejected => f.write_str("a payload its destination refused"),
         }
     }
 }
@@ -228,6 +236,20 @@ impl<H> Decoder<H> {
         handles: impl IntoIterator<Item = H>,
         mut sink: impl FnMut(Message<'_, H>),
     ) -> Result<(), BadMessage> {
+        self.try_feed(bytes, handles, |message| {
+            sink(message);
+            Ok(())
+        })
+    }
+
+    /// `feed` with a `sink` that may refuse a message: that message is
+    /// then the bad one, and none after it is given out.
+    pub fn try_feed(
+        &mut self,
+        bytes: &[u8],
+        handles: impl IntoIterator<Item = H>,
+        mut sink: impl FnMut(Message<'_, H>) -> Result<(), BadMessage>,
+    ) -> Result<(), BadMessage> {
         // Taken before anything is checked, so that a failure drops them
         // with the rest.
         self.handles.extend(handles);
@@ -243,7 +265,7 @@ impl<H> Decoder<H> {
     fn feed_checked(
         &mut self,
         bytes: &[u8],
-        sink: &mut dyn FnMut(Message<'_, H>),
+        sink: &mut dyn FnMut(Message<'_, H>) -> Result<(), BadMessage>,
     ) -> Result<(), BadMessage> {
         if let Some(bad) = self.failed {
             return Err(bad);
@@ -278,7 +300,7 @@ impl<H> Decoder<H> {
     fn take_messages<'a>(
         &mut self,
         mut bytes: &'a [u8],
-        sink: &mut dyn FnMut(Message<'_, H>),
+        sink: &mut dyn FnMut(Message<'_, H>) -> Result<(), BadMessage>,
     ) -> Result<&'a [u8], BadMessage> {
         while let Some((header, after)) = bytes.split_first_chunk::<HEADER_LEN>() {
             let header = Header::read(header);
@@ -321,7 +343,7 @@ impl<H> Decoder<H> {
                 sequence: header.sequence,
                 payload,
                 handles,
-            });
+            })?;
             bytes = rest;
         }
         Ok(bytes)

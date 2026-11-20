@@ -21,8 +21,9 @@
                                        # mutation testing: break the code as SPEC lists, check a test fails
     python scripts/test.py cdp [CASE ...]
                                        # machopo's answers to DevTools' domains against Chrome's
-    python scripts/test.py ipc fuzz [--minutes M] | miri
-                                       # the channels' core: its fuzzers (cargo-fuzz), its tests under Miri
+    python scripts/test.py ipc fuzz [--minutes M] | miri | models
+                                       # the channels' core: its fuzzers (cargo-fuzz), its tests under Miri,
+                                       # what its threads share under loom and shuttle
 
 `matrix` and `fuzz` link the debug V8 (V8's `DCHECK`s), in a target directory
 of their own; `scenarios --window` needs a display and a GPU. `scenarios` is a
@@ -1585,7 +1586,28 @@ def cmd_ipc(args: argparse.Namespace) -> int:
     component add miri`), with strict provenance, in a target directory of
     its own (target/miri).
 
+    `models`: what a channel's threads share (its sending side's queue
+    and lock, the end of the channel) under loom and shuttle, which stand
+    in for its locks when it is built with `--cfg ipc_loom` or `--cfg
+    ipc_shuttle` (its `core::sync`): loom tries every interleaving of small
+    models (the unit tests in `loom_tests`), shuttle random schedules of
+    larger ones (`shuttle_tests`). Each builds in a target directory of its
+    own (target/ipc-loom, target/ipc-shuttle): a change of RUSTFLAGS
+    rebuilds every dependency. Release builds, for speed.
+
     Non-zero on a failure."""
+    if args.what == "models":
+        failed = []
+        for name in ("loom", "shuttle"):
+            env = dict(os.environ, RUSTFLAGS=f"--cfg ipc_{name}", CARGO_TARGET_DIR=str(ROOT / "target" / f"ipc-{name}"))
+            command = ["cargo", "test", "-q", "-p", "ipc", "--release", "--lib", f"{name}_tests"]
+            print(f"--- {name}: {' '.join(command)}", flush=True)
+            if subprocess.run(command, cwd=ROOT, env=env).returncode != 0:
+                failed.append(name)
+        if failed:
+            print(f"failed: {', '.join(failed)}")
+            return 1
+        return 0
     if args.what == "miri":
         env = dict(
             os.environ,
@@ -1932,8 +1954,8 @@ def main() -> int:
     cdp = command("cdp", cmd_cdp, "machopo's answers to DevTools' domains against Chrome's")
     cdp.add_argument("cases", nargs="*", metavar="CASE", help="run only these cases (default: all)")
 
-    ipc = command("ipc", cmd_ipc, "the channels' core: its fuzzers, its tests under Miri")
-    ipc.add_argument("what", choices=["fuzz", "miri"], help="which check")
+    ipc = command("ipc", cmd_ipc, "the channels' core: its fuzzers, its tests under Miri, its threads under loom and shuttle")
+    ipc.add_argument("what", choices=["fuzz", "miri", "models"], help="which check")
     ipc.add_argument(
         "--minutes", type=float, default=5, metavar="M", help="fuzz: how long each fuzzer runs (default 5)"
     )

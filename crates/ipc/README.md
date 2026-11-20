@@ -75,7 +75,42 @@ decoder.feed(&bytes, handles, |message| {
 - **handle**：跟著一則訊息的第一個位元組讀到，照讀到的順序給訊息。對方那一端沒有附 handle 的權限（`peer_may_attach` 是 `false`）時，任何 handle 都是壞訊息，不管開頭有沒有說；訊息沒認領的 handle 最多留兩則訊息的份，再多也是壞訊息。
 - **`BadMessage` 之後**什麼都不留、什麼都不再收：留著的位元組和 handle 當場丟掉（handle 的 `Drop` 就是關掉它），之後每次 `feed` 都回同一個錯誤。上層看到它就關掉通道。
 - `Encoder` 擋掉對方會拒絕的（太長、太多 handle），被擋掉的不佔序號。
-- 目的地認不認得、送出的佇列、斷線，不在這一層。
+- 目的地認不認得、送出的佇列、斷線，不在這一層，在 `core::channel`。
+
+### `core::channel`：通道的兩側
+
+Chromium 的 `mojo::core::Channel`。底下搬位元組的東西是 `Transport`（平台那一層實作它）：
+
+```rust
+pub trait Transport {
+    type Handle;
+    /// 不等。寫 `bytes` 的開頭（一則訊息剩下的部分），回答收了多少：
+    /// 全部、一部分（串流），或 `WouldBlock`。handle 跟著第一個位元組走。
+    fn write(&self, bytes: &[u8], handles: &mut Vec<Self::Handle>) -> Result<usize, WriteError>;
+    /// 讓讀傳輸的那條 thread 之後呼叫 `Receiver::woken`。
+    fn wake(&self);
+}
+
+let (sender, mut receiver) = ipc::core::channel::channel(transport, config);
+
+// 任何 thread：不等。
+sender.send(destination, &payload, handles)?;
+
+// 讀傳輸的那一條 thread（IO thread）的迴圈：
+if let Some(gone) = receiver.feed(&bytes, handles, |message| dispatch(message)) { /* 通道結束了 */ }
+if let Some(gone) = receiver.peer_gone() { /* 平台說對方不在了 */ }
+if let Some(gone) = receiver.woken() { /* `wake` 之後：別的 thread 關掉了通道 */ }
+sender.flush(); // 傳輸又有空間時
+```
+
+- **送不等**：傳輸收得下就當場寫；收不下的（或前面已經有在等的）排進佇列，照順序。一把鎖守著訊息的編號和寫出去的順序，所以好幾條 thread 同時送時，線上的序號還是連續的、一則訊息不會被另一則插進中間。一次 `write` 只給一則訊息的位元組：Mach 訊息那種「整則或沒有」的傳輸不會拿到半則或兩則。
+- **佇列有上限**（`MAX_QUEUED_BYTES`，256 MiB，兩則最大的訊息）：等著的位元組超過它，就是對方不讀了，通道關掉（`Gone::QueueFull`），等著的連同 handle 丟掉。對方「多久沒回應」不是這一層的事。
+- **佇列從空變成有東西時 `wake` 一次**（IO thread 開始等傳輸有空間，有了就 `flush`），關掉通道時也 `wake`。`wake` 一律在放開鎖之後呼叫。
+- **收的一側**：`feed` 把到齊的訊息照順序交給 `sink`；目的地不在 `Config::destinations` 以內的、`sink` 回 `BadMessage::Rejected` 的（內容解不出來）、`core::frame` 擋下來的，都是壞訊息，通道關掉，同一批位元組裡後面的不交出去。
+- **結束只報告一次**：`feed`、`peer_gone`、`woken` 都可能回 `Some(Gone)`，整條通道只有一次、由 IO thread 拿到；理由是第一個發生的（`PeerClosed`、`BadMessage`、`QueueFull`、這一端自己的 `Closed`）。報告之後不再交出訊息，讀到一半的訊息和它的 handle 當場丟掉；`send` 從通道關掉那一刻起就回 `SendError::Gone`。
+- **這一端自己的錯不關通道**：太長、太多 handle（`SendError::Encode`）、沒有權限卻附了 handle（`HandlesNotAllowed`），什麼都不送、不佔序號。
+- 組訊息的緩衝區留著給下一則用，超過 64 KiB 的不留。
+- 同步呼叫等回答的位置不在這裡：它在 renderer 的 scheduler 裡。
 
 ## `unsafe` 的論證
 
@@ -90,6 +125,14 @@ cargo test -p ipc
 ```
 
 `src/core/frame.rs` 的單元測試：開頭的每個欄位在哪裡；三則訊息（有 handle 的、空的、兩個 handle 的）一次餵完、在每一個位置切成兩段、一次一個位元組，交出來的都一樣；只留沒到齊的那一則；長度的上限只看開頭就擋（剛好在上限的不擋）；謊報的長度不佔記憶體；序號跳號和重複；沒有權限的一端留不下任何 handle（開頭說有、開頭說沒有但附了、開頭說有但沒附）；handle 太多（一則的、堆著沒認領的）和不夠；壞訊息之後什麼都不留、答案不變；最後一個序號之後沒有下一則；`Encoder` 擋掉的不佔序號；兩條 thread 經過一個隨意切位元組的假傳輸（`core/fake.rs`，只在測試裡），收到的照順序、各一次。
+
+`src/core/channel.rs` 的單元測試（用一個記下寫了什麼、照給的空間收的假傳輸）：收得下的當場寫；收不下的照順序等、從停下來的地方接著寫，之後送的排在後面；`flush` 寫到沒有空間為止；一次 `write` 只有一則訊息；佇列剛好到上限可以、超過就關（等著的和 handle 丟掉、IO thread 被叫醒、只聽到一次）；寫的時候對方不在了；這一端自己的錯不動通道；大訊息的緩衝區不留；收到的照順序、帶目的地；不認得的目的地、`sink` 拒絕的、框架擋下來的都關掉通道，後面的不交出去；結束只報告一次、理由是第一個。
+
+```sh
+python3 scripts/test.py ipc models   # 通道的 thread 共用的東西在 loom 和 shuttle 底下
+```
+
+`core::sync` 在 `--cfg ipc_loom`、`--cfg ipc_shuttle` 時把鎖換成 loom 和 shuttle 的（不用 `loom` 這個 cfg：`ipc` 依賴的 tokio 自己也認它，會拿掉幾個模組、換掉幾處實作，測到的就不是平常編出來的那個 tokio）。loom 的模型（`loom_tests`，每一種交錯都試）：兩條 thread 同時送、第三條補空間和 `flush`，每則各寫一次、完整、序號照順序；送的同時對方不在了，結束只聽到一次、之後送不出去、沒有東西留著；兩條同時送而佇列只放得下一則，剛好一條被拒絕、理由是 `QueueFull`。shuttle 的模型（`shuttle_tests`，隨機的排程各 10000 次）：3 條 thread 各送 12 則長短不一的訊息，傳輸一次只收幾個位元組，一條 thread 補空間和 `flush`，全部寫出來、每條 thread 自己的照順序；同樣的情況中途關掉通道，結束只聽到一次，寫出去的是完整的訊息加上最多一則的開頭，沒有「被告知沒送出去」的訊息。
 
 `tests/it/frame_fuzz.rs`：fuzzer 跑的那一段檢查（`fuzz/fuzz_targets/frame.rs` 直接引用這個檔案），輸入是對端可能送的任何位元組、怎麼切、每一段旁邊附幾個 handle。任何輸入都不能 panic；同樣的位元組不管怎麼切，交出來的訊息和結局一樣；序號從 0 連續；沒有權限的一端的 handle 一個也到不了上層；留著的不比到了的多；每個 handle 不是在 `Decoder` 手上就是已經關掉。測試跑一組種子，並重播 `fuzz/regressions/` 裡 fuzzer 找到過的輸入。
 

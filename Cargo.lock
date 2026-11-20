@@ -2306,9 +2306,11 @@ version = "0.0.1"
 dependencies = [
  "base",
  "bytes",
+ "loom",
  "rustix 1.1.5",
  "serde",
  "serde_json",
+ "shuttle",
  "tokio",
  "windows-sys 0.61.2",
 ]

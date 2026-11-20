@@ -1,0 +1,150 @@
+# Step 2b: a channel's two sides (`ipc::core::channel`). Sends never wait
+# and go in order; a peer that stops reading closes the channel; its end
+# is heard of once, for its first reason.
+test = ["sh", "-c", "cargo test -q -p ipc"]
+timeout = 900
+
+[[mutant]]
+name = "a send goes straight to the transport past what waits"
+file = "crates/ipc/src/core/channel.rs"
+from = '''        if outgoing.queue.is_empty() {
+            match'''
+to = '''        if true {
+            match'''
+
+[[mutant]]
+name = "the queue's limit is ignored"
+file = "crates/ipc/src/core/channel.rs"
+from = '''            .filter(|&queued| queued <= self.0.queue_limit)'''
+to = '''            .filter(|&queued| queued <= self.0.queue_limit || true)'''
+
+[[mutant]]
+name = "a queue right at its limit is refused"
+file = "crates/ipc/src/core/channel.rs"
+from = '''            .filter(|&queued| queued <= self.0.queue_limit)'''
+to = '''            .filter(|&queued| queued < self.0.queue_limit)'''
+
+[[mutant]]
+name = "a closed channel keeps what waited"
+file = "crates/ipc/src/core/channel.rs"
+from = '''        self.queue.clear();
+        self.queued = 0;'''
+to = '''        self.queued = 0;'''
+
+[[mutant]]
+name = "a closed channel still counts what waited"
+file = "crates/ipc/src/core/channel.rs"
+from = '''        self.queue.clear();
+        self.queued = 0;'''
+to = '''        self.queue.clear();'''
+
+[[mutant]]
+name = "the last reason for the end replaces the first"
+file = "crates/ipc/src/core/channel.rs"
+from = '''        *self.gone.get_or_insert(gone)'''
+to = '''        self.gone = Some(gone);
+        gone'''
+
+[[mutant]]
+name = "closing wakes nobody"
+file = "crates/ipc/src/core/channel.rs"
+from = '''        drop(outgoing);
+        self.transport.wake();
+        first'''
+to = '''        drop(outgoing);
+        first'''
+
+[[mutant]]
+name = "the first message to wait wakes nobody"
+file = "crates/ipc/src/core/channel.rs"
+from = '''        if first {'''
+to = '''        if false && first {'''
+
+[[mutant]]
+name = "every message that waits wakes the reading thread"
+file = "crates/ipc/src/core/channel.rs"
+from = '''        if first {'''
+to = '''        if true || first {'''
+
+[[mutant]]
+name = "a flush doesn't count what it wrote"
+file = "crates/ipc/src/core/channel.rs"
+from = '''            outgoing.queued = outgoing.queued.saturating_sub(taken);'''
+to = '''            let _ = taken;'''
+
+[[mutant]]
+name = "a flush keeps a message it wrote whole"
+file = "crates/ipc/src/core/channel.rs"
+from = '''            if whole {'''
+to = '''            if false && whole {'''
+
+[[mutant]]
+name = "an end that may attach nothing sends handles"
+file = "crates/ipc/src/core/channel.rs"
+from = '''        if !handles.is_empty() && !self.0.may_attach {'''
+to = '''        if false && !handles.is_empty() && !self.0.may_attach {'''
+
+[[mutant]]
+name = "a large message's buffer is kept"
+file = "crates/ipc/src/core/channel.rs"
+from = '''                if bytes.capacity() <= SCRATCH_KEPT {'''
+to = '''                if true || bytes.capacity() <= SCRATCH_KEPT {'''
+
+[[mutant]]
+name = "a destination one past the last is taken"
+file = "crates/ipc/src/core/channel.rs"
+from = '''            if message.destination >= destinations {'''
+to = '''            if message.destination > destinations {'''
+
+[[mutant]]
+name = "the end is heard of every time"
+file = "crates/ipc/src/core/channel.rs"
+from = '''            self.reported = true;'''
+to = '''            self.reported = false;'''
+
+[[mutant]]
+name = "the end leaves the unfinished message's bytes"
+file = "crates/ipc/src/core/channel.rs"
+from = '''            self.decoder = Decoder::new(false);'''
+to = '''            let _ = &self.decoder;'''
+
+[[mutant]]
+name = "a send after the end goes"
+file = "crates/ipc/src/core/channel.rs"
+from = '''        if let Some(gone) = outgoing.gone {
+            return Err(SendError::Gone(gone));
+        }
+        let mut bytes'''
+to = '''        let mut bytes'''
+
+[[mutant]]
+name = "bytes that come after a close from another thread are given out"
+file = "crates/ipc/src/core/channel.rs"
+from = '''        let gone = self.shared.outgoing().gone;
+        if gone.is_some() {
+            return self.report(gone);
+        }
+        let destinations'''
+to = '''        let destinations'''
+
+[[mutant]]
+name = "the lock is let go between numbering a message and writing it (loom)"
+file = "crates/ipc/src/core/channel.rs"
+from = '''        let mut written = 0;
+        if outgoing.queue.is_empty() {'''
+to = '''        drop(outgoing);
+        let mut outgoing = self.0.outgoing();
+        let mut written = 0;
+        if outgoing.queue.is_empty() {'''
+test = ["sh", "-c", "RUSTFLAGS='--cfg ipc_loom' CARGO_TARGET_DIR=target/ipc-loom cargo test -q -p ipc --release --lib loom_tests"]
+
+[[mutant]]
+name = "the lock is let go between numbering a message and writing it (shuttle)"
+file = "crates/ipc/src/core/channel.rs"
+from = '''        let mut written = 0;
+        if outgoing.queue.is_empty() {'''
+to = '''        drop(outgoing);
+        let mut outgoing = self.0.outgoing();
+        let mut written = 0;
+        if outgoing.queue.is_empty() {'''
+test = ["sh", "-c", "RUSTFLAGS='--cfg ipc_shuttle' CARGO_TARGET_DIR=target/ipc-shuttle cargo test -q -p ipc --release --lib shuttle_tests"]

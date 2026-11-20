@@ -233,7 +233,7 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
 5. **不被卡住**：送訊息不等對方；對方不讀時，這一端的佇列到上限就關掉通道，不是一直長。
 6. **順序**：一條通道上，收的一端交出訊息的順序就是送的一端送的順序，不重複、不漏。
 7. **斷線**：對方不在了（結束、當掉、只關掉一半、送了壞訊息）時，這一端剛好報告一次，之後不再交出它的訊息。
-8. **同步的呼叫**：回答只到等它的那個呼叫；通道斷了時等的一方醒來、當成失敗。
+8. **同步的呼叫**：回答只到等它的那個呼叫；通道斷了時等的一方醒來、當成失敗。這一條由 renderer 的 scheduler 守，不在 `ipc` 裡（第 27 條）。
 9. **data pipe**：讀到的位元組就是寫的、照順序、不重複；Browser 送出去、renderer 還沒說讀了的量不超過管道的容量；renderer 說讀了的比送的多是壞訊息。
 
 平台層守不住的寫成**假設**：kernel 照文件做的那幾件事（把唯讀的 handle map 成可寫會失敗、收到的 handle 是對方真的給的、訊息的來源認得出來、對方不在了一定通知）。每一條假設有一個真的跨 process 的測試，在那個平台上不成立時測試會失敗；原型在 macOS 上試過一遍（`prototype/README.md`）。
@@ -247,7 +247,7 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
 | 單元測試和惡意的對端 | 全部 | 核心經過假通道測；測試扮演壞掉的 renderer：超過上限的長度、不認得的目的地、不連續的序號、附了 handle 的訊息、不在它的表裡的 region 編號（包括別的 renderer 的）、超出那一塊的範圍、反序列化失敗的內容、巢狀超過上限的值、超過上限的共用記憶體、寫到一半就斷線。Browser 都要關掉通道、報告 `RendererGone`，不能 panic、卡住或 stack overflow | `cargo test`，每次 |
 | 平台層的跨 process 測試 | 假設，和 1、3、7 | 測試自己啟動小的 child process：建立、map、傳 handle、唯讀和大小的保證（拿唯讀的 handle 試著寫入或 map 成可寫、試著縮小 region，都要失敗）、對方整個結束、只關掉收的一半、只丟掉送的一半。macOS 另外測 rendezvous（沒登記的 pid 拿不到、同一個 pid 拿不到第二次、請求比登記早到時等得到）和假冒 kernel 的通知（忽略） | `cargo test`；Linux 和 Windows 在每天的 CI，macOS 在本機 |
 | fuzz（cargo-fuzz） | 2，和 1、6、9 | 兩個 target：從「通道讀到的位元組」到「Browser 處理完這則訊息」的整條路（反序列化、分派、處理訊息的物件；惡意的 renderer 唯一碰得到 Browser 的路，那個物件不需要真的通道就能跑）；region 的參照 | 每週的 CI；改核心時在本機跑一段 |
-| loom、shuttle | 5、6、8、9 | 送出的佇列和它的鎖（好幾條 thread 同時送、對方同時斷線）、同步呼叫等回答的位置、body 的訊息和「讀了多少」的往返（兩端各一條 thread）。atomic 和鎖的型別在核心裡是抽象的，測試時換成 loom 的 | 每週的 CI；改到這幾處時在本機 |
+| loom、shuttle | 5、6、7、9 | 送出的佇列和它的鎖（好幾條 thread 同時送、對方同時斷線）、body 的訊息和「讀了多少」的往返（兩端各一條 thread）。同步呼叫等回答的位置不在這裡（第 27 條）。atomic 和鎖的型別在核心裡是抽象的，測試時換成 loom 的 | 每週的 CI；改到這幾處時在本機 |
 | TLA+ | 4、5、6、7、9 | 通道的協定的模型：兩端、有上限的佇列、任一端隨時斷線、region 的發出和收回、body 的管道的額度。TLC 檢查模型成立，再拿掉每一部分確認找得到反例 | 改協定時；模型和協定一起改 |
 | Verus | 1 | 範圍的檢查和位置的運算寫成純函式（輸入數字，回答合不合法），證明「檢查通過的範圍一定在那一塊裡面」和 data pipe 的額度的運算（送出的不超過容量、讀了的不超過送的） | 每週的 CI |
 | Miri | 1 | 核心的測試經過假通道在 Miri 底下跑：碰共用記憶體的 `unsafe` 沒有未定義的行為 | 每週的 CI |
@@ -363,6 +363,13 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
 26. **一則訊息的開頭固定 20 bytes，長度的上限 128 MiB，照實際收到的量配置**（2026-11-21，第 2 階段的 2a，「控制通道」）：開頭是長度（`u32`，開頭之後的位元組數）、目的地（`u32`）、序號（`u64`，每一端從 0 開始加一，不會繞回來）、handle 的數量（`u32`），little-endian。核心拿到的是「讀到的位元組」，自己切出訊息：socket 是串流，Mach 訊息一則就是一則，走同一段。
     - **上限 128 MiB**：和 Chromium 同一級（舊的 IPC 128 MiB、Mojo 的 channel 256 MiB）。大的位元組資料是 `BigBuffer`、走 region，但字串不是（DevTools 和 WebDriver 的訊息裡 script 的原始碼、執行的結果可以到幾 MiB）。不選 16 MiB：沒有清單保證所有訊息都在它以下，正常的大訊息會被當成壞訊息、分頁掛掉，之後每加一種帶大字串的訊息都要記得這個上限。
     - **不照開頭寫的長度先配置**：位元組到了多少緩衝區才長多少，謊報長度不花收的一端的記憶體；真的送滿時每個 renderer 最多讓 Browser 暫時拿著 128 MiB。上限是一個常數，之後量到訊息都很小，收緊只改它。
+
+27. **同步呼叫等回答的位置留在 renderer 的 scheduler，`ipc` 不做這一塊**（2026-11-21，第 2 階段的 2b）：它已經在 `renderer` 的 `task_queue.rs`（`sync_call`、`post_reply`），和 task queue 共用一把鎖和一個 condvar（回答到的時候 task 照順序留在佇列裡），也已經處理「通道關了，等的一方醒來、當成失敗」。第 3 階段接上時，renderer 的 IO thread 看到通道斷了就呼叫 scheduler 現有的關閉。
+    - **不選搬進 `ipc` 的核心**：scheduler 要拆成兩把鎖或把鎖借出去，動到 main thread 的 event loop；renderer process 在 Browser 不在時本來就整個結束，「斷線時醒來」在那一側幾乎用不到。Mojo 的 `[Sync]` 也是在 binding 那一層等，不在 `mojo/core` 的 channel 裡。
+    - 性質 8 因此不在 `ipc` 的 loom 模型裡：由 `renderer` 現有的測試和第 3 階段一個跨 process 的測試守（「測試」的表跟著改）。
+28. **送出的佇列的上限是 256 MiB，照位元組算**（2026-11-21，第 2 階段的 2b，性質 5）：等著寫出去的位元組（連開頭）超過它，就當成對方不讀了、關掉通道。兩則最大的訊息（第 26 條）的大小：一則合法的大訊息一定排得進去。佇列平常是空的：對方的 IO thread 是獨立的 thread，main thread 忙的時候照樣在讀；body 有自己的背壓（第 21 條）。會堆起來的只有對方整個 process 停住的時候。
+    - **不選照「多久沒讀」算**（或兩個都要）：被 debugger 停住的 renderer 會被殺掉；核心要有時鐘，loom 和 fuzz 都變難；多久算壞沒有好的答案。Mojo 的 channel 送出的佇列預設沒有上限，renderer 沒回應是另一層的事（hang monitor）；這裡也留給之後的 hang monitor。
+    - 上限是一個常數（`MAX_QUEUED_BYTES`），之後量到平常的佇列有多長，收緊只改它。
 
 ## 待決定
 
