@@ -10,4 +10,5 @@
 )]
 
 mod site;
+mod site_for_cookies;
 mod storage_key;

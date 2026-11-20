@@ -1055,13 +1055,17 @@ impl WebContents {
         } else if local {
             self.process.set_file_access(true);
         }
+        // Its loader's params, by the frames it is in now (before its own
+        // commit, which the renderer hasn't reported).
+        let params = self.frame_tree.loader_params(frame, &origin.origin);
         self.frame_tree
             .committing(frame, navigation_id, &document.url, origin);
         let before = self.frame_tree.take_any_document_load(frame);
         let mut committer = committer;
         let place = self.controller.commit_place(navigation_id);
         committer.set_history_place(place, self.entries_heard.peek());
-        let completer = committer.commit(navigation_id, document);
+        let loader = self.process.register_loader(params);
+        let completer = committer.commit(navigation_id, document, loader);
         // The document before is no more: its body stops, and the renderer
         // hears it was aborted after the commit that takes its place (it
         // would commit what it has of it, else).

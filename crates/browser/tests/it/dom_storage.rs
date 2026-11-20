@@ -405,7 +405,7 @@ fn each_tab_has_a_session_storage_of_its_own() {
 
 /// The renderer's messages until the title is `done` (not empty), each
 /// handed to the tab; the titles before it.
-fn titles_until(
+pub(crate) fn titles_until(
     web_contents: &mut browser::WebContents,
     host_rx: &crossbeam_channel::Receiver<browser::ContentsEvent>,
     done: impl Fn(&str) -> bool,
@@ -421,7 +421,7 @@ fn titles_until(
     }
 }
 
-fn partition(profile: &Profile) -> StoragePartition {
+pub(crate) fn partition(profile: &Profile) -> StoragePartition {
     StoragePartition::new(
         profile,
         NetworkContext::start(NetworkContextParams {

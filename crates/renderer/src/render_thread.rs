@@ -369,6 +369,8 @@ struct RenderThread {
     next_request_id: RequestIds,
     /// The blob URLs the realms registered.
     blob_urls: BlobUrls,
+    /// The loader each document's subresources go through.
+    loaders: crate::loader::DocumentLoaders,
     /// The select whose dropdown the browser shows (Blink's
     /// `ExternalPopupMenu`, one at a time).
     popup: Option<dom::NodeId>,
@@ -536,6 +538,7 @@ impl RenderThread {
             dom_agent.clone(),
         ));
         let blob_urls = BlobUrls::new(to_browser.clone());
+        let loaders = crate::loader::DocumentLoaders::default();
         tracing::info!(raster = raster::BACKEND, "renderer main thread up");
         let _ = to_browser.send(RendererHostMsg::RendererReady);
         Self {
@@ -553,6 +556,7 @@ impl RenderThread {
                 scheduler.clone(),
                 to_browser.clone(),
                 crate::worker_thread::Owner::Main,
+                crate::worker_thread::WorkerLoaders::Documents(loaders.clone()),
             )),
             to_browser,
             widget: Some(FrameWidget::new(layer_tree_host)),
@@ -573,6 +577,7 @@ impl RenderThread {
             main_frame_requests: 0,
             next_request_id: RequestIds::new(),
             blob_urls,
+            loaders,
             popup: None,
             popup_closed_by_press: None,
             pending_mouse_move: None,
@@ -955,6 +960,7 @@ impl RenderThread {
     ) {
         let document_body::NavigationCommit {
             frame,
+            loader,
             navigation_id,
             begin_id,
             url,
@@ -1013,6 +1019,7 @@ impl RenderThread {
                 &history,
                 time_origin,
                 timing,
+                loader,
             )
         } else {
             let Ok(document_url) = Url::parse(&document_url) else {
@@ -1036,6 +1043,7 @@ impl RenderThread {
                     url,
                     origin_source: None,
                     history,
+                    loader,
                 },
             )
         };
@@ -1056,6 +1064,7 @@ impl RenderThread {
         match msg {
             RendererMsg::CommitNavigation {
                 frame,
+                loader,
                 navigation_id,
                 begin_id,
                 url,
@@ -1072,6 +1081,7 @@ impl RenderThread {
             } => {
                 let commit = document_body::NavigationCommit {
                     frame,
+                    loader,
                     navigation_id,
                     begin_id,
                     url,
@@ -1305,6 +1315,7 @@ impl RenderThread {
         history: &HistoryEntryParams,
         time_origin: f64,
         timing: NavigationTiming,
+        loader: u64,
     ) -> bool {
         if self
             .document
@@ -1330,6 +1341,7 @@ impl RenderThread {
             history,
             time_origin,
             &timing,
+            loader,
         );
         true
     }

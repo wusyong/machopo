@@ -201,6 +201,7 @@ impl RenderThread {
             to_browser: self.to_browser.clone(),
             ids: self.next_request_id.clone(),
             blob_urls: self.blob_urls.clone(),
+            loaders: self.loaders.clone(),
         }));
         // `localStorage`, its areas opened waiting for the browser.
         engine.set_storage_host(Box::new(super::documents::RendererStorageHost {

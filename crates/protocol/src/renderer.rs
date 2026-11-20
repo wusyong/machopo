@@ -173,6 +173,10 @@ pub enum RendererMsg {
     /// start of its body, and frame `frame` should show it.
     CommitNavigation {
         frame: crate::FrameToken,
+        /// The loader the document's subresources go through (Chromium's
+        /// `subresource_loader_factories`, bound with the browser's params
+        /// for the document): its number, for each `FetchResource` of it.
+        loader: u64,
         /// Increases with every navigation the browser starts. Responses
         /// arrive in any order, so the renderer drops a commit older than
         /// the one it shows.
@@ -720,6 +724,12 @@ pub enum RendererHostMsg {
         /// its own); none: the main thread. One the browser doesn't know as
         /// the renderer's (`DedicatedWorkerCreated`) is refused.
         worker: Option<u64>,
+        /// The loader it goes through: its document's (`CommitNavigation`'s
+        /// `loader`), or the worker's (`DedicatedWorkerCreated`'s). Its
+        /// request's `initiator` is to be the loader's origin, and its
+        /// cookies are the loader's site's: one the browser doesn't know as
+        /// the renderer's, or that isn't the worker's, is a bad message.
+        loader: u64,
         request: ResourceRequest,
     },
     /// Closing the `URLLoader` of a `FetchResource` still loading (an
@@ -744,6 +754,10 @@ pub enum RendererHostMsg {
     /// `RendererMsg::DedicatedWorkerScript`. Handled on the IO thread.
     DedicatedWorkerCreated {
         worker: u64,
+        /// The loader of the document (or worker) that made it, which its
+        /// loads go through (Chromium's `DedicatedWorkerHost` takes its
+        /// creator's).
+        loader: u64,
         request: ResourceRequest,
     },
     /// The dedicated worker `worker` is no more (terminated, closed, its

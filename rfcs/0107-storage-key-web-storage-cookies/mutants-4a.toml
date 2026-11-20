@@ -1,0 +1,103 @@
+# Step 4a: where a request comes from, the browser's to say. A loader
+# for each document as it commits (its origin, the site it is first party
+# to, the top-level site), its number with the commit; the renderer sends
+# each request through its document's (a child frame's first about:blank
+# and a worker its creator's), the IO thread checking it and giving it the
+# loader's trusted params.
+test = [
+    "sh", "-c",
+    "cargo test -q -p site && cargo test -q -p browser --lib -- loader request_takes workers_request && cargo test -q -p browser --test it loaders::",
+]
+timeout = 1800
+
+[[mutant]]
+name = "a renderer's trusted params are taken"
+file = "crates/browser/src/render_process_host.rs"
+from = '''    if request.trusted.is_some() {
+        return Err(BadMessageReason::TrustedParamsFromRenderer);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "a loader the renderer wasn't given is taken"
+file = "crates/browser/src/render_process_host.rs"
+from = '''        .ok_or(BadMessageReason::UnknownLoader)?;'''
+to = '''        .or_else(|| loaders.params.values().next())
+        .ok_or(BadMessageReason::UnknownLoader)?;'''
+
+[[mutant]]
+name = "a worker's request may go through another loader"
+file = "crates/browser/src/render_process_host.rs"
+from = '''        if known.loader != loader {'''
+to = '''        if known.loader != loader && false {'''
+
+[[mutant]]
+name = "any initiator is taken"
+file = "crates/browser/src/render_process_host.rs"
+from = '''        Some(_) => return Err(BadMessageReason::InitiatorMismatch),'''
+to = '''        Some(_) => {}'''
+
+[[mutant]]
+name = "an opaque initiator is refused"
+file = "crates/browser/src/render_process_host.rs"
+from = '''        None | Some("null") => {}'''
+to = '''        None => {}'''
+
+[[mutant]]
+name = "a frame's site for cookies looks at it alone"
+file = "crates/site/src/lib.rs"
+from = '''            && std::iter::once(origin)
+                .chain(ancestors.iter().copied())
+                .all(|frame| Site::of(frame) == site);'''
+to = '''            && Site::of(origin) == site;'''
+
+[[mutant]]
+name = "a ws URL isn't first party to its http site"
+file = "crates/site/src/lib.rs"
+from = '''            "ws" => Some("http"),'''
+to = '''            "ws" => None,'''
+
+[[mutant]]
+name = "the top-level site is the frame's own"
+file = "crates/browser/src/frame_tree.rs"
+from = '''        let top = ancestors.last().copied().unwrap_or(origin);
+        let site_for_cookies = SiteForCookies::of_frame(origin, ancestors.iter().copied());'''
+to = '''        let top = origin;
+        let site_for_cookies = SiteForCookies::of_frame(origin, ancestors.iter().copied());'''
+
+[[mutant]]
+name = "an image's initiator is the top-level document's"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            request.initiator = self.engine.as_mut().and_then(|engine| {
+                engine.dom_mut().read(|cx| {
+                    let document = cx.node_by_id(document)?;
+                    Some(match dom_api::origin(cx, document) {
+                        Some(origin @ url::Origin::Tuple(..)) => origin.ascii_serialization(),
+                        _ => "null".to_owned(),
+                    })
+                })
+            });'''
+to = '''            request.initiator = self.document.as_ref().map(|next| match next.url.origin() {
+                origin @ url::Origin::Tuple(..) => origin.ascii_serialization(),
+                url::Origin::Opaque(_) => "null".to_owned(),
+            });'''
+
+[[mutant]]
+name = "a child frame's first about:blank has no loader"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                            self.loaders.set(id, parent_loader);'''
+to = '''                            let _ = (id, parent_loader);'''
+
+[[mutant]]
+name = "a worker goes through no loader"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''                .and_then(|document| loaders.of(document))
+                .unwrap_or(0),'''
+to = '''                .and_then(|document| loaders.of(document))
+                .map_or(0, |_| 0),'''
+
+[[mutant]]
+name = "a child document goes through its parent's loader"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            Some(navigation) => navigation.loader,'''
+to = '''            Some(_) => self.loader_of(parent),'''

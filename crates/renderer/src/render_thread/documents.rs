@@ -359,6 +359,8 @@ pub(super) struct ChildCommit<'a> {
     pub(super) origin_source: Option<NodeRoot>,
     /// Its item's state, and where its entry is in the session history.
     pub(super) history: protocol::renderer::HistoryEntryParams,
+    /// The loader the browser gave it.
+    pub(super) loader: u64,
 }
 
 impl ChildFrames {
@@ -575,6 +577,7 @@ impl RenderThread {
         history: &protocol::renderer::HistoryEntryParams,
         time_origin: f64,
         timing: &crate::navigation_timing::NavigationTiming,
+        loader: u64,
     ) {
         let _span = trace_event::info_event!("commit_navigation", %url);
         let document_id = self.new_document_id();
@@ -683,6 +686,9 @@ impl RenderThread {
         );
         let parser = Parser::new(engine.dom_mut(), &document);
         let node = engine.dom_mut().read(|cx| cx.node_id(document.get(cx.gc)));
+        // Its subresources, its scripts' as it parses too, go through the
+        // browser's loader for it.
+        self.loaders.set(node, loader);
         let view = FrameView::new(document.clone(), node, document_id, self.system_colors);
         match engine
             .dom_and_layout()
@@ -780,6 +786,8 @@ impl RenderThread {
             }
         }
         drop(engine);
+        // Its documents' numbers are the next DOM's from the start.
+        self.loaders.clear();
         // Its `localStorage` areas went with its DOM: the next engine's
         // documents get them again.
         let _ = self.to_browser.send(RendererHostMsg::ForgetStorageAreas);
@@ -801,6 +809,45 @@ impl RenderThread {
             .documents
             .iter_mut()
             .find(|next| next.frame == frame)
+    }
+
+    /// The loader `frame`'s document's subresources go through: the one
+    /// the browser gave it, or for a document it didn't commit (a child
+    /// frame's first `about:blank`, a `javascript:` URL's) the one of the
+    /// frame it is in. 0, which the browser knows as none, if it has none.
+    fn loader_of(&mut self, frame: FrameId) -> u64 {
+        let mut at = Some(frame);
+        while let Some(frame) = at {
+            if let Some(loader) = self
+                .document_of_frame(frame)
+                .and_then(|id| self.loaders.of(id))
+            {
+                return loader;
+            }
+            at = self.children.frames.get(&frame).map(|(parent, _)| *parent);
+        }
+        0
+    }
+
+    /// The DOM's number for the document the browser last committed in
+    /// `frame`; none for a frame that shows none of the browser's (its
+    /// first `about:blank`).
+    fn document_of_frame(&mut self, frame: FrameId) -> Option<dom::NodeId> {
+        let document = self.doc(frame)?.document.clone();
+        let engine = self.engine.as_mut()?;
+        Some(engine.dom_mut().read(|cx| cx.node_id(document.get(cx.gc))))
+    }
+
+    /// The loader the document `document` goes through: the browser's for
+    /// it, else that of the frame showing it (or the top-level one's).
+    fn loader_of_document(&mut self, document: dom::NodeId) -> u64 {
+        if let Some(loader) = self.loaders.of(document) {
+            return loader;
+        }
+        let frame = self
+            .frame_of_document(document)
+            .or_else(|| self.document.as_ref().map(|next| next.frame));
+        frame.map_or(0, |frame| self.loader_of(frame))
     }
 
     fn doc(&self, frame: FrameId) -> Option<&FrameDocument> {
@@ -865,6 +912,15 @@ impl RenderThread {
                             });
                         }
                         self.children.tokens.insert(frame, token);
+                        // Its first `about:blank`, of its parent's origin,
+                        // goes through its parent's loader (Chromium's
+                        // initial empty document takes its creator's
+                        // factories).
+                        let parent_loader = self.loader_of(parent);
+                        if let Some(engine) = self.engine.as_mut() {
+                            let id = engine.dom_mut().read(|cx| cx.node_id(document.get(cx.gc)));
+                            self.loaders.set(id, parent_loader);
+                        }
                         let document_id = self.new_document_id();
                         let Some((dom, next)) = engine_frame(&mut self.engine) else {
                             continue;
@@ -1618,6 +1674,12 @@ impl RenderThread {
         let Some((parent, owner)) = self.children.frames.get(&frame).cloned() else {
             return;
         };
+        // The browser's loader for it; one the renderer commits itself (a
+        // `javascript:` URL's) goes through the frame's document's before.
+        let loader = match &navigation {
+            Some(navigation) => navigation.loader,
+            None => self.loader_of(frame),
+        };
         let document_id = self.new_document_id();
         let (now, time_origin, timing) = match &navigation {
             Some(navigation) => (
@@ -1711,6 +1773,7 @@ impl RenderThread {
                 cx.node_id(owner.get(cx.gc)),
             )
         });
+        self.loaders.set(node, loader);
         let view = FrameView::new(document.clone(), node, document_id, self.system_colors)
             .into_child(frame, owner_id);
         let top = self.document.as_ref().map(|next| next.frame);
@@ -4238,14 +4301,6 @@ impl RenderThread {
         let Some(engine) = &mut self.engine else {
             return;
         };
-        // From the document's origin (HTML's "create a potential-CORS
-        // request", no-cors): the network service taints another origin's
-        // response (opaque), which a canvas that draws it can't be read
-        // after.
-        let initiator = self.document.as_ref().map(|next| match next.url.origin() {
-            origin @ url::Origin::Tuple(..) => origin.ascii_serialization(),
-            url::Origin::Opaque(_) => "null".to_owned(),
-        });
         let fetches = engine.dom_mut().take_image_fetches();
         for dom::ImageFetch {
             url,
@@ -4268,20 +4323,42 @@ impl RenderThread {
                 continue;
             }
             let mut request = ResourceRequest::new(&url, RequestDestination::Image);
-            request.initiator = initiator.clone();
+            // From its document's origin (HTML's "create a potential-CORS
+            // request", no-cors): the network service taints another
+            // origin's response (opaque), which a canvas that draws it
+            // can't be read after.
+            request.initiator = self.engine.as_mut().and_then(|engine| {
+                engine.dom_mut().read(|cx| {
+                    let document = cx.node_by_id(document)?;
+                    Some(match dom_api::origin(cx, document) {
+                        Some(origin @ url::Origin::Tuple(..)) => origin.ascii_serialization(),
+                        _ => "null".to_owned(),
+                    })
+                })
+            });
             // Told from its document's frame, which asked first (the
-            // top-level one's, if none shows it now).
-            let frame = if self.network_agent.enabled() {
-                self.frame_of_document(document)
-                    .or_else(|| self.document.as_ref().map(|next| next.frame))
-            } else {
-                None
-            };
+            // top-level one's, if none shows it now), through its
+            // document's loader.
+            let loader = self.loader_of_document(document);
+            let frame = self
+                .frame_of_document(document)
+                .or_else(|| self.document.as_ref().map(|next| next.frame));
             let request_id = match frame {
-                Some(frame) => self.send_request_with_initiator(frame, request, |this| {
-                    this.initiator(frame, &asker)
-                }),
-                None => self.send_request_untold(request),
+                Some(frame) if self.network_agent.enabled() => {
+                    let request_id = self.next_request_id.next();
+                    let initiator = self.initiator(frame, &asker);
+                    if let Some(at) = self.request_frame(frame) {
+                        self.network_agent
+                            .will_send(request_id, &request, at, initiator.as_ref());
+                    }
+                    self.send_request(request_id, loader, request);
+                    request_id
+                }
+                _ => {
+                    let request_id = self.next_request_id.next();
+                    self.send_request(request_id, loader, request);
+                    request_id
+                }
             };
             self.images.insert(request_id, (url, document));
         }
@@ -4663,22 +4740,18 @@ impl RenderThread {
                     .will_send(request_id, &request, at, initiator.as_ref());
             }
         }
-        self.send_request(request_id, request);
+        let loader = self.loader_of(frame);
+        self.send_request(request_id, loader, request);
         request_id
     }
 
-    /// Sends `request`, of no frame DevTools knows. Its id.
-    fn send_request_untold(&mut self, request: ResourceRequest) -> u64 {
-        let request_id = self.next_request_id.next();
-        self.send_request(request_id, request);
-        request_id
-    }
-
-    fn send_request(&self, request_id: u64, request: ResourceRequest) {
+    /// Sends `request` through `loader` (its document's).
+    fn send_request(&self, request_id: u64, loader: u64, request: ResourceRequest) {
         self.next_request_id.sent(request_id, &request);
         let _ = self.to_browser.send(RendererHostMsg::FetchResource {
             request_id,
             worker: None,
+            loader,
             request,
         });
     }
@@ -5015,6 +5088,7 @@ pub(super) struct RendererLoadSink {
     pub(super) to_browser: crossbeam_channel::Sender<RendererHostMsg>,
     pub(super) ids: crate::loader::RequestIds,
     pub(super) blob_urls: crate::loader::BlobUrls,
+    pub(super) loaders: crate::loader::DocumentLoaders,
 }
 
 impl dom_api::LoadSink for RendererLoadSink {
@@ -5025,9 +5099,15 @@ impl dom_api::LoadSink for RendererLoadSink {
         let resource = crate::loader::fetch_resource_request(request);
         let request_id = self.ids.next();
         self.ids.sent(request_id, &resource);
+        // Through its document's loader.
+        let loader = request
+            .document
+            .and_then(|document| self.loaders.of(document))
+            .unwrap_or(0);
         let _ = self.to_browser.send(RendererHostMsg::FetchResource {
             request_id,
             worker: None,
+            loader,
             request: resource,
         });
         Some(request_id)

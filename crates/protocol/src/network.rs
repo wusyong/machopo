@@ -98,6 +98,22 @@ pub struct ResourceRequest {
     /// Its body, whole; `None` for a null one.
     pub body: Option<Vec<u8>>,
     pub redirect: RedirectMode,
+    /// What only the browser gives a request (Chromium's
+    /// `ResourceRequest::TrustedParams`): none from a renderer, whose
+    /// requests the browser gives their document's loader's (one a
+    /// renderer sends with them is a bad message).
+    pub trusted: Option<TrustedParams>,
+}
+
+/// Where a request comes from as the browser knows it, for its cookies
+/// (Chromium's `IsolationInfo` in its `TrustedParams`, or its
+/// `URLLoaderFactoryParams`'): the site it is first party to, none for a
+/// third party's (`SiteForCookies`, null), and the top-level frame's site,
+/// none for an opaque one; each serialized (`https://example.com`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrustedParams {
+    pub site_for_cookies: Option<String>,
+    pub top_frame_site: Option<String>,
 }
 
 impl ResourceRequest {
@@ -114,6 +130,7 @@ impl ResourceRequest {
             credentials: CredentialsMode::Include,
             body: None,
             redirect: RedirectMode::Follow,
+            trusted: None,
         }
     }
 }

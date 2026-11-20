@@ -73,8 +73,8 @@ fn dom_error(error: Result<Rc<ObjectRoot>, ApiError>) -> ExceptionName {
 }
 
 /// `new Worker(url, { name })`: a `Worker` of the realm, its worker started
-/// with the URL parsed against the realm's base URL, the name and the
-/// realm's origin; the host's number is the worker's.
+/// with the URL parsed against the realm's base URL, the name, the realm's
+/// origin and its document; the host's number is the worker's.
 #[test]
 fn a_worker_starts_its_worker() {
     let mut dom = page(true);
@@ -84,12 +84,17 @@ fn a_worker_starts_its_worker() {
     )
     .expect("a worker");
     let origin = url::Url::parse("https://example.test/").unwrap().origin();
+    let document = dom.read(|cx| {
+        let window = dom.1.current_window.borrow();
+        cx.node_id(cx.window_document(window.as_ref().unwrap().get(cx.gc)))
+    });
     assert_eq!(
         calls(&dom),
         [WorkerCall::Start(WorkerStart {
             url: url::Url::parse("https://example.test/dir/w.js").unwrap(),
             name: "fib".to_owned(),
             owner_origin: Some(origin),
+            owner_document: Some(document),
             module: None,
         })]
     );

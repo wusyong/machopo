@@ -17,7 +17,10 @@
 | 3a：同步等 Browser 的路、Browser 的 storage thread 和資料庫、`Storage` 介面和 `localStorage` | 完成 | 2026-11-20 |
 | 3b：`storage` 事件、`sessionStorage` | 完成 | 2026-11-20 |
 | 3c：上限、寫進磁碟的批次、WPT 的 `webstorage/`、第 3 階段的檢查和文件 | 完成 | 2026-11-20 |
-| 4：`net` 的 cookie | 未開始 | |
+| 4a：請求的來歷（Browser 給的最上層的網站和 site for cookies，核對 `initiator`） | 完成 | 2026-11-20 |
+| 4b：解析 `Set-Cookie`、記憶體裡的 store、每一跳帶 `Cookie`、`SameSite` | 未開始 | |
+| 4c：第三方的 cookie、`Partitioned`、上限和淘汰、寫進 profile 的 `Cookies` 資料庫 | 未開始 | |
+| 4d：WPT 的 `cookies/`、第 4 階段的檢查和文件 | 未開始 | |
 | 5：cookie 到 DOM 和自動化 | 未開始 | |
 | 6：檢查和文件 | 未開始 | |
 
@@ -43,6 +46,8 @@
 | 上限：renderer 的（10 MiB，每個 UTF-16 code unit 算 2 bytes，只在項目變大時檢查；拿掉的、清掉的不再算；從 Browser 拿到的超過上限時改小照樣可以），超過丟 `QuotaExceededError`（code 22、是 `QuotaExceededError`）、不改，`localStorage` 和 `sessionStorage` 各算各的；Browser 的（多容許 100 KiB），超過時拒絕、只告訴做出改動的 renderer，renderer 改回 Browser 的值（後面還有這個 key 的改動時不改） | `cargo test -p dom --test it storage::`；`cargo test -p browser --test it dom_storage::` |
 | 成批寫進磁碟：到期之前檔案不變，到期時一起寫，結束時寫完；延遲是 5 秒和兩個速率限制中最長的，速率從 area 第一次有改動起算 | `cargo test -p browser --lib dom_storage`；`cargo test -p browser --test it dom_storage::` |
 | WPT：`webstorage/` 0 個意外的結果（`window.open`、`BroadcastChannel`、單獨的 surrogate 失敗；`set.window.js` 和 `storage_builtins.window.js` 失敗的項目和 Chrome 一樣）；`createEvent('StorageEvent')` | `python3 scripts/test.py wpt webstorage/ dom/nodes/Document-createEvent.https.html dom/events/EventTarget-dispatchEvent.html` |
+| site for cookies：最上層的 frame 是自己的網站；frame 和中間的每一層都是最上層的網站時是它，有一層不是、或有 opaque 的時是 null；網址照 scheme 比（`ws:` 算 `http:`、`wss:` 算 `https:`） | `cargo test -p site` |
+| 請求的來歷：每份文件 commit 時一個 Browser 給的 loader（文件的 origin、site for cookies、最上層的網站，照它所在的 frame 算）；IO thread 照編號核對（沒給的 loader、不是 worker 的 loader、`initiator` 不是 loader 的 origin、renderer 自己帶了可信的參數都是壞掉的訊息；opaque 的 `initiator` 照收），填上 loader 的可信參數；跨 origin 的 iframe 的圖片、iframe 一開始的 `about:blank` 的 `fetch()`、worker 的 `fetch()` 都經過各自的 loader | `cargo test -p browser --lib -- loader request_takes workers_request`；`cargo test -p browser --test it loaders::` |
 
 ## 做過的檢查
 
@@ -154,3 +159,17 @@ macOS、Apple M4，2026-11-20。
 - mutation test（`mutants-3c.toml`）14 個，抓到 13 個；沒抓到的「超過上限的項目不能改小」是測試的值選得不好（改小之後剛好又在上限內），改成改小之後仍然超過，重跑抓到。「一批用一個 transaction」寫成的 mutant 編不過，而且從外面看不出差別，拿掉了。
 - 第 3 階段的檢查：`cargo test --workspace` 4327 個通過、0 個失敗、1 個 ignored，跑完之後家目錄底下沒有 profile 的資料夾；`cargo fmt --check` 抓到一個測試的換行，照 rustfmt 改了；`cargo clippy --workspace --all-targets -- -D warnings` 抓到兩個測試裡太長的型別（改成 type alias）和測試分頁的編號用了 `fetch_add`（改成 `base::AtomicSequenceNumber`）。
 - 文件：`docs/architecture.md`（`DomStorageContext` 的上限和批次）、`docs/limitations.md`、`crates/dom_api/README.md`（上限、`createEvent`）。
+
+### 4a：請求的來歷
+
+macOS、Apple M4，2026-11-20。
+
+- 決定了第 15 條（cookie 自己照 RFC 6265bis 和 Chromium 寫；讀了 `cookie_store` 0.22.1 的原始碼）和第 16 條（每份文件一個 Browser 給的 loader 編號；讀了 Chromium 的 `network_context.mojom` 的 `URLLoaderFactoryParams` 和 `isolation_info.h`）。
+- 新的東西：`site` 的 `SiteForCookies`（Chromium 的 `ComputeSiteForCookies`、`IsSchemefullyFirstParty`）；`protocol` 的 `ResourceRequest::trusted`（`TrustedParams`：site for cookies、最上層的網站），`CommitNavigation`、`FetchResource`、`DedicatedWorkerCreated` 帶 `loader`；`browser` 的 `FrameTree::loader_params`、`RenderProcessHost::register_loader`、IO thread 的 `check_request` 和四個新的 `BadMessageReason`；`renderer` 的 `DocumentLoaders`（文件 → loader，iframe 建立時它一開始的 `about:blank` 登記成 parent 的，換 engine 時清掉）、worker 的 `WorkerLoaders`；`dom` 的 `context_document_id`（只給文件的編號，不給文件本身）、`dom_api::WorkerStart::owner_document`。可信的參數 4b 才有人用（cookie），這一段看不出它們的效果，4b 的測試守它們。
+- 找到的問題：圖片的請求的 `initiator` 一直是最上層的文件的 origin（iframe 裡的圖片也是），照新的核對會讓 renderer 被結束；改成圖片所在的文件的 origin。主文件和子文件在 commit 的途中就開始 parse，裡面的 script 可能馬上發請求，所以文件的 loader 在建文件的當下就登記，不等 commit 結束。
+- `browser` 的測試建分頁時原本沒有 worker 的 engine（`worker_engine: None`），worker 不會跑；改成 V8 的，和 `shell` 一樣，`browser` 的測試照樣全部通過。
+- WPT：跑了 `workers/`、`fetch/api/basic/`、`fetch/api/cors/`、`fetch/api/redirect/`、`html/semantics/embedded-content/the-iframe-element/`、`html/browsers/browsing-the-web/navigating-across-documents/`、`webstorage/`，沒有 renderer 被結束。`workers/semantics/navigation/001.html` 意外通過，連跑 5 次都通過；在這一段之前的 commit（`df988a8`）上也通過，是之前就通過、預期結果沒更新，拿掉了它的 `.ini`。
+- 新的測試：`site` 的 `site_for_cookies` 2 個，`browser` 的單元測試 3 個（loader 的參數、請求的核對、worker 的請求），`browser` 的 `loaders` 1 個。
+- mutation test（`mutants-4a.toml`）12 個，抓到 11 個；沒抓到的「`ws:` 不算它的 `http:` 網站」是測試只測了 `wss:` 對 `https:`，補了 `ws:` 對 `http:`，重跑抓到。
+- 文件：`docs/architecture.md`（`RenderProcessHost` 的 loader）、`docs/limitations.md`（loader 留到 renderer 結束、opaque 的 `initiator` 照收）。
+- 跑過的檢查：`cargo test` 的 `site`、`dom_api`、`renderer`、`browser`、`shell`（1296 個通過）；`cargo fmt --check`；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。

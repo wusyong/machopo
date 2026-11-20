@@ -73,6 +73,7 @@
 
 - 沒有 cookie 和 HTTP cache，每次載入都重新向伺服器要。
 - 沒有擋 Fetch 的 bad port（`fetch` 到 port 13、25 等照樣去連）：在 Windows 上連 localhost 那些 port 的請求可能等很久才結束，WPT 的 `request-bad-port.any.js` 在 Windows 上等到逾時。
+- Browser 替每份文件建的 loader（子資源請求的來歷）在 renderer 結束之前都留著，每次 commit 多一個（Chromium 的 factory 在 renderer 放掉它的 pipe 時就沒了）。請求的 `initiator` 是 opaque 的（`null`）時照收，不像 Chromium 核對它的 precursor 是不是 loader 的 origin。
 - `fetch()`、module script、`modulepreload` 和帶 `crossorigin` 的 classic script 跨源時照 CORS；preflight 不快取：不是 simple 的跨源請求每次都先送 `OPTIONS`（Chrome 照 `Access-Control-Max-Age` 快取，預設 5 秒）。preflight 不帶 `Referer`（machopo 都不送）。沒有 cookie，`credentials` 只改變 CORS 要求對方的條件。
 - HTTP/1 的回應的 status text 是 status 標準的 reason phrase（reqwest 不留伺服器給的）；HTTP/2 沒有 reason phrase，是空字串。request header 的名稱送出時一律小寫（hyper 的 HTTP/1），Chrome 照 script 給的大小寫。沒有 `Accept-Language`。request header 的值有控制字元（tab 以外 0x20 以下的 byte，Fetch 允許）時送不出去，是網路錯誤：hyper 的 `http` crate 不接受（WPT 的 `header-values-normalize.any.js`、`cors-preflight-not-cors-safelisted.any.js`）。伺服器回 421（Misdirected Request）時不換一條連線重送（Chrome 會，WPT 的 `request-upload-421.any.js`）。`fetch()` 的 `Origin` 不看 referrer policy（`no-referrer` 時 Chrome 送 `null`）。伺服器在 204、205、304 的回應後面多送 body（HTTP 不允許）時，hyper 照樣重用那條連線，下一個用到它的請求把殘留的 bytes 當成回應解析而失敗；Chrome 發現回應之後還有資料就不重用（`HttpStreamParser`）。WPT 的 `response-null-body.any.js` 因此不穩定，寫成 `disabled`。
 - `Accept-Encoding` 只有 `gzip, deflate, br`（Chrome 還有 `zstd`），`net` 自己解壓。

@@ -128,6 +128,15 @@ impl<'gc> Cx<'_, 'gc> {
         Some(self.window_document(window))
     }
 
+    /// The number of `context`'s global's document, if it has one (a
+    /// window's), for the host to know it by (the loader a worker it makes
+    /// goes through): a number, not the document, which stays the DOM's
+    /// own.
+    pub fn context_document_id(&self, context: Gc<'gc, ExecutionContext>) -> Option<crate::NodeId> {
+        self.context_document(context)
+            .map(|document| self.node_id(document))
+    }
+
     /// `context`'s API base URL (HTML's): its global's document's base
     /// URL, a worker's global's URL; none without one.
     pub fn context_base_url(&self, context: Gc<'gc, ExecutionContext>) -> Option<Url> {

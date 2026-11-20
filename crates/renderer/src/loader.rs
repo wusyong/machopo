@@ -17,6 +17,30 @@ use protocol::network::{
 };
 use protocol::renderer::RendererHostMsg;
 
+/// The loader each document's subresources go through (the browser's
+/// number for it, `CommitNavigation`'s `loader`; Blink's frame's
+/// `URLLoaderFactory`), by the DOM's number for the document: the render
+/// thread's, shared with what sends requests from the engine. A document
+/// the browser didn't commit (a child frame's first `about:blank`, a
+/// `javascript:` URL's) goes through its creator's.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct DocumentLoaders(Rc<RefCell<HashMap<dom::NodeId, u64>>>);
+
+impl DocumentLoaders {
+    pub(crate) fn set(&self, document: dom::NodeId, loader: u64) {
+        self.0.borrow_mut().insert(document, loader);
+    }
+
+    pub(crate) fn of(&self, document: dom::NodeId) -> Option<u64> {
+        self.0.borrow().get(&document).copied()
+    }
+
+    /// None: a new DOM's documents are numbered from the start.
+    pub(crate) fn clear(&self) {
+        self.0.borrow_mut().clear();
+    }
+}
+
 /// The next request id, shared by everything in the renderer that sends
 /// one; and the URL of each request until it is answered, which the page's
 /// log names a failed load by.

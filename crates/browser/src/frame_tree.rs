@@ -12,11 +12,12 @@
 use std::collections::HashMap;
 
 use protocol::FrameToken;
-use site::StorageKey;
+use site::{Site, SiteForCookies, StorageKey};
 
 use crate::bad_message::BadMessageReason;
 use crate::navigation_controller::HistoryPlace;
 use crate::navigation_request::{DocumentLoad, NavigationRequest};
+use crate::render_process_host::LoaderParams;
 
 /// A frame of the tree: its parent (none for the main frame) and its
 /// child frames, in the order they were made; its document, and its
@@ -234,6 +235,29 @@ impl FrameTree {
         let ancestors = std::iter::successors(frame, |at| self.nodes.get(at)?.parent)
             .filter_map(|at| self.nodes.get(&at).map(|node| &node.origin));
         StorageKey::of_frame(origin, ancestors)
+    }
+
+    /// The params of the loader for a document of `origin` that `frame`
+    /// commits, its subresources' (Chromium's `URLLoaderFactoryParams`:
+    /// `request_initiator_origin_lock`, and the `IsolationInfo` of the
+    /// frame): the site it is first party to, by the frames it is in as
+    /// they are now, and the top-level frame's site.
+    pub(crate) fn loader_params(&self, frame: FrameToken, origin: &url::Origin) -> LoaderParams {
+        let parent = self.nodes.get(&frame).and_then(|node| node.parent);
+        let ancestors: Vec<&url::Origin> =
+            std::iter::successors(parent, |at| self.nodes.get(at)?.parent)
+                .filter_map(|at| self.nodes.get(&at).map(|node| &node.origin))
+                .collect();
+        let top = ancestors.last().copied().unwrap_or(origin);
+        let site_for_cookies = SiteForCookies::of_frame(origin, ancestors.iter().copied());
+        let top_frame_site = Site::of(top);
+        LoaderParams {
+            origin: origin.clone(),
+            trusted: protocol::network::TrustedParams {
+                site_for_cookies: site_for_cookies.site().map(Site::serialize),
+                top_frame_site: (!top_frame_site.is_opaque()).then(|| top_frame_site.serialize()),
+            },
+        }
     }
 
     /// `frame`'s document's origin and whether it may open local files,
@@ -608,6 +632,40 @@ mod tests {
         assert_eq!(tree.storage_key(token(9)), None);
         tree.reset();
         assert!(tree.storage_key(token(0)).unwrap().is_third_party());
+    }
+
+    /// A loader's params: the document's origin, the site it is first
+    /// party to (none below a frame of another site), the top-level frame's
+    /// site, by the frames it is in as it commits.
+    #[test]
+    fn a_loaders_params_are_of_the_frames_its_document_is_in() {
+        let origin = |url: &str| url::Url::parse(url).unwrap().origin();
+        let mut tree = FrameTree::new(token(0));
+        commit_at(&mut tree, token(0), 1, "https://a.example/");
+        let main = tree.loader_params(token(0), &origin("https://www.a.example/"));
+        assert_eq!(main.origin, origin("https://www.a.example/"));
+        let first_party = protocol::network::TrustedParams {
+            site_for_cookies: Some("https://a.example".to_owned()),
+            top_frame_site: Some("https://a.example".to_owned()),
+        };
+        assert_eq!(main.trusted, first_party);
+        tree.add_child(token(0), token(1), "", false).unwrap();
+        assert_eq!(
+            tree.loader_params(token(1), &origin("https://sub.a.example/"))
+                .trusted,
+            first_party
+        );
+        let third = tree.loader_params(token(1), &origin("https://b.example/"));
+        assert_eq!(third.trusted.site_for_cookies, None);
+        assert_eq!(third.trusted.top_frame_site, first_party.top_frame_site);
+        // `a.example` in `b.example` in `a.example`: no site's first party.
+        commit_at(&mut tree, token(1), 2, "https://b.example/");
+        tree.add_child(token(1), token(2), "", false).unwrap();
+        let below = tree.loader_params(token(2), &origin("https://a.example/"));
+        assert_eq!(below.trusted.site_for_cookies, None);
+        // An opaque top-level frame: no site.
+        let opaque = tree.loader_params(token(0), &url::Url::parse("data:,").unwrap().origin());
+        assert_eq!(opaque.trusted, protocol::network::TrustedParams::default());
     }
 
     /// Child frames hang from the frame they were made in, in the order

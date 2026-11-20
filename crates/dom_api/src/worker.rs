@@ -32,6 +32,9 @@ pub struct WorkerStart {
     /// The origin of the realm that made it: what its script is fetched
     /// for (same-origin), and its own but for a `data:` URL's.
     pub owner_origin: Option<url::Origin>,
+    /// The number of the document whose window made it; none for a
+    /// worker's: the loader its loads go through is its creator's.
+    pub owner_document: Option<dom::NodeId>,
     /// A module worker's (`type: "module"`): the credentials mode its
     /// script graph is fetched with (`WorkerOptions`' `credentials`, by
     /// CORS); none: a classic worker's.
@@ -252,6 +255,7 @@ pub(crate) fn construct<'gc, O: OpFront>(
         url,
         name: options.name.clone(),
         owner_origin: cx.context_origin(context),
+        owner_document: cx.context_document_id(context),
         module,
     };
     let host = op

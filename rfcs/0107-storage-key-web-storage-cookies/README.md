@@ -82,9 +82,9 @@ cookie 存在 `net` 那一側（Chromium 的 `CookieMonster` 在 network service
 4. ~~profile~~：位置和哪些模式寫磁碟（第 5 條）、第二個 machopo 拒絕啟動（第 6 條）。
 5. ~~磁碟上的格式~~：SQLite（第 7 條）。
 6. ~~renderer 怎麼同步等 Browser~~：回答走一般的訊息，到 scheduler 裡等回答的位置（第 9 條）。
-7. **Web Storage 的細節**：~~`storage` 事件怎麼到其他分頁~~（第 11 條）、~~`sessionStorage` 的 namespace 跟著什麼~~（第 12 條）、~~上限怎麼算~~（第 13 條）。
-8. **cookie 的實作**：自己照 RFC 6265bis 和 Chromium 的 `CanonicalCookie` 寫，或用 `cookie_store` crate（reqwest 的 `cookies` 用的）。看 WPT 的 `cookies/` 要的行為它做不做得到。
-9. **請求的來歷**：`ResourceRequest` 加哪些欄位、誰填、Browser 怎麼核對 renderer 送來的。
+7. ~~Web Storage 的細節~~：~~`storage` 事件怎麼到其他分頁~~（第 11 條）、~~`sessionStorage` 的 namespace 跟著什麼~~（第 12 條）、~~上限怎麼算~~（第 13 條）。
+8. ~~cookie 的實作~~：自己照 RFC 6265bis 和 Chromium 寫（第 15 條）。
+9. ~~請求的來歷~~：每份文件一個 Browser 給的 loader 編號（第 16 條）。
 10. **第三方的 cookie**：照 Chrome 現在的預設（沒標 `Partitioned` 的第三方 cookie 照送，`SameSite` 預設 `Lax`），或一律擋掉、只留 `Partitioned`（CHIPS）的。
 11. **`document.cookie` 的同步讀**：每次都問 Browser，或照 Chromium 留一個版本號、沒變就用上一次的。
 12. **自動化**：WebDriver 的 cookie 指令、CDP 的 `Network.getCookies`、`setCookie`、`deleteCookies`、`clearBrowserCookies`，`DOMStorage` 和 `Storage` 做哪些。
@@ -104,7 +104,7 @@ cookie 存在 `net` 那一側（Chromium 的 `CookieMonster` 在 network service
 1. **網站和 key**：public suffix list、`Site`、`StorageKey`，frame 樹在 commit 時算出每個 frame 的 key。看得到的只有 DevTools 的 `domainAndRegistry`。分三段：1a `site` crate 的 `Site` 和 registrable domain；1b `StorageKey`，frame 樹在 commit 時算；1c DevTools 的 `domainAndRegistry`、檢查和文件。
 2. **profile 和磁碟**：資料夾、`--user-data-dir`、哪些模式只在記憶體、磁碟上的格式和它的讀寫。
 3. **Web Storage**：同步等 Browser 的路、`localStorage`、`sessionStorage`、`storage` 事件、上限。分三段：3a 同步等 Browser 的路、Browser 的 storage thread 和資料庫、`Storage` 介面和 `localStorage`；3b `storage` 事件、`sessionStorage`；3c 上限、寫進磁碟的批次、WPT 的 `webstorage/`、檢查和文件。
-4. **`net` 的 cookie**：請求的來歷、cookie 的儲存、`Set-Cookie` 和 `Cookie`、`SameSite`、持久。
+4. **`net` 的 cookie**：請求的來歷、cookie 的儲存、`Set-Cookie` 和 `Cookie`、`SameSite`、持久。分四段：4a 請求的來歷（Browser 給的、renderer 宣稱不了的最上層的網站和 site for cookies，核對 `initiator`）；4b 解析 `Set-Cookie`、記憶體裡的 store、每一跳帶 `Cookie`、`SameSite`；4c 第三方的 cookie、`Partitioned`、上限和淘汰、寫進 profile 的 `Cookies` 資料庫；4d WPT 的 `cookies/`、檢查和文件。
 5. **cookie 到 DOM 和自動化**：`document.cookie`、`navigator.cookieEnabled`、WebDriver、CDP。
 6. **檢查和文件**。
 
@@ -150,6 +150,10 @@ cookie 存在 `net` 那一側（Chromium 的 `CookieMonster` 在 network service
 13. **Web Storage 的上限由 renderer 和 Browser 都守**（2026-11-20，第 3 階段）：每個 area 10 MiB，key 和 value 每個字元算 2 bytes（UTF-16），只在項目變大時檢查。renderer 在 `setItem` 時算，超過丟 `QuotaExceededError`、項目不改；Browser 照同樣的算法、多容許 100 KiB（幾個 renderer 同時寫），超過時拒絕那個改動，告訴做出改動的 renderer 把那個 key 改回 Browser 的值。`localStorage` 和 `sessionStorage` 各算各的。對照 Chromium（2026-11-20 讀 `storage_area_map.cc`、`storage_area.mojom`）：`kPerStorageAreaQuota` 是 10485760、`kPerStorageAreaOverQuotaAllowance` 是 102400，`QuotaForString` 是字元數乘 `sizeof(UChar)`，`SetItemInternal` 只在新的項目比舊的大時檢查；Browser 拒絕時送 `KeyChangeFailed`，renderer 照它改回。不選只在 renderer 守：最簡單，但 Browser 信任 renderer（違反收的一方要驗證的規則），兩個 renderer 同時寫時總和可能超過。不選只在 Browser 守：每個 `setItem` 都要同步問 Browser 才知道要不要丟錯，每次寫入多一趟同步的來回。
 
 14. **`localStorage` 成批寫進磁碟，照 Chromium 的延遲和速率限制**（2026-11-20，第 3 階段）：每個 area 的改動先放在一批裡，到期時在一個 transaction 裡寫進資料庫；等待的時間是三者中最長的：5 秒、每小時最多 60 次、每小時最多寫 10 MiB（從那個 area 第一次有改動起算）。`DomStorageContext` 結束時（machopo 關掉時）寫完還沒寫的；browser 當掉時，最後一批的改動會丟掉（和 Chrome 一樣）。延遲和速率可以由測試設定。打開 area 不受影響（項目在記憶體裡）。對照 Chromium（2026-11-20 讀 `local_storage_impl.cc`、`storage_area_impl.cc`）：`kCommitDefaultDelaySecs` 5 秒、`kMaxCommitsPerHour` 60、`kMaxBytesPerHour` 是 `kPerStorageAreaQuota`，`ComputeCommitDelay` 取預設的延遲和兩個 `RateLimiter` 的延遲中最大的，關閉時 `ScheduleImmediateCommit`。不選只有 5 秒的延遲、不限速率：少約五十行，但頁面一直寫時一小時最多寫 720 次。不選每個改動馬上寫：browser 當掉也不丟，但每個 `setItem` 都是一個 fsync 的 transaction，頁面連續寫一千次就是一千次磁碟同步，別的分頁第一次打開 storage 時要排在這些寫入後面同步等。
+
+15. **cookie 自己照 RFC 6265bis 和 Chromium 寫**（2026-11-20，第 4 階段）：解析照 Chromium 的 `ParsedCookie`，cookie 照 `CanonicalCookie`，存取照 `CookieMonster`；public suffix 用 `site` crate，存檔用 `sql` crate，不多依賴。對照 Chromium：`//net/cookies` 是它自己的，不用外面的函式庫。不選 `cookie_store` crate 外面再包一層（2026-11-20 讀 0.22.1 的原始碼）：domain、path 的比對和到期現成，但沒有 `SameSite` 的判斷、`Partitioned`、`__Host-` / `__Secure-` 前綴、數量和大小的上限，存檔是整個 store 一次序列化（和逐筆寫 SQLite 對不上），還帶進第二份 public suffix list（`publicsuffix`，和 `site` 的 `psl` 可能判斷不同）。不選自己寫 store、用 `cookie` crate（0.18）解析 `Set-Cookie`：省下解析的約三百行，但它的規則和 RFC 6265bis、Chromium 在細節上不同（不合法的字元、`Max-Age` 和 `Expires` 的先後、大小的上限），WPT 的 `cookies/` 正好大量測這些。
+
+16. **請求的來歷：每份文件一個 Browser 給的 loader 編號**（2026-11-20，第 4 階段）：Browser 在送 `CommitNavigation` 之前登記那份文件的 loader 的參數（文件的 origin、最上層的網站、site for cookies），給它一個編號，交給 IO thread，編號跟著 commit 送給 renderer；renderer 的子資源請求（`FetchResource`）帶著編號，IO thread 用編號查參數：`initiator` 和參數的 origin 對不上是壞掉的訊息，cookie 照參數決定。先登記、後送 commit，IO thread 收到新文件的第一個請求時一定查得到。renderer 自己 commit 的文件（`about:blank`、`srcdoc`、`javascript:`）和 dedicated worker 用建立它的文件的編號。對照 Chromium（2026-11-20 讀 `network_context.mojom`、`isolation_info.h`）：Browser 在 commit 時替每份文件建 `URLLoaderFactory`，`URLLoaderFactoryParams` 帶 `request_initiator_origin_lock` 和 `IsolationInfo`（frame 的 origin、最上層的 frame 的 origin、`SiteForCookies`），factory 跟著 commit 交給 renderer，network service 照它決定 cookie、核對請求的 `request_initiator`。不選 renderer 自己填最上層的網站和 site for cookies：最簡單，但被攻破的 renderer 可以宣稱自己是最上層的網站、拿到 `SameSite=Strict` 的 cookie，違反收的一方要驗證的規則。不選子資源的請求先繞到 UI thread、從 frame 樹拿參數：不用新的編號，但每個請求多一趟 UI thread（忙著畫畫面時載入跟著慢），也還是有 IO thread 比 UI thread 先收到新文件的請求的時序問題。
 
 ## 待決定
 

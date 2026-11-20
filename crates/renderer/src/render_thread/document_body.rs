@@ -15,6 +15,8 @@ use crate::encoding::DocumentDecoder;
 /// What `CommitNavigation` brought, but the body.
 pub(super) struct NavigationCommit {
     pub(super) frame: FrameToken,
+    /// The loader the browser gave the document.
+    pub(super) loader: u64,
     pub(super) navigation_id: u64,
     pub(super) begin_id: Option<u64>,
     pub(super) url: String,

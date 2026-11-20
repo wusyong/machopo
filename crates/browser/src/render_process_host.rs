@@ -1,6 +1,6 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 
 use base::AtomicSequenceNumber;
@@ -8,7 +8,9 @@ use bytes::Bytes;
 use crossbeam_channel::Sender;
 use net::{LoadHandle, NetworkContext};
 use protocol::input::InputEvent;
-use protocol::network::{LoadResult, NetError, NetErrorCode, RequestDestination, ResourceRequest};
+use protocol::network::{
+    LoadResult, NetError, NetErrorCode, RequestDestination, ResourceRequest, TrustedParams,
+};
 use protocol::renderer::{
     CompositorMsg, HistoryEntryParams, NavigationLoad, NavigationTimingType, RendererHostMsg,
     RendererMsg,
@@ -44,6 +46,76 @@ pub struct RenderProcessHost {
     /// The IO thread passes the renderer's messages on: not once it was
     /// killed, so nothing it still sends is taken for its successor's.
     forwarding: Arc<AtomicBool>,
+    /// The loaders the browser gave the renderer's documents, which the IO
+    /// thread checks their requests by (`register_loader`).
+    loaders: Arc<Mutex<Loaders>>,
+}
+
+/// The params of a loader the browser gives a document as it commits
+/// (Chromium's `URLLoaderFactoryParams`): the origin its requests'
+/// initiator is to be (`request_initiator_origin_lock`), and what its
+/// requests' cookies go by (`IsolationInfo`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LoaderParams {
+    pub(crate) origin: url::Origin,
+    pub(crate) trusted: TrustedParams,
+}
+
+/// A renderer's loaders, by number, from 1. Kept while the renderer is:
+/// a document gone may have requests on their way still (Chromium's
+/// factory lives until the renderer lets its pipe go).
+#[derive(Default)]
+pub(crate) struct Loaders {
+    params: HashMap<u64, LoaderParams>,
+    last: u64,
+}
+
+/// What the IO thread knows of a dedicated worker of the renderer's: the
+/// loader it was made with, its creator's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Worker {
+    loader: u64,
+}
+
+/// A request's trusted params, its loader's, if the renderer may send it
+/// through `loader` (worker `worker`'s, if a worker's): of a loader it
+/// was given, the worker's for a worker's, its initiator none, opaque (an
+/// opaque origin of the loader's, as Chromium lets its precursor) or the
+/// loader's origin, with no trusted params of its own. `Ok(None)`: a
+/// worker the renderer has no more (gone as the request came), refused
+/// without blame.
+fn check_request(
+    loaders: &Loaders,
+    workers: &HashMap<u64, Worker>,
+    worker: Option<u64>,
+    loader: u64,
+    request: &ResourceRequest,
+) -> Result<Option<TrustedParams>, BadMessageReason> {
+    if request.trusted.is_some() {
+        return Err(BadMessageReason::TrustedParamsFromRenderer);
+    }
+    let params = loaders
+        .params
+        .get(&loader)
+        .ok_or(BadMessageReason::UnknownLoader)?;
+    if let Some(worker) = worker {
+        let Some(known) = workers.get(&worker) else {
+            return Ok(None);
+        };
+        if known.loader != loader {
+            return Err(BadMessageReason::WorkerLoaderMismatch);
+        }
+    }
+    let lock = match &params.origin {
+        origin @ url::Origin::Tuple(..) => origin.ascii_serialization(),
+        url::Origin::Opaque(_) => "null".to_owned(),
+    };
+    match request.initiator.as_deref() {
+        None | Some("null") => {}
+        Some(initiator) if initiator == lock => {}
+        Some(_) => return Err(BadMessageReason::InitiatorMismatch),
+    }
+    Ok(Some(params.trusted.clone()))
 }
 
 /// Called on a renderer's IO thread with each message it sends the UI
@@ -124,10 +196,12 @@ impl RenderProcessHost {
         // can come after that.
         let forwarding = Arc::new(AtomicBool::new(true));
         let renderer_id = RENDERER_IDS.get_next();
+        let loaders = Arc::new(Mutex::new(Loaders::default()));
         let io_thread = {
             let to_renderer = to_renderer.clone();
             let file_access = file_access.clone();
             let forwarding = forwarding.clone();
+            let loaders = loaders.clone();
             let forward = move |tab, msg: Result<RendererHostMsg, BadMessageReason>| {
                 if forwarding.load(Ordering::Acquire) {
                     on_message(tab, RendererId(renderer_id), msg);
@@ -143,7 +217,7 @@ impl RenderProcessHost {
                     // `DedicatedWorkerHost`s, each a `URLLoaderFactory`),
                     // and the blob URLs each registered (its
                     // `BlobURLStore`'s), which go with it.
-                    let mut workers = HashSet::new();
+                    let mut workers: HashMap<u64, Worker> = HashMap::new();
                     let mut worker_blob_urls: HashMap<u64, Vec<String>> = HashMap::new();
                     while let Ok(msg) = from_renderer.recv() {
                         let fetch = |load, request| {
@@ -161,9 +235,29 @@ impl RenderProcessHost {
                             RendererHostMsg::FetchResource {
                                 request_id,
                                 worker,
-                                request,
+                                loader,
+                                mut request,
                             } => {
                                 let load = LoadKey::Resource { worker, request_id };
+                                let checked = check_request(
+                                    &loaders.lock().unwrap_or_else(PoisonError::into_inner),
+                                    &workers,
+                                    worker,
+                                    loader,
+                                    &request,
+                                );
+                                let trusted = match checked {
+                                    Ok(trusted) => trusted,
+                                    Err(reason) => {
+                                        let _ = to_renderer.send(load.answer(Err(NetError::new(
+                                            NetErrorCode::AccessDenied,
+                                            request.url,
+                                        ))));
+                                        forward(tab, Err(reason));
+                                        continue;
+                                    }
+                                };
+                                request.trusted = trusted;
                                 // The browser loads every frame's document,
                                 // as a navigation: a renderer asking for one
                                 // is bad (the network service's "frame
@@ -177,7 +271,7 @@ impl RenderProcessHost {
                                         request.url,
                                     ))));
                                     forward(tab, Err(BadMessageReason::DocumentRequest));
-                                } else if worker.is_some_and(|worker| !workers.contains(&worker)) {
+                                } else if request.trusted.is_none() {
                                     // One it didn't make, or gone.
                                     let _ = to_renderer.send(load.answer(Err(NetError::new(
                                         NetErrorCode::AccessDenied,
@@ -187,9 +281,28 @@ impl RenderProcessHost {
                                     fetch(load, request);
                                 }
                             }
-                            RendererHostMsg::DedicatedWorkerCreated { worker, request } => {
-                                if workers.insert(worker) {
-                                    fetch(LoadKey::WorkerScript(worker), request);
+                            RendererHostMsg::DedicatedWorkerCreated {
+                                worker,
+                                loader,
+                                mut request,
+                            } => {
+                                if workers.contains_key(&worker) {
+                                    continue;
+                                }
+                                let checked = check_request(
+                                    &loaders.lock().unwrap_or_else(PoisonError::into_inner),
+                                    &workers,
+                                    None,
+                                    loader,
+                                    &request,
+                                );
+                                match checked {
+                                    Ok(trusted) => {
+                                        request.trusted = trusted;
+                                        workers.insert(worker, Worker { loader });
+                                        fetch(LoadKey::WorkerScript(worker), request);
+                                    }
+                                    Err(reason) => forward(tab, Err(reason)),
                                 }
                             }
                             // Its loads close with it.
@@ -227,7 +340,7 @@ impl RenderProcessHost {
                                     network.register_blob_url(renderer_id, &url, mime_type, bytes);
                                 }
                                 // One it didn't make, or gone: nothing.
-                                Some(worker) if workers.contains(&worker) => {
+                                Some(worker) if workers.contains_key(&worker) => {
                                     network.register_blob_url(renderer_id, &url, mime_type, bytes);
                                     worker_blob_urls.entry(worker).or_default().push(url);
                                 }
@@ -294,7 +407,24 @@ impl RenderProcessHost {
             io_thread: Some(io_thread),
             renderer_id,
             forwarding,
+            loaders,
         })
+    }
+
+    /// A loader for a document about to commit, with `params`: its number,
+    /// which the commit carries (`CommitNavigation`'s `loader`).
+    pub(crate) fn register_loader(&self, params: LoaderParams) -> u64 {
+        let mut loaders = self.loaders.lock().unwrap_or_else(PoisonError::into_inner);
+        #[expect(
+            clippy::arithmetic_side_effects,
+            reason = "one a document committed: a u64 lasts centuries"
+        )]
+        {
+            loaders.last += 1;
+        }
+        let id = loaders.last;
+        loaders.params.insert(id, params);
+        id
     }
 
     /// Its number, which its blob URLs are registered under.
@@ -497,9 +627,14 @@ impl Committer {
         self.history.entries_heard = entries_heard;
     }
 
-    /// Sends the commit; what tells the renderer how its load ended, if it
-    /// hasn't yet, comes back.
-    pub(crate) fn commit(self, navigation_id: u64, document: CommittedDocument) -> LoadCompleter {
+    /// Sends the commit, its subresources through loader `loader`; what
+    /// tells the renderer how its load ended, if it hasn't yet, comes back.
+    pub(crate) fn commit(
+        self,
+        navigation_id: u64,
+        document: CommittedDocument,
+        loader: u64,
+    ) -> LoadCompleter {
         let completer = LoadCompleter {
             to_renderer: self.to_renderer.clone(),
             frame: self.frame,
@@ -507,6 +642,7 @@ impl Committer {
         };
         let _ = self.to_renderer.send(RendererMsg::CommitNavigation {
             frame: self.frame,
+            loader,
             navigation_id,
             begin_id: self.begin_id,
             url: document.url,
@@ -643,4 +779,103 @@ pub(crate) fn is_file_url(url: &str) -> bool {
 pub(crate) fn is_blob_url(url: &str) -> bool {
     url.get(..5)
         .is_some_and(|scheme| scheme.eq_ignore_ascii_case("blob:"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn loaders() -> Loaders {
+        let mut loaders = Loaders::default();
+        loaders.params.insert(
+            1,
+            LoaderParams {
+                origin: url::Url::parse("https://a.example/").unwrap().origin(),
+                trusted: TrustedParams {
+                    site_for_cookies: Some("https://a.example".to_owned()),
+                    top_frame_site: Some("https://a.example".to_owned()),
+                },
+            },
+        );
+        loaders.params.insert(
+            2,
+            LoaderParams {
+                origin: url::Url::parse("data:,").unwrap().origin(),
+                trusted: TrustedParams::default(),
+            },
+        );
+        loaders
+    }
+
+    fn request(initiator: Option<&str>) -> ResourceRequest {
+        let mut request = ResourceRequest::new("https://b.example/x", RequestDestination::Image);
+        request.initiator = initiator.map(str::to_owned);
+        request
+    }
+
+    /// A request through a loader the renderer was given takes the
+    /// loader's trusted params: its initiator none, opaque or the loader's
+    /// origin; another origin, a loader it wasn't given, or trusted params
+    /// of its own are bad.
+    #[test]
+    fn a_request_takes_its_loaders_params() {
+        let (loaders, workers) = (loaders(), HashMap::new());
+        let check = |loader, request: &ResourceRequest| {
+            check_request(&loaders, &workers, None, loader, request)
+        };
+        let trusted = loaders.params[&1].trusted.clone();
+        for initiator in [None, Some("null"), Some("https://a.example")] {
+            assert_eq!(check(1, &request(initiator)), Ok(Some(trusted.clone())));
+        }
+        assert_eq!(
+            check(1, &request(Some("https://b.example"))),
+            Err(BadMessageReason::InitiatorMismatch)
+        );
+        assert_eq!(
+            check(1, &request(Some("https://a.example:444"))),
+            Err(BadMessageReason::InitiatorMismatch)
+        );
+        // An opaque loader's: "null" alone.
+        assert_eq!(
+            check(2, &request(Some("null"))),
+            Ok(Some(TrustedParams::default()))
+        );
+        assert_eq!(
+            check(2, &request(Some("https://a.example"))),
+            Err(BadMessageReason::InitiatorMismatch)
+        );
+        assert_eq!(
+            check(3, &request(None)),
+            Err(BadMessageReason::UnknownLoader)
+        );
+        assert_eq!(
+            check(0, &request(None)),
+            Err(BadMessageReason::UnknownLoader)
+        );
+        let mut claimed = request(None);
+        claimed.trusted = Some(trusted);
+        assert_eq!(
+            check(1, &claimed),
+            Err(BadMessageReason::TrustedParamsFromRenderer)
+        );
+    }
+
+    /// A worker's request goes through the loader the worker was made
+    /// with; through another it is bad; of a worker the renderer has no
+    /// more, refused without blame.
+    #[test]
+    fn a_workers_request_goes_through_its_loader() {
+        let loaders = loaders();
+        let workers = HashMap::from([(7, Worker { loader: 1 })]);
+        let ok = request(Some("https://a.example"));
+        assert_eq!(
+            check_request(&loaders, &workers, Some(7), 1, &ok),
+            Ok(Some(loaders.params[&1].trusted.clone()))
+        );
+        assert_eq!(
+            check_request(&loaders, &workers, Some(7), 2, &ok),
+            Err(BadMessageReason::WorkerLoaderMismatch)
+        );
+        assert_eq!(check_request(&loaders, &workers, Some(8), 1, &ok), Ok(None));
+    }
 }

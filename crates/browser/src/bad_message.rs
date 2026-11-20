@@ -48,4 +48,16 @@ pub enum BadMessageReason {
     /// documents (network service's "frame destination requires kNavigate
     /// mode").
     DocumentRequest,
+    /// A request through a loader the browser didn't give the renderer
+    /// (Chromium's factory's pipe is the browser's to make).
+    UnknownLoader,
+    /// A worker's request through another loader than the worker's.
+    WorkerLoaderMismatch,
+    /// A request whose initiator is another origin than its loader's
+    /// (Chromium's `INCORRECT_LOCK`, `request_initiator_origin_lock`'s
+    /// check).
+    InitiatorMismatch,
+    /// A request with the params only the browser gives one (Chromium's
+    /// `TRUSTED_PARAMS_FROM_UNTRUSTED_FACTORY`).
+    TrustedParamsFromRenderer,
 }

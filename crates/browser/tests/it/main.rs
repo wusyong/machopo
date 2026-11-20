@@ -10,5 +10,6 @@
 )]
 
 mod dom_storage;
+mod loaders;
 mod navigation;
 mod profile;

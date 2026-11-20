@@ -215,3 +215,66 @@ impl StorageKey {
         })
     }
 }
+
+/// The site a request is first party to, for its cookies' `SameSite`
+/// (Chromium's `net::SiteForCookies`): a frame's is the top-level site if
+/// the frame and every frame it is in are of it, else null (a third
+/// party's, to no site first party).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SiteForCookies(Option<Site>);
+
+impl SiteForCookies {
+    /// A frame's whose document is of `origin`, in frames of `ancestors`'
+    /// origins, its parent's first, the top-level frame's last (Chromium's
+    /// `RenderFrameHostImpl::ComputeSiteForCookies`): the top-level site,
+    /// null if it is opaque or the frame or one between isn't of it.
+    pub fn of_frame<'a>(origin: &Origin, ancestors: impl IntoIterator<Item = &'a Origin>) -> Self {
+        let ancestors: Vec<&Origin> = ancestors.into_iter().collect();
+        let top = ancestors.last().copied().unwrap_or(origin);
+        let site = Site::of(top);
+        let first_party = !site.is_opaque()
+            && std::iter::once(origin)
+                .chain(ancestors.iter().copied())
+                .all(|frame| Site::of(frame) == site);
+        Self(first_party.then_some(site))
+    }
+
+    /// Of `site`: a top-level navigation's to it, say
+    /// (`SiteForCookies::FromUrl`).
+    pub fn of_site(site: Site) -> Self {
+        Self((!site.is_opaque()).then_some(site))
+    }
+
+    /// The null one: first party to nothing.
+    pub fn null() -> Self {
+        Self(None)
+    }
+
+    pub fn is_null(&self) -> bool {
+        self.0.is_none()
+    }
+
+    pub fn site(&self) -> Option<&Site> {
+        self.0.as_ref()
+    }
+
+    /// Whether `url` is first party to it, its scheme as well
+    /// (`IsSchemefullyFirstParty`): of its site, `ws:` as `http:` and
+    /// `wss:` as `https:`.
+    pub fn is_first_party(&self, url: &Url) -> bool {
+        let Some(site) = &self.0 else {
+            return false;
+        };
+        let mut url = url.clone();
+        let http = match url.scheme() {
+            "ws" => Some("http"),
+            "wss" => Some("https"),
+            _ => None,
+        };
+        if let Some(http) = http {
+            // Always a scheme a URL with a host takes.
+            let _ = url.set_scheme(http);
+        }
+        Site::of_url(&url) == *site
+    }
+}

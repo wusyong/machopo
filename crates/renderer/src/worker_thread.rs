@@ -157,6 +157,8 @@ pub(crate) struct Workers {
     to_browser: BrowserSender<RendererHostMsg>,
     /// The thread they are of, which hears from them.
     home: Owner,
+    /// The loaders their loads go through: their creators'.
+    loaders: WorkerLoaders,
     running: RefCell<HashMap<u64, Running>>,
     /// The workers' threads, joined as the renderer goes (each ends soon
     /// after it is stopped).
@@ -171,6 +173,7 @@ impl Workers {
         scheduler: Arc<MainThreadScheduler>,
         to_browser: BrowserSender<RendererHostMsg>,
         home: Owner,
+        loaders: WorkerLoaders,
     ) -> Self {
         Self {
             engine,
@@ -179,6 +182,7 @@ impl Workers {
             scheduler,
             to_browser,
             home,
+            loaders,
             running: RefCell::new(HashMap::new()),
             threads: RefCell::new(Vec::new()),
         }
@@ -248,6 +252,7 @@ impl Workers {
         let (tasks, from_owner) = std::sync::mpsc::channel();
         let shared = Arc::new(Shared::default());
         let request = script_request(&start);
+        let loader = self.loaders.of(&start);
         // Its time origin (Blink's `WorkerThread` takes it as it is made).
         let time_origin = std::time::Instant::now();
         let thread = std::thread::Builder::new()
@@ -272,6 +277,7 @@ impl Workers {
                         to_browser,
                         scheduler,
                         owner,
+                        loader,
                     });
                 }
             });
@@ -287,6 +293,7 @@ impl Workers {
                     .to_browser
                     .send(RendererHostMsg::DedicatedWorkerCreated {
                         worker: id,
+                        loader,
                         request,
                     });
             }
@@ -302,6 +309,28 @@ impl Workers {
     fn post(&self, id: u64, message: dom::SerializedMessage) {
         if let Some(worker) = self.running.borrow().get(&id) {
             let _ = worker.tasks.send(WorkerTask::Message(message));
+        }
+    }
+}
+
+/// The loaders of the workers a thread makes: the main thread's, their
+/// documents'; a worker's, its own.
+pub(crate) enum WorkerLoaders {
+    Documents(crate::loader::DocumentLoaders),
+    Worker(u64),
+}
+
+impl WorkerLoaders {
+    /// The loader of a worker `start` makes: its owner document's, or the
+    /// worker's that made it. None for a document the browser gave none:
+    /// the browser refuses such a worker's loads.
+    fn of(&self, start: &WorkerStart) -> u64 {
+        match self {
+            Self::Documents(loaders) => start
+                .owner_document
+                .and_then(|document| loaders.of(document))
+                .unwrap_or(0),
+            Self::Worker(loader) => *loader,
         }
     }
 }
@@ -368,6 +397,8 @@ struct GlobalHost {
     inbox: Rc<Inbox>,
     /// Its origin, serialized: its loads' initiator.
     origin: String,
+    /// The loader its loads go through, its creator's.
+    loader: u64,
     /// The origin of the realm that made it, serialized: its module
     /// worker's graph's loads' (HTML's outside settings).
     owner_origin: String,
@@ -397,6 +428,7 @@ impl GlobalHost {
         let _ = self.to_browser.send(RendererHostMsg::FetchResource {
             request_id,
             worker,
+            loader: self.loader,
             request,
         });
         loop {
@@ -497,6 +529,7 @@ impl dom_api::WorkerGlobalHost for GlobalHost {
         let _ = self.to_browser.send(RendererHostMsg::FetchResource {
             request_id,
             worker: Some(self.id),
+            loader: self.loader,
             request: crate::loader::fetch_resource_request(request),
         });
     }
@@ -527,6 +560,7 @@ impl dom_api::WorkerGlobalHost for GlobalHost {
         let _ = self.to_browser.send(RendererHostMsg::FetchResource {
             request_id,
             worker: Some(self.id),
+            loader: self.loader,
             request,
         });
         request_id
@@ -600,6 +634,8 @@ struct WorkerThread {
     scheduler: Arc<MainThreadScheduler>,
     /// The thread that made it.
     owner: Owner,
+    /// The loader its loads go through, its creator's.
+    loader: u64,
 }
 
 /// A worker's thread: its engine made, its global, its script run, then
@@ -620,6 +656,7 @@ fn run(thread: WorkerThread) {
         to_browser,
         scheduler,
         owner,
+        loader,
     } = thread;
     let inbox = Rc::new(Inbox {
         from_owner,
@@ -695,6 +732,7 @@ fn run(thread: WorkerThread) {
         to_browser: to_browser.clone(),
         inbox: inbox.clone(),
         origin: origin.ascii_serialization(),
+        loader,
         owner_origin: start
             .owner_origin
             .as_ref()
@@ -726,6 +764,7 @@ fn run(thread: WorkerThread) {
         scheduler.clone(),
         to_browser.clone(),
         Owner::Worker(id),
+        WorkerLoaders::Worker(loader),
     ));
     engine.set_worker_host(workers.host());
     // Run (`Some(true)`), not runnable (`Some(false)`: HTML's "run a worker"
@@ -992,11 +1031,13 @@ mod tests {
             Arc::new(MainThreadScheduler::default()),
             crossbeam_channel::unbounded().0,
             Owner::Main,
+            WorkerLoaders::Worker(1),
         ));
         workers.host().start_worker(WorkerStart {
             url: url::Url::parse("data:text/javascript,").unwrap(),
             name: String::new(),
             owner_origin: None,
+            owner_document: None,
             module: None,
         });
         workers.terminate_all();
