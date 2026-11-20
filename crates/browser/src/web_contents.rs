@@ -13,8 +13,8 @@ use protocol::renderer::{
     RendererHostMsg, RendererMsg, StorageKind, VisualProperties, WindowOpenDisposition,
 };
 use protocol::viz::{
-    BeginFrameArgs, BeginFrameObserver, DisplayMsg, FrameSinkId, LocalSurfaceId,
-    SharedImageInterface, SurfaceId, VizMsg,
+    BeginFrameArgs, BeginFrameObserver, ContextProvider, DisplayMsg, FrameSinkId, LocalSurfaceId,
+    SurfaceId, VizMsg,
 };
 use protocol::{FrameToken, TabId};
 
@@ -235,7 +235,7 @@ struct Asked {
 struct Launch {
     flags: RendererFlags,
     script_engine: ScriptEngineFactory,
-    gpu: Option<Arc<dyn SharedImageInterface>>,
+    gpu: Option<Arc<dyn ContextProvider>>,
     /// Every renderer's messages, and every navigation's events, go here.
     on_event: Arc<Mutex<ContentsEventCallback>>,
 }
@@ -307,7 +307,7 @@ impl WebContents {
         flags: RendererFlags,
         script_engine: ScriptEngineFactory,
         viz: Sender<VizMsg>,
-        gpu: Option<Arc<dyn SharedImageInterface>>,
+        gpu: Option<Arc<dyn ContextProvider>>,
         partition: StoragePartition,
         on_event: ContentsEventCallback,
     ) -> std::io::Result<Self> {

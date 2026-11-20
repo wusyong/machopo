@@ -24,7 +24,7 @@ use protocol::TabId;
 use protocol::automation::Message;
 use protocol::input::{MouseButton, ScrollDelta};
 use protocol::renderer::CursorType;
-use protocol::viz::{ContextLostObserver, DisplayMsg, SharedImageInterface, VizMsg};
+use protocol::viz::{ContextLostObserver, ContextProvider, DisplayMsg, VizMsg};
 use shell::automation_pipe::{self, Read};
 use shell::automation_session::{AutomationSession, ClientEvent, Input, Reply};
 use shell::browser_view::Command;
@@ -318,9 +318,9 @@ impl App {
 
         let proxy = self.proxy.clone();
         // Tiles go straight onto the GPU Viz draws with once its device is up
-        // (Chromium's `SharedImageInterface` to the GPU process).
+        // (Chromium's `ContextProvider` to the GPU process).
         let shared_images = viz::GpuSharedImages::new();
-        let gpu: Arc<dyn SharedImageInterface> = shared_images.clone();
+        let gpu: Arc<dyn ContextProvider> = shared_images.clone();
         let clipboard = arboard::Clipboard::new()
             .map_err(|err| tracing::warn!(%err, "no clipboard"))
             .ok();

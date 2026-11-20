@@ -997,8 +997,6 @@ impl LayerTreeHostImpl {
             .map(|layer| Self::layer_origin_in_pixels(tree, &offsets, &layer.properties(), scroll))
             .collect();
         let mut prepared = TilesPrepared::default();
-        // Whether a shared image was made, to flush them once all are.
-        let mut made_shared_images = false;
         // The tiles to raster, in the order they are drawn: their resources
         // are numbered in that order, however many threads raster them.
         let mut jobs = Vec::new();
@@ -1025,17 +1023,9 @@ impl LayerTreeHostImpl {
                                 bytes::Bytes::from_owner(SnapshotPixels(snapshot.bytes.clone())),
                             )
                         });
-                        let shared_image = match &image {
-                            Some(image) => {
-                                Some(protocol::viz::SharedImage::from_mailbox(image.mailbox()))
-                            }
-                            None => self
-                                .settings
-                                .shared_image_interface
-                                .as_ref()
-                                .and_then(|gpu| gpu.create_shared_image(size, snapshot.as_bytes())),
-                        };
-                        made_shared_images |= image.is_none() && shared_image.is_some();
+                        let shared_image = image
+                            .as_ref()
+                            .map(|image| protocol::viz::SharedImage::from_mailbox(image.mailbox()));
                         let pixels: Arc<[u8]> = match shared_image {
                             Some(_) => Arc::from([]),
                             None => Arc::from(snapshot.as_bytes()),
@@ -1138,7 +1128,6 @@ impl LayerTreeHostImpl {
             }
         }
         let cache = &self.raster_cache;
-        let gpu = self.settings.shared_image_interface.as_deref();
         // Done with each tile where it was rastered: its pixels go to the
         // GPU, or into what is kept, right away, not all of a frame's at
         // once on this thread.
@@ -1186,18 +1175,12 @@ impl LayerTreeHostImpl {
                 if let Some(color) = solid {
                     return Rastered::Solid(color, cpu_only);
                 }
-                // On the GPU, if there is one to put it on; else the pixels
-                // are kept, copied out of the buffer.
-                let _upload = trace_event::trace_event!("TileManager::UploadTile");
-                let shared_image = gpu.and_then(|gpu| gpu.create_shared_image(size, drawn));
-                let pixels: Arc<[u8]> = match shared_image {
-                    Some(_) => Arc::from([]),
-                    None => Arc::from(drawn),
-                };
+                // With no shared images (no GPU), the pixels are kept,
+                // copied out of the buffer, and go with the frame.
                 Rastered::Pixels {
                     size,
-                    pixels,
-                    shared_image,
+                    pixels: Arc::from(drawn),
+                    shared_image: None,
                     image: None,
                     cpu_only,
                 }
@@ -1211,21 +1194,6 @@ impl LayerTreeHostImpl {
             _ => jobs.iter().map(raster).collect(),
         };
 
-        made_shared_images |= rastered.iter().any(|rastered| {
-            matches!(
-                rastered,
-                Rastered::Pixels {
-                    shared_image: Some(_),
-                    image: None,
-                    ..
-                }
-            )
-        });
-        // All of them at once, not each as it was made: a submit costs
-        // about a third of what putting a tile's pixels on the GPU does.
-        if made_shared_images && let Some(gpu) = gpu {
-            gpu.flush();
-        }
         let Some(tree) = self.pending_tree.as_mut().or(self.active_tree.as_mut()) else {
             return;
         };
@@ -1555,12 +1523,11 @@ fn sub(a: PointF, b: PointF) -> PointF {
 #[cfg(test)]
 mod tests {
     use crate::DocumentId;
-    use std::sync::atomic::Ordering;
     use std::sync::{Arc, Mutex};
 
     use compositor_paint::{DisplayItemList, PaintFlags, PaintOp};
     use gfx::{Color, RectF, Size, SizeF};
-    use protocol::viz::{CompositorFrame, LocalSurfaceId, Material, SharedImageInterface};
+    use protocol::viz::{CompositorFrame, LocalSurfaceId, Material};
 
     use crate::{
         ClipNode, ClipNodeId, ElementId, LayerId, LayerProperties, LayerTreeHost,
@@ -1579,7 +1546,7 @@ mod tests {
     }
 
     fn host_with(
-        gpu: Option<Arc<dyn SharedImageInterface>>,
+        gpu: Option<Arc<crate::SharedImages>>,
     ) -> (
         LayerTreeHost<SingleThreadProxy>,
         Arc<Mutex<Vec<CompositorFrame>>>,
@@ -1588,7 +1555,7 @@ mod tests {
     }
 
     fn host_with_threads(
-        gpu: Option<Arc<dyn SharedImageInterface>>,
+        gpu: Option<Arc<crate::SharedImages>>,
         num_raster_threads: usize,
     ) -> (
         LayerTreeHost<SingleThreadProxy>,
@@ -1599,7 +1566,7 @@ mod tests {
         let host = LayerTreeHost::new_single_threaded(
             LayerTreeSettings {
                 default_tile_size: 64,
-                shared_image_interface: gpu,
+                shared_images: gpu,
                 num_raster_threads,
                 ..Default::default()
             },
@@ -2526,7 +2493,7 @@ mod tests {
     }
 
     fn tall_layer_with(
-        gpu: Option<Arc<dyn SharedImageInterface>>,
+        gpu: Option<Arc<crate::SharedImages>>,
     ) -> (
         LayerTreeHost<SingleThreadProxy>,
         Arc<Mutex<Vec<CompositorFrame>>>,
@@ -2834,31 +2801,6 @@ mod tests {
         );
     }
 
-    /// With a shared image interface, a tile's pixels go into a shared
-    /// image and the tile keeps none: the frame hands Viz the image.
-    #[test]
-    fn a_tile_on_the_gpu_keeps_no_pixels() {
-        let gpu = Arc::new(FakeGpu::default());
-        let (mut host, frames) = tall_layer_with(Some(gpu.clone()));
-        host.composite();
-        // Every rastered tile, visible or ahead of the viewport.
-        assert_eq!(gpu.alive(), host.host_impl().resident_tiles());
-        let frames = frames.lock().unwrap();
-        let resources = &frames[0].resource_list;
-        assert_eq!(resources.len(), 4);
-        for resource in resources {
-            assert!(resource.pixels.is_empty(), "{resource:?}");
-            let image = resource.shared_image.as_ref().expect("a shared image");
-            let pixels = image.backing::<Vec<u8>>().unwrap();
-            assert_eq!(
-                pixels.len(),
-                (resource.size.width * resource.size.height * 4) as usize
-            );
-            // The top left pixel of every tile is the blue fill.
-            assert_eq!(pixels[..4], [0, 0, 255, 255]);
-        }
-    }
-
     /// [`tall_layer`], whose compositor makes its shared images by messages
     /// to Viz: the host, its frames, its shared images and what it sent.
     #[expect(clippy::type_complexity, reason = "a test's four handles")]
@@ -3058,72 +3000,13 @@ mod tests {
         assert_eq!(alive, host.host_impl().resident_tiles());
     }
 
-    /// The shared images a frame's tiles need are all made before the
-    /// interface is flushed, once; a frame that makes none doesn't flush.
-    #[test]
-    fn shared_images_are_flushed_once_all_of_a_frames_are_made() {
-        let gpu = Arc::new(FakeGpu::default());
-        let (mut host, _frames) = tall_layer_with(Some(gpu.clone()));
-        host.composite();
-        let made = gpu.made.lock().unwrap().len();
-        assert!(made > 1, "{made}");
-        assert_eq!(*gpu.flushes.lock().unwrap(), [made]);
-        // Nothing new to raster.
-        host.composite();
-        assert_eq!(*gpu.flushes.lock().unwrap(), [made]);
-
-        // None made (the tiles keep their pixels): nothing to flush.
-        let full = Arc::new(FakeGpu::default());
-        full.full.store(true, Ordering::Relaxed);
-        let (mut host, _frames) = tall_layer_with(Some(full.clone()));
-        host.composite();
-        assert!(full.flushes.lock().unwrap().is_empty());
-    }
-
-    /// A tile the interface makes no shared image for keeps its pixels.
-    #[test]
-    fn a_tile_with_no_shared_image_keeps_its_pixels() {
-        let gpu = Arc::new(FakeGpu::default());
-        gpu.full.store(true, Ordering::Relaxed);
-        let (mut host, frames) = tall_layer_with(Some(gpu.clone()));
-        host.composite();
-        let frames = frames.lock().unwrap();
-        let resources = &frames[0].resource_list;
-        assert_eq!(resources.len(), 4);
-        for resource in resources {
-            assert!(resource.shared_image.is_none(), "{resource:?}");
-            assert_eq!(
-                resource.pixels.len(),
-                (resource.size.width * resource.size.height * 4) as usize
-            );
-        }
-    }
-
-    /// A released tile lets its shared image go, once Viz has too.
-    #[test]
-    fn a_released_tile_lets_its_shared_image_go() {
-        let gpu = Arc::new(FakeGpu::default());
-        let (mut host, frames) = tall_layer_with(Some(gpu.clone()));
-        host.composite();
-        let first = gpu.alive();
-        host.set_root_scroll_offset(gfx::PointF::new(0.0, 1500.0));
-        host.composite();
-        // Viz is done with the frames that held them.
-        frames.lock().unwrap().clear();
-        // Only the tiles around 1500 are left.
-        let made = gpu.made.lock().unwrap();
-        assert!(made[..first].iter().all(|image| image.strong_count() == 0));
-        drop(made);
-        assert_eq!(gpu.alive(), host.host_impl().resident_tiles());
-    }
-
     /// When the GPU is lost, the tiles on it are rastered again into new
     /// shared images and the old ones let go; the tiles of one color stay;
     /// all of the next frame is damaged.
     #[test]
     fn losing_the_gpu_rasters_again_the_tiles_that_were_on_it() {
-        let gpu = Arc::new(FakeGpu::default());
-        let (mut host, frames) = host_with(Some(gpu.clone()));
+        let gpu = FakeGpu::default();
+        let (mut host, frames) = host_with(Some(gpu.images.clone()));
         // As in `tiles_of_one_color_are_drawn_as_solid_color_quads`: the
         // first column red, the tile at 64,0 dotted, the one at 64,64
         // empty.
@@ -3149,13 +3032,13 @@ mod tests {
         host.set_viewport_rect_and_scale(Size::new(128, 128), 1.0, LocalSurfaceId::default());
         host.composite();
         host.composite();
-        assert_eq!(gpu.made.lock().unwrap().len(), 1);
+        assert_eq!(gpu.made(), 1);
 
         host.did_lose_layer_tree_frame_sink();
         host.composite();
         let prepared = host.host_impl().tiles_prepared();
         assert_eq!((prepared.rastered, prepared.kept), (1, 3));
-        assert_eq!(gpu.made.lock().unwrap().len(), 2);
+        assert_eq!(gpu.made(), 2);
         let mut frames = frames.lock().unwrap();
         assert_eq!(damage(&frames[1]), RectF::default(), "nothing changed");
         assert_eq!(damage(&frames[2]), RectF::new(0.0, 0.0, 128.0, 128.0));
@@ -3473,21 +3356,21 @@ mod tests {
     /// document's tiles as they are.
     #[test]
     fn a_texture_layer_puts_each_snapshot_on_the_gpu_once() {
-        let gpu = Arc::new(FakeGpu::default());
-        let (mut host, frames) = host_with(Some(gpu.clone()));
+        let gpu = FakeGpu::default();
+        let (mut host, frames) = host_with(Some(gpu.images.clone()));
         let blue = snapshot([0, 0, 255, 255]);
         with_texture(&mut host, texture_layer(blue.clone()));
         host.set_viewport_rect_and_scale(Size::new(100, 100), 1.0, LocalSurfaceId::default());
         host.composite();
-        let made = gpu.made.lock().unwrap().len();
+        let made = gpu.made();
         // Committed again with the same snapshot: nothing made.
         with_texture(&mut host, texture_layer(blue));
         host.composite();
-        assert_eq!(gpu.made.lock().unwrap().len(), made);
+        assert_eq!(gpu.made(), made);
         // A new snapshot: one new shared image, the layer's.
         with_texture(&mut host, texture_layer(snapshot([255, 0, 0, 255])));
         host.composite();
-        assert_eq!(gpu.made.lock().unwrap().len(), made + 1);
+        assert_eq!(gpu.made(), made + 1);
         let frames = frames.lock().unwrap();
         let (_, first) = texture_quad(&frames[0]);
         let (_, kept) = texture_quad(&frames[1]);
@@ -3514,15 +3397,15 @@ mod tests {
     /// The GPU lost, a texture layer's snapshot is put on the new one.
     #[test]
     fn a_texture_layer_is_put_on_a_new_gpu() {
-        let gpu = Arc::new(FakeGpu::default());
-        let (mut host, frames) = host_with(Some(gpu.clone()));
+        let gpu = FakeGpu::default();
+        let (mut host, frames) = host_with(Some(gpu.images.clone()));
         with_texture(&mut host, texture_layer(snapshot([0, 0, 255, 255])));
         host.set_viewport_rect_and_scale(Size::new(100, 100), 1.0, LocalSurfaceId::default());
         host.composite();
-        let made = gpu.made.lock().unwrap().len();
+        let made = gpu.made();
         host.did_lose_layer_tree_frame_sink();
         host.composite();
-        assert!(gpu.made.lock().unwrap().len() > made);
+        assert!(gpu.made() > made);
         let frames = frames.lock().unwrap();
         let (_, before) = texture_quad(&frames[0]);
         let (_, after) = texture_quad(frames.last().unwrap());

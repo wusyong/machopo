@@ -16,7 +16,7 @@ use gfx::Size;
 use protocol::TabId;
 use protocol::input::InputEvent;
 use protocol::renderer::RendererHostMsg;
-use protocol::viz::{CompositorFrameSinkMsg, CopyOutputRequest, SharedImageInterface, VizMsg};
+use protocol::viz::{CompositorFrameSinkMsg, ContextProvider, CopyOutputRequest, VizMsg};
 use viz::{BeginFrameSource, Display, GpuSharedImages, WgpuRenderer};
 
 /// The first frame that shows a navigation fully loaded.
@@ -249,7 +249,7 @@ fn drive(
         },
         script_engine,
         viz_tx,
-        Some(shared_images as Arc<dyn SharedImageInterface>),
+        Some(shared_images as Arc<dyn ContextProvider>),
         StoragePartition::new(&browser::Profile::in_memory(), network)
             .map_err(|e| format!("failed to start the storage and the network service: {e}"))?,
         Box::new(move |_tab, event| {

@@ -20,12 +20,11 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 use std::time::{Duration, Instant};
 
-use base::AtomicSequenceNumber;
 use base::numerics::saturated_cast;
 use gfx::{RectF, Size};
 use protocol::viz::{
-    ContextLostObserver, CopyOutputResult, Mailbox, Material, ResourceId, SharedImage,
-    SharedImageInterface, TransferableResource,
+    ContextLostObserver, ContextProvider, CopyOutputResult, Material, ResourceId,
+    TransferableResource,
 };
 use wgpu::util::DeviceExt;
 
@@ -145,7 +144,6 @@ const RECREATE_WAITS: [Duration; 3] = [
 #[derive(Default)]
 pub struct GpuSharedImages {
     gpu: RwLock<Option<Arc<GpuContext>>>,
-    mailboxes: AtomicSequenceNumber<u64>,
     observers: Mutex<Vec<Weak<dyn ContextLostObserver>>>,
 }
 
@@ -197,14 +195,18 @@ impl GpuSharedImages {
     }
 }
 
-impl SharedImageInterface for GpuSharedImages {
-    fn create_shared_image(&self, size: Size, pixels: &[u8]) -> Option<SharedImage> {
-        let backing = self.upload(size, pixels)?;
-        let mailbox = Mailbox(self.mailboxes.get_next());
-        Some(SharedImage::new(mailbox, Arc::new(backing)))
+impl GpuSharedImages {
+    /// `pixels` on the device as a shared image, as a renderer keeps one
+    /// for its `Display`.
+    pub fn create_shared_image(&self, size: Size, pixels: &[u8]) -> Option<SharedImageHandle> {
+        let backing: SharedImageHandle = Arc::new(self.upload(size, pixels)?);
+        Some(backing)
     }
 
-    fn flush(&self) {
+    /// Sends the GPU what the shared images made since the last call were
+    /// made from: after those there are to make for now, not each (until
+    /// then their pixels are held as copies waiting to go).
+    pub fn flush(&self) {
         let Some(gpu) = self.gpu.read().unwrap_or_else(|e| e.into_inner()).clone() else {
             return;
         };
@@ -215,7 +217,9 @@ impl SharedImageInterface for GpuSharedImages {
         let _submit = trace_event::trace_event!("SharedImage::Submit");
         gpu.queue.submit(std::iter::empty());
     }
+}
 
+impl ContextProvider for GpuSharedImages {
     fn add_context_lost_observer(&self, observer: Weak<dyn ContextLostObserver>) {
         let mut observers = self.observers.lock().unwrap_or_else(|e| e.into_inner());
         observers.retain(|o| o.strong_count() > 0);
@@ -506,20 +510,14 @@ impl WgpuRenderer {
             if self.resources.contains_key(id) {
                 continue;
             }
-            // A shared image its client made by a message: what the
-            // frame holds of Viz's own table.
-            if let Some(image) = frame.images.get(id) {
-                if let Some(backing) = image.downcast_ref::<SharedImageBacking>()
-                    && backing.generation == self.context.generation
-                {
-                    self.resources.insert(*id, backing.uploaded.clone());
-                }
-                continue;
-            }
-            if let Some(image) = &res.shared_image {
-                // One made on a lost device isn't drawn: its client is
-                // making it again on this one.
-                if let Some(backing) = image.backing::<SharedImageBacking>()
+            // A shared image: what the frame holds of Viz's table, if its
+            // client made it. One made on a lost device isn't drawn: its
+            // client is making it again on this one.
+            if res.shared_image.is_some() {
+                if let Some(backing) = frame
+                    .images
+                    .get(id)
+                    .and_then(|image| image.downcast_ref::<SharedImageBacking>())
                     && backing.generation == self.context.generation
                 {
                     self.resources.insert(*id, backing.uploaded.clone());
@@ -593,8 +591,7 @@ impl DirectRenderer for WgpuRenderer {
     }
 
     fn create_shared_image(&mut self, size: Size, pixels: &[u8]) -> Option<SharedImageHandle> {
-        let backing: SharedImageHandle = Arc::new(self.shared_images.upload(size, pixels)?);
-        Some(backing)
+        self.shared_images.create_shared_image(size, pixels)
     }
 
     fn flush_shared_images(&mut self) {
@@ -1345,6 +1342,40 @@ mod drawing_tests {
         assert_eq!(px(&copy, 1, 1), [0, 0, 255, 255]);
     }
 
+    /// A resource naming a shared image its client never made draws
+    /// nothing, whatever pixels the frame carries: a client can't get its
+    /// own bytes drawn in place of an image it doesn't have.
+    #[test]
+    fn a_shared_image_nobody_made_isnt_drawn() {
+        let _gpu = gpu();
+        let size = Size::new(2, 2);
+        let mut f = frame(
+            size,
+            SharedQuadState::default(),
+            vec![DrawQuad {
+                rect: RectF::new(0.0, 0.0, 2.0, 2.0),
+                shared_quad_state: 0,
+                material: Material::Texture {
+                    resource_id: ResourceId(7),
+                    tex_coord_rect: RectF::new(0.0, 0.0, 2.0, 2.0),
+                    nearest_neighbor: true,
+                },
+            }],
+        );
+        f.resource_list.push(TransferableResource {
+            id: ResourceId(7),
+            size,
+            format: ResourceFormat::Rgba8Premul,
+            pixels: Arc::from([255, 0, 0, 255].repeat(4)),
+            shared_image: Some(SharedImage::from_mailbox(Mailbox(4))),
+        });
+        let mut display = display(size);
+        display.submit_compositor_frame(SINK, LocalSurfaceId::default(), f);
+        let copy = draw(&mut display);
+        assert_eq!(px(&copy, 0, 0), [255, 255, 255, 255]);
+        assert_eq!(px(&copy, 1, 1), [255, 255, 255, 255]);
+    }
+
     /// A texture scaled up is sampled bilinearly (a canvas's), clamped at
     /// its edges, unless it asks for its nearest texel (a tile's).
     #[test]
@@ -1635,7 +1666,7 @@ mod drawing_tests {
             .create_shared_image(Size::new(1, 1), &[0; 4])
             .unwrap();
         images.flush();
-        let uploaded = &image.backing::<SharedImageBacking>().unwrap().uploaded;
+        let uploaded = &image.downcast_ref::<SharedImageBacking>().unwrap().uploaded;
         assert!(uploaded.linear_bind_group.get().is_none());
         let first: *const wgpu::BindGroup = renderer.context.linear(uploaded);
         assert!(uploaded.linear_bind_group.get().is_some());
@@ -1674,7 +1705,11 @@ mod drawing_tests {
         assert_eq!(pooled(), before + 1);
 
         // The next of this size takes it, and is what it was made of.
-        let blue = filled([0, 0, 255, 255]);
+        let blue: Vec<u8> = std::iter::repeat_n([0, 0, 255, 255], 15)
+            .flatten()
+            .collect();
+        display.create_shared_image(SINK, Mailbox(9), size, &blue);
+        display.flush_shared_images();
         assert_eq!(pooled(), before);
         let mut f = frame(
             size,
@@ -1694,7 +1729,7 @@ mod drawing_tests {
             size,
             format: ResourceFormat::Rgba8Premul,
             pixels: Arc::from([]),
-            shared_image: Some(blue.clone()),
+            shared_image: Some(SharedImage::from_mailbox(Mailbox(9))),
         });
         display.submit_compositor_frame(SINK, LocalSurfaceId::default(), f);
         let copy = draw(&mut display);
@@ -1702,7 +1737,7 @@ mod drawing_tests {
             assert_eq!(px(&copy, x, y), [0, 0, 255, 255], "{x},{y}");
         }
         // The frame still holds it: not let go while anything does.
-        drop(blue);
+        display.destroy_shared_image(SINK, Mailbox(9));
         assert_eq!(pooled(), before);
         drop(display);
         assert_eq!(pooled(), before + 1);

@@ -5,7 +5,6 @@
 //! (textures) those quads reference. Viz aggregates the frames of every
 //! surface into one and draws it.
 
-use std::any::Any;
 use std::sync::{Arc, Weak};
 
 use base::numerics::saturated_cast;
@@ -67,64 +66,25 @@ impl ResourceFormat {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Mailbox(pub u64);
 
-/// A GPU image a client made through a [`SharedImageInterface`] (Chromium's
-/// `gpu::ClientSharedImage`): Viz draws it as it is, with no pixels sent.
-/// The backing keeps it alive while the client's tile or a frame holds it,
-/// standing in, in one process, for `DestroySharedImage` once Viz has
-/// returned it (`ReturnResources`); it isn't sent across processes.
-#[derive(Clone, Serialize, Deserialize)]
+/// A GPU image its client made (`CompositorFrameSinkMsg::CreateSharedImage`;
+/// Chromium's `gpu::ClientSharedImage`), as a frame names it: by the
+/// client's number for it. Viz draws it as it is, with no pixels sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SharedImage {
     pub mailbox: Mailbox,
-    #[serde(skip)]
-    backing: Option<Arc<dyn Any + Send + Sync>>,
 }
 
 impl SharedImage {
-    pub fn new(mailbox: Mailbox, backing: Arc<dyn Any + Send + Sync>) -> Self {
-        Self {
-            mailbox,
-            backing: Some(backing),
-        }
-    }
-
-    /// The shared image a client made as `mailbox`
-    /// (`CompositorFrameSinkMsg::CreateSharedImage`): a frame names it by
-    /// that alone.
     pub fn from_mailbox(mailbox: Mailbox) -> Self {
-        Self {
-            mailbox,
-            backing: None,
-        }
-    }
-
-    /// What the interface that made it put behind it.
-    pub fn backing<T: Any>(&self) -> Option<&T> {
-        self.backing.as_deref()?.downcast_ref()
+        Self { mailbox }
     }
 }
 
-impl std::fmt::Debug for SharedImage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("SharedImage").field(&self.mailbox).finish()
-    }
-}
-
-/// `gpu::SharedImageInterface`: how a client puts pixels on the GPU Viz
-/// draws with, once, instead of sending them with every frame that shows
-/// them. Viz implements it; the client sees only [`SharedImage`]s.
-pub trait SharedImageInterface: Send + Sync {
-    /// `CreateSharedImage` with `pixels` (tightly packed RGBA,
-    /// premultiplied) as its contents. `None` if there is no GPU to put it
-    /// on (not yet, or a lost one not made again yet): the client keeps
-    /// the pixels.
-    fn create_shared_image(&self, size: Size, pixels: &[u8]) -> Option<SharedImage>;
-
-    /// `Flush`: sends the GPU what the shared images made since the last
-    /// one were made from. A client calls it once it has made those it
-    /// has to make for now (a frame's tiles), not after each: until then
-    /// their pixels are held as copies waiting to go.
-    fn flush(&self);
-
+/// Viz's GPU as the browser sees it (Chromium's `viz::ContextProvider`):
+/// whether there is one for a renderer's shared images, and where to hear
+/// that it was lost. The browser's alone: a renderer hears through a
+/// message.
+pub trait ContextProvider: Send + Sync {
     /// Tells `observer` when the GPU is lost. Held weakly: it is told until
     /// its client drops it (Chromium's clients remove theirs).
     fn add_context_lost_observer(&self, observer: Weak<dyn ContextLostObserver>);

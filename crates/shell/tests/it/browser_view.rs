@@ -6,7 +6,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
@@ -19,8 +18,8 @@ use protocol::TabId;
 use protocol::input::{MouseButton, ScrollDelta};
 use protocol::renderer::{CursorType, RendererHostMsg};
 use protocol::viz::{
-    CompositorFrameSinkMsg, ContextLostObserver, CopyOutputRequest, CopyOutputResult, FrameSinkId,
-    SharedImage, SharedImageInterface, VizMsg,
+    CompositorFrameSinkMsg, ContextLostObserver, ContextProvider, CopyOutputRequest,
+    CopyOutputResult, FrameSinkId, VizMsg,
 };
 use shell::browser_view::{BROWSER_FRAME_SINK, BrowserView, TabFactory};
 use shell::browser_view_layout::{tab_strip_height, toolbar_height};
@@ -60,23 +59,12 @@ impl Clipboard for SharedClipboard {
     }
 }
 
-/// Makes no shared images (the tiles keep their pixels, for the software
-/// renderer), but counts the tiles that asked.
+/// A GPU there is, which tells no one it was lost: the toolbar makes
+/// shared images, which the window counts.
 #[derive(Default)]
-struct CountingGpu(AtomicUsize);
+struct QuietGpu;
 
-impl SharedImageInterface for CountingGpu {
-    fn create_shared_image(&self, _: Size, _: &[u8]) -> Option<SharedImage> {
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "a test's count: far from wrapping"
-        )]
-        self.0.fetch_add(1, Ordering::Relaxed);
-        None
-    }
-
-    fn flush(&self) {}
-
+impl ContextProvider for QuietGpu {
     fn add_context_lost_observer(&self, _: Weak<dyn ContextLostObserver>) {}
 }
 
@@ -95,6 +83,10 @@ struct Window {
     closed: Rc<RefCell<Vec<TabId>>>,
     frame_time: f64,
     display: Display<WgpuRenderer>,
+    /// Each client, for what Viz tells it besides its `BeginFrame`s.
+    clients: HashMap<FrameSinkId, protocol::viz::BeginFrameObserver>,
+    /// How many shared images the browser's own compositor made.
+    toolbar_images: usize,
     clipboard: SharedClipboard,
 }
 
@@ -112,7 +104,7 @@ impl Window {
     fn open_with_gpu(
         size: Size,
         scale: f32,
-        gpu: Option<Arc<dyn SharedImageInterface>>,
+        gpu: Option<Arc<dyn ContextProvider>>,
         images: Arc<GpuSharedImages>,
     ) -> Self {
         Self::open_with(size, scale, gpu, images)
@@ -121,7 +113,7 @@ impl Window {
     fn open_with(
         size: Size,
         scale: f32,
-        gpu: Option<Arc<dyn SharedImageInterface>>,
+        gpu: Option<Arc<dyn ContextProvider>>,
         images: Arc<GpuSharedImages>,
     ) -> Self {
         let (viz_tx, viz) = unbounded::<VizMsg>();
@@ -156,6 +148,8 @@ impl Window {
                 WgpuRenderer::offscreen(size, images).expect("an adapter"),
                 BROWSER_FRAME_SINK,
             ),
+            clients: HashMap::new(),
+            toolbar_images: 0,
             clipboard,
         }
     }
@@ -295,6 +289,7 @@ impl Window {
             }
             VizMsg::RegisterFrameSinkId(sink, observer) => {
                 let observer = observer.clone();
+                self.clients.insert(*sink, observer.clone());
                 self.display.add_frame_sink(*sink);
                 self.begin_frames
                     .add_client(*sink, Box::new(move |args| observer.on_begin_frame(args)));
@@ -356,6 +351,34 @@ impl Window {
 
     /// Hands a frame to Viz; which sink it came from.
     fn submit(&mut self, msg: VizMsg) -> Option<FrameSinkId> {
+        let msg = match msg {
+            // A shared image: made, its pixels' buffer handed back.
+            VizMsg::FrameSink(
+                sink,
+                CompositorFrameSinkMsg::CreateSharedImage {
+                    mailbox,
+                    size,
+                    pixels,
+                },
+            ) => {
+                self.display
+                    .create_shared_image(sink, mailbox, size, &pixels);
+                self.display.flush_shared_images();
+                drop(pixels);
+                if sink == BROWSER_FRAME_SINK {
+                    self.toolbar_images += 1;
+                }
+                if let Some(client) = self.clients.get(&sink) {
+                    client.on_pixels_returned(mailbox);
+                }
+                return None;
+            }
+            VizMsg::FrameSink(sink, CompositorFrameSinkMsg::DestroySharedImage { mailbox }) => {
+                self.display.destroy_shared_image(sink, mailbox);
+                return None;
+            }
+            msg => msg,
+        };
         let VizMsg::FrameSink(
             sink,
             CompositorFrameSinkMsg::SubmitCompositorFrame {
@@ -802,7 +825,7 @@ fn a_new_frame_from_the_tab_alone_is_drawn() {
 #[test]
 fn the_toolbar_is_drawn_again_when_the_gpu_is_lost() {
     let server = server(&[("/", GREEN_PAGE)]);
-    let gpu = Arc::new(CountingGpu::default());
+    let gpu = Arc::new(QuietGpu);
     let mut window = Window::open_with_gpu(
         Size::new(400, 300),
         1.0,
@@ -811,14 +834,14 @@ fn the_toolbar_is_drawn_again_when_the_gpu_is_lost() {
     );
     window.load(&server.url("/"));
     assert_eq!(window.pixel(1, TOOLBAR_Y as u32 + 1), TOOLBAR);
-    let rastered = gpu.0.load(Ordering::Relaxed);
+    let rastered = window.toolbar_images;
     assert!(rastered > 0);
     window.view.did_lose_context();
-    assert!(gpu.0.load(Ordering::Relaxed) > rastered, "rastered again");
     assert_eq!(
         window.until_frame_from(BROWSER_FRAME_SINK),
         [BROWSER_FRAME_SINK]
     );
+    assert!(window.toolbar_images > rastered, "rastered again");
     assert_eq!(window.pixel(1, TOOLBAR_Y as u32 + 1), TOOLBAR);
     assert_eq!(window.pixel(1, 299), GREEN);
     window.close();

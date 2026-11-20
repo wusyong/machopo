@@ -14,7 +14,7 @@ use gfx::{NodeId, PointF, RectF, SizeF};
 use protocol::input::{InputEvent, Modifiers};
 use protocol::network::{LoadResult, RedirectInfo};
 use protocol::renderer::{HistoryEntryParams, RendererHostMsg, RendererMsg, VisualProperties};
-use protocol::viz::{BeginFrameArgs, CompositorFrameSinkSender, SharedImageInterface};
+use protocol::viz::{BeginFrameArgs, CompositorFrameSinkSender};
 use url::Url;
 
 use layout::TextContext;
@@ -52,10 +52,11 @@ pub struct RendererEndpoints {
     /// by the browser. cc submits frames directly to Viz, not through the
     /// browser, as in Chromium.
     pub viz: CompositorFrameSinkSender,
-    /// Where tiles go on the GPU Viz draws with (Chromium's GPU channel,
-    /// which the browser establishes for the renderer); `None` drawing in
-    /// software.
-    pub gpu: Option<Arc<dyn SharedImageInterface>>,
+    /// Whether Viz has a GPU for the renderer's shared images (Chromium's
+    /// GPU channel, which the browser establishes for the renderer): the
+    /// compositor makes them by messages on `viz`. Without one, tiles'
+    /// pixels go with the frames.
+    pub gpu: bool,
 }
 
 /// Switches the browser passes down when it launches a renderer
@@ -209,7 +210,7 @@ pub fn spawn_renderer_main_thread(
     // handles to the browser itself.
     // Tiles go to the GPU by messages to Viz, on the same channel as the
     // frames that show them, if Viz has a GPU to put them on.
-    let shared_images = gpu.is_some().then(|| {
+    let shared_images = gpu.then(|| {
         let viz = viz.clone();
         compositor::SharedImages::new(move |msg| {
             let _ = viz.send(msg);

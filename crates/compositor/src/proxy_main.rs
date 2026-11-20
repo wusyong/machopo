@@ -378,26 +378,6 @@ mod tests {
         assert_eq!(posted(&rx), ["Shutdown"]);
     }
 
-    /// The compositor doesn't watch the GPU itself: the browser tells it,
-    /// with a message, once Viz has lost it (the renderer reaches nothing
-    /// of Viz's but through messages).
-    #[test]
-    fn the_compositor_doesnt_watch_the_gpu() {
-        let gpu = Arc::new(FakeGpu::default());
-        let (_viz, compositor) = channel();
-        let _host = LayerTreeHost::new_threaded(
-            LayerTreeSettings {
-                shared_image_interface: Some(gpu.clone()),
-                ..LayerTreeSettings::default()
-            },
-            Box::new(|_: LocalSurfaceId, _: CompositorFrame| {}),
-            &compositor,
-            |_| {},
-            unbounded().0,
-        );
-        assert_eq!(gpu.lose(), 0, "no observer");
-    }
-
     /// What reached Viz from the compositor thread.
     #[derive(Debug, PartialEq)]
     enum ToViz {
@@ -425,10 +405,10 @@ mod tests {
         let (viz_tx, viz) = unbounded();
         let (main_tx, main) = unbounded();
         let (viz_sender, compositor) = channel();
-        let gpu = Arc::new(FakeGpu::default());
+        let gpu = FakeGpu::default();
         let mut host = LayerTreeHost::new_threaded(
             LayerTreeSettings {
-                shared_image_interface: Some(gpu.clone()),
+                shared_images: Some(gpu.images.clone()),
                 ..LayerTreeSettings::default()
             },
             Box::new(ChannelSink(viz_tx)),

@@ -16,8 +16,8 @@ use protocol::renderer::{
     RendererMsg,
 };
 use protocol::viz::{
-    BeginFrameArgs, CompositorFrameSinkSender, ContextLostObserver, FrameSinkId,
-    SharedImageInterface, VizMsg,
+    BeginFrameArgs, CompositorFrameSinkSender, ContextLostObserver, ContextProvider, FrameSinkId,
+    VizMsg,
 };
 use protocol::{FrameToken, TabId};
 use renderer::{
@@ -184,7 +184,7 @@ impl RenderProcessHost {
         flags: RendererFlags,
         script_engine: ScriptEngineFactory,
         viz: Sender<VizMsg>,
-        gpu: Option<Arc<dyn SharedImageInterface>>,
+        gpu: Option<Arc<dyn ContextProvider>>,
         partition: StoragePartition,
         on_message: RendererMessageCallback,
     ) -> std::io::Result<Self> {
@@ -206,7 +206,7 @@ impl RenderProcessHost {
                 // Bound to the renderer's sink (`FrameSinkManager`): it
                 // speaks for no other.
                 viz: CompositorFrameSinkSender::new(frame_sink_id, viz),
-                gpu,
+                gpu: gpu.is_some(),
             },
             flags,
             script_engine,

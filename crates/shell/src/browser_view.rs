@@ -28,7 +28,7 @@ use protocol::TabId;
 use protocol::input::{InputEvent, Modifiers, MouseButton, ScrollDelta};
 use protocol::renderer::{CursorType, PopupMenuResult, RendererHostMsg, WindowOpenDisposition};
 use protocol::viz::{
-    CompositorFrameSinkSender, FrameSinkId, LocalSurfaceId, SharedImageInterface, VizMsg,
+    CompositorFrameSinkSender, ContextProvider, FrameSinkId, LocalSurfaceId, VizMsg,
 };
 use std::sync::Arc;
 use winit::keyboard::{Key, ModifiersState, NamedKey, PhysicalKey};
@@ -316,15 +316,34 @@ pub struct BrowserView {
 impl BrowserView {
     /// `viz` takes the browser's frames, for `BROWSER_FRAME_SINK`.
     /// `test_fonts` as for the renderer: the toolbar's text too.
-    /// `gpu` is where the toolbar's tiles go on the GPU Viz draws with;
-    /// with `None` they go to Viz as pixels, which it uploads.
+    /// With `gpu` (Viz has one), the toolbar's tiles go to it as shared
+    /// images; with `None` they go to Viz as pixels, which it uploads.
     pub fn new(
         web_contents: WebContents,
         viz: Sender<VizMsg>,
-        gpu: Option<Arc<dyn SharedImageInterface>>,
+        gpu: Option<Arc<dyn ContextProvider>>,
         test_fonts: bool,
         clipboard: Box<dyn Clipboard>,
     ) -> Self {
+        // The toolbar's tiles go to the GPU as a renderer's do: by
+        // messages to Viz, which tells this client when it has done with
+        // a tile's pixels.
+        let shared_images = gpu.is_some().then(|| {
+            let sink = CompositorFrameSinkSender::new(BROWSER_FRAME_SINK, viz.clone());
+            let images = compositor::SharedImages::new(move |msg| {
+                let _ = sink.send(msg);
+            });
+            let returned = Arc::downgrade(&images);
+            let client = protocol::viz::BeginFrameObserver::new(|_| {}).with_pixels_returned(
+                move |mailbox| {
+                    if let Some(images) = returned.upgrade() {
+                        images.pixels_returned(mailbox);
+                    }
+                },
+            );
+            let _ = viz.send(VizMsg::RegisterFrameSinkId(BROWSER_FRAME_SINK, client));
+            images
+        });
         let frame_sink =
             ChannelLayerTreeFrameSink::new(CompositorFrameSinkSender::new(BROWSER_FRAME_SINK, viz));
         let tab = web_contents.tab();
@@ -344,7 +363,7 @@ impl BrowserView {
             sidebar_floating: false,
             compositor: LayerTreeHost::new_single_threaded(
                 LayerTreeSettings {
-                    shared_image_interface: gpu,
+                    shared_images,
                     ..LayerTreeSettings::default()
                 },
                 Box::new(frame_sink),

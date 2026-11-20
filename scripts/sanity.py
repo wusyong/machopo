@@ -259,14 +259,10 @@ PROTOCOL_ALLOWED = {
         "#[serde(skip)]": "exception 7: the body's data pipe in `CommitNavigation`",
     },
     "crates/protocol/src/viz.rs": {
-        # Exception 1: the shared image's backing, the GPU texture Viz made
-        # for a tile (RFC 0004's step 1 makes it a mailbox table).
-        "#[serde(skip)]": "the shared image's backing and `CopyOutputRequest`'s callback",
-        "backing: Option<Arc<dyn Any + Send + Sync>>,": "exception 1",
-        "pub fn new(mailbox: Mailbox, backing: Arc<dyn Any + Send + Sync>) -> Self {": "exception 1",
-        "fn add_context_lost_observer(&self, observer: Weak<dyn ContextLostObserver>);":
-            "exception 1's interface: only the browser's own UI registers (in the browser process)",
         # Between the browser and Viz, which stays in the browser process.
+        "#[serde(skip)]": "`CopyOutputRequest`'s and `BeginFrameObserver`'s callbacks",
+        "fn add_context_lost_observer(&self, observer: Weak<dyn ContextLostObserver>);":
+            "the browser's `ContextProvider`, which a renderer has none of",
         "callback: Option<Arc<dyn Fn(Option<CopyOutputResult>) + Send + Sync>>,": "browser and Viz",
         "pub fn new(callback: impl Fn(Option<CopyOutputResult>) + Send + Sync + 'static) -> Self {":
             "browser and Viz",

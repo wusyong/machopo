@@ -14,7 +14,7 @@ use browser::{
 use crossbeam_channel::Sender;
 use gfx::Size;
 use protocol::TabId;
-use protocol::viz::{DisplayMsg, SharedImageInterface, VizMsg};
+use protocol::viz::{ContextProvider, DisplayMsg, VizMsg};
 use viz::DirectRenderer;
 
 use crate::browser_view::{BROWSER_FRAME_SINK, BrowserView, TabFactory};
@@ -56,7 +56,7 @@ impl BrowserWindow {
         options: Options,
         size: Size,
         scale: f32,
-        gpu: Option<Arc<dyn SharedImageInterface>>,
+        gpu: Option<Arc<dyn ContextProvider>>,
         make_renderer: F,
         clipboard: Box<dyn Clipboard>,
         on_message: ContentsEventCallback,
@@ -157,7 +157,7 @@ impl BrowserWindow {
 struct WindowTabs {
     flags: RendererFlags,
     viz: Sender<VizMsg>,
-    gpu: Option<Arc<dyn SharedImageInterface>>,
+    gpu: Option<Arc<dyn ContextProvider>>,
     /// The window's profile's storage, which holds the profile (its
     /// folder the window's while it is up).
     partition: StoragePartition,

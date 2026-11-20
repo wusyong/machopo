@@ -1,0 +1,32 @@
+# Step 1b-3: the old interface is gone. A renderer's compositor and the
+# browser's own make their shared images by messages when Viz has a GPU,
+# and a frame's shared image is drawn from Viz's table alone.
+test = ["sh", "-c", "cargo test -q -p shell --test it -- the_toolbar_is_drawn_again_when_the_gpu_is_lost"]
+timeout = 1800
+
+[[mutant]]
+name = "the toolbar makes no shared images"
+file = "crates/shell/src/browser_view.rs"
+from = '''        let shared_images = gpu.is_some().then(|| {'''
+to = '''        let shared_images = (gpu.is_some() && false).then(|| {'''
+
+[[mutant]]
+name = "a renderer with a GPU makes no shared images"
+file = "crates/renderer/src/render_thread.rs"
+from = '''    let shared_images = gpu.then(|| {'''
+to = '''    let shared_images = (gpu && false).then(|| {'''
+test = ["sh", "-c", "cargo test -q -p browser --test it -- losing_the_gpu_drops"]
+
+[[mutant]]
+name = "the browser tells the renderer there is no GPU"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                gpu: gpu.is_some(),'''
+to = '''                gpu: false,'''
+test = ["sh", "-c", "cargo test -q -p browser --test it -- losing_the_gpu_drops"]
+
+[[mutant]]
+name = "a resource with a shared image Viz has none for draws its pixels"
+file = "crates/viz/src/wgpu_renderer.rs"
+from = '''            if res.shared_image.is_some() {'''
+to = '''            if res.shared_image.is_some() && frame.images.contains_key(id) {'''
+test = ["sh", "-c", "cargo test -q -p viz --lib -- a_shared_image"]

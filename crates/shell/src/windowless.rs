@@ -18,7 +18,7 @@ use gfx::Size;
 use protocol::TabId;
 use protocol::automation::Message;
 use protocol::input::MouseButton;
-use protocol::viz::{ContextLostObserver, SharedImageInterface};
+use protocol::viz::{ContextLostObserver, ContextProvider};
 use winit::keyboard::ModifiersState;
 
 use crate::automation::{self, Client, Context, Failure};
@@ -100,7 +100,7 @@ pub fn start(
     on_message: ContentsEventCallback,
 ) -> Result<(BrowserWindow, ContextLost), String> {
     let shared_images = viz::GpuSharedImages::new();
-    let gpu: Arc<dyn SharedImageInterface> = shared_images.clone();
+    let gpu: Arc<dyn ContextProvider> = shared_images.clone();
     let browser = BrowserWindow::start(
         options,
         size,

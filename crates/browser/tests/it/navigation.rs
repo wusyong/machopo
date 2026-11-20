@@ -15,8 +15,7 @@ use net::test_server::{Route, TestServer, unused_port};
 use protocol::TabId;
 use protocol::renderer::{BeginNavigationKind, RendererHostMsg, WindowOpenDisposition};
 use protocol::viz::{
-    CompositorFrameSinkMsg, ContextLostObserver, DisplayMsg, Mailbox, SharedImage,
-    SharedImageInterface, VizMsg,
+    CompositorFrameSinkMsg, ContextLostObserver, ContextProvider, DisplayMsg, VizMsg,
 };
 use viz::BeginFrameSource;
 
@@ -69,7 +68,7 @@ fn tab_with_viz_flags(
 fn tab_with_viz_gpu(
     wait: bool,
     automation: bool,
-    gpu: Option<Arc<dyn SharedImageInterface>>,
+    gpu: Option<Arc<dyn ContextProvider>>,
 ) -> (
     WebContents,
     Receiver<ContentsEvent>,
@@ -106,7 +105,7 @@ fn tab_with_parser_budget(
 fn tab_with_viz_colors(
     wait: bool,
     automation: bool,
-    gpu: Option<Arc<dyn SharedImageInterface>>,
+    gpu: Option<Arc<dyn ContextProvider>>,
     system_colors: gfx::SystemColors,
     partition: StoragePartition,
 ) -> (
@@ -144,7 +143,7 @@ fn in_memory() -> StoragePartition {
 fn tab_with_flags(
     wait: bool,
     automation: bool,
-    gpu: Option<Arc<dyn SharedImageInterface>>,
+    gpu: Option<Arc<dyn ContextProvider>>,
     system_colors: gfx::SystemColors,
     parser_budget: browser::ParserBudget,
     new_content_rendering_delay: Duration,
@@ -1152,7 +1151,6 @@ fn the_gpu_crash_url_loses_the_gpu_and_navigates_nowhere() {
 /// losing the device.
 #[derive(Default)]
 struct RecordingGpu {
-    mailboxes: AtomicSequenceNumber<u64>,
     observers: Mutex<Vec<Weak<dyn ContextLostObserver>>>,
 }
 
@@ -1170,15 +1168,7 @@ impl RecordingGpu {
     }
 }
 
-impl SharedImageInterface for RecordingGpu {
-    fn create_shared_image(&self, _: gfx::Size, pixels: &[u8]) -> Option<SharedImage> {
-        let pixels = Arc::new(pixels.to_vec());
-        let mailbox = Mailbox(self.mailboxes.get_next());
-        Some(SharedImage::new(mailbox, pixels))
-    }
-
-    fn flush(&self) {}
-
+impl ContextProvider for RecordingGpu {
     fn add_context_lost_observer(&self, observer: Weak<dyn ContextLostObserver>) {
         self.observers.lock().unwrap().push(observer);
     }

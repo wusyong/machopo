@@ -248,10 +248,10 @@
 ## Viz、GPU 和記憶體
 
 - 每個 frame 只有一個 render pass；`DrawQuad` 只有平移，Viz 嵌入 surface 時直接把位移算進座標。
-- 沒有 `ReturnResources`：shared image 的生命週期靠參考計數；Viz 照舊整個畫面重畫（damage rect 送到了，但沒用來 partial swap）。
+- shared image 的生命週期是兩則訊息（建立、銷毀），Viz 讓 frame 拿著它畫的那幾個；沒有 cc 的 `ReturnResources`（Viz 告訴 client 哪些 resource 沒有 frame 在用了：machopo 的 client 自己決定什麼時候銷毀，Viz 只把像素的緩衝區還回去）。Viz 照舊整個畫面重畫（damage rect 送到了，但沒用來 partial swap）。
 - 網頁 frame 的 `LocalSurfaceId` 不比對：Viz 用那個 sink 最新的 frame，視窗大小改變的那一下會先顯示舊大小的 frame。
 - `about:demo` 的 GPU 那份比活著的 texture 多約 95 MB，跟著動畫出現（每個 frame 上傳一個 tile、畫一個 frame），不會繼續長；不是 texture 建立和銷毀造成的（重用 texture 試過，省不下來），原因還沒查到。
-- tile 和 canvas 的 texture 重用的方式和 cc 的 `ResourcePool` 不同：池子在 Viz 這一側（一個 device 一個），shared image 的最後一個引用放掉時才還回去，只照大小找；最多留 32 MB、256 張，超過時放掉最舊的，沒有閒置逾時（閒著的最多多佔 32 MB，到 device 遺失或程式結束）。Viz 自己上傳的資源（沒有 shared image、像素跟著 frame 來的）不重用。
+- tile 和 canvas 的 texture 重用的方式和 cc 的 `ResourcePool` 不同：texture 的池子在 Viz 這一側（一個 device 一個），shared image 被銷毀、畫它的 frame 也換掉時才還回去，只照大小找；最多留 32 MB、256 張，超過時放掉最舊的，沒有閒置逾時（閒著的最多多佔 32 MB，到 device 遺失或程式結束）。Viz 自己上傳的資源（沒有 shared image、像素跟著 frame 來的）不重用。compositor 這一側另有 tile 的像素緩衝區的池子（raster 直接畫進去、交給 Viz、用完還回來）：最多留 64 塊，只照長度找，沒有閒置逾時也不照記憶體的壓力放掉（256×256 的 tile 一塊 256 KiB，最多約 16 MB）。
 - raster 的字型快取（`RasterCache`，每個畫過的字型和 face 一筆，握著字型檔的 bytes）跟著 compositor，不會變小：頁面換掉的 web font 也留著（Blink 的 `FontCache` 會清掉不用的 `FontPlatformData`）。
 - GPU device 遺失之後，新的 device 做不出來時（重試 3 次）直接結束程式：視窗沒有 software 的輸出可以退回（Chromium 退到 software compositing）。
 - Viz 不用 texture 上限小於 8192 的 adapter（renderer 把不超過它的 canvas 當成 layer）：這樣的 GPU 建不出 device、程式結束，不會改用下一個 adapter（例如 CPU 的）。目前的桌機 GPU 和 lavapipe、WARP 都到 16384 以上。

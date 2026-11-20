@@ -1,59 +1,60 @@
-//! A `SharedImageInterface` for tests, with no GPU.
+//! The compositor's shared images for tests, with no Viz: what it sent.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex};
 
-use base::AtomicSequenceNumber;
-use gfx::Size;
-use protocol::viz::{ContextLostObserver, Mailbox, SharedImage, SharedImageInterface};
+use protocol::viz::{CompositorFrameSinkMsg, Mailbox};
 
-/// Makes shared images that are the pixels they were made from, and
-/// remembers them to see when they are let go; or, when `full`, none.
-/// `lose` plays Viz losing the GPU.
-#[derive(Default)]
+use crate::SharedImages;
+
+/// A compositor's [`SharedImages`] whose messages are kept, to see which
+/// shared images it made and which it has destroyed.
 pub(crate) struct FakeGpu {
-    pub(crate) full: AtomicBool,
-    mailboxes: AtomicSequenceNumber<u64>,
-    pub(crate) made: Mutex<Vec<Weak<Vec<u8>>>>,
-    /// How many shared images had been made at each flush.
-    pub(crate) flushes: Mutex<Vec<usize>>,
-    observers: Mutex<Vec<Weak<dyn ContextLostObserver>>>,
+    pub(crate) images: Arc<SharedImages>,
+    sent: Arc<Mutex<Vec<CompositorFrameSinkMsg>>>,
+}
+
+impl Default for FakeGpu {
+    fn default() -> Self {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let to = sent.clone();
+        Self {
+            images: SharedImages::new(move |msg| to.lock().unwrap().push(msg)),
+            sent,
+        }
+    }
 }
 
 impl FakeGpu {
+    /// The shared images made, in order: each one's mailbox and pixels.
+    pub(crate) fn created(&self) -> Vec<(Mailbox, bytes::Bytes)> {
+        let sent = self.sent.lock().unwrap();
+        sent.iter()
+            .filter_map(|msg| match msg {
+                CompositorFrameSinkMsg::CreateSharedImage {
+                    mailbox, pixels, ..
+                } => Some((*mailbox, pixels.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// How many were made.
+    pub(crate) fn made(&self) -> usize {
+        self.created().len()
+    }
+
+    pub(crate) fn destroyed(&self) -> Vec<Mailbox> {
+        let sent = self.sent.lock().unwrap();
+        sent.iter()
+            .filter_map(|msg| match msg {
+                CompositorFrameSinkMsg::DestroySharedImage { mailbox } => Some(*mailbox),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// How many made and not destroyed.
     pub(crate) fn alive(&self) -> usize {
-        let made = self.made.lock().unwrap();
-        made.iter().filter(|image| image.strong_count() > 0).count()
-    }
-
-    /// Tells the observers still alive the GPU was lost; how many.
-    pub(crate) fn lose(&self) -> usize {
-        let observers = self.observers.lock().unwrap();
-        let alive: Vec<_> = observers.iter().filter_map(Weak::upgrade).collect();
-        for observer in &alive {
-            observer.on_context_lost();
-        }
-        alive.len()
-    }
-}
-
-impl SharedImageInterface for FakeGpu {
-    fn create_shared_image(&self, _size: Size, pixels: &[u8]) -> Option<SharedImage> {
-        if self.full.load(Ordering::Relaxed) {
-            return None;
-        }
-        let backing = Arc::new(pixels.to_vec());
-        self.made.lock().unwrap().push(Arc::downgrade(&backing));
-        let mailbox = Mailbox(self.mailboxes.get_next());
-        Some(SharedImage::new(mailbox, backing))
-    }
-
-    fn flush(&self) {
-        let made = self.made.lock().unwrap().len();
-        self.flushes.lock().unwrap().push(made);
-    }
-
-    fn add_context_lost_observer(&self, observer: Weak<dyn ContextLostObserver>) {
-        self.observers.lock().unwrap().push(observer);
+        self.made() - self.destroyed().len()
     }
 }
