@@ -169,6 +169,19 @@ impl<'a> Alone<'a> {
     }
 }
 
+impl Alone<'_> {
+    /// Waits for the host's end to go, letting go of what the host says
+    /// meanwhile.
+    fn until_the_host_goes(mut self) -> i32 {
+        for _ in 0..10_000 {
+            if self.next(None).0 == Event::PeerGone {
+                return PEER_CLOSED;
+            }
+        }
+        OTHER
+    }
+}
+
 /// One of the core's messages as its bytes.
 pub(crate) fn frame(encoder: &mut Encoder, destination: u32, msg: &Msg, handles: usize) -> Vec<u8> {
     let payload = postcard::to_allocvec(msg).unwrap();
@@ -211,22 +224,25 @@ fn child() {
 }
 
 /// A child that isn't ours: what it writes to the channel is made by
-/// hand.
+/// hand. Its end is waited on before it writes: on some systems an end
+/// writes nothing until a thread serves it.
 fn rogue(role: &str, channel: &Channel) -> i32 {
     match role {
         // Bytes that are no message of the core's.
         "garbage" => {
+            let alone = Alone::new(channel);
             channel.write(&[0xff; 40], &mut Vec::new()).unwrap();
-            wait_for_the_host_to_go(channel)
+            alone.until_the_host_goes()
         }
         // A good message with a handle attached, which a child may not.
         "handle" => {
             let Some((_mapping, handle)) = channel.create(64 * KIB, false) else {
                 return SETUP;
             };
+            let alone = Alone::new(channel);
             let with_handle = frame(&mut Encoder::new(), 0, &text("with a handle"), 1);
             channel.write(&with_handle, &mut vec![handle]).unwrap();
-            wait_for_the_host_to_go(channel)
+            alone.until_the_host_goes()
         }
         // The host sends large bytes: the region they are in comes as a
         // handle. Whether this process can map to write what it should
@@ -245,18 +261,6 @@ fn rogue(role: &str, channel: &Channel) -> i32 {
         }
         _ => SETUP,
     }
-}
-
-/// Waits for the host's end to go, letting go of what the host says
-/// meanwhile.
-pub(crate) fn wait_for_the_host_to_go(channel: &Channel) -> i32 {
-    let mut alone = Alone::new(channel);
-    for _ in 0..10_000 {
-        if alone.next(None).0 == Event::PeerGone {
-            return PEER_CLOSED;
-        }
-    }
-    OTHER
 }
 
 /// Sends what a host's endpoint hands up to the test, and why its
