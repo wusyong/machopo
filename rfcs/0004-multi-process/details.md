@@ -59,7 +59,7 @@
 | macOS 的通道 | Mach port | Mach port（ipc-channel 的第一個 backend） | Mach port（2026-03 從 socket 換過來） | Mach port |
 | Windows 的通道 | overlapped 的 named pipe | named pipe | socket | overlapped 的 named pipe |
 | macOS 上 child 怎麼連上 | rendezvous：一個 server，名字由 parent 的 pid 決定，靠 audit token 的 pid 發 port | 每個 child 一個帶亂數的名字，放在命令列，不驗證對方 | 查 bootstrap server 上的 port，server 照 pid 發 port | 照 Chromium |
-| 共用記憶體 | 唯讀、可寫、雙方可寫三種 region；`BigBuffer` 64 KB 以上自動改走；data pipe | `IpcSharedMemory`，對方拿到的是可寫的；`GenericSharedMemory` 在單一 process 時是 `Arc<Vec<u8>>` | — | 照 Chromium 的三種 region 和 `BigBuffer` |
+| 共用記憶體 | 唯讀、可寫、雙方可寫三種 region（這份只做唯讀和雙方可寫兩種）；`BigBuffer` 64 KB 以上自動改走；data pipe | `IpcSharedMemory`，對方拿到的是可寫的；`GenericSharedMemory` 在單一 process 時是 `Arc<Vec<u8>>` | — | 照 Chromium 的三種 region 和 `BigBuffer` |
 | 誰建立共用記憶體 | sandbox 不允許的平台由 Browser 代配，其他的 renderer 自己建（後半是就我們的了解） | 送的一端 | — | 只有 Browser |
 | 誰能附 handle | 任何一端，收的一端驗證 | 任何一端 | 任何一端 | 每一端各自的權限；renderer 沒有，所以只從 Browser 往 renderer |
 | process 的分法 | site-per-process | 每個 pipeline（大致是每個網站） | — | 每個分頁 |

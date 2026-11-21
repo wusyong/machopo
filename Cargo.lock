@@ -2307,6 +2307,7 @@ dependencies = [
  "base",
  "bytes",
  "loom",
+ "mach2",
  "postcard",
  "rustix 1.1.5",
  "serde",

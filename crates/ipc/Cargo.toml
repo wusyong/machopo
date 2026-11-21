@@ -38,6 +38,10 @@ shuttle = "0.9"
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true
 
+# Mach ports and memory entries: the channel and its shared memory.
+[target.'cfg(target_os = "macos")'.dependencies]
+mach2.workspace = true
+
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true
 

@@ -121,7 +121,7 @@ Browser process                                Renderer process
 
 **共用記憶體**：
 
-- **三種 region**：`ReadOnlySharedMemoryRegion`、`WritableSharedMemoryRegion`、`UnsafeSharedMemoryRegion`，名字和語意照 Chromium。可寫的能轉成唯讀的一次；唯讀的 handle 在 OS 那一層就不能拿來寫（Linux 的 `F_SEAL_FUTURE_WRITE`、macOS 另建一個只有 `VM_PROT_READ` 的 memory entry、Windows 複製 handle 時只給 `FILE_MAP_READ`）。大小建立時決定，不能改。
+- **兩種 region**（第 37 條），語意照 Chromium 的 `ReadOnlySharedMemoryRegion`（建的一端可寫，交出去的只能讀：Browser 送給 renderer 的大資料）和 `UnsafeSharedMemoryRegion`（對方可寫：renderer 的大資料、tile 的像素；讀的一端先複製才用）。Chromium 的第三種 `WritableSharedMemoryRegion`（可寫、能轉成唯讀一次）不做。唯讀的 handle 在 OS 那一層就不能拿來寫（Linux 的 `F_SEAL_FUTURE_WRITE`、macOS 另建一個只有 `VM_PROT_READ` 的 memory entry、Windows 複製 handle 時只給 `FILE_MAP_READ`）。大小建立時決定，不能改。
 - **只有 Browser 建立**：renderer 要共用記憶體時向 Browser 要，拿到之後留著重複用。renderer 不需要建立共用記憶體的權限，它也沒辦法交給 Browser 一塊會被縮小的記憶體。
 - **一塊 region 只屬於一個 renderer**：renderer 還回來、或它不在了，Browser 就放掉那一塊，不轉給別的 renderer。裡面還留著前一個 renderer 寫的東西（它畫過的像素、它送過的資料），轉手就是跨分頁洩漏。每個 renderer 能要的總量有上限。
 - **能不能附 handle 是通道每一端各自的權限，renderer 那一端沒有**：
@@ -404,6 +404,9 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
     - **不選 IO thread 只轉送位元組、目標 thread 自己解**（Mojo 的做法）：region 要在解的時候讀，表就得跨 thread 共用，「讀完才還」散到各個 thread。Mojo 做得到是因為 `BigBuffer` 的共用記憶體每筆一塊、跟著訊息走、不用還。
     - **代價**：大資料複製出來的那一次在 IO thread 上（1 MiB 約 18 µs、8 MiB 約 150 µs，第 22 條的數字的一半），排在後面的訊息要等。總時間還是三種做法裡最短的（第 22 條量的就是這個做法）。對輸入延遲的影響沒有量過，記在「待決定」。
     - 管道的讀端怎麼回報不另外定：RFC 的「導覽的 body 的管道」已經寫明 renderer 看到的是同一個 `Consumer`，所以 `Consumer` 多一個「讀了多少」的掛勾，跨 process 時由端點掛上。
+37. **共用記憶體只做用得到的兩種**（2026-11-21，第 2 階段的 2e-2，「共用記憶體」；改掉起草時的「三種 region」）：「建的一端可寫、交出去的只能讀」和「對方可寫」，就是端點向平台要的 `create(len, peer_writes)` 的兩個分支。Browser 自己對「對方可寫」的那一塊只 map 成唯讀。
+    - **不做 Chromium 的 `WritableSharedMemoryRegion`**（只有一個擁有者、能轉成唯讀一次）：它是給「A 建好交給 B 寫，B 寫完凍結再交給 C」用的；這裡只有 Browser 建 region、renderer 不能送 handle（第 17 條），沒有這種轉手。平台層是工具驗不到、要逐行審的部分（第 20 條），沒有人呼叫的 FFI 是壞了最不容易發現的；三個平台各少一段轉換（Linux 重新開 fd、Windows 複製 handle）。之後需要時是加一個函式，不動現有的。
+    - macOS 的實作（`ipc::platform::macos::memory`）：`mach_make_memory_entry_64` 加 `MAP_MEM_NAMED_CREATE` 建；交出去只能讀的那一種，是對 Browser 自己的 mapping 再建一個只有 `VM_PROT_READ` 的 entry（Chromium 的 `ConvertToReadOnly`），能寫的那個 right 不離開建立的函式。map 時最大的保護和現在的一樣，唯讀的 mapping 之後改不成可寫。長度不是整頁的不建（kernel 會進位，那就不是要的那一塊）。
 
 ## 待決定
 

@@ -1,0 +1,106 @@
+# Step 2e-2: macOS shared memory (`ipc::platform::macos::memory`). A
+# region its maker writes is one the peer can only read; a mapping to read
+# stays one; a region is made at the length asked or not at all; rights
+# and mappings are let go when dropped.
+test = ["sh", "-c", "timeout 120 cargo test -q -p ipc --lib platform"]
+timeout = 600
+
+[[mutant]]
+name = "the peer gets the right to write what it should only read"
+file = "crates/ipc/src/platform/macos/memory.rs"
+from = '''    let read_only = entry(len, Some(mapping.address), VM_PROT_READ)?;
+    Some((mapping, read_only))'''
+to = '''    Some((mapping, whole))'''
+
+[[mutant]]
+name = "the entry to read is made with the right to write"
+file = "crates/ipc/src/platform/macos/memory.rs"
+from = '''    let read_only = entry(len, Some(mapping.address), VM_PROT_READ)?;'''
+to = '''    let read_only = entry(len, Some(mapping.address), VM_PROT_READ | VM_PROT_WRITE)?;'''
+
+[[mutant]]
+name = "the maker maps what the peer writes to write too"
+file = "crates/ipc/src/platform/macos/memory.rs"
+from = '''        let mapping = map(&whole, len, false)?;
+        return Some((mapping, whole));'''
+to = '''        let mapping = map(&whole, len, true)?;
+        return Some((mapping, whole));'''
+
+[[mutant]]
+name = "the maker maps what it writes only to read"
+file = "crates/ipc/src/platform/macos/memory.rs"
+from = '''    let mapping = map(&whole, len, true)?;
+    // An entry'''
+to = '''    let mapping = map(&whole, len, false)?;
+    // An entry'''
+
+[[mutant]]
+name = "every mapping is to write"
+file = "crates/ipc/src/platform/macos/memory.rs"
+from = '''    let protection = if writable {
+        VM_PROT_READ | VM_PROT_WRITE
+    } else {
+        VM_PROT_READ
+    };'''
+to = '''    let _ = writable;
+    let protection = VM_PROT_READ | VM_PROT_WRITE;'''
+
+[[mutant]]
+name = "a mapping to read may be made writable later"
+file = "crates/ipc/src/platform/macos/memory.rs"
+from = '''            // The most the mapping may ever be given: a mapping to read
+            // can't be made writable later.
+            protection,'''
+to = '''            VM_PROT_READ | VM_PROT_WRITE,'''
+
+[[mutant]]
+name = "a region of any length is made"
+file = "crates/ipc/src/platform/macos/memory.rs"
+from = '''    (size == wanted).then_some(right)'''
+to = '''    Some(right)'''
+
+[[mutant]]
+name = "a failed call's name is taken for a right"
+file = "crates/ipc/src/platform/macos/memory.rs"
+from = '''    if result != KERN_SUCCESS {
+        return None;
+    }
+    // SAFETY: the call succeeded'''
+to = '''    // SAFETY: the call succeeded'''
+
+[[mutant]]
+name = "a failed mapping is taken for one"
+file = "crates/ipc/src/platform/macos/memory.rs"
+from = '''    (result == KERN_SUCCESS).then_some(Mapping { address, len })'''
+to = '''    let _ = result;
+    Some(Mapping { address, len })'''
+
+[[mutant]]
+name = "a handle dropped keeps its right"
+file = "crates/ipc/src/platform/macos/memory.rs"
+from = '''        unsafe { mach_port_deallocate(mach_task_self(), self.0) };'''
+to = '''        let _ = unsafe { mach_task_self() };'''
+
+[[mutant]]
+name = "a handle moved into a message is let go as well"
+file = "crates/ipc/src/platform/macos/memory.rs"
+from = '''        let name = self.0;
+        std::mem::forget(self);
+        name'''
+to = '''        self.0'''
+
+[[mutant]]
+name = "a mapping dropped stays mapped"
+file = "crates/ipc/src/platform/macos/memory.rs"
+from = '''        unsafe { mach_vm_deallocate(mach_task_self(), self.address, self.len as u64) };'''
+to = '''        let _ = unsafe { mach_task_self() };'''
+
+[[mutant]]
+name = "a mapping says it is longer than it is"
+file = "crates/ipc/src/platform/macos/memory.rs"
+from = '''    fn len(&self) -> usize {
+        self.len
+    }'''
+to = '''    fn len(&self) -> usize {
+        self.len.saturating_add(1)
+    }'''

@@ -22,7 +22,7 @@
 | 2c：region 的表和範圍的檢查、`BigBuffer` 帶 region 的序列化、留著重複用的池子（Verus、fuzz、Miri） | 完成 | 2026-11-21 |
 | 2d：data pipe 的跨 process 版；通道協定的 TLA+ 模型（TLA+、Verus、fuzz） | 完成 | 2026-11-21 |
 | 2e-1：端點（`ipc::endpoint`）：通道、`Control`、池子和表、管道的兩半、`codec` 組成上層用的介面，IO thread 的迴圈；同一個 process 裡的平台（整合測試、Miri、fuzz） | 完成 | 2026-11-21 |
-| 2e-2：macOS 的共用記憶體（memory entry 的建立、map、轉成唯讀） | 未開始 | |
+| 2e-2：macOS 的共用記憶體（memory entry 的建立、map、只能讀的 handle） | 完成 | 2026-11-21 |
 | 2e-3：macOS 的通道（Mach 訊息的 `Platform`、等 port set、dead-name 和 no-senders、audit token；測試自己啟動 child process） | 未開始 | |
 | 2e-4：rendezvous（Browser 的 server、child 的查詢；跨 process 的測試） | 未開始 | |
 | 2e-5：2e 的檢查和文件；Linux、Windows 在這台機器測不到的部分怎麼處理 | 未開始 | |
@@ -241,4 +241,18 @@
   - 端點自己沒有 loom 的模型：送的 thread 和 IO thread 共用的是一把鎖底下的狀態（池子、管道的額度、排著要給的 region），靠兩條 thread 的測試和它重複跑的結果。之後量到要拆鎖時再加。
   - 池子什麼時候放掉閒置的 region、每個 renderer 的上限是多少：第 3 階段 Browser 接上時定。
   - 單一 process 的模式要不要也走 `ipc::local`：沒有討論過，現在它只給測試用。
+
+### 2e-2：macOS 的共用記憶體（2026-11-21，macOS 26、Apple M4）
+
+- **決定**：「已決定的事項」第 37 條（只做用得到的兩種 region，不做 `WritableSharedMemoryRegion`）；「共用記憶體」的「三種 region」改成兩種。
+- **做了什麼**：`ipc::platform::macos::memory`：`create(len, peer_writes)`、`map(handle, len, writable)`、`SendRight`、`Mapping`（實作核心的 `Memory`）。workspace 多一個依賴 `mach2`（0.6，本來就在 `Cargo.lock` 裡），只在 macOS。mach2 沒有宣告 `MAP_MEM_NAMED_CREATE`，自己寫了那一個常數。
+- **測試**：單元測試 12 個，只在 macOS，在同一個 process 裡把 handle 再 map 一次當成對方。跨 process 的要等 2e-3 能傳 handle。
+- **寫的時候碰到的**：
+  - 「mapping drop 就是解除」第一版是在剛放掉的位址上再 map 一次；別的測試的 thread 可能剛好佔走那個位址，會不穩。改成量整個 task 的位址空間：map 又 drop 4 GiB 之後沒有長大，留著的時候有長大。
+  - 「handle drop 就是放掉」是再放一次、看它失敗。別的 thread 剛好拿到同一個名字的話會誤判；Mach 的名字帶世代，短時間內不會重複。這一組重複跑 300 次、整組單元測試平行跑 50 次都過。
+  - 長度 0 的 entry kernel 建得出來（我原本以為會失敗）；`create(0)` 回 `None` 是後面的 map 擋的。
+- **mutation test**（`mutants-2e2.toml`）13 個，全部抓到。第一次有 1 個沒抓到：「系統呼叫失敗時仍把回來的名字當成 right」，外面看不出來是因為後面的 map 也失敗；補了直接對那個函式的測試（對沒有記憶體的位址建 entry）。跑完確認檔案都還原了。
+- **Miri 跑不到**：全部是系統呼叫。`test.py ipc miri` 只跑核心和端點。
+- **只靠審查的**：mapping 不被 child 繼承（`VM_INHERIT_NONE`），要 `fork` 才看得到，記在 `docs/test-gaps.md`。
+- **跑過的檢查**：`cargo test -p ipc`（單元 62 個、整合 51 個）；`cargo clippy -p ipc --all-targets -- -D warnings`、`cargo fmt --check`；`sanity.py` 的 7 項。核心和端點沒有動，fuzz、Miri、模型、Verus、TLA+ 沒有重跑。
 

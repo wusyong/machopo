@@ -1,6 +1,6 @@
 # ipc
 
-對應 Chromium 的 `ipc/` 和 `mojo/`：machopo 的各個 process 之間共用的東西。renderer 現在還是 Browser process 裡的 thread；現在有每個 process 都讀同一個的時鐘 `TimeTicks`、還在同一個 process 裡的 data pipe（`data_pipe`），channel 的核心（`core`）、訊息的值怎麼變成位元組（`codec`）、把它們組起來的端點（`endpoint`），和同一個 process 裡的平台（`local`）；作業系統的平台層還沒有。
+對應 Chromium 的 `ipc/` 和 `mojo/`：machopo 的各個 process 之間共用的東西。renderer 現在還是 Browser process 裡的 thread；現在有每個 process 都讀同一個的時鐘 `TimeTicks`、還在同一個 process 裡的 data pipe（`data_pipe`），channel 的核心（`core`）、訊息的值怎麼變成位元組（`codec`）、把它們組起來的端點（`endpoint`）、同一個 process 裡的平台（`local`），和作業系統的平台層（`platform`：現在只有 macOS 的共用記憶體）。
 
 `unsafe` 只放在這裡和 `bindings`（`python3 scripts/sanity.py unsafe` 檢查）：這裡的是作業系統的 API，和對共用記憶體的複製。
 
@@ -257,6 +257,29 @@ impl Handler<P> for MyHandler {
 
 同一個 process 裡的 `Platform`：兩端各在一條 thread 上，一端寫的原樣交給另一端，region 是一般配置的記憶體（`HeapMemory`）。端點的測試和 fuzzer 跑在它上面，Miri 也跑得起來。`pair(room)` 的 `room` 是一端最多堆多少位元組沒讀（測傳輸沒有空間的情況）；`poll` 是不等的 `wait`，測試用它一步一步推。
 
+## `platform`
+
+每個作業系統為通道做的事（Chromium 的 `mojo/core/platform` 和 `base/memory/platform_shared_memory_region_*`）：搬位元組和 handle、等、建和 map 共用記憶體。裡面沒有判斷，薄到可以逐行看：系統呼叫是工具看不進去的。
+
+### `platform::macos::memory`
+
+共用記憶體是 Mach 的 memory entry：一個 port 代表那塊記憶體，沒有名字、沒有檔案描述子，也不能改大小。
+
+```rust
+// 建的一端寫、對方只能讀（Chromium 的 ReadOnlySharedMemoryRegion）
+let (mine, handle) = memory::create(len, false)?;   // mine 可寫；handle 只有讀的權限
+// 對方寫（Chromium 的 UnsafeSharedMemoryRegion）
+let (mine, handle) = memory::create(len, true)?;    // mine 只 map 成唯讀；handle 可寫
+// 收到 handle 的一端
+let theirs = memory::map(&handle, len, writable)?;
+```
+
+- 只有這兩種。Chromium 的第三種（可寫、能轉成唯讀一次）不做：只有 Browser 建 region，沒有那種轉手。
+- **只能讀的 handle** 是對建的一端自己的 mapping 另建的、只有讀權限的 entry；kernel 不讓它 map 成可寫。能寫的那個 right 不離開 `create`。
+- **唯讀的 mapping 一直是唯讀的**：map 時最大的保護就是現在的保護，之後改不成可寫。
+- **長度要是整頁**（region 的那幾種長度都是）：kernel 會把長度進位，進位過的不是要的那一塊，不建。map 可以少於整塊（它的開頭），不能多。
+- `SendRight`：這個 task 拿著的一個 send right，drop 時放掉；`into_raw` 給要把它搬進訊息的地方。`Mapping`：drop 時解除，實作 `Memory`。
+
 ## `unsafe` 的論證
 
 | 地方 | 為什麼安全 |
@@ -265,6 +288,10 @@ impl Handler<P> for MyHandler {
 | `core/region.rs` 的 `unsafe trait Memory` | 實作的人保證：值活著的期間 `ptr()` 起 `len()` 個位元組可讀（放進 `Pool` 的還要可寫），兩者不變；這個 process 裡沒有別的參照指進那一段。`Arc<M>` 的實作只是轉給裡面的值，`Arc` 讓它活著、不搬動 |
 | `core/region.rs` 的 `Pool::put`（複製進 region） | 目的地是 `best_fit` 選的那一塊，它的長度至少是要寫的長度（Verus 證明的後置條件），`Memory` 保證那一段可寫；來源是這個 process 自己的 slice，和 region 不重疊 |
 | `core/region.rs` 的 `Table::read`（從 region 複製出來、`set_len`） | 長度先和 region 的長度比過（超過的是 `OutsideRegion`）；目的地是剛 `reserve` 過的多餘容量，`set_len` 只涵蓋剛寫的那幾個位元組。對方可能同時在寫那一塊：讀到的是位元組，不當成有不變量的型別，複製出來之後才交給上層 |
+| `platform/macos/memory.rs` 的 `mach_make_memory_entry_64`（`entry`） | 傳進去的是活到呼叫結束的兩個區域變數的指標（大小、回來的名字）；`from` 是這個 task 自己的 mapping 的位址或沒有。回 `KERN_SUCCESS` 才把名字當成 right（`SendRight::from_raw`：新的 send right，只有這裡拿著） |
+| `platform/macos/memory.rs` 的 `mach_vm_map`（`map`） | 位址由 kernel 選（`VM_FLAGS_ANYWHERE`），寫進活到呼叫結束的區域變數；不蓋掉這個 task 已有的東西。成功才建 `Mapping` |
+| `platform/macos/memory.rs` 的 `SendRight`（`from_raw`、`Drop` 的 `mach_port_deallocate`） | `from_raw` 是 `unsafe fn`：呼叫的人保證名字是這個 task 的一個 send right、沒有別人會放掉它。`Drop` 放掉一次；`into_raw` 用 `forget` 把放掉的責任交出去 |
+| `platform/macos/memory.rs` 的 `Mapping`（`Drop` 的 `mach_vm_deallocate`、`Send`、`Sync`、`Memory`） | 範圍是 `map` 得到的那一段，只在 `drop` 解除一次。位址在每條 thread 上都一樣；經過 `Memory` 的讀寫都是整段位元組的複製。`Memory` 的保證：從 `map` 到 `drop` 都 map 著、不搬動、可讀；放進 `Pool` 的是 map 成可寫的（`create(_, false)` 的那一個、`map(_, _, true)` 的）。指標用 `with_exposed_provenance_mut` 從位址做出來：記憶體不是 Rust 配置的 |
 | `core/region.rs` 的 `HeapMemory`（`Box::into_raw`、`from_raw`、`Send`、`Sync`） | 指標來自 `new` 裡的 `Box::into_raw`，只在 `drop` 還回去一次；配置是這個值自己的，經過 `Memory` 的讀寫都是整段位元組的複製，兩端同時複製和跨 process 的 mapping 是同一種情況 |
 
 ## 測試
@@ -306,6 +333,8 @@ python3 scripts/test.py ipc tla      # crates/ipc/tla/ 的三個 TLA+ 模型（T
 ```
 
 `tla/Channel.tla`（通道的一端：佇列的上限、結束只報告一次、理由是第一個、之後不交出訊息、沒有東西留著等）、`tla/Regions.tla`（region 給哪個 peer、先告知再提到、寫進去、對方真的讀到那則訊息時才還、peer 不在了之後不轉給別人）、`tla/Pipe.tla`（管道的額度、回報的門檻、結尾和取消在路上交錯、亂回報的讀的一端、不會卡住）。`tla/check.py` 用 TLC 檢查每個模型成立，再把每一部分拿掉（模型的 `Mutation`），確認 TLC 找得到列出來的那個反例。TLC 的 jar 第一次跑時下載（釘住版本和 SHA-256，放在 `target/tla/`），要有 Java。
+
+`src/platform/macos/memory.rs` 的單元測試（只在 macOS；同一個 process 裡把 handle 再 map 一次當成對方）：建的一端寫的、對方讀得到，而且是同一塊記憶體、不是當時的複本（handle 建好、map 好之後才寫的也看得到）；只能讀的 handle map 成可寫會失敗；對方寫的、建的一端讀得到；唯讀的 mapping 改不成可寫（對方的、建的一端對「對方寫」那一塊的、可寫的 region 唯讀 map 的）；有 mapping 在，放掉 handle 記憶體還在；map 超過長度失敗、少於可以；不是整頁的長度不建；kernel 拒絕的呼叫不給 handle；不是 region 的 port map 不了；handle drop 就是放掉 right、`into_raw` 之後不放；mapping drop 就是解除（map 又 drop 4 GiB，位址空間沒有長大；留著的時候有長大）；池子和表接在真的 region 上。這一組重複跑 300 次、整組單元測試平行跑 50 次都過。
 
 `tests/it/endpoint.rs`（兩個端點接在 `local` 上，一端是能建 region 的 host、一端是 child）：訊息照順序到各自的目的地；host 的大位元組走它自己建的 region、對方讀完再用、同時送兩筆就多一塊；到了上限就放在訊息裡；child 不建 region、拿到 host 給的之後才用；管道的位元組照順序、讀的一端不讀就只送容量那麼多、讀了才繼續；讀的一端走了來源就停、通道照常；傳輸沒有空間時什麼都不會永遠卡住；關掉之後兩端都結束、送不出去、放進 region 的還回來。亂送的 child（一條裸的通道，送什麼由測試決定）：不認得的目的地、解不出來的值、還沒寫過或還兩次的 region、提到沒給過它的 region、超過長度、自己附 handle、沒有 handle 的 `Granted`、開管道、對沒開過的管道回報取消送資料、回報超過、提到沒有的管道、不是 `Control` 的內容，host 都關掉通道、說出理由，之後不再交出任何訊息。亂送的 host 對 child 也一樣（超過容量的資料、重開的編號、長度不對或重複的 region）。兩條 thread 各跑一個 `run`，三條 thread 同時送訊息和大位元組、加一條 900 KiB 的管道，全部到齊之後 host 關掉，兩邊的理由各是 `Closed` 和 `PeerClosed`。
 

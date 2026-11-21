@@ -197,6 +197,9 @@ arboard = { version = "3", default-features = false }
 # `ipc`'s proved code (`verus!`): the version of the Verus release that
 # checks it (`VERUS_VERSION` in scripts/test.py).
 vstd = "=0.0.0-2026-10-18-0147"
+# Mach's FFI, for `ipc`'s macOS layer (the version wasmtime's fork builds
+# with).
+mach2 = "0.6"
 # What a message's value is written as between processes.
 postcard = { version = "1", default-features = false, features = ["alloc"] }
 

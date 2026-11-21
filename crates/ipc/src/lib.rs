@@ -31,6 +31,7 @@ pub mod core;
 pub mod data_pipe;
 pub mod endpoint;
 pub mod local;
+pub mod platform;
 mod time_ticks;
 
 pub use time_ticks::TimeTicks;
