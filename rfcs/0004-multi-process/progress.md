@@ -32,7 +32,11 @@
 | 2f-1：Linux 的共用記憶體（memfd 和 seal、map、只能讀的 handle、不能執行；第 46、47 條） | 完成 | 2026-11-22 |
 | 2f-2：Linux 的通道（socket 的 `Platform`、epoll 的 `Waiter`、`spawn`、`inherited`、`child_gone`；跨 process 的測試；第 43、48、49 條） | 完成 | 2026-11-22 |
 | 2f-3：用真的平台層重量（第 44、45、49 條的數字）；2f 的檢查和文件 | 完成 | 2026-11-22 |
-| 2g：Windows 的平台層；量 pipe 的緩衝區。在 Windows 的機器上做（第 40 條）；對方不能附 handle 時不看訊息裡的 handle 數值（第 41 條的契約，要有跨 process 的測試）；做的時候決定 CI 要不要加 macOS、Windows 的 runner | 未開始 | |
+| 2g 之前：Windows 的探測（`prototype-windows/`）：送的 thread 結束時的寫入、pipe 的緩衝區、大的資料、和 `interprocess` 比 | 完成 | 2026-11-21 |
+| 2g-1：Windows 的共用記憶體（section 的建立、map、只能讀的 handle；第 54 條） | 完成 | 2026-11-22 |
+| 2g-2：Windows 的通道和它的 `Waiter`（completion port；同一個 process 裡的測試） | 未開始 | |
+| 2g-3：Windows 的 `spawn`、`inherited`、`child_gone`；不分平台的跨 process 測試原樣通過；Windows 自己的（對方不能附 handle 時不看訊息裡的 handle 數值，第 41 條的契約） | 未開始 | |
+| 2g-4：在真的通道上量、文件；決定 CI 要不要加 macOS、Windows 的 runner | 未開始 | |
 | 2h：第 2 階段的檢查、`soundness.md`、`test.py` 的指令、文件；把 `test.py ipc` 的每一項排進每週的 CI（2a 起在本機跑） | 未開始 | |
 | 3：啟動 child process | 未開始 | |
 
@@ -55,6 +59,7 @@
 | 一則訊息的位元組（`ipc::core::frame`）：怎麼切交出來的都一樣、照順序各一次；長度超過上限、序號不連續、沒有權限的一端的 handle、太多或不夠的 handle 都是壞訊息；謊報的長度不佔記憶體；壞訊息之後什麼都不留；任何輸入都不 panic | `cargo test -p ipc`；`python3 scripts/test.py ipc fuzz`；`python3 scripts/test.py ipc miri` |
 | `ipc` 的核心不做系統呼叫、不分平台 | `python3 scripts/sanity.py deps` |
 | 通道的兩側（`ipc::core::channel`）：送不等、照順序，好幾條 thread 同時送時線上的序號連續、訊息不互相插入；佇列超過上限就關掉通道；不認得的目的地和被拒絕的內容是壞訊息；結束只報告一次、理由是第一個，之後不交出訊息也送不出去 | `cargo test -p ipc`；`python3 scripts/test.py ipc models`；`python3 scripts/test.py ipc miri` |
+| Windows 的共用記憶體（`ipc::platform::windows::memory`）：建的一端寫的，對方的 handle 只能 map 成唯讀，也換不成權限更多的 handle（連改 section 的清單的權限都要不到）；對方寫的，建的一端只 map 成唯讀；唯讀的 mapping 改不成可寫；只建整頁的長度，map 不超過 region 的長度、長度 0 不 map；不是 region 的 handle map 不起來；kernel 拒絕時沒有 handle；交出去的 handle 不被 child 繼承；放掉之後不留 handle、mapping drop 就解除 | `cargo test -p ipc --lib platform`（Windows） |
 
 ## 做過的檢查
 
@@ -394,7 +399,6 @@
   - `remove` 之後那條通道的事不能再報出來（key 不重複使用，迴圈拿到不認得的 key 會略過，但緩衝區裡它的東西要丟掉）。
   - Windows 不能用「每條通道三個 event 加 `WaitForMultipleObjects`」：一次最多等 64 個。
   - `process_channel.rs` 裡 `one_io_thread_serves_several_children` 是驗這一段的：一個迴圈、四個 child。
-
 ### 2f：Linux 的平台層（2026-11-22 起，Fedora、kernel 7.3.3、AMD Ryzen AI 9 HX 370）
 
 branch `0004-linux`，從 `0004` 的 2e-7（`82a4fc7`）分出去。
@@ -457,3 +461,27 @@ branch `0004-linux`，從 `0004` 的 2e-7（`82a4fc7`）分出去。
 - **量的限制**：一台機器（筆電，`powersave`）；數字有雙峰，只看兩次一致的；門檻以下的 region 量不到（門檻是 `codec` 的常數）。
 - **2f 整個做完時跑的**：`cargo test -p ipc`（單元 80 個、整合 66 個）、`cargo clippy -p ipc --all-targets -- -D warnings`、`cargo fmt --check -p ipc`、`sanity.py` 的 7 項。整個 workspace 的測試、fmt、clippy 照規矩在第 2 階段結束（2h）跑。
 - **給接著做的人**：`tests/it/process_channel.rs` 的兩個測試在 2f-2 放寬了時序（那一節），macOS 上還沒跑過；`0004-linux` 進 `0004` 之後在 macOS 上跑一次 `cargo test -p ipc`。
+
+### 2g 之前：Windows 的探測（2026-11-21，Windows 11 10.0.26200、Intel Core i9-13900K）
+
+- **為什麼有這一段**：Windows 的平台層沒有原型。寫之前先確認幾件會決定怎麼寫的事；每一項的數字在 `prototype-windows/` 的 README。
+- **做了什麼**：`prototype-windows/`（不在 workspace 裡，直接用 windows-sys）：host 和它自己啟動的 child 之間一條 overlapped 的 named pipe，child 那一端是繼承的。
+- **查到的**：
+  - handle 沒綁 completion port 時，thread 結束會取消它發出的還沒完成的寫入（1 MiB 寫了 0 bytes、對方什麼都沒收到）；綁了就不會。
+  - pipe 的緩衝區 4 KiB 到 1 MiB 相差在 15% 以內；一次寫 64 KiB 比整則寫快 13% 到 17%。
+  - 64 KiB 時放在 pipe 裡和走 region 一樣，1 MiB 以上 region 快 1.4 到 2 倍。
+  - 第二個 client、同名的第二個 instance 都連不上；child 沒碰它那一端就結束或被 kill，host 的讀以 `ERROR_BROKEN_PIPE` 完成。
+  - 和 `interprocess` 2.4.9 比：小訊息它慢 40%，64 KiB 以上一樣。
+- **這台機器原本編不起來**：`../third_party/elise` 不在 machopo 釘的 commit，`python scripts/ci.py third-party` 同步之後恢復。
+
+### 2g-1：Windows 的共用記憶體（2026-11-22，Windows 11 10.0.26200、Intel Core i9-13900K）
+
+- **決定**：「已決定的事項」第 53 條（分段，和 2026-11-21 那一版為什麼沒有留）、第 54 條（section 的清單、handle 的權限和檢查、handle 的型別）。
+- **做了什麼**：`ipc::platform::windows::memory`：`create(len, peer_writes)`、`map(handle, len, writable)`、`Mapping`（實作核心的 `Memory`）。workspace 的 windows-sys 多開五個 feature（`Win32_Foundation`、`Win32_Security`、`Win32_System_Memory`、`Win32_System_SystemInformation`、`Win32_System_Threading`）：這是共用的 `Cargo.toml`，另一邊 rebase 時會碰到。
+- **和 2026-11-21 那一版的關係**：第 54 條的三項選的和那一版做的一樣，所以程式和測試就是那一版的，只改了檔頭的說明（清單不是空的、收到的 handle 不檢查）；不是從空白寫的。
+- **測試**：單元測試 14 個，只在 Windows，在同一個 process 裡把 handle 再 map 一次當成對方（和 macOS 的那一組同樣的情況，多的是「換不成權限更多的 handle」「不被 child 繼承」「放掉之後不留 handle」）。跨 process 的要等 2g-3 能送 handle。
+  - 「mapping drop 就是解除」和 macOS 一樣量整個 process 的位址空間（map 又 drop 4 GiB 之後剩下的沒有少，留著的時候少了）；「不留 handle」數整個 process 的 handle（4000 塊建了又放，多不到 1000 個；留著時是一塊一個）。
+- **mutation test**（`mutants-2g1.toml`）18 個，全部抓到。跑完確認檔案還原了。不列的一個是等價的：`create` 不自己檢查長度 0 時，kernel 本來就不建長度 0 的 section（記在 `docs/test-gaps.md`）。
+- **Miri 跑不到**：全部是系統呼叫。
+- **跑過的檢查**：`cargo test -p ipc`（Windows：單元 64 個、整合 53 個）；`cargo clippy -p ipc --all-targets -- -D warnings`；`sanity.py` 的 `deps`、`unsafe`、`tests`、`numerics`、`boundary`、`spans`、`docs`。核心和端點沒有動，fuzz、Miri、模型、Verus、TLA+ 沒有重跑。
+- **留給 2g-2 的**：`Platform` 的 `map` 和 `create` 直接接這兩個函式；handle 送給對方是 `DuplicateHandle` 進對方的 process（這裡的 handle 已經只有該有的權限，照原樣的權限複製）。

@@ -75,7 +75,14 @@ rustix = { version = "1", default-features = false, features = ["std", "time", "
 # Mapping a memfd (`ipc`'s shared memory on Linux) without `unsafe` of our
 # own; in the tree already, through parley's fontique.
 memmap2 = "0.9"
-windows-sys = { version = "0.61", features = ["Win32_System_Performance"] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Memory",
+    "Win32_System_Performance",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+] }
 # Timing the connections reqwest opens (`net`'s connector layer; in the
 # tree already, through reqwest).
 tower-layer = "0.3"

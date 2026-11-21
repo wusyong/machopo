@@ -486,6 +486,15 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
     - **16 個事件**留在 waiter 裡一個一個交出去。原本打算 `remove` 時丟掉屬於那條通道的，沒有做：key 不重用，找不到的本來就略過。它也是「別的 thread 打斷等待，最多晚多久被處理」的上限：16 次 `recvmsg`，估計最多約 0.3 ms，沒有量。
     - 對照 Chromium：`channel_posix.cc` 每次可讀時連續讀，最多 256 KiB（`kMaxBatchReadCapacity`）。
 
+53. **Windows 的平台層分五段，每一段開始前先定那一段的事**（2026-11-22，第 2 階段的 2g）：探測（`prototype-windows/`，2026-11-21 做的，只量 Windows 自己的行為）；2g-1 共用記憶體；2g-2 通道和它的 `Waiter`（同一個 process 裡的測試）；2g-3 `spawn`、`inherited`、`child_gone` 和跨 process 的測試；2g-4 在真的通道上量、文件、CI 的 runner。
+    - **2026-11-21 寫過一版，沒有留**：那一版照第 42 條之前的介面寫（通道自己擁有 completion port、自己等），而且共用記憶體和通道裡有好幾處選擇沒有先問過。第 42 條之後通道的擁有權整個不同，所以重寫；每一段要選的事先列出來、確認了才寫。留下來的只有探測和它量到的數字。
+54. **Windows 的共用記憶體**（2026-11-22，2g-1；三項都是使用者確認的）：
+    - **section 的存取清單誰都不允許，而且不讓擁有者改清單**。問題：交給 renderer 的 handle 只能讀，但 `DuplicateHandle` 要的權限比來源多時，kernel 照 section 的清單檢查；物件的擁有者不看清單就能改清單（`WRITE_DAC`），而同一個使用者的 process 都是擁有者。實測：清單是空的時候，要一個帶 `WRITE_DAC` 的 handle 要得到。所以清單裡放一項：對 owner rights（S-1-3-4）拒絕 `WRITE_DAC`。不選空的清單（Chromium 的做法，`base/memory/platform_shared_memory_region_win.cc`，2026-11-22 的 `main`）：它靠 sandbox 讓 renderer 不是擁有者，這裡還沒有 sandbox。代價是多一段建 SID 和加一項的 FFI。
+    - **交出去的 handle 只有 map 的權限，收到的 handle 不檢查是哪一種 section**。問題：對方給的 handle 可能不是這裡建的那種（例如執行檔的 image section）；要檢查就得留著 `SECTION_QUERY`。現在只有 child 收 host 的 handle，host 不收 child 的（第 17 條），送的一方是可信的，所以不檢查、權限也不留：沒有人能觸發的 FFI 是壞了最不容易發現的。Chromium 兩件都做（建立時留 `FILE_MAP_READ | FILE_MAP_WRITE | SECTION_QUERY | READ_CONTROL`，唯讀的是 `FILE_MAP_READ | SECTION_QUERY`；收到時用 `NtQuerySection` 查不是 `SEC_IMAGE`，並試著要 `FILE_MAP_WRITE` 看和模式一不一致）：它的 renderer 可以送 region 給 Browser。**之後開放 child 送 handle 時，這兩個檢查和 `SECTION_QUERY` 要一起加。**
+    - **region 的 handle 是 std 的 `OwnedHandle`，不另外包一個型別**。問題：型別上看不出它是 section，任何 handle 都能傳給 `map`。留著通用的型別：傳錯的由 kernel 在 map 時拒絕；通道收到的數值本來就只能「當成」section，包一層也沒有多保證什麼。macOS 的 `SendRight`、Chromium 的 `win::ScopedHandle` 也是通用的。
+    - **照已經定的和 macOS 的做法，沒有另外選的**：只做兩種（第 37 條）；長度要是整頁，不是的不建（核心只要 64 KiB 起每次加倍的大小，第 29 條）；`map` 的長度是 0 時不 map（Windows 把 0 當成整個 section）；map 可以少於整塊、不能多；不比對 section 實際的大小（Chromium 收到和 map 的時候也不比）。
+    - **建立時就預訂整塊的 commit**（`PAGE_READWRITE`，不加 `SEC_RESERVE`；和 Chromium 一樣）：訂不到時 `create` 沒有結果，核心把資料放在訊息裡。Chromium 這時會重試、並結束別的 process 來騰記憶體，這裡不做。
+
 ## 待決定
 
 - **CI 要不要加 macOS、Windows 的 runner**（第 40 條；2g 做的時候）：只跑 `cargo test -p ipc`（不依賴 V8，幾分鐘）。要看的是費用（GitHub 的 macOS runner 是 Linux 的 10 倍、Windows 是 2 倍）和 runner 的系統版本與開發機不同時那幾個實測來的行為還成不成立。

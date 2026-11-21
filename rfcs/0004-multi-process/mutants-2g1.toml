@@ -1,0 +1,141 @@
+# Step 2g-1: Windows shared memory (`ipc::platform::windows::memory`). A
+# region its maker writes is one the peer can only read, and its handle
+# can't be made into one with more; a mapping to read stays one; a region
+# is made at the length asked or not at all; handles and mappings are let
+# go when dropped, and no child inherits one.
+#
+# Not listed, the same either way: `create` without its own check of a
+# length of zero (the kernel makes no section of nothing).
+test = ["cargo", "test", "-q", "-p", "ipc", "--lib", "platform"]
+timeout = 300
+
+[[mutant]]
+name = "the peer gets the right to write what it should only read"
+file = "crates/ipc/src/platform/windows/memory.rs"
+from = '''    Some((mapping, with_rights(&whole, FILE_MAP_READ)?))'''
+to = '''    Some((mapping, with_rights(&whole, FILE_MAP_READ | FILE_MAP_WRITE)?))'''
+
+[[mutant]]
+name = "the peer gets the handle with every right, for what it should only read"
+file = "crates/ipc/src/platform/windows/memory.rs"
+from = '''    Some((mapping, with_rights(&whole, FILE_MAP_READ)?))'''
+to = '''    Some((mapping, whole))'''
+
+[[mutant]]
+name = "the peer gets the handle with every right, for what it writes"
+file = "crates/ipc/src/platform/windows/memory.rs"
+from = '''            with_rights(&whole, FILE_MAP_READ | FILE_MAP_WRITE)?,'''
+to = '''            whole,'''
+
+[[mutant]]
+name = "the maker maps what the peer writes to write too"
+file = "crates/ipc/src/platform/windows/memory.rs"
+from = '''        let mapping = map(&whole, len, false)?;'''
+to = '''        let mapping = map(&whole, len, true)?;'''
+
+[[mutant]]
+name = "the maker maps what it writes only to read"
+file = "crates/ipc/src/platform/windows/memory.rs"
+from = '''    let mapping = map(&whole, len, true)?;
+    Some('''
+to = '''    let mapping = map(&whole, len, false)?;
+    Some('''
+
+[[mutant]]
+name = "every mapping is to write"
+file = "crates/ipc/src/platform/windows/memory.rs"
+from = '''    let access = if writable {'''
+to = '''    let access = if writable || len != 0 {'''
+
+[[mutant]]
+name = "every mapping is to read"
+file = "crates/ipc/src/platform/windows/memory.rs"
+from = '''    let access = if writable {'''
+to = '''    let access = if writable && len == 0 {'''
+
+[[mutant]]
+name = "a length of zero maps all a section has"
+file = "crates/ipc/src/platform/windows/memory.rs"
+from = '''    if len == 0 {
+        return None;
+    }
+    let access'''
+to = '''    let access'''
+
+[[mutant]]
+name = "a region is made at a length that isn't whole pages"
+file = "crates/ipc/src/platform/windows/memory.rs"
+from = '''    if len == 0 || len.checked_rem(page())? != 0 {'''
+to = '''    if len == 0 {'''
+
+[[mutant]]
+name = "the section's owner may change who can open it"
+file = "crates/ipc/src/platform/windows/memory.rs"
+from = '''            && AddAccessDeniedAce(acl, ACL_REVISION, WRITE_DAC, (&raw mut owner).cast()) != 0'''
+to = '''            && !(&raw mut owner).is_null()'''
+
+[[mutant]]
+name = "the section is made with the list every object gets"
+file = "crates/ipc/src/platform/windows/memory.rs"
+from = '''            &raw const attributes,
+            PAGE_READWRITE,'''
+to = '''            null::<SECURITY_ATTRIBUTES>().wrapping_add(usize::from(attributes.nLength == 0)),
+            PAGE_READWRITE,'''
+
+[[mutant]]
+name = "a mapping dropped stays mapped"
+file = "crates/ipc/src/platform/windows/memory.rs"
+from = '''                Value: self.ptr().cast(),'''
+to = '''                Value: null_mut::<u8>().wrapping_add(self.len & 0).cast(),'''
+
+[[mutant]]
+name = "a mapping says it is shorter than it is"
+file = "crates/ipc/src/platform/windows/memory.rs"
+from = '''        address: view.Value.expose_provenance(),
+        len,'''
+to = '''        address: view.Value.expose_provenance(),
+        len: len.saturating_sub(1),'''
+
+[[mutant]]
+name = "a child inherits the handle"
+file = "crates/ipc/src/platform/windows/memory.rs"
+from = '''            rights,
+            0,
+            0,'''
+to = '''            rights,
+            1,
+            0,'''
+
+[[mutant]]
+name = "a handle is duplicated with all the rights of the one it comes from"
+file = "crates/ipc/src/platform/windows/memory.rs"
+from = '''            rights,
+            0,
+            0,'''
+to = '''            rights,
+            0,
+            2,'''
+
+[[mutant]]
+name = "the section is as long as the two halves of its length swapped"
+file = "crates/ipc/src/platform/windows/memory.rs"
+from = '''            high,
+            low,'''
+to = '''            low,
+            high,'''
+
+[[mutant]]
+name = "a section the kernel refused is taken for a handle"
+file = "crates/ipc/src/platform/windows/memory.rs"
+from = '''    if handle.is_null() {
+        return None;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "a duplicate the kernel refused is taken for a handle"
+file = "crates/ipc/src/platform/windows/memory.rs"
+from = '''    if made == 0 {
+        return None;
+    }'''
+to = ''''''

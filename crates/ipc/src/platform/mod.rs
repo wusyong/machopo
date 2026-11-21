@@ -16,6 +16,8 @@
 pub mod linux;
 #[cfg(target_os = "macos")]
 pub mod macos;
+#[cfg(windows)]
+pub mod windows;
 
 #[cfg(target_os = "linux")]
 pub use linux::channel::{Channel, child_gone, inherited, spawn};

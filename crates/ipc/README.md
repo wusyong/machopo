@@ -415,6 +415,18 @@ let theirs = memory::map(handle.as_fd(), len, writable)?;
 - **`map` 只 map「不能縮短」的檔案**，並且先確認它夠長（memmap2 給了長度就不看檔案的大小）：先看 seal、再量長度，量到的就不會再變短。所以不管 fd 是誰給的，`map` 不會留下會讓 process 結束的 mapping。長度 0 不 map。
 - `mmap` 和 `munmap` 經過 memmap2 的 `MmapRaw`（安全的 API，drop 時解除）；其餘是 rustix 的安全呼叫。這一份自己的 `unsafe` 只有 `Mapping` 的 `Memory`。
 
+### `platform::windows::memory`
+
+共用記憶體是 page file 的 section：沒有名字、沒有檔案，也不能改大小。函式和 macOS 的那一組一樣（`create`、`map`、`Mapping`），region 的 handle 是 std 的 `OwnedHandle`。
+
+- **交出去的 handle 只有 map 的權限**：kernel 給的第一個 handle 還有別的（查詢、刪除、讀存取清單），它不離開 `create`；交出去的是用 `DuplicateHandle` 複製的，對方只能讀的那一種只有 `FILE_MAP_READ`，kernel 不讓它 map 成可寫。
+- **換不成權限更多的 handle**：要的權限比來源多時 kernel 照 section 的存取清單檢查，所以 section 建立時給一份誰都不允許的清單，其中一項不讓擁有者改清單（不寫的話擁有者不看清單就能改，而同一個使用者的 process 都是擁有者）。Chromium 的清單是空的，靠 sandbox。
+- **收到的 handle 不檢查是哪一種 section**：只有 child 收 handle，給的是 host。之後 child 也能送時，要加 Chromium 做的兩個檢查（不是 image section、權限和說的一致），交出去的 handle 也要留查詢的權限。
+- **唯讀的 mapping 一直是唯讀的**：map 成唯讀的 view 之後改不成可寫。
+- **長度要是整頁**：kernel 建得出任何長度的 section，這裡不建不是整頁的。map 可以少於整塊（它的開頭），不能多；長度 0 在 kernel 是「整塊」的意思，這裡不 map。
+- 建立時就向系統預訂整塊的記憶體（commit）；訂不到時沒有 region。
+- 交出去的 handle 不被 child 繼承。
+
 ## `unsafe` 的論證
 
 | 地方 | 為什麼安全 |
@@ -440,6 +452,10 @@ let theirs = memory::map(handle.as_fd(), len, writable)?;
 | `platform/macos/message.rs` 的 `Buffer::body`（out-of-line 的那一支）、`Mapped` 的 `Drop` | kernel 為這一則訊息 map 進來的 `len` 位元組，是送的一方那幾頁的 copy-on-write 的一份，只有這個 task 碰得到，所以可以當成 `&[u8]`（和共用的 region 不同）；借出去的 slice 活不過 `Received`，`Received` drop 時解除一次 |
 | `platform/macos/port.rs` 的 `request`、`PortSet`、`raise_queue_limit`、`dead_name_told` | 都是對這個 task 自己拿著的名字做的呼叫，讀寫的是活到呼叫結束的區域變數。`mach_port_insert_member`、`mach_port_set_attributes` 是自己宣告的（mach2 沒有），照 `<mach/mach_port.h>` 的原型。`dead_name_told` 放掉的是通知多給的那一個計數，值自己的那一個留著 |
 | `platform/macos/rendezvous.rs` 的 `bootstrap_check_in`、`bootstrap_look_up` | 傳進去的是活到呼叫結束的 C 字串和一個放名字的區域變數。成功才把名字包成 right：check-in 給的是 service 的 receive right，look-up 給的是 send right |
+| `platform/windows/memory.rs` 的 `section`（`InitializeAcl`、`AddAccessDeniedAce`、`InitializeSecurityDescriptor`、`SetSecurityDescriptorDacl`、`CreateFileMappingW`） | 每個呼叫寫的都是活到呼叫結束的區域變數：清單是 64 個位元組的陣列（以 `u32` 配置，kernel 要它對齊），放得下表頭和一項；descriptor 指向那個陣列，兩者都活到 `CreateFileMappingW` 回來。沒有檔案、沒有名字。回來的不是 null 才包成 `OwnedHandle`（新的 handle，只有這裡拿著） |
+| `platform/windows/memory.rs` 的 `with_rights`（`DuplicateHandle`） | 來源是借來的、呼叫期間開著的 handle，兩個 process 都是自己，結果寫進活到呼叫結束的區域變數。成功才包成 `OwnedHandle` |
+| `platform/windows/memory.rs` 的 `MapViewOfFile`（`map`） | 位址由 kernel 選，不蓋掉這個 process 已有的東西；handle 在呼叫期間開著。成功才建 `Mapping` |
+| `platform/windows/memory.rs` 的 `Mapping`（`Drop` 的 `UnmapViewOfFile`、`Send`、`Sync`、`Memory`）、`page` 的 `GetSystemInfo` | 和 macOS 的 `Mapping` 同一個論證：範圍是 `map` 得到的那一段，只在 `drop` 解除一次；位址在每條 thread 上都一樣，經過 `Memory` 的讀寫都是整段位元組的複製；放進 `Pool` 的是 map 成可寫的。`GetSystemInfo` 只寫一個全零也合法的區域變數，不會失敗 |
 | `core/region.rs` 的 `HeapMemory`（`Box::into_raw`、`from_raw`、`Send`、`Sync`） | 指標來自 `new` 裡的 `Box::into_raw`，只在 `drop` 還回去一次；配置是這個值自己的，經過 `Memory` 的讀寫都是整段位元組的複製，兩端同時複製和跨 process 的 mapping 是同一種情況 |
 
 ## 測試
@@ -487,6 +503,8 @@ python3 scripts/test.py ipc tla      # crates/ipc/tla/ 的三個 TLA+ 模型（T
 `src/platform/linux/memory.rs` 的單元測試（只在 Linux；同一個 process 裡把 handle 再 map 一次當成對方）：建的一端寫的、對方讀得到，而且是同一塊記憶體；只能讀的 handle map 成可寫會失敗，`write` 不進去，經過 `/proc/self/fd` 重新開成可寫的也一樣；對方唯讀的 mapping `mprotect` 不成可寫；兩端各自只把自己寫的那一種 map 成可寫（看 `/proc/self/maps`）；對方寫的、建的一端讀得到；兩種 region 都不能縮短、加長、再加 seal，seal 就是該有的那幾個；kernel 有 `MFD_NOEXEC_SEAL` 時 region 不能改成可執行；kernel 不認得旗標時不帶它再問一次，別的拒絕不再問，認得的只問一次（用假的 `memfd_create`）；有 mapping 在，放掉 handle 記憶體還在；map 超過長度和長度 0 失敗、少於可以；還能縮短的檔案、`/dev/null`、socket 都不 map；mapping drop 就是解除（數 `/proc/self/maps` 裡這個 memfd 的 mapping）；池子和表接在真的 region 上。
 
 `src/platform/macos/message.rs` 的單元測試（同一個 process 裡自己送給自己）：幾種長度的 body 原樣到、送的人是這個 process；沒有訊息時逾時；right 照順序到、各自還是原來那一種（對它送的訊息從原來的 port 出來）；回答送到發問的人指定的 port；沒回答就丟掉時 kernel 會通知（送的人是 0）；送到死掉的 port 送不出去、帶的 right 被放掉；收到又丟掉的 right 被放掉、receive right 丟掉 port 就死了；超過緩衝區的 body、超過 16 個 right 不送，right 被放掉；比緩衝區長的訊息被拒絕並且從 port 上拿掉；佇列滿了、不等的送會被拒絕，讀走一則就有位置；排法不對的六種（太長的 body、out-of-line 的記憶體、out-of-line 的 port、send-once 的 right、太多 right、不是回一次的 reply）都被拒絕、帶來的被放掉，之後 port 照常。
+
+`src/platform/windows/memory.rs` 的單元測試（只在 Windows；同一個 process 裡把 handle 再 map 一次當成對方）：和 macOS 的那一組同樣的情況（建的一端寫的對方讀得到、是同一塊記憶體；只能讀的 handle map 成可寫會失敗；對方寫的建的一端讀得到；唯讀的 mapping 改不成可寫；有 mapping 在，放掉 handle 記憶體還在；map 超過長度失敗、少於可以、長度 0 不 map；不是整頁的長度不建；kernel 拒絕的呼叫不給 handle；不是 region 的 handle（一個檔案的）map 不了；mapping drop 就是解除；池子和表接在真的 region 上），加上：只能讀的 handle 換不成權限更多的（可寫的、全部的、改清單的都要不到），兩種 handle 都只有 map 的權限（查詢、刪除、讀清單的也要不到）；交出去的 handle 不被 child 繼承；4000 塊建了又放，process 的 handle 沒有變多，留著時一塊一個。
 
 `src/platform/macos/message.rs` 另外為 out-of-line 和不等的送：長的 body 走 out-of-line、到的一樣；送出去之後送的一方再改，收的一方那一份不變；不收 out-of-line 的緩衝區、上限比較小的緩衝區都拒絕，剛好到上限的收；收了又丟、被拒絕的各 2 GiB 之後位址空間沒有長大；佇列滿時帶著 right 和 16 MiB 的 body 連送 64 次，位址空間和 right 都不變，有空間之後同一個呼叫送得出去；kernel 在有空間時通知、佇列開到 1024 則、port 死掉時通知（在 port set 上也收得到，知道是哪一個 port）。
 
