@@ -30,6 +30,8 @@
 | 2e-7：一個 process 一條 IO thread：`IoLoop` 管多個端點，平台的介面拆成 `Platform`（通道）和 `Waiter`（等待）；macOS 和同一個 process 的平台跟著改（第 42 條） | 完成 | 2026-11-21 |
 | 2f：Linux 的平台層；量 socket 的緩衝區和大的資料的門檻。在 Linux 的機器上做（第 40 條）；先決定的是第 43 到 49 條 | 進行中 | |
 | 2f-1：Linux 的共用記憶體（memfd 和 seal、map、只能讀的 handle、不能執行；第 46、47 條） | 完成 | 2026-11-22 |
+| 2f-2：Linux 的通道（socket 的 `Platform`、epoll 的 `Waiter`、`spawn`、`inherited`、`child_gone`；跨 process 的測試；第 43、48、49 條） | 完成 | 2026-11-22 |
+| 2f-3：用真的平台層重量（第 44、45、49 條的數字）；2f 的檢查和文件 | 未開始 | |
 | 2g：Windows 的平台層；量 pipe 的緩衝區。在 Windows 的機器上做（第 40 條）；對方不能附 handle 時不看訊息裡的 handle 數值（第 41 條的契約，要有跨 process 的測試）；做的時候決定 CI 要不要加 macOS、Windows 的 runner | 未開始 | |
 | 2h：第 2 階段的檢查、`soundness.md`、`test.py` 的指令、文件；把 `test.py ipc` 的每一項排進每週的 CI（2a 起在本機跑） | 未開始 | |
 | 3：啟動 child process | 未開始 | |
@@ -419,3 +421,27 @@ branch `0004-linux`，從 `0004` 的 2e-7（`82a4fc7`）分出去。
 - **跑過的檢查**：`cargo test -p ipc`（單元 64 個、整合 53 個）；`cargo clippy -p ipc --all-targets -- -D warnings`；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。
 - **只靠審查的**：kernel 不認得 `MFD_NOEXEC_SEAL` 時真的回 `EINVAL`、5.1 之前的 kernel 上的行為（`docs/test-gaps.md`）。
 
+### 2f-2：Linux 的通道（2026-11-22，Fedora、kernel 7.3.3、AMD Ryzen AI 9 HX 370）
+
+- **做了什麼**：`ipc::platform::linux::channel` 的 `Channel`（`Transport`、`Platform`）、`EpollWaiter`、`spawn`、`inherited`、`child_gone`（`crates/ipc/README.md` 的「`platform::linux::channel`」）；`platform/mod.rs` 的 re-export；`tests/it/main.rs` 裡 `process_channel` 在 Linux 上也跑。`unsafe` 三處：`pre_exec`、它裡面借用 fd 的那一行、`inherited` 收下 fd。
+- **先查的**：Chromium 的 `base/message_loop/message_pump_epoll.cc`（2026-11-22 的 main）：level-triggered，`epoll_wait` 一次 16 個事件，只等一次的登記（寫的那一種）在使用者這一側做。和第 48、49 條一致。
+- **和決定不同、或決定沒說到的**：
+  - **「一則最多 16 個 fd」不能靠控制資料的緩衝區大小擋**：`cmsg_space!(ScmRights(16))` 的緩衝區收得進 17 個（會進位）。送和收都另外數個數。這是測試抓到的（送 17 個、預期對方不在了，結果讀到 17 個 handle）。
+  - **socket 不設成 non-blocking**（第 43 條前後的敘述寫的是 non-blocking 的 socket）：每次 `sendmsg`、`recvmsg` 自己帶 `MSG_DONTWAIT`，再設一次是多餘的（mutation test 拿掉它沒有測試失敗）。
+  - **第 49 條說 `remove` 時丟掉 waiter 裡留著的那條通道的事件**：沒有做。key 不重用，迴圈拿到找不到的 key 本來就略過。
+  - 「可寫」和「可讀」同時來時只報「可寫」，「可讀」等 epoll 下一次再說（level-triggered）。
+  - 一條通道只能有一個 waiter，`add` 第二次回 `false`；被移掉之後可以換一個。
+- **改了三個平台共用的測試**（`tests/it/process_channel.rs`；2026-11-22 使用者決定跟著這一段留在 `0004-linux`，不另外先進 `0004`）。兩個測試的時序假設在串流的 socket 上不成立，放寬之後在 macOS 上應該照樣成立，但沒有在 macOS 上跑過：
+  - `a_child_cant_map_to_write_what_the_host_sends_it`：child 一拿到 region 就結束（region 的 handle 走在提到它的訊息前面），host 接著寫的那一則在 Linux 上被拒絕（對方不在了），`send(...).unwrap()` 就失敗，整組一起跑 40 次裡 39 次。改成不看這次送出的結果，照舊只看 child 的 exit code。
+  - `a_host_and_a_child_talk`：child 先回答、那一批讀完才說「還你了」；測試在收到回答的當下就檢查 region 空了，40 次裡 4 次還沒空（回答是 300 KiB 的內嵌，在 Linux 上分兩次讀，兩者之間的空檔比 macOS 大）。改成等到空為止，有時限。
+- **不穩定過的測試**（都是這一段新寫的，原因都找到了）：
+  - 「handle 送出去之後寫的一端的關掉了」原本問那個 fd 的號碼還開不開著：別的測試的 thread 會馬上重用那個號碼，500 次 1 次。改成數這個 process 裡指向那塊 memfd 的 fd；又因為只比 inode，1500 次 2 次（別的檔案系統的檔案撞到同一個 inode，例如 socket），改成比裝置加 inode。
+- **測試**：`src/platform/linux/channel.rs` 的單元測試 16 個，整個單元測試的 binary 重複跑 3000 次都過；`tests/it/process_channel.rs` 9 個（不分平台）和 `tests/it/linux_channel.rs` 4 個，整個整合測試重複跑 40 次都過（改掉上面兩個測試之後）。
+- **mutation test**（`mutants-2f2.toml`）35 個，31 個抓到。沒抓到的 4 個（`docs/test-gaps.md`）：
+  - 等價的 3 個：`sendmsg` 不帶 `MSG_NOSIGNAL`（Rust 的程式本來就忽略 SIGPIPE）；`recvmsg` 不帶 `MSG_DONTWAIT`（只讀 epoll 說有東西的，而且只有一條 thread 讀）；讀出錯時再讀一次（socket 的錯誤只讀得到一次，再來就是結尾）。
+  - 只靠審查的 1 個：`MSG_CTRUNC` 的檢查。fd 放不下時剩下的一定超過 16 個，由數個數的檢查抓到；剩下不到 16 個只在這個 process 的 fd 用完時發生，沒有測試做得出來。
+  - 寫清單時拿掉的 3 處多餘的程式：把 socket 設成 non-blocking、「可寫」之外的事件排回去、`remove` 時丟掉留著的事件（上面）。
+  - 跑完確認檔案都還原了。
+- **只靠審查的**：上面的 `MSG_CTRUNC`；`spawn` 在 child 那一端的號碼是 0 到 2 時換號碼；`spawn` 用過的 `Command` 不能再用（`docs/test-gaps.md`）。
+- **跑過的檢查**：`cargo test -p ipc`（單元 80 個、整合 66 個）；`cargo clippy -p ipc --all-targets -- -D warnings`、`cargo fmt --check -p ipc`；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。
+- **還沒做的**：2f-3，用真的平台層重量。

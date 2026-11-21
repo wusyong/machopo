@@ -117,6 +117,7 @@
 | --- | --- | --- | --- |
 | CI | 整套每天跑一次，GC 的 `matrix`、`fuzz` 每週一次（`testing.md` 的「CI」），merge 不等它；CI 只在 Linux（x86-64）上跑，畫面只經過 lavapipe，沒有 GPU 的路；沒有 CODEOWNERS | 開發機上照 `CLAUDE.md` 的清單跑改動相關的部分；每次 push 跑 lint、`sanity.py` 和 Linux 的 `cargo test --workspace`（Rust 的 `webdriver`、`automation_pipe` 測試跟著它） | 之後加 Windows 的 `cargo test`、`reftest` 和 macOS（ARM64）的 `matrix`；真視窗的情境（`test.py scenarios --window`）：GitHub 的標準 runner 沒有 GPU 也沒有螢幕，要 xvfb 或 headless 的 Wayland compositor 加上 lavapipe，還沒試 |
 | `ipc` 在 Linux 上建共用記憶體時，kernel 不認得 `MFD_NOEXEC_SEAL` 就不帶它再建一次（`platform/linux/memory.rs` 的 `memfd`） | 只有 6.3 之前的 kernel 回那個錯誤（`EINVAL`），開發機和 CI 的都比它新；同樣地，5.1 之前的 kernel 沒有 `F_SEAL_FUTURE_WRITE` 時「建的一端寫」的 region 建不出來，也沒有在那種 kernel 上跑過 | 「不認得就再問一次、別的拒絕不再問」用假的 `memfd_create` 測；真的 kernel 回的是不是 `EINVAL` 靠 kernel 的文件和 Chromium 同樣的做法 | 有舊 kernel 的機器或 CI 的 image 時在上面跑一次 `cargo test -p ipc` |
+| `ipc` 的 Linux 通道幾條沒有測試走得到的路（`platform/linux/channel.rs`）：`spawn` 在 child 那一端的號碼是 0 到 2 時先換一個號碼；`spawn` 用過的 `Command` 再啟動一次會交出那個號碼上當時的 fd（只寫在說明裡）；讀的時候 kernel 說有 fd 放不下（`MSG_CTRUNC`）而剩下的沒超過 16 個 | 第一條要 host 自己啟動時 stdin、stdout 或 stderr 是關著的；第三條只在這個 process 的 fd 用完時發生（放不下的情況剩下的一定超過 16 個，由數個數的檢查抓到） | 審查。第三條沒有那個檢查時，那則訊息的 handle 比它說的少，核心照樣判成壞訊息、關掉通道 | 有能限制 child 的 fd 上限的測試工具時補第三條；第二條在 `browser` 接上 `spawn` 時看要不要讓介面擋（收下 `Command`、不還） |
 | `ipc` 的 macOS 平台層（`crates/ipc/src/platform/macos/`，和 `crates/ipc/tests/it/` 的 `rendezvous.rs`、`mach_channel.rs`） | 只在 macOS 上編得起來，而 CI 只有 Linux：這些測試 CI 一次都不跑。其中幾個行為是在 macOS 26 上實測來的（佇列滿時 kernel 怎麼退回訊息、通知什麼時候到），別的版本沒有驗過 | 開發機：改到 `ipc` 的人在 macOS 上跑 `cargo test -p ipc` | 和 Windows 的平台層一起決定要不要在 CI 加 macOS、Windows 的 runner（Windows 那一層做的時候） |
 | TSan | 自己編 V8 之後做得到，但要另外的 V8 build 設定 | elise 的 heap verifier（`HeapOptions::verify`，每次 GC 之後走一遍 heap）抓不到只在特定記憶體順序下才出現的 race；cppgc 的 marking verifier（debug 的 V8 一律打開）只看 cppgc 上的物件，machopo 的不在那裡 | 之後（還沒排進任何階段）：DOM 的 heap 的 concurrent marking 已經是預設，marker 讀 `TracedReference`（C4）的記憶體順序的錯誤 stress 碰不上，目前只能靠審查 |
 | 效能的回歸 | 沒有自動的效能測試：優化（例如 style 照桶比對 selector）弄壞了，行為照樣對 | 多數的優化有計數的測試守著（`cargo test -p style --test it matching::few_selectors_are_matched` 數完整比對過的 selector）；沒有的列在下面的「沒有計數守著的優化」；時間只在使用者要求時量（`benchmarks.md`） | 補那裡的計數，大的先補；數字接近 Chrome 時，再考慮固定機器上的自動量測 |
@@ -250,6 +251,12 @@
 ## 等價、不用處理的 mutation
 
 弄壞之後行為完全一樣，記在這裡免得重複追查。
+
+**`ipc` 的 Linux 通道（`platform/linux/channel.rs`）**
+
+- `sendmsg` 不帶 `MSG_NOSIGNAL`：Rust 的程式啟動時就忽略 SIGPIPE，寫給不在了的對方有沒有旗標都是被拒絕。留著是不靠那個預設（別的語言寫的 host 載入這段程式時沒有）。
+- `recvmsg` 不帶 `MSG_DONTWAIT`：只有 epoll 說有東西的 socket 才讀，而且只有一條 thread 讀它，所以不會等。留著是因為 socket 沒有設成 non-blocking，萬一讀到沒東西的，IO thread 會卡住。
+- 讀出錯時不當成對方不在了、再讀一次：socket 的錯誤只讀得到一次，下一次就是串流的結尾，結果一樣是對方不在了。
 
 **只會變慢或多用記憶體（拿掉的是效能或記憶體的捷徑，結果一樣）**
 

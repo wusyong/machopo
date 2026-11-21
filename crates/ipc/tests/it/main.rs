@@ -14,11 +14,13 @@ mod data_pipe;
 mod endpoint;
 mod endpoint_fuzz;
 mod frame_fuzz;
+#[cfg(target_os = "linux")]
+mod linux_channel;
 #[cfg(target_os = "macos")]
 mod mach_channel;
 mod pipe_fuzz;
-// Wherever there is a platform's channel: macOS, for now.
-#[cfg(target_os = "macos")]
+// Wherever there is a platform's channel.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod process_channel;
 mod region_fuzz;
 #[cfg(target_os = "macos")]

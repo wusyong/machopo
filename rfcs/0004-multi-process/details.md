@@ -314,8 +314,8 @@ ringbuf、rtrb、crossbeam 的 `ArrayQueue` 是給同一個 process 的 thread �
   - Chromium 不是這樣做（`base/memory/platform_shared_memory_region_posix.cc`，2026-11-22 讀的 main）：它經過 `/proc/self/fd/N` 重新開一個 `O_RDONLY` 的 fd 交出去。拿到這種 fd 的 process 可以經過 `/proc` 再開一次、開成可寫，Chromium 靠 sandbox 不讓 renderer 讀 `/proc` 擋住。`F_SEAL_FUTURE_WRITE` 不靠 sandbox。
 - 只有 memfd 建的檔案能加 seal：一般 tmpfs 的檔案一開始就帶著 `F_SEAL_SEAL`，所以不能改用 `/dev/shm` 底下的暫存檔。
 - map：memmap2 的 `MmapRaw`。給了長度時它不確認檔案夠不夠大，先用 `fstat` 確認（第 47 條）。
-- 控制通道：std 的 `UnixStream::pair`，non-blocking，緩衝區不設（第 44 條）；一端給 child 繼承（第 43 條）。IO thread 用一個 level-triggered 的 epoll 等所有通道的 socket 和一個 eventfd；「可寫」只在寫入被擋之後才登記（第 48 條）；接收緩衝區 256 KiB（第 49 條）。
-- 傳 fd：rustix 的 `sendmsg` 和 `SendAncillaryMessage::ScmRights`，帶 `MSG_NOSIGNAL`（對方關掉時不要 SIGPIPE）；收的一端用 `MSG_CMSG_CLOEXEC`，控制資料的緩衝區放得下 16 個 fd（核心的 `MAX_HANDLES`），被截斷（`MSG_CTRUNC`）就當成對方不在了。fd 只由 Browser 送給 renderer；Browser 這一端收到的 fd 照樣交給核心，由它判成壞訊息（`HandlesNotAllowed`）。
+- 控制通道：std 的 `UnixStream::pair`，每次讀寫帶 `MSG_DONTWAIT`，緩衝區不設（第 44 條）；一端給 child 繼承（第 43 條）。IO thread 用一個 level-triggered 的 epoll 等所有通道的 socket 和一個 eventfd；「可寫」只在寫入被擋之後才登記（第 48 條）；接收緩衝區 256 KiB（第 49 條）。
+- 傳 fd：rustix 的 `sendmsg` 和 `SendAncillaryMessage::ScmRights`，帶 `MSG_NOSIGNAL`（對方關掉時不要 SIGPIPE）；收的一端用 `MSG_CMSG_CLOEXEC`，一次讀到超過 16 個 fd（核心的 `MAX_HANDLES`）或控制資料被截斷（`MSG_CTRUNC`）就當成對方不在了；個數要自己數，給 16 個 fd 的控制資料緩衝區實測收得進 17 個（大小會進位）。fd 只由 Browser 送給 renderer；Browser 這一端收到的 fd 照樣交給核心，由它判成壞訊息（`HandlesNotAllowed`）。
 - 對方不在了：讀到 0 個位元組或讀寫錯誤。不看 `EPOLLHUP`：對方關掉之前送的訊息要先讀完、交出去。
 
 ### macOS

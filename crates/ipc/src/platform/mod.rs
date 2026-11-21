@@ -17,5 +17,7 @@ pub mod linux;
 #[cfg(target_os = "macos")]
 pub mod macos;
 
+#[cfg(target_os = "linux")]
+pub use linux::channel::{Channel, child_gone, inherited, spawn};
 #[cfg(target_os = "macos")]
 pub use macos::channel::{Channel, child_gone, inherited, spawn};

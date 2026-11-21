@@ -1,6 +1,6 @@
 # ipc
 
-對應 Chromium 的 `ipc/` 和 `mojo/`：machopo 的各個 process 之間共用的東西。renderer 現在還是 Browser process 裡的 thread；現在有每個 process 都讀同一個的時鐘 `TimeTicks`、還在同一個 process 裡的 data pipe（`data_pipe`），channel 的核心（`core`）、訊息的值怎麼變成位元組（`codec`）、把它們組起來的端點（`endpoint`）、同一個 process 裡的平台（`local`），和作業系統的平台層（`platform`：現在有 macOS 的那一份和 Linux 的共用記憶體，Linux 的通道和 Windows 的還沒有）。
+對應 Chromium 的 `ipc/` 和 `mojo/`：machopo 的各個 process 之間共用的東西。renderer 現在還是 Browser process 裡的 thread；現在有每個 process 都讀同一個的時鐘 `TimeTicks`、還在同一個 process 裡的 data pipe（`data_pipe`），channel 的核心（`core`）、訊息的值怎麼變成位元組（`codec`）、把它們組起來的端點（`endpoint`）、同一個 process 裡的平台（`local`），和作業系統的平台層（`platform`：現在有 macOS 和 Linux 的，Windows 的還沒有）。
 
 `unsafe` 只放在這裡和 `bindings`（`python3 scripts/sanity.py unsafe` 檢查）：這裡的是作業系統的 API，和對共用記憶體的複製。
 
@@ -282,8 +282,8 @@ ipc::platform::child_gone(child.id());
 let channel = ipc::platform::inherited()?;
 ```
 
-- `spawn` 啟動 child，回來 child 和 host 這一端。child 那一端怎麼過去是平台的事：macOS 上 child 繼承不了 port，所以留在這個 process 的 rendezvous server（`Server::global()`）等它來拿；能繼承 fd 或 handle 的平台在啟動時就交過去。
-- `child_gone`：child 還沒拿它那一端就結束時，macOS 的 kernel 不會告訴 host（那一端還替它留著），要 host 自己說；說了之後 host 這一端就收到「對方不在了」。拿過的 child、kernel 自己會說的平台，它什麼都不做。
+- `spawn` 啟動 child，回來 child 和 host 這一端。child 那一端怎麼過去是平台的事：macOS 上 child 繼承不了 port，所以留在這個 process 的 rendezvous server（`Server::global()`）等它來拿；Linux 上 child 繼承那一端的 fd（下面的 `platform::linux::channel`）。`spawn` 用過的 `Command` 不要再拿來啟動別的。
+- `child_gone`：child 還沒拿它那一端就結束時，macOS 的 kernel 不會告訴 host（那一端還替它留著），要 host 自己說；說了之後 host 這一端就收到「對方不在了」。拿過的 child、kernel 自己會說的平台（Linux：host 在 child 啟動之後就不拿著它那一端），它什麼都不做。
 - **平台要自己守的一條**（`Platform` 的說明）：交給端點的 handle 一定是 kernel 為這則訊息搬進來的，不能是對方寫的數值。handle 以數值走在位元組裡的平台（送的一方把它複製進收的一方），對方不能附 handle 時，只要訊息說它有 handle 就當成對方不在了，那個數值不看：數值指的是這個 process 自己的 handle，而且是對方挑的。
 
 ### `platform::macos::memory`
@@ -382,6 +382,23 @@ let rights = rendezvous::fetch(std::os::unix::process::parent_id(), wait)?;
 - `forget(pid)`：child 還沒問就不在了的時候，收回登記的 right。
 - `fetch` 的錯誤：`NoServer`（查不到那個 host 的 server）、`Refused`、`TimedOut`、`Failed`。
 
+### `platform::linux::channel`
+
+通道的一端（Chromium 的 `ChannelPosix`）是一條 Unix stream socket：核心的訊息是串流裡的位元組，寫多少算多少、讀到多少交多少，訊息由核心自己切出來。handle 是 fd（region 的 memfd），跟著它那一則的位元組走（`SCM_RIGHTS`）。
+
+- **child 怎麼拿到它那一端**：`spawn` 用 `socketpair` 建兩端（都是 close-on-exec），在 `Command` 的 `pre_exec` 裡，也就是 fork 之後、exec 之前、只在 child 的 process 裡，拿掉 child 那一端的 close-on-exec，號碼放在環境變數 `MACHOPO_IPC_FD`。所以只有這個 child 繼承到，同時啟動的別的 child 拿不到；host 開著的別的東西（其他 child 的通道、region）它也拿不到。`inherited` 讀環境變數，確認那個號碼是 `AF_UNIX` 的 stream socket（0、1、2 不算），收下、重新設 close-on-exec；只拿一次。
+  - 號碼不是秘密：fd 只在自己的 process 裡有意義。不放在命令列：child 可能是有自己參數的程式（測試的 child 就是）。
+  - 不 dup2 到別的號碼：dup2 會悄悄關掉目標號碼上原本的 fd，來源和目標同號時又什麼都不做。
+  - `pre_exec` 的 closure 留在 `Command` 裡，所以那個 `Command` 不能再用：再啟動一次，它會把那個號碼上當時的 fd 交出去。
+- **寫**：`sendmsg`，不等（`MSG_DONTWAIT`），對方不在了不要 signal（`MSG_NOSIGNAL`）。寫進去多少回多少；fd 跟著第一個位元組走，寫進去了這一端的就關掉。一則最多 16 個 fd（核心的上限），多的不送。
+- **等**：`EpollWaiter` 是一個 level-triggered 的 epoll，裡面是每條通道的 socket 和一個 eventfd（`interrupter` 寫它；寫幾次都只打斷一次）。`epoll_wait` 一次最多拿 16 個事件，每次 `wait` 交出一個、對那條通道做一次 `recvmsg`，讀進 waiter 的 256 KiB 的緩衝區借出去；沒讀完的 epoll 會再說。
+- **「可寫」只在寫入被擋之後才等**：socket 幾乎一直有空間，一直等的話 epoll 不停地醒。`write` 碰到 `EAGAIN` 時，在當下那條 thread 上把這條 socket 在 epoll 裡的登記加上「可寫」；IO thread 被告知一次就拿掉。通道和 waiter 為此共用 epoll 的 fd（`Arc`：waiter 先結束時 fd 還在，寫的 thread 不會改到別人的 fd）。還沒有 waiter 的通道被擋過，加入時就帶著「可寫」。鎖的順序：`write` 是在核心的鎖裡被呼叫的，再拿通道自己的；所以拿著通道的鎖時不呼叫核心。
+- **對方不在了**是讀到串流的結尾或讀出錯；不看 epoll 的 hang-up，所以對方關掉之前送的都先交出去。
+- **收到的 fd** 帶 close-on-exec（`MSG_CMSG_CLOEXEC`）。一次讀到超過 16 個、或 kernel 說有 fd 放不下（`MSG_CTRUNC`），就當成對方不在了。控制資料的緩衝區大小不是那個上限：它會進位，多一兩個也放得下，所以另外數。
+- **緩衝區用 kernel 的預設**：量過，Linux 上把 `SO_SNDBUF` 設大沒有差別，`SO_RCVBUF` 對 Unix socket 沒有作用。socket 也不設成 non-blocking：每次讀寫自己說不等。
+- `shut` 是 `shutdown(SHUT_RDWR)`：對方讀到結尾，它的寫入被拒絕。一條通道只能有一個 waiter；shut 過的不能再加入。
+- `Channel::pair()`：同一個 process 裡的兩端，測試用。
+
 ### `platform::linux::memory`
 
 共用記憶體是 memfd：一個沒有名字的檔案，建好就封住（seal）它的長度。API 和 macOS 的那一份同一個形狀，handle 是 `OwnedFd`：
@@ -409,6 +426,8 @@ let theirs = memory::map(handle.as_fd(), len, writable)?;
 | `platform/macos/memory.rs` 的 `mach_make_memory_entry_64`（`entry`） | 傳進去的是活到呼叫結束的兩個區域變數的指標（大小、回來的名字）；`from` 是這個 task 自己的 mapping 的位址或沒有。回 `KERN_SUCCESS` 才把名字當成 right（`SendRight::from_raw`：新的 send right，只有這裡拿著） |
 | `platform/macos/memory.rs` 的 `mach_vm_map`（`map`） | 位址由 kernel 選（`VM_FLAGS_ANYWHERE`），寫進活到呼叫結束的區域變數；不蓋掉這個 task 已有的東西。成功才建 `Mapping` |
 | `platform/macos/memory.rs` 的 `SendRight`（`from_raw`、`Drop` 的 `mach_port_deallocate`） | `from_raw` 是 `unsafe fn`：呼叫的人保證名字是這個 task 的一個 send right、沒有別人會放掉它。`Drop` 放掉一次；`into_raw` 用 `forget` 把放掉的責任交出去 |
+| `platform/linux/channel.rs` 的 `spawn`（`pre_exec` 和裡面的 `BorrowedFd::borrow_raw`） | closure 在 child 裡、fork 和 exec 之間跑，那裡只能做 async-signal-safe 的事（fork 的當下別的 thread 可能拿著任何鎖）：它只做一次 `fcntl` 的系統呼叫，不配置記憶體（錯誤只帶一個號碼）。那個號碼在 child 裡是開著的：`theirs` 在 host 活到 `spawn` 回來之後，fork 時還在。借用只到那一次呼叫結束 |
+| `platform/linux/channel.rs` 的 `inherited`（`BorrowedFd::borrow_raw`、`OwnedFd::from_raw_fd`） | 先借來問它是什麼（號碼沒開著的話兩個呼叫都是錯誤）；確認是 Unix stream socket、不是 0 到 2，才收下。號碼是 `spawn` 寫的、替這個 process 留著開的，這個 process 裡沒有別人拿過它，而且只收一次（`TAKEN`），所以只有這個值會關它。環境變數被改成指向別的 Unix stream socket 時，收下的是那一條：做得到這件事的人本來就決定這個 process 怎麼啟動 |
 | `platform/linux/memory.rs` 的 `Mapping`（`Memory`） | 裡面是 memmap2 的 `MmapRaw`：從 `map` 到 drop 都 map 著、不搬動、可讀；放進 `Pool` 的是 map 成可寫的（`create(_, false)` 的那一個、`map(_, _, true)` 的）。範圍一直在檔案裡面：`map` 只接受封住「不能縮短」的檔案，而且在看到 seal 之後才量長度；`create` 自己建的在 map 之前就封了 |
 | `platform/macos/memory.rs` 的 `Mapping`（`Drop` 的 `mach_vm_deallocate`、`Send`、`Sync`、`Memory`） | 範圍是 `map` 得到的那一段，只在 `drop` 解除一次。位址在每條 thread 上都一樣；經過 `Memory` 的讀寫都是整段位元組的複製。`Memory` 的保證：從 `map` 到 `drop` 都 map 著、不搬動、可讀；放進 `Pool` 的是 map 成可寫的（`create(_, false)` 的那一個、`map(_, _, true)` 的）。指標用 `with_exposed_provenance_mut` 從位址做出來：記憶體不是 Rust 配置的 |
 | `platform/macos/port.rs` 的三種 right（`from_raw`、`Drop`、`ReceiveRight::new`、`make_send`、`tell_when_no_senders`） | `from_raw` 都是 `unsafe fn`：呼叫的人保證名字是這個 task 的那一種 right、沒有別人會放掉。每種的 `Drop` 用對應的呼叫放掉一次（send 和 send-once 是 `mach_port_deallocate`，receive 是 `mach_port_mod_refs` 減一）；`into_raw` 用 `forget` 交出責任。其餘的呼叫都是對自己的 receive right 做的，寫的是活到呼叫結束的區域變數。`mach_port_request_notification` 是自己宣告的（mach2 沒有），照 `<mach/mach_port.h>` 的原型 |
@@ -474,6 +493,10 @@ python3 scripts/test.py ipc tla      # crates/ipc/tla/ 的三個 TLA+ 模型（T
 `src/platform/macos/channel.rs` 的單元測試（兩端在同一個 process 裡，各有自己的 `PortWaiter`；每個測試自己設 10 秒的時限）：一個 `PortWaiter` 等四條通道，分得出各是哪一條的（加入之前就到的也收得到），一條的對方不在了只有那一條被告知，拿掉之後到它的 port 的不算，關掉的一端加不進去；還沒加入迴圈的一端叫醒沒有作用；一端寫的另一端整則拿到（內嵌和 out-of-line 的長度都有）；handle 跟著訊息、送出去之後不在寫的人手上、收的一端 map 得到同一塊；叫醒 20 次只報一次、之後下一件事照常；關掉的一端送不出去、對方先收到關之前送的、再被告知；一端 drop 就是對方不在了；佇列滿了回 `WouldBlock`、帶的 handle 還在、對方讀走一則就收到 `Writable`、同一個寫入成功；只有對方的 port 死了、或只有通往這一端的 right 都沒了，各自都是對方不在了；dead-name 通知多給的計數有放掉；receive right 不算 handle；right 的形狀不對、host 先走了，都建不起一端。
 
 `tests/it/process_channel.rs`（兩個真的 process 之間，不分平台：只用 `ipc::platform` 的 `spawn`、`inherited`、`child_gone` 和 `Platform` 的函式，每個平台的那一層都要原樣通過；host 是測試裡真的端點，child 是測試把自己再執行一次）：訊息來回；host 的大資料走它建的 region、child 的在沒有 region 時放在訊息裡、給了 region 之後走 region；3 MiB 的字串來回；700 KiB 的管道；child 自己關、host 關、child 直接結束、child 被 kill，另一端都知道，理由對；child 還沒拿它那一端就結束，host 說了 `child_gone` 之後收到對方不在了；child 先睡 1.5 秒不讀，host 連送 3000 則（超過傳輸放得下的），全部照順序回來；child 自己附 handle、送不是訊息的位元組，通道都關掉、什麼都沒交給上層；child 把 host 送的 region map 成可寫會失敗；一條 IO thread（一個迴圈）同時服務四個 child：各自的訊息照順序、大資料各走各的 region，kill 掉一個只有那一條結束，迴圈停下來時其餘的都關掉、child 各自結束。
+
+`src/platform/linux/channel.rs` 的單元測試（只在 Linux；同一個 process 裡的兩端，各有自己的 waiter）：一端寫的另一端照順序讀到，比一次讀的量長的分好幾次、位元組一樣；沒有位元組的寫入不帶走 handle；handle 跟著它那一則到、寫的一端的關掉了、收到的帶 close-on-exec、map 得到同一塊記憶體；16 個 handle 照順序到；17 個不送；對方一次送 17 個和 64 個都當成對方不在了；「可寫」只在寫入被擋之後說一次，沒被擋不說，有 waiter 之前被擋的加入之後說，和位元組同時來時兩個都說；對方不在了排在它送的東西後面，之後的寫入被拒絕（process 沒有被 signal 結束）；shut 的一端對方知道、兩邊都寫不進去、不能再被等；一個 waiter 分得出三條通道，移掉的不再說、它被擋的寫入不動原本的 waiter、可以換一個 waiter；移掉的 socket 真的離開 epoll（看 `/proc/self/fdinfo`）；一條通道只有一個 waiter；打斷叫五次只說一次、從別的 thread 打斷正在等的；waiter 先結束，通道的寫入照常被擋。整個單元測試的 binary 重複跑 3000 次都過。
+
+`tests/it/linux_channel.rs`（只有 Linux 的通道有的：child 怎麼拿到它那一端）：child 只多拿到一個 fd，就是它的通道，host 開著的別的通道和 region 都不在它手上，拿的時候沒有多開或少開 fd，拿到的帶 close-on-exec，第二次拿不到；`Command` 活得比 child 久，host 照樣知道 child 結束了；環境變數沒有、不是數字、是 0 到 2（連 stdin 就是一條 Unix stream socket 時）、沒開著、開著但是 memfd、datagram 的 Unix socket、TCP 和 UDP 的 socket，都拿不到；是 Unix stream socket 就拿得到。
 
 `tests/it/mach_channel.rs`（只有 macOS 的通道有的）：child 假冒四種 kernel 的通知和一種別的 id（都帶著像樣的內容），沒有任何效果；child 送超過 128 MiB 的 out-of-line，通道關掉；host 以為對方是另一個 process 時，child 送的全部被忽略、通道也不關。這兩組加 rendezvous 的重複跑 30 次都過。
 

@@ -386,11 +386,17 @@ fn a_host_and_a_child_talk() {
     let body = pattern(300 * KIB, 1);
     host.link.send(1, &Msg::Body(body.clone())).unwrap();
     assert_eq!(host.next(), (1, Msg::Body(body)));
-    assert_eq!(
-        host.link.regions(),
-        (512 * KIB, 512 * KIB),
-        "made, read by the child, free again"
-    );
+    // The child says it has read the region after it has answered: the
+    // answer is here first.
+    let waited = Instant::now();
+    while host.link.regions() != (512 * KIB, 512 * KIB) {
+        assert!(
+            waited.elapsed() < SOON,
+            "made, read by the child, free again: {:?}",
+            host.link.regions()
+        );
+        thread::sleep(Duration::from_millis(1));
+    }
     // Given a region, the child's go by it too.
     host.link.grant_to_peer(512 * KIB);
     for salt in 2..6 {
@@ -514,9 +520,10 @@ fn what_a_child_may_not_send_closes_its_channel() {
 #[test]
 fn a_child_cant_map_to_write_what_the_host_sends_it() {
     let host = Host::start("map");
-    host.link
-        .send(0, &Msg::Body(pattern(200 * KIB, 3)))
-        .unwrap();
+    // The child goes as soon as it has the region, which is told of
+    // before the message that names it: where a write to a peer that
+    // is gone is refused, the message may not be sent.
+    let _ = host.link.send(0, &Msg::Body(pattern(200 * KIB, 3)));
     let (_, code) = host.end();
     assert_eq!(code, 0, "{WRITABLE}: mapped to write");
 }

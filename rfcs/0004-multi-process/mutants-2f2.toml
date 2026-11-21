@@ -1,0 +1,251 @@
+# Step 2f-2: Linux's channel (`ipc::platform::linux::channel`). A child
+# has its end and nothing else of its host's, and only what is a Unix
+# stream socket named to it is one; bytes and handles go as written, the
+# handles with their message and no more than a message brings; room is
+# told of once after a refusal; a peer gone is told after what it sent; a
+# waiter tells its channels apart and lets go of the ones removed.
+#
+# The last four no test catches (docs/test-gaps.md). Equivalent: Rust
+# starts every program with SIGPIPE ignored, so the write is refused with
+# or without the flag; a socket's error is read once and the end of the
+# stream after it; a read is made only of a socket the epoll said has
+# something, by the one thread that reads it, so it never waits. By
+# review: descriptors the kernel dropped for want of room leave more than
+# a message brings in the room there is (caught by the count), and fewer
+# only when this process has none left to give, which no test makes.
+test = ["sh", "-c", "timeout 60 cargo test -q -p ipc --lib platform::linux::channel && timeout 240 cargo test -q -p ipc --test it _channel"]
+timeout = 900
+
+[[mutant]]
+name = "the child's end stays close-on-exec in the child"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''            Ok(fcntl_setfd(fd, FdFlags::empty())?)'''
+to = '''            Ok(fcntl_setfd(fd, FdFlags::CLOEXEC)?)'''
+
+[[mutant]]
+name = "the child isn't told its end's number"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''    command.env(INHERITED_FD, number.to_string());'''
+to = '''    let _ = number.to_string();'''
+
+[[mutant]]
+name = "the host keeps the child's end"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''    drop(theirs);'''
+to = '''    std::mem::forget(theirs);'''
+
+[[mutant]]
+name = "one of the three a process starts with is taken for an end"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''    if number < FIRST_FREE_FD {
+        return None;
+    }'''
+to = '''    if false {
+        return None;
+    }'''
+
+[[mutant]]
+name = "a socket of another family is taken for an end"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''    if socket_domain(named).ok()? != AddressFamily::UNIX
+        || socket_type'''
+to = '''    if socket_domain(named).is_err()
+        || socket_type'''
+
+[[mutant]]
+name = "a socket that is no stream is taken for an end"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''        || socket_type(named).ok()? != SocketType::STREAM'''
+to = '''        || socket_type(named).is_err()'''
+
+[[mutant]]
+name = "an end is taken twice"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''    if TAKEN.swap(true, Ordering::SeqCst) {'''
+to = '''    if TAKEN.swap(true, Ordering::SeqCst) && false {'''
+
+[[mutant]]
+name = "what a child starts inherits its end"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''    fcntl_setfd(&fd, FdFlags::CLOEXEC).ok()?;'''
+to = '''    fcntl_setfd(&fd, FdFlags::empty()).ok()?;'''
+
+[[mutant]]
+name = "more handles than a message brings are sent"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''        if handles.len() > HANDLES {
+            return Err(WriteError::Closed);'''
+to = '''        if false {
+            return Err(WriteError::Closed);'''
+
+[[mutant]]
+name = "exactly as many handles as a message brings aren't sent"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''        if handles.len() > HANDLES {
+            return Err(WriteError::Closed);'''
+to = '''        if handles.len() >= HANDLES {
+            return Err(WriteError::Closed);'''
+
+[[mutant]]
+name = "a handle sent stays in the writer's hands"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''                    handles.clear();
+                    return Ok(written);'''
+to = '''                    return Ok(written);'''
+
+[[mutant]]
+name = "a refused write asks for no room"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''                    self.0.want_room(true);'''
+to = ''''''
+
+[[mutant]]
+name = "a refused write is the channel closed"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''                Err(Errno::AGAIN) => {'''
+to = '''                Err(Errno::AGAIN) if false => {'''
+
+[[mutant]]
+name = "a write waits for room"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''            let flags = SendFlags::DONTWAIT | SendFlags::NOSIGNAL;'''
+to = '''            let flags = SendFlags::NOSIGNAL;'''
+
+[[mutant]]
+name = "an end shut is still an end to its peer"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''        let _ = shutdown(&self.0.socket, Shutdown::Both);'''
+to = ''''''
+
+[[mutant]]
+name = "an end shut only stops reading"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''        let _ = shutdown(&self.0.socket, Shutdown::Both);'''
+to = '''        let _ = shutdown(&self.0.socket, Shutdown::Read);'''
+
+[[mutant]]
+name = "an end shut only stops writing"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''        let _ = shutdown(&self.0.socket, Shutdown::Both);'''
+to = '''        let _ = shutdown(&self.0.socket, Shutdown::Write);'''
+
+[[mutant]]
+name = "an end shut can be waited on"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''        self.0.shut.store(true, Ordering::SeqCst);'''
+to = ''''''
+
+[[mutant]]
+name = "an interrupt does nothing"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''            let _ = rustix::io::write(&*interrupt, &1u64.to_ne_bytes());'''
+to = ''''''
+
+[[mutant]]
+name = "an interrupt is told of for ever"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''                let _ = rustix::io::read(&*self.interrupt, &mut count);'''
+to = ''''''
+
+[[mutant]]
+name = "an end is served by two waiters"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''        if watch.served.is_some() {
+            return false;
+        }'''
+to = '''        if false {
+            return false;
+        }'''
+
+[[mutant]]
+name = "a write refused before a waiter served the end is forgotten"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''            End::interest(watch.wants_room),'''
+to = '''            End::interest(false),'''
+
+[[mutant]]
+name = "an end isn't told what serves it"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''            watch.served = Some((self.epoll.clone(), key));'''
+to = ''''''
+
+[[mutant]]
+name = "an end removed still names its waiter"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''        end.watch().served = None;'''
+to = ''''''
+
+[[mutant]]
+name = "an end removed stays in the epoll"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''        let _ = epoll::delete(&self.epoll, &end.socket);'''
+to = ''''''
+
+[[mutant]]
+name = "room is told of for ever"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''                end.want_room(false);'''
+to = ''''''
+
+[[mutant]]
+name = "asking for room changes nothing in the epoll"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''        watch.wants_room = wants_room;
+        if let Some((epoll, key)) = &watch.served {'''
+to = '''        watch.wants_room = wants_room;
+        if let Some((epoll, key)) = watch.served.as_ref().filter(|_| false) {'''
+
+[[mutant]]
+name = "room wanted isn't remembered for a waiter to come"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''        watch.wants_room = wants_room;'''
+to = ''''''
+
+[[mutant]]
+name = "what comes in is left to whatever this process starts"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''                RecvFlags::DONTWAIT | RecvFlags::CMSG_CLOEXEC,'''
+to = '''                RecvFlags::DONTWAIT,'''
+
+[[mutant]]
+name = "one handle too many is handed up"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''            if read.flags.contains(ReturnFlags::CTRUNC) || handles.len() > HANDLES {'''
+to = '''            if read.flags.contains(ReturnFlags::CTRUNC) {'''
+
+[[mutant]]
+name = "handles the kernel dropped some of are handed up (by review)"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''            if read.flags.contains(ReturnFlags::CTRUNC) || handles.len() > HANDLES {'''
+to = '''            if handles.len() > HANDLES {'''
+
+[[mutant]]
+name = "the end of the stream is nothing"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''            if read.bytes == 0 {
+                // The end of the stream.
+                break (key, Event::PeerGone, 0);
+            }'''
+to = '''            if read.bytes == 0 {
+                // The end of the stream.
+                continue;
+            }'''
+
+[[mutant]]
+name = "a read waits (equivalent)"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''                RecvFlags::DONTWAIT | RecvFlags::CMSG_CLOEXEC,'''
+to = '''                RecvFlags::CMSG_CLOEXEC,'''
+
+[[mutant]]
+name = "no signal is asked not to come for a peer gone (equivalent)"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''            let flags = SendFlags::DONTWAIT | SendFlags::NOSIGNAL;'''
+to = '''            let flags = SendFlags::DONTWAIT;'''
+
+[[mutant]]
+name = "a read refused isn't the peer gone (equivalent)"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''                Err(_) => break (key, Event::PeerGone, 0),'''
+to = '''                Err(_) => continue,'''
+

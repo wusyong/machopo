@@ -139,7 +139,7 @@ Browser process                                Renderer process
 - 一則訊息是長度、目的地的編號、序號、序列化的內容；有權限的一端還可以附帶 handle。序號現在只用來檢查（每一端照送出的順序加一，收的一端看到不連續就是壞訊息）；留著它，是為了之後訊息分兩條路走時（「之後的可能」的 ring）排得回順序，不用改格式。
 - 上層只經過一個介面送和收訊息（目的地、內容、handle），不知道底下是哪一種傳輸。
 - 三個平台同一個形狀：一個 process 一條 IO thread，等它所有的通道和「喚醒」（第 42 條）；送的時候不等，送不出去的自己排隊。
-  - **Linux**：non-blocking 的 socket，IO thread 用一個 epoll（level-triggered）等所有通道的 socket 和一個喚醒用的 eventfd，每次可讀做一次 `recvmsg`、讀進那條 thread 的 256 KiB 的緩衝區（第 49 條）。寫入被擋時，碰到的那條 thread 自己對 epoll 加上「可寫」，有空間了 IO thread 拿掉（第 48 條）。handle 跟著同一次 `sendmsg` 送出；收的一端處理控制資料被截斷的情況，收到的 fd 用 `MSG_CMSG_CLOEXEC` 設成 close-on-exec。
+  - **Linux**：讀寫都不等的 socket（每次呼叫帶 `MSG_DONTWAIT`；原本寫的是把 socket 設成 non-blocking，兩個都做是多餘的），IO thread 用一個 epoll（level-triggered）等所有通道的 socket 和一個喚醒用的 eventfd，每次可讀做一次 `recvmsg`、讀進那條 thread 的 256 KiB 的緩衝區（第 49 條）。寫入被擋時，碰到的那條 thread 自己對 epoll 加上「可寫」，有空間了 IO thread 拿掉（第 48 條）。handle 跟著同一次 `sendmsg` 送出；收的一端處理控制資料被截斷的情況，並且自己數一次讀到幾個 fd（控制資料的緩衝區會進位，放得下的比一則的上限多），收到的 fd 用 `MSG_CMSG_CLOEXEC` 設成 close-on-exec。
   - **macOS**：一則訊息是一則 Mach 訊息（64 KiB 以上的內容走 out-of-line，第 39 條）；每一則都照 audit token 確認是那個 child 送的（第 22 條）。IO thread 阻塞在 `mach_msg`，等一個 port set（每條通道的 receive port 加一個自己的喚醒用的 port）；送的 timeout 是 0，佇列滿了請 kernel 在有空間時通知。在通往對方的 send right 上登記 dead-name、在自己的 receive port 上登記 no-senders，任一個到了就當成斷線；通知只認 kernel 送的（訊息的 audit token），對方可以送一則 id 相同的訊息來假冒。
   - **Windows**：overlapped 的 `ReadFile` / `WriteFile`，寫入一次只有一筆在進行。IO thread 用一個 I/O completion port 等所有通道的完成和喚醒（不用 `WaitForMultipleObjects`：它一次最多等 64 個，一條 thread 等所有 renderer 不夠）；結束時用 `CancelIoEx` 取消進行中的 I/O 再關 handle。Browser 送 handle 時自己用 `DuplicateHandle` 複製進 renderer 的 process，訊息只帶數值。
 - 序列化：serde 加 postcard（第 22 條）。postcard 自己沒有巢狀深度的上限：會一層包一層的型別（下一條）的解碼自己數深度。內容裡 region 只是編號和長度，和一般的欄位一樣；Browser 新發出的 region 的 handle 不在內容裡，跟著 `ipc` 自己的一則訊息（「這個編號的 region 給你」）走在用到它的訊息前面（第 30 條）。包在 postcard 外面的一層決定一段位元組放訊息裡還是 region，並數巢狀的深度（第 31 條）。
@@ -483,7 +483,7 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
 49. **Linux 的接收緩衝區 256 KiB，`epoll_wait` 一次最多拿 16 個事件**（2026-11-22，2f，「控制通道」）：每次 `Waiter::wait` 做一次 `recvmsg`，讀進那條 thread 的緩衝區借給核心（第 42 條）。
     - **256 KiB，不選 64 KiB**：量到兩者一樣快（一條通道和兩條通道都是），但門檻邊緣的最大內嵌訊息（64 KiB 加上框架的標頭和編碼）比 64 KiB 大一點，64 KiB 要讀兩次。一次讀 256 KiB 估計是十幾 µs（256 KiB 走 region 的來回，含兩次複製，量到 15–19 µs），不算佔住 IO thread。緩衝區一條 thread 一個，記憶體不是考量。
     - **不選從小開始、照訊息的大小變大**（Chromium 的 `channel.cc` 從 4 KiB 開始）：緩衝區只有一個、借出去用，沒讀完的部分核心本來就自己存，變大換不到東西。
-    - **16 個事件**留在 waiter 裡一個一個交出去（`remove` 時丟掉屬於那條通道的）。它也是「別的 thread 打斷等待，最多晚多久被處理」的上限：16 次 `recvmsg`，估計最多約 0.3 ms，沒有量。
+    - **16 個事件**留在 waiter 裡一個一個交出去。原本打算 `remove` 時丟掉屬於那條通道的，沒有做：key 不重用，找不到的本來就略過。它也是「別的 thread 打斷等待，最多晚多久被處理」的上限：16 次 `recvmsg`，估計最多約 0.3 ms，沒有量。
     - 對照 Chromium：`channel_posix.cc` 每次可讀時連續讀，最多 256 KiB（`kMaxBatchReadCapacity`）。
 
 ## 待決定
