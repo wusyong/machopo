@@ -426,9 +426,16 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
     - **不選本機用 Docker 跑 Linux**：寫的當下能跑，但那是虛擬機裡的 aarch64，量到的時間不能當成真的機器的。
     - **不選只靠 CI**：每改一次要 push 一次、等一輪，mutation test 和量測做不了。
     - **CI 要不要加 macOS 和 Windows 的 runner，等 Windows 那一層做的時候一起決定**：CI 現在只有 Ubuntu，macOS 那一層的測試一次都不跑，Windows 的之後也一樣。兩個平台是同一個問題。在那之前記在 `docs/test-gaps.md` 的「缺少的工具和檢查」。
+41. **host 和 child 各拿到一端，三個平台是同樣的三個函式；跨 process 的測試拆成不分平台的和平台自己的**（2026-11-21，第 2 階段的 2e-6，分頭做 2f、2g 之前）：`ipc::platform` 的 `spawn(&mut Command) -> (Child, Channel)`、`inherited() -> Option<Channel>`、`child_gone(pid)`。`browser` 不用知道 macOS 是先啟動 child 才建通道（要 pid：rendezvous 登記用、比對 audit token 用），而 Linux 和 Windows 是先建好、啟動時繼承。
+    - `child_gone` 是 macOS 需要的：child 還沒拿它那一端就結束時，那一端還在 rendezvous 的 server 手上，host 的 no-senders 和 dead-name 都不會來。別的平台 host 在啟動之後就關掉自己手上 child 的那一端，child 結束 kernel 自己會說，那裡它什麼都不做。
+    - **`Platform` 的六個函式三個平台都夠用，簽名不用改**（逐個對過，`progress.md` 的 2e-6）。
+    - **平台要自己守的一條契約**（寫在 `Platform` 的說明裡）：交給端點的 handle 一定是 kernel 搬進來的，不是對方寫的數值。Windows 的 handle 是送的一方用 `DuplicateHandle` 複製進對方、訊息裡帶數值，所以 child（不能附 handle）可以在訊息裡寫任意數值；host 的平台層照著包成 handle 的話，child 就指定了 host 自己的某個 handle。所以 Windows 的通道建立時要知道對方能不能附，不能的話訊息只要說有 handle 就當成對方不在了，數值不看；要有跨 process 的測試（child 送一個假的數值）。macOS 的 right 和 Linux 的 fd 是 kernel 搬的，對方編不出來。
+    - `crates/ipc/tests/it/process_channel.rs` 只用上面三個函式和 `Platform`，Linux 和 Windows 的那一層原樣跑同一份；`crates/ipc/tests/it/mach_channel.rs` 留下只有 macOS 有的（假冒 kernel 的通知、超過上限的 out-of-line、audit token）。
+    - 2f 和 2g 各自記決定時的編號：Linux 從第 42 條起，Windows 從第 52 條起，兩邊都進了 `0004` 之後再順一次。
 
 ## 待決定
 
+- **「多大的資料改走 region」要不要每個平台各一個數字**（2f 量完時）：現在是 `codec` 裡共用的 64 KiB。Linux 上調過緩衝區的 socket 內嵌送 1 MiB 可能和 region 一樣快，門檻也許可以高一點；要的話在 `Platform` 加一個有預設值的常數，這是唯一看得到會動到 `Platform` 本身的地方。
 - **CI 要不要加 macOS、Windows 的 runner**（第 40 條；2g 做的時候）：只跑 `cargo test -p ipc`（不依賴 V8，幾分鐘）。要看的是費用（GitHub 的 macOS runner 是 Linux 的 10 倍、Windows 是 2 倍）和 runner 的系統版本與開發機不同時那幾個實測來的行為還成不成立。
 - **IO thread 上複製大資料的時間**（第 36 條；第 3 階段量捲動時每個 frame 的延遲時一起看）：64 KiB 以上的 `BigBuffer` 在 IO thread 上從 region 複製出來，那一段時間後面的訊息等著。量到是問題時，把複製搬到目標 thread（IO thread 只交出「這一塊的借據」，目標 thread 複製完再還）：線上的格式不變，代價是表跨 thread 共用、多一組 loom 的模型。
 

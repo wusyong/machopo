@@ -1,0 +1,38 @@
+# Step 2e-6: the way a host starts a child with a channel, the same on
+# every platform (`ipc::platform`'s `spawn`, `inherited`, `child_gone`;
+# macOS's implementation). The child gets the end made for it, and a
+# child gone before it took its end is heard of.
+test = ["sh", "-c", "timeout 200 cargo test -q -p ipc --test it -- process_channel mach_channel"]
+timeout = 900
+
+[[mutant]]
+name = "the child's end isn't left for it"
+file = "crates/ipc/src/platform/macos/channel.rs"
+from = '''    server.register(child.id(), rights);
+    Ok((child, channel))'''
+to = '''    drop((server, rights));
+    Ok((child, channel))'''
+
+[[mutant]]
+name = "the host takes its child to be another process"
+file = "crates/ipc/src/platform/macos/channel.rs"
+from = '''    let Some((channel, rights)) = Channel::pair(child.id()) else {'''
+to = '''    let Some((channel, rights)) = Channel::pair(std::process::id()) else {'''
+
+[[mutant]]
+name = "the child takes its host to be itself"
+file = "crates/ipc/src/platform/macos/channel.rs"
+from = '''    Channel::from_rights(rights, host)
+}'''
+to = '''    Channel::from_rights(rights, std::process::id())
+}'''
+
+[[mutant]]
+name = "a child gone leaves its end held for it"
+file = "crates/ipc/src/platform/macos/channel.rs"
+from = '''        server.forget(pid);
+    }
+}'''
+to = '''        let _ = (server, pid);
+    }
+}'''

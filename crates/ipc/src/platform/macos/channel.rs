@@ -15,14 +15,18 @@
 //! sent it. A message with a notification's id from anyone else is
 //! nothing.
 
+use std::io;
+use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
+use std::time::Duration;
 
 use mach2::notify::{MACH_NOTIFY_DEAD_NAME, MACH_NOTIFY_NO_SENDERS, MACH_NOTIFY_SEND_POSSIBLE};
 
 use super::memory::{self, Mapping};
 use super::message::{self, Buffer, ReceiveError, SendError, Sender};
 use super::port::{PortSet, ReceiveRight, Right, SendRight};
+use super::rendezvous::{self, Server};
 use crate::core::channel::{Transport, WriteError};
 use crate::core::frame::{HEADER_LEN, MAX_PAYLOAD_LEN};
 use crate::endpoint::{Event, Platform};
@@ -42,6 +46,48 @@ fn longest_message() -> usize {
     usize::try_from(MAX_PAYLOAD_LEN)
         .unwrap_or(usize::MAX)
         .saturating_add(HEADER_LEN)
+}
+
+/// How long a child waits for its end: a host registers it as soon as the
+/// child is started, so the wait is the host's being busy.
+const INHERIT_WAIT: Duration = Duration::from_secs(30);
+
+/// Starts `command` as a child that has the other end of a new channel,
+/// which it takes with [`inherited`]. A child can't inherit a Mach port:
+/// its end waits for it at this process's rendezvous server, under its
+/// pid.
+///
+/// If the child goes without taking its end, nothing tells this end so
+/// (the rights it was to take are still held for it): whoever sees the
+/// child exit calls [`child_gone`].
+pub fn spawn(command: &mut Command) -> io::Result<(Child, Channel)> {
+    let server =
+        Server::global().ok_or_else(|| io::Error::other("the rendezvous server couldn't start"))?;
+    let mut child = command.spawn()?;
+    let Some((channel, rights)) = Channel::pair(child.id()) else {
+        // No ports: the child would wait for an end that isn't coming.
+        let _ = child.kill();
+        return Err(io::Error::other("a Mach port couldn't be made"));
+    };
+    server.register(child.id(), rights);
+    Ok((child, channel))
+}
+
+/// In a process started by [`spawn`]: its end of the channel. `None`
+/// when the parent has none for it.
+pub fn inherited() -> Option<Channel> {
+    let host = std::os::unix::process::parent_id();
+    let rights = rendezvous::fetch(host, INHERIT_WAIT).ok()?;
+    Channel::from_rights(rights, host)
+}
+
+/// The child `pid` is gone: the end it never took is let go, which the
+/// host's own end then hears of as its peer gone. Nothing, for a child
+/// that took its end.
+pub fn child_gone(pid: u32) {
+    if let Some(server) = Server::global() {
+        server.forget(pid);
+    }
 }
 
 /// Who the peer is known to be.

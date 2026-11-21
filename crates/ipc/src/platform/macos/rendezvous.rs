@@ -12,7 +12,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::CString;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use mach2::bootstrap::{bootstrap_check_in, bootstrap_look_up, bootstrap_port};
@@ -89,6 +89,13 @@ impl Server {
             .spawn(move || serve(&port, &serving))
             .ok()?;
         Some(Self { registry })
+    }
+
+    /// This process's server, started the first time it is asked for.
+    /// `None` when it couldn't be (as [`Server::start`]).
+    pub fn global() -> Option<&'static Self> {
+        static SERVER: OnceLock<Option<Server>> = OnceLock::new();
+        SERVER.get_or_init(Self::start).as_ref()
     }
 
     /// The rights the child `pid` gets when it asks, in this order. It is
@@ -242,14 +249,11 @@ pub fn fetch(host_pid: u32, wait: Duration) -> Result<Vec<Right>, FetchError> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::OnceLock;
-
     use super::*;
 
     /// The test process's one server.
     fn server() -> &'static Server {
-        static SERVER: OnceLock<Server> = OnceLock::new();
-        SERVER.get_or_init(|| Server::start().expect("the rendezvous server checks in"))
+        Server::global().expect("the rendezvous server checks in")
     }
 
     /// A send right to this process's own server.

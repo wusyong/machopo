@@ -26,8 +26,9 @@
 | 2e-3：macOS 的 Mach 訊息和 right（最底下一層）、rendezvous（Browser 的 server、child 的查詢；測試自己啟動 child process）。順序和 2e-4 對調過（第 38 條） | 完成 | 2026-11-21 |
 | 2e-4：macOS 的通道（Mach 訊息的 `Platform`、等 port set、dead-name 和 no-senders、audit token；跨 process 的測試）；大訊息走 out-of-line（第 39 條） | 完成 | 2026-11-21 |
 | 2e-5：2e 的檢查和文件；Linux、Windows 在這台機器測不到的部分怎麼處理（第 40 條） | 完成 | 2026-11-21 |
+| 2e-6：三個平台共用的啟動入口（`ipc::platform` 的 `spawn`、`inherited`、`child_gone`）；跨 process 的測試拆成不分平台的和 macOS 自己的；`Platform` 夠不夠用對過一次（第 41 條） | 完成 | 2026-11-21 |
 | 2f：Linux 的平台層；量 socket 的緩衝區和大的資料的門檻。在 Linux 的機器上做（第 40 條） | 未開始 | |
-| 2g：Windows 的平台層；量 pipe 的緩衝區。在 Windows 的機器上做（第 40 條）；做的時候決定 CI 要不要加 macOS、Windows 的 runner | 未開始 | |
+| 2g：Windows 的平台層；量 pipe 的緩衝區。在 Windows 的機器上做（第 40 條）；對方不能附 handle 時不看訊息裡的 handle 數值（第 41 條的契約，要有跨 process 的測試）；做的時候決定 CI 要不要加 macOS、Windows 的 runner | 未開始 | |
 | 2h：第 2 階段的檢查、`soundness.md`、`test.py` 的指令、文件；把 `test.py ipc` 的每一項排進每週的 CI（2a 起在本機跑） | 未開始 | |
 | 3：啟動 child process | 未開始 | |
 
@@ -315,4 +316,33 @@
 - **這一段沒有程式**。2e 的每一段各自跑過它的檢查（上面各節）；整個 workspace 的測試、`cargo fmt --check`、workspace 的 clippy 照規矩在第 2 階段結束（2h）跑。
 - **branch**：`0004` 在 2026-11-21 推到 origin（到 2e-4 為止），給另外兩台機器 pull。
 - **給在 Linux、Windows 上接手的人**：平台層要實作的只有 `ipc::endpoint::Platform`（`write`、`wake`、`wait`、`map`、`create`、`shut`）；`ipc::platform::macos::channel` 是一個完整的例子，`ipc::local` 是最小的。`tests/it/mach_channel.rs` 的測試不分平台的部分（host 是真的端點、child 是測試把自己再執行一次）可以照著寫；child 怎麼拿到它那一端在 Linux 是繼承 fd、在 Windows 是繼承 handle，不需要 rendezvous。
+
+### 2e-6：共用的啟動入口，和 `Platform` 夠不夠用（2026-11-21，macOS 26、Apple M4）
+
+- **為什麼有這一段**：2f 和 2g 要分頭在兩台機器上同時做。分頭之前先看介面夠不夠用，把兩邊都會用到的東西先做好、推上去，免得做到一半才撞。
+- **決定**：「已決定的事項」第 41 條；「待決定」多一條（門檻要不要每個平台各一個）。
+- **`Platform` 逐個對過**（結論：六個函式都夠用，簽名不用改）：
+
+  | 函式 | Linux | Windows |
+  | --- | --- | --- |
+  | `write` | 不等的 `sendmsg`，fd 用 `SCM_RIGHTS`；可以只收一部分 | overlapped 的 `WriteFile`，一次一筆：沒有進行中的就整則收下，有的話回 `WouldBlock` |
+  | `wake` | eventfd | `SetEvent` |
+  | `wait` | `poll` socket 和 eventfd，讀進自己的緩衝區再借出去 | 等「讀完成、寫完成、叫醒」三個 event |
+  | `map` | `mmap` | `MapViewOfFile` |
+  | `create` | `memfd_create` 加 seal，給對方唯讀的用 `F_SEAL_FUTURE_WRITE` | `CreateFileMappingW`，給對方唯讀的是另一個只有讀權限的 handle |
+  | `shut` | `shutdown(SHUT_RDWR)` | `CancelIoEx` 再關 |
+
+- **實作時要注意的**（不是介面的事）：
+  - Linux：`recvmsg` 的控制緩衝區要放得下 16 個 fd，被截斷（`MSG_CTRUNC`）當成對方不在了，收到的 fd 設 close-on-exec；`map` 前用 `fstat` 確認大小（map 到不夠大的檔案是當掉，不是錯誤）；寫入被擋之後才等「可寫」，不然 `poll` 一直醒。
+  - Windows：overlapped 的寫入沒有當場完成的那一則要自己留一份到完成；handle 的數值走在位元組裡，平台層要有自己的一層包裝，收的一端要先把包裝收齊才借得出位元組；第 41 條的契約。
+- **做了什麼**：`ipc::platform` 的 `spawn`、`inherited`、`child_gone` 和 `Channel`（macOS 的實作在 `platform::macos::channel`）；`rendezvous::Server::global()`（一個 process 一個）；`Platform` 的說明多一條契約；`tests/it/process_channel.rs`（不分平台，8 個測試）和瘦下來的 `tests/it/mach_channel.rs`（3 個）。
+- **寫的時候發現的**：child 還沒拿它那一端就結束時，macOS 的 host 永遠不會知道（那一端還替它留著，兩種通知都不來）。這是第 3 階段 `browser` 一定會碰到的（child 啟動就當掉），所以有了 `child_gone` 和它的測試。
+- **mutation test**（`mutants-2e6.toml`）4 個，全部抓到（child 那一端沒有留給它、host 把 child 當成別的 process、child 把 host 當成自己、`child_gone` 什麼都不做）。跑完確認檔案都還原了。
+- **跑過的檢查**：`cargo test -p ipc`（單元 90 個、整合 72 個）；三組跨 process 的測試重複跑 30 次、整個整合測試 15 次都過；`cargo clippy -p ipc --all-targets -- -D warnings`（三種 cfg）、`cargo fmt --check`；`sanity.py` 的 7 項。
+- **給在 Linux、Windows 上接手的人**（取代 2e-5 那一節的同一段）：
+  - 各開一個從 `0004` 分出去的 branch，做完 rebase 到最新的 `0004` 再 fast-forward。
+  - 要寫的：`platform/<系統>/` 底下實作 `Platform` 的通道，和那個系統的 `spawn`、`inherited`、`child_gone`；在 `platform/mod.rs` 照 macOS 的那幾行 re-export；`tests/it/main.rs` 裡 `process_channel` 的 `cfg` 加上自己的系統。`process_channel.rs` 不用改就要過。
+  - 那個系統自己才有的行為，另外寫一個測試檔（像 `mach_channel.rs`）。
+  - 要動到共用的東西（`endpoint.rs` 的 `Platform`、`codec` 的門檻）時，單獨做成一個小 commit 先推上 `0004`，另一邊 rebase，不要兩邊各改各的。
+  - 決定的編號：Linux 從第 42 條、Windows 從第 52 條起。
 

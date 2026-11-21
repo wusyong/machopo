@@ -5,7 +5,6 @@
 //! test's port, where the kernel says which process wrote.
 
 use std::process::{Child, Command, Stdio};
-use std::sync::OnceLock;
 use std::time::Duration;
 
 use ipc::platform::macos::message::{self, Buffer, Received, To};
@@ -17,9 +16,8 @@ const ID: i32 = 0x7e57;
 const SOON: Option<Duration> = Some(Duration::from_secs(10));
 
 /// The test process's one server.
-pub(crate) fn server() -> &'static Server {
-    static SERVER: OnceLock<Server> = OnceLock::new();
-    SERVER.get_or_init(|| Server::start().expect("the rendezvous server checks in"))
+fn server() -> &'static Server {
+    Server::global().expect("the rendezvous server checks in")
 }
 
 fn spawn(role: &str) -> Child {

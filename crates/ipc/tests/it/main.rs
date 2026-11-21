@@ -17,6 +17,9 @@ mod frame_fuzz;
 #[cfg(target_os = "macos")]
 mod mach_channel;
 mod pipe_fuzz;
+// Wherever there is a platform's channel: macOS, for now.
+#[cfg(target_os = "macos")]
+mod process_channel;
 mod region_fuzz;
 #[cfg(target_os = "macos")]
 mod rendezvous;

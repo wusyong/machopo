@@ -45,6 +45,14 @@ pub enum Event {
 /// What a platform does for an endpoint, and nothing else: it moves bytes
 /// and handles, waits, and maps memory. What to make of any of it is the
 /// endpoint's.
+///
+/// One thing a platform must see to itself: a handle it hands up is one
+/// the kernel moved into this process for the message, never a value the
+/// peer wrote. Where handles cross as values in the bytes (a system
+/// where the sender duplicates them into the receiver), an end whose
+/// peer may attach none takes any message that claims one as the peer
+/// gone, without looking at the value: a value is a handle of this
+/// process's own, of the peer's choosing.
 pub trait Platform: Transport + Send + Sync + 'static
 where
     Self::Handle: Send,

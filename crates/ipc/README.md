@@ -261,6 +261,23 @@ impl Handler<P> for MyHandler {
 
 每個作業系統為通道做的事（Chromium 的 `mojo/core/platform` 和 `base/memory/platform_shared_memory_region_*`）：搬位元組和 handle、等、建和 map 共用記憶體。裡面沒有判斷，薄到可以逐行看：系統呼叫是工具看不進去的。
 
+host 和 child 怎麼各拿到一端，每個平台都是同樣的三個函式：
+
+```rust
+// host
+let (child, channel) = ipc::platform::spawn(&mut command)?;   // channel：ipc::platform::Channel
+let (link, endpoint) = ipc::endpoint::endpoint(channel, config);
+// ...看到 child 結束時：
+ipc::platform::child_gone(child.id());
+
+// child
+let channel = ipc::platform::inherited()?;
+```
+
+- `spawn` 啟動 child，回來 child 和 host 這一端。child 那一端怎麼過去是平台的事：macOS 上 child 繼承不了 port，所以留在這個 process 的 rendezvous server（`Server::global()`）等它來拿；能繼承 fd 或 handle 的平台在啟動時就交過去。
+- `child_gone`：child 還沒拿它那一端就結束時，macOS 的 kernel 不會告訴 host（那一端還替它留著），要 host 自己說；說了之後 host 這一端就收到「對方不在了」。拿過的 child、kernel 自己會說的平台，它什麼都不做。
+- **平台要自己守的一條**（`Platform` 的說明）：交給端點的 handle 一定是 kernel 為這則訊息搬進來的，不能是對方寫的數值。handle 以數值走在位元組裡的平台（送的一方把它複製進收的一方），對方不能附 handle 時，只要訊息說它有 handle 就當成對方不在了，那個數值不看：數值指的是這個 process 自己的 handle，而且是對方挑的。
+
 ### `platform::macos::memory`
 
 共用記憶體是 Mach 的 memory entry：一個 port 代表那塊記憶體，沒有名字、沒有檔案描述子，也不能改大小。
@@ -428,7 +445,9 @@ python3 scripts/test.py ipc tla      # crates/ipc/tla/ 的三個 TLA+ 模型（T
 
 `src/platform/macos/channel.rs` 的單元測試（兩端在同一個 process 裡；每個測試自己設 10 秒的時限）：一端寫的另一端整則拿到（內嵌和 out-of-line 的長度都有）；handle 跟著訊息、送出去之後不在寫的人手上、收的一端 map 得到同一塊；叫醒 20 次只報一次、之後下一件事照常；關掉的一端送不出去、對方先收到關之前送的、再被告知；一端 drop 就是對方不在了；佇列滿了回 `WouldBlock`、帶的 handle 還在、對方讀走一則就收到 `Writable`、同一個寫入成功；只有對方的 port 死了、或只有通往這一端的 right 都沒了，各自都是對方不在了；dead-name 通知多給的計數有放掉；receive right 不算 handle；right 的形狀不對、host 先走了，都建不起一端。
 
-`tests/it/mach_channel.rs`（只在 macOS；host 是測試裡真的端點，child 是測試把自己再執行一次、經過 rendezvous 拿到它那一端）：訊息來回；host 的大資料走它建的 region、child 的在沒有 region 時走訊息（out-of-line）、給了 region 之後走 region；3 MiB 的字串來回；700 KiB 的管道；child 自己關、host 關、child 直接結束、child 被 kill，另一端都知道，理由對；child 先睡 1.5 秒不讀，host 連送 3000 則（超過 port 的佇列），全部照順序回來；child 假冒四種 kernel 的通知和一種別的 id（都帶著像樣的內容），沒有任何效果；child 自己附 handle、送不是訊息的位元組、送超過 128 MiB 的 out-of-line，通道都關掉；child 把 host 送的 region map 成可寫會失敗、唯讀可以；host 以為對方是另一個 process 時，child 送的全部被忽略、通道也不關。這一組重複跑 30 次都過。
+`tests/it/process_channel.rs`（兩個真的 process 之間，不分平台：只用 `ipc::platform` 的 `spawn`、`inherited`、`child_gone` 和 `Platform` 的函式，每個平台的那一層都要原樣通過；host 是測試裡真的端點，child 是測試把自己再執行一次）：訊息來回；host 的大資料走它建的 region、child 的在沒有 region 時放在訊息裡、給了 region 之後走 region；3 MiB 的字串來回；700 KiB 的管道；child 自己關、host 關、child 直接結束、child 被 kill，另一端都知道，理由對；child 還沒拿它那一端就結束，host 說了 `child_gone` 之後收到對方不在了；child 先睡 1.5 秒不讀，host 連送 3000 則（超過傳輸放得下的），全部照順序回來；child 自己附 handle、送不是訊息的位元組，通道都關掉、什麼都沒交給上層；child 把 host 送的 region map 成可寫會失敗。
+
+`tests/it/mach_channel.rs`（只有 macOS 的通道有的）：child 假冒四種 kernel 的通知和一種別的 id（都帶著像樣的內容），沒有任何效果；child 送超過 128 MiB 的 out-of-line，通道關掉；host 以為對方是另一個 process 時，child 送的全部被忽略、通道也不關。這兩組加 rendezvous 的重複跑 30 次都過。
 
 `src/platform/macos/rendezvous.rs` 的單元測試：不是問題的訊息（id 不對、沒有回答用的 port、有內容）不被回答、回答的 right 被放掉，登記的東西還在；真的問題拿得到，而且只有一次。
 
