@@ -394,8 +394,20 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
 34. **TLA+ 是三個小模型，不是一個**（2026-11-21，2d，`crates/ipc/tla/`）：`Channel.tla`（性質 5、6、7）、`Regions.tla`（性質 4，和「先告知再提到」「對方讀到才還」）、`Pipe.tla`（性質 9 和不會卡住）。每個模型自己帶著「照順序、隨時可以斷」的通道。
     - **不選一個模型**：狀態數是各部分相乘，只能用很小的參數、每一部分都檢查得淺；region 和管道在核心裡沒有共用的狀態，交集只有同一條通道和同一次斷線。
     - 每個模型照 elise 的做法：先成立，再把每一部分拿掉、確認 TLC 找得到列出來的反例。Mojo 和 ipcz 沒有公開的形式化模型可以對照。
+35. **IO thread 的迴圈由 `ipc` 提供**（2026-11-21，第 2 階段的 2e-1，`ipc::endpoint`）：上層建好 thread、呼叫 `Endpoint::run(handler)`，它阻塞到通道結束、回傳理由；`handler` 只有「收到一則訊息」一個入口。迴圈寫在一個平台的介面上（`Platform`：寫、叫醒、等、把 handle 變成記憶體、建 region、關掉），三個平台和兩種 process 共用，用同一個 process 裡的平台（`ipc::local`）在測試、Miri 和 fuzz 底下跑。「讀到就餵、這一批讀過的 region 還回去、建好要給對方的 region、管道有多少空間送多少、寫出等著的」這個順序因此只有一份。
+    - **不選 `ipc` 只給零件、`browser` 和 `renderer` 各自寫迴圈**：同一段順序寫兩次，差一步就是訊息卡住或 region 不還，而且只有跨 process 的測試看得到；平台的等待方式漏到上層。
+    - 對照 Chromium：`mojo::core::Channel` 把自己登記到 IO thread 的 `MessagePumpForIO` 上，因為它的 IO thread 同時服務所有 renderer 的通道和別的 I/O；machopo 是一條 IO thread 對一條通道。「迴圈不寫死成只等一條來源」（第 19 條）由平台的 `wait` 滿足。
+    - 實作時加的：通道結束時端點呼叫平台的 `shut`，把傳輸關掉，對方的平台才知道（只把這一端標成結束的話，還拿著 `Link` 的 thread 會讓傳輸一直開著；兩條 thread 的測試卡住才看出來）。
+    - 2e 分成五段（`progress.md`）：端點、macOS 的共用記憶體、macOS 的通道、rendezvous、檢查和文件。端點放最前面：它和平台無關，做完之後每個平台的那一層只剩搬位元組和 map 記憶體。
+36. **訊息的型別在 IO thread 上解，由上層指定**（2026-11-21，2e-1）：`handler` 收到的物件有 `destination()` 和 `decode::<T>()`，上層看目的地決定型別，解出來的值再放進目標 thread 的佇列；`decode` 的錯誤傳回去就是壞訊息。訊息裡提到的 region 在這時候複製出來，一批讀完送一則 `Released`，所以表只在 IO thread 上。送的一側對稱：`Link::send(destination, &value)`。
+    - **不選端點綁一個訊息型別**：一條通道的訊息要先合成一個大的 enum，目的地的編號就多餘了（它是留給訊息之後分兩條路走的，第 19 條）。
+    - **不選 IO thread 只轉送位元組、目標 thread 自己解**（Mojo 的做法）：region 要在解的時候讀，表就得跨 thread 共用，「讀完才還」散到各個 thread。Mojo 做得到是因為 `BigBuffer` 的共用記憶體每筆一塊、跟著訊息走、不用還。
+    - **代價**：大資料複製出來的那一次在 IO thread 上（1 MiB 約 18 µs、8 MiB 約 150 µs，第 22 條的數字的一半），排在後面的訊息要等。總時間還是三種做法裡最短的（第 22 條量的就是這個做法）。對輸入延遲的影響沒有量過，記在「待決定」。
+    - 管道的讀端怎麼回報不另外定：RFC 的「導覽的 body 的管道」已經寫明 renderer 看到的是同一個 `Consumer`，所以 `Consumer` 多一個「讀了多少」的掛勾，跨 process 時由端點掛上。
 
 ## 待決定
+
+- **IO thread 上複製大資料的時間**（第 36 條；第 3 階段量捲動時每個 frame 的延遲時一起看）：64 KiB 以上的 `BigBuffer` 在 IO thread 上從 region 複製出來，那一段時間後面的訊息等著。量到是問題時，把複製搬到目標 thread（IO thread 只交出「這一塊的借據」，目標 thread 複製完再還）：線上的格式不變，代價是表跨 thread 共用、多一組 loom 的模型。
 
 排程之前：
 

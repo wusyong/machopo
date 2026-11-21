@@ -233,6 +233,7 @@ dependencies = [
  "bytes",
  "ipc",
  "libfuzzer-sys",
+ "postcard",
  "serde",
 ]
 

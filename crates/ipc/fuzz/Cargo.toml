@@ -12,14 +12,21 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 ipc = { path = ".." }
-# What the regions' and the pipes' checks name (`tests/it/region_fuzz.rs`,
-# `tests/it/pipe_fuzz.rs`).
+# What the checks name besides `ipc` (`tests/it/*_fuzz.rs`).
+postcard = { version = "1", default-features = false, features = ["alloc"] }
 bytes = { version = "1", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 
 [[bin]]
 name = "frame"
 path = "fuzz_targets/frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "endpoint"
+path = "fuzz_targets/endpoint.rs"
 test = false
 doc = false
 bench = false

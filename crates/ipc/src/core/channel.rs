@@ -10,6 +10,7 @@
 
 use std::collections::VecDeque;
 
+use super::control::CONTROL_DESTINATION;
 use super::frame::{BadMessage, Decoder, EncodeError, Encoder, Message};
 use super::sync::{Arc, Mutex, MutexGuard, lock};
 
@@ -66,7 +67,8 @@ pub trait Transport {
 #[derive(Debug, Clone, Copy)]
 pub struct Config {
     /// How many destinations this end has: a message for one from this
-    /// number up is a bad message.
+    /// number up is a bad message, but for the core's own
+    /// ([`CONTROL_DESTINATION`]).
     pub destinations: u32,
     /// This end may attach handles to what it sends.
     pub may_attach: bool,
@@ -338,7 +340,8 @@ impl<T: Transport> Receiver<T> {
         }
         let destinations = self.destinations;
         let fed = self.decoder.try_feed(bytes, handles, |message| {
-            if message.destination >= destinations {
+            // The core's own messages are every end's.
+            if message.destination >= destinations && message.destination != CONTROL_DESTINATION {
                 return Err(BadMessage::UnknownDestination {
                     destination: message.destination,
                 });

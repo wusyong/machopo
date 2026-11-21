@@ -1,0 +1,361 @@
+# Step 2e-1: a whole endpoint (`ipc::endpoint`) over the platform within
+# one process (`ipc::local`), and the read observer of a data pipe's
+# consumer. Regions are told of before they are named and given back once
+# read, pipes go as far as their readers have room, and what a peer that
+# isn't ours sends closes the channel.
+test = ["sh", "-c", "timeout 60 cargo test -q -p ipc"]
+timeout = 900
+
+[[mutant]]
+name = "a child makes regions"
+file = "crates/ipc/src/endpoint.rs"
+from = '''        if !self.inner.config.may_attach {
+            return None;
+        }
+        let class = class_len(len)?;
+        if self.pool'''
+to = '''        let class = class_len(len)?;
+        if self.pool'''
+
+[[mutant]]
+name = "the limit of regions is ignored"
+file = "crates/ipc/src/endpoint.rs"
+from = '''        if self.pool.total().checked_add(class)? > self.inner.config.region_limit {
+            return None;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a host right at its limit makes no region"
+file = "crates/ipc/src/endpoint.rs"
+from = '''        if self.pool.total().checked_add(class)? > self.inner.config.region_limit {'''
+to = '''        if self.pool.total().checked_add(class)? >= self.inner.config.region_limit {'''
+
+[[mutant]]
+name = "every region has the same number"
+file = "crates/ipc/src/endpoint.rs"
+from = '''        self.pool.add(number, memory).ok()?;
+        *self.next_region = after;'''
+to = '''        self.pool.add(number, memory).ok()?;'''
+
+[[mutant]]
+name = "a new region isn't told to the peer"
+file = "crates/ipc/src/endpoint.rs"
+from = '''        self.inner.control(&granted, vec![handle]).ok()
+    }
+}
+
+impl<P: Platform> Place'''
+to = '''        drop((granted, handle));
+        Some(())
+    }
+}
+
+impl<P: Platform> Place'''
+
+[[mutant]]
+name = "a host's own region is told as one the peer writes"
+file = "crates/ipc/src/endpoint.rs"
+from = '''            len: u32::try_from(class).ok()?,
+            writable: false,'''
+to = '''            len: u32::try_from(class).ok()?,
+            writable: true,'''
+
+[[mutant]]
+name = "no region is made when none is free"
+file = "crates/ipc/src/endpoint.rs"
+from = '''                self.grow(bytes.len())?;
+                self.pool.put(bytes)?'''
+to = '''                self.pool.put(bytes)?'''
+
+[[mutant]]
+name = "what was placed for an unsent message stays out"
+file = "crates/ipc/src/endpoint.rs"
+from = '''            for number in std::mem::take(&mut placing.placed) {
+                placing.unplace(number);
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "a pipe is fed before it is opened"
+file = "crates/ipc/src/endpoint.rs"
+from = '''        if let Err(error) = self
+            .0
+            .control(&Control::PipeOpened { pipe, capacity }, Vec::new())
+        {
+            out.pipes.end(pipe);
+            return Err(error);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a source with more to send wakes nobody"
+file = "crates/ipc/src/endpoint.rs"
+from = '''        source.watch(move || sender.transport().wake());'''
+to = '''        drop(sender);'''
+
+[[mutant]]
+name = "a reader's reads are never reported"
+file = "crates/ipc/src/endpoint.rs"
+from = '''        if let Some(count) = self.report.read(count) {'''
+to = '''        if let Some(count) = self.report.read(count).filter(|_| false) {'''
+
+[[mutant]]
+name = "a reader that goes says nothing"
+file = "crates/ipc/src/endpoint.rs"
+from = '''        if !self.done {
+            let _ = self'''
+to = '''        if false {
+            let _ = self'''
+
+[[mutant]]
+name = "a pipe taken can be taken again"
+file = "crates/ipc/src/endpoint.rs"
+from = '''        Some(self.arrived.swap_remove(i).1)'''
+to = '''        let _ = i;
+        None'''
+
+[[mutant]]
+name = "a channel that is over goes on"
+file = "crates/ipc/src/endpoint.rs"
+from = '''        if gone.is_some() {
+            self.over();
+            return gone;
+        }'''
+to = '''        if gone.is_some() {
+            return gone;
+        }'''
+
+[[mutant]]
+name = "a peer's going isn't looked at"
+file = "crates/ipc/src/endpoint.rs"
+from = '''            Event::PeerGone => self.receiver.peer_gone(),'''
+to = '''            Event::PeerGone => None,'''
+
+[[mutant]]
+name = "a wake isn't looked at"
+file = "crates/ipc/src/endpoint.rs"
+from = '''            Event::Woken => self.receiver.woken(),'''
+to = '''            Event::Woken => None,'''
+
+[[mutant]]
+name = "regions asked for the peer aren't made"
+file = "crates/ipc/src/endpoint.rs"
+from = '''        self.grant();
+        self.feed_pipes();'''
+to = '''        self.feed_pipes();'''
+
+[[mutant]]
+name = "pipes aren't fed"
+file = "crates/ipc/src/endpoint.rs"
+from = '''        self.grant();
+        self.feed_pipes();'''
+to = '''        self.grant();'''
+
+[[mutant]]
+name = "what waits isn't written when there is room"
+file = "crates/ipc/src/endpoint.rs"
+from = '''        self.inner.sender.flush();
+        None'''
+to = '''        None'''
+
+[[mutant]]
+name = "a pipe's sources stay after the channel is over"
+file = "crates/ipc/src/endpoint.rs"
+from = '''        out.feeding.clear();
+        out.to_grant.clear();'''
+to = '''        out.to_grant.clear();'''
+
+[[mutant]]
+name = "the transport isn't shut when the channel is over"
+file = "crates/ipc/src/endpoint.rs"
+from = '''        drop(out);
+        self.inner.platform().shut();'''
+to = '''        drop(out);'''
+
+[[mutant]]
+name = "a message with handles is handed up"
+file = "crates/ipc/src/endpoint.rs"
+from = '''            if !message.handles.is_empty() {
+                return Err(BadMessage::Rejected);
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "regions read aren't given back"
+file = "crates/ipc/src/endpoint.rs"
+from = '''        if !read.is_empty() {
+            let _ = inner.control(&Control::Released(read), Vec::new());
+        }'''
+to = '''        drop(read);'''
+
+[[mutant]]
+name = "a child grants regions"
+file = "crates/ipc/src/endpoint.rs"
+from = '''        if !self.inner.config.may_attach {
+            return None;
+        }
+        let class = class_len(len)?;
+        let granted_len'''
+to = '''        let class = class_len(len)?;
+        let granted_len'''
+
+[[mutant]]
+name = "a region for the peer to write is told as one to read"
+file = "crates/ipc/src/endpoint.rs"
+from = '''            len: granted_len,
+            writable: true,'''
+to = '''            len: granted_len,
+            writable: false,'''
+
+[[mutant]]
+name = "a region granted to the peer isn't in the table"
+file = "crates/ipc/src/endpoint.rs"
+from = '''        if !self.table.insert(number, memory) {
+            return None;
+        }'''
+to = '''        drop(memory);'''
+
+[[mutant]]
+name = "regions granted to the peer share a number"
+file = "crates/ipc/src/endpoint.rs"
+from = '''        out.next_region = after;
+        let granted'''
+to = '''        let _ = after;
+        let granted'''
+
+[[mutant]]
+name = "a pipe's bytes go past its reader's room"
+file = "crates/ipc/src/endpoint.rs"
+from = '''                let room = pipes.room(pipe);
+                if room == 0 {'''
+to = '''                let room = pipes.room(pipe).max(1024);
+                if room == 0 {'''
+
+[[mutant]]
+name = "a pipe out of room is dropped"
+file = "crates/ipc/src/endpoint.rs"
+from = '''                    return pipes.open_pipes().any(|open| open == pipe);'''
+to = '''                    return false;'''
+
+[[mutant]]
+name = "what a pipe sent isn't counted"
+file = "crates/ipc/src/endpoint.rs"
+from = '''                        let counted = pipes.sent(pipe, bytes.len());'''
+to = '''                        let counted = true;'''
+
+[[mutant]]
+name = "a source that is done doesn't end its pipe"
+file = "crates/ipc/src/endpoint.rs"
+from = '''                        pipes.end(pipe);
+                        let _ = self.inner.control(&Control::PipeEnded { pipe }, Vec::new());
+                        return false;'''
+to = '''                        pipes.end(pipe);
+                        return false;'''
+
+[[mutant]]
+name = "an empty source is dropped"
+file = "crates/ipc/src/endpoint.rs"
+from = '''                    Read::Empty => return true,'''
+to = '''                    Read::Empty => return false,'''
+
+[[mutant]]
+name = "a control message's handles aren't counted"
+file = "crates/ipc/src/endpoint.rs"
+from = '''    if message.handles.len() != control.handles() {
+        return Err(BadMessage::Rejected);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "a region that doesn't map is let go"
+file = "crates/ipc/src/endpoint.rs"
+from = '''            let memory = inner
+                .platform()
+                .map(handle, len, writable)
+                .ok_or(BadMessage::Rejected)?;'''
+to = '''            let Some(memory) = inner.platform().map(handle, len, writable) else {
+                return Ok(());
+            };'''
+
+[[mutant]]
+name = "a region to write goes in the table"
+file = "crates/ipc/src/endpoint.rs"
+from = '''            let kept = if writable {'''
+to = '''            let kept = if !writable {'''
+
+[[mutant]]
+name = "a region whose number is taken is let go"
+file = "crates/ipc/src/endpoint.rs"
+from = '''            if kept {
+                Ok(())
+            } else {
+                Err(BadMessage::Rejected)
+            }'''
+to = '''            let _ = kept;
+            Ok(())'''
+
+[[mutant]]
+name = "any peer may open pipes"
+file = "crates/ipc/src/endpoint.rs"
+from = '''            if !inner.config.peer_may_open_pipes {
+                return Err(BadMessage::Rejected);
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "a pipe's reads aren't observed"
+file = "crates/ipc/src/endpoint.rs"
+from = '''            consumer.observe(Box::new(Reporter {
+                inner: inner.clone(),
+                pipe,
+                report: ReadReport::new(capacity),
+                done: false,
+            }));'''
+to = '''            let _ = &mut consumer;'''
+
+[[mutant]]
+name = "bytes past a pipe's capacity are let go"
+file = "crates/ipc/src/endpoint.rs"
+from = '''                Err(TryWriteError::Full) => Err(BadMessage::PipeOverrun { pipe }),'''
+to = '''                Err(TryWriteError::Full) => Ok(()),'''
+
+[[mutant]]
+name = "a report isn't given to the pipe"
+file = "crates/ipc/src/endpoint.rs"
+from = '''        Control::PipeRead { pipe, count } => inner.out().pipes.peer_read(pipe, count),'''
+to = '''        Control::PipeRead { pipe, count } => inner.out().pipes.peer_read(pipe, count.min(0)),'''
+
+[[mutant]]
+name = "a pipe's end isn't passed on"
+file = "crates/ipc/src/endpoint.rs"
+from = '''        Control::PipeEnded { pipe } => incoming.ended(pipe).map(drop),'''
+to = '''        Control::PipeEnded { pipe } => incoming.get(pipe).map(drop),'''
+
+[[mutant]]
+name = "a cancel isn't given to the pipe"
+file = "crates/ipc/src/endpoint.rs"
+from = '''            inner.out().pipes.peer_cancelled(pipe).map(drop)'''
+to = '''            inner.out().pipes.peer_read(pipe, 0)'''
+
+[[mutant]]
+name = "a consumer's reads aren't told to its observer"
+file = "crates/ipc/src/data_pipe.rs"
+from = '''        if let Some(observer) = &mut self.observer {
+            observer.read(part.len());
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a consumer's end isn't told to its observer"
+file = "crates/ipc/src/data_pipe.rs"
+from = '''                    if let Some(observer) = &mut self.observer {
+                        observer.done();
+                    }'''
+to = ''''''
+
+[[mutant]]
+name = "the core's own destination is unknown"
+file = "crates/ipc/src/core/channel.rs"
+from = '''            if message.destination >= destinations && message.destination != CONTROL_DESTINATION {'''
+to = '''            if message.destination >= destinations {'''

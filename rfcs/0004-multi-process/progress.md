@@ -21,7 +21,11 @@
 | 2b：送出的佇列、目的地的分派、斷線只報告一次（loom、shuttle；同步呼叫等回答的位置留在 renderer，第 27 條） | 完成 | 2026-11-21 |
 | 2c：region 的表和範圍的檢查、`BigBuffer` 帶 region 的序列化、留著重複用的池子（Verus、fuzz、Miri） | 完成 | 2026-11-21 |
 | 2d：data pipe 的跨 process 版；通道協定的 TLA+ 模型（TLA+、Verus、fuzz） | 完成 | 2026-11-21 |
-| 2e：macOS 的平台層（Mach 訊息、rendezvous、memory entry；跨 process 的測試）；把 `Control`（region 的兩則、管道的五則）接進通道收的一側，管道的兩半接上 `data_pipe` | 未開始 | |
+| 2e-1：端點（`ipc::endpoint`）：通道、`Control`、池子和表、管道的兩半、`codec` 組成上層用的介面，IO thread 的迴圈；同一個 process 裡的平台（整合測試、Miri、fuzz） | 完成 | 2026-11-21 |
+| 2e-2：macOS 的共用記憶體（memory entry 的建立、map、轉成唯讀） | 未開始 | |
+| 2e-3：macOS 的通道（Mach 訊息的 `Platform`、等 port set、dead-name 和 no-senders、audit token；測試自己啟動 child process） | 未開始 | |
+| 2e-4：rendezvous（Browser 的 server、child 的查詢；跨 process 的測試） | 未開始 | |
+| 2e-5：2e 的檢查和文件；Linux、Windows 在這台機器測不到的部分怎麼處理 | 未開始 | |
 | 2f：Linux 的平台層；量 socket 的緩衝區和大的資料的門檻 | 未開始 | |
 | 2g：Windows 的平台層 | 未開始 | |
 | 2h：第 2 階段的檢查、`soundness.md`、`test.py` 的指令、文件；把 `test.py ipc` 的每一項排進每週的 CI（2a 起在本機跑） | 未開始 | |
@@ -210,4 +214,31 @@
 - **留給後面的**：
   - 管道的兩半接到通道和 `data_pipe` 的那一段還沒有寫（Browser 的 IO thread 從自己那一側讀出來送、renderer 的 IO thread `try_write` 進它那一側、讀的那條 thread 回報）：要等 `Control` 接進通道（2e，記在上面的表）。`pipe_fuzz.rs` 裡有完整的一份。
   - `test.py ipc` 現在有五項（`fuzz`、`miri`、`models`、`tla`、`verus`），都還沒有排進 CI（2h）。
+
+### 2e-1：端點（2026-11-21，macOS、Apple M4）
+
+- **決定**：2e 分成五段（上面的表）。「已決定的事項」第 35 條（IO thread 的迴圈由 `ipc` 提供）和第 36 條（訊息的型別在 IO thread 上解、由上層指定）；「待決定」多一條「IO thread 上複製大資料的時間」。管道的讀端怎麼回報沒有另外定：RFC 已經寫明 renderer 看到的是同一個 `Consumer`。
+- **做了什麼**：
+  - `ipc::endpoint`：`Platform`（平台要實作的：`Transport` 的 `write` 和 `wake`，加上 `wait`、`map`、`create`、`shut`）、`Config`、`endpoint()` 給出 `Link`（任何 thread：`send`、`open_pipe`、`grant_to_peer`、`close`）和 `Endpoint`（IO thread：`run`，和一步一步推的 `turn`）、`Handler` 和 `Received`（`destination`、`decode`、`take_pipe`）。
+  - `ipc::local`：同一個 process 裡的 `Platform`（`pair`、`poll`，和測試看的 `written`、`created`）。
+  - `ipc::data_pipe`：`Consumer::observe` 和 `ReadObserver`。
+  - `ipc::core::channel`：核心自己的目的地一律放行。
+- **寫的時候碰到的**：
+  - **通道結束時要把傳輸關掉**：只把這一端標成結束，別的 thread 還拿著 `Link`，傳輸就一直開著，對方永遠不知道。兩條 thread 的測試卡住才看出來；`Platform` 多了 `shut`。
+  - **送不出去的訊息放進 region 的那幾塊要還**：第一版留了一段什麼都沒做的程式，重寫成 `Placing` 記下這一則放了哪幾塊。
+  - `local` 第一版兩端各一把鎖、互相看對方的，寫到一半就看得出會互鎖；改成一把鎖。
+  - Miri 報了 3 筆沒釋放的記憶體：是測試為了讓管道保持開著寫的 `mem::forget`，不是端點。改成把來源留到檢查結束。
+- **測試**：`tests/it/endpoint.rs` 12 個（兩端一步一步推的、亂送的 child 和亂送的 host、兩條 thread 真的跑的）；`tests/it/endpoint_fuzz.rs`。兩條 thread 的那一個重複跑 300 次都過；它自己設 20 秒的時限，卡住時說是卡住。
+- **fuzz**：新的 target `endpoint`（host 的端點對一個照輸入送任何 frame 的 child）。四個 target 各 2 分鐘：`endpoint` 71 萬次、`frame` 1467 萬次、`pipe` 433 萬次、`region` 110 萬次，沒有發現。
+- **Miri**：核心的單元測試 49 個通過、1 個跳過；端點資料量小的 4 個測試通過（`test.py ipc miri` 現在兩個都跑）。
+- **mutation test**（`mutants-2e1.toml`）45 個，全部抓到。過程：
+  - 第一次 45 個裡 6 個沒抓到。5 個補了測試：通道結束後管道的來源要放掉；帶 handle 的一般訊息是壞訊息（原本的測試裡框架那一層先擋掉了，走不到端點的檢查）；child 不會建 region（原本只看 host 的池子）；給兩塊 region 是兩個編號（原本只給過一塊）；讀到結尾的讀端離開時不送取消。第 6 個是程式多餘：收到取消時「把來源拿掉」那一行，緊接著的送管道那一步本來就會做；拿掉那一行，清單換成「取消沒有交給管道」。
+  - 「region 的上限不檢查」第一次也沒抓到：池子自己也會擋，差別只在白建一塊再丟掉。`local` 記下建了幾塊，測試檢查沒有白建。
+  - 抓到的裡面有 13 個是兩條 thread 的測試卡住才失敗的（叫醒、對方不在了、管道不送這一類）。原本要等外面的上限，現在測試自己在 20 秒內失敗。它們指得出「卡住」，指不出卡在哪一步。
+  - 跑完確認檔案都還原了。
+- **跑過的檢查**：`cargo test -p ipc`（單元 50 個、整合 51 個）；`test.py ipc fuzz --minutes 2`、`ipc miri`、`ipc models`、`ipc verus`、`ipc tla`；`cargo clippy -p ipc --all-targets -- -D warnings`（一般的、`ipc_loom` 和 `ipc_shuttle` 的各一次）、`cargo fmt --check`；`sanity.py` 的 7 項。
+- **沒有做的**：
+  - 端點自己沒有 loom 的模型：送的 thread 和 IO thread 共用的是一把鎖底下的狀態（池子、管道的額度、排著要給的 region），靠兩條 thread 的測試和它重複跑的結果。之後量到要拆鎖時再加。
+  - 池子什麼時候放掉閒置的 region、每個 renderer 的上限是多少：第 3 階段 Browser 接上時定。
+  - 單一 process 的模式要不要也走 `ipc::local`：沒有討論過，現在它只給測試用。
 

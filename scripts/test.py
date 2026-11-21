@@ -1560,7 +1560,14 @@ def restore_originals() -> list[str]:
 
 IPC_FUZZ = ROOT / "crates" / "ipc" / "fuzz"
 # The fuzzers there are (`[[bin]]`s of its Cargo.toml).
-IPC_FUZZ_TARGETS = ["frame", "pipe", "region"]
+IPC_FUZZ_TARGETS = ["endpoint", "frame", "pipe", "region"]
+# The endpoint's integration tests that run under Miri.
+IPC_MIRI_ENDPOINT_TESTS = [
+    "endpoint::messages_arrive",
+    "endpoint::whatever_a_child_sends",
+    "endpoint::a_child_keeps_to",
+    "endpoint::a_closed_channel",
+]
 # The Verus release `ipc`'s proofs are checked with (the one elise's are).
 IPC_VERUS_VERSION = "0.2026.10.18.7d82994"
 
@@ -1584,9 +1591,9 @@ def cmd_ipc(args: argparse.Namespace) -> int:
     target, not the one cargo-fuzz defaults to (a prebuilt cargo-fuzz is
     musl's, which ASan can't link).
 
-    `miri`: the core's unit tests under Miri (`rustup +<the nightly>
-    component add miri`), with strict provenance, in a target directory of
-    its own (target/miri).
+    `miri`: the core's unit tests, and the endpoint's tests that use little
+    data, under Miri (`rustup +<the nightly> component add miri`), with
+    strict provenance, in a target directory of its own (target/miri).
 
     `models`: what a channel's threads share (its sending side's queue
     and lock, the end of the channel) under loom and shuttle, which stand
@@ -1649,9 +1656,18 @@ def cmd_ipc(args: argparse.Namespace) -> int:
             MIRIFLAGS="-Zmiri-strict-provenance",
             CARGO_TARGET_DIR=str(ROOT / "target" / "miri"),
         )
-        command = ["cargo", f"+{ipc_nightly()}", "miri", "test", "-p", "ipc", "--lib", "core::"]
-        print(f"--- {' '.join(command)}", flush=True)
-        return subprocess.run(command, cwd=ROOT, env=env).returncode
+        # The core's unit tests, then a whole endpoint over the platform
+        # within one process: its messages each way, and what a peer that
+        # isn't ours sends (the tests with little data: Miri is slow).
+        commands = [
+            ["cargo", f"+{ipc_nightly()}", "miri", "test", "-p", "ipc", "--lib", "core::"],
+            ["cargo", f"+{ipc_nightly()}", "miri", "test", "-p", "ipc", "--test", "it", "--", *IPC_MIRI_ENDPOINT_TESTS],
+        ]
+        for command in commands:
+            print(f"--- {' '.join(command)}", flush=True)
+            if subprocess.run(command, cwd=ROOT, env=env).returncode != 0:
+                return 1
+        return 0
     work = ROOT / "target" / "ipc-fuzz"
     out = subprocess.run(["rustc", "-vV"], cwd=IPC_FUZZ, capture_output=True, text=True, check=True).stdout
     host = re.search(r"^host: (\S+)", out, re.M).group(1)

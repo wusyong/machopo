@@ -38,7 +38,10 @@ pub fn create(capacity: usize) -> (Producer, Consumer) {
         Producer {
             shared: shared.clone(),
         },
-        Consumer { shared },
+        Consumer {
+            shared,
+            observer: None,
+        },
     )
 }
 
@@ -73,6 +76,18 @@ pub enum Read {
     /// Nothing more: everything written has been read, and the producer is
     /// gone.
     Done,
+}
+
+/// What is told of a consumer's reads ([`Consumer::observe`]): for the
+/// receiving end of a pipe between processes, which has to tell the
+/// sending end how much was read. Dropped with the consumer.
+pub trait ReadObserver: Send {
+    /// `count` bytes were read.
+    fn read(&mut self, count: usize);
+
+    /// The consumer read to the end: the producer is gone and nothing is
+    /// left.
+    fn done(&mut self);
 }
 
 /// What the consumer gave to be called when the pipe becomes readable.
@@ -236,6 +251,7 @@ impl fmt::Debug for Producer {
 /// the pipe: what is unread is let go, and the producer's writes fail.
 pub struct Consumer {
     shared: Arc<Shared>,
+    observer: Option<Box<dyn ReadObserver>>,
 }
 
 impl Consumer {
@@ -248,6 +264,10 @@ impl Consumer {
             let mut state = self.shared.lock();
             let Some(front) = state.chunks.front_mut() else {
                 if state.producer_closed {
+                    drop(state);
+                    if let Some(observer) = &mut self.observer {
+                        observer.done();
+                    }
                     return Read::Done;
                 }
                 state.armed = true;
@@ -262,7 +282,16 @@ impl Consumer {
             part
         };
         self.shared.writable.notify_one();
+        if let Some(observer) = &mut self.observer {
+            observer.read(part.len());
+        }
         Read::Data(part)
+    }
+
+    /// Has `observer` told of every read from now on, and of the end.
+    /// Replaces the one given before.
+    pub fn observe(&mut self, observer: Box<dyn ReadObserver>) {
+        self.observer = Some(observer);
     }
 
     /// Calls `on_readable` each time the pipe becomes readable after a
