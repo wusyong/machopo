@@ -56,9 +56,9 @@ pub enum Event {
 /// the kernel moved into this process for the message, never a value the
 /// peer wrote. Where handles cross as values in the bytes (a system
 /// where the sender duplicates them into the receiver), an end whose
-/// peer may attach none takes any message that claims one as the peer
-/// gone, without looking at the value: a value is a handle of this
-/// process's own, of the peer's choosing.
+/// peer may attach none looks at no value and hands no handle up, so
+/// the core refuses the message that says it has one: a value is a
+/// handle of this process's own, of the peer's choosing.
 pub trait Platform: Transport<Handle: Send> + Send + Sync + Sized + 'static {
     /// A mapping of shared memory.
     type Memory: Memory + Send + 'static;

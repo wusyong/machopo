@@ -284,7 +284,7 @@ let channel = ipc::platform::inherited()?;
 
 - `spawn` 啟動 child，回來 child 和 host 這一端。child 那一端怎麼過去是平台的事：macOS 上 child 繼承不了 port，所以留在這個 process 的 rendezvous server（`Server::global()`）等它來拿；Linux 上 child 繼承那一端的 fd（下面的 `platform::linux::channel`）。`spawn` 用過的 `Command` 不要再拿來啟動別的。
 - `child_gone`：child 還沒拿它那一端就結束時，macOS 的 kernel 不會告訴 host（那一端還替它留著），要 host 自己說；說了之後 host 這一端就收到「對方不在了」。拿過的 child、kernel 自己會說的平台（Linux：host 在 child 啟動之後就不拿著它那一端），它什麼都不做。
-- **平台要自己守的一條**（`Platform` 的說明）：交給端點的 handle 一定是 kernel 為這則訊息搬進來的，不能是對方寫的數值。handle 以數值走在位元組裡的平台（送的一方把它複製進收的一方），對方不能附 handle 時，只要訊息說它有 handle 就當成對方不在了，那個數值不看：數值指的是這個 process 自己的 handle，而且是對方挑的。
+- **平台要自己守的一條**（`Platform` 的說明）：交給端點的 handle 一定是 kernel 為這則訊息搬進來的，不能是對方寫的數值。handle 以數值走在位元組裡的平台（送的一方把它複製進收的一方），對方不能附 handle 時，那個數值不看、一個 handle 都不交上去，說自己有 handle 的訊息由核心拒絕（壞訊息）：數值指的是這個 process 自己的 handle，而且是對方挑的。
 
 ### `platform::macos::memory`
 
