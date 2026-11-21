@@ -28,7 +28,7 @@
 | 2e-5：2e 的檢查和文件；Linux、Windows 在這台機器測不到的部分怎麼處理（第 40 條） | 完成 | 2026-11-21 |
 | 2e-6：三個平台共用的啟動入口（`ipc::platform` 的 `spawn`、`inherited`、`child_gone`）；跨 process 的測試拆成不分平台的和 macOS 自己的；`Platform` 夠不夠用對過一次（第 41 條） | 完成 | 2026-11-21 |
 | 2e-7：一個 process 一條 IO thread：`IoLoop` 管多個端點，平台的介面拆成 `Platform`（通道）和 `Waiter`（等待）；macOS 和同一個 process 的平台跟著改（第 42 條） | 完成 | 2026-11-21 |
-| 2f：Linux 的平台層；量 socket 的緩衝區和大的資料的門檻。在 Linux 的機器上做（第 40 條） | 未開始 | |
+| 2f：Linux 的平台層；量 socket 的緩衝區和大的資料的門檻。在 Linux 的機器上做（第 40 條）；先決定的是第 43 到 49 條 | 進行中 | |
 | 2g：Windows 的平台層；量 pipe 的緩衝區。在 Windows 的機器上做（第 40 條）；對方不能附 handle 時不看訊息裡的 handle 數值（第 41 條的契約，要有跨 process 的測試）；做的時候決定 CI 要不要加 macOS、Windows 的 runner | 未開始 | |
 | 2h：第 2 階段的檢查、`soundness.md`、`test.py` 的指令、文件；把 `test.py ipc` 的每一項排進每週的 CI（2a 起在本機跑） | 未開始 | |
 | 3：啟動 child process | 未開始 | |
@@ -391,4 +391,18 @@
   - `remove` 之後那條通道的事不能再報出來（key 不重複使用，迴圈拿到不認得的 key 會略過，但緩衝區裡它的東西要丟掉）。
   - Windows 不能用「每條通道三個 event 加 `WaitForMultipleObjects`」：一次最多等 64 個。
   - `process_channel.rs` 裡 `one_io_thread_serves_several_children` 是驗這一段的：一個迴圈、四個 child。
+
+### 2f：Linux 的平台層（2026-11-22 起，Fedora、kernel 7.3.3、AMD Ryzen AI 9 HX 370）
+
+branch `0004-linux`，從 `0004` 的 2e-7（`82a4fc7`）分出去。
+
+- **先決定的**：「已決定的事項」第 43 到 49 條（child 怎麼拿到它那一端、socket 的緩衝區不設、門檻共用 64 KiB、`MFD_NOEXEC_SEAL`、依賴、誰登記「可寫」、接收緩衝區）。「待決定」裡「門檻要不要每個平台各一個」「Linux 上大的資料的門檻和 socket 的緩衝區」「Linux 的 memfd 要不要加 `MFD_NOEXEC_SEAL`」結掉，「怎麼把控制通道的一端交給 child」只剩 Windows。
+- **先量的**：socket 內嵌對 region、`SO_SNDBUF` 的大小、接收緩衝區的大小、兩條通道在同一條 IO thread 上時小訊息的延遲；照核心的複製次數和照原型的量法各量一次。量法和數字在 `details.md` 的「Linux 上 socket 的緩衝區和門檻的實測」。量的是暫時的 C 程式，不是 `ipc`：平台層寫完之後用真的那一層重量一次（同樣兩種量法），結論變了就回頭改第 44、45、49 條。
+- **先查的**：
+  - unix(7)、socket(7)：`SO_RCVBUF` 對 Unix socket 沒有作用；`SO_SNDBUF` 被加倍、被 `wmem_max` 限住，不報錯。
+  - kernel：`wmem_max` 的預設在 6.18 從 212992 改成 4 MiB（commit `a6d4f25888b8`，用 GitHub 的 compare 確認不在 6.17、在 6.18）；`Documentation/userspace-api/mfd_noexec.rst`；`fs/eventpoll.c` 的 `ep_modify`（改登記時已經就緒就排進就緒的清單）。
+  - Chromium（2026-11-22 的 main）：`mojo/core/channel_posix.cc`、`channel.cc`、`channel_linux.cc`，`mojo/public/cpp/platform/socket_utils_posix.cc`、`platform_channel.cc`，`base/posix/unix_domain_socket.cc`，`base/memory/platform_shared_memory_region_posix.cc`。沒有設 socket 的緩衝區；`MFD_NOEXEC_SEAL` 先帶、`EINVAL` 就記住不帶；給對方唯讀的 memfd 是經過 `/proc` 重新開的 `O_RDONLY` fd（`details.md` 的「平台層」的 Linux）；`EAGAIN` 時在 IO thread 上登記可寫；送出帶 `MSG_NOSIGNAL`；一次最多附 128 個 fd；每次可讀最多連續讀 256 KiB。
+  - std（`rust-toolchain.toml` 的 1.99.0）：`std::os::unix::process::CommandExt` 沒有穩定的「指定繼承哪個 fd」的 API。
+  - memmap2 0.9.11：`map_raw`、`map_raw_read_only` 是安全的；給了長度時不讀檔案的大小。
+- **還沒做的**：程式。順序：依賴（第 47 條，單獨一個 commit 先進 `0004`）、共用記憶體、通道和 `Waiter` 和 `spawn`、`inherited`、`child_gone`、Linux 自己的測試、重量、mutation test。
 

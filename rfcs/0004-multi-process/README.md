@@ -117,7 +117,7 @@ Browser process                                Renderer process
 | 傳 handle | rustix 的 `sendmsg` 和 `ScmRights` | Mach 訊息裡的 port descriptor（memory entry 本身就是 port） | Browser 用 `DuplicateHandle` 複製進 renderer |
 | 發現對方不在了 | 讀到 EOF、讀寫錯誤 | kernel 的 dead-name 和 no-senders 通知 | 讀寫失敗、讀到 0 個位元組 |
 
-- **socket 的緩衝區要設**（Linux 的控制通道；2026-11-21 原型在 macOS 上量的，`prototype/` 的 README 的「和 ipc-channel、interprocess 比」）：Unix socket 預設的緩衝區小（macOS 是 8 KiB），超過的訊息要來回切換好幾次才送得完，16 KiB 來回慢 2.8 倍；建通道時用 `SO_SNDBUF`、`SO_RCVBUF` 設大（原型設 1 MiB 之後和 Mach 訊息差不多）。設多大在第 2 階段做 Linux 的平台層時量了再定（「待決定」的那一次量測）：至少要放得下門檻以下的訊息。
+- **Linux 上 socket 的緩衝區不設**（第 44 條）：Linux 的預設（208 KiB）放得下門檻以下的訊息，設大量不出差別。原本以為要設，是原型在 macOS 上量到的：macOS 的預設只有 8 KiB，16 KiB 來回慢 2.8 倍（`prototype/` 的 README 的「和 ipc-channel、interprocess 比」）；macOS 的控制通道是 Mach 訊息，不受影響。
 
 **共用記憶體**：
 
@@ -139,7 +139,7 @@ Browser process                                Renderer process
 - 一則訊息是長度、目的地的編號、序號、序列化的內容；有權限的一端還可以附帶 handle。序號現在只用來檢查（每一端照送出的順序加一，收的一端看到不連續就是壞訊息）；留著它，是為了之後訊息分兩條路走時（「之後的可能」的 ring）排得回順序，不用改格式。
 - 上層只經過一個介面送和收訊息（目的地、內容、handle），不知道底下是哪一種傳輸。
 - 三個平台同一個形狀：一個 process 一條 IO thread，等它所有的通道和「喚醒」（第 42 條）；送的時候不等，送不出去的自己排隊。
-  - **Linux**：non-blocking 的 socket，IO thread 用一個 epoll 等所有通道的 socket 和一個喚醒用的 eventfd。handle 跟著同一次 `sendmsg` 送出；收的一端處理控制資料被截斷的情況，收到的 fd 用 `MSG_CMSG_CLOEXEC` 設成 close-on-exec。
+  - **Linux**：non-blocking 的 socket，IO thread 用一個 epoll（level-triggered）等所有通道的 socket 和一個喚醒用的 eventfd，每次可讀做一次 `recvmsg`、讀進那條 thread 的 256 KiB 的緩衝區（第 49 條）。寫入被擋時，碰到的那條 thread 自己對 epoll 加上「可寫」，有空間了 IO thread 拿掉（第 48 條）。handle 跟著同一次 `sendmsg` 送出；收的一端處理控制資料被截斷的情況，收到的 fd 用 `MSG_CMSG_CLOEXEC` 設成 close-on-exec。
   - **macOS**：一則訊息是一則 Mach 訊息（64 KiB 以上的內容走 out-of-line，第 39 條）；每一則都照 audit token 確認是那個 child 送的（第 22 條）。IO thread 阻塞在 `mach_msg`，等一個 port set（每條通道的 receive port 加一個自己的喚醒用的 port）；送的 timeout 是 0，佇列滿了請 kernel 在有空間時通知。在通往對方的 send right 上登記 dead-name、在自己的 receive port 上登記 no-senders，任一個到了就當成斷線；通知只認 kernel 送的（訊息的 audit token），對方可以送一則 id 相同的訊息來假冒。
   - **Windows**：overlapped 的 `ReadFile` / `WriteFile`，寫入一次只有一筆在進行。IO thread 用一個 I/O completion port 等所有通道的完成和喚醒（不用 `WaitForMultipleObjects`：它一次最多等 64 個，一條 thread 等所有 renderer 不夠）；結束時用 `CancelIoEx` 取消進行中的 I/O 再關 handle。Browser 送 handle 時自己用 `DuplicateHandle` 複製進 renderer 的 process，訊息只帶數值。
 - 序列化：serde 加 postcard（第 22 條）。postcard 自己沒有巢狀深度的上限：會一層包一層的型別（下一條）的解碼自己數深度。內容裡 region 只是編號和長度，和一般的欄位一樣；Browser 新發出的 region 的 handle 不在內容裡，跟著 `ipc` 自己的一則訊息（「這個編號的 region 給你」）走在用到它的訊息前面（第 30 條）。包在 postcard 外面的一層決定一段位元組放訊息裡還是 region，並數巢狀的深度（第 31 條）。
@@ -183,7 +183,9 @@ Browser process                                Renderer process
 
 Browser 建好控制通道的兩端，以 `--type=renderer` 和 renderer 的旗標（`RendererFlags`，已經能序列化）啟動同一個執行檔，把一端交給 child。child 的 `main` 看到 `--type=renderer` 就不開視窗、選好 script engine，從控制通道拿到初始的訊息，然後跑現在的 `spawn_renderer_main_thread`。之後的 sandbox 套在這一段的最前面，任何其他程式碼之前。
 
-- **Linux 和 Windows**：child 繼承一端（怎麼繼承見「待決定」）。兩端都由 Browser 建立，沒有用名字連線的步驟，別的 process 搶不到通道。
+- **Linux 和 Windows**：child 繼承一端。兩端都由 Browser 建立，沒有用名字連線的步驟，別的 process 搶不到通道。
+  - Linux：fork 之後、exec 之前，只在 child 裡拿掉那一端的 close-on-exec，號碼放在環境變數裡告訴 child（第 43 條）。
+  - Windows：怎麼繼承見「待決定」。
 - **macOS**：Mach port 不能繼承，照 Chromium 的 `MachPortRendezvous`：
   - Browser 開一個 rendezvous server，用固定的前綴加上 Browser 的 pid 當名字，登記在 launchd 的 bootstrap namespace；所有 child 共用這一個 server。
   - 啟動 child 時，Browser 把要給它的 port（它的 receive port、通往 Browser 的 send right）記在 child 的 pid 底下。pid 啟動之後才知道，所以 child 的請求比登記早到時，server 等登記完成再回。
@@ -269,7 +271,7 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
 
 0. **整理邊界**（2026-10-06 做完，`progress.md`）：邊界的規則和檢查；修掉 context lost 的 observer、`RendererFlags` 的函式指標、能送給任何 `FrameSinkId` 的 sender。
 1. **message 化，還是單一 process**（2026-11-21 做完，分成 1a 到 1d，`progress.md`）：tile 的交接改成訊息（拿掉 `SharedImage` 的 backing，加上 `ReturnResources` / `DestroySharedImage`、Viz 的 mailbox 表）、`protocol` 的 bytes 型別；Browser 處理一個 renderer 的訊息的邏輯從 `Chrome_IOThread` 的迴圈抽成物件。現有的測試全部照舊通過。
-2. **`ipc` crate**：核心（先做，經過假通道就能測）、平台層（Linux 的那一層做完時量 socket 的緩衝區和大的資料的門檻，「待決定」）、控制通道、帶 handle 的序列化、Browser 配共用記憶體和編號的表；用測試自己的 child process 測，包括惡意的對端。這個階段把驗證的工具架好（fuzz、loom 和 shuttle、Miri、Verus、TLA+ 的模型、`soundness.md`），核心的每一塊做完時它的那幾條性質就驗過。還沒接上 renderer。
+2. **`ipc` crate**：核心（先做，經過假通道就能測）、平台層（Linux 的 socket 的緩衝區和大的資料的門檻，第 44、45 條）、控制通道、帶 handle 的序列化、Browser 配共用記憶體和編號的表；用測試自己的 child process 測，包括惡意的對端。這個階段把驗證的工具架好（fuzz、loom 和 shuttle、Miri、Verus、TLA+ 的模型、`soundness.md`），核心的每一塊做完時它的那幾條性質就驗過。還沒接上 renderer。
 3. **啟動 child process**（每個階段的驗收包含它那一塊的驗證；這個階段加的是 body 的管道和處理訊息的物件的 fuzz target；最後做 macOS 上 sandbox 的探測）：`--type=renderer`、renderer 的 IO thread、所有訊息走控制通道、tile 走共用記憶體、導覽的 body 的管道跨 process、process 當掉。最後量捲動時每個 frame 的延遲。
 
 ## 缺點
@@ -444,10 +446,48 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
     - **macOS 的一個限制**：比接收緩衝區長的內嵌訊息被 kernel 毀掉時，不知道是哪一條通道的（訊息已經沒了）。只有一條通道時當成對方不在了；現在是略過，那條通道接下來的訊息序號不連續，那時才關掉。會送這種訊息的只有惡意的對端（我們自己超過 64 KiB 的都走 out-of-line）。
     - 對照 Chromium：每個 process 一條 IO thread，`mojo::core::Channel` 把自己登記到它的 `MessagePumpForIO` 上。分法相同；不同的是迴圈在 `ipc` 裡（第 35 條的理由）。
     - 這一段只改 `ipc`。`browser` 現在單一 process 的模式裡每個 `RenderProcessHost` 一條 IO thread，第 3 階段接上時才改。
+43. **Linux 的 child 怎麼拿到它那一端：只在 child 裡拿掉那個 fd 的 close-on-exec，號碼放在環境變數**（2026-11-22，第 2 階段的 2f，「啟動」）：`spawn` 用 `UnixStream::pair` 建兩端，在 `Command` 的 `pre_exec` 裡（fork 之後、exec 之前，只在 child 的 process 裡）用 `fcntl` 拿掉 child 那一端的 close-on-exec，號碼寫進一個環境變數；child 起來之後 host 關掉自己手上的那一端。`inherited` 讀環境變數，確認那個 fd 是 `AF_UNIX` 的 stream socket，收下、重新設 close-on-exec；只拿一次，第二次回 `None`（macOS 的 rendezvous 也只給一次）。
+    - **號碼不是秘密**：fd 只在擁有它的 process 裡有意義，知道號碼的別的 process 拿不到它。只有這一個 child 拿得到 fd，靠的是 close-on-exec 只在它的 process 裡拿掉；改了環境變數、指向別的 fd 的，頂多是通道上收到不合格式的東西、通道關掉。孫 process 會繼承環境變數，但 fd 已經重新設了 close-on-exec，它拿不到。
+    - **號碼不放命令列**：測試的 child 是測試的執行檔本身（libtest），多一個它不認得的參數就壞了。
+    - **不選當成 child 的 stdin 傳**（起草時的建議；host 和 child 都不用 `unsafe`，std 也照舊走 `posix_spawn`）：在 `inherited` 之前讀 stdin 的程式會吃掉通道的位元組；用 gdb、rr、strace 這類工具包著 renderer 時它們要用 stdin；呼叫的人自己設的 stdin 會被悄悄蓋掉；查問題的人想不到 fd 0 是一條雙向的 socket。
+    - **不選 dup2 到另一個號碼**（Chromium 的做法）：dup2 會悄悄關掉目標號碼上原本的 fd（std 在 fork 的路上開一條回報 exec 失敗的 pipe，號碼可能就是那個），exec 失敗時 `spawn` 會回傳成功；來源和目標剛好同一個號碼時 dup2 什麼都不做，close-on-exec 還在，child 拿不到。兩個都補得起來，但補的是用不到的東西：號碼反正要告訴 child，沿用原本的號碼就好。
+    - **不選在 Browser 裡、spawn 之前拿掉 close-on-exec**：同時有別的 thread 在啟動 child 的話，fd 會漏給那個 child，它就能讀這個 renderer 和 Browser 之間的通道。
+    - **不選 command-fds 這類 crate**：它裡面就是 `pre_exec` 加 dup2，多一個依賴。
+    - **代價**：兩個 `unsafe`，都在 `ipc`：`pre_exec`（closure 裡只呼叫 async-signal-safe 的 `fcntl`）和 `OwnedFd::from_raw_fd`（號碼是我們的 `spawn` 給的、確認過是 socket、只收一次）。有 `pre_exec` 時 std 從 `posix_spawn` 改成 fork，啟動時要複製 Browser 的 page table，沒有量。std（`rust-toolchain.toml` 的 1.99.0）沒有穩定的「指定繼承哪個 fd」的 API。
+    - **closure 留在 `Command` 裡**：同一個 `Command` 再啟動一次的話，會對那個號碼上當時的 fd 拿掉 close-on-exec。`spawn` 的說明寫明之後不要再用那個 `Command`。
+    - 對照 Chromium（`mojo/public/cpp/platform/platform_channel_endpoint.cc`、`base/process/launch_posix.cc`，2026-11-22 讀的 main）：fork 之後照 `fds_to_remap` 把 fd dup2 到從 `base::GlobalDescriptors::kBaseDescriptor` 起第一個沒用到的號碼，號碼放在命令列（`PlatformChannel::kHandleSwitch`）。號碼另外告訴 child 這一點相同；不同的是不 dup2、用環境變數。Chromium 在 Linux 上還有從 zygote fork renderer 的路，machopo 沒有，要不要做是之後 sandbox 的事（那條路怎麼交 fd 沒有讀）。
+44. **Linux 上 socket 的緩衝區不設**（2026-11-22，2f，「`ipc` crate」；改掉「socket 的緩衝區要設」）：`SO_SNDBUF` 和 `SO_RCVBUF` 都不設，用 kernel 的預設。量法和數字在 `details.md` 的「Linux 上 socket 的緩衝區和門檻的實測」。
+    - **量到的**：`SO_SNDBUF` 從預設（208 KiB）、6.18 之前的 kernel 的上限（約 416 KiB）到 2 MiB、8 MiB，64 KiB、1 MiB、8 MiB 內嵌的時間都落在同一個範圍；照原型的量法（不算核心的複製）設成 1 MiB 反而比不設慢（1 MiB 約 90 對 60 µs）。原型在 macOS 上要調，是因為 macOS 的預設只有 8 KiB。
+    - **`SO_RCVBUF` 對 Unix socket 沒有作用**（unix(7)）：送出去的資料算在送的一端的帳上。原本的「`SO_SNDBUF`、`SO_RCVBUF` 設大」這一半本來就不對。
+    - **設大也拿不到**：kernel 把 `SO_SNDBUF` 限在 `net.core.wmem_max`，超過不報錯。kernel 6.18 之前預設是 212992（實際最多約 416 KiB），6.18 起改成 4 MiB（commit `a6d4f25888b8`，2025-08-21）；Ubuntu 24.04 的 GA kernel（6.8）在 6.18 之前，CI（`ubuntu-24.04`）應該也是，沒有確認。突破上限要 `SO_SNDBUFFORCE`，需要 `CAP_NET_ADMIN`。
+    - **不選設成新舊 kernel 都拿得到的值（約 416 KiB）**：一樣量不出差別，多一個常數。
+    - 對照 Chromium：`mojo/public/cpp/platform/platform_channel.cc` 用 `socketpair(AF_UNIX, SOCK_STREAM, 0, …)` 建通道，讀過的 `channel_posix.cc`、`socket_utils_posix.cc` 等五個檔案裡都沒有設緩衝區。
+45. **「多大的資料改走 region」三個平台共用 64 KiB**（2026-11-22，2f，「大的資料」；結掉「待決定」裡「要不要每個平台各一個數字」）：Linux 上兩條路正好在 64 KiB 交叉（照核心的複製次數量，內嵌 11–12 µs、region 12 µs），以上 region 快：128 KiB 約 1.5 倍、1 MiB 約 2 倍。`Platform` 不用加常數。
+    - **不選 Linux 提高門檻**（「待決定」原本的猜測）：依據是原型「調過緩衝區的 socket 內嵌 1 MiB 和 region 差不多」，但那量的是純傳輸。核心在內嵌的路上另外複製好幾次（`codec` 編進 payload、`Sender::send` 加上框架再複製一次、收的一端一次沒讀完時存進還沒讀完的那一則、解碼成 `BigBuffer`），region 的路上是寫進 region 和解碼時複製出來各一次；算進去之後內嵌在 128 KiB 以上都比較慢。量測的程式是近似：送的一端少算一次、收的一端對一次讀得完的訊息多算一次，交叉點準確在哪裡要等平台層寫完重量，「不提高」不受影響。
+    - **不選 Linux 降低門檻**：32 KiB 時 region 稍快（約 2 µs），在雜訊範圍裡；小的資料改走 region 的話池子用得多，還多一則「還你了」的訊息，這次沒有量。
+    - **一條 IO thread 管所有通道之後**（第 42 條）：一條通道傳 8 MiB 時，同一條 IO thread 上另一條通道的小訊息 p99 多約 0.2 到 0.35 ms，內嵌和 region 差不多（region 的複製是一整塊、不中斷的，尾巴稍長，但總量快 2 倍多）；1 MiB 的看不出影響。這是「待決定」裡「IO thread 上複製大資料的時間」的第一批數字。
+46. **Linux 的 memfd 先帶 `MFD_NOEXEC_SEAL`，`EINVAL` 就不帶再建一次，不記住**（2026-11-22，2f，「共用記憶體」；2026-11-17 的看法）：帶了之後那塊記憶體不能被當成程式執行，而且改不回來（kernel 加上 `F_SEAL_EXEC`）。否則被攻破的 renderer 可以在「對方可寫」的 region 裡寫一個執行檔、用 `fexecve` 執行，繞過 noexec 的掛載點；之後的 sandbox 會擋 `execve`，這一層不靠它。
+    - 旗標 Linux 6.3 起才有，舊的 kernel 回 `EINVAL`；有的系統把 `vm.memfd_noexec` 設成 2，不帶旗標的 `memfd_create` 會失敗。所以先帶、不認得才不帶，兩種系統都建得了。
+    - **不選一律帶**：只支援 6.3 以上，Ubuntu 22.04 的 GA kernel（5.15）上建不了任何 region。**不選不帶**：沒有保護，`vm.memfd_noexec=2` 的系統上也建不了。
+    - **不記住「kernel 不認得」**：region 只在池子不夠時才建，舊的 kernel 上多一次系統呼叫不算成本，少一個全域的狀態。
+    - 退回去的那條路只有 6.3 之前的 kernel 走得到，開發機和 CI 都測不到，實作時記進 `docs/test-gaps.md`。
+    - 對照 Chromium：`base/memory/platform_shared_memory_region_posix.cc` 也是先帶、`EINVAL` 就不帶，但記在一個 static 的 atomic 裡，之後都不帶。這個旗標是 Chromium 的人為 ChromeOS 加進 kernel 的（kernel 的 `Documentation/userspace-api/mfd_noexec.rst`）。
+47. **Linux 那一層的依賴：rustix 加 `net`、`fs`、`event`，workspace 加 memmap2 0.9**（2026-11-22，2f；照第 2 條）：都已經在依賴樹裡（rustix 1.1.5；memmap2 0.9.11 由 parley 的 fontique 和視窗那一層用），不多 crate。memmap2 的 `map_raw`、`map_raw_read_only` 是安全的 API，unmap 由它的 `Drop` 做。給了長度時 memmap2 不確認檔案夠不夠大，所以 `map` 前自己用 `fstat` 確認：map 一個太短的檔案，碰到超出的部分是 SIGBUS，不是錯誤。
+    - **不選只用 rustix、自己 `mmap`**：`mmap`、`munmap` 和保證 unmap 的 `Drop` 都要自己寫成 `unsafe`。**不選 libc**：每個呼叫都是 `unsafe`。**不選 nix**：不在依賴樹裡，和 rustix 重疊。
+    - 依賴的改動單獨一個 commit 先進 `0004`（2e-6 的規則：Windows 那一層也改 workspace 的 `Cargo.toml`）。
+48. **寫入被擋時，碰到 `EAGAIN` 的那條 thread 自己向 epoll 登記「可寫」**（2026-11-22，2f，「控制通道」）：通道和 waiter 共用一小塊狀態（epoll 的 fd 和這條通道的 key，`add` 時裝上、`remove` 時拿掉）；`write` 碰到 `EAGAIN` 就把登記改成「可讀、可寫」，IO thread 收到「可寫」時改回只有「可讀」，兩者用同一把鎖。epoll 是 level-triggered：加上時已經有空間，會馬上報出來。
+    - **跨 thread 改 epoll 是 kernel 明文支援的**（man epoll_wait：一條 thread 在 `epoll_wait` 時，別的 thread 改的登記照樣叫醒它）。萬一漏了也不會卡住：核心在佇列從空變成有東西時叫醒 IO thread（`core::channel` 的 `send`），IO thread 自己再寫一次，還是被擋就自己登記。
+    - 和 macOS 那一層同一個形狀：它的 `write` 在當下那條 thread 上請 kernel 有空間時通知。
+    - **不選只有 IO thread 碰 epoll**（`write` 只記旗標，waiter 每次等之前登記）：正確性一樣，但 waiter 每次等都要掃所有通道，或另外維護一份「要登記的」清單。**不選一直開著 edge-triggered 的「可寫」**：對方每讀走一次就來一個事件，IO thread 每送一則多醒一次。
+    - 對照 Chromium：`mojo/core/channel_posix.cc` 的 `WaitForWriteOnIOThreadNoLock` 在 IO thread 上就登記，不在的話丟一個 task 給 IO thread。那是因為它登記用的 `IOWatcher` 只能在 IO thread 上用，不是 kernel 的限制。
+49. **Linux 的接收緩衝區 256 KiB，`epoll_wait` 一次最多拿 16 個事件**（2026-11-22，2f，「控制通道」）：每次 `Waiter::wait` 做一次 `recvmsg`，讀進那條 thread 的緩衝區借給核心（第 42 條）。
+    - **256 KiB，不選 64 KiB**：量到兩者一樣快（一條通道和兩條通道都是），但門檻邊緣的最大內嵌訊息（64 KiB 加上框架的標頭和編碼）比 64 KiB 大一點，64 KiB 要讀兩次。一次讀 256 KiB 估計是十幾 µs（256 KiB 走 region 的來回，含兩次複製，量到 15–19 µs），不算佔住 IO thread。緩衝區一條 thread 一個，記憶體不是考量。
+    - **不選從小開始、照訊息的大小變大**（Chromium 的 `channel.cc` 從 4 KiB 開始）：緩衝區只有一個、借出去用，沒讀完的部分核心本來就自己存，變大換不到東西。
+    - **16 個事件**留在 waiter 裡一個一個交出去（`remove` 時丟掉屬於那條通道的）。它也是「別的 thread 打斷等待，最多晚多久被處理」的上限：16 次 `recvmsg`，估計最多約 0.3 ms，沒有量。
+    - 對照 Chromium：`channel_posix.cc` 每次可讀時連續讀，最多 256 KiB（`kMaxBatchReadCapacity`）。
 
 ## 待決定
 
-- **「多大的資料改走 region」要不要每個平台各一個數字**（2f 量完時）：現在是 `codec` 裡共用的 64 KiB。Linux 上調過緩衝區的 socket 內嵌送 1 MiB 可能和 region 一樣快，門檻也許可以高一點；要的話在 `Platform` 加一個有預設值的常數，這是唯一看得到會動到 `Platform` 本身的地方。
 - **CI 要不要加 macOS、Windows 的 runner**（第 40 條；2g 做的時候）：只跑 `cargo test -p ipc`（不依賴 V8，幾分鐘）。要看的是費用（GitHub 的 macOS runner 是 Linux 的 10 倍、Windows 是 2 倍）和 runner 的系統版本與開發機不同時那幾個實測來的行為還成不成立。
 - **IO thread 上複製大資料的時間**（第 36 條；第 3 階段量捲動時每個 frame 的延遲時一起看）：64 KiB 以上的 `BigBuffer` 在 IO thread 上從 region 複製出來，那一段時間後面的訊息等著。量到是問題時，把複製搬到目標 thread（IO thread 只交出「這一塊的借據」，目標 thread 複製完再還）：線上的格式不變，代價是表跨 thread 共用、多一組 loom 的模型。
     - **第 42 條之後影響變大**（2026-11-21）：Browser 的一條 IO thread 管所有 renderer 的通道，一個 renderer 送大資料時，等的是其他每一個 renderer 的訊息，不只是它自己後面的。
@@ -484,9 +524,7 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
   - 壞的 frame：frame 是在 Browser 裡交給 GPU 的，而 wgpu 的驗證錯誤現在會結束整個程式。Viz 收到 frame 時的檢查要涵蓋所有會走到 wgpu 的值；這一項單一 process 時就可以開始做。
 - **trace 怎麼收**：每個 process 各寫一個檔案（`MACHOPO_TRACE` 加上 pid）、之後合併，或 child 把 span 送回 Browser。Chromium 是每個 process 的 tracing service 把資料送回 Browser 合成一份。
 - **哪些模式預設多個 process**：看法是只有人用的視窗；headless、情境、`--automation-pipe` 和測試預設單一 process，CI 另外用多個 process 跑選定的幾套（下面的「哪幾套測試」）。
-- **Linux 和 Windows 怎麼把控制通道的一端交給 child**：std 的 `Command` 沒有安全的 API 指定要繼承哪個 fd 或 handle。選項：spawn 前短暫拿掉那個 fd 的 close-on-exec、用 command-fds 這類 crate、當成 child 的 stdin 傳、Windows 上照 Chromium 讓 handle 可以繼承並把數值放在命令列。
-- **Linux 上大的資料的門檻和 socket 的緩衝區**（2026-11-21，第 2 階段做 Linux 的平台層時量）：原型在 macOS 上量到，緩衝區設成 1 MiB 的 Unix socket 內嵌送 1 MiB 和留著重複用的 region 一樣快。在 Linux 上量同一組（64 KiB、1 MiB、8 MiB：socket 內嵌對 region），定兩件事：緩衝區設多大；64 KiB 的門檻在 Linux 上要不要不一樣。region 不在這個數字裡的理由不變：大的資料不佔住控制通道（frame 和輸入排在它後面）、不用把每個 renderer 在 kernel 裡的緩衝區開大；所以量到一樣快也不是把門檻拿掉的理由，只是門檻可以高一點。
-- **Linux 的 memfd 要不要加 `MFD_NOEXEC_SEAL`**：2026-11-17 的看法：加，kernel 不認得就不加，Chromium 也是。
+- **Windows 怎麼把控制通道的一端交給 child**（Linux 的是第 43 條）：std 的 `Command` 沒有指定要繼承哪個 handle 的 API。選項：照 Chromium 讓 handle 可以繼承並把數值放在命令列、當成 child 的 stdin 傳（Linux 不選它的理由見第 43 條）。
 - **哪幾套測試在 CI 上用多個 process 跑**：WPT 可以。情境和 reftest 怎麼啟動、要全部還是一部分、多花多少時間，還沒確認。
 - **Browser 的 IO thread 要不要合成一條**（2026-11-20：第 3 階段決定，那時開得了多個 renderer process、可以量；合成一條之後那條 thread 比較忙，同時重量一次訊息的 ring 值不值得，第 19 條）：現在每個 renderer 一條，分頁多的時候 thread 跟著多；Chromium 是整個 process 一條處理所有通道。IO thread 的迴圈本來就不寫死成只等一條通道（「`ipc` crate」），合起來不用改設計；量到 thread 的數量是問題時再做。
 - **背景 GC**：拆 process、有背景分頁時，V8 的 heap 在背景要不要 concurrent GC。

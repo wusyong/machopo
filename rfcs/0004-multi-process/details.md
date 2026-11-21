@@ -309,12 +309,14 @@ ringbuf、rtrb、crossbeam 的 `ArrayQueue` 是給同一個 process 的 thread �
 
 ### Linux
 
-- 建立：rustix 的 `memfd_create`，帶 `MFD_ALLOW_SEALING` 和 `MFD_CLOEXEC`；設好大小之後加 `F_SEAL_SHRINK`、`F_SEAL_GROW`，最後加 `F_SEAL_SEAL`。`MFD_NOEXEC_SEAL` 見 `README.md` 的「待決定」。
-- 唯讀：`F_SEAL_FUTURE_WRITE`（Linux 5.1 起）讓已經存在的可寫 mapping 照舊能寫，但之後誰都不能再 map 成可寫，所以 Browser 先 map 好自己的，再交出 fd。
+- 建立：rustix 的 `memfd_create`，帶 `MFD_ALLOW_SEALING`、`MFD_CLOEXEC` 和 `MFD_NOEXEC_SEAL`（kernel 回 `EINVAL` 就不帶它再建一次，`README.md` 的第 46 條）；設好大小之後加 `F_SEAL_SHRINK`、`F_SEAL_GROW`，最後加 `F_SEAL_SEAL`。
+- 唯讀：`F_SEAL_FUTURE_WRITE`（Linux 5.1 起）讓已經存在的可寫 mapping 照舊能寫，但之後誰都不能再 map 成可寫，所以 Browser 先 map 好自己的，再交出 fd。seal 是檔案本身的，拿到 fd 的人經過 `/proc/self/fd/N` 重新開也寫不了。
+  - Chromium 不是這樣做（`base/memory/platform_shared_memory_region_posix.cc`，2026-11-22 讀的 main）：它經過 `/proc/self/fd/N` 重新開一個 `O_RDONLY` 的 fd 交出去。拿到這種 fd 的 process 可以經過 `/proc` 再開一次、開成可寫，Chromium 靠 sandbox 不讓 renderer 讀 `/proc` 擋住。`F_SEAL_FUTURE_WRITE` 不靠 sandbox。
 - 只有 memfd 建的檔案能加 seal：一般 tmpfs 的檔案一開始就帶著 `F_SEAL_SEAL`，所以不能改用 `/dev/shm` 底下的暫存檔。
-- map：memmap2 的 `MmapRaw`。
-- 控制通道：std 的 `UnixStream::pair`，non-blocking；一端給 child 繼承。IO thread 等 socket 可讀、可寫和喚醒。
-- 傳 fd：rustix 的 `sendmsg` 和 `SendAncillaryMessage::ScmRights`；收的一端用 `MSG_CMSG_CLOEXEC`，檢查控制資料有沒有被截斷（`MSG_CTRUNC`）。fd 只由 Browser 送給 renderer；Browser 這一端收到 `SCM_RIGHTS` 就是壞訊息。
+- map：memmap2 的 `MmapRaw`。給了長度時它不確認檔案夠不夠大，先用 `fstat` 確認（第 47 條）。
+- 控制通道：std 的 `UnixStream::pair`，non-blocking，緩衝區不設（第 44 條）；一端給 child 繼承（第 43 條）。IO thread 用一個 level-triggered 的 epoll 等所有通道的 socket 和一個 eventfd；「可寫」只在寫入被擋之後才登記（第 48 條）；接收緩衝區 256 KiB（第 49 條）。
+- 傳 fd：rustix 的 `sendmsg` 和 `SendAncillaryMessage::ScmRights`，帶 `MSG_NOSIGNAL`（對方關掉時不要 SIGPIPE）；收的一端用 `MSG_CMSG_CLOEXEC`，控制資料的緩衝區放得下 16 個 fd（核心的 `MAX_HANDLES`），被截斷（`MSG_CTRUNC`）就當成對方不在了。fd 只由 Browser 送給 renderer；Browser 這一端收到的 fd 照樣交給核心，由它判成壞訊息（`HandlesNotAllowed`）。
+- 對方不在了：讀到 0 個位元組或讀寫錯誤。不看 `EPOLLHUP`：對方關掉之前送的訊息要先讀完、交出去。
 
 ### macOS
 
@@ -356,6 +358,64 @@ ringbuf、rtrb、crossbeam 的 `ArrayQueue` 是給同一個 process 的 thread �
 - 邊收邊送時「另一端還開著」那一組不乾淨：腳本在送出之後馬上也關了另一端，沒有等 child 收到；那一組壞了 3,954 個，不列在表裡。
 - 所以這個 bug 在 macOS 26 還在，但在這個測試裡只影響 socket 的 fd。0 個出錯不是證明：Chromium 的註解沒有說只限 socket。
 - 測試的腳本是 Python（`socket.send_fds`、`socket.recv_fds`），沒有放進 repo；Linux 上沒有跑。之後在 Linux 上要傳 socket 的 fd 時，先照同樣的測法測。
+
+## Linux 上 socket 的緩衝區和門檻的實測
+
+2026-11-22，Fedora、kernel 7.3.3、AMD Ryzen AI 9 HX 370（筆電，`powersave` governor、`balanced` 的電源設定）。`README.md` 的第 44、45、49 條用的數字。
+
+**測法**：一個暫時的 C 程式（沒有放進 repo），兩個 process 之間一條 `socketpair(AF_UNIX, SOCK_STREAM)`；收的一端用 level-triggered 的 epoll，每個事件做一次 `recv`。量兩種：
+
+- **照核心的複製次數**（2f 的平台層會走的路）：內嵌是送的一端編碼時複製一次、寫進 socket，收的一端 `recv`、存進還沒讀完的那一則（複製）、解碼成新的緩衝區（複製，`BigBuffer::copy_from_slice`）；region 是送的一端複製進留著重複用的 memfd、送一則 16 bytes 的通知，收的一端從 region 複製進新的緩衝區。
+- **照原型的量法**（`prototype/` 的 `src/others.rs`，「和 ipc-channel、interprocess 比」那一節）：blocking 的 socket、先長度後內容，收的一端讀進自己重複用的緩衝區，不算核心的複製。
+
+每組跑兩次。數字有雙峰（例如 64 KiB 有時 11 µs、有時 17 µs），看起來和兩個 process 排到哪一種核心有關，只看兩次一致的趨勢。`SO_SNDBUF` 寫的是 `getsockopt` 讀回來的（kernel 加倍過的）值。
+
+**一條通道：送一則、回答 8 bytes（中位數）**
+
+照核心的複製次數，`SO_SNDBUF` 是預設（212992）、接收緩衝區 64 KiB：
+
+| 大小 | 內嵌 | region |
+| --- | --- | --- |
+| 16 KiB | 9–10 µs | 5–8 µs |
+| 32 KiB | 12 µs | 10 µs |
+| 64 KiB | 11–12 µs | 12 µs |
+| 128 KiB | 18–23 µs | 13 µs |
+| 256 KiB | 28–37 µs | 15–19 µs |
+| 512 KiB | 50–54 µs | 28–31 µs |
+| 1 MiB | 106–110 µs | 50 µs |
+| 8 MiB | 1.24–1.43 ms | 0.53–0.60 ms |
+
+- `SO_SNDBUF` 是 425984（要 212992，6.18 之前的 kernel 的上限）、2 MiB、8 MiB 時，64 KiB、1 MiB、8 MiB 內嵌的數字都落在同一個範圍（1 MiB 都是約 106 µs，偶爾一次 160 或 250 µs，是上面的雙峰）。
+- 接收緩衝區 64 KiB 和 256 KiB 一樣。
+
+照原型的量法：
+
+| 大小 | 內嵌，預設的緩衝區 | 內嵌，`SO_SNDBUF`、`SO_RCVBUF` 都要 1 MiB | region |
+| --- | --- | --- | --- |
+| 64 KiB | 8–11 µs | 9–12 µs | 7–11 µs |
+| 1 MiB | 54–68 µs | 90–92 µs | 50 µs |
+| 8 MiB | 675–698 µs | 691–699 µs | 549–561 µs |
+
+- 和原型在 macOS（Apple M4）上的比：macOS 上調大緩衝區讓 1 MiB 從 430 µs 到 41 µs（預設只有 8 KiB）；Linux 上調大沒有變快，1 MiB 兩次都變慢，原因沒有查。純傳輸時兩個平台都是內嵌和 region 接近；絕對值不能跨機器比（region 1 MiB 在 M4 是 36 µs，這台 50 µs）。
+
+**兩條通道在同一條 IO thread 上**：一條連續傳大資料（每則等回答），另一條每 1 ms 送一則 16 bytes、收 8 bytes 的回答，共 2000 則；照核心的複製次數，`SO_SNDBUF` 是預設和 425984 各一組，數字合在一起寫範圍：
+
+| 另一條在傳 | 小訊息 p50 | p90 | p99 | 大資料的速度 |
+| --- | --- | --- | --- | --- |
+| 沒有 | 26–30 µs | 29–39 µs | 42–65 µs | |
+| 1 MiB 內嵌 | 12–21 µs | 28–36 µs | 39–60 µs | 7.5–9.4 GiB/s |
+| 1 MiB region | 9–16 µs | 28–30 µs | 40–43 µs | 14–19 GiB/s |
+| 8 MiB 內嵌 | 13–112 µs | 126–202 µs | 220–290 µs | 6.0–6.6 GiB/s |
+| 8 MiB region | 27–184 µs | 139–313 µs | 330–377 µs | 11.7–15 GiB/s |
+
+- 閒置時比較慢：收的 thread 睡著了，要先叫醒（原型在 macOS 上也是約 24 µs）。
+- 接收緩衝區 256 KiB 時，8 MiB 內嵌的 p99 是 242–290 µs，和 64 KiB 的一樣。
+
+**同一台機器上查到的**：
+
+- 預設的 `SO_SNDBUF` 是 212992（kernel 的 `SK_WMEM_DEFAULT`）；不等、每次 4 KiB 寫進去，`EAGAIN` 之前放得下 180224 bytes（每段資料有 kernel 的記帳開銷）。
+- 要 212992 拿到 425984、1 MiB 拿到 2 MiB、4 MiB 拿到 8 MiB、16 MiB 也只拿到 8 MiB（這台的 `wmem_max` 是 4 MiB，kernel 6.18 起的預設）。
+- `vm.memfd_noexec` 是 0。
 
 ## ring 的設計
 
