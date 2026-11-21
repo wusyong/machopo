@@ -462,10 +462,10 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
     - **設大也拿不到**：kernel 把 `SO_SNDBUF` 限在 `net.core.wmem_max`，超過不報錯。kernel 6.18 之前預設是 212992（實際最多約 416 KiB），6.18 起改成 4 MiB（commit `a6d4f25888b8`，2025-08-21）；Ubuntu 24.04 的 GA kernel（6.8）在 6.18 之前，CI（`ubuntu-24.04`）應該也是，沒有確認。突破上限要 `SO_SNDBUFFORCE`，需要 `CAP_NET_ADMIN`。
     - **不選設成新舊 kernel 都拿得到的值（約 416 KiB）**：一樣量不出差別，多一個常數。
     - 對照 Chromium：`mojo/public/cpp/platform/platform_channel.cc` 用 `socketpair(AF_UNIX, SOCK_STREAM, 0, …)` 建通道，讀過的 `channel_posix.cc`、`socket_utils_posix.cc` 等五個檔案裡都沒有設緩衝區。
-45. **「多大的資料改走 region」三個平台共用 64 KiB**（2026-11-22，2f，「大的資料」；結掉「待決定」裡「要不要每個平台各一個數字」）：Linux 上兩條路正好在 64 KiB 交叉（照核心的複製次數量，內嵌 11–12 µs、region 12 µs），以上 region 快：128 KiB 約 1.5 倍、1 MiB 約 2 倍。`Platform` 不用加常數。
-    - **不選 Linux 提高門檻**（「待決定」原本的猜測）：依據是原型「調過緩衝區的 socket 內嵌 1 MiB 和 region 差不多」，但那量的是純傳輸。核心在內嵌的路上另外複製好幾次（`codec` 編進 payload、`Sender::send` 加上框架再複製一次、收的一端一次沒讀完時存進還沒讀完的那一則、解碼成 `BigBuffer`），region 的路上是寫進 region 和解碼時複製出來各一次；算進去之後內嵌在 128 KiB 以上都比較慢。量測的程式是近似：送的一端少算一次、收的一端對一次讀得完的訊息多算一次，交叉點準確在哪裡要等平台層寫完重量，「不提高」不受影響。
-    - **不選 Linux 降低門檻**：32 KiB 時 region 稍快（約 2 µs），在雜訊範圍裡；小的資料改走 region 的話池子用得多，還多一則「還你了」的訊息，這次沒有量。
-    - **一條 IO thread 管所有通道之後**（第 42 條）：一條通道傳 8 MiB 時，同一條 IO thread 上另一條通道的小訊息 p99 多約 0.2 到 0.35 ms，內嵌和 region 差不多（region 的複製是一整塊、不中斷的，尾巴稍長，但總量快 2 倍多）；1 MiB 的看不出影響。這是「待決定」裡「IO thread 上複製大資料的時間」的第一批數字。
+45. **「多大的資料改走 region」三個平台共用 64 KiB**（2026-11-22，2f，「大的資料」；結掉「待決定」裡「要不要每個平台各一個數字」）：用真的平台層量，Linux 上 64 KiB 以上 region 都比較快：64 KiB 是 17 對 22 µs，1 MiB 約 2 倍，8 MiB 約 3 倍。`Platform` 不用加常數。（寫平台層之前用探測程式量到的是「正好在 64 KiB 交叉」；兩種量法的數字都在 `details.md`。）
+    - **不選 Linux 提高門檻**（「待決定」原本的猜測）：依據是原型「調過緩衝區的 socket 內嵌 1 MiB 和 region 差不多」，但那量的是純傳輸。核心在內嵌的路上另外複製好幾次（`codec` 編進 payload、`Sender::send` 加上框架再複製一次、收的一端一次沒讀完時存進還沒讀完的那一則、解碼成 `BigBuffer`），region 的路上是寫進 region 和解碼時複製出來各一次；算進去之後內嵌在 128 KiB 以上都比較慢。量測的程式是近似：送的一端少算一次、收的一端對一次讀得完的訊息多算一次，平台層寫完之後重量過，結論相同。
+    - **不選 Linux 降低門檻**：64 KiB 時 region 已經快 5 µs，交叉點可能更低，但門檻是 `codec` 裡三個平台共用的常數，真的平台層量不到 64 KiB 以下的 region；探測程式在 32 KiB 量到的差距（約 2 µs）在雜訊範圍裡。小的資料改走 region 的話池子用得多，還多一則「還你了」的訊息。沒有看得出來的好處就不讓平台之間不一樣。
+    - **一條 IO thread 管所有通道之後**（第 42 條）：一條通道傳 8 MiB 時，同一條 IO thread 上另一條通道的小訊息 p99 多約 0.2 到 0.35 ms，內嵌和 region 差不多（region 的複製是一整塊、不中斷的，尾巴稍長，但總量快 2 倍多）；1 MiB 的看不出影響。這是「待決定」裡「IO thread 上複製大資料的時間」的第一批數字。用真的平台層重量時多看到一件事：host 送 8 MiB 的內嵌訊息時，socket 收不下的部分是 IO thread 在「可寫」時一段一段寫出去的，別的通道的 p99 到 1 ms；走 region 就沒有這一段。這是大的資料走 region 的另一個理由，也是池子沒有空塊、退回內嵌時的代價。
 46. **Linux 的 memfd 先帶 `MFD_NOEXEC_SEAL`，`EINVAL` 就不帶再建一次，不記住**（2026-11-22，2f，「共用記憶體」；2026-11-17 的看法）：帶了之後那塊記憶體不能被當成程式執行，而且改不回來（kernel 加上 `F_SEAL_EXEC`）。否則被攻破的 renderer 可以在「對方可寫」的 region 裡寫一個執行檔、用 `fexecve` 執行，繞過 noexec 的掛載點；之後的 sandbox 會擋 `execve`，這一層不靠它。
     - 旗標 Linux 6.3 起才有，舊的 kernel 回 `EINVAL`；有的系統把 `vm.memfd_noexec` 設成 2，不帶旗標的 `memfd_create` 會失敗。所以先帶、不認得才不帶，兩種系統都建得了。
     - **不選一律帶**：只支援 6.3 以上，Ubuntu 22.04 的 GA kernel（5.15）上建不了任何 region。**不選不帶**：沒有保護，`vm.memfd_noexec=2` 的系統上也建不了。
@@ -481,7 +481,7 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
     - **不選只有 IO thread 碰 epoll**（`write` 只記旗標，waiter 每次等之前登記）：正確性一樣，但 waiter 每次等都要掃所有通道，或另外維護一份「要登記的」清單。**不選一直開著 edge-triggered 的「可寫」**：對方每讀走一次就來一個事件，IO thread 每送一則多醒一次。
     - 對照 Chromium：`mojo/core/channel_posix.cc` 的 `WaitForWriteOnIOThreadNoLock` 在 IO thread 上就登記，不在的話丟一個 task 給 IO thread。那是因為它登記用的 `IOWatcher` 只能在 IO thread 上用，不是 kernel 的限制。
 49. **Linux 的接收緩衝區 256 KiB，`epoll_wait` 一次最多拿 16 個事件**（2026-11-22，2f，「控制通道」）：每次 `Waiter::wait` 做一次 `recvmsg`，讀進那條 thread 的緩衝區借給核心（第 42 條）。
-    - **256 KiB，不選 64 KiB**：量到兩者一樣快（一條通道和兩條通道都是），但門檻邊緣的最大內嵌訊息（64 KiB 加上框架的標頭和編碼）比 64 KiB 大一點，64 KiB 要讀兩次。一次讀 256 KiB 估計是十幾 µs（256 KiB 走 region 的來回，含兩次複製，量到 15–19 µs），不算佔住 IO thread。緩衝區一條 thread 一個，記憶體不是考量。
+    - **256 KiB，不選 64 KiB**：探測程式量到兩者一樣快，真的平台層量到 64 KiB 慢 5% 到 15%；而且門檻邊緣的最大內嵌訊息（64 KiB 加上框架的標頭和編碼）比 64 KiB 大一點，64 KiB 要讀兩次。一次讀 256 KiB 估計是十幾 µs（256 KiB 走 region 的來回，含兩次複製，量到 15–19 µs），不算佔住 IO thread。緩衝區一條 thread 一個，記憶體不是考量。
     - **不選從小開始、照訊息的大小變大**（Chromium 的 `channel.cc` 從 4 KiB 開始）：緩衝區只有一個、借出去用，沒讀完的部分核心本來就自己存，變大換不到東西。
     - **16 個事件**留在 waiter 裡一個一個交出去。原本打算 `remove` 時丟掉屬於那條通道的，沒有做：key 不重用，找不到的本來就略過。它也是「別的 thread 打斷等待，最多晚多久被處理」的上限：16 次 `recvmsg`，估計最多約 0.3 ms，沒有量。
     - 對照 Chromium：`channel_posix.cc` 每次可讀時連續讀，最多 256 KiB（`kMaxBatchReadCapacity`）。

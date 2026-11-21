@@ -28,10 +28,10 @@
 | 2e-5：2e 的檢查和文件；Linux、Windows 在這台機器測不到的部分怎麼處理（第 40 條） | 完成 | 2026-11-21 |
 | 2e-6：三個平台共用的啟動入口（`ipc::platform` 的 `spawn`、`inherited`、`child_gone`）；跨 process 的測試拆成不分平台的和 macOS 自己的；`Platform` 夠不夠用對過一次（第 41 條） | 完成 | 2026-11-21 |
 | 2e-7：一個 process 一條 IO thread：`IoLoop` 管多個端點，平台的介面拆成 `Platform`（通道）和 `Waiter`（等待）；macOS 和同一個 process 的平台跟著改（第 42 條） | 完成 | 2026-11-21 |
-| 2f：Linux 的平台層；量 socket 的緩衝區和大的資料的門檻。在 Linux 的機器上做（第 40 條）；先決定的是第 43 到 49 條 | 進行中 | |
+| 2f：Linux 的平台層；量 socket 的緩衝區和大的資料的門檻。在 Linux 的機器上做（第 40 條）；先決定的是第 43 到 49 條 | 完成 | 2026-11-22 |
 | 2f-1：Linux 的共用記憶體（memfd 和 seal、map、只能讀的 handle、不能執行；第 46、47 條） | 完成 | 2026-11-22 |
 | 2f-2：Linux 的通道（socket 的 `Platform`、epoll 的 `Waiter`、`spawn`、`inherited`、`child_gone`；跨 process 的測試；第 43、48、49 條） | 完成 | 2026-11-22 |
-| 2f-3：用真的平台層重量（第 44、45、49 條的數字）；2f 的檢查和文件 | 未開始 | |
+| 2f-3：用真的平台層重量（第 44、45、49 條的數字）；2f 的檢查和文件 | 完成 | 2026-11-22 |
 | 2g：Windows 的平台層；量 pipe 的緩衝區。在 Windows 的機器上做（第 40 條）；對方不能附 handle 時不看訊息裡的 handle 數值（第 41 條的契約，要有跨 process 的測試）；做的時候決定 CI 要不要加 macOS、Windows 的 runner | 未開始 | |
 | 2h：第 2 階段的檢查、`soundness.md`、`test.py` 的指令、文件；把 `test.py ipc` 的每一項排進每週的 CI（2a 起在本機跑） | 未開始 | |
 | 3：啟動 child process | 未開始 | |
@@ -444,4 +444,16 @@ branch `0004-linux`，從 `0004` 的 2e-7（`82a4fc7`）分出去。
   - 跑完確認檔案都還原了。
 - **只靠審查的**：上面的 `MSG_CTRUNC`；`spawn` 在 child 那一端的號碼是 0 到 2 時換號碼；`spawn` 用過的 `Command` 不能再用（`docs/test-gaps.md`）。
 - **跑過的檢查**：`cargo test -p ipc`（單元 80 個、整合 66 個）；`cargo clippy -p ipc --all-targets -- -D warnings`、`cargo fmt --check -p ipc`；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。
-- **還沒做的**：2f-3，用真的平台層重量。
+
+### 2f-3：用真的平台層重量（2026-11-22，Fedora、kernel 7.3.3、AMD Ryzen AI 9 HX 370）
+
+- **為什麼**：第 44、45、49 條是照一個模擬核心複製次數的 C 程式定的，寫的時候就說平台層做完要用真的重量。
+- **怎麼量的**：一個暫時的 `ipc` 的 example（release build，沒有留下），經過 `ipc::platform::spawn`、`IoLoop`、`Link::send` 和 `codec`。`SO_SNDBUF` 和接收緩衝區的大小暫時用環境變數開口，量完還原（`git status` 確認工作目錄乾淨）。數字在 `details.md` 的「Linux 上 socket 的緩衝區和門檻的實測」的最後一段。
+- **結論都沒有變**：
+  - 第 44 條（不設緩衝區）：`SO_SNDBUF` 要 212992、1 MiB、4 MiB 都沒有趨勢。
+  - 第 45 條（門檻 64 KiB）：64 KiB 以上 region 都比較快（64 KiB 是 17 對 22 µs，8 MiB 約 3 倍）。探測程式量到「正好在 64 KiB 交叉」不準：真的程式在內嵌的路上複製得比模擬的多。第 45 條的敘述照真的數字改了。
+  - 第 49 條（接收緩衝區 256 KiB）：64 KiB 慢 5% 到 15%，探測程式量到的是一樣快。
+- **多看到的**：host 送大的內嵌訊息時，socket 收不下的部分由 IO thread 在「可寫」時寫出去，同一條 IO thread 上別的通道的 p99 到 1 ms（8 MiB）；走 region 沒有。探測程式的送是在送的 thread 上等，看不到這一段。記在第 45 條。
+- **量的限制**：一台機器（筆電，`powersave`）；數字有雙峰，只看兩次一致的；門檻以下的 region 量不到（門檻是 `codec` 的常數）。
+- **2f 整個做完時跑的**：`cargo test -p ipc`（單元 80 個、整合 66 個）、`cargo clippy -p ipc --all-targets -- -D warnings`、`cargo fmt --check -p ipc`、`sanity.py` 的 7 項。整個 workspace 的測試、fmt、clippy 照規矩在第 2 階段結束（2h）跑。
+- **給接著做的人**：`tests/it/process_channel.rs` 的兩個測試在 2f-2 放寬了時序（那一節），macOS 上還沒跑過；`0004-linux` 進 `0004` 之後在 macOS 上跑一次 `cargo test -p ipc`。

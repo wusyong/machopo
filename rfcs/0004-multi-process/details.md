@@ -417,6 +417,39 @@ ringbuf、rtrb、crossbeam 的 `ArrayQueue` 是給同一個 process 的 thread �
 - 要 212992 拿到 425984、1 MiB 拿到 2 MiB、4 MiB 拿到 8 MiB、16 MiB 也只拿到 8 MiB（這台的 `wmem_max` 是 4 MiB，kernel 6.18 起的預設）。
 - `vm.memfd_noexec` 是 0。
 
+**用真的平台層重量**（2026-11-22，同一台機器；`ipc::platform::linux` 寫完之後）：一個暫時的 example（沒有留下），release build。host 是一個 `IoLoop` 加 `ipc::platform::spawn` 啟動的 child，child 也是一個 `IoLoop`；訊息是帶一個 `Bytes` 的 enum，經過 `Link::send`、`codec`、端點。內嵌是把 `region_limit` 設成 0（沒有 region，`codec` 退回放在訊息裡）。`SO_SNDBUF` 和接收緩衝區的大小沒有對外的設定，量的時候暫時用環境變數開口。每組兩次。數字比上面的探測程式高：多了 IO thread 把訊息轉給送的那條 thread 的一次交接，和真的編碼、解碼。
+
+host 送一則給 child、child 回一則小的（中位數；兩次差得多的是上面說的雙峰）：
+
+| 大小 | 內嵌 | region |
+| --- | --- | --- |
+| 64 KiB | 22 µs | 17 µs |
+| 128 KiB | 30–31 µs | 23 µs |
+| 256 KiB | 35–52 µs | 23–35 µs |
+| 512 KiB | 71–107 µs | 29–48 µs |
+| 1 MiB | 139–199 µs | 67–83 µs |
+| 8 MiB | 2.34 ms | 0.79–0.83 ms |
+
+- `SO_SNDBUF` 要 212992、1 MiB、4 MiB：內嵌的數字都在預設的那兩次的範圍裡（1 MiB 是 141–215 µs，8 MiB 是 1.9–2.4 ms），沒有趨勢。
+- 接收緩衝區 64 KiB：比 256 KiB 慢一點（64 KiB 是 24 對 22 µs，1 MiB 是 229–234 對 139–199 µs）。
+
+兩個 child 在 host 的同一個 `IoLoop` 上，一個連續傳大資料、另一個每 1 ms 一則小的來回（2000 則）：
+
+| 大資料的方向和走法 | 小訊息 p50 | p90 | p99 | 大資料的速度 |
+| --- | --- | --- | --- | --- |
+| 沒有 | 36–51 µs | 49–65 µs | 74–138 µs | |
+| host 送 1 MiB，內嵌 | 34–35 µs | 38–41 µs | 73–83 µs | 4.2–5.2 GiB/s |
+| host 送 1 MiB，region | 31–34 µs | 37–40 µs | 44–55 µs | 12 GiB/s |
+| host 送 8 MiB，內嵌 | 50–57 µs | 149–270 µs | 0.61–1.15 ms | 3.4 GiB/s |
+| host 送 8 MiB，region | 40 µs | 43–47 µs | 58–66 µs | 10 GiB/s |
+| child 送 1 MiB，內嵌 | 34–38 µs | 57–70 µs | 88–101 µs | 1.9–2.4 GiB/s |
+| child 送 1 MiB，region | 37–39 µs | 58–65 µs | 78–84 µs | 9.9–11 GiB/s |
+| child 送 8 MiB，內嵌 | 30–32 µs | 192–250 µs | 389–406 µs | 1.9–2.0 GiB/s |
+| child 送 8 MiB，region | 37–39 µs | 366–380 µs | 434–435 µs | 8.5–8.6 GiB/s |
+
+- **host 送大的內嵌訊息時，別的通道等得最久**（p99 到 1 ms）：socket 一次收不下，剩下的排在佇列裡，由 IO thread 在「可寫」時一段一段寫出去，那是 IO thread 的時間。走 region 時 host 只送一則小的通知，別的通道看不出影響。探測程式沒有這一段（它的送是在送的那條 thread 上等）。
+- **child 送大資料給 host**（renderer 往 Browser 的方向）：內嵌和 region 讓別的通道多等的差不多（8 MiB 的 p99 約 0.4 ms），region 快約 4 倍。和探測程式量到的一致。
+
 ## ring 的設計
 
 訊息的 ring 沒有採用（`README.md` 的第 19 條）；body 的管道也不用 ring（第 21 條）。這一節留給之後要加的時候（`README.md` 的「之後的可能」）。
