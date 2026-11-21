@@ -1,0 +1,27 @@
+# A probe for RFC 0004 (multi-process), Windows only, not part of machopo's
+# workspace: what an overlapped named pipe does that the Windows layer's
+# design rests on, and the timings that size its buffers.
+#   $env:CARGO_TARGET_DIR = "../../../target/mp-prototype-windows"; cargo run --release
+[workspace]
+
+[package]
+name = "mp-prototype-windows"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+# Measured beside the probe's own pipe (`src/others.rs`).
+interprocess = "2.4"
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Memory",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }
+
+[profile.release]
+debug = 1
