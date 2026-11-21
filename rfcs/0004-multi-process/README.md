@@ -422,9 +422,14 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
     - **佇列滿了**：不等的送失敗時 kernel 把訊息退回成收到的樣子（right 多一個計數、out-of-line 的記憶體重新 map 一份），實測的；所以 right 用複製的方式送、失敗就 `mach_msg_destroy`，寫的人手上的不動。之後請 kernel 在有空間時通知（`MACH_NOTIFY_SEND_POSSIBLE`，登記時已經有空間就立刻通知，也是實測的）。Chromium 不是這樣做：它把訊息留在送的緩衝區、排一個重試的 task。選通知是因為核心的佇列已經留著那則訊息，平台層不用再留一份，也不用輪詢。
     - **比對整個 audit token**：一開始照 pid（host 知道 child 的 pid，child 知道 parent 的），第一則到了之後記下整個 token，之後要一模一樣（Chromium 記的是握手那一則的）。不合的丟掉、通道不關，和 Chromium 一樣。
     - 對方不在了：dead-name 和 no-senders 都登記，任一個到了就算（第 3 條）。叫醒用另一個 port（放進同一個 port set），不拿著通往自己的 port 的 send right：拿著的話 no-senders 永遠不會來。
+40. **Linux 和 Windows 的平台層在那個平台的機器上做和驗**（2026-11-21，第 2 階段的 2e-5）：2f 在真的 Linux 機器上、2g 在真的 Windows 機器上寫和跑，不在 macOS 上盲寫、也不用容器；branch 推上去，在那台機器上接著做。量測（socket 的緩衝區、大資料的門檻）因此是在真的機器上量的。
+    - **不選本機用 Docker 跑 Linux**：寫的當下能跑，但那是虛擬機裡的 aarch64，量到的時間不能當成真的機器的。
+    - **不選只靠 CI**：每改一次要 push 一次、等一輪，mutation test 和量測做不了。
+    - **CI 要不要加 macOS 和 Windows 的 runner，等 Windows 那一層做的時候一起決定**：CI 現在只有 Ubuntu，macOS 那一層的測試一次都不跑，Windows 的之後也一樣。兩個平台是同一個問題。在那之前記在 `docs/test-gaps.md` 的「缺少的工具和檢查」。
 
 ## 待決定
 
+- **CI 要不要加 macOS、Windows 的 runner**（第 40 條；2g 做的時候）：只跑 `cargo test -p ipc`（不依賴 V8，幾分鐘）。要看的是費用（GitHub 的 macOS runner 是 Linux 的 10 倍、Windows 是 2 倍）和 runner 的系統版本與開發機不同時那幾個實測來的行為還成不成立。
 - **IO thread 上複製大資料的時間**（第 36 條；第 3 階段量捲動時每個 frame 的延遲時一起看）：64 KiB 以上的 `BigBuffer` 在 IO thread 上從 region 複製出來，那一段時間後面的訊息等著。量到是問題時，把複製搬到目標 thread（IO thread 只交出「這一塊的借據」，目標 thread 複製完再還）：線上的格式不變，代價是表跨 thread 共用、多一組 loom 的模型。
 
 排程之前：

@@ -25,9 +25,9 @@
 | 2e-2：macOS 的共用記憶體（memory entry 的建立、map、只能讀的 handle） | 完成 | 2026-11-21 |
 | 2e-3：macOS 的 Mach 訊息和 right（最底下一層）、rendezvous（Browser 的 server、child 的查詢；測試自己啟動 child process）。順序和 2e-4 對調過（第 38 條） | 完成 | 2026-11-21 |
 | 2e-4：macOS 的通道（Mach 訊息的 `Platform`、等 port set、dead-name 和 no-senders、audit token；跨 process 的測試）；大訊息走 out-of-line（第 39 條） | 完成 | 2026-11-21 |
-| 2e-5：2e 的檢查和文件；Linux、Windows 在這台機器測不到的部分怎麼處理 | 未開始 | |
-| 2f：Linux 的平台層；量 socket 的緩衝區和大的資料的門檻 | 未開始 | |
-| 2g：Windows 的平台層 | 未開始 | |
+| 2e-5：2e 的檢查和文件；Linux、Windows 在這台機器測不到的部分怎麼處理（第 40 條） | 完成 | 2026-11-21 |
+| 2f：Linux 的平台層；量 socket 的緩衝區和大的資料的門檻。在 Linux 的機器上做（第 40 條） | 未開始 | |
+| 2g：Windows 的平台層；量 pipe 的緩衝區。在 Windows 的機器上做（第 40 條）；做的時候決定 CI 要不要加 macOS、Windows 的 runner | 未開始 | |
 | 2h：第 2 階段的檢查、`soundness.md`、`test.py` 的指令、文件；把 `test.py ipc` 的每一項排進每週的 CI（2a 起在本機跑） | 未開始 | |
 | 3：啟動 child process | 未開始 | |
 
@@ -307,4 +307,12 @@
 - **只靠跨 process 的測試守的**：收到的 out-of-line 的各種檢查、audit token、通知只認 kernel 的。fuzz 和 Miri 碰不到（系統呼叫）。
 - **跑過的檢查**：`cargo test -p ipc`（單元 90 個、整合 69 個）；`test.py ipc models`、`ipc verus`；`cargo clippy -p ipc --all-targets -- -D warnings`（三種 cfg）、`cargo fmt --check`；`sanity.py` 的 7 項。
 - **沒有重跑的**：fuzz 和 Miri。核心沒有動；端點改的是 `Platform::wait` 的介面和 `run` 的迴圈，而 fuzz 和 Miri 的端點測試驅動的是 `turn`（一步一步推），碰不到改的地方。改到的由兩條 thread 的端點測試（走 `run` 和 `ipc::local` 的 `wait`）和跨 process 的測試（走 Mach 的 `wait`）涵蓋。
+
+### 2e-5：其他平台怎麼驗（2026-11-21）
+
+- **決定**：「已決定的事項」第 40 條。2f、2g 在 Linux、Windows 的機器上做；CI 加不加 macOS、Windows 的 runner 等 2g 一起定（「待決定」多一條）。
+- **查到的現況**：CI 的三個 workflow 都只跑 `ubuntu-24.04`。macOS 那一層的測試（`platform::macos` 的單元測試 40 個、`tests/it/rendezvous.rs`、`tests/it/mach_channel.rs`）只在 macOS 上編得起來，CI 一次都不跑；記在 `docs/test-gaps.md`。
+- **這一段沒有程式**。2e 的每一段各自跑過它的檢查（上面各節）；整個 workspace 的測試、`cargo fmt --check`、workspace 的 clippy 照規矩在第 2 階段結束（2h）跑。
+- **branch**：`0004` 在 2026-11-21 推到 origin（到 2e-4 為止），給另外兩台機器 pull。
+- **給在 Linux、Windows 上接手的人**：平台層要實作的只有 `ipc::endpoint::Platform`（`write`、`wake`、`wait`、`map`、`create`、`shut`）；`ipc::platform::macos::channel` 是一個完整的例子，`ipc::local` 是最小的。`tests/it/mach_channel.rs` 的測試不分平台的部分（host 是真的端點、child 是測試把自己再執行一次）可以照著寫；child 怎麼拿到它那一端在 Linux 是繼承 fd、在 Windows 是繼承 handle，不需要 rendezvous。
 

@@ -116,6 +116,7 @@
 | 項目 | 狀況 | 現在靠什麼 | 之後怎麼處理 |
 | --- | --- | --- | --- |
 | CI | 整套每天跑一次，GC 的 `matrix`、`fuzz` 每週一次（`testing.md` 的「CI」），merge 不等它；CI 只在 Linux（x86-64）上跑，畫面只經過 lavapipe，沒有 GPU 的路；沒有 CODEOWNERS | 開發機上照 `CLAUDE.md` 的清單跑改動相關的部分；每次 push 跑 lint、`sanity.py` 和 Linux 的 `cargo test --workspace`（Rust 的 `webdriver`、`automation_pipe` 測試跟著它） | 之後加 Windows 的 `cargo test`、`reftest` 和 macOS（ARM64）的 `matrix`；真視窗的情境（`test.py scenarios --window`）：GitHub 的標準 runner 沒有 GPU 也沒有螢幕，要 xvfb 或 headless 的 Wayland compositor 加上 lavapipe，還沒試 |
+| `ipc` 的 macOS 平台層（`crates/ipc/src/platform/macos/`，和 `crates/ipc/tests/it/` 的 `rendezvous.rs`、`mach_channel.rs`） | 只在 macOS 上編得起來，而 CI 只有 Linux：這些測試 CI 一次都不跑。其中幾個行為是在 macOS 26 上實測來的（佇列滿時 kernel 怎麼退回訊息、通知什麼時候到），別的版本沒有驗過 | 開發機：改到 `ipc` 的人在 macOS 上跑 `cargo test -p ipc` | 和 Windows 的平台層一起決定要不要在 CI 加 macOS、Windows 的 runner（Windows 那一層做的時候） |
 | TSan | 自己編 V8 之後做得到，但要另外的 V8 build 設定 | elise 的 heap verifier（`HeapOptions::verify`，每次 GC 之後走一遍 heap）抓不到只在特定記憶體順序下才出現的 race；cppgc 的 marking verifier（debug 的 V8 一律打開）只看 cppgc 上的物件，machopo 的不在那裡 | 之後（還沒排進任何階段）：DOM 的 heap 的 concurrent marking 已經是預設，marker 讀 `TracedReference`（C4）的記憶體順序的錯誤 stress 碰不上，目前只能靠審查 |
 | 效能的回歸 | 沒有自動的效能測試：優化（例如 style 照桶比對 selector）弄壞了，行為照樣對 | 多數的優化有計數的測試守著（`cargo test -p style --test it matching::few_selectors_are_matched` 數完整比對過的 selector）；沒有的列在下面的「沒有計數守著的優化」；時間只在使用者要求時量（`benchmarks.md`） | 補那裡的計數，大的先補；數字接近 Chrome 時，再考慮固定機器上的自動量測 |
 | Miri | 不能執行 FFI（V8 的 C++） | 審查；`crates/bindings/soundness.md` 開宗明義「這是論證，不是證明」 | 無計畫 |
