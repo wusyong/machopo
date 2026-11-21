@@ -140,14 +140,14 @@ Browser process                                Renderer process
 - 上層只經過一個介面送和收訊息（目的地、內容、handle），不知道底下是哪一種傳輸。
 - 三個平台同一個形狀：IO thread 等「通道」和「喚醒」；送的時候不等，送不出去的自己排隊。這份每個 process 只有一條通道，但 IO thread 的迴圈不寫死成只等一條。
   - **Linux**：non-blocking 的 socket。handle 跟著同一次 `sendmsg` 送出；收的一端處理控制資料被截斷的情況，收到的 fd 用 `MSG_CMSG_CLOEXEC` 設成 close-on-exec。
-  - **macOS**：一則訊息是一則 Mach 訊息；每一則都照 audit token 確認是那個 child 送的（第 22 條）。IO thread 阻塞在 `mach_msg`，等一個 port set（通道的 receive port 加一個自己的喚醒用的 port）；送的 timeout 是 0。在通往對方的 send right 上登記 dead-name、在自己的 receive port 上登記 no-senders，任一個到了就當成斷線；通知只認 kernel 送的（訊息的 audit token），對方可以送一則 id 相同的訊息來假冒。
+  - **macOS**：一則訊息是一則 Mach 訊息（64 KiB 以上的內容走 out-of-line，第 39 條）；每一則都照 audit token 確認是那個 child 送的（第 22 條）。IO thread 阻塞在 `mach_msg`，等一個 port set（通道的 receive port 加一個自己的喚醒用的 port）；送的 timeout 是 0，佇列滿了請 kernel 在有空間時通知。在通往對方的 send right 上登記 dead-name、在自己的 receive port 上登記 no-senders，任一個到了就當成斷線；通知只認 kernel 送的（訊息的 audit token），對方可以送一則 id 相同的訊息來假冒。
   - **Windows**：overlapped 的 `ReadFile` / `WriteFile`，寫入一次只有一筆在進行。IO thread 等「讀完成」和「喚醒」兩個 event；結束時用 `CancelIoEx` 取消進行中的 I/O 再關 handle。Browser 送 handle 時自己用 `DuplicateHandle` 複製進 renderer 的 process，訊息只帶數值。
 - 序列化：serde 加 postcard（第 22 條）。postcard 自己沒有巢狀深度的上限：會一層包一層的型別（下一條）的解碼自己數深度。內容裡 region 只是編號和長度，和一般的欄位一樣；Browser 新發出的 region 的 handle 不在內容裡，跟著 `ipc` 自己的一則訊息（「這個編號的 region 給你」）走在用到它的訊息前面（第 30 條）。包在 postcard 外面的一層決定一段位元組放訊息裡還是 region，並數巢狀的深度（第 31 條）。
 - 收的一端先檢查長度上限、目的地的編號（不認得的就是壞訊息）和 handle 的數量（對方沒有權限時只能是 0），再反序列化。反序列化時巢狀的深度有上限：訊息裡有可以一層包一層的型別（例如 `protocol::webdriver` 的 `WebDriverValue`，renderer 送的），不設限的話對方送一個巢狀很深的值就能讓收的一端 stack overflow，那不是 panic、接不住，整個 process 結束。不合的就當成對方壞掉，關掉通道（Chromium 的 `ReceivedBadMessage`）。
 
 ### 大的資料
 
-- **`protocol` 加一個 bytes 的型別**（`protocol::BigBuffer`，Chromium 的 `mojo_base::BigBuffer`，第 25 條）：單一 process 時是 `Bytes`；跨 process 時 64 KiB 以下放在訊息裡，以上放進共用記憶體（第 22 條）。兩個方向都走留著重複用的 region，不是每筆資料新建一塊（新建、map、第一次碰每一頁的成本比直接放在訊息裡還高）：Browser 送的寫進它給這個 renderer 的唯讀的 region（handle 在那一塊第一次用之前交出去），訊息只帶編號和長度，renderer 複製出來之後回報、Browser 才重複用那一塊；renderer 送的寫進 Browser 之前配給它的 region，訊息一樣只帶編號和長度，Browser 複製出來之後回報。一筆資料用一整塊（第 29 條）；沒有空的那一塊時照樣放在訊息裡。macOS 上訊息一律內嵌在 Mach 訊息裡，不用 out-of-line 的 descriptor（64 KiB 以下兩者一樣快，以上已經走 region）。跨邊界的訊息裡的位元組欄位都用它：子資源的回應、worker 的主 script、導覽的 body 放在訊息裡的那一段、blob 的內容和 request 的 body（renderer 送的）、history 的 state、沒有 GPU 時 frame 的像素。導覽的 body 不用：它只有開頭在訊息裡，其餘走 data pipe（下一節）。
+- **`protocol` 加一個 bytes 的型別**（`protocol::BigBuffer`，Chromium 的 `mojo_base::BigBuffer`，第 25 條）：單一 process 時是 `Bytes`；跨 process 時 64 KiB 以下放在訊息裡，以上放進共用記憶體（第 22 條）。兩個方向都走留著重複用的 region，不是每筆資料新建一塊（新建、map、第一次碰每一頁的成本比直接放在訊息裡還高）：Browser 送的寫進它給這個 renderer 的唯讀的 region（handle 在那一塊第一次用之前交出去），訊息只帶編號和長度，renderer 複製出來之後回報、Browser 才重複用那一塊；renderer 送的寫進 Browser 之前配給它的 region，訊息一樣只帶編號和長度，Browser 複製出來之後回報。一筆資料用一整塊（第 29 條）；沒有空的那一塊時照樣放在訊息裡。macOS 的平台層對 64 KiB 以上的訊息用 out-of-line 的 descriptor（第 39 條；`BigBuffer` 的大資料還是走 region，會這麼大的訊息是很長的字串，或池子沒有空塊時退回放在訊息裡的）。跨邊界的訊息裡的位元組欄位都用它：子資源的回應、worker 的主 script、導覽的 body 放在訊息裡的那一段、blob 的內容和 request 的 body（renderer 送的）、history 的 state、沒有 GPU 時 frame 的像素。導覽的 body 不用：它只有開頭在訊息裡，其餘走 data pipe（下一節）。
 - **從 renderer 來的大資料**：renderer 還能寫那塊記憶體，所以 Browser 一律先複製出來再用（Chromium 的 `BigBuffer` 的註解也警告這個 TOCTOU 的風險）。
 
 ### 導覽的 body 的管道
@@ -348,7 +348,7 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
 22. **postcard、每則訊息比對 audit token、大的資料走留著重複用的 region**（2026-11-20，原型量過的三項，`prototype/README.md`）：
     - **序列化用 postcard**：machopo 真的 frame 最多 46 個 quad，編 1.4 µs、解 2.3 µs；編出來的 1150 個 quad 的 frame 也只有編 26 µs、解 49 µs。起草時擔心它把整數一個一個編成不定長度、frame 大時太慢，量出來不成立。postcard 沒有巢狀深度的上限，會一層包一層的型別的解碼自己數深度，fuzz 守著。不選 bincode（就我們的了解 2025 年停止維護；ipc-channel 0.21 也換成 postcard）、Cap'n Proto 和 FlatBuffers（要 schema 和產生的程式，`protocol` 的 enum 要整個改寫）、固定長度的自訂格式（量不到需要）。
     - **macOS 上每則訊息都比對 audit token**：原型每則都比對，成本已經在一則來回 4.2 µs 裡。對照 Chromium：也比對。不選只靠「send right 只交給那個 child」：比對幾乎不花時間，多一層。
-    - **大的資料走留著重複用的 region，門檻 64 KiB**：送 1 MiB 給對方、直到它複製出來，留著重複用的 region 是 36 µs，放在訊息裡 105 µs，每次新建一塊 region 120 µs（8 MiB 是 317、1050、956 µs）；64 KiB 時是 6 µs 對 12 µs。門檻照 Chromium 的 `BigBuffer`。不選每筆資料新建一塊 region（起草時「Browser 送的放進唯讀的 region、連 handle 一起交給 renderer」的寫法）：比放在訊息裡還慢。不選 Mach 的 out-of-line 記憶體：8 MiB 時和 region 一樣快，收的一方拿到自己的一份，但只有 macOS 有，三個平台要同一個設計。
+    - **大的資料走留著重複用的 region，門檻 64 KiB**：送 1 MiB 給對方、直到它複製出來，留著重複用的 region 是 36 µs，放在訊息裡 105 µs，每次新建一塊 region 120 µs（8 MiB 是 317、1050、956 µs）；64 KiB 時是 6 µs 對 12 µs。門檻照 Chromium 的 `BigBuffer`。不選每筆資料新建一塊 region（起草時「Browser 送的放進唯讀的 region、連 handle 一起交給 renderer」的寫法）：比放在訊息裡還慢。`BigBuffer` 不選 Mach 的 out-of-line 記憶體：8 MiB 時和 region 一樣快，收的一方拿到自己的一份，但只有 macOS 有，三個平台要同一個設計（這一句講的是 `BigBuffer` 怎麼搬；平台層怎麼送一則很大的訊息是另一回事，第 39 條）。
 
 23. **tile 經過共用記憶體交給 Viz，Viz 上傳**（2026-11-20，T1，「tile 交接」）：compositor 照舊用 CPU 畫，像素寫進 Browser 配給它的 region（第 22 條的池子），frame 的 resource 帶 mailbox 和 region 的編號、位置和長度；Viz 複製出來、上傳，生命週期用 `ReturnResources` 和 `DestroySharedImage` 兩則訊息。canvas 的快照一樣。2026-11-20 的盤點確認 renderer 這一側沒有 wgpu，raster 是 vello_cpu 畫的 CPU 像素，所以 raster 的位置不用動。對照 Chromium：OOP-R 之前是這樣（one-copy raster），現在是 OOP-R（T3）。不選 T2（renderer 自己上傳、交出 texture）和 T3（OOP-R），理由在「理由和其他做法」。之後做 GPU raster 時換成 T3：那時過邊界的是 display list 不是像素，這一段本來就要重來（「之後的可能」）。
 
@@ -413,6 +413,15 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
     - 對照 Chromium：`MachPortRendezvous` 在 `base/`，`ChannelMac` 建在它上面。
     - rendezvous 實作時定的（第 16 條的細節）：名字是 `org.machopo.MachPortRendezvousServer.<pid>`；比登記早到的問題留著、`register` 時當場回答，server 的 thread 不等任何人（原型是等 500 ms，那樣一個沒登記的 process 就能卡住所有 child）；等著的問題最多 64 個、同一個 process 的新問題擠掉舊的；回答過的 pid 再問直接拒絕；只回答 id 對、沒有內容、沒有 right、有回答用的 port 的訊息。
     - Mach 訊息這一層定的：不送也不收 out-of-line 的記憶體（第 22 條）；排法不對的訊息整則用 `mach_msg_destroy` 毀掉，不先拿一半；一則最多 16 個 right（和框架的 `MAX_HANDLES` 一樣）。
+39. **macOS 的平台層對大訊息用 out-of-line，不切**（2026-11-21，第 2 階段的 2e-4，`ipc::platform::macos::channel`；改掉第 22 條的「macOS 上訊息一律內嵌」）：核心的一則訊息是一則 Mach 訊息，64 KiB 以下內嵌、以上 out-of-line（kernel 把送的一方的頁用 copy-on-write map 給收的一方）。這是 Chromium 的 `ChannelMac` 的做法（它的門檻是一個 page）。
+    - **量到的**（macOS 26、M4）：一則 Mach 訊息內嵌最多 48 MiB，而核心的訊息最大 128 MiB，所以不用 out-of-line 就得切。切成 16 KiB 到 16 MiB 搬同樣多的資料，每 MiB 都是 80 到 115 µs，切多大幾乎沒差。同一個量法下 out-of-line 對內嵌一則：64 KiB 一樣（23 µs），256 KiB 是 30 對 90 µs，8 MiB 是 584 對 1371 µs。經過通道、不複製（下面）：8 MiB 是 408 µs。
+    - **不選切成好幾則內嵌的**（256 KiB 或 1 MiB 一則）：慢 2 到 3 倍，收的一端沒到齊的訊息要先存起來（多一次複製），每條通道的緩衝區也要那麼大。
+    - **第 22 條的理由哪裡不夠**：它回答的是「`BigBuffer` 的大資料用什麼搬」（region，三個平台都有），不是「平台層怎麼送一則很大的訊息」。大訊息不走 region 的情況有兩種：很長的字串，和池子沒有空塊時退回放在訊息裡的 `BigBuffer`。平台層怎麼搬位元組核心看不到，Linux 的 socket 和 Windows 的 pipe 本來就是另一種搬法（串流：寫多少算多少），不受這一條影響。
+    - **out-of-line 的風險和擋法**：送的一方決定收的一方 map 多少。接收的緩衝區帶一個上限（核心最長的訊息），超過的、兩塊的、內嵌和 out-of-line 同時有的，整則毀掉、當成對方不在了。這些檢查 fuzz 和 Miri 碰不到，靠跨 process 的測試（惡意的 child）。
+    - **端點向平台要位元組的介面改成「借」**（`Platform::wait` 收一個 callback）：原本是「放進這個 `Vec`」，out-of-line 的內容就要先複製一次，省掉的那次複製等於沒省。改完 8 MiB 從 622 µs 到 408 µs。
+    - **佇列滿了**：不等的送失敗時 kernel 把訊息退回成收到的樣子（right 多一個計數、out-of-line 的記憶體重新 map 一份），實測的；所以 right 用複製的方式送、失敗就 `mach_msg_destroy`，寫的人手上的不動。之後請 kernel 在有空間時通知（`MACH_NOTIFY_SEND_POSSIBLE`，登記時已經有空間就立刻通知，也是實測的）。Chromium 不是這樣做：它把訊息留在送的緩衝區、排一個重試的 task。選通知是因為核心的佇列已經留著那則訊息，平台層不用再留一份，也不用輪詢。
+    - **比對整個 audit token**：一開始照 pid（host 知道 child 的 pid，child 知道 parent 的），第一則到了之後記下整個 token，之後要一模一樣（Chromium 記的是握手那一則的）。不合的丟掉、通道不關，和 Chromium 一樣。
+    - 對方不在了：dead-name 和 no-senders 都登記，任一個到了就算（第 3 條）。叫醒用另一個 port（放進同一個 port set），不拿著通往自己的 port 的 send right：拿著的話 no-senders 永遠不會來。
 
 ## 待決定
 

@@ -24,7 +24,7 @@
 | 2e-1：端點（`ipc::endpoint`）：通道、`Control`、池子和表、管道的兩半、`codec` 組成上層用的介面，IO thread 的迴圈；同一個 process 裡的平台（整合測試、Miri、fuzz） | 完成 | 2026-11-21 |
 | 2e-2：macOS 的共用記憶體（memory entry 的建立、map、只能讀的 handle） | 完成 | 2026-11-21 |
 | 2e-3：macOS 的 Mach 訊息和 right（最底下一層）、rendezvous（Browser 的 server、child 的查詢；測試自己啟動 child process）。順序和 2e-4 對調過（第 38 條） | 完成 | 2026-11-21 |
-| 2e-4：macOS 的通道（Mach 訊息的 `Platform`、等 port set、dead-name 和 no-senders、audit token；跨 process 的測試）；先量 Mach 訊息內嵌的大小上限，定大訊息切多大 | 未開始 | |
+| 2e-4：macOS 的通道（Mach 訊息的 `Platform`、等 port set、dead-name 和 no-senders、audit token；跨 process 的測試）；大訊息走 out-of-line（第 39 條） | 完成 | 2026-11-21 |
 | 2e-5：2e 的檢查和文件；Linux、Windows 在這台機器測不到的部分怎麼處理 | 未開始 | |
 | 2f：Linux 的平台層；量 socket 的緩衝區和大的資料的門檻 | 未開始 | |
 | 2g：Windows 的平台層 | 未開始 | |
@@ -280,5 +280,31 @@
 - **Miri 跑不到**：全是系統呼叫。
 - **只靠審查的**（`docs/test-gaps.md`）：等著的問題超過 64 個時拒絕最舊的（要 65 個 process）；`fetch` 比對回答的人的 pid（做不出別人送的回答）。
 - **跑過的檢查**：`cargo test -p ipc`（單元 74 個、整合 60 個）；`cargo clippy -p ipc --all-targets -- -D warnings`（三種 cfg）、`cargo fmt --check`；`sanity.py` 的 7 項。核心和端點沒有動，fuzz、Miri、模型、Verus、TLA+ 沒有重跑。
-- **留給 2e-4 的**：Mach 訊息內嵌的大小 kernel 有上限，一則訊息最大 128 MiB，大訊息要切成好幾則 Mach 訊息；切多大先量再定。佇列滿了之後怎麼知道又有空間（Chromium 用 `MACH_NOTIFY_SEND_POSSIBLE`）也在那一段。
+- **留給 2e-4 的**：Mach 訊息內嵌的大小 kernel 有上限，一則訊息最大 128 MiB，大訊息怎麼送先量再定；佇列滿了之後怎麼知道又有空間也在那一段。（這一行原本寫「Chromium 用 `MACH_NOTIFY_SEND_POSSIBLE`」，是錯的：2e-4 讀了 `channel_mac.cc`，它是留著訊息、排重試。）
+
+### 2e-4：macOS 的通道（2026-11-21，macOS 26、Apple M4）
+
+- **決定**：「已決定的事項」第 39 條（大訊息用 out-of-line、不切；端點的 `wait` 改成借位元組；佇列滿了用 kernel 的通知；比對整個 audit token）。第 22 條的「macOS 上訊息一律內嵌」和「控制通道」的 macOS 那一條跟著改。
+- **先量的、先查的**：
+  - Mach 訊息內嵌的上限是 48 MiB；切成 16 KiB 到 16 MiB 每 MiB 都是 80 到 115 µs（數字在第 39 條）。
+  - 讀了 Chromium 的 `mojo/core/channel_mac.cc`：緩衝區各一個 page、超過就 out-of-line、不切、佇列滿了留著訊息排重試、比對整個 audit token。我先前說它用 `MACH_NOTIFY_SEND_POSSIBLE`、有 pseudo-receive 的註解，兩個都錯。
+  - 探測 kernel（暫時的程式，沒有留下）：佇列滿、不等的送失敗時訊息被退回成收到的樣子（right 多一個計數、16 MiB 的 out-of-line 重新 map 一份、descriptor 改成要解除），`mach_msg_destroy` 之後全部恢復，連做 200 次不累積；`MACH_NOTIFY_SEND_POSSIBLE` 用 `sync=1` 登記會在有空間時通知，登記時已經有空間就立刻通知；dead-name 的 `sync` 是 0 或 1 沒有差別，對已經死掉的名字登記會失敗。
+- **做了什麼**：
+  - `ipc::platform::macos::channel`：`Channel`（`pair`、`from_rights`），實作 `Transport` 和 `Platform`。
+  - `message`：`Buffer::with_out_of_line`、`try_send`、收的一側認一個 out-of-line 的 descriptor、`Received::port`。
+  - `port`：`PortSet`、`raise_queue_limit`、`tell_when_dead`、`tell_when_sendable`、`dead_name_told`。
+  - `ipc::endpoint` 的 `Platform::wait` 改成收一個 callback、把位元組借給它（`ipc::local` 跟著改）。
+- **寫的時候碰到的**：
+  - 我說 out-of-line「少一次複製」，第一版沒有做到：`wait` 的介面是「放進這個 `Vec`」。量了才看到（8 MiB 是 584 µs，不是引用原型的 320 µs），改了介面之後是 408 µs。
+  - 「通往自己的 port 的 send right」不能拿來叫醒：拿著它，no-senders 永遠不來。改用另一個 port 加 port set（RFC 原本就這樣寫）。
+- **測試**：`message.rs` 多 6 個、`channel.rs` 10 個（同一個 process 裡，各自有 10 秒的時限）、`tests/it/mach_channel.rs` 8 個（真的 child）。跨 process 的那一組重複跑 30 次、整個整合測試 15 次、macOS 的單元測試 100 次都過。
+- **mutation test**（`mutants-2e4.toml`）27 個，全部抓到。過程：
+  - 第一次 30 個裡 9 個沒抓到。補測試的 6 個：只有 dead-name 或只有 no-senders 各自都算對方不在了（原本兩個總是一起來，拿掉一個看不出來）；receive right 不算 handle；兩塊 out-of-line、內嵌加 out-of-line；假冒的訊息帶著像樣的內容（原本是空的，被當真也沒有東西可交出去）；dead-name 通知多給的計數。
+  - 拿掉的 2 處多餘的程式：叫醒訊息靠「來自哪個 port」擋（後面的「是不是對方送的」本來就擋）；佇列滿了「問完再試一次」（kernel 在登記時有空間會立刻通知）。
+  - 等價的 1 個：dead-name 登記的 `sync` 參數。記在清單的註解裡。
+  - 有幾個 mutant 讓測試永遠等：同一個 process 裡的通道測試（`wait` 沒有時限）、餵管道的迴圈、等 child 結束。各加了時限，卡住時測試自己失敗並說明。
+  - 跑完確認檔案都還原了。
+- **只靠跨 process 的測試守的**：收到的 out-of-line 的各種檢查、audit token、通知只認 kernel 的。fuzz 和 Miri 碰不到（系統呼叫）。
+- **跑過的檢查**：`cargo test -p ipc`（單元 90 個、整合 69 個）；`test.py ipc models`、`ipc verus`；`cargo clippy -p ipc --all-targets -- -D warnings`（三種 cfg）、`cargo fmt --check`；`sanity.py` 的 7 項。
+- **沒有重跑的**：fuzz 和 Miri。核心沒有動；端點改的是 `Platform::wait` 的介面和 `run` 的迴圈，而 fuzz 和 Miri 的端點測試驅動的是 `turn`（一步一步推），碰不到改的地方。改到的由兩條 thread 的端點測試（走 `run` 和 `ipc::local` 的 `wait`）和跨 process 的測試（走 Mach 的 `wait`）涵蓋。
 

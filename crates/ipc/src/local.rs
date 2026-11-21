@@ -167,18 +167,23 @@ impl Transport for Local {
 impl Platform for Local {
     type Memory = Region;
 
-    fn wait(&self, bytes: &mut Vec<u8>, handles: &mut Vec<Region>) -> Event {
+    fn wait<R>(&self, then: impl FnOnce(Event, &[u8], &mut Vec<Region>) -> R) -> R {
+        let mut bytes = Vec::new();
+        let mut handles = Vec::new();
         let mut sides = self.sides();
-        loop {
-            if let Some(event) = self.next(&mut sides, bytes, handles) {
-                return event;
+        let event = loop {
+            if let Some(event) = self.next(&mut sides, &mut bytes, &mut handles) {
+                break event;
             }
             sides = self
                 .shared
                 .changed
                 .wait(sides)
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-        }
+        };
+        // Not under the lock: what `then` does writes to the peer.
+        drop(sides);
+        then(event, &bytes, &mut handles)
     }
 
     fn map(&self, handle: Region, len: usize, _writable: bool) -> Option<Region> {

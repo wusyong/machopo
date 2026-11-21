@@ -14,6 +14,8 @@ mod data_pipe;
 mod endpoint;
 mod endpoint_fuzz;
 mod frame_fuzz;
+#[cfg(target_os = "macos")]
+mod mach_channel;
 mod pipe_fuzz;
 mod region_fuzz;
 #[cfg(target_os = "macos")]

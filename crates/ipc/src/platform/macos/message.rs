@@ -3,11 +3,16 @@
 //! written and read at its place in a buffer of words, not through a
 //! `#[repr(C)]` struct that would lay a descriptor out otherwise.
 //!
-//! A message here is the header; when it carries rights, the count of its
-//! descriptors and one port descriptor a right; then its body: a length
-//! and that many bytes, padded to a word. Out-of-line memory is never
-//! sent, and a message that brings any, or a descriptor of another kind,
-//! is destroyed whole and refused.
+//! A message here is the header; when it carries rights or its body is
+//! out of line, the count of its descriptors, one port descriptor a
+//! right and at most one of memory; then its body: a length and that
+//! many bytes, padded to a word. A body longer than the buffer is for
+//! goes out of line where the buffer allows it ([`Buffer::with_out_of_line`],
+//! as Chromium's `ChannelMac` does): the kernel maps the sender's pages
+//! into the receiver, copy on write, where an inline body is copied in and
+//! out. A message that brings a descriptor of another kind, memory where
+//! none is allowed or more than is allowed, is destroyed whole and
+//! refused.
 //!
 //! Every message received comes with the kernel's word on who sent it
 //! (the audit trailer): a pid the sender can't choose, 0 for the kernel
@@ -17,14 +22,16 @@ use std::ops::Range;
 use std::time::Duration;
 
 use mach2::message::{
-    MACH_MSG_PORT_DESCRIPTOR, MACH_MSG_SUCCESS, MACH_MSG_TIMEOUT_NONE, MACH_MSG_TYPE_COPY_SEND,
-    MACH_MSG_TYPE_MAKE_SEND_ONCE, MACH_MSG_TYPE_MOVE_RECEIVE, MACH_MSG_TYPE_MOVE_SEND,
-    MACH_MSG_TYPE_MOVE_SEND_ONCE, MACH_MSGH_BITS_COMPLEX, MACH_RCV_MSG, MACH_RCV_TIMED_OUT,
-    MACH_RCV_TIMEOUT, MACH_RCV_TOO_LARGE, MACH_SEND_MSG, MACH_SEND_TIMED_OUT, MACH_SEND_TIMEOUT,
-    audit_token_t, mach_msg, mach_msg_destroy, mach_msg_header_t, mach_msg_return_t,
-    mach_msg_type_name_t,
+    MACH_MSG_OOL_DESCRIPTOR, MACH_MSG_PORT_DESCRIPTOR, MACH_MSG_SUCCESS, MACH_MSG_TIMEOUT_NONE,
+    MACH_MSG_TYPE_COPY_SEND, MACH_MSG_TYPE_MAKE_SEND_ONCE, MACH_MSG_TYPE_MOVE_RECEIVE,
+    MACH_MSG_TYPE_MOVE_SEND, MACH_MSG_TYPE_MOVE_SEND_ONCE, MACH_MSG_VIRTUAL_COPY,
+    MACH_MSGH_BITS_COMPLEX, MACH_RCV_MSG, MACH_RCV_TIMED_OUT, MACH_RCV_TIMEOUT, MACH_RCV_TOO_LARGE,
+    MACH_SEND_MSG, MACH_SEND_TIMED_OUT, MACH_SEND_TIMEOUT, audit_token_t, mach_msg,
+    mach_msg_destroy, mach_msg_header_t, mach_msg_return_t, mach_msg_type_name_t,
 };
 use mach2::port::{MACH_PORT_NULL, mach_port_t};
+use mach2::traps::mach_task_self;
+use mach2::vm::mach_vm_deallocate;
 
 use super::port::{ReceiveRight, Right, SendOnceRight, SendRight};
 
@@ -32,6 +39,9 @@ use super::port::{ReceiveRight, Right, SendOnceRight, SendRight};
 const HEADER_WORDS: usize = 6;
 /// A port descriptor: name, pad, and a word of pad, disposition and type.
 const PORT_DESCRIPTOR_WORDS: usize = 3;
+/// A descriptor of out-of-line memory: the address in two words, a word
+/// of flags and type, the size.
+const OOL_DESCRIPTOR_WORDS: usize = 4;
 /// What follows a message in the buffer it was received into: the
 /// trailer with the audit token (type, size, sequence number, the old
 /// security token's two words, the audit token's eight).
@@ -52,8 +62,10 @@ unsafe extern "C" {
 /// A buffer for one message, aligned as its header is.
 pub struct Buffer {
     words: Vec<u32>,
-    /// The longest body it is for.
+    /// The longest body that goes in the message itself.
     body: usize,
+    /// The longest body that goes out of line; 0 when none does.
+    out_of_line: usize,
 }
 
 impl Buffer {
@@ -63,11 +75,24 @@ impl Buffer {
         let fixed = HEADER_WORDS
             .saturating_add(1)
             .saturating_add(MAX_RIGHTS.saturating_mul(PORT_DESCRIPTOR_WORDS))
+            .saturating_add(OOL_DESCRIPTOR_WORDS)
             .saturating_add(1)
             .saturating_add(TRAILER_WORDS);
         Self {
             words: vec![0; fixed.saturating_add(body.div_ceil(4))],
             body,
+            out_of_line: 0,
+        }
+    }
+
+    /// A buffer for messages whose bodies of up to `inline` bytes go in
+    /// the message itself and longer ones, up to `most` bytes, out of
+    /// line. A message received with more out of line than `most` is
+    /// refused.
+    pub fn with_out_of_line(inline: usize, most: usize) -> Self {
+        Self {
+            out_of_line: most,
+            ..Self::for_body(inline)
         }
     }
 
@@ -89,8 +114,20 @@ impl Buffer {
     }
 
     /// The bytes of a message received into this buffer.
-    pub fn body(&self, received: &Received) -> &[u8] {
-        self.bytes().get(received.body.clone()).unwrap_or(&[])
+    pub fn body<'a>(&'a self, received: &'a Received) -> &'a [u8] {
+        match &received.body {
+            Body::Inline(range) => self.bytes().get(range.clone()).unwrap_or(&[]),
+            // SAFETY: the kernel mapped `len` bytes at `address` into this
+            // task for this message alone, a copy of the sender's pages
+            // that the sender can't reach; they stay mapped until
+            // `received` is dropped, which the borrow outlasts.
+            Body::OutOfLine(mapped) => unsafe {
+                std::slice::from_raw_parts(
+                    std::ptr::with_exposed_provenance(usize::try_from(mapped.address).unwrap_or(0)),
+                    mapped.len,
+                )
+            },
+        }
     }
 }
 
@@ -267,8 +304,34 @@ pub struct Received {
     pub reply: Option<SendOnceRight>,
     pub rights: Vec<Right>,
     pub sender: Sender,
-    /// Where in the buffer its body is ([`Buffer::body`]).
-    body: Range<usize>,
+    /// The port it came to: one of a set's, when it was received on a
+    /// set.
+    pub port: mach_port_t,
+    /// Where its body is ([`Buffer::body`]).
+    body: Body,
+}
+
+#[derive(Debug)]
+enum Body {
+    /// In the buffer.
+    Inline(Range<usize>),
+    OutOfLine(Mapped),
+}
+
+/// Memory a message brought out of line: this task's own, unmapped when
+/// dropped.
+#[derive(Debug)]
+struct Mapped {
+    address: u64,
+    len: usize,
+}
+
+impl Drop for Mapped {
+    fn drop(&mut self) {
+        // SAFETY: the range the kernel mapped for the message, unmapped
+        // once; `len` came from a `u32`.
+        unsafe { mach_vm_deallocate(mach_task_self(), self.address, self.len as u64) };
+    }
 }
 
 /// Why no message was received.
@@ -320,7 +383,7 @@ pub fn receive(
         MACH_RCV_TOO_LARGE => return Err(ReceiveError::TooLarge),
         failed => return Err(ReceiveError::Kernel(failed)),
     }
-    match parse(&buffer.words) {
+    match parse(&buffer.words, buffer.out_of_line) {
         Some(parsed) => Ok(parsed.own()),
         None => {
             // SAFETY: a message the kernel just wrote whole into the
@@ -339,7 +402,10 @@ struct Parsed {
     reply: mach_port_t,
     rights: Vec<(mach_port_t, mach_msg_type_name_t)>,
     token: [u32; 8],
+    port: mach_port_t,
     body: Range<usize>,
+    /// The address and length of memory it brought out of line.
+    out_of_line: Option<(u64, usize)>,
 }
 
 impl Parsed {
@@ -365,18 +431,24 @@ impl Parsed {
         // other disposition.
         let reply =
             (self.reply != MACH_PORT_NULL).then(|| unsafe { SendOnceRight::from_raw(self.reply) });
+        let body = match self.out_of_line {
+            Some((address, len)) => Body::OutOfLine(Mapped { address, len }),
+            None => Body::Inline(self.body),
+        };
         Received {
             id: self.id,
             reply,
             rights,
             sender: Sender { token: self.token },
-            body: self.body,
+            port: self.port,
+            body,
         }
     }
 }
 
-fn parse(words: &[u32]) -> Option<Parsed> {
-    let (&[bits, size, reply, _local, _voucher, id], mut rest) =
+/// `out_of_line` is the most memory a message may bring out of line.
+fn parse(words: &[u32], out_of_line: usize) -> Option<Parsed> {
+    let (&[bits, size, reply, port, _voucher, id], mut rest) =
         words.split_first_chunk::<HEADER_WORDS>()?;
     let size_words = usize::try_from(size).ok()?.div_ceil(4);
     // After a receive the header's remote port is the sender's reply
@@ -387,24 +459,41 @@ fn parse(words: &[u32]) -> Option<Parsed> {
     }
     let mut at = HEADER_WORDS;
     let mut rights = Vec::new();
+    let mut memory = None;
     if bits & MACH_MSGH_BITS_COMPLEX != 0 {
         let (&count, after) = rest.split_first()?;
         rest = after;
         at = at.checked_add(1)?;
-        if usize::try_from(count).ok()? > MAX_RIGHTS {
-            return None;
-        }
         for _ in 0..count {
-            let (&[name, _pad, kind], after) = rest.split_first_chunk::<PORT_DESCRIPTOR_WORDS>()?;
-            rest = after;
-            at = at.checked_add(PORT_DESCRIPTOR_WORDS)?;
-            let disposition = (kind >> 16) & 0xff;
-            let sent_as_right =
-                disposition == MACH_MSG_TYPE_MOVE_SEND || disposition == MACH_MSG_TYPE_MOVE_RECEIVE;
-            if kind >> 24 != MACH_MSG_PORT_DESCRIPTOR || !sent_as_right {
+            // Whatever its kind, a descriptor's kind is the top byte of
+            // its third word.
+            let kind = rest.get(2)? >> 24;
+            if kind == MACH_MSG_PORT_DESCRIPTOR {
+                let (&[name, _pad, flags], after) =
+                    rest.split_first_chunk::<PORT_DESCRIPTOR_WORDS>()?;
+                rest = after;
+                at = at.checked_add(PORT_DESCRIPTOR_WORDS)?;
+                let disposition = (flags >> 16) & 0xff;
+                let sent_as_right = disposition == MACH_MSG_TYPE_MOVE_SEND
+                    || disposition == MACH_MSG_TYPE_MOVE_RECEIVE;
+                if !sent_as_right || rights.len() >= MAX_RIGHTS {
+                    return None;
+                }
+                rights.push((name, disposition));
+            } else if kind == MACH_MSG_OOL_DESCRIPTOR {
+                let (&[low, high, _flags, len], after) =
+                    rest.split_first_chunk::<OOL_DESCRIPTOR_WORDS>()?;
+                rest = after;
+                at = at.checked_add(OOL_DESCRIPTOR_WORDS)?;
+                let len = usize::try_from(len).ok()?;
+                // One piece of memory, no more than this end takes.
+                if memory.is_some() || len > out_of_line {
+                    return None;
+                }
+                memory = Some((u64::from(low) | (u64::from(high) << 32), len));
+            } else {
                 return None;
             }
-            rights.push((name, disposition));
         }
     }
     // The kernel's own messages (notifications) have no body of this
@@ -420,6 +509,10 @@ fn parse(words: &[u32]) -> Option<Parsed> {
         }
         _ => 0..0,
     };
+    // A body is in the message or out of line, not both.
+    if memory.is_some() && !body.is_empty() {
+        return None;
+    }
     // The trailer follows the message.
     let trailer = words.get(size_words..)?;
     let token = *trailer.get(AUDIT_TOKEN_AT..)?.first_chunk::<8>()?;
@@ -428,8 +521,141 @@ fn parse(words: &[u32]) -> Option<Parsed> {
         reply,
         rights,
         token,
+        port,
         body,
+        out_of_line: memory,
     })
+}
+
+/// Sends one message to `to` without waiting, its body out of line when
+/// it is longer than the buffer holds inline, and with a copy of each of
+/// `rights`: sent or not, the rights given stay the caller's.
+/// [`SendError::TimedOut`] says the port's queue is full.
+pub fn try_send(
+    buffer: &mut Buffer,
+    to: &SendRight,
+    id: i32,
+    body: &[u8],
+    rights: &[SendRight],
+) -> Result<(), SendError> {
+    let inline = body.len() <= buffer.body;
+    if rights.len() > MAX_RIGHTS || (!inline && body.len() > buffer.out_of_line) {
+        return Err(SendError::TooLarge);
+    }
+    let body_len = u32::try_from(body.len()).map_err(|_| SendError::TooLarge)?;
+    let descriptors = rights.len().saturating_add(usize::from(!inline));
+    let complex = descriptors > 0;
+    let mut words = Vec::with_capacity(
+        HEADER_WORDS
+            .saturating_add(2)
+            .saturating_add(rights.len().saturating_mul(PORT_DESCRIPTOR_WORDS))
+            .saturating_add(OOL_DESCRIPTOR_WORDS),
+    );
+    let bits = MACH_MSG_TYPE_COPY_SEND | if complex { MACH_MSGH_BITS_COMPLEX } else { 0 };
+    words.extend([
+        bits,
+        0,
+        to.name(),
+        MACH_PORT_NULL,
+        MACH_PORT_NULL,
+        id.cast_unsigned(),
+    ]);
+    if complex {
+        words.push(u32::try_from(descriptors).map_err(|_| SendError::TooLarge)?);
+        for right in rights {
+            // A copy: the caller's own right is its own whatever comes of
+            // the send.
+            words.extend([
+                right.name(),
+                0,
+                (MACH_MSG_TYPE_COPY_SEND << 16) | (MACH_MSG_PORT_DESCRIPTOR << 24),
+            ]);
+        }
+        if !inline {
+            let address = body.as_ptr().expose_provenance() as u64;
+            // The low and high halves of the address.
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "each half of a `u64` is a `u32`"
+            )]
+            let (low, high) = (address as u32, (address >> 32) as u32);
+            // Not deallocated from this task (the bytes are the caller's),
+            // and copied on write: what the receiver gets is the bytes as
+            // they are now.
+            words.extend([
+                low,
+                high,
+                (MACH_MSG_VIRTUAL_COPY << 8) | (MACH_MSG_OOL_DESCRIPTOR << 24),
+                body_len,
+            ]);
+        }
+    }
+    words.push(if inline { body_len } else { 0 });
+    let before_body = words.len();
+    let inline_words = if inline { body.len().div_ceil(4) } else { 0 };
+    let total = before_body.saturating_add(inline_words);
+    let size = total
+        .checked_mul(4)
+        .and_then(|size| u32::try_from(size).ok());
+    let fits = total.saturating_add(TRAILER_WORDS) <= buffer.words.len();
+    let (Some(size), true) = (size, fits) else {
+        return Err(SendError::TooLarge);
+    };
+    if let Some(size_word) = words.get_mut(1) {
+        *size_word = size;
+    }
+    let Some((head, _)) = buffer.words.split_at_mut_checked(before_body) else {
+        return Err(SendError::TooLarge);
+    };
+    head.copy_from_slice(&words);
+    if inline {
+        // The body's last word is padded with zeroes.
+        if let Some(last) = buffer
+            .words
+            .get_mut(total.saturating_sub(1))
+            .filter(|_| inline_words > 0)
+        {
+            *last = 0;
+        }
+        let start = before_body.saturating_mul(4);
+        if let Some(into) = buffer
+            .bytes_mut()
+            .get_mut(start..start.saturating_add(body.len()))
+        {
+            into.copy_from_slice(body);
+        }
+    }
+    let header = buffer.words.as_mut_ptr().cast::<mach_msg_header_t>();
+    // SAFETY: the buffer holds a whole message of `size` bytes, aligned
+    // as a header is; the rights it names are the caller's, copied; the
+    // memory it names is `body`, alive for the call, which the kernel
+    // copies (on write) and leaves mapped here.
+    let result = unsafe {
+        mach_msg(
+            header,
+            MACH_SEND_MSG | MACH_SEND_TIMEOUT,
+            size,
+            0,
+            MACH_PORT_NULL,
+            0,
+            MACH_PORT_NULL,
+        )
+    };
+    match result {
+        MACH_MSG_SUCCESS => Ok(()),
+        failed => {
+            // SAFETY: a send that fails hands the message back as if it
+            // had been received: a reference more to each right it named
+            // and its memory mapped anew. This lets go of exactly those,
+            // and leaves what the caller holds as it was.
+            unsafe { mach_msg_destroy(header) };
+            Err(if failed == MACH_SEND_TIMED_OUT {
+                SendError::TimedOut
+            } else {
+                SendError::Kernel(failed)
+            })
+        }
+    }
 }
 
 #[cfg(test)]
@@ -766,6 +992,219 @@ mod tests {
         Buffer::for_body(4096)
     }
 
+    #[test]
+    fn a_long_body_goes_out_of_line_and_arrives_the_same() {
+        let (receive, to) = port();
+        let mut buffer = Buffer::with_out_of_line(64, 1 << 20);
+        for len in [0usize, 64, 65, 4096, 100_000, 1 << 20] {
+            let body: Vec<u8> = (0..len)
+                .map(|i| (i as u8).wrapping_mul(13).wrapping_add(5))
+                .collect();
+            try_send(&mut buffer, &to, ID, &body, &[]).unwrap();
+            let received = receive_one(&mut buffer, &receive);
+            assert!(buffer.body(&received) == &body[..], "{len} bytes");
+            assert_eq!(
+                matches!(received.body, Body::OutOfLine(_)),
+                len > 64,
+                "{len} bytes"
+            );
+            assert_eq!(received.port, receive.name());
+        }
+        // Longer than this end sends at all.
+        assert_eq!(
+            try_send(&mut buffer, &to, ID, &vec![0; (1 << 20) + 1], &[]),
+            Err(SendError::TooLarge)
+        );
+    }
+
+    #[test]
+    fn what_is_sent_out_of_line_is_the_bytes_as_they_were_when_sent() {
+        let (receive, to) = port();
+        let mut buffer = Buffer::with_out_of_line(64, 1 << 20);
+        let mut body = vec![1u8; 200_000];
+        try_send(&mut buffer, &to, ID, &body, &[]).unwrap();
+        // The sender writes over them after: the receiver's are its own.
+        body.fill(2);
+        let received = receive_one(&mut buffer, &receive);
+        assert!(buffer.body(&received).iter().all(|byte| *byte == 1));
+        assert!(
+            body.iter().all(|byte| *byte == 2),
+            "and the sender's are still the sender's"
+        );
+    }
+
+    #[test]
+    fn out_of_line_memory_is_taken_only_where_allowed_and_as_much() {
+        let (receive, to) = port();
+        let mut sending = Buffer::with_out_of_line(64, 1 << 20);
+        let body = vec![7u8; 300_000];
+        // A buffer that takes none.
+        try_send(&mut sending, &to, ID, &body, &[]).unwrap();
+        let mut inline_only = Buffer::for_body(64);
+        assert_eq!(
+            super::receive(&mut inline_only, receive.name(), SOON).unwrap_err(),
+            ReceiveError::Malformed
+        );
+        // One that takes less; exactly as much is taken.
+        try_send(&mut sending, &to, ID, &body, &[]).unwrap();
+        let mut smaller = Buffer::with_out_of_line(64, 299_999);
+        assert_eq!(
+            super::receive(&mut smaller, receive.name(), SOON).unwrap_err(),
+            ReceiveError::Malformed
+        );
+        try_send(&mut sending, &to, ID, &body, &[]).unwrap();
+        let mut exact = Buffer::with_out_of_line(64, 300_000);
+        let received = receive_one(&mut exact, &receive);
+        assert_eq!(exact.body(&received).len(), 300_000);
+    }
+
+    /// The address space this task has mapped, in bytes.
+    fn virtual_size() -> u64 {
+        use mach2::task_info::{
+            MACH_TASK_BASIC_INFO, MACH_TASK_BASIC_INFO_COUNT, mach_task_basic_info,
+        };
+
+        let mut info = mach_task_basic_info::default();
+        let mut count = MACH_TASK_BASIC_INFO_COUNT;
+        // SAFETY: the call writes at most `count` words of `info`, which
+        // is that long and alive for the call.
+        let result = unsafe {
+            mach2::task::task_info(
+                mach_task_self(),
+                MACH_TASK_BASIC_INFO,
+                (&raw mut info).cast(),
+                &raw mut count,
+            )
+        };
+        assert_eq!(result, mach2::kern_return::KERN_SUCCESS);
+        info.virtual_size
+    }
+
+    #[test]
+    fn memory_received_out_of_line_is_unmapped_with_its_message() {
+        let (receive, to) = port();
+        let mut buffer = Buffer::with_out_of_line(64, 16 << 20);
+        let body = vec![3u8; 16 << 20];
+        let before = virtual_size();
+        // 2 GiB in all, received and dropped, then refused.
+        for _ in 0..64 {
+            try_send(&mut buffer, &to, ID, &body, &[]).unwrap();
+            drop(receive_one(&mut buffer, &receive));
+            try_send(&mut buffer, &to, ID, &body, &[]).unwrap();
+            let mut refusing = Buffer::for_body(64);
+            assert_eq!(
+                super::receive(&mut refusing, receive.name(), SOON).unwrap_err(),
+                ReceiveError::Malformed
+            );
+        }
+        let grew = virtual_size().saturating_sub(before);
+        assert!(grew < 256 << 20, "the address space grew by {grew} bytes");
+    }
+
+    #[test]
+    fn a_send_that_finds_the_queue_full_leaves_everything_as_it_was() {
+        let (receive, to) = port();
+        let (carried_port, carried) = port();
+        let mut buffer = Buffer::with_out_of_line(64, 16 << 20);
+        let mut filled = 0;
+        while try_send(&mut buffer, &to, ID, b"fill", &[]).is_ok() {
+            filled += 1;
+            assert!(filled < 10_000);
+        }
+        let body = vec![9u8; 16 << 20];
+        let rights = [carried];
+        let before = virtual_size();
+        for _ in 0..64 {
+            assert_eq!(
+                try_send(&mut buffer, &to, ID, &body, &rights),
+                Err(SendError::TimedOut)
+            );
+        }
+        // Neither the memory the kernel mapped back nor the references
+        // it gave back are kept.
+        let grew = virtual_size().saturating_sub(before);
+        assert!(grew < 256 << 20, "the address space grew by {grew} bytes");
+        assert!(
+            !no_senders(&carried_port),
+            "the caller's right is still its own"
+        );
+        // With room, the same call goes, and the right is still the
+        // caller's after: the receiver has one of its own.
+        while super::receive(&mut buffer, receive.name(), Some(Duration::from_millis(20))).is_ok() {
+        }
+        assert_eq!(try_send(&mut buffer, &to, ID, &body, &rights), Ok(()));
+        let mut received = receive_one(&mut buffer, &receive);
+        assert!(buffer.body(&received) == &body[..]);
+        let Some(Right::Send(theirs)) = received.rights.pop() else {
+            panic!("a send right");
+        };
+        drop(rights);
+        assert!(
+            !no_senders(&carried_port),
+            "the receiver's is one of its own"
+        );
+        drop(theirs);
+        drop(received);
+        assert!(no_senders(&carried_port));
+    }
+
+    #[test]
+    fn the_kernel_says_when_a_full_port_has_room_and_when_a_port_dies() {
+        use super::super::port::PortSet;
+
+        let (receive, to) = port();
+        let notify = ReceiveRight::new().unwrap();
+        let mut buffer = Buffer::for_body(64);
+        while try_send(&mut buffer, &to, ID, b"fill", &[]).is_ok() {}
+        assert!(to.tell_when_sendable(&notify));
+        let quiet = Some(Duration::from_millis(50));
+        assert_eq!(
+            super::receive(&mut buffer, notify.name(), quiet).unwrap_err(),
+            ReceiveError::TimedOut
+        );
+        receive_one(&mut buffer, &receive);
+        let told = receive_one(&mut buffer, &notify);
+        assert_eq!(
+            (told.id, told.sender.pid()),
+            (mach2::notify::MACH_NOTIFY_SEND_POSSIBLE, 0)
+        );
+        assert_eq!(try_send(&mut buffer, &to, ID, b"room", &[]), Ok(()));
+        // A queue made as long as one can be holds many more.
+        let (long, to_long) = port();
+        assert!(long.raise_queue_limit());
+        let mut held = 0;
+        while try_send(&mut buffer, &to_long, ID, b"fill", &[]).is_ok() {
+            held += 1;
+            assert!(held < 10_000);
+        }
+        assert_eq!(held, 1024);
+        // A port's death is told to whoever asked, on a set as well as on
+        // the port; the notification's own reference is let go.
+        let set = PortSet::new().unwrap();
+        assert!(set.add(&notify));
+        assert!(to.tell_when_dead(&notify));
+        assert_eq!(
+            super::receive(&mut buffer, set.name(), quiet).unwrap_err(),
+            ReceiveError::TimedOut
+        );
+        drop(receive);
+        let told = super::receive(&mut buffer, set.name(), SOON).unwrap();
+        assert_eq!(
+            (told.id, told.sender.pid()),
+            (mach2::notify::MACH_NOTIFY_DEAD_NAME, 0)
+        );
+        assert_eq!(
+            told.port,
+            notify.name(),
+            "which of the set's ports it came to"
+        );
+        to.dead_name_told();
+        assert!(matches!(
+            try_send(&mut buffer, &to, ID, b"", &[]),
+            Err(SendError::Kernel(_))
+        ));
+    }
+
     /// A message as bytes of this test's own making, sent as they are.
     fn send_raw(to: &SendRight, mut words: Vec<u32>) {
         words[1] = (words.len() * 4) as u32;
@@ -904,6 +1343,43 @@ mod tests {
             ReceiveError::Malformed
         );
         assert!(no_senders(&carried_port));
+        // Memory out of line is one piece, with no body in the message
+        // beside it: two pieces, and a piece with a body, are refused by
+        // a buffer that would take either alone.
+        let mut taking = Buffer::with_out_of_line(256, 1 << 20);
+        let ool = |memory: &[u8]| {
+            let address = memory.as_ptr() as u64;
+            [
+                address as u32,
+                (address >> 32) as u32,
+                (1 << 8) | (1 << 24),
+                memory.len() as u32,
+            ]
+        };
+        let mut one = vec![plain | MACH_MSGH_BITS_COMPLEX, 0, 0, 0, 0, 1, 1];
+        one.extend(ool(&memory));
+        one.push(0);
+        send_raw(&to, one.clone());
+        let received = receive_one(&mut taking, &receive);
+        assert_eq!(taking.body(&received).len(), 1 << 16);
+        drop(received);
+        let mut two = vec![plain | MACH_MSGH_BITS_COMPLEX, 0, 0, 0, 0, 1, 2];
+        two.extend(ool(&memory));
+        two.extend(ool(&memory));
+        two.push(0);
+        send_raw(&to, two);
+        assert_eq!(
+            super::receive(&mut taking, receive.name(), SOON).unwrap_err(),
+            ReceiveError::Malformed
+        );
+        let mut both = one;
+        *both.last_mut().unwrap() = 4;
+        both.push(0xaaaa_aaaa);
+        send_raw(&to, both);
+        assert_eq!(
+            super::receive(&mut taking, receive.name(), SOON).unwrap_err(),
+            ReceiveError::Malformed
+        );
         // More rights than a message of ours carries: all let go.
         let mut many = vec![
             plain | MACH_MSGH_BITS_COMPLEX,

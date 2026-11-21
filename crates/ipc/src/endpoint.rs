@@ -32,8 +32,7 @@ use crate::data_pipe::{self, Consumer, Producer, Read, ReadObserver, TryWriteErr
 /// What a platform's wait came back with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Event {
-    /// Bytes from the peer (and the handles that came with them) were
-    /// added to what the wait was given.
+    /// Bytes from the peer, and the handles that came with them.
     Read,
     /// The transport has room again.
     Writable,
@@ -53,9 +52,13 @@ where
     /// A mapping of shared memory.
     type Memory: Memory + Send + 'static;
 
-    /// Waits until there is something for the IO thread to do, and says
-    /// what. Only the IO thread calls it.
-    fn wait(&self, bytes: &mut Vec<u8>, handles: &mut Vec<Self::Handle>) -> Event;
+    /// Waits until there is something for the IO thread to do, then has
+    /// `then` do it: it is told what, and for [`Event::Read`] lent the
+    /// bytes and given the handles (for the others there are none). The
+    /// bytes are lent, not handed over, so a platform that has them in
+    /// memory of its own (a message mapped out of line) copies them
+    /// nowhere. Only the IO thread calls it.
+    fn wait<R>(&self, then: impl FnOnce(Event, &[u8], &mut Vec<Self::Handle>) -> R) -> R;
 
     /// Maps `len` bytes of the region a handle from the peer is, to write
     /// when `writable`. `None` when the handle isn't such a region.
@@ -484,12 +487,12 @@ where
     /// The IO thread's loop: waits on the platform and does what there is
     /// to do, until the channel is over; then says why.
     pub fn run(mut self, mut handler: impl Handler<P>) -> Gone {
-        let mut bytes = Vec::new();
-        let mut handles = Vec::new();
+        let inner = self.inner.clone();
         loop {
-            bytes.clear();
-            let event = self.inner.platform().wait(&mut bytes, &mut handles);
-            if let Some(gone) = self.turn(event, &bytes, &mut handles, &mut handler) {
+            let gone = inner
+                .platform()
+                .wait(|event, bytes, handles| self.turn(event, bytes, handles, &mut handler));
+            if let Some(gone) = gone {
                 return gone;
             }
         }

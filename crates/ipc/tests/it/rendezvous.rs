@@ -17,7 +17,7 @@ const ID: i32 = 0x7e57;
 const SOON: Option<Duration> = Some(Duration::from_secs(10));
 
 /// The test process's one server.
-fn server() -> &'static Server {
+pub(crate) fn server() -> &'static Server {
     static SERVER: OnceLock<Server> = OnceLock::new();
     SERVER.get_or_init(|| Server::start().expect("the rendezvous server checks in"))
 }

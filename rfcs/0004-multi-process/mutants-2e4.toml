@@ -1,0 +1,200 @@
+# Step 2e-4: macOS's channel (`ipc::platform::macos::channel`), with
+# bodies out of line, the send that doesn't wait, and the kernel's
+# notifications (`message`, `port`). A send to a full queue loses
+# nothing; a peer gone is heard of; only the peer's messages and the
+# kernel's notifications are taken.
+test = ["sh", "-c", "timeout 120 cargo test -q -p ipc -- platform::macos mach_channel"]
+timeout = 900
+
+[[mutant]]
+name = "the peer's port dying isn't asked about"
+file = "crates/ipc/src/platform/macos/channel.rs"
+from = '''            && theirs.tell_when_dead(&ours)
+            && ours.tell_when_no_senders(1);'''
+to = '''            && ours.tell_when_no_senders(1);'''
+
+[[mutant]]
+name = "the last right to this port going isn't asked about"
+file = "crates/ipc/src/platform/macos/channel.rs"
+from = '''            && theirs.tell_when_dead(&ours)
+            && ours.tell_when_no_senders(1);'''
+to = '''            && theirs.tell_when_dead(&ours);'''
+
+[[mutant]]
+name = "the port holds five messages"
+file = "crates/ipc/src/platform/macos/channel.rs"
+from = '''        let ready = ours.raise_queue_limit()
+            && set.add(&ours)'''
+to = '''        let ready = set.add(&ours)'''
+
+[[mutant]]
+name = "the wake port isn't waited on"
+file = "crates/ipc/src/platform/macos/channel.rs"
+from = '''            && set.add(&wake_port)'''
+to = ''''''
+
+[[mutant]]
+name = "room in a full queue isn't asked about"
+file = "crates/ipc/src/platform/macos/channel.rs"
+from = '''.is_some_and(|ours| to.tell_when_sendable(ours));'''
+to = '''.is_some();'''
+
+[[mutant]]
+name = "a handle sent stays in the writer's hands"
+file = "crates/ipc/src/platform/macos/channel.rs"
+from = '''                handles.clear();
+                Ok(bytes.len())'''
+to = '''                Ok(bytes.len())'''
+
+[[mutant]]
+name = "a wake sets no flag"
+file = "crates/ipc/src/platform/macos/channel.rs"
+from = '''        self.woken.store(true, Ordering::SeqCst);'''
+to = ''''''
+
+[[mutant]]
+name = "a wake is told again and again"
+file = "crates/ipc/src/platform/macos/channel.rs"
+from = '''            if self.woken.swap(false, Ordering::SeqCst) {'''
+to = '''            if self.woken.load(Ordering::SeqCst) {'''
+
+[[mutant]]
+name = "what isn't a message is let pass"
+file = "crates/ipc/src/platform/macos/channel.rs"
+from = '''                Err(ReceiveError::TooLarge | ReceiveError::Malformed | ReceiveError::Kernel(_)) => {
+                    break (Event::PeerGone, None);
+                }'''
+to = '''                Err(ReceiveError::TooLarge | ReceiveError::Malformed) => continue,
+                Err(ReceiveError::Kernel(_)) => {
+                    break (Event::PeerGone, None);
+                }'''
+
+[[mutant]]
+name = "the peer's port dying is nothing"
+file = "crates/ipc/src/platform/macos/channel.rs"
+from = '''                        break (Event::PeerGone, None);
+                    }
+                    MACH_NOTIFY_NO_SENDERS'''
+to = '''                        continue;
+                    }
+                    MACH_NOTIFY_NO_SENDERS'''
+
+[[mutant]]
+name = "the last right to this port going is nothing"
+file = "crates/ipc/src/platform/macos/channel.rs"
+from = '''                    MACH_NOTIFY_NO_SENDERS => break (Event::PeerGone, None),'''
+to = '''                    MACH_NOTIFY_NO_SENDERS => continue,'''
+
+[[mutant]]
+name = "room in the peer's queue is nothing"
+file = "crates/ipc/src/platform/macos/channel.rs"
+from = '''                    MACH_NOTIFY_SEND_POSSIBLE => break (Event::Writable, None),'''
+to = '''                    MACH_NOTIFY_SEND_POSSIBLE => continue,'''
+
+[[mutant]]
+name = "a notification is taken from whoever sends it"
+file = "crates/ipc/src/platform/macos/channel.rs"
+from = '''            if received.sender.pid() == 0 {
+                // The kernel's.'''
+to = '''            if received.sender.pid() == 0 || received.id == MACH_NOTIFY_DEAD_NAME || received.id == MACH_NOTIFY_NO_SENDERS {
+                // The kernel's.'''
+
+[[mutant]]
+name = "a message is taken from whoever sends it"
+file = "crates/ipc/src/platform/macos/channel.rs"
+from = '''            if !is_peer || received.id != MESSAGE_ID {'''
+to = '''            if received.id != MESSAGE_ID {'''
+
+[[mutant]]
+name = "a message of any id is taken for the core's"
+file = "crates/ipc/src/platform/macos/channel.rs"
+from = '''            if !is_peer || received.id != MESSAGE_ID {'''
+to = '''            if !is_peer {'''
+
+[[mutant]]
+name = "a receive right is taken for a handle"
+file = "crates/ipc/src/platform/macos/channel.rs"
+from = '''            if let Right::Send(right) = right {
+                handles.push(right);
+            }'''
+to = '''            match right {
+                Right::Send(right) => handles.push(right),
+                Right::Receive(right) => handles.extend(right.make_send()),
+            }'''
+
+[[mutant]]
+name = "an end shut keeps its right to the peer"
+file = "crates/ipc/src/platform/macos/channel.rs"
+from = '''        let theirs = lock(&self.theirs).take();'''
+to = '''        let theirs: Option<SendRight> = None;'''
+
+[[mutant]]
+name = "an end shut keeps its port"
+file = "crates/ipc/src/platform/macos/channel.rs"
+from = '''        let ours = lock(&self.ours).take();'''
+to = '''        let ours: Option<ReceiveRight> = None;'''
+
+[[mutant]]
+name = "two pieces of memory are taken"
+file = "crates/ipc/src/platform/macos/message.rs"
+from = '''                if memory.is_some() || len > out_of_line {'''
+to = '''                if len > out_of_line {'''
+
+[[mutant]]
+name = "memory of any length is taken"
+file = "crates/ipc/src/platform/macos/message.rs"
+from = '''                if memory.is_some() || len > out_of_line {'''
+to = '''                if memory.is_some() {'''
+
+[[mutant]]
+name = "a body both in the message and out of line is taken"
+file = "crates/ipc/src/platform/macos/message.rs"
+from = '''    if memory.is_some() && !body.is_empty() {
+        return None;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "a body is never sent out of line"
+file = "crates/ipc/src/platform/macos/message.rs"
+from = '''    let inline = body.len() <= buffer.body;
+    if rights'''
+to = '''    let inline = true;
+    if rights'''
+
+[[mutant]]
+name = "a body longer than this end sends is sent"
+file = "crates/ipc/src/platform/macos/message.rs"
+from = '''    if rights.len() > MAX_RIGHTS || (!inline && body.len() > buffer.out_of_line) {'''
+to = '''    if rights.len() > MAX_RIGHTS {'''
+
+[[mutant]]
+name = "a send that fails keeps what the kernel handed back"
+file = "crates/ipc/src/platform/macos/message.rs"
+from = '''            // and leaves what the caller holds as it was.
+            unsafe { mach_msg_destroy(header) };'''
+to = '''            // and leaves what the caller holds as it was.
+            let _ = header;'''
+
+[[mutant]]
+name = "memory sent out of line is the sender's pages, not a copy"
+file = "crates/ipc/src/platform/macos/message.rs"
+from = '''                (MACH_MSG_VIRTUAL_COPY << 8) | (MACH_MSG_OOL_DESCRIPTOR << 24),'''
+to = '''                1 | (MACH_MSG_VIRTUAL_COPY << 8) | (MACH_MSG_OOL_DESCRIPTOR << 24),'''
+
+[[mutant]]
+name = "room is asked about without arming the request"
+file = "crates/ipc/src/platform/macos/port.rs"
+from = '''        request(self.0, MACH_NOTIFY_SEND_POSSIBLE, 1, notify)'''
+to = '''        request(self.0, MACH_NOTIFY_SEND_POSSIBLE, 0, notify)'''
+
+[[mutant]]
+name = "the reference a dead-name notification gave is kept"
+file = "crates/ipc/src/platform/macos/channel.rs"
+from = '''                            theirs.dead_name_told();'''
+to = '''                            let _ = theirs;'''
+
+# Not listed, equivalent: asking for the dead-name notification with the
+# other value of its `sync` argument. The kernel tells of a live port's
+# death either way, and refuses the request for a name already dead
+# either way (probed on macOS 26).
