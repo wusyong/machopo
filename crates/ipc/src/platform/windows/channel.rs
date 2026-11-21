@@ -26,7 +26,9 @@
 
 use std::collections::VecDeque;
 use std::hash::{BuildHasher, RandomState};
-use std::os::windows::io::{AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
+use std::io;
+use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
+use std::process::{Child, Command};
 use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -34,12 +36,13 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use base::AtomicSequenceNumber;
 use windows_sys::Win32::Foundation::{
     DUPLICATE_CLOSE_SOURCE, DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_IO_PENDING,
-    ERROR_PIPE_CONNECTED, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
+    ERROR_PIPE_CONNECTED, GetLastError, HANDLE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE,
+    SetHandleInformation,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_APPEND_DATA, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED,
-    FILE_GENERIC_READ, FILE_GENERIC_WRITE, OPEN_EXISTING, PIPE_ACCESS_DUPLEX, ReadFile,
-    SECURITY_ANONYMOUS, SECURITY_SQOS_PRESENT, WriteFile,
+    FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_TYPE_PIPE, GetFileType, OPEN_EXISTING,
+    PIPE_ACCESS_DUPLEX, ReadFile, SECURITY_ANONYMOUS, SECURITY_SQOS_PRESENT, WriteFile,
 };
 use windows_sys::Win32::System::IO::{
     CancelIoEx, CreateIoCompletionPort, GetQueuedCompletionStatus, OVERLAPPED,
@@ -648,6 +651,95 @@ pub fn pipe() -> Option<(OwnedHandle, OwnedHandle)> {
     named_pipe().map(|(server, client, _)| (server, client))
 }
 
+/// The variable a child started by [`spawn`] finds its end's handle in:
+/// the handle's value, which is the same in the child as in its host.
+/// (A child's arguments aren't this layer's to add to.)
+pub const CHANNEL_VARIABLE: &str = "MACHOPO_IPC_CHANNEL";
+
+/// Whether a child this process starts inherits `handle`.
+fn inherited_by_children(handle: &OwnedHandle, inherited: bool) -> bool {
+    let flag = if inherited { HANDLE_FLAG_INHERIT } else { 0 };
+    // SAFETY: `handle` is open for the call.
+    unsafe { SetHandleInformation(handle.as_raw_handle(), HANDLE_FLAG_INHERIT, flag) != 0 }
+}
+
+/// Starts `command` as a child that has the other end of a new channel,
+/// which it takes with [`inherited`]. The child inherits its end, as
+/// every child this process starts meanwhile would: one is started here
+/// at a time, and the end is inherited only while it is. A process
+/// started elsewhere in that time has the end too; nothing here can
+/// keep it from that.
+pub fn spawn(command: &mut Command) -> io::Result<(Child, Channel)> {
+    static STARTING: Mutex<()> = Mutex::new(());
+    let (server, client) = pipe().ok_or_else(|| io::Error::other("no pipe could be made"))?;
+    let value = client.as_raw_handle().expose_provenance();
+    let spawned = {
+        let _one_at_a_time = lock(&STARTING);
+        if !inherited_by_children(&client, true) {
+            return Err(io::Error::last_os_error());
+        }
+        command.env(CHANNEL_VARIABLE, value.to_string());
+        let spawned = command.spawn();
+        // The command is the caller's: a child it starts by itself
+        // later is told of no end.
+        command.env_remove(CHANNEL_VARIABLE);
+        // This process's own client end goes here, with the lock held:
+        // the child's is the only one, so the child going is the pipe
+        // broken.
+        drop(client);
+        spawned
+    };
+    let mut child = spawned?;
+    let Some(channel) = Channel::host(server, child.as_handle()) else {
+        // No way to give it handles: the child would wait on a host
+        // that can't be one.
+        let _ = child.kill();
+        return Err(io::Error::last_os_error());
+    };
+    Ok((child, channel))
+}
+
+/// In a process started by [`spawn`]: its end of the channel, once.
+/// `None` when the parent gave none, or it was taken already. Called
+/// before the process has other threads: it takes the variable out of
+/// the process's environment.
+pub fn inherited() -> Option<Channel> {
+    static TAKEN: AtomicBool = AtomicBool::new(false);
+    if TAKEN.swap(true, Ordering::SeqCst) {
+        return None;
+    }
+    let value = std::env::var(CHANNEL_VARIABLE).ok()?;
+    // A child of this process's own is told of no end: it has none.
+    // SAFETY: the caller's to see to, as said above: no other thread
+    // reads or writes the environment meanwhile.
+    unsafe { std::env::remove_var(CHANNEL_VARIABLE) };
+    end_named(&value)
+}
+
+/// The end the variable's `value` names, if it names a pipe of this
+/// process's.
+fn end_named(value: &str) -> Option<Channel> {
+    let value: usize = value.parse().ok()?;
+    let handle: HANDLE = std::ptr::with_exposed_provenance_mut(value);
+    // A variable set by anyone else names nothing, or something that
+    // isn't a pipe. (Asked of what is no handle, the call says so.)
+    // SAFETY: the call only looks the value up.
+    if unsafe { GetFileType(handle) } != FILE_TYPE_PIPE {
+        return None;
+    }
+    // SAFETY: the host, which is trusted, put this handle in this
+    // process for this and says so once; it was just seen to be a pipe,
+    // and `inherited` sees that it is owned once.
+    let pipe = unsafe { OwnedHandle::from_raw_handle(handle) };
+    // Inherited, it would be inherited again by this process's own
+    // children.
+    inherited_by_children(&pipe, false).then(|| Channel::child(pipe))
+}
+
+/// Nothing: a child gone has let go of its end, taken or not, and this
+/// end's read fails for it.
+pub const fn child_gone(_pid: u32) {}
+
 /// What other threads end a waiter's wait by.
 struct Interrupt {
     port: OwnedHandle,
@@ -888,9 +980,7 @@ impl IocpWaiter {
 
 #[cfg(test)]
 mod tests {
-    use windows_sys::Win32::Foundation::{
-        ERROR_PIPE_BUSY, GetHandleInformation, HANDLE_FLAG_INHERIT,
-    };
+    use windows_sys::Win32::Foundation::{ERROR_PIPE_BUSY, GetHandleInformation};
     use windows_sys::Win32::System::Threading::GetProcessHandleCount;
 
     use super::*;
@@ -1700,6 +1790,48 @@ mod tests {
             from_elsewhere.join().unwrap();
             assert!(end.upgrade().is_none());
         });
+    }
+
+    #[test]
+    fn a_variable_names_an_end_only_when_it_names_a_pipe() {
+        let file = std::fs::File::open(std::env::current_exe().unwrap()).unwrap();
+        let a_file = file.as_raw_handle().expose_provenance().to_string();
+        for value in ["", "0", "nothing", "-1", "4294967292", &a_file] {
+            assert!(end_named(value).is_none(), "{value:?}");
+        }
+        // Not taken for an end, the file is still open.
+        assert!(file.metadata().is_ok());
+    }
+
+    #[test]
+    fn an_end_is_taken_once_and_no_word_of_it_is_left() {
+        use std::os::windows::io::IntoRawHandle;
+
+        // (The one test that takes this process's end.)
+        let inheritable = |handle: HANDLE| {
+            let mut flags = 0;
+            // SAFETY: `handle` is open and `flags` alive for the call.
+            assert!(unsafe { GetHandleInformation(handle, &raw mut flags) } != 0);
+            flags & HANDLE_FLAG_INHERIT != 0
+        };
+        let (_server, client) = pipe().unwrap();
+        // As a child finds it: inherited, and so to be inherited again.
+        assert!(inherited_by_children(&client, true));
+        let handle = client.into_raw_handle();
+        assert!(inheritable(handle));
+        let value = handle.expose_provenance().to_string();
+        // SAFETY: no other test reads or writes this variable.
+        unsafe { std::env::set_var(CHANNEL_VARIABLE, &value) };
+        let end = inherited().unwrap();
+        assert!(!inheritable(handle), "its own children would inherit it");
+        assert!(std::env::var_os(CHANNEL_VARIABLE).is_none());
+        // Told of it again, it is taken no second time.
+        // SAFETY: as above.
+        unsafe { std::env::set_var(CHANNEL_VARIABLE, &value) };
+        assert!(inherited().is_none());
+        // SAFETY: as above.
+        unsafe { std::env::remove_var(CHANNEL_VARIABLE) };
+        drop(end);
     }
 
     #[test]

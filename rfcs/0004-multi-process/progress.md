@@ -35,7 +35,7 @@
 | 2g 之前：Windows 的探測（`prototype-windows/`）：送的 thread 結束時的寫入、pipe 的緩衝區、大的資料、和 `interprocess` 比 | 完成 | 2026-11-21 |
 | 2g-1：Windows 的共用記憶體（section 的建立、map、只能讀的 handle；第 54 條） | 完成 | 2026-11-22 |
 | 2g-2：Windows 的通道和它的 `Waiter`（completion port；同一個 process 裡的測試；第 55 條） | 完成 | 2026-11-22 |
-| 2g-3：Windows 的 `spawn`、`inherited`、`child_gone`；不分平台的跨 process 測試原樣通過；Windows 自己的（對方不能附 handle 時不看訊息裡的 handle 數值，第 41 條的契約） | 未開始 | |
+| 2g-3：Windows 的 `spawn`、`inherited`、`child_gone`（繼承加環境變數，第 56 條）；不分平台的跨 process 測試原樣通過；Windows 自己的跨 process 測試 | 完成 | 2026-11-22 |
 | 2g-4：在真的通道上量、文件；決定 CI 要不要加 macOS、Windows 的 runner | 未開始 | |
 | 2h：第 2 階段的檢查、`soundness.md`、`test.py` 的指令、文件；把 `test.py ipc` 的每一項排進每週的 CI（2a 起在本機跑） | 未開始 | |
 | 3：啟動 child process | 未開始 | |
@@ -61,6 +61,7 @@
 | 通道的兩側（`ipc::core::channel`）：送不等、照順序，好幾條 thread 同時送時線上的序號連續、訊息不互相插入；佇列超過上限就關掉通道；不認得的目的地和被拒絕的內容是壞訊息；結束只報告一次、理由是第一個，之後不交出訊息也送不出去 | `cargo test -p ipc`；`python3 scripts/test.py ipc models`；`python3 scripts/test.py ipc miri` |
 | Windows 的共用記憶體（`ipc::platform::windows::memory`）：建的一端寫的，對方的 handle 只能 map 成唯讀，也換不成權限更多的 handle（連改 section 的清單的權限都要不到）；對方寫的，建的一端只 map 成唯讀；唯讀的 mapping 改不成可寫；只建整頁的長度，map 不超過 region 的長度、長度 0 不 map；不是 region 的 handle map 不起來；kernel 拒絕時沒有 handle；交出去的 handle 不被 child 繼承；放掉之後不留 handle、mapping drop 就解除 | `cargo test -p ipc --lib platform`（Windows） |
 | Windows 的通道（`ipc::platform::windows::channel`），兩端在同一個 process 裡：交給迴圈之前不寫、加入時被拒絕過的被告知有空間；一次一筆寫入，沒被拒絕過的不被告知；長的訊息一段一段照順序到；host 的 handle 跟著訊息、離開送的一端、到的只有原本的權限、不被繼承，送出去和送不出去都不留 handle；child 不能給 handle，host 把 child 寫的像表頭的位元組當成位元組；host 的每一次寫入各借出去一次、照順序，一個位元組一個位元組到的接得起來；不合理的表頭當成對方不在了；打斷只報一次；一個 waiter 分得出它的通道，拿掉的、自己關掉的、已經報過不在了的都不再報；值丟掉就是關掉；送的 thread 結束之後它的寫入照樣到；進行中的操作讓通道的內部狀態活到通知被取走；通道放掉之後不留 handle；pipe 的兩端不被繼承、第二個 client 連不上 | `cargo test -p ipc --lib platform::windows::channel`（Windows） |
+| Windows 上 child 拿到它那一端：不分平台的跨 process 測試原樣通過；一個 process 只拿得到一次，拿到之後環境裡沒有那個變數、那一端不可繼承；變數指到的不是 pipe 就拿不到；child 自己的 child、host 之後另外啟動的 process、同時啟動的其他 child 都沒有它的那一端（child 結束時 host 馬上收到） | `cargo test -p ipc --test it process_channel`、`cargo test -p ipc --test it windows_channel`、`cargo test -p ipc --lib platform::windows`（Windows） |
 
 ## 做過的檢查
 
@@ -505,3 +506,20 @@ branch `0004-linux`，從 `0004` 的 2e-7（`82a4fc7`）分出去。
 - **Miri 跑不到**：全部是系統呼叫。
 - **跑過的檢查**：`cargo test -p ipc`；`cargo clippy -p ipc --all-targets -- -D warnings`、`cargo fmt -p ipc --check`；`sanity.py` 的 `deps`、`unsafe`、`tests`、`numerics`、`boundary`、`spans`、`docs`。核心沒有動；端點只改了 `Platform` 的說明文字。fuzz、Miri、模型、Verus、TLA+ 沒有重跑。
 - **留給 2g-3 的**：`spawn`（怎麼把 client 那一端交給 child：自己呼叫 `CreateProcessW` 給清單，還是用標準庫加一把鎖）、`inherited`、`child_gone`；`process_channel.rs` 原樣通過；跨 process 才看得到的（handle 真的到了 child 的 process、child 亂附 handle 時 host 以壞訊息關掉、送的 thread 結束之後寫入照樣到）。
+### 2g-3：Windows 上 child 怎麼拿到它那一端（2026-11-22，Windows 11 10.0.26200、Intel Core i9-13900K）
+
+- **決定**：「已決定的事項」第 56 條（四項，逐項問過）。
+- **做了什麼**：
+  - `ipc::platform::windows::channel` 的 `spawn`、`inherited`、`child_gone`，`ipc::platform` 在 Windows 上 re-export 它們和 `Channel`。
+  - `tests/it/main.rs`：`process_channel` 在 Windows 上也編；新的 `windows_channel`（只在 Windows）。
+  - `tests/it/process_channel.rs`（共用的，單獨一個 commit）：亂送的 child 先等它那一端、再寫；拿掉沒有人用的 `wait_for_the_host_to_go`。
+- **不分平台的跨 process 測試**（`process_channel.rs`）9 個在 Windows 上都過。第一次跑是 8 個過：沒過的那一個就是上面改的（child 在被服務之前寫，被拒絕）。這是兩個真的端點第一次接在 Windows 的通道上：訊息來回、host 的大資料走 region（handle 真的到了 child 的 process、child map 得到、map 不成可寫）、3 MiB 的字串、700 KiB 的管道、child 先睡著時連送 3000 則、child 亂附 handle 時 host 以壞訊息關掉、一條 IO thread 服務四個 child。
+- **Windows 自己的測試**：`tests/it/windows_channel.rs` 6 個（child 拿到一次、變數清掉、第二次拿不到；`spawn` 之後呼叫的人的 `Command` 不再帶那個變數；變數是空的、0、不是數字、-1、太大、沒有這個 handle 的數值、沒設，都拿不到；child 自己的 child 活著時 child 結束，host 兩秒內收到；之後由這個 process 另外啟動的 process 活著時 child 被 kill，host 兩秒內收到；八條 thread 同時啟動八個 child，逐一 kill 都馬上收到）。`channel.rs` 多兩個單元測試（變數指到的不是 pipe 就拿不到，包括一個開著的檔案、檔案之後還開著；拿到的那一端被設回不可繼承、變數清掉、再設一次也拿不到第二次）。
+- **mutation test**（`mutants-2g3.toml`）11 個，全部抓到。跑完確認檔案還原了。
+  - 「拿掉啟動的鎖」是靠八個同時啟動的 child 抓到的，看的是時機；這一次抓到了，但它是機率的。
+  - 第一版的測試抓不到兩個，跑之前就看出來、先改了：「`Command` 還帶著變數」（第二個 child 讀到的數值在它那裡多半不是 handle，照樣拿不到；改成直接看 `Command` 的環境）和「只能拿一次的旗標」（變數清掉之後第二次本來就拿不到；改成清掉之後再設一次）。
+  - 沒有列的：`spawn` 在建不出 host 那一端時把 child 結束掉（測試裡 kernel 不會拒絕那個複製）。記在 `docs/test-gaps.md`。
+- **過程中改掉的**：`inherited` 原本另外檢查數值是不是 0；`GetFileType` 對 0 本來就說不是 pipe，拿掉了。
+- **跑過的檢查**：`cargo test -p ipc`（Windows：單元 90 個、整合 69 個，重複 5 次）；`cargo clippy -p ipc --all-targets -- -D warnings`、`cargo fmt -p ipc --check`；`sanity.py` 的 `deps`、`unsafe`、`tests`、`numerics`、`boundary`、`spans`、`docs`。核心和端點沒有動；fuzz、Miri、模型、Verus、TLA+ 沒有重跑。
+- **macOS 上沒有驗的**：`process_channel.rs` 改的那一處（先等再寫）在 macOS 上應該沒有差別，但這台機器跑不到，要在 macOS 上跑一次 `cargo test -p ipc`。
+- **留給 2g-4 的**：在真的通道上量（當場完成的讀寫等不等 port 的通知、讀的大小、一條 thread 服務好幾條通道）；決定 CI 要不要加 macOS、Windows 的 runner。

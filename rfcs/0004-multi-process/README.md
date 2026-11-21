@@ -185,7 +185,7 @@ Browser 建好控制通道的兩端，以 `--type=renderer` 和 renderer 的旗�
 
 - **Linux 和 Windows**：child 繼承一端。兩端都由 Browser 建立，沒有用名字連線的步驟，別的 process 搶不到通道。
   - Linux：fork 之後、exec 之前，只在 child 裡拿掉那一端的 close-on-exec，號碼放在環境變數裡告訴 child（第 43 條）。
-  - Windows：怎麼繼承見「待決定」。
+  - Windows：只在啟動 child 的那一小段把那一端設成可繼承（一次啟動一個），handle 的數值放在環境變數裡告訴 child（第 56 條）。
 - **macOS**：Mach port 不能繼承，照 Chromium 的 `MachPortRendezvous`：
   - Browser 開一個 rendezvous server，用固定的前綴加上 Browser 的 pid 當名字，登記在 launchd 的 bootstrap namespace；所有 child 共用這一個 server。
   - 啟動 child 時，Browser 把要給它的 port（它的 receive port、通往 Browser 的 send right）記在 child 的 pid 底下。pid 啟動之後才知道，所以 child 的請求比登記早到時，server 等登記完成再回。
@@ -508,6 +508,13 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
     - **幾個小的**：寫入完成的位元組數不是整段，當成對方不在了（Chromium 一樣）；child 收到不合理的表頭（長度 0、超過一次寫入、handle 超過 16 個）當成對方不在了；讀失敗或讀到 0 個位元組當成對方不在了，不分哪一種錯誤（Chromium 一樣）；打斷等待被呼叫很多次只往 port 放一筆；核心交來 0 個位元組時什麼都不寫。
     - **寫的時候定的細節**：「又有空間」只告訴被拒絕過的那一端（每筆寫入完成都報的話，每則訊息端點都要多推一步）；對方不在了只報一次（讀和寫可能都失敗）；自己關掉的那一端之後什麼都不報；`Channel` 的值丟掉就是關掉（waiter 可能還拿著它的內部狀態）；child 那一端被交了 handle 時放掉它們（核心的約定是寫入收了位元組就收走 handle，而它沒有地方放）。
 
+56. **Windows 上 child 怎麼拿到它那一端**（2026-11-22，2g-3；四項都是逐項列出問題和選項之後使用者選的）：
+    - **用標準庫的 `Command`，client 那一端只在啟動的那一小段可繼承，整段包在一把鎖裡**。問題：Windows 讓 child 繼承 handle 有兩種，給清單（只繼承指定的）和不給（這段時間啟動的每個 process 都繼承所有可繼承的）；標準庫只有第二種（給清單的 `spawn_with_attributes` 在 1.99 還是 unstable，對過這台的原始碼）。別的 process 多拿到 client 那一端時，它能讀寫通道，而且真正的 child 當掉時 pipe 不會斷。做法：`spawn` 拿鎖、把 client 那一端設成可繼承、啟動、關掉自己的那一份、放鎖。**留下的缺口**：鎖只管得到經過 `ipc::platform::spawn` 的，Browser 在別處同時啟動別的 process 時那個 process 也會拿到；現在 machopo 的 Browser 沒有在別處啟動 process。記在 `docs/limitations.md`。不選照 Chromium 自己呼叫 `CreateProcessW` 給清單（`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`）：標準庫的 `Child` 不能從 process handle 建出來，第 41 條的簽名要改、另外兩個平台跟著改，還要自己組命令列、環境變數的區塊、標準輸出入；這些本來就是作業系統的 sandbox 那一份要做的（restricted token、job 都要自己呼叫 `CreateProcessW`），那時整個啟動重寫，**做 sandbox 時換成這個**，缺口跟著消失。不選不繼承、child 用名字連上來、host 照 kernel 說的 client 的 pid 確認：通道多一個「等對方連上來」的狀態，child 沒連就結束時 kernel 不說話。
+    - **數值放環境變數 `MACHOPO_IPC_CHANNEL`**（十進位）。問題：child 繼承到的 handle 在它那裡是一個數值，啟動時要有人告訴它；管道只有命令列和環境變數。不選命令列的 switch（Chromium 的 `--mojo-platform-channel-handle`）：不分平台的跨 process 測試的 child 是測試的執行檔自己，它的入口是 test harness，不認得的 `--` 參數會讓它在我們的程式跑到之前就結束；`ipc` 也得往呼叫的人的 `Command` 加參數、child 那邊要有人挑出來，`inherited()` 的簽名就不能三個平台一樣。安全性上沒有差別（數值只是 child 的 handle 表裡的編號）。做 sandbox、child 的入口是我們自己的時候可以重看。`inherited` 讀到之後確認那個數值是一個 pipe（`GetFileType`），不是就沒有通道：擋的是變數被別人亂設。`spawn` 啟動完把變數從呼叫的人的 `Command` 拿掉。
+    - **child 拿到之後清掉交接留下的三樣東西**：把 handle 設回不可繼承（不然它自己啟動的 process 會拿到通道的一端）；把變數從自己的環境拿掉（不然傳給孫 process）；一個 process 只能拿到一次（另有一個旗標守著，不靠變數有沒有清）。拿掉變數是 `unsafe` 的 `std::env::remove_var`，所以 `inherited` 的使用規則是在 process 還沒有別的 thread 時呼叫。host 這一側啟動完就關掉自己的 client 那一端（不關的話 child 當掉時 pipe 不會斷）。
+    - **`child_gone` 在 Windows 上什麼都不做**。問題：child 還沒拿它那一端就結束時 host 要知道。child 是用繼承拿到的，process 一啟動那一端就在它的 handle 表裡、結束時 kernel 關掉，host 的讀就失敗（探測量過：kill 之後 0.6 到 1.4 ms）。第一點留下的缺口在這裡的樣子是：別的 process 也拿著 client 那一端時 child 死了 host 收不到；和那個缺口一起在做 sandbox 時消失。不選 `child_gone` 主動通知（一張 pid 對通道的全域表、waiter 多一種通知）、不選通道自己等 child 的 process handle（系統 thread pool 的回呼，或 job 接到 port 上）：補的是現在碰不到、之後會消失的缺口。Chromium 的分工相同：`ChannelWin` 只看 pipe，process 的死活由啟動它的那一層看。
+    - **共用的測試改了一處**（單獨一個 commit）：`process_channel.rs` 裡亂送的 child 原本先寫、再開始等它那一端；Windows 的通道在有 thread 服務之前不寫（第 55 條），所以改成先等、再寫。另外兩個平台上順序無所謂。
+
 ## 待決定
 
 - **Windows 的通道上，當場完成的讀寫要不要等 completion port 的通知**（第 55 條；2g-4 量的時候）：現在等（Chromium 的做法）。另一種是設 `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`、當場完成就算完成。兩種都量：連續送幾千則小訊息的總時間（不分平台的跨 process 測試裡對方先睡著的那一個情境就是）、大的資料一段一段送的時間、一條 thread 服務好幾條通道時。差不多就留現在的（少一條路要審）；另一種明顯比較快才換。
@@ -548,7 +555,6 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
   - 壞的 frame：frame 是在 Browser 裡交給 GPU 的，而 wgpu 的驗證錯誤現在會結束整個程式。Viz 收到 frame 時的檢查要涵蓋所有會走到 wgpu 的值；這一項單一 process 時就可以開始做。
 - **trace 怎麼收**：每個 process 各寫一個檔案（`MACHOPO_TRACE` 加上 pid）、之後合併，或 child 把 span 送回 Browser。Chromium 是每個 process 的 tracing service 把資料送回 Browser 合成一份。
 - **哪些模式預設多個 process**：看法是只有人用的視窗；headless、情境、`--automation-pipe` 和測試預設單一 process，CI 另外用多個 process 跑選定的幾套（下面的「哪幾套測試」）。
-- **Windows 怎麼把控制通道的一端交給 child**（Linux 的是第 43 條）：std 的 `Command` 沒有指定要繼承哪個 handle 的 API。選項：照 Chromium 讓 handle 可以繼承並把數值放在命令列、當成 child 的 stdin 傳（Linux 不選它的理由見第 43 條）。
 - **哪幾套測試在 CI 上用多個 process 跑**：WPT 可以。情境和 reftest 怎麼啟動、要全部還是一部分、多花多少時間，還沒確認。
 - **Browser 的 IO thread 要不要合成一條**（2026-11-20：第 3 階段決定，那時開得了多個 renderer process、可以量；合成一條之後那條 thread 比較忙，同時重量一次訊息的 ring 值不值得，第 19 條）：現在每個 renderer 一條，分頁多的時候 thread 跟著多；Chromium 是整個 process 一條處理所有通道。IO thread 的迴圈本來就不寫死成只等一條通道（「`ipc` crate」），合起來不用改設計；量到 thread 的數量是問題時再做。
 - **背景 GC**：拆 process、有背景分頁時，V8 的 heap 在背景要不要 concurrent GC。

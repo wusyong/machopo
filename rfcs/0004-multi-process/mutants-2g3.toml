@@ -1,0 +1,83 @@
+# Step 2g-3: how a Windows child comes by its end
+# (`ipc::platform::windows::channel`'s `spawn` and `inherited`). The
+# child inherits its end and is told where it is; the host keeps none of
+# it; children started at once don't inherit each other's; the end is
+# taken once, only if it is a pipe, and neither it nor word of it is
+# left for the child's own children.
+#
+# Not listed: a child killed when no host's end could be made for it
+# (the kernel doesn't refuse the duplicate in any test).
+test = ["cargo", "test", "-q", "-p", "ipc"]
+timeout = 120
+
+[[mutant]]
+name = "the child's end isn't made one it inherits"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''        if !inherited_by_children(&client, true) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "the host keeps the child's end"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''        drop(client);
+        spawned'''
+to = '''        std::mem::forget(client);
+        spawned'''
+
+[[mutant]]
+name = "the command goes on naming the child's end"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''        command.env_remove(CHANNEL_VARIABLE);
+'''
+to = ''''''
+
+[[mutant]]
+name = "the child isn't told where its end is"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''        command.env(CHANNEL_VARIABLE, value.to_string());
+'''
+to = ''''''
+
+[[mutant]]
+name = "children are started at once, each inheriting the others' ends"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''        let _one_at_a_time = lock(&STARTING);
+'''
+to = ''''''
+
+[[mutant]]
+name = "an end is taken as often as it is asked for"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''    if TAKEN.swap(true, Ordering::SeqCst) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "the variable is left in the child's environment"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''    unsafe { std::env::remove_var(CHANNEL_VARIABLE) };
+    end_named(&value)'''
+to = '''    end_named(&value)'''
+
+[[mutant]]
+name = "whatever handle the variable names is taken for the end"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''    if unsafe { GetFileType(handle) } != FILE_TYPE_PIPE {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "a child's own children inherit its end"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''    inherited_by_children(&pipe, false).then(|| Channel::child(pipe))'''
+to = '''    Some(Channel::child(pipe))'''
+
+[[mutant]]
+name = "making a handle inherited does nothing"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''    let flag = if inherited { HANDLE_FLAG_INHERIT } else { 0 };'''
+to = '''    let flag = 0;'''
+
+[[mutant]]
+name = "a handle is always made inherited"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''    let flag = if inherited { HANDLE_FLAG_INHERIT } else { 0 };'''
+to = '''    let flag = HANDLE_FLAG_INHERIT;'''
