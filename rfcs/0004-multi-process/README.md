@@ -130,8 +130,8 @@ Browser process                                Renderer process
   - 不寫死成「Browser 可以、child 不行」：之後 GPU process 要交出只有它建得出來的緩衝區。不變的是 renderer 永遠不能。
 - **用編號稱呼 region**：
   - Browser 建立一塊 region 時給它一個編號（每個 renderer 各自一組），把編號和 handle 一起交給 renderer。作業系統只認 handle，光有編號 map 不了，所以這一次省不掉。
-  - renderer map 好、留著，之後直接寫那塊記憶體。它在訊息裡提到這一塊時只寫編號，一塊裡放好幾樣東西時加上位置和長度。
-  - Browser 為每個 renderer 記一張「編號 → region」的表，用自己建立時就有的 handle 和 mapping。要檢查的只有：編號在不在這個 renderer 的表裡、位置加長度有沒有超出那一塊（checked 的運算）。三個平台都一樣。
+  - renderer map 好、留著，之後直接寫那塊記憶體。它在訊息裡提到這一塊時只寫編號和長度：一塊一次只放一筆資料（第 29 條）。
+  - Browser 為每個 renderer 記一張「編號 → region」的表，用自己建立時就有的 handle 和 mapping。要檢查的只有：編號在不在這個 renderer 的表裡、長度有沒有超出那一塊。三個平台都一樣。
 - **map 出來的記憶體不轉成 `&[u8]`**：對方隨時可能在寫，拿著 Rust 的參照就違反了 aliasing 的規則。存取一律經過指標：計數用 atomic，內容用指標複製到自己的記憶體之後才用。Viz 上傳 tile 的像素也一樣，不能把共用記憶體直接當成 slice 交給 wgpu。
 
 **控制通道**：
@@ -142,12 +142,12 @@ Browser process                                Renderer process
   - **Linux**：non-blocking 的 socket。handle 跟著同一次 `sendmsg` 送出；收的一端處理控制資料被截斷的情況，收到的 fd 用 `MSG_CMSG_CLOEXEC` 設成 close-on-exec。
   - **macOS**：一則訊息是一則 Mach 訊息；每一則都照 audit token 確認是那個 child 送的（第 22 條）。IO thread 阻塞在 `mach_msg`，等一個 port set（通道的 receive port 加一個自己的喚醒用的 port）；送的 timeout 是 0。在通往對方的 send right 上登記 dead-name、在自己的 receive port 上登記 no-senders，任一個到了就當成斷線；通知只認 kernel 送的（訊息的 audit token），對方可以送一則 id 相同的訊息來假冒。
   - **Windows**：overlapped 的 `ReadFile` / `WriteFile`，寫入一次只有一筆在進行。IO thread 等「讀完成」和「喚醒」兩個 event；結束時用 `CancelIoEx` 取消進行中的 I/O 再關 handle。Browser 送 handle 時自己用 `DuplicateHandle` 複製進 renderer 的 process，訊息只帶數值。
-- 序列化：serde 加 postcard（第 22 條）。postcard 自己沒有巢狀深度的上限：會一層包一層的型別（下一條）的解碼自己數深度。Browser 新發出的 region 序列化成 handle 表的 index，handle 本身走帶外；其他時候 region 只是編號，和一般的欄位一樣。
+- 序列化：serde 加 postcard（第 22 條）。postcard 自己沒有巢狀深度的上限：會一層包一層的型別（下一條）的解碼自己數深度。內容裡 region 只是編號和長度，和一般的欄位一樣；Browser 新發出的 region 的 handle 不在內容裡，跟著 `ipc` 自己的一則訊息（「這個編號的 region 給你」）走在用到它的訊息前面（第 30 條）。包在 postcard 外面的一層決定一段位元組放訊息裡還是 region，並數巢狀的深度（第 31 條）。
 - 收的一端先檢查長度上限、目的地的編號（不認得的就是壞訊息）和 handle 的數量（對方沒有權限時只能是 0），再反序列化。反序列化時巢狀的深度有上限：訊息裡有可以一層包一層的型別（例如 `protocol::webdriver` 的 `WebDriverValue`，renderer 送的），不設限的話對方送一個巢狀很深的值就能讓收的一端 stack overflow，那不是 panic、接不住，整個 process 結束。不合的就當成對方壞掉，關掉通道（Chromium 的 `ReceivedBadMessage`）。
 
 ### 大的資料
 
-- **`protocol` 加一個 bytes 的型別**（`protocol::BigBuffer`，Chromium 的 `mojo_base::BigBuffer`，第 25 條）：單一 process 時是 `Bytes`；跨 process 時 64 KiB 以下放在訊息裡，以上放進共用記憶體（第 22 條）。兩個方向都走留著重複用的 region，不是每筆資料新建一塊（新建、map、第一次碰每一頁的成本比直接放在訊息裡還高）：Browser 送的寫進它給這個 renderer 的唯讀的 region，第一次用那一塊時連 handle 一起交出去，之後只帶編號、位置和長度，renderer 複製出來之後回報、Browser 才重複用那一段；renderer 送的寫進 Browser 之前配給它的 region，訊息只帶編號、位置和長度。macOS 上訊息一律內嵌在 Mach 訊息裡，不用 out-of-line 的 descriptor（64 KiB 以下兩者一樣快，以上已經走 region）。跨邊界的訊息裡的位元組欄位都用它：子資源的回應、worker 的主 script、導覽的 body 放在訊息裡的那一段、blob 的內容和 request 的 body（renderer 送的）、history 的 state、沒有 GPU 時 frame 的像素。導覽的 body 不用：它只有開頭在訊息裡，其餘走 data pipe（下一節）。
+- **`protocol` 加一個 bytes 的型別**（`protocol::BigBuffer`，Chromium 的 `mojo_base::BigBuffer`，第 25 條）：單一 process 時是 `Bytes`；跨 process 時 64 KiB 以下放在訊息裡，以上放進共用記憶體（第 22 條）。兩個方向都走留著重複用的 region，不是每筆資料新建一塊（新建、map、第一次碰每一頁的成本比直接放在訊息裡還高）：Browser 送的寫進它給這個 renderer 的唯讀的 region（handle 在那一塊第一次用之前交出去），訊息只帶編號和長度，renderer 複製出來之後回報、Browser 才重複用那一塊；renderer 送的寫進 Browser 之前配給它的 region，訊息一樣只帶編號和長度，Browser 複製出來之後回報。一筆資料用一整塊（第 29 條）；沒有空的那一塊時照樣放在訊息裡。macOS 上訊息一律內嵌在 Mach 訊息裡，不用 out-of-line 的 descriptor（64 KiB 以下兩者一樣快，以上已經走 region）。跨邊界的訊息裡的位元組欄位都用它：子資源的回應、worker 的主 script、導覽的 body 放在訊息裡的那一段、blob 的內容和 request 的 body（renderer 送的）、history 的 state、沒有 GPU 時 frame 的像素。導覽的 body 不用：它只有開頭在訊息裡，其餘走 data pipe（下一節）。
 - **從 renderer 來的大資料**：renderer 還能寫那塊記憶體，所以 Browser 一律先複製出來再用（Chromium 的 `BigBuffer` 的註解也警告這個 TOCTOU 的風險）。
 
 ### 導覽的 body 的管道
@@ -226,7 +226,7 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
 
 `ipc` 要守住的事，一條一條列出來；每一條在「測試」的表裡對到驗證它的方法。完整的論證（假設、不變式、每一處 `unsafe`）寫在 `ipc` 自己的 `soundness.md`（做的時候新增，像 `bindings` 的）。
 
-1. **記憶體**：不管對方在共用記憶體裡寫什麼、在訊息裡給什麼編號、位置和長度，這一端讀寫的都在它自己 map 的那一塊裡面。
+1. **記憶體**：不管對方在共用記憶體裡寫什麼、在訊息裡給什麼編號和長度，這一端讀寫的都在它自己 map 的那一塊裡面。
 2. **壞的輸入**：從通道讀到的任何位元組，結果只有兩種：照規則處理，或當成壞訊息關掉通道。不會 panic、卡住或 stack overflow，用掉的記憶體有上限。
 3. **handle**：沒有權限的一端送的訊息，不會讓收的一端留下任何 handle。
 4. **region 的歸屬**：一塊 region 只在建它時指定的那個 renderer 的表裡；收回之後不在任何表裡，不會交給別的 renderer。
@@ -249,7 +249,7 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
 | fuzz（cargo-fuzz） | 2，和 1、6、9 | 兩個 target：從「通道讀到的位元組」到「Browser 處理完這則訊息」的整條路（反序列化、分派、處理訊息的物件；惡意的 renderer 唯一碰得到 Browser 的路，那個物件不需要真的通道就能跑）；region 的參照 | 每週的 CI；改核心時在本機跑一段 |
 | loom、shuttle | 5、6、7、9 | 送出的佇列和它的鎖（好幾條 thread 同時送、對方同時斷線）、body 的訊息和「讀了多少」的往返（兩端各一條 thread）。同步呼叫等回答的位置不在這裡（第 27 條）。atomic 和鎖的型別在核心裡是抽象的，測試時換成 loom 的 | 每週的 CI；改到這幾處時在本機 |
 | TLA+ | 4、5、6、7、9 | 通道的協定的模型：兩端、有上限的佇列、任一端隨時斷線、region 的發出和收回、body 的管道的額度。TLC 檢查模型成立，再拿掉每一部分確認找得到反例 | 改協定時；模型和協定一起改 |
-| Verus | 1 | 範圍的檢查和位置的運算寫成純函式（輸入數字，回答合不合法），證明「檢查通過的範圍一定在那一塊裡面」和 data pipe 的額度的運算（送出的不超過容量、讀了的不超過送的） | 每週的 CI |
+| Verus | 1、4 | 池子的運算寫成純函式，證明：一個長度對到的 region 放得下它、是最小的一種；選出來的那一塊是空的、夠長、最短的，說沒有時真的沒有；總量的檢查不溢位。和 data pipe 的額度的運算（送出的不超過容量、讀了的不超過送的） | 每週的 CI |
 | Miri | 1 | 核心的測試經過假通道在 Miri 底下跑：碰共用記憶體的 `unsafe` 沒有未定義的行為 | 每週的 CI |
 | mutation test | 每一個檢查 | 照 `docs/testing.md`：弄壞每個檢查，確認有測試失敗 | 每個階段 |
 
@@ -370,6 +370,17 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
 28. **送出的佇列的上限是 256 MiB，照位元組算**（2026-11-21，第 2 階段的 2b，性質 5）：等著寫出去的位元組（連開頭）超過它，就當成對方不讀了、關掉通道。兩則最大的訊息（第 26 條）的大小：一則合法的大訊息一定排得進去。佇列平常是空的：對方的 IO thread 是獨立的 thread，main thread 忙的時候照樣在讀；body 有自己的背壓（第 21 條）。會堆起來的只有對方整個 process 停住的時候。
     - **不選照「多久沒讀」算**（或兩個都要）：被 debugger 停住的 renderer 會被殺掉；核心要有時鐘，loom 和 fuzz 都變難；多久算壞沒有好的答案。Mojo 的 channel 送出的佇列預設沒有上限，renderer 沒回應是另一層的事（hang monitor）；這裡也留給之後的 hang monitor。
     - 上限是一個常數（`MAX_QUEUED_BYTES`），之後量到平常的佇列有多長，收緊只改它。
+29. **池子裡一筆資料用一整塊 region，照大小分級**（2026-11-21，第 2 階段的 2c，「共用記憶體」）：region 的長度是 64 KiB 起每次加倍的那幾種（到 1 GiB），資料放進最短的放得下的空塊，用完整塊回池子。訊息裡提到 region 時只有編號和長度，沒有位置；檢查只有「編號在不在表裡、長度有沒有超過那一塊」。tile 都一樣大，剛好一級；`BigBuffer` 用幾級。
+    - **不選少數幾塊大的 region 裡切段**（以頁為單位的 free list，訊息帶編號、位置、長度）：region 少、浪費的位址空間少，但要寫配置器（切段、合併、碎片），「兩段不重疊」要證，Browser 送的一側還要比對 renderer 還回來的是不是發出去的那一段，閒置的記憶體要一頁一頁還給 OS。它省的是 handle 和 map 的次數，那只在每一塊第一次用時付一次。
+    - 對照 Chromium：`BigBuffer` 每筆新建一塊、沒有池子（第 22 條量過，比放在訊息裡慢）；軟體合成的 tile 是一個 resource 一塊 region、compositor 留著重複用，是這個做法；大的 region 裡照頁切的只有 discardable memory。
+    - 沒有空的那一塊時資料照樣放在訊息裡，不等。池子什麼時候多要一塊、閒置的什麼時候放掉，在 Browser 接上它的時候定（第 3 階段）。
+30. **「這一塊可以再用了」是控制通道上的一則訊息，共用記憶體裡沒有雙方都寫的狀態**（2026-11-21，2c）：`ipc` 自己保留一個目的地（`CONTROL_DESTINATION`）。收的一端處理完一批讀到的位元組，把用過的編號合成一則 `Released` 送出；還的不是「發出去、還沒還」的那一塊就是壞訊息。新的 region 也經過這個目的地給（`Granted`：編號、長度、給對方寫的或讀的，handle 跟著這一則），走在用到它的訊息前面，所以訊息的內容裡不會有 handle 的 index，兩個方向的 region 用同一種方式交出去。tile 的那一塊不經過 `Released`：它的生命週期是上層的訊息（第 23 條），池子另有「由拿的人還」的入口。
+    - **不選共用記憶體裡的 atomic 旗標**：Browser 送的 region 對 renderer 是唯讀的，旗標要另開一塊雙方可寫的狀態區；renderer 可以隨時亂改它，每一種改法都要論證只傷到它自己，還要 loom 的模型；池子空了時也沒有喚醒。省下的是每批大資料一則小訊息（單程約 2 µs，1 MiB 的資料本身是 36 µs）。
+    - 對照 Chromium：`BigBuffer` 沒有這一步（每筆一塊，雙方放掉 handle 時 OS 收回），這一步是「留著重複用」（第 22 條）和「renderer 不能送 handle」（第 17 條）帶來的；tile 的 resource 用訊息還（`ReturnResources`）。共用記憶體裡放 atomic 狀態的只有 data pipe 的環狀緩衝區。
+31. **`BigBuffer` 走 region 和巢狀深度的上限，都做在包住 postcard 的一層 serde 的 Serializer / Deserializer 裡**（2026-11-21，2c，`ipc::codec`）：其他的值原樣轉給 postcard；`serialize_bytes` 的一段位元組到 64 KiB 時向池子要一塊，寫成一個兩種 variant 的 enum（在訊息裡的、在 region 裡的編號和長度）。池子和表是明確傳進去的參數，`protocol` 不用改、不用知道 region。解碼的那一層數深度，上限 128 層。攔的是 `serialize_bytes`，不是 `BigBuffer` 這個型別：現在只有它這樣寫（`sanity.py boundary` 守著），之後別的型別這樣寫也走同一條路。
+    - **不選 thread-local 的範圍**（`protocol` 開掛勾，`ipc` 編碼期間把池子掛上去）：藏起來的全域狀態，忘了掛就靜靜地全部放在訊息裡；`protocol` 要知道 region；深度的上限還是得另外包一層。
+    - **不選每種訊息自己列出它的 `BigBuffer` 欄位**：加欄位時漏列就不走 region。
+    - 對照 Chromium：Mojo 產生的序列化程式把訊息的 context 明確傳給每個型別的 traits，`BigBuffer` 的 traits 從它把 handle 放進訊息。
 
 ## 待決定
 

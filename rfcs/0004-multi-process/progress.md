@@ -19,9 +19,9 @@
 | 1d：第 1 階段的檢查和文件 | 完成 | 2026-11-21 |
 | 2a：訊息的框架和對收到的位元組的檢查；同一個 process 裡的假通道；`sanity.py` 檢查核心沒有系統呼叫（單元測試、惡意的對端、fuzz、Miri） | 完成 | 2026-11-21 |
 | 2b：送出的佇列、目的地的分派、斷線只報告一次（loom、shuttle；同步呼叫等回答的位置留在 renderer，第 27 條） | 完成 | 2026-11-21 |
-| 2c：region 的表和範圍的檢查、`BigBuffer` 帶 region 的序列化、留著重複用的池子（Verus、fuzz、Miri） | 未開始 | |
+| 2c：region 的表和範圍的檢查、`BigBuffer` 帶 region 的序列化、留著重複用的池子（Verus、fuzz、Miri） | 完成 | 2026-11-21 |
 | 2d：data pipe 的跨 process 版；通道協定的 TLA+ 模型（TLA+、loom、Verus） | 未開始 | |
-| 2e：macOS 的平台層（Mach 訊息、rendezvous、memory entry；跨 process 的測試） | 未開始 | |
+| 2e：macOS 的平台層（Mach 訊息、rendezvous、memory entry；跨 process 的測試）；把 `Control`（`Released`、`Granted`）接進通道收的一側 | 未開始 | |
 | 2f：Linux 的平台層；量 socket 的緩衝區和大的資料的門檻 | 未開始 | |
 | 2g：Windows 的平台層 | 未開始 | |
 | 2h：第 2 階段的檢查、`soundness.md`、`test.py` 的指令、文件；把 `test.py ipc` 的每一項排進每週的 CI（2a 起在本機跑） | 未開始 | |
@@ -162,3 +162,26 @@
 - **mutation test**（`mutants-2b.toml`）20 個，全部抓到：18 個是單元測試抓的（繞過佇列直接寫、上限不檢查和差一、關掉後留著等著的或它的計數、理由被後來的蓋掉、該叫醒的沒叫和不該叫的叫了、`flush` 不扣和不拿掉、沒有權限的一端送 handle、大的緩衝區留著、目的地差一、結束報告多次、讀到一半的不丟、結束後還送、別的 thread 關掉之後還交出訊息）；「鎖在編號和寫出之間放開」單元測試看不到，loom 和 shuttle 各抓到一次。跑完確認檔案都還原了。
 - **跑過的檢查**：`cargo test -p ipc`（單元 27 個、整合 20 個）；`test.py ipc models`、`test.py ipc miri`；`cargo clippy -p ipc --all-targets -- -D warnings`（一般的、`ipc_loom` 和 `ipc_shuttle` 的各一次）、`cargo fmt --check`；`sanity.py` 的 7 項。這一段沒有加 fuzz target：`Receiver` 在 `Decoder` 上面只多目的地的比較，從位元組到「Browser 處理完這則訊息」的那個 target 在第 3 階段。
 - **留給後面的**：`Transport` 的讀的一側（平台自己的迴圈）和 `wake` 怎麼實作在 2e 之後；region（2c）、data pipe（2d）。
+
+### 2c：region、池子和 `BigBuffer` 的序列化（2026-11-21，macOS、Apple M4）
+
+- **決定**：「已決定的事項」第 29 條（一筆資料用一整塊 region、照大小分級）、第 30 條（「可以再用了」是一則訊息；新的 region 也經過 `ipc` 自己的訊息給）、第 31 條（包住 postcard 的一層 serde）。「共用記憶體」「控制通道」「大的資料」三段和「測試」的表的 Verus 那一列跟著改：訊息裡提到 region 時沒有位置，內容裡沒有 handle 的 index。
+- **做了什麼**：
+  - `ipc::core::region`：`Memory`（一段共用的記憶體，`unsafe trait`）、`Pool`（送的一端：`add`、`put`、`take`、`released`、`give_back`、`remove`，總量的上限）、`Table`（收的一端：`insert`、`read`、`take_read`、`remove`）、`Control`（`Released`、`Granted` 和它們的位元組）、`HeapMemory`（一般配置的記憶體當 region）。`BadMessage` 多 `TooDeep`、`UnknownRegion`、`OutsideRegion`、`RegionNotOut`。
+  - `ipc::core::fit`：`class_len`、`best_fit`、`admits`，寫在 `verus!` 裡。
+  - `ipc::codec`：`encode`、`decode`，`Place` 和 `Resolve`（`Pool` 和 `Table` 實作它們），`NoRegions`，`MAX_DEPTH`（128）。
+  - workspace 多兩個依賴：`postcard`（1，只開 `alloc`）和 `vstd`（釘和 elise 同一個版本）。
+- **Verus**（`test.py ipc verus`，新的）：14 個驗證通過。證明的是：`class_len` 回來的是合法的一種長度、放得下、最小；`best_fit` 回來的是空的、夠長、最短的，回 `None` 時沒有任何一塊可以；`admits` 等於「總量加這一塊不超過上限」。把 `class_len` 的規格改成「嚴格大於」確認過 Verus 會失敗。`Pool::put` 的 `unsafe` 靠 `best_fit` 的後置條件。用的是 elise 的那一版 Verus（toolchain 1.99.1），整個 `ipc`（連 tokio）在它底下編得過。
+- **fuzz**：新的 target `region`（`tests/it/region_fuzz.rs`）：輸入當成提到 region 的訊息、`Control`、和一串對池子和表的操作（對著模型）。兩個 target 各 2 分鐘：`frame` 1380 萬次、`region` 122 萬次，沒有發現。
+- **Miri**：核心的單元測試 39 個通過、1 個跳過（128 MiB 的那一個），約 8 分鐘；這一段起核心有 `unsafe`（對 region 的複製、`HeapMemory`）。`codec` 的測試不在 Miri 底下：它自己沒有 `unsafe`，經過的 `Table::read` 和 `Pool::put` 由核心的單元測試在 Miri 底下跑。
+- **mutation test**（`mutants-2c.toml`）52 個，全部抓到。第一次跑有 3 個沒抓到：
+  - 「拿第一個放得下的，不是最短的」：測試裡的 region 都是由短到長加的，兩者一樣。補了一個長的先加的測試。
+  - 「不認得的 variant 當成放在訊息裡的」：原本偽造的內容剛好也解不出來。改成後面接著一段解得出來的位元組。
+  - 「region 的錯回報最後一個而不是第一個」：等價。serde 產生的型別碰到錯就整個停，不會有第二個；留著 `get_or_insert` 是為了手寫的 `Deserialize` 接住錯誤繼續的情況。記在清單的註解裡，不列成 mutant。
+  - 跑完確認檔案都還原了。
+- **寫的時候碰到的**：深度的測試原本用程式建一個兩萬層的值，測試自己先 stack overflow（建、序列化、drop 都遞迴），改成直接組位元組（一百萬層）。`encode` 原本把 `out` 整個交給 postcard，失敗時拿不回來；改成 postcard 寫進一個包著 `&mut Vec` 的 `Extend`。
+- **跑過的檢查**：`cargo test -p ipc`（單元 40 個、整合 33 個）；`test.py ipc verus`、`ipc fuzz --minutes 2`、`ipc miri`、`ipc models`；`cargo clippy -p ipc --all-targets -- -D warnings`（一般的、`ipc_loom` 和 `ipc_shuttle` 的各一次）、`cargo fmt --check`；`sanity.py` 的 7 項。
+- **留給後面的**：
+  - `Control` 還沒有接進 `core::channel` 的收的一側，`codec` 也還沒有人呼叫：要等平台那一層能把 handle 變成 `Memory`（2e，記在上面的表）。
+  - 池子什麼時候多要一塊、閒置的什麼時候放掉、每個 renderer 的上限是多少：Browser 接上時定（第 3 階段）。
+  - `test.py ipc` 現在有四項（`fuzz`、`miri`、`models`、`verus`），都還沒有排進 CI（2h）。

@@ -1560,7 +1560,9 @@ def restore_originals() -> list[str]:
 
 IPC_FUZZ = ROOT / "crates" / "ipc" / "fuzz"
 # The fuzzers there are (`[[bin]]`s of its Cargo.toml).
-IPC_FUZZ_TARGETS = ["frame"]
+IPC_FUZZ_TARGETS = ["frame", "region"]
+# The Verus release `ipc`'s proofs are checked with (the one elise's are).
+IPC_VERUS_VERSION = "0.2026.10.18.7d82994"
 
 
 def ipc_nightly() -> str:
@@ -1595,7 +1597,29 @@ def cmd_ipc(args: argparse.Namespace) -> int:
     own (target/ipc-loom, target/ipc-shuttle): a change of RUSTFLAGS
     rebuilds every dependency. Release builds, for speed.
 
+    `verus`: the proofs of the arithmetic its regions' pool rests on
+    (`crates/ipc/src/core/fit.rs`; `cargo verus verify -p ipc`). Verus
+    builds the whole crate and proves what is inside `verus!`, which a
+    plain build compiles with its specs and proofs erased. Needs Verus
+    IPC_VERUS_VERSION (this script's; its `vstd` is the one the workspace's
+    Cargo.toml pins), from VERUS_DIR or
+    ~/verus/<version>/verus-<arch>-<os>/: the release's zip from
+    github.com/verus-lang/verus, and `rustup install` of the toolchain its
+    `verus --version` names.
+
     Non-zero on a failure."""
+    if args.what == "verus":
+        home = os.environ.get("VERUS_DIR")
+        if home is None:
+            found = sorted((Path.home() / "verus" / IPC_VERUS_VERSION).glob("verus-*"))
+            home = str(found[0]) if found else None
+        if home is None or not (Path(home) / "cargo-verus").exists():
+            print(f"Verus {IPC_VERUS_VERSION} isn't installed: see `test.py ipc -h`")
+            return 1
+        env = dict(os.environ, PATH=f"{home}{os.pathsep}{os.environ.get('PATH', '')}")
+        command = [str(Path(home) / "cargo-verus"), "verify", "-p", "ipc"]
+        print(f"--- {' '.join(command)}", flush=True)
+        return subprocess.run(command, cwd=ROOT / "crates" / "ipc", env=env).returncode
     if args.what == "models":
         failed = []
         for name in ("loom", "shuttle"):
@@ -1954,8 +1978,8 @@ def main() -> int:
     cdp = command("cdp", cmd_cdp, "machopo's answers to DevTools' domains against Chrome's")
     cdp.add_argument("cases", nargs="*", metavar="CASE", help="run only these cases (default: all)")
 
-    ipc = command("ipc", cmd_ipc, "the channels' core: its fuzzers, its tests under Miri, its threads under loom and shuttle")
-    ipc.add_argument("what", choices=["fuzz", "miri", "models"], help="which check")
+    ipc = command("ipc", cmd_ipc, "the channels' core: its fuzzers, its tests under Miri, its threads under loom and shuttle, its proofs")
+    ipc.add_argument("what", choices=["fuzz", "miri", "models", "verus"], help="which check")
     ipc.add_argument(
         "--minutes", type=float, default=5, metavar="M", help="fuzz: how long each fuzzer runs (default 5)"
     )

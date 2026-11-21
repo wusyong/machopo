@@ -47,6 +47,14 @@ pub enum BadMessage {
     UnknownDestination { destination: u32 },
     /// A payload whoever it was for could make nothing of.
     Rejected,
+    /// A value nested deeper than a message's may be.
+    TooDeep,
+    /// A region that isn't one of this peer's.
+    UnknownRegion { number: u32 },
+    /// More bytes than the region named has.
+    OutsideRegion { number: u32, len: u32 },
+    /// A region given back that nothing was sent in.
+    RegionNotOut { number: u32 },
 }
 
 impl fmt::Display for BadMessage {
@@ -66,6 +74,14 @@ impl fmt::Display for BadMessage {
                 write!(f, "a message for destination {destination}")
             }
             Self::Rejected => f.write_str("a payload its destination refused"),
+            Self::TooDeep => f.write_str("a value nested too deep"),
+            Self::UnknownRegion { number } => write!(f, "region {number}, which isn't this peer's"),
+            Self::OutsideRegion { number, len } => {
+                write!(f, "{len} bytes of region {number}, which is shorter")
+            }
+            Self::RegionNotOut { number } => {
+                write!(f, "region {number} given back with nothing sent in it")
+            }
         }
     }
 }

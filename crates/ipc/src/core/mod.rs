@@ -6,7 +6,9 @@
 //! Miri and a fuzzer.
 
 pub mod channel;
+pub mod fit;
 pub mod frame;
+pub mod region;
 mod sync;
 
 #[cfg(test)]

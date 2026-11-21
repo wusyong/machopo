@@ -194,6 +194,12 @@ base64 = "0.22"
 # the default `image-data` feature.
 arboard = { version = "3", default-features = false }
 
+# `ipc`'s proved code (`verus!`): the version of the Verus release that
+# checks it (`VERUS_VERSION` in scripts/test.py).
+vstd = "=0.0.0-2026-10-18-0147"
+# What a message's value is written as between processes.
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+
 # Proc-macro and test-only crates.
 syn = "2"
 quote = "1"
@@ -207,7 +213,8 @@ ctor = { version = "1", default-features = false, features = ["std"] }
 # `--cfg ipc_shuttle`, to check what its threads share. Not `loom` itself:
 # tokio, which `ipc` depends on, reads that cfg too (it leaves modules out
 # and swaps code under it), and would be another tokio than the one shipped.
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(ipc_loom)", "cfg(ipc_shuttle)"] }
+# Its Verus lemmas are imported under Verus's `cfg(verus_only)`.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(ipc_loom)", "cfg(ipc_shuttle)", "cfg(verus_only)"] }
 unsafe_op_in_unsafe_fn = "deny"
 # `unsafe` is confined to `bindings` (V8 FFI) and `ipc` (the channels' shared
 # memory), which opt back in at their crate roots. Everything else builds on

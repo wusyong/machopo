@@ -1,6 +1,6 @@
 [package]
 name = "ipc"
-description = "The process boundary (Chromium's ipc/ and mojo/): the clock every process reads (TimeTicks), and data pipes."
+description = "The process boundary (Chromium's ipc/ and mojo/): the clock every process reads (TimeTicks), data pipes, and the channels' core."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,11 +14,18 @@ doctest = false
 [lints]
 workspace = true
 
+[package.metadata.verus]
+verify = true
+
 [dependencies]
 base.workspace = true
 bytes.workspace = true
+postcard.workspace = true
 serde.workspace = true
 tokio.workspace = true
+# Verus's `verus!` and its specs, erased in a plain build: `src/core/fit.rs`
+# is proved (`python3 scripts/test.py ipc verus`).
+vstd.workspace = true
 
 # The checks of what a channel's threads share, only when built with
 # `--cfg ipc_loom` / `--cfg ipc_shuttle` (`python3 scripts/test.py ipc

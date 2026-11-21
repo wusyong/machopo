@@ -1,8 +1,8 @@
 # ipc
 
-對應 Chromium 的 `ipc/` 和 `mojo/`：machopo 的各個 process 之間共用的東西。renderer 現在還是 Browser process 裡的 thread；現在有每個 process 都讀同一個的時鐘 `TimeTicks`、還在同一個 process 裡的 data pipe（`data_pipe`），和 channel 的核心（`core`，還沒有接上任何傳輸）。
+對應 Chromium 的 `ipc/` 和 `mojo/`：machopo 的各個 process 之間共用的東西。renderer 現在還是 Browser process 裡的 thread；現在有每個 process 都讀同一個的時鐘 `TimeTicks`、還在同一個 process 裡的 data pipe（`data_pipe`），channel 的核心（`core`，還沒有接上任何傳輸），和訊息的值怎麼變成位元組（`codec`）。
 
-`unsafe` 只放在這裡和 `bindings`（`python3 scripts/sanity.py unsafe` 檢查）：這裡的是作業系統的 API。
+`unsafe` 只放在這裡和 `bindings`（`python3 scripts/sanity.py unsafe` 檢查）：這裡的是作業系統的 API，和對共用記憶體的複製。
 
 ## `TimeTicks`
 
@@ -112,11 +112,67 @@ sender.flush(); // 傳輸又有空間時
 - 組訊息的緩衝區留著給下一則用，超過 64 KiB 的不留。
 - 同步呼叫等回答的位置不在這裡：它在 renderer 的 scheduler 裡。
 
+### `core::region`：共用記憶體
+
+對核心來說，一塊 region 是建立它的一端給的編號，加一段記憶體（`Memory`：指標和長度，哪個平台怎麼 map 的它不知道）。對應 Chromium 的 `BigBuffer` 底下的 `base::*SharedMemoryRegion`；不同的是 Chromium 每筆資料新建一塊，這裡留著重複用。
+
+```rust
+// 送的一端：這一端寫進去的 region。一塊一次只放一筆資料。
+let mut pool = ipc::core::region::Pool::new(limit);
+pool.add(number, memory)?;                  // 長度要是 class_len 給的那幾種
+let number = pool.put(&bytes);              // 最短的放得下的空塊；沒有就是 None
+pool.released(number)?;                     // 對方說它讀完了
+
+// 收的一端：對方寫進去的 region，照編號查。
+let mut table = ipc::core::region::Table::new();
+table.insert(number, memory);
+table.read(number, len, &mut into)?;        // 檢查、複製出來
+let read = table.take_read();               // 讀過的，要告訴對方的
+```
+
+- **一筆資料用一整塊**：訊息裡提到 region 時只有編號和長度，沒有位置。region 的長度是 64 KiB 起每次加倍、到 1 GiB 的那幾種（`class_len`）；資料放進最短的放得下的空塊。
+- **用著的不會再被寫**：`put`、`take` 之後那一塊是「出去了」，到 `released`（對方的訊息）或 `give_back`（拿走它的人自己還，例如 tile 的像素）才再用。還一塊沒出去的、或不是這個池子的，是壞訊息（`RegionNotOut`、`UnknownRegion`）。
+- **收的一端只檢查兩件事**：編號在不在表裡（`UnknownRegion`）、長度有沒有超過那一塊（`OutsideRegion`）。內容一律先複製到自己的記憶體才用：對方還能寫那一塊。
+- **map 出來的記憶體不變成 `&[u8]`**：進出都經過指標複製。
+- **總量有上限**：`Pool::new(limit)`，超過的 `add` 被拒絕。只有空的那一塊拿得走（`remove`）。
+- **`Control`**：核心自己的訊息，目的地是 `CONTROL_DESTINATION`。`Released`（這些編號讀完了，一批一則）和 `Granted`（一塊新的 region，handle 跟著這則訊息；給對方寫的或給對方讀的）。共用記憶體裡沒有雙方都寫的狀態，「可以再用了」只經過這則訊息。
+- `HeapMemory`：一般配置的記憶體當成 region，給同一個 process 裡的兩端和測試用（Miri 跑得起來）。
+- `Control` 還沒有接進 `core::channel` 的收的一側：要等平台那一層能把 handle 變成 `Memory`。
+
+### `core::fit`：池子的算術，Verus 證明過的
+
+`class_len`（一個長度用多大的 region）、`best_fit`（哪一塊空的）、`admits`（加一塊會不會超過上限）。這三個錯了，就是寫超出 mapping、或兩筆資料在同一塊，而測試只有剛好碰到那個長度才看得到。`verus!` 裡面的就是實際跑的程式：平常編的時候規格和證明被拿掉。
+
+- `class_len`：回來的是一種合法的長度、放得下、而且是最小的一種；超過最大的才回 `None`。
+- `best_fit`：回來的那一塊是空的、夠長、而且沒有更短的空塊也夠長；回 `None` 時真的沒有任何一塊可以。
+- `admits`：就是「總量加這一塊不超過上限」，加法不溢位。
+
+## `codec`
+
+訊息的值和內容的位元組之間（Mojo 產生的序列化程式和它的 message context 的位置）：postcard，外面包一層 serde 的 Serializer 和 Deserializer，其他的值原樣轉過去，只做兩件事。
+
+```rust
+let mut payload = Vec::new();
+ipc::codec::encode(&message, &mut pool, &mut payload)?;     // pool：Place
+let message: Msg = ipc::codec::decode(&payload, &mut table)?; // table：Resolve
+```
+
+- **大的位元組走 region**：值用 `serialize_bytes` 寫的一段位元組（`protocol::BigBuffer` 就是這樣寫自己的）到 64 KiB（`MIN_REGION_LEN`）時，向 `Place` 要一塊；有的話內容寫進 region，訊息裡只有編號和長度。沒有空塊、或比最大的 region 還長，就照樣放在訊息裡。寫出來的是一個兩種 variant 的 enum（放在訊息裡的、在 region 裡的），所以不走 region 的位元組前面多一個位元組。
+- **值寫到一半失敗**：已經放進 region 的還回去，`out` 回到原來的樣子。
+- **巢狀的深度有上限**（`MAX_DEPTH`，128）：sequence、map、struct、tuple、enum、option、newtype 各算一層。postcard 自己沒有上限，對方送一個包了幾萬層的值就能讓 stack overflow，那接不住。超過的是 `BadMessage::TooDeep`。
+- **不是剛好一個值的內容是壞訊息**：解不出來、後面還有多的位元組（`Rejected`）；提到的 region 不對時回報的是 region 的那個錯誤。
+- 沒有 region 的一端用 `NoRegions`：全部放在訊息裡，提到 region 的訊息是壞訊息。
+- 池子和表是明確傳進來的參數，不是值的 `serialize` 自己要去哪裡找的狀態。包裝裡的 `RefCell` 是因為 serde 把巢狀的值交給 `Serialize::serialize(&self)`；每一段大的位元組借一次。
+
 ## `unsafe` 的論證
 
 | 地方 | 為什麼安全 |
 | --- | --- |
 | `time_ticks.rs` 的 `QueryPerformanceFrequency`、`QueryPerformanceCounter`（只在 Windows） | 傳進去的指標指向一個活著的 `i64`，呼叫只寫它、不留著它；Windows XP 以後這兩個呼叫不會失敗。頻率讀成 0 時當成 1，不會除以 0 |
+| `core/region.rs` 的 `unsafe trait Memory` | 實作的人保證：值活著的期間 `ptr()` 起 `len()` 個位元組可讀（放進 `Pool` 的還要可寫），兩者不變；這個 process 裡沒有別的參照指進那一段。`Arc<M>` 的實作只是轉給裡面的值，`Arc` 讓它活著、不搬動 |
+| `core/region.rs` 的 `Pool::put`（複製進 region） | 目的地是 `best_fit` 選的那一塊，它的長度至少是要寫的長度（Verus 證明的後置條件），`Memory` 保證那一段可寫；來源是這個 process 自己的 slice，和 region 不重疊 |
+| `core/region.rs` 的 `Table::read`（從 region 複製出來、`set_len`） | 長度先和 region 的長度比過（超過的是 `OutsideRegion`）；目的地是剛 `reserve` 過的多餘容量，`set_len` 只涵蓋剛寫的那幾個位元組。對方可能同時在寫那一塊：讀到的是位元組，不當成有不變量的型別，複製出來之後才交給上層 |
+| `core/region.rs` 的 `HeapMemory`（`Box::into_raw`、`from_raw`、`Send`、`Sync`） | 指標來自 `new` 裡的 `Box::into_raw`，只在 `drop` 還回去一次；配置是這個值自己的，經過 `Memory` 的讀寫都是整段位元組的複製，兩端同時複製和跨 process 的 mapping 是同一種情況 |
 
 ## 測試
 
@@ -134,11 +190,23 @@ python3 scripts/test.py ipc models   # 通道的 thread 共用的東西在 loom 
 
 `core::sync` 在 `--cfg ipc_loom`、`--cfg ipc_shuttle` 時把鎖換成 loom 和 shuttle 的（不用 `loom` 這個 cfg：`ipc` 依賴的 tokio 自己也認它，會拿掉幾個模組、換掉幾處實作，測到的就不是平常編出來的那個 tokio）。loom 的模型（`loom_tests`，每一種交錯都試）：兩條 thread 同時送、第三條補空間和 `flush`，每則各寫一次、完整、序號照順序；送的同時對方不在了，結束只聽到一次、之後送不出去、沒有東西留著；兩條同時送而佇列只放得下一則，剛好一條被拒絕、理由是 `QueueFull`。shuttle 的模型（`shuttle_tests`，隨機的排程各 10000 次）：3 條 thread 各送 12 則長短不一的訊息，傳輸一次只收幾個位元組，一條 thread 補空間和 `flush`，全部寫出來、每條 thread 自己的照順序；同樣的情況中途關掉通道，結束只聽到一次，寫出去的是完整的訊息加上最多一則的開頭，沒有「被告知沒送出去」的訊息。
 
+`src/core/region.rs` 的單元測試（記憶體是 `HeapMemory`，Miri 底下也跑）：長度對到哪一種 region；寫進去的就是對方讀到的；放進最短的放得下的空塊；出去了的在對方讀完之前不會再被寫、被拒絕的那一筆沒有碰到它；還一塊沒出去的、還兩次、不是這個池子的都是壞訊息；`take` 的那一塊到 `give_back` 之前是拿的人的；不在表裡的編號、超過那一塊的長度（多一個位元組、`u32::MAX`）不讀，整塊和零個位元組可以；從表拿掉的不能再提、號碼被佔的不換掉原來那一塊；池子只收合法長度、不重複、總量以內的（剛好到上限可以）；只有空的拿得走、拿走之後其他的編號和狀態不變；`Control` 兩種訊息讀得回來、位元組的順序、沒有人會寫的內容都是壞訊息。
+
+```sh
+python3 scripts/test.py ipc verus    # core/fit.rs 的證明（cargo verus verify -p ipc）
+```
+
+要裝 Verus（版本和裝法見 `test.py ipc -h`）；它用自己的 toolchain 編整個 crate，約一秒，第一次約一分鐘。
+
+`tests/it/codec.rs`：沒有位元組的值寫出來和 postcard 一模一樣（serde 的每一種形狀各有）；每一種形狀裡的位元組都回得來；大的位元組不管巢狀在哪裡都走 region、訊息只剩一點、讀的順序照值裡的順序；對方讀完之後那一塊再用；沒有空塊、或比最大的還長時留在訊息裡，用著的那一塊沒被蓋掉；寫在 `out` 原有的內容後面；序列化到一半失敗的值不留下放進去的 region 和寫了一半的位元組；不是對方的 region、太長、沒有 region 的一端被提到 region、不認得的 variant 都是壞訊息，回報的是第一個錯；多一個位元組、少一段、聲稱比訊息還長的位元組都是壞訊息；六種巢狀的方式各自剛好到上限可以、多一層是 `TooDeep`，一百萬層的不會真的走進去；又寬又淺的值不受影響。
+
+`tests/it/region_fuzz.rs`：fuzzer 跑的另一段檢查（`fuzz/fuzz_targets/region.rs`）。輸入當成三樣東西：一則提到 region 的訊息的內容（不管它寫什麼編號和長度，讀都留在 region 裡面，ASan 看著；解得出來的值再寫、再讀要一樣）、一則 `Control`（解得出來的再寫要是同樣的位元組）、一串對池子和表的操作（加、放、拿、還、對方還、拿掉、讀），每一步都對著一個簡單的模型：結果一樣、放進的是最短的放得下的、出去了的那一塊的內容沒有變、總量不超過上限。重播 `fuzz/regressions/region/`。
+
 `tests/it/frame_fuzz.rs`：fuzzer 跑的那一段檢查（`fuzz/fuzz_targets/frame.rs` 直接引用這個檔案），輸入是對端可能送的任何位元組、怎麼切、每一段旁邊附幾個 handle。任何輸入都不能 panic；同樣的位元組不管怎麼切，交出來的訊息和結局一樣；序號從 0 連續；沒有權限的一端的 handle 一個也到不了上層；留著的不比到了的多；每個 handle 不是在 `Decoder` 手上就是已經關掉。測試跑一組種子，並重播 `fuzz/regressions/` 裡 fuzzer 找到過的輸入。
 
 ```sh
 python3 scripts/test.py ipc fuzz [--minutes M]   # cargo-fuzz，每個 target 跑 M 分鐘（預設 5）
-python3 scripts/test.py ipc miri                 # 核心的單元測試在 Miri 底下（約 5 分鐘）
+python3 scripts/test.py ipc miri                 # 核心的單元測試在 Miri 底下（約 8 分鐘）
 ```
 
 兩者用 `fuzz/rust-toolchain.toml` 釘的 nightly（和 elise 的同一個）。fuzzer 失敗時會印出輸入在哪裡：連同修正放進 `fuzz/regressions/`，取一個說明它找到什麼的名字。

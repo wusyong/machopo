@@ -2307,11 +2307,13 @@ dependencies = [
  "base",
  "bytes",
  "loom",
+ "postcard",
  "rustix 1.1.5",
  "serde",
  "serde_json",
  "shuttle",
  "tokio",
+ "vstd",
  "windows-sys 0.61.2",
 ]
 

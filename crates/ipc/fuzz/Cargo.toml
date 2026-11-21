@@ -12,10 +12,20 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 ipc = { path = ".." }
+# What the regions' checks name (`tests/it/region_fuzz.rs`).
+bytes = { version = "1", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
 
 [[bin]]
 name = "frame"
 path = "fuzz_targets/frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "region"
+path = "fuzz_targets/region.rs"
 test = false
 doc = false
 bench = false

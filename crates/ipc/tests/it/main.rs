@@ -9,6 +9,8 @@
     reason = "tests"
 )]
 
+mod codec;
 mod data_pipe;
 mod frame_fuzz;
+mod region_fuzz;
 mod time_ticks;

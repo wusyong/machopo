@@ -1,0 +1,383 @@
+# Step 2c: regions (`ipc::core::region`, `ipc::core::fit`) and the codec
+# that puts large bytes in them (`ipc::codec`). A region holds one piece
+# of data at a time, a peer reads only what is its own and inside it, and
+# a value from a peer nests only so deep.
+test = ["sh", "-c", "cargo test -q -p ipc"]
+timeout = 900
+
+[[mutant]]
+name = "a region is made a class too small"
+file = "crates/ipc/src/core/fit.rs"
+from = '''    while c < len
+        invariant'''
+to = '''    while c * 2 < len
+        invariant'''
+
+[[mutant]]
+name = "lengths over the largest region get one"
+file = "crates/ipc/src/core/fit.rs"
+from = '''    if len > MAX_REGION_LEN {
+        return None;
+    }'''
+to = '''    if len > MAX_REGION_LEN.saturating_mul(2) {
+        return None;
+    }'''
+
+[[mutant]]
+name = "the search takes a region that is out"
+file = "crates/ipc/src/core/fit.rs"
+from = '''        if !slot.out && slot.len >= want {'''
+to = '''        if slot.len >= want {'''
+
+[[mutant]]
+name = "the search takes a region too short"
+file = "crates/ipc/src/core/fit.rs"
+from = '''        if !slot.out && slot.len >= want {'''
+to = '''        if !slot.out {'''
+
+[[mutant]]
+name = "the search refuses a region exactly long enough"
+file = "crates/ipc/src/core/fit.rs"
+from = '''        if !slot.out && slot.len >= want {'''
+to = '''        if !slot.out && slot.len > want {'''
+
+[[mutant]]
+name = "the search takes the first that fits, not the shortest"
+file = "crates/ipc/src/core/fit.rs"
+from = '''                Some(b) => slot.len < slots[b].len,'''
+to = '''                Some(_) => false,'''
+
+[[mutant]]
+name = "the search takes the longest that fits"
+file = "crates/ipc/src/core/fit.rs"
+from = '''                Some(b) => slot.len < slots[b].len,'''
+to = '''                Some(b) => slot.len > slots[b].len,'''
+
+[[mutant]]
+name = "the limit is ignored"
+file = "crates/ipc/src/core/fit.rs"
+from = '''        Some(sum) => sum <= limit,'''
+to = '''        Some(_) => true,'''
+
+[[mutant]]
+name = "a pool right at its limit is refused"
+file = "crates/ipc/src/core/fit.rs"
+from = '''        Some(sum) => sum <= limit,'''
+to = '''        Some(sum) => sum < limit,'''
+
+[[mutant]]
+name = "a second region takes a number in use"
+file = "crates/ipc/src/core/region.rs"
+from = '''        if self.index(number).is_some() {
+            return Err(AddError::Duplicate);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a region of any length joins"
+file = "crates/ipc/src/core/region.rs"
+from = '''        if class_len(len) != Some(len) {
+            return Err(AddError::NotAClass);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "the pool doesn't count what it holds"
+file = "crates/ipc/src/core/region.rs"
+from = '''        self.total = self.total.saturating_add(len);
+        self.slots.push'''
+to = '''        self.slots.push'''
+
+[[mutant]]
+name = "a region put into isn't out"
+file = "crates/ipc/src/core/region.rs"
+from = '''        self.slots.get_mut(i)?.out = true;
+        Some(*number)'''
+to = '''        Some(*number)'''
+
+[[mutant]]
+name = "a region taken isn't out"
+file = "crates/ipc/src/core/region.rs"
+from = '''        self.slots.get_mut(i)?.out = true;
+        Some(self.regions.get(i)?.0)'''
+to = '''        Some(self.regions.get(i)?.0)'''
+
+[[mutant]]
+name = "the bytes aren't copied in"
+file = "crates/ipc/src/core/region.rs"
+from = '''        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), memory.ptr(), bytes.len()) };'''
+to = '''        let _ = unsafe { memory.ptr().read() };'''
+
+[[mutant]]
+name = "a region given back stays out"
+file = "crates/ipc/src/core/region.rs"
+from = '''            Some(slot) if slot.out => {
+                slot.out = false;
+                true'''
+to = '''            Some(slot) if slot.out => {
+                true'''
+
+[[mutant]]
+name = "a region not out can be given back"
+file = "crates/ipc/src/core/region.rs"
+from = '''            Some(slot) if slot.out => {'''
+to = '''            Some(slot) => {'''
+
+[[mutant]]
+name = "a release of a region not the pool's is one that isn't out"
+file = "crates/ipc/src/core/region.rs"
+from = '''        if self.index(number).is_none() {
+            return Err(BadMessage::UnknownRegion { number });
+        }
+        if self.give_back'''
+to = '''        if self.give_back'''
+
+[[mutant]]
+name = "a release of a region not out is taken"
+file = "crates/ipc/src/core/region.rs"
+from = '''            Err(BadMessage::RegionNotOut { number })'''
+to = '''            Ok(())'''
+
+[[mutant]]
+name = "regions out count as free"
+file = "crates/ipc/src/core/region.rs"
+from = '''            .filter(|(slot, _)| !slot.out)'''
+to = '''            .filter(|(_, _)| true)'''
+
+[[mutant]]
+name = "a region out leaves the pool"
+file = "crates/ipc/src/core/region.rs"
+from = '''        if self.slots.get(i)?.out {
+            return None;
+        }
+        let slot'''
+to = '''        let slot'''
+
+[[mutant]]
+name = "a region that left is still counted"
+file = "crates/ipc/src/core/region.rs"
+from = '''        self.total = self.total.saturating_sub(slot.len);'''
+to = ''''''
+
+[[mutant]]
+name = "removing a region leaves its slot behind"
+file = "crates/ipc/src/core/region.rs"
+from = '''        let slot = self.slots.swap_remove(i);'''
+to = '''        let slot = Slot { len: self.slots.get(i)?.len, out: false };'''
+
+[[mutant]]
+name = "the table takes a second region for a number"
+file = "crates/ipc/src/core/region.rs"
+from = '''        if self.regions.iter().any(|(n, _)| *n == number) {
+            return false;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a read one byte past a region is let through"
+file = "crates/ipc/src/core/region.rs"
+from = '''            Ok(count) if count <= memory.len() => count,'''
+to = '''            Ok(count) if count <= memory.len().saturating_add(1) => count,'''
+
+[[mutant]]
+name = "a read of all of a region is refused"
+file = "crates/ipc/src/core/region.rs"
+from = '''            Ok(count) if count <= memory.len() => count,'''
+to = '''            Ok(count) if count < memory.len() => count,'''
+
+[[mutant]]
+name = "a region read isn't noted for giving back"
+file = "crates/ipc/src/core/region.rs"
+from = '''        self.read.push(number);'''
+to = ''''''
+
+[[mutant]]
+name = "the regions read are told again"
+file = "crates/ipc/src/core/region.rs"
+from = '''        std::mem::take(&mut self.read)'''
+to = '''        self.read.clone()'''
+
+[[mutant]]
+name = "a grant says the other kind of region"
+file = "crates/ipc/src/core/region.rs"
+from = '''                        writable: writable == 1,'''
+to = '''                        writable: writable == 0,'''
+
+[[mutant]]
+name = "a grant's flag may be any byte"
+file = "crates/ipc/src/core/region.rs"
+from = '''                Some((words, &[writable @ (0 | 1)])) => {'''
+to = '''                Some((words, &[writable])) => {'''
+
+[[mutant]]
+name = "a release's ragged end is dropped"
+file = "crates/ipc/src/core/region.rs"
+from = '''                (numbers, []) => Ok'''
+to = '''                (numbers, _) => Ok'''
+
+[[mutant]]
+name = "a grant comes with no handle"
+file = "crates/ipc/src/core/region.rs"
+from = '''            Self::Granted { .. } => 1,'''
+to = '''            Self::Granted { .. } => 0,'''
+
+[[mutant]]
+name = "large bytes stay in the message"
+file = "crates/ipc/src/codec.rs"
+from = '''        if v.len() >= MIN_REGION_LEN'''
+to = '''        if v.len() > usize::MAX / 2'''
+
+[[mutant]]
+name = "bytes exactly at the threshold stay in the message"
+file = "crates/ipc/src/codec.rs"
+from = '''        if v.len() >= MIN_REGION_LEN'''
+to = '''        if v.len() > MIN_REGION_LEN'''
+
+[[mutant]]
+name = "small bytes go by a region"
+file = "crates/ipc/src/codec.rs"
+from = '''        if v.len() >= MIN_REGION_LEN'''
+to = '''        if !v.is_empty()'''
+
+[[mutant]]
+name = "what a failed value placed stays out"
+file = "crates/ipc/src/codec.rs"
+from = '''        for number in placed {
+            regions.unplace(number);
+        }'''
+to = '''        drop(placed);'''
+
+[[mutant]]
+name = "a failed value's bytes stay in the vector"
+file = "crates/ipc/src/codec.rs"
+from = '''        out.truncate(before);'''
+to = ''''''
+
+[[mutant]]
+name = "what was placed isn't remembered"
+file = "crates/ipc/src/codec.rs"
+from = '''                placing.placed.push(number);'''
+to = ''''''
+
+[[mutant]]
+name = "bytes after a value are let through"
+file = "crates/ipc/src/codec.rs"
+from = '''        (Ok(value), Ok([])) => Ok(value),'''
+to = '''        (Ok(value), Ok(_)) => Ok(value),'''
+
+[[mutant]]
+name = "what was wrong with a region is told as a refusal"
+file = "crates/ipc/src/codec.rs"
+from = '''        _ => Err(resolving.bad.unwrap_or(BadMessage::Rejected)),'''
+to = '''        _ => Err(BadMessage::Rejected),'''
+
+[[mutant]]
+name = "no limit on depth"
+file = "crates/ipc/src/codec.rs"
+from = '''        if self.depth >= MAX_DEPTH {'''
+to = '''        if self.depth >= usize::MAX {'''
+
+[[mutant]]
+name = "one level more than the limit"
+file = "crates/ipc/src/codec.rs"
+from = '''        if self.depth >= MAX_DEPTH {'''
+to = '''        if self.depth > MAX_DEPTH {'''
+
+[[mutant]]
+name = "levels are never left"
+file = "crates/ipc/src/codec.rs"
+from = '''        self.depth = self.depth.saturating_sub(1);'''
+to = ''''''
+
+[[mutant]]
+name = "a deep value is told as a refusal"
+file = "crates/ipc/src/codec.rs"
+from = '''            self.bad.get_or_insert(BadMessage::TooDeep);'''
+to = ''''''
+
+# Not listed, equivalent: "the last thing wrong with a region is told, not
+# the first" (`bad = Some(bad)` for `bad.get_or_insert(bad)`). The error
+# that goes with it ends the whole decode, with serde's derived types, so
+# there is no second one; the `get_or_insert` is for a hand-written
+# `Deserialize` that would catch an error and go on.
+
+[[mutant]]
+name = "an unknown variant of bytes reads as inline"
+file = "crates/ipc/src/codec.rs"
+from = '''            (INLINE, variant) => variant'''
+to = '''            (INLINE | 2.., variant) => variant'''
+
+[[mutant]]
+name = "an end with no regions resolves one"
+file = "crates/ipc/src/codec.rs"
+from = '''        Err(BadMessage::UnknownRegion { number })
+    }
+}
+
+/// A value that couldn't'''
+to = '''        let _ = number;
+        Ok(())
+    }
+}
+
+/// A value that couldn't'''
+
+[[mutant]]
+name = "an option's value skips the wrapper"
+file = "crates/ipc/src/codec.rs"
+from = '''        self.visitor.visit_some(De {
+            inner: deserializer,
+            resolving: self.resolving,
+        })'''
+to = '''        self.visitor.visit_some(deserializer)'''
+
+[[mutant]]
+name = "a sequence's elements skip the wrapper"
+file = "crates/ipc/src/codec.rs"
+from = '''        self.inner.next_element_seed(Seed {
+            seed,
+            resolving: &mut *self.resolving,
+        })'''
+to = '''        self.inner.next_element_seed(seed)'''
+
+[[mutant]]
+name = "a map's values skip the wrapper"
+file = "crates/ipc/src/codec.rs"
+from = '''        self.inner.next_value_seed(Seed {
+            seed,
+            resolving: &mut *self.resolving,
+        })'''
+to = '''        self.inner.next_value_seed(seed)'''
+
+[[mutant]]
+name = "a newtype variant's value skips the wrapper"
+file = "crates/ipc/src/codec.rs"
+from = '''        self.inner.newtype_variant_seed(Seed {
+            seed,
+            resolving: self.resolving,
+        })'''
+to = '''        self.inner.newtype_variant_seed(seed)'''
+
+[[mutant]]
+name = "a struct variant's fields skip the wrapper"
+file = "crates/ipc/src/codec.rs"
+from = '''        self.inner.struct_variant(
+            fields,
+            Vis {
+                visitor,
+                resolving: self.resolving,
+            },
+        )'''
+to = '''        self.inner.struct_variant(fields, visitor)'''
+
+[[mutant]]
+name = "a tuple variant's fields skip the wrapper"
+file = "crates/ipc/src/codec.rs"
+from = '''        self.inner.tuple_variant(
+            len,
+            Vis {
+                visitor,
+                resolving: self.resolving,
+            },
+        )'''
+to = '''        self.inner.tuple_variant(len, visitor)'''
