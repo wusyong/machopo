@@ -76,7 +76,7 @@ Viz 留在 Browser process，不做 GPU process。單一 process 的模式留著
 
 ### 架構
 
-每個 renderer 和 Browser 之間有一條控制通道（Chromium `mojo::core::Channel` 的角色），兩端各有一條 IO thread 讀它：
+每個 renderer 和 Browser 之間有一條控制通道（Chromium `mojo::core::Channel` 的角色）。每個 process 有一條 IO thread 讀它的通道：renderer 的讀那一條，Browser 的那一條讀所有 renderer 的（第 42 條）：
 
 ```
 Browser process                                Renderer process
@@ -90,7 +90,7 @@ Browser process                                Renderer process
 ```
 
 - **一條通道多工**：四種訊息（`RendererMsg`、`CompositorMsg`、`RendererHostMsg`、`CompositorFrameSinkMsg`）都在同一條控制通道上，各帶一個目的地的編號。每種訊息照送出的順序到，不同種之間的相對順序也保留（相當於 Mojo 的 associated interface 共用一條 pipe）。目的地現在是固定的四個；之後同一條通道上要有更多對象（每個 frame、每個 worker 各一個）時加編號就好，不用為每個對象多開一條系統的通道。
-- **兩端的 IO thread**：renderer 多一條，讀控制通道、依目的地的編號放進 main thread 或 compositor thread 的 task queue；main thread 照舊只等它的 scheduler。Browser 沿用每個 `RenderProcessHost` 一條的 `Chrome_IOThread`，`CompositorFrameSinkMsg` 由它轉給 Viz thread，用自己記著的 `FrameSinkId`、不信任訊息裡的。Viz 在 Browser 裡，所以比 Chromium（renderer 直接連到 GPU process）多一次轉手。
+- **兩端的 IO thread**：renderer 多一條，讀控制通道、依目的地的編號放進 main thread 或 compositor thread 的 task queue；main thread 照舊只等它的 scheduler。Browser 整個 process 一條 `Chrome_IOThread`，等所有 renderer 的通道（第 42 條；單一 process 的模式現在是每個 `RenderProcessHost` 一條、等的是 crossbeam，第 3 階段接上 `ipc` 時一起改），`CompositorFrameSinkMsg` 由它轉給 Viz thread，用自己記著的 `FrameSinkId`、不信任訊息裡的。Viz 在 Browser 裡，所以比 Chromium（renderer 直接連到 GPU process）多一次轉手。
 - **Browser 對一個 renderer 的訊息做的事是一個物件，不長在 IO thread 的迴圈裡**：它現在做的不只是轉送：子資源的請求直接交給網路、登記 worker 和它們的 blob URL、判斷壞訊息、其餘的轉給 UI thread，而且記著這個 renderer 還在進行的載入。把這些抽成一個只有「收到這則訊息」一個入口的物件，IO thread 只負責從通道讀出訊息、交給它。換通道（crossbeam 換成 `ipc`）時只動外面那一層，裡面的檢查兩種模式跑的是同一份。
 - **送的一端**：任何 thread 都能送，不等。送不出去的（對方的 buffer 或佇列滿了、上一筆還沒寫完）放進自己的佇列，一把鎖守著一則訊息的完整和佇列的順序。Browser 不能被 renderer 卡住。
 - **crossbeam 留著**：IPC 收到的訊息放進和現在一樣的 crossbeam channel，renderer 和 Browser 的程式不知道訊息從哪裡來。
@@ -138,10 +138,10 @@ Browser process                                Renderer process
 
 - 一則訊息是長度、目的地的編號、序號、序列化的內容；有權限的一端還可以附帶 handle。序號現在只用來檢查（每一端照送出的順序加一，收的一端看到不連續就是壞訊息）；留著它，是為了之後訊息分兩條路走時（「之後的可能」的 ring）排得回順序，不用改格式。
 - 上層只經過一個介面送和收訊息（目的地、內容、handle），不知道底下是哪一種傳輸。
-- 三個平台同一個形狀：IO thread 等「通道」和「喚醒」；送的時候不等，送不出去的自己排隊。這份每個 process 只有一條通道，但 IO thread 的迴圈不寫死成只等一條。
-  - **Linux**：non-blocking 的 socket。handle 跟著同一次 `sendmsg` 送出；收的一端處理控制資料被截斷的情況，收到的 fd 用 `MSG_CMSG_CLOEXEC` 設成 close-on-exec。
-  - **macOS**：一則訊息是一則 Mach 訊息（64 KiB 以上的內容走 out-of-line，第 39 條）；每一則都照 audit token 確認是那個 child 送的（第 22 條）。IO thread 阻塞在 `mach_msg`，等一個 port set（通道的 receive port 加一個自己的喚醒用的 port）；送的 timeout 是 0，佇列滿了請 kernel 在有空間時通知。在通往對方的 send right 上登記 dead-name、在自己的 receive port 上登記 no-senders，任一個到了就當成斷線；通知只認 kernel 送的（訊息的 audit token），對方可以送一則 id 相同的訊息來假冒。
-  - **Windows**：overlapped 的 `ReadFile` / `WriteFile`，寫入一次只有一筆在進行。IO thread 等「讀完成」和「喚醒」兩個 event；結束時用 `CancelIoEx` 取消進行中的 I/O 再關 handle。Browser 送 handle 時自己用 `DuplicateHandle` 複製進 renderer 的 process，訊息只帶數值。
+- 三個平台同一個形狀：一個 process 一條 IO thread，等它所有的通道和「喚醒」（第 42 條）；送的時候不等，送不出去的自己排隊。
+  - **Linux**：non-blocking 的 socket，IO thread 用一個 epoll 等所有通道的 socket 和一個喚醒用的 eventfd。handle 跟著同一次 `sendmsg` 送出；收的一端處理控制資料被截斷的情況，收到的 fd 用 `MSG_CMSG_CLOEXEC` 設成 close-on-exec。
+  - **macOS**：一則訊息是一則 Mach 訊息（64 KiB 以上的內容走 out-of-line，第 39 條）；每一則都照 audit token 確認是那個 child 送的（第 22 條）。IO thread 阻塞在 `mach_msg`，等一個 port set（每條通道的 receive port 加一個自己的喚醒用的 port）；送的 timeout 是 0，佇列滿了請 kernel 在有空間時通知。在通往對方的 send right 上登記 dead-name、在自己的 receive port 上登記 no-senders，任一個到了就當成斷線；通知只認 kernel 送的（訊息的 audit token），對方可以送一則 id 相同的訊息來假冒。
+  - **Windows**：overlapped 的 `ReadFile` / `WriteFile`，寫入一次只有一筆在進行。IO thread 用一個 I/O completion port 等所有通道的完成和喚醒（不用 `WaitForMultipleObjects`：它一次最多等 64 個，一條 thread 等所有 renderer 不夠）；結束時用 `CancelIoEx` 取消進行中的 I/O 再關 handle。Browser 送 handle 時自己用 `DuplicateHandle` 複製進 renderer 的 process，訊息只帶數值。
 - 序列化：serde 加 postcard（第 22 條）。postcard 自己沒有巢狀深度的上限：會一層包一層的型別（下一條）的解碼自己數深度。內容裡 region 只是編號和長度，和一般的欄位一樣；Browser 新發出的 region 的 handle 不在內容裡，跟著 `ipc` 自己的一則訊息（「這個編號的 region 給你」）走在用到它的訊息前面（第 30 條）。包在 postcard 外面的一層決定一段位元組放訊息裡還是 region，並數巢狀的深度（第 31 條）。
 - 收的一端先檢查長度上限、目的地的編號（不認得的就是壞訊息）和 handle 的數量（對方沒有權限時只能是 0），再反序列化。反序列化時巢狀的深度有上限：訊息裡有可以一層包一層的型別（例如 `protocol::webdriver` 的 `WebDriverValue`，renderer 送的），不設限的話對方送一個巢狀很深的值就能讓收的一端 stack overflow，那不是 panic、接不住，整個 process 結束。不合的就當成對方壞掉，關掉通道（Chromium 的 `ReceivedBadMessage`）。
 
@@ -431,13 +431,33 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
     - **`Platform` 的六個函式三個平台都夠用，簽名不用改**（逐個對過，`progress.md` 的 2e-6）。
     - **平台要自己守的一條契約**（寫在 `Platform` 的說明裡）：交給端點的 handle 一定是 kernel 搬進來的，不是對方寫的數值。Windows 的 handle 是送的一方用 `DuplicateHandle` 複製進對方、訊息裡帶數值，所以 child（不能附 handle）可以在訊息裡寫任意數值；host 的平台層照著包成 handle 的話，child 就指定了 host 自己的某個 handle。所以 Windows 的通道建立時要知道對方能不能附，不能的話訊息只要說有 handle 就當成對方不在了，數值不看；要有跨 process 的測試（child 送一個假的數值）。macOS 的 right 和 Linux 的 fd 是 kernel 搬的，對方編不出來。
     - `crates/ipc/tests/it/process_channel.rs` 只用上面三個函式和 `Platform`，Linux 和 Windows 的那一層原樣跑同一份；`crates/ipc/tests/it/mach_channel.rs` 留下只有 macOS 有的（假冒 kernel 的通知、超過上限的 out-of-line、audit token）。
-    - 2f 和 2g 各自記決定時的編號：Linux 從第 42 條起，Windows 從第 52 條起，兩邊都進了 `0004` 之後再順一次。
+    - 2f 和 2g 各自記決定時的編號：Linux 從第 43 條起，Windows 從第 53 條起（第 42 條是分頭之前最後一條共用的），兩邊都進了 `0004` 之後再順一次。
+42. **一個 process 一條 IO thread，`ipc` 的迴圈管所有通道；「等」是每條 thread 一個的介面**（2026-11-21，第 2 階段的 2e-7，分頭做 2f、2g 之前；改掉第 35 條的一部分）：Browser 的 IO thread 等所有 renderer 的通道，child 的等它那一條。`ipc::endpoint` 的 `IoLoop` 是那條 thread 的迴圈：別的 thread 用 `LoopHandle::serve` 把端點交給它、`stop` 停它；某一條通道結束時告訴那個端點的 `Handler`（`gone`），其他的照常。
+    - **平台的介面拆成兩個角色**：通道的（`Platform`，每條一個：寫、map 記憶體、建 region、關掉）和等待的（`Waiter`，每條 thread 一個：把通道登記進來、等所有通道、被叫醒）。等待的對應各平台原生的東西：macOS 是一個 port set，Linux 是 epoll，Windows 是 I/O completion port。接收的緩衝區跟著等待的那一半，整條 thread 一個。
+    - **第 35 條哪些還成立**：「迴圈由 `ipc` 提供、順序只有一份」不變（一條通道做一步還是 `Endpoint::turn`）。「一條 thread 佔住一條通道」（`Endpoint::run`）拿掉了：它的前提是 machopo 一條 IO thread 對一條通道，那不是要的。
+    - **不選保留一個介面、`wait` 改成收一組通道**：每次等都要把整組交進去，Linux 和 Windows 上等於每次重建等待的集合，或者在裡面留狀態，那就是拆成兩個只是藏起來。
+    - **叫醒怎麼知道是哪一條通道**：callback 由核心的通道自己拿著（`Sender::on_wake`），迴圈在端點加入時裝上：記下那條通道的編號、打斷那條 thread 的等待。平台完全不經手（`Transport` 沒有 `wake`、`Platform` 沒有 `on_wake`），所以每個平台少寫兩個函式，也沒有「平台忘了轉呼叫」這種錯。還沒加入迴圈的通道叫醒沒有作用，加入時迴圈先推它一步，所以加入之前排著的東西不會掉。
+    - **不選讓平台拿著 callback**（第一版這樣做）：`Transport::wake` 和 `Platform::on_wake` 在三個平台會是一模一樣的幾行（存一個 callback、呼叫它），而且是核心自己要用的東西繞了平台一圈。
+    - **兩種「被叫醒」分開命名**：一條通道被叫醒是 `Event::Woken`（那個端點要推一步）；等待被別的 thread 打斷是 `Waited::Interrupted`、由 `Waiter::interrupter` 給的 callback 觸發（迴圈自己有事：有通道被叫醒、有端點交進來、要停）。平台要實作的只有後者。
+    - **對 Windows 的影響**：原本想的「等三個 event」（`WaitForMultipleObjects`）一次最多等 64 個，每條通道三個的話約 21 個 renderer 就滿了；一條 thread 等所有通道要用 completion port。
+    - **型別不擋一個 process 開兩個迴圈**：child 開一個、裡面只有一條通道；測試為了扮演兩端會開兩個。「Browser 只開一個」是用法上的規定，寫在 `IoLoop` 的說明裡。
+    - **macOS 的一個限制**：比接收緩衝區長的內嵌訊息被 kernel 毀掉時，不知道是哪一條通道的（訊息已經沒了）。只有一條通道時當成對方不在了；現在是略過，那條通道接下來的訊息序號不連續，那時才關掉。會送這種訊息的只有惡意的對端（我們自己超過 64 KiB 的都走 out-of-line）。
+    - 對照 Chromium：每個 process 一條 IO thread，`mojo::core::Channel` 把自己登記到它的 `MessagePumpForIO` 上。分法相同；不同的是迴圈在 `ipc` 裡（第 35 條的理由）。
+    - 這一段只改 `ipc`。`browser` 現在單一 process 的模式裡每個 `RenderProcessHost` 一條 IO thread，第 3 階段接上時才改。
 
 ## 待決定
 
 - **「多大的資料改走 region」要不要每個平台各一個數字**（2f 量完時）：現在是 `codec` 裡共用的 64 KiB。Linux 上調過緩衝區的 socket 內嵌送 1 MiB 可能和 region 一樣快，門檻也許可以高一點；要的話在 `Platform` 加一個有預設值的常數，這是唯一看得到會動到 `Platform` 本身的地方。
 - **CI 要不要加 macOS、Windows 的 runner**（第 40 條；2g 做的時候）：只跑 `cargo test -p ipc`（不依賴 V8，幾分鐘）。要看的是費用（GitHub 的 macOS runner 是 Linux 的 10 倍、Windows 是 2 倍）和 runner 的系統版本與開發機不同時那幾個實測來的行為還成不成立。
 - **IO thread 上複製大資料的時間**（第 36 條；第 3 階段量捲動時每個 frame 的延遲時一起看）：64 KiB 以上的 `BigBuffer` 在 IO thread 上從 region 複製出來，那一段時間後面的訊息等著。量到是問題時，把複製搬到目標 thread（IO thread 只交出「這一塊的借據」，目標 thread 複製完再還）：線上的格式不變，代價是表跨 thread 共用、多一組 loom 的模型。
+    - **第 42 條之後影響變大**（2026-11-21）：Browser 的一條 IO thread 管所有 renderer 的通道，一個 renderer 送大資料時，等的是其他每一個 renderer 的訊息，不只是它自己後面的。
+    - **現在有的數字**：複製一次約 18 到 26 µs/MiB（第 36 條的 1 MiB 約 18 µs、8 MiB 約 150 µs；macOS 的通道借出來不複製是 8 MiB 408 µs、多複製一次是 622 µs）。照這個推算，64 MiB 約 1.7 ms、256 MiB 約 7 ms、最大的一塊 1 GiB 約 27 ms；這幾個是推算，沒有量過那麼大的，也沒有和解碼合在一起量。常見的大小（幾百 KiB 到幾 MiB）是幾十到幾百 µs。
+    - **管道的資料也在 IO thread 上複製**：一步裡每條管道最多送到對方還有的空間（不超過那條管道的容量，64 KiB 一段），所以一步佔多久看開管道的人給的容量；容量幾百 KiB 時是十幾 µs。量的時候一起看。
+    - **對照 Chromium**：IO thread 只把訊息轉給綁定 `Receiver` 的那條 thread，型別的檢查和反序列化在那條 thread 上做；`BigBuffer` 走共用記憶體時 IO thread 只經手 handle，收的一方拿到 mapping 的 view，要不要複製由它決定。它的 IO thread 不付這一次複製，付的是 region 佔得比較久、和對方不被信任時要自己先複製再用。上面「搬到目標 thread」就是往這個做法靠。
+- **怎麼不讓上層在 IO thread 上做重的事**（第 3 階段寫第一個真的 `Handler`、`browser` 的那一個時；2026-11-21 提出）：`Handler::message` 在 IO thread 上跑，一個 process 只有一條（第 42 條），它回傳之前其他每一條通道都在等。應該只解碼、把值放進目標 thread 的佇列；現在這只是用法上的規定，型別擋不住。
+    - **收窄介面**：上層替每個目的地登記型別和目標 thread 的佇列，解碼和放進佇列由 `ipc` 做，上層的程式只在目標 thread 上跑。正確的寫法變成唯一的寫法；代價是介面比較死（訊息提到的管道要當場拿走、解不出來要關通道，都要另外設計），型別自己的 `Deserialize` 和佇列的 `push` 還是在 IO thread 上。Chromium 是這個方向：`Receiver` 綁在哪條 thread 就在那條 thread 上處理，在 IO thread 上攔訊息是特例。
+    - **執行時量**：`ipc` 量每一步和每一次 `message` 花多久，超過門檻（例如 1 ms）在 debug build 記下來或讓測試失敗，trace 裡也看得到。便宜，`ipc` 自己的慢（上面那一條的複製）也抓得到；但是事後才發現，只看得到跑到的路。Chromium 在 IO thread 上禁止會等的呼叫（debug build 會 assert）。
+    - 現在不定：還沒有真的使用者，收窄的介面是猜的。兩個不互斥。
 
 排程之前：
 

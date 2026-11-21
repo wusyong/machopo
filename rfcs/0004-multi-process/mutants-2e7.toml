@@ -1,0 +1,214 @@
+# Step 2e-7: one IO thread for a process's channels (`ipc::endpoint`'s
+# `IoLoop` and `Waiter`; `ipc::local`'s and macOS's waiters), woken by
+# the wake each end's channel holds (`core::channel`'s `Sender::on_wake`). Every
+# channel is turned for what comes to it and for its wakes, each for its
+# own; a channel over is told once and served no more; a loop stopped
+# closes what it served.
+#
+# Taken out as the mutant showed it did nothing: a second wake at the end
+# of `Link::open_pipe` (watching the source wakes at once when it has
+# something already, and a source with nothing has nothing to send).
+test = ["sh", "-c", "timeout 150 cargo test -q -p ipc -- endpoint process_channel mach_channel platform::macos::channel core::channel"]
+timeout = 900
+
+[[mutant]]
+name = "an end that joins isn't turned for what it did before"
+file = "crates/ipc/src/endpoint.rs"
+from = '''                turns.extend(self.join(endpoint, handler));'''
+to = '''                let _ = self.join(endpoint, handler);'''
+
+[[mutant]]
+name = "an end woken isn't turned"
+file = "crates/ipc/src/endpoint.rs"
+from = '''            let mut turns = woken;
+            for (endpoint, handler) in joining {'''
+to = '''            drop(woken);
+            let mut turns = Vec::new();
+            for (endpoint, handler) in joining {'''
+
+[[mutant]]
+name = "a stopped loop leaves its channels open"
+file = "crates/ipc/src/endpoint.rs"
+from = '''                    endpoint.abandon();
+                    handler.gone(Gone::Closed);
+                }
+                return;'''
+to = '''                    let _ = &mut endpoint;
+                    handler.gone(Gone::Closed);
+                }
+                return;'''
+
+[[mutant]]
+name = "a stopped loop tells nobody its channels are over"
+file = "crates/ipc/src/endpoint.rs"
+from = '''                    endpoint.abandon();
+                    handler.gone(Gone::Closed);
+                }
+                return;'''
+to = '''                    endpoint.abandon();
+                    let _ = &mut handler;
+                }
+                return;'''
+
+[[mutant]]
+name = "a loop doesn't stop"
+file = "crates/ipc/src/endpoint.rs"
+from = '''            if stop {
+                let served = self'''
+to = '''            if stop && self.served.is_empty() {
+                let served = self'''
+
+[[mutant]]
+name = "a channel's wake doesn't say whose it is"
+file = "crates/ipc/src/endpoint.rs"
+from = '''            shared.pending().woken.push(key);
+            (shared.interrupt)();'''
+to = '''            (shared.interrupt)();'''
+
+[[mutant]]
+name = "a channel's wake doesn't wake the loop"
+file = "crates/ipc/src/endpoint.rs"
+from = '''            shared.pending().woken.push(key);
+            (shared.interrupt)();'''
+to = '''            shared.pending().woken.push(key);'''
+
+[[mutant]]
+name = "every end joins under the same key"
+file = "crates/ipc/src/endpoint.rs"
+from = '''        self.next_key = next;
+        let shared = self.shared.clone();'''
+to = '''        let _ = next;
+        let shared = self.shared.clone();'''
+
+[[mutant]]
+name = "a channel over is told nothing"
+file = "crates/ipc/src/endpoint.rs"
+from = '''    served.handler.gone(gone);
+    Some(key)'''
+to = '''    let _ = gone;
+    Some(key)'''
+
+[[mutant]]
+name = "a channel over is still served"
+file = "crates/ipc/src/endpoint.rs"
+from = '''    served.handler.gone(gone);
+    Some(key)'''
+to = '''    served.handler.gone(gone);
+    let _ = key;
+    None'''
+
+[[mutant]]
+name = "giving a loop an end doesn't wake it"
+file = "crates/ipc/src/endpoint.rs"
+from = '''        self.0.pending().joining.push((endpoint, Box::new(handler)));
+        (self.0.interrupt)();'''
+to = '''        self.0.pending().joining.push((endpoint, Box::new(handler)));'''
+
+[[mutant]]
+name = "stopping a loop doesn't wake it"
+file = "crates/ipc/src/endpoint.rs"
+from = '''        self.0.pending().stop = true;
+        (self.0.interrupt)();'''
+to = '''        self.0.pending().stop = true;'''
+
+[[mutant]]
+name = "the in-process waiter looks at its first channel only"
+file = "crates/ipc/src/local.rs"
+from = '''            for step in 0..count {'''
+to = '''            for step in 0..count.min(1) {'''
+
+[[mutant]]
+name = "the in-process waiter doesn't look again after finding something"
+file = "crates/ipc/src/local.rs"
+from = '''                    // There may be more, here or at another end.
+                    signal(&self.signal, |signal| signal.arrived = true);'''
+to = '''                    // There may be more, here or at another end.'''
+
+[[mutant]]
+name = "what arrived before an end was waited on isn't found"
+file = "crates/ipc/src/local.rs"
+from = '''        // What arrived before it was waited on is there to find.
+        signal(&self.signal, |signal| signal.arrived = true);'''
+to = '''        // What arrived before it was waited on is there to find.'''
+
+[[mutant]]
+name = "the port waiter takes every message for its first channel's"
+file = "crates/ipc/src/platform/macos/channel.rs"
+from = '''            .find(|(_, end)| end.port == port)'''
+to = '''            .find(|(_, end)| end.port == port || port != 0)'''
+
+[[mutant]]
+name = "a channel isn't added to the port set"
+file = "crates/ipc/src/platform/macos/channel.rs"
+from = '''            .is_some_and(|ours| self.set.add(ours));'''
+to = '''            .is_some();'''
+
+[[mutant]]
+name = "a channel removed is still served"
+file = "crates/ipc/src/platform/macos/channel.rs"
+from = '''        self.channels.retain(|(served, _)| *served != key);'''
+to = '''        let _ = key;'''
+
+[[mutant]]
+name = "a refused message isn't its channel's end"
+file = "crates/ipc/src/platform/macos/channel.rs"
+from = '''                    Some((key, _)) => break (key, Event::PeerGone, None),
+                    None => continue,'''
+to = '''                    Some(_) | None => continue,'''
+
+[[mutant]]
+name = "a closed end wakes nobody"
+file = "crates/ipc/src/core/channel.rs"
+from = '''        // Not under the lock: it is another thread's to take.
+        if let Some(wake) = wake {
+            wake();
+        }'''
+to = '''        // Not under the lock: it is another thread's to take.
+        drop(wake);'''
+
+[[mutant]]
+name = "a queue that starts wakes nobody"
+file = "crates/ipc/src/core/channel.rs"
+from = '''        let wake = outgoing.wake.clone().filter(|_| first);'''
+to = '''        let wake = outgoing.wake.clone().filter(|_| false);'''
+
+[[mutant]]
+name = "every queued message wakes"
+file = "crates/ipc/src/core/channel.rs"
+from = '''        let wake = outgoing.wake.clone().filter(|_| first);'''
+to = '''        let wake = outgoing.wake.clone();'''
+
+[[mutant]]
+name = "the wake an end is given isn't kept"
+file = "crates/ipc/src/core/channel.rs"
+from = '''        self.0.outgoing().wake = Some(wake);'''
+to = '''        drop(wake);'''
+
+[[mutant]]
+name = "the layer above can't wake an end"
+file = "crates/ipc/src/core/channel.rs"
+from = '''        let wake = self.0.outgoing().wake.clone();
+        if let Some(wake) = wake {
+            wake();
+        }'''
+to = '''        let wake = self.0.outgoing().wake.clone();
+        drop(wake);'''
+
+[[mutant]]
+name = "a pipe's source with more wakes nobody"
+file = "crates/ipc/src/endpoint.rs"
+from = '''        source.watch(move || sender.wake());'''
+to = '''        source.watch(move || drop(sender.clone()));'''
+
+[[mutant]]
+name = "a region to grant wakes nobody"
+file = "crates/ipc/src/endpoint.rs"
+from = '''        self.0.out().to_grant.push(len);
+        self.0.sender.wake();'''
+to = '''        self.0.out().to_grant.push(len);'''
+
+[[mutant]]
+name = "the port waiter's interrupter does nothing"
+file = "crates/ipc/src/platform/macos/channel.rs"
+from = '''                return then(Waited::Interrupted);'''
+to = '''                continue;'''

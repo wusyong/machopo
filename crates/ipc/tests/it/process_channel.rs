@@ -17,7 +17,9 @@ use bytes::Bytes;
 use ipc::core::channel::{Gone, MAX_QUEUED_BYTES, Transport};
 use ipc::core::frame::{BadMessage, Encoder};
 use ipc::data_pipe::{self, Read, TryWriteError};
-use ipc::endpoint::{self, Config, Event, Handler, Link, Platform, Received};
+use ipc::endpoint::{
+    self, Config, Event, Handler, IoLoop, Link, LoopHandle, Platform, Received, Waited, Waiter,
+};
 use ipc::platform::{self, Channel};
 use serde::{Deserialize, Serialize};
 
@@ -70,9 +72,12 @@ fn gone_code(gone: Gone) -> i32 {
     }
 }
 
-/// A child of ours: answers what it is sent.
+/// A child of ours: answers what it is sent. Its channel over, it stops
+/// its IO thread's loop and says why.
 struct Echo {
     link: Link<Channel>,
+    io: LoopHandle<Channel>,
+    over: mpsc::Sender<Gone>,
 }
 
 impl Handler<Channel> for Echo {
@@ -109,6 +114,59 @@ impl Handler<Channel> for Echo {
         let _ = self.link.send(destination, &answer);
         Ok(())
     }
+
+    fn gone(&mut self, gone: Gone) {
+        let _ = self.over.send(gone);
+        self.io.stop();
+    }
+}
+
+/// A child's one IO thread, here the thread itself: serves the child's
+/// end until its channel is over, and says why it was.
+fn serve_as_child(channel: Channel) -> Gone {
+    let (link, endpoint) = endpoint::endpoint(channel, config(false));
+    let (io, handle) = IoLoop::new().unwrap();
+    let (over, was_over) = mpsc::channel();
+    handle.serve(
+        endpoint,
+        Echo {
+            link,
+            io: handle.clone(),
+            over,
+        },
+    );
+    io.run();
+    was_over.recv().unwrap()
+}
+
+/// What a platform's waiter says next of the one channel it waits on.
+struct Alone<'a> {
+    channel: &'a Channel,
+    waiter: <Channel as Platform>::Waiter,
+}
+
+impl<'a> Alone<'a> {
+    fn new(channel: &'a Channel) -> Self {
+        let mut waiter = <Channel as Platform>::Waiter::new().unwrap();
+        assert!(waiter.add(0, channel));
+        Self { channel, waiter }
+    }
+
+    /// The next event, with the handle a read came with mapped to write
+    /// if `map` says to: whether it could be.
+    fn next(&mut self, map: Option<usize>) -> (Event, Option<bool>) {
+        let channel = self.channel;
+        self.waiter.wait(|waited| match waited {
+            Waited::Interrupted => (Event::Woken, None),
+            Waited::Channel { event, handles, .. } => {
+                let mapped = handles
+                    .pop()
+                    .zip(map)
+                    .map(|(handle, len)| channel.map(handle, len, true).is_some());
+                (event, mapped)
+            }
+        })
+    }
 }
 
 /// One of the core's messages as its bytes.
@@ -128,6 +186,12 @@ fn child() {
     let Ok(role) = std::env::var(ROLE) else {
         return;
     };
+    // A child nothing tells to end (its host failed and is gone) ends by
+    // itself: one left behind keeps the test run's output open.
+    thread::spawn(|| {
+        thread::sleep(SOON * 3);
+        std::process::exit(9);
+    });
     let outcome = match role.as_str() {
         // Goes without taking its end.
         "never" => 8,
@@ -136,8 +200,7 @@ fn child() {
                 if role == "sleepy" {
                     thread::sleep(Duration::from_millis(1500));
                 }
-                let (link, endpoint) = endpoint::endpoint(channel, config(false));
-                gone_code(endpoint.run(Echo { link }))
+                gone_code(serve_as_child(channel))
             }
             // Has its end and goes, without a word.
             "die" => 7,
@@ -169,18 +232,13 @@ fn rogue(role: &str, channel: &Channel) -> i32 {
         // handle. Whether this process can map to write what it should
         // only read.
         "map" => {
+            let mut alone = Alone::new(channel);
             for _ in 0..100 {
-                let handle =
-                    channel.wait(|event, _, handles| (event == Event::Read).then(|| handles.pop()));
-                match handle {
-                    Some(Some(region)) => {
-                        return match channel.map(region, 256 * KIB, true) {
-                            Some(_) => WRITABLE,
-                            None => 0,
-                        };
-                    }
-                    Some(None) => {}
-                    None => return OTHER,
+                match alone.next(Some(256 * KIB)) {
+                    (Event::Read, Some(true)) => return WRITABLE,
+                    (Event::Read, Some(false)) => return 0,
+                    (Event::PeerGone, _) => return OTHER,
+                    _ => {}
                 }
             }
             SETUP
@@ -192,29 +250,41 @@ fn rogue(role: &str, channel: &Channel) -> i32 {
 /// Waits for the host's end to go, letting go of what the host says
 /// meanwhile.
 pub(crate) fn wait_for_the_host_to_go(channel: &Channel) -> i32 {
+    let mut alone = Alone::new(channel);
     for _ in 0..10_000 {
-        if channel.wait(|event, _, _| event) == Event::PeerGone {
+        if alone.next(None).0 == Event::PeerGone {
             return PEER_CLOSED;
         }
     }
     OTHER
 }
 
-/// Sends what the host's endpoint hands up to the test.
-struct Forward(mpsc::Sender<(u32, Msg)>);
+/// Sends what a host's endpoint hands up to the test, and why its
+/// channel was over, as the endpoint `name`.
+struct Forward {
+    name: usize,
+    got: mpsc::Sender<(usize, u32, Msg)>,
+    over: mpsc::Sender<(usize, Gone)>,
+}
 
 impl Handler<Channel> for Forward {
     fn message(&mut self, mut message: Received<'_, Channel>) -> Result<(), BadMessage> {
         let msg = message.decode::<Msg>()?;
-        let _ = self.0.send((message.destination(), msg));
+        let _ = self.got.send((self.name, message.destination(), msg));
         Ok(())
+    }
+
+    fn gone(&mut self, gone: Gone) {
+        let _ = self.over.send((self.name, gone));
     }
 }
 
 /// The host's end, its IO thread, and the child.
 pub(crate) struct Host {
     pub(crate) link: Link<Channel>,
-    pub(crate) got: mpsc::Receiver<(u32, Msg)>,
+    pub(crate) got: mpsc::Receiver<(usize, u32, Msg)>,
+    /// The host's IO thread: it ends, with the reason, once the channel
+    /// is over.
     pub(crate) io: JoinHandle<Gone>,
     pub(crate) child: Child,
 }
@@ -241,7 +311,27 @@ impl Host {
     pub(crate) fn over(channel: Channel, child: Child) -> Self {
         let (link, endpoint) = endpoint::endpoint(channel, config(true));
         let (forward, got) = mpsc::channel();
-        let io = thread::spawn(move || endpoint.run(Forward(forward)));
+        let io = thread::spawn(move || {
+            let (io, handle) = IoLoop::new().unwrap();
+            let (over, was_over) = mpsc::channel();
+            handle.serve(
+                endpoint,
+                Forward {
+                    name: 0,
+                    got: forward,
+                    over,
+                },
+            );
+            // The loop, on this thread; another waits for the channel's
+            // end to stop it.
+            let stop = thread::spawn(move || {
+                let gone = was_over.recv().map(|(_, gone)| gone);
+                handle.stop();
+                gone
+            });
+            io.run();
+            stop.join().unwrap().unwrap()
+        });
         Self {
             link,
             got,
@@ -251,7 +341,8 @@ impl Host {
     }
 
     pub(crate) fn next(&self) -> (u32, Msg) {
-        self.got.recv_timeout(SOON).expect("the child's message")
+        let (_, destination, msg) = self.got.recv_timeout(SOON).expect("the child's message");
+        (destination, msg)
     }
 
     /// Why the host's channel was over, and what the child exited with.
@@ -428,4 +519,98 @@ fn a_child_cant_map_to_write_what_the_host_sends_it() {
         .unwrap();
     let (_, code) = host.end();
     assert_eq!(code, 0, "{WRITABLE}: mapped to write");
+}
+
+#[test]
+fn one_io_thread_serves_several_children() {
+    // One loop, as a host process has: four children's channels on it.
+    let (io, handle) = IoLoop::<Channel>::new().unwrap();
+    let (stopped, was_stopped) = mpsc::channel();
+    thread::spawn(move || {
+        io.run();
+        let _ = stopped.send(());
+    });
+    let (got, came) = mpsc::channel();
+    let (over, was_over) = mpsc::channel();
+    let mut children = Vec::new();
+    let mut links = Vec::new();
+    for name in 0..4 {
+        let (child, channel) =
+            platform::spawn(&mut command("process_channel::child", "echo")).unwrap();
+        let (link, endpoint) = endpoint::endpoint(channel, config(true));
+        handle.serve(
+            endpoint,
+            Forward {
+                name,
+                got: got.clone(),
+                over: over.clone(),
+            },
+        );
+        children.push(child);
+        links.push(link);
+    }
+    let next = || came.recv_timeout(SOON).expect("a child's message");
+    // Each child answers its own, in order, with the others' in between;
+    // large bytes go by each channel's own region.
+    for round in 0..20 {
+        for (name, link) in links.iter().enumerate() {
+            link.send(1, &Msg::Text(format!("{name} {round}"))).unwrap();
+        }
+    }
+    for (name, link) in links.iter().enumerate() {
+        link.send(2, &Msg::Body(pattern(300 * KIB, name as u8)))
+            .unwrap();
+    }
+    let mut answered = [0; 4];
+    let mut bodies = [false; 4];
+    while answered != [20; 4] || bodies != [true; 4] {
+        match next() {
+            (name, 1, Msg::Text(text)) => {
+                assert_eq!(text, format!("echo {name} {}", answered[name]));
+                answered[name] += 1;
+            }
+            (name, 2, Msg::Body(body)) => {
+                assert!(body == pattern(300 * KIB, name as u8));
+                bodies[name] = true;
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+    // One child killed is that channel's alone.
+    children[1].kill().unwrap();
+    assert_eq!(was_over.recv_timeout(SOON).unwrap(), (1, Gone::PeerClosed));
+    for name in [0, 2, 3] {
+        links[name].send(0, &text("still")).unwrap();
+    }
+    let mut still = [false; 4];
+    for _ in 0..3 {
+        let (name, _, msg) = next();
+        assert_eq!(msg, text("echo still"));
+        still[name] = true;
+    }
+    assert_eq!(still, [true, false, true, true]);
+    // The loop stopped closes the rest: their children hear, and exit.
+    handle.stop();
+    was_stopped.recv_timeout(SOON).expect("the loop stops");
+    let mut closed: Vec<_> = (0..3)
+        .map(|_| was_over.recv_timeout(SOON).unwrap())
+        .collect();
+    closed.sort_by_key(|(name, _)| *name);
+    assert_eq!(
+        closed,
+        [(0, Gone::Closed), (2, Gone::Closed), (3, Gone::Closed)]
+    );
+    for (name, mut child) in children.into_iter().enumerate() {
+        let waited = Instant::now();
+        let code = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status.code();
+            }
+            assert!(waited.elapsed() < SOON, "child {name} never exited");
+            thread::sleep(Duration::from_millis(10));
+        };
+        if name != 1 {
+            assert_eq!(code, Some(PEER_CLOSED), "child {name}");
+        }
+    }
 }

@@ -44,6 +44,14 @@ pub enum WriteError {
     Closed,
 }
 
+/// What tells the thread that reads a channel that the channel has
+/// something for it to do ([`Sender::on_wake`]).
+// std's `Arc` whatever the build: a callback is handed in from outside,
+// and nothing of the channel's own is behind it. It is cloned out of the
+// channel's lock and called after, when a queue stops being empty or the
+// channel is closed, not for every message.
+pub type Wake = std::sync::Arc<dyn Fn() + Send + Sync>;
+
 /// What a platform does for a channel's sending side. Its reading side is
 /// the platform's own loop, which feeds a [`Receiver`].
 pub trait Transport {
@@ -55,12 +63,6 @@ pub trait Transport {
     /// message's first byte: a write that takes any byte takes them all,
     /// out of the vector.
     fn write(&self, bytes: &[u8], handles: &mut Vec<Self::Handle>) -> Result<usize, WriteError>;
-
-    /// Has the thread that reads the transport call [`Receiver::woken`],
-    /// soon and from its loop: there is something to write when the
-    /// transport has room, or the channel was closed from another thread.
-    /// Called with no lock of the channel's held.
-    fn wake(&self);
 }
 
 /// What a channel is made with.
@@ -109,6 +111,8 @@ struct Outgoing<H> {
     queued: usize,
     /// Why the channel is over: the first reason there was.
     gone: Option<Gone>,
+    /// What has the reading thread come by ([`Sender::on_wake`]).
+    wake: Option<Wake>,
 }
 
 impl<H> Outgoing<H> {
@@ -136,8 +140,12 @@ impl<T: Transport> Shared<T> {
     /// Closes the channel and has the reading thread hear of it.
     fn close(&self, mut outgoing: MutexGuard<'_, Outgoing<T::Handle>>, gone: Gone) -> Gone {
         let first = outgoing.close(gone);
+        let wake = outgoing.wake.clone();
         drop(outgoing);
-        self.transport.wake();
+        // Not under the lock: it is another thread's to take.
+        if let Some(wake) = wake {
+            wake();
+        }
         first
     }
 }
@@ -153,6 +161,7 @@ pub fn channel<T: Transport>(transport: T, config: Config) -> (Sender<T>, Receiv
             queue: VecDeque::new(),
             queued: 0,
             gone: None,
+            wake: None,
         }),
         may_attach: config.may_attach,
         queue_limit: config.queue_limit,
@@ -242,10 +251,11 @@ impl<T: Transport> Sender<T> {
             written,
             handles,
         });
+        // The reading thread starts watching for room.
+        let wake = outgoing.wake.clone().filter(|_| first);
         drop(outgoing);
-        if first {
-            // The reading thread starts watching for room.
-            self.0.transport.wake();
+        if let Some(wake) = wake {
+            wake();
         }
         Ok(())
     }
@@ -291,6 +301,26 @@ impl<T: Transport> Sender<T> {
     /// The transport the channel is over.
     pub fn transport(&self) -> &T {
         &self.0.transport
+    }
+
+    /// Has `wake` called from now on, by whichever thread it happens on,
+    /// when the thread that reads the channel should come by: a message
+    /// began to wait for room (it calls [`Sender::flush`] when there is
+    /// some), or the channel was closed ([`Receiver::woken`] says so).
+    /// Called with no lock of the channel's held. Until there is one,
+    /// nothing is called: whoever gives one looks at the channel once
+    /// itself.
+    pub fn on_wake(&self, wake: Wake) {
+        self.0.outgoing().wake = Some(wake);
+    }
+
+    /// Calls what [`Sender::on_wake`] was given: the layer above has
+    /// something of its own for the reading thread to do.
+    pub fn wake(&self) {
+        let wake = self.0.outgoing().wake.clone();
+        if let Some(wake) = wake {
+            wake();
+        }
     }
 }
 
@@ -381,8 +411,10 @@ impl<T: Transport> Receiver<T> {
 /// it was given goes.
 #[cfg(test)]
 mod wire {
+    use std::sync::Arc;
+
     use super::super::sync::{Mutex, lock};
-    use super::{Transport, WriteError};
+    use super::{Transport, Wake, WriteError};
 
     #[derive(Default)]
     pub(super) struct State<H> {
@@ -400,11 +432,11 @@ mod wire {
         pub(super) wakes: usize,
     }
 
-    pub(super) struct Wire<H>(Mutex<State<H>>);
+    pub(super) struct Wire<H>(Arc<Mutex<State<H>>>);
 
     impl<H> Wire<H> {
         pub(super) fn new(room: usize) -> Self {
-            Self(Mutex::new(State {
+            Self(Arc::new(Mutex::new(State {
                 written: Vec::new(),
                 handles: Vec::new(),
                 room,
@@ -412,7 +444,16 @@ mod wire {
                 whole_only: false,
                 closed: false,
                 wakes: 0,
-            }))
+            })))
+        }
+
+        /// What counts a wake: for the channel made over this wire.
+        pub(super) fn waker(&self) -> Wake
+        where
+            H: Send + 'static,
+        {
+            let state = self.0.clone();
+            Arc::new(move || lock(&state).wakes += 1)
         }
 
         pub(super) fn with<R>(&self, f: impl FnOnce(&mut State<H>) -> R) -> R {
@@ -439,10 +480,6 @@ mod wire {
             state.room -= taken;
             state.handles.append(handles);
             Ok(taken)
-        }
-
-        fn wake(&self) {
-            lock(&self.0).wakes += 1;
         }
     }
 }
@@ -481,7 +518,9 @@ mod tests {
     type TestReceiver = Receiver<Wire<TestHandle>>;
 
     fn pair(room: usize, config: Config) -> (TestSender, TestReceiver) {
-        channel(Wire::new(room), config)
+        let (sender, receiver) = channel(Wire::new(room), config);
+        sender.on_wake(sender.transport().waker());
+        (sender, receiver)
     }
 
     /// What was written, as the peer would read it: each message's
@@ -941,6 +980,7 @@ mod loom_tests {
         loom::model(|| {
             // Room for less than one message: the first send is cut.
             let (sender, _receiver) = channel(Wire::<()>::new(MESSAGE - 5), CONFIG);
+            sender.on_wake(sender.transport().waker());
             let threads: Vec<_> = (0..2u8)
                 .map(|number| {
                     let sender = sender.clone();
@@ -971,6 +1011,7 @@ mod loom_tests {
     fn a_send_and_the_peer_going() {
         loom::model(|| {
             let (sender, mut receiver) = channel(Wire::<()>::new(MESSAGE - 5), CONFIG);
+            sender.on_wake(sender.transport().waker());
             let sending = {
                 let sender = sender.clone();
                 thread::spawn(move || sender.send(0, &[0, 0], Vec::new()))
@@ -1009,6 +1050,7 @@ mod loom_tests {
                 ..CONFIG
             };
             let (sender, mut receiver) = channel(Wire::<()>::new(0), config);
+            sender.on_wake(sender.transport().waker());
             let threads: Vec<_> = (0..2u8)
                 .map(|number| {
                     let sender = sender.clone();
@@ -1081,6 +1123,7 @@ mod shuttle_tests {
         shuttle::check_random(
             || {
                 let (sender, _receiver) = channel(Wire::<()>::new(0), CONFIG);
+                sender.on_wake(sender.transport().waker());
                 sender.transport().with(|wire| wire.per_write = 9);
                 let sending = senders(&sender);
                 let flusher = {
@@ -1117,6 +1160,7 @@ mod shuttle_tests {
         shuttle::check_random(
             || {
                 let (sender, mut receiver) = channel(Wire::<()>::new(0), CONFIG);
+                sender.on_wake(sender.transport().waker());
                 sender.transport().with(|wire| wire.per_write = 9);
                 let sending = senders(&sender);
                 let flusher = {

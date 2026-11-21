@@ -9,6 +9,7 @@
 //! nothing. The tests here replay `fuzz/regressions/endpoint/`.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use bytes::Bytes;
 use ipc::core::channel::{self, Gone, MAX_QUEUED_BYTES};
@@ -16,7 +17,7 @@ use ipc::core::control::CONTROL_DESTINATION;
 use ipc::core::frame::BadMessage;
 use ipc::core::region::{HeapMemory, MIN_REGION_LEN};
 use ipc::data_pipe;
-use ipc::endpoint::{self, Config, Handler, Received, SendError};
+use ipc::endpoint::{self, Config, Event, Handler, Received, SendError};
 use ipc::local::{self, Local};
 use serde::{Deserialize, Serialize};
 
@@ -60,6 +61,11 @@ pub fn run(data: &[u8]) {
             queue_limit: MAX_QUEUED_BYTES,
         },
     );
+    // The test is the host's loop: it turns the end by hand, for its
+    // wakes too.
+    let woken = Arc::new(AtomicBool::new(false));
+    let flag = woken.clone();
+    host.on_wake(Arc::new(move || flag.store(true, Ordering::SeqCst)));
     // The child's end: a bare channel, which may do whatever its input
     // says (what it may do is the host's to decide).
     let (child, _) = channel::channel(
@@ -126,7 +132,14 @@ pub fn run(data: &[u8]) {
         // The host's IO thread does all there is to do.
         let mut read = Vec::new();
         let mut handles = Vec::new();
-        while let Some(event) = host.platform().poll(&mut read, &mut handles) {
+        loop {
+            let event = match woken.swap(false, Ordering::SeqCst) {
+                true => Event::Woken,
+                false => match host.platform().poll(&mut read, &mut handles) {
+                    Some(event) => event,
+                    None => break,
+                },
+            };
             if gone.is_none() {
                 gone = endpoint.turn(event, &read, &mut handles, &mut counter);
                 if gone.is_some() {

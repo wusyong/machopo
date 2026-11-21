@@ -2,14 +2,16 @@
 //! `Channel` on its IO thread together with what `mojo/core` does for
 //! messages, shared buffers and data pipes): the core's parts put to work
 //! over a [`Platform`]. A [`Link`] is what any thread sends with; an
-//! [`Endpoint`] is the IO thread's, whose [`Endpoint::run`] is that
-//! thread's loop until the channel is over.
+//! [`Endpoint`] is the IO thread's. A process has one IO thread, whose
+//! loop is an [`IoLoop`]: it waits on every channel the process has at
+//! once (a platform's [`Waiter`]) and turns the endpoint of the one
+//! something came for (Chromium's IO thread and its `MessagePumpForIO`).
 //!
-//! The order of what the loop does is here once, for every platform and
-//! for both kinds of process, because the core's guarantees rest on it: a
-//! region is told of before a message names it and given back once what
-//! named it was read; a pipe is opened before a message names it, and its
-//! bytes go only as far as its reader has room.
+//! The order of what an endpoint does in a turn is here once, for every
+//! platform and for both kinds of process, because the core's guarantees
+//! rest on it: a region is told of before a message names it and given
+//! back once what named it was read; a pipe is opened before a message
+//! names it, and its bytes go only as far as its reader has room.
 //!
 //! Only one end of a channel makes regions (the one that may attach
 //! handles, a Browser): the numbers of both directions' regions are its
@@ -22,6 +24,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use crate::codec::{self, Place};
+pub use crate::core::channel::Wake;
 use crate::core::channel::{self, Gone, Receiver, SendError as ChannelError, Sender, Transport};
 use crate::core::control::{CONTROL_DESTINATION, Control};
 use crate::core::frame::{BadMessage, Message};
@@ -29,22 +32,25 @@ use crate::core::pipe::{Incoming, Outgoing, ReadReport};
 use crate::core::region::{Memory, Pool, Table, class_len};
 use crate::data_pipe::{self, Consumer, Producer, Read, ReadObserver, TryWriteError};
 
-/// What a platform's wait came back with.
+/// What there is for an endpoint to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Event {
     /// Bytes from the peer, and the handles that came with them.
     Read,
     /// The transport has room again.
     Writable,
-    /// [`Transport::wake`] was called.
+    /// The end's wake was called ([`Sender::on_wake`]): it has something
+    /// to do that nothing came from the peer for (a queue to write, a
+    /// pipe to feed, a close).
     Woken,
     /// The peer is gone.
     PeerGone,
 }
 
-/// What a platform does for an endpoint, and nothing else: it moves bytes
-/// and handles, waits, and maps memory. What to make of any of it is the
-/// endpoint's.
+/// What a platform does for one channel's end, and nothing else: it moves
+/// bytes and handles and maps memory. Waiting is not a channel's: a
+/// process's one IO thread waits on all its channels together, with the
+/// platform's [`Waiter`]. What to make of anything is the endpoint's.
 ///
 /// One thing a platform must see to itself: a handle it hands up is one
 /// the kernel moved into this process for the message, never a value the
@@ -53,20 +59,12 @@ pub enum Event {
 /// peer may attach none takes any message that claims one as the peer
 /// gone, without looking at the value: a value is a handle of this
 /// process's own, of the peer's choosing.
-pub trait Platform: Transport + Send + Sync + 'static
-where
-    Self::Handle: Send,
-{
+pub trait Platform: Transport<Handle: Send> + Send + Sync + Sized + 'static {
     /// A mapping of shared memory.
     type Memory: Memory + Send + 'static;
 
-    /// Waits until there is something for the IO thread to do, then has
-    /// `then` do it: it is told what, and for [`Event::Read`] lent the
-    /// bytes and given the handles (for the others there are none). The
-    /// bytes are lent, not handed over, so a platform that has them in
-    /// memory of its own (a message mapped out of line) copies them
-    /// nowhere. Only the IO thread calls it.
-    fn wait<R>(&self, then: impl FnOnce(Event, &[u8], &mut Vec<Self::Handle>) -> R) -> R;
+    /// What an IO thread waits on this platform's channels with.
+    type Waiter: Waiter<Self>;
 
     /// Maps `len` bytes of the region a handle from the peer is, to write
     /// when `writable`. `None` when the handle isn't such a region.
@@ -81,6 +79,48 @@ where
     /// handle that gives the peer its own, to write when `peer_writes` and
     /// only to read otherwise.
     fn create(&self, len: usize, peer_writes: bool) -> Option<(Self::Memory, Self::Handle)>;
+}
+
+/// Which of an IO thread's channels: the loop's name for one.
+pub type Key = u32;
+
+/// What a wait came back with.
+pub enum Waited<'a, H> {
+    /// The [`Waiter::interrupter`] was called.
+    Interrupted,
+    /// Something for the channel `key`: [`Event::Read`], with the bytes
+    /// lent and the handles that came with them; [`Event::Writable`]; or
+    /// [`Event::PeerGone`]. The bytes are lent, not handed over, so a
+    /// platform that has them in memory of its own (a message mapped out
+    /// of line) copies them nowhere.
+    Channel {
+        key: Key,
+        event: Event,
+        bytes: &'a [u8],
+        handles: &'a mut Vec<H>,
+    },
+}
+
+/// What an IO thread waits with: all of a process's channels at once (a
+/// port set, an epoll, a completion port), and a way to be woken. One a
+/// thread, used by that thread alone.
+pub trait Waiter<P: Platform>: Sized {
+    /// `None` when the system gives none.
+    fn new() -> Option<Self>;
+
+    /// What ends [`Waiter::wait`] from another thread: a wait under way
+    /// returns [`Waited::Interrupted`], and so does the next if none is.
+    fn interrupter(&self) -> Wake;
+
+    /// `channel` is waited on from now, as `key`. `false` when it can't
+    /// be (it is shut already).
+    fn add(&mut self, key: Key, channel: &P) -> bool;
+
+    /// The channel `key` is no longer waited on.
+    fn remove(&mut self, key: Key);
+
+    /// Waits until there is something to do, then has `then` do it.
+    fn wait<R>(&mut self, then: impl FnOnce(Waited<'_, P::Handle>) -> R) -> R;
 }
 
 /// What an endpoint is made with.
@@ -124,10 +164,7 @@ impl From<ChannelError> for SendError {
 /// What the sending threads and the IO thread share, behind one lock: a
 /// message's large bytes are placed, the regions they went in are told
 /// of, and the message is sent, with nothing of another thread's between.
-struct Out<P: Platform>
-where
-    P::Handle: Send,
-{
+struct Out<P: Platform> {
     /// The regions this end writes into.
     pool: Pool<P::Memory>,
     /// The next region's number, when this end makes them.
@@ -142,19 +179,13 @@ where
     scratch: Vec<u8>,
 }
 
-struct Inner<P: Platform>
-where
-    P::Handle: Send,
-{
+struct Inner<P: Platform> {
     sender: Sender<P>,
     out: Mutex<Out<P>>,
     config: Config,
 }
 
-impl<P: Platform> Inner<P>
-where
-    P::Handle: Send,
-{
+impl<P: Platform> Inner<P> {
     fn out(&self) -> MutexGuard<'_, Out<P>> {
         // A panic while holding it (an allocation failing) leaves the
         // channel no worse than the panic did.
@@ -176,10 +207,7 @@ where
 
 /// Places a message's large bytes in the pool, making a region for them
 /// when no free one is long enough and this end may.
-struct Placing<'a, P: Platform>
-where
-    P::Handle: Send,
-{
+struct Placing<'a, P: Platform> {
     inner: &'a Inner<P>,
     pool: &'a mut Pool<P::Memory>,
     next_region: &'a mut u32,
@@ -187,10 +215,7 @@ where
     placed: Vec<u32>,
 }
 
-impl<P: Platform> Placing<'_, P>
-where
-    P::Handle: Send,
-{
+impl<P: Platform> Placing<'_, P> {
     /// A new region that holds `len` bytes, told to the peer: `None` when
     /// this end makes none, has its fill, or the platform has none to
     /// give.
@@ -218,10 +243,7 @@ where
     }
 }
 
-impl<P: Platform> Place for Placing<'_, P>
-where
-    P::Handle: Send,
-{
+impl<P: Platform> Place for Placing<'_, P> {
     fn place(&mut self, bytes: &[u8]) -> Option<u32> {
         let number = match self.pool.put(bytes) {
             Some(number) => number,
@@ -241,23 +263,15 @@ where
 }
 
 /// An endpoint's sending side, for any thread.
-pub struct Link<P: Platform>(Arc<Inner<P>>)
-where
-    P::Handle: Send;
+pub struct Link<P: Platform>(Arc<Inner<P>>);
 
-impl<P: Platform> Clone for Link<P>
-where
-    P::Handle: Send,
-{
+impl<P: Platform> Clone for Link<P> {
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
 
-impl<P: Platform> Link<P>
-where
-    P::Handle: Send,
-{
+impl<P: Platform> Link<P> {
     /// Sends `message` to the peer's `destination`, without waiting. Its
     /// large bytes go by a region when there is one.
     pub fn send<T: Serialize + ?Sized>(
@@ -305,12 +319,12 @@ where
             out.pipes.end(pipe);
             return Err(error);
         }
-        // The IO thread sends what the source has, each time it has more.
+        // The IO thread sends what the source has, each time it has more:
+        // watching tells at once of what it has already, and the turn that
+        // makes waits for `out`, so it finds the source here.
         let sender = self.0.sender.clone();
-        source.watch(move || sender.transport().wake());
+        source.watch(move || sender.wake());
         out.feeding.push((pipe, source));
-        drop(out);
-        self.0.platform().wake();
         Ok(pipe)
     }
 
@@ -318,7 +332,7 @@ where
     /// large bytes into. Only for the end that makes regions.
     pub fn grant_to_peer(&self, len: usize) {
         self.0.out().to_grant.push(len);
-        self.0.platform().wake();
+        self.0.sender.wake();
     }
 
     /// Closes the channel: the IO thread's loop ends.
@@ -337,24 +351,25 @@ where
     pub fn platform(&self) -> &P {
         self.0.platform()
     }
+
+    /// Has `wake` called when this end has something for its IO thread to
+    /// do. A loop does this for the ends it serves; this is for whoever
+    /// turns an endpoint by hand in a loop's place.
+    pub fn on_wake(&self, wake: Wake) {
+        self.0.sender.on_wake(wake);
+    }
 }
 
 /// Tells a pipe's writer how much of it was read, and that its reader is
 /// gone.
-struct Reporter<P: Platform>
-where
-    P::Handle: Send,
-{
+struct Reporter<P: Platform> {
     inner: Arc<Inner<P>>,
     pipe: u32,
     report: ReadReport,
     done: bool,
 }
 
-impl<P: Platform> ReadObserver for Reporter<P>
-where
-    P::Handle: Send,
-{
+impl<P: Platform> ReadObserver for Reporter<P> {
     fn read(&mut self, count: usize) {
         if let Some(count) = self.report.read(count) {
             // To a channel that is over there is nobody to tell.
@@ -373,10 +388,7 @@ where
     }
 }
 
-impl<P: Platform> Drop for Reporter<P>
-where
-    P::Handle: Send,
-{
+impl<P: Platform> Drop for Reporter<P> {
     fn drop(&mut self) {
         if !self.done {
             let _ = self
@@ -387,20 +399,14 @@ where
 }
 
 /// A message for the layer above, on the IO thread.
-pub struct Received<'a, P: Platform>
-where
-    P::Handle: Send,
-{
+pub struct Received<'a, P: Platform> {
     destination: u32,
     payload: &'a [u8],
     table: &'a mut Table<P::Memory>,
     arrived: &'a mut Vec<(u32, Consumer)>,
 }
 
-impl<P: Platform> Received<'_, P>
-where
-    P::Handle: Send,
-{
+impl<P: Platform> Received<'_, P> {
     /// Which of this end's destinations it is for.
     pub const fn destination(&self) -> u32 {
         self.destination
@@ -426,20 +432,20 @@ where
 }
 
 /// What the layer above does with a message.
-pub trait Handler<P: Platform>
-where
-    P::Handle: Send,
-{
+pub trait Handler<P: Platform> {
     /// A message from the peer, on the IO thread. An error closes the
     /// channel.
     fn message(&mut self, message: Received<'_, P>) -> Result<(), BadMessage>;
+
+    /// The channel is over, and why: told once, on the IO thread, after
+    /// which the handler is dropped.
+    fn gone(&mut self, gone: Gone) {
+        let _ = gone;
+    }
 }
 
 /// An endpoint's receiving side: the IO thread's.
-pub struct Endpoint<P: Platform>
-where
-    P::Handle: Send,
-{
+pub struct Endpoint<P: Platform> {
     inner: Arc<Inner<P>>,
     receiver: Receiver<P>,
     /// The regions the peer writes into.
@@ -453,10 +459,7 @@ where
 
 /// An endpoint over `platform`: its sending side, for any thread, and its
 /// receiving side, for the IO thread.
-pub fn endpoint<P: Platform>(platform: P, config: Config) -> (Link<P>, Endpoint<P>)
-where
-    P::Handle: Send,
-{
+pub fn endpoint<P: Platform>(platform: P, config: Config) -> (Link<P>, Endpoint<P>) {
     let (sender, receiver) = channel::channel(
         platform,
         channel::Config {
@@ -488,22 +491,17 @@ where
     (Link(inner), endpoint)
 }
 
-impl<P: Platform> Endpoint<P>
-where
-    P::Handle: Send,
-{
-    /// The IO thread's loop: waits on the platform and does what there is
-    /// to do, until the channel is over; then says why.
-    pub fn run(mut self, mut handler: impl Handler<P>) -> Gone {
-        let inner = self.inner.clone();
-        loop {
-            let gone = inner
-                .platform()
-                .wait(|event, bytes, handles| self.turn(event, bytes, handles, &mut handler));
-            if let Some(gone) = gone {
-                return gone;
-            }
-        }
+impl<P: Platform> Endpoint<P> {
+    /// The platform's end this endpoint is over.
+    pub fn platform(&self) -> &P {
+        self.inner.platform()
+    }
+
+    /// Closes the channel at this end, for a loop that stops with the
+    /// channel still open: the peer hears of it.
+    fn abandon(&mut self) {
+        self.inner.sender.close();
+        self.over();
     }
 
     /// One turn of the loop, for what one wait came back with. `Some` when
@@ -513,7 +511,7 @@ where
         event: Event,
         bytes: &[u8],
         handles: &mut Vec<P::Handle>,
-        handler: &mut impl Handler<P>,
+        handler: &mut (impl Handler<P> + ?Sized),
     ) -> Option<Gone> {
         let gone = match event {
             Event::Read => self.read(bytes, handles, handler),
@@ -545,7 +543,7 @@ where
         &mut self,
         bytes: &[u8],
         handles: &mut Vec<P::Handle>,
-        handler: &mut impl Handler<P>,
+        handler: &mut (impl Handler<P> + ?Sized),
     ) -> Option<Gone> {
         let Self {
             inner,
@@ -650,6 +648,197 @@ where
     }
 }
 
+/// An endpoint a loop serves, and what the layer above does with its
+/// messages.
+struct Served<P: Platform> {
+    key: Key,
+    endpoint: Endpoint<P>,
+    handler: Box<dyn Handler<P> + Send>,
+}
+
+/// What other threads leave for a loop.
+struct Pending<P: Platform> {
+    /// Endpoints to serve from now on.
+    joining: Vec<(Endpoint<P>, Box<dyn Handler<P> + Send>)>,
+    /// The channels whose ends were woken.
+    woken: Vec<Key>,
+    stop: bool,
+}
+
+struct LoopShared<P: Platform> {
+    interrupt: Wake,
+    pending: Mutex<Pending<P>>,
+}
+
+impl<P: Platform> LoopShared<P> {
+    fn pending(&self) -> MutexGuard<'_, Pending<P>> {
+        // Held for a push or a take.
+        self.pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+/// A process's IO thread's loop: every channel the process has, waited on
+/// together.
+pub struct IoLoop<P: Platform> {
+    waiter: P::Waiter,
+    served: Vec<Served<P>>,
+    next_key: Key,
+    shared: Arc<LoopShared<P>>,
+}
+
+/// A loop, for the threads that aren't its own: gives it endpoints to
+/// serve, and stops it.
+pub struct LoopHandle<P: Platform>(Arc<LoopShared<P>>);
+
+impl<P: Platform> Clone for LoopHandle<P> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<P: Platform> LoopHandle<P> {
+    /// Has the loop serve `endpoint` from now on: its messages go to
+    /// `handler`, which is told when the channel is over.
+    pub fn serve(&self, endpoint: Endpoint<P>, handler: impl Handler<P> + Send + 'static) {
+        self.0.pending().joining.push((endpoint, Box::new(handler)));
+        (self.0.interrupt)();
+    }
+
+    /// Stops the loop: [`IoLoop::run`] returns, the channels it served
+    /// closed at this end.
+    pub fn stop(&self) {
+        self.0.pending().stop = true;
+        (self.0.interrupt)();
+    }
+}
+
+impl<P: Platform> IoLoop<P> {
+    /// A loop that serves nothing yet, and its handle. `None` when the
+    /// platform has nothing to wait with.
+    pub fn new() -> Option<(Self, LoopHandle<P>)> {
+        let waiter = P::Waiter::new()?;
+        let shared = Arc::new(LoopShared {
+            interrupt: waiter.interrupter(),
+            pending: Mutex::new(Pending {
+                joining: Vec::new(),
+                woken: Vec::new(),
+                stop: false,
+            }),
+        });
+        let io = Self {
+            waiter,
+            served: Vec::new(),
+            next_key: 0,
+            shared: shared.clone(),
+        };
+        Some((io, LoopHandle(shared)))
+    }
+
+    /// The IO thread's loop, until it is stopped.
+    pub fn run(mut self) {
+        loop {
+            let (joining, woken, stop) = {
+                let mut pending = self.shared.pending();
+                (
+                    std::mem::take(&mut pending.joining),
+                    std::mem::take(&mut pending.woken),
+                    pending.stop,
+                )
+            };
+            if stop {
+                let served = self
+                    .served
+                    .drain(..)
+                    .map(|served| (served.endpoint, served.handler));
+                for (mut endpoint, mut handler) in served.chain(joining) {
+                    endpoint.abandon();
+                    handler.gone(Gone::Closed);
+                }
+                return;
+            }
+            let mut turns = woken;
+            for (endpoint, handler) in joining {
+                turns.extend(self.join(endpoint, handler));
+            }
+            // An end woken has something to do that nothing came from
+            // the peer for (a queue to write, a pipe to feed, a close).
+            for key in turns {
+                let gone = turn(&mut self.served, key, Event::Woken, &[], &mut Vec::new());
+                self.leave(gone);
+            }
+            let Self { waiter, served, .. } = &mut self;
+            let gone = waiter.wait(|waited| match waited {
+                Waited::Interrupted => None,
+                Waited::Channel {
+                    key,
+                    event,
+                    bytes,
+                    handles,
+                } => turn(served, key, event, bytes, handles),
+            });
+            self.leave(gone);
+        }
+    }
+
+    /// Serves `endpoint` from now: its key, for the turn joining gives it
+    /// (what its end did before it joined woke nobody).
+    fn join(
+        &mut self,
+        mut endpoint: Endpoint<P>,
+        mut handler: Box<dyn Handler<P> + Send>,
+    ) -> Option<Key> {
+        let key = self.next_key;
+        // Keys aren't used again: a wake for a channel that left names
+        // nothing.
+        let next = key.checked_add(1);
+        let added = next.is_some() && self.waiter.add(key, endpoint.platform());
+        let (Some(next), true) = (next, added) else {
+            endpoint.abandon();
+            handler.gone(Gone::Closed);
+            return None;
+        };
+        self.next_key = next;
+        let shared = self.shared.clone();
+        endpoint.inner.sender.on_wake(Arc::new(move || {
+            shared.pending().woken.push(key);
+            (shared.interrupt)();
+        }));
+        self.served.push(Served {
+            key,
+            endpoint,
+            handler,
+        });
+        Some(key)
+    }
+
+    /// The channel `gone` names is over: it is served no more.
+    fn leave(&mut self, gone: Option<Key>) {
+        if let Some(key) = gone {
+            self.waiter.remove(key);
+            self.served.retain(|served| served.key != key);
+        }
+    }
+}
+
+/// Turns the endpoint `key` is, if the loop still serves it: its key
+/// again when its channel is over (its handler was told).
+fn turn<P: Platform>(
+    served: &mut [Served<P>],
+    key: Key,
+    event: Event,
+    bytes: &[u8],
+    handles: &mut Vec<P::Handle>,
+) -> Option<Key> {
+    let served = served.iter_mut().find(|served| served.key == key)?;
+    let gone = served
+        .endpoint
+        .turn(event, bytes, handles, &mut *served.handler)?;
+    served.handler.gone(gone);
+    Some(key)
+}
+
 /// One of the core's own messages from the peer.
 fn control<P: Platform>(
     inner: &Arc<Inner<P>>,
@@ -657,10 +846,7 @@ fn control<P: Platform>(
     incoming: &mut Incoming<Producer>,
     arrived: &mut Vec<(u32, Consumer)>,
     mut message: Message<'_, P::Handle>,
-) -> Result<(), BadMessage>
-where
-    P::Handle: Send,
-{
+) -> Result<(), BadMessage> {
     let control = Control::decode(message.payload)?;
     if message.handles.len() != control.handles() {
         return Err(BadMessage::Rejected);

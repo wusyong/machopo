@@ -89,11 +89,11 @@ pub trait Transport {
     /// 不等。寫 `bytes` 的開頭（一則訊息剩下的部分），回答收了多少：
     /// 全部、一部分（串流），或 `WouldBlock`。handle 跟著第一個位元組走。
     fn write(&self, bytes: &[u8], handles: &mut Vec<Self::Handle>) -> Result<usize, WriteError>;
-    /// 讓讀傳輸的那條 thread 之後呼叫 `Receiver::woken`。
-    fn wake(&self);
 }
 
 let (sender, mut receiver) = ipc::core::channel::channel(transport, config);
+// 這一端有事要 IO thread 做時呼叫它（讓那條 thread 之後呼叫 `Receiver::woken`）。
+sender.on_wake(wake);
 
 // 任何 thread：不等。
 sender.send(destination, &payload, handles)?;
@@ -101,13 +101,13 @@ sender.send(destination, &payload, handles)?;
 // 讀傳輸的那一條 thread（IO thread）的迴圈：
 if let Some(gone) = receiver.feed(&bytes, handles, |message| dispatch(message)) { /* 通道結束了 */ }
 if let Some(gone) = receiver.peer_gone() { /* 平台說對方不在了 */ }
-if let Some(gone) = receiver.woken() { /* `wake` 之後：別的 thread 關掉了通道 */ }
+if let Some(gone) = receiver.woken() { /* 被叫醒之後：別的 thread 關掉了通道 */ }
 sender.flush(); // 傳輸又有空間時
 ```
 
 - **送不等**：傳輸收得下就當場寫；收不下的（或前面已經有在等的）排進佇列，照順序。一把鎖守著訊息的編號和寫出去的順序，所以好幾條 thread 同時送時，線上的序號還是連續的、一則訊息不會被另一則插進中間。一次 `write` 只給一則訊息的位元組：Mach 訊息那種「整則或沒有」的傳輸不會拿到半則或兩則。
 - **佇列有上限**（`MAX_QUEUED_BYTES`，256 MiB，兩則最大的訊息）：等著的位元組超過它，就是對方不讀了，通道關掉（`Gone::QueueFull`），等著的連同 handle 丟掉。對方「多久沒回應」不是這一層的事。
-- **佇列從空變成有東西時 `wake` 一次**（IO thread 開始等傳輸有空間，有了就 `flush`），關掉通道時也 `wake`。`wake` 一律在放開鎖之後呼叫。
+- **叫醒 IO thread 的 callback 由通道自己拿著**（`Sender::on_wake` 給它，還沒給的時候叫醒沒有作用），傳輸不用知道：佇列從空變成有東西時呼叫一次（IO thread 開始等傳輸有空間，有了就 `flush`），關掉通道時也呼叫；上面一層有事要那條 thread 做時用 `Sender::wake`。一律在放開鎖之後呼叫。
 - **收的一側**：`feed` 把到齊的訊息照順序交給 `sink`；目的地不在 `Config::destinations` 以內的、`sink` 回 `BadMessage::Rejected` 的（內容解不出來）、`core::frame` 擋下來的，都是壞訊息，通道關掉，同一批位元組裡後面的不交出去。
 - **結束只報告一次**：`feed`、`peer_gone`、`woken` 都可能回 `Some(Gone)`，整條通道只有一次、由 IO thread 拿到；理由是第一個發生的（`PeerClosed`、`BadMessage`、`QueueFull`、這一端自己的 `Closed`）。報告之後不再交出訊息，讀到一半的訊息和它的 handle 當場丟掉；`send` 從通道關掉那一刻起就回 `SendError::Gone`。
 - **這一端自己的錯不關通道**：太長、太多 handle（`SendError::Encode`）、沒有權限卻附了 handle（`HandlesNotAllowed`），什麼都不送、不佔序號。
@@ -228,8 +228,11 @@ let pipe = link.open_pipe(consumer, capacity)?; // 之後送的訊息裡帶這�
 link.grant_to_peer(len);                        // 給對方一塊它寫的 region（只有建 region 的那一端）
 link.close();
 
-// IO thread：阻塞到通道結束，回傳理由。
-let gone = endpoint.run(handler);
+// 一個 process 一條 IO thread，它的迴圈管這個 process 所有的通道。
+let (io, handle) = ipc::endpoint::IoLoop::new()?;
+std::thread::spawn(move || io.run());
+handle.serve(endpoint, handler);   // 任何 thread：把一個端點交給它
+handle.stop();                     // 停下來；還在的通道在這一端關掉
 
 impl Handler<P> for MyHandler {
     fn message(&mut self, mut message: Received<'_, P>) -> Result<(), BadMessage> {
@@ -241,21 +244,26 @@ impl Handler<P> for MyHandler {
         // 訊息裡提到管道時：message.take_pipe(pipe)
         Ok(())
     }
+    fn gone(&mut self, gone: Gone) { /* 這條通道結束了，理由；之後不會再被呼叫 */ }
 }
 ```
 
-- **`Platform`**：平台只做這幾件事，裡面沒有判斷。`write` 和 `wake`（`Transport`）、`wait`（等到有事做：讀到位元組和 handle、又有空間、被叫醒、對方不在了；位元組是「借」給端點的，平台自己記憶體裡有的，例如 out-of-line 的訊息，不用再複製一次）、`map`（對方給的 handle 變成記憶體）、`create`（建一塊 region：這一端的 mapping 和給對方的 handle）、`shut`（通道結束時關掉傳輸，對方的平台才知道）。
+- **平台的介面是兩個角色**，裡面都沒有判斷：
+  - `Platform`（每條通道一個）：`write`（`Transport`）、`map`（對方給的 handle 變成記憶體）、`create`（建一塊 region：這一端的 mapping 和給對方的 handle）、`shut`（通道結束時關掉傳輸，對方的平台才知道）。
+  - `Waiter`（每條 IO thread 一個）：`add` 和 `remove`（哪些通道要等）、`interrupter`（別的 thread 打斷它的等待用的）、`wait`（等到有事做：哪一條通道讀到位元組和 handle、又有空間、對方不在了，或是被打斷）。位元組是「借」出來的，平台自己記憶體裡有的（例如 out-of-line 的訊息）不用再複製一次。
+- **一個 process 一條 IO thread**：`IoLoop` 等這個 process 所有的通道，來了什麼就推那一條通道的端點一步。Browser 只開一個，所有 renderer 的端點都交給它；child 開一個，裡面只有它那一條。型別不擋一個 process 開兩個（測試會這樣扮演兩端），這是用法上的規定。
+- **通道被叫醒**（佇列有東西要寫、管道有資料要送、別的 thread 關了它）：迴圈在端點交給它時把 callback 裝到通道上（核心的 `Sender::on_wake`），callback 記下是哪一條、打斷那條 thread 的等待，迴圈推它一步。這一段不經過平台。還沒交給迴圈的通道叫醒沒有作用；交給迴圈時先推一步，所以之前排著的不會掉。「通道被叫醒」（`Event::Woken`）和「等待被打斷」（`Waited::Interrupted`）是兩件事：後者只是迴圈自己有事（有通道被叫醒、有端點交進來、要停）。
 - **迴圈的順序只有一份**（`turn`）：讀到的餵給通道，核心自己的訊息當場處理、其餘的交給 `handler`；這一批讀過的 region 合成一則 `Released`；建好排著要給對方的 region；管道的來源有多少、對方有多少空間就送多少；最後寫出等著的。`run` 就是「等、`turn`」。
 - **型別在 IO thread 上解**：`handler` 看目的地決定型別，`decode` 時從對方的 region 複製出來。`decode` 的錯誤傳回去，通道就關掉。
 - **先告知、再提到**：一則訊息的大位元組放進 region、新建的 region 的 `Granted`、訊息本身，在同一把鎖底下依序送出，別的 thread 的訊息插不進中間。`open_pipe` 先送 `PipeOpened` 才回傳編號。
 - **只有能附 handle 的一端建 region**（`Config::may_attach`，Browser）：兩個方向的 region 都是它編號。它自己送大資料時，沒有空塊就當場建一塊（不超過 `region_limit`）；對方要寫的那幾塊由它用 `grant_to_peer` 給。另一端沒有空塊時大資料就放在訊息裡。
 - **送不出去的訊息**（通道已經結束、太長）放進 region 的那幾塊當場還回池子。
 - **管道**：來源的 `Consumer` 交給 `open_pipe`，它有資料時叫醒 IO thread；收的一側收到 `PipeOpened` 時建一條 `data_pipe`、掛上回報的掛勾，讀的一端等訊息提到它時由 `take_pipe` 拿走。讀的一端 drop 就是取消。對方不被信任時不讓它開管道（`peer_may_open_pipes`）：每一條都是這一端要留的記憶體。
-- **通道結束**：`turn` 回 `Some(Gone)` 一次；管道的來源放掉（它們的寫的一端看到讀的不在了）、傳輸關掉，之後 `send` 回 `SendError::Gone`。
+- **通道結束**：`turn` 回 `Some(Gone)` 一次；管道的來源放掉（它們的寫的一端看到讀的不在了）、傳輸關掉，之後 `send` 回 `SendError::Gone`。迴圈告訴那個端點的 `handler`（`gone`）、不再等它；其他的通道照常。迴圈被停下來時，還在的每一條都在這一端關掉、`handler` 收到 `Gone::Closed`。
 
 ## `local`
 
-同一個 process 裡的 `Platform`：兩端各在一條 thread 上，一端寫的原樣交給另一端，region 是一般配置的記憶體（`HeapMemory`）。端點的測試和 fuzzer 跑在它上面，Miri 也跑得起來。`pair(room)` 的 `room` 是一端最多堆多少位元組沒讀（測傳輸沒有空間的情況）；`poll` 是不等的 `wait`，測試用它一步一步推。
+同一個 process 裡的 `Platform`：兩端各在一條 thread 上，一端寫的原樣交給另一端，region 是一般配置的記憶體（`HeapMemory`）。端點的測試和 fuzzer 跑在它上面，Miri 也跑得起來。`pair(room)` 的 `room` 是一端最多堆多少位元組沒讀（測傳輸沒有空間的情況）。`LocalWaiter` 是它的 `Waiter`：等好幾個這樣的一端，輪流看，一條很忙的不會讓別條一直等。`poll` 是不等、只看一端的版本，測試用它一步一步推（叫醒不經過它：手動推的測試自己用 `Link::on_wake` 接）。
 
 ## `platform`
 
@@ -344,7 +352,8 @@ let channel = Channel::from_rights(rights, host_pid)?;
 ```
 
 - **核心的一則訊息是一則 Mach 訊息**，整則或沒有：64 KiB（`INLINE_MAX`）以下內嵌，以上 out-of-line。不切。handle 是 send right（region 的 memory entry）。
-- **IO thread 等一個 port set**：這一端的 port（對方的訊息和 kernel 的通知都到這裡），加一個只有自己能寫的叫醒用的 port。`wake` 先設旗標、再送一則到叫醒的 port；每次等之前先看旗標，所以叫醒的 port 滿了也不會漏。
+- **IO thread 等一個 port set**（`PortWaiter`，這個平台的 `Waiter`）：每條通道這一端的 port（對方的訊息和 kernel 關於它的通知都到這裡）都加進去，再加一個只有自己能寫的叫醒用的 port。收到的訊息說它到的是哪一個 port，就知道是哪一條通道的。叫醒是先設旗標、再送一則到叫醒的 port；每次等之前先看旗標，所以叫醒的 port 滿了也不會漏。接收的緩衝區整條 thread 一個。
+- 比緩衝區長的內嵌訊息被 kernel 毀掉時不知道是哪一條通道的，略過；那條通道之後的訊息序號不連續，那時才關掉。只有惡意的對端會送（我們自己超過 64 KiB 的走 out-of-line）。
 - **送不等**：佇列滿了（port 的佇列開到 1024 則）就回 `WouldBlock`，並請 kernel 在有空間時通知（`MACH_NOTIFY_SEND_POSSIBLE`；登記的當下已經有空間的話它立刻通知），通知到了是 `Event::Writable`。
 - **對方不在了**：對方的 port 死了（dead-name）或通往這一端的 right 都沒了（no-senders），任一個都是 `Event::PeerGone`。
 - **誰送的看 kernel**：只收對方的訊息。一開始照 pid，第一則到了之後記下它的整個 audit token，之後每一則都要一模一樣。通知只認 kernel 送的（pid 是 0）；對方送一則 id 和通知一樣的訊息沒有任何效果。不是對方送的、id 不對的，都丟掉，通道照常。
@@ -443,9 +452,9 @@ python3 scripts/test.py ipc tla      # crates/ipc/tla/ 的三個 TLA+ 模型（T
 
 `src/platform/macos/message.rs` 另外為 out-of-line 和不等的送：長的 body 走 out-of-line、到的一樣；送出去之後送的一方再改，收的一方那一份不變；不收 out-of-line 的緩衝區、上限比較小的緩衝區都拒絕，剛好到上限的收；收了又丟、被拒絕的各 2 GiB 之後位址空間沒有長大；佇列滿時帶著 right 和 16 MiB 的 body 連送 64 次，位址空間和 right 都不變，有空間之後同一個呼叫送得出去；kernel 在有空間時通知、佇列開到 1024 則、port 死掉時通知（在 port set 上也收得到，知道是哪一個 port）。
 
-`src/platform/macos/channel.rs` 的單元測試（兩端在同一個 process 裡；每個測試自己設 10 秒的時限）：一端寫的另一端整則拿到（內嵌和 out-of-line 的長度都有）；handle 跟著訊息、送出去之後不在寫的人手上、收的一端 map 得到同一塊；叫醒 20 次只報一次、之後下一件事照常；關掉的一端送不出去、對方先收到關之前送的、再被告知；一端 drop 就是對方不在了；佇列滿了回 `WouldBlock`、帶的 handle 還在、對方讀走一則就收到 `Writable`、同一個寫入成功；只有對方的 port 死了、或只有通往這一端的 right 都沒了，各自都是對方不在了；dead-name 通知多給的計數有放掉；receive right 不算 handle；right 的形狀不對、host 先走了，都建不起一端。
+`src/platform/macos/channel.rs` 的單元測試（兩端在同一個 process 裡，各有自己的 `PortWaiter`；每個測試自己設 10 秒的時限）：一個 `PortWaiter` 等四條通道，分得出各是哪一條的（加入之前就到的也收得到），一條的對方不在了只有那一條被告知，拿掉之後到它的 port 的不算，關掉的一端加不進去；還沒加入迴圈的一端叫醒沒有作用；一端寫的另一端整則拿到（內嵌和 out-of-line 的長度都有）；handle 跟著訊息、送出去之後不在寫的人手上、收的一端 map 得到同一塊；叫醒 20 次只報一次、之後下一件事照常；關掉的一端送不出去、對方先收到關之前送的、再被告知；一端 drop 就是對方不在了；佇列滿了回 `WouldBlock`、帶的 handle 還在、對方讀走一則就收到 `Writable`、同一個寫入成功；只有對方的 port 死了、或只有通往這一端的 right 都沒了，各自都是對方不在了；dead-name 通知多給的計數有放掉；receive right 不算 handle；right 的形狀不對、host 先走了，都建不起一端。
 
-`tests/it/process_channel.rs`（兩個真的 process 之間，不分平台：只用 `ipc::platform` 的 `spawn`、`inherited`、`child_gone` 和 `Platform` 的函式，每個平台的那一層都要原樣通過；host 是測試裡真的端點，child 是測試把自己再執行一次）：訊息來回；host 的大資料走它建的 region、child 的在沒有 region 時放在訊息裡、給了 region 之後走 region；3 MiB 的字串來回；700 KiB 的管道；child 自己關、host 關、child 直接結束、child 被 kill，另一端都知道，理由對；child 還沒拿它那一端就結束，host 說了 `child_gone` 之後收到對方不在了；child 先睡 1.5 秒不讀，host 連送 3000 則（超過傳輸放得下的），全部照順序回來；child 自己附 handle、送不是訊息的位元組，通道都關掉、什麼都沒交給上層；child 把 host 送的 region map 成可寫會失敗。
+`tests/it/process_channel.rs`（兩個真的 process 之間，不分平台：只用 `ipc::platform` 的 `spawn`、`inherited`、`child_gone` 和 `Platform` 的函式，每個平台的那一層都要原樣通過；host 是測試裡真的端點，child 是測試把自己再執行一次）：訊息來回；host 的大資料走它建的 region、child 的在沒有 region 時放在訊息裡、給了 region 之後走 region；3 MiB 的字串來回；700 KiB 的管道；child 自己關、host 關、child 直接結束、child 被 kill，另一端都知道，理由對；child 還沒拿它那一端就結束，host 說了 `child_gone` 之後收到對方不在了；child 先睡 1.5 秒不讀，host 連送 3000 則（超過傳輸放得下的），全部照順序回來；child 自己附 handle、送不是訊息的位元組，通道都關掉、什麼都沒交給上層；child 把 host 送的 region map 成可寫會失敗；一條 IO thread（一個迴圈）同時服務四個 child：各自的訊息照順序、大資料各走各的 region，kill 掉一個只有那一條結束，迴圈停下來時其餘的都關掉、child 各自結束。
 
 `tests/it/mach_channel.rs`（只有 macOS 的通道有的）：child 假冒四種 kernel 的通知和一種別的 id（都帶著像樣的內容），沒有任何效果；child 送超過 128 MiB 的 out-of-line，通道關掉；host 以為對方是另一個 process 時，child 送的全部被忽略、通道也不關。這兩組加 rendezvous 的重複跑 30 次都過。
 
@@ -453,7 +462,7 @@ python3 scripts/test.py ipc tla      # crates/ipc/tla/ 的三個 TLA+ 模型（T
 
 `tests/it/rendezvous.rs`（只在 macOS；測試把自己再執行一次當成 child，用環境變數告訴它做什麼）：child 照順序拿到登記的 right，而且真的能用（它寫到測試的 port，kernel 說寫的人是 child 的 pid；搬給它的 receive right 收得到測試送的，它看到送的人是 host）；比登記早問的，登記時拿到；回答過的再問被拒絕；沒登記的 process 拿不到（同時有別的 child 登記著也一樣）；登記之後收回，child 拿不到、right 被放掉；同一個 process 的第二個問題擠掉第一個；沒有 server 的 host 是 `NoServer`；一個 process 只能有一個 server。這一組重複跑 30 次、整個整合測試 15 次都過。
 
-`tests/it/endpoint.rs`（兩個端點接在 `local` 上，一端是能建 region 的 host、一端是 child）：訊息照順序到各自的目的地；host 的大位元組走它自己建的 region、對方讀完再用、同時送兩筆就多一塊；到了上限就放在訊息裡；child 不建 region、拿到 host 給的之後才用；管道的位元組照順序、讀的一端不讀就只送容量那麼多、讀了才繼續；讀的一端走了來源就停、通道照常；傳輸沒有空間時什麼都不會永遠卡住；關掉之後兩端都結束、送不出去、放進 region 的還回來。亂送的 child（一條裸的通道，送什麼由測試決定）：不認得的目的地、解不出來的值、還沒寫過或還兩次的 region、提到沒給過它的 region、超過長度、自己附 handle、沒有 handle 的 `Granted`、開管道、對沒開過的管道回報取消送資料、回報超過、提到沒有的管道、不是 `Control` 的內容，host 都關掉通道、說出理由，之後不再交出任何訊息。亂送的 host 對 child 也一樣（超過容量的資料、重開的編號、長度不對或重複的 region）。兩條 thread 各跑一個 `run`，三條 thread 同時送訊息和大位元組、加一條 900 KiB 的管道，全部到齊之後 host 關掉，兩邊的理由各是 `Closed` 和 `PeerClosed`。
+`tests/it/endpoint.rs`（兩個端點接在 `local` 上，一端是能建 region 的 host、一端是 child）：訊息照順序到各自的目的地；host 的大位元組走它自己建的 region、對方讀完再用、同時送兩筆就多一塊；到了上限就放在訊息裡；child 不建 region、拿到 host 給的之後才用；管道的位元組照順序、讀的一端不讀就只送容量那麼多、讀了才繼續；讀的一端走了來源就停、通道照常；傳輸沒有空間時什麼都不會永遠卡住；關掉之後兩端都結束、送不出去、放進 region 的還回來。亂送的 child（一條裸的通道，送什麼由測試決定）：不認得的目的地、解不出來的值、還沒寫過或還兩次的 region、提到沒給過它的 region、超過長度、自己附 handle、沒有 handle 的 `Granted`、開管道、對沒開過的管道回報取消送資料、回報超過、提到沒有的管道、不是 `Control` 的內容，host 都關掉通道、說出理由，之後不再交出任何訊息。亂送的 host 對 child 也一樣（超過容量的資料、重開的編號、長度不對或重複的 region）。兩個迴圈各在一條 thread 上、各管一端（端點交給迴圈之前送的也到），三條 thread 同時送訊息和大位元組、加一條 900 KiB 的管道，全部到齊之後 host 關掉，兩邊的 `handler` 各被告知一次，理由是 `Closed` 和 `PeerClosed`。一個迴圈管五條通道（另一個迴圈管它們的另一端）：每條通道自己的訊息照順序到、互不相干，大資料各走各的 region；關掉其中一條只有那一條的兩端被告知，其他的照常；迴圈停下來時剩下的每一條都關掉、各被告知一次。端點交給迴圈之前做的事（開了管道、餵完、結束；關掉通道）那時叫醒不了誰，交給迴圈時才做：管道的位元組到對方、兩端各被告知結束。這三個測試自己設 30 秒的時限。一步一步推的那幾個測試自己接叫醒（`Link::on_wake`）。
 
 `tests/it/endpoint_fuzz.rs`：fuzzer 跑的第四段檢查（`fuzz/fuzz_targets/endpoint.rs`）。host 的端點對一個照輸入送任何 frame 的 child（任何目的地、有沒有 handle），host 自己同時送大位元組、開管道、給 region。不能 panic、不能讀到 region 外面；說了通道結束之後不再交出訊息；region 的總量不超過上限。重播 `fuzz/regressions/endpoint/`。
 

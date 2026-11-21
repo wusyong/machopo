@@ -27,6 +27,7 @@
 | 2e-4：macOS 的通道（Mach 訊息的 `Platform`、等 port set、dead-name 和 no-senders、audit token；跨 process 的測試）；大訊息走 out-of-line（第 39 條） | 完成 | 2026-11-21 |
 | 2e-5：2e 的檢查和文件；Linux、Windows 在這台機器測不到的部分怎麼處理（第 40 條） | 完成 | 2026-11-21 |
 | 2e-6：三個平台共用的啟動入口（`ipc::platform` 的 `spawn`、`inherited`、`child_gone`）；跨 process 的測試拆成不分平台的和 macOS 自己的；`Platform` 夠不夠用對過一次（第 41 條） | 完成 | 2026-11-21 |
+| 2e-7：一個 process 一條 IO thread：`IoLoop` 管多個端點，平台的介面拆成 `Platform`（通道）和 `Waiter`（等待）；macOS 和同一個 process 的平台跟著改（第 42 條） | 完成 | 2026-11-21 |
 | 2f：Linux 的平台層；量 socket 的緩衝區和大的資料的門檻。在 Linux 的機器上做（第 40 條） | 未開始 | |
 | 2g：Windows 的平台層；量 pipe 的緩衝區。在 Windows 的機器上做（第 40 條）；對方不能附 handle 時不看訊息裡的 handle 數值（第 41 條的契約，要有跨 process 的測試）；做的時候決定 CI 要不要加 macOS、Windows 的 runner | 未開始 | |
 | 2h：第 2 階段的檢查、`soundness.md`、`test.py` 的指令、文件；把 `test.py ipc` 的每一項排進每週的 CI（2a 起在本機跑） | 未開始 | |
@@ -344,5 +345,50 @@
   - 要寫的：`platform/<系統>/` 底下實作 `Platform` 的通道，和那個系統的 `spawn`、`inherited`、`child_gone`；在 `platform/mod.rs` 照 macOS 的那幾行 re-export；`tests/it/main.rs` 裡 `process_channel` 的 `cfg` 加上自己的系統。`process_channel.rs` 不用改就要過。
   - 那個系統自己才有的行為，另外寫一個測試檔（像 `mach_channel.rs`）。
   - 要動到共用的東西（`endpoint.rs` 的 `Platform`、`codec` 的門檻）時，單獨做成一個小 commit 先推上 `0004`，另一邊 rebase，不要兩邊各改各的。
-  - 決定的編號：Linux 從第 42 條、Windows 從第 52 條起。
+  - 決定的編號：Linux 從第 43 條、Windows 從第 53 條起（2e-7 用掉了第 42 條）。
+  - 這一段寫的「實作 `Platform`」在 2e-7 之後是兩個介面，見 2e-7 那一節。
+
+### 2e-7：一個 process 一條 IO thread（2026-11-21，macOS 26、Apple M4）
+
+- **為什麼有這一段**：一個 process 只會有一條 IO thread。2e-1 的 `Endpoint::run` 是一條 thread 佔住一條通道，`Platform::wait` 只等自己那一條；2f、2g 照那個介面寫的話，三個平台之後都要重寫等待的那一半。分頭之前先改。
+- **決定**：「已決定的事項」第 42 條。
+- **做了什麼**：
+  - `ipc::endpoint`：`IoLoop`（一條 thread 的迴圈，`run`）和 `LoopHandle`（別的 thread 用：`serve(endpoint, handler)`、`stop`）；`Handler` 多 `gone`；`Endpoint::run` 拿掉，`turn` 留著（迴圈和一步一步推的測試都用它）。
+  - 平台的介面拆成 `Platform`（每條通道：`write`、`map`、`create`、`shut`）和 `Waiter`（每條 thread：`new`、`interrupter`、`add`、`remove`、`wait`）。
+  - 叫醒的 callback 由核心的通道拿著（`core::channel` 的 `Sender::on_wake`、`Sender::wake`）：`Transport::wake` 拿掉，平台不經手。迴圈在端點加入時裝上；手動推端點的測試用 `Link::on_wake`。
+  - `Platform` 的條件寫進 trait（`Transport<Handle: Send>`），用到它的地方不用各自重複。
+  - `ipc::local` 的 `LocalWaiter`（輪流看每一端）；macOS 的 `PortWaiter`（一個 port set、一個接收緩衝區、一個打斷用的 port；通道的 receive right 加進 set，收到的訊息照 port 找回是哪一條）。
+- **過程中改掉的**：
+  - 第一版叫醒經過平台（`Transport::wake` 加 `Platform::on_wake`）。回頭看介面時發現那是核心自己要用的東西繞了平台一圈，三個平台會各寫一份一樣的；改成通道自己拿著。
+  - 「通道被叫醒」和「等待被打斷」原本都叫 woken，讀起來分不清：後者改成 `Waited::Interrupted`、`Waiter::interrupter`。
+- **測試**：
+  - `crates/ipc/tests/it/endpoint.rs`：兩個迴圈各在一條 thread 上跑一條通道到一端關掉；一個迴圈管五條通道；端點交給迴圈之前做的事（管道開了、餵完、結束；通道關掉）交給迴圈時才做。各有 30 秒的時限。
+  - `crates/ipc/tests/it/process_channel.rs`：一條 IO thread 管四個真的 child（各自的訊息照順序、大資料各走各的 region；kill 其中一個只有那一條結束；迴圈停下來其餘的 child 都收到、結束）。原本的測試改成經過迴圈。
+  - macOS 的通道的單元測試改成經過 `PortWaiter`：一個 waiter 分得出它的幾條通道、移掉的不再等、打斷不管叫幾次只說一次。
+  - 核心的通道：叫醒的次數（佇列從空變成有東西一次、關掉一次）改成數裝上去的 callback。
+- **mutation test**（`mutants-2e7.toml`）27 個，全部抓到。過程：
+  - 介面整理之前跑到一半（20 個裡的 8 個）漏了 1 個：端點交給迴圈時不先推一步。補了測試（交給迴圈之前管道開了、餵完、結束，另一條通道關掉）。
+  - 整理之後 28 個，漏了 2 個。補測試的 1 個：`LocalWaiter` 登記一端時不看已經到的（原本的測試裡後面總有別的訊息到，順便帶出來；現在有一則先到、之後什麼都不送的）。拿掉的 1 處多餘的程式：`Link::open_pipe` 最後再叫醒一次（掛上 `watch` 時來源已經有資料就會當場叫醒，沒有資料時也沒東西可送）；拿掉之後「來源有資料時不叫醒」那個 mutant 重跑還是抓到。
+  - 「通道結束不告訴 `handler`」那個 mutant 讓整個 run 卡了 7 分鐘：測試的 child 也是同一份程式，它永遠不結束，host 被時限結束之後留下的 child 握著測試輸出的 pipe。手動停掉 child 之後繼續；`process_channel.rs` 的 child 加了 60 秒自己結束的保險，等迴圈停下來的那一處也加了時限。
+  - 跑完確認檔案都還原了。
+- **跑過的檢查**：`cargo test -p ipc`（單元 91 個、整合 75 個，重複 5 次）；`test.py ipc models`（loom 3 個、shuttle 2 個）；`test.py ipc fuzz`（4 個 target 各 5 分鐘：`endpoint` 119 萬次、`frame` 3732 萬次、`pipe` 1149 萬次、`region` 265 萬次，沒有發現）；`test.py ipc miri`（核心 49 個、端點 4 個，沒有洩漏）；`cargo clippy -p ipc --all-targets -- -D warnings`（三種 cfg）、`cargo fmt --check`；`sanity.py` 的 7 項。
+  - fuzz、Miri、loom 和 shuttle 是在拿掉 `open_pipe` 那一行之前跑的；之後重跑的是 `cargo test -p ipc`、clippy、fmt 和那一個 mutant。
+- **沒有跑的**：`test.py ipc verus`、`ipc tla`（`fit`、`credit` 和三個模型對應的程式沒有動）。
+- **給在 Linux、Windows 上接手的人**（取代 2e-6 那一節裡講介面的部分；branch、檔案放哪裡、編號照 2e-6）：
+  - 要實作的是兩個東西，`ipc::platform::macos::channel` 是完整的例子，`ipc::local` 是最小的：
+
+    | | Linux | Windows |
+    | --- | --- | --- |
+    | `Platform::write` | 不等的 `sendmsg`，fd 用 `SCM_RIGHTS` | overlapped 的 `WriteFile`，一次一筆 |
+    | `Platform::map`、`create` | `mmap`；`memfd_create` 加 seal | `MapViewOfFile`；`CreateFileMappingW` |
+    | `Platform::shut` | `shutdown(SHUT_RDWR)` | `CancelIoEx` 再關 |
+    | `Waiter` | 一個 epoll：每條通道的 socket 用它的 key 登記 | 一個 I/O completion port：每條通道的 handle 用它的 key 關聯 |
+    | `Waiter::interrupter` | 一個 eventfd，也登記在 epoll 裡 | `PostQueuedCompletionStatus` |
+    | `Waiter::wait` | `epoll_wait`，可讀的那一條 `recvmsg` 進 waiter 自己的緩衝區再借出去 | `GetQueuedCompletionStatus`，完成的讀是哪一條看 completion key |
+
+  - **叫醒不用做**：通道什麼時候要 IO thread 做事是核心和迴圈之間的事。平台只要讓 `interrupter` 給的 callback 能從任何 thread 打斷 `wait`（回 `Waited::Interrupted`；叫很多次、打斷一次就夠）。
+  - `Waiter::wait` 回報「又有空間」（`Event::Writable`）只在那條通道的 `write` 回過 `WouldBlock` 之後：Linux 那時才對 socket 登記 `EPOLLOUT`、有了就拿掉，不然 epoll 一直醒；Windows 是進行中的那一筆寫完成。這表示 `Platform`（`write`）要能告訴 `Waiter` 它在等空間：macOS 是通道和 waiter 共用一個 `Arc` 的內部狀態，可以照做。
+  - `remove` 之後那條通道的事不能再報出來（key 不重複使用，迴圈拿到不認得的 key 會略過，但緩衝區裡它的東西要丟掉）。
+  - Windows 不能用「每條通道三個 event 加 `WaitForMultipleObjects`」：一次最多等 64 個。
+  - `process_channel.rs` 裡 `one_io_thread_serves_several_children` 是驗這一段的：一個迴圈、四個 child。
 

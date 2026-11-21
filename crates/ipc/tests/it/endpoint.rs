@@ -4,7 +4,10 @@
 //! And a child's end that isn't ours: whatever it sends, the host closes
 //! the channel and says why.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
 use std::thread;
+use std::time::Duration;
 
 use bytes::Bytes;
 use ipc::core::channel::{self, Gone, MAX_QUEUED_BYTES};
@@ -12,7 +15,9 @@ use ipc::core::control::{CONTROL_DESTINATION, Control};
 use ipc::core::frame::BadMessage;
 use ipc::core::region::HeapMemory;
 use ipc::data_pipe::{self, Consumer, Read, TryWriteError};
-use ipc::endpoint::{self, Config, Endpoint, Handler, Link, Received, SendError};
+use ipc::endpoint::{
+    self, Config, Endpoint, Event, Handler, IoLoop, Link, LoopHandle, Received, SendError,
+};
 use ipc::local::{self, Local};
 use serde::{Deserialize, Serialize};
 
@@ -60,25 +65,38 @@ struct End {
     endpoint: Endpoint<Local>,
     recorder: Recorder,
     gone: Option<Gone>,
+    /// The end's wake was called: what a loop would turn it for.
+    woken: Arc<AtomicBool>,
 }
 
 impl End {
     fn new(platform: Local, config: Config) -> Self {
         let (link, endpoint) = endpoint::endpoint(platform, config);
+        // The test is the loop: it turns the end by hand, for its wakes
+        // too.
+        let woken = Arc::new(AtomicBool::new(false));
+        let flag = woken.clone();
+        link.on_wake(Arc::new(move || flag.store(true, Ordering::SeqCst)));
         Self {
             link,
             endpoint,
             recorder: Recorder::default(),
             gone: None,
+            woken,
         }
     }
 
-    /// One turn, if the platform has something: whether it did.
+    /// One turn, if the end was woken or the platform has something:
+    /// whether it did.
     fn turn(&mut self) -> bool {
         let mut bytes = Vec::new();
         let mut handles = Vec::new();
-        let Some(event) = self.link.platform().poll(&mut bytes, &mut handles) else {
-            return false;
+        let event = match self.woken.swap(false, Ordering::SeqCst) {
+            true => Event::Woken,
+            false => match self.link.platform().poll(&mut bytes, &mut handles) {
+                Some(event) => event,
+                None => return false,
+            },
         };
         if self.gone.is_some() {
             return false;
@@ -805,154 +823,364 @@ fn a_child_keeps_to_what_its_host_may_send_too() {
     }
 }
 
-#[test]
-fn two_ends_on_two_threads_run_until_one_closes() {
-    // What can go wrong here is a wait that never ends: the test says so
-    // itself, instead of hanging.
-    let (done, finished) = std::sync::mpsc::channel();
-    thread::spawn(move || {
-        two_ends_on_two_threads();
-        done.send(()).unwrap();
-    });
-    match finished.recv_timeout(std::time::Duration::from_secs(20)) {
-        Ok(()) => {}
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-            panic!("stuck: a message, a wake or the channel's end never came")
-        }
-        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => panic!("failed (above)"),
+/// What an endpoint served by a loop saw, told to the test.
+#[derive(Debug, PartialEq)]
+enum Seen {
+    Text(String),
+    Body(Bytes),
+    /// A pipe a message named, read to its end.
+    Pipe(Vec<u8>),
+    Gone(Gone),
+}
+
+/// Tells the test of everything, as the endpoint `name`. Reads each pipe
+/// a message names on a thread of its own; answers a text that begins
+/// "ask" with "answer".
+struct Teller {
+    name: usize,
+    link: Link<Local>,
+    seen: mpsc::Sender<(usize, Seen)>,
+}
+
+impl Handler<Local> for Teller {
+    fn message(&mut self, mut message: Received<'_, Local>) -> Result<(), BadMessage> {
+        let seen = match message.decode::<Msg>()? {
+            Msg::Text(text) => {
+                if let Some(rest) = text.strip_prefix("ask") {
+                    self.link
+                        .send(message.destination(), &Msg::Text(format!("answer{rest}")))
+                        .unwrap();
+                }
+                Seen::Text(text)
+            }
+            Msg::Body(body) => Seen::Body(body),
+            Msg::Stream { pipe } => {
+                let mut reader = message.take_pipe(pipe).ok_or(BadMessage::Rejected)?;
+                let (name, seen) = (self.name, self.seen.clone());
+                thread::spawn(move || {
+                    let mut got = Vec::new();
+                    loop {
+                        match reader.read(40 * KIB) {
+                            Read::Data(bytes) => got.extend_from_slice(&bytes),
+                            Read::Empty => thread::yield_now(),
+                            Read::Done => break,
+                        }
+                    }
+                    let _ = seen.send((name, Seen::Pipe(got)));
+                });
+                return Ok(());
+            }
+        };
+        let _ = self.seen.send((self.name, seen));
+        Ok(())
+    }
+
+    fn gone(&mut self, gone: Gone) {
+        let _ = self.seen.send((self.name, Seen::Gone(gone)));
     }
 }
 
-fn two_ends_on_two_threads() {
-    use std::sync::mpsc;
+/// A loop on a thread of its own.
+fn io_thread() -> (LoopHandle<Local>, thread::JoinHandle<()>) {
+    let (io, handle) = IoLoop::new().unwrap();
+    (handle, thread::spawn(move || io.run()))
+}
 
-    let (host_end, child_end) = local::pair(Some(64 * KIB));
-    let (host, host_endpoint) = endpoint::endpoint(host_end, config(true));
-    let (child, child_endpoint) = endpoint::endpoint(child_end, config(false));
-
-    /// Counts what comes (telling the test of each), and reads each pipe
-    /// a message names to its end on a thread of its own, which then says
-    /// so to the peer.
-    struct Sink {
-        link: Link<Local>,
-        came: mpsc::Sender<()>,
-        texts: usize,
-        bodies: Vec<Bytes>,
-        readers: Vec<thread::JoinHandle<Vec<u8>>>,
+/// Whatever goes wrong with threads here is a wait that never ends: the
+/// test says so itself, instead of hanging.
+fn within(test: impl FnOnce() + Send + 'static) {
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        test();
+        let _ = done.send(());
+    });
+    match finished.recv_timeout(Duration::from_secs(30)) {
+        Ok(()) => {}
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            panic!("stuck: a message, a wake or the channel's end never came")
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => panic!("failed (above)"),
     }
-    impl Handler<Local> for &mut Sink {
-        fn message(&mut self, mut message: Received<'_, Local>) -> Result<(), BadMessage> {
-            match message.decode::<Msg>()? {
-                Msg::Text(_) => self.texts += 1,
-                Msg::Body(body) => self.bodies.push(body),
-                Msg::Stream { pipe } => {
-                    let mut reader = message.take_pipe(pipe).ok_or(BadMessage::Rejected)?;
-                    let link = self.link.clone();
-                    self.readers.push(thread::spawn(move || {
-                        let mut got = Vec::new();
-                        loop {
-                            match reader.read(40 * KIB) {
-                                Read::Data(bytes) => got.extend_from_slice(&bytes),
-                                Read::Empty => thread::yield_now(),
-                                Read::Done => break,
-                            }
+}
+
+#[test]
+fn two_loops_on_two_threads_run_a_channel_until_one_end_closes() {
+    within(|| {
+        let (host_end, child_end) = local::pair(Some(64 * KIB));
+        let (host, host_endpoint) = endpoint::endpoint(host_end, config(true));
+        let (child, child_endpoint) = endpoint::endpoint(child_end, config(false));
+        let (host_io, host_thread) = io_thread();
+        let (child_io, child_thread) = io_thread();
+        let (seen, saw) = mpsc::channel();
+        // Sent before either end is served: nothing is lost.
+        host.send(0, &text("early")).unwrap();
+        let teller = |name, link: &Link<Local>| Teller {
+            name,
+            link: link.clone(),
+            seen: seen.clone(),
+        };
+        host_io.serve(host_endpoint, teller(0, &host));
+        child_io.serve(child_endpoint, teller(1, &child));
+
+        host.grant_to_peer(256 * KIB);
+        let body = pattern(900 * KIB, 7);
+        let (mut source, consumer) = data_pipe::create(128 * KIB);
+        let pipe = host.open_pipe(consumer, 128 * KIB as u32).unwrap();
+        host.send(0, &Msg::Stream { pipe }).unwrap();
+        let senders: Vec<_> = (0..3u8)
+            .map(|n| {
+                let (host, child) = (host.clone(), child.clone());
+                thread::spawn(move || {
+                    for i in 0..40u8 {
+                        host.send(u32::from(n), &text("to the child")).unwrap();
+                        child.send(u32::from(n), &text("to the host")).unwrap();
+                        if i % 8 == 0 {
+                            host.send(1, &Msg::Body(pattern(100 * KIB, n))).unwrap();
+                            child.send(1, &Msg::Body(pattern(100 * KIB, n))).unwrap();
                         }
-                        link.send(0, &text("the pipe is read")).unwrap();
-                        got
-                    }));
-                }
-            }
-            self.came.send(()).unwrap();
-            Ok(())
-        }
-    }
-    let run = |endpoint: Endpoint<Local>, link: Link<Local>| {
-        let (came, count) = mpsc::channel();
-        let thread = thread::spawn(move || {
-            let mut sink = Sink {
-                link,
-                came,
-                texts: 0,
-                bodies: Vec::new(),
-                readers: Vec::new(),
-            };
-            let gone = endpoint.run(&mut sink);
-            (gone, sink)
-        });
-        (thread, count)
-    };
-    let (host_thread, host_came) = run(host_endpoint, host.clone());
-    let (child_thread, child_came) = run(child_endpoint, child.clone());
-
-    host.grant_to_peer(256 * KIB);
-    let body = pattern(900 * KIB, 7);
-    let (mut source, consumer) = data_pipe::create(128 * KIB);
-    let pipe = host.open_pipe(consumer, 128 * KIB as u32).unwrap();
-    host.send(0, &Msg::Stream { pipe }).unwrap();
-    let senders: Vec<_> = (0..3u8)
-        .map(|n| {
-            let (host, child) = (host.clone(), child.clone());
-            thread::spawn(move || {
-                for i in 0..40u8 {
-                    host.send(u32::from(n), &text("to the child")).unwrap();
-                    child.send(u32::from(n), &text("to the host")).unwrap();
-                    if i % 8 == 0 {
-                        host.send(1, &Msg::Body(pattern(100 * KIB, n))).unwrap();
-                        child.send(1, &Msg::Body(pattern(100 * KIB, n))).unwrap();
                     }
-                }
+                })
             })
-        })
-        .collect();
-    let mut at = 0;
-    while at < body.len() {
-        let end = (at + 30 * KIB).min(body.len());
-        match source.try_write(body.slice(at..end)) {
-            Ok(()) => at = end,
-            Err(TryWriteError::Full) => thread::yield_now(),
-            Err(TryWriteError::Closed) => panic!("the pipe's source lost its reader"),
+            .collect();
+        let mut at = 0;
+        while at < body.len() {
+            let end = (at + 30 * KIB).min(body.len());
+            match source.try_write(body.slice(at..end)) {
+                Ok(()) => at = end,
+                Err(TryWriteError::Full) => thread::yield_now(),
+                Err(TryWriteError::Closed) => panic!("the pipe's source lost its reader"),
+            }
         }
-    }
-    drop(source);
-    for sender in senders {
-        sender.join().unwrap();
-    }
-    // Everything has arrived at both ends (the host's last is the child's
-    // word that the pipe is read); then the host closes.
-    for _ in 0..120 + 15 + 1 {
-        child_came.recv().unwrap();
-    }
-    for _ in 0..120 + 15 + 1 {
-        host_came.recv().unwrap();
-    }
-    host.close();
-    let (host_gone, host_sink) = host_thread.join().unwrap();
-    let (child_gone, mut child_sink) = child_thread.join().unwrap();
-    assert_eq!(host_gone, Gone::Closed);
-    assert_eq!(child_gone, Gone::PeerClosed);
-    assert_eq!(host_sink.texts, 121);
-    assert_eq!(child_sink.texts, 120);
-    for sink in [&host_sink, &child_sink] {
-        assert_eq!(sink.bodies.len(), 15);
-        for n in 0..3u8 {
-            assert_eq!(
-                sink.bodies
-                    .iter()
-                    .filter(|got| **got == pattern(100 * KIB, n))
-                    .count(),
-                5
+        drop(source);
+        for sender in senders {
+            sender.join().unwrap();
+        }
+        // Everything arrives at both ends: 120 texts and 15 bodies each
+        // way, the early text and the pipe at the child.
+        let mut texts = [0, 0];
+        let mut bodies = [Vec::new(), Vec::new()];
+        let mut piped = None;
+        while texts != [120, 121]
+            || bodies[0].len() != 15
+            || bodies[1].len() != 15
+            || piped.is_none()
+        {
+            match saw.recv().unwrap() {
+                (name, Seen::Text(_)) => texts[name] += 1,
+                (name, Seen::Body(body)) => bodies[name].push(body),
+                (1, Seen::Pipe(got)) => piped = Some(got),
+                other => panic!("{other:?}"),
+            }
+        }
+        for got in &bodies {
+            for n in 0..3u8 {
+                assert_eq!(
+                    got.iter()
+                        .filter(|body| **body == pattern(100 * KIB, n))
+                        .count(),
+                    5
+                );
+            }
+        }
+        assert!(piped.unwrap() == body[..], "the pipe's bytes");
+        // The host closes: each end is told why, once.
+        host.close();
+        let mut gone = [saw.recv().unwrap(), saw.recv().unwrap()];
+        gone.sort_by_key(|(name, _)| *name);
+        assert_eq!(
+            gone,
+            [
+                (0, Seen::Gone(Gone::Closed)),
+                (1, Seen::Gone(Gone::PeerClosed))
+            ]
+        );
+        assert_eq!(
+            child.send(0, &text("after")),
+            Err(SendError::Gone(Gone::PeerClosed))
+        );
+        host_io.stop();
+        child_io.stop();
+        host_thread.join().unwrap();
+        child_thread.join().unwrap();
+        assert!(saw.try_recv().is_err(), "nothing more is told");
+    });
+}
+
+#[test]
+fn what_an_end_did_before_a_loop_served_it_is_done_when_one_does() {
+    within(|| {
+        let (io, io_thread) = io_thread();
+        let (seen, saw) = mpsc::channel();
+        let teller = |name, link: &Link<Local>| Teller {
+            name,
+            link: link.clone(),
+            seen: seen.clone(),
+        };
+        // A pipe opened, fed and ended while nothing serves the end: its
+        // wakes woke nobody.
+        let (host_end, child_end) = local::pair(Some(64 * KIB));
+        let (host, host_endpoint) = endpoint::endpoint(host_end, config(true));
+        let (child, child_endpoint) = endpoint::endpoint(child_end, config(false));
+        let body = pattern(50 * KIB, 3);
+        let (mut source, consumer) = data_pipe::create(128 * KIB);
+        let pipe = host.open_pipe(consumer, 128 * KIB as u32).unwrap();
+        host.send(0, &Msg::Stream { pipe }).unwrap();
+        source.try_write(body.clone()).unwrap();
+        drop(source);
+        // And an end closed before it was ever served.
+        let (closed_end, other_end) = local::pair(Some(64 * KIB));
+        let (closed, closed_endpoint) = endpoint::endpoint(closed_end, config(true));
+        let (other, other_endpoint) = endpoint::endpoint(other_end, config(false));
+        closed.close();
+
+        // And a message that came to an end before it was served, with
+        // nothing after it to have the loop look.
+        let (early_end, late_end) = local::pair(Some(64 * KIB));
+        let (early, _early_endpoint) = endpoint::endpoint(early_end, config(true));
+        let (late, late_endpoint) = endpoint::endpoint(late_end, config(false));
+        early.send(0, &text("early")).unwrap();
+        io.serve(late_endpoint, teller(4, &late));
+        assert_eq!(saw.recv().unwrap(), (4, Seen::Text("early".into())));
+
+        io.serve(child_endpoint, teller(1, &child));
+        io.serve(other_endpoint, teller(3, &other));
+        assert!(saw.recv_timeout(Duration::from_millis(100)).is_err());
+        io.serve(host_endpoint, teller(0, &host));
+        io.serve(closed_endpoint, teller(2, &closed));
+        let mut told = vec![
+            saw.recv().unwrap(),
+            saw.recv().unwrap(),
+            saw.recv().unwrap(),
+        ];
+        told.sort_by_key(|(name, _)| *name);
+        assert_eq!(
+            told,
+            [
+                (1, Seen::Pipe(body.to_vec())),
+                (2, Seen::Gone(Gone::Closed)),
+                (3, Seen::Gone(Gone::PeerClosed))
+            ]
+        );
+        io.stop();
+        io_thread.join().unwrap();
+    });
+}
+
+#[test]
+fn one_loop_serves_many_channels() {
+    within(|| {
+        // Five channels: all the host ends on one thread, all the child
+        // ends on another.
+        let (host_io, host_thread) = io_thread();
+        let (child_io, child_thread) = io_thread();
+        let (seen, saw) = mpsc::channel();
+        let mut hosts = Vec::new();
+        let mut children = Vec::new();
+        for name in 0..5 {
+            let (host_end, child_end) = local::pair(Some(16 * KIB));
+            let (host, host_endpoint) = endpoint::endpoint(host_end, config(true));
+            let (child, child_endpoint) = endpoint::endpoint(child_end, config(false));
+            host_io.serve(
+                host_endpoint,
+                Teller {
+                    name,
+                    link: host.clone(),
+                    seen: seen.clone(),
+                },
             );
+            // The children's are told of as 100 and up.
+            child_io.serve(
+                child_endpoint,
+                Teller {
+                    name: 100 + name,
+                    link: child.clone(),
+                    seen: seen.clone(),
+                },
+            );
+            hosts.push(host);
+            children.push(child);
         }
-    }
-    let got = child_sink.readers.pop().unwrap().join().unwrap();
-    assert!(
-        got == body[..],
-        "the pipe's bytes: {} of {}",
-        got.len(),
-        body.len()
-    );
-    assert_eq!(
-        child.send(0, &text("after")),
-        Err(SendError::Gone(Gone::PeerClosed))
-    );
+        // Each channel carries its own, in order, whatever the others do:
+        // texts answered by the child, and a large body by a region.
+        for round in 0..30 {
+            for (name, host) in hosts.iter().enumerate() {
+                host.send(0, &Msg::Text(format!("ask {name} {round}")))
+                    .unwrap();
+            }
+        }
+        for (name, host) in hosts.iter().enumerate() {
+            host.send(1, &Msg::Body(pattern(200 * KIB, name as u8)))
+                .unwrap();
+        }
+        let mut asked = [0; 5];
+        let mut answered = [0; 5];
+        let mut bodies = 0;
+        while answered != [30; 5] || bodies != 5 {
+            match saw.recv().unwrap() {
+                (name @ 100.., Seen::Text(text)) => {
+                    let name = name - 100;
+                    assert_eq!(text, format!("ask {name} {}", asked[name]));
+                    asked[name] += 1;
+                }
+                (name, Seen::Text(text)) => {
+                    assert_eq!(text, format!("answer {name} {}", answered[name]));
+                    answered[name] += 1;
+                }
+                (name @ 100.., Seen::Body(body)) => {
+                    assert!(body == pattern(200 * KIB, (name - 100) as u8));
+                    bodies += 1;
+                }
+                other => panic!("{other:?}"),
+            }
+        }
+        // One channel closed is that channel's alone.
+        hosts[2].close();
+        let mut gone = [saw.recv().unwrap(), saw.recv().unwrap()];
+        gone.sort_by_key(|(name, _)| *name);
+        assert_eq!(
+            gone,
+            [
+                (2, Seen::Gone(Gone::Closed)),
+                (102, Seen::Gone(Gone::PeerClosed))
+            ]
+        );
+        assert_eq!(
+            hosts[2].send(0, &text("after")),
+            Err(SendError::Gone(Gone::Closed))
+        );
+        for name in [0, 1, 3, 4] {
+            hosts[name]
+                .send(0, &Msg::Text(format!("ask {name} 30")))
+                .unwrap();
+        }
+        let mut again = 0;
+        while again < 8 {
+            match saw.recv().unwrap() {
+                (name, Seen::Text(_)) => {
+                    assert!(name % 100 != 2);
+                    again += 1;
+                }
+                other => panic!("{other:?}"),
+            }
+        }
+        // A loop stopped closes what it still served: the hosts are told
+        // they closed, and their peers that the peer did.
+        host_io.stop();
+        host_thread.join().unwrap();
+        let mut told: Vec<_> = (0..8).map(|_| saw.recv().unwrap()).collect();
+        told.sort_by_key(|(name, _)| *name);
+        let expected: Vec<_> = [0, 1, 3, 4]
+            .into_iter()
+            .map(|name| (name, Seen::Gone(Gone::Closed)))
+            .chain(
+                [0, 1, 3, 4]
+                    .into_iter()
+                    .map(|name| (100 + name, Seen::Gone(Gone::PeerClosed))),
+            )
+            .collect();
+        assert_eq!(told, expected);
+        child_io.stop();
+        child_thread.join().unwrap();
+        assert!(saw.try_recv().is_err(), "nothing more is told");
+    });
 }

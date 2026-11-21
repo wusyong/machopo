@@ -66,6 +66,8 @@ pub struct Buffer {
     body: usize,
     /// The longest body that goes out of line; 0 when none does.
     out_of_line: usize,
+    /// The port the last message refused as malformed came to.
+    refused_at: mach_port_t,
 }
 
 impl Buffer {
@@ -82,6 +84,7 @@ impl Buffer {
             words: vec![0; fixed.saturating_add(body.div_ceil(4))],
             body,
             out_of_line: 0,
+            refused_at: MACH_PORT_NULL,
         }
     }
 
@@ -111,6 +114,12 @@ impl Buffer {
         let len = std::mem::size_of_val(&*self.words);
         // SAFETY: as `bytes`, and any bytes are a `u32`.
         unsafe { std::slice::from_raw_parts_mut(self.words.as_mut_ptr().cast(), len) }
+    }
+
+    /// The port the message a receive just refused
+    /// ([`ReceiveError::Malformed`]) came to: which of a set's.
+    pub const fn refused_at(&self) -> mach_port_t {
+        self.refused_at
     }
 
     /// The bytes of a message received into this buffer.
@@ -386,6 +395,8 @@ pub fn receive(
     match parse(&buffer.words, buffer.out_of_line) {
         Some(parsed) => Ok(parsed.own()),
         None => {
+            // The header's local port: the one it came to.
+            buffer.refused_at = buffer.words.get(3).copied().unwrap_or(MACH_PORT_NULL);
             // SAFETY: a message the kernel just wrote whole into the
             // buffer; nothing of it was taken yet, so each right and any
             // memory it brought is let go once here.
