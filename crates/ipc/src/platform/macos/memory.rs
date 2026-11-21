@@ -10,56 +10,20 @@
 //! refuses to map it writable.
 
 use mach2::kern_return::KERN_SUCCESS;
-use mach2::mach_port::mach_port_deallocate;
-use mach2::port::{MACH_PORT_NULL, mach_port_t};
+use mach2::port::MACH_PORT_NULL;
 use mach2::traps::mach_task_self;
 use mach2::vm::{mach_make_memory_entry_64, mach_vm_deallocate, mach_vm_map};
 use mach2::vm_inherit::VM_INHERIT_NONE;
 use mach2::vm_prot::{VM_PROT_READ, VM_PROT_WRITE, vm_prot_t};
 use mach2::vm_statistics::VM_FLAGS_ANYWHERE;
 
+pub use super::port::SendRight;
 use crate::core::region::Memory;
 
 /// `MAP_MEM_NAMED_CREATE` (`<mach/memory_object_types.h>`), which mach2
 /// doesn't declare: make new memory for the entry, not an entry for
 /// memory there already is.
 const MAP_MEM_NAMED_CREATE: vm_prot_t = 0x02_0000;
-
-/// A send right this task holds, let go when dropped: a region's handle.
-#[derive(Debug)]
-pub struct SendRight(mach_port_t);
-
-impl SendRight {
-    /// Takes over a send right.
-    ///
-    /// # Safety
-    ///
-    /// `name` is a send right in this task that nothing else will let go
-    /// of.
-    pub const unsafe fn from_raw(name: mach_port_t) -> Self {
-        Self(name)
-    }
-
-    /// The right's name in this task.
-    pub const fn name(&self) -> mach_port_t {
-        self.0
-    }
-
-    /// The right, no longer let go by this value: for a message that
-    /// moves it to the peer.
-    pub fn into_raw(self) -> mach_port_t {
-        let name = self.0;
-        std::mem::forget(self);
-        name
-    }
-}
-
-impl Drop for SendRight {
-    fn drop(&mut self) {
-        // SAFETY: the name is a right this value owns, let go once.
-        unsafe { mach_port_deallocate(mach_task_self(), self.0) };
-    }
-}
 
 /// A mapping of a region in this task, unmapped when dropped.
 #[derive(Debug)]
@@ -186,6 +150,9 @@ pub fn create(len: usize, peer_writes: bool) -> Option<(Mapping, SendRight)> {
 
 #[cfg(test)]
 mod tests {
+    use mach2::mach_port::mach_port_deallocate;
+    use mach2::port::mach_port_t;
+
     use super::*;
 
     const LEN: usize = 64 << 10;

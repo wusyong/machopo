@@ -1,6 +1,6 @@
 # ipc
 
-對應 Chromium 的 `ipc/` 和 `mojo/`：machopo 的各個 process 之間共用的東西。renderer 現在還是 Browser process 裡的 thread；現在有每個 process 都讀同一個的時鐘 `TimeTicks`、還在同一個 process 裡的 data pipe（`data_pipe`），channel 的核心（`core`）、訊息的值怎麼變成位元組（`codec`）、把它們組起來的端點（`endpoint`）、同一個 process 裡的平台（`local`），和作業系統的平台層（`platform`：現在只有 macOS 的共用記憶體）。
+對應 Chromium 的 `ipc/` 和 `mojo/`：machopo 的各個 process 之間共用的東西。renderer 現在還是 Browser process 裡的 thread；現在有每個 process 都讀同一個的時鐘 `TimeTicks`、還在同一個 process 裡的 data pipe（`data_pipe`），channel 的核心（`core`）、訊息的值怎麼變成位元組（`codec`）、把它們組起來的端點（`endpoint`）、同一個 process 裡的平台（`local`），和作業系統的平台層（`platform`：現在有 macOS 的共用記憶體、Mach 訊息和 rendezvous，還沒有通道）。
 
 `unsafe` 只放在這裡和 `bindings`（`python3 scripts/sanity.py unsafe` 檢查）：這裡的是作業系統的 API，和對共用記憶體的複製。
 
@@ -278,7 +278,55 @@ let theirs = memory::map(&handle, len, writable)?;
 - **只能讀的 handle** 是對建的一端自己的 mapping 另建的、只有讀權限的 entry；kernel 不讓它 map 成可寫。能寫的那個 right 不離開 `create`。
 - **唯讀的 mapping 一直是唯讀的**：map 時最大的保護就是現在的保護，之後改不成可寫。
 - **長度要是整頁**（region 的那幾種長度都是）：kernel 會把長度進位，進位過的不是要的那一塊，不建。map 可以少於整塊（它的開頭），不能多。
-- `SendRight`：這個 task 拿著的一個 send right，drop 時放掉；`into_raw` 給要把它搬進訊息的地方。`Mapping`：drop 時解除，實作 `Memory`。
+- `Mapping`：drop 時解除，實作 `Memory`。region 的 handle 是一個 `SendRight`（下面）。
+
+### `platform::macos::port`
+
+這個 task 拿著的 Mach port 的 right，每一種 drop 時放掉：忘了放的 handle 是一個永遠不死的 port，對方就永遠不知道通道結束了。
+
+- `SendRight`：送訊息的對象，也是 region 的 handle。
+- `SendOnceRight`：回一次答案用的。沒用就 drop 的話，kernel 會告訴那個 port 的主人「不會有答案了」。
+- `ReceiveRight`：一個 port 本身。`new` 建一個、`make_send` 做出通往它的 send right、`tell_when_no_senders` 請 kernel 在沒有 send right 剩下時通知。drop 時 port 就死了，通往它的 send right 變成 dead name。
+- `Right`：訊息從一個 task 帶到另一個 task 的 right（`Send` 或 `Receive`）。
+- `into_raw` 給要把 right 搬進訊息的地方；`from_raw` 是 `unsafe`。
+
+### `platform::macos::message`
+
+一則 Mach 訊息，手動排出來、拆開（kernel 的結構是 4 bytes 對齊的，`#[repr(C)]` 排不出來）：header；帶 right 時是 descriptor 的數量和每個 right 一個 port descriptor；然後是 body（長度加位元組，補到 4 的倍數）。
+
+```rust
+let mut buffer = message::Buffer::for_body(max_body);
+message::send(&mut buffer, To::Port(&to), reply, id, body, rights, timeout)?;
+let received = message::receive(&mut buffer, port.name(), timeout)?;
+// received.id、received.reply、received.rights、received.sender.pid()、buffer.body(&received)
+```
+
+- **誰送的是 kernel 說的**：每一則收到的訊息都帶 audit token，`Sender::pid()` 是送的那個 process，kernel 自己是 0。送的一方改不了。
+- **right 不會掉**：送出去的歸 kernel；沒送成的（對方的 port 死了、佇列滿了又不等、太大）當場放掉。收到的歸收的一方，包成會自己放掉的型別。
+- **排法不對的訊息整則毀掉**：body 聲稱比訊息長、out-of-line 的記憶體或 port 陣列、不是 send 也不是 receive 的 right、超過 16 個 right、不是「回一次」的 reply right，都是 `Malformed`，它帶來的 right 和記憶體全部放掉（`mach_msg_destroy`），不會先拿一半。
+- **不送 out-of-line 的記憶體**。
+- 比緩衝區長的訊息：kernel 從 port 上拿掉、毀掉，回 `TooLarge`。`Buffer::for_body(n)` 的 body 上限就是 `n`。
+
+### `platform::macos::rendezvous`
+
+child 怎麼拿到它的 port（Chromium 的 `MachPortRendezvous`）：child 繼承不了 Mach port，所以 host 向 launchd 的 bootstrap 登記一個 server，名字帶自己的 pid（`org.machopo.MachPortRendezvousServer.<pid>`）；child 用 parent 的 pid 拼出名字、查到、發問；server 照 kernel 給的 audit token（不是照 child 說的任何話）把登記在那個 pid 底下的 right 交出去，只交一次。
+
+```rust
+// host：一個 process 一個，一直開著
+let server = rendezvous::Server::start()?;
+let child = Command::new(exe).spawn()?;
+server.register(child.id(), vec![Right::Receive(its_port), Right::Send(to_ours)]);
+
+// child
+let rights = rendezvous::fetch(std::os::unix::process::parent_id(), wait)?;
+```
+
+- **child 可以比登記早問**（host 要等 child 啟動了才知道它的 pid）：問題留著，`register` 時當場回答。
+- **沒有登記的 process 什麼都拿不到**：它的問題一直等，`fetch` 逾時（`TimedOut`）。等著的問題最多 64 個，超過就拒絕最舊的；同一個 process 再問一次，前一個問題就被拒絕。
+- **回答過的再問會被拒絕**（`Refused`），不是等。同一個 pid 重新 `register`（pid 被新的 child 重用）之後可以再回答。
+- **只回答「問題」**：id 對、沒有內容、沒有帶 right、有回答用的 port。其他的丟掉，帶來的 right 放掉。
+- `forget(pid)`：child 還沒問就不在了的時候，收回登記的 right。
+- `fetch` 的錯誤：`NoServer`（查不到那個 host 的 server）、`Refused`、`TimedOut`、`Failed`。
 
 ## `unsafe` 的論證
 
@@ -292,6 +340,13 @@ let theirs = memory::map(&handle, len, writable)?;
 | `platform/macos/memory.rs` 的 `mach_vm_map`（`map`） | 位址由 kernel 選（`VM_FLAGS_ANYWHERE`），寫進活到呼叫結束的區域變數；不蓋掉這個 task 已有的東西。成功才建 `Mapping` |
 | `platform/macos/memory.rs` 的 `SendRight`（`from_raw`、`Drop` 的 `mach_port_deallocate`） | `from_raw` 是 `unsafe fn`：呼叫的人保證名字是這個 task 的一個 send right、沒有別人會放掉它。`Drop` 放掉一次；`into_raw` 用 `forget` 把放掉的責任交出去 |
 | `platform/macos/memory.rs` 的 `Mapping`（`Drop` 的 `mach_vm_deallocate`、`Send`、`Sync`、`Memory`） | 範圍是 `map` 得到的那一段，只在 `drop` 解除一次。位址在每條 thread 上都一樣；經過 `Memory` 的讀寫都是整段位元組的複製。`Memory` 的保證：從 `map` 到 `drop` 都 map 著、不搬動、可讀；放進 `Pool` 的是 map 成可寫的（`create(_, false)` 的那一個、`map(_, _, true)` 的）。指標用 `with_exposed_provenance_mut` 從位址做出來：記憶體不是 Rust 配置的 |
+| `platform/macos/port.rs` 的三種 right（`from_raw`、`Drop`、`ReceiveRight::new`、`make_send`、`tell_when_no_senders`） | `from_raw` 都是 `unsafe fn`：呼叫的人保證名字是這個 task 的那一種 right、沒有別人會放掉。每種的 `Drop` 用對應的呼叫放掉一次（send 和 send-once 是 `mach_port_deallocate`，receive 是 `mach_port_mod_refs` 減一）；`into_raw` 用 `forget` 交出責任。其餘的呼叫都是對自己的 receive right 做的，寫的是活到呼叫結束的區域變數。`mach_port_request_notification` 是自己宣告的（mach2 沒有），照 `<mach/mach_port.h>` 的原型 |
+| `platform/macos/message.rs` 的 `Buffer::bytes`、`bytes_mut` | 把 `Vec<u32>` 看成位元組：字都初始化過，`u32` 的位元組就是位元組、任何位元組也都是合法的 `u32`，長度是 vector 的位元組數 |
+| `platform/macos/message.rs` 的 `mach_msg`（送） | 緩衝區裡是一則完整的訊息（大小就是 header 寫的那個、在 vector 的範圍內），對齊和 header 一樣；它提到的 right 是呼叫的人交出來的（`into_raw` 之後才寫進去） |
+| `platform/macos/message.rs` 的 `mach_msg_destroy`（送失敗、`discard`、收到排法不對的） | 訊息沒送出去時，它要搬的 right 還是這個 task 的，各放掉一次；只是複製的那個（`To::Port`）kernel 不會動。收到的訊息是 kernel 剛寫進緩衝區的完整的一則，`parse` 失敗時還沒有任何 right 被包成型別，所以每個只放掉一次 |
+| `platform/macos/message.rs` 的 `mach_msg`（收）、`Parsed::own` | 緩衝區是 `capacity` 位元組，kernel 不會寫超過。`own` 只在整則訊息 `parse` 通過之後才把名字包成 right：receive right 是訊息搬給這個 task 的，其餘的是 send right（`parse` 不放行別種），reply 是 send-once（`parse` 檢查過） |
+| `platform/macos/message.rs` 的 `audit_token_to_pid`（libbsm） | 傳值進去，讀其中一個字 |
+| `platform/macos/rendezvous.rs` 的 `bootstrap_check_in`、`bootstrap_look_up` | 傳進去的是活到呼叫結束的 C 字串和一個放名字的區域變數。成功才把名字包成 right：check-in 給的是 service 的 receive right，look-up 給的是 send right |
 | `core/region.rs` 的 `HeapMemory`（`Box::into_raw`、`from_raw`、`Send`、`Sync`） | 指標來自 `new` 裡的 `Box::into_raw`，只在 `drop` 還回去一次；配置是這個值自己的，經過 `Memory` 的讀寫都是整段位元組的複製，兩端同時複製和跨 process 的 mapping 是同一種情況 |
 
 ## 測試
@@ -335,6 +390,12 @@ python3 scripts/test.py ipc tla      # crates/ipc/tla/ 的三個 TLA+ 模型（T
 `tla/Channel.tla`（通道的一端：佇列的上限、結束只報告一次、理由是第一個、之後不交出訊息、沒有東西留著等）、`tla/Regions.tla`（region 給哪個 peer、先告知再提到、寫進去、對方真的讀到那則訊息時才還、peer 不在了之後不轉給別人）、`tla/Pipe.tla`（管道的額度、回報的門檻、結尾和取消在路上交錯、亂回報的讀的一端、不會卡住）。`tla/check.py` 用 TLC 檢查每個模型成立，再把每一部分拿掉（模型的 `Mutation`），確認 TLC 找得到列出來的那個反例。TLC 的 jar 第一次跑時下載（釘住版本和 SHA-256，放在 `target/tla/`），要有 Java。
 
 `src/platform/macos/memory.rs` 的單元測試（只在 macOS；同一個 process 裡把 handle 再 map 一次當成對方）：建的一端寫的、對方讀得到，而且是同一塊記憶體、不是當時的複本（handle 建好、map 好之後才寫的也看得到）；只能讀的 handle map 成可寫會失敗；對方寫的、建的一端讀得到；唯讀的 mapping 改不成可寫（對方的、建的一端對「對方寫」那一塊的、可寫的 region 唯讀 map 的）；有 mapping 在，放掉 handle 記憶體還在；map 超過長度失敗、少於可以；不是整頁的長度不建；kernel 拒絕的呼叫不給 handle；不是 region 的 port map 不了；handle drop 就是放掉 right、`into_raw` 之後不放；mapping drop 就是解除（map 又 drop 4 GiB，位址空間沒有長大；留著的時候有長大）；池子和表接在真的 region 上。這一組重複跑 300 次、整組單元測試平行跑 50 次都過。
+
+`src/platform/macos/message.rs` 的單元測試（同一個 process 裡自己送給自己）：幾種長度的 body 原樣到、送的人是這個 process；沒有訊息時逾時；right 照順序到、各自還是原來那一種（對它送的訊息從原來的 port 出來）；回答送到發問的人指定的 port；沒回答就丟掉時 kernel 會通知（送的人是 0）；送到死掉的 port 送不出去、帶的 right 被放掉；收到又丟掉的 right 被放掉、receive right 丟掉 port 就死了；超過緩衝區的 body、超過 16 個 right 不送，right 被放掉；比緩衝區長的訊息被拒絕並且從 port 上拿掉；佇列滿了、不等的送會被拒絕，讀走一則就有位置；排法不對的六種（太長的 body、out-of-line 的記憶體、out-of-line 的 port、send-once 的 right、太多 right、不是回一次的 reply）都被拒絕、帶來的被放掉，之後 port 照常。
+
+`src/platform/macos/rendezvous.rs` 的單元測試：不是問題的訊息（id 不對、沒有回答用的 port、有內容）不被回答、回答的 right 被放掉，登記的東西還在；真的問題拿得到，而且只有一次。
+
+`tests/it/rendezvous.rs`（只在 macOS；測試把自己再執行一次當成 child，用環境變數告訴它做什麼）：child 照順序拿到登記的 right，而且真的能用（它寫到測試的 port，kernel 說寫的人是 child 的 pid；搬給它的 receive right 收得到測試送的，它看到送的人是 host）；比登記早問的，登記時拿到；回答過的再問被拒絕；沒登記的 process 拿不到（同時有別的 child 登記著也一樣）；登記之後收回，child 拿不到、right 被放掉；同一個 process 的第二個問題擠掉第一個；沒有 server 的 host 是 `NoServer`；一個 process 只能有一個 server。這一組重複跑 30 次、整個整合測試 15 次都過。
 
 `tests/it/endpoint.rs`（兩個端點接在 `local` 上，一端是能建 region 的 host、一端是 child）：訊息照順序到各自的目的地；host 的大位元組走它自己建的 region、對方讀完再用、同時送兩筆就多一塊；到了上限就放在訊息裡；child 不建 region、拿到 host 給的之後才用；管道的位元組照順序、讀的一端不讀就只送容量那麼多、讀了才繼續；讀的一端走了來源就停、通道照常；傳輸沒有空間時什麼都不會永遠卡住；關掉之後兩端都結束、送不出去、放進 region 的還回來。亂送的 child（一條裸的通道，送什麼由測試決定）：不認得的目的地、解不出來的值、還沒寫過或還兩次的 region、提到沒給過它的 region、超過長度、自己附 handle、沒有 handle 的 `Granted`、開管道、對沒開過的管道回報取消送資料、回報超過、提到沒有的管道、不是 `Control` 的內容，host 都關掉通道、說出理由，之後不再交出任何訊息。亂送的 host 對 child 也一樣（超過容量的資料、重開的編號、長度不對或重複的 region）。兩條 thread 各跑一個 `run`，三條 thread 同時送訊息和大位元組、加一條 900 KiB 的管道，全部到齊之後 host 關掉，兩邊的理由各是 `Closed` 和 `PeerClosed`。
 

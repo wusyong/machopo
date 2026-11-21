@@ -23,8 +23,8 @@
 | 2d：data pipe 的跨 process 版；通道協定的 TLA+ 模型（TLA+、Verus、fuzz） | 完成 | 2026-11-21 |
 | 2e-1：端點（`ipc::endpoint`）：通道、`Control`、池子和表、管道的兩半、`codec` 組成上層用的介面，IO thread 的迴圈；同一個 process 裡的平台（整合測試、Miri、fuzz） | 完成 | 2026-11-21 |
 | 2e-2：macOS 的共用記憶體（memory entry 的建立、map、只能讀的 handle） | 完成 | 2026-11-21 |
-| 2e-3：macOS 的通道（Mach 訊息的 `Platform`、等 port set、dead-name 和 no-senders、audit token；測試自己啟動 child process） | 未開始 | |
-| 2e-4：rendezvous（Browser 的 server、child 的查詢；跨 process 的測試） | 未開始 | |
+| 2e-3：macOS 的 Mach 訊息和 right（最底下一層）、rendezvous（Browser 的 server、child 的查詢；測試自己啟動 child process）。順序和 2e-4 對調過（第 38 條） | 完成 | 2026-11-21 |
+| 2e-4：macOS 的通道（Mach 訊息的 `Platform`、等 port set、dead-name 和 no-senders、audit token；跨 process 的測試）；先量 Mach 訊息內嵌的大小上限，定大訊息切多大 | 未開始 | |
 | 2e-5：2e 的檢查和文件；Linux、Windows 在這台機器測不到的部分怎麼處理 | 未開始 | |
 | 2f：Linux 的平台層；量 socket 的緩衝區和大的資料的門檻 | 未開始 | |
 | 2g：Windows 的平台層 | 未開始 | |
@@ -255,4 +255,30 @@
 - **Miri 跑不到**：全部是系統呼叫。`test.py ipc miri` 只跑核心和端點。
 - **只靠審查的**：mapping 不被 child 繼承（`VM_INHERIT_NONE`），要 `fork` 才看得到，記在 `docs/test-gaps.md`。
 - **跑過的檢查**：`cargo test -p ipc`（單元 62 個、整合 51 個）；`cargo clippy -p ipc --all-targets -- -D warnings`、`cargo fmt --check`；`sanity.py` 的 7 項。核心和端點沒有動，fuzz、Miri、模型、Verus、TLA+ 沒有重跑。
+
+### 2e-3：macOS 的 Mach 訊息和 rendezvous（2026-11-21，macOS 26、Apple M4）
+
+- **決定**：「已決定的事項」第 38 條：2e-3 和 2e-4 對調（先 rendezvous、再通道），和 rendezvous、Mach 訊息這一層實作時定的細節。
+- **做了什麼**：
+  - `ipc::platform::macos::port`：`SendRight`（從 `memory` 搬過來）、`SendOnceRight`、`ReceiveRight`、`Right`。
+  - `ipc::platform::macos::message`：`Buffer`、`send`、`receive`、`Received`、`Sender`（audit token 的 pid）。
+  - `ipc::platform::macos::rendezvous`：`Server`（`start`、`register`、`forget`）、`fetch`、`name_for`。
+  - mach2 沒有宣告的自己宣告：`mach_port_request_notification`、libbsm 的 `audit_token_to_pid`。
+- **和原型不同的地方**：
+  - 原型的 server 收到沒登記的 pid 的問題時等 500 ms；一個沒登記的 process 一直問就能讓所有 child 每次多等半秒。現在問題留著、`register` 時回答，server 不等。
+  - 原型收到的 right 是裸的 port 編號、一律用 `mach_port_deallocate` 放；receive right 那樣放不掉。現在照 descriptor 寫的種類包成對應的型別。
+  - 原型收訊息時用 `MACH_RCV_LARGE` 把緩衝區長大；現在緩衝區固定，太長的由 kernel 毀掉（不讓對方決定這一端配置多少）。
+- **測試**：`message.rs` 的單元測試 11 個、`rendezvous.rs` 的 1 個（都在同一個 process 裡）；`tests/it/rendezvous.rs` 9 個，其中 6 個真的啟動 child（測試把自己再執行一次）。rendezvous 那一組重複跑 30 次、整個整合測試 15 次都過。
+- **寫的時候碰到的**：
+  - `Buffer::for_body(n)` 第一版沒有記 `n`：為 16 個 right 預留的空間被沒有 right 的訊息拿去放多的位元組，上限就不是說的那個數字。測試（17 個位元組送進 16 的緩衝區）抓到，改成明確記著。
+  - 同一個問題在 server 又出現一次：註解寫「問題沒有內容，長的會被接收拒絕」，實際上短的內容收得進來、照樣被回答。不是安全問題（回答的對象還是照 kernel 給的 pid），但說的和做的不一樣；補測試時看到，server 改成明確檢查內容是空的、沒有帶 right。
+  - 「登記之後收回」的測試第一版兩種結果都接受（child 可能在兩個呼叫之間問到），等於沒測；改成 child 先等 700 ms 才問。
+- **mutation test**（`mutants-2e3.toml`）24 個，全部抓到。第一次 23 個裡 2 個沒抓到：
+  - 「任何種類的 descriptor 都當成 port」：測的 out-of-line 記憶體剛好被另一個檢查擋掉。補了 out-of-line 的 port 陣列（它的那個位元組剛好是合法的 disposition）。
+  - 「server 對任何訊息都回答」：測試沒有對 server 送過不是問題的訊息。補了單元測試（就是它發現上面那個有內容的問題）。
+  - 跑完確認檔案都還原了。
+- **Miri 跑不到**：全是系統呼叫。
+- **只靠審查的**（`docs/test-gaps.md`）：等著的問題超過 64 個時拒絕最舊的（要 65 個 process）；`fetch` 比對回答的人的 pid（做不出別人送的回答）。
+- **跑過的檢查**：`cargo test -p ipc`（單元 74 個、整合 60 個）；`cargo clippy -p ipc --all-targets -- -D warnings`（三種 cfg）、`cargo fmt --check`；`sanity.py` 的 7 項。核心和端點沒有動，fuzz、Miri、模型、Verus、TLA+ 沒有重跑。
+- **留給 2e-4 的**：Mach 訊息內嵌的大小 kernel 有上限，一則訊息最大 128 MiB，大訊息要切成好幾則 Mach 訊息；切多大先量再定。佇列滿了之後怎麼知道又有空間（Chromium 用 `MACH_NOTIFY_SEND_POSSIBLE`）也在那一段。
 

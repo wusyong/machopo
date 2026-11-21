@@ -407,6 +407,12 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
 37. **共用記憶體只做用得到的兩種**（2026-11-21，第 2 階段的 2e-2，「共用記憶體」；改掉起草時的「三種 region」）：「建的一端可寫、交出去的只能讀」和「對方可寫」，就是端點向平台要的 `create(len, peer_writes)` 的兩個分支。Browser 自己對「對方可寫」的那一塊只 map 成唯讀。
     - **不做 Chromium 的 `WritableSharedMemoryRegion`**（只有一個擁有者、能轉成唯讀一次）：它是給「A 建好交給 B 寫，B 寫完凍結再交給 C」用的；這裡只有 Browser 建 region、renderer 不能送 handle（第 17 條），沒有這種轉手。平台層是工具驗不到、要逐行審的部分（第 20 條），沒有人呼叫的 FFI 是壞了最不容易發現的；三個平台各少一段轉換（Linux 重新開 fd、Windows 複製 handle）。之後需要時是加一個函式，不動現有的。
     - macOS 的實作（`ipc::platform::macos::memory`）：`mach_make_memory_entry_64` 加 `MAP_MEM_NAMED_CREATE` 建；交出去只能讀的那一種，是對 Browser 自己的 mapping 再建一個只有 `VM_PROT_READ` 的 entry（Chromium 的 `ConvertToReadOnly`），能寫的那個 right 不離開建立的函式。map 時最大的保護和現在的一樣，唯讀的 mapping 之後改不成可寫。長度不是整頁的不建（kernel 會進位，那就不是要的那一塊）。
+38. **macOS 上先做 rendezvous、再做通道**（2026-11-21，第 2 階段的 2e-3；改掉 2e 原本的順序）：child 繼承不了 Mach port，通道的跨 process 測試要先有 rendezvous 才啟動得了拿著 port 的 child。兩者共用的最底下一層（送和收一則帶 right 的 Mach 訊息、audit token、會自己放掉的 right）放在先做的這一段。
+    - **不選照原順序、通道先只在同一個 process 裡測**：通道 commit 的時候，對方整個 process 死掉、audit token 是另一個 process 的、right 真的搬到別的 task，這幾項都還沒驗證過。
+    - **不選啟動時換掉 child 的 bootstrap port 把 port 塞進去**：只給測試用的另一條路，而且 child 會查不到系統服務。
+    - 對照 Chromium：`MachPortRendezvous` 在 `base/`，`ChannelMac` 建在它上面。
+    - rendezvous 實作時定的（第 16 條的細節）：名字是 `org.machopo.MachPortRendezvousServer.<pid>`；比登記早到的問題留著、`register` 時當場回答，server 的 thread 不等任何人（原型是等 500 ms，那樣一個沒登記的 process 就能卡住所有 child）；等著的問題最多 64 個、同一個 process 的新問題擠掉舊的；回答過的 pid 再問直接拒絕；只回答 id 對、沒有內容、沒有 right、有回答用的 port 的訊息。
+    - Mach 訊息這一層定的：不送也不收 out-of-line 的記憶體（第 22 條）；排法不對的訊息整則用 `mach_msg_destroy` 毀掉，不先拿一半；一則最多 16 個 right（和框架的 `MAX_HANDLES` 一樣）。
 
 ## 待決定
 

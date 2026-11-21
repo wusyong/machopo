@@ -16,4 +16,6 @@ mod endpoint_fuzz;
 mod frame_fuzz;
 mod pipe_fuzz;
 mod region_fuzz;
+#[cfg(target_os = "macos")]
+mod rendezvous;
 mod time_ticks;

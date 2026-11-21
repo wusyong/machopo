@@ -1,0 +1,179 @@
+# Step 2e-3: macOS's Mach messages, rights and rendezvous
+# (`ipc::platform::macos::{message, port, rendezvous}`). A message's
+# rights are its receiver's or are let go, never lost; a message laid out
+# otherwise is refused whole; a child gets the rights registered for its
+# pid, once, and no other process's.
+test = ["sh", "-c", "timeout 240 cargo test -q -p ipc -- platform::macos rendezvous"]
+timeout = 900
+
+[[mutant]]
+name = "a body longer than the buffer is for is sent"
+file = "crates/ipc/src/platform/macos/message.rs"
+from = '''    if rights.len() > MAX_RIGHTS || body.len() > buffer.body {'''
+to = '''    if rights.len() > MAX_RIGHTS {'''
+
+[[mutant]]
+name = "more rights than a message holds are sent"
+file = "crates/ipc/src/platform/macos/message.rs"
+from = '''    if rights.len() > MAX_RIGHTS || body.len() > buffer.body {'''
+to = '''    if body.len() > buffer.body {'''
+
+[[mutant]]
+name = "a message not sent keeps its rights"
+file = "crates/ipc/src/platform/macos/message.rs"
+from = '''            // only copied (`To::Port`) is left as it was.
+            unsafe { mach_msg_destroy(header) };'''
+to = '''            // only copied (`To::Port`) is left as it was.
+            let _ = header;'''
+
+[[mutant]]
+name = "a full port is told as the kernel's refusal"
+file = "crates/ipc/src/platform/macos/message.rs"
+from = '''            Err(if failed == MACH_SEND_TIMED_OUT {'''
+to = '''            Err(if failed == MACH_MSG_SUCCESS {'''
+
+[[mutant]]
+name = "no right to answer goes with a question"
+file = "crates/ipc/src/platform/macos/message.rs"
+from = '''        Some(port) => (port.name(), MACH_MSG_TYPE_MAKE_SEND_ONCE),'''
+to = '''        Some(_) => (MACH_PORT_NULL, 0),'''
+
+[[mutant]]
+name = "a message refused keeps what it brought"
+file = "crates/ipc/src/platform/macos/message.rs"
+from = '''            // memory it brought is let go once here.
+            unsafe { mach_msg_destroy(header) };'''
+to = '''            // memory it brought is let go once here.
+            let _ = header;'''
+
+[[mutant]]
+name = "a receive right received is taken for a send right"
+file = "crates/ipc/src/platform/macos/message.rs"
+from = '''                if disposition == MACH_MSG_TYPE_MOVE_RECEIVE {'''
+to = '''                if disposition == MACH_MSG_TYPE_MOVE_SEND_ONCE {'''
+
+[[mutant]]
+name = "any reply right is taken for one to answer once"
+file = "crates/ipc/src/platform/macos/message.rs"
+from = '''    if reply != MACH_PORT_NULL && reply_disposition != MACH_MSG_TYPE_MOVE_SEND_ONCE {
+        return None;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "any number of rights is received"
+file = "crates/ipc/src/platform/macos/message.rs"
+from = '''        if usize::try_from(count).ok()? > MAX_RIGHTS {
+            return None;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a descriptor of any kind is taken for a port"
+file = "crates/ipc/src/platform/macos/message.rs"
+from = '''            if kind >> 24 != MACH_MSG_PORT_DESCRIPTOR || !sent_as_right {'''
+to = '''            if !sent_as_right {'''
+
+[[mutant]]
+name = "a right of any kind is taken for a send right"
+file = "crates/ipc/src/platform/macos/message.rs"
+from = '''            if kind >> 24 != MACH_MSG_PORT_DESCRIPTOR || !sent_as_right {'''
+to = '''            if kind >> 24 != MACH_MSG_PORT_DESCRIPTOR {'''
+
+[[mutant]]
+name = "a body may run past its message"
+file = "crates/ipc/src/platform/macos/message.rs"
+from = '''            if end > size_words.checked_mul(4)? {
+                return None;
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "the sender is read from the wrong words"
+file = "crates/ipc/src/platform/macos/message.rs"
+from = '''const AUDIT_TOKEN_AT: usize = 5;'''
+to = '''const AUDIT_TOKEN_AT: usize = 4;'''
+
+[[mutant]]
+name = "a send right dropped keeps its right"
+file = "crates/ipc/src/platform/macos/port.rs"
+from = '''impl Drop for SendRight {
+    fn drop(&mut self) {
+        // SAFETY: the name is a right this value owns, let go once.
+        unsafe { mach_port_deallocate(mach_task_self(), self.0) };'''
+to = '''impl Drop for SendRight {
+    fn drop(&mut self) {
+        // SAFETY: the name is a right this value owns, let go once.
+        let _ = unsafe { mach_task_self() };'''
+
+[[mutant]]
+name = "a right to answer dropped unused tells nobody"
+file = "crates/ipc/src/platform/macos/port.rs"
+from = '''impl Drop for SendOnceRight {
+    fn drop(&mut self) {
+        // SAFETY: the name is a right this value owns, let go once.
+        unsafe { mach_port_deallocate(mach_task_self(), self.0) };'''
+to = '''impl Drop for SendOnceRight {
+    fn drop(&mut self) {
+        // SAFETY: the name is a right this value owns, let go once.
+        let _ = unsafe { mach_task_self() };'''
+
+[[mutant]]
+name = "a receive right dropped leaves its port alive"
+file = "crates/ipc/src/platform/macos/port.rs"
+from = '''        unsafe { mach_port_mod_refs(mach_task_self(), self.0, MACH_PORT_RIGHT_RECEIVE, -1) };'''
+to = '''        let _ = unsafe { mach_task_self() };'''
+
+[[mutant]]
+name = "a child answered may ask again"
+file = "crates/ipc/src/platform/macos/rendezvous.rs"
+from = '''        if let Some(rights) = registry.registered.remove(&pid) {
+            registry.answered.insert(pid);'''
+to = '''        if let Some(rights) = registry.registered.remove(&pid) {'''
+
+[[mutant]]
+name = "a child is given what is registered for another"
+file = "crates/ipc/src/platform/macos/rendezvous.rs"
+from = '''        if let Some(rights) = registry.registered.remove(&pid) {
+            registry.answered.insert(pid);'''
+to = '''        let any = registry.registered.keys().next().copied().unwrap_or(pid);
+        if let Some(rights) = registry.registered.remove(&any) {
+            registry.answered.insert(pid);'''
+
+[[mutant]]
+name = "a question that came first isn't answered at the registration"
+file = "crates/ipc/src/platform/macos/rendezvous.rs"
+from = '''        let asked = registry.waiting.iter().position(|(asker, _)| *asker == pid);
+        match asked.and_then(|i| registry.waiting.remove(i)) {'''
+to = '''        let asked: Option<usize> = None;
+        match asked.and_then(|i| registry.waiting.remove(i)) {'''
+
+[[mutant]]
+name = "what is registered can't be taken back"
+file = "crates/ipc/src/platform/macos/rendezvous.rs"
+from = '''        lock(&self.registry).registered.remove(&pid.cast_signed());'''
+to = '''        let _ = pid;'''
+
+[[mutant]]
+name = "a process's second question waits beside its first"
+file = "crates/ipc/src/platform/macos/rendezvous.rs"
+from = '''                    .and_then(|i| registry.waiting.remove(i))'''
+to = '''                    .and_then(|_| None)'''
+
+[[mutant]]
+name = "a child answered is told to wait, not refused"
+file = "crates/ipc/src/platform/macos/rendezvous.rs"
+from = '''        } else if registry.answered.contains(&pid) {'''
+to = '''        } else if false {'''
+
+[[mutant]]
+name = "the server answers whatever it is sent"
+file = "crates/ipc/src/platform/macos/rendezvous.rs"
+from = '''        let (REQUEST, true, Some(reply)) = (request.id, empty, request.reply) else {'''
+to = '''        let (_, true, Some(reply)) = (request.id, empty, request.reply) else {'''
+
+[[mutant]]
+name = "a question with something in it is answered"
+file = "crates/ipc/src/platform/macos/rendezvous.rs"
+from = '''        let (REQUEST, true, Some(reply)) = (request.id, empty, request.reply) else {'''
+to = '''        let (REQUEST, _, Some(reply)) = (request.id, empty, request.reply) else {'''
