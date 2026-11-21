@@ -4,8 +4,9 @@
 //! memory, whatever platform mapped it. A [`Pool`] is the regions this end
 //! writes large data into, one piece of data to a region; a [`Table`] is
 //! the regions the peer writes into, read by number and checked. What says
-//! a region may be written again is a message ([`Control`]), so nothing in
-//! the shared memory itself is state both ends write.
+//! a region may be written again is a message
+//! ([`Control`](super::control::Control)), so nothing in the shared memory
+//! itself is state both ends write.
 //!
 //! The memory is never a `&[u8]`: the peer may be writing it. Bytes go in
 //! and come out through pointers, into memory of this end's own.
@@ -15,10 +16,6 @@ use std::sync::Arc;
 pub use super::fit::{MAX_REGION_LEN, MIN_REGION_LEN, class_len};
 use super::fit::{Slot, admits, best_fit};
 use super::frame::BadMessage;
-
-/// The destination of the core's own messages ([`Control`]): no layer
-/// above has one there.
-pub const CONTROL_DESTINATION: u32 = u32::MAX;
 
 /// A length of memory another process may see too.
 ///
@@ -297,88 +294,6 @@ impl<M: Memory> Table<M> {
     }
 }
 
-/// The core's own messages, at [`CONTROL_DESTINATION`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Control {
-    /// The regions the sender has read what was in: each may be written
-    /// again.
-    Released(Vec<u32>),
-    /// A region the receiver has from now on, its handle with the
-    /// message: `writable` for one the receiver writes into (its
-    /// [`Pool`]'s), otherwise one it reads (its [`Table`]'s).
-    Granted {
-        number: u32,
-        len: u32,
-        writable: bool,
-    },
-}
-
-const RELEASED: u8 = 0;
-const GRANTED: u8 = 1;
-
-impl Control {
-    /// The message's payload, after what `out` has.
-    pub fn encode(&self, out: &mut Vec<u8>) {
-        match self {
-            Self::Released(numbers) => {
-                out.push(RELEASED);
-                for number in numbers {
-                    out.extend_from_slice(&number.to_le_bytes());
-                }
-            }
-            Self::Granted {
-                number,
-                len,
-                writable,
-            } => {
-                out.push(GRANTED);
-                out.extend_from_slice(&number.to_le_bytes());
-                out.extend_from_slice(&len.to_le_bytes());
-                out.push(u8::from(*writable));
-            }
-        }
-    }
-
-    /// How many handles come with the message.
-    pub const fn handles(&self) -> usize {
-        match self {
-            Self::Released(_) => 0,
-            Self::Granted { .. } => 1,
-        }
-    }
-
-    /// A payload read back: anything [`Control::encode`] doesn't write is
-    /// a bad message.
-    pub fn decode(payload: &[u8]) -> Result<Self, BadMessage> {
-        let word = |bytes: &[u8]| {
-            bytes
-                .try_into()
-                .map(u32::from_le_bytes)
-                .map_err(|_| BadMessage::Rejected)
-        };
-        match payload.split_first() {
-            Some((&RELEASED, rest)) => match rest.as_chunks() {
-                (numbers, []) => Ok(Self::Released(
-                    numbers.iter().copied().map(u32::from_le_bytes).collect(),
-                )),
-                _ => Err(BadMessage::Rejected),
-            },
-            Some((&GRANTED, rest)) => match rest.split_at_checked(8) {
-                Some((words, &[writable @ (0 | 1)])) => {
-                    let (number, len) = words.split_at(4);
-                    Ok(Self::Granted {
-                        number: word(number)?,
-                        len: word(len)?,
-                        writable: writable == 1,
-                    })
-                }
-                _ => Err(BadMessage::Rejected),
-            },
-            _ => Err(BadMessage::Rejected),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -635,60 +550,5 @@ mod tests {
         assert_eq!(pool.put(&[4]), None);
         assert_eq!(pool.released(2), Ok(()));
         assert_eq!(pool.released(3), Ok(()));
-    }
-
-    #[test]
-    fn the_cores_own_messages_read_back() {
-        for control in [
-            Control::Released(vec![]),
-            Control::Released(vec![1, u32::MAX, 0x0102_0304]),
-            Control::Granted {
-                number: 7,
-                len: 1 << 16,
-                writable: true,
-            },
-            Control::Granted {
-                number: u32::MAX,
-                len: 1 << 30,
-                writable: false,
-            },
-        ] {
-            let mut payload = vec![];
-            control.encode(&mut payload);
-            assert_eq!(Control::decode(&payload), Ok(control.clone()));
-            assert_eq!(
-                control.handles(),
-                usize::from(matches!(control, Control::Granted { .. }))
-            );
-        }
-        let mut payload = vec![0xaa];
-        Control::Released(vec![0x0102_0304]).encode(&mut payload);
-        assert_eq!(
-            payload,
-            [0xaa, 0, 4, 3, 2, 1],
-            "after what was there, little-endian"
-        );
-    }
-
-    #[test]
-    fn a_control_message_nobody_writes_is_a_bad_message() {
-        let bad: [&[u8]; 9] = [
-            &[],
-            &[2],
-            &[0, 1],
-            &[0, 1, 2, 3, 4, 5],
-            &[1],
-            &[1, 0, 0, 0, 0, 0, 0, 0, 0],
-            &[1, 0, 0, 0, 0, 0, 0, 0, 0, 2],
-            &[1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0],
-            &[0xff, 0, 0, 0, 0],
-        ];
-        for payload in bad {
-            assert_eq!(
-                Control::decode(payload),
-                Err(BadMessage::Rejected),
-                "{payload:?}"
-            );
-        }
     }
 }

@@ -20,8 +20,8 @@
 | 2a：訊息的框架和對收到的位元組的檢查；同一個 process 裡的假通道；`sanity.py` 檢查核心沒有系統呼叫（單元測試、惡意的對端、fuzz、Miri） | 完成 | 2026-11-21 |
 | 2b：送出的佇列、目的地的分派、斷線只報告一次（loom、shuttle；同步呼叫等回答的位置留在 renderer，第 27 條） | 完成 | 2026-11-21 |
 | 2c：region 的表和範圍的檢查、`BigBuffer` 帶 region 的序列化、留著重複用的池子（Verus、fuzz、Miri） | 完成 | 2026-11-21 |
-| 2d：data pipe 的跨 process 版；通道協定的 TLA+ 模型（TLA+、loom、Verus） | 未開始 | |
-| 2e：macOS 的平台層（Mach 訊息、rendezvous、memory entry；跨 process 的測試）；把 `Control`（`Released`、`Granted`）接進通道收的一側 | 未開始 | |
+| 2d：data pipe 的跨 process 版；通道協定的 TLA+ 模型（TLA+、Verus、fuzz） | 完成 | 2026-11-21 |
+| 2e：macOS 的平台層（Mach 訊息、rendezvous、memory entry；跨 process 的測試）；把 `Control`（region 的兩則、管道的五則）接進通道收的一側，管道的兩半接上 `data_pipe` | 未開始 | |
 | 2f：Linux 的平台層；量 socket 的緩衝區和大的資料的門檻 | 未開始 | |
 | 2g：Windows 的平台層 | 未開始 | |
 | 2h：第 2 階段的檢查、`soundness.md`、`test.py` 的指令、文件；把 `test.py ipc` 的每一項排進每週的 CI（2a 起在本機跑） | 未開始 | |
@@ -185,3 +185,29 @@
   - `Control` 還沒有接進 `core::channel` 的收的一側，`codec` 也還沒有人呼叫：要等平台那一層能把 handle 變成 `Memory`（2e，記在上面的表）。
   - 池子什麼時候多要一塊、閒置的什麼時候放掉、每個 renderer 的上限是多少：Browser 接上時定（第 3 階段）。
   - `test.py ipc` 現在有四項（`fuzz`、`miri`、`models`、`verus`），都還沒有排進 CI（2h）。
+
+### 2d：過通道的 data pipe 和 TLA+ 的模型（2026-11-21，macOS、Apple M4）
+
+- **決定**：「已決定的事項」第 32 條（管道的訊息是 `ipc` 自己的；編號只變大）、第 33 條（讀的一端累積到容量的一半才回報）、第 34 條（三個小模型）。「導覽的 body 的管道」的表和「測試」的 TLA+ 那一列跟著改。
+- **做了什麼**：
+  - `ipc::core::pipe`：`Outgoing`（寫的一端：`open`、`room`、`sent`、`end`、`peer_read`、`peer_cancelled`）、`Incoming`（讀的一端：`opened`、`get`、`ended`、`cancel`）、`ReadReport`、`MAX_PIPE_CHUNK`（64 KiB）。
+  - `ipc::core::control`：`Control` 從 `region.rs` 搬出來，多五則管道的訊息；`PipeData` 的位元組解出來不複製。`BadMessage` 多 `UnknownPipe`、`PipeReopened`、`PipeOverRead`、`PipeOverrun`。
+  - `ipc::core::credit`：`room`、`sent`、`read`、`threshold`、`report`，寫在 `verus!` 裡。
+  - `ipc::data_pipe`：`Producer::try_write`（整段寫或不寫、不等）。
+  - `crates/ipc/tla/`：`Channel.tla`、`Regions.tla`、`Pipe.tla` 和 `check.py`；`test.py ipc tla`（新的）。
+- **表上寫的 loom 沒有用到**：管道的兩半各自只在一條 thread 上（寫端的額度在 IO thread；讀端「還沒回報多少」在讀的那條 thread），兩條 thread 共用的只有 `data_pipe` 自己的那把鎖，它已經有測試。表的那一列改成實際用的（TLA+、Verus、fuzz）。
+- **Verus**：19 個驗證通過（多的 5 個是額度的）。證明的是：送了之後的量不超過容量、超過的被拒絕；回報的比送的多被拒絕；門檻至少 1、不超過容量；每個讀到的位元組剛好被回報一次。
+- **TLA+**（TLC 1.7.4，`check.py` 第一次跑時下載、核對 SHA-256）：67 項檢查，約 48 秒，全部符合預期。
+  - 成立：`Channel`（120 個狀態）、`Regions`（2 塊 region 1402 個、3 塊 46518 個）、`Pipe`（容量 1、2、3、4、6：照規矩的讀端 122 到 7244 個，亂回報的讀端 1535 到 415 萬個）。
+  - 拿掉一部分要找到反例：`Channel` 6 種、`Regions` 6 種、`Pipe` 7 種，都找到列出來的那一個。
+  - 三個模型第一次跑就全部成立，沒有修過；證明它們不是空轉的是那 19 種拿掉的部分。
+  - `Pipe` 的容量 8 試過（亂回報的讀端 1.4 億個狀態，6 分 37 秒，成立），不放進每次都跑的清單。
+  - 模型和程式的對應是手寫的；`pipe_fuzz.rs` 用同樣的步驟跑真的程式。`Regions` 裡的 peer 都照規矩，亂送的 peer 是 fuzz 和單元測試的事。
+- **fuzz**：新的 target `pipe`（`tests/it/pipe_fuzz.rs`：寫端、讀端、真的 `data_pipe`、中間編成位元組的訊息）。三個 target 各 2 分鐘：`frame` 1594 萬次、`pipe` 511 萬次、`region` 91 萬次，沒有發現。
+- **Miri**：核心的單元測試 49 個通過、1 個跳過，約 9 分鐘。
+- **mutation test**（`mutants-2d.toml`）40 個，全部抓到。第一次跑有 1 個沒抓到：「結束一條管道連帶結束編號比它小的」，測試只結束過編號最小的那一條；補了結束中間那一條的檢查。跑完確認檔案都還原了。
+- **跑過的檢查**：`cargo test -p ipc`（單元 50 個、整合 37 個）；`test.py ipc verus`、`ipc tla`、`ipc fuzz --minutes 2`、`ipc miri`、`ipc models`；`cargo clippy -p ipc --all-targets -- -D warnings`（一般的、`ipc_loom` 和 `ipc_shuttle` 的各一次）、`cargo fmt --check`；`sanity.py` 的 7 項。
+- **留給後面的**：
+  - 管道的兩半接到通道和 `data_pipe` 的那一段還沒有寫（Browser 的 IO thread 從自己那一側讀出來送、renderer 的 IO thread `try_write` 進它那一側、讀的那條 thread 回報）：要等 `Control` 接進通道（2e，記在上面的表）。`pipe_fuzz.rs` 裡有完整的一份。
+  - `test.py ipc` 現在有五項（`fuzz`、`miri`、`models`、`tla`、`verus`），都還沒有排進 CI（2h）。
+

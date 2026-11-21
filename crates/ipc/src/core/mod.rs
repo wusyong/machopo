@@ -6,8 +6,11 @@
 //! Miri and a fuzzer.
 
 pub mod channel;
+pub mod control;
+pub mod credit;
 pub mod fit;
 pub mod frame;
+pub mod pipe;
 pub mod region;
 mod sync;
 

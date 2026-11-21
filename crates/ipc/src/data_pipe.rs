@@ -7,11 +7,11 @@
 //! `SimpleWatcher`), so a thread with an event loop of its own (a
 //! renderer's main thread) posts itself a task for it.
 //!
-//! Both ends are in one process for now: what is written is kept as the
-//! `Bytes` it came in, and read out without a copy. Once the renderer is a
-//! process the pipe becomes a ring in shared memory, with the same limit
-//! (a ring is only ever written up to full), and reading becomes two-phase
-//! (a span of the ring, then how much of it was used).
+//! Both ends are in one process: what is written is kept as the `Bytes`
+//! it came in, and read out without a copy. Between two processes there
+//! is one of these in each, and the bytes go from the one to the other as
+//! messages on the channel, with the same limit (`core::pipe`): the
+//! receiving side writes with [`Producer::try_write`].
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -53,6 +53,15 @@ impl fmt::Display for Closed {
 }
 
 impl std::error::Error for Closed {}
+
+/// Why [`Producer::try_write`] wrote nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TryWriteError {
+    /// There isn't room for all of it.
+    Full,
+    /// The consumer is gone.
+    Closed,
+}
 
 /// What [`Consumer::read`] found.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -171,6 +180,34 @@ impl Producer {
                 }
                 None => self.shared.writable.notified().await,
             }
+        }
+        Ok(())
+    }
+}
+
+impl Producer {
+    /// Writes all of `data` now, or none of it: never waits. For a writer
+    /// that is told how much room there is before it is given the bytes
+    /// (the receiving end of a pipe between processes, whose sender keeps
+    /// to the capacity): [`TryWriteError::Full`] is then the sender's
+    /// mistake.
+    pub fn try_write(&mut self, data: Bytes) -> Result<(), TryWriteError> {
+        let wake = {
+            let mut state = self.shared.lock();
+            if state.consumer_closed {
+                return Err(TryWriteError::Closed);
+            }
+            if data.is_empty() {
+                return Ok(());
+            }
+            if data.len() > state.capacity.saturating_sub(state.unread) {
+                return Err(TryWriteError::Full);
+            }
+            state.push(data);
+            state.wake_consumer()
+        };
+        if let Some(on_readable) = wake {
+            on_readable();
         }
         Ok(())
     }

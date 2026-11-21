@@ -1560,7 +1560,7 @@ def restore_originals() -> list[str]:
 
 IPC_FUZZ = ROOT / "crates" / "ipc" / "fuzz"
 # The fuzzers there are (`[[bin]]`s of its Cargo.toml).
-IPC_FUZZ_TARGETS = ["frame", "region"]
+IPC_FUZZ_TARGETS = ["frame", "pipe", "region"]
 # The Verus release `ipc`'s proofs are checked with (the one elise's are).
 IPC_VERUS_VERSION = "0.2026.10.18.7d82994"
 
@@ -1597,8 +1597,9 @@ def cmd_ipc(args: argparse.Namespace) -> int:
     own (target/ipc-loom, target/ipc-shuttle): a change of RUSTFLAGS
     rebuilds every dependency. Release builds, for speed.
 
-    `verus`: the proofs of the arithmetic its regions' pool rests on
-    (`crates/ipc/src/core/fit.rs`; `cargo verus verify -p ipc`). Verus
+    `verus`: the proofs of the arithmetic its regions' pool and its pipes'
+    credit rest on (`crates/ipc/src/core/fit.rs`, `credit.rs`; `cargo verus
+    verify -p ipc`). Verus
     builds the whole crate and proves what is inside `verus!`, which a
     plain build compiles with its specs and proofs erased. Needs Verus
     IPC_VERUS_VERSION (this script's; its `vstd` is the one the workspace's
@@ -1607,7 +1608,17 @@ def cmd_ipc(args: argparse.Namespace) -> int:
     github.com/verus-lang/verus, and `rustup install` of the toolchain its
     `verus --version` names.
 
+    `tla`: the TLA+ models of its protocols (`crates/ipc/tla/`: one end of
+    a channel, the regions, a data pipe), checked with TLC as they are and
+    with each part taken out (`crates/ipc/tla/check.py`, whose `-h` says
+    where TLC and Java come from: it downloads TLC's jar once, pinned, into
+    target/tla/).
+
     Non-zero on a failure."""
+    if args.what == "tla":
+        command = [sys.executable, str(ROOT / "crates" / "ipc" / "tla" / "check.py")]
+        print(f"--- {' '.join(command)}", flush=True)
+        return subprocess.run(command, cwd=ROOT).returncode
     if args.what == "verus":
         home = os.environ.get("VERUS_DIR")
         if home is None:
@@ -1978,8 +1989,8 @@ def main() -> int:
     cdp = command("cdp", cmd_cdp, "machopo's answers to DevTools' domains against Chrome's")
     cdp.add_argument("cases", nargs="*", metavar="CASE", help="run only these cases (default: all)")
 
-    ipc = command("ipc", cmd_ipc, "the channels' core: its fuzzers, its tests under Miri, its threads under loom and shuttle, its proofs")
-    ipc.add_argument("what", choices=["fuzz", "miri", "models", "verus"], help="which check")
+    ipc = command("ipc", cmd_ipc, "the channels' core: its fuzzers, its tests under Miri, its threads under loom and shuttle, its proofs and models")
+    ipc.add_argument("what", choices=["fuzz", "miri", "models", "tla", "verus"], help="which check")
     ipc.add_argument(
         "--minutes", type=float, default=5, metavar="M", help="fuzz: how long each fuzzer runs (default 5)"
     )

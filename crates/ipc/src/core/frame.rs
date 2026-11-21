@@ -55,6 +55,14 @@ pub enum BadMessage {
     OutsideRegion { number: u32, len: u32 },
     /// A region given back that nothing was sent in.
     RegionNotOut { number: u32 },
+    /// A pipe this peer was never told of, or never opened.
+    UnknownPipe { pipe: u32 },
+    /// A pipe opened with a number not past every one before.
+    PipeReopened { pipe: u32 },
+    /// More of a pipe's bytes said to be read than were sent.
+    PipeOverRead { pipe: u32 },
+    /// More of a pipe's bytes sent than its reader has room for.
+    PipeOverrun { pipe: u32 },
 }
 
 impl fmt::Display for BadMessage {
@@ -81,6 +89,14 @@ impl fmt::Display for BadMessage {
             }
             Self::RegionNotOut { number } => {
                 write!(f, "region {number} given back with nothing sent in it")
+            }
+            Self::UnknownPipe { pipe } => write!(f, "pipe {pipe}, which was never opened"),
+            Self::PipeReopened { pipe } => {
+                write!(f, "pipe {pipe} opened after one numbered as high")
+            }
+            Self::PipeOverRead { pipe } => write!(f, "more of pipe {pipe} read than was sent"),
+            Self::PipeOverrun { pipe } => {
+                write!(f, "more of pipe {pipe} sent than there is room for")
             }
         }
     }

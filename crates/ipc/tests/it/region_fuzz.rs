@@ -11,9 +11,10 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use ipc::codec::{self, NoRegions};
+use ipc::core::control::Control;
 use ipc::core::frame::BadMessage;
 use ipc::core::region::{
-    AddError, Control, HeapMemory, MAX_REGION_LEN, MIN_REGION_LEN, Pool, Table, class_len,
+    AddError, HeapMemory, MAX_REGION_LEN, MIN_REGION_LEN, Pool, Table, class_len,
 };
 use serde::{Deserialize, Serialize};
 

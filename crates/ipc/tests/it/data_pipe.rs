@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::task::{Context, Poll, Wake, Waker};
 
 use bytes::Bytes;
-use ipc::data_pipe::{self, Closed, Read};
+use ipc::data_pipe::{self, Closed, Read, TryWriteError};
 
 fn poll<F: Future>(future: Pin<&mut F>) -> Poll<F::Output> {
     future.poll(&mut Context::from_waker(Waker::noop()))
@@ -260,4 +260,77 @@ fn a_waiting_write_is_woken_when_the_consumer_goes() {
     drop(consumer);
     assert!(woken.0.load(Ordering::SeqCst));
     assert_eq!(poll(write.as_mut()), Poll::Ready(Err(Closed)));
+}
+
+#[test]
+fn a_write_that_doesnt_wait_takes_all_or_nothing() {
+    let (mut producer, mut consumer) = data_pipe::create(8);
+    assert_eq!(producer.try_write(Bytes::from_static(b"abcde")), Ok(()));
+    assert_eq!(
+        producer.try_write(Bytes::from_static(b"fghi")),
+        Err(TryWriteError::Full),
+        "one more than the room"
+    );
+    assert_eq!(
+        producer.try_write(Bytes::from_static(b"fgh")),
+        Ok(()),
+        "exactly the room"
+    );
+    assert_eq!(
+        producer.try_write(Bytes::from_static(b"i")),
+        Err(TryWriteError::Full)
+    );
+    assert_eq!(
+        producer.try_write(Bytes::new()),
+        Ok(()),
+        "nothing always fits"
+    );
+    // Nothing of what was refused is there.
+    assert_eq!(data(consumer.read(64)), b"abcde");
+    assert_eq!(data(consumer.read(64)), b"fgh");
+    assert_eq!(consumer.read(64), Read::Empty);
+    // What was read is room again.
+    assert_eq!(producer.try_write(Bytes::from_static(b"12345678")), Ok(()));
+    drop(consumer);
+    assert_eq!(
+        producer.try_write(Bytes::from_static(b"x")),
+        Err(TryWriteError::Closed)
+    );
+    assert_eq!(producer.try_write(Bytes::new()), Err(TryWriteError::Closed));
+}
+
+#[test]
+fn a_write_that_doesnt_wait_tells_the_watcher() {
+    let (mut producer, mut consumer) = data_pipe::create(8);
+    let (calls, watcher) = counter();
+    consumer.watch(watcher);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(producer.try_write(Bytes::new()), Ok(()));
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "nothing written, nothing to read"
+    );
+    assert_eq!(producer.try_write(Bytes::from_static(b"abc")), Ok(()));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(producer.try_write(Bytes::from_static(b"de")), Ok(()));
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "told once until it finds the pipe empty"
+    );
+    assert_eq!(data(consumer.read(64)), b"abc");
+    assert_eq!(data(consumer.read(64)), b"de");
+    assert_eq!(consumer.read(64), Read::Empty);
+    assert_eq!(
+        producer.try_write(Bytes::from_static(b"123456789")),
+        Err(TryWriteError::Full)
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "a refused write tells nobody"
+    );
+    assert_eq!(producer.try_write(Bytes::from_static(b"f")), Ok(()));
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
 }

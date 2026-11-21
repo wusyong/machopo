@@ -1,0 +1,314 @@
+# Step 2d: a data pipe across a channel (`ipc::core::pipe`, its credit in
+# `ipc::core::credit`, its messages in `ipc::core::control`) and the write
+# that doesn't wait (`ipc::data_pipe`). A writer never sends past its
+# pipe's capacity, a reader reports each half of it, and a message for a
+# pipe that is over is told from one for a pipe that never was.
+test = ["sh", "-c", "cargo test -q -p ipc"]
+timeout = 900
+
+[[mutant]]
+name = "room is the whole capacity"
+file = "crates/ipc/src/core/credit.rs"
+from = '''            capacity - unread
+        }'''
+to = '''            capacity
+        }'''
+
+[[mutant]]
+name = "a send past the room is counted"
+file = "crates/ipc/src/core/credit.rs"
+from = '''    if unread <= capacity && len <= room(capacity, unread) {'''
+to = '''    if unread <= capacity {'''
+
+[[mutant]]
+name = "a send of exactly the room is refused"
+file = "crates/ipc/src/core/credit.rs"
+from = '''    if unread <= capacity && len <= room(capacity, unread) {'''
+to = '''    if unread <= capacity && len < room(capacity, unread) {'''
+
+[[mutant]]
+name = "a report of more than was sent is taken"
+file = "crates/ipc/src/core/credit.rs"
+from = '''    if count <= unread {'''
+to = '''    if count <= unread.saturating_add(1) {'''
+
+[[mutant]]
+name = "a report of all that was sent is refused"
+file = "crates/ipc/src/core/credit.rs"
+from = '''    if count <= unread {'''
+to = '''    if count < unread {'''
+
+[[mutant]]
+name = "a report gives no room"
+file = "crates/ipc/src/core/credit.rs"
+from = '''            Some(unread - count)'''
+to = '''            Some(unread)'''
+
+[[mutant]]
+name = "the reader reports only a whole capacity"
+file = "crates/ipc/src/core/credit.rs"
+from = '''        capacity / 2
+    } else {'''
+to = '''        capacity
+    } else {'''
+
+[[mutant]]
+name = "the reader waits for more than the capacity"
+file = "crates/ipc/src/core/credit.rs"
+from = '''        capacity / 2
+    } else {'''
+to = '''        capacity.saturating_add(1)
+    } else {'''
+
+[[mutant]]
+name = "the reader reports one byte late"
+file = "crates/ipc/src/core/credit.rs"
+from = '''        Some(total) => if total >= threshold {'''
+to = '''        Some(total) => if total > threshold {'''
+
+[[mutant]]
+name = "what was reported is reported again"
+file = "crates/ipc/src/core/credit.rs"
+from = '''            (0, Some(total))'''
+to = '''            (total, Some(total))'''
+
+[[mutant]]
+name = "what wasn't reported is forgotten"
+file = "crates/ipc/src/core/credit.rs"
+from = '''            (total, None)'''
+to = '''            (0, None)'''
+
+[[mutant]]
+name = "a pipe of no capacity holds nothing"
+file = "crates/ipc/src/core/pipe.rs"
+from = '''            capacity: u64::from(capacity.max(1)),
+            unread: 0,'''
+to = '''            capacity: u64::from(capacity),
+            unread: 0,'''
+
+[[mutant]]
+name = "a message holds more than a chunk"
+file = "crates/ipc/src/core/pipe.rs"
+from = '''map_or(MAX_PIPE_CHUNK, |room| room.min(MAX_PIPE_CHUNK))'''
+to = '''map_or(MAX_PIPE_CHUNK, |room| room)'''
+
+[[mutant]]
+name = "what was sent isn't counted"
+file = "crates/ipc/src/core/pipe.rs"
+from = '''            Some(unread) => {
+                window.unread = unread;
+                true
+            }'''
+to = '''            Some(_) => true,'''
+
+[[mutant]]
+name = "a pipe ended stays open"
+file = "crates/ipc/src/core/pipe.rs"
+from = '''        self.open.retain(|(number, _)| *number != pipe);
+        self.open.len() != before'''
+to = '''        self.open.len() != before'''
+
+[[mutant]]
+name = "ending one pipe ends the others"
+file = "crates/ipc/src/core/pipe.rs"
+from = '''        self.open.retain(|(number, _)| *number != pipe);
+        self.open.len() != before'''
+to = '''        self.open.retain(|(number, _)| *number > pipe);
+        self.open.len() != before'''
+
+[[mutant]]
+name = "a report for a pipe never opened is let go"
+file = "crates/ipc/src/core/pipe.rs"
+from = '''        self.known(pipe)?;
+        let Some(window) = self.window(pipe) else {'''
+to = '''        let Some(window) = self.window(pipe) else {'''
+
+[[mutant]]
+name = "a report for a pipe that is over is a bad message"
+file = "crates/ipc/src/core/pipe.rs"
+from = '''        let Some(window) = self.window(pipe) else {
+            return Ok(());
+        };
+        match credit::read'''
+to = '''        let Some(window) = self.window(pipe) else {
+            return Err(BadMessage::UnknownPipe { pipe });
+        };
+        match credit::read'''
+
+[[mutant]]
+name = "a report of too much is let go"
+file = "crates/ipc/src/core/pipe.rs"
+from = '''            None => Err(BadMessage::PipeOverRead { pipe }),'''
+to = '''            None => Ok(()),'''
+
+[[mutant]]
+name = "a report's room isn't given"
+file = "crates/ipc/src/core/pipe.rs"
+from = '''            Some(unread) => {
+                window.unread = unread;
+                Ok(())
+            }'''
+to = '''            Some(_) => Ok(()),'''
+
+[[mutant]]
+name = "a cancel for a pipe never opened is let go"
+file = "crates/ipc/src/core/pipe.rs"
+from = '''        self.known(pipe)?;
+        Ok(self.end(pipe))'''
+to = '''        Ok(self.end(pipe))'''
+
+[[mutant]]
+name = "a cancel leaves the pipe open"
+file = "crates/ipc/src/core/pipe.rs"
+from = '''        self.known(pipe)?;
+        Ok(self.end(pipe))'''
+to = '''        self.known(pipe)?;
+        Ok(self.window(pipe).is_some())'''
+
+[[mutant]]
+name = "the number after the highest is known"
+file = "crates/ipc/src/core/pipe.rs"
+from = '''        if pipe < self.next {
+            Ok(())'''
+to = '''        if pipe <= self.next {
+            Ok(())'''
+
+[[mutant]]
+name = "the reader's threshold is the capacity"
+file = "crates/ipc/src/core/pipe.rs"
+from = '''            threshold: credit::threshold(u64::from(capacity.max(1))),'''
+to = '''            threshold: u64::from(capacity.max(1)),'''
+
+[[mutant]]
+name = "the reader forgets what it hasn't reported"
+file = "crates/ipc/src/core/pipe.rs"
+from = '''        self.unreported = unreported;
+        report'''
+to = '''        let _ = unreported;
+        report'''
+
+[[mutant]]
+name = "a pipe's number is opened again"
+file = "crates/ipc/src/core/pipe.rs"
+from = '''        if pipe < self.next {
+            return Err(BadMessage::PipeReopened { pipe });
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a number under the highest opens a pipe if none has it"
+file = "crates/ipc/src/core/pipe.rs"
+from = '''        if pipe < self.next {
+            return Err(BadMessage::PipeReopened { pipe });
+        }'''
+to = '''        if self.open.iter().any(|(number, _)| *number == pipe) {
+            return Err(BadMessage::PipeReopened { pipe });
+        }'''
+
+[[mutant]]
+name = "bytes for a pipe never opened are let go"
+file = "crates/ipc/src/core/pipe.rs"
+from = '''        if pipe >= self.next {
+            return Err(BadMessage::UnknownPipe { pipe });
+        }
+        Ok(self
+            .open'''
+to = '''        Ok(self
+            .open'''
+
+[[mutant]]
+name = "the end of a pipe never opened is let go"
+file = "crates/ipc/src/core/pipe.rs"
+from = '''        if pipe >= self.next {
+            return Err(BadMessage::UnknownPipe { pipe });
+        }
+        Ok(self.cancel(pipe))'''
+to = '''        Ok(self.cancel(pipe))'''
+
+[[mutant]]
+name = "a cancelled pipe is still there"
+file = "crates/ipc/src/core/pipe.rs"
+from = '''        Some(self.open.swap_remove(i).1)'''
+to = '''        let _ = i;
+        None'''
+
+[[mutant]]
+name = "a write that doesn't wait takes part of what doesn't fit"
+file = "crates/ipc/src/data_pipe.rs"
+from = '''            if data.len() > state.capacity.saturating_sub(state.unread) {
+                return Err(TryWriteError::Full);
+            }'''
+to = '''            let room = state.capacity.saturating_sub(state.unread);
+            let data = if data.len() > room { data.slice(..room) } else { data };'''
+
+[[mutant]]
+name = "a write of exactly the room is refused"
+file = "crates/ipc/src/data_pipe.rs"
+from = '''            if data.len() > state.capacity.saturating_sub(state.unread) {'''
+to = '''            if data.len() >= state.capacity.saturating_sub(state.unread) {'''
+
+[[mutant]]
+name = "a write that doesn't wait ignores the capacity"
+file = "crates/ipc/src/data_pipe.rs"
+from = '''            if data.len() > state.capacity.saturating_sub(state.unread) {'''
+to = '''            if data.len() > state.capacity {'''
+
+[[mutant]]
+name = "a write to a pipe nobody reads is taken"
+file = "crates/ipc/src/data_pipe.rs"
+from = '''            if state.consumer_closed {
+                return Err(TryWriteError::Closed);
+            }
+            if data.is_empty() {'''
+to = '''            if data.is_empty() {'''
+
+[[mutant]]
+name = "an empty write wakes the reader"
+file = "crates/ipc/src/data_pipe.rs"
+from = '''            if data.is_empty() {
+                return Ok(());
+            }
+            if data.len() > state'''
+to = '''            if data.len() > state'''
+
+[[mutant]]
+name = "a write that doesn't wait tells nobody"
+file = "crates/ipc/src/data_pipe.rs"
+from = '''            state.push(data);
+            state.wake_consumer()
+        };
+        if let Some(on_readable) = wake {
+            on_readable();
+        }
+        Ok(())'''
+to = '''            state.push(data);
+            state.wake_consumer()
+        };
+        drop(wake);
+        Ok(())'''
+
+[[mutant]]
+name = "a pipe's bytes lose their first"
+file = "crates/ipc/src/core/control.rs"
+from = '''            (PIPE_DATA, bytes) => Ok(Self::PipeData { pipe: first, bytes }),'''
+to = '''            (PIPE_DATA, bytes) => Ok(Self::PipeData { pipe: first, bytes: bytes.get(1..).unwrap_or(bytes) }),'''
+
+[[mutant]]
+name = "an end with bytes after it reads as an end"
+file = "crates/ipc/src/core/control.rs"
+from = '''            (PIPE_ENDED, []) => Ok'''
+to = '''            (PIPE_ENDED, _) => Ok'''
+
+[[mutant]]
+name = "a cancel reads as an end"
+file = "crates/ipc/src/core/control.rs"
+from = '''const PIPE_CANCELLED: u8 = 6;'''
+to = '''const PIPE_CANCELLED: u8 = 5;'''
+
+[[mutant]]
+name = "an opening comes with a handle"
+file = "crates/ipc/src/core/control.rs"
+from = '''            Self::Granted { .. } => 1,
+            _ => 0,'''
+to = '''            Self::Granted { .. } | Self::PipeOpened { .. } => 1,
+            _ => 0,'''

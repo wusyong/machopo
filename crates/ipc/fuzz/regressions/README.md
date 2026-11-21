@@ -4,3 +4,4 @@ Each `.bin` is an input a fuzzer failed on, kept with the fix: `cargo test -p ip
 
 - Here: the framing's (`tests/it/frame_fuzz.rs`).
 - `region/`: the regions' (`tests/it/region_fuzz.rs`).
+- `pipe/`: the pipes' (`tests/it/pipe_fuzz.rs`).

@@ -40,6 +40,7 @@ match consumer.read(64 * 1024) {
 - **寫是 async、讀不等待**：寫的一側在 network service 的 tokio 上，背壓就是 `write` 在那裡等；讀的一側是有自己的 event loop 的 thread（renderer 的 main thread），不放 executor：`read` 回現在有的，`watch` 給的 callback 在管道變成可讀時被呼叫一次（Mojo 的 `SimpleWatcher`），由它排一個 task 來讀。
 - **`watch` 什麼時候呼叫**：開始 watch 時已經可讀（有資料、或 producer 已經不在）就當場呼叫；之後每次 `read` 回 `Empty`，下一次寫或 producer 的結束呼叫一次（在 producer 的 thread 上）。讀到 `Empty` 或 `Done` 才要求下一次通知，讀了自己那一份就停的 task 要自己排下一個。callback 在放開鎖之後呼叫。
 - **兩端的結束**：`Producer` drop 是結尾，consumer 讀完剩下的才是 `Done`；`Consumer` drop 時沒讀的丟掉，producer 的 `write`（等著的也是）回 `Closed`。
+- **不等的寫**：`Producer::try_write` 整段寫進去或完全不寫（`Full`、`Closed`），不等。給「事先被告知有多少空間」的寫的一端用：跨 process 的管道收的那一側，送的一端守著容量，所以 `Full` 就是對方的錯。
 - **單一 process 的實作**：一把 `Mutex` 裡的 `Bytes` 佇列，加 tokio 的 `Notify` 喚醒等空間的 producer（兩個 thread 真的共用，所以 `Arc`）；寫進來的片段原樣讀出、不複製。拆 process 時管道本身不變、兩個 process 各一條：Browser 那一側的讀出來、一段一段經過控制通道送過去，寫進 renderer 那一側的；renderer 回報讀了多少，Browser 送出而還沒被讀的不超過容量。
 
 ## `core`
@@ -135,9 +136,58 @@ let read = table.take_read();               // 讀過的，要告訴對方的
 - **收的一端只檢查兩件事**：編號在不在表裡（`UnknownRegion`）、長度有沒有超過那一塊（`OutsideRegion`）。內容一律先複製到自己的記憶體才用：對方還能寫那一塊。
 - **map 出來的記憶體不變成 `&[u8]`**：進出都經過指標複製。
 - **總量有上限**：`Pool::new(limit)`，超過的 `add` 被拒絕。只有空的那一塊拿得走（`remove`）。
-- **`Control`**：核心自己的訊息，目的地是 `CONTROL_DESTINATION`。`Released`（這些編號讀完了，一批一則）和 `Granted`（一塊新的 region，handle 跟著這則訊息；給對方寫的或給對方讀的）。共用記憶體裡沒有雙方都寫的狀態，「可以再用了」只經過這則訊息。
+- **交出去和還回來都是訊息**（`core::control` 的 `Granted` 和 `Released`）：共用記憶體裡沒有雙方都寫的狀態，「可以再用了」只經過訊息。
 - `HeapMemory`：一般配置的記憶體當成 region，給同一個 process 裡的兩端和測試用（Miri 跑得起來）。
-- `Control` 還沒有接進 `core::channel` 的收的一側：要等平台那一層能把 handle 變成 `Memory`。
+
+### `core::control`：核心自己的訊息
+
+目的地是 `CONTROL_DESTINATION`（上層沒有東西在那裡）。位元組是手排的：一個位元組的種類，後面是 little-endian 的欄位，核心不用序列化的程式就讀得懂對方送的。
+
+| 訊息 | 內容 | 意思 |
+| --- | --- | --- |
+| `Released` | 一串 region 的編號 | 這些讀完了，可以再寫（一批一則） |
+| `Granted` | 編號、長度、給對方寫的或讀的 | 一塊新的 region，handle 跟著這一則 |
+| `PipeOpened` | 管道的編號、容量 | 送的一端要寫的一條新管道 |
+| `PipeData` | 管道的編號、位元組 | 管道接下來的一段 |
+| `PipeRead` | 管道的編號、數量 | 讀的一端又讀了這麼多 |
+| `PipeEnded` | 管道的編號 | 寫的一端寫完了 |
+| `PipeCancelled` | 管道的編號 | 讀的一端不要了 |
+
+`encode` 沒有寫過的內容（多一個位元組、少一個、不認得的種類）都是壞訊息。`PipeData` 的位元組解出來還在讀進來的地方，不複製。這些訊息還沒有接進 `core::channel` 的收的一側：`Granted` 要等平台那一層能把 handle 變成 `Memory`。
+
+### `core::pipe`：過通道的 data pipe
+
+Mojo 的 data pipe 是共用記憶體裡的 ring；這裡管道的位元組是訊息。兩端各有一半：
+
+```rust
+// 寫的一端
+let mut pipes = ipc::core::pipe::Outgoing::new();
+let pipe = pipes.open(capacity)?;      // 編號；送 PipeOpened
+let room = pipes.room(pipe);           // 現在可以送幾個位元組（一則最多 64 KiB）
+pipes.sent(pipe, len);                 // 送 PipeData
+pipes.peer_read(pipe, count)?;         // 收到 PipeRead
+pipes.peer_cancelled(pipe)?;           // 收到 PipeCancelled
+pipes.end(pipe);                       // 送 PipeEnded
+
+// 讀的一端
+let mut pipes = ipc::core::pipe::Incoming::new();
+pipes.opened(pipe, producer)?;         // 收到 PipeOpened；producer 是這一側的 data_pipe
+pipes.get(pipe)?;                      // 收到 PipeData：Some 就 try_write
+pipes.ended(pipe)?;                    // 收到 PipeEnded
+pipes.cancel(pipe);                    // 這一側不要了；送 PipeCancelled
+let mut report = ipc::core::pipe::ReadReport::new(capacity);
+if let Some(count) = report.read(n) { /* 送 PipeRead */ }
+```
+
+- **額度**：寫的一端送出去、對方還沒說讀了的量不超過容量。對方回報的比送的多是壞訊息（`PipeOverRead`）。
+- **讀的一端累積到容量的一半才回報**（容量 1 的每個位元組都報）：門檻不超過容量，所以寫的一端額度用完時，讀的一端把手上的讀完一定會回報，不會卡住。
+- **讀的一端手上超過容量**是送的一端的錯：收的一側的 `data_pipe` 的 `try_write` 回 `Full`，當成壞訊息（`PipeOverrun`）。
+- **編號只會變大、不重複用**，由寫的一端給。靠這一點分辨兩種情況：給「已經結束的管道」的訊息（讀的一端取消時資料還在路上、寫的一端結束時回報還在路上）丟掉就好；給「從來沒開過的管道」的訊息是壞訊息（`UnknownPipe`）。重開一個不比之前都大的編號也是壞訊息（`PipeReopened`）。
+- 把這兩半接到通道和 `data_pipe` 的那一段（Browser 的 IO thread 從自己那一側的管道讀出來送、renderer 的 IO thread 寫進它那一側的）還沒有寫，要等 `core::control` 接進通道；`tests/it/pipe_fuzz.rs` 裡有完整的一份，照它接。
+
+### `core::credit`：管道的額度，Verus 證明過的
+
+`room`（還能送多少）、`sent`（送了之後；超過容量回 `None`）、`read`（對方說讀了之後；比送的多回 `None`）、`threshold`（回報的門檻：容量的一半、至少 1、不超過容量）、`report`（讀了之後要不要回報；每個位元組剛好被回報一次）。
 
 ### `core::fit`：池子的算術，Verus 證明過的
 
@@ -190,7 +240,7 @@ python3 scripts/test.py ipc models   # 通道的 thread 共用的東西在 loom 
 
 `core::sync` 在 `--cfg ipc_loom`、`--cfg ipc_shuttle` 時把鎖換成 loom 和 shuttle 的（不用 `loom` 這個 cfg：`ipc` 依賴的 tokio 自己也認它，會拿掉幾個模組、換掉幾處實作，測到的就不是平常編出來的那個 tokio）。loom 的模型（`loom_tests`，每一種交錯都試）：兩條 thread 同時送、第三條補空間和 `flush`，每則各寫一次、完整、序號照順序；送的同時對方不在了，結束只聽到一次、之後送不出去、沒有東西留著；兩條同時送而佇列只放得下一則，剛好一條被拒絕、理由是 `QueueFull`。shuttle 的模型（`shuttle_tests`，隨機的排程各 10000 次）：3 條 thread 各送 12 則長短不一的訊息，傳輸一次只收幾個位元組，一條 thread 補空間和 `flush`，全部寫出來、每條 thread 自己的照順序；同樣的情況中途關掉通道，結束只聽到一次，寫出去的是完整的訊息加上最多一則的開頭，沒有「被告知沒送出去」的訊息。
 
-`src/core/region.rs` 的單元測試（記憶體是 `HeapMemory`，Miri 底下也跑）：長度對到哪一種 region；寫進去的就是對方讀到的；放進最短的放得下的空塊；出去了的在對方讀完之前不會再被寫、被拒絕的那一筆沒有碰到它；還一塊沒出去的、還兩次、不是這個池子的都是壞訊息；`take` 的那一塊到 `give_back` 之前是拿的人的；不在表裡的編號、超過那一塊的長度（多一個位元組、`u32::MAX`）不讀，整塊和零個位元組可以；從表拿掉的不能再提、號碼被佔的不換掉原來那一塊；池子只收合法長度、不重複、總量以內的（剛好到上限可以）；只有空的拿得走、拿走之後其他的編號和狀態不變；`Control` 兩種訊息讀得回來、位元組的順序、沒有人會寫的內容都是壞訊息。
+`src/core/region.rs` 的單元測試（記憶體是 `HeapMemory`，Miri 底下也跑）：長度對到哪一種 region；寫進去的就是對方讀到的；放進最短的放得下的空塊；出去了的在對方讀完之前不會再被寫、被拒絕的那一筆沒有碰到它；還一塊沒出去的、還兩次、不是這個池子的都是壞訊息；`take` 的那一塊到 `give_back` 之前是拿的人的；不在表裡的編號、超過那一塊的長度（多一個位元組、`u32::MAX`）不讀，整塊和零個位元組可以；從表拿掉的不能再提、號碼被佔的不換掉原來那一塊；池子只收合法長度、不重複、總量以內的（剛好到上限可以）；只有空的拿得走、拿走之後其他的編號和狀態不變。
 
 ```sh
 python3 scripts/test.py ipc verus    # core/fit.rs 的證明（cargo verus verify -p ipc）
@@ -201,6 +251,18 @@ python3 scripts/test.py ipc verus    # core/fit.rs 的證明（cargo verus verif
 `tests/it/codec.rs`：沒有位元組的值寫出來和 postcard 一模一樣（serde 的每一種形狀各有）；每一種形狀裡的位元組都回得來；大的位元組不管巢狀在哪裡都走 region、訊息只剩一點、讀的順序照值裡的順序；對方讀完之後那一塊再用；沒有空塊、或比最大的還長時留在訊息裡，用著的那一塊沒被蓋掉；寫在 `out` 原有的內容後面；序列化到一半失敗的值不留下放進去的 region 和寫了一半的位元組；不是對方的 region、太長、沒有 region 的一端被提到 region、不認得的 variant 都是壞訊息，回報的是第一個錯；多一個位元組、少一段、聲稱比訊息還長的位元組都是壞訊息；六種巢狀的方式各自剛好到上限可以、多一層是 `TooDeep`，一百萬層的不會真的走進去；又寬又淺的值不受影響。
 
 `tests/it/region_fuzz.rs`：fuzzer 跑的另一段檢查（`fuzz/fuzz_targets/region.rs`）。輸入當成三樣東西：一則提到 region 的訊息的內容（不管它寫什麼編號和長度，讀都留在 region 裡面，ASan 看著；解得出來的值再寫、再讀要一樣）、一則 `Control`（解得出來的再寫要是同樣的位元組）、一串對池子和表的操作（加、放、拿、還、對方還、拿掉、讀），每一步都對著一個簡單的模型：結果一樣、放進的是最短的放得下的、出去了的那一塊的內容沒有變、總量不超過上限。重播 `fuzz/regressions/region/`。
+
+`src/core/control.rs` 的單元測試：七種訊息都讀得回來、種類的位元組各不相同、每個欄位在哪裡；沒有人會寫的 20 種內容都是壞訊息。
+
+`src/core/pipe.rs` 的單元測試：送的不超過空間、被拒絕的不算數；回報的比送的多是壞訊息；一則最多一個 chunk，容量 0 的管道放得下一個位元組；每條管道有自己的編號和額度；給結束的管道的回報和取消丟掉、給沒開過的是壞訊息；讀的一端每讀一半回報一次（奇數的容量、最小的幾種）；六種容量乘六種讀法，寫的一端額度用完之後一定等得到回報；讀的一端分得出結束的和沒開過的；編號不重開。
+
+`tests/it/pipe_fuzz.rs`：fuzzer 跑的第三段檢查（`fuzz/fuzz_targets/pipe.rs`）。寫的一端、讀的一端（真的 `data_pipe`）和中間編成位元組的訊息，照輸入的步驟走：送、結尾、把一則交給對方、讀、取消、和輸入編出來的回報。照規矩的讀的一端：手上不超過容量、讀到的就是寫的、照順序、兩端都不把對方當成壞的，最後一定讀得完。編出來的回報：寫的一端只接受不超過它送的。重播 `fuzz/regressions/pipe/`。
+
+```sh
+python3 scripts/test.py ipc tla      # crates/ipc/tla/ 的三個 TLA+ 模型（TLC）
+```
+
+`tla/Channel.tla`（通道的一端：佇列的上限、結束只報告一次、理由是第一個、之後不交出訊息、沒有東西留著等）、`tla/Regions.tla`（region 給哪個 peer、先告知再提到、寫進去、對方真的讀到那則訊息時才還、peer 不在了之後不轉給別人）、`tla/Pipe.tla`（管道的額度、回報的門檻、結尾和取消在路上交錯、亂回報的讀的一端、不會卡住）。`tla/check.py` 用 TLC 檢查每個模型成立，再把每一部分拿掉（模型的 `Mutation`），確認 TLC 找得到列出來的那個反例。TLC 的 jar 第一次跑時下載（釘住版本和 SHA-256，放在 `target/tla/`），要有 Java。
 
 `tests/it/frame_fuzz.rs`：fuzzer 跑的那一段檢查（`fuzz/fuzz_targets/frame.rs` 直接引用這個檔案），輸入是對端可能送的任何位元組、怎麼切、每一段旁邊附幾個 handle。任何輸入都不能 panic；同樣的位元組不管怎麼切，交出來的訊息和結局一樣；序號從 0 連續；沒有權限的一端的 handle 一個也到不了上層；留著的不比到了的多；每個 handle 不是在 `Decoder` 手上就是已經關掉。測試跑一組種子，並重播 `fuzz/regressions/` 裡 fuzzer 找到過的輸入。
 

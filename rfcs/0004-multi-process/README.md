@@ -157,8 +157,8 @@ Browser process                                Renderer process
 | 步驟 | 單一 process | 跨 process |
 | --- | --- | --- |
 | 網路收到一段 | 寫進管道（Browser 的 network thread） | 一樣，寫進 Browser 這一側的管道 |
-| 交給 renderer | renderer 的 main thread 直接讀同一條管道 | Browser 的 IO thread 從那條管道讀出來，包成 body 的訊息（管道的編號、位元組）送進控制通道；renderer 的 IO thread 寫進 renderer 自己 process 裡的另一條管道，main thread 讀它 |
-| 背壓 | 管道滿了，network thread 的寫就等 | renderer 每讀走一些就回一則「這條管道我讀了多少」；Browser 送出去、對方還沒說讀了的量不超過管道的容量（512 KiB），到了就不再從自己的管道讀，那條管道滿了，network thread 的寫照樣等 |
+| 交給 renderer | renderer 的 main thread 直接讀同一條管道 | Browser 的 IO thread 從那條管道讀出來，包成 `ipc` 自己的訊息（管道的編號、位元組，一則最多 64 KiB；第 32 條）送進控制通道；renderer 的 IO thread 寫進 renderer 自己 process 裡的另一條管道，main thread 讀它。`CommitNavigation` 裡帶的是管道的編號；「開了這條管道」的訊息走在它前面 |
+| 背壓 | 管道滿了，network thread 的寫就等 | renderer 讀走的累積到容量的一半時回一則「這條管道我讀了多少」（第 33 條）；Browser 送出去、對方還沒說讀了的量不超過管道的容量（512 KiB），到了就不再從自己的管道讀，那條管道滿了，network thread 的寫照樣等 |
 | 結尾和取消 | 寫的一端 drop 是結尾；讀的一端 drop 讓寫的一端失敗 | 各一則訊息：結尾、renderer 不要了 |
 
 - renderer 這一側看到的還是一條 `Consumer`：它由 renderer 的 IO thread 在收到 `CommitNavigation` 時建好、放進訊息，parser 的程式不用改。單一 process 的模式不變。
@@ -248,7 +248,7 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
 | 平台層的跨 process 測試 | 假設，和 1、3、7 | 測試自己啟動小的 child process：建立、map、傳 handle、唯讀和大小的保證（拿唯讀的 handle 試著寫入或 map 成可寫、試著縮小 region，都要失敗）、對方整個結束、只關掉收的一半、只丟掉送的一半。macOS 另外測 rendezvous（沒登記的 pid 拿不到、同一個 pid 拿不到第二次、請求比登記早到時等得到）和假冒 kernel 的通知（忽略） | `cargo test`；Linux 和 Windows 在每天的 CI，macOS 在本機 |
 | fuzz（cargo-fuzz） | 2，和 1、6、9 | 兩個 target：從「通道讀到的位元組」到「Browser 處理完這則訊息」的整條路（反序列化、分派、處理訊息的物件；惡意的 renderer 唯一碰得到 Browser 的路，那個物件不需要真的通道就能跑）；region 的參照 | 每週的 CI；改核心時在本機跑一段 |
 | loom、shuttle | 5、6、7、9 | 送出的佇列和它的鎖（好幾條 thread 同時送、對方同時斷線）、body 的訊息和「讀了多少」的往返（兩端各一條 thread）。同步呼叫等回答的位置不在這裡（第 27 條）。atomic 和鎖的型別在核心裡是抽象的，測試時換成 loom 的 | 每週的 CI；改到這幾處時在本機 |
-| TLA+ | 4、5、6、7、9 | 通道的協定的模型：兩端、有上限的佇列、任一端隨時斷線、region 的發出和收回、body 的管道的額度。TLC 檢查模型成立，再拿掉每一部分確認找得到反例 | 改協定時；模型和協定一起改 |
+| TLA+ | 4、5、6、7、9 | 三個模型（第 34 條）：通道的一端（有上限的佇列、結束只報告一次）、region 的發出和收回（每個 peer 各自的、peer 不在了之後不轉手）、body 的管道的額度（結尾和取消在路上交錯、不會卡住）；任一端隨時斷線。TLC 檢查模型成立，再拿掉每一部分確認找得到反例 | 改協定時；模型和協定一起改 |
 | Verus | 1、4 | 池子的運算寫成純函式，證明：一個長度對到的 region 放得下它、是最小的一種；選出來的那一塊是空的、夠長、最短的，說沒有時真的沒有；總量的檢查不溢位。和 data pipe 的額度的運算（送出的不超過容量、讀了的不超過送的） | 每週的 CI |
 | Miri | 1 | 核心的測試經過假通道在 Miri 底下跑：碰共用記憶體的 `unsafe` 沒有未定義的行為 | 每週的 CI |
 | mutation test | 每一個檢查 | 照 `docs/testing.md`：弄壞每個檢查，確認有測試失敗 | 每個階段 |
@@ -381,6 +381,19 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
     - **不選 thread-local 的範圍**（`protocol` 開掛勾，`ipc` 編碼期間把池子掛上去）：藏起來的全域狀態，忘了掛就靜靜地全部放在訊息裡；`protocol` 要知道 region；深度的上限還是得另外包一層。
     - **不選每種訊息自己列出它的 `BigBuffer` 欄位**：加欄位時漏列就不走 region。
     - 對照 Chromium：Mojo 產生的序列化程式把訊息的 context 明確傳給每個型別的 traits，`BigBuffer` 的 traits 從它把 handle 放進訊息。
+32. **body 的管道的訊息是 `ipc` 自己的**（2026-11-21，第 2 階段的 2d，「導覽的 body 的管道」）：和 region 的兩則訊息同一個保留的目的地，五則：開了一條管道（編號、容量）、一段資料、讀了多少、結尾、不要了。核心裡有管道的兩半（`core::pipe`）：寫的一端記「送出去、對方還沒說讀了的量」，不超過容量；讀的一端記該回報多少。上層看到的還是 `data_pipe` 的 `Producer` 和 `Consumer`，`CommitNavigation` 帶管道的編號。
+    - 性質 9 的檢查因此整個在核心裡，Verus、fuzz、TLA+ 對的是同一份程式；之後換成共用記憶體裡的 ring 時上層和 `protocol` 不用動。
+    - **不選 `protocol` 的訊息、由 `browser` 和 `renderer` 處理**：規則分散在三個 crate，「renderer 回報超過」的檢查在 `browser` 裡，核心的 fuzz 和模型碰不到；每多一種走管道的資料就要再寫一次。
+    - 對照 Chromium：data pipe 是 `mojo/core` 的東西，上層只拿到兩端的 handle。
+    - **管道的編號由寫的一端給，只會變大、不重複用**（實作時定的）：給已經結束的管道的訊息（取消時資料還在路上、結束時回報還在路上）丟掉，給從來沒開過的管道的訊息是壞訊息，兩者靠「編號有沒有超過開過的最大的」分。
+    - 一則資料最多 64 KiB（第 21 條量的那個大小）。讀的一端手上超過容量是寫的一端的錯（壞訊息）。
+33. **讀的一端累積讀了容量的一半才回報**（2026-11-21，2d）：還沒回報的量到 256 KiB（容量 512 KiB）時送一則，帶累積的數字。大約每四則資料一則回報；規則只看數字、不看時間。門檻不超過容量，所以寫的一端額度用完時，讀的一端把手上的讀完一定會回報：這一條由 Verus（門檻不超過容量、每個位元組剛好回報一次）和 TLA+ 的模型（不會卡住）守著。
+    - **不選每次讀都回報**：每則資料配一則回報，訊息數加倍。
+    - **不選等一段時間或 IO thread 下一次醒來時合併**：要時鐘或多一次喚醒，核心變得不確定。
+    - 對照：Mojo 的 data pipe 讀的位置直接寫在共用的狀態裡，沒有這一步；HTTP/2 的流量控制多數實作在視窗用掉一半時送 `WINDOW_UPDATE`。
+34. **TLA+ 是三個小模型，不是一個**（2026-11-21，2d，`crates/ipc/tla/`）：`Channel.tla`（性質 5、6、7）、`Regions.tla`（性質 4，和「先告知再提到」「對方讀到才還」）、`Pipe.tla`（性質 9 和不會卡住）。每個模型自己帶著「照順序、隨時可以斷」的通道。
+    - **不選一個模型**：狀態數是各部分相乘，只能用很小的參數、每一部分都檢查得淺；region 和管道在核心裡沒有共用的狀態，交集只有同一條通道和同一次斷線。
+    - 每個模型照 elise 的做法：先成立，再把每一部分拿掉、確認 TLC 找得到列出來的反例。Mojo 和 ipcz 沒有公開的形式化模型可以對照。
 
 ## 待決定
 
