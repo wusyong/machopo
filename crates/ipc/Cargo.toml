@@ -38,6 +38,10 @@ shuttle = "0.9"
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true
 
+# Mapping a memfd: the channel's shared memory.
+[target.'cfg(target_os = "linux")'.dependencies]
+memmap2.workspace = true
+
 # Mach ports and memory entries: the channel and its shared memory.
 [target.'cfg(target_os = "macos")'.dependencies]
 mach2.workspace = true
