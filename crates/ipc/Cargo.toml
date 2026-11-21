@@ -51,3 +51,7 @@ windows-sys.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+
+# `mprotect`, for the tests that a mapping to read stays one.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+rustix = { workspace = true, features = ["mm"] }

@@ -1,6 +1,6 @@
 # ipc
 
-對應 Chromium 的 `ipc/` 和 `mojo/`：machopo 的各個 process 之間共用的東西。renderer 現在還是 Browser process 裡的 thread；現在有每個 process 都讀同一個的時鐘 `TimeTicks`、還在同一個 process 裡的 data pipe（`data_pipe`），channel 的核心（`core`）、訊息的值怎麼變成位元組（`codec`）、把它們組起來的端點（`endpoint`）、同一個 process 裡的平台（`local`），和作業系統的平台層（`platform`：現在有 macOS 的那一份，Linux 和 Windows 的還沒有）。
+對應 Chromium 的 `ipc/` 和 `mojo/`：machopo 的各個 process 之間共用的東西。renderer 現在還是 Browser process 裡的 thread；現在有每個 process 都讀同一個的時鐘 `TimeTicks`、還在同一個 process 裡的 data pipe（`data_pipe`），channel 的核心（`core`）、訊息的值怎麼變成位元組（`codec`）、把它們組起來的端點（`endpoint`）、同一個 process 裡的平台（`local`），和作業系統的平台層（`platform`：現在有 macOS 的那一份和 Linux 的共用記憶體，Linux 的通道和 Windows 的還沒有）。
 
 `unsafe` 只放在這裡和 `bindings`（`python3 scripts/sanity.py unsafe` 檢查）：這裡的是作業系統的 API，和對共用記憶體的複製。
 
@@ -382,6 +382,22 @@ let rights = rendezvous::fetch(std::os::unix::process::parent_id(), wait)?;
 - `forget(pid)`：child 還沒問就不在了的時候，收回登記的 right。
 - `fetch` 的錯誤：`NoServer`（查不到那個 host 的 server）、`Refused`、`TimedOut`、`Failed`。
 
+### `platform::linux::memory`
+
+共用記憶體是 memfd：一個沒有名字的檔案，建好就封住（seal）它的長度。API 和 macOS 的那一份同一個形狀，handle 是 `OwnedFd`：
+
+```rust
+let (mine, handle) = memory::create(len, false)?;   // mine 可寫；handle 從此誰都 map 不成可寫
+let (mine, handle) = memory::create(len, true)?;    // mine 只 map 成唯讀；handle 可寫
+let theirs = memory::map(handle.as_fd(), len, writable)?;
+```
+
+- **長度封住**（`F_SEAL_SHRINK`、`F_SEAL_GROW`，最後 `F_SEAL_SEAL` 讓 seal 不能再加）：碰到落在檔案結尾之外的 mapping 不是錯誤，是 process 被結束，所以拿著 fd 的對方不能把檔案縮短。
+- **只能讀的 handle** 靠 `F_SEAL_FUTURE_WRITE`：建的一端先 map 好自己可寫的那一份，再封；之後這個檔案不管經過哪個 fd（對方收到的、經過 `/proc/self/fd` 重新開的）都 map 不成可寫、`write` 不進去，唯讀的 mapping 也 `mprotect` 不成可寫。這個 seal 要 Linux 5.1；更舊的 kernel 上 `create(_, false)` 回 `None`。Chromium 交出去的是重新開成唯讀的 fd，靠 sandbox 不讓 renderer 碰 `/proc`；這裡不靠 sandbox。
+- **不能執行**（`MFD_NOEXEC_SEAL`，Linux 6.3）：能寫 region 的對方不能在裡面寫一個程式再執行它。kernel 不認得這個旗標（回 `EINVAL`）時不帶它再建一次；不記住，region 很少建。
+- **`map` 只 map「不能縮短」的檔案**，並且先確認它夠長（memmap2 給了長度就不看檔案的大小）：先看 seal、再量長度，量到的就不會再變短。所以不管 fd 是誰給的，`map` 不會留下會讓 process 結束的 mapping。長度 0 不 map。
+- `mmap` 和 `munmap` 經過 memmap2 的 `MmapRaw`（安全的 API，drop 時解除）；其餘是 rustix 的安全呼叫。這一份自己的 `unsafe` 只有 `Mapping` 的 `Memory`。
+
 ## `unsafe` 的論證
 
 | 地方 | 為什麼安全 |
@@ -393,6 +409,7 @@ let rights = rendezvous::fetch(std::os::unix::process::parent_id(), wait)?;
 | `platform/macos/memory.rs` 的 `mach_make_memory_entry_64`（`entry`） | 傳進去的是活到呼叫結束的兩個區域變數的指標（大小、回來的名字）；`from` 是這個 task 自己的 mapping 的位址或沒有。回 `KERN_SUCCESS` 才把名字當成 right（`SendRight::from_raw`：新的 send right，只有這裡拿著） |
 | `platform/macos/memory.rs` 的 `mach_vm_map`（`map`） | 位址由 kernel 選（`VM_FLAGS_ANYWHERE`），寫進活到呼叫結束的區域變數；不蓋掉這個 task 已有的東西。成功才建 `Mapping` |
 | `platform/macos/memory.rs` 的 `SendRight`（`from_raw`、`Drop` 的 `mach_port_deallocate`） | `from_raw` 是 `unsafe fn`：呼叫的人保證名字是這個 task 的一個 send right、沒有別人會放掉它。`Drop` 放掉一次；`into_raw` 用 `forget` 把放掉的責任交出去 |
+| `platform/linux/memory.rs` 的 `Mapping`（`Memory`） | 裡面是 memmap2 的 `MmapRaw`：從 `map` 到 drop 都 map 著、不搬動、可讀；放進 `Pool` 的是 map 成可寫的（`create(_, false)` 的那一個、`map(_, _, true)` 的）。範圍一直在檔案裡面：`map` 只接受封住「不能縮短」的檔案，而且在看到 seal 之後才量長度；`create` 自己建的在 map 之前就封了 |
 | `platform/macos/memory.rs` 的 `Mapping`（`Drop` 的 `mach_vm_deallocate`、`Send`、`Sync`、`Memory`） | 範圍是 `map` 得到的那一段，只在 `drop` 解除一次。位址在每條 thread 上都一樣；經過 `Memory` 的讀寫都是整段位元組的複製。`Memory` 的保證：從 `map` 到 `drop` 都 map 著、不搬動、可讀；放進 `Pool` 的是 map 成可寫的（`create(_, false)` 的那一個、`map(_, _, true)` 的）。指標用 `with_exposed_provenance_mut` 從位址做出來：記憶體不是 Rust 配置的 |
 | `platform/macos/port.rs` 的三種 right（`from_raw`、`Drop`、`ReceiveRight::new`、`make_send`、`tell_when_no_senders`） | `from_raw` 都是 `unsafe fn`：呼叫的人保證名字是這個 task 的那一種 right、沒有別人會放掉。每種的 `Drop` 用對應的呼叫放掉一次（send 和 send-once 是 `mach_port_deallocate`，receive 是 `mach_port_mod_refs` 減一）；`into_raw` 用 `forget` 交出責任。其餘的呼叫都是對自己的 receive right 做的，寫的是活到呼叫結束的區域變數。`mach_port_request_notification` 是自己宣告的（mach2 沒有），照 `<mach/mach_port.h>` 的原型 |
 | `platform/macos/message.rs` 的 `Buffer::bytes`、`bytes_mut` | 把 `Vec<u32>` 看成位元組：字都初始化過，`u32` 的位元組就是位元組、任何位元組也都是合法的 `u32`，長度是 vector 的位元組數 |
@@ -447,6 +464,8 @@ python3 scripts/test.py ipc tla      # crates/ipc/tla/ 的三個 TLA+ 模型（T
 `tla/Channel.tla`（通道的一端：佇列的上限、結束只報告一次、理由是第一個、之後不交出訊息、沒有東西留著等）、`tla/Regions.tla`（region 給哪個 peer、先告知再提到、寫進去、對方真的讀到那則訊息時才還、peer 不在了之後不轉給別人）、`tla/Pipe.tla`（管道的額度、回報的門檻、結尾和取消在路上交錯、亂回報的讀的一端、不會卡住）。`tla/check.py` 用 TLC 檢查每個模型成立，再把每一部分拿掉（模型的 `Mutation`），確認 TLC 找得到列出來的那個反例。TLC 的 jar 第一次跑時下載（釘住版本和 SHA-256，放在 `target/tla/`），要有 Java。
 
 `src/platform/macos/memory.rs` 的單元測試（只在 macOS；同一個 process 裡把 handle 再 map 一次當成對方）：建的一端寫的、對方讀得到，而且是同一塊記憶體、不是當時的複本（handle 建好、map 好之後才寫的也看得到）；只能讀的 handle map 成可寫會失敗；對方寫的、建的一端讀得到；唯讀的 mapping 改不成可寫（對方的、建的一端對「對方寫」那一塊的、可寫的 region 唯讀 map 的）；有 mapping 在，放掉 handle 記憶體還在；map 超過長度失敗、少於可以；不是整頁的長度不建；kernel 拒絕的呼叫不給 handle；不是 region 的 port map 不了；handle drop 就是放掉 right、`into_raw` 之後不放；mapping drop 就是解除（map 又 drop 4 GiB，位址空間沒有長大；留著的時候有長大）；池子和表接在真的 region 上。這一組重複跑 300 次、整組單元測試平行跑 50 次都過。
+
+`src/platform/linux/memory.rs` 的單元測試（只在 Linux；同一個 process 裡把 handle 再 map 一次當成對方）：建的一端寫的、對方讀得到，而且是同一塊記憶體；只能讀的 handle map 成可寫會失敗，`write` 不進去，經過 `/proc/self/fd` 重新開成可寫的也一樣；對方唯讀的 mapping `mprotect` 不成可寫；兩端各自只把自己寫的那一種 map 成可寫（看 `/proc/self/maps`）；對方寫的、建的一端讀得到；兩種 region 都不能縮短、加長、再加 seal，seal 就是該有的那幾個；kernel 有 `MFD_NOEXEC_SEAL` 時 region 不能改成可執行；kernel 不認得旗標時不帶它再問一次，別的拒絕不再問，認得的只問一次（用假的 `memfd_create`）；有 mapping 在，放掉 handle 記憶體還在；map 超過長度和長度 0 失敗、少於可以；還能縮短的檔案、`/dev/null`、socket 都不 map；mapping drop 就是解除（數 `/proc/self/maps` 裡這個 memfd 的 mapping）；池子和表接在真的 region 上。
 
 `src/platform/macos/message.rs` 的單元測試（同一個 process 裡自己送給自己）：幾種長度的 body 原樣到、送的人是這個 process；沒有訊息時逾時；right 照順序到、各自還是原來那一種（對它送的訊息從原來的 port 出來）；回答送到發問的人指定的 port；沒回答就丟掉時 kernel 會通知（送的人是 0）；送到死掉的 port 送不出去、帶的 right 被放掉；收到又丟掉的 right 被放掉、receive right 丟掉 port 就死了；超過緩衝區的 body、超過 16 個 right 不送，right 被放掉；比緩衝區長的訊息被拒絕並且從 port 上拿掉；佇列滿了、不等的送會被拒絕，讀走一則就有位置；排法不對的六種（太長的 body、out-of-line 的記憶體、out-of-line 的 port、send-once 的 right、太多 right、不是回一次的 reply）都被拒絕、帶來的被放掉，之後 port 照常。
 

@@ -1,0 +1,132 @@
+# Step 2f-1: Linux shared memory (`ipc::platform::linux::memory`). A
+# region its maker writes is one the peer can only read, however it holds
+# it; a region keeps its length; nothing is mapped that could be left past
+# its file's end; a region can't be run where the kernel can say so, and is
+# made without that where it can't.
+test = ["sh", "-c", "timeout 120 cargo test -q -p ipc --lib platform"]
+timeout = 600
+
+[[mutant]]
+name = "what the peer should only read isn't sealed against writing"
+file = "crates/ipc/src/platform/linux/memory.rs"
+from = '''        SealFlags::FUTURE_WRITE | SealFlags::SEAL
+    };'''
+to = '''        SealFlags::SEAL
+    };'''
+
+[[mutant]]
+name = "what the peer writes is sealed against writing"
+file = "crates/ipc/src/platform/linux/memory.rs"
+from = '''    let last = if peer_writes {'''
+to = '''    let last = if false {'''
+
+[[mutant]]
+name = "more seals can be added after"
+file = "crates/ipc/src/platform/linux/memory.rs"
+from = '''    let last = if peer_writes {
+        SealFlags::SEAL
+    } else {
+        SealFlags::FUTURE_WRITE | SealFlags::SEAL
+    };'''
+to = '''    let last = if peer_writes {
+        SealFlags::empty()
+    } else {
+        SealFlags::FUTURE_WRITE
+    };'''
+
+[[mutant]]
+name = "a region can be made shorter"
+file = "crates/ipc/src/platform/linux/memory.rs"
+from = '''    fcntl_add_seals(&fd, SealFlags::SHRINK | SealFlags::GROW).ok()?;'''
+to = '''    fcntl_add_seals(&fd, SealFlags::GROW).ok()?;'''
+
+[[mutant]]
+name = "a region can be made longer"
+file = "crates/ipc/src/platform/linux/memory.rs"
+from = '''    fcntl_add_seals(&fd, SealFlags::SHRINK | SealFlags::GROW).ok()?;'''
+to = '''    fcntl_add_seals(&fd, SealFlags::SHRINK).ok()?;'''
+
+[[mutant]]
+name = "the maker maps what the peer writes to write too"
+file = "crates/ipc/src/platform/linux/memory.rs"
+from = '''    let mapping = map(fd.as_fd(), len, !peer_writes)?;'''
+to = '''    let mapping = map(fd.as_fd(), len, true)?;'''
+
+[[mutant]]
+name = "the maker maps what it writes only to read"
+file = "crates/ipc/src/platform/linux/memory.rs"
+from = '''    let mapping = map(fd.as_fd(), len, !peer_writes)?;'''
+to = '''    let mapping = map(fd.as_fd(), len, false)?;'''
+
+[[mutant]]
+name = "a file that could be made shorter is mapped"
+file = "crates/ipc/src/platform/linux/memory.rs"
+from = '''    if !seals.contains(SealFlags::SHRINK) {'''
+to = '''    if false && !seals.contains(SealFlags::SHRINK) {'''
+
+[[mutant]]
+name = "more than the file has is mapped"
+file = "crates/ipc/src/platform/linux/memory.rs"
+from = '''    if u64::try_from(len).ok()? > size {'''
+to = '''    if false && u64::try_from(len).ok()? > size {'''
+
+[[mutant]]
+name = "a file exactly as long as asked isn't mapped"
+file = "crates/ipc/src/platform/linux/memory.rs"
+from = '''    if u64::try_from(len).ok()? > size {'''
+to = '''    if u64::try_from(len).ok()? >= size {'''
+
+[[mutant]]
+name = "nothing at all is mapped as something"
+file = "crates/ipc/src/platform/linux/memory.rs"
+from = '''    if len == 0 {
+        return None;
+    }
+    // Sealed first'''
+to = '''    // Sealed first'''
+
+[[mutant]]
+name = "a mapping asked to write is one to read"
+file = "crates/ipc/src/platform/linux/memory.rs"
+from = '''    let mapped = if writable {'''
+to = '''    let mapped = if false {'''
+
+[[mutant]]
+name = "a mapping asked to read is one to write"
+file = "crates/ipc/src/platform/linux/memory.rs"
+from = '''    let mapped = if writable {'''
+to = '''    let mapped = if true {'''
+
+[[mutant]]
+name = "a region can be run"
+file = "crates/ipc/src/platform/linux/memory.rs"
+from = '''    match make(flags | MemfdFlags::NOEXEC_SEAL) {'''
+to = '''    match make(flags) {'''
+
+[[mutant]]
+name = "a kernel that doesn't know the flag gives no region"
+file = "crates/ipc/src/platform/linux/memory.rs"
+from = '''Some(Errno::INVAL.raw_os_error()) => make(flags),'''
+to = '''Some(Errno::INVAL.raw_os_error()) => Err(error),'''
+
+[[mutant]]
+name = "any refusal is asked again"
+file = "crates/ipc/src/platform/linux/memory.rs"
+from = '''        Err(error) if error.raw_os_error() == Some(Errno::INVAL.raw_os_error()) => make(flags),'''
+to = '''        Err(_) => make(flags),'''
+
+[[mutant]]
+name = "a region can't be sealed"
+file = "crates/ipc/src/platform/linux/memory.rs"
+from = '''fn memfd(make: impl Fn(MemfdFlags) -> io::Result<OwnedFd>) -> io::Result<OwnedFd> {
+    let flags = MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING;'''
+to = '''fn memfd(make: impl Fn(MemfdFlags) -> io::Result<OwnedFd>) -> io::Result<OwnedFd> {
+    let flags = MemfdFlags::CLOEXEC;'''
+
+[[mutant]]
+name = "a region's descriptor is inherited by whatever is started"
+file = "crates/ipc/src/platform/linux/memory.rs"
+from = '''fn memfd(make: impl Fn(MemfdFlags) -> io::Result<OwnedFd>) -> io::Result<OwnedFd> {
+    let flags = MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING;'''
+to = '''fn memfd(make: impl Fn(MemfdFlags) -> io::Result<OwnedFd>) -> io::Result<OwnedFd> {
+    let flags = MemfdFlags::ALLOW_SEALING;'''

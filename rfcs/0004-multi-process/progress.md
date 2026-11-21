@@ -29,6 +29,7 @@
 | 2e-6：三個平台共用的啟動入口（`ipc::platform` 的 `spawn`、`inherited`、`child_gone`）；跨 process 的測試拆成不分平台的和 macOS 自己的；`Platform` 夠不夠用對過一次（第 41 條） | 完成 | 2026-11-21 |
 | 2e-7：一個 process 一條 IO thread：`IoLoop` 管多個端點，平台的介面拆成 `Platform`（通道）和 `Waiter`（等待）；macOS 和同一個 process 的平台跟著改（第 42 條） | 完成 | 2026-11-21 |
 | 2f：Linux 的平台層；量 socket 的緩衝區和大的資料的門檻。在 Linux 的機器上做（第 40 條）；先決定的是第 43 到 49 條 | 進行中 | |
+| 2f-1：Linux 的共用記憶體（memfd 和 seal、map、只能讀的 handle、不能執行；第 46、47 條） | 完成 | 2026-11-22 |
 | 2g：Windows 的平台層；量 pipe 的緩衝區。在 Windows 的機器上做（第 40 條）；對方不能附 handle 時不看訊息裡的 handle 數值（第 41 條的契約，要有跨 process 的測試）；做的時候決定 CI 要不要加 macOS、Windows 的 runner | 未開始 | |
 | 2h：第 2 階段的檢查、`soundness.md`、`test.py` 的指令、文件；把 `test.py ipc` 的每一項排進每週的 CI（2a 起在本機跑） | 未開始 | |
 | 3：啟動 child process | 未開始 | |
@@ -404,5 +405,17 @@ branch `0004-linux`，從 `0004` 的 2e-7（`82a4fc7`）分出去。
   - Chromium（2026-11-22 的 main）：`mojo/core/channel_posix.cc`、`channel.cc`、`channel_linux.cc`，`mojo/public/cpp/platform/socket_utils_posix.cc`、`platform_channel.cc`，`base/posix/unix_domain_socket.cc`，`base/memory/platform_shared_memory_region_posix.cc`。沒有設 socket 的緩衝區；`MFD_NOEXEC_SEAL` 先帶、`EINVAL` 就記住不帶；給對方唯讀的 memfd 是經過 `/proc` 重新開的 `O_RDONLY` fd（`details.md` 的「平台層」的 Linux）；`EAGAIN` 時在 IO thread 上登記可寫；送出帶 `MSG_NOSIGNAL`；一次最多附 128 個 fd；每次可讀最多連續讀 256 KiB。
   - std（`rust-toolchain.toml` 的 1.99.0）：`std::os::unix::process::CommandExt` 沒有穩定的「指定繼承哪個 fd」的 API。
   - memmap2 0.9.11：`map_raw`、`map_raw_read_only` 是安全的；給了長度時不讀檔案的大小。
-- **還沒做的**：程式。順序：依賴（第 47 條，單獨一個 commit 先進 `0004`）、共用記憶體、通道和 `Waiter` 和 `spawn`、`inherited`、`child_gone`、Linux 自己的測試、重量、mutation test。
+- **還沒做的**：通道和 `Waiter` 和 `spawn`、`inherited`、`child_gone`（2f-2）、Linux 自己的跨 process 測試、用真的平台層重量（2f-3）。依賴（第 47 條）2026-11-22 單獨一個 commit 進了 `0004`。
+
+### 2f-1：Linux 的共用記憶體（2026-11-22，Fedora、kernel 7.3.3、AMD Ryzen AI 9 HX 370）
+
+- **做了什麼**：`ipc::platform::linux::memory` 的 `create`、`map`、`Mapping`（`crates/ipc/README.md` 的「`platform::linux::memory`」）。自己的 `unsafe` 只有 `Mapping` 的 `Memory`；`mmap` 經過 memmap2，其餘是 rustix 的安全呼叫。
+- **比決定多做的**：`map` 只接受封了「不能縮短」的檔案，而且先看 seal 再量長度。只用 `fstat` 確認長度的話，檢查之後檔案還能被縮短，mapping 就落在結尾之外；有了 seal，`map` 不管 fd 是誰給的都不會留下那種 mapping。
+- **這個 kernel 上確認的**（第 46 條和 `details.md` 寫「要靠測試確認」的）：封了 `F_SEAL_FUTURE_WRITE` 的 region map 成可寫、`write`、經過 `/proc/self/fd` 重新開成可寫再寫或再 map、把唯讀的 mapping `mprotect` 成可寫，都被拒絕；帶 `MFD_NOEXEC_SEAL` 的 region `fchmod` 不成可執行。
+- **測試**：`src/platform/linux/memory.rs` 的單元測試 14 個；整個單元測試的 binary 重複跑 1000 次都過。
+- **不穩定過的測試**：「mapping drop 就是解除」原本量整個 process 的位址空間（`/proc/self/statm`）有沒有長大。第一版用 64 MiB 的 region，馬上就失敗；改成 1 GiB 之後單獨那一組 100 次都過，但整個 binary 一起跑時 600 次裡失敗 6 次：同時跑的其他測試的 thread 各自保留幾百 MiB（malloc 的 arena、stack），量到多出 600 到 770 MiB。原因是量的東西不對，不是門檻：改成數 `/proc/self/maps` 裡這個 memfd（照 inode）的 mapping 有幾個，別的 thread 影響不到。
+- **mutation test**（`mutants-2f1.toml`）18 個，全部抓到。寫清單時拿掉的 1 處多餘的程式：`create` 自己對長度 0 的檢查（`map` 的那一個本來就擋）。跑完確認檔案都還原了。
+  - 第一次 `test.py mutate` 沒有跑：`../third_party/rusty_v8` 不在釘住的 commit、有兩個沒 commit 的 `gen/*.sum`（本機編 V8 留下的），使用者確認之後還原、切過去。
+- **跑過的檢查**：`cargo test -p ipc`（單元 64 個、整合 53 個）；`cargo clippy -p ipc --all-targets -- -D warnings`；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。
+- **只靠審查的**：kernel 不認得 `MFD_NOEXEC_SEAL` 時真的回 `EINVAL`、5.1 之前的 kernel 上的行為（`docs/test-gaps.md`）。
 
