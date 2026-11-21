@@ -427,6 +427,28 @@ let theirs = memory::map(handle.as_fd(), len, writable)?;
 - 建立時就向系統預訂整塊的記憶體（commit）；訂不到時沒有 region。
 - 交出去的 handle 不被 child 繼承。
 
+### `platform::windows::channel`
+
+通道的一端是一條 named pipe 的一端（Chromium 的 `mojo/core/channel_win.cc`）：讀和寫都是 overlapped 的，完成的通知到 IO thread 的 completion port（`IocpWaiter`，這個平台的 `Waiter`），一個 port 等這個 process 所有的通道。
+
+```rust
+let (server, client) = channel::pipe()?;            // 兩端都在這裡建；client 那一端之後交給 child
+let host = Channel::host(server, child_process)?;   // child_process：child 的 process handle（借用）
+let child = Channel::child(client);                 // 在 child 裡
+```
+
+- **為什麼要 completion port**：pipe 滿了的時候寫入在 `write` 回來之後還在 kernel 裡進行，而 Windows 在 thread 結束時取消它發出的 I/O，除非 handle 在 completion port 上。任何 thread 都會送，送完就結束的 thread 不能把訊息帶走。
+- **交給迴圈之前不寫**：pipe 要到 `add` 才在 port 上，在那之前 `write` 回 `WouldBlock`，訊息留在核心的佇列；加入時被拒絕過的那一端收到 `Writable`。一個通道只能加入一個 waiter、一次。
+- **寫**：一次一筆，最多 64 KiB（`RECORD_MAX`，pipe 的緩衝區，host 的連表頭），其餘的核心留著。一筆寫入從發出到它的通知被 IO thread 從 port 取走都算「進行中」（當場完成的也是），這段時間 `write` 回 `WouldBlock`；通知取走時，被拒絕過的收到 `Writable`。
+- **handle 只從 host 往 child**：host 的每次寫入前面有這一層的表頭（後面幾個位元組、幾個 handle，各 `u32`；每個 handle 一個 8 位元組的數值）。host 寫入當下把 handle 複製進 child 的 process（它留的 process handle 只有 `PROCESS_DUP_HANDLE`），數值是 handle 在 child 裡的值；寫入沒發出去時把放進去的從 child 裡關掉。child 那一端照表頭把數值包成 handle（信任 host），handle 跟著那一次寫入的位元組借出去。
+- **child 往 host 沒有表頭**：寫的就是核心的位元組，host 讀到什麼原樣借給核心。host 這一側沒有任何一行把位元組變成 handle；child 的訊息說它有 handle 時由核心當成壞訊息。child 那一端被交了 handle 時放掉它們。
+- **讀**：每條通道一塊 64 KiB 的緩衝區（一次寫入的上限），讀在 IO thread 上發出。child 那一端一次借出一次寫入的位元組（一次讀到好幾筆時一筆一筆借，切到一半的等下一次讀接起來）。
+- **對方不在了**：讀失敗、讀到 0 個位元組、寫入失敗或少寫、child 收到不合理的表頭（長度 0、超過一次寫入、handle 超過 16 個、數值是 0 或 -1），都是 `Event::PeerGone`，一條通道只報一次。自己 `shut` 的那一端之後什麼都不報。
+- **進行中的操作拿著通道**：kernel 手上有那筆操作的 `OVERLAPPED` 和緩衝區，直到它的通知從 port 取走；所以每筆進行中的操作拿著通道內部狀態的一份 `Arc`，waiter 取到通知時才放掉（Chromium 的 `pending_read_`、`pending_write_`）。通道關掉、離開迴圈之後遲到的通知照樣取走、釋放，不報出來。waiter 丟掉時還在進行的不收，那幾塊記憶體不釋放（洩漏是安全的）；`shut` 關掉所有 handle，留下的只有記憶體。
+- **`Channel` 的值丟掉就是 `shut`**：waiter 可能還拿著它的內部狀態，handle 不等它。
+- **打斷等待**：一個旗標加 `PostQueuedCompletionStatus`，叫很多次只放一筆。
+- **pipe 的兩端**（`pipe()`）：名字是 pid、序號和亂數，只在函式裡；名字第一次用、只有一個 instance、不收別台機器的、client 那一端沒有再建 instance 的權限、server 不能冒用 client，建好後確認 client 連著；失敗就換名字，最多試 8 次。兩端都不被 child 繼承。
+
 ## `unsafe` 的論證
 
 | 地方 | 為什麼安全 |
@@ -456,6 +478,13 @@ let theirs = memory::map(handle.as_fd(), len, writable)?;
 | `platform/windows/memory.rs` 的 `with_rights`（`DuplicateHandle`） | 來源是借來的、呼叫期間開著的 handle，兩個 process 都是自己，結果寫進活到呼叫結束的區域變數。成功才包成 `OwnedHandle` |
 | `platform/windows/memory.rs` 的 `MapViewOfFile`（`map`） | 位址由 kernel 選，不蓋掉這個 process 已有的東西；handle 在呼叫期間開著。成功才建 `Mapping` |
 | `platform/windows/memory.rs` 的 `Mapping`（`Drop` 的 `UnmapViewOfFile`、`Send`、`Sync`、`Memory`）、`page` 的 `GetSystemInfo` | 和 macOS 的 `Mapping` 同一個論證：範圍是 `map` 得到的那一段，只在 `drop` 解除一次；位址在每條 thread 上都一樣，經過 `Memory` 的讀寫都是整段位元組的複製；放進 `Pool` 的是 map 成可寫的。`GetSystemInfo` 只寫一個全零也合法的區域變數，不會失敗 |
+| `platform/windows/channel.rs` 的 `Operation`、`End` 的兩個指標（`Send`、`Sync`、`Drop`） | 每個通道一筆讀、一筆寫的操作，各是自己的一塊配置（`Box::into_raw`），和通道同時建立、同時釋放，位址不變。讀的那一筆只有 IO thread 碰，寫的那一筆只在 `writing` 的鎖底下碰，而且都只在它不在進行中的時候：進行中時 kernel 隨時會寫 `OVERLAPPED`（和讀的緩衝區），這段時間沒有任何參照指著它們。`Drop` 只在計數歸零時跑，而進行中的操作拿著一個計數，所以釋放時沒有操作在進行 |
+| `platform/windows/channel.rs` 的 `hold`、`let_go`、`wait` 裡的 `Arc::from_raw` | 發出操作之前多拿一個計數（`Arc::into_raw` 之後不留指標）；操作沒發出去（呼叫回的不是成功也不是 `ERROR_IO_PENDING`，這時不會有通知）就當場還回去；發出去的，每筆恰好一個通知，waiter 取到時用 `Arc::from_raw` 接手那一個計數。指標是操作裡記的 `end`，建立通道時從 `Arc::into_raw` 得到、之後不變。port 上只有這個 waiter 的通道的 pipe，另外只有它自己的打斷會 post、而且不帶 `OVERLAPPED`，所以帶 `OVERLAPPED` 的通知一定是其中一筆操作的，位址就是操作的位址（`repr(C)`，`OVERLAPPED` 是第一個欄位）。`kind` 和 `end` 建立之後不變，讀它們不和 kernel 搶 |
+| `platform/windows/channel.rs` 的 `ReadFile`、`WriteFile`（`End::read`、`write`） | pipe 的鎖拿著，handle 在呼叫期間開著。緩衝區和 `OVERLAPPED` 是操作自己的，被剛拿的計數留到通知取走。讀進去的是緩衝區裡還沒用的那一段；寫出去的是這次組好的那一段，長度在 64 KiB 以內 |
+| `platform/windows/channel.rs` 的 `wait` 借出去的位元組（`slice::from_raw_parts`） | 通道的讀的緩衝區裡的一段，`wait` 自己拿著通道的 `Arc`。這時沒有讀在進行，而下一筆讀只有這條 thread 會發、在借出去的這次呼叫回來之後：借出去的期間沒有人寫它 |
+| `platform/windows/channel.rs` 的 `End::next` 把數值包成 handle（`OwnedHandle::from_raw_handle`） | 只有 child 那一端做，數值是 host 寫的，host 是可信的：它為這則訊息把 handle 放進這個 process、只說一次。host 寫錯（同一個數值兩次）時 child 會把同一個 handle 關兩次。host 那一端沒有這段程式 |
+| `platform/windows/channel.rs` 的 `DuplicateHandle`（`to_duplicate_into`、`give`、`take_back`） | handle 都是借來的、呼叫期間開著的，結果寫進活到呼叫結束的區域變數。`take_back` 關的是 `give` 剛放進 child 的那幾個，child 還沒被告知有它們；沒有目標的 `DUPLICATE_CLOSE_SOURCE` 只在來源的 process 裡關掉 |
+| `platform/windows/channel.rs` 的 `named_pipe`、`IocpWaiter` 的 port（`CreateNamedPipeW`、`CreateFileW`、`ConnectNamedPipe`、`CreateIoCompletionPort`、`PostQueuedCompletionStatus`、`GetQueuedCompletionStatus`、`CancelIoEx`） | 名字是以 0 結尾、活到呼叫結束的陣列。回來的 handle 檢查過才包成 `OwnedHandle`（新的，只有這裡拿著）。其餘的呼叫都是對自己拿著、呼叫期間開著的 handle 做的，寫的是活到呼叫結束的區域變數 |
 | `core/region.rs` 的 `HeapMemory`（`Box::into_raw`、`from_raw`、`Send`、`Sync`） | 指標來自 `new` 裡的 `Box::into_raw`，只在 `drop` 還回去一次；配置是這個值自己的，經過 `Memory` 的讀寫都是整段位元組的複製，兩端同時複製和跨 process 的 mapping 是同一種情況 |
 
 ## 測試
@@ -505,6 +534,8 @@ python3 scripts/test.py ipc tla      # crates/ipc/tla/ 的三個 TLA+ 模型（T
 `src/platform/macos/message.rs` 的單元測試（同一個 process 裡自己送給自己）：幾種長度的 body 原樣到、送的人是這個 process；沒有訊息時逾時；right 照順序到、各自還是原來那一種（對它送的訊息從原來的 port 出來）；回答送到發問的人指定的 port；沒回答就丟掉時 kernel 會通知（送的人是 0）；送到死掉的 port 送不出去、帶的 right 被放掉；收到又丟掉的 right 被放掉、receive right 丟掉 port 就死了；超過緩衝區的 body、超過 16 個 right 不送，right 被放掉；比緩衝區長的訊息被拒絕並且從 port 上拿掉；佇列滿了、不等的送會被拒絕，讀走一則就有位置；排法不對的六種（太長的 body、out-of-line 的記憶體、out-of-line 的 port、send-once 的 right、太多 right、不是回一次的 reply）都被拒絕、帶來的被放掉，之後 port 照常。
 
 `src/platform/windows/memory.rs` 的單元測試（只在 Windows；同一個 process 裡把 handle 再 map 一次當成對方）：和 macOS 的那一組同樣的情況（建的一端寫的對方讀得到、是同一塊記憶體；只能讀的 handle map 成可寫會失敗；對方寫的建的一端讀得到；唯讀的 mapping 改不成可寫；有 mapping 在，放掉 handle 記憶體還在；map 超過長度失敗、少於可以、長度 0 不 map；不是整頁的長度不建；kernel 拒絕的呼叫不給 handle；不是 region 的 handle（一個檔案的）map 不了；mapping drop 就是解除；池子和表接在真的 region 上），加上：只能讀的 handle 換不成權限更多的（可寫的、全部的、改清單的都要不到），兩種 handle 都只有 map 的權限（查詢、刪除、讀清單的也要不到）；交出去的 handle 不被 child 繼承；4000 塊建了又放，process 的 handle 沒有變多，留著時一塊一個。
+
+`src/platform/windows/channel.rs` 的單元測試（兩端在同一個 process 裡，各有自己的 `IocpWaiter`，host 的「child」是這個 process；每個測試自己設 10 秒的時限）：一端寫的另一端拿到；長的訊息一次只收一次寫入放得下的（host 的少一個表頭），一段一段照順序到；一次一筆寫入，進行中被拒絕的在通知取走時收到 `Writable`，沒被拒絕過的不收；交給迴圈之前的寫入被拒絕、加入時被告知、之後寫得出去；0 個位元組什麼都不寫；handle 跟著訊息、送出去之後不在寫的人手上、照順序、各是原本的權限、不被繼承、map 得到同一塊；2000 則帶 handle 的送完 process 的 handle 沒有變多；對方不在時 2000 次送不出去，handle 還在寫的人手上、child 裡一個都沒留；child 被交的 handle 被放掉、host 一個都沒收到，child 寫的像表頭的位元組（數值是 host 自己的 pipe）host 當成位元組、那個 handle 還開著；host 的三筆寫入在一次讀裡，各借出去一次；最長的寫入兩筆；一個位元組一個位元組到的表頭和內容接得起來，一筆之後跟著半筆也不掉；六種不合理的表頭都是對方不在了、之前合理的照樣借出去；打斷 20 次只報一次、之後下一件事照常、另一條 thread 打斷得了；一個 waiter 等四條通道分得出各是哪一條（加入之前就到的也收得到），一條的對方不在了只有那一條被告知，關掉的、已經加入過的加不進去；拿掉的那一端有位元組、被拒絕過、或加入前被拒絕過，都不再報；關掉的一端送不出去，對方先收到關之前送的、再被告知一次，自己那一端被取消的讀什麼都不報；值丟掉就是對方不在了；讀和寫都失敗時也只報一次；host 留的 process handle 問不到 process 的狀態；送的 thread 結束之後它還在進行的寫入照樣到；300 條通道用過放掉之後 process 的 handle 沒有變多（留著時有）；操作還在進行時通道的內部狀態活著、通知取走之後才釋放；pipe 的兩端不被繼承、第二個 client 連不上、每條的名字不同。
 
 `src/platform/macos/message.rs` 另外為 out-of-line 和不等的送：長的 body 走 out-of-line、到的一樣；送出去之後送的一方再改，收的一方那一份不變；不收 out-of-line 的緩衝區、上限比較小的緩衝區都拒絕，剛好到上限的收；收了又丟、被拒絕的各 2 GiB 之後位址空間沒有長大；佇列滿時帶著 right 和 16 MiB 的 body 連送 64 次，位址空間和 right 都不變，有空間之後同一個呼叫送得出去；kernel 在有空間時通知、佇列開到 1024 則、port 死掉時通知（在 port set 上也收得到，知道是哪一個 port）。
 

@@ -435,7 +435,7 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
     - `crates/ipc/tests/it/process_channel.rs` 只用上面三個函式和 `Platform`，Linux 和 Windows 的那一層原樣跑同一份；`crates/ipc/tests/it/mach_channel.rs` 留下只有 macOS 有的（假冒 kernel 的通知、超過上限的 out-of-line、audit token）。
     - 2f 和 2g 各自記決定時的編號：Linux 從第 43 條起，Windows 從第 53 條起（第 42 條是分頭之前最後一條共用的），兩邊都進了 `0004` 之後再順一次。
 42. **一個 process 一條 IO thread，`ipc` 的迴圈管所有通道；「等」是每條 thread 一個的介面**（2026-11-21，第 2 階段的 2e-7，分頭做 2f、2g 之前；改掉第 35 條的一部分）：Browser 的 IO thread 等所有 renderer 的通道，child 的等它那一條。`ipc::endpoint` 的 `IoLoop` 是那條 thread 的迴圈：別的 thread 用 `LoopHandle::serve` 把端點交給它、`stop` 停它；某一條通道結束時告訴那個端點的 `Handler`（`gone`），其他的照常。
-    - **平台的介面拆成兩個角色**：通道的（`Platform`，每條一個：寫、map 記憶體、建 region、關掉）和等待的（`Waiter`，每條 thread 一個：把通道登記進來、等所有通道、被叫醒）。等待的對應各平台原生的東西：macOS 是一個 port set，Linux 是 epoll，Windows 是 I/O completion port。接收的緩衝區跟著等待的那一半，整條 thread 一個。
+    - **平台的介面拆成兩個角色**：通道的（`Platform`，每條一個：寫、map 記憶體、建 region、關掉）和等待的（`Waiter`，每條 thread 一個：把通道登記進來、等所有通道、被叫醒）。等待的對應各平台原生的東西：macOS 是一個 port set，Linux 是 epoll，Windows 是 I/O completion port。接收的緩衝區跟著等待的那一半，整條 thread 一個（Windows 例外，每條通道一塊，第 55 條）。
     - **第 35 條哪些還成立**：「迴圈由 `ipc` 提供、順序只有一份」不變（一條通道做一步還是 `Endpoint::turn`）。「一條 thread 佔住一條通道」（`Endpoint::run`）拿掉了：它的前提是 machopo 一條 IO thread 對一條通道，那不是要的。
     - **不選保留一個介面、`wait` 改成收一組通道**：每次等都要把整組交進去，Linux 和 Windows 上等於每次重建等待的集合，或者在裡面留狀態，那就是拆成兩個只是藏起來。
     - **叫醒怎麼知道是哪一條通道**：callback 由核心的通道自己拿著（`Sender::on_wake`），迴圈在端點加入時裝上：記下那條通道的編號、打斷那條 thread 的等待。平台完全不經手（`Transport` 沒有 `wake`、`Platform` 沒有 `on_wake`），所以每個平台少寫兩個函式，也沒有「平台忘了轉呼叫」這種錯。還沒加入迴圈的通道叫醒沒有作用，加入時迴圈先推它一步，所以加入之前排著的東西不會掉。
@@ -495,8 +495,23 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
     - **照已經定的和 macOS 的做法，沒有另外選的**：只做兩種（第 37 條）；長度要是整頁，不是的不建（核心只要 64 KiB 起每次加倍的大小，第 29 條）；`map` 的長度是 0 時不 map（Windows 把 0 當成整個 section）；map 可以少於整塊、不能多；不比對 section 實際的大小（Chromium 收到和 map 的時候也不比）。
     - **建立時就預訂整塊的 commit**（`PAGE_READWRITE`，不加 `SEC_RESERVE`；和 Chromium 一樣）：訂不到時 `create` 沒有結果，核心把資料放在訊息裡。Chromium 這時會重試、並結束別的 process 來騰記憶體，這裡不做。
 
+55. **Windows 的通道和它的 `Waiter`**（2026-11-22，2g-2；十項都是逐項列出問題和選項之後使用者選的，Chromium 的部分對的是當天的 `main`）：
+    - **通道交給迴圈之前不寫**。問題：pipe 要到 `Waiter::add` 才在 completion port 上，在那之前沒當場完成的寫入沒有人收得到它的完成，而且探測量到發出它的 thread 一結束 kernel 就取消它。做法：加入之前 `write` 一律回 `WouldBlock`，訊息留在核心的佇列；加入時被拒絕過的那一端會被告知有空間。不選照樣寫（要依賴「關聯之前發出的操作完成時進不進 port」，文件沒有寫）；不選建通道時就給 port（要改三個平台共用的 `Waiter::add`）。Chromium 一樣：`delay_writes_` 到 `StartOnIOThread` 註冊完才清掉。
+    - **讀的緩衝區每條通道一塊**（第 42 條的「整條 thread 一個」在 Windows 做不到）。問題：completion port 是先把緩衝區交給 kernel、資料到了才通知，所以每條在等資料的通道都要有一塊在 kernel 手上。不選用長度 0 的讀當通知、再用共用的緩衝區讀：每批資料多一次系統呼叫，切到一半的那半段還是要每條通道自己存。大小先固定（一次寫入的上限，64 KiB），2g-4 量。Chromium 也是每條通道自己的，從 4096 起、不夠就加倍。
+    - **進行中的讀寫自己拿著通道的一份 `Arc`，完成的通知被取走時才放掉；迴圈停下來時不收**。問題：通道關掉（`CancelIoEx`、關 pipe）之後，kernel 還會寫那筆操作的 `OVERLAPPED` 和緩衝區，直到它的通知從 port 取走。通道離開迴圈之後遲到的通知照樣被取走、釋放，不報給迴圈。迴圈停下來（waiter 丟掉）時還在進行的不收：那幾塊記憶體不釋放，洩漏是安全的、釋放才不安全；`shut` 一定關掉所有 handle，所以留下的只有記憶體。不選關的時候等通知收完（2026-11-21 那一版，最多 5 秒）：一條 IO thread 上會卡住所有通道。不選停下來時收完再關 port：多一條測試走不到的路（超過時限）和一個沒有依據的數字；正式的用法裡迴圈只在 process 結束時停。Chromium 一樣：`pending_read_`、`pending_write_` 讓物件活到 `OnIOCompleted`，IO thread 結束時不收（「Pending IO will never be dispatched once the pump is gone」）。
+    - **child 說它帶了 handle 時由核心當成壞訊息；改掉第 41 條的契約的寫法**。問題：兩種做法都不看數值，差在通道結束的理由。原本寫的是平台層當成對方不在了；改成平台層不交出 handle、核心看到訊息說有 handle 而這一端不准附，照壞訊息關掉（`HandlesNotAllowed`）。這樣理由和另外兩個平台一樣，不分平台的跨 process 測試原樣通過，判斷只有核心那一份。`Platform` 的說明跟著改一句（共用的檔案，單獨一個 commit）。
+    - **一次寫入最多 64 KiB（含表頭），pipe 的緩衝區 64 KiB**。問題：沒當場完成的寫入，平台層要自己留一份副本到完成；一次收多少副本就多大，而一則訊息最大 128 MiB。探測量到：緩衝區 4 KiB 到 1 MiB 相差在 15% 以內，一次 64 KiB 比整則快 13% 到 17%。不選整則一次寫（Chromium：緩衝區 4096、整則寫，它的佇列擁有訊息的記憶體所以不用副本）。
+    - **當場完成的讀寫也等 port 的通知才算完成**（先寫這一種，2g-4 兩種都量，「待決定」有一條）。問題：`WriteFile`、`ReadFile` 當場完成時要不要也等 IO thread 取到通知。等的話只有一條路、一種狀態，代價是每則送出的訊息 IO thread 都要醒一次。另一種（`FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`）是這一種加一條捷徑。Chromium 是這一種。
+    - **只有 host 往 child 的方向有這一層的表頭**。問題：pipe 是位元組串流，handle 的數值要跟著某一則訊息的第一段，所以 host 的每次寫入前面有表頭（後面幾個位元組、幾個 handle，各 `u32`；每個 handle 一個 8 位元組的數值）。child 往 host 沒有 handle 會走，所以那個方向沒有表頭，寫的就是核心的位元組：host 不解析 child 的任何平台層位元組，沒有任何一行會把位元組變成 handle，不被信任的輸入全部由核心（有 fuzzer 和模型）處理。不選兩個方向對稱（Chromium 的做法，它的 child 也送 handle）：host 要解析 child 寫的表頭，那一段工具看不到。之後開放 child 送 handle 時這個方向要加格式；那時 host 也不能照數值收，要去 child 的 process 把 handle 拉過來。
+    - **pipe 建立時的保護**：照 Chromium 的 `platform_channel.cc`（名字第一次用、只有一個 instance、位元組模式、client 那一端沒有再建 instance 的權限、server 不能冒用 client、建好後確認 client 連著），另外四點不同：加 `PIPE_REJECT_REMOTE_CLIENTS`（Chromium 沒有；多一層）；名字是 pid、process 裡的序號和標準庫的 `RandomState` 給的 64 位元亂數（名字被猜到只會讓我們建不成，搶不到通道）；兩步的失敗都換名字重試，最多 8 次，再不行回 `None`（Chromium 只重試一次、其餘讓 process 當掉）；兩端建立時都不可繼承（Chromium 建立時就可繼承，因為它啟動 process 時用清單指定繼承哪幾個；用標準庫的 `Command` 沒有清單，怎麼交給 child 是 2g-3 的事）。
+    - **host 在寫入當下才把 handle 複製進 child，失敗就收回**。順序：有寫入在進行就回 `WouldBlock`、什麼都不複製；否則逐個複製（照原樣的權限、在 child 裡不可繼承）、寫 pipe；寫入發出去之後才關掉自己的那一份；複製到一半或寫入當場失敗時，把已經放進 child 的從 child 裡關掉。host 留的 child 的 process handle 只有 `PROCESS_DUP_HANDLE`，不借用 `Child` 的那一個。child 收到的數值是 0 或 -1 時當成對方不在了。不選複製的同時關掉來源、失敗不收回（Chromium 的 `DUPLICATE_CLOSE_SOURCE`）：寫入失敗時 child 裡留一個它不知道的 handle，而且「不留東西」沒辦法用測試守。
+    - **幾個小的**：寫入完成的位元組數不是整段，當成對方不在了（Chromium 一樣）；child 收到不合理的表頭（長度 0、超過一次寫入、handle 超過 16 個）當成對方不在了；讀失敗或讀到 0 個位元組當成對方不在了，不分哪一種錯誤（Chromium 一樣）；打斷等待被呼叫很多次只往 port 放一筆；核心交來 0 個位元組時什麼都不寫。
+    - **寫的時候定的細節**：「又有空間」只告訴被拒絕過的那一端（每筆寫入完成都報的話，每則訊息端點都要多推一步）；對方不在了只報一次（讀和寫可能都失敗）；自己關掉的那一端之後什麼都不報；`Channel` 的值丟掉就是關掉（waiter 可能還拿著它的內部狀態）；child 那一端被交了 handle 時放掉它們（核心的約定是寫入收了位元組就收走 handle，而它沒有地方放）。
+
 ## 待決定
 
+- **Windows 的通道上，當場完成的讀寫要不要等 completion port 的通知**（第 55 條；2g-4 量的時候）：現在等（Chromium 的做法）。另一種是設 `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`、當場完成就算完成。兩種都量：連續送幾千則小訊息的總時間（不分平台的跨 process 測試裡對方先睡著的那一個情境就是）、大的資料一段一段送的時間、一條 thread 服務好幾條通道時。差不多就留現在的（少一條路要審）；另一種明顯比較快才換。
+- **Windows 的通道一次讀多大**（第 55 條；2g-4 量的時候）：現在是一次寫入的上限（64 KiB），每條通道一塊。量 128 KiB 有沒有比較快，有才換；量到每條通道的記憶體是問題時改成 Chromium 的從小的開始、不夠再長大。
 - **CI 要不要加 macOS、Windows 的 runner**（第 40 條；2g 做的時候）：只跑 `cargo test -p ipc`（不依賴 V8，幾分鐘）。要看的是費用（GitHub 的 macOS runner 是 Linux 的 10 倍、Windows 是 2 倍）和 runner 的系統版本與開發機不同時那幾個實測來的行為還成不成立。
 - **IO thread 上複製大資料的時間**（第 36 條；第 3 階段量捲動時每個 frame 的延遲時一起看）：64 KiB 以上的 `BigBuffer` 在 IO thread 上從 region 複製出來，那一段時間後面的訊息等著。量到是問題時，把複製搬到目標 thread（IO thread 只交出「這一塊的借據」，目標 thread 複製完再還）：線上的格式不變，代價是表跨 thread 共用、多一組 loom 的模型。
     - **第 42 條之後影響變大**（2026-11-21）：Browser 的一條 IO thread 管所有 renderer 的通道，一個 renderer 送大資料時，等的是其他每一個 renderer 的訊息，不只是它自己後面的。

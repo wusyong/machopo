@@ -1,0 +1,246 @@
+# Step 2g-2: Windows's channel and its waiter
+# (`ipc::platform::windows::channel`). An end writes nothing before a
+# thread serves it, and one write at a time; room is told to whoever was
+# refused; a host's handles go as values in its header and a child's
+# bytes go as they are; a header no host writes is the peer gone; an
+# interrupt ends one wait; an end removed, shut or gone is told of no
+# more; nothing is left open by a channel let go.
+#
+# Not listed, the same either way (`docs/test-gaps.md`): `shut` without
+# `CancelIoEx` (closing the pipe cancels too); a read that failed or
+# brought nothing not taken for the pipe's end (the next read fails);
+# a write that put fewer bytes than asked taken for whole (a pipe never
+# does); an interrupt posted every time it is asked (only more turns of
+# the loop); the pipe's flags, which only another process could try.
+test = ["cargo", "test", "-q", "-p", "ipc", "--lib", "platform::windows"]
+timeout = 120
+
+[[mutant]]
+name = "an end writes before a thread serves it"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''        if !writing.joined || writing.going {'''
+to = '''        if writing.going {'''
+
+[[mutant]]
+name = "a second write is started while one goes on"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''        if !writing.joined || writing.going {'''
+to = '''        if !writing.joined {'''
+
+[[mutant]]
+name = "a refused write isn't remembered"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''            writing.blocked = true;
+            return Err(WriteError::WouldBlock);'''
+to = '''            return Err(WriteError::WouldBlock);'''
+
+[[mutant]]
+name = "joining doesn't let the end write"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''        writing.joined = true;
+'''
+to = ''''''
+
+[[mutant]]
+name = "an end refused before it joined isn't told of room"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''            self.writable.push_back(key);
+'''
+to = ''''''
+
+[[mutant]]
+name = "joining starts no read"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''        self.read.push_back(key);
+        true'''
+to = '''        true'''
+
+[[mutant]]
+name = "a write's completion doesn't end the write"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''                    writing.going = false;
+                    let whole'''
+to = '''                    let whole'''
+
+[[mutant]]
+name = "room is told after every write"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''                    if blocked {'''
+to = '''                    if true {'''
+
+[[mutant]]
+name = "room is never told"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''                    if blocked {'''
+to = '''                    if false {'''
+
+[[mutant]]
+name = "a host's write takes a whole write's bytes besides its header"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''bytes.len().min(RECORD_MAX.saturating_sub(header))'''
+to = '''bytes.len().min(RECORD_MAX)'''
+
+[[mutant]]
+name = "a child's end is taken for a host's"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''            host: peer.is_some(),'''
+to = '''            host: peer.is_none(),'''
+
+[[mutant]]
+name = "handles written are left with the writer"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''        handles.clear();
+        Ok(taken)'''
+to = '''        Ok(taken)'''
+
+[[mutant]]
+name = "handles given for a write that failed stay in the child"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''            if let Some(peer) = peer.as_ref() {
+                take_back(peer, &values);
+            }
+'''
+to = ''''''
+
+[[mutant]]
+name = "a handle given is one the child's children inherit"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''            &raw mut out,
+            0,
+            0,
+            DUPLICATE_SAME_ACCESS,'''
+to = '''            &raw mut out,
+            0,
+            1,
+            DUPLICATE_SAME_ACCESS,'''
+
+[[mutant]]
+name = "a host holds its child with every right"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''            PROCESS_DUP_HANDLE,
+            0,
+            0,'''
+to = '''            0x1F_FFFF,
+            0,
+            0,'''
+
+[[mutant]]
+name = "a value that is no handle is taken for one"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''            if handle.is_null() || handle == INVALID_HANDLE_VALUE {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "a null value is taken for a handle"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''            if handle.is_null() || handle == INVALID_HANDLE_VALUE {'''
+to = '''            if handle == INVALID_HANDLE_VALUE {'''
+
+[[mutant]]
+name = "a record of no bytes is lent"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''        if len == 0 || count > VALUES_MAX || whole > RECORD_MAX {'''
+to = '''        if count > VALUES_MAX || whole > RECORD_MAX {'''
+
+[[mutant]]
+name = "a header may say any number of handles"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''        if len == 0 || count > VALUES_MAX || whole > RECORD_MAX {'''
+to = '''        if len == 0 || whole > RECORD_MAX {'''
+
+[[mutant]]
+name = "a header may say more than a write holds"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''        if len == 0 || count > VALUES_MAX || whole > RECORD_MAX {'''
+to = '''        if len == 0 || count > VALUES_MAX {'''
+
+[[mutant]]
+name = "a record lent is counted as its header alone"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''        reading.start = reading.start.saturating_add(whole);'''
+to = '''        reading.start = reading.start.saturating_add(header);'''
+
+[[mutant]]
+name = "a child's bytes lent to a host are lent again"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''            reading.start = reading.end;
+'''
+to = ''''''
+
+[[mutant]]
+name = "the start of a record isn't moved to the buffer's start"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''        operation.buffer.copy_within(reading.start..reading.end, 0);
+'''
+to = ''''''
+
+[[mutant]]
+name = "what a read brought isn't counted"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''            reading.end = reading.end.saturating_add(transferred);
+'''
+to = ''''''
+
+[[mutant]]
+name = "an interrupt asked for isn't looked for"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''            if self.interrupt.asked.swap(false, Ordering::SeqCst) {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "an interrupt posts nothing"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''unsafe { PostQueuedCompletionStatus(interrupt.port.as_raw_handle(), 0, 0, null()) };'''
+to = '''let _ = null::<u8>();'''
+
+[[mutant]]
+name = "an end removed is still served"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''        self.channels.retain(|(served, _)| *served != key);
+'''
+to = ''''''
+
+[[mutant]]
+name = "an end removed is still told of room"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''        self.writable.retain(|served| *served != key);
+'''
+to = ''''''
+
+[[mutant]]
+name = "the peer gone is told for each operation that fails"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''            // Told once: its other operation's failing says no more.
+            self.remove(key);
+'''
+to = ''''''
+
+[[mutant]]
+name = "an end that shut itself is told what its operations ended with"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''(Arc::ptr_eq(&served, end) && lock(&end.pipe).is_some()).then_some(key)'''
+to = '''Arc::ptr_eq(&served, end).then_some(key)'''
+
+[[mutant]]
+name = "an end that shut itself before its first read is told its peer is gone"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''                if lock(&end.pipe).is_none() {
+                    self.read.pop_front();
+                    continue;
+                }
+'''
+to = ''''''
+
+[[mutant]]
+name = "an end shut keeps its child's process"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''        drop(lock(&self.peer).take());
+'''
+to = ''''''
+
+[[mutant]]
+name = "a channel dropped isn't shut"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''        // on): its handles aren't.
+        self.0.shut();'''
+to = '''        // on): its handles aren't.'''

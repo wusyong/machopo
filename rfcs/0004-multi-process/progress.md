@@ -34,7 +34,7 @@
 | 2f-3：用真的平台層重量（第 44、45、49 條的數字）；2f 的檢查和文件 | 完成 | 2026-11-22 |
 | 2g 之前：Windows 的探測（`prototype-windows/`）：送的 thread 結束時的寫入、pipe 的緩衝區、大的資料、和 `interprocess` 比 | 完成 | 2026-11-21 |
 | 2g-1：Windows 的共用記憶體（section 的建立、map、只能讀的 handle；第 54 條） | 完成 | 2026-11-22 |
-| 2g-2：Windows 的通道和它的 `Waiter`（completion port；同一個 process 裡的測試） | 未開始 | |
+| 2g-2：Windows 的通道和它的 `Waiter`（completion port；同一個 process 裡的測試；第 55 條） | 完成 | 2026-11-22 |
 | 2g-3：Windows 的 `spawn`、`inherited`、`child_gone`；不分平台的跨 process 測試原樣通過；Windows 自己的（對方不能附 handle 時不看訊息裡的 handle 數值，第 41 條的契約） | 未開始 | |
 | 2g-4：在真的通道上量、文件；決定 CI 要不要加 macOS、Windows 的 runner | 未開始 | |
 | 2h：第 2 階段的檢查、`soundness.md`、`test.py` 的指令、文件；把 `test.py ipc` 的每一項排進每週的 CI（2a 起在本機跑） | 未開始 | |
@@ -60,6 +60,7 @@
 | `ipc` 的核心不做系統呼叫、不分平台 | `python3 scripts/sanity.py deps` |
 | 通道的兩側（`ipc::core::channel`）：送不等、照順序，好幾條 thread 同時送時線上的序號連續、訊息不互相插入；佇列超過上限就關掉通道；不認得的目的地和被拒絕的內容是壞訊息；結束只報告一次、理由是第一個，之後不交出訊息也送不出去 | `cargo test -p ipc`；`python3 scripts/test.py ipc models`；`python3 scripts/test.py ipc miri` |
 | Windows 的共用記憶體（`ipc::platform::windows::memory`）：建的一端寫的，對方的 handle 只能 map 成唯讀，也換不成權限更多的 handle（連改 section 的清單的權限都要不到）；對方寫的，建的一端只 map 成唯讀；唯讀的 mapping 改不成可寫；只建整頁的長度，map 不超過 region 的長度、長度 0 不 map；不是 region 的 handle map 不起來；kernel 拒絕時沒有 handle；交出去的 handle 不被 child 繼承；放掉之後不留 handle、mapping drop 就解除 | `cargo test -p ipc --lib platform`（Windows） |
+| Windows 的通道（`ipc::platform::windows::channel`），兩端在同一個 process 裡：交給迴圈之前不寫、加入時被拒絕過的被告知有空間；一次一筆寫入，沒被拒絕過的不被告知；長的訊息一段一段照順序到；host 的 handle 跟著訊息、離開送的一端、到的只有原本的權限、不被繼承，送出去和送不出去都不留 handle；child 不能給 handle，host 把 child 寫的像表頭的位元組當成位元組；host 的每一次寫入各借出去一次、照順序，一個位元組一個位元組到的接得起來；不合理的表頭當成對方不在了；打斷只報一次；一個 waiter 分得出它的通道，拿掉的、自己關掉的、已經報過不在了的都不再報；值丟掉就是關掉；送的 thread 結束之後它的寫入照樣到；進行中的操作讓通道的內部狀態活到通知被取走；通道放掉之後不留 handle；pipe 的兩端不被繼承、第二個 client 連不上 | `cargo test -p ipc --lib platform::windows::channel`（Windows） |
 
 ## 做過的檢查
 
@@ -485,3 +486,22 @@ branch `0004-linux`，從 `0004` 的 2e-7（`82a4fc7`）分出去。
 - **Miri 跑不到**：全部是系統呼叫。
 - **跑過的檢查**：`cargo test -p ipc`（Windows：單元 64 個、整合 53 個）；`cargo clippy -p ipc --all-targets -- -D warnings`；`sanity.py` 的 `deps`、`unsafe`、`tests`、`numerics`、`boundary`、`spans`、`docs`。核心和端點沒有動，fuzz、Miri、模型、Verus、TLA+ 沒有重跑。
 - **留給 2g-2 的**：`Platform` 的 `map` 和 `create` 直接接這兩個函式；handle 送給對方是 `DuplicateHandle` 進對方的 process（這裡的 handle 已經只有該有的權限，照原樣的權限複製）。
+### 2g-2：Windows 的通道和它的 `Waiter`（2026-11-22，Windows 11 10.0.26200、Intel Core i9-13900K）
+
+- **決定**：「已決定的事項」第 55 條（十項，逐項問過）。
+- **做了什麼**：
+  - `ipc::platform::windows::channel`：`pipe()`（兩端）、`Channel::host(pipe, child 的 process)`、`Channel::child(pipe)`（實作 `Transport` 和 `Platform`）、`IocpWaiter`（實作 `Waiter`）。從空白寫的，沒有用 2026-11-21 那一版的結構；系統呼叫的參數對過那一版和 Chromium。
+  - `ipc::endpoint` 的 `Platform` 的說明照第 55 條改了一句，`crates/ipc/README.md` 同一句也改（共用的，要單獨一個 commit 先進 `0004`）。
+  - workspace 的 windows-sys 再多三個 feature（`Win32_Storage_FileSystem`、`Win32_System_IO`、`Win32_System_Pipes`）。
+- **還沒有的**：`spawn`、`inherited`、`child_gone`（2g-3）。兩端現在只在同一個 process 裡測過：host 的「child 的 process」是自己，所以「handle 是放進對方的 process 而不是自己的」這裡分不出來，等 2g-3 的跨 process 測試；兩個端點接在這個通道上也是那時第一次跑。
+- **測試**：`channel.rs` 的單元測試 24 個（各有 10 秒的時限）。`cargo test -p ipc --lib platform::windows` 重複跑 20 次都過。
+- **寫的時候碰到的**：
+  - **自己關掉、而且一次都還沒等過的那一端被報成對方不在了**：加入時排著的第一次讀在 pipe 已經關掉時發不出去，被當成 pipe 的盡頭。是把測試改成「真的讓等待把 port 裡的東西取走」之後才看到的（原本的測試先打斷等待，等待在看 port 之前就回來了）。改成自己關掉的那一端什麼都不報。
+  - **數 handle 的測試卡住時拖住別的測試**：三個數 handle 的通道測試原本在時限裡面拿那把共用的鎖，卡住的 thread 一直拿著，共用記憶體那邊沒有時限的同類測試就等到永遠（第一次 mutation test 因此每個會卡住的 mutant 都等到工具的上限）。改成由測試自己的 thread 在時限外面拿。
+  - **測試連寫兩筆沒有等上一筆完成**：第一版有三個測試這樣寫，第二筆被拒絕。這是設計的行為（寫入要等 IO thread 取到通知才算完成），測試改成被拒絕時等「又有空間」。
+- **mutation test**（`mutants-2g2.toml`）：33 個，全部抓到（12 個是測試卡住、到時限才失敗的：叫醒、又有空間、對方不在了這一類）。過程：第一次漏了 1 個，「自己關掉的那一端被告知它的操作怎麼結束的」：測試裡那一端關掉時沒有讀在進行。補了兩種情況（關掉時有讀在進行、一次都還沒等過就關掉），重跑相關的 4 個都抓到。第一次跑到一半停掉過（上面那一條的鎖），用 `--restore` 還原後重跑。跑完確認檔案還原了（還原之後 38 個測試通過）。
+- **等價、沒有列的**（記在 `docs/test-gaps.md`）：`shut` 不取消（關掉 pipe 就會取消）；讀失敗或讀到 0 不當成盡頭（下一次讀會失敗）；寫入少寫了當成整段（pipe 不會少寫）；打斷每次都放一筆（只是迴圈多轉幾圈）。
+- **只靠審查的**（`docs/test-gaps.md`）：pipe 建立時的旗標（要另一個知道名字、卡在那一小段時間的 process 才看得到）；進行中的操作拿著的那一份 `Arc` 成對（發出時拿、取到通知時放、沒發出去時還回去；弄壞它是釋放後被用，沒有列成 mutant）。有一個測試守著方向：操作還在進行時通道的內部狀態活著，通知被取走之後才釋放。
+- **Miri 跑不到**：全部是系統呼叫。
+- **跑過的檢查**：`cargo test -p ipc`；`cargo clippy -p ipc --all-targets -- -D warnings`、`cargo fmt -p ipc --check`；`sanity.py` 的 `deps`、`unsafe`、`tests`、`numerics`、`boundary`、`spans`、`docs`。核心沒有動；端點只改了 `Platform` 的說明文字。fuzz、Miri、模型、Verus、TLA+ 沒有重跑。
+- **留給 2g-3 的**：`spawn`（怎麼把 client 那一端交給 child：自己呼叫 `CreateProcessW` 給清單，還是用標準庫加一把鎖）、`inherited`、`child_gone`；`process_channel.rs` 原樣通過；跨 process 才看得到的（handle 真的到了 child 的 process、child 亂附 handle 時 host 以壞訊息關掉、送的 thread 結束之後寫入照樣到）。

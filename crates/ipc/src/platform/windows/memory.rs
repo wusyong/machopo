@@ -442,6 +442,7 @@ mod tests {
     fn a_region_let_go_leaves_no_handle() {
         // Other tests open and close handles meanwhile, a few at a time,
         // not thousands.
+        let _alone = super::super::counting_handles();
         let before = handles();
         for i in 0..4000 {
             let (mine, handle) = create(LEN, i % 2 == 0).unwrap();
