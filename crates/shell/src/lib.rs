@@ -48,6 +48,34 @@ pub const SCRIPT_ENGINES: browser::ScriptEngineFactory = browser::ScriptEngineFa
     worker_engine: Some(dom_js::V8WorkerEngine::boxed),
 };
 
+/// What tells the executable it is to be a renderer process (Chromium's
+/// `--type=renderer`): its first argument, so that it knows what it is
+/// before it reads anything else.
+pub const RENDERER_PROCESS_SWITCH: &str = "--type=renderer";
+
+/// What the executable exits with as a renderer process that had no
+/// channel to a browser (it was started by hand).
+pub const NO_CHANNEL_EXIT: u8 = 2;
+
+/// Is a renderer process until it ends (Chromium's `RendererMain`): the
+/// end of the channel its browser started it with, and the renderer run
+/// on it with this executable's script engines. What the process exits
+/// with.
+pub fn renderer_main() -> u8 {
+    let Some(channel) = ipc::platform::inherited() else {
+        eprintln!(
+            "machopo: {RENDERER_PROCESS_SWITCH} is how machopo starts its own renderers: \
+             there is no browser to render for"
+        );
+        return NO_CHANNEL_EXIT;
+    };
+    match browser::run_child_process(channel, SCRIPT_ENGINES) {
+        browser::ChildExit::Ended => 0,
+        browser::ChildExit::NotStarted => 3,
+        browser::ChildExit::Crashed => 4,
+    }
+}
+
 /// URLs pass through; anything else is a file path, which becomes a
 /// `file://` URL (relative paths are resolved against the working
 /// directory).

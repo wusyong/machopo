@@ -16,8 +16,8 @@ use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 
 use bytes::Bytes;
-use crossbeam_channel::Sender;
 use ipc::TimeTicks;
+use protocol::control_channel::BrowserSender;
 use protocol::devtools_network::{priority, request_json, resource_type, response_json, wall_time};
 use protocol::network::{LoadResult, NetError, RedirectInfo, ResourceRequest};
 use protocol::renderer::{NavigationLoad, RendererHostMsg};
@@ -141,7 +141,7 @@ impl KeptBody {
 
 /// Blink's `InspectorNetworkAgent`, for every session of the page.
 pub(crate) struct NetworkAgent {
-    to_browser: Sender<RendererHostMsg>,
+    to_browser: BrowserSender,
     /// This renderer's, in its requests' ids (its frames' too).
     prefix: u64,
     sessions: RefCell<HashMap<String, Session>>,
@@ -152,11 +152,7 @@ pub(crate) struct NetworkAgent {
 }
 
 impl NetworkAgent {
-    pub(crate) fn new(
-        to_browser: Sender<RendererHostMsg>,
-        prefix: u64,
-        log_agent: Rc<LogAgent>,
-    ) -> Self {
+    pub(crate) fn new(to_browser: BrowserSender, prefix: u64, log_agent: Rc<LogAgent>) -> Self {
         Self {
             to_browser,
             prefix,
@@ -719,8 +715,8 @@ mod tests {
 
     fn agent() -> (NetworkAgent, crossbeam_channel::Receiver<RendererHostMsg>) {
         let (to_browser, from) = crossbeam_channel::unbounded();
-        let log = Rc::new(LogAgent::new(to_browser.clone()));
-        (NetworkAgent::new(to_browser, 0xab, log), from)
+        let log = Rc::new(LogAgent::new(to_browser.clone().into()));
+        (NetworkAgent::new(to_browser.into(), 0xab, log), from)
     }
 
     fn command(method: &str, params: Value) -> String {

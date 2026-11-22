@@ -44,6 +44,7 @@ mod navigator;
 mod network;
 mod performance;
 mod remote_debugging;
+mod renderer_process;
 mod resize_observers;
 mod scheduling;
 mod script;

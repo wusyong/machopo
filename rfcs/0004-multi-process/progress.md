@@ -39,7 +39,7 @@
 | 2g-4：在真的通道上量；當場完成的讀寫改成不經過 completion port、讀的緩衝區維持 64 KiB、CI 先不加 runner（第 54 條） | 完成 | 2026-11-22 |
 | 2h：第 2 階段的檢查、`unsafe` 的論證、`test.py` 的指令、文件；`test.py ipc` 的每一項不排進 CI，留在本機跑（第 55 條；原本規劃排進每週的 CI） | 完成 | 2026-11-22 |
 | 3：啟動 child process，分成七段（第 56 條） | 進行中 | |
-| 3a：child 起得來：`--type=renderer`、child 的 IO thread、Browser 用 `ipc::platform::spawn` 啟動、四種訊息走控制通道 | 進行中 | |
+| 3a：child 起得來：`--type=renderer`、child 的 IO thread、Browser 用 `ipc::platform::spawn` 啟動、四種訊息走控制通道 | 完成 | 2026-11-22 |
 | 3b：導覽的 body 的管道跨 process | 未開始 | |
 | 3c：tile 走共用記憶體 | 未開始 | |
 | 3d：process 不在了（當掉、被 kill、壞訊息、`about:crash`） | 未開始 | |
@@ -581,4 +581,28 @@ branch `0004-linux`，從 `0004` 的 2e-7（`82a4fc7`）分出去。
 - **文件**：「測試」的表、`docs/testing.md`、`docs/test-gaps.md` 改成 CI 不跑那五項；`test.py ipc -h` 本來就寫了每一項怎麼裝、怎麼跑，沒有改。
 - **沒有做的**：`test.py ipc` 的五項這一段沒有重跑（核心從 2e-7 之後沒有動；那時跑過，結果在 2e-7 那一節）。
 - **第 2 階段到這裡做完**。還沒有 merge 回 `main`：等使用者要求。
+
+### 3a：child 起得來（2026-11-22，macOS 26、Apple M4）
+
+- **決定**：「已決定的事項」第 56 條（第 3 階段分成七段）、第 57 條（3a 的五件事：程式放進現有的 crate、旗標是通道的第一則訊息、送的一端換成自己的型別、目的地的編號在 `protocol`、`Handler` 不收窄）。
+- **做了什麼**：
+  - `protocol::control_channel`（新的）：兩個方向的目的地（往 renderer：main thread、compositor；往 Browser：`RendererHostMsg`、給 Viz 的），兩端共用的通道設定（只有 Browser 附 handle、開管道；region 的上限暫定每個方向 64 MiB），`BrowserSender`，`send_over`（通道拒絕的訊息記下來、丟掉，通道繼續）。`protocol` 多依賴 `tracing`（為了那一則 log）。
+  - 送的一端都有兩種：`BrowserSender`（取代 `renderer`、`compositor` 裡 30 處 crossbeam 的 `Sender<RendererHostMsg>`）、`CompositorFrameSinkSender`、`RendererSender`、`CompositorSender`。走通道的 `CompositorFrameSinkSender` 不帶 `FrameSinkId`，它的 `frame_sink_id()` 拿掉了（沒有人用）。
+  - `renderer::child_process`（新的）：`run_child_process`（child 的入口：建端點、`Chrome_ChildIOThread`、等第一則訊息 `ChildInit`、開 renderer 的 thread、等它結束）、`ChildExit`。IO thread 的 `Handler` 只解碼、放進兩個佇列；通道結束時送 `Shutdown` 給 main thread、停迴圈。
+  - `browser`：`RendererLauncher`（`InProcess(ScriptEngineFactory)` 或 `Process(建 Command 的函式)`），取代 `WebContents::new` 和 `RenderProcessHost::launch` 的 `script_engine` 參數；`RenderProcessHost` 的 process 那一支：`ipc::platform::spawn`、端點、送 `ChildInit`、把端點交給整個 Browser 一條的 IO thread（第一次用到時才建，不停），`ChannelHost`（`Handler`：`RendererHostMsg` 交給原本的 `IoThreadHost`、給 Viz 的補上這個 renderer 的 `FrameSinkId`）；結束時等 child 5 秒、不走就 kill；`WebContents::renderer_pid()`。
+  - `shell`：`machopo --type=renderer`（只認第一個參數）、`shell::renderer_main`。
+- **這一段刻意沒做的**：視窗和 headless 還不會啟動 renderer process（怎麼打開、預設是哪一種，等 3b、3c 之後定）；body 的管道（3b）；tile 的共用記憶體（3c）；結束不回應的 process、`about:crash`、壞訊息時結束 process（3d，現在 `kill` 只關掉通道、process 在 host 放掉時才結束）；child 的 trace（3f）。記在 `docs/limitations.md`。
+- **測試**：
+  - `crates/browser/tests/it/renderer_process.rs`（測試把自己再執行一次當 renderer）：`about:blank` 和一個帶標題的 `data:` 頁面在另一個 process 載入、同一個 process 服務兩次導覽；兩個分頁各一個 process、各自的訊息不混；renderer 的 frame 到 Viz 時是分頁的那個 sink；renderer 被 `kill -9` 之後分頁收到 `RendererGone`、變成當掉的狀態（只在 Unix）；同一個 process 的 renderer 沒有 pid。
+  - `crates/shell/tests/it/renderer_process.rs`（真的 `machopo --type=renderer`）：手動啟動時說明、以 2 結束；拿到通道之後 Browser 那一端不見就結束；renderer 的 thread 都在跑時 Browser 不見也結束；Browser 那一端在它拿之前就不見時不會留著；switch 不在第一個參數時不算。
+- **過程中碰到的**：
+  - `shell` 的「Browser 不見」的測試一開始失敗，原因在測試：剛 link 好的 `machopo` 第一次啟動要兩秒多，測試放掉 Browser 那一端時 child 還沒拿它那一端（macOS 上拿到的是已經死掉的 right，當成沒有通道、以 2 結束）。改成 renderer 開始讀通道、thread 開好時各在 log 說一聲，測試等那一行。
+  - 同一份測試裡「手動啟動」的那一個原本要 30 秒：測試的 process 因為別的測試已經是 rendezvous 的 host，child 向它要自己的那一端、等到逾時。改成經過 shell 啟動（它的 parent 不是 host）。真的手動啟動沒有這個問題。
+  - 在 macOS 上 `child_gone` 只能對已經結束的 child 呼叫：對還活著、還沒拿它那一端的 child 呼叫，它會等 30 秒才知道沒有通道。`RenderProcessHost` 是先 kill、等它結束才呼叫。
+- **mutation test**（`mutants-3a.toml`）跑了 18 個，17 個抓到，1 個漏掉、留到後面：
+  - 漏掉的是「Browser 那一端照 renderer 的設定建」。兩端的目的地都是兩個，而這一段沒有任何東西需要 Browser 附 handle（大的資料建不出 region 時退回放在訊息裡，照樣到）。補不出有意義的測試：要看得出來，得有非走共用記憶體不可的東西（3c 的 tile），或一個自己附 handle 的 renderer 被拒絕（3d、3e 的壞訊息）。從清單拿掉、在清單的開頭寫明，3c 和 3d 做的時候放回去。
+  - 沒有列成 mutant 的兩處（清單開頭有寫）：`ChildInit::gpu`（還沒有帶 GPU 的 renderer process 的測試，3c）、`end_child` 在 child 不走時 kill（測試的 renderer 都會自己結束，3d）。
+  - 跑完確認檔案都還原了（重新 build 過）。
+- **跑過的檢查**：`cargo test -p ipc -p protocol -p compositor -p renderer -p browser -p shell`（都過）；`cargo clippy` 同樣六個 crate `--all-targets -- -D warnings`；`cargo fmt --check`；`sanity.py` 的 7 項（新檔案先 `git add -N` 再跑：它只看追蹤的檔案）。之後加的測試和文件各自重跑了那兩組測試和 `sanity.py docs`。
+- **沒有驗到的**：Linux 和 Windows（這一段只在 macOS 上編和跑；`child` 的啟動、`kill -9` 的測試在 Linux 上應該一樣，Windows 上那個測試不編）。
 

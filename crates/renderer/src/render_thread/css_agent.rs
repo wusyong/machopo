@@ -19,11 +19,11 @@ use std::rc::Rc;
 use std::sync::{Arc, Weak};
 
 use computed_style::ComputedStyle;
-use crossbeam_channel::Sender;
 use css::inspector::{SourceDeclaration, SourceRule};
 use css::{CssPropertyValueSet, CssRule, StyleSheetContents as CssStyleSheetContents};
 use dom::{Cx, Dom, ForcedPseudoClasses, NodeId, NodeKind, NodeRef};
 use dom_api::{DevToolsPage, FrameLayout};
+use protocol::control_channel::BrowserSender;
 use protocol::renderer::RendererHostMsg;
 use serde_json::{Value, json};
 
@@ -71,7 +71,7 @@ type LinkText = (Weak<CssStyleSheetContents>, Option<Rc<str>>);
 
 /// Blink's `InspectorCSSAgent`, for every session of the page.
 pub(crate) struct CssAgent {
-    to_browser: Sender<RendererHostMsg>,
+    to_browser: BrowserSender,
     dom_agent: Rc<DomAgent>,
     /// What has the documents' markup, which an inline sheet's position is
     /// found in.
@@ -181,7 +181,7 @@ struct Refetch {
 
 impl CssAgent {
     pub(crate) fn new(
-        to_browser: Sender<RendererHostMsg>,
+        to_browser: BrowserSender,
         dom_agent: Rc<DomAgent>,
         page_agent: Rc<PageAgent>,
         prefix: u64,

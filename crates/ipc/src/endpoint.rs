@@ -432,6 +432,11 @@ impl<P: Platform> Received<'_, P> {
 }
 
 /// What the layer above does with a message.
+///
+/// It runs on the IO thread, which every channel of the process waits
+/// behind: it may do work (check a message, hand it on), but it doesn't
+/// wait for anything, and what it does for one message doesn't grow
+/// without bound with what the peer sent.
 pub trait Handler<P: Platform> {
     /// A message from the peer, on the IO thread. An error closes the
     /// channel.

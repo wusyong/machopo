@@ -1,0 +1,136 @@
+# Step 3a: a renderer in a process of its own. Each kind of message goes
+# to its destination at the other end, the renderer starts with its first
+# message, the browser says whose frames a renderer's are, and each end
+# hears the other go.
+#
+# Not here, and why:
+# - `ChildInit::gpu` (whether Viz has a GPU): tiles on the GPU from a
+#   renderer process are the next step but one's; no test has one yet.
+# - `end_child`'s kill of a process that didn't exit when asked: the tests'
+#   renderers do exit. With the step that ends a process for cause.
+# - The browser's end made as a renderer's (`control_channel::config(false)`
+#   in `RenderProcessHost::launch`): run, and missed. Both ends have two
+#   destinations, and nothing in this step needs the browser to attach a
+#   handle: large bytes fall back to the message itself. The step that puts
+#   tiles in shared memory needs it, and a renderer that attaches a handle
+#   is refused only by the right setting: that step's and the bad-message
+#   step's tests are to catch it.
+test = ["sh", "-c", "timeout 600 cargo test -q -p browser --test it -- renderer_process && timeout 900 cargo test -q -p shell --test it -- renderer_process"]
+timeout = 1800
+
+[[mutant]]
+name = "a renderer's messages to the browser go to Viz's destination"
+file = "crates/protocol/src/control_channel.rs"
+from = '''send_over(link, to_browser::HOST, &msg)'''
+to = '''send_over(link, to_browser::FRAME_SINK, &msg)'''
+
+[[mutant]]
+name = "a compositor's messages to Viz go to the browser's destination"
+file = "crates/protocol/src/viz.rs"
+from = '''send_over(link, to_browser::FRAME_SINK, &msg)'''
+to = '''send_over(link, to_browser::HOST, &msg)'''
+
+[[mutant]]
+name = "the browser's messages to the main thread go to the compositor's destination"
+file = "crates/renderer/src/task_queue.rs"
+from = '''send_over(link, to_renderer::MAIN, &msg)'''
+to = '''send_over(link, to_renderer::COMPOSITOR, &msg)'''
+
+[[mutant]]
+name = "the browser's messages to the compositor go to the main thread's destination"
+file = "crates/compositor/src/proxy_main.rs"
+from = '''send_over(link, to_renderer::COMPOSITOR, &msg)'''
+to = '''send_over(link, to_renderer::MAIN, &msg)'''
+
+[[mutant]]
+name = "the renderer's end is made as a browser's"
+file = "crates/renderer/src/child_process.rs"
+from = '''endpoint::endpoint(channel, control_channel::config(false))'''
+to = '''endpoint::endpoint(channel, control_channel::config(true))'''
+
+[[mutant]]
+name = "a renderer process is told nothing to start with"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                let _ = send_over(&link, to_renderer::MAIN, &init);'''
+to = '''                let _ = &init;'''
+
+[[mutant]]
+name = "what the main thread is sent is dropped by the IO thread"
+file = "crates/renderer/src/child_process.rs"
+from = '''                    let _ = self.to_main.send(message.decode::<RendererMsg>()?);'''
+to = '''                    let _ = message.decode::<RendererMsg>()?;'''
+
+[[mutant]]
+name = "what the compositor is sent is dropped by the IO thread"
+file = "crates/renderer/src/child_process.rs"
+from = '''                let _ = self.to_compositor.send(message.decode::<CompositorMsg>()?);'''
+to = '''                let _ = message.decode::<CompositorMsg>()?;'''
+
+[[mutant]]
+name = "a renderer whose browser went before it started waits for ever"
+file = "crates/renderer/src/child_process.rs"
+from = '''        self.init = None;
+        let _ = self.to_main.send(RendererMsg::Shutdown);'''
+to = '''        std::mem::forget(self.init.take());
+        let _ = self.to_main.send(RendererMsg::Shutdown);'''
+
+[[mutant]]
+name = "a running renderer whose browser went isn't ended"
+file = "crates/renderer/src/child_process.rs"
+from = '''        self.init = None;
+        let _ = self.to_main.send(RendererMsg::Shutdown);'''
+to = '''        self.init = None;'''
+
+[[mutant]]
+name = "what a renderer process sends the browser is dropped"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                if let Some(host) = &mut self.host {
+                    host.on_message(msg);
+                }'''
+to = '''                let _ = msg;'''
+
+[[mutant]]
+name = "what a renderer process sends Viz is dropped"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                let _ = self.viz.send(VizMsg::FrameSink(self.frame_sink_id, msg));'''
+to = '''                let _ = msg;'''
+
+[[mutant]]
+name = "a renderer process's frames are another sink's"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                let _ = self.viz.send(VizMsg::FrameSink(self.frame_sink_id, msg));'''
+to = '''                let other = FrameSinkId {
+                    client_id: self.frame_sink_id.client_id.wrapping_add(1),
+                    ..self.frame_sink_id
+                };
+                let _ = self.viz.send(VizMsg::FrameSink(other, msg));'''
+
+[[mutant]]
+name = "a renderer process whose channel is over isn't reported gone"
+file = "crates/browser/src/render_process_host.rs"
+from = '''        if let Some(host) = self.host.take() {
+            host.on_channel_closed();
+        }'''
+to = '''        drop(self.host.take());'''
+
+[[mutant]]
+name = "a tab says its renderer has no process"
+file = "crates/browser/src/render_process_host.rs"
+from = '''        self.child.as_ref().map(|(child, _)| child.id())'''
+to = '''        None'''
+
+[[mutant]]
+name = "the executable is a renderer wherever the switch is"
+file = "crates/shell/src/main.rs"
+from = '''std::env::args().nth(1).as_deref() == Some(shell::RENDERER_PROCESS_SWITCH)'''
+to = '''std::env::args().any(|arg| arg == shell::RENDERER_PROCESS_SWITCH)'''
+
+[[mutant]]
+name = "a renderer with no channel runs on as a browser"
+file = "crates/shell/src/lib.rs"
+from = '''        return NO_CHANNEL_EXIT;
+    };
+    match browser::run_child_process'''
+to = '''        return 0;
+    };
+    match browser::run_child_process'''

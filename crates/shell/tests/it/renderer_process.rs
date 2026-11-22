@@ -1,0 +1,186 @@
+//! `machopo --type=renderer`: the executable as a renderer process. That
+//! a renderer in a process of its own loads a document is `browser`'s
+//! test, with a test run for the process; here is the executable's own
+//! way in.
+
+use std::io::{BufRead, BufReader};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+const MACHOPO: &str = env!("CARGO_BIN_EXE_machopo");
+
+/// What the process exited with, if it did before long.
+fn exit_of(child: &mut std::process::Child) -> Option<i32> {
+    let started = Instant::now();
+    loop {
+        match child.try_wait().expect("the child is ours to wait for") {
+            Some(status) => return status.code(),
+            None if started.elapsed() > Duration::from_secs(20) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            None => std::thread::sleep(Duration::from_millis(5)),
+        }
+    }
+}
+
+/// `machopo` with `args`, as a person starts it: from a shell, not from
+/// this test run, which is a host to the renderers its other tests start
+/// (a renderer asks its parent for its end, and one a host knows nothing
+/// of waits to be told of).
+#[cfg(unix)]
+fn by_hand(args: &[&str]) -> Command {
+    let mut command = Command::new("sh");
+    // Not the shell's last command, which it would become instead of
+    // starting.
+    command
+        .arg("-c")
+        .arg(r#""$0" "$@"; exit $?"#)
+        .arg(MACHOPO)
+        .args(args);
+    command
+}
+
+#[cfg(not(unix))]
+fn by_hand(args: &[&str]) -> Command {
+    let mut command = Command::new(MACHOPO);
+    command.args(args);
+    command
+}
+
+#[test]
+fn a_renderer_started_by_hand_says_it_has_no_browser() {
+    // What would be a URL to open, were this a browser.
+    let out = by_hand(&[shell::RENDERER_PROCESS_SWITCH, "about:blank"])
+        .stdin(Stdio::null())
+        .output()
+        .expect("machopo runs");
+    assert_eq!(out.status.code(), Some(i32::from(shell::NO_CHANNEL_EXIT)));
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(said.contains("no browser to render for"), "{said}");
+    assert!(out.stdout.is_empty());
+}
+
+#[test]
+fn a_renderer_whose_browser_goes_ends() {
+    let mut command = Command::new(MACHOPO);
+    command
+        .arg(shell::RENDERER_PROCESS_SWITCH)
+        // It says when it reads its channel.
+        .env("RUST_LOG", "renderer=info")
+        .stderr(Stdio::piped());
+    let (mut child, channel) = ipc::platform::spawn(&mut command).expect("machopo starts");
+    let mut said = BufReader::new(child.stderr.take().expect("its standard error"));
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let read = said.read_line(&mut line).expect("what it says is text");
+        assert!(read != 0, "it ended before it had its channel");
+        if line.contains("the renderer process has its channel") {
+            break;
+        }
+    }
+    // The browser's end goes before it said what to start with: the
+    // renderer hears, and ends without having rendered.
+    drop(channel);
+    assert_eq!(exit_of(&mut child), Some(0));
+}
+
+/// Reads what the process says until it says `what`.
+fn until_it_says(said: &mut impl BufRead, what: &str) {
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let read = said.read_line(&mut line).expect("what it says is text");
+        assert!(read != 0, "it ended before it said: {what}");
+        if line.contains(what) {
+            return;
+        }
+    }
+}
+
+/// A browser's side of a renderer's channel that makes nothing of what
+/// the renderer sends.
+struct Deaf;
+
+impl ipc::endpoint::Handler<ipc::platform::Channel> for Deaf {
+    fn message(
+        &mut self,
+        _message: ipc::endpoint::Received<'_, ipc::platform::Channel>,
+    ) -> Result<(), ipc::core::frame::BadMessage> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_running_renderer_whose_browser_goes_ends() {
+    use protocol::control_channel::{config, send_over, to_renderer};
+
+    let mut command = Command::new(MACHOPO);
+    command
+        .arg(shell::RENDERER_PROCESS_SWITCH)
+        .env("RUST_LOG", "renderer=info")
+        .stderr(Stdio::piped());
+    let (mut child, channel) = ipc::platform::spawn(&mut command).expect("machopo starts");
+    let mut said = BufReader::new(child.stderr.take().expect("its standard error"));
+    // The browser's side: an IO thread, and what a renderer starts with.
+    let (link, endpoint) = ipc::endpoint::endpoint(channel, config(true));
+    let (io, io_handle) = ipc::endpoint::IoLoop::new().expect("a way to wait");
+    io_handle.serve(endpoint, Deaf);
+    let io_thread = std::thread::spawn(move || io.run());
+    let init = browser::ChildInit {
+        flags: browser::RendererFlags {
+            test_fonts: true,
+            web_tests: false,
+            wait_for_all_pipeline_stages_before_draw: true,
+            automation: false,
+            user_agent: browser::user_agent(),
+            system_colors: gfx::SystemColors::DEFAULT,
+            num_raster_threads: None,
+            caret_blink_interval: None,
+            parser_budget: Default::default(),
+            new_content_rendering_delay: browser::NEW_CONTENT_RENDERING_DELAY,
+        },
+        gpu: false,
+    };
+    send_over(&link, to_renderer::MAIN, &init).expect("the channel is there");
+    until_it_says(&mut said, "the renderer's threads are started");
+    // The browser goes, with the renderer's threads running and nothing
+    // said to them: they are ended for it.
+    io_handle.stop();
+    io_thread.join().expect("the IO thread ends");
+    drop(link);
+    assert_eq!(exit_of(&mut child), Some(0));
+}
+
+#[test]
+fn a_renderer_whose_browsers_end_was_gone_already_has_no_browser() {
+    let mut command = Command::new(MACHOPO);
+    command
+        .arg(shell::RENDERER_PROCESS_SWITCH)
+        .stderr(Stdio::null());
+    let (mut child, channel) = ipc::platform::spawn(&mut command).expect("machopo starts");
+    // Gone at once: before the renderer took its end (it finds none to
+    // talk to), or just after (it hears). Either way it doesn't stay.
+    drop(channel);
+    let exit = exit_of(&mut child);
+    assert!(
+        exit == Some(0) || exit == Some(i32::from(shell::NO_CHANNEL_EXIT)),
+        "{exit:?}"
+    );
+}
+
+#[test]
+fn the_switch_is_one_only_as_the_first_argument() {
+    // Anywhere else it is an argument of the browser's, which has none
+    // such.
+    let out = Command::new(MACHOPO)
+        .args(["--test-fonts", shell::RENDERER_PROCESS_SWITCH])
+        .stdin(Stdio::null())
+        .output()
+        .expect("machopo runs");
+    assert_eq!(out.status.code(), Some(2));
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(!said.contains("no browser to render for"), "{said}");
+}

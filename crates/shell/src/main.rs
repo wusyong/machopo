@@ -432,7 +432,30 @@ fn profile(args: &Args) -> Result<browser::Profile, browser::ProfileError> {
     }
 }
 
+/// The log on standard error, as `filter` says.
+fn log_layer<S>(filter: tracing_subscriber::EnvFilter) -> impl tracing_subscriber::Layer<S>
+where
+    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+{
+    tracing_subscriber::fmt::layer()
+        .with_thread_names(true)
+        // Standard output is `--automation-pipe`'s.
+        .with_writer(std::io::stderr)
+        .with_filter(filter)
+}
+
 fn main() -> ExitCode {
+    // A renderer process: nothing of the browser's is read or started.
+    // Its spans aren't traced: the browser's trace is one file, which a
+    // second process writing would spoil.
+    if std::env::args().nth(1).as_deref() == Some(shell::RENDERER_PROCESS_SWITCH) {
+        let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| DEFAULT_LOG_FILTER.into());
+        tracing_subscriber::registry()
+            .with(log_layer(filter))
+            .init();
+        return ExitCode::from(shell::renderer_main());
+    }
     let args = match parse_args(std::env::args().skip(1)) {
         Ok(Command::Run(args)) => *args,
         Ok(Command::Help) => {
@@ -451,11 +474,7 @@ fn main() -> ExitCode {
         .max_level_hint()
         .unwrap_or(LevelFilter::TRACE)
         .as_log();
-    let log = tracing_subscriber::fmt::layer()
-        .with_thread_names(true)
-        // Standard output is `--automation-pipe`'s.
-        .with_writer(std::io::stderr)
-        .with_filter(filter);
+    let log = log_layer(filter);
     // The trace's end is written when `_trace_end` drops, as `main` returns.
     // Before anything starts V8, which records its events only if the
     // trace is up by then.

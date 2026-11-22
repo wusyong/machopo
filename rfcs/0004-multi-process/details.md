@@ -42,7 +42,7 @@
 | Browser 處理一個 renderer 的訊息 | `RenderProcessHost::launch` 裡 IO thread 的迴圈 | 一個只有「收到這則訊息」一個入口的物件，兩種模式共用 |
 | `BeginFrame` | Viz 呼叫 Browser 給的 closure，送進 compositor 的 channel | `RenderProcessHost` 讓 closure 寫進控制通道；renderer 不必改 |
 | compositor 送給 Viz | 綁著 `FrameSinkId` 的 `CompositorFrameSinkSender` | 經過控制通道到 Browser 的 IO thread，由它補上 `FrameSinkId` 轉給 Viz |
-| `RendererFlags` | 啟動 thread 時的參數 | 命令列 |
+| `RendererFlags` | 啟動 thread 時的參數 | 控制通道上的第一則訊息（`README.md` 的第 57 條；原本寫的是命令列） |
 | script engine | 啟動的一方給的 `ScriptEngineFactory` | child 的 `main` 選 |
 | `RendererGone` | renderer 的 thread 結束、channel 關閉 | 控制通道斷了，或 renderer 送了壞訊息 |
 | 結束一個 renderer（`kill`、壞訊息） | 送 `Shutdown`、不再轉它的訊息；thread 自己結束 | 結束那個 process |

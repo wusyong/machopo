@@ -181,7 +181,7 @@ Browser process                                Renderer process
 
 ### 啟動
 
-Browser 建好控制通道的兩端，以 `--type=renderer` 和 renderer 的旗標（`RendererFlags`，已經能序列化）啟動同一個執行檔，把一端交給 child。child 的 `main` 看到 `--type=renderer` 就不開視窗、選好 script engine，從控制通道拿到初始的訊息，然後跑現在的 `spawn_renderer_main_thread`。之後的 sandbox 套在這一段的最前面，任何其他程式碼之前。
+Browser 建好控制通道的兩端，以 `--type=renderer` 啟動同一個執行檔，把一端交給 child。child 的 `main` 看到 `--type=renderer` 就不開視窗、選好 script engine，從控制通道拿到第一則訊息（renderer 的旗標 `RendererFlags` 和「Viz 有沒有 GPU」，第 57 條），然後跑現在的 `spawn_renderer_main_thread`。之後的 sandbox 套在這一段的最前面，任何其他程式碼之前。
 
 - **Linux 和 Windows**：child 繼承一端。兩端都由 Browser 建立，沒有用名字連線的步驟，別的 process 搶不到通道。
   - Linux：fork 之後、exec 之前，只在 child 裡拿掉那一端的 close-on-exec，號碼放在環境變數裡告訴 child（第 43 條）。
@@ -538,6 +538,12 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
     - **為什麼**：整合的問題（啟動、旗標、兩邊的 thread 怎麼接）最早碰到；3b 在 3c 前面，因為任何真的頁面都要 body，而沒有 GPU 時像素本來就走訊息，3b 做完 headless 就能跑；3e 要等基本功能都在才定得了；量測照原本的規劃放最後。
     - **不選先把單一 process 的模式改成 Browser 只有一條 IO thread**：動到現在全部測試都在跑的路，而「單一 process 時要不要連 IO thread 都拿掉」還沒定（「待決定」）。3a 只讓多 process 的模式用一條，單一 process 的先不動。
     - 對照 Chromium：平常是多個 process，`--single-process` 是測試和除錯用的；renderer 的入口是 `RendererMain`，child 的 IO thread 由 `ChildProcess` 建。
+57. **3a 的幾件事**（2026-11-22，第 3 階段的 3a；逐項列出選項、使用者選的）：
+    - **程式放進現有的 crate**：child 那一側（入口函式、IO thread）在 `renderer`，Browser 啟動 child、接上通道的那一段在 `browser`（`RenderProcessHost` 旁邊），兩邊共用的在 `protocol`；`shell` 的 `main` 只認 `--type=renderer`、選好 script engine、呼叫 `renderer` 的入口。理由：`renderer` 和 `browser` 本來就依賴 `ipc`；`browser` 的整合測試可以把自己再執行一次當 child，不必先編好整個 `machopo`；script engine 還是 `shell` 選，`renderer` 維持和 engine 無關。不選新開一個 `child` crate（Chromium 的 `content/child`）：現在只有一種 child，哪些算共用是猜的，有第二種（GPU process）時再從 `renderer` 搬出來。不選都放 `shell`：`browser` 的測試啟動不了 child，而且啟動 renderer 是 `browser` 的事。
+    - **旗標是控制通道上的第一則訊息，命令列只有 `--type=renderer`**（改掉「啟動」和「要改的地方」原本寫的命令列）：child 拿到它那一端之後等第一則訊息（`RendererFlags` 和「Viz 有沒有 GPU」），再開 renderer 的 thread。理由：型別照 serde 走，加欄位不用改傳遞的程式，沒有長度和跳脫的問題；`browser` 的測試把自己再執行一次當 child，測試的執行檔不認得多的命令列參數，旗標走通道的話測試的 child 和真的 child 走同一條路；之後執行中要改的設定也是通道上的訊息。代價：`ps` 看不到每個 renderer 的設定；child 要等到第一則訊息才開始。`--type=renderer` 留在命令列：之後的 sandbox 要在讀任何東西之前靠它知道自己是哪種 process。不選每個欄位一個 switch（Chromium 對啟動時不變的設定的做法：10 個欄位各寫一次轉換，漏改不會編譯失敗）；不選命令列一個序列化好的參數（看不懂，而且有長度上限）。
+    - **送的一端都是自己的型別，裡面是 crossbeam 或通道**：renderer 送給 Browser 的 `Sender<RendererHostMsg>`（crossbeam 的型別直接寫在 `renderer` 和 `compositor` 的 30 處）換成 `BrowserSender`；它、`CompositorFrameSinkSender` 和 Browser 送給 renderer 的 sender 裡面各有兩種：單一 process 時是 crossbeam，多 process 時直接呼叫 `ipc` 的 `Link::send`。理由：送的 thread 直接寫進通道，沒有多的 thread 和佇列；四種訊息經過同一把鎖，不同種之間的順序保得住（「架構」）；對方不讀時只有 `ipc` 的那一個佇列在長，上限只有一份。代價：30 處型別改名（呼叫 `send` 的地方不動）。不選留著 crossbeam、child 多一條轉送的 thread：每則訊息多一次叫醒（睡著時約 20 µs），兩種訊息各一個佇列時不同種之間的順序保不住，兩個沒有上限的佇列疊在一起。不選讓 IO thread 去拿 crossbeam 裡的訊息：`ipc` 的迴圈等的是 kernel 的東西。對照 Chromium：送的一端是 `mojo::Remote`，任何 sequence 呼叫就寫進 pipe。
+    - **目的地的編號定義在 `protocol`**（照慣例做的，沒有列選項）：兩邊都要知道哪個編號是哪種訊息，而 `protocol` 是兩邊都依賴的。往 renderer：`RendererMsg`、`CompositorMsg`；往 Browser：`RendererHostMsg`、`CompositorFrameSinkMsg`。第一則訊息的型別帶著 `RendererFlags`，那是 `renderer` 的型別，所以定義在 `renderer`（`browser` 本來就依賴它）。
+    - **`Handler` 的介面不收窄；規定是「不等、每則訊息做的事有上限」，3f 量**（「待決定」留下來的那一條）：看程式才知道兩邊不一樣。renderer 那一側的 IO thread 只解碼、放進 main thread 或 compositor 的佇列；Browser 那一側處理訊息的物件（`IoThreadHost`）本來就在 IO thread 上做事（核對請求和 cookie、子資源交給網路、登記 worker 和 blob URL，其餘的才轉給 UI thread），都是交出去、帶一個完成時的 callback，不等，但不是「只放進佇列」。所以收窄成「只能解碼加放佇列」對 Browser 行不通。不選只收窄 renderer 那一側：`ipc` 多一套只有一個使用者的介面，而那一側的 `Handler` 只有十幾行。不選把 Browser 的檢查搬離 IO thread：推翻「架構」和第 1 階段抽好的物件，子資源多一次轉手。對照 Chromium：IO thread 上禁止會等的呼叫（debug build 會 assert），允許做事。
 
 ## 待決定
 
@@ -547,10 +553,6 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
     - **現在有的數字**：複製一次約 18 到 26 µs/MiB（第 36 條的 1 MiB 約 18 µs、8 MiB 約 150 µs；macOS 的通道借出來不複製是 8 MiB 408 µs、多複製一次是 622 µs）。照這個推算，64 MiB 約 1.7 ms、256 MiB 約 7 ms、最大的一塊 1 GiB 約 27 ms；這幾個是推算，沒有量過那麼大的，也沒有和解碼合在一起量。常見的大小（幾百 KiB 到幾 MiB）是幾十到幾百 µs。
     - **管道的資料也在 IO thread 上複製**：一步裡每條管道最多送到對方還有的空間（不超過那條管道的容量，64 KiB 一段），所以一步佔多久看開管道的人給的容量；容量幾百 KiB 時是十幾 µs。量的時候一起看。
     - **對照 Chromium**：IO thread 只把訊息轉給綁定 `Receiver` 的那條 thread，型別的檢查和反序列化在那條 thread 上做；`BigBuffer` 走共用記憶體時 IO thread 只經手 handle，收的一方拿到 mapping 的 view，要不要複製由它決定。它的 IO thread 不付這一次複製，付的是 region 佔得比較久、和對方不被信任時要自己先複製再用。上面「搬到目標 thread」就是往這個做法靠。
-- **怎麼不讓上層在 IO thread 上做重的事**（第 3 階段寫第一個真的 `Handler`、`browser` 的那一個時；2026-11-21 提出）：`Handler::message` 在 IO thread 上跑，一個 process 只有一條（第 42 條），它回傳之前其他每一條通道都在等。應該只解碼、把值放進目標 thread 的佇列；現在這只是用法上的規定，型別擋不住。
-    - **收窄介面**：上層替每個目的地登記型別和目標 thread 的佇列，解碼和放進佇列由 `ipc` 做，上層的程式只在目標 thread 上跑。正確的寫法變成唯一的寫法；代價是介面比較死（訊息提到的管道要當場拿走、解不出來要關通道，都要另外設計），型別自己的 `Deserialize` 和佇列的 `push` 還是在 IO thread 上。Chromium 是這個方向：`Receiver` 綁在哪條 thread 就在那條 thread 上處理，在 IO thread 上攔訊息是特例。
-    - **執行時量**：`ipc` 量每一步和每一次 `message` 花多久，超過門檻（例如 1 ms）在 debug build 記下來或讓測試失敗，trace 裡也看得到。便宜，`ipc` 自己的慢（上面那一條的複製）也抓得到；但是事後才發現，只看得到跑到的路。Chromium 在 IO thread 上禁止會等的呼叫（debug build 會 assert）。
-    - 現在不定：還沒有真的使用者，收窄的介面是猜的。兩個不互斥。
 
 排程之前：
 

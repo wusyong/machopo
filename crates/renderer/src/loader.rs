@@ -10,8 +10,8 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use base::SequenceNumber;
-use crossbeam_channel::Sender;
 use dom_api::FrameId;
+use protocol::control_channel::BrowserSender;
 use protocol::network::{
     CredentialsMode, LoadResult, RedirectMode, RequestDestination, RequestMode, ResourceRequest,
 };
@@ -88,7 +88,7 @@ impl RequestIds {
 /// a blob URL as it parses it).
 #[derive(Debug, Clone)]
 pub(crate) struct BlobUrls {
-    to_browser: Sender<RendererHostMsg>,
+    to_browser: BrowserSender,
     state: Rc<RefCell<BlobUrlState>>,
 }
 
@@ -105,7 +105,7 @@ struct BlobUrlState {
 }
 
 impl BlobUrls {
-    pub(crate) fn new(to_browser: Sender<RendererHostMsg>) -> Self {
+    pub(crate) fn new(to_browser: BrowserSender) -> Self {
         Self {
             to_browser,
             state: Rc::default(),
@@ -282,7 +282,7 @@ mod tests {
     #[test]
     fn blob_urls_are_registered_and_revoked() {
         let (to_browser, from_renderer) = crossbeam_channel::unbounded();
-        let urls = BlobUrls::new(to_browser);
+        let urls = BlobUrls::new(to_browser.into());
         let bytes: std::sync::Arc<[u8]> = std::sync::Arc::from(&b"hi"[..]);
         urls.register("blob:null/1", FrameId(1), "a/b", bytes.clone());
         urls.register("blob:null/2", FrameId(2), "a/b", bytes.clone());

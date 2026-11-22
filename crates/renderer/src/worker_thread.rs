@@ -42,8 +42,8 @@ use std::sync::mpsc::{Receiver, RecvError, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 
-use crossbeam_channel::Sender as BrowserSender;
 use dom_api::{ClassicScript, EngineSettings, WorkerEngine, WorkerError, WorkerStart};
+use protocol::control_channel::BrowserSender;
 use protocol::network::{
     CredentialsMode, LoadResult, RequestDestination, RequestMode, ResourceRequest, ResponseTainting,
 };
@@ -154,7 +154,7 @@ pub(crate) struct Workers {
     scheduler: Arc<MainThreadScheduler>,
     /// The browser's end: told of each worker as it starts and goes; what
     /// a worker's thread asks of it goes there too.
-    to_browser: BrowserSender<RendererHostMsg>,
+    to_browser: BrowserSender,
     /// The thread they are of, which hears from them.
     home: Owner,
     /// The loaders their loads go through: their creators'.
@@ -171,7 +171,7 @@ impl Workers {
         settings: EngineSettings,
         agent: Agent,
         scheduler: Arc<MainThreadScheduler>,
-        to_browser: BrowserSender<RendererHostMsg>,
+        to_browser: BrowserSender,
         home: Owner,
         loaders: WorkerLoaders,
     ) -> Self {
@@ -392,7 +392,7 @@ struct GlobalHost {
     id: u64,
     owner: Owner,
     scheduler: Arc<MainThreadScheduler>,
-    to_browser: BrowserSender<RendererHostMsg>,
+    to_browser: BrowserSender,
     /// Its tasks, which it waits on for a load.
     inbox: Rc<Inbox>,
     /// Its origin, serialized: its loads' initiator.
@@ -630,7 +630,7 @@ struct WorkerThread {
     settings: EngineSettings,
     from_owner: Receiver<WorkerTask>,
     shared: Arc<Shared>,
-    to_browser: BrowserSender<RendererHostMsg>,
+    to_browser: BrowserSender,
     scheduler: Arc<MainThreadScheduler>,
     /// The thread that made it.
     owner: Owner,
@@ -1029,7 +1029,7 @@ mod tests {
             EngineSettings { web_tests: false },
             Agent::default(),
             Arc::new(MainThreadScheduler::default()),
-            crossbeam_channel::unbounded().0,
+            crossbeam_channel::unbounded().0.into(),
             Owner::Main,
             WorkerLoaders::Worker(1),
         ));

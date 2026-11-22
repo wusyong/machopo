@@ -126,7 +126,7 @@ fn tab_with_viz_colors(
 }
 
 /// A new profile's storage, in memory.
-fn in_memory() -> StoragePartition {
+pub(crate) fn in_memory() -> StoragePartition {
     StoragePartition::new(
         &Profile::in_memory(),
         NetworkContextParams {
@@ -141,6 +141,35 @@ fn in_memory() -> StoragePartition {
 /// and which shows a new document that can't be drawn empty after
 /// `new_content_rendering_delay`.
 fn tab_with_flags(
+    wait: bool,
+    automation: bool,
+    gpu: Option<Arc<dyn ContextProvider>>,
+    system_colors: gfx::SystemColors,
+    parser_budget: browser::ParserBudget,
+    new_content_rendering_delay: Duration,
+    partition: StoragePartition,
+) -> (
+    WebContents,
+    Receiver<ContentsEvent>,
+    Receiver<VizMsg>,
+    BeginFrameSource,
+) {
+    tab_with_launcher(
+        in_process(),
+        wait,
+        automation,
+        gpu,
+        system_colors,
+        parser_budget,
+        new_content_rendering_delay,
+        partition,
+    )
+}
+
+/// [`tab_with_flags`], whose renderers `launcher` launches.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn tab_with_launcher(
+    launcher: browser::RendererLauncher,
     wait: bool,
     automation: bool,
     gpu: Option<Arc<dyn ContextProvider>>,
@@ -170,11 +199,7 @@ fn tab_with_flags(
             parser_budget,
             new_content_rendering_delay,
         },
-        browser::ScriptEngineFactory {
-            engine: dom_js::V8Engine::boxed,
-            wasm_engine: None,
-            worker_engine: Some(dom_js::V8WorkerEngine::boxed),
-        },
+        launcher,
         viz_tx,
         gpu,
         partition,
@@ -269,11 +294,11 @@ fn a_renderer_that_ends_on_its_own_is_reported_gone() {
             parser_budget: browser::ParserBudget::default(),
             new_content_rendering_delay: Duration::ZERO,
         },
-        browser::ScriptEngineFactory {
+        browser::RendererLauncher::InProcess(browser::ScriptEngineFactory {
             engine: |_| panic!("the engine of a test whose renderer ends on its own"),
             wasm_engine: None,
             worker_engine: None,
-        },
+        }),
         viz_tx,
         None,
         in_memory(),
@@ -326,8 +351,38 @@ fn tab_in_partition(
     system_colors: gfx::SystemColors,
     partition: StoragePartition,
 ) -> (WebContents, Receiver<ContentsEvent>) {
-    let (mut web_contents, host_rx, viz_rx, mut begin_frames) =
-        tab_with_viz_colors(true, automation, None, system_colors, partition);
+    tab_launched(in_process(), automation, system_colors, partition)
+}
+
+/// The script engines of a renderer the tests start.
+pub(crate) const SCRIPT_ENGINES: browser::ScriptEngineFactory = browser::ScriptEngineFactory {
+    engine: dom_js::V8Engine::boxed,
+    wasm_engine: None,
+    worker_engine: Some(dom_js::V8WorkerEngine::boxed),
+};
+
+/// A renderer as threads of the test's process.
+fn in_process() -> browser::RendererLauncher {
+    browser::RendererLauncher::InProcess(SCRIPT_ENGINES)
+}
+
+/// [`tab_in`], whose renderers `launcher` launches.
+pub(crate) fn tab_launched(
+    launcher: browser::RendererLauncher,
+    automation: bool,
+    system_colors: gfx::SystemColors,
+    partition: StoragePartition,
+) -> (WebContents, Receiver<ContentsEvent>) {
+    let (mut web_contents, host_rx, viz_rx, mut begin_frames) = tab_with_launcher(
+        launcher,
+        true,
+        automation,
+        None,
+        system_colors,
+        Default::default(),
+        browser::NEW_CONTENT_RENDERING_DELAY,
+        partition,
+    );
     web_contents.resize(gfx::Size::new(200, 200), 1.0);
     // Viz, minus the drawing: frames are dropped, and `BeginFrame`s go to the
     // renderer back to back, as headless sends them.
@@ -769,7 +824,7 @@ fn a_new_document_stops_the_old_ones_animation_frames() {
 }
 
 /// Waits for the next commit and the title that follows it.
-fn next_commit(
+pub(crate) fn next_commit(
     web_contents: &mut WebContents,
     host_rx: &Receiver<ContentsEvent>,
 ) -> (u64, String, String) {

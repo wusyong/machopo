@@ -11,6 +11,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use dom_api::{DevToolsQueued, EngineSettings, ScriptEngine};
+use protocol::control_channel::BrowserSender;
 use protocol::renderer::{RendererHostMsg, RendererMsg};
 use url::Url;
 
@@ -277,10 +278,7 @@ impl RenderThread {
 
 /// Where a session's answers and events from the engine's inspector go:
 /// to the browser, as the session's.
-fn devtools_send(
-    to_browser: &crossbeam_channel::Sender<RendererHostMsg>,
-    session: &str,
-) -> dom_api::DevToolsSend {
+fn devtools_send(to_browser: &BrowserSender, session: &str) -> dom_api::DevToolsSend {
     let to_browser = to_browser.clone();
     let session = session.to_owned();
     Box::new(move |message| {
@@ -307,7 +305,7 @@ struct DevToolsQueueHandle {
     css_agent: Rc<super::css_agent::CssAgent>,
     overlay_agent: Rc<super::overlay_agent::OverlayAgent>,
     /// For a frame asked for (`RequestVisualState`) while paused.
-    to_browser: crossbeam_channel::Sender<RendererHostMsg>,
+    to_browser: BrowserSender,
     automation: bool,
     /// The frame can't be drawn in this pause: the operation that called
     /// the paused script holds the layout (script paused in a

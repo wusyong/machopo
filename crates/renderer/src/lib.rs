@@ -33,6 +33,7 @@
 mod canvas;
 mod canvas_encoder;
 mod canvas_raster;
+mod child_process;
 mod clock;
 mod compositing;
 mod document;
@@ -54,6 +55,7 @@ mod task_queue;
 mod testing;
 mod worker_thread;
 
+pub use child_process::{ChildExit, ChildInit, run_child_process};
 pub use compositor::{CompositorGone, CompositorSender};
 pub use render_thread::{
     NEW_CONTENT_RENDERING_DELAY, ParserBudget, RendererEndpoints, RendererFlags,

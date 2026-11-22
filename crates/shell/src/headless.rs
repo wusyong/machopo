@@ -247,7 +247,7 @@ fn drive(
             parser_budget: Default::default(),
             new_content_rendering_delay: browser::NEW_CONTENT_RENDERING_DELAY,
         },
-        script_engine,
+        browser::RendererLauncher::InProcess(script_engine),
         viz_tx,
         Some(shared_images as Arc<dyn ContextProvider>),
         StoragePartition::new(&browser::Profile::in_memory(), network)

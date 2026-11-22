@@ -3,7 +3,8 @@
 
 use crossbeam_channel::{Receiver, Sender};
 use gfx::PointF;
-use protocol::renderer::{CompositorMsg, RendererHostMsg};
+use protocol::control_channel::{BrowserSender, ChannelLink, send_over, to_renderer};
+use protocol::renderer::CompositorMsg;
 
 use crate::layer_tree_host_impl::CommitState;
 use crate::proxy_impl::{ProxyImpl, ToMainThread};
@@ -33,21 +34,44 @@ pub(crate) enum CompositorTask {
 /// the compositor thread's end.
 pub fn channel() -> (CompositorSender, CompositorReceiver) {
     let (tx, rx) = crossbeam_channel::unbounded();
-    (CompositorSender(tx.clone()), CompositorReceiver { rx, tx })
+    (
+        CompositorSender(Way::Local(tx.clone())),
+        CompositorReceiver { rx, tx },
+    )
 }
 
 /// How Viz and the browser reach a renderer's compositor thread (the
-/// `mojo::Remote`s bound there). Each message becomes a task on its queue,
-/// posted from the thread that sends it.
+/// `mojo::Remote`s bound there). For a renderer in the browser's process,
+/// each message becomes a task on its queue, posted from the thread that
+/// sends it. For one in a process of its own, the message is written to
+/// its channel, and that process's IO thread posts it.
 #[derive(Clone)]
-pub struct CompositorSender(Sender<CompositorTask>);
+pub struct CompositorSender(Way);
+
+#[derive(Clone)]
+enum Way {
+    Local(Sender<CompositorTask>),
+    Channel(ChannelLink),
+}
 
 impl CompositorSender {
-    /// Fails once the compositor thread has gone; the message is dropped.
+    /// For the browser: the way to the compositor of a renderer in a
+    /// process of its own, whose channel `link` is.
+    pub fn over(link: ChannelLink) -> Self {
+        Self(Way::Channel(link))
+    }
+
+    /// Fails once the compositor thread has gone, or the way to it; the
+    /// message is dropped.
     pub fn send(&self, msg: CompositorMsg) -> Result<(), CompositorGone> {
-        self.0
-            .send(CompositorTask::External(msg))
-            .map_err(|_| CompositorGone)
+        match &self.0 {
+            Way::Local(queue) => queue
+                .send(CompositorTask::External(msg))
+                .map_err(|_| CompositorGone),
+            Way::Channel(link) => {
+                send_over(link, to_renderer::COMPOSITOR, &msg).map_err(|_| CompositorGone)
+            }
+        }
     }
 }
 
@@ -152,7 +176,7 @@ impl LayerTreeHost<ProxyMain> {
         frame_sink: Box<dyn LayerTreeFrameSink>,
         compositor: &CompositorReceiver,
         post_to_main_thread: impl FnMut(ToMainThread) + Send + 'static,
-        to_browser: Sender<RendererHostMsg>,
+        to_browser: BrowserSender,
     ) -> Self {
         let proxy = ProxyMain {
             to_impl: compositor.tx.clone(),
@@ -264,7 +288,7 @@ mod tests {
             Box::new(|_: LocalSurfaceId, _: CompositorFrame| {}),
             &compositor,
             |_| {},
-            unbounded().0,
+            unbounded().0.into(),
         );
         let rx = compositor.rx.clone();
         assert!(matches!(rx.try_recv(), Ok(CompositorTask::Initialize(_))));
@@ -414,7 +438,7 @@ mod tests {
             Box::new(ChannelSink(viz_tx)),
             &compositor,
             move |task| main_tx.send(task).unwrap(),
-            unbounded().0,
+            unbounded().0.into(),
         );
         let thread = std::thread::Builder::new()
             .name("Compositor".into())

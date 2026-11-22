@@ -15,8 +15,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crossbeam_channel::Sender;
 use ipc::TimeTicks;
+use protocol::control_channel::BrowserSender;
 use protocol::network::LoadResult;
 use protocol::renderer::RendererHostMsg;
 use serde_json::{Value, json};
@@ -187,7 +187,7 @@ struct Lifecycle {
 
 /// Blink's `InspectorPageAgent`, for every session of the page.
 pub(crate) struct PageAgent {
-    to_browser: Sender<RendererHostMsg>,
+    to_browser: BrowserSender,
     /// What has the subresources' bodies, for `Page.getResourceContent`.
     network_agent: Rc<NetworkAgent>,
     /// The sessions that turned `Page` on.
@@ -202,10 +202,7 @@ pub(crate) struct PageAgent {
 }
 
 impl PageAgent {
-    pub(crate) fn new(
-        to_browser: Sender<RendererHostMsg>,
-        network_agent: Rc<NetworkAgent>,
-    ) -> Self {
+    pub(crate) fn new(to_browser: BrowserSender, network_agent: Rc<NetworkAgent>) -> Self {
         Self {
             to_browser,
             network_agent,

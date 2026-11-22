@@ -5,7 +5,7 @@ use gfx::PointF;
 use protocol::input::InputEvent;
 use protocol::viz::BeginFrameArgs;
 
-use crossbeam_channel::Sender;
+use protocol::control_channel::BrowserSender;
 use protocol::renderer::RendererHostMsg;
 
 use crate::DocumentId;
@@ -125,7 +125,7 @@ pub(crate) struct ProxyImpl {
     /// For the acks of the input handled here (`WidgetInputHandler`'s
     /// callback, which Blink runs from the compositor thread for what it
     /// handled there), so they don't wait for a busy main thread.
-    to_browser: Sender<RendererHostMsg>,
+    to_browser: BrowserSender,
     /// The main thread wants main frames (it has animation frame callbacks,
     /// or something changed). The main thread sets and clears it.
     needs_begin_main_frame: bool,
@@ -151,7 +151,7 @@ impl ProxyImpl {
         settings: LayerTreeSettings,
         frame_sink: Box<dyn LayerTreeFrameSink>,
         post_to_main_thread: PostToMainThread,
-        to_browser: Sender<RendererHostMsg>,
+        to_browser: BrowserSender,
     ) -> Self {
         Self {
             wait_for_all_pipeline_stages_before_draw: settings
@@ -510,7 +510,7 @@ mod tests {
             },
             Box::new(viz.clone()),
             Box::new(move |task| posted.lock().unwrap().push(task)),
-            acks,
+            acks.into(),
         );
         let mut host = LayerTreeHost::with_proxy(());
         host.set_viewport_rect_and_scale(Size::new(100, 100), 1.0, LocalSurfaceId::default());

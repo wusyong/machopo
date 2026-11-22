@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use base::AtomicSequenceNumber;
 use compositor::{CompositorReceiver, CompositorSender, ToMainThread};
 use dom_api::{DevToolsInterrupter, DevToolsQueued};
+use protocol::control_channel::{ChannelLink, send_over, to_renderer};
 use protocol::renderer::RendererMsg;
 
 /// One task for the renderer main thread.
@@ -530,25 +531,47 @@ pub fn channel() -> (RendererSender, CompositorSender, RendererReceiver) {
         scheduler: scheduler.clone(),
         compositor,
     };
-    (RendererSender { scheduler }, to_compositor, receiver)
+    (
+        RendererSender(Way::Local(scheduler)),
+        to_compositor,
+        receiver,
+    )
 }
 
 /// The browser's end of a renderer's pipe (a `mojo::Remote` to the
-/// renderer's interfaces). Each message becomes a task on the main thread's
-/// scheduler, posted from the thread that sends it; once the renderer is a
-/// process of its own, whatever reads the IPC channel posts them instead.
+/// renderer's interfaces). For a renderer in the browser's process, each
+/// message becomes a task on the main thread's scheduler, posted from the
+/// thread that sends it. For one in a process of its own, the message is
+/// written to its channel, and that process's IO thread, which reads it,
+/// posts it with the sender it has of the first kind.
 /// DevTools' go to their own queue, which script paused or busy takes from
 /// too (Chromium's DevTools messages go through the IO thread to Blink's
 /// `InspectorTaskRunner`).
 #[derive(Clone)]
-pub struct RendererSender {
-    scheduler: Arc<MainThreadScheduler>,
+pub struct RendererSender(Way);
+
+#[derive(Clone)]
+enum Way {
+    Local(Arc<MainThreadScheduler>),
+    Channel(ChannelLink),
 }
 
 impl RendererSender {
-    /// Fails once the main thread has gone; the message is dropped.
+    /// For the browser: the way to a renderer in a process of its own,
+    /// whose channel `link` is.
+    pub fn over(link: ChannelLink) -> Self {
+        Self(Way::Channel(link))
+    }
+
+    /// Fails once the main thread has gone, or the way to it; the message
+    /// is dropped.
     pub fn send(&self, msg: RendererMsg) -> Result<(), RendererGone> {
-        let scheduler = &self.scheduler;
+        let scheduler = match &self.0 {
+            Way::Local(scheduler) => scheduler,
+            Way::Channel(link) => {
+                return send_over(link, to_renderer::MAIN, &msg).map_err(|_| RendererGone);
+            }
+        };
         // A dedicated worker's: to its thread.
         if let RendererMsg::ReceivedRedirect {
             worker: Some(worker),

@@ -25,7 +25,7 @@ use crate::debug_urls::{DebugUrl, debug_url};
 use crate::navigation_controller::{HistoryLoad, NavigationController, NavigationType};
 use crate::navigation_request::{DocumentLoad, Loading, NavigationRequest, NavigationResponse};
 use crate::render_process_host::{CommittedDocument, Committer, is_file_url};
-use crate::{RenderProcessHost, RendererFlags, RendererId, ScriptEngineFactory, StoragePartition};
+use crate::{RenderProcessHost, RendererFlags, RendererId, RendererLauncher, StoragePartition};
 
 /// What a tab's other threads have for its UI thread: the embedder posts
 /// each to the UI thread and hands it to the tab there (the renderer's
@@ -234,7 +234,7 @@ struct Asked {
 /// What launches this tab's renderers.
 struct Launch {
     flags: RendererFlags,
-    script_engine: ScriptEngineFactory,
+    launcher: RendererLauncher,
     gpu: Option<Arc<dyn ContextProvider>>,
     /// Every renderer's messages, and every navigation's events, go here.
     on_event: Arc<Mutex<ContentsEventCallback>>,
@@ -253,7 +253,7 @@ impl Launch {
             tab,
             frame_sink_id,
             self.flags.clone(),
-            self.script_engine,
+            &self.launcher,
             viz.clone(),
             self.gpu.clone(),
             partition.clone(),
@@ -305,7 +305,7 @@ impl WebContents {
     pub fn new(
         tab: TabId,
         flags: RendererFlags,
-        script_engine: ScriptEngineFactory,
+        launcher: RendererLauncher,
         viz: Sender<VizMsg>,
         gpu: Option<Arc<dyn ContextProvider>>,
         partition: StoragePartition,
@@ -325,7 +325,7 @@ impl WebContents {
         };
         let launch = Launch {
             flags,
-            script_engine,
+            launcher,
             gpu,
             on_event: Arc::new(Mutex::new(on_event)),
         };
@@ -773,6 +773,12 @@ impl WebContents {
 
     /// Whether the renderer has gone: its sad tab shows until the next
     /// navigation.
+    /// The process the tab's renderer is, if it is one of its own
+    /// (Chromium's `RenderProcessHost::GetProcess`).
+    pub fn renderer_pid(&self) -> Option<u32> {
+        self.process.pid()
+    }
+
     pub fn is_crashed(&self) -> bool {
         self.crashed
     }

@@ -23,3 +23,5 @@ data-url.workspace = true
 gfx.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# A message its channel refused is said so where it is dropped.
+tracing.workspace = true

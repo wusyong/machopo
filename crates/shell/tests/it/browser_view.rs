@@ -537,7 +537,7 @@ fn start_contents(
             parser_budget: Default::default(),
             new_content_rendering_delay: browser::NEW_CONTENT_RENDERING_DELAY,
         },
-        shell::SCRIPT_ENGINES,
+        browser::RendererLauncher::InProcess(shell::SCRIPT_ENGINES),
         viz.clone(),
         None,
         browser::StoragePartition::new(

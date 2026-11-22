@@ -8,6 +8,7 @@
 //!
 //! | Module | Chromium counterpart |
 //! | --- | --- |
+//! | [`control_channel`] | the pipe a `mojo::core::Channel` is, and its `mojo::Remote`s |
 //! | [`automation`] | the DevTools protocol (`browser_protocol.pdl`), between the browser and what drives it |
 //! | [`renderer`] | `content/common/{widget,frame}.mojom`, `blink.mojom.Widget` |
 //! | [`viz`] | `services/viz/public/mojom/compositing/*.mojom` |
@@ -28,6 +29,7 @@
 
 pub mod automation;
 mod big_buffer;
+pub mod control_channel;
 pub mod devtools_network;
 pub mod header_list;
 pub mod input;

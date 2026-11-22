@@ -33,9 +33,9 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 
 use computed_style::{Content, PseudoId};
-use crossbeam_channel::Sender;
 use dom::{Cx, Dom, DomChange, NodeId, NodeIdHashMap, NodeKind, NodeRef, NodeRoot, QuirksMode};
 use dom_api::DevToolsPage;
+use protocol::control_channel::BrowserSender;
 
 use crate::frame_view::Frame;
 use protocol::renderer::RendererHostMsg;
@@ -170,7 +170,7 @@ impl Session {
 
 /// Blink's `InspectorDOMAgent`, for every session of the page.
 pub(crate) struct DomAgent {
-    to_browser: Sender<RendererHostMsg>,
+    to_browser: BrowserSender,
     sessions: RefCell<HashMap<String, Session>>,
     /// The top-level frame's document (Blink's `document_`).
     document: Cell<Option<NodeId>>,
@@ -183,7 +183,7 @@ pub(crate) struct DomAgent {
 }
 
 impl DomAgent {
-    pub(crate) fn new(to_browser: Sender<RendererHostMsg>) -> Self {
+    pub(crate) fn new(to_browser: BrowserSender) -> Self {
         Self {
             to_browser,
             sessions: RefCell::new(HashMap::new()),
@@ -2101,7 +2101,7 @@ mod tests {
     #[test]
     fn the_dom_notes_changes_while_a_session_has_dom_on() {
         let (to_browser, _from) = crossbeam_channel::unbounded();
-        let agent = DomAgent::new(to_browser);
+        let agent = DomAgent::new(to_browser.into());
         let (mut dom, document) = page(&agent);
         let page = &mut Lent(&mut dom);
         assert!(agent.handle("a", &command("DOM.enable"), page));

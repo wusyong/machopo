@@ -15,7 +15,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 
-use crossbeam_channel::Sender;
+use protocol::control_channel::BrowserSender;
 use protocol::devtools_network::wall_time;
 use protocol::renderer::RendererHostMsg;
 use serde_json::{Value, json};
@@ -118,7 +118,7 @@ pub(crate) enum RasterFailed {
 /// Blink's `InspectorLogAgent`, for every session of the page, and the
 /// page's messages.
 pub(crate) struct LogAgent {
-    to_browser: Sender<RendererHostMsg>,
+    to_browser: BrowserSender,
     /// The sessions that turned `Log` on.
     enabled: RefCell<Vec<String>>,
     /// The newest messages, oldest first.
@@ -129,7 +129,7 @@ pub(crate) struct LogAgent {
 }
 
 impl LogAgent {
-    pub(crate) fn new(to_browser: Sender<RendererHostMsg>) -> Self {
+    pub(crate) fn new(to_browser: BrowserSender) -> Self {
         Self {
             to_browser,
             enabled: RefCell::new(Vec::new()),
@@ -320,7 +320,7 @@ mod tests {
         );
         // Told as any entry is.
         let (to_browser, from) = crossbeam_channel::unbounded();
-        let agent = LogAgent::new(to_browser);
+        let agent = LogAgent::new(to_browser.into());
         assert!(agent.handle("s", &command("Log.enable")));
         sent(&from);
         agent.add(tile.clone());
@@ -332,7 +332,7 @@ mod tests {
     #[test]
     fn the_newest_are_kept_and_replayed() {
         let (to_browser, from) = crossbeam_channel::unbounded();
-        let agent = LogAgent::new(to_browser);
+        let agent = LogAgent::new(to_browser.into());
         for n in 0..1002 {
             agent.add(entry(&n.to_string()));
         }

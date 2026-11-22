@@ -8,6 +8,7 @@
 use std::sync::{Arc, Weak};
 
 use crate::BigBuffer;
+use crate::control_channel::{ChannelLink, send_over, to_browser};
 use base::numerics::saturated_cast;
 use gfx::{Color, RRectF, RectF, Size};
 use serde::{Deserialize, Serialize};
@@ -417,38 +418,58 @@ pub enum VizMsg {
 /// `mojom::CompositorFrameSink` remote, which the browser's
 /// `FrameSinkManager` binds to the client's `FrameSinkId`): the browser
 /// makes it for the client's sink, and the client can't change which, so
-/// it speaks for no other. Once the renderer is a process of its own, the
-/// browser's IO thread adds the id instead.
+/// it speaks for no other. A renderer in a process of its own names no
+/// sink at all: the browser's IO thread adds the id of the one it bound
+/// that renderer's channel to.
 #[derive(Clone)]
-pub struct CompositorFrameSinkSender {
-    frame_sink_id: FrameSinkId,
-    viz: crossbeam_channel::Sender<VizMsg>,
+pub struct CompositorFrameSinkSender(Way);
+
+#[derive(Clone)]
+enum Way {
+    /// A client in the browser's process: the message is moved.
+    Local {
+        frame_sink_id: FrameSinkId,
+        viz: crossbeam_channel::Sender<VizMsg>,
+    },
+    /// A renderer in a process of its own: the message is written to its
+    /// channel.
+    Channel(ChannelLink),
 }
 
 impl CompositorFrameSinkSender {
     /// For the browser: `frame_sink_id`'s way to Viz, at `viz`.
     pub fn new(frame_sink_id: FrameSinkId, viz: crossbeam_channel::Sender<VizMsg>) -> Self {
-        Self { frame_sink_id, viz }
+        Self(Way::Local { frame_sink_id, viz })
     }
 
-    pub fn frame_sink_id(&self) -> FrameSinkId {
-        self.frame_sink_id
+    /// For a renderer in a process of its own, whose channel `link` is.
+    pub fn over(link: ChannelLink) -> Self {
+        Self(Way::Channel(link))
     }
 
-    /// Sends `msg` to Viz, from this sink. Fails once Viz has gone; the
-    /// message is dropped.
+    /// Sends `msg` to Viz, from this sink. Fails once Viz has gone, or the
+    /// way to it; the message is dropped.
     pub fn send(&self, msg: CompositorFrameSinkMsg) -> Result<(), VizGone> {
-        self.viz
-            .send(VizMsg::FrameSink(self.frame_sink_id, msg))
-            .map_err(|_| VizGone)
+        match &self.0 {
+            Way::Local { frame_sink_id, viz } => viz
+                .send(VizMsg::FrameSink(*frame_sink_id, msg))
+                .map_err(|_| VizGone),
+            Way::Channel(link) => {
+                send_over(link, to_browser::FRAME_SINK, &msg).map_err(|_| VizGone)
+            }
+        }
     }
 }
 
 impl std::fmt::Debug for CompositorFrameSinkSender {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("CompositorFrameSinkSender")
-            .field(&self.frame_sink_id)
-            .finish()
+        match &self.0 {
+            Way::Local { frame_sink_id, .. } => f
+                .debug_tuple("CompositorFrameSinkSender")
+                .field(frame_sink_id)
+                .finish(),
+            Way::Channel(_) => f.write_str("CompositorFrameSinkSender(channel)"),
+        }
     }
 }
 
@@ -469,7 +490,6 @@ mod tests {
             sink_id: 1,
         };
         let sender = CompositorFrameSinkSender::new(sink, tx);
-        assert_eq!(sender.frame_sink_id(), sink);
         sender
             .send(CompositorFrameSinkMsg::DidNotProduceFrame)
             .unwrap();

@@ -8,9 +8,9 @@ use compositor::{
     CompositorScrollDelta, DocumentId, InputDispatch, LayerTreeHost, LayerTreeSettings, ProxyMain,
     SwapPromise, ToMainThread,
 };
-use crossbeam_channel::Sender;
 use dom::NavigationType;
 use gfx::{NodeId, PointF, RectF, SizeF};
+use protocol::control_channel::BrowserSender;
 use protocol::input::{InputEvent, Modifiers};
 use protocol::network::{LoadResult, RedirectInfo};
 use protocol::renderer::{HistoryEntryParams, RendererHostMsg, RendererMsg, VisualProperties};
@@ -47,7 +47,7 @@ pub struct RendererEndpoints {
     /// `BeginFrame`s and the browser's input do (the other ends of
     /// [`crate::channel`]).
     pub from_browser: RendererReceiver,
-    pub to_browser: Sender<RendererHostMsg>,
+    pub to_browser: BrowserSender,
     /// `CompositorFrameSink` to Viz, bound to the renderer's `FrameSinkId`
     /// by the browser. cc submits frames directly to Viz, not through the
     /// browser, as in Chromium.
@@ -325,7 +325,7 @@ struct RenderThread {
     /// The dedicated workers its documents made (`worker_thread`): the
     /// engine starts them through its host of them.
     workers: Rc<crate::worker_thread::Workers>,
-    to_browser: Sender<RendererHostMsg>,
+    to_browser: BrowserSender,
     /// The widget, until the first document's frame takes it: the frame's
     /// from then on (`widget`).
     widget: Option<FrameWidget>,
@@ -516,7 +516,7 @@ impl Drop for RenderThread {
 
 impl RenderThread {
     fn new(
-        to_browser: Sender<RendererHostMsg>,
+        to_browser: BrowserSender,
         scheduler: Arc<MainThreadScheduler>,
         layer_tree_host: LayerTreeHost<ProxyMain>,
         pending_input: PendingUserInput,
@@ -1822,7 +1822,7 @@ impl RenderThread {
 /// the frame's next commit; none without `RendererFlags::automation`, which
 /// is what asks.
 fn visual_state_promise(
-    to_browser: &Sender<RendererHostMsg>,
+    to_browser: &BrowserSender,
     automation: bool,
     request_id: u64,
 ) -> Option<SwapPromise> {

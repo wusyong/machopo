@@ -22,10 +22,10 @@ use std::sync::Arc;
 use base::numerics::f32_from_f64;
 use compositor_paint::{DisplayItemList, PaintFlags, PaintOp};
 use computed_style::PseudoId;
-use crossbeam_channel::Sender;
 use dom::{Cx, NodeId, NodeKind, NodeRef};
 use dom_api::DevToolsPage;
 use gfx::{Color, PointF, RRectF, RectF, SizeF};
+use protocol::control_channel::BrowserSender;
 use protocol::renderer::RendererHostMsg;
 use serde_json::{Value, json};
 
@@ -175,7 +175,7 @@ struct Session {
 /// Blink's `InspectorOverlayAgent`, for every session of the page; one
 /// overlay, which the last command shows.
 pub(crate) struct OverlayAgent {
-    to_browser: Sender<RendererHostMsg>,
+    to_browser: BrowserSender,
     dom_agent: Rc<DomAgent>,
     sessions: RefCell<HashMap<String, Session>>,
     shown: RefCell<Option<Shown>>,
@@ -191,7 +191,7 @@ pub(crate) struct OverlayAgent {
 }
 
 impl OverlayAgent {
-    pub(crate) fn new(to_browser: Sender<RendererHostMsg>, dom_agent: Rc<DomAgent>) -> Self {
+    pub(crate) fn new(to_browser: BrowserSender, dom_agent: Rc<DomAgent>) -> Self {
         Self {
             to_browser,
             dom_agent,

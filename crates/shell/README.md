@@ -76,6 +76,15 @@ UI 的深淺色跟著系統，系統切換時跟著換；`--ui-theme=light` 或 
 - 滾輪的捲動由 renderer 的 compositor thread 處理，網頁的 script 忙碌時照樣能捲（`about:demo` 的「Busy for 3 seconds」）；按鍵要先經過網頁的 `keydown`，script 忙碌時要等（和 Chrome 一樣）。例外是被縮放、旋轉、半透明，或被畫在它之後的東西蓋到的捲動容器，以及在它們裡面的：滾輪要等 script 忙完（compositor 只認得成為 layer 的捲動容器，也只知道每個 layer 的範圍、不知道之後畫的 layer 哪裡真的有東西，所以這些交給 main thread 判斷）；網頁上有不是 passive 的 `wheel` / `mousewheel` listener 的元素上也是，listener 可以取消捲動（照 Chrome 的 wheel event handler region）。
 - 主按鍵在同一個連結上按下又放開，才算點連結；中鍵在新分頁開（上面）；右鍵只分派 `contextmenu`，沒有選單。
 
+## 當成 renderer process（`--type=renderer`）
+
+`machopo --type=renderer` 是 Browser 啟動自己的 renderer 用的（Chromium 的 `--type=renderer`），不是給人下的：只在它是第一個參數時才算，這樣 process 在讀別的東西之前就知道自己是什麼。這時不解析其他參數、不開視窗、不讀 profile：`shell::renderer_main` 用 `ipc::platform::inherited` 拿到 Browser 留給它的那一端，交給 `browser::run_child_process`（`renderer` 的），script engine 是這個執行檔的 `SCRIPT_ENGINES`。其餘的設定都從通道的第一則訊息來。
+
+- 手動執行（沒有 Browser 留給它的一端）：在 stderr 說明、以 2 結束。
+- 結束的代碼：0 是照 Browser 說的結束，或 Browser 不在了；3 是啟動不了；4 是 renderer 的 main thread panic。
+- log 照 `RUST_LOG`，寫到 stderr；trace（`MACHOPO_TRACE`）不寫，那個檔案是 Browser 的。
+- 現在視窗和 headless 都不會啟動它（renderer 還是同一個 process 裡的 thread）；走這條路的只有測試（`crates/shell/tests/it/renderer_process.rs`，和 `browser` 的 `crates/browser/tests/it/renderer_process.rs`）。
+
 ## 自動化的 pipe
 
 `machopo --automation-pipe` 讓外面的程式（machopodriver，`crates/driver/README.md`）經過 stdin 和 stdout 驅動瀏覽器，對應 Chromium 的 `--remote-debugging-pipe`（`DevToolsPipeHandler`，它用 fd 3 和 4）。瀏覽器是沒有平台視窗的 `BrowserWindow`（和情境測試的一樣），分頁從 `about:blank` 開始（initial entry：第一次新增 entry 的導覽取代它，和 Chrome 的新分頁一樣），加上 `--window` 是真的視窗（在最上層，期間不理會平台的滑鼠和鍵盤，和 `machopo --automation` 一樣）；profile 只在記憶體，每次從空的開始（chromedriver 每個 session 一個新的資料夾），給了 `--user-data-dir` 才用那個資料夾；沒有平台視窗時，`--scale F` 是 device scale factor（machopo 自己的 reftest 用它在 2 倍、1.5 倍下跑；真的視窗用螢幕的）；stdin 結束或 `Browser.close` 時結束。machopo 的 log 和網頁的輸出（`console.log`、沒接住的例外、wasm guest 的 stdout）都在 stderr：stdout 只有 pipe 的訊息。WPT 的網域和根憑證用 `--host-resolver-rules`、`--additional-trust-anchors` 給（`machopo --help`）。

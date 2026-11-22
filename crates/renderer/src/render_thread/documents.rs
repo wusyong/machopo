@@ -22,6 +22,7 @@ use dom_api::{
 };
 use gfx::PointF;
 use html::parser::{Parser, ParserState, SinkHandle};
+use protocol::control_channel::BrowserSender;
 use protocol::input::{InputEvent, Modifiers, MouseButton};
 use protocol::network::{
     CredentialsMode, LoadResult, RequestDestination, RequestMode, ResourceRequest, ResponseTainting,
@@ -5085,7 +5086,7 @@ fn script_loaded(
 /// render thread (which hears of each `fetch()` after,
 /// `FrameRequest::FetchSent`).
 pub(super) struct RendererLoadSink {
-    pub(super) to_browser: crossbeam_channel::Sender<RendererHostMsg>,
+    pub(super) to_browser: BrowserSender,
     pub(super) ids: crate::loader::RequestIds,
     pub(super) blob_urls: crate::loader::BlobUrls,
     pub(super) loaders: crate::loader::DocumentLoaders,
@@ -5133,7 +5134,7 @@ impl dom_api::LoadSink for RendererLoadSink {
 /// waits for, every task left queued (`[Sync] GetAll`); a change is sent
 /// as it is made (`Put`, `Delete`, `DeleteAll`).
 pub(super) struct RendererStorageHost {
-    pub(super) to_browser: crossbeam_channel::Sender<RendererHostMsg>,
+    pub(super) to_browser: BrowserSender,
     pub(super) scheduler: std::sync::Arc<crate::task_queue::MainThreadScheduler>,
 }
 
@@ -5185,7 +5186,7 @@ impl dom_api::StorageHost for RendererStorageHost {
 /// (`[Sync] GetCookiesString`); a write is sent as the engine hands it
 /// (`SetCookieFromString`). A document without a loader has no cookies.
 pub(super) struct RendererCookieHost {
-    pub(super) to_browser: crossbeam_channel::Sender<RendererHostMsg>,
+    pub(super) to_browser: BrowserSender,
     pub(super) scheduler: std::sync::Arc<crate::task_queue::MainThreadScheduler>,
     pub(super) loaders: crate::loader::DocumentLoaders,
 }

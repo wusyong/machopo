@@ -171,7 +171,7 @@ impl TabFactory for WindowTabs {
         let contents = WebContents::new(
             tab,
             self.flags.clone(),
-            crate::SCRIPT_ENGINES,
+            browser::RendererLauncher::InProcess(crate::SCRIPT_ENGINES),
             self.viz.clone(),
             self.gpu.clone(),
             self.partition.clone(),

@@ -1,12 +1,18 @@
 use std::collections::HashMap;
+use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::thread::JoinHandle;
 
 use base::AtomicSequenceNumber;
 use bytes::Bytes;
 use crossbeam_channel::Sender;
+use ipc::core::channel::Gone;
+use ipc::core::frame::BadMessage;
+use ipc::endpoint::{self, Handler, IoLoop, LoopHandle, Received};
+use ipc::platform::Channel;
 use net::{LoadHandle, NetworkContext};
+use protocol::control_channel::{self, ChannelLink, send_over, to_browser, to_renderer};
 use protocol::input::InputEvent;
 use protocol::network::{
     LoadResult, NetError, NetErrorCode, RequestDestination, ResourceRequest, TrustedParams,
@@ -16,20 +22,98 @@ use protocol::renderer::{
     RendererMsg,
 };
 use protocol::viz::{
-    BeginFrameArgs, CompositorFrameSinkSender, ContextLostObserver, ContextProvider, FrameSinkId,
-    VizMsg,
+    BeginFrameArgs, CompositorFrameSinkMsg, CompositorFrameSinkSender, ContextLostObserver,
+    ContextProvider, FrameSinkId, VizMsg,
 };
 use protocol::{FrameToken, TabId};
 use renderer::{
-    CompositorSender, RendererEndpoints, RendererFlags, RendererSender, ScriptEngineFactory,
+    ChildInit, CompositorSender, RendererEndpoints, RendererFlags, RendererSender,
+    ScriptEngineFactory,
 };
 
 use crate::StoragePartition;
 use crate::bad_message::BadMessageReason;
 
-/// `content::RenderProcessHost`. For now the "process" is a thread in this
-/// process; launching a real child process would carry the same messages
-/// over IPC and keep this interface.
+/// How a renderer is run (Chromium's `--single-process`, or not).
+#[derive(Clone)]
+pub enum RendererLauncher {
+    /// As threads of this process, with the script engines given: its
+    /// messages are moved, not serialized.
+    InProcess(ScriptEngineFactory),
+    /// As a process of its own. The function makes the command that
+    /// starts one: the embedder's executable, told to be a renderer (it
+    /// takes its end with `ipc::platform::inherited` and runs
+    /// `renderer::run_child_process`, with the engines it picks itself).
+    Process(Arc<dyn Fn() -> Command + Send + Sync>),
+}
+
+impl std::fmt::Debug for RendererLauncher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::InProcess(_) => "RendererLauncher::InProcess",
+            Self::Process(_) => "RendererLauncher::Process",
+        })
+    }
+}
+
+/// The browser's IO thread for its renderer processes (`BrowserThread::IO`):
+/// one for the process, which waits on every renderer's channel, started
+/// with the first renderer process and never stopped. `None` when the
+/// system gives no way to wait, or no thread.
+fn io_thread() -> Option<&'static LoopHandle<Channel>> {
+    static IO: OnceLock<Option<LoopHandle<Channel>>> = OnceLock::new();
+    IO.get_or_init(|| {
+        let (io, handle) = IoLoop::new()?;
+        std::thread::Builder::new()
+            .name("Chrome_IOThread".into())
+            .spawn(move || io.run())
+            .ok()?;
+        Some(handle)
+    })
+    .as_ref()
+}
+
+/// The IO thread's side of a renderer process's channel: what it sends
+/// the browser goes to the object that checks it, and what it sends Viz
+/// goes there as from the sink the browser bound the renderer to,
+/// whatever the renderer would say.
+struct ChannelHost {
+    /// None once the channel is over.
+    host: Option<IoThreadHost>,
+    frame_sink_id: FrameSinkId,
+    viz: Sender<VizMsg>,
+}
+
+impl Handler<Channel> for ChannelHost {
+    fn message(&mut self, mut message: Received<'_, Channel>) -> Result<(), BadMessage> {
+        match message.destination() {
+            to_browser::HOST => {
+                let msg = message.decode::<RendererHostMsg>()?;
+                if let Some(host) = &mut self.host {
+                    host.on_message(msg);
+                }
+            }
+            to_browser::FRAME_SINK => {
+                let msg = message.decode::<CompositorFrameSinkMsg>()?;
+                // Viz gone: the browser is ending.
+                let _ = self.viz.send(VizMsg::FrameSink(self.frame_sink_id, msg));
+            }
+            _ => return Err(BadMessage::Rejected),
+        }
+        Ok(())
+    }
+
+    fn gone(&mut self, gone: Gone) {
+        tracing::debug!(?gone, "a renderer's channel is over");
+        if let Some(host) = self.host.take() {
+            host.on_channel_closed();
+        }
+    }
+}
+
+/// `content::RenderProcessHost`: a renderer, in this process (its threads)
+/// or in one of its own (a child process and the channel to it). The
+/// messages and the checks are the same either way.
 pub struct RenderProcessHost {
     to_renderer: RendererSender,
     /// The renderer's compositor thread, for Viz's `BeginFrame`s and the
@@ -39,8 +123,13 @@ pub struct RenderProcessHost {
     /// Told by Viz when the GPU is lost, while this is alive; it tells the
     /// renderer.
     _context_lost: Option<Arc<dyn ContextLostObserver>>,
+    /// A renderer in this process: its main thread, and the thread that
+    /// takes its messages.
     renderer_thread: Option<JoinHandle<()>>,
     io_thread: Option<JoinHandle<()>>,
+    /// A renderer in a process of its own: the process, and this end of
+    /// its channel.
+    child: Option<(Child, ChannelLink)>,
     /// Its number, which its blob URLs are registered under.
     renderer_id: u64,
     /// The IO thread passes the renderer's messages on: not once it was
@@ -170,9 +259,8 @@ impl ContextLostObserver for ContextLostForwarder {
 }
 
 impl RenderProcessHost {
-    /// Launches the renderer, with `flags` and the script engine
-    /// `script_engine` makes (which a renderer process of its own would
-    /// pick itself). `on_message` runs on the IO thread for every message
+    /// Launches the renderer as `launcher` says, with `flags`.
+    /// `on_message` runs on the IO thread for every message
     /// the renderer sends, with the renderer's id, except subresource
     /// requests, which the IO thread passes to `network` itself; or for
     /// one the IO thread found bad (`Err`), which the UI thread ends the
@@ -182,7 +270,7 @@ impl RenderProcessHost {
         tab: TabId,
         frame_sink_id: FrameSinkId,
         flags: RendererFlags,
-        script_engine: ScriptEngineFactory,
+        launcher: &RendererLauncher,
         viz: Sender<VizMsg>,
         gpu: Option<Arc<dyn ContextProvider>>,
         partition: StoragePartition,
@@ -190,44 +278,23 @@ impl RenderProcessHost {
     ) -> std::io::Result<Self> {
         let network = partition.network().clone();
         let dom_storage = partition.dom_storage().clone();
-        let (to_renderer, to_compositor, from_browser) = renderer::channel();
-        let (to_browser, from_renderer) = crossbeam_channel::unbounded();
         let file_access = Arc::new(AtomicBool::new(false));
-        let context_lost = gpu.as_ref().map(|gpu| {
-            let forwarder: Arc<dyn ContextLostObserver> =
-                Arc::new(ContextLostForwarder(to_compositor.clone()));
-            gpu.add_context_lost_observer(Arc::downgrade(&forwarder));
-            forwarder
-        });
-        let renderer_thread = renderer::spawn_renderer_main_thread(
-            RendererEndpoints {
-                from_browser,
-                to_browser,
-                // Bound to the renderer's sink (`FrameSinkManager`): it
-                // speaks for no other.
-                viz: CompositorFrameSinkSender::new(frame_sink_id, viz),
-                gpu: gpu.is_some(),
-            },
-            flags,
-            script_engine,
-        )?;
-        // `BrowserThread::IO`: where child-process IPC lands before being
-        // posted to the UI thread. Subresource requests stop here, as a
-        // renderer's `URLLoaderFactory` talks to the network service
-        // without going through the UI thread. The renderer is gone once
-        // its channel closes, every sender dropped (Chromium's
-        // `OnChannelError`), whether it exited or crashed: nothing it sent
-        // can come after that.
         let forwarding = Arc::new(AtomicBool::new(true));
         let renderer_id = RENDERER_IDS.get_next();
         let loaders = Arc::new(Mutex::new(Loaders::default()));
-        let io_thread = {
+        // `BrowserThread::IO`: where a renderer's messages land before
+        // being posted to the UI thread. Subresource requests stop here,
+        // as a renderer's `URLLoaderFactory` talks to the network service
+        // without going through the UI thread. The renderer is gone once
+        // its channel is over (Chromium's `OnChannelError`), whether it
+        // exited or crashed: nothing it sent can come after that.
+        let host = |to_renderer: RendererSender| {
             let forwarding = forwarding.clone();
-            let mut host = IoThreadHost {
+            IoThreadHost {
                 renderer_id,
                 network,
                 dom_storage,
-                to_renderer: to_renderer.clone(),
+                to_renderer,
                 file_access: file_access.clone(),
                 loaders: loaders.clone(),
                 forward: Box::new(move |msg| {
@@ -238,23 +305,81 @@ impl RenderProcessHost {
                 loads: Loads::default(),
                 workers: HashMap::new(),
                 worker_blob_urls: HashMap::new(),
-            };
-            std::thread::Builder::new()
-                .name("Chrome_IOThread".into())
-                .spawn(move || {
-                    while let Ok(msg) = from_renderer.recv() {
-                        host.on_message(msg);
-                    }
-                    host.on_channel_closed();
-                })?
+            }
         };
+        let (to_renderer, to_compositor, renderer_thread, io_thread, child) = match launcher {
+            RendererLauncher::InProcess(script_engine) => {
+                let (to_renderer, to_compositor, from_browser) = renderer::channel();
+                let (to_browser, from_renderer) = crossbeam_channel::unbounded();
+                let renderer_thread = renderer::spawn_renderer_main_thread(
+                    RendererEndpoints {
+                        from_browser,
+                        to_browser: to_browser.into(),
+                        // Bound to the renderer's sink (`FrameSinkManager`):
+                        // it speaks for no other.
+                        viz: CompositorFrameSinkSender::new(frame_sink_id, viz),
+                        gpu: gpu.is_some(),
+                    },
+                    flags,
+                    *script_engine,
+                )?;
+                // The channel closes once every sender is dropped.
+                let mut host = host(to_renderer.clone());
+                let io_thread = std::thread::Builder::new()
+                    .name("Chrome_IOThread".into())
+                    .spawn(move || {
+                        while let Ok(msg) = from_renderer.recv() {
+                            host.on_message(msg);
+                        }
+                        host.on_channel_closed();
+                    })?;
+                (
+                    to_renderer,
+                    to_compositor,
+                    Some(renderer_thread),
+                    Some(io_thread),
+                    None,
+                )
+            }
+            RendererLauncher::Process(command) => {
+                let io = io_thread()
+                    .ok_or_else(|| std::io::Error::other("the browser has no IO thread"))?;
+                let (child, channel) = ipc::platform::spawn(&mut command())?;
+                let (link, endpoint) = endpoint::endpoint(channel, control_channel::config(true));
+                // What the renderer starts with, before anything else is
+                // sent it: its own first message.
+                let init = ChildInit {
+                    flags,
+                    gpu: gpu.is_some(),
+                };
+                let _ = send_over(&link, to_renderer::MAIN, &init);
+                let to_renderer = RendererSender::over(link.clone());
+                io.serve(
+                    endpoint,
+                    ChannelHost {
+                        host: Some(host(to_renderer.clone())),
+                        frame_sink_id,
+                        viz,
+                    },
+                );
+                let to_compositor = CompositorSender::over(link.clone());
+                (to_renderer, to_compositor, None, None, Some((child, link)))
+            }
+        };
+        let context_lost = gpu.as_ref().map(|gpu| {
+            let forwarder: Arc<dyn ContextLostObserver> =
+                Arc::new(ContextLostForwarder(to_compositor.clone()));
+            gpu.add_context_lost_observer(Arc::downgrade(&forwarder));
+            forwarder
+        });
         Ok(Self {
             to_renderer,
             to_compositor,
             file_access,
             _context_lost: context_lost,
-            renderer_thread: Some(renderer_thread),
-            io_thread: Some(io_thread),
+            renderer_thread,
+            io_thread,
+            child,
             renderer_id,
             forwarding,
             loaders,
@@ -288,6 +413,11 @@ impl RenderProcessHost {
         self.to_renderer.clone()
     }
 
+    /// The renderer's process, if it has one of its own.
+    pub(crate) fn pid(&self) -> Option<u32> {
+        self.child.as_ref().map(|(child, _)| child.id())
+    }
+
     /// Which renderer it is, as its messages say.
     pub(crate) fn id(&self) -> RendererId {
         RendererId(self.renderer_id)
@@ -299,6 +429,11 @@ impl RenderProcessHost {
     pub fn kill(&self) {
         self.forwarding.store(false, Ordering::Release);
         self.send(RendererMsg::Shutdown);
+        // A process isn't asked: its channel is closed, and it is ended
+        // when this is dropped or abandoned.
+        if let Some((_, link)) = &self.child {
+            link.close();
+        }
     }
 
     /// Lets the renderer's threads end on their own: a renderer that has
@@ -308,6 +443,11 @@ impl RenderProcessHost {
         self.forwarding.store(false, Ordering::Release);
         self.renderer_thread.take();
         self.io_thread.take();
+        // A process is ended, not left: nothing waits for one that is
+        // killed.
+        if let Some((child, link)) = self.child.take() {
+            end_child(child, &link, None);
+        }
     }
 
     pub fn send(&self, msg: RendererMsg) {
@@ -396,7 +536,37 @@ impl RenderProcessHost {
                 tracing::error!("renderer-side thread panicked");
             }
         }
+        if let Some((child, link)) = self.child.take() {
+            end_child(child, &link, Some(CHILD_EXIT_WAIT));
+        }
     }
+}
+
+/// How long a renderer process asked to exit is given before it is ended.
+const CHILD_EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Ends a renderer process: waits `wait` for it to exit by itself (it was
+/// asked to), then kills it; closes this end of its channel, and tells
+/// the platform it has gone (a child that never took its end).
+fn end_child(mut child: Child, link: &ChannelLink, wait: Option<std::time::Duration>) {
+    let asked = std::time::Instant::now();
+    let exited = wait.is_some_and(|wait| {
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break true,
+                Ok(None) if asked.elapsed() < wait => {
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+                _ => break false,
+            }
+        }
+    });
+    if !exited {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    link.close();
+    ipc::platform::child_gone(child.id());
 }
 
 impl Drop for RenderProcessHost {
