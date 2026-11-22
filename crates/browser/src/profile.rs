@@ -183,8 +183,10 @@ pub fn user_data_dir_on(
         ),
         Platform::Windows => Some(dir("LOCALAPPDATA")?.join("machopo").join("User Data")),
         Platform::Xdg => {
+            // Absolute as on `platform`, from the root: `is_absolute` goes
+            // by the system machopo runs on, and Windows's wants a drive.
             let config = dir("XDG_CONFIG_HOME")
-                .filter(|path| path.is_absolute())
+                .filter(|path| path.has_root())
                 .or_else(|| Some(dir("HOME")?.join(".config")))?;
             Some(config.join("machopo"))
         }

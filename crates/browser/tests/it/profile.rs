@@ -22,14 +22,21 @@ fn a_profile_in_memory_has_no_folder() {
 }
 
 /// Its folder is made if it isn't there, and its lock file says whose it
-/// is.
+/// is, and only that: not what a longer one said before.
 #[test]
 fn a_profiles_folder_is_made_and_says_whose_it_is() {
     let dir = scratch("made").join("deeper");
     let profile = Profile::open(&dir).unwrap();
     assert_eq!(profile.dir(), Some(dir.as_path()));
-    let said = std::fs::read_to_string(dir.join("lock")).unwrap();
-    assert_eq!(said, std::process::id().to_string());
+    // Let go to be read: on Windows no other handle reads a locked file.
+    drop(profile);
+    let lock = dir.join("lock");
+    let pid = std::process::id().to_string();
+    assert_eq!(std::fs::read_to_string(&lock).unwrap(), pid);
+
+    std::fs::write(&lock, "left by a process that crashed").unwrap();
+    drop(Profile::open(&dir).unwrap());
+    assert_eq!(std::fs::read_to_string(&lock).unwrap(), pid);
 }
 
 /// While one has it (any of its clones), another can't: it is in use, the
