@@ -1,7 +1,9 @@
 //! Where an element's boxes are, for script (Blink's
 //! `LayoutObject::AbsoluteQuads` / `LocalToAbsolute`): its border box, or
 //! an inline element's box on each line, mapped from the fragment tree
-//! through transforms and the scroll containers' offsets.
+//! through transforms and the scroll containers' offsets, and to the
+//! viewport through the page's scroll, which moves all but what is fixed
+//! to it.
 //!
 //! Pre-paint builds the same mapping into its property trees for paint and
 //! hit testing (`paint::pre_paint`, which takes `box_transform` from here);
@@ -17,6 +19,36 @@ use crate::{BoxFragment, StickyOffsets};
 /// Each scroll container's scroll offset, by element: how far its content
 /// is moved up and left. Containers not in it are at the origin.
 pub type ScrollOffsets = NodeIdHashMap<PointF>;
+
+/// From a space in the fragment tree to the viewport (Blink's
+/// `TransformState`, as `MapLocalToAncestor` leaves it): through `to_root`
+/// to the root fragment's space, then less `scrolled`, how far the page's
+/// scroll moves what is in it. That isn't composed into the transform: a
+/// rect's size would be rounded otherwise the further the page scrolls.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Mapping {
+    pub(crate) to_root: Transform,
+    pub(crate) scrolled: PointF,
+}
+
+impl Mapping {
+    fn then(&self, transform: &Transform) -> Self {
+        Self {
+            to_root: self.to_root.then(transform),
+            scrolled: self.scrolled,
+        }
+    }
+
+    fn map_point(&self, point: PointF) -> PointF {
+        let at = self.to_root.map_point(point);
+        PointF::new(at.x - self.scrolled.x, at.y - self.scrolled.y)
+    }
+
+    fn map_rect(&self, rect: RectF) -> RectF {
+        let rect = self.to_root.map_rect(rect);
+        rect.offset(-self.scrolled.x, -self.scrolled.y)
+    }
+}
 
 /// `fragment`'s `transform`, from its border box's origin, about its
 /// `transform-origin` in its reference box (`transform-box`: the content
@@ -43,14 +75,16 @@ pub fn box_transform(fragment: &BoxFragment) -> Option<Transform> {
     fragment.style.transform_about_origin(reference)
 }
 
-/// `element`'s boxes in the root fragment's space (the document's
-/// coordinates: the viewport's scroll offset isn't taken off), in tree
+/// `element`'s boxes in the viewport, the page scrolled to
+/// `viewport_scroll` (zero gives the document's coordinates), in tree
 /// order: its border box, or an inline element's box on each line (CSSOM
 /// View's `getClientRects`), each the bounding rect of the box as
 /// transformed, moved by the offsets of the scroll containers around it
-/// (`scroll`), not cut by clips. Empty if it has no box.
+/// (`scroll`) and by the page's unless it is in a box fixed to the
+/// viewport, not cut by clips. Empty if it has no box.
 pub fn client_rects(
     layout_view: &BoxFragment,
+    viewport_scroll: PointF,
     scroll: &ScrollOffsets,
     sticky: &StickyOffsets,
     element: NodeId,
@@ -58,9 +92,10 @@ pub fn client_rects(
     let mut rects = Vec::new();
     walk(
         layout_view,
+        viewport_scroll,
         scroll,
         sticky,
-        &mut |fragment, offset, to_root, contents| {
+        &mut |fragment, offset, mapping, contents| {
             if fragment.node == Some(element) && fragment.pseudo.is_none() {
                 let border_box = RectF::new(
                     offset.x,
@@ -68,7 +103,7 @@ pub fn client_rects(
                     fragment.size.width,
                     fragment.size.height,
                 );
-                rects.push(to_root.map_rect(border_box));
+                rects.push(mapping.map_rect(border_box));
             }
             for line in &fragment.lines {
                 for inline_box in line
@@ -100,7 +135,7 @@ pub struct BoxQuads {
     pub margin: Quad,
 }
 
-fn quad(rect: RectF, to: &Transform) -> Quad {
+fn quad(rect: RectF, to: &Mapping) -> Quad {
     [
         to.map_point(PointF::new(rect.x, rect.y)),
         to.map_point(PointF::new(rect.x + rect.width, rect.y)),
@@ -119,8 +154,8 @@ fn contract(rect: RectF, sides: &computed_style::Sides<f32>) -> RectF {
     )
 }
 
-/// `element`'s box model in the root fragment's space (as `client_rects`
-/// has it), through transforms and the scroll containers' offsets (Blink's
+/// `element`'s box model in the viewport (as `client_rects` has it),
+/// through transforms and the scroll offsets (Blink's
 /// `BuildNodeQuads`): a box's content, padding, border and margin boxes
 /// (the margins clamped to no negative size); an inline element's around
 /// its boxes on the lines (Blink's `PhysicalLinesBoundingBox`), its border
@@ -129,11 +164,12 @@ fn contract(rect: RectF, sides: &computed_style::Sides<f32>) -> RectF {
 /// keep no margins; Blink's has the horizontal ones). None without a box.
 pub fn box_quads(
     layout_view: &BoxFragment,
+    viewport_scroll: PointF,
     scroll: &ScrollOffsets,
     sticky: &StickyOffsets,
     element: NodeId,
 ) -> Option<BoxQuads> {
-    pseudo_box_quads(layout_view, scroll, sticky, element, None)
+    pseudo_box_quads(layout_view, viewport_scroll, scroll, sticky, element, None)
 }
 
 /// `box_quads` of `element`'s pseudo-element `pseudo` (its own, if none):
@@ -141,12 +177,20 @@ pub fn box_quads(
 /// `getBoxModel` of a `::before`).
 pub fn pseudo_box_quads(
     layout_view: &BoxFragment,
+    viewport_scroll: PointF,
     scroll: &ScrollOffsets,
     sticky: &StickyOffsets,
     element: NodeId,
     pseudo: Option<computed_style::PseudoId>,
 ) -> Option<BoxQuads> {
-    if let Some((fragment, to_root)) = box_of(layout_view, scroll, sticky, element, pseudo) {
+    if let Some((fragment, mapping)) = box_of(
+        layout_view,
+        viewport_scroll,
+        scroll,
+        sticky,
+        element,
+        pseudo,
+    ) {
         let border = RectF::new(0.0, 0.0, fragment.size.width, fragment.size.height);
         let padding = contract(border, &fragment.border);
         let content = contract(padding, &fragment.padding);
@@ -158,15 +202,16 @@ pub fn pseudo_box_quads(
             (border.height + margins.top + margins.bottom).max(0.0),
         );
         return Some(BoxQuads {
-            content: quad(content, &to_root),
-            padding: quad(padding, &to_root),
-            border: quad(border, &to_root),
-            margin: quad(margin, &to_root),
+            content: quad(content, &mapping),
+            padding: quad(padding, &mapping),
+            border: quad(border, &mapping),
+            margin: quad(margin, &mapping),
         });
     }
     let mut boxes = Vec::new();
     walk(
         layout_view,
+        viewport_scroll,
         scroll,
         sticky,
         &mut |fragment, offset, _, contents| {
@@ -176,10 +221,13 @@ pub fn pseudo_box_quads(
                     .iter()
                     .filter(|b| b.node == element && b.pseudo == pseudo)
                 {
+                    // Added up in the root's space, scrolled once added.
+                    let rect = inline_box.rect.offset(offset.x, offset.y);
                     boxes.push((
-                        contents.map_rect(inline_box.rect.offset(offset.x, offset.y)),
+                        contents.to_root.map_rect(rect),
                         inline_box.border,
                         inline_box.padding,
+                        contents.scrolled,
                     ));
                 }
             }
@@ -202,22 +250,26 @@ pub fn pseudo_box_quads(
     };
     let padding = contract(border, &border_sides);
     let content = contract(padding, &padding_sides);
-    let identity = Transform::IDENTITY;
+    let from_root = Mapping {
+        to_root: Transform::IDENTITY,
+        scrolled: first.3,
+    };
     Some(BoxQuads {
-        content: quad(content, &identity),
-        padding: quad(padding, &identity),
-        border: quad(border, &identity),
-        margin: quad(border, &identity),
+        content: quad(content, &from_root),
+        padding: quad(padding, &from_root),
+        border: quad(border, &from_root),
+        margin: quad(border, &from_root),
     })
 }
 
-/// `element`'s border boxes as quads in the root fragment's space, in tree
-/// order, as `client_rects` finds them but not made rects: a box's border
+/// `element`'s border boxes as quads in the viewport, in tree order, as
+/// `client_rects` finds them but not made rects: a box's border
 /// box through its transforms, an inline element's box on each line
 /// (DevTools' `getContentQuads`; Blink's `CollectQuads` goes into an
 /// inline element's children instead). Empty without a box.
 pub fn border_quads(
     layout_view: &BoxFragment,
+    viewport_scroll: PointF,
     scroll: &ScrollOffsets,
     sticky: &StickyOffsets,
     element: NodeId,
@@ -225,9 +277,10 @@ pub fn border_quads(
     let mut quads = Vec::new();
     walk(
         layout_view,
+        viewport_scroll,
         scroll,
         sticky,
-        &mut |fragment, offset, to_root, contents| {
+        &mut |fragment, offset, mapping, contents| {
             if fragment.node == Some(element) && fragment.pseudo.is_none() {
                 let border = RectF::new(
                     offset.x,
@@ -235,7 +288,7 @@ pub fn border_quads(
                     fragment.size.width,
                     fragment.size.height,
                 );
-                quads.push(quad(border, to_root));
+                quads.push(quad(border, mapping));
             }
             for line in &fragment.lines {
                 for inline_box in line
@@ -264,6 +317,7 @@ pub fn border_quads(
 /// (at the end of the data) the last. Empty if the text has no box.
 pub fn text_rects(
     layout_view: &BoxFragment,
+    viewport_scroll: PointF,
     scroll: &ScrollOffsets,
     sticky: &StickyOffsets,
     text: NodeId,
@@ -276,6 +330,7 @@ pub fn text_rects(
     let mut at_end = None;
     walk(
         layout_view,
+        viewport_scroll,
         scroll,
         sticky,
         &mut |fragment, offset, _, contents| {
@@ -322,41 +377,49 @@ pub fn text_rects(
 }
 
 /// Pre-paint's walk, mapping instead of recording: `visit` sees each
-/// fragment with where its border box is in the space `to_root` maps from,
-/// and the transform for its contents (its lines and children, moved by
-/// its scroll offset); it returns whether to go on.
-fn walk(
-    layout_view: &BoxFragment,
+/// fragment under the `LayoutView` with where its border box is in the
+/// space the first mapping maps from, and the mapping of its contents (its
+/// lines and children, moved by its scroll offset); it returns whether to
+/// go on.
+///
+/// The page's scroll, `viewport_scroll`, is the root's step: its children
+/// are moved by it but the ones fixed to the viewport, which are all among
+/// them, and what is in a child goes with it (Blink's
+/// `OffsetFromScrollableContainer`: nothing from the `LayoutView` for a
+/// fixed box).
+fn walk<'a>(
+    layout_view: &'a BoxFragment,
+    viewport_scroll: PointF,
     scroll: &ScrollOffsets,
     sticky: &StickyOffsets,
-    visit: &mut dyn FnMut(&BoxFragment, PointF, &Transform, &Transform) -> bool,
+    visit: &mut dyn FnMut(&'a BoxFragment, PointF, &Mapping, &Mapping) -> bool,
 ) {
-    fn go(
-        fragment: &BoxFragment,
+    fn go<'a>(
+        fragment: &'a BoxFragment,
         offset: PointF,
-        to_root: Transform,
+        mapping: Mapping,
         scroll: &ScrollOffsets,
         sticky: &StickyOffsets,
-        visit: &mut dyn FnMut(&BoxFragment, PointF, &Transform, &Transform) -> bool,
+        visit: &mut dyn FnMut(&'a BoxFragment, PointF, &Mapping, &Mapping) -> bool,
     ) -> bool {
-        let (mut to_root, mut offset) = (to_root, stuck(fragment, offset, sticky));
+        let (mut mapping, mut offset) = (mapping, stuck(fragment, offset, sticky));
         if let Some(transform) = box_transform(fragment) {
-            to_root = to_root
+            mapping = mapping
                 .then(&Transform::translate(offset.x, offset.y))
                 .then(&transform);
             offset = PointF::new(0.0, 0.0);
         }
         // A scroll container's content (its lines and children) moves by
         // its offset. The element whose `overflow` went to the viewport has
-        // `visible` here: the viewport's offset is the caller's.
+        // `visible` here: the viewport's offset is the root's.
         let contents = match fragment.node {
             Some(node) if fragment.style.is_scroll_container() => {
                 let at = scroll.get(&node).copied().unwrap_or(PointF::new(0.0, 0.0));
-                to_root.then(&Transform::translate(-at.x, -at.y))
+                mapping.then(&Transform::translate(-at.x, -at.y))
             }
-            _ => to_root,
+            _ => mapping,
         };
-        if !visit(fragment, offset, &to_root, &contents) {
+        if !visit(fragment, offset, &mapping, &contents) {
             return false;
         }
         for child in &fragment.children {
@@ -367,14 +430,28 @@ fn walk(
         }
         true
     }
-    go(
-        layout_view,
-        PointF::new(0.0, 0.0),
-        Transform::IDENTITY,
-        scroll,
-        sticky,
-        visit,
-    );
+    // Not the `LayoutView` itself, which is no node's and has no lines.
+    for child in &layout_view.children {
+        let scrolled = if child.fragment.fixed_to_viewport {
+            PointF::new(0.0, 0.0)
+        } else {
+            viewport_scroll
+        };
+        let mapping = Mapping {
+            to_root: Transform::IDENTITY,
+            scrolled,
+        };
+        if !go(
+            &child.fragment,
+            child.offset,
+            mapping,
+            scroll,
+            sticky,
+            visit,
+        ) {
+            return;
+        }
+    }
 }
 
 /// `offset`, where `fragment` is, moved by how far it sticks (Blink's
@@ -392,69 +469,45 @@ pub(crate) fn stuck(fragment: &BoxFragment, offset: PointF, sticky: &StickyOffse
     }
 }
 
-/// `element`'s box (the first, if it has several), and the transform from
-/// its border box's space (its origin at the border box's) to the root
-/// fragment's, through transforms and the scroll containers' offsets, as
-/// `client_rects` maps it.
-pub(crate) fn box_to_root<'a>(
+/// `element`'s box (the first, if it has several), and the mapping from
+/// its border box's space (its origin at the border box's) to the
+/// viewport, as `client_rects` maps it.
+pub(crate) fn box_to_viewport<'a>(
     layout_view: &'a BoxFragment,
+    viewport_scroll: PointF,
     scroll: &ScrollOffsets,
     sticky: &StickyOffsets,
     element: NodeId,
-) -> Option<(&'a BoxFragment, Transform)> {
-    box_of(layout_view, scroll, sticky, element, None)
+) -> Option<(&'a BoxFragment, Mapping)> {
+    box_of(layout_view, viewport_scroll, scroll, sticky, element, None)
 }
 
-/// `box_to_root` of `element`'s pseudo-element `pseudo`'s box (its own, if
-/// none).
+/// `box_to_viewport` of `element`'s pseudo-element `pseudo`'s box (its
+/// own, if none).
 fn box_of<'a>(
     layout_view: &'a BoxFragment,
+    viewport_scroll: PointF,
     scroll: &ScrollOffsets,
     sticky: &StickyOffsets,
     element: NodeId,
     pseudo: Option<computed_style::PseudoId>,
-) -> Option<(&'a BoxFragment, Transform)> {
-    fn find<'a>(
-        fragment: &'a BoxFragment,
-        offset: PointF,
-        to_root: Transform,
-        scroll: &ScrollOffsets,
-        sticky: &StickyOffsets,
-        element: (NodeId, Option<computed_style::PseudoId>),
-    ) -> Option<(&'a BoxFragment, Transform)> {
-        let (mut to_root, mut offset) = (to_root, stuck(fragment, offset, sticky));
-        if let Some(transform) = box_transform(fragment) {
-            to_root = to_root
-                .then(&Transform::translate(offset.x, offset.y))
-                .then(&transform);
-            offset = PointF::new(0.0, 0.0);
-        }
-        if fragment.node == Some(element.0) && fragment.pseudo == element.1 {
-            return Some((
-                fragment,
-                to_root.then(&Transform::translate(offset.x, offset.y)),
-            ));
-        }
-        let contents = match fragment.node {
-            Some(node) if fragment.style.is_scroll_container() => {
-                let at = scroll.get(&node).copied().unwrap_or(PointF::new(0.0, 0.0));
-                to_root.then(&Transform::translate(-at.x, -at.y))
-            }
-            _ => to_root,
-        };
-        fragment.children.iter().find_map(|child| {
-            let at = PointF::new(offset.x + child.offset.x, offset.y + child.offset.y);
-            find(&child.fragment, at, contents, scroll, sticky, element)
-        })
-    }
-    find(
+) -> Option<(&'a BoxFragment, Mapping)> {
+    let mut found = None;
+    walk(
         layout_view,
-        PointF::new(0.0, 0.0),
-        Transform::IDENTITY,
+        viewport_scroll,
         scroll,
         sticky,
-        (element, pseudo),
-    )
+        &mut |fragment, offset, mapping, _| {
+            if fragment.node == Some(element) && fragment.pseudo == pseudo {
+                let to_box = Transform::translate(offset.x, offset.y);
+                found = Some((fragment, mapping.then(&to_box)));
+                return false;
+            }
+            true
+        },
+    );
+    found
 }
 
 /// `element`'s box for `offset*`, `client*` and `scroll*`, in the root
@@ -628,23 +681,6 @@ fn used_inset(fragment: &BoxFragment, parent: Option<(&BoxFragment, PointF)>) ->
         ];
     }
     [0.0; 4]
-}
-
-/// Whether `element`'s box is fixed to the viewport (`position: fixed`,
-/// and no box around it its containing block): it is laid out against
-/// the viewport, so where layout put it is where it shows, however far the
-/// document is scrolled.
-pub fn is_fixed(layout_view: &BoxFragment, element: NodeId) -> bool {
-    fn find(fragment: &BoxFragment, element: NodeId) -> bool {
-        if fragment.node == Some(element) && fragment.pseudo.is_none() {
-            return fragment.fixed_to_viewport;
-        }
-        fragment
-            .children
-            .iter()
-            .any(|child| find(&child.fragment, element))
-    }
-    find(layout_view, element)
 }
 
 /// CSSOM View's `getBoundingClientRect` from the element's `rects`: none

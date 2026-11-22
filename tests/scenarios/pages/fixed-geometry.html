@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Geometry in a fixed bar</title>
+<style>
+  body { margin: 0; height: 4000px }
+  #bar { position: fixed; left: 10px; top: 20px; width: 400px; padding: 10px; background: orange }
+  #bar button { display: block; width: 300px; height: 30px }
+  #bar select { display: block; width: 300px; height: 20px }
+  #bar p { margin: 0 }
+</style>
+<div id="bar">
+  <button id="measure">Measure this button</button>
+  <select id="pick"><option>one</option><option>two</option></select>
+  <p id="note">The page is scrolled to 1500.</p>
+  <p id="picked">Nothing picked.</p>
+</div>
+<script>
+  const button = document.getElementById("measure");
+  button.addEventListener("click", () => {
+    const r = button.getBoundingClientRect();
+    document.getElementById("note").textContent = `${r.left}, ${r.top}, page at ${scrollY}.`;
+  });
+  const pick = document.getElementById("pick");
+  pick.addEventListener("change", () => {
+    document.getElementById("picked").textContent = `${pick.value}, page at ${scrollY}.`;
+  });
+  scrollTo(0, 1500);
+</script>

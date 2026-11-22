@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use compositor::{CompositorScrollDelta, DocumentId, Layer, ScrollKey, ScrollNode};
 use dom::{Cx, Dom, LocalToken, NodeId, NodeRef, NodeRoot};
-use gfx::{ElementBox, PointF, RectF, SizeF, SvgGeometry, SvgTextChar, Transform, Viewport};
+use gfx::{ElementBox, PointF, RectF, SizeF, SvgGeometry, SvgTextChar, Viewport};
 use layout::svg_dom::SvgElement;
 use layout::{BoxFragment, BoxTree, TextContext};
 use paint::PrePaint;
@@ -1462,22 +1462,13 @@ impl FrameView {
         let Some(fragment) = &self.fragment else {
             return Vec::new();
         };
-        // A box fixed to the viewport is laid out against it, so layout
-        // already placed it where it shows.
-        let at = if layout::is_fixed(fragment, element) {
-            PointF::new(0.0, 0.0)
-        } else {
-            self.scroll.viewport
-        };
         layout::client_rects(
             fragment,
+            self.scroll.viewport,
             &self.scroll.containers,
             &self.scroll.stuck.offsets,
             element,
         )
-        .into_iter()
-        .map(|rect| rect.offset(-at.x, -at.y))
-        .collect()
     }
 
     /// `element`'s box model as last laid out, CSS px of the viewport, as
@@ -1532,21 +1523,14 @@ impl FrameView {
         pseudo: Option<computed_style::PseudoId>,
     ) -> Option<layout::BoxQuads> {
         let fragment = self.fragment.as_ref()?;
-        let quads = layout::pseudo_box_quads(
+        layout::pseudo_box_quads(
             fragment,
+            self.scroll.viewport,
             &self.scroll.containers,
             &self.scroll.stuck.offsets,
             element,
             pseudo,
-        )?;
-        let at = self.viewport_origin_of(fragment, element);
-        let moved = |quad: layout::Quad| quad.map(|p| PointF::new(p.x - at.x, p.y - at.y));
-        Some(layout::BoxQuads {
-            content: moved(quads.content),
-            padding: moved(quads.padding),
-            border: moved(quads.border),
-            margin: moved(quads.margin),
-        })
+        )
     }
 
     /// `element`'s border boxes as quads as last laid out, CSS px of the
@@ -1555,27 +1539,13 @@ impl FrameView {
         let Some(fragment) = &self.fragment else {
             return Vec::new();
         };
-        let at = self.viewport_origin_of(fragment, element);
         layout::border_quads(
             fragment,
+            self.scroll.viewport,
             &self.scroll.containers,
             &self.scroll.stuck.offsets,
             element,
         )
-        .into_iter()
-        .map(|quad| quad.map(|p| PointF::new(p.x - at.x, p.y - at.y)))
-        .collect()
-    }
-
-    /// Where the viewport is in the document for `element`'s boxes: its
-    /// scroll offset, or nowhere for a box fixed to it, which layout
-    /// placed where it shows.
-    fn viewport_origin_of(&self, fragment: &layout::BoxFragment, element: NodeId) -> PointF {
-        if layout::is_fixed(fragment, element) {
-            PointF::new(0.0, 0.0)
-        } else {
-            self.scroll.viewport
-        }
     }
 
     /// Whether `element` is a box the user scrolls: a scroll container
@@ -1595,35 +1565,21 @@ impl FrameView {
     }
 
     /// The boxes of text `text`'s data from `start` to `end`, CSS px of the
-    /// viewport (`layout::text_rects` less the viewport's scroll offset,
-    /// unless `element`, the one it is in, is fixed to it, as
-    /// `client_rects` has it); empty without a box or a layout.
-    pub(crate) fn text_rects(
-        &self,
-        text: NodeId,
-        element: Option<NodeId>,
-        start: u32,
-        end: u32,
-    ) -> Vec<RectF> {
+    /// viewport, as last laid out (`layout::text_rects`); empty without a
+    /// box or a layout.
+    pub(crate) fn text_rects(&self, text: NodeId, start: u32, end: u32) -> Vec<RectF> {
         let Some(fragment) = &self.fragment else {
             return Vec::new();
         };
-        let at = if element.is_some_and(|element| layout::is_fixed(fragment, element)) {
-            PointF::new(0.0, 0.0)
-        } else {
-            self.scroll.viewport
-        };
         layout::text_rects(
             fragment,
+            self.scroll.viewport,
             &self.scroll.containers,
             &self.scroll.stuck.offsets,
             text,
             start,
             end,
         )
-        .into_iter()
-        .map(|rect| rect.offset(-at.x, -at.y))
-        .collect()
     }
 
     /// The first place a caret can be in editing host `host`, as last laid
@@ -1642,24 +1598,20 @@ impl FrameView {
     }
 
     /// An SVG element's geometry, CSS px of the viewport, as last laid out
-    /// (`layout::svg_geometry` less the viewport's scroll offset); the
-    /// default if no `<svg>` around it has a box.
+    /// (`layout::svg_geometry`); the default if no `<svg>` around it has a
+    /// box.
     pub(crate) fn svg_geometry(&self, element: SvgElement<'_, '_>) -> SvgGeometry {
         let Some(fragment) = &self.fragment else {
             return SvgGeometry::default();
         };
-        let Some(mut geometry) = layout::svg_geometry(
+        layout::svg_geometry(
             fragment,
+            self.scroll.viewport,
             &self.scroll.containers,
             &self.scroll.stuck.offsets,
             element,
-        ) else {
-            return SvgGeometry::default();
-        };
-        let at = self.scroll.viewport;
-        geometry.screen_ctm = Transform::translate(-at.x, -at.y).then(&geometry.screen_ctm);
-        geometry.client_rect = geometry.client_rect.map(|rect| rect.offset(-at.x, -at.y));
-        geometry
+        )
+        .unwrap_or_default()
     }
 
     /// An SVG shape's path for its length, as laid out
@@ -2472,14 +2424,8 @@ impl dom_api::FrameLayout for Frame {
         self.selected().client_rects(node)
     }
 
-    fn text_rects(
-        &self,
-        text: NodeId,
-        element: Option<NodeId>,
-        start: u32,
-        end: u32,
-    ) -> Vec<RectF> {
-        self.selected().text_rects(text, element, start, end)
+    fn text_rects(&self, text: NodeId, start: u32, end: u32) -> Vec<RectF> {
+        self.selected().text_rects(text, start, end)
     }
 
     fn first_caret_position<'gc>(

@@ -137,9 +137,9 @@ fn a_ranges_rects_are_its_elements_and_its_texts_parts() {
         log.borrow().as_slice(),
         [
             "layout",
-            "text 1 4294967295 false",
-            "text 0 4294967295 false",
-            "text 0 4294967295 false"
+            "text 1 4294967295",
+            "text 0 4294967295",
+            "text 0 4294967295"
         ]
     );
     // Its bounding rect: their union.
@@ -166,14 +166,11 @@ fn a_ranges_rects_are_its_elements_and_its_texts_parts() {
         rects(&mut dom, &r),
         [[0.0, 0.0, 10.0, 10.0], [1.0, 1.0, 4.0, 2.0]]
     );
-    assert_eq!(
-        log.borrow().as_slice(),
-        ["layout", "text 0 4294967295 false"]
-    );
+    assert_eq!(log.borrow().as_slice(), ["layout", "text 0 4294967295"]);
 }
 
 #[test]
-fn a_collapsed_or_fixed_or_detached_ranges_rects() {
+fn a_collapsed_or_detached_ranges_rects() {
     let (mut dom, nodes, log) = laid_out();
     let (document, body, text) = (&nodes[0], &nodes[2], &nodes[4]);
     let r = range(&mut dom, document);
@@ -186,16 +183,7 @@ fn a_collapsed_or_fixed_or_detached_ranges_rects() {
     on(&mut dom, &r, "collapse", &[Arg::Bool(true)]);
     log.borrow_mut().clear();
     assert_eq!(rects(&mut dom, &r), [[1.0, 1.0, 4.0, 2.0]]);
-    assert_eq!(log.borrow().as_slice(), ["layout", "text 2 2 false"]);
-    // The element it is in fixed to the viewport.
-    let body_id = id(&dom, body);
-    fake(&dom, |fake| {
-        fake.positions
-            .insert(body_id, computed_style::Position::Fixed);
-    });
-    log.borrow_mut().clear();
-    rects(&mut dom, &r);
-    assert_eq!(log.borrow().as_slice(), ["layout", "text 2 2 true"]);
+    assert_eq!(log.borrow().as_slice(), ["layout", "text 2 2"]);
     // Out of the document: nothing asked.
     let lone =
         dom.mutate(|cx| Rc::new(cx.root(cx.create_text(cx.document_of(body.get(cx.gc)), "x"))));

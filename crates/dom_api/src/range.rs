@@ -1057,8 +1057,7 @@ fn text_rects<'gc>(
     from: u32,
     to: u32,
 ) -> Vec<RectF> {
-    let element = cx.parent(text).map(|parent| cx.node_id(parent));
-    layout.text_rects(cx.node_id(text), element, from, to)
+    layout.text_rects(cx.node_id(text), from, to)
 }
 
 /// The boxes of `element`, held whole by a range: its own, or for a

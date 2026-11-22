@@ -28,7 +28,8 @@ fn both(
     let mut out: Vec<_> = ids
         .iter()
         .map(|(name, &id)| {
-            let rects = layout::client_rects(&view, &offsets, &Default::default(), id);
+            let rects =
+                layout::client_rects(&view, Default::default(), &offsets, &Default::default(), id);
             let union = rects.iter().copied().reduce(|a, b| a.union(&b));
             (
                 name.clone(),
@@ -143,8 +144,15 @@ fn transforms_are_about_the_center_and_percentages_of_the_box() {
          <div id=both style='transform: translate(10px) scale(2)'></div>",
         VIEWPORT,
     );
-    let rects =
-        |id: &str| layout::client_rects(&view, &Default::default(), &Default::default(), ids[id]);
+    let rects = |id: &str| {
+        layout::client_rects(
+            &view,
+            Default::default(),
+            &Default::default(),
+            &Default::default(),
+            ids[id],
+        )
+    };
     assert_eq!(rects("scaled"), [RectF::new(-50.0, -20.0, 200.0, 80.0)]);
     assert_eq!(rects("moved"), [RectF::new(15.0, 50.0, 30.0, 40.0)]);
     // Scaled about its center, then moved by 10: the other order would
@@ -170,9 +178,13 @@ fn transforms_turn_about_their_origin_in_their_reference_box() {
         VIEWPORT,
     );
     let rect = |id: &str| {
-        let [r] =
-            layout::client_rects(&view, &Default::default(), &Default::default(), ids[id])[..]
-        else {
+        let [r] = layout::client_rects(
+            &view,
+            Default::default(),
+            &Default::default(),
+            &Default::default(),
+            ids[id],
+        )[..] else {
             panic!("#{id} has one box");
         };
         // To a thousandth: the tangent of 45° isn't exactly 1.
@@ -202,7 +214,13 @@ fn element_boxes(
                 name.clone(),
                 (
                     layout::element_box(&view, &offsets, &Default::default(), id),
-                    layout::client_rects(&view, &offsets, &Default::default(), id),
+                    layout::client_rects(
+                        &view,
+                        Default::default(),
+                        &offsets,
+                        &Default::default(),
+                        id,
+                    ),
                 ),
             )
         })

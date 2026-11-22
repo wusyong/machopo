@@ -43,7 +43,7 @@ pub(crate) struct Fake {
     /// A frame never laid out: the viewport's width its layout gives it.
     pub(crate) unknown_width: Option<f32>,
     /// Each text's rect, which every part of it asked for gets (each ask
-    /// logged: `text {start} {end} {fixed}`).
+    /// logged: `text {start} {end}`).
     pub(crate) texts: HashMap<NodeId, RectF>,
     /// Elements `display: contents`.
     pub(crate) contents: Vec<NodeId>,
@@ -95,18 +95,8 @@ impl FrameLayout for Fake {
         self.rects.get(&node).cloned().unwrap_or_default()
     }
 
-    fn text_rects(
-        &self,
-        text: NodeId,
-        element: Option<NodeId>,
-        start: u32,
-        end: u32,
-    ) -> Vec<RectF> {
-        let fixed =
-            element.is_some_and(|element| self.positions.get(&element) == Some(&Position::Fixed));
-        self.log
-            .borrow_mut()
-            .push(format!("text {start} {end} {fixed}"));
+    fn text_rects(&self, text: NodeId, start: u32, end: u32) -> Vec<RectF> {
+        self.log.borrow_mut().push(format!("text {start} {end}"));
         self.texts.get(&text).copied().into_iter().collect()
     }
 

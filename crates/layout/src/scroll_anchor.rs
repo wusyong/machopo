@@ -3,8 +3,8 @@
 //! text in a scroller's content is its anchor, and how far its top is from
 //! the top of what the scroller shows. The renderer keeps the anchors and
 //! moves the scroll offsets; this only measures, in the root fragment's
-//! space as `client_rects` maps it (the scroll containers' offsets taken
-//! off, the viewport's not).
+//! space, as `client_rects` maps to with the page unscrolled (the scroll
+//! containers' offsets taken off, the viewport's not).
 //!
 //! machopo lays out horizontal text only: the block axis is the vertical one,
 //! and the anchor's corner is its top.
@@ -86,12 +86,14 @@ pub fn scroll_anchor_offset(
     anchor: ScrollAnchorNode,
 ) -> Option<f32> {
     let port = scrollport(layout_view, scroll, sticky, scroller, viewport)?;
+    // The page unscrolled: in the root's space, as `port` is.
+    let unscrolled = PointF::new(0.0, 0.0);
     let rects = match anchor {
         ScrollAnchorNode::Box(element) => {
-            crate::geometry::client_rects(layout_view, scroll, sticky, element)
+            crate::geometry::client_rects(layout_view, unscrolled, scroll, sticky, element)
         }
         ScrollAnchorNode::Text(text) => {
-            crate::geometry::text_rects(layout_view, scroll, sticky, text, 0, u32::MAX)
+            crate::geometry::text_rects(layout_view, unscrolled, scroll, sticky, text, 0, u32::MAX)
         }
     };
     let top = rects.iter().map(|rect| rect.y).reduce(f32::min)?;

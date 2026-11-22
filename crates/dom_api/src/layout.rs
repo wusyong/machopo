@@ -51,18 +51,12 @@ pub trait FrameLayout: Any {
     fn client_rects(&self, node: NodeId) -> Vec<RectF>;
 
     /// The boxes of text `text`'s data from `start` to `end` (UTF-16 code
-    /// units), CSS px of the viewport (scrolled, unless `element`, the one
-    /// it is in, is fixed to it), as last laid out (Blink's
+    /// units), CSS px of the viewport (scrolled, unless it is in a box
+    /// fixed to it), as last laid out (Blink's
     /// `LayoutText::AbsoluteQuadsForRange`); empty without a box. None by
     /// default.
-    fn text_rects(
-        &self,
-        text: NodeId,
-        element: Option<NodeId>,
-        start: u32,
-        end: u32,
-    ) -> Vec<RectF> {
-        let _ = (text, element, start, end);
+    fn text_rects(&self, text: NodeId, start: u32, end: u32) -> Vec<RectF> {
+        let _ = (text, start, end);
         Vec::new()
     }
 

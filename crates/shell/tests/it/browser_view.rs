@@ -1793,6 +1793,28 @@ fn only_the_tab_shown_has_a_dropdown() {
 }
 
 /// A select, and an element whose presses don't move the focus.
+/// A select in a bar fixed to the window, the page scrolled under it: its
+/// dropdown is below it, where it shows.
+#[test]
+fn a_selects_dropdown_in_a_fixed_bar() {
+    let mut window = Window::open(window_size(1.0), 1.0);
+    let server = server(&[("/", SELECT_IN_FIXED)]);
+    window.load(&server.url("/"));
+    window.until_out(TabId(0), "500");
+    window.click(10.0, TOP + 40.0);
+    window.until(|msg| matches!(msg, RendererHostMsg::ShowPopupMenu(_)));
+    let rect = window.view.popup_menu().expect("shown").rect();
+    assert_eq!((rect.x, rect.y), (0.0, TOP + 50.0));
+}
+
+const SELECT_IN_FIXED: &str =
+    "<!DOCTYPE html><style>html, body { margin: 0 } body { height: 3000px }
+     div { position: fixed; left: 0; top: 30px }
+     select { display: block; width: 100px; height: 20px }</style>
+     <div><select><option>one</option><option>two</option></select></div>
+     <p id=out></p>
+     <script>scrollTo(0, 500); document.getElementById('out').textContent = scrollY;</script>";
+
 const SELECT_AND_STILL: &str = "<!DOCTYPE html><style>html, body { margin: 0 }
      select { display: block; width: 100px; height: 20px } div { height: 50px }</style>
      <select id=s><option>one</option><option>two</option></select>

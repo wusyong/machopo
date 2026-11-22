@@ -530,7 +530,8 @@
     <p class="layer-note">Fixed to the viewport: "Pin a bar" puts a
        <code>position: fixed</code> bar in the top right corner. It stays there as the page
        scrolls — the compositor keeps it in place without the main thread — and
-       <code>getBoundingClientRect</code> says the same wherever the page is.</p>
+       <code>getBoundingClientRect</code> of the bar, or of the label in it (measured
+       here), says the same wherever the page is.</p>
     <p><span id="pin" class="button" onclick="pinBar()">Pin a bar</span>
        <span id="pin-note">No bar is pinned.</span></p>
     <p class="layer-note">Backgrounds: the card is a <code>linear-gradient()</code> with rounded
@@ -1250,12 +1251,15 @@
     if (pinned) {
       bar = document.createElement("div");
       bar.id = "fixed-bar";
-      bar.textContent = "Pinned";
+      const label = document.createElement("div");
+      label.textContent = "Pinned";
+      bar.appendChild(label);
       document.body.appendChild(bar);
     } else if (bar) {
       bar.remove();
     }
-    const rect = bar && pinned ? bar.getBoundingClientRect() : null;
+    // The label's: what is in the bar stays with it.
+    const rect = bar && pinned ? bar.firstElementChild.getBoundingClientRect() : null;
     document.getElementById("pin-note").textContent = rect
       // Rounded: a real window's viewport can be a fraction of a CSS px
       // wide, and the bar is at its right edge.

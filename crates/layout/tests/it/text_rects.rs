@@ -32,6 +32,7 @@ fn rects(html: &str, id: &str, index: usize, start: u32, end: u32) -> Vec<RectF>
     let (view, _, text) = lay_out(html, id, index);
     text_rects(
         &view,
+        gfx::PointF::new(0.0, 0.0),
         &ScrollOffsets::default(),
         &Default::default(),
         text,
@@ -278,7 +279,15 @@ fn transformed_and_scrolled() {
     );
     let scroll = ScrollOffsets::from_iter([(element, gfx::PointF::new(0.0, 20.0))]);
     assert_eq!(
-        text_rects(&view, &scroll, &Default::default(), text, 3, 4),
+        text_rects(
+            &view,
+            gfx::PointF::new(0.0, 0.0),
+            &scroll,
+            &Default::default(),
+            text,
+            3,
+            4
+        ),
         [RectF::new(0.0, 0.0, 20.0, 20.0)]
     );
 }

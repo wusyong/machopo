@@ -1,0 +1,19 @@
+# A button and a select in a bar fixed to the window, the page scrolled
+# under it: the button is clicked where it shows, the page left where it
+# was, and script reads that place of it; the select's list opens below it,
+# where a click on its second row picks that (a point of the window, the
+# toolbar and tabs 74 down).
+window size=800x600
+navigate pages/fixed-geometry.html
+wait-loaded
+wait-text #note "The page is scrolled to 1500."
+click #measure
+wait-text #note "20, 30, page at 1500."
+screenshot measured
+capture closed
+click #pick
+expect-differs closed #note
+screenshot list
+click-at 60 182
+wait-text #picked "two, page at 1500."
+screenshot picked

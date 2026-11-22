@@ -13,7 +13,7 @@
 use gfx::{NodeId, Path, PointF, RectF, SvgGeometry, SvgTextChar, Transform};
 
 use crate::StickyOffsets;
-use crate::geometry::{ScrollOffsets, box_to_root};
+use crate::geometry::{ScrollOffsets, box_to_viewport};
 use crate::svg_dom::{SvgElement, SvgName};
 use crate::{BoxFragment, SvgFragment, SvgNode, SvgNodeKind, SvgText};
 
@@ -23,6 +23,8 @@ struct Found<'a, 'd, 'gc> {
     svg: &'a SvgFragment,
     /// From the `<svg>`'s content box to the root fragment's space.
     content_box: Transform,
+    /// How far the page's scroll moves that (`geometry::Mapping`).
+    scrolled: PointF,
     /// The SVG elements from the outermost `<svg>` down to the element.
     path: Vec<SvgElement<'d, 'gc>>,
     /// Each one's own transform, what `getCTM()` multiplies.
@@ -37,6 +39,7 @@ struct Found<'a, 'd, 'gc> {
 /// it has a box.
 fn find<'a, 'd, 'gc>(
     layout_view: &'a BoxFragment,
+    viewport_scroll: PointF,
     scroll: &ScrollOffsets,
     sticky: &StickyOffsets,
     element: SvgElement<'d, 'gc>,
@@ -51,12 +54,13 @@ fn find<'a, 'd, 'gc>(
     path.reverse();
     let top = path[0];
     let found = (top.svg_name() == Some(SvgName::Svg))
-        .then(|| box_to_root(layout_view, scroll, sticky, top.id()))
+        .then(|| box_to_viewport(layout_view, viewport_scroll, scroll, sticky, top.id()))
         .flatten()
-        .and_then(|(fragment, to_root)| Some((fragment, fragment.svg.as_deref()?, to_root)));
-    let (fragment, svg, to_root) = found?;
+        .and_then(|(fragment, mapping)| Some((fragment, fragment.svg.as_deref()?, mapping)));
+    let (fragment, svg, mapping) = found?;
     let (b, p) = (&fragment.border, &fragment.padding);
-    let content_box = to_root.then(&Transform::translate(b.left + p.left, b.top + p.top));
+    let to_content = Transform::translate(b.left + p.left, b.top + p.top);
+    let content_box = mapping.to_root.then(&to_content);
 
     let mut locals = vec![svg.content_transform];
     let mut at = Laid::Root(&svg.children);
@@ -100,6 +104,7 @@ fn find<'a, 'd, 'gc>(
     Some(Found {
         svg,
         content_box,
+        scrolled: mapping.scrolled,
         path,
         locals,
         at,
@@ -107,15 +112,17 @@ fn find<'a, 'd, 'gc>(
     })
 }
 
-/// `element`'s geometry, the frame laid out as `layout_view` with its
-/// scroll containers at `scroll` and its sticky boxes moved by `sticky`: its screen matrix and client rect in the
-/// root fragment's space (the document's coordinates, the viewport's scroll
-/// offset not taken off). `element` is an SVG element; the outermost
+/// `element`'s geometry, the frame laid out as `layout_view` with the page
+/// scrolled to `viewport_scroll`, its scroll containers at `scroll` and its
+/// sticky boxes moved by `sticky`: its screen matrix and client rect in the
+/// viewport (moved by the page's scroll unless the `<svg>` is in a box
+/// fixed to it). `element` is an SVG element; the outermost
 /// `<svg>`'s own client rects are its CSS box's, not this one. `None` if
 /// no outermost `<svg>` around it has a box: then nothing around it is
 /// laid out, and its geometry is the default (no box, identity matrices).
 pub fn svg_geometry(
     layout_view: &BoxFragment,
+    viewport_scroll: PointF,
     scroll: &ScrollOffsets,
     sticky: &StickyOffsets,
     element: SvgElement<'_, '_>,
@@ -123,11 +130,12 @@ pub fn svg_geometry(
     let Found {
         svg,
         content_box,
+        scrolled,
         path,
         locals,
         at,
         hidden,
-    } = find(layout_view, scroll, sticky, element)?;
+    } = find(layout_view, viewport_scroll, scroll, sticky, element)?;
 
     // To the nearest viewport: up to and including the first `<svg>` or
     // `<symbol>` around it.
@@ -141,7 +149,7 @@ pub fn svg_geometry(
             break;
         }
     }
-    let screen_ctm = locals
+    let to_root = locals
         .iter()
         .fold(content_box, |matrix, local| matrix.then(local));
 
@@ -156,8 +164,11 @@ pub fn svg_geometry(
     Some(SvgGeometry {
         bbox: bbox.unwrap_or_default(),
         ctm,
-        screen_ctm,
-        client_rect: (rendered && !hidden).then(|| screen_ctm.map_rect(bbox.unwrap_or_default())),
+        screen_ctm: Transform::translate(-scrolled.x, -scrolled.y).then(&to_root),
+        client_rect: (rendered && !hidden).then(|| {
+            let rect = to_root.map_rect(bbox.unwrap_or_default());
+            rect.offset(-scrolled.x, -scrolled.y)
+        }),
     })
 }
 
@@ -337,6 +348,7 @@ pub fn svg_node<'f>(
 ) -> Option<&'f SvgNode> {
     match find(
         layout_view,
+        PointF::new(0.0, 0.0),
         &ScrollOffsets::default(),
         &StickyOffsets::default(),
         element,
@@ -384,6 +396,7 @@ pub fn svg_shape_path(layout_view: &BoxFragment, element: SvgElement<'_, '_>) ->
 pub fn svg_text_chars(layout_view: &BoxFragment, element: SvgElement<'_, '_>) -> Vec<SvgTextChar> {
     let Some(found) = find(
         layout_view,
+        PointF::new(0.0, 0.0),
         &ScrollOffsets::default(),
         &StickyOffsets::default(),
         element,

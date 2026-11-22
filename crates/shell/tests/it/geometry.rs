@@ -1079,6 +1079,135 @@ onload = () => {
     assert_eq!(report(&url), "null / 760 / 7 / fixed / 7px / 760px / 0px");
 }
 
+/// What is in a box fixed to the viewport stays with it as the page
+/// scrolls, however it is laid out in it (a block, an inline, text, out of
+/// flow, sticky, scrolled, transformed, SVG), and hit testing finds it
+/// where its rect says; what is in one a transform contains moves with the
+/// page (Blink's `OffsetFromScrollableContainer`). `offsetY` is the
+/// document's all the same.
+#[test]
+fn what_is_in_a_fixed_box_stays_as_the_page_scrolls() {
+    let url = page(
+        "in-fixed.html",
+        r##"<!DOCTYPE html>
+<style>
+  html, body { margin: 0 } body { height: 3000px }
+  #bar { position: fixed; left: 500px; top: 10px; width: 200px; height: 400px; line-height: 20px }
+  #block, #sticky { height: 20px }
+  #abs { position: absolute; left: 0; top: 100px; width: 50px; height: 20px }
+  #sticky { position: sticky; top: 0 }
+  #scroller { position: absolute; top: 130px; width: 100px; height: 40px; overflow: hidden }
+  #scaled { position: absolute; top: 180px; width: 50px; height: 20px; transform: scale(2); transform-origin: 0 0 }
+  #table { position: absolute; top: 230px; border-spacing: 0 }
+  #svg { position: absolute; top: 260px }
+  #inner { position: fixed; left: 0; top: 450px; width: 100px; height: 30px }
+  #fixedTable { position: fixed; left: 110px; top: 450px; border-spacing: 0 }
+  #fixedSvg { position: fixed; left: 200px; top: 450px }
+</style>
+<div id="bar">
+  <div id="block"></div>
+  <div><span id="inline">words</span></div>
+  <div id="sticky"></div>
+  <div id="abs"></div>
+  <div id="scroller"><div style="height: 30px"></div><div id="scrolled" style="height: 10px"></div><div style="height: 100px"></div></div>
+  <div id="scaled"><div id="inScaled" style="height: 5px"></div></div>
+  <table id="table"><tr><td id="cell" style="width: 30px; height: 20px; padding: 0"></td></tr></table>
+  <svg id="svg" width="60" height="40"><rect id="shape" x="5" y="7" width="20" height="10"/><text id="svgText" x="5" y="35">t</text></svg>
+  <div style="display: contents"><div id="inContents" style="position: absolute; top: 310px; width: 10px; height: 10px"></div></div>
+  <div id="inner"><div id="inInner" style="height: 10px"></div></div>
+</div>
+<table id="fixedTable"><tr><td id="fixedCell" style="width: 20px; height: 20px; padding: 0"></td></tr></table>
+<svg id="fixedSvg" width="30" height="30"><rect id="fixedShape" y="4" width="10" height="10"/></svg>
+<div id="flow" style="height: 20px"></div>
+<div style="transform: translateY(5px); height: 20px"><div style="position: fixed; top: 1px"><div id="trapped" style="width: 10px; height: 10px"></div></div></div>
+<script>
+onload = () => {
+  const at = id => document.getElementById(id);
+  at('scroller').scrollTop = 25;
+  const range = node => { const r = document.createRange(); r.selectNodeContents(node); return r; };
+  const ctm = id => { const m = at(id).getScreenCTM(); return { top: m.f, left: m.e }; };
+  const places = {};
+  for (const id of ['bar', 'block', 'inline', 'sticky', 'abs', 'scrolled', 'inScaled', 'cell', 'svg',
+                    'shape', 'svgText', 'inContents', 'inner', 'inInner', 'fixedTable', 'fixedCell',
+                    'fixedSvg', 'fixedShape', 'flow', 'trapped'])
+    places[id] = () => at(id).getBoundingClientRect();
+  places['a line'] = () => at('inline').getClientRects()[0];
+  places['text'] = () => range(at('inline').firstChild).getBoundingClientRect();
+  places['range'] = () => range(at('block').parentNode).getBoundingClientRect();
+  places['ctm'] = () => ctm('shape');
+  places['fixedSvg ctm'] = () => ctm('fixedSvg');
+  const was = {};
+  for (const name in places) was[name] = places[name]();
+  scrollTo(0, 500);
+  const log = [];
+  for (const name in places) {
+    const [before, now] = [was[name], places[name]()];
+    let line = `${name} ${+(now.top - before.top).toFixed(2)}`;
+    if (now.left !== before.left || now.width !== before.width) line += ' and more';
+    log.push(line);
+  }
+  for (const id of ['block', 'abs', 'scrolled', 'inScaled', 'shape', 'inInner'])
+    log.push(`${id} at ${at(id).getBoundingClientRect().top}`);
+  // Where its rect says is where it is hit.
+  for (const id of ['block', 'inline', 'abs', 'cell', 'inInner', 'fixedCell']) {
+    const r = at(id).getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    log.push(`${id} hit ${hit && hit.id}`);
+  }
+  for (const id of ['block', 'abs']) {
+    let got;
+    at(id).addEventListener('click', e => got = `${e.layerY},${e.offsetY}`, { once: true });
+    at(id).dispatchEvent(new MouseEvent('click', { clientX: 505, clientY: 115, view: window }));
+    log.push(`${id} event ${got}`);
+  }
+  testRunner.reportHarnessResults(log.join('\n'));
+};
+</script>"##,
+    );
+    let expected = [
+        "bar 0",
+        "block 0",
+        "inline 0",
+        "sticky 0",
+        "abs 0",
+        "scrolled 0",
+        "inScaled 0",
+        "cell 0",
+        "svg 0",
+        "shape 0",
+        "svgText 0",
+        "inContents 0",
+        "inner 0",
+        "inInner 0",
+        "fixedTable 0",
+        "fixedCell 0",
+        "fixedSvg 0",
+        "fixedShape 0",
+        "flow -500",
+        "trapped -500",
+        "a line 0",
+        "text 0",
+        "range 0",
+        "ctm 0",
+        "fixedSvg ctm 0",
+        "block at 10",
+        "abs at 110",
+        "scrolled at 145",
+        "inScaled at 190",
+        "shape at 277",
+        "inInner at 450",
+        "block hit block",
+        "inline hit inline",
+        "abs hit abs",
+        "cell hit cell",
+        "inInner hit inInner",
+        "fixedCell hit fixedCell",
+        "block event 105,605",
+        "abs event 5,505",
+    ];
+    assert_eq!(report(&url), expected.join("\n"));
+}
+
 /// `url()` in a `style` attribute resolves against the document's base
 /// URL: a `<base>` added later changes what it resolves to once the style
 /// is computed again.
@@ -1736,8 +1865,7 @@ onload = () => {
 /// clip, a scroller, a `z-index` that doesn't apply or a `display:
 /// contents` element), in the viewport; else `pageX` and `pageY`. Read
 /// when asked, floored and clamped to a `long`; the shadow host's for an
-/// event retargeted to it. (A box in a fixed one isn't scrolled here:
-/// its rect is off by the scroll.) The DOM gives the same.
+/// event retargeted to it. The DOM gives the same.
 #[test]
 fn mouse_event_layer_coordinates() {
     let url = page(

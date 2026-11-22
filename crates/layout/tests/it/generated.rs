@@ -141,7 +141,7 @@ fn an_inline_pseudo_element_has_an_inline_box() {
 
 /// An element's geometry is its own boxes', not its pseudo-elements'
 /// (which are in them, and have its node): its client rects, its box, and
-/// whether it is fixed.
+/// whether the page's scroll moves them.
 #[test]
 fn geometry_leaves_pseudo_elements_out() {
     let laid = lay_out(&format!(
@@ -153,17 +153,43 @@ fn geometry_leaves_pseudo_elements_out() {
     let id = |name: &str| laid.node(name);
     let scroll = layout::ScrollOffsets::default();
     assert_eq!(
-        layout::client_rects(&view, &scroll, &Default::default(), id("d")),
+        layout::client_rects(
+            &view,
+            Default::default(),
+            &scroll,
+            &Default::default(),
+            id("d")
+        ),
         [RectF::new(0.0, 0.0, 400.0, 20.0)]
     );
     // The span's box covers its `::after` too.
     assert_eq!(
-        layout::client_rects(&view, &scroll, &Default::default(), id("s")),
+        layout::client_rects(
+            &view,
+            Default::default(),
+            &scroll,
+            &Default::default(),
+            id("s")
+        ),
         [RectF::new(20.0, 0.0, 60.0, 20.0)]
     );
     let element_box = layout::element_box(&view, &scroll, &Default::default(), id("d")).unwrap();
     assert_eq!(element_box.border_box, RectF::new(0.0, 0.0, 400.0, 20.0));
-    assert!(!layout::is_fixed(&view, id("d")));
+    // The page scrolls it, though its `::before` is fixed, which it doesn't.
+    let scrolled = gfx::PointF::new(0.0, 8.0);
+    assert_eq!(
+        layout::client_rects(&view, scrolled, &scroll, &Default::default(), id("d")),
+        [RectF::new(0.0, -8.0, 400.0, 20.0)]
+    );
+    let before = layout::pseudo_box_quads(
+        &view,
+        scrolled,
+        &scroll,
+        &Default::default(),
+        id("d"),
+        Some(computed_style::PseudoId::Before),
+    );
+    assert_eq!(before.expect("its box").border[0].y, 0.0);
 }
 
 /// `inline-table` is laid out as `inline-block`: an atomic inline.

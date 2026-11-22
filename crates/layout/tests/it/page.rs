@@ -3,7 +3,7 @@
 //! 800×600. [`lay_out`] builds and lays out once; a [`Page`] is changed
 //! and updated, each update checked against building it all again.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use dom::{Cx, Dom, LayoutTreeFlags, LocalToken, NodeKind, NodeRef, NodeRoot, QualName};
@@ -180,6 +180,7 @@ impl Page {
             got.dump(),
             want.dump()
         );
+        assert_for_geometry(&got);
         self.layout = self.tree.last_layout();
         self.view = Some(got);
     }
@@ -306,6 +307,40 @@ pub fn lay_out(html: &str) -> Laid {
     Page::build(html).lay_out()
 }
 
+/// What geometry's walk rests on: the boxes fixed to the viewport are the
+/// `LayoutView`'s children (it takes the page's scroll off at that step
+/// alone), and an element, or a pseudo-element of it, has one box.
+fn assert_for_geometry(view: &BoxFragment) {
+    type Seen = HashSet<(NodeId, Option<computed_style::PseudoId>)>;
+    fn once(view: &BoxFragment, fragment: &BoxFragment, seen: &mut Seen) {
+        if let Some(node) = fragment.node {
+            assert!(
+                seen.insert((node, fragment.pseudo)),
+                "two boxes of node {}:
+{}",
+                node.get(),
+                view.dump()
+            );
+        }
+    }
+    fn below(view: &BoxFragment, fragment: &BoxFragment, seen: &mut Seen) {
+        for child in &fragment.children {
+            once(view, &child.fragment, seen);
+            assert!(
+                !child.fragment.fixed_to_viewport,
+                "fixed to the viewport under another box:\n{}",
+                view.dump()
+            );
+            below(view, &child.fragment, seen);
+        }
+    }
+    let mut seen = Seen::new();
+    for child in &view.children {
+        once(view, &child.fragment, &mut seen);
+        below(view, &child.fragment, &mut seen);
+    }
+}
+
 /// A tree laid out: its fragments, and its elements' boxes by `id`.
 pub struct Laid {
     pub view: Arc<BoxFragment>,
@@ -337,6 +372,7 @@ impl Laid {
             layout,
         };
         laid.collect(&view, PointF::new(0.0, 0.0));
+        assert_for_geometry(&view);
         laid
     }
 

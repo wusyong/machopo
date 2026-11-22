@@ -291,16 +291,28 @@ fn script_sees_a_sticky_box_where_it_stuck() {
     let laid = lay_out(TOP);
     let scroll = ScrollOffsets::default();
     let sticky = laid.offsets(250.0, &[]);
-    // The document's coordinates: the viewport's offset isn't taken off.
+    // The document's coordinates, then the viewport's, which it stuck in.
+    let document = gfx::PointF::new(0.0, 0.0);
     assert_eq!(
-        layout::client_rects(&laid.view, &scroll, &sticky, laid.id("s")),
+        layout::client_rects(&laid.view, document, &scroll, &sticky, laid.id("s")),
         [RectF::new(0.0, 260.0, 800.0, 50.0)]
+    );
+    let scrolled = gfx::PointF::new(0.0, 250.0);
+    assert_eq!(
+        layout::client_rects(&laid.view, scrolled, &scroll, &sticky, laid.id("s")),
+        [RectF::new(0.0, 10.0, 800.0, 50.0)]
     );
     let element_box = layout::element_box(&laid.view, &scroll, &sticky, laid.id("s")).unwrap();
     assert_eq!(element_box.border_box, RectF::new(0.0, 260.0, 800.0, 50.0));
     // Unstuck: where the flow put it.
     assert_eq!(
-        layout::client_rects(&laid.view, &scroll, &Default::default(), laid.id("s")),
+        layout::client_rects(
+            &laid.view,
+            document,
+            &scroll,
+            &Default::default(),
+            laid.id("s")
+        ),
         [RectF::new(0.0, 200.0, 800.0, 50.0)]
     );
 }

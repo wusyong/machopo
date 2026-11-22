@@ -1,0 +1,258 @@
+# Stage 1: the page's scroll is the root's step of the geometry's walk; the
+# callers pass it and correct nothing afterwards.
+#
+# Not listed, equivalent (docs/test-gaps.md): the walk going on when told to
+# stop, and `box_of` going on past the box it found. An element, or a
+# pseudo-element of it, has one box (the layout tests' `Page` asserts it),
+# so there is no other to find: stopping only saves the rest of the walk.
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it"]
+timeout = 600
+
+[[mutant]]
+name = "the root's step always subtracts"
+file = "crates/layout/src/geometry.rs"
+from = '''        let scrolled = if child.fragment.fixed_to_viewport {'''
+to = '''        let scrolled = if child.fragment.fixed_to_viewport && false {'''
+
+[[mutant]]
+name = "the root's step never subtracts"
+file = "crates/layout/src/geometry.rs"
+from = '''        let scrolled = if child.fragment.fixed_to_viewport {'''
+to = '''        let scrolled = if child.fragment.fixed_to_viewport || true {'''
+
+[[mutant]]
+name = "the root's step is the other way around"
+file = "crates/layout/src/geometry.rs"
+from = '''        let scrolled = if child.fragment.fixed_to_viewport {'''
+to = '''        let scrolled = if !child.fragment.fixed_to_viewport {'''
+
+[[mutant]]
+name = "the steps below the root subtract again"
+file = "crates/layout/src/geometry.rs"
+from = '''            if !go(&child.fragment, at, contents, scroll, sticky, visit) {'''
+to = '''            let twice = PointF::new(contents.scrolled.x * 2.0, contents.scrolled.y * 2.0); let deeper = Mapping { scrolled: twice, ..contents }; if !go(&child.fragment, at, deeper, scroll, sticky, visit) {'''
+
+[[mutant]]
+name = "the steps below the root don't inherit it"
+file = "crates/layout/src/geometry.rs"
+from = '''            if !go(&child.fragment, at, contents, scroll, sticky, visit) {'''
+to = '''            let deeper = Mapping { scrolled: PointF::new(0.0, 0.0), ..contents }; if !go(&child.fragment, at, deeper, scroll, sticky, visit) {'''
+
+[[mutant]]
+name = "a transform or a scroll container forgets it"
+file = "crates/layout/src/geometry.rs"
+from = '''            to_root: self.to_root.then(transform),
+            scrolled: self.scrolled,'''
+to = '''            to_root: self.to_root.then(transform),
+            scrolled: PointF::new(0.0, 0.0),'''
+
+[[mutant]]
+name = "the root's children lose their offset"
+file = "crates/layout/src/geometry.rs"
+from = '''            &child.fragment,
+            child.offset,'''
+to = '''            &child.fragment,
+            PointF::new(0.0, 0.0),'''
+
+[[mutant]]
+name = "a point isn't moved across"
+file = "crates/layout/src/geometry.rs"
+from = '''        PointF::new(at.x - self.scrolled.x, at.y - self.scrolled.y)'''
+to = '''        PointF::new(at.x, at.y - self.scrolled.y)'''
+
+[[mutant]]
+name = "a point isn't moved down"
+file = "crates/layout/src/geometry.rs"
+from = '''        PointF::new(at.x - self.scrolled.x, at.y - self.scrolled.y)'''
+to = '''        PointF::new(at.x - self.scrolled.x, at.y)'''
+
+[[mutant]]
+name = "a rect isn't moved across"
+file = "crates/layout/src/geometry.rs"
+from = '''        rect.offset(-self.scrolled.x, -self.scrolled.y)'''
+to = '''        rect.offset(0.0, -self.scrolled.y)'''
+
+[[mutant]]
+name = "a rect isn't moved down"
+file = "crates/layout/src/geometry.rs"
+from = '''        rect.offset(-self.scrolled.x, -self.scrolled.y)'''
+to = '''        rect.offset(-self.scrolled.x, 0.0)'''
+
+[[mutant]]
+name = "a rect's corners are moved, not the rect"
+file = "crates/layout/src/geometry.rs"
+from = '''        let rect = self.to_root.map_rect(rect);
+        rect.offset(-self.scrolled.x, -self.scrolled.y)'''
+to = '''        Transform::translate(-self.scrolled.x, -self.scrolled.y)
+            .then(&self.to_root).map_rect(rect)'''
+
+[[mutant]]
+name = "a box's rect isn't scrolled"
+file = "crates/layout/src/geometry.rs"
+from = '''                rects.push(mapping.map_rect(border_box));'''
+to = '''                rects.push(mapping.to_root.map_rect(border_box));'''
+
+[[mutant]]
+name = "a line's rect isn't scrolled"
+file = "crates/layout/src/geometry.rs"
+from = '''                    rects.push(contents.map_rect(inline_box.rect.offset(offset.x, offset.y)));'''
+to = '''                    rects.push(contents.to_root.map_rect(inline_box.rect.offset(offset.x, offset.y)));'''
+
+[[mutant]]
+name = "a box's quad isn't scrolled"
+file = "crates/layout/src/geometry.rs"
+from = '''                quads.push(quad(border, mapping));'''
+to = '''                quads.push(quad(border, &Mapping { scrolled: PointF::new(0.0, 0.0), ..*mapping }));'''
+
+[[mutant]]
+name = "a line's quad isn't scrolled"
+file = "crates/layout/src/geometry.rs"
+from = '''                    quads.push(quad(inline_box.rect.offset(offset.x, offset.y), contents));'''
+to = '''                    quads.push(quad(inline_box.rect.offset(offset.x, offset.y), &Mapping { scrolled: PointF::new(0.0, 0.0), ..*contents }));'''
+
+[[mutant]]
+name = "a box model's margin box isn't scrolled"
+file = "crates/layout/src/geometry.rs"
+from = '''            margin: quad(margin, &mapping),'''
+to = '''            margin: quad(margin, &Mapping { scrolled: PointF::new(0.0, 0.0), ..mapping }),'''
+
+[[mutant]]
+name = "an inline's box model isn't scrolled"
+file = "crates/layout/src/geometry.rs"
+from = '''        scrolled: first.3,'''
+to = '''        scrolled: PointF::new(0.0, 0.0),'''
+
+[[mutant]]
+name = "an inline's box model is always scrolled"
+file = "crates/layout/src/geometry.rs"
+from = '''        scrolled: first.3,'''
+to = '''        scrolled: viewport_scroll,'''
+
+[[mutant]]
+name = "an inline's box model is scrolled twice"
+file = "crates/layout/src/geometry.rs"
+from = '''                        contents.to_root.map_rect(rect),'''
+to = '''                        contents.map_rect(rect),'''
+
+[[mutant]]
+name = "text isn't scrolled"
+file = "crates/layout/src/geometry.rs"
+from = '''                let rect = contents.map_rect(rect);'''
+to = '''                let rect = contents.to_root.map_rect(rect);'''
+
+[[mutant]]
+name = "box_of takes a pseudo-element's box"
+file = "crates/layout/src/geometry.rs"
+from = '''            if fragment.node == Some(element) && fragment.pseudo == pseudo {'''
+to = '''            if fragment.node == Some(element) && (fragment.pseudo == pseudo || true) {'''
+
+[[mutant]]
+name = "box_of forgets where the box is"
+file = "crates/layout/src/geometry.rs"
+from = '''                found = Some((fragment, mapping.then(&to_box)));'''
+to = '''                found = Some((fragment, *mapping)); let _ = to_box;'''
+
+[[mutant]]
+name = "a fixed box is fixed to the viewport whatever is around it"
+file = "crates/layout/src/lib.rs"
+from = '''            && !self.contains_fixed_above(usize::from(id));'''
+to = '''            && (!self.contains_fixed_above(usize::from(id)) || true);'''
+
+[[mutant]]
+name = "an SVG element's screen matrix isn't scrolled"
+file = "crates/layout/src/svg_geometry.rs"
+from = '''        screen_ctm: Transform::translate(-scrolled.x, -scrolled.y).then(&to_root),'''
+to = '''        screen_ctm: to_root,'''
+
+[[mutant]]
+name = "an SVG element's screen matrix is scrolled after its own"
+file = "crates/layout/src/svg_geometry.rs"
+from = '''        screen_ctm: Transform::translate(-scrolled.x, -scrolled.y).then(&to_root),'''
+to = '''        screen_ctm: to_root.then(&Transform::translate(-scrolled.x, -scrolled.y)),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "geometry::"]
+
+[[mutant]]
+name = "an SVG element's rect isn't scrolled"
+file = "crates/layout/src/svg_geometry.rs"
+from = '''            rect.offset(-scrolled.x, -scrolled.y)'''
+to = '''            rect.offset(0.0, 0.0)'''
+
+[[mutant]]
+name = "an <svg> is scrolled, fixed or not"
+file = "crates/layout/src/svg_geometry.rs"
+from = '''        scrolled: mapping.scrolled,'''
+to = '''        scrolled: viewport_scroll,'''
+
+[[mutant]]
+name = "scroll anchoring takes a box in the viewport"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''            crate::geometry::client_rects(layout_view, unscrolled, scroll, sticky, element)'''
+to = '''            crate::geometry::client_rects(layout_view, PointF::new(viewport.x, viewport.y), scroll, sticky, element)'''
+
+[[mutant]]
+name = "scroll anchoring takes text in the viewport"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''            crate::geometry::text_rects(layout_view, unscrolled, scroll, sticky, text, 0, u32::MAX)'''
+to = '''            crate::geometry::text_rects(layout_view, PointF::new(viewport.x, viewport.y), scroll, sticky, text, 0, u32::MAX)'''
+
+[[mutant]]
+name = "FrameView's client rects are the document's"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        layout::client_rects(
+            fragment,
+            self.scroll.viewport,'''
+to = '''        layout::client_rects(
+            fragment,
+            PointF::new(0.0, 0.0),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "geometry::"]
+
+[[mutant]]
+name = "FrameView's box models are the document's"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        layout::pseudo_box_quads(
+            fragment,
+            self.scroll.viewport,'''
+to = '''        layout::pseudo_box_quads(
+            fragment,
+            PointF::new(0.0, 0.0),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "devtools_overlay::"]
+
+[[mutant]]
+name = "FrameView's quads are the document's"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        layout::border_quads(
+            fragment,
+            self.scroll.viewport,'''
+to = '''        layout::border_quads(
+            fragment,
+            PointF::new(0.0, 0.0),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "devtools_overlay::"]
+
+[[mutant]]
+name = "FrameView's text rects are the document's"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        layout::text_rects(
+            fragment,
+            self.scroll.viewport,'''
+to = '''        layout::text_rects(
+            fragment,
+            PointF::new(0.0, 0.0),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "geometry::"]
+
+[[mutant]]
+name = "FrameView's SVG geometry is the document's"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        layout::svg_geometry(
+            fragment,
+            self.scroll.viewport,'''
+to = '''        layout::svg_geometry(
+            fragment,
+            PointF::new(0.0, 0.0),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "geometry::"]
+
+[[mutant]]
+name = "a range asks for all of its text"
+file = "crates/dom_api/src/range.rs"
+from = '''    layout.text_rects(cx.node_id(text), from, to)'''
+to = '''    layout.text_rects(cx.node_id(text), from * 0, to)'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "ranges::"]

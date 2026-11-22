@@ -210,6 +210,52 @@ fn nodes_have_box_models() {
     );
 }
 
+/// What is in a box fixed to the viewport has its box model and its quads
+/// where it shows, the page scrolled: a block, its `::before`, an inline
+/// element, a fixed `<svg>`.
+#[test]
+fn nodes_in_a_fixed_box_have_box_models_where_they_show() {
+    let html = "<!DOCTYPE html><style>html, body { margin: 0 } body { height: 3000px } \
+        #f { position: fixed; left: 300px; top: 40px; width: 100px; font: 10px/10px Ahem } \
+        #b { height: 20px } \
+        #b::before { content: ''; display: block; height: 5px } \
+        #s { position: fixed; left: 0; top: 70px }</style>\
+        <div id=f><div id=b></div><i id=i>xy</i></div><svg id=s width=10 height=10></svg>";
+    let (_machopo, mut page, document, _server) = dom_page(&[("/", Route::ok("text/html", html))]);
+    evaluate(&mut page, "scrollTo(0, 500)", None);
+    let b = node(&mut page, &document, "#b");
+    let described =
+        result(page.call(None, "DOM.describeNode", json!({ "nodeId": b })))["node"].clone();
+    let before = described["pseudoElements"][0]["backendNodeId"].clone();
+    let model =
+        result(page.call(None, "DOM.getBoxModel", json!({ "backendNodeId": before })))["model"]
+            .clone();
+    for part in ["margin", "border", "padding", "content"] {
+        assert_eq!(
+            corners(&model[part]),
+            [(300.0, 40.0), (400.0, 40.0), (400.0, 45.0), (300.0, 45.0)],
+            "{part} of the ::before"
+        );
+    }
+    for (selector, top_left) in [
+        ("#f", (300.0, 40.0)),
+        ("#b", (300.0, 40.0)),
+        ("#i", (300.0, 60.0)),
+        ("#s", (0.0, 70.0)),
+    ] {
+        let id = node(&mut page, &document, selector);
+        let model =
+            result(page.call(None, "DOM.getBoxModel", json!({ "nodeId": id })))["model"].clone();
+        for part in ["margin", "border", "padding", "content"] {
+            assert_eq!(corners(&model[part])[0], top_left, "{selector}'s {part}");
+        }
+        let quads =
+            result(page.call(None, "DOM.getContentQuads", json!({ "nodeId": id })))["quads"]
+                .clone();
+        assert_eq!(corners(&quads[0])[0], top_left, "{selector}'s quad");
+    }
+}
+
 /// The node at a point of the document (scrolled into it): an element, a
 /// run of text's, one in an iframe; numbered with the path sent once the
 /// document was asked for; nothing outside.

@@ -310,6 +310,7 @@
 - `InlineContent` 記住 min-content 和 max-content 寬度（只省時間）。
 - `layout` 的 `InlineContent` 不追蹤開著的行內元素、一律拿 container 的 style 和 run 的比（`push_runs` 的 `enclosing`）：行內元素裡的文字的 style 和那個元素的一樣，多設一次和元素的 span 相同的 text property，排版結果一樣，只多做一點事）。
 - `Range` 的文字盒子裡 collapse 的範圍找到之後就停（`layout::text_rects`：一個 text 節點的 run 不重疊地蓋滿它的原文，含有一個點的 run 只有一個，停下只省下走完 fragment tree）。
+- `layout` 的 `geometry` 找到盒子就停（`box_of`，和 `walk` 在 `visit` 說停時停下）：一個元素或它的一個 pseudo-element 只有一個盒子（`layout` 測試的 `assert_for_geometry` 每次檢查都驗），沒有別的可以找到，停下只省下走完 fragment tree。
 - `PaintController` 清掉只剩它拿著的 fragment 的紀錄（拿錯只會讓那個 box 重畫，沒清掉只多佔記憶體；要上千個 box 才清，沒有測試）。
 - `BrowserView` 關掉分頁時清掉以它為 opener 的紀錄（分頁的 id 只增不減，留下的紀錄不會再被比對到，只是佔一點記憶體）。
 - `style_resolver` 的 `cssText` 每個 shorthand 只試一次（`CssPropertyValueSet::css_text` 的 `shorthands_tried`：宣告清單沒變，再試一次結果一樣，合回過的 shorthand 的 longhand 都已經寫過，只省時間）、cascade 跳過沒有 `!important` 的區塊的 important 那一輪（`push_block` 的 `has_important`：那一輪沒有宣告可套用）。

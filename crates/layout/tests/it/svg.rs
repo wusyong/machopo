@@ -1167,6 +1167,7 @@ fn the_svg_queries() {
         let geometry = |id| {
             layout::svg_geometry(
                 &view,
+                gfx::PointF::new(0.0, 0.0),
                 &layout::ScrollOffsets::default(),
                 &layout::StickyOffsets::default(),
                 element(id),
@@ -1189,5 +1190,43 @@ fn the_svg_queries() {
         );
         let line = layout::svg_shape_path(&view, element("line")).expect("a path");
         assert!(!line.elements().is_empty(), "the line around it");
+    });
+}
+
+/// The page's scroll moves an SVG element's screen matrix and client rect,
+/// across as down, unless its `<svg>` is fixed to the viewport or in a box
+/// that is; not its own matrix or bounding box.
+#[test]
+fn the_pages_scroll_and_svg_geometry() {
+    let html = "<!doctype html><style>body { margin: 0 } svg { display: block }</style>\
+        <div style='position: fixed; top: 10px'><svg width=20 height=20><rect id=in_f width=5 height=5 /></svg></div>\
+        <svg style='position: fixed; top: 50px' width=20 height=20><rect id=f width=5 height=5 /></svg>\
+        <svg width=20 height=20><rect id=n width=5 height=5 /></svg>";
+    let mut page = Page::build(html);
+    let view = page.tree.layout(VIEWPORT);
+    let Page { dom, token, .. } = &page;
+    dom.read(|cx| {
+        let document = page.document.get(cx.gc);
+        for (id, moved) in [("in_f", 0.0), ("f", 0.0), ("n", 1.0)] {
+            let node = cx.element_by_id(document, id).expect("the element");
+            let geometry = |at| {
+                layout::svg_geometry(
+                    &view,
+                    at,
+                    &layout::ScrollOffsets::default(),
+                    &layout::StickyOffsets::default(),
+                    layout::svg_element(cx, token, node),
+                )
+                .expect("laid out")
+            };
+            let was = geometry(gfx::PointF::new(0.0, 0.0));
+            let now = geometry(gfx::PointF::new(30.0, 500.0));
+            let (x, y) = (30.0 * moved, 500.0 * moved);
+            let (from, to) = (was.screen_ctm.0, now.screen_ctm.0);
+            assert_eq!((to[4], to[5]), (from[4] - x, from[5] - y), "#{id}'s matrix");
+            let rect = was.client_rect.map(|rect| rect.offset(-x, -y));
+            assert_eq!(now.client_rect, rect, "#{id}'s rect");
+            assert_eq!((now.bbox, now.ctm), (was.bbox, was.ctm), "#{id}'s own");
+        }
     });
 }

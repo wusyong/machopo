@@ -2,7 +2,7 @@
 //! formatting context, the containing blocks `transform` and containment
 //! make, and which fixed boxes are fixed to the viewport.
 
-use gfx::SizeF;
+use gfx::{PointF, RectF, SizeF};
 
 use crate::page::{Page, lay_out};
 
@@ -110,7 +110,8 @@ fn a_filtered_root_contains_nothing() {
 
 /// What paint containment clips, and a fixed box fixed to the viewport,
 /// reach nowhere in the document's size; a fixed box a box around
-/// contains does, there and in a scroll container's overflow. `is_fixed` is the fixed boxes fixed to the viewport.
+/// contains does, there and in a scroll container's overflow; and that
+/// one's rect is moved by the page's scroll, the other's not.
 #[test]
 fn contained_overflow_and_fixed_boxes() {
     let laid = lay_out(
@@ -126,9 +127,136 @@ fn contained_overflow_and_fixed_boxes() {
         layout::scrollable_overflow(laid.fragment("s")).height,
         510.0
     );
-    let node = |id: &str| laid.fragment(id).node.unwrap();
-    assert!(!layout::is_fixed(&laid.view, node("c")));
-    assert!(layout::is_fixed(&laid.view, node("v")));
+    let top = |id: &str| {
+        let scrolled = PointF::new(0.0, 100.0);
+        let (none, node) = (Default::default(), laid.node(id));
+        layout::client_rects(&laid.view, scrolled, &none, &Default::default(), node)[0].y
+    };
+    assert_eq!((top("c"), top("v")), (1910.0, 5000.0));
+}
+
+/// The page's scroll moves every box, line and text in the viewport but
+/// those in a box fixed to it, across as down, in every query script has;
+/// a rect keeps its size however far it is scrolled.
+#[test]
+fn the_pages_scroll_moves_what_isnt_in_a_fixed_box() {
+    let mut page = Page::new(&format!(
+        "{AHEM}<style>#b::before, #n::before {{ content: ''; display: block; height: 5px }}
+           #i::after, #ni::after {{ content: 'Y' }}</style>
+         <div id=f style='position: fixed; left: 10px; top: 10px; width: 100px'><div id=b style='height: 20.3px'></div><span id=i>X X</span><div id=a style='position: absolute; top: 90px; height: 5px'></div><div id=in_f style='position: fixed; top: 200px'><div id=deep style='height: 5px'></div></div></div>
+         <table id=t style='position: fixed; top: 300px'><tr><td id=cell>X</td></tr></table>
+         <div id=n style='margin-top: 0.3px; height: 20.3px'></div>
+         <div><span id=ni>X X</span></div>
+         <div style='transform: translate(3px)'><div id=c style='position: fixed'><div id=in_c style='height: 5px'></div></div></div>"
+    ));
+    let view = page.lay_out().view;
+    // Far enough that adding it to each corner would round a rect's size.
+    let by = PointF::new(30.0, 1_000_000.0);
+    let zero = PointF::new(0.0, 0.0);
+    let (none, unstuck) = (layout::ScrollOffsets::default(), Default::default());
+    let texts = page.read(|cx, document| {
+        ["i", "ni"].map(|id| {
+            let span = crate::page::find(cx, document, id);
+            let mut text = cx.first_child(span).expect("its text");
+            while cx.kind(text) != dom::NodeKind::Text {
+                text = cx.next_sibling(text).expect("its text");
+            }
+            cx.node_id(text)
+        })
+    });
+    for (id, fixed) in [
+        ("f", true),
+        ("b", true),
+        ("i", true),
+        ("a", true),
+        ("in_f", true),
+        ("deep", true),
+        ("t", true),
+        ("cell", true),
+        ("n", false),
+        ("ni", false),
+        ("c", false),
+        ("in_c", false),
+    ] {
+        let node = page.id(id);
+        let moved = if fixed { zero } else { by };
+        let point = |p: PointF| PointF::new(p.x - moved.x, p.y - moved.y);
+        let rect = |r: RectF| r.offset(-moved.x, -moved.y);
+
+        let rects = |at| layout::client_rects(&view, at, &none, &unstuck, node);
+        assert!(!rects(zero).is_empty(), "#{id}");
+        let expected: Vec<_> = rects(zero).into_iter().map(rect).collect();
+        assert_eq!(rects(by), expected, "#{id}'s rects");
+
+        let quads = |at| layout::border_quads(&view, at, &none, &unstuck, node);
+        let expected: Vec<_> = quads(zero).into_iter().map(|q| q.map(point)).collect();
+        assert_eq!(quads(by), expected, "#{id}'s quads");
+
+        for pseudo in [
+            None,
+            Some(computed_style::PseudoId::Before),
+            Some(computed_style::PseudoId::After),
+        ] {
+            let model = |at| match pseudo {
+                None => layout::box_quads(&view, at, &none, &unstuck, node),
+                _ => layout::pseudo_box_quads(&view, at, &none, &unstuck, node, pseudo),
+            };
+            let has = matches!(
+                (id, pseudo),
+                (_, None)
+                    | ("b" | "n", Some(computed_style::PseudoId::Before))
+                    | ("i" | "ni", Some(computed_style::PseudoId::After))
+            );
+            assert_eq!(model(zero).is_some(), has, "#{id}'s {pseudo:?}");
+            if pseudo.is_none() {
+                // Each has one box or line, only translated.
+                let (border, first) = (model(zero).expect("its box").border, rects(zero)[0]);
+                assert_eq!(border[0], PointF::new(first.x, first.y), "#{id}'s place");
+            }
+            let expected = model(zero).map(|q| layout::BoxQuads {
+                content: q.content.map(point),
+                padding: q.padding.map(point),
+                border: q.border.map(point),
+                margin: q.margin.map(point),
+            });
+            assert_eq!(model(by), expected, "#{id}'s {pseudo:?} box model");
+        }
+    }
+    for (text, moved) in texts.into_iter().zip([zero, by]) {
+        // Two of them, and a caret at the end.
+        for (start, end) in [(0, 3), (3, 3)] {
+            let rects = |at| layout::text_rects(&view, at, &none, &unstuck, text, start, end);
+            assert!(!rects(zero).is_empty());
+            let expected: Vec<_> = rects(zero)
+                .into_iter()
+                .map(|rect| rect.offset(-moved.x, -moved.y))
+                .collect();
+            assert_eq!(rects(by), expected, "{start}..{end}");
+        }
+    }
+}
+
+/// A fixed root element is fixed to the viewport, with all in it; the
+/// root element's transform contains fixed boxes, which the page scrolls.
+#[test]
+fn the_pages_scroll_and_the_root_element() {
+    for (root, top) in [
+        ("position: fixed", 10.0),
+        ("transform: translate(0)", -90.0),
+    ] {
+        let laid = lay_out(&format!(
+            "<html style='{root}'><body style='margin: 0'>
+             <div id=x style='position: fixed; top: 10px; width: 5px; height: 5px'></div>"
+        ));
+        let rects = layout::client_rects(
+            &laid.view,
+            PointF::new(0.0, 100.0),
+            &Default::default(),
+            &Default::default(),
+            laid.node("x"),
+        );
+        assert_eq!(rects[0].y, top, "{root}");
+    }
 }
 
 /// Containment on the root element or `<body>` keeps `<body>`'s
