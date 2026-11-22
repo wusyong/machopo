@@ -387,27 +387,34 @@ fn a_host_and_a_child_talk() {
     assert_eq!(host.next(), (2, text("echo two")));
 
     // Large bytes to the child go by a region the host makes; back, in
-    // the message (the child has no region).
+    // the message (the child has no region, and asks for one for the
+    // next time).
     let body = pattern(300 * KIB, 1);
     host.link.send(1, &Msg::Body(body.clone())).unwrap();
     assert_eq!(host.next(), (1, Msg::Body(body)));
     // The child says it has read the region after it has answered: the
     // answer is here first.
-    let waited = Instant::now();
-    while host.link.regions() != (512 * KIB, 512 * KIB) {
-        assert!(
-            waited.elapsed() < SOON,
-            "made, read by the child, free again: {:?}",
-            host.link.regions()
-        );
-        thread::sleep(Duration::from_millis(1));
-    }
-    // Given a region, the child's go by it too.
+    let read_by_the_child = || {
+        let waited = Instant::now();
+        while host.link.regions() != (512 * KIB, 512 * KIB) {
+            assert!(
+                waited.elapsed() < SOON,
+                "made, read by the child, free again: {:?}",
+                host.link.regions()
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
+    };
+    read_by_the_child();
+    // Given a region, the child's go by it too. Each is sent once the
+    // child said it read the one before: sooner, the host's region is
+    // still out, and it makes another.
     host.link.grant_to_peer(512 * KIB);
     for salt in 2..6 {
         let body = pattern(400 * KIB, salt);
         host.link.send(0, &Msg::Body(body.clone())).unwrap();
         assert_eq!(host.next(), (0, Msg::Body(body)));
+        read_by_the_child();
     }
     assert_eq!(
         host.link.regions().0,

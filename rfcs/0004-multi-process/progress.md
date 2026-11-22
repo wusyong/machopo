@@ -759,3 +759,6 @@ branch `0004-linux`，從 `0004` 的 2e-7（`82a4fc7`）分出去。
 - **沒有驗到的**：
   - Linux 和 Windows：平台層沒有改，但 `Platform::Memory: Sync` 和其他的改動在那兩個平台上有沒有編過，Linux 要看 push 之後的 CI，Windows 要在那台機器上編。
   - 時間：這一步沒有量每個 frame 快了多少（3g）。
+- **push 之後的 CI**（`0440bf9`，Linux）：lint 過；測試壞一個，`ipc` 的 `process_channel::a_host_and_a_child_talk`（host 自己的 region 是 1 MiB，預期 512 KiB）。Linux 上這一步的程式編得過、其他的都過（包括 `shared_buffer` 的和 `browser` 的 renderer process 測試）。
+  - 原因是測試本來就有的競爭，被這一步的時間差帶出來：測試連送四筆大資料，每筆等到回音就送下一筆，但 child 是「先回答、再說讀完了」，下一筆送出時 host 的那塊 region 可能還沒被還回來，host 就再建一塊。macOS 上兩則訊息總是一起到，所以沒發生過。行為本身是對的。
+  - 改測試：每一筆都等到 child 說讀完了才送下一筆（原本只有第一筆這樣等）。本機重複 5 次都過；Linux 上要等下一次 CI 才知道。
