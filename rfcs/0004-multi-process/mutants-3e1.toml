@@ -1,0 +1,45 @@
+# Step 3e, first part: machopo's switches for how its tabs' renderers are
+# run, and a renderer process told to crash being gone when that returns.
+test = ["sh", "-c", "timeout 300 cargo test -q -p shell --bin machopo && timeout 900 cargo test -q -p shell --test it -- renderer_process && timeout 600 cargo test -q -p browser --test it -- renderer_process"]
+timeout = 2400
+
+[[mutant]]
+name = "the switch for renderer processes is taken and changes nothing"
+file = "crates/shell/src/browser_window.rs"
+from = '''            launcher: crate::renderer_launcher(options.process_per_tab),
+            flags: RendererFlags {
+                test_fonts: options.test_fonts,'''
+to = '''            launcher: crate::renderer_launcher(false),
+            flags: RendererFlags {
+                test_fonts: options.test_fonts,'''
+
+[[mutant]]
+name = "every machopo's renderers are processes"
+file = "crates/shell/src/lib.rs"
+from = '''    if !process_per_tab {'''
+to = '''    if false && !process_per_tab {'''
+
+[[mutant]]
+name = "both switches at once are taken"
+file = "crates/shell/src/main.rs"
+from = '''    if single_process && process_per_tab {'''
+to = '''    if false && single_process && process_per_tab {'''
+
+[[mutant]]
+name = "a renderer process is only said to have been told to crash"
+file = "crates/browser/src/render_process_host.rs"
+from = '''        self.send(RendererMsg::Crash);
+        self.exit = end_child(child, &link, Some(CRASH_WAIT));'''
+to = '''        self.exit = end_child(child, &link, Some(CRASH_WAIT));'''
+
+[[mutant]]
+name = "a renderer process told to crash is killed at once instead"
+file = "crates/browser/src/render_process_host.rs"
+from = '''        self.exit = end_child(child, &link, Some(CRASH_WAIT));'''
+to = '''        self.exit = end_child(child, &link, None);'''
+
+[[mutant]]
+name = "how a renderer process ended is forgotten"
+file = "crates/browser/src/render_process_host.rs"
+from = '''            Some((child, link)) => self.exit = end_child(child, &link, None),'''
+to = '''            Some((child, link)) => drop(end_child(child, &link, None)),'''

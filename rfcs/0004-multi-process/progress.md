@@ -45,7 +45,9 @@
 | 3b-2：`protocol` 拿掉 `#[serde(skip)]`，`browser` 和 `renderer` 接上 | 完成 | 2026-11-22 |
 | 3c：守住現狀：renderer process 的 tile 已經上得了 GPU（多複製兩次）；測試、3a 留下的 mutant、文件（2026-11-22 調整，第 56 條） | 完成 | 2026-11-22 |
 | 3d：process 不在了（當掉、被 kill、壞訊息、`about:crash`） | 完成 | 2026-11-22 |
-| 3e：整套測試哪些用多個 process 跑；處理訊息的物件和 body 的管道的 fuzz target | 未開始 | |
+| 3e：切換的旗標、整套測試用多個 process 跑、fuzz target，分兩小段（第 59 條） | 進行中 | |
+| 3e-1：`--single-process` 和 `--process-per-tab`；`test.py` 和 CI 用多 process 跑的選項 | 完成 | 2026-11-22 |
+| 3e-2：整套測試在多 process 底下跑一遍、修壞的；處理訊息的物件和 body 的管道的 fuzz target | 未開始 | |
 | 3f：tile 只複製一次（第 24 條的驗收條件；原本的 3c） | 未開始 | |
 | 3g：trace；量每個 frame 的延遲和 IO thread 每一步的時間（3f 之前先量一次現況） | 未開始 | |
 | 3h：macOS 上 sandbox 的探測；第 3 階段的檢查和文件 | 未開始 | |
@@ -671,4 +673,30 @@ branch `0004-linux`，從 `0004` 的 2e-7（`82a4fc7`）分出去。
 - **跑過的檢查**（都在最後一次改程式之後跑）：`cargo test -p ipc -p protocol -p renderer -p browser -p shell`；`cargo clippy` 六個 crate `--all-targets -- -D warnings`，`ipc` 另外兩種 cfg；`cargo fmt --check`；`sanity.py` 的 7 項。跑完確認沒有留下測試啟動的 process。
 - **沒有跑的**：`test.py ipc` 的 fuzz 和 Miri（`ipc` 這一段只多一行，在端點結束時換掉池子；沒有先問使用者就不跑）。
 - **沒有驗到的**：Linux 和 Windows。Windows 上看 process 還在不在的測試不編（`ps`），kill 那條路在那裡只有「分頁變成當掉」被測到。
+
+### 3e-1：切換的旗標，和用多 process 跑測試的選項（2026-11-22，macOS 26、Apple M4）
+
+- **決定**：「已決定的事項」第 59 條：先加旗標、預設不變，3h 驗收時才換；收尾時視窗和 pipe 都預設多 process（看過下面的數字之後定的）。
+- **做了什麼**：
+  - `machopo` 的 `--single-process`（預設）和 `--process-per-tab`，視窗和 `--automation-pipe` 都認；兩個一起給是錯誤。`shell::renderer_launcher`：多 process 時啟動的是正在跑的這個執行檔加 `--type=renderer`。
+  - `test.py` 的 `wpt`、`reftest`、`wdspec`、`scenarios --window` 加 `--process-per-tab`：設環境變數 `MACHOPO_PROCESS_PER_TAB`，WPT 的 product（`tests/wpt/wptrunner_machopo`）和 `shell` 的情境、pipe 測試看到就替 `machopo` 加上旗標。`scenarios` 不加 `--window` 時不能用（那是在測試的 process 裡跑的）。
+  - 每天的 CI workflow（`nightly.yml`）加一個手動開始時的輸入 `process_per_tab`，選了就讓 reftest、wpt、wdspec 用它跑。每天自動跑的內容不變。
+- **量的**（決定收尾預設的依據）：
+
+  | | 單一 process | `--process-per-tab` |
+  | --- | --- | --- |
+  | `shell` 的 pipe 測試（36 個，`cargo test -p shell --test it -- automation_pipe`） | 36 過，4.4 秒 | 36 過，4.6 秒 |
+  | WPT `dom/events`（217 個測試、1069 項檢查，`test.py wpt dom/events`） | 83 秒 | 71 秒 |
+
+  WPT 的結果兩邊逐項相同（各有同樣的 4 個意外通過，和這次無關：兩邊都被同一個逾時的測試佔掉 64 秒，所以時間的差距是雜訊）。
+- **第一次用真的 `machopo` 跑多 process 找到的**：pipe 測試 36 個裡壞 1 個（`the_outer_size_is_the_windows`）：它導覽到 `about:crash` 之後馬上再導覽。3d 把 renderer process 的 `about:crash` 做成送出去就回來、等通道斷了才算當掉，下一個導覽撞上正在死的 renderer。單一 process 時是當場生效的。
+  - 改成：`RenderProcessHost::crash` 送出之後等 process 結束（最多 5 秒，不然 kill），回來時已經沒有了；分頁照 kill 的路當場標成當掉。兩種模式行為一致。3d 那一節寫的「分頁經過 `RendererGone` 得知」因此不再成立；`architecture.md` 改了，3d 的 mutant 清單裡對應的那一個也改了。
+  - 多了 `WebContents::renderer_exit()`（renderer process 是怎麼結束的）。測試用它確認 `about:crash` 是 process 自己 abort（signal 6）、壞訊息是被 kill（signal 9），不會把「沒當掉、時限到了被 kill」當成通過。
+- **測試**：`machopo` 的參數解析多一個（兩種模式的預設、兩個旗標、一起給）；`crates/shell/tests/it/renderer_process.rs` 多一個（只在 Unix）：pipe 的 `machopo` 加 `--process-per-tab` 時底下有一個 renderer process，不加或加 `--single-process` 時沒有，pipe 關掉之後 Browser 和 renderer 都結束。
+  - 那個測試第一次失敗是測試自己的問題：`pgrep -f --type=renderer` 把樣式當成它自己的選項。
+- **mutation test**（`mutants-3e1.toml`）6 個，全部抓到（旗標收下但不生效、永遠多 process、兩個旗標一起給也收、沒送「當掉」、改成直接 kill、不記得怎麼結束的）；跑完確認檔案還原。
+- **跑過的檢查**（都在最後一次改程式之後）：`cargo test -p ipc -p protocol -p renderer -p browser -p shell`；`MACHOPO_PROCESS_PER_TAB=1 cargo test -p shell --test it -- automation_pipe`（36 過）；`cargo clippy` 六個 crate `--all-targets -- -D warnings`；`cargo fmt --check`；`sanity.py` 的 7 項。
+- **沒有驗到的**：
+  - `nightly.yml` 的改動在本機跑不了，也沒有工具檢查它的語法：要在 GitHub 上手動開始一次才知道。
+  - 整套 WPT、reftest、wdspec 在多 process 底下（3e-2，用上面那個手動的輸入）；真的視窗（`scenarios --window --process-per-tab`，還沒跑）；Linux 和 Windows。
 

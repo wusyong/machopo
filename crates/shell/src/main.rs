@@ -54,11 +54,13 @@ const DEFAULT_LOG_FILTER: &str = "info,wgpu_core=warn,wgpu_hal=warn,naga=warn";
 const USAGE: &str = "\
 usage: machopo [--ui-layout LAYOUT] [--ui-theme THEME] [--test-fonts]
            [--num-raster-threads N] [--user-data-dir DIR]
+           [--single-process | --process-per-tab]
            [--remote-debugging-port PORT [--remote-allow-origins ORIGINS]]
            [URL|PATH]
        machopo --automation-pipe [--window | --scale F] [--host-resolver-rules RULES]
            [--additional-trust-anchors PEM] [--test-fonts]
            [--num-raster-threads N] [--user-data-dir DIR]
+           [--single-process | --process-per-tab]
            [--remote-debugging-port PORT [--remote-allow-origins ORIGINS]]
 
 Options that take a value take it as --name VALUE or --name=VALUE.";
@@ -93,6 +95,11 @@ Options:
                       are the viewport times F, in physical pixels.
   --test-fonts        Use only the built-in test fonts: Ahem, and Lato for
                       every generic family, as the reftests do.
+  --single-process    Every tab's renderer is threads of machopo's own
+                      process, as Chromium's switch. The default.
+  --process-per-tab   Each tab's renderer is a process of its own (machopo
+                      started again with --type=renderer), which a page
+                      that crashes takes down alone.
   --num-raster-threads N
                       Threads each page's tiles are rastered on at once, as
                       Chromium's switch (default 1: on the compositor's
@@ -196,6 +203,8 @@ struct Args {
     automation_pipe: Option<AutomationPipe>,
     /// `--num-raster-threads`; `None`: the default.
     num_raster_threads: Option<usize>,
+    /// `--process-per-tab`, and not `--single-process`.
+    process_per_tab: bool,
     /// `--remote-debugging-port` and `--remote-allow-origins`.
     remote_debugging: Option<devtools_http_handler::Options>,
     /// `--user-data-dir`.
@@ -238,6 +247,8 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
     let mut host_resolver_rules = None;
     let mut additional_trust_anchors = None;
     let mut num_raster_threads = None;
+    let mut single_process = false;
+    let mut process_per_tab = false;
     let mut remote_debugging_port = None;
     let mut remote_allow_origins = None;
     let mut user_data_dir = None;
@@ -291,6 +302,8 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
                     format!("--num-raster-threads wants a whole number from 1, like 4, not {v:?}")
                 })?);
             }
+            "--single-process" => single_process = true,
+            "--process-per-tab" => process_per_tab = true,
             "--automation-pipe" => automation_pipe = true,
             "--window" => pipe_window = true,
             "--host-resolver-rules" => host_resolver_rules = Some(value("--host-resolver-rules")?),
@@ -322,6 +335,11 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
         if inline.is_some() {
             return Err(format!("{name} takes no value"));
         }
+    }
+    if single_process && process_per_tab {
+        return Err(
+            "--single-process and --process-per-tab say opposite things: give one of them".into(),
+        );
     }
     if scale.is_some() && (!automation_pipe || pipe_window) {
         return Err(
@@ -375,6 +393,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
         ui_theme,
         test_fonts,
         num_raster_threads,
+        process_per_tab,
         remote_debugging,
         user_data_dir,
         automation_pipe: automation_pipe.then_some(AutomationPipe {
@@ -512,6 +531,7 @@ fn main() -> ExitCode {
                 ui_theme: Some(ColorMode::Light),
                 test_fonts: args.test_fonts,
                 num_raster_threads: args.num_raster_threads,
+                process_per_tab: args.process_per_tab,
                 pipe: Some(network),
                 remote_debugging: args.remote_debugging,
                 profile,
@@ -521,6 +541,7 @@ fn main() -> ExitCode {
                 test_fonts: args.test_fonts,
                 network,
                 num_raster_threads: args.num_raster_threads,
+                process_per_tab: args.process_per_tab,
                 remote_debugging: args.remote_debugging,
                 profile,
                 ..Default::default()
@@ -536,6 +557,7 @@ fn main() -> ExitCode {
             ui_theme: args.ui_theme,
             test_fonts: args.test_fonts,
             num_raster_threads: args.num_raster_threads,
+            process_per_tab: args.process_per_tab,
             pipe: None,
             remote_debugging: args.remote_debugging,
             profile,
@@ -573,6 +595,26 @@ mod tests {
     /// shows in mimalloc's own statistics, which the platform's
     /// allocator's wouldn't move.
     #[test]
+    fn renderers_are_processes_only_when_asked() {
+        let run = |args: &[&str]| match parse(args) {
+            Ok(Command::Run(args)) => *args,
+            other => panic!("{other:?}"),
+        };
+        // The default, and said outright; in a window and by the pipe.
+        assert!(!run(&["about:blank"]).process_per_tab);
+        assert!(!run(&["--single-process"]).process_per_tab);
+        assert!(!run(&["--automation-pipe"]).process_per_tab);
+        assert!(run(&["--process-per-tab"]).process_per_tab);
+        assert!(run(&["--automation-pipe", "--process-per-tab"]).process_per_tab);
+        assert!(run(&["--automation-pipe", "--window", "--process-per-tab"]).process_per_tab);
+        let both = parse(&["--single-process", "--process-per-tab"]);
+        assert!(
+            matches!(&both, Err(e) if e.contains("opposite")),
+            "{both:?}"
+        );
+    }
+
+    #[test]
     fn rusts_allocations_are_mimallocs() {
         const SIZE: usize = 64 << 20;
         let before = mimalloc_committed();
@@ -599,6 +641,7 @@ mod tests {
         assert!(args.automation_pipe.is_none());
         assert!(!args.test_fonts);
         assert_eq!(args.num_raster_threads, None);
+        assert!(!args.process_per_tab);
         assert_eq!(parse(&["x", "--help"]), Ok(Command::Help));
         assert_eq!(parse(&["-h"]), Ok(Command::Help));
     }

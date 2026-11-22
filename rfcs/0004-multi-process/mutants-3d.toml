@@ -30,8 +30,8 @@ to = '''                    if false && matches!(msg, RendererMsg::Crash) {'''
 name = "a renderer process is only said to have been told to crash"
 file = "crates/browser/src/render_process_host.rs"
 from = '''        self.send(RendererMsg::Crash);
-        true'''
-to = '''        true'''
+        self.exit = end_child(child, &link, Some(CRASH_WAIT));'''
+to = '''        self.exit = end_child(child, &link, Some(CRASH_WAIT));'''
 
 [[mutant]]
 name = "a renderer process that is killed runs on"

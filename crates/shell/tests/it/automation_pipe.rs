@@ -20,6 +20,9 @@ use protocol::automation::{
 };
 use serde_json::{Value, json};
 
+/// Set to run these tests with `machopo --process-per-tab`.
+const PROCESS_PER_TAB: &str = "MACHOPO_PROCESS_PER_TAB";
+
 const TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A `machopo --automation-pipe`, and what it has sent that wasn't asked for
@@ -63,6 +66,9 @@ impl Browser {
     fn start_in(args: &[&str], env: &[(&str, &std::ffi::OsStr)], stderr: Stdio) -> Self {
         let mut child = Process::new(env!("CARGO_BIN_EXE_machopo"))
             .args(["--automation-pipe", "--test-fonts"])
+            // The same tests with each tab's renderer in a process of its
+            // own, when the run asks for it.
+            .args(std::env::var_os(PROCESS_PER_TAB).map(|_| "--process-per-tab"))
             .args(args)
             .envs(env.iter().copied())
             .stdin(Stdio::piped())

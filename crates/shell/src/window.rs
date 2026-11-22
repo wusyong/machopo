@@ -194,6 +194,7 @@ struct App {
     ui_theme: Option<ColorMode>,
     test_fonts: bool,
     num_raster_threads: Option<usize>,
+    process_per_tab: bool,
     /// The window's profile (`--user-data-dir`, or the user's own).
     profile: browser::Profile,
     proxy: EventLoopProxy<ShellEvent>,
@@ -330,6 +331,7 @@ impl App {
                 automation,
                 network,
                 num_raster_threads: self.num_raster_threads,
+                process_per_tab: self.process_per_tab,
                 caret_blink_interval,
                 profile: self.profile.clone(),
             },
@@ -803,6 +805,8 @@ pub struct Options {
     pub ui_theme: Option<ColorMode>,
     pub test_fonts: bool,
     pub num_raster_threads: Option<usize>,
+    /// Each tab's renderer is a process of its own (`--process-per-tab`).
+    pub process_per_tab: bool,
     /// The network settings `--automation-pipe --window` gives: the pipe
     /// drives the window.
     pub pipe: Option<NetworkContextParams>,
@@ -820,6 +824,7 @@ pub fn run(options: Options) -> Result<(), String> {
         ui_theme,
         test_fonts,
         num_raster_threads,
+        process_per_tab,
         pipe,
         remote_debugging,
         profile,
@@ -833,6 +838,7 @@ pub fn run(options: Options) -> Result<(), String> {
         ui_theme,
         test_fonts,
         num_raster_threads,
+        process_per_tab,
         profile,
         proxy: event_loop.create_proxy(),
         running: None,

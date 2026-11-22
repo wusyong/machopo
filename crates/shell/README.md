@@ -83,7 +83,7 @@ UI 的深淺色跟著系統，系統切換時跟著換；`--ui-theme=light` 或 
 - 手動執行（沒有 Browser 留給它的一端）：在 stderr 說明、以 2 結束。
 - 結束的代碼：0 是照 Browser 說的結束，或 Browser 不在了；3 是啟動不了；4 是 renderer 的 main thread panic。
 - log 照 `RUST_LOG`，寫到 stderr；trace（`MACHOPO_TRACE`）不寫，那個檔案是 Browser 的。
-- 現在視窗和 headless 都不會啟動它（renderer 還是同一個 process 裡的 thread）；走這條路的只有測試（`crates/shell/tests/it/renderer_process.rs`，和 `browser` 的 `crates/browser/tests/it/renderer_process.rs`）。
+- `machopo --process-per-tab`（視窗和 `--automation-pipe` 都可以）才會啟動它：每個分頁的 renderer 是一個這樣的 process（`shell::renderer_launcher`，用的是正在跑的這個執行檔）。預設是 `--single-process`：renderer 是 machopo 自己的 thread。兩個一起給是錯誤。測試在 `crates/shell/tests/it/renderer_process.rs`；`crates/shell/tests/it/automation_pipe.rs` 的測試和 `tests/scenarios/` 在視窗裡跑的情境在環境變數 `MACHOPO_PROCESS_PER_TAB` 設了的時候加上這個旗標（`test.py` 的 `--process-per-tab`）。
 
 ## 自動化的 pipe
 

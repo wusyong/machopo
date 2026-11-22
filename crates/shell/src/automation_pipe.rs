@@ -34,6 +34,8 @@ pub struct Options {
     pub network: NetworkContextParams,
     /// `RendererFlags::num_raster_threads`.
     pub num_raster_threads: Option<usize>,
+    /// Each tab's renderer is a process of its own (`--process-per-tab`).
+    pub process_per_tab: bool,
     /// `--remote-debugging-port`: other clients too, over HTTP and
     /// websockets.
     pub remote_debugging: Option<devtools_http_handler::Options>,
@@ -52,6 +54,7 @@ impl Default for Options {
             test_fonts: false,
             network: NetworkContextParams::default(),
             num_raster_threads: None,
+            process_per_tab: false,
             remote_debugging: None,
             profile: browser::Profile::in_memory(),
         }
@@ -152,6 +155,7 @@ pub fn run(options: Options) -> Result<(), String> {
             automation: true,
             network: options.network,
             num_raster_threads: options.num_raster_threads,
+            process_per_tab: options.process_per_tab,
             // A web test's: no blinking, so each frame is the same.
             caret_blink_interval: None,
             profile: options.profile,

@@ -29,6 +29,8 @@ pub struct Options {
     pub automation: bool,
     /// `RendererFlags::num_raster_threads`.
     pub num_raster_threads: Option<usize>,
+    /// Each tab's renderer is a process of its own (`--process-per-tab`).
+    pub process_per_tab: bool,
     /// `RendererFlags::caret_blink_interval`.
     pub caret_blink_interval: Option<std::time::Duration>,
     /// The network service's: the user agent is the browser's whatever it
@@ -73,6 +75,7 @@ impl BrowserWindow {
             ..options.network
         };
         let mut tabs = WindowTabs {
+            launcher: crate::renderer_launcher(options.process_per_tab),
             flags: RendererFlags {
                 test_fonts: options.test_fonts,
                 web_tests: false,
@@ -155,6 +158,7 @@ impl BrowserWindow {
 /// window's profile), and tells Viz of their frame sinks
 /// (`HostFrameSinkManager`).
 struct WindowTabs {
+    launcher: browser::RendererLauncher,
     flags: RendererFlags,
     viz: Sender<VizMsg>,
     gpu: Option<Arc<dyn ContextProvider>>,
@@ -171,7 +175,7 @@ impl TabFactory for WindowTabs {
         let contents = WebContents::new(
             tab,
             self.flags.clone(),
-            browser::RendererLauncher::InProcess(crate::SCRIPT_ENGINES),
+            self.launcher.clone(),
             self.viz.clone(),
             self.gpu.clone(),
             self.partition.clone(),
@@ -205,6 +209,7 @@ mod tests {
     fn window_tabs_tell_viz_of_their_frame_sinks() {
         let (viz, viz_rx) = crossbeam_channel::unbounded();
         let mut tabs = WindowTabs {
+            launcher: crate::renderer_launcher(false),
             flags: RendererFlags {
                 test_fonts: true,
                 web_tests: false,

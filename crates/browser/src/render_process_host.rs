@@ -136,6 +136,8 @@ pub struct RenderProcessHost {
     /// A renderer in a process of its own: the process, and this end of
     /// its channel.
     child: Option<(Child, ChannelLink)>,
+    /// How the process ended, once it has.
+    exit: Option<std::process::ExitStatus>,
     /// Its number, which its blob URLs are registered under.
     renderer_id: u64,
     /// The IO thread passes the renderer's messages on: not once it was
@@ -386,6 +388,7 @@ impl RenderProcessHost {
             renderer_thread,
             io_thread,
             child,
+            exit: None,
             renderer_id,
             forwarding,
             loaders,
@@ -444,7 +447,7 @@ impl RenderProcessHost {
     pub fn kill(&mut self) {
         self.forwarding.store(false, Ordering::Release);
         match self.child.take() {
-            Some((child, link)) => end_child(child, &link, None),
+            Some((child, link)) => self.exit = end_child(child, &link, None),
             None => self.send(RendererMsg::Shutdown),
         }
     }
@@ -456,18 +459,31 @@ impl RenderProcessHost {
     /// and is killed.
     pub(crate) fn ended(&mut self) {
         if let Some((child, link)) = self.child.take() {
-            end_child(child, &link, Some(GONE_EXIT_WAIT));
+            self.exit = end_child(child, &link, Some(GONE_EXIT_WAIT));
         }
     }
 
     /// Has the renderer crash (`chrome://crash`), if it is a process of its
     /// own: `false` for one that is this process's threads, which can't.
-    pub(crate) fn crash(&self) -> bool {
-        if self.child.is_none() {
+    /// The process ends itself, and is no more when this returns, so
+    /// whatever the tab is asked next finds a renderer that is gone, as
+    /// after a kill (a real crash comes whenever it does; this one is
+    /// asked for). One that doesn't crash in time is killed. Nothing more
+    /// from it is passed on.
+    pub(crate) fn crash(&mut self) -> bool {
+        let Some((child, link)) = self.child.take() else {
             return false;
-        }
+        };
+        self.forwarding.store(false, Ordering::Release);
         self.send(RendererMsg::Crash);
+        self.exit = end_child(child, &link, Some(CRASH_WAIT));
         true
+    }
+
+    /// How the renderer's process ended, if it has (Chromium's
+    /// `ChildProcessTerminationInfo`): what the system says of it.
+    pub(crate) fn exit(&self) -> Option<std::process::ExitStatus> {
+        self.exit
     }
 
     /// Lets the renderer's threads end on their own: a renderer that has
@@ -579,6 +595,9 @@ impl RenderProcessHost {
 /// How long a renderer process asked to exit is given before it is ended.
 const CHILD_EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// How long a renderer process told to crash is given to have done it.
+const CRASH_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// How long a renderer process whose channel is over is given to have
 /// exited by itself (the channel of one that crashed is over a moment
 /// before the system says the process is) before it is killed.
@@ -587,7 +606,11 @@ const GONE_EXIT_WAIT: std::time::Duration = std::time::Duration::from_millis(200
 /// Ends a renderer process: waits `wait` for it to exit by itself (it was
 /// asked to), then kills it; closes this end of its channel, and tells
 /// the platform it has gone (a child that never took its end).
-fn end_child(mut child: Child, link: &ChannelLink, wait: Option<std::time::Duration>) {
+fn end_child(
+    mut child: Child,
+    link: &ChannelLink,
+    wait: Option<std::time::Duration>,
+) -> Option<std::process::ExitStatus> {
     let asked = std::time::Instant::now();
     let exited = wait.is_some_and(|wait| {
         loop {
@@ -614,6 +637,7 @@ fn end_child(mut child: Child, link: &ChannelLink, wait: Option<std::time::Durat
     );
     link.close();
     ipc::platform::child_gone(child.id());
+    status
 }
 
 impl Drop for RenderProcessHost {

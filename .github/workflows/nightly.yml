@@ -3,7 +3,10 @@
 # gc.yml, every week). Each is a job of its own, so they run side by side,
 # each in a runner's 6 hours, and wptserve's fixed port is never wanted by
 # two at once. Any of them can also be started by hand (Actions → this
-# workflow → Run workflow).
+# workflow → Run workflow); started so, reftest, wpt and wdspec can be run
+# with each tab's renderer in a process of its own (machopo
+# --process-per-tab), which the daily run doesn't do. The scenarios here
+# run in the test's own process either way.
 #
 # The runners as ci.yml's: 4 CPUs, no GPU (wgpu draws with lavapipe), the
 # same Ubuntu release. The scenarios are a `cargo test` of the debug build,
@@ -22,9 +25,15 @@ on:
         type: choice
         options: [all, scenarios, reftest, wpt, wdspec]
         default: all
+      process_per_tab:
+        description: Each tab's renderer in a process of its own (reftest, wpt, wdspec)
+        type: boolean
+        default: false
 
 env:
   CARGO_TERM_COLOR: always
+  # A scheduled run has no inputs: then it is empty.
+  PROCESS_PER_TAB: ${{ inputs.process_per_tab && '--process-per-tab' || '' }}
   # As ci.yml's, so these builds match the cache its `test` job saves.
   CARGO_PROFILE_DEV_DEBUG: "0"
 
@@ -88,7 +97,7 @@ jobs:
           name: machopo-ci
           path: target/ci
       - run: chmod +x target/ci/machopo target/ci/machopodriver
-      - run: python3 scripts/test.py reftest --profile ci --no-build
+      - run: python3 scripts/test.py reftest --profile ci --no-build $PROCESS_PER_TAB
       - if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -123,7 +132,7 @@ jobs:
           name: machopo-ci
           path: target/ci
       - run: chmod +x target/ci/machopo target/ci/machopodriver
-      - run: python3 scripts/test.py wpt --chunk ${{ matrix.chunk }}/4 --profile ci --no-build
+      - run: python3 scripts/test.py wpt --chunk ${{ matrix.chunk }}/4 --profile ci --no-build $PROCESS_PER_TAB
       - if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -174,7 +183,7 @@ jobs:
           name: machopo-ci
           path: target/ci
       - run: chmod +x target/ci/machopo target/ci/machopodriver
-      - run: python3 scripts/test.py wdspec --profile ci --no-build
+      - run: python3 scripts/test.py wdspec --profile ci --no-build $PROCESS_PER_TAB
       - if: always()
         uses: actions/upload-artifact@v4
         with:

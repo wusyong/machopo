@@ -485,14 +485,14 @@ impl WebContents {
             }
             Some(DebugUrl::Crash) => {
                 tracing::warn!(url, "ending the renderer");
-                // A renderer process crashes itself, and the tab hears as
-                // of any crash (`RendererGone`); a renderer that is this
-                // process's threads is ended from here.
+                // A renderer process crashes itself; a renderer that is
+                // this process's threads is ended from here. Either way
+                // it is gone by the next thing the tab is asked.
                 if !self.process.crash() {
                     self.process.kill();
-                    self.crashed = true;
-                    self.frame_tree.reset();
                 }
+                self.crashed = true;
+                self.frame_tree.reset();
             }
             None => self.begin_navigation(url, NavigationType::NewEntry, Asked::default()),
         }
@@ -789,6 +789,12 @@ impl WebContents {
     /// None for a renderer in this process.
     pub fn renderer_shared_memory(&self) -> Option<(usize, usize)> {
         self.process.shared_memory()
+    }
+
+    /// How the tab's renderer process ended, if it has: what the system
+    /// says of it (an exit code, or the signal that ended it).
+    pub fn renderer_exit(&self) -> Option<std::process::ExitStatus> {
+        self.process.exit()
     }
 
     pub fn is_crashed(&self) -> bool {

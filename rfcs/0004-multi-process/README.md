@@ -558,8 +558,15 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
     - **不選線上多包一層、明寫出來**（往 main thread 的線上型別是「訊息加上它的管道的編號」，送的一端先開管道、收的一端放回去；起草時的建議）：不動 `ipc`，但每多一種帶管道的訊息兩邊各加一段，`#[serde(skip)]` 留著，而且那一段邏輯留在 machopo，不跟著 `ipc` 走。不選線上和記憶體裡兩套訊息型別。
     - **3b 分成兩小段**：3b-1 在 `ipc` 做完並驗證；3b-2 `protocol` 拿掉 `#[serde(skip)]`、`browser` 和 `renderer` 接上、renderer process 載入大的頁面。
     - 對照 Chromium：Mojo 的 handle 可以放在訊息的任何位置，序列化時從物件裡取走。
+59. **先加切換的旗標，預設不變；預設在階段驗收時才換**（2026-11-22，第 3 階段的 3e；使用者選的）：`machopo` 加 `--single-process`（Chromium 的名字，最後留下來的那個）和 `--process-per-tab`（要求每個分頁的 renderer 是自己的 process；Chromium 也有這個旗標，意思相近）。視窗和 automation pipe 兩種跑法的預設都維持單一 process。3e 用 `--process-per-tab` 把視窗和整套測試跑過、修掉壞的；3f、3g 做完，3h 階段驗收時把視窗的預設換成多 process。
+    - **為什麼不現在就換視窗的預設**（「單一 process 的模式」寫的最後狀態）：視窗接 renderer process 還沒試過，tile 現在複製三次（3f），沒有偵測 renderer 卡住的機制，Linux 和 Windows 沒有驗過；每天用的視窗會先踩到這些。換預設那一刻要有整套測試和量測的數字。
+    - **不選兩種跑法現在都預設多 process**（Chromium 的做法）：上面的缺點都有，加上整套測試變慢多少還不知道。
+    - **收尾時 pipe 和測試也預設多 process**（2026-11-22 定的，使用者選的；改掉「單一 process 的模式」寫的「headless 和測試的預設」是單一 process，那一節在 3h 換預設時一起改）。依據是 3e 量的：`shell` 的 pipe 測試 36 個，單一 process 4.4 秒、`--process-per-tab` 4.6 秒，都過；WPT 的 `dom/events`（217 個測試、1069 項檢查）83 秒對 71 秒（差距是雜訊），結果逐項相同。看不出變慢。之後每天的 WPT、reftest、情境、WebDriver 的測試走的就是使用者用的那條路，不用另外再跑一遍；單一 process 那條路由 `cargo test` 裡直接在 process 裡建分頁的測試守（`browser`、`shell`，本來就只能那樣跑）。不選 pipe 維持單一 process：多 process 那條路要另外跑，每天跑 CI 的時間加倍，每週跑壞了最多一週後才知道，而且平常跑的不是使用者用的那條路（「缺點」裡自己列的）。
+    - **換預設之前**：`test.py` 的 `wpt`、`reftest`、`wdspec`、`scenarios --window` 加 `--process-per-tab`；每天的 CI workflow 加一個手動開始時可以選的輸入，選了就用它跑整套。每天自動跑的內容不變。整套在多 process 底下是綠的才換。
+    - **一直是單一 process 的**：情境「沒有平台視窗」的版本和 `cargo test` 裡直接建分頁的測試在測試的 process 裡跑，沒有 `machopo` 執行檔可以當 renderer。多 process 的情境用 `scenarios --window`。
 
 ## 待決定
+
 
 - **CI 之後要不要加 macOS、Windows 的 runner**（第 40 條；2g 做完時定了先不加，第 54 條）：要跑的只有 `cargo test -p ipc`（不依賴 V8，幾分鐘）。重看的時機：共用的改動又在另一個平台上壞掉而沒有人發現時，或作業系統的 sandbox 開始做的時候。要看的是費用（GitHub 的 macOS runner 是 Linux 的 10 倍、Windows 是 2 倍）和 runner 的系統版本與開發機不同時那幾個實測來的行為還成不成立。
 - **IO thread 上複製大資料的時間**（第 36 條；第 3 階段量捲動時每個 frame 的延遲時一起看）：64 KiB 以上的 `BigBuffer` 在 IO thread 上從 region 複製出來，那一段時間後面的訊息等著。量到是問題時，把複製搬到目標 thread（IO thread 只交出「這一塊的借據」，目標 thread 複製完再還）：線上的格式不變，代價是表跨 thread 共用、多一組 loom 的模型。

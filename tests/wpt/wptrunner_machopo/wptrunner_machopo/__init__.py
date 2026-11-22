@@ -12,6 +12,7 @@ wptrunner is imported when wptrunner asks for the product, not with the
 package: `python -m wptrunner_machopo.run` puts it on `sys.path` first.
 """
 
+import os
 import re
 
 # machopo's rules for WPT's domains: `nonexistent` ones don't resolve, the
@@ -37,6 +38,10 @@ def machopo_args(ca_cert_path):
     args = ["--test-fonts", "--host-resolver-rules", HOST_RESOLVER_RULES]
     if ca_cert_path:
         args += ["--additional-trust-anchors", ca_cert_path]
+    # The same run with each tab's renderer in a process of its own, when
+    # the environment asks (`test.py`'s `--process-per-tab`).
+    if os.environ.get("MACHOPO_PROCESS_PER_TAB"):
+        args.append("--process-per-tab")
     return [part for arg in args for part in ("--binary-arg", arg)]
 
 

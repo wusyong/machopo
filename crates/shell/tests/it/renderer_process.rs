@@ -184,3 +184,57 @@ fn the_switch_is_one_only_as_the_first_argument() {
     let said = String::from_utf8_lossy(&out.stderr);
     assert!(!said.contains("no browser to render for"), "{said}");
 }
+
+/// The renderer processes the machopo `browser` has started and that are
+/// still there.
+#[cfg(unix)]
+fn renderers_of(browser: u32) -> usize {
+    let found = Command::new("pgrep")
+        // Without its dashes: `pgrep` would take them for a switch of its
+        // own.
+        .args(["-P", &browser.to_string(), "-f"])
+        .arg(shell::RENDERER_PROCESS_SWITCH.trim_start_matches('-'))
+        .output()
+        .expect("pgrep runs");
+    String::from_utf8_lossy(&found.stdout).lines().count()
+}
+
+#[cfg(unix)]
+#[test]
+fn tabs_renderers_are_processes_only_when_machopo_is_told() {
+    // The pipe's machopo has a tab from the start: its renderer is a
+    // process of its own with the switch, and threads of machopo's
+    // without it or with the other.
+    for (switch, renderers) in [
+        (Some("--process-per-tab"), 1),
+        (None, 0),
+        (Some("--single-process"), 0),
+    ] {
+        let mut browser = Command::new(MACHOPO)
+            .args(["--automation-pipe", "--test-fonts"])
+            .args(switch)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("machopo starts");
+        // As long as a renderer takes to be started, and to be seen not
+        // to have been.
+        let started = Instant::now();
+        while renderers_of(browser.id()) != renderers || started.elapsed() < Duration::from_secs(2)
+        {
+            assert!(
+                started.elapsed() < Duration::from_secs(20),
+                "{switch:?}: {} renderer processes",
+                renderers_of(browser.id())
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        // The pipe closed is the browser's end, and its renderer's with
+        // it.
+        let pid = browser.id();
+        drop(browser.stdin.take());
+        assert_eq!(exit_of(&mut browser), Some(0), "{switch:?}");
+        assert_eq!(renderers_of(pid), 0, "{switch:?}");
+    }
+}

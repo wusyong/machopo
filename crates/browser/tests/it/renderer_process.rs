@@ -401,18 +401,19 @@ fn state_of(pid: u32) -> Option<String> {
     (!state.is_empty()).then_some(state)
 }
 
-/// Hands the tab its renderer's messages until the renderer is gone.
-fn until_gone(
-    web_contents: &mut browser::WebContents,
-    host_rx: &crossbeam_channel::Receiver<browser::ContentsEvent>,
-) {
-    loop {
-        let msg = next_message(web_contents, host_rx, TIMEOUT).expect("the tab hears");
-        web_contents.on_renderer_message(&msg);
-        if matches!(msg, RendererHostMsg::RendererGone) {
-            return;
-        }
-    }
+/// The signal `abort` ends a process with, and the one that kills it.
+#[cfg(unix)]
+const ABORTED: i32 = 6;
+#[cfg(unix)]
+const KILLED: i32 = 9;
+
+/// The signal that ended the tab's renderer process, if one did.
+#[cfg(unix)]
+fn ended_by(web_contents: &browser::WebContents) -> Option<i32> {
+    use std::os::unix::process::ExitStatusExt;
+    web_contents
+        .renderer_exit()
+        .and_then(|status| status.signal())
 }
 
 #[cfg(unix)]
@@ -427,12 +428,12 @@ fn a_renderer_process_told_to_crash_does_and_another_is_started_for_a_reload() {
     web_contents.navigate("data:text/html,<title>one</title>");
     assert_eq!(next_commit(&mut web_contents, &host_rx).2, "one");
     let first = web_contents.renderer_pid().expect("a process of its own");
-    // The renderer ends itself, and the tab hears as of any crash: by its
-    // channel, not because it asked.
+    // The renderer ends itself (abnormally: the system says it aborted,
+    // not that it was killed), and has by the time the tab is asked
+    // anything more.
     web_contents.navigate("about:crash");
-    assert!(!web_contents.is_crashed(), "not before it has");
-    until_gone(&mut web_contents, &host_rx);
     assert!(web_contents.is_crashed());
+    assert_eq!(ended_by(&web_contents), Some(ABORTED));
     // Seen to its end: nothing is left of the process, not even what
     // waits to be waited for.
     assert_eq!(state_of(first), None);
@@ -463,8 +464,8 @@ fn a_renderer_process_that_hangs_crashes_when_told_to() {
     let pid = web_contents.renderer_pid().expect("a process of its own");
     std::thread::sleep(std::time::Duration::from_millis(300));
     web_contents.navigate("about:crash");
-    until_gone(&mut web_contents, &host_rx);
     assert!(web_contents.is_crashed());
+    assert_eq!(ended_by(&web_contents), Some(ABORTED));
     assert_eq!(state_of(pid), None);
     web_contents.shutdown();
 }
@@ -519,6 +520,7 @@ fn a_process_that_sends_what_no_renderer_does_is_killed() {
             "{role}"
         );
         assert!(web_contents.is_crashed(), "{role}");
+        assert_eq!(ended_by(&web_contents), Some(KILLED), "{role}");
         assert_eq!(state_of(pid), None, "{role}: still there");
         assert_eq!(web_contents.renderer_pid(), None, "{role}");
         web_contents.shutdown();

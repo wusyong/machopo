@@ -76,6 +76,24 @@ pub fn renderer_main() -> u8 {
     }
 }
 
+/// How the tabs' renderers are run: each in a process of its own when
+/// `process_per_tab` (this executable again, as a renderer:
+/// [`RENDERER_PROCESS_SWITCH`]), or as threads of this process.
+pub fn renderer_launcher(process_per_tab: bool) -> browser::RendererLauncher {
+    if !process_per_tab {
+        return browser::RendererLauncher::InProcess(SCRIPT_ENGINES);
+    }
+    browser::RendererLauncher::Process(std::sync::Arc::new(|| {
+        // The executable as it was started: one replaced on disk since is
+        // another build, which may speak otherwise. A path that can't be
+        // had starts nothing, and the tab says its renderer didn't start.
+        let executable = std::env::current_exe().unwrap_or_default();
+        let mut command = std::process::Command::new(executable);
+        command.arg(RENDERER_PROCESS_SWITCH);
+        command
+    }))
+}
+
 /// URLs pass through; anything else is a file path, which becomes a
 /// `file://` URL (relative paths are resolved against the working
 /// directory).
