@@ -564,6 +564,12 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
     - **收尾時 pipe 和測試也預設多 process**（2026-11-22 定的，使用者選的；改掉「單一 process 的模式」寫的「headless 和測試的預設」是單一 process，那一節在 3h 換預設時一起改）。依據是 3e 量的：`shell` 的 pipe 測試 36 個，單一 process 4.4 秒、`--process-per-tab` 4.6 秒，都過；WPT 的 `dom/events`（217 個測試、1069 項檢查）83 秒對 71 秒（差距是雜訊），結果逐項相同。看不出變慢。之後每天的 WPT、reftest、情境、WebDriver 的測試走的就是使用者用的那條路，不用另外再跑一遍；單一 process 那條路由 `cargo test` 裡直接在 process 裡建分頁的測試守（`browser`、`shell`，本來就只能那樣跑）。不選 pipe 維持單一 process：多 process 那條路要另外跑，每天跑 CI 的時間加倍，每週跑壞了最多一週後才知道，而且平常跑的不是使用者用的那條路（「缺點」裡自己列的）。
     - **換預設之前**：`test.py` 的 `wpt`、`reftest`、`wdspec`、`scenarios --window` 加 `--process-per-tab`；每天的 CI workflow 加一個手動開始時可以選的輸入，選了就用它跑整套。每天自動跑的內容不變。整套在多 process 底下是綠的才換。
     - **一直是單一 process 的**：情境「沒有平台視窗」的版本和 `cargo test` 裡直接建分頁的測試在測試的 process 裡跑，沒有 `machopo` 執行檔可以當 renderer。多 process 的情境用 `scenarios --window`。
+60. **Browser 這一側的 fuzz target 涵蓋到分頁，body 的管道不另外寫**（2026-11-22，第 3 階段的 3e-2；使用者選的；「測試」的表原本寫的是兩個 target）：
+    - **一個 target**：輸入切成幾則訊息，每則解成 `RendererHostMsg`，先交給 IO thread 上的物件（`IoThreadHost`），它轉給 UI thread 的再交給分頁（`WebContents::on_renderer_message`），分頁判定壞訊息時照正常的路結束 renderer。惡意的 renderer 碰得到 Browser 的整條路。要找的是讓 Browser panic 的訊息（`unwrap`、索引越界）：Browser 一 panic 所有分頁都沒了。
+    - **不選只到 IO thread 上的物件**：frame 樹、導覽、history 的檢查在分頁那一半，判定壞訊息的地方那裡比較多，狀態也比較複雜。
+    - **為了它加的**：一種「另一端沒有東西」的 renderer 啟動方式（`RendererLauncher::Detached`：Browser 送給它的訊息留在佇列裡沒有人讀，renderer 的訊息由呼叫的人同步交進來），只給測試和 fuzz 用；`net` 的 host 規則把一切對到「不存在」時，連寫成 IP 的網址也拒絕（原本 IP 不經過解析、規則管不到；Chromium 的規則兩種都管），fuzz 用這個確保什麼都連不出去。
+    - **body 的管道**：過通道的部分是 `ipc` 的，它的 `pipe` 和 `endpoint` 兩個 target 已經涵蓋（3b-1 擴充過訊息裡帶管道的情況），不另外寫。
+    - **放哪裡、怎麼跑**照 `ipc` 的做法：harness 是 `browser` 整合測試的一個模組，找到過的輸入放進回歸的資料夾、`cargo test` 每次重放；cargo-fuzz 的 target 在 `crates/browser/fuzz/`；`test.py` 跑，只在本機（第 55 條），跑之前先問使用者。
 
 ## 待決定
 

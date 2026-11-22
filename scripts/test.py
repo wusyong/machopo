@@ -24,6 +24,9 @@
     python scripts/test.py ipc fuzz [--minutes M] | miri | models
                                        # the channels' core: its fuzzers (cargo-fuzz), its tests under Miri,
                                        # what its threads share under loom and shuttle
+    python scripts/test.py browser fuzz [--minutes M]
+                                       # the browser's side of a tab against whatever a renderer sends
+                                       # (cargo-fuzz; nothing reaches the network)
 
 `matrix` and `fuzz` link the debug V8 (V8's `DCHECK`s), in a target directory
 of their own; `scenarios --window` needs a display and a GPU. `scenarios` is a
@@ -1685,33 +1688,58 @@ def cmd_ipc(args: argparse.Namespace) -> int:
             if subprocess.run(command, cwd=ROOT, env=env).returncode != 0:
                 return 1
         return 0
-    work = ROOT / "target" / "ipc-fuzz"
-    out = subprocess.run(["rustc", "-vV"], cwd=IPC_FUZZ, capture_output=True, text=True, check=True).stdout
+    return run_fuzzers("ipc", IPC_FUZZ, IPC_FUZZ_TARGETS, args.minutes)
+
+
+def run_fuzzers(crate: str, fuzz: Path, targets: list[str], minutes: float) -> int:
+    """Runs a crate's cargo-fuzz targets (its `fuzz/`, a workspace of its
+    own on a pinned nightly), each for `minutes`. What they find stays in
+    target/<crate>-fuzz/, run after run. Built for this machine's target,
+    not the one cargo-fuzz defaults to."""
+    work = ROOT / "target" / f"{crate}-fuzz"
+    out = subprocess.run(["rustc", "-vV"], cwd=fuzz, capture_output=True, text=True, check=True).stdout
     host = re.search(r"^host: (\S+)", out, re.M).group(1)
     env = dict(os.environ, CARGO_TARGET_DIR=str(work / "build"))
     failed = []
-    for target in IPC_FUZZ_TARGETS:
+    for target in targets:
         corpus, artifacts = work / target / "corpus", work / target / "artifacts"
         for directory in (corpus, artifacts):
             directory.mkdir(parents=True, exist_ok=True)
-        flags = [f"-max_total_time={int(args.minutes * 60)}", "-rss_limit_mb=4096", f"-artifact_prefix={artifacts}/"]
+        flags = [f"-max_total_time={int(minutes * 60)}", "-rss_limit_mb=4096", f"-artifact_prefix={artifacts}/"]
         started = time.time()
-        print(f"--- fuzzing {target} for {args.minutes} minutes", flush=True)
+        print(f"--- fuzzing {target} for {minutes} minutes", flush=True)
         command = ["cargo", "fuzz", "run", "--target", host, target, str(corpus), "--", *flags]
-        if subprocess.run(command, cwd=IPC_FUZZ, env=env).returncode == 0:
+        if subprocess.run(command, cwd=fuzz, env=env).returncode == 0:
             continue
         failed.append(target)
         found = [path for path in artifacts.iterdir() if path.stat().st_mtime >= started]
         if found:
             crash = max(found, key=lambda path: path.stat().st_mtime)
             print(f"failing input: {crash}")
-            print("put it in crates/ipc/fuzz/regressions/ with the fix: cargo test -p ipc replays it")
+            print(f"put it in crates/{crate}/fuzz/regressions/ with the fix: cargo test -p {crate} replays it")
         else:
             print("the fuzzer failed without leaving an input")
     if failed:
         print(f"failed: {', '.join(failed)}")
         return 1
     return 0
+
+
+BROWSER_FUZZ = ROOT / "crates" / "browser" / "fuzz"
+
+
+def cmd_browser(args: argparse.Namespace) -> int:
+    """`fuzz`: the browser's fuzzer (`crates/browser/fuzz`, cargo-fuzz on
+    the nightly its rust-toolchain.toml pins, with ASan) for M minutes
+    (default 5): a renderer that sends whatever it likes, against the
+    browser's side of a tab, with the checks of
+    `crates/browser/tests/it/renderer_message_fuzz.rs`. Nothing it does
+    reaches the network. On a failure it prints where the input is: put it
+    in crates/browser/fuzz/regressions/ with the fix, and `cargo test -p
+    browser` replays it. Needs `cargo install cargo-fuzz`.
+
+    Non-zero on a failure."""
+    return run_fuzzers("browser", BROWSER_FUZZ, ["renderer_message"], args.minutes)
 
 
 def cmd_cdp(args: argparse.Namespace) -> int:
@@ -2035,6 +2063,12 @@ def main() -> int:
     ipc.add_argument("what", choices=["fuzz", "miri", "models", "tla", "verus"], help="which check")
     ipc.add_argument(
         "--minutes", type=float, default=5, metavar="M", help="fuzz: how long each fuzzer runs (default 5)"
+    )
+
+    browser = command("browser", cmd_browser, "the browser's side of a tab against any renderer: its fuzzer")
+    browser.add_argument("what", choices=["fuzz"], help="which check")
+    browser.add_argument(
+        "--minutes", type=float, default=5, metavar="M", help="how long the fuzzer runs (default 5)"
     )
 
     mutate = command("mutate", cmd_mutate, "mutation testing: break the code as a spec file lists, check a test fails")

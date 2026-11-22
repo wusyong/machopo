@@ -1,0 +1,28 @@
+# Step 3e, second part: what the browser's fuzzer rests on. A renderer
+# with nothing at its end has its messages handled as a real one's are,
+# and a network told to reach nothing reaches nothing.
+#
+# Not here, and why:
+# - What the harness itself does with an input
+#   (`crates/browser/tests/it/renderer_message_fuzz.rs`) is test code.
+# - A detached renderer said to be gone (`RenderProcessHost::deliver_gone`):
+#   the harness only asks that the browser doesn't panic over it.
+test = ["sh", "-c", "timeout 300 cargo test -q -p net --test it -- load && timeout 600 cargo test -q -p browser --test it -- renderer_message_fuzz"]
+timeout = 1500
+
+[[mutant]]
+name = "a host written as an address is reached whatever the rules say"
+file = "crates/net/src/http.rs"
+from = '''            && self.rules.map(host) == Some(HostMapping::NotFound)'''
+to = '''            && false
+            && self.rules.map(host) == Some(HostMapping::NotFound)'''
+
+[[mutant]]
+name = "what is handed in for a detached renderer is dropped"
+file = "crates/browser/src/render_process_host.rs"
+from = '''        if let Some((host, _)) = &mut self.detached {
+            host.on_message(msg);
+        }'''
+to = '''        if let Some((host, _)) = &mut self.detached {
+            let _ = (host, msg);
+        }'''

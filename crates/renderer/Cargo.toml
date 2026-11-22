@@ -50,3 +50,7 @@ getrandom.workspace = true
 url.workspace = true
 # A frame's registrable domain, for DevTools (`page_agent`).
 site.workspace = true
+# A renderer process told to crash leaves no core dump (`child_process`).
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { workspace = true, features = ["process"] }
+

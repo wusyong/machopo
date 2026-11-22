@@ -68,9 +68,8 @@ impl Handler<Channel> for ChildHandler {
                     let msg = message.decode::<RendererMsg>()?;
                     if matches!(msg, RendererMsg::Crash) {
                         // Here, not on the main thread: a renderer that
-                        // hangs crashes too. Abnormally, as a crash is:
-                        // nothing is unwound or flushed.
-                        std::process::abort();
+                        // hangs crashes too.
+                        crash();
                     }
                     let _ = self.to_main.send(msg);
                 }
@@ -91,6 +90,19 @@ impl Handler<Channel> for ChildHandler {
         let _ = self.to_main.send(RendererMsg::Shutdown);
         self.io.stop();
     }
+}
+
+/// Ends this process abnormally, as a crash does: nothing is unwound or
+/// flushed.
+fn crash() -> ! {
+    // Linux hands a process that aborts to whatever takes its core dumps
+    // first, and the process isn't over (its channel isn't closed) until
+    // that is done with its memory: half a minute and more, measured on a
+    // machine that pipes them to a collector. A crash that was asked for
+    // has nothing in it to look at.
+    #[cfg(target_os = "linux")]
+    let _ = rustix::process::set_dumpable_behavior(rustix::process::DumpableBehavior::NotDumpable);
+    std::process::abort()
 }
 
 /// Runs a renderer in this process until it ends: `channel` is the

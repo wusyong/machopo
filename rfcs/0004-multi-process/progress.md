@@ -700,3 +700,26 @@ branch `0004-linux`，從 `0004` 的 2e-7（`82a4fc7`）分出去。
   - `nightly.yml` 的改動在本機跑不了，也沒有工具檢查它的語法：要在 GitHub 上手動開始一次才知道。
   - 整套 WPT、reftest、wdspec 在多 process 底下（3e-2，用上面那個手動的輸入）；真的視窗（`scenarios --window --process-per-tab`，還沒跑）；Linux 和 Windows。
 
+### 3e-2：整套測試在多 process 底下跑（進行中）
+
+- **真的視窗接 renderer process**（2026-11-22，macOS 26、Apple M4，Metal）：`python3 scripts/test.py scenarios --window --process-per-tab`，72 個情境（每個一個真的視窗，一次一個）全部通過，加上 pipe 開視窗的那個測試，共 85 秒。這是 renderer process 第一次接上 winit、wgpu 和真的 GPU：tile 上 GPU、輸入、捲動、動畫、canvas、分頁、TodoMVC（JS 和 wasm 的）都在裡面。
+  - 確認真的走了多 process：72 份 `machopo.log` 每一份都有「a renderer process ended」那一行（Browser 回收 renderer process 時記的）。看了 `todomvc-app-js` 的截圖，畫面正確。
+  - renderer process 的 log 也在同一份 `machopo.log` 裡（它繼承了 stderr）。
+- **Browser 這一側的 fuzz target**（第 60 條；2026-11-22）：
+  - `browser`：`RendererLauncher::Detached`（另一端沒有東西的 renderer）、`WebContents::deliver_from_renderer` 和 `deliver_renderer_gone`（把 renderer 的訊息、「它不見了」交進來，當場處理完）。
+  - `net`：host 規則把 host 對到「不存在」時，寫成 IP 的網址也在送出前拒絕（`HttpTransport::send`）。原本 IP 的網址不經過解析，規則管不到；fuzz 用 `MAP * ^NOTFOUND` 保證什麼都連不出去要靠它。測試（`crates/net/tests/it/load.rs`）：`localhost`、`127.0.0.1` 和一個名字都被拒絕，server 一個請求都沒收到。
+  - harness：`crates/browser/tests/it/renderer_message_fuzz.rs`（`run`、它自己的測試、重放 `crates/browser/fuzz/regressions/`）；cargo-fuzz 的 target 在 `crates/browser/fuzz/`（自己的 workspace，和 `ipc` 的釘同一個 nightly）；`test.py browser fuzz`，`test.py` 裡跑 fuzzer 的那一段和 `ipc` 共用。
+  - 所有輸入共用一份記憶體裡的 profile（啟動網路那一側是一次 run 大部分的成本）：cookie 和 blob URL 會留給下一個輸入，和它們有關的發現重放時可能要連同前面的輸入。
+  - **跑了一次**（使用者同意之後）：`test.py browser fuzz --minutes 10`，394,876 次，每秒約 657 次，沒有發現。最後一分鐘還在長新的涵蓋（6028 條邊、語料 1438 份），所以 10 分鐘還沒跑到頭；之後改到這幾個檔案時再跑。
+  - mutation test（`mutants-3e2.toml`）2 個，都抓到（IP 的網址不擋、交進來的訊息丟掉）；沒有列的寫在清單開頭（harness 本身是測試的程式；`deliver_gone` 只要求不 panic）。跑完確認檔案還原。
+  - 跑過的檢查（最後一次改程式之後）：`cargo test -p net -p browser`、`cargo clippy` 七個 crate（加上 `net`）、`cargo fmt --check`、`sanity.py` 的 7 項；fuzz 的 crate 在它的 nightly 上 `cargo check` 過。
+- **還沒做的**：整套 WPT、reftest、wdspec 用 `--process-per-tab`（用 `nightly.yml` 手動開始時的輸入，在 CI 上跑；那個輸入本身也還沒驗過）。這一項要使用者在 GitHub 上開始。
+- **CI 的結果到這時才第一次看**（2026-11-22，使用者問了才看的）：`0004` 上每次 push 都有 CI（Ubuntu），從 3a 起我一次都沒看。結果：
+  - 3a（`84d9fd0`）：lint 失敗。就是 3b-2 那時本機才發現、已經修掉的兩處 clippy。
+  - 3b-2（`365507c`）：通過。
+  - 3c（`adb1098`）：`shell` 的 `documents::history_through_the_browser` 失敗一次（`popstate` 和 `hashchange` 之後的兩個布林值順序相反）。那個測試是在測試的 process 裡跑的，3c 沒有改到它走的路；`main` 在這之前的 CI 也有別的 `shell` 測試偶爾失敗（`devtools_css::sheets_coming_and_going_are_told`）。看起來是原本就有的不穩定，沒有查原因，告訴使用者了。
+  - 3d（`1674686`）和 3e-1（`d03a129`）：`about:crash` 的兩個測試在 Linux 上失敗。3d 的是等 30 秒收不到 `RendererGone`；3e-1 的是 process 被 kill（signal 9）而不是自己 abort（signal 6）。兩者是同一件事：在那台機器上 `abort()` 之後 process 沒有馬上結束。原因我判斷是 core dump：Ubuntu 把 core dump 用 pipe 交給收集程式，process 要等它收完才算結束，通道也到那時才斷。macOS 上沒有這件事，所以本機一直是過的。
+  - **修正**：renderer process 被要求當掉時，在 Linux 上先把自己設成不留 core dump（`prctl(PR_SET_DUMPABLE, 0)`，經過 rustix 的 `set_dumpable_behavior`，`renderer` 在 Linux 上多依賴 rustix 的 `process`），再 `abort`。這段只在 Linux 上編，本機編不到：確認了 rustix 的原始碼裡有這個函式、`cargo metadata` 以 Linux 為目標時 `renderer` 拿得到它，剩下的要靠 push 之後的 CI。
+  - 真的當掉的 renderer 在 Linux 上還是要等 core dump 收完 Browser 才知道，記進 `docs/limitations.md`。
+  - 之後的做法：push 之後看 CI，不是只看本機。
+

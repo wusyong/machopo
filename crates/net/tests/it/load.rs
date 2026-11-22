@@ -375,6 +375,25 @@ fn host_mapping_rules() {
     .unwrap_err();
     assert_eq!(unresolved.code, NetErrorCode::NameNotResolved);
 
+    // A rule that maps everything to nothing reaches nothing: a host
+    // written as an address too, which is never resolved.
+    let nowhere = NetworkContext::start(NetworkContextParams {
+        host_resolver_rules: net::HostMappingRules::parse("MAP * ^NOTFOUND").unwrap(),
+        ..Default::default()
+    })
+    .unwrap();
+    let before = server.requests().len();
+    for host in ["localhost", "127.0.0.1", "web-platform.test"] {
+        let refused = fetch(
+            &nowhere,
+            &server.url_for_host(host, "/page"),
+            RequestDestination::Document,
+        )
+        .unwrap_err();
+        assert_eq!(refused.code, NetErrorCode::NameNotResolved, "{host}");
+    }
+    assert_eq!(server.requests().len(), before, "nothing was connected to");
+
     // Without rules, `.test` is the system's, which never resolves it
     // (RFC 6761).
     let plain = NetworkContext::start(NetworkContextParams::default()).unwrap();

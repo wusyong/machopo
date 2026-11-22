@@ -1,0 +1,30 @@
+# browser's fuzzer (cargo-fuzz): a workspace of its own, on the nightly its
+# rust-toolchain.toml pins. `python3 scripts/test.py browser fuzz` runs it.
+[package]
+name = "browser-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+browser = { path = ".." }
+# What the checks name besides `browser`
+# (`tests/it/renderer_message_fuzz.rs`).
+base = { path = "../../base" }
+gfx = { path = "../../gfx" }
+ipc = { path = "../../ipc" }
+protocol = { path = "../../protocol" }
+crossbeam-channel = "0.5"
+
+[[bin]]
+name = "renderer_message"
+path = "fuzz_targets/renderer_message.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

@@ -53,6 +53,9 @@ impl RawResponse {
 #[derive(Clone)]
 pub(crate) struct HttpTransport {
     client: Result<reqwest::Client, String>,
+    /// The rules the client's resolver has, for the hosts it is never
+    /// asked about.
+    rules: HostMappingRules,
 }
 
 impl HttpTransport {
@@ -93,7 +96,10 @@ impl HttpTransport {
             tracing::error!(error = %e, "can't set up the HTTP client");
             e.to_string()
         });
-        Self { client }
+        Self {
+            client,
+            rules: params.host_resolver_rules.clone(),
+        }
     }
 
     /// A request of `url` by `method` (a token) with `headers` (script's),
@@ -113,6 +119,18 @@ impl HttpTransport {
             .client
             .as_ref()
             .map_err(|e| NetError::new(NetErrorCode::Failed, e.clone()))?;
+        // A host written as an address is never resolved, so the resolver's
+        // rules don't see it: one they map to nothing is refused here, as a
+        // name is there (Chromium's rules take either). With `MAP *
+        // ^NOTFOUND` nothing is connected to at all.
+        if let Some(host) = url.host_str()
+            && self.rules.map(host) == Some(HostMapping::NotFound)
+        {
+            return Err(NetError::new(
+                NetErrorCode::NameNotResolved,
+                format!("{host}: not found (host mapping rules)"),
+            ));
+        }
         let method = reqwest::Method::from_bytes(method.as_bytes())
             .map_err(|e| NetError::new(NetErrorCode::Failed, format!("{method}: {e}")))?;
         let empty_body = matches!(method, reqwest::Method::POST | reqwest::Method::PUT);

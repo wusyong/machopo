@@ -45,6 +45,12 @@ pub enum RendererLauncher {
     /// takes its end with `ipc::platform::inherited` and runs
     /// `renderer::run_child_process`, with the engines it picks itself).
     Process(Arc<dyn Fn() -> Command + Send + Sync>),
+    /// With nothing at the other end, for tests and fuzzing: what the
+    /// browser sends the renderer waits in queues nobody reads, and the
+    /// renderer's messages are whatever the caller hands in
+    /// (`WebContents::deliver_from_renderer`), each handled before the
+    /// call returns, by the same object that handles a real renderer's.
+    Detached,
 }
 
 impl std::fmt::Debug for RendererLauncher {
@@ -52,6 +58,7 @@ impl std::fmt::Debug for RendererLauncher {
         f.write_str(match self {
             Self::InProcess(_) => "RendererLauncher::InProcess",
             Self::Process(_) => "RendererLauncher::Process",
+            Self::Detached => "RendererLauncher::Detached",
         })
     }
 }
@@ -138,6 +145,9 @@ pub struct RenderProcessHost {
     child: Option<(Child, ChannelLink)>,
     /// How the process ended, once it has.
     exit: Option<std::process::ExitStatus>,
+    /// A renderer with nothing at the other end: what handles the messages
+    /// handed in for it, and the queues the browser's messages wait in.
+    detached: Option<(IoThreadHost, renderer::RendererReceiver)>,
     /// Its number, which its blob URLs are registered under.
     renderer_id: u64,
     /// The IO thread passes the renderer's messages on: not once it was
@@ -315,6 +325,7 @@ impl RenderProcessHost {
                 worker_blob_urls: HashMap::new(),
             }
         };
+        let mut detached = None;
         let (to_renderer, to_compositor, renderer_thread, io_thread, child) = match launcher {
             RendererLauncher::InProcess(script_engine) => {
                 let (to_renderer, to_compositor, from_browser) = renderer::channel();
@@ -373,6 +384,11 @@ impl RenderProcessHost {
                 let to_compositor = CompositorSender::over(link.clone());
                 (to_renderer, to_compositor, None, None, Some((child, link)))
             }
+            RendererLauncher::Detached => {
+                let (to_renderer, to_compositor, from_browser) = renderer::channel();
+                detached = Some((host(to_renderer.clone()), from_browser));
+                (to_renderer, to_compositor, None, None, None)
+            }
         };
         let context_lost = gpu.as_ref().map(|gpu| {
             let forwarder: Arc<dyn ContextLostObserver> =
@@ -389,6 +405,7 @@ impl RenderProcessHost {
             io_thread,
             child,
             exit: None,
+            detached,
             renderer_id,
             forwarding,
             loaders,
@@ -420,6 +437,24 @@ impl RenderProcessHost {
     /// another thread.
     pub(crate) fn sender(&self) -> RendererSender {
         self.to_renderer.clone()
+    }
+
+    /// A message from a renderer with nothing at the other end
+    /// ([`RendererLauncher::Detached`]), handled as one off a channel is,
+    /// before this returns. Nothing, for any other renderer.
+    pub(crate) fn deliver(&mut self, msg: RendererHostMsg) {
+        if let Some((host, _)) = &mut self.detached {
+            host.on_message(msg);
+        }
+    }
+
+    /// The channel of a renderer with nothing at the other end is over,
+    /// as when a renderer goes: what it had is let go, and the tab is
+    /// told (`RendererGone`).
+    pub(crate) fn deliver_gone(&mut self) {
+        if let Some((host, _)) = self.detached.take() {
+            host.on_channel_closed();
+        }
     }
 
     /// The renderer's process, if it has one of its own.

@@ -778,6 +778,20 @@ impl WebContents {
 
     /// Whether the renderer has gone: its sad tab shows until the next
     /// navigation.
+    /// Hands the tab's renderer's side a message, for a renderer with
+    /// nothing at the other end (`RendererLauncher::Detached`): it goes
+    /// the way a renderer's does, through the checks made where its
+    /// channel is read, and what passes comes out as the tab's events do.
+    pub fn deliver_from_renderer(&mut self, msg: RendererHostMsg) {
+        self.process.deliver(msg);
+    }
+
+    /// The renderer with nothing at the other end goes, as one whose
+    /// channel is over.
+    pub fn deliver_renderer_gone(&mut self) {
+        self.process.deliver_gone();
+    }
+
     /// The process the tab's renderer is, if it is one of its own
     /// (Chromium's `RenderProcessHost::GetProcess`).
     pub fn renderer_pid(&self) -> Option<u32> {
