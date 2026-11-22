@@ -166,8 +166,10 @@ fn the_arguments_errors() {
          log.push(error(() => observer.observe(d, {box: 'padding-box'})));
          log.push(error(() => observer.observe(d, 'content-box')));
          log.push(error(() => observer.unobserve(document)));
-         log.push(error(() => observer.observe(document.createElementNS(
-             'http://www.w3.org/2000/svg', 'rect'))));",
+         // Kept in a variable: only the element keeps its observation, so
+         // one nothing holds goes with the next collection.
+         var rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+         log.push(error(() => observer.observe(rect)));",
     );
     assert_eq!(
         page.log(),
