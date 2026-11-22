@@ -11,7 +11,7 @@
 
 **這是論證，不是證明。** 機械化證明過的只有兩小塊算術（池子選哪一塊、管道的額度，Verus）；協定用小的模型窮舉過（TLA+、loom）；其餘靠 fuzz、Miri、跨 process 的測試、mutation test 和人工審查。kernel 的行為證明不了，寫成假設，每一條有測試在那個平台上守著。
 
-**分兩層是為了能驗證**：核心（`src/core/`）不做系統呼叫、不分平台（`python3 scripts/sanity.py deps` 檢查），所以能整個放進 Miri、fuzzer 和 loom；平台層（`src/platform/`）只做四件事（搬位元組和 handle、等、建和 map 共用記憶體、啟動時交接一端，Windows 上啟動時也把 child 放進 job），裡面沒有對訊息內容的判斷。
+**分兩層是為了能驗證**：核心（`src/core/`）不做系統呼叫、不分平台（`python3 scripts/sanity.py deps` 檢查），所以能整個放進 Miri、fuzzer 和 loom；平台層（`src/platform/`）只做四件事（搬位元組和 handle、等、建和 map 共用記憶體、啟動時交接一端，Windows 上啟動時也把 child 放進 job；macOS 和 Linux 上另有一個當場結束自己這個 process 的函式），裡面沒有對訊息內容的判斷。
 
 ## 信任誰
 
@@ -113,6 +113,12 @@ macOS 那一層的測試在 `src/platform/macos/` 各檔的單元測試和 `crat
 | `platform/linux/channel.rs` 的 `spawn`（`pre_exec` 和裡面的 `BorrowedFd::borrow_raw`） | closure 在 child 裡、fork 和 exec 之間跑，那裡只能做 async-signal-safe 的事（fork 的當下別的 thread 可能拿著任何鎖）：它只做一次 `fcntl` 的系統呼叫，不配置記憶體（錯誤只帶一個號碼）。那個號碼在 child 裡是開著的：`theirs` 在 host 活到 `spawn` 回來之後，fork 時還在。借用只到那一次呼叫結束 |
 | `platform/linux/channel.rs` 的 `inherited`（`BorrowedFd::borrow_raw`、`OwnedFd::from_raw_fd`） | 先借來問它是什麼（號碼沒開著的話兩個呼叫都是錯誤）；確認是 Unix stream socket、不是 0 到 2，才收下。號碼是 `spawn` 寫的、替這個 process 留著開的，這個 process 裡沒有別人拿過它，而且只收一次（`TAKEN`），所以只有這個值會關它。環境變數被改成指向別的 Unix stream socket 時，收下的是那一條：做得到這件事的人本來就決定這個 process 怎麼啟動 |
 | `platform/linux/memory.rs` 的 `Mapping`（`Memory`） | 裡面是 memmap2 的 `MmapRaw`：從 `map` 到 drop 都 map 著、不搬動、可讀；放進 `Pool` 的是 map 成可寫的（`create(_, false)` 的那一個、`map(_, _, true)` 的）。範圍一直在檔案裡面：`map` 只接受封住「不能縮短」的檔案，而且在看到 seal 之後才量長度；`create` 自己建的在 map 之前就封了 |
+
+### macOS 和 Linux 共用的（`platform/unix.rs`）
+
+| 地方 | 為什麼安全 |
+| --- | --- |
+| `platform/unix.rs` 的 `terminate_current_process_immediately`（`libc::_exit`） | `_exit` 接受任何代碼、不回來，不讀也不寫這個 process 的記憶體：它就是結束 process 的系統呼叫，kernel 停掉每一條 thread、關掉 process 開著的東西。呼叫之後這個 process 沒有程式再跑，所以沒有東西會看到沒被 drop 的值。不跑 exit handler 和 destructor 正是用它的理由（其他 thread 還在跑），不是安全上的問題：留下的只是沒寫出去的緩衝區 |
 
 ### Windows（`platform/windows/`）
 

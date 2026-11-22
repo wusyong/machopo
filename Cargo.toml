@@ -72,6 +72,10 @@ serde_json = "1"
 # messages and the descriptors sent with them (`net`), memfds and their
 # seals (`fs`), epoll and eventfd (`event`).
 rustix = { version = "1", default-features = false, features = ["std", "time", "net", "fs", "event"] }
+# `_exit`, for a child process whose host is gone (`ipc::platform`'s
+# `terminate_current_process_immediately`): rustix has it for Linux alone.
+# In the tree already, through rustix and nearly everything else.
+libc = "0.2"
 # Mapping a memfd (`ipc`'s shared memory on Linux) without `unsafe` of our
 # own; in the tree already, through parley's fontique.
 memmap2 = "0.9"

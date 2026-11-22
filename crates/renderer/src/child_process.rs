@@ -38,7 +38,8 @@ pub struct ChildInit {
 /// How a renderer process ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChildExit {
-    /// Its main thread ended as it was told to, or its browser went.
+    /// Its main thread ended as it was told to, or its browser went
+    /// (where the process isn't ended there and then for it: Windows).
     Ended,
     /// It could not start: no IO thread, or no threads of the renderer's.
     NotStarted,
@@ -86,6 +87,17 @@ impl Handler<Channel> for ChildHandler {
         // No browser: nothing to render for. Whoever waits for the first
         // message hears there is none, and a renderer that runs ends.
         tracing::debug!(?gone, "the channel to the browser is over");
+        // Over from the browser's side, the process ends here (Chromium's
+        // `ChildThreadImpl`, which ends its process from the IO thread
+        // when the channel has an error): the main thread may be in a
+        // script that never returns, and would never read that it is to
+        // end. Windows needs none of it: the browser's job ends the
+        // process there. A channel this process closed itself is the
+        // renderer ending as it was told to, which goes on as it was.
+        #[cfg(unix)]
+        if gone != Gone::Closed {
+            ipc::platform::terminate_current_process_immediately(0);
+        }
         self.init = None;
         let _ = self.to_main.send(RendererMsg::Shutdown);
         self.io.stop();

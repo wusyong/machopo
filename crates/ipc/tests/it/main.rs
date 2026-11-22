@@ -28,5 +28,7 @@ mod region_fuzz;
 mod rendezvous;
 mod shared_buffer;
 mod time_ticks;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod unix_exit;
 #[cfg(windows)]
 mod windows_channel;

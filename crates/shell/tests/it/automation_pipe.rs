@@ -2705,27 +2705,32 @@ fn a_second_machopo_on_a_profiles_folder_doesnt_start() {
     assert!(first.end().success());
 }
 
-/// A browser killed takes its renderers with it, one that would never
-/// read that it is gone too: nothing is left running, or holding open
-/// the output it inherited.
-#[cfg(windows)]
-#[test]
-fn a_killed_browsers_hung_renderer_goes_with_it() {
+/// Starts a machopo with a tab for each of `scripts`, in a renderer
+/// process of its own that is left running its script (or doing nothing),
+/// and kills the machopo: whether every renderer went with it. They had
+/// its output too, so it is at its end only once they are all gone.
+fn renderers_go_with_a_killed_browser(scripts: &[Option<&str>]) {
     let server = server(&[("/", Route::ok("text/html", "<!DOCTYPE html>page"))]);
     // Whatever the run asks for: this is about the processes.
     let mut browser = Browser::start_with(&["--process-per-tab"]);
-    let session = browser.attach();
-    browser.navigate(&session, &server.url("/"));
-    // Busy for far longer than the test waits; should the test fail,
-    // what it left behind stops by itself.
-    browser.send(
-        Some(&session),
-        "Machopo.executeScript",
-        json!({
-            "script": "const end = Date.now() + 30000; while (Date.now() < end) {}",
-            "async": false,
-        }),
-    );
+    for (tab, script) in scripts.iter().enumerate() {
+        let session = if tab == 0 {
+            browser.attach()
+        } else {
+            let created = browser
+                .call(None, "Target.createTarget", json!({ "url": "about:blank" }))
+                .unwrap();
+            browser.attach_to(created["targetId"].as_str().unwrap())
+        };
+        browser.navigate(&session, &server.url("/"));
+        if let Some(script) = script {
+            browser.send(
+                Some(&session),
+                "Machopo.executeScript",
+                json!({ "script": script, "async": false }),
+            );
+        }
+    }
     std::thread::sleep(Duration::from_secs(1));
     browser.child.kill().unwrap();
     browser.child.wait().unwrap();
@@ -2734,11 +2739,45 @@ fn a_killed_browsers_hung_renderer_goes_with_it() {
         let left = deadline.saturating_duration_since(std::time::Instant::now());
         match browser.messages.recv_timeout(left) {
             Ok(_) => {}
-            // Its output is at its end: the renderer had it too.
+            // Its output is at its end: the renderers had it too.
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
                 panic!("a renderer outlived its browser")
             }
         }
     }
+}
+
+/// Busy for far longer than a test waits; should the test fail, what it
+/// left behind stops by itself.
+const HUNG: &str = "const end = Date.now() + 30000; while (Date.now() < end) {}";
+
+/// A browser killed takes its renderers with it, one that would never
+/// read that it is gone too: nothing is left running, or holding open
+/// the output it inherited.
+#[test]
+fn a_killed_browsers_hung_renderer_goes_with_it() {
+    renderers_go_with_a_killed_browser(&[Some(HUNG)]);
+}
+
+/// One with nothing to do goes as well: it is the same end, not one of
+/// its own that a renderer with time for it takes.
+#[test]
+fn a_killed_browsers_idle_renderer_goes_with_it() {
+    renderers_go_with_a_killed_browser(&[None]);
+}
+
+/// One whose script keeps the collector busy: the process ends with
+/// threads of the engine's at work.
+#[test]
+fn a_killed_browsers_allocating_renderer_goes_with_it() {
+    let allocating = "const end = Date.now() + 30000; let kept = []; \
+        while (Date.now() < end) { kept = [kept.length, new Array(4096).fill(kept)]; }";
+    renderers_go_with_a_killed_browser(&[Some(allocating)]);
+}
+
+/// Each tab's renderer ends for itself: none waits for another.
+#[test]
+fn a_killed_browsers_hung_renderers_all_go_with_it() {
+    renderers_go_with_a_killed_browser(&[Some(HUNG), Some(HUNG)]);
 }

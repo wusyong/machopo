@@ -1,0 +1,37 @@
+# After the RFC was done: on macOS and Linux a renderer process ends
+# itself, from its IO thread, when its channel is over from the browser's
+# side (`renderer`'s `ChildHandler::gone`, and `ipc::platform`'s
+# `terminate_current_process_immediately`), so one whose main thread is
+# stuck doesn't outlive its browser. A channel the renderer closed itself
+# ends nothing: that is the renderer ending as it was told to.
+#
+# Not listed: a channel over for what the browser sent, or for a queue
+# the browser stopped reading (`Gone::BadMessage`, `Gone::QueueFull`),
+# ending the process as a browser gone does. No test has a browser that
+# does either to a renderer that is stuck (`docs/test-gaps.md`).
+test = ["sh", "-c", "timeout 300 cargo test -q -p ipc --test it unix_exit && timeout 900 cargo test -q -p shell --test it -- a_killed_browsers renderer_process trace::"]
+timeout = 1800
+
+[[mutant]]
+name = "a renderer whose browser is gone only asks its main thread to end"
+file = "crates/renderer/src/child_process.rs"
+from = '''        if gone != Gone::Closed {'''
+to = '''        if false && gone != Gone::Closed {'''
+
+[[mutant]]
+name = "a renderer that closed its own channel ends its process there too"
+file = "crates/renderer/src/child_process.rs"
+from = '''        if gone != Gone::Closed {'''
+to = '''        if true || gone != Gone::Closed {'''
+
+[[mutant]]
+name = "the process exits as processes do"
+file = "crates/ipc/src/platform/unix.rs"
+from = '''    unsafe { libc::_exit(status) }'''
+to = '''    std::process::exit(status)'''
+
+[[mutant]]
+name = "the process ends with a status of its own"
+file = "crates/ipc/src/platform/unix.rs"
+from = '''    unsafe { libc::_exit(status) }'''
+to = '''    unsafe { libc::_exit(status & 0) }'''

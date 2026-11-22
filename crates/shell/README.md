@@ -81,7 +81,7 @@ UI 的深淺色跟著系統，系統切換時跟著換；`--ui-theme=light` 或 
 `machopo --type=renderer` 是 Browser 啟動自己的 renderer 用的（Chromium 的 `--type=renderer`），不是給人下的：只在它是第一個參數時才算，這樣 process 在讀別的東西之前就知道自己是什麼。這時不解析其他參數、不開視窗、不讀 profile：`shell::renderer_main` 用 `ipc::platform::inherited` 拿到 Browser 留給它的那一端，交給 `browser::run_child_process`（`renderer` 的），script engine 是這個執行檔的 `SCRIPT_ENGINES`。其餘的設定都從通道的第一則訊息來。
 
 - 手動執行（沒有 Browser 留給它的一端）：在 stderr 說明、以 2 結束。
-- 結束的代碼：0 是照 Browser 說的結束，或 Browser 不在了（Windows 上也包括 main thread 卡住、由 Browser 的 job 結束的）；3 是啟動不了；4 是 renderer 的 main thread panic。
+- 結束的代碼：0 是照 Browser 說的結束，或 Browser 不在了（main thread 卡住的也是：macOS 和 Linux 上由它的 IO thread 當場結束 process，Windows 上由 Browser 的 job 結束）；3 是啟動不了；4 是 renderer 的 main thread panic。
 - log 照 `RUST_LOG`，寫到 stderr；trace（`MACHOPO_TRACE`）寫到自己的檔：Browser 的那個檔名後面加這個 process 的 pid（一個 trace 是一個 process 的，兩個 process 寫同一個檔會壞）。兩邊的時間是同一個時鐘。
 - `machopo`（視窗和 `--automation-pipe`）預設就啟動它：每個分頁的 renderer 是一個這樣的 process（`shell::renderer_launcher`，用的是正在跑的這個執行檔；`--process-per-tab` 是同一件事說出來）。`--single-process` 時 renderer 是 machopo 自己的 thread。兩個一起給是錯誤。測試在 `crates/shell/tests/it/renderer_process.rs`；`crates/shell/tests/it/automation_pipe.rs` 的測試和 `tests/scenarios/` 在視窗裡跑的情境在環境變數 `MACHOPO_SINGLE_PROCESS` 設了的時候加上 `--single-process`（`test.py` 的 `--single-process`）。
 

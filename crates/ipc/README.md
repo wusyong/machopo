@@ -319,7 +319,8 @@ ipc::platform::child_gone(child.id());
 let channel = ipc::platform::inherited()?;
 ```
 
-- `spawn` 啟動 child，回來 child 和 host 這一端。child 那一端怎麼過去是平台的事：macOS 上 child 繼承不了 port，所以留在這個 process 的 rendezvous server（`Server::global()`）等它來拿；Linux 上 child 繼承那一端的 fd（下面的 `platform::linux::channel`）。`spawn` 用過的 `Command` 不要再拿來啟動別的。Windows 上 child 也不會活得比這個 process 久（下面的 `platform::windows::channel`）；另外兩個平台上 child 要自己聽到通道斷了而結束。
+- `spawn` 啟動 child，回來 child 和 host 這一端。child 那一端怎麼過去是平台的事：macOS 上 child 繼承不了 port，所以留在這個 process 的 rendezvous server（`Server::global()`）等它來拿；Linux 上 child 繼承那一端的 fd（下面的 `platform::linux::channel`）。`spawn` 用過的 `Command` 不要再拿來啟動別的。Windows 上 child 也不會活得比這個 process 久（下面的 `platform::windows::channel`）；另外兩個平台上 child 要自己聽到通道斷了而結束（下一條）。
+- `terminate_current_process_immediately`（只有 macOS 和 Linux；`platform/unix.rs`；Chromium 的 `base::Process::TerminateCurrentProcessImmediately`）：當場結束這個 process（`_exit`），給 host 不在了的 child 從它的 IO thread 呼叫。不 unwind、不跑 exit handler、不 flush 緩衝區，所以其他 thread 在做什麼都沒關係（卡在不會結束的迴圈裡的也一樣）；`std::process::exit` 會在其他 thread 還在跑的時候跑 exit handler，不能用在這裡。child 自己關掉通道時（`Gone::Closed`）不要呼叫它：那是 child 正常收尾的路。
 - `child_gone`：child 還沒拿它那一端就結束時，macOS 的 kernel 不會告訴 host（那一端還替它留著），要 host 自己說；說了之後 host 這一端就收到「對方不在了」。拿過的 child、kernel 自己會說的平台（Linux：host 在 child 啟動之後就不拿著它那一端），它什麼都不做。
 - **平台要自己守的一條**（`Platform` 的說明）：交給端點的 handle 一定是 kernel 為這則訊息搬進來的，不能是對方寫的數值。handle 以數值走在位元組裡的平台（送的一方把它複製進收的一方），對方不能附 handle 時，那個數值不看、一個 handle 都不交上去，說自己有 handle 的訊息由核心拒絕（壞訊息）：數值指的是這個 process 自己的 handle，而且是對方挑的。
 
@@ -556,6 +557,8 @@ python3 scripts/test.py ipc tla      # crates/ipc/tla/ 的三個 TLA+ 模型（T
 `tests/it/process_channel.rs`（兩個真的 process 之間，不分平台：只用 `ipc::platform` 的 `spawn`、`inherited`、`child_gone` 和 `Platform` 的函式，每個平台的那一層都要原樣通過，現在是 macOS、Linux 和 Windows；host 是測試裡真的端點，child 是測試把自己再執行一次；自己動手寫位元組的 child 先等它那一端、再寫，因為有的平台在有 thread 服務之前不寫）：訊息來回；host 的大資料走它建的 region、child 的在沒有 region 時放在訊息裡、給了 region 之後走 region；3 MiB 的字串來回；700 KiB 的管道；child 自己關、host 關、child 直接結束、child 被 kill，另一端都知道，理由對；child 還沒拿它那一端就結束，host 說了 `child_gone` 之後收到對方不在了；child 先睡 1.5 秒不讀，host 連送 3000 則（超過傳輸放得下的），全部照順序回來；child 自己附 handle、送不是訊息的位元組，通道都關掉、什麼都沒交給上層；child 把 host 送的 region map 成可寫會失敗；一條 IO thread（一個迴圈）同時服務四個 child：各自的訊息照順序、大資料各走各的 region，kill 掉一個只有那一條結束，迴圈停下來時其餘的都關掉、child 各自結束。
 
 `tests/it/windows_channel.rs`（只有 Windows 的通道有的：child 怎麼拿到它那一端、不比 host 活得久；測試把自己再執行一次當成 child；另有一個平常不跑的量測 `measure`，在真的通道上量小訊息、連續送、四個 child、放在訊息裡和走 region 的大資料）：child 拿到一次、環境裡沒有那個變數了、第二次拿不到；`spawn` 之後 `Command` 不再帶那個變數，用它再啟動的 child 拿不到；變數是空的、0、不是數字、-1、太大、沒有這個 handle 的數值、沒設，都拿不到；child 啟動一個活得比它久的 child 之後結束，host 兩秒內被告知對方不在了（孫 process 沒有繼承到那一端）；host 之後另外啟動的 process 活著時 child 被 kill，host 兩秒內被告知；八條 thread 同時啟動八個 child，逐一 kill 都馬上被告知（沒有互相繼承）；host 被 kill 時，它的兩個不看通道的 child 都跟著結束（host 活著時不會），它不經過 `spawn` 啟動的不受影響。
+
+`tests/it/unix_exit.rs`（只有 macOS 和 Linux；測試把自己再執行一次當成 child）：child 的一條 thread 卡在迴圈裡、stdout 的緩衝區裡還有沒寫出去的字時，另一條 thread 呼叫 `terminate_current_process_immediately`：process 以給的代碼結束，緩衝區裡的沒有被寫出去。
 
 `src/platform/linux/channel.rs` 的單元測試（只在 Linux；同一個 process 裡的兩端，各有自己的 waiter）：一端寫的另一端照順序讀到，比一次讀的量長的分好幾次、位元組一樣；沒有位元組的寫入不帶走 handle；handle 跟著它那一則到、寫的一端的關掉了、收到的帶 close-on-exec、map 得到同一塊記憶體；16 個 handle 照順序到；17 個不送；對方一次送 17 個和 64 個都當成對方不在了；「可寫」只在寫入被擋之後說一次，沒被擋不說，有 waiter 之前被擋的加入之後說，和位元組同時來時兩個都說；對方不在了排在它送的東西後面，之後的寫入被拒絕（process 沒有被 signal 結束）；shut 的一端對方知道、兩邊都寫不進去、不能再被等；一個 waiter 分得出三條通道，移掉的不再說、它被擋的寫入不動原本的 waiter、可以換一個 waiter；移掉的 socket 真的離開 epoll（看 `/proc/self/fdinfo`）；一條通道只有一個 waiter；打斷叫五次只說一次、從別的 thread 打斷正在等的；waiter 先結束，通道的寫入照常被擋。整個單元測試的 binary 重複跑 3000 次都過。
 

@@ -218,7 +218,7 @@ sad tab、重新載入和 `about:crash` 原本就有，由 renderer 的 thread �
 - **通道斷了**（各平台的訊號見「`ipc` crate」的表）：IO thread 報告 `RendererGone`，這個 renderer 的 region 和表都放掉，Browser 回收那個 process（等不到就 kill）。之後照原本的路：分頁顯示 sad tab，重新載入時啟動新的 renderer process。
 - **壞掉的訊息**（解不出來的、`ipc` 判定的、Browser 的檢查判定的）、對方不讀讓佇列滿了：通道關掉，分頁照壞訊息的路結束 renderer，Browser kill 那個 process。
 - **`about:crash`**：Browser 送一則「當掉」，renderer process 自己 `abort`；Browser 等它結束（最多 5 秒，不然 kill），回來時已經沒有了，所以緊接著的導覽不會撞上正在死的 renderer。Linux 上先把自己設成不留 core dump：core dump 交給收集程式的機器上，process 要等它收完才算結束。
-- **Browser 不在了**：renderer 的通道斷了，它自己結束。Windows 上另外由 job object 保證：main thread 卡住、自己結束不了的也跟著 Browser 結束（第 71 條）。
+- **Browser 不在了**：renderer process 跟著結束，main thread 卡在 script 裡的也是。macOS 和 Linux 上，它的 IO thread 聽到通道從 Browser 那一側斷了就當場結束 process（`_exit(0)`，不經過 main thread、不收尾；第 72 條）；Windows 上由 job object 保證（第 71 條）。renderer 自己關的通道（照 Browser 說的結束）照常收尾。
 - **沒有的**：偵測「不回應」的機制（Chromium 的 hang monitor）。卡住的 renderer 要有人重新載入或關掉分頁，Browser 才結束它（`docs/limitations.md`）。
 
 ### 單一 process 的模式
@@ -655,9 +655,18 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
     - 對照 Chromium：所有平台預設多 process，`--single-process` 只給除錯用。
 71. **Windows 上 renderer process 用 job object 跟著 Browser 結束**（2026-11-22，做完之後在 Windows 上驗證時發現的；使用者同意用 job object）：`ipc::platform::spawn` 把 child 放進一個 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 的 job，job 唯一的 handle 是 Browser 的，一直不關、不被繼承。
     - **為什麼**：通道斷了時 renderer 的 IO thread 只請 main thread 結束，main thread 卡在 script 裡時永遠讀不到：Browser 被 kill 或當掉之後 renderer 留著（重現 30 次留下 30 次）。`machopodriver` 關有卡住的分頁的 session 時也會走到。
-    - **不選只讓 renderer 的 IO thread 自己結束 process**：要 child 的那條 thread 還活著、還聽得到；job 不需要 child 配合，renderer 和 driver 也都不用改。macOS 和 Linux 沒有 job，要用這個做法，還沒做（`docs/limitations.md`）。
+    - **不選只讓 renderer 的 IO thread 自己結束 process**：要 child 的那條 thread 還活著、還聽得到；job 不需要 child 配合，renderer 和 driver 也都不用改。macOS 和 Linux 沒有 job，用的是這個做法（第 72 條）。
     - **實作時實測之後加的兩點**：正在結束的 child 會被 job 拒絕、但還要一下子（最久 16 ms）才算結束，所以被拒絕時最多等 1 秒，確定它在結束就不算錯；Browser 在第一個 renderer 之後被別人放進另一個 job 時，原本的 job 收不了新的 child，所以再建一個、舊的留著（只有一個 job 的話，從那時起開不了新分頁）。
     - 對照 Chromium：Windows 上也靠 job（`child_thread_impl.cc` 寫明因此不需要 `TerminateSelfOnDisconnect`；不進 sandbox 的 child 是 `sandbox_win.cc` 的 `CreateUnsandboxedJob`：整個 process 一個、一直不關，放不進去是啟動失敗）；POSIX 上 IO thread 在通道斷了時直接結束 process。
+72. **macOS 和 Linux 上，通道從 Browser 那一側斷了時 renderer 的 IO thread 當場 `_exit(0)`**（2026-11-22，第 71 條留下的同一個 bug；使用者選的，也是我的建議）：`renderer` 的 `ChildHandler::gone` 收到 `Gone::Closed` 以外的原因（`PeerClosed`、`BadMessage`、`QueueFull`）就呼叫 `ipc::platform::terminate_current_process_immediately(0)`（`ipc` 的 `platform/unix.rs`，`libc::_exit`），不再只把 `Shutdown` 放進 main thread 的佇列。
+    - **重現**（Linux）：把 `a_killed_browsers_hung_renderer_goes_with_it` 的 `#[cfg(windows)]` 拿掉就失敗，Browser 被 kill 之後 `machopo --type=renderer` 還在跑。
+    - **`Gone::Closed` 不走這條路**：renderer 收尾時自己 `link.close()`、`io_handle.stop()`，IO loop 對每個 handler 呼叫 `gone(Closed)`；在那裡結束 process 會截斷正常的收尾（trace 檔寫不完）。正常關閉不會先看到 `PeerClosed`：Browser 是先送 `Shutdown`、等 child 結束（最多 5 秒，不然 kill），之後才關它那一端（`browser` 的 `render_process_host.rs` 的 `end_child`）。
+    - **不選先請 main thread 結束、等 1 到 2 秒再 `_exit`**：閒著的 renderer 能正常收尾、trace 完整，但多一條 thread 和一個時限，卡住的多留那一段、繼續握著 stdout；Browser 都不在了，沒有人等這個收尾。代價是 Browser 被 kill 或當掉時 renderer 的 trace 最後一段會掉（`docs/limitations.md`）。
+    - **不選 `std::process::exit`**：它在其他 thread 還在跑的時候跑 exit handler 和 flush。**不選對自己送 `SIGKILL`**（rustix 有安全的 API，不用新的 `unsafe`）：結束的狀態變成被 signal 結束，不是 0。**不選 Linux 的 `PR_SET_PDEATHSIG`**：macOS 沒有對應的東西，而且它跟的是啟動 child 的那條 thread，不是 process。
+    - **`ipc` 因此直接依賴 `libc`**（只有 unix；本來就在依賴樹裡）：rustix 的 `exit_group` 只有 Linux 的 raw backend 有。`_exit` 是 `unsafe` 的 extern 函式，所以包在 `ipc` 裡，論證在 `crates/ipc/soundness.md`。
+    - **Windows 不變**：靠 job（第 71 條），`gone` 在那裡照原本的路。
+    - **只在 Linux 上跑過**（Fedora，kernel 7.3.3）：macOS 是同一段程式，寫的時候沒有機器可以跑（`docs/test-gaps.md`）。
+    - 對照 Chromium：`content/child/child_thread_impl.cc` 在 POSIX 上由 IO thread 在通道斷了時呼叫 `base::Process::TerminateCurrentProcessImmediately(0)`，理由是卡在迴圈裡的 renderer 會留下來吃 CPU。這一條是照記憶寫的，寫的時候沒有對過 Chromium 現在的原始碼。
 
 ## 待決定
 

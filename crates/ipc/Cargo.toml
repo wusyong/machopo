@@ -37,6 +37,8 @@ shuttle = "0.9"
 
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true
+# `_exit`: how a child whose host is gone ends.
+libc.workspace = true
 
 # Mapping a memfd: the channel's shared memory.
 [target.'cfg(target_os = "linux")'.dependencies]

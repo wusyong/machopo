@@ -2308,6 +2308,7 @@ version = "0.0.1"
 dependencies = [
  "base",
  "bytes",
+ "libc",
  "loom",
  "mach2",
  "memmap2",
