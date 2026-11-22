@@ -981,3 +981,12 @@ branch `0004-linux`，從 `0004` 的 2e-7（`82a4fc7`）分出去。
 - **mutation test**（`mutants-exit.toml`）4 個，都抓到：不結束 process（只請 main thread 結束）、自己關通道時也結束、改用 `std::process::exit`、不照給的代碼結束。跑完確認檔案已還原。沒有列的：`BadMessage`、`QueueFull` 也結束 process 的那一半沒有測試（`docs/test-gaps.md`）。
 - **修改之後的檢查**：`cargo test --workspace` 4636 個過、0 個失敗（那個不穩定的這次過了）；`cargo fmt --check`、clippy、`sanity.py` 的 7 項過。
 - **沒有做的**：macOS 上沒有編過、跑過；訊息裡的另一條重現的路（`machopodriver` 開兩個卡住的分頁再 DELETE session）沒有跑，它走到的是同一個 `gone`；重複跑新的測試找不穩定也沒有做。
+
+### 做完之後：macOS 上確認 renderer 跟著 Browser 結束（2026-11-22，macOS 26、Apple M4）
+
+- **為什麼做**：上面兩段的修正（Windows 的 job、macOS 和 Linux 上 renderer 的 IO thread 自己結束 process）是在 Windows 和 Linux 的機器上做的，macOS 上沒有編過、跑過。
+- **修正之前，macOS 上重現得出來**（`baf8881`；一個自己寫的腳本經過 pipe 開一頁、載入後進 `for(;;){}`，各 4 次）：Browser 被 kill 時，卡住的 renderer 12 秒後 4 次都還在、吃滿一顆核；閒置的 0.2 秒內結束。Browser 正常結束（關掉 pipe）時卡住的 renderer 不會留下，但 Browser 花 5.2 秒才結束（它等那個 renderer 5 秒才 kill）。
+- **修正之後**（`2037f19`）：同一個腳本，Browser 被 kill 時卡住的 renderer 4 次都在 0.2 秒內結束。
+- **跑過的**：`cargo test -p ipc`（單元 94、整合 99，含新的 `unix_exit`）、`-p renderer`、`-p browser`、`-p shell`（整合 639 個，含 `a_killed_browsers_*` 四個；renderer 的 trace 的三個測試照樣過，所以 Browser 正常結束時 renderer 還是走乾淨的那條路、trace 寫得完）；`cargo clippy -p ipc -p renderer -p shell --all-targets -- -D warnings`、`cargo fmt --check`、`sanity.py` 的 7 項；`mutants-exit.toml` 的 4 個在 macOS 上也都抓到，跑完確認檔案還原。
+- **沒有做的**：`cargo test --workspace` 和整個 workspace 的 clippy 沒有重跑（只跑了改到的 crate）；真的視窗的情境沒有重跑。
+- **還在的一件事，沒有改**：Browser 正常結束時，對卡住的 renderer 一個一個各等 5 秒才 kill（`render_process_host.rs` 的 `CHILD_EXIT_WAIT`），幾個卡住的分頁就是幾個 5 秒；machopodriver 只等 Browser 5 秒就 kill 它。Browser 被 kill 之後 renderer 現在會自己結束，所以不再留下孤兒，但結束得慢這件事還在。要不要改、怎麼改還沒有問使用者。
