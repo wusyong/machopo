@@ -771,7 +771,7 @@ branch `0004-linux`，從 `0004` 的 2e-7（`82a4fc7`）分出去。
   - 量測用的記錄點：compositor 送出 frame 時的 debug log（`frame submitted`）、Viz 收到和畫出來時的（`viz: frame arrived`、`viz: frame drawn`，帶 sink 和 frame 的編號）、Browser 的 IO thread 處理 renderer process 每則訊息的 span（`ChannelHost::OnMessage`；`browser` 多依賴 `trace_event`）。
   - frame 的延遲用 log 對、不用 trace：span 現在帶不了參數（要帶編號得改 rusty_v8 的 C++、重編 V8），而兩個 process 的 log 是同一個檔、時間是微秒。
   - `bench.py raster`：`--process-per-tab`、`--binary`（量別的 commit 編出來的）、`--name`（結果各放一個資料夾）；讀 renderer 自己的 trace 檔；第三張表（Browser 這一側，和 frame 到畫面的時間）。
-- **怎麼量的**：`bench.py raster`，不開視窗（device scale factor 2，GPU 照用），`perf` profile，三個頁面各捲動 120 次、改視窗大小 82 次。三種組態交錯著各跑 3 次，下面是 3 次的中位數。「3f 之前」是 `9784771` 加上這一步的 trace 和記錄點（worktree 在 `../machopo-before-3f`）。原始結果在 `target/bench/raster/{single,multi,before}-{1,2,3}/`。
+- **怎麼量的**：`bench.py raster`，不開視窗（device scale factor 2，GPU 照用），`perf` profile，三個頁面各捲動 120 次、改視窗大小 82 次。三種組態交錯著各跑 3 次，下面是 3 次的中位數。「3f 之前」是 `9784771` 加上這一步的 trace 和記錄點（在暫時的 worktree 裡編的）。原始結果在 `target/bench/raster/{single,multi,before}-{1,2,3}/`。
 - **每塊 tile 的成本**（µs；從 Gutenberg 捲動那一段算，612 塊，每塊 256 KiB；其他頁面的比例相近）：
 
   | | 單一 process | 3f 之前的多 process | 現在的多 process |
@@ -817,4 +817,4 @@ branch `0004-linux`，從 `0004` 的 2e-7（`82a4fc7`）分出去。
   - 只在 macOS、不開視窗的情況下量；真的視窗（有 vsync、要 present）和 Linux、Windows 沒有量。
   - 各 3 次，沒有算變異；差距在一成以內的（第 4 點的「慢一成」）要多跑才說得準。
   - 兩個 process 的 trace 檔接起來能不能在 Perfetto 的 UI 一起看，沒有試。
-  - worktree `../machopo-before-3f` 還留著（幾 GB），確認不用再量之後刪掉。
+  - worktree `../machopo-before-3f` 量完、使用者同意之後刪掉了（2026-11-22）：要再量 3f 之前的，照第 65 條重開一份。
