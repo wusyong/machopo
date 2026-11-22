@@ -36,7 +36,7 @@
 | 2g-1：Windows 的共用記憶體（section 的建立、map、只能讀的 handle；第 54 條） | 完成 | 2026-11-22 |
 | 2g-2：Windows 的通道和它的 `Waiter`（completion port；同一個 process 裡的測試；第 55 條） | 完成 | 2026-11-22 |
 | 2g-3：Windows 的 `spawn`、`inherited`、`child_gone`（繼承加環境變數，第 56 條）；不分平台的跨 process 測試原樣通過；Windows 自己的跨 process 測試 | 完成 | 2026-11-22 |
-| 2g-4：在真的通道上量、文件；決定 CI 要不要加 macOS、Windows 的 runner | 未開始 | |
+| 2g-4：在真的通道上量；當場完成的讀寫改成不經過 completion port、讀的緩衝區維持 64 KiB、CI 先不加 runner（第 57 條） | 完成 | 2026-11-22 |
 | 2h：第 2 階段的檢查、`soundness.md`、`test.py` 的指令、文件；把 `test.py ipc` 的每一項排進每週的 CI（2a 起在本機跑） | 未開始 | |
 | 3：啟動 child process | 未開始 | |
 
@@ -523,3 +523,31 @@ branch `0004-linux`，從 `0004` 的 2e-7（`82a4fc7`）分出去。
 - **跑過的檢查**：`cargo test -p ipc`（Windows：單元 90 個、整合 69 個，重複 5 次）；`cargo clippy -p ipc --all-targets -- -D warnings`、`cargo fmt -p ipc --check`；`sanity.py` 的 `deps`、`unsafe`、`tests`、`numerics`、`boundary`、`spans`、`docs`。核心和端點沒有動；fuzz、Miri、模型、Verus、TLA+ 沒有重跑。
 - **macOS 上沒有驗的**：`process_channel.rs` 改的那一處（先等再寫）在 macOS 上應該沒有差別，但這台機器跑不到，要在 macOS 上跑一次 `cargo test -p ipc`。
 - **留給 2g-4 的**：在真的通道上量（當場完成的讀寫等不等 port 的通知、讀的大小、一條 thread 服務好幾條通道）；決定 CI 要不要加 macOS、Windows 的 runner。
+### 2g-4：在真的通道上量（2026-11-22，Windows 11 10.0.26200、Intel Core i9-13900K）
+
+- **決定**：「已決定的事項」第 57 條（三項，看過數字之後逐項選的）。
+- **怎麼量的**：`tests/it/windows_channel.rs` 的 `measure`（平常不跑：`cargo test -p ipc --test it -- --ignored --exact windows_channel::measure --nocapture`）。host 是真的端點，四個會回送的 child 接在同一條 IO thread 上；每個情境重複 5 到 7 次取中位數，整組跑 3 次。測試用的 profile（有最佳化）。
+- **數字**（µs；「等 port」是 2g-2 的寫法，「不經過 port」是現在的）：
+
+  | 情境 | 等 port | 不經過 port（現在） |
+  | --- | --- | --- |
+  | 小訊息，一來一回 | 10.6 到 11.5 | 13.4 到 14.2 |
+  | 小訊息，一次送 20000 則（每則來回） | 2.42 | 1.12 到 1.19 |
+  | 小訊息，4 個 child 各 5000 則同時送（每則） | 3.50 | 0.38 到 0.46 |
+  | 48 KiB 放在訊息裡，來回 | 64 | 46 到 47 |
+  | 1 MiB 放在訊息裡，來回 | 1402 | 1338 到 1356 |
+  | 8 MiB 放在訊息裡，來回 | 9565 | 9147 到 9508 |
+  | 64 KiB 走 region，來回 | 35 | 28 到 33 |
+  | 1 MiB 走 region，來回 | 684 | 640 到 686 |
+  | 8 MiB 走 region，來回 | 4590 | 3759 到 4699 |
+
+  - 讀 128 KiB（暫時的程式量的，沒有留）：等 port 時每一列都沒有差別（一來一回量到 11.8 到 14.1，走的是和讀 64 KiB 同一段程式）；不經過 port 時只有 48 KiB 放在訊息裡從 47 到 36。
+- **說錯過一次**：第一輪我說一來一回「沒有差別、是雜訊」。換成正式的寫法重量之後，不經過 port 的六次都在 13.4 到 14.2，比等 port 的那一組穩定地高約 3 µs；不能確定是真的（另一組走同一段程式的也量到 14.1），但不能再說是雜訊。把這一點告訴使用者之後才定的。
+- **做了什麼**：
+  - `ipc::platform::windows::channel`：讀和寫發出之後分當場完成和進行中；pipe 加入迴圈時設 `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`；IO thread 借出一筆之後換別條通道、連續 8 輪之後看一次 port。量測用的環境變數切換沒有留。
+  - 單元測試：6 個原本測「寫入要等通知才算完成」的改成新的行為（pipe 有空間時連寫 20 筆都不用等；滿了才有一筆在進行、第三筆被拒絕）。新增：當場完成的讀寫不拿著通道（值丟掉就釋放）；進行中的讀、寫各自拿著通道到通知被取走；一條通道一次讀到 1000 筆要借出去時，另一條通道的訊息最多等 9 筆就輪到，那 1000 筆順序不亂；關掉之後 pipe 和 child 的 process handle 都不在了。
+- **mutation test**（`mutants-2g2.toml`，改成現在的寫法，41 個）：全部抓到。第一次漏 1 個，「關掉時留著 child 的 process handle」：它原本是靠操作還掛著、內部狀態沒釋放間接抓到的，當場完成的操作不掛著之後那條路沒了；補了直接的檢查。跑完確認檔案還原了。
+  - 沒有列的一個（記在 `docs/test-gaps.md`）：不設那個模式。弄壞它是計數多還一次，不是測試失敗。
+  - 多一個等價的：port 只看不等（迴圈空轉，行為一樣）。
+- **跑過的檢查**：`cargo test -p ipc`（Windows：單元 93 個、整合 69 個、量測 1 個不跑；重複 20 次）；`cargo clippy -p ipc --all-targets -- -D warnings`、`cargo fmt -p ipc --check`；`sanity.py` 的 `deps`、`unsafe`、`tests`、`numerics`、`boundary`、`spans`、`docs`。核心和端點沒有動。
+- **2g 到這裡做完**。還沒有做的、不在 2g 裡的：`cf3c85b`（共用的測試先等再寫）在 macOS 上跑一次；整個階段的 `cargo test --workspace`、`cargo fmt --check`、clippy 留到第 2 階段做完時（2h）。

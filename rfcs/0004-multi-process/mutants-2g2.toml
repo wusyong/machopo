@@ -11,7 +11,10 @@
 # brought nothing not taken for the pipe's end (the next read fails);
 # a write that put fewer bytes than asked taken for whole (a pipe never
 # does); an interrupt posted every time it is asked (only more turns of
-# the loop); the pipe's flags, which only another process could try.
+# the loop); the port only looked at, never waited on (the loop spins);
+# the pipe's flags, which only another process could try. Not listed
+# because breaking it is memory freed twice, not a test failing: the
+# mode that keeps what is done at once from the port.
 test = ["cargo", "test", "-q", "-p", "ipc", "--lib", "platform::windows"]
 timeout = 120
 
@@ -96,11 +99,69 @@ to = '''        Ok(taken)'''
 [[mutant]]
 name = "handles given for a write that failed stay in the child"
 file = "crates/ipc/src/platform/windows/channel.rs"
-from = '''            if let Some(peer) = peer.as_ref() {
-                take_back(peer, &values);
-            }
+from = '''                if let Some(peer) = peer.as_ref() {
+                    take_back(peer, &values);
+                }
 '''
 to = ''''''
+
+[[mutant]]
+name = "a write done at once is taken to go on"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''            writing.going = false;
+            end.let_go();
+'''
+to = '''            end.let_go();
+'''
+
+[[mutant]]
+name = "a write done at once goes on holding its end"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''            writing.going = false;
+            end.let_go();
+'''
+to = '''            writing.going = false;
+'''
+
+[[mutant]]
+name = "a read done at once goes on holding its end"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''        self.let_go();
+        let read = usize::try_from(read).unwrap_or(0);'''
+to = '''        let read = usize::try_from(read).unwrap_or(0);'''
+
+[[mutant]]
+name = "what a read done at once brought isn't counted"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''        reading.end = reading.end.saturating_add(read);
+'''
+to = ''''''
+
+[[mutant]]
+name = "the port is never looked at while an end has something to lend"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''                && self.turns < TURNS_BEFORE_THE_PORT'''
+to = '''                && self.turns < usize::MAX'''
+
+[[mutant]]
+name = "the end that was just lent from has the next turn too"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''                        self.read.rotate_left(1);
+'''
+to = ''''''
+
+[[mutant]]
+name = "the turns before the port are never counted anew"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''            self.turns = 0;
+'''
+to = ''''''
+
+[[mutant]]
+name = "the port is waited on with ends waiting for their turn"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''if waiting { 0 } else { INFINITE }'''
+to = '''INFINITE'''
 
 [[mutant]]
 name = "a handle given is one the child's children inherit"

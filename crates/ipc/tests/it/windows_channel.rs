@@ -204,3 +204,154 @@ fn children_started_at_once_each_have_their_own_end_alone() {
         left.push(child);
     }
 }
+
+/// A measurement, not a check: a host and echoing children over the real
+/// channel, what each kind of message costs.
+/// `cargo test -p ipc --test it -- --ignored --exact windows_channel::measure --nocapture`
+#[test]
+#[ignore = "a measurement, run by hand"]
+fn measure() {
+    use std::time::Instant;
+
+    use bytes::Bytes;
+    use ipc::core::frame::BadMessage;
+    use ipc::endpoint::{self, Handler, IoLoop, Link, Received};
+
+    use crate::process_channel::{Msg, config};
+
+    struct Count(mpsc::Sender<usize>, usize);
+    impl Handler<Channel> for Count {
+        fn message(&mut self, mut message: Received<'_, Channel>) -> Result<(), BadMessage> {
+            let _ = message.decode::<Msg>()?;
+            let _ = self.0.send(self.1);
+            Ok(())
+        }
+    }
+
+    let (io, handle) = IoLoop::<Channel>::new().unwrap();
+    thread::spawn(move || io.run());
+    let (told, came) = mpsc::channel();
+    let mut children = Vec::new();
+    let links: Vec<Link<Channel>> = (0..4)
+        .map(|name| {
+            let (child, channel) =
+                platform::spawn(&mut command("process_channel::child", "echo")).unwrap();
+            let (link, endpoint) = endpoint::endpoint(channel, config(true));
+            handle.serve(endpoint, Count(told.clone(), name));
+            link.grant_to_peer(8 << 20);
+            children.push(child);
+            link
+        })
+        .collect();
+    let wait = |count: usize| {
+        for _ in 0..count {
+            came.recv_timeout(SOON).expect("an echo");
+        }
+    };
+    // Warm: regions made, threads awake.
+    for link in &links {
+        link.send(0, &Msg::Body(Bytes::from(vec![1u8; 8 << 20])))
+            .unwrap();
+    }
+    wait(4);
+    let median = |mut runs: Vec<f64>| {
+        runs.sort_by(f64::total_cmp);
+        (runs[0], runs[runs.len() / 2])
+    };
+    let report = |what: &str, per: &str, runs: Vec<f64>| {
+        let (least, middle) = median(runs);
+        println!("MEASURE {what:<44} {middle:>9.2} {per} (least {least:.2})");
+    };
+    let small = Msg::Text("ping".into());
+    let one = &links[0];
+
+    report(
+        "small, one at a time (round trip)",
+        "us",
+        (0..7)
+            .map(|_| {
+                let began = Instant::now();
+                for _ in 0..20_000 {
+                    one.send(0, &small).unwrap();
+                    wait(1);
+                }
+                began.elapsed().as_secs_f64() * 1e6 / 20_000.0
+            })
+            .collect(),
+    );
+
+    report(
+        "small, 20000 sent at once (each, there and back)",
+        "us",
+        (0..7)
+            .map(|_| {
+                let began = Instant::now();
+                for _ in 0..20_000 {
+                    one.send(0, &small).unwrap();
+                }
+                wait(20_000);
+                began.elapsed().as_secs_f64() * 1e6 / 20_000.0
+            })
+            .collect(),
+    );
+
+    report(
+        "small, 4 children, 5000 each at once (each)",
+        "us",
+        (0..7)
+            .map(|_| {
+                let began = Instant::now();
+                thread::scope(|scope| {
+                    for link in &links {
+                        scope.spawn(|| {
+                            for _ in 0..5_000 {
+                                link.send(0, &small).unwrap();
+                            }
+                        });
+                    }
+                });
+                wait(20_000);
+                began.elapsed().as_secs_f64() * 1e6 / 20_000.0
+            })
+            .collect(),
+    );
+
+    for (kib, rounds) in [(48usize, 400usize), (1024, 60), (8192, 12)] {
+        let string = Msg::Text("s".repeat(kib << 10));
+        report(
+            &format!("{kib} KiB in the message (round trip)"),
+            "us",
+            (0..5)
+                .map(|_| {
+                    let began = Instant::now();
+                    for _ in 0..rounds {
+                        one.send(0, &string).unwrap();
+                        wait(1);
+                    }
+                    began.elapsed().as_secs_f64() * 1e6 / rounds as f64
+                })
+                .collect(),
+        );
+    }
+    for (kib, rounds) in [(64usize, 400usize), (1024, 100), (8192, 20)] {
+        let body = Msg::Body(Bytes::from(vec![7u8; kib << 10]));
+        report(
+            &format!("{kib} KiB by a region (round trip)"),
+            "us",
+            (0..5)
+                .map(|_| {
+                    let began = Instant::now();
+                    for _ in 0..rounds {
+                        one.send(0, &body).unwrap();
+                        wait(1);
+                    }
+                    began.elapsed().as_secs_f64() * 1e6 / rounds as f64
+                })
+                .collect(),
+        );
+    }
+    handle.stop();
+    for mut child in children {
+        let _ = child.wait();
+    }
+}

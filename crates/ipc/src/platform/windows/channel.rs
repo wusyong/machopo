@@ -11,9 +11,14 @@
 //! its IO thread serves it: until then every write is refused as one
 //! that would block, and the core keeps the message.
 //!
-//! One write goes on at a time, of [`RECORD_MAX`] bytes at most, and it
-//! goes on until its completion was taken off the port, whether or not
-//! the kernel was done with it at once (as Chromium's does).
+//! A write is of [`RECORD_MAX`] bytes at most, and one goes on at a
+//! time. What the kernel is done with when the call returns is over
+//! then, and leaves nothing at the port: with room in the pipe any
+//! thread writes one message after another without the IO thread's
+//! having to wake for each (Chromium's waits for the port every time;
+//! measured, that is half as fast for one channel and a seventh as fast
+//! for four). Only what the kernel couldn't finish at once goes on, and
+//! holds its end, until its completion is taken off the port.
 //!
 //! The pipe carries bytes alone, so the handles that go with a message
 //! go as values, and only from a host to its child: before each of a
@@ -42,7 +47,8 @@ use windows_sys::Win32::Foundation::{
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_APPEND_DATA, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED,
     FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_TYPE_PIPE, GetFileType, OPEN_EXISTING,
-    PIPE_ACCESS_DUPLEX, ReadFile, SECURITY_ANONYMOUS, SECURITY_SQOS_PRESENT, WriteFile,
+    PIPE_ACCESS_DUPLEX, ReadFile, SECURITY_ANONYMOUS, SECURITY_SQOS_PRESENT,
+    SetFileCompletionNotificationModes, WriteFile,
 };
 use windows_sys::Win32::System::IO::{
     CancelIoEx, CreateIoCompletionPort, GetQueuedCompletionStatus, OVERLAPPED,
@@ -73,6 +79,13 @@ const HEADER_LEN: usize = 8;
 const VALUE_LEN: usize = 8;
 /// The most handles' values a header has.
 const VALUES_MAX: usize = MAX_HANDLES as usize;
+/// `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` (`<winbase.h>`): a read or a
+/// write that is done when its call returns leaves nothing at the port.
+const SKIP_PORT_ON_SUCCESS: u8 = 1;
+/// How many times in a row the IO thread takes up what its ends have
+/// read already before it looks at the port: an end whose reads are
+/// always done at once doesn't keep the others' completions waiting.
+const TURNS_BEFORE_THE_PORT: usize = 8;
 /// How many names are tried for a pipe before there is none.
 const NAMES_TRIED: usize = 8;
 /// What `CreateNamedPipeW` is told a client's `WaitNamedPipe` waits by
@@ -201,6 +214,17 @@ enum Next {
     Bad,
 }
 
+/// How a read that was started stands.
+enum Started {
+    /// It goes on: its completion comes to the port.
+    Going,
+    /// Done at once: what it read is in the buffer, and nothing comes
+    /// to the port.
+    Done,
+    /// The pipe has no more to give.
+    Over,
+}
+
 fn u32_at(bytes: &[u8], at: usize) -> Option<usize> {
     let end = at.checked_add(4)?;
     usize::try_from(u32::from_le_bytes(bytes.get(at..end)?.try_into().ok()?)).ok()
@@ -281,9 +305,8 @@ impl End {
     }
 
     /// Starts a read for what the buffer has room for. For the IO
-    /// thread, with no read going on. `false` when the pipe has no more
-    /// to give.
-    fn read(self: &Arc<Self>) -> bool {
+    /// thread, with no read going on.
+    fn read(self: &Arc<Self>) -> Started {
         let mut reading = lock(&self.reading);
         // SAFETY: no read is going on, and only this thread starts one.
         let operation = unsafe { &mut *self.read };
@@ -293,38 +316,50 @@ impl End {
         reading.end = reading.end.saturating_sub(reading.start);
         reading.start = 0;
         let Some(room) = operation.buffer.get_mut(reading.end..) else {
-            return false;
+            return Started::Over;
         };
         let Ok(len) = u32::try_from(room.len()) else {
-            return false;
+            return Started::Over;
         };
         let pipe = lock(&self.pipe);
         let Some(pipe) = pipe.as_ref() else {
-            return false;
+            return Started::Over;
         };
         if len == 0 {
-            return false;
+            return Started::Over;
         }
         operation.overlapped = zeroed_overlapped();
+        let mut read = 0;
+        // Held before the call: a read that goes on may be over, and
+        // its completion taken, before the call is back.
         self.hold();
-        // SAFETY: `pipe` is open for the call. `room` and the
-        // `OVERLAPPED` are the read operation's, which stays where it is
-        // and is held by the count just taken until the read's
-        // completion is taken off the port; nothing refers to either
-        // until then.
-        let started = unsafe {
+        // SAFETY: `pipe` is open and `read` alive for the call. `room`
+        // and the `OVERLAPPED` are the read operation's, which stays
+        // where it is and, if the read goes on, is held by the count
+        // just taken until the read's completion is taken off the port;
+        // nothing refers to either until then.
+        let done = unsafe {
             ReadFile(
                 pipe.as_raw_handle(),
                 room.as_mut_ptr(),
                 len,
-                null_mut(),
+                &raw mut read,
                 &raw mut operation.overlapped,
             ) != 0
-        } || last_error() == ERROR_IO_PENDING;
-        if !started {
-            self.let_go();
+        };
+        if !done && last_error() == ERROR_IO_PENDING {
+            return Started::Going;
         }
-        started
+        // Over with the call, one way or the other: no completion
+        // comes for it.
+        self.let_go();
+        let read = usize::try_from(read).unwrap_or(0);
+        // A read that failed, or brought nothing, is the pipe's end.
+        if !done || read == 0 {
+            return Started::Over;
+        }
+        reading.end = reading.end.saturating_add(read);
+        Started::Done
     }
 }
 
@@ -521,31 +556,38 @@ impl Transport for Channel {
             .unwrap_or_default()
             .copy_from_slice(bytes.get(..taken).unwrap_or_default());
         operation.overlapped = zeroed_overlapped();
+        let mut written = 0;
+        // Set before the call: a write that goes on may be over, and
+        // its completion taken, before the call is back.
         writing.going = true;
         writing.len = whole;
         end.hold();
-        // SAFETY: `pipe` is open for the call. `record` and the
-        // `OVERLAPPED` are the write operation's, which stays where it
-        // is and is held by the count just taken until the write's
-        // completion is taken off the port; nothing refers to either
-        // until then.
-        let started = unsafe {
+        // SAFETY: `pipe` is open and `written` alive for the call.
+        // `record` and the `OVERLAPPED` are the write operation's, which
+        // stays where it is and, if the write goes on, is held by the
+        // count just taken until the write's completion is taken off
+        // the port; nothing refers to either until then.
+        let done = unsafe {
             WriteFile(
                 pipe.as_raw_handle(),
                 record.as_ptr(),
                 len,
-                null_mut(),
+                &raw mut written,
                 &raw mut operation.overlapped,
             ) != 0
-        } || last_error() == ERROR_IO_PENDING;
-        if !started {
-            // No completion comes for it.
+        };
+        if done || last_error() != ERROR_IO_PENDING {
+            // Over with the call, one way or the other: no completion
+            // comes for it.
             writing.going = false;
             end.let_go();
-            if let Some(peer) = peer.as_ref() {
-                take_back(peer, &values);
+            // A pipe takes all of a write or fails it.
+            if !done || written != len {
+                if let Some(peer) = peer.as_ref() {
+                    take_back(peer, &values);
+                }
+                return Err(WriteError::Closed);
             }
-            return Err(WriteError::Closed);
         }
         // A host's are in the child now, and these were this end's; a
         // child has no way to give one, and lets go of what it was
@@ -763,6 +805,9 @@ pub struct IocpWaiter {
     read: VecDeque<Key>,
     /// The ends to say have room again.
     writable: VecDeque<Key>,
+    /// How many times in a row something was taken up from `read`
+    /// without a look at the port.
+    turns: usize,
 }
 
 impl Waiter<Channel> for IocpWaiter {
@@ -782,6 +827,7 @@ impl Waiter<Channel> for IocpWaiter {
             channels: Vec::new(),
             read: VecDeque::new(),
             writable: VecDeque::new(),
+            turns: 0,
         })
     }
 
@@ -821,6 +867,15 @@ impl Waiter<Channel> for IocpWaiter {
             if port.is_null() {
                 return false;
             }
+            // Before anything is read or written: what is done at once
+            // is over at once, with no completion to wait for.
+            // SAFETY: `pipe` is open for the call.
+            let set = unsafe {
+                SetFileCompletionNotificationModes(pipe.as_raw_handle(), SKIP_PORT_ON_SUCCESS)
+            };
+            if set == 0 {
+                return false;
+            }
         }
         let mut writing = lock(&end.writing);
         writing.joined = true;
@@ -851,7 +906,12 @@ impl Waiter<Channel> for IocpWaiter {
             if let Some(key) = self.writable.pop_front() {
                 break (key, Event::Writable);
             }
-            if let Some(&key) = self.read.front() {
+            // What the ends have read already, an end at a time and
+            // not for ever: the port's turn comes too.
+            let waiting = !self.read.is_empty();
+            if let Some(&key) = self.read.front()
+                && self.turns < TURNS_BEFORE_THE_PORT
+            {
                 // (An end no longer served isn't in the queue.)
                 let Some(end) = self.served(key) else {
                     self.read.pop_front();
@@ -863,8 +923,12 @@ impl Waiter<Channel> for IocpWaiter {
                     self.read.pop_front();
                     continue;
                 }
+                self.turns = self.turns.saturating_add(1);
                 match end.next(&mut handles) {
                     Next::Lend(bytes, len) => {
+                        // The next turn is another end's, if another
+                        // has something.
+                        self.read.rotate_left(1);
                         // SAFETY: `len` bytes of the end's read buffer,
                         // which `end` keeps alive. No read is going on,
                         // and only this thread starts one, after this
@@ -877,13 +941,19 @@ impl Waiter<Channel> for IocpWaiter {
                             handles: &mut handles,
                         });
                     }
-                    Next::More if end.read() => {
-                        self.read.pop_front();
-                        continue;
-                    }
-                    Next::More | Next::Bad => break (key, Event::PeerGone),
+                    Next::More => match end.read() {
+                        Started::Going => {
+                            self.read.pop_front();
+                        }
+                        // Its bytes are lent in the next turn.
+                        Started::Done => {}
+                        Started::Over => break (key, Event::PeerGone),
+                    },
+                    Next::Bad => break (key, Event::PeerGone),
                 }
+                continue;
             }
+            self.turns = 0;
             let mut transferred = 0;
             let mut port_key = 0;
             let mut overlapped: *mut OVERLAPPED = null_mut();
@@ -895,11 +965,12 @@ impl Waiter<Channel> for IocpWaiter {
                     &raw mut transferred,
                     &raw mut port_key,
                     &raw mut overlapped,
-                    INFINITE,
+                    // Only a look, with ends waiting for their turn.
+                    if waiting { 0 } else { INFINITE },
                 ) != 0
             };
             // An interrupt's (the flag says whether it is still to be
-            // told).
+            // told), or nothing was there to take.
             if overlapped.is_null() {
                 continue;
             }
@@ -1109,6 +1180,28 @@ mod tests {
         told
     }
 
+    /// What a waiter of several ends says next.
+    fn told(waiter: &mut IocpWaiter) -> Option<(Key, Event, Vec<u8>)> {
+        waiter.wait(|waited| match waited {
+            Waited::Interrupted => None,
+            Waited::Channel {
+                key, event, bytes, ..
+            } => Some((key, event, bytes.to_vec())),
+        })
+    }
+
+    /// As `later`, for a waiter of several ends.
+    fn told_later(waiter: &mut IocpWaiter) -> Option<(Key, Event, Vec<u8>)> {
+        let interrupt = waiter.interrupter();
+        let from_elsewhere = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            interrupt();
+        });
+        let told = told(waiter);
+        from_elsewhere.join().unwrap();
+        told
+    }
+
     fn read(bytes: &[u8], handles: usize) -> Option<(Event, Vec<u8>, usize)> {
         Some((Event::Read, bytes.to_vec(), handles))
     }
@@ -1156,24 +1249,26 @@ mod tests {
     #[test]
     fn a_long_message_goes_a_write_at_a_time_and_comes_in_order() {
         within(|| {
+            // A write takes what one write holds and no more: less for a
+            // host, by its header.
+            let (host, child) = ends();
+            let long = pattern(1 << 20);
+            assert_eq!(host.write(&long), Ok(RECORD_MAX - HEADER_LEN));
+            assert_eq!(child.write(&long), Ok(RECORD_MAX));
+        });
+        within(|| {
             let (mut host, mut child) = ends();
             for len in [RECORD_MAX, RECORD_MAX + 1, 1 << 20] {
                 let bytes = pattern(len);
-                // The first write takes what one write holds and no
-                // more: less for a host, by its header.
-                assert_eq!(host.write(&bytes), Ok(RECORD_MAX - HEADER_LEN));
-                let rest = &bytes[RECORD_MAX - HEADER_LEN..];
                 let got = std::thread::scope(|scope| {
                     let reader = scope.spawn(|| child.receive(len));
-                    host.send(rest);
+                    host.send(&bytes);
                     reader.join().unwrap()
                 });
                 assert!(got == bytes, "{len} bytes to the child");
-                assert_eq!(child.write(&bytes), Ok(RECORD_MAX));
-                let rest = &bytes[RECORD_MAX..];
                 let got = std::thread::scope(|scope| {
                     let reader = scope.spawn(|| host.receive(len));
-                    child.send(rest);
+                    child.send(&bytes);
                     reader.join().unwrap()
                 });
                 assert!(got == bytes, "{len} bytes to the host");
@@ -1182,16 +1277,38 @@ mod tests {
     }
 
     #[test]
+    fn writes_go_one_after_another_while_the_pipe_has_room() {
+        within(|| {
+            let (mut host, mut child) = ends();
+            // Each is over when its call is back: none waits for its
+            // end's thread to take anything off the port.
+            let mut to_child = Vec::new();
+            let mut to_host = Vec::new();
+            for i in 0..20u8 {
+                assert_eq!(host.write(&[i; 100]), Ok(100));
+                assert_eq!(child.write(&[i; 50]), Ok(50));
+                to_child.extend([i; 100]);
+                to_host.extend([i; 50]);
+            }
+            assert!(child.receive(2000) == to_child);
+            assert!(host.receive(1000) == to_host);
+            // And they left nothing at the port: what is told next is
+            // what comes next.
+            assert_eq!(child.write(b"after"), Ok(5));
+            assert_eq!(host.next(), read(b"after", 0));
+            assert_eq!(host.write(b"and back"), Ok(8));
+            assert_eq!(child.next(), read(b"and back", 0));
+        });
+    }
+
+    #[test]
     fn one_write_goes_on_at_a_time_and_room_is_told_to_who_was_refused() {
         within(|| {
             let (mut host, mut child) = ends();
             let bytes = pattern(60_000);
+            // The pipe takes the first at once.
             assert_eq!(host.write(&bytes), Ok(60_000));
-            // In the pipe already, and still going on until this end's
-            // thread has taken its completion.
-            assert_eq!(host.write(&bytes), Err(WriteError::WouldBlock));
-            assert_eq!(host.next().unwrap().0, Event::Writable);
-            // The pipe has no room for this one: it goes on until the
+            // It has no room for the second, which goes on until the
             // child reads.
             assert_eq!(host.write(&bytes), Ok(60_000));
             assert_eq!(host.write(b"third"), Err(WriteError::WouldBlock));
@@ -1601,15 +1718,21 @@ mod tests {
             assert!(waiter.add(2, &host));
             let gone_child = Served::new(gone_child);
             let child = Served::new(child);
-            // Refused of a write, and with bytes to read: both would be
-            // told.
-            assert_eq!(gone_host.write(b"a", &mut Vec::new()), Ok(1));
+            // Refused of a write while one goes on, and with bytes to
+            // read: both would be told.
+            let bytes = pattern(60_000);
+            assert_eq!(gone_host.write(&bytes, &mut Vec::new()), Ok(60_000));
+            assert_eq!(gone_host.write(&bytes, &mut Vec::new()), Ok(60_000));
             assert_eq!(
                 gone_host.write(b"b", &mut Vec::new()),
                 Err(WriteError::WouldBlock)
             );
             assert_eq!(gone_child.write(b"unheard"), Ok(7));
             waiter.remove(1);
+            // The write that went on is over once its peer has read: its
+            // completion is at the port, for nobody.
+            let mut gone_child = gone_child;
+            assert!(gone_child.receive(60_000) == bytes);
             // And one refused before it joined, which is told of room
             // on joining: not once it has left.
             let (refused, _its_child) = channels();
@@ -1641,6 +1764,10 @@ mod tests {
             assert_eq!(host.write(b"before"), Ok(6));
             host.channel.shut();
             assert_eq!(host.write(b"after"), Err(WriteError::Closed));
+            // Its handles go at once, whatever holds the end yet: the
+            // pipe, and its child's process.
+            assert!(lock(&host.channel.0.pipe).is_none());
+            assert!(lock(&host.channel.0.peer).is_none());
             // What was sent before still comes; then the pipe's end.
             assert_eq!(child.next(), read(b"before", 0));
             assert_eq!(child.next().unwrap().0, Event::PeerGone);
@@ -1681,10 +1808,9 @@ mod tests {
         within(|| {
             let (mut host, child) = ends();
             let bytes = pattern(60_000);
-            host.send(&bytes);
-            assert_eq!(host.write(b"x"), Err(WriteError::WouldBlock));
-            assert_eq!(host.next().unwrap().0, Event::Writable);
             assert_eq!(host.write(&bytes), Ok(60_000));
+            assert_eq!(host.write(&bytes), Ok(60_000));
+            assert_eq!(later(&mut host), None);
             drop(child);
             assert_eq!(host.next().unwrap().0, Event::PeerGone);
             assert_eq!(later(&mut host), None);
@@ -1710,11 +1836,9 @@ mod tests {
     #[test]
     fn a_write_outlives_the_thread_that_started_it() {
         within(|| {
-            let (mut host, mut child) = ends();
+            let (host, mut child) = ends();
             let bytes = pattern(60_000);
-            host.send(&bytes);
-            assert_eq!(host.write(b"x"), Err(WriteError::WouldBlock));
-            assert_eq!(host.next().unwrap().0, Event::Writable);
+            assert_eq!(host.write(&bytes), Ok(60_000));
             let Served { channel, .. } = &host;
             // The pipe is full: this one goes on in the kernel after
             // its thread is over.
@@ -1762,33 +1886,113 @@ mod tests {
 
     #[test]
     fn what_goes_on_holds_its_end_until_its_completion_is_taken() {
+        // A read.
+        within(|| {
+            let (host, _child) = channels();
+            let mut waiter = IocpWaiter::new().unwrap();
+            assert!(waiter.add(1, &host));
+            let end = Arc::downgrade(&host.0);
+            // Its first read goes on: nothing is there to read.
+            assert_eq!(told_later(&mut waiter), None);
+            // Let go of by its value and by the waiter's list, the end
+            // is there yet.
+            waiter.remove(1);
+            drop(host);
+            assert!(end.upgrade().is_some());
+            // Cancelled when it was shut, the read's completion is taken
+            // off the port by the next wait, and the end goes.
+            assert_eq!(told_later(&mut waiter), None);
+            assert!(end.upgrade().is_none());
+        });
+        // A write.
+        within(|| {
+            let (host, _child) = channels();
+            let mut waiter = IocpWaiter::new().unwrap();
+            assert!(waiter.add(1, &host));
+            let end = Arc::downgrade(&host.0);
+            let bytes = pattern(60_000);
+            // The second finds the pipe full. (No read was started: the
+            // waiter hasn't waited.)
+            assert_eq!(host.write(&bytes, &mut Vec::new()), Ok(60_000));
+            assert_eq!(host.write(&bytes, &mut Vec::new()), Ok(60_000));
+            waiter.remove(1);
+            drop(host);
+            assert!(end.upgrade().is_some());
+            assert_eq!(told_later(&mut waiter), None);
+            assert!(end.upgrade().is_none());
+        });
+    }
+
+    #[test]
+    fn what_is_done_at_once_holds_nothing() {
         within(|| {
             let (host, child) = channels();
             let mut waiter = IocpWaiter::new().unwrap();
             assert!(waiter.add(1, &host));
             let mut child = Served::new(child);
             let end = Arc::downgrade(&host.0);
-            // A read starts with the first wait.
-            assert_eq!(child.write(b"one"), Ok(3));
-            waiter.wait(|_| ());
-            assert_eq!(host.write(b"two", &mut Vec::new()), Ok(3));
-            assert_eq!(child.next(), read(b"two", 0));
-            // Let go of by its value and by the waiter's list, the end
-            // is there yet: its read goes on.
+            // Written at once, and read at once: the bytes were there.
+            assert_eq!(host.write(b"there", &mut Vec::new()), Ok(5));
+            assert_eq!(child.next(), read(b"there", 0));
+            assert_eq!(child.write(b"back"), Ok(4));
+            assert_eq!(told(&mut waiter), Some((1, Event::Read, b"back".to_vec())));
+            // Nothing of the end's goes on: it goes with its value.
             waiter.remove(1);
             drop(host);
-            assert!(end.upgrade().is_some());
-            // Cancelled when it was shut, the read's completion (and
-            // the write's) is taken off the port by the next wait, and
-            // the end goes.
-            let interrupt = waiter.interrupter();
-            let from_elsewhere = std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(100));
-                interrupt();
-            });
-            waiter.wait(|waited| assert!(matches!(waited, Waited::Interrupted)));
-            from_elsewhere.join().unwrap();
             assert!(end.upgrade().is_none());
+        });
+    }
+
+    #[test]
+    fn an_end_with_much_to_lend_doesnt_keep_the_others_waiting() {
+        within(|| {
+            let mut waiter = IocpWaiter::new().unwrap();
+            // One whose peer writes records by hand, and one more.
+            let (server, client) = pipe().unwrap();
+            let mut busy_peer = Served::new(Channel::child(server));
+            let busy = Channel::child(client);
+            let (quiet, quiet_peer) = channels();
+            assert!(waiter.add(1, &busy));
+            assert!(waiter.add(2, &quiet));
+            let quiet_peer = Served::new(quiet_peer);
+            // Both reads go on: nothing is there yet.
+            assert_eq!(told_later(&mut waiter), None);
+            // A thousand records in one read for the first; then a
+            // message for the second, whose read's completion waits at
+            // the port behind it.
+            let mut many = Vec::new();
+            for i in 0..1000u32 {
+                many.extend(record(4, &[], &i.to_le_bytes()));
+            }
+            busy_peer.send(&many);
+            assert_eq!(quiet_peer.write(b"quiet"), Ok(5));
+            let mut lent = Vec::new();
+            let before = loop {
+                match told(&mut waiter) {
+                    Some((1, Event::Read, bytes)) => lent.push(bytes),
+                    Some((2, Event::Read, bytes)) => {
+                        assert_eq!(bytes, b"quiet");
+                        break lent.len();
+                    }
+                    other => panic!("{other:?}"),
+                }
+            };
+            // The port is looked at after so many turns, and the turn
+            // after that is the other end's.
+            assert!(
+                before <= TURNS_BEFORE_THE_PORT + 1,
+                "the second end waited for {before} of the first's records"
+            );
+            // And the first's all come, in order.
+            while lent.len() < 1000 {
+                match told(&mut waiter) {
+                    Some((1, Event::Read, bytes)) => lent.push(bytes),
+                    other => panic!("{other:?}"),
+                }
+            }
+            for (i, bytes) in lent.iter().enumerate() {
+                assert_eq!(bytes, &(i as u32).to_le_bytes());
+            }
         });
     }
 
