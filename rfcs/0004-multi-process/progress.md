@@ -33,10 +33,10 @@
 | 2f-2：Linux 的通道（socket 的 `Platform`、epoll 的 `Waiter`、`spawn`、`inherited`、`child_gone`；跨 process 的測試；第 43、48、49 條） | 完成 | 2026-11-22 |
 | 2f-3：用真的平台層重量（第 44、45、49 條的數字）；2f 的檢查和文件 | 完成 | 2026-11-22 |
 | 2g 之前：Windows 的探測（`prototype-windows/`）：送的 thread 結束時的寫入、pipe 的緩衝區、大的資料、和 `interprocess` 比 | 完成 | 2026-11-21 |
-| 2g-1：Windows 的共用記憶體（section 的建立、map、只能讀的 handle；第 54 條） | 完成 | 2026-11-22 |
-| 2g-2：Windows 的通道和它的 `Waiter`（completion port；同一個 process 裡的測試；第 55 條） | 完成 | 2026-11-22 |
-| 2g-3：Windows 的 `spawn`、`inherited`、`child_gone`（繼承加環境變數，第 56 條）；不分平台的跨 process 測試原樣通過；Windows 自己的跨 process 測試 | 完成 | 2026-11-22 |
-| 2g-4：在真的通道上量；當場完成的讀寫改成不經過 completion port、讀的緩衝區維持 64 KiB、CI 先不加 runner（第 57 條） | 完成 | 2026-11-22 |
+| 2g-1：Windows 的共用記憶體（section 的建立、map、只能讀的 handle；第 51 條） | 完成 | 2026-11-22 |
+| 2g-2：Windows 的通道和它的 `Waiter`（completion port；同一個 process 裡的測試；第 52 條） | 完成 | 2026-11-22 |
+| 2g-3：Windows 的 `spawn`、`inherited`、`child_gone`（繼承加環境變數，第 53 條）；不分平台的跨 process 測試原樣通過；Windows 自己的跨 process 測試 | 完成 | 2026-11-22 |
+| 2g-4：在真的通道上量；當場完成的讀寫改成不經過 completion port、讀的緩衝區維持 64 KiB、CI 先不加 runner（第 54 條） | 完成 | 2026-11-22 |
 | 2h：第 2 階段的檢查、`soundness.md`、`test.py` 的指令、文件；把 `test.py ipc` 的每一項排進每週的 CI（2a 起在本機跑） | 未開始 | |
 | 3：啟動 child process | 未開始 | |
 
@@ -355,7 +355,7 @@
   - 要寫的：`platform/<系統>/` 底下實作 `Platform` 的通道，和那個系統的 `spawn`、`inherited`、`child_gone`；在 `platform/mod.rs` 照 macOS 的那幾行 re-export；`tests/it/main.rs` 裡 `process_channel` 的 `cfg` 加上自己的系統。`process_channel.rs` 不用改就要過。
   - 那個系統自己才有的行為，另外寫一個測試檔（像 `mach_channel.rs`）。
   - 要動到共用的東西（`endpoint.rs` 的 `Platform`、`codec` 的門檻）時，單獨做成一個小 commit 先推上 `0004`，另一邊 rebase，不要兩邊各改各的。
-  - 決定的編號：Linux 從第 43 條、Windows 從第 53 條起（2e-7 用掉了第 42 條）。
+  - 決定的編號：Linux 從第 43 條、Windows 從第 53 條起（2e-7 用掉了第 42 條）。Windows 的之後順成第 50 到 54 條。
   - 這一段寫的「實作 `Platform`」在 2e-7 之後是兩個介面，見 2e-7 那一節。
 
 ### 2e-7：一個 process 一條 IO thread（2026-11-21，macOS 26、Apple M4）
@@ -478,9 +478,9 @@ branch `0004-linux`，從 `0004` 的 2e-7（`82a4fc7`）分出去。
 
 ### 2g-1：Windows 的共用記憶體（2026-11-22，Windows 11 10.0.26200、Intel Core i9-13900K）
 
-- **決定**：「已決定的事項」第 53 條（分段，和 2026-11-21 那一版為什麼沒有留）、第 54 條（section 的清單、handle 的權限和檢查、handle 的型別）。
+- **決定**：「已決定的事項」第 50 條（分段，和 2026-11-21 那一版為什麼沒有留）、第 51 條（section 的清單、handle 的權限和檢查、handle 的型別）。
 - **做了什麼**：`ipc::platform::windows::memory`：`create(len, peer_writes)`、`map(handle, len, writable)`、`Mapping`（實作核心的 `Memory`）。workspace 的 windows-sys 多開五個 feature（`Win32_Foundation`、`Win32_Security`、`Win32_System_Memory`、`Win32_System_SystemInformation`、`Win32_System_Threading`）：這是共用的 `Cargo.toml`，另一邊 rebase 時會碰到。
-- **和 2026-11-21 那一版的關係**：第 54 條的三項選的和那一版做的一樣，所以程式和測試就是那一版的，只改了檔頭的說明（清單不是空的、收到的 handle 不檢查）；不是從空白寫的。
+- **和 2026-11-21 那一版的關係**：第 51 條的三項選的和那一版做的一樣，所以程式和測試就是那一版的，只改了檔頭的說明（清單不是空的、收到的 handle 不檢查）；不是從空白寫的。
 - **測試**：單元測試 14 個，只在 Windows，在同一個 process 裡把 handle 再 map 一次當成對方（和 macOS 的那一組同樣的情況，多的是「換不成權限更多的 handle」「不被 child 繼承」「放掉之後不留 handle」）。跨 process 的要等 2g-3 能送 handle。
   - 「mapping drop 就是解除」和 macOS 一樣量整個 process 的位址空間（map 又 drop 4 GiB 之後剩下的沒有少，留著的時候少了）；「不留 handle」數整個 process 的 handle（4000 塊建了又放，多不到 1000 個；留著時是一塊一個）。
 - **mutation test**（`mutants-2g1.toml`）18 個，全部抓到。跑完確認檔案還原了。不列的一個是等價的：`create` 不自己檢查長度 0 時，kernel 本來就不建長度 0 的 section（記在 `docs/test-gaps.md`）。
@@ -489,10 +489,10 @@ branch `0004-linux`，從 `0004` 的 2e-7（`82a4fc7`）分出去。
 - **留給 2g-2 的**：`Platform` 的 `map` 和 `create` 直接接這兩個函式；handle 送給對方是 `DuplicateHandle` 進對方的 process（這裡的 handle 已經只有該有的權限，照原樣的權限複製）。
 ### 2g-2：Windows 的通道和它的 `Waiter`（2026-11-22，Windows 11 10.0.26200、Intel Core i9-13900K）
 
-- **決定**：「已決定的事項」第 55 條（十項，逐項問過）。
+- **決定**：「已決定的事項」第 52 條（十項，逐項問過）。
 - **做了什麼**：
   - `ipc::platform::windows::channel`：`pipe()`（兩端）、`Channel::host(pipe, child 的 process)`、`Channel::child(pipe)`（實作 `Transport` 和 `Platform`）、`IocpWaiter`（實作 `Waiter`）。從空白寫的，沒有用 2026-11-21 那一版的結構；系統呼叫的參數對過那一版和 Chromium。
-  - `ipc::endpoint` 的 `Platform` 的說明照第 55 條改了一句，`crates/ipc/README.md` 同一句也改（共用的，要單獨一個 commit 先進 `0004`）。
+  - `ipc::endpoint` 的 `Platform` 的說明照第 52 條改了一句，`crates/ipc/README.md` 同一句也改（共用的，要單獨一個 commit 先進 `0004`）。
   - workspace 的 windows-sys 再多三個 feature（`Win32_Storage_FileSystem`、`Win32_System_IO`、`Win32_System_Pipes`）。
 - **還沒有的**：`spawn`、`inherited`、`child_gone`（2g-3）。兩端現在只在同一個 process 裡測過：host 的「child 的 process」是自己，所以「handle 是放進對方的 process 而不是自己的」這裡分不出來，等 2g-3 的跨 process 測試；兩個端點接在這個通道上也是那時第一次跑。
 - **測試**：`channel.rs` 的單元測試 24 個（各有 10 秒的時限）。`cargo test -p ipc --lib platform::windows` 重複跑 20 次都過。
@@ -508,7 +508,7 @@ branch `0004-linux`，從 `0004` 的 2e-7（`82a4fc7`）分出去。
 - **留給 2g-3 的**：`spawn`（怎麼把 client 那一端交給 child：自己呼叫 `CreateProcessW` 給清單，還是用標準庫加一把鎖）、`inherited`、`child_gone`；`process_channel.rs` 原樣通過；跨 process 才看得到的（handle 真的到了 child 的 process、child 亂附 handle 時 host 以壞訊息關掉、送的 thread 結束之後寫入照樣到）。
 ### 2g-3：Windows 上 child 怎麼拿到它那一端（2026-11-22，Windows 11 10.0.26200、Intel Core i9-13900K）
 
-- **決定**：「已決定的事項」第 56 條（四項，逐項問過）。
+- **決定**：「已決定的事項」第 53 條（四項，逐項問過）。
 - **做了什麼**：
   - `ipc::platform::windows::channel` 的 `spawn`、`inherited`、`child_gone`，`ipc::platform` 在 Windows 上 re-export 它們和 `Channel`。
   - `tests/it/main.rs`：`process_channel` 在 Windows 上也編；新的 `windows_channel`（只在 Windows）。
@@ -525,7 +525,7 @@ branch `0004-linux`，從 `0004` 的 2e-7（`82a4fc7`）分出去。
 - **留給 2g-4 的**：在真的通道上量（當場完成的讀寫等不等 port 的通知、讀的大小、一條 thread 服務好幾條通道）；決定 CI 要不要加 macOS、Windows 的 runner。
 ### 2g-4：在真的通道上量（2026-11-22，Windows 11 10.0.26200、Intel Core i9-13900K）
 
-- **決定**：「已決定的事項」第 57 條（三項，看過數字之後逐項選的）。
+- **決定**：「已決定的事項」第 54 條（三項，看過數字之後逐項選的）。
 - **怎麼量的**：`tests/it/windows_channel.rs` 的 `measure`（平常不跑：`cargo test -p ipc --test it -- --ignored --exact windows_channel::measure --nocapture`）。host 是真的端點，四個會回送的 child 接在同一條 IO thread 上；每個情境重複 5 到 7 次取中位數，整組跑 3 次。測試用的 profile（有最佳化）。
 - **數字**（µs；「等 port」是 2g-2 的寫法，「不經過 port」是現在的）：
 
@@ -551,3 +551,17 @@ branch `0004-linux`，從 `0004` 的 2e-7（`82a4fc7`）分出去。
   - 多一個等價的：port 只看不等（迴圈空轉，行為一樣）。
 - **跑過的檢查**：`cargo test -p ipc`（Windows：單元 93 個、整合 69 個、量測 1 個不跑；重複 20 次）；`cargo clippy -p ipc --all-targets -- -D warnings`、`cargo fmt -p ipc --check`；`sanity.py` 的 `deps`、`unsafe`、`tests`、`numerics`、`boundary`、`spans`、`docs`。核心和端點沒有動。
 - **2g 到這裡做完**。還沒有做的、不在 2g 裡的：`cf3c85b`（共用的測試先等再寫）在 macOS 上跑一次；整個階段的 `cargo test --workspace`、`cargo fmt --check`、clippy 留到第 2 階段做完時（2h）。
+
+### 2f、2g 的審查（2026-11-22，macOS 26、Apple M4）
+
+- **做了什麼**：在 macOS 上把 2e-7 之後的 12 個 commit 讀過一次：Linux 和 Windows 的共用記憶體和通道（測試以外的部分逐行讀）、共用的介面和測試的改動、文件、第 43 到 54 條。那兩層在這台機器上編不起來，是用讀的。
+- **特別對過的**：Linux 寫入被擋時向 epoll 登記「可寫」在幾種 thread 交錯之下不漏通知（寫入和排隊在核心的同一把鎖底下）；一次讀到前一則的尾巴加下一則帶 fd 的開頭時，核心照順序把 handle 配給訊息；Windows 進行中的操作拿著的那一份 `Arc`（`hold`、`let_go`、取走通知時的 `Arc::from_raw`）每條路徑成對；Windows 的鎖的順序一致；child 的位元組沒有表頭，host 不會把它給的數值當成 handle。
+- **結果**：沒有發現會出錯的地方。改了四處小的：
+  - `crates/ipc/README.md` 講 `process_channel.rs` 的那一段漏了 Linux。
+  - Windows 的 `inherited` 的 `SAFETY` 理由：原本是「呼叫的人保證沒有別的 thread」；標準庫寫明 `remove_var` 在 Windows 上多條 thread 也安全，改成這個，使用規則拿掉（第 53 條裡記了）。只改了註解。
+  - Linux 的 child 不拿掉環境變數：記進第 43 條、README 和 `inherited` 的說明。
+  - 決定的編號順過：Windows 的 53 到 57 改成 50 到 54。
+- **看到、沒有動的**：Windows 的 `named_pipe` 對 overlapped 的 handle 呼叫 `ConnectNamedPipe` 時沒有給 `OVERLAPPED`，微軟的文件說要給；這裡 client 已經連上、呼叫當場回來，Windows 上的測試也過。
+- **跑過的檢查**（macOS）：`cargo test -p ipc`（單元 91 個、整合 75 個）、`cargo clippy -p ipc --all-targets -- -D warnings`、`cargo fmt --check`、`sanity.py` 的 7 項。改了註解和文件之後重跑的是 `sanity.py docs`、`unsafe` 和 `cargo fmt --check`。
+- **沒有驗到的**：共用的測試在 Windows 那一段改過一處（亂送的 child 先等它那一端），Linux 上有沒有在那之後重跑，紀錄看不出來；CI（Ubuntu）每天跑 `cargo test --workspace`，由它確認。這次改的 Windows 的註解沒有在 Windows 上編過。
+

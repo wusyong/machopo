@@ -185,7 +185,7 @@ Browser 建好控制通道的兩端，以 `--type=renderer` 和 renderer 的旗�
 
 - **Linux 和 Windows**：child 繼承一端。兩端都由 Browser 建立，沒有用名字連線的步驟，別的 process 搶不到通道。
   - Linux：fork 之後、exec 之前，只在 child 裡拿掉那一端的 close-on-exec，號碼放在環境變數裡告訴 child（第 43 條）。
-  - Windows：只在啟動 child 的那一小段把那一端設成可繼承（一次啟動一個），handle 的數值放在環境變數裡告訴 child（第 56 條）。
+  - Windows：只在啟動 child 的那一小段把那一端設成可繼承（一次啟動一個），handle 的數值放在環境變數裡告訴 child（第 53 條）。
 - **macOS**：Mach port 不能繼承，照 Chromium 的 `MachPortRendezvous`：
   - Browser 開一個 rendezvous server，用固定的前綴加上 Browser 的 pid 當名字，登記在 launchd 的 bootstrap namespace；所有 child 共用這一個 server。
   - 啟動 child 時，Browser 把要給它的 port（它的 receive port、通往 Browser 的 send right）記在 child 的 pid 底下。pid 啟動之後才知道，所以 child 的請求比登記早到時，server 等登記完成再回。
@@ -433,9 +433,9 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
     - **`Platform` 的六個函式三個平台都夠用，簽名不用改**（逐個對過，`progress.md` 的 2e-6）。
     - **平台要自己守的一條契約**（寫在 `Platform` 的說明裡）：交給端點的 handle 一定是 kernel 搬進來的，不是對方寫的數值。Windows 的 handle 是送的一方用 `DuplicateHandle` 複製進對方、訊息裡帶數值，所以 child（不能附 handle）可以在訊息裡寫任意數值；host 的平台層照著包成 handle 的話，child 就指定了 host 自己的某個 handle。所以 Windows 的通道建立時要知道對方能不能附，不能的話訊息只要說有 handle 就當成對方不在了，數值不看；要有跨 process 的測試（child 送一個假的數值）。macOS 的 right 和 Linux 的 fd 是 kernel 搬的，對方編不出來。
     - `crates/ipc/tests/it/process_channel.rs` 只用上面三個函式和 `Platform`，Linux 和 Windows 的那一層原樣跑同一份；`crates/ipc/tests/it/mach_channel.rs` 留下只有 macOS 有的（假冒 kernel 的通知、超過上限的 out-of-line、audit token）。
-    - 2f 和 2g 各自記決定時的編號：Linux 從第 43 條起，Windows 從第 53 條起（第 42 條是分頭之前最後一條共用的），兩邊都進了 `0004` 之後再順一次。
+    - 2f 和 2g 各自記決定時的編號：Linux 從第 43 條起，Windows 從第 53 條起（第 42 條是分頭之前最後一條共用的），兩邊都進了 `0004` 之後再順一次。2026-11-22 順過了：Linux 用到第 49 條，Windows 的改成第 50 到 54 條（做的時候是 53 到 57；更早的 commit message 裡寫的是舊的編號）。
 42. **一個 process 一條 IO thread，`ipc` 的迴圈管所有通道；「等」是每條 thread 一個的介面**（2026-11-21，第 2 階段的 2e-7，分頭做 2f、2g 之前；改掉第 35 條的一部分）：Browser 的 IO thread 等所有 renderer 的通道，child 的等它那一條。`ipc::endpoint` 的 `IoLoop` 是那條 thread 的迴圈：別的 thread 用 `LoopHandle::serve` 把端點交給它、`stop` 停它；某一條通道結束時告訴那個端點的 `Handler`（`gone`），其他的照常。
-    - **平台的介面拆成兩個角色**：通道的（`Platform`，每條一個：寫、map 記憶體、建 region、關掉）和等待的（`Waiter`，每條 thread 一個：把通道登記進來、等所有通道、被叫醒）。等待的對應各平台原生的東西：macOS 是一個 port set，Linux 是 epoll，Windows 是 I/O completion port。接收的緩衝區跟著等待的那一半，整條 thread 一個（Windows 例外，每條通道一塊，第 55 條）。
+    - **平台的介面拆成兩個角色**：通道的（`Platform`，每條一個：寫、map 記憶體、建 region、關掉）和等待的（`Waiter`，每條 thread 一個：把通道登記進來、等所有通道、被叫醒）。等待的對應各平台原生的東西：macOS 是一個 port set，Linux 是 epoll，Windows 是 I/O completion port。接收的緩衝區跟著等待的那一半，整條 thread 一個（Windows 例外，每條通道一塊，第 52 條）。
     - **第 35 條哪些還成立**：「迴圈由 `ipc` 提供、順序只有一份」不變（一條通道做一步還是 `Endpoint::turn`）。「一條 thread 佔住一條通道」（`Endpoint::run`）拿掉了：它的前提是 machopo 一條 IO thread 對一條通道，那不是要的。
     - **不選保留一個介面、`wait` 改成收一組通道**：每次等都要把整組交進去，Linux 和 Windows 上等於每次重建等待的集合，或者在裡面留狀態，那就是拆成兩個只是藏起來。
     - **叫醒怎麼知道是哪一條通道**：callback 由核心的通道自己拿著（`Sender::on_wake`），迴圈在端點加入時裝上：記下那條通道的編號、打斷那條 thread 的等待。平台完全不經手（`Transport` 沒有 `wake`、`Platform` 沒有 `on_wake`），所以每個平台少寫兩個函式，也沒有「平台忘了轉呼叫」這種錯。還沒加入迴圈的通道叫醒沒有作用，加入時迴圈先推它一步，所以加入之前排著的東西不會掉。
@@ -449,6 +449,7 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
 43. **Linux 的 child 怎麼拿到它那一端：只在 child 裡拿掉那個 fd 的 close-on-exec，號碼放在環境變數**（2026-11-22，第 2 階段的 2f，「啟動」）：`spawn` 用 `UnixStream::pair` 建兩端，在 `Command` 的 `pre_exec` 裡（fork 之後、exec 之前，只在 child 的 process 裡）用 `fcntl` 拿掉 child 那一端的 close-on-exec，號碼寫進一個環境變數；child 起來之後 host 關掉自己手上的那一端。`inherited` 讀環境變數，確認那個 fd 是 `AF_UNIX` 的 stream socket，收下、重新設 close-on-exec；只拿一次，第二次回 `None`（macOS 的 rendezvous 也只給一次）。
     - **號碼不是秘密**：fd 只在擁有它的 process 裡有意義，知道號碼的別的 process 拿不到它。只有這一個 child 拿得到 fd，靠的是 close-on-exec 只在它的 process 裡拿掉；改了環境變數、指向別的 fd 的，頂多是通道上收到不合格式的東西、通道關掉。孫 process 會繼承環境變數，但 fd 已經重新設了 close-on-exec，它拿不到。
     - **號碼不放命令列**：測試的 child 是測試的執行檔本身（libtest），多一個它不認得的參數就壞了。
+    - **child 不把變數從自己的環境拿掉**（2026-11-22 審查時定的，使用者選的；Windows 會拿掉，第 53 條）：`std::env::remove_var` 在 Linux 上只有 process 沒有別的 thread 時才安全，`inherited` 保證不了，也不該把這件事變成呼叫的人的責任。孫 process 看得到變數，但那個號碼在它那裡是關著的（上一點），`inherited` 回 `None`。不選由啟動孫 process 的人在 `Command` 上清掉：要靠每一處記得做，而留著沒有害處。
     - **不選當成 child 的 stdin 傳**（起草時的建議；host 和 child 都不用 `unsafe`，std 也照舊走 `posix_spawn`）：在 `inherited` 之前讀 stdin 的程式會吃掉通道的位元組；用 gdb、rr、strace 這類工具包著 renderer 時它們要用 stdin；呼叫的人自己設的 stdin 會被悄悄蓋掉；查問題的人想不到 fd 0 是一條雙向的 socket。
     - **不選 dup2 到另一個號碼**（Chromium 的做法）：dup2 會悄悄關掉目標號碼上原本的 fd（std 在 fork 的路上開一條回報 exec 失敗的 pipe，號碼可能就是那個），exec 失敗時 `spawn` 會回傳成功；來源和目標剛好同一個號碼時 dup2 什麼都不做，close-on-exec 還在，child 拿不到。兩個都補得起來，但補的是用不到的東西：號碼反正要告訴 child，沿用原本的號碼就好。
     - **不選在 Browser 裡、spawn 之前拿掉 close-on-exec**：同時有別的 thread 在啟動 child 的話，fd 會漏給那個 child，它就能讀這個 renderer 和 Browser 之間的通道。
@@ -486,37 +487,37 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
     - **16 個事件**留在 waiter 裡一個一個交出去。原本打算 `remove` 時丟掉屬於那條通道的，沒有做：key 不重用，找不到的本來就略過。它也是「別的 thread 打斷等待，最多晚多久被處理」的上限：16 次 `recvmsg`，估計最多約 0.3 ms，沒有量。
     - 對照 Chromium：`channel_posix.cc` 每次可讀時連續讀，最多 256 KiB（`kMaxBatchReadCapacity`）。
 
-53. **Windows 的平台層分五段，每一段開始前先定那一段的事**（2026-11-22，第 2 階段的 2g）：探測（`prototype-windows/`，2026-11-21 做的，只量 Windows 自己的行為）；2g-1 共用記憶體；2g-2 通道和它的 `Waiter`（同一個 process 裡的測試）；2g-3 `spawn`、`inherited`、`child_gone` 和跨 process 的測試；2g-4 在真的通道上量、文件、CI 的 runner。
+50. **Windows 的平台層分五段，每一段開始前先定那一段的事**（2026-11-22，第 2 階段的 2g）：探測（`prototype-windows/`，2026-11-21 做的，只量 Windows 自己的行為）；2g-1 共用記憶體；2g-2 通道和它的 `Waiter`（同一個 process 裡的測試）；2g-3 `spawn`、`inherited`、`child_gone` 和跨 process 的測試；2g-4 在真的通道上量、文件、CI 的 runner。
     - **2026-11-21 寫過一版，沒有留**：那一版照第 42 條之前的介面寫（通道自己擁有 completion port、自己等），而且共用記憶體和通道裡有好幾處選擇沒有先問過。第 42 條之後通道的擁有權整個不同，所以重寫；每一段要選的事先列出來、確認了才寫。留下來的只有探測和它量到的數字。
-54. **Windows 的共用記憶體**（2026-11-22，2g-1；三項都是使用者確認的）：
+51. **Windows 的共用記憶體**（2026-11-22，2g-1；三項都是使用者確認的）：
     - **section 的存取清單誰都不允許，而且不讓擁有者改清單**。問題：交給 renderer 的 handle 只能讀，但 `DuplicateHandle` 要的權限比來源多時，kernel 照 section 的清單檢查；物件的擁有者不看清單就能改清單（`WRITE_DAC`），而同一個使用者的 process 都是擁有者。實測：清單是空的時候，要一個帶 `WRITE_DAC` 的 handle 要得到。所以清單裡放一項：對 owner rights（S-1-3-4）拒絕 `WRITE_DAC`。不選空的清單（Chromium 的做法，`base/memory/platform_shared_memory_region_win.cc`，2026-11-22 的 `main`）：它靠 sandbox 讓 renderer 不是擁有者，這裡還沒有 sandbox。代價是多一段建 SID 和加一項的 FFI。
     - **交出去的 handle 只有 map 的權限，收到的 handle 不檢查是哪一種 section**。問題：對方給的 handle 可能不是這裡建的那種（例如執行檔的 image section）；要檢查就得留著 `SECTION_QUERY`。現在只有 child 收 host 的 handle，host 不收 child 的（第 17 條），送的一方是可信的，所以不檢查、權限也不留：沒有人能觸發的 FFI 是壞了最不容易發現的。Chromium 兩件都做（建立時留 `FILE_MAP_READ | FILE_MAP_WRITE | SECTION_QUERY | READ_CONTROL`，唯讀的是 `FILE_MAP_READ | SECTION_QUERY`；收到時用 `NtQuerySection` 查不是 `SEC_IMAGE`，並試著要 `FILE_MAP_WRITE` 看和模式一不一致）：它的 renderer 可以送 region 給 Browser。**之後開放 child 送 handle 時，這兩個檢查和 `SECTION_QUERY` 要一起加。**
     - **region 的 handle 是 std 的 `OwnedHandle`，不另外包一個型別**。問題：型別上看不出它是 section，任何 handle 都能傳給 `map`。留著通用的型別：傳錯的由 kernel 在 map 時拒絕；通道收到的數值本來就只能「當成」section，包一層也沒有多保證什麼。macOS 的 `SendRight`、Chromium 的 `win::ScopedHandle` 也是通用的。
     - **照已經定的和 macOS 的做法，沒有另外選的**：只做兩種（第 37 條）；長度要是整頁，不是的不建（核心只要 64 KiB 起每次加倍的大小，第 29 條）；`map` 的長度是 0 時不 map（Windows 把 0 當成整個 section）；map 可以少於整塊、不能多；不比對 section 實際的大小（Chromium 收到和 map 的時候也不比）。
     - **建立時就預訂整塊的 commit**（`PAGE_READWRITE`，不加 `SEC_RESERVE`；和 Chromium 一樣）：訂不到時 `create` 沒有結果，核心把資料放在訊息裡。Chromium 這時會重試、並結束別的 process 來騰記憶體，這裡不做。
 
-55. **Windows 的通道和它的 `Waiter`**（2026-11-22，2g-2；十項都是逐項列出問題和選項之後使用者選的，Chromium 的部分對的是當天的 `main`）：
+52. **Windows 的通道和它的 `Waiter`**（2026-11-22，2g-2；十項都是逐項列出問題和選項之後使用者選的，Chromium 的部分對的是當天的 `main`）：
     - **通道交給迴圈之前不寫**。問題：pipe 要到 `Waiter::add` 才在 completion port 上，在那之前沒當場完成的寫入沒有人收得到它的完成，而且探測量到發出它的 thread 一結束 kernel 就取消它。做法：加入之前 `write` 一律回 `WouldBlock`，訊息留在核心的佇列；加入時被拒絕過的那一端會被告知有空間。不選照樣寫（要依賴「關聯之前發出的操作完成時進不進 port」，文件沒有寫）；不選建通道時就給 port（要改三個平台共用的 `Waiter::add`）。Chromium 一樣：`delay_writes_` 到 `StartOnIOThread` 註冊完才清掉。
     - **讀的緩衝區每條通道一塊**（第 42 條的「整條 thread 一個」在 Windows 做不到）。問題：completion port 是先把緩衝區交給 kernel、資料到了才通知，所以每條在等資料的通道都要有一塊在 kernel 手上。不選用長度 0 的讀當通知、再用共用的緩衝區讀：每批資料多一次系統呼叫，切到一半的那半段還是要每條通道自己存。大小先固定（一次寫入的上限，64 KiB），2g-4 量。Chromium 也是每條通道自己的，從 4096 起、不夠就加倍。
     - **進行中的讀寫自己拿著通道的一份 `Arc`，完成的通知被取走時才放掉；迴圈停下來時不收**。問題：通道關掉（`CancelIoEx`、關 pipe）之後，kernel 還會寫那筆操作的 `OVERLAPPED` 和緩衝區，直到它的通知從 port 取走。通道離開迴圈之後遲到的通知照樣被取走、釋放，不報給迴圈。迴圈停下來（waiter 丟掉）時還在進行的不收：那幾塊記憶體不釋放，洩漏是安全的、釋放才不安全；`shut` 一定關掉所有 handle，所以留下的只有記憶體。不選關的時候等通知收完（2026-11-21 那一版，最多 5 秒）：一條 IO thread 上會卡住所有通道。不選停下來時收完再關 port：多一條測試走不到的路（超過時限）和一個沒有依據的數字；正式的用法裡迴圈只在 process 結束時停。Chromium 一樣：`pending_read_`、`pending_write_` 讓物件活到 `OnIOCompleted`，IO thread 結束時不收（「Pending IO will never be dispatched once the pump is gone」）。
     - **child 說它帶了 handle 時由核心當成壞訊息；改掉第 41 條的契約的寫法**。問題：兩種做法都不看數值，差在通道結束的理由。原本寫的是平台層當成對方不在了；改成平台層不交出 handle、核心看到訊息說有 handle 而這一端不准附，照壞訊息關掉（`HandlesNotAllowed`）。這樣理由和另外兩個平台一樣，不分平台的跨 process 測試原樣通過，判斷只有核心那一份。`Platform` 的說明跟著改一句（共用的檔案，單獨一個 commit）。
     - **一次寫入最多 64 KiB（含表頭），pipe 的緩衝區 64 KiB**。問題：沒當場完成的寫入，平台層要自己留一份副本到完成；一次收多少副本就多大，而一則訊息最大 128 MiB。探測量到：緩衝區 4 KiB 到 1 MiB 相差在 15% 以內，一次 64 KiB 比整則快 13% 到 17%。不選整則一次寫（Chromium：緩衝區 4096、整則寫，它的佇列擁有訊息的記憶體所以不用副本）。
-    - **當場完成的讀寫也等 port 的通知才算完成**（先寫這一種，2g-4 兩種都量；**量過之後改掉了，第 57 條**）。問題：`WriteFile`、`ReadFile` 當場完成時要不要也等 IO thread 取到通知。等的話只有一條路、一種狀態，代價是每則送出的訊息 IO thread 都要醒一次。另一種（`FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`）是這一種加一條捷徑。Chromium 是這一種。
+    - **當場完成的讀寫也等 port 的通知才算完成**（先寫這一種，2g-4 兩種都量；**量過之後改掉了，第 54 條**）。問題：`WriteFile`、`ReadFile` 當場完成時要不要也等 IO thread 取到通知。等的話只有一條路、一種狀態，代價是每則送出的訊息 IO thread 都要醒一次。另一種（`FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`）是這一種加一條捷徑。Chromium 是這一種。
     - **只有 host 往 child 的方向有這一層的表頭**。問題：pipe 是位元組串流，handle 的數值要跟著某一則訊息的第一段，所以 host 的每次寫入前面有表頭（後面幾個位元組、幾個 handle，各 `u32`；每個 handle 一個 8 位元組的數值）。child 往 host 沒有 handle 會走，所以那個方向沒有表頭，寫的就是核心的位元組：host 不解析 child 的任何平台層位元組，沒有任何一行會把位元組變成 handle，不被信任的輸入全部由核心（有 fuzzer 和模型）處理。不選兩個方向對稱（Chromium 的做法，它的 child 也送 handle）：host 要解析 child 寫的表頭，那一段工具看不到。之後開放 child 送 handle 時這個方向要加格式；那時 host 也不能照數值收，要去 child 的 process 把 handle 拉過來。
     - **pipe 建立時的保護**：照 Chromium 的 `platform_channel.cc`（名字第一次用、只有一個 instance、位元組模式、client 那一端沒有再建 instance 的權限、server 不能冒用 client、建好後確認 client 連著），另外四點不同：加 `PIPE_REJECT_REMOTE_CLIENTS`（Chromium 沒有；多一層）；名字是 pid、process 裡的序號和標準庫的 `RandomState` 給的 64 位元亂數（名字被猜到只會讓我們建不成，搶不到通道）；兩步的失敗都換名字重試，最多 8 次，再不行回 `None`（Chromium 只重試一次、其餘讓 process 當掉）；兩端建立時都不可繼承（Chromium 建立時就可繼承，因為它啟動 process 時用清單指定繼承哪幾個；用標準庫的 `Command` 沒有清單，怎麼交給 child 是 2g-3 的事）。
     - **host 在寫入當下才把 handle 複製進 child，失敗就收回**。順序：有寫入在進行就回 `WouldBlock`、什麼都不複製；否則逐個複製（照原樣的權限、在 child 裡不可繼承）、寫 pipe；寫入發出去之後才關掉自己的那一份；複製到一半或寫入當場失敗時，把已經放進 child 的從 child 裡關掉。host 留的 child 的 process handle 只有 `PROCESS_DUP_HANDLE`，不借用 `Child` 的那一個。child 收到的數值是 0 或 -1 時當成對方不在了。不選複製的同時關掉來源、失敗不收回（Chromium 的 `DUPLICATE_CLOSE_SOURCE`）：寫入失敗時 child 裡留一個它不知道的 handle，而且「不留東西」沒辦法用測試守。
     - **幾個小的**：寫入完成的位元組數不是整段，當成對方不在了（Chromium 一樣）；child 收到不合理的表頭（長度 0、超過一次寫入、handle 超過 16 個）當成對方不在了；讀失敗或讀到 0 個位元組當成對方不在了，不分哪一種錯誤（Chromium 一樣）；打斷等待被呼叫很多次只往 port 放一筆；核心交來 0 個位元組時什麼都不寫。
     - **寫的時候定的細節**：「又有空間」只告訴被拒絕過的那一端（每筆寫入完成都報的話，每則訊息端點都要多推一步）；對方不在了只報一次（讀和寫可能都失敗）；自己關掉的那一端之後什麼都不報；`Channel` 的值丟掉就是關掉（waiter 可能還拿著它的內部狀態）；child 那一端被交了 handle 時放掉它們（核心的約定是寫入收了位元組就收走 handle，而它沒有地方放）。
 
-56. **Windows 上 child 怎麼拿到它那一端**（2026-11-22，2g-3；四項都是逐項列出問題和選項之後使用者選的）：
+53. **Windows 上 child 怎麼拿到它那一端**（2026-11-22，2g-3；四項都是逐項列出問題和選項之後使用者選的）：
     - **用標準庫的 `Command`，client 那一端只在啟動的那一小段可繼承，整段包在一把鎖裡**。問題：Windows 讓 child 繼承 handle 有兩種，給清單（只繼承指定的）和不給（這段時間啟動的每個 process 都繼承所有可繼承的）；標準庫只有第二種（給清單的 `spawn_with_attributes` 在 1.99 還是 unstable，對過這台的原始碼）。別的 process 多拿到 client 那一端時，它能讀寫通道，而且真正的 child 當掉時 pipe 不會斷。做法：`spawn` 拿鎖、把 client 那一端設成可繼承、啟動、關掉自己的那一份、放鎖。**留下的缺口**：鎖只管得到經過 `ipc::platform::spawn` 的，Browser 在別處同時啟動別的 process 時那個 process 也會拿到；現在 machopo 的 Browser 沒有在別處啟動 process。記在 `docs/limitations.md`。不選照 Chromium 自己呼叫 `CreateProcessW` 給清單（`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`）：標準庫的 `Child` 不能從 process handle 建出來，第 41 條的簽名要改、另外兩個平台跟著改，還要自己組命令列、環境變數的區塊、標準輸出入；這些本來就是作業系統的 sandbox 那一份要做的（restricted token、job 都要自己呼叫 `CreateProcessW`），那時整個啟動重寫，**做 sandbox 時換成這個**，缺口跟著消失。不選不繼承、child 用名字連上來、host 照 kernel 說的 client 的 pid 確認：通道多一個「等對方連上來」的狀態，child 沒連就結束時 kernel 不說話。
     - **數值放環境變數 `MACHOPO_IPC_CHANNEL`**（十進位）。問題：child 繼承到的 handle 在它那裡是一個數值，啟動時要有人告訴它；管道只有命令列和環境變數。不選命令列的 switch（Chromium 的 `--mojo-platform-channel-handle`）：不分平台的跨 process 測試的 child 是測試的執行檔自己，它的入口是 test harness，不認得的 `--` 參數會讓它在我們的程式跑到之前就結束；`ipc` 也得往呼叫的人的 `Command` 加參數、child 那邊要有人挑出來，`inherited()` 的簽名就不能三個平台一樣。安全性上沒有差別（數值只是 child 的 handle 表裡的編號）。做 sandbox、child 的入口是我們自己的時候可以重看。`inherited` 讀到之後確認那個數值是一個 pipe（`GetFileType`），不是就沒有通道：擋的是變數被別人亂設。`spawn` 啟動完把變數從呼叫的人的 `Command` 拿掉。
-    - **child 拿到之後清掉交接留下的三樣東西**：把 handle 設回不可繼承（不然它自己啟動的 process 會拿到通道的一端）；把變數從自己的環境拿掉（不然傳給孫 process）；一個 process 只能拿到一次（另有一個旗標守著，不靠變數有沒有清）。拿掉變數是 `unsafe` 的 `std::env::remove_var`，所以 `inherited` 的使用規則是在 process 還沒有別的 thread 時呼叫。host 這一側啟動完就關掉自己的 client 那一端（不關的話 child 當掉時 pipe 不會斷）。
+    - **child 拿到之後清掉交接留下的三樣東西**：把 handle 設回不可繼承（不然它自己啟動的 process 會拿到通道的一端）；把變數從自己的環境拿掉（不然傳給孫 process）；一個 process 只能拿到一次（另有一個旗標守著，不靠變數有沒有清）。拿掉變數是 `unsafe` 的 `std::env::remove_var`，原本因此規定 `inherited` 要在 process 還沒有別的 thread 時呼叫；2026-11-22 審查時拿掉這條規定：標準庫寫明它在 Windows 上多條 thread 的程式裡也安全，一個安全的函式也不該靠呼叫的人才安全。host 這一側啟動完就關掉自己的 client 那一端（不關的話 child 當掉時 pipe 不會斷）。
     - **`child_gone` 在 Windows 上什麼都不做**。問題：child 還沒拿它那一端就結束時 host 要知道。child 是用繼承拿到的，process 一啟動那一端就在它的 handle 表裡、結束時 kernel 關掉，host 的讀就失敗（探測量過：kill 之後 0.6 到 1.4 ms）。第一點留下的缺口在這裡的樣子是：別的 process 也拿著 client 那一端時 child 死了 host 收不到；和那個缺口一起在做 sandbox 時消失。不選 `child_gone` 主動通知（一張 pid 對通道的全域表、waiter 多一種通知）、不選通道自己等 child 的 process handle（系統 thread pool 的回呼，或 job 接到 port 上）：補的是現在碰不到、之後會消失的缺口。Chromium 的分工相同：`ChannelWin` 只看 pipe，process 的死活由啟動它的那一層看。
-    - **共用的測試改了一處**（單獨一個 commit）：`process_channel.rs` 裡亂送的 child 原本先寫、再開始等它那一端；Windows 的通道在有 thread 服務之前不寫（第 55 條），所以改成先等、再寫。另外兩個平台上順序無所謂。
+    - **共用的測試改了一處**（單獨一個 commit）：`process_channel.rs` 裡亂送的 child 原本先寫、再開始等它那一端；Windows 的通道在有 thread 服務之前不寫（第 52 條），所以改成先等、再寫。另外兩個平台上順序無所謂。
 
-57. **Windows 的通道量過之後定的三件事**（2026-11-22，2g-4；使用者逐項選的。數字在 `progress.md` 的 2g-4）：
-    - **當場完成的讀寫就算完成，不經過 completion port**（`FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`；改掉第 55 條的「也等 port 的通知」）。量到：一次送 20000 則小訊息，每則來回從 2.42 µs 到 1.15 µs；四個 child 共用一條 IO thread 同時送，從 3.50 µs 到 0.40 µs；大的資料一樣。原因是原本每一則都要等 IO thread 取到上一則的通知才能寫下一則，IO thread 是瓶頸，通道越多越明顯，而 Browser 正是一條 IO thread 服務所有 renderer（第 42 條）。**一來一回可能慢約 3 µs**（原本 10.6 到 11.5，現在 13.4 到 14.2；另一組走同一段程式的量到 11.8 到 14.1，所以不確定是不是真的；可能的原因是原本每筆寫入多的那一次通知剛好讓 IO thread 在回覆到的時候還醒著）。使用者在知道這一點之後維持這個選擇：machopo 平常的訊息稀疏，這一點每秒不到 1 ms，而另一種的弱點隨負載變大。
+54. **Windows 的通道量過之後定的三件事**（2026-11-22，2g-4；使用者逐項選的。數字在 `progress.md` 的 2g-4）：
+    - **當場完成的讀寫就算完成，不經過 completion port**（`FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`；改掉第 52 條的「也等 port 的通知」）。量到：一次送 20000 則小訊息，每則來回從 2.42 µs 到 1.15 µs；四個 child 共用一條 IO thread 同時送，從 3.50 µs 到 0.40 µs；大的資料一樣。原因是原本每一則都要等 IO thread 取到上一則的通知才能寫下一則，IO thread 是瓶頸，通道越多越明顯，而 Browser 正是一條 IO thread 服務所有 renderer（第 42 條）。**一來一回可能慢約 3 µs**（原本 10.6 到 11.5，現在 13.4 到 14.2；另一組走同一段程式的量到 11.8 到 14.1，所以不確定是不是真的；可能的原因是原本每筆寫入多的那一次通知剛好讓 IO thread 在回覆到的時候還醒著）。使用者在知道這一點之後維持這個選擇：machopo 平常的訊息稀疏，這一點每秒不到 1 ms，而另一種的弱點隨負載變大。
     - **這樣做多出來的三件事**：每筆操作分「當場完成（沒有通知，不拿通道的計數）」和「進行中（有通知，拿著）」；pipe 加入迴圈時先設好這個模式才讀寫，設不成就加不進去（沒設而照常跑的話，當場完成的操作會既當場結算、又收到通知，計數多還一次）；IO thread 自己守公平，因為資料一直當場讀得到時同一條通道可以一直讀：借出一筆之後下一輪換別條有東西的通道，連續 8 輪之後一定看一次 port（只看、不等）。對另外兩個平台沒有影響，它們本來就是「有空間就當場寫完」。Chromium 不設這個模式。
     - **讀的緩衝區維持每條通道固定 64 KiB**。量到：改成 128 KiB 只有 48 KiB 放在訊息裡的那一種快 22%（剛好比一次寫入多一點、被切成兩段的），其餘沒有差別；每條通道多 64 KiB 不值得。不選 Chromium 的從 4096 開始、不夠就加倍：固定 4096 在這裡不能用（child 那一端要整筆到齊才借出去），會長大的那一種只省記憶體（只收小訊息的通道一條省 60 KiB，一百個 renderer 6 MiB），多約四十行；量到每條通道的記憶體是問題時再換，介面不變。
     - **「多大的資料改走 region」在 Windows 上留在 64 KiB**：真的通道上 64 KiB 走 region 來回 28 到 33 µs，48 KiB 放在訊息裡 46 µs，1 MiB 是 650 對 1340 µs。
@@ -524,7 +525,7 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
 
 ## 待決定
 
-- **CI 之後要不要加 macOS、Windows 的 runner**（第 40 條；2g 做完時定了先不加，第 57 條）：要跑的只有 `cargo test -p ipc`（不依賴 V8，幾分鐘）。重看的時機：共用的改動又在另一個平台上壞掉而沒有人發現時，或作業系統的 sandbox 開始做的時候。要看的是費用（GitHub 的 macOS runner 是 Linux 的 10 倍、Windows 是 2 倍）和 runner 的系統版本與開發機不同時那幾個實測來的行為還成不成立。
+- **CI 之後要不要加 macOS、Windows 的 runner**（第 40 條；2g 做完時定了先不加，第 54 條）：要跑的只有 `cargo test -p ipc`（不依賴 V8，幾分鐘）。重看的時機：共用的改動又在另一個平台上壞掉而沒有人發現時，或作業系統的 sandbox 開始做的時候。要看的是費用（GitHub 的 macOS runner 是 Linux 的 10 倍、Windows 是 2 倍）和 runner 的系統版本與開發機不同時那幾個實測來的行為還成不成立。
 - **IO thread 上複製大資料的時間**（第 36 條；第 3 階段量捲動時每個 frame 的延遲時一起看）：64 KiB 以上的 `BigBuffer` 在 IO thread 上從 region 複製出來，那一段時間後面的訊息等著。量到是問題時，把複製搬到目標 thread（IO thread 只交出「這一塊的借據」，目標 thread 複製完再還）：線上的格式不變，代價是表跨 thread 共用、多一組 loom 的模型。
     - **第 42 條之後影響變大**（2026-11-21）：Browser 的一條 IO thread 管所有 renderer 的通道，一個 renderer 送大資料時，等的是其他每一個 renderer 的訊息，不只是它自己後面的。
     - **現在有的數字**：複製一次約 18 到 26 µs/MiB（第 36 條的 1 MiB 約 18 µs、8 MiB 約 150 µs；macOS 的通道借出來不複製是 8 MiB 408 µs、多複製一次是 622 µs）。照這個推算，64 MiB 約 1.7 ms、256 MiB 約 7 ms、最大的一塊 1 GiB 約 27 ms；這幾個是推算，沒有量過那麼大的，也沒有和解碼合在一起量。常見的大小（幾百 KiB 到幾 MiB）是幾十到幾百 µs。

@@ -108,6 +108,11 @@ pub fn spawn(command: &mut Command) -> io::Result<(Child, Channel)> {
 
 /// In a process started by [`spawn`]: its end of the channel. `None`
 /// when the parent left none, and from the second call on.
+///
+/// The variable stays in this process's environment, and what the process
+/// starts sees it: taking it out is sound only with no other thread, which
+/// isn't this function's to know. The number is closed in such a process
+/// (the descriptor is close-on-exec again), so it finds no end there.
 pub fn inherited() -> Option<Channel> {
     static TAKEN: AtomicBool = AtomicBool::new(false);
     let number: i32 = std::env::var(INHERITED_FD).ok()?.parse().ok()?;

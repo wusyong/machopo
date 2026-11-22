@@ -742,9 +742,8 @@ pub fn spawn(command: &mut Command) -> io::Result<(Child, Channel)> {
 }
 
 /// In a process started by [`spawn`]: its end of the channel, once.
-/// `None` when the parent gave none, or it was taken already. Called
-/// before the process has other threads: it takes the variable out of
-/// the process's environment.
+/// `None` when the parent gave none, or it was taken already. It takes
+/// the variable out of the process's environment.
 pub fn inherited() -> Option<Channel> {
     static TAKEN: AtomicBool = AtomicBool::new(false);
     if TAKEN.swap(true, Ordering::SeqCst) {
@@ -752,8 +751,9 @@ pub fn inherited() -> Option<Channel> {
     }
     let value = std::env::var(CHANNEL_VARIABLE).ok()?;
     // A child of this process's own is told of no end: it has none.
-    // SAFETY: the caller's to see to, as said above: no other thread
-    // reads or writes the environment meanwhile.
+    // SAFETY: on Windows the environment is changed by a call of the
+    // system's that any thread may make while others read it, and this
+    // module is built for Windows alone.
     unsafe { std::env::remove_var(CHANNEL_VARIABLE) };
     end_named(&value)
 }
