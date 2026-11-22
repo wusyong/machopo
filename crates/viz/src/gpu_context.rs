@@ -536,12 +536,14 @@ impl GpuContext {
                 row.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT),
             )
         };
+        let making = trace_event::trace_event!("SharedImage::StageBuffer");
         let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("viz shared pixels"),
             size: u64::from(padded_row).saturating_mul(u64::from(size.height)),
             usage: wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: true,
         });
+        drop(making);
         // A device that was lost makes a buffer that isn't one: nothing
         // is mapped, and there is nothing to unmap (which wgpu takes as
         // a fatal error). The device's textures went with it; the client
@@ -550,14 +552,19 @@ impl GpuContext {
             tracing::debug!("viz: no buffer for shared pixels: the device is lost");
             return;
         };
+        let copying = trace_event::trace_event!("SharedImage::StageCopy");
         let copied = copy_rows(pixels, mapped.slice(..), row, padded_row);
+        drop(copying);
+        let unmapping = trace_event::trace_event!("SharedImage::StageUnmap");
         drop(mapped);
         buffer.unmap();
+        drop(unmapping);
         if !copied {
             // Not all there (the caller checked they were): the texture
             // keeps what it had.
             return;
         }
+        let _encoding = trace_event::trace_event!("SharedImage::StageEncode");
         let mut staged = self.staged.lock().unwrap_or_else(|e| e.into_inner());
         let encoder = staged.get_or_insert_with(|| {
             self.device

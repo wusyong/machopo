@@ -116,6 +116,8 @@ IO_THREAD = "Chrome_IOThread"
 BROWSER_PARTS = {
     IO_THREAD: ("ChannelHost::OnMessage",),
     VIZ_THREAD: ("SharedImage::Write", "SharedImage::WriteTexture", "SharedImage::StageTexture",
+                 "SharedImage::StageBuffer", "SharedImage::StageCopy", "SharedImage::StageUnmap",
+                 "SharedImage::StageEncode", "SharedImage::CreateTexture", "SharedImage::BindGroups",
                  "SharedImage::Submit", "Display::DrawAndSwap"),
 }
 
