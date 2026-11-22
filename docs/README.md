@@ -18,6 +18,7 @@
 | `rfcs/pre-rfcs/` | MVP 時期的規劃、各階段的設計和進度。2026-10-04 起凍結，不再更新內容（見它的 README）；它的路徑和測試指令是當時的樣子，`sanity.py docs` 不檢查，只剩壞掉的章節引用要修 | 任何新的東西 |
 | `crates/*/README.md` | 那個 crate 的 API、使用規則、怎麼修改、測試怎麼跑；各子系統怎麼運作也寫在這裡。`crates/shell/README.md` 另外放視窗裡的鍵盤和滑鼠操作 | 進度 |
 | `crates/bindings/soundness.md` | `bindings` 的安全論證（DOM 的 GC 的在 elise 的 `docs/`）：假設、不變式、找到的漏洞、mutation test、人工審查清單 | API 教學 |
+| `crates/ipc/soundness.md` | `ipc` 的安全論證：要保證的性質、信任誰、對 kernel 的假設（每個平台）、不變式、每一處 `unsafe`、修改時要審查什麼 | API 和各部分怎麼運作（在它的 README） |
 | `../third_party/*/README.machopo.md` | 放在 machopo 旁邊、各自是 git repo 的第三方專案裡，上游的 fork（`machopo` 分支；`../third_party/wpt` 是上游本身、不改，沒有這個檔，見 `tests/wpt/README.md`）：上游和分支的起點、為什麼 fork、本地的修改（`machopo` 分支上的 commit；parley 和 taffy 的另外標明上游的狀態，每個也是 machopo 的 `patches/<名稱>/` 底下的 patch）、怎麼更新。用英文 | 設計理由（寫在對應的 RFC） |
 | repo 根目錄的 `README.md` | 入口，英文：這是什麼、從哪幾份文件讀起、怎麼放第三方的專案、怎麼 build 和跑、常用的測試指令、哪些部分用哪一種授權（條文在 `LICENSE-MIT`、`LICENSE-APACHE`） | 設計、細節（寫在各自的文件） |
 | repo 根目錄的 `CLAUDE.md` | 給 AI 助手的工作約定：先讀哪些文件、怎麼做決定、不要做的事、完成前要跑的檢查、fork 的規則。內容盡量指向其他文件；在 repo 裡，`sanity.py docs` 也檢查它（它寫到的 `../third_party/rusty_v8_artifacts` 是 `ci.py v8` 在本機產生的，不算錯） | 設計、進度、規則的完整內容（寫在它指向的文件裡） |

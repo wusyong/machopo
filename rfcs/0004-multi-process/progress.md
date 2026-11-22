@@ -37,7 +37,7 @@
 | 2g-2：Windows 的通道和它的 `Waiter`（completion port；同一個 process 裡的測試；第 52 條） | 完成 | 2026-11-22 |
 | 2g-3：Windows 的 `spawn`、`inherited`、`child_gone`（繼承加環境變數，第 53 條）；不分平台的跨 process 測試原樣通過；Windows 自己的跨 process 測試 | 完成 | 2026-11-22 |
 | 2g-4：在真的通道上量；當場完成的讀寫改成不經過 completion port、讀的緩衝區維持 64 KiB、CI 先不加 runner（第 54 條） | 完成 | 2026-11-22 |
-| 2h：第 2 階段的檢查、`soundness.md`、`test.py` 的指令、文件；把 `test.py ipc` 的每一項排進每週的 CI（2a 起在本機跑） | 未開始 | |
+| 2h：第 2 階段的檢查、`unsafe` 的論證、`test.py` 的指令、文件；`test.py ipc` 的每一項不排進 CI，留在本機跑（第 55 條；原本規劃排進每週的 CI） | 完成 | 2026-11-22 |
 | 3：啟動 child process | 未開始 | |
 
 ## 驗收
@@ -564,4 +564,14 @@ branch `0004-linux`，從 `0004` 的 2e-7（`82a4fc7`）分出去。
 - **看到、沒有動的**：Windows 的 `named_pipe` 對 overlapped 的 handle 呼叫 `ConnectNamedPipe` 時沒有給 `OVERLAPPED`，微軟的文件說要給；這裡 client 已經連上、呼叫當場回來，Windows 上的測試也過。
 - **跑過的檢查**（macOS）：`cargo test -p ipc`（單元 91 個、整合 75 個）、`cargo clippy -p ipc --all-targets -- -D warnings`、`cargo fmt --check`、`sanity.py` 的 7 項。改了註解和文件之後重跑的是 `sanity.py docs`、`unsafe` 和 `cargo fmt --check`。
 - **沒有驗到的**：共用的測試在 Windows 那一段改過一處（亂送的 child 先等它那一端），Linux 上有沒有在那之後重跑，紀錄看不出來；CI（Ubuntu）每天跑 `cargo test --workspace`，由它確認。這次改的 Windows 的註解沒有在 Windows 上編過。
+
+### 2h：第 2 階段的檢查和文件（2026-11-22，macOS 26、Apple M4）
+
+- **決定**：「已決定的事項」第 55 條（`test.py ipc` 的五項不排進 CI，使用者定的：`ipc` 之後分成獨立的專案，CI 那時做）。論證另外寫成 `crates/ipc/soundness.md`（第 7、20 條原本就這樣寫；做到這裡只有 README 的一節，使用者選了補上）。
+- **階段結束的檢查**（照規矩整個階段跑一次）：`cargo fmt --check`、`cargo test --workspace`（60 組測試的結果都是通過）、`cargo clippy --workspace --all-targets -- -D warnings`，都沒有要修的。在 macOS 上跑的：Linux 和 Windows 的平台層不在裡面，它們各自那一段跑過 `cargo test -p ipc` 和 clippy（2f、2g 各節）。
+- **`crates/ipc/soundness.md`**（新的）：兩層的目標；信任誰；九條性質各由哪段程式守、怎麼驗證；對 kernel 的假設 K1 到 K9，每個平台各靠什麼、哪個測試守著，標出實測來的；`ipc` 自己的不變式 I1 到 I8；每一處 `unsafe` 的表（從 README 搬過來，照核心和三個平台分成四張，34 列）；怎麼驗證的；還守不住的；修改時要審查的。`crates/ipc/README.md` 的那一節改成指過去，`CLAUDE.md`、`docs/README.md`、`docs/test-gaps.md` 的指向跟著改。
+- **寫的時候對過的**：文件裡提到的每個測試名字都在程式裡找得到；共用記憶體的存取點只有 `Pool::put` 和 `Table::read` 兩處（I3）。Linux 和 Windows 的假設是照 2f、2g 的程式、測試和決定寫的，沒有在那兩台機器上重跑。
+- **文件**：「測試」的表、`docs/testing.md`、`docs/test-gaps.md` 改成 CI 不跑那五項；`test.py ipc -h` 本來就寫了每一項怎麼裝、怎麼跑，沒有改。
+- **沒有做的**：`test.py ipc` 的五項這一段沒有重跑（核心從 2e-7 之後沒有動；那時跑過，結果在 2e-7 那一節）。
+- **第 2 階段到這裡做完**。還沒有 merge 回 `main`：等使用者要求。
 

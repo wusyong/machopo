@@ -454,42 +454,7 @@ let child = Channel::child(client);                 // 在 child 裡
 
 ## `unsafe` 的論證
 
-| 地方 | 為什麼安全 |
-| --- | --- |
-| `time_ticks.rs` 的 `QueryPerformanceFrequency`、`QueryPerformanceCounter`（只在 Windows） | 傳進去的指標指向一個活著的 `i64`，呼叫只寫它、不留著它；Windows XP 以後這兩個呼叫不會失敗。頻率讀成 0 時當成 1，不會除以 0 |
-| `core/region.rs` 的 `unsafe trait Memory` | 實作的人保證：值活著的期間 `ptr()` 起 `len()` 個位元組可讀（放進 `Pool` 的還要可寫），兩者不變；這個 process 裡沒有別的參照指進那一段。`Arc<M>` 的實作只是轉給裡面的值，`Arc` 讓它活著、不搬動 |
-| `core/region.rs` 的 `Pool::put`（複製進 region） | 目的地是 `best_fit` 選的那一塊，它的長度至少是要寫的長度（Verus 證明的後置條件），`Memory` 保證那一段可寫；來源是這個 process 自己的 slice，和 region 不重疊 |
-| `core/region.rs` 的 `Table::read`（從 region 複製出來、`set_len`） | 長度先和 region 的長度比過（超過的是 `OutsideRegion`）；目的地是剛 `reserve` 過的多餘容量，`set_len` 只涵蓋剛寫的那幾個位元組。對方可能同時在寫那一塊：讀到的是位元組，不當成有不變量的型別，複製出來之後才交給上層 |
-| `platform/macos/memory.rs` 的 `mach_make_memory_entry_64`（`entry`） | 傳進去的是活到呼叫結束的兩個區域變數的指標（大小、回來的名字）；`from` 是這個 task 自己的 mapping 的位址或沒有。回 `KERN_SUCCESS` 才把名字當成 right（`SendRight::from_raw`：新的 send right，只有這裡拿著） |
-| `platform/macos/memory.rs` 的 `mach_vm_map`（`map`） | 位址由 kernel 選（`VM_FLAGS_ANYWHERE`），寫進活到呼叫結束的區域變數；不蓋掉這個 task 已有的東西。成功才建 `Mapping` |
-| `platform/macos/memory.rs` 的 `SendRight`（`from_raw`、`Drop` 的 `mach_port_deallocate`） | `from_raw` 是 `unsafe fn`：呼叫的人保證名字是這個 task 的一個 send right、沒有別人會放掉它。`Drop` 放掉一次；`into_raw` 用 `forget` 把放掉的責任交出去 |
-| `platform/linux/channel.rs` 的 `spawn`（`pre_exec` 和裡面的 `BorrowedFd::borrow_raw`） | closure 在 child 裡、fork 和 exec 之間跑，那裡只能做 async-signal-safe 的事（fork 的當下別的 thread 可能拿著任何鎖）：它只做一次 `fcntl` 的系統呼叫，不配置記憶體（錯誤只帶一個號碼）。那個號碼在 child 裡是開著的：`theirs` 在 host 活到 `spawn` 回來之後，fork 時還在。借用只到那一次呼叫結束 |
-| `platform/linux/channel.rs` 的 `inherited`（`BorrowedFd::borrow_raw`、`OwnedFd::from_raw_fd`） | 先借來問它是什麼（號碼沒開著的話兩個呼叫都是錯誤）；確認是 Unix stream socket、不是 0 到 2，才收下。號碼是 `spawn` 寫的、替這個 process 留著開的，這個 process 裡沒有別人拿過它，而且只收一次（`TAKEN`），所以只有這個值會關它。環境變數被改成指向別的 Unix stream socket 時，收下的是那一條：做得到這件事的人本來就決定這個 process 怎麼啟動 |
-| `platform/linux/memory.rs` 的 `Mapping`（`Memory`） | 裡面是 memmap2 的 `MmapRaw`：從 `map` 到 drop 都 map 著、不搬動、可讀；放進 `Pool` 的是 map 成可寫的（`create(_, false)` 的那一個、`map(_, _, true)` 的）。範圍一直在檔案裡面：`map` 只接受封住「不能縮短」的檔案，而且在看到 seal 之後才量長度；`create` 自己建的在 map 之前就封了 |
-| `platform/macos/memory.rs` 的 `Mapping`（`Drop` 的 `mach_vm_deallocate`、`Send`、`Sync`、`Memory`） | 範圍是 `map` 得到的那一段，只在 `drop` 解除一次。位址在每條 thread 上都一樣；經過 `Memory` 的讀寫都是整段位元組的複製。`Memory` 的保證：從 `map` 到 `drop` 都 map 著、不搬動、可讀；放進 `Pool` 的是 map 成可寫的（`create(_, false)` 的那一個、`map(_, _, true)` 的）。指標用 `with_exposed_provenance_mut` 從位址做出來：記憶體不是 Rust 配置的 |
-| `platform/macos/port.rs` 的三種 right（`from_raw`、`Drop`、`ReceiveRight::new`、`make_send`、`tell_when_no_senders`） | `from_raw` 都是 `unsafe fn`：呼叫的人保證名字是這個 task 的那一種 right、沒有別人會放掉。每種的 `Drop` 用對應的呼叫放掉一次（send 和 send-once 是 `mach_port_deallocate`，receive 是 `mach_port_mod_refs` 減一）；`into_raw` 用 `forget` 交出責任。其餘的呼叫都是對自己的 receive right 做的，寫的是活到呼叫結束的區域變數。`mach_port_request_notification` 是自己宣告的（mach2 沒有），照 `<mach/mach_port.h>` 的原型 |
-| `platform/macos/message.rs` 的 `Buffer::bytes`、`bytes_mut` | 把 `Vec<u32>` 看成位元組：字都初始化過，`u32` 的位元組就是位元組、任何位元組也都是合法的 `u32`，長度是 vector 的位元組數 |
-| `platform/macos/message.rs` 的 `mach_msg`（送） | 緩衝區裡是一則完整的訊息（大小就是 header 寫的那個、在 vector 的範圍內），對齊和 header 一樣；它提到的 right 是呼叫的人交出來的（`into_raw` 之後才寫進去） |
-| `platform/macos/message.rs` 的 `mach_msg_destroy`（送失敗、`discard`、收到排法不對的） | 訊息沒送出去時，它要搬的 right 還是這個 task 的，各放掉一次；只是複製的那個（`To::Port`）kernel 不會動。收到的訊息是 kernel 剛寫進緩衝區的完整的一則，`parse` 失敗時還沒有任何 right 被包成型別，所以每個只放掉一次 |
-| `platform/macos/message.rs` 的 `mach_msg`（收）、`Parsed::own` | 緩衝區是 `capacity` 位元組，kernel 不會寫超過。`own` 只在整則訊息 `parse` 通過之後才把名字包成 right：receive right 是訊息搬給這個 task 的，其餘的是 send right（`parse` 不放行別種），reply 是 send-once（`parse` 檢查過） |
-| `platform/macos/message.rs` 的 `audit_token_to_pid`（libbsm） | 傳值進去，讀其中一個字 |
-| `platform/macos/message.rs` 的 `try_send`（`mach_msg` 和失敗時的 `mach_msg_destroy`） | 緩衝區裡是一則完整的訊息；right 是複製的（呼叫的人的不動），out-of-line 的記憶體是 `body`，活到呼叫結束，kernel 做 copy-on-write、不從這個 task 解除。送失敗時 kernel 把訊息退回成收到的樣子（每個 right 多一個計數、記憶體重新 map 一份、descriptor 改成要解除）：`mach_msg_destroy` 放掉的剛好是這些。這個行為是實測的（macOS 26），有測試守著：佇列滿時連送 64 次，位址空間和 right 的計數都不變 |
-| `platform/macos/message.rs` 的 `Buffer::body`（out-of-line 的那一支）、`Mapped` 的 `Drop` | kernel 為這一則訊息 map 進來的 `len` 位元組，是送的一方那幾頁的 copy-on-write 的一份，只有這個 task 碰得到，所以可以當成 `&[u8]`（和共用的 region 不同）；借出去的 slice 活不過 `Received`，`Received` drop 時解除一次 |
-| `platform/macos/port.rs` 的 `request`、`PortSet`、`raise_queue_limit`、`dead_name_told` | 都是對這個 task 自己拿著的名字做的呼叫，讀寫的是活到呼叫結束的區域變數。`mach_port_insert_member`、`mach_port_set_attributes` 是自己宣告的（mach2 沒有），照 `<mach/mach_port.h>` 的原型。`dead_name_told` 放掉的是通知多給的那一個計數，值自己的那一個留著 |
-| `platform/macos/rendezvous.rs` 的 `bootstrap_check_in`、`bootstrap_look_up` | 傳進去的是活到呼叫結束的 C 字串和一個放名字的區域變數。成功才把名字包成 right：check-in 給的是 service 的 receive right，look-up 給的是 send right |
-| `platform/windows/memory.rs` 的 `section`（`InitializeAcl`、`AddAccessDeniedAce`、`InitializeSecurityDescriptor`、`SetSecurityDescriptorDacl`、`CreateFileMappingW`） | 每個呼叫寫的都是活到呼叫結束的區域變數：清單是 64 個位元組的陣列（以 `u32` 配置，kernel 要它對齊），放得下表頭和一項；descriptor 指向那個陣列，兩者都活到 `CreateFileMappingW` 回來。沒有檔案、沒有名字。回來的不是 null 才包成 `OwnedHandle`（新的 handle，只有這裡拿著） |
-| `platform/windows/memory.rs` 的 `with_rights`（`DuplicateHandle`） | 來源是借來的、呼叫期間開著的 handle，兩個 process 都是自己，結果寫進活到呼叫結束的區域變數。成功才包成 `OwnedHandle` |
-| `platform/windows/memory.rs` 的 `MapViewOfFile`（`map`） | 位址由 kernel 選，不蓋掉這個 process 已有的東西；handle 在呼叫期間開著。成功才建 `Mapping` |
-| `platform/windows/memory.rs` 的 `Mapping`（`Drop` 的 `UnmapViewOfFile`、`Send`、`Sync`、`Memory`）、`page` 的 `GetSystemInfo` | 和 macOS 的 `Mapping` 同一個論證：範圍是 `map` 得到的那一段，只在 `drop` 解除一次；位址在每條 thread 上都一樣，經過 `Memory` 的讀寫都是整段位元組的複製；放進 `Pool` 的是 map 成可寫的。`GetSystemInfo` 只寫一個全零也合法的區域變數，不會失敗 |
-| `platform/windows/channel.rs` 的 `Operation`、`End` 的兩個指標（`Send`、`Sync`、`Drop`） | 每個通道一筆讀、一筆寫的操作，各是自己的一塊配置（`Box::into_raw`），和通道同時建立、同時釋放，位址不變。讀的那一筆只有 IO thread 碰，寫的那一筆只在 `writing` 的鎖底下碰，而且都只在它不在進行中的時候：進行中時 kernel 隨時會寫 `OVERLAPPED`（和讀的緩衝區），這段時間沒有任何參照指著它們。`Drop` 只在計數歸零時跑，而進行中的操作拿著一個計數，所以釋放時沒有操作在進行 |
-| `platform/windows/channel.rs` 的 `hold`、`let_go`、`wait` 裡的 `Arc::from_raw` | 發出操作之前多拿一個計數（`Arc::into_raw` 之後不留指標；在呼叫之前拿，因為進行中的操作可能在呼叫回來之前就完成、通知就被取走）。呼叫回來時已經結束的（當場完成，或失敗），不會有通知，當場還回去：pipe 在加入迴圈時設了 `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`，設不成就加不進去，所以當場完成的一定沒有通知。回 `ERROR_IO_PENDING` 的，恰好一個通知，waiter 取到時用 `Arc::from_raw` 接手那一個計數。指標是操作裡記的 `end`，建立通道時從 `Arc::into_raw` 得到、之後不變。port 上只有這個 waiter 的通道的 pipe，另外只有它自己的打斷會 post、而且不帶 `OVERLAPPED`，所以帶 `OVERLAPPED` 的通知一定是其中一筆操作的，位址就是操作的位址（`repr(C)`，`OVERLAPPED` 是第一個欄位）。`kind` 和 `end` 建立之後不變，讀它們不和 kernel 搶 |
-| `platform/windows/channel.rs` 的 `ReadFile`、`WriteFile`（`End::read`、`write`） | pipe 的鎖拿著，handle 在呼叫期間開著；回報位元組數的區域變數活到呼叫結束。緩衝區和 `OVERLAPPED` 是操作自己的；操作進行中時被剛拿的計數留到通知取走，當場結束時呼叫回來之後 kernel 就不再碰它們。讀進去的是緩衝區裡還沒用的那一段；寫出去的是這次組好的那一段，長度在 64 KiB 以內 |
-| `platform/windows/channel.rs` 的 `wait` 借出去的位元組（`slice::from_raw_parts`） | 通道的讀的緩衝區裡的一段，`wait` 自己拿著通道的 `Arc`。這時沒有讀在進行，而下一筆讀只有這條 thread 會發、在借出去的這次呼叫回來之後：借出去的期間沒有人寫它 |
-| `platform/windows/channel.rs` 的 `End::next` 把數值包成 handle（`OwnedHandle::from_raw_handle`） | 只有 child 那一端做，數值是 host 寫的，host 是可信的：它為這則訊息把 handle 放進這個 process、只說一次。host 寫錯（同一個數值兩次）時 child 會把同一個 handle 關兩次。host 那一端沒有這段程式 |
-| `platform/windows/channel.rs` 的 `DuplicateHandle`（`to_duplicate_into`、`give`、`take_back`） | handle 都是借來的、呼叫期間開著的，結果寫進活到呼叫結束的區域變數。`take_back` 關的是 `give` 剛放進 child 的那幾個，child 還沒被告知有它們；沒有目標的 `DUPLICATE_CLOSE_SOURCE` 只在來源的 process 裡關掉 |
-| `platform/windows/channel.rs` 的 `inherited`、`end_named`（`std::env::remove_var`、`GetFileType`、`OwnedHandle::from_raw_handle`、`SetHandleInformation`） | `remove_var`：標準庫寫明它在 Windows 上單一和多條 thread 的程式裡都安全（改環境是系統的一個呼叫，別的 thread 可以同時讀）；這個模組只在 Windows 上編。`GetFileType` 只查那個數值，不是 handle 時它自己會說。包成 `OwnedHandle` 的數值是 host（可信）為這件事放進這個 process 的、剛確認過是 pipe，而且 `inherited` 的旗標讓它只被包一次。變數被別人設成這個 process 自己的另一個 pipe 的數值時，那個 pipe 會被當成通道、之後被關掉：能設 child 的環境的人本來就是啟動它的人 |
-| `platform/windows/channel.rs` 的 `named_pipe`、`IocpWaiter` 的 port（`CreateNamedPipeW`、`CreateFileW`、`ConnectNamedPipe`、`CreateIoCompletionPort`、`PostQueuedCompletionStatus`、`GetQueuedCompletionStatus`、`CancelIoEx`） | 名字是以 0 結尾、活到呼叫結束的陣列。回來的 handle 檢查過才包成 `OwnedHandle`（新的，只有這裡拿著）。其餘的呼叫都是對自己拿著、呼叫期間開著的 handle 做的，寫的是活到呼叫結束的區域變數 |
-| `core/region.rs` 的 `HeapMemory`（`Box::into_raw`、`from_raw`、`Send`、`Sync`） | 指標來自 `new` 裡的 `Box::into_raw`，只在 `drop` 還回去一次；配置是這個值自己的，經過 `Memory` 的讀寫都是整段位元組的複製，兩端同時複製和跨 process 的 mapping 是同一種情況 |
+在 `crates/ipc/soundness.md`：要保證的性質、信任誰、對 kernel 的假設、不變式、每一處 `unsafe` 為什麼安全、修改時要審查什麼。新增或改動一處 `unsafe` 時，程式裡的 `// SAFETY:` 和那份文件一起改。
 
 ## 測試
 
