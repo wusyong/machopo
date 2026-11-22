@@ -155,11 +155,11 @@ impl LogAgent {
     /// A message of the page's: printed, kept, and told to every session
     /// that turned `Log` on.
     pub(crate) fn add(&self, entry: LogEntry) {
-        if entry.url.is_empty() {
-            eprintln!("[console] {}", entry.text);
+        super::print_line(if entry.url.is_empty() {
+            format!("[console] {}\n", entry.text)
         } else {
-            eprintln!("[console] {} ({})", entry.text, entry.url);
-        }
+            format!("[console] {} ({})\n", entry.text, entry.url)
+        });
         let json = entry.to_json();
         {
             let mut entries = self.entries.borrow_mut();

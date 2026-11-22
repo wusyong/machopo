@@ -1877,11 +1877,21 @@ pub(crate) fn print_console(kind: &str, text: &str, url: &str, line: u32) {
     if text.is_empty() {
         return;
     }
-    match (url.is_empty(), line) {
-        (true, _) => eprintln!("[{kind}] {text}"),
-        (false, 0) => eprintln!("[{kind}] {text} ({url})"),
-        (false, line) => eprintln!("[{kind}] {text} ({url}:{line})"),
-    }
+    print_line(match (url.is_empty(), line) {
+        (true, _) => format!("[{kind}] {text}\n"),
+        (false, 0) => format!("[{kind}] {text} ({url})\n"),
+        (false, line) => format!("[{kind}] {text} ({url}:{line})\n"),
+    });
+}
+
+/// `line` (with its newline) to stderr in one write: the browser and its
+/// other renderers, in processes of their own, write there too, and what
+/// is written in pieces has theirs between the pieces. (`eprintln!` with
+/// the text and its parentheses apart writes each as it comes; one string
+/// is one write. By the macro, so that a test's run keeps it with the
+/// test's output.)
+pub(crate) fn print_line(line: String) {
+    eprint!("{line}");
 }
 
 /// The main frame's viewport, CSS px, and the device pixels per CSS px.

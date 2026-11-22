@@ -871,3 +871,8 @@ branch `0004-linux`，從 `0004` 的 2e-7（`82a4fc7`）分出去。
 - **真的視窗**（使用者開了顯示器之後；Metal）：`test.py scenarios --window`，沒有加任何旗標，72 個情境全部通過；72 份 `machopo.log` 都有「a renderer process ended」（走的是新的預設），沒有一份有 `ERROR` 或 panic。
 - **沒有驗到的**（第 70 條寫的）：整套 WPT、reftest、wdspec 用多 process，第一次是這個 commit 之後每天的 CI；Linux 上 `shell` 的 pipe 測試用多 process 跑，第一次是 push 之後的 CI；Windows 整個沒有；`nightly.yml` 的改動在本機驗不了。
 - **會跟著變的**：`bench.py` 的 Speedometer、blink-perf 這些經過 pipe 的量測，從這時起量的是多 process 的 `machopo`，和之前的數字比的時候要記得。
+- **push 之後的 CI**（`8bbf921`，Linux；`shell` 的 pipe 和 DevTools 的測試第一次在 Linux 上用多 process 跑）：lint 過；633 個過、2 個失敗，`devtools_log::commands_machopo_cant_carry_out_are_warned_of` 和 `devtools_overlay::other_overlays_are_answered`，都死在讀「DevTools listening on」那一行（`remote_debugging.rs` 的 `Machopo::start_with`），讀到的是那一行的開頭接著 renderer 的一行 log。
+  - 原因：`machopo` 用 `eprintln!("\nDevTools listening on {}\n", …)` 印那一行。stderr 沒有緩衝，格式字串的每一段各是一次 `write`；renderer process 繼承同一個 stderr，它的 log 那一行剛好落在兩段中間。單一 process 時 Rust 的 stderr 有一把鎖擋著，所以以前沒發生；macOS 上跑了好幾次也沒碰到，是時間差的問題。
+  - 修正：那一行先組成一個字串再印（一次 `write`，pipe 上小於 `PIPE_BUF` 的寫入不會被插隊）。renderer 印頁面的 console 訊息（`[console] …`、`[uncaught] …`）也是分段印的，一起改（`renderer` 的 `print_line`）：兩個 renderer process、或 renderer 和 Browser 同時印時會混在一起。
+  - 這個修正本機重現不了那個時間差，所以沒有測試直接守著「一次寫出」：靠的是那兩個（和其他讀 stderr 的）測試在 CI 上不再失敗。先前我用 `write_all` 直接寫 stderr，測試跑的時候 console 的輸出就不被測試框架收著、全部印出來，改回用巨集印一個字串。
+  - 本機：`cargo test -p renderer -p shell`、`cargo clippy` 這兩個 crate、`cargo fmt --check` 過。Linux 上要等下一次 CI。

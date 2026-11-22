@@ -181,7 +181,11 @@ impl DevToolsHttpHandler {
             stop: Some(stop),
             thread: Some(thread),
         };
-        eprintln!("\nDevTools listening on {}\n", handler.browser_url());
+        // One write: standard error is also the renderer processes', and
+        // a line of theirs between two pieces of this one leaves whoever
+        // reads it for the address (as Chrome's is read) with neither.
+        let listening = format!("\nDevTools listening on {}\n\n", handler.browser_url());
+        eprint!("{listening}");
         Ok(handler)
     }
 
