@@ -7,7 +7,7 @@
 **目標**有兩層：
 
 - **記憶體安全**：不寫 `unsafe` 的程式碼只透過 `ipc` 的 API，不可能造成 undefined behavior，不管通道另一端的 process 送什麼、在共用記憶體裡寫什麼。
-- **通道的性質**（下面的 P1 到 P9）：不被信任的對端能做到的最壞的事，是讓它自己的那條通道被關掉。
+- **通道的性質**（下面的 G1 到 G9）：不被信任的對端能做到的最壞的事，是讓它自己的那條通道被關掉。
 
 **這是論證，不是證明。** 機械化證明過的只有兩小塊算術（池子選哪一塊、管道的額度，Verus）；協定用小的模型窮舉過（TLA+、loom）；其餘靠 fuzz、Miri、跨 process 的測試、mutation test 和人工審查。kernel 的行為證明不了，寫成假設，每一條有測試在那個平台上守著。
 
@@ -23,15 +23,15 @@
 
 | | 性質 | 由哪裡守住 | 怎麼驗證 |
 | --- | --- | --- | --- |
-| P1 | **記憶體**：不管對方在共用記憶體裡寫什麼、在訊息裡給什麼編號和長度，這一端讀寫的都在它自己 map 的那一塊裡面 | `core/region.rs`：`Table::read` 先比長度（超過是 `OutsideRegion`）、編號要在表裡（`UnknownRegion`）；`Pool::put` 寫的那一塊由 `core/fit.rs` 的 `best_fit` 選，夠長是證明過的。mapping 不會比物件長：I2 和假設 K1 | `core/region.rs` 的單元測試；`region` fuzzer（對著一個簡單的模型，開 ASan）；核心在 Miri 底下；`fit.rs` 的 Verus 證明；三個平台各自的 `no_more_than_a_region_has_is_mapped` |
-| P2 | **壞的輸入**：從通道讀到的任何位元組，結果只有兩種：照規則處理，或當成壞訊息關掉通道。不 panic、不卡住、不 stack overflow，用掉的記憶體有上限 | `core/frame.rs`：長度上限（`MAX_PAYLOAD_LEN`）、照實際收到的量配置、序號、handle 的個數；`codec.rs`：巢狀深度上限（`MAX_DEPTH`）；`core/channel.rs`：目的地要認得；`endpoint.rs`：上層解不出來就是壞訊息 | `frame`、`endpoint` 兩個 fuzzer（任何輸入都不 panic，怎麼切結果都一樣）；`crates/ipc/tests/it/codec.rs`；`crates/ipc/tests/it/endpoint.rs` 裡亂送的對端；跨 process 的 `what_a_child_may_not_send_closes_its_channel` |
-| P3 | **handle**：沒有權限的一端送的訊息，不會讓收的一端留下任何 handle | `core/frame.rs` 的 `Decoder`：對方不能附時，有 handle 到了就是 `HandlesNotAllowed`，到了的全部丟掉；個數超過是 `TooManyHandles`。交給核心的 handle 一定是 kernel 搬進來的：I4 | `frame` fuzzer（沒有權限的一端留不下 handle，留著的不比到了的多）；跨 process 的 `what_a_child_may_not_send_closes_its_channel`；macOS 的 `a_receive_right_isnt_a_handle`；Windows 的 `a_child_gives_no_handle_and_a_host_takes_no_value_for_one` |
-| P4 | **region 的歸屬**：一塊 region 只在建它時指定的那條通道的表裡；收回之後不在任何表裡 | 池子和表是每個端點自己的（`endpoint.rs`），兩個方向的 region 都由能附 handle 的一端編號；對方提到沒給過它的、還沒寫過的、還兩次的都是壞訊息（`UnknownRegion`、`RegionNotOut`）。一個 Browser 對好幾個 renderer 時「不交給別的 renderer」由上層守，`ipc` 這一層只有一條通道 | `crates/ipc/tla/Regions.tla`；`region` fuzzer；`crates/ipc/tests/it/endpoint.rs` |
-| P5 | **不被卡住**：送訊息不等對方；對方不讀時，這一端的佇列到上限就關掉通道 | `core/channel.rs`：`send` 不等，收不下的排隊，超過 `MAX_QUEUED_BYTES` 是 `Gone::QueueFull`；平台的 `write` 不等（I6） | `core/channel.rs` 的單元測試；loom、shuttle；跨 process 的 `a_child_that_isnt_reading_delays_nothing_for_good` |
-| P6 | **順序**：一條通道上，收的一端交出訊息的順序就是送的一端送的順序，不重複、不漏 | `core/channel.rs`：一把鎖守著編號和寫出去的順序；`core/frame.rs`：序號不連續是 `OutOfOrder` | loom（每一種交錯）、shuttle；`crates/ipc/tla/Channel.tla`；`frame` fuzzer |
-| P7 | **斷線**：對方不在了（結束、當掉、只關掉一半、送了壞訊息）時，這一端剛好報告一次，之後不再交出它的訊息 | `core/channel.rs` 的 `Receiver`：理由是第一個發生的，只報告一次；平台說對方不在了靠假設 K4 | `crates/ipc/tla/Channel.tla`；loom、shuttle；跨 process 的 `a_child_that_exits_or_is_killed_is_heard_by_its_host`、`a_host_that_closes_is_heard_by_its_child`、`a_child_gone_before_it_took_its_end_is_heard_once_the_host_says_so` |
-| P8 | **同步的呼叫**：回答只到等它的那個呼叫；通道斷了時等的一方醒來、當成失敗 | 不在 `ipc` 裡：由用它的那一層守 | 那一層的測試 |
-| P9 | **data pipe**：讀到的位元組就是寫的、照順序、不重複；送出去、對方還沒說讀了的量不超過管道的容量；對方說讀了的比送的多是壞訊息 | `core/credit.rs`（算術是證明過的）、`core/pipe.rs`（`PipeOverRead`、`PipeOverrun`） | `credit.rs` 的 Verus 證明；`crates/ipc/tla/Pipe.tla`；`pipe` fuzzer；`crates/ipc/tests/it/endpoint.rs` |
+| G1 | **記憶體**：不管對方在共用記憶體裡寫什麼、在訊息裡給什麼編號和長度，這一端讀寫的都在它自己 map 的那一塊裡面 | `core/region.rs`：`Table::read` 先比長度（超過是 `OutsideRegion`）、編號要在表裡（`UnknownRegion`）；`Pool::put` 寫的那一塊由 `core/fit.rs` 的 `best_fit` 選，夠長是證明過的。mapping 不會比物件長：I2 和假設 K1 | `core/region.rs` 的單元測試；`region` fuzzer（對著一個簡單的模型，開 ASan）；核心在 Miri 底下；`fit.rs` 的 Verus 證明；三個平台各自的 `no_more_than_a_region_has_is_mapped` |
+| G2 | **壞的輸入**：從通道讀到的任何位元組，結果只有兩種：照規則處理，或當成壞訊息關掉通道。不 panic、不卡住、不 stack overflow，用掉的記憶體有上限 | `core/frame.rs`：長度上限（`MAX_PAYLOAD_LEN`）、照實際收到的量配置、序號、handle 的個數；`codec.rs`：巢狀深度上限（`MAX_DEPTH`）；`core/channel.rs`：目的地要認得；`endpoint.rs`：上層解不出來就是壞訊息 | `frame`、`endpoint` 兩個 fuzzer（任何輸入都不 panic，怎麼切結果都一樣）；`crates/ipc/tests/it/codec.rs`；`crates/ipc/tests/it/endpoint.rs` 裡亂送的對端；跨 process 的 `what_a_child_may_not_send_closes_its_channel` |
+| G3 | **handle**：沒有權限的一端送的訊息，不會讓收的一端留下任何 handle | `core/frame.rs` 的 `Decoder`：對方不能附時，有 handle 到了就是 `HandlesNotAllowed`，到了的全部丟掉；個數超過是 `TooManyHandles`。交給核心的 handle 一定是 kernel 搬進來的：I4 | `frame` fuzzer（沒有權限的一端留不下 handle，留著的不比到了的多）；跨 process 的 `what_a_child_may_not_send_closes_its_channel`；macOS 的 `a_receive_right_isnt_a_handle`；Windows 的 `a_child_gives_no_handle_and_a_host_takes_no_value_for_one` |
+| G4 | **region 的歸屬**：一塊 region 只在建它時指定的那條通道的表裡；收回之後不在任何表裡 | 池子和表是每個端點自己的（`endpoint.rs`），兩個方向的 region 都由能附 handle 的一端編號；對方提到沒給過它的、還沒寫過的、還兩次的都是壞訊息（`UnknownRegion`、`RegionNotOut`）。一個 Browser 對好幾個 renderer 時「不交給別的 renderer」由上層守，`ipc` 這一層只有一條通道 | `crates/ipc/tla/Regions.tla`；`region` fuzzer；`crates/ipc/tests/it/endpoint.rs` |
+| G5 | **不被卡住**：送訊息不等對方；對方不讀時，這一端的佇列到上限就關掉通道 | `core/channel.rs`：`send` 不等，收不下的排隊，超過 `MAX_QUEUED_BYTES` 是 `Gone::QueueFull`；平台的 `write` 不等（I6） | `core/channel.rs` 的單元測試；loom、shuttle；跨 process 的 `a_child_that_isnt_reading_delays_nothing_for_good` |
+| G6 | **順序**：一條通道上，收的一端交出訊息的順序就是送的一端送的順序，不重複、不漏 | `core/channel.rs`：一把鎖守著編號和寫出去的順序；`core/frame.rs`：序號不連續是 `OutOfOrder` | loom（每一種交錯）、shuttle；`crates/ipc/tla/Channel.tla`；`frame` fuzzer |
+| G7 | **斷線**：對方不在了（結束、當掉、只關掉一半、送了壞訊息）時，這一端剛好報告一次，之後不再交出它的訊息 | `core/channel.rs` 的 `Receiver`：理由是第一個發生的，只報告一次；平台說對方不在了靠假設 K4 | `crates/ipc/tla/Channel.tla`；loom、shuttle；跨 process 的 `a_child_that_exits_or_is_killed_is_heard_by_its_host`、`a_host_that_closes_is_heard_by_its_child`、`a_child_gone_before_it_took_its_end_is_heard_once_the_host_says_so` |
+| G8 | **同步的呼叫**：回答只到等它的那個呼叫；通道斷了時等的一方醒來、當成失敗 | 不在 `ipc` 裡：由用它的那一層守 | 那一層的測試 |
+| G9 | **data pipe**：讀到的位元組就是寫的、照順序、不重複；送出去、對方還沒說讀了的量不超過管道的容量；對方說讀了的比送的多是壞訊息 | `core/credit.rs`（算術是證明過的）、`core/pipe.rs`（`PipeOverRead`、`PipeOverrun`） | `credit.rs` 的 Verus 證明；`crates/ipc/tla/Pipe.tla`；`pipe` fuzzer；`crates/ipc/tests/it/endpoint.rs` |
 
 ## 假設
 
@@ -131,10 +131,10 @@ macOS 那一層的測試在 `src/platform/macos/` 各檔的單元測試和 `crat
 | 方法 | 守什麼 | 什麼時候跑 |
 | --- | --- | --- |
 | `cargo test -p ipc`：單元測試、惡意的對端、跨 process 的測試、fuzzer 找到過的輸入（`crates/ipc/fuzz/regressions/`） | 全部；每個平台的假設 | 每次；CI 每天在 Linux 上跑，macOS 和 Windows 的平台層只在開發機上跑 |
-| fuzz（`python3 scripts/test.py ipc fuzz`：`endpoint`、`frame`、`pipe`、`region` 四個 target，開 ASan） | P1、P2、P3、P9 | 改核心時在本機 |
-| Miri（`python3 scripts/test.py ipc miri`：核心的單元測試，和端點經過同一個 process 裡的平台的幾個測試） | 核心的 `unsafe`（P1、I3） | 改核心時在本機 |
-| loom、shuttle（`python3 scripts/test.py ipc models`） | P5、P6、P7：送出的佇列和它的鎖、通道的結束 | 改到這幾處時在本機 |
-| TLA+（`python3 scripts/test.py ipc tla`：三個模型，各自再拿掉每一部分確認找得到反例） | P4、P6、P7、P9 的協定 | 改協定時，模型一起改 |
+| fuzz（`python3 scripts/test.py ipc fuzz`：`endpoint`、`frame`、`pipe`、`region` 四個 target，開 ASan） | G1、G2、G3、G9 | 改核心時在本機 |
+| Miri（`python3 scripts/test.py ipc miri`：核心的單元測試，和端點經過同一個 process 裡的平台的幾個測試） | 核心的 `unsafe`（G1、I3） | 改核心時在本機 |
+| loom、shuttle（`python3 scripts/test.py ipc models`） | G5、G6、G7：送出的佇列和它的鎖、通道的結束 | 改到這幾處時在本機 |
+| TLA+（`python3 scripts/test.py ipc tla`：三個模型，各自再拿掉每一部分確認找得到反例） | G4、G6、G7、G9 的協定 | 改協定時，模型一起改 |
 | Verus（`python3 scripts/test.py ipc verus`） | `core/fit.rs`、`core/credit.rs` 的算術 | 改這兩個檔案時 |
 | mutation test（`python3 scripts/test.py mutate`） | 每一個檢查真的有測試守著 | 每一段工作做完時 |
 | `python3 scripts/sanity.py unsafe`、`deps` | `unsafe` 不出 `ipc`；I1 | 每一段工作做完時 |

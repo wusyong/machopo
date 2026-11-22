@@ -38,7 +38,14 @@
 | 2g-3：Windows 的 `spawn`、`inherited`、`child_gone`（繼承加環境變數，第 53 條）；不分平台的跨 process 測試原樣通過；Windows 自己的跨 process 測試 | 完成 | 2026-11-22 |
 | 2g-4：在真的通道上量；當場完成的讀寫改成不經過 completion port、讀的緩衝區維持 64 KiB、CI 先不加 runner（第 54 條） | 完成 | 2026-11-22 |
 | 2h：第 2 階段的檢查、`unsafe` 的論證、`test.py` 的指令、文件；`test.py ipc` 的每一項不排進 CI，留在本機跑（第 55 條；原本規劃排進每週的 CI） | 完成 | 2026-11-22 |
-| 3：啟動 child process | 未開始 | |
+| 3：啟動 child process，分成七段（第 56 條） | 進行中 | |
+| 3a：child 起得來：`--type=renderer`、child 的 IO thread、Browser 用 `ipc::platform::spawn` 啟動、四種訊息走控制通道 | 進行中 | |
+| 3b：導覽的 body 的管道跨 process | 未開始 | |
+| 3c：tile 走共用記憶體 | 未開始 | |
+| 3d：process 不在了（當掉、被 kill、壞訊息、`about:crash`） | 未開始 | |
+| 3e：整套測試哪些用多個 process 跑；處理訊息的物件和 body 的管道的 fuzz target | 未開始 | |
+| 3f：trace；量每個 frame 的延遲和 IO thread 每一步的時間 | 未開始 | |
+| 3g：macOS 上 sandbox 的探測；第 3 階段的檢查和文件 | 未開始 | |
 
 ## 驗收
 

@@ -527,6 +527,17 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
     - **不選的**：新開一個每週的 workflow（五個 job，fuzz 每個 target 30 分鐘）；加進每週跑 GC 的那個 workflow；快的三項（`models`、`tla`、`verus`）每天、慢的每週。
     - **留下的缺口**：核心改了而沒有人在本機跑這五項時，沒有東西會發現。記在 `docs/test-gaps.md`。`cargo test -p ipc`（包括 fuzzer 留下的回歸輸入）照樣由每天的 CI 在 Linux 上跑。
     - 對照 Chromium：fuzzer 是持續在跑的服務（ClusterFuzz），不是排程的 CI。
+56. **第 3 階段分成七段，先打通最細的一條路**（2026-11-22，第 3 階段開始前；使用者確認的）：
+    - 3a：child 起得來（`--type=renderer`、child 的 IO thread、Browser 用 `ipc::platform::spawn` 啟動、四種訊息走控制通道）；做完 `about:blank` 在另一個 process 裡載入。
+    - 3b：導覽的 body 的管道跨 process（邊界上最後一個例外）。
+    - 3c：tile 走共用記憶體。
+    - 3d：process 不在了（當掉、被 kill、壞訊息、`about:crash`），接到現有的 sad tab。
+    - 3e：整套現有的測試哪些用多個 process 再跑；`IoThreadHost` 和 body 的管道的 fuzz target。
+    - 3f：trace 怎麼收；量捲動時每個 frame 的延遲和 IO thread 每一步的時間。
+    - 3g：macOS 上 sandbox 的探測；第 3 階段的檢查和文件。
+    - **為什麼**：整合的問題（啟動、旗標、兩邊的 thread 怎麼接）最早碰到；3b 在 3c 前面，因為任何真的頁面都要 body，而沒有 GPU 時像素本來就走訊息，3b 做完 headless 就能跑；3e 要等基本功能都在才定得了；量測照原本的規劃放最後。
+    - **不選先把單一 process 的模式改成 Browser 只有一條 IO thread**：動到現在全部測試都在跑的路，而「單一 process 時要不要連 IO thread 都拿掉」還沒定（「待決定」）。3a 只讓多 process 的模式用一條，單一 process 的先不動。
+    - 對照 Chromium：平常是多個 process，`--single-process` 是測試和除錯用的；renderer 的入口是 `RendererMain`，child 的 IO thread 由 `ChildProcess` 建。
 
 ## 待決定
 
