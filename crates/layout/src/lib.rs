@@ -1723,7 +1723,13 @@ impl BoxTree {
                 // if not: the width its box was given.
                 let own = fit.filter(|_| sized_by_content);
                 let width = known.width.or(own).or(match available.width {
-                    AvailableSpace::Definite(room) => Some(room),
+                    // taffy's leaf takes the padding and border off the room
+                    // without a floor: a box given less than those has a
+                    // content box 0 wide (css-sizing 3; Blink's
+                    // `ShrinkLogicalSize` clamps at 0). Narrower than nothing,
+                    // a line beside a float would be wider than its layout,
+                    // which parley asserts against.
+                    AvailableSpace::Definite(room) => Some(room.max(0.0)),
                     AvailableSpace::MinContent => Some(inline.content_widths(self).0),
                     AvailableSpace::MaxContent => None,
                 });

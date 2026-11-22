@@ -677,9 +677,17 @@ impl FloatBands {
         (left, (right - left).max(0.0))
     }
 
-    /// The first band's top below `top`: where the room changes next.
-    fn next_top(&self, top: f32) -> Option<f32> {
-        self.0.iter().map(|band| band.top).find(|&t| t > top)
+    /// The first band's top below `top`, where the room changes next, if
+    /// there is more room down there than `room` in a content box `width`
+    /// wide, by more than a layout unit: where a line that doesn't fit is
+    /// tried next. The last band, below every float, has the most (Blink's
+    /// last layout opportunity): with no more there it stays, and
+    /// overflows.
+    fn next_top(&self, top: f32, room: f32, width: f32) -> Option<f32> {
+        let next = self.0.iter().map(|band| band.top).find(|&t| t > top)?;
+        let last = self.0.last()?;
+        let most = (last.x + last.width).min(width) - last.x.max(0.0);
+        (most > room + BREAK_TOLERANCE).then_some(next)
     }
 }
 
@@ -1571,7 +1579,7 @@ impl InlineContent {
                 // opportunity).
                 if content > left + BREAK_TOLERANCE
                     && beside.is_empty()
-                    && let Some(lower) = bands.next_top(top)
+                    && let Some(lower) = bands.next_top(top, room, width)
                 {
                     atomics.count_line_broken_again();
                     breaker.revert_to(start.clone());

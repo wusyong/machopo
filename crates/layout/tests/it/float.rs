@@ -4,7 +4,7 @@
 
 use gfx::{RectF, SizeF};
 
-use crate::page::{Page, lay_out};
+use crate::page::{Page, find, lay_out};
 
 const RESET: &str = "<style>body { margin: 0 } div { box-sizing: border-box }</style>";
 
@@ -353,6 +353,176 @@ fn a_float_narrower_than_nothing_takes_no_room() {
            style='float: left; width: 40px; height: 20px; margin-left: -60px'></span>XX</div>"
     ));
     assert_eq!(laid.lines("para")[0], RectF::new(0.0, 0.0, 100.0, 20.0));
+}
+
+/// A line that doesn't fit goes down only for more room below, as Chrome
+/// lays these out: beside floats that take none of its room, over those
+/// lower down and where it has no room at all, it stays and overflows.
+#[test]
+fn a_line_that_doesnt_fit_stays_without_more_room_below() {
+    let float = |side: &str, width: f32, height: f32, below: f32| {
+        format!(
+            "<div style='height: 0'><div style='height: {below}px'></div>\
+             <i style='float: {side}; width: {width}px; height: {height}px'></i></div>"
+        )
+    };
+    let small = float("left", 5.0, 5.0, 0.0);
+    let gap = float("left", 10.0, 10.0, 0.0) + &float("left", 10.0, 10.0, 40.0);
+    let same_then_wider = float("left", 10.0, 10.0, 0.0) + &float("left", 10.0, 20.0, 10.0);
+    let less_then_wider = float("left", 10.0, 10.0, 0.0) + &float("left", 15.0, 20.0, 10.0);
+    let two_steps = float("left", 10.0, 30.0, 0.0) + &float("left", 10.0, 10.0, 0.0);
+    let lay_out_line = |floats: &str, style: &str, content: f32| {
+        lay_out(&format!(
+            "{RESET}<div style='display: flow-root; width: 100px; font: 10px/10px Ahem'>{floats}\
+             <p style='margin: 0; {style}'><b id=line style='display: inline-block; \
+             vertical-align: top; width: {content}px; height: 10px'></b></p></div>"
+        ))
+    };
+    for (floats, style, content, top) in [
+        // Outside its content box, to either side.
+        (small.clone(), "width: 4px; margin-left: 20px", 10.0, 0.0),
+        (float("right", 5.0, 5.0, 0.0), "width: 4px", 10.0, 0.0),
+        (
+            small.clone(),
+            "width: 4px; margin-left: 20px; direction: rtl",
+            10.0,
+            0.0,
+        ),
+        // Its padding is no room of the line's.
+        (
+            small.clone(),
+            "width: 4px; margin-left: 20px; padding-right: 40px",
+            10.0,
+            0.0,
+        ),
+        (small.clone(), "width: 0; padding-right: 40px", 10.0, 0.0),
+        // As wide as its content, past the room it is put in.
+        (
+            small.clone(),
+            "width: fit-content; margin-left: 20px; margin-right: 76px",
+            10.0,
+            0.0,
+        ),
+        (
+            small.clone(),
+            "width: fit-content; margin-right: 92px",
+            10.0,
+            5.0,
+        ),
+        // No room in it, nor below.
+        (small.clone(), "width: 0", 10.0, 0.0),
+        (small.clone(), "width: 0; padding-left: 40px", 10.0, 0.0),
+        // Less than a layout unit in it, and more.
+        (float("left", 0.01, 5.0, 0.0), "width: 8px", 10.0, 0.0),
+        (float("left", 0.5, 5.0, 0.0), "width: 8px", 10.0, 5.0),
+        (small.clone(), "width: 8px", 10.0, 5.0),
+        // All the room where it starts, less lower down.
+        (float("left", 10.0, 20.0, 30.0), "width: 20px", 30.0, 0.0),
+        (gap, "width: 20px", 30.0, 10.0),
+        // Where the line reaches, though: past it.
+        (float("left", 10.0, 20.0, 5.0), "width: 20px", 30.0, 25.0),
+        // No more room in the next band, more past it.
+        (same_then_wider, "width: 20px", 25.0, 30.0),
+        (less_then_wider, "width: 20px", 25.0, 30.0),
+        // More in the next, enough or not.
+        (two_steps.clone(), "width: 30px", 18.0, 10.0),
+        (two_steps, "width: 30px", 25.0, 30.0),
+    ] {
+        let laid = lay_out_line(&floats, style, content);
+        assert_eq!(laid.rect("line").y, top, "{floats} {style} {content}");
+    }
+    // Shrunk to fit, its padding a percentage of that: it is measured
+    // wider than the room it is given, which gets no wider below.
+    let shrunk = lay_out(&format!(
+        "{RESET}<div style='float: left; font: 10px/10px Ahem'>\
+         <p style='margin: 0; padding: 0 33%'><b id=line style='display: inline-block; \
+         vertical-align: top; width: 20px; height: 10px'></b>\
+         <i style='float: left; width: 5px; height: 5px'></i></p></div>"
+    ));
+    assert_eq!(shrunk.rect("line").y, 0.0);
+    // It is broken once, where it stays.
+    let stays = lay_out_line(&small, "width: 4px; margin-left: 20px", 10.0);
+    assert_eq!(stays.layout.lines_broken_again_beside_floats, 0);
+}
+
+/// A box given less room than its padding has a content box 0 wide, not
+/// narrower (css-sizing 3): its lines and floats are laid out as with
+/// `width: 0`, and beside a float don't panic in parley's line breaker.
+#[test]
+fn a_box_narrower_than_its_padding_has_no_room_for_lines() {
+    let left = "<i style='float: left; width: 5px; height: 5px'></i>";
+    let right = "<i style='float: right; width: 5px; height: 5px'></i>";
+    let nothing_wide = "<i style='float: left; width: 0; height: 5px'></i>";
+    let flow_root = "display: flow-root;";
+    let centered = "text-align: center;";
+    let rtl = "direction: rtl;";
+    for (narrow, style, before, inside) in [
+        // Auto, as wide as the 12px it is in.
+        ("", "", left, ""),
+        ("", rtl, left, ""),
+        ("", centered, right, ""),
+        ("", "", "", left),
+        ("", "", "", nothing_wide),
+        // A block formatting context of its own, for its floats.
+        ("", flow_root, "", left),
+        ("", flow_root, "", right),
+        // Given 12px, and held to 12px.
+        ("width: 12px; box-sizing: border-box;", "", left, ""),
+        ("max-width: 12px; box-sizing: border-box;", "", left, ""),
+    ] {
+        let lay_out_in = |width: &str| {
+            lay_out(&format!(
+                "{AHEM}<div style='width: 12px'>{before}\
+                 <p id=p style='padding-left: 40px; {style} {width}'>{inside}X</p></div>"
+            ))
+        };
+        let (squeezed, empty) = (lay_out_in(narrow), lay_out_in("width: 0"));
+        let case = format!("{narrow} {style} {before} {inside}");
+        assert_eq!(squeezed.rect("p"), empty.rect("p"), "{case}");
+        assert_eq!(squeezed.lines("p"), empty.lines("p"), "{case}");
+    }
+    // Without a float too, the lines are broken at the width the fragments
+    // are made at.
+    let plain = lay_out(&format!(
+        "{AHEM}<div style='width: 12px'><p style='padding-left: 40px'>X</p></div>"
+    ));
+    assert_eq!(plain.layout.lines_broken_for_fragments, 0);
+}
+
+/// Lists in lists until the innermost has less room than its padding,
+/// beside a float: laid out, and the same when the page is narrowed to it
+/// by its style or by its viewport (an iframe's).
+#[test]
+fn lists_squeezed_beside_a_float_are_laid_out() {
+    let html = |style: &str| {
+        format!(
+            "<!doctype html><html id=html {style}><body><ul><ul><fieldset>\
+             <div style='float:left'>x</div><ol id=ol>x"
+        )
+    };
+    let narrow = SizeF::new(140.0, 600.0);
+    let mut page = Page::build(&html("style='width:140px'"));
+    page.viewport = narrow;
+    // Its 40px of padding, and no content box.
+    let laid = page.lay_out();
+    assert_eq!(laid.rect("ol").width, 40.0);
+    // Its line stays beside the float, which there is no more room below.
+    assert_eq!(laid.lines("ol")[0].y, laid.rect("ol").y);
+    // A thread has one page's style at a time.
+    drop(page);
+
+    let mut page = Page::build(&html("style='width:800px'"));
+    page.lay_out();
+    // Checked against the page built afresh.
+    page.change(|cx, document| {
+        cx.set_attribute(find(cx, document, "html"), "style", "width:140px");
+    });
+    drop(page);
+
+    let mut page = Page::build(&html(""));
+    page.lay_out();
+    page.viewport = narrow;
+    page.check();
 }
 
 /// A box beside floats, or putting its own floats into the block
