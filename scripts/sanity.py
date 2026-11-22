@@ -275,12 +275,6 @@ PROTOCOL_NOT_SERIALIZABLE = re.compile(
     r"serde\(skip\)|\bArc<dyn\b|\bBox<dyn\b|\bRc<|\bWeak<|\bfn\(|\bimpl\s+Fn|\bdyn\s+Fn"
 )
 PROTOCOL_ALLOWED = {
-    "crates/protocol/src/renderer.rs": {
-        # Exception 7: a navigation's body's data pipe, in its commit (its
-        # bytes go as messages once the renderer is a process, into a pipe
-        # of the renderer's that whatever reads its channel puts here).
-        "#[serde(skip)]": "exception 7: the body's data pipe in `CommitNavigation`",
-    },
     "crates/protocol/src/viz.rs": {
         # Between the browser and Viz, which stays in the browser process.
         "#[serde(skip)]": "`CopyOutputRequest`'s and `BeginFrameObserver`'s callbacks",

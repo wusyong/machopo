@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use browser::RendererLauncher;
 
+use net::test_server::Route;
 use protocol::renderer::RendererHostMsg;
 use protocol::viz::{CompositorFrameSinkMsg, VizMsg};
 
@@ -78,6 +79,46 @@ fn a_document_loads_in_a_renderer_process() {
 }
 
 #[test]
+fn a_document_longer_than_its_commit_carries_loads_in_a_renderer_process() {
+    // Most of the body comes after the commit, by the body's pipe, which
+    // crosses with the commit: the title is the last thing in it, past
+    // more than the pipe holds at once, so the renderer says it only if
+    // every byte came, in order, as the renderer read.
+    let mut page = String::from("<!DOCTYPE html><p>");
+    let mut n = 0u32;
+    while page.len() < 1_500_000 {
+        page.push_str(&format!("{n} "));
+        n += 1;
+    }
+    page.push_str(&format!("<title>after {n} numbers</title>"));
+    let server = crate::navigation::server(&[("/long", Route::ok("text/html", page.as_str()))]);
+    let (mut web_contents, host_rx) = tab_launched(
+        as_a_process(),
+        false,
+        gfx::SystemColors::DEFAULT,
+        in_memory(),
+    );
+    let url = server.url("/long");
+    web_contents.navigate(&url);
+    // The document commits with its first bytes, with no title yet; the
+    // title comes when the parser reaches it.
+    let mut committed = None;
+    let title = loop {
+        let msg = next_message(&mut web_contents, &host_rx, TIMEOUT).expect("the renderer says");
+        web_contents.on_renderer_message(&msg);
+        match msg {
+            RendererHostMsg::DidCommitNavigation { url, .. } => committed = Some(url),
+            RendererHostMsg::UpdateTitle(title) if !title.is_empty() => break title,
+            RendererHostMsg::RendererGone => panic!("the renderer went"),
+            _ => {}
+        }
+    };
+    assert_eq!(committed.as_deref(), Some(url.as_str()));
+    assert_eq!(title, format!("after {n} numbers"));
+    web_contents.shutdown();
+}
+
+#[test]
 fn each_tab_has_a_renderer_process_of_its_own() {
     // Both on the browser's one IO thread, each heard as itself.
     let mut tabs: Vec<_> = (0..2)
@@ -92,7 +133,7 @@ fn each_tab_has_a_renderer_process_of_its_own() {
         .collect();
     assert_ne!(tabs[0].0.renderer_pid(), tabs[1].0.renderer_pid());
     for (n, (web_contents, _)) in tabs.iter_mut().enumerate() {
-        web_contents.navigate(&format!("data:text/html,<title>tab {n}</title>"));
+        web_contents.navigate(format!("data:text/html,<title>tab {n}</title>"));
     }
     for (n, (web_contents, host_rx)) in tabs.iter_mut().enumerate() {
         let (_, _, title) = next_commit(web_contents, host_rx);
@@ -137,13 +178,12 @@ fn a_renderer_processs_frames_are_its_tabs_sinks() {
                 web_contents.on_navigation_event(event);
             }
         }
-        match viz_rx.recv_timeout(std::time::Duration::from_millis(20)) {
-            Ok(VizMsg::FrameSink(from, msg)) => {
-                assert_eq!(from, sink);
-                begin_frames.did_receive(from, &msg);
-                submitted = matches!(msg, CompositorFrameSinkMsg::SubmitCompositorFrame { .. });
-            }
-            Ok(_) | Err(_) => {}
+        if let Ok(VizMsg::FrameSink(from, msg)) =
+            viz_rx.recv_timeout(std::time::Duration::from_millis(20))
+        {
+            assert_eq!(from, sink);
+            begin_frames.did_receive(from, &msg);
+            submitted = matches!(msg, CompositorFrameSinkMsg::SubmitCompositorFrame { .. });
         }
     }
     web_contents.shutdown();

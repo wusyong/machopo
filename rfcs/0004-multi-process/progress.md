@@ -40,9 +40,9 @@
 | 2h：第 2 階段的檢查、`unsafe` 的論證、`test.py` 的指令、文件；`test.py ipc` 的每一項不排進 CI，留在本機跑（第 55 條；原本規劃排進每週的 CI） | 完成 | 2026-11-22 |
 | 3：啟動 child process，分成七段（第 56 條） | 進行中 | |
 | 3a：child 起得來：`--type=renderer`、child 的 IO thread、Browser 用 `ipc::platform::spawn` 啟動、四種訊息走控制通道 | 完成 | 2026-11-22 |
-| 3b：導覽的 body 的管道跨 process，分成兩小段（第 58 條） | 進行中 | |
+| 3b：導覽的 body 的管道跨 process，分成兩小段（第 58 條） | 完成 | 2026-11-22 |
 | 3b-1：`ipc` 的 codec 認得管道（`Consumer` 能序列化） | 完成 | 2026-11-22 |
-| 3b-2：`protocol` 拿掉 `#[serde(skip)]`，`browser` 和 `renderer` 接上 | 未開始 | |
+| 3b-2：`protocol` 拿掉 `#[serde(skip)]`，`browser` 和 `renderer` 接上 | 完成 | 2026-11-22 |
 | 3c：tile 走共用記憶體 | 未開始 | |
 | 3d：process 不在了（當掉、被 kill、壞訊息、`about:crash`） | 未開始 | |
 | 3e：整套測試哪些用多個 process 跑；處理訊息的物件和 body 的管道的 fuzz target | 未開始 | |
@@ -624,4 +624,15 @@ branch `0004-linux`，從 `0004` 的 2e-7（`82a4fc7`）分出去。
   - fuzz 和 Miri 我一開始沒有先問就要跑，被權限擋下；使用者同意之後才跑的。
 - **沒有跑的**：`test.py ipc models`、`verus`、`tla`（核心沒有動）。Linux 和 Windows 沒有驗：改的是不分平台的部分，那兩台機器 pull 之後要跑一次 `cargo test -p ipc`。
 - **還沒接上的**：`protocol` 的 `CommitNavigation` 還標著 `#[serde(skip)]`，renderer process 還收不到 body 的管道（3b-2）。
+
+### 3b-2：renderer process 收到 body 的管道（2026-11-22，macOS 26、Apple M4）
+
+- **做了什麼**：`protocol` 的 `CommitNavigation` 的 `body_pipe` 拿掉 `#[serde(skip)]`，就這一處：`Consumer` 能序列化之後（3b-1），commit 帶著的管道跟著訊息過通道。`browser` 和 `renderer` 的程式沒有改：Browser 照舊把 `Consumer` 放進訊息，renderer 的 main thread 照舊讀它，只是 renderer process 裡讀到的是它自己那一側的管道。
+- **邊界上最後一個例外消掉**：`sanity.py` 的 `PROTOCOL_ALLOWED` 拿掉 `renderer.rs` 那一項，`docs/architecture.md` 的例外那一段改成「現在沒有」；`protocol` 的 `boundary` 測試不用改（它在編譯時要求每種訊息都能序列化，`Consumer` 現在滿足）。
+- **測試**：`crates/browser/tests/it/renderer_process.rs` 多一個：測試的 server 送一份 1.5 MB 的文件（超過管道的容量 512 KiB，所以背壓一定用到），標題放在最後；renderer process 說出那個標題，表示每個位元組照順序到了。重複 3 次都過。
+  - 第一次失敗是測試自己的問題：它拿 commit 之後的第一個標題（空的），文件最後的標題是之後才更新的。改成等到非空的標題。
+- **mutation test**（`mutants-3b2.toml`）2 個，都抓到：把 `#[serde(skip)]` 放回去；renderer 那一端不准 Browser 開管道。後者是 3a 那時看不出來的同一類（兩端的設定），現在有管道就看得出來了；「Browser 那一端照 renderer 的設定建」還是看不出來，等 3c。跑完確認檔案還原。
+- **跑過的檢查**：`cargo test -p ipc -p protocol -p renderer -p browser -p shell`（都過）；`cargo clippy` 六個 crate `--all-targets -- -D warnings`；`cargo fmt --check`；`sanity.py` 的 7 項。
+- **這次才發現的**：clippy 在 `renderer_process.rs` 找到兩處（多餘的借用、只有一個分支的 `match`），是 3a 最後補的三個測試裡的。3a 那時 clippy 是在補那幾個測試之前跑的，之後沒有再跑，就 commit 了。這一段修掉。之後的做法：最後一次改程式之後再跑一次 clippy，不只是「跑過」。
+- **沒有驗到的**：Linux 和 Windows。
 

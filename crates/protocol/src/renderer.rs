@@ -203,11 +203,10 @@ pub enum RendererMsg {
         /// The rest of the body, as it comes (Chromium's `response_body`,
         /// a data pipe's consumer handle): a document that came over the
         /// network has one, which may be over already; a page of the
-        /// browser's own, an error page or a blob's comes whole. It
-        /// doesn't cross a process yet: to a renderer of its own the bytes
-        /// would go as messages, written into a pipe of that process which
-        /// whatever reads its channel puts here.
-        #[serde(skip)]
+        /// browser's own, an error page or a blob's comes whole. To a
+        /// renderer in a process of its own the pipe crosses with the
+        /// message: its bytes go as messages of the channel's, into a pipe
+        /// of that process, whose consumer is what is read here.
         body_pipe: Option<ipc::data_pipe::Consumer>,
         /// The entry it commits to, as the navigation started.
         history: HistoryEntryParams,

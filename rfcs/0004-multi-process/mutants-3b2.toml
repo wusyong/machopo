@@ -1,0 +1,24 @@
+# Step 3b-2: a navigation's body's pipe crosses to a renderer process
+# with its commit. The step itself is one attribute taken off; what it
+# rests on (`ipc`'s codec and endpoint) has its own list, 3b-1's.
+#
+# Back from step 3a's list, which could not see it then: the renderer's
+# end made with a browser's rights lets its peer open no pipe, and now a
+# pipe is what a long document comes by.
+test = ["sh", "-c", "timeout 600 cargo test -q -p browser --test it -- renderer_process"]
+timeout = 1500
+
+[[mutant]]
+name = "the body's pipe is dropped from the commit on its way to a process"
+file = "crates/protocol/src/renderer.rs"
+from = '''        /// of that process, whose consumer is what is read here.
+        body_pipe: Option<ipc::data_pipe::Consumer>,'''
+to = '''        /// of that process, whose consumer is what is read here.
+        #[serde(skip)]
+        body_pipe: Option<ipc::data_pipe::Consumer>,'''
+
+[[mutant]]
+name = "the renderer's end lets its browser open no pipe"
+file = "crates/protocol/src/control_channel.rs"
+from = '''        peer_may_open_pipes: !browser,'''
+to = '''        peer_may_open_pipes: false,'''
