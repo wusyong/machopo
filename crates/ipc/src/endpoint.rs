@@ -614,6 +614,11 @@ impl<P: Platform> Endpoint<P> {
         // The sources' writers see their reader gone.
         out.feeding.clear();
         out.to_grant.clear();
+        // Nothing more is sent: the regions kept to send by are unmapped
+        // now, not when the last of this end's senders is dropped (a tab
+        // keeps the host of a renderer that went until it is loaded
+        // again).
+        out.pool = Pool::new(self.inner.config.region_limit);
         drop(out);
         self.inner.platform().shut();
     }

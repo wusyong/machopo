@@ -652,6 +652,11 @@ fn a_closed_channel_is_over_at_both_ends_and_sends_nothing() {
         Err(SendError::Gone(Gone::Closed))
     );
     assert_eq!(host.link.regions(), (128 * KIB, 128 * KIB));
+    // Once the IO thread has seen the channel over, this end keeps no
+    // region for it.
+    settle(&mut host, &mut child);
+    assert_eq!(host.gone, Some(Gone::Closed));
+    assert_eq!(host.link.regions(), (0, 0));
     // A pipe's source learns its reader is gone.
     let (mut host, mut child) = ends(None);
     let (mut source, consumer) = data_pipe::create(64 * KIB);

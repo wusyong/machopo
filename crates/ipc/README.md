@@ -261,7 +261,7 @@ impl Handler<P> for MyHandler {
 - **只有能附 handle 的一端建 region**（`Config::may_attach`，Browser）：兩個方向的 region 都是它編號。它自己送大資料時，沒有空塊就當場建一塊（不超過 `region_limit`）；對方要寫的那幾塊由它用 `grant_to_peer` 給。另一端沒有空塊時大資料就放在訊息裡。
 - **送不出去的訊息**（通道已經結束、太長）放進 region 的那幾塊當場還回池子。
 - **管道**：來源的 `Consumer` 放在訊息的值裡，`send` 就替它開管道（`PipeOpened` 走在那則訊息前面，同一把鎖底下），容量是那條管道自己的；收的一側 `decode` 出來的值裡就是那條管道的 `Consumer`。訊息送不出去時（通道結束了、佇列滿了），為它開的管道結束、來源放掉、告訴對方（對方把替它留的那一端丟掉）。`open_pipe` 和 `take_pipe` 是同一件事分開做的版本（訊息裡自己帶編號）。來源有資料時叫醒 IO thread；收的一側收到 `PipeOpened` 時建一條 `data_pipe`、掛上回報的掛勾，讀的一端等訊息提到它時由 `take_pipe` 拿走。讀的一端 drop 就是取消。對方不被信任時不讓它開管道（`peer_may_open_pipes`）：每一條都是這一端要留的記憶體。
-- **通道結束**：`turn` 回 `Some(Gone)` 一次；管道的來源放掉（它們的寫的一端看到讀的不在了）、傳輸關掉，之後 `send` 回 `SendError::Gone`。迴圈告訴那個端點的 `handler`（`gone`）、不再等它；其他的通道照常。迴圈被停下來時，還在的每一條都在這一端關掉、`handler` 收到 `Gone::Closed`。
+- **通道結束**：`turn` 回 `Some(Gone)` 一次；管道的來源放掉（它們的寫的一端看到讀的不在了）、這一端留著用來送大資料的 region 都放掉（不等最後一個 `Link` 被丟掉：拿著 `Link` 的人可能留很久）、傳輸關掉，之後 `send` 回 `SendError::Gone`。迴圈告訴那個端點的 `handler`（`gone`）、不再等它；其他的通道照常。迴圈被停下來時，還在的每一條都在這一端關掉、`handler` 收到 `Gone::Closed`。
 
 ## `local`
 

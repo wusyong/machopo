@@ -1,0 +1,56 @@
+# Step 3d: a renderer process that is gone, or is to be. The browser ends
+# the process itself and sees it to its end; a renderer told to crash
+# does, hung or not; what the channel refuses is a bad message as any
+# other; an end whose channel is over keeps no shared memory for it.
+#
+# Not here, and why:
+# - A queue over its limit counted with the channel's bad messages
+#   (`ChannelHost::gone`'s `Gone::QueueFull`): it takes 256 MiB that a
+#   renderer never reads, which no test here sends. By review.
+# - How long a process whose channel is over is given to have exited
+#   before it is killed (`GONE_EXIT_WAIT`): it changes what the log says
+#   of how the process ended, and nothing else.
+test = ["sh", "-c", "timeout 200 cargo test -q -p ipc -- endpoint::a_closed_channel && timeout 600 cargo test -q -p browser --test it -- renderer_process"]
+timeout = 1500
+
+[[mutant]]
+name = "an end whose channel is over keeps its regions"
+file = "crates/ipc/src/endpoint.rs"
+from = '''        out.pool = Pool::new(self.inner.config.region_limit);
+        drop(out);'''
+to = '''        drop(out);'''
+
+[[mutant]]
+name = "a renderer process told to crash goes on"
+file = "crates/renderer/src/child_process.rs"
+from = '''                    if matches!(msg, RendererMsg::Crash) {'''
+to = '''                    if false && matches!(msg, RendererMsg::Crash) {'''
+
+[[mutant]]
+name = "a renderer process is only said to have been told to crash"
+file = "crates/browser/src/render_process_host.rs"
+from = '''        self.send(RendererMsg::Crash);
+        true'''
+to = '''        true'''
+
+[[mutant]]
+name = "a renderer process that is killed runs on"
+file = "crates/browser/src/render_process_host.rs"
+from = '''            Some((child, link)) => end_child(child, &link, None),'''
+to = '''            Some((child, link)) => {
+                link.close();
+                std::mem::forget(child);
+            }'''
+
+[[mutant]]
+name = "a renderer process whose channel is over isn't seen to its end"
+file = "crates/browser/src/web_contents.rs"
+from = '''                self.process.ended();
+                self.crashed = true;'''
+to = '''                self.crashed = true;'''
+
+[[mutant]]
+name = "what the channel refuses is only a renderer gone"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                (host.forward)(Err(BadMessageReason::Channel));'''
+to = '''                let _ = &host;'''

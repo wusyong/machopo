@@ -67,4 +67,10 @@ pub enum BadMessageReason {
     /// Script's cookies of a URL of another origin than the loader's
     /// (`RestrictedCookieManager`'s "Incorrect url origin").
     CookieUrlMismatch,
+    /// What the channel to a renderer process itself refused: bytes that
+    /// are no message, a message that is none of its kind, a handle or a
+    /// pipe a renderer may not send, more queued than may wait (Mojo's
+    /// `ReportBadMessage` from its own validation). The channel is over
+    /// by then.
+    Channel,
 }

@@ -1236,6 +1236,12 @@ impl RenderThread {
                 }
             }
             RendererMsg::Shutdown => return false,
+            // A process's IO thread acts on it before it gets here; threads
+            // of the browser's can't crash without taking the browser
+            // along.
+            RendererMsg::Crash => {
+                tracing::warn!("asked to crash, as the browser's threads: ignored");
+            }
         }
         true
     }

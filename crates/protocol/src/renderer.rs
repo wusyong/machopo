@@ -422,6 +422,11 @@ pub enum RendererMsg {
     PopupMenuClosed(PopupMenuResult),
     /// Orderly shutdown of the renderer main thread.
     Shutdown,
+    /// The renderer is to crash (`chrome://crash`, which has the renderer
+    /// crash itself): only to a renderer in a process of its own, which
+    /// ends itself abnormally as soon as it reads this. One that is the
+    /// browser's threads can't, and isn't sent it.
+    Crash,
 }
 
 /// A `<select>`'s dropdown, as the renderer asks the browser to show it

@@ -8,7 +8,11 @@ use std::sync::Arc;
 
 use browser::RendererLauncher;
 
+use ipc::core::frame::BadMessage;
+use ipc::endpoint::{self, Handler, IoLoop, Received};
+use ipc::platform::Channel;
 use net::test_server::Route;
+use protocol::control_channel::{ChannelLink, config, to_browser};
 use protocol::renderer::RendererHostMsg;
 use protocol::viz::{CompositorFrameSinkMsg, VizMsg};
 
@@ -24,8 +28,31 @@ const RENDERER: &str = "MACHOPO_TEST_RENDERER";
 /// with how that ended. Without it (the test run itself) it does nothing.
 #[test]
 fn child() {
-    if std::env::var_os(RENDERER).is_none() {
+    let Some(role) = std::env::var_os(RENDERER) else {
         return;
+    };
+    // Whatever it is, it ends by itself in the end: one the browser's
+    // side failed to end (the test of that failing) keeps the test run's
+    // output open, and the run waits on it.
+    std::thread::spawn(|| {
+        std::thread::sleep(TIMEOUT * 3);
+        std::process::exit(9);
+    });
+    match role.to_str() {
+        // Not a renderer of ours: what no renderer sends, and then it
+        // stays, whatever becomes of its channel.
+        Some("garbage") => rogue(|link| {
+            let _ = link.send(to_browser::HOST, "no message of a renderer's");
+        }),
+        Some("another's cookies") => rogue(|link| {
+            let cookie = RendererHostMsg::SetCookie {
+                loader: 999,
+                url: "https://example.test/".into(),
+                line: "a=b".into(),
+            };
+            let _ = link.send(to_browser::HOST, &cookie);
+        }),
+        _ => {}
     }
     let exit = match ipc::platform::inherited() {
         Some(channel) => match renderer::run_child_process(channel, SCRIPT_ENGINES) {
@@ -38,9 +65,36 @@ fn child() {
     std::process::exit(exit);
 }
 
+/// A process that takes a renderer's end of the channel, sends what
+/// `send` does, and then goes on (far longer than a test waits): it reads
+/// its channel and heeds nothing, as a renderer that was taken over
+/// would.
+fn rogue(send: impl FnOnce(&ChannelLink)) -> ! {
+    struct Deaf;
+    impl Handler<Channel> for Deaf {
+        fn message(&mut self, _: Received<'_, Channel>) -> Result<(), BadMessage> {
+            Ok(())
+        }
+    }
+    let channel = ipc::platform::inherited().expect("its end of the channel");
+    let (link, endpoint) = endpoint::endpoint(channel, config(false));
+    let (io, io_handle) = IoLoop::new().expect("a way to wait");
+    io_handle.serve(endpoint, Deaf);
+    std::thread::spawn(move || io.run());
+    send(&link);
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(60));
+    }
+}
+
 /// Starts this test binary again as a renderer.
 fn as_a_process() -> RendererLauncher {
-    RendererLauncher::Process(Arc::new(|| {
+    launching("a renderer")
+}
+
+/// Starts this test binary again as what `role` says ([`child`]).
+fn launching(role: &'static str) -> RendererLauncher {
+    RendererLauncher::Process(Arc::new(move || {
         let mut command = Command::new(std::env::current_exe().expect("the test's own path"));
         command
             .args([
@@ -49,7 +103,7 @@ fn as_a_process() -> RendererLauncher {
                 "--nocapture",
                 "--test-threads=1",
             ])
-            .env(RENDERER, "1");
+            .env(RENDERER, role);
         command
     }))
 }
@@ -333,4 +387,140 @@ fn a_renderer_in_the_browsers_process_has_no_process() {
     let (mut web_contents, _host_rx) = crate::navigation::tab_in(in_memory());
     assert_eq!(web_contents.renderer_pid(), None);
     web_contents.shutdown();
+}
+
+/// How the system has the process: its state's letters (`Z` for one that
+/// ended and nobody waited for), or none once it is gone.
+#[cfg(unix)]
+fn state_of(pid: u32) -> Option<String> {
+    let out = Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+        .expect("ps runs");
+    let state = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    (!state.is_empty()).then_some(state)
+}
+
+/// Hands the tab its renderer's messages until the renderer is gone.
+fn until_gone(
+    web_contents: &mut browser::WebContents,
+    host_rx: &crossbeam_channel::Receiver<browser::ContentsEvent>,
+) {
+    loop {
+        let msg = next_message(web_contents, host_rx, TIMEOUT).expect("the tab hears");
+        web_contents.on_renderer_message(&msg);
+        if matches!(msg, RendererHostMsg::RendererGone) {
+            return;
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_renderer_process_told_to_crash_does_and_another_is_started_for_a_reload() {
+    let (mut web_contents, host_rx) = tab_launched(
+        as_a_process(),
+        false,
+        gfx::SystemColors::DEFAULT,
+        in_memory(),
+    );
+    web_contents.navigate("data:text/html,<title>one</title>");
+    assert_eq!(next_commit(&mut web_contents, &host_rx).2, "one");
+    let first = web_contents.renderer_pid().expect("a process of its own");
+    // The renderer ends itself, and the tab hears as of any crash: by its
+    // channel, not because it asked.
+    web_contents.navigate("about:crash");
+    assert!(!web_contents.is_crashed(), "not before it has");
+    until_gone(&mut web_contents, &host_rx);
+    assert!(web_contents.is_crashed());
+    // Seen to its end: nothing is left of the process, not even what
+    // waits to be waited for.
+    assert_eq!(state_of(first), None);
+    assert_eq!(web_contents.renderer_pid(), None);
+    assert_eq!(web_contents.renderer_shared_memory(), None);
+    // A reload starts another.
+    web_contents.reload();
+    assert_eq!(next_commit(&mut web_contents, &host_rx).2, "one");
+    assert!(!web_contents.is_crashed());
+    let second = web_contents.renderer_pid().expect("a process of its own");
+    assert_ne!(second, first);
+    web_contents.shutdown();
+    assert_eq!(state_of(second), None);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_renderer_process_that_hangs_crashes_when_told_to() {
+    let (mut web_contents, host_rx) = tab_launched(
+        as_a_process(),
+        false,
+        gfx::SystemColors::DEFAULT,
+        in_memory(),
+    );
+    // Its main thread never comes back from this script.
+    web_contents.navigate("data:text/html,<title>stuck</title><script>for(;;){}</script>");
+    assert_eq!(next_commit(&mut web_contents, &host_rx).2, "stuck");
+    let pid = web_contents.renderer_pid().expect("a process of its own");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    web_contents.navigate("about:crash");
+    until_gone(&mut web_contents, &host_rx);
+    assert!(web_contents.is_crashed());
+    assert_eq!(state_of(pid), None);
+    web_contents.shutdown();
+}
+
+/// What the tab is told was wrong with what its renderer sent: the tab
+/// ends the renderer for it, as an embedder has it do.
+fn bad_message_of(
+    web_contents: &mut browser::WebContents,
+    host_rx: &crossbeam_channel::Receiver<browser::ContentsEvent>,
+) -> browser::BadMessageReason {
+    loop {
+        match host_rx.recv_timeout(TIMEOUT).expect("the tab hears") {
+            browser::ContentsEvent::BadMessage { renderer, reason } => {
+                assert!(web_contents.is_current_renderer(renderer));
+                web_contents.received_bad_message(reason);
+                return reason;
+            }
+            browser::ContentsEvent::Renderer { msg, .. } => {
+                assert!(
+                    !matches!(msg, RendererHostMsg::RendererGone),
+                    "gone, with nothing said of a bad message"
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_process_that_sends_what_no_renderer_does_is_killed() {
+    // What the channel itself refuses, and what the browser's checks do:
+    // either way the process, which goes on running, is ended, and the
+    // tab shows that its renderer is gone.
+    for (role, reason) in [
+        ("garbage", browser::BadMessageReason::Channel),
+        (
+            "another's cookies",
+            browser::BadMessageReason::UnknownLoader,
+        ),
+    ] {
+        let (mut web_contents, host_rx) = tab_launched(
+            launching(role),
+            false,
+            gfx::SystemColors::DEFAULT,
+            in_memory(),
+        );
+        let pid = web_contents.renderer_pid().expect("a process of its own");
+        assert_eq!(
+            bad_message_of(&mut web_contents, &host_rx),
+            reason,
+            "{role}"
+        );
+        assert!(web_contents.is_crashed(), "{role}");
+        assert_eq!(state_of(pid), None, "{role}: still there");
+        assert_eq!(web_contents.renderer_pid(), None, "{role}");
+        web_contents.shutdown();
+    }
 }

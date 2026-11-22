@@ -44,7 +44,7 @@
 | 3b-1：`ipc` 的 codec 認得管道（`Consumer` 能序列化） | 完成 | 2026-11-22 |
 | 3b-2：`protocol` 拿掉 `#[serde(skip)]`，`browser` 和 `renderer` 接上 | 完成 | 2026-11-22 |
 | 3c：守住現狀：renderer process 的 tile 已經上得了 GPU（多複製兩次）；測試、3a 留下的 mutant、文件（2026-11-22 調整，第 56 條） | 完成 | 2026-11-22 |
-| 3d：process 不在了（當掉、被 kill、壞訊息、`about:crash`） | 未開始 | |
+| 3d：process 不在了（當掉、被 kill、壞訊息、`about:crash`） | 完成 | 2026-11-22 |
 | 3e：整套測試哪些用多個 process 跑；處理訊息的物件和 body 的管道的 fuzz target | 未開始 | |
 | 3f：tile 只複製一次（第 24 條的驗收條件；原本的 3c） | 未開始 | |
 | 3g：trace；量每個 frame 的延遲和 IO thread 每一步的時間（3f 之前先量一次現況） | 未開始 | |
@@ -649,4 +649,26 @@ branch `0004-linux`，從 `0004` 的 2e-7（`82a4fc7`）分出去。
 - **mutation test**（`mutants-3c.toml`）3 個，都抓到：Browser 那一端照 renderer 的設定建（3a 那時漏掉的那個，現在由「大資料走 region」的測試抓到；因為它 9 秒就被抓到，另外手動套一次確認是那個測試失敗、不是編不過）；告訴 renderer process 沒有 GPU（3a 那時沒有列的那個）；`renderer_shared_memory` 回空的。3a 的清單開頭改成指向這裡。跑完確認檔案還原。
 - **跑過的檢查**（都在最後一次改程式之後跑）：`cargo test -p browser -p shell`；`cargo clippy` 六個 crate（`ipc`、`protocol`、`compositor`、`renderer`、`browser`、`shell`）`--all-targets -- -D warnings`；`cargo fmt --check`；`sanity.py` 的 7 項。
 - **沒有驗到的**：Linux 和 Windows。
+
+### 3d：renderer process 不在了（2026-11-22，macOS 26、Apple M4）
+
+- **決定**：沒有新的大決定，照「process 當掉」寫的做。做的時候定的幾件小事記在這裡（下面「選的」）。
+- **開始時試出來的**（暫時的測試，試完還原）：`about:crash` 之後 renderer process 50 ms 內自己結束、重新載入會啟動新的、連跑著無窮迴圈的頁面也會結束（關閉的訊息會打斷 script）。但都靠 renderer 配合：Browser 沒有去結束 process，結束的 process 沒有被回收（一直是 zombie，到重新載入或關分頁），通道拒絕的東西只被當成「對方不見了」。
+- **做了什麼**：
+  - `browser` 的 `RenderProcessHost`：`kill` 對 renderer process 是直接 kill 並等它結束（不請它，它可能不聽），回來時 process 已經沒有了；`ended`（分頁收到 `RendererGone` 時呼叫）把 process 送終：給 200 ms 讓它自己結束（當掉的 process 通道比 process 早一點點消失），沒有就 kill，都回收，結束的狀態記進 log；`crash`（送 `RendererMsg::Crash`）。
+  - 通道自己判定的壞訊息（`Gone::BadMessage`、`Gone::QueueFull`）在 IO thread 上先當成壞訊息交給分頁（新的 `BadMessageReason::Channel`），再照通道結束處理：和 `IoThreadHost` 的檢查判定的走同一條路，分頁結束那個 renderer。
+  - `protocol` 的 `RendererMsg::Crash`；`renderer` 的 child 的 IO thread 一解出它就 `std::process::abort()`（在 IO thread 上，所以 main thread 卡住也有效）；同一個 process 裡的 renderer 收到的話不理（Browser 不會送）。
+  - `about:crash`：renderer process 自己異常終止，分頁經過 `RendererGone` 得知（不是自己先標成當掉）；同一個 process 的照舊由 Browser 結束。
+  - `ipc` 的端點：通道結束時把這一端留著送大資料的 region 放掉（原本要等最後一個 `Link` 被丟掉，而分頁會留著當掉的 renderer 的 host 到重新載入）。
+- **選的**：
+  - `about:crash` 用訊息讓 child 自己 `abort`，不是 Browser 送 signal：三個平台一樣，而且測得到「真的當掉」那條路（通道先斷、分頁才知道）。
+  - 被 kill 之後 `renderer_pid()` 和 `renderer_shared_memory()` 回空的：那個 process 沒有了。
+  - 沒有做「不回應」的偵測（Chromium 的 hang monitor）：RFC 的「process 當掉」沒有列，記在 `docs/limitations.md`。
+- **測試**（`crates/browser/tests/it/renderer_process.rs` 多 4 個，共 13 個，重複 5 次都過；看 process 還在不在的那幾個只在 Unix）：`about:crash` 之後分頁先不是當掉、收到 `RendererGone` 才是，process 連 zombie 都沒留下，重新載入啟動另一個 process、頁面載入；main thread 卡在無窮迴圈的 renderer 也當掉；送了不是訊息的東西的 process（通道拒絕，`Channel`）和送了別人的 cookie 的 process（Browser 的檢查，`UnknownLoader`）都被 kill，而它們自己是不會結束的。`crates/ipc/tests/it/endpoint.rs`：通道結束後這一端的 region 是 0。
+- **mutation test**（`mutants-3d.toml`）6 個，全部抓到；跑完確認檔案還原。
+  - 「被 kill 的 process 其實沒死」那個 mutant 讓整個 run 卡了 20 分鐘：它讓測試裡故意不結束的 process 真的留下來（60 個），握著測試輸出的 pipe。手動停掉之後繼續。測試用的 process 現在都有壽命上限（90 秒自己結束），和 `ipc` 的測試 child 同樣的做法；這是第二次碰到同一種卡法，之後寫會啟動 process 的測試時一開始就加。
+  - 沒有列成 mutant 的兩處寫在清單開頭：佇列超過上限也算通道的壞訊息（要 256 MiB 沒人讀，測試送不出來）、等 200 ms 的那個數字（只影響 log 寫的結束方式）。
+- **跑過的檢查**（都在最後一次改程式之後跑）：`cargo test -p ipc -p protocol -p renderer -p browser -p shell`；`cargo clippy` 六個 crate `--all-targets -- -D warnings`，`ipc` 另外兩種 cfg；`cargo fmt --check`；`sanity.py` 的 7 項。跑完確認沒有留下測試啟動的 process。
+- **沒有跑的**：`test.py ipc` 的 fuzz 和 Miri（`ipc` 這一段只多一行，在端點結束時換掉池子；沒有先問使用者就不跑）。
+- **沒有驗到的**：Linux 和 Windows。Windows 上看 process 還在不在的測試不編（`ps`），kill 那條路在那裡只有「分頁變成當掉」被測到。
 

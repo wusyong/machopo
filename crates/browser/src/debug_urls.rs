@@ -8,9 +8,10 @@ pub(crate) enum DebugUrl {
     /// `about:gpucrash`: loses the GPU device, as a driver reset would
     /// (`chrome://gpucrash`, which crashes the GPU process).
     GpuCrash,
-    /// `about:crash`: ends the tab's renderer at once, which shows its sad
-    /// tab (like `chrome://kill`; `chrome://crash` has the renderer crash
-    /// itself, which a renderer thread unwinding through V8 can't).
+    /// `about:crash`: the tab's renderer crashes, which shows its sad tab.
+    /// A renderer process ends itself abnormally (`chrome://crash`); one
+    /// that is this process's threads can't (a thread unwinding through V8
+    /// can't), and is ended from here (like `chrome://kill`).
     Crash,
 }
 

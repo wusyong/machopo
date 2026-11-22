@@ -485,9 +485,14 @@ impl WebContents {
             }
             Some(DebugUrl::Crash) => {
                 tracing::warn!(url, "ending the renderer");
-                self.process.kill();
-                self.crashed = true;
-                self.frame_tree.reset();
+                // A renderer process crashes itself, and the tab hears as
+                // of any crash (`RendererGone`); a renderer that is this
+                // process's threads is ended from here.
+                if !self.process.crash() {
+                    self.process.kill();
+                    self.crashed = true;
+                    self.frame_tree.reset();
+                }
             }
             None => self.begin_navigation(url, NavigationType::NewEntry, Asked::default()),
         }
@@ -1781,6 +1786,7 @@ impl WebContents {
             // What was in flight will never be acknowledged; the next
             // renderer starts with nothing in flight.
             RendererHostMsg::RendererGone => {
+                self.process.ended();
                 self.crashed = true;
                 self.input_in_flight = 0;
                 self.frame_tree.reset();

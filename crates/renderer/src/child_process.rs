@@ -65,7 +65,14 @@ impl Handler<Channel> for ChildHandler {
                 if let Some(init) = self.init.take() {
                     let _ = init.send(message.decode::<ChildInit>()?);
                 } else {
-                    let _ = self.to_main.send(message.decode::<RendererMsg>()?);
+                    let msg = message.decode::<RendererMsg>()?;
+                    if matches!(msg, RendererMsg::Crash) {
+                        // Here, not on the main thread: a renderer that
+                        // hangs crashes too. Abnormally, as a crash is:
+                        // nothing is unwound or flushed.
+                        std::process::abort();
+                    }
+                    let _ = self.to_main.send(msg);
                 }
             }
             to_renderer::COMPOSITOR => {
