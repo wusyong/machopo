@@ -23,6 +23,7 @@ net.workspace = true
 protocol.workspace = true
 renderer.workspace = true
 tracing.workspace = true
+trace_event.workspace = true
 # Each frame's document's origin.
 url.workspace = true
 # What a frame's storage is kept by (`FrameTree::storage_key`).

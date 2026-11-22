@@ -589,6 +589,22 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
     - **緩衝區沒有重複用**：每上傳一塊建一個（mapped 的緩衝區用過之後要等 GPU 才能再 map，重複用要一個非同步的池子）。wgpu 自己的 `write_texture` 也是每次建一個，所以和原本的路一樣；一批 tile 的複製指令合成一次 submit。3g 量到是問題時再做。
     - **不選先複製到 Viz 自己的記憶體再 `write_texture`**：兩次複製，沒達到驗收條件，留一截之後要做。**不選把 view 當成 `&[u8]`**：上面說的借用，要在 `ipc` 的 soundness 開一個說不出理由的例外。
     - 對照 Chromium：one-copy raster 時 GPU process 把共用記憶體直接交給 `glTexSubImage2D`，次數相同。
+64. **renderer process 的 trace 寫自己的檔**（2026-11-22，第 3 階段的 3g；使用者選的；「待決定」的「trace 怎麼收」）：`MACHOPO_TRACE=<檔>` 時 Browser 寫 `<檔>`，每個 renderer process 寫 `<檔>.<pid>`。兩邊用的是整台機器共用的時鐘，時間對得上；量測的工具每個檔都讀。
+    - **理由**：改動小（renderer 啟動時照樣開 trace，只換檔名），V8 自己的事件（GC、deopt）也跟著有。
+    - **不選 renderer 把 span 送回 Browser 合成一份**（Chromium 的做法：每個 process 的 tracing service 經過共用記憶體把資料送回 Browser）：span 可以走通道，但 V8 的事件是 Perfetto 在 V8 裡直接寫的，要換成 Perfetto 自己跨 process 的模式，等於再接一個子系統；trace 的訊息和正常的訊息走同一條通道，量到的數字會被量測本身影響。Chromium 這樣做是因為 sandbox 裡的 process 不能寫檔、trace 要能線上開關，這兩個需求現在都沒有。
+    - **不選不收、只看 log 的時間**：現有的量測工具用不了，也看不到 V8 的 GC。
+    - **留下的**：有 sandbox 時 renderer 不能自己開檔，到時由 Browser 開好交給它（那一份 RFC）；renderer 被 kill 或當掉時 trace 的最後一段可能沒寫完。
+65. **3f 之前的現況用暫時的 worktree 量**（2026-11-22，3g；使用者選的）：在 `9784771`（3f 的前一個 commit）上另開一份原始碼，只套上 renderer process 寫 trace 的改動（第 64 條），編 release 的執行檔來量，量完丟掉。計畫原本寫「3f 做之前先量一次現況」，那一次我沒量就做了，這是補量。
+    - **理由**：量到的是當時真正的程式；正式的程式裡不留只為量測存在的東西。
+    - **不選在現在的程式加一個關掉共用記憶體的開關**：量到的是「新程式關掉一部分」，不是舊的程式（訊息欄位的型別換過）；產品多一個只為量測的開關。**不選不補量**：回答不了 3f 省了多少。
+    - 「單一 process」和「現在的多 process」不管怎樣都量：那是決定預設要不要換的依據（第 59 條）。
+66. **3g 量三層，只量不改**（2026-11-22，3g；使用者照建議選的）：用 `bench.py raster`（三個頁面各捲動、改視窗大小一輪）跑三種組態：單一 process、現在的多 process、3f 之前的多 process（第 65 條）。
+    - **renderer 這一側**（工具原本就有）：compositor 每個 frame 準備 tile 的時間和它的各部分。
+    - **Browser 這一側**：IO thread 處理每則訊息的時間（加一個 span）、Viz 上傳每塊 tile 的時間（span 已經有）。
+    - **每個 frame 的延遲**：從 compositor 送出 frame 到 Viz 畫出來。這是使用者感覺得到的數字，也是換預設（第 59 條）最直接的依據。
+    - **量完不在這一步接著改**：可能要做的（GPU 的緩衝區重複用、IO thread 的複製通用化、回應的 body 走共用記憶體）看到數字之後一件一件決定。
+    - **不選只量 renderer 這一側**：3f 改的另一半（IO thread、Viz）看不到。**不選不量延遲**：其他的數字都是某一段的時間，加不出使用者看到的那一個。
+    - 對照 Chromium：trace 裡每個 frame 有一條跨 process 的 flow（`PipelineReporter`），量的是同一種「從送出到畫出來」。
 
 ## 待決定
 
@@ -623,7 +639,6 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
   - 沒有上限的東西：Browser 收 renderer 訊息的佇列、Browser 送給卡住的 renderer 的佇列、一個 renderer 能要的共用記憶體（「`ipc` crate」）、反序列化的巢狀深度（同上）。各要定一個數字，超過就關掉那個 renderer。
   - 處理訊息時 panic：Rust 擋得住記憶體錯誤，擋不住 `unwrap` 和越界。處理 renderer 的訊息的程式遇到不合理的內容要走壞訊息的路（`browser` 的 `BadMessageReason`），不能 panic。
   - 壞的 frame：frame 是在 Browser 裡交給 GPU 的，而 wgpu 的驗證錯誤現在會結束整個程式。Viz 收到 frame 時的檢查要涵蓋所有會走到 wgpu 的值；這一項單一 process 時就可以開始做。
-- **trace 怎麼收**：每個 process 各寫一個檔案（`MACHOPO_TRACE` 加上 pid）、之後合併，或 child 把 span 送回 Browser。Chromium 是每個 process 的 tracing service 把資料送回 Browser 合成一份。
 - **哪些模式預設多個 process**：看法是只有人用的視窗；headless、情境、`--automation-pipe` 和測試預設單一 process，CI 另外用多個 process 跑選定的幾套（下面的「哪幾套測試」）。
 - **哪幾套測試在 CI 上用多個 process 跑**：WPT 可以。情境和 reftest 怎麼啟動、要全部還是一部分、多花多少時間，還沒確認。
 - **Browser 的 IO thread 要不要合成一條**（2026-11-20：第 3 階段決定，那時開得了多個 renderer process、可以量；合成一條之後那條 thread 比較忙，同時重量一次訊息的 ring 值不值得，第 19 條）：現在每個 renderer 一條，分頁多的時候 thread 跟著多；Chromium 是整個 process 一條處理所有通道。IO thread 的迴圈本來就不寫死成只等一條通道（「`ipc` crate」），合起來不用改設計；量到 thread 的數量是問題時再做。

@@ -377,6 +377,7 @@ dependencies = [
  "renderer",
  "site",
  "sql",
+ "trace_event",
  "tracing",
  "url",
  "viz",

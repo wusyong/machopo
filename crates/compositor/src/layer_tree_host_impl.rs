@@ -1323,6 +1323,9 @@ impl LayerTreeHostImpl {
             self.drawn_document = Some(tree.document_id);
             self.frame_sink
                 .submit_compositor_frame(local_surface_id, frame);
+            // With Viz's "frame drawn" of the same token: how long a
+            // frame takes from here to the screen.
+            tracing::debug!(frame_token = token, "frame submitted");
             token
         });
         for promise in self.swap_promises.drain(..) {

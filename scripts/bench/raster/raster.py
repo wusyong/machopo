@@ -30,6 +30,17 @@ takes its screen's); frame intervals aren't reported: the wheel's events are ans
 once the renderer has handled each, so frames come as fast as the events,
 not as fast as machopo could draw them.
 
+A third table is the browser's side of the same frames, and how long a
+frame takes to the screen: what the browser's IO thread spends on each of
+a renderer process's messages (`ChannelHost::OnMessage`; there is none
+with the renderer in the browser's process), what Viz spends putting
+tiles on the GPU and drawing, and, from the log, each frame's time from
+the compositor's `frame submitted` to Viz's `frame arrived` and `frame
+drawn` of the same token. With `--process-per-tab` the renderer is a
+process of its own, whose trace is a file of its own beside the
+browser's; `--binary` measures another build of machopo (an older
+commit's), and `--name` keeps each run's results in a folder of its own.
+
 Standard library only (with `speedometer.py`'s pipe, server and trace
 reader).
 """
@@ -91,23 +102,48 @@ PARTS = ("raster::playback", "raster::scene", "raster::render", "TileManager::Sc
          "SharedImage::Write", "SharedImage::CreateTexture", "SharedImage::WriteTexture", "SharedImage::BindGroups",
          "SharedImage::Submit")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
+# A frame on its way to the screen, in the log: submitted by the
+# renderer's compositor (on its thread), then arrived at Viz and drawn,
+# from the frame sink the browser bound that renderer to.
+FRAME = re.compile(r"^(?P<time>\d{4}-\d\d-\d\dT[\d:.]+Z)\s+\w+\s+(?P<thread>\S+)\s.*"
+                   r"frame (?P<what>submitted|arrived|drawn)(?P<fields>.*)$")
+# The browser's own frame sink's client: its UI's frames, not a tab's.
+BROWSER_CLIENT = 0
+# The browser's threads, as the trace has them (names cut to 15 bytes).
+VIZ_THREAD = "VizCompositorTh"
+IO_THREAD = "Chrome_IOThread"
+# What the browser's side does for a renderer's frames, each a span.
+BROWSER_PARTS = {
+    IO_THREAD: ("ChannelHost::OnMessage",),
+    VIZ_THREAD: ("SharedImage::Write", "SharedImage::WriteTexture", "SharedImage::StageTexture",
+                 "SharedImage::Submit", "Display::DrawAndSwap"),
+}
 
 
 def page_url(kind: str, where: str, server: speedometer.Server) -> str:
     return (speedometer.ROOT / where).as_uri() if kind == "file" else server.url(where)
 
 
+def renderer_traces(trace: Path) -> list[Path]:
+    """The traces renderer processes wrote beside the browser's `trace`:
+    its name with each one's process id after it."""
+    return sorted(path for path in trace.parent.glob(f"{trace.name}.*") if path.suffix[1:].isdigit())
+
+
 def run_page(binary: Path, url: str, folder: Path, name: str, window: bool, scale: float,
-             raster_threads: int | None = None) -> dict:
-    """`url` in machopo (with `--num-raster-threads raster_threads`, if given),
+             raster_threads: int | None = None, process_per_tab: bool = False) -> dict:
+    """`url` in machopo (with `--num-raster-threads raster_threads`, if given;
+    the renderer a process of its own if `process_per_tab`),
     scrolled then resized: each phase's span, on the trace's clock and the
     wall clock (the log's), and where its trace and log are."""
     trace = folder / f"{name}.pftrace"
     log_path = folder / f"{name}.log"
-    trace.unlink(missing_ok=True)
-    env = {**os.environ, "MACHOPO_TRACE": str(trace), "RUST_LOG": "info,compositor=debug"}
+    for old in [trace, *renderer_traces(trace)]:
+        old.unlink(missing_ok=True)
+    env = {**os.environ, "MACHOPO_TRACE": str(trace), "RUST_LOG": "info,compositor=debug,viz=debug"}
     arguments = [str(binary), "--automation-pipe", *(["--window"] if window else ["--scale", str(scale)]),
-                 *(["--num-raster-threads", str(raster_threads)] if raster_threads else [])]
+                 *(["--num-raster-threads", str(raster_threads)] if raster_threads else []),
+                 *(["--process-per-tab"] if process_per_tab else [])]
     phases = {}
     with open(log_path, "w", encoding="utf-8") as log:
         process = subprocess.Popen(arguments, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, env=env)
@@ -176,7 +212,7 @@ def tiles_in_log(text: str, window: tuple[float, float]) -> dict:
         found = PREPARED.match(line)
         if not found:
             continue
-        at = datetime.fromisoformat(found["time"].replace("Z", "+00:00")).timestamp()
+        at = log_time(found["time"])
         if window[0] <= at <= window[1]:
             for name, count in COUNT.findall(found["counts"]):
                 if name in counts:
@@ -202,20 +238,97 @@ def raster_spans(trace: Path) -> dict[int, list[tuple[str, int, int]]]:
     return {track: spans(found, set(PARTS)) for track, found in by_track.items()}
 
 
+def log_time(text: str) -> float:
+    return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+
+
+def frames_in_log(text: str) -> dict[str, list[tuple[float, int]]]:
+    """The tab's frames the log tells of, each `(wall clock, token)`:
+    submitted (the renderer's compositor's; the browser's UI's own are on
+    another thread), and arrived at Viz and drawn (the sink that isn't the
+    browser's own)."""
+    found = {"submitted": [], "arrived": [], "drawn": []}
+    for line in ANSI.sub("", text).splitlines():
+        frame = FRAME.match(line)
+        if not frame:
+            continue
+        fields = dict(COUNT.findall(frame["fields"]))
+        if "frame_token" not in fields:
+            continue
+        if frame["what"] == "submitted":
+            if frame["thread"] != "Compositor":
+                continue
+        elif int(fields.get("client_id", BROWSER_CLIENT)) == BROWSER_CLIENT:
+            continue
+        found[frame["what"]].append((log_time(frame["time"]), int(fields["frame_token"])))
+    return found
+
+
+def percentile(sorted_values: list[float], share: float) -> float:
+    if not sorted_values:
+        return 0.0
+    return sorted_values[min(len(sorted_values) - 1, int(share * len(sorted_values)))]
+
+
+def frame_latency(frames: dict[str, list[tuple[float, int]]], window: tuple[float, float]) -> dict:
+    """Of the frames submitted in `window`: how long each took to arrive
+    at Viz, and to be in what Viz drew (the first draw of that frame or a
+    later one of its client's: a frame replaced before a draw was never on
+    the screen itself). In ms."""
+    arrived = {token: at for at, token in reversed(frames["arrived"])}
+    drawn = frames["drawn"]
+    to_viz, to_screen, at_draw = [], [], 0
+    for at, token in frames["submitted"]:
+        if not window[0] <= at <= window[1]:
+            continue
+        if token in arrived:
+            to_viz.append((arrived[token] - at) * 1e3)
+        while at_draw < len(drawn) and (drawn[at_draw][1] < token or drawn[at_draw][0] < at):
+            at_draw += 1
+        if at_draw < len(drawn):
+            to_screen.append((drawn[at_draw][0] - at) * 1e3)
+    to_viz.sort()
+    to_screen.sort()
+
+    def stats(values: list[float]) -> dict:
+        return {"count": len(values), "median_ms": round(percentile(values, 0.5), 2),
+                "p95_ms": round(percentile(values, 0.95), 2), "max_ms": round(max(values, default=0), 2)}
+
+    return {"to_viz": stats(to_viz), "to_screen": stats(to_screen)}
+
+
+def thread_slices(traces: list[Path]) -> dict[str, list[tuple[int, str | None]]]:
+    """`perfetto_slices` of every process's trace together: a thread's
+    name is one process's (the renderer's threads are in its own trace
+    when it is a process of its own)."""
+    together: dict[str, list[tuple[int, str | None]]] = {}
+    for trace in traces:
+        for thread, slices in speedometer.perfetto_slices(trace).items():
+            together.setdefault(thread, []).extend(slices)
+    return together
+
+
 def analyze(run: dict) -> dict:
     """Each phase of a page's run: the compositor thread's `PrepareTiles`,
     the `raster::playback` calls (theirs and the raster threads') and how
-    many threads made them, the renderer's main frames, and the tiles the
-    log counts."""
-    slices = speedometer.perfetto_slices(run["trace"])
+    many threads made them, the renderer's main frames, the tiles the
+    log counts, what the browser's side spent, and how long the frames
+    took to the screen."""
+    traces = [run["trace"], *renderer_traces(run["trace"])]
+    slices = thread_slices(traces)
     compositor = spans(slices.get("Compositor", []), {"TileManager::PrepareTiles", "raster::playback"})
-    rasters = raster_spans(run["trace"])
+    rasters = {(trace, track): found for trace in traces for track, found in raster_spans(trace).items()}
     playbacks = [found for thread in rasters.values() for found in thread]
     main = spans(slices.get(speedometer.MAIN_THREAD, []), {"ProxyMain::BeginMainFrame"})
+    browser = {thread: spans(slices.get(thread, []), set(names)) for thread, names in BROWSER_PARTS.items()}
     log = run["log"].read_text(encoding="utf-8", errors="replace")
+    frames = frames_in_log(log)
     results = {}
     for name, phase in run["phases"].items():
         results[name] = {
+            "browser": {part: summary(browser[thread], part, phase["trace"])
+                        for thread, names in BROWSER_PARTS.items() for part in names},
+            "frames": frame_latency(frames, phase["wall"]),
             "prepare_tiles": summary(compositor, "TileManager::PrepareTiles", phase["trace"]),
             "raster": summary(playbacks, "raster::playback", phase["trace"]),
             "parts": {part: summary(playbacks, part, phase["trace"]) for part in PARTS},
@@ -228,7 +341,8 @@ def analyze(run: dict) -> dict:
 
 
 def write_report(results: dict[str, dict], env: dict, window: bool, scale: float,
-                 raster_threads: int | None = None) -> Path:
+                 raster_threads: int | None = None, process_per_tab: bool = False, folder: Path | None = None,
+                 binary: Path | None = None) -> Path:
     """`raster.md`: for each page and phase, the content updates
     (`PrepareTiles`), the raster's total and each update's mean and
     longest, the main frames', the tiles rastered and how many were one
@@ -236,7 +350,9 @@ def write_report(results: dict[str, dict], env: dict, window: bool, scale: float
     lines = [
         "# machopo's tile raster while scrolling and resizing",
         "",
-        f"{date.today().isoformat()}, machopo {speedometer.git_head()} (the `perf` profile), "
+        f"{date.today().isoformat()}, "
+        f"{f'machopo at `{binary}`' if binary else f'machopo {speedometer.git_head()} (the `perf` profile)'}, "
+        f"{'a renderer process for the tab' if process_per_tab else 'the renderer in the browser\'s process'}, "
         f"{'a real window' if window else f'headless, device scale factor {scale:g}'}, "
         f"{f'{raster_threads} raster threads' if raster_threads else 'the default raster threads'}; "
         f"{env['os']}, {env['cpu']}, power: {env['power']}. "
@@ -283,9 +399,34 @@ def write_report(results: dict[str, dict], env: dict, window: bool, scale: float
                          f"{part('TileManager::ScanTile')} | {part('TileManager::UploadTile')} ({write}, {submit}) | "
                          f"{share('gpu')} | {share('gpu_but_images')} | {share('masks')} | {share('filters')} | "
                          f"{share('blurs')} | {share('patterns')} | {share('bitmap_glyphs')} |")
-    report = RESULTS / "raster.md"
+    lines += [
+        "",
+        "The browser's side (ms: count, total, longest), and each frame's time from the compositor's submit to "
+        "Viz having it and to Viz having drawn it (ms: median, 95th percentile, longest):",
+        "",
+        "| Page | Phase | IO thread, a message | Viz: tiles to the GPU | of it staged from shared memory "
+        "| Viz: draws | Frames | To Viz | To the screen |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for page, phases in results.items():
+        for phase, r in phases.items():
+            browser, frames = r.get("browser", {}), r.get("frames", {})
+
+            def spent(name: str) -> str:
+                found = browser.get(name, {})
+                return f"{found.get('count', 0)}, {found.get('total_ms', 0)}, {found.get('max_ms', 0)}"
+
+            def took(name: str) -> str:
+                found = frames.get(name, {})
+                return f"{found.get('median_ms', 0)}, {found.get('p95_ms', 0)}, {found.get('max_ms', 0)}"
+
+            lines.append(f"| {page} | {phase} | {spent('ChannelHost::OnMessage')} | {spent('SharedImage::Write')} | "
+                         f"{spent('SharedImage::StageTexture')} | {spent('Display::DrawAndSwap')} | "
+                         f"{frames.get('to_screen', {}).get('count', 0)} | {took('to_viz')} | {took('to_screen')} |")
+    folder = folder or RESULTS
+    report = folder / "raster.md"
     report.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
-    (RESULTS / "raster.json").write_text(json.dumps(results, indent=1) + "\n", encoding="utf-8", newline="\n")
+    (folder / "raster.json").write_text(json.dumps(results, indent=1) + "\n", encoding="utf-8", newline="\n")
     return report
 
 
@@ -298,18 +439,20 @@ def cmd_raster(args) -> int:
     env = speedometer.environment(speedometer.MACHOPO_PROFILE)
     if env["power"] == "battery":
         print("warning: on battery power, the times may not be comparable")
-    RESULTS.mkdir(parents=True, exist_ok=True)
-    binary = speedometer.machopo_binary(speedometer.MACHOPO_PROFILE)
+    folder = RESULTS / args.name if args.name else RESULTS
+    folder.mkdir(parents=True, exist_ok=True)
+    binary = Path(args.binary) if args.binary else speedometer.machopo_binary(speedometer.MACHOPO_PROFILE)
     server = speedometer.Server()
     results = {}
     try:
         for name in names:
             kind, where = PAGES[name]
             print(f"  {name}")
-            results[name] = analyze(run_page(binary, page_url(kind, where, server), RESULTS, name, args.window,
-                                             args.scale, args.raster_threads))
+            results[name] = analyze(run_page(binary, page_url(kind, where, server), folder, name, args.window,
+                                             args.scale, args.raster_threads, args.process_per_tab))
     finally:
         server.close()
-    report = write_report(results, env, args.window, args.scale, args.raster_threads)
+    report = write_report(results, env, args.window, args.scale, args.raster_threads, args.process_per_tab, folder,
+                          Path(args.binary) if args.binary else None)
     print(report.read_text(encoding="utf-8"))
     return 0

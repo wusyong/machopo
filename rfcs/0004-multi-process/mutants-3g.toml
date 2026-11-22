@@ -1,0 +1,58 @@
+# Step 3g: a renderer process writes a trace of its own, and what the
+# measurements read: the frames' way to the screen in the log, and the
+# browser's IO thread's span.
+#
+# Not here, and why:
+# - The log lines' wording and the report's columns are the tool's, whose
+#   own tests read them (`scripts/bench/raster/raster_test.py`).
+test = ["sh", "-c", "timeout 900 cargo test -q -p shell --test it -- trace::"]
+timeout = 1500
+
+[[mutant]]
+name = "a renderer process writes no trace"
+file = "crates/shell/src/main.rs"
+from = '''        let (trace, _trace_end) = start_trace(file.as_deref());
+        tracing_subscriber::registry()
+            .with(log_layer(filter))'''
+to = '''        let (trace, _trace_end) = start_trace(None);
+        tracing_subscriber::registry()
+            .with(log_layer(filter))'''
+
+[[mutant]]
+name = "a renderer process writes the browser's trace"
+file = "crates/shell/src/main.rs"
+from = '''            file.push(format!(".{}", std::process::id()));'''
+to = '''            file.push("");'''
+
+[[mutant]]
+name = "a renderer process's trace ends before it has run"
+file = "crates/shell/src/main.rs"
+from = '''        let (trace, _trace_end) = start_trace(file.as_deref());
+        tracing_subscriber::registry()
+            .with(log_layer(filter))'''
+to = '''        let (trace, _) = start_trace(file.as_deref());
+        tracing_subscriber::registry()
+            .with(log_layer(filter))'''
+
+[[mutant]]
+name = "the compositor doesn't say it submitted a frame"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''            tracing::debug!(frame_token = token, "frame submitted");'''
+to = '''            let _ = token;'''
+test = ["sh", "-c", "timeout 900 python3 scripts/bench/raster/raster_test.py RunTests"]
+
+[[mutant]]
+name = "Viz doesn't say it drew a frame"
+file = "crates/viz/src/display.rs"
+from = '''                if tracing::enabled!(tracing::Level::DEBUG) {
+                    let sinks ='''
+to = '''                if false {
+                    let sinks ='''
+test = ["sh", "-c", "timeout 900 python3 scripts/bench/raster/raster_test.py RunTests"]
+
+[[mutant]]
+name = "the IO thread's handling of a message isn't in the trace"
+file = "crates/browser/src/render_process_host.rs"
+from = '''        let _span = trace_event::trace_event!("ChannelHost::OnMessage");'''
+to = '''        let _span = ();'''
+test = ["sh", "-c", "timeout 900 python3 scripts/bench/raster/raster_test.py RunTests"]

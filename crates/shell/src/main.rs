@@ -170,7 +170,9 @@ Environment:
                            own events (GC, deopts), cppgc's phases (the
                            DOM's heap), and the page's
                            performance.mark() and measure(), as Chrome's
-                           blink.user_timing.
+                           blink.user_timing. A renderer in a process of
+                           its own writes its own, the file's name with
+                           its process id after it.
   MACHOPO_GPU_ADAPTER          cpu draws with the CPU adapter (WARP on Windows,
                            Mesa's lavapipe or llvmpipe on Linux) even with a
                            GPU; by default a GPU, the CPU adapter only if
@@ -463,15 +465,51 @@ where
         .with_filter(filter)
 }
 
+/// Starts the process's trace into `file`, if there is to be one: the
+/// layer that records it, and what ends it when dropped. Before anything
+/// starts V8, which records its events only if the trace is up by then.
+fn start_trace<S>(
+    file: Option<&Path>,
+) -> (
+    Option<impl tracing_subscriber::Layer<S> + Send + Sync + 'static>,
+    Option<shell::trace::TraceEnd>,
+)
+where
+    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a> + Send + Sync,
+{
+    let Some(file) = file else {
+        return (None, None);
+    };
+    match shell::trace::layer(file) {
+        Ok((layer, end)) => (Some(layer), Some(end)),
+        Err(e) => {
+            eprintln!(
+                "machopo: MACHOPO_TRACE: can't trace into {}: {e:?}",
+                file.display()
+            );
+            (None, None)
+        }
+    }
+}
+
 fn main() -> ExitCode {
     // A renderer process: nothing of the browser's is read or started.
-    // Its spans aren't traced: the browser's trace is one file, which a
-    // second process writing would spoil.
+    // Its trace is a file of its own, the browser's with this process's
+    // id after it: a trace is one process's, and two writing one file
+    // would spoil it. The two are on one clock, the machine's.
     if std::env::args().nth(1).as_deref() == Some(shell::RENDERER_PROCESS_SWITCH) {
         let filter = tracing_subscriber::EnvFilter::try_from_default_env()
             .unwrap_or_else(|_| DEFAULT_LOG_FILTER.into());
+        let file = std::env::var_os("MACHOPO_TRACE").map(|file| {
+            let mut file = file;
+            file.push(format!(".{}", std::process::id()));
+            std::path::PathBuf::from(file)
+        });
+        // Ended, and its last events written, as this returns.
+        let (trace, _trace_end) = start_trace(file.as_deref());
         tracing_subscriber::registry()
             .with(log_layer(filter))
+            .with(trace)
             .init();
         return ExitCode::from(shell::renderer_main());
     }
@@ -497,19 +535,8 @@ fn main() -> ExitCode {
     // The trace's end is written when `_trace_end` drops, as `main` returns.
     // Before anything starts V8, which records its events only if the
     // trace is up by then.
-    let (trace, _trace_end) = match std::env::var_os("MACHOPO_TRACE") {
-        Some(file) => match shell::trace::layer(Path::new(&file)) {
-            Ok((layer, end)) => (Some(layer), Some(end)),
-            Err(e) => {
-                eprintln!(
-                    "machopo: MACHOPO_TRACE: can't trace into {}: {e:?}",
-                    Path::new(&file).display()
-                );
-                (None, None)
-            }
-        },
-        None => (None, None),
-    };
+    let file = std::env::var_os("MACHOPO_TRACE").map(std::path::PathBuf::from);
+    let (trace, _trace_end) = start_trace(file.as_deref());
     tracing_subscriber::registry().with(log).with(trace).init();
     // The `log` crate's records go only to the log. `init` lets them through
     // as far as any layer takes anything, and the trace's takes spans of

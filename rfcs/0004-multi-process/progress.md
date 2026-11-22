@@ -49,7 +49,7 @@
 | 3e-1：`--single-process` 和 `--process-per-tab`；`test.py` 和 CI 用多 process 跑的選項 | 完成 | 2026-11-22 |
 | 3e-2：整套測試在多 process 底下跑一遍、修壞的；處理訊息的物件和 body 的管道的 fuzz target | 未開始 | |
 | 3f：tile 只複製一次（第 24 條的驗收條件；原本的 3c） | 完成（Linux 等 push 之後的 CI，Windows 還沒編過） | 2026-11-22 |
-| 3g：trace；量每個 frame 的延遲和 IO thread 每一步的時間（3f 之前先量一次現況） | 未開始 | |
+| 3g：trace；量每個 frame 的延遲和 IO thread 每一步的時間（3f 之前的現況是事後補量的） | 完成（只量不改；要不要接著改等使用者決定） | 2026-11-22 |
 | 3h：macOS 上 sandbox 的探測；第 3 階段的檢查和文件 | 未開始 | |
 
 ## 驗收
@@ -762,3 +762,59 @@ branch `0004-linux`，從 `0004` 的 2e-7（`82a4fc7`）分出去。
 - **push 之後的 CI**（`0440bf9`，Linux）：lint 過；測試壞一個，`ipc` 的 `process_channel::a_host_and_a_child_talk`（host 自己的 region 是 1 MiB，預期 512 KiB）。Linux 上這一步的程式編得過、其他的都過（包括 `shared_buffer` 的和 `browser` 的 renderer process 測試）。
   - 原因是測試本來就有的競爭，被這一步的時間差帶出來：測試連送四筆大資料，每筆等到回音就送下一筆，但 child 是「先回答、再說讀完了」，下一筆送出時 host 的那塊 region 可能還沒被還回來，host 就再建一塊。macOS 上兩則訊息總是一起到，所以沒發生過。行為本身是對的。
   - 改測試：每一筆都等到 child 說讀完了才送下一筆（原本只有第一筆這樣等）。本機重複 5 次都過；Linux 上要等下一次 CI 才知道。
+
+### 3g：trace 和量測（2026-11-22，macOS 26、Apple M4，接電源）
+
+- **決定**：「已決定的事項」第 64 條（renderer process 寫自己的 trace 檔）、第 65 條（3f 之前的現況用暫時的 worktree 補量）、第 66 條（量三層，只量不改）。都是使用者選的。
+- **做了什麼**：
+  - `machopo`：renderer process 在 `MACHOPO_TRACE` 設了的時候寫 `<檔>.<pid>`（`main.rs` 的 `start_trace`，Browser 和 renderer 共用）。
+  - 量測用的記錄點：compositor 送出 frame 時的 debug log（`frame submitted`）、Viz 收到和畫出來時的（`viz: frame arrived`、`viz: frame drawn`，帶 sink 和 frame 的編號）、Browser 的 IO thread 處理 renderer process 每則訊息的 span（`ChannelHost::OnMessage`；`browser` 多依賴 `trace_event`）。
+  - frame 的延遲用 log 對、不用 trace：span 現在帶不了參數（要帶編號得改 rusty_v8 的 C++、重編 V8），而兩個 process 的 log 是同一個檔、時間是微秒。
+  - `bench.py raster`：`--process-per-tab`、`--binary`（量別的 commit 編出來的）、`--name`（結果各放一個資料夾）；讀 renderer 自己的 trace 檔；第三張表（Browser 這一側，和 frame 到畫面的時間）。
+- **怎麼量的**：`bench.py raster`，不開視窗（device scale factor 2，GPU 照用），`perf` profile，三個頁面各捲動 120 次、改視窗大小 82 次。三種組態交錯著各跑 3 次，下面是 3 次的中位數。「3f 之前」是 `9784771` 加上這一步的 trace 和記錄點（worktree 在 `../machopo-before-3f`）。原始結果在 `target/bench/raster/{single,multi,before}-{1,2,3}/`。
+- **每塊 tile 的成本**（µs；從 Gutenberg 捲動那一段算，612 塊，每塊 256 KiB；其他頁面的比例相近）：
+
+  | | 單一 process | 3f 之前的多 process | 現在的多 process |
+  | --- | --- | --- | --- |
+  | compositor 送出一塊（`TileManager::UploadTile`） | 3.4 | 94 | 5.6 |
+  | Browser 的 IO thread（那一段全部的訊息，除以 tile 數） | 沒有 | 59 | 14 |
+  | Viz 放上 GPU（`SharedImage::Write`） | 150 | 153 | 163 |
+
+- **compositor 準備 tile 的總時間**（`PrepareTiles`，ms）：
+
+  | 頁面、動作 | 單一 process | 3f 之前 | 現在 |
+  | --- | --- | --- | --- |
+  | Gutenberg 捲動 | 340.9 | 388.3 | 339.7 |
+  | Gutenberg 改大小 | 819.2 | 1021.4 | 818.8 |
+  | SQLite 改大小 | 605.9 | 697.2 | 595.5 |
+  | NewsSite 捲動 | 246.1 | 302.1 | 219.0 |
+  | NewsSite 改大小 | 1267.2 | 1451.7 | 1217.9 |
+
+  改大小的那幾段各組態畫的 frame 數不一樣（慢的組態在同樣的時間裡畫得少：NewsSite 改大小是 67、47、71 個 frame），所以總時間只能大致比；每塊 tile 的成本比較準。
+- **Browser 的 IO thread**：一則訊息最長 0.1 ms（3f 之前 0.5 ms）；最忙的一段（NewsSite 改大小，39780 則）合計 16.5 ms（3f 之前 25225 則 266 ms）。
+- **每個 frame 從送出到畫出來**（ms，中位數／第 95 百分位）：
+
+  | 頁面、動作 | 單一 process | 3f 之前 | 現在 |
+  | --- | --- | --- | --- |
+  | Gutenberg 捲動 | 0.63 / 0.89 | 0.66 / 0.94 | 0.69 / 1.03 |
+  | Gutenberg 改大小 | 0.20 / 0.35 | 0.18 / 0.34 | 0.19 / 0.33 |
+  | SQLite 改大小 | 0.24 / 0.58 | 0.22 / 0.48 | 0.24 / 0.47 |
+  | NewsSite 捲動 | 1.36 / 1.90 | 1.25 / 1.92 | 1.47 / 1.93 |
+  | NewsSite 改大小 | 0.77 / 1.47 | 0.74 / 1.15 | 1.50 / 3.44 |
+
+  其中「送出到 Viz 收到」（過通道和 IO thread 的那一段）中位數是 0.02 到 0.05 ms，單一 process 是 0.01 ms；NewsSite 改大小例外（現在 0.31 ms，單一 process 0.12 ms）。
+- **看得出來的**：
+  1. 3f 有效：compositor 送一塊 tile 從 94 µs 降到 5.6 µs，IO thread 從 59 µs 降到 14 µs。多 process 準備 tile 的時間現在和單一 process 一樣（3f 之前多 14% 到 25%）。
+  2. IO thread 不是瓶頸：一則訊息最長 0.1 ms，最忙時佔那一段時間的 1% 左右。
+  3. frame 的延遲三種組態幾乎一樣，都在 2 ms 以內，離一個 frame 的 16.7 ms 很遠。
+  4. 一個例外：NewsSite 改大小（2 萬塊 tile，最重的一段）現在的延遲是單一 process 的兩倍（中位數 1.5 對 0.77 ms，第 95 百分位 3.4 對 1.5 ms）。Viz 從共用記憶體上傳比 `write_texture` 慢約一成（每塊 163 對 150 µs，改大小的那幾段是 43 到 48 對 39 到 44 µs），Viz thread 忙著上傳時 frame 就排在後面。我判斷多出來的是每次新建 GPU 緩衝區的成本，沒有另外驗證。
+  5. Browser 這一側最貴的一直是 Viz 把 tile 放上 GPU（每塊 40 到 160 µs），三種組態都是；過 process 的成本（現在每塊約 20 µs）比它小得多。
+  6. 改大小時有 650 到 690 塊 tile 走退回複製的路（3% 到 12%）：一次要畫的比手上的 region 多。捲動時沒有。
+- **測試**：`shell` 的 `trace::a_renderer_process_writes_a_trace_of_its_own`（多 process 時 renderer 的 thread 和頁面的 mark 只在它自己的檔，兩邊時間對得上；單一 process 時只有一個檔）；原本的兩個 trace 測試改成兩種模式都讀對檔案（`MACHOPO_PROCESS_PER_TAB=1` 也跑過）；`scripts/bench/raster/raster_test.py` 多 3 個、改 2 個（讀 log 裡的 frame、找 renderer 的 trace 檔、報告的第三張表、真的跑一次多 process），12 個過。
+- **mutation test**（`mutants-3g.toml`）6 個，全部抓到；跑完確認檔案還原。
+- **跑過的檢查**（最後一次改程式之後）：`cargo test -p browser -p viz -p compositor -p shell`、`cargo clippy` 這四個 crate、`cargo fmt --check`、`sanity.py` 的 7 項、`raster_test.py`。
+- **沒有驗到的、要小心的**：
+  - 只在 macOS、不開視窗的情況下量；真的視窗（有 vsync、要 present）和 Linux、Windows 沒有量。
+  - 各 3 次，沒有算變異；差距在一成以內的（第 4 點的「慢一成」）要多跑才說得準。
+  - 兩個 process 的 trace 檔接起來能不能在 Perfetto 的 UI 一起看，沒有試。
+  - worktree `../machopo-before-3f` 還留著（幾 GB），確認不用再量之後刪掉。

@@ -93,6 +93,10 @@ struct ChannelHost {
 
 impl Handler<Channel> for ChannelHost {
     fn message(&mut self, mut message: Received<'_, Channel>) -> Result<(), BadMessage> {
+        // Every renderer's messages wait behind this one: what it costs
+        // (its decoding, and whatever of it is copied) is what the
+        // browser's IO thread is busy for.
+        let _span = trace_event::trace_event!("ChannelHost::OnMessage");
         match message.destination() {
             to_browser::HOST => {
                 let msg = message.decode::<RendererHostMsg>()?;

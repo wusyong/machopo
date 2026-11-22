@@ -134,6 +134,12 @@ impl<R: DirectRenderer> Display<R> {
             tracing::error!(?sink, bad, "viz: dropping a frame");
             return;
         }
+        tracing::debug!(
+            client_id = sink.client_id,
+            sink_id = sink.sink_id,
+            frame_token = frame.metadata.frame_token,
+            "viz: frame arrived"
+        );
         // What the frame draws of its client's shared images, held with
         // it. A mailbox the client made no image for (one of a lost GPU,
         // or a bad one) has none, and its quads draw nothing.
@@ -281,6 +287,23 @@ impl<R: DirectRenderer> Display<R> {
                     }
                 }
                 self.embedded = frame.embedded;
+                // Each client's frame that was in what was drawn, with
+                // the client's "frame submitted" of the same token: how
+                // long a frame takes to the screen.
+                if tracing::enabled!(tracing::Level::DEBUG) {
+                    let sinks =
+                        std::iter::once(self.root_frame_sink).chain(self.embedded.iter().copied());
+                    for sink in sinks {
+                        if let Some(drawn) = self.surfaces.latest(sink) {
+                            tracing::debug!(
+                                client_id = sink.client_id,
+                                sink_id = sink.sink_id,
+                                frame_token = drawn.metadata.frame_token,
+                                "viz: frame drawn"
+                            );
+                        }
+                    }
+                }
                 true
             }
             None => false,

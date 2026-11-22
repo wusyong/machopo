@@ -7,7 +7,8 @@
 //! time, named as Chrome's are. cppgc's phases (`CppGC.*`, as Oilpan's in
 //! Chrome's trace) are there under `cppgc`, a JS document's and a wasm
 //! document's heap alike. A trace is once a process, so machopo runs as one of
-//! its own.
+//! its own; and a renderer in a process of its own writes a trace of its
+//! own, beside the browser's.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -30,16 +31,13 @@ performance.measure('m', { start: t0 + 5, end: t0 + 15 });
 new PerformanceMark('made');
 </script>"#;
     let server = server(&[("/marks", Route::ok("text/html", page))]);
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("shell-trace");
-    std::fs::create_dir_all(&dir).unwrap();
-    let file = dir.join("user-timing.pftrace");
-    let _ = std::fs::remove_file(&file);
+    let file = trace_file("user-timing");
     let mut browser = Browser::start_with_env(&[("MACHOPO_TRACE", file.as_os_str())]);
     let session = browser.attach();
     browser.navigate(&session, &server.url("/marks"));
     assert!(browser.end().success());
 
-    let trace = Trace::read(&std::fs::read(&file).expect("machopo wrote the trace"));
+    let trace = renderers_trace(&file);
     let main = trace.thread_track("CrRendererMain");
     let (navigation, user_timing): (Vec<&TrackEvent>, Vec<&TrackEvent>) = trace
         .events
@@ -180,17 +178,109 @@ fn traced(
     env: &[(&str, &std::ffi::OsStr)],
 ) -> Trace {
     let server = server(routes);
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("shell-trace");
-    std::fs::create_dir_all(&dir).unwrap();
-    let file = dir.join(format!("{name}.pftrace"));
-    let _ = std::fs::remove_file(&file);
+    let file = trace_file(name);
     let mut env = env.to_vec();
     env.push(("MACHOPO_TRACE", file.as_os_str()));
     let mut browser = Browser::start_with_env(&env);
     let session = browser.attach();
     browser.navigate(&session, &server.url(path));
     assert!(browser.end().success());
-    Trace::read(&std::fs::read(&file).expect("machopo wrote the trace"))
+    renderers_trace(&file)
+}
+
+/// Where a run of machopo is to write its trace: alone in a folder of its
+/// own, with nothing an earlier run left.
+fn trace_file(name: &str) -> PathBuf {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("shell-trace")
+        .join(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir.join("trace.pftrace")
+}
+
+/// The traces renderer processes wrote beside the browser's `file`: its
+/// name with each one's process id after it.
+fn renderer_files(file: &std::path::Path) -> Vec<PathBuf> {
+    let name = file.file_name().unwrap().to_str().unwrap();
+    let mut files: Vec<PathBuf> = std::fs::read_dir(file.parent().unwrap())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            let other = path.file_name().unwrap().to_str().unwrap();
+            other
+                .strip_prefix(name)
+                .and_then(|rest| rest.strip_prefix('.'))
+                .is_some_and(|pid| pid.parse::<u32>().is_ok())
+        })
+        .collect();
+    files.sort();
+    files
+}
+
+/// The trace the renderer's threads are in: the browser's, or the
+/// renderer's own when it is a process of its own (the tests run both
+/// ways).
+fn renderers_trace(file: &std::path::Path) -> Trace {
+    let browsers = std::fs::read(file).expect("machopo wrote the trace");
+    match &renderer_files(file)[..] {
+        [] => Trace::read(&browsers),
+        [renderers] => Trace::read(&std::fs::read(renderers).unwrap()),
+        several => panic!("one tab, and {} renderers' traces", several.len()),
+    }
+}
+
+/// Each process's threads are in its own trace: the browser's has its
+/// own and none of a renderer's, the renderer's the other way, and what
+/// the page did is in the renderer's alone. With renderers in the
+/// browser's process there is one trace, of them all.
+#[test]
+fn a_renderer_process_writes_a_trace_of_its_own() {
+    let page = "<!DOCTYPE html><script>performance.mark('here');</script>";
+    let run = |name: &str, switch: &str| {
+        let server = server(&[("/page", Route::ok("text/html", page))]);
+        let file = trace_file(name);
+        let mut browser =
+            Browser::start_with_args_and_env(&[switch], &[("MACHOPO_TRACE", file.as_os_str())]);
+        let session = browser.attach();
+        browser.navigate(&session, &server.url("/page"));
+        assert!(browser.end().success());
+        file
+    };
+    let has_thread = |trace: &Trace, name: &str| {
+        trace
+            .tracks
+            .values()
+            .any(|t| t.thread.as_deref() == Some(name))
+    };
+    let marked = |trace: &Trace| trace.events.iter().any(|event| event.name == "here");
+
+    let file = run("process-per-tab", "--process-per-tab");
+    let browsers = Trace::read(&std::fs::read(&file).unwrap());
+    let [renderers] = &renderer_files(&file)[..] else {
+        panic!("{:?}", renderer_files(&file));
+    };
+    let renderers = Trace::read(&std::fs::read(renderers).unwrap());
+    assert!(has_thread(&renderers, "CrRendererMain"));
+    assert!(has_thread(&renderers, "Compositor"));
+    assert!(marked(&renderers));
+    assert!(!has_thread(&browsers, "CrRendererMain"));
+    assert!(!has_thread(&browsers, "Compositor"));
+    assert!(!marked(&browsers));
+    assert!(!browsers.events.is_empty(), "the browser's own spans");
+    // One clock: the page's mark is within the browser's trace's times.
+    let times = |trace: &Trace| {
+        let times = trace.events.iter().map(|event| event.time);
+        (times.clone().min().unwrap(), times.max().unwrap())
+    };
+    let (began, ended) = times(&browsers);
+    let here = renderers.events.iter().find(|e| e.name == "here").unwrap();
+    assert!(began <= here.time && here.time <= ended);
+
+    let file = run("single-process", "--single-process");
+    assert!(renderer_files(&file).is_empty());
+    let all = Trace::read(&std::fs::read(&file).unwrap());
+    assert!(has_thread(&all, "CrRendererMain") && marked(&all));
 }
 
 /// The names of the `cppgc` slices begun on the renderer's main thread,

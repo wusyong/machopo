@@ -60,6 +60,63 @@ class ReadingTests(unittest.TestCase):
                           "images": 6, "masks": 1, "blurs": 2, "bitmap_glyphs": 1})
         self.assertEqual(raster.tiles_in_log(log, (start + 2.5, start + 4)), {**none, "rastered": 7, "solid": 7})
 
+    def test_the_logs_frames_on_their_way_to_the_screen(self):
+        at = "2026-10-18T10:00:0"
+        log = "\n".join([
+            # The browser's UI's own, on its thread and its sink: not the tab's.
+            f"{at}0.000000Z DEBUG main compositor::layer_tree_host_impl: frame submitted frame_token=1",
+            f"{at}0.000100Z DEBUG VizCompositorThread viz::display: viz: frame arrived client_id=0 sink_id=1 "
+            "frame_token=1",
+            f"\x1b[2m{at}1.000000Z\x1b[0m DEBUG Compositor compositor::layer_tree_host_impl: frame submitted "
+            "frame_token=1",
+            f"{at}1.000500Z DEBUG VizCompositorThread viz::display: viz: frame arrived client_id=2 sink_id=1 "
+            "frame_token=1",
+            f"{at}1.001000Z DEBUG Compositor compositor::layer_tree_host_impl: frame submitted frame_token=2",
+            f"{at}1.001200Z DEBUG VizCompositorThread viz::display: viz: frame arrived client_id=2 sink_id=1 "
+            "frame_token=2",
+            # One draw, of the browser's frame and the tab's second: the
+            # first was never on the screen itself.
+            f"{at}1.003000Z DEBUG VizCompositorThread viz::display: viz: frame drawn client_id=0 sink_id=1 "
+            "frame_token=1",
+            f"{at}1.003000Z DEBUG VizCompositorThread viz::display: viz: frame drawn client_id=2 sink_id=1 "
+            "frame_token=2",
+            # The same frame drawn again (the browser's own changed).
+            f"{at}1.009000Z DEBUG VizCompositorThread viz::display: viz: frame drawn client_id=2 sink_id=1 "
+            "frame_token=2",
+            f"{at}2.000000Z DEBUG Compositor compositor::layer_tree_host_impl: frame submitted frame_token=3",
+            f"{at}2.010000Z DEBUG VizCompositorThread viz::display: viz: frame drawn client_id=2 sink_id=1 "
+            "frame_token=3",
+            f"{at}3.000000Z  INFO main browser: a frame of something else",
+        ])
+        start = 1792317600.0  # 2026-10-18T10:00:00Z
+        frames = raster.frames_in_log(log)
+        self.assertEqual([token for _, token in frames["submitted"]], [1, 2, 3])
+        self.assertEqual([token for _, token in frames["arrived"]], [1, 2])
+        self.assertEqual([token for _, token in frames["drawn"]], [2, 2, 3])
+        # The frames submitted in the second from 1 s: both took until the
+        # draw at 1.003 (3 ms and 2 ms), and 0.5 ms and 0.2 ms to Viz.
+        took = raster.frame_latency(frames, (start + 0.5, start + 1.5))
+        self.assertEqual(took["to_screen"], {"count": 2, "median_ms": 3.0, "p95_ms": 3.0, "max_ms": 3.0})
+        self.assertEqual(took["to_viz"], {"count": 2, "median_ms": 0.5, "p95_ms": 0.5, "max_ms": 0.5})
+        # The third: 10 ms; it never said it arrived.
+        took = raster.frame_latency(frames, (start + 1.5, start + 2.5))
+        self.assertEqual(took["to_screen"], {"count": 1, "median_ms": 10.0, "p95_ms": 10.0, "max_ms": 10.0})
+        self.assertEqual(took["to_viz"]["count"], 0)
+        # A frame no draw followed counts for nothing.
+        del frames["drawn"][-1]
+        self.assertEqual(raster.frame_latency(frames, (start + 1.5, start + 2.5))["to_screen"]["count"], 0)
+        self.assertEqual(raster.percentile([], 0.5), 0.0)
+        self.assertEqual(raster.percentile([1.0, 2.0, 3.0, 4.0], 0.95), 4.0)
+
+    def test_a_renderer_processs_traces_are_beside_the_browsers(self):
+        with tempfile.TemporaryDirectory() as folder:
+            trace = Path(folder) / "page.pftrace"
+            for name in ("page.pftrace", "page.pftrace.412", "page.pftrace.97", "page.pftrace.old", "page.log",
+                         "other.pftrace.5"):
+                (Path(folder) / name).write_bytes(b"")
+            self.assertEqual([path.name for path in raster.renderer_traces(trace)],
+                             ["page.pftrace.412", "page.pftrace.97"])
+
     def test_the_window_shrinks_and_grows_back(self):
         sizes = raster.resize_sizes()
         self.assertEqual(len(sizes), 2 * raster.RESIZE_STEPS)
@@ -85,6 +142,12 @@ class ReadingTests(unittest.TestCase):
                                  "TileManager::UploadTile": {"count": 2, "total_ms": 1.0, "max_ms": 0.6},
                                  "SharedImage::Write": {"count": 2, "total_ms": 0.6, "max_ms": 0.4},
                                  "SharedImage::Submit": {"count": 2, "total_ms": 0.3, "max_ms": 0.2}},
+                       "browser": {"ChannelHost::OnMessage": {"count": 30, "total_ms": 1.5, "max_ms": 0.2},
+                                   "SharedImage::Write": {"count": 2, "total_ms": 0.6, "max_ms": 0.4},
+                                   "SharedImage::StageTexture": {"count": 1, "total_ms": 0.1, "max_ms": 0.1},
+                                   "Display::DrawAndSwap": {"count": 4, "total_ms": 3.0, "max_ms": 1.0}},
+                       "frames": {"to_viz": {"count": 4, "median_ms": 0.05, "p95_ms": 0.2, "max_ms": 0.2},
+                                  "to_screen": {"count": 4, "median_ms": 1.2, "p95_ms": 2.5, "max_ms": 2.5}},
                        "tiles": {"rastered": 8, "solid": 6, "skipped": 12, "gpu": 4, "gpu_but_images": 2, "masks": 1,
                                  "blurs": 1}},
             "resize": {"prepare_tiles": {"count": 0, "total_ms": 0, "max_ms": 0},
@@ -97,6 +160,18 @@ class ReadingTests(unittest.TestCase):
             text = raster.write_report(results, env, False, 2.0).read_text(encoding="utf-8")
             self.assertTrue((Path(folder) / "raster.json").exists())
             threaded = raster.write_report(results, env, False, 2.0, 3).read_text(encoding="utf-8")
+            named = Path(folder) / "another"
+            named.mkdir()
+            other = raster.write_report(results, env, False, 2.0, None, True, named, Path("/old/machopo"))
+            self.assertEqual(other, named / "raster.md")
+            other = other.read_text(encoding="utf-8")
+        self.assertIn("the renderer in the browser's process, headless", text)
+        self.assertIn("machopo at `/old/machopo`, a renderer process for the tab, headless", other)
+        # The browser's side, and the frames' way to the screen; none of
+        # either in a run from before they were told.
+        self.assertIn("| page | scroll | 30, 1.5, 0.2 | 2, 0.6, 0.4 | 1, 0.1, 0.1 | 4, 3.0, 1.0 | 4 | 0.05, 0.2, 0.2 "
+                      "| 1.2, 2.5, 2.5 |", text)
+        self.assertIn("| page | resize | 0, 0, 0 | 0, 0, 0 | 0, 0, 0 | 0, 0, 0 | 0 | 0, 0, 0 | 0, 0, 0 |", text)
         self.assertIn("headless, device scale factor 2, the default raster threads;", text)
         self.assertIn("headless, device scale factor 2, 3 raster threads;", threaded)
         self.assertIn("| page | scroll | 4 | 10.0 | 2.5, 5.0 | 2.0 | 8 | 6 (75%) | 12 |", text)
@@ -145,8 +220,38 @@ class RunTests(unittest.TestCase):
             # Right of the paragraphs, nothing draws: those tiles aren't
             # rastered.
             self.assertGreater(r["tiles"]["skipped"], 0, phase)
+            # Its frames were drawn, each after it was submitted, and Viz
+            # put its tiles on the GPU; in the browser's process, no
+            # channel's messages are handled.
+            self.assertGreater(r["frames"]["to_screen"]["count"], 0, phase)
+            self.assertGreater(r["frames"]["to_screen"]["median_ms"], 0, phase)
+            self.assertGreaterEqual(r["frames"]["to_screen"]["median_ms"], r["frames"]["to_viz"]["median_ms"], phase)
+            self.assertGreater(r["browser"]["Display::DrawAndSwap"]["count"], 0, phase)
+            self.assertEqual(r["browser"]["ChannelHost::OnMessage"]["count"], 0, phase)
         # Resizing lays the page out again on the main thread.
         self.assertGreater(results["resize"]["main_frames"]["count"], 0)
+
+    def test_a_renderer_in_a_process_of_its_own(self):
+        page = "<!DOCTYPE html><body style='margin:0'>" + "".join(
+            f"<p style='height:300px;background:#{i % 9}{i % 7}{i % 5}'>line {i}</p>" for i in range(20))
+        with tempfile.TemporaryDirectory() as folder, \
+                mock.patch.object(raster, "SCROLL_STEPS", 4), mock.patch.object(raster, "RESIZE_STEPS", 2):
+            path = Path(folder) / "tall.html"
+            path.write_text(page, encoding="utf-8")
+            run = raster.run_page(self.binary, path.as_uri(), Path(folder), "tall", False, 2.0, None, True)
+            # Its threads are in a trace of its own, read with the browser's.
+            self.assertEqual(len(raster.renderer_traces(run["trace"])), 1)
+            results = raster.analyze(run)
+        for phase in ("scroll", "resize"):
+            r = results[phase]
+            self.assertGreater(r["prepare_tiles"]["count"], 0, phase)
+            self.assertGreater(r["raster"]["count"], 0, phase)
+            self.assertEqual(r["raster_threads"], 1, phase)
+            self.assertGreater(r["frames"]["to_screen"]["count"], 0, phase)
+            # Each of its messages is handled on the browser's IO thread,
+            # and its tiles' pixels come in shared memory.
+            self.assertGreater(r["browser"]["ChannelHost::OnMessage"]["count"], 0, phase)
+            self.assertGreater(r["browser"]["SharedImage::StageTexture"]["count"], 0, phase)
 
     def test_tiles_are_rastered_on_the_compositor_thread_unless_asked(self):
         page = "<!DOCTYPE html><body style='margin:0'>" + "".join(
