@@ -19,6 +19,7 @@ mod linux_channel;
 #[cfg(target_os = "macos")]
 mod mach_channel;
 mod pipe_fuzz;
+mod pipe_in_message;
 // Wherever there is a platform's channel.
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod process_channel;

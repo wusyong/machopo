@@ -7,7 +7,10 @@
 //! number and the length. And a value read back may nest only
 //! [`MAX_DEPTH`] deep: postcard has no limit of its own, and a peer's
 //! value nested deeper than the stack is long ends the process, which no
-//! handler catches.
+//! handler catches. And a data pipe's consumer
+//! ([`crate::data_pipe::Consumer`]) in a value goes with it: a pipe over
+//! the channel is opened for it and the payload holds the pipe's number,
+//! which reads back as the consumer of the pipe the other end made.
 //!
 //! Both are wrappers around serde's serializer and deserializer that pass
 //! everything else through, so the regions are arguments, not state
@@ -24,6 +27,7 @@ use serde::ser::{self, Serialize, Serializer};
 
 use crate::core::frame::BadMessage;
 use crate::core::region::{MIN_REGION_LEN, Memory, Pool, Table};
+use crate::data_pipe::{self, CONSUMER_NAME, Consumer};
 
 /// How deep a value read from a peer may nest: every sequence, map,
 /// struct, tuple, enum, option and newtype is a level. machopo's messages
@@ -40,6 +44,20 @@ pub trait Place {
     /// The message `number` was placed for isn't going: the region is
     /// free again.
     fn unplace(&mut self, number: u32);
+
+    /// Opens a pipe to the peer fed from `source`: its number. `None`
+    /// when this end opens none (the value doesn't serialize, and the
+    /// source is let go).
+    fn pipe(&mut self, source: Consumer) -> Option<u32> {
+        drop(source);
+        None
+    }
+
+    /// The message the pipe `number` was opened for isn't going: the pipe
+    /// is ended, and its source let go.
+    fn unpipe(&mut self, number: u32) {
+        let _ = number;
+    }
 }
 
 /// Where large bytes are on their way in.
@@ -47,6 +65,12 @@ pub trait Resolve {
     /// The first `len` bytes of the peer's region `number`, copied to the
     /// end of `into`.
     fn resolve(&mut self, number: u32, len: u32, into: &mut Vec<u8>) -> Result<(), BadMessage>;
+
+    /// The reading end of the pipe `number` the peer opened, which no
+    /// message has named yet.
+    fn pipe(&mut self, number: u32) -> Result<Consumer, BadMessage> {
+        Err(BadMessage::UnknownPipe { pipe: number })
+    }
 }
 
 impl<M: Memory> Place for Pool<M> {
@@ -96,8 +120,9 @@ impl fmt::Display for EncodeError {
 impl std::error::Error for EncodeError {}
 
 /// `value` as a payload, after what `out` has; its large bytes in
-/// `regions`. When it can't be written, `out` is as it was and nothing
-/// stays placed.
+/// `regions`, and its pipes opened there. When it can't be written, `out`
+/// is as it was, nothing stays placed, and the pipes opened for it are
+/// ended (the value has lost them all the same).
 pub fn encode<T: Serialize + ?Sized>(
     value: &T,
     regions: &mut dyn Place,
@@ -107,16 +132,24 @@ pub fn encode<T: Serialize + ?Sized>(
     let placing = RefCell::new(Placing {
         regions,
         placed: Vec::new(),
+        piped: Vec::new(),
     });
     let wrapped = Wrapped {
         value,
         placing: &placing,
     };
     let written = postcard::to_extend(&wrapped, Tail(out)).map(drop);
-    let Placing { regions, placed } = placing.into_inner();
+    let Placing {
+        regions,
+        placed,
+        piped,
+    } = placing.into_inner();
     if written.is_err() {
         for number in placed {
             regions.unplace(number);
+        }
+        for number in piped {
+            regions.unpipe(number);
         }
         out.truncate(before);
     }
@@ -167,6 +200,7 @@ const REGION: u32 = 1;
 struct Placing<'r> {
     regions: &'r mut dyn Place,
     placed: Vec<u32>,
+    piped: Vec<u32>,
 }
 
 // A `RefCell`, not `&mut`: serde hands a nested value to
@@ -283,6 +317,21 @@ impl<'a, 'r, S: Serializer> Serializer for Ser<'a, 'r, S> {
         name: &'static str,
         value: &T,
     ) -> Result<S::Ok, S::Error> {
+        // A data pipe's consumer, which left its pipe beside the value:
+        // the pipe is opened to the peer, and its number is what is
+        // written. Another type that calls itself by the name left none.
+        if name == CONSUMER_NAME {
+            let source = data_pipe::take_crossing()
+                .ok_or_else(|| ser::Error::custom("no data pipe to send"))?;
+            let mut placing = self.placing.borrow_mut();
+            let number = placing
+                .regions
+                .pipe(source)
+                .ok_or_else(|| ser::Error::custom("this end opens no pipe"))?;
+            placing.piped.push(number);
+            drop(placing);
+            return self.inner.serialize_newtype_struct(name, &number);
+        }
         self.inner.serialize_newtype_struct(
             name,
             &Wrapped {
@@ -625,6 +674,24 @@ impl<'de, D: Deserializer<'de>> Deserializer<'de> for De<'_, '_, D> {
         name: &'static str,
         visitor: V,
     ) -> Result<V::Value, D::Error> {
+        // A data pipe's consumer: the number the peer wrote is the pipe
+        // it opened, whose reading end goes beside the number to the
+        // visitor that asked by this name.
+        if name == CONSUMER_NAME {
+            let number = <u32 as de::Deserialize>::deserialize(self.inner)?;
+            let consumer = match self.resolving.regions.pipe(number) {
+                Ok(consumer) => consumer,
+                Err(bad) => {
+                    self.resolving.bad.get_or_insert(bad);
+                    return Err(de::Error::custom("no such pipe"));
+                }
+            };
+            data_pipe::set_crossing(consumer);
+            let value = visitor.visit_u32(number);
+            // A visitor that isn't a consumer's took none: it goes.
+            drop(data_pipe::take_crossing());
+            return value;
+        }
         level!(self, visitor, |inner, wrapped| inner
             .deserialize_newtype_struct(name, wrapped))
     }

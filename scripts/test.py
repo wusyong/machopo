@@ -1567,6 +1567,9 @@ IPC_MIRI_ENDPOINT_TESTS = [
     "endpoint::whatever_a_child_sends",
     "endpoint::a_child_keeps_to",
     "endpoint::a_closed_channel",
+    "endpoint::pipes_in_a_message",
+    "endpoint::a_message_the_channel_cant_take",
+    "pipe_in_message::",
 ]
 # The Verus release `ipc`'s proofs are checked with (the one elise's are).
 IPC_VERUS_VERSION = "0.2026.10.18.7d82994"

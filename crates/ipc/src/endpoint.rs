@@ -23,7 +23,7 @@ use bytes::Bytes;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use crate::codec::{self, Place};
+use crate::codec::{self, Place, Resolve};
 pub use crate::core::channel::Wake;
 use crate::core::channel::{self, Gone, Receiver, SendError as ChannelError, Sender, Transport};
 use crate::core::control::{CONTROL_DESTINATION, Control};
@@ -211,8 +211,36 @@ struct Placing<'a, P: Platform> {
     inner: &'a Inner<P>,
     pool: &'a mut Pool<P::Memory>,
     next_region: &'a mut u32,
-    /// What this message placed, to take back if it isn't sent.
+    pipes: &'a mut Outgoing,
+    feeding: &'a mut Vec<(u32, Consumer)>,
+    /// What this message placed, and the pipes opened for it, to take
+    /// back if it isn't sent.
     placed: Vec<u32>,
+    piped: Vec<u32>,
+}
+
+/// Opens a pipe to the peer that holds at most `capacity` unread bytes,
+/// fed from `source`: told to the peer now, so before whatever names it.
+/// With `out`'s lock held.
+fn open_pipe<P: Platform>(
+    inner: &Inner<P>,
+    pipes: &mut Outgoing,
+    feeding: &mut Vec<(u32, Consumer)>,
+    mut source: Consumer,
+    capacity: u32,
+) -> Result<u32, SendError> {
+    let pipe = pipes.open(capacity).ok_or(SendError::Refused)?;
+    if let Err(error) = inner.control(&Control::PipeOpened { pipe, capacity }, Vec::new()) {
+        pipes.end(pipe);
+        return Err(error);
+    }
+    // The IO thread sends what the source has, each time it has more:
+    // watching tells at once of what it has already, and the turn that
+    // makes waits for `out`, so it finds the source here.
+    let sender = inner.sender.clone();
+    source.watch(move || sender.wake());
+    feeding.push((pipe, source));
+    Ok(pipe)
 }
 
 impl<P: Platform> Placing<'_, P> {
@@ -260,6 +288,26 @@ impl<P: Platform> Place for Placing<'_, P> {
         self.pool.give_back(number);
         self.placed.retain(|placed| *placed != number);
     }
+
+    fn pipe(&mut self, mut source: Consumer) -> Option<u32> {
+        // As long as the pipe it reads: the peer keeps as much.
+        let capacity = u32::try_from(source.capacity()).ok()?;
+        let pipe = open_pipe(self.inner, self.pipes, self.feeding, source, capacity).ok()?;
+        self.piped.push(pipe);
+        Some(pipe)
+    }
+
+    fn unpipe(&mut self, number: u32) {
+        self.piped.retain(|piped| *piped != number);
+        // The peer was told of the pipe: it is told there is nothing to
+        // come. The source goes, and whoever writes it hears.
+        self.feeding.retain(|(pipe, _)| *pipe != number);
+        if self.pipes.end(number) {
+            let _ = self
+                .inner
+                .control(&Control::PipeEnded { pipe: number }, Vec::new());
+        }
+    }
 }
 
 /// An endpoint's sending side, for any thread.
@@ -273,7 +321,10 @@ impl<P: Platform> Clone for Link<P> {
 
 impl<P: Platform> Link<P> {
     /// Sends `message` to the peer's `destination`, without waiting. Its
-    /// large bytes go by a region when there is one.
+    /// large bytes go by a region when there is one, and the data pipes
+    /// in it ([`Consumer`]) go with it: each is opened to the peer before
+    /// the message, and fed from then on. A message that isn't sent ends
+    /// the pipes it had.
     pub fn send<T: Serialize + ?Sized>(
         &self,
         destination: u32,
@@ -283,6 +334,8 @@ impl<P: Platform> Link<P> {
         let Out {
             pool,
             next_region,
+            pipes,
+            feeding,
             scratch,
             ..
         } = &mut *out;
@@ -291,15 +344,22 @@ impl<P: Platform> Link<P> {
             inner: &self.0,
             pool,
             next_region,
+            pipes,
+            feeding,
             placed: Vec::new(),
+            piped: Vec::new(),
         };
         codec::encode(message, &mut placing, scratch).map_err(|_| SendError::Refused)?;
         let sent = self.0.sender.send(destination, scratch, Vec::new());
         if sent.is_err() {
             // The peer gets no message that names what was placed for
-            // this one: nobody will read it or give it back.
+            // this one, or the pipes opened for it: nobody will read
+            // them or give them back.
             for number in std::mem::take(&mut placing.placed) {
                 placing.unplace(number);
+            }
+            for number in std::mem::take(&mut placing.piped) {
+                placing.unpipe(number);
             }
         }
         Ok(sent?)
@@ -309,23 +369,9 @@ impl<P: Platform> Link<P> {
     /// bytes, fed from `source`: its number, for the message that names
     /// it, which is to be sent after.
     pub fn open_pipe(&self, source: Consumer, capacity: u32) -> Result<u32, SendError> {
-        let mut source = source;
         let mut out = self.0.out();
-        let pipe = out.pipes.open(capacity).ok_or(SendError::Refused)?;
-        if let Err(error) = self
-            .0
-            .control(&Control::PipeOpened { pipe, capacity }, Vec::new())
-        {
-            out.pipes.end(pipe);
-            return Err(error);
-        }
-        // The IO thread sends what the source has, each time it has more:
-        // watching tells at once of what it has already, and the turn that
-        // makes waits for `out`, so it finds the source here.
-        let sender = self.0.sender.clone();
-        source.watch(move || sender.wake());
-        out.feeding.push((pipe, source));
-        Ok(pipe)
+        let Out { pipes, feeding, .. } = &mut *out;
+        open_pipe(&self.0, pipes, feeding, source, capacity)
     }
 
     /// Asks for a region of `len` bytes or more for the peer to write its
@@ -416,7 +462,13 @@ impl<P: Platform> Received<'_, P> {
     /// copied out of the peer's regions. An error is a bad message: the
     /// handler returns it, and the channel is closed.
     pub fn decode<T: DeserializeOwned>(&mut self) -> Result<T, BadMessage> {
-        codec::decode(self.payload, self.table)
+        codec::decode(
+            self.payload,
+            &mut Arriving {
+                table: self.table,
+                arrived: self.arrived,
+            },
+        )
     }
 
     /// The reading end of a pipe the peer opened, by the number a message
@@ -428,6 +480,28 @@ impl<P: Platform> Received<'_, P> {
             .iter()
             .position(|(number, _)| *number == pipe)?;
         Some(self.arrived.swap_remove(i).1)
+    }
+}
+
+/// What a message's value is read out of: the peer's regions, and the
+/// pipes it opened that no message has named yet.
+struct Arriving<'a, M: Memory> {
+    table: &'a mut Table<M>,
+    arrived: &'a mut Vec<(u32, Consumer)>,
+}
+
+impl<M: Memory> Resolve for Arriving<'_, M> {
+    fn resolve(&mut self, number: u32, len: u32, into: &mut Vec<u8>) -> Result<(), BadMessage> {
+        self.table.read(number, len, into)
+    }
+
+    fn pipe(&mut self, number: u32) -> Result<Consumer, BadMessage> {
+        let i = self
+            .arrived
+            .iter()
+            .position(|(pipe, _)| *pipe == number)
+            .ok_or(BadMessage::UnknownPipe { pipe: number })?;
+        Ok(self.arrived.swap_remove(i).1)
     }
 }
 
@@ -916,7 +990,13 @@ fn control<P: Platform>(
             }
         }
         Control::PipeRead { pipe, count } => inner.out().pipes.peer_read(pipe, count),
-        Control::PipeEnded { pipe } => incoming.ended(pipe).map(drop),
+        Control::PipeEnded { pipe } => {
+            incoming.ended(pipe)?;
+            // Ended with no message having named it (the one it was
+            // opened for didn't go): nothing will take it.
+            arrived.retain(|(number, _)| *number != pipe);
+            Ok(())
+        }
         Control::PipeCancelled { pipe } => {
             // Its source goes at the feeding that follows: a pipe that
             // isn't open has no room and is let go there.

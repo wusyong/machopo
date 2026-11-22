@@ -40,7 +40,9 @@
 | 2h：第 2 階段的檢查、`unsafe` 的論證、`test.py` 的指令、文件；`test.py ipc` 的每一項不排進 CI，留在本機跑（第 55 條；原本規劃排進每週的 CI） | 完成 | 2026-11-22 |
 | 3：啟動 child process，分成七段（第 56 條） | 進行中 | |
 | 3a：child 起得來：`--type=renderer`、child 的 IO thread、Browser 用 `ipc::platform::spawn` 啟動、四種訊息走控制通道 | 完成 | 2026-11-22 |
-| 3b：導覽的 body 的管道跨 process | 未開始 | |
+| 3b：導覽的 body 的管道跨 process，分成兩小段（第 58 條） | 進行中 | |
+| 3b-1：`ipc` 的 codec 認得管道（`Consumer` 能序列化） | 完成 | 2026-11-22 |
+| 3b-2：`protocol` 拿掉 `#[serde(skip)]`，`browser` 和 `renderer` 接上 | 未開始 | |
 | 3c：tile 走共用記憶體 | 未開始 | |
 | 3d：process 不在了（當掉、被 kill、壞訊息、`about:crash`） | 未開始 | |
 | 3e：整套測試哪些用多個 process 跑；處理訊息的物件和 body 的管道的 fuzz target | 未開始 | |
@@ -605,4 +607,21 @@ branch `0004-linux`，從 `0004` 的 2e-7（`82a4fc7`）分出去。
   - 跑完確認檔案都還原了（重新 build 過）。
 - **跑過的檢查**：`cargo test -p ipc -p protocol -p compositor -p renderer -p browser -p shell`（都過）；`cargo clippy` 同樣六個 crate `--all-targets -- -D warnings`；`cargo fmt --check`；`sanity.py` 的 7 項（新檔案先 `git add -N` 再跑：它只看追蹤的檔案）。之後加的測試和文件各自重跑了那兩組測試和 `sanity.py docs`。
 - **沒有驗到的**：Linux 和 Windows（這一段只在 macOS 上編和跑；`child` 的啟動、`kill -9` 的測試在 Linux 上應該一樣，Windows 上那個測試不編）。
+
+### 3b-1：管道放在訊息裡就能過通道（2026-11-22，macOS 26、Apple M4）
+
+- **決定**：「已決定的事項」第 58 條（codec 認得 `Consumer`，不是線上多包一層；使用者選的，考慮了 `ipc` 之後分成獨立的專案）。
+- **做了什麼**（核心 `core/` 沒有動）：
+  - `ipc::data_pipe`：`Consumer` 裡面是可以被取走的（`Mutex<Option<..>>`；只有序列化經過那把鎖，其他用法都是 `&mut`）。`Serialize`：把管道取走、放進一個 thread-local、用保留的名字 `$ipc::data_pipe::Consumer` 呼叫 serializer；codec 沒拿走就還給那個值、回錯誤。`Deserialize`：只從 codec 交過來的那一個拿。`capacity()`。關掉管道的動作從 `Consumer` 的 `Drop` 搬到裡面那一層。
+  - `ipc::codec`：`Place` 多 `pipe`、`unpipe`（預設不開），`Resolve` 多 `pipe`（預設沒有這條）；serializer 和 deserializer 在那個名字上攔下來；`encode` 失敗時結束為這個值開的管道。
+  - `ipc::endpoint`：`send` 的 `Placing` 開管道（原本 `open_pipe` 的內容抽成共用的函式，容量用那條管道自己的）、訊息沒送出去時結束它、放掉來源、送 `PipeEnded`；`decode` 用表加上「到了還沒被拿的管道」；收到 `PipeEnded` 時，沒被任何訊息提到的那一端丟掉。
+- **寫的時候想過的**：
+  - serde 把值借給 `serialize`，拿不到所有權，也沒辦法從泛型的 `&T` 認出 `Consumer`。比過三種交接的辦法：thread-local（選的）、整個 process 一張表加編號（一樣是藏起來的狀態，還跨 thread）、把位址當數字傳（要 `unsafe`，而且別的型別可以冒用名字傳假的位址）。thread-local 的範圍是同一條 thread 的同一次呼叫，兩邊都保證拿走或還回去（`soundness.md` 的 I9）。
+  - `encode` 結束時原本多清一次那個 thread-local：`Consumer` 的 `serialize` 自己一定會拿回去，所以是多餘的，拿掉了（列成 mutant 會是等價的）。
+- **測試**：`crates/ipc/tests/it/pipe_in_message.rs`（新的，7 個）、`crates/ipc/tests/it/endpoint.rs` 多 5 個（兩條管道跟著一則訊息、容量不變、通道結束時、佇列滿時、child 不能送）、endpoint 的 fuzz harness 多一種操作和一種訊息。`cargo test -p ipc`：單元 91 個、整合 87 個。
+- **mutation test**（`mutants-3b1.toml`）9 個，全部抓到；跑完確認檔案還原（還原後重跑測試）。沒有列成 mutant 的兩處寫在清單開頭：結束管道時通知對方、對方丟掉替它留的那一端。漏做的後果是多留一個 `Consumer` 到通道結束，測試看不到，靠審查。
+- **跑過的檢查**：`cargo clippy -p ipc --all-targets -- -D warnings`（三種 cfg）、`cargo fmt --check`、`sanity.py` 的 `deps`、`unsafe`、`tests`、`numerics`、`docs`；`test.py ipc fuzz --minutes 3`（`endpoint` 129 萬次、`frame` 2207 萬次、`pipe` 664 萬次、`region` 163 萬次，沒有發現）；`test.py ipc miri`（核心 49 個；端點和新的測試 13 個：Miri 的清單加了 `endpoint::pipes_in_a_message`、`endpoint::a_message_the_channel_cant_take` 和整個 `pipe_in_message`）。
+  - fuzz 和 Miri 我一開始沒有先問就要跑，被權限擋下；使用者同意之後才跑的。
+- **沒有跑的**：`test.py ipc models`、`verus`、`tla`（核心沒有動）。Linux 和 Windows 沒有驗：改的是不分平台的部分，那兩台機器 pull 之後要跑一次 `cargo test -p ipc`。
+- **還沒接上的**：`protocol` 的 `CommitNavigation` 還標著 `#[serde(skip)]`，renderer process 還收不到 body 的管道（3b-2）。
 

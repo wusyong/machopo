@@ -12,12 +12,19 @@
 //! is one of these in each, and the bytes go from the one to the other as
 //! messages on the channel, with the same limit (`core::pipe`): the
 //! receiving side writes with [`Producer::try_write`].
+//!
+//! A [`Consumer`] in a message crosses with it: serializing it, which
+//! only this crate's codec can, takes the pipe out of the value and opens
+//! one over the channel for it, and the value read at the other end is
+//! the consumer of the pipe that end made (Mojo's handles in a message).
 
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::fmt;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use bytes::Bytes;
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de, ser};
 use tokio::sync::Notify;
 
 /// A pipe that holds at most `capacity` unread bytes (at least one).
@@ -38,10 +45,10 @@ pub fn create(capacity: usize) -> (Producer, Consumer) {
         Producer {
             shared: shared.clone(),
         },
-        Consumer {
+        Consumer::of(Ends {
             shared,
             observer: None,
-        },
+        }),
     )
 }
 
@@ -250,22 +257,63 @@ impl fmt::Debug for Producer {
 /// The reading end (Mojo's `DataPipeConsumerHandle`). Dropping it closes
 /// the pipe: what is unread is let go, and the producer's writes fail.
 pub struct Consumer {
+    /// None once the pipe was taken out, to cross a channel: what is left
+    /// reads as a pipe that is over, and closes nothing when dropped.
+    // A lock only because serializing borrows the value it takes the
+    // pipe out of; every other use has the consumer to itself (`&mut`),
+    // and locks nothing.
+    ends: Mutex<Option<Ends>>,
+}
+
+/// A consumer's hold on its pipe.
+struct Ends {
     shared: Arc<Shared>,
     observer: Option<Box<dyn ReadObserver>>,
 }
 
 impl Consumer {
+    fn of(ends: Ends) -> Self {
+        Self {
+            ends: Mutex::new(Some(ends)),
+        }
+    }
+
+    fn ends(&mut self) -> Option<&mut Ends> {
+        self.ends
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_mut()
+    }
+
+    /// The pipe, taken out of this value: none if it was already.
+    fn take(&self) -> Option<Self> {
+        self.ends
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+            .map(Self::of)
+    }
+
+    /// How many unread bytes the pipe holds at most; 0 once it was taken
+    /// out.
+    pub fn capacity(&mut self) -> usize {
+        self.ends().map_or(0, |ends| ends.shared.lock().capacity)
+    }
+
     /// Takes at most `max` bytes (at least one) of what was written, without
     /// waiting: a chunk as it was written, or its first `max` bytes.
     /// [`Read::Empty`] asks for the watcher to be called once there is more.
     pub fn read(&mut self, max: usize) -> Read {
         let max = max.max(1);
+        let Some(ends) = self.ends() else {
+            return Read::Done;
+        };
         let part = {
-            let mut state = self.shared.lock();
+            let mut state = ends.shared.lock();
             let Some(front) = state.chunks.front_mut() else {
                 if state.producer_closed {
                     drop(state);
-                    if let Some(observer) = &mut self.observer {
+                    if let Some(observer) = &mut ends.observer {
                         observer.done();
                     }
                     return Read::Done;
@@ -281,8 +329,8 @@ impl Consumer {
             state.taken(&part);
             part
         };
-        self.shared.writable.notify_one();
-        if let Some(observer) = &mut self.observer {
+        ends.shared.writable.notify_one();
+        if let Some(observer) = &mut ends.observer {
             observer.read(part.len());
         }
         Read::Data(part)
@@ -291,7 +339,9 @@ impl Consumer {
     /// Has `observer` told of every read from now on, and of the end.
     /// Replaces the one given before.
     pub fn observe(&mut self, observer: Box<dyn ReadObserver>) {
-        self.observer = Some(observer);
+        if let Some(ends) = self.ends() {
+            ends.observer = Some(observer);
+        }
     }
 
     /// Calls `on_readable` each time the pipe becomes readable after a
@@ -303,9 +353,12 @@ impl Consumer {
     /// that read its share) reads on without one. Replaces the one given
     /// before.
     pub fn watch(&mut self, on_readable: impl Fn() + Send + Sync + 'static) {
+        let Some(ends) = self.ends() else {
+            return;
+        };
         let on_readable: OnReadable = Arc::new(on_readable);
         let readable = {
-            let mut state = self.shared.lock();
+            let mut state = ends.shared.lock();
             state.on_readable = Some(on_readable.clone());
             let readable = state.readable();
             state.armed = !readable;
@@ -317,7 +370,7 @@ impl Consumer {
     }
 }
 
-impl Drop for Consumer {
+impl Drop for Ends {
     fn drop(&mut self) {
         {
             let mut state = self.shared.lock();
@@ -327,6 +380,88 @@ impl Drop for Consumer {
             state.on_readable = None;
         }
         self.shared.writable.notify_one();
+    }
+}
+
+/// What a serializer is told a consumer is (a newtype struct of this
+/// name): how this crate's codec knows one, in a value of any type.
+pub(crate) const CONSUMER_NAME: &str = "$ipc::data_pipe::Consumer";
+
+thread_local! {
+    /// The consumer on its way between a value and the codec, for the
+    /// length of one call: serde's data model has no place for a pipe, so
+    /// it goes beside it. Set and taken on the one thread that is
+    /// serializing or deserializing the value.
+    static CROSSING: RefCell<Option<Consumer>> = const { RefCell::new(None) };
+}
+
+/// The consumer a value being serialized is giving up, for the codec.
+pub(crate) fn take_crossing() -> Option<Consumer> {
+    CROSSING.with(|crossing| crossing.borrow_mut().take())
+}
+
+/// The consumer the codec has for the value it is about to hand its
+/// visitor.
+pub(crate) fn set_crossing(consumer: Consumer) {
+    CROSSING.with(|crossing| *crossing.borrow_mut() = Some(consumer));
+}
+
+/// What a serializer that isn't the codec gets to write of a consumer:
+/// nothing.
+struct OnlyInAMessage;
+
+impl Serialize for OnlyInAMessage {
+    fn serialize<S: Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+        Err(ser::Error::custom(
+            "a data pipe's consumer is serialized only into an ipc message",
+        ))
+    }
+}
+
+/// Takes the pipe out of the value: it crosses with the message, and the
+/// value left behind is a pipe that is over. Only this crate's codec
+/// serializes one; any other serializer is refused, and the value keeps
+/// its pipe. A value whose pipe was taken already is refused too.
+impl Serialize for Consumer {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let Some(pipe) = self.take() else {
+            return Err(ser::Error::custom("a data pipe's consumer crosses once"));
+        };
+        set_crossing(pipe);
+        let written = serializer.serialize_newtype_struct(CONSUMER_NAME, &OnlyInAMessage);
+        // Not taken: the serializer wasn't the codec. The pipe stays the
+        // value's.
+        if let Some(pipe) = take_crossing() {
+            *self.ends.lock().unwrap_or_else(PoisonError::into_inner) = pipe
+                .ends
+                .into_inner()
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+        written
+    }
+}
+
+/// The consumer of the pipe the message's sender put there, which only
+/// this crate's codec has to give.
+impl<'de> Deserialize<'de> for Consumer {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Arrived;
+
+        impl<'de> de::Visitor<'de> for Arrived {
+            type Value = Consumer;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a data pipe's consumer, in an ipc message")
+            }
+
+            fn visit_u32<E: de::Error>(self, _number: u32) -> Result<Consumer, E> {
+                take_crossing().ok_or_else(|| {
+                    E::custom("a data pipe's consumer is read only out of an ipc message")
+                })
+            }
+        }
+
+        deserializer.deserialize_newtype_struct(CONSUMER_NAME, Arrived)
     }
 }
 

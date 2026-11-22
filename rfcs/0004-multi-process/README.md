@@ -544,6 +544,12 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
     - **送的一端都是自己的型別，裡面是 crossbeam 或通道**：renderer 送給 Browser 的 `Sender<RendererHostMsg>`（crossbeam 的型別直接寫在 `renderer` 和 `compositor` 的 30 處）換成 `BrowserSender`；它、`CompositorFrameSinkSender` 和 Browser 送給 renderer 的 sender 裡面各有兩種：單一 process 時是 crossbeam，多 process 時直接呼叫 `ipc` 的 `Link::send`。理由：送的 thread 直接寫進通道，沒有多的 thread 和佇列；四種訊息經過同一把鎖，不同種之間的順序保得住（「架構」）；對方不讀時只有 `ipc` 的那一個佇列在長，上限只有一份。代價：30 處型別改名（呼叫 `send` 的地方不動）。不選留著 crossbeam、child 多一條轉送的 thread：每則訊息多一次叫醒（睡著時約 20 µs），兩種訊息各一個佇列時不同種之間的順序保不住，兩個沒有上限的佇列疊在一起。不選讓 IO thread 去拿 crossbeam 裡的訊息：`ipc` 的迴圈等的是 kernel 的東西。對照 Chromium：送的一端是 `mojo::Remote`，任何 sequence 呼叫就寫進 pipe。
     - **目的地的編號定義在 `protocol`**（照慣例做的，沒有列選項）：兩邊都要知道哪個編號是哪種訊息，而 `protocol` 是兩邊都依賴的。往 renderer：`RendererMsg`、`CompositorMsg`；往 Browser：`RendererHostMsg`、`CompositorFrameSinkMsg`。第一則訊息的型別帶著 `RendererFlags`，那是 `renderer` 的型別，所以定義在 `renderer`（`browser` 本來就依賴它）。
     - **`Handler` 的介面不收窄；規定是「不等、每則訊息做的事有上限」，3f 量**（「待決定」留下來的那一條）：看程式才知道兩邊不一樣。renderer 那一側的 IO thread 只解碼、放進 main thread 或 compositor 的佇列；Browser 那一側處理訊息的物件（`IoThreadHost`）本來就在 IO thread 上做事（核對請求和 cookie、子資源交給網路、登記 worker 和 blob URL，其餘的才轉給 UI thread），都是交出去、帶一個完成時的 callback，不等，但不是「只放進佇列」。所以收窄成「只能解碼加放佇列」對 Browser 行不通。不選只收窄 renderer 那一側：`ipc` 多一套只有一個使用者的介面，而那一側的 `Handler` 只有十幾行。不選把 Browser 的檢查搬離 IO thread：推翻「架構」和第 1 階段抽好的物件，子資源多一次轉手。對照 Chromium：IO thread 上禁止會等的呼叫（debug build 會 assert），允許做事。
+58. **管道放在訊息裡就能過通道：`ipc` 的 codec 認得 `Consumer`**（2026-11-22，第 3 階段的 3b；使用者選的。改掉「導覽的 body 的管道」原本寫的「`CommitNavigation` 裡帶的是管道的編號」的做法，線上的結果一樣）：`ipc::data_pipe::Consumer` 自己能序列化。codec 序列化到它時開一條過通道的管道（`PipeOpened` 走在提到它的訊息前面）、在訊息裡寫編號；解碼到編號時取出這一端為那條管道建好的 `Consumer`。訊息的任何欄位放一個 `Consumer` 都能過，和大的位元組走 region 是同一套（第 31 條）。
+    - **理由**：訊息的型別說了算，沒有「哪些訊息要另外處理」要記；`CommitNavigation` 的 `#[serde(skip)]` 拿掉，邊界上最後一個例外消失；`ipc` 之後分成獨立的專案時這是它自己完整的功能，由它自己的測試和 fuzzer 守，不是每個用它的專案各寫一段「開管道、放編號、取回來」；失敗時的收拾照 region 已有的做法（序列化到一半失敗，已經開的管道關掉）。
+    - **代價**：serde 序列化時只借得到值，而管道要被拿走，所以 `Consumer` 裡多一層可以取走的包裝，同一個值序列化第二次是錯誤；`Consumer` 只在 `ipc` 的 codec 底下能序列化，別的格式回錯誤，靠一個保留的名字讓 codec 認出它（`serde_bytes` 和 TOML 的日期用的手法；分出去之後是公開的約定）；動到 codec 和端點（核心、TLA+ 的模型、Verus 的證明不動：管道的協定沒變，變的是誰在什麼時候開）。
+    - **不選線上多包一層、明寫出來**（往 main thread 的線上型別是「訊息加上它的管道的編號」，送的一端先開管道、收的一端放回去；起草時的建議）：不動 `ipc`，但每多一種帶管道的訊息兩邊各加一段，`#[serde(skip)]` 留著，而且那一段邏輯留在 machopo，不跟著 `ipc` 走。不選線上和記憶體裡兩套訊息型別。
+    - **3b 分成兩小段**：3b-1 在 `ipc` 做完並驗證；3b-2 `protocol` 拿掉 `#[serde(skip)]`、`browser` 和 `renderer` 接上、renderer process 載入大的頁面。
+    - 對照 Chromium：Mojo 的 handle 可以放在訊息的任何位置，序列化時從物件裡取走。
 
 ## 待決定
 

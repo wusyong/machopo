@@ -41,6 +41,7 @@ match consumer.read(64 * 1024) {
 - **`watch` 什麼時候呼叫**：開始 watch 時已經可讀（有資料、或 producer 已經不在）就當場呼叫；之後每次 `read` 回 `Empty`，下一次寫或 producer 的結束呼叫一次（在 producer 的 thread 上）。讀到 `Empty` 或 `Done` 才要求下一次通知，讀了自己那一份就停的 task 要自己排下一個。callback 在放開鎖之後呼叫。
 - **兩端的結束**：`Producer` drop 是結尾，consumer 讀完剩下的才是 `Done`；`Consumer` drop 時沒讀的丟掉，producer 的 `write`（等著的也是）回 `Closed`。
 - **不等的寫**：`Producer::try_write` 整段寫進去或完全不寫（`Full`、`Closed`），不等。給「事先被告知有多少空間」的寫的一端用：跨 process 的管道收的那一側，送的一端守著容量，所以 `Full` 就是對方的錯。
+- **`Consumer` 放在訊息裡就跟著訊息過通道**（Mojo 的訊息裡的 handle）：`Consumer` 能序列化，但只有這個 crate 的 `codec` 做得完。序列化時它把管道從值裡取走（留下的值讀起來是已經結束的管道，drop 不關任何東西）；同一個值序列化第二次是錯誤。別的格式（JSON、純 postcard）序列化它會被拒絕，管道還給那個值；反過來也只有從 `ipc` 的訊息裡讀得出來。做法是一個保留的名字（`$ipc::data_pipe::Consumer`）讓 codec 認出它，管道本身在那一次呼叫裡經過一個 thread-local 交到 codec 手上（serde 的資料模型裡放不了一條管道）；別的型別用了那個名字拿不到管道。`Consumer::capacity()` 是它的容量。
 - **讀了多少的掛勾**：`Consumer::observe` 給一個 `ReadObserver`，之後每次讀到資料、讀到結尾都告訴它，`Consumer` drop 時它跟著 drop。跨 process 的管道收的那一側用它回報和取消；單一 process 時不掛。
 - **單一 process 的實作**：一把 `Mutex` 裡的 `Bytes` 佇列，加 tokio 的 `Notify` 喚醒等空間的 producer（兩個 thread 真的共用，所以 `Arc`）；寫進來的片段原樣讀出、不複製。拆 process 時管道本身不變、兩個 process 各一條：Browser 那一側的讀出來、一段一段經過控制通道送過去，寫進 renderer 那一側的；renderer 回報讀了多少，Browser 送出而還沒被讀的不超過容量。
 
@@ -200,7 +201,7 @@ if let Some(count) = report.read(n) { /* 送 PipeRead */ }
 
 ## `codec`
 
-訊息的值和內容的位元組之間（Mojo 產生的序列化程式和它的 message context 的位置）：postcard，外面包一層 serde 的 Serializer 和 Deserializer，其他的值原樣轉過去，只做兩件事。
+訊息的值和內容的位元組之間（Mojo 產生的序列化程式和它的 message context 的位置）：postcard，外面包一層 serde 的 Serializer 和 Deserializer，其他的值原樣轉過去，只做三件事。
 
 ```rust
 let mut payload = Vec::new();
@@ -209,7 +210,8 @@ let message: Msg = ipc::codec::decode(&payload, &mut table)?; // table：Resolve
 ```
 
 - **大的位元組走 region**：值用 `serialize_bytes` 寫的一段位元組（`protocol::BigBuffer` 就是這樣寫自己的）到 64 KiB（`MIN_REGION_LEN`）時，向 `Place` 要一塊；有的話內容寫進 region，訊息裡只有編號和長度。沒有空塊、或比最大的 region 還長，就照樣放在訊息裡。寫出來的是一個兩種 variant 的 enum（放在訊息裡的、在 region 裡的），所以不走 region 的位元組前面多一個位元組。
-- **值寫到一半失敗**：已經放進 region 的還回去，`out` 回到原來的樣子。
+- **值裡的管道跟著過去**：序列化到 `data_pipe::Consumer` 時，向 `Place` 開一條過通道的管道（`Place::pipe`），訊息裡只寫它的編號；解碼到編號時向 `Resolve` 要這一端替那條管道建好的 `Consumer`（`Resolve::pipe`）。它在值的哪一層都一樣。這一端不開管道（`Place::pipe` 回 `None`，預設就是）時那個值送不出去；對方寫的編號不是一條等著被拿的管道是 `BadMessage::UnknownPipe`，同一個編號提兩次也是。
+- **值寫到一半失敗**：已經放進 region 的還回去，為它開的管道結束掉（`Place::unpipe`；管道已經從值裡取走了，來源跟著放掉），`out` 回到原來的樣子。
 - **巢狀的深度有上限**（`MAX_DEPTH`，128）：sequence、map、struct、tuple、enum、option、newtype 各算一層。postcard 自己沒有上限，對方送一個包了幾萬層的值就能讓 stack overflow，那接不住。超過的是 `BadMessage::TooDeep`。
 - **不是剛好一個值的內容是壞訊息**：解不出來、後面還有多的位元組（`Rejected`）；提到的 region 不對時回報的是 region 的那個錯誤。
 - 沒有 region 的一端用 `NoRegions`：全部放在訊息裡，提到 region 的訊息是壞訊息。
@@ -258,7 +260,7 @@ impl Handler<P> for MyHandler {
 - **先告知、再提到**：一則訊息的大位元組放進 region、新建的 region 的 `Granted`、訊息本身，在同一把鎖底下依序送出，別的 thread 的訊息插不進中間。`open_pipe` 先送 `PipeOpened` 才回傳編號。
 - **只有能附 handle 的一端建 region**（`Config::may_attach`，Browser）：兩個方向的 region 都是它編號。它自己送大資料時，沒有空塊就當場建一塊（不超過 `region_limit`）；對方要寫的那幾塊由它用 `grant_to_peer` 給。另一端沒有空塊時大資料就放在訊息裡。
 - **送不出去的訊息**（通道已經結束、太長）放進 region 的那幾塊當場還回池子。
-- **管道**：來源的 `Consumer` 交給 `open_pipe`，它有資料時叫醒 IO thread；收的一側收到 `PipeOpened` 時建一條 `data_pipe`、掛上回報的掛勾，讀的一端等訊息提到它時由 `take_pipe` 拿走。讀的一端 drop 就是取消。對方不被信任時不讓它開管道（`peer_may_open_pipes`）：每一條都是這一端要留的記憶體。
+- **管道**：來源的 `Consumer` 放在訊息的值裡，`send` 就替它開管道（`PipeOpened` 走在那則訊息前面，同一把鎖底下），容量是那條管道自己的；收的一側 `decode` 出來的值裡就是那條管道的 `Consumer`。訊息送不出去時（通道結束了、佇列滿了），為它開的管道結束、來源放掉、告訴對方（對方把替它留的那一端丟掉）。`open_pipe` 和 `take_pipe` 是同一件事分開做的版本（訊息裡自己帶編號）。來源有資料時叫醒 IO thread；收的一側收到 `PipeOpened` 時建一條 `data_pipe`、掛上回報的掛勾，讀的一端等訊息提到它時由 `take_pipe` 拿走。讀的一端 drop 就是取消。對方不被信任時不讓它開管道（`peer_may_open_pipes`）：每一條都是這一端要留的記憶體。
 - **通道結束**：`turn` 回 `Some(Gone)` 一次；管道的來源放掉（它們的寫的一端看到讀的不在了）、傳輸關掉，之後 `send` 回 `SendError::Gone`。迴圈告訴那個端點的 `handler`（`gone`）、不再等它；其他的通道照常。迴圈被停下來時，還在的每一條都在這一端關掉、`handler` 收到 `Gone::Closed`。
 
 ## `local`
@@ -481,6 +483,8 @@ python3 scripts/test.py ipc verus    # core/fit.rs 的證明（cargo verus verif
 要裝 Verus（版本和裝法見 `test.py ipc -h`）；它用自己的 toolchain 編整個 crate，約一秒，第一次約一分鐘。
 
 `tests/it/codec.rs`：沒有位元組的值寫出來和 postcard 一模一樣（serde 的每一種形狀各有）；每一種形狀裡的位元組都回得來；大的位元組不管巢狀在哪裡都走 region、訊息只剩一點、讀的順序照值裡的順序；對方讀完之後那一塊再用；沒有空塊、或比最大的還長時留在訊息裡，用著的那一塊沒被蓋掉；寫在 `out` 原有的內容後面；序列化到一半失敗的值不留下放進去的 region 和寫了一半的位元組；不是對方的 region、太長、沒有 region 的一端被提到 region、不認得的 variant 都是壞訊息，回報的是第一個錯；多一個位元組、少一段、聲稱比訊息還長的位元組都是壞訊息；六種巢狀的方式各自剛好到上限可以、多一層是 `TooDeep`，一百萬層的不會真的走進去；又寬又淺的值不受影響。
+
+`tests/it/pipe_in_message.rs`（值裡的管道，用一個記下開了哪些管道的假的一端）：`Consumer` 在 struct、`Option`、`Vec`、map、enum 的兩種 variant 裡都照值的順序各開一條、訊息裡只有編號，值留下的是結束的管道而原本的管道還開著，另一端解出來的是它自己那幾條的 `Consumer`；同一個值只能過一次；值在開了管道之後失敗時那些管道被結束、來源放掉、`out` 不變；不開管道的一端送不出帶管道的值，開到一半開不了時前面開的收回；編號不是等著的管道、提兩次、沒有管道的一端都是 `UnknownPipe`；JSON 和純 postcard 都不能序列化或讀出 `Consumer`，被拒絕的值管道還在；冒用那個名字的型別送的時候拿不到管道、收的時候它提到的那一條被放掉、不留給下一個值。
 
 `tests/it/region_fuzz.rs`：fuzzer 跑的另一段檢查（`fuzz/fuzz_targets/region.rs`）。輸入當成三樣東西：一則提到 region 的訊息的內容（不管它寫什麼編號和長度，讀都留在 region 裡面，ASan 看著；解得出來的值再寫、再讀要一樣）、一則 `Control`（解得出來的再寫要是同樣的位元組）、一串對池子和表的操作（加、放、拿、還、對方還、拿掉、讀），每一步都對著一個簡單的模型：結果一樣、放進的是最短的放得下的、出去了的那一塊的內容沒有變、總量不超過上限。重播 `fuzz/regressions/region/`。
 

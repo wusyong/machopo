@@ -31,7 +31,7 @@
 | G6 | **順序**：一條通道上，收的一端交出訊息的順序就是送的一端送的順序，不重複、不漏 | `core/channel.rs`：一把鎖守著編號和寫出去的順序；`core/frame.rs`：序號不連續是 `OutOfOrder` | loom（每一種交錯）、shuttle；`crates/ipc/tla/Channel.tla`；`frame` fuzzer |
 | G7 | **斷線**：對方不在了（結束、當掉、只關掉一半、送了壞訊息）時，這一端剛好報告一次，之後不再交出它的訊息 | `core/channel.rs` 的 `Receiver`：理由是第一個發生的，只報告一次；平台說對方不在了靠假設 K4 | `crates/ipc/tla/Channel.tla`；loom、shuttle；跨 process 的 `a_child_that_exits_or_is_killed_is_heard_by_its_host`、`a_host_that_closes_is_heard_by_its_child`、`a_child_gone_before_it_took_its_end_is_heard_once_the_host_says_so` |
 | G8 | **同步的呼叫**：回答只到等它的那個呼叫；通道斷了時等的一方醒來、當成失敗 | 不在 `ipc` 裡：由用它的那一層守 | 那一層的測試 |
-| G9 | **data pipe**：讀到的位元組就是寫的、照順序、不重複；送出去、對方還沒說讀了的量不超過管道的容量；對方說讀了的比送的多是壞訊息 | `core/credit.rs`（算術是證明過的）、`core/pipe.rs`（`PipeOverRead`、`PipeOverrun`） | `credit.rs` 的 Verus 證明；`crates/ipc/tla/Pipe.tla`；`pipe` fuzzer；`crates/ipc/tests/it/endpoint.rs` |
+| G9 | **data pipe**：讀到的位元組就是寫的、照順序、不重複；送出去、對方還沒說讀了的量不超過管道的容量；對方說讀了的比送的多是壞訊息 | `core/credit.rs`（算術是證明過的）、`core/pipe.rs`（`PipeOverRead`、`PipeOverrun`） | `credit.rs` 的 Verus 證明；`crates/ipc/tla/Pipe.tla`；`pipe`、`endpoint` fuzzer；`crates/ipc/tests/it/endpoint.rs`；管道放在訊息的值裡過去的那一段：`crates/ipc/tests/it/pipe_in_message.rs` |
 
 ## 假設
 
@@ -65,6 +65,7 @@ macOS 那一層的測試在 `src/platform/macos/` 各檔的單元測試和 `crat
 | I6 | **平台的函式除了 `wait` 都不等** | 審查；`core/channel.rs` 在自己的鎖底下呼叫 `write` |
 | I7 | **一條通道只有一條 thread 讀**（IO thread） | `Endpoint` 交給迴圈時是搬進去的，只能交一次；Linux 的 waiter 拒絕已經被別的 waiter 等著的一端（`an_end_has_one_waiter`），Windows 的 pipe 只上得了一個 completion port |
 | I8 | **Windows 上進行中的操作讓它的通道活著**，直到它的通知從 port 取走：那之前 kernel 隨時會寫它的 `OVERLAPPED` 和緩衝區 | `hold`、`let_go` 和 `wait` 裡的 `Arc::from_raw` 成對（下面的表）。waiter 丟掉時還在進行的不釋放：刻意洩漏 |
+| I9 | **值裡的管道只在同一條 thread 的同一次序列化或解碼裡交接**：`Consumer` 經過一個 thread-local 交給 codec（或從 codec 交給值），交接的兩邊一定把它拿走或還回去，不留給下一個值 | `data_pipe` 的 `Serialize`（codec 沒拿走就還給值）、codec 解碼時交出之後再清一次；`crates/ipc/tests/it/pipe_in_message.rs` 的「只有 codec 序列化」「冒用名字的型別」兩個測試。沒有 `unsafe`：放錯地方的後果是一條管道提早結束，不是記憶體錯誤 |
 
 ## 每一處 `unsafe`
 

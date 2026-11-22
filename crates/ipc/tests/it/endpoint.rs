@@ -30,15 +30,32 @@ enum Msg {
     Stream { pipe: u32 },
 }
 
+/// A message with pipes in it, as values.
+#[derive(Serialize, Deserialize)]
+struct Carrying {
+    name: String,
+    pipes: Vec<Consumer>,
+}
+
 /// Keeps what came, and the pipes the messages named.
 #[derive(Default)]
 struct Recorder {
     got: Vec<(u32, Msg)>,
     pipes: Vec<Consumer>,
+    /// What comes is a [`Carrying`]: its name, and its pipes with the
+    /// others.
+    carrying: bool,
+    carried: Vec<String>,
 }
 
 impl Handler<Local> for Recorder {
     fn message(&mut self, mut message: Received<'_, Local>) -> Result<(), BadMessage> {
+        if self.carrying {
+            let Carrying { name, pipes } = message.decode()?;
+            self.carried.push(name);
+            self.pipes.extend(pipes);
+            return Ok(());
+        }
         let msg = message.decode::<Msg>()?;
         if let Msg::Stream { pipe } = &msg {
             self.pipes
@@ -365,6 +382,180 @@ fn a_pipes_bytes_arrive_in_order_as_far_as_the_reader_has_room() {
     settle(&mut host, &mut child);
     assert_eq!(child.link.platform().written(), written);
     assert_eq!((host.gone, child.gone), (None, None));
+}
+
+#[test]
+fn pipes_in_a_message_cross_with_it() {
+    let (mut host, mut child) = ends(None);
+    child.recorder.carrying = true;
+    let (mut first, first_reader) = data_pipe::create(128 * KIB);
+    let (mut second, second_reader) = data_pipe::create(64 * KIB);
+    // Written before the message is sent, and after.
+    let body = pattern(300 * KIB, 5);
+    first.try_write(body.slice(..100 * KIB)).unwrap();
+    let carrying = Carrying {
+        name: "two pipes".into(),
+        pipes: vec![first_reader, second_reader],
+    };
+    host.link.send(1, &carrying).unwrap();
+    // The value gave its pipes up.
+    let Carrying { mut pipes, .. } = carrying;
+    assert_eq!(pipes[0].read(64), Read::Done);
+    drop(pipes);
+    settle(&mut host, &mut child);
+    assert_eq!(child.recorder.carried, ["two pipes"]);
+    assert_eq!(child.recorder.pipes.len(), 2);
+    let mut second_at_child = child.recorder.pipes.pop().unwrap();
+    let mut first_at_child = child.recorder.pipes.pop().unwrap();
+
+    // Each pipe is its own, in the order the value had them.
+    second.try_write(Bytes::from_static(b"the second")).unwrap();
+    drop(second);
+    let mut at = 100 * KIB;
+    let mut got = Vec::new();
+    let mut turns = 0;
+    loop {
+        if at < body.len() {
+            let end = (at + 40 * KIB).min(body.len());
+            if first.try_write(body.slice(at..end)).is_ok() {
+                at = end;
+            }
+        } else if at == body.len() {
+            // Its writer is done: the reader reads to the end.
+            let (done, _) = data_pipe::create(1);
+            drop(std::mem::replace(&mut first, done));
+            at += 1;
+        }
+        settle(&mut host, &mut child);
+        match first_at_child.read(30 * KIB) {
+            Read::Data(bytes) => got.extend_from_slice(&bytes),
+            Read::Empty => {}
+            Read::Done => break,
+        }
+        turns += 1;
+        assert!(turns < 10_000, "stuck with {} bytes", got.len());
+    }
+    assert!(got == body[..], "what was read isn't what was written");
+    let mut small = Vec::new();
+    loop {
+        settle(&mut host, &mut child);
+        match second_at_child.read(64) {
+            Read::Data(bytes) => small.extend_from_slice(&bytes),
+            Read::Empty => {}
+            Read::Done => break,
+        }
+    }
+    assert_eq!(small, b"the second");
+    assert_eq!((host.gone, child.gone), (None, None));
+}
+
+#[test]
+fn a_pipe_crosses_holding_no_more_than_its_own_capacity() {
+    let (mut host, mut child) = ends(None);
+    child.recorder.carrying = true;
+    let (mut source, reader) = data_pipe::create(96 * KIB);
+    host.link
+        .send(
+            0,
+            &Carrying {
+                name: "one".into(),
+                pipes: vec![reader],
+            },
+        )
+        .unwrap();
+    settle(&mut host, &mut child);
+    let mut reader = child.recorder.pipes.pop().unwrap();
+    // The reader reads nothing: what crossed is the pipe's capacity, and
+    // the rest waits in the writer's own pipe, which fills.
+    let mut written = 0;
+    loop {
+        settle(&mut host, &mut child);
+        match source.try_write(pattern(32 * KIB, 1)) {
+            Ok(()) => written += 32 * KIB,
+            Err(TryWriteError::Full) => break,
+            Err(TryWriteError::Closed) => panic!("closed"),
+        }
+        assert!(written < 1 << 20, "nothing holds the writer back");
+    }
+    assert_eq!(reader.capacity(), 96 * KIB);
+    let mut at_reader = 0;
+    while let Read::Data(bytes) = reader.read(usize::MAX) {
+        at_reader += bytes.len();
+    }
+    assert_eq!(at_reader, 96 * KIB);
+    assert_eq!(written, 2 * 96 * KIB);
+}
+
+#[test]
+fn a_message_that_isnt_sent_ends_the_pipes_it_had() {
+    let (mut host, mut child) = ends(None);
+    host.link.close();
+    settle(&mut host, &mut child);
+    let (mut source, reader) = data_pipe::create(64 * KIB);
+    let carrying = Carrying {
+        name: "too late".into(),
+        pipes: vec![reader],
+    };
+    assert_eq!(
+        host.link.send(0, &carrying),
+        Err(SendError::Refused),
+        "no pipe can be opened on a channel that is over"
+    );
+    assert_eq!(
+        source.try_write(Bytes::from_static(b"x")),
+        Err(TryWriteError::Closed),
+        "the pipe went with the message"
+    );
+}
+
+#[test]
+fn a_message_the_channel_cant_take_ends_the_pipes_opened_for_it() {
+    // A channel with little room and a short queue: the pipe is told of,
+    // and then the message itself is more than may wait.
+    let (host_end, child_end) = local::pair(Some(64));
+    let mut host = End::new(
+        host_end,
+        Config {
+            queue_limit: KIB,
+            ..config(true)
+        },
+    );
+    let mut child = End::new(child_end, config(false));
+    child.recorder.carrying = true;
+    let (mut source, reader) = data_pipe::create(64 * KIB);
+    let sent = host.link.send(
+        0,
+        &Carrying {
+            name: "x".repeat(4 * KIB),
+            pipes: vec![reader],
+        },
+    );
+    assert_eq!(sent, Err(SendError::Gone(Gone::QueueFull)));
+    assert_eq!(
+        source.try_write(Bytes::from_static(b"x")),
+        Err(TryWriteError::Closed),
+        "the pipe went with the message"
+    );
+    settle(&mut host, &mut child);
+    assert!(child.recorder.carried.is_empty() && child.recorder.pipes.is_empty());
+}
+
+#[test]
+fn a_child_sends_no_pipe_in_a_message_either() {
+    // The host lets its child open no pipe: one in a message is opened
+    // all the same, and is the end of the channel.
+    let (mut host, mut child) = ends(None);
+    let (_source, reader) = data_pipe::create(64 * KIB);
+    let _ = child.link.send(
+        0,
+        &Carrying {
+            name: "from a child".into(),
+            pipes: vec![reader],
+        },
+    );
+    settle(&mut host, &mut child);
+    assert_eq!(host.gone, bad(BadMessage::Rejected));
+    assert!(host.recorder.got.is_empty() && host.recorder.pipes.is_empty());
 }
 
 #[test]

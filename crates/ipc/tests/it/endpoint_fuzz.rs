@@ -16,7 +16,7 @@ use ipc::core::channel::{self, Gone, MAX_QUEUED_BYTES};
 use ipc::core::control::CONTROL_DESTINATION;
 use ipc::core::frame::BadMessage;
 use ipc::core::region::{HeapMemory, MIN_REGION_LEN};
-use ipc::data_pipe;
+use ipc::data_pipe::{self, Consumer};
 use ipc::endpoint::{self, Config, Event, Handler, Received, SendError};
 use ipc::local::{self, Local};
 use serde::{Deserialize, Serialize};
@@ -25,8 +25,13 @@ use serde::{Deserialize, Serialize};
 enum Msg {
     Text(String),
     Body(Bytes),
-    Stream { pipe: u32 },
+    Stream {
+        pipe: u32,
+    },
     Many(Vec<Self>),
+    /// A pipe as a value: what a child writes for one is a number of no
+    /// pipe of its own (it may open none).
+    Piped(Consumer),
 }
 
 #[derive(Default)]
@@ -111,6 +116,27 @@ pub fn run(data: &[u8]) {
                     gone.is_some(),
                     "{sent:?} with the channel {gone:?}"
                 );
+            }
+            // A pipe in a message, opened by the message itself.
+            5 if arg % 3 == 2 => {
+                let (mut source, consumer) = data_pipe::create(usize::from(*arg).max(1) * 64);
+                let sent = host.send(
+                    0,
+                    &Msg::Many(vec![Msg::Text("with a pipe".into()), Msg::Piped(consumer)]),
+                );
+                assert_eq!(
+                    sent.is_err(),
+                    gone.is_some(),
+                    "{sent:?} with the channel {gone:?}"
+                );
+                let written = source.try_write(Bytes::copy_from_slice(bytes));
+                // Not sent: the pipe went with the message.
+                if sent.is_err() && !bytes.is_empty() {
+                    assert_eq!(written, Err(data_pipe::TryWriteError::Closed));
+                }
+                if arg % 2 == 0 {
+                    sources.push(source);
+                }
             }
             5 => {
                 let (mut source, consumer) = data_pipe::create(1 << 16);

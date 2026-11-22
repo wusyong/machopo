@@ -1,0 +1,88 @@
+# Step 3b-1: a data pipe's consumer in a message's value crosses with it
+# (`ipc::data_pipe`'s `Serialize` and `Deserialize`, `ipc::codec`, and the
+# endpoint's side of both).
+#
+# Not here, and why:
+# - A pipe ended because its message didn't go is told to the peer
+#   (`Placing::unpipe`'s `PipeEnded`), which then forgets the consumer it
+#   kept for it (`control`'s `arrived.retain`): what either leaves undone
+#   is a consumer kept by an end until its channel is over, which no test
+#   sees. By review.
+test = ["sh", "-c", "timeout 200 cargo test -q -p ipc"]
+timeout = 900
+
+[[mutant]]
+name = "a consumer another serializer refused has lost its pipe"
+file = "crates/ipc/src/data_pipe.rs"
+from = '''        if let Some(pipe) = take_crossing() {
+            *self.ends.lock().unwrap_or_else(PoisonError::into_inner) = pipe
+                .ends
+                .into_inner()
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+        written'''
+to = '''        drop(take_crossing());
+        written'''
+
+[[mutant]]
+name = "any serializer writes a consumer"
+file = "crates/ipc/src/data_pipe.rs"
+from = '''    fn serialize<S: Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+        Err(ser::Error::custom(
+            "a data pipe's consumer is serialized only into an ipc message",
+        ))
+    }'''
+to = '''    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_u32(0)
+    }'''
+
+[[mutant]]
+name = "a value that fails leaves its pipes open"
+file = "crates/ipc/src/codec.rs"
+from = '''        for number in piped {
+            regions.unpipe(number);
+        }'''
+to = '''        drop(piped);'''
+
+[[mutant]]
+name = "the codec forgets the pipes it opened for a value"
+file = "crates/ipc/src/codec.rs"
+from = '''            placing.piped.push(number);'''
+to = '''            let _ = &mut placing;'''
+
+[[mutant]]
+name = "a number of no pipe is only a value of another type"
+file = "crates/ipc/src/codec.rs"
+from = '''                Err(bad) => {
+                    self.resolving.bad.get_or_insert(bad);
+                    return Err(de::Error::custom("no such pipe"));'''
+to = '''                Err(_) => {
+                    return Err(de::Error::custom("no such pipe"));'''
+
+[[mutant]]
+name = "a pipe nothing took stays beside the next value"
+file = "crates/ipc/src/codec.rs"
+from = '''            // A visitor that isn't a consumer's took none: it goes.
+            drop(data_pipe::take_crossing());'''
+to = '''            // A visitor that isn't a consumer's took none: it goes.'''
+
+[[mutant]]
+name = "a pipe crosses with a capacity that isn't its own"
+file = "crates/ipc/src/endpoint.rs"
+from = '''        let capacity = u32::try_from(source.capacity()).ok()?;'''
+to = '''        let capacity = u32::try_from(source.capacity().min(64 << 10)).ok()?;'''
+
+[[mutant]]
+name = "a message that isn't sent keeps its pipes' sources"
+file = "crates/ipc/src/endpoint.rs"
+from = '''        self.feeding.retain(|(pipe, _)| *pipe != number);
+        if self.pipes.end(number) {'''
+to = '''        if self.pipes.end(number) {'''
+
+[[mutant]]
+name = "a message the channel refuses leaves its pipes open"
+file = "crates/ipc/src/endpoint.rs"
+from = '''            for number in std::mem::take(&mut placing.piped) {
+                placing.unpipe(number);
+            }'''
+to = '''            placing.piped.clear();'''
