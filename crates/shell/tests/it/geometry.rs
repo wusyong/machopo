@@ -934,6 +934,69 @@ onload = async () => {
     );
 }
 
+/// What is fixed to the viewport scrolled into view through the renderer,
+/// the page at 500: the page stays, by `scrollIntoView`, `focus()` or a
+/// link to it, for an iframe that is fixed too (what is in it scrolls the
+/// iframe's frame). In a box with a transform it is the page's to scroll.
+/// Fixed in an iframe's frame, that frame stays and the page goes to where
+/// the iframe shows it.
+#[test]
+fn fixed_boxes_scroll_into_view() {
+    let url = page(
+        "fixed-into-view.html",
+        r##"<!DOCTYPE html>
+<style>
+  body { margin: 0; height: 4000px; position: relative }
+  .f { position: fixed; top: 10px; height: 100px; width: 200px }
+  #t { position: absolute; top: 1500px; height: 1000px; transform: translate(0) }
+  iframe { width: 300px; height: 300px; border: 0 }
+  #a { position: absolute; top: 1000px; border: 5px solid; padding: 3px }
+</style>
+<div class=f id=self></div>
+<button class=f id=button>b</button>
+<div class=f id=editable contenteditable>e</div>
+<div id=t><div class=f style="top: 100px"><div id=transformed style="height: 20px"></div></div></div>
+<iframe id=a srcdoc="<style>body { margin: 0; height: 3000px } #in { position: fixed; top: 120px; height: 40px }</style><div id=in><div id=below style='height: 10px'></div></div>"></iframe>
+<iframe class=f id=b srcdoc="<style>body { margin: 0; height: 3000px }</style><div style='height: 700px'></div><div id=far style='height: 10px'></div>"></iframe>
+<script>
+onload = async () => {
+  const log = [], $ = id => document.getElementById(id);
+  const a = $('a').contentWindow, b = $('b').contentWindow;
+  const at = (name, run) => {
+    scrollTo(0, 500);
+    a.scrollTo(0, 500);
+    run();
+    log.push(`${name} ${scrollY} ${a.scrollY} ${b.scrollY}`);
+  };
+  at('self', () => $('self').scrollIntoView());
+  at('button', () => $('button').focus());
+  at('editable', () => $('editable').focus());
+  at('transformed', () => $('transformed').scrollIntoView());
+  at('framed', () => a.document.getElementById('in').scrollIntoView());
+  at('in framed', () => a.document.getElementById('below').scrollIntoView());
+  at('in fixed frame', () => b.document.getElementById('far').scrollIntoView());
+  scrollTo(0, 500);
+  location.hash = 'self';
+  for (let i = 0; i < 2; i++) await new Promise(r => requestAnimationFrame(r));
+  log.push(`link ${scrollY}`);
+  testRunner.reportHarnessResults(log.join('\n'));
+};
+</script>"##,
+    );
+    let expected = [
+        "self 500 500 0",
+        "button 500 500 0",
+        "editable 500 500 0",
+        "transformed 1600 500 0",
+        // The iframe's content box at 1008, and 120 into it.
+        "framed 1128 500 0",
+        "in framed 1128 500 0",
+        "in fixed frame 500 500 700",
+        "link 500",
+    ];
+    assert_eq!(report(&url), expected.join("\n"));
+}
+
 /// Absolute positioning in a whole browser: the box
 /// is laid out against its containing block's padding box however deep it
 /// sits, `offsetParent` is that containing block, and `getComputedStyle`

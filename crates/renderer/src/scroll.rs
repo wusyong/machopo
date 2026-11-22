@@ -426,7 +426,19 @@ impl ScrollState {
         params: ScrollIntoViewParams,
     ) -> Option<RectF> {
         let mut scrolls = true;
-        let rect = self.bring_into_view(view, target, inner, params, &mut scrolls)?;
+        let (top, rect) = view.children.iter().find_map(|child| {
+            let rect =
+                self.bring_into_view(&child.fragment, target, inner, params, &mut scrolls)?;
+            Some((child, rect.offset(child.offset.x, child.offset.y)))
+        })?;
+        // A box fixed to the viewport is the view's child, placed in the
+        // viewport: it, and what is in it, move with the viewport, which
+        // scrolling then brings no nearer (Blink's `IsFixedToFrame`, where
+        // scrolling into view leaves the frame). One that a box around it
+        // contains is under that box here, and scrolls as anything does.
+        if top.fragment.fixed_to_viewport {
+            return Some(rect);
+        }
         if scrolls && let Some(viewport) = self.viewport_node {
             // The viewport's direction is the root element's.
             let params = match view.children.first() {
@@ -466,15 +478,7 @@ impl ScrollState {
                     .map(|r| r.offset(child.offset.x, child.offset.y))
             })?
         };
-        // A fixed box moves with the viewport: scrolling what is around it
-        // brings nothing nearer, so nothing past it scrolls (Blink's
-        // scroll into view stops at a box fixed to the view). Its own
-        // overflow still scrolls.
-        let fixed = fragment.style.position == computed_style::Position::Fixed;
         let Some((element, node)) = scroll_container(fragment) else {
-            if fixed {
-                *scrolls = false;
-            }
             return Some(found);
         };
         let current = self
@@ -497,9 +501,6 @@ impl ScrollState {
         } else {
             current
         };
-        if fixed {
-            *scrolls = false;
-        }
         Some(found.offset(-offset.x, -offset.y))
     }
 }
@@ -1021,6 +1022,107 @@ mod tests {
         // At its end: 210 of content in 50.
         assert_eq!(state.containers[&ids["scroller"]], PointF::new(0.0, 160.0));
         assert_eq!(state.viewport, PointF::new(0.0, 0.0));
+    }
+
+    /// Into view from a page scrolled to 500, whatever is fixed to the
+    /// viewport is where it was: the target itself, or around it.
+    #[test]
+    fn a_target_fixed_to_the_viewport_does_not_scroll_it() {
+        let (view, ids, size, _) = lay_out(
+            "<style>html, body { margin: 0 } .fixed { position: fixed; top: 10px; height: 50px }</style>
+             <div style='height: 3000px'></div>
+             <div class=fixed id=fixed><div id=in-fixed style='height: 5px'></div></div>
+             <div class=fixed id=below style='top: 900px'></div>
+             <div class=fixed id=scroller style='overflow: auto'>
+               <div style='height: 200px'></div><div id=in-scroller style='height: 10px'></div>
+             </div>
+             <table class=fixed id=table><tr><td>cell</td></tr></table>
+             <p><span><div class=fixed id=in-inline></div></span></p>
+             <div class=fixed><div class=fixed id=nested style='top: 40px'></div></div>",
+        );
+        let start = ScrollIntoViewParams {
+            block: ScrollAlignment::Start,
+            inline: ScrollAlignment::Nearest,
+            nearest_only: false,
+        };
+        for (id, top) in [
+            ("fixed", 10.0),
+            ("in-fixed", 10.0),
+            ("below", 900.0),
+            ("scroller", 10.0),
+            // The scroller's 10, and 40 into it once it has scrolled.
+            ("in-scroller", 50.0),
+            ("table", 10.0),
+            ("in-inline", 10.0),
+            ("nested", 40.0),
+        ] {
+            for nearest_only in [false, true] {
+                let mut state = laid_out(size, Default::default());
+                state.viewport = PointF::new(0.0, 500.0);
+                let params = ScrollIntoViewParams {
+                    nearest_only,
+                    ..start
+                };
+                let rect = state
+                    .scroll_into_view(&view, ids[id], None, params)
+                    .unwrap();
+                assert_eq!(state.viewport, PointF::new(0.0, 500.0), "{id}");
+                assert_eq!(rect.y, top, "{id}");
+            }
+        }
+    }
+
+    /// A box around it that is the containing block of fixed boxes has it
+    /// scroll with the document: what is past it scrolls as for any other.
+    #[test]
+    fn a_fixed_box_not_fixed_to_the_viewport_scrolls_into_view() {
+        let (view, ids, size, _) = lay_out(
+            "<style>html, body { margin: 0 } .fixed { position: fixed; top: 0; height: 50px }</style>
+             <div style='height: 1500px'></div>
+             <div style='transform: translate(0); height: 300px'>
+               <div class=fixed id=transformed><div id=in-transformed style='height: 5px'></div></div>
+             </div>
+             <div style='contain: layout; height: 300px'>
+               <div class=fixed><div id=in-contained style='height: 5px'></div></div>
+             </div>
+             <div id=around style='overflow: auto; height: 100px'>
+               <div style='transform: translate(0); height: 800px'>
+                 <div class=fixed style='top: 400px'><div id=in-both style='height: 5px'></div></div>
+               </div>
+             </div>
+             <div style='height: 2000px'></div>",
+        );
+        let start = ScrollIntoViewParams {
+            block: ScrollAlignment::Start,
+            inline: ScrollAlignment::Nearest,
+            nearest_only: false,
+        };
+        for (id, viewport) in [
+            ("transformed", 1500.0),
+            ("in-transformed", 1500.0),
+            ("in-contained", 1800.0),
+            ("in-both", 2100.0),
+        ] {
+            let mut state = laid_out(size, Default::default());
+            state.viewport = PointF::new(0.0, 500.0);
+            let rect = state.scroll_into_view(&view, ids[id], None, start).unwrap();
+            assert_eq!(state.viewport, PointF::new(0.0, viewport), "{id}");
+            assert_eq!(rect.y, 0.0, "{id}");
+            if id == "in-both" {
+                assert_eq!(state.containers[&ids["around"]], PointF::new(0.0, 400.0));
+                // Its scroll container alone: where that leaves it in the
+                // viewport, which didn't move.
+                let mut state = laid_out(size, Default::default());
+                state.viewport = PointF::new(0.0, 500.0);
+                let only = ScrollIntoViewParams {
+                    nearest_only: true,
+                    ..start
+                };
+                let rect = state.scroll_into_view(&view, ids[id], None, only).unwrap();
+                assert_eq!(state.viewport, PointF::new(0.0, 500.0));
+                assert_eq!(rect.y, 2100.0 - 500.0);
+            }
+        }
     }
 
     #[test]

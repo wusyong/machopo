@@ -1,0 +1,14 @@
+# Scrolling a box fixed to the window into view, or focusing it, leaves the
+# page where it was: scrolling it would bring the box no nearer. A box
+# fixed inside a transformed one moves with the page, which scrolls to it.
+window size=800x600
+navigate pages/fixed-into-view.html
+wait-loaded
+click #into
+wait-text #note "into: at 500."
+screenshot into
+click #focus
+wait-text #note "focus: at 500."
+click #inside
+wait-text #note "inside: at 1600."
+screenshot inside

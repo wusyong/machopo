@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Fixed into view</title>
+<style>
+  body { margin: 0; height: 4000px; position: relative }
+  .fixed { position: fixed; left: 10px; width: 300px; height: 30px }
+  #transformed { position: absolute; top: 1500px; width: 400px; height: 500px; transform: translate(0); background: lightblue }
+</style>
+<p id="note" class="fixed" style="top: 0; margin: 0">Nothing yet.</p>
+<button id="into" class="fixed" style="top: 50px">Scroll the fixed bar into view</button>
+<button id="focus" class="fixed" style="top: 100px">Focus the fixed bar</button>
+<button id="inside" class="fixed" style="top: 150px">Scroll to the bar in the transformed box</button>
+<div id="bar" class="fixed" tabindex="0" style="top: 300px; background: orange">Fixed to the window</div>
+<div id="transformed">
+  <div class="fixed" style="top: 100px; background: plum"><span id="in-bar">Fixed to the blue box</span></div>
+</div>
+<script>
+  const on = (id, run) => document.getElementById(id).addEventListener("click", () => {
+    scrollTo(0, 500);
+    run();
+    document.getElementById("note").textContent = `${id}: at ${Math.floor(scrollY / 100) * 100}.`;
+  });
+  const bar = document.getElementById("bar");
+  on("into", () => bar.scrollIntoView());
+  on("focus", () => bar.focus());
+  on("inside", () => document.getElementById("in-bar").scrollIntoView());
+</script>
