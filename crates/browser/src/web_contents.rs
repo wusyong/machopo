@@ -779,6 +779,13 @@ impl WebContents {
         self.process.pid()
     }
 
+    /// The shared memory the browser keeps for what it sends the tab's
+    /// renderer process: its bytes, and how many of its regions are free.
+    /// None for a renderer in this process.
+    pub fn renderer_shared_memory(&self) -> Option<(usize, usize)> {
+        self.process.shared_memory()
+    }
+
     pub fn is_crashed(&self) -> bool {
         self.crashed
     }

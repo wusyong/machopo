@@ -51,7 +51,7 @@ Renderer 的 compositor 直接把 frame 送給 Viz，不經過 Browser，這點�
 
 ### Process 的邊界
 
-Renderer 可以是 Browser process 裡的 thread，也可以是自己的 process（`browser::RendererLauncher`，啟動的人選）；程式照 process 的邊界寫，renderer 這一側的 thread 不知道自己是哪一種。現在視窗、headless 和測試都用同一個 process 的；自己的 process 那條路只有測試會走，而且還不完整：tile 還不能上 GPU（`docs/limitations.md` 的「平台和建置」）。
+Renderer 可以是 Browser process 裡的 thread，也可以是自己的 process（`browser::RendererLauncher`，啟動的人選）；程式照 process 的邊界寫，renderer 這一側的 thread 不知道自己是哪一種。現在視窗、headless 和測試都用同一個 process 的；自己的 process 那條路只有測試會走，還缺幾樣（`docs/limitations.md` 的「平台和建置」）；tile 上得了 GPU，但像素比同一個 process 時多複製兩次：`CreateSharedImage` 的像素是訊息裡的一段位元組，compositor 送的時候複製進訊息、Browser 的 IO thread 解碼時複製出來，Viz 交給 GPU 是第三次。Browser 送給 renderer 的大資料（子資源的回應等）走 Browser 替那個 renderer 建的共用記憶體，renderer 送給 Browser 的還沒有（Browser 還沒有給它可以寫的那幾塊）。
 
 **兩種的差別只在訊息怎麼走**。同一個 process 時訊息是搬的，不序列化。自己的 process 時，Browser 用 `ipc::platform::spawn` 啟動執行檔（`machopo --type=renderer`，Chromium 的 `RendererMain`），兩邊之間一條控制通道（`ipc`），四種訊息各有一個目的地的編號（`protocol::control_channel`）；送的一端（`BrowserSender`、`CompositorFrameSinkSender`、`RendererSender`、`CompositorSender`）裡面分兩種，直接放進對方的佇列，或寫進通道。renderer 的 frame 在通道上不帶 `FrameSinkId`，由 Browser 的 IO thread 補上它綁給那個 renderer 的。Chromium 的 `--single-process` 也是這樣（renderer 是 thread，訊息照樣走 Mojo），邊界靠 `DEPS` 和 `checkdeps` 守住；machopo 用 `python3 scripts/sanity.py boundary` 和 `protocol` 的 `boundary` 測試。
 

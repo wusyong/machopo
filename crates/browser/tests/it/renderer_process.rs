@@ -13,7 +13,8 @@ use protocol::renderer::RendererHostMsg;
 use protocol::viz::{CompositorFrameSinkMsg, VizMsg};
 
 use crate::navigation::{
-    SCRIPT_ENGINES, TIMEOUT, in_memory, next_commit, next_message, tab_launched, tab_with_launcher,
+    DrivenViz, RecordingGpu, SCRIPT_ENGINES, TIMEOUT, in_memory, next_commit, next_message,
+    tab_launched, tab_with_launcher,
 };
 
 /// Set in the test run that is to be a renderer.
@@ -115,6 +116,109 @@ fn a_document_longer_than_its_commit_carries_loads_in_a_renderer_process() {
     };
     assert_eq!(committed.as_deref(), Some(url.as_str()));
     assert_eq!(title, format!("after {n} numbers"));
+    web_contents.shutdown();
+}
+
+/// A tab with a renderer process and a Viz that has a GPU, played by the
+/// test.
+fn tab_with_a_gpu() -> (
+    browser::WebContents,
+    crossbeam_channel::Receiver<browser::ContentsEvent>,
+    DrivenViz,
+    Arc<RecordingGpu>,
+) {
+    let gpu = Arc::new(RecordingGpu::default());
+    let (mut web_contents, host_rx, viz_rx, begin_frames) = tab_with_launcher(
+        as_a_process(),
+        true,
+        false,
+        Some(gpu.clone()),
+        gfx::SystemColors::DEFAULT,
+        Default::default(),
+        browser::NEW_CONTENT_RENDERING_DELAY,
+        in_memory(),
+    );
+    web_contents.resize(gfx::Size::new(600, 600), 1.0);
+    (
+        web_contents,
+        host_rx,
+        DrivenViz::new(viz_rx, begin_frames),
+        gpu,
+    )
+}
+
+/// A page with more than one tile of text.
+const TILES: &str = "data:text/html,<p style='font-size:80px'>tiles tiles tiles tiles tiles";
+
+#[test]
+fn a_renderer_processs_tiles_go_to_the_gpu() {
+    // The renderer is told Viz has a GPU, so its compositor sends each
+    // tile's pixels as a shared image as soon as they are drawn, and its
+    // frames name them: the pixels cross in the messages (as large bytes
+    // do), from the renderer's sink.
+    let (mut web_contents, host_rx, mut viz, _gpu) = tab_with_a_gpu();
+    web_contents.navigate(TILES);
+    viz.until_loaded(&mut web_contents, &host_rx);
+    viz.run_until(&mut web_contents, &host_rx, "a frame of tiles", |viz, _| {
+        viz.shared_images.len() >= 2 && !viz.frames.is_empty()
+    });
+    web_contents.shutdown();
+}
+
+#[test]
+fn losing_the_gpu_has_a_renderer_process_make_its_tiles_again() {
+    let (mut web_contents, host_rx, mut viz, gpu) = tab_with_a_gpu();
+    web_contents.navigate(TILES);
+    viz.until_loaded(&mut web_contents, &host_rx);
+    viz.run_until(&mut web_contents, &host_rx, "tiles on the GPU", |viz, _| {
+        !viz.shared_images.is_empty()
+    });
+    let before = viz.shared_images.clone();
+    // The browser is told by Viz, and tells the renderer's compositor
+    // over the channel.
+    assert_eq!(gpu.lose(), 1, "only the browser watches the GPU");
+    viz.run_until(
+        &mut web_contents,
+        &host_rx,
+        "the lost GPU's shared images to go and new ones to come",
+        |viz, _| before.is_disjoint(&viz.shared_images) && !viz.shared_images.is_empty(),
+    );
+    web_contents.shutdown();
+}
+
+#[test]
+fn what_the_browser_sends_a_renderer_process_that_is_large_goes_by_shared_memory() {
+    // A script of 300 KiB, which the browser loads and sends whole: by a
+    // region the browser makes for this renderer, not in the message.
+    let mut script = String::from("document.title = 'ran';\n//");
+    script.push_str(&"x".repeat(300 << 10));
+    let server = crate::navigation::server(&[
+        (
+            "/page",
+            Route::ok("text/html", "<!DOCTYPE html><script src=/big.js></script>"),
+        ),
+        ("/big.js", Route::ok("text/javascript", script.as_str())),
+    ]);
+    let (mut web_contents, host_rx) = tab_launched(
+        as_a_process(),
+        false,
+        gfx::SystemColors::DEFAULT,
+        in_memory(),
+    );
+    assert_eq!(web_contents.renderer_shared_memory(), Some((0, 0)));
+    web_contents.navigate(server.url("/page"));
+    loop {
+        let msg = next_message(&mut web_contents, &host_rx, TIMEOUT).expect("the renderer says");
+        web_contents.on_renderer_message(&msg);
+        if matches!(&msg, RendererHostMsg::UpdateTitle(title) if title == "ran") {
+            break;
+        }
+    }
+    // One region, long enough for it.
+    let (bytes, _free) = web_contents
+        .renderer_shared_memory()
+        .expect("a process of its own");
+    assert_eq!(bytes, 512 << 10);
     web_contents.shutdown();
 }
 

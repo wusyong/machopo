@@ -355,6 +355,7 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
 23. **tile 經過共用記憶體交給 Viz，Viz 上傳**（2026-11-20，T1，「tile 交接」）：compositor 照舊用 CPU 畫，像素寫進 Browser 配給它的 region（第 22 條的池子），frame 的 resource 帶 mailbox 和 region 的編號、位置和長度；Viz 複製出來、上傳，生命週期用 `ReturnResources` 和 `DestroySharedImage` 兩則訊息。canvas 的快照一樣。2026-11-20 的盤點確認 renderer 這一側沒有 wgpu，raster 是 vello_cpu 畫的 CPU 像素，所以 raster 的位置不用動。對照 Chromium：OOP-R 之前是這樣（one-copy raster），現在是 OOP-R（T3）。不選 T2（renderer 自己上傳、交出 texture）和 T3（OOP-R），理由在「理由和其他做法」。之後做 GPU raster 時換成 T3：那時過邊界的是 display list 不是像素，這一段本來就要重來（「之後的可能」）。
 
 24. **tile 畫好就送「建立」的訊息，像素只複製一次、有計數守著**（2026-11-20，第 1 階段的 1b，「tile 交接」）：三則訊息（`CreateSharedImage`、緩衝區還回來、`DestroySharedImage`），編號由 renderer 取；raster 直接畫進要交出去的緩衝區，Viz 交給 GPU 是唯一的一次複製，測試用計數確認。對照 Chromium：`SharedImageInterface::CreateSharedImage` 是 client 取 mailbox、送一則訊息給 GPU process，frame 帶 mailbox 和 sync token（不同通道之間排順序用；這裡是同一條通道，不需要），用完 `DestroySharedImage`。不選像素跟著 frame 送（起草時的寫法）：少一種訊息，但上傳全部擠在收到 frame 的那一刻，捲動時新的 tile 多，那個 frame 要等它們都上傳完才能畫。不選先多複製一次、量過再省（2026-11-20 起先的建議）：使用者的意見是這種事之後容易忘記；raster 本來就畫進呼叫的一方給的緩衝區，直接做成一次不比多複製難多少，計數讓它之後不會悄悄變回去。
+    - **2026-11-22 的現況**（3c）：跨 process 時像素複製三次，還沒達到這一條。`CreateSharedImage` 的像素是訊息裡的位元組，renderer process 的 compositor 送的時候複製進訊息，Browser 的 IO thread 解碼時複製出來，Viz 交給 GPU 是第三次。功能是通的（測試守著），「只複製一次」和跨 process 的計數由 3f 做（第 56 條的調整）。
 
 25. **bytes 的型別是明確的 `protocol::BigBuffer`，跨邊界的訊息裡的位元組欄位都用它**（2026-11-21，第 1 階段的 1c，「大的資料」）：`BigBuffer` 包一個 `Bytes`，自己實作序列化；單一 process 時就是 `Bytes`，跨 process 時 `ipc` 在編碼期間決定放訊息裡還是放進 region（第 22 條）。
     - **不選「不加型別，`ipc` 的序列化器攔 `serialize_bytes`」**：哪些欄位會走共用記憶體變成隱含的；`Vec<u8>` 在 serde 裡是一個一個 `u8` 的序列，攔不到，之後加的欄位會默默內嵌在訊息裡，沒有東西提醒。Chromium 也是明確的型別（mojom 裡宣告成 `BigBuffer` 的欄位才走共用記憶體）。
@@ -538,6 +539,13 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
     - **為什麼**：整合的問題（啟動、旗標、兩邊的 thread 怎麼接）最早碰到；3b 在 3c 前面，因為任何真的頁面都要 body，而沒有 GPU 時像素本來就走訊息，3b 做完 headless 就能跑；3e 要等基本功能都在才定得了；量測照原本的規劃放最後。
     - **不選先把單一 process 的模式改成 Browser 只有一條 IO thread**：動到現在全部測試都在跑的路，而「單一 process 時要不要連 IO thread 都拿掉」還沒定（「待決定」）。3a 只讓多 process 的模式用一條，單一 process 的先不動。
     - 對照 Chromium：平常是多個 process，`--single-process` 是測試和除錯用的；renderer 的入口是 `RendererMain`，child 的 IO thread 由 `ChildProcess` 建。
+    - **2026-11-22 調整（3c 開始前；使用者確認的）：tile「只複製一次」從 3c 移到 3e 之後，後面的往後挪**。原因是開始 3c 時試出來的事實：renderer process 的 tile 現在就上得了 GPU（像素是訊息裡的一段位元組，codec 自己處理），只是比第 24 條定的多複製兩次（compositor 送的時候一次、Browser 的 IO thread 解碼時一次）。所以 3c 變成守住現狀，「只複製一次」是新的 3f：
+        - 3c：renderer process 加 GPU 的測試、補上 3a 留下的 mutant、文件記明現在複製三次。
+        - 3d、3e 不變。
+        - 3f（新的）：tile 只複製一次（`ipc` 把 region 借出去畫、compositor 的像素池從 region 切、Viz 從共用記憶體直接上傳、region 不夠時怎麼要）。
+        - 3g：trace 和量測（原本的 3f；3f 做之前先量一次現況）。
+        - 3h：sandbox 的探測和階段的檢查（原本的 3g）。
+    - **為什麼「只複製一次」不現在做**：它動到畫面那條路，3e 之後 reftest、WPT 和情境才能在多 process 底下守著它；把 region 借給 Viz 之後 renderer 當掉怎麼收回，是 3d 的規則，先有再接；排在量測之前，做之前和做之後各量一次，省了多少是量出來的。現在補的測試到時候就是它的回歸測試。沒有任何一段在等它。第 24 條的驗收條件（跨 process 也只複製一次）不改，由 3f 達成；這份 RFC 結束前要做到。
 57. **3a 的幾件事**（2026-11-22，第 3 階段的 3a；逐項列出選項、使用者選的）：
     - **程式放進現有的 crate**：child 那一側（入口函式、IO thread）在 `renderer`，Browser 啟動 child、接上通道的那一段在 `browser`（`RenderProcessHost` 旁邊），兩邊共用的在 `protocol`；`shell` 的 `main` 只認 `--type=renderer`、選好 script engine、呼叫 `renderer` 的入口。理由：`renderer` 和 `browser` 本來就依賴 `ipc`；`browser` 的整合測試可以把自己再執行一次當 child，不必先編好整個 `machopo`；script engine 還是 `shell` 選，`renderer` 維持和 engine 無關。不選新開一個 `child` crate（Chromium 的 `content/child`）：現在只有一種 child，哪些算共用是猜的，有第二種（GPU process）時再從 `renderer` 搬出來。不選都放 `shell`：`browser` 的測試啟動不了 child，而且啟動 renderer 是 `browser` 的事。
     - **旗標是控制通道上的第一則訊息，命令列只有 `--type=renderer`**（改掉「啟動」和「要改的地方」原本寫的命令列）：child 拿到它那一端之後等第一則訊息（`RendererFlags` 和「Viz 有沒有 GPU」），再開 renderer 的 thread。理由：型別照 serde 走，加欄位不用改傳遞的程式，沒有長度和跳脫的問題；`browser` 的測試把自己再執行一次當 child，測試的執行檔不認得多的命令列參數，旗標走通道的話測試的 child 和真的 child 走同一條路；之後執行中要改的設定也是通道上的訊息。代價：`ps` 看不到每個 renderer 的設定；child 要等到第一則訊息才開始。`--type=renderer` 留在命令列：之後的 sandbox 要在讀任何東西之前靠它知道自己是哪種 process。不選每個欄位一個 switch（Chromium 對啟動時不變的設定的做法：10 個欄位各寫一次轉換，漏改不會編譯失敗）；不選命令列一個序列化好的參數（看不懂，而且有長度上限）。

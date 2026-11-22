@@ -4,8 +4,8 @@
 # hears the other go.
 #
 # Not here, and why:
-# - `ChildInit::gpu` (whether Viz has a GPU): tiles on the GPU from a
-#   renderer process are the next step but one's; no test has one yet.
+# - `ChildInit::gpu` (whether Viz has a GPU): no test had a renderer
+#   process with one yet. Step 3c's list has it.
 # - `end_child`'s kill of a process that didn't exit when asked: the tests'
 #   renderers do exit. With the step that ends a process for cause.
 # - The browser's end made as a renderer's (`control_channel::config(false)`
@@ -15,6 +15,8 @@
 #   tiles in shared memory needs it, and a renderer that attaches a handle
 #   is refused only by the right setting: that step's and the bad-message
 #   step's tests are to catch it.
+#   Caught since step 3c (its list has it): what the browser sends that is
+#   large is seen to go by a region.
 test = ["sh", "-c", "timeout 600 cargo test -q -p browser --test it -- renderer_process && timeout 900 cargo test -q -p shell --test it -- renderer_process"]
 timeout = 1800
 

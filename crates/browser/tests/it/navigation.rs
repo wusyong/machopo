@@ -411,7 +411,7 @@ pub(crate) fn tab_launched(
 /// whenever the renderer wants one, back to back (unless `held`), and
 /// hands the renderer's messages to the tab meanwhile, so a test can see
 /// when the renderer stops asking.
-struct DrivenViz {
+pub(crate) struct DrivenViz {
     begin_frames: BeginFrameSource,
     viz_rx: Receiver<VizMsg>,
     frame_time: f64,
@@ -420,19 +420,19 @@ struct DrivenViz {
     /// While set, no `BeginFrame` goes out: nothing new is drawn.
     held: bool,
     /// The tokens of the frames the renderer submitted.
-    frames: Vec<u64>,
+    pub(crate) frames: Vec<u64>,
     /// The resources (rastered tiles) of each frame, by token.
     resources: HashMap<u64, Vec<u64>>,
     /// The shared images the renderer made and hasn't destroyed, by its
     /// numbers for them.
-    shared_images: HashSet<u64>,
+    pub(crate) shared_images: HashSet<u64>,
     /// The navigations whose load finished, whichever wait saw it: a wait
     /// for something else takes the renderer's messages too.
     loaded: HashSet<u64>,
 }
 
 impl DrivenViz {
-    fn new(viz_rx: Receiver<VizMsg>, begin_frames: BeginFrameSource) -> Self {
+    pub(crate) fn new(viz_rx: Receiver<VizMsg>, begin_frames: BeginFrameSource) -> Self {
         Self {
             begin_frames,
             viz_rx,
@@ -454,7 +454,7 @@ impl DrivenViz {
 
     /// Runs Viz until `done` (asked before each step, and with each of the
     /// renderer's messages) says so. Panics after `TIMEOUT`, naming `what`.
-    fn run_until(
+    pub(crate) fn run_until(
         &mut self,
         web_contents: &mut WebContents,
         host_rx: &Receiver<ContentsEvent>,
@@ -538,7 +538,11 @@ impl DrivenViz {
 
     /// Runs Viz until the latest navigation has loaded: at once if an
     /// earlier wait saw it load.
-    fn until_loaded(&mut self, web_contents: &mut WebContents, host_rx: &Receiver<ContentsEvent>) {
+    pub(crate) fn until_loaded(
+        &mut self,
+        web_contents: &mut WebContents,
+        host_rx: &Receiver<ContentsEvent>,
+    ) {
         let latest = web_contents.latest_navigation_id();
         self.run_until(web_contents, host_rx, "the load", |viz, _| {
             viz.loaded.contains(&latest)
@@ -1205,13 +1209,13 @@ fn the_gpu_crash_url_loses_the_gpu_and_navigates_nowhere() {
 /// shared images (by messages, which `DrivenViz` takes); `lose` plays Viz
 /// losing the device.
 #[derive(Default)]
-struct RecordingGpu {
+pub(crate) struct RecordingGpu {
     observers: Mutex<Vec<Weak<dyn ContextLostObserver>>>,
 }
 
 impl RecordingGpu {
     /// Tells the observers still there; how many.
-    fn lose(&self) -> usize {
+    pub(crate) fn lose(&self) -> usize {
         let observers: Vec<_> = {
             let observers = self.observers.lock().unwrap();
             observers.iter().filter_map(Weak::upgrade).collect()

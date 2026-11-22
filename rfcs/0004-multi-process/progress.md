@@ -43,11 +43,12 @@
 | 3b：導覽的 body 的管道跨 process，分成兩小段（第 58 條） | 完成 | 2026-11-22 |
 | 3b-1：`ipc` 的 codec 認得管道（`Consumer` 能序列化） | 完成 | 2026-11-22 |
 | 3b-2：`protocol` 拿掉 `#[serde(skip)]`，`browser` 和 `renderer` 接上 | 完成 | 2026-11-22 |
-| 3c：tile 走共用記憶體 | 未開始 | |
+| 3c：守住現狀：renderer process 的 tile 已經上得了 GPU（多複製兩次）；測試、3a 留下的 mutant、文件（2026-11-22 調整，第 56 條） | 完成 | 2026-11-22 |
 | 3d：process 不在了（當掉、被 kill、壞訊息、`about:crash`） | 未開始 | |
 | 3e：整套測試哪些用多個 process 跑；處理訊息的物件和 body 的管道的 fuzz target | 未開始 | |
-| 3f：trace；量每個 frame 的延遲和 IO thread 每一步的時間 | 未開始 | |
-| 3g：macOS 上 sandbox 的探測；第 3 階段的檢查和文件 | 未開始 | |
+| 3f：tile 只複製一次（第 24 條的驗收條件；原本的 3c） | 未開始 | |
+| 3g：trace；量每個 frame 的延遲和 IO thread 每一步的時間（3f 之前先量一次現況） | 未開始 | |
+| 3h：macOS 上 sandbox 的探測；第 3 階段的檢查和文件 | 未開始 | |
 
 ## 驗收
 
@@ -634,5 +635,18 @@ branch `0004-linux`，從 `0004` 的 2e-7（`82a4fc7`）分出去。
 - **mutation test**（`mutants-3b2.toml`）2 個，都抓到：把 `#[serde(skip)]` 放回去；renderer 那一端不准 Browser 開管道。後者是 3a 那時看不出來的同一類（兩端的設定），現在有管道就看得出來了；「Browser 那一端照 renderer 的設定建」還是看不出來，等 3c。跑完確認檔案還原。
 - **跑過的檢查**：`cargo test -p ipc -p protocol -p renderer -p browser -p shell`（都過）；`cargo clippy` 六個 crate `--all-targets -- -D warnings`；`cargo fmt --check`；`sanity.py` 的 7 項。
 - **這次才發現的**：clippy 在 `renderer_process.rs` 找到兩處（多餘的借用、只有一個分支的 `match`），是 3a 最後補的三個測試裡的。3a 那時 clippy 是在補那幾個測試之前跑的，之後沒有再跑，就 commit 了。這一段修掉。之後的做法：最後一次改程式之後再跑一次 clippy，不只是「跑過」。
+- **沒有驗到的**：Linux 和 Windows。
+
+### 3c：守住 renderer process 現在對 tile 和大資料做的事（2026-11-22，macOS 26、Apple M4）
+
+- **決定**：第 56 條的調整（「只複製一次」移到 3e 之後的 3f；使用者確認的，這份 RFC 結束前要做到）。
+- **開始時試出來的**：我原本以為有 GPU 時 renderer process 的 tile 過不去。寫了一個暫時的測試（試完還原）：過得去。`CreateSharedImage` 的像素是訊息裡的位元組，codec 照一般的大位元組處理。所以 3c 沒有功能要做，要做的是把現況用測試守住、把和第 24 條的差距寫清楚。
+- **現在實際的路**（讀程式確認的）：
+  - renderer → Browser 的大資料（tile 的像素、blob）：Browser 沒有給 renderer 可以寫的 region（沒有人呼叫 `grant_to_peer`），所以都放在訊息裡。像素複製三次：compositor 序列化時、Browser 的 IO thread 解碼時、Viz 交給 GPU 時。
+  - Browser → renderer 的大資料（子資源的回應）：Browser 需要時自己建 region，renderer 讀出來之後還回去重複用。
+- **做了什麼**：`WebContents::renderer_shared_memory()`（Browser 替那個 renderer process 留的 region 的總量和空的塊數；測試要看，之後列出每個 process 用多少記憶體時也用得到）；測試的輔助型別（`DrivenViz`、`RecordingGpu`）開放給同一個測試 binary 的其他模組。
+- **測試**（`crates/browser/tests/it/renderer_process.rs` 多 3 個，共 10 個）：renderer process 加有 GPU 的 Viz，tile 的 shared image 到、frame 也到；GPU 遺失時 Browser 經過通道告訴 compositor，舊的 shared image 都銷毀、新的再來；Browser 送一份 300 KiB 的 script 給 renderer process，script 跑了，而且 Browser 為它建了一塊 512 KiB 的 region（之前是 0）。
+- **mutation test**（`mutants-3c.toml`）3 個，都抓到：Browser 那一端照 renderer 的設定建（3a 那時漏掉的那個，現在由「大資料走 region」的測試抓到；因為它 9 秒就被抓到，另外手動套一次確認是那個測試失敗、不是編不過）；告訴 renderer process 沒有 GPU（3a 那時沒有列的那個）；`renderer_shared_memory` 回空的。3a 的清單開頭改成指向這裡。跑完確認檔案還原。
+- **跑過的檢查**（都在最後一次改程式之後跑）：`cargo test -p browser -p shell`；`cargo clippy` 六個 crate（`ipc`、`protocol`、`compositor`、`renderer`、`browser`、`shell`）`--all-targets -- -D warnings`；`cargo fmt --check`；`sanity.py` 的 7 項。
 - **沒有驗到的**：Linux 和 Windows。
 

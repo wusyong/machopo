@@ -1,0 +1,26 @@
+# Step 3c: what a renderer process already does for tiles and large data
+# is kept by tests. Two of these are back from step 3a's list, which could
+# not see them then.
+test = ["sh", "-c", "timeout 600 cargo test -q -p browser --test it -- renderer_process"]
+timeout = 1500
+
+[[mutant]]
+name = "the browser's end is made as a renderer's"
+file = "crates/browser/src/render_process_host.rs"
+from = '''endpoint::endpoint(channel, control_channel::config(true))'''
+to = '''endpoint::endpoint(channel, control_channel::config(false))'''
+
+[[mutant]]
+name = "a renderer process is told Viz has no GPU"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                let init = ChildInit {
+                    flags,
+                    gpu: gpu.is_some(),
+                };'''
+to = '''                let init = ChildInit { flags, gpu: false };'''
+
+[[mutant]]
+name = "a tab says it keeps no shared memory for its renderer process"
+file = "crates/browser/src/render_process_host.rs"
+from = '''        self.child.as_ref().map(|(_, link)| link.regions())'''
+to = '''        self.child.as_ref().map(|_| (0, 0))'''

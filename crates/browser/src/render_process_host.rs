@@ -418,6 +418,13 @@ impl RenderProcessHost {
         self.child.as_ref().map(|(child, _)| child.id())
     }
 
+    /// The shared memory this end keeps for what it sends a renderer
+    /// process (the regions its large data goes by): their bytes, and how
+    /// many of them are free. None for a renderer in this process.
+    pub(crate) fn shared_memory(&self) -> Option<(usize, usize)> {
+        self.child.as_ref().map(|(_, link)| link.regions())
+    }
+
     /// Which renderer it is, as its messages say.
     pub(crate) fn id(&self) -> RendererId {
         RendererId(self.renderer_id)
