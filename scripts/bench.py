@@ -102,8 +102,9 @@ def main() -> int:
                         help="headless: the device scale factor (default 2, a high-DPI screen's)")
     raster.add_argument("--raster-threads", type=int,
                         help="machopo's --num-raster-threads (default: machopo's, 1)")
-    raster.add_argument("--process-per-tab", action="store_true",
-                        help="the tab's renderer in a process of its own (machopo's --process-per-tab)")
+    raster.add_argument("--single-process", action="store_true",
+                        help="the tab's renderer in machopo's own process (machopo's --single-process), not the "
+                        "process of its own it is by default")
     raster.add_argument("--binary", help="measure this machopo (another commit's build), not this tree's")
     raster.add_argument("--name", help="keep the results in target/bench/raster/NAME/, to compare runs")
     raster.set_defaults(func=cmd_raster)

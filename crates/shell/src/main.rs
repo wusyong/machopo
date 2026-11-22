@@ -95,11 +95,11 @@ Options:
                       are the viewport times F, in physical pixels.
   --test-fonts        Use only the built-in test fonts: Ahem, and Lato for
                       every generic family, as the reftests do.
-  --single-process    Every tab's renderer is threads of machopo's own
-                      process, as Chromium's switch. The default.
   --process-per-tab   Each tab's renderer is a process of its own (machopo
                       started again with --type=renderer), which a page
-                      that crashes takes down alone.
+                      that crashes takes down alone. The default.
+  --single-process    Every tab's renderer is threads of machopo's own
+                      process, as Chromium's switch.
   --num-raster-threads N
                       Threads each page's tiles are rastered on at once, as
                       Chromium's switch (default 1: on the compositor's
@@ -205,7 +205,8 @@ struct Args {
     automation_pipe: Option<AutomationPipe>,
     /// `--num-raster-threads`; `None`: the default.
     num_raster_threads: Option<usize>,
-    /// `--process-per-tab`, and not `--single-process`.
+    /// Not `--single-process`: each tab's renderer is a process of its
+    /// own.
     process_per_tab: bool,
     /// `--remote-debugging-port` and `--remote-allow-origins`.
     remote_debugging: Option<devtools_http_handler::Options>,
@@ -343,6 +344,8 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
             "--single-process and --process-per-tab say opposite things: give one of them".into(),
         );
     }
+    // A process a tab unless told otherwise, as Chromium.
+    let process_per_tab = !single_process;
     if scale.is_some() && (!automation_pipe || pipe_window) {
         return Err(
             "--scale only applies with --automation-pipe; a window takes its scale from the \
@@ -622,15 +625,18 @@ mod tests {
     /// shows in mimalloc's own statistics, which the platform's
     /// allocator's wouldn't move.
     #[test]
-    fn renderers_are_processes_only_when_asked() {
+    fn renderers_are_processes_unless_told_otherwise() {
         let run = |args: &[&str]| match parse(args) {
             Ok(Command::Run(args)) => *args,
             other => panic!("{other:?}"),
         };
         // The default, and said outright; in a window and by the pipe.
-        assert!(!run(&["about:blank"]).process_per_tab);
+        assert!(run(&["about:blank"]).process_per_tab);
+        assert!(run(&["--automation-pipe"]).process_per_tab);
+        assert!(run(&["--automation-pipe", "--window"]).process_per_tab);
         assert!(!run(&["--single-process"]).process_per_tab);
-        assert!(!run(&["--automation-pipe"]).process_per_tab);
+        assert!(!run(&["--automation-pipe", "--single-process"]).process_per_tab);
+        assert!(!run(&["--automation-pipe", "--window", "--single-process"]).process_per_tab);
         assert!(run(&["--process-per-tab"]).process_per_tab);
         assert!(run(&["--automation-pipe", "--process-per-tab"]).process_per_tab);
         assert!(run(&["--automation-pipe", "--window", "--process-per-tab"]).process_per_tab);
@@ -668,7 +674,7 @@ mod tests {
         assert!(args.automation_pipe.is_none());
         assert!(!args.test_fonts);
         assert_eq!(args.num_raster_threads, None);
-        assert!(!args.process_per_tab);
+        assert!(args.process_per_tab);
         assert_eq!(parse(&["x", "--help"]), Ok(Command::Help));
         assert_eq!(parse(&["-h"]), Ok(Command::Help));
     }

@@ -50,7 +50,7 @@
 | 3e-2：整套測試在多 process 底下跑一遍、修壞的；處理訊息的物件和 body 的管道的 fuzz target | 未開始 | |
 | 3f：tile 只複製一次（第 24 條的驗收條件；原本的 3c） | 完成（Linux 等 push 之後的 CI，Windows 還沒編過） | 2026-11-22 |
 | 3g：trace；量每個 frame 的延遲和 IO thread 每一步的時間（3f 之前的現況是事後補量的） | 完成（只量不改；要不要接著改等使用者決定） | 2026-11-22 |
-| 3h：macOS 上 sandbox 的探測；第 3 階段的檢查和文件 | 未開始 | |
+| 3h：把預設換成多 process；第 3 階段的檢查和文件（sandbox 的探測移到 sandbox 的那一份 RFC，第 69 條） | 完成（整套 WPT、reftest、wdspec 和 Windows 還沒用多 process 驗過，第 70 條） | 2026-11-22 |
 
 ## 驗收
 
@@ -850,3 +850,24 @@ branch `0004-linux`，從 `0004` 的 2e-7（`82a4fc7`）分出去。
   - GPU 的緩衝區：先不改（第 67 條），上面兩段是依據。
   - 一開始給幾塊共用記憶體：維持 16 塊（第 68 條）。
   - IO thread 的複製通用化：數字看不出必要，沒有列成選項；記在「待決定」那一項底下。
+
+### 3h：預設換成多 process，和第 3 階段的檢查（2026-11-22，macOS 26、Apple M4）
+
+- **決定**：「已決定的事項」第 69 條（sandbox 的探測移到 sandbox 的那一份 RFC；使用者提的）、第 70 條（預設現在就換，不等整套測試先跑過；使用者選的，我建議的是等）。
+- **做了什麼**：
+  - `machopo` 的視窗和 automation pipe 預設每個分頁一個 renderer process；`--single-process` 換回去；`--process-per-tab` 還收，就是預設。`shell` 的函式庫的預設沒有變（在測試的 process 裡建分頁的照舊）。
+  - 測試和工具的開關反過來：環境變數 `MACHOPO_PROCESS_PER_TAB` 改成 `MACHOPO_SINGLE_PROCESS`（`shell` 的 pipe 測試、視窗的情境、WPT 的 product 看它），`test.py` 的 `--process-per-tab` 改成 `--single-process`，`nightly.yml` 手動開始時的輸入改成 `single_process`，`bench.py raster` 的 `--process-per-tab` 改成 `--single-process`。
+  - 文件：`architecture.md`、`limitations.md`、`testing.md`、`benchmarks.md`、`crates/shell/README.md`、`machopo --help`；RFC 的「單一 process 的模式」改寫，「待決定」拿掉已經定了的兩項（哪些模式預設多 process、哪幾套測試用多 process 跑）。
+- **換了之後跑的**（都在最後一次改程式之後）：
+  - `cargo test -p shell`：635 個全過（pipe、DevTools、WebDriver 的測試現在都是多 process 跑的）；`MACHOPO_SINGLE_PROCESS=1` 再跑一次：635 個全過。
+  - `cargo test -p driver`：過。
+  - `test.py wpt dom/events`（改了 WPT 的 product 所以要跑）：預設和 `--single-process` 各一次，都是 1069 項檢查、同樣 4 個意外的結果（3e-1 就有的那幾個意外通過）。
+  - `test.py reftest tests/reftests/backgrounds`：過。
+  - `scripts/bench/raster/raster_test.py`：12 個過。
+  - **開關真的有換到另一種模式**（手動看的，測試的結果兩種模式都過所以看不出來）：跑 pipe 測試時數 `--type=renderer` 的 process，預設最多同時 11 個，`MACHOPO_SINGLE_PROCESS=1` 時 3 個。那 3 個來自不看這個變數的地方：`automation_pipe.rs` 裡直接啟動第二個 `machopo` 的那個測試。`remote_debugging.rs` 和 `webdriver.rs` 也自己啟動 `machopo`、不看這個變數，所以它們一律是預設的多 process。WPT 的 product 用 Python 直接呼叫確認：設了才加 `--single-process`。
+- **mutation test**（`mutants-3h.toml`）2 個，都抓到（預設沒換、`--single-process` 收下但不生效）；跑完確認檔案還原。
+- **第 3 階段的檢查**（階段做完時跑的那三項）：`cargo test --workspace` 沒有失敗；`cargo fmt --check` 過；`cargo clippy --workspace --all-targets -- -D warnings` 沒有東西。`sanity.py` 的 7 項過。
+- **push 之後的 CI**：`49c7aa0`（3g 的最後一個 commit）全綠。
+- **真的視窗**（使用者開了顯示器之後；Metal）：`test.py scenarios --window`，沒有加任何旗標，72 個情境全部通過；72 份 `machopo.log` 都有「a renderer process ended」（走的是新的預設），沒有一份有 `ERROR` 或 panic。
+- **沒有驗到的**（第 70 條寫的）：整套 WPT、reftest、wdspec 用多 process，第一次是這個 commit 之後每天的 CI；Linux 上 `shell` 的 pipe 測試用多 process 跑，第一次是 push 之後的 CI；Windows 整個沒有；`nightly.yml` 的改動在本機驗不了。
+- **會跟著變的**：`bench.py` 的 Speedometer、blink-perf 這些經過 pipe 的量測，從這時起量的是多 process 的 `machopo`，和之前的數字比的時候要記得。

@@ -262,9 +262,10 @@ fn run_in_window(scenario: &scenario::Scenario, path: &Path, out: &Path) -> Resu
         .map_err(|e| failure(format!("{}: {e}", out.display())))?;
     let mut child = Process::new(env!("CARGO_BIN_EXE_machopo"))
         .args(["--automation-pipe", "--window"])
-        // Each tab's renderer in a process of its own, when the run asks
-        // (`test.py scenarios --window --process-per-tab`).
-        .args(std::env::var_os("MACHOPO_PROCESS_PER_TAB").map(|_| "--process-per-tab"))
+        // Each tab's renderer in machopo's own process, when the run asks
+        // (`test.py scenarios --window --single-process`); by default it
+        // is a process of its own.
+        .args(std::env::var_os("MACHOPO_SINGLE_PROCESS").map(|_| "--single-process"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(log)

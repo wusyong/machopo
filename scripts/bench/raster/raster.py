@@ -36,9 +36,9 @@ a renderer process's messages (`ChannelHost::OnMessage`; there is none
 with the renderer in the browser's process), what Viz spends putting
 tiles on the GPU and drawing, and, from the log, each frame's time from
 the compositor's `frame submitted` to Viz's `frame arrived` and `frame
-drawn` of the same token. With `--process-per-tab` the renderer is a
-process of its own, whose trace is a file of its own beside the
-browser's; `--binary` measures another build of machopo (an older
+drawn` of the same token. The renderer is a process of its own
+(machopo's default), whose trace is a file of its own beside the
+browser's; with `--single-process` it is threads of the browser's; `--binary` measures another build of machopo (an older
 commit's), and `--name` keeps each run's results in a folder of its own.
 
 Standard library only (with `speedometer.py`'s pipe, server and trace
@@ -133,9 +133,9 @@ def renderer_traces(trace: Path) -> list[Path]:
 
 
 def run_page(binary: Path, url: str, folder: Path, name: str, window: bool, scale: float,
-             raster_threads: int | None = None, process_per_tab: bool = False) -> dict:
+             raster_threads: int | None = None, single_process: bool = False) -> dict:
     """`url` in machopo (with `--num-raster-threads raster_threads`, if given;
-    the renderer a process of its own if `process_per_tab`),
+    the renderer threads of the browser's process if `single_process`),
     scrolled then resized: each phase's span, on the trace's clock and the
     wall clock (the log's), and where its trace and log are."""
     trace = folder / f"{name}.pftrace"
@@ -145,7 +145,7 @@ def run_page(binary: Path, url: str, folder: Path, name: str, window: bool, scal
     env = {**os.environ, "MACHOPO_TRACE": str(trace), "RUST_LOG": "info,compositor=debug,viz=debug"}
     arguments = [str(binary), "--automation-pipe", *(["--window"] if window else ["--scale", str(scale)]),
                  *(["--num-raster-threads", str(raster_threads)] if raster_threads else []),
-                 *(["--process-per-tab"] if process_per_tab else [])]
+                 *(["--single-process"] if single_process else [])]
     phases = {}
     with open(log_path, "w", encoding="utf-8") as log:
         process = subprocess.Popen(arguments, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, env=env)
@@ -343,7 +343,7 @@ def analyze(run: dict) -> dict:
 
 
 def write_report(results: dict[str, dict], env: dict, window: bool, scale: float,
-                 raster_threads: int | None = None, process_per_tab: bool = False, folder: Path | None = None,
+                 raster_threads: int | None = None, single_process: bool = False, folder: Path | None = None,
                  binary: Path | None = None) -> Path:
     """`raster.md`: for each page and phase, the content updates
     (`PrepareTiles`), the raster's total and each update's mean and
@@ -354,7 +354,7 @@ def write_report(results: dict[str, dict], env: dict, window: bool, scale: float
         "",
         f"{date.today().isoformat()}, "
         f"{f'machopo at `{binary}`' if binary else f'machopo {speedometer.git_head()} (the `perf` profile)'}, "
-        f"{'a renderer process for the tab' if process_per_tab else 'the renderer in the browser\'s process'}, "
+        f"{'the renderer in the browser\'s process' if single_process else 'a renderer process for the tab'}, "
         f"{'a real window' if window else f'headless, device scale factor {scale:g}'}, "
         f"{f'{raster_threads} raster threads' if raster_threads else 'the default raster threads'}; "
         f"{env['os']}, {env['cpu']}, power: {env['power']}. "
@@ -451,10 +451,10 @@ def cmd_raster(args) -> int:
             kind, where = PAGES[name]
             print(f"  {name}")
             results[name] = analyze(run_page(binary, page_url(kind, where, server), folder, name, args.window,
-                                             args.scale, args.raster_threads, args.process_per_tab))
+                                             args.scale, args.raster_threads, args.single_process))
     finally:
         server.close()
-    report = write_report(results, env, args.window, args.scale, args.raster_threads, args.process_per_tab, folder,
+    report = write_report(results, env, args.window, args.scale, args.raster_threads, args.single_process, folder,
                           Path(args.binary) if args.binary else None)
     print(report.read_text(encoding="utf-8"))
     return 0

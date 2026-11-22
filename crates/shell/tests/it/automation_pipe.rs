@@ -20,8 +20,10 @@ use protocol::automation::{
 };
 use serde_json::{Value, json};
 
-/// Set to run these tests with `machopo --process-per-tab`.
-const PROCESS_PER_TAB: &str = "MACHOPO_PROCESS_PER_TAB";
+/// Set to run these tests with `machopo --single-process`: each tab's
+/// renderer threads of machopo's own process, not the process of its own
+/// it is by default.
+const SINGLE_PROCESS: &str = "MACHOPO_SINGLE_PROCESS";
 
 /// The switches that say where a tab's renderer runs.
 const PROCESS_SWITCHES: [&str; 2] = ["--process-per-tab", "--single-process"];
@@ -74,13 +76,13 @@ impl Browser {
     fn start_in(args: &[&str], env: &[(&str, &std::ffi::OsStr)], stderr: Stdio) -> Self {
         let mut child = Process::new(env!("CARGO_BIN_EXE_machopo"))
             .args(["--automation-pipe", "--test-fonts"])
-            // The same tests with each tab's renderer in a process of its
-            // own, when the run asks for it (but for a test that says
+            // The same tests with each tab's renderer in machopo's own
+            // process, when the run asks for it (but for a test that says
             // which itself).
             .args(
-                std::env::var_os(PROCESS_PER_TAB)
+                std::env::var_os(SINGLE_PROCESS)
                     .filter(|_| !args.iter().any(|arg| PROCESS_SWITCHES.contains(arg)))
-                    .map(|_| "--process-per-tab"),
+                    .map(|_| "--single-process"),
             )
             .args(args)
             .envs(env.iter().copied())

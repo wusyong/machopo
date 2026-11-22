@@ -112,7 +112,7 @@ paint 的快取另外由測試的 harness 守著（`paint` 的 `paint_controller
 | --- | --- | --- |
 | `MACHOPO_UPDATE_EXPECTATIONS` | `test.py wpt`、`reftest`、`wdspec` | 設了（任何值）就把跑出來的結果寫成預期結果：wptrunner 的 `.ini`（WPT 的在 `tests/wpt/metadata/`，machopo 自己的 reftest 的在 `tests/reftests/` 的 `metadata` 目錄，全部通過的刪掉），別的平台的條件、`disabled` 和註解留著。之後檢查 diff。 |
 | `MACHOPO_WPT_TIMEOUT_MULTIPLIER` | `test.py wpt`、`reftest`、`wdspec` | 正數：每個測試的逾時乘上它（wptrunner 的 `--timeout-multiplier`），慢的機器用。 |
-| `MACHOPO_PROCESS_PER_TAB` | `test.py wpt`、`reftest`、`wdspec`、`scenarios --window` 的 `--process-per-tab` 設的；`shell` 的 pipe 測試（`cargo test -p shell --test it -- automation_pipe`）也看它 | 設了：`machopo` 加 `--process-per-tab`，每個分頁的 renderer 是自己的 process。每天的 CI 不設；手動開始那個 workflow 時可以選 |
+| `MACHOPO_SINGLE_PROCESS` | `test.py wpt`、`reftest`、`wdspec`、`scenarios --window` 的 `--single-process` 設的；`shell` 的 pipe 測試（`cargo test -p shell --test it -- automation_pipe`）也看它 | 設了：`machopo` 加 `--single-process`，每個分頁的 renderer 在 `machopo` 自己的 process 裡，不是預設的自己一個 process。每天的 CI 不設；手動開始那個 workflow 時可以選 |
 | `MACHOPO_UPDATE_GOLDEN` | `dom_wasm` 的 `wit` | 設了就用目前的宣告表重寫 `crates/dom_wasm/wit/machopo-dom.wit`，之後檢查 diff（`crates/dom_wasm/README.md`）。 |
 | `MACHOPO_SLOW_TESTS` | `shell` 的 `scenarios` | 設了才跑情境；`test.py scenarios` 會設，`cargo test --workspace` 不跑它們。 |
 | `MACHOPO_TEST_SEED` | `bindings` 的 `cppgc_traced_marking` | 亂數種子，十進位或 `0x` 開頭的十六進位；測試會印出用到的種子，失敗時拿來重播。 |

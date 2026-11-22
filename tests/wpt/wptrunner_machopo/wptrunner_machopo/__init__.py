@@ -38,10 +38,11 @@ def machopo_args(ca_cert_path):
     args = ["--test-fonts", "--host-resolver-rules", HOST_RESOLVER_RULES]
     if ca_cert_path:
         args += ["--additional-trust-anchors", ca_cert_path]
-    # The same run with each tab's renderer in a process of its own, when
-    # the environment asks (`test.py`'s `--process-per-tab`).
-    if os.environ.get("MACHOPO_PROCESS_PER_TAB"):
-        args.append("--process-per-tab")
+    # The same run with each tab's renderer in machopo's own process, when
+    # the environment asks (`test.py`'s `--single-process`); by default it
+    # is a process of its own.
+    if os.environ.get("MACHOPO_SINGLE_PROCESS"):
+        args.append("--single-process")
     return [part for arg in args for part in ("--binary-arg", arg)]
 
 

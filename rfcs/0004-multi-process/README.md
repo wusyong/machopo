@@ -208,7 +208,7 @@ sandbox 不在這份裡，但這份的設計要讓它之後鎖得緊：sandbox �
 
 - **IPC 的那一半驗證過了**：原型的 child 一開始就進只開這三樣的 sandbox，rendezvous、控制通道、共用記憶體都可以（`prototype/README.md`）。
 - **renderer 自己的那一半還沒有**：原型的 child 很小，讀字型是直接打開一個檔案。machopo 真的 renderer 在 macOS 上經過 CoreText 列出系統的字型（fontique 的 `coretext` backend），CoreText 可能要連系統的字型服務，那就不是開放字型目錄能解決的；V8 的 JIT、wasmtime、elise 的 worker pool 在 `deny default` 底下各自要什麼，也還不知道。
-- **第 3 階段加一個只給測試用的探測**（2026-11-20，「測試」和「分階段」）：macOS 上讓真的 renderer process 在原型那份最緊的 profile 底下啟動、載入一個頁面，記下它被擋了什麼。不是做 sandbox：不出貨、不比較做法、只有 macOS。產出是一張「真的 renderer 在 sandbox 裡還需要這幾樣」的清單，是之後那份 RFC 的起點；清單裡有會改這份的設計的東西（例如字型要改由 Browser 交給 renderer，那是新的訊息和一塊共用記憶體）時，在這份裡就處理或記下，不等到下一份才回頭改。
+- ~~第 3 階段加一個只給測試用的探測~~（2026-11-22 移到 sandbox 的那一份 RFC，第 69 條；下面是原本的計畫，留給那一份）：macOS 上讓真的 renderer process 在原型那份最緊的 profile 底下啟動、載入一個頁面，記下它被擋了什麼。不是做 sandbox：不出貨、不比較做法、只有 macOS。產出是一張「真的 renderer 在 sandbox 裡還需要這幾樣」的清單，是之後那份 RFC 的起點；清單裡有會改這份的設計的東西（例如字型要改由 Browser 交給 renderer，那是新的訊息和一塊共用記憶體）時，在這份裡就處理或記下，不等到下一份才回頭改。
 
 ### process 當掉
 
@@ -220,7 +220,7 @@ sad tab、重新載入和 `about:crash` 已經有了，現在由 renderer 的 th
 
 ### 單一 process 的模式
 
-`--single-process`，以及 headless 和測試的預設。renderer 的程式不知道自己在哪種模式。訊息直接走 crossbeam，大的資料是 `Arc`：不序列化、不經過 `ipc`，不付 IPC 的成本。IPC 那條路因此不在這個模式的測試裡，由用多個 process 跑的整套測試守著（「測試」）。
+`--single-process`。`machopo` 的視窗和 automation pipe 預設是多 process（第 70 條）；情境沒有平台視窗的版本、`cargo test` 裡直接建分頁的測試和 headless 的跑法一直是這個模式（測試的執行檔當不了 renderer）。renderer 的程式不知道自己在哪種模式。訊息直接走 crossbeam，大的資料是 `Arc`：不序列化、不經過 `ipc`，不付 IPC 的成本。IPC 那條路由每天用多 process 跑的整套測試守著，這個模式由 `cargo test` 裡的那些守著（「測試」）。
 
 renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 佇列。Browser 這一側的 `Chrome_IOThread` 在這個模式也在（現在就是這樣），它等的是 crossbeam，推的是同一個處理訊息的物件（「架構」）；要不要連它也拿掉見「待決定」。
 
@@ -261,7 +261,7 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
 - **單一 process 的測試照舊**：`DrivenViz`、reftest、`shell` 的端到端測試都不改，證明新的訊息（`ReturnResources`、`DestroySharedImage`）在同一個 process 裡行為一樣。
 - **整套的測試用多個 process 跑**：單一 process 的模式不經過 `ipc`，所以 CI 另外用多個 process 跑整套的測試。WPT 經過 machopodriver 啟動真的 `machopo`，讓它開 renderer process 就行；其他幾套見「待決定」。連啟動都算在內。
 - **跨 process 的端到端測試**（`cargo test` 裡的少數幾個）：啟動真的 child process，載入一個頁面、點一下、捲一下；`about:crash` 之後 Browser 還在、分頁是 sad tab、重新載入可以恢復。另外確認 Browser 收回的 region 不會出現在別的 renderer 手上。
-- **sandbox 的探測**（只有 macOS，只給測試用；「為 sandbox 留的條件」）：一個只有測試會給的旗標讓 renderer process 一開始就進最緊的 profile（查 rendezvous 的名字、讀系統字型的目錄、讀執行檔），載入一個有文字、圖片和 script 的頁面。測試不要求它通過：它把被擋的東西（sandbox 的拒絕紀錄、頁面有沒有畫出來）寫成清單，清單記進 `progress.md`。之後清單變長時（renderer 多要了一樣東西）測試會失敗，要人看過才更新。
+- ~~sandbox 的探測~~（2026-11-22 移到 sandbox 的那一份 RFC，第 69 條；原本的計畫：只有 macOS，只給測試用；「為 sandbox 留的條件」）：一個只有測試會給的旗標讓 renderer process 一開始就進最緊的 profile（查 rendezvous 的名字、讀系統字型的目錄、讀執行檔），載入一個有文字、圖片和 script 的頁面。測試不要求它通過：它把被擋的東西（sandbox 的拒絕紀錄、頁面有沒有畫出來）寫成清單，清單記進 `progress.md`。之後清單變長時（renderer 多要了一樣東西）測試會失敗，要人看過才更新。
 - **只能手動確認的**：活動監視器裡的 process，記進 `docs/test-gaps.md` 的「只做過手動確認」。
 - **工具碰不到的**：平台層的 FFI 只有跨 process 的測試和審查；kernel 的行為是假設。記進 `docs/test-gaps.md`。
 
@@ -272,7 +272,7 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
 0. **整理邊界**（2026-10-06 做完，`progress.md`）：邊界的規則和檢查；修掉 context lost 的 observer、`RendererFlags` 的函式指標、能送給任何 `FrameSinkId` 的 sender。
 1. **message 化，還是單一 process**（2026-11-21 做完，分成 1a 到 1d，`progress.md`）：tile 的交接改成訊息（拿掉 `SharedImage` 的 backing，加上 `ReturnResources` / `DestroySharedImage`、Viz 的 mailbox 表）、`protocol` 的 bytes 型別；Browser 處理一個 renderer 的訊息的邏輯從 `Chrome_IOThread` 的迴圈抽成物件。現有的測試全部照舊通過。
 2. **`ipc` crate**：核心（先做，經過假通道就能測）、平台層（Linux 的 socket 的緩衝區和大的資料的門檻，第 44、45 條）、控制通道、帶 handle 的序列化、Browser 配共用記憶體和編號的表；用測試自己的 child process 測，包括惡意的對端。這個階段把驗證的工具架好（fuzz、loom 和 shuttle、Miri、Verus、TLA+ 的模型、`soundness.md`），核心的每一塊做完時它的那幾條性質就驗過。還沒接上 renderer。
-3. **啟動 child process**（每個階段的驗收包含它那一塊的驗證；這個階段加的是 body 的管道和處理訊息的物件的 fuzz target；最後做 macOS 上 sandbox 的探測）：`--type=renderer`、renderer 的 IO thread、所有訊息走控制通道、tile 走共用記憶體、導覽的 body 的管道跨 process、process 當掉。最後量捲動時每個 frame 的延遲。
+3. **啟動 child process**（每個階段的驗收包含它那一塊的驗證；這個階段加的是 body 的管道和處理訊息的物件的 fuzz target；原本最後要做的 macOS 上 sandbox 的探測移到 sandbox 的那一份，第 69 條）：`--type=renderer`、renderer 的 IO thread、所有訊息走控制通道、tile 走共用記憶體、導覽的 body 的管道跨 process、process 當掉。最後量捲動時每個 frame 的延遲。
 
 ## 缺點
 
@@ -613,6 +613,17 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
     - **理由**：退回只在一次重畫整個畫面時發生，「不夠再要」在運作；每個分頁常駐的最少（4 MiB）。
     - **不選 64 塊**：每個分頁常駐多 12 MiB，背景的分頁也佔著（還沒有收回的機制）；改大小時一個 frame 要畫上百塊，多半還是不夠，能少多少退回沒有量。**不選照視窗大小算**：蓋滿一個 1280×800、兩倍縮放的畫面約 130 塊（32 MiB），要先有背景分頁的收回才合理（「待決定」）。
     - 對照 Chromium：不預先給，每要一塊向 Browser 要一塊、等回答，用完還回去。
+69. **sandbox 的探測不在這份做，移到 sandbox 的那一份 RFC**（2026-11-22，3h 開始時；使用者提的；改掉第 18 條同一天加上的那一句和第 56 條的 3h）：第 3 階段原本最後要在 macOS 上讓真的 renderer process 在最緊的 profile 底下載入一個頁面、記下它被擋了什麼。
+    - **理由**：它回答的是「真的 renderer 在 sandbox 裡還需要什麼」，是 sandbox 那一份的第一步；這份的驗收（多 process 跑得起來、測試過、預設換掉）不靠它。
+    - **留下的風險**：「為 sandbox 留的條件」裡 renderer 自己的那一半（CoreText 列字型要不要連系統的字型服務、V8 的 JIT、wasmtime、elise 的 worker pool 在 `deny default` 底下各要什麼）這份做完時還是沒驗。探測如果發現設計要改（例如字型改由 Browser 交給 renderer），那是加一則訊息和一塊共用記憶體，現有的機制接得住，到那一份再做。
+    - **那一份開始時可以用的**：macOS 還有 `/usr/bin/sandbox-exec`（2026-11-22 在 macOS 26 上試過，能套 profile），測試可以用它包住 renderer，產品不用為探測加程式或 `unsafe`；原型的 profile 在 `prototype/src/main.rs`。
+    - 3h 剩下：把預設換成多 process、第 3 階段的檢查和文件。
+70. **預設現在就換成多 process，不等整套測試先跑過**（2026-11-22，3h；使用者選的；改掉第 59 條的「整套在多 process 底下是綠的才換」）：`machopo` 的視窗和 automation pipe 預設每個分頁一個 renderer process，三個平台都是；`--single-process` 換回去，`--process-per-tab` 留著（就是預設）。
+    - **跟著反過來的**：測試和工具的開關從「加 `--process-per-tab`」變成「加 `--single-process`」：環境變數 `MACHOPO_SINGLE_PROCESS`、`test.py` 的 `--single-process`、每天的 CI workflow 手動開始時的輸入 `single_process`、`bench.py raster` 的 `--single-process`。每天自動跑的 WPT、reftest、wdspec 從這時起就是多 process 的。
+    - **沒換的**：情境沒有平台視窗的版本、`cargo test` 裡直接建分頁的測試、headless 的那幾種跑法，都在自己的 process 裡建 renderer（測試的執行檔當不了 renderer）；`shell` 的函式庫的預設（`automation_pipe::Options` 等）不變，換的是 `machopo` 這個執行檔的參數的預設。
+    - **換的時候還沒驗到的**（使用者知道）：整套 WPT、reftest、wdspec 沒有用多 process 跑過，第一次是換了之後每天的 CI；Windows 上 `machopo` 用 renderer process 一次都沒跑過，3f、3g 的改動在 Windows 上也還沒編過。壞了的先用 `--single-process`。
+    - **不選等手動的 Nightly 綠了再換**（原本的條件，我的建議）：卡在要有人手動開始、等一輪。**不選 Windows 維持單一 process**：三個平台的預設不一樣容易忘記。
+    - 對照 Chromium：所有平台預設多 process，`--single-process` 只給除錯用。
 
 ## 待決定
 
@@ -648,8 +659,6 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
   - 沒有上限的東西：Browser 收 renderer 訊息的佇列、Browser 送給卡住的 renderer 的佇列、一個 renderer 能要的共用記憶體（「`ipc` crate」）、反序列化的巢狀深度（同上）。各要定一個數字，超過就關掉那個 renderer。
   - 處理訊息時 panic：Rust 擋得住記憶體錯誤，擋不住 `unwrap` 和越界。處理 renderer 的訊息的程式遇到不合理的內容要走壞訊息的路（`browser` 的 `BadMessageReason`），不能 panic。
   - 壞的 frame：frame 是在 Browser 裡交給 GPU 的，而 wgpu 的驗證錯誤現在會結束整個程式。Viz 收到 frame 時的檢查要涵蓋所有會走到 wgpu 的值；這一項單一 process 時就可以開始做。
-- **哪些模式預設多個 process**：看法是只有人用的視窗；headless、情境、`--automation-pipe` 和測試預設單一 process，CI 另外用多個 process 跑選定的幾套（下面的「哪幾套測試」）。
-- **哪幾套測試在 CI 上用多個 process 跑**：WPT 可以。情境和 reftest 怎麼啟動、要全部還是一部分、多花多少時間，還沒確認。
 - **Browser 的 IO thread 要不要合成一條**（2026-11-20：第 3 階段決定，那時開得了多個 renderer process、可以量；合成一條之後那條 thread 比較忙，同時重量一次訊息的 ring 值不值得，第 19 條）：現在每個 renderer 一條，分頁多的時候 thread 跟著多；Chromium 是整個 process 一條處理所有通道。IO thread 的迴圈本來就不寫死成只等一條通道（「`ipc` crate」），合起來不用改設計；量到 thread 的數量是問題時再做。
 - **背景 GC**：拆 process、有背景分頁時，V8 的 heap 在背景要不要 concurrent GC。
 

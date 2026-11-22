@@ -799,11 +799,12 @@ def cmd_scenarios(args: argparse.Namespace) -> int:
     --automation-pipe --window`), one at a time, with the system's keyboard
     shortcuts, its screenshots and machopo's log in
     `target/automation-results/`; then the pipe's test that drives the
-    window. Needs a display and a GPU. With `--process-per-tab` too, each
-    tab's renderer is a process of its own (as for the wptrunner commands)."""
+    window. Needs a display and a GPU. Each tab's renderer is a process of
+    its own, machopo's default; with `--single-process` too, threads of
+    machopo's (as for the wptrunner commands)."""
     if not args.window:
-        if args.process_per_tab:
-            print("--process-per-tab is for --window: without it the scenarios run in the test's own process")
+        if args.single_process:
+            print("--single-process is for --window: without it the scenarios run in the test's own process")
             return 1
         return run_slow_test("scenarios", args.filter, None)
     # The display stays on while this runs (macOS): once it sleeps, the
@@ -811,7 +812,7 @@ def cmd_scenarios(args: argparse.Namespace) -> int:
     # that never comes. `caffeinate -i` alone keeps only the system awake.
     if sys.platform == "darwin":
         subprocess.Popen(["caffeinate", "-d", "-i", "-w", str(os.getpid())])
-    env = {PROCESS_PER_TAB_ENV: "1"} if args.process_per_tab else None
+    env = {SINGLE_PROCESS_ENV: "1"} if args.single_process else None
     failures = 1 if run_slow_test("scenarios", ["--window", *args.filter], env) else 0
     # `machopo --automation-pipe --window`: the pipe's test that needs the window.
     if not args.filter or any(f in "pipe" for f in args.filter):
@@ -1120,9 +1121,11 @@ def processes_for_gpu(machopo: Path) -> list[str]:
     return processes
 
 
-# Set for a run with `machopo --process-per-tab`: the wptrunner product and
-# shell's scenarios in a window add the switch when they see it.
-PROCESS_PER_TAB_ENV = "MACHOPO_PROCESS_PER_TAB"
+# Set for a run with `machopo --single-process` (each tab's renderer in
+# machopo's own process, not the process of its own it is by default): the
+# wptrunner product and shell's scenarios in a window add the switch when
+# they see it.
+SINGLE_PROCESS_ENV = "MACHOPO_SINGLE_PROCESS"
 
 
 @dataclass
@@ -1134,8 +1137,8 @@ class Build:
 
     profile: str = "dev"
     build: bool = True
-    # Each tab's renderer in a process of its own.
-    process_per_tab: bool = False
+    # Each tab's renderer in machopo's own process, not one of its own.
+    single_process: bool = False
 
     def binaries(self) -> Path:
         # Cargo's directory for a profile is its name, but `dev`'s.
@@ -1143,7 +1146,7 @@ class Build:
 
     @staticmethod
     def of(args: argparse.Namespace) -> Build:
-        return Build(args.profile, not args.no_build, args.process_per_tab)
+        return Build(args.profile, not args.no_build, args.single_process)
 
 
 def run_wptrunner(
@@ -1239,8 +1242,8 @@ def run_wptrunner(
         cmd += ["--timeout-multiplier", multiplier]
     env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
     env.setdefault("RUST_LOG", "warn")
-    if build.process_per_tab:
-        env[PROCESS_PER_TAB_ENV] = "1"
+    if build.single_process:
+        env[SINGLE_PROCESS_ENV] = "1"
     status = subprocess.run(cmd, cwd=WPTRUNNER, env=env).returncode
     if not checkout_untouched():
         return 1
@@ -1903,13 +1906,14 @@ def main() -> int:
             action="store_true",
             help="run those already in the profile's target directory (built elsewhere), without cargo",
         )
-        process_per_tab_argument(parser)
+        single_process_argument(parser)
 
-    def process_per_tab_argument(parser: argparse.ArgumentParser) -> None:
+    def single_process_argument(parser: argparse.ArgumentParser) -> None:
         parser.add_argument(
-            "--process-per-tab",
+            "--single-process",
             action="store_true",
-            help="run machopo with --process-per-tab: each tab's renderer in a process of its own",
+            help="run machopo with --single-process: each tab's renderer in machopo's own process, "
+            "not the process of its own it is by default",
         )
 
     command("matrix", cmd_matrix, "GC tests under each pool size, then under fixed stress flags")
@@ -1985,7 +1989,7 @@ def main() -> int:
         "shortcuts (screenshots and logs in target/automation-results/), then the pipe's test with "
         "the window; needs a display and a GPU",
     )
-    process_per_tab_argument(scenarios)
+    single_process_argument(scenarios)
     scenarios.add_argument(
         "filter",
         nargs="*",

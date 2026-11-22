@@ -201,13 +201,13 @@ fn renderers_of(browser: u32) -> usize {
 
 #[cfg(unix)]
 #[test]
-fn tabs_renderers_are_processes_only_when_machopo_is_told() {
+fn tabs_renderers_are_processes_unless_machopo_is_told_otherwise() {
     // The pipe's machopo has a tab from the start: its renderer is a
-    // process of its own with the switch, and threads of machopo's
-    // without it or with the other.
+    // process of its own, with the switch that says so or without, and
+    // threads of machopo's with the other.
     for (switch, renderers) in [
         (Some("--process-per-tab"), 1),
-        (None, 0),
+        (None, 1),
         (Some("--single-process"), 0),
     ] {
         let mut browser = Command::new(MACHOPO)

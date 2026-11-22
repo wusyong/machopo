@@ -163,9 +163,12 @@ class ReadingTests(unittest.TestCase):
             named = Path(folder) / "another"
             named.mkdir()
             other = raster.write_report(results, env, False, 2.0, None, True, named, Path("/old/machopo"))
+            single = other.read_text(encoding="utf-8")
+            other = raster.write_report(results, env, False, 2.0, None, False, named, Path("/old/machopo"))
             self.assertEqual(other, named / "raster.md")
             other = other.read_text(encoding="utf-8")
-        self.assertIn("the renderer in the browser's process, headless", text)
+        self.assertIn("a renderer process for the tab, headless", text)
+        self.assertIn("machopo at `/old/machopo`, the renderer in the browser's process, headless", single)
         self.assertIn("machopo at `/old/machopo`, a renderer process for the tab, headless", other)
         # The browser's side, and the frames' way to the screen; none of
         # either in a run from before they were told.
@@ -204,7 +207,9 @@ class RunTests(unittest.TestCase):
             path = Path(folder) / "tall.html"
             path.write_text(page, encoding="utf-8")
             # Two raster threads: they raster the tiles, from machopo's flag.
-            run = raster.run_page(self.binary, path.as_uri(), Path(folder), "tall", False, 2.0, 2)
+            # The renderer in the browser's process, from the other.
+            run = raster.run_page(self.binary, path.as_uri(), Path(folder), "tall", False, 2.0, 2, True)
+            self.assertEqual(raster.renderer_traces(run["trace"]), [])
             self.assertTrue(run["trace"].exists())
             results = raster.analyze(run)
         self.assertEqual(set(results), {"scroll", "resize"})
@@ -238,7 +243,7 @@ class RunTests(unittest.TestCase):
                 mock.patch.object(raster, "SCROLL_STEPS", 4), mock.patch.object(raster, "RESIZE_STEPS", 2):
             path = Path(folder) / "tall.html"
             path.write_text(page, encoding="utf-8")
-            run = raster.run_page(self.binary, path.as_uri(), Path(folder), "tall", False, 2.0, None, True)
+            run = raster.run_page(self.binary, path.as_uri(), Path(folder), "tall", False, 2.0)
             # Its threads are in a trace of its own, read with the browser's.
             self.assertEqual(len(raster.renderer_traces(run["trace"])), 1)
             results = raster.analyze(run)

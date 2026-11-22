@@ -1,0 +1,22 @@
+# Step 3h: machopo's renderers are processes unless it is told otherwise.
+#
+# Not here, and why:
+# - The tests' and the tools' own switch for the other way (the
+#   environment variable `shell`'s tests and the wptrunner product read,
+#   `test.py`'s and `bench.py raster`'s `--single-process`) is test and
+#   tool code. That the pipe's tests do run the other way with it was
+#   looked at by hand (progress.md).
+test = ["sh", "-c", "timeout 900 cargo test -q -p shell --bin machopo && timeout 900 cargo test -q -p shell --test it -- renderer_process trace::"]
+timeout = 1800
+
+[[mutant]]
+name = "renderers are processes only when asked"
+file = "crates/shell/src/main.rs"
+from = '''    let process_per_tab = !single_process;'''
+to = '''    let process_per_tab = process_per_tab;'''
+
+[[mutant]]
+name = "--single-process is taken and does nothing"
+file = "crates/shell/src/main.rs"
+from = '''    let process_per_tab = !single_process;'''
+to = '''    let process_per_tab = !single_process || true;'''
