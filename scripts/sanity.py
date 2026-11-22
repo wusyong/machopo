@@ -299,7 +299,6 @@ PROTOCOL_RAW_BYTES = re.compile(r"\bVec<u8>|\[u8\]>|\bBytes\b")
 PROTOCOL_BIG_BUFFER = "crates/protocol/src/big_buffer.rs"
 PROTOCOL_BYTES_ALLOWED = {
     "crates/protocol/src/viz.rs": {
-        "pixels: bytes::Bytes,": "`CreateSharedImage`'s: a tile's pixels have their own shared memory",
         "pub pixels: Vec<u8>,": "`CopyOutputResult`'s: Viz to the browser, in one process",
     },
 }

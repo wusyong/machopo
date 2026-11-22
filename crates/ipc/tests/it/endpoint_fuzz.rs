@@ -63,6 +63,7 @@ pub fn run(data: &[u8]) {
             peer_may_attach: false,
             peer_may_open_pipes: false,
             region_limit: 4 * MIN_REGION_LEN,
+            peer_region_limit: 4 * MIN_REGION_LEN,
             queue_limit: MAX_QUEUED_BYTES,
         },
     );

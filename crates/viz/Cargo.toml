@@ -25,3 +25,8 @@ pollster.workspace = true
 tracing.workspace = true
 trace_event.workspace = true
 crossbeam-channel.workspace = true
+
+[dev-dependencies]
+# Pixels in a region of shared memory with no channel under it, for the
+# tests of what draws in one and what reads one.
+ipc.workspace = true

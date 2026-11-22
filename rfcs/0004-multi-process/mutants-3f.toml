@@ -1,0 +1,283 @@
+# Step 3f: a tile's pixels cross in shared memory, drawn in place and
+# copied once, by Viz. What `ipc` rests the writer's slice on, what a
+# reader of a region may read, how a region goes to its message and comes
+# back; the compositor drawing in a region; Viz's copy to the GPU; and
+# the browser's grants.
+#
+# Not here, and why:
+# - The renderer handing its compositor the channel's regions
+#   (`render_thread.rs`, `CompositorFrameSinkSender::take_region`): without
+#   it a tile's pixels are copied into a region as any large bytes are, and
+#   the browser sees what it sees now (one copy more, which no test of the
+#   browser's can tell from none). In docs/test-gaps.md.
+# - `From<&SharedBuffer> for Pixels` taking the process's own bytes through
+#   the staged path: the same pixels, drawn the same.
+# - The lengths in `ChunksOut::next` and the slices of `Writer`: wrong, they
+#   are reads and writes past a mapping, which Miri and the fuzzer look for,
+#   not a test's assertion.
+test = ["sh", "-c", "timeout 600 cargo test -q -p ipc"]
+timeout = 900
+
+[[mutant]]
+name = "a region taken isn't held"
+file = "crates/ipc/src/core/region.rs"
+from = '''        *self.held.get_mut(i)? = true;'''
+to = '''        *self.held.get_mut(i)? = false;'''
+
+[[mutant]]
+name = "the peer frees a region its taker still writes"
+file = "crates/ipc/src/core/region.rs"
+from = '''        if self.held.get(i).copied().unwrap_or(false) {
+            return Err(BadMessage::RegionNotOut { number });
+        }'''
+to = '''        if false {
+            return Err(BadMessage::RegionNotOut { number });
+        }'''
+
+[[mutant]]
+name = "a region nobody holds is lent"
+file = "crates/ipc/src/core/region.rs"
+from = '''            Some(held) if *held => {
+                *held = false;
+                true
+            }'''
+to = '''            Some(held) => {
+                *held = false;
+                true
+            }'''
+
+[[mutant]]
+name = "a region given back is still held"
+file = "crates/ipc/src/core/region.rs"
+from = '''                slot.out = false;
+                *held = false;
+                true'''
+to = '''                slot.out = false;
+                let _ = held;
+                true'''
+
+[[mutant]]
+name = "a region that leaves the pool leaves its hold to another"
+file = "crates/ipc/src/core/region.rs"
+from = '''        self.held.swap_remove(i);'''
+to = '''        self.held.pop();'''
+
+[[mutant]]
+name = "a byte past a region is copied out"
+file = "crates/ipc/src/core/region.rs"
+from = '''        .is_some_and(|end| end <= memory.len());
+    if !within {
+        return false;
+    }
+    // SAFETY: `offset + into.len()` is no more than the memory's length,'''
+to = '''        .is_some_and(|end| end <= memory.len().saturating_add(1));
+    if !within {
+        return false;
+    }
+    // SAFETY: `offset + into.len()` is no more than the memory's length,'''
+
+[[mutant]]
+name = "runs past a region are handed out"
+file = "crates/ipc/src/core/region.rs"
+from = '''    if end > memory.len() {
+        return None;
+    }
+    Some(ChunksOut {'''
+to = '''    if false {
+        return None;
+    }
+    Some(ChunksOut {'''
+
+[[mutant]]
+name = "a message names more of a region than it has"
+file = "crates/ipc/src/core/region.rs"
+from = '''            Ok(count) if count <= memory.len() => Ok(memory),'''
+to = '''            Ok(_) => Ok(memory),'''
+
+[[mutant]]
+name = "a buffer is read past what its message said"
+file = "crates/ipc/src/shared_buffer.rs"
+from = '''        if !within {
+            return false;
+        }
+        match &self.0 {
+            Repr::Own(bytes) => {
+                let from'''
+to = '''        if false {
+            return false;
+        }
+        match &self.0 {
+            Repr::Own(bytes) => {
+                let from'''
+
+[[mutant]]
+name = "a buffer's runs go past what its message said"
+file = "crates/ipc/src/shared_buffer.rs"
+from = '''        if end > self.len() {
+            return None;
+        }'''
+to = '''        if false {
+            return None;
+        }'''
+
+[[mutant]]
+name = "a region sent is given back where it was sent from"
+file = "crates/ipc/src/shared_buffer.rs"
+from = '''        if !*self.sent.get_mut() {
+            self.owner.give_back(self.number);
+        }'''
+to = '''        if true {
+            self.owner.give_back(self.number);
+        }'''
+
+[[mutant]]
+name = "a region crosses as often as its buffer is sent"
+file = "crates/ipc/src/shared_buffer.rs"
+from = '''        if lent.sent.swap(true, Ordering::AcqRel) {
+            return Err(ser::Error::custom("a region crosses once"));
+        }'''
+to = '''        if false {
+            return Err(ser::Error::custom("a region crosses once"));
+        }'''
+
+[[mutant]]
+name = "a serializer that isn't the codec's leaves the buffer without its region"
+file = "crates/ipc/src/shared_buffer.rs"
+from = '''        if take_lending().is_some() {
+            lent.sent.store(false, Ordering::Release);
+        }'''
+to = '''        if take_lending().is_some() {
+            lent.sent.store(true, Ordering::Release);
+        }'''
+
+[[mutant]]
+name = "what was read in a region is never said to be"
+file = "crates/ipc/src/shared_buffer.rs"
+from = '''        self.owner.read(self.number);'''
+to = '''        let _ = (&self.owner, self.number);'''
+
+[[mutant]]
+name = "another channel's codec leaves the buffer without its region"
+file = "crates/ipc/src/codec.rs"
+from = '''                // The value keeps its region.
+                shared_buffer::set_lending(lending);'''
+to = '''                // The value keeps its region.
+                let _ = lending;'''
+
+[[mutant]]
+name = "a channel lends a region of another's by its number"
+file = "crates/ipc/src/endpoint.rs"
+from = '''        if owner != id_of(self.inner) || !self.pool.lend(number) {'''
+to = '''        if !self.pool.lend(number) {'''
+
+[[mutant]]
+name = "a region lent to a message that isn't sent stays out"
+file = "crates/ipc/src/endpoint.rs"
+from = '''        if owner != id_of(self.inner) || !self.pool.lend(number) {
+            return false;
+        }
+        self.placed.push(number);'''
+to = '''        if owner != id_of(self.inner) || !self.pool.lend(number) {
+            return false;
+        }
+        let _ = &self.placed;'''
+
+[[mutant]]
+name = "a region taken and dropped isn't given back"
+file = "crates/ipc/src/endpoint.rs"
+from = '''    fn give_back(&self, number: u32) {
+        self.out().pool.give_back(number);
+    }'''
+to = '''    fn give_back(&self, number: u32) {
+        let _ = number;
+    }'''
+
+[[mutant]]
+name = "a peer is granted regions without end"
+file = "crates/ipc/src/endpoint.rs"
+from = '''        if granted > self.inner.config.peer_region_limit {
+            return None;
+        }'''
+to = '''        if false {
+            return None;
+        }'''
+
+[[mutant]]
+name = "an end that makes no regions takes being asked for one"
+file = "crates/ipc/src/endpoint.rs"
+from = '''            // The end that makes the regions asks nobody.
+            if !inner.config.may_attach {
+                return Err(BadMessage::Rejected);
+            }'''
+to = '''            // The end that makes the regions asks nobody.
+            if false {
+                return Err(BadMessage::Rejected);
+            }'''
+
+[[mutant]]
+name = "an end with no region free asks for none"
+file = "crates/ipc/src/endpoint.rs"
+from = '''                if let Ok(len) = u32::try_from(bytes.len()) {
+                    let _ = self.inner.control(&Control::Wanted { len }, Vec::new());
+                }'''
+to = '''                if let Ok(len) = u32::try_from(bytes.len()) {
+                    let _ = len;
+                }'''
+
+[[mutant]]
+name = "a tile is never drawn in a region"
+file = "crates/compositor/src/shared_image.rs"
+from = '''        let region = self.take_region.as_ref().and_then(|take| take(len));'''
+to = '''        let region = self.take_region.as_ref().and_then(|_| None::<SharedBufferWriter>);'''
+test = ["sh", "-c", "timeout 600 cargo test -q -p compositor shared_image"]
+
+[[mutant]]
+name = "every row of shared pixels is the first"
+file = "crates/viz/src/gpu_context.rs"
+from = '''        offset = offset.saturating_add(row);'''
+to = '''        offset = offset.saturating_add(0);'''
+test = ["sh", "-c", "timeout 600 cargo test -q -p viz pixels_in_shared"]
+
+[[mutant]]
+name = "shared pixels written over a pooled texture aren't"
+file = "crates/viz/src/gpu_context.rs"
+from = '''            Pixels::Shared(pixels) => self.stage(&resource.texture, resource.size, pixels),'''
+to = '''            Pixels::Shared(pixels) => drop((&resource.texture, resource.size, pixels)),'''
+test = ["sh", "-c", "timeout 600 cargo test -q -p viz pixels_in_shared"]
+
+[[mutant]]
+name = "a frame is drawn before the shared pixels it shows are copied"
+file = "crates/viz/src/wgpu_renderer.rs"
+from = '''            let staged = self.context.take_staged();'''
+to = '''            let staged = None::<wgpu::CommandBuffer>;'''
+test = ["sh", "-c", "timeout 600 cargo test -q -p viz pixels_in_shared"]
+
+[[mutant]]
+name = "a flush leaves the copies of shared pixels waiting"
+file = "crates/viz/src/wgpu_renderer.rs"
+from = '''        gpu.queue.submit(gpu.take_staged());'''
+to = '''        gpu.queue.submit(None::<wgpu::CommandBuffer>);'''
+test = ["sh", "-c", "timeout 600 cargo test -q -p viz pixels_in_shared"]
+
+[[mutant]]
+name = "a renderer process starts with no shared memory for its tiles"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                    for _ in 0..TILE_REGIONS {'''
+to = '''                    for _ in 0..0 {'''
+test = ["sh", "-c", "timeout 600 cargo test -q -p browser --test it -- renderer_process"]
+
+[[mutant]]
+name = "the browser makes a renderer no shared memory to write"
+file = "crates/protocol/src/control_channel.rs"
+from = '''        peer_region_limit: if browser { REGION_LIMIT } else { 0 },'''
+to = '''        peer_region_limit: 0,'''
+test = ["sh", "-c", "timeout 600 cargo test -q -p browser --test it -- renderer_process"]
+
+[[mutant]]
+name = "a buffer that a lost device didn't make is unmapped"
+file = "crates/viz/src/gpu_context.rs"
+from = '''            tracing::debug!("viz: no buffer for shared pixels: the device is lost");
+            return;'''
+to = '''            buffer.unmap();
+            return;'''
+test = ["sh", "-c", "timeout 600 cargo test -q -p viz pixels_in_shared"]

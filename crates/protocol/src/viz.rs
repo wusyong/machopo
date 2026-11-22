@@ -262,12 +262,14 @@ pub enum CompositorFrameSinkMsg {
     /// channel keeps the two in order, so there are no sync tokens. Viz
     /// hands the buffer back once the pixels are on the GPU
     /// ([`BeginFrameObserver::on_pixels_returned`]): the client draws its next
-    /// into it. The bytes stand in for a piece of a shared-memory region:
-    /// shared with whoever drew them, not copied into the message.
+    /// into it. The pixels are shared with whoever drew them, not copied
+    /// into the message: the client's own buffer within a process, and a
+    /// region of the channel's it drew in from a process of its own
+    /// (which is its to draw in again when Viz lets the pixels go).
     CreateSharedImage {
         mailbox: Mailbox,
         size: Size,
-        pixels: bytes::Bytes,
+        pixels: crate::SharedBuffer,
     },
     /// The client is done with the shared image `mailbox`
     /// (`DestroySharedImage`). Viz lets its texture go once no frame it
@@ -445,6 +447,19 @@ impl CompositorFrameSinkSender {
     /// For a renderer in a process of its own, whose channel `link` is.
     pub fn over(link: ChannelLink) -> Self {
         Self(Way::Channel(link))
+    }
+
+    /// A region of the channel's to draw `len` bytes of pixels in, for a
+    /// `CreateSharedImage` sent by this sender: the pixels cross without
+    /// being copied. `None` within a process (the client's own buffer is
+    /// shared as it is), and when the channel has no region free: the
+    /// pixels are then drawn in a buffer of the client's own, and sending
+    /// them asks the browser for one more region, for the next time.
+    pub fn take_region(&self, len: usize) -> Option<crate::SharedBufferWriter> {
+        match &self.0 {
+            Way::Local { .. } => None,
+            Way::Channel(link) => link.take_region(len),
+        }
     }
 
     /// Sends `msg` to Viz, from this sink. Fails once Viz has gone, or the

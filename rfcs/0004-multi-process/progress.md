@@ -48,7 +48,7 @@
 | 3e：切換的旗標、整套測試用多個 process 跑、fuzz target，分兩小段（第 59 條） | 進行中 | |
 | 3e-1：`--single-process` 和 `--process-per-tab`；`test.py` 和 CI 用多 process 跑的選項 | 完成 | 2026-11-22 |
 | 3e-2：整套測試在多 process 底下跑一遍、修壞的；處理訊息的物件和 body 的管道的 fuzz target | 未開始 | |
-| 3f：tile 只複製一次（第 24 條的驗收條件；原本的 3c） | 未開始 | |
+| 3f：tile 只複製一次（第 24 條的驗收條件；原本的 3c） | 完成（Linux 等 push 之後的 CI，Windows 還沒編過） | 2026-11-22 |
 | 3g：trace；量每個 frame 的延遲和 IO thread 每一步的時間（3f 之前先量一次現況） | 未開始 | |
 | 3h：macOS 上 sandbox 的探測；第 3 階段的檢查和文件 | 未開始 | |
 
@@ -722,4 +722,40 @@ branch `0004-linux`，從 `0004` 的 2e-7（`82a4fc7`）分出去。
   - **修正**：renderer process 被要求當掉時，在 Linux 上先把自己設成不留 core dump（`prctl(PR_SET_DUMPABLE, 0)`，經過 rustix 的 `set_dumpable_behavior`，`renderer` 在 Linux 上多依賴 rustix 的 `process`），再 `abort`。這段只在 Linux 上編，本機編不到：確認了 rustix 的原始碼裡有這個函式、`cargo metadata` 以 Linux 為目標時 `renderer` 拿得到它，剩下的要靠 push 之後的 CI。
   - 真的當掉的 renderer 在 Linux 上還是要等 core dump 收完 Browser 才知道，記進 `docs/limitations.md`。
   - 之後的做法：push 之後看 CI，不是只看本機。
+  - 修正之後（`9784771`，2026-11-22）：`about:crash` 的兩個測試在 Linux 上過了。那一次 CI 還是紅的，壞的是 `shell` 的 `devtools_css::sheets_coming_and_going_are_told`（等 30 秒收不到 `CSS.styleSheetAdded`）：就是上面說 `main` 上也偶爾失敗的那一個，在測試的 process 裡跑、和這幾步無關，還沒有查原因。
 
+### 3f：tile 只複製一次（2026-11-22，macOS 26、Apple M4）
+
+- **決定**：「已決定的事項」第 61 條（用 `ipc` 現有的 region，加上「借出去畫」）、第 62 條（先給一組、不夠再要、compositor 不等）、第 63 條（Viz 直接複製進 GPU 的緩衝區）。三條都是使用者選的；62 和 63 各有一段「實作時定的」。
+- **做了什麼**：
+  - `ipc`：新的 `shared_buffer` 模組。`Link::take_region(len)` 拿一塊空的 region（`Writer`，裡面是 `&mut [u8]`）；`SharedBuffer` 是訊息裡的欄位型別（自己的位元組、這一端寫好的 region、對方寫的 region）；codec 認得它（和 `Consumer` 一樣經過 thread-local 交接），線上的格式和原本「大的位元組在 region 裡」完全一樣；收的一端解出來的是 region 本身，只能複製出來（`copy_to`、`chunks`），最後一個 clone 被丟掉時才送 `Released`。
+  - `ipc` 的池子多一個「被拿著」的狀態（`Pool::take` 到 `Pool::lend` 之間）：這段期間對方說「讀完了」是壞訊息。少了它，惡意的對方可以讓同一塊記憶體同時有兩個可寫的 slice。
+  - `ipc` 多一則控制訊息 `Wanted`（沒有空的 region、大的位元組只好放進訊息時送），和 `Config::peer_region_limit`（Browser 替對方建的 region 的上限；原本 `grant_to_peer` 沒有上限）。
+  - `Platform::Memory` 多要求 `Sync`（mapping 現在會被 IO thread 以外的 thread 拿著）。三個平台的 `Mapping` 本來就是，平台層沒有改。
+  - `protocol`：`CreateSharedImage` 的像素從 `Bytes` 改成 `SharedBuffer`（`sanity.py boundary` 的例外少一個）；`CompositorFrameSinkSender::take_region`。
+  - `compositor`：`SharedImages::with_regions`；`PixelBuffer` 可以是池子的一塊或通道的一塊 region。
+  - `renderer`：有 GPU 時把 `take_region` 交給 `SharedImages`。`browser`：啟動有 GPU 的 renderer process 時先給 16 塊 256 KiB。
+  - `viz`：像素來自共用記憶體時（`Pixels::Shared`），`GpuContext::stage` 建一個 mapped 的緩衝區、把像素複製進去、排一個「緩衝區到 texture」的複製；一批的複製指令在 flush 或畫 frame 的那次 submit 一起送。
+- **和原本想的不一樣的**：
+  - wgpu 30 的 mapped 緩衝區只能寫（`WriteOnly`），拿不到 `&mut [u8]`。改成以值一段一段交（第 63 條的「實作時發現、改掉的」）。量的（`wgpu-types` 的 `WriteOnly` 包一般的記憶體，256 KiB，64 組來源和目的地輪流）：`copy_from_slice` 5.8 到 8.1 µs；一段 64 bytes 5.2 到 6.2 µs、1024 bytes 4.6 到 4.8 µs、4096 bytes 5.2 µs。
+  - 「要一塊」原本想由 compositor 送，做成 `ipc` 在大的位元組放進訊息時自己送（第 62 條）。副作用是 renderer 送給 Browser 的其他大資料也開始走共用記憶體（3c 記的「都放在訊息裡」不再成立，`architecture.md` 和 `limitations.md` 改了）。
+  - RFC 的「tile 交接」寫的是用一個複製次數的計數守著。沒有做成那樣（複製發生在三個 crate 裡），改成每一段各有測試；那一節改了。接線的那一段守不住，記在 `docs/test-gaps.md` 的「沒有計數守著的優化」。
+- **測試**：
+  - `ipc`：`core/region.rs` 多 3 個單元測試（拿著的狀態、別的 region 離開時狀態跟對、slice 和複製出來）；`core/control.rs` 的三個測試加上 `Wanted`；`tests/it/shared_buffer.rs`（新的，10 個，內容在 `crates/ipc/README.md` 的「測試」）；`region_fuzz` 的模型多「交給訊息」的操作和「拿著」的狀態；`endpoint.rs` 的一個測試改了預期（沒有 region 的 child 送完大資料之後自己得到一塊）。
+  - `compositor`：`a_tile_is_drawn_in_a_region_of_the_channels_when_one_is_free`。
+  - `viz`：`pixels_in_shared_memory_are_what_is_drawn`（真的 GPU：四種大小涵蓋「一列剛好 1024 bytes」「不到 256」「超過 256 又不是倍數」「一列 4 bytes」，寫在新的和池子裡的 texture 上，flush 過的和靠畫 frame 那次 submit 的）。
+  - `browser`（真的 renderer process）：`a_renderer_processs_tiles_go_to_the_gpu_in_shared_memory`（每一塊 tile 都是共用記憶體裡的，放在訊息裡的是 0 塊，讀出來不是單色）；`a_renderer_process_out_of_shared_memory_copies_its_tiles_and_is_given_more`（Viz 不放手時，renderer 不停下來、退回複製，之後要到超過 16 塊）。
+  - 寫測試時自己弄錯的兩次：`viz` 的測試第二輪用了同一個 resource 編號（Viz 照編號留著 resource），我一開始以為是實作沒有把暫存的複製送出去；`region.rs` 的一個測試算錯哪一塊會被選到。
+- **mutation test**（`mutants-3f.toml`）28 個（視窗那一次之後 29 個），全部抓到；沒有列的寫在清單開頭。為了它補的測試：送過的 `SharedBuffer` 在那塊 region 被別人拿走之後不能再送（少了 `sent` 旗標時它會把別人正在寫的 region 送出去）；別的通道同一個編號的 region 被拿著時也不會被借走；flush 之後沒有暫存的複製留著。跑完確認檔案還原（`target/mutate/originals` 是空的）。
+- **跑過的檢查**（都在最後一次改程式之後）：`cargo test -p ipc -p protocol -p compositor -p viz -p renderer -p browser -p shell`；`MACHOPO_PROCESS_PER_TAB=1 cargo test -p shell --test it -- automation_pipe renderer_process`（42 過）；`cargo clippy` 七個 crate `--all-targets -- -D warnings`；`cargo fmt --check`；`sanity.py` 的 7 項（在 `git add -N` 新檔案之後）。
+- **Miri 和 fuzz**（使用者同意之後；2026-11-22）：
+  - `test.py ipc miri`：核心的單元測試 52 個過（564 秒），端點的 23 個過（含 `shared_buffer::` 的 10 個；2633 秒），沒有回報 undefined behavior。端點那一段從幾分鐘變成 44 分鐘：`shared_buffer` 的測試每個都搬 256 KiB，在 Miri 底下很慢。之後把那幾個測試的資料縮小。
+  - `test.py ipc fuzz`（4 個 target 各 5 分鐘）：`endpoint` 182 萬次、`frame` 3485 萬次、`pipe` 1081 萬次、`region` 225 萬次（模型加了「拿著」和「交給訊息」之後的），沒有發現。
+- **真的視窗**（`scenarios --window --process-per-tab`，使用者同意之後；2026-11-22，Metal）：
+  - 第一次的結果不能用：72 份 `machopo.log` 每一份都是「viz: can't draw … occluded」，沒有一張截圖。`pmset -g log` 顯示那段時間顯示器是關的；視窗看不到時 Viz 不畫。之後跑這一項用 `caffeinate -di`（`-d` 不讓顯示器睡），跑之前確認顯示器開著。
+  - 顯示器開著再跑：72 個裡 `gpu-crash` 失敗。**是這一步的 bug**：GPU device 遺失之後，新的上傳路徑向遺失的 device 建緩衝區，拿到的是無效的；我處理了「map 不到」，卻照樣呼叫 `unmap`，wgpu 把那當成致命錯誤，Viz thread panic。原本的 `write_texture` 在遺失的 device 上不會這樣。單元測試沒有涵蓋「device 遺失之後上傳共用記憶體裡的像素」，是情境抓到的。
+  - 修正：map 不到就直接回去，不 `unmap`（`GpuContext::stage`）。`viz` 的 `pixels_in_shared_memory_are_what_is_drawn` 多一段：device 遺失之前暫存的、遺失之後送來的都不出事，新的 device 照樣畫。mutant 多一個（無效的緩衝區照樣 `unmap`），抓到；清單現在 29 個。
+  - 修正之後整套重跑：72 個全部通過；72 份 log 都有「a renderer process ended」（確實是多 process），沒有一份有 `ERROR` 或 panic；看了 `todomvc-app-js` 的截圖，畫面正確。之後 `cargo test -p viz`、`cargo clippy -p viz`、`cargo fmt --check` 再跑過。
+- **沒有驗到的**：
+  - Linux 和 Windows：平台層沒有改，但 `Platform::Memory: Sync` 和其他的改動在那兩個平台上有沒有編過，Linux 要看 push 之後的 CI，Windows 要在那台機器上編。
+  - 時間：這一步沒有量每個 frame 快了多少（3g）。

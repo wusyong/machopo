@@ -33,7 +33,7 @@ mod thread;
 mod wgpu_renderer;
 
 pub use begin_frame_source::{BeginFrameClient, BeginFrameSource};
-pub use display::{CopyFailure, DirectRenderer, Display};
+pub use display::{CopyFailure, DirectRenderer, Display, Pixels};
 pub use surface_aggregator::AggregatedFrame;
 pub use thread::spawn_viz_compositor_thread;
 pub use wgpu_renderer::{GpuSharedImages, MakeSurface, WgpuRenderer};

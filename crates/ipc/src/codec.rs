@@ -28,6 +28,7 @@ use serde::ser::{self, Serialize, Serializer};
 use crate::core::frame::BadMessage;
 use crate::core::region::{MIN_REGION_LEN, Memory, Pool, Table};
 use crate::data_pipe::{self, CONSUMER_NAME, Consumer};
+use crate::shared_buffer::{self, BUFFER_NAME, LENT_NAME};
 
 /// How deep a value read from a peer may nest: every sequence, map,
 /// struct, tuple, enum, option and newtype is a level. machopo's messages
@@ -44,6 +45,14 @@ pub trait Place {
     /// The message `number` was placed for isn't going: the region is
     /// free again.
     fn unplace(&mut self, number: u32);
+
+    /// The message names the region `number`, which `owner`'s taker
+    /// wrote in place: out from now as one bytes were placed in. `false`
+    /// when it isn't a region of this end's that a taker holds.
+    fn lend(&mut self, owner: usize, number: u32) -> bool {
+        let _ = (owner, number);
+        false
+    }
 
     /// Opens a pipe to the peer fed from `source`: its number. `None`
     /// when this end opens none (the value doesn't serialize, and the
@@ -65,6 +74,14 @@ pub trait Resolve {
     /// The first `len` bytes of the peer's region `number`, copied to the
     /// end of `into`.
     fn resolve(&mut self, number: u32, len: u32, into: &mut Vec<u8>) -> Result<(), BadMessage>;
+
+    /// The peer's region `number`, which the message says holds `len`
+    /// bytes, left for the value being read
+    /// ([`shared_buffer::set_arriving`]): not copied.
+    fn hold(&mut self, number: u32, len: u32) -> Result<(), BadMessage> {
+        let _ = len;
+        Err(BadMessage::UnknownRegion { number })
+    }
 
     /// The reading end of the pipe `number` the peer opened, which no
     /// message has named yet.
@@ -317,6 +334,29 @@ impl<'a, 'r, S: Serializer> Serializer for Ser<'a, 'r, S> {
         name: &'static str,
         value: &T,
     ) -> Result<S::Ok, S::Error> {
+        // A region written in place, which left its number beside the
+        // value: written as bytes placed in a region are, with nothing
+        // placed.
+        if name == LENT_NAME {
+            let lending = shared_buffer::take_lending()
+                .ok_or_else(|| ser::Error::custom("no region to send"))?;
+            let (owner, number, len) = lending;
+            let mut placing = self.placing.borrow_mut();
+            let len = u32::try_from(len).ok();
+            let (Some(len), true) = (len, placing.regions.lend(owner, number)) else {
+                // The value keeps its region.
+                shared_buffer::set_lending(lending);
+                return Err(ser::Error::custom("not a region of this channel's"));
+            };
+            placing.placed.push(number);
+            drop(placing);
+            let mut region = self
+                .inner
+                .serialize_tuple_variant(NAME, REGION, "Region", 2)?;
+            ser::SerializeTupleVariant::serialize_field(&mut region, &number)?;
+            ser::SerializeTupleVariant::serialize_field(&mut region, &len)?;
+            return ser::SerializeTupleVariant::end(region);
+        }
         // A data pipe's consumer, which left its pipe beside the value:
         // the pipe is opened to the peer, and its number is what is
         // written. Another type that calls itself by the name left none.
@@ -648,6 +688,7 @@ impl<'de, D: Deserializer<'de>> Deserializer<'de> for De<'_, '_, D> {
             Run {
                 visitor,
                 resolving: self.resolving,
+                hold: false,
             },
         )
     }
@@ -691,6 +732,19 @@ impl<'de, D: Deserializer<'de>> Deserializer<'de> for De<'_, '_, D> {
             // A visitor that isn't a consumer's took none: it goes.
             drop(data_pipe::take_crossing());
             return value;
+        }
+        // Bytes whose region isn't copied out of: the region goes beside
+        // its number to the visitor that asked by this name.
+        if name == BUFFER_NAME {
+            return self.inner.deserialize_enum(
+                NAME,
+                VARIANTS,
+                Run {
+                    visitor,
+                    resolving: self.resolving,
+                    hold: true,
+                },
+            );
         }
         level!(self, visitor, |inner, wrapped| inner
             .deserialize_newtype_struct(name, wrapped))
@@ -960,6 +1014,8 @@ impl<'de, A: VariantAccess<'de>> VariantAccess<'de> for Access<'_, '_, A> {
 struct Run<'a, 'r, V> {
     visitor: V,
     resolving: &'a mut Resolving<'r>,
+    /// A region is handed over as it is, not copied out of.
+    hold: bool,
 }
 
 impl<'de, V: Visitor<'de>> Visitor<'de> for Run<'_, '_, V> {
@@ -982,6 +1038,20 @@ impl<'de, V: Visitor<'de>> Visitor<'de> for Run<'_, '_, V> {
         else {
             return Err(de::Error::custom("a region's number and a length"));
         };
+        if self.hold {
+            return match self.resolving.regions.hold(number, len) {
+                Ok(()) => {
+                    let value = self.visitor.visit_u32(number);
+                    // A visitor that isn't a buffer's took none: it goes.
+                    drop(shared_buffer::take_arriving());
+                    value
+                }
+                Err(bad) => {
+                    self.resolving.bad.get_or_insert(bad);
+                    Err(de::Error::custom(bad))
+                }
+            };
+        }
         let mut bytes = Vec::new();
         match self.resolving.regions.resolve(number, len, &mut bytes) {
             Ok(()) => self.visitor.visit_byte_buf(bytes),

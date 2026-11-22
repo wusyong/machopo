@@ -32,7 +32,7 @@ impl FakeGpu {
             .filter_map(|msg| match msg {
                 CompositorFrameSinkMsg::CreateSharedImage {
                     mailbox, pixels, ..
-                } => Some((*mailbox, pixels.clone())),
+                } => Some((*mailbox, pixels.as_bytes()?.clone())),
                 _ => None,
             })
             .collect()

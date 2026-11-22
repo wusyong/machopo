@@ -24,6 +24,9 @@ pub enum Control<'a> {
         len: u32,
         writable: bool,
     },
+    /// The sender had no free region for `len` bytes and would have one
+    /// more: for the end that makes regions, which grants it or doesn't.
+    Wanted { len: u32 },
     /// A pipe the sender will write: the receiver holds at most `capacity`
     /// of its bytes unread.
     PipeOpened { pipe: u32, capacity: u32 },
@@ -45,6 +48,7 @@ const PIPE_DATA: u8 = 3;
 const PIPE_READ: u8 = 4;
 const PIPE_ENDED: u8 = 5;
 const PIPE_CANCELLED: u8 = 6;
+const WANTED: u8 = 7;
 
 fn word(bytes: &[u8]) -> Result<u32, BadMessage> {
     bytes
@@ -72,6 +76,10 @@ impl<'a> Control<'a> {
                 out.extend_from_slice(&number.to_le_bytes());
                 out.extend_from_slice(&len.to_le_bytes());
                 out.push(u8::from(*writable));
+            }
+            Self::Wanted { len } => {
+                out.push(WANTED);
+                out.extend_from_slice(&len.to_le_bytes());
             }
             Self::PipeOpened { pipe, capacity } => {
                 out.push(PIPE_OPENED);
@@ -119,7 +127,8 @@ impl<'a> Control<'a> {
                 _ => Err(BadMessage::Rejected),
             };
         }
-        // Every other message begins with a number: a region's or a pipe's.
+        // Every other message begins with a number: a region's, a pipe's
+        // or a length.
         let (first, rest) = rest.split_at_checked(4).ok_or(BadMessage::Rejected)?;
         let first = word(first)?;
         match (tag, rest) {
@@ -140,6 +149,7 @@ impl<'a> Control<'a> {
                     .map(u64::from_le_bytes)
                     .map_err(|_| BadMessage::Rejected)?,
             }),
+            (WANTED, []) => Ok(Self::Wanted { len: first }),
             (PIPE_ENDED, []) => Ok(Self::PipeEnded { pipe: first }),
             (PIPE_CANCELLED, []) => Ok(Self::PipeCancelled { pipe: first }),
             _ => Err(BadMessage::Rejected),
@@ -166,6 +176,8 @@ mod tests {
                 len: 1 << 30,
                 writable: false,
             },
+            Control::Wanted { len: 0 },
+            Control::Wanted { len: u32::MAX },
             Control::PipeOpened {
                 pipe: 3,
                 capacity: 512 << 10,
@@ -204,7 +216,7 @@ mod tests {
                 payload[0]
             })
             .collect();
-        assert_eq!(tags, [0, 0, 1, 1, 2, 3, 3, 4, 4, 5, 6]);
+        assert_eq!(tags, [0, 0, 1, 1, 7, 7, 2, 3, 3, 4, 4, 5, 6]);
     }
 
     #[test]
@@ -226,6 +238,10 @@ mod tests {
                 writable: true
             }),
             [0xaa, 1, 4, 3, 2, 1, 8, 7, 6, 5, 1]
+        );
+        assert_eq!(
+            payload(Control::Wanted { len: 0x0102_0304 }),
+            [0xaa, 7, 4, 3, 2, 1]
         );
         assert_eq!(
             payload(Control::PipeOpened {
@@ -260,11 +276,14 @@ mod tests {
 
     #[test]
     fn a_control_message_nobody_writes_is_a_bad_message() {
-        let bad: [&[u8]; 20] = [
+        let bad: [&[u8]; 22] = [
             &[],
-            &[7],
-            &[7, 0, 0, 0, 0],
+            &[8],
+            &[8, 0, 0, 0, 0],
             &[0xff, 0, 0, 0, 0],
+            // Wanted: short, long.
+            &[7, 0, 0, 0],
+            &[7, 0, 0, 0, 0, 0],
             // Released: not whole numbers.
             &[0, 1],
             &[0, 1, 2, 3, 4, 5],

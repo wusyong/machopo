@@ -42,7 +42,8 @@ pub mod to_browser {
 
 /// The most bytes of shared memory one end of a channel writes large
 /// data into (the regions kept to be used again): past it, large data
-/// goes in the message.
+/// goes in the message. A renderer's are the browser's to make, and it
+/// makes no more than this however many are asked for.
 const REGION_LIMIT: usize = 64 << 20;
 
 /// How the browser's end of a renderer's channel is made (`browser`), and
@@ -60,6 +61,7 @@ pub const fn config(browser: bool) -> Config {
         peer_may_attach: !browser,
         peer_may_open_pipes: !browser,
         region_limit: REGION_LIMIT,
+        peer_region_limit: if browser { REGION_LIMIT } else { 0 },
         queue_limit: MAX_QUEUED_BYTES,
     }
 }

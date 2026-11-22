@@ -51,6 +51,7 @@ pub(crate) fn config(host: bool) -> Config {
         peer_may_attach: !host,
         peer_may_open_pipes: !host,
         region_limit: 8 << 20,
+        peer_region_limit: 8 << 20,
         queue_limit: MAX_QUEUED_BYTES,
     }
 }

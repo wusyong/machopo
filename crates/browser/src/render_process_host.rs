@@ -372,6 +372,15 @@ impl RenderProcessHost {
                     gpu: gpu.is_some(),
                 };
                 let _ = send_over(&link, to_renderer::MAIN, &init);
+                // Shared memory for the tiles it draws, so their pixels
+                // cross without being copied: enough for a frame's worth
+                // of new tiles, and it asks for more when it has none
+                // free.
+                if gpu.is_some() {
+                    for _ in 0..TILE_REGIONS {
+                        link.grant_to_peer(TILE_REGION_LEN);
+                    }
+                }
                 let to_renderer = RendererSender::over(link.clone());
                 io.serve(
                     endpoint,
@@ -632,6 +641,12 @@ const CHILD_EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// How long a renderer process told to crash is given to have done it.
 const CRASH_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The shared memory a renderer process that draws for a GPU starts
+/// with: how many regions, each as long as a tile's pixels (256 by 256,
+/// four bytes each).
+const TILE_REGIONS: usize = 16;
+const TILE_REGION_LEN: usize = 256 << 10;
 
 /// How long a renderer process whose channel is over is given to have
 /// exited by itself (the channel of one that crashed is over a moment

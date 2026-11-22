@@ -372,7 +372,7 @@ mod tests {
                 CompositorFrameSinkMsg::CreateSharedImage {
                     mailbox,
                     size: gfx::Size::new(1, 1),
-                    pixels: bytes::Bytes::from_owner(Shared(pixels.clone())),
+                    pixels: bytes::Bytes::from_owner(Shared(pixels.clone())).into(),
                 },
             ))
             .unwrap();

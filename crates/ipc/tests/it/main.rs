@@ -26,6 +26,7 @@ mod process_channel;
 mod region_fuzz;
 #[cfg(target_os = "macos")]
 mod rendezvous;
+mod shared_buffer;
 mod time_ticks;
 #[cfg(windows)]
 mod windows_channel;

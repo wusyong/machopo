@@ -23,10 +23,10 @@
 
 | | 性質 | 由哪裡守住 | 怎麼驗證 |
 | --- | --- | --- | --- |
-| G1 | **記憶體**：不管對方在共用記憶體裡寫什麼、在訊息裡給什麼編號和長度，這一端讀寫的都在它自己 map 的那一塊裡面 | `core/region.rs`：`Table::read` 先比長度（超過是 `OutsideRegion`）、編號要在表裡（`UnknownRegion`）；`Pool::put` 寫的那一塊由 `core/fit.rs` 的 `best_fit` 選，夠長是證明過的。mapping 不會比物件長：I2 和假設 K1 | `core/region.rs` 的單元測試；`region` fuzzer（對著一個簡單的模型，開 ASan）；核心在 Miri 底下；`fit.rs` 的 Verus 證明；三個平台各自的 `no_more_than_a_region_has_is_mapped` |
+| G1 | **記憶體**：不管對方在共用記憶體裡寫什麼、在訊息裡給什麼編號和長度，這一端讀寫的都在它自己 map 的那一塊裡面 | `core/region.rs`：訊息提到的編號和長度由 `Table::named` 檢查（超過是 `OutsideRegion`、不在表裡是 `UnknownRegion`），`Table::read` 和訊息帶來的 `SharedBuffer` 都經過它；之後從 `SharedBuffer` 讀的每一段（`copy_out`、`chunks_out`）再和訊息說的長度比一次。`Pool::put` 寫的和 `Pool::take` 交出去的那一塊由 `core/fit.rs` 的 `best_fit` 選，夠長是證明過的。mapping 不會比物件長：I2 和假設 K1 | `core/region.rs` 的單元測試；`crates/ipc/tests/it/shared_buffer.rs`；`region` fuzzer（對著一個簡單的模型，開 ASan）；核心在 Miri 底下；`fit.rs` 的 Verus 證明；三個平台各自的 `no_more_than_a_region_has_is_mapped` |
 | G2 | **壞的輸入**：從通道讀到的任何位元組，結果只有兩種：照規則處理，或當成壞訊息關掉通道。不 panic、不卡住、不 stack overflow，用掉的記憶體有上限 | `core/frame.rs`：長度上限（`MAX_PAYLOAD_LEN`）、照實際收到的量配置、序號、handle 的個數；`codec.rs`：巢狀深度上限（`MAX_DEPTH`）；`core/channel.rs`：目的地要認得；`endpoint.rs`：上層解不出來就是壞訊息 | `frame`、`endpoint` 兩個 fuzzer（任何輸入都不 panic，怎麼切結果都一樣）；`crates/ipc/tests/it/codec.rs`；`crates/ipc/tests/it/endpoint.rs` 裡亂送的對端；跨 process 的 `what_a_child_may_not_send_closes_its_channel` |
 | G3 | **handle**：沒有權限的一端送的訊息，不會讓收的一端留下任何 handle | `core/frame.rs` 的 `Decoder`：對方不能附時，有 handle 到了就是 `HandlesNotAllowed`，到了的全部丟掉；個數超過是 `TooManyHandles`。交給核心的 handle 一定是 kernel 搬進來的：I4 | `frame` fuzzer（沒有權限的一端留不下 handle，留著的不比到了的多）；跨 process 的 `what_a_child_may_not_send_closes_its_channel`；macOS 的 `a_receive_right_isnt_a_handle`；Windows 的 `a_child_gives_no_handle_and_a_host_takes_no_value_for_one` |
-| G4 | **region 的歸屬**：一塊 region 只在建它時指定的那條通道的表裡；收回之後不在任何表裡 | 池子和表是每個端點自己的（`endpoint.rs`），兩個方向的 region 都由能附 handle 的一端編號；對方提到沒給過它的、還沒寫過的、還兩次的都是壞訊息（`UnknownRegion`、`RegionNotOut`）。一個 Browser 對好幾個 renderer 時「不交給別的 renderer」由上層守，`ipc` 這一層只有一條通道 | `crates/ipc/tla/Regions.tla`；`region` fuzzer；`crates/ipc/tests/it/endpoint.rs` |
+| G4 | **region 的歸屬**：一塊 region 只在建它時指定的那條通道的表裡；收回之後不在任何表裡 | 池子和表是每個端點自己的（`endpoint.rs`），兩個方向的 region 都由能附 handle 的一端編號；對方提到沒給過它的、還沒寫過的、還兩次的、這一端拿去寫還沒送出去的（I10）都是壞訊息（`UnknownRegion`、`RegionNotOut`）。一個 Browser 對好幾個 renderer 時「不交給別的 renderer」由上層守，`ipc` 這一層只有一條通道 | `crates/ipc/tla/Regions.tla`；`region` fuzzer；`crates/ipc/tests/it/endpoint.rs` |
 | G5 | **不被卡住**：送訊息不等對方；對方不讀時，這一端的佇列到上限就關掉通道 | `core/channel.rs`：`send` 不等，收不下的排隊，超過 `MAX_QUEUED_BYTES` 是 `Gone::QueueFull`；平台的 `write` 不等（I6） | `core/channel.rs` 的單元測試；loom、shuttle；跨 process 的 `a_child_that_isnt_reading_delays_nothing_for_good` |
 | G6 | **順序**：一條通道上，收的一端交出訊息的順序就是送的一端送的順序，不重複、不漏 | `core/channel.rs`：一把鎖守著編號和寫出去的順序；`core/frame.rs`：序號不連續是 `OutOfOrder` | loom（每一種交錯）、shuttle；`crates/ipc/tla/Channel.tla`；`frame` fuzzer |
 | G7 | **斷線**：對方不在了（結束、當掉、只關掉一半、送了壞訊息）時，這一端剛好報告一次，之後不再交出它的訊息 | `core/channel.rs` 的 `Receiver`：理由是第一個發生的，只報告一次；平台說對方不在了靠假設 K4 | `crates/ipc/tla/Channel.tla`；loom、shuttle；跨 process 的 `a_child_that_exits_or_is_killed_is_heard_by_its_host`、`a_host_that_closes_is_heard_by_its_child`、`a_child_gone_before_it_took_its_end_is_heard_once_the_host_says_so` |
@@ -59,12 +59,14 @@ macOS 那一層的測試在 `src/platform/macos/` 各檔的單元測試和 `crat
 | --- | --- | --- |
 | I1 | **核心不做系統呼叫**，也不依賴平台的 crate | `python3 scripts/sanity.py deps` |
 | I2 | **`Memory` 的實作**：值活著的期間 `ptr()` 起 `len()` 個位元組可讀（放進 `Pool` 的還要可寫）、不搬動、不比底下的物件長 | `unsafe trait`：每個實作有自己的 `// SAFETY:`（下面的表）；平台的 `map` 在 map 之前確認長度（Linux 先看 seal 再量；macOS 和 Windows 由 kernel 拒絕） |
-| I3 | **共用記憶體裡的位元組只被整段複製**，不當成有不變量的型別、不借成 `&[u8]` 或 `&T` 交出去 | 對方可能同時在寫。`Pool::put` 和 `Table::read` 是僅有的兩個存取點，都是 `ptr::copy_nonoverlapping`；複製出來之後才解碼。審查 |
+| I3 | **對方可能在寫的共用記憶體只被複製出來**，不當成有不變量的型別、不借成 `&[u8]` 或 `&T` 交出去 | 對方寫的 region（表裡的）只有三個讀的地方，都在 `core/region.rs`：`Table::read`（整段複製到 `Vec`）、`copy_out`（複製到呼叫的人給的 slice）、`chunks_out`（一段一段以值交出去，給只能寫、拿不到 slice 的目的地）。`SharedBuffer` 拿著 region 時只提供後兩種，`as_bytes` 回 `None`。複製出來之後才解碼。審查；`crates/ipc/tests/it/shared_buffer.rs` |
 | I4 | **交給核心的 handle 是 kernel 為這則訊息搬進來的**，不是對方寫的數值 | macOS、Linux：假設 K3。Windows：child 寫的位元組沒有這一層的表頭，host 那一端沒有把數值包成 handle 的程式，所以對方不能附 handle 的一端看不到任何數值（`a_child_gives_no_handle_and_a_host_takes_no_value_for_one`） |
-| I5 | **child 信任 host 的地方只有這幾處** | Windows 的 child 把 host 寫的數值包成 handle（`End::next`）、不檢查收到的 section 是哪一種；三個平台的 child 照環境變數或 rendezvous 拿它那一端。新增一處要寫在這裡 |
+| I5 | **child 信任 host 的地方只有這幾處** | Windows 的 child 把 host 寫的數值包成 handle（`End::next`）、不檢查收到的 section 是哪一種；三個平台的 child 照環境變數或 rendezvous 拿它那一端；child 把 host 給它寫的 region 借成 slice 來畫（I10），相信 host 不寫那一塊。新增一處要寫在這裡 |
 | I6 | **平台的函式除了 `wait` 都不等** | 審查；`core/channel.rs` 在自己的鎖底下呼叫 `write` |
 | I7 | **一條通道只有一條 thread 讀**（IO thread） | `Endpoint` 交給迴圈時是搬進去的，只能交一次；Linux 的 waiter 拒絕已經被別的 waiter 等著的一端（`an_end_has_one_waiter`），Windows 的 pipe 只上得了一個 completion port |
 | I8 | **Windows 上進行中的操作讓它的通道活著**，直到它的通知從 port 取走：那之前 kernel 隨時會寫它的 `OVERLAPPED` 和緩衝區 | `hold`、`let_go` 和 `wait` 裡的 `Arc::from_raw` 成對（下面的表）。waiter 丟掉時還在進行的不釋放：刻意洩漏 |
+| I10 | **這一端寫的 region 只在一個時候是 slice：被拿出池子（`Pool::take`）、還沒交給訊息（`Pool::lend`）的期間，而且只給拿的那一個人**（`shared_buffer::Writer`） | 那段期間池子記著它被拿著（`held`）：不會再被 `take` 或 `put` 選到，對方說「讀完了」是壞訊息（`RegionNotOut`，不然下一個拿的人會寫同一塊）。`Writer` 變成 `SharedBuffer` 時被消耗掉，之後沒有東西能寫它；`SharedBuffer` 還給池子只有一次（訊息沒送出去時由送的那一步還，`sent` 旗標讓它自己 drop 時不再還）。對方那一側的 mapping 不寫這一塊：Browser 寫的 region，renderer 拿到的是唯讀的（K1）；renderer 寫的 region，Browser 的程式只讀（I5 的方向相反：這裡是 child 信任 host）。`core/region.rs` 和 `crates/ipc/tests/it/shared_buffer.rs` 的測試（`a_region_its_taker_still_writes_isnt_the_peers_to_free`）；Miri；審查 |
+| I11 | **值裡的 region 和管道一樣，只在同一條 thread 的同一次序列化或解碼裡交接**：`SharedBuffer` 把它的編號經過一個 thread-local 交給 codec，codec 把訊息提到的 region 經過另一個交給值 | codec 不是這條通道的（別的序列化器、別的通道）時編號留在原地，`SharedBuffer` 的 region 還是它的；解碼時交出之後再清一次。記憶體安全不靠這一條（能寫 region 的 `Writer` 在這之前已經沒有了）：放錯的後果是一塊 region 不被還回來，或訊息被拒絕。`crates/ipc/tests/it/shared_buffer.rs` 的 `a_region_crosses_once_and_only_its_own_channel` |
 | I9 | **值裡的管道只在同一條 thread 的同一次序列化或解碼裡交接**：`Consumer` 經過一個 thread-local 交給 codec（或從 codec 交給值），交接的兩邊一定把它拿走或還回去，不留給下一個值 | `data_pipe` 的 `Serialize`（codec 沒拿走就還給值）、codec 解碼時交出之後再清一次；`crates/ipc/tests/it/pipe_in_message.rs` 的「只有 codec 序列化」「冒用名字的型別」兩個測試。沒有 `unsafe`：放錯地方的後果是一條管道提早結束，不是記憶體錯誤 |
 
 ## 每一處 `unsafe`
@@ -77,7 +79,10 @@ macOS 那一層的測試在 `src/platform/macos/` 各檔的單元測試和 `crat
 | --- | --- |
 | `core/region.rs` 的 `unsafe trait Memory` | 實作的人保證：值活著的期間 `ptr()` 起 `len()` 個位元組可讀（放進 `Pool` 的還要可寫），兩者不變；這個 process 裡沒有別的參照指進那一段。`Arc<M>` 的實作只是轉給裡面的值，`Arc` 讓它活著、不搬動 |
 | `core/region.rs` 的 `Pool::put`（複製進 region） | 目的地是 `best_fit` 選的那一塊，它的長度至少是要寫的長度（Verus 證明的後置條件），`Memory` 保證那一段可寫；來源是這個 process 自己的 slice，和 region 不重疊 |
-| `core/region.rs` 的 `Table::read`（從 region 複製出來、`set_len`） | 長度先和 region 的長度比過（超過的是 `OutsideRegion`）；目的地是剛 `reserve` 過的多餘容量，`set_len` 只涵蓋剛寫的那幾個位元組。對方可能同時在寫那一塊：讀到的是位元組，不當成有不變量的型別，複製出來之後才交給上層 |
+| `core/region.rs` 的 `copy_out`（從 region 複製到呼叫的人的 slice） | 位置加長度先和記憶體的長度比過（溢位或超過就不複製）；目的地是呼叫的人自己的 `&mut [u8]`，和 region 不重疊。對方可能同時在寫：同 `Table::read` |
+| `core/region.rs` 的 `chunks_out`、`ChunksOut::next`（一段一段以值讀出來） | 建的時候確認「位置加段數乘每段的長度」在記憶體裡面（乘和加都檢查溢位），之後每拿一段就少算一段，所以每次讀的 `N` 個位元組都在裡面；借著記憶體的生命週期，讀的期間 mapping 還在。讀成 `[u8; N]`：位元組不用對齊、任何內容都合法。對方可能同時在寫：同 `Table::read` |
+| `core/region.rs` 的 `bytes_mut`、`bytes`，和 `shared_buffer.rs` 的 `Writer::bytes_mut`、`Writer::bytes` | I10：region 是池子裡的（可寫），長度在拿的時候和它比過；被拿著、還沒交給訊息的期間這個 process 裡只有這個 `Writer` 碰得到它，`&mut self` 和 `&self` 讓同時只有一個可寫的 slice、或幾個只讀的；對方的 mapping 不寫它。mapping 的內容是 0 或之前寫的，都是初始化過的位元組。`Writer` 自己拿著 mapping 的 `Arc`，通道結束之後 slice 還是有效 |
+| `core/region.rs` 的 `Table::read`（從 region 複製出來、`set_len`） | 長度先和 region 的長度比過（`Table::named`，超過的是 `OutsideRegion`）；目的地是剛 `reserve` 過的多餘容量，`set_len` 只涵蓋剛寫的那幾個位元組。對方可能同時在寫那一塊：讀到的是位元組，不當成有不變量的型別，複製出來之後才交給上層 |
 | `core/region.rs` 的 `HeapMemory`（`Box::into_raw`、`from_raw`、`Send`、`Sync`） | 指標來自 `new` 裡的 `Box::into_raw`，只在 `drop` 還回去一次；配置是這個值自己的，經過 `Memory` 的讀寫都是整段位元組的複製，兩端同時複製和跨 process 的 mapping 是同一種情況 |
 | `time_ticks.rs` 的 `QueryPerformanceFrequency`、`QueryPerformanceCounter`（只在 Windows） | 傳進去的指標指向一個活著的 `i64`，呼叫只寫它、不留著它；Windows XP 以後這兩個呼叫不會失敗。頻率讀成 0 時當成 1，不會除以 0 |
 
@@ -133,7 +138,7 @@ macOS 那一層的測試在 `src/platform/macos/` 各檔的單元測試和 `crat
 | --- | --- | --- |
 | `cargo test -p ipc`：單元測試、惡意的對端、跨 process 的測試、fuzzer 找到過的輸入（`crates/ipc/fuzz/regressions/`） | 全部；每個平台的假設 | 每次；CI 每天在 Linux 上跑，macOS 和 Windows 的平台層只在開發機上跑 |
 | fuzz（`python3 scripts/test.py ipc fuzz`：`endpoint`、`frame`、`pipe`、`region` 四個 target，開 ASan） | G1、G2、G3、G9 | 改核心時在本機 |
-| Miri（`python3 scripts/test.py ipc miri`：核心的單元測試，和端點經過同一個 process 裡的平台的幾個測試） | 核心的 `unsafe`（G1、I3） | 改核心時在本機 |
+| Miri（`python3 scripts/test.py ipc miri`：核心的單元測試，和端點經過同一個 process 裡的平台的幾個測試，包括 `shared_buffer` 的） | 核心的 `unsafe`（G1、I3、I10） | 改核心時在本機 |
 | loom、shuttle（`python3 scripts/test.py ipc models`） | G5、G6、G7：送出的佇列和它的鎖、通道的結束 | 改到這幾處時在本機 |
 | TLA+（`python3 scripts/test.py ipc tla`：三個模型，各自再拿掉每一部分確認找得到反例） | G4、G6、G7、G9 的協定 | 改協定時，模型一起改 |
 | Verus（`python3 scripts/test.py ipc verus`） | `core/fit.rs`、`core/credit.rs` 的算術 | 改這兩個檔案時 |
@@ -146,7 +151,8 @@ Miri 和 fuzzer 碰不到平台層（系統呼叫）：那一層靠跨 process �
 
 列在 `docs/test-gaps.md` 和 `docs/limitations.md` 的「平台和建置」，這裡只列和論證有關的：
 
-- **共用記憶體被對方同時寫**：這一端用 `ptr::copy_nonoverlapping` 讀對方可能正在寫的位元組。Rust 的模型裡這是和另一個 process 的 data race；`ipc` 把它當成「讀到任意位元組」處理（I3），這也是用共用記憶體的程式通常的做法，但不是語言保證的。
+- **共用記憶體被對方同時寫**：這一端用 `ptr::copy_nonoverlapping` 和 `read_unaligned` 讀對方可能正在寫的位元組。Rust 的模型裡這是和另一個 process 的 data race；`ipc` 把它當成「讀到任意位元組」處理（I3），這也是用共用記憶體的程式通常的做法，但不是語言保證的。
+- **這一端寫 region 的 slice 靠對方不寫那一塊**（I10）：renderer 這一側靠的是 Browser 的程式不寫它給出去的 region，不是 kernel。同一個 process 裡的平台（`local`，測試用）兩端共用同一塊記憶體：一端太早說「讀完了」而另一端還拿著那塊 region 的 `SharedBuffer` 時，是同一個 process 裡的 data race；只有故意寫成那樣的測試做得到，現有的測試沒有。
 - **macOS 和 Windows 的平台層 CI 不跑**，fuzz、Miri、loom、TLA+、Verus 也只在本機跑：改了而沒有跑時沒有東西會發現。
 - **作業系統的 sandbox 還沒有做**：K5 對「同一個使用者的其他 process」的部分（Windows 啟動 child 時的繼承、pipe 建立時的保護）只靠審查。
 - **Windows 的 `hold` 和 `let_go` 成對**：弄壞是釋放後被 kernel 寫，測試看不出來，沒有列成 mutant。
@@ -155,7 +161,7 @@ Miri 和 fuzzer 碰不到平台層（系統呼叫）：那一層靠跨 process �
 ## 修改時要審查的
 
 - **新增 `unsafe`**：寫 `// SAFETY:`，在上面的表加一列；如果靠 kernel 的行為，加一條假設和守它的測試。
-- **改 `core/region.rs` 的存取**：I3 還成立嗎（有沒有把 region 的位元組借出去）；長度的檢查在複製之前嗎。跑 `region` fuzzer 和 Miri。
+- **改 `core/region.rs` 的存取，或 `shared_buffer.rs`**：I3 還成立嗎（有沒有把對方能寫的位元組借出去）；I10 還成立嗎（`held` 的每一個轉換、誰能把一塊 region 還給池子、`Writer` 以外有沒有東西拿得到可寫的 slice）；長度的檢查在複製之前嗎。跑 `region` fuzzer 和 Miri。
 - **改訊息的格式或檢查**（`core/frame.rs`、`core/control.rs`、`codec.rs`）：每一個上限還在嗎；跑 `frame`、`endpoint` fuzzer；協定變了的話改 TLA+ 的模型。
 - **改送出的佇列、鎖或通道的結束**（`core/channel.rs`）：跑 loom 和 shuttle；鎖底下不能等（I6）。
 - **新的平台，或改平台的 `Platform`、`Waiter`**：對過 K1 到 K6 每一條在那個平台靠什麼、有沒有測試；`crates/ipc/tests/it/process_channel.rs` 不改就要過；handle 如果是數值，照 Windows 的做法守 I4。

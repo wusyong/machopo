@@ -8,8 +8,9 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use crate::core::channel::{Transport, WriteError};
-use crate::core::region::{HeapMemory, Memory};
+use crate::core::region::{HeapMemory, Memory, Pool, class_len};
 use crate::endpoint::{Event, Key, Platform, Waited, Waiter, Wake};
+use crate::shared_buffer::{Mapped, Owner, SharedBuffer, Writer};
 
 /// A region, as a handle and as a mapping: the memory itself, shared.
 pub type Region = Arc<HeapMemory>;
@@ -328,4 +329,41 @@ impl Waiter<Local> for LocalWaiter {
             }
         }
     }
+}
+
+/// Regions with no channel under them: nobody to give one back to, and
+/// no peer to tell.
+struct NoChannel;
+
+impl Owner for NoChannel {
+    fn give_back(&self, _: u32) {}
+
+    fn read(&self, _: u32) {}
+}
+
+/// `bytes` as a buffer a message brought in a region its sender wrote,
+/// with no channel under it: for the tests of whatever takes such a
+/// buffer, which reads it as it would one that crossed. `None` for more
+/// bytes than a region holds.
+pub fn shared_buffer(bytes: &[u8]) -> Option<SharedBuffer> {
+    let len = class_len(bytes.len())?;
+    let memory = Arc::new(HeapMemory::new(len));
+    let mut pool = Pool::new(len);
+    pool.add(0, memory.clone()).ok()?;
+    pool.put(bytes)?;
+    let memory: Mapped = memory;
+    Some(SharedBuffer::held(
+        memory,
+        0,
+        bytes.len(),
+        Arc::new(NoChannel),
+    ))
+}
+
+/// A region to write `len` bytes in place, with no channel under it:
+/// for the tests of whatever draws in one. `None` for more bytes than a
+/// region holds.
+pub fn writer(len: usize) -> Option<Writer> {
+    let memory: Mapped = Arc::new(HeapMemory::new(class_len(len)?));
+    Some(Writer::new(memory, 0, len, Arc::new(NoChannel)))
 }

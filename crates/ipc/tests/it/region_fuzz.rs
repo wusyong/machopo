@@ -20,10 +20,12 @@ use serde::{Deserialize, Serialize};
 
 type Shared = Arc<HeapMemory>;
 
-/// What the model knows of a region: its length, and what is out in it.
+/// What the model knows of a region: its length, what is out in it, and
+/// whether it is out to a taker that hasn't lent it to a message.
 struct Known {
     len: usize,
     out: Option<Vec<u8>>,
+    held: bool,
 }
 
 const LIMIT: usize = 4 * MIN_REGION_LEN;
@@ -58,7 +60,7 @@ impl Ends {
     }
 
     fn step(&mut self, op: u8, number: u32, amount: usize) {
-        match op % 7 {
+        match op % 8 {
             0 => {
                 // Lengths around the two smallest classes, and not classes.
                 let len = match amount % 5 {
@@ -81,7 +83,14 @@ impl Ends {
                 assert_eq!(self.pool.add(number, memory.clone()), expected);
                 if expected.is_ok() {
                     assert!(self.table.insert(number, memory));
-                    self.known.insert(number, Known { len, out: None });
+                    self.known.insert(
+                        number,
+                        Known {
+                            len,
+                            out: None,
+                            held: false,
+                        },
+                    );
                 }
             }
             1 => {
@@ -103,7 +112,11 @@ impl Ends {
                 }
             }
             2 => {
-                let was_out = self.known.get(&number).map(|known| known.out.is_some());
+                // Out, and not to a taker that has yet to send it.
+                let was_out = self
+                    .known
+                    .get(&number)
+                    .map(|known| known.out.is_some() && !known.held);
                 let expected = match was_out {
                     None => Err(BadMessage::UnknownRegion { number }),
                     Some(false) => Err(BadMessage::RegionNotOut { number }),
@@ -153,18 +166,30 @@ impl Ends {
                         let mut held = Vec::new();
                         self.table.read(taken, known.len as u32, &mut held).unwrap();
                         known.out = Some(held);
+                        known.held = true;
                     }
                     None => assert_eq!(fit, None),
                 }
             }
-            _ => {
+            6 => {
                 let was_out = self
                     .known
                     .get(&number)
                     .is_some_and(|known| known.out.is_some());
                 assert_eq!(self.pool.give_back(number), was_out);
                 if was_out {
-                    self.known.get_mut(&number).unwrap().out = None;
+                    let known = self.known.get_mut(&number).unwrap();
+                    known.out = None;
+                    known.held = false;
+                }
+            }
+            _ => {
+                // Lent to a message by its taker, once: still out, and
+                // the peer's to give back from now.
+                let held = self.known.get(&number).is_some_and(|known| known.held);
+                assert_eq!(self.pool.lend(number), held);
+                if held {
+                    self.known.get_mut(&number).unwrap().held = false;
                 }
             }
         }

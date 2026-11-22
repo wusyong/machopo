@@ -125,18 +125,22 @@ let mut pool = ipc::core::region::Pool::new(limit);
 pool.add(number, memory)?;                  // 長度要是 class_len 給的那幾種
 let number = pool.put(&bytes);              // 最短的放得下的空塊；沒有就是 None
 pool.released(number)?;                     // 對方說它讀完了
+let number = pool.take(len);                // 拿一塊空的直接寫（不複製）
+pool.lend(number);                          // 寫好了，交給要提到它的訊息
 
 // 收的一端：對方寫進去的 region，照編號查。
 let mut table = ipc::core::region::Table::new();
 table.insert(number, memory);
 table.read(number, len, &mut into)?;        // 檢查、複製出來
 let read = table.take_read();               // 讀過的，要告訴對方的
+let memory = table.named(number, len)?;     // 只檢查、不讀：之後由拿著它的人讀、說讀完了
 ```
 
 - **一筆資料用一整塊**：訊息裡提到 region 時只有編號和長度，沒有位置。region 的長度是 64 KiB 起每次加倍、到 1 GiB 的那幾種（`class_len`）；資料放進最短的放得下的空塊。
-- **用著的不會再被寫**：`put`、`take` 之後那一塊是「出去了」，到 `released`（對方的訊息）或 `give_back`（拿走它的人自己還，例如 tile 的像素）才再用。還一塊沒出去的、或不是這個池子的，是壞訊息（`RegionNotOut`、`UnknownRegion`）。
-- **收的一端只檢查兩件事**：編號在不在表裡（`UnknownRegion`）、長度有沒有超過那一塊（`OutsideRegion`）。內容一律先複製到自己的記憶體才用：對方還能寫那一塊。
-- **map 出來的記憶體不變成 `&[u8]`**：進出都經過指標複製。
+- **用著的不會再被寫**：`put`、`take` 之後那一塊是「出去了」，到 `released`（對方的訊息）或 `give_back`（拿走它的人自己還）才再用。還一塊沒出去的、或不是這個池子的，是壞訊息（`RegionNotOut`、`UnknownRegion`）。
+- **拿去寫的那一塊在交給訊息之前只屬於拿的人**：`take` 之後池子記著它被「拿著」，到 `lend`（訊息提到它了，從此和 `put` 的一樣由對方說讀完）或 `give_back` 為止。這段期間對方說它「讀完了」是壞訊息：沒有訊息提過它，放掉的話下一個拿的人會寫同一塊。
+- **收的一端只檢查兩件事**：編號在不在表裡（`UnknownRegion`）、長度有沒有超過那一塊（`OutsideRegion`）。內容一律複製到自己的記憶體才用：對方還能寫那一塊。
+- **對方能寫的記憶體不變成 `&[u8]`**：只經過指標複製出來，`Table::read`（整段）、`copy_out`（一段，到給的 slice）、`chunks_out`（一段一段以值交出去）。這一端自己寫的 region，被拿著的期間可以是 slice（`bytes_mut`、`bytes`，`unsafe`，只有 `shared_buffer::Writer` 用）。
 - **總量有上限**：`Pool::new(limit)`，超過的 `add` 被拒絕。只有空的那一塊拿得走（`remove`）。
 - **交出去和還回來都是訊息**（`core::control` 的 `Granted` 和 `Released`）：共用記憶體裡沒有雙方都寫的狀態，「可以再用了」只經過訊息。
 - `HeapMemory`：一般配置的記憶體當成 region，給同一個 process 裡的兩端和測試用（Miri 跑得起來）。
@@ -149,6 +153,7 @@ let read = table.take_read();               // 讀過的，要告訴對方的
 | --- | --- | --- |
 | `Released` | 一串 region 的編號 | 這些讀完了，可以再寫（一批一則） |
 | `Granted` | 編號、長度、給對方寫的或讀的 | 一塊新的 region，handle 跟著這一則 |
+| `Wanted` | 長度 | 送的一端沒有空的 region 放這麼長的資料，想多一塊（給建 region 的那一端；給不給由它決定） |
 | `PipeOpened` | 管道的編號、容量 | 送的一端要寫的一條新管道 |
 | `PipeData` | 管道的編號、位元組 | 管道接下來的一段 |
 | `PipeRead` | 管道的編號、數量 | 讀的一端又讀了這麼多 |
@@ -228,6 +233,7 @@ let (link, endpoint) = ipc::endpoint::endpoint(platform, config);
 link.send(destination, &message)?;              // 大的位元組走 region
 let pipe = link.open_pipe(consumer, capacity)?; // 之後送的訊息裡帶這個編號
 link.grant_to_peer(len);                        // 給對方一塊它寫的 region（只有建 region 的那一端）
+let writer = link.take_region(len);             // 拿一塊空的 region 直接寫（見 `shared_buffer`）
 link.close();
 
 // 一個 process 一條 IO thread，它的迴圈管這個 process 所有的通道。
@@ -258,10 +264,39 @@ impl Handler<P> for MyHandler {
 - **迴圈的順序只有一份**（`turn`）：讀到的餵給通道，核心自己的訊息當場處理、其餘的交給 `handler`；這一批讀過的 region 合成一則 `Released`；建好排著要給對方的 region；管道的來源有多少、對方有多少空間就送多少；最後寫出等著的。`run` 就是「等、`turn`」。
 - **型別在 IO thread 上解**：`handler` 看目的地決定型別，`decode` 時從對方的 region 複製出來。`decode` 的錯誤傳回去，通道就關掉。
 - **先告知、再提到**：一則訊息的大位元組放進 region、新建的 region 的 `Granted`、訊息本身，在同一把鎖底下依序送出，別的 thread 的訊息插不進中間。`open_pipe` 先送 `PipeOpened` 才回傳編號。
-- **只有能附 handle 的一端建 region**（`Config::may_attach`，Browser）：兩個方向的 region 都是它編號。它自己送大資料時，沒有空塊就當場建一塊（不超過 `region_limit`）；對方要寫的那幾塊由它用 `grant_to_peer` 給。另一端沒有空塊時大資料就放在訊息裡。
+- **只有能附 handle 的一端建 region**（`Config::may_attach`，Browser）：兩個方向的 region 都是它編號。它自己送大資料時，沒有空塊就當場建一塊（不超過 `region_limit`）；對方要寫的那幾塊由它用 `grant_to_peer` 給，或對方要（`Wanted`），兩種加起來不超過 `peer_region_limit`，超過的不建、也不算對方的錯。另一端沒有空塊時大資料就放在訊息裡，同時送一則 `Wanted`（那個長度的），不等回答：下一筆那麼長的就有地方放。建 region 的那一端收到 `Wanted` 是壞訊息（它不向誰要）。
 - **送不出去的訊息**（通道已經結束、太長）放進 region 的那幾塊當場還回池子。
 - **管道**：來源的 `Consumer` 放在訊息的值裡，`send` 就替它開管道（`PipeOpened` 走在那則訊息前面，同一把鎖底下），容量是那條管道自己的；收的一側 `decode` 出來的值裡就是那條管道的 `Consumer`。訊息送不出去時（通道結束了、佇列滿了），為它開的管道結束、來源放掉、告訴對方（對方把替它留的那一端丟掉）。`open_pipe` 和 `take_pipe` 是同一件事分開做的版本（訊息裡自己帶編號）。來源有資料時叫醒 IO thread；收的一側收到 `PipeOpened` 時建一條 `data_pipe`、掛上回報的掛勾，讀的一端等訊息提到它時由 `take_pipe` 拿走。讀的一端 drop 就是取消。對方不被信任時不讓它開管道（`peer_may_open_pipes`）：每一條都是這一端要留的記憶體。
 - **通道結束**：`turn` 回 `Some(Gone)` 一次；管道的來源放掉（它們的寫的一端看到讀的不在了）、這一端留著用來送大資料的 region 都放掉（不等最後一個 `Link` 被丟掉：拿著 `Link` 的人可能留很久）、傳輸關掉，之後 `send` 回 `SendError::Gone`。迴圈告訴那個端點的 `handler`（`gone`）、不再等它；其他的通道照常。迴圈被停下來時，還在的每一條都在這一端關掉、`handler` 收到 `Gone::Closed`。
+
+## `shared_buffer`
+
+過通道時兩端都不複製的位元組（Chromium 的 `mojo_base::BigBuffer` 走共用記憶體的時候；兩端各自對應 `base::WritableSharedMemoryMapping` 和 `base::ReadOnlySharedMemoryMapping`）。給「畫在哪裡就從哪裡送」的資料用：tile 的像素。
+
+```rust
+// 送的一端：拿一塊空的 region，直接畫在裡面。
+let mut writer = link.take_region(len)?;        // 沒有空的是 None：改用自己的位元組送，那一次會替下一次要一塊
+draw(writer.bytes_mut());                       // &mut [u8]，只有這個 Writer 碰得到
+let pixels = SharedBuffer::from(writer);        // 之後沒有東西能寫它
+link.send(destination, &Tile { pixels, .. })?;  // 訊息裡只有編號和長度
+
+// 收的一端：decode 出來的欄位就是那一塊 region，沒有複製。
+let tile: Tile = message.decode()?;
+tile.pixels.as_bytes();                         // None：對方還能寫，不給 slice
+tile.pixels.copy_to(offset, &mut into);         // 複製出來，一次
+tile.pixels.chunks::<256>(offset, count);       // 或一段一段以值拿（給只能寫的目的地）
+drop(tile);                                     // 這時才告訴對方「可以再寫了」
+```
+
+- **`SharedBuffer` 是訊息裡的欄位型別**，有三種內容：這個 process 自己的位元組（`From<Bytes>`，和一般的位元組一樣序列化，夠長就複製進 region）、這一端寫好的 region（`From<Writer>`）、對方寫的 region（解碼出來的）。同一個 process 裡不經過 codec 時，它就是那些 `Bytes`。
+- **收的一端拿到的一律是 region 本身**（訊息說在 region 裡時）：不管送的一端是直接畫在裡面，還是把自己的位元組複製進去的。前者整條路不複製，後者送的一端複製一次。
+- **一塊 region 只過去一次、只經過它自己的通道**：同一個 `SharedBuffer`（或它的 clone）送第二次、交給別的通道、交給不是 codec 的序列化器都被拒絕；後兩種 region 還是它的。對方寫的 region 不能再轉送出去。
+- **還回去的時機**：`Writer` 或沒送出去的 `SharedBuffer` 被 drop 時，region 回到池子；送出去之後由對方決定（它那一份 `SharedBuffer` 的最後一個 clone 被 drop 時送 `Released`）。訊息沒送成（通道結束、佇列滿）時當場還。
+- **活得比通道久**：`Writer` 和 `SharedBuffer` 自己拿著 mapping，通道結束之後還讀得到、寫得到；還回去時沒有人收，mapping 在它們 drop 時解除。
+- **`chunks` 是給 GPU 的 mapped 緩衝區用的**：那種記憶體只能寫（wgpu 的 `WriteOnly`），拿不到可以複製進去的 `&mut [u8]`，只收「值」。一段一段以 `[u8; N]` 交出去，量起來和一次 `memcpy` 一樣快（256 KiB 約 5 µs）。
+- `local::shared_buffer(bytes)`、`local::writer(len)`：沒有通道的版本，給用它們的程式的測試。
+
+為什麼 `&mut [u8]` 成立、對方太早說「讀完了」會怎樣，在 `crates/ipc/soundness.md` 的 I10。
 
 ## `local`
 
@@ -474,7 +509,7 @@ python3 scripts/test.py ipc models   # 通道的 thread 共用的東西在 loom 
 
 `core::sync` 在 `--cfg ipc_loom`、`--cfg ipc_shuttle` 時把鎖換成 loom 和 shuttle 的（不用 `loom` 這個 cfg：`ipc` 依賴的 tokio 自己也認它，會拿掉幾個模組、換掉幾處實作，測到的就不是平常編出來的那個 tokio）。loom 的模型（`loom_tests`，每一種交錯都試）：兩條 thread 同時送、第三條補空間和 `flush`，每則各寫一次、完整、序號照順序；送的同時對方不在了，結束只聽到一次、之後送不出去、沒有東西留著；兩條同時送而佇列只放得下一則，剛好一條被拒絕、理由是 `QueueFull`。shuttle 的模型（`shuttle_tests`，隨機的排程各 10000 次）：3 條 thread 各送 12 則長短不一的訊息，傳輸一次只收幾個位元組，一條 thread 補空間和 `flush`，全部寫出來、每條 thread 自己的照順序；同樣的情況中途關掉通道，結束只聽到一次，寫出去的是完整的訊息加上最多一則的開頭，沒有「被告知沒送出去」的訊息。
 
-`src/core/region.rs` 的單元測試（記憶體是 `HeapMemory`，Miri 底下也跑）：長度對到哪一種 region；寫進去的就是對方讀到的；放進最短的放得下的空塊；出去了的在對方讀完之前不會再被寫、被拒絕的那一筆沒有碰到它；還一塊沒出去的、還兩次、不是這個池子的都是壞訊息；`take` 的那一塊到 `give_back` 之前是拿的人的；不在表裡的編號、超過那一塊的長度（多一個位元組、`u32::MAX`）不讀，整塊和零個位元組可以；從表拿掉的不能再提、號碼被佔的不換掉原來那一塊；池子只收合法長度、不重複、總量以內的（剛好到上限可以）；只有空的拿得走、拿走之後其他的編號和狀態不變。
+`src/core/region.rs` 的單元測試（記憶體是 `HeapMemory`，Miri 底下也跑）：長度對到哪一種 region；寫進去的就是對方讀到的；放進最短的放得下的空塊；出去了的在對方讀完之前不會再被寫、被拒絕的那一筆沒有碰到它；還一塊沒出去的、還兩次、不是這個池子的都是壞訊息；`take` 的那一塊到 `give_back` 之前是拿的人的；被拿著的那一塊對方說讀完是壞訊息、交給訊息（`lend`）只能一次、之後才由對方還，`put` 的和還回去的不算被拿著，別的 region 離開池子時「拿著」跟著它自己的那一塊；拿的人寫的 slice 就是對方讀到的，訊息提到的編號和長度只檢查不讀（`named`），任何一段都複製得出來、超出去的不行（`copy_out`），一段一段以值讀的也是（`chunks_out`：段數乘長度溢位的、最後一段超出去的都不給）；不在表裡的編號、超過那一塊的長度（多一個位元組、`u32::MAX`）不讀，整塊和零個位元組可以；從表拿掉的不能再提、號碼被佔的不換掉原來那一塊；池子只收合法長度、不重複、總量以內的（剛好到上限可以）；只有空的拿得走、拿走之後其他的編號和狀態不變。
 
 ```sh
 python3 scripts/test.py ipc verus    # core/fit.rs 的證明（cargo verus verify -p ipc）
@@ -486,9 +521,11 @@ python3 scripts/test.py ipc verus    # core/fit.rs 的證明（cargo verus verif
 
 `tests/it/pipe_in_message.rs`（值裡的管道，用一個記下開了哪些管道的假的一端）：`Consumer` 在 struct、`Option`、`Vec`、map、enum 的兩種 variant 裡都照值的順序各開一條、訊息裡只有編號，值留下的是結束的管道而原本的管道還開著，另一端解出來的是它自己那幾條的 `Consumer`；同一個值只能過一次；值在開了管道之後失敗時那些管道被結束、來源放掉、`out` 不變；不開管道的一端送不出帶管道的值，開到一半開不了時前面開的收回；編號不是等著的管道、提兩次、沒有管道的一端都是 `UnknownPipe`；JSON 和純 postcard 都不能序列化或讀出 `Consumer`，被拒絕的值管道還在；冒用那個名字的型別送的時候拿不到管道、收的時候它提到的那一條被放掉、不留給下一個值。
 
-`tests/it/region_fuzz.rs`：fuzzer 跑的另一段檢查（`fuzz/fuzz_targets/region.rs`）。輸入當成三樣東西：一則提到 region 的訊息的內容（不管它寫什麼編號和長度，讀都留在 region 裡面，ASan 看著；解得出來的值再寫、再讀要一樣）、一則 `Control`（解得出來的再寫要是同樣的位元組）、一串對池子和表的操作（加、放、拿、還、對方還、拿掉、讀），每一步都對著一個簡單的模型：結果一樣、放進的是最短的放得下的、出去了的那一塊的內容沒有變、總量不超過上限。重播 `fuzz/regressions/region/`。
+`tests/it/region_fuzz.rs`：fuzzer 跑的另一段檢查（`fuzz/fuzz_targets/region.rs`）。輸入當成三樣東西：一則提到 region 的訊息的內容（不管它寫什麼編號和長度，讀都留在 region 裡面，ASan 看著；解得出來的值再寫、再讀要一樣）、一則 `Control`（解得出來的再寫要是同樣的位元組）、一串對池子和表的操作（加、放、拿、交給訊息、還、對方還、拿掉、讀），每一步都對著一個簡單的模型：結果一樣、放進的是最短的放得下的、出去了的那一塊的內容沒有變、被拿著還沒交給訊息的那一塊對方還不了、總量不超過上限。重播 `fuzz/regressions/region/`。
 
-`src/core/control.rs` 的單元測試：七種訊息都讀得回來、種類的位元組各不相同、每個欄位在哪裡；沒有人會寫的 20 種內容都是壞訊息。
+`src/core/control.rs` 的單元測試：八種訊息都讀得回來、種類的位元組各不相同、每個欄位在哪裡；沒有人會寫的 22 種內容都是壞訊息。
+
+`tests/it/shared_buffer.rs`（兩端經過同一個 process 裡的平台，手動推）：拿一塊 region 直接寫、送出去，對方讀到的就是寫的，訊息裡沒有那些位元組、也沒有為它新建 region；對方拿到的不是自己的記憶體（`as_bytes` 是 `None`），任何一段都複製得出來、以值一段一段拿也一樣，超過訊息說的長度的不行（region 比它長也不行）；對方（和它的 clone）還拿著時送的一端不能再寫那一塊，放掉之後才能；拿了沒送的、變成 `SharedBuffer` 沒送的都回到池子；一塊 region 只過去一次、只經過自己的通道（純 postcard、別的通道、送第二次、clone 都被拒絕，前兩種之後還送得出去），對方寫的不能轉送；訊息沒送成時 region 當場還、之後 `SharedBuffer` 被丟掉不會再還一次（那時已經是別人拿著）；通道結束之後 region 都放掉、訊息被拒絕；自己的位元組夠長時複製進 region、對方拿到的是 region，短的留在訊息裡，Browser 那一端送的也一樣，對方放掉才再用；`Writer` 和 `SharedBuffer` 活得比通道久；child 沒有空的 region 時大的位元組放在訊息裡、同時要一塊，要到的照長度的種類算、加上 host 自己給的不超過上限，有空的或太短的不要，不是我們的 host 送 `Wanted` 是壞訊息；不是我們的 host 在 child 還拿著一塊 region 寫的時候說「讀完了」是壞訊息，訊息提過之後才可以、說兩次也是壞訊息；不是我們的 child 的訊息提到的 region 超過長度、不是給它的，都是壞訊息；沒有通道的 `local::shared_buffer`、`local::writer`。
 
 `src/core/pipe.rs` 的單元測試：送的不超過空間、被拒絕的不算數；回報的比送的多是壞訊息；一則最多一個 chunk，容量 0 的管道放得下一個位元組；每條管道有自己的編號和額度；給結束的管道的回報和取消丟掉、給沒開過的是壞訊息；讀的一端每讀一半回報一次（奇數的容量、最小的幾種）；六種容量乘六種讀法，寫的一端額度用完之後一定等得到回報；讀的一端分得出結束的和沒開過的；編號不重開。
 

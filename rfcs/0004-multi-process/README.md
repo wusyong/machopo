@@ -174,8 +174,8 @@ Browser process                                Renderer process
   - 「緩衝區還你了」：Viz 把像素交給 GPU 之後送回，那一塊回到 renderer 的池子。
   - `DestroySharedImage`（編號）：tile 不要了。Viz 等沒有 frame 在用、而且收到它，才回收 texture。
 - frame 的 resource 只帶編號。訊息在同一條通道上照順序到，「建立」一定在用它的 frame 之前，不需要 Chromium 的 sync token。
-- **像素只複製一次**（和改之前一樣）：compositor 有一個緩衝區的池子，raster 直接畫進池子的一塊，那一塊的擁有權跟著「建立」交給 Viz，Viz 交給 GPU 的那一次是唯一的複製。單一 process 時一塊是一段共用的記憶體（`Arc`），跨 process 時是 Browser 配給它的 region 的一段（第 22 條的池子），步驟相同；跨 process 時 Viz 從共用記憶體用指標直接複製進 GPU 給的緩衝區，不先複製到自己的記憶體（共用記憶體不能當成 slice 交給 wgpu）。畫出來是單一顏色的 tile 不上傳，那一塊當場回池子。
-- **有計數守著**：tile 的像素每複製一次就計一次，測試確認次數等於上傳的 tile 的數量，單一 process 和跨 process 都是；多一次複製時測試失敗。第 3 階段的驗收包含跨 process 的這一項。
+- **像素只複製一次**（和改之前一樣）：compositor 有一個緩衝區的池子，raster 直接畫進池子的一塊，那一塊的擁有權跟著「建立」交給 Viz，Viz 交給 GPU 的那一次是唯一的複製。單一 process 時一塊是一段共用的記憶體（`Arc`），跨 process 時是通道的一整塊 region（第 61 條；Browser 先給一組、不夠再要，第 62 條），步驟相同；跨 process 時 Viz 從共用記憶體直接複製進 GPU 給的緩衝區，不先複製到自己的記憶體（共用記憶體不能當成 slice 交給 wgpu；第 63 條）。沒有空的 region 時那一塊 tile 畫在 compositor 自己的緩衝區、像素複製進訊息（三次），不等。畫出來是單一顏色的 tile 不上傳，那一塊當場回池子。
+- **怎麼守著**（3f 做的；原本寫的是「每複製一次就計一次」的計數，沒有做成那樣：複製發生在三個 crate 裡，沒有一個地方數得到全部）：每一段各有測試確認它那一段沒有複製。compositor 畫的那一塊就是訊息帶的那一塊（`compositor` 的 `a_tile_is_drawn_in_a_region_of_the_channels_when_one_is_free`：池子一塊都沒建）；訊息裡沒有像素、也沒有為它新建 region（`ipc` 的 `a_region_written_in_place_is_what_the_peer_reads_out_of`：送的一端寫出去的不到 1 KiB）；Browser 解出來的是那一塊 region、不是自己的記憶體，renderer process 的每一塊 tile 都是（`browser` 的 `a_renderer_processs_tiles_go_to_the_gpu_in_shared_memory`：放在訊息裡的是 0 塊）；Viz 從 region 讀的那一次寫進 GPU 的緩衝區（`viz` 的 `pixels_in_shared_memory_are_what_is_drawn`）。Viz 那一段「沒有先複製到自己的記憶體」測試看不出來，靠型別（`SharedBuffer` 拿著 region 時不給 slice）和審查，記在 `docs/test-gaps.md`。
 - GPU 遺失時 Viz 手上的 texture 都沒了：Browser 照舊送 `ContextLost`，compositor 忘掉所有編號、重新畫、重新送「建立」。
 - renderer 碰不到 GPU，之後的 sandbox 可以鎖得最緊。
 
@@ -570,6 +570,25 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
     - **為了它加的**：一種「另一端沒有東西」的 renderer 啟動方式（`RendererLauncher::Detached`：Browser 送給它的訊息留在佇列裡沒有人讀，renderer 的訊息由呼叫的人同步交進來），只給測試和 fuzz 用；`net` 的 host 規則把一切對到「不存在」時，連寫成 IP 的網址也拒絕（原本 IP 不經過解析、規則管不到；Chromium 的規則兩種都管），fuzz 用這個確保什麼都連不出去。
     - **body 的管道**：過通道的部分是 `ipc` 的，它的 `pipe` 和 `endpoint` 兩個 target 已經涵蓋（3b-1 擴充過訊息裡帶管道的情況），不另外寫。
     - **放哪裡、怎麼跑**照 `ipc` 的做法：harness 是 `browser` 整合測試的一個模組，找到過的輸入放進回歸的資料夾、`cargo test` 每次重放；cargo-fuzz 的 target 在 `crates/browser/fuzz/`；`test.py` 跑，只在本機（第 55 條），跑之前先問使用者。
+61. **tile 的像素用 `ipc` 現有的 region，加上「借出去畫」**（2026-11-22，第 3 階段的 3f；使用者選的。第 23 條寫的「resource 帶 region 的編號、位置和長度」改成帶一整塊 region，沒有位置）：送的一方先向池子拿一塊空的 region 直接畫（不複製），訊息裡帶那一塊的參照；收的一方解出來的是那塊記憶體的 view（不複製），view 放掉時才回報「可以重複用了」。tile 是 256 KiB，剛好是 region 的一種大小。
+    - **理由**：沿用已經驗證過的池子、表和回報的協定（TLA+ 的 `Regions` 模型、fuzzer），不另外發明一套；「Viz 用完了」就是 view 放掉，`ipc` 自己回報；對方給的編號和長度的檢查已經在 `ipc` 裡。
+    - **代價**：`ipc` 的一條不變式要改（`soundness.md` 的 I3：共用記憶體只被整段複製、不借出去）：view 借出去的是對方還能寫的記憶體，要定清楚它只能怎麼用；view 活多久由上層決定，一塊 region 被佔住的時間變長。
+    - **不選另外給一大塊、compositor 自己切**（第 23 條原本的樣子）：多一套分配、位置和長度的檢查、收回的邏輯要自己驗證；讀共用記憶體要 `unsafe`，還是得在 `ipc` 加介面；大小要先猜。不選只省 IO thread 上那一次（收的一方拿 view、送的一方照舊複製）：`ipc` 要動的差不多，只省一半。
+    - 對照 Chromium：改成 GPU raster 之前，tile 的共用記憶體是每塊各自一個、由 renderer 向 Browser 要，生命週期跟著 resource 的歸還。
+62. **renderer 可以寫的 region：啟動時先給一組，不夠再要，compositor 不等**（2026-11-22，3f；使用者選的；「待決定」的「renderer 向 Browser 要共用記憶體時怎麼不卡住 compositor」）：
+    - Browser 啟動有 GPU 的 renderer 時先給一組小的（暫定 16 塊 256 KiB，4 MiB）。compositor 拿不到空的 region 時，那一塊照現在的路走（像素複製進訊息），同時送一則「我要這個大小的」給 Browser；Browser 在上限內建好交給它（`ipc` 已有的 `Granted`），之後的就有得用。總量的上限沿用每個方向的 region 上限（暫定 64 MiB）。
+    - **compositor 永遠不停下來等記憶體**：沒有空的就走複製。所以「沒有共用記憶體時退回哪條路」不用另外決定，就是現在的路。
+    - **實作時定的**（2026-11-22）：「我要這個大小的」是 `ipc` 自己的一則控制訊息（`Wanted`），由 `ipc` 在「大的位元組找不到空的 region、只好放進訊息」的那一刻送，不是 compositor 另外送的：tile 退回複製時送的就是這樣的位元組，所以一塊退回的 tile 剛好要一塊；canvas 的快照和 renderer 送給 Browser 的其他大資料也跟著要得到。上限算在 Browser 那一端（`peer_region_limit`，Browser 自己給的和對方要的加起來），超過的不建、不算壞訊息；建 region 的那一端收到 `Wanted` 是壞訊息。tile 的 region 和其他大資料用的是同一個池子。
+    - **不選只在啟動時給固定的量**：大螢幕、高 DPI、捲動快時不夠，多的 tile 永遠走複製；canvas 的快照大小不合（region 的大小是 2 的次方），完全用不到。**不選全部用要的**：每個分頁最前面幾個 frame 都走複製，那是載入最忙的時候。
+    - **Browser 什麼時候收回給出去的 region 不在這次**：renderer 結束時全部放掉（3d）。有上限守著；量到記憶體是問題時再做（分頁變成背景時收回）。留在「待決定」。
+    - 對照 Chromium：renderer 每要一塊共用記憶體都向 Browser 發一次同步的請求、等回答。這裡不等、先走複製，因為 compositor 不能停。
+63. **Viz 把共用記憶體裡的像素直接複製進 GPU 的緩衝區**（2026-11-22，3f；使用者選的）：像素來自 view 時，Viz 向 wgpu 要一塊已經 map 好的緩衝區，view 提供「把這一段複製到給的地方」，再由 GPU 把緩衝區搬進 texture。整條路只複製這一次（第 24 條的驗收條件）。像素是一般的記憶體時（單一 process、退回複製進訊息的那幾塊）照舊走 `write_texture`。
+    - **view 不變成 `&[u8]`**：那塊記憶體 renderer 還能寫，借成 slice 是不成立的借用（編譯器假設借用期間內容不變）。view 只提供長度和「複製出去」；renderer 在複製途中改內容，拿到的是亂的像素，不是未定義行為。
+    - **代價**：Viz 多一條上傳的路；wgpu 要求緩衝區每一列的長度是 256 的倍數，tile（256 px 寬，一列 1024 bytes）剛好，寬度不合的（canvas 的快照）一列一列複製、補齊。
+    - **實作時發現、改掉的**（2026-11-22）：wgpu 30 的 mapped 緩衝區是「只能寫」的型別（`WriteOnly`，因為那塊記憶體可能是 write-combining 的），拿不到 `&mut [u8]`，所以「view 把位元組複製到給的地方」寫不成。直接寫它的裸指標要 `unsafe`，而 `unsafe` 只能在 `ipc`：那就得讓 `ipc` 依賴 wgpu 的型別。改成 view 把位元組一段一段以值（`[u8; 256]`）交出去，Viz 用 wgpu 安全的介面寫進去：`unsafe` 還是只在 `ipc`，`ipc` 不認得 wgpu。量過（256 KiB，來源和目的地輪流換、不讓它們留在 cache 裡）：一次 `memcpy` 5.8 到 8.1 µs，一段 64、1024、4096 bytes 以值交是 4.6 到 6.2 µs，沒有差別。不選讓 `ipc` 依賴 `wgpu-types`：`ipc` 之後要獨立成 crate。
+    - **緩衝區沒有重複用**：每上傳一塊建一個（mapped 的緩衝區用過之後要等 GPU 才能再 map，重複用要一個非同步的池子）。wgpu 自己的 `write_texture` 也是每次建一個，所以和原本的路一樣；一批 tile 的複製指令合成一次 submit。3g 量到是問題時再做。
+    - **不選先複製到 Viz 自己的記憶體再 `write_texture`**：兩次複製，沒達到驗收條件，留一截之後要做。**不選把 view 當成 `&[u8]`**：上面說的借用，要在 `ipc` 的 soundness 開一個說不出理由的例外。
+    - 對照 Chromium：one-copy raster 時 GPU process 把共用記憶體直接交給 `glTexSubImage2D`，次數相同。
 
 ## 待決定
 
@@ -598,7 +617,7 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
 
 設計：
 
-- **renderer 向 Browser 要共用記憶體時怎麼不卡住 compositor**：只發生在池子不夠的時候。可以做的：一次要一大塊、renderer 自己切；池子快用完就先要；要的時候不停下來等。還有 Browser 什麼時候收回一塊。
+- **Browser 什麼時候收回給 renderer 的 region**（第 62 條留下的；量到記憶體是問題時）：現在只在 renderer 結束時放掉。可以做的：分頁變成背景時收回空的那幾塊。
 - **單一 process 時要不要連 Browser 的 IO thread 也拿掉**：處理訊息的邏輯抽成物件之後（「架構」）做得到：renderer 拿到的「送訊息的東西」在這個模式直接呼叫那個物件，由它交給網路或叫醒 UI thread，中間沒有佇列也沒有 thread。每個分頁少一條 thread，renderer 到 UI thread、到網路各少一次轉手。代價：Browser 的邏輯在 renderer 的 thread 上跑（main thread 和 worker 可能同時送，要加鎖；它 panic 時倒的是 renderer 的 thread）；`RendererGone` 改成靠最後一個 sender 被丟掉來報告；「從通道讀出來、交給物件」那一段只剩多 process 的測試跑得到。那條 thread 現在就在，不是這份加的成本，所以先量每則訊息的那一次轉手占多少再決定。比過的做法見 `details.md` 的「比過的做法」。
 - **renderer 不能讓 Browser 當掉**：惡意的 renderer 最容易走的三條路，接上 renderer 的那一步要一起處理。
   - 沒有上限的東西：Browser 收 renderer 訊息的佇列、Browser 送給卡住的 renderer 的佇列、一個 renderer 能要的共用記憶體（「`ipc` crate」）、反序列化的巢狀深度（同上）。各要定一個數字，超過就關掉那個 renderer。

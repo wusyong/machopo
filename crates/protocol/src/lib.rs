@@ -39,6 +39,7 @@ pub mod viz;
 pub mod webdriver;
 
 pub use big_buffer::BigBuffer;
+pub use ipc::shared_buffer::{SharedBuffer, Writer as SharedBufferWriter};
 use serde::{Deserialize, Serialize};
 
 /// Identifies one tab's renderer-side frame tree. Stand-in for the

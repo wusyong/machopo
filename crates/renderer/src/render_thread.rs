@@ -210,11 +210,18 @@ pub fn spawn_renderer_main_thread(
     // handles to the browser itself.
     // Tiles go to the GPU by messages to Viz, on the same channel as the
     // frames that show them, if Viz has a GPU to put them on.
+    // From a process of the renderer's own a tile is drawn in a region
+    // of the channel's, where there is a free one, so its pixels cross
+    // without being copied.
     let shared_images = gpu.then(|| {
         let viz = viz.clone();
-        compositor::SharedImages::new(move |msg| {
-            let _ = viz.send(msg);
-        })
+        let regions = viz.clone();
+        compositor::SharedImages::with_regions(
+            move |msg| {
+                let _ = viz.send(msg);
+            },
+            move |len| regions.take_region(len),
+        )
     });
     let frame_sink = ChannelLayerTreeFrameSink::new(viz);
     let defaults = LayerTreeSettings::default();

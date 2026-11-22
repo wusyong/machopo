@@ -28,7 +28,7 @@ use protocol::viz::{
 };
 use wgpu::util::DeviceExt;
 
-use crate::display::{CopyFailure, DirectRenderer, SharedImageHandle};
+use crate::display::{CopyFailure, DirectRenderer, Pixels, SharedImageHandle};
 use crate::gpu_context::GpuContext;
 use crate::surface_aggregator::AggregatedFrame;
 
@@ -171,7 +171,7 @@ impl GpuSharedImages {
 impl GpuSharedImages {
     /// `pixels` on the device as a shared image's texture, if there is a
     /// device and they are a texture's of `size` it can make.
-    fn upload(&self, size: Size, pixels: &[u8]) -> Option<SharedImageBacking> {
+    fn upload(&self, size: Size, pixels: Pixels<'_>) -> Option<SharedImageBacking> {
         let gpu = self.gpu.read().unwrap_or_else(|e| e.into_inner()).clone()?;
         // Not one Viz can make (the GPU process checks a client's too).
         if size.is_empty() || !crate::display::pixels_fit(size, pixels.len()) {
@@ -198,8 +198,12 @@ impl GpuSharedImages {
 impl GpuSharedImages {
     /// `pixels` on the device as a shared image, as a renderer keeps one
     /// for its `Display`.
-    pub fn create_shared_image(&self, size: Size, pixels: &[u8]) -> Option<SharedImageHandle> {
-        let backing: SharedImageHandle = Arc::new(self.upload(size, pixels)?);
+    pub fn create_shared_image<'a>(
+        &self,
+        size: Size,
+        pixels: impl Into<Pixels<'a>>,
+    ) -> Option<SharedImageHandle> {
+        let backing: SharedImageHandle = Arc::new(self.upload(size, pixels.into())?);
         Some(backing)
     }
 
@@ -215,7 +219,7 @@ impl GpuSharedImages {
         // they don't pile up holding their staging copies.
         let _submitting = gpu.submit_lock.lock().unwrap_or_else(|e| e.into_inner());
         let _submit = trace_event::trace_event!("SharedImage::Submit");
-        gpu.queue.submit(std::iter::empty());
+        gpu.queue.submit(gpu.take_staged());
     }
 }
 
@@ -528,7 +532,7 @@ impl WgpuRenderer {
             if size.is_empty() {
                 continue;
             }
-            let uploaded = self.context.upload(*size, pixels);
+            let uploaded = self.context.upload(*size, &pixels[..]);
             self.resources.insert(*id, uploaded);
         }
     }
@@ -590,7 +594,7 @@ impl DirectRenderer for WgpuRenderer {
         }
     }
 
-    fn create_shared_image(&mut self, size: Size, pixels: &[u8]) -> Option<SharedImageHandle> {
+    fn create_shared_image(&mut self, size: Size, pixels: Pixels<'_>) -> Option<SharedImageHandle> {
         self.shared_images.create_shared_image(size, pixels)
     }
 
@@ -899,7 +903,12 @@ impl WgpuRenderer {
                 .submit_lock
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
-            self.context.queue.submit([encoder.finish()]);
+            // What the frame draws may be in pixels staged since the last
+            // flush: their copies go first.
+            let staged = self.context.take_staged();
+            self.context
+                .queue
+                .submit(staged.into_iter().chain([encoder.finish()]));
         }
         if let Target::Surface(surface_texture) = target {
             self.context.queue.present(surface_texture);
@@ -1741,6 +1750,134 @@ mod drawing_tests {
         assert_eq!(pooled(), before);
         drop(display);
         assert_eq!(pooled(), before + 1);
+    }
+
+    /// Pixels that came in memory shared with whoever drew them are what
+    /// is drawn, whatever their rows' length is to the 256 bytes the GPU
+    /// copies rows at: a tile's (256 pixels wide, nothing between its
+    /// rows), a few pixels', and rows longer than 256 bytes that aren't a
+    /// multiple of it. On a texture made for them and on one of the
+    /// pool's, as the frame that draws them is submitted and after a
+    /// flush. (Sizes no other test's shared images have: the pool is the
+    /// process's.)
+    #[test]
+    fn pixels_in_shared_memory_are_what_is_drawn() {
+        let _gpu = gpu();
+        // Each pixel says where it is, so one in the wrong place shows.
+        let pixels_of = |size: Size, salt: u8| -> Vec<u8> {
+            (0..size.height)
+                .flat_map(|y| (0..size.width).map(move |x| (x, y)))
+                .flat_map(|(x, y)| [x as u8, y as u8, salt, 255])
+                .collect()
+        };
+        for (n, size) in [
+            Size::new(256, 3),
+            Size::new(7, 3),
+            Size::new(70, 2),
+            Size::new(1, 6),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let images = GpuSharedImages::new();
+            let renderer = WgpuRenderer::offscreen(size, images.clone()).unwrap();
+            let pool = renderer.context.pool.clone();
+            let pooled = || pool.sizes().iter().filter(|&&s| s == size).count();
+            let context = renderer.context.clone();
+            let mut display = Display::new(renderer, SINK);
+            // A texture of the size let go: the first image is written
+            // over it, and the second (the first's is still drawn) on one
+            // made for it.
+            let own = vec![9; pixels_of(size, 0).len()];
+            drop(images.create_shared_image(size, &own));
+            let before = pooled();
+            assert!(before > 0);
+            for (round, flush) in [(0u8, true), (1, false)] {
+                let salt = 40 + round;
+                let mailbox = Mailbox(u64::from(round) + 1);
+                let pixels = pixels_of(size, salt);
+                let shared = ipc::local::shared_buffer(&pixels).unwrap();
+                assert!(shared.as_bytes().is_none());
+                display.create_shared_image(SINK, mailbox, size, &shared);
+                drop(shared);
+                assert_eq!(pooled(), before - 1, "round {round}");
+                if flush {
+                    display.flush_shared_images();
+                    // Sent to the GPU now: nothing waits for a frame to
+                    // be drawn, holding what it was copied into.
+                    assert!(context.take_staged().is_none());
+                }
+                let (w, h) = (size.width as f32, size.height as f32);
+                let mut f = frame(
+                    size,
+                    SharedQuadState::default(),
+                    vec![DrawQuad {
+                        rect: RectF::new(0.0, 0.0, w, h),
+                        shared_quad_state: 0,
+                        material: Material::Texture {
+                            resource_id: ResourceId(7 + u64::from(round)),
+                            tex_coord_rect: RectF::new(0.0, 0.0, w, h),
+                            nearest_neighbor: true,
+                        },
+                    }],
+                );
+                f.resource_list.push(TransferableResource {
+                    id: ResourceId(7 + u64::from(round)),
+                    size,
+                    format: ResourceFormat::Rgba8Premul,
+                    pixels: protocol::BigBuffer::from([]),
+                    shared_image: Some(SharedImage::from_mailbox(mailbox)),
+                });
+                display.submit_compositor_frame(SINK, LocalSurfaceId::default(), f);
+                let copy = draw(&mut display);
+                for y in 0..size.height {
+                    for x in 0..size.width {
+                        assert_eq!(
+                            px(&copy, x, y),
+                            [x as u8, y as u8, salt, 255],
+                            "size {n}, round {round}: {x},{y}"
+                        );
+                    }
+                }
+                display.destroy_shared_image(SINK, mailbox);
+            }
+        }
+        // On a device that was lost nothing is copied and nothing goes
+        // wrong, with pixels staged before it was lost or after; the next
+        // device draws what is made on it.
+        let size = Size::new(9, 2);
+        let images = GpuSharedImages::new();
+        let renderer = WgpuRenderer::offscreen(size, images.clone()).unwrap();
+        let mut display = Display::new(renderer, SINK);
+        let pixels = pixels_of(size, 50);
+        let shared = ipc::local::shared_buffer(&pixels).unwrap();
+        display.create_shared_image(SINK, Mailbox(1), size, &shared);
+        display.lose_context();
+        display.create_shared_image(SINK, Mailbox(2), size, &shared);
+        display.flush_shared_images();
+        let blue = solid(Color::rgb(0, 0, 255), RectF::new(0.0, 0.0, 9.0, 2.0));
+        let f = frame(size, SharedQuadState::default(), vec![blue]);
+        display.submit_compositor_frame(SINK, LocalSurfaceId::default(), f);
+        assert_eq!(px(&draw(&mut display), 1, 1), [0, 0, 255, 255]);
+        display.create_shared_image(SINK, Mailbox(3), size, &shared);
+        display.flush_shared_images();
+
+        // Pixels that aren't all there make no image, as any that don't
+        // fit their size.
+        let images = GpuSharedImages::new();
+        let _renderer = WgpuRenderer::offscreen(Size::new(2, 2), images.clone()).unwrap();
+        let short = ipc::local::shared_buffer(&[0; 15]).unwrap();
+        assert!(
+            images
+                .create_shared_image(Size::new(2, 2), &short)
+                .is_none()
+        );
+        let whole = ipc::local::shared_buffer(&[0; 16]).unwrap();
+        assert!(
+            images
+                .create_shared_image(Size::new(2, 2), &whole)
+                .is_some()
+        );
     }
 
     /// The pool keeps the textures put last, up to so many and so many

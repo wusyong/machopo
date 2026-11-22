@@ -31,6 +31,7 @@ use crate::core::frame::{BadMessage, Message};
 use crate::core::pipe::{Incoming, Outgoing, ReadReport};
 use crate::core::region::{Memory, Pool, Table, class_len};
 use crate::data_pipe::{self, Consumer, Producer, Read, ReadObserver, TryWriteError};
+use crate::shared_buffer::{self, Mapped, Owner, Writer};
 
 /// What there is for an endpoint to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,8 +61,10 @@ pub enum Event {
 /// the core refuses the message that says it has one: a value is a
 /// handle of this process's own, of the peer's choosing.
 pub trait Platform: Transport<Handle: Send> + Send + Sync + Sized + 'static {
-    /// A mapping of shared memory.
-    type Memory: Memory + Send + 'static;
+    /// A mapping of shared memory. Shared between the threads of a
+    /// process: whoever holds bytes that crossed in a region keeps its
+    /// mapping, on a thread of its own.
+    type Memory: Memory + Send + Sync + 'static;
 
     /// What an IO thread waits on this platform's channels with.
     type Waiter: Waiter<Self>;
@@ -137,6 +140,10 @@ pub struct Config {
     pub peer_may_open_pipes: bool,
     /// The most bytes of regions this end writes into.
     pub region_limit: usize,
+    /// The most bytes of regions this end makes for the peer to write
+    /// into, asked for by either end. Only for the end that makes
+    /// regions.
+    pub peer_region_limit: usize,
     /// The most bytes that wait to be written
     /// ([`channel::MAX_QUEUED_BYTES`]).
     pub queue_limit: usize,
@@ -165,8 +172,10 @@ impl From<ChannelError> for SendError {
 /// message's large bytes are placed, the regions they went in are told
 /// of, and the message is sent, with nothing of another thread's between.
 struct Out<P: Platform> {
-    /// The regions this end writes into.
-    pool: Pool<P::Memory>,
+    /// The regions this end writes into. Each mapping is shared with
+    /// whoever took the region to write in place, who may hold it past
+    /// the channel's end.
+    pool: Pool<Arc<P::Memory>>,
     /// The next region's number, when this end makes them.
     next_region: u32,
     /// The pipes this end writes, and where their bytes come from.
@@ -205,11 +214,28 @@ impl<P: Platform> Inner<P> {
     }
 }
 
+impl<P: Platform> Owner for Inner<P> {
+    fn give_back(&self, number: u32) {
+        self.out().pool.give_back(number);
+    }
+
+    fn read(&self, number: u32) {
+        // To a channel that is over there is nobody to tell.
+        let _ = self.control(&Control::Released(vec![number]), Vec::new());
+    }
+}
+
+/// Which end `inner` is, as a region's taker knows its owner
+/// ([`shared_buffer::owner_id`]).
+fn id_of<P: Platform>(inner: &Inner<P>) -> usize {
+    std::ptr::from_ref(inner).cast::<()>().addr()
+}
+
 /// Places a message's large bytes in the pool, making a region for them
 /// when no free one is long enough and this end may.
 struct Placing<'a, P: Platform> {
     inner: &'a Inner<P>,
-    pool: &'a mut Pool<P::Memory>,
+    pool: &'a mut Pool<Arc<P::Memory>>,
     next_region: &'a mut u32,
     pipes: &'a mut Outgoing,
     feeding: &'a mut Vec<(u32, Consumer)>,
@@ -258,7 +284,7 @@ impl<P: Platform> Placing<'_, P> {
         let number = *self.next_region;
         let after = number.checked_add(1)?;
         let (memory, handle) = self.inner.platform().create(class, false)?;
-        self.pool.add(number, memory).ok()?;
+        self.pool.add(number, Arc::new(memory)).ok()?;
         *self.next_region = after;
         let granted = Control::Granted {
             number,
@@ -275,9 +301,18 @@ impl<P: Platform> Place for Placing<'_, P> {
     fn place(&mut self, bytes: &[u8]) -> Option<u32> {
         let number = match self.pool.put(bytes) {
             Some(number) => number,
-            None => {
+            None if self.inner.config.may_attach => {
                 self.grow(bytes.len())?;
                 self.pool.put(bytes)?
+            }
+            None => {
+                // These go in the message. The end that makes regions is
+                // told there was none free for them: it may grant one
+                // more, for the next that long. Nothing waits for it.
+                if let Ok(len) = u32::try_from(bytes.len()) {
+                    let _ = self.inner.control(&Control::Wanted { len }, Vec::new());
+                }
+                return None;
             }
         };
         self.placed.push(number);
@@ -287,6 +322,14 @@ impl<P: Platform> Place for Placing<'_, P> {
     fn unplace(&mut self, number: u32) {
         self.pool.give_back(number);
         self.placed.retain(|placed| *placed != number);
+    }
+
+    fn lend(&mut self, owner: usize, number: u32) -> bool {
+        if owner != id_of(self.inner) || !self.pool.lend(number) {
+            return false;
+        }
+        self.placed.push(number);
+        true
     }
 
     fn pipe(&mut self, mut source: Consumer) -> Option<u32> {
@@ -321,7 +364,9 @@ impl<P: Platform> Clone for Link<P> {
 
 impl<P: Platform> Link<P> {
     /// Sends `message` to the peer's `destination`, without waiting. Its
-    /// large bytes go by a region when there is one, and the data pipes
+    /// large bytes go by a region when there is one (when there is none,
+    /// the end that makes them makes one, and the other asks it for one
+    /// for the next time), and the data pipes
     /// in it ([`Consumer`]) go with it: each is opened to the peer before
     /// the message, and fed from then on. A message that isn't sent ends
     /// the pipes it had.
@@ -375,10 +420,30 @@ impl<P: Platform> Link<P> {
     }
 
     /// Asks for a region of `len` bytes or more for the peer to write its
-    /// large bytes into. Only for the end that makes regions.
+    /// large bytes into. Only for the end that makes regions; one past
+    /// what it makes for its peer ([`Config::peer_region_limit`]) isn't
+    /// made.
     pub fn grant_to_peer(&self, len: usize) {
         self.0.out().to_grant.push(len);
         self.0.sender.wake();
+    }
+
+    /// A free region of this end's to write `len` bytes in place, for a
+    /// message of this channel to take to the peer as a
+    /// [`SharedBuffer`](shared_buffer::SharedBuffer): nothing is copied
+    /// on the way. `None` when no free region is that long; none is made
+    /// for it here. What was to be written there is then sent as bytes
+    /// of the sender's own, which is what asks for one more.
+    pub fn take_region(&self, len: usize) -> Option<Writer> {
+        let mut out = self.0.out();
+        let number = out.pool.take(len)?;
+        let Some(memory) = out.pool.memory(number).cloned() else {
+            out.pool.give_back(number);
+            return None;
+        };
+        drop(out);
+        let memory: Mapped = memory;
+        Some(Writer::new(memory, number, len, self.0.clone()))
     }
 
     /// Closes the channel: the IO thread's loop ends.
@@ -448,7 +513,8 @@ impl<P: Platform> Drop for Reporter<P> {
 pub struct Received<'a, P: Platform> {
     destination: u32,
     payload: &'a [u8],
-    table: &'a mut Table<P::Memory>,
+    inner: &'a Arc<Inner<P>>,
+    table: &'a mut Table<Arc<P::Memory>>,
     arrived: &'a mut Vec<(u32, Consumer)>,
 }
 
@@ -459,12 +525,15 @@ impl<P: Platform> Received<'_, P> {
     }
 
     /// The message as the type its destination takes; its large bytes
-    /// copied out of the peer's regions. An error is a bad message: the
-    /// handler returns it, and the channel is closed.
+    /// copied out of the peer's regions, but for those the type takes as
+    /// a [`SharedBuffer`](shared_buffer::SharedBuffer), whose regions
+    /// are the peer's to write again when the buffers go. An error is a
+    /// bad message: the handler returns it, and the channel is closed.
     pub fn decode<T: DeserializeOwned>(&mut self) -> Result<T, BadMessage> {
         codec::decode(
             self.payload,
             &mut Arriving {
+                inner: self.inner,
                 table: self.table,
                 arrived: self.arrived,
             },
@@ -485,14 +554,22 @@ impl<P: Platform> Received<'_, P> {
 
 /// What a message's value is read out of: the peer's regions, and the
 /// pipes it opened that no message has named yet.
-struct Arriving<'a, M: Memory> {
-    table: &'a mut Table<M>,
+struct Arriving<'a, P: Platform> {
+    inner: &'a Arc<Inner<P>>,
+    table: &'a mut Table<Arc<P::Memory>>,
     arrived: &'a mut Vec<(u32, Consumer)>,
 }
 
-impl<M: Memory> Resolve for Arriving<'_, M> {
+impl<P: Platform> Resolve for Arriving<'_, P> {
     fn resolve(&mut self, number: u32, len: u32, into: &mut Vec<u8>) -> Result<(), BadMessage> {
         self.table.read(number, len, into)
+    }
+
+    fn hold(&mut self, number: u32, len: u32) -> Result<(), BadMessage> {
+        let memory: Mapped = self.table.named(number, len)?.clone();
+        let len = usize::try_from(len).map_err(|_| BadMessage::OutsideRegion { number, len })?;
+        shared_buffer::set_arriving(memory, number, len, self.inner.clone());
+        Ok(())
     }
 
     fn pipe(&mut self, number: u32) -> Result<Consumer, BadMessage> {
@@ -527,8 +604,12 @@ pub trait Handler<P: Platform> {
 pub struct Endpoint<P: Platform> {
     inner: Arc<Inner<P>>,
     receiver: Receiver<P>,
-    /// The regions the peer writes into.
-    table: Table<P::Memory>,
+    /// The regions the peer writes into. Each mapping is shared with
+    /// whoever holds a buffer a message brought in it.
+    table: Table<Arc<P::Memory>>,
+    /// The bytes of the regions this end made for the peer to write
+    /// into.
+    granted: usize,
     /// The pipes the peer writes, and where their bytes go.
     incoming: Incoming<Producer>,
     /// The reading ends of pipes the peer opened, until a message names
@@ -564,6 +645,7 @@ pub fn endpoint<P: Platform>(platform: P, config: Config) -> (Link<P>, Endpoint<
         inner: inner.clone(),
         receiver,
         table: Table::new(),
+        granted: 0,
         incoming: Incoming::new(),
         arrived: Vec::new(),
     };
@@ -635,6 +717,7 @@ impl<P: Platform> Endpoint<P> {
             table,
             incoming,
             arrived,
+            ..
         } = self;
         let gone = receiver.feed(bytes, handles.drain(..), |message| {
             if message.destination == CONTROL_DESTINATION {
@@ -647,6 +730,7 @@ impl<P: Platform> Endpoint<P> {
             handler.message(Received {
                 destination: message.destination,
                 payload: message.payload,
+                inner,
                 table,
                 arrived,
             })
@@ -677,13 +761,20 @@ impl<P: Platform> Endpoint<P> {
         }
         let class = class_len(len)?;
         let granted_len = u32::try_from(class).ok()?;
+        // Whoever asked, the peer has only so much: a peer that asks
+        // without end is given no more.
+        let granted = self.granted.checked_add(class)?;
+        if granted > self.inner.config.peer_region_limit {
+            return None;
+        }
         let mut out = self.inner.out();
         let number = out.next_region;
         let after = number.checked_add(1)?;
         let (memory, handle) = self.inner.platform().create(class, true)?;
-        if !self.table.insert(number, memory) {
+        if !self.table.insert(number, Arc::new(memory)) {
             return None;
         }
+        self.granted = granted;
         out.next_region = after;
         let granted = Control::Granted {
             number,
@@ -926,7 +1017,7 @@ fn turn<P: Platform>(
 /// One of the core's own messages from the peer.
 fn control<P: Platform>(
     inner: &Arc<Inner<P>>,
-    table: &mut Table<P::Memory>,
+    table: &mut Table<Arc<P::Memory>>,
     incoming: &mut Incoming<Producer>,
     arrived: &mut Vec<(u32, Consumer)>,
     mut message: Message<'_, P::Handle>,
@@ -953,6 +1044,7 @@ fn control<P: Platform>(
                 .platform()
                 .map(handle, len, writable)
                 .ok_or(BadMessage::Rejected)?;
+            let memory = Arc::new(memory);
             let kept = if writable {
                 inner.out().pool.add(number, memory).is_ok()
             } else {
@@ -963,6 +1055,16 @@ fn control<P: Platform>(
             } else {
                 Err(BadMessage::Rejected)
             }
+        }
+        Control::Wanted { len } => {
+            // The end that makes the regions asks nobody.
+            if !inner.config.may_attach {
+                return Err(BadMessage::Rejected);
+            }
+            // Made at the end of this turn, if the peer may have more.
+            let len = usize::try_from(len).map_err(|_| BadMessage::Rejected)?;
+            inner.out().to_grant.push(len);
+            Ok(())
         }
         Control::PipeOpened { pipe, capacity } => {
             if !inner.config.peer_may_open_pipes {

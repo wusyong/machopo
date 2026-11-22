@@ -426,6 +426,16 @@ pub(crate) struct DrivenViz {
     /// The shared images the renderer made and hasn't destroyed, by its
     /// numbers for them.
     pub(crate) shared_images: HashSet<u64>,
+    /// How many shared images' pixels came in memory shared with the
+    /// renderer, and how many in the browser's own (the message's, from
+    /// a renderer in a process of its own).
+    pub(crate) pixels_shared: usize,
+    pub(crate) pixels_own: usize,
+    /// While set, the pixels are kept as they came, as a Viz slow to put
+    /// them on the GPU would: the renderer draws nothing else where they
+    /// are.
+    pub(crate) keep_pixels: bool,
+    pub(crate) kept_pixels: Vec<protocol::SharedBuffer>,
     /// The navigations whose load finished, whichever wait saw it: a wait
     /// for something else takes the renderer's messages too.
     loaded: HashSet<u64>,
@@ -442,6 +452,10 @@ impl DrivenViz {
             frames: Vec::new(),
             resources: HashMap::new(),
             shared_images: HashSet::new(),
+            pixels_shared: 0,
+            pixels_own: 0,
+            keep_pixels: false,
+            kept_pixels: Vec::new(),
             loaded: HashSet::new(),
         }
     }
@@ -485,9 +499,22 @@ impl DrivenViz {
                         self.begin_frames.did_receive(sink, &msg);
                         match msg {
                             // Taken, and its pixels' buffer handed back.
-                            CompositorFrameSinkMsg::CreateSharedImage { mailbox, pixels, .. } => {
+                            CompositorFrameSinkMsg::CreateSharedImage { mailbox, size, pixels } => {
                                 self.shared_images.insert(mailbox.0);
-                                drop(pixels);
+                                match pixels.as_bytes() {
+                                    Some(_) => self.pixels_own += 1,
+                                    None => self.pixels_shared += 1,
+                                }
+                                // However they came, all of them are
+                                // there to read.
+                                let mut read = vec![0; pixels.len()];
+                                assert!(pixels.copy_to(0, &mut read));
+                                assert_eq!(size.checked_byte_size(), Some(read.len()));
+                                if self.keep_pixels {
+                                    self.kept_pixels.push(pixels);
+                                } else {
+                                    drop(pixels);
+                                }
                                 web_contents.shared_image_pixels_returned(mailbox);
                             }
                             CompositorFrameSinkMsg::DestroySharedImage { mailbox } => {

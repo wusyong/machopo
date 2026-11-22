@@ -2855,7 +2855,7 @@ mod tests {
                     mailbox,
                     pixels,
                     ..
-                } => Some((*mailbox, pixels.clone())),
+                } => Some((*mailbox, pixels.as_bytes()?.clone())),
                 _ => None,
             })
             .collect()

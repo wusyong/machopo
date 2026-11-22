@@ -17,8 +17,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use gfx::Size;
+use protocol::SharedBuffer;
 use protocol::viz::MAX_TEXTURE_SIZE;
 
+use crate::display::Pixels;
 use crate::wgpu_renderer::{SHADER, UploadedResource, Vertex};
 
 /// The environment variable that picks the adapter: `cpu` for the CPU
@@ -146,6 +148,11 @@ pub(crate) struct GpuContext {
     /// while it waits for the GPU to go idle. (Chromium's GPU scheduler
     /// runs shared image and display work in turn, never at once.)
     pub(crate) submit_lock: Arc<Mutex<()>>,
+    /// The copies into textures of pixels that came in shared memory,
+    /// waiting for the next submit ([`GpuContext::take_staged`]): each
+    /// from a buffer the pixels were copied into, once, straight out of
+    /// the memory they were drawn in.
+    staged: Mutex<Option<wgpu::CommandEncoder>>,
     /// The textures of shared images let go, for the next ones.
     pub(crate) pool: Arc<TexturePool>,
 }
@@ -414,6 +421,7 @@ impl GpuContext {
             pipelines: Mutex::default(),
             white,
             submit_lock: Arc::new(Mutex::new(())),
+            staged: Mutex::new(None),
             pool: Arc::default(),
         })
     }
@@ -477,20 +485,114 @@ impl GpuContext {
     }
 
     /// `pixels` (premultiplied RGBA, `size`) as a texture to draw.
-    pub(crate) fn upload(&self, size: Size, pixels: &[u8]) -> UploadedResource {
-        upload(
-            &self.device,
-            &self.queue,
-            &self.bind_group_layout,
-            &self.sampler,
-            size,
-            pixels,
-        )
+    pub(crate) fn upload<'a>(&self, size: Size, pixels: impl Into<Pixels<'a>>) -> UploadedResource {
+        match pixels.into() {
+            Pixels::Own(pixels) => upload(
+                &self.device,
+                &self.queue,
+                &self.bind_group_layout,
+                &self.sampler,
+                size,
+                pixels,
+            ),
+            Pixels::Shared(pixels) => {
+                let texture = texture(&self.device, size);
+                self.stage(&texture, size, pixels);
+                resource(
+                    &self.device,
+                    &self.bind_group_layout,
+                    &self.sampler,
+                    size,
+                    texture,
+                )
+            }
+        }
     }
 
     /// `pixels` over what `resource`, of their size, had.
-    pub(crate) fn write(&self, resource: &UploadedResource, pixels: &[u8]) {
-        write(&self.queue, &resource.texture, resource.size, pixels);
+    pub(crate) fn write<'a>(&self, resource: &UploadedResource, pixels: impl Into<Pixels<'a>>) {
+        match pixels.into() {
+            Pixels::Own(pixels) => write(&self.queue, &resource.texture, resource.size, pixels),
+            Pixels::Shared(pixels) => self.stage(&resource.texture, resource.size, pixels),
+        }
+    }
+
+    /// `pixels` (of `size`, which they fit) on their way to `texture`,
+    /// from memory whoever drew them shares and may still write: copied
+    /// once, into a buffer of the GPU's mapped for it, which the next
+    /// submit copies to the texture. `Queue::write_texture` copies the
+    /// same once, but out of a slice, which that memory can't be.
+    fn stage(&self, texture: &wgpu::Texture, size: Size, pixels: &SharedBuffer) {
+        let _write = trace_event::trace_event!("SharedImage::StageTexture");
+        #[expect(
+            clippy::arithmetic_side_effects,
+            reason = "the pixels fit their size (`pixels_fit`): no wider than MAX_TEXTURE_SIZE, \
+                      so 4 bytes a pixel, rounded up to the next 256, fit a u32"
+        )]
+        let (row, padded_row) = {
+            let row = size.width * 4;
+            (
+                row,
+                row.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT),
+            )
+        };
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("viz shared pixels"),
+            size: u64::from(padded_row).saturating_mul(u64::from(size.height)),
+            usage: wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: true,
+        });
+        // A device that was lost makes a buffer that isn't one: nothing
+        // is mapped, and there is nothing to unmap (which wgpu takes as
+        // a fatal error). The device's textures went with it; the client
+        // makes its images again on the next.
+        let Ok(mut mapped) = buffer.get_mapped_range_mut(..) else {
+            tracing::debug!("viz: no buffer for shared pixels: the device is lost");
+            return;
+        };
+        let copied = copy_rows(pixels, mapped.slice(..), row, padded_row);
+        drop(mapped);
+        buffer.unmap();
+        if !copied {
+            // Not all there (the caller checked they were): the texture
+            // keeps what it had.
+            return;
+        }
+        let mut staged = self.staged.lock().unwrap_or_else(|e| e.into_inner());
+        let encoder = staged.get_or_insert_with(|| {
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("viz shared pixels"),
+                })
+        });
+        encoder.copy_buffer_to_texture(
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_row),
+                    rows_per_image: Some(size.height),
+                },
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: size.width,
+                height: size.height,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
+    /// The copies staged since the last call, for whoever submits next
+    /// to submit first: what it draws samples those textures.
+    pub(crate) fn take_staged(&self) -> Option<wgpu::CommandBuffer> {
+        let staged = self.staged.lock().unwrap_or_else(|e| e.into_inner()).take();
+        staged.map(wgpu::CommandEncoder::finish)
     }
 
     /// What `resource` (of this device) is drawn with sampled bilinearly,
@@ -507,6 +609,81 @@ impl GpuContext {
     }
 }
 
+/// The pixels' rows, `row` bytes each, copied to `into` `padded_row`
+/// bytes apart (a GPU copies rows out of a buffer only at multiples of
+/// 256 bytes). `false`, with `into` partly written, when the buffer
+/// hasn't that many rows or `into` no room for them.
+///
+/// `into` is memory that may only be written (a mapped buffer may be
+/// write-combining), so it gives no slice to copy into: the bytes go by
+/// value, 256 at a time, which costs what a copy does.
+fn copy_rows(
+    pixels: &SharedBuffer,
+    mut into: wgpu::WriteOnly<'_, [u8]>,
+    row: u32,
+    padded_row: u32,
+) -> bool {
+    const RUN: usize = 256;
+    let (Ok(row), Ok(padded_row)) = (usize::try_from(row), usize::try_from(padded_row)) else {
+        return false;
+    };
+    if padded_row < row || !pixels.len().is_multiple_of(row) {
+        return false;
+    }
+    let Some(rows) = pixels.len().checked_div(row) else {
+        return false;
+    };
+    if rows.checked_mul(padded_row) != Some(into.len()) {
+        return false;
+    }
+    // Rows with nothing between them (a tile's, 256 pixels wide): all
+    // of them as one.
+    let (row, padded_row, rows) = if row == padded_row {
+        (pixels.len(), pixels.len(), usize::from(rows > 0))
+    } else {
+        (row, padded_row, rows)
+    };
+    let mut offset = 0usize;
+    for _ in 0..rows {
+        let Some(mut padded) = into.split_off(..padded_row) else {
+            return false;
+        };
+        let (runs, rest) = padded.slice(..row).into_chunks::<RUN>();
+        let whole = runs.len().saturating_mul(RUN);
+        // A row is whole pixels, so what is left after the runs is too.
+        let (pixels_left, _) = rest.into_chunks::<4>();
+        let (Some(from_runs), Some(from_rest)) = (
+            pixels.chunks::<RUN>(offset, runs.len()),
+            pixels.chunks::<4>(offset.saturating_add(whole), pixels_left.len()),
+        ) else {
+            return false;
+        };
+        runs.write_iter(from_runs);
+        pixels_left.write_iter(from_rest);
+        offset = offset.saturating_add(row);
+    }
+    true
+}
+
+/// A texture for a resource of `size`, with nothing in it yet.
+fn texture(device: &wgpu::Device, size: Size) -> wgpu::Texture {
+    let _create = trace_event::trace_event!("SharedImage::CreateTexture");
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("viz resource"),
+        size: wgpu::Extent3d {
+            width: size.width,
+            height: size.height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    })
+}
+
 fn upload(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -515,24 +692,19 @@ fn upload(
     size: Size,
     pixels: &[u8],
 ) -> UploadedResource {
-    let extent = wgpu::Extent3d {
-        width: size.width,
-        height: size.height,
-        depth_or_array_layers: 1,
-    };
-    let create = trace_event::trace_event!("SharedImage::CreateTexture");
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("viz resource"),
-        size: extent,
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    });
-    drop(create);
+    let texture = texture(device, size);
     write(queue, &texture, size, pixels);
+    resource(device, layout, nearest, size, texture)
+}
+
+/// `texture`, of `size`, as what quads of it are drawn with.
+fn resource(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    nearest: &wgpu::Sampler,
+    size: Size,
+    texture: wgpu::Texture,
+) -> UploadedResource {
     let _bind = trace_event::trace_event!("SharedImage::BindGroups");
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     UploadedResource {

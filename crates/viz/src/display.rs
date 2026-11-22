@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use gfx::Size;
+use protocol::SharedBuffer;
 use protocol::viz::{
     CompositorFrame, CopyOutputRequest, CopyOutputResult, FrameSinkId, LocalSurfaceId,
     MAX_TEXTURE_SIZE, Mailbox,
@@ -34,7 +35,11 @@ pub trait DirectRenderer {
     /// the caller has checked) on the GPU as a shared image. `None` if
     /// there is no GPU to put them on (none yet, or a lost one not made
     /// again yet), or the renderer keeps no shared images.
-    fn create_shared_image(&mut self, _size: Size, _pixels: &[u8]) -> Option<SharedImageHandle> {
+    fn create_shared_image(
+        &mut self,
+        _size: Size,
+        _pixels: Pixels<'_>,
+    ) -> Option<SharedImageHandle> {
         None
     }
     /// Sends the GPU what the shared images made since the last call were
@@ -153,13 +158,14 @@ impl<R: DirectRenderer> Display<R> {
     /// submit, the pixels aren't those of a texture of `size` Viz can make,
     /// the client has an image of that number already, or there is no GPU
     /// (its client hears of a new one, and makes its images again).
-    pub fn create_shared_image(
+    pub fn create_shared_image<'a>(
         &mut self,
         sink: FrameSinkId,
         mailbox: Mailbox,
         size: Size,
-        pixels: &[u8],
+        pixels: impl Into<Pixels<'a>>,
     ) {
+        let pixels = pixels.into();
         if sink != self.root_frame_sink && !self.frame_sinks.contains(&sink) {
             tracing::debug!(?sink, "viz: no shared image for a sink it doesn't know");
             return;
@@ -287,6 +293,59 @@ impl<R: DirectRenderer> Display<R> {
 
     pub fn renderer_mut(&mut self) -> &mut R {
         &mut self.renderer
+    }
+}
+
+/// A shared image's pixels, as Viz was given them: tightly packed RGBA,
+/// premultiplied.
+#[derive(Clone, Copy)]
+pub enum Pixels<'a> {
+    /// In the process's own memory.
+    Own(&'a [u8]),
+    /// In memory whoever drew them shares, and may still write (a
+    /// renderer in a process of its own): only copied out of, once, to
+    /// the GPU.
+    Shared(&'a SharedBuffer),
+}
+
+impl Pixels<'_> {
+    /// How many bytes.
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Own(pixels) => pixels.len(),
+            Self::Shared(pixels) => pixels.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+impl<'a> From<&'a [u8]> for Pixels<'a> {
+    fn from(pixels: &'a [u8]) -> Self {
+        Self::Own(pixels)
+    }
+}
+
+impl<'a, const N: usize> From<&'a [u8; N]> for Pixels<'a> {
+    fn from(pixels: &'a [u8; N]) -> Self {
+        Self::Own(pixels)
+    }
+}
+
+impl<'a> From<&'a Vec<u8>> for Pixels<'a> {
+    fn from(pixels: &'a Vec<u8>) -> Self {
+        Self::Own(pixels)
+    }
+}
+
+impl<'a> From<&'a SharedBuffer> for Pixels<'a> {
+    fn from(pixels: &'a SharedBuffer) -> Self {
+        match pixels.as_bytes() {
+            Some(own) => Self::Own(own),
+            None => Self::Shared(pixels),
+        }
     }
 }
 
@@ -670,7 +729,7 @@ mod tests {
             held.sort_unstable();
             self.drawn.push(held);
         }
-        fn create_shared_image(&mut self, _: Size, _: &[u8]) -> Option<SharedImageHandle> {
+        fn create_shared_image(&mut self, _: Size, _: Pixels<'_>) -> Option<SharedImageHandle> {
             if self.no_gpu {
                 return None;
             }

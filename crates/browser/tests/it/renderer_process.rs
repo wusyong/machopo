@@ -205,17 +205,65 @@ fn tab_with_a_gpu() -> (
 const TILES: &str = "data:text/html,<p style='font-size:80px'>tiles tiles tiles tiles tiles";
 
 #[test]
-fn a_renderer_processs_tiles_go_to_the_gpu() {
+fn a_renderer_processs_tiles_go_to_the_gpu_in_shared_memory() {
     // The renderer is told Viz has a GPU, so its compositor sends each
     // tile's pixels as a shared image as soon as they are drawn, and its
-    // frames name them: the pixels cross in the messages (as large bytes
-    // do), from the renderer's sink.
+    // frames name them, from the renderer's sink. The pixels aren't in
+    // the messages: each tile is drawn in shared memory the browser gave
+    // the renderer when it started it, which is what Viz is handed, to
+    // copy to the GPU, once.
     let (mut web_contents, host_rx, mut viz, _gpu) = tab_with_a_gpu();
+    viz.keep_pixels = true;
     web_contents.navigate(TILES);
     viz.until_loaded(&mut web_contents, &host_rx);
     viz.run_until(&mut web_contents, &host_rx, "a frame of tiles", |viz, _| {
         viz.shared_images.len() >= 2 && !viz.frames.is_empty()
     });
+    assert_eq!(viz.pixels_own, 0, "a tile's pixels copied into its message");
+    assert!(viz.pixels_shared >= 2);
+    // What is read there is what was drawn: tiles of a page of text, of
+    // more than one color each (a tile of one is sent as its color).
+    for pixels in &viz.kept_pixels {
+        assert!(pixels.as_bytes().is_none());
+        let mut read = vec![0; pixels.len()];
+        assert!(pixels.copy_to(0, &mut read));
+        assert!(read.chunks(4).any(|pixel| pixel != &read[..4]));
+    }
+    web_contents.shutdown();
+}
+
+/// A page of more tiles than the renderer starts with shared memory for:
+/// 1600 pixels each way, every tile with text in it.
+fn many_tiles() -> String {
+    let line = "tiles ".repeat(60);
+    let lines = format!("<div>{line}</div>").repeat(60);
+    format!("data:text/html,<body style='margin:0;font-size:30px;white-space:nowrap'>{lines}")
+}
+
+#[test]
+fn a_renderer_process_out_of_shared_memory_copies_its_tiles_and_is_given_more() {
+    // A Viz that never lets go of a tile's pixels: the renderer has no
+    // shared memory to draw the next in once what it started with is all
+    // out. It doesn't wait: those tiles' pixels go in their messages.
+    // And it asked for more, which the browser gave: later tiles are in
+    // shared memory again, past what it started with.
+    let (mut web_contents, host_rx, mut viz, _gpu) = tab_with_a_gpu();
+    viz.keep_pixels = true;
+    web_contents.resize(gfx::Size::new(1600, 1600), 1.0);
+    web_contents.navigate(many_tiles());
+    viz.until_loaded(&mut web_contents, &host_rx);
+    viz.run_until(
+        &mut web_contents,
+        &host_rx,
+        "more tiles in shared memory than the renderer started with",
+        |viz, _| viz.pixels_shared > 16 && viz.pixels_own > 0,
+    );
+    // Every one of them whole, wherever it came.
+    for pixels in &viz.kept_pixels {
+        let mut read = vec![0; pixels.len()];
+        assert!(pixels.copy_to(0, &mut read));
+        assert!(read.chunks(4).any(|pixel| pixel != &read[..4]));
+    }
     web_contents.shutdown();
 }
 

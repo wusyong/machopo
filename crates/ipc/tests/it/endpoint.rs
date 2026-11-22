@@ -73,6 +73,7 @@ fn config(host: bool) -> Config {
         peer_may_attach: !host,
         peer_may_open_pipes: !host,
         region_limit: 4 << 20,
+        peer_region_limit: 4 << 20,
         queue_limit: MAX_QUEUED_BYTES,
     }
 }
@@ -228,6 +229,7 @@ fn a_host_at_its_limit_of_regions_sends_large_bytes_in_the_message() {
         host_end,
         Config {
             region_limit: 256 * KIB,
+            peer_region_limit: 256 * KIB,
             ..config(true)
         },
     );
@@ -267,8 +269,7 @@ fn a_child_makes_no_regions_and_uses_the_ones_it_is_granted() {
     settle(&mut host, &mut child);
     assert_eq!(host.recorder.got, [(0, first)]);
 
-    host.link.grant_to_peer(200 * KIB);
-    settle(&mut host, &mut child);
+    // The host, told there was none, made one for the next that long.
     assert_eq!(child.link.regions(), (256 * KIB, 256 * KIB));
     let written = child.link.platform().written();
     let second = Msg::Body(pattern(256 * KIB, 2));

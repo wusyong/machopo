@@ -8,9 +8,13 @@
 //! ([`Control`](super::control::Control)), so nothing in the shared memory
 //! itself is state both ends write.
 //!
-//! The memory is never a `&[u8]`: the peer may be writing it. Bytes go in
-//! and come out through pointers, into memory of this end's own.
+//! Memory the peer may be writing is never a `&[u8]`: bytes come out of
+//! it through pointers, into memory of this end's own ([`copy_out`]). A
+//! region this end writes is a slice only for whoever took it out of the
+//! pool, and only until it is sent ([`bytes_mut`]): the peer reads it, and
+//! writes nothing.
 
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 pub use super::fit::{MAX_REGION_LEN, MIN_REGION_LEN, class_len};
@@ -96,6 +100,115 @@ pub enum AddError {
     OverLimit,
 }
 
+/// The first `into.len()` bytes from `offset` of `memory`, copied out.
+/// `false`, and nothing copied, when they aren't all in it. What the peer
+/// writes meanwhile comes out as whatever bytes were there: the copy is
+/// this end's own from then on.
+pub fn copy_out<M: Memory + ?Sized>(memory: &M, offset: usize, into: &mut [u8]) -> bool {
+    let within = offset
+        .checked_add(into.len())
+        .is_some_and(|end| end <= memory.len());
+    if !within {
+        return false;
+    }
+    // SAFETY: `offset + into.len()` is no more than the memory's length,
+    // which is readable; `into` is this process's own, apart from it.
+    unsafe {
+        std::ptr::copy_nonoverlapping(memory.ptr().add(offset), into.as_mut_ptr(), into.len());
+    }
+    true
+}
+
+/// Runs of `N` bytes of a memory one after another, each copied out as
+/// it is asked for ([`chunks_out`]): for whoever takes bytes by value
+/// (a destination that is only written to, and so gives no slice to copy
+/// into).
+pub struct ChunksOut<'a, const N: usize> {
+    /// The next run: with the `left` runs from it, all in the memory.
+    next: *const u8,
+    left: usize,
+    memory: PhantomData<&'a ()>,
+}
+
+/// The `count` runs of `N` bytes from `offset` of `memory`. `None` when
+/// they aren't all in it.
+pub fn chunks_out<M: Memory + ?Sized, const N: usize>(
+    memory: &M,
+    offset: usize,
+    count: usize,
+) -> Option<ChunksOut<'_, N>> {
+    let end = count.checked_mul(N)?.checked_add(offset)?;
+    if end > memory.len() {
+        return None;
+    }
+    Some(ChunksOut {
+        // SAFETY: `offset` is no more than the memory's length.
+        next: unsafe { memory.ptr().add(offset) },
+        left: count,
+        memory: PhantomData,
+    })
+}
+
+impl<const N: usize> Iterator for ChunksOut<'_, N> {
+    type Item = [u8; N];
+
+    #[inline]
+    fn next(&mut self) -> Option<[u8; N]> {
+        self.left = self.left.checked_sub(1)?;
+        // SAFETY: `chunks_out` checked that the runs counted from `next`
+        // are in the memory, which lives and stays readable for `'a`;
+        // one was left, so `N` bytes are there to read, and the pointer
+        // after them is in the memory or at its end. Bytes need no
+        // alignment and any are valid.
+        let chunk = unsafe {
+            let chunk = self.next.cast::<[u8; N]>().read_unaligned();
+            self.next = self.next.add(N);
+            chunk
+        };
+        Some(chunk)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.left, Some(self.left))
+    }
+}
+
+impl<const N: usize> ExactSizeIterator for ChunksOut<'_, N> {}
+
+/// The first `len` bytes of `memory`, to write and to read back.
+///
+/// # Safety
+///
+/// `memory` is writable and `len` is no more than its length. For as
+/// long as the slice lives nothing else in this process reads or writes
+/// the memory, and nothing outside it writes there: the region is out of
+/// its [`Pool`] to the caller alone ([`Pool::take`]) and not yet sent
+/// ([`Pool::lend`]), and the peer's mapping is one it only reads by.
+#[expect(
+    clippy::mut_from_ref,
+    reason = "the memory is behind a pointer; what makes the slice the only way to it is the caller's promise"
+)]
+pub unsafe fn bytes_mut<M: Memory + ?Sized>(memory: &M, len: usize) -> &mut [u8] {
+    debug_assert!(len <= memory.len());
+    // SAFETY: the caller's promises: `len` bytes that are valid to read
+    // and write, reached by nothing else while the slice lives. The bytes
+    // are initialized: a mapping's are zero or what was written.
+    unsafe { std::slice::from_raw_parts_mut(memory.ptr(), len) }
+}
+
+/// The first `len` bytes of `memory`, to read.
+///
+/// # Safety
+///
+/// As [`bytes_mut`], but for other slices this one made: for as long as
+/// the slice lives nothing writes the memory at all.
+pub unsafe fn bytes<M: Memory + ?Sized>(memory: &M, len: usize) -> &[u8] {
+    debug_assert!(len <= memory.len());
+    // SAFETY: the caller's promises: `len` bytes that are valid to read
+    // and that nothing writes while the slice lives.
+    unsafe { std::slice::from_raw_parts(memory.ptr(), len) }
+}
+
 /// The regions this end writes large data into (the sending half of
 /// Chromium's `BigBuffer`, with the regions kept): each holds one piece of
 /// data at a time, and is written again only once the peer said it had
@@ -104,6 +217,10 @@ pub struct Pool<M> {
     /// What the search reads; `regions[i]` is slot `i`'s.
     slots: Vec<Slot>,
     regions: Vec<(u32, M)>,
+    /// `held[i]`: slot `i` is out to a taker that hasn't sent it
+    /// ([`Pool::take`]). The peer hasn't heard of what is in it, so it
+    /// isn't the peer's to say it was read.
+    held: Vec<bool>,
     total: usize,
     limit: usize,
 }
@@ -114,6 +231,7 @@ impl<M: Memory> Pool<M> {
         Self {
             slots: Vec::new(),
             regions: Vec::new(),
+            held: Vec::new(),
             total: 0,
             limit,
         }
@@ -138,6 +256,7 @@ impl<M: Memory> Pool<M> {
         self.total = self.total.saturating_add(len);
         self.slots.push(Slot { len, out: false });
         self.regions.push((number, memory));
+        self.held.push(false);
         Ok(())
     }
 
@@ -147,11 +266,30 @@ impl<M: Memory> Pool<M> {
     }
 
     /// A free region of `len` bytes or more, the shortest there is, now
-    /// out: its number. `None` when no free one is long enough.
+    /// out to the caller, to write as it likes: its number. `None` when
+    /// no free one is long enough. It is the caller's until it is lent
+    /// ([`Pool::lend`]) or given back; the peer saying it read it frees
+    /// nothing.
     pub fn take(&mut self, len: usize) -> Option<u32> {
         let i = best_fit(&self.slots, len)?;
         self.slots.get_mut(i)?.out = true;
+        *self.held.get_mut(i)? = true;
         Some(self.regions.get(i)?.0)
+    }
+
+    /// A message is about to name the region `number`, which its taker
+    /// wrote: from now it is out as one bytes were put in, the peer's to
+    /// say it read. `false` when no taker holds it (it was lent already,
+    /// or never taken).
+    pub fn lend(&mut self, number: u32) -> bool {
+        let held = self.index(number).and_then(|i| self.held.get_mut(i));
+        match held {
+            Some(held) if *held => {
+                *held = false;
+                true
+            }
+            _ => false,
+        }
     }
 
     /// `bytes` copied into a free region, now out: its number. `None` when
@@ -176,10 +314,13 @@ impl<M: Memory> Pool<M> {
     /// Whoever took the region is done with it: free again. `false` when
     /// it wasn't out.
     pub fn give_back(&mut self, number: u32) -> bool {
-        let slot = self.index(number).and_then(|i| self.slots.get_mut(i));
-        match slot {
-            Some(slot) if slot.out => {
+        let Some(i) = self.index(number) else {
+            return false;
+        };
+        match (self.slots.get_mut(i), self.held.get_mut(i)) {
+            (Some(slot), Some(held)) if slot.out => {
                 slot.out = false;
+                *held = false;
                 true
             }
             _ => false,
@@ -187,11 +328,15 @@ impl<M: Memory> Pool<M> {
     }
 
     /// The peer said it had read what was in the region: free again. A
-    /// region that isn't this pool's, or that nothing is out in, is the
-    /// peer's mistake.
+    /// region that isn't this pool's, that nothing is out in, or that its
+    /// taker still writes (no message named it: freed, the next taker
+    /// would write the same memory) is the peer's mistake.
     pub fn released(&mut self, number: u32) -> Result<(), BadMessage> {
-        if self.index(number).is_none() {
+        let Some(i) = self.index(number) else {
             return Err(BadMessage::UnknownRegion { number });
+        };
+        if self.held.get(i).copied().unwrap_or(false) {
+            return Err(BadMessage::RegionNotOut { number });
         }
         if self.give_back(number) {
             Ok(())
@@ -217,6 +362,7 @@ impl<M: Memory> Pool<M> {
             return None;
         }
         let slot = self.slots.swap_remove(i);
+        self.held.swap_remove(i);
         self.total = self.total.saturating_sub(slot.len);
         Some(self.regions.swap_remove(i).1)
     }
@@ -257,16 +403,25 @@ impl<M: Memory> Table<M> {
         true
     }
 
-    /// The first `len` bytes of region `number`, copied to the end of
-    /// `into`.
-    pub fn read(&mut self, number: u32, len: u32, into: &mut Vec<u8>) -> Result<(), BadMessage> {
+    /// The memory of region `number`, which a message says holds `len`
+    /// bytes: checked, and not read. Whoever reads it says when it may be
+    /// written again; [`Table::take_read`] doesn't.
+    pub fn named(&self, number: u32, len: u32) -> Result<&M, BadMessage> {
         let Some((_, memory)) = self.regions.iter().find(|(n, _)| *n == number) else {
             return Err(BadMessage::UnknownRegion { number });
         };
-        let count = match usize::try_from(len) {
-            Ok(count) if count <= memory.len() => count,
-            _ => return Err(BadMessage::OutsideRegion { number, len }),
-        };
+        match usize::try_from(len) {
+            Ok(count) if count <= memory.len() => Ok(memory),
+            _ => Err(BadMessage::OutsideRegion { number, len }),
+        }
+    }
+
+    /// The first `len` bytes of region `number`, copied to the end of
+    /// `into`.
+    pub fn read(&mut self, number: u32, len: u32, into: &mut Vec<u8>) -> Result<(), BadMessage> {
+        let memory = self.named(number, len)?;
+        // `named` checked it against the region's length, a `usize`.
+        let count = usize::try_from(len).unwrap_or(0);
         into.reserve(count);
         let spare = into.spare_capacity_mut();
         debug_assert!(count <= spare.len());
@@ -425,6 +580,124 @@ mod tests {
         assert!(!pool.give_back(77));
         assert_eq!(pool.take(256 * KIB), Some(2));
         assert!(pool.memory(77).is_none());
+    }
+
+    #[test]
+    fn a_region_its_taker_holds_is_the_takers_alone_until_it_is_lent() {
+        let (mut pool, _) = ends();
+        let number = pool.take(100 * KIB).unwrap();
+        assert_eq!(number, 2);
+        // No message named it: the peer saying it read it frees nothing
+        // (the next taker would write where this one does).
+        assert_eq!(
+            pool.released(2),
+            Err(BadMessage::RegionNotOut { number: 2 })
+        );
+        assert_eq!(pool.take(100 * KIB), None);
+        assert!(pool.remove(2).is_none());
+        // Lent to a message, once: from then the peer's to say it read.
+        assert!(pool.lend(2));
+        assert!(!pool.lend(2));
+        assert_eq!(pool.take(100 * KIB), None, "still out");
+        assert_eq!(pool.released(2), Ok(()));
+        assert!(!pool.lend(2), "free");
+        assert!(!pool.lend(1), "never taken");
+        assert!(!pool.lend(77));
+        // One bytes were put in has no taker.
+        assert_eq!(pool.put(&[1]), Some(1));
+        assert!(!pool.lend(1));
+        assert_eq!(pool.released(1), Ok(()));
+        // Given back by its taker, it is as any free one: whoever it goes
+        // to next isn't held to the first taker's hold.
+        assert_eq!(pool.take(1), Some(1));
+        assert!(pool.give_back(1));
+        assert!(!pool.lend(1));
+        assert_eq!(pool.put(&[1]), Some(1));
+        assert_eq!(pool.released(1), Ok(()));
+    }
+
+    #[test]
+    fn a_takers_hold_stays_its_regions_when_another_leaves() {
+        let mut pool = Pool::new(1 << 20);
+        for number in 1..=3 {
+            pool.add(number, HeapMemory::new(64 * KIB)).unwrap();
+        }
+        assert_eq!(pool.put(&[1]), Some(1));
+        assert_eq!(pool.put(&[2]), Some(2));
+        assert_eq!(pool.take(1), Some(3));
+        assert_eq!(pool.released(1), Ok(()));
+        // 1 leaves; 3 takes its place in the vectors, held still, and 2
+        // is not.
+        assert!(pool.remove(1).is_some());
+        assert_eq!(
+            pool.released(3),
+            Err(BadMessage::RegionNotOut { number: 3 })
+        );
+        assert_eq!(pool.released(2), Ok(()));
+        assert!(!pool.lend(2));
+        assert!(pool.lend(3));
+        assert_eq!(pool.released(3), Ok(()));
+        // A region that joins after isn't held by what was.
+        assert_eq!(pool.take(1), Some(3));
+        assert!(pool.remove(2).is_some());
+        pool.add(4, HeapMemory::new(64 * KIB)).unwrap();
+        assert!(!pool.lend(4));
+        assert!(pool.lend(3));
+    }
+
+    #[test]
+    fn a_takers_slice_is_the_bytes_the_other_end_reads() {
+        let (mut pool, table) = ends();
+        let number = pool.take(100 * KIB).unwrap();
+        let memory = pool.memory(number).unwrap();
+        // SAFETY: the region is out to this test alone, writable, and
+        // longer than 100 KiB; nothing reads it while the slices live.
+        let written = unsafe {
+            let slice = bytes_mut(memory, 100 * KIB);
+            assert_eq!(slice.len(), 100 * KIB);
+            slice.copy_from_slice(&pattern(100 * KIB, 4));
+            bytes(memory, 100 * KIB).to_vec()
+        };
+        assert_eq!(written, pattern(100 * KIB, 4));
+
+        // What a message names is checked, and not read.
+        let named = table.named(number, (100 * KIB) as u32).unwrap();
+        assert_eq!(named.len(), 256 * KIB);
+        assert_eq!(
+            table.named(number, (256 * KIB + 1) as u32).err(),
+            Some(BadMessage::OutsideRegion {
+                number,
+                len: (256 * KIB + 1) as u32
+            })
+        );
+        assert_eq!(
+            table.named(9, 1).err(),
+            Some(BadMessage::UnknownRegion { number: 9 })
+        );
+        // Any part of it copies out; nothing that isn't all inside does.
+        let mut part = [0; 7];
+        assert!(copy_out(named, 100 * KIB - 7, &mut part));
+        assert_eq!(part, written[100 * KIB - 7..]);
+        assert!(copy_out(named, 256 * KIB - 7, &mut part));
+        assert_eq!(part, [0; 7], "never written");
+        part = [5; 7];
+        assert!(!copy_out(named, 256 * KIB - 6, &mut part));
+        assert!(!copy_out(named, usize::MAX, &mut part));
+        assert_eq!(part, [5; 7]);
+        assert!(copy_out(named, 256 * KIB, &mut []));
+        assert!(!copy_out(named, 256 * KIB + 1, &mut []));
+        // By value, a run at a time.
+        let runs: Vec<[u8; 3]> = chunks_out(named, 1, 5).unwrap().collect();
+        assert_eq!(runs.as_flattened(), &written[1..16]);
+        let mut last = chunks_out::<_, 4>(named, 256 * KIB - 8, 2).unwrap();
+        assert_eq!((last.len(), last.next()), (2, Some([0; 4])));
+        assert_eq!((last.len(), last.next()), (1, Some([0; 4])));
+        assert_eq!((last.len(), last.next()), (0, None));
+        assert_eq!(last.next(), None);
+        assert!(chunks_out::<_, 4>(named, 256 * KIB - 7, 2).is_none());
+        assert!(chunks_out::<_, 4>(named, 0, usize::MAX).is_none());
+        assert!(chunks_out::<_, 4>(named, usize::MAX, 1).is_none());
+        assert_eq!(chunks_out::<_, 4>(named, 256 * KIB, 0).unwrap().count(), 0);
     }
 
     #[test]
