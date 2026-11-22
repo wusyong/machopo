@@ -77,7 +77,7 @@ pub trait Resolve {
 
     /// The peer's region `number`, which the message says holds `len`
     /// bytes, left for the value being read
-    /// ([`shared_buffer::set_arriving`]): not copied.
+    /// (`shared_buffer::set_arriving`): not copied.
     fn hold(&mut self, number: u32, len: u32) -> Result<(), BadMessage> {
         let _ = len;
         Err(BadMessage::UnknownRegion { number })

@@ -47,7 +47,7 @@
 | `RendererGone` | renderer 的 thread 結束、channel 關閉 | 控制通道斷了，或 renderer 送了壞訊息 |
 | 結束一個 renderer（`kill`、壞訊息） | 送 `Shutdown`、不再轉它的訊息；thread 自己結束 | 結束那個 process |
 | renderer 這一側 | 沒有 IO thread | 新的 IO thread 讀控制通道，呼叫 `RendererSender::send`（main thread、worker、DevTools、等回答的位置）和 compositor 的 queue |
-| trace | 一個 process、一個檔案 | 還沒決定（「待決定」） |
+| trace | 一個 process、一個檔案 | 每個 process 寫自己的檔（`README.md` 的「已決定的事項」第 64 條） |
 
 ## 其他實作
 
@@ -227,7 +227,7 @@
 renderer 這一側在單一 process 時本來就沒有 IO thread：crossbeam 是 process 裡的東西，每條 thread 直接等自己的佇列。Browser 這一側有，因為 UI thread 等的是視窗系統的 event loop，沒辦法同時等 crossbeam；而且子資源的請求不用吵醒 UI thread 就能交給網路。它轉給 UI thread 靠的是 Browser 給的 callback，那個 callback 把訊息塞進 event loop 並叫醒它，任何 thread 都能呼叫。
 
 - **留著 IO thread，邏輯抽成物件**：`README.md` 現在寫的。兩種模式都是「IO thread 讀出訊息、交給物件」，差別只在讀的是 crossbeam 還是 `ipc` 的通道。
-- **單一 process 時直接呼叫那個物件**（`README.md` 的「待決定」）：renderer 送訊息的那條 thread 自己呼叫，沒有 IO thread。邏輯還是只有一份。和 `BeginFrame` 的做法同一招：Browser 建好一個東西交給 renderer，裡面做什麼由 Browser 決定。
+- **單一 process 時直接呼叫那個物件**（`README.md` 的「之後的可能」）：renderer 送訊息的那條 thread 自己呼叫，沒有 IO thread。邏輯還是只有一份。和 `BeginFrame` 的做法同一招：Browser 建好一個東西交給 renderer，裡面做什麼由 Browser 決定。
 - **每條 thread 各開一條通道、各自讀**（多 process 時也不要 IO thread）：不選。每條 thread 都得改成能等 kernel 的物件；不同通道之間訊息的先後沒有保證；main thread 忙的時候沒有人讀它那一條，對方死了也不知道。
 
 就我們的了解，Chromium 在把網路搬到獨立的 process 之前，也是用掛在 IO thread 上的 message filter 處理 renderer 的資源請求。

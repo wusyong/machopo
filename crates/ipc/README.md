@@ -1,6 +1,6 @@
 # ipc
 
-對應 Chromium 的 `ipc/` 和 `mojo/`：machopo 的各個 process 之間共用的東西。renderer 現在還是 Browser process 裡的 thread；現在有每個 process 都讀同一個的時鐘 `TimeTicks`、還在同一個 process 裡的 data pipe（`data_pipe`），channel 的核心（`core`）、訊息的值怎麼變成位元組（`codec`）、把它們組起來的端點（`endpoint`）、同一個 process 裡的平台（`local`），和作業系統的平台層（`platform`：macOS、Linux 和 Windows 的）。
+對應 Chromium 的 `ipc/` 和 `mojo/`：machopo 的各個 process 之間共用的東西，和它們之間的通道。Browser 和每個 renderer process 之間的控制通道就是它（`protocol` 的 `control_channel` 定兩端各有哪些目的地，`browser` 和 `renderer` 接上）。裡面有：每個 process 都讀同一個的時鐘 `TimeTicks`、data pipe（`data_pipe`，同一個 process 裡的和過通道的）、channel 的核心（`core`）、訊息的值怎麼變成位元組（`codec`）、把它們組起來的端點和 IO thread 的迴圈（`endpoint`）、過通道時不複製的位元組（`shared_buffer`）、同一個 process 裡的平台（`local`，測試和 fuzz 用）、三個作業系統的平台層（`platform`）。
 
 `unsafe` 只放在這裡和 `bindings`（`python3 scripts/sanity.py unsafe` 檢查）：這裡的是作業系統的 API，和對共用記憶體的複製。
 

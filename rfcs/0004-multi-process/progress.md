@@ -2,7 +2,15 @@
 
 <!-- 怎麼更新見 docs/README.md 的「完成一步時」和「一份 RFC 做完時」。設計理由寫在 README.md，目前仍然成立的限制寫在 docs/limitations.md。 -->
 
-開始日期：2026-10-06（第 0 步「整理邊界」，之後延後）；2026-11-20 排程，從第 1 階段開始
+開始日期：2026-10-06（第 0 步「整理邊界」，Windows 11，之後延後）；2026-11-20 排程，從第 1 階段開始。完成：2026-11-22。主要在 macOS 26（Apple M4，Rust 1.99.0）上做和驗收；Linux 的平台層在 Fedora（kernel 7.3.3、AMD Ryzen AI 9 HX 370）、Windows 的在 Windows 11（10.0.26200、Intel Core i9-13900K）上做。都在 branch `0004` 上；第 2 階段做完時 merge 過一次 `main`。
+
+**做完時還沒驗到的**（使用者知道，之後自己驗）：
+
+- **Windows**：3f、3g、3h 的改動（tile 走共用記憶體、renderer 的 trace 檔、預設多 process）沒有在 Windows 上編過、跑過；`machopo` 用 renderer process 在 Windows 上一次都沒跑過。
+- **Linux**：`shell` 經過真的 `machopo` 的測試用多 process 跑，第一次是 3h 之後的 CI，壞了兩個（stderr 的一行被另一個 process 插在中間）；修正（`2088577`）之後的 CI 那兩個過了，634 個過、只壞下面那個不穩定的測試。Linux 上驗到的就是 CI 的 `cargo test`；真的視窗和量測沒有在 Linux 上做。
+- **整套 WPT、reftest、wdspec 用多 process**：預設換了之後由每天的 CI 跑，第一次的結果寫這份時還沒有。每天的 CI workflow 手動開始時的輸入沒有驗過。
+- **`shell` 的 `devtools_css::sheets_coming_and_going_are_told` 不穩定**（等 30 秒收不到 `CSS.styleSheetAdded`；2026-11-22 那天 Linux 的 CI 五次裡壞三次，`main` 上也壞過）：在測試的 process 裡跑、和這份無關，使用者決定等整理結束流程（graceful shutdown）時一起查。CI 紅的時候先看是不是只有它。
+- 量測只在 macOS、不開視窗時做過，各 3 次。
 
 ## 步驟
 
@@ -38,21 +46,25 @@
 | 2g-3：Windows 的 `spawn`、`inherited`、`child_gone`（繼承加環境變數，第 53 條）；不分平台的跨 process 測試原樣通過；Windows 自己的跨 process 測試 | 完成 | 2026-11-22 |
 | 2g-4：在真的通道上量；當場完成的讀寫改成不經過 completion port、讀的緩衝區維持 64 KiB、CI 先不加 runner（第 54 條） | 完成 | 2026-11-22 |
 | 2h：第 2 階段的檢查、`unsafe` 的論證、`test.py` 的指令、文件；`test.py ipc` 的每一項不排進 CI，留在本機跑（第 55 條；原本規劃排進每週的 CI） | 完成 | 2026-11-22 |
-| 3：啟動 child process，分成七段（第 56 條） | 進行中 | |
+| 3：啟動 child process，分成八段（第 56 條） | 完成 | 2026-11-22 |
 | 3a：child 起得來：`--type=renderer`、child 的 IO thread、Browser 用 `ipc::platform::spawn` 啟動、四種訊息走控制通道 | 完成 | 2026-11-22 |
 | 3b：導覽的 body 的管道跨 process，分成兩小段（第 58 條） | 完成 | 2026-11-22 |
 | 3b-1：`ipc` 的 codec 認得管道（`Consumer` 能序列化） | 完成 | 2026-11-22 |
 | 3b-2：`protocol` 拿掉 `#[serde(skip)]`，`browser` 和 `renderer` 接上 | 完成 | 2026-11-22 |
 | 3c：守住現狀：renderer process 的 tile 已經上得了 GPU（多複製兩次）；測試、3a 留下的 mutant、文件（2026-11-22 調整，第 56 條） | 完成 | 2026-11-22 |
 | 3d：process 不在了（當掉、被 kill、壞訊息、`about:crash`） | 完成 | 2026-11-22 |
-| 3e：切換的旗標、整套測試用多個 process 跑、fuzz target，分兩小段（第 59 條） | 進行中 | |
+| 3e：切換的旗標、整套測試用多個 process 跑、fuzz target，分兩小段（第 59 條） | 完成（整套 WPT、reftest、wdspec 改由預設換了之後每天的 CI 跑，第 70 條） | 2026-11-22 |
 | 3e-1：`--single-process` 和 `--process-per-tab`；`test.py` 和 CI 用多 process 跑的選項 | 完成 | 2026-11-22 |
-| 3e-2：整套測試在多 process 底下跑一遍、修壞的；處理訊息的物件和 body 的管道的 fuzz target | 未開始 | |
+| 3e-2：真的視窗的情境和 pipe 測試用多 process 跑、修壞的；Browser 這一側的 fuzz target（第 60 條） | 完成 | 2026-11-22 |
 | 3f：tile 只複製一次（第 24 條的驗收條件；原本的 3c） | 完成（Linux 等 push 之後的 CI，Windows 還沒編過） | 2026-11-22 |
 | 3g：trace；量每個 frame 的延遲和 IO thread 每一步的時間（3f 之前的現況是事後補量的） | 完成（只量不改；要不要接著改等使用者決定） | 2026-11-22 |
 | 3h：把預設換成多 process；第 3 階段的檢查和文件（sandbox 的探測移到 sandbox 的那一份 RFC，第 69 條） | 完成（整套 WPT、reftest、wdspec 和 Windows 還沒用多 process 驗過，第 70 條） | 2026-11-22 |
 
 ## 驗收
+
+依領域分組。每一項後面是守它的測試或指令；第 2、3 階段每一步的細節（新的測試各測什麼、mutation test 弄壞了什麼）在「做過的檢查」那一步的段落。
+
+**邊界、訊息化和 `ipc` 的核心前半（第 0、1 階段，2a、2b）；Windows 的平台層（2g）**
 
 | 項目 | 怎麼驗證 |
 | --- | --- |
@@ -75,9 +87,65 @@
 | Windows 的通道（`ipc::platform::windows::channel`），兩端在同一個 process 裡：交給迴圈之前不寫、加入時被拒絕過的被告知有空間；一次一筆寫入，沒被拒絕過的不被告知；長的訊息一段一段照順序到；host 的 handle 跟著訊息、離開送的一端、到的只有原本的權限、不被繼承，送出去和送不出去都不留 handle；child 不能給 handle，host 把 child 寫的像表頭的位元組當成位元組；host 的每一次寫入各借出去一次、照順序，一個位元組一個位元組到的接得起來；不合理的表頭當成對方不在了；打斷只報一次；一個 waiter 分得出它的通道，拿掉的、自己關掉的、已經報過不在了的都不再報；值丟掉就是關掉；送的 thread 結束之後它的寫入照樣到；進行中的操作讓通道的內部狀態活到通知被取走；通道放掉之後不留 handle；pipe 的兩端不被繼承、第二個 client 連不上 | `cargo test -p ipc --lib platform::windows::channel`（Windows） |
 | Windows 上 child 拿到它那一端：不分平台的跨 process 測試原樣通過；一個 process 只拿得到一次，拿到之後環境裡沒有那個變數、那一端不可繼承；變數指到的不是 pipe 就拿不到；child 自己的 child、host 之後另外啟動的 process、同時啟動的其他 child 都沒有它的那一端（child 結束時 host 馬上收到） | `cargo test -p ipc --test it process_channel`、`cargo test -p ipc --test it windows_channel`、`cargo test -p ipc --lib platform::windows`（Windows） |
 
+**`ipc` 的核心後半和端點（2c 到 2e）**
+
+| 項目 | 怎麼驗證 |
+| --- | --- |
+| region 的池子和表：寫進去的就是對方讀到的；放進最短的放得下的空塊；出去了的在對方讀完之前不再被寫；不在表裡的編號、超過那一塊的長度是壞訊息；總量有上限 | `cargo test -p ipc --lib region`；`python3 scripts/test.py ipc verus`（`core/fit.rs`）；`ipc fuzz`（`region`） |
+| 大的位元組不管巢狀在哪裡都走 region、訊息只剩編號和長度；沒有空塊時留在訊息裡；巢狀超過上限是壞訊息、不會 stack overflow | `cargo test -p ipc --test it codec` |
+| 過通道的 data pipe：讀到的就是寫的、照順序；送出去還沒被讀的不超過容量；回報的比送的多是壞訊息；結尾和取消交錯時不卡住 | `cargo test -p ipc --lib pipe`、`--test it pipe`；`test.py ipc verus`（`core/credit.rs`）；`test.py ipc tla`（`Pipe.tla`） |
+| 通道的協定（有上限的佇列、結束只報告一次）和 region 的發出與收回，任一端隨時斷線都成立 | `test.py ipc tla`（`Channel.tla`、`Regions.tla`） |
+| 端點：一則訊息的大位元組、新 region 的告知、訊息本身照順序送出；讀過的 region 一批還回去；一個 process 一條 IO thread 管多條通道；通道結束時 handler 剛好聽到一次 | `cargo test -p ipc --test it endpoint`；`test.py ipc models`（loom、shuttle） |
+| 不是我們的對端（child 或 host）送什麼，結果都只有關掉通道；任何輸入都不 panic | `cargo test -p ipc --test it endpoint`（亂送的對端）；`ipc fuzz`（`endpoint`、`frame`） |
+| 管道放在訊息的值裡就跟著過通道（`Consumer` 能序列化）；只有 codec 能序列化它、一個值只過一次 | `cargo test -p ipc --test it pipe_in_message` |
+| 核心的 `unsafe` 沒有未定義的行為 | `test.py ipc miri` |
+
+**macOS 和 Linux 的平台層（2e、2f）**
+
+| 項目 | 怎麼驗證 |
+| --- | --- |
+| macOS：memory entry 的建立和 map，對方的 handle 只能讀；Mach 訊息和 right 的擁有權；rendezvous 只把 port 給登記過的 pid、只給一次、請求比登記早到時等得到；假冒 kernel 的通知被忽略；每則訊息照 audit token 認 child | `cargo test -p ipc`（macOS 上：`platform::macos` 的單元測試、`--test it rendezvous`、`mach_channel`） |
+| Linux：memfd 和 seal，對方的 handle 只能讀、不能執行、不能改大小；socket 的通道和 epoll 的 waiter；child 經過環境變數拿到它那一端、只拿一次 | `cargo test -p ipc`（Linux 上：`platform::linux` 的單元測試、`--test it linux_channel`） |
+| 三個平台共用的跨 process 測試：host 和 child 互送（小的、走 region 的、很長的、管道）；child 結束或被 kill、host 關掉，對方都聽得到；child 不能做的事（附 handle、開管道、提沒給它的 region）關掉它的通道；child 不讀時 host 不被卡住 | `cargo test -p ipc --test it process_channel`（三個平台各自跑過） |
+
+**renderer process（第 3 階段）**
+
+| 項目 | 怎麼驗證 |
+| --- | --- |
+| renderer 在自己的 process 裡載入文件：`--type=renderer`、第一則訊息帶旗標和「有沒有 GPU」、四種訊息走控制通道 | `cargo test -p browser --test it renderer_process`（`a_document_loads_in_a_renderer_process`）；`cargo test -p shell --test it renderer_process` |
+| 導覽的 body 比 commit 帶的長時，其餘的經過管道到 renderer process | `cargo test -p browser --test it renderer_process`（`a_document_longer_than_its_commit_carries_loads_in_a_renderer_process`） |
+| renderer process 的 frame 算在 Browser 綁給它的 sink 上；每個分頁一個 process；GPU 遺失時 renderer 重新建 tile | 同上（`a_renderer_processs_frames_are_its_tabs_sinks`、`each_tab_has_a_renderer_process_of_its_own`、`losing_the_gpu_has_a_renderer_process_make_its_tiles_again`） |
+| Browser 送給 renderer process 的大資料走共用記憶體 | 同上（`what_the_browser_sends_a_renderer_process_that_is_large_goes_by_shared_memory`） |
+| process 不在了：自己死的回報 `RendererGone`；`about:crash` 是 process 自己 abort、重新載入啟動新的；卡住的照樣當得掉；送壞訊息的被 kill；Browser 不在了 renderer 自己結束 | 同上（`a_renderer_process_that_dies_is_reported_gone`、`a_renderer_process_told_to_crash_does_and_another_is_started_for_a_reload`、`a_renderer_process_that_hangs_crashes_when_told_to`、`a_process_that_sends_what_no_renderer_does_is_killed`）；`cargo test -p shell --test it renderer_process` |
+| Browser 對 renderer 的任何訊息都不 panic | `cargo test -p browser --test it renderer_message_fuzz`（重放）；`python3 scripts/test.py browser fuzz` |
+
+**tile 走共用記憶體（3f）**
+
+| 項目 | 怎麼驗證 |
+| --- | --- |
+| 拿一塊 region 直接寫、送出去，對方讀到的就是寫的，訊息裡沒有那些位元組；對方還拿著時送的一端不能再寫；一塊只過去一次、只經過自己的通道；被拿著還沒送的那一塊，對方說「讀完了」是壞訊息 | `cargo test -p ipc --test it shared_buffer`、`--lib region` |
+| 沒有空的 region 時大的位元組放在訊息裡、同時要一塊；Browser 替對方建的不超過上限；建 region 的一端被要求是壞訊息 | `cargo test -p ipc --test it shared_buffer`（`a_child_with_no_region_free_asks_and_gets_no_more_than_it_may_have`） |
+| compositor 有空的 region 就畫在裡面，那一塊就是訊息帶的 | `cargo test -p compositor shared_image` |
+| renderer process 的每一塊 tile 到 Browser 時都是共用記憶體裡的；Viz 不放手時 renderer 不停下來、退回複製，之後要到更多 | `cargo test -p browser --test it renderer_process`（`a_renderer_processs_tiles_go_to_the_gpu_in_shared_memory`、`a_renderer_process_out_of_shared_memory_copies_its_tiles_and_is_given_more`） |
+| Viz 從共用記憶體上傳的像素就是畫出來的（各種列長、新的和池子裡的 texture、GPU 遺失前後） | `cargo test -p viz pixels_in_shared`（真的 GPU） |
+| 真的視窗裡多 process 的 `machopo` 畫得對，GPU 遺失之後照樣 | `python3 scripts/test.py scenarios --window`（72 個） |
+
+**trace、量測和預設（3g、3h）**
+
+| 項目 | 怎麼驗證 |
+| --- | --- |
+| renderer process 寫自己的 trace 檔，它的 thread 和頁面的 mark 只在那裡，兩邊時間對得上 | `cargo test -p shell --test it trace::` |
+| `machopo` 預設每個分頁一個 renderer process，`--single-process` 換回去，兩個一起給是錯誤 | `cargo test -p shell --bin machopo`；`cargo test -p shell --test it renderer_process` |
+| 經過真的 `machopo` 的測試兩種模式都過 | `cargo test -p shell`（預設）；`MACHOPO_SINGLE_PROCESS=1 cargo test -p shell --test it` |
+| 量測的工具讀得到兩個 process 的 trace 和 frame 的時間 | `python3 scripts/bench/raster/raster_test.py` |
+
 ## 做過的檢查
 
-每一步一段：日期和平台；新的測試；mutation test（弄壞了什麼、哪個測試失敗、沒抓到的和原因）；視窗裡的手動確認；找到的 bug；不穩定的測試；跑過的檢查和測試數字。
+**做完時的**（2026-11-22，macOS 26、Apple M4）：`cargo test --workspace` 沒有失敗、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 沒有東西、`sanity.py` 的 7 項；最後一次改程式（印到 stderr 的寫法、`ipc` 的模組說明）和收尾的文件之後整個重跑過。`test.py ipc` 的 `miri` 和 `fuzz` 在 3f 改了核心之後跑過；`models`、`tla`、`verus` 最後一次是第 2 階段，之後沒有改到它們守的東西（3f 加的池子的「拿著」狀態不在 TLA+ 的模型和 Verus 的證明裡，靠單元測試、fuzz 的模型和 Miri）。mutation test 的清單是這個資料夾的 `mutants-*.toml`，每一步的結果在那一步的段落。
+
+**量到的主要數字**（3g，細節在那一段）：compositor 送一塊 tile，單一 process 3.4 µs、多 process 5.6 µs（tile 走共用記憶體之前 94 µs）；Browser 的 IO thread 一則訊息最長 0.1 ms；每個 frame 從送出到畫出來，兩種模式都在 2 ms 以內，最重的一段（一次重畫 2 萬塊 tile）多 process 是 1.5 ms、單一 process 0.8 ms。
+
+下面是每一步做的時候寫的紀錄，照時間排，沒有另外濃縮：這份的步驟多（30 幾步、三台機器），每一步的量測、找到的 bug 和沒驗到的東西都在各自的段落，併成一段會丟掉後面查得到的細節。每一步一段：日期和平台；新的測試；mutation test（弄壞了什麼、哪個測試失敗、沒抓到的和原因）；視窗裡的手動確認；找到的 bug；不穩定的測試；跑過的檢查和測試數字。
 
 ### 0a（2026-10-06，Windows 11）
 
@@ -158,7 +226,7 @@
 ### 1d：第 1 階段的檢查和文件（2026-11-21，macOS、Apple M4）
 
 - **跑過的檢查**：`cargo test --workspace`（60 個測試 binary，沒有失敗）；`cargo fmt --check`；`cargo clippy --workspace --all-targets -- -D warnings`；`sanity.py` 的 7 項。都沒有要修的。reftest、情境（含視窗的）在 1b-3 跑過，1c 之後沒有再動畫面和視窗那一層；1c 跑了相關的 WPT 目錄。
-- **文件**：grep 過這個階段改名和拿掉的東西（`SharedImageInterface`、`shared_image_interface`、`Arc<[u8]>` 的欄位）：`docs/` 和各 crate 的 README 裡沒有留下舊的說法（`docs/architecture.md`、`docs/limitations.md`、`docs/test-gaps.md` 在 1b 和 1c 各步當下改過）。`README.md` 的「還沒有的」拿掉做完的兩項、加上「第 1 階段做完的」；`details.md` 的盤點是 2026-11-20 的，在它下面加一段第 1 階段之後的現況。
+- **文件**：grep 過這個階段改名和拿掉的東西（`SharedImageInterface`、`shared_image_interface`、`Arc<[u8]>` 的欄位）：`docs/` 和各 crate 的 README 裡沒有留下舊的說法（`docs/architecture.md`、`docs/limitations.md`、`docs/test-gaps.md` 在 1b 和 1c 各步當下改過）。`README.md` 的「動機」裡還沒有的那幾項拿掉做完的兩項、加上第 1 階段做完的；`details.md` 的盤點是 2026-11-20 的，在它下面加一段第 1 階段之後的現況。
 - **留給後面的**：Browser 轉告「像素用完了」那一段沒有測試守著（`docs/test-gaps.md` 的「沒有計數守著的優化」）；`matrix`、`fuzz`、`wdspec` 和整套的 WPT 由 CI 跑。
 
 ### 原型和 `ipc-channel`、`interprocess` 比（2026-11-21，macOS、Apple M4）
@@ -876,3 +944,4 @@ branch `0004-linux`，從 `0004` 的 2e-7（`82a4fc7`）分出去。
   - 修正：那一行先組成一個字串再印（一次 `write`，pipe 上小於 `PIPE_BUF` 的寫入不會被插隊）。renderer 印頁面的 console 訊息（`[console] …`、`[uncaught] …`）也是分段印的，一起改（`renderer` 的 `print_line`）：兩個 renderer process、或 renderer 和 Browser 同時印時會混在一起。
   - 這個修正本機重現不了那個時間差，所以沒有測試直接守著「一次寫出」：靠的是那兩個（和其他讀 stderr 的）測試在 CI 上不再失敗。先前我用 `write_all` 直接寫 stderr，測試跑的時候 console 的輸出就不被測試框架收著、全部印出來，改回用巨集印一個字串。
   - 本機：`cargo test -p renderer -p shell`、`cargo clippy` 這兩個 crate、`cargo fmt --check` 過。Linux 上要等下一次 CI。
+  - 修正之後的 CI（`2088577`，Linux）：那兩個測試過了；634 個過，壞的只有 `devtools_css::sheets_coming_and_going_are_told`（原本就不穩定的那一個）。

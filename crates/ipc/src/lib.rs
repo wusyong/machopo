@@ -1,11 +1,14 @@
 //! The process boundary (Chromium's `ipc/` and `mojo/`): what machopo's
-//! processes share. The clock every process reads, [`TimeTicks`], and data
-//! pipes ([`data_pipe`]: a response's body from the network service to
-//! where it is used), for now within one process; the channels' core
-//! ([`core`]: what a channel does with the bytes and handles a platform
-//! reads and writes, and with the memory two processes share), with no
-//! platform under it yet; and a message's value to and from its bytes
-//! ([`codec`]).
+//! processes share, and what goes between them. The clock every process
+//! reads, [`TimeTicks`]; data pipes ([`data_pipe`]: a response's body from
+//! the network service to where it is used, across a channel too); the
+//! channels' core ([`core`]: what a channel does with the bytes and
+//! handles a platform reads and writes, and with the memory two processes
+//! share); a message's value to and from its bytes ([`codec`]); one end of
+//! a channel whole, and a process's IO thread ([`endpoint`]); bytes that
+//! cross in shared memory uncopied ([`shared_buffer`]); and each operating
+//! system's part ([`platform`]), with one for two ends within a process
+//! ([`local`]).
 //!
 //! `unsafe` is allowed here (and in `dom` and `bindings`): the Windows API
 //! the clock reads is FFI, and shared memory is read and written through
