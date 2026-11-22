@@ -11,7 +11,7 @@
 
 **這是論證，不是證明。** 機械化證明過的只有兩小塊算術（池子選哪一塊、管道的額度，Verus）；協定用小的模型窮舉過（TLA+、loom）；其餘靠 fuzz、Miri、跨 process 的測試、mutation test 和人工審查。kernel 的行為證明不了，寫成假設，每一條有測試在那個平台上守著。
 
-**分兩層是為了能驗證**：核心（`src/core/`）不做系統呼叫、不分平台（`python3 scripts/sanity.py deps` 檢查），所以能整個放進 Miri、fuzzer 和 loom；平台層（`src/platform/`）只做四件事（搬位元組和 handle、等、建和 map 共用記憶體、啟動時交接一端），裡面沒有對訊息內容的判斷。
+**分兩層是為了能驗證**：核心（`src/core/`）不做系統呼叫、不分平台（`python3 scripts/sanity.py deps` 檢查），所以能整個放進 Miri、fuzzer 和 loom；平台層（`src/platform/`）只做四件事（搬位元組和 handle、等、建和 map 共用記憶體、啟動時交接一端，Windows 上啟動時也把 child 放進 job），裡面沒有對訊息內容的判斷。
 
 ## 信任誰
 
@@ -48,6 +48,7 @@ kernel 和標準庫的行為，`ipc` 證明不了。每一條有測試在那個�
 | K7 | **out-of-line 收到的記憶體是這個 process 自己的一份**（只有 macOS 用） | 送的一方那幾頁的 copy-on-write，之後它再改也看不到。測試：`what_is_sent_out_of_line_is_the_bytes_as_they_were_when_sent` | | |
 | K8 | **進行中的 I/O 的規則**（只有 Windows 用） | | | 在 completion port 上的 handle，發出操作的 thread 結束時操作不會被取消（`a_write_outlives_the_thread_that_started_it`）；每筆進行中的操作恰好留下一個通知，被取消的也是；設了 `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` 之後當場完成的不留（`what_goes_on_holds_its_end_until_its_completion_is_taken`、`what_is_done_at_once_holds_nothing`） |
 | K9 | **`std::env::remove_var` 在 Windows 上多條 thread 也安全**（標準庫的文件寫明） | | 不成立，所以 Linux 的 child 不拿掉變數 | `inherited` 靠它 |
+| K10 | **job 最後一個 handle 關掉時，kernel 結束裡面的 process**，而一個 process 怎麼結束，它的 handle 都會被關掉（只有 Windows 用） | | | 設了 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`（文件寫明）。測試：`children_share_a_job_and_end_when_it_closes`、`a_hosts_children_go_with_it_whatever_they_are_doing`。正在結束的 process 放不進 job，而那時它還不算結束（實測，Windows 11 10.0.26300：最久差 16 ms），所以被拒絕時最多等 1 秒看它是不是正在結束。測試：`a_child_that_is_exiting_needs_no_job` |
 
 macOS 那一層的測試在 `src/platform/macos/` 各檔的單元測試和 `crates/ipc/tests/it/mach_channel.rs`；Linux 的在 `src/platform/linux/` 和 `crates/ipc/tests/it/linux_channel.rs`；Windows 的在 `src/platform/windows/` 和 `crates/ipc/tests/it/windows_channel.rs`；三個平台共用的跨 process 測試是 `crates/ipc/tests/it/process_channel.rs`。
 
@@ -62,7 +63,7 @@ macOS 那一層的測試在 `src/platform/macos/` 各檔的單元測試和 `crat
 | I3 | **對方可能在寫的共用記憶體只被複製出來**，不當成有不變量的型別、不借成 `&[u8]` 或 `&T` 交出去 | 對方寫的 region（表裡的）只有三個讀的地方，都在 `core/region.rs`：`Table::read`（整段複製到 `Vec`）、`copy_out`（複製到呼叫的人給的 slice）、`chunks_out`（一段一段以值交出去，給只能寫、拿不到 slice 的目的地）。`SharedBuffer` 拿著 region 時只提供後兩種，`as_bytes` 回 `None`。複製出來之後才解碼。審查；`crates/ipc/tests/it/shared_buffer.rs` |
 | I4 | **交給核心的 handle 是 kernel 為這則訊息搬進來的**，不是對方寫的數值 | macOS、Linux：假設 K3。Windows：child 寫的位元組沒有這一層的表頭，host 那一端沒有把數值包成 handle 的程式，所以對方不能附 handle 的一端看不到任何數值（`a_child_gives_no_handle_and_a_host_takes_no_value_for_one`） |
 | I5 | **child 信任 host 的地方只有這幾處** | Windows 的 child 把 host 寫的數值包成 handle（`End::next`）、不檢查收到的 section 是哪一種；三個平台的 child 照環境變數或 rendezvous 拿它那一端；child 把 host 給它寫的 region 借成 slice 來畫（I10），相信 host 不寫那一塊。新增一處要寫在這裡 |
-| I6 | **平台的函式除了 `wait` 都不等** | 審查；`core/channel.rs` 在自己的鎖底下呼叫 `write` |
+| I6 | **平台的函式除了 `wait` 都不等**（啟動 child 的 `spawn` 不算：不在核心的鎖底下呼叫，Windows 上 child 放不進 job 時最多等它 1 秒） | 審查；`core/channel.rs` 在自己的鎖底下呼叫 `write` |
 | I7 | **一條通道只有一條 thread 讀**（IO thread） | `Endpoint` 交給迴圈時是搬進去的，只能交一次；Linux 的 waiter 拒絕已經被別的 waiter 等著的一端（`an_end_has_one_waiter`），Windows 的 pipe 只上得了一個 completion port |
 | I8 | **Windows 上進行中的操作讓它的通道活著**，直到它的通知從 port 取走：那之前 kernel 隨時會寫它的 `OVERLAPPED` 和緩衝區 | `hold`、`let_go` 和 `wait` 裡的 `Arc::from_raw` 成對（下面的表）。waiter 丟掉時還在進行的不釋放：刻意洩漏 |
 | I10 | **這一端寫的 region 只在一個時候是 slice：被拿出池子（`Pool::take`）、還沒交給訊息（`Pool::lend`）的期間，而且只給拿的那一個人**（`shared_buffer::Writer`） | 那段期間池子記著它被拿著（`held`）：不會再被 `take` 或 `put` 選到，對方說「讀完了」是壞訊息（`RegionNotOut`，不然下一個拿的人會寫同一塊）。`Writer` 變成 `SharedBuffer` 時被消耗掉，之後沒有東西能寫它；`SharedBuffer` 還給池子只有一次（訊息沒送出去時由送的那一步還，`sent` 旗標讓它自己 drop 時不再還）。對方那一側的 mapping 不寫這一塊：Browser 寫的 region，renderer 拿到的是唯讀的（K1）；renderer 寫的 region，Browser 的程式只讀（I5 的方向相反：這裡是 child 信任 host）。`core/region.rs` 和 `crates/ipc/tests/it/shared_buffer.rs` 的測試（`a_region_its_taker_still_writes_isnt_the_peers_to_free`）；Miri；審查 |
@@ -129,6 +130,7 @@ macOS 那一層的測試在 `src/platform/macos/` 各檔的單元測試和 `crat
 | `platform/windows/channel.rs` 的 `DuplicateHandle`（`to_duplicate_into`、`give`、`take_back`） | handle 都是借來的、呼叫期間開著的，結果寫進活到呼叫結束的區域變數。`take_back` 關的是 `give` 剛放進 child 的那幾個，child 還沒被告知有它們；沒有目標的 `DUPLICATE_CLOSE_SOURCE` 只在來源的 process 裡關掉 |
 | `platform/windows/channel.rs` 的 `inherited`、`end_named`（`std::env::remove_var`、`GetFileType`、`OwnedHandle::from_raw_handle`、`SetHandleInformation`） | `remove_var`：標準庫寫明它在 Windows 上單一和多條 thread 的程式裡都安全（改環境是系統的一個呼叫，別的 thread 可以同時讀）；這個模組只在 Windows 上編。`GetFileType` 只查那個數值，不是 handle 時它自己會說。包成 `OwnedHandle` 的數值是 host（可信）為這件事放進這個 process 的、剛確認過是 pipe，而且 `inherited` 的旗標讓它只被包一次。變數被別人設成這個 process 自己的另一個 pipe 的數值時，那個 pipe 會被當成通道、之後被關掉：能設 child 的環境的人本來就是啟動它的人 |
 | `platform/windows/channel.rs` 的 `named_pipe`、`IocpWaiter` 的 port（`CreateNamedPipeW`、`CreateFileW`、`ConnectNamedPipe`、`CreateIoCompletionPort`、`PostQueuedCompletionStatus`、`GetQueuedCompletionStatus`、`CancelIoEx`） | 名字是以 0 結尾、活到呼叫結束的陣列。回來的 handle 檢查過才包成 `OwnedHandle`（新的，只有這裡拿著）。其餘的呼叫都是對自己拿著、呼叫期間開著的 handle 做的，寫的是活到呼叫結束的區域變數 |
+| `platform/windows/job.rs`（`CreateJobObjectW`、`OwnedHandle::from_raw_handle`、`SetInformationJobObject`、`AssignProcessToJobObject`、`WaitForSingleObject`） | 建 job 時兩個指標都是 null（沒有名字、不被繼承），回來的不是 null 才包成 `OwnedHandle`（新的，只有這裡拿著）。limits 是活到呼叫結束的區域變數，型別和長度照那個 class 要的。放進 job 和等待用的是借來的、呼叫期間開著的 handle；kernel 自己檢查是不是 process、權限夠不夠 |
 
 ## 怎麼驗證的
 
@@ -166,4 +168,5 @@ Miri 和 fuzzer 碰不到平台層（系統呼叫）：那一層靠跨 process �
 - **改送出的佇列、鎖或通道的結束**（`core/channel.rs`）：跑 loom 和 shuttle；鎖底下不能等（I6）。
 - **新的平台，或改平台的 `Platform`、`Waiter`**：對過 K1 到 K6 每一條在那個平台靠什麼、有沒有測試；`crates/ipc/tests/it/process_channel.rs` 不改就要過；handle 如果是數值，照 Windows 的做法守 I4。
 - **child 這一側新增一處不檢查 host 的**：寫進 I5。
+- **改 Windows 的 job**：handle 不能被繼承、不能複製給別的 process、host 活著時不能關：前兩種讓 child 在 host 不在之後留著，最後一種把活著的 child 全部結束（K10）。
 - **升級作業系統的版本**：重跑那個平台的 `cargo test -p ipc`，標「實測」的假設先看。

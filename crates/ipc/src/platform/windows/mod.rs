@@ -1,7 +1,9 @@
 //! Windows. A channel's end is a named pipe's; a region of shared memory
-//! is a section of the page file, with no name.
+//! is a section of the page file, with no name. A child started with a
+//! channel is in a job that ends it with this process.
 
 pub mod channel;
+mod job;
 pub mod memory;
 
 /// Held by a test that counts this process's handles, or has hundreds

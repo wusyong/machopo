@@ -2704,3 +2704,41 @@ fn a_second_machopo_on_a_profiles_folder_doesnt_start() {
     first.navigate(&session, "about:blank");
     assert!(first.end().success());
 }
+
+/// A browser killed takes its renderers with it, one that would never
+/// read that it is gone too: nothing is left running, or holding open
+/// the output it inherited.
+#[cfg(windows)]
+#[test]
+fn a_killed_browsers_hung_renderer_goes_with_it() {
+    let server = server(&[("/", Route::ok("text/html", "<!DOCTYPE html>page"))]);
+    // Whatever the run asks for: this is about the processes.
+    let mut browser = Browser::start_with(&["--process-per-tab"]);
+    let session = browser.attach();
+    browser.navigate(&session, &server.url("/"));
+    // Busy for far longer than the test waits; should the test fail,
+    // what it left behind stops by itself.
+    browser.send(
+        Some(&session),
+        "Machopo.executeScript",
+        json!({
+            "script": "const end = Date.now() + 30000; while (Date.now() < end) {}",
+            "async": false,
+        }),
+    );
+    std::thread::sleep(Duration::from_secs(1));
+    browser.child.kill().unwrap();
+    browser.child.wait().unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        match browser.messages.recv_timeout(left) {
+            Ok(_) => {}
+            // Its output is at its end: the renderer had it too.
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                panic!("a renderer outlived its browser")
+            }
+        }
+    }
+}

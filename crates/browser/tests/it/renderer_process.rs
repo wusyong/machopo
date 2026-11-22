@@ -520,6 +520,7 @@ fn a_renderer_process_that_hangs_crashes_when_told_to() {
 
 /// What the tab is told was wrong with what its renderer sent: the tab
 /// ends the renderer for it, as an embedder has it do.
+#[cfg(unix)]
 fn bad_message_of(
     web_contents: &mut browser::WebContents,
     host_rx: &crossbeam_channel::Receiver<browser::ContentsEvent>,

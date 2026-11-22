@@ -186,7 +186,7 @@ Browser 建好控制通道的兩端，以 `--type=renderer` 啟動同一個執�
 
 - **Linux 和 Windows**：child 繼承一端。兩端都由 Browser 建立，沒有用名字連線的步驟，別的 process 搶不到通道。
   - Linux：fork 之後、exec 之前，只在 child 裡拿掉那一端的 close-on-exec，號碼放在環境變數裡告訴 child（第 43 條）。
-  - Windows：只在啟動 child 的那一小段把那一端設成可繼承（一次啟動一個），handle 的數值放在環境變數裡告訴 child（第 53 條）。
+  - Windows：只在啟動 child 的那一小段把那一端設成可繼承（一次啟動一個），handle 的數值放在環境變數裡告訴 child（第 53 條）。啟動之後、送第一則訊息之前，把 child 放進和 Browser 一起結束的 job object（第 71 條）。
 - **macOS**：Mach port 不能繼承，照 Chromium 的 `MachPortRendezvous`：
   - Browser 開一個 rendezvous server，用固定的前綴加上 Browser 的 pid 當名字，登記在 launchd 的 bootstrap namespace；所有 child 共用這一個 server。
   - 啟動 child 時，Browser 把要給它的 port（它的 receive port、通往 Browser 的 send right）記在 child 的 pid 底下。pid 啟動之後才知道，所以 child 的請求比登記早到時，server 等登記完成再回。
@@ -218,7 +218,7 @@ sad tab、重新載入和 `about:crash` 原本就有，由 renderer 的 thread �
 - **通道斷了**（各平台的訊號見「`ipc` crate」的表）：IO thread 報告 `RendererGone`，這個 renderer 的 region 和表都放掉，Browser 回收那個 process（等不到就 kill）。之後照原本的路：分頁顯示 sad tab，重新載入時啟動新的 renderer process。
 - **壞掉的訊息**（解不出來的、`ipc` 判定的、Browser 的檢查判定的）、對方不讀讓佇列滿了：通道關掉，分頁照壞訊息的路結束 renderer，Browser kill 那個 process。
 - **`about:crash`**：Browser 送一則「當掉」，renderer process 自己 `abort`；Browser 等它結束（最多 5 秒，不然 kill），回來時已經沒有了，所以緊接著的導覽不會撞上正在死的 renderer。Linux 上先把自己設成不留 core dump：core dump 交給收集程式的機器上，process 要等它收完才算結束。
-- **Browser 不在了**：renderer 的通道斷了，它自己結束。
+- **Browser 不在了**：renderer 的通道斷了，它自己結束。Windows 上另外由 job object 保證：main thread 卡住、自己結束不了的也跟著 Browser 結束（第 71 條）。
 - **沒有的**：偵測「不回應」的機制（Chromium 的 hang monitor）。卡住的 renderer 要有人重新載入或關掉分頁，Browser 才結束它（`docs/limitations.md`）。
 
 ### 單一 process 的模式
@@ -653,6 +653,11 @@ renderer 這一側沒有 IO thread：每條 thread 直接等自己的 crossbeam 
     - **換的時候還沒驗到的**（使用者知道）：整套 WPT、reftest、wdspec 沒有用多 process 跑過，第一次是換了之後每天的 CI；Windows 上 `machopo` 用 renderer process 一次都沒跑過，3f、3g 的改動在 Windows 上也還沒編過。壞了的先用 `--single-process`。
     - **不選等手動的 Nightly 綠了再換**（原本的條件，我的建議）：卡在要有人手動開始、等一輪。**不選 Windows 維持單一 process**：三個平台的預設不一樣容易忘記。
     - 對照 Chromium：所有平台預設多 process，`--single-process` 只給除錯用。
+71. **Windows 上 renderer process 用 job object 跟著 Browser 結束**（2026-11-22，做完之後在 Windows 上驗證時發現的；使用者同意用 job object）：`ipc::platform::spawn` 把 child 放進一個 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 的 job，job 唯一的 handle 是 Browser 的，一直不關、不被繼承。
+    - **為什麼**：通道斷了時 renderer 的 IO thread 只請 main thread 結束，main thread 卡在 script 裡時永遠讀不到：Browser 被 kill 或當掉之後 renderer 留著（重現 30 次留下 30 次）。`machopodriver` 關有卡住的分頁的 session 時也會走到。
+    - **不選只讓 renderer 的 IO thread 自己結束 process**：要 child 的那條 thread 還活著、還聽得到；job 不需要 child 配合，renderer 和 driver 也都不用改。macOS 和 Linux 沒有 job，要用這個做法，還沒做（`docs/limitations.md`）。
+    - **實作時實測之後加的兩點**：正在結束的 child 會被 job 拒絕、但還要一下子（最久 16 ms）才算結束，所以被拒絕時最多等 1 秒，確定它在結束就不算錯；Browser 在第一個 renderer 之後被別人放進另一個 job 時，原本的 job 收不了新的 child，所以再建一個、舊的留著（只有一個 job 的話，從那時起開不了新分頁）。
+    - 對照 Chromium：Windows 上也靠 job（`child_thread_impl.cc` 寫明因此不需要 `TerminateSelfOnDisconnect`；不進 sandbox 的 child 是 `sandbox_win.cc` 的 `CreateUnsandboxedJob`：整個 process 一個、一直不關，放不進去是啟動失敗）；POSIX 上 IO thread 在通道斷了時直接結束 process。
 
 ## 待決定
 

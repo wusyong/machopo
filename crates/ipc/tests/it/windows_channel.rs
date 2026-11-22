@@ -1,11 +1,14 @@
 //! What only Windows's channel has, between real processes: how a child
-//! comes by its end. It inherits the end's handle and is told the
-//! handle's value by a variable of its environment; once it has taken
-//! the end, neither is there for a child of its own.
+//! comes by its end, and that it doesn't outlive its host. It inherits
+//! the end's handle and is told the handle's value by a variable of its
+//! environment; once it has taken the end, neither is there for a child
+//! of its own.
 //!
 //! The test is the host and starts itself again as the child (this
 //! file's `child`), as `process_channel` does.
 
+use std::io::{ErrorKind, Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
@@ -22,6 +25,12 @@ const VARIABLE_LEFT: i32 = 41;
 const TAKEN_TWICE: i32 = 42;
 const GOT_AN_END: i32 = 43;
 const SETUP: i32 = 44;
+
+/// Where a child that stays says it runs: the test's listener's address.
+const REPORT_TO: &str = "MACHOPO_IPC_TEST_REPORT_TO";
+/// What it says it is: a child of `spawn`'s, or one started without it.
+const SPAWNED: u8 = b's';
+const STARTED_PLAINLY: u8 = b'p';
 
 /// The test started again as `role`, by nothing of the platform's: it is
 /// given no end.
@@ -68,6 +77,13 @@ fn child() {
             thread::sleep(Duration::from_secs(4));
             0
         }
+        // A host of two children that never look at their channels, and
+        // of one started without the platform.
+        "host" => host(),
+        // Says it runs and stays, hearing nothing of any channel, for as
+        // long as the test holds the connection.
+        "stays" => stays(SPAWNED),
+        "stays-plainly" => stays(STARTED_PLAINLY),
         // Was given no end, whatever its environment says.
         "none" => no_end(),
         _ => SETUP,
@@ -81,6 +97,37 @@ fn no_end() -> i32 {
     } else {
         0
     }
+}
+
+fn host() -> i32 {
+    let mut kept = Vec::new();
+    for _ in 0..2 {
+        let mut command = command("windows_channel::child", "stays");
+        match platform::spawn(command.stderr(Stdio::null())) {
+            Ok(started) => kept.push(started),
+            Err(_) => return SETUP,
+        }
+    }
+    let Ok(_other) = plain("stays-plainly").spawn() else {
+        return SETUP;
+    };
+    // Until it is killed.
+    thread::sleep(SOON * 2);
+    SETUP
+}
+
+fn stays(as_what: u8) -> i32 {
+    let Some(mut test) = std::env::var(REPORT_TO)
+        .ok()
+        .and_then(|address| TcpStream::connect(address).ok())
+    else {
+        return SETUP;
+    };
+    if test.write_all(&[as_what]).is_err() {
+        return SETUP;
+    }
+    let _ = test.read(&mut [0]);
+    0
 }
 
 fn exit_code(mut child: std::process::Child) -> Option<i32> {
@@ -203,6 +250,62 @@ fn children_started_at_once_each_have_their_own_end_alone() {
         );
         left.push(child);
     }
+}
+
+/// Whether the process at the other end of `connection` ends within
+/// `soon`: a socket isn't inherited, so nothing else holds it open.
+fn ends(connection: &mut TcpStream, soon: Duration) -> bool {
+    connection.set_read_timeout(Some(soon)).unwrap();
+    match connection.read(&mut [0]) {
+        Ok(read) => read == 0,
+        Err(error) => !matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut),
+    }
+}
+
+#[test]
+fn a_hosts_children_go_with_it_whatever_they_are_doing() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+    let mut host = plain("host")
+        .env(REPORT_TO, address)
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    let (came, connections) = mpsc::channel();
+    thread::spawn(move || {
+        for _ in 0..3 {
+            let (mut connection, _) = listener.accept().unwrap();
+            let mut as_what = [0];
+            connection.read_exact(&mut as_what).unwrap();
+            if came.send((as_what[0], connection)).is_err() {
+                return;
+            }
+        }
+    });
+    let mut spawned = Vec::new();
+    let mut plainly = Vec::new();
+    for _ in 0..3 {
+        match connections.recv_timeout(SOON).expect("its children run") {
+            (SPAWNED, connection) => spawned.push(connection),
+            (_, connection) => plainly.push(connection),
+        }
+    }
+    assert_eq!((spawned.len(), plainly.len()), (2, 1));
+
+    // While it lives, so do they.
+    for child in &mut spawned {
+        assert!(!ends(child, Duration::from_millis(300)), "gone before it");
+    }
+    host.kill().unwrap();
+    host.wait().unwrap();
+    for child in &mut spawned {
+        assert!(ends(child, Duration::from_secs(5)), "left behind");
+    }
+    // What it started by itself is none of the platform's.
+    assert!(
+        !ends(&mut plainly[0], Duration::from_millis(300)),
+        "a process spawn didn't start went with it"
+    );
 }
 
 /// A measurement, not a check: a host and echoing children over the real

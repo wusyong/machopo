@@ -1,0 +1,102 @@
+# After the RFC was done: a Windows child doesn't outlive its host
+# (`ipc::platform::windows::job`, and `channel`'s `spawn` that uses it).
+# The children are in a job that ends them when the host's handle to it
+# closes; the host isn't in it and no child has the handle; a child the
+# job can't take gets another, the first kept; a child that is exiting
+# is no error, one that runs on and takes no job is.
+#
+# Not listed: `spawn` killing the child that no job would take (the
+# kernel refuses no child of `spawn`'s in any test; `docs/test-gaps.md`).
+test = ["cargo", "test", "-q", "-p", "ipc"]
+timeout = 180
+
+[[mutant]]
+name = "spawn puts the child in no job"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''    if let Err(error) = job::end_with_this_process(child.as_handle()) {'''
+to = '''    if let Err(error) = Ok::<(), io::Error>(()) {'''
+
+[[mutant]]
+name = "the job doesn't kill when it closes"
+file = "crates/ipc/src/platform/windows/job.rs"
+from = '''    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;'''
+to = '''    limits.BasicLimitInformation.LimitFlags = 0 & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;'''
+
+[[mutant]]
+name = "children inherit the job's handle"
+file = "crates/ipc/src/platform/windows/job.rs"
+from = '''    let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();'''
+to = '''    // SAFETY: the job is open for the call.
+    unsafe { windows_sys::Win32::Foundation::SetHandleInformation(job.as_raw_handle(), 1, 1) };
+    let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();'''
+
+[[mutant]]
+name = "the process's jobs close when spawn returns"
+file = "crates/ipc/src/platform/windows/job.rs"
+from = '''    OF_THIS_PROCESS.add(child)'''
+to = '''    Jobs::new().add(child)'''
+
+[[mutant]]
+name = "the host is in its children's job"
+file = "crates/ipc/src/platform/windows/job.rs"
+from = '''    OF_THIS_PROCESS.add(child)'''
+to = '''    // SAFETY: this process's pseudo handle is always open.
+    OF_THIS_PROCESS.add(unsafe {
+        BorrowedHandle::borrow_raw(windows_sys::Win32::System::Threading::GetCurrentProcess())
+    })?;
+    OF_THIS_PROCESS.add(child)'''
+
+[[mutant]]
+name = "every child gets a job of its own"
+file = "crates/ipc/src/platform/windows/job.rs"
+from = '''        if let Some(job) = jobs.last()'''
+to = '''        if let Some(job) = jobs.last().filter(|_| false)'''
+
+[[mutant]]
+name = "a child the job can't take gets no other"
+file = "crates/ipc/src/platform/windows/job.rs"
+from = '''        let job = kill_on_close()?;
+        assign_to(&job, child)?;'''
+to = '''        if !jobs.is_empty() {
+            return Err(io::Error::other("refused"));
+        }
+        let job = kill_on_close()?;
+        assign_to(&job, child)?;'''
+
+[[mutant]]
+name = "the job before is closed when another is made"
+file = "crates/ipc/src/platform/windows/job.rs"
+from = '''        jobs.push(job);'''
+to = '''        jobs.clear();
+        jobs.push(job);'''
+
+[[mutant]]
+name = "a job no child joined is kept"
+file = "crates/ipc/src/platform/windows/job.rs"
+from = '''        assign_to(&job, child)?;
+        // The ones before are kept: closing one ends the children in it.
+        jobs.push(job);'''
+to = '''        let joined = assign_to(&job, child);
+        jobs.push(job);
+        joined?;'''
+
+[[mutant]]
+name = "a child that has exited is an error"
+file = "crates/ipc/src/platform/windows/job.rs"
+from = '''        if exits_within(child, EXITING_MS) {'''
+to = '''        if false && exits_within(child, EXITING_MS) {'''
+
+[[mutant]]
+name = "a child that is exiting isn't waited for"
+file = "crates/ipc/src/platform/windows/job.rs"
+from = '''        if exits_within(child, EXITING_MS) {'''
+to = '''        if exits_within(child, EXITING_MS.min(0)) {'''
+
+[[mutant]]
+name = "a child that takes no job is no error"
+file = "crates/ipc/src/platform/windows/job.rs"
+from = '''            Err(refused)'''
+to = '''            {
+                let _ = refused;
+                Ok(())
+            }'''

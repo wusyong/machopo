@@ -6,7 +6,7 @@
 
 **做完時還沒驗到的**（使用者知道，之後自己驗）：
 
-- **Windows**：3f、3g、3h 的改動（tile 走共用記憶體、renderer 的 trace 檔、預設多 process）沒有在 Windows 上編過、跑過；`machopo` 用 renderer process 在 Windows 上一次都沒跑過。
+- **Windows**：做完時沒有跑過；2026-11-22 之後在 Windows 11 上驗了，找到一個 bug（Browser 不在了時卡住的 renderer 留下來）、修了（第 71 條；「做過的檢查」的最後一節）。還沒在 Windows 上驗的列在那一節最後。macOS 和 Linux 上同一個 bug 還在（`docs/limitations.md`）。
 - **Linux**：`shell` 經過真的 `machopo` 的測試用多 process 跑，第一次是 3h 之後的 CI，壞了兩個（stderr 的一行被另一個 process 插在中間）；修正（`2088577`）之後的 CI 那兩個過了，634 個過、只壞下面那個不穩定的測試。Linux 上驗到的就是 CI 的 `cargo test`；真的視窗和量測沒有在 Linux 上做。
 - **整套 WPT、reftest、wdspec 用多 process**：預設換了之後由每天的 CI 跑，第一次的結果寫這份時還沒有。每天的 CI workflow 手動開始時的輸入沒有驗過。
 - **`shell` 的 `devtools_css::sheets_coming_and_going_are_told` 不穩定**（等 30 秒收不到 `CSS.styleSheetAdded`；2026-11-22 那天 Linux 的 CI 五次裡壞三次，`main` 上也壞過）：在測試的 process 裡跑、和這份無關，使用者決定等整理結束流程（graceful shutdown）時一起查。CI 紅的時候先看是不是只有它。
@@ -116,7 +116,7 @@
 | 導覽的 body 比 commit 帶的長時，其餘的經過管道到 renderer process | `cargo test -p browser --test it renderer_process`（`a_document_longer_than_its_commit_carries_loads_in_a_renderer_process`） |
 | renderer process 的 frame 算在 Browser 綁給它的 sink 上；每個分頁一個 process；GPU 遺失時 renderer 重新建 tile | 同上（`a_renderer_processs_frames_are_its_tabs_sinks`、`each_tab_has_a_renderer_process_of_its_own`、`losing_the_gpu_has_a_renderer_process_make_its_tiles_again`） |
 | Browser 送給 renderer process 的大資料走共用記憶體 | 同上（`what_the_browser_sends_a_renderer_process_that_is_large_goes_by_shared_memory`） |
-| process 不在了：自己死的回報 `RendererGone`；`about:crash` 是 process 自己 abort、重新載入啟動新的；卡住的照樣當得掉；送壞訊息的被 kill；Browser 不在了 renderer 自己結束 | 同上（`a_renderer_process_that_dies_is_reported_gone`、`a_renderer_process_told_to_crash_does_and_another_is_started_for_a_reload`、`a_renderer_process_that_hangs_crashes_when_told_to`、`a_process_that_sends_what_no_renderer_does_is_killed`）；`cargo test -p shell --test it renderer_process` |
+| process 不在了：自己死的回報 `RendererGone`；`about:crash` 是 process 自己 abort、重新載入啟動新的；卡住的照樣當得掉；送壞訊息的被 kill；Browser 不在了 renderer 自己結束 | 同上（`a_renderer_process_that_dies_is_reported_gone`、`a_renderer_process_told_to_crash_does_and_another_is_started_for_a_reload`、`a_renderer_process_that_hangs_crashes_when_told_to`、`a_process_that_sends_what_no_renderer_does_is_killed`）；`cargo test -p shell --test it renderer_process`。做完之後補的：Windows 上 main thread 卡住的也跟著 Browser 結束（`a_hosts_children_go_with_it_whatever_they_are_doing`、`a_killed_browsers_hung_renderer_goes_with_it`）；macOS 和 Linux 上還不成立 |
 | Browser 對 renderer 的任何訊息都不 panic | `cargo test -p browser --test it renderer_message_fuzz`（重放）；`python3 scripts/test.py browser fuzz` |
 
 **tile 走共用記憶體（3f）**
@@ -945,3 +945,21 @@ branch `0004-linux`，從 `0004` 的 2e-7（`82a4fc7`）分出去。
   - 這個修正本機重現不了那個時間差，所以沒有測試直接守著「一次寫出」：靠的是那兩個（和其他讀 stderr 的）測試在 CI 上不再失敗。先前我用 `write_all` 直接寫 stderr，測試跑的時候 console 的輸出就不被測試框架收著、全部印出來，改回用巨集印一個字串。
   - 本機：`cargo test -p renderer -p shell`、`cargo clippy` 這兩個 crate、`cargo fmt --check` 過。Linux 上要等下一次 CI。
   - 修正之後的 CI（`2088577`，Linux）：那兩個測試過了；634 個過，壞的只有 `devtools_css::sheets_coming_and_going_are_told`（原本就不穩定的那一個）。
+
+### 做完之後：在 Windows 上驗證，和 renderer 跟著 Browser 結束（2026-11-22，Windows 11 10.0.26300、32 個邏輯 CPU、RX 7900 XTX）
+
+- **修改之前驗的**（`baf8881`）：
+  - `cargo test --workspace`：4640 個過、3 個失敗（下面）。clippy 一個錯：`browser` 的測試的 `bad_message_of` 只有 unix 的測試用，Windows 上是 dead code；加了 `#[cfg(unix)]`。`cargo fmt --check` 和 `sanity.py` 的 7 項過。
+  - 情境：沒有平台視窗的 96 個、真的視窗的 72 個通過，log 都有 renderer process。WPT `dom/events` 1069 項檢查、0 個意外，兩種模式一樣。machopo 的 reftest 152 個、0 個意外。
+  - 用腳本從外面開 `machopo` 看的：20 個分頁是 20 個 process；`about:crash`（閒著的、卡住的）、從外面 kill、JS 的 OOM、stack overflow 都只有那個 renderer 結束、另一個分頁不受影響；送壞訊息的被 kill（5/5）；開關分頁 300 次、當掉 100 次，Browser 的 handle 沒有變多；trace 每個 process 一個檔。
+- **找到的 bug**：Browser 被 kill 時，main thread 卡住的 renderer 不結束。`ChildHandler::gone` 只把 `Shutdown` 放進 main thread 的佇列；log 確認它有被呼叫，之後 process 照樣跑（120 秒用掉 116.8 秒的 CPU），也握著繼承的 stdout。無窮迴圈、一直配置、兩個卡住的分頁各 10 次，30 次全部留下。`machopodriver` 關 session：一個卡住的分頁 25 次留下 3 次，兩個時 6 次留下 6 次；`--single-process` 沒有。3d 的測試沒抓到，因為它只試閒著的 renderer。
+- **修正**（第 71 條）：`ipc` 的 `platform/windows/job.rs`。寫之前先實測：正在結束的 process 放進 job 300/300 次被拒絕、最久再過 16 ms 才算結束；host 中途被放進另一個 job 之後，原本的 job 拒絕新的 child。
+- **測試**：新的 8 個（`job` 的單元測試 6 個、`windows_channel` 1 個、`shell` 的 `automation_pipe` 1 個）；後面兩個在修改之前確認會失敗。重複跑：`ipc` 的單元測試 150 次、整合測試 80 次、兩者各 8 個同時跑 5 輪；`shell` 那個單獨 30 次、8 個同時跑 3 輪，都沒有失敗。
+- **mutation test**（`mutants-job.toml`）12 個，都抓到；跑完逐檔比對，已還原。
+- **修改之後在真的 `machopo` 上**：同樣 30 次留下 0 個（最久 47 ms 內結束）；Browser 在第一個分頁之後被放進另一個 job，第二個分頁照樣開得起來、kill 之後 10 次都沒留下；`machopodriver` 關 session，一個卡住的分頁 15 次、兩個 4 次，都沒留下；正常關閉的結束代碼、trace 檔、300 次開關分頁和 100 次當掉的 handle 數沒有變差；`test.py wpt dom/events` 還是 1069 項、0 個意外。
+- **修改之後的檢查**：`cargo test --workspace` 4648 個過、同樣 3 個失敗；clippy、`cargo fmt --check`、`sanity.py` 的 7 項過。
+- **那 3 個失敗**：
+  - `profile::a_persons_profile_is_where_the_platform_keeps_a_users_data`、`profile::a_profiles_folder_is_made_and_says_whose_it_is`：`main` 的 `35c2e9f` 修了，rebase 之後就有。
+  - `automation_pipe::the_window_has_bounds_to_set` 不穩定（等 30 秒逾時；單獨跑 10 次都過）：16 個以上的 `machopo` 同時啟動時約 35–60% 拿不到 GPU、退回 WARP（兩種模式都是；8 個時沒有）。強制用 WARP 時它平均要 25.6 秒（多 process）、21.2 秒（`--single-process`），整套一起跑時就超過 30 秒。挑 adapter 的程式和 `main` 的一樣；還沒修。
+- **找到、沒修的**：renderer 送壞訊息被結束之後，`Target.targetCrashed` 要到下一個命令進來時才送（`shell` 的 `windowless.rs` 的 `drive` 在 Browser 標成當掉之前就看過、之後不再看）；程式和 `main` 的一樣。
+- **Windows 上還沒驗的**：整套 WPT、wdspec、fuzz、之前各段的 mutation spec、效能、輸入法和剪貼簿的手動確認。job 的修改沒有在 macOS、Linux 上編過（平台的程式和新測試都只在 Windows 上編）。

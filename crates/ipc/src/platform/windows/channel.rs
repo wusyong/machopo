@@ -60,6 +60,7 @@ use windows_sys::Win32::System::Pipes::{
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, INFINITE, PROCESS_DUP_HANDLE};
 
+use super::job;
 use super::memory::{self, Mapping};
 use crate::core::channel::{Transport, WriteError};
 use crate::core::frame::MAX_HANDLES;
@@ -711,6 +712,10 @@ fn inherited_by_children(handle: &OwnedHandle, inherited: bool) -> bool {
 /// at a time, and the end is inherited only while it is. A process
 /// started elsewhere in that time has the end too; nothing here can
 /// keep it from that.
+///
+/// The child doesn't outlive this process, however either of them is
+/// doing (`job`): hearing that the channel is over is only enough for a
+/// child that isn't stuck. Chromium likewise puts each child in a job.
 pub fn spawn(command: &mut Command) -> io::Result<(Child, Channel)> {
     static STARTING: Mutex<()> = Mutex::new(());
     let (server, client) = pipe().ok_or_else(|| io::Error::other("no pipe could be made"))?;
@@ -732,6 +737,13 @@ pub fn spawn(command: &mut Command) -> io::Result<(Child, Channel)> {
         spawned
     };
     let mut child = spawned?;
+    // It has been told nothing yet, so it isn't stuck in anything: were
+    // this process to end before this, the child would hear that and go.
+    if let Err(error) = job::end_with_this_process(child.as_handle()) {
+        // It would be left running when this process is gone.
+        let _ = child.kill();
+        return Err(error);
+    }
     let Some(channel) = Channel::host(server, child.as_handle()) else {
         // No way to give it handles: the child would wait on a host
         // that can't be one.
