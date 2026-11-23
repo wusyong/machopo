@@ -1004,6 +1004,163 @@ fn a_revoked_blob_urls_background_delays_no_load() {
     assert_eq!(run(&url), "loaded");
 }
 
+/// The routes of a page `index` whose iframe shows `/child`, which has an
+/// iframe of `/grand`; `extra` too.
+fn frames_server(
+    index: &str,
+    child: &str,
+    extra: &[(&str, net::test_server::Route)],
+) -> net::test_server::TestServer {
+    use std::collections::HashMap;
+
+    use net::test_server::{Route, TestServer};
+    let mut routes = HashMap::from([
+        ("/index.html".to_owned(), Route::ok("text/html", index)),
+        ("/child".to_owned(), Route::ok("text/html", child)),
+        (
+            "/grand".to_owned(),
+            Route::ok("text/html", "<!DOCTYPE html><p>grand</p>"),
+        ),
+    ]);
+    routes.extend(
+        extra
+            .iter()
+            .map(|(path, route)| ((*path).to_owned(), route.clone())),
+    );
+    TestServer::start(routes).expect("the test server starts")
+}
+
+/// An iframe removed: its document's `pagehide` and `unload`, then those of
+/// the frames in it, before `remove()` returns (Chrome's
+/// `LocalFrame::DetachImpl` unloads its document, then detaches its
+/// children, which unload theirs).
+#[test]
+fn a_removed_frame_unloads_as_it_goes() {
+    let server = frames_server(
+        "<!DOCTYPE html><iframe src=/child></iframe><script>onload = () => {\
+           const log = [], w = frames[0], inner = w.frames[0];\
+           w.onpagehide = () => log.push('pagehide'); w.onunload = () => log.push('unload');\
+           inner.onpagehide = () => log.push('inner pagehide');\
+           inner.onunload = () => log.push('inner unload');\
+           document.querySelector('iframe').remove(); log.push('removed');\
+           testRunner.reportHarnessResults(log.join()); }</script>",
+        "<!DOCTYPE html><iframe src=/grand></iframe>",
+        &[],
+    );
+    assert_eq!(
+        run(&server.url("/index.html")),
+        "pagehide,unload,inner pagehide,inner unload,removed"
+    );
+}
+
+/// While a removed frame's document unloads, an iframe inserted into it
+/// gets no frame, and it navigates nowhere, not even to a fragment
+/// (Chrome's `SubframeLoadingDisabler` and `FrameNavigationDisabler`;
+/// HTML's unload counter).
+#[test]
+fn a_frame_unloading_as_it_goes_makes_no_frames_and_navigates_nowhere() {
+    let server = frames_server(
+        "<!DOCTYPE html><iframe src=/child></iframe><script>onload = () => {\
+           const log = [], w = frames[0];\
+           w.onunload = () => {\
+             const f = w.document.body.appendChild(w.document.createElement('iframe'));\
+             log.push(String(f.contentWindow)); w.location.hash = 'x'; log.push(w.location.hash);\
+           };\
+           document.querySelector('iframe').remove();\
+           testRunner.reportHarnessResults(log.join()); }</script>",
+        "<!DOCTYPE html><p>child</p>",
+        &[],
+    );
+    assert_eq!(run(&server.url("/index.html")), "null,");
+}
+
+/// While the frames in a removed one unload, it is still unloading too:
+/// their handlers navigate it nowhere (Chrome's `FrameNavigationDisabler`
+/// lasts through `DetachChildren`).
+#[test]
+fn a_removed_frame_navigates_nowhere_as_the_frames_in_it_unload() {
+    let server = frames_server(
+        "<!DOCTYPE html><iframe src=/child></iframe><script>onload = () => {\
+           const log = [], inner = frames[0].frames[0];\
+           inner.onunload = () => { inner.parent.location.hash = 'y';\
+             log.push(inner.parent.location.hash); };\
+           document.querySelector('iframe').remove();\
+           testRunner.reportHarnessResults(log.join() + '|'); }</script>",
+        "<!DOCTYPE html><iframe src=/grand></iframe>",
+        &[],
+    );
+    assert_eq!(run(&server.url("/index.html")), "|");
+}
+
+/// An iframe its own document's `unload` puts back in: it gets a new
+/// frame as it is inserted, which the removal that unloaded the old one
+/// leaves alone.
+#[test]
+fn a_frame_put_back_as_it_unloads_has_a_frame() {
+    let server = frames_server(
+        "<!DOCTYPE html><iframe src=/child></iframe><script>onload = () => {\
+           const f = document.querySelector('iframe'), w = frames[0];\
+           w.onunload = () => document.body.appendChild(f);\
+           f.remove();\
+           testRunner.reportHarnessResults([f.isConnected, f.contentWindow !== null,\
+             f.contentWindow !== w, f.contentDocument && f.contentDocument.URL].join()); }</script>",
+        "<!DOCTYPE html><p>child</p>",
+        &[],
+    );
+    assert_eq!(run(&server.url("/index.html")), "true,true,true,about:blank");
+}
+
+/// The last iframe loading removed, its parent's `load` is queued as it
+/// goes (Chrome checks the parent in the removal): before a task script
+/// queues after the removal, in the same task.
+#[test]
+fn a_parent_loads_as_its_last_loading_frame_goes() {
+    let server = frames_server(
+        "<!DOCTYPE html><iframe src=/slow></iframe><script>\
+           const log = [];\
+           const done = () => log.length == 2 && testRunner.reportHarnessResults(log.join());\
+           onmessage = () => { log.push('message'); done(); };\
+           onload = () => { log.push('load'); done(); };\
+           addEventListener('DOMContentLoaded', () => {\
+             document.querySelector('iframe').remove(); postMessage('', '*'); });</script>",
+        "<!DOCTYPE html>",
+        &[(
+            "/slow",
+            net::test_server::Route::ok("text/html", "<!DOCTYPE html>")
+                .with_delay(Duration::from_secs(10)),
+        )],
+    );
+    assert_eq!(run(&server.url("/index.html")), "load,message");
+}
+
+/// An iframe's `load` comes in its document's window's `load` task, right
+/// after that `load` (Chrome's `LocalDOMWindow::DispatchLoadEvent`):
+/// before a task the child's `onload` queues in the parent (an empty
+/// `src`'s `error`, an element task). It is its parent's realm's: its
+/// target the parent's `HTMLIFrameElement`, the parent's `window.event`
+/// its event, what its listener throws the parent's error.
+#[test]
+fn an_iframes_load_comes_with_its_documents() {
+    let server = frames_server(
+        "<!DOCTYPE html><iframe src=/child></iframe><script>\
+           var log = [], f = document.querySelector('iframe');\
+           var report = () => testRunner.reportHarnessResults(log.join());\
+           onerror = m => { log.push('error in parent'); return true; };\
+           f.addEventListener('load', e => log.push('iframe load ' +\
+             (e.target instanceof HTMLIFrameElement) + ' ' + (window.event === e)));\
+           f.addEventListener('load', () => { throw new Error('thrown'); });</script>",
+        "<!DOCTYPE html><script>onload = () => {\
+           const s = parent.document.createElement('script');\
+           s.onerror = () => { parent.log.push('task'); parent.report(); };\
+           s.setAttribute('src', ''); parent.document.body.appendChild(s); };</script>",
+        &[],
+    );
+    assert_eq!(
+        run(&server.url("/index.html")),
+        "iframe load true true,error in parent,task"
+    );
+}
+
 /// A `javascript:` URL that another origin's page sets a child's
 /// `location` to: a `SecurityError`, nothing run in the child (whose
 /// realm it would be); the same origin's runs, after (so the other's

@@ -78,7 +78,9 @@ pub(crate) fn navigate<'gc>(
     replace: bool,
     initiator: dom::NavigationInitiator<'gc>,
 ) {
-    if !may_navigate(cx, document, &url, initiator) {
+    // HTML's: a document unloading navigates nowhere (its unload counter;
+    // Blink's `FrameNavigationDisabler` as its frame detaches).
+    if !may_navigate(cx, document, &url, initiator) || cx.unloading(document) {
         return;
     }
     let current = document_url(cx, document);

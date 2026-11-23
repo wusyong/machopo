@@ -576,6 +576,72 @@ pub(crate) fn send_fetches(scope: &mut Scope<'_, '_, '_>) {
 }
 
 /// The frame showing `document` went, with those in it: the host told.
+/// Child frame `document`'s, its iframe removed, unloads, then those in it
+/// (`ScriptHost::unload_child`).
+pub(crate) fn unload_child(scope: &mut Scope<'_, '_, '_>, document: &NodeRoot) {
+    let frame = {
+        let (state, _) = scope.state();
+        let id = state.dom.read(|cx| cx.node_id(document.get(cx.gc)));
+        state.frames.of_document(id).map(|frame| frame.id)
+    };
+    if let Some(frame) = frame {
+        unload_frame(scope, frame);
+    }
+}
+
+/// `frame`'s document's `pagehide` and `unload` in its realm (none for its
+/// initial `about:blank`, or one already discarded), then its children's,
+/// in the order they were made: what their handlers did may have taken
+/// any of them away, each looked for as it comes. It is unloading till
+/// theirs are done too (`Cx::unloading`; Blink's disablers last through
+/// `DetachChildren`).
+fn unload_frame(scope: &mut Scope<'_, '_, '_>, frame: FrameId) {
+    let found = {
+        let (state, _) = scope.state();
+        state.frames.get(frame).map(|found| {
+            let discarded = state
+                .dom
+                .read(|cx| cx.is_discarded(found.document.get(cx.gc)));
+            (found.context.clone(), found.document.clone(), found.initial || discarded)
+        })
+    };
+    let Some((context, document, quiet)) = found else {
+        return;
+    };
+    change_unload_counter(scope, &document, true);
+    if !quiet {
+        let context = v8::Local::new(scope.scope(), &context);
+        let scope = &mut v8::ContextScope::new(scope.scope(), context);
+        let mut scope = crate::state::scope(scope).expect("the engine's DOM");
+        dom_api::unload_document(&mut crate::listeners::Host { scope: &mut scope }, &document);
+    }
+    let children: Vec<FrameId> = {
+        let (state, _) = scope.state();
+        state
+            .frames
+            .iter()
+            .filter(|child| child.parent == Some(frame))
+            .map(|child| child.id)
+            .collect()
+    };
+    for child in children {
+        unload_frame(scope, child);
+    }
+    change_unload_counter(scope, &document, false);
+}
+
+/// `document`'s unload counter one more (`unloading`), or one fewer.
+pub(crate) fn change_unload_counter(
+    scope: &mut Scope<'_, '_, '_>,
+    document: &NodeRoot,
+    unloading: bool,
+) {
+    let (state, _) = scope.state_mut();
+    state
+        .dom
+        .mutate(|cx| cx.change_unload_counter(document.get(cx.gc), unloading));
+}
+
 pub(crate) fn discard_child(scope: &mut Scope<'_, '_, '_>, document: &NodeRoot) {
     let (state, _) = scope.state_mut();
     let id = state.dom.read(|cx| cx.node_id(document.get(cx.gc)));

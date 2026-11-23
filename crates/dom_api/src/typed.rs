@@ -2083,6 +2083,16 @@ pub trait ScriptHost {
         let _ = (owner, navigation);
     }
 
+    /// `document`, a child browsing context's, is going with its iframe:
+    /// it unloads, then the documents of the frames in it, in the order
+    /// they were made, each in its realm (`unload_document`; an initial
+    /// `about:blank` fires nothing), before it is discarded (Blink's
+    /// `LocalFrame::DetachImpl` unloads, then detaches its children).
+    /// Nothing by default.
+    fn unload_child(&mut self, document: &dom::NodeRoot) {
+        let _ = document;
+    }
+
     /// `document`, a child browsing context's, went with its iframe: the
     /// browsing context discarded, with those in it. Nothing by default.
     fn discard_child(&mut self, document: &dom::NodeRoot) {

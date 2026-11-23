@@ -447,6 +447,10 @@ pub struct DocumentData {
     /// its host told (`window`'s `set_frame_navigating`), which delays its
     /// parent's load event as it loads (Blink's provisional navigation).
     pub(crate) frame_navigating: Cell<bool>,
+    /// HTML's unload counter: its `pagehide` and `unload` being fired
+    /// (`window`'s `unloading`), while which it makes no child frame and
+    /// navigates nowhere.
+    pub(crate) unload_counter: Cell<u32>,
     /// Its `<img>`s that select again when its environment changes
     /// (`image`'s `responsive_images`), weakly.
     pub(crate) responsive_images: Member<HeapVector<image::ResponsiveImage>>,

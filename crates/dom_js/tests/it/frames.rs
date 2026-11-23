@@ -1423,3 +1423,33 @@ fn the_frame_client_hears_of_frames_as_they_come_and_go() {
         .expect("a window");
     assert_eq!(told(), [format!("detached {h}"), format!("detached {i}")]);
 }
+
+/// A document navigated from is unloading till the frames in it have
+/// unloaded too: their handlers navigate it nowhere, not even to a
+/// fragment (Blink's `FrameNavigationDisabler` lasts through
+/// `DetachChildren`), and make no frames in it.
+#[test]
+fn a_document_navigated_from_is_unloading_as_the_frames_in_it_unload() {
+    let mut engine = engine();
+    run(
+        &mut engine,
+        "var f = document.body.appendChild(document.createElement('iframe'));",
+    );
+    let made = created(&engine.take_frame_requests());
+    let [(child, _)] = made[..] else {
+        panic!("{made:?}");
+    };
+    engine
+        .create_window(child, "https://example.test/a/child.html", Instant::now())
+        .expect("its frame");
+    run(
+        &mut engine,
+        "f.contentWindow.onunload = () => {
+           parent.location.hash = 'z';
+           const g = parent.document.body.appendChild(parent.document.createElement('iframe'));
+           log.push(parent.location.hash, String(g.contentWindow));
+         };",
+    );
+    engine.unload_document(engine.top_frame());
+    assert_eq!(log(&mut engine), " / null");
+}

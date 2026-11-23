@@ -841,6 +841,10 @@ impl ScriptEngine for V8Engine {
     fn unload_document(&mut self, frame: dom_api::FrameId) -> Option<(Instant, Instant)> {
         let initial = self.state().frames.get(frame)?.initial;
         let (context, document) = self.frame_context_and_document(frame)?;
+        // Unloading till the frames below it are done too (Blink's
+        // disablers last through `DetachChildren`).
+        self.dom_mut()
+            .mutate(|cx| cx.change_unload_counter(document.get(cx.gc), true));
         let unloaded = if initial {
             None
         } else {
@@ -869,6 +873,8 @@ impl ScriptEngine for V8Engine {
         for child in children {
             self.unload_document(child);
         }
+        self.dom_mut()
+            .mutate(|cx| cx.change_unload_counter(document.get(cx.gc), false));
         unloaded
     }
 

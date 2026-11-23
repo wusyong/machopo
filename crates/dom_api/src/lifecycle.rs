@@ -179,10 +179,14 @@ pub fn unload_document<H: ScriptHost>(
         cx.window_of(document.get(cx.gc))
             .map(|window| cx.root_target(TargetRef::Window(window)))
     })?;
+    // HTML's unload counter: no child frame made, no navigation, as they
+    // fire.
+    host.mutate(|cx| cx.change_unload_counter(document.get(cx.gc), true));
     fire_event(host, &window, event::PAGEHIDE, false, false);
     let start = Instant::now();
     fire_event(host, &window, event::UNLOAD, false, false);
     let end = Instant::now();
+    host.mutate(|cx| cx.change_unload_counter(document.get(cx.gc), false));
     // It shuts down: the images it used go, but those others use.
     host.mutate(|cx| cx.release_document_images(document.get(cx.gc)));
     Some((start, end))

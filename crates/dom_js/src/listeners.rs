@@ -249,6 +249,10 @@ impl<'s> ScriptHost for Host<'_, '_, 's, '_> {
         });
     }
 
+    fn unload_child(&mut self, document: &dom::NodeRoot) {
+        crate::frames::unload_child(self.scope, document);
+    }
+
     fn discard_child(&mut self, document: &dom::NodeRoot) {
         crate::frames::discard_child(self.scope, document);
     }

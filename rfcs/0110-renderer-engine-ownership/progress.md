@@ -17,7 +17,9 @@
 | 2b. renderer 向 engine 查 frame 的 token、parent、owner；拿掉 `ChildFrames` 的樹和 token、`FrameDocument.child_of`；WebDriver 和 DevTools 的 frame 清單讀 engine（A5、A1） | 做完，待審查（兩條 mutation 沒抓到，見做過的檢查） | 2026-11-23 |
 | 2c. 建立和移除時 child view 和給 Browser 的訊息由 hook 當場做 | 做完，待審查 | 2026-11-23 |
 | 2d. 文件的載入狀態（readiness、還在等的載入）搬到 DOM，「載完了沒」的判斷移到 `dom_api` | 做完，待審查（第 13 到 16 條；兩條 mutation 沒抓到，見做過的檢查） | 2026-11-23 |
-| 2e. 移除時 engine 當場發子 frame 的 `pagehide`、`unload`，檢查 parent、排它的 `load` | 沒開始（開始前列出要決定的事） | |
+| 2e-1. 必壞的測試：拿掉 iframe 時的 unload 和它期間擋的事、parent 的 `load` 的時機、iframe 的 `load` 緊接著 window 的 `load`（第 21 條） | 做完，待審查（iframe 的 `load` 那一個現在就通過，見做過的檢查） | 2026-11-23 |
+| 2e-2. 拿掉 iframe 時先 unload（unload counter 擋建子 frame 和導覽）再 discard，拆完當場檢查 parent（第 17、18 條） | 做完，待審查 | 2026-11-23 |
+| 2e-3. iframe 的 `load` 和「載入結束了」在子 frame 的 window `load` 的 task 裡（第 19 條） | 沒開始 | |
 | 2f. 初始的 `about:blank` 不先建 `FrameDocument`；拿掉 `Created`、`Removed` 的便條 | 沒開始 | |
 | 3. 同一份文件內的捲動當場做，拿掉 renderer 那份文件網址的副本（第 7 條的第 3 步） | 沒開始 | |
 | 4. `javascript:` 網址在 `dom_api` 裡排成綁在 Document 上的 task（第 4 步） | 沒開始 | |
@@ -116,4 +118,20 @@
 跑完檔案都還原了。另外記進 `docs/limitations.md` 的「Parser 和載入」：背景圖的載入記在整個 DOM，每份文件的 `load` 都等它。
 
 **測試**：`dom` 254 個、`dom_api` 201 個、`dom_js` 551 個（1 個 ignored）、`renderer` 128 個、`browser` 191 個、`shell` 657 個都通過。
+
+### 第 2e-1、2e-2 步：拿掉 iframe 時先 unload、再拆，當場檢查 parent（2026-11-23，Linux：Fedora 45、debug build，`50d6bf7` 之上）
+
+先讀了 Chromium main 的原始碼（`html_frame_owner_element.cc`、`local_frame.cc`、`frame.cc`、`frame_loader.cc`、`document.cc`、`local_dom_window.cc`；`child_frame_disconnector.cc` 的路徑不對、沒讀到），逐條決定（已決定的事項第 17 到 21 條）。
+
+**2e-1**：`shell` 的 `documents.rs` 的四個測試。`a_removed_frame_unloads_as_it_goes`、`a_frame_unloading_as_it_goes_makes_no_frames_and_navigates_nowhere`、`a_parent_loads_as_its_last_loading_frame_goes` 改之前失敗（`removed`、空的、`message,load`）。`an_iframes_load_comes_with_its_documents` 改之前就通過，不是必壞的：machopo 的 task 一批一批跑，這一批裡排的 task 下一批才跑，renderer 在這一批之後發 iframe 的 `load`，子 frame 的 `onload` 或 iframe 的 `load` 的 listener 排的 task 都在它之後；看得出差別的只有在子 frame 的 `load` 的 task 排進去之後、這一批開始之前排的 task，排不出來。先試的 `postMessage` 和空的 `src` 的 `error` 都是這樣。留著守順序和 parent 的 realm（`e.target`、`window.event`、例外）。
+
+**2e-2**：DOM 的文件加 unload counter（`unloading`、`change_unload_counter`），`dom_api` 的 `unload_document` 在 `pagehide`、`unload` 的期間加一；`create_child_frame` 和 `history.rs` 的 `navigate` 看它。`dom_api` 拿掉 iframe 的步驟改成 `remove_child_frame`：先 `ScriptHost::unload_child`（dom_js 的 `frames::unload_child`：先自己、再照建立的順序發子孫的，初始的 `about:blank` 和已經 discard 的不發，各在自己的 realm），再確認 iframe 的 content document 還是那一份（handler 可能把 iframe 插回去、有了新的 frame）才 discard、`discard_child`，再 `check_completed(parent)`（parent 是 `Parsed` 時才借 layout）。`limitations.md` 裡說拿掉 iframe 時不發 `pagehide`、`unload` 的那一條拿掉了。
+
+**實作時加的**：mutation test 指出 counter 在子孫 unload 之前就減回來了，看的時候發現 Chrome 的 `FrameNavigationDisabler`、`SubframeLoadingDisabler` 涵蓋整個 `DetachImpl`，包括 `DetachChildren`（讀過的順序）：子孫 unload 時，拿掉的 frame 的文件也還不能導覽、建 frame。dom_js 的 `unload_frame` 和 engine 的 `unload_document`（導覽離開時）改成文件的 counter 等子孫都 unload 完才減。補了 `documents::a_removed_frame_navigates_nowhere_as_the_frames_in_it_unload`（改之前是 `#y`）、dom_js 的 `frames::a_document_navigated_from_is_unloading_as_the_frames_in_it_unload`、`documents::a_frame_put_back_as_it_unloads_has_a_frame`（unload 的 handler 把 iframe 插回去：新的 frame 留著）。
+
+**WPT**：和 2d 同一組加上 `html/browsers/history/`，407 個，0 個非預期的結果（`navigation-unload-same-origin-fragment.html` 照樣通過）。第一次跑的時候 mutation test 還在背景跑、可能編到改壞的檔案，那次不算，跑完之後重跑的是上面的結果。
+
+**Mutation test**（`mutants-2e2.toml`）：10 條，8 條抓到；`a document navigated from stops unloading before the frames in it` 第一次沒抓到（沒有導覽時子孫 unload 的測試），補了 dom_js 的測試之後抓到；`the unload counter never comes down` 等價（unload 過的文件接著就被拆或換掉），記進 `docs/test-gaps.md` 的「等價、不用處理的 mutation」。跑完檔案都還原了。
+
+**測試**：`dom` 254 個、`dom_api` 201 個、`dom_js` 552 個（1 個 ignored）、`renderer` 128 個、`browser` 191 個、`shell` 663 個都通過。
 

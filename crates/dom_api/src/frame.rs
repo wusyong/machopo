@@ -167,15 +167,7 @@ fn update_element_changes<H: ScriptHost>(host: &mut H) {
                     process_iframe_attributes(host, &owner, true);
                 }
             }
-            FrameOwnerChange::Removed(owner) => {
-                let document = host.mutate(|cx| {
-                    let document = cx.discard_content_document(cx.node_by_id(owner)?)?;
-                    Some(cx.root(document))
-                });
-                if let Some(document) = document {
-                    host.discard_child(&document);
-                }
-            }
+            FrameOwnerChange::Removed(owner) => remove_child_frame(host, owner),
             // HTML's attribute change steps: `src` counts only without a
             // `srcdoc`.
             FrameOwnerChange::SrcChanged(owner) | FrameOwnerChange::SrcdocChanged(owner) => {
@@ -196,9 +188,53 @@ fn update_element_changes<H: ScriptHost>(host: &mut H) {
     }
 }
 
+/// HTML's "destroy a child navigable" for `owner`, removed: its document
+/// and those of the frames in it unload, script allowed (Blink's
+/// `LocalFrame::DetachImpl`: no frame made, no navigation, meanwhile:
+/// `Cx::unloading`), then they are discarded with their frames; then its
+/// document, whose `load` may have waited for it, may be loaded
+/// (`check_completed`; Blink's `FrameLoader::Detach` checks the parent as
+/// the child goes). The unload's handlers may have changed anything: its
+/// content document is looked for again.
+fn remove_child_frame<H: ScriptHost>(host: &mut H, owner: dom::NodeId) {
+    let Some(document) = host.read(|cx| {
+        let owner = cx.node_by_id(owner)?;
+        cx.content_document(owner).map(|document| cx.root(document))
+    }) else {
+        return;
+    };
+    host.unload_child(&document);
+    let gone = host.mutate(|cx| {
+        let owner = cx.node_by_id(owner)?;
+        let current = cx.content_document(owner)?;
+        if !elise::Gc::ptr_eq(current, document.get(cx.gc)) {
+            return None;
+        }
+        cx.discard_content_document(owner)?;
+        Some(cx.root(cx.document_of(owner)))
+    });
+    let Some(parent) = gone else {
+        return;
+    };
+    host.discard_child(&document);
+    host.mutate(|cx| {
+        let parent = parent.get(cx.gc);
+        // Its style brought up to date only if nothing else delays it.
+        if cx.load_progress(parent) != dom::LoadProgress::Parsed {
+            return;
+        }
+        let checked = cx.lend_layout(parent, |layout| {
+            crate::lifecycle::check_completed(cx, Some(layout), parent)
+        });
+        if checked.is_none() {
+            crate::lifecycle::check_completed(cx, None, parent);
+        }
+    });
+}
+
 /// HTML's "create a new child navigable" for `owner`, if it is still
 /// connected and its document is shown in a browsing context (has a
-/// window, not discarded): its initial `about:blank` (`<html>`, `<head>`, `<body>`, in
+/// window, not discarded, not unloading): its initial `about:blank` (`<html>`, `<head>`, `<body>`, in
 /// quirks mode) in a realm the engine makes. The iframe, if it got one.
 fn create_child_frame<H: ScriptHost>(host: &mut H, owner: dom::NodeId) -> Option<NodeRoot> {
     let owner = host.read(|cx| {
@@ -207,7 +243,9 @@ fn create_child_frame<H: ScriptHost>(host: &mut H, owner: dom::NodeId) -> Option
             .filter(|owner| cx.is_connected(*owner))?;
         let document = cx.document_of(owner);
         cx.window_of(document)?;
-        (!cx.is_discarded(document)).then(|| cx.root(owner))
+        // Not while it unloads (Blink's `SubframeLoadingDisabler`): it is
+        // to go, and its frames with it.
+        (!cx.is_discarded(document) && !cx.unloading(document)).then(|| cx.root(owner))
     })?;
     let document = host.create_child_window(&owner)?;
     host.mutate(|cx| {

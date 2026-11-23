@@ -950,6 +950,26 @@ impl<'gc> Cx<'_, 'gc> {
             .set(navigating);
     }
 
+    /// Whether `document` is unloading (HTML's unload counter above 0):
+    /// its `pagehide` or `unload` is being fired. It makes no child frame
+    /// and navigates nowhere meanwhile (Blink's `SubframeLoadingDisabler`
+    /// and `FrameNavigationDisabler` as its frame detaches).
+    pub fn unloading(&self, document: NodeRef<'gc>) -> bool {
+        self.document_data(document)
+            .is_some_and(|data| data.unload_counter.get() > 0)
+    }
+
+    /// `document`'s unload counter one more (`unloading`), or one fewer.
+    pub fn change_unload_counter(&self, document: NodeRef<'gc>, unloading: bool) {
+        let data = self.ensure_document_data(document);
+        let count = data.unload_counter.get();
+        data.unload_counter.set(if unloading {
+            count.checked_add(1).expect("fewer than 2^32 unloads nested")
+        } else {
+            count.saturating_sub(1)
+        });
+    }
+
     /// `document`'s readiness: complete if it has no data (none was set).
     pub fn ready_state(&self, document: NodeRef<'gc>) -> DocumentReadyState {
         match self
@@ -1470,6 +1490,7 @@ pub(crate) fn new_document_data<'gc>() -> DocumentDataInit<'gc> {
         load_queued: Cell::new(false),
         load_ended: Cell::new(false),
         frame_navigating: Cell::new(false),
+        unload_counter: Cell::new(0),
         responsive_images: None,
         lazy_load_observer: None,
         auto_sizes_observer: None,

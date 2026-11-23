@@ -269,6 +269,10 @@
 
 弄壞之後行為完全一樣，記在這裡免得重複追查。
 
+**`dom_api` 的 unload counter（`lifecycle.rs` 的 `unload_document`）**
+
+- 發完 `unload` 之後不把 counter 減回來：unload 過的文件接著就被 discard（iframe 拿掉）或換掉（導覽），counter 再也沒有人讀。留著是因為 counter 不該依賴「之後一定拆掉」。
+
 **`ipc` 的 Linux 通道（`platform/linux/channel.rs`）**
 
 - `sendmsg` 不帶 `MSG_NOSIGNAL`：Rust 的程式啟動時就忽略 SIGPIPE，寫給不在了的對方有沒有旗標都是被拒絕。留著是不靠那個預設（別的語言寫的 host 載入這段程式時沒有）。

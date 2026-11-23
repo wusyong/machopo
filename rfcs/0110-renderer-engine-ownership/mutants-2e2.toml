@@ -1,0 +1,74 @@
+# Stage 1, step 2e-2: a removed frame unloads, then goes, and its parent is checked.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "env", "MACHOPO_GPU_ADAPTER=cpu", "cargo", "test", "-q", "-p", "shell", "--test", "it"]
+timeout = 240
+
+[[mutant]]
+name = "a removed frame doesn't unload"
+file = "crates/dom_api/src/frame.rs"
+from = '''    host.unload_child(&document);'''
+to = '''    let _ = &document;'''
+
+[[mutant]]
+name = "the frames in a removed one don't unload"
+file = "crates/dom_js/src/frames.rs"
+from = '''    for child in children {
+        unload_frame(scope, child);
+    }'''
+to = '''    let _ = children;'''
+
+[[mutant]]
+name = "no unload counter"
+file = "crates/dom_api/src/lifecycle.rs"
+from = '''    host.mutate(|cx| cx.change_unload_counter(document.get(cx.gc), true));'''
+to = ''''''
+
+[[mutant]]
+name = "the unload counter never comes down"
+file = "crates/dom_api/src/lifecycle.rs"
+from = '''    host.mutate(|cx| cx.change_unload_counter(document.get(cx.gc), false));'''
+to = ''''''
+
+[[mutant]]
+name = "an unloading document makes child frames"
+file = "crates/dom_api/src/frame.rs"
+from = '''        (!cx.is_discarded(document) && !cx.unloading(document)).then(|| cx.root(owner))'''
+to = '''        (!cx.is_discarded(document)).then(|| cx.root(owner))'''
+
+[[mutant]]
+name = "an unloading document navigates"
+file = "crates/dom_api/src/history.rs"
+from = '''    if !may_navigate(cx, document, &url, initiator) || cx.unloading(document) {'''
+to = '''    if !may_navigate(cx, document, &url, initiator) {'''
+
+[[mutant]]
+name = "a frame put back as it unloads is discarded"
+file = "crates/dom_api/src/frame.rs"
+from = '''        if !elise::Gc::ptr_eq(current, document.get(cx.gc)) {
+            return None;
+        }'''
+to = '''        let _ = current;'''
+
+[[mutant]]
+name = "the parent not checked as its frame goes"
+file = "crates/dom_api/src/frame.rs"
+from = '''        if cx.load_progress(parent) != dom::LoadProgress::Parsed {
+            return;
+        }'''
+to = '''        if cx.load_progress(parent) != dom::LoadProgress::Parsed || true {
+            return;
+        }'''
+
+[[mutant]]
+name = "a removed frame stops unloading before the frames in it"
+file = "crates/dom_js/src/frames.rs"
+from = '''    change_unload_counter(scope, &document, true);
+    if !quiet {'''
+to = '''    if !quiet {'''
+
+[[mutant]]
+name = "a document navigated from stops unloading before the frames in it"
+file = "crates/dom_js/src/engine.rs"
+from = '''        self.dom_mut()
+            .mutate(|cx| cx.change_unload_counter(document.get(cx.gc), true));'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "frames::a_document_navigated_from_is_unloading_as_the_frames_in_it_unload"]
