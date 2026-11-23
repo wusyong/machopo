@@ -6,7 +6,8 @@
 //! the parser stops, not as script asks for them as Blink does: what script
 //! asked for, the engine captured the stack of then (the DOM keeps it,
 //! `dom::StackAsker`), and the load takes it as it starts; what the
-//! parser made, the line of its start tag (`Parser::take_load_lines`).
+//! parser made, the line of its start tag, the DOM's too
+//! (`Cx::set_parser_load_line`).
 
 use std::rc::Rc;
 use std::sync::Arc;

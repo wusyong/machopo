@@ -24,7 +24,9 @@
 | 3. 同一份文件內的捲動當場做，拿掉 renderer 那份文件網址的副本（第 7 條的第 3 步） | 做完，待審查 | 2026-11-23 |
 | 4. `javascript:` 網址在 `dom_api` 裡排成綁在 Document 上的 task（第 7 條的第 4 步、第 23 條） | 做完，待審查 | 2026-11-23 |
 | 5. intersection 的通知排成真的 task（第 7 條的第 5 步） | 做完，待審查 | 2026-11-23 |
-| 6. 圖片和 script 開始載入的記錄交給 `dom`（第 6 步） | 沒開始 | |
+| 6a. DevTools 的 initiator 要的 parser 行號搬進 DOM（第 24 條） | 做完，待審查 | 2026-11-23 |
+| 6b. 圖片的請求由 engine 經過 `LoadSink` 送出，記錄在 DOM（第 24 條） | 沒開始 | |
+| 6c. script 的請求由 engine 經過 `LoadSink` 送出，記錄在 DOM（第 24 條） | 沒開始 | |
 
 ## 驗收
 
@@ -200,4 +202,12 @@
 **Mutation test**（`mutants-5.toml`）：3 條，2 條抓到；`a task for every observer with entries` 等價（之後的 task 看到空的清單），記進 `docs/test-gaps.md` 的「等價、不用處理的 mutation」。跑完檔案都還原了。
 
 **測試**：`dom` 254 個、`dom_api` 201 個、`dom_js` 553 個（1 個 ignored）、`renderer` 127 個、`browser` 191 個、`shell` 668 個都通過。
+
+### 第 6a 步：parser 的行號在 DOM（2026-11-23，Linux：Fedora 45、debug build，`fb4840f` 之上）
+
+**做的事**：`dom` 的元素資料加 `load_line`（`Cx::set_parser_load_line`、`take_parser_load_line`：取一次就清掉）；html 的 parser 做出會載入東西的元素（`<link>`、`<img>`、`<script>`、`<iframe>`）時直接寫進 DOM，它自己的 `load_lines`、`take_load_lines`、`finish_taking_load_lines` 拿掉（`finish` 只交回 host）。renderer 的 `FrameDocument.parser_lines`、`keep_parser_lines` 拿掉，`initiator` 從 DOM 取行號。和原本的差別：原本只在 DevTools 的 `Network` 開著時才留，現在每個這樣的元素都寫一個 `u32`（在元素資料裡，跟著元素不見，不會留下舊的）。為 6b、6c 做準備：engine 在 parser 的一次執行裡送出請求時，行號已經在 DOM。html 的 `sink::the_document_parser_knows_where_its_loads_start` 改成從 DOM 讀，加上「只取一次」。
+
+**Mutation test**（`mutants-6a.toml`）：3 條全部抓到，跑完檔案都還原了。
+
+**測試**：`html` 49 個、`dom` 254 個、`renderer` 127 個、`shell` 668 個都通過。
 

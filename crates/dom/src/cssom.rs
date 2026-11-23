@@ -204,6 +204,24 @@ impl<'gc> Cx<'_, 'gc> {
         self.element_data(style).parser_line.set(line);
     }
 
+    /// `element`, which loads something (`<link>`, `<img>`, `<script>`,
+    /// `<iframe>`), was made by its document's parser at `line` (1-based):
+    /// where DevTools says the parser asked for its load (Blink's
+    /// `FetchInitiatorInfo::position`).
+    pub fn set_parser_load_line(&self, element: NodeRef<'gc>, line: u32) {
+        self.element_data(element).load_line.set(line);
+    }
+
+    /// The line the parser made `element` at (`set_parser_load_line`),
+    /// taken: its load's, once.
+    pub fn take_parser_load_line(&self, element: NodeRef<'gc>) -> Option<u32> {
+        let data = element
+            .data
+            .get(self.gc)?
+            .downcast::<crate::style::ElementData>()?;
+        Some(data.load_line.replace(0)).filter(|&line| line != 0)
+    }
+
     /// The line `style`'s start tag ends on in its document's markup, if
     /// the parser made it (`set_style_parser_line`).
     pub fn style_parser_line(&self, style: NodeRef<'gc>) -> Option<u32> {

@@ -464,6 +464,11 @@ pub struct ElementData {
     /// text starts, for a `<style>` the parser made (0: none): where
     /// DevTools tells its sheet's text is.
     pub(crate) parser_line: Cell<u32>,
+    /// The line it starts on, for an element the document's parser made
+    /// that loads something (0: none), till its load takes it: where
+    /// DevTools says the parser asked for it (`cssom`'s
+    /// `take_parser_load_line`).
+    pub(crate) load_line: Cell<u32>,
     /// What changed of its attributes since the style phase last looked:
     /// written by the DOM's operations, taken by the style phase (a
     /// `Cell`: a move, no borrow).
@@ -511,6 +516,7 @@ impl<'gc> Cx<'_, 'gc> {
                 selector_flags: Cell::new(0),
                 state_dependencies: Cell::new(0),
                 parser_line: Cell::new(0),
+                load_line: Cell::new(0),
                 changes: External::new(Cell::new(None)),
                 style: External::new(TokenCell::default()),
             },

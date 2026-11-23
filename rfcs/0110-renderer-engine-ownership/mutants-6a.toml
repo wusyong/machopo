@@ -1,0 +1,22 @@
+# Stage 1, step 6a: the line a loading element's parser made it at is the DOM's.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "env", "MACHOPO_GPU_ADAPTER=cpu", "cargo", "test", "-q", "-p", "shell", "--test", "it"]
+timeout = 240
+
+[[mutant]]
+name = "the parser notes no load's line"
+file = "crates/html/src/parser.rs"
+from = '''                cx.set_parser_load_line(element, line);'''
+to = '''                let _ = line;'''
+
+[[mutant]]
+name = "a load's line taken more than once"
+file = "crates/dom/src/cssom.rs"
+from = '''        Some(data.load_line.replace(0)).filter(|&line| line != 0)'''
+to = '''        Some(data.load_line.get()).filter(|&line| line != 0)'''
+test = ["cargo", "test", "-q", "-p", "html", "--test", "it", "sink::the_document_parser_knows_where_its_loads_start"]
+
+[[mutant]]
+name = "DevTools' initiator without the parser's line"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                        .and_then(|element| cx.take_parser_load_line(element))'''
+to = '''                        .and_then(|element| cx.take_parser_load_line(element).filter(|_| false))'''

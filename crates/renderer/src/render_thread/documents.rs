@@ -111,10 +111,6 @@ pub(super) struct FrameDocument {
     /// read at.
     sent_title: Option<String>,
     title_version: u64,
-    /// The line each element its parser made that loads something starts
-    /// on (1-based), until its load starts: DevTools names the parser as
-    /// having asked for it there.
-    parser_lines: dom::NodeIdHashMap<u32>,
     /// The subresources it loaded, for DevTools' `Page.getResourceTree`
     /// (shared with what the `Page` agent was told: copied as it changes
     /// after).
@@ -231,7 +227,6 @@ impl FrameDocument {
             idleness: crate::idleness_detector::IdlenessDetector::default(),
             sent_title: None,
             title_version: 0,
-            parser_lines: dom::NodeIdHashMap::default(),
             resources: Rc::default(),
             initial: false,
             history_load: false,
@@ -2119,10 +2114,6 @@ impl RenderThread {
             let lent = self.engine.take().expect("the engine, checked above");
             let (state, engine) = parser.resume(lent);
             self.engine = Some(engine);
-            // Where the elements it made start, before their loads do, for
-            // DevTools' `Network` (kept only while a session has it on).
-            let lines = parser.take_load_lines();
-            self.keep_parser_lines(frame, lines);
             self.note_body_parsed(frame);
             match state {
                 ParserState::NeedsInput => {
@@ -2159,9 +2150,7 @@ impl RenderThread {
                         return;
                     }
                     if let Some(engine) = self.engine.take() {
-                        let (engine, lines) = parser.finish_taking_load_lines(engine);
-                        self.engine = Some(engine);
-                        self.keep_parser_lines(frame, lines);
+                        self.engine = Some(parser.finish(engine));
                     }
                     // Parsed: it may be rendered now, body or not.
                     self.update_child_blocking(frame);
@@ -4671,27 +4660,18 @@ impl RenderThread {
                 if let Some(stack) = stack.filter(|_| stacks) {
                     return Some(Initiator::Script(stack));
                 }
+                // Where the parser made it, the DOM's (`set_parser_load_line`).
+                let line = self.engine.as_mut()?.dom_mut().read(|cx| {
+                    cx.node_by_id(*element)
+                        .and_then(|element| cx.take_parser_load_line(element))
+                })?;
                 let document_url = self.document_url(frame)?;
-                let next = self.doc_mut(frame)?;
-                let line = next.parser_lines.remove(element)?;
                 let url = document_url.as_str().split('#').next().unwrap_or_default();
                 Some(Initiator::Parser {
                     url: url.to_owned(),
                     line: line.saturating_sub(1),
                 })
             }
-        }
-    }
-
-    /// The lines the elements `frame`'s document's parser made start on
-    /// (`lines`), kept for their loads' initiators while a session has
-    /// `Network` on (nothing is told of the loads otherwise).
-    fn keep_parser_lines(&mut self, frame: FrameId, lines: dom::NodeIdHashMap<u32>) {
-        if lines.is_empty() || !self.network_agent.enabled() {
-            return;
-        }
-        if let Some(next) = self.doc_mut(frame) {
-            next.parser_lines.extend(lines);
         }
     }
 

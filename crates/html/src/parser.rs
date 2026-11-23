@@ -36,7 +36,7 @@
 //!   inserted flag: `dom`'s `set_parser_form_owner`).
 //! - **The lines elements start on**: a script's, where its text begins;
 //!   an element's that loads something, where DevTools says the parser
-//!   asked for its load (`Parser::take_load_lines`).
+//!   asked for its load (`dom`'s `set_parser_load_line`).
 //! - **Not yet**: the fast path for a whole document, element hooks
 //!   (a script's or a style's attribute changing).
 
@@ -160,11 +160,6 @@ pub struct Sink<H: ?Sized + ParserHost = dyn ParserHost> {
     /// the last one's.
     current_line: Cell<u64>,
     script_line: Cell<u64>,
-    /// The line each element that loads something (`<link>`, `<img>`,
-    /// `<script>`, `<iframe>`) starts on, for DevTools to name where the
-    /// parser asked for its load (Blink's `FetchInitiatorInfo::position`),
-    /// until taken (`Parser::take_load_lines`).
-    load_lines: std::cell::RefCell<dom::NodeIdHashMap<u32>>,
 }
 
 impl<H: ?Sized + ParserHost> Sink<H> {
@@ -183,7 +178,6 @@ impl<H: ?Sized + ParserHost> Sink<H> {
             scripts_never_run: false,
             current_line: Cell::new(1),
             script_line: Cell::new(1),
-            load_lines: std::cell::RefCell::default(),
         }
     }
 
@@ -551,10 +545,10 @@ impl<H: ?Sized + ParserHost> TreeSink for Sink<H> {
             let element =
                 create_element_in(cx, self.document.get(cx), &name, &attrs, &flags, &making);
             cx.set_parser_line(0);
+            // The line each element that loads something starts on, the
+            // DOM's for its load to name (DevTools').
             if loads {
-                self.load_lines
-                    .borrow_mut()
-                    .insert(cx.node_id(element), line);
+                cx.set_parser_load_line(element, line);
             }
             // Where its sheet's text is, for DevTools (one a `<style>`): the
             // line its start tag ends on, html5ever's as it makes it.
@@ -1509,23 +1503,9 @@ impl<H: ?Sized + ParserHost> Parser<H> {
     /// The end of the input: parses what is left and closes every open
     /// element, `host` lent to it (and given back). A script cut off by the
     /// end isn't run.
-    pub fn finish(self, host: Box<H>) -> Box<H> {
-        self.finish_taking_load_lines(host).0
-    }
-
-    /// `finish`, and the [load lines](Self::take_load_lines) of the
-    /// elements made since last taken.
-    pub fn finish_taking_load_lines(mut self, host: Box<H>) -> (Box<H>, dom::NodeIdHashMap<u32>) {
+    pub fn finish(mut self, host: Box<H>) -> Box<H> {
         let _span = trace_event::trace_event!("ParseHTML");
         let ((), host) = self.lend(host, |parser| parser.tokenizer.end());
-        (host, self.take_load_lines())
-    }
-
-    /// The line (1-based) each element it made since last asked starts on,
-    /// of those that load something (`<link>`, `<img>`, `<script>`,
-    /// `<iframe>`): where the parser asked for its load, as DevTools names
-    /// it.
-    pub fn take_load_lines(&self) -> dom::NodeIdHashMap<u32> {
-        std::mem::take(&mut *self.tokenizer.sink.sink.load_lines.borrow_mut())
+        host
     }
 }

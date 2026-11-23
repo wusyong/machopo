@@ -270,11 +270,11 @@ fn the_document_parser_pauses_at_each_script() {
     );
 }
 
-/// The document's parser knows the line each element that loads
+/// The document's parser notes the line each element that loads
 /// something starts on (`<link>`, `<img>`, `<script>`, `<iframe>`; not
-/// another element, nor one in another namespace), taken as it goes (and
-/// at the end); what it connects, it asked for, not script (the line is
-/// set as it inserts).
+/// another element, nor one in another namespace), in the DOM as it makes
+/// it, its load's to take once; what it connects, it asked for, not script
+/// (the line is set as it inserts).
 #[test]
 fn the_document_parser_knows_where_its_loads_start() {
     use html::parser::{Parser, ParserState};
@@ -294,34 +294,37 @@ fn the_document_parser_knows_where_its_loads_start() {
     assert!(matches!(state, ParserState::Script { .. }));
     // Its script element's root, before the DOM.
     drop(state);
-    let lines = parser.take_load_lines();
     let (state, back) = parser.resume(back);
     assert!(matches!(state, ParserState::NeedsInput));
-    let rest = parser.take_load_lines();
-    let (back, end) = parser.finish_taking_load_lines(back);
-    assert!(end.is_empty(), "taken");
-    let named = |lines: &dom::NodeIdHashMap<u32>| {
-        let mut named: Vec<(String, u32)> = back.dom.read(|cx| {
+    let back = parser.finish(back);
+    // Each element's line, in tree order, taken.
+    let lines = |back: &TestHost| -> Vec<(String, Option<u32>)> {
+        back.dom.read(|cx| {
+            let mut lines = Vec::new();
+            let mut at = cx.first_child(document.get(cx.gc));
+            while let Some(node) = at {
+                if cx.kind(node) == dom::NodeKind::Element {
+                    lines.push((cx.node_name(node).to_string(), cx.take_parser_load_line(node)));
+                }
+                at = cx.following_within(node, document.get(cx.gc));
+            }
             lines
-                .iter()
-                .map(|(&id, &line)| {
-                    let node = cx.node_by_id(id).expect("a node");
-                    (cx.node_name(node).to_string(), line)
-                })
-                .collect()
-        });
-        named.sort_by_key(|(_, line)| *line);
-        named
+        })
     };
+    let loads: Vec<(String, u32)> = lines(&back)
+        .into_iter()
+        .filter_map(|(name, line)| Some((name, line?)))
+        .collect();
     assert_eq!(
-        named(&lines),
+        loads,
         [
             ("LINK".to_owned(), 2),
             ("IMG".to_owned(), 4),
-            ("SCRIPT".to_owned(), 5)
+            ("SCRIPT".to_owned(), 5),
+            ("IFRAME".to_owned(), 6)
         ]
     );
-    assert_eq!(named(&rest), [("IFRAME".to_owned(), 6)]);
+    assert!(lines(&back).iter().all(|(_, line)| line.is_none()), "taken once");
     assert!(!back.dom.take_microtasks().stacks(), "none script's");
     // The roots before their DOM.
     drop(document);
