@@ -270,6 +270,10 @@
 
 弄壞之後行為完全一樣，記在這裡免得重複追查。
 
+**intersection observer 的 task（`dom` 的 `intersection.rs` 的 `queue_intersection_entry`）**
+
+- 每個有 entry 的 observer 都排一個 task，不只第一個：第一個 task 送出整個 window 在等的 observer（`take_pending_intersection_observers` 清空清單），之後的看到空的清單，什麼都不做；它們都在同一個 frame 之後接著跑，中間沒有 frame 帶來新的 entry。只有第一個排，是 HTML 的 intersection observer task queued 旗標，省掉空的 task。
+
 **`javascript:` 網址的 task（`dom_api` 的 `history.rs` 的 `run_javascript_urls`）**
 
 - 文件被 discard 之後不再跑清單裡之後的網址：frame 不在了時，engine 照文件找不到 realm，`run_classic_script` 本來就不執行。留著是對應 Blink 的 `if (!GetFrame()) break;`，不靠 engine 的這個行為。

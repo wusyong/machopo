@@ -284,22 +284,6 @@ pub fn run_posted_messages(
     ran
 }
 
-/// Intersection Observer's "notify intersection observers" of the window
-/// that is `context`'s global.
-pub fn notify_intersection_observers(
-    scope: &mut v8::PinScope<'_, '_>,
-    context: v8::Local<'_, v8::Context>,
-) {
-    let Some(mut scope) = state::scope(scope) else {
-        return;
-    };
-    let Some(window) = window_of(&mut scope, context) else {
-        return;
-    };
-    dom_api::notify_intersection_observers(&mut Host { scope: &mut scope }, &window);
-    state::report(&mut scope);
-}
-
 /// Whether the resize observers of the window that is `context`'s global
 /// observe anything (`dom_api::has_resize_observations`).
 pub fn has_resize_observations(

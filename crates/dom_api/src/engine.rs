@@ -579,11 +579,6 @@ pub trait ScriptEngine: ParserHost {
     /// microtask checkpoint after each: whether any ran.
     fn run_posted_messages(&mut self) -> bool;
 
-    /// The intersection observers' task of each frame's window in tree
-    /// order (the host queued it as `update_intersections` asked):
-    /// `notify_intersection_observers`, a microtask checkpoint after each.
-    fn notify_intersection_observers(&mut self);
-
     /// Whether `frame`'s window's resize observers observe anything: the
     /// host's resize observer loop runs for its document only then.
     fn has_resize_observations(&mut self, frame: crate::FrameId) -> bool;

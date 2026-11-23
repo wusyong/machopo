@@ -4108,31 +4108,17 @@ impl RenderThread {
         if let Some((dom, frame)) = engine_frame(&mut self.engine) {
             let _span =
                 trace_event::trace_event!("LocalFrameView::UpdateViewportIntersectionsForSubtree");
-            let (queue, due) = compute_intersections(
+            let due = compute_intersections(
                 dom,
                 frame,
                 &documents,
                 &blocked,
                 &mut self.intersections_computed,
             );
-            self.intersection_task |= queue;
             self.intersections_due = due.map(|wait| self.clock.now() + wait);
         }
         self.recompute_under_mouse();
         true
-    }
-
-    /// The DOM's window's intersection observers' task, if the
-    /// rendering update queued it (`dom_api::update_intersections`).
-    pub(super) fn run_intersection_task(&mut self) {
-        if !std::mem::take(&mut self.intersection_task) {
-            return;
-        }
-        let Some(engine) = &mut self.engine else {
-            return;
-        };
-        engine.notify_intersection_observers();
-        self.send_harness_results();
     }
 
     /// `run_scroll_steps` for the DOM's documents (HTML's "run the
@@ -5347,21 +5333,21 @@ fn dom_modifiers(modifiers: Modifiers) -> u16 {
 /// window.
 /// Nothing is done again while the frame's pre-paint, the observations
 /// and (for one that tracks visibility) the paint are what they were last
-/// time (`computed`). Whether the task is to be queued, and in how many
-/// milliseconds the first held back is due.
+/// time (`computed`). In how many milliseconds the first held back is
+/// due. The entries' task is the DOM's to queue (`Cx::queue_intersection_entry`).
 fn compute_intersections(
     dom: &mut Dom,
     frame: &mut Frame,
     documents: &[gfx::NodeId],
     blocked: &[NodeRoot],
     computed: &mut Option<(u64, u64, Option<paint::PaintId>)>,
-) -> (bool, Option<f64>) {
+) -> Option<f64> {
     let view = &frame.view;
     let document = view.document().clone();
     dom.mutate(|cx| {
         let top = document.get(cx.gc);
         if cx.window_of(top).is_none() {
-            return (false, None);
+            return None;
         }
         let tracked = computed.is_some_and(|(.., paint)| paint.is_some());
         let state = (
@@ -5370,7 +5356,7 @@ fn compute_intersections(
             view.last_paint().filter(|_| tracked),
         );
         if *computed == Some(state) {
-            return (false, None);
+            return None;
         }
         // Each document of the frame tree in tree order, but those whose
         // rendering is blocked, with its window and its now.
@@ -5445,7 +5431,7 @@ fn compute_intersections(
             .is_none()
             .then(|| (state.0, state.1, view.last_paint().filter(|_| tracking)));
         if observations.is_empty() {
-            return (false, due);
+            return due;
         }
         for &(index, observer, target, ..) in &observations {
             cx.set_intersection_observation_run(observer, target, documents[index].2);
@@ -5497,13 +5483,12 @@ fn compute_intersections(
                 is_visible: geometry.visible,
             });
         }
-        let mut queue = false;
+        // The DOM queues the task that delivers what they bring.
         for ((_, window, now), results) in documents.iter().zip(&by_window) {
             if !results.is_empty() {
-                queue |=
-                    dom_api::update_intersections(&dom_api::ApiCx::new(cx), *window, results, *now);
+                dom_api::update_intersections(&dom_api::ApiCx::new(cx), *window, results, *now);
             }
         }
-        (queue, due)
+        due
     })
 }

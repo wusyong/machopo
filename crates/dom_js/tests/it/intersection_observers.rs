@@ -276,7 +276,8 @@ fn the_task_calls_the_observers_back() {
         &mut engine,
         "log.push('taken ' + taken.takeRecords().length)",
     );
-    engine.notify_intersection_observers();
+    // The task the DOM queued with the entries.
+    while engine.run_element_tasks() {}
     run(
         &mut engine,
         "testRunner.reportHarnessResults(log.join(' / '))",

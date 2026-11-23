@@ -1128,7 +1128,6 @@ impl ScriptEngine for WasmEngine {
         false
     }
 
-    fn notify_intersection_observers(&mut self) {}
 
     fn has_resize_observations(&mut self, _: FrameId) -> bool {
         false

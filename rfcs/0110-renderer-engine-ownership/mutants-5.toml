@@ -1,0 +1,25 @@
+# Stage 1, step 5: intersection observers notified in a task of the document's, queued as the entries are.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "env", "MACHOPO_GPU_ADAPTER=cpu", "cargo", "test", "-q", "-p", "shell", "--test", "it"]
+timeout = 240
+
+[[mutant]]
+name = "the intersection observers' task never queued"
+file = "crates/dom/src/intersection.rs"
+from = '''        if first {
+            let document = self.window_document(window);'''
+to = '''        if first && false {
+            let document = self.window_document(window);'''
+
+[[mutant]]
+name = "the intersection observers' task notifies nothing"
+file = "crates/dom_api/src/text_control.rs"
+from = '''                    crate::intersection_observer::notify_intersection_observers(host, &window);'''
+to = '''                    let _ = window;'''
+
+[[mutant]]
+name = "a task for every observer with entries"
+file = "crates/dom/src/intersection.rs"
+from = '''        if first {
+            let document = self.window_document(window);'''
+to = '''        if true {
+            let document = self.window_document(window);'''

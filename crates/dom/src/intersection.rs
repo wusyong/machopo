@@ -509,8 +509,11 @@ impl<'gc> Cx<'_, 'gc> {
     }
 
     /// `entry` queued on `observer`, which goes on `window`'s list of
-    /// observers waiting for the task if it isn't: whether that list was
-    /// empty (the task is to be queued).
+    /// observers waiting for the task if it isn't; the first on it queues
+    /// that task, an element task of the window's document (HTML's "queue
+    /// an intersection observer task"; Blink's `PostTaskToDeliver
+    /// Notifications`), as the rendering update computes the entries:
+    /// whether it did.
     pub fn queue_intersection_entry(
         &self,
         window: Gc<'gc, Window>,
@@ -540,7 +543,18 @@ impl<'gc> Cx<'_, 'gc> {
             }
         };
         pending.push(self.gc, observer);
-        pending.len() == 1
+        let first = pending.len() == 1;
+        if first {
+            let document = self.window_document(window);
+            self.push_element_task(
+                window,
+                document,
+                crate::names::event::LOAD,
+                crate::window::INTERSECTION_OBSERVERS,
+                0,
+            );
+        }
+        first
     }
 
     /// `window`'s observers waiting for the task, taken, in the order they

@@ -671,7 +671,8 @@ fn a_childs_intersection_observers_are_called_back() {
         dom_api::update_intersections(&ApiCx::new(cx), child, &computed, 1.0)
     });
     assert!(queue);
-    engine.notify_intersection_observers();
+    // The task the DOM queued with the entries.
+    while engine.run_element_tasks() {}
     assert_eq!(log(&mut engine), "child 1");
 }
 

@@ -23,7 +23,7 @@
 | 2f. 拿掉 `Created`、`Removed` 的便條，renderer 的帳對照 engine 的 frame（第 22 條） | 做完，待審查 | 2026-11-23 |
 | 3. 同一份文件內的捲動當場做，拿掉 renderer 那份文件網址的副本（第 7 條的第 3 步） | 做完，待審查 | 2026-11-23 |
 | 4. `javascript:` 網址在 `dom_api` 裡排成綁在 Document 上的 task（第 7 條的第 4 步、第 23 條） | 做完，待審查 | 2026-11-23 |
-| 5. intersection 的通知排成真的 task（第 5 步） | 沒開始 | |
+| 5. intersection 的通知排成真的 task（第 7 條的第 5 步） | 做完，待審查 | 2026-11-23 |
 | 6. 圖片和 script 開始載入的記錄交給 `dom`（第 6 步） | 沒開始 | |
 
 ## 驗收
@@ -186,4 +186,18 @@
 **Mutation test**（`mutants-4.toml`）：第一次 6 條，3 條抓到。`a later javascript: URL finds its task queued still` 補了同一份文件在不同的 task 再導覽一次之後抓到；`no load check after javascript: URLs` 指出跑完之後的 `check_completed` 是多的（`load` 不等它們），拿掉那一行，mutant 跟著拿掉；`a discarded document's javascript: URLs run` 等價（frame 不在了時 engine 本來就不執行），記進 `docs/test-gaps.md` 的「等價、不用處理的 mutation」。跑完檔案都還原了。
 
 **測試**：`dom` 254 個、`dom_api` 201 個（單元測試多一個）、`dom_js` 553 個（1 個 ignored）、`renderer` 127 個（`percent_decode` 的單元測試移走了）、`browser` 191 個、`shell` 667 個都通過。
+
+### 第 5 步：intersection 的通知是 DOM 的 task（2026-11-23，Linux：Fedora 45、debug build，`8182c7b` 之上）
+
+沒有要使用者決定的事（第 7 條已經定了；Blink 的 `PostTaskToDeliverNotifications` 在第 0 階段對過）。
+
+**A6 的原因證實了**：`shell` 的 `intersection_observers::entries_come_before_the_next_frame`。第一個 frame 的 `requestAnimationFrame` 排一個 `postMessage`，它的 handler 忙 100 ms：renderer 的迴圈在每個 task 之後跑那個 task 排的 DOM task（`run_queued_tasks`），這段期間下一個 frame 的 BeginFrame 到了，內圈接著跑它，外圈的 `run_intersection_task` 才送通知。改之前 5 次壞 5 次（`entries after frame 2`），和 A6 一樣，原因從「推論」變成確定。先試的兩個寫法（什麼都不做、在 `requestAnimationFrame` 裡忙 100 ms）都不壞：headless 等前一個 frame 送出了才給下一個 BeginFrame，忙要在 frame 的 task 之後。
+
+**做的事**：`dom` 的 `queue_intersection_entry` 在 window 的等待清單從空變成有一個時，在 window 的文件上排一個 element task（`IntersectionObservers`；HTML 的 queue an intersection observer task），`dom_api` 的 task 處理照 `notify_intersection_observers` 送。renderer 的 `intersection_task`、外圈的 `run_intersection_task` 拿掉，`compute_intersections` 只回傳下一次要算的時間；`ScriptEngine::notify_intersection_observers`（dom_js、`dom_wasm` 的實作，dom_js 的 `window::notify_intersection_observers`）沒有人呼叫了，拿掉。dom_js 的兩個測試改成跑 DOM 排的 element task。新的測試改了之後 10 次都通過。
+
+**WPT**：`intersection-observer/`、`html/semantics/embedded-content/the-img-element/`（lazy 的圖經過 intersection 的 task 恢復載入）、`html/webappapis/scripting/`、`html/browsers/browsing-the-web/`，525 個，0 個非預期的結果。
+
+**Mutation test**（`mutants-5.toml`）：3 條，2 條抓到；`a task for every observer with entries` 等價（之後的 task 看到空的清單），記進 `docs/test-gaps.md` 的「等價、不用處理的 mutation」。跑完檔案都還原了。
+
+**測試**：`dom` 254 個、`dom_api` 201 個、`dom_js` 553 個（1 個 ignored）、`renderer` 127 個、`browser` 191 個、`shell` 668 個都通過。
 

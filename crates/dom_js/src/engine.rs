@@ -1542,16 +1542,6 @@ impl ScriptEngine for V8Engine {
         });
     }
 
-    fn notify_intersection_observers(&mut self) {
-        // Each window's task of its own.
-        for (_, context, _) in self.frames_with_contexts() {
-            self.in_context(&context, |scope| {
-                let context = scope.get_current_context();
-                crate::window::notify_intersection_observers(scope, context);
-            });
-            self.perform_microtask_checkpoint();
-        }
-    }
 
     fn set_worker_host(&mut self, host: Box<dyn dom_api::WorkerHost>) {
         if let Some(waker) = host.port_waker() {

@@ -488,9 +488,6 @@ struct RenderThread {
     images: std::collections::HashMap<u64, (String, NodeId)>,
     /// The scripts the DOM queued being fetched, by request.
     script_fetches: std::collections::HashMap<u64, documents::PendingScriptFetch>,
-    /// The DOM's window's intersection observers' task is queued
-    /// (`run_intersection_task`).
-    intersection_task: bool,
     /// DevTools' `Page` domain, the renderer's part (Blink's
     /// `InspectorPageAgent`).
     page_agent: Rc<page_agent::PageAgent>,
@@ -621,7 +618,6 @@ impl RenderThread {
             engine_is_wasm: false,
             images: std::collections::HashMap::new(),
             script_fetches: std::collections::HashMap::new(),
-            intersection_task: false,
             document: None,
             children: documents::ChildFrames::default(),
         }
@@ -677,7 +673,6 @@ impl RenderThread {
             self.run_due_tasks();
             // The parsers that let the rest run parse on, a run each.
             self.parse_on();
-            self.run_intersection_task();
             self.start_image_fetches();
             self.start_script_fetches();
             self.retry_scripts_blocked_by_sheets();

@@ -507,3 +507,31 @@ new IntersectionObserver(entries => {{
         "t 0,500,50,50 0,0,0,0 false 0 / t 0,200,50,50 0,200,50,50 true 1"
     );
 }
+
+/// The entries a frame finds are delivered in a task queued as it
+/// computes them (Blink's `PostTaskToDeliverNotifications`): before the
+/// next frame's animation frame callbacks, however soon it comes (a task
+/// the first frame's callback queues busy past the next frame's time, so
+/// that it is waiting as that task ends).
+#[test]
+fn entries_come_before_the_next_frame() {
+    let url = page(
+        "before_next_frame.html",
+        &format!(
+            r#"<!DOCTYPE html>{HELPERS}
+<div id="a" style="width: 10px; height: 10px"></div>
+<script>
+let count = 0;
+const tick = () => {{
+  count++;
+  if (count == 1) postMessage('', '*');
+  if (count < 4) requestAnimationFrame(tick); else done();
+}};
+onmessage = () => {{ const until = performance.now() + 100; while (performance.now() < until); }};
+new IntersectionObserver(() => log.push('entries after frame ' + count)).observe(el('a'));
+requestAnimationFrame(tick);
+</script>"#
+        ),
+    );
+    assert_eq!(report(&url), "entries after frame 1");
+}

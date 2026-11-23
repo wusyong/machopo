@@ -342,6 +342,15 @@ pub fn run_element_task<H: ScriptHost>(host: &mut H, global: &GlobalRoot) -> boo
             (ElementTaskKind::JavaScriptUrls, Some(document)) => {
                 crate::history::run_javascript_urls(host, &document);
             }
+            (ElementTaskKind::IntersectionObservers, Some(document)) => {
+                let window = host.read(|cx| {
+                    cx.window_of(document.get(cx.gc))
+                        .map(|window| elise::Persistent::new(cx.gc, window))
+                });
+                if let Some(window) = window {
+                    crate::intersection_observer::notify_intersection_observers(host, &window);
+                }
+            }
             // An element's, in a worker: none is queued there (its global
             // has no document).
             (
@@ -351,7 +360,8 @@ pub fn run_element_task<H: ScriptHost>(host: &mut H, global: &GlobalRoot) -> boo
                 | ElementTaskKind::HashChange(..)
                 | ElementTaskKind::Storage(_)
                 | ElementTaskKind::WindowLoad
-                | ElementTaskKind::JavaScriptUrls,
+                | ElementTaskKind::JavaScriptUrls
+                | ElementTaskKind::IntersectionObservers,
                 None,
             ) => {}
         }

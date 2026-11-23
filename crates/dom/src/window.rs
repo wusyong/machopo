@@ -147,6 +147,7 @@ pub(crate) const BLOB_READ: u8 = 13;
 pub(crate) const WORKER_ERROR: u8 = 14;
 pub(crate) const STORAGE_EVENT: u8 = 15;
 const JAVASCRIPT_URLS: u8 = 16;
+pub(crate) const INTERSECTION_OBSERVERS: u8 = 17;
 
 /// What an element task does (`Cx::take_element_task`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,6 +188,9 @@ pub enum ElementTaskKind {
     /// The `javascript:` URLs navigated to in the document, the task's
     /// element, run in order (`Cx::take_javascript_urls`).
     JavaScriptUrls,
+    /// The intersection observers of the document's window that have
+    /// entries, notified (`Cx::take_pending_intersection_observers`).
+    IntersectionObservers,
     /// A blob read's promise, of the number, resolved (`Cx::take_blob_read`).
     BlobRead(u64),
     /// What the worker of the `Worker` (the task's target) threw, fired at
@@ -728,6 +732,7 @@ impl<'gc> Cx<'_, 'gc> {
             },
             WINDOW_LOAD => ElementTaskKind::WindowLoad,
             JAVASCRIPT_URLS => ElementTaskKind::JavaScriptUrls,
+            INTERSECTION_OBSERVERS => ElementTaskKind::IntersectionObservers,
             STORAGE_EVENT => ElementTaskKind::Storage(
                 self.context_window(context)
                     .and_then(|window| self.take_storage_event(window))
