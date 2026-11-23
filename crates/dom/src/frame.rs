@@ -120,13 +120,13 @@ pub enum FrameNavigation {
     /// the URL and history update steps of `pushState` and
     /// `replaceState`): its URL is `url` now, its new entry (or the
     /// current one, if `replace`) has `state` (serialized; none: `null`);
-    /// `scroll`: it scrolls to the fragment (`pushState` doesn't);
-    /// `pop_state`: `popstate` fires at its window now (a fragment's).
+    /// `pop_state`: `popstate` fires at its window now (a fragment's). A
+    /// fragment's was scrolled to as it happened (`dom_api`'s, through the
+    /// frame's layout).
     SameDocument {
         url: String,
         replace: bool,
         state: Option<Vec<u8>>,
-        scroll: bool,
         pop_state: bool,
     },
     /// A hyperlink followed to `url` in a new tab (the browser's), in the

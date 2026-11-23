@@ -110,6 +110,13 @@ pub trait FrameLayout: Any {
         let _ = (frame, parent, owner, document, document_node);
     }
 
+    /// `element` of `document` (the frame's, or one below it) scrolled into
+    /// view once it is laid out; `document` itself: its top (HTML's
+    /// "scroll to the fragment"). Nothing by default.
+    fn scroll_to_fragment(&mut self, document: NodeId, element: NodeId) {
+        let _ = (document, element);
+    }
+
     /// Child frame `frame` gone with its iframe, and the frames in it with
     /// it: no longer shown (Blink's `LocalFrame::Detach` disposes of its
     /// `LocalFrameView`). Nothing by default.

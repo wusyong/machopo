@@ -90,7 +90,14 @@ pub(crate) fn navigate<'gc>(
         && without_fragment(&url) == without_fragment(&current)
     {
         cx.set_document_url(document, url.as_str());
-        update_target_element(cx, document, &url);
+        // Scrolled to now, as Chrome commits it (`FrameLoader::
+        // StartNavigation`): what the script reads next is where it is.
+        if let Some(target) = fragment_target(cx, document, &url) {
+            let document_id = cx.node_id(document);
+            cx.lend_layout(document, |layout| {
+                layout.scroll_to_fragment(document_id, target);
+            });
+        }
         if let Some(window) = cx.window_of(document) {
             cx.set_window_history_state(window, None);
             if current.fragment() != url.fragment() {
@@ -106,7 +113,6 @@ pub(crate) fn navigate<'gc>(
                 url: url.into(),
                 replace,
                 state: None,
-                scroll: true,
                 pop_state: true,
             },
         );
@@ -120,6 +126,26 @@ pub(crate) fn navigate<'gc>(
             replace,
         },
     );
+}
+
+/// HTML's "scroll to the fragment" of `document` at `url`: its target
+/// element set (`update_target_element`), and what comes into view, the
+/// element, or with none the document (its top) for an empty fragment or
+/// `top` (ASCII case-insensitively); none for another.
+pub fn fragment_target<'gc>(
+    cx: &dom::Cx<'_, 'gc>,
+    document: NodeRef<'gc>,
+    url: &Url,
+) -> Option<dom::NodeId> {
+    update_target_element(cx, document, url);
+    let top = url
+        .fragment()
+        .is_some_and(|fragment| fragment.is_empty() || fragment.eq_ignore_ascii_case("top"));
+    match cx.target_element(document) {
+        Some(element) => Some(cx.node_id(element)),
+        None if top => Some(cx.node_id(document)),
+        None => None,
+    }
 }
 
 /// `document`'s target element for `url`'s fragment (HTML's; `:target`),
@@ -413,7 +439,6 @@ fn push_or_replace<'gc>(
             url: new_url.into(),
             replace,
             state: Some(data.to_vec()),
-            scroll: false,
             pop_state: false,
         },
     );

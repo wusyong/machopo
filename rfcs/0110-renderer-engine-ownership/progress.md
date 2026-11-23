@@ -21,7 +21,7 @@
 | 2e-2. 拿掉 iframe 時先 unload（unload counter 擋建子 frame 和導覽）再 discard，拆完當場檢查 parent（第 17、18 條） | 做完，待審查 | 2026-11-23 |
 | 2e-3. iframe 的 `load` 和「載入結束了」在子 frame 的 window `load` 的 task 裡（第 19 條） | 做完，待審查（兩條 mutation 沒抓到，見做過的檢查） | 2026-11-23 |
 | 2f. 拿掉 `Created`、`Removed` 的便條，renderer 的帳對照 engine 的 frame（第 22 條） | 做完，待審查 | 2026-11-23 |
-| 3. 同一份文件內的捲動當場做，拿掉 renderer 那份文件網址的副本（第 7 條的第 3 步） | 沒開始 | |
+| 3. 同一份文件內的捲動當場做，拿掉 renderer 那份文件網址的副本（第 7 條的第 3 步） | 做完，待審查 | 2026-11-23 |
 | 4. `javascript:` 網址在 `dom_api` 裡排成綁在 Document 上的 task（第 4 步） | 沒開始 | |
 | 5. intersection 的通知排成真的 task（第 5 步） | 沒開始 | |
 | 6. 圖片和 script 開始載入的記錄交給 `dom`（第 6 步） | 沒開始 | |
@@ -158,4 +158,18 @@
 **Mutation test**（`mutants-2f.toml`）：8 條，7 條抓到；`a navigated child's frames before followed late` 等價（見上），記進 `docs/test-gaps.md` 的「等價、不用處理的 mutation」。跑完檔案都還原了。
 
 **測試**：`dom` 254 個、`dom_api` 201 個、`dom_js` 552 個（1 個 ignored）、`renderer` 128 個、`browser` 191 個、`shell` 663 個都通過。
+
+### 第 3 步：捲到 fragment 在 engine 的呼叫裡做，文件的網址只有 DOM 一份（2026-11-23，Linux：Fedora 45、debug build，`764c451` 之上）
+
+沒有要使用者決定的事（第 7 條已經定了做法；告訴 Browser 照 `details.md` 的表留著）。
+
+**A4**：`shell` 的 `documents::a_fragment_scrolls_as_it_is_navigated_to`（`location.hash` 之後同一個 task 讀 `scrollY`；`top` 回到頂端），改之前是 `false,0`。
+
+**做的事**：`FrameLayout` 加 `scroll_to_fragment`（renderer 的 `Frame` 照 `view_of_mut` 找到那份文件的 view，`scroll_into_view_after_layout`）；`dom_api` 加 `fragment_target`（HTML 的 scroll to the fragment：設 target element，回傳要捲到的元素，沒有時空的 fragment 和 `top` 是文件本身），`history.rs` 的 `navigate` 在同一份文件內的導覽改了網址之後當場經過 `lend_layout` 捲（Chrome 的 `FrameLoader::StartNavigation` 同步 commit）；renderer 的 `scroll_to_fragment`（parse 完時）也用 `fragment_target`。`FrameNavigation::SameDocument` 的 `scroll` 拿掉（engine 已經捲了，renderer 不再看它）。renderer 的 `FrameDocument.url` 拿掉，讀的地方改用 `document_url`、`top_document_url`（讀 DOM 的 `document_url`，沒有的是 `about:blank`）；原本改它的三處（同一份文件內的導覽、`traverse_within_document` 之後、`navigate_to_fragment`）DOM 都已經自己改了。最上層的 commit 在借 engine 之前先讀換掉之前的網址（`kept_url`）；`frame_info` 改成 `&mut self`。順便拿掉 `navigate_to_fragment` 上面兩段沒有對應函式的註解。
+
+**WPT**：iframe、`<link>`、`html/dom/documents/`、`html/browsers/browsing-the-web/`、`html/browsers/history/`、`html/browsers/windows/`、`html/semantics/links/`、`css/cssom-view/`、`css/selectors/`，775 個。兩個非預期的 PASS 是 A4：`scroll-restoration-fragment-scrolling-samedoc.html`、`location_hash.html` 的 srcdoc 那一項都在設了 `location.hash` 之後馬上讀 `scrollY`；用 `MACHOPO_UPDATE_EXPECTATIONS` 更新（兩份 `.ini` 都拿掉了：整份通過），重跑那兩個目錄 0 個非預期的結果。
+
+**Mutation test**（`mutants-3.toml`）：5 條全部抓到，跑完檔案都還原了。
+
+**測試**：`dom` 254 個、`dom_api` 201 個、`dom_js` 552 個（1 個 ignored）、`renderer` 128 個、`browser` 191 個、`shell` 664 個都通過。
 

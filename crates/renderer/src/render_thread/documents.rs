@@ -51,7 +51,6 @@ pub(super) struct FrameDocument {
     /// The browsing context it is the document of.
     frame: FrameId,
     navigation_id: u64,
-    url: Url,
     /// Its MIME type and markup as they came, for DevTools (the markup
     /// once its body has all come: its `body`'s until then).
     mime_type: String,
@@ -199,7 +198,6 @@ impl FrameDocument {
     /// yet.
     fn new(
         frame: FrameId,
-        url: Url,
         mime_type: &str,
         source: Rc<str>,
         parser: Option<Parser<dyn ScriptEngine>>,
@@ -209,7 +207,6 @@ impl FrameDocument {
         Self {
             frame,
             navigation_id: 0,
-            url,
             mime_type: mime_type.to_owned(),
             source,
             parser,
@@ -538,9 +535,12 @@ impl RenderThread {
         // document is of its origin then.
         let origin_source = origin_source.filter(|_| !replacing);
         let replaced = replacing.then(|| {
-            let previous = self.document.as_ref().map(|next| next.url.clone());
+            let previous = self.top_document_url();
             (previous, self.replace_engine(wasm))
         });
+        // The URL of the document it shows now, before the engine is
+        // borrowed (by the engine before, if the page took a new one).
+        let kept_url = replaced.is_none().then(|| self.top_document_url()).flatten();
         self.engine_is_wasm = wasm;
         if self.engine.is_none() {
             self.engine = Some(self.make_engine());
@@ -587,10 +587,7 @@ impl RenderThread {
         // (By the engine before, if the page took a new one.)
         let (previous, unloaded) = match replaced {
             Some(replaced) => replaced,
-            None => (
-                self.document.as_ref().map(|next| next.url.clone()),
-                engine.unload_document(top),
-            ),
+            None => (kept_url, engine.unload_document(top)),
         };
         // Its documents' `fetch()`es go with them, those of their `unload`
         // too (by the engine before, if the page took a new one).
@@ -683,7 +680,6 @@ impl RenderThread {
             time_origin,
             ..FrameDocument::new(
                 top,
-                document_url,
                 mime_type,
                 source,
                 Some(parser),
@@ -847,10 +843,8 @@ impl RenderThread {
             {
                 self.children.creation_stacks.insert(frame, stack);
             }
-            let url = Url::parse("about:blank").expect("about:blank");
             let mut initial = FrameDocument::new(
                 frame,
-                url,
                 "text/html",
                 Rc::from(""),
                 None,
@@ -861,6 +855,26 @@ impl RenderThread {
             self.children.documents.push(initial);
         }
         self.request_main_frame();
+    }
+
+    /// `frame`'s document's URL, the DOM's (what its `location` reads; the
+    /// renderer keeps no copy of it): `about:blank` for one with none.
+    pub(super) fn document_url(&mut self, frame: FrameId) -> Option<Url> {
+        let document = self.doc(frame)?.document.clone();
+        let engine = self.engine.as_mut()?;
+        let url = engine
+            .dom_mut()
+            .read(|cx| cx.document_url(document.get(cx.gc)).map(|url| url.to_string()));
+        Some(
+            url.and_then(|url| Url::parse(&url).ok())
+                .unwrap_or_else(|| Url::parse("about:blank").expect("about:blank")),
+        )
+    }
+
+    /// The top-level frame's document's URL (`document_url`).
+    fn top_document_url(&mut self) -> Option<Url> {
+        let top = self.document.as_ref()?.frame;
+        self.document_url(top)
     }
 
     /// Child frame `frame`'s token, the engine's (its frames are the one
@@ -1112,18 +1126,12 @@ impl RenderThread {
                 url,
                 replace,
                 state,
-                scroll,
                 ..
             } => {
-                let Ok(parsed) = Url::parse(&url) else {
+                // Its URL the DOM's already; a fragment's scrolled to, in
+                // the engine's call (`FrameLayout::scroll_to_fragment`).
+                if self.doc(frame).is_none() {
                     return;
-                };
-                let Some(next) = self.doc_mut(frame) else {
-                    return;
-                };
-                next.url = parsed;
-                if scroll {
-                    self.scroll_to_fragment(frame);
                 }
                 // Every frame's: a child frame's URL is the browser's too
                 // (what its reload loads).
@@ -1175,10 +1183,10 @@ impl RenderThread {
     /// document.
     fn run_javascript_url(&mut self, frame: FrameId, url: &str) {
         let source = document::percent_decode(&url["javascript:".len()..]);
-        let Some((document_url, document)) = self
-            .doc(frame)
-            .map(|next| (next.url.to_string(), next.document.clone()))
-        else {
+        let Some(document) = self.doc(frame).map(|next| next.document.clone()) else {
+            return;
+        };
+        let Some(document_url) = self.document_url(frame).map(|url| url.to_string()) else {
             return;
         };
         let Some(engine) = &mut self.engine else {
@@ -1252,10 +1260,8 @@ impl RenderThread {
                 .send(RendererHostMsg::SameDocumentNavigationFailed { navigation_id });
             return;
         }
+        // Its URL the DOM's now (`traverse_within_document`).
         let fragment = new_url.fragment().is_some();
-        if let Some(next) = self.doc_mut(frame) {
-            next.url = new_url.clone();
-        }
         if !history.manual_scroll_restoration && fragment {
             self.scroll_to_fragment(frame);
         }
@@ -1709,7 +1715,7 @@ impl RenderThread {
                 (now, time_origin, timing)
             }
         };
-        let previous = self.doc(frame).map(|next| next.url.clone());
+        let previous = self.document_url(frame);
         // The realm before it goes, and the blob URLs it made.
         self.blob_urls.revoke_frame(frame);
         let clock = self.clock;
@@ -1807,7 +1813,6 @@ impl RenderThread {
             time_origin,
             ..FrameDocument::new(
                 frame,
-                url,
                 mime_type,
                 Rc::from(""),
                 Some(parser),
@@ -2448,7 +2453,10 @@ impl RenderThread {
         let Some(next) = self.doc(frame) else {
             return;
         };
-        let (document, url) = (next.document.clone(), next.url.clone());
+        let document = next.document.clone();
+        let Some(url) = self.document_url(frame) else {
+            return;
+        };
         let Some(engine) = &mut self.engine else {
             return;
         };
@@ -2787,27 +2795,22 @@ impl RenderThread {
             .map(|next| next.frame)
     }
 
-    /// The window's `load`, if the document is parsed and no sheet is
-    /// loading.
-    /// The document of `frame` scrolled to its URL's fragment once laid
-    /// out (HTML's "scroll to the fragment": its indicated part, the
-    /// element whose id is the fragment, decoded, or the first `<a>` whose
-    /// `name` is), as it is parsed.
     /// `frame`'s navigation to `url`, if `url` is its document's but for
     /// the fragment: the document's URL `url`, scrolled to the fragment.
     /// Whether it was.
     fn navigate_to_fragment(&mut self, frame: FrameId, url: &Url) -> bool {
-        let Some(next) = self.doc_mut(frame) else {
+        let Some(mut current) = self.document_url(frame) else {
             return false;
         };
-        let (mut current, mut wanted) = (next.url.clone(), url.clone());
+        let mut wanted = url.clone();
         current.set_fragment(None);
         wanted.set_fragment(None);
         if current != wanted {
             return false;
         }
-        next.url = url.clone();
-        let document = next.document.clone();
+        let Some(document) = self.doc(frame).map(|next| next.document.clone()) else {
+            return false;
+        };
         if let Some(engine) = &mut self.engine {
             engine
                 .dom_mut()
@@ -2818,30 +2821,23 @@ impl RenderThread {
         true
     }
 
+    /// The document of `frame` scrolled to its URL's fragment once laid
+    /// out (HTML's "scroll to the fragment", `dom_api::fragment_target`),
+    /// as it is parsed.
     fn scroll_to_fragment(&mut self, frame: FrameId) {
-        let Some(next) = self.doc(frame) else {
+        let Some(url) = self.document_url(frame) else {
             return;
         };
-        let url = next.url.clone();
-        let document = next.document.clone();
+        let Some(document) = self.doc(frame).map(|next| next.document.clone()) else {
+            return;
+        };
         let Some((dom, view)) = engine_frame(&mut self.engine) else {
             return;
         };
-        // HTML's scroll to the fragment: its indicated element is the
-        // document's target element (`:target`), then in view; with none,
-        // an empty fragment or `top` (ASCII case-insensitively) is the top
-        // of the document.
+        // HTML's scroll to the fragment (`dom_api::fragment_target`).
         let found = dom.mutate(|cx| {
             let document = document.get(cx.gc);
-            dom_api::update_target_element(cx, document, &url);
-            let top = url.fragment().is_some_and(|fragment| {
-                fragment.is_empty() || fragment.eq_ignore_ascii_case("top")
-            });
-            let element = match cx.target_element(document) {
-                Some(element) => cx.node_id(element),
-                None if top => cx.node_id(document),
-                None => return None,
-            };
+            let element = dom_api::fragment_target(cx, document, &url)?;
             Some((cx.node_id(document), element))
         });
         if let Some((document, element)) = found
@@ -2962,12 +2958,13 @@ impl RenderThread {
 
     /// The main frame and the DOM's document in it as DevTools tells
     /// them, once DevTools gave the frame its token.
-    pub(super) fn frame_info(&self) -> Option<FrameInfo> {
+    pub(super) fn frame_info(&mut self) -> Option<FrameInfo> {
+        let url = self.top_document_url()?;
         let next = self.document.as_ref()?;
         main_frame_info(
             self.devtools_main_frame_token,
             next.navigation_id,
-            &next.url,
+            &url,
             &next.mime_type,
             &next.source(),
             &next.resources,
@@ -4374,10 +4371,8 @@ impl RenderThread {
         what: super::log_agent::RasterFailed,
         failure: &raster::RasterFailure,
     ) {
-        let url = self
-            .document
-            .as_ref()
-            .map_or("", |document| document.url.as_str());
+        let url = self.top_document_url().map(String::from).unwrap_or_default();
+        let url = url.as_str();
         self.log_agent
             .add(super::log_agent::LogEntry::raster_failed(
                 what, failure, url,
@@ -4684,7 +4679,7 @@ impl RenderThread {
             self.frame_id(frame)
         };
         let loader_id = self.loader_id(frame)?;
-        let document_url = self.doc(frame)?.url.to_string();
+        let document_url = self.document_url(frame)?.to_string();
         Some(RequestFrame {
             frame_id,
             loader_id,
@@ -4727,9 +4722,10 @@ impl RenderThread {
                 if let Some(stack) = stack.filter(|_| stacks) {
                     return Some(Initiator::Script(stack));
                 }
+                let document_url = self.document_url(frame)?;
                 let next = self.doc_mut(frame)?;
                 let line = next.parser_lines.remove(element)?;
-                let url = next.url.as_str().split('#').next().unwrap_or_default();
+                let url = document_url.as_str().split('#').next().unwrap_or_default();
                 Some(Initiator::Parser {
                     url: url.to_owned(),
                     line: line.saturating_sub(1),
@@ -4868,6 +4864,9 @@ impl RenderThread {
     }
 
     fn sheet_loaded(&mut self, frame: FrameId, sheet: PendingSheet, result: &LoadResult) {
+        let Some(document_url) = self.document_url(frame) else {
+            return;
+        };
         let Some(next) = self.doc(frame) else {
             return;
         };
@@ -4877,7 +4876,7 @@ impl RenderThread {
         // it asked its own origin.
         let origin_clean = match result {
             Ok(response) => response.head.tainting != ResponseTainting::Opaque,
-            Err(_) => sheet.url.scheme() == "data" || sheet.url.origin() == next.url.origin(),
+            Err(_) => sheet.url.scheme() == "data" || sheet.url.origin() == document_url.origin(),
         };
         let Some(engine) = &mut self.engine else {
             return;

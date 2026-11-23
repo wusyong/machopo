@@ -164,7 +164,6 @@ fn a_fragment_navigates_within_the_document() {
             url: "https://example.test/a.html#two".to_owned(),
             replace: false,
             state: None,
-            scroll: true,
             pop_state: true,
         }]
     );
@@ -224,7 +223,6 @@ fn history_members() {
             url,
             replace,
             state,
-            scroll,
             pop_state,
         },
     ] = &page.navigations()[..]
@@ -232,8 +230,8 @@ fn history_members() {
         panic!("one navigation within the document");
     };
     assert_eq!(
-        (url.as_str(), *replace, state.is_some(), *scroll, *pop_state),
-        ("https://example.test/a/c.html?x", false, true, false, false)
+        (url.as_str(), *replace, state.is_some(), *pop_state),
+        ("https://example.test/a/c.html?x", false, true, false)
     );
     assert_eq!(
         page.eval("var s = history.state; history.replaceState(2, '', ''); [history.state, s !== history.state, location.href, history.length].join()"),

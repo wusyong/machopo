@@ -164,8 +164,8 @@ pub use frame::{
     update_elements,
 };
 pub use history::{
-    can_have_url_rewritten, indicated_element, restore_history, traverse_within_document,
-    update_target_element,
+    can_have_url_rewritten, fragment_target, indicated_element, restore_history,
+    traverse_within_document, update_target_element,
 };
 pub use idle::run_idle_callback;
 pub use image::{react_to_environment_changes, run_image_updates};

@@ -1161,6 +1161,26 @@ fn an_iframes_load_comes_with_its_documents() {
     );
 }
 
+/// A fragment navigated to scrolls as it is navigated to: the same task
+/// reads the new scroll position (Chrome commits a same-document
+/// navigation and scrolls in `FrameLoader::StartNavigation`); a fragment
+/// with no element, or `top`, back to the top.
+#[test]
+fn a_fragment_scrolls_as_it_is_navigated_to() {
+    let url = site(
+        "a_fragment_scrolls_as_it_is_navigated_to",
+        &[(
+            "index.html",
+            "<!DOCTYPE html><div style='height: 3000px'></div><p id=a>a</p><div style='height: 3000px'></div>\
+             <script>onload = () => { const log = [];\
+               location.hash = 'a'; log.push(scrollY > 2000);\
+               location.hash = 'top'; log.push(scrollY);\
+               testRunner.reportHarnessResults(log.join()); };</script>",
+        )],
+    );
+    assert_eq!(run(&url), "true,0");
+}
+
 /// A `javascript:` URL that another origin's page sets a child's
 /// `location` to: a `SecurityError`, nothing run in the child (whose
 /// realm it would be); the same origin's runs, after (so the other's

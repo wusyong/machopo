@@ -2485,6 +2485,12 @@ impl dom_api::FrameLayout for Frame {
         self.view.show_new_child(parent, view);
     }
 
+    fn scroll_to_fragment(&mut self, document: NodeId, element: NodeId) {
+        if let Some(view) = self.view.view_of_mut(document) {
+            view.scroll_into_view_after_layout(element);
+        }
+    }
+
     fn child_frame_removed(&mut self, frame: dom_api::FrameId) {
         self.view.remove_child(frame);
     }

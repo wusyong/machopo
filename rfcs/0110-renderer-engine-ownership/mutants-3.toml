@@ -1,0 +1,45 @@
+# Stage 1, step 3: a fragment scrolled to in the engine's call; the document's URL the DOM's alone.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "env", "MACHOPO_GPU_ADAPTER=cpu", "cargo", "test", "-q", "-p", "shell", "--test", "it"]
+timeout = 240
+
+[[mutant]]
+name = "a fragment navigated to not scrolled in the call"
+file = "crates/dom_api/src/history.rs"
+from = '''            cx.lend_layout(document, |layout| {
+                layout.scroll_to_fragment(document_id, target);
+            });'''
+to = '''            let _ = (document_id, target);'''
+
+[[mutant]]
+name = "the layout doesn't scroll to a fragment"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        if let Some(view) = self.view.view_of_mut(document) {
+            view.scroll_into_view_after_layout(element);
+        }
+    }
+
+    fn child_frame_removed'''
+to = '''        let _ = (document, element);
+    }
+
+    fn child_frame_removed'''
+
+[[mutant]]
+name = "the top of the document no fragment's target"
+file = "crates/dom_api/src/history.rs"
+from = '''        None if top => Some(cx.node_id(document)),'''
+to = '''        None if top => None,'''
+
+[[mutant]]
+name = "a document's URL never its own"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            url.and_then(|url| Url::parse(&url).ok())
+                .unwrap_or_else(|| Url::parse("about:blank").expect("about:blank")),'''
+to = '''            url.and_then(|_| None)
+                .unwrap_or_else(|| Url::parse("about:blank").expect("about:blank")),'''
+
+[[mutant]]
+name = "the URL before a top-level commit not the document's then"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        let kept_url = replaced.is_none().then(|| self.top_document_url()).flatten();'''
+to = '''        let kept_url = replaced.is_none().then(|| None).flatten();'''
