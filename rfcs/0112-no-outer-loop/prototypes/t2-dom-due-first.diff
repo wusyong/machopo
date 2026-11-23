@@ -1,0 +1,134 @@
+diff --git a/crates/dom_api/src/engine.rs b/crates/dom_api/src/engine.rs
+index ce528d1c..ee9b026e 100644
+--- a/crates/dom_api/src/engine.rs
++++ b/crates/dom_api/src/engine.rs
+@@ -610,6 +610,15 @@ pub trait ScriptEngine: ParserHost {
+     /// timer; now with an element task queued).
+     fn until_next_timer(&mut self) -> Option<std::time::Duration>;
+ 
++    /// When the earliest task a frame's window may run now became due (its
++    /// timer's time, or when it was queued): the host runs it before the
++    /// scheduler's tasks posted after that (Blink picks among a frame
++    /// scheduler's queues by when each task became ready). None with none
++    /// due.
++    fn earliest_due_task(&mut self) -> Option<std::time::Instant> {
++        None
++    }
++
+     /// Runs the frames' windows' timers due now, the earliest due first
+     /// across the windows (those due at once, the first frame made's), each in its
+     /// window's realm and a microtask checkpoint after it: whether any
+diff --git a/crates/dom_js/src/engine.rs b/crates/dom_js/src/engine.rs
+index b3811037..8d48ca58 100644
+--- a/crates/dom_js/src/engine.rs
++++ b/crates/dom_js/src/engine.rs
+@@ -1429,6 +1429,23 @@ impl ScriptEngine for V8Engine {
+         })
+     }
+ 
++    fn earliest_due_task(&mut self) -> Option<std::time::Instant> {
++        let State { dom, frames, .. } = self.state();
++        dom.read(|cx| {
++            let now = cx.dom_now();
++            let at = frames
++                .iter()
++                .filter_map(|frame| {
++                    let window = cx.window_of(frame.document.get(cx.gc))?;
++                    cx.next_task(cx.window_context(window), now).map(|task| task.at)
++                })
++                .min_by(f64::total_cmp)?;
++            // The DOM's clock is milliseconds; how long ago that was.
++            let ago = std::time::Duration::from_secs_f64(((now - at) / 1000.0).max(0.0));
++            std::time::Instant::now().checked_sub(ago)
++        })
++    }
++
+     fn run_timers(&mut self) -> bool {
+         let mut nows = Vec::new();
+         let mut ran = false;
+diff --git a/crates/renderer/src/render_thread.rs b/crates/renderer/src/render_thread.rs
+index 6e1369a5..e9bdd166 100644
+--- a/crates/renderer/src/render_thread.rs
++++ b/crates/renderer/src/render_thread.rs
+@@ -643,6 +643,7 @@ impl RenderThread {
+                 // before the next task comes off the channel.
+                 self.run_queued_tasks();
+                 self.update_title();
++                self.run_dom_tasks_due_first();
+                 next = self.scheduler.try_next(TaskQueues::ALL);
+             }
+             self.blink_caret();
+@@ -731,6 +732,28 @@ impl RenderThread {
+         tracing::debug!("renderer main thread exiting");
+     }
+ 
++    /// The DOM's tasks due before the scheduler's earliest was posted (a
++    /// timer that came due while a task ran), run before it: the two
++    /// sources take turns by time, as Blink's frame scheduler's queues do,
++    /// not the DOM's after every task on the channel.
++    fn run_dom_tasks_due_first(&mut self) {
++        let Some(due) = self
++            .engine
++            .as_mut()
++            .and_then(|engine| engine.earliest_due_task())
++        else {
++            return;
++        };
++        if self
++            .scheduler
++            .earliest_posted(TaskQueues::ALL)
++            .is_some_and(|posted| posted < due)
++        {
++            return;
++        }
++        self.run_due_tasks();
++    }
++
+     /// What the dedicated worker numbered `id` sent its `Worker`, given to
+     /// the engine (a message a task of the `Worker`'s realm, an error an
+     /// event at it now, script run: what it reported sent, as after the
+diff --git a/crates/renderer/src/task_queue.rs b/crates/renderer/src/task_queue.rs
+index 004f564b..442517e1 100644
+--- a/crates/renderer/src/task_queue.rs
++++ b/crates/renderer/src/task_queue.rs
+@@ -116,6 +116,9 @@ impl TaskQueues {
+ /// interrupt script.
+ struct Queued {
+     sequence: u64,
++    /// When it was posted: what the DOM's tasks are ordered against
++    /// (`earliest_posted`).
++    posted: Instant,
+     task: MainThreadTask,
+     interrupt: bool,
+ }
+@@ -221,6 +224,7 @@ impl MainThreadScheduler {
+             let sequence = state.next;
+             state.queues[queue.index()].push_back(Queued {
+                 sequence,
++                posted: Instant::now(),
+                 task,
+                 interrupt,
+             });
+@@ -422,6 +426,14 @@ impl MainThreadScheduler {
+         }
+     }
+ 
++    /// When the earliest task of `queues` was posted, if there is one: a
++    /// DOM task due before it runs first.
++    pub(crate) fn earliest_posted(&self, queues: TaskQueues) -> Option<Instant> {
++        let state = self.lock();
++        let queue = state.earliest(queues)?;
++        state.queues[queue.index()].front().map(|queued| queued.posted)
++    }
++
+     /// The earliest task of `queues`, if there is one.
+     pub(crate) fn try_next(&self, queues: TaskQueues) -> Option<MainThreadTask> {
+         let mut state = self.lock();
+@@ -536,6 +548,7 @@ impl MainThreadScheduler {
+             for queued in back.into_iter().rev() {
+                 devtools.push_front(Queued {
+                     sequence: 0,
++                    posted: Instant::now(),
+                     task: MainThreadTask::DevTools(queued),
+                     interrupt: false,
+                 });

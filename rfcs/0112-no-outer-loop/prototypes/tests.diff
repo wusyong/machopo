@@ -1,0 +1,62 @@
+diff --git a/crates/shell/tests/it/event_loop.rs b/crates/shell/tests/it/event_loop.rs
+new file mode 100644
+index 00000000..857d09c8
+--- /dev/null
++++ b/crates/shell/tests/it/event_loop.rs
+@@ -0,0 +1,44 @@
++//! The renderer's event loop in a whole browser: the DOM's tasks take
++//! their turn among the scheduler's, whatever else keeps coming.
++
++use std::collections::HashMap;
++use std::time::Duration;
++
++use net::test_server::{Route, TestServer};
++use shell::headless;
++
++/// A timer due while the responses to a chain of `fetch()`es keep coming
++/// runs before the chain ends (Blink's timer is a task of the frame's
++/// scheduler, picked among the networking ones by when it was queued):
++/// each response's handler asks for the next and keeps the thread busy
++/// until that one is in, so a task always waits as the one before ends.
++#[test]
++fn a_timer_runs_while_responses_keep_coming() {
++    let page = r#"<!DOCTYPE html><script>
++const busy = ms => { const until = performance.now() + ms; while (performance.now() < until); };
++let responses = 0;
++let timer = -1;
++const next = () => fetch('/r?' + responses, { cache: 'no-store' }).then(() => {
++  responses++;
++  if (responses < 40) { next(); busy(20); return; }
++  testRunner.reportHarnessResults(timer >= 0 && timer < 40 ? 'the timer ran as they came' : `the timer ran after ${timer}`);
++});
++// Once the page has loaded, and none of its own tasks wait.
++fetch('/start', { cache: 'no-store' }).then(() => {
++  setTimeout(() => { timer = responses; }, 0);
++  next();
++  busy(20);
++});
++</script>"#;
++    let mut start = Route::ok("text/plain", "start");
++    start.delay = Duration::from_millis(300);
++    let server = TestServer::start(HashMap::from([
++        ("/".to_owned(), Route::ok("text/html", page)),
++        ("/r".to_owned(), Route::ok("text/plain", "r")),
++        ("/start".to_owned(), start),
++    ]))
++    .expect("the test server starts");
++    let report = headless::run_testharness(&server.url("/"), Duration::from_secs(30), Default::default())
++        .expect("the page reports");
++    assert_eq!(report, "the timer ran as they came");
++}
+diff --git a/crates/shell/tests/it/main.rs b/crates/shell/tests/it/main.rs
+index 950ac2cd..7ea26db4 100644
+--- a/crates/shell/tests/it/main.rs
++++ b/crates/shell/tests/it/main.rs
+@@ -24,6 +24,7 @@ mod devtools_log;
+ mod devtools_network;
+ mod devtools_overlay;
+ mod documents;
++mod event_loop;
+ mod fetch;
+ mod file_reader;
+ mod focus;

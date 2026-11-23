@@ -1,8 +1,8 @@
 # RFC 0112：拿掉 event loop 的外圈
 
 - 開始日期：2026-11-24
-- 狀態：📝 草稿
-- 細節：`details.md`
+- 狀態：🚧 已排程：2026-11-24（第 0 階段做完；範圍和做法已決定，第 1 段還沒開始）
+- 細節：`details.md`；進度：`progress.md`
 
 ## 摘要
 
@@ -83,7 +83,13 @@ parser 的續跑和子 frame 的 commit 是 renderer 自己的工作，直接排
    - 盤點外圈和內圈每個 task 之後的每一步，各自對照 Chromium 的原始碼（現在的表是憑記憶），分成目標第 1 條的三類，寫成 `details.md` 的表。
    - DOM 的 task 進 scheduler 的 T1、T2 各做一個原型（patch 放在 `prototypes/`，不合併），用「通道一直有 task 時的 timer」的必壞測試比。
    - 交給使用者決定範圍和做法。
-1. 之後的階段照決定的順序，建議由小到大：DevTools 的事件、導覽、DOM 的 task 和 parser、commit，最後是其他的步驟和拿掉外圈。每一步各自測試、mutation test、審核。
+1. **DevTools 的事件**：`frameAttached`、`frameDetached`、`frameNavigated` 當場送（先送出排著的 DOM 變動）；DOM 的變動和 console 從整批 task 之後改成每個 task 之後送（Chrome 的 `DidProcessTask`）。
+2. **導覽在呼叫的當下送**：推翻 RFC 0019 第 24、35 條；「待決定」第 1、2 條在這一段開始前決定。
+3. **DOM 的 task 是 scheduler 的 task**（T1，第 4 條）：一個記號跑一個 DOM 的 task；UA 自己的 timer 和 idle callback 的 timeout 也送記號；`until_next_due` 不再問 DOM 的 timer。
+4. **renderer 自己的工作排成 task**：parser 的續跑、`srcdoc` 和 `about:` 的 commit、等 sheet 的 script（kNetworking）；caret、intersection 的 `delay`、延後的 iframe `load`、新內容的逾時（renderer 的 timer）；engine 的 platform task。
+5. **剩下的步驟，拿掉外圈**：`<select>` 的選單、WebDriver 的結果、DevTools 的 `CSS` 重抓改成當場；network idle、overlay、idle callback、`toBlob`、request stack 的清理改成每個 task 之後（Chrome 的 `TaskObserver`、idle period）；`RenderThread::run` 只剩取 task、跑它、task 之後的觀察者、要不要 frame。
+
+每一段各自測試、mutation test、審核，做完可以先 merge 回 `main`（`rfcs/README.md` 的「階段的 merge」）。
 
 ## 缺點
 
@@ -99,20 +105,22 @@ parser 的續跑和子 frame 的 commit 是 renderer 自己的工作，直接排
 
 ## 先例
 
-- **Chromium**（憑記憶，第 0 階段對原始碼）：renderer main thread 的 `MainThreadSchedulerImpl` 和 `SequenceManager`，每個 frame 的 `FrameScheduler` 照 task type 分 task queue（timer、networking、DOM manipulation、parser……），Blink 排 task 時經過 `ExecutionContext::GetTaskRunner(TaskType)`；DevTools 經過 `probe::` 當場送；導覽經過 `LocalFrameClient::BeginNavigation` 當場送 `BeginNavigation`；task 之間的工作是 `TaskObserver`（microtask checkpoint、`IdlenessDetector`）和 rendering 的步驟。沒有「通道空了才做」的外圈。
+- **Chromium**（2026-11-24 對過 `main` 的原始碼，`details.md` 的「盤點」）：renderer main thread 的 `MainThreadSchedulerImpl` 和 `SequenceManager`，每個 frame 的 `FrameScheduler` 照 task type 分 task queue（timer、networking、DOM manipulation、parser……），Blink 排 task 時經過 `ExecutionContext::GetTaskRunner(TaskType)`；DevTools 經過 `probe::` 當場送；導覽經過 `LocalFrameClient::BeginNavigation` 在 setter 裡同步送 `BeginNavigation`；task 之間的工作是 `TaskObserver`（`IdlenessDetector`、DevTools 的通知在每個 task 之後 flush）、idle period 和 rendering 的步驟；scheduler 先看優先度，同一級裡跨 queue 取 enqueue order 最舊的。沒有「通道空了才做」的外圈。
 - **HTML**：event loop 每一輪取一個 task、microtask checkpoint、必要時 update the rendering；timer、parser、導覽都是 task source 的 task。
 - 其他瀏覽器沒有對照。
 
 ## 已決定的事項
 
-無。
+1. **開始做第 0 階段**（2026-11-24，使用者要求）：只評估、不改產品。
+2. **原型用「通道一直有 task 時的 timer」比**（2026-11-24，使用者同意）：T1、T2 的原型都要讓它從必壞變成必過，再比改動、成本和兩個 engine 各要做什麼。理由：它是外圈最根本的問題（內圈不停、外圈的工作一直晚），也是 DOM 的 task 進 scheduler 的兩種做法差別最大的地方；導覽和 DevTools 的事件是當場做的 hook，和 DOM 的 task 怎麼排無關，不用原型比。
+3. **DOM 的 task 用 T1：排的當下告訴 scheduler**（2026-11-24，使用者同意；原本「待決定」的第 2 條）：`dom` 擁有 host 設的 `TaskWaker`，排 task 時送一個記號、timer 的記號在到期時排進 scheduler（編號在那時給，和 Chrome 的 delayed task 到期時才拿到 enqueue order 一樣），scheduler 輪到記號時跑一個 DOM 的 task；task 的內容照 RFC 0110 留在 `dom`。理由：和 Blink 一樣（`ExecutionContext::GetTaskRunner(type)->PostTask`），順序只在 scheduler 一個地方決定；waker 在 `dom` 裡，兩個 engine 一處設好（`make_engine`）；之後 `until_next_due` 不用再問 DOM 的 timer。代價：DOM 每排一個 task 多一次 scheduler 的 lock 和 push；取消的 task 留下的記號要跑到才知道沒有事。不選 T2（scheduler 取 task 時問 DOM）：改動比較少（+62 對 +107 行），但順序由內圈的程式比兩邊，每個 engine 都要實作查詢（原型的 wasm engine 沒有），順序比 Chrome 早。不選 T3（只把 `run_due_tasks` 搬進內圈）：順序還是清單決定的。原型和比較在 `details.md` 的「原型」。
+4. **範圍：拿掉整個外圈**（2026-11-24，使用者同意；原本「待決定」的第 1 條；A）：外圈的每一步照 `details.md` 的盤點去它在 Chrome 的位置（當場、scheduler 的 task、每個 task 之後），只有 blob URL 的撤銷（`flush_revoked`）例外，留給導覽帶著解析好的 blob 那一份。理由：只做導覽、DevTools 的事件和 DOM 的 task（B）時外圈還在，剩下的步驟照樣會晚，之後還要另一份 RFC 才拿得掉；盤點之後每一步在 Chrome 都有明確的位置，沒有要另外設計的。代價：parser、commit 和 renderer 自己的 timer 都改成 task，WPT 的時序要整套重看（CI）。
+5. **分五段**（2026-11-24，使用者同意）：照「分階段」的第 1 到 5 段，由小到大，每段做完可以先 merge。理由：DevTools 的事件和導覽是當場做的 hook，不牽動 event loop，先做風險最低；DOM 的 task 要先進 scheduler，renderer 自己的工作才有一致的規則可循；拿掉外圈放最後，那時剩下的步驟最少。
 
 ## 待決定
 
-1. **範圍**：盤點之後決定外圈的哪些步驟這份要改，哪些記成和 Chrome 不同、留著。
-2. **DOM 的 task 怎麼進 scheduler**：T1、T2 或 T3，第 0 階段的原型比較之後決定。2026-11-24 的看法：T1（和 Blink 一樣，順序由 scheduler 決定），前提是取消時兩邊對得上。
-3. **導覽的帳在哪裡**：搬進 `dom`、由 engine 當參數帶，或 hook 當場送、renderer 在呼叫之後對照（RFC 0110 第 22 條的做法）。
-4. **同一個 task 裡連續的導覽**：照 Chrome 每個都送、Browser 取消前一個，還是保留第 24 條的「只留最後一個」。
+1. **導覽的帳在哪裡**：搬進 `dom`、由 engine 當參數帶，或 hook 當場送、renderer 在呼叫之後對照（RFC 0110 第 22 條的做法）。
+2. **同一個 task 裡連續的導覽**：照 Chrome 每個都送、Browser 取消前一個，還是保留第 24 條的「只留最後一個」。
 
 ## 之後的可能
 

@@ -1,0 +1,287 @@
+diff --git a/crates/dom/src/lib.rs b/crates/dom/src/lib.rs
+index 7e3aedf1..e7a1015f 100644
+--- a/crates/dom/src/lib.rs
++++ b/crates/dom/src/lib.rs
+@@ -215,7 +215,7 @@ pub use storage::{
+ pub use style_sheet::{CssStyleSheet, SheetContents, SheetMedia};
+ pub use svg::{SvgAnimatedString, SvgMatrix, SvgPoint, SvgRect};
+ pub use svg_use::MAX_COPIES;
+-pub use tasks::{NextTask, TaskQueue};
++pub use tasks::{NextTask, TaskQueue, TaskWaker};
+ pub use text_control::{SelectionDirection, SelectionMode, TextArea, TextSelection};
+ pub use traversal::{NodeIterator, Traversal, TraversalRoot, TreeWalker};
+ pub use tree::DOCUMENT_POSITION_FOLLOWING;
+@@ -909,6 +909,9 @@ struct Changes {
+     /// What wakes this DOM's thread for its ports' messages from other
+     /// threads (`Dom::set_port_waker`).
+     port_waker: Option<message_pipe::PortWaker>,
++    /// What tells the host's scheduler of each task queued, and when a
++    /// timer is due (`Dom::set_task_waker`).
++    task_waker: Option<tasks::TaskWaker>,
+     /// The documents whose window's `load` task ran, until the host takes
+     /// them (`Dom::take_loaded_documents`).
+     loaded_documents: Cell<Vec<NodeId>>,
+@@ -1045,6 +1048,14 @@ impl Dom {
+         self.changes.port_waker = Some(waker);
+     }
+ 
++    /// What tells the host's scheduler of each task queued (`None`: due
++    /// now) and of when each timer is due, as Blink posts each to its
++    /// frame's task runner: the host runs the DOM's tasks as its scheduler
++    /// takes them in turn with its own.
++    pub fn set_task_waker(&mut self, waker: tasks::TaskWaker) {
++        self.changes.task_waker = Some(waker);
++    }
++
+     /// Runs an operation: a binding's call. The heap may collect first.
+     pub fn mutate<R>(&mut self, f: impl for<'gc> FnOnce(&Cx<'_, 'gc>) -> R) -> R {
+         ::base::census::count(::base::census::Kind::Mutate);
+diff --git a/crates/dom/src/tasks.rs b/crates/dom/src/tasks.rs
+index a5bf7f6b..cbfac35e 100644
+--- a/crates/dom/src/tasks.rs
++++ b/crates/dom/src/tasks.rs
+@@ -35,6 +35,10 @@ pub enum TaskQueue {
+     Message,
+ }
+ 
++/// What tells the host's scheduler of the DOM's tasks: `None` for one due
++/// now, the instant a timer is due otherwise (`Dom::set_task_waker`).
++pub type TaskWaker = Box<dyn Fn(Option<std::time::Instant>)>;
++
+ /// A window's next task: when it may run (milliseconds since the DOM was
+ /// made), its number, and its queue.
+ #[derive(Debug, Clone, Copy, PartialEq)]
+@@ -98,9 +102,22 @@ impl<'gc> Cx<'_, 'gc> {
+     /// `has_queued_tasks` is set.
+     pub(crate) fn stamp_queued_task(&self) -> (f64, u64) {
+         self.changes.tasks_queued.set(true);
++        self.wake_for_task(None);
+         (self.dom_now(), self.next_task_number())
+     }
+ 
++    /// The host's scheduler told of a task: due now (`None`), or at `at`
++    /// on the DOM's clock (`dom_now`'s milliseconds).
++    pub(crate) fn wake_for_task(&self, at: Option<f64>) {
++        if let Some(waker) = &self.changes.task_waker {
++            let at = at.and_then(|ms| {
++                self.origin
++                    .checked_add(std::time::Duration::from_secs_f64(ms.max(0.0) / 1000.0))
++            });
++            waker(at);
++        }
++    }
++
+     /// Whether a task of number `number` may run now: in a pass, only one
+     /// numbered before it began.
+     pub(crate) fn task_may_run(&self, number: u64) -> bool {
+diff --git a/crates/dom/src/window.rs b/crates/dom/src/window.rs
+index 23b28c20..de0015b8 100644
+--- a/crates/dom/src/window.rs
++++ b/crates/dom/src/window.rs
+@@ -1157,6 +1157,7 @@ impl<'gc> Cx<'_, 'gc> {
+             }
+         };
+         timers.push(self.gc, timer);
++        self.wake_for_task(Some(timer.due.get() + context.time_origin.get()));
+         timer
+     }
+ 
+@@ -1356,6 +1357,7 @@ impl<'gc> Cx<'_, 'gc> {
+                 timer.due.set(now + interval);
+                 // Set again: a task numbered after those queued meanwhile.
+                 timer.number.set(self.next_task_number());
++                self.wake_for_task(Some(now + interval + context.time_origin.get()));
+             }
+             None => {
+                 timers.remove(self.gc, index);
+diff --git a/crates/renderer/src/render_thread.rs b/crates/renderer/src/render_thread.rs
+index 6e1369a5..4b500ac6 100644
+--- a/crates/renderer/src/render_thread.rs
++++ b/crates/renderer/src/render_thread.rs
+@@ -776,6 +776,12 @@ impl RenderThread {
+             }
+             // Run with the DOM's tasks, as the loop next does.
+             MainThreadTask::PortMessages => true,
++            // Its due tasks, in its order, now that the scheduler took
++            // the turn it queued.
++            MainThreadTask::DomTasks => {
++                self.run_due_tasks();
++                true
++            }
+             MainThreadTask::NavigationBody {
+                 frame,
+                 navigation_id,
+diff --git a/crates/renderer/src/render_thread/devtools.rs b/crates/renderer/src/render_thread/devtools.rs
+index bfea34e0..7c9b204a 100644
+--- a/crates/renderer/src/render_thread/devtools.rs
++++ b/crates/renderer/src/render_thread/devtools.rs
+@@ -218,6 +218,10 @@ impl RenderThread {
+             to_browser: self.to_browser.clone(),
+             scheduler: self.scheduler.clone(),
+         }));
++        // The DOM's tasks taken in turn with the thread's own.
++        engine
++            .dom_mut()
++            .set_task_waker(self.scheduler.dom_task_waker());
+         // What every frame's `navigator` answers, a new iframe's too.
+         engine
+             .dom_mut()
+diff --git a/crates/renderer/src/task_queue.rs b/crates/renderer/src/task_queue.rs
+index 004f564b..ffcc1b4c 100644
+--- a/crates/renderer/src/task_queue.rs
++++ b/crates/renderer/src/task_queue.rs
+@@ -44,6 +44,9 @@ pub(crate) enum MainThreadTask {
+     /// From another thread: the DOM's message ports may have messages
+     /// (`dom::PortWaker`), which the loop runs as it runs the DOM's tasks.
+     PortMessages,
++    /// The DOM queued a task, or one of its timers came due
++    /// (`dom::TaskWaker`): its due tasks run, in its own order.
++    DomTasks,
+     /// From the network service's thread: the body of the document
+     /// navigation `navigation_id` sent `frame` to commit has more in its
+     /// pipe, or its pipe is over (the pipe's watcher, Blink's
+@@ -73,16 +76,20 @@ pub(crate) enum TaskQueue {
+     /// What dedicated workers send their `Worker`s (Blink posts them to
+     /// the posted message task source's queue).
+     Worker,
++    /// The DOM's tasks (its timers, element tasks and messages): Blink's
++    /// frame task queues by task type, in one.
++    Dom,
+ }
+ 
+ impl TaskQueue {
+-    const ALL: [Self; 6] = [
++    const ALL: [Self; 7] = [
+         Self::Browser,
+         Self::Rendering,
+         Self::Input,
+         Self::DevTools,
+         Self::Canvas,
+         Self::Worker,
++        Self::Dom,
+     ];
+ 
+     fn index(self) -> usize {
+@@ -96,7 +103,7 @@ pub(crate) struct TaskQueues(u8);
+ 
+ impl TaskQueues {
+     /// The event loop's: every queue.
+-    pub(crate) const ALL: Self = Self(0b11_1111);
++    pub(crate) const ALL: Self = Self(0b111_1111);
+     /// DevTools' alone.
+     pub(crate) const DEVTOOLS: Self = Self(1 << TaskQueue::DevTools as u8);
+     /// The rendering's alone.
+@@ -122,7 +129,11 @@ struct Queued {
+ 
+ #[derive(Default)]
+ struct State {
+-    queues: [VecDeque<Queued>; 6],
++    queues: [VecDeque<Queued>; 7],
++    /// The DOM's timers not due yet: each queued in `TaskQueue::Dom` as it
++    /// comes due, numbered then (Blink's delayed tasks take their place
++    /// in the order as they become ready).
++    delayed: std::collections::BinaryHeap<std::cmp::Reverse<Instant>>,
+     /// The next task's number, from 1: 0 is what was put back first
+     /// (`put_back`).
+     next: u64,
+@@ -137,6 +148,31 @@ struct State {
+ }
+ 
+ impl State {
++    /// The DOM's timers due by now, queued in their turn.
++    fn queue_due(&mut self) {
++        let now = Instant::now();
++        while self
++            .delayed
++            .peek()
++            .is_some_and(|std::cmp::Reverse(at)| *at <= now)
++        {
++            self.delayed.pop();
++            #[expect(
++                clippy::arithmetic_side_effects,
++                reason = "one per task the main thread is given: a u64 lasts centuries"
++            )]
++            {
++                self.next += 1;
++            }
++            let sequence = self.next;
++            self.queues[TaskQueue::Dom.index()].push_back(Queued {
++                sequence,
++                task: MainThreadTask::DomTasks,
++                interrupt: false,
++            });
++        }
++    }
++
+     /// The queue among `queues` whose first task was posted earliest.
+     fn earliest(&self, queues: TaskQueues) -> Option<TaskQueue> {
+         TaskQueue::ALL
+@@ -211,6 +247,8 @@ impl MainThreadScheduler {
+             if state.closed {
+                 return Err(RendererGone);
+             }
++            // A timer due before this task came is before it.
++            state.queue_due();
+             #[expect(
+                 clippy::arithmetic_side_effects,
+                 reason = "one per task the main thread is given: a u64 lasts centuries"
+@@ -282,6 +320,27 @@ impl MainThreadScheduler {
+ 
+     /// What wakes the main thread for its ports' messages from workers'
+     /// threads (a task in the queue of what workers send).
++    /// What the main thread's DOM tells of its tasks (`dom::TaskWaker`):
++    /// one due now queued in `TaskQueue::Dom`, a timer's held until it is
++    /// due. On the main thread alone, which owns the DOM.
++    pub(crate) fn dom_task_waker(self: &Arc<Self>) -> dom::TaskWaker {
++        let scheduler = Arc::downgrade(self);
++        Box::new(move |at| {
++            let Some(scheduler) = scheduler.upgrade() else {
++                return;
++            };
++            match at.filter(|at| *at > Instant::now()) {
++                Some(at) => {
++                    scheduler.lock().delayed.push(std::cmp::Reverse(at));
++                    scheduler.ready.notify_one();
++                }
++                None => {
++                    let _ = scheduler.post(TaskQueue::Dom, MainThreadTask::DomTasks, false);
++                }
++            }
++        })
++    }
++
+     pub(crate) fn port_waker(self: &Arc<Self>) -> dom::PortWaker {
+         let scheduler = Arc::downgrade(self);
+         Arc::new(move || {
+@@ -393,6 +452,7 @@ impl MainThreadScheduler {
+         let deadline = timeout.and_then(|timeout| Instant::now().checked_add(timeout));
+         let mut state = self.lock();
+         loop {
++            state.queue_due();
+             if let Some(queue) = state.earliest(queues) {
+                 return state.queues[queue.index()]
+                     .pop_front()
+@@ -425,6 +485,7 @@ impl MainThreadScheduler {
+     /// The earliest task of `queues`, if there is one.
+     pub(crate) fn try_next(&self, queues: TaskQueues) -> Option<MainThreadTask> {
+         let mut state = self.lock();
++        state.queue_due();
+         let queue = state.earliest(queues)?;
+         state.queues[queue.index()]
+             .pop_front()
+@@ -436,6 +497,7 @@ impl MainThreadScheduler {
+     pub(crate) fn wait_for(&self, queues: TaskQueues) -> TaskQueue {
+         let mut state = self.lock();
+         loop {
++            state.queue_due();
+             if let Some(queue) = state.earliest(queues) {
+                 return queue;
+             }
+@@ -709,6 +771,7 @@ mod tests {
+             MainThreadTask::FetchFailed { fetch } => format!("fetch failed {fetch}"),
+             MainThreadTask::Worker { id, .. } => format!("worker {id}"),
+             MainThreadTask::PortMessages => "ports".to_owned(),
++            MainThreadTask::DomTasks => "dom".to_owned(),
+             MainThreadTask::NavigationBody { navigation_id, .. } => {
+                 format!("navigation body {navigation_id}")
+             }
