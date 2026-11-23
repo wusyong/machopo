@@ -10,7 +10,8 @@ use std::sync::Arc;
 use dom::NodeKind;
 use gfx::{NodeId, PointF, RectF};
 use layout::{
-    BoxFragment, ScrollAnchorNode, ScrollOffsets, find_scroll_anchor, scroll_anchor_offset,
+    BoxFragment, BoxTree, ScrollAnchorNode, ScrollOffsets, find_scroll_anchor,
+    scroll_anchor_offset, scroll_anchor_offset_walked_for_testing,
 };
 
 use crate::page::{Page, VIEWPORT, each_node};
@@ -19,6 +20,7 @@ const STYLE: &str =
     "<style>html, body { margin: 0 } body { font: 20px/1 Ahem } div { height: 100px }</style>";
 
 struct Laid {
+    tree: BoxTree,
     view: Arc<BoxFragment>,
     /// Each element with an `id` by it, and its first text node by
     /// `"<id> text"`.
@@ -45,10 +47,11 @@ fn lay_out(html: &str) -> Laid {
         });
         ids
     });
-    Laid {
-        view: page.tree.layout(VIEWPORT),
-        ids,
-    }
+    let view = page.tree.layout(VIEWPORT);
+    // Not the page: a test lays out more than one, and a thread reads
+    // one DOM at a time.
+    let Page { tree, .. } = page;
+    Laid { tree, view, ids }
 }
 
 impl Laid {
@@ -314,14 +317,16 @@ fn the_offset_of_an_anchor() {
          <div id=n style='display: none'></div><div style='height: 2000px'></div>",
     );
     let offset = |anchor, y: f32| {
-        scroll_anchor_offset(
-            &laid.view,
-            &ScrollOffsets::default(),
-            &Default::default(),
-            None,
-            RectF::new(0.0, y, VIEWPORT.width, VIEWPORT.height),
-            anchor,
-        )
+        let viewport = RectF::new(0.0, y, VIEWPORT.width, VIEWPORT.height);
+        let (scroll, sticky) = (ScrollOffsets::default(), Default::default());
+        let found = scroll_anchor_offset(
+            &laid.tree, &laid.view, &scroll, &sticky, None, viewport, anchor,
+        );
+        let walked = scroll_anchor_offset_walked_for_testing(
+            &laid.view, &scroll, &sticky, None, viewport, anchor,
+        );
+        assert_eq!(found, walked);
+        found
     };
     assert_eq!(
         offset(ScrollAnchorNode::Box(laid.ids["b"]), 30.0),

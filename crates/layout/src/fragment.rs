@@ -664,12 +664,14 @@ pub struct OutOfFlowPlace {
 }
 
 /// The first and the last of a fragment's lines each inline element has a
-/// box on, by element (with its pseudo-elements' boxes): a query of one
-/// element of a paragraph looks at its lines, not at all of them, which,
-/// read for each of the paragraph's elements, would be quadratic. Blink's `LayoutInline` keeps its first `FragmentItem`
-/// (`FirstInlineFragmentItemIndex`), and each item the way to the next of
-/// the same element; here only the first and last lines: going by the
-/// other boxes on an element's lines costs much only in deep nests.
+/// box on (with its pseudo-elements' boxes) and each text node a run on,
+/// by node: a query of one element or text of a paragraph looks at its
+/// lines, not at all of them, which, read for each of the paragraph's
+/// nodes, would be quadratic. Blink's `LayoutInline` and `LayoutText` keep
+/// their first `FragmentItem` (`FirstInlineFragmentItemIndex`), and each
+/// item the way to the next of the same object; here only the first and
+/// last lines: going by the others on a node's lines costs much only in
+/// deep nests.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct InlineLines(Vec<(NodeId, u32, u32)>);
 
@@ -683,7 +685,13 @@ impl InlineLines {
                 // Saturates: a line is far larger than a byte, so no box
                 // has `u32::MAX` of them.
                 let at = u32::try_from(at).unwrap_or(u32::MAX);
-                line.boxes.iter().map(move |b| (b.node, at))
+                let runs = line.runs.iter();
+                let texts = runs.filter_map(|run| run.source.as_ref().map(|(node, _)| *node));
+                line.boxes
+                    .iter()
+                    .map(|b| b.node)
+                    .chain(texts)
+                    .map(move |node| (node, at))
             })
             .collect();
         on.sort_unstable();
@@ -697,10 +705,10 @@ impl InlineLines {
         Self(index)
     }
 
-    /// `element`'s lines of `lines` (those it was made from): empty
-    /// without a box on them.
-    pub fn of<'a>(&self, lines: &'a [LineFragment], element: NodeId) -> &'a [LineFragment] {
-        let found = self.0.binary_search_by_key(&element, |&(node, _, _)| node);
+    /// `node`'s lines of `lines` (those it was made from): empty without a
+    /// box or a run on them.
+    pub fn of<'a>(&self, lines: &'a [LineFragment], node: NodeId) -> &'a [LineFragment] {
+        let found = self.0.binary_search_by_key(&node, |&(on, _, _)| on);
         let Some(&(_, first, last)) = found.ok().and_then(|at| self.0.get(at)) else {
             return &[];
         };

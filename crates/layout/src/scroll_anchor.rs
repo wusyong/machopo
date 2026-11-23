@@ -13,7 +13,7 @@ use gfx::NodeId;
 use gfx::{PointF, RectF, Transform};
 
 use crate::geometry::{ScrollOffsets, box_transform, stuck};
-use crate::{BoxFragment, StickyOffsets};
+use crate::{BoxFragment, BoxTree, StickyOffsets};
 
 /// What a scroll anchor is: an element's box, or a text node's text
 /// (Blink anchors a `LayoutText` as it does a box).
@@ -75,9 +75,41 @@ pub fn find_scroll_anchor(
 }
 
 /// How far `anchor`'s top is below the top of what `scroller` shows now
-/// (Blink's `ComputeRelativeOffset`); `None` if the scroller or the anchor
-/// has no box.
+/// (Blink's `ComputeRelativeOffset`), in `layout_view`, `tree`'s last
+/// layout: the scroller and the anchor found from their boxes, as Blink's
+/// `ScrollAnchor::Adjust` goes up from the anchor's `LayoutObject`, not
+/// through the whole tree after each layout. `None` if the scroller or the
+/// anchor has no box.
 pub fn scroll_anchor_offset(
+    tree: &BoxTree,
+    layout_view: &BoxFragment,
+    scroll: &ScrollOffsets,
+    sticky: &StickyOffsets,
+    scroller: Option<NodeId>,
+    viewport: RectF,
+    anchor: ScrollAnchorNode,
+) -> Option<f32> {
+    let port = match scroller {
+        None => viewport_port(layout_view, viewport),
+        Some(element) => {
+            let path = tree.own_path(layout_view, element)?;
+            port_on(layout_view, &path, scroll, sticky, element)?
+        }
+    };
+    // The page unscrolled: in the root's space, as `port` is.
+    let unscrolled = PointF::new(0.0, 0.0);
+    let geometry = tree.geometry(layout_view, unscrolled, scroll, sticky);
+    let rects = match anchor {
+        ScrollAnchorNode::Box(element) => geometry.client_rects(element),
+        ScrollAnchorNode::Text(text) => geometry.text_rects(text, 0, u32::MAX),
+    };
+    let top = rects.iter().map(|rect| rect.y).reduce(f32::min)?;
+    Some(top - port.visible.y)
+}
+
+/// `scroll_anchor_offset` found by walking from the root, as the anchor is
+/// picked: for tests, against it.
+pub fn scroll_anchor_offset_walked_for_testing(
     layout_view: &BoxFragment,
     scroll: &ScrollOffsets,
     sticky: &StickyOffsets,
@@ -86,7 +118,6 @@ pub fn scroll_anchor_offset(
     anchor: ScrollAnchorNode,
 ) -> Option<f32> {
     let port = scrollport(layout_view, scroll, sticky, scroller, viewport)?;
-    // The page unscrolled: in the root's space, as `port` is.
     let unscrolled = PointF::new(0.0, 0.0);
     let rects = match anchor {
         ScrollAnchorNode::Box(element) => {
@@ -118,12 +149,7 @@ fn scrollport<'a>(
     viewport: RectF,
 ) -> Option<Scrollport<'a>> {
     let Some(element) = scroller else {
-        return Some(Scrollport {
-            visible: viewport,
-            fragment: layout_view,
-            offset: PointF::new(0.0, 0.0),
-            contents: Transform::IDENTITY,
-        });
+        return Some(viewport_port(layout_view, viewport));
     };
     fn find<'a>(
         fragment: &'a BoxFragment,
@@ -134,23 +160,8 @@ fn scrollport<'a>(
         element: NodeId,
     ) -> Option<Scrollport<'a>> {
         let place = Place::of(fragment, offset, to_root, scroll, sticky);
-        if fragment.node == Some(element)
-            && fragment.pseudo.is_none()
-            && fragment.style.is_scroll_container()
-        {
-            let (b, size) = (&fragment.border, fragment.size);
-            let padding_box = RectF::new(
-                place.offset.x + b.left,
-                place.offset.y + b.top,
-                size.width - b.left - b.right,
-                size.height - b.top - b.bottom,
-            );
-            return Some(Scrollport {
-                visible: place.to_root.map_rect(padding_box),
-                fragment,
-                offset: place.offset,
-                contents: place.contents,
-            });
+        if let Some(port) = port_of(fragment, &place, element) {
+            return Some(port);
         }
         fragment.children.iter().find_map(|child| {
             let at = PointF::new(
@@ -168,6 +179,95 @@ fn scrollport<'a>(
         sticky,
         element,
     )
+}
+
+/// The viewport as a scroller: what it shows, and the root's content.
+fn viewport_port(layout_view: &BoxFragment, viewport: RectF) -> Scrollport<'_> {
+    Scrollport {
+        visible: viewport,
+        fragment: layout_view,
+        offset: PointF::new(0.0, 0.0),
+        contents: Transform::IDENTITY,
+    }
+}
+
+/// Scroll container `element`'s scrollport if `fragment`, placed at
+/// `place`, is its box.
+fn port_of<'a>(
+    fragment: &'a BoxFragment,
+    place: &Place,
+    element: NodeId,
+) -> Option<Scrollport<'a>> {
+    if fragment.node != Some(element)
+        || fragment.pseudo.is_some()
+        || !fragment.style.is_scroll_container()
+    {
+        return None;
+    }
+    let (b, size) = (&fragment.border, fragment.size);
+    let padding_box = RectF::new(
+        place.offset.x + b.left,
+        place.offset.y + b.top,
+        size.width - b.left - b.right,
+        size.height - b.top - b.bottom,
+    );
+    Some(Scrollport {
+        visible: place.to_root.map_rect(padding_box),
+        fragment,
+        offset: place.offset,
+        contents: place.contents,
+    })
+}
+
+/// `scrollport` of `element` down `path` (its box's, `BoxTree::path`):
+/// each fragment on the way placed as the walk places it.
+fn port_on<'a>(
+    layout_view: &'a BoxFragment,
+    path: &[u32],
+    scroll: &ScrollOffsets,
+    sticky: &StickyOffsets,
+    element: NodeId,
+) -> Option<Scrollport<'a>> {
+    let (mut fragment, mut offset, mut to_root) =
+        (layout_view, PointF::new(0.0, 0.0), Transform::IDENTITY);
+    for &child in path {
+        let place = Place::of(fragment, offset, to_root, scroll, sticky);
+        let child = fragment.children.get(usize::try_from(child).ok()?)?;
+        offset = PointF::new(
+            place.offset.x + child.offset.x,
+            place.offset.y + child.offset.y,
+        );
+        to_root = place.contents;
+        fragment = &child.fragment;
+    }
+    port_of(
+        fragment,
+        &Place::of(fragment, offset, to_root, scroll, sticky),
+        element,
+    )
+}
+
+/// Those of `containers` that are scroll containers in `layout_view`,
+/// `tree`'s last layout, in tree order (as their boxes' paths sort), which
+/// is the order their anchors adjust in: from their boxes, not by walking
+/// the tree.
+pub fn scroll_containers_in_tree_order(
+    tree: &BoxTree,
+    layout_view: &BoxFragment,
+    containers: impl IntoIterator<Item = NodeId>,
+) -> Vec<NodeId> {
+    let mut found: Vec<(Vec<u32>, NodeId)> = containers
+        .into_iter()
+        .filter_map(|element| {
+            let path = tree.own_path(layout_view, element)?;
+            let scrolls = tree
+                .fragment_of(layout_view, element)
+                .is_some_and(|fragment| fragment.style.is_scroll_container());
+            scrolls.then_some((path, element))
+        })
+        .collect();
+    found.sort_unstable();
+    found.into_iter().map(|(_, element)| element).collect()
 }
 
 /// Where a fragment is, as `geometry`'s walk places it: its border box's

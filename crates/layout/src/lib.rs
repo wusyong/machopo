@@ -120,7 +120,10 @@ pub use geometry::{
 pub use platform_fonts::{PlatformFont, platform_fonts};
 use replaced::Replaced;
 pub use replaced::{ImageState, Images};
-pub use scroll_anchor::{ScrollAnchorNode, find_scroll_anchor, scroll_anchor_offset};
+pub use scroll_anchor::{
+    ScrollAnchorNode, find_scroll_anchor, scroll_anchor_offset,
+    scroll_anchor_offset_walked_for_testing, scroll_containers_in_tree_order,
+};
 pub use sticky::{
     StickyConstraints, StickyKey, StickyOffsets, StickyPositions, StickyReaches, StickyState,
     sticks,

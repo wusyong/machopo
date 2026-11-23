@@ -8,7 +8,7 @@ use dom::{Cx, NodeRef};
 use gfx::PointF;
 use layout::{Geometry, ScrollOffsets, StickyOffsets};
 
-use crate::page::{Page, find, html};
+use crate::page::{Page, assert_texts_found_from_boxes, find, html};
 
 /// `query` of the geometry of `page`'s last check, unscrolled.
 fn with_geometry<R>(page: &Page, query: impl FnOnce(&Geometry<'_>) -> R) -> R {
@@ -150,17 +150,25 @@ fn boxes_are_found_after_changes() {
         &page,
         &["outer", "inner", "abs", "one", "two", "span", "to"],
     );
+    // The texts too, on the tree changed (each check holds them on one
+    // built afresh, to leave what the changed one laid out as it was).
+    assert_texts_found_from_boxes(&page.tree, &page.view(), page.viewport);
 }
 
 /// A query goes into the fragments on the way to the box, not into its
-/// siblings: ten times as many leaves it the same.
+/// siblings: ten times as many leaves it the same. A text's from the box
+/// its lines are in; an SVG element's from its outermost `<svg>`'s.
 #[test]
 fn a_query_goes_down_only_to_the_box() {
     let entered = |rows: usize| {
         let mut html = String::from("<div><section>");
         for i in 0..rows {
             if i == rows / 2 {
-                html.push_str("<p id=middle>middle <span id=span>span</span></p>");
+                html.push_str(
+                    "<p id=middle>middle <span id=span>span</span></p>\
+                     <svg id=svg width=50 height=50><g><rect id=rect width=10 height=10 />\
+                     <text id=text y=20>svg</text></g></svg>",
+                );
             } else {
                 html.push_str("<p>row</p>");
             }
@@ -176,6 +184,17 @@ fn a_query_goes_down_only_to_the_box() {
                 assert!(geometry.box_quads(node).is_some());
             }
             assert!(geometry.scroll_size(page.id("middle")).is_some());
+            let text = text_in(&page, "middle");
+            assert!(!geometry.text_rects(text, 0, u32::MAX).is_empty());
+            page.read(|cx, document| {
+                let svg = |id| layout::svg_element(cx, &page.token, find(cx, document, id));
+                for id in ["svg", "rect", "text"] {
+                    assert!(geometry.svg_geometry(svg(id)).is_some(), "#{id}");
+                }
+                assert!(geometry.svg_node(svg("rect")).is_some());
+                assert!(geometry.svg_shape_path(svg("rect")).is_some());
+                assert!(!geometry.svg_text_chars(svg("text")).is_empty());
+            });
             geometry.entered_for_testing()
         })
     };
@@ -184,9 +203,21 @@ fn a_query_goes_down_only_to_the_box() {
     assert_eq!(entered(200), few);
 }
 
+/// The first text node in the element whose `id` is `id`.
+fn text_in(page: &Page, id: &str) -> gfx::NodeId {
+    page.read(|cx, document| {
+        let mut child = cx.first_child(find(cx, document, id));
+        while let Some(c) = child.filter(|c| cx.kind(*c) != dom::NodeKind::Text) {
+            child = cx.next_sibling(c);
+        }
+        cx.node_id(child.expect("a text"))
+    })
+}
+
 /// A query of an inline element looks at the lines it has boxes on, not
 /// at all of its paragraph's: ten times as many elements around it leave
-/// it the same; and an element over lines looks at each of them once.
+/// it the same; and an element over lines looks at each of them once. A
+/// text's at the lines it has runs on, the same.
 #[test]
 fn a_query_looks_only_at_the_elements_lines() {
     let looked_at = |spans: usize| {
@@ -206,6 +237,9 @@ fn a_query_looks_only_at_the_elements_lines() {
             assert_eq!(geometry.client_rects(node).len(), 1);
             assert_eq!(geometry.border_quads(node).len(), 1);
             assert!(geometry.box_quads(node).is_some());
+            let text = text_in(&page, "middle");
+            assert_eq!(geometry.text_rects(text, 0, u32::MAX).len(), 1);
+            assert_eq!(geometry.text_rects(text, 2, 2).len(), 1);
             geometry.lines_for_testing()
         })
     };
@@ -218,6 +252,13 @@ fn a_query_looks_only_at_the_elements_lines() {
     );
     with_geometry(&page, |geometry| {
         let rects = geometry.client_rects(page.id("over")).len();
+        assert!(rects > 2, "over lines");
+        assert_eq!(geometry.lines_for_testing(), rects);
+    });
+    with_geometry(&page, |geometry| {
+        let rects = geometry
+            .text_rects(text_in(&page, "over"), 0, u32::MAX)
+            .len();
         assert!(rects > 2, "over lines");
         assert_eq!(geometry.lines_for_testing(), rects);
     });

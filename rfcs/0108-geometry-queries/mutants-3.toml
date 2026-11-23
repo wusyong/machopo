@@ -1,0 +1,134 @@
+# Stage 3: a text's rects from its box and its lines, the SVG queries from
+# the outermost <svg>'s box, the caret's block and an iframe's box from
+# their boxes, and scroll anchoring after layout by the boxes' paths.
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it"]
+timeout = 900
+
+[[mutant]]
+name = "a text's runs aren't in the lines' index"
+file = "crates/layout/src/fragment.rs"
+from = '''                    .chain(texts)'''
+to = '''                    .chain(texts.take(0))'''
+
+[[mutant]]
+name = "a text is looked for in the element index"
+file = "crates/layout/src/geometry.rs"
+from = '''            .texts
+            .get(&text)
+            .and_then(|&index| self.tree.path(self.layout_view, index));'''
+to = '''            .elements
+            .get(&text)
+            .and_then(|&index| self.tree.path(self.layout_view, index));'''
+
+[[mutant]]
+name = "a text's query looks at all of its block's lines"
+file = "crates/layout/src/geometry.rs"
+from = '''            found.on(self.lines_of(fragment, text), offset, &contents);'''
+to = '''            found.on(&fragment.lines, offset, &contents);'''
+
+[[mutant]]
+name = "a text's rects aren't mapped from its block"
+file = "crates/layout/src/geometry.rs"
+from = '''            found.on(self.lines_of(fragment, text), offset, &contents);'''
+to = '''            found.on(self.lines_of(fragment, text), PointF::new(0.0, 0.0), &contents);'''
+
+[[mutant]]
+name = "an element's fragment stops a step short"
+file = "crates/layout/src/geometry.rs"
+from = '''        let path = self.own_path(layout_view, element)?;
+        path.iter().try_fold(layout_view, |fragment, &child| {'''
+to = '''        let path = self.own_path(layout_view, element)?;
+        path[..path.len() - 1].iter().try_fold(layout_view, |fragment, &child| {'''
+
+[[mutant]]
+name = "the box an <svg> is in isn't moved to"
+file = "crates/layout/src/geometry.rs"
+from = '''        Some((fragment, mapping.then(&to_box)))
+    }'''
+to = '''        let _ = to_box;
+        Some((fragment, mapping))
+    }'''
+
+[[mutant]]
+name = "an SVG element is found from the root's box"
+file = "crates/layout/src/svg_geometry.rs"
+from = '''        let found = find(|top| self.box_to_viewport(top), element)?;'''
+to = '''        let found = find(|_| self.box_to_viewport(NodeId::from_raw(1)), element)?;'''
+
+[[mutant]]
+name = "an SVG shape's node isn't found"
+file = "crates/layout/src/svg_geometry.rs"
+from = '''        node_of(find(|top| self.box_to_viewport(top), element)?)'''
+to = '''        node_of(find(|_| None, element)?)'''
+
+[[mutant]]
+name = "SVG text's characters aren't found"
+file = "crates/layout/src/svg_geometry.rs"
+from = '''        find(|top| self.box_to_viewport(top), element)
+            .map_or_else(Vec::new, |found| text_chars_of(found, element))'''
+to = '''        find(|_| None, element)
+            .map_or_else(Vec::new, |found| text_chars_of(found, element))'''
+
+[[mutant]]
+name = "what isn't a scroll container is in the anchoring order"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''                .is_some_and(|fragment| fragment.style.is_scroll_container());'''
+to = '''                .is_some();'''
+
+[[mutant]]
+name = "the anchoring order isn't the tree's"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''    found.sort_unstable();
+    found.into_iter().map(|(_, element)| element).collect()'''
+to = '''    found.into_iter().map(|(_, element)| element).collect()'''
+
+[[mutant]]
+name = "a scroller's port doesn't follow what scrolls around it"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''        to_root = place.contents;
+        fragment = &child.fragment;'''
+to = '''        to_root = place.to_root;
+        fragment = &child.fragment;'''
+
+[[mutant]]
+name = "a scroller's port isn't placed where its ancestors are"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''        offset = PointF::new(
+            place.offset.x + child.offset.x,
+            place.offset.y + child.offset.y,
+        );'''
+to = '''        offset = PointF::new(
+            child.offset.x,
+            child.offset.y,
+        );'''
+
+[[mutant]]
+name = "an anchor's rects are those of the page scrolled"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''    let geometry = tree.geometry(layout_view, unscrolled, scroll, sticky);'''
+to = '''    let geometry = tree.geometry(layout_view, PointF::new(0.0, viewport.y), scroll, sticky);'''
+
+[[mutant]]
+name = "the caret is placed in the root's box"
+file = "crates/renderer/src/frame_view.rs"
+from = '''    let fragment = box_tree.fragment_of(fragment, caret.block)?;'''
+to = '''    let _ = box_tree.fragment_of(fragment, caret.block)?;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it"]
+
+[[mutant]]
+name = "a child frame is laid out at the viewport's size"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        .and_then(|((owner, _), (box_tree, fragment))| box_tree.fragment_of(fragment, owner))'''
+to = '''        .and_then(|((owner, _), (box_tree, fragment))| box_tree.fragment_of(fragment, owner).map(|_| fragment))'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it"]
+
+[[mutant]]
+name = "the containers' anchors adjust inside out"
+file = "crates/renderer/src/scroll_anchor.rs"
+from = '''                layout::scroll_containers_in_tree_order(box_tree, fragment, containers)
+                    .into_iter()'''
+to = '''                layout::scroll_containers_in_tree_order(box_tree, fragment, containers)
+                    .into_iter()
+                    .rev()'''
+# Only with containers in containers: the viewport is always first.
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "scroll_anchoring::"]

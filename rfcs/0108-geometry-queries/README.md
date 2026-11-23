@@ -145,15 +145,15 @@ let mapping = Mapping { to_root: Transform::IDENTITY, scrolled };
 - `crates/layout/src/fragment.rs`：每個行內元素在 fragment 的第幾行到第幾行（「已決定的事項」14）。
 - `crates/layout/src/tree_builder.rs`：增量更新時維護它們。
 - `crates/layout/src/geometry.rs`：照路徑的查詢、共用的一步（含根那一步）；刪掉 `is_fixed`。
-- `crates/layout/src/scroll_anchor.rs`、`crates/layout/src/svg_geometry.rs`：傳 viewport 的捲動（前者傳 0）。
-- `crates/renderer/src/frame_view.rs`：改用它；刪掉各處自己扣的捲動和 fixed 的判斷。
+- `crates/layout/src/scroll_anchor.rs`、`crates/layout/src/svg_geometry.rs`：傳 viewport 的捲動（前者傳 0）。第 3 階段：前者 layout 之後的錨定、後者找外層的 `<svg>` 用路徑；`crates/renderer/src/scroll_anchor.rs` 傳盒子樹、容器照路徑排序。
+- `crates/renderer/src/frame_view.rs`：改用它；刪掉各處自己扣的捲動和 fixed 的判斷；`caret_rect`、`child_viewport` 從盒子拿 fragment（第 3 階段）。
 - `crates/dom_api/src/layout.rs`：`text_rects` 少一個參數；`scroll_size`。`crates/dom_api/src/range.rs` 跟著改。
 - `crates/dom_api/src/geometry.rs`、`crates/gfx/src/element_box.rs`：拿掉 `scroll_size`。
 - `docs/architecture.md`：「快取和增量：加新東西時要跟著改的地方」加上「新的放 child fragment 的路要寫連結」和「建行內內容的新路要進 inline 元素的索引」；「從 fragment tree 算位置的新走訪」那一條加上根那一步。
 
 ### 測試
 
-- **和走訪逐一比對**：從根走訪的版本留給測試當對照。`layout` 測試的 `Page` 每次檢查時，對每個元素和 text node 比較兩者的答案，現有的 layout 和 update 的測試頁因此都成為案例。原型用這個方法驗證過路徑（`details.md` 的「原型」）。
+- **和走訪逐一比對**：從根走訪的版本留給測試當對照。`layout` 測試的 `Page` 每次檢查時，對每個元素和 text node 比較兩者的答案，現有的 layout 和 update 的測試頁因此都成為案例。原型用這個方法驗證過路徑（`details.md` 的「原型」）。2026-11-23 補充（第 3 階段）：文字的 rect 會算出 run 的 cluster（layout 留給要的人才算），在受測的樹上比會讓 caret 的測試看到它算過，所以文字（和文字當錨點的位移）在同一次檢查從頭建的樹上比；改過的樹上的文字在 `geometry::` 改 DOM 的那個測試最後比一次。
 - **連結本身**：`Page` 也檢查走訪看得到的每個 fragment 剛好有一個盒子沿連結找得到它，像原型一樣。只比答案時，漏寫外側 marker 的連結抓不到：沒有一個查詢走到 marker（它是 pseudo-element，`pseudo_box_quads` 照舊走訪）。2026-11-23 更正：原本的測試計畫只比答案，卻把這條列進 mutation test。
 - **補上的案例**：transform、sticky、巢狀的捲動容器的組合；absolute 和 fixed 換 containing block；`order`；float 和 atomic inline 混排；外側 marker；被 block 切開和跨行的 inline 元素；table 的 caption 和 column；盒子釋放後索引被重用。
 - **計數**：兄弟多十倍時查詢碰到的 fragment 數不變；`body` 的 `offsetWidth` 不算 scrollable overflow。時間不放進測試。
@@ -170,7 +170,7 @@ let mapping = Mapping { to_root: Transform::IDENTITY, scrolled };
 
 1. **座標**：用現在的走訪做根那一步，拿掉事後的修正（連同 `is_fixed`）；更新那條限制。改變答案的只有這一段，所以分開、先做（「已決定的事項」3）。
 2. **元素**：連結、inline 元素的索引、比對的測試；`element_box`、`client_rects`、`border_quads`、沒有 pseudo 的 `box_quads`；`scroll_size`。答案不變。
-3. **文字**：`text_rects` 經過 `texts`。答案不變。
+3. **文字和其他的走訪**：`text_rects` 經過 `texts`，文字節點也進 `InlineLines`（「已決定的事項」16）；`svg_geometry` 的外層 `<svg>`、`caret_rect`、`child_viewport` 從盒子找（15）；layout 之後的捲動錨定用路徑（17）。答案不變。
 
 ### 什麼時候停
 
@@ -181,7 +181,7 @@ let mapping = Mapping { to_root: Transform::IDENTITY, scrolled };
 
 ## 缺點
 
-- 每個盒子多 12 bytes（連結；`LayoutBox` 現在是 2544 bytes），做 fragment 時每個 child 多一次寫入；inline 元素多一份索引，它的記憶體和維護的時間還沒量；每次排一段時多建一份每個行內元素在第幾行的表（每個 12 bytes）。
+- 每個盒子多 12 bytes（連結；`LayoutBox` 現在是 2544 bytes），做 fragment 時每個 child 多一次寫入；inline 元素多一份索引，它的記憶體和維護的時間還沒量；每次排一段時多建一份每個行內元素和 text node 在第幾行的表（每個 12 bytes；建的時候先排序一份每一行的每個盒子和 run 一筆的暫存）。
 - 多一個要跟著改的不變式：新的放 child fragment 的路漏了連結，那個盒子就查不到幾何。靠比對的測試抓。
 - 幾何查詢從「只要一棵 fragment tree」變成也要 box tree。
 - 很深的樹仍然是 O(深度)，和 Blink 一樣。
@@ -236,6 +236,9 @@ Chromium（`details.md` 的「Blink」）：
 
 13. **`scroll_size`：S1，從 `BlockBox` 拿掉，`dom_api::FrameLayout` 多一個 `scroll_size(node)`，問的時候才算**。照 Chrome 的 `OffsetWidth()` 不碰 scrollable overflow：原型上只有 A 時前 1000 列的 `offsetTop` 是 113 ms，A 加上 S1 是 0.39 ms（Chrome 158 是 0.42；Windows 11）。不選 S2（留著，算過一次存在 fragment 上）：介面不變，但每次 layout 之後第一次 `offsetWidth` 仍然付整個子樹，每個 fragment 變大，又和「之後的可能」2 重疊。代價：改 `FrameLayout` 的介面，`scrollWidth`、`scrollHeight` 照舊每次走子樹；Chrome 在 layout 時算好存起來，這一半是「之後的可能」2，這份不做。
 14. **一段裡有很多行內元素：I2，fragment 記下每個行內元素在它的第幾行到第幾行**（2026-11-23），照 Chrome（Blink 的 `LayoutInline` 記下它的第一個 `FragmentItem`，`FirstInlineFragmentItemIndex`）。查詢用二分搜找到元素，只看那幾行。第 2 階段做完時量的：一段 1000 個、10000 個 `<span>` 各讀一次 `offsetHeight` 是 0.68、40 ms（Chrome 158 是 0.17、2.13；Windows 11），十倍的 `<span>` 慢 59 倍。不選 I1（照舊掃整段的行）：一段裡一個 token 一個 `<span>` 的頁面（語法上色的 `<pre>`）是平方。Blink 另外讓每個 item 記下到同一個元素的下一個 item 有多遠，這裡不做：只在一行上有很多層巢狀的元素時才有差，做的話每個行內盒子都多一個欄位。代價：每次排一段時多建一份排好序的表（每個行內元素 12 bytes，O(B log B)，B 是那一段的盒子數），沒人查也要付；Chrome 也付。
+15. **其他從根找一個節點的走訪：Q1，三個都改**（2026-11-23）：`svg_geometry` 找外層的 `<svg>` 用從盒子找的路徑和對應；`caret_rect` 和 `child_viewport` 從盒子直接拿 fragment（它們不要位置）。照 Chrome：SVG 元素、游標所在的 `LayoutBlock`、iframe 的 `LayoutEmbeddedContent` 都從物件本身找。量的（Windows 11、Chrome 158，ms）：10000 列之後的 `<svg>` 裡一個 shape 讀 1000 次 `getBBox` 是 116（Chrome 0.27），隨列數線性；10000 列之後的文字欄位 `focus()` 100 次是 288（Chrome 2.75），其中多少是 `scrollIntoView` 自己的走訪（「之後的可能」5）沒有拆開量；iframe 那一條沒量。不選 Q2（只改 SVG）：一開始的建議，理由是「已決定的事項」11 的範圍，但 11 縮小範圍是因為照 Chrome 猜的規則只能拿模型比，這兩個不算位置、現在的走訪就是對照，套不上。不選 Q3（都不改）：SVG 元素的 rect 仍是 Chrome 的四百多倍。代價：第 3 階段多兩處要比對，多量一頁有很多 iframe 的。SVG 裡面沿 SVG 的樹往下、每層找兄弟的那一段照舊（「之後的可能」4）。
+16. **一段裡有很多文字節點：T2，`InlineLines` 也記下每個文字節點在第幾行到第幾行**（2026-11-23），和 14 同一份索引（取每一行 run 的來源節點），照 Chrome（Blink 的 `LayoutText` 也記著它的第一個 `FragmentItem`）。量的（Windows 11、Chrome 158，每個文字節點讀一次 `Range` 的 rect，ms）：10000 列 1990（Chrome 6.08），從根走完整棵樹；一段 10000 個文字節點 74.9（Chrome 6.2），走訪很短，慢在掃那一段的每一行。不選 T1（只經過 `texts` 找到盒子，照舊掃那一段的行）：列的頁面變快，一段很多文字節點時仍是平方。代價：索引每個文字節點多 12 bytes。
+17. **捲動錨定：A1，layout 之後的照 Chrome 從錨點找，選錨點不改**（2026-11-23）。layout 之後 `scroll_anchor_offset` 的錨點的 rect、找捲動容器（`scrollport`）、有錨點的容器的順序（`containers_in_tree_order`）改用路徑：前兩個經過 `Geometry`，順序是容器的路徑排序。這時盒子樹和新的 fragment 一致（「一致性」）。照 Chrome 的 `ScrollAnchor::Adjust`（從錨點的 `LayoutObject` 往上算，`ComputeRelativeOffset`）。不選 A2（選錨點也改）：選錨點讀舊的 fragment，盒子樹已經更新，要用路徑得把它挪到盒子樹更新之前，和 Chrome 的順序不同；收集 out-of-flow 盒子時走整個捲動容器的子樹也還在。不選 A0（都不改）：捲過的頁面每次 layout 多走一到三次整棵樹。代價和限制：省的是常數倍，layout 之後還有別的走訪走整棵樹（`document_size`、`StickyPositions::new`、pre-paint，「之後的可能」2）；捲動之後的 layout 照舊選錨點、走子樹；盒子樹和 fragment 對不上時錨點被丟掉、那一次不調整（debug build 的 assertion 先抓到）；`layout::scroll_anchor_offset` 多傳盒子樹；好處沒量（推算 10000 列時每次 layout 約 0.2 ms）。2026-11-23 先建議過 A0，理由是「每次 layout 仍然要走整棵樹」，讀程式之後是錯的：選錨點只在沒有錨點時（捲動之後）才跑。
 
 ## 待決定
 
@@ -246,13 +249,15 @@ Chromium（`details.md` 的「Blink」）：
    - I2：連行和其中的索引一起記（像 Blink 的 `FirstInlineFragmentItemIndex`）。每次斷行都要維護。
    - 2026-11-22 的看法：先 I1，第 2 階段做完時量一段 10000 個 `<span>` 的頁再決定。
    - 2026-11-23 第 2 階段做完時量的（Windows 11、Chrome 158）：一段 1000 個 `<span>` 各讀一次 `offsetHeight` 是 0.68 ms、10000 個是 40 ms（Chrome 0.17、2.13），十倍的 `<span>` 慢 59 倍；從根走時是 0.62、41.5 ms，第 2 階段沒有讓它變慢。
-4. **其他從根找一個節點的走訪要不要一起改**（第 3 階段前）：`svg_geometry`、`caret_rect`、`child_viewport` 的 `find_fragment`。2026-11-22 的看法：不一起，列在「之後的可能」；都還沒量過。
+4. **其他從根找一個節點的走訪要不要一起改**：已決定，Q1（「已決定的事項」15）。`svg_geometry`、`caret_rect`、`child_viewport` 的 `find_fragment`。2026-11-22 的看法：不一起，列在「之後的可能」；都還沒量過。
 
 ## 之後的可能
 
 1. style 和 box tree 的更新從髒節點的共同祖先開始（Blink 的 `StyleTraversalRoot`）：改一列的顏色再讀 computed style，30000 列時是 Chrome 的 434 倍。
 2. layout 之後不走整棵樹（分組的頁面改一列，lifecycle 裡 span 以外的 566 µs 推測在這裡，還沒分開量）：快取 scrollable overflow、只更新變了的捲動容器和 sticky 盒子。`scrollWidth` 也因此變成常數。
 3. relayout boundary 和 simplified layout（`contain: strict` 的列現在一樣整頁重跑）。
-4. 「待決定」4 的走訪改用同一條路徑。
-5. `scrollIntoView()` 改用同一條路徑（這份做完之後修，「已決定的事項」2）：它自己的走訪不看 transform 和 sticky 的位移（`translateY(300px)` 裡、在 1500 的元素捲到 1500，Chrome 是 1800）。
+4. SVG 裡面的元素從自己的節點找（Blink 的每個 SVG 元素有自己的 `LayoutObject`）：現在從外層的 `<svg>` 沿 SVG 的樹往下、每層在兄弟裡找，很多兄弟時是平方：第 3 階段做完時量的，一個 `<svg>` 裡 10000 個 shape 各讀一次 `getBBox` 是 19.6 ms（Chrome 2.91），1000 個時 0.61（Chrome 0.29）。
+5. `scrollIntoView()` 改用同一條路徑（這份做完之後修，「已決定的事項」2）：它自己的走訪不看 transform 和 sticky 的位移（`translateY(300px)` 裡、在 1500 的元素捲到 1500，Chrome 是 1800）。它也是 10000 列時文字欄位 `focus()` 慢的主因：第 3 階段做完時 100 次 226 ms，`preventScroll` 時 59.4（Chrome 2.78 和 2.36）。
 6. 滑鼠事件的座標（「已決定的事項」11 移出的）：另一份 RFC，從 `details.md` 的「移出範圍的滑鼠事件座標」開始。
+7. 選捲動錨點時不走整個捲動容器的子樹（「已決定的事項」17 沒改的那一半）：現在先收集 out-of-flow 盒子、找優先的候選，都走整個子樹；Blink 的 layout tree 裡 out-of-flow 在 DOM 的位置，`FindAnchorRecursive` 跳過看不到的子樹。捲動中又有動畫的頁面每次 layout 都選。
+8. 文字欄位 `focus({preventScroll: true})` 在 10000 列時 100 次 59.4 ms（Chrome 2.36），1000 列時約十分之一：不捲也隨列數線性，是哪一段還沒查（游標已經從盒子找）。

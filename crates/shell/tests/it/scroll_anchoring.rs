@@ -58,3 +58,52 @@ onload = async () => {
         "150 / 180 / -50 / 180 / b / b / 290 / c"
     );
 }
+
+/// The viewport, a scroll container `o` in it and another, `i`, in that,
+/// each scrolled to 150, each anchored to what `i` shows: 30px added at
+/// the top of `i` moves all three by 30, `o` before `i` (it measures its
+/// anchor before `i` moves it back), as Chrome 158 does; the other way
+/// round `o` would see its anchor where it was and stay.
+#[test]
+fn nested_scrollers_adjust_outside_in() {
+    let url = page(
+        "nested.html",
+        r#"<!DOCTYPE html>
+<style>html, body { margin: 0 } .r { height: 100px }</style>
+<div class=r></div>
+<div id=o style="height: 600px; overflow: auto">
+<div class=r></div>
+<div id=i style="height: 400px; overflow: auto">
+<div id=i1 class=r></div><div id=i2 class=r></div><div id=i3 class=r></div><div id=i4 class=r></div><div style="height: 2000px"></div>
+</div>
+<div style="height: 2000px"></div>
+</div>
+<div style="height: 2000px"></div>
+<script>
+const frame = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+onload = async () => {
+  const o = document.getElementById('o'), i = document.getElementById('i');
+  const log = [];
+  scrollTo(0, 150);
+  o.scrollTop = 150;
+  i.scrollTop = 150;
+  await frame();
+  const top = id => document.getElementById(id).getBoundingClientRect().top;
+  const now = () => log.push([scrollY, o.scrollTop, i.scrollTop, top('i2'), top('i3')].join(','));
+  now();
+  const added = document.createElement('div');
+  added.style.height = '30px';
+  i.prepend(added);
+  now();
+  await frame();
+  now();
+  testRunner.reportHarnessResults(log.join(' / '));
+};
+</script>"#,
+    );
+    assert_eq!(
+        headless::run_testharness(&url, Duration::from_secs(30), Default::default())
+            .expect("the page reports"),
+        "150,150,150,-150,-50 / 180,180,180,-210,-110 / 180,180,180,-210,-110"
+    );
+}

@@ -400,56 +400,86 @@ pub fn text_rects(
     start: u32,
     end: u32,
 ) -> Vec<RectF> {
-    let mut rects = Vec::new();
-    // A collapsed range at the end of a run: the last such, if no run
-    // holds it.
-    let mut at_end = None;
+    let mut found = TextRects::new(text, start, end);
     walk(
         layout_view,
         viewport_scroll,
         scroll,
         sticky,
-        &mut |fragment, offset, _, contents| {
-            for run in fragment.lines.iter().flat_map(|line| &line.runs) {
-                let Some((node, source)) = &run.source else {
-                    continue;
-                };
-                if *node != text {
-                    continue;
-                }
-                let ends_here = start == end && start == source.end;
-                let holds = if start == end {
-                    source.start <= start && start < source.end
-                } else {
-                    start < source.end && source.start < end
-                };
-                if !holds && !ends_here {
-                    continue;
-                }
-                let (left, right) = run.x_range(start, end);
-                let rect = RectF::new(
-                    left + offset.x,
-                    run.baseline - run.ascent + offset.y,
-                    right - left,
-                    run.ascent + run.descent,
-                );
-                let rect = contents.map_rect(rect);
-                if !holds {
-                    at_end = Some(rect);
-                    continue;
-                }
-                rects.push(rect);
-                if start == end {
-                    return false;
-                }
-            }
-            true
-        },
+        &mut |fragment, offset, _, contents| found.on(&fragment.lines, offset, contents),
     );
-    if rects.is_empty() {
-        rects.extend(at_end);
+    found.rects()
+}
+
+/// `text_rects` as it goes through the lines.
+struct TextRects {
+    text: NodeId,
+    start: u32,
+    end: u32,
+    rects: Vec<RectF>,
+    /// A collapsed range at the end of a run: the last such, if no run
+    /// holds it.
+    at_end: Option<RectF>,
+}
+
+impl TextRects {
+    fn new(text: NodeId, start: u32, end: u32) -> Self {
+        Self {
+            text,
+            start,
+            end,
+            rects: Vec::new(),
+            at_end: None,
+        }
     }
-    rects
+
+    /// The text's boxes on `lines` (a fragment's, at `offset`, or those of
+    /// them the text is on), its contents mapped by `contents`: whether to
+    /// go on (a collapsed range has one box).
+    fn on(&mut self, lines: &[LineFragment], offset: PointF, contents: &Mapping) -> bool {
+        let (start, end) = (self.start, self.end);
+        for run in lines.iter().flat_map(|line| &line.runs) {
+            let Some((node, source)) = &run.source else {
+                continue;
+            };
+            if *node != self.text {
+                continue;
+            }
+            let ends_here = start == end && start == source.end;
+            let holds = if start == end {
+                source.start <= start && start < source.end
+            } else {
+                start < source.end && source.start < end
+            };
+            if !holds && !ends_here {
+                continue;
+            }
+            let (left, right) = run.x_range(start, end);
+            let rect = RectF::new(
+                left + offset.x,
+                run.baseline - run.ascent + offset.y,
+                right - left,
+                run.ascent + run.descent,
+            );
+            let rect = contents.map_rect(rect);
+            if !holds {
+                self.at_end = Some(rect);
+                continue;
+            }
+            self.rects.push(rect);
+            if start == end {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn rects(mut self) -> Vec<RectF> {
+        if self.rects.is_empty() {
+            self.rects.extend(self.at_end);
+        }
+        self.rects
+    }
 }
 
 /// Pre-paint's walk, mapping instead of recording: `visit` sees each
@@ -853,13 +883,7 @@ impl BoxTree {
         scroll: &'a ScrollOffsets,
         sticky: &'a StickyOffsets,
     ) -> Geometry<'a> {
-        debug_assert!(
-            self.boxes[LAYOUT_VIEW]
-                .fragment
-                .as_deref()
-                .is_some_and(|last| std::ptr::eq(last, layout_view)),
-            "geometry of a layout not this tree's last"
-        );
+        self.debug_assert_last(layout_view);
         Geometry {
             tree: self,
             layout_view,
@@ -869,6 +893,45 @@ impl BoxTree {
             entered: Cell::new(0),
             lines: Cell::new(0),
         }
+    }
+
+    /// The fragment of `element`'s own box under `layout_view`, the tree's
+    /// last layout, as the first in tree order whose node it is (none of
+    /// its pseudo-elements' comes before it: they are in it, or later
+    /// among the out-of-flow boxes of a block around it); `None` without
+    /// one (an inline element's boxes are on lines).
+    pub fn fragment_of<'a>(
+        &self,
+        layout_view: &'a BoxFragment,
+        element: NodeId,
+    ) -> Option<&'a BoxFragment> {
+        let path = self.own_path(layout_view, element)?;
+        path.iter().try_fold(layout_view, |fragment, &child| {
+            let child = fragment.children.get(usize::try_from(child).ok()?)?;
+            Some(&*child.fragment)
+        })
+    }
+
+    /// The path of `element`'s own box (`path`) under `layout_view`, the
+    /// tree's last layout (which debug builds check); `None` without one.
+    /// Never empty: that is the `LayoutView`'s, which no element has.
+    pub(crate) fn own_path(&self, layout_view: &BoxFragment, element: NodeId) -> Option<Vec<u32>> {
+        self.debug_assert_last(layout_view);
+        let &index = self.elements.get(&element)?;
+        self.path(layout_view, index)
+    }
+
+    /// That `layout_view` is this tree's last layout: the boxes' links are
+    /// into it. Another (an older one, a tree changed since) would mostly
+    /// find nothing, the links checked on the way down, but not always.
+    fn debug_assert_last(&self, layout_view: &BoxFragment) {
+        debug_assert!(
+            self.boxes[LAYOUT_VIEW]
+                .fragment
+                .as_deref()
+                .is_some_and(|last| std::ptr::eq(last, layout_view)),
+            "geometry of a layout not this tree's last"
+        );
     }
 
     /// Where box `index`'s fragment is under `layout_view`: each child's
@@ -1043,6 +1106,29 @@ impl<'a> Geometry<'a> {
             inline_boxes_in(lines, offset, &contents, element, None, &mut boxes);
         }
         quads_of(None, &boxes)
+    }
+
+    /// `text_rects`.
+    pub fn text_rects(&self, text: NodeId, start: u32, end: u32) -> Vec<RectF> {
+        let mut found = TextRects::new(text, start, end);
+        let path = self
+            .tree
+            .texts
+            .get(&text)
+            .and_then(|&index| self.tree.path(self.layout_view, index));
+        if let Some((fragment, offset, _, contents)) = path.and_then(|path| self.mapped(&path)) {
+            found.on(self.lines_of(fragment, text), offset, &contents);
+        }
+        found.rects()
+    }
+
+    /// `box_to_viewport`: `element`'s own box and the mapping of its border
+    /// box.
+    pub(crate) fn box_to_viewport(&self, element: NodeId) -> Option<(&'a BoxFragment, Mapping)> {
+        let path = self.tree.own_path(self.layout_view, element)?;
+        let (fragment, offset, mapping, _) = self.mapped(&path)?;
+        let to_box = Transform::translate(offset.x, offset.y);
+        Some((fragment, mapping.then(&to_box)))
     }
 
     /// `scroll_size`.

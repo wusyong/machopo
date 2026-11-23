@@ -12,10 +12,10 @@
 
 use gfx::{NodeId, Path, PointF, RectF, SvgGeometry, SvgTextChar, Transform};
 
-use crate::StickyOffsets;
-use crate::geometry::{ScrollOffsets, box_to_viewport};
+use crate::geometry::{Mapping, ScrollOffsets, box_to_viewport};
 use crate::svg_dom::{SvgElement, SvgName};
 use crate::{BoxFragment, SvgFragment, SvgNode, SvgNodeKind, SvgText};
+use crate::{Geometry, StickyOffsets};
 
 /// Where an SVG element is in the layout of the outermost `<svg>` around
 /// it, and the transforms on the way down.
@@ -35,13 +35,11 @@ struct Found<'a, 'd, 'gc> {
     hidden: bool,
 }
 
-/// `element`'s place in the layout; `None` if no outermost `<svg>` around
-/// it has a box.
+/// `element`'s place in the layout, the outermost `<svg>`'s box found by
+/// `svg_box` (as `box_to_viewport` has it: from the root, or from its own
+/// box); `None` if no outermost `<svg>` around it has a box.
 fn find<'a, 'd, 'gc>(
-    layout_view: &'a BoxFragment,
-    viewport_scroll: PointF,
-    scroll: &ScrollOffsets,
-    sticky: &StickyOffsets,
+    svg_box: impl FnOnce(NodeId) -> Option<(&'a BoxFragment, Mapping)>,
     element: SvgElement<'d, 'gc>,
 ) -> Option<Found<'a, 'd, 'gc>> {
     // The SVG elements from the outermost down to `element`.
@@ -54,7 +52,7 @@ fn find<'a, 'd, 'gc>(
     path.reverse();
     let top = path[0];
     let found = (top.svg_name() == Some(SvgName::Svg))
-        .then(|| box_to_viewport(layout_view, viewport_scroll, scroll, sticky, top.id()))
+        .then(|| svg_box(top.id()))
         .flatten()
         .and_then(|(fragment, mapping)| Some((fragment, fragment.svg.as_deref()?, mapping)));
     let (fragment, svg, mapping) = found?;
@@ -127,6 +125,36 @@ pub fn svg_geometry(
     sticky: &StickyOffsets,
     element: SvgElement<'_, '_>,
 ) -> Option<SvgGeometry> {
+    let svg_box = |top| box_to_viewport(layout_view, viewport_scroll, scroll, sticky, top);
+    Some(geometry_of(find(svg_box, element)?, element))
+}
+
+impl<'a> Geometry<'a> {
+    /// `svg_geometry`.
+    pub fn svg_geometry(&self, element: SvgElement<'_, '_>) -> Option<SvgGeometry> {
+        let found = find(|top| self.box_to_viewport(top), element)?;
+        Some(geometry_of(found, element))
+    }
+
+    /// `svg_node`.
+    pub fn svg_node(&self, element: SvgElement<'_, '_>) -> Option<&'a SvgNode> {
+        node_of(find(|top| self.box_to_viewport(top), element)?)
+    }
+
+    /// `svg_shape_path`.
+    pub fn svg_shape_path(&self, element: SvgElement<'_, '_>) -> Option<Path> {
+        shape_path_of(self.svg_node(element), element)
+    }
+
+    /// `svg_text_chars`.
+    pub fn svg_text_chars(&self, element: SvgElement<'_, '_>) -> Vec<SvgTextChar> {
+        find(|top| self.box_to_viewport(top), element)
+            .map_or_else(Vec::new, |found| text_chars_of(found, element))
+    }
+}
+
+/// `svg_geometry` of `element`, found.
+fn geometry_of(found: Found<'_, '_, '_>, element: SvgElement<'_, '_>) -> SvgGeometry {
     let Found {
         svg,
         content_box,
@@ -135,7 +163,7 @@ pub fn svg_geometry(
         locals,
         at,
         hidden,
-    } = find(layout_view, viewport_scroll, scroll, sticky, element)?;
+    } = found;
 
     // To the nearest viewport: up to and including the first `<svg>` or
     // `<symbol>` around it.
@@ -161,7 +189,7 @@ pub fn svg_geometry(
         Laid::InText(text) => text_bbox(text, element),
     };
     let rendered = path.len() > 1 && !matches!(at, Laid::None);
-    Some(SvgGeometry {
+    SvgGeometry {
         bbox: bbox.unwrap_or_default(),
         ctm,
         screen_ctm: Transform::translate(-scrolled.x, -scrolled.y).then(&to_root),
@@ -169,7 +197,7 @@ pub fn svg_geometry(
             let rect = to_root.map_rect(bbox.unwrap_or_default());
             rect.offset(-scrolled.x, -scrolled.y)
         }),
-    })
+    }
 }
 
 /// How far down the path to an element the layout goes.
@@ -346,15 +374,19 @@ pub fn svg_node<'f>(
     layout_view: &'f BoxFragment,
     element: SvgElement<'_, '_>,
 ) -> Option<&'f SvgNode> {
-    match find(
-        layout_view,
-        PointF::new(0.0, 0.0),
-        &ScrollOffsets::default(),
-        &StickyOffsets::default(),
-        element,
-    )?
-    .at
-    {
+    node_of(find(|top| unscrolled_box(layout_view, top), element)?)
+}
+
+/// `box_to_viewport` with nothing scrolled: for what doesn't ask where it
+/// is.
+fn unscrolled_box(layout_view: &BoxFragment, top: NodeId) -> Option<(&BoxFragment, Mapping)> {
+    let (scroll, sticky) = (ScrollOffsets::default(), StickyOffsets::default());
+    box_to_viewport(layout_view, PointF::new(0.0, 0.0), &scroll, &sticky, top)
+}
+
+/// The layout node of an element found, if it has one of its own.
+fn node_of<'a>(found: Found<'a, '_, '_>) -> Option<&'a SvgNode> {
+    match found.at {
         Laid::Node(node) => Some(node),
         _ => None,
     }
@@ -366,8 +398,13 @@ pub fn svg_node<'f>(
 /// percentages of nothing (as Chrome 152 resolves them). `None` without a
 /// style.
 pub fn svg_shape_path(layout_view: &BoxFragment, element: SvgElement<'_, '_>) -> Option<Path> {
+    shape_path_of(svg_node(layout_view, element), element)
+}
+
+/// `svg_shape_path` of `element`, laid out as `node`.
+fn shape_path_of(node: Option<&SvgNode>, element: SvgElement<'_, '_>) -> Option<Path> {
     let is_rect = element.svg_name() == Some(SvgName::Rect);
-    let (path, bbox) = match svg_node(layout_view, element) {
+    let (path, bbox) = match node {
         Some(node) => match &node.kind {
             SvgNodeKind::Shape(shape) => (shape.path.clone(), shape.bbox),
             _ => (None, None),
@@ -394,15 +431,12 @@ pub fn svg_shape_path(layout_view: &BoxFragment, element: SvgElement<'_, '_>) ->
 /// laid out, in logical order (Blink's `SVGTextQuery`); none for one not
 /// rendered.
 pub fn svg_text_chars(layout_view: &BoxFragment, element: SvgElement<'_, '_>) -> Vec<SvgTextChar> {
-    let Some(found) = find(
-        layout_view,
-        PointF::new(0.0, 0.0),
-        &ScrollOffsets::default(),
-        &StickyOffsets::default(),
-        element,
-    ) else {
-        return Vec::new();
-    };
+    find(|top| unscrolled_box(layout_view, top), element)
+        .map_or_else(Vec::new, |found| text_chars_of(found, element))
+}
+
+/// `svg_text_chars` of `element`, found.
+fn text_chars_of(found: Found<'_, '_, '_>, element: SvgElement<'_, '_>) -> Vec<SvgTextChar> {
     let text = match found.at {
         Laid::Node(SvgNode {
             kind: SvgNodeKind::Text(text),

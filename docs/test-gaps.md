@@ -261,6 +261,7 @@
 - **離 tile 太遠的 glyph 不交給 Vello**（`raster` 的 `vello_backend.rs` 的 `draw_glyphs`）：拿掉時畫出來一樣（Vello 自己會裁掉），文字多的頁面每個 tile 都把整段文字的外框線攤平一次。測試只看得到「該畫的有畫」（`a_glyph_that_begins_outside_is_drawn`）。要守的話在 playback 加一個測試讀得到的計數：交給 Vello 的 glyph 數。
 - **一批的 tile 上傳完之後送一次 queue**（`viz` 的 `GpuSharedImages::flush`）：拿掉裡面的 submit 時畫面一樣（下一次畫 frame 的 submit 會把寫入帶出去），只是視窗被遮住、不畫 frame 的期間，上傳的像素在 wgpu 的 staging 裡堆積。「一批訊息裡建了才 flush、只一次」有 `viz` 的測試（`the_shared_images_that_arent_made`）；Viz 這一側有沒有真的 submit 看不到。要守的話要 wgpu 給出還沒送出的寫入有多少。
 - **cookie 的 jar 的淘汰等最早的使用時間超過 30 天才做**（`net` 的 `CookieMonster::garbage_collect` 的 `earliest_access`，Chromium 的 `earliest_access_time_`）：記著最早用過的時間的下限，沒有比 30 天更早的就不排序、不刪；拿掉時結果一樣（沒有 30 天前用過的 cookie 就沒有能刪的），只是超過 3300 筆、又都是最近用過的時候，每設一個 cookie 就把 3300 筆排序一次。要數：排序的次數。
+- **`layout` 從盒子找一個元素的 fragment、捲動容器和它們的順序**（`BoxTree::fragment_of`：游標所在的 block、iframe 的 child frame 的大小；`scroll_anchor_offset` 找捲動容器的 `port_on`、`scroll_containers_in_tree_order`）：改回從根走時答案一樣（`layout` 的 `Page` 每次檢查都和從根走的逐 bit 比），只是 layout 之後每次多走整棵樹。經過 `Geometry` 的查詢有計數（`entered_for_testing`、`lines_for_testing`），這幾個不經過它。要數：`BoxTree::path` 往下走的步數，在兄弟多十倍的頁面上斷言不變。
 
 
 ## 等價、不用處理的 mutation

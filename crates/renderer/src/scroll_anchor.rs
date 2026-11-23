@@ -7,7 +7,7 @@
 
 use dom::{Cx, LocalToken, NodeId, NodeIdHashSet, NodeRef};
 use gfx::{PointF, RectF, SizeF};
-use layout::BoxFragment;
+use layout::{BoxFragment, BoxTree};
 
 use crate::scroll::{ScrollAnchor, ScrollState};
 
@@ -103,6 +103,7 @@ impl ScrollState {
     pub(crate) fn adjust_for_scroll_anchors(
         &mut self,
         cx: &Cx<'_, '_>,
+        box_tree: &BoxTree,
         fragment: &BoxFragment,
         viewport: SizeF,
         disabled: &[NodeId],
@@ -110,11 +111,16 @@ impl ScrollState {
     ) -> bool {
         // The viewport first, then the containers outside in (Blink's
         // `anchoring_adjustment_queue_`, in the order the scrollers came):
-        // each measures its anchor before those inside it move.
-        let mut order = vec![None];
-        if self.anchors.len() > usize::from(self.anchors.contains_key(&None)) {
-            containers_in_tree_order(fragment, &mut order);
-        }
+        // each measures its anchor before those inside it move. In the
+        // order of their boxes' paths, not by walking the tree.
+        let containers = self.anchors.keys().flatten().copied();
+        let order: Vec<Option<NodeId>> = std::iter::once(None)
+            .chain(
+                layout::scroll_containers_in_tree_order(box_tree, fragment, containers)
+                    .into_iter()
+                    .map(Some),
+            )
+            .collect();
         let anchors: Vec<(Option<NodeId>, ScrollAnchor)> = order
             .into_iter()
             .filter_map(|scroller| Some((scroller, *self.anchors.get(&scroller)?)))
@@ -122,6 +128,7 @@ impl ScrollState {
         let mut moved = false;
         for (scroller, anchor) in anchors {
             let Some(offset) = layout::scroll_anchor_offset(
+                box_tree,
                 fragment,
                 &self.containers,
                 &self.stuck.offsets,
@@ -159,20 +166,6 @@ impl ScrollState {
             viewport.width,
             viewport.height,
         )
-    }
-}
-
-/// The scroll containers in `fragment`, in tree order.
-fn containers_in_tree_order(fragment: &BoxFragment, out: &mut Vec<Option<NodeId>>) {
-    for link in &fragment.children {
-        let child = &link.fragment;
-        if let Some(node) = child.node
-            && child.pseudo.is_none()
-            && child.style.is_scroll_container()
-        {
-            out.push(Some(node));
-        }
-        containers_in_tree_order(child, out);
     }
 }
 

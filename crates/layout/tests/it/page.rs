@@ -183,6 +183,11 @@ impl Page {
         );
         assert_for_geometry(&got);
         assert_found_from_boxes(tree, &got, *viewport);
+        assert_texts_found_from_boxes(&fresh, &want, *viewport);
+        dom.read(|cx| {
+            let document = document.get(cx.gc);
+            assert_svg_found_from_boxes(cx, token, document, tree, &got, *viewport);
+        });
         self.layout = self.tree.last_layout();
         self.view = Some(got);
     }
@@ -359,22 +364,31 @@ fn assert_found_from_boxes(tree: &BoxTree, view: &BoxFragment, viewport: SizeF) 
     }
     let mut walked = Vec::new();
     let mut nodes = BTreeSet::new();
+    let mut texts = BTreeSet::new();
+    // Each element's own box, the first in tree order.
+    let mut own = BTreeMap::new();
+    let mut containers = Vec::new();
     let mut scroll = layout::ScrollOffsets::default();
     each(view, &mut |fragment| {
         walked.push(std::ptr::from_ref(fragment));
         if let Some(node) = fragment.node {
             nodes.insert(node);
+            if fragment.pseudo.is_none() && !own.contains_key(&node) {
+                own.insert(node, std::ptr::from_ref(fragment));
+                if fragment.style.is_scroll_container() {
+                    containers.push(node);
+                }
+            }
             if fragment.style.is_scroll_container() {
                 scroll.insert(node, PointF::new(3.5, 12.25));
             }
         }
         for line in &fragment.lines {
             nodes.extend(line.boxes.iter().map(|b| b.node));
-            nodes.extend(
-                line.runs
-                    .iter()
-                    .filter_map(|run| run.source.as_ref().map(|(node, _)| *node)),
-            );
+            for (node, _) in line.runs.iter().filter_map(|run| run.source.as_ref()) {
+                nodes.insert(*node);
+                texts.insert(*node);
+            }
         }
     });
     let mut linked: Vec<_> = tree
@@ -422,6 +436,166 @@ fn assert_found_from_boxes(tree: &BoxTree, view: &BoxFragment, viewport: SizeF) 
             geometry.scroll_size(node),
             layout::scroll_size(view, node),
             "scroll_size of {which}"
+        );
+        assert_eq!(
+            tree.fragment_of(view, node).map(std::ptr::from_ref),
+            own.get(&node).copied(),
+            "the fragment of {which}"
+        );
+        // A text anchor's offset is from its rects: not here, where
+        // working them out would make its clusters (which layout leaves
+        // to what asks), but in `assert_texts_found_from_boxes`.
+        if texts.contains(&node) {
+            continue;
+        }
+        let anchor = layout::ScrollAnchorNode::Box(node);
+        let port = RectF::new(at.x, at.y, viewport.width, viewport.height);
+        for scroller in std::iter::once(None).chain(containers.iter().take(2).copied().map(Some)) {
+            assert_eq!(
+                layout::scroll_anchor_offset(tree, view, &scroll, &sticky, scroller, port, anchor),
+                layout::scroll_anchor_offset_walked_for_testing(
+                    view, &scroll, &sticky, scroller, port, anchor
+                ),
+                "the anchor offset of {which} in {scroller:?}"
+            );
+        }
+    }
+    // Asked for in any order, each once (as the scrollers with anchors
+    // are), and with what isn't one.
+    let others = nodes
+        .iter()
+        .filter(|node| !containers.contains(node))
+        .take(20);
+    let asked = containers.iter().rev().chain(others).copied();
+    assert_eq!(
+        layout::scroll_containers_in_tree_order(tree, view, asked),
+        containers,
+        "the scroll containers in tree order"
+    );
+}
+
+/// Each text's rects in `view` (a range of all of it, collapsed at the
+/// start and the end of its first run, and of that run), and its offset as
+/// a scroll anchor, found from its box and its lines as walking finds
+/// them: the same answers, scrolled as `assert_found_from_boxes` scrolls.
+/// They work out the runs' clusters: on a tree whose layout what is
+/// tested doesn't look at.
+pub fn assert_texts_found_from_boxes(tree: &BoxTree, view: &BoxFragment, viewport: SizeF) {
+    fn each(fragment: &BoxFragment, texts: &mut BTreeMap<NodeId, (u32, u32)>) {
+        for line in &fragment.lines {
+            for (node, source) in line.runs.iter().filter_map(|run| run.source.as_ref()) {
+                texts.entry(*node).or_insert((source.start, source.end));
+            }
+        }
+        for child in &fragment.children {
+            each(&child.fragment, texts);
+        }
+    }
+    let mut texts = BTreeMap::new();
+    each(view, &mut texts);
+    let (scroll, sticky, at, fragments) = scrolled(view, viewport);
+    let containers = layout::scroll_containers_in_tree_order(tree, view, scroll.keys().copied());
+    let geometry = tree.geometry(view, at, &scroll, &sticky);
+    let stride = (texts.len().saturating_mul(fragments) / 500_000).max(1);
+    for (&text, &(start, end)) in texts.iter().step_by(stride) {
+        let which = format!("#{}", text.get());
+        let ranges = [
+            (0, u32::MAX),
+            (start, start),
+            (end, end),
+            (start, end),
+            (start.saturating_add(1), end),
+        ];
+        for (start, end) in ranges {
+            assert_eq!(
+                geometry.text_rects(text, start, end),
+                layout::text_rects(view, at, &scroll, &sticky, text, start, end),
+                "text_rects of {which} from {start} to {end}"
+            );
+        }
+        let anchor = layout::ScrollAnchorNode::Text(text);
+        let port = RectF::new(at.x, at.y, viewport.width, viewport.height);
+        for scroller in std::iter::once(None).chain(containers.iter().take(2).copied().map(Some)) {
+            assert_eq!(
+                layout::scroll_anchor_offset(tree, view, &scroll, &sticky, scroller, port, anchor),
+                layout::scroll_anchor_offset_walked_for_testing(
+                    view, &scroll, &sticky, scroller, port, anchor
+                ),
+                "the anchor offset of {which} in {scroller:?}"
+            );
+        }
+    }
+}
+
+/// How the geometry checks scroll `view`: each scroll container and the
+/// viewport by a fraction of a pixel and more, and the sticky boxes as
+/// that sticks them; and how many fragments a walk goes through.
+fn scrolled(
+    view: &BoxFragment,
+    viewport: SizeF,
+) -> (layout::ScrollOffsets, layout::StickyOffsets, PointF, usize) {
+    fn each(fragment: &BoxFragment, scroll: &mut layout::ScrollOffsets) -> usize {
+        if let Some(node) = fragment
+            .node
+            .filter(|_| fragment.style.is_scroll_container())
+        {
+            scroll.insert(node, PointF::new(3.5, 12.25));
+        }
+        let children = fragment.children.iter();
+        children.fold(1, |n, child| {
+            n.saturating_add(each(&child.fragment, scroll))
+        })
+    }
+    let mut scroll = layout::ScrollOffsets::default();
+    let fragments = each(view, &mut scroll);
+    let at = PointF::new(7.3, 130.6);
+    let sticky = layout::StickyPositions::new(view, viewport).offsets(&scroll, at);
+    (scroll, sticky, at, fragments)
+}
+
+/// The SVG geometry queries of `document`'s elements, laid out in `view`,
+/// found from the outermost `<svg>`'s box as walking from the root finds
+/// them: the same answers, scrolled as `assert_found_from_boxes` scrolls.
+fn assert_svg_found_from_boxes<'gc>(
+    cx: &Cx<'_, 'gc>,
+    token: &LocalToken,
+    document: NodeRef<'gc>,
+    tree: &BoxTree,
+    view: &BoxFragment,
+    viewport: SizeF,
+) {
+    let mut elements = Vec::new();
+    each_node(cx, document, &mut |node| {
+        if cx.kind(node) == NodeKind::Element {
+            elements.push(node);
+        }
+    });
+    let (scroll, sticky, at, fragments) = scrolled(view, viewport);
+    let geometry = tree.geometry(view, at, &scroll, &sticky);
+    // Every element: those not in an outermost `<svg>` have none.
+    let stride = (elements.len().saturating_mul(fragments) / 2_000_000).max(1);
+    for &node in elements.iter().step_by(stride) {
+        let element = layout::svg_element(cx, token, node);
+        let which = format!("#{}", cx.node_id(node).get());
+        assert_eq!(
+            geometry.svg_geometry(element),
+            layout::svg_geometry(view, at, &scroll, &sticky, element),
+            "svg_geometry of {which}"
+        );
+        assert_eq!(
+            geometry.svg_node(element).map(std::ptr::from_ref),
+            layout::svg_node(view, element).map(std::ptr::from_ref),
+            "svg_node of {which}"
+        );
+        assert_eq!(
+            geometry.svg_shape_path(element),
+            layout::svg_shape_path(view, element),
+            "svg_shape_path of {which}"
+        );
+        assert_eq!(
+            geometry.svg_text_chars(element),
+            layout::svg_text_chars(view, element),
+            "svg_text_chars of {which}"
         );
     }
 }

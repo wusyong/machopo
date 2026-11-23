@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | 1. 座標 | 做完，等審核 | 2026-11-22 |
 | 2. 元素 | 做完，等審核 | 2026-11-23 |
-| 3. 文字 | 還沒開始（先決定「待決定」4） | |
+| 3. 文字和其他的走訪 | 做完，等審核 | 2026-11-23 |
 
 ## 驗收
 
@@ -24,9 +24,12 @@
 | 捲過的頁面上點得到 fixed 列裡的按鈕，選單開在它下面；`about:demo` 示範 | `python3 scripts/test.py scenarios fixed-geometry`；`python3 scripts/test.py scenarios position-fixed` |
 | 元素的盒子從連結和行內元素的索引找到：經過 transform、sticky、捲動容器，out-of-flow 盒子、外側 marker、flex 的 `order`、float、被 block 切開和換行的行內元素、table；DOM 改過、盒子的位置被重用之後；查詢只走到那個盒子，和兄弟的數量無關 | `cargo test -p layout --test it geometry::` |
 | 每個節點從盒子找到的 `element_box`、client rect、border quad、沒有 pseudo 的 box quad、`scroll_size` 和從根走的每個 bit 相同（捲過的捲動容器、頁面和黏住的盒子）；每個 fragment 剛好被一個盒子的連結找到；行內元素的索引和重建的一樣 | `cargo test -p layout --test it`（`Page` 的 `assert_found_from_boxes`，每次檢查都驗） |
-| 一段裡的行內元素的查詢只看它在的那幾行：它前後的元素變十倍時看的行數不變，跨好幾行的元素每一行看一次 | `cargo test -p layout --test it geometry::`（`a_query_looks_only_at_the_elements_lines`） |
+| 一段裡的行內元素的查詢只看它在的那幾行：它前後的元素變十倍時看的行數不變，跨好幾行的元素每一行看一次；文字的 rect 也是 | `cargo test -p layout --test it geometry::`（`a_query_looks_only_at_the_elements_lines`） |
+| 文字的 rect、SVG 元素的四種查詢只走到盒子（外層的 `<svg>` 的），和兄弟的數量無關 | `cargo test -p layout --test it geometry::`（`a_query_goes_down_only_to_the_box`） |
+| 每個 text node 從盒子和它的行找到的 rect（整段、開頭和結尾折疊的、第一個 run 的）和當錨點的位移、每個元素的 `fragment_of` 和當錨點的位移、捲動容器的順序、每個 SVG 元素的 `svg_geometry`、`svg_node`、`svg_shape_path`、`svg_text_chars`，和從根走的每個 bit 相同（捲過的捲動容器和頁面）；DOM 改過之後的文字 | `cargo test -p layout --test it`（`Page` 的檢查；文字在從頭建的樹上比，改過的樹上的在 `geometry::` 的 `boxes_are_found_after_changes`） |
+| 游標、child frame 的大小從盒子找；巢狀的捲動容器由外往內錨定 | `cargo test -p shell --test it`（`scroll_anchoring::nested_scrollers_adjust_outside_in`；游標和 iframe 由現有的測試守著，見「做過的檢查」的 mutation test） |
 | `scrollWidth`、`scrollHeight` 問的時候才算，盒子不帶它 | `cargo test -p paint --test it geometry::`；`cargo test -p dom_api --test it geometry::` |
-| 守著這些的測試擋得住弄壞的實作 | `python3 scripts/test.py mutate rfcs/0108-geometry-queries/mutants-1.toml`；`python3 scripts/test.py mutate rfcs/0108-geometry-queries/mutants-2.toml` |
+| 守著這些的測試擋得住弄壞的實作 | `python3 scripts/test.py mutate rfcs/0108-geometry-queries/mutants-1.toml`；`python3 scripts/test.py mutate rfcs/0108-geometry-queries/mutants-2.toml`；`python3 scripts/test.py mutate rfcs/0108-geometry-queries/mutants-3.toml` |
 
 ## 做過的檢查
 
@@ -133,3 +136,30 @@
   - `<span>` 變十倍慢 11 倍（Chrome 13 倍）：不再是平方。
   - 建索引的成本看不出來：一段 10000 個 `<span>` 的「改一點、讀一次」和原型交替各跑 5 次是 835–851 和 832–855 ms。沒有單獨量建表的時間。
 - `cargo test --workspace` 4674 個通過、0 失敗、2 個原本就忽略；fmt、clippy、七個 sanity 通過。WPT（cssom-view、`uievents/mouse/layer-coords-transform.html`、dom/ranges）47007 個檢查，沒有非預期的結果。
+
+2026-11-23，第 3 階段（Windows 11、Chrome 158）：
+
+- 文字的 rect 從它的盒子（`texts`）和它在的行找：每個有行的 fragment 記下的表多收 text node（它有 run 的第幾行到第幾行）。SVG 元素從外層的 `<svg>` 的盒子找，游標所在的 block 和 iframe 從自己的盒子拿 fragment（`BoxTree::fragment_of`）。layout 之後的捲動錨定：捲動容器沿它的盒子的路徑找、錨點的 rect 經過 `Geometry`，有錨點的容器照路徑排序。從根走的版本留著當對照（`scroll_anchor_offset_walked_for_testing` 等）。
+- `Page` 的檢查多比：每個元素的 `fragment_of` 和當錨點的位移、捲動容器的順序（倒過來問、混進不是的）、每個 SVG 元素的四種查詢、每個 text node 的五種範圍的 rect 和當錨點的位移，都和從根走的逐 bit 比。文字的 rect 會算出 run 的 cluster，在受測的樹上比會讓 `caret` 的測試看到它算過（一開始 `caret::` 的兩個測試失敗），所以文字在同一次檢查從頭建的樹上比，改過的樹上的在 `geometry::` 改 DOM 的測試最後比一次。`geometry::` 的兩個計數的測試加上文字和 SVG。
+- `cargo test -p layout -p paint -p dom_api -p renderer` 通過（layout 32 + 482、paint 9 + 278、dom_api 26 + 201、renderer 128）；shell 的整合測試 643 個通過。WPT（cssom-view、`uievents/mouse/layer-coords-transform.html`、dom/ranges、css-scroll-anchoring，SVG 的 geometry、types、text、path）47847 個檢查，沒有非預期的結果，1 個原本標著的 known intermittent（`scroll-behavior-smooth-navigation.html`）；預期結果沒改。
+- debug build 的「盒子樹的最後一次 layout」的 assertion 原本只在 `BoxTree::geometry`，也放進 `own_path`：`fragment_of`、找捲動容器和容器的順序不經過 `Geometry`，拿別的 layout 來問時也先被抓到。
+- mutation test（`mutants-3.toml`）：第一次 18 條，沒抓到 2 條：
+  - `own_path` 濾掉空的路徑：空的只有 `LayoutView` 的盒子，沒有元素的盒子是它，濾不到；拿掉那一行和那一條。
+  - 有錨點的容器的順序反過來：shell 和 css-scroll-anchoring 的 WPT 都沒抓到。只有一個容器時反不反都一樣（viewport 一律最先），加了一個巢狀兩層容器的 shell 測試（`nested_scrollers_adjust_outside_in`，三個捲動的都移 30，和 Chrome 158 一樣；反過來時外層的不動），抓到了。
+  - 最後 17 條全部抓到，檔案都還原。
+- 不穩定的一次：單獨跑「順序反過來」那一條時，shell 的整套失敗過一次（那時的測試頁只有一個容器，這條是等價的）。`test.py mutate` 不留測試的輸出，不知道是哪一個；沒改的程式上整套連跑 8 次、套著這條跑 2 次，都沒再出現。之後最後一次跑 spec 時，沒改的程式（mutation 之前的 baseline）上 `automation_pipe::the_window_has_bounds_to_set` 等 30 秒逾時：已知的不穩定（很多 `machopo` 同時啟動時有的拿不到 GPU、退回 WARP，RFC 0004 的 `progress.md`，還沒修），和這份無關；那一次多半也是它，沒有證實。
+- 量測（`target/perf`，三次的中位數，ms；「改之前」是第 2 階段加 I2 的 binary）：
+
+  | 頁面 | 查詢 | 改之前 | 現在 | Chrome |
+  | --- | --- | --- | --- | --- |
+  | 10000 列之後的 `<svg>` | 一個 shape 的 `getBBox` 1000 次 | 116 | 0.40 | 0.28 |
+  | 一個 `<svg>` 裡 10000 個 shape | 每個讀一次 `getBBox` | 98.8 | 19.6 | 2.91 |
+  | 10000 列 | 每列的文字的 `Range` 的 rect | 1990 | 5.15 | 6.23 |
+  | 一段 10000 個 `<span>` | 每個的文字的 `Range` 的 rect | 74.9 | 4.58 | 6.27 |
+  | 10000 列之後的文字欄位 | `focus()` 100 次 | 288 | 226 | 2.78 |
+
+  - SVG 裡面 10000 個兄弟仍是平方（「之後的可能」4）。`focus()` 剩下的 226 裡 167 是 `scrollIntoView` 自己的走訪（`preventScroll` 時 59.4，Chrome 2.36）；不捲的 59.4 也隨列數線性，是哪一段沒查（「之後的可能」5、8）。
+  - 「改一點、讀一次」在 10000 列後面有 iframe 時 3.6 對 3.34，捲到底、每次都錨定時 4.15 對 3.28（Chrome 1.46、1.52）：沒有 iframe、不捲的同一頁也是 4.08 對 2.79，差別在雜訊裡，時間在 layout。
+  - 第 2 階段的頁面重量：10000 列的 `offsetHeight` 2.21、rect 3.96，一段 10000 個 `<span>` 的 2.89 → 3.08、4.46；「改一點、讀一次」在一段 10000 個 `<span>` 是 1100（之前 835–851），和改之前的 binary 交替各跑 5 次是 1117–1196 和 848–1166，是機器的狀態，不是多建的表。
+- `cargo test --workspace` 4675 個通過、0 失敗、2 個原本就忽略；fmt（排過改到的檔案之後，spec 的兩條原文跟著換行）、clippy、七個 sanity 通過。
+- 沒驗的：`fragment_of`、錨定的位移和容器的順序只比答案，沒有計數（`docs/test-gaps.md`）；macOS、Linux、真的視窗（沒動視窗那一層）、真實網站。

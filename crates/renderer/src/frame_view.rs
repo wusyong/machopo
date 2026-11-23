@@ -744,7 +744,11 @@ impl FrameView {
         // again.
         let mut children = std::mem::take(&mut self.children);
         for child in &mut children {
-            let child_viewport = child_viewport(self.fragment.as_deref(), child.owner);
+            let child_viewport = child_viewport(
+                self.box_tree.as_ref(),
+                self.fragment.as_deref(),
+                child.owner,
+            );
             child.scrolling_off = child.owner.is_some_and(|(owner, _)| {
                 cx.node_by_id(owner).is_some_and(|iframe| {
                     cx.attribute_value_ns(iframe, None, "scrolling")
@@ -843,7 +847,11 @@ impl FrameView {
         };
         self.update_style_and_layout_only(cx, token, text, viewport, device_scale_factor);
         let child = &self.children[index];
-        let child_viewport = child_viewport(self.fragment.as_deref(), child.owner);
+        let child_viewport = child_viewport(
+            self.box_tree.as_ref(),
+            self.fragment.as_deref(),
+            child.owner,
+        );
         if child.viewport != child_viewport
             && let Some((_, frame)) = child.owner
         {
@@ -1031,6 +1039,7 @@ impl FrameView {
         if !self.scroll.anchors.is_empty()
             && self.scroll.adjust_for_scroll_anchors(
                 cx,
+                box_tree,
                 &fragment,
                 viewport,
                 &anchoring.disabled,
@@ -1574,18 +1583,9 @@ impl FrameView {
     /// viewport, as last laid out (`layout::text_rects`); empty without a
     /// box or a layout.
     pub(crate) fn text_rects(&self, text: NodeId, start: u32, end: u32) -> Vec<RectF> {
-        let Some(fragment) = &self.fragment else {
-            return Vec::new();
-        };
-        layout::text_rects(
-            fragment,
-            self.scroll.viewport,
-            &self.scroll.containers,
-            &self.scroll.stuck.offsets,
-            text,
-            start,
-            end,
-        )
+        self.geometry()
+            .map(|geometry| geometry.text_rects(text, start, end))
+            .unwrap_or_default()
     }
 
     /// The first place a caret can be in editing host `host`, as last laid
@@ -1607,23 +1607,15 @@ impl FrameView {
     /// (`layout::svg_geometry`); the default if no `<svg>` around it has a
     /// box.
     pub(crate) fn svg_geometry(&self, element: SvgElement<'_, '_>) -> SvgGeometry {
-        let Some(fragment) = &self.fragment else {
-            return SvgGeometry::default();
-        };
-        layout::svg_geometry(
-            fragment,
-            self.scroll.viewport,
-            &self.scroll.containers,
-            &self.scroll.stuck.offsets,
-            element,
-        )
-        .unwrap_or_default()
+        self.geometry()
+            .and_then(|geometry| geometry.svg_geometry(element))
+            .unwrap_or_default()
     }
 
     /// An SVG shape's path for its length, as laid out
     /// (`layout::svg_shape_path`).
     pub(crate) fn svg_shape_path(&self, element: SvgElement<'_, '_>) -> Option<gfx::Path> {
-        layout::svg_shape_path(self.fragment.as_ref()?, element)
+        self.geometry()?.svg_shape_path(element)
     }
 
     /// Whether `point` is in an SVG shape's fill or stroke area, as laid
@@ -1634,17 +1626,15 @@ impl FrameView {
         point: PointF,
         stroke: bool,
     ) -> bool {
-        self.fragment
-            .as_ref()
-            .and_then(|fragment| layout::svg_node(fragment, element))
+        self.geometry()
+            .and_then(|geometry| geometry.svg_node(element))
             .is_some_and(|node| paint::svg_shape_contains(node, point, stroke))
     }
 
     /// An SVG text element's characters, as laid out.
     pub(crate) fn svg_text_chars(&self, element: SvgElement<'_, '_>) -> Vec<SvgTextChar> {
-        self.fragment
-            .as_ref()
-            .map(|fragment| layout::svg_text_chars(fragment, element))
+        self.geometry()
+            .map(|geometry| geometry.svg_text_chars(element))
             .unwrap_or_default()
     }
 
@@ -2646,7 +2636,7 @@ impl dom_api::FrameLayout for Frame {
         let Some(caret) = focused_caret(cx, &self.token, document, box_tree, &mut self.text) else {
             return false;
         };
-        let Some(rect) = caret_rect(fragment, caret) else {
+        let Some(rect) = caret_rect(box_tree, fragment, caret) else {
             return false;
         };
         let document_of = |node: NodeId| {
@@ -2739,27 +2729,19 @@ fn scrolling_off(scrolling: &str) -> bool {
         .any(|off| scrolling.eq_ignore_ascii_case(off))
 }
 
-/// The first fragment `node` generated, in `root`.
-fn find_fragment(root: &BoxFragment, node: NodeId) -> Option<&BoxFragment> {
-    if root.node == Some(node) {
-        return Some(root);
-    }
-    root.children
-        .iter()
-        .find_map(|child| find_fragment(&child.fragment, node))
-}
-
 /// The size a child frame of iframe `owner` (none: no iframe) is laid out
-/// at: the iframe's content box in `fragment`, its frame's layout; 0×0
-/// where the iframe has no box (Blink still styles and lays out such a
-/// frame of the same process).
+/// at: the iframe's content box in `fragment`, its frame's layout by
+/// `box_tree`, found from the iframe's box (as Blink's
+/// `LayoutEmbeddedContent` has it); 0×0 where the iframe has no box (Blink
+/// still styles and lays out such a frame of the same process).
 fn child_viewport(
+    box_tree: Option<&BoxTree>,
     fragment: Option<&BoxFragment>,
     owner: Option<(NodeId, dom_api::FrameId)>,
 ) -> SizeF {
     owner
-        .zip(fragment)
-        .and_then(|((owner, _), fragment)| find_fragment(fragment, owner))
+        .zip(box_tree.zip(fragment))
+        .and_then(|((owner, _), (box_tree, fragment))| box_tree.fragment_of(fragment, owner))
         .map_or(SizeF::new(0.0, 0.0), content_box_size)
 }
 
@@ -2772,19 +2754,15 @@ fn content_box_size(fragment: &BoxFragment) -> SizeF {
     )
 }
 
-/// Where `caret` is drawn in its block, `fragment`'s or one in it: from
-/// the block's content box (on its lines, or those of an anonymous block
-/// in it, as paint finds it); `None` if it is on none.
-fn caret_rect(fragment: &BoxFragment, caret: paint::Caret) -> Option<RectF> {
-    if fragment.node == Some(caret.block) {
-        let rect = in_anonymous_blocks(fragment, caret.at)?;
-        let (b, p) = (&fragment.border, &fragment.padding);
-        return Some(rect.offset(-(b.left + p.left), -(b.top + p.top)));
-    }
-    fragment
-        .children
-        .iter()
-        .find_map(|child| caret_rect(&child.fragment, caret))
+/// Where `caret` is drawn in its block, in `fragment`, `box_tree`'s layout,
+/// found from the block's box (as Blink's caret is from its
+/// `LayoutBlock`): from the block's content box (on its lines, or those of
+/// an anonymous block in it, as paint finds it); `None` if it is on none.
+fn caret_rect(box_tree: &BoxTree, fragment: &BoxFragment, caret: paint::Caret) -> Option<RectF> {
+    let fragment = box_tree.fragment_of(fragment, caret.block)?;
+    let rect = in_anonymous_blocks(fragment, caret.at)?;
+    let (b, p) = (&fragment.border, &fragment.padding);
+    Some(rect.offset(-(b.left + p.left), -(b.top + p.top)))
 }
 
 /// The caret at `at` on `fragment`'s lines or an anonymous block's in it,
