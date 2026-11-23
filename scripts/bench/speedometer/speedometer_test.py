@@ -645,12 +645,11 @@ class MachopoTests(BrowserTests, unittest.TestCase):
         # default), and their sum.
         result = self.load(speedometer.suite_url(self.server, "list", 1))
         self.assertEqual(speedometer.parse_run(result)["status"], "done")
-        if sys.platform == "darwin" or sys.platform.startswith("linux"):
-            memory = result["memory_by_process"]
-            self.assertGreater(memory["browser"], 20 << 20)
-            self.assertGreater(memory["renderer"], 20 << 20)
-            self.assertEqual(memory["total"], memory["browser"] + memory["renderer"])
-            self.assertEqual(result["memory"], memory["total"])
+        memory = result["memory_by_process"]
+        self.assertGreater(memory["browser"], 20 << 20)
+        self.assertGreater(memory["renderer"], 20 << 20)
+        self.assertEqual(memory["total"], memory["browser"] + memory["renderer"])
+        self.assertEqual(result["memory"], memory["total"])
 
     def test_with_single_process_the_renderer_is_the_browsers(self):
         # Its process the only one: its trace and memory the browser's.
@@ -663,10 +662,9 @@ class MachopoTests(BrowserTests, unittest.TestCase):
             self.assertEqual(speedometer.renderer_traces(trace), [])
             self.assertEqual(speedometer.renderer_trace(trace, result["processes"]), (trace, False))
             self.assertIn("CrRendererMain", speedometer.perfetto_marks(trace))
-        if sys.platform == "darwin" or sys.platform.startswith("linux"):
-            memory = result["memory_by_process"]
-            self.assertIsNone(memory["renderer"])
-            self.assertEqual(memory["total"], memory["browser"])
+        memory = result["memory_by_process"]
+        self.assertIsNone(memory["renderer"])
+        self.assertEqual(memory["total"], memory["browser"])
 
     def test_the_windows_are_the_runners_times(self):
         # Each test's window by the runner's marks in machopo's trace is the
@@ -861,7 +859,8 @@ class MeasureTests(unittest.TestCase):
         windows, found_by = speedometer.timed_windows(slices["CrRendererMain"], marks)
         self.assertEqual(found_by, "the runner's marks")
         tests = ["TimerThenFrame", "Garbage", "Markup", "MarkupAndElements"]
-        self.assertEqual([name for _, name in marks if name.endswith("-start") and "async" not in name],
+        self.assertEqual([name for _, name in marks
+                          if name.startswith("frames.") and name.endswith("-start") and "async" not in name],
                          [f"frames.{test}-start" for test in tests])
         measures = {}
         thread_names = set(speedometer.perfetto_track_events(trace)[0].values())
@@ -1985,7 +1984,10 @@ class RendererTraceTests(unittest.TestCase):
     def sample(self, renderer: Callable[[], None], samples: list[tuple], pids: set[int]) -> tuple[list, bool, str]:
         events = (speedometer.sampling() or speedometer.LINUX_SAMPLING).events
         out = io.StringIO()
-        with (self.run_machopo(renderer, [self.BROWSER, {"type": "renderer", "id": 42}]),
+        # The results in the test's folder, as `cmd_trace`'s: the tree's
+        # `target/bench/` may not be there yet.
+        with (mock.patch.object(speedometer, "RESULTS", self.folder),
+              self.run_machopo(renderer, [self.BROWSER, {"type": "renderer", "id": 42}]),
               mock.patch.object(speedometer, "read_samples", return_value=({events[0]: samples}, pids)),
               mock.patch.object(speedometer, "samply_etls", return_value=[]),
               mock.patch("sys.stdout", new=out)):
@@ -2226,15 +2228,15 @@ class CompareTests(unittest.TestCase):
 class MemoryTests(unittest.TestCase):
     """`peak_memory`: the most a process has had of its own memory."""
 
-    @unittest.skipUnless(sys.platform == "darwin" or sys.platform.startswith("linux"), "macOS's or Linux's")
     def test_another_processs_peak_stays(self):
-        # A new process (as machopo is) touches 64 MB and gives it back; its
-        # peak keeps them.
+        # A new process (as machopo is) touches 64 MB of its own and gives
+        # it back; its peak keeps them. Its own: an anonymous `mmap` is a
+        # section of the paging file on Windows, shared, not private bytes.
         child = subprocess.Popen(
-            [sys.executable, "-c", "import mmap, time\n"
-             "m = mmap.mmap(-1, 64 << 20)\n"
+            [sys.executable, "-c", "import time\n"
+             "m = bytearray(64 << 20)\n"
              "for i in range(0, len(m), 4096): m[i] = 1\n"
-             "m.close()\n"
+             "del m\n"
              "print('ready', flush=True)\n"
              "time.sleep(60)\n"],
             stdout=subprocess.PIPE, text=True)
@@ -2319,9 +2321,13 @@ class SampleTests(unittest.TestCase):
         # into machopo's call of it, the runner's animation frame callback's (on
         # Linux the dev profile has no frame pointers: from machopo's own code,
         # the stack ends before it gets to the JS; arm64 macOS always keeps
-        # them).
+        # them). Either of `dom_js::listeners`' two: the free function, or on
+        # Windows, where the `perf` profile inlines it and the PDB's names
+        # leave inlined frames out, `ScriptHost`'s method calling it
+        # (`dom_js::listeners::impl$0::call_animation_frame`).
         self.assertTrue(any(any("makeGarbage" in frame for frame in stack)
-                            and any("dom_js::listeners::call_animation_frame" in frame for frame in stack)
+                            and any(frame.startswith("dom_js::listeners::") and "call_animation_frame" in frame
+                                    for frame in stack)
                             for stack in stacks))
         # The trace makes no log records: html5ever's for each token would
         # be made only to be dropped.

@@ -1,0 +1,35 @@
+# Stage 3's mutants (Windows): `python3 scripts/test.py mutate rfcs/0111-measuring-across-processes/mutants-3.toml`.
+test = ["python3", "scripts/bench/raster/raster_test.py", "ReadingTests"]
+timeout = 600
+
+[[mutant]]
+name = "a thread's name isn't cut"
+file = "scripts/bench/raster/raster.py"
+from = '''            together.setdefault(thread_name(thread), []).extend(slices)'''
+to = '''            together.setdefault(thread, []).extend(slices)'''
+
+[[mutant]]
+name = "a name is cut to more than 15 bytes"
+file = "scripts/bench/raster/raster.py"
+from = '''    return name.encode("utf-8")[:15].decode("utf-8", errors="ignore")'''
+to = '''    return name.encode("utf-8")[:16].decode("utf-8", errors="ignore")'''
+
+[[mutant]]
+name = "the report's renderer is the other one"
+file = "scripts/bench/raster/raster.py"
+from = '''    renderer = "the renderer in the browser's process" if single_process else "a renderer process for the tab"'''
+to = '''    renderer = "a renderer process for the tab" if single_process else "the renderer in the browser's process"'''
+
+[[mutant]]
+name = "Windows reads the private bytes now, not their peak"
+file = "scripts/bench/common.py"
+from = '''        return counters.PeakPagefileUsage'''
+to = '''        return counters.PagefileUsage'''
+test = ["python3", "scripts/bench/speedometer/speedometer_test.py", "MemoryTests"]
+
+[[mutant]]
+name = "the fake runner's first mark is a test's"
+file = "scripts/bench/speedometer/fake/resources/main.mjs"
+from = '''      performance.mark("iteration-start");'''
+to = ''''''
+test = ["python3", "scripts/bench/speedometer/speedometer_test.py", "MachopoTests.test_the_windows_are_the_runners_times"]

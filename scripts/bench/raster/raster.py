@@ -109,7 +109,8 @@ FRAME = re.compile(r"^(?P<time>\d{4}-\d\d-\d\dT[\d:.]+Z)\s+\w+\s+(?P<thread>\S+)
                    r"frame (?P<what>submitted|arrived|drawn)(?P<fields>.*)$")
 # The browser's own frame sink's client: its UI's frames, not a tab's.
 BROWSER_CLIENT = 0
-# The browser's threads, as the trace has them (names cut to 15 bytes).
+# The browser's threads, as the trace has them on Linux and macOS (names
+# cut to 15 bytes; `thread_slices` cuts Windows's whole names to them).
 VIZ_THREAD = "VizCompositorTh"
 IO_THREAD = "Chrome_IOThread"
 # What the browser's side does for a renderer's frames, each a span.
@@ -301,12 +302,18 @@ def frame_latency(frames: dict[str, list[tuple[float, int]]], window: tuple[floa
 def thread_slices(traces: list[Path]) -> dict[str, list[tuple[int, str | None]]]:
     """`perfetto_slices` of every process's trace together: a thread's
     name is one process's (the renderer's threads are in its own trace
-    when it is a process of its own)."""
+    when it is a process of its own), cut to 15 bytes (`thread_name`)."""
     together: dict[str, list[tuple[int, str | None]]] = {}
     for trace in traces:
         for thread, slices in speedometer.perfetto_slices(trace).items():
-            together.setdefault(thread, []).extend(slices)
+            together.setdefault(thread_name(thread), []).extend(slices)
     return together
+
+
+def thread_name(name: str) -> str:
+    """A thread's `name` as the trace has it on Linux and macOS, cut to 15
+    bytes: Windows keeps the whole of it (`VizCompositorThread`)."""
+    return name.encode("utf-8")[:15].decode("utf-8", errors="ignore")
 
 
 def analyze(run: dict) -> dict:
@@ -348,12 +355,15 @@ def write_report(results: dict[str, dict], env: dict, window: bool, scale: float
     (`PrepareTiles`), the raster's total and each update's mean and
     longest, the main frames', the tiles rastered and how many were one
     color, and those not rastered."""
+    # Not in the f-string: before Python 3.12 its expressions can't hold a
+    # backslash.
+    renderer = "the renderer in the browser's process" if single_process else "a renderer process for the tab"
     lines = [
         "# machopo's tile raster while scrolling and resizing",
         "",
         f"{date.today().isoformat()}, "
         f"{f'machopo at `{binary}`' if binary else f'machopo {speedometer.git_head()} (the `perf` profile)'}, "
-        f"{'the renderer in the browser\'s process' if single_process else 'a renderer process for the tab'}, "
+        f"{renderer}, "
         f"{'a real window' if window else f'headless, device scale factor {scale:g}'}, "
         f"{f'{raster_threads} raster threads' if raster_threads else 'the default raster threads'}; "
         f"{env['os']}, {env['cpu']}, power: {env['power']}. "

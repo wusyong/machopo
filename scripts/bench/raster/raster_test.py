@@ -117,6 +117,21 @@ class ReadingTests(unittest.TestCase):
             self.assertEqual([path.name for path in raster.renderer_traces(trace)],
                              ["page.pftrace.412", "page.pftrace.97"])
 
+    def test_a_threads_name_is_cut_as_linux_and_macos_cut_it(self):
+        # Windows's trace has Viz's thread's whole name, the others' 15
+        # bytes of it: the same thread, read under the cut name.
+        traces = {Path("windows"): {"VizCompositorThread": [(1, "Display::DrawAndSwap"), (2, None)],
+                                    "Chrome_IOThread": [(1, "ChannelHost::OnMessage"), (2, None)]},
+                  Path("macos"): {"VizCompositorTh": [(3, "Display::DrawAndSwap"), (4, None)]}}
+        with mock.patch.object(speedometer, "perfetto_slices", side_effect=traces.get):
+            slices = raster.thread_slices(list(traces))
+        self.assertEqual(slices, {raster.VIZ_THREAD: [(1, "Display::DrawAndSwap"), (2, None),
+                                                      (3, "Display::DrawAndSwap"), (4, None)],
+                                  raster.IO_THREAD: [(1, "ChannelHost::OnMessage"), (2, None)]})
+        # A character that doesn't fit whole is left out, as Linux's
+        # `pthread_setname_np` takes bytes.
+        self.assertEqual(raster.thread_name("VizCompositorTé"), "VizCompositorT")
+
     def test_the_window_shrinks_and_grows_back(self):
         sizes = raster.resize_sizes()
         self.assertEqual(len(sizes), 2 * raster.RESIZE_STEPS)
@@ -162,14 +177,16 @@ class ReadingTests(unittest.TestCase):
             threaded = raster.write_report(results, env, False, 2.0, 3).read_text(encoding="utf-8")
             named = Path(folder) / "another"
             named.mkdir()
-            other = raster.write_report(results, env, False, 2.0, None, True, named, Path("/old/machopo"))
+            old = Path("/old/machopo")
+            other = raster.write_report(results, env, False, 2.0, None, True, named, old)
             single = other.read_text(encoding="utf-8")
-            other = raster.write_report(results, env, False, 2.0, None, False, named, Path("/old/machopo"))
+            other = raster.write_report(results, env, False, 2.0, None, False, named, old)
             self.assertEqual(other, named / "raster.md")
             other = other.read_text(encoding="utf-8")
         self.assertIn("a renderer process for the tab, headless", text)
-        self.assertIn("machopo at `/old/machopo`, the renderer in the browser's process, headless", single)
-        self.assertIn("machopo at `/old/machopo`, a renderer process for the tab, headless", other)
+        # The path as this platform writes it (`\old\machopo` on Windows).
+        self.assertIn(f"machopo at `{old}`, the renderer in the browser's process, headless", single)
+        self.assertIn(f"machopo at `{old}`, a renderer process for the tab, headless", other)
         # The browser's side, and the frames' way to the screen; none of
         # either in a run from before they were told.
         self.assertIn("| page | scroll | 30, 1.5, 0.2 | 2, 0.6, 0.4 | 1, 0.1, 0.1 | 4, 3.0, 1.0 | 4 | 0.05, 0.2, 0.2 "

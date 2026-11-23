@@ -85,6 +85,10 @@ async function run() {
   try {
     await client.willStartFirstIteration(iterationCount);
     for (let i = 0; i < iterationCount; i++) {
+      // As the real runner's `_runMultipleIterations`: the page's first
+      // `performance.mark()`, whose first call costs what a later one
+      // doesn't, comes before any test's window.
+      performance.mark("iteration-start");
       const tests = {};
       for (const name of suites) {
         const frame = await loadFrame(`/suites/${name}.html`);

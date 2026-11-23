@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | 1. process 和 trace：automation pipe 的 `SystemInfo.getProcessInfo`、工具讀一次執行的每一份 trace、Speedometer 的 `--trace` 和 `--sample`、`blink-perf --gc`、量不到 renderer 時報錯 | 做完，merge 回 `main` | 2026-11-23 |
 | 2. 記憶體和 `census`、`--single-process` | 做完、待審查 | 2026-11-23 |
-| 3. Linux 和 Windows | | |
+| 3. Linux 和 Windows | Windows 做完，Linux 待使用者在那台機器上跑 | |
 
 ## 驗收
 
@@ -26,6 +26,8 @@
 | `compare.md` 的記憶體：合計和它的變化，照 process 的表；舊版本的合計由 Browser 的補上 | `CompareTests.test_times_and_memory_compared`、`test_without_sample_the_versions_are_timed_in_turn` |
 | 真的 machopo 的記憶體：Browser 和 renderer process 都有、合計是兩者的和；`--single-process` 時只有 Browser 的 process、trace 和記憶體 | `MachopoTests.test_machopos_peak_memory_with_its_run`、`test_with_single_process_the_renderer_is_the_browsers` |
 | `--single-process`：交給認得它的 build，`--against` 的舊版本不交；報告寫明每一邊的 renderer 在哪裡 | `SingleProcessTests` |
+| Windows：ETW 取到 renderer process 的樣本（machopo 的函式由 PDB 命名、JS 由 V8 的 ETW 命名、展開穿過 JIT 的 frame）；記憶體讀得到 renderer process 的 | `SampleTests`（系統管理員的終端機）；`MachopoTests.test_machopos_peak_memory_with_its_run`、`MemoryTests.test_another_processs_peak_stays`（現在每個平台都跑） |
+| `raster` 的 Browser 的 thread 在 Windows 的 trace 裡是整個名字（`VizCompositorThread`），照 15 個位元組讀 | `raster_test.py ReadingTests.test_a_threads_name_is_cut_as_linux_and_macos_cut_it`；Windows 上：`RunTests` |
 | `census`：renderer process 寫 `MACHOPO_CENSUS` 加 `.<pid>`；工具把一頁的每一份加總、其他檔案不算；renderer process 沒寫時那一頁是錯誤 | `cargo test -p base --features census census`、`cargo test -p shell --features census --test it automation_pipe::a_renderer_process_counts`、`python3 scripts/bench/census/census_test.py` |
 
 ## 做過的檢查
@@ -48,3 +50,19 @@
 - **不穩定的測試**：`speedometer_test.py` 整套跑時 `MeasureTests.test_profiles_of_both` 失敗一次，在 Chrome 那一側：profile 裡沒有 suite 自己的程式碼（節點的 URL 都是空的）。單獨跑 3 次都通過。Chrome 那條路這次沒有改；同樣的失敗在 2026-10-23 就記過（`rfcs/0075-remote-debugging/progress.md` 的「不穩定的測試」），原因還沒查：假的 `list` suite 很小，Chrome 每 1 ms 取一次樣，可能一個樣本都沒落在 suite 的 JS 裡。沒有在這份 RFC 修。
 - 跑過的：`speedometer_test.py`（139 個，上面那一個以外都通過）、`census_test.py`、`blink_perf_test.py`、`raster_test.py`；`cargo test -p base --features census census`、`cargo test -p shell --features census --test it automation_pipe::a_renderer_process_counts`；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。
 - 階段的檢查：`cargo test --workspace` 4681 個通過，`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`，和開著 `census` 的 `cargo clippy -p base -p shell --all-targets --features base/census,shell/census -- -D warnings` 沒有問題。
+
+**第 3 階段，Windows**（2026-11-23，Windows 11 Home 10.0.26300，Intel Core i9（Family 6 Model 183），Python 3.11.9，samply 0.13.1）：
+
+- 第一次在這台機器上跑工具的測試時，找到的問題（都已修好）：
+  - **`raster.py` 在 Python 3.12 之前 parse 不了**：報告開頭的 f-string 的表達式裡有反斜線（`browser\'s`），3.12 起才允許；macOS 和 CI 是 3.12 以上，所以沒有發現。`raster_test.py` 整個跑不起來。改成先存到變數（報告的文字不變）。`scripts/` 和 `tests/` 底下的其他 Python 檔案用 3.11 都 parse 得了。
+  - **`raster` 在 Windows 上讀不到 Browser 的 Viz thread**：Linux 和 macOS 的 trace 把 thread 的名字截成 15 個位元組（`VizCompositorTh`），Windows 的保留整個名字（`VizCompositorThread`），`Display::DrawAndSwap`、`SharedImage::*` 都是 0，沒有報錯（`RunTests` 的兩個失敗）。`Chrome_IOThread` 剛好 15 個位元組，所以沒受影響。`thread_slices` 把每個名字截成 15 個位元組（`thread_name`）。
+  - **`MachopoTests.test_the_windows_are_the_runners_times` 第一個 test 多 0.2 ms**（允許 0.15）：trace 裡 mark 的時間是 `performance.mark()` 的 `startTime`，和 `performance.now()` 一樣 coarsen 到 0.1 ms。假的 runner（`fake/resources/main.mjs`）的第一個 `performance.mark()` 是某個 test 的 `-start`，第一次呼叫的成本（mark 的時間之後、`performance.now()` 之前）落在計時區間裡、不在 runner 回報的時間裡：每次執行的第一個 test 的 `-start` 比 runner 的 `performance.now()` 早 0.1 到 0.2 ms，dev 和 `perf` profile 都是。真的 runner 在第一個 test 之前就 mark 了 `iteration-start`（`_runMultipleIterations`），假的 runner 照它加上之後，dev 和 `perf` 各跑 4 次，每個 test 都在 0.1 ms 以內。`MeasureTests.test_traces_of_both` 列出 `-start` 的 mark 時改成只看 suite 的（多了 `iteration-start`；它要 Chrome for Testing，這台沒有，沒有跑）。
+  - **`SampleTests.test_the_stacks_in_the_timed_windows` 在 Windows 上每次都找不到 `call_animation_frame`**（系統管理員的終端機，10 次都失敗）：stack 完整，從 `dom_js::listeners::impl$0::call_animation_frame()` 經過 `Builtins_JSEntry` 到 `makeGarbage`，但測試找的是 `dom_js::listeners::call_animation_frame` 這個名字。`listeners.rs` 有兩個：`ScriptHost` 的 method，和它呼叫的同名的自由函式；Windows 的 `perf` profile 把後者 inline 進前者，samply 從 PDB 拿的名字不列 inline 的 frame，method 的名字是 `impl$0::…`。和 renderer 是不是自己的 process 無關。測試改成接受 `dom_js::listeners::` 底下任一個 `call_animation_frame`；那 10 次留下的樣本照新的檢查都通過，之後在系統管理員的終端機跑 `SampleTests` 通過。
+  - **`RendererTraceTests` 的取樣測試寫到 tree 的 `target/bench/speedometer/`**：沒有那個目錄時（新的 checkout）`FileNotFoundError`。改成和 `cmd_trace` 的那幾個一樣寫到測試自己的目錄。
+- 記憶體：這台的 `test-gaps.md` 寫了「下次在 Windows 上跑時讓 `MemoryTests` 的自己的峰值也在 Windows 上跑」：匿名的 `mmap` 在 Windows 上是 paging file 的 section（共用的，不算 private bytes），改成碰過每一頁的 `bytearray`，每個平台都跑；`MachopoTests` 的兩個記憶體的檢查也拿掉只在 macOS 和 Linux 跑的條件。真的 machopo（dev）：Browser 706 MB、renderer 38 MB、合計是兩者的和（Browser 的 private bytes 包括 GPU 驅動程式的）。
+- 真的 Speedometer（TodoMVC-JavaScript-ES5，`perf` profile，renderer 是自己的 process）：`bench.py speedometer --trace --browser machopo` 讀 `.pftrace.18300`，`phases.md` 每個 iteration 的 script 15.6、style 2.0、box tree 1.2、layout 0.8、paint 1.2、parse 6.1、GC 1.2 ms。`--sample`（UAC 問一次）：266.3 ms 的 CPU 時間、30 個照 runner 的 mark 的計時區間，樣本是 renderer process 的（不是的話工具會報錯）；machopo 的函式有名字（PDB），JS 的函式由 V8 的 ETW 命名（`Store.save …/store.js:82:37`，Windows 上沒有 `JS:` 的前綴），stack 從 `dom_js::listeners::call_animation_frame` 穿過 `Builtins_JSEntry` 到頁面的 JS、再到 DOM 的 callback；沒有 `tracing_log` 的 frame。所以 ETW 取得到子 process 的樣本，不用 attach 或 `--renderer-cmd-prefix`。
+- mutation test（`mutants-3.toml`，`python3 scripts/test.py mutate --keep-going`）：5 條全部抓到。thread 的名字不截、截成 16 個位元組（`ReadingTests`）；報告的 renderer 說反（`ReadingTests.test_the_report`）；Windows 讀目前的 private bytes、不是峰值（`MemoryTests`）；假的 runner 拿掉 `iteration-start`（`MachopoTests.test_the_windows_are_the_runners_times`，這台機器上第一個 test 每次都多 0.2 ms）。
+- 跑過的：`speedometer_test.py`（121 個通過，跳過的是要 Chrome for Testing、Linux `perf`、系統管理員的那幾組）、`blink_perf_test.py`（37 個通過，`GcRunTests`、`RunTests` 要 Chrome for Testing，跳過）、`raster_test.py`（13 個通過）、`census_test.py`；`cargo test -p base --features census census`、`cargo test -p shell --features census --test it automation_pipe::a_renderer_process_counts`、`cargo test -p shell --test it automation_pipe::the_process_info`。
+- `SampleTests`（系統管理員的終端機，使用者跑）：通過。
+- 沒有跑的：Chrome 那一側的測試要先下載 Chrome for Testing（這個階段沒有改 Chrome 的路）；`SampleTests` 的檢查放寬之後沒有對它跑 mutation test（要系統管理員，每一條都要人在終端機跑）：放寬的只是名字的比對，stack 要穿過 JS 到 machopo 的那一段照舊檢查。
+- Linux 的 `perf` 和 `VmHWM`：待使用者在那台機器上跑。
