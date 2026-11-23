@@ -2100,8 +2100,13 @@ impl BoxTree {
             };
             return self.lay_out_box(id, inputs, block_ctx);
         }
-        // Laid out for real, not only measured: its fragment changes.
+        // Laid out for real, not only measured: its fragment changes, and
+        // it is the containing block of those hoisted to it this time
+        // (Blink's `OutOfFlowLayoutPart` fills a new layout result).
+        // Cleared here, as taffy's pass leaves the list alone for a result
+        // with no positioning area (a leaf's: a box left empty).
         if inputs.run_mode == RunMode::PerformLayout {
+            self.boxes[index].absolute.clear();
             self.boxes[index].needs_fragment = true;
             self.boxes[index].content_shift = 0.0;
             self.last_layout.laid_out = self.last_layout.laid_out.wrapping_add(1);

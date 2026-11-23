@@ -3234,6 +3234,102 @@ fn out_of_flow_boxes_hoisted_elsewhere_are_where_their_parents_have_them() {
     assert!(Arc::ptr_eq(&places[1].fragment, &fragments["f"]));
 }
 
+/// A containing block left with nothing in it has none of the out-of-flow
+/// boxes it had, whatever lays it out and however they left: not as they
+/// were, nor as the box that took one's place in the tree's boxes (which
+/// was then in the fragments twice; the harness checks the tree against one
+/// built from scratch).
+#[test]
+fn a_containing_block_left_empty_has_no_out_of_flow_boxes() {
+    for container in [
+        "position: relative",
+        "position: relative; display: flex",
+        "position: relative; display: grid",
+        "position: relative; display: inline-block",
+        "position: relative; display: list-item",
+        "position: relative; display: table-cell",
+        "position: relative; display: table",
+        "position: absolute",
+        "contain: layout",
+        "transform: translateX(4px)",
+    ] {
+        for child in [
+            "<b id=gone style='position: absolute'></b>",
+            "<div id=gone><b style='position: absolute'></b></div>",
+            "<b id=gone style='position: fixed'></b>",
+        ] {
+            for how in ["removed", "hidden", "moved", "replaced"] {
+                let mut page = Page::new(&format!(
+                    "<div id=cb style='{container}'>{child}</div><div id=other></div>"
+                ));
+                page.change(|cx, document| {
+                    let gone = find(cx, document, "gone");
+                    let other = find(cx, document, "other");
+                    match how {
+                        "removed" => cx.remove(gone),
+                        "hidden" => cx.set_attribute(gone, "style", "display: none"),
+                        "moved" => {
+                            cx.append_child(other, gone).unwrap();
+                        }
+                        _ => {
+                            cx.remove(gone);
+                            let new = element(cx, document, "i", &[("style", "display: block")]);
+                            cx.append_child(other, new).unwrap();
+                        }
+                    }
+                });
+                let view = page.view();
+                let cb = &fragments(&view, &page)["cb"];
+                assert!(
+                    !cb.children
+                        .iter()
+                        .any(|child| child.fragment.style.is_out_of_flow()),
+                    "{container}, {child}, {how}"
+                );
+            }
+        }
+    }
+}
+
+/// The same when the box that takes the place of the one that left is the
+/// anonymous block the containing block is in: that had the containing
+/// block holding the box it is in, which overflowed the stack as the
+/// fragments were made. The text after it is what has the anonymous block
+/// made again after the out-of-flow box went.
+#[test]
+fn a_containing_block_left_empty_doesnt_hold_the_box_it_is_in() {
+    let mut page = Page::new(
+        "<div><p>block</p>text<span id=cb style='position: absolute'>\
+         <b id=gone style='position: absolute'></b></span>after</div>",
+    );
+    page.change(|cx, document| {
+        let cb = find(cx, document, "cb");
+        cx.set_data(cx.next_sibling(cb).expect("the text after it"), "later");
+        cx.remove(find(cx, document, "gone"));
+    });
+    let view = page.view();
+    assert!(fragments(&view, &page)["cb"].children.is_empty());
+}
+
+/// Only laying a containing block out says which out-of-flow boxes are its:
+/// measured again after that, as a shrink-to-fit box around it measures
+/// what is in it, it has them still.
+#[test]
+fn a_containing_block_only_measured_keeps_its_out_of_flow_boxes() {
+    let page = Page::new(
+        "<div style='position: absolute; top: 3px'><div style='display: inline-flex'>\
+         <div id=cb style='position: relative'>text<b id=abs style='position: absolute'></b></div>\
+         </div></div>",
+    );
+    let view = page.view();
+    let fragments = fragments(&view, &page);
+    let held = &fragments["cb"].children;
+    assert!(
+        held.iter()
+            .any(|child| Arc::ptr_eq(&child.fragment, &fragments["abs"]))
+    );
+}
+
 /// What a selection goes over (Blink's `LayoutSelection` walks the nodes
 /// with a layout object): text with something left after white space
 /// processing, a `<br>`, a replaced element; and as the DOM changes.
