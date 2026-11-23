@@ -143,6 +143,7 @@
 
 | 項目 | 為什麼還沒有測試 | 現在靠什麼 | 之後怎麼處理 |
 | --- | --- | --- | --- |
+| 子 frame 載完時當場檢查 parent（`dom_api` 的 `lifecycle.rs` 的 `end_load` 的 `check_parent_completed`；parent 的 `load` 的 task 在子 frame 的 `load` 的 task 裡排） | 拿掉時 renderer 在那一批 task 跑完之後照樣對每個 frame 判斷（`run_due_tasks` 的 `finish_loads`），差別只在同一批裡、子 frame 的 `load` 之後才跑的 task 排的 task 和 parent 的 `load` 的先後；排不出那樣的一批 | 審查 | headless 在一批 task 裡照順序跑兩個 frame 的 task 的 hook，或 renderer 不再在一批之後替每個 frame 判斷時（之後拿掉那個判斷的話）就有測試抓得到 |
 | 只剩圖片在等時，送出圖片的請求之後再判斷一次 `load`（`renderer` 的 `documents.rs` 的 `finish_load` 的第二次 `check_completed`；撤銷了的 blob URL 的圖片在送的時候就失敗） | 拿掉時 `load` 只是延到下一個 task 跑完（`run_due_tasks` 對每個 frame 再判斷一次），測試的頁面之後總有 task；要一個之後完全沒有 task 的頁面 | 審查 | headless 在文件不再有 task 時停下、看 `load` 發了沒，或測試能數 `finish_load` 判斷了幾次 |
 | 子 frame 的文件在 parser 做出 body 之前不畫（`renderer` 的 `documents.rs` 的 `commit_child` 裡 commit 時的 `update_child_blocking`；拿掉就先畫出只有 `<head>` 的文件） | headless 的 `render` 只回最後一張 frame 和畫了幾張，parent 的 frame 照樣在畫，看不出子 frame 在暫停的期間畫了什麼 | 審查；main frame 的同樣的判斷有 `shell` 的 `a_document_is_drawn_once_it_has_a_body` | 情境裡在子 frame 的 body 暫停時截圖，或 headless 記下每一張 frame 在某一點的顏色 |
 | parser 停下（讓出、或等其餘的 body）時馬上開始它做出的元素要的載入（`renderer` 的 `documents.rs` 的 `parser_stopped`；拿掉時 `<link>` 的 sheet 要等 loop 那一輪最後的 `request_next_frame_if_dom_changed` 才開始） | 只有 compositor 的 frame 和停下的那個 task 排在同一批、在那之前跑時，才先排版了沒有 sheet 的文件；測試排不出那個順序 | `browser` 的 `a_child_frame_waits_for_its_stylesheets` 碰巧排到時失敗（拿掉時約六次一次） | 測試能讓 compositor 的 frame 排在 commit 之後、結束之前的 hook，或 headless 記下每一張 frame 用到的 sheet |
@@ -269,9 +270,10 @@
 
 弄壞之後行為完全一樣，記在這裡免得重複追查。
 
-**`dom_api` 的 unload counter（`lifecycle.rs` 的 `unload_document`）**
+**`dom_api` 的 unload counter 和文件的載入（`lifecycle.rs`）**
 
 - 發完 `unload` 之後不把 counter 減回來：unload 過的文件接著就被 discard（iframe 拿掉）或換掉（導覽），counter 再也沒有人讀。留著是因為 counter 不該依賴「之後一定拆掉」。
+- 子 frame 的文件被 discard 了就不發 iframe 的 `load`（`lifecycle.rs` 的 `end_load`）：discard 了的文件不再 fully active，它的 window 的 `load` 的 task 不跑，走不到這裡。留著是不靠 task 的這個規則。
 
 **`ipc` 的 Linux 通道（`platform/linux/channel.rs`）**
 

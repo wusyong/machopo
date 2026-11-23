@@ -165,6 +165,32 @@ pub fn document_ready<H: ScriptHost>(
     }
 }
 
+/// `document`'s load ended, right after its window's `load` in the same
+/// task: it delays its parent's `load` no more (`Cx::set_load_ended`); a
+/// child frame's iframe fires `load` (HTML's "iframe load event steps";
+/// Chrome's `LocalDOMWindow::DispatchLoadEvent` calls the owner's
+/// `DispatchLoad` right after the window's), unless script took the
+/// iframe away meanwhile; then its parent may have loaded. The event is
+/// dispatched from here, the child's realm current: what of it is a realm's
+/// is the parent's all the same (its wrappers, its listeners' calls, their
+/// errors, `window.event`).
+pub(crate) fn end_load<H: ScriptHost>(host: &mut H, document: &NodeRoot) {
+    let owner = host.mutate(|cx| {
+        let document = document.get(cx.gc);
+        cx.set_load_ended(document);
+        if cx.is_discarded(document) {
+            return None;
+        }
+        cx.frame_owner(document).map(|owner| cx.root(owner))
+    });
+    let Some(owner) = owner else {
+        return;
+    };
+    fire_event(host, &TargetRoot::Node(owner.clone()), event::LOAD, false, false);
+    let parent = host.read(|cx| cx.root(cx.document_of(owner.get(cx.gc))));
+    crate::frame::check_parent_completed(host, &parent);
+}
+
 /// HTML's "unload a document" of `document` (a window's), as its frame
 /// navigates on: `pagehide` at its window (a plain event: machopo has no
 /// `PageTransitionEvent`, whose `persisted` would be false), then

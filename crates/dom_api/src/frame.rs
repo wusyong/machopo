@@ -217,9 +217,15 @@ fn remove_child_frame<H: ScriptHost>(host: &mut H, owner: dom::NodeId) {
         return;
     };
     host.discard_child(&document);
+    check_parent_completed(host, &parent);
+}
+
+/// `check_completed` of `parent`, whose child frame's load ended or which
+/// it went from, its style brought up to date through its frame's layout,
+/// lent only if nothing else delays it.
+pub(crate) fn check_parent_completed<H: ScriptHost>(host: &mut H, parent: &NodeRoot) {
     host.mutate(|cx| {
         let parent = parent.get(cx.gc);
-        // Its style brought up to date only if nothing else delays it.
         if cx.load_progress(parent) != dom::LoadProgress::Parsed {
             return;
         }

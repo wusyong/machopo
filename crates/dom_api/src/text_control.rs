@@ -319,8 +319,9 @@ pub fn run_element_task<H: ScriptHost>(host: &mut H, global: &GlobalRoot) -> boo
                 }
             }
             // HTML's "the end": complete, the window's `load` (each event
-            // with its checkpoint), then the host hears of it
-            // (`Dom::take_loaded_documents`): its iframe's `load` next.
+            // with its checkpoint), a child frame's iframe's `load` and its
+            // parent checked (`lifecycle::end_load`), then the host hears
+            // of it (`Dom::take_loaded_documents`).
             (ElementTaskKind::WorkerError(info), _) => {
                 if let Some(worker) = &target {
                     crate::worker::fire_worker_error(host, worker, &info);
@@ -335,6 +336,7 @@ pub fn run_element_task<H: ScriptHost>(host: &mut H, global: &GlobalRoot) -> boo
             }
             (ElementTaskKind::WindowLoad, Some(element)) => {
                 crate::lifecycle::document_ready(host, &element, crate::DocumentReadiness::Loaded);
+                crate::lifecycle::end_load(host, &element);
                 host.mutate(|cx| cx.note_document_loaded(element.get(cx.gc)));
             }
             // An element's, in a worker: none is queued there (its global

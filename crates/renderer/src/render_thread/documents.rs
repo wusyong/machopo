@@ -2883,49 +2883,23 @@ impl RenderThread {
         }
     }
 
-    /// `frame`'s document's window `load` task ran: a child frame's iframe
-    /// fires `load` (HTML's "iframe load event steps", in its parent's
-    /// realm) and its parent's `load` may come; the top-level frame's
+    /// `frame`'s document's window `load` task ran, its iframe's `load` and
+    /// its parent's check with it (`dom_api`'s): the top-level frame's
     /// `DidFinishLoad` goes with the next frame. DevTools hears of either.
     fn document_loaded(&mut self, frame: FrameId) {
-        let Some(next) = self.doc_mut(frame) else {
-            return;
-        };
-        let document = next.document.clone();
-        let Some(engine) = &mut self.engine else {
-            return;
-        };
-        // Once: its load ends here, its parent's no longer waiting for it.
-        let queued = engine.dom_mut().mutate(|cx| {
-            let document = document.get(cx.gc);
-            let queued = cx.load_progress(document) == dom::LoadProgress::LoadQueued;
-            if queued {
-                cx.set_load_ended(document);
-            }
-            queued
-        });
-        if !queued {
+        if self.doc(frame).is_none() {
             return;
         }
-        let place = self.place_of(frame);
-        let Some(engine) = &mut self.engine else {
-            return;
-        };
-        match place {
-            // Its frame gone: no `load` of its iframe's.
+        match self.place_of(frame) {
+            // Its frame gone: nothing to tell.
             None => {}
-            // A child frame's: its iframe's `load` (HTML's "iframe load
-            // event steps", in its parent's realm), and its parent's
-            // `load` if it waited for it.
-            Some(Some((parent, owner))) => {
-                engine.fire_event(&owner, dom::names::event::LOAD);
+            Some(Some(_)) => {
                 self.handle_frame_requests();
                 self.send_harness_results();
                 if let Some(id) = self.tell_lifecycle(frame, "load", ipc::TimeTicks::now()) {
                     self.page_agent.stopped_loading(&id);
                 }
                 self.request_main_frame();
-                self.finish_load(parent);
             }
             Some(None) => {
                 self.handle_frame_requests();

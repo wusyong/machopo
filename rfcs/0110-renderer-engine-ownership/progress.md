@@ -19,7 +19,7 @@
 | 2d. 文件的載入狀態（readiness、還在等的載入）搬到 DOM，「載完了沒」的判斷移到 `dom_api` | 做完，待審查（第 13 到 16 條；兩條 mutation 沒抓到，見做過的檢查） | 2026-11-23 |
 | 2e-1. 必壞的測試：拿掉 iframe 時的 unload 和它期間擋的事、parent 的 `load` 的時機、iframe 的 `load` 緊接著 window 的 `load`（第 21 條） | 做完，待審查（iframe 的 `load` 那一個現在就通過，見做過的檢查） | 2026-11-23 |
 | 2e-2. 拿掉 iframe 時先 unload（unload counter 擋建子 frame 和導覽）再 discard，拆完當場檢查 parent（第 17、18 條） | 做完，待審查 | 2026-11-23 |
-| 2e-3. iframe 的 `load` 和「載入結束了」在子 frame 的 window `load` 的 task 裡（第 19 條） | 沒開始 | |
+| 2e-3. iframe 的 `load` 和「載入結束了」在子 frame 的 window `load` 的 task 裡（第 19 條） | 做完，待審查（兩條 mutation 沒抓到，見做過的檢查） | 2026-11-23 |
 | 2f. 初始的 `about:blank` 不先建 `FrameDocument`；拿掉 `Created`、`Removed` 的便條 | 沒開始 | |
 | 3. 同一份文件內的捲動當場做，拿掉 renderer 那份文件網址的副本（第 7 條的第 3 步） | 沒開始 | |
 | 4. `javascript:` 網址在 `dom_api` 裡排成綁在 Document 上的 task（第 4 步） | 沒開始 | |
@@ -134,4 +134,16 @@
 **Mutation test**（`mutants-2e2.toml`）：10 條，8 條抓到；`a document navigated from stops unloading before the frames in it` 第一次沒抓到（沒有導覽時子孫 unload 的測試），補了 dom_js 的測試之後抓到；`the unload counter never comes down` 等價（unload 過的文件接著就被拆或換掉），記進 `docs/test-gaps.md` 的「等價、不用處理的 mutation」。跑完檔案都還原了。
 
 **測試**：`dom` 254 個、`dom_api` 201 個、`dom_js` 552 個（1 個 ignored）、`renderer` 128 個、`browser` 191 個、`shell` 663 個都通過。
+
+### 第 2e-3 步：iframe 的 `load` 在子 frame 的 window `load` 的 task 裡（2026-11-23，Linux：Fedora 45、debug build，`7d65fe8` 之上）
+
+**做的事**：`dom_api` 的 `WindowLoad` task 在 `document_ready(Loaded)` 之後呼叫 `lifecycle::end_load`：設「host 結束了它的載入」（原本是 renderer 在 `document_loaded` 設），文件沒被 discard、有 iframe 時在 iframe 上發 `load`（在子 frame 的 realm 是目前的時候直接 `fire_event`，第 19 條），再檢查 parent（`frame::check_parent_completed`，和拿掉 iframe 時共用）。renderer 的 `document_loaded` 只留 DevTools 的 lifecycle、`stopped_loading`、最上層的 `load_finished`，不再發 iframe 的 `load`、不再 `finish_load(parent)`。拿掉 `limitations.md` 裡 iframe 的 `load` 晚一輪的那一條。`documents::an_iframes_load_comes_with_its_documents`（2e-1）照樣通過：順序和 parent 的 realm（`e.target`、`window.event`、例外）都沒變。
+
+**WPT**：2e-2 的那一組加上 `html/browsers/windows/`，415 個，0 個非預期的結果。
+
+**Mutation test**（`mutants-2e3.toml`）：5 條，3 條抓到；沒抓到的兩條：
+- `the parent not checked as its child loads`：renderer 在一批 task 之後照樣替每個 frame 判斷（`run_due_tasks` 的 `finish_loads`），差別只在同一批裡、子 frame 的 `load` 之後跑的 task 排的 task 和 parent 的 `load` 的先後，排不出來（和 2d 的第二次判斷同一類）。記進 `docs/test-gaps.md` 的「能補、還沒補的測試空缺」。
+- `a discarded document's iframe fires load`：等價：discard 了的文件的 window `load` 的 task 不跑。記進 `docs/test-gaps.md` 的「等價、不用處理的 mutation」。
+
+跑完檔案都還原了。**測試**：`dom` 254 個、`dom_api` 201 個、`dom_js` 552 個（1 個 ignored）、`renderer` 128 個、`browser` 191 個、`shell` 663 個都通過。
 

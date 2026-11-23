@@ -1,0 +1,38 @@
+# Stage 1, step 2e-3: an iframe's load and its parent's check in its document's load task.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "env", "MACHOPO_GPU_ADAPTER=cpu", "cargo", "test", "-q", "-p", "shell", "--test", "it"]
+timeout = 240
+
+[[mutant]]
+name = "a document's load never ends"
+file = "crates/dom_api/src/text_control.rs"
+from = '''                crate::lifecycle::end_load(host, &element);'''
+to = ''''''
+
+[[mutant]]
+name = "no load ended recorded"
+file = "crates/dom_api/src/lifecycle.rs"
+from = '''        cx.set_load_ended(document);
+        if cx.is_discarded(document) {'''
+to = '''        if cx.is_discarded(document) {'''
+
+[[mutant]]
+name = "no iframe load"
+file = "crates/dom_api/src/lifecycle.rs"
+from = '''    fire_event(host, &TargetRoot::Node(owner.clone()), event::LOAD, false, false);'''
+to = ''''''
+
+[[mutant]]
+name = "the parent not checked as its child loads"
+file = "crates/dom_api/src/lifecycle.rs"
+from = '''    crate::frame::check_parent_completed(host, &parent);
+}'''
+to = '''    let _ = parent;
+}'''
+
+[[mutant]]
+name = "a discarded document's iframe fires load"
+file = "crates/dom_api/src/lifecycle.rs"
+from = '''        if cx.is_discarded(document) {
+            return None;
+        }'''
+to = ''''''
