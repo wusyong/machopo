@@ -237,7 +237,7 @@
   - 在 inline 內容中間插入 block 時，Blink 把兩邊包進新的匿名 block，它們沒有 layout 過，選 anchor 時整段跳過；machopo 照舊在裡面選。
   - SVG 裡的元素不會是 anchor（外層的 `<svg>` 會）；Blink 用它們的 decorated bounding box 選。
   - 沒有 `scroll-padding`：捲動框的可見範圍是整個 scrollport（Blink 扣掉 `scroll-padding`）。
-- 回上一頁時不恢復捲動位置（同一份文件的 entry 之間只捲到 entry 的 fragment）；文件的 `#fragment` 在載入完成時捲一次，之後導覽到 fragment 時再捲；設 `location.hash` 時在 event loop 的最上層才捲（Chrome 當場捲：設完馬上讀 `scrollY` 已經是新的）。
+- 回上一頁時不恢復捲動位置（同一份文件的 entry 之間只捲到 entry 的 fragment）；文件的 `#fragment` 在載入完成時捲一次，之後導覽到 fragment 時再捲；設 `location.hash` 時當場捲（和 Chrome 一樣：設完馬上讀 `scrollY` 已經是新的）。
 - scroll anchoring 調整捲動的位置時不分派 `scroll`：WPT 的 `css/css-scroll-anchoring/after-scrollable-range-shrinkage-001.html` 在 `scrollBy` 的那一個趕在 `setTimeout(0)` 之前的 frame 就發了時，等不到而 TIMEOUT（時好時壞）。
 - 打字時不把 caret 捲進視野（只有 script 的 `focus()` 時捲）；文字框的值比框長時，inner editor 也不照 caret 捲動（Blink 的 `RevealSelection`）。
 
