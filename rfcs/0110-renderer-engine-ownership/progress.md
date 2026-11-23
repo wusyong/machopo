@@ -16,7 +16,7 @@
 | 2a. 必壞的測試：A1、A5；移除 iframe 時 parent 的 `load` 和子 frame 的 unload（先對照 Chrome） | A1、A5 的做完，待審查；移除的兩個留到 2e | 2026-11-23 |
 | 2b. renderer 向 engine 查 frame 的 token、parent、owner；拿掉 `ChildFrames` 的樹和 token、`FrameDocument.child_of`；WebDriver 和 DevTools 的 frame 清單讀 engine（A5、A1） | 做完，待審查（兩條 mutation 沒抓到，見做過的檢查） | 2026-11-23 |
 | 2c. 建立和移除時 child view 和給 Browser 的訊息由 hook 當場做 | 做完，待審查 | 2026-11-23 |
-| 2d. 文件的載入狀態（readiness、還在等的載入）搬到 DOM，「載完了沒」的判斷移到 `dom_api` | 沒開始（開始前列出要決定的事） | |
+| 2d. 文件的載入狀態（readiness、還在等的載入）搬到 DOM，「載完了沒」的判斷移到 `dom_api` | 做完，待審查（第 13 到 16 條；兩條 mutation 沒抓到，見做過的檢查） | 2026-11-23 |
 | 2e. 移除時 engine 當場發子 frame 的 `pagehide`、`unload`，檢查 parent、排它的 `load` | 沒開始（開始前列出要決定的事） | |
 | 2f. 初始的 `about:blank` 不先建 `FrameDocument`；拿掉 `Created`、`Removed` 的便條 | 沒開始 | |
 | 3. 同一份文件內的捲動當場做，拿掉 renderer 那份文件網址的副本（第 7 條的第 3 步） | 沒開始 | |
@@ -94,4 +94,26 @@
 **Mutation test**（`mutants-2c.toml`）：7 條，第一次 6 條抓到。`the browser not told of a frame gone` 沒抓到：Browser 的 `frame_tree.remove` 沒有網頁看得到的效果，補了 `browser_view::the_browser_hears_of_a_removed_frame`（看 renderer 送出的訊息：拿掉的 frame 的 `DidDetachFrame` 帶著建它時的 token），之後抓到。跑完檔案都還原了。
 
 **測試**：`dom_js` 551 個（1 個 ignored）、`renderer` 128 個、`shell` 653 個、`dom_api` 201 個、`browser` 191 個都通過。
+
+### 第 2d 步：文件的載入狀態在 DOM，「載完了沒」是 `dom_api` 的（2026-11-23，Linux：Fedora 45、debug build，`693e686` 之上）
+
+逐條決定（已決定的事項第 13 到 16 條；第 14 條實作前從 B 更正成 B'：`Loaded` 不能從 `readyState` 推，renderer 在 iframe 的 `load` 分派之後才設）。
+
+**做的事**：`dom` 的文件資料加了 host 替它抓、會擋 `load` 的請求（`add_load_request`、`remove_load_request`、`has_load_requests`，照編號）、`DOMContentLoaded` 發過了（`document_ready(ContentLoaded)` 設）、`load` 排了（`queue_window_load` 設）、host 結束了它的載入（`set_load_ended`）、它的 frame 的導覽在路上（`set_frame_navigating`，記在子 frame 的文件上：commit 換來新的文件，frame 拿掉時文件跟著不在，不會留下舊的旗標），`load_progress` 從這些和 `readyState` 推出五個值。`dom_api` 加了 `check_completed`（`LoadCheck`：`Queued`、`Waits`、`WaitsForImages`）。renderer 拿掉 `Readiness` 和 `readiness`、`ChildFrames::loading`、`children_loading`；`finish_load` 先送 `<link>`，呼叫 `check_completed`，只剩圖片在等時送出圖片的請求、再呼叫一次；`<link>` 的 sheet 開始載入、收到回應時同步 DOM 的請求；子 frame 的導覽和排著的 commit 每次改動之後同步旗標（`sync_child_navigating`）；`document_loaded` 和中止時設 `set_load_ended`。
+
+**和第 16 條說的不同的地方**：原本寫 renderer 照舊先更新 style、送圖片，再呼叫 `check_completed`。那樣每次 `finish_load` 都會更新 style，連還在 parse 的文件也是；改成 `check_completed` 先看前提、通過了才更新 style，回 `WaitsForImages` 時 renderer 送圖片、再問一次，和原本的順序一樣。
+
+**順帶修的 2c 的錯**：同一個 call 裡建立又拿掉的 iframe，view 在拿掉時當場拿掉了，renderer 之後處理它的 `Created` 時 2c 加的 `debug_assert` 失敗（WPT 的 `initial-empty-document/iframe-nosrc.html` 等 4 個 crash，2c 的整組測試沒有這種情況）。`Created` 遇到 engine 已經沒有的 frame 時整筆跳過；補了 `automation_pipe::a_frame_made_and_removed_in_one_script_leaves_nothing`。
+
+**WPT**：`html/semantics/embedded-content/the-iframe-element/`、`html/semantics/document-metadata/the-link-element/`、`html/syntax/parsing/`、`html/dom/documents/`、`html/browsers/browsing-the-web/`、`html/webappapis/scripting/` 267 個，0 個非預期的結果（修掉上面的 crash 之後）；`html/semantics/scripting-1/`、`html/semantics/embedded-content/the-img-element/` 有 7 個非預期的 PASS（`script-crossorigin-network.sub.html` 的 6 個、`module/credentials.sub.html` 的 1 個），在 `main`（`9e7d93d`）上同樣通過，和這份 RFC 無關，沒有改預期結果（CI 上照 FAIL 寫，可能和這台機器有關）。
+
+**Mutation test**（`mutants-2d.toml`）：第一次用 900 秒的上限，會讓 `load` 永遠不發的 mutant 每條要等滿，停掉改成 240 秒（停掉時留下的改動用 runner 存的原檔還原、確認過）。12 條，第一次 6 條抓到、2 條 hung（算抓到）、4 條沒抓到：
+- `an initial about:blank not loaded`：等價：初始的 `about:blank` 的 `readyState` 一建好就是 complete，最後的 fallback 本來就是 `Loaded`。拿掉多餘的 `initial_about_blank` 判斷，mutant 改成弄壞那個 fallback，之後抓到。
+- `a dropped child navigation still delays load`：補了 `documents::a_dropped_child_navigation_delays_no_load`（iframe 導覽到沒有 handler 的 scheme，Browser 丟掉；先試的 204 在 machopo 會 commit 一份文件，不是丟掉），之後抓到。
+- `an aborted document's load never ends`：補了 `documents::a_child_whose_body_stops_short_delays_no_load`，仍然沒抓到：中止的文件 `readyState` 是 complete、沒有排 `load`，fallback 照樣是 `Loaded`；這個 bit 只在中止時 interactive 的 `readystatechange` 的 handler 裡有差（B' 的用意），現在那時沒有人判斷。2e 之前等價，2e 讓 engine 在 handler 裡判斷時補測試。
+- `load not checked again once the images are asked for`：補了 `documents::a_revoked_blob_urls_background_delays_no_load`，仍然沒抓到：拿掉時 `load` 延到下一個 task 跑完（`run_due_tasks` 的 `finish_loads`），測試的頁面之後總有 task。記進 `docs/test-gaps.md` 的「能補、還沒補的測試空缺」。
+
+跑完檔案都還原了。另外記進 `docs/limitations.md` 的「Parser 和載入」：背景圖的載入記在整個 DOM，每份文件的 `load` 都等它。
+
+**測試**：`dom` 254 個、`dom_api` 201 個、`dom_js` 551 個（1 個 ignored）、`renderer` 128 個、`browser` 191 個、`shell` 657 個都通過。
 

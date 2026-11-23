@@ -861,6 +861,95 @@ impl<'gc> Cx<'_, 'gc> {
         });
     }
 
+    /// `request_id`, a request its host fetches for `document`, delays its
+    /// load event till it is done (`remove_load_request`).
+    pub fn add_load_request(&self, document: NodeRef<'gc>, request_id: u64) {
+        let data = self.ensure_document_data(document);
+        let mut requests = data.load_requests.take();
+        if !requests.contains(&request_id) {
+            requests.push(request_id);
+        }
+        data.load_requests.set(requests);
+    }
+
+    /// `request_id`, of `document`'s load requests, done: it delays it no
+    /// more. Nothing for one it doesn't have.
+    pub fn remove_load_request(&self, document: NodeRef<'gc>, request_id: u64) {
+        let Some(data) = self.document_data(document) else {
+            return;
+        };
+        let mut requests = data.load_requests.take();
+        requests.retain(|&id| id != request_id);
+        data.load_requests.set(requests);
+    }
+
+    /// Whether a request its host fetches for `document` delays its load
+    /// event (`add_load_request`).
+    pub fn has_load_requests(&self, document: NodeRef<'gc>) -> bool {
+        self.document_data(document).is_some_and(|data| {
+            let requests = data.load_requests.take();
+            let any = !requests.is_empty();
+            data.load_requests.set(requests);
+            any
+        })
+    }
+
+    /// How far `document`'s loading is: from its readiness, whether its
+    /// `DOMContentLoaded` fired and its window's `load` task was queued,
+    /// and whether its host ended its load. One with no data (none was
+    /// loaded) is loaded.
+    pub fn load_progress(&self, document: NodeRef<'gc>) -> crate::LoadProgress {
+        use crate::LoadProgress;
+        let Some(data) = self.document_data(document) else {
+            return LoadProgress::Loaded;
+        };
+        if data.load_ended.get() {
+            LoadProgress::Loaded
+        } else if data.load_queued.get() {
+            LoadProgress::LoadQueued
+        } else if data.content_loaded.get() {
+            LoadProgress::Parsed
+        } else {
+            match self.ready_state(document) {
+                DocumentReadyState::Loading => LoadProgress::Loading,
+                DocumentReadyState::Interactive => LoadProgress::Deferring,
+                // Complete with no `load` queued: a child frame's initial
+                // `about:blank`, complete as it is made (no one sets it
+                // loading), or one its host loads no more.
+                DocumentReadyState::Complete => LoadProgress::Loaded,
+            }
+        }
+    }
+
+    /// `document`'s `DOMContentLoaded` is to fire: it is parsed
+    /// (`load_progress`).
+    pub fn set_content_loaded(&self, document: NodeRef<'gc>) {
+        self.ensure_document_data(document).content_loaded.set(true);
+    }
+
+    /// `document`'s host ended its load: its iframe's `load` fired, or its
+    /// parser aborted (`load_progress`). It delays its parent's load event
+    /// no more.
+    pub fn set_load_ended(&self, document: NodeRef<'gc>) {
+        self.ensure_document_data(document).load_ended.set(true);
+    }
+
+    /// Whether `document`'s frame has a navigation on its way, as its host
+    /// told (`set_frame_navigating`).
+    pub fn frame_navigating(&self, document: NodeRef<'gc>) -> bool {
+        self.document_data(document)
+            .is_some_and(|data| data.frame_navigating.get())
+    }
+
+    /// `document`'s frame has a navigation on its way (`navigating`) or
+    /// none now, as its host has it: one that commits brings a document
+    /// of its own, which has none.
+    pub fn set_frame_navigating(&self, document: NodeRef<'gc>, navigating: bool) {
+        self.ensure_document_data(document)
+            .frame_navigating
+            .set(navigating);
+    }
+
     /// `document`'s readiness: complete if it has no data (none was set).
     pub fn ready_state(&self, document: NodeRef<'gc>) -> DocumentReadyState {
         match self
@@ -1290,6 +1379,7 @@ impl<'gc> Cx<'_, 'gc> {
         let Some(window) = self.window_of(document) else {
             return;
         };
+        self.ensure_document_data(document).load_queued.set(true);
         self.push_element_task(window, document, crate::names::event::LOAD, WINDOW_LOAD, 0);
     }
 
@@ -1375,6 +1465,11 @@ pub(crate) fn new_document_data<'gc>() -> DocumentDataInit<'gc> {
         changed_sheets: None,
         forms: None,
         load_delay: Cell::new(0),
+        load_requests: elise::External::new(Cell::new(Vec::new())),
+        content_loaded: Cell::new(false),
+        load_queued: Cell::new(false),
+        load_ended: Cell::new(false),
+        frame_navigating: Cell::new(false),
         responsive_images: None,
         lazy_load_observer: None,
         auto_sizes_observer: None,

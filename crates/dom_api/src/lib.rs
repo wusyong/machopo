@@ -178,7 +178,8 @@ pub use intersection_observer::{
 };
 pub use layout::{FrameLayout, Hit, LayoutCell};
 pub use lifecycle::{
-    DocumentReadiness, document_ready, report_unhandled_rejection, unload_document,
+    DocumentReadiness, LoadCheck, check_completed, document_ready, report_unhandled_rejection,
+    unload_document,
 };
 pub use media_query_list::report_media_query_changes;
 pub use menu_list::{

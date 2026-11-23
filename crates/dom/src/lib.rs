@@ -434,6 +434,19 @@ pub struct DocumentData {
     /// How many of its `<img>`s' requests and external scripts delay its
     /// load event (HTML's "delay the load event"; `image`, `script`).
     pub(crate) load_delay: Cell<u32>,
+    /// The requests its host fetches for it that its load event waits
+    /// for, by number (Blink's `ResourceFetcher`'s blocking loaders: a
+    /// `<link>`'s sheet's; `window`'s `add_load_request`).
+    pub(crate) load_requests: External<Cell<Vec<u64>>>,
+    /// Its `DOMContentLoaded` fired, its window's `load` task queued, and
+    /// its host ended its load (`window`'s `load_progress`).
+    pub(crate) content_loaded: Cell<bool>,
+    pub(crate) load_queued: Cell<bool>,
+    pub(crate) load_ended: Cell<bool>,
+    /// A child frame's document: its frame has a navigation on its way, as
+    /// its host told (`window`'s `set_frame_navigating`), which delays its
+    /// parent's load event as it loads (Blink's provisional navigation).
+    pub(crate) frame_navigating: Cell<bool>,
     /// Its `<img>`s that select again when its environment changes
     /// (`image`'s `responsive_images`), weakly.
     pub(crate) responsive_images: Member<HeapVector<image::ResponsiveImage>>,
@@ -529,6 +542,28 @@ pub enum DocumentReadyState {
     Loading,
     Interactive,
     Complete,
+}
+
+/// How far a frame's document's loading is (HTML's "the end"; Blink's
+/// `Document`'s `parsing_state_` and `load_event_progress_`), as the DOM
+/// worked it out (`Cx::load_progress`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoadProgress {
+    /// Its parser is at work.
+    Loading,
+    /// Parsed and interactive: its deferred scripts run, then
+    /// `DOMContentLoaded`.
+    Deferring,
+    /// Its `DOMContentLoaded` fired: its `load` waits for what delays it
+    /// (`dom_api::check_completed`).
+    Parsed,
+    /// Its window's `load` task queued (`Cx::queue_window_load`), or run
+    /// with its host yet to end its load.
+    LoadQueued,
+    /// Its host ended its load (`Cx::set_load_ended`): its iframe's `load`
+    /// fired, or its parser aborted; or it is complete as it is made (a
+    /// child frame's initial `about:blank`, which no parser loads).
+    Loaded,
 }
 
 /// What a node is.

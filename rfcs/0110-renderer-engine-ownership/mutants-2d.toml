@@ -1,0 +1,91 @@
+# Stage 1, step 2d: a document's loading is the DOM's, and so is whether it has loaded.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "env", "MACHOPO_GPU_ADAPTER=cpu", "cargo", "test", "-q", "-p", "shell", "--test", "it"]
+timeout = 240
+
+[[mutant]]
+name = "DOMContentLoaded not recorded"
+file = "crates/dom_api/src/lifecycle.rs"
+from = '''            DocumentReadiness::ContentLoaded => cx.set_content_loaded(node),'''
+to = '''            DocumentReadiness::ContentLoaded => {}'''
+
+[[mutant]]
+name = "the window's load task not recorded as queued"
+file = "crates/dom/src/window.rs"
+from = '''        self.ensure_document_data(document).load_queued.set(true);
+'''
+to = ''''''
+
+[[mutant]]
+name = "an initial about:blank not loaded"
+file = "crates/dom/src/window.rs"
+from = '''                DocumentReadyState::Complete => LoadProgress::Loaded,'''
+to = '''                DocumentReadyState::Complete => LoadProgress::Loading,'''
+
+[[mutant]]
+name = "a sheet's request delays no load"
+file = "crates/dom/src/window.rs"
+from = '''        if !requests.contains(&request_id) {
+            requests.push(request_id);
+        }'''
+to = '''        let _ = request_id;'''
+
+[[mutant]]
+name = "a sheet's request delays load for ever"
+file = "crates/dom/src/window.rs"
+from = '''        requests.retain(|&id| id != request_id);'''
+to = '''        let _ = request_id;'''
+
+[[mutant]]
+name = "a child frame's navigation delays no load"
+file = "crates/dom_api/src/lifecycle.rs"
+from = '''        .any(|child| cx.frame_navigating(child) || cx.load_progress(child) != LoadProgress::Loaded)'''
+to = '''        .any(|child| cx.load_progress(child) != LoadProgress::Loaded)'''
+
+[[mutant]]
+name = "a child frame's document delays no load"
+file = "crates/dom_api/src/lifecycle.rs"
+from = '''        .any(|child| cx.frame_navigating(child) || cx.load_progress(child) != LoadProgress::Loaded)'''
+to = '''        .any(|child| cx.frame_navigating(child))'''
+
+[[mutant]]
+name = "a dropped child navigation still delays load"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        self.children.navigations.remove(&frame);
+        self.sync_child_navigating(frame);
+        let parent'''
+to = '''        self.children.navigations.remove(&frame);
+        let parent'''
+
+[[mutant]]
+name = "an aborted document's load never ends"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                .mutate(|cx| cx.set_load_ended(document.get(cx.gc)));
+        }
+        let place = self.place_of(frame);'''
+to = '''                .mutate(|cx| cx.node_id(document.get(cx.gc)));
+        }
+        let place = self.place_of(frame);'''
+
+[[mutant]]
+name = "load not checked again once the images are asked for"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            self.start_image_fetches();
+            self.check_completed(&document);'''
+to = '''            self.start_image_fetches();'''
+
+[[mutant]]
+name = "no style update before load"
+file = "crates/dom_api/src/lifecycle.rs"
+from = '''        layout.update_style_and_layout(cx);'''
+to = '''        let _ = layout;'''
+
+[[mutant]]
+name = "a frame gone in the call that made it kept"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                        if self.child_parent(frame).is_none() {
+                            continue;
+                        }'''
+to = '''                        if self.child_parent(frame).is_none() && false {
+                            continue;
+                        }'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "env", "MACHOPO_GPU_ADAPTER=cpu", "cargo", "test", "-q", "-p", "shell", "--test", "it", "automation_pipe::a_frame_made_and_removed_in_one_script_leaves_nothing"]

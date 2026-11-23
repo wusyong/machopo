@@ -101,10 +101,10 @@ pub(super) struct FrameDocument {
     /// The `<link>`s whose sheet was asked for, by element: each loads
     /// once.
     requested_links: dom::NodeIdHashSet,
-    /// The `<link>`s' sheets loading, by request.
+    /// The `<link>`s' sheets loading, by request: the DOM has their
+    /// numbers too, as its `load` waits for them (`Cx::add_load_request`).
+    /// How far its loading is, is the DOM's (`Cx::load_progress`).
     pending_sheets: HashMap<u64, PendingSheet>,
-    /// Where its loading is: `load` waits for the sheets.
-    readiness: Readiness,
     /// When its network goes quiet, for DevTools (Blink's
     /// `IdlenessDetector`, one a frame), from `DOMContentLoaded` on.
     idleness: crate::idleness_detector::IdlenessDetector,
@@ -148,20 +148,6 @@ struct PendingSheet {
     url: Url,
     blocking: bool,
     blocks_scripts: bool,
-}
-
-/// How far the document's loading is (HTML's "the end").
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Readiness {
-    Loading,
-    /// Parsed and interactive: its deferred scripts run, then
-    /// `DOMContentLoaded`.
-    Deferring,
-    /// Parsed, its `DOMContentLoaded` fired; `load` waits for the sheets.
-    Parsed,
-    /// Its window's `load` task queued (`Cx::queue_window_load`).
-    LoadQueued,
-    Loaded,
 }
 
 /// A script the parser waits for, or that runs after parsing: its
@@ -245,7 +231,6 @@ impl FrameDocument {
             encoding,
             requested_links: dom::NodeIdHashSet::default(),
             pending_sheets: HashMap::new(),
-            readiness: Readiness::Loading,
             idleness: crate::idleness_detector::IdlenessDetector::default(),
             sent_title: None,
             title_version: 0,
@@ -370,16 +355,6 @@ impl ChildFrames {
         self.commits.retain(|(id, _, _)| *id != frame);
     }
 
-    /// Whether one of `children` is still loading: its navigation the
-    /// browser's, its document to commit, or not loaded (HTML's: an iframe
-    /// delays its document's `load` event).
-    fn loading(&self, children: &[FrameId]) -> bool {
-        self.navigations.keys().any(|id| children.contains(id))
-            || self.commits.iter().any(|(id, _, _)| children.contains(id))
-            || self.documents.iter().any(|document| {
-                children.contains(&document.frame) && document.readiness != Readiness::Loaded
-            })
-    }
 }
 
 /// A committed document's content type (its MIME type's essence: the
@@ -833,14 +808,30 @@ impl RenderThread {
         below
     }
 
-    /// Whether a child of `frame` is still loading (`ChildFrames::loading`).
-    fn children_loading(&mut self, frame: FrameId) -> bool {
-        let children = self
-            .engine
-            .as_mut()
-            .map(|engine| engine.child_frames(frame))
-            .unwrap_or_default();
-        self.children.loading(&children)
+    /// Whether child frame `frame` has a navigation on its way, the
+    /// browser's or a commit queued, told to the DOM, whose parent's `load`
+    /// waits for it (`dom_api::check_completed`): after each change to
+    /// them.
+    fn sync_child_navigating(&mut self, frame: FrameId) {
+        let navigating = self.children.navigations.contains_key(&frame)
+            || self.children.commits.iter().any(|(id, _, _)| *id == frame);
+        let Some((_, owner)) = self.child_parent(frame) else {
+            return;
+        };
+        if let Some(engine) = &mut self.engine {
+            engine.dom_mut().mutate(|cx| {
+                if let Some(document) = cx.content_document(owner.get(cx.gc)) {
+                    cx.set_frame_navigating(document, navigating);
+                }
+            });
+        }
+    }
+
+    /// How far `frame`'s document's loading is, as the DOM has it.
+    fn load_progress(&mut self, frame: FrameId) -> Option<dom::LoadProgress> {
+        let document = self.doc(frame)?.document.clone();
+        let engine = self.engine.as_mut()?;
+        Some(engine.dom_mut().read(|cx| cx.load_progress(document.get(cx.gc))))
     }
 
     /// Whether `frame` is the top-level frame.
@@ -932,6 +923,12 @@ impl RenderThread {
                         document,
                         ..
                     } => {
+                        // Gone already, in the call that made it (its view
+                        // with it, `child_frame_removed`): nothing of it to
+                        // keep.
+                        if self.child_parent(frame).is_none() {
+                            continue;
+                        }
                         let document_id = self.new_document_id();
                         let Some((dom, next)) = engine_frame(&mut self.engine) else {
                             continue;
@@ -969,7 +966,6 @@ impl RenderThread {
                             document,
                             encoding_rs::UTF_8,
                         );
-                        initial.readiness = Readiness::Loaded;
                         initial.initial = true;
                         self.children.documents.push(initial);
                         self.request_main_frame();
@@ -1389,6 +1385,7 @@ impl RenderThread {
                 origin_source,
             },
         );
+        self.sync_child_navigating(frame);
         // DevTools hears of the frame, loading, before the browser tells
         // of its navigation (Blink tells `frameAttached` as it is made).
         self.tell_frames();
@@ -1468,6 +1465,7 @@ impl RenderThread {
             return false;
         }
         let asked = self.children.navigations.remove(&frame);
+        self.sync_child_navigating(frame);
         let navigation = ChildCommit {
             origin_source: asked.and_then(|asked| asked.origin_source),
             ..navigation
@@ -1512,6 +1510,7 @@ impl RenderThread {
             return;
         }
         self.children.navigations.remove(&frame);
+        self.sync_child_navigating(frame);
         let parent = self.child_parent(frame).map(|(parent, _)| parent);
         if let Some(parent) = parent {
             self.finish_load(parent);
@@ -1542,6 +1541,7 @@ impl RenderThread {
     fn queue_child_commit(&mut self, frame: FrameId, url: Url, markup: String) {
         self.children.navigating(frame);
         self.children.commits.push_back((frame, url, markup));
+        self.sync_child_navigating(frame);
     }
 
     /// Child frame `frame` navigated within its completely loaded document
@@ -1611,6 +1611,7 @@ impl RenderThread {
     /// of its own, in order (`queue_child_commit`).
     pub(super) fn run_child_commits(&mut self) {
         while let Some((frame, url, markup)) = self.children.commits.pop_front() {
+            self.sync_child_navigating(frame);
             let _task = trace_event::trace_event!("ThreadControllerImpl::RunTask");
             let reported = url.to_string();
             let body = NavigationBody {
@@ -2380,12 +2381,23 @@ impl RenderThread {
     /// again after the tasks: script may have removed its `<link>`, or made
     /// it no stylesheet, so they run without waiting for its response.
     pub(super) fn retry_scripts_blocked_by_sheets(&mut self) {
-        let waiting: Vec<(FrameId, bool)> = self
-            .document
+        let Self {
+            document,
+            children,
+            engine,
+            ..
+        } = self;
+        let Some(engine) = engine else {
+            return;
+        };
+        let dom = engine.dom_mut();
+        let waiting: Vec<(FrameId, bool)> = document
             .iter()
-            .chain(&self.children.documents)
+            .chain(&children.documents)
             .filter(|next| {
-                (next.blocking_script.is_some() || next.readiness == Readiness::Deferring)
+                (next.blocking_script.is_some()
+                    || dom.read(|cx| cx.load_progress(next.document.get(cx.gc)))
+                        == dom::LoadProgress::Deferring)
                     && next
                         .pending_sheets
                         .values()
@@ -2563,10 +2575,9 @@ impl RenderThread {
     /// parser-blocking scripts ran: interactive, then its deferred scripts
     /// (`run_deferred_scripts`).
     fn document_parsed(&mut self, frame: FrameId) {
-        let Some(next) = self.doc_mut(frame) else {
+        if self.doc(frame).is_none() {
             return;
-        };
-        next.readiness = Readiness::Deferring;
+        }
         let Some(engine) = &mut self.engine else {
             return;
         };
@@ -2589,7 +2600,13 @@ impl RenderThread {
             return;
         };
         next.deferred_scripts.clear();
-        next.readiness = Readiness::Loaded;
+        // Its load over, before its `readystatechange`: no one waits for it.
+        let document = next.document.clone();
+        if let Some(engine) = &mut self.engine {
+            engine
+                .dom_mut()
+                .mutate(|cx| cx.set_load_ended(document.get(cx.gc)));
+        }
         let place = self.place_of(frame);
         let Some(engine) = &mut self.engine else {
             return;
@@ -2621,12 +2638,12 @@ impl RenderThread {
     /// `load` once nothing delays it (`finish_load`).
     fn run_deferred_scripts(&mut self, frame: FrameId) {
         loop {
+            if self.load_progress(frame) != Some(dom::LoadProgress::Deferring) {
+                return;
+            }
             let Some(next) = self.doc(frame) else {
                 return;
             };
-            if next.readiness != Readiness::Deferring {
-                return;
-            }
             if next.deferred_scripts.is_empty() {
                 break;
             }
@@ -2642,10 +2659,6 @@ impl RenderThread {
             self.execute_parser_script(frame, script);
         }
         let top = self.is_top(frame);
-        let Some(next) = self.doc_mut(frame) else {
-            return;
-        };
-        next.readiness = Readiness::Parsed;
         let Some(engine) = &mut self.engine else {
             return;
         };
@@ -2835,45 +2848,25 @@ impl RenderThread {
         // The `<link>`s the last of the input brought looked for before the
         // style update below takes the flag that says the sheets changed.
         self.start_loads();
-        // Before its document is borrowed: its children are the engine's.
-        let children_loading = self.children_loading(frame);
-        let Some(next) = self.doc(frame) else {
+        let Some(document) = self.doc(frame).map(|next| next.document.clone()) else {
             return;
         };
-        if next.readiness != Readiness::Parsed || !next.pending_sheets.is_empty() || children_loading {
-            return;
+        // The DOM's rules (`dom_api::check_completed`); once only images
+        // delay it, those its style found fetched, and again: one that
+        // fails as it is asked for (a revoked blob URL's) delays it no
+        // more. Its window's `load` task ends it (`document_loaded`).
+        if self.check_completed(&document) == Some(dom_api::LoadCheck::WaitsForImages) {
+            self.start_image_fetches();
+            self.check_completed(&document);
         }
-        // Its backgrounds' images looked for first: its style brought up to
-        // date (Blink finds them in the style recalc before `load`), those
-        // it fetches delaying it.
-        let document = next.document.clone();
-        if let Some((dom, view)) = engine_frame(&mut self.engine) {
-            dom.mutate(|cx| view.update_style_and_layout(cx));
-        }
-        self.start_image_fetches();
-        let Some(engine) = &mut self.engine else {
-            return;
-        };
-        // Its images that delay it (not a lazy one's, as in Chrome), and
-        // the backgrounds' (Chrome's too).
-        if engine
-            .dom_mut()
-            .read(|cx| cx.background_images_loading() || cx.load_event_delayed(document.get(cx.gc)))
-        {
-            return;
-        }
-        // HTML's "the end": complete and the window's `load` are a task of
-        // the DOM manipulation task source, after the element tasks queued
-        // before it (a script's `error` for an empty `src`, an image's
-        // `load`); its iframe still delays its parent's `load` meanwhile
-        // (`ChildFrames::loading_in`). Its turn ends it
-        // (`document_loaded`).
-        engine
-            .dom_mut()
-            .mutate(|cx| cx.queue_window_load(document.get(cx.gc)));
-        if let Some(next) = self.doc_mut(frame) {
-            next.readiness = Readiness::LoadQueued;
-        }
+    }
+
+    /// `dom_api::check_completed` of `document`, its style updated through
+    /// the frame's layout.
+    fn check_completed(&mut self, document: &NodeRoot) -> Option<dom_api::LoadCheck> {
+        let engine = self.engine.as_mut()?;
+        let (dom, layout) = engine.dom_and_layout();
+        Some(dom.mutate(|cx| dom_api::check_completed(cx, layout, document.get(cx.gc))))
     }
 
     /// The window `load` tasks that ran since the last look
@@ -2898,10 +2891,22 @@ impl RenderThread {
         let Some(next) = self.doc_mut(frame) else {
             return;
         };
-        if next.readiness != Readiness::LoadQueued {
+        let document = next.document.clone();
+        let Some(engine) = &mut self.engine else {
+            return;
+        };
+        // Once: its load ends here, its parent's no longer waiting for it.
+        let queued = engine.dom_mut().mutate(|cx| {
+            let document = document.get(cx.gc);
+            let queued = cx.load_progress(document) == dom::LoadProgress::LoadQueued;
+            if queued {
+                cx.set_load_ended(document);
+            }
+            queued
+        });
+        if !queued {
             return;
         }
-        next.readiness = Readiness::Loaded;
         let place = self.place_of(frame);
         let Some(engine) = &mut self.engine else {
             return;
@@ -3371,6 +3376,7 @@ impl RenderThread {
             };
             // An alternate one (or a shadow tree's) loads, but blocks
             // nothing.
+            let document = next.document.clone();
             next.pending_sheets.insert(
                 request_id,
                 PendingSheet {
@@ -3380,6 +3386,12 @@ impl RenderThread {
                     blocks_scripts,
                 },
             );
+            // Its document's `load` waits for it.
+            if let Some(engine) = &mut self.engine {
+                engine
+                    .dom_mut()
+                    .mutate(|cx| cx.add_load_request(document.get(cx.gc), request_id));
+            }
         }
         self.update_child_blocking(frame);
     }
@@ -4586,6 +4598,12 @@ impl RenderThread {
                 continue;
             };
             if let Some(sheet) = next.pending_sheets.remove(&request_id) {
+                let document = next.document.clone();
+                if let Some(engine) = &mut self.engine {
+                    engine
+                        .dom_mut()
+                        .mutate(|cx| cx.remove_load_request(document.get(cx.gc), request_id));
+                }
                 self.update_child_blocking(frame);
                 self.sheet_loaded(frame, sheet, result);
                 return true;

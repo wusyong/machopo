@@ -1871,6 +1871,26 @@ fn a_removed_frame_is_gone_for_the_next_command() {
     );
 }
 
+/// A frame made and removed in one script, gone before the renderer takes
+/// the engine's note of its making: nothing of it is kept, and the page
+/// goes on (debug builds assert that a frame still there was shown as it
+/// was made).
+#[test]
+fn a_frame_made_and_removed_in_one_script_leaves_nothing() {
+    let server = server(&[("/", Route::ok("text/html", "<!DOCTYPE html><p>top</p>"))]);
+    let mut browser = Browser::start();
+    let session = browser.attach();
+    browser.navigate(&session, &server.url("/"));
+    let b = &mut browser;
+    let script = "const f = document.body.appendChild(document.createElement('iframe')); \
+                  f.remove(); return frames.length";
+    assert_eq!(script_in(b, &session, None, script, json!([])), Ok(json!(0)));
+    assert_eq!(
+        script_in(b, &session, None, "return document.body.textContent", json!([])),
+        Ok(json!("top"))
+    );
+}
+
 /// `Machopo.switchToFrame` gives a child frame's id, by its index in its
 /// parent's `window` or by its iframe; the `Machopo` WebDriver methods work in
 /// the frame they are given. A frame's id stays its own as it navigates,

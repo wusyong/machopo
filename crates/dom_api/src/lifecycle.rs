@@ -7,13 +7,76 @@
 
 use dom::names::event;
 use dom::{
-    DocumentReadyState, Event, EventFlags, NavigationMilestone, NodeRoot, TargetRef, TargetRoot,
+    Cx, DocumentReadyState, Event, EventFlags, LoadProgress, NavigationMilestone, NodeRef, NodeRoot,
+    TargetRef, TargetRoot,
 };
 use elise::Persistent;
 use std::time::Instant;
 
 use crate::typed::ScriptHost;
 use crate::{dispatch, fire_event};
+
+/// What `check_completed` found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoadCheck {
+    /// Nothing delays its `load` any more: its window's `load` task is
+    /// queued.
+    Queued,
+    /// It isn't parsed yet, or a request of its own or a child frame
+    /// delays its `load`.
+    Waits,
+    /// Only images delay its `load`, those its style found now among them:
+    /// its host fetches them (one that fails as it is asked for, a revoked
+    /// blob URL's, delays it no more, and it may check again).
+    WaitsForImages,
+}
+
+/// Whether `document` (a frame's) has loaded, HTML's "the end" once it is
+/// parsed (Blink's `Document::CheckCompleted` and `ShouldComplete`): its
+/// window's `load` task queued if nothing delays it. What does: a request
+/// its host fetches for it (`Cx::add_load_request`, a `<link>`'s sheet's),
+/// a child frame loading (a navigation on its way, `Cx::frame_navigating`,
+/// or its document not loaded), its own requests that delay its load event
+/// (an `<img>`'s, an external script's), and the images backgrounds wait
+/// for. Its style is brought up to date through `layout` first, if parsed
+/// and nothing else delays it: the backgrounds its style finds delay it
+/// too (Blink finds them in the style recalc before `load`).
+pub fn check_completed<'gc>(
+    cx: &Cx<'_, 'gc>,
+    layout: Option<&mut dyn crate::FrameLayout>,
+    document: NodeRef<'gc>,
+) -> LoadCheck {
+    if cx.load_progress(document) != LoadProgress::Parsed
+        || cx.has_load_requests(document)
+        || children_loading(cx, document)
+    {
+        return LoadCheck::Waits;
+    }
+    if let Some(layout) = layout {
+        layout.update_style_and_layout(cx);
+    }
+    // Its images that delay it (not a lazy one's, as in Chrome), and the
+    // backgrounds' (Chrome's too).
+    if cx.background_images_loading() || cx.load_event_delayed(document) {
+        return LoadCheck::WaitsForImages;
+    }
+    // HTML's "the end": complete and the window's `load` are a task of the
+    // DOM manipulation task source, after the element tasks queued before
+    // it (a script's `error` for an empty `src`, an image's `load`); its
+    // iframe still delays its parent's `load` meanwhile.
+    cx.queue_window_load(document);
+    LoadCheck::Queued
+}
+
+/// Whether a child frame of `document`'s delays its `load` (HTML: an
+/// iframe delays its document's load event; Blink's
+/// `AllDescendantsAreComplete`): its navigation on its way, or its
+/// document not loaded.
+fn children_loading<'gc>(cx: &Cx<'_, 'gc>, document: NodeRef<'gc>) -> bool {
+    cx.child_content_documents(document)
+        .into_iter()
+        .any(|child| cx.frame_navigating(child) || cx.load_progress(child) != LoadProgress::Loaded)
+}
 
 /// Where a document's loading is (`document_ready`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,7 +126,8 @@ pub fn document_ready<H: ScriptHost>(
                 cx.set_ready_state(node, DocumentReadyState::Complete);
                 mark(NavigationMilestone::DomComplete);
             }
-            DocumentReadiness::ContentLoaded => {}
+            // Parsed from now on: its `load` may come (`check_completed`).
+            DocumentReadiness::ContentLoaded => cx.set_content_loaded(node),
         }
         (cx.root_target(TargetRef::Node(node)), window)
     });

@@ -942,6 +942,68 @@ fn a_new_frames_fetch_goes_through_its_creators_loader() {
     assert_eq!(run(&server.url("/index.html")), "data");
 }
 
+/// A page whose iframe's navigation the browser drops (a scheme with no
+/// handler: no document comes) loads all the same: its frame no longer
+/// delays its `load`.
+#[test]
+fn a_dropped_child_navigation_delays_no_load() {
+    let url = site(
+        "a_dropped_child_navigation_delays_no_load",
+        &[(
+            "index.html",
+            "<!DOCTYPE html><iframe src='nohandler:x'></iframe>\
+             <script>onload = () => testRunner.reportHarnessResults(frames[0].location.href)</script>",
+        )],
+    );
+    assert_eq!(run(&url), "about:blank");
+}
+
+/// A page whose iframe's document stops short (its parser aborted: no
+/// `load` of its own) loads all the same: its load ended.
+#[test]
+fn a_child_whose_body_stops_short_delays_no_load() {
+    use std::collections::HashMap;
+
+    use net::test_server::{Route, TestServer};
+    let server = TestServer::start(HashMap::from([
+        (
+            "/index.html".to_owned(),
+            Route::ok(
+                "text/html",
+                "<!DOCTYPE html><iframe src=/cut></iframe>\
+                 <script>onload = () => testRunner.reportHarnessResults(frames[0].document.readyState)</script>",
+            ),
+        ),
+        (
+            "/cut".to_owned(),
+            Route::ok(
+                "text/html",
+                crate::devtools_log::deflate_cut_short(b"<!DOCTYPE html>part"),
+            )
+            .with_header("Content-Encoding", "deflate"),
+        ),
+    ]))
+    .expect("the test server starts");
+    assert_eq!(run(&server.url("/index.html")), "complete");
+}
+
+/// A background whose blob URL was revoked before its image was asked for
+/// fails as it is asked for: the page's `load` doesn't wait for it.
+#[test]
+fn a_revoked_blob_urls_background_delays_no_load() {
+    let url = site(
+        "a_revoked_blob_urls_background_delays_no_load",
+        &[(
+            "index.html",
+            "<!DOCTYPE html><div id=d style='width: 10px; height: 10px'></div>\
+             <script>const u = URL.createObjectURL(new Blob(['x'], { type: 'image/png' }));\
+             d.style.backgroundImage = `url(${u})`; URL.revokeObjectURL(u);\
+             onload = () => testRunner.reportHarnessResults('loaded');</script>",
+        )],
+    );
+    assert_eq!(run(&url), "loaded");
+}
+
 /// A `javascript:` URL that another origin's page sets a child's
 /// `location` to: a `SecurityError`, nothing run in the child (whose
 /// realm it would be); the same origin's runs, after (so the other's
