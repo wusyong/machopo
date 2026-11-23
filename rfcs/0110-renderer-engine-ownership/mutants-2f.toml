@@ -1,0 +1,67 @@
+# Stage 1, step 2f: no Created or Removed requests; the renderer follows the engine's frames.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "env", "MACHOPO_GPU_ADAPTER=cpu", "cargo", "test", "-q", "-p", "shell", "--test", "it"]
+timeout = 240
+
+[[mutant]]
+name = "a frame made isn't told as a change"
+file = "crates/dom_js/src/frames.rs"
+from = '''    state.frames.changed = true;'''
+to = ''''''
+
+[[mutant]]
+name = "a frame gone isn't told as a change"
+file = "crates/dom_js/src/frames.rs"
+from = '''        if !removed.is_empty() {
+            self.changed = true;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "the renderer keeps what it had of frames gone"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        self.children.remove(&gone);
+        self.cancel_fetches_of_gone_documents();
+        for (frame, _, owner) in frames {'''
+to = '''        let _ = &gone;
+        self.cancel_fetches_of_gone_documents();
+        for (frame, _, owner) in frames {'''
+
+[[mutant]]
+name = "gone frames' fetches not cancelled as they are followed"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        self.children.remove(&gone);
+        self.cancel_fetches_of_gone_documents();
+        for (frame, _, owner) in frames {'''
+to = '''        self.children.remove(&gone);
+        for (frame, _, owner) in frames {'''
+
+[[mutant]]
+name = "a new frame's initial about:blank has no document of the renderer's"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            initial.initial = true;
+            self.children.documents.push(initial);'''
+to = '''            initial.initial = true;
+            drop(initial);'''
+
+[[mutant]]
+name = "a navigated child's frames before followed late"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        // them, before anything drives them.
+        self.follow_child_frames();'''
+to = '''        // them, before anything drives them.'''
+
+[[mutant]]
+name = "a child frame's view without a document id"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        let view = FrameView::new(document, document_node, next_document_id(), system_colors)'''
+to = '''        let view = FrameView::new(document, document_node, DocumentId::default(), system_colors)'''
+
+[[mutant]]
+name = "the frame client's creation stack not kept"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                self.children.creation_stacks.insert(frame, stack);
+            }
+            let url = Url::parse("about:blank").expect("about:blank");'''
+to = '''                let _ = stack;
+            }
+            let url = Url::parse("about:blank").expect("about:blank");'''

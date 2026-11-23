@@ -1696,6 +1696,10 @@ impl ScriptEngine for V8Engine {
         self.data.pump_platform_tasks()
     }
 
+    fn take_frames_changed(&mut self) -> bool {
+        std::mem::take(&mut self.state().frames.changed)
+    }
+
     fn set_frame_client(&mut self, client: Box<dyn dom_api::FrameClient>) {
         self.state().frames.client = Some(client);
     }

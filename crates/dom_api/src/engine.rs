@@ -615,6 +615,13 @@ pub trait ScriptEngine: ParserHost {
     /// `fetch()` goes nowhere: its promise stays pending.
     fn set_load_sink(&mut self, sink: Box<dyn LoadSink>);
 
+    /// Whether a child frame was made or went since the last ask: what the
+    /// host keeps of its frames follows them then (`child_frames`,
+    /// `frame_parent`). None by default: an engine with no child frames.
+    fn take_frames_changed(&mut self) -> bool {
+        false
+    }
+
     /// What the engine tells of its child frames as they are made and go
     /// (`FrameClient`). Nothing by default: an engine with no child frames.
     fn set_frame_client(&mut self, client: Box<dyn FrameClient>) {

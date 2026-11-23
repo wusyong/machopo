@@ -37,14 +37,8 @@ fn engine(urls: &[&str]) -> (V8Engine, Vec<FrameId>) {
             &format!("var f{index} = document.body.appendChild(document.createElement('iframe'));"),
         );
     }
-    let frames: Vec<_> = engine
-        .take_frame_requests()
-        .into_iter()
-        .filter_map(|request| match request {
-            FrameRequest::Created { frame, .. } => Some(frame),
-            _ => None,
-        })
-        .collect();
+    engine.take_frame_requests();
+    let frames = crate::child_frames(&mut engine);
     for (&frame, url) in frames.iter().zip(urls) {
         engine
             .create_window(frame, url, Instant::now())

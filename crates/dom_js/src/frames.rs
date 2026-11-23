@@ -51,6 +51,10 @@ pub(crate) struct Frames {
     /// What is told of the child frames as they are made and go, the
     /// host's (`ScriptEngine::set_frame_client`).
     pub(crate) client: Option<Box<dyn dom_api::FrameClient>>,
+    /// A child frame made or gone since the host last asked
+    /// (`ScriptEngine::take_frames_changed`): what it keeps of them is to
+    /// follow.
+    pub(crate) changed: bool,
 }
 
 impl Frames {
@@ -127,33 +131,16 @@ impl Frames {
     }
 
     /// The host told of `removed`, the frames that were in `parent`'s
-    /// document: its client at once, and one `Removed` for each of its
-    /// children, with the frames inside it.
+    /// document: its client at once, once for each of its children (the
+    /// frames inside it with it); its frames changed (`changed`).
     fn tell_removed(&mut self, removed: &[Frame], parent: FrameId) {
+        if !removed.is_empty() {
+            self.changed = true;
+        }
         for child in removed.iter().filter(|frame| frame.parent == Some(parent)) {
-            let Some(token) = child.token else {
-                continue;
-            };
-            if let Some(client) = &mut self.client {
+            if let (Some(token), Some(client)) = (child.token, &mut self.client) {
                 client.frame_detached(token);
             }
-            let mut gone = vec![child.id];
-            let mut at = 0;
-            while let Some(&above) = gone.get(at) {
-                gone.extend(
-                    removed
-                        .iter()
-                        .filter(|frame| frame.parent == Some(above))
-                        .map(|frame| frame.id),
-                );
-                at = at.saturating_add(1);
-            }
-            self.requests.push(FrameRequest::Removed {
-                frame: child.id,
-                token,
-                parent,
-                gone,
-            });
         }
     }
 
@@ -315,15 +302,7 @@ pub(crate) fn create_child(scope: &mut Scope<'_, '_, '_>, owner: &NodeRoot) -> O
     if let (Some(parent_token), Some(client)) = (state.frames.token(parent), &mut state.frames.client) {
         client.child_frame_created(parent_token, token, &name, created_by_script);
     }
-    state.frames.requests.push(FrameRequest::Created {
-        frame: id,
-        token,
-        parent,
-        owner: owner.clone(),
-        document: document.clone(),
-        name,
-        created_by_script,
-    });
+    state.frames.changed = true;
     // Its layout is there for what script reads of it next.
     if let Some(mut layout) = state.layout.take() {
         let (parent_document, owner_id) = state.dom.read(|cx| {

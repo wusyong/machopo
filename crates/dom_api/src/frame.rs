@@ -48,37 +48,17 @@ pub enum ChildNavigation {
 }
 
 /// What the engine asks of its host for its frames, after the call that
-/// made it so (`ScriptEngine::take_frame_requests`), in order.
+/// made it so (`ScriptEngine::take_frame_requests`), in order. Frames made
+/// and gone are told as they come and go (`FrameClient`, `FrameLayout`),
+/// and are the engine's to ask of (`ScriptEngine::child_frames`,
+/// `take_frames_changed`).
 #[derive(Debug, Clone)]
 pub enum FrameRequest {
-    /// `frame` was made, the child of `parent`, for iframe `owner`: its
-    /// initial `about:blank`, `document`; its token `token`; its name, its
-    /// iframe's `name` then; whether script running made it (not the
-    /// parser).
-    Created {
-        frame: FrameId,
-        token: FrameToken,
-        parent: FrameId,
-        owner: NodeRoot,
-        document: NodeRoot,
-        name: String,
-        created_by_script: bool,
-    },
     /// `frame` is to navigate (its host loads the document and makes it
     /// its active one: `ScriptEngine::create_window`).
     Navigate {
         frame: FrameId,
         navigation: ChildNavigation,
-    },
-    /// `frame`, whose token was `token`, went with the frames in it: its
-    /// iframe was removed, or the document it was in was navigated from
-    /// (one for each frame that document had). Its parent, and every frame
-    /// gone with it (it first): the engine's frames have none of them now.
-    Removed {
-        frame: FrameId,
-        token: FrameToken,
-        parent: FrameId,
-        gone: Vec<FrameId>,
     },
     /// Script navigated `frame` (`location`, `history`), as script in
     /// `initiator` asked (`frame` itself for what isn't asked by another):

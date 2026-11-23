@@ -33,6 +33,23 @@ use crate::compositing;
 use crate::scroll::{self, ScrollState};
 use crate::svg_image::SvgImage;
 
+thread_local! {
+    /// The renderer's next document id: each renderer's thread its own, so
+    /// that the documents its frames show are numbered apart as they are
+    /// made, by the render thread (a navigation's) or in the engine's call
+    /// (an iframe's, `child_frame_created`), without sharing anything. A
+    /// `RefCell`: a `SequenceNumber` hands out the next by `&mut`, and no
+    /// borrow of it outlives `next_document_id`.
+    static NEXT_DOCUMENT_ID: RefCell<base::SequenceNumber<u64>> =
+        RefCell::new(base::SequenceNumber::starting_at(1));
+}
+
+/// An id for a document this renderer shows (a navigation's, an iframe's):
+/// never one given before.
+pub(crate) fn next_document_id() -> DocumentId {
+    DocumentId(NEXT_DOCUMENT_ID.with_borrow_mut(base::SequenceNumber::get_next))
+}
+
 pub(crate) struct FrameView {
     document: NodeRoot,
     /// Its document's id.
@@ -419,12 +436,6 @@ impl FrameView {
             at.paint_dirty = true;
         }
     }
-
-    /// The compositor's id of the document this view shows.
-    pub(crate) fn set_document_id(&mut self, document_id: DocumentId) {
-        self.document_id = document_id;
-    }
-
     /// `view` (a child frame's: `into_child`) shown in this view's frame
     /// or the one below that is `parent` (none: this one), replacing the one
     /// it had for the same frame.
@@ -2469,13 +2480,8 @@ impl dom_api::FrameLayout for Frame {
         document_node: NodeId,
     ) {
         let system_colors = self.view.style.system_colors();
-        let view = FrameView::new(
-            document,
-            document_node,
-            DocumentId::default(),
-            system_colors,
-        )
-        .into_child(frame, owner);
+        let view = FrameView::new(document, document_node, next_document_id(), system_colors)
+            .into_child(frame, owner);
         self.view.show_new_child(parent, view);
     }
 

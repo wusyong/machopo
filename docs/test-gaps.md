@@ -270,6 +270,10 @@
 
 弄壞之後行為完全一樣，記在這裡免得重複追查。
 
+**renderer 對照 engine 的 frame（`documents.rs` 的 `follow_child_frames`）**
+
+- 子 frame 換文件時（`commit_child`）不在 `create_window` 之後當場對帳：接著 parse 新的文件時的 `handle_frame_requests` 照樣對帳，中間只有這個 frame 自己的 `update_child_blocking` 和 `request_main_frame`，沒有東西推動舊文件裡的 frame。留著是讓舊的帳在最早的時候拿掉，不靠之後一定有 `handle_frame_requests`。
+
 **`dom_api` 的 unload counter 和文件的載入（`lifecycle.rs`）**
 
 - 發完 `unload` 之後不把 counter 減回來：unload 過的文件接著就被 discard（iframe 拿掉）或換掉（導覽），counter 再也沒有人讀。留著是因為 counter 不該依賴「之後一定拆掉」。

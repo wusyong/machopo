@@ -290,14 +290,9 @@ fn a_child_frames_entries_are_the_pages() {
         length: 1,
     });
     page.eval("var f = document.body.appendChild(document.createElement('iframe')); 0");
-    let child = page
-        .engine
-        .take_frame_requests()
-        .into_iter()
-        .find_map(|request| match request {
-            FrameRequest::Created { frame, .. } => Some(frame),
-            _ => None,
-        })
+    page.engine.take_frame_requests();
+    let child = *crate::child_frames(&mut page.engine)
+        .first()
         .expect("the iframe's frame");
     // Completely loaded (as Chromium's initial empty document is), so that
     // `location`'s navigations aren't replacements for that.

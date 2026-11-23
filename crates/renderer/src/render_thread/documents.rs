@@ -338,6 +338,18 @@ pub(super) struct ChildCommit<'a> {
 }
 
 impl ChildFrames {
+    /// The frames the renderer has something of.
+    fn known(&self) -> Vec<FrameId> {
+        let mut known: Vec<FrameId> = self.documents.iter().map(|next| next.frame).collect();
+        known.extend(self.navigations.keys());
+        known.extend(self.commits.iter().map(|(frame, _, _)| *frame));
+        known.extend(self.creation_stacks.keys());
+        known.extend(self.owner_loads.keys());
+        known.sort_unstable();
+        known.dedup();
+        known
+    }
+
     /// The frames `gone` (a frame and those in it) gone: what of them the
     /// renderer had.
     fn remove(&mut self, gone: &[FrameId]) {
@@ -514,7 +526,7 @@ impl RenderThread {
         loader: u64,
     ) {
         let _span = trace_event::info_event!("commit_navigation", %url);
-        let document_id = self.new_document_id();
+        let document_id = crate::frame_view::next_document_id();
         // The engine the document's scripts are of, known before it is
         // parsed: a page whose engine is the other kind takes a new one.
         let wasm = self.script_engine.wasm_engine.is_some()
@@ -772,6 +784,85 @@ impl RenderThread {
         0
     }
 
+    /// What the renderer keeps of the child frames brought to the engine's,
+    /// once frames were made or went since it last looked (`ScriptEngine::
+    /// take_frames_changed`), right after the engine's call that did, as
+    /// nothing drives them yet: a new one's initial `about:blank` is a
+    /// document as any other (Blink's has its loader too: what script
+    /// inserts into it loads, its subresources are its own; it is complete
+    /// already), with the stack of the script that made it for DevTools'
+    /// `Page.frameAttached` (its navigation takes it too); what it had of
+    /// one gone goes, the `fetch()`es of documents discarded with it
+    /// cancelled. The browser and the frames' views have them already, as
+    /// they came and went (`RendererFrameClient`, `child_frame_created`,
+    /// `child_frame_removed`); a parent whose `load` waited for one gone
+    /// was checked then (`dom_api`'s). Chrome's `RenderFrameImpl` makes and
+    /// deletes its own in the engine's call; the renderer's state isn't the
+    /// engine's to reach.
+    fn follow_child_frames(&mut self) {
+        let Some(engine) = &mut self.engine else {
+            return;
+        };
+        if !engine.take_frames_changed() {
+            return;
+        }
+        let frames = match self.document.as_ref().map(|next| next.frame) {
+            Some(top) => self.child_frames_below(top),
+            None => Vec::new(),
+        };
+        let gone: Vec<FrameId> = self
+            .children
+            .known()
+            .into_iter()
+            .filter(|known| frames.iter().all(|(frame, _, _)| frame != known))
+            .collect();
+        self.children.remove(&gone);
+        self.cancel_fetches_of_gone_documents();
+        for (frame, _, owner) in frames {
+            if self.children.documents.iter().any(|next| next.frame == frame) {
+                continue;
+            }
+            let Some((dom, view)) = engine_frame(&mut self.engine) else {
+                continue;
+            };
+            let (owner_id, document) = dom.read(|cx| {
+                let owner = owner.get(cx.gc);
+                (
+                    cx.node_id(owner),
+                    cx.content_document(owner).map(|document| cx.root(document)),
+                )
+            });
+            let Some(document) = document else {
+                continue;
+            };
+            // Shown already as its iframe was inserted (the engine has the
+            // frame's layout from the first document on, and a paused
+            // page's DevTools puts it back before script runs).
+            debug_assert!(
+                view.view.child_mut(frame).is_some(),
+                "child frame {frame:?} not shown as it was made"
+            );
+            if self.page_agent.any_enabled()
+                && let Some(stack) = dom.request_stack(dom::StackAsker::Element(owner_id))
+            {
+                self.children.creation_stacks.insert(frame, stack);
+            }
+            let url = Url::parse("about:blank").expect("about:blank");
+            let mut initial = FrameDocument::new(
+                frame,
+                url,
+                "text/html",
+                Rc::from(""),
+                None,
+                document,
+                encoding_rs::UTF_8,
+            );
+            initial.initial = true;
+            self.children.documents.push(initial);
+        }
+        self.request_main_frame();
+    }
+
     /// Child frame `frame`'s token, the engine's (its frames are the one
     /// list of them).
     pub(super) fn child_token(&mut self, frame: FrameId) -> Option<protocol::FrameToken> {
@@ -902,10 +993,12 @@ impl RenderThread {
 
     /// What the engine asked for its frames (`ScriptEngine::
     /// take_frame_requests`), after the script that made it so: a child
-    /// frame's view shown in its parent's, its navigation started, a frame
-    /// that went dropped with its view and loading.
+    /// frame's navigation started, a navigation script made, blob URLs;
+    /// the renderer's own of the frames made and gone since brought to the
+    /// engine's first (`follow_child_frames`).
     pub(super) fn handle_frame_requests(&mut self) {
         loop {
+            self.follow_child_frames();
             let Some(engine) = &mut self.engine else {
                 return;
             };
@@ -915,61 +1008,6 @@ impl RenderThread {
             }
             for request in requests {
                 match request {
-                    // The browser's frame tree has it already
-                    // (`RendererFrameClient`).
-                    FrameRequest::Created {
-                        frame,
-                        owner,
-                        document,
-                        ..
-                    } => {
-                        // Gone already, in the call that made it (its view
-                        // with it, `child_frame_removed`): nothing of it to
-                        // keep.
-                        if self.child_parent(frame).is_none() {
-                            continue;
-                        }
-                        let document_id = self.new_document_id();
-                        let Some((dom, next)) = engine_frame(&mut self.engine) else {
-                            continue;
-                        };
-                        let owner_id = dom.read(|cx| cx.node_id(owner.get(cx.gc)));
-                        // Shown already as its iframe was inserted
-                        // (`child_frame_created`: the engine has the frame's
-                        // layout from the first document on, and a paused
-                        // page's DevTools puts it back before script runs):
-                        // given its compositor id.
-                        match next.view.child_mut(frame) {
-                            Some(view) => view.set_document_id(document_id),
-                            None => debug_assert!(false, "child frame {frame:?} not shown as it was made"),
-                        }
-                        // The stack of the script whose iframe made it, for
-                        // DevTools' `Page.frameAttached` (its navigation
-                        // takes it too).
-                        if self.page_agent.any_enabled()
-                            && let Some(stack) =
-                                dom.request_stack(dom::StackAsker::Element(owner_id))
-                        {
-                            self.children.creation_stacks.insert(frame, stack);
-                        }
-                        // Its initial `about:blank` is a document as any other
-                        // (Blink's has its loader too): what script inserts
-                        // into it loads, its subresources are its own. It
-                        // is complete already: it delays nothing.
-                        let url = Url::parse("about:blank").expect("about:blank");
-                        let mut initial = FrameDocument::new(
-                            frame,
-                            url,
-                            "text/html",
-                            Rc::from(""),
-                            None,
-                            document,
-                            encoding_rs::UTF_8,
-                        );
-                        initial.initial = true;
-                        self.children.documents.push(initial);
-                        self.request_main_frame();
-                    }
                     FrameRequest::Navigate { frame, navigation } => {
                         self.navigate_child(frame, navigation);
                     }
@@ -985,21 +1023,6 @@ impl RenderThread {
                             .register(&url, frame, data.type_(), data.shared_bytes());
                     }
                     FrameRequest::RevokeBlobUrl { url } => self.blob_urls.revoke(&url),
-                    // The browser and the frame's view have it gone
-                    // already (`RendererFrameClient`, `child_frame_removed`).
-                    FrameRequest::Removed {
-                        frame,
-                        parent,
-                        gone,
-                        ..
-                    } => {
-                        self.blob_urls.revoke_frame(frame);
-                        self.cancel_fetches_of_gone_documents();
-                        self.children.remove(&gone);
-                        self.request_main_frame();
-                        // Its parent's `load` may have waited for it.
-                        self.finish_load(parent);
-                    }
                 }
             }
         }
@@ -1655,20 +1678,13 @@ impl RenderThread {
         let Some((parent, owner)) = self.child_parent(frame) else {
             return;
         };
-        // The frames in its document before, which the engine takes out as
-        // it makes its next (`create_window`).
-        let below: Vec<FrameId> = self
-            .child_frames_below(frame)
-            .into_iter()
-            .map(|(child, _, _)| child)
-            .collect();
         // The browser's loader for it; one the renderer commits itself (a
         // `javascript:` URL's) goes through the frame's document's before.
         let loader = match &navigation {
             Some(navigation) => navigation.loader,
             None => self.loader_of(frame),
         };
-        let document_id = self.new_document_id();
+        let document_id = crate::frame_view::next_document_id();
         let (now, time_origin, timing) = match &navigation {
             Some(navigation) => (
                 self.clock
@@ -1775,8 +1791,6 @@ impl RenderThread {
         let top = self.document.as_ref().map(|next| next.frame);
         next.view
             .show_child((Some(parent) != top).then_some(parent), view);
-        // Its children before go with the document before.
-        self.children.remove(&below);
         self.children.documents.retain(|next| next.frame != frame);
         // The document before's `fetch()`es go with it.
         self.cancel_fetches_of_gone_documents();
@@ -1801,6 +1815,10 @@ impl RenderThread {
                 document_encoding,
             )
         });
+        // Its children before went with the document before, the engine's
+        // as it made this one (`create_window`): what the renderer had of
+        // them, before anything drives them.
+        self.follow_child_frames();
         // Not rendered till its parser has made its body.
         self.update_child_blocking(frame);
         self.request_main_frame();

@@ -429,8 +429,6 @@ struct RenderThread {
     /// Whether the page has the system's focus, as last told
     /// (`RendererMsg::SetFocus`), for an engine not made yet.
     page_focused: bool,
-    /// The last `DocumentId` given (`new_document_id`).
-    last_document_id: u64,
     /// The main frame's token, the browser's
     /// (`RendererMsg::DevToolsMainFrameToken`): what DevTools calls it, and
     /// the browser's frame tree its child frames' parent; none until told.
@@ -602,7 +600,6 @@ impl RenderThread {
             window_screen_rect: None,
             page_hidden: false,
             page_focused: false,
-            last_document_id: 0,
             devtools_main_frame_token: None,
             begin_navigation_ids: base::SequenceNumber::starting_at(1),
             own_history_entries: OwnHistoryEntries::default(),
@@ -860,17 +857,6 @@ impl RenderThread {
         if let Some(scroll) = &scroll {
             self.apply_document_compositor_scroll(scroll);
         }
-    }
-
-    /// An id for a document this renderer shows (a navigation's, an
-    /// iframe's): never one given before.
-    #[expect(
-        clippy::arithmetic_side_effects,
-        reason = "one per document the renderer commits: a u64 lasts centuries"
-    )]
-    fn new_document_id(&mut self) -> DocumentId {
-        self.last_document_id += 1;
-        DocumentId(self.last_document_id)
     }
 
     /// The widget: the thread's until the first document's frame takes it,

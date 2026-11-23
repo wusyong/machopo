@@ -6,7 +6,7 @@
 
 use std::time::Instant;
 
-use dom_api::{ClassicScript, EngineSettings, FrameRequest, ScriptEngine};
+use dom_api::{ClassicScript, EngineSettings, ScriptEngine};
 use dom_js::V8Engine;
 
 /// A window of a document at `https://example.test/a/` with
@@ -157,12 +157,8 @@ fn a_message_to_a_child_frame() {
                                                     Object.getPrototypeOf(e.data) === w.Array.prototype));
          w.postMessage([1], '*');",
     );
-    engine.take_frame_requests().iter().for_each(|request| {
-        assert!(
-            matches!(request, FrameRequest::Created { .. }),
-            "{request:?}"
-        );
-    });
+    let requests = engine.take_frame_requests();
+    assert!(requests.is_empty(), "{requests:?}");
     engine.run_posted_messages();
     assert_eq!(log(&mut engine), "1 / true / true");
 }

@@ -13,12 +13,21 @@ use std::time::Instant;
 
 use dom_api::{
     ClassicScript, DevToolsPage, DevToolsQueue, DevToolsQueued, EngineSettings, FrameId,
-    FrameRequest, FrameToken, ScriptEngine,
+    FrameToken, ScriptEngine,
 };
 use dom_js::V8Engine;
 use serde_json::{Value, json};
 
 /// An engine with a DevTools session, `"s"`, whose messages `sent` has.
+/// `parent`'s one child frame, and its token, as the engine has them.
+fn only_child(engine: &mut V8Engine, parent: FrameId) -> (FrameId, FrameToken) {
+    let children = engine.child_frames(parent);
+    let [child] = children[..] else {
+        panic!("{children:?}");
+    };
+    (child, engine.frame_token(child).expect("a child frame's token"))
+}
+
 struct Inspected {
     engine: V8Engine,
     sent: Rc<RefCell<Vec<Value>>>,
@@ -139,10 +148,7 @@ fn each_frames_realm_is_told_as_it_comes_and_goes() {
         "document.appendChild(document.createElement('html'));
          document.documentElement.appendChild(document.createElement('iframe'));",
     );
-    let (child, token) = match page.engine.take_frame_requests().as_slice() {
-        [FrameRequest::Created { frame, token, .. }] => (*frame, *token),
-        requests => panic!("{requests:?}"),
-    };
+    let (child, token) = only_child(&mut page.engine, top);
     assert_ne!(token, TOP_TOKEN);
     assert_eq!(
         contexts(&page.events()),
@@ -199,18 +205,12 @@ fn a_child_frames_navigation_takes_its_frames() {
     let iframe = "document.appendChild(document.createElement('html'));
          document.documentElement.appendChild(document.createElement('iframe'));";
     page.run(top, iframe);
-    let (child, token) = match page.engine.take_frame_requests().as_slice() {
-        [FrameRequest::Created { frame, token, .. }] => (*frame, *token),
-        requests => panic!("{requests:?}"),
-    };
+    let (child, token) = only_child(&mut page.engine, top);
     page.engine
         .create_window(child, "https://other.test/", Instant::now())
         .unwrap();
     page.run(child, iframe);
-    let (grandchild, grandchild_token) = match page.engine.take_frame_requests().as_slice() {
-        [FrameRequest::Created { frame, token, .. }] => (*frame, *token),
-        requests => panic!("{requests:?}"),
-    };
+    let (grandchild, grandchild_token) = only_child(&mut page.engine, child);
     page.events();
     page.engine
         .create_window(child, "https://third.test/", Instant::now())
@@ -223,12 +223,13 @@ fn a_child_frames_navigation_takes_its_frames() {
             format!("created {token} https://third.test 5")
         ]
     );
-    assert!(
-        page.engine.take_frame_requests().iter().any(
-            |request| matches!(request, FrameRequest::Removed { frame, token, .. }
-                if *frame == grandchild && *token == grandchild_token)
+    assert_eq!(
+        (
+            page.engine.frame_parent(grandchild).map(|(parent, _)| parent),
+            page.engine.frame_of_token(grandchild_token)
         ),
-        "the host removes the grandchild's frame"
+        (None, None),
+        "the grandchild's frame is gone"
     );
 }
 
@@ -247,10 +248,7 @@ fn a_realm_kept_by_its_frames_next_document_is_told_once() {
         "document.appendChild(document.createElement('html'));
          document.documentElement.appendChild(document.createElement('iframe'));",
     );
-    let child = match page.engine.take_frame_requests().as_slice() {
-        [FrameRequest::Created { frame, .. }] => *frame,
-        requests => panic!("{requests:?}"),
-    };
+    let (child, _) = only_child(&mut page.engine, top);
     page.events();
     page.engine
         .create_window(child, "https://example.test/b", Instant::now())
@@ -662,19 +660,13 @@ fn the_stacks_of_script_that_asks_for_loads_are_captured() {
         panic!("{sent:?}");
     };
     assert_eq!(top_function(origin.stack.clone()), "go");
-    let requests = page.engine.take_frame_requests();
-    let owner = requests
-        .iter()
-        .find_map(|request| match request {
-            FrameRequest::Created { owner, .. } => Some(owner.clone()),
-            _ => None,
-        })
-        .expect("the frame");
+    let top = page.engine.top_frame();
+    let (child, _) = only_child(&mut page.engine, top);
+    let (_, owner) = page.engine.frame_parent(child).expect("the frame");
     let dom = page.engine.dom_mut();
     let owner = dom.read(|cx| cx.node_id(owner.get(cx.gc)));
     assert_eq!(
         top_function(dom.take_request_stack(StackAsker::Element(owner))),
         "addFrame"
     );
-    drop(requests);
 }

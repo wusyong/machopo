@@ -104,14 +104,9 @@ fn following_hyperlinks() {
         "var f = document.body.appendChild(document.createElement('iframe')); f.name = 'kid'; \
          var a = document.body.appendChild(document.createElement('a')); a.href = 'c.html'; 0",
     );
-    let child = page
-        .engine
-        .take_frame_requests()
-        .into_iter()
-        .find_map(|request| match request {
-            FrameRequest::Created { frame, .. } => Some(frame),
-            _ => None,
-        })
+    page.engine.take_frame_requests();
+    let child = *crate::child_frames(&mut page.engine)
+        .first()
         .expect("the iframe's frame");
     let top = page.engine.top_frame();
     let followed = |page: &mut Page, source: &str| {
@@ -233,14 +228,9 @@ fn a_navigation_says_who_asked() {
     let mut page = Page::new("https://example.test/a/b.html");
     page.load();
     page.eval("var f = document.body.appendChild(document.createElement('iframe')); 0");
-    let child = page
-        .engine
-        .take_frame_requests()
-        .into_iter()
-        .find_map(|request| match request {
-            FrameRequest::Created { frame, .. } => Some(frame),
-            _ => None,
-        })
+    page.engine.take_frame_requests();
+    let child = *crate::child_frames(&mut page.engine)
+        .first()
         .expect("the iframe's frame");
     let top = page.engine.top_frame();
     let asked = |page: &mut Page, source: &str| {

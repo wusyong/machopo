@@ -20,7 +20,7 @@
 | 2e-1. 必壞的測試：拿掉 iframe 時的 unload 和它期間擋的事、parent 的 `load` 的時機、iframe 的 `load` 緊接著 window 的 `load`（第 21 條） | 做完，待審查（iframe 的 `load` 那一個現在就通過，見做過的檢查） | 2026-11-23 |
 | 2e-2. 拿掉 iframe 時先 unload（unload counter 擋建子 frame 和導覽）再 discard，拆完當場檢查 parent（第 17、18 條） | 做完，待審查 | 2026-11-23 |
 | 2e-3. iframe 的 `load` 和「載入結束了」在子 frame 的 window `load` 的 task 裡（第 19 條） | 做完，待審查（兩條 mutation 沒抓到，見做過的檢查） | 2026-11-23 |
-| 2f. 初始的 `about:blank` 不先建 `FrameDocument`；拿掉 `Created`、`Removed` 的便條 | 沒開始 | |
+| 2f. 拿掉 `Created`、`Removed` 的便條，renderer 的帳對照 engine 的 frame（第 22 條） | 做完，待審查 | 2026-11-23 |
 | 3. 同一份文件內的捲動當場做，拿掉 renderer 那份文件網址的副本（第 7 條的第 3 步） | 沒開始 | |
 | 4. `javascript:` 網址在 `dom_api` 裡排成綁在 Document 上的 task（第 4 步） | 沒開始 | |
 | 5. intersection 的通知排成真的 task（第 5 步） | 沒開始 | |
@@ -146,4 +146,16 @@
 - `a discarded document's iframe fires load`：等價：discard 了的文件的 window `load` 的 task 不跑。記進 `docs/test-gaps.md` 的「等價、不用處理的 mutation」。
 
 跑完檔案都還原了。**測試**：`dom` 254 個、`dom_api` 201 個、`dom_js` 552 個（1 個 ignored）、`renderer` 128 個、`browser` 191 個、`shell` 663 個都通過。
+
+### 第 2f 步：拿掉 `Created`、`Removed`，renderer 對照 engine 的 frame（2026-11-23，Linux：Fedora 45、debug build，`83e1f22` 之上）
+
+**做的事**：`FrameRequest` 拿掉 `Created`、`Removed`；dom_js 在建子 frame、`tell_removed`（iframe 拿掉、文件換掉）時記「frame 變了」（`Frames::changed`，`ScriptEngine::take_frames_changed`，`dom_api` 的預設是 `false`：wasm 的 engine 沒有子 frame）。renderer 的 `handle_frame_requests` 每一輪先 `follow_child_frames`：旗標有的時候，engine 有、renderer 沒有 `FrameDocument` 的子 frame 補一份初始 `about:blank` 的（`debug_assert` 它的 view 在；DevTools 要時照舊拿 `frameAttached` 的 stack），renderer 有、engine 沒有的 frame 的帳拿掉（`ChildFrames::known`、`remove`），取消 discard 了的文件的 `fetch()`。`commit_child` 不再在 `create_window` 前算舊文件裡的 frame、之後拿掉，改成推進新的 `FrameDocument` 之後呼叫同一個對帳（先推進去：不然對帳會把這個 frame 當成沒有 `FrameDocument`，補一份初始的）；它自己的舊文件的 `fetch()` 照樣另外取消（沒有子 frame 時旗標不會變）。`Removed` 原本的 blob URL 撤銷和 `finish_load(parent)` 是重複的，拿掉。child view 的 `DocumentId` 改成 `frame_view.rs` 的 thread-local 計數器（`next_document_id`，`sanity.py` 的 `STATICS_ALLOWED`），`child_frame_created` 當場給，`RenderThread::new_document_id`、`last_document_id`、`FrameView::set_document_id` 拿掉。dom_js 的測試有 39 處靠這兩種便條知道建了、拿掉了哪些 frame，改成問 engine（`crate::child_frames`、`only_child`、`frame_parent`）；`frames::a_frame_goes_with_its_token` 改成驗 engine 的查詢和 `take_frames_changed`。
+
+**2b 留下的事**：`a navigated child's frames before kept by the renderer` 擔心的空檔（舊文件裡的 frame 的帳晚一點才清，期間舊的 parser 會不會被續跑），現在是 `commit_child` 裡當場對帳，下面的 mutation 顯示即使拿掉它，接著的 `handle_frame_requests` 也會在任何東西推動那些 frame 之前對帳。
+
+**WPT**：2e-3 的那一組，415 個，0 個非預期的結果。
+
+**Mutation test**（`mutants-2f.toml`）：8 條，7 條抓到；`a navigated child's frames before followed late` 等價（見上），記進 `docs/test-gaps.md` 的「等價、不用處理的 mutation」。跑完檔案都還原了。
+
+**測試**：`dom` 254 個、`dom_api` 201 個、`dom_js` 552 個（1 個 ignored）、`renderer` 128 個、`browser` 191 個、`shell` 663 個都通過。
 

@@ -328,6 +328,8 @@ STATICS_ALLOWED = {
     ("crates/renderer/src/worker_thread.rs", "ENGINE_GONE"):
         "a unit test's flag, set as its worker's engine goes (its module is the tests')",
     ("crates/bindings/src/unified_heap.rs", "RECEIVER_UNWRAPS"): "tests' counters (thread-local)",
+    ("crates/renderer/src/frame_view.rs", "NEXT_DOCUMENT_ID"):
+        "the renderer's next document id (thread-local: each renderer's thread its own, as its request ids)",
     ("crates/renderer/src/loader.rs", "NEXT_REQUEST_ID"):
         "the renderer's next request id (thread-local: each renderer's thread its own; Blink's "
         "`CreateUniqueIdentifier`)",

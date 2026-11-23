@@ -359,14 +359,8 @@ fn a_child_frames_script_runs_in_its_realm() {
         "window.f = document.documentElement.appendChild(document.createElement('iframe'));
          window.g = document.documentElement.appendChild(document.createElement('iframe'));",
     );
-    let frames: Vec<_> = engine
-        .take_frame_requests()
-        .into_iter()
-        .filter_map(|request| match request {
-            dom_api::FrameRequest::Created { frame, .. } => Some(frame),
-            _ => None,
-        })
-        .collect();
+    engine.take_frame_requests();
+    let frames = crate::child_frames(&mut engine);
     let [child, other] = frames[..] else {
         panic!("{frames:?}");
     };

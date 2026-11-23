@@ -80,3 +80,19 @@ mod wrappers;
 
 // Forced GCs: `--expose-gc` lets a test ask V8 for one.
 ::bindings::initialize_v8_before_main!("--expose-gc");
+
+/// The engine's child frames, parents before their children, each parent's
+/// in the order it made them: as the host asks for them
+/// (`ScriptEngine::child_frames`).
+pub(crate) fn child_frames(engine: &mut dom_js::V8Engine) -> Vec<dom_api::FrameId> {
+    use dom_api::ScriptEngine;
+    let mut frames = Vec::new();
+    let mut parents = std::collections::VecDeque::from([engine.top_frame()]);
+    while let Some(parent) = parents.pop_front() {
+        for child in engine.child_frames(parent) {
+            frames.push(child);
+            parents.push_back(child);
+        }
+    }
+    frames
+}

@@ -74,32 +74,30 @@ fn an_iframe_connected_gets_a_browsing_context() {
          true / true / true / null / 1 / true / undefined / true / <html><head></head><body></body></html> / \
          BackCompat / true / 0 / true / false"
     );
-    let requests = engine.take_frame_requests();
-    assert!(
-        matches!(requests.as_slice(), [FrameRequest::Created { parent, .. }] if *parent == engine.top_frame()),
-        "{requests:?}"
-    );
+    let top = engine.top_frame();
+    let [outer] = engine.child_frames(top)[..] else {
+        panic!("one frame made");
+    };
+    assert_eq!(engine.frame_parent(outer).map(|(parent, _)| parent), Some(top));
     // A child of the child, then the first removed: both gone.
     run(
         &mut engine,
         "var g = d.createElement('iframe'); d.body.appendChild(g);
-         log.push(w.length, g.contentWindow.parent === w, g.contentWindow.top === window);
-         f.remove();
+         log.push(w.length, g.contentWindow.parent === w, g.contentWindow.top === window);",
+    );
+    let [inner] = engine.child_frames(outer)[..] else {
+        panic!("one frame made in it");
+    };
+    run(
+        &mut engine,
+        "f.remove();
          log.push(String(f.contentWindow), String(f.contentDocument), frames.length, d.defaultView === w);",
     );
     assert_eq!(log(&mut engine), "1 / true / true / null / null / 0 / true");
-    let requests = engine.take_frame_requests();
-    let FrameRequest::Created { frame: inner, .. } = &requests[0] else {
-        panic!("{requests:?}");
-    };
-    assert_ne!(*inner, engine.top_frame());
-    assert!(
-        matches!(requests[1..], [FrameRequest::Removed { .. }]),
-        "the outer one: {requests:?}"
-    );
+    assert_eq!(engine.child_frames(top), [], "the outer one gone");
     assert!(
         engine
-            .create_window(*inner, "https://example.test/a/c.html", Instant::now())
+            .create_window(inner, "https://example.test/a/c.html", Instant::now())
             .is_none(),
         "gone with its parent"
     );
@@ -149,7 +147,6 @@ fn src_and_srcdoc_navigate_the_child() {
     );
     let requests = engine.take_frame_requests();
     let [
-        FrameRequest::Created { frame, .. },
         FrameRequest::Navigate {
             frame: navigated,
             navigation,
@@ -158,6 +155,10 @@ fn src_and_srcdoc_navigate_the_child() {
     else {
         panic!("{requests:?}");
     };
+    let [frame] = crate::child_frames(&mut engine)[..] else {
+        panic!("one frame made");
+    };
+    let frame = &frame;
     assert_eq!(frame, navigated);
     assert_eq!(
         *navigation,
@@ -278,11 +279,8 @@ fn a_document_navigated_from_is_no_longer_fully_active() {
          f.src = 'https://other.test/';",
     );
     assert_eq!(log(&mut engine), "true");
-    let requests = engine.take_frame_requests();
-    let FrameRequest::Created { frame, .. } = &requests[0] else {
-        panic!("{requests:?}");
-    };
-    let frame = *frame;
+    engine.take_frame_requests();
+    let frame = crate::child_frames(&mut engine)[0];
     drop(
         engine
             .create_window(frame, "https://other.test/", Instant::now())
@@ -314,20 +312,13 @@ fn a_document_has_its_origin_from_the_one_it_inherits() {
          var again = document.body.appendChild(document.createElement('iframe'));
          0",
     );
-    let requests = engine.take_frame_requests();
-    let frames: Vec<_> = requests
-        .iter()
-        .filter_map(|request| match request {
-            FrameRequest::Created { frame, .. } => Some(*frame),
-            _ => None,
-        })
-        .collect();
+    engine.take_frame_requests();
+    let frames = crate::child_frames(&mut engine);
     let [other, srcdoc, blank, again] = frames[..] else {
-        panic!("{requests:?}");
+        panic!("{frames:?}");
     };
-    let FrameRequest::Created { owner, .. } = &requests[0] else {
-        unreachable!("the first is made");
-    };
+    let (_, owner) = engine.frame_parent(other).expect("the first is made");
+    let owner = &owner;
     let other_document = engine
         .create_window(other, "https://other.test/", Instant::now())
         .expect("its frame");
@@ -377,20 +368,13 @@ fn realms_reach_each_other_by_origin() {
          log.push(same.contentWindow.document === same.contentDocument);",
     );
     assert_eq!(log(&mut engine), "true");
-    let requests = engine.take_frame_requests();
-    let frames: Vec<_> = requests
-        .iter()
-        .filter_map(|request| match request {
-            FrameRequest::Created { frame, .. } => Some(*frame),
-            _ => None,
-        })
-        .collect();
+    engine.take_frame_requests();
+    let frames = crate::child_frames(&mut engine);
     let [same, other, srcdoc] = frames[..] else {
-        panic!("{requests:?}");
+        panic!("{frames:?}");
     };
-    let FrameRequest::Created { owner, .. } = &requests[0] else {
-        unreachable!("the first is made");
-    };
+    let (_, owner) = engine.frame_parent(same).expect("the first is made");
+    let owner = &owner;
     let documents = [
         engine.create_window(same, "https://example.test/b.html", Instant::now()),
         engine.create_window(other, "https://other.test/", Instant::now()),
@@ -449,7 +433,7 @@ fn the_parsers_iframe_gets_one_as_it_is_inserted() {
     assert!(
         matches!(
             requests.as_slice(),
-            [FrameRequest::Created { .. }, FrameRequest::Navigate { navigation: ChildNavigation::Src(src), .. }]
+            [FrameRequest::Navigate { navigation: ChildNavigation::Src(src), .. }]
                 if src == "https://example.test/a/b.html"
         ),
         "{requests:?}"
@@ -662,12 +646,13 @@ fn a_childs_intersection_observers_are_called_back() {
          new f.contentWindow.IntersectionObserver(entries => log.push('child ' + entries.length))
              .observe(d.body);",
     );
-    let requests = engine.take_frame_requests();
-    let Some(FrameRequest::Created { document, .. }) = requests.first() else {
-        panic!("{requests:?}");
-    };
+    engine.take_frame_requests();
+    let child = crate::child_frames(&mut engine)[0];
+    let (_, owner) = engine.frame_parent(child).expect("the frame made");
     let queue = engine.dom_mut().mutate(|cx| {
-        let document = document.get(cx.gc);
+        let document = cx
+            .content_document(owner.get(cx.gc))
+            .expect("its document");
         let child = cx.window_of(document).expect("the child's window");
         let body = cx.last_child(cx.first_child(document).unwrap()).unwrap();
         let rect = Some(gfx::RectF::new(0.0, 0.0, 10.0, 10.0));
@@ -747,14 +732,8 @@ fn a_frames_window_proxy_stays() {
          w.addEventListener('load', () => log.push('load on the window kept'));
          wg.marker = 'kept';",
     );
-    let frames: Vec<_> = engine
-        .take_frame_requests()
-        .into_iter()
-        .filter_map(|request| match request {
-            FrameRequest::Created { frame, .. } => Some(frame),
-            _ => None,
-        })
-        .collect();
+    engine.take_frame_requests();
+    let frames = crate::child_frames(&mut engine);
     let [f, g, h] = frames[..] else {
         panic!("{frames:?}");
     };
@@ -832,14 +811,8 @@ fn a_childs_initial_window_has_the_page_focus() {
          w.addEventListener('focus', () => log.push('focus'));
          w.addEventListener('blur', () => log.push('blur'));",
     );
-    let frame = engine
-        .take_frame_requests()
-        .into_iter()
-        .find_map(|request| match request {
-            FrameRequest::Created { frame, .. } => Some(frame),
-            _ => None,
-        })
-        .expect("made");
+    engine.take_frame_requests();
+    let frame = *crate::child_frames(&mut engine).first().expect("made");
     engine
         .create_window(frame, "https://example.test/a/b.html", Instant::now())
         .expect("its frame");
@@ -945,11 +918,8 @@ fn a_navigated_frames_realm_and_unload() {
         &mut engine,
         "var f = document.body.appendChild(document.createElement('iframe'));",
     );
-    let requests = engine.take_frame_requests();
-    let Some(FrameRequest::Created { frame, .. }) = requests.first() else {
-        panic!("{requests:?}");
-    };
-    let frame = *frame;
+    engine.take_frame_requests();
+    let frame = *crate::child_frames(&mut engine).first().expect("made");
     assert!(
         engine.unload_document(frame).is_none(),
         "the initial about:blank"
@@ -1008,12 +978,10 @@ fn a_removed_frames_images_go() {
         &mut engine,
         "var f = document.body.appendChild(document.createElement('iframe'));",
     );
-    let requests = engine.take_frame_requests();
-    let Some(FrameRequest::Created { frame, .. }) = requests.first() else {
-        panic!("{requests:?}");
-    };
+    engine.take_frame_requests();
+    let frame = *crate::child_frames(&mut engine).first().expect("made");
     engine
-        .create_window(*frame, "https://example.test/a/b.html", Instant::now())
+        .create_window(frame, "https://example.test/a/b.html", Instant::now())
         .expect("its frame");
     run(
         &mut engine,
@@ -1115,11 +1083,8 @@ fn the_globals_document_is_cached_and_follows_the_window() {
          for (let i = 0; i < 5; i++) read();
          log.push(read() === before, mine() === w);",
     );
-    let requests = engine.take_frame_requests();
-    let Some(FrameRequest::Created { frame, .. }) = requests.first() else {
-        panic!("{requests:?}");
-    };
-    let frame = *frame;
+    engine.take_frame_requests();
+    let frame = *crate::child_frames(&mut engine).first().expect("made");
     engine
         .create_window(frame, "https://example.test/a/next.html", Instant::now())
         .expect("its frame");
@@ -1243,43 +1208,25 @@ fn a_new_nodes_wrapper_is_of_its_documents_realm() {
     );
 }
 
-/// The frames made, each with its token, in order.
-fn created(requests: &[FrameRequest]) -> Vec<(dom_api::FrameId, dom_api::FrameToken)> {
-    requests
-        .iter()
-        .filter_map(|request| match request {
-            FrameRequest::Created { frame, token, .. } => Some((*frame, *token)),
-            _ => None,
-        })
-        .collect()
-}
-
-/// The frames gone, each with its token, its parent and the frames gone
-/// with it, in order.
-#[expect(clippy::type_complexity, reason = "a test's tuple of what a request says")]
-fn removed(
-    requests: &[FrameRequest],
-) -> Vec<(dom_api::FrameId, dom_api::FrameToken, dom_api::FrameId, Vec<dom_api::FrameId>)> {
-    requests
-        .iter()
-        .filter_map(|request| match request {
-            FrameRequest::Removed {
-                frame,
-                token,
-                parent,
-                gone,
-            } => Some((*frame, *token, *parent, gone.clone())),
-            _ => None,
-        })
+/// The engine's child frames not among `before`, each with its token, as
+/// they were made (parents first).
+fn created(
+    engine: &mut V8Engine,
+    before: &[dom_api::FrameId],
+) -> Vec<(dom_api::FrameId, dom_api::FrameToken)> {
+    crate::child_frames(engine)
+        .into_iter()
+        .filter(|frame| !before.contains(frame))
+        .map(|frame| (frame, engine.frame_token(frame).expect("a child frame's token")))
         .collect()
 }
 
 /// Each child frame has a token of its own, the browser's name for it; a
-/// frame that goes is told with its token, once, the frames in it with it
-/// (each named, for the host, which has no tree of its own), and its
-/// parent: its iframe removed, or the document it was in navigated from (a
-/// child frame's, or the top-level frame's, one for each frame it had).
-/// The engine has none of them after (`ScriptEngine::frame_parent`).
+/// frame goes with the frames in it, its iframe removed, or the document it
+/// was in navigated from (a child frame's, or the top-level frame's): the
+/// engine has none of them after (`ScriptEngine::frame_parent`,
+/// `frame_of_token`), and says its frames changed, for the host to follow
+/// (`take_frames_changed`).
 #[test]
 fn a_frame_goes_with_its_token() {
     let mut engine = engine();
@@ -1289,7 +1236,9 @@ fn a_frame_goes_with_its_token() {
          var g = document.body.appendChild(document.createElement('iframe'));
          f.contentDocument.body.appendChild(f.contentDocument.createElement('iframe'));",
     );
-    let made = created(&engine.take_frame_requests());
+    assert!(engine.take_frames_changed(), "frames made");
+    assert!(!engine.take_frames_changed(), "told once");
+    let made = created(&mut engine, &[]);
     let top = engine.top_frame();
     let [(f, f_token), (g, g_token), (inner_frame, inner)] = made[..] else {
         panic!("{made:?}");
@@ -1304,15 +1253,13 @@ fn a_frame_goes_with_its_token() {
     assert_eq!(engine.frame_parent(inner_frame).map(|(parent, _)| parent), Some(f));
     assert_eq!(engine.frame_parent(top).map(|(parent, _)| parent), None);
     assert_eq!(engine.child_frames(top), [f, g]);
-    // Removed with the one in it: one for the two.
+    // Removed with the one in it.
     run(&mut engine, "f.remove();");
-    assert_eq!(
-        removed(&engine.take_frame_requests()),
-        [(f, f_token, top, vec![f, inner_frame])],
-        "the frame in it goes with it"
-    );
+    assert!(engine.take_frames_changed(), "frames gone");
+    assert_eq!(engine.frame_parent(f).map(|(parent, _)| parent), None);
     assert_eq!(engine.frame_parent(inner_frame).map(|(parent, _)| parent), None);
     assert_eq!(engine.frame_of_token(f_token), None);
+    assert_eq!(engine.child_frames(top), [g]);
     // A child frame navigated: the frames of its document go, it stays;
     // the one in its child with that child.
     run(
@@ -1320,33 +1267,33 @@ fn a_frame_goes_with_its_token() {
         "var gi = g.contentDocument.body.appendChild(g.contentDocument.createElement('iframe'));
          gi.contentDocument.body.appendChild(gi.contentDocument.createElement('iframe'));",
     );
-    let [(in_g, in_g_token), (in_in_g, _)] = created(&engine.take_frame_requests())[..] else {
+    let [(_, in_g_token), (in_in_g, _)] = created(&mut engine, &[g])[..] else {
         panic!("two frames made");
     };
+    engine.take_frames_changed();
     engine
         .create_window(g, "https://other.test/", Instant::now())
         .expect("its frame");
-    assert_eq!(
-        removed(&engine.take_frame_requests()),
-        [(in_g, in_g_token, g, vec![in_g, in_in_g])]
-    );
+    assert!(engine.take_frames_changed(), "frames gone");
     assert_eq!(engine.child_frames(g), []);
-    // The top-level frame navigated: its frames go, each told.
+    assert_eq!(engine.frame_of_token(in_g_token), None);
+    assert_eq!(engine.frame_parent(in_in_g).map(|(parent, _)| parent), None);
+    assert_eq!(engine.frame_parent(g).map(|(parent, _)| parent), Some(top));
+    // The top-level frame navigated: its frames go.
     run(
         &mut engine,
         "document.body.appendChild(document.createElement('iframe'));",
     );
-    let [(h, h_token)] = created(&engine.take_frame_requests())[..] else {
+    let [(_, h_token)] = created(&mut engine, &[g])[..] else {
         panic!("one frame made");
     };
+    engine.take_frames_changed();
     engine
         .create_window(engine.top_frame(), "https://example.test/b", Instant::now())
         .expect("a window");
-    assert_eq!(
-        removed(&engine.take_frame_requests()),
-        [(g, g_token, top, vec![g]), (h, h_token, top, vec![h])]
-    );
+    assert!(engine.take_frames_changed(), "frames gone");
     assert_eq!(engine.child_frames(top), []);
+    assert_eq!((engine.frame_of_token(g_token), engine.frame_of_token(h_token)), (None, None));
 }
 
 /// What a `FrameClient` was told, in order.
@@ -1391,12 +1338,21 @@ fn the_frame_client_hears_of_frames_as_they_come_and_go() {
          var g = document.body.appendChild(document.createElement('iframe'));
          g.remove();",
     );
-    let made = created(&engine.take_frame_requests());
-    let [(_, f), (_, inner), (_, g)] = made[..] else {
+    let made = created(&mut engine, &[]);
+    let [(_, f), (_, inner)] = made[..] else {
         panic!("{made:?}");
     };
+    // `g` made and gone in the call: the engine has it no more, its token
+    // the client's alone.
+    let heard = told();
+    let g = heard
+        .get(2)
+        .and_then(|line| line.strip_prefix("created "))
+        .and_then(|line| line.split(' ').next())
+        .expect("g made")
+        .to_owned();
     assert_eq!(
-        told(),
+        heard,
         [
             format!("created {f} in {main} \"one\" true"),
             format!("created {inner} in {f} \"\" true"),
@@ -1413,7 +1369,7 @@ fn the_frame_client_hears_of_frames_as_they_come_and_go() {
         "document.body.appendChild(document.createElement('iframe'));
          document.body.appendChild(document.createElement('iframe'));",
     );
-    let made = created(&engine.take_frame_requests());
+    let made = created(&mut engine, &[]);
     let [(_, h), (_, i)] = made[..] else {
         panic!("{made:?}");
     };
@@ -1435,7 +1391,7 @@ fn a_document_navigated_from_is_unloading_as_the_frames_in_it_unload() {
         &mut engine,
         "var f = document.body.appendChild(document.createElement('iframe'));",
     );
-    let made = created(&engine.take_frame_requests());
+    let made = created(&mut engine, &[]);
     let [(child, _)] = made[..] else {
         panic!("{made:?}");
     };
