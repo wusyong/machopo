@@ -51,54 +51,17 @@ pub fn run_image_updates<H: ScriptHost>(host: &mut H) {
 pub fn send_image_fetches(
     dom: &mut dom::Dom,
     sink: &mut dyn crate::LoadSink,
-    frame_of: &dyn Fn(dom::NodeId) -> (crate::FrameId, Option<String>, Option<dom::NodeRoot>),
+    frame_of: &dyn Fn(dom::NodeId) -> crate::LoadFrame,
 ) {
     for fetch in dom.take_image_fetches() {
         let (frame, frame_token, frame_document) = frame_of(fetch.document);
-        let (loader, document_url, request_origin, parser_line) = dom.read(|cx| {
-            let document = cx.node_by_id(fetch.document);
-            let loader = document
-                .and_then(|document| cx.document_loader(document))
-                .or_else(|| cx.document_loader(frame_document.as_ref()?.get(cx.gc)));
-            let parser_line = match &fetch.initiator {
-                dom::LoadInitiator::Element(element) => cx
-                    .node_by_id(*element)
-                    .and_then(|element| cx.take_parser_load_line(element)),
-                _ => None,
-            };
-            (
-                loader,
-                document
-                    .and_then(|document| cx.document_url(document))
-                    .map(|url| url.to_str().to_string()),
-                // HTML's "create a potential-CORS request" (no-cors): the
-                // network service taints another origin's response.
-                document.map(|document| match crate::origin(cx, document) {
-                    Some(origin @ url::Origin::Tuple(..)) => origin.ascii_serialization(),
-                    _ => "null".to_owned(),
-                }),
-                parser_line,
-            )
-        });
-        let stack = match &fetch.initiator {
-            dom::LoadInitiator::Element(element) => {
-                dom.take_request_stack(dom::StackAsker::Element(*element))
-            }
-            dom::LoadInitiator::Script(stack) => Some(stack.clone()),
-            _ => None,
-        };
-        let stylesheet = match &fetch.initiator {
-            dom::LoadInitiator::Stylesheet(url) => Some(url.clone()),
-            _ => None,
-        };
-        let origin = crate::FetchOrigin {
-            loader,
+        let (origin, request_origin) = crate::engine::load_origin(
+            dom,
+            fetch.document,
             frame_token,
-            document_url,
-            stack,
-            parser_line,
-            stylesheet,
-        };
+            frame_document.as_ref(),
+            &fetch.initiator,
+        );
         match sink.start_image_fetch(
             frame,
             fetch.document,

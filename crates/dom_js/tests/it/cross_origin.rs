@@ -473,7 +473,11 @@ fn javascript_urls_stop_once_their_frame_goes() {
     );
     while engine.run_element_tasks() {}
     assert_eq!(log(&mut engine), "");
-    assert_eq!(engine.child_frames(engine.top_frame()), [], "the frame gone");
+    assert_eq!(
+        engine.child_frames(engine.top_frame()),
+        [],
+        "the frame gone"
+    );
 }
 
 /// The window's `close()` and `blur()` do nothing, `opener` is none,

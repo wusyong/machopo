@@ -975,7 +975,13 @@ impl<'gc> Cx<'_, 'gc> {
         urls.push(url.to_owned());
         data.javascript_urls.set(urls);
         if !data.javascript_url_task.replace(true) {
-            self.push_element_task(window, document, crate::names::event::LOAD, JAVASCRIPT_URLS, 0);
+            self.push_element_task(
+                window,
+                document,
+                crate::names::event::LOAD,
+                JAVASCRIPT_URLS,
+                0,
+            );
         }
     }
 
@@ -1011,7 +1017,9 @@ impl<'gc> Cx<'_, 'gc> {
         let data = self.ensure_document_data(document);
         let count = data.unload_counter.get();
         data.unload_counter.set(if unloading {
-            count.checked_add(1).expect("fewer than 2^32 unloads nested")
+            count
+                .checked_add(1)
+                .expect("fewer than 2^32 unloads nested")
         } else {
             count.saturating_sub(1)
         });

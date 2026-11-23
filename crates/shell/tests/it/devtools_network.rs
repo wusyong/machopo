@@ -295,9 +295,48 @@ fn an_image_is_requested_in_its_microtask() {
     let sent: Vec<String> = events
         .iter()
         .filter(|event| event["method"] == "Network.requestWillBeSent")
-        .map(|event| event["params"]["request"]["url"].as_str().unwrap_or_default().to_owned())
+        .map(|event| {
+            event["params"]["request"]["url"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned()
+        })
         .collect();
     assert_eq!(sent, [server.url("/a.png"), server.url("/plain")]);
+}
+
+/// A script script inserts is requested as it is prepared (Blink's
+/// `ScriptLoader::PrepareScript`), told to DevTools then: before a
+/// `fetch()` of a task queued after it.
+#[test]
+fn a_script_is_requested_as_it_is_prepared() {
+    let server = server(&[
+        ("/", Route::ok("text/html", "<!DOCTYPE html>page")),
+        ("/s.js", Route::ok("text/javascript", "0")),
+        ("/plain", Route::ok("text/plain", "plain")),
+    ]);
+    let machopo = Machopo::start();
+    let (mut page, _) = page(&machopo);
+    load(&mut page, &server.url("/"));
+    page.call(None, "Network.enable", json!({}));
+    evaluate(
+        &mut page,
+        "const s = document.createElement('script'); s.src = '/s.js'; document.body.append(s);
+         setTimeout(() => fetch('/plain'), 0); 0",
+        None,
+    );
+    let events = network_events(&mut page, 2);
+    let sent: Vec<String> = events
+        .iter()
+        .filter(|event| event["method"] == "Network.requestWillBeSent")
+        .map(|event| {
+            event["params"]["request"]["url"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(sent, [server.url("/s.js"), server.url("/plain")]);
 }
 
 /// A `fetch()`'s `requestWillBeSent` is stamped as it is sent, not once the

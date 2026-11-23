@@ -435,10 +435,7 @@ impl ScriptEngine for V8Engine {
         self.state().frames.of_token(token).map(|frame| frame.id)
     }
 
-    fn frame_parent(
-        &mut self,
-        frame: dom_api::FrameId,
-    ) -> Option<(dom_api::FrameId, NodeRoot)> {
+    fn frame_parent(&mut self, frame: dom_api::FrameId) -> Option<(dom_api::FrameId, NodeRoot)> {
         let frame = self.state().frames.get(frame)?;
         Some((frame.parent?, frame.owner.clone()?))
     }
@@ -1542,7 +1539,6 @@ impl ScriptEngine for V8Engine {
         });
     }
 
-
     fn set_worker_host(&mut self, host: Box<dyn dom_api::WorkerHost>) {
         if let Some(waker) = host.port_waker() {
             self.state().dom.set_port_waker(waker);
@@ -1696,6 +1692,10 @@ impl ScriptEngine for V8Engine {
 
     fn send_image_fetches(&mut self) {
         crate::frames::send_image_fetches(self.state());
+    }
+
+    fn send_script_fetches(&mut self) {
+        crate::frames::send_script_fetches(self.state());
     }
 
     fn set_load_sink(&mut self, sink: Box<dyn dom_api::LoadSink>) {

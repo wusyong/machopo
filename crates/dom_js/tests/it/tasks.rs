@@ -81,9 +81,7 @@ impl LoadSink for Sink {
     }
 
     fn cancel_fetch(&mut self, request_id: u64) {
-        self.calls
-            .borrow_mut()
-            .push(format!("cancel {request_id}"));
+        self.calls.borrow_mut().push(format!("cancel {request_id}"));
     }
 
     fn frame_gone(&self, _: FrameId) {
@@ -120,10 +118,13 @@ fn a_fetch_goes_to_the_load_sink_as_it_is_called() {
         ]
     );
     assert!(
-        page.engine.take_frame_requests().iter().all(|request| !matches!(
-            request,
-            FrameRequest::RegisterBlobUrl { .. } | FrameRequest::RevokeBlobUrl { .. }
-        )),
+        page.engine
+            .take_frame_requests()
+            .iter()
+            .all(|request| !matches!(
+                request,
+                FrameRequest::RegisterBlobUrl { .. } | FrameRequest::RevokeBlobUrl { .. }
+            )),
         "the sink's"
     );
     let sent: Vec<(u64, String)> = page

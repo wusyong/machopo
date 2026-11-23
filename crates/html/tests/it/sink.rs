@@ -304,7 +304,10 @@ fn the_document_parser_knows_where_its_loads_start() {
             let mut at = cx.first_child(document.get(cx.gc));
             while let Some(node) = at {
                 if cx.kind(node) == dom::NodeKind::Element {
-                    lines.push((cx.node_name(node).to_string(), cx.take_parser_load_line(node)));
+                    lines.push((
+                        cx.node_name(node).to_string(),
+                        cx.take_parser_load_line(node),
+                    ));
                 }
                 at = cx.following_within(node, document.get(cx.gc));
             }
@@ -324,7 +327,10 @@ fn the_document_parser_knows_where_its_loads_start() {
             ("IFRAME".to_owned(), 6)
         ]
     );
-    assert!(lines(&back).iter().all(|(_, line)| line.is_none()), "taken once");
+    assert!(
+        lines(&back).iter().all(|(_, line)| line.is_none()),
+        "taken once"
+    );
     assert!(!back.dom.take_microtasks().stacks(), "none script's");
     // The roots before their DOM.
     drop(document);

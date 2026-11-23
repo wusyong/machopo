@@ -78,7 +78,10 @@ fn an_iframe_connected_gets_a_browsing_context() {
     let [outer] = engine.child_frames(top)[..] else {
         panic!("one frame made");
     };
-    assert_eq!(engine.frame_parent(outer).map(|(parent, _)| parent), Some(top));
+    assert_eq!(
+        engine.frame_parent(outer).map(|(parent, _)| parent),
+        Some(top)
+    );
     // A child of the child, then the first removed: both gone.
     run(
         &mut engine,
@@ -650,9 +653,7 @@ fn a_childs_intersection_observers_are_called_back() {
     let child = crate::child_frames(&mut engine)[0];
     let (_, owner) = engine.frame_parent(child).expect("the frame made");
     let queue = engine.dom_mut().mutate(|cx| {
-        let document = cx
-            .content_document(owner.get(cx.gc))
-            .expect("its document");
+        let document = cx.content_document(owner.get(cx.gc)).expect("its document");
         let child = cx.window_of(document).expect("the child's window");
         let body = cx.last_child(cx.first_child(document).unwrap()).unwrap();
         let rect = Some(gfx::RectF::new(0.0, 0.0, 10.0, 10.0));
@@ -1218,7 +1219,12 @@ fn created(
     crate::child_frames(engine)
         .into_iter()
         .filter(|frame| !before.contains(frame))
-        .map(|frame| (frame, engine.frame_token(frame).expect("a child frame's token")))
+        .map(|frame| {
+            (
+                frame,
+                engine.frame_token(frame).expect("a child frame's token"),
+            )
+        })
         .collect()
 }
 
@@ -1251,14 +1257,20 @@ fn a_frame_goes_with_its_token() {
     // The engine's frames, the one list of them the host asks.
     assert_eq!(engine.frame_token(g), Some(g_token));
     assert_eq!(engine.frame_of_token(inner), Some(inner_frame));
-    assert_eq!(engine.frame_parent(inner_frame).map(|(parent, _)| parent), Some(f));
+    assert_eq!(
+        engine.frame_parent(inner_frame).map(|(parent, _)| parent),
+        Some(f)
+    );
     assert_eq!(engine.frame_parent(top).map(|(parent, _)| parent), None);
     assert_eq!(engine.child_frames(top), [f, g]);
     // Removed with the one in it.
     run(&mut engine, "f.remove();");
     assert!(engine.take_frames_changed(), "frames gone");
     assert_eq!(engine.frame_parent(f).map(|(parent, _)| parent), None);
-    assert_eq!(engine.frame_parent(inner_frame).map(|(parent, _)| parent), None);
+    assert_eq!(
+        engine.frame_parent(inner_frame).map(|(parent, _)| parent),
+        None
+    );
     assert_eq!(engine.frame_of_token(f_token), None);
     assert_eq!(engine.child_frames(top), [g]);
     // A child frame navigated: the frames of its document go, it stays;
@@ -1294,7 +1306,13 @@ fn a_frame_goes_with_its_token() {
         .expect("a window");
     assert!(engine.take_frames_changed(), "frames gone");
     assert_eq!(engine.child_frames(top), []);
-    assert_eq!((engine.frame_of_token(g_token), engine.frame_of_token(h_token)), (None, None));
+    assert_eq!(
+        (
+            engine.frame_of_token(g_token),
+            engine.frame_of_token(h_token)
+        ),
+        (None, None)
+    );
 }
 
 /// What a `FrameClient` was told, in order.
@@ -1309,9 +1327,9 @@ impl dom_api::FrameClient for Client {
         name: &str,
         created_by_script: bool,
     ) {
-        self.0
-            .borrow_mut()
-            .push(format!("created {frame} in {parent} {name:?} {created_by_script}"));
+        self.0.borrow_mut().push(format!(
+            "created {frame} in {parent} {name:?} {created_by_script}"
+        ));
     }
 
     fn frame_detached(&mut self, frame: dom_api::FrameToken) {

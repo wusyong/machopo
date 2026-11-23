@@ -416,6 +416,9 @@ fn queue_microtasks(scope: &mut Scope<'_, '_, '_>, microtasks: dom::Microtasks) 
     if microtasks.fetches() {
         crate::frames::send_fetches(scope);
     }
+    // Nor the scripts it prepared: requested as they were (Blink's
+    // `ScriptLoader::PrepareScript`), their stacks noted above.
+    crate::frames::send_script_fetches(scope.state_mut().0);
     // Nor what changed in `localStorage`: the host told before the call
     // returns, in order.
     if microtasks.storage() {

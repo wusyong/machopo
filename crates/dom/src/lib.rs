@@ -144,10 +144,9 @@ pub use event::{
 };
 pub use execution_context::ExecutionContext;
 pub use fetch::{
-    FetchHostRequest, FetchRecord, FetchRequest, FetchState, Referrer, Request, RequestCache, SentFetch,
-    SentImage,
+    FetchHostRequest, FetchRecord, FetchRequest, FetchState, Referrer, Request, RequestCache,
     RequestCredentials, RequestData, RequestMode, RequestPriority, RequestRedirect, Response,
-    ResponseData, ResponseType,
+    ResponseData, ResponseType, SentFetch, SentImage, SentScript,
 };
 pub use file_reader::{
     FileReaderData, FileReaderResult, FileReaderState, ProgressEventData, ReadAs, ReadStep,
@@ -922,6 +921,9 @@ struct Changes {
     /// The images' requests the host sent, by request, until their
     /// responses come (`Dom::note_image_sent`): as `sent_fetches`.
     sent_images: std::cell::RefCell<std::collections::HashMap<u64, fetch::SentImage>>,
+    /// The queued scripts' requests the host sent, by request, until their
+    /// responses come (`Dom::note_script_sent`): as `sent_fetches`.
+    sent_scripts: std::cell::RefCell<std::collections::HashMap<u64, fetch::SentScript>>,
     /// The browser's user agent and whether automation controls it, its
     /// host's (`Dom::set_agent`, `navigator`).
     user_agent: std::cell::RefCell<String>,

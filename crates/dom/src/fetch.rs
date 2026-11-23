@@ -333,6 +333,50 @@ impl crate::Dom {
     }
 }
 
+/// A queued script's request that the host sent (`Dom::note_script_sent`):
+/// its URL, the number it was queued by (`ScriptFetch::key`), the document
+/// that asked, its `charset` attribute's label, and whether it is a
+/// module's. The DOM's own record of it, which the host reads its response
+/// by.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SentScript {
+    pub url: String,
+    pub key: u64,
+    pub document: crate::NodeId,
+    pub charset: Option<String>,
+    pub module: bool,
+}
+
+impl crate::Dom {
+    /// The host sent the request of the script `sent` as `request_id`.
+    pub fn note_script_sent(&self, request_id: u64, sent: SentScript) {
+        self.changes
+            .sent_scripts
+            .borrow_mut()
+            .insert(request_id, sent);
+    }
+
+    /// The script whose request is `request_id`, if one is.
+    pub fn sent_script(&self, request_id: u64) -> Option<SentScript> {
+        self.changes.sent_scripts.borrow().get(&request_id).cloned()
+    }
+
+    /// The script whose request is `request_id`, its request answered.
+    pub fn take_sent_script(&self, request_id: u64) -> Option<SentScript> {
+        self.changes.sent_scripts.borrow_mut().remove(&request_id)
+    }
+
+    /// How many of the scripts' requests sent are `document`'s.
+    pub fn sent_scripts_of(&self, document: crate::NodeId) -> usize {
+        self.changes
+            .sent_scripts
+            .borrow()
+            .values()
+            .filter(|sent| sent.document == document)
+            .count()
+    }
+}
+
 /// What a `FetchRecord` says of its fetch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FetchState {

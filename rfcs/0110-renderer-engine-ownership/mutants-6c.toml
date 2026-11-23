@@ -1,0 +1,68 @@
+# Stage 1, step 6c: queued scripts' requests sent by the engine as they are prepared, recorded in the DOM.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "env", "MACHOPO_GPU_ADAPTER=cpu", "cargo", "test", "-q", "-p", "shell", "--test", "it"]
+timeout = 240
+
+[[mutant]]
+name = "a prepared script not sent as the call ends"
+file = "crates/dom_js/src/state.rs"
+from = '''    crate::frames::send_script_fetches(scope.state_mut().0);'''
+to = '''    let _ = &scope;'''
+
+[[mutant]]
+name = "a module not sent as its graph asks"
+file = "crates/dom_js/src/modules.rs"
+from = '''        crate::frames::send_script_fetches(state);
+        key'''
+to = '''        key'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "devtools::the_stacks_of_script_that_asks_for_loads_are_captured"]
+
+[[mutant]]
+name = "the renderer leaves the scripts the engine didn't send"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        if let Some(engine) = &mut self.engine {
+            engine.send_script_fetches();
+        }'''
+to = '''        let _ = &self.engine;'''
+
+[[mutant]]
+name = "a script's request not recorded"
+file = "crates/dom_api/src/script.rs"
+from = '''            dom.note_script_sent(
+                request_id,'''
+to = '''            let _ = dom::SentScript::clone;
+            dom.note_script_sent(
+                request_id.wrapping_add(1 << 40),'''
+
+[[mutant]]
+name = "a revoked blob URL's script requested"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            && self.blob_urls.is_revoked(&parsed)
+        {
+            self.scheduler.post_request_failed(request_id, &script.url);'''
+to = '''            && self.blob_urls.is_revoked(&parsed)
+            && false
+        {
+            self.scheduler.post_request_failed(request_id, &script.url);'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "navigation::links::blobs"]
+
+[[mutant]]
+name = "a module's request not by CORS"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        if let Some(cors) = script.cors {
+            request.mode = RequestMode::Cors;'''
+to = '''        if let Some(cors) = script.cors.filter(|_| false) {
+            request.mode = RequestMode::Cors;'''
+
+[[mutant]]
+name = "a script's request from no origin"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        let mut request = ResourceRequest::new(&script.url, RequestDestination::Script);
+        request.initiator = request_origin.map(String::from);'''
+to = '''        let mut request = ResourceRequest::new(&script.url, RequestDestination::Script);
+        request.initiator = request_origin.map(String::from).filter(|_| false);'''
+
+[[mutant]]
+name = "DevTools' initiator without the importing module"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                origin.importer.clone().map(Initiator::Import)'''
+to = '''                origin.importer.clone().map(Initiator::Import).filter(|_| false)'''

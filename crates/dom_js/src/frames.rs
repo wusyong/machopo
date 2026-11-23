@@ -72,9 +72,7 @@ impl Frames {
 
     /// The child frame whose token is `token`.
     pub(crate) fn of_token(&self, token: FrameToken) -> Option<&Frame> {
-        self.frames
-            .iter()
-            .find(|frame| frame.token == Some(token))
+        self.frames.iter().find(|frame| frame.token == Some(token))
     }
 
     /// The frames, in the order they were made (the top-level one first):
@@ -299,7 +297,9 @@ pub(crate) fn create_child(scope: &mut Scope<'_, '_, '_>, owner: &NodeRoot) -> O
             .unwrap_or_default()
     });
     // The browser's frame tree has it at once.
-    if let (Some(parent_token), Some(client)) = (state.frames.token(parent), &mut state.frames.client) {
+    if let (Some(parent_token), Some(client)) =
+        (state.frames.token(parent), &mut state.frames.client)
+    {
         client.child_frame_created(parent_token, token, &name, created_by_script);
     }
     state.frames.changed = true;
@@ -422,9 +422,7 @@ pub(crate) fn cookie_call(
     call: dom_api::CookieCall,
 ) -> dom_api::CookieReply {
     let (state, _) = scope.state();
-    let loader = state
-        .dom
-        .read(|cx| cx.document_loader(document.get(cx.gc)));
+    let loader = state.dom.read(|cx| cx.document_loader(document.get(cx.gc)));
     match (&state.cookie_host, loader) {
         (Some(host), Some(loader)) => call.on(host.as_ref(), loader.loader, url),
         _ => dom_api::CookieReply::None,
@@ -576,6 +574,26 @@ pub(crate) fn send_image_fetches(state: &mut crate::state::State) {
     state.frames.load_sink = Some(sink);
 }
 
+/// The scripts the DOM queued to fetch sent now through the host's load
+/// sink (`dom_api::send_script_fetches`), each from the frame showing the
+/// document that asked: none without a sink, the queue left for whoever
+/// takes it.
+pub(crate) fn send_script_fetches(state: &mut crate::state::State) {
+    let Some(mut sink) = state.frames.load_sink.take() else {
+        return;
+    };
+    let frames = &state.frames;
+    dom_api::send_script_fetches(&mut state.dom, sink.as_mut(), &|document| {
+        let frame = frames.of_document(document)?;
+        Some((
+            frame.id,
+            frames.token(frame.id).map(|token| token.to_string()),
+            Some(frame.document.clone()),
+        ))
+    });
+    state.frames.load_sink = Some(sink);
+}
+
 /// Child frame `document`'s, its iframe removed, unloads, then those in it
 /// (`ScriptHost::unload_child`).
 pub(crate) fn unload_child(scope: &mut Scope<'_, '_, '_>, document: &NodeRoot) {
@@ -602,7 +620,11 @@ fn unload_frame(scope: &mut Scope<'_, '_, '_>, frame: FrameId) {
             let discarded = state
                 .dom
                 .read(|cx| cx.is_discarded(found.document.get(cx.gc)));
-            (found.context.clone(), found.document.clone(), found.initial || discarded)
+            (
+                found.context.clone(),
+                found.document.clone(),
+                found.initial || discarded,
+            )
         })
     };
     let Some((context, document, quiet)) = found else {

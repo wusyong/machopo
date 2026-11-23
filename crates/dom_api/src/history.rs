@@ -148,7 +148,9 @@ pub(crate) fn run_javascript_urls<H: ScriptHost>(host: &mut H, document: &NodeRo
             let document = document.get(cx.gc);
             (!cx.is_discarded(document)).then(|| {
                 (
-                    cx.document_url(document).map(|url| url.to_string()).unwrap_or_default(),
+                    cx.document_url(document)
+                        .map(|url| url.to_string())
+                        .unwrap_or_default(),
                     cx.document_base_url(document).map(String::from),
                 )
             })

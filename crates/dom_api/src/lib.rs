@@ -150,8 +150,8 @@ pub use document::{document_title, set_page_visible};
 pub use dom_api_macros::declare;
 pub use engine::{
     ClassicScript, ConsoleMessage, ConsoleSink, DevToolsInterrupter, DevToolsObjects, DevToolsPage,
-    DevToolsQueue, DevToolsQueued, DevToolsSend, EngineSettings, FetchOrigin, FrameClient, LoadSink, ScriptEngine,
-    WasmScript, WorkerEngine, WorkerGlobalParams,
+    DevToolsQueue, DevToolsQueued, DevToolsSend, EngineSettings, FetchOrigin, FrameClient,
+    LoadFrame, LoadSink, ScriptEngine, WasmScript, WorkerEngine, WorkerGlobalParams,
 };
 pub use event::{cancel as cancel_event, coarsen};
 pub use event_target::{dispatch, fire_event};
@@ -194,7 +194,7 @@ pub use resize_observer::{
 };
 pub use script::{
     ModuleSource, ModuleStart, Prepared, is_javascript_mime_type, prepare_script,
-    prepare_wasm_script, run_script_task, uses_credentials,
+    prepare_wasm_script, run_script_task, send_script_fetches, uses_credentials,
 };
 pub use storage::{OpenedStorageArea, StorageHost, open_for_listeners};
 pub use text_control::run_element_tasks;

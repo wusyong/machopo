@@ -364,6 +364,25 @@ impl MainThreadScheduler {
         );
     }
 
+    /// The network error of request `request_id`, which went nowhere (a
+    /// revoked blob URL's script): after the browser's messages posted
+    /// before, as the browser's answer would have been, with its error
+    /// (`ERR_FILE_NOT_FOUND`, the browser's blob registry's).
+    pub(crate) fn post_request_failed(&self, request_id: u64, url: &str) {
+        let _ = self.post(
+            TaskQueue::Browser,
+            MainThreadTask::Browser(RendererMsg::ResourceResponse {
+                request_id,
+                worker: None,
+                result: Err(protocol::network::NetError::new(
+                    protocol::network::NetErrorCode::FileNotFound,
+                    url,
+                )),
+            }),
+            false,
+        );
+    }
+
     /// The earliest task of `queues`, waiting for one until `timeout` has
     /// passed (forever if none).
     pub(crate) fn next(

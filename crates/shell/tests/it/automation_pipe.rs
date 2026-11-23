@@ -1847,7 +1847,10 @@ fn a_removed_frame_is_gone_for_the_next_command() {
     let server = server(&[
         (
             "/top",
-            Route::ok("text/html", "<!DOCTYPE html><iframe id=one src=/one></iframe>"),
+            Route::ok(
+                "text/html",
+                "<!DOCTYPE html><iframe id=one src=/one></iframe>",
+            ),
         ),
         ("/one", Route::ok("text/html", "<!DOCTYPE html><p>one</p>")),
     ]);
@@ -1884,9 +1887,18 @@ fn a_frame_made_and_removed_in_one_script_leaves_nothing() {
     let b = &mut browser;
     let script = "const f = document.body.appendChild(document.createElement('iframe')); \
                   f.remove(); return frames.length";
-    assert_eq!(script_in(b, &session, None, script, json!([])), Ok(json!(0)));
     assert_eq!(
-        script_in(b, &session, None, "return document.body.textContent", json!([])),
+        script_in(b, &session, None, script, json!([])),
+        Ok(json!(0))
+    );
+    assert_eq!(
+        script_in(
+            b,
+            &session,
+            None,
+            "return document.body.textContent",
+            json!([])
+        ),
         Ok(json!("top"))
     );
 }

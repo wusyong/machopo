@@ -1107,7 +1107,10 @@ fn a_frame_put_back_as_it_unloads_has_a_frame() {
         "<!DOCTYPE html><p>child</p>",
         &[],
     );
-    assert_eq!(run(&server.url("/index.html")), "true,true,true,about:blank");
+    assert_eq!(
+        run(&server.url("/index.html")),
+        "true,true,true,about:blank"
+    );
 }
 
 /// The last iframe loading removed, its parent's `load` is queued as it

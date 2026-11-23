@@ -481,8 +481,6 @@ struct RenderThread {
     /// Whether `engine` is the wasm one (the page's document declared its
     /// scripts wasm): a document of the other kind takes another engine.
     engine_is_wasm: bool,
-    /// The scripts the DOM queued being fetched, by request.
-    script_fetches: std::collections::HashMap<u64, documents::PendingScriptFetch>,
     /// DevTools' `Page` domain, the renderer's part (Blink's
     /// `InspectorPageAgent`).
     page_agent: Rc<page_agent::PageAgent>,
@@ -611,7 +609,6 @@ impl RenderThread {
             scheduler,
             engine: None,
             engine_is_wasm: false,
-            script_fetches: std::collections::HashMap::new(),
             document: None,
             children: documents::ChildFrames::default(),
         }
@@ -1732,12 +1729,14 @@ impl RenderThread {
         // (`FrameRequest::FetchSent`): this may be one's response.
         self.handle_frame_requests();
         self.network_agent.did_finish(request_id, &result);
-        // A `fetch()`'s and an image's are the DOM's records'.
+        // A `fetch()`'s, an image's and a queued script's are the DOM's
+        // records'.
         let url = self.request_urls.answered(request_id).or_else(|| {
             let dom = self.engine.as_mut()?.dom_mut();
             dom.sent_fetch(request_id)
                 .map(|sent| sent.url)
                 .or_else(|| dom.sent_image(request_id).map(|sent| sent.url))
+                .or_else(|| dom.sent_script(request_id).map(|sent| sent.url))
         });
         // DevTools' `CSS`'s: a sheet's text, its alone.
         if let Some((key, frame)) = self.css_refetches.remove(&request_id) {

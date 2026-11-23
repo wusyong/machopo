@@ -19,12 +19,14 @@ use crate::history::Page;
 
 /// What a test's load sink was asked: a `fetch()`'s request sent, with
 /// where it came from; a request cancelled, by its number; an image's
-/// request sent, its URL, request's origin and where it came from.
+/// request sent, its URL, request's origin and where it came from; a
+/// queued script's, its request and where it came from.
 #[derive(Debug)]
 pub(crate) enum Sent {
     Fetch(dom::FetchRequest, FetchOrigin),
     Cancel(u64),
     Image(String, Option<String>, FetchOrigin),
+    Script(dom::ScriptRequest, FetchOrigin),
 }
 
 /// A load sink that records what it is asked, numbering each request as
@@ -77,6 +79,19 @@ impl LoadSink for Sink {
             request_origin.map(String::from),
             origin.clone(),
         ));
+        Some(u64::try_from(sent.len()).expect("fewer than 2^64 requests"))
+    }
+
+    fn start_script_fetch(
+        &mut self,
+        _: FrameId,
+        _: dom::NodeId,
+        request: &dom::ScriptRequest,
+        _: Option<&str>,
+        origin: &FetchOrigin,
+    ) -> Option<u64> {
+        let mut sent = self.0.borrow_mut();
+        sent.push(Sent::Script(request.clone(), origin.clone()));
         Some(u64::try_from(sent.len()).expect("fewer than 2^64 requests"))
     }
 

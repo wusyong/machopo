@@ -425,7 +425,10 @@ impl<'gc> Cx<'_, 'gc> {
             if let Some(data) = self.document_data(at)
                 && let Some(loader) = data.loader.get()
             {
-                let navigation = data.loader_navigation.get().filter(|_| Gc::ptr_eq(at, document));
+                let navigation = data
+                    .loader_navigation
+                    .get()
+                    .filter(|_| Gc::ptr_eq(at, document));
                 return Some(DocumentLoader { loader, navigation });
             }
             if !self.is_initial_about_blank(at) {

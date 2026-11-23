@@ -41,7 +41,7 @@ thread_local! {
     /// `RefCell`: a `SequenceNumber` hands out the next by `&mut`, and no
     /// borrow of it outlives `next_document_id`.
     static NEXT_DOCUMENT_ID: RefCell<base::SequenceNumber<u64>> =
-        RefCell::new(base::SequenceNumber::starting_at(1));
+        const { RefCell::new(base::SequenceNumber::starting_at(1)) };
 }
 
 /// An id for a document this renderer shows (a navigation's, an iframe's):

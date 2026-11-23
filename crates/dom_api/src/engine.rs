@@ -72,6 +72,24 @@ pub trait LoadSink {
         None
     }
 
+    /// The script `request` (a classic script's that waits for no parser,
+    /// or a module's), which `document` (`frame`'s) asked for, its request
+    /// sent from `request_origin`, `origin` naming where it comes from, as
+    /// the DOM asks (`send_script_fetches`; Blink's `ScriptLoader::
+    /// PrepareScript` as it prepares it): its request's number; none if it
+    /// went nowhere, which the host fails itself. None by default.
+    fn start_script_fetch(
+        &mut self,
+        frame: crate::FrameId,
+        document: dom::NodeId,
+        request: &dom::ScriptRequest,
+        request_origin: Option<&str>,
+        origin: &FetchOrigin,
+    ) -> Option<u64> {
+        let _ = (frame, document, request, request_origin, origin);
+        None
+    }
+
     /// `url` made a blob URL for `data` in `frame`'s realm
     /// (`URL.createObjectURL`).
     fn register_blob_url(&self, frame: crate::FrameId, url: &str, data: &dom::BlobData);
@@ -124,6 +142,76 @@ pub struct FetchOrigin {
     pub parser_line: Option<u32>,
     /// A background's: the URL of the stylesheet whose `url()` it is.
     pub stylesheet: Option<std::sync::Arc<str>>,
+    /// A module's static `import`: the importing module's URL.
+    pub importer: Option<String>,
+}
+
+/// The frame a document's load goes from, as an engine finds it for the
+/// DOM's queued loads (`send_image_fetches`, `send_script_fetches`): the
+/// frame, its token (DevTools' name for it) and its document.
+pub type LoadFrame = (crate::FrameId, Option<String>, Option<dom::NodeRoot>);
+
+/// Where a load `document` asked for comes from, as its host sends it
+/// (`send_image_fetches`, `send_script_fetches`): through the document's
+/// loader (the frame's document's, `frame_document`, for one that has none:
+/// an initial `about:blank` whose iframe went), named for DevTools by
+/// `frame_token`, the document's URL and who asked (`initiator`: the
+/// script's stack, the line the parser made the element at, a stylesheet,
+/// an importing module); and the origin the request is from (HTML's
+/// "create a potential-CORS request": `null` for an opaque one, none for
+/// no document).
+pub(crate) fn load_origin(
+    dom: &dom::Dom,
+    document: dom::NodeId,
+    frame_token: Option<String>,
+    frame_document: Option<&dom::NodeRoot>,
+    initiator: &dom::LoadInitiator,
+) -> (FetchOrigin, Option<String>) {
+    let (loader, document_url, request_origin, parser_line) = dom.read(|cx| {
+        let node = cx.node_by_id(document);
+        let loader = node
+            .and_then(|node| cx.document_loader(node))
+            .or_else(|| cx.document_loader(frame_document?.get(cx.gc)));
+        let parser_line = match initiator {
+            dom::LoadInitiator::Element(element) => cx
+                .node_by_id(*element)
+                .and_then(|element| cx.take_parser_load_line(element)),
+            _ => None,
+        };
+        (
+            loader,
+            node.and_then(|node| cx.document_url(node))
+                .map(|url| url.to_str().to_string()),
+            node.map(|node| match crate::origin(cx, node) {
+                Some(origin @ url::Origin::Tuple(..)) => origin.ascii_serialization(),
+                _ => "null".to_owned(),
+            }),
+            parser_line,
+        )
+    });
+    let stack = match initiator {
+        dom::LoadInitiator::Element(element) => {
+            dom.take_request_stack(dom::StackAsker::Element(*element))
+        }
+        dom::LoadInitiator::Script(stack) => Some(stack.clone()),
+        _ => None,
+    };
+    let origin = FetchOrigin {
+        loader,
+        frame_token,
+        document_url,
+        stack,
+        parser_line,
+        stylesheet: match initiator {
+            dom::LoadInitiator::Stylesheet(url) => Some(url.clone()),
+            _ => None,
+        },
+        importer: match initiator {
+            dom::LoadInitiator::Import(url) => Some(url.clone()),
+            _ => None,
+        },
+    };
+    (origin, request_origin)
 }
 
 /// What an engine is made with, as its host's settings say.
@@ -639,6 +727,12 @@ pub trait ScriptEngine: ParserHost {
     /// background the host's style update found) and any still waiting.
     /// Nothing by default.
     fn send_image_fetches(&mut self) {}
+
+    /// The scripts the DOM queued to fetch, sent now through the load sink
+    /// (`send_script_fetches`): those queued outside the engine's calls
+    /// (a module's imports its response brought, the parser's) and any
+    /// still waiting. Nothing by default.
+    fn send_script_fetches(&mut self) {}
 
     /// Whether a child frame was made or went since the last ask: what the
     /// host keeps of its frames follows them then (`child_frames`,

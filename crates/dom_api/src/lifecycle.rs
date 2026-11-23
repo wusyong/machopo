@@ -7,8 +7,8 @@
 
 use dom::names::event;
 use dom::{
-    Cx, DocumentReadyState, Event, EventFlags, LoadProgress, NavigationMilestone, NodeRef, NodeRoot,
-    TargetRef, TargetRoot,
+    Cx, DocumentReadyState, Event, EventFlags, LoadProgress, NavigationMilestone, NodeRef,
+    NodeRoot, TargetRef, TargetRoot,
 };
 use elise::Persistent;
 use std::time::Instant;
@@ -186,7 +186,13 @@ pub(crate) fn end_load<H: ScriptHost>(host: &mut H, document: &NodeRoot) {
     let Some(owner) = owner else {
         return;
     };
-    fire_event(host, &TargetRoot::Node(owner.clone()), event::LOAD, false, false);
+    fire_event(
+        host,
+        &TargetRoot::Node(owner.clone()),
+        event::LOAD,
+        false,
+        false,
+    );
     let parent = host.read(|cx| cx.root(cx.document_of(owner.get(cx.gc))));
     crate::frame::check_parent_completed(host, &parent);
 }

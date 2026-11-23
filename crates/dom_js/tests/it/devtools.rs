@@ -25,7 +25,10 @@ fn only_child(engine: &mut V8Engine, parent: FrameId) -> (FrameId, FrameToken) {
     let [child] = children[..] else {
         panic!("{children:?}");
     };
-    (child, engine.frame_token(child).expect("a child frame's token"))
+    (
+        child,
+        engine.frame_token(child).expect("a child frame's token"),
+    )
 }
 
 struct Inspected {
@@ -225,7 +228,9 @@ fn a_child_frames_navigation_takes_its_frames() {
     );
     assert_eq!(
         (
-            page.engine.frame_parent(grandchild).map(|(parent, _)| parent),
+            page.engine
+                .frame_parent(grandchild)
+                .map(|(parent, _)| parent),
             page.engine.frame_of_token(grandchild_token)
         ),
         (None, None),
@@ -628,31 +633,27 @@ fn the_stacks_of_script_that_asks_for_loads_are_captured() {
          addImage(); go(); addFrame(); lazily();",
     );
     page.engine.perform_microtask_checkpoint();
-    let dom = page.engine.dom_mut();
-    let scripts = dom.take_script_fetches();
-    let [
-        dom::ScriptFetch {
-            initiator: LoadInitiator::Script(stack),
-            ..
-        },
-    ] = scripts.as_slice()
-    else {
-        panic!("{scripts:?}");
-    };
-    assert_eq!(top_function(Some(stack.clone())), "lazily");
-    // The `fetch()`'s and the image's, handed to the load sink with them
-    // (the image's in its microtask, after the `fetch()`).
+    // The `fetch()`'s, the `import()`'s module and the image's, handed to
+    // the load sink with them (the image's in its microtask, after the
+    // others).
     let sent = sink.take();
     let [
         crate::fetch::Sent::Fetch(_, origin),
+        crate::fetch::Sent::Script(request, module),
         crate::fetch::Sent::Image(url, request_origin, image),
     ] = sent.as_slice()
     else {
         panic!("{sent:?}");
     };
+    assert_eq!(request.url, "https://example.test/a/m.js");
+    assert_eq!(top_function(module.stack.clone()), "lazily");
     assert_eq!(top_function(origin.stack.clone()), "go");
     assert_eq!(url, "https://example.test/a/x.png");
-    assert_eq!(request_origin.as_deref(), Some("https://example.test"), "its document's");
+    assert_eq!(
+        request_origin.as_deref(),
+        Some("https://example.test"),
+        "its document's"
+    );
     assert_eq!(top_function(image.stack.clone()), "addImage");
     let top = page.engine.top_frame();
     let (child, _) = only_child(&mut page.engine, top);

@@ -1135,7 +1135,6 @@ impl ScriptEngine for WasmEngine {
         false
     }
 
-
     fn has_resize_observations(&mut self, _: FrameId) -> bool {
         false
     }
@@ -1172,6 +1171,18 @@ impl ScriptEngine for WasmEngine {
         let document = self.document.clone();
         dom_api::send_image_fetches(self.dom(), sink.as_mut(), &|_| {
             (TOP, token.clone(), document.clone())
+        });
+        self.load_sink = Some(sink);
+    }
+
+    fn send_script_fetches(&mut self) {
+        let Some(mut sink) = self.load_sink.take() else {
+            return;
+        };
+        let token = self.main_token.map(|token| token.to_string());
+        let document = self.document.clone();
+        dom_api::send_script_fetches(self.dom(), sink.as_mut(), &|_| {
+            Some((TOP, token.clone(), document.clone()))
         });
         self.load_sink = Some(sink);
     }

@@ -1402,7 +1402,10 @@ fn the_browser_hears_of_a_removed_frame() {
             }
             window.view.on_contents_event(tab, event);
         }
-        assert!(start.elapsed() < TIMEOUT, "the renderer tells of the frame gone");
+        assert!(
+            start.elapsed() < TIMEOUT,
+            "the renderer tells of the frame gone"
+        );
     }
     window.close();
 }

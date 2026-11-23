@@ -21,10 +21,14 @@ use protocol::renderer::RendererHostMsg;
 /// that brought it; for one none brought (a child frame's first
 /// `about:blank`, a `srcdoc` or `javascript:` URL's), the document's
 /// number.
-pub(crate) fn devtools_loader_id(loader: Option<dom::DocumentLoader>, document: dom::NodeId) -> String {
-    loader
-        .and_then(|loader| loader.navigation)
-        .map_or_else(|| document.get().to_string(), |navigation| navigation.to_string())
+pub(crate) fn devtools_loader_id(
+    loader: Option<dom::DocumentLoader>,
+    document: dom::NodeId,
+) -> String {
+    loader.and_then(|loader| loader.navigation).map_or_else(
+        || document.get().to_string(),
+        |navigation| navigation.to_string(),
+    )
 }
 
 thread_local! {
@@ -35,7 +39,7 @@ thread_local! {
     /// `SequenceNumber` hands out the next by `&mut`, and no borrow of it
     /// outlives `next_request_id`.
     static NEXT_REQUEST_ID: RefCell<SequenceNumber<u64>> =
-        RefCell::new(SequenceNumber::starting_at(1));
+        const { RefCell::new(SequenceNumber::starting_at(1)) };
 }
 
 /// A new request id, unique in this renderer.

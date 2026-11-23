@@ -178,17 +178,6 @@ enum ParserSource {
     },
 }
 
-/// A script the DOM queued (`Dom::take_script_fetches`) being fetched: its
-/// number, to hand it back by, the frame whose document it is, and its
-/// `charset` attribute's label.
-pub(super) struct PendingScriptFetch {
-    key: u64,
-    frame: FrameId,
-    charset: Option<String>,
-    /// A module the engine's module map asked for.
-    module: bool,
-}
-
 impl FrameDocument {
     /// `frame`'s new document, loading: nothing asked for, run or rendered
     /// yet.
@@ -358,7 +347,6 @@ impl ChildFrames {
         self.navigations.remove(&frame);
         self.commits.retain(|(id, _, _)| *id != frame);
     }
-
 }
 
 /// A committed document's content type (its MIME type's essence: the
@@ -535,7 +523,10 @@ impl RenderThread {
         });
         // The URL of the document it shows now, before the engine is
         // borrowed (by the engine before, if the page took a new one).
-        let kept_url = replaced.is_none().then(|| self.top_document_url()).flatten();
+        let kept_url = replaced
+            .is_none()
+            .then(|| self.top_document_url())
+            .flatten();
         self.engine_is_wasm = wasm;
         if self.engine.is_none() {
             self.engine = Some(self.make_engine());
@@ -714,8 +705,7 @@ impl RenderThread {
         self.main_origin_source = None;
         // What was asked for its documents: a response still to come is
         // no one's (the next DOM's nodes are numbered from the start).
-        // Its `fetch()`es' requests go with its DOM.
-        self.script_fetches.clear();
+        // Its `fetch()`es', images' and scripts' requests go with its DOM.
         self.css_refetches.clear();
         // Its documents' workers with them.
         self.workers.terminate_running();
@@ -809,7 +799,12 @@ impl RenderThread {
         self.children.remove(&gone);
         self.cancel_fetches_of_gone_documents();
         for (frame, _, owner) in frames {
-            if self.children.documents.iter().any(|next| next.frame == frame) {
+            if self
+                .children
+                .documents
+                .iter()
+                .any(|next| next.frame == frame)
+            {
                 continue;
             }
             let Some((dom, view)) = engine_frame(&mut self.engine) else {
@@ -856,9 +851,10 @@ impl RenderThread {
     pub(super) fn document_url(&mut self, frame: FrameId) -> Option<Url> {
         let document = self.doc(frame)?.document.clone();
         let engine = self.engine.as_mut()?;
-        let url = engine
-            .dom_mut()
-            .read(|cx| cx.document_url(document.get(cx.gc)).map(|url| url.to_string()));
+        let url = engine.dom_mut().read(|cx| {
+            cx.document_url(document.get(cx.gc))
+                .map(|url| url.to_string())
+        });
         Some(
             url.and_then(|url| Url::parse(&url).ok())
                 .unwrap_or_else(|| Url::parse("about:blank").expect("about:blank")),
@@ -890,7 +886,10 @@ impl RenderThread {
 
     /// The frames below `frame`, each with its parent and iframe, as the
     /// engine has them: parents before their children.
-    pub(super) fn child_frames_below(&mut self, frame: FrameId) -> Vec<(FrameId, FrameId, NodeRoot)> {
+    pub(super) fn child_frames_below(
+        &mut self,
+        frame: FrameId,
+    ) -> Vec<(FrameId, FrameId, NodeRoot)> {
         let Some(engine) = self.engine.as_mut() else {
             return Vec::new();
         };
@@ -930,12 +929,18 @@ impl RenderThread {
     fn load_progress(&mut self, frame: FrameId) -> Option<dom::LoadProgress> {
         let document = self.doc(frame)?.document.clone();
         let engine = self.engine.as_mut()?;
-        Some(engine.dom_mut().read(|cx| cx.load_progress(document.get(cx.gc))))
+        Some(
+            engine
+                .dom_mut()
+                .read(|cx| cx.load_progress(document.get(cx.gc))),
+        )
     }
 
     /// Whether `frame` is the top-level frame.
     fn is_top(&self, frame: FrameId) -> bool {
-        self.document.as_ref().is_some_and(|next| next.frame == frame)
+        self.document
+            .as_ref()
+            .is_some_and(|next| next.frame == frame)
     }
 
     /// Where `frame` is: the top-level frame (none), or a child frame (its
@@ -1733,7 +1738,9 @@ impl RenderThread {
                 document.get(cx.gc),
                 dom::DocumentLoader {
                     loader,
-                    navigation: navigation.as_ref().map(|navigation| navigation.navigation_id),
+                    navigation: navigation
+                        .as_ref()
+                        .map(|navigation| navigation.navigation_id),
                 },
             );
         });
@@ -1918,7 +1925,11 @@ impl RenderThread {
 
     /// The document `token`'s navigation `navigation_id` committed in it,
     /// while its body comes: its frame.
-    fn frame_with_body(&mut self, token: protocol::FrameToken, navigation_id: u64) -> Option<FrameId> {
+    fn frame_with_body(
+        &mut self,
+        token: protocol::FrameToken,
+        navigation_id: u64,
+    ) -> Option<FrameId> {
         let frame = if Some(token) == self.devtools_main_frame_token {
             self.document.as_ref()?.frame
         } else {
@@ -2666,33 +2677,14 @@ impl RenderThread {
 
     /// The scripts the DOM queued that wait for no parser
     /// (`Dom::take_script_fetches`), fetched: each handed back
-    /// (`Cx::script_fetched`) as its response comes (`resource`).
+    /// (`Cx::script_fetched`) as its response comes (`resource`). The
+    /// engine sent those its calls prepared already; the rest (the
+    /// parser's) it sends now (`RendererLoadSink::start_script_fetch`).
     pub(super) fn start_script_fetches(&mut self) {
-        // As `start_image_fetches`: a blob URL registered first.
+        // As `start_image_fetches`: what the engine asked for first.
         self.handle_frame_requests();
-        let Some(engine) = &mut self.engine else {
-            return;
-        };
-        let fetches = engine.dom_mut().take_script_fetches();
-        for script in fetches {
-            // One whose document no frame shows is never fetched (its
-            // document's load waits for nothing).
-            let Some(frame) = self.frame_of_document(script.document) else {
-                continue;
-            };
-            // A module's request has its credentials mode (by CORS), the
-            // module map's.
-            let request = script.request;
-            let request_id = self.fetch_script(frame, &request, script.initiator);
-            self.script_fetches.insert(
-                request_id,
-                PendingScriptFetch {
-                    key: script.key,
-                    frame,
-                    charset: request.charset,
-                    module: script.module,
-                },
-            );
+        if let Some(engine) = &mut self.engine {
+            engine.send_script_fetches();
         }
     }
 
@@ -3060,9 +3052,8 @@ impl RenderThread {
         let loader_id = crate::loader::devtools_loader_id(loader, document);
         let document = u64::from(document.get());
         let secure_context = super::devtools::secure_context(&url, Some(parent.secure_context));
-        let (mime_type, source, resources, initial) = committed.unwrap_or_else(|| {
-            ("text/html".to_owned(), Rc::from(""), Rc::default(), true)
-        });
+        let (mime_type, source, resources, initial) = committed
+            .unwrap_or_else(|| ("text/html".to_owned(), Rc::from(""), Rc::default(), true));
         Some(FrameInfo {
             id,
             parent_id: Some(parent.id.clone()),
@@ -3090,9 +3081,13 @@ impl RenderThread {
     fn requests_in_flight(&mut self, frame: FrameId, document: dom::NodeId) -> usize {
         // Before its document is borrowed: the DOM has them, its images
         // too.
-        let (fetches, images) = self.engine.as_mut().map_or((0, 0), |engine| {
+        let (fetches, images, queued) = self.engine.as_mut().map_or((0, 0, 0), |engine| {
             let dom = engine.dom_mut();
-            (dom.sent_fetches_of(document), dom.sent_images_of(document))
+            (
+                dom.sent_fetches_of(document),
+                dom.sent_images_of(document),
+                dom.sent_scripts_of(document),
+            )
         });
         let Some(next) = self.doc(frame) else {
             return 0;
@@ -3102,11 +3097,6 @@ impl RenderThread {
             .iter()
             .chain(&next.deferred_scripts)
             .filter(|script| script.request_id.is_some() && script.ready.is_none())
-            .count();
-        let queued = self
-            .script_fetches
-            .values()
-            .filter(|fetching| fetching.frame == frame)
             .count();
         // Each fewer than the requests the renderer has made.
         next.pending_sheets
@@ -4234,7 +4224,10 @@ impl RenderThread {
         what: super::log_agent::RasterFailed,
         failure: &raster::RasterFailure,
     ) {
-        let url = self.top_document_url().map(String::from).unwrap_or_default();
+        let url = self
+            .top_document_url()
+            .map(String::from)
+            .unwrap_or_default();
         let url = url.as_str();
         self.log_agent
             .add(super::log_agent::LogEntry::raster_failed(
@@ -4419,11 +4412,18 @@ impl RenderThread {
             return true;
         }
         // A script the DOM queued: handed back, its turn a task of its own.
-        if let Some(fetching) = self.script_fetches.remove(&request_id) {
+        let script = self
+            .engine
+            .as_mut()
+            .and_then(|engine| engine.dom_mut().take_sent_script(request_id));
+        if let Some(fetching) = script {
+            let frame = self.frame_of_document(fetching.document);
             if fetching.module {
                 let module = crate::loader::module_loaded(result);
-                if module.is_none() {
-                    self.note_failed(fetching.frame, failed_url(result, asked));
+                if module.is_none()
+                    && let Some(frame) = frame
+                {
+                    self.note_failed(frame, failed_url(result, asked));
                 }
                 if let Some(engine) = &mut self.engine {
                     engine.module_fetched(fetching.key, module);
@@ -4434,11 +4434,15 @@ impl RenderThread {
                 }
                 return true;
             }
-            let encoding = self.doc(fetching.frame).map(|next| next.encoding);
+            let encoding = frame
+                .and_then(|frame| self.doc(frame))
+                .map(|next| next.encoding);
             let loaded = encoding
                 .and_then(|encoding| script_loaded(result, fetching.charset.as_deref(), encoding));
-            if loaded.is_none() {
-                self.note_failed(fetching.frame, failed_url(result, asked));
+            if loaded.is_none()
+                && let Some(frame) = frame
+            {
+                self.note_failed(frame, failed_url(result, asked));
             }
             if let Some(engine) = &mut self.engine {
                 engine
@@ -4621,8 +4625,13 @@ impl RenderThread {
         let found = if let Some(image) = image {
             self.frame_of_document(image.document)
                 .map(|frame| (frame, "Image"))
-        } else if let Some(fetching) = self.script_fetches.get(&request_id) {
-            Some((fetching.frame, "Script"))
+        } else if let Some(script) = self
+            .engine
+            .as_mut()
+            .and_then(|engine| engine.dom_mut().sent_script(request_id))
+        {
+            self.frame_of_document(script.document)
+                .map(|frame| (frame, "Script"))
         } else {
             self.frames().into_iter().find_map(|frame| {
                 let next = self.doc(frame)?;
@@ -4876,7 +4885,63 @@ impl dom_api::FrameClient for RendererFrameClient {
     }
 
     fn frame_detached(&mut self, frame: protocol::FrameToken) {
-        let _ = self.to_browser.send(RendererHostMsg::DidDetachFrame { frame });
+        let _ = self
+            .to_browser
+            .send(RendererHostMsg::DidDetachFrame { frame });
+    }
+}
+
+impl RendererLoadSink {
+    /// `request`, of `document`, sent as `request_id` through its loader,
+    /// told to DevTools as it is: who asked, the script's stack if it wants
+    /// stacks, else the parser's line, else the stylesheet or the importing
+    /// module.
+    fn send(
+        &self,
+        request_id: u64,
+        document: dom::NodeId,
+        request: ResourceRequest,
+        origin: &dom_api::FetchOrigin,
+    ) {
+        if self.network_agent.enabled()
+            && let (Some(frame_id), Some(document_url)) =
+                (origin.frame_token.clone(), origin.document_url.clone())
+        {
+            let initiator = if let Some(stack) = origin
+                .stack
+                .clone()
+                .filter(|_| self.network_agent.wants_stacks())
+            {
+                Some(Initiator::Script(stack))
+            } else if let Some(line) = origin.parser_line {
+                Some(Initiator::Parser {
+                    url: document_url
+                        .split('#')
+                        .next()
+                        .unwrap_or_default()
+                        .to_owned(),
+                    line: line.saturating_sub(1),
+                })
+            } else if let Some(sheet) = &origin.stylesheet {
+                Some(Initiator::Css(sheet.clone()))
+            } else {
+                origin.importer.clone().map(Initiator::Import)
+            };
+            let at = super::network_agent::RequestFrame {
+                frame_id,
+                loader_id: crate::loader::devtools_loader_id(origin.loader, document),
+                document_url,
+            };
+            self.network_agent
+                .will_send(request_id, &request, at, initiator.as_ref());
+        }
+        let loader = origin.loader.map_or(0, |loader| loader.loader);
+        let _ = self.to_browser.send(RendererHostMsg::FetchResource {
+            request_id,
+            worker: None,
+            loader,
+            request,
+        });
     }
 }
 
@@ -4967,38 +5032,38 @@ impl dom_api::LoadSink for RendererLoadSink {
         let mut request = ResourceRequest::new(url, RequestDestination::Image);
         request.initiator = request_origin.map(String::from);
         let request_id = crate::loader::next_request_id();
-        // Told to DevTools as it is sent: who asked, the script's stack if
-        // it wants stacks, else the parser's line, else the stylesheet.
-        if self.network_agent.enabled()
-            && let (Some(frame_id), Some(document_url)) =
-                (origin.frame_token.clone(), origin.document_url.clone())
+        self.send(request_id, document, request, origin);
+        Some(request_id)
+    }
+
+    fn start_script_fetch(
+        &mut self,
+        _: FrameId,
+        document: dom::NodeId,
+        script: &dom::ScriptRequest,
+        request_origin: Option<&str>,
+        origin: &dom_api::FetchOrigin,
+    ) -> Option<u64> {
+        let request_id = crate::loader::next_request_id();
+        // A blob URL revoked before (the browser hears of it only as the
+        // loop turns): its network error, as the browser's would have
+        // been, in a task of its own.
+        if let Ok(parsed) = Url::parse(&script.url)
+            && parsed.scheme() == "blob"
+            && self.blob_urls.is_revoked(&parsed)
         {
-            let initiator = match (&origin.stack, origin.parser_line, &origin.stylesheet) {
-                (Some(stack), ..) if self.network_agent.wants_stacks() => {
-                    Some(Initiator::Script(stack.clone()))
-                }
-                (_, Some(line), _) => Some(Initiator::Parser {
-                    url: document_url.split('#').next().unwrap_or_default().to_owned(),
-                    line: line.saturating_sub(1),
-                }),
-                (.., Some(sheet)) => Some(Initiator::Css(sheet.clone())),
-                _ => None,
-            };
-            let at = super::network_agent::RequestFrame {
-                frame_id,
-                loader_id: crate::loader::devtools_loader_id(origin.loader, document),
-                document_url,
-            };
-            self.network_agent
-                .will_send(request_id, &request, at, initiator.as_ref());
+            self.scheduler.post_request_failed(request_id, &script.url);
+            return Some(request_id);
         }
-        let loader = origin.loader.map_or(0, |loader| loader.loader);
-        let _ = self.to_browser.send(RendererHostMsg::FetchResource {
-            request_id,
-            worker: None,
-            loader,
-            request,
-        });
+        let mut request = ResourceRequest::new(&script.url, RequestDestination::Script);
+        request.initiator = request_origin.map(String::from);
+        // A module's (and a `crossorigin` one's) by CORS, its credentials
+        // mode the module map's or the attribute's.
+        if let Some(cors) = script.cors {
+            request.mode = RequestMode::Cors;
+            request.credentials = crate::loader::script_credentials(cors);
+        }
+        self.send(request_id, document, request, origin);
         Some(request_id)
     }
 
@@ -5313,9 +5378,7 @@ fn compute_intersections(
     let document = view.document().clone();
     dom.mutate(|cx| {
         let top = document.get(cx.gc);
-        if cx.window_of(top).is_none() {
-            return None;
-        }
+        cx.window_of(top)?;
         let tracked = computed.is_some_and(|(.., paint)| paint.is_some());
         let state = (
             view.pre_paints(),

@@ -117,9 +117,12 @@ impl ModuleHost for Host<'_, '_, '_, '_> {
             |importer| LoadInitiator::Import(importer.as_str().to_owned()),
         );
         let (state, _) = self.scope.state_mut();
-        state
+        let key = state
             .dom
-            .mutate(|cx| cx.queue_module_fetch(document.get(cx.gc), request, initiator))
+            .mutate(|cx| cx.queue_module_fetch(document.get(cx.gc), request, initiator));
+        // Requested now, as Blink's module map fetches as it is asked.
+        crate::frames::send_script_fetches(state);
+        key
     }
 
     fn compile(

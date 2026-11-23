@@ -547,3 +547,47 @@ pub(crate) fn set_script_text<'gc>(
 pub(crate) fn script_supports(_: &ApiCx<'_, '_>, kind: &str) -> Result<bool, ApiError> {
     Ok(kind == "classic" || kind == "module")
 }
+
+/// The scripts the DOM queued to fetch (`Dom::take_script_fetches`) sent
+/// through `sink` now, as they were prepared (Blink's `ScriptLoader::
+/// PrepareScript` requests then), each from the frame `frame_of` finds
+/// showing the document that asked (and that frame's token and document:
+/// `engine::load_origin`); one whose document no frame shows is never
+/// fetched (its document's load waits for nothing). Recorded by the request
+/// each went as (`Dom::note_script_sent`).
+pub fn send_script_fetches(
+    dom: &mut dom::Dom,
+    sink: &mut dyn crate::LoadSink,
+    frame_of: &dyn Fn(dom::NodeId) -> Option<crate::LoadFrame>,
+) {
+    for fetch in dom.take_script_fetches() {
+        let Some((frame, frame_token, frame_document)) = frame_of(fetch.document) else {
+            continue;
+        };
+        let (origin, request_origin) = crate::engine::load_origin(
+            dom,
+            fetch.document,
+            frame_token,
+            frame_document.as_ref(),
+            &fetch.initiator,
+        );
+        if let Some(request_id) = sink.start_script_fetch(
+            frame,
+            fetch.document,
+            &fetch.request,
+            request_origin.as_deref(),
+            &origin,
+        ) {
+            dom.note_script_sent(
+                request_id,
+                dom::SentScript {
+                    url: fetch.request.url,
+                    key: fetch.key,
+                    document: fetch.document,
+                    charset: fetch.request.charset,
+                    module: fetch.module,
+                },
+            );
+        }
+    }
+}

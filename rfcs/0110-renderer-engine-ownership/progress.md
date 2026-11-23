@@ -26,7 +26,7 @@
 | 5. intersection 的通知排成真的 task（第 7 條的第 5 步） | 做完，待審查 | 2026-11-23 |
 | 6a. DevTools 的 initiator 要的 parser 行號搬進 DOM（第 24 條） | 做完，待審查 | 2026-11-23 |
 | 6b. 圖片的請求由 engine 經過 `LoadSink` 送出，記錄在 DOM（第 24 條） | 做完，待審查 | 2026-11-23 |
-| 6c. script 的請求由 engine 經過 `LoadSink` 送出，記錄在 DOM（第 24 條） | 沒開始 | |
+| 6c. script 的請求由 engine 經過 `LoadSink` 送出，記錄在 DOM（第 24 條） | 做完，待審查 | 2026-11-23 |
 
 ## 驗收
 
@@ -226,4 +226,26 @@
 **Mutation test**（`mutants-6b.toml`）：9 條全部抓到，跑完檔案都還原了。
 
 **測試**：`dom` 254 個、`dom_api` 201 個、`dom_js` 553 個（1 個 ignored）、`dom_wasm` 49 個、`renderer` 127 個、`browser` 191 個、`shell` 670 個都通過。
+
+### 第 6c 步：DOM 排著的 script 由 engine 在 prepare 的當下送出（2026-11-23，Linux：Fedora 45、debug build，`c181975` 之上）
+
+**範圍**：script 有兩條路。parser 的外部 script（`fetch_parser_script`）由 renderer 跑的 parser 停在它時當場送，已經是 prepare 的當下，記錄（`ParserScript.request_id`）只有 renderer 用（第 5 條），不改。改的是 DOM 排著的（`take_script_fetches`：script 插入的、module graph、`import()`），原本 renderer 在外圈才送。
+
+**必壞的測試**：`shell` 的 `devtools_network::a_script_is_requested_as_it_is_prepared`（插入 `<script src>` 之後，`setTimeout(0)` 裡的 `fetch()`；DevTools 要 script 在前），改之前 3 次壞 3 次。
+
+**做的事**：`dom` 加 `SentScript`（網址、key、文件、charset、是不是 module）和它的記錄；`dom_api` 的 `FetchOrigin` 加 `importer`，`LoadSink` 加 `start_script_fetch`，`send_script_fetches`（沒有 frame 顯示的文件的照舊不送），建 `FetchOrigin` 的部分和圖片共用（`engine::load_origin`、`LoadFrame`）；`ScriptEngine::send_script_fetches`。dom_js 在每個 binding 呼叫結尾（`fetch()` 旁邊、記下 stack 之後）和 `ModuleHost::fetch`（`import()`、graph 的 root、module 的回應帶來的 static import：Blink 的 module map 在被要求時就 fetch）送；`dom_wasm` 也送（renderer 呼叫時）。renderer 的 `RendererLoadSink::start_script_fetch`（請求的 origin、CORS 的 mode 和 credentials），送和告訴 DevTools 的部分和圖片共用（`RendererLoadSink::send`，initiator 多了 importing module）；`start_script_fetches` 改成請 engine 送；`script_fetches`、`PendingScriptFetch` 拿掉，回應、DevTools 的 resource type、網路閒置的計數、失敗的網址讀 DOM 的記錄，frame 照記錄的文件找。
+
+**改了之後抓到的**：`browser` 的 `navigation::links::blobs` 的「在之前的 task 撤銷的 blob URL 的 script」變成 `load`：renderer 知道撤銷了的 blob URL（`BlobUrls::is_revoked`），Browser 要等外圈的 `flush_revoked` 才知道；請求改成在內圈就送之後比撤銷先到。`fetch()` 和圖片在 renderer 先查，script 原本靠 Browser 擋。`start_script_fetch` 也先查，撤銷了的照樣給請求的編號、排一個 Browser 會給的網路錯誤（`ERR_FILE_NOT_FOUND`，`MainThreadScheduler::post_request_failed`），經過一般的回應的路失敗（classic 和 module 一樣）。
+
+**WPT**：`html/semantics/scripting-1/`、`html/webappapis/scripting/`、`html/semantics/embedded-content/the-img-element/`、`FileAPI/`、`workers/`，945 個，沒有非預期的失敗。非預期的 PASS：`module/dynamic-import/blob-url.any.html` 的「A revoked blob URL will not resolve」是上面的修正讓它通過的，用 `MACHOPO_UPDATE_EXPECTATIONS` 更新（worker 的兩個空的段落一起拿掉了），重跑那個目錄 0 個；`credentials.sub.html`、`script-crossorigin-network.sub.html`（2d 查過，`main` 上也通過）和 `workers/baseurl/alpha/xhr-in-moduleworker.html`（拿掉這一步的改動也是 OK）和這份無關，沒有改。
+
+**Mutation test**（`mutants-6c.toml`）：8 條全部抓到，跑完檔案都還原了。
+
+**測試**：dom_js 的 `devtools::the_stacks_of_script_that_asks_for_loads_are_captured` 改成從 sink 讀 `import()` 的 module 的 stack（測試的 `Sink` 也記 script）。`dom` 254 個、`dom_api` 201 個、`dom_js` 553 個（1 個 ignored）、`dom_wasm` 49 個、`html` 49 個、`renderer` 127 個、`browser` 191 個、`shell` 671 個都通過。
+
+### 第 1 階段做完時的檢查（2026-11-23，Linux：Fedora 45，6c 之上）
+
+- `cargo test --workspace`：4688 個通過、0 個失敗、1 個 ignored（log 裡的 panic 是測試預期的：`bindings` 的 `gc_platform`、`canvas_raster` 的 `a_thread_that_panicked_is_waited_for_by_nobody`）。
+- `cargo clippy --workspace --all-targets -- -D warnings`：修了四處，放進 6c 的 commit：`send_script_fetches` 的 closure 的型別太複雜（加了 `dom_api::LoadFrame`，圖片的那一圈也用它）、兩個 thread-local 的計數器（`NEXT_REQUEST_ID`、`NEXT_DOCUMENT_ID`）的初始值改成 `const`、`compute_intersections` 的 `?`。之後通過。
+- `cargo fmt --check`：這個階段改過的檔案（`9e7d93d` 之後的）裡有格式的差異，`cargo fmt` 之後通過；沒有碰到這個階段以外的檔案。
 
