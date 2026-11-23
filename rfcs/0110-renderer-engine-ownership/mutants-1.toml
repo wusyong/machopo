@@ -1,0 +1,119 @@
+# Stage 1, step 1: requests and loaders the DOM's.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "env", "MACHOPO_GPU_ADAPTER=cpu", "cargo", "test", "-q", "-p", "shell", "--test", "it"]
+timeout = 900
+
+[[mutant]]
+name = "a sent fetch not recorded"
+file = "crates/dom_js/src/frames.rs"
+from = '''                if let Some(request_id) = sent {'''
+to = '''                if let Some(request_id) = sent.filter(|_| false) {'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "tasks::a_fetch_goes_to_the_load_sink_as_it_is_called"]
+
+[[mutant]]
+name = "an abort not cancelled"
+file = "crates/dom_js/src/frames.rs"
+from = '''                    state.dom.take_sent_fetch(request_id);
+                    sink.cancel_fetch(request_id);'''
+to = '''                    state.dom.take_sent_fetch(request_id);'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "fetch::an_aborted_fetch"]
+
+[[mutant]]
+name = "not told to DevTools as it is sent"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        if self.network_agent.enabled()
+            && let (Some(frame_id), Some(document_url)) ='''
+to = '''        if false
+            && let (Some(frame_id), Some(document_url)) ='''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "env", "MACHOPO_GPU_ADAPTER=cpu", "cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_network::a_fetch_is_told_as_it_is_sent_before_its_redirect"]
+
+[[mutant]]
+name = "a fetch through no loader"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        let loader = origin.loader.map_or(0, |loader| loader.loader);'''
+to = '''        let loader = origin.loader.map_or(0, |_| 0);'''
+
+[[mutant]]
+name = "an initial about:blank without its creator's loader"
+file = "crates/dom/src/frame.rs"
+from = '''            if !self.is_initial_about_blank(at) {
+                return None;
+            }'''
+to = '''            if true {
+                return None;
+            }'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "env", "MACHOPO_GPU_ADAPTER=cpu", "cargo", "test", "-q", "-p", "shell", "--test", "it", "documents::a_new_frames_fetch_goes_through_its_creators_loader"]
+
+[[mutant]]
+name = "a replaced document's fetches not cancelled"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        cancel_sent_fetches(engine.dom_mut(), &self.to_browser, &self.network_agent);
+        let clock'''
+to = '''        let clock'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "env", "MACHOPO_GPU_ADAPTER=cpu", "cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_network::a_replaced_documents_fetches_are_cancelled"]
+
+[[mutant]]
+name = "a replaced engine's fetches not cancelled"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        cancel_sent_fetches(engine.dom_mut(), &self.to_browser, &self.network_agent);
+        drop(engine);'''
+to = '''        drop(engine);'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "env", "MACHOPO_GPU_ADAPTER=cpu", "cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_network::a_replaced_documents_fetches_are_cancelled"]
+
+[[mutant]]
+name = "a gone frame's fetches not cancelled"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                        .is_none_or(|document| cx.is_discarded(document))
+                })
+                .map(|(request_id, _)| *request_id)'''
+to = '''                        .is_none_or(|_| false)
+                })
+                .map(|(request_id, _)| *request_id)'''
+
+[[mutant]]
+name = "cookies through no loader"
+file = "crates/dom_js/src/frames.rs"
+from = '''        (Some(host), Some(loader)) => call.on(host.as_ref(), loader.loader, url),'''
+to = '''        (Some(host), Some(_)) => call.on(host.as_ref(), 0, url),'''
+
+[[mutant]]
+name = "a cookie set through no loader"
+file = "crates/dom_js/src/frames.rs"
+from = '''                host.set_cookie(loader.loader, &write.url, &write.line);'''
+to = '''                host.set_cookie(0, &write.url, &write.line);'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "cookies::document_cookie_and_cookie_enabled"]
+
+[[mutant]]
+name = "a worker without its owner's loader"
+file = "crates/dom_api/src/worker.rs"
+from = '''            .map(|loader| loader.loader),'''
+to = '''            .map(|_| 0),'''
+
+[[mutant]]
+name = "a fetch that went nowhere never fails"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            self.scheduler.post_fetch_failed(request.id);'''
+to = '''            let _ = request.id;'''
+
+[[mutant]]
+name = "request ids repeat"
+file = "crates/renderer/src/loader.rs"
+from = '''    NEXT_REQUEST_ID.with_borrow_mut(SequenceNumber::get_next)'''
+to = '''    NEXT_REQUEST_ID.with_borrow_mut(|_| 1)'''
+
+[[mutant]]
+name = "a failed fetch's URL not logged"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        let url = self.request_urls.answered(request_id).or_else(|| {'''
+to = '''        let url = self.request_urls.answered(request_id).or_else(|| -> Option<String> { return None;'''
+
+[[mutant]]
+name = "DevTools names every loader by its document"
+file = "crates/renderer/src/loader.rs"
+from = '''        .and_then(|loader| loader.navigation)'''
+to = '''        .and_then(|_| None::<u64>)'''
+
+[[mutant]]
+name = "the top-level document's navigation not recorded"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                    navigation: Some(navigation_id),'''
+to = '''                    navigation: None,'''

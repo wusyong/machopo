@@ -244,6 +244,138 @@ fn a_document_whose_body_stops_short_fails_once() {
     of(&events, "Network.dataReceived", &id);
 }
 
+/// A `fetch()` is told as it is sent: its redirect, which comes while the
+/// script that sent it is busy, is told after it, as the same request's
+/// second `requestWillBeSent` (were it told only once the script's task
+/// had ended, the redirect would find no request to be of).
+#[test]
+fn a_fetch_is_told_as_it_is_sent_before_its_redirect() {
+    let server = server(&[
+        ("/", Route::ok("text/html", "<!DOCTYPE html>page")),
+        ("/moved", Route::redirect(302, "/plain")),
+        ("/plain", Route::ok("text/plain", "plain")),
+    ]);
+    let machopo = Machopo::start();
+    let (mut page, _) = page(&machopo);
+    load(&mut page, &server.url("/"));
+    page.call(None, "Network.enable", json!({}));
+    evaluate(
+        &mut page,
+        "fetch('/moved'); { const until = Date.now() + 200; while (Date.now() < until); } 0",
+        None,
+    );
+    let events = network_events(&mut page, 1);
+    let sent = events
+        .iter()
+        .filter(|event| event["method"] == "Network.requestWillBeSent")
+        .count();
+    assert_eq!(sent, 2, "{events:?}");
+}
+
+/// A `fetch()`'s `requestWillBeSent` is stamped as it is sent, not once the
+/// script that sent it is done: before its `loadingFinished`, which may
+/// come while the script is busy.
+#[test]
+fn a_fetch_is_stamped_as_it_is_sent() {
+    let server = server(&[
+        ("/", Route::ok("text/html", "<!DOCTYPE html>page")),
+        ("/plain", Route::ok("text/plain", "plain")),
+    ]);
+    let machopo = Machopo::start();
+    let (mut page, _) = page(&machopo);
+    load(&mut page, &server.url("/"));
+    page.call(None, "Network.enable", json!({}));
+    evaluate(
+        &mut page,
+        "fetch('/plain'); { const until = Date.now() + 200; while (Date.now() < until); } 0",
+        None,
+    );
+    let events = network_events(&mut page, 1);
+    let at = |method: &str| {
+        events
+            .iter()
+            .find(|event| event["method"] == method)
+            .and_then(|event| event["params"]["timestamp"].as_f64())
+            .expect(method)
+    };
+    assert!(
+        at("Network.loadingFinished") >= at("Network.requestWillBeSent"),
+        "{events:?}"
+    );
+}
+
+/// A document replaced by the next takes its `fetch()`es still on their
+/// way with it, the one its `pagehide` sends too: each ends in a cancelled
+/// `loadingFailed` (Chrome cancels a gone context's loads), not in its
+/// response; the same when the next is a wasm document, the page's engine
+/// replaced with the document.
+#[test]
+fn a_replaced_documents_fetches_are_cancelled() {
+    use std::time::Duration;
+    let slow = || Route::ok("text/plain", "late").with_delay(Duration::from_secs(2));
+    for next in ["/js", "/wasm"] {
+        let server = server(&[
+            (
+                "/",
+                Route::ok(
+                    "text/html",
+                    "<!DOCTYPE html><script>onpagehide = () => fetch('/hidden');</script>page",
+                ),
+            ),
+            ("/slow", slow()),
+            ("/hidden", slow()),
+            ("/js", Route::ok("text/html", "<!DOCTYPE html>next")),
+            (
+                "/wasm",
+                Route::ok(
+                    "text/html",
+                    r#"<!DOCTYPE html><meta name="script" content="wasm">next"#,
+                ),
+            ),
+        ]);
+        let machopo = Machopo::start();
+        let (mut page, _) = page(&machopo);
+        load(&mut page, &server.url("/"));
+        page.call(None, "Network.enable", json!({}));
+        evaluate(&mut page, "fetch('/slow'); 0", None);
+        load(&mut page, &server.url(next));
+        // Each fetch's request, and how it ended.
+        let mut events = page.take_events("Network.");
+        let ended = |events: &[Value], path: &str| {
+            let id = events
+                .iter()
+                .find(|event| {
+                    event["method"] == "Network.requestWillBeSent"
+                        && event["params"]["request"]["url"]
+                            .as_str()
+                            .is_some_and(|url| url.ends_with(path))
+                })
+                .map(|event| event["params"]["requestId"].clone())?;
+            events
+                .iter()
+                .find(|event| {
+                    event["params"]["requestId"] == id
+                        && matches!(
+                            event["method"].as_str(),
+                            Some("Network.loadingFinished" | "Network.loadingFailed")
+                        )
+                })
+                .cloned()
+        };
+        while ended(&events, "/slow").is_none() || ended(&events, "/hidden").is_none() {
+            events.push(page.read().expect("events"));
+        }
+        for path in ["/slow", "/hidden"] {
+            let end = ended(&events, path).expect("ended");
+            assert_eq!(
+                (end["method"].as_str(), end["params"]["canceled"].as_bool()),
+                (Some("Network.loadingFailed"), Some(true)),
+                "{next} {path}: {end}"
+            );
+        }
+    }
+}
+
 /// A redirect is another `requestWillBeSent` of the same request, with the
 /// redirect's response; a load that fails, and one cancelled, end in
 /// `loadingFailed`.

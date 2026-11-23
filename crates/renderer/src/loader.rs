@@ -17,66 +17,47 @@ use protocol::network::{
 };
 use protocol::renderer::RendererHostMsg;
 
-/// The loader each document's subresources go through (the browser's
-/// number for it, `CommitNavigation`'s `loader`; Blink's frame's
-/// `URLLoaderFactory`), by the DOM's number for the document: the render
-/// thread's, shared with what sends requests from the engine. A document
-/// the browser didn't commit (a child frame's first `about:blank`, a
-/// `javascript:` URL's) goes through its creator's.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct DocumentLoaders(Rc<RefCell<HashMap<dom::NodeId, u64>>>);
-
-impl DocumentLoaders {
-    pub(crate) fn set(&self, document: dom::NodeId, loader: u64) {
-        self.0.borrow_mut().insert(document, loader);
-    }
-
-    pub(crate) fn of(&self, document: dom::NodeId) -> Option<u64> {
-        self.0.borrow().get(&document).copied()
-    }
-
-    /// None: a new DOM's documents are numbered from the start.
-    pub(crate) fn clear(&self) {
-        self.0.borrow_mut().clear();
-    }
+/// What DevTools calls `document`'s loader (`loaderId`): the navigation
+/// that brought it; for one none brought (a child frame's first
+/// `about:blank`, a `srcdoc` or `javascript:` URL's), the document's
+/// number.
+pub(crate) fn devtools_loader_id(loader: Option<dom::DocumentLoader>, document: dom::NodeId) -> String {
+    loader
+        .and_then(|loader| loader.navigation)
+        .map_or_else(|| document.get().to_string(), |navigation| navigation.to_string())
 }
 
-/// The next request id, shared by everything in the renderer that sends
-/// one; and the URL of each request until it is answered, which the page's
-/// log names a failed load by.
-#[derive(Debug, Clone)]
-pub(crate) struct RequestIds {
-    next: Rc<RefCell<SequenceNumber<u64>>>,
-    in_flight: Rc<RefCell<HashMap<u64, String>>>,
+thread_local! {
+    /// The renderer's next request id: each renderer's thread its own, so
+    /// what the render thread sends and what the engine's load sink sends
+    /// are numbered apart without sharing anything (Blink's
+    /// `CreateUniqueIdentifier`, its process's). A `RefCell`: a
+    /// `SequenceNumber` hands out the next by `&mut`, and no borrow of it
+    /// outlives `next_request_id`.
+    static NEXT_REQUEST_ID: RefCell<SequenceNumber<u64>> =
+        RefCell::new(SequenceNumber::starting_at(1));
 }
 
-impl RequestIds {
-    pub(crate) fn new() -> Self {
-        Self {
-            next: Rc::new(RefCell::new(SequenceNumber::starting_at(1))),
-            in_flight: Rc::default(),
-        }
-    }
+/// A new request id, unique in this renderer.
+pub(crate) fn next_request_id() -> u64 {
+    NEXT_REQUEST_ID.with_borrow_mut(SequenceNumber::get_next)
+}
 
-    pub(crate) fn next(&self) -> u64 {
-        self.next.borrow_mut().get_next()
-    }
+/// The URL of each request the render thread sent, until it is answered,
+/// which the page's log names a failed load by (a `fetch()`'s is the
+/// DOM's, `Dom::sent_fetch`).
+#[derive(Debug, Default)]
+pub(crate) struct RequestUrls(HashMap<u64, String>);
 
+impl RequestUrls {
     /// Request `request_id`, `request`, is being sent.
-    pub(crate) fn sent(&self, request_id: u64, request: &ResourceRequest) {
-        self.in_flight
-            .borrow_mut()
-            .insert(request_id, request.url.clone());
-    }
-
-    /// Request `request_id` was cancelled.
-    pub(crate) fn cancelled(&self, request_id: u64) {
-        self.in_flight.borrow_mut().remove(&request_id);
+    pub(crate) fn sent(&mut self, request_id: u64, request: &ResourceRequest) {
+        self.0.insert(request_id, request.url.clone());
     }
 
     /// Request `request_id` was answered: its URL, if it was sent.
-    pub(crate) fn answered(&self, request_id: u64) -> Option<String> {
-        self.in_flight.borrow_mut().remove(&request_id)
+    pub(crate) fn answered(&mut self, request_id: u64) -> Option<String> {
+        self.0.remove(&request_id)
     }
 }
 

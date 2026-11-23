@@ -1404,6 +1404,8 @@ pub(crate) fn new_document_data<'gc>() -> DocumentDataInit<'gc> {
         target_element: None,
         completely_loaded: Cell::new(false),
         initial_about_blank: Cell::new(false),
+        loader: Cell::new(None),
+        loader_navigation: Cell::new(None),
         base_url: LocalExternal::new(RefCell::new(None)),
         about_base_url: LocalExternal::new(RefCell::new(None)),
         content_language: LocalExternal::new(RefCell::new(None)),

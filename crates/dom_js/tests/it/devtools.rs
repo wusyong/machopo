@@ -619,6 +619,8 @@ fn the_stacks_of_script_that_asks_for_loads_are_captured() {
     );
 
     page.engine.set_stacks_wanted(true, true);
+    let sink = crate::fetch::Sink::default();
+    page.engine.set_load_sink(Box::new(sink.clone()));
     page.run(
         top,
         "function addImage() { new Image().src = 'x.png'; }
@@ -654,14 +656,13 @@ fn the_stacks_of_script_that_asks_for_loads_are_captured() {
         panic!("{scripts:?}");
     };
     assert_eq!(top_function(Some(stack.clone())), "lazily");
+    // The `fetch()`'s, handed to the load sink with it.
+    let sent = sink.take();
+    let [crate::fetch::Sent::Fetch(_, origin)] = sent.as_slice() else {
+        panic!("{sent:?}");
+    };
+    assert_eq!(top_function(origin.stack.clone()), "go");
     let requests = page.engine.take_frame_requests();
-    let fetch = requests
-        .iter()
-        .find_map(|request| match request {
-            FrameRequest::Fetch { request, .. } => Some(request.id),
-            _ => None,
-        })
-        .expect("the fetch");
     let owner = requests
         .iter()
         .find_map(|request| match request {
@@ -670,10 +671,6 @@ fn the_stacks_of_script_that_asks_for_loads_are_captured() {
         })
         .expect("the frame");
     let dom = page.engine.dom_mut();
-    assert_eq!(
-        top_function(dom.take_request_stack(StackAsker::Fetch(fetch))),
-        "go"
-    );
     let owner = dom.read(|cx| cx.node_id(owner.get(cx.gc)));
     assert_eq!(
         top_function(dom.take_request_stack(StackAsker::Element(owner))),

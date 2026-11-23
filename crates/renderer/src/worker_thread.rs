@@ -314,9 +314,10 @@ impl Workers {
 }
 
 /// The loaders of the workers a thread makes: the main thread's, their
-/// documents'; a worker's, its own.
+/// documents' (the engine gives each, `WorkerStart::owner_loader`); a
+/// worker's, its own.
 pub(crate) enum WorkerLoaders {
-    Documents(crate::loader::DocumentLoaders),
+    Documents,
     Worker(u64),
 }
 
@@ -326,10 +327,7 @@ impl WorkerLoaders {
     /// the browser refuses such a worker's loads.
     fn of(&self, start: &WorkerStart) -> u64 {
         match self {
-            Self::Documents(loaders) => start
-                .owner_document
-                .and_then(|document| loaders.of(document))
-                .unwrap_or(0),
+            Self::Documents => start.owner_loader.unwrap_or(0),
             Self::Worker(loader) => *loader,
         }
     }
@@ -1038,6 +1036,7 @@ mod tests {
             name: String::new(),
             owner_origin: None,
             owner_document: None,
+            owner_loader: None,
             module: None,
         });
         workers.terminate_all();

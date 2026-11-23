@@ -200,9 +200,9 @@ impl RenderThread {
         // `fetch()` and blob URLs at the call, on the thread's handles.
         engine.set_load_sink(Box::new(super::documents::RendererLoadSink {
             to_browser: self.to_browser.clone(),
-            ids: self.next_request_id.clone(),
+            scheduler: self.scheduler.clone(),
             blob_urls: self.blob_urls.clone(),
-            loaders: self.loaders.clone(),
+            network_agent: self.network_agent.clone(),
         }));
         // `localStorage`, its areas opened waiting for the browser.
         engine.set_storage_host(Box::new(super::documents::RendererStorageHost {
@@ -213,7 +213,6 @@ impl RenderThread {
         engine.set_cookie_host(Box::new(super::documents::RendererCookieHost {
             to_browser: self.to_browser.clone(),
             scheduler: self.scheduler.clone(),
-            loaders: self.loaders.clone(),
         }));
         // What every frame's `navigator` answers, a new iframe's too.
         engine

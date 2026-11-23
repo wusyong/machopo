@@ -14,21 +14,22 @@ use crate::typed::{DomStr, ScriptHost};
 use crate::{ApiCx, ApiError};
 
 /// The host's side of cookies (Blink's `CookieJar` and its
-/// `RestrictedCookieManager`), the engine's to call. `document` is the
-/// DOM's number for the document; `url` its cookie URL.
+/// `RestrictedCookieManager`), the engine's to call. `loader` is the
+/// document's loader, as the DOM has it (`Cx::document_loader`), which the
+/// browser checks the cookies against; `url` its cookie URL.
 pub trait CookieHost {
     /// The cookie string script sees at `url` (`GetCookiesString`),
     /// waiting for the answer.
-    fn cookies(&self, document: dom::NodeId, url: &str) -> String;
+    fn cookies(&self, loader: u64, url: &str) -> String;
 
     /// Sets `line` as script sets it at `url` (`SetCookieFromString`),
     /// without waiting: a later `cookies` sees it. Given the DOM's queued
     /// writes (`Cx::take_cookie_writes`) by the engine.
-    fn set_cookie(&self, document: dom::NodeId, url: &str, line: &str);
+    fn set_cookie(&self, loader: u64, url: &str, line: &str);
 
     /// Whether the cookie policy lets the document have every cookie
     /// (`CookiesEnabledFor`), waiting for the answer.
-    fn cookies_enabled(&self, document: dom::NodeId, url: &str) -> bool;
+    fn cookies_enabled(&self, loader: u64, url: &str) -> bool;
 }
 
 /// What a front end's script host asks its cookie host, waiting for the
@@ -40,7 +41,7 @@ pub enum CookieCall {
 }
 
 /// The answer to a `CookieCall`: `Get`'s string, `Enabled`'s flag; none
-/// without a cookie host (no cookies).
+/// without a cookie host or a loader (no cookies).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CookieReply {
     Cookies(String),
@@ -49,11 +50,11 @@ pub enum CookieReply {
 }
 
 impl CookieCall {
-    /// Asks `host` of `document`'s cookies at `url`.
-    pub fn on(self, host: &dyn CookieHost, document: dom::NodeId, url: &str) -> CookieReply {
+    /// Asks `host` of the cookies at `url` through `loader`.
+    pub fn on(self, host: &dyn CookieHost, loader: u64, url: &str) -> CookieReply {
         match self {
-            Self::Get => CookieReply::Cookies(host.cookies(document, url)),
-            Self::Enabled => CookieReply::Enabled(host.cookies_enabled(document, url)),
+            Self::Get => CookieReply::Cookies(host.cookies(loader, url)),
+            Self::Enabled => CookieReply::Enabled(host.cookies_enabled(loader, url)),
         }
     }
 }

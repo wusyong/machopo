@@ -117,10 +117,6 @@ pub(super) struct FrameDocument {
     /// on (1-based), until its load starts: DevTools names the parser as
     /// having asked for it there.
     parser_lines: dom::NodeIdHashMap<u32>,
-    /// What DevTools calls its loader, if not its document's number: a
-    /// child frame's document's request (the top-level one's is its
-    /// navigation's).
-    loader_id: Option<String>,
     /// The subresources it loaded, for DevTools' `Page.getResourceTree`
     /// (shared with what the `Page` agent was told: copied as it changes
     /// after).
@@ -258,7 +254,6 @@ impl FrameDocument {
             sent_title: None,
             title_version: 0,
             parser_lines: dom::NodeIdHashMap::default(),
-            loader_id: None,
             resources: Rc::default(),
             initial: false,
             history_load: false,
@@ -647,6 +642,9 @@ impl RenderThread {
                 engine.unload_document(top),
             ),
         };
+        // Its documents' `fetch()`es go with them, those of their `unload`
+        // too (by the engine before, if the page took a new one).
+        cancel_sent_fetches(engine.dom_mut(), &self.to_browser, &self.network_agent);
         let clock = self.clock;
         let unloaded = unloaded.map(|(start, end)| (clock.at(start), clock.at(end)));
         let timing = crate::navigation_timing::with_unload(
@@ -689,7 +687,15 @@ impl RenderThread {
         let node = engine.dom_mut().read(|cx| cx.node_id(document.get(cx.gc)));
         // Its subresources, its scripts' as it parses too, go through the
         // browser's loader for it.
-        self.loaders.set(node, loader);
+        engine.dom_mut().mutate(|cx| {
+            cx.set_document_loader(
+                document.get(cx.gc),
+                dom::DocumentLoader {
+                    loader,
+                    navigation: Some(navigation_id),
+                },
+            );
+        });
         let view = FrameView::new(document.clone(), node, document_id, self.system_colors);
         match engine
             .dom_and_layout()
@@ -769,7 +775,7 @@ impl RenderThread {
         // What was asked for its documents: a response still to come is
         // no one's (the next DOM's nodes are numbered from the start).
         self.images.clear();
-        self.fetches.clear();
+        // Its `fetch()`es' requests go with its DOM.
         self.script_fetches.clear();
         self.css_refetches.clear();
         // Its documents' workers with them.
@@ -786,9 +792,8 @@ impl RenderThread {
                 self.widget = Some(widget);
             }
         }
+        cancel_sent_fetches(engine.dom_mut(), &self.to_browser, &self.network_agent);
         drop(engine);
-        // Its documents' numbers are the next DOM's from the start.
-        self.loaders.clear();
         // Its `localStorage` areas went with its DOM: the next engine's
         // documents get them again.
         let _ = self.to_browser.send(RendererHostMsg::ForgetStorageAreas);
@@ -821,13 +826,23 @@ impl RenderThread {
         while let Some(frame) = at {
             if let Some(loader) = self
                 .document_of_frame(frame)
-                .and_then(|id| self.loaders.of(id))
+                .and_then(|id| self.loader_in_dom(id))
             {
                 return loader;
             }
             at = self.children.frames.get(&frame).map(|(parent, _)| *parent);
         }
         0
+    }
+
+    /// The loader the DOM has for the document `document`
+    /// (`Cx::document_loader`).
+    fn loader_in_dom(&mut self, document: dom::NodeId) -> Option<u64> {
+        let engine = self.engine.as_mut()?;
+        engine.dom_mut().read(|cx| {
+            cx.document_loader(cx.node_by_id(document)?)
+                .map(|loader| loader.loader)
+        })
     }
 
     /// The DOM's number for the document the browser last committed in
@@ -842,7 +857,7 @@ impl RenderThread {
     /// The loader the document `document` goes through: the browser's for
     /// it, else that of the frame showing it (or the top-level one's).
     fn loader_of_document(&mut self, document: dom::NodeId) -> u64 {
-        if let Some(loader) = self.loaders.of(document) {
+        if let Some(loader) = self.loader_in_dom(document) {
             return loader;
         }
         let frame = self
@@ -913,15 +928,6 @@ impl RenderThread {
                             });
                         }
                         self.children.tokens.insert(frame, token);
-                        // Its first `about:blank`, of its parent's origin,
-                        // goes through its parent's loader (Chromium's
-                        // initial empty document takes its creator's
-                        // factories).
-                        let parent_loader = self.loader_of(parent);
-                        if let Some(engine) = self.engine.as_mut() {
-                            let id = engine.dom_mut().read(|cx| cx.node_id(document.get(cx.gc)));
-                            self.loaders.set(id, parent_loader);
-                        }
                         let document_id = self.new_document_id();
                         let Some((dom, next)) = engine_frame(&mut self.engine) else {
                             continue;
@@ -995,13 +1001,6 @@ impl RenderThread {
                             .register(&url, frame, data.type_(), data.shared_bytes());
                     }
                     FrameRequest::RevokeBlobUrl { url } => self.blob_urls.revoke(&url),
-                    FrameRequest::Fetch { frame, request } => self.start_fetch(frame, request),
-                    FrameRequest::FetchSent {
-                        frame,
-                        request,
-                        request_id,
-                    } => self.fetch_sent(frame, request, request_id),
-                    FrameRequest::CancelFetch { id } => self.cancel_fetch(id),
                     FrameRequest::Removed { frame, token } => {
                         let _ = self
                             .to_browser
@@ -1774,7 +1773,15 @@ impl RenderThread {
                 cx.node_id(owner.get(cx.gc)),
             )
         });
-        self.loaders.set(node, loader);
+        dom.mutate(|cx| {
+            cx.set_document_loader(
+                document.get(cx.gc),
+                dom::DocumentLoader {
+                    loader,
+                    navigation: navigation.as_ref().map(|navigation| navigation.navigation_id),
+                },
+            );
+        });
         let view = FrameView::new(document.clone(), node, document_id, self.system_colors)
             .into_child(frame, owner_id);
         let top = self.document.as_ref().map(|next| next.frame);
@@ -1794,9 +1801,6 @@ impl RenderThread {
         self.children.documents.retain(|next| next.frame != frame);
         // The document before's `fetch()`es go with it.
         self.cancel_fetches_of_gone_documents();
-        let loader_id = navigation
-            .as_ref()
-            .map(|navigation| navigation.navigation_id.to_string());
         let (navigation_id, history_load) = navigation.as_ref().map_or((0, false), |navigation| {
             (
                 navigation.navigation_id,
@@ -1804,7 +1808,6 @@ impl RenderThread {
             )
         });
         self.children.documents.push(FrameDocument {
-            loader_id,
             navigation_id,
             history_load,
             body: Some(body),
@@ -3120,16 +3123,16 @@ impl RenderThread {
             (
                 next.mime_type.clone(),
                 next.source(),
-                next.loader_id.clone(),
                 next.resources.clone(),
                 next.initial,
             )
         });
         let creation_stack = self.children.creation_stacks.get(&frame).cloned();
         let engine = self.engine.as_mut()?;
-        let (document, url, origin, name) = engine.dom_mut().read(|cx| {
+        let (document, url, origin, name, loader) = engine.dom_mut().read(|cx| {
             let owner = owner.get(cx.gc);
             let document = cx.content_document(owner)?;
+            let loader = cx.document_loader(document);
             let url: String = cx
                 .document_url(document)
                 .map_or_else(|| "about:blank".to_owned(), |url| url.to_str().into_owned());
@@ -3143,23 +3146,19 @@ impl RenderThread {
                 .attribute_value_by_id(owner, dom::names::local::NAME)
                 .map(|name| name.borrow().to_str().into_owned())
                 .unwrap_or_default();
-            Some((u64::from(cx.node_id(document).get()), url, origin, name))
+            Some((cx.node_id(document), url, origin, name, loader))
         })?;
+        let loader_id = crate::loader::devtools_loader_id(loader, document);
+        let document = u64::from(document.get());
         let secure_context = super::devtools::secure_context(&url, Some(parent.secure_context));
-        let (mime_type, source, loader_id, resources, initial) = committed.unwrap_or_else(|| {
-            (
-                "text/html".to_owned(),
-                Rc::from(""),
-                None,
-                Rc::default(),
-                true,
-            )
+        let (mime_type, source, resources, initial) = committed.unwrap_or_else(|| {
+            ("text/html".to_owned(), Rc::from(""), Rc::default(), true)
         });
         Some(FrameInfo {
             id,
             parent_id: Some(parent.id.clone()),
             // Its request's, if one brought it.
-            loader_id: loader_id.unwrap_or_else(|| document.to_string()),
+            loader_id,
             document,
             name: Some(name),
             initial,
@@ -3179,7 +3178,12 @@ impl RenderThread {
     /// counts): its sheets, its parser's scripts and those its DOM queued,
     /// the images it asked for first, its `fetch()`es. Not a child frame's
     /// `src` (its own document's request).
-    fn requests_in_flight(&self, frame: FrameId, document: dom::NodeId) -> usize {
+    fn requests_in_flight(&mut self, frame: FrameId, document: dom::NodeId) -> usize {
+        // Before its document is borrowed: the DOM has them.
+        let fetches = self
+            .engine
+            .as_mut()
+            .map_or(0, |engine| engine.dom_mut().sent_fetches_of(document));
         let Some(next) = self.doc(frame) else {
             return 0;
         };
@@ -3196,11 +3200,6 @@ impl RenderThread {
             .count();
         let images = self
             .images
-            .values()
-            .filter(|(_, of)| *of == document)
-            .count();
-        let fetches = self
-            .fetches
             .values()
             .filter(|(_, of)| *of == document)
             .count();
@@ -4346,7 +4345,7 @@ impl RenderThread {
                 .or_else(|| self.document.as_ref().map(|next| next.frame));
             let request_id = match frame {
                 Some(frame) if self.network_agent.enabled() => {
-                    let request_id = self.next_request_id.next();
+                    let request_id = crate::loader::next_request_id();
                     let initiator = self.initiator(frame, &asker);
                     if let Some(at) = self.request_frame(frame) {
                         self.network_agent
@@ -4356,7 +4355,7 @@ impl RenderThread {
                     request_id
                 }
                 _ => {
-                    let request_id = self.next_request_id.next();
+                    let request_id = crate::loader::next_request_id();
                     self.send_request(request_id, loader, request);
                     request_id
                 }
@@ -4491,75 +4490,9 @@ impl RenderThread {
         }
     }
 
-    /// A response the DOM's document asked for: its parser-blocking
-    /// script runs (one that failed to load doesn't), then parsing goes
-    /// on. Whether it was the document's.
-    /// A `fetch()`'s request sent (Blink's `FetchManager::Loader`), its
-    /// response the engine's by its number (`fetch_answered`); a blob
-    /// URL revoked before is a network error, now.
-    fn start_fetch(&mut self, frame: FrameId, request: dom::FetchRequest) {
-        // A frame's are its document's (a worker's go from its thread).
-        let Some(document) = request.document else {
-            return;
-        };
-        if fetch_of_revoked_blob(&self.blob_urls, &request) {
-            self.fetch_went_nowhere(request.id);
-            return;
-        }
-        let resource = crate::loader::fetch_resource_request(&request);
-        // Script asked: its stack, if DevTools wants it (none: no one it
-        // names).
-        let fetch = request.id;
-        let request_id = self.send_request_with_initiator(frame, resource, |this| {
-            let stack = this
-                .engine
-                .as_mut()?
-                .dom_mut()
-                .take_request_stack(dom::StackAsker::Fetch(fetch))?;
-            this.network_agent
-                .wants_stacks()
-                .then_some(Initiator::Script(stack))
-        });
-        self.fetches.insert(request_id, (request.id, document));
-    }
-
-    /// A `fetch()` the load sink sent as script called it
-    /// (`RendererLoadSink`, `request_id`): kept to give its response back by,
-    /// and told to DevTools' `Network` now, with the stack of the script
-    /// that asked; one it sent nowhere (a revoked blob URL's) a network
-    /// error now.
-    fn fetch_sent(&mut self, frame: FrameId, request: dom::FetchRequest, request_id: Option<u64>) {
-        let Some(document) = request.document else {
-            return;
-        };
-        let Some(request_id) = request_id else {
-            self.fetch_went_nowhere(request.id);
-            return;
-        };
-        let fetch = request.id;
-        if self.network_agent.enabled() {
-            let resource = crate::loader::fetch_resource_request(&request);
-            let initiator = self
-                .engine
-                .as_mut()
-                .and_then(|engine| {
-                    engine
-                        .dom_mut()
-                        .take_request_stack(dom::StackAsker::Fetch(fetch))
-                })
-                .filter(|_| self.network_agent.wants_stacks())
-                .map(Initiator::Script);
-            if let Some(at) = self.request_frame(frame) {
-                self.network_agent
-                    .will_send(request_id, &resource, at, initiator.as_ref());
-            }
-        }
-        self.fetches.insert(request_id, (fetch, document));
-    }
-
     /// The `fetch()` numbered `fetch` went nowhere (a revoked blob URL): a
-    /// network error, in a task of its own (this one).
-    fn fetch_went_nowhere(&mut self, fetch: u64) {
+    /// network error, in a task of its own (`MainThreadTask::FetchFailed`).
+    pub(super) fn fetch_went_nowhere(&mut self, fetch: u64) {
         if let Some(engine) = &mut self.engine {
             engine.fetch_response(fetch, Err(()));
         }
@@ -4571,45 +4504,28 @@ impl RenderThread {
     /// `FetchManager` cancels its loaders as its execution context is
     /// destroyed), their promises never settled.
     fn cancel_fetches_of_gone_documents(&mut self) {
-        if self.fetches.is_empty() {
-            return;
-        }
         let Some(engine) = &mut self.engine else {
             return;
         };
-        let gone: Vec<u64> = engine.dom_mut().read(|cx| {
-            self.fetches
-                .values()
-                .filter(|(_, document)| {
-                    cx.node_by_id(*document)
+        let dom = engine.dom_mut();
+        let fetches = dom.sent_fetches();
+        if fetches.is_empty() {
+            return;
+        }
+        let gone: Vec<u64> = dom.read(|cx| {
+            fetches
+                .iter()
+                .filter(|(_, sent)| {
+                    cx.node_by_id(sent.document)
                         .is_none_or(|document| cx.is_discarded(document))
                 })
-                .map(|(fetch, _)| *fetch)
+                .map(|(request_id, _)| *request_id)
                 .collect()
         });
-        for fetch in gone {
-            self.cancel_fetch(fetch);
+        for request_id in gone {
+            dom.take_sent_fetch(request_id);
+            cancel_request(&self.to_browser, &self.network_agent, request_id);
         }
-    }
-
-    /// The fetch numbered `id` aborted: its request cancelled, if it is
-    /// still on its way.
-    fn cancel_fetch(&mut self, id: u64) {
-        let Some(request_id) = self
-            .fetches
-            .iter()
-            .find(|&(_, &(fetch, _))| fetch == id)
-            .map(|(&request_id, _)| request_id)
-        else {
-            return;
-        };
-        self.fetches.remove(&request_id);
-        self.next_request_id.cancelled(request_id);
-        self.network_agent.did_cancel(request_id);
-        let _ = self.to_browser.send(RendererHostMsg::CancelResource {
-            request_id,
-            worker: None,
-        });
     }
 
     /// The response to a `fetch()` of the DOM's, or its network error:
@@ -4631,8 +4547,12 @@ impl RenderThread {
         asked: Option<&str>,
         result: &LoadResult,
     ) -> bool {
-        if let Some((id, _)) = self.fetches.remove(&request_id) {
-            self.fetch_answered(id, result);
+        if let Some(sent) = self
+            .engine
+            .as_mut()
+            .and_then(|engine| engine.dom_mut().take_sent_fetch(request_id))
+        {
+            self.fetch_answered(sent.fetch, result);
             return true;
         }
         if let Some((url, document)) = self.images.remove(&request_id) {
@@ -4733,7 +4653,7 @@ impl RenderThread {
         request: ResourceRequest,
         initiator: impl FnOnce(&mut Self) -> Option<Initiator>,
     ) -> u64 {
-        let request_id = self.next_request_id.next();
+        let request_id = crate::loader::next_request_id();
         if self.network_agent.enabled() {
             let initiator = initiator(self);
             if let Some(at) = self.request_frame(frame) {
@@ -4747,8 +4667,8 @@ impl RenderThread {
     }
 
     /// Sends `request` through `loader` (its document's).
-    fn send_request(&self, request_id: u64, loader: u64, request: ResourceRequest) {
-        self.next_request_id.sent(request_id, &request);
+    fn send_request(&mut self, request_id: u64, loader: u64, request: ResourceRequest) {
+        self.request_urls.sent(request_id, &request);
         let _ = self.to_browser.send(RendererHostMsg::FetchResource {
             request_id,
             worker: None,
@@ -4780,19 +4700,12 @@ impl RenderThread {
     /// one's navigation; a child frame's, its request, or for one none
     /// brought its document's number (as `child_info` tells it).
     fn loader_id(&mut self, frame: FrameId) -> Option<String> {
-        let next = self.doc(frame)?;
-        if next.child_of.is_none() {
-            return Some(next.navigation_id.to_string());
-        }
-        if let Some(loader_id) = &next.loader_id {
-            return Some(loader_id.clone());
-        }
-        let document = next.document.clone();
+        let document = self.doc(frame)?.document.clone();
         let engine = self.engine.as_mut()?;
-        let number = engine
-            .dom_mut()
-            .read(|cx| u64::from(cx.node_id(document.get(cx.gc)).get()));
-        Some(number.to_string())
+        Some(engine.dom_mut().read(|cx| {
+            let document = document.get(cx.gc);
+            crate::loader::devtools_loader_id(cx.document_loader(document), cx.node_id(document))
+        }))
     }
 
     /// Who asked for a load, as the DOM says (`initiator`), as DevTools
@@ -5079,32 +4992,61 @@ fn script_loaded(
     })
 }
 
-/// What the DOM's engine sends as script asks (`dom_api::
-/// LoadSink`): a `fetch()` at the call, a blob URL registered and revoked
-/// at once (Blink's `FetchManager` starts its loader in the call), on the
-/// handles of the renderer's request ids and blob URLs it shares with the
-/// render thread (which hears of each `fetch()` after,
-/// `FrameRequest::FetchSent`).
+/// What the DOM's engine sends as script asks (`dom_api::LoadSink`): a
+/// `fetch()` at the call, told to DevTools as it goes, and cancelled at
+/// once; a blob URL registered and revoked at once (Blink's `FetchManager`
+/// starts its loader in the call). The engine records the `fetch()`es sent
+/// (`Dom::note_fetch_sent`), which the render thread gives their responses
+/// back by.
 pub(super) struct RendererLoadSink {
     pub(super) to_browser: BrowserSender,
-    pub(super) ids: crate::loader::RequestIds,
+    /// Where a `fetch()` that went nowhere gets its network error, in a
+    /// task of its own (`MainThreadTask::FetchFailed`).
+    pub(super) scheduler: std::sync::Arc<crate::task_queue::MainThreadScheduler>,
     pub(super) blob_urls: crate::loader::BlobUrls,
-    pub(super) loaders: crate::loader::DocumentLoaders,
+    /// Told of each `fetch()` as it is sent and cancelled. Shared (`Rc`):
+    /// DevTools' agents are the render thread's, observers of what the
+    /// page does as it does it (Blink's are its probes' `GarbageCollected`
+    /// objects); it asks whether it is on before anything else.
+    pub(super) network_agent: Rc<super::network_agent::NetworkAgent>,
 }
 
 impl dom_api::LoadSink for RendererLoadSink {
-    fn start_fetch(&self, _: FrameId, request: &dom::FetchRequest) -> Option<u64> {
+    fn start_fetch(
+        &mut self,
+        _: FrameId,
+        request: &dom::FetchRequest,
+        origin: &dom_api::FetchOrigin,
+    ) -> Option<u64> {
+        let document = request.document?;
         if fetch_of_revoked_blob(&self.blob_urls, request) {
+            self.scheduler.post_fetch_failed(request.id);
             return None;
         }
         let resource = crate::loader::fetch_resource_request(request);
-        let request_id = self.ids.next();
-        self.ids.sent(request_id, &resource);
-        // Through its document's loader.
-        let loader = request
-            .document
-            .and_then(|document| self.loaders.of(document))
-            .unwrap_or(0);
+        let request_id = crate::loader::next_request_id();
+        // Told to DevTools as it is sent, before anything of its response
+        // can come (Blink's `ResourceLoadObserverForFrame::WillSendRequest`).
+        if self.network_agent.enabled()
+            && let (Some(frame_id), Some(document_url)) =
+                (origin.frame_token.clone(), origin.document_url.clone())
+        {
+            let initiator = origin
+                .stack
+                .clone()
+                .filter(|_| self.network_agent.wants_stacks())
+                .map(Initiator::Script);
+            let at = super::network_agent::RequestFrame {
+                frame_id,
+                loader_id: crate::loader::devtools_loader_id(origin.loader, document),
+                document_url,
+            };
+            self.network_agent
+                .will_send(request_id, &resource, at, initiator.as_ref());
+        }
+        // Through its document's loader: 0, which the browser knows as
+        // none, for a document it gave none.
+        let loader = origin.loader.map_or(0, |loader| loader.loader);
         let _ = self.to_browser.send(RendererHostMsg::FetchResource {
             request_id,
             worker: None,
@@ -5112,6 +5054,10 @@ impl dom_api::LoadSink for RendererLoadSink {
             request: resource,
         });
         Some(request_id)
+    }
+
+    fn cancel_fetch(&mut self, request_id: u64) {
+        cancel_request(&self.to_browser, &self.network_agent, request_id);
     }
 
     fn register_blob_url(&self, frame: FrameId, url: &str, data: &dom::BlobData) {
@@ -5126,6 +5072,41 @@ impl dom_api::LoadSink for RendererLoadSink {
     fn frame_gone(&self, frame: FrameId) {
         self.blob_urls.revoke_frame(frame);
     }
+}
+
+/// Every `fetch()` of `dom`'s documents still on its way cancelled, in the
+/// order they were sent: the documents all go (the top-level one is
+/// replaced; Blink's `FetchManager` cancels its loaders as its execution
+/// context is destroyed).
+fn cancel_sent_fetches(
+    dom: &Dom,
+    to_browser: &BrowserSender,
+    network_agent: &super::network_agent::NetworkAgent,
+) {
+    let mut sent: Vec<u64> = dom
+        .sent_fetches()
+        .into_iter()
+        .map(|(request_id, _)| request_id)
+        .collect();
+    sent.sort_unstable();
+    for request_id in sent {
+        dom.take_sent_fetch(request_id);
+        cancel_request(to_browser, network_agent, request_id);
+    }
+}
+
+/// The renderer's request `request_id` cancelled: DevTools told, the
+/// browser's load stopped.
+fn cancel_request(
+    to_browser: &BrowserSender,
+    network_agent: &super::network_agent::NetworkAgent,
+    request_id: u64,
+) {
+    network_agent.did_cancel(request_id);
+    let _ = to_browser.send(RendererHostMsg::CancelResource {
+        request_id,
+        worker: None,
+    });
 }
 
 /// What opens the frames' `localStorage` and tells the browser what script
@@ -5184,18 +5165,14 @@ impl dom_api::StorageHost for RendererStorageHost {
 /// frame's `RestrictedCookieManager`), through each document's loader: a
 /// read is the answer the main thread waits for, every task left queued
 /// (`[Sync] GetCookiesString`); a write is sent as the engine hands it
-/// (`SetCookieFromString`). A document without a loader has no cookies.
+/// (`SetCookieFromString`). The engine gives the document's loader.
 pub(super) struct RendererCookieHost {
     pub(super) to_browser: BrowserSender,
     pub(super) scheduler: std::sync::Arc<crate::task_queue::MainThreadScheduler>,
-    pub(super) loaders: crate::loader::DocumentLoaders,
 }
 
 impl dom_api::CookieHost for RendererCookieHost {
-    fn cookies(&self, document: dom::NodeId, url: &str) -> String {
-        let Some(loader) = self.loaders.of(document) else {
-            return String::new();
-        };
+    fn cookies(&self, loader: u64, url: &str) -> String {
         let reply = self.scheduler.sync_call(|request_id| {
             let _ = self.to_browser.send(RendererHostMsg::GetCookies {
                 loader,
@@ -5209,20 +5186,15 @@ impl dom_api::CookieHost for RendererCookieHost {
         }
     }
 
-    fn set_cookie(&self, document: dom::NodeId, url: &str, line: &str) {
-        if let Some(loader) = self.loaders.of(document) {
-            let _ = self.to_browser.send(RendererHostMsg::SetCookie {
-                loader,
-                url: url.to_owned(),
-                line: line.to_owned(),
-            });
-        }
+    fn set_cookie(&self, loader: u64, url: &str, line: &str) {
+        let _ = self.to_browser.send(RendererHostMsg::SetCookie {
+            loader,
+            url: url.to_owned(),
+            line: line.to_owned(),
+        });
     }
 
-    fn cookies_enabled(&self, document: dom::NodeId, url: &str) -> bool {
-        let Some(loader) = self.loaders.of(document) else {
-            return false;
-        };
+    fn cookies_enabled(&self, loader: u64, url: &str) -> bool {
         let reply = self.scheduler.sync_call(|request_id| {
             let _ = self.to_browser.send(RendererHostMsg::CookiesEnabled {
                 loader,

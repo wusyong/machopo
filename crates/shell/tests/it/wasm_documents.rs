@@ -252,3 +252,37 @@ fn the_engine_is_the_one_the_bodys_start_declares_across_a_pause() {
     assert_eq!(render(&server.url("/wasm")).title.as_deref(), Some("wasm"));
     assert_eq!(render(&server.url("/js")).title.as_deref(), Some("js"));
 }
+
+/// A JS document's `pagehide` and `unload` call `fetch()` as a wasm
+/// document replaces it, its engine with it: the wasm document loads.
+/// (That the requests are cancelled is `devtools_network`'s.)
+#[test]
+fn a_js_documents_unload_may_fetch_as_a_wasm_document_replaces_it() {
+    use std::collections::HashMap;
+
+    use net::test_server::{Route, TestServer, Unanswered};
+    let server = TestServer::start(HashMap::from([
+        (
+            "/js".to_owned(),
+            // Never loaded (its image never comes), so the wasm document's
+            // is the load the frame is rendered after.
+            Route::ok(
+                "text/html",
+                "<!DOCTYPE html><title>js</title><script>onpagehide = () => fetch('/hidden'); \
+                 onunload = () => fetch('/unloaded'); location.href = '/wasm';</script><img src=/never>",
+            ),
+        ),
+        (
+            "/never".to_owned(),
+            Route::ok("image/png", "").unanswered(Unanswered::Never),
+        ),
+        (
+            "/wasm".to_owned(),
+            Route::ok("text/html", format!("<!DOCTYPE html>{META}<title>wasm</title>")),
+        ),
+        ("/hidden".to_owned(), Route::ok("text/plain", "")),
+        ("/unloaded".to_owned(), Route::ok("text/plain", "")),
+    ]))
+    .expect("the test server starts");
+    assert_eq!(render(&server.url("/js")).title.as_deref(), Some("wasm"));
+}

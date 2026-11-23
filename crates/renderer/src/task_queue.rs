@@ -30,6 +30,9 @@ pub(crate) enum MainThreadTask {
     /// From the canvas encoder thread: the file of the DOM's `toBlob`
     /// call numbered `id` (none if it couldn't be encoded).
     CanvasEncoded { id: u64, file: Option<Vec<u8>> },
+    /// The DOM's `fetch()` numbered `fetch` went nowhere (a revoked blob
+    /// URL's): its network error, in a task of its own, as a response's.
+    FetchFailed { fetch: u64 },
     /// What the browser asked of the page's DevTools sessions.
     DevTools(DevToolsQueued),
     /// From the thread of the dedicated worker numbered `id`: what it
@@ -346,6 +349,17 @@ impl MainThreadScheduler {
         let _ = self.post(
             TaskQueue::Canvas,
             MainThreadTask::CanvasEncoded { id, file },
+            false,
+        );
+    }
+
+    /// The network error of the DOM's `fetch()` numbered `fetch`, which
+    /// went nowhere: after the browser's messages posted before, as its
+    /// response would have been.
+    pub(crate) fn post_fetch_failed(&self, fetch: u64) {
+        let _ = self.post(
+            TaskQueue::Browser,
+            MainThreadTask::FetchFailed { fetch },
             false,
         );
     }
@@ -673,6 +687,7 @@ mod tests {
                 "raster failed".to_owned()
             }
             MainThreadTask::CanvasEncoded { id, .. } => format!("canvas {id}"),
+            MainThreadTask::FetchFailed { fetch } => format!("fetch failed {fetch}"),
             MainThreadTask::Worker { id, .. } => format!("worker {id}"),
             MainThreadTask::PortMessages => "ports".to_owned(),
             MainThreadTask::NavigationBody { navigation_id, .. } => {

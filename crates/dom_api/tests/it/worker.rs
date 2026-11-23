@@ -95,6 +95,7 @@ fn a_worker_starts_its_worker() {
             name: "fib".to_owned(),
             owner_origin: Some(origin),
             owner_document: Some(document),
+            owner_loader: None,
             module: None,
         })]
     );

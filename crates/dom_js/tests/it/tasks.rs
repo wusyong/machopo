@@ -58,10 +58,17 @@ struct Sink {
 }
 
 impl LoadSink for Sink {
-    fn start_fetch(&self, _: FrameId, request: &dom::FetchRequest) -> Option<u64> {
-        self.calls
-            .borrow_mut()
-            .push(format!("fetch {}", request.url));
+    fn start_fetch(
+        &mut self,
+        _: FrameId,
+        request: &dom::FetchRequest,
+        origin: &dom_api::FetchOrigin,
+    ) -> Option<u64> {
+        self.calls.borrow_mut().push(format!(
+            "fetch {} from {}",
+            request.url,
+            origin.document_url.as_deref().unwrap_or("nowhere")
+        ));
         (!request.url.ends_with("nowhere")).then_some(7)
     }
 
@@ -73,15 +80,22 @@ impl LoadSink for Sink {
         self.calls.borrow_mut().push("revoke".to_owned());
     }
 
+    fn cancel_fetch(&mut self, request_id: u64) {
+        self.calls
+            .borrow_mut()
+            .push(format!("cancel {request_id}"));
+    }
+
     fn frame_gone(&self, _: FrameId) {
         self.calls.borrow_mut().push("frame gone".to_owned());
     }
 }
 
 /// With a load sink, a `fetch()` is sent as it is called, in order with the
-/// blob URLs registered and revoked around it, and the host told after
-/// what went (`FetchSent`, its request's number; none for one the sink
-/// sent nowhere); none waits for the host's look.
+/// blob URLs registered and revoked around it, its document's URL with
+/// it; the DOM records the one sent by its request's number, which its
+/// response comes by, and not the one the sink sent nowhere; none waits
+/// for the host's look.
 #[test]
 fn a_fetch_goes_to_the_load_sink_as_it_is_called() {
     let mut page = Page::new("https://example.test/");
@@ -100,34 +114,26 @@ fn a_fetch_goes_to_the_load_sink_as_it_is_called() {
         *calls.borrow(),
         [
             "register",
-            "fetch https://example.test/data",
+            "fetch https://example.test/data from https://example.test/",
             "revoke",
-            "fetch https://example.test/nowhere"
+            "fetch https://example.test/nowhere from https://example.test/"
         ]
     );
-    let sent: Vec<(String, Option<u64>)> = page
+    assert!(
+        page.engine.take_frame_requests().iter().all(|request| !matches!(
+            request,
+            FrameRequest::RegisterBlobUrl { .. } | FrameRequest::RevokeBlobUrl { .. }
+        )),
+        "the sink's"
+    );
+    let sent: Vec<(u64, String)> = page
         .engine
-        .take_frame_requests()
+        .dom_mut()
+        .sent_fetches()
         .into_iter()
-        .filter_map(|request| match request {
-            FrameRequest::FetchSent {
-                request,
-                request_id,
-                ..
-            } => Some((request.url, request_id)),
-            FrameRequest::Fetch { .. }
-            | FrameRequest::RegisterBlobUrl { .. }
-            | FrameRequest::RevokeBlobUrl { .. } => panic!("the sink's"),
-            _ => None,
-        })
+        .map(|(request_id, sent)| (request_id, sent.url))
         .collect();
-    assert_eq!(
-        sent,
-        [
-            ("https://example.test/data".to_owned(), Some(7)),
-            ("https://example.test/nowhere".to_owned(), None)
-        ]
-    );
+    assert_eq!(sent, [(7, "https://example.test/data".to_owned())]);
 }
 
 /// The user agent and the webdriver flag are the DOM's: a new iframe's

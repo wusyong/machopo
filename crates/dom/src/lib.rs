@@ -144,7 +144,7 @@ pub use event::{
 };
 pub use execution_context::ExecutionContext;
 pub use fetch::{
-    FetchHostRequest, FetchRecord, FetchRequest, FetchState, Referrer, Request, RequestCache,
+    FetchHostRequest, FetchRecord, FetchRequest, FetchState, Referrer, Request, RequestCache, SentFetch,
     RequestCredentials, RequestData, RequestMode, RequestPriority, RequestRedirect, Response,
     ResponseData, ResponseType,
 };
@@ -154,8 +154,8 @@ pub use file_reader::{
 pub use flat::FlatChildren;
 pub use form::{FormAssociation, FormItem, PastNames, RadioList, disabled_walks, form_walks};
 pub use frame::{
-    BlobUrlRequest, ElementChange, FrameNavigation, FrameOwnerChange, NavigationInitiator,
-    NavigationRequest,
+    BlobUrlRequest, DocumentLoader, ElementChange, FrameNavigation, FrameOwnerChange,
+    NavigationInitiator, NavigationRequest,
 };
 pub use geolocation::{GeoRequest, Geolocation, GeolocationPositionError, GeolocationStep};
 pub use headers::{Headers, HeadersGuard};
@@ -500,6 +500,10 @@ pub struct DocumentData {
     /// It is HTML's initial `about:blank`: a child frame's first document,
     /// made with it (`history`'s `is_initial_about_blank`).
     pub(crate) initial_about_blank: Cell<bool>,
+    /// The loader its subresources go through, and the navigation that
+    /// brought it, as its host gave them (`frame`'s `document_loader`).
+    pub(crate) loader: Cell<Option<u64>>,
+    pub(crate) loader_navigation: Cell<Option<u64>>,
     /// Its base URL as last worked out (`base`).
     pub(crate) base_url: LocalExternal<base::BaseUrlCell>,
     /// An `about:blank` document's about base URL (HTML's), its creator's
@@ -864,6 +868,12 @@ struct Changes {
     /// The documents whose window's `load` task ran, until the host takes
     /// them (`Dom::take_loaded_documents`).
     loaded_documents: Cell<Vec<NodeId>>,
+    /// The `fetch()`es' requests the host sent, by request, until their
+    /// responses come or they are cancelled (`Dom::note_fetch_sent`): the
+    /// DOM's own record, which the host reads its responses by. A
+    /// `RefCell`, as the other changes here: the DOM's API is `&self`, and
+    /// no borrow of it outlives the call that takes it.
+    sent_fetches: std::cell::RefCell<std::collections::HashMap<u64, fetch::SentFetch>>,
     /// The browser's user agent and whether automation controls it, its
     /// host's (`Dom::set_agent`, `navigator`).
     user_agent: std::cell::RefCell<String>,

@@ -150,7 +150,7 @@ pub use document::{document_title, set_page_visible};
 pub use dom_api_macros::declare;
 pub use engine::{
     ClassicScript, ConsoleMessage, ConsoleSink, DevToolsInterrupter, DevToolsObjects, DevToolsPage,
-    DevToolsQueue, DevToolsQueued, DevToolsSend, EngineSettings, LoadSink, ScriptEngine,
+    DevToolsQueue, DevToolsQueued, DevToolsSend, EngineSettings, FetchOrigin, LoadSink, ScriptEngine,
     WasmScript, WorkerEngine, WorkerGlobalParams,
 };
 pub use event::{cancel as cancel_event, coarsen};

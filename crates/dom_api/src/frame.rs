@@ -94,26 +94,6 @@ pub enum FrameRequest {
     },
     /// `url` stands for nothing now (`URL.revokeObjectURL`).
     RevokeBlobUrl { url: String },
-    /// Script in `frame`'s realm called `fetch()`: the host sends
-    /// `request`, and gives its response back by its number
-    /// (`ScriptEngine::fetch_response`).
-    Fetch {
-        frame: FrameId,
-        request: dom::FetchRequest,
-    },
-    /// Script in `frame`'s realm called `fetch()`, and the host's
-    /// `LoadSink` sent `request` as it was called: the request it sent
-    /// (none: it sent none, a revoked blob URL's network error, for the
-    /// host to give back), by which the host gives its response back
-    /// (`ScriptEngine::fetch_response`).
-    FetchSent {
-        frame: FrameId,
-        request: dom::FetchRequest,
-        request_id: Option<u64>,
-    },
-    /// The fetch numbered `id` was aborted: its request cancelled, if it
-    /// went; no response is wanted.
-    CancelFetch { id: u64 },
 }
 
 /// The steps for what happened to the iframes, and the script elements

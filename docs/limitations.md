@@ -90,7 +90,6 @@
 - DNS 失敗是從 hyper-util 的錯誤訊息辨認的（它沒有專用的錯誤型別）；升級 reqwest 時，`net` 的 `connection_failures` 測試會告訴我們它還對不對。
 - 導覽到 `file:` 只看發起導覽的文件是不是 `file:`（`file:` 文件裡的子 frame 一開始的 `about:blank` 也算）；子資源讀本機檔案看整個 renderer：main frame 的文件是 `file:`、或子 frame commit 了 `file:` 的文件之後都可以，main frame 換成不是 `file:` 的文件時收回。Chromium 還會依 origin 做更細的限制。
 - `file:` 的目錄是一份簡單的清單（上一層和每個項目的連結，目錄在前、照名稱排序），沒有 Chrome 那份的大小、修改時間和排序的按鈕；沒有尾端斜線的目錄網址不轉到有斜線的（Chrome 會），連結都是完整的網址。
-- 頂層的文件換掉時，它還在路上的 `fetch()` 不取消：回應來了找不到 window，丟掉；回應一直不來的（長輪詢）留著，browser 也一直在載（Chrome 在 execution context 不在時取消請求）。iframe 拿掉、或導覽到別的文件時，它的文件的 `fetch()` 會取消。
 
 ## Style
 

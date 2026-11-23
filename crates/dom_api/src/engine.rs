@@ -33,13 +33,25 @@ pub type ConsoleSink = Box<dyn Fn(ConsoleMessage)>;
 /// call returns (Blink's `FetchManager` starts its loader in `fetch()`; a
 /// blob URL is the registry's at once): so that a `fetch()` and a blob
 /// URL revoked after it in the same task go in that order, and a request
-/// leaves while the script that made it goes on. The engine tells its
-/// host what it sent after (`FrameRequest::FetchSent`).
+/// leaves while the script that made it goes on; and told to DevTools
+/// as it is sent (Blink's `ResourceLoadObserverForFrame::WillSendRequest`).
+/// The engine records what was sent (`Dom::note_fetch_sent`), which the
+/// host gives the responses back by (`ScriptEngine::fetch_response`).
 pub trait LoadSink {
-    /// `request`, of `frame`'s realm's `fetch()`, sent: its request's
-    /// number, or none if it went nowhere (a revoked blob URL's, a network
-    /// error).
-    fn start_fetch(&self, frame: crate::FrameId, request: &dom::FetchRequest) -> Option<u64>;
+    /// `request`, of `frame`'s realm's `fetch()`, sent, `origin` naming
+    /// where it comes from: its request's number; none if it went nowhere
+    /// (a revoked blob URL's), for which the host gives a network error
+    /// back in a task of its own.
+    fn start_fetch(
+        &mut self,
+        frame: crate::FrameId,
+        request: &dom::FetchRequest,
+        origin: &FetchOrigin,
+    ) -> Option<u64>;
+
+    /// The request numbered `request_id` cancelled (its fetch aborted, or
+    /// its document gone): no response is wanted.
+    fn cancel_fetch(&mut self, request_id: u64);
 
     /// `url` made a blob URL for `data` in `frame`'s realm
     /// (`URL.createObjectURL`).
@@ -51,6 +63,20 @@ pub trait LoadSink {
     /// `frame` went (its iframe removed): the blob URLs its realm made are
     /// revoked now, for the loads script asks for after.
     fn frame_gone(&self, frame: crate::FrameId);
+}
+
+/// Where a `fetch()` comes from, as the engine knows it as it is sent:
+/// its document's loader (`Cx::document_loader`), which the request goes
+/// through; and for DevTools to name it by, its frame's token (the
+/// top-level frame's, the browser's), its document's URL and loader
+/// (`DocumentLoader::devtools_id`), and the stack of the script that
+/// asked, if one was kept (`Dom::take_request_stack`).
+#[derive(Debug, Clone, Default)]
+pub struct FetchOrigin {
+    pub loader: Option<dom::DocumentLoader>,
+    pub frame_token: Option<String>,
+    pub document_url: Option<String>,
+    pub stack: Option<std::rc::Rc<str>>,
 }
 
 /// What an engine is made with, as its host's settings say.
@@ -537,8 +563,9 @@ pub trait ScriptEngine: ParserHost {
     fn set_console_sink(&mut self, sink: ConsoleSink);
 
     /// What sends the loads script asks for as it asks (`LoadSink`): the
-    /// host's, in place of the frame requests for them
-    /// (`FrameRequest::RegisterBlobUrl`, `RevokeBlobUrl`, `Fetch`).
+    /// host's, in place of the frame requests for blob URLs
+    /// (`FrameRequest::RegisterBlobUrl`, `RevokeBlobUrl`). Without one, a
+    /// `fetch()` goes nowhere: its promise stays pending.
     fn set_load_sink(&mut self, sink: Box<dyn LoadSink>);
 
     /// What `testRunner.reportHarnessResults` was given since the last

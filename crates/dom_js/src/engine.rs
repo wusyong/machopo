@@ -652,25 +652,6 @@ impl ScriptEngine for V8Engine {
     }
 
     fn take_frame_requests(&mut self) -> Vec<dom_api::FrameRequest> {
-        let state = self.state();
-        // The `fetch()`s since: their documents' frames' requests now.
-        let fetches = state.dom.mutate(|cx| cx.take_fetch_requests());
-        for fetch in fetches {
-            let request = match fetch {
-                dom::FetchHostRequest::Start(request) => {
-                    let Some(frame) = request
-                        .document
-                        .and_then(|document| state.frames.of_document(document))
-                        .map(|frame| frame.id)
-                    else {
-                        continue;
-                    };
-                    dom_api::FrameRequest::Fetch { frame, request }
-                }
-                dom::FetchHostRequest::Cancel(id) => dom_api::FrameRequest::CancelFetch { id },
-            };
-            state.frames.requests.push(request);
-        }
         std::mem::take(&mut self.state().frames.requests)
     }
 

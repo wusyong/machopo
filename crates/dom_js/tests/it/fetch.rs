@@ -2,30 +2,70 @@
 //! and their errors, a body moved from its input, the signal followed),
 //! `Response` (its constructor, `error()`, `redirect()`, `json()`), the
 //! body mixin (each reading once; a `Content-Type` of the body's), and
-//! `fetch()`: its request the engine's frame request once the script is
-//! done, its response given back by its number (a basic, CORS, opaque or
-//! opaque-redirect `Response`, or a network error), and its abort (the
-//! promise rejected with the reason, the request cancelled; a body after
-//! it unreadable).
+//! `fetch()`: its request handed to the load sink as the script's
+//! operation ends, its response given back by its number (a basic, CORS,
+//! opaque or opaque-redirect `Response`, or a network error), and its abort
+//! (the promise rejected with the reason, its request cancelled by the sink;
+//! a body after it unreadable).
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 
-use dom_api::{FetchedResponse, FrameRequest, ScriptEngine};
+use dom_api::{FetchOrigin, FetchedResponse, FrameId, LoadSink, ScriptEngine};
 use protocol::network::ResponseTainting;
 
 use crate::history::Page;
 
-fn fetches(page: &mut Page) -> Vec<FrameRequest> {
-    page.engine
-        .take_frame_requests()
-        .into_iter()
-        .filter(|request| {
-            matches!(
-                request,
-                FrameRequest::Fetch { .. } | FrameRequest::CancelFetch { .. }
-            )
-        })
-        .collect()
+/// What a test's load sink was asked: a `fetch()`'s request sent, with
+/// where it came from; a request cancelled, by its number.
+#[derive(Debug)]
+pub(crate) enum Sent {
+    Fetch(dom::FetchRequest, FetchOrigin),
+    Cancel(u64),
+}
+
+/// A load sink that records what it is asked, numbering each request as
+/// its fetch is (so a cancelled request names its fetch).
+#[derive(Default, Clone)]
+pub(crate) struct Sink(Rc<RefCell<Vec<Sent>>>);
+
+impl Sink {
+    /// A new one, `page`'s engine's.
+    pub(crate) fn on(page: &mut Page) -> Self {
+        let sink = Self::default();
+        page.engine.set_load_sink(Box::new(sink.clone()));
+        sink
+    }
+
+    /// What it was asked since, taken.
+    pub(crate) fn take(&self) -> Vec<Sent> {
+        self.0.take()
+    }
+}
+
+impl LoadSink for Sink {
+    fn start_fetch(
+        &mut self,
+        _: FrameId,
+        request: &dom::FetchRequest,
+        origin: &FetchOrigin,
+    ) -> Option<u64> {
+        self.0
+            .borrow_mut()
+            .push(Sent::Fetch(request.clone(), origin.clone()));
+        Some(request.id)
+    }
+
+    fn cancel_fetch(&mut self, request_id: u64) {
+        self.0.borrow_mut().push(Sent::Cancel(request_id));
+    }
+
+    fn register_blob_url(&self, _: FrameId, _: &str, _: &dom::BlobData) {}
+
+    fn revoke_blob_url(&self, _: &str) {}
+
+    fn frame_gone(&self, _: FrameId) {}
 }
 
 fn response(
@@ -118,15 +158,20 @@ fn a_response_and_its_body() {
 #[test]
 fn fetch_goes_to_the_host_as_the_script_ends() {
     let mut page = Page::new("https://example.test/dir/page");
+    let sink = Sink::on(&mut page);
     page.eval(
         "var log = []; var done = p => p.then(r => log.push([r.type, r.status, r.statusText, r.url, r.redirected, r.headers.get('x-a'), String(r.headers.get('set-cookie'))].join() + ' ' + r.bodyUsed),
                                        e => log.push(e.name + ' ' + e.message));
          done(fetch('data', { method: 'POST', headers: [['X-A', '1'], ['x-a', '2']], body: 'hi', redirect: 'manual' })); 0",
     );
-    let requests = fetches(&mut page);
-    let [FrameRequest::Fetch { request, .. }] = requests.as_slice() else {
+    let requests = sink.take();
+    let [Sent::Fetch(request, origin)] = requests.as_slice() else {
         panic!("{requests:?}");
     };
+    assert_eq!(
+        origin.document_url.as_deref(),
+        Some("https://example.test/dir/page")
+    );
     assert_eq!(
         (
             request.url.as_str(),
@@ -159,10 +204,11 @@ fn fetch_goes_to_the_host_as_the_script_ends() {
     page.eval(
         "done(fetch('a')); done(fetch('b')); done(fetch('c')); done(fetch('d')); done(fetch('e')); 0",
     );
-    let ids: Vec<u64> = fetches(&mut page)
+    let ids: Vec<u64> = sink
+        .take()
         .into_iter()
-        .map(|request| match request {
-            FrameRequest::Fetch { request, .. } => request.id,
+        .map(|sent| match sent {
+            Sent::Fetch(request, _) => request.id,
             other => panic!("{other:?}"),
         })
         .collect();
@@ -195,8 +241,8 @@ fn fetch_goes_to_the_host_as_the_script_ends() {
     );
     // A null body status's body is none (read as empty, not used).
     page.eval("fetch('f').then(r => r.text().then(t => log.push('204 body ' + JSON.stringify(t) + ' ' + r.bodyUsed))); 0");
-    let id = match fetches(&mut page).as_slice() {
-        [FrameRequest::Fetch { request, .. }] => request.id,
+    let id = match sink.take().as_slice() {
+        [Sent::Fetch(request, _)] => request.id,
         other => panic!("{other:?}"),
     };
     page.engine.fetch_response(
@@ -213,30 +259,30 @@ fn fetch_goes_to_the_host_as_the_script_ends() {
         "TypeError,TypeError,TypeError",
         "rejected at once"
     );
-    assert!(fetches(&mut page).is_empty(), "none goes");
+    assert!(sink.take().is_empty(), "none goes");
 }
 
 #[test]
 fn an_aborted_fetch() {
     let mut page = Page::new("https://example.test/");
+    let sink = Sink::on(&mut page);
     page.eval(
         "var log = []; var c = new AbortController();
          fetch('a', { signal: c.signal }).then(() => log.push('resolved'), e => log.push('rejected ' + e));
          fetch('b', { signal: AbortSignal.abort('early') }).catch(e => log.push('at once ' + e)); 0",
     );
-    let requests = fetches(&mut page);
-    let [FrameRequest::Fetch { request, .. }] = requests.as_slice() else {
+    let requests = sink.take();
+    let [Sent::Fetch(request, _)] = requests.as_slice() else {
         panic!("one goes: {requests:?}");
     };
     let id = request.id;
     page.eval("c.abort('why'); 0");
     assert_eq!(page.eval("log.join(' | ')"), "at once early | rejected why");
-    assert_eq!(
-        fetches(&mut page)
-            .into_iter()
-            .map(|request| format!("{request:?}"))
-            .collect::<Vec<_>>(),
-        [format!("{:?}", FrameRequest::CancelFetch { id })]
+    // Its request cancelled as the abort's operation ends, by its number.
+    let cancelled = sink.take();
+    assert!(
+        matches!(cancelled.as_slice(), [Sent::Cancel(request)] if *request == id),
+        "{cancelled:?}"
     );
     assert!(
         !page.engine.fetch_response(id, Err(())),
@@ -246,15 +292,15 @@ fn an_aborted_fetch() {
     page.eval(
         "var d = new AbortController(); var got; fetch('c', { signal: d.signal }).then(r => { got = r; }); 0",
     );
-    let id = match fetches(&mut page).as_slice() {
-        [FrameRequest::Fetch { request, .. }] => request.id,
+    let id = match sink.take().as_slice() {
+        [Sent::Fetch(request, _)] => request.id,
         other => panic!("{other:?}"),
     };
     page.engine
         .fetch_response(id, Ok(response(ResponseTainting::Basic, 200, &[], "text")));
     page.eval("d.abort('late'); got.text().catch(e => log.push('body ' + e)); 0");
     assert_eq!(page.eval("log.slice(2).join()"), "body late");
-    assert!(fetches(&mut page).is_empty(), "nothing to cancel");
+    assert!(sink.take().is_empty(), "nothing to cancel");
 }
 
 /// A signal timing out (in its native timer's task) rejects the fetch
@@ -269,7 +315,6 @@ fn a_timed_out_fetch_reacts_after_the_abort_listeners() {
          fetch('t', { signal: s }).catch(e => log.push('rejected ' + e.name));
          s.onabort = () => log.push('abort'); 0",
     );
-    fetches(&mut page);
     assert!(page.engine.run_timers());
     assert_eq!(
         page.eval("log.join(' | ')"),

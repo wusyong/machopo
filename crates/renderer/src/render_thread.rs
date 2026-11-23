@@ -22,7 +22,7 @@ use layout::TextContext;
 use crate::canvas_encoder::CanvasEncoder;
 use crate::clock::Clock;
 use crate::frame_widget::FrameWidget;
-use crate::loader::{BlobUrls, RequestIds};
+use crate::loader::BlobUrls;
 use crate::navigation_timing::NavigationTiming;
 use crate::pending_user_input::{Pending, PendingUserInput};
 use crate::task_queue::{MainThreadScheduler, MainThreadTask, RendererReceiver, TaskQueues};
@@ -380,13 +380,12 @@ struct RenderThread {
     /// compares it before and after, as Blink's `LatencyInfoSwapPromiseMonitor`
     /// watches for a commit request while an event is dispatched.
     main_frame_requests: u64,
-    /// Subresource request ids are unique per renderer, so a response for
-    /// a document that has gone is recognised and dropped.
-    next_request_id: RequestIds,
+    /// The URLs of the requests the render thread sent (their ids are
+    /// unique per renderer, `loader::next_request_id`, so a response for a
+    /// document that has gone is recognised and dropped).
+    request_urls: crate::loader::RequestUrls,
     /// The blob URLs the realms registered.
     blob_urls: BlobUrls,
-    /// The loader each document's subresources go through.
-    loaders: crate::loader::DocumentLoaders,
     /// The select whose dropdown the browser shows (Blink's
     /// `ExternalPopupMenu`, one at a time).
     popup: Option<dom::NodeId>,
@@ -489,9 +488,6 @@ struct RenderThread {
     /// memory cache); with the document that asked first, whose network
     /// idleness counts it.
     images: std::collections::HashMap<u64, (String, NodeId)>,
-    /// The DOM's `fetch()`es on their way, their requests' ids to
-    /// their numbers, and their documents.
-    fetches: std::collections::HashMap<u64, (u64, NodeId)>,
     /// The scripts the DOM queued being fetched, by request.
     script_fetches: std::collections::HashMap<u64, documents::PendingScriptFetch>,
     /// The DOM's window's intersection observers' task is queued
@@ -554,7 +550,6 @@ impl RenderThread {
             dom_agent.clone(),
         ));
         let blob_urls = BlobUrls::new(to_browser.clone());
-        let loaders = crate::loader::DocumentLoaders::default();
         tracing::info!(raster = raster::BACKEND, "renderer main thread up");
         let _ = to_browser.send(RendererHostMsg::RendererReady);
         Self {
@@ -572,7 +567,7 @@ impl RenderThread {
                 scheduler.clone(),
                 to_browser.clone(),
                 crate::worker_thread::Owner::Main,
-                crate::worker_thread::WorkerLoaders::Documents(loaders.clone()),
+                crate::worker_thread::WorkerLoaders::Documents,
             )),
             to_browser,
             widget: Some(FrameWidget::new(layer_tree_host)),
@@ -591,9 +586,8 @@ impl RenderThread {
             resize_loop_error: false,
             animations_running: false,
             main_frame_requests: 0,
-            next_request_id: RequestIds::new(),
+            request_urls: crate::loader::RequestUrls::default(),
             blob_urls,
-            loaders,
             popup: None,
             popup_closed_by_press: None,
             pending_mouse_move: None,
@@ -629,7 +623,6 @@ impl RenderThread {
             engine: None,
             engine_is_wasm: false,
             images: std::collections::HashMap::new(),
-            fetches: std::collections::HashMap::new(),
             script_fetches: std::collections::HashMap::new(),
             intersection_task: false,
             document: None,
@@ -788,6 +781,10 @@ impl RenderThread {
             MainThreadTask::Browser(msg) => self.handle_message(msg),
             MainThreadTask::CanvasEncoded { id, file } => {
                 self.canvas_encoded(id, file);
+                true
+            }
+            MainThreadTask::FetchFailed { fetch } => {
+                self.fetch_went_nowhere(fetch);
                 true
             }
             MainThreadTask::Worker { id, event } => {
@@ -1760,7 +1757,11 @@ impl RenderThread {
         // (`FrameRequest::FetchSent`): this may be one's response.
         self.handle_frame_requests();
         self.network_agent.did_finish(request_id, &result);
-        let url = self.next_request_id.answered(request_id);
+        // A `fetch()`'s is the DOM's record's.
+        let url = self.request_urls.answered(request_id).or_else(|| {
+            let engine = self.engine.as_mut()?;
+            Some(engine.dom_mut().sent_fetch(request_id)?.url)
+        });
         // DevTools' `CSS`'s: a sheet's text, its alone.
         if let Some((key, frame)) = self.css_refetches.remove(&request_id) {
             self.log_load(request_id, url.as_deref(), &result);

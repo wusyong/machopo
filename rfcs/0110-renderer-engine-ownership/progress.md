@@ -11,6 +11,7 @@
 | 0c. 原型：`fetch()` 的登記，做法二 | 做完，待審查；換 engine 時會 panic | 2026-11-23 |
 | 0c'. 獨立的審查；原型：`fetch()` 的登記，做法三 | 做完，待審查 | 2026-11-23 |
 | 0d. 交給使用者決定做法和範圍 | 做完：做法第 5 條，DevTools agent 第 6 條，範圍第 7 條 | 2026-11-23 |
+| 1. 請求和 loader 交給 `dom`（已決定的事項第 7 條的第 1 步，第 10 條） | 做完，待審查 | 2026-11-23 |
 
 ## 驗收
 
@@ -43,4 +44,16 @@
 - 做法二的第一版（有 `Drop` 的 guard）沒有編過，見 `details.md` 的「原型」；沒有留它的 patch。
 - **審查**：獨立的 subagent 唯讀地審了盤點和三個原型（`details.md` 的「審查」）。它的主要說法我對過程式；V2 的 panic 用上面的測試重現了。
 - **第二次審查**：另一個 subagent 唯讀地審了 V3、做法三用在 frame 的樹上和範圍「乙」（`details.md` 的「第二次審查」），沒有執行任何東西；它的關鍵說法我對過程式。
+
+### 第 1 步：請求和 loader 交給 `dom`（2026-11-23，Linux：Fedora 45、debug build，`9e7d93d` 之上）
+
+照原型 V3（`prototypes/v3-dom-owns.diff`）做，另外：拿掉 V0 給 V1、V2 用的 `ScriptEngine::load_sink_mut` 和 `LoadSink::as_any_mut`；拿掉 `FrameRequest` 的 `Fetch`、`FetchSent`、`CancelFetch`（已決定的事項第 10 條），送不出去的 `fetch()`（撤銷了的 blob URL）改由 sink 排一個 `MainThreadTask::FetchFailed`；取消是 `LoadSink::cancel_fetch`；文件的 loader 和帶來它的導覽記在 DOM（`Cx::document_loader`，子 frame 初始的 `about:blank` 走它的 creator 的），cookie 和 worker 的 hook 由 engine 帶 loader，renderer 的 `DocumentLoaders` 和 `FrameDocument.loader_id` 拿掉；頂層的文件換掉時（同一個 engine，和換 engine）取消它們還在路上的 `fetch()`。`sanity.py boundary` 的 `STATICS_ALLOWED` 加了每個 thread 的請求編號。
+
+**新的測試**：`shell` 的 `devtools_network::a_fetch_is_told_as_it_is_sent_before_its_redirect`（A2）、`a_fetch_is_stamped_as_it_is_sent`（A3）、`a_replaced_documents_fetches_are_cancelled`（同一個 engine 和換 engine）、`documents::a_new_frames_fetch_goes_through_its_creators_loader`、`wasm_documents::a_js_documents_unload_may_fetch_as_a_wasm_document_replaces_it`；`dom_js` 的 `fetch.rs` 改用測試的 load sink（`Sent`、`Sink`），`tasks.rs`、`devtools.rs` 跟著改。新的四個 `shell` 測試各跑 3 次都通過。
+
+**一個量不出東西的測試**（沒有留下）：原本用 TestServer 看 `fetch()` 的請求有沒有被放棄來驗證取消，但 `run`、`render` 回來之後 machopo 就結束、關掉每一條連線，沒有取消照樣被記成放棄（拿掉取消時兩個測試都還是通過）。改成 DevTools 的 `loadingFailed`（`canceled`）：拿掉任一條路的取消，請求都照樣完成（`loadingFinished`），測試失敗。這也確認了「頂層的文件換掉時不取消」是原本就有的問題（`docs/limitations.md` 那一條刪了）。
+
+**Mutation test**（`mutants-1.toml`）：16 條都抓到。`a cookie set through no loader` 第一次只跑 `shell`，沒抓到；寫入再讀回的測試在 `browser` 的 `cookies::document_cookie_and_cookie_enabled`，spec 改成跑它之後抓到。跑完檔案都還原了（`target/mutate/originals` 是空的）。
+
+**測試**：`dom` 254 個、`dom_api` 201 個、`dom_js` 550 個（1 個 ignored）、`renderer` 128 個、`browser` 191 個、`shell` 649 個都通過（加上新的測試之後 `shell` 是 650 個，新的那一個另外跑過）。WPT：`fetch/api/basic/`、`abort/`、`redirect/`、`cors/`、`cookies/`、`document-cookie.html`，3742 項，非預期的 0 個。`sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs 通過。`cargo test --workspace`、`cargo fmt --check`、clippy 照規定在整個階段做完時跑。
 

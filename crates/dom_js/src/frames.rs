@@ -395,13 +395,13 @@ pub(crate) fn cookie_call(
     call: dom_api::CookieCall,
 ) -> dom_api::CookieReply {
     let (state, _) = scope.state();
-    let id = state.dom.read(|cx| cx.node_id(document.get(cx.gc)));
-    state
-        .cookie_host
-        .as_ref()
-        .map_or(dom_api::CookieReply::None, |host| {
-            call.on(host.as_ref(), id, url)
-        })
+    let loader = state
+        .dom
+        .read(|cx| cx.document_loader(document.get(cx.gc)));
+    match (&state.cookie_host, loader) {
+        (Some(host), Some(loader)) => call.on(host.as_ref(), loader.loader, url),
+        _ => dom_api::CookieReply::None,
+    }
 }
 
 /// What the operation changed in Web Storage, and the cookies script set:
@@ -419,7 +419,14 @@ pub(crate) fn send_storage_changes(scope: &mut Scope<'_, '_, '_>) {
     }
     if let Some(host) = &state.cookie_host {
         for write in cookies {
-            host.set_cookie(write.document, &write.url, &write.line);
+            // Through its document's loader: none, no cookies.
+            let loader = state.dom.read(|cx| {
+                cx.node_by_id(write.document)
+                    .and_then(|document| cx.document_loader(document))
+            });
+            if let Some(loader) = loader {
+                host.set_cookie(loader.loader, &write.url, &write.line);
+            }
         }
     }
     dom_api::open_for_listeners(&mut crate::listeners::Host { scope });
@@ -442,9 +449,10 @@ pub(crate) fn revoke_blob_url(scope: &mut Scope<'_, '_, '_>, url: &str) {
 }
 
 /// The `fetch()`es and aborts the operation asked for, handed to the host
-/// before the call returns: each `fetch()` sent by its load sink now,
-/// what it sent told after (`FrameRequest::FetchSent`); without a sink,
-/// they wait for the host's next look (`take_frame_requests`).
+/// before the call returns: each `fetch()` sent by its load sink now, with
+/// where it comes from (`FetchOrigin`), and recorded by the request it went
+/// as (`Dom::note_fetch_sent`); each abort's request cancelled now. Without
+/// a sink they go nowhere.
 pub(crate) fn send_fetches(scope: &mut Scope<'_, '_, '_>) {
     let (state, _) = scope.state_mut();
     // A worker's: sent by its host now.
@@ -457,34 +465,65 @@ pub(crate) fn send_fetches(scope: &mut Scope<'_, '_, '_>) {
         }
         return;
     }
+    let fetches = state.dom.mutate(|cx| cx.take_fetch_requests());
     if state.frames.load_sink.is_none() {
         return;
     }
-    let fetches = state.dom.mutate(|cx| cx.take_fetch_requests());
     for fetch in fetches {
-        let request = match fetch {
+        match fetch {
             dom::FetchHostRequest::Start(request) => {
-                let Some(frame) = request
-                    .document
-                    .and_then(|document| state.frames.of_document(document))
-                    .map(|frame| frame.id)
-                else {
+                let Some(document) = request.document else {
                     continue;
                 };
-                let request_id = state
+                let Some(frame) = state.frames.of_document(document).map(|frame| frame.id) else {
+                    continue;
+                };
+                let (loader, document_url) = state.dom.read(|cx| {
+                    let document = cx.node_by_id(document);
+                    (
+                        document.and_then(|document| cx.document_loader(document)),
+                        document
+                            .and_then(|document| cx.document_url(document))
+                            .map(|url| url.to_str().to_string()),
+                    )
+                });
+                let origin = dom_api::FetchOrigin {
+                    loader,
+                    frame_token: state.frames.token(frame).map(|token| token.to_string()),
+                    document_url,
+                    stack: state
+                        .dom
+                        .take_request_stack(dom::StackAsker::Fetch(request.id)),
+                };
+                // What the host's responses come by: the DOM's own record
+                // (none went for one that went nowhere: the host gives its
+                // network error back).
+                let sent = state
                     .frames
                     .load_sink
-                    .as_ref()
-                    .and_then(|sink| sink.start_fetch(frame, &request));
-                FrameRequest::FetchSent {
-                    frame,
-                    request,
-                    request_id,
+                    .as_mut()
+                    .and_then(|sink| sink.start_fetch(frame, &request, &origin));
+                if let Some(request_id) = sent {
+                    state.dom.note_fetch_sent(
+                        request_id,
+                        dom::SentFetch {
+                            fetch: request.id,
+                            document,
+                            url: request.url,
+                        },
+                    );
                 }
             }
-            dom::FetchHostRequest::Cancel(id) => FrameRequest::CancelFetch { id },
-        };
-        state.frames.requests.push(request);
+            // Aborted: its request cancelled now, if it went.
+            dom::FetchHostRequest::Cancel(id) => {
+                if let Some(request_id) = state.dom.request_of_fetch(id)
+                    && let Some(sink) = state.frames.load_sink.as_mut()
+                {
+                    state.dom.take_sent_fetch(request_id);
+                    sink.cancel_fetch(request_id);
+                }
+            }
+        }
     }
 }
 

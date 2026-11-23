@@ -35,6 +35,9 @@ pub struct WorkerStart {
     /// The number of the document whose window made it; none for a
     /// worker's: the loader its loads go through is its creator's.
     pub owner_document: Option<dom::NodeId>,
+    /// That document's loader (`Cx::document_loader`), which its loads go
+    /// through; none for a worker's, or a document its host gave none.
+    pub owner_loader: Option<u64>,
     /// A module worker's (`type: "module"`): the credentials mode its
     /// script graph is fetched with (`WorkerOptions`' `credentials`, by
     /// CORS); none: a classic worker's.
@@ -256,6 +259,11 @@ pub(crate) fn construct<'gc, O: OpFront>(
         name: options.name.clone(),
         owner_origin: cx.context_origin(context),
         owner_document: cx.context_document_id(context),
+        owner_loader: cx
+            .context_document_id(context)
+            .and_then(|document| cx.node_by_id(document))
+            .and_then(|document| cx.document_loader(document))
+            .map(|loader| loader.loader),
         module,
     };
     let host = op

@@ -918,6 +918,30 @@ fn a_javascript_url_runs_in_the_frame() {
     assert_eq!(run(&url), "in the page index.html");
 }
 
+/// A new iframe's initial `about:blank` goes through its creator's loader
+/// from the start (Chromium's initial empty document takes its creator's
+/// factories): a `fetch()` of its window, in the task that made it, loads.
+#[test]
+fn a_new_frames_fetch_goes_through_its_creators_loader() {
+    use std::collections::HashMap;
+
+    use net::test_server::{Route, TestServer};
+    let server = TestServer::start(HashMap::from([
+        (
+            "/index.html".to_owned(),
+            Route::ok(
+                "text/html",
+                "<!DOCTYPE html><script>const f = document.documentElement.appendChild(document.createElement('iframe'));\
+                 f.contentWindow.fetch('/data').then(r => r.text()).then(t => testRunner.reportHarnessResults(t),\
+                   e => testRunner.reportHarnessResults(e.name));</script>",
+            ),
+        ),
+        ("/data".to_owned(), Route::ok("text/plain", "data")),
+    ]))
+    .expect("the test server starts");
+    assert_eq!(run(&server.url("/index.html")), "data");
+}
+
 /// A `javascript:` URL that another origin's page sets a child's
 /// `location` to: a `SecurityError`, nothing run in the child (whose
 /// realm it would be); the same origin's runs, after (so the other's

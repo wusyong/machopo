@@ -91,6 +91,16 @@ pub struct NavigationRequest {
 /// Who asked for a navigation (HTML's source document): a document (a
 /// hyperlink's), or the realm whose script asked (`location`'s, the
 /// incumbent's), whose document the DOM finds itself.
+/// What a document's subresources go through, as its host gave it: the
+/// browser's number for its loader (Blink's frame's `URLLoaderFactory`),
+/// and the navigation that brought it, if one did (what DevTools names the
+/// loader by).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DocumentLoader {
+    pub loader: u64,
+    pub navigation: Option<u64>,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum NavigationInitiator<'gc> {
     Document(NodeRef<'gc>),
@@ -394,6 +404,36 @@ impl<'gc> Cx<'_, 'gc> {
         self.document_url(self.origin_document(document))
             .and_then(|url| url::Url::parse(&url.to_str()).ok())
             .map(|url| url.origin())
+    }
+
+    /// `document`'s loader is `loader`, as its host committed it.
+    pub fn set_document_loader(&self, document: NodeRef<'gc>, loader: DocumentLoader) {
+        let data = self.ensure_document_data(document);
+        data.loader.set(Some(loader.loader));
+        data.loader_navigation.set(loader.navigation);
+    }
+
+    /// What `document`'s subresources go through: the loader its host gave
+    /// it; a child frame's initial `about:blank`, which its host committed
+    /// none for, goes through its creator's (Chromium's initial empty
+    /// document takes its creator's factories), no navigation bringing it.
+    /// None for a document its host gave none.
+    pub fn document_loader(&self, document: NodeRef<'gc>) -> Option<DocumentLoader> {
+        let mut at = document;
+        // A frame tree is fewer than u16::MAX deep.
+        for _ in 0..u16::MAX {
+            if let Some(data) = self.document_data(at)
+                && let Some(loader) = data.loader.get()
+            {
+                let navigation = data.loader_navigation.get().filter(|_| Gc::ptr_eq(at, document));
+                return Some(DocumentLoader { loader, navigation });
+            }
+            if !self.is_initial_about_blank(at) {
+                return None;
+            }
+            at = self.document_of(self.frame_owner(at)?);
+        }
+        None
     }
 
     /// `owner`'s content document is `document` now (none: its browsing

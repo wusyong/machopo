@@ -232,6 +232,68 @@ pub enum FetchHostRequest {
     Cancel(u64),
 }
 
+/// A `fetch()`'s request that the host sent (`Dom::note_fetch_sent`): its
+/// fetch's number, its document's, and its URL. The DOM's own record of it,
+/// which the host reads its responses by: one owner, the engine's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SentFetch {
+    pub fetch: u64,
+    pub document: crate::NodeId,
+    pub url: String,
+}
+
+impl crate::Dom {
+    /// The host sent the request of `sent.fetch` as `request_id`: its
+    /// response comes by that number.
+    pub fn note_fetch_sent(&self, request_id: u64, sent: SentFetch) {
+        self.changes
+            .sent_fetches
+            .borrow_mut()
+            .insert(request_id, sent);
+    }
+
+    /// The fetch whose request is `request_id`, if one is.
+    pub fn sent_fetch(&self, request_id: u64) -> Option<SentFetch> {
+        self.changes.sent_fetches.borrow().get(&request_id).cloned()
+    }
+
+    /// The fetch whose request is `request_id`, its request answered or
+    /// cancelled.
+    pub fn take_sent_fetch(&self, request_id: u64) -> Option<SentFetch> {
+        self.changes.sent_fetches.borrow_mut().remove(&request_id)
+    }
+
+    /// The request of the fetch numbered `fetch`, if it was sent.
+    pub fn request_of_fetch(&self, fetch: u64) -> Option<u64> {
+        self.changes
+            .sent_fetches
+            .borrow()
+            .iter()
+            .find(|(_, sent)| sent.fetch == fetch)
+            .map(|(&request_id, _)| request_id)
+    }
+
+    /// Every fetch's request sent, by request.
+    pub fn sent_fetches(&self) -> Vec<(u64, SentFetch)> {
+        self.changes
+            .sent_fetches
+            .borrow()
+            .iter()
+            .map(|(&request_id, sent)| (request_id, sent.clone()))
+            .collect()
+    }
+
+    /// How many of the requests sent are `document`'s.
+    pub fn sent_fetches_of(&self, document: crate::NodeId) -> usize {
+        self.changes
+            .sent_fetches
+            .borrow()
+            .values()
+            .filter(|sent| sent.document == document)
+            .count()
+    }
+}
+
 /// What a `FetchRecord` says of its fetch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FetchState {
