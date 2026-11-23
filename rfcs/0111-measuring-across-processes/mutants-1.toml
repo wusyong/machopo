@@ -1,0 +1,138 @@
+# Stage 1's mutants: `python3 scripts/test.py mutate rfcs/0111-measuring-across-processes/mutants-1.toml`.
+test = ["python3", "scripts/bench/speedometer/speedometer_test.py", "RendererTraceTests"]
+timeout = 600
+
+[[mutant]]
+name = "getProcessInfo lists no renderer"
+file = "crates/shell/src/automation_session.rs"
+from = '''                    .filter_map(|contents| contents.renderer_pid())'''
+to = '''                    .filter_map(|contents| contents.renderer_pid().filter(|_| false))'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "automation_pipe::the_process_info"]
+
+[[mutant]]
+name = "getProcessInfo calls a renderer the browser"
+file = "crates/shell/src/automation_session.rs"
+from = '''                        .map(|pid| json!({ "type": "renderer", "id": pid })),'''
+to = '''                        .map(|pid| json!({ "type": "browser", "id": pid })),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "automation_pipe::the_process_info"]
+
+[[mutant]]
+name = "getProcessInfo lists the browser's process twice"
+file = "crates/shell/src/automation_session.rs"
+from = '''                .chain(
+                    renderers'''
+to = '''                .chain(std::iter::once(json!({ "type": "browser", "id": std::process::id() })))
+                .chain(
+                    renderers'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "automation_pipe::the_process_info"]
+
+[[mutant]]
+name = "a version that can't tell its processes: the files beside the browser's not read"
+file = "scripts/bench/common.py"
+from = '''        found = renderer_traces(trace)'''
+to = '''        found = []'''
+
+[[mutant]]
+name = "a renderer process without a trace isn't an error"
+file = "scripts/bench/common.py"
+from = '''        if missing:
+            raise RendererTraceError'''
+to = '''        if False:
+            raise RendererTraceError'''
+
+[[mutant]]
+name = "a renderer process's trace not taken for its own process"
+file = "scripts/bench/common.py"
+from = '''        return found[0], True'''
+to = '''        return found[0], False'''
+
+[[mutant]]
+name = "of several renderers, the one with the fewest marks"
+file = "scripts/bench/common.py"
+from = '''    return max(found, key=lambda path: sum(len(marks) for marks in perfetto_marks(path).values())), True'''
+to = '''    return min(found, key=lambda path: sum(len(marks) for marks in perfetto_marks(path).values())), True'''
+
+[[mutant]]
+name = "the browser's process taken for a renderer"
+file = "scripts/bench/common.py"
+from = '''[p["id"] for p in processes if p.get("type") == "renderer"]'''
+to = '''[p["id"] for p in processes]'''
+
+[[mutant]]
+name = "a version without getProcessInfo is an error"
+file = "scripts/bench/common.py"
+from = '''        if "wasn't found" in str(e):
+            return None'''
+to = '''        if False:
+            return None'''
+
+[[mutant]]
+name = "an earlier run's renderer trace stays"
+file = "scripts/bench/common.py"
+from = '''        for old in renderer_traces(trace):
+            old.unlink(missing_ok=True)'''
+to = '''        for old in renderer_traces(trace):
+            pass'''
+
+[[mutant]]
+name = "run_in_machopo doesn't tell the processes"
+file = "scripts/bench/common.py"
+from = '''                    "processes": processes}'''
+to = '''                    "processes": None}'''
+test = ["python3", "scripts/bench/speedometer/speedometer_test.py", "MachopoTests.test_the_windows_are_the_runners_times"]
+
+[[mutant]]
+name = "--trace reads the browser's trace"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''                            trace, _ = renderer_trace(trace, result.get("processes"))'''
+to = '''                            _ = renderer_trace(trace, result.get("processes"))'''
+
+[[mutant]]
+name = "--trace reports nothing timed as 0"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''            if not phases and not others:'''
+to = '''            if False:'''
+
+[[mutant]]
+name = "--sample guesses a renderer process's windows by its frames"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''                if own_process and found_by != "the runner's marks":'''
+to = '''                if False:'''
+
+[[mutant]]
+name = "--sample takes another process's samples"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''                if not trouble and renderers and not pids & set(renderers):'''
+to = '''                if False:'''
+
+[[mutant]]
+name = "--sample reports no samples in the windows as 0"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''                if not trouble and not any(by_event.values()):'''
+to = '''                if False:'''
+
+[[mutant]]
+name = "blink-perf --gc reads the browser's trace"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''    return trace_gc(renderer)'''
+to = '''    return trace_gc(trace)'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "GcReportTests"]
+
+[[mutant]]
+name = "blink-perf --gc without the renderer process's trace isn't an error"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''    except common.RendererTraceError as e:
+        return {"error": str(e)}'''
+to = '''    except common.RendererTraceError as e:
+        return trace_gc(trace)'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "GcReportTests"]
+
+[[mutant]]
+name = "a renderer process makes every log record the trace's layer lets through"
+file = "crates/shell/src/main.rs"
+from = '''        // As the browser's: only as many of the `log` crate's records as the
+        // log takes, not every one the trace's layer would let through
+        // (html5ever's for each token, made only to be dropped).
+        tracing_log::log::set_max_level(log_records);'''
+to = '''        let _ = log_records;'''
+test = ["python3", "scripts/bench/speedometer/speedometer_test.py", "SampleTests"]

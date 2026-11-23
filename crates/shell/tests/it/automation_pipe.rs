@@ -778,6 +778,55 @@ fn the_system_info_tells_the_gpu_adapter() {
     assert!(browser.end().success());
 }
 
+/// `SystemInfo.getProcessInfo` tells the processes, as Chrome's
+/// `{processInfo: [{type, id}]}`: the browser's first, then each tab's
+/// renderer process, each tab its own.
+#[test]
+fn the_process_info_tells_the_browser_and_each_renderer() {
+    let mut browser = Browser::start_with(&["--process-per-tab"]);
+    browser
+        .call(None, "Target.createTarget", json!({ "url": "about:blank" }))
+        .unwrap();
+    let start = std::time::Instant::now();
+    let infos = loop {
+        let info = browser
+            .call(None, "SystemInfo.getProcessInfo", json!({}))
+            .unwrap();
+        let infos = info["processInfo"].as_array().unwrap().clone();
+        if infos.len() == 3 {
+            break infos;
+        }
+        assert!(start.elapsed() < Duration::from_secs(10), "{info}");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(infos[0]["type"], "browser");
+    assert_eq!(infos[0]["id"], browser.child.id());
+    let renderers: Vec<u64> = infos[1..]
+        .iter()
+        .map(|info| {
+            assert_eq!(info["type"], "renderer", "{info}");
+            info["id"].as_u64().unwrap()
+        })
+        .collect();
+    assert_ne!(renderers[0], renderers[1]);
+    assert!(!renderers.contains(&u64::from(browser.child.id())));
+    assert!(browser.end().success());
+}
+
+/// With `--single-process` the browser's process is the only one.
+#[test]
+fn the_process_info_of_a_single_process() {
+    let mut browser = Browser::start_with(&["--single-process"]);
+    let info = browser
+        .call(None, "SystemInfo.getProcessInfo", json!({}))
+        .unwrap();
+    assert_eq!(
+        info["processInfo"],
+        json!([{ "type": "browser", "id": browser.child.id() }])
+    );
+    assert!(browser.end().success());
+}
+
 /// For the `Machopo` domain's tests: a button and what it did, something far
 /// below, and stripes of different heights, so every scroll position looks
 /// different.

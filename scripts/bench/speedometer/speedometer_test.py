@@ -15,11 +15,13 @@ import gzip
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from collections.abc import Callable
 from pathlib import Path
 from unittest import mock
 
@@ -648,12 +650,22 @@ class MachopoTests(BrowserTests, unittest.TestCase):
         # Each test's window by the runner's marks in machopo's trace is the
         # sync and async times it reports, give or take the 0.1 ms
         # `performance.now()` is coarsened to.
+        # In the trace of the renderer process (machopo's default), which
+        # machopo's processes tell, beside the browser's.
         with tempfile.TemporaryDirectory() as folder:
             trace = Path(folder) / "list-machopo.pftrace"
-            got = speedometer.parse_run(speedometer.run_in_machopo(
-                self.server, self.binary, speedometer.suite_url(self.server, "list", 2), TIMEOUT, self.log, trace))
+            result = speedometer.run_in_machopo(
+                self.server, self.binary, speedometer.suite_url(self.server, "list", 2), TIMEOUT, self.log, trace)
+            got = speedometer.parse_run(result)
+            processes = result["processes"]
+            self.assertEqual([process["type"] for process in processes], ["browser", "renderer"])
+            renderer, own_process = speedometer.renderer_trace(trace, processes)
+            self.assertTrue(own_process)
+            self.assertEqual(renderer.name, f"list-machopo.pftrace.{processes[1]['id']}")
+            self.assertNotIn("CrRendererMain", speedometer.perfetto_marks(trace))
             windows, found_by = speedometer.timed_windows(
-                speedometer.perfetto_slices(trace)["CrRendererMain"], speedometer.perfetto_marks(trace)["CrRendererMain"])
+                speedometer.perfetto_slices(renderer)["CrRendererMain"],
+                speedometer.perfetto_marks(renderer)["CrRendererMain"])
         self.assertEqual(got["status"], "done")
         self.assertEqual(found_by, "the runner's marks")
         times = [test["tests"]["Sync"] + test["tests"]["Async"]
@@ -813,14 +825,15 @@ class MeasureTests(unittest.TestCase):
         written = json.loads((self.results / "phases.json").read_text(encoding="utf-8"))
         self.assertGreater(written["frames"]["machopo"]["script"], 0)
         self.assertGreater(written["frames"]["Chrome"]["script"], 0)
-        # machopo's: Perfetto's protobuf, its spans and V8's events.
-        threads = perfetto_threads(self.results / "trace" / "frames-machopo.pftrace")
+        # machopo's: Perfetto's protobuf, its spans and V8's events; the
+        # renderer's main thread in its renderer process's trace.
+        [trace] = speedometer.renderer_traces(self.results / "trace" / "frames-machopo.pftrace")
+        threads = perfetto_threads(trace)
         self.assertIn("CrRendererMain", threads)
         main = threads["CrRendererMain"]
         # The windows the runner times, one a test, by its marks; each the
         # length of the test's two measures, which are slices on tracks of
         # their own.
-        trace = self.results / "trace" / "frames-machopo.pftrace"
         slices = speedometer.perfetto_slices(trace)
         marks = speedometer.perfetto_marks(trace)["CrRendererMain"]
         windows, found_by = speedometer.timed_windows(slices["CrRendererMain"], marks)
@@ -1832,6 +1845,157 @@ class PhasesTests(unittest.TestCase):
         self.assertNotIn("Chrome's that no phase", machopo_text)
 
 
+class RendererTraceTests(unittest.TestCase):
+    """Which of a run's traces holds the page's renderer (`renderer_trace`:
+    its renderer process's, beside the browser's), and what `--trace` and
+    `--sample` make of a run whose renderer they can't read."""
+
+    MS = 1_000_000
+    BROWSER = {"type": "browser", "id": 1}
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.folder = Path(folder.name)
+        self.trace = self.folder / "s-machopo.pftrace"
+        # The browser's: no renderer main thread in it.
+        self.trace.write_bytes(PhasesTests.trace((1, "CrBrowserMain", [(0, 1, "Task"), (self.MS, 2, "")])))
+
+    def renderer(self, pid: int, tests: int = 1, marks: bool = True) -> Path:
+        """A renderer process's trace: its main thread's script in `tests`
+        windows the runner timed (by its marks, if `marks`)."""
+        events = []
+        for test in range(tests):
+            start = (10 + 100 * test) * self.MS
+            if marks:
+                events += [(start, 3, f"S.T{test}-start"), (start + 50 * self.MS, 3, f"S.T{test}-async-end")]
+            events += [(start + 10 * self.MS, 1, "v8.callFunction"), (start + 30 * self.MS, 2, "")]
+        path = self.trace.with_name(f"{self.trace.name}.{pid}")
+        path.write_bytes(PhasesTests.trace((7, "CrRendererMain", events)))
+        return path
+
+    def test_the_renderer_process_by_its_pid(self):
+        renderer = self.renderer(42)
+        # Another process's, not this run's: not read.
+        self.renderer(9, tests=3)
+        self.assertEqual(speedometer.renderer_trace(self.trace, [self.BROWSER, {"type": "renderer", "id": 42}]),
+                         (renderer, True))
+
+    def test_a_renderer_process_without_a_trace(self):
+        with self.assertRaisesRegex(speedometer.RendererTraceError, r"s-machopo\.pftrace\.42 missing"):
+            speedometer.renderer_trace(self.trace, [self.BROWSER, {"type": "renderer", "id": 42}])
+
+    def test_a_renderer_of_threads_of_the_browsers_process(self):
+        self.renderer(9)
+        self.assertEqual(speedometer.renderer_trace(self.trace, [self.BROWSER]), (self.trace, False))
+
+    def test_a_version_that_cant_tell_its_processes(self):
+        # By the files beside the browser's.
+        self.assertEqual(speedometer.renderer_trace(self.trace, None), (self.trace, False))
+        renderer = self.renderer(42)
+        self.assertEqual(speedometer.renderer_trace(self.trace, None), (renderer, True))
+
+    def test_of_several_renderers_the_one_with_the_runners_marks(self):
+        self.renderer(42)
+        busiest = self.renderer(43, tests=3)
+        processes = [self.BROWSER, {"type": "renderer", "id": 42}, {"type": "renderer", "id": 43}]
+        self.assertEqual(speedometer.renderer_trace(self.trace, processes), (busiest, True))
+
+    def test_a_version_without_the_process_list(self):
+        pipe = mock.Mock()
+        pipe.call.side_effect = RuntimeError("SystemInfo.getProcessInfo: 'SystemInfo.getProcessInfo' wasn't found")
+        self.assertIsNone(common.machopo_processes(pipe))
+        pipe.call.side_effect = RuntimeError("machopo has ended")
+        with self.assertRaises(RuntimeError):
+            common.machopo_processes(pipe)
+        pipe.call.side_effect = None
+        pipe.call.return_value = {"processInfo": [self.BROWSER]}
+        self.assertEqual(common.machopo_processes(pipe), [self.BROWSER])
+
+    def test_an_earlier_runs_renderer_trace_goes(self):
+        stale = self.renderer(9)
+        with mock.patch.object(common, "MachopoPipe") as pipe:
+            pipe.return_value.open.side_effect = RuntimeError("no page")
+            got = common.run_in_machopo(mock.Mock(), Path("machopo"), "about:blank", 1, None, self.trace)
+        self.assertEqual(got, {"error": "no page"})
+        self.assertFalse(stale.exists())
+
+    def run_machopo(self, renderer: Callable[[], None], processes: list[dict]):
+        """`run_in_machopo` for a run that writes the browser's trace, the
+        renderer's (`renderer`), and samples."""
+        def run(server, binary, url, timeout, log, trace, samples=None, **_):
+            trace.write_bytes(self.trace.read_bytes())
+            self.trace = trace
+            renderer()
+            if samples:
+                samples.write_bytes(b"")
+            return {"body": json.dumps({"status": "done", "errors": []}), "processes": processes}
+        return mock.patch.object(speedometer, "run_in_machopo", side_effect=run)
+
+    def cmd_trace(self, renderer: Callable[[], None], processes: list[dict]) -> tuple[int, str]:
+        out = io.StringIO()
+        with (mock.patch.object(speedometer, "RESULTS", self.folder),
+              mock.patch.object(speedometer, "machopo_binary", return_value=Path("machopo")),
+              self.run_machopo(renderer, processes), mock.patch("sys.stdout", new=out)):
+            status = speedometer.cmd_trace(argparse.Namespace(browser="machopo", iterations=1), [("s", True)], None)
+        return status, out.getvalue()
+
+    def test_trace_reads_the_renderer_processs(self):
+        status, out = self.cmd_trace(lambda: self.renderer(42), [self.BROWSER, {"type": "renderer", "id": 42}])
+        self.assertEqual(status, 0, out)
+        phases = json.loads((self.folder / "phases.json").read_text(encoding="utf-8"))
+        self.assertEqual(phases["s"]["machopo"], {"script": 20.0})
+
+    def test_trace_without_the_renderer_processs_is_an_error(self):
+        status, out = self.cmd_trace(lambda: None, [self.BROWSER, {"type": "renderer", "id": 42}])
+        self.assertEqual(status, 1)
+        self.assertIn("the renderer process wrote no trace", out)
+        self.assertFalse((self.folder / "phases.md").exists())
+
+    def test_trace_with_nothing_in_the_timed_windows_is_an_error(self):
+        # A renderer of the browser's process, whose trace has no marks:
+        # nothing timed, not 0 ms.
+        status, out = self.cmd_trace(lambda: None, [self.BROWSER])
+        self.assertEqual(status, 1)
+        self.assertIn("nothing in the windows the runner timed", out)
+        self.assertFalse((self.folder / "phases.md").exists())
+
+    def sample(self, renderer: Callable[[], None], samples: list[tuple], pids: set[int]) -> tuple[list, bool, str]:
+        events = (speedometer.sampling() or speedometer.LINUX_SAMPLING).events
+        out = io.StringIO()
+        with (self.run_machopo(renderer, [self.BROWSER, {"type": "renderer", "id": 42}]),
+              mock.patch.object(speedometer, "read_samples", return_value=({events[0]: samples}, pids)),
+              mock.patch.object(speedometer, "samply_etls", return_value=[]),
+              mock.patch("sys.stdout", new=out)):
+            rows, failed = speedometer.sample_suites(Path("machopo"), ["s"], self.folder / "sample", 1)
+        return rows, failed, out.getvalue()
+
+    def test_samples_in_the_renderer_processs_windows(self):
+        rows, failed, out = self.sample(lambda: self.renderer(42), [(25 * self.MS, ["f"], 1)], {42})
+        self.assertFalse(failed, out)
+        [(name, by_event, found_by)] = rows
+        self.assertEqual(found_by, "the runner's marks")
+        self.assertEqual(sum(sum(folded.values()) for folded in by_event.values()), 1)
+
+    def test_samples_without_the_runners_marks_are_an_error(self):
+        # A renderer process writes them: windows guessed by its frames
+        # would hide a trace read wrong.
+        rows, failed, out = self.sample(lambda: self.renderer(42, marks=False), [(25 * self.MS, ["f"], 1)], {42})
+        self.assertTrue(failed)
+        self.assertEqual(rows, [])
+        self.assertIn("the runner's marks aren't in the renderer process's trace", out)
+
+    def test_samples_of_another_process_are_an_error(self):
+        rows, failed, out = self.sample(lambda: self.renderer(42), [(25 * self.MS, ["f"], 1)], {99})
+        self.assertTrue(failed)
+        self.assertIn("no samples of the renderer process's main thread (pid 42)", out)
+
+    def test_no_samples_in_the_windows_are_an_error(self):
+        rows, failed, out = self.sample(lambda: self.renderer(42), [(5 * self.MS, ["f"], 1)], {42})
+        self.assertTrue(failed)
+        self.assertIn("no samples in the 1 windows the runner timed", out)
+
+
 class CompareTests(unittest.TestCase):
     """`--sample --against REV`: machopo at another commit and the working
     tree's, sampled in turn."""
@@ -2066,7 +2230,11 @@ class SampleTests(unittest.TestCase):
         # V8's names for the JS are gone with the run, and it left no log.
         self.assertEqual(set(Path("/tmp").glob("perf-*.map")) - maps, set())
         self.assertEqual(set(speedometer.ROOT.glob("isolate-*.log")) - logs, set())
-        self.assertEqual(sorted(path.name for path in (self.results / "sample").iterdir()), files)
+        # The renderer process's trace too, its pid after the browser's name.
+        written = sorted(path.name for path in (self.results / "sample").iterdir())
+        renderers = [name for name in written if re.fullmatch(r"frames-machopo\.pftrace\.\d+", name)]
+        self.assertEqual(len(renderers), 1, written)
+        self.assertEqual([name for name in written if name not in renderers], files)
 
 
 class CategoryTests(unittest.TestCase):

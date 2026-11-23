@@ -1,8 +1,8 @@
 # RFC 0111：量測工具跟著 process 走
 
 - 開始日期：2026-11-23
-- 狀態：📝 草稿
-- 細節：`details.md`
+- 狀態：🚧 已排程：2026-11-23（第 1 階段做完、待審查）
+- 細節：`details.md`；進度：`progress.md`
 
 ## 摘要
 
@@ -63,7 +63,7 @@ RFC 0004 讓 renderer 預設是每個分頁一個 process 之後，`scripts/benc
 - **P2：從 OS 的 process 樹**。macOS 的 `proc_listchildpids`、Linux 的 `/proc/<pid>/task/*/children`、Windows 的 Toolhelp32 snapshot。不用 machopo 配合，但種類要另外猜（命令列有 renderer 的 switch）。
 - **P3：CDP 的 `SystemInfo.getProcessInfo`**。machopo 的 automation pipe 加這個方法，照 Chrome 回傳 `{type, id, cpuTime}`。種類由瀏覽器自己說，同一個呼叫也問得到 Chrome 的（之後比 Chrome 的記憶體時用得到）；Chrome 的也只在 browser target 上。
 
-P3 給 pid 和種類，P1 找 trace 的檔案（trace 的檔名本來就帶 pid，不必另外問）。一次執行問一次 `getProcessInfo` 就夠：machopo 每個分頁一個 renderer、Speedometer 和 Blink 的 perf tests 都只開一個分頁，在頁面載入之後、讀記憶體之前問；導覽換了 renderer 的情況（之後有 site isolation 時）再照 Chrome 的行為處理。
+P3 給 pid 和種類（`crates/shell/src/automation_session.rs`；不給 Chrome 的 `cpuTime`：讀別的 process 的 CPU 時間要平台的呼叫，machopo 只在 `ipc` 裡做那種事，工具也用不到），P1 找 trace 的檔案（trace 的檔名本來就帶 pid，不必另外問）。一次執行問一次 `getProcessInfo` 就夠：machopo 每個分頁一個 renderer、Speedometer 和 Blink 的 perf tests 都只開一個分頁，在頁面載入之後、讀記憶體之前問；導覽換了 renderer 的情況（之後有 site isolation 時）再照 Chrome 的行為處理。
 
 ### trace
 
@@ -77,6 +77,7 @@ P3 給 pid 和種類，P1 找 trace 的檔案（trace 的檔名本來就帶 pid�
 - 樣本照 thread 的名稱和計時區間挑（`read_samples`），區間來自 renderer 的 trace 之後就有樣本，前提是取樣器也取到了子 process：macOS 的 samply 會（2026-11-23 確認，`details.md` 的「盤點」：renderer 的 pid 和它的 trace 的檔名一樣，`read_samples` 已經挑到它的 `CrRendererMain`、JS 函式有名字）；Linux 的 `perf record` 預設跟著子 process（inherit），要在那台機器上確認；Windows 的 ETW 錄整台機器、照 pid 篩，也要確認。
 - 挑樣本時連 pid 一起比（renderer 的 pid 來自上一節），不只比 thread 的名稱：之後一次執行有好幾個 renderer 時不會混在一起。
 - V8 的 perf map（`/tmp/perf-<pid>.map`）每個 process 各一份，工具照樣本裡的 pid 刪（現在就是）。
+- 讀得到 renderer 的樣本之後，`SampleTests.test_the_stacks_in_the_timed_windows` 的「開著 trace 時不做 `log` 的紀錄」抓到 renderer process 每一筆都做（html5ever 每個 token 一筆，做了再丟）：`crates/shell/src/main.rs` 的 renderer 那條路在 `init` 之後沒有像 Browser 的那樣 `tracing_log::log::set_max_level`，trace 那一層收每一個 level，`log` 的上限就是 TRACE。2026-11-23 補上；renderer 在 Browser 的 process 裡時（以前取樣的都是）沒有這個問題，所以以前沒看到。
 
 ### 記憶體
 

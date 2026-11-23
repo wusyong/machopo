@@ -99,6 +99,7 @@ UI 的深淺色跟著系統，系統切換時跟著換；`--ui-theme=light` 或 
 | --- | --- |
 | `Browser.getVersion` | `product`（真的視窗是 `machopo/版本`，沒有平台視窗時是 `Headlessmachopo/版本`，照 Chrome 的 headless 模式的 `HeadlessChrome/…`）、`userAgent`（網頁的，兩種都一樣） |
 | `SystemInfo.getInfo` | 畫圖用的 GPU，照 Chrome 的格式：`gpu.devices` 列裝置的名稱和驅動，machopo 的 adapter 類型（`Cpu` 是 CPU adapter）和 backend 在 `gpu.auxAttributes`；Viz 建好 renderer 之前 `devices` 是空的 |
+| `SystemInfo.getProcessInfo` | machopo 的 process，照 Chrome 的 `{processInfo: [{type, id}]}`：先是 Browser 的（`browser`），再來是每個分頁的 renderer process（`renderer`，pid 由小到大；renderer 在 Browser 的 process 裡的分頁沒有）。量測工具用它找 renderer 的 process。沒有 Chrome 的 `cpuTime`：讀別的 process 的 CPU 時間要平台的呼叫，machopo 只在 `ipc` 裡做那種事 |
 | `Browser.close` | 回答之後結束 |
 | `Target.getTargets`、`Target.getTargetInfo` | 分頁的 `TargetInfo`（標題、網址、有沒有 session） |
 | `Target.attachToTarget` | 分頁的 session |

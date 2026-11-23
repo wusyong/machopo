@@ -126,10 +126,9 @@ def page_url(kind: str, where: str, server: speedometer.Server) -> str:
     return (speedometer.ROOT / where).as_uri() if kind == "file" else server.url(where)
 
 
-def renderer_traces(trace: Path) -> list[Path]:
-    """The traces renderer processes wrote beside the browser's `trace`:
-    its name with each one's process id after it."""
-    return sorted(path for path in trace.parent.glob(f"{trace.name}.*") if path.suffix[1:].isdigit())
+# The traces renderer processes wrote beside the browser's, as every tool
+# reads them.
+renderer_traces = speedometer.renderer_traces
 
 
 def run_page(binary: Path, url: str, folder: Path, name: str, window: bool, scale: float,

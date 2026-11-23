@@ -101,6 +101,9 @@ pub enum Method {
     BrowserGetVersion,
     /// `SystemInfo.getInfo`: the GPU the browser draws with.
     SystemInfoGetInfo,
+    /// `SystemInfo.getProcessInfo`: the browser's process and each tab's
+    /// renderer process, `{processInfo: [{type, id}]}`.
+    SystemInfoGetProcessInfo,
     /// `Browser.close`: answered, then the browser ends.
     BrowserClose,
     /// `Target.getTargets`: the tabs.
@@ -245,6 +248,7 @@ impl Method {
             Method::Other { name, .. } => name,
             Method::BrowserGetVersion => "Browser.getVersion",
             Method::SystemInfoGetInfo => "SystemInfo.getInfo",
+            Method::SystemInfoGetProcessInfo => "SystemInfo.getProcessInfo",
             Method::BrowserClose => "Browser.close",
             Method::TargetGetTargets => "Target.getTargets",
             Method::TargetGetTargetInfo(_) => "Target.getTargetInfo",
@@ -332,6 +336,7 @@ impl Method {
             Method::Other { params, .. } => return params.clone(),
             Method::BrowserGetVersion
             | Method::SystemInfoGetInfo
+            | Method::SystemInfoGetProcessInfo
             | Method::BrowserClose
             | Method::TargetGetTargets
             | Method::PageEnable
@@ -349,6 +354,7 @@ impl Method {
         Ok(match name {
             "Browser.getVersion" => none(params, Method::BrowserGetVersion)?,
             "SystemInfo.getInfo" => none(params, Method::SystemInfoGetInfo)?,
+            "SystemInfo.getProcessInfo" => none(params, Method::SystemInfoGetProcessInfo)?,
             "Browser.close" => none(params, Method::BrowserClose)?,
             "Target.getTargets" => none(params, Method::TargetGetTargets)?,
             "Target.getTargetInfo" => Method::TargetGetTargetInfo(typed(params)?),

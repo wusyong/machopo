@@ -965,15 +965,76 @@ def save_trace(chrome: CdpPipe, path: Path) -> bool:
     return bool(done.get("dataLossOccurred"))
 
 
+class RendererTraceError(RuntimeError):
+    """A run's renderer process wrote no trace, or one without what a
+    renderer of a process of its own writes."""
+
+
+def renderer_traces(trace: Path) -> list[Path]:
+    """The traces renderer processes wrote beside the browser's `trace`:
+    its name with each one's process id after it (`MACHOPO_TRACE`: one
+    trace a process, on one clock)."""
+    return sorted(path for path in trace.parent.glob(f"{trace.name}.*") if path.suffix[1:].isdigit())
+
+
+def machopo_processes(machopo: CdpPipe) -> list[dict] | None:
+    """machopo's processes as its `SystemInfo.getProcessInfo` tells them,
+    Chrome's way (`[{type, id}]`, the browser's first, then each renderer
+    process); `None` from a version without it, whose renderer processes
+    only their traces tell (`renderer_trace`)."""
+    try:
+        return machopo.call("SystemInfo.getProcessInfo").get("processInfo", [])
+    except RuntimeError as e:
+        if "wasn't found" in str(e):
+            return None
+        raise
+
+
+def renderer_pids(processes: list[dict] | None) -> list[int] | None:
+    """The renderer processes' ids in `processes` (`machopo_processes`)."""
+    return None if processes is None else [p["id"] for p in processes if p.get("type") == "renderer"]
+
+
+def renderer_trace(trace: Path, processes: list[dict] | None) -> tuple[Path, bool]:
+    """The trace of the renderer the page ran in, of a run whose browser
+    wrote `trace`, and whether that renderer is a process of its own: the
+    renderer process's (`<trace>.<pid>`, the pid from `processes`, or, from
+    a version that can't tell them, the files beside `trace`), the one
+    with the most of the runner's marks if there are several; the browser's
+    own when its renderer is threads of its process. `RendererTraceError`
+    when a renderer process wrote none: the browser's trace has nothing of
+    the page then, and reading it would give nothing that looks like it
+    measured something."""
+    pids = renderer_pids(processes)
+    if pids is None:
+        found = renderer_traces(trace)
+    else:
+        found = [trace.with_name(f"{trace.name}.{pid}") for pid in pids]
+        missing = [path.name for path in found if not path.exists()]
+        if missing:
+            raise RendererTraceError(f"the renderer process wrote no trace ({', '.join(missing)} missing)")
+    if not found:
+        return trace, False
+    if len(found) == 1:
+        return found[0], True
+    return max(found, key=lambda path: sum(len(marks) for marks in perfetto_marks(path).values())), True
+
+
 def run_in_machopo(server: Server, binary: Path, url: str, timeout: float, log, trace: Path | None = None,
                samples: Path | None = None, cpu_profile: Path | None = None, env: dict | None = None) -> dict:
     """`url` in a new `machopo --automation-pipe`: what its page posted
     (`{"body"}`, and machopo's `peak_memory` by then as `memory` when nothing
-    wraps it), or why there is nothing (`{"error"}`). With `trace`, machopo
-    writes a trace there (`MACHOPO_TRACE`); with `samples`, `perf` samples it
-    into that file (`sampler`); with `cpu_profile`, DevTools' `Profiler` as in
-    Chrome (`run_in_chrome`); `env`, more of machopo's environment."""
+    wraps it, and its processes then as `processes`, `machopo_processes`),
+    or why there is nothing (`{"error"}`). With `trace`, machopo writes a
+    trace there (`MACHOPO_TRACE`; each renderer process its own beside it,
+    `renderer_trace`); with `samples`, `perf` samples it into that file
+    (`sampler`); with `cpu_profile`, DevTools' `Profiler` as in Chrome
+    (`run_in_chrome`); `env`, more of machopo's environment."""
     server.forget()
+    if trace:
+        # A renderer's trace of an earlier run would be taken for this one's.
+        for old in renderer_traces(trace):
+            old.unlink(missing_ok=True)
     env = {**(env or {}), **({"MACHOPO_TRACE": str(trace)} if trace else {})}
     wrapper = None
     if samples:
@@ -996,8 +1057,13 @@ def run_in_machopo(server: Server, binary: Path, url: str, timeout: float, log, 
             except RuntimeError as e:
                 return {"error": f"the profile: {e}"}
         if body is not None:
+            try:
+                processes = machopo_processes(machopo)
+            except RuntimeError as e:
+                return {"error": f"machopo's processes: {e}"}
             # A wrapper's process is the sampler's, not machopo's.
-            return {"body": body, "memory": None if wrapper else peak_memory(machopo.process.pid)}
+            return {"body": body, "memory": None if wrapper else peak_memory(machopo.process.pid),
+                    "processes": processes}
         return {"error": f"machopo ended (exit status {machopo.process.returncode})" if machopo.process.poll() is not None
                 else f"no report in {timeout:.0f} s"}
     finally:

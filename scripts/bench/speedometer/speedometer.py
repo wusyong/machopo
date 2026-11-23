@@ -1390,31 +1390,49 @@ def cmd_trace(args, all_suites: list[tuple[str, bool]], chosen: list[str] | None
     server.mode = "measure"
     server.deadline = measure_deadline(args.iterations) * 1000
     timeout = measure_deadline(args.iterations) + START_TIME
-    traces = []
+    # Each suite's trace in each browser that holds its renderer's main
+    # thread: machopo's renderer process's, beside the browser's.
+    traces: dict[tuple[str, str], Path] = {}
+    failed = []
     try:
         with open(RESULTS / "machopo.log", "w", encoding="utf-8") as log:
             for name, browser in schedule(names, browsers):
                 url = suite_url(server, name, args.iterations)
                 if browser == "machopo":
                     trace = folder / f"{name}-machopo.pftrace"
-                    run = parse_run(run_in_machopo(server, binary, url, timeout, log, trace))
+                    result = run_in_machopo(server, binary, url, timeout, log, trace)
+                    run = parse_run(result)
+                    if trace.exists() and "error" not in result:
+                        try:
+                            trace, _ = renderer_trace(trace, result.get("processes"))
+                        except RendererTraceError as e:
+                            failed.append(f"{name}, machopo: {e}")
                 else:
                     trace = folder / f"{name}-chrome.pftrace"
                     run = parse_run(run_in_chrome(server, url, timeout, trace))
                 problems = run_problems(run, None)
                 print(f"  {name}, {browser}: {problems[0] if problems else 'done'}; {trace}")
-                traces.append(trace)
+                traces[(name, browser)] = trace
     finally:
         server.close()
-    missing = [str(trace) for trace in traces if not trace.exists()]
-    if missing:
-        print(f"no trace written: {', '.join(missing)}")
+    failed += [f"no trace written: {trace}" for trace in traces.values() if not trace.exists()]
+    if failed:
+        print("\n".join(failed))
         return 1
     times: dict[str, dict[str, tuple[collections.Counter, collections.Counter]]] = {}
     for name in names:
         for browser in browsers:
-            trace = folder / f"{name}-{'machopo' if browser == 'machopo' else 'chrome'}.pftrace"
-            times.setdefault(name, {})[browser] = phase_times(trace, browser)
+            phases, others = phase_times(traces[(name, browser)], browser)
+            # Nothing in the windows the runner timed is a trace read
+            # wrong (or without the runner's marks), not a suite that took
+            # no time: said so, not reported as 0.
+            if not phases and not others:
+                failed.append(f"{name}, {browser}: nothing in the windows the runner timed, by its marks, "
+                              f"in {traces[(name, browser)]}")
+            times.setdefault(name, {})[browser] = (phases, others)
+    if failed:
+        print("\n".join(failed))
+        return 1
     report = write_phases_report(times, environment(MACHOPO_PROFILE), args.iterations)
     print(report.read_text(encoding="utf-8"))
     print("open the traces in https://ui.perfetto.dev")
@@ -1510,15 +1528,30 @@ def sample_suites(binary: Path, names: list[str], folder: Path,
                 trace = folder / f"{name}-machopo.pftrace"
                 samples = folder / f"{name}-machopo{(sampling() or LINUX_SAMPLING).suffix}"
                 url = suite_url(server, name, iterations)
-                run = parse_run(run_in_machopo(server, binary, url, timeout, log, trace, samples))
+                result = run_in_machopo(server, binary, url, timeout, log, trace, samples)
+                run = parse_run(result)
                 problems = run_problems(run, None)
                 if not trace.exists() or not samples.exists():
                     print(f"  {name}: no {'trace' if not trace.exists() else 'samples'} written")
                     failed = True
                     continue
+                trouble = None
+                try:
+                    # The renderer's: its main thread's slices and marks.
+                    trace, own_process = renderer_trace(trace, result.get("processes"))
+                except RendererTraceError as e:
+                    trace, own_process, trouble = None, False, str(e)
                 windows, found_by = timed_windows(perfetto_slices(trace).get(MAIN_THREAD, []),
-                                                  perfetto_marks(trace).get(MAIN_THREAD, []))
+                                                  perfetto_marks(trace).get(MAIN_THREAD, [])) if trace else ([], "")
+                # A version with renderer processes writes the runner's
+                # marks: guessing the windows by its frames would hide a
+                # trace read wrong. Only an older one goes by its frames.
+                if own_process and found_by != "the runner's marks":
+                    trouble = f"the runner's marks aren't in the renderer process's trace, {trace}"
                 taken, pids = read_samples(samples, MAIN_THREAD)
+                renderers = renderer_pids(result.get("processes"))
+                if not trouble and renderers and not pids & set(renderers):
+                    trouble = f"no samples of the renderer process's main thread (pid {', '.join(map(str, renderers))})"
                 if sys.platform == "win32":
                     # What samply's times count from, read just now.
                     for etl in samply_etls(samples):
@@ -1531,6 +1564,12 @@ def sample_suites(binary: Path, names: list[str], folder: Path,
                     v8_log(samples).unlink(missing_ok=True)
                 by_event = {event: fold(taken.get(event, []), windows)
                             for event in (sampling() or LINUX_SAMPLING).events}
+                if not trouble and not any(by_event.values()):
+                    trouble = f"no samples in the {len(windows)} windows the runner timed"
+                if trouble:
+                    print(f"  {name}: {trouble}")
+                    failed = True
+                    continue
                 for event, folded in by_event.items():
                     folded_path(folder, name, event).write_text(
                         "".join(f"{stack} {count}\n" for stack, count in folded.most_common()),

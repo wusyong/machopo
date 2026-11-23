@@ -665,7 +665,14 @@ class GcReportTests(unittest.TestCase):
                 if name == "Chrome" and len(order) == 4:
                     return {"error": "no report in 3 s"}
                 trace.write_bytes(b"")
-                return {"body": json.dumps({"unit": "ms", "values": [1], "log": [], "summary": SUMMARY})}
+                posted = {"body": json.dumps({"unit": "ms", "values": [1], "log": [], "summary": SUMMARY})}
+                if name == "machopo":
+                    # machopo's renderer is a process of its own, with a
+                    # trace of its own: but for the second run.
+                    if len(order) == 1:
+                        trace.with_name(f"{trace.name}.42").write_bytes(b"")
+                    posted["processes"] = [{"type": "browser", "id": 1}, {"type": "renderer", "id": 42}]
+                return posted
             return run
 
         folder = tempfile.TemporaryDirectory()
@@ -684,11 +691,18 @@ class GcReportTests(unittest.TestCase):
             ("Chrome", "dom-time-Chrome-2.pftrace", common.CHROME_GC_TRACE_CATEGORIES),
         ])
         runs = by_page["dom/time.html"]["runs"]
-        self.assertEqual(runs[0]["machopo"]["gc"], {"gc_ns": 1, "trace": "dom-time-machopo-1.pftrace"})
+        # machopo's GC is its renderer process's, in that one's trace.
+        self.assertEqual(runs[0]["machopo"]["gc"], {"gc_ns": 1, "trace": "dom-time-machopo-1.pftrace.42"})
         self.assertEqual(runs[0]["Chrome"]["gc"]["trace"], "dom-time-Chrome-1.pftrace")
+        # A renderer process that wrote no trace: no GC, said why.
+        self.assertEqual(runs[1]["machopo"]["gc"],
+                         {"error": "the renderer process wrote no trace (dom-time-machopo-2.pftrace.42 missing)"})
         # A run that gave nothing has no GC.
         self.assertEqual(runs[1]["Chrome"], {"error": "no report in 3 s"})
-        self.assertEqual(blink_perf.gc_problems(by_page["dom/time.html"]), ["run 2: Chrome: no report in 3 s"])
+        self.assertEqual(blink_perf.gc_problems(by_page["dom/time.html"]), [
+            "run 2: Chrome: no report in 3 s",
+            "run 2: machopo's trace: the renderer process wrote no trace (dom-time-machopo-2.pftrace.42 missing)",
+        ])
         self.assertEqual(by_page["other/internals.html"], {"excluded": "needs Chromium's `internals`"})
 
 
@@ -992,6 +1006,10 @@ class GcRunTests(unittest.TestCase):
             self.assertTrue(gc["pauses_ns"], browser)
             trace = Path(self.results.name) / "gc" / f"gc-garbage-{browser}-1.pftrace"
             self.assertTrue(trace.is_file(), browser)
+            if browser == "machopo":
+                # The page's GC is its renderer process's, in that one's
+                # trace (machopo's default).
+                [trace] = common.renderer_traces(trace)
             # V8's schedule: the scavenges counted; both traces have
             # `v8.memory`'s counters.
             self.assertGreater(gc["schedule"]["young_gcs"], 0, (browser, gc["schedule"]))

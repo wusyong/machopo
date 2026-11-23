@@ -521,6 +521,19 @@ def v8_schedule(events: list[tuple], main: int, first: int, last: int, starts: l
     }
 
 
+def machopo_trace_gc(trace: Path, posted: dict) -> dict:
+    """`trace_gc` of the trace of machopo's renderer the page ran in
+    (`common.renderer_trace`: its renderer process's, beside the browser's
+    `trace`), of a run that `posted` this (`common.run_in_machopo`)."""
+    if not trace.is_file():
+        return {"error": "none written"}
+    try:
+        renderer, _ = common.renderer_trace(trace, posted.get("processes"))
+    except common.RendererTraceError as e:
+        return {"error": str(e)}
+    return trace_gc(renderer)
+
+
 def trace_gc(path: Path) -> dict:
     """The trace at `path` read once: `span_gc` of its track events, with
     V8's schedule (`v8_schedule`, of the counters the runner's thread's
@@ -763,7 +776,8 @@ def trace_pages(names: list[str], root: Path, profile: str, timeout: float, runs
                                                        categories=common.CHROME_GC_TRACE_CATEGORIES))
                         run[browser] = result(posted)
                         if "error" not in run[browser]:
-                            run[browser]["gc"] = trace_gc(trace) if trace.is_file() else {"error": "none written"}
+                            run[browser]["gc"] = machopo_trace_gc(trace, posted) if browser == "machopo" else (
+                                trace_gc(trace) if trace.is_file() else {"error": "none written"})
                     each.append(run)
                 by_page[page] = {"runs": each}
                 why = gc_problems(by_page[page])

@@ -1702,6 +1702,31 @@ impl AutomationSession {
                     "commandLine": "",
                 })));
             }
+            Method::SystemInfoGetProcessInfo => {
+                // Chrome's `SystemInfoHandler::GetProcessInfo`: the
+                // browser's process, then each renderer process (a tab
+                // whose renderer is threads of this process has none).
+                // No `cpuTime`: reading another process's needs the
+                // platform's calls, which machopo makes only in `ipc`.
+                let mut renderers: Vec<u32> = browser
+                    .view()
+                    .tabs()
+                    .filter_map(|contents| contents.renderer_pid())
+                    .collect();
+                renderers.sort_unstable();
+                renderers.dedup();
+                let infos: Vec<Value> = std::iter::once(json!({
+                    "type": "browser",
+                    "id": std::process::id(),
+                }))
+                .chain(
+                    renderers
+                        .into_iter()
+                        .map(|pid| json!({ "type": "renderer", "id": pid })),
+                )
+                .collect();
+                return Dispatched::Now(Ok(json!({ "processInfo": infos })));
+            }
             Method::BrowserClose => {
                 self.close = true;
                 return Dispatched::Now(Ok(json!({})));
