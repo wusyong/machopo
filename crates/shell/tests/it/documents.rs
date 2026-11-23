@@ -918,6 +918,50 @@ fn a_javascript_url_runs_in_the_frame() {
     assert_eq!(run(&url), "in the page index.html");
 }
 
+/// A `javascript:` URL that another origin's page sets a child's
+/// `location` to: a `SecurityError`, nothing run in the child (whose
+/// realm it would be); the same origin's runs, after (so the other's
+/// would have posted first).
+#[test]
+fn a_javascript_url_of_another_origin_does_not_run() {
+    use std::collections::HashMap;
+
+    use net::test_server::{Route, TestServer};
+    const CHILD: &str = "<!DOCTYPE html><p>child</p>";
+    let other = TestServer::start(HashMap::from([(
+        "/child.html".to_owned(),
+        Route::ok("text/html", CHILD),
+    )]))
+    .expect("the other origin's server starts");
+    let page = format!(
+        "<!DOCTYPE html><iframe id=same src=/child.html></iframe><iframe id=other src='{}'></iframe>\
+         <script>const log = [];\
+         addEventListener('message', e => {{ log.push(e.data);\
+           if (e.data === location.port) testRunner.reportHarnessResults(log.join()); }});\
+         const js = \"javascript:parent.postMessage(location.port,'*')\";\
+         onload = () => {{\
+           try {{ other.contentWindow.location = js; }} catch (e) {{ log.push(e.name); }}\
+           same.contentWindow.location = js;\
+         }};</script>",
+        other.url("/child.html")
+    );
+    let server = TestServer::start(HashMap::from([
+        ("/index.html".to_owned(), Route::ok("text/html", page)),
+        ("/child.html".to_owned(), Route::ok("text/html", CHILD)),
+    ]))
+    .expect("the test server starts");
+    let port = server
+        .url("")
+        .rsplit(':')
+        .next()
+        .expect("a port")
+        .to_owned();
+    assert_eq!(
+        run(&server.url("/index.html")),
+        format!("SecurityError,{port}")
+    );
+}
+
 /// `scrollIntoView` through the renderer: an element in an iframe below
 /// the fold brought into view in its frame's viewport (as far as it
 /// scrolls) and then in the parent's, where the element is now; each

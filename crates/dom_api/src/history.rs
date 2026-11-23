@@ -39,6 +39,29 @@ fn without_fragment(url: &Url) -> Url {
     url
 }
 
+/// Whether `initiator` may navigate `document`'s frame to `url` (Blink's
+/// `LocalFrame::CanNavigate`, as HTML's navigate checks a `javascript:`
+/// URL): a `javascript:` URL's script runs in `document`, so only its own
+/// origin may ask for one. A realm with no document (a worker's) may not.
+pub(crate) fn may_navigate<'gc>(
+    cx: &ApiCx<'_, 'gc>,
+    document: NodeRef<'gc>,
+    url: &Url,
+    initiator: dom::NavigationInitiator<'gc>,
+) -> bool {
+    if url.scheme() != "javascript" {
+        return true;
+    }
+    let initiator = match initiator {
+        dom::NavigationInitiator::Document(initiator) => Some(initiator),
+        // The DOM gives a realm's document by its number.
+        dom::NavigationInitiator::Context(context) => cx
+            .context_document_id(context)
+            .and_then(|id| cx.node_by_id(id)),
+    };
+    initiator.is_some_and(|initiator| crate::frame::same_origin(cx, initiator, document))
+}
+
 /// HTML's navigate of `document`'s frame to `url` (absolute already), its
 /// entry replacing the current one if `replace` (or if `url` is the
 /// document's URL, or the document is the initial `about:blank`, as HTML's
@@ -46,6 +69,8 @@ fn without_fragment(url: &Url) -> Url {
 /// document: navigated now (its URL, its target element, its history's
 /// state `null`; `hashchange` queued if the fragment changed; `popstate`
 /// as the call ends); else the host navigates, as `initiator` asked.
+/// Nothing if `initiator` may not (`may_navigate`): a link's does nothing,
+/// as Blink finds no frame for it (`location` has thrown before).
 pub(crate) fn navigate<'gc>(
     cx: &ApiCx<'_, 'gc>,
     document: NodeRef<'gc>,
@@ -53,6 +78,9 @@ pub(crate) fn navigate<'gc>(
     replace: bool,
     initiator: dom::NavigationInitiator<'gc>,
 ) {
+    if !may_navigate(cx, document, &url, initiator) {
+        return;
+    }
     let current = document_url(cx, document);
     let replace = replace || current.as_ref() == Some(&url) || cx.is_initial_about_blank(document);
     if let Some(current) = current

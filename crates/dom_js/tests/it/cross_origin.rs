@@ -381,6 +381,64 @@ fn a_childs_location_navigates_it() {
     );
 }
 
+/// A `javascript:` URL, whose script runs in its target's document, is
+/// its target's origin's alone (Blink's `LocalFrame::CanNavigate`):
+/// another origin's `location` setters and `replace()` throw a
+/// `SecurityError` (as Chrome's; HTML's navigate does nothing), its link
+/// navigates nothing; the same origin's do, an opaque one's of its own
+/// document too.
+#[test]
+fn a_javascript_url_is_its_targets_origins_alone() {
+    let (mut engine, frames) = engine(&[
+        "https://example.test/b.html",
+        "https://other.test/x/",
+        "data:text/html,",
+    ]);
+    let [same, other, opaque] = frames[..] else {
+        unreachable!("three");
+    };
+    let js = || "javascript:0".to_owned();
+    run(
+        &mut engine,
+        "var js = 'javascript:0', a = document.body.appendChild(document.createElement('a'));
+         a.href = js;
+         log.push(error(() => { f1.contentWindow.location = js; }),
+                  error(() => { f1.contentWindow.location.href = js; }),
+                  error(() => { f1.contentWindow.location.replace(js); }),
+                  error(() => { f2.contentWindow.location = js; }));
+         f1.name = 'other'; a.target = 'other'; a.click();
+         f2.name = 'opaque'; a.target = 'opaque'; a.click();",
+    );
+    assert_eq!(
+        log(&mut engine),
+        "SecurityError / SecurityError / SecurityError / SecurityError"
+    );
+    assert_eq!(navigations(&mut engine), []);
+    run(
+        &mut engine,
+        "f0.contentWindow.location = js; f0.contentWindow.location.replace(js);
+         f0.name = 'same'; a.target = 'same'; a.click();",
+    );
+    assert_eq!(
+        navigations(&mut engine),
+        [(same, js()), (same, js()), (same, js())]
+    );
+    // Each child, its own.
+    run_in(
+        &mut engine,
+        other,
+        "https://other.test/x/",
+        "location.href = 'javascript:0';",
+    );
+    run_in(
+        &mut engine,
+        opaque,
+        "data:text/html,",
+        "location.href = 'javascript:0';",
+    );
+    assert_eq!(navigations(&mut engine), [(other, js()), (opaque, js())]);
+}
+
 /// The window's `close()` and `blur()` do nothing, `opener` is none,
 /// `closed` whether its iframe is gone; a child's `focus()` makes it the
 /// focused frame (its iframe the parent's active element).

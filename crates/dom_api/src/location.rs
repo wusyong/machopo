@@ -49,13 +49,44 @@ fn navigate<'gc>(
         return;
     };
     let replace = replace || !cx.is_completely_loaded(document);
-    // The setters but `href`'s are the same origin's alone: one of the
-    // location's document's origin asks, which it stands for.
-    let initiator = by.map_or(
+    crate::history::navigate(cx, document, url, replace, initiator(document, by));
+}
+
+/// Who asks to navigate the location's `document`: the realm `by`, else
+/// the document itself. The setters but `href`'s are the same origin's
+/// alone: one of the document's origin asks, which it stands for.
+fn initiator<'gc>(
+    document: NodeRef<'gc>,
+    by: Option<Gc<'gc, dom::ExecutionContext>>,
+) -> NavigationInitiator<'gc> {
+    by.map_or(
         NavigationInitiator::Document(document),
         NavigationInitiator::Context,
-    );
-    crate::history::navigate(cx, document, url, replace, initiator);
+    )
+}
+
+/// A `SecurityError` if `by` may not navigate the location's document to
+/// `url` (Blink's `Location::SetLocation`; `history::may_navigate`): a
+/// `javascript:` URL from another origin. HTML's navigate does nothing
+/// then; Chrome throws.
+fn check_may_navigate<'gc>(
+    cx: &ApiCx<'_, 'gc>,
+    this: Gc<'gc, Location>,
+    url: &Url,
+    by: Option<Gc<'gc, dom::ExecutionContext>>,
+) -> Result<(), ApiError> {
+    let Some(document) = relevant_document(cx, this) else {
+        return Ok(());
+    };
+    if crate::history::may_navigate(cx, document, url, initiator(document, by)) {
+        return Ok(());
+    }
+    Err(ApiError::Dom(DomException {
+        name: ExceptionName::Security,
+        message: format!(
+            "The current window does not have permission to navigate the target frame to '{url}'."
+        ),
+    }))
 }
 
 fn get<'gc>(cx: &ApiCx<'_, 'gc>, this: Gc<'gc, Location>, part: fn(&Url) -> &str) -> DomStr<'gc> {
@@ -118,7 +149,9 @@ pub(crate) fn set_href<'gc, O: OpFront>(
         return Ok(());
     }
     let url = parse_relative_to_entry(op, cx, this, url)?;
-    navigate(cx, this, url, false, op.current_context(cx));
+    let by = op.current_context(cx);
+    check_may_navigate(cx, this, &url, by)?;
+    navigate(cx, this, url, false, by);
     Ok(())
 }
 
@@ -133,7 +166,9 @@ pub(crate) fn replace<'gc, O: OpFront>(
         return Ok(());
     }
     let url = parse_relative_to_entry(op, cx, this, url)?;
-    navigate(cx, this, url, true, op.current_context(cx));
+    let by = op.current_context(cx);
+    check_may_navigate(cx, this, &url, by)?;
+    navigate(cx, this, url, true, by);
     Ok(())
 }
 
