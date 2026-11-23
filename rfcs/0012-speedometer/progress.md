@@ -161,6 +161,19 @@
 
 新的在前。2026-10-13 的盤點時，Complex-DOM 和 NewsSite 在 kun 上還少算了用 `var()` 的 style 和 `::before`、`::after` 的 box，那時以前的比較表裡它們的比值偏低；「2d-2 之後的 trace」的 `ParseHTML` 被高估，以最後一次為準。
 
+### renderer 預設是自己的 process、RFC 0108 和 RFC 0110 的第 1 階段之後（2026-11-23，macOS Apple Silicon，接電源）
+
+使用者要求量的，看 2026-11-19 之後有沒有變慢（`main` 的 `9e7d93d`，比 `9691a36` 多 130 個 commit：RFC 0004 做完，renderer 預設是自己的 process、tile 在共用記憶體裡畫；RFC 0108；RFC 0110 的第 1 階段）。`bench.py speedometer`（20 個 default suite，各 10 個 iteration，只跑一次），同一台 macOS 26.6.2、Apple M4，machopo 的 `perf` profile，Chrome for Testing 152.0.7977.82。20 個都有效。各 suite 的中位數合計：machopo 635.8 ms（11-19 是 624.8，+1.8%）、Chrome 412.3 ms（414.0，−0.4%），比值的幾何平均 **1.49**（1.48）。差最多的：Editor-TipTap 2.18（2.06）、TodoMVC-Lit-Complex-DOM 1.78（1.73）、NewsSite-Nuxt 1.76（1.75）、TodoMVC-WebComponents 1.69（1.77）、Charts-chartjs 1.68；最少的：TodoMVC-JavaScript-ES5 1.15（1.24）、Editor-CodeMirror 1.17（1.22）、TodoMVC-React-Redux 1.17（1.23）。11-19 有記下的 8 個 suite 的比值有升有降，合計的差在只跑一次的雜訊（同一個 build 兩次差好幾 %）以內；變最多的是 Editor-TipTap（+6%）。
+
+接著用 `bench.py speedometer --against 9691a36` 在同一台上比（current 是 `9e7d93d` 加上只改文件的工作目錄），各 3 次輪流、每次 10 個 iteration：20 個 suite 的 current / against 的幾何平均 **1.018**（+1.8%）。兩個 suite 確實變慢，兩邊的 95% 區間不重疊、每一次的中位數都分得開：**TodoMVC-JavaScript-ES6-Webpack-Complex-DOM +20.1%**（27.6 → 33.2 ms，每次 27.6 到 27.8 對 33.0 到 33.3）、**Editor-TipTap +6.3%**（70.3 → 74.6 ms，每次 70.2 到 70.7 對 74.3 到 74.8）。其他 18 個在 −1.9%（TodoMVC-React-Redux）到 +2.2%（TodoMVC-Lit-Complex-DOM）之間。peak memory 每個 suite −59.7% 到 −26.8%，但不能比：工具只讀 machopo 啟動的那個 process（Browser）的 phys footprint，current 的 renderer 是自己的 process，不在裡面。只跑一次時看到的 ES6-Webpack 的比值 1.67 沒有在 11-19 的紀錄裡（那次只記了差最多和最少的幾個），所以那時沒看出來。
+
+再用 `--against REV --suites <那兩個>`（各 1 到 2 次，讀 against 那一欄）二分這 130 個 commit（它們的 `third_party.toml`、`.cargo/config.toml` 都一樣）：
+
+- **ES6-Webpack-Complex-DOM 是 `c5f649c`（RFC 0107 的 3b，storage 事件和 `sessionStorage`）**：前一個 `9cd286d` 29.3 ms，它 33.3 ms，之後一直在 33 左右。這個 app 不用 Web Storage（它的 store 是記憶體裡的 JSON）；兩個版本每個 test 之後的 DOM 摘要相同。在旁邊的 worktree 用 `--against 9cd286d --sample` 取樣：`querySelector` 底下的 `SelectorQuery::query_first`（inclusive）2.4 → 56.6 ms，呼叫它的是 app 的 `removeItem` 和 `elementComplete` 的 `document.querySelector('[data-id="…"]')`。原因是子樹的 bloom filter（`dom` 的 `bloom.rs`）的 attribute 名稱的 bit 照名稱的**編號**算：`data-id` 不是編譯時固定的名稱，編號在固定的名稱之後，`c5f649c` 在 `dictionary_members.txt` 加了 4 個（`newValue`、`oldValue`、`storageArea`、`url`），`FIXED_COUNT` 2710 → 2714，`data-id` 的兩個 bit 跟著換了，列表前面那些大的子樹不再被跳過。對照：`9cd286d` 只在 `dictionary_members.txt` 加 4 個用不到的名稱，33.5 ms。所以任何加固定名稱的 commit 都可能讓這類 suite 變快或變慢；`9691a36` 到 `9cd286d` 的 27.6 → 29.3 ms 也可能是這樣。
+- **Editor-TipTap 是 `11d3035`（RFC 0105 的 2c，inline 內容的 `unicode-bidi`）**：前一個 `fad7fef` 69.8 ms，它 73.9 ms。取樣（`--against fad7fef --sample`）CPU 時間 +4.8%，多的幾乎都在新的 `InlineContent::place_line`（inclusive 37.7 ms）：每一行都跑，沒有 RTL 和 bidi control 的段落也是；它走兩次 `line.items()`（parley 的 `GlyphRunIter::next` 33.2 → 54.1 ms），每個 run 呼叫一次掃過段落裡每個元素的 `holding`，`InlineContent::fragments` 和另一處 layout 各呼叫它一次。
+
+`--sample`、`--trace` 和 peak memory 在 renderer 是自己的 process 時（現在的預設）讀不到 renderer：current 的樣本是 0、沒有 runner 的 mark，記憶體只有 Browser 的。所以上面的取樣都是在 RFC 0004 之前的兩個 commit 之間做的（另一個 worktree checkout 新的那個，`--against` 舊的）。
+
 ### frame 樹和每個 frame 的導覽搬到 Browser 之後（2026-11-19，macOS Apple Silicon，接電源）
 
 使用者要求量的（RFC 0104 做完、merge 回 `main` 之前，branch 的 `9691a36`）。`bench.py speedometer`（20 個 default suite，各 10 個 iteration），macOS 26.6.2、Apple M4（10 核，macOS 不能綁核心），machopo 的 `perf` profile，Chrome for Testing 152.0.7977.82。20 個都有效。各 suite 的中位數合計：machopo 624.8 ms、Chrome 414.0 ms，比值的幾何平均 **1.48**。差最多的：Editor-TipTap 2.06、TodoMVC-WebComponents 1.77、NewsSite-Nuxt 1.75、TodoMVC-Lit-Complex-DOM 1.73、TodoMVC-Svelte-Complex-DOM 1.65；最少的：Editor-CodeMirror 1.22、TodoMVC-React-Redux 1.23、TodoMVC-JavaScript-ES5 1.24。這台上一次量是 2026-10-11（換 DOM 之前），之後的都在 Fedora 和 Windows 上，所以不和以前的比。
