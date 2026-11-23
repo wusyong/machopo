@@ -1,0 +1,39 @@
+diff --git a/crates/shell/tests/it/wasm_documents.rs b/crates/shell/tests/it/wasm_documents.rs
+index 4dd914f..21be8d8 100644
+--- a/crates/shell/tests/it/wasm_documents.rs
++++ b/crates/shell/tests/it/wasm_documents.rs
+@@ -252,3 +252,34 @@ fn the_engine_is_the_one_the_bodys_start_declares_across_a_pause() {
+     assert_eq!(render(&server.url("/wasm")).title.as_deref(), Some("wasm"));
+     assert_eq!(render(&server.url("/js")).title.as_deref(), Some("js"));
+ }
++
++/// Lab: a JS document's `pagehide` and `unload` call `fetch()` as a wasm
++/// document replaces it, its engine with it; the wasm document loads.
++#[test]
++fn lab_a_fetch_in_unload_as_the_engine_changes() {
++    use std::collections::HashMap;
++
++    use net::test_server::{Route, TestServer, Unanswered};
++    let server = TestServer::start(HashMap::from([
++        (
++            "/js".to_owned(),
++            Route::ok(
++                "text/html",
++                "<!DOCTYPE html><title>js</title><script>onpagehide = () => fetch('/ping'); \
++                 onunload = () => fetch('/ping2'); location.href = '/wasm';</script><img src=/never>",
++            ),
++        ),
++        (
++            "/never".to_owned(),
++            Route::ok("image/png", "").unanswered(Unanswered::Never),
++        ),
++        (
++            "/wasm".to_owned(),
++            Route::ok("text/html", format!("<!DOCTYPE html>{META}<title>wasm</title>")),
++        ),
++        ("/ping".to_owned(), Route::ok("text/plain", "")),
++        ("/ping2".to_owned(), Route::ok("text/plain", "")),
++    ]))
++    .expect("the test server starts");
++    assert_eq!(render(&server.url("/js")).title.as_deref(), Some("wasm"));
++}

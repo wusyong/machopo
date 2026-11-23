@@ -1,0 +1,520 @@
+diff --git a/crates/dom/src/fetch.rs b/crates/dom/src/fetch.rs
+index 472ad98..ecd9443 100644
+--- a/crates/dom/src/fetch.rs
++++ b/crates/dom/src/fetch.rs
+@@ -232,6 +232,68 @@ pub enum FetchHostRequest {
+     Cancel(u64),
+ }
+ 
++/// A `fetch()`'s request that the host sent (`Dom::note_fetch_sent`): its
++/// fetch's number, its document's, and its URL. The DOM's own record of it,
++/// which the host reads its responses by: one owner, the engine's.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct SentFetch {
++    pub fetch: u64,
++    pub document: crate::NodeId,
++    pub url: String,
++}
++
++impl crate::Dom {
++    /// The host sent the request of `sent.fetch` as `request_id`: its
++    /// response comes by that number.
++    pub fn note_fetch_sent(&self, request_id: u64, sent: SentFetch) {
++        self.changes
++            .sent_fetches
++            .borrow_mut()
++            .insert(request_id, sent);
++    }
++
++    /// The fetch whose request is `request_id`, if one is.
++    pub fn sent_fetch(&self, request_id: u64) -> Option<SentFetch> {
++        self.changes.sent_fetches.borrow().get(&request_id).cloned()
++    }
++
++    /// The fetch whose request is `request_id`, its request answered or
++    /// cancelled.
++    pub fn take_sent_fetch(&self, request_id: u64) -> Option<SentFetch> {
++        self.changes.sent_fetches.borrow_mut().remove(&request_id)
++    }
++
++    /// The request of the fetch numbered `fetch`, if it was sent.
++    pub fn request_of_fetch(&self, fetch: u64) -> Option<u64> {
++        self.changes
++            .sent_fetches
++            .borrow()
++            .iter()
++            .find(|(_, sent)| sent.fetch == fetch)
++            .map(|(&request_id, _)| request_id)
++    }
++
++    /// Every fetch's request sent, by request.
++    pub fn sent_fetches(&self) -> Vec<(u64, SentFetch)> {
++        self.changes
++            .sent_fetches
++            .borrow()
++            .iter()
++            .map(|(&request_id, sent)| (request_id, sent.clone()))
++            .collect()
++    }
++
++    /// How many of the requests sent are `document`'s.
++    pub fn sent_fetches_of(&self, document: crate::NodeId) -> usize {
++        self.changes
++            .sent_fetches
++            .borrow()
++            .values()
++            .filter(|sent| sent.document == document)
++            .count()
++    }
++}
++
+ /// What a `FetchRecord` says of its fetch.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ pub struct FetchState {
+diff --git a/crates/dom/src/lib.rs b/crates/dom/src/lib.rs
+index 1504444..d206f45 100644
+--- a/crates/dom/src/lib.rs
++++ b/crates/dom/src/lib.rs
+@@ -144,7 +144,7 @@ pub use event::{
+ };
+ pub use execution_context::ExecutionContext;
+ pub use fetch::{
+-    FetchHostRequest, FetchRecord, FetchRequest, FetchState, Referrer, Request, RequestCache,
++    FetchHostRequest, FetchRecord, FetchRequest, FetchState, Referrer, Request, RequestCache, SentFetch,
+     RequestCredentials, RequestData, RequestMode, RequestPriority, RequestRedirect, Response,
+     ResponseData, ResponseType,
+ };
+@@ -864,6 +864,9 @@ struct Changes {
+     /// The documents whose window's `load` task ran, until the host takes
+     /// them (`Dom::take_loaded_documents`).
+     loaded_documents: Cell<Vec<NodeId>>,
++    /// The `fetch()`es' requests the host sent, by request, until their
++    /// responses come (`Dom::note_fetch_sent`).
++    sent_fetches: std::cell::RefCell<std::collections::HashMap<u64, fetch::SentFetch>>,
+     /// The browser's user agent and whether automation controls it, its
+     /// host's (`Dom::set_agent`, `navigator`).
+     user_agent: std::cell::RefCell<String>,
+diff --git a/crates/dom_js/src/frames.rs b/crates/dom_js/src/frames.rs
+index 8ec8f75..eb1c01c 100644
+--- a/crates/dom_js/src/frames.rs
++++ b/crates/dom_js/src/frames.rs
+@@ -490,7 +490,16 @@ pub(crate) fn send_fetches(scope: &mut Scope<'_, '_, '_>) {
+                     .load_sink
+                     .as_mut()
+                     .and_then(|sink| sink.start_fetch(frame, &request, &origin));
+-                if request_id.is_some() {
++                // What the host's responses come by: the DOM's own record.
++                if let (Some(request_id), Some(document)) = (request_id, request.document) {
++                    state.dom.note_fetch_sent(
++                        request_id,
++                        dom::SentFetch {
++                            fetch: request.id,
++                            document,
++                            url: request.url.clone(),
++                        },
++                    );
+                     continue;
+                 }
+                 FrameRequest::FetchSent {
+diff --git a/crates/renderer/src/loader.rs b/crates/renderer/src/loader.rs
+index 2fd2fd6..b26d1b2 100644
+--- a/crates/renderer/src/loader.rs
++++ b/crates/renderer/src/loader.rs
+@@ -53,89 +53,40 @@ impl DocumentLoaders {
+     }
+ }
+ 
+-/// The `fetch()`es on their way, by request: each one's number, and its
+-/// document's: the render thread's, shared with the load sink that sends
+-/// them (and records them as it does).
+-#[derive(Debug, Clone, Default)]
+-pub(crate) struct Fetches(Rc<RefCell<HashMap<u64, (u64, dom::NodeId)>>>);
+-
+-impl Fetches {
+-    pub(crate) fn insert(&self, request_id: u64, fetch: u64, document: dom::NodeId) {
+-        self.0.borrow_mut().insert(request_id, (fetch, document));
+-    }
+-
+-    pub(crate) fn remove(&self, request_id: u64) -> Option<(u64, dom::NodeId)> {
+-        self.0.borrow_mut().remove(&request_id)
+-    }
+-
+-    pub(crate) fn is_empty(&self) -> bool {
+-        self.0.borrow().is_empty()
+-    }
+-
+-    pub(crate) fn clear(&self) {
+-        self.0.borrow_mut().clear();
+-    }
+-
+-    /// Each one's number and its document's, as they are now.
+-    pub(crate) fn all(&self) -> Vec<(u64, dom::NodeId)> {
+-        self.0.borrow().values().copied().collect()
+-    }
+-
+-    /// How many are `document`'s.
+-    pub(crate) fn count_of(&self, document: dom::NodeId) -> usize {
+-        self.0
+-            .borrow()
+-            .values()
+-            .filter(|(_, of)| *of == document)
+-            .count()
+-    }
+-
+-    /// The request of the one numbered `fetch`.
+-    pub(crate) fn request_of(&self, fetch: u64) -> Option<u64> {
+-        self.0
+-            .borrow()
+-            .iter()
+-            .find(|&(_, &(number, _))| number == fetch)
+-            .map(|(&request_id, _)| request_id)
+-    }
++thread_local! {
++    /// The renderer's next request id: each renderer's thread its own, so
++    /// what the render thread sends and what the engine's load sink sends
++    /// are numbered apart without sharing anything (Blink's
++    /// `CreateUniqueIdentifier`, its process's).
++    static NEXT_REQUEST_ID: RefCell<SequenceNumber<u64>> =
++        RefCell::new(SequenceNumber::starting_at(1));
+ }
+ 
+-/// The next request id, shared by everything in the renderer that sends
+-/// one; and the URL of each request until it is answered, which the page's
+-/// log names a failed load by.
+-#[derive(Debug, Clone)]
+-pub(crate) struct RequestIds {
+-    next: Rc<RefCell<SequenceNumber<u64>>>,
+-    in_flight: Rc<RefCell<HashMap<u64, String>>>,
++/// A new request id, unique in this renderer.
++pub(crate) fn next_request_id() -> u64 {
++    NEXT_REQUEST_ID.with_borrow_mut(SequenceNumber::get_next)
+ }
+ 
+-impl RequestIds {
+-    pub(crate) fn new() -> Self {
+-        Self {
+-            next: Rc::new(RefCell::new(SequenceNumber::starting_at(1))),
+-            in_flight: Rc::default(),
+-        }
+-    }
+-
+-    pub(crate) fn next(&self) -> u64 {
+-        self.next.borrow_mut().get_next()
+-    }
++/// The URL of each request the render thread sent, until it is answered,
++/// which the page's log names a failed load by (a `fetch()`'s is the
++/// DOM's, `Dom::sent_fetch`).
++#[derive(Debug, Default)]
++pub(crate) struct RequestUrls(HashMap<u64, String>);
+ 
++impl RequestUrls {
+     /// Request `request_id`, `request`, is being sent.
+-    pub(crate) fn sent(&self, request_id: u64, request: &ResourceRequest) {
+-        self.in_flight
+-            .borrow_mut()
+-            .insert(request_id, request.url.clone());
++    pub(crate) fn sent(&mut self, request_id: u64, request: &ResourceRequest) {
++        self.0.insert(request_id, request.url.clone());
+     }
+ 
+     /// Request `request_id` was cancelled.
+-    pub(crate) fn cancelled(&self, request_id: u64) {
+-        self.in_flight.borrow_mut().remove(&request_id);
++    pub(crate) fn cancelled(&mut self, request_id: u64) {
++        self.0.remove(&request_id);
+     }
+ 
+     /// Request `request_id` was answered: its URL, if it was sent.
+-    pub(crate) fn answered(&self, request_id: u64) -> Option<String> {
+-        self.in_flight.borrow_mut().remove(&request_id)
++    pub(crate) fn answered(&mut self, request_id: u64) -> Option<String> {
++        self.0.remove(&request_id)
+     }
+ }
+ 
+diff --git a/crates/renderer/src/render_thread.rs b/crates/renderer/src/render_thread.rs
+index 648a478..deb1c46 100644
+--- a/crates/renderer/src/render_thread.rs
++++ b/crates/renderer/src/render_thread.rs
+@@ -22,7 +22,7 @@ use layout::TextContext;
+ use crate::canvas_encoder::CanvasEncoder;
+ use crate::clock::Clock;
+ use crate::frame_widget::FrameWidget;
+-use crate::loader::{BlobUrls, RequestIds};
++use crate::loader::BlobUrls;
+ use crate::navigation_timing::NavigationTiming;
+ use crate::pending_user_input::{Pending, PendingUserInput};
+ use crate::task_queue::{MainThreadScheduler, MainThreadTask, RendererReceiver, TaskQueues};
+@@ -380,9 +380,10 @@ struct RenderThread {
+     /// compares it before and after, as Blink's `LatencyInfoSwapPromiseMonitor`
+     /// watches for a commit request while an event is dispatched.
+     main_frame_requests: u64,
+-    /// Subresource request ids are unique per renderer, so a response for
+-    /// a document that has gone is recognised and dropped.
+-    next_request_id: RequestIds,
++    /// The URLs of the requests the render thread sent (their ids are
++    /// unique per renderer, `loader::next_request_id`, so a response for a
++    /// document that has gone is recognised and dropped).
++    request_urls: crate::loader::RequestUrls,
+     /// The blob URLs the realms registered.
+     blob_urls: BlobUrls,
+     /// The loader each document's subresources go through.
+@@ -489,9 +490,6 @@ struct RenderThread {
+     /// memory cache); with the document that asked first, whose network
+     /// idleness counts it.
+     images: std::collections::HashMap<u64, (String, NodeId)>,
+-    /// The DOM's `fetch()`es on their way, their requests' ids to
+-    /// their numbers, and their documents.
+-    fetches: crate::loader::Fetches,
+     /// The scripts the DOM queued being fetched, by request.
+     script_fetches: std::collections::HashMap<u64, documents::PendingScriptFetch>,
+     /// The DOM's window's intersection observers' task is queued
+@@ -591,7 +589,7 @@ impl RenderThread {
+             resize_loop_error: false,
+             animations_running: false,
+             main_frame_requests: 0,
+-            next_request_id: RequestIds::new(),
++            request_urls: crate::loader::RequestUrls::default(),
+             blob_urls,
+             loaders,
+             popup: None,
+@@ -629,7 +627,6 @@ impl RenderThread {
+             engine: None,
+             engine_is_wasm: false,
+             images: std::collections::HashMap::new(),
+-            fetches: crate::loader::Fetches::default(),
+             script_fetches: std::collections::HashMap::new(),
+             intersection_task: false,
+             document: None,
+@@ -1760,7 +1757,11 @@ impl RenderThread {
+         // (`FrameRequest::FetchSent`): this may be one's response.
+         self.handle_frame_requests();
+         self.network_agent.did_finish(request_id, &result);
+-        let url = self.next_request_id.answered(request_id);
++        // A `fetch()`'s is the DOM's record's.
++        let url = self.request_urls.answered(request_id).or_else(|| {
++            let engine = self.engine.as_mut()?;
++            Some(engine.dom_mut().sent_fetch(request_id)?.url)
++        });
+         // DevTools' `CSS`'s: a sheet's text, its alone.
+         if let Some((key, frame)) = self.css_refetches.remove(&request_id) {
+             self.log_load(request_id, url.as_deref(), &result);
+diff --git a/crates/renderer/src/render_thread/devtools.rs b/crates/renderer/src/render_thread/devtools.rs
+index da47d20..1f2c6b4 100644
+--- a/crates/renderer/src/render_thread/devtools.rs
++++ b/crates/renderer/src/render_thread/devtools.rs
+@@ -200,11 +200,9 @@ impl RenderThread {
+         // `fetch()` and blob URLs at the call, on the thread's handles.
+         engine.set_load_sink(Box::new(super::documents::RendererLoadSink {
+             to_browser: self.to_browser.clone(),
+-            ids: self.next_request_id.clone(),
+             blob_urls: self.blob_urls.clone(),
+             loaders: self.loaders.clone(),
+             network_agent: self.network_agent.clone(),
+-            fetches: self.fetches.clone(),
+         }));
+         // `localStorage`, its areas opened waiting for the browser.
+         engine.set_storage_host(Box::new(super::documents::RendererStorageHost {
+diff --git a/crates/renderer/src/render_thread/documents.rs b/crates/renderer/src/render_thread/documents.rs
+index 2c58bdb..334b680 100644
+--- a/crates/renderer/src/render_thread/documents.rs
++++ b/crates/renderer/src/render_thread/documents.rs
+@@ -769,7 +769,7 @@ impl RenderThread {
+         // What was asked for its documents: a response still to come is
+         // no one's (the next DOM's nodes are numbered from the start).
+         self.images.clear();
+-        self.fetches.clear();
++        // Its `fetch()`es' requests go with its DOM.
+         self.script_fetches.clear();
+         self.css_refetches.clear();
+         // Its documents' workers with them.
+@@ -3185,7 +3185,12 @@ impl RenderThread {
+     /// counts): its sheets, its parser's scripts and those its DOM queued,
+     /// the images it asked for first, its `fetch()`es. Not a child frame's
+     /// `src` (its own document's request).
+-    fn requests_in_flight(&self, frame: FrameId, document: dom::NodeId) -> usize {
++    fn requests_in_flight(&mut self, frame: FrameId, document: dom::NodeId) -> usize {
++        // Before its document is borrowed: the DOM has them.
++        let fetches = self
++            .engine
++            .as_mut()
++            .map_or(0, |engine| engine.dom_mut().sent_fetches_of(document));
+         let Some(next) = self.doc(frame) else {
+             return 0;
+         };
+@@ -3205,7 +3210,6 @@ impl RenderThread {
+             .values()
+             .filter(|(_, of)| *of == document)
+             .count();
+-        let fetches = self.fetches.count_of(document);
+         // Each fewer than the requests the renderer has made.
+         next.pending_sheets
+             .len()
+@@ -4348,7 +4352,7 @@ impl RenderThread {
+                 .or_else(|| self.document.as_ref().map(|next| next.frame));
+             let request_id = match frame {
+                 Some(frame) if self.network_agent.enabled() => {
+-                    let request_id = self.next_request_id.next();
++                    let request_id = crate::loader::next_request_id();
+                     let initiator = self.initiator(frame, &asker);
+                     if let Some(at) = self.request_frame(frame) {
+                         self.network_agent
+@@ -4358,7 +4362,7 @@ impl RenderThread {
+                     request_id
+                 }
+                 _ => {
+-                    let request_id = self.next_request_id.next();
++                    let request_id = crate::loader::next_request_id();
+                     self.send_request(request_id, loader, request);
+                     request_id
+                 }
+@@ -4522,7 +4526,16 @@ impl RenderThread {
+                 .wants_stacks()
+                 .then_some(Initiator::Script(stack))
+         });
+-        self.fetches.insert(request_id, request.id, document);
++        if let Some(engine) = &mut self.engine {
++            engine.dom_mut().note_fetch_sent(
++                request_id,
++                dom::SentFetch {
++                    fetch: request.id,
++                    document,
++                    url: request.url.clone(),
++                },
++            );
++        }
+     }
+ 
+     /// A `fetch()` the load sink sent as script called it
+@@ -4556,7 +4569,16 @@ impl RenderThread {
+                     .will_send(request_id, &resource, at, initiator.as_ref());
+             }
+         }
+-        self.fetches.insert(request_id, fetch, document);
++        if let Some(engine) = &mut self.engine {
++            engine.dom_mut().note_fetch_sent(
++                request_id,
++                dom::SentFetch {
++                    fetch,
++                    document,
++                    url: request.url.clone(),
++                },
++            );
++        }
+     }
+ 
+     /// The `fetch()` numbered `fetch` went nowhere (a revoked blob URL): a
+@@ -4573,21 +4595,21 @@ impl RenderThread {
+     /// `FetchManager` cancels its loaders as its execution context is
+     /// destroyed), their promises never settled.
+     fn cancel_fetches_of_gone_documents(&mut self) {
+-        if self.fetches.is_empty() {
+-            return;
+-        }
+         let Some(engine) = &mut self.engine else {
+             return;
+         };
+-        let fetches = self.fetches.all();
++        let fetches = engine.dom_mut().sent_fetches();
++        if fetches.is_empty() {
++            return;
++        }
+         let gone: Vec<u64> = engine.dom_mut().read(|cx| {
+             fetches
+                 .iter()
+-                .filter(|(_, document)| {
+-                    cx.node_by_id(*document)
++                .filter(|(_, sent)| {
++                    cx.node_by_id(sent.document)
+                         .is_none_or(|document| cx.is_discarded(document))
+                 })
+-                .map(|(fetch, _)| *fetch)
++                .map(|(_, sent)| sent.fetch)
+                 .collect()
+         });
+         for fetch in gone {
+@@ -4598,11 +4620,14 @@ impl RenderThread {
+     /// The fetch numbered `id` aborted: its request cancelled, if it is
+     /// still on its way.
+     fn cancel_fetch(&mut self, id: u64) {
+-        let Some(request_id) = self.fetches.request_of(id) else {
++        let Some(engine) = &mut self.engine else {
+             return;
+         };
+-        self.fetches.remove(request_id);
+-        self.next_request_id.cancelled(request_id);
++        let Some(request_id) = engine.dom_mut().request_of_fetch(id) else {
++            return;
++        };
++        engine.dom_mut().take_sent_fetch(request_id);
++        self.request_urls.cancelled(request_id);
+         self.network_agent.did_cancel(request_id);
+         let _ = self.to_browser.send(RendererHostMsg::CancelResource {
+             request_id,
+@@ -4629,8 +4654,12 @@ impl RenderThread {
+         asked: Option<&str>,
+         result: &LoadResult,
+     ) -> bool {
+-        if let Some((id, _)) = self.fetches.remove(request_id) {
+-            self.fetch_answered(id, result);
++        if let Some(sent) = self
++            .engine
++            .as_mut()
++            .and_then(|engine| engine.dom_mut().take_sent_fetch(request_id))
++        {
++            self.fetch_answered(sent.fetch, result);
+             return true;
+         }
+         if let Some((url, document)) = self.images.remove(&request_id) {
+@@ -4731,7 +4760,7 @@ impl RenderThread {
+         request: ResourceRequest,
+         initiator: impl FnOnce(&mut Self) -> Option<Initiator>,
+     ) -> u64 {
+-        let request_id = self.next_request_id.next();
++        let request_id = crate::loader::next_request_id();
+         if self.network_agent.enabled() {
+             let initiator = initiator(self);
+             if let Some(at) = self.request_frame(frame) {
+@@ -4745,8 +4774,8 @@ impl RenderThread {
+     }
+ 
+     /// Sends `request` through `loader` (its document's).
+-    fn send_request(&self, request_id: u64, loader: u64, request: ResourceRequest) {
+-        self.next_request_id.sent(request_id, &request);
++    fn send_request(&mut self, request_id: u64, loader: u64, request: ResourceRequest) {
++        self.request_urls.sent(request_id, &request);
+         let _ = self.to_browser.send(RendererHostMsg::FetchResource {
+             request_id,
+             worker: None,
+@@ -5085,11 +5114,9 @@ fn script_loaded(
+ /// `FrameRequest::FetchSent`).
+ pub(super) struct RendererLoadSink {
+     pub(super) to_browser: BrowserSender,
+-    pub(super) ids: crate::loader::RequestIds,
+     pub(super) blob_urls: crate::loader::BlobUrls,
+     pub(super) loaders: crate::loader::DocumentLoaders,
+     pub(super) network_agent: Rc<super::network_agent::NetworkAgent>,
+-    pub(super) fetches: crate::loader::Fetches,
+ }
+ 
+ impl dom_api::LoadSink for RendererLoadSink {
+@@ -5104,8 +5131,9 @@ impl dom_api::LoadSink for RendererLoadSink {
+         }
+         let document = request.document?;
+         let resource = crate::loader::fetch_resource_request(request);
+-        let request_id = self.ids.next();
+-        self.ids.sent(request_id, &resource);
++        // The engine records it (`Dom::note_fetch_sent`), which its
++        // response comes by.
++        let request_id = crate::loader::next_request_id();
+         // Told to DevTools as it is sent, before anything of its response
+         // can come (Blink's `ResourceLoadObserverForFrame::WillSendRequest`).
+         if self.network_agent.enabled()
+@@ -5125,7 +5153,6 @@ impl dom_api::LoadSink for RendererLoadSink {
+             self.network_agent
+                 .will_send(request_id, &resource, at, initiator.as_ref());
+         }
+-        self.fetches.insert(request_id, request.id, document);
+         // Through its document's loader.
+         let loader = self.loaders.of(document).unwrap_or(0);
+         let _ = self.to_browser.send(RendererHostMsg::FetchResource {

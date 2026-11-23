@@ -89,7 +89,7 @@
 - DNS 失敗是從 hyper-util 的錯誤訊息辨認的（它沒有專用的錯誤型別）；升級 reqwest 時，`net` 的 `connection_failures` 測試會告訴我們它還對不對。
 - 導覽到 `file:` 只看發起導覽的文件是不是 `file:`（`file:` 文件裡的子 frame 一開始的 `about:blank` 也算）；子資源讀本機檔案看整個 renderer：main frame 的文件是 `file:`、或子 frame commit 了 `file:` 的文件之後都可以，main frame 換成不是 `file:` 的文件時收回。Chromium 還會依 origin 做更細的限制。
 - `file:` 的目錄是一份簡單的清單（上一層和每個項目的連結，目錄在前、照名稱排序），沒有 Chrome 那份的大小、修改時間和排序的按鈕；沒有尾端斜線的目錄網址不轉到有斜線的（Chrome 會），連結都是完整的網址。
-- frame 不在了時，它還在路上的 `fetch()` 不取消：回應來了找不到 window，丟掉（Chrome 取消請求）。
+- 頂層的文件換掉時，它還在路上的 `fetch()` 不取消：回應來了找不到 window，丟掉；回應一直不來的（長輪詢）留著，browser 也一直在載（Chrome 在 execution context 不在時取消請求）。iframe 拿掉、或導覽到別的文件時，它的文件的 `fetch()` 會取消。
 
 ## Style
 
@@ -417,6 +417,7 @@ iframe 照同源、同 process 的情形做：有自己的 browsing context、wi
 - 跨網站的 iframe 和頁面在同一個 renderer，只靠 security token 擋住互相存取（Chromium 的 site isolation 放在別的 process）。
 - 子 frame 導覽到別的文件（`src`、點連結、`location.href = …`、`location.reload()`）由 browser 載入、換掉子 frame 的文件（舊的文件裡的 frame 跟著不在），進 session history（第一份文件併進目前的 entry，之後的是新的 entry，`history.length` 每個 frame 都是整個分頁的），上一頁、下一頁照 entry 換回每個 frame 的文件，上一頁、下一頁重新載入的文件在 `load` 之前建的子 frame 照 entry 還原（重新整理照 `src`，和 Chrome 一樣）。`about:blank` 的 origin 照 HTML 是發起導覽的文件的，`srcdoc` 的是父 frame 的；`about:srcdoc` 只有和父 frame 同源的文件能叫子 frame 導覽過去（或同源的 `srcdoc` 重新載入自己，Chromium 的規則），其他的是錯誤頁。子 frame 裡導覽到自己的 `#fragment`（連結、`location.hash`）和 `pushState` 照樣捲動、改網址、分派 `popstate` 和 `hashchange`，browser 記下網址（子 frame 的 `location.reload()` 載入它）和 entry。
 - `javascript:` 的 `src` 不執行（commit 一份空的文件，網址是那個 `javascript:` 網址）。`loading`、`sandbox`、`allow` 都還沒有（sandbox 的 iframe 照樣跑 script，裡面的 `loading="lazy"` 的圖照樣等到接近 viewport 才載入；`name` 的名稱給 window 的具名屬性和連結的 `target`，沒有 `window.name`；連結找 `target` 時讀 iframe 現在的 `name`，HTML 是子 frame 建立時的名稱，browser 記的也是建立時的）；`referrerpolicy` 只用在子 frame 的 navigation timing（`no-referrer` 時 redirect 的 `Timing-Allow-Origin` 只認 `*`；machopo 的請求都不送 `Referer`）。
+- 拿掉 iframe 時，它的文件和裡面的 frame 的文件不發 `pagehide`、`unload`：它們只是不再 fully active（Chrome 在拿掉的當下發，之後才把 frame 拆掉）。
 - 載入失敗（網路錯誤）的子 frame 是錯誤頁，和 main frame 的一樣：文件的網址是 `chrome-error://chromewebdata/`（opaque 的 origin，父 frame 讀不到它），browser 記著失敗的網址。頁面不准的導覽（不是 `file:` 的文件要開 `file:`、browser 不載入的 scheme）什麼都不載入：iframe 留著原本的文件，父文件的 `load` 不等它。
 - `window[i]` 和集合的 indexed property 一樣只能讀：設定、刪除、`Object.defineProperty` 會在 global 上建一般的屬性（規範是失敗）。
 

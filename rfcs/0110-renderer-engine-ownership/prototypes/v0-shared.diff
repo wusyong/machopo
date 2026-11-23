@@ -1,0 +1,509 @@
+diff --git a/crates/dom_api/src/engine.rs b/crates/dom_api/src/engine.rs
+index b7777d0..f821353 100644
+--- a/crates/dom_api/src/engine.rs
++++ b/crates/dom_api/src/engine.rs
+@@ -33,13 +33,23 @@ pub type ConsoleSink = Box<dyn Fn(ConsoleMessage)>;
+ /// call returns (Blink's `FetchManager` starts its loader in `fetch()`; a
+ /// blob URL is the registry's at once): so that a `fetch()` and a blob
+ /// URL revoked after it in the same task go in that order, and a request
+-/// leaves while the script that made it goes on. The engine tells its
+-/// host what it sent after (`FrameRequest::FetchSent`).
++/// leaves while the script that made it goes on; and told to DevTools
++/// as it is sent (Blink's `ResourceLoadObserverForFrame::WillSendRequest`).
++/// The engine tells its host after only of one that went nowhere
++/// (`FrameRequest::FetchSent`).
+ pub trait LoadSink {
+-    /// `request`, of `frame`'s realm's `fetch()`, sent: its request's
+-    /// number, or none if it went nowhere (a revoked blob URL's, a network
+-    /// error).
+-    fn start_fetch(&self, frame: crate::FrameId, request: &dom::FetchRequest) -> Option<u64>;
++    /// `request`, of `frame`'s realm's `fetch()`, sent, `origin` naming
++    /// where it comes from: its request's number, or none if it went
++    /// nowhere (a revoked blob URL's, a network error).
++    fn start_fetch(
++        &mut self,
++        frame: crate::FrameId,
++        request: &dom::FetchRequest,
++        origin: &FetchOrigin,
++    ) -> Option<u64>;
++
++    /// The host's own type, for the host (`ScriptEngine::load_sink_mut`).
++    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+ 
+     /// `url` made a blob URL for `data` in `frame`'s realm
+     /// (`URL.createObjectURL`).
+@@ -53,6 +63,17 @@ pub trait LoadSink {
+     fn frame_gone(&self, frame: crate::FrameId);
+ }
+ 
++/// Where a `fetch()` comes from, as the engine knows it as it is sent,
++/// for DevTools to name it by: its frame's token (the top-level frame's,
++/// the browser's), its document's URL, and the stack of the script that
++/// asked, if one was kept (`Dom::take_request_stack`).
++#[derive(Debug, Clone, Default)]
++pub struct FetchOrigin {
++    pub frame_token: Option<String>,
++    pub document_url: Option<String>,
++    pub stack: Option<std::rc::Rc<str>>,
++}
++
+ /// What an engine is made with, as its host's settings say.
+ #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+ pub struct EngineSettings {
+@@ -541,6 +562,11 @@ pub trait ScriptEngine: ParserHost {
+     /// (`FrameRequest::RegisterBlobUrl`, `RevokeBlobUrl`, `Fetch`).
+     fn set_load_sink(&mut self, sink: Box<dyn LoadSink>);
+ 
++    /// The load sink it was given, if any: for the host to reach its own.
++    fn load_sink_mut(&mut self) -> Option<&mut dyn LoadSink> {
++        None
++    }
++
+     /// What `testRunner.reportHarnessResults` was given since the last
+     /// ask, if anything (web tests only).
+     fn take_harness_results(&mut self) -> Option<String>;
+diff --git a/crates/dom_api/src/lib.rs b/crates/dom_api/src/lib.rs
+index c94a408..2815ffd 100644
+--- a/crates/dom_api/src/lib.rs
++++ b/crates/dom_api/src/lib.rs
+@@ -150,7 +150,7 @@ pub use document::{document_title, set_page_visible};
+ pub use dom_api_macros::declare;
+ pub use engine::{
+     ClassicScript, ConsoleMessage, ConsoleSink, DevToolsInterrupter, DevToolsObjects, DevToolsPage,
+-    DevToolsQueue, DevToolsQueued, DevToolsSend, EngineSettings, LoadSink, ScriptEngine,
++    DevToolsQueue, DevToolsQueued, DevToolsSend, EngineSettings, FetchOrigin, LoadSink, ScriptEngine,
+     WasmScript, WorkerEngine, WorkerGlobalParams,
+ };
+ pub use event::{cancel as cancel_event, coarsen};
+diff --git a/crates/dom_js/src/engine.rs b/crates/dom_js/src/engine.rs
+index 0aeb45a..dcbeb77 100644
+--- a/crates/dom_js/src/engine.rs
++++ b/crates/dom_js/src/engine.rs
+@@ -1685,6 +1685,12 @@ impl ScriptEngine for V8Engine {
+         self.state().frames.load_sink = Some(sink);
+     }
+ 
++    fn load_sink_mut(&mut self) -> Option<&mut dyn dom_api::LoadSink> {
++        // Shortening the box's `'static` to the borrow's.
++        let sink: &mut dyn dom_api::LoadSink = self.state().frames.load_sink.as_deref_mut()?;
++        Some(sink)
++    }
++
+     fn set_console_sink(&mut self, sink: ConsoleSink) {
+         self.data.set_console_sink(Box::new(move |message| {
+             sink(ConsoleMessage {
+diff --git a/crates/dom_js/src/frames.rs b/crates/dom_js/src/frames.rs
+index c648df9..8ec8f75 100644
+--- a/crates/dom_js/src/frames.rs
++++ b/crates/dom_js/src/frames.rs
+@@ -442,9 +442,10 @@ pub(crate) fn revoke_blob_url(scope: &mut Scope<'_, '_, '_>, url: &str) {
+ }
+ 
+ /// The `fetch()`es and aborts the operation asked for, handed to the host
+-/// before the call returns: each `fetch()` sent by its load sink now,
+-/// what it sent told after (`FrameRequest::FetchSent`); without a sink,
+-/// they wait for the host's next look (`take_frame_requests`).
++/// before the call returns: each `fetch()` sent by its load sink now, with
++/// where it comes from (`FetchOrigin`); one that went nowhere told after
++/// (`FrameRequest::FetchSent`); without a sink, they wait for the host's
++/// next look (`take_frame_requests`).
+ pub(crate) fn send_fetches(scope: &mut Scope<'_, '_, '_>) {
+     let (state, _) = scope.state_mut();
+     // A worker's: sent by its host now.
+@@ -471,11 +472,27 @@ pub(crate) fn send_fetches(scope: &mut Scope<'_, '_, '_>) {
+                 else {
+                     continue;
+                 };
++                let origin = dom_api::FetchOrigin {
++                    frame_token: state.frames.token(frame).map(|token| token.to_string()),
++                    document_url: request.document.and_then(|document| {
++                        state.dom.read(|cx| {
++                            cx.node_by_id(document)
++                                .and_then(|document| cx.document_url(document))
++                                .map(|url| url.to_str().to_string())
++                        })
++                    }),
++                    stack: state
++                        .dom
++                        .take_request_stack(dom::StackAsker::Fetch(request.id)),
++                };
+                 let request_id = state
+                     .frames
+                     .load_sink
+-                    .as_ref()
+-                    .and_then(|sink| sink.start_fetch(frame, &request));
++                    .as_mut()
++                    .and_then(|sink| sink.start_fetch(frame, &request, &origin));
++                if request_id.is_some() {
++                    continue;
++                }
+                 FrameRequest::FetchSent {
+                     frame,
+                     request,
+diff --git a/crates/dom_js/tests/it/tasks.rs b/crates/dom_js/tests/it/tasks.rs
+index 487b4dd..c3ca233 100644
+--- a/crates/dom_js/tests/it/tasks.rs
++++ b/crates/dom_js/tests/it/tasks.rs
+@@ -58,13 +58,24 @@ struct Sink {
+ }
+ 
+ impl LoadSink for Sink {
+-    fn start_fetch(&self, _: FrameId, request: &dom::FetchRequest) -> Option<u64> {
+-        self.calls
+-            .borrow_mut()
+-            .push(format!("fetch {}", request.url));
++    fn start_fetch(
++        &mut self,
++        _: FrameId,
++        request: &dom::FetchRequest,
++        origin: &dom_api::FetchOrigin,
++    ) -> Option<u64> {
++        self.calls.borrow_mut().push(format!(
++            "fetch {} from {}",
++            request.url,
++            origin.document_url.as_deref().unwrap_or("nowhere")
++        ));
+         (!request.url.ends_with("nowhere")).then_some(7)
+     }
+ 
++    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
++        self
++    }
++
+     fn register_blob_url(&self, _: FrameId, _: &str, _: &dom::BlobData) {
+         self.calls.borrow_mut().push("register".to_owned());
+     }
+@@ -79,9 +90,9 @@ impl LoadSink for Sink {
+ }
+ 
+ /// With a load sink, a `fetch()` is sent as it is called, in order with the
+-/// blob URLs registered and revoked around it, and the host told after
+-/// what went (`FetchSent`, its request's number; none for one the sink
+-/// sent nowhere); none waits for the host's look.
++/// blob URLs registered and revoked around it, its document's URL with
++/// it; the host told after only of the one the sink sent nowhere
++/// (`FetchSent`); none waits for the host's look.
+ #[test]
+ fn a_fetch_goes_to_the_load_sink_as_it_is_called() {
+     let mut page = Page::new("https://example.test/");
+@@ -100,9 +111,9 @@ fn a_fetch_goes_to_the_load_sink_as_it_is_called() {
+         *calls.borrow(),
+         [
+             "register",
+-            "fetch https://example.test/data",
++            "fetch https://example.test/data from https://example.test/",
+             "revoke",
+-            "fetch https://example.test/nowhere"
++            "fetch https://example.test/nowhere from https://example.test/"
+         ]
+     );
+     let sent: Vec<(String, Option<u64>)> = page
+@@ -123,10 +134,7 @@ fn a_fetch_goes_to_the_load_sink_as_it_is_called() {
+         .collect();
+     assert_eq!(
+         sent,
+-        [
+-            ("https://example.test/data".to_owned(), Some(7)),
+-            ("https://example.test/nowhere".to_owned(), None)
+-        ]
++        [("https://example.test/nowhere".to_owned(), None)]
+     );
+ }
+ 
+diff --git a/crates/renderer/src/loader.rs b/crates/renderer/src/loader.rs
+index 320f91e..2fd2fd6 100644
+--- a/crates/renderer/src/loader.rs
++++ b/crates/renderer/src/loader.rs
+@@ -23,16 +23,28 @@ use protocol::renderer::RendererHostMsg;
+ /// thread's, shared with what sends requests from the engine. A document
+ /// the browser didn't commit (a child frame's first `about:blank`, a
+ /// `javascript:` URL's) goes through its creator's.
++/// With each, what DevTools calls its loader (`loaderId`): the navigation
++/// that brought it, none for one no navigation brought (DevTools calls it
++/// by its number then).
+ #[derive(Debug, Clone, Default)]
+-pub(crate) struct DocumentLoaders(Rc<RefCell<HashMap<dom::NodeId, u64>>>);
++pub(crate) struct DocumentLoaders(Rc<RefCell<HashMap<dom::NodeId, (u64, Option<String>)>>>);
+ 
+ impl DocumentLoaders {
+-    pub(crate) fn set(&self, document: dom::NodeId, loader: u64) {
+-        self.0.borrow_mut().insert(document, loader);
++    pub(crate) fn set(&self, document: dom::NodeId, loader: u64, devtools: Option<String>) {
++        self.0.borrow_mut().insert(document, (loader, devtools));
+     }
+ 
+     pub(crate) fn of(&self, document: dom::NodeId) -> Option<u64> {
+-        self.0.borrow().get(&document).copied()
++        self.0.borrow().get(&document).map(|(loader, _)| *loader)
++    }
++
++    /// What DevTools calls `document`'s loader.
++    pub(crate) fn devtools_id(&self, document: dom::NodeId) -> String {
++        self.0
++            .borrow()
++            .get(&document)
++            .and_then(|(_, devtools)| devtools.clone())
++            .unwrap_or_else(|| document.get().to_string())
+     }
+ 
+     /// None: a new DOM's documents are numbered from the start.
+@@ -41,6 +53,53 @@ impl DocumentLoaders {
+     }
+ }
+ 
++/// The `fetch()`es on their way, by request: each one's number, and its
++/// document's: the render thread's, shared with the load sink that sends
++/// them (and records them as it does).
++#[derive(Debug, Clone, Default)]
++pub(crate) struct Fetches(Rc<RefCell<HashMap<u64, (u64, dom::NodeId)>>>);
++
++impl Fetches {
++    pub(crate) fn insert(&self, request_id: u64, fetch: u64, document: dom::NodeId) {
++        self.0.borrow_mut().insert(request_id, (fetch, document));
++    }
++
++    pub(crate) fn remove(&self, request_id: u64) -> Option<(u64, dom::NodeId)> {
++        self.0.borrow_mut().remove(&request_id)
++    }
++
++    pub(crate) fn is_empty(&self) -> bool {
++        self.0.borrow().is_empty()
++    }
++
++    pub(crate) fn clear(&self) {
++        self.0.borrow_mut().clear();
++    }
++
++    /// Each one's number and its document's, as they are now.
++    pub(crate) fn all(&self) -> Vec<(u64, dom::NodeId)> {
++        self.0.borrow().values().copied().collect()
++    }
++
++    /// How many are `document`'s.
++    pub(crate) fn count_of(&self, document: dom::NodeId) -> usize {
++        self.0
++            .borrow()
++            .values()
++            .filter(|(_, of)| *of == document)
++            .count()
++    }
++
++    /// The request of the one numbered `fetch`.
++    pub(crate) fn request_of(&self, fetch: u64) -> Option<u64> {
++        self.0
++            .borrow()
++            .iter()
++            .find(|&(_, &(number, _))| number == fetch)
++            .map(|(&request_id, _)| request_id)
++    }
++}
++
+ /// The next request id, shared by everything in the renderer that sends
+ /// one; and the URL of each request until it is answered, which the page's
+ /// log names a failed load by.
+diff --git a/crates/renderer/src/render_thread.rs b/crates/renderer/src/render_thread.rs
+index c3750d6..648a478 100644
+--- a/crates/renderer/src/render_thread.rs
++++ b/crates/renderer/src/render_thread.rs
+@@ -491,7 +491,7 @@ struct RenderThread {
+     images: std::collections::HashMap<u64, (String, NodeId)>,
+     /// The DOM's `fetch()`es on their way, their requests' ids to
+     /// their numbers, and their documents.
+-    fetches: std::collections::HashMap<u64, (u64, NodeId)>,
++    fetches: crate::loader::Fetches,
+     /// The scripts the DOM queued being fetched, by request.
+     script_fetches: std::collections::HashMap<u64, documents::PendingScriptFetch>,
+     /// The DOM's window's intersection observers' task is queued
+@@ -629,7 +629,7 @@ impl RenderThread {
+             engine: None,
+             engine_is_wasm: false,
+             images: std::collections::HashMap::new(),
+-            fetches: std::collections::HashMap::new(),
++            fetches: crate::loader::Fetches::default(),
+             script_fetches: std::collections::HashMap::new(),
+             intersection_task: false,
+             document: None,
+diff --git a/crates/renderer/src/render_thread/devtools.rs b/crates/renderer/src/render_thread/devtools.rs
+index 5bad06f..da47d20 100644
+--- a/crates/renderer/src/render_thread/devtools.rs
++++ b/crates/renderer/src/render_thread/devtools.rs
+@@ -203,6 +203,8 @@ impl RenderThread {
+             ids: self.next_request_id.clone(),
+             blob_urls: self.blob_urls.clone(),
+             loaders: self.loaders.clone(),
++            network_agent: self.network_agent.clone(),
++            fetches: self.fetches.clone(),
+         }));
+         // `localStorage`, its areas opened waiting for the browser.
+         engine.set_storage_host(Box::new(super::documents::RendererStorageHost {
+diff --git a/crates/renderer/src/render_thread/documents.rs b/crates/renderer/src/render_thread/documents.rs
+index f4380b0..2c58bdb 100644
+--- a/crates/renderer/src/render_thread/documents.rs
++++ b/crates/renderer/src/render_thread/documents.rs
+@@ -689,7 +689,7 @@ impl RenderThread {
+         let node = engine.dom_mut().read(|cx| cx.node_id(document.get(cx.gc)));
+         // Its subresources, its scripts' as it parses too, go through the
+         // browser's loader for it.
+-        self.loaders.set(node, loader);
++        self.loaders.set(node, loader, Some(navigation_id.to_string()));
+         let view = FrameView::new(document.clone(), node, document_id, self.system_colors);
+         match engine
+             .dom_and_layout()
+@@ -920,7 +920,7 @@ impl RenderThread {
+                         let parent_loader = self.loader_of(parent);
+                         if let Some(engine) = self.engine.as_mut() {
+                             let id = engine.dom_mut().read(|cx| cx.node_id(document.get(cx.gc)));
+-                            self.loaders.set(id, parent_loader);
++                            self.loaders.set(id, parent_loader, None);
+                         }
+                         let document_id = self.new_document_id();
+                         let Some((dom, next)) = engine_frame(&mut self.engine) else {
+@@ -1774,7 +1774,13 @@ impl RenderThread {
+                 cx.node_id(owner.get(cx.gc)),
+             )
+         });
+-        self.loaders.set(node, loader);
++        self.loaders.set(
++            node,
++            loader,
++            navigation
++                .as_ref()
++                .map(|navigation| navigation.navigation_id.to_string()),
++        );
+         let view = FrameView::new(document.clone(), node, document_id, self.system_colors)
+             .into_child(frame, owner_id);
+         let top = self.document.as_ref().map(|next| next.frame);
+@@ -3199,11 +3205,7 @@ impl RenderThread {
+             .values()
+             .filter(|(_, of)| *of == document)
+             .count();
+-        let fetches = self
+-            .fetches
+-            .values()
+-            .filter(|(_, of)| *of == document)
+-            .count();
++        let fetches = self.fetches.count_of(document);
+         // Each fewer than the requests the renderer has made.
+         next.pending_sheets
+             .len()
+@@ -4520,7 +4522,7 @@ impl RenderThread {
+                 .wants_stacks()
+                 .then_some(Initiator::Script(stack))
+         });
+-        self.fetches.insert(request_id, (request.id, document));
++        self.fetches.insert(request_id, request.id, document);
+     }
+ 
+     /// A `fetch()` the load sink sent as script called it
+@@ -4554,7 +4556,7 @@ impl RenderThread {
+                     .will_send(request_id, &resource, at, initiator.as_ref());
+             }
+         }
+-        self.fetches.insert(request_id, (fetch, document));
++        self.fetches.insert(request_id, fetch, document);
+     }
+ 
+     /// The `fetch()` numbered `fetch` went nowhere (a revoked blob URL): a
+@@ -4577,9 +4579,10 @@ impl RenderThread {
+         let Some(engine) = &mut self.engine else {
+             return;
+         };
++        let fetches = self.fetches.all();
+         let gone: Vec<u64> = engine.dom_mut().read(|cx| {
+-            self.fetches
+-                .values()
++            fetches
++                .iter()
+                 .filter(|(_, document)| {
+                     cx.node_by_id(*document)
+                         .is_none_or(|document| cx.is_discarded(document))
+@@ -4595,15 +4598,10 @@ impl RenderThread {
+     /// The fetch numbered `id` aborted: its request cancelled, if it is
+     /// still on its way.
+     fn cancel_fetch(&mut self, id: u64) {
+-        let Some(request_id) = self
+-            .fetches
+-            .iter()
+-            .find(|&(_, &(fetch, _))| fetch == id)
+-            .map(|(&request_id, _)| request_id)
+-        else {
++        let Some(request_id) = self.fetches.request_of(id) else {
+             return;
+         };
+-        self.fetches.remove(&request_id);
++        self.fetches.remove(request_id);
+         self.next_request_id.cancelled(request_id);
+         self.network_agent.did_cancel(request_id);
+         let _ = self.to_browser.send(RendererHostMsg::CancelResource {
+@@ -4631,7 +4629,7 @@ impl RenderThread {
+         asked: Option<&str>,
+         result: &LoadResult,
+     ) -> bool {
+-        if let Some((id, _)) = self.fetches.remove(&request_id) {
++        if let Some((id, _)) = self.fetches.remove(request_id) {
+             self.fetch_answered(id, result);
+             return true;
+         }
+@@ -5090,21 +5088,46 @@ pub(super) struct RendererLoadSink {
+     pub(super) ids: crate::loader::RequestIds,
+     pub(super) blob_urls: crate::loader::BlobUrls,
+     pub(super) loaders: crate::loader::DocumentLoaders,
++    pub(super) network_agent: Rc<super::network_agent::NetworkAgent>,
++    pub(super) fetches: crate::loader::Fetches,
+ }
+ 
+ impl dom_api::LoadSink for RendererLoadSink {
+-    fn start_fetch(&self, _: FrameId, request: &dom::FetchRequest) -> Option<u64> {
++    fn start_fetch(
++        &mut self,
++        _: FrameId,
++        request: &dom::FetchRequest,
++        origin: &dom_api::FetchOrigin,
++    ) -> Option<u64> {
+         if fetch_of_revoked_blob(&self.blob_urls, request) {
+             return None;
+         }
++        let document = request.document?;
+         let resource = crate::loader::fetch_resource_request(request);
+         let request_id = self.ids.next();
+         self.ids.sent(request_id, &resource);
++        // Told to DevTools as it is sent, before anything of its response
++        // can come (Blink's `ResourceLoadObserverForFrame::WillSendRequest`).
++        if self.network_agent.enabled()
++            && let (Some(frame_id), Some(document_url)) =
++                (origin.frame_token.clone(), origin.document_url.clone())
++        {
++            let initiator = origin
++                .stack
++                .clone()
++                .filter(|_| self.network_agent.wants_stacks())
++                .map(Initiator::Script);
++            let at = super::network_agent::RequestFrame {
++                frame_id,
++                loader_id: self.loaders.devtools_id(document),
++                document_url,
++            };
++            self.network_agent
++                .will_send(request_id, &resource, at, initiator.as_ref());
++        }
++        self.fetches.insert(request_id, request.id, document);
+         // Through its document's loader.
+-        let loader = request
+-            .document
+-            .and_then(|document| self.loaders.of(document))
+-            .unwrap_or(0);
++        let loader = self.loaders.of(document).unwrap_or(0);
+         let _ = self.to_browser.send(RendererHostMsg::FetchResource {
+             request_id,
+             worker: None,
+@@ -5114,6 +5137,10 @@ impl dom_api::LoadSink for RendererLoadSink {
+         Some(request_id)
+     }
+ 
++    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
++        self
++    }
++
+     fn register_blob_url(&self, frame: FrameId, url: &str, data: &dom::BlobData) {
+         self.blob_urls
+             .register(url, frame, data.type_(), data.shared_bytes());

@@ -1,0 +1,1342 @@
+diff --git a/crates/renderer/src/loader.rs b/crates/renderer/src/loader.rs
+index 2fd2fd6..550de38 100644
+--- a/crates/renderer/src/loader.rs
++++ b/crates/renderer/src/loader.rs
+@@ -54,91 +54,94 @@ impl DocumentLoaders {
+ }
+ 
+ /// The `fetch()`es on their way, by request: each one's number, and its
+-/// document's: the render thread's, shared with the load sink that sends
+-/// them (and records them as it does).
+-#[derive(Debug, Clone, Default)]
+-pub(crate) struct Fetches(Rc<RefCell<HashMap<u64, (u64, dom::NodeId)>>>);
++/// document's.
++#[derive(Debug, Default)]
++pub(crate) struct Fetches(HashMap<u64, (u64, dom::NodeId)>);
+ 
+ impl Fetches {
+-    pub(crate) fn insert(&self, request_id: u64, fetch: u64, document: dom::NodeId) {
+-        self.0.borrow_mut().insert(request_id, (fetch, document));
++    pub(crate) fn insert(&mut self, request_id: u64, fetch: u64, document: dom::NodeId) {
++        self.0.insert(request_id, (fetch, document));
+     }
+ 
+-    pub(crate) fn remove(&self, request_id: u64) -> Option<(u64, dom::NodeId)> {
+-        self.0.borrow_mut().remove(&request_id)
++    pub(crate) fn remove(&mut self, request_id: u64) -> Option<(u64, dom::NodeId)> {
++        self.0.remove(&request_id)
+     }
+ 
+     pub(crate) fn is_empty(&self) -> bool {
+-        self.0.borrow().is_empty()
++        self.0.is_empty()
+     }
+ 
+-    pub(crate) fn clear(&self) {
+-        self.0.borrow_mut().clear();
++    pub(crate) fn clear(&mut self) {
++        self.0.clear();
+     }
+ 
+     /// Each one's number and its document's, as they are now.
+     pub(crate) fn all(&self) -> Vec<(u64, dom::NodeId)> {
+-        self.0.borrow().values().copied().collect()
++        self.0.values().copied().collect()
+     }
+ 
+     /// How many are `document`'s.
+     pub(crate) fn count_of(&self, document: dom::NodeId) -> usize {
+-        self.0
+-            .borrow()
+-            .values()
+-            .filter(|(_, of)| *of == document)
+-            .count()
++        self.0.values().filter(|(_, of)| *of == document).count()
+     }
+ 
+     /// The request of the one numbered `fetch`.
+     pub(crate) fn request_of(&self, fetch: u64) -> Option<u64> {
+         self.0
+-            .borrow()
+             .iter()
+             .find(|&(_, &(number, _))| number == fetch)
+             .map(|(&request_id, _)| request_id)
+     }
+ }
+ 
+-/// The next request id, shared by everything in the renderer that sends
+-/// one; and the URL of each request until it is answered, which the page's
+-/// log names a failed load by.
+-#[derive(Debug, Clone)]
++/// The next request id, of everything in the renderer that sends one; and
++/// the URL of each request until it is answered, which the page's log
++/// names a failed load by.
++#[derive(Debug)]
+ pub(crate) struct RequestIds {
+-    next: Rc<RefCell<SequenceNumber<u64>>>,
+-    in_flight: Rc<RefCell<HashMap<u64, String>>>,
++    next: SequenceNumber<u64>,
++    in_flight: HashMap<u64, String>,
+ }
+ 
+-impl RequestIds {
+-    pub(crate) fn new() -> Self {
++impl Default for RequestIds {
++    fn default() -> Self {
+         Self {
+-            next: Rc::new(RefCell::new(SequenceNumber::starting_at(1))),
+-            in_flight: Rc::default(),
++            next: SequenceNumber::starting_at(1),
++            in_flight: HashMap::new(),
+         }
+     }
++}
+ 
+-    pub(crate) fn next(&self) -> u64 {
+-        self.next.borrow_mut().get_next()
++impl RequestIds {
++    pub(crate) fn next(&mut self) -> u64 {
++        self.next.get_next()
+     }
+ 
+     /// Request `request_id`, `request`, is being sent.
+-    pub(crate) fn sent(&self, request_id: u64, request: &ResourceRequest) {
+-        self.in_flight
+-            .borrow_mut()
+-            .insert(request_id, request.url.clone());
++    pub(crate) fn sent(&mut self, request_id: u64, request: &ResourceRequest) {
++        self.in_flight.insert(request_id, request.url.clone());
+     }
+ 
+     /// Request `request_id` was cancelled.
+-    pub(crate) fn cancelled(&self, request_id: u64) {
+-        self.in_flight.borrow_mut().remove(&request_id);
++    pub(crate) fn cancelled(&mut self, request_id: u64) {
++        self.in_flight.remove(&request_id);
+     }
+ 
+     /// Request `request_id` was answered: its URL, if it was sent.
+-    pub(crate) fn answered(&self, request_id: u64) -> Option<String> {
+-        self.in_flight.borrow_mut().remove(&request_id)
++    pub(crate) fn answered(&mut self, request_id: u64) -> Option<String> {
++        self.in_flight.remove(&request_id)
+     }
+ }
+ 
++/// What the renderer's requests are numbered and recorded by: one owner,
++/// the engine's load sink while there is one (it sends `fetch()`es as
++/// script calls it), else the render thread (`RenderThread::load_state`).
++#[derive(Debug, Default)]
++pub(crate) struct LoadState {
++    pub(crate) ids: RequestIds,
++    pub(crate) fetches: Fetches,
++}
++
+ /// The blob URLs this renderer's realms registered (Blink's
+ /// `PublicURLManager`), which the browser serves (`RegisterBlobUrl`). A
+ /// revoked one is revoked here at once, for the `fetch()`es after it; the
+diff --git a/crates/renderer/src/render_thread.rs b/crates/renderer/src/render_thread.rs
+index 648a478..4897001 100644
+--- a/crates/renderer/src/render_thread.rs
++++ b/crates/renderer/src/render_thread.rs
+@@ -22,7 +22,7 @@ use layout::TextContext;
+ use crate::canvas_encoder::CanvasEncoder;
+ use crate::clock::Clock;
+ use crate::frame_widget::FrameWidget;
+-use crate::loader::{BlobUrls, RequestIds};
++use crate::loader::BlobUrls;
+ use crate::navigation_timing::NavigationTiming;
+ use crate::pending_user_input::{Pending, PendingUserInput};
+ use crate::task_queue::{MainThreadScheduler, MainThreadTask, RendererReceiver, TaskQueues};
+@@ -31,6 +31,7 @@ mod css_agent;
+ mod devtools;
+ mod document_body;
+ mod documents;
++mod engine_slot;
+ mod dom_agent;
+ mod log_agent;
+ mod network_agent;
+@@ -380,9 +381,6 @@ struct RenderThread {
+     /// compares it before and after, as Blink's `LatencyInfoSwapPromiseMonitor`
+     /// watches for a commit request while an event is dispatched.
+     main_frame_requests: u64,
+-    /// Subresource request ids are unique per renderer, so a response for
+-    /// a document that has gone is recognised and dropped.
+-    next_request_id: RequestIds,
+     /// The blob URLs the realms registered.
+     blob_urls: BlobUrls,
+     /// The loader each document's subresources go through.
+@@ -480,7 +478,11 @@ struct RenderThread {
+     overlay_agent: Rc<overlay_agent::OverlayAgent>,
+     /// The DOM's engine, made at its first document, or at DevTools'
+     /// first command for its inspector (`make_engine`).
+-    engine: Option<Box<dyn dom_api::ScriptEngine>>,
++    /// The page's engine, and the request ids (unique per renderer, so a
++    /// response for a document that has gone is recognised and dropped)
++    /// and `fetch()`es on their way, lent to its load sink while the
++    /// engine is reached (`EngineSlot`).
++    engine: engine_slot::EngineSlot,
+     /// Whether `engine` is the wasm one (the page's document declared its
+     /// scripts wasm): a document of the other kind takes another engine.
+     engine_is_wasm: bool,
+@@ -489,9 +491,6 @@ struct RenderThread {
+     /// memory cache); with the document that asked first, whose network
+     /// idleness counts it.
+     images: std::collections::HashMap<u64, (String, NodeId)>,
+-    /// The DOM's `fetch()`es on their way, their requests' ids to
+-    /// their numbers, and their documents.
+-    fetches: crate::loader::Fetches,
+     /// The scripts the DOM queued being fetched, by request.
+     script_fetches: std::collections::HashMap<u64, documents::PendingScriptFetch>,
+     /// The DOM's window's intersection observers' task is queued
+@@ -591,7 +590,6 @@ impl RenderThread {
+             resize_loop_error: false,
+             animations_running: false,
+             main_frame_requests: 0,
+-            next_request_id: RequestIds::new(),
+             blob_urls,
+             loaders,
+             popup: None,
+@@ -626,10 +624,9 @@ impl RenderThread {
+             css_refetches: std::collections::HashMap::new(),
+             overlay_agent,
+             scheduler,
+-            engine: None,
++            engine: engine_slot::EngineSlot::default(),
+             engine_is_wasm: false,
+             images: std::collections::HashMap::new(),
+-            fetches: crate::loader::Fetches::default(),
+             script_fetches: std::collections::HashMap::new(),
+             intersection_task: false,
+             document: None,
+@@ -1138,7 +1135,7 @@ impl RenderThread {
+                 // and this place would drop them).
+                 self.handle_frame_requests();
+                 let history = self.own_history_entries.place(index, length, entries_heard);
+-                if let Some(engine) = &mut self.engine {
++                if let Some(engine) = self.engine.as_mut() {
+                     engine.set_session_history(history);
+                 }
+             }
+@@ -1196,7 +1193,7 @@ impl RenderThread {
+             RendererMsg::DevToolsMainFrameToken(token) => {
+                 self.devtools_main_frame_token = Some(token);
+                 // The realms made from now on are told by it.
+-                if let Some(engine) = &mut self.engine {
++                if let Some(engine) = self.engine.as_mut() {
+                     engine.set_main_frame_token(token);
+                 }
+             }
+@@ -1274,7 +1271,7 @@ impl RenderThread {
+             return;
+         }
+         self.page_hidden = !visible;
+-        if let Some(engine) = &mut self.engine {
++        if let Some(engine) = self.engine.as_mut() {
+             engine.set_page_visible(visible);
+             self.request_next_frame_if_dom_changed();
+         }
+@@ -1760,7 +1757,7 @@ impl RenderThread {
+         // (`FrameRequest::FetchSent`): this may be one's response.
+         self.handle_frame_requests();
+         self.network_agent.did_finish(request_id, &result);
+-        let url = self.next_request_id.answered(request_id);
++        let url = self.engine.state_mut().ids.answered(request_id);
+         // DevTools' `CSS`'s: a sheet's text, its alone.
+         if let Some((key, frame)) = self.css_refetches.remove(&request_id) {
+             self.log_load(request_id, url.as_deref(), &result);
+@@ -1789,7 +1786,7 @@ impl RenderThread {
+             // HTML's "update the rendering": its documents found once, for
+             // every step below (each walked the frame tree's documents for
+             // their iframes again).
+-            if let Some(engine) = &mut self.engine {
++            if let Some(engine) = self.engine.as_mut() {
+                 engine.begin_rendering_update();
+             }
+             self.flush_autofocus_candidates();
+@@ -1815,7 +1812,7 @@ impl RenderThread {
+         } else {
+             self.widget().layer_tree_host.abort_main_frame();
+         }
+-        if let Some(engine) = &mut self.engine {
++        if let Some(engine) = self.engine.as_mut() {
+             engine.end_rendering_update();
+         }
+     }
+diff --git a/crates/renderer/src/render_thread/devtools.rs b/crates/renderer/src/render_thread/devtools.rs
+index da47d20..bbb496e 100644
+--- a/crates/renderer/src/render_thread/devtools.rs
++++ b/crates/renderer/src/render_thread/devtools.rs
+@@ -40,7 +40,7 @@ impl RenderThread {
+     }
+ 
+     pub(super) fn devtools_attach(&mut self, session: String) {
+-        if let Some(engine) = &mut self.engine {
++        if let Some(engine) = self.engine.as_mut() {
+             engine.devtools_attach(session.clone(), devtools_send(&self.to_browser, &session));
+         }
+         self.devtools_sessions.retain(|known| *known != session);
+@@ -48,7 +48,7 @@ impl RenderThread {
+     }
+ 
+     pub(super) fn devtools_detach(&mut self, session: &str) {
+-        if let Some(engine) = &mut self.engine {
++        if let Some(engine) = self.engine.as_mut() {
+             engine.devtools_detach(session);
+         }
+         self.page_agent.detach(session);
+@@ -58,7 +58,7 @@ impl RenderThread {
+         self.css_agent
+             .detach(session, self.engine.as_mut().map(|engine| engine.dom_mut()));
+         self.overlay_agent.detach(session);
+-        if let Some(engine) = &mut self.engine {
++        if let Some(engine) = self.engine.as_mut() {
+             engine
+                 .dom_mut()
+                 .set_dom_changes_wanted(self.dom_agent.any_enabled());
+@@ -75,7 +75,7 @@ impl RenderThread {
+             self.page_agent.update(frames);
+             if self.dom_agent.any_enabled() {
+                 let frames = self.dom_frames();
+-                if let Some(engine) = &mut self.engine {
++                if let Some(engine) = self.engine.as_mut() {
+                     self.dom_agent.set_frames(engine.dom_mut(), frames);
+                 }
+             }
+@@ -84,7 +84,7 @@ impl RenderThread {
+ 
+     /// Tells the `DOM` agent's sessions of the DOM's changes since.
+     pub(super) fn tell_dom_changes(&mut self) {
+-        if let Some(engine) = &mut self.engine {
++        if let Some(engine) = self.engine.as_mut() {
+             self.dom_agent.take_changes(engine.dom_mut());
+         }
+     }
+@@ -140,9 +140,10 @@ impl RenderThread {
+             return;
+         }
+         if self.engine.is_none() {
+-            self.engine = Some(self.make_engine());
++            let engine = self.make_engine();
++            self.engine.put(engine);
+         }
+-        if let Some(engine) = &mut self.engine {
++        if let Some(engine) = self.engine.as_mut() {
+             let mut page = engine.devtools_page();
+             if self.dom_agent.handle(session, message, &mut *page) {
+                 self.css_agent.dom_answered(session, &mut *page);
+@@ -200,11 +201,10 @@ impl RenderThread {
+         // `fetch()` and blob URLs at the call, on the thread's handles.
+         engine.set_load_sink(Box::new(super::documents::RendererLoadSink {
+             to_browser: self.to_browser.clone(),
+-            ids: self.next_request_id.clone(),
+             blob_urls: self.blob_urls.clone(),
+             loaders: self.loaders.clone(),
+             network_agent: self.network_agent.clone(),
+-            fetches: self.fetches.clone(),
++            lent: None,
+         }));
+         // `localStorage`, its areas opened waiting for the browser.
+         engine.set_storage_host(Box::new(super::documents::RendererStorageHost {
+@@ -260,7 +260,7 @@ impl RenderThread {
+     /// The loop waits for its next task (`idle`), or has one: the engine's
+     /// inspector tells the two apart in a profile.
+     pub(super) fn set_idle(&mut self, idle: bool) {
+-        if let Some(engine) = &mut self.engine {
++        if let Some(engine) = self.engine.as_mut() {
+             engine.set_idle(idle);
+         }
+     }
+@@ -268,7 +268,7 @@ impl RenderThread {
+     /// The warnings the engine's script earned since (Blink's
+     /// `ExecutionContext::AddConsoleMessage`): the page's log has them.
+     pub(super) fn log_console_warnings(&mut self) {
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         for text in engine.dom_mut().take_console_warnings() {
+diff --git a/crates/renderer/src/render_thread/documents.rs b/crates/renderer/src/render_thread/documents.rs
+index 2c58bdb..c61319c 100644
+--- a/crates/renderer/src/render_thread/documents.rs
++++ b/crates/renderer/src/render_thread/documents.rs
+@@ -553,9 +553,9 @@ pub(super) fn update_lifecycle_and_layers(
+ }
+ 
+ pub(super) fn engine_frame(
+-    engine: &mut Option<Box<dyn ScriptEngine>>,
++    engine: &mut super::engine_slot::EngineSlot,
+ ) -> Option<(&mut Dom, &mut Frame)> {
+-    let (dom, layout) = engine.as_mut()?.dom_and_layout();
++    let (dom, layout) = engine.unlent_mut()?.dom_and_layout();
+     Some((dom, layout?.as_any_mut().downcast_mut::<Frame>()?))
+ }
+ 
+@@ -598,7 +598,8 @@ impl RenderThread {
+         });
+         self.engine_is_wasm = wasm;
+         if self.engine.is_none() {
+-            self.engine = Some(self.make_engine());
++            let engine = self.make_engine();
++            self.engine.put(engine);
+         }
+         let engine = self.engine.as_mut().expect("just made");
+         // The system's focus may have come before the first document (and
+@@ -757,7 +758,7 @@ impl RenderThread {
+     /// of its DOM let go before its heap, and the frame's text and widget
+     /// taken back for the next engine's frame.
+     fn replace_engine(&mut self, wasm: bool) -> Option<(std::time::Instant, std::time::Instant)> {
+-        let mut engine = self.engine.take()?;
++        let mut engine = self.engine.take_to_drop()?;
+         let top = engine.top_frame();
+         let unloaded = engine.unload_document(top);
+         self.dom_agent.dom_gone();
+@@ -769,7 +770,7 @@ impl RenderThread {
+         // What was asked for its documents: a response still to come is
+         // no one's (the next DOM's nodes are numbered from the start).
+         self.images.clear();
+-        self.fetches.clear();
++        self.engine.state_mut().fetches.clear();
+         self.script_fetches.clear();
+         self.css_refetches.clear();
+         // Its documents' workers with them.
+@@ -793,7 +794,8 @@ impl RenderThread {
+         // documents get them again.
+         let _ = self.to_browser.send(RendererHostMsg::ForgetStorageAreas);
+         self.engine_is_wasm = wasm;
+-        self.engine = Some(self.make_engine());
++        let engine = self.make_engine();
++            self.engine.put(engine);
+         unloaded
+     }
+ 
+@@ -878,7 +880,7 @@ impl RenderThread {
+     /// that went dropped with its view and loading.
+     pub(super) fn handle_frame_requests(&mut self) {
+         loop {
+-            let Some(engine) = &mut self.engine else {
++            let Some(engine) = self.engine.as_mut() else {
+                 return;
+             };
+             let requests = engine.take_frame_requests();
+@@ -1177,7 +1179,7 @@ impl RenderThread {
+         else {
+             return;
+         };
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         // HTML's: its base URL is its document's.
+@@ -1223,7 +1225,7 @@ impl RenderThread {
+             self.doc(*frame)
+                 .is_some_and(|next| next.navigation_id == document)
+         });
+-        let (Some(frame), Ok(new_url), Some(engine)) = (frame, Url::parse(url), &mut self.engine)
++        let (Some(frame), Ok(new_url), Some(engine)) = (frame, Url::parse(url), self.engine.as_mut())
+         else {
+             let _ = self
+                 .to_browser
+@@ -1573,7 +1575,7 @@ impl RenderThread {
+         ) else {
+             return;
+         };
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         let other_origin = engine.dom_mut().read(|cx| {
+@@ -1613,7 +1615,7 @@ impl RenderThread {
+             else {
+                 continue;
+             };
+-            if let Some(engine) = &mut self.engine {
++            if let Some(engine) = self.engine.as_mut() {
+                 let _task = trace_event::trace_event!("ThreadControllerImpl::RunTask");
+                 engine.fire_event(&owner, dom::names::event::LOAD);
+             }
+@@ -1710,7 +1712,7 @@ impl RenderThread {
+         // The realm before it goes, and the blob URLs it made.
+         self.blob_urls.revoke_frame(frame);
+         let clock = self.clock;
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         let (body, start) = DocumentBody::new(mime_type, charset, body);
+@@ -2035,7 +2037,7 @@ impl RenderThread {
+         };
+         next.aborted = loaded.end.as_ref().is_some_and(|end| end.error.is_some());
+         if let Some(end) = &loaded.end
+-            && let Some(engine) = &mut self.engine
++            && let Some(engine) = self.engine.as_mut()
+         {
+             let clock = self.clock;
+             let response_end =
+@@ -2082,7 +2084,7 @@ impl RenderThread {
+         else {
+             return;
+         };
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         let parsed = engine
+@@ -2157,7 +2159,7 @@ impl RenderThread {
+             // custom elements it defines at once), and given back.
+             let lent = self.engine.take().expect("the engine, checked above");
+             let (state, engine) = parser.resume(lent);
+-            self.engine = Some(engine);
++            self.engine.put(engine);
+             // Where the elements it made start, before their loads do, for
+             // DevTools' `Network` (kept only while a session has it on).
+             let lines = parser.take_load_lines();
+@@ -2199,7 +2201,7 @@ impl RenderThread {
+                     }
+                     if let Some(engine) = self.engine.take() {
+                         let (engine, lines) = parser.finish_taking_load_lines(engine);
+-                        self.engine = Some(engine);
++                        self.engine.put(engine);
+                         self.keep_parser_lines(frame, lines);
+                     }
+                     // Parsed: it may be rendered now, body or not.
+@@ -2231,7 +2233,7 @@ impl RenderThread {
+                     // hear of what the parser inserted before the script is
+                     // prepared (Blink's
+                     // `HTMLParserScriptRunner::ProcessScriptElement`).
+-                    if let Some(engine) = &mut self.engine {
++                    if let Some(engine) = self.engine.as_mut() {
+                         engine.perform_microtask_checkpoint();
+                     }
+                     let line = u32::try_from(line).unwrap_or(u32::MAX);
+@@ -2342,7 +2344,7 @@ impl RenderThread {
+                 ready: None,
+             });
+         }
+-        if let Some(engine) = &mut self.engine {
++        if let Some(engine) = self.engine.as_mut() {
+             engine.start_module_graph(&document, start);
+         }
+     }
+@@ -2435,7 +2437,7 @@ impl RenderThread {
+     fn execute_parser_script(&mut self, frame: FrameId, script: ParserScript) {
+         // A module script's, the engine's (which looks at where it is).
+         if script.module {
+-            if let Some(engine) = &mut self.engine {
++            if let Some(engine) = self.engine.as_mut() {
+                 engine.run_ready_script(&script.element);
+             }
+             self.send_harness_results();
+@@ -2445,7 +2447,7 @@ impl RenderThread {
+             return;
+         };
+         let (document, url) = (next.document.clone(), next.url.clone());
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         let moved = engine.dom_mut().read(|cx| {
+@@ -2502,7 +2504,7 @@ impl RenderThread {
+                         use_credentials: false,
+                     },
+                 );
+-                if let Some(engine) = &mut self.engine {
++                if let Some(engine) = self.engine.as_mut() {
+                     engine.fire_event(&script.element, dom::names::event::LOAD);
+                 }
+                 self.send_harness_results();
+@@ -2520,7 +2522,7 @@ impl RenderThread {
+         // A wasm document's scripts are wasm (its top-level frame's: it
+         // has no other).
+         let wasm = self.engine_is_wasm;
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return Prepared::Nothing;
+         };
+         engine.dom_mut().mutate(|cx| {
+@@ -2544,7 +2546,7 @@ impl RenderThread {
+     /// "execute the script element": none for one in a shadow tree), and
+     /// reports testharness's results if it gave any.
+     fn run_script(&mut self, frame: FrameId, script: &NodeRoot, classic: &ClassicScript<'_>) {
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         engine.perform_microtask_checkpoint();
+@@ -2593,7 +2595,7 @@ impl RenderThread {
+             return;
+         };
+         next.readiness = Readiness::Deferring;
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         engine.document_ready(frame, DocumentReadiness::Interactive);
+@@ -2617,12 +2619,12 @@ impl RenderThread {
+         next.deferred_scripts.clear();
+         next.readiness = Readiness::Loaded;
+         let child_of = next.child_of.clone();
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         engine.document_ready(frame, DocumentReadiness::Interactive);
+         self.handle_frame_requests();
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         engine.document_ready(frame, DocumentReadiness::Aborted);
+@@ -2670,7 +2672,7 @@ impl RenderThread {
+         };
+         next.readiness = Readiness::Parsed;
+         let top = next.child_of.is_none();
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         engine.document_ready(frame, DocumentReadiness::ContentLoaded);
+@@ -2716,7 +2718,7 @@ impl RenderThread {
+     pub(super) fn start_script_fetches(&mut self) {
+         // As `start_image_fetches`: a blob URL registered first.
+         self.handle_frame_requests();
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         let fetches = engine.dom_mut().take_script_fetches();
+@@ -2801,7 +2803,7 @@ impl RenderThread {
+         }
+         next.url = url.clone();
+         let document = next.document.clone();
+-        if let Some(engine) = &mut self.engine {
++        if let Some(engine) = self.engine.as_mut() {
+             engine
+                 .dom_mut()
+                 .mutate(|cx| cx.set_document_url(document.get(cx.gc), url.as_str()));
+@@ -2876,7 +2878,7 @@ impl RenderThread {
+             dom.mutate(|cx| view.update_style_and_layout(cx));
+         }
+         self.start_image_fetches();
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         // Its images that delay it (not a lazy one's, as in Chrome), and
+@@ -2904,7 +2906,7 @@ impl RenderThread {
+     /// The window `load` tasks that ran since the last look
+     /// (`Dom::take_loaded_documents`): each document's load ends.
+     fn finish_loaded_documents(&mut self) {
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         let loaded = engine.dom_mut().take_loaded_documents();
+@@ -2928,7 +2930,7 @@ impl RenderThread {
+         }
+         next.readiness = Readiness::Loaded;
+         let child_of = next.child_of.clone();
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         match child_of {
+@@ -2966,7 +2968,7 @@ impl RenderThread {
+     /// last one sent (the first, empty or not, at once: the browser shows
+     /// the URL for an empty one, as before any).
+     pub(super) fn update_title(&mut self) {
+-        let (Some(engine), Some(next)) = (&mut self.engine, &mut self.document) else {
++        let (Some(engine), Some(next)) = (self.engine.as_mut(), &mut self.document) else {
+             return;
+         };
+         let version = engine.dom_mut().read(|cx| cx.tree_version());
+@@ -3185,7 +3187,9 @@ impl RenderThread {
+     /// counts): its sheets, its parser's scripts and those its DOM queued,
+     /// the images it asked for first, its `fetch()`es. Not a child frame's
+     /// `src` (its own document's request).
+-    fn requests_in_flight(&self, frame: FrameId, document: dom::NodeId) -> usize {
++    fn requests_in_flight(&mut self, frame: FrameId, document: dom::NodeId) -> usize {
++        // Before its document is borrowed: they may be the engine's sink's.
++        let fetches = self.engine.state_mut().fetches.count_of(document);
+         let Some(next) = self.doc(frame) else {
+             return 0;
+         };
+@@ -3205,7 +3209,6 @@ impl RenderThread {
+             .values()
+             .filter(|(_, of)| *of == document)
+             .count();
+-        let fetches = self.fetches.count_of(document);
+         // Each fewer than the requests the renderer has made.
+         next.pending_sheets
+             .len()
+@@ -3218,7 +3221,7 @@ impl RenderThread {
+     /// The DOM's frames' documents whose network has been quiet long
+     /// enough (`check_network_idle`'s).
+     pub(super) fn check_network_idle(&mut self) {
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         let documents: Vec<(FrameId, dom::NodeId)> = self
+@@ -3286,7 +3289,7 @@ impl RenderThread {
+         };
+         let document = next.document.clone();
+         let requested = next.requested_links.clone();
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         let links: Vec<LinkToLoad> = engine.dom_mut().read(|cx| {
+@@ -3485,7 +3488,7 @@ impl RenderThread {
+     pub(super) fn handle_popup_requests(&mut self) {
+         // The selects' events may ask for more; a few rounds at most.
+         for _ in 0..4 {
+-            let Some(engine) = &mut self.engine else {
++            let Some(engine) = self.engine.as_mut() else {
+                 return;
+             };
+             let requests = engine.dom_mut().mutate(|cx| cx.take_popup_requests());
+@@ -3574,7 +3577,7 @@ impl RenderThread {
+ 
+     /// Tells `select` its popup closed with `result`.
+     pub(super) fn close_popup(&mut self, select: dom::NodeId, result: PopupMenuResult) {
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         let result = match result {
+@@ -3591,7 +3594,7 @@ impl RenderThread {
+         // highlighted, a click inspects it, and the page sees none of it
+         // (Blink's `InspectorOverlayAgent::HandleInputEvent`).
+         if self.overlay_agent.inspecting()
+-            && let Some(engine) = &mut self.engine
++            && let Some(engine) = self.engine.as_mut()
+         {
+             let mut page = engine.devtools_page();
+             match *event {
+@@ -3609,7 +3612,7 @@ impl RenderThread {
+             }
+         }
+         if let InputEvent::Key(key) = event {
+-            let Some(engine) = &mut self.engine else {
++            let Some(engine) = self.engine.as_mut() else {
+                 return;
+             };
+             let result = engine.handle_key(&KeyInput {
+@@ -3685,7 +3688,7 @@ impl RenderThread {
+             self.close_popup(select, PopupMenuResult::Canceled { by_press: true });
+             self.popup_closed_by_press = Some(select);
+         }
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         let cursor = engine.handle_mouse(&MouseInput {
+@@ -3727,7 +3730,7 @@ impl RenderThread {
+             return;
+         }
+         let _span = trace_event::trace_event!("MouseEventManager::RecomputeMouseHoverState");
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         let cursor = engine.recompute_under_mouse();
+@@ -3765,7 +3768,7 @@ impl RenderThread {
+         else {
+             return;
+         };
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         let point = PointF::new(x, y);
+@@ -3811,7 +3814,7 @@ impl RenderThread {
+     /// new DOM's documents in tree order (`ScriptEngine::
+     /// report_media_query_changes`), before the animation frame callbacks.
+     pub(super) fn report_media_query_changes(&mut self) {
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         for frame in engine.frames_in_tree_order() {
+@@ -3827,7 +3830,7 @@ impl RenderThread {
+     /// on is styled in this frame's rendering update; frames are wanted
+     /// while they run.
+     pub(super) fn update_animations(&mut self, frame_time: std::time::Instant) {
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         let _span =
+@@ -3859,7 +3862,7 @@ impl RenderThread {
+             frame.view.child_frames_shown(&mut shown);
+         }
+         let top = self.document.as_ref().map(|next| next.frame);
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         let mut running = false;
+@@ -3875,7 +3878,7 @@ impl RenderThread {
+     /// (`ScriptEngine::run_animation_frames`), at this main frame's time,
+     /// before its rendering update: what they change is drawn in it.
+     pub(super) fn run_animation_frames(&mut self, frame_time: std::time::Instant) {
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         if !engine.has_animation_frames() {
+@@ -3900,7 +3903,7 @@ impl RenderThread {
+         if self.render_blocked() {
+             return;
+         }
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         // Each document's loop in tree order (HTML's: for each of the
+@@ -3917,7 +3920,7 @@ impl RenderThread {
+         if self.frame_render_blocked(frame) {
+             return;
+         }
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         if !engine.has_resize_observations(frame) {
+@@ -3929,7 +3932,7 @@ impl RenderThread {
+             if let Some((dom, view)) = engine_frame(&mut self.engine) {
+                 dom.mutate(|cx| view.update_lifecycle_to_pre_paint(cx));
+             }
+-            let Some(engine) = &mut self.engine else {
++            let Some(engine) = self.engine.as_mut() else {
+                 return;
+             };
+             let round = engine.gather_and_broadcast_resizes(frame, depth);
+@@ -3938,7 +3941,7 @@ impl RenderThread {
+                 None => break round.skipped,
+             }
+         };
+-        if skipped && let Some(engine) = &mut self.engine {
++        if skipped && let Some(engine) = self.engine.as_mut() {
+             engine.report_resize_loop_error(frame);
+             self.resize_loop_error = true;
+         }
+@@ -3951,7 +3954,7 @@ impl RenderThread {
+     pub(super) fn set_page_focused(&mut self, focused: bool) {
+         // Kept for the first document, which may come later.
+         let changed = std::mem::replace(&mut self.page_focused, focused) != focused;
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         engine.set_page_focused(focused);
+@@ -3967,7 +3970,7 @@ impl RenderThread {
+     /// `RendererMsg::SetInitialFocus` on the DOM: Tab from the toolbar
+     /// into the page (`ScriptEngine::set_initial_focus`).
+     pub(super) fn set_document_initial_focus(&mut self, reverse: bool) {
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         engine.set_initial_focus(reverse);
+@@ -3979,7 +3982,7 @@ impl RenderThread {
+     /// start of the rendering update
+     /// (`ScriptEngine::flush_autofocus_candidates`).
+     pub(super) fn flush_autofocus_candidates(&mut self) {
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         engine.flush_autofocus_candidates();
+@@ -3990,7 +3993,7 @@ impl RenderThread {
+     /// HTML's focus fixup of the DOM's document at the rendering update
+     /// (`ScriptEngine::run_focus_fixup`).
+     pub(super) fn run_focus_fixup(&mut self) {
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         engine.run_focus_fixup();
+@@ -4001,7 +4004,7 @@ impl RenderThread {
+     /// Asks for a main frame if the DOM's trees changed since the
+     /// rendering was last asked for (`request_main_frame_if_dom_changed`).
+     pub(super) fn request_next_frame_if_dom_changed(&mut self) {
+-        let (Some(engine), Some(next)) = (&mut self.engine, &mut self.document) else {
++        let (Some(engine), Some(next)) = (self.engine.as_mut(), &mut self.document) else {
+             return;
+         };
+         let (version, intersections, resizes, canvas_draws) = engine.dom_mut().read(|cx| {
+@@ -4047,7 +4050,7 @@ impl RenderThread {
+         let changed = frame.set_viewport(viewport, dsf);
+         frame.set_window_screen_rect(window);
+         // Its `<img>`s with `srcset` or in a `<picture>` select again.
+-        if changed && let Some(engine) = &mut self.engine {
++        if changed && let Some(engine) = self.engine.as_mut() {
+             let top = engine.top_frame();
+             engine.react_to_environment_changes(top);
+         }
+@@ -4133,7 +4136,7 @@ impl RenderThread {
+         if engine_frame(&mut self.engine).is_some_and(|(_, frame)| frame.view.has_scroll_events()) {
+             self.request_main_frame();
+         }
+-        if let Some(engine) = &mut self.engine {
++        if let Some(engine) = self.engine.as_mut() {
+             let any = !resized.is_empty();
+             for frame in resized {
+                 engine.react_to_environment_changes(frame);
+@@ -4181,7 +4184,7 @@ impl RenderThread {
+         if !std::mem::take(&mut self.intersection_task) {
+             return;
+         }
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         engine.notify_intersection_observers();
+@@ -4203,7 +4206,7 @@ impl RenderThread {
+             return;
+         }
+         self.request_main_frame();
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         for target in due {
+@@ -4230,7 +4233,7 @@ impl RenderThread {
+     /// The DOM's document's timers due now (`until_next_due` woke the
+     /// loop for them), then its testharness results if they gave any.
+     pub(super) fn run_due_tasks(&mut self) {
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         if engine.run_due_tasks() {
+@@ -4260,7 +4263,7 @@ impl RenderThread {
+     /// Whether the DOM's windows have idle callbacks waiting, and one
+     /// they may run in the idle period running.
+     pub(super) fn idle_callbacks(&mut self) -> (bool, bool) {
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return (false, false);
+         };
+         if !engine.has_idle_callbacks() {
+@@ -4271,7 +4274,7 @@ impl RenderThread {
+ 
+     /// An idle period starts in the DOM's windows too.
+     pub(super) fn start_idle_period(&mut self) {
+-        if let Some(engine) = &mut self.engine {
++        if let Some(engine) = self.engine.as_mut() {
+             engine.start_idle_period();
+         }
+     }
+@@ -4281,7 +4284,7 @@ impl RenderThread {
+     /// testharness results if it gave any.
+     pub(super) fn run_document_idle_callback(&mut self, deadline: f64) {
+         let clock = self.clock;
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         // A deadline past what an `Instant` holds: now's.
+@@ -4301,7 +4304,7 @@ impl RenderThread {
+         // handled (a task's blob URLs among them): the browser hears of a
+         // blob URL before a load of it.
+         self.handle_frame_requests();
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         let fetches = engine.dom_mut().take_image_fetches();
+@@ -4318,7 +4321,7 @@ impl RenderThread {
+                 && parsed.scheme() == "blob"
+                 && self.blob_urls.is_revoked(&parsed)
+             {
+-                if let Some(engine) = &mut self.engine {
++                if let Some(engine) = self.engine.as_mut() {
+                     engine
+                         .dom_mut()
+                         .mutate(|cx| cx.image_fetched(&url, None, true));
+@@ -4348,7 +4351,7 @@ impl RenderThread {
+                 .or_else(|| self.document.as_ref().map(|next| next.frame));
+             let request_id = match frame {
+                 Some(frame) if self.network_agent.enabled() => {
+-                    let request_id = self.next_request_id.next();
++                    let request_id = self.engine.state_mut().ids.next();
+                     let initiator = self.initiator(frame, &asker);
+                     if let Some(at) = self.request_frame(frame) {
+                         self.network_agent
+@@ -4358,7 +4361,7 @@ impl RenderThread {
+                     request_id
+                 }
+                 _ => {
+-                    let request_id = self.next_request_id.next();
++                    let request_id = self.engine.state_mut().ids.next();
+                     self.send_request(request_id, loader, request);
+                     request_id
+                 }
+@@ -4370,7 +4373,7 @@ impl RenderThread {
+     /// What the DOM's `toBlob` calls are to encode
+     /// (`Dom::take_canvas_encodes`), sent to the encoder thread, in order.
+     pub(super) fn start_canvas_encodes(&mut self) {
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         for encode in engine.dom_mut().take_canvas_encodes() {
+@@ -4411,7 +4414,7 @@ impl RenderThread {
+     /// DOM, which queues the task that calls its callback
+     /// (`Cx::canvas_encoded`).
+     pub(super) fn canvas_encoded(&mut self, id: u64, file: Option<Vec<u8>>) {
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         engine.dom_mut().mutate(|cx| cx.canvas_encoded(id, file));
+@@ -4448,7 +4451,7 @@ impl RenderThread {
+                 size,
+             ))
+         });
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return true;
+         };
+         let origin_clean = !matches!(
+@@ -4470,7 +4473,7 @@ impl RenderThread {
+     /// The DOM's engine's platform tasks that are ready, with a
+     /// microtask checkpoint after them.
+     pub(super) fn run_platform_tasks(&mut self) {
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         if engine.run_platform_tasks() {
+@@ -4482,7 +4485,7 @@ impl RenderThread {
+     /// The DOM's document's testharness results, once its page
+     /// reported them (web tests only).
+     pub(super) fn send_harness_results(&mut self) {
+-        let (Some(engine), Some(next)) = (&mut self.engine, &self.document) else {
++        let (Some(engine), Some(next)) = (self.engine.as_mut(), &self.document) else {
+             return;
+         };
+         if let Some(results) = engine.take_harness_results() {
+@@ -4522,7 +4525,7 @@ impl RenderThread {
+                 .wants_stacks()
+                 .then_some(Initiator::Script(stack))
+         });
+-        self.fetches.insert(request_id, request.id, document);
++        self.engine.state_mut().fetches.insert(request_id, request.id, document);
+     }
+ 
+     /// A `fetch()` the load sink sent as script called it
+@@ -4556,13 +4559,13 @@ impl RenderThread {
+                     .will_send(request_id, &resource, at, initiator.as_ref());
+             }
+         }
+-        self.fetches.insert(request_id, fetch, document);
++        self.engine.state_mut().fetches.insert(request_id, fetch, document);
+     }
+ 
+     /// The `fetch()` numbered `fetch` went nowhere (a revoked blob URL): a
+     /// network error, in a task of its own (this one).
+     fn fetch_went_nowhere(&mut self, fetch: u64) {
+-        if let Some(engine) = &mut self.engine {
++        if let Some(engine) = self.engine.as_mut() {
+             engine.fetch_response(fetch, Err(()));
+         }
+         self.send_harness_results();
+@@ -4573,13 +4576,14 @@ impl RenderThread {
+     /// `FetchManager` cancels its loaders as its execution context is
+     /// destroyed), their promises never settled.
+     fn cancel_fetches_of_gone_documents(&mut self) {
+-        if self.fetches.is_empty() {
++        if self.engine.state_mut().fetches.is_empty() {
+             return;
+         }
+-        let Some(engine) = &mut self.engine else {
++        // Before the engine is borrowed: they may be its sink's.
++        let fetches = self.engine.state_mut().fetches.all();
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+-        let fetches = self.fetches.all();
+         let gone: Vec<u64> = engine.dom_mut().read(|cx| {
+             fetches
+                 .iter()
+@@ -4598,11 +4602,11 @@ impl RenderThread {
+     /// The fetch numbered `id` aborted: its request cancelled, if it is
+     /// still on its way.
+     fn cancel_fetch(&mut self, id: u64) {
+-        let Some(request_id) = self.fetches.request_of(id) else {
++        let Some(request_id) = self.engine.state_mut().fetches.request_of(id) else {
+             return;
+         };
+-        self.fetches.remove(request_id);
+-        self.next_request_id.cancelled(request_id);
++        self.engine.state_mut().fetches.remove(request_id);
++        self.engine.state_mut().ids.cancelled(request_id);
+         self.network_agent.did_cancel(request_id);
+         let _ = self.to_browser.send(RendererHostMsg::CancelResource {
+             request_id,
+@@ -4614,7 +4618,7 @@ impl RenderThread {
+     /// its promise settled, as a task of its own (this one).
+     fn fetch_answered(&mut self, id: u64, result: &LoadResult) {
+         let response = crate::loader::fetched_response(result);
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         if engine.fetch_response(id, response) {
+@@ -4629,7 +4633,7 @@ impl RenderThread {
+         asked: Option<&str>,
+         result: &LoadResult,
+     ) -> bool {
+-        if let Some((id, _)) = self.fetches.remove(request_id) {
++        if let Some((id, _)) = self.engine.state_mut().fetches.remove(request_id) {
+             self.fetch_answered(id, result);
+             return true;
+         }
+@@ -4651,7 +4655,7 @@ impl RenderThread {
+                 if module.is_none() {
+                     self.note_failed(fetching.frame, failed_url(result, asked));
+                 }
+-                if let Some(engine) = &mut self.engine {
++                if let Some(engine) = self.engine.as_mut() {
+                     engine.module_fetched(fetching.key, module);
+                 }
+                 // A deferred module script's graph may be in.
+@@ -4666,7 +4670,7 @@ impl RenderThread {
+             if loaded.is_none() {
+                 self.note_failed(fetching.frame, failed_url(result, asked));
+             }
+-            if let Some(engine) = &mut self.engine {
++            if let Some(engine) = self.engine.as_mut() {
+                 engine
+                     .dom_mut()
+                     .mutate(|cx| cx.script_fetched(fetching.key, loaded));
+@@ -4731,7 +4735,7 @@ impl RenderThread {
+         request: ResourceRequest,
+         initiator: impl FnOnce(&mut Self) -> Option<Initiator>,
+     ) -> u64 {
+-        let request_id = self.next_request_id.next();
++        let request_id = self.engine.state_mut().ids.next();
+         if self.network_agent.enabled() {
+             let initiator = initiator(self);
+             if let Some(at) = self.request_frame(frame) {
+@@ -4745,8 +4749,8 @@ impl RenderThread {
+     }
+ 
+     /// Sends `request` through `loader` (its document's).
+-    fn send_request(&self, request_id: u64, loader: u64, request: ResourceRequest) {
+-        self.next_request_id.sent(request_id, &request);
++    fn send_request(&mut self, request_id: u64, loader: u64, request: ResourceRequest) {
++        self.engine.state_mut().ids.sent(request_id, &request);
+         let _ = self.to_browser.send(RendererHostMsg::FetchResource {
+             request_id,
+             worker: None,
+@@ -4879,7 +4883,7 @@ impl RenderThread {
+     /// script that asked that no load took go (an image the list had, a
+     /// `<link>` with nothing to load), so no later load takes them.
+     pub(super) fn clear_request_stacks(&mut self) {
+-        if let Some(engine) = &mut self.engine {
++        if let Some(engine) = self.engine.as_mut() {
+             engine.dom_mut().clear_request_stacks();
+         }
+     }
+@@ -4889,7 +4893,7 @@ impl RenderThread {
+     /// (`Network.setAttachDebugStack`), of the script making frames while
+     /// one has `Page` on.
+     pub(super) fn update_stacks_wanted(&mut self) {
+-        if let Some(engine) = &mut self.engine {
++        if let Some(engine) = self.engine.as_mut() {
+             engine.set_stacks_wanted(
+                 self.network_agent.wants_stacks(),
+                 self.page_agent.any_enabled(),
+@@ -4968,7 +4972,7 @@ impl RenderThread {
+             Ok(response) => response.head.tainting != ResponseTainting::Opaque,
+             Err(_) => sheet.url.scheme() == "data" || sheet.url.origin() == next.url.origin(),
+         };
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         let quirks = engine
+@@ -5000,7 +5004,7 @@ impl RenderThread {
+         {
+             self.css_agent.keep_link_text(&contents, css);
+         }
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         engine.dom_mut().mutate(|cx| {
+@@ -5011,7 +5015,7 @@ impl RenderThread {
+                 origin_clean,
+             );
+         });
+-        let Some(engine) = &mut self.engine else {
++        let Some(engine) = self.engine.as_mut() else {
+             return;
+         };
+         engine.fire_event(
+@@ -5085,11 +5089,12 @@ fn script_loaded(
+ /// `FrameRequest::FetchSent`).
+ pub(super) struct RendererLoadSink {
+     pub(super) to_browser: BrowserSender,
+-    pub(super) ids: crate::loader::RequestIds,
++    /// The render thread's request ids and `fetch()`es, lent while it
++    /// calls the engine (`EngineSlot`).
++    pub(super) lent: Option<crate::loader::LoadState>,
+     pub(super) blob_urls: crate::loader::BlobUrls,
+     pub(super) loaders: crate::loader::DocumentLoaders,
+     pub(super) network_agent: Rc<super::network_agent::NetworkAgent>,
+-    pub(super) fetches: crate::loader::Fetches,
+ }
+ 
+ impl dom_api::LoadSink for RendererLoadSink {
+@@ -5103,9 +5108,13 @@ impl dom_api::LoadSink for RendererLoadSink {
+             return None;
+         }
+         let document = request.document?;
++        let state = self
++            .lent
++            .as_mut()
++            .expect("lent by the render thread while it calls the engine");
+         let resource = crate::loader::fetch_resource_request(request);
+-        let request_id = self.ids.next();
+-        self.ids.sent(request_id, &resource);
++        let request_id = state.ids.next();
++        state.ids.sent(request_id, &resource);
+         // Told to DevTools as it is sent, before anything of its response
+         // can come (Blink's `ResourceLoadObserverForFrame::WillSendRequest`).
+         if self.network_agent.enabled()
+@@ -5125,7 +5134,7 @@ impl dom_api::LoadSink for RendererLoadSink {
+             self.network_agent
+                 .will_send(request_id, &resource, at, initiator.as_ref());
+         }
+-        self.fetches.insert(request_id, request.id, document);
++        state.fetches.insert(request_id, request.id, document);
+         // Through its document's loader.
+         let loader = self.loaders.of(document).unwrap_or(0);
+         let _ = self.to_browser.send(RendererHostMsg::FetchResource {
+diff --git a/crates/renderer/src/render_thread/engine_slot.rs b/crates/renderer/src/render_thread/engine_slot.rs
+new file mode 100644
+index 0000000..e0a8897
+--- /dev/null
++++ b/crates/renderer/src/render_thread/engine_slot.rs
+@@ -0,0 +1,115 @@
++//! The page's engine, and the render thread's requests (`LoadState`) that
++//! its load sink needs while script runs. The render thread owns them;
++//! reaching the engine through the slot (`as_mut`) lends them to the
++//! engine's load sink, and reaching them (`state_mut`) takes them back.
++//! Both borrow the whole slot, so the borrow checker keeps the render
++//! thread from holding the engine and its requests at once; and neither
++//! leaves a guard behind, so each borrow ends at its last use.
++
++use dom_api::ScriptEngine;
++
++use super::documents::RendererLoadSink;
++use crate::loader::LoadState;
++
++pub(super) struct EngineSlot {
++    engine: Option<Box<dyn ScriptEngine>>,
++    /// None while lent to the engine's sink.
++    state: Option<LoadState>,
++}
++
++impl Default for EngineSlot {
++    fn default() -> Self {
++        Self {
++            engine: None,
++            state: Some(LoadState::default()),
++        }
++    }
++}
++
++fn sink(engine: &mut Box<dyn ScriptEngine>) -> Option<&mut RendererLoadSink> {
++    engine
++        .load_sink_mut()?
++        .as_any_mut()
++        .downcast_mut::<RendererLoadSink>()
++}
++
++/// Puts `state` in `engine`'s sink, if it has one (the wasm engine
++/// keeps none): what it can't take stays in `state`.
++fn lend(engine: &mut Box<dyn ScriptEngine>, state: &mut Option<LoadState>) {
++    if let Some(sink) = sink(engine)
++        && let Some(lent) = state.take()
++    {
++        sink.lent = Some(lent);
++    }
++}
++
++/// Takes back what `lend` put in `engine`'s sink.
++fn take_back(engine: &mut Box<dyn ScriptEngine>, state: &mut Option<LoadState>) {
++    if let Some(sink) = sink(engine)
++        && let Some(lent) = sink.lent.take()
++    {
++        *state = Some(lent);
++    }
++}
++
++impl EngineSlot {
++    /// The engine, the requests lent to its sink.
++    pub(super) fn as_mut(&mut self) -> Option<&mut Box<dyn ScriptEngine>> {
++        let engine = self.engine.as_mut()?;
++        lend(engine, &mut self.state);
++        Some(engine)
++    }
++
++    pub(super) fn as_ref(&self) -> Option<&Box<dyn ScriptEngine>> {
++        self.engine.as_ref()
++    }
++
++    /// The engine without lending it the requests: for reading and
++    /// writing the DOM and the layout, which runs no script.
++    pub(super) fn unlent_mut(&mut self) -> Option<&mut Box<dyn ScriptEngine>> {
++        self.engine.as_mut()
++    }
++
++    pub(super) fn is_some(&self) -> bool {
++        self.engine.is_some()
++    }
++
++    pub(super) fn is_none(&self) -> bool {
++        self.engine.is_none()
++    }
++
++    /// The engine, taken (to a parser, which runs script with it): the
++    /// requests go with it, in its sink, until it is `put` back.
++    pub(super) fn take(&mut self) -> Option<Box<dyn ScriptEngine>> {
++        let mut engine = self.engine.take()?;
++        lend(&mut engine, &mut self.state);
++        Some(engine)
++    }
++
++    /// The engine, taken to be dropped: the requests stay.
++    pub(super) fn take_to_drop(&mut self) -> Option<Box<dyn ScriptEngine>> {
++        let mut engine = self.engine.take()?;
++        take_back(&mut engine, &mut self.state);
++        Some(engine)
++    }
++
++    /// `engine` in the slot (with the requests, if it has them).
++    pub(super) fn put(&mut self, engine: Box<dyn ScriptEngine>) {
++        self.engine = Some(engine);
++    }
++
++    /// The requests, taken back from the engine's sink. None while the
++    /// engine is taken (`take`).
++    pub(super) fn state(&mut self) -> Option<&mut LoadState> {
++        if let Some(engine) = self.engine.as_mut() {
++            take_back(engine, &mut self.state);
++        }
++        self.state.as_mut()
++    }
++
++    /// `state`, where it must be: not while the engine is taken.
++    pub(super) fn state_mut(&mut self) -> &mut LoadState {
++        self.state()
++            .expect("the requests are the render thread's while no one has the engine")
++    }
++}
