@@ -183,3 +183,42 @@ fn a_query_goes_down_only_to_the_box() {
     assert!(few > 0);
     assert_eq!(entered(200), few);
 }
+
+/// A query of an inline element looks at the lines it has boxes on, not
+/// at all of its paragraph's: ten times as many elements around it leave
+/// it the same; and an element over lines looks at each of them once.
+#[test]
+fn a_query_looks_only_at_the_elements_lines() {
+    let looked_at = |spans: usize| {
+        let mut html = String::from("<p style='width: 200px'>");
+        for i in 0..spans {
+            if i == spans / 2 {
+                html.push_str("<span id=middle>middle</span> ");
+            } else {
+                html.push_str(&format!("<span>w{i}</span> "));
+            }
+        }
+        html.push_str("</p>");
+        let page = Page::new(&html);
+        with_geometry(&page, |geometry| {
+            let node = page.id("middle");
+            assert!(geometry.element_box(node).is_some());
+            assert_eq!(geometry.client_rects(node).len(), 1);
+            assert_eq!(geometry.border_quads(node).len(), 1);
+            assert!(geometry.box_quads(node).is_some());
+            geometry.lines_for_testing()
+        })
+    };
+    let few = looked_at(20);
+    assert!(few > 0);
+    assert_eq!(looked_at(200), few);
+
+    let page = Page::new(
+        "<p style='width: 60px'>before <span id=over>a span over several lines</span> after</p>",
+    );
+    with_geometry(&page, |geometry| {
+        let rects = geometry.client_rects(page.id("over")).len();
+        assert!(rects > 2, "over lines");
+        assert_eq!(geometry.lines_for_testing(), rects);
+    });
+}

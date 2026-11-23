@@ -45,6 +45,8 @@ pub struct BoxFragment {
     pub out_of_flow: Vec<OutOfFlowPlace>,
     /// The line boxes, if this box is an inline formatting context's root.
     pub lines: Vec<LineFragment>,
+    /// Which of `lines` each inline element has boxes on.
+    pub inline_lines: InlineLines,
     /// A replaced element's image, drawn into its content box; `None` for
     /// other boxes, and while the image is loading or broken.
     pub image: Option<ImageData>,
@@ -659,6 +661,53 @@ pub struct OutOfFlowPlace {
     pub before: usize,
     /// Its fragment, its containing block's child.
     pub fragment: Arc<BoxFragment>,
+}
+
+/// The first and the last of a fragment's lines each inline element has a
+/// box on, by element (with its pseudo-elements' boxes): a query of one
+/// element of a paragraph looks at its lines, not at all of them, which,
+/// read for each of the paragraph's elements, would be quadratic. Blink's `LayoutInline` keeps its first `FragmentItem`
+/// (`FirstInlineFragmentItemIndex`), and each item the way to the next of
+/// the same element; here only the first and last lines: going by the
+/// other boxes on an element's lines costs much only in deep nests.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct InlineLines(Vec<(NodeId, u32, u32)>);
+
+impl InlineLines {
+    /// The index of `lines`.
+    pub(crate) fn new(lines: &[LineFragment]) -> Self {
+        let mut on: Vec<(NodeId, u32)> = lines
+            .iter()
+            .enumerate()
+            .flat_map(|(at, line)| {
+                // Saturates: a line is far larger than a byte, so no box
+                // has `u32::MAX` of them.
+                let at = u32::try_from(at).unwrap_or(u32::MAX);
+                line.boxes.iter().map(move |b| (b.node, at))
+            })
+            .collect();
+        on.sort_unstable();
+        let mut index: Vec<(NodeId, u32, u32)> = Vec::new();
+        for (node, at) in on {
+            match index.last_mut() {
+                Some((last, _, end)) if *last == node => *end = at,
+                _ => index.push((node, at, at)),
+            }
+        }
+        Self(index)
+    }
+
+    /// `element`'s lines of `lines` (those it was made from): empty
+    /// without a box on them.
+    pub fn of<'a>(&self, lines: &'a [LineFragment], element: NodeId) -> &'a [LineFragment] {
+        let found = self.0.binary_search_by_key(&element, |&(node, _, _)| node);
+        let Some(&(_, first, last)) = found.ok().and_then(|at| self.0.get(at)) else {
+            return &[];
+        };
+        let first = usize::try_from(first).unwrap_or(usize::MAX);
+        let end = usize::try_from(last).map_or(usize::MAX, |last| last.saturating_add(1));
+        lines.get(first..end.min(lines.len())).unwrap_or_default()
+    }
 }
 
 /// A child fragment and where it sits (`blink::PhysicalFragmentLink`).

@@ -110,8 +110,8 @@ pub use clip_path::ClipPaths;
 pub use control::empty_caret_metrics;
 pub use fragment::{
     AtomicInline, BoxFragment, BoxRole, CollapsedBorder, CollapsedBorders, ControlState,
-    FragmentLink, InlineBoxFragment, LineEnd, LineEndKind, LineFragment, OutOfFlowPlace,
-    TableColumn, TextCluster, TextFragment,
+    FragmentLink, InlineBoxFragment, InlineLines, LineEnd, LineEndKind, LineFragment,
+    OutOfFlowPlace, TableColumn, TextCluster, TextFragment,
 };
 pub use geometry::{
     BoxQuads, Geometry, Quad, ScrollOffsets, border_quads, bounding_rect, box_quads, box_transform,
@@ -1513,6 +1513,7 @@ impl BoxTree {
             margin: sides(b.layout.margin),
             children,
             out_of_flow,
+            inline_lines: fragment::InlineLines::new(&lines),
             lines,
         });
         b.fragment = Some(fragment.clone());

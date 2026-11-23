@@ -24,6 +24,7 @@
 | 捲過的頁面上點得到 fixed 列裡的按鈕，選單開在它下面；`about:demo` 示範 | `python3 scripts/test.py scenarios fixed-geometry`；`python3 scripts/test.py scenarios position-fixed` |
 | 元素的盒子從連結和行內元素的索引找到：經過 transform、sticky、捲動容器，out-of-flow 盒子、外側 marker、flex 的 `order`、float、被 block 切開和換行的行內元素、table；DOM 改過、盒子的位置被重用之後；查詢只走到那個盒子，和兄弟的數量無關 | `cargo test -p layout --test it geometry::` |
 | 每個節點從盒子找到的 `element_box`、client rect、border quad、沒有 pseudo 的 box quad、`scroll_size` 和從根走的每個 bit 相同（捲過的捲動容器、頁面和黏住的盒子）；每個 fragment 剛好被一個盒子的連結找到；行內元素的索引和重建的一樣 | `cargo test -p layout --test it`（`Page` 的 `assert_found_from_boxes`，每次檢查都驗） |
+| 一段裡的行內元素的查詢只看它在的那幾行：它前後的元素變十倍時看的行數不變，跨好幾行的元素每一行看一次 | `cargo test -p layout --test it geometry::`（`a_query_looks_only_at_the_elements_lines`） |
 | `scrollWidth`、`scrollHeight` 問的時候才算，盒子不帶它 | `cargo test -p paint --test it geometry::`；`cargo test -p dom_api --test it geometry::` |
 | 守著這些的測試擋得住弄壞的實作 | `python3 scripts/test.py mutate rfcs/0108-geometry-queries/mutants-1.toml`；`python3 scripts/test.py mutate rfcs/0108-geometry-queries/mutants-2.toml` |
 
@@ -113,3 +114,22 @@
 - 已完成的 RFC 的 spec 有兩條因為 `BlockBox` 拿掉了 `scroll_size` 不能照原樣重跑：0036 的 `mutants-1b.toml` 的「an inline element has its box」（換上去的程式建一個有 `scroll_size` 的 `BlockBox`，編不過）、0091 的 `mutants-2a.toml` 的「a box that just fits scrolls」（原文不在了）。後者現在由這份的 `mutants-2.toml` 守著；前者守的是 resize observer 分辨行內元素，和 `scroll_size` 無關，換上去的程式拿掉那個欄位就能跑。舊的照規定不改。
 - `cargo test --workspace` 4673 個通過、0 失敗、2 個原本就忽略；fmt（排了五個改到的檔案之後）、clippy（paint 的測試多一個型別別名之後）、七個 sanity 通過。
 - 沒驗的：行內元素的索引的記憶體和維護的時間沒有單獨量（「缺點」）；macOS、Linux、真的視窗（沒動視窗那一層）、真實網站。
+
+2026-11-23，行內元素在第幾行（「已決定的事項」14；Windows 11、Chrome 158）：
+
+- 每個有行的 fragment 記下每個行內元素（連同它的 pseudo-element 的盒子）在第幾行到第幾行，從盒子找的查詢只看那幾行；從根走的照舊看每一行，`Page` 的檢查拿兩者逐 bit 比。一開始建索引時濾掉 pseudo-element 的盒子：它們和元素在同樣的行上，濾不濾答案都一樣，拿掉了。
+- 新的測試數查詢看了幾行（`Geometry::lines_for_testing`）：答案不變、只差在快慢，所以要數才守得住。
+- mutation test：`mutants-2.toml` 加 5 條（查詢看每一行、不建索引、沒排序、最後一行當成第一行、少看最後一行），連同原本的「行內元素的盒子不進索引」6 條都抓到，檔案都還原。
+- 量測（同樣的頁面和做法，ms）：
+
+  | 頁面 | 查詢 | 改之前 | 現在 | Chrome |
+  | --- | --- | --- | --- | --- |
+  | 一段 1000 個 `<span>` | `offsetHeight` | 0.68 | 0.26 | 0.17 |
+  | 一段 10000 個 `<span>` | `offsetHeight` | 40 | 2.89 | 2.19 |
+  | 一段 10000 個 `<span>` | `getBoundingClientRect` | 35.7 | 4.41 | 4.35 |
+  | 一段 10000 個 `<span>` | 前 1000 個的 `offsetTop` | 9.62 | 0.53 | 0.42 |
+  | 10000 列 | `offsetHeight` | 2.16 | 2.14 | 2.14 |
+
+  - `<span>` 變十倍慢 11 倍（Chrome 13 倍）：不再是平方。
+  - 建索引的成本看不出來：一段 10000 個 `<span>` 的「改一點、讀一次」和原型交替各跑 5 次是 835–851 和 832–855 ms。沒有單獨量建表的時間。
+- `cargo test --workspace` 4674 個通過、0 失敗、2 個原本就忽略；fmt、clippy、七個 sanity 通過。WPT（cssom-view、`uievents/mouse/layer-coords-transform.html`、dom/ranges）47007 個檢查，沒有非預期的結果。

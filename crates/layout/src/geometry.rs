@@ -22,7 +22,7 @@ use computed_style::{LengthPercentageOrAuto, TransformBox};
 use gfx::{BlockBox, ElementBox, NodeId, NodeIdHashMap};
 use gfx::{PointF, RectF, SizeF, Transform};
 
-use crate::{BoxFragment, BoxTree, FragmentLink, LAYOUT_VIEW, StickyOffsets};
+use crate::{BoxFragment, BoxTree, FragmentLink, LAYOUT_VIEW, LineFragment, StickyOffsets};
 
 /// Each scroll container's scroll offset, by element: how far its content
 /// is moved up and left. Containers not in it are at the origin.
@@ -104,7 +104,10 @@ pub fn client_rects(
         scroll,
         sticky,
         &mut |fragment, offset, mapping, contents| {
-            client_rects_in(fragment, offset, mapping, contents, element, &mut rects);
+            let lines = &fragment.lines;
+            client_rects_in(
+                fragment, lines, offset, mapping, contents, element, &mut rects,
+            );
             true
         },
     );
@@ -113,9 +116,11 @@ pub fn client_rects(
 
 /// `client_rects`' of `element` that `fragment` has, at `offset` (as `walk`
 /// gives them): its border box if it is the element's box, and the
-/// element's boxes on its lines.
+/// element's boxes on `lines` (its lines, or those of them the element is
+/// on).
 fn client_rects_in(
     fragment: &BoxFragment,
+    lines: &[LineFragment],
     offset: PointF,
     mapping: &Mapping,
     contents: &Mapping,
@@ -131,7 +136,7 @@ fn client_rects_in(
         );
         rects.push(mapping.map_rect(border_box));
     }
-    for line in &fragment.lines {
+    for line in lines {
         for inline_box in line
             .boxes
             .iter()
@@ -221,7 +226,8 @@ pub fn pseudo_box_quads(
             scroll,
             sticky,
             &mut |fragment, offset, _, contents| {
-                inline_boxes_in(fragment, offset, contents, element, pseudo, &mut boxes);
+                let lines = &fragment.lines;
+                inline_boxes_in(lines, offset, contents, element, pseudo, &mut boxes);
                 true
             },
         );
@@ -242,14 +248,14 @@ type InlineQuadBox = (
 /// `element`'s (or its `pseudo`'s) boxes on `fragment`'s lines, at `offset`
 /// in the space `contents` maps from.
 fn inline_boxes_in(
-    fragment: &BoxFragment,
+    lines: &[LineFragment],
     offset: PointF,
     contents: &Mapping,
     element: NodeId,
     pseudo: Option<computed_style::PseudoId>,
     boxes: &mut Vec<InlineQuadBox>,
 ) {
-    for line in &fragment.lines {
+    for line in lines {
         for inline_box in line
             .boxes
             .iter()
@@ -335,7 +341,10 @@ pub fn border_quads(
         scroll,
         sticky,
         &mut |fragment, offset, mapping, contents| {
-            border_quads_in(fragment, offset, mapping, contents, element, &mut quads);
+            let lines = &fragment.lines;
+            border_quads_in(
+                fragment, lines, offset, mapping, contents, element, &mut quads,
+            );
             true
         },
     );
@@ -345,6 +354,7 @@ pub fn border_quads(
 /// `border_quads`' of `element` that `fragment` has, as `client_rects_in`.
 fn border_quads_in(
     fragment: &BoxFragment,
+    lines: &[LineFragment],
     offset: PointF,
     mapping: &Mapping,
     contents: &Mapping,
@@ -360,7 +370,7 @@ fn border_quads_in(
         );
         quads.push(quad(border, mapping));
     }
-    for line in &fragment.lines {
+    for line in lines {
         for inline_box in line
             .boxes
             .iter()
@@ -636,7 +646,8 @@ fn find_box(
     parent: Option<(&BoxFragment, PointF)>,
 ) -> Option<ElementBox> {
     let offset = stuck(fragment, offset, sticky);
-    if let Some(found) = box_in(fragment, offset, scroll, element, inline, parent) {
+    let lines = &fragment.lines;
+    if let Some(found) = box_in(fragment, lines, offset, scroll, element, inline, parent) {
         return Some(found);
     }
     fragment.children.iter().find_map(|child| {
@@ -654,10 +665,11 @@ fn find_box(
 }
 
 /// `element`'s box if it is `fragment`, at `offset` (moved by how far it
-/// sticks), as `element_box` has it; otherwise the element's boxes on its
-/// lines go into `inline`.
+/// sticks), as `element_box` has it; otherwise the element's boxes on
+/// `lines` (as `client_rects_in`'s) go into `inline`.
 fn box_in(
     fragment: &BoxFragment,
+    lines: &[LineFragment],
     offset: PointF,
     scroll: &ScrollOffsets,
     element: NodeId,
@@ -690,7 +702,7 @@ fn box_in(
             }),
         });
     }
-    for line in &fragment.lines {
+    for line in lines {
         for inline_box in line
             .boxes
             .iter()
@@ -855,6 +867,7 @@ impl BoxTree {
             scroll,
             sticky,
             entered: Cell::new(0),
+            lines: Cell::new(0),
         }
     }
 
@@ -943,8 +956,10 @@ pub struct Geometry<'a> {
     viewport_scroll: PointF,
     scroll: &'a ScrollOffsets,
     sticky: &'a StickyOffsets,
-    /// How many fragments the queries went into, for tests.
+    /// How many fragments the queries went into, and how many lines they
+    /// looked at, for tests.
     entered: Cell<usize>,
+    lines: Cell<usize>,
 }
 
 impl<'a> Geometry<'a> {
@@ -969,8 +984,16 @@ impl<'a> Geometry<'a> {
                 fragment = &child.fragment;
             }
             let offset = stuck(fragment, offset, self.sticky);
-            if let Some(found) = box_in(fragment, offset, self.scroll, element, &mut inline, parent)
-            {
+            let lines = self.lines_of(fragment, element);
+            if let Some(found) = box_in(
+                fragment,
+                lines,
+                offset,
+                self.scroll,
+                element,
+                &mut inline,
+                parent,
+            ) {
                 return Some(found);
             }
         }
@@ -982,7 +1005,10 @@ impl<'a> Geometry<'a> {
         let mut rects = Vec::new();
         for path in self.tree.paths(self.layout_view, element) {
             if let Some((fragment, offset, mapping, contents)) = self.mapped(&path) {
-                client_rects_in(fragment, offset, &mapping, &contents, element, &mut rects);
+                let lines = self.lines_of(fragment, element);
+                client_rects_in(
+                    fragment, lines, offset, &mapping, &contents, element, &mut rects,
+                );
             }
         }
         rects
@@ -993,7 +1019,10 @@ impl<'a> Geometry<'a> {
         let mut quads = Vec::new();
         for path in self.tree.paths(self.layout_view, element) {
             if let Some((fragment, offset, mapping, contents)) = self.mapped(&path) {
-                border_quads_in(fragment, offset, &mapping, &contents, element, &mut quads);
+                let lines = self.lines_of(fragment, element);
+                border_quads_in(
+                    fragment, lines, offset, &mapping, &contents, element, &mut quads,
+                );
             }
         }
         quads
@@ -1010,7 +1039,8 @@ impl<'a> Geometry<'a> {
                 let to_box = Transform::translate(offset.x, offset.y);
                 return quads_of(Some((fragment, mapping.then(&to_box))), &[]);
             }
-            inline_boxes_in(fragment, offset, &contents, element, None, &mut boxes);
+            let lines = self.lines_of(fragment, element);
+            inline_boxes_in(lines, offset, &contents, element, None, &mut boxes);
         }
         quads_of(None, &boxes)
     }
@@ -1039,6 +1069,19 @@ impl<'a> Geometry<'a> {
 
     fn count_entered(&self) {
         self.entered.set(self.entered.get().saturating_add(1));
+    }
+
+    /// How many lines the queries so far looked at, for tests: those of
+    /// the elements, not of the paragraphs they are in.
+    pub fn lines_for_testing(&self) -> usize {
+        self.lines.get()
+    }
+
+    /// `fragment`'s lines `element` has boxes on.
+    fn lines_of(&self, fragment: &'a BoxFragment, element: NodeId) -> &'a [LineFragment] {
+        let lines = fragment.inline_lines.of(&fragment.lines, element);
+        self.lines.set(self.lines.get().saturating_add(lines.len()));
+        lines
     }
 
     /// The fragment at the end of `path`, as `walk` visits it: where its

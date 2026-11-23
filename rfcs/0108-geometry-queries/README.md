@@ -142,6 +142,7 @@ let mapping = Mapping { to_root: Transform::IDENTITY, scrolled };
 ### 改到的地方
 
 - `crates/layout/src/lib.rs`：連結、inline 元素的索引（第 2 階段）。
+- `crates/layout/src/fragment.rs`：每個行內元素在 fragment 的第幾行到第幾行（「已決定的事項」14）。
 - `crates/layout/src/tree_builder.rs`：增量更新時維護它們。
 - `crates/layout/src/geometry.rs`：照路徑的查詢、共用的一步（含根那一步）；刪掉 `is_fixed`。
 - `crates/layout/src/scroll_anchor.rs`、`crates/layout/src/svg_geometry.rs`：傳 viewport 的捲動（前者傳 0）。
@@ -180,7 +181,7 @@ let mapping = Mapping { to_root: Transform::IDENTITY, scrolled };
 
 ## 缺點
 
-- 每個盒子多 12 bytes（連結；`LayoutBox` 現在是 2544 bytes），做 fragment 時每個 child 多一次寫入；inline 元素多一份索引，它的記憶體和維護的時間還沒量。
+- 每個盒子多 12 bytes（連結；`LayoutBox` 現在是 2544 bytes），做 fragment 時每個 child 多一次寫入；inline 元素多一份索引，它的記憶體和維護的時間還沒量；每次排一段時多建一份每個行內元素在第幾行的表（每個 12 bytes）。
 - 多一個要跟著改的不變式：新的放 child fragment 的路漏了連結，那個盒子就查不到幾何。靠比對的測試抓。
 - 幾何查詢從「只要一棵 fragment tree」變成也要 box tree。
 - 很深的樹仍然是 O(深度)，和 Blink 一樣。
@@ -234,12 +235,13 @@ Chromium（`details.md` 的「Blink」）：
 12. **怎麼找到元素：A，盒子記下自己的 fragment 是哪個 fragment 的第幾個 child**，照 Chrome（元素有 `LayoutObject`，從它往上找）。A 的原型（在一份拷貝上，沒有留在 repo）在 layout、paint、renderer、shell 的測試、情境和 11079 個 WPT 的靜態頁上，約 5400 萬次查詢和走訪的答案相同（renderer 裡的和大的頁面是抽樣比的）；隨機改 DOM 的 7099 組裡不同的 10 組，盒子樹本身都已經壞了（同一個盒子出現兩次，那個 bug 在 `main` 的 cc6479f 修好）。10000 列每列讀一次：`offsetHeight` 2.58 ms、`getBoundingClientRect` 4.16 ms（現在 429、1290；Chrome 158 是 2.24、3.96；Windows 11）。不選 B（每次 layout 後建整頁的表）：沒有人查也要付，只量了建表就是每次 layout 1.28 ms（10000 列）、8.9 ms（30000 列），「改一點、讀一次」仍是 O(N)；Chrome 也不這樣做。代價：每個盒子 12 bytes 和 inline 元素的索引，一個要跟著改的不變式（「缺點」）。只有 A 時前 1000 列的 `offsetTop` 仍是 113 ms（Chrome 0.42），要看「待決定」2。這些數字是 renderer 還在 Browser 的 process 裡時量的，做完時重量。
 
 13. **`scroll_size`：S1，從 `BlockBox` 拿掉，`dom_api::FrameLayout` 多一個 `scroll_size(node)`，問的時候才算**。照 Chrome 的 `OffsetWidth()` 不碰 scrollable overflow：原型上只有 A 時前 1000 列的 `offsetTop` 是 113 ms，A 加上 S1 是 0.39 ms（Chrome 158 是 0.42；Windows 11）。不選 S2（留著，算過一次存在 fragment 上）：介面不變，但每次 layout 之後第一次 `offsetWidth` 仍然付整個子樹，每個 fragment 變大，又和「之後的可能」2 重疊。代價：改 `FrameLayout` 的介面，`scrollWidth`、`scrollHeight` 照舊每次走子樹；Chrome 在 layout 時算好存起來，這一半是「之後的可能」2，這份不做。
+14. **一段裡有很多行內元素：I2，fragment 記下每個行內元素在它的第幾行到第幾行**（2026-11-23），照 Chrome（Blink 的 `LayoutInline` 記下它的第一個 `FragmentItem`，`FirstInlineFragmentItemIndex`）。查詢用二分搜找到元素，只看那幾行。第 2 階段做完時量的：一段 1000 個、10000 個 `<span>` 各讀一次 `offsetHeight` 是 0.68、40 ms（Chrome 158 是 0.17、2.13；Windows 11），十倍的 `<span>` 慢 59 倍。不選 I1（照舊掃整段的行）：一段裡一個 token 一個 `<span>` 的頁面（語法上色的 `<pre>`）是平方。Blink 另外讓每個 item 記下到同一個元素的下一個 item 有多遠，這裡不做：只在一行上有很多層巢狀的元素時才有差，做的話每個行內盒子都多一個欄位。代價：每次排一段時多建一份排好序的表（每個行內元素 12 bytes，O(B log B)，B 是那一段的盒子數），沒人查也要付；Chrome 也付。
 
 ## 待決定
 
 1. **怎麼找到元素**：已決定，A（「已決定的事項」12）。
 2. **`scroll_size`**：已決定，S1（「已決定的事項」13）。
-3. **很長的一段裡有很多 inline 元素**（第 2 階段做完時）：
+3. **很長的一段裡有很多 inline 元素**：已決定，I2（「已決定的事項」14）。
    - I1：掃那一段所有的行。簡單；一段裡 M 個 `<span>` 各讀一次是 O(M²)。
    - I2：連行和其中的索引一起記（像 Blink 的 `FirstInlineFragmentItemIndex`）。每次斷行都要維護。
    - 2026-11-22 的看法：先 I1，第 2 階段做完時量一段 10000 個 `<span>` 的頁再決定。

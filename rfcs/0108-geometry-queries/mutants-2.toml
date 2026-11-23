@@ -119,3 +119,37 @@ file = "crates/layout/src/text.rs"
 from = '''            .filter(|element| element.node.pseudo.is_none())
             .map(|element| element.node.node)'''
 to = '''            .map(|element| element.node.node)'''
+
+# Which lines each inline element is on ("已決定的事項" 14).
+
+[[mutant]]
+name = "the queries look at all of a paragraph's lines"
+file = "crates/layout/src/geometry.rs"
+from = '''        let lines = fragment.inline_lines.of(&fragment.lines, element);'''
+to = '''        let lines = &fragment.lines[..];
+        let _ = element;'''
+
+[[mutant]]
+name = "a fragment's lines aren't indexed"
+file = "crates/layout/src/lib.rs"
+from = '''            inline_lines: fragment::InlineLines::new(&lines),'''
+to = '''            inline_lines: Default::default(),'''
+
+[[mutant]]
+name = "the index isn't sorted"
+file = "crates/layout/src/fragment.rs"
+from = '''        on.sort_unstable();
+        let mut index'''
+to = '''        let mut index'''
+
+[[mutant]]
+name = "an element's last line is its first"
+file = "crates/layout/src/fragment.rs"
+from = '''                Some((last, _, end)) if *last == node => *end = at,'''
+to = '''                Some((last, _, _)) if *last == node => {}'''
+
+[[mutant]]
+name = "an element's lines end before its last"
+file = "crates/layout/src/fragment.rs"
+from = '''usize::try_from(last).map_or(usize::MAX, |last| last.saturating_add(1));'''
+to = '''usize::try_from(last).unwrap_or(usize::MAX);'''
