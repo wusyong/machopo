@@ -65,6 +65,29 @@ pub trait LoadSink {
     fn frame_gone(&self, frame: crate::FrameId);
 }
 
+/// The host's side of the engine's frames, told as they are made and as
+/// they go, before the call returns (Blink's `LocalFrameClient`, whose
+/// `CreateFrame` and `Detached` content's `RenderFrameImpl` answers by
+/// telling the browser at once): so that the browser's frame tree has a
+/// frame as script goes on with it, and has it no more as its iframe goes.
+/// Frames are named by their tokens, the browser's names for them.
+pub trait FrameClient {
+    /// Child frame `frame` made for an iframe in the frame `parent`, its
+    /// iframe's name `name`; `created_by_script` if script was running
+    /// (Blink's `is_created_by_script`).
+    fn child_frame_created(
+        &mut self,
+        parent: crate::FrameToken,
+        frame: crate::FrameToken,
+        name: &str,
+        created_by_script: bool,
+    );
+
+    /// Child frame `frame` gone, and the frames in it with it: its iframe
+    /// removed, or the document it was in replaced.
+    fn frame_detached(&mut self, frame: crate::FrameToken);
+}
+
 /// Where a `fetch()` comes from, as the engine knows it as it is sent:
 /// its document's loader (`Cx::document_loader`), which the request goes
 /// through; and for DevTools to name it by, its frame's token (the
@@ -591,6 +614,12 @@ pub trait ScriptEngine: ParserHost {
     /// (`FrameRequest::RegisterBlobUrl`, `RevokeBlobUrl`). Without one, a
     /// `fetch()` goes nowhere: its promise stays pending.
     fn set_load_sink(&mut self, sink: Box<dyn LoadSink>);
+
+    /// What the engine tells of its child frames as they are made and go
+    /// (`FrameClient`). Nothing by default: an engine with no child frames.
+    fn set_frame_client(&mut self, client: Box<dyn FrameClient>) {
+        let _ = client;
+    }
 
     /// What `testRunner.reportHarnessResults` was given since the last
     /// ask, if anything (web tests only).

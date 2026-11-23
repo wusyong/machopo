@@ -110,6 +110,13 @@ pub trait FrameLayout: Any {
         let _ = (frame, parent, owner, document, document_node);
     }
 
+    /// Child frame `frame` gone with its iframe, and the frames in it with
+    /// it: no longer shown (Blink's `LocalFrame::Detach` disposes of its
+    /// `LocalFrameView`). Nothing by default.
+    fn child_frame_removed(&mut self, frame: FrameId) {
+        let _ = frame;
+    }
+
     /// Whether the frame's viewport is known: a child frame's once it was
     /// laid out (at its iframe's content box). Known by default.
     fn has_viewport(&self) -> bool {

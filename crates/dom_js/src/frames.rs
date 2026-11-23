@@ -48,6 +48,9 @@ pub(crate) struct Frames {
     /// What sends the loads script asks for as it asks, the host's
     /// (`ScriptEngine::set_load_sink`); none: they wait in `requests`.
     pub(crate) load_sink: Option<Box<dyn dom_api::LoadSink>>,
+    /// What is told of the child frames as they are made and go, the
+    /// host's (`ScriptEngine::set_frame_client`).
+    pub(crate) client: Option<Box<dyn dom_api::FrameClient>>,
 }
 
 impl Frames {
@@ -120,7 +123,38 @@ impl Frames {
                 }
             })
             .collect();
-        tell_removed(&mut self.requests, &removed, TOP);
+        self.tell_removed(&removed, TOP);
+    }
+
+    /// The host told of `removed`, the frames that were in `parent`'s
+    /// document: its client at once, and one `Removed` for each of its
+    /// children, with the frames inside it.
+    fn tell_removed(&mut self, removed: &[Frame], parent: FrameId) {
+        for child in removed.iter().filter(|frame| frame.parent == Some(parent)) {
+            let Some(token) = child.token else {
+                continue;
+            };
+            if let Some(client) = &mut self.client {
+                client.frame_detached(token);
+            }
+            let mut gone = vec![child.id];
+            let mut at = 0;
+            while let Some(&above) = gone.get(at) {
+                gone.extend(
+                    removed
+                        .iter()
+                        .filter(|frame| frame.parent == Some(above))
+                        .map(|frame| frame.id),
+                );
+                at = at.saturating_add(1);
+            }
+            self.requests.push(FrameRequest::Removed {
+                frame: child.id,
+                token,
+                parent,
+                gone,
+            });
+        }
     }
 
     fn next_id(&mut self) -> FrameId {
@@ -277,6 +311,10 @@ pub(crate) fn create_child(scope: &mut Scope<'_, '_, '_>, owner: &NodeRoot) -> O
             .map(|name| name.borrow().to_string())
             .unwrap_or_default()
     });
+    // The browser's frame tree has it at once.
+    if let (Some(parent_token), Some(client)) = (state.frames.token(parent), &mut state.frames.client) {
+        client.child_frame_created(parent_token, token, &name, created_by_script);
+    }
     state.frames.requests.push(FrameRequest::Created {
         frame: id,
         token,
@@ -541,10 +579,11 @@ pub(crate) fn send_fetches(scope: &mut Scope<'_, '_, '_>) {
 pub(crate) fn discard_child(scope: &mut Scope<'_, '_, '_>, document: &NodeRoot) {
     let (state, _) = scope.state_mut();
     let id = state.dom.read(|cx| cx.node_id(document.get(cx.gc)));
-    let Some((frame, token)) = state
+    let Some(frame) = state
         .frames
         .of_document(id)
-        .and_then(|frame| Some((frame.id, frame.token?)))
+        .filter(|frame| frame.token.is_some())
+        .map(|frame| frame.id)
     else {
         return;
     };
@@ -559,12 +598,12 @@ pub(crate) fn discard_child(scope: &mut Scope<'_, '_, '_>, document: &NodeRoot) 
         .first()
         .and_then(|removed| removed.parent)
         .unwrap_or(TOP);
-    state.frames.requests.push(FrameRequest::Removed {
-        frame,
-        token,
-        parent,
-        gone: removed.iter().map(|removed| removed.id).collect(),
-    });
+    state.frames.tell_removed(&removed, parent);
+    // No longer shown: its layout's view of it gone as it is.
+    if let Some(mut layout) = state.layout.take() {
+        layout.child_frame_removed(frame);
+        state.layout.set(Some(layout));
+    }
     // Their realms have gone for the inspector too.
     for removed in &removed {
         crate::devtools::realm_destroyed(scope.scope(), &removed.context);
@@ -595,33 +634,6 @@ pub(crate) fn terminate_workers<'a>(
     });
 }
 
-/// The host told of `removed`, the frames that were in `parent`'s document:
-/// one `Removed` for each of its children, with the frames inside it.
-fn tell_removed(requests: &mut Vec<FrameRequest>, removed: &[Frame], parent: FrameId) {
-    for child in removed.iter().filter(|frame| frame.parent == Some(parent)) {
-        let Some(token) = child.token else {
-            continue;
-        };
-        let mut gone = vec![child.id];
-        let mut at = 0;
-        while let Some(&above) = gone.get(at) {
-            gone.extend(
-                removed
-                    .iter()
-                    .filter(|frame| frame.parent == Some(above))
-                    .map(|frame| frame.id),
-            );
-            at = at.saturating_add(1);
-        }
-        requests.push(FrameRequest::Removed {
-            frame: child.id,
-            token,
-            parent,
-            gone,
-        });
-    }
-}
-
 /// The frames inside child frame `frame`'s document, as it navigates to
 /// another (Blink's `FrameLoader::DetachChildren`): gone as a removed
 /// iframe's are, `frame` itself kept.
@@ -634,7 +646,7 @@ pub(crate) fn discard_descendants(scope: &mut Scope<'_, '_, '_>, frame: FrameId)
             sink.frame_gone(removed.id);
         }
     }
-    tell_removed(&mut state.frames.requests, &removed, frame);
+    state.frames.tell_removed(&removed, frame);
     for removed in &removed {
         crate::devtools::realm_destroyed(scope.scope(), &removed.context);
     }

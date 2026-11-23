@@ -1348,3 +1348,78 @@ fn a_frame_goes_with_its_token() {
     );
     assert_eq!(engine.child_frames(top), []);
 }
+
+/// What a `FrameClient` was told, in order.
+#[derive(Clone, Default)]
+struct Client(std::rc::Rc<std::cell::RefCell<Vec<String>>>);
+
+impl dom_api::FrameClient for Client {
+    fn child_frame_created(
+        &mut self,
+        parent: dom_api::FrameToken,
+        frame: dom_api::FrameToken,
+        name: &str,
+        created_by_script: bool,
+    ) {
+        self.0
+            .borrow_mut()
+            .push(format!("created {frame} in {parent} {name:?} {created_by_script}"));
+    }
+
+    fn frame_detached(&mut self, frame: dom_api::FrameToken) {
+        self.0.borrow_mut().push(format!("detached {frame}"));
+    }
+}
+
+/// The host's client hears of each child frame as it is made, in its
+/// parent (the top-level frame's the browser's token) with its iframe's
+/// name, and as it goes, once for it and the frames in it: within the
+/// call that made or removed it, a frame made and removed in one script
+/// told both ways in order; the frames of a document replaced too.
+#[test]
+fn the_frame_client_hears_of_frames_as_they_come_and_go() {
+    let mut engine = engine();
+    let main = dom_api::new_frame_token();
+    engine.set_main_frame_token(main);
+    let client = Client::default();
+    engine.set_frame_client(Box::new(client.clone()));
+    let told = || std::mem::take(&mut *client.0.borrow_mut());
+    run(
+        &mut engine,
+        "var f = document.createElement('iframe'); f.name = 'one'; document.body.appendChild(f);
+         f.contentDocument.body.appendChild(f.contentDocument.createElement('iframe'));
+         var g = document.body.appendChild(document.createElement('iframe'));
+         g.remove();",
+    );
+    let made = created(&engine.take_frame_requests());
+    let [(_, f), (_, inner), (_, g)] = made[..] else {
+        panic!("{made:?}");
+    };
+    assert_eq!(
+        told(),
+        [
+            format!("created {f} in {main} \"one\" true"),
+            format!("created {inner} in {f} \"\" true"),
+            format!("created {g} in {main} \"\" true"),
+            format!("detached {g}"),
+        ]
+    );
+    // Removed with the one in it: told once.
+    run(&mut engine, "f.remove();");
+    assert_eq!(told(), [format!("detached {f}")]);
+    // A document replaced: each frame it had.
+    run(
+        &mut engine,
+        "document.body.appendChild(document.createElement('iframe'));
+         document.body.appendChild(document.createElement('iframe'));",
+    );
+    let made = created(&engine.take_frame_requests());
+    let [(_, h), (_, i)] = made[..] else {
+        panic!("{made:?}");
+    };
+    told();
+    engine
+        .create_window(engine.top_frame(), "https://example.test/b", Instant::now())
+        .expect("a window");
+    assert_eq!(told(), [format!("detached {h}"), format!("detached {i}")]);
+}

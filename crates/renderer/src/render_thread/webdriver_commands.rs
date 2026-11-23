@@ -205,7 +205,7 @@ impl RenderThread {
                 let value = engine
                     .webdriver_element_property(cx.frame, element, &name)
                     .map_err(script_error)?;
-                self.value_out(cx, value)?
+                self.value_out(Some(cx), value)?
             }
             WebDriverCommand::SwitchToFrame { index, element } => {
                 self.switch_to_frame(cx, index, element.as_deref())?
@@ -427,7 +427,7 @@ impl RenderThread {
     /// gone).
     fn value_out(
         &mut self,
-        cx: Context,
+        cx: Option<Context>,
         value: dom_api::WebDriverValue,
     ) -> Result<WebDriverValue, WebDriverError> {
         use dom_api::WebDriverValue as Engine;
@@ -449,6 +449,12 @@ impl RenderThread {
                     .collect::<Result<_, WebDriverError>>()?,
             ),
             Engine::Element(element) => {
+                let cx = cx.ok_or_else(|| {
+                    error(
+                        ErrorKind::JavascriptError,
+                        "the document went away before the script settled",
+                    )
+                })?;
                 // One out of the document now (a script may make one): stale.
                 self.query(cx.frame, &WebDriverQuery::Element(element))?;
                 WebDriverValue::Element(self.reference(cx, element))
@@ -617,13 +623,11 @@ impl RenderThread {
             let Some(document) = self.webdriver_state.scripts.remove(&request_id) else {
                 continue;
             };
+            // Its frame may have gone as it ran (it removed its own iframe,
+            // which is gone at once): what names nothing of its document
+            // is still its result, as WebDriver's JSON clone of it.
             let result = result.map_err(script_error).and_then(|value| {
-                let cx = self.script_context(document).ok_or_else(|| {
-                    error(
-                        ErrorKind::JavascriptError,
-                        "the document went away before the script settled",
-                    )
-                })?;
+                let cx = self.script_context(document);
                 self.value_out(cx, value)
             });
             self.reply_webdriver(request_id, result);

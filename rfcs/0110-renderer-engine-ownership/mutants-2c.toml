@@ -1,0 +1,55 @@
+# Stage 1, step 2c: child frames told to the browser and their views changed at once.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "env", "MACHOPO_GPU_ADAPTER=cpu", "cargo", "test", "-q", "-p", "shell", "--test", "it"]
+timeout = 900
+
+[[mutant]]
+name = "the engine tells its client of no frame made"
+file = "crates/dom_js/src/frames.rs"
+from = '''        client.child_frame_created(parent_token, token, &name, created_by_script);'''
+to = '''        let _ = (client, parent_token, created_by_script);'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "frames::the_frame_client_hears_of_frames_as_they_come_and_go"]
+
+[[mutant]]
+name = "the engine tells its client of no frame gone"
+file = "crates/dom_js/src/frames.rs"
+from = '''                client.frame_detached(token);'''
+to = '''                let _ = client;'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "frames::the_frame_client_hears_of_frames_as_they_come_and_go"]
+
+[[mutant]]
+name = "the engine has no frame client"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''        engine.set_frame_client(Box::new(super::documents::RendererFrameClient {'''
+to = '''        let _ = (Box::new(super::documents::RendererFrameClient {'''
+
+[[mutant]]
+name = "the browser not told of a frame made"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        let _ = self.to_browser.send(RendererHostMsg::DidCreateChildFrame {'''
+to = '''        let _ = (RendererHostMsg::DidCreateChildFrame {'''
+
+[[mutant]]
+name = "the browser not told of a frame gone"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        let _ = self.to_browser.send(RendererHostMsg::DidDetachFrame { frame });'''
+to = '''        let _ = RendererHostMsg::DidDetachFrame { frame };'''
+
+[[mutant]]
+name = "a removed frame's view kept"
+file = "crates/renderer/src/frame_view.rs"
+from = '''    fn child_frame_removed(&mut self, frame: dom_api::FrameId) {
+        self.view.remove_child(frame);'''
+to = '''    fn child_frame_removed(&mut self, frame: dom_api::FrameId) {
+        let _ = frame;'''
+
+[[mutant]]
+name = "a script whose frame went has no result"
+file = "crates/renderer/src/render_thread/webdriver_commands.rs"
+from = '''                let cx = self.script_context(document);
+                self.value_out(cx, value)'''
+to = '''                let cx = self.script_context(document);
+                if cx.is_none() {
+                    return Err(error(ErrorKind::JavascriptError, "gone"));
+                }
+                self.value_out(cx, value)'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "env", "MACHOPO_GPU_ADAPTER=cpu", "cargo", "test", "-q", "-p", "shell", "--test", "it", "webdriver::frames_are_switched_to_and_from"]

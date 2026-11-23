@@ -1690,6 +1690,10 @@ impl ScriptEngine for V8Engine {
         self.data.pump_platform_tasks()
     }
 
+    fn set_frame_client(&mut self, client: Box<dyn dom_api::FrameClient>) {
+        self.state().frames.client = Some(client);
+    }
+
     fn set_load_sink(&mut self, sink: Box<dyn dom_api::LoadSink>) {
         self.state().frames.load_sink = Some(sink);
     }

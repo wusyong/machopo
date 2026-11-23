@@ -15,7 +15,7 @@
 | 2. frame 的表只有一份，建立和移除當場做完（第 7 條的第 2 步，第 11 條） | 進行中 | |
 | 2a. 必壞的測試：A1、A5；移除 iframe 時 parent 的 `load` 和子 frame 的 unload（先對照 Chrome） | A1、A5 的做完，待審查；移除的兩個留到 2e | 2026-11-23 |
 | 2b. renderer 向 engine 查 frame 的 token、parent、owner；拿掉 `ChildFrames` 的樹和 token、`FrameDocument.child_of`；WebDriver 和 DevTools 的 frame 清單讀 engine（A5、A1） | 做完，待審查（兩條 mutation 沒抓到，見做過的檢查） | 2026-11-23 |
-| 2c. 建立和移除時 child view 和給 Browser 的訊息由 hook 當場做 | 沒開始 | |
+| 2c. 建立和移除時 child view 和給 Browser 的訊息由 hook 當場做 | 做完，待審查 | 2026-11-23 |
 | 2d. 文件的載入狀態（readiness、還在等的載入）搬到 DOM，「載完了沒」的判斷移到 `dom_api` | 沒開始（開始前列出要決定的事） | |
 | 2e. 移除時 engine 當場發子 frame 的 `pagehide`、`unload`，檢查 parent、排它的 `load` | 沒開始（開始前列出要決定的事） | |
 | 2f. 初始的 `about:blank` 不先建 `FrameDocument`；拿掉 `Created`、`Removed` 的便條 | 沒開始 | |
@@ -82,4 +82,16 @@
 - `a navigated child's frames before kept by the renderer`（`commit_child` 當場清掉舊文件裡 frame 的帳）：engine 在 `create_window` 時照樣為它們送 `Removed`，下一次處理便條時清掉，差別只在中間的空檔；空檔裡舊文件的 parser 會不會被續跑沒有排除。2f 拿掉便條、重新設計清帳時一起處理，補測試。
 
 跑完檔案都還原了。**測試**：`dom_api` 201 個、`dom_js` 550 個（1 個 ignored）、`renderer` 128 個、`browser` 191 個、`shell` 652 個都通過。
+
+### 第 2c 步：給 Browser 的訊息和 child view 當場做（2026-11-23，Linux：Fedora 45、debug build，`3e21253` 之上）
+
+使用者選了新的 `FrameClient`（Blink 的 `LocalFrameClient`：`CreateFrame`、`Detached` 都在它上面，content 的 `RenderFrameImpl` 當場送 `CreateChildFrame`、`Detach`），不加在 `LoadSink` 上。
+
+**做的事**：`dom_api` 加 `FrameClient`（`child_frame_created`、`frame_detached`）和 `ScriptEngine::set_frame_client`（預設不做事：wasm 的 engine 沒有子 frame）；dom_js 在 `create_child` 帶 parent 的 token（最上層的是 Browser 給的，`set_main_frame_token`）呼叫它，`Frames::tell_removed`（iframe 拿掉、文件換掉）每個直接的子 frame 呼叫一次。`FrameLayout` 加 `child_frame_removed`，`discard_child` 當場呼叫，renderer 拿掉 child view；文件換掉時 child view 跟著換掉的 view 走，不另外呼叫。renderer 的 `RendererFrameClient` 送 `DidCreateChildFrame`、`DidDetachFrame`，`Created`、`Removed` 的處理不再送這兩個、不再動 child view；`Created` 補建 child view 的那一段換成 `debug_assert`（layout 從第一份文件起在 engine 裡，DevTools 暫停時拿走的在執行 script 前放回；整組測試沒有碰到）。
+
+**連帶改的**：WebDriver 的 script 在它自己的 frame 被拿掉之後才交回結果時（`parent.frameElement.remove()`），以前 child view 晚一點才拿掉，結果照樣送回；view 當場拿掉之後變成 `javascript error`（`webdriver::frames_are_switched_to_and_from` 抓到）。照 WebDriver 規範，script 跑完後不再檢查 browsing context，所以改成：沒有 context 時，結果裡不指向文件的值照樣交回，只有 element 給原來的錯誤（`value_out` 的 context 改成 `Option`）。
+
+**Mutation test**（`mutants-2c.toml`）：7 條，第一次 6 條抓到。`the browser not told of a frame gone` 沒抓到：Browser 的 `frame_tree.remove` 沒有網頁看得到的效果，補了 `browser_view::the_browser_hears_of_a_removed_frame`（看 renderer 送出的訊息：拿掉的 frame 的 `DidDetachFrame` 帶著建它時的 token），之後抓到。跑完檔案都還原了。
+
+**測試**：`dom_js` 551 個（1 個 ignored）、`renderer` 128 個、`shell` 653 個、`dom_api` 201 個、`browser` 191 個都通過。
 

@@ -1371,6 +1371,42 @@ fn a_hidden_tab_asks_for_no_frames() {
     window.close();
 }
 
+/// The browser's frame tree loses a child frame as its iframe is removed:
+/// the renderer tells it (`DidDetachFrame`) by the token it made it with.
+#[test]
+fn the_browser_hears_of_a_removed_frame() {
+    let server = server(&[(
+        "/",
+        "<!DOCTYPE html><iframe></iframe>\
+         <script>onload = () => document.querySelector('iframe').remove()</script>",
+    )]);
+    let mut window = Window::open(Size::new(400, 300), 1.0);
+    window.view.navigate(&server.url("/"));
+    let start = Instant::now();
+    let mut made = None;
+    loop {
+        while let Ok(msg) = window.viz.try_recv() {
+            window.viz_message(msg);
+        }
+        window.send_begin_frames();
+        if let Ok((tab, event)) = window.host.recv_timeout(Duration::from_millis(5)) {
+            if let ContentsEvent::Renderer { msg, .. } = &event {
+                match msg {
+                    RendererHostMsg::DidCreateChildFrame { frame, .. } => made = Some(*frame),
+                    RendererHostMsg::DidDetachFrame { frame } => {
+                        assert_eq!(Some(*frame), made, "the frame made goes");
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            window.view.on_contents_event(tab, event);
+        }
+        assert!(start.elapsed() < TIMEOUT, "the renderer tells of the frame gone");
+    }
+    window.close();
+}
+
 /// What a renderer the tab ended sent counts for nothing: the view hands
 /// it to no one, while the tab shows its sad tab, or once another renderer
 /// took its place.

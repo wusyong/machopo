@@ -204,6 +204,10 @@ impl RenderThread {
             blob_urls: self.blob_urls.clone(),
             network_agent: self.network_agent.clone(),
         }));
+        // Its child frames told to the browser as they are made and go.
+        engine.set_frame_client(Box::new(super::documents::RendererFrameClient {
+            to_browser: self.to_browser.clone(),
+        }));
         // `localStorage`, its areas opened waiting for the browser.
         engine.set_storage_host(Box::new(super::documents::RendererStorageHost {
             to_browser: self.to_browser.clone(),

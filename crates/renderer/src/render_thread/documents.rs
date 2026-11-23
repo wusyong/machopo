@@ -924,58 +924,27 @@ impl RenderThread {
             }
             for request in requests {
                 match request {
+                    // The browser's frame tree has it already
+                    // (`RendererFrameClient`).
                     FrameRequest::Created {
                         frame,
-                        token,
-                        parent,
                         owner,
                         document,
-                        name,
-                        created_by_script,
+                        ..
                     } => {
-                        // The browser's frame tree takes it, whatever the
-                        // renderer does with it: it hears of its going.
-                        let top = self.document.as_ref().map(|next| next.frame);
-                        let parent_token = if Some(parent) == top {
-                            self.devtools_main_frame_token
-                        } else {
-                            self.child_token(parent)
-                        };
-                        if let Some(parent) = parent_token {
-                            let _ = self.to_browser.send(RendererHostMsg::DidCreateChildFrame {
-                                parent,
-                                frame: token,
-                                name,
-                                created_by_script,
-                            });
-                        }
                         let document_id = self.new_document_id();
                         let Some((dom, next)) = engine_frame(&mut self.engine) else {
                             continue;
                         };
-                        let (node, owner_id) = dom.read(|cx| {
-                            (
-                                cx.node_id(document.get(cx.gc)),
-                                cx.node_id(owner.get(cx.gc)),
-                            )
-                        });
+                        let owner_id = dom.read(|cx| cx.node_id(owner.get(cx.gc)));
                         // Shown already as its iframe was inserted
-                        // (`child_frame_created`), unless its parent's
-                        // frame wasn't yet: given its compositor id.
+                        // (`child_frame_created`: the engine has the frame's
+                        // layout from the first document on, and a paused
+                        // page's DevTools puts it back before script runs):
+                        // given its compositor id.
                         match next.view.child_mut(frame) {
                             Some(view) => view.set_document_id(document_id),
-                            None => {
-                                let view = FrameView::new(
-                                    document.clone(),
-                                    node,
-                                    document_id,
-                                    self.system_colors,
-                                )
-                                .into_child(frame, owner_id);
-                                let top = self.document.as_ref().map(|next| next.frame);
-                                next.view
-                                    .show_child((Some(parent) != top).then_some(parent), view);
-                            }
+                            None => debug_assert!(false, "child frame {frame:?} not shown as it was made"),
                         }
                         // The stack of the script whose iframe made it, for
                         // DevTools' `Page.frameAttached` (its navigation
@@ -1020,20 +989,16 @@ impl RenderThread {
                             .register(&url, frame, data.type_(), data.shared_bytes());
                     }
                     FrameRequest::RevokeBlobUrl { url } => self.blob_urls.revoke(&url),
+                    // The browser and the frame's view have it gone
+                    // already (`RendererFrameClient`, `child_frame_removed`).
                     FrameRequest::Removed {
                         frame,
-                        token,
                         parent,
                         gone,
+                        ..
                     } => {
-                        let _ = self
-                            .to_browser
-                            .send(RendererHostMsg::DidDetachFrame { frame: token });
                         self.blob_urls.revoke_frame(frame);
                         self.cancel_fetches_of_gone_documents();
-                        if let Some((_, next)) = engine_frame(&mut self.engine) {
-                            next.view.remove_child(frame);
-                        }
                         self.children.remove(&gone);
                         self.request_main_frame();
                         // Its parent's `load` may have waited for it.
@@ -5011,6 +4976,37 @@ fn script_loaded(
         url: response.head.url.clone(),
         muted: response.head.tainting == ResponseTainting::Opaque,
     })
+}
+
+/// What the DOM's engine tells of its child frames (`dom_api::FrameClient`).
+pub(super) struct RendererFrameClient {
+    pub(super) to_browser: BrowserSender,
+}
+
+/// The engine's child frames told to the browser as they are made and go,
+/// before the call returns (content's `RenderFrameImpl::CreateChildFrame`
+/// and `FrameDetached` send `CreateChildFrame` and `Detach` in Blink's
+/// call): a frame the browser has is one script has, and one gone is gone
+/// for the browser before anything after its removal is.
+impl dom_api::FrameClient for RendererFrameClient {
+    fn child_frame_created(
+        &mut self,
+        parent: protocol::FrameToken,
+        frame: protocol::FrameToken,
+        name: &str,
+        created_by_script: bool,
+    ) {
+        let _ = self.to_browser.send(RendererHostMsg::DidCreateChildFrame {
+            parent,
+            frame,
+            name: name.to_owned(),
+            created_by_script,
+        });
+    }
+
+    fn frame_detached(&mut self, frame: protocol::FrameToken) {
+        let _ = self.to_browser.send(RendererHostMsg::DidDetachFrame { frame });
+    }
 }
 
 /// What the DOM's engine sends as script asks (`dom_api::LoadSink`): a

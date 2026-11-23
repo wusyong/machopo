@@ -2479,6 +2479,10 @@ impl dom_api::FrameLayout for Frame {
         self.view.show_new_child(parent, view);
     }
 
+    fn child_frame_removed(&mut self, frame: dom_api::FrameId) {
+        self.view.remove_child(frame);
+    }
+
     /// The window's size and scale as they are, before a layout takes
     /// them, as Blink's frame view has its size at once.
     /// A child frame's, as its iframe last laid it out.
