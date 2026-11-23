@@ -270,6 +270,10 @@
 
 弄壞之後行為完全一樣，記在這裡免得重複追查。
 
+**`javascript:` 網址的 task（`dom_api` 的 `history.rs` 的 `run_javascript_urls`）**
+
+- 文件被 discard 之後不再跑清單裡之後的網址：frame 不在了時，engine 照文件找不到 realm，`run_classic_script` 本來就不執行。留著是對應 Blink 的 `if (!GetFrame()) break;`，不靠 engine 的這個行為。
+
 **renderer 對照 engine 的 frame（`documents.rs` 的 `follow_child_frames`）**
 
 - 子 frame 換文件時（`commit_child`）不在 `create_window` 之後當場對帳：接著 parse 新的文件時的 `handle_frame_requests` 照樣對帳，中間只有這個 frame 自己的 `update_child_blocking` 和 `request_main_frame`，沒有東西推動舊文件裡的 frame。留著是讓舊的帳在最早的時候拿掉，不靠之後一定有 `handle_frame_requests`。

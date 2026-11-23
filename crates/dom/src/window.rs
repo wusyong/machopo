@@ -146,6 +146,7 @@ const WINDOW_LOAD: u8 = 12;
 pub(crate) const BLOB_READ: u8 = 13;
 pub(crate) const WORKER_ERROR: u8 = 14;
 pub(crate) const STORAGE_EVENT: u8 = 15;
+const JAVASCRIPT_URLS: u8 = 16;
 
 /// What an element task does (`Cx::take_element_task`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,6 +184,9 @@ pub enum ElementTaskKind {
     /// manipulation task source, so the element tasks queued before it
     /// run first), its document the task's element.
     WindowLoad,
+    /// The `javascript:` URLs navigated to in the document, the task's
+    /// element, run in order (`Cx::take_javascript_urls`).
+    JavaScriptUrls,
     /// A blob read's promise, of the number, resolved (`Cx::take_blob_read`).
     BlobRead(u64),
     /// What the worker of the `Worker` (the task's target) threw, fired at
@@ -723,6 +727,7 @@ impl<'gc> Cx<'_, 'gc> {
                 answered: data & 1 == 1,
             },
             WINDOW_LOAD => ElementTaskKind::WindowLoad,
+            JAVASCRIPT_URLS => ElementTaskKind::JavaScriptUrls,
             STORAGE_EVENT => ElementTaskKind::Storage(
                 self.context_window(context)
                     .and_then(|window| self.take_storage_event(window))
@@ -948,6 +953,43 @@ impl<'gc> Cx<'_, 'gc> {
         self.ensure_document_data(document)
             .frame_navigating
             .set(navigating);
+    }
+
+    /// `url`, a `javascript:` URL `document`'s frame navigates to, run in
+    /// a task of the document's (Blink's `Document::ProcessJavaScriptUrl`:
+    /// one task for those navigated to before it runs, bound to the
+    /// document: a document discarded meanwhile runs none). Its load
+    /// doesn't wait for them: one queued after them runs after them all
+    /// the same. Nothing without a window.
+    pub fn queue_javascript_url(&self, document: NodeRef<'gc>, url: &str) {
+        let Some(window) = self.window_of(document) else {
+            return;
+        };
+        let data = self.ensure_document_data(document);
+        let mut urls = data.javascript_urls.take();
+        urls.push(url.to_owned());
+        data.javascript_urls.set(urls);
+        if !data.javascript_url_task.replace(true) {
+            self.push_element_task(window, document, crate::names::event::LOAD, JAVASCRIPT_URLS, 0);
+        }
+    }
+
+    /// The `javascript:` URLs `document`'s task is to run, taken
+    /// (`ElementTaskKind::JavaScriptUrls`).
+    pub fn take_javascript_urls(&self, document: NodeRef<'gc>) -> Vec<String> {
+        let Some(data) = self.document_data(document) else {
+            return Vec::new();
+        };
+        data.javascript_url_task.set(false);
+        data.javascript_urls.take()
+    }
+
+    /// `document`'s `javascript:` URLs not run, its frame navigating on
+    /// (Blink's `CancelPendingJavaScriptUrls`): its task runs none.
+    pub fn cancel_javascript_urls(&self, document: NodeRef<'gc>) {
+        if let Some(data) = self.document_data(document) {
+            data.javascript_urls.set(Vec::new());
+        }
     }
 
     /// Whether `document` is unloading (HTML's unload counter above 0):
@@ -1491,6 +1533,8 @@ pub(crate) fn new_document_data<'gc>() -> DocumentDataInit<'gc> {
         load_ended: Cell::new(false),
         frame_navigating: Cell::new(false),
         unload_counter: Cell::new(0),
+        javascript_urls: elise::External::new(Cell::new(Vec::new())),
+        javascript_url_task: Cell::new(false),
         responsive_images: None,
         lazy_load_observer: None,
         auto_sizes_observer: None,

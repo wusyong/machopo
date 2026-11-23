@@ -391,46 +391,89 @@ fn a_javascript_url_is_its_targets_origins_alone() {
     let [same, other, opaque] = frames[..] else {
         unreachable!("three");
     };
-    let js = || "javascript:0".to_owned();
+    // Each run counted on its document's root once its tasks ran (a
+    // `javascript:` URL runs in a task of the document's).
+    const JS: &str = "javascript:document.appendChild(document.createComment(\"ran\"))";
+    let ran = |engine: &mut V8Engine, frame: FrameId, _: &str| {
+        while engine.run_element_tasks() {}
+        let (_, owner) = engine.frame_parent(frame).expect("a child frame");
+        engine.dom_mut().read(|cx| {
+            let document = cx.content_document(owner.get(cx.gc)).expect("its document");
+            let mut count = 0_u32;
+            let mut at = cx.first_child(document);
+            while let Some(node) = at {
+                count = count.saturating_add(1);
+                at = cx.next_sibling(node);
+            }
+            count.to_string()
+        })
+    };
     run(
         &mut engine,
-        "var js = 'javascript:0', a = document.body.appendChild(document.createElement('a'));
-         a.href = js;
-         log.push(error(() => { f1.contentWindow.location = js; }),
-                  error(() => { f1.contentWindow.location.href = js; }),
-                  error(() => { f1.contentWindow.location.replace(js); }),
-                  error(() => { f2.contentWindow.location = js; }));
-         f1.name = 'other'; a.target = 'other'; a.click();
-         f2.name = 'opaque'; a.target = 'opaque'; a.click();",
+        &format!(
+            "var js = '{JS}', a = document.body.appendChild(document.createElement('a'));
+             a.href = js;
+             log.push(error(() => {{ f1.contentWindow.location = js; }}),
+                      error(() => {{ f1.contentWindow.location.href = js; }}),
+                      error(() => {{ f1.contentWindow.location.replace(js); }}),
+                      error(() => {{ f2.contentWindow.location = js; }}));
+             f1.name = 'other'; a.target = 'other'; a.click();
+             f2.name = 'opaque'; a.target = 'opaque'; a.click();"
+        ),
     );
     assert_eq!(
         log(&mut engine),
         "SecurityError / SecurityError / SecurityError / SecurityError"
     );
-    assert_eq!(navigations(&mut engine), []);
+    assert_eq!(ran(&mut engine, other, "https://other.test/x/"), "0");
+    assert_eq!(ran(&mut engine, opaque, "data:text/html,"), "0");
     run(
         &mut engine,
         "f0.contentWindow.location = js; f0.contentWindow.location.replace(js);
          f0.name = 'same'; a.target = 'same'; a.click();",
     );
-    assert_eq!(
-        navigations(&mut engine),
-        [(same, js()), (same, js()), (same, js())]
-    );
+    assert_eq!(ran(&mut engine, same, "https://example.test/b.html"), "3");
     // Each child, its own.
     run_in(
         &mut engine,
         other,
         "https://other.test/x/",
-        "location.href = 'javascript:0';",
+        &format!("location.href = '{JS}';"),
     );
     run_in(
         &mut engine,
         opaque,
         "data:text/html,",
-        "location.href = 'javascript:0';",
+        &format!("location.href = '{JS}';"),
     );
-    assert_eq!(navigations(&mut engine), [(other, js()), (opaque, js())]);
+    assert_eq!(ran(&mut engine, other, "https://other.test/x/"), "1");
+    assert_eq!(ran(&mut engine, opaque, "data:text/html,"), "1");
+    // Again, its task run: another of its own.
+    run_in(
+        &mut engine,
+        other,
+        "https://other.test/x/",
+        &format!("location.href = '{JS}';"),
+    );
+    assert_eq!(ran(&mut engine, other, "https://other.test/x/"), "2");
+    assert_eq!(navigations(&mut engine), [], "none for the host to load");
+}
+
+/// A `javascript:` URL whose script takes its frame away (its iframe
+/// removed): those after it in its document's task don't run (Blink's
+/// `ExecuteJavaScriptUrls` stops once the frame is gone).
+#[test]
+fn javascript_urls_stop_once_their_frame_goes() {
+    let (mut engine, _) = engine(&["https://example.test/b.html"]);
+    run(
+        &mut engine,
+        "const w = f0.contentWindow;
+         w.location.href = 'javascript:frameElement.remove()';
+         w.location.href = 'javascript:parent.log.push(\"ran\")';",
+    );
+    while engine.run_element_tasks() {}
+    assert_eq!(log(&mut engine), "");
+    assert_eq!(engine.child_frames(engine.top_frame()), [], "the frame gone");
 }
 
 /// The window's `close()` and `blur()` do nothing, `opener` is none,

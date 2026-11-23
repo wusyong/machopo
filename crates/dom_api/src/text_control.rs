@@ -339,6 +339,9 @@ pub fn run_element_task<H: ScriptHost>(host: &mut H, global: &GlobalRoot) -> boo
                 crate::lifecycle::end_load(host, &element);
                 host.mutate(|cx| cx.note_document_loaded(element.get(cx.gc)));
             }
+            (ElementTaskKind::JavaScriptUrls, Some(document)) => {
+                crate::history::run_javascript_urls(host, &document);
+            }
             // An element's, in a worker: none is queued there (its global
             // has no document).
             (
@@ -347,7 +350,8 @@ pub fn run_element_task<H: ScriptHost>(host: &mut H, global: &GlobalRoot) -> boo
                 | ElementTaskKind::Script
                 | ElementTaskKind::HashChange(..)
                 | ElementTaskKind::Storage(_)
-                | ElementTaskKind::WindowLoad,
+                | ElementTaskKind::WindowLoad
+                | ElementTaskKind::JavaScriptUrls,
                 None,
             ) => {}
         }

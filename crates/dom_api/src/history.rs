@@ -118,6 +118,14 @@ pub(crate) fn navigate<'gc>(
         );
         return;
     }
+    // A `javascript:` URL runs in a task of the document's (Blink's
+    // `Document::ProcessJavaScriptUrl`), not the host's navigation; any
+    // other cancels those not run yet (Blink's `Document::Abort`).
+    if url.scheme() == "javascript" {
+        cx.queue_javascript_url(document, url.as_str());
+        return;
+    }
+    cx.cancel_javascript_urls(document);
     cx.request_navigation_from(
         document,
         initiator,
@@ -126,6 +134,40 @@ pub(crate) fn navigate<'gc>(
             replace,
         },
     );
+}
+
+/// `document`'s `javascript:` URLs run, in order, each the rest of the URL
+/// percent-decoded run as a classic script of the document, its base URL
+/// the document's (HTML's "evaluate a javascript: URL"; Blink's
+/// `Document::ExecuteJavaScriptUrls`), till one takes its frame away. Its
+/// load waited for none of them (what would unblock it checks it itself),
+/// so none is checked here. A result that is a string doesn't replace it.
+pub(crate) fn run_javascript_urls<H: ScriptHost>(host: &mut H, document: &NodeRoot) {
+    for url in host.mutate(|cx| cx.take_javascript_urls(document.get(cx.gc))) {
+        let Some((document_url, base_url)) = host.read(|cx| {
+            let document = document.get(cx.gc);
+            (!cx.is_discarded(document)).then(|| {
+                (
+                    cx.document_url(document).map(|url| url.to_string()).unwrap_or_default(),
+                    cx.document_base_url(document).map(String::from),
+                )
+            })
+        }) else {
+            break;
+        };
+        let source = percent_decode(url.strip_prefix("javascript:").unwrap_or_default());
+        host.run_classic_script(
+            document,
+            &crate::ClassicScript {
+                source: &source,
+                url: &document_url,
+                base_url: base_url.as_deref(),
+                line: 1,
+                muted: false,
+                use_credentials: false,
+            },
+        );
+    }
 }
 
 /// HTML's "scroll to the fragment" of `document` at `url`: its target
@@ -701,4 +743,18 @@ pub fn restore_history<H: ScriptHost>(
         cx.set_history_state(history, state);
         cx.set_history_manual_scroll_restoration(history, manual);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::percent_decode;
+
+    #[test]
+    fn percent_decoding() {
+        assert_eq!(percent_decode("%C3%A9%20x"), "é x");
+        assert_eq!(percent_decode("%74op"), "top");
+        // What isn't `%` and two hex digits stays as it is.
+        assert_eq!(percent_decode("100%"), "100%");
+        assert_eq!(percent_decode("%zz%4"), "%zz%4");
+    }
 }

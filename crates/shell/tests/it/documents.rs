@@ -1181,6 +1181,63 @@ fn a_fragment_scrolls_as_it_is_navigated_to() {
     assert_eq!(run(&url), "true,0");
 }
 
+/// A `javascript:` URL navigated to waits in its document's task; a
+/// navigation after it cancels it (Blink's `Document::Abort` cancels the
+/// document's pending `javascript:` URLs): it never runs.
+#[test]
+fn a_navigation_cancels_a_javascript_url_not_run_yet() {
+    let server = frames_server(
+        "<!DOCTYPE html><iframe src=/child></iframe><script>var log = [];\
+           onload = () => { const f = document.querySelector('iframe'), w = frames[0];\
+             f.onload = () => testRunner.reportHarnessResults(log.join() + '|');\
+             w.location.href = 'javascript:parent.log.push(\"ran\")';\
+             w.location.href = '/other'; };</script>",
+        "<!DOCTYPE html><p>child</p>",
+        &[(
+            "/other",
+            net::test_server::Route::ok("text/html", "<!DOCTYPE html><p>other</p>"),
+        )],
+    );
+    assert_eq!(run(&server.url("/index.html")), "|");
+}
+
+/// A `javascript:` URL's document gone before its task runs (its iframe
+/// removed): it never runs, in that document or another.
+#[test]
+fn a_javascript_url_goes_with_its_document() {
+    let server = frames_server(
+        "<!DOCTYPE html><iframe src=/child></iframe><script>var log = [];\
+           onload = () => { const w = frames[0];\
+             w.location.href = 'javascript:parent.log.push(\"ran\")';\
+             document.querySelector('iframe').remove();\
+             setTimeout(() => testRunner.reportHarnessResults(log.join() + '|'), 50); };</script>",
+        "<!DOCTYPE html><p>child</p>",
+        &[],
+    );
+    assert_eq!(run(&server.url("/index.html")), "|");
+}
+
+/// A `javascript:` URL runs in a task of its own, its document's `load`
+/// queued before it by then: what the script queues comes after `load`, as
+/// in Chrome (whose `ExecuteJavaScriptUrls` fires `load` in the task, at
+/// its `CheckCompleted`).
+#[test]
+fn what_a_javascript_url_queues_comes_after_load() {
+    let url = site(
+        "what_a_javascript_url_queues_comes_after_load",
+        &[(
+            "index.html",
+            "<!DOCTYPE html><script>const log = [];\
+               const done = () => log.length == 2 && testRunner.reportHarnessResults(log.join());\
+               onmessage = () => { log.push('message'); done(); };\
+               onload = () => { log.push('load'); done(); };\
+               addEventListener('DOMContentLoaded', () => {\
+                 location.href = 'javascript:postMessage(\"\", \"*\")'; });</script>",
+        )],
+    );
+    assert_eq!(run(&url), "load,message");
+}
+
 /// A `javascript:` URL that another origin's page sets a child's
 /// `location` to: a `SecurityError`, nothing run in the child (whose
 /// realm it would be); the same origin's runs, after (so the other's

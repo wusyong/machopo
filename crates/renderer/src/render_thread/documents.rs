@@ -1107,9 +1107,6 @@ impl RenderThread {
             .is_some_and(|next| next.frame == frame);
         match navigation {
             // A `javascript:` URL's script runs in the frame.
-            FrameNavigation::To { url, .. } if url.starts_with("javascript:") => {
-                self.run_javascript_url(frame, &url);
-            }
             FrameNavigation::To { url, replace } if top => {
                 let kind = protocol::renderer::BeginNavigationKind::To { url, replace };
                 self.begin_navigation(frame, initiator, kind);
@@ -1176,40 +1173,6 @@ impl RenderThread {
                 }
             }
         }
-    }
-
-    /// A `javascript:` URL navigated to in `frame`: its source (the rest
-    /// of the URL, percent-decoded) run as a classic script of the frame's
-    /// document.
-    fn run_javascript_url(&mut self, frame: FrameId, url: &str) {
-        let source = document::percent_decode(&url["javascript:".len()..]);
-        let Some(document) = self.doc(frame).map(|next| next.document.clone()) else {
-            return;
-        };
-        let Some(document_url) = self.document_url(frame).map(|url| url.to_string()) else {
-            return;
-        };
-        let Some(engine) = &mut self.engine else {
-            return;
-        };
-        // HTML's: its base URL is its document's.
-        let base_url = engine
-            .dom_mut()
-            .read(|cx| cx.document_base_url(document.get(cx.gc)).map(String::from));
-        engine.run_classic_script(
-            frame,
-            &dom_api::ClassicScript {
-                source: &source,
-                url: &document_url,
-                base_url: base_url.as_deref(),
-                line: 1,
-                muted: false,
-                use_credentials: false,
-            },
-        );
-        self.handle_frame_requests();
-        self.request_next_frame_if_dom_changed();
-        self.send_harness_results();
     }
 
     /// `RendererMsg::CommitSameDocumentNavigation` for the DOM: the

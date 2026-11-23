@@ -96,44 +96,9 @@ pub(crate) fn root_has_class<'gc>(
         })
 }
 
-/// `%XX` sequences decoded, then read as UTF-8 (lossily).
-pub(crate) fn percent_decode(text: &str) -> String {
-    let mut rest = text.as_bytes();
-    let mut out = Vec::with_capacity(rest.len());
-    while let Some((&first, after)) = rest.split_first() {
-        let decoded = (first == b'%')
-            .then(|| after.split_first_chunk::<2>())
-            .flatten()
-            .and_then(|(hex, after)| {
-                let hex = std::str::from_utf8(hex).ok()?;
-                Some((u8::from_str_radix(hex, 16).ok()?, after))
-            });
-        match decoded {
-            Some((byte, after)) => {
-                out.push(byte);
-                rest = after;
-            }
-            None => {
-                out.push(first);
-                rest = after;
-            }
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn percent_decoding() {
-        assert_eq!(percent_decode("%C3%A9%20x"), "é x");
-        assert_eq!(percent_decode("%74op"), "top");
-        // What isn't `%` and two hex digits stays as it is.
-        assert_eq!(percent_decode("100%"), "100%");
-        assert_eq!(percent_decode("%zz%4"), "%zz%4");
-    }
 
     #[test]
     fn plain_text_is_not_parsed_as_markup() {

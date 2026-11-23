@@ -1,0 +1,45 @@
+# Stage 1, step 4: a javascript: URL runs in a task of its document's.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "env", "MACHOPO_GPU_ADAPTER=cpu", "cargo", "test", "-q", "-p", "shell", "--test", "it"]
+timeout = 240
+
+[[mutant]]
+name = "a javascript: URL left to the host"
+file = "crates/dom_api/src/history.rs"
+from = '''    if url.scheme() == "javascript" {
+        cx.queue_javascript_url(document, url.as_str());
+        return;
+    }'''
+to = '''    if url.scheme() == "javascript" && false {
+        cx.queue_javascript_url(document, url.as_str());
+        return;
+    }'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "cross_origin::"]
+
+[[mutant]]
+name = "a navigation doesn't cancel a javascript: URL"
+file = "crates/dom_api/src/history.rs"
+from = '''    cx.cancel_javascript_urls(document);
+    cx.request_navigation_from('''
+to = '''    cx.request_navigation_from('''
+
+[[mutant]]
+name = "a javascript: URL's task never queued"
+file = "crates/dom/src/window.rs"
+from = '''            self.push_element_task(window, document, crate::names::event::LOAD, JAVASCRIPT_URLS, 0);'''
+to = '''            let _ = window;'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "cross_origin::"]
+
+[[mutant]]
+name = "a later javascript: URL finds its task queued still"
+file = "crates/dom/src/window.rs"
+from = '''        data.javascript_url_task.set(false);
+        data.javascript_urls.take()'''
+to = '''        data.javascript_urls.take()'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "cross_origin::"]
+
+[[mutant]]
+name = "a discarded document's javascript: URLs run"
+file = "crates/dom_api/src/history.rs"
+from = '''            (!cx.is_discarded(document)).then(|| {'''
+to = '''            Some(()).map(|()| {'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "cross_origin::"]

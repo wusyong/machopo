@@ -451,6 +451,11 @@ pub struct DocumentData {
     /// (`window`'s `unloading`), while which it makes no child frame and
     /// navigates nowhere.
     pub(crate) unload_counter: Cell<u32>,
+    /// The `javascript:` URLs navigated to in it, to run in its task
+    /// (`window`'s `queue_javascript_url`), and whether that is queued
+    /// (Blink's `pending_javascript_urls_`, `javascript_url_task_handle_`).
+    pub(crate) javascript_urls: External<Cell<Vec<String>>>,
+    pub(crate) javascript_url_task: Cell<bool>,
     /// Its `<img>`s that select again when its environment changes
     /// (`image`'s `responsive_images`), weakly.
     pub(crate) responsive_images: Member<HeapVector<image::ResponsiveImage>>,

@@ -22,7 +22,7 @@
 | 2e-3. iframe 的 `load` 和「載入結束了」在子 frame 的 window `load` 的 task 裡（第 19 條） | 做完，待審查（兩條 mutation 沒抓到，見做過的檢查） | 2026-11-23 |
 | 2f. 拿掉 `Created`、`Removed` 的便條，renderer 的帳對照 engine 的 frame（第 22 條） | 做完，待審查 | 2026-11-23 |
 | 3. 同一份文件內的捲動當場做，拿掉 renderer 那份文件網址的副本（第 7 條的第 3 步） | 做完，待審查 | 2026-11-23 |
-| 4. `javascript:` 網址在 `dom_api` 裡排成綁在 Document 上的 task（第 4 步） | 沒開始 | |
+| 4. `javascript:` 網址在 `dom_api` 裡排成綁在 Document 上的 task（第 7 條的第 4 步、第 23 條） | 做完，待審查 | 2026-11-23 |
 | 5. intersection 的通知排成真的 task（第 5 步） | 沒開始 | |
 | 6. 圖片和 script 開始載入的記錄交給 `dom`（第 6 步） | 沒開始 | |
 
@@ -172,4 +172,18 @@
 **Mutation test**（`mutants-3.toml`）：5 條全部抓到，跑完檔案都還原了。
 
 **測試**：`dom` 254 個、`dom_api` 201 個、`dom_js` 552 個（1 個 ignored）、`renderer` 128 個、`browser` 191 個、`shell` 664 個都通過。
+
+### 第 4 步：`javascript:` 網址排在文件上（2026-11-23，Linux：Fedora 45、debug build，`c2c85c0` 之上）
+
+對照 Chromium main 的 `frame_loader.cc`、`document.cc`（`document.cc` 太長，用 Gitiles 的 `?format=TEXT` 抓下來解開、只 grep）之後決定（第 23 條）；第 2 項實作前從「`load` 等它」改成不等（machopo 的 `load` 是 task，等只會把 `load` 推到 `javascript:` 的 script 排的 task 後面，Chrome 在那些 task 之前同步發 `load`）。
+
+**做的事**：DOM 的文件加 `javascript:` 網址的清單和「task 排了」（`queue_javascript_url`、`take_javascript_urls`、`cancel_javascript_urls`；element task `JavaScriptUrls`，綁在文件上）；`dom_api` 的 `navigate` 遇到 `javascript:` 網址（`may_navigate` 之後）排進文件的清單，遇到別的清掉清單；`run_javascript_urls` 照順序跑（去掉 `javascript:`、percent-decode，文件的網址和 base URL），文件被 discard 了就停。renderer 的 `run_javascript_url` 和 `frame_navigated` 的那一支拿掉；renderer 的 `percent_decode` 沒有人用了，拿掉，它的單元測試移到 `dom_api` 的那一份。
+
+**測試**：`shell` 的 `documents::a_navigation_cancels_a_javascript_url_not_run_yet`（改之前 `ran|`）、`documents::what_a_javascript_url_queues_comes_after_load`（改之前 `message,load`）是必壞的；`documents::a_javascript_url_goes_with_its_document` 改之前也通過，守著 discard 的情況。dom_js 的 `cross_origin::a_javascript_url_is_its_targets_origins_alone` 原本看 `Navigation` 的便條，改成數 script 在目標文件裡跑了幾次（每次在文件上加一個 comment）；新增 `cross_origin::javascript_urls_stop_once_their_frame_goes`。
+
+**WPT**：iframe、`html/dom/documents/`、`html/browsers/browsing-the-web/`、`html/browsers/history/`、`html/browsers/windows/`、`html/semantics/links/`、`html/webappapis/scripting/`，415 個，0 個非預期的結果。
+
+**Mutation test**（`mutants-4.toml`）：第一次 6 條，3 條抓到。`a later javascript: URL finds its task queued still` 補了同一份文件在不同的 task 再導覽一次之後抓到；`no load check after javascript: URLs` 指出跑完之後的 `check_completed` 是多的（`load` 不等它們），拿掉那一行，mutant 跟著拿掉；`a discarded document's javascript: URLs run` 等價（frame 不在了時 engine 本來就不執行），記進 `docs/test-gaps.md` 的「等價、不用處理的 mutation」。跑完檔案都還原了。
+
+**測試**：`dom` 254 個、`dom_api` 201 個（單元測試多一個）、`dom_js` 553 個（1 個 ignored）、`renderer` 127 個（`percent_decode` 的單元測試移走了）、`browser` 191 個、`shell` 667 個都通過。
 
