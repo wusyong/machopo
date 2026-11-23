@@ -3,7 +3,7 @@
 //! 800×600. [`lay_out`] builds and lays out once; a [`Page`] is changed
 //! and updated, each update checked against building it all again.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 
 use dom::{Cx, Dom, LayoutTreeFlags, LocalToken, NodeKind, NodeRef, NodeRoot, QualName};
@@ -173,6 +173,7 @@ impl Page {
         // selection goes over points at the boxes in the tree.
         assert_eq!(got, want, "rendered, and in the block of");
         assert_eq!(tree.texts_for_testing(), fresh.texts_for_testing());
+        assert_eq!(tree.inlines_for_testing(), fresh.inlines_for_testing());
         let (got, want) = (tree.layout(*viewport), fresh.layout(*viewport));
         assert!(
             got == want,
@@ -181,6 +182,7 @@ impl Page {
             want.dump()
         );
         assert_for_geometry(&got);
+        assert_found_from_boxes(tree, &got, *viewport);
         self.layout = self.tree.last_layout();
         self.view = Some(got);
     }
@@ -198,6 +200,7 @@ impl Page {
     /// The tree laid out at the viewport, and its elements' boxes by `id`.
     pub fn lay_out(&mut self) -> Laid {
         let view = self.tree.layout(self.viewport);
+        assert_found_from_boxes(&self.tree, &view, self.viewport);
         let layout = self.tree.last_layout();
         Laid::new(view, self.ids(), layout)
     }
@@ -338,6 +341,88 @@ fn assert_for_geometry(view: &BoxFragment) {
     for child in &view.children {
         once(view, &child.fragment, &mut seen);
         below(view, &child.fragment, &mut seen);
+    }
+}
+
+/// What finding an element from its boxes (`BoxTree::geometry`) rests on,
+/// and that it answers as the walk from the root does: each fragment but
+/// the `LayoutView` is found by the link of one box, and each query of each
+/// node there is a box of is the same, to the bit, with every scroll
+/// container and the page scrolled and the sticky boxes stuck. A big page's
+/// nodes are sampled: each walk goes through all of it.
+fn assert_found_from_boxes(tree: &BoxTree, view: &BoxFragment, viewport: SizeF) {
+    fn each<'a>(fragment: &'a BoxFragment, f: &mut impl FnMut(&'a BoxFragment)) {
+        for child in &fragment.children {
+            f(&child.fragment);
+            each(&child.fragment, f);
+        }
+    }
+    let mut walked = Vec::new();
+    let mut nodes = BTreeSet::new();
+    let mut scroll = layout::ScrollOffsets::default();
+    each(view, &mut |fragment| {
+        walked.push(std::ptr::from_ref(fragment));
+        if let Some(node) = fragment.node {
+            nodes.insert(node);
+            if fragment.style.is_scroll_container() {
+                scroll.insert(node, PointF::new(3.5, 12.25));
+            }
+        }
+        for line in &fragment.lines {
+            nodes.extend(line.boxes.iter().map(|b| b.node));
+            nodes.extend(
+                line.runs
+                    .iter()
+                    .filter_map(|run| run.source.as_ref().map(|(node, _)| *node)),
+            );
+        }
+    });
+    let mut linked: Vec<_> = tree
+        .linked_fragments_for_testing(view)
+        .into_iter()
+        .map(std::ptr::from_ref)
+        .collect();
+    walked.sort_unstable();
+    linked.sort_unstable();
+    assert!(
+        walked == linked,
+        "{} fragments, {} found from the boxes' links, not each once:
+{}",
+        walked.len(),
+        linked.len(),
+        view.dump()
+    );
+    let at = PointF::new(7.3, 130.6);
+    let sticky = layout::StickyPositions::new(view, viewport).offsets(&scroll, at);
+    let geometry = tree.geometry(view, at, &scroll, &sticky);
+    let stride = (nodes.len().saturating_mul(walked.len()) / 2_000_000).max(1);
+    for &node in nodes.iter().step_by(stride) {
+        let which = format!("#{}", node.get());
+        assert_eq!(
+            geometry.element_box(node),
+            layout::element_box(view, &scroll, &sticky, node),
+            "element_box of {which}"
+        );
+        assert_eq!(
+            geometry.client_rects(node),
+            layout::client_rects(view, at, &scroll, &sticky, node),
+            "client_rects of {which}"
+        );
+        assert_eq!(
+            geometry.border_quads(node),
+            layout::border_quads(view, at, &scroll, &sticky, node),
+            "border_quads of {which}"
+        );
+        assert_eq!(
+            geometry.box_quads(node),
+            layout::box_quads(view, at, &scroll, &sticky, node),
+            "box_quads of {which}"
+        );
+        assert_eq!(
+            geometry.scroll_size(node),
+            layout::scroll_size(view, node),
+            "scroll_size of {which}"
+        );
     }
 }
 

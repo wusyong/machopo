@@ -77,6 +77,7 @@ mod table;
 mod text;
 mod tree_builder;
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use computed_style::{
@@ -113,8 +114,8 @@ pub use fragment::{
     TableColumn, TextCluster, TextFragment,
 };
 pub use geometry::{
-    BoxQuads, Quad, ScrollOffsets, border_quads, bounding_rect, box_quads, box_transform,
-    client_rects, element_box, pseudo_box_quads, text_rects,
+    BoxQuads, Geometry, Quad, ScrollOffsets, border_quads, bounding_rect, box_quads, box_transform,
+    client_rects, element_box, pseudo_box_quads, scroll_size, text_rects,
 };
 pub use platform_fonts::{PlatformFont, platform_fonts};
 use replaced::Replaced;
@@ -146,6 +147,12 @@ const WIDTH_NOISE: f32 = 1.0 / 64.0;
 /// viewport, whose only child is the root element's box.
 const LAYOUT_VIEW: usize = 0;
 
+/// A box's [`LayoutBox::link`] as child `at` of box `parent`'s fragment;
+/// none past what `u32` holds, which geometry then finds no box for.
+fn child_link(parent: usize, at: usize) -> Option<(u32, u32)> {
+    Some((u32::try_from(parent).ok()?, u32::try_from(at).ok()?))
+}
+
 /// The box tree (`LayoutObject` tree) of one document.
 pub struct BoxTree {
     /// Indexed by taffy node id; `LAYOUT_VIEW` first.
@@ -161,6 +168,12 @@ pub struct BoxTree {
     /// over. Taken out with the box or its content: debug builds check it
     /// against the box.
     texts: NodeIdHashMap<usize>,
+    /// The boxes whose inline content each inline element has boxes in, by
+    /// element: one, or several where blocks split it. A set by both, as
+    /// an element in many boxes leaves them one at a time. Kept as `texts`
+    /// is (Blink has no such index: a `LayoutInline` is in its containing
+    /// block's `FragmentItems`, which its `LayoutObject` reaches).
+    inlines: BTreeSet<(NodeId, usize)>,
     document: DocumentBoxes,
     last_layout: LayoutUpdate,
     /// The `calc()` values the boxes' taffy styles refer to.
@@ -318,6 +331,12 @@ struct LayoutBox {
     /// The fragment made at the last layout, kept while nothing above
     /// says otherwise (Blink's cached layout result).
     fragment: Option<Arc<BoxFragment>>,
+    /// Where that fragment is: which child of which box's fragment, as the
+    /// last fragment made with it as a child had it (the containing
+    /// block's for an out-of-flow box, not `parent`'s). What geometry
+    /// climbs from an element, as Blink's `LayoutObject::Container()`;
+    /// stale once that fragment goes, which the climb sees.
+    link: Option<(u32, u32)>,
     /// The `<clipPath>` its `clip-path: url()` names, as captured when the
     /// box was built (a change to it builds the box again).
     clip_source: Option<Arc<svg::ClipSource>>,
@@ -370,6 +389,7 @@ impl LayoutBox {
             needs_layout: false,
             needs_fragment: true,
             fragment: None,
+            link: None,
             clip_source: None,
         }
     }
@@ -802,6 +822,7 @@ impl BoxTree {
             unused: Vec::new(),
             elements: NodeIdHashMap::default(),
             texts: NodeIdHashMap::default(),
+            inlines: BTreeSet::new(),
             document,
             last_layout: LayoutUpdate::default(),
             calcs,
@@ -942,6 +963,8 @@ impl BoxTree {
     fn index_texts(&mut self, index: usize) {
         if let Some(inline) = &self.boxes[index].inline {
             self.texts.extend(inline.nodes().map(|node| (node, index)));
+            self.inlines
+                .extend(inline.inline_elements().map(|node| (node, index)));
         }
     }
 
@@ -949,6 +972,9 @@ impl BoxTree {
     /// it goes.
     fn forget_texts(&mut self, index: usize) {
         if let Some(inline) = &self.boxes[index].inline {
+            for node in inline.inline_elements() {
+                self.inlines.remove(&(node, index));
+            }
             for node in inline.nodes() {
                 if self.texts.get(&node) == Some(&index) {
                     self.texts.remove(&node);
@@ -1015,6 +1041,12 @@ impl BoxTree {
     /// (`BoxTree::texts`), stale ones included.
     pub fn texts_for_testing(&self) -> usize {
         self.texts.len()
+    }
+
+    /// How many entries the index of the boxes inline elements are in
+    /// (`BoxTree::inlines`) has, stale ones included.
+    pub fn inlines_for_testing(&self) -> usize {
+        self.inlines.len()
     }
 
     pub fn capacity_for_testing(&self) -> usize {
@@ -1369,7 +1401,9 @@ impl BoxTree {
             .collect();
         let mut children: Vec<FragmentLink> = children
             .into_iter()
-            .map(|child| {
+            .enumerate()
+            .map(|(at, child)| {
+                self.boxes[usize::from(child)].link = child_link(index, at);
                 let location = self.boxes[usize::from(child)].layout.location;
                 FragmentLink {
                     offset: PointF::new(location.x, location.y),
@@ -1383,6 +1417,7 @@ impl BoxTree {
         // before anything on it.
         if let Some(marker) = self.boxes[usize::from(id)].marker {
             let marker_child = children.len();
+            self.boxes[usize::from(marker)].link = child_link(index, marker_child);
             children.push(self.marker_link(usize::from(id), marker));
             if let Some(first) = lines.first_mut() {
                 first.atomic_inlines.insert(

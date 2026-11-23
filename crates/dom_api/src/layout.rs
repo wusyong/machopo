@@ -50,6 +50,16 @@ pub trait FrameLayout: Any {
     /// viewport (scrolled), in order; empty without one.
     fn client_rects(&self, node: NodeId) -> Vec<RectF>;
 
+    /// `node`'s scrollable overflow as last laid out, from its padding
+    /// box's origin, at least the padding box (`scrollWidth`,
+    /// `scrollHeight`); `None` without a box of its own (an inline
+    /// element's). Apart from `element_box`, which doesn't work it out, as
+    /// Blink's `OffsetWidth()` doesn't. None by default.
+    fn scroll_size(&self, node: NodeId) -> Option<SizeF> {
+        let _ = node;
+        None
+    }
+
     /// The boxes of text `text`'s data from `start` to `end` (UTF-16 code
     /// units), CSS px of the viewport (scrolled, unless it is in a box
     /// fixed to it), as last laid out (Blink's

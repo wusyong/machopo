@@ -9,7 +9,7 @@
 | 步驟 | 狀態 | 完成日期 |
 | --- | --- | --- |
 | 1. 座標 | 做完，等審核 | 2026-11-22 |
-| 2. 元素 | 還沒開始（「待決定」1、2 已決定；`0108` 要先 rebase 到 `main`） | |
+| 2. 元素 | 做完，等審核 | 2026-11-23 |
 | 3. 文字 | 還沒開始（先決定「待決定」4） | |
 
 ## 驗收
@@ -22,7 +22,10 @@
 | 從 script 看到的：rect、文字的 `Range`、SVG、`layerY`；`offsetX`、`offsetY` 不變 | `cargo test -p shell --test it geometry::` |
 | fixed 盒子裡的 DevTools 盒子模型和 `<select>` 的選單在畫出來的地方 | `cargo test -p shell --test it devtools_overlay::`；`cargo test -p shell --test it browser_view::` |
 | 捲過的頁面上點得到 fixed 列裡的按鈕，選單開在它下面；`about:demo` 示範 | `python3 scripts/test.py scenarios fixed-geometry`；`python3 scripts/test.py scenarios position-fixed` |
-| 守著這些的測試擋得住弄壞的實作 | `python3 scripts/test.py mutate rfcs/0108-geometry-queries/mutants-1.toml` |
+| 元素的盒子從連結和行內元素的索引找到：經過 transform、sticky、捲動容器，out-of-flow 盒子、外側 marker、flex 的 `order`、float、被 block 切開和換行的行內元素、table；DOM 改過、盒子的位置被重用之後；查詢只走到那個盒子，和兄弟的數量無關 | `cargo test -p layout --test it geometry::` |
+| 每個節點從盒子找到的 `element_box`、client rect、border quad、沒有 pseudo 的 box quad、`scroll_size` 和從根走的每個 bit 相同（捲過的捲動容器、頁面和黏住的盒子）；每個 fragment 剛好被一個盒子的連結找到；行內元素的索引和重建的一樣 | `cargo test -p layout --test it`（`Page` 的 `assert_found_from_boxes`，每次檢查都驗） |
+| `scrollWidth`、`scrollHeight` 問的時候才算，盒子不帶它 | `cargo test -p paint --test it geometry::`；`cargo test -p dom_api --test it geometry::` |
+| 守著這些的測試擋得住弄壞的實作 | `python3 scripts/test.py mutate rfcs/0108-geometry-queries/mutants-1.toml`；`python3 scripts/test.py mutate rfcs/0108-geometry-queries/mutants-2.toml` |
 
 ## 做過的檢查
 
@@ -77,3 +80,36 @@
 - 流程上的錯：`test.py mutate` 還原原始碼，但 `target/debug/machopo.exe` 還是最後一條 mutation 編出來的，拿它分類時多出幾千個假的不同。重編之後整套比對重跑，數字是上面這些。
 - 已完成的 RFC 0091 的 `mutants-2a.toml` 有一條的原文是拿掉的 `viewport_origin_of`，那份 spec 因此不能照原樣重跑；同一件事現在由這份的 `mutants-1.toml` 守著，舊的照規定不改。
 - 沒驗的：macOS、Linux、真的視窗（沒動視窗那一層）、真實網站。這一段不讓查詢變快：走訪照舊是整棵樹。
+
+2026-11-23，第 2 階段（Windows 11、Chrome 158）：
+
+- `0108` 先 rebase 到 `main` 的 d2105e5（含 cc6479f 的盒子樹修正：原型上不同的 10 組都出在它）。
+- 每次 `Page` 的檢查從盒子找每個節點的 `element_box`、client rect、border quad、沒有 pseudo 的 box quad 和 `scroll_size`，和從根走的每個 bit 比（每個捲動容器、頁面都捲過，黏住的盒子照它們的位移）；每個 fragment 剛好被一個盒子的連結找到；行內元素的索引和重建的一樣。layout 的 `geometry::` 另外四個測試（「驗收」）。
+- `cargo test -p layout -p paint -p dom_api -p renderer` 和 shell 的 `geometry::`、`devtools_overlay::`、`browser_view::` 通過（layout 32 + 481、paint 9 + 278、dom_api 26 + 201、renderer 128、shell 38、11、45）。
+- WPT（cssom-view、`uievents/mouse/layer-coords-transform.html`、dom/ranges）47007 個檢查，沒有非預期的結果，1 個原本標著的 known intermittent（`scroll-behavior-smooth-navigation.html`）；預期結果沒改。
+- mutation test：第一次 16 條，沒抓到 3 條，都改了程式或記下來，沒有補測試：
+  - text 的盒子也放進要走的路徑：這一段的查詢從它拿不到東西（text 節點沒有行內盒子，`<br>` 不在行的盒子裡），從 `paths` 拿掉；之後 `text_rects` 才用 `texts`。
+  - 路徑去掉重複：一個元素不是有自己的盒子、就是在某個 block 的行內內容裡，兩種索引不會都有它，拿掉。因此「行內元素的索引不收 pseudo-element 的」變成要守的（block 有行內的 `::before` 時它自己的盒子會走兩次），加了一條。
+  - 連結比對 fragment 的指標、往上爬的步數有上限：盒子一致時都不會成立，是防呆，記進 `docs/test-gaps.md` 的「等價、不用處理的 mutation」，從 spec 拿掉。
+  - 另外加 `is_user_scrollable` 的 `>=`（剛好填滿的不算能捲）。最後 16 條全部抓到，檔案都還原。
+- 量測：`target/perf` 第一次編，V8 照原型的做法連 `target/debug` 解好的同一份 release 的 V8（`RUSTY_V8_ARCHIVE`）。每個元素讀一次，三次的中位數，ms；「從根走」是原型的 binary 切到原本的走訪（它的基底是 a2f1722，不是第 1 階段的 commit）：
+
+  | 頁面 | 查詢 | 第 2 階段 | 從根走 | Chrome |
+  | --- | --- | --- | --- | --- |
+  | 1000 列 | `offsetHeight` | 0.19 | | 0.20 |
+  | 10000 列 | `offsetHeight` | 2.16 | 428 | 2.12 |
+  | 10000 列 | `getBoundingClientRect` | 3.8 | 1570 | 3.9 |
+  | 10000 列 | 前 1000 列的 `offsetTop` | 0.33 | 120 | 0.41 |
+  | 10000 列 | `body.offsetWidth` 1000 次 | 0.20 | 124 | 0.21 |
+  | 30000 列 | `offsetHeight` | 7.15 | | 6.4 |
+  | 30000 列 | `getBoundingClientRect` | 14.1 | | 12.9 |
+  | 一段 1000 個 `<span>` | `offsetHeight` | 0.68 | 0.62 | 0.17 |
+  | 一段 10000 個 `<span>` | `offsetHeight` | 40 | 41.5 | 2.13 |
+  | 一段 10000 個 `<span>` | `getBoundingClientRect` | 35.7 | 31.9 | 4.36 |
+
+  - 列數變三倍，`offsetHeight` 和 rect 慢 3.3 和 3.7 倍（Chrome 3.0 和 3.3）：不隨列數的平方變慢，「什麼時候停」不成立。
+  - 一段裡的 `<span>` 變十倍慢 59 倍：「待決定」3 的 I1 是 O(M²)，從根走時也一樣；這一段沒有讓它變慢。數字也寫進 README 的「待決定」3。
+  - 「改一點、讀一次」10000 列 15.8 ms（Chrome 4.95），比原型的 10.2 慢；和原型交替各跑 5 次是 9.65–16.2 和 9.55–13.5，是雜訊，不是索引的維護。和 Chrome 的差在 layout 本身（「之後的可能」1 到 3）。一段 10000 個 `<span>` 時是 815 ms（從根走 796、Chrome 23.5），同樣是 layout。
+- 已完成的 RFC 的 spec 有兩條因為 `BlockBox` 拿掉了 `scroll_size` 不能照原樣重跑：0036 的 `mutants-1b.toml` 的「an inline element has its box」（換上去的程式建一個有 `scroll_size` 的 `BlockBox`，編不過）、0091 的 `mutants-2a.toml` 的「a box that just fits scrolls」（原文不在了）。後者現在由這份的 `mutants-2.toml` 守著；前者守的是 resize observer 分辨行內元素，和 `scroll_size` 無關，換上去的程式拿掉那個欄位就能跑。舊的照規定不改。
+- `cargo test --workspace` 4673 個通過、0 失敗、2 個原本就忽略；fmt（排了五個改到的檔案之後）、clippy（paint 的測試多一個型別別名之後）、七個 sanity 通過。
+- 沒驗的：行內元素的索引的記憶體和維護的時間沒有單獨量（「缺點」）；macOS、Linux、真的視窗（沒動視窗那一層）、真實網站。

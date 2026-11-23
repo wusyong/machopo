@@ -583,9 +583,9 @@ pub(crate) fn scroll_width<'gc>(cx: &ApiCx<'_, 'gc>, this: NodeRef<'gc>) -> Resu
             if is_scrolling_element(cx, layout, this) {
                 return round(layout.viewport().content_size.width);
             }
-            box_of(cx, layout, this)
-                .and_then(|found| found.block)
-                .map_or(0, |block| round(block.scroll_size.width))
+            layout
+                .scroll_size(cx.node_id(this))
+                .map_or(0, |size| round(size.width))
         })
         .unwrap_or(0))
 }
@@ -596,9 +596,9 @@ pub(crate) fn scroll_height<'gc>(cx: &ApiCx<'_, 'gc>, this: NodeRef<'gc>) -> Res
             if is_scrolling_element(cx, layout, this) {
                 return round(layout.viewport().content_size.height);
             }
-            box_of(cx, layout, this)
-                .and_then(|found| found.block)
-                .map_or(0, |block| round(block.scroll_size.height))
+            layout
+                .scroll_size(cx.node_id(this))
+                .map_or(0, |size| round(size.height))
         })
         .unwrap_or(0))
 }

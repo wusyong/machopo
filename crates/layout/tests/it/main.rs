@@ -20,6 +20,7 @@ mod font_features;
 mod font_selection;
 mod form_controls;
 mod generated;
+mod geometry;
 mod grid;
 mod inline;
 mod inline_block;

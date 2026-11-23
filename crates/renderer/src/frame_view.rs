@@ -1436,14 +1436,21 @@ impl FrameView {
         }
     }
 
-    /// `element`'s box as last laid out.
-    pub(crate) fn element_box(&self, element: NodeId) -> Option<ElementBox> {
-        let mut found = layout::element_box(
+    /// The last layout's geometry, found from the elements' boxes
+    /// (`layout::BoxTree::geometry`): the box tree and the fragments are
+    /// updated together, so they agree.
+    fn geometry(&self) -> Option<layout::Geometry<'_>> {
+        Some(self.box_tree.as_ref()?.geometry(
             self.fragment.as_ref()?,
+            self.scroll.viewport,
             &self.scroll.containers,
             &self.scroll.stuck.offsets,
-            element,
-        )?;
+        ))
+    }
+
+    /// `element`'s box as last laid out.
+    pub(crate) fn element_box(&self, element: NodeId) -> Option<ElementBox> {
+        let mut found = self.geometry()?.element_box(element)?;
         // A sticky box's insets are resolved against its scrollport,
         // which only its constraints know.
         if let Some(constraints) = self.scroll.sticky.get((element, None))
@@ -1459,16 +1466,15 @@ impl FrameView {
     /// `element`'s boxes' border boxes as last laid out, CSS px of the
     /// viewport.
     pub(crate) fn client_rects(&self, element: NodeId) -> Vec<RectF> {
-        let Some(fragment) = &self.fragment else {
-            return Vec::new();
-        };
-        layout::client_rects(
-            fragment,
-            self.scroll.viewport,
-            &self.scroll.containers,
-            &self.scroll.stuck.offsets,
-            element,
-        )
+        self.geometry()
+            .map(|geometry| geometry.client_rects(element))
+            .unwrap_or_default()
+    }
+
+    /// `element`'s scrollable overflow as last laid out
+    /// (`layout::scroll_size`).
+    pub(crate) fn scroll_size(&self, element: NodeId) -> Option<SizeF> {
+        self.geometry()?.scroll_size(element)
     }
 
     /// `element`'s box model as last laid out, CSS px of the viewport, as
@@ -1522,6 +1528,10 @@ impl FrameView {
         element: NodeId,
         pseudo: Option<computed_style::PseudoId>,
     ) -> Option<layout::BoxQuads> {
+        if pseudo.is_none() {
+            return self.geometry()?.box_quads(element);
+        }
+        // A pseudo-element's boxes aren't in the indexes: found by walking.
         let fragment = self.fragment.as_ref()?;
         layout::pseudo_box_quads(
             fragment,
@@ -1536,16 +1546,9 @@ impl FrameView {
     /// `element`'s border boxes as quads as last laid out, CSS px of the
     /// viewport (`layout::border_quads`).
     pub(crate) fn border_quads(&self, element: NodeId) -> Vec<layout::Quad> {
-        let Some(fragment) = &self.fragment else {
-            return Vec::new();
-        };
-        layout::border_quads(
-            fragment,
-            self.scroll.viewport,
-            &self.scroll.containers,
-            &self.scroll.stuck.offsets,
-            element,
-        )
+        self.geometry()
+            .map(|geometry| geometry.border_quads(element))
+            .unwrap_or_default()
     }
 
     /// Whether `element` is a box the user scrolls: a scroll container
@@ -1558,10 +1561,13 @@ impl FrameView {
         let Some(block) = found.block.filter(|block| block.scroll.is_some()) else {
             return false;
         };
+        let Some(size) = self.scroll_size(element) else {
+            return false;
+        };
         let border = found.border_box;
         let width = border.width - block.border[1] - block.border[3];
         let height = border.height - block.border[0] - block.border[2];
-        block.scroll_size.width > width || block.scroll_size.height > height
+        size.width > width || size.height > height
     }
 
     /// The boxes of text `text`'s data from `start` to `end`, CSS px of the
@@ -2422,6 +2428,10 @@ impl dom_api::FrameLayout for Frame {
 
     fn client_rects(&self, node: NodeId) -> Vec<RectF> {
         self.selected().client_rects(node)
+    }
+
+    fn scroll_size(&self, node: NodeId) -> Option<SizeF> {
+        self.selected().scroll_size(node)
     }
 
     fn text_rects(&self, text: NodeId, start: u32, end: u32) -> Vec<RectF> {

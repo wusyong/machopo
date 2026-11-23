@@ -832,6 +832,16 @@ pub(crate) enum PassedUp {
 }
 
 impl InlineContent {
+    /// The inline elements it has boxes of: not their pseudo-elements',
+    /// which would put the box of a block with an inline `::before` among
+    /// its element's twice.
+    pub(crate) fn inline_elements(&self) -> impl Iterator<Item = NodeId> + '_ {
+        self.elements
+            .iter()
+            .filter(|element| element.node.pseudo.is_none())
+            .map(|element| element.node.node)
+    }
+
     /// Processes white space (css-text phase I, across element boundaries
     /// like Blink's `InlineItemsBuilder`) and shapes the text. `None` if
     /// nothing is left. `container` is the style of the block the content

@@ -243,6 +243,7 @@ Chromium（`details.md` 的「Blink」）：
    - I1：掃那一段所有的行。簡單；一段裡 M 個 `<span>` 各讀一次是 O(M²)。
    - I2：連行和其中的索引一起記（像 Blink 的 `FirstInlineFragmentItemIndex`）。每次斷行都要維護。
    - 2026-11-22 的看法：先 I1，第 2 階段做完時量一段 10000 個 `<span>` 的頁再決定。
+   - 2026-11-23 第 2 階段做完時量的（Windows 11、Chrome 158）：一段 1000 個 `<span>` 各讀一次 `offsetHeight` 是 0.68 ms、10000 個是 40 ms（Chrome 0.17、2.13），十倍的 `<span>` 慢 59 倍；從根走時是 0.62、41.5 ms，第 2 階段沒有讓它變慢。
 4. **其他從根找一個節點的走訪要不要一起改**（第 3 階段前）：`svg_geometry`、`caret_rect`、`child_viewport` 的 `find_fragment`。2026-11-22 的看法：不一起，列在「之後的可能」；都還沒量過。
 
 ## 之後的可能

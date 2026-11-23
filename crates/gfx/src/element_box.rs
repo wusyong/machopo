@@ -52,9 +52,6 @@ pub struct BlockBox {
     /// far a relatively positioned one moved. Zero for a static box, whose
     /// resolved value is its computed `auto` instead.
     pub inset: [f32; 4],
-    /// Its scrollable overflow, from its padding box's origin, at least the
-    /// padding box (`scrollWidth`, `scrollHeight`).
-    pub scroll_size: SizeF,
     /// How far it is scrolled, if it is a scroll container.
     pub scroll: Option<PointF>,
 }

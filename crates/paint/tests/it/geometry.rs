@@ -197,12 +197,13 @@ fn transforms_turn_about_their_origin_in_their_reference_box() {
     assert_eq!(rect("content"), [-13.0, 107.0, 252.0, 132.0]);
 }
 
-/// Each element with an `id` in `html`, laid out and scrolled by `scroll`:
-/// its `layout::element_box`, and its client rects.
-fn element_boxes(
-    html: &str,
-    scroll: &[(&str, f32, f32)],
-) -> HashMap<String, (Option<gfx::ElementBox>, Vec<RectF>)> {
+/// An element's `layout::element_box`, its client rects, and its
+/// `layout::scroll_size`.
+type Found = (Option<gfx::ElementBox>, Vec<RectF>, Option<SizeF>);
+
+/// Each element with an `id` in `html`, laid out and scrolled by `scroll`,
+/// and what is found of it.
+fn element_boxes(html: &str, scroll: &[(&str, f32, f32)]) -> HashMap<String, Found> {
     let (view, ids) = page::lay_out(html, VIEWPORT);
     let offsets: ScrollOffsets = scroll
         .iter()
@@ -221,6 +222,7 @@ fn element_boxes(
                         &Default::default(),
                         id,
                     ),
+                    layout::scroll_size(&view, id),
                 ),
             )
         })
@@ -246,7 +248,7 @@ fn element_boxes_are_before_transforms_and_scrolling() {
            <div id="none" style="display: none"></div>"#,
         &[("scroller", 0.0, 30.0)],
     );
-    let (scroller, scroller_rects) = &boxes["scroller"];
+    let (scroller, scroller_rects, scroller_size) = &boxes["scroller"];
     let scroller = scroller.expect("a box");
     assert_eq!(scroller.border_box, RectF::new(10.0, 0.0, 104.0, 54.0));
     assert_eq!(scroller.start, PointF::new(10.0, 0.0));
@@ -255,19 +257,19 @@ fn element_boxes_are_before_transforms_and_scrolling() {
     assert_eq!(block.margin, [0.0, 0.0, 0.0, 10.0], "the used margins");
     assert_eq!(block.padding, [0.0; 4]);
     assert_eq!(block.scroll, Some(PointF::new(0.0, 30.0)));
-    assert_eq!(block.scroll_size, SizeF::new(300.0, 200.0));
+    assert_eq!(*scroller_size, Some(SizeF::new(300.0, 200.0)));
     // The client rect is moved by the transform.
     assert_eq!(scroller_rects[0], RectF::new(15.0, 5.0, 104.0, 54.0));
 
     // Inside the scroller: neither its transform nor its offset.
-    let (content, rects) = &boxes["content"];
+    let (content, rects, _) = &boxes["content"];
     let content = content.expect("a box");
     assert_eq!(content.border_box, RectF::new(12.0, 2.0, 300.0, 200.0));
     assert_eq!(content.block.expect("a block").scroll, None);
     assert_eq!(rects[0], RectF::new(17.0, -23.0, 300.0, 200.0));
 
     // Not transformed or scrolled: around the client rects.
-    let (span, rects) = &boxes["span"];
+    let (span, rects, span_size) = &boxes["span"];
     let span = span.expect("a box");
     assert!(rects.len() > 1, "on several lines");
     let union = rects[1..].iter().fold(rects[0], |a, b| a.union(b));
@@ -277,6 +279,7 @@ fn element_boxes_are_before_transforms_and_scrolling() {
     // start.
     assert!(span.start.x > span.border_box.x);
     assert_eq!(span.block, None);
+    assert_eq!(*span_size, None, "no scroll size of its own");
 
     assert_eq!(boxes["none"].0, None);
 }

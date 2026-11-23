@@ -1,0 +1,121 @@
+# Stage 2: the geometry found from the element's boxes, by their links and
+# the inline elements' index; scroll_size asked for apart.
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it"]
+timeout = 900
+
+[[mutant]]
+name = "the marker's link isn't written"
+file = "crates/layout/src/lib.rs"
+from = '''            self.boxes[usize::from(marker)].link = child_link(index, marker_child);'''
+to = '''            let _ = marker_child;'''
+
+[[mutant]]
+name = "the link is to the box's parent, not its containing block"
+file = "crates/layout/src/lib.rs"
+from = '''                self.boxes[usize::from(child)].link = child_link(index, at);'''
+to = '''                self.boxes[usize::from(child)].link = child_link(self.boxes[usize::from(child)].parent.unwrap_or(index), at);'''
+
+[[mutant]]
+name = "an inline element's boxes aren't indexed"
+file = "crates/layout/src/lib.rs"
+from = '''            self.inlines
+                .extend(inline.inline_elements().map(|node| (node, index)));'''
+to = '''            let _ = inline.inline_elements();'''
+
+[[mutant]]
+name = "an inline element's boxes stay in the index once they go"
+file = "crates/layout/src/lib.rs"
+from = '''                self.inlines.remove(&(node, index));'''
+to = '''                let _ = node;'''
+
+[[mutant]]
+name = "the paths aren't in tree order"
+file = "crates/layout/src/geometry.rs"
+from = '''        paths.sort_unstable();
+        paths'''
+to = '''        paths.sort_unstable();
+        paths.reverse();
+        paths'''
+
+[[mutant]]
+name = "an element's own box isn't among the paths"
+file = "crates/layout/src/geometry.rs"
+from = '''            .get(&node)
+            .copied()
+            .into_iter()'''
+to = '''            .get(&node)
+            .copied()
+            .filter(|_| false)
+            .into_iter()'''
+
+[[mutant]]
+name = "the way down to a mapped box skips the scroll offsets"
+file = "crates/layout/src/geometry.rs"
+from = '''            mapping = contents;
+            fragment = &child.fragment;'''
+to = '''            let _ = contents;
+            mapping = own;
+            fragment = &child.fragment;'''
+
+[[mutant]]
+name = "the way down to an element's box skips how far boxes stick"
+file = "crates/layout/src/geometry.rs"
+from = '''                let from = stuck(fragment, offset, self.sticky);'''
+to = '''                let from = offset;'''
+
+[[mutant]]
+name = "an element's box has no parent for its insets"
+file = "crates/layout/src/geometry.rs"
+from = '''                parent = Some((fragment, child.offset));
+                offset = PointF::new(from.x + child.offset.x, from.y + child.offset.y);'''
+to = '''                let _ = &parent;
+                offset = PointF::new(from.x + child.offset.x, from.y + child.offset.y);'''
+
+[[mutant]]
+name = "a box's quads take the first box on the way, not the element's"
+file = "crates/layout/src/geometry.rs"
+from = '''            if fragment.node == Some(element) && fragment.pseudo.is_none() {
+                let to_box = Transform::translate(offset.x, offset.y);'''
+to = '''            if fragment.node.is_some() && fragment.pseudo.is_none() {
+                let to_box = Transform::translate(offset.x, offset.y);'''
+
+[[mutant]]
+name = "scroll_size is of any box found"
+file = "crates/layout/src/geometry.rs"
+from = '''                (fragment.node == Some(element) && fragment.pseudo.is_none())
+                    .then(|| crate::scrollable_overflow(fragment).size())'''
+to = '''                Some(crate::scrollable_overflow(fragment).size())'''
+
+[[mutant]]
+name = "a query counts no fragment it goes into"
+file = "crates/layout/src/geometry.rs"
+from = '''        self.entered.set(self.entered.get().saturating_add(1));'''
+to = '''        self.entered.set(self.entered.get());'''
+
+[[mutant]]
+name = "scrollWidth asks the box for its height"
+file = "crates/dom_api/src/geometry.rs"
+from = '''                .map_or(0, |size| round(size.width))'''
+to = '''                .map_or(0, |size| round(size.height))'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "geometry::"]
+
+[[mutant]]
+name = "is_user_scrollable says no to any overflow"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        size.width > width || size.height > height'''
+to = '''        size.width > width && size.height > height'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_overlay::"]
+
+[[mutant]]
+name = "is_user_scrollable says yes to a box its overflow just fills"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        size.width > width || size.height > height'''
+to = '''        size.width >= width || size.height >= height'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_overlay::"]
+
+[[mutant]]
+name = "a pseudo-element's inline boxes are indexed as its element's"
+file = "crates/layout/src/text.rs"
+from = '''            .filter(|element| element.node.pseudo.is_none())
+            .map(|element| element.node.node)'''
+to = '''            .map(|element| element.node.node)'''

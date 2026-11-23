@@ -21,6 +21,8 @@ use crate::{Arg, Ret, TestDom, This, call, call_on, rc};
 pub(crate) struct Fake {
     document: NodeId,
     pub(crate) boxes: HashMap<NodeId, ElementBox>,
+    /// Each box's scrollable overflow: its padding box's if not here.
+    pub(crate) scroll_sizes: HashMap<NodeId, SizeF>,
     pub(crate) rects: HashMap<NodeId, Vec<RectF>>,
     pub(crate) positions: HashMap<NodeId, Position>,
     /// Where each element's border box is painted.
@@ -93,6 +95,19 @@ impl FrameLayout for Fake {
 
     fn client_rects(&self, node: NodeId) -> Vec<RectF> {
         self.rects.get(&node).cloned().unwrap_or_default()
+    }
+
+    fn scroll_size(&self, node: NodeId) -> Option<SizeF> {
+        if let Some(size) = self.scroll_sizes.get(&node) {
+            return Some(*size);
+        }
+        let found = self.boxes.get(&node)?;
+        let [top, right, bottom, left] = found.block?.border;
+        let border_box = found.border_box;
+        Some(SizeF::new(
+            border_box.width - left - right,
+            border_box.height - top - bottom,
+        ))
     }
 
     fn text_rects(&self, text: NodeId, start: u32, end: u32) -> Vec<RectF> {
@@ -250,6 +265,7 @@ pub(crate) fn page(quirks: bool, children: &[&str]) -> (TestDom, Vec<Rc<NodeRoot
     dom.1.layout.set(Some(Box::new(Fake {
         document,
         boxes: HashMap::new(),
+        scroll_sizes: HashMap::new(),
         rects: HashMap::new(),
         positions: HashMap::new(),
         paint_offsets: HashMap::new(),
@@ -304,10 +320,6 @@ pub(crate) fn block(x: f32, y: f32, width: f32, height: f32, border: [f32; 4]) -
             padding: [0.0; 4],
             margin: [0.0; 4],
             inset: [0.0; 4],
-            scroll_size: SizeF::new(
-                width - border[1] - border[3],
-                height - border[0] - border[2],
-            ),
             scroll: None,
         }),
     }
@@ -736,7 +748,7 @@ fn scroll_offsets_and_sizes() {
         let mut scroller = block(0.0, 0.0, 50.0, 60.0, [0.0; 4]);
         let inner = scroller.block.as_mut().unwrap();
         inner.scroll = Some(PointF::new(5.5, 6.0));
-        inner.scroll_size = SizeF::new(300.0, 400.0);
+        fake.scroll_sizes.insert(ids[3], SizeF::new(300.0, 400.0));
         fake.boxes.insert(ids[3], scroller);
         fake.boxes.insert(
             ids[4],

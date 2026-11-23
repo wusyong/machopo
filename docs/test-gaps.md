@@ -418,6 +418,7 @@
 - parley fork 判斷字型的規則和空白時，`kern` 的 pair 不把空白後面的 mark 算成「空白後面的 glyph」（`space.rs` 的 `in_kern`）：算進去只是多合併一些字、比較慢，HarfBuzz 的 kerning 本來就跳過 mark。照樣不算。
 - parley fork 查斷行表時，交給 ICU4X 的字一律從文字開頭看起（`line_table.rs` 不記前一個字的開頭）：ICU4X 看到的上下文只多不少，結果一樣，只是比較慢。照樣只從前一個字開始。
 - `layout` 的 `TextContext` 不關掉字的界線（`set_word_boundaries(false)`）：machopo 不讀 parley 的字的界線，只是分析比較慢；測試看不到。之後若有算分析次數或時間的計數，再補。
+- `layout` 從元素的盒子找它的 fragment 時（`BoxTree::path`）的兩個防呆：往下走時比對連結指到的 fragment 就是那個盒子的（`Arc::ptr_eq`）、往上爬的步數不超過盒子的數量。盒子一致時兩個都不會成立：每個從索引找得到、有 fragment 的盒子，在父層的 fragment 重建時都重寫了連結，放掉的盒子連結清空，連結不會成環。它們守的是盒子樹和 fragment 對不上的 bug（之前出過：containing block 空了還留著它的 out-of-flow 盒子）：那時查詢回答「沒有」，不會拿到別的盒子的位置；`Page` 的每次檢查另外比對每個 fragment 剛好被一個盒子的連結找到。
 - parley fork 判斷字型的規則和空白時，chained context 的 backtrack 不倒過來（`space.rs` 的 `chained`）：backtrack 有兩格以上時規則就有三格以上，有空白就一律當成跨過空白，順序看不出差別；只有一格時倒不倒都一樣。照樣倒過來，位置的順序和比對的順序一致。
 - 行內元素的 bidi 控制字元裡，結尾的放在它的結束 tag 之前或之後（`layout` 的 `insert_bidi_controls` 的 tag 的 slot）：結果一樣，行內盒子的邊界在 bidi 重排之後照元素的方向重新擺（`place_line`），和邊界拿到的 level 無關；照 Blink 的順序（PDI 在結束 tag 之後）留著。
 - 強制換行之前關掉 embedding 的順序（`insert_bidi_controls` 的 `usize::MAX` 那一格的 `order`）：UBA 的 X8 在段落分隔字元結束所有的 embedding，關掉的字元的順序不影響任何字元；照 Blink 由內到外留著。
