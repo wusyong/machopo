@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | 1. process 和 trace：automation pipe 的 `SystemInfo.getProcessInfo`、工具讀一次執行的每一份 trace、Speedometer 的 `--trace` 和 `--sample`、`blink-perf --gc`、量不到 renderer 時報錯 | 做完，merge 回 `main` | 2026-11-23 |
 | 2. 記憶體和 `census`、`--single-process` | 做完、待審查 | 2026-11-23 |
-| 3. Linux 和 Windows | Windows 做完，Linux 待使用者在那台機器上跑 | |
+| 3. Linux 和 Windows | 做完、待審查 | 2026-11-23 |
 
 ## 驗收
 
@@ -65,4 +65,13 @@
 - 跑過的：`speedometer_test.py`（121 個通過，跳過的是要 Chrome for Testing、Linux `perf`、系統管理員的那幾組）、`blink_perf_test.py`（37 個通過，`GcRunTests`、`RunTests` 要 Chrome for Testing，跳過）、`raster_test.py`（13 個通過）、`census_test.py`；`cargo test -p base --features census census`、`cargo test -p shell --features census --test it automation_pipe::a_renderer_process_counts`、`cargo test -p shell --test it automation_pipe::the_process_info`。
 - `SampleTests`（系統管理員的終端機，使用者跑）：通過。
 - 沒有跑的：Chrome 那一側的測試要先下載 Chrome for Testing（這個階段沒有改 Chrome 的路）；`SampleTests` 的檢查放寬之後沒有對它跑 mutation test（要系統管理員，每一條都要人在終端機跑）：放寬的只是名字的比對，stack 要穿過 JS 到 machopo 的那一段照舊檢查。
-- Linux 的 `perf` 和 `VmHWM`：待使用者在那台機器上跑。
+
+**第 3 階段，Linux**（2026-11-23，Fedora 45，kernel 7.3.3-300.fc45.x86_64，AMD Ryzen AI 9 HX 370，Python 3.14.10，`perf` 7.3.3，`perf_event_paranoid` 2；`60af6005`，`cargo clean` 之後從頭編）：
+
+- 不用改程式：工具的測試和真的 Speedometer 都照第 1、2 階段的程式通過。
+- **`perf record` 跟著子 process**：照預設（inherit）就取到 renderer process 的樣本，不用 attach 或 `--renderer-cmd-prefix`。`SampleTests.test_the_stacks_in_the_timed_windows`（真的 `perf`）通過；真的 Speedometer 的 `perf.data` 裡最多的是 renderer process 的 `CrRendererMain`（7781 個，pid 588597；Browser 是 588592）。`perf_event_paranoid` 是 2 也取得到：工具只要 user space 的（`:u`、`--user-callchains`）。
+- **`VmHWM` 讀得到 renderer process 的**：`MachopoTests.test_machopos_peak_memory_with_its_run`（真的 machopo：Browser 和 renderer process 都有、合計是兩者的和）、`MemoryTests.test_linuxs_peak_resident_set`、`test_another_processs_peak_stays` 通過。
+- 真的 Speedometer（TodoMVC-JavaScript-ES5，`perf` profile，renderer 是自己的 process）：`bench.py speedometer --trace --browser machopo` 讀 `.pftrace.588406`，`phases.md` 每個 iteration 的 script 15.2、style 2.1、box tree 2.0、layout 1.0、paint 1.4、parse 6.5、GC 1.4 ms。`--sample`：1403 個 cycles、4841 個 instructions 的樣本（IPC 3.45），30 個照 runner 的 mark 的計時區間，樣本是 renderer process 的（不是的話工具會報錯）；JS 的函式由 V8 的 perf map 命名，stack 經過 `dom_js::listeners::call_animation_frame` 到頁面的 JS。不帶選項的一次量測也跑完（`measure.md`，renderer 寫成「processes of their own」）。
+- `bench.py census blink-perf --dirs bindings`：40 頁計到，每一頁的是 renderer process 的 `<頁>.tsv.<pid>`（53 份），沒有一頁報 renderer 沒寫；Browser 的 process 沒有 binding 的呼叫、沒寫檔（和 macOS 一樣）。另外 13 頁是頁面自己的錯誤（沒有 `WebGLRenderingContext`、worker 裡沒有 `XMLHttpRequest`），不是工具的。
+- 跑過的：`cargo test -p shell --test it automation_pipe::the_process_info`、`cargo test -p base --features census census`、`cargo test -p shell --features census --test it automation_pipe::a_renderer_process_counts`；`speedometer_test.py`（123 個通過，跳過的是要 Chrome for Testing、samply 的；下載 Chrome for Testing 152.0.7977.82 之後補跑 `ChromeTests`、`MeasureTests`（包括 `test_traces_of_both`）、`MachopoTests.test_machopo_and_chrome_summarize_alike`，18 個通過，跳過的是 Windows 的）、`blink_perf_test.py`（37 個通過；補跑 `GcRunTests`、`RunTests`，9 個通過）、`raster_test.py`（13 個）、`census_test.py`（5 個）。
+- 沒有跑的：`--against` 的 `compare.md`（照 process 的記憶體表；要另外編一個版本），Linux 上讀得到每個 process 的記憶體已經由上面真的 machopo 的測試確認。

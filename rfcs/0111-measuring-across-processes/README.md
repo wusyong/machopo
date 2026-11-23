@@ -1,7 +1,7 @@
 # RFC 0111：量測工具跟著 process 走
 
 - 開始日期：2026-11-23
-- 狀態：🚧 已排程：2026-11-23（第 1 階段 merge 回 `main`；第 2 階段做完、待審查；第 3 階段 Windows 做完，Linux 待跑）
+- 狀態：🚧 已排程：2026-11-23（第 1 階段 merge 回 `main`；第 2 階段做完、待審查；第 3 階段做完、待審查）
 - 細節：`details.md`；進度：`progress.md`
 
 ## 摘要
@@ -74,7 +74,7 @@ P3 給 pid 和種類（`crates/shell/src/automation_session.rs`；不給 Chrome 
 
 ### 取樣
 
-- 樣本照 thread 的名稱和計時區間挑（`read_samples`），區間來自 renderer 的 trace 之後就有樣本，前提是取樣器也取到了子 process：macOS 的 samply 會（2026-11-23 確認，`details.md` 的「盤點」：renderer 的 pid 和它的 trace 的檔名一樣，`read_samples` 已經挑到它的 `CrRendererMain`、JS 函式有名字）；Linux 的 `perf record` 預設跟著子 process（inherit），要在那台機器上確認；Windows 的 ETW 錄整台機器、照 pid 篩，samply 也收了子 process 的（2026-11-23 確認，`progress.md` 的第 3 階段：樣本有 renderer 的 pid，JS 函式由 V8 的 ETW 命名）。
+- 樣本照 thread 的名稱和計時區間挑（`read_samples`），區間來自 renderer 的 trace 之後就有樣本，前提是取樣器也取到了子 process：macOS 的 samply 會（2026-11-23 確認，`details.md` 的「盤點」：renderer 的 pid 和它的 trace 的檔名一樣，`read_samples` 已經挑到它的 `CrRendererMain`、JS 函式有名字）；Linux 的 `perf record` 預設跟著子 process（inherit），也取到了（2026-11-23 確認，`progress.md` 的第 3 階段：`perf_event_paranoid` 是 2 也一樣，工具只取 user space 的）；Windows 的 ETW 錄整台機器、照 pid 篩，samply 也收了子 process 的（2026-11-23 確認，`progress.md` 的第 3 階段：樣本有 renderer 的 pid，JS 函式由 V8 的 ETW 命名）。
 - 挑樣本時連 pid 一起比（renderer 的 pid 來自上一節），不只比 thread 的名稱：之後一次執行有好幾個 renderer 時不會混在一起。
 - V8 的 perf map（`/tmp/perf-<pid>.map`）每個 process 各一份，工具照樣本裡的 pid 刪（現在就是）。
 - 讀得到 renderer 的樣本之後，`SampleTests.test_the_stacks_in_the_timed_windows` 的「開著 trace 時不做 `log` 的紀錄」抓到 renderer process 每一筆都做（html5ever 每個 token 一筆，做了再丟）：`crates/shell/src/main.rs` 的 renderer 那條路在 `init` 之後沒有像 Browser 的那樣 `tracing_log::log::set_max_level`，trace 那一層收每一個 level，`log` 的上限就是 TRACE。2026-11-23 補上；renderer 在 Browser 的 process 裡時（以前取樣的都是）沒有這個問題，所以以前沒看到。
@@ -148,7 +148,7 @@ Speedometer 和 Blink 的 perf tests 的工具加 `--single-process`（`raster` 
 2. ~~記憶體的合計~~：已決定的事項第 3 條。
 3. ~~要不要也量 Chrome 的記憶體~~：已決定的事項第 4 條。
 4. ~~工具的測試誰跑~~：已決定的事項第 2 條。
-5. ~~macOS 的 samply 跟不跟子 process~~：跟（2026-11-23 確認，「取樣」）；Windows 經過 ETW 的也跟（2026-11-23）。Linux 的在第 3 階段確認；不跟時改成 attach 到 renderer 的 pid，或像 Chromium 的 `--renderer-cmd-prefix` 那樣由 machopo 在啟動 renderer 時包一層取樣器。
+5. ~~macOS 的 samply 跟不跟子 process~~：跟（2026-11-23 確認，「取樣」）；Windows 經過 ETW 的也跟（2026-11-23）；Linux 的 `perf record` 也跟（2026-11-23，第 3 階段）。三個平台都不用 attach 到 renderer 的 pid，或像 Chromium 的 `--renderer-cmd-prefix` 那樣包一層取樣器。
 
 ## 之後的可能
 
