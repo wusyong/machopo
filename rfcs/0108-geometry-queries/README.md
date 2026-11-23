@@ -117,7 +117,7 @@ let mapping = Mapping { to_root: Transform::IDENTITY, scrolled };
 捲動帶在 transform 旁邊，不乘進去（第 1 階段實作時定）：`map_rect` 對應四個角再取最小和最大，乘進去之後捲得越遠，rect 的寬高取整得越不一樣。帶在旁邊時，不在 fixed 盒子裡的答案和改之前每個 bit 都相同。
 
 - **子孫不用知道自己在不在 fixed 盒子裡**：它們的路徑一定經過這一步。fixed 到 viewport 的 fragment 一定是 `LayoutView` 的 child（out-of-flow 掛在 containing block 底下）；被 transform 包住的 fixed 盒子沒有這個標記，掛在那個盒子底下，照常跟著頁面捲。
-- **規則在共用的那一步**：照舊走訪的（有 pseudo 的 `pseudo_box_quads`、`svg_geometry` 經過的 `box_to_viewport`）也一樣對，也不依賴「待決定」1 選哪個。
+- **規則在共用的那一步**：照舊走訪的（有 pseudo 的 `pseudo_box_quads`、`svg_geometry` 經過的 `box_to_viewport`）也一樣對，也不依賴怎麼找到元素。
 - **兩種座標分清楚**：
   - 對應過的（`client_rects`、`box_quads`、`border_quads`、`text_rects`、SVG 的 rect 和 CTM）：viewport 座標，吃 `viewport_scroll`。
   - layout 的位置（`element_box`：`offsetTop` 一族）：照舊是文件座標，不吃 transform 和捲動，像 Blink 把 `PhysicalLocation()` 加起來。
@@ -128,7 +128,7 @@ let mapping = Mapping { to_root: Transform::IDENTITY, scrolled };
 
 ### `scroll_size`
 
-`ElementBox` 的 `BlockBox::scroll_size` 每次都算，所以只有路徑時 `body.offsetWidth` 仍然是 O(子樹)：30000 列時 `element_box(body)` 的 723 µs 幾乎全是它。2026-11-22 的看法：S1，從 `BlockBox` 拿掉，`dom_api::FrameLayout` 多一個 `scroll_size(node)`，只有 `scrollWidth`、`scrollHeight` 和 `is_user_scrollable` 呼叫（「待決定」2）。
+`ElementBox` 的 `BlockBox::scroll_size` 每次都算，所以只有路徑時 `body.offsetWidth` 仍然是 O(子樹)：30000 列時 `element_box(body)` 的 723 µs 幾乎全是它。選 S1（「已決定的事項」13）：從 `BlockBox` 拿掉，`dom_api::FrameLayout` 多一個 `scroll_size(node)`，只有 `scrollWidth`、`scrollHeight` 和 `is_user_scrollable` 呼叫。
 
 ### 一致性
 
@@ -146,13 +146,14 @@ let mapping = Mapping { to_root: Transform::IDENTITY, scrolled };
 - `crates/layout/src/geometry.rs`：照路徑的查詢、共用的一步（含根那一步）；刪掉 `is_fixed`。
 - `crates/layout/src/scroll_anchor.rs`、`crates/layout/src/svg_geometry.rs`：傳 viewport 的捲動（前者傳 0）。
 - `crates/renderer/src/frame_view.rs`：改用它；刪掉各處自己扣的捲動和 fixed 的判斷。
-- `crates/dom_api/src/layout.rs`：`text_rects` 少一個參數；選 S1 時的 `scroll_size`。`crates/dom_api/src/range.rs` 跟著改。
-- `crates/dom_api/src/geometry.rs`、`crates/gfx/src/element_box.rs`：只在選 S1 時。
+- `crates/dom_api/src/layout.rs`：`text_rects` 少一個參數；`scroll_size`。`crates/dom_api/src/range.rs` 跟著改。
+- `crates/dom_api/src/geometry.rs`、`crates/gfx/src/element_box.rs`：拿掉 `scroll_size`。
 - `docs/architecture.md`：「快取和增量：加新東西時要跟著改的地方」加上「新的放 child fragment 的路要寫連結」和「建行內內容的新路要進 inline 元素的索引」；「從 fragment tree 算位置的新走訪」那一條加上根那一步。
 
 ### 測試
 
 - **和走訪逐一比對**：從根走訪的版本留給測試當對照。`layout` 測試的 `Page` 每次檢查時，對每個元素和 text node 比較兩者的答案，現有的 layout 和 update 的測試頁因此都成為案例。原型用這個方法驗證過路徑（`details.md` 的「原型」）。
+- **連結本身**：`Page` 也檢查走訪看得到的每個 fragment 剛好有一個盒子沿連結找得到它，像原型一樣。只比答案時，漏寫外側 marker 的連結抓不到：沒有一個查詢走到 marker（它是 pseudo-element，`pseudo_box_quads` 照舊走訪）。2026-11-23 更正：原本的測試計畫只比答案，卻把這條列進 mutation test。
 - **補上的案例**：transform、sticky、巢狀的捲動容器的組合；absolute 和 fixed 換 containing block；`order`；float 和 atomic inline 混排；外側 marker；被 block 切開和跨行的 inline 元素；table 的 caption 和 column；盒子釋放後索引被重用。
 - **計數**：兄弟多十倍時查詢碰到的 fragment 數不變；`body` 的 `offsetWidth` 不算 scrollable overflow。時間不放進測試。
 - **座標**：先找 WPT（`css/cssom-view/` 已經整個在清單裡），沒有涵蓋的寫測試，頁面和捲動容器都捲過：
@@ -190,7 +191,7 @@ let mapping = Mapping { to_root: Transform::IDENTITY, scrolled };
 
 | 做法 | 一次查詢 | 額外成本 | 問題 |
 | --- | --- | --- | --- |
-| **A：盒子記連結（2026-11-22 的看法）** | O(深度) | 每個盒子 12 bytes | 多一個不變式 |
+| **A：盒子記連結（選這個，「已決定的事項」12）** | O(深度) | 每個盒子 12 bytes | 多一個不變式 |
 | A′：沿 `parent` 累加 `Layout::location` | O(深度) | 無 | out-of-flow 和 marker 是錯的；位置有兩份來源 |
 | A″：沿祖先往下，每層在 `children` 裡找 | O(深度 × 兄弟) | 無 | 平的長清單仍然是線性 |
 | B：layout 後第一次查詢時建整頁的表 | O(1) | 每次 layout 後 O(N)，每個節點一筆 | 「改一點、讀一次」仍然是 O(N) |
@@ -220,7 +221,7 @@ Chromium（`details.md` 的「Blink」）：
 
 2026-11-22：
 
-1. **頁面的捲動照 Chrome 在路徑離開根的那一步處理**：往 `fixed_to_viewport` 的 child 走時不減，其他的減；`FrameView` 事後的 fixed 判斷拿掉。不選「算完文件座標，再照路徑上有沒有 fixed 修正」：規則會分散在每個呼叫者，現在的錯就是這樣來的。這一條不決定怎麼找到元素（「待決定」1）。原本連同 `offsetX`、`offsetY` 用它的反函數，那一半移出範圍（11）。
+1. **頁面的捲動照 Chrome 在路徑離開根的那一步處理**：往 `fixed_to_viewport` 的 child 走時不減，其他的減；`FrameView` 事後的 fixed 判斷拿掉。不選「算完文件座標，再照路徑上有沒有 fixed 修正」：規則會分散在每個呼叫者，現在的錯就是這樣來的。這一條不決定怎麼找到元素（12）。原本連同 `offsetX`、`offsetY` 用它的反函數，那一半移出範圍（11）。
 2. **`scrollIntoView()`、`focus()` 和連結的捲動不看 transform 和 sticky 的位移，等這份做完再修**（「之後的可能」5）：那時可以改用這份的路徑和對應。不選現在修：要在它自己的走訪裡另做一次同樣的對應，路徑做好之後會被換掉。決定時路徑和對應預定一起做好；座標改成先做（3）之後，對應在第 1 階段就有，所以技術上可以更早修，時間仍照這個決定。
 3. **座標先做**（第 1 階段；元素第 2、文字第 3）：根那一步的規則在共用的一步裡，用現在的走訪就能做，之後不用丟掉；對的答案比較早有，之後兩段比對的對照組一開始就是對的，也不用暫時留著 `is_fixed`。不選最後做：錯的座標要多留兩段。
 
@@ -228,13 +229,16 @@ Chromium（`details.md` 的「Blink」）：
 
 11. **範圍縮小**：只做這份原本要解的兩件事，頁面的捲動在 fixed 盒子裡算對（1）和查詢不走整棵樹（3 和「待決定」）；「什麼時候停」也是這一條。1 裡 `offsetX`、`offsetY` 的那一半和 4 到 10 移出，做的時候另寫 RFC；現在的錯記在 `docs/limitations.md`。為什麼：兩個問題重量過都成立（`details.md` 的「縮小範圍時的重量」），解它們不需要那些決定；那些規則是照 Chrome 猜的，只能拿模型比，寫下之後推翻過好幾次，留下的則有現成的對照（根那一步對 Chrome、加速對現在的走訪）。不選照原範圍做（大半的工作和風險不在這兩個問題上）和整份停掉（兩個問題都還在）。代價：`offsetX`、`offsetY` 在 fixed 盒子、捲動容器和 transform 上暫時照舊是錯的。
 
+2026-11-23：
+
+12. **怎麼找到元素：A，盒子記下自己的 fragment 是哪個 fragment 的第幾個 child**，照 Chrome（元素有 `LayoutObject`，從它往上找）。A 的原型（在一份拷貝上，沒有留在 repo）在 layout、paint、renderer、shell 的測試、情境和 11079 個 WPT 的靜態頁上，約 5400 萬次查詢和走訪的答案相同（renderer 裡的和大的頁面是抽樣比的）；隨機改 DOM 的 7099 組裡不同的 10 組，盒子樹本身都已經壞了（同一個盒子出現兩次，那個 bug 在 `main` 的 cc6479f 修好）。10000 列每列讀一次：`offsetHeight` 2.58 ms、`getBoundingClientRect` 4.16 ms（現在 429、1290；Chrome 158 是 2.24、3.96；Windows 11）。不選 B（每次 layout 後建整頁的表）：沒有人查也要付，只量了建表就是每次 layout 1.28 ms（10000 列）、8.9 ms（30000 列），「改一點、讀一次」仍是 O(N)；Chrome 也不這樣做。代價：每個盒子 12 bytes 和 inline 元素的索引，一個要跟著改的不變式（「缺點」）。只有 A 時前 1000 列的 `offsetTop` 仍是 113 ms（Chrome 0.42），要看「待決定」2。這些數字是 renderer 還在 Browser 的 process 裡時量的，做完時重量。
+
+13. **`scroll_size`：S1，從 `BlockBox` 拿掉，`dom_api::FrameLayout` 多一個 `scroll_size(node)`，問的時候才算**。照 Chrome 的 `OffsetWidth()` 不碰 scrollable overflow：原型上只有 A 時前 1000 列的 `offsetTop` 是 113 ms，A 加上 S1 是 0.39 ms（Chrome 158 是 0.42；Windows 11）。不選 S2（留著，算過一次存在 fragment 上）：介面不變，但每次 layout 之後第一次 `offsetWidth` 仍然付整個子樹，每個 fragment 變大，又和「之後的可能」2 重疊。代價：改 `FrameLayout` 的介面，`scrollWidth`、`scrollHeight` 照舊每次走子樹；Chrome 在 layout 時算好存起來，這一半是「之後的可能」2，這份不做。
+
 ## 待決定
 
-1. **怎麼找到元素**：A、B。2026-11-22 的看法：A。第 2 階段前決定：第 1 階段用現在的走訪，不需要它。
-2. **`scroll_size`**（第 2 階段前）：
-   - S1：拿掉，另一個方法，問的時候才算。改一個 trait 的介面；`scrollWidth` 仍然 O(子樹)。
-   - S2：留著，在 fragment 上快取（像 Blink）。介面不變，但 layout 後第一次 `offsetWidth` 仍然付整個子樹，每個 fragment 變大；和「之後的可能」2 重疊。
-   - 2026-11-22 的看法：S1。
+1. **怎麼找到元素**：已決定，A（「已決定的事項」12）。
+2. **`scroll_size`**：已決定，S1（「已決定的事項」13）。
 3. **很長的一段裡有很多 inline 元素**（第 2 階段做完時）：
    - I1：掃那一段所有的行。簡單；一段裡 M 個 `<span>` 各讀一次是 O(M²)。
    - I2：連行和其中的索引一起記（像 Blink 的 `FirstInlineFragmentItemIndex`）。每次斷行都要維護。
