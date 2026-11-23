@@ -225,7 +225,7 @@ fn a_child_frames_navigation_takes_its_frames() {
     );
     assert!(
         page.engine.take_frame_requests().iter().any(
-            |request| matches!(request, FrameRequest::Removed { frame, token }
+            |request| matches!(request, FrameRequest::Removed { frame, token, .. }
                 if *frame == grandchild && *token == grandchild_token)
         ),
         "the host removes the grandchild's frame"

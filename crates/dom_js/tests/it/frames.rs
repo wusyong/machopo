@@ -1254,21 +1254,32 @@ fn created(requests: &[FrameRequest]) -> Vec<(dom_api::FrameId, dom_api::FrameTo
         .collect()
 }
 
-/// The frames gone, each with its token, in order.
-fn removed(requests: &[FrameRequest]) -> Vec<(dom_api::FrameId, dom_api::FrameToken)> {
+/// The frames gone, each with its token, its parent and the frames gone
+/// with it, in order.
+#[expect(clippy::type_complexity, reason = "a test's tuple of what a request says")]
+fn removed(
+    requests: &[FrameRequest],
+) -> Vec<(dom_api::FrameId, dom_api::FrameToken, dom_api::FrameId, Vec<dom_api::FrameId>)> {
     requests
         .iter()
         .filter_map(|request| match request {
-            FrameRequest::Removed { frame, token } => Some((*frame, *token)),
+            FrameRequest::Removed {
+                frame,
+                token,
+                parent,
+                gone,
+            } => Some((*frame, *token, *parent, gone.clone())),
             _ => None,
         })
         .collect()
 }
 
 /// Each child frame has a token of its own, the browser's name for it; a
-/// frame that goes is told with its token, once, the frames in it with it:
-/// its iframe removed, or the document it was in navigated from (a child
-/// frame's, or the top-level frame's, one for each frame it had).
+/// frame that goes is told with its token, once, the frames in it with it
+/// (each named, for the host, which has no tree of its own), and its
+/// parent: its iframe removed, or the document it was in navigated from (a
+/// child frame's, or the top-level frame's, one for each frame it had).
+/// The engine has none of them after (`ScriptEngine::frame_parent`).
 #[test]
 fn a_frame_goes_with_its_token() {
     let mut engine = engine();
@@ -1279,32 +1290,47 @@ fn a_frame_goes_with_its_token() {
          f.contentDocument.body.appendChild(f.contentDocument.createElement('iframe'));",
     );
     let made = created(&engine.take_frame_requests());
-    let [(f, f_token), (g, g_token), (_, inner)] = made[..] else {
+    let top = engine.top_frame();
+    let [(f, f_token), (g, g_token), (inner_frame, inner)] = made[..] else {
         panic!("{made:?}");
     };
     assert!(
         f_token != g_token && f_token != inner && g_token != inner,
         "{made:?}"
     );
+    // The engine's frames, the one list of them the host asks.
+    assert_eq!(engine.frame_token(g), Some(g_token));
+    assert_eq!(engine.frame_of_token(inner), Some(inner_frame));
+    assert_eq!(engine.frame_parent(inner_frame).map(|(parent, _)| parent), Some(f));
+    assert_eq!(engine.frame_parent(top).map(|(parent, _)| parent), None);
+    assert_eq!(engine.child_frames(top), [f, g]);
     // Removed with the one in it: one for the two.
     run(&mut engine, "f.remove();");
     assert_eq!(
         removed(&engine.take_frame_requests()),
-        [(f, f_token)],
+        [(f, f_token, top, vec![f, inner_frame])],
         "the frame in it goes with it"
     );
-    // A child frame navigated: the frames of its document go, it stays.
+    assert_eq!(engine.frame_parent(inner_frame).map(|(parent, _)| parent), None);
+    assert_eq!(engine.frame_of_token(f_token), None);
+    // A child frame navigated: the frames of its document go, it stays;
+    // the one in its child with that child.
     run(
         &mut engine,
-        "g.contentDocument.body.appendChild(g.contentDocument.createElement('iframe'));",
+        "var gi = g.contentDocument.body.appendChild(g.contentDocument.createElement('iframe'));
+         gi.contentDocument.body.appendChild(gi.contentDocument.createElement('iframe'));",
     );
-    let [(in_g, in_g_token)] = created(&engine.take_frame_requests())[..] else {
-        panic!("one frame made");
+    let [(in_g, in_g_token), (in_in_g, _)] = created(&engine.take_frame_requests())[..] else {
+        panic!("two frames made");
     };
     engine
         .create_window(g, "https://other.test/", Instant::now())
         .expect("its frame");
-    assert_eq!(removed(&engine.take_frame_requests()), [(in_g, in_g_token)]);
+    assert_eq!(
+        removed(&engine.take_frame_requests()),
+        [(in_g, in_g_token, g, vec![in_g, in_in_g])]
+    );
+    assert_eq!(engine.child_frames(g), []);
     // The top-level frame navigated: its frames go, each told.
     run(
         &mut engine,
@@ -1318,6 +1344,7 @@ fn a_frame_goes_with_its_token() {
         .expect("a window");
     assert_eq!(
         removed(&engine.take_frame_requests()),
-        [(g, g_token), (h, h_token)]
+        [(g, g_token, top, vec![g]), (h, h_token, top, vec![h])]
     );
+    assert_eq!(engine.child_frames(top), []);
 }

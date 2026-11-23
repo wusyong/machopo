@@ -794,6 +794,27 @@ fn sheets_coming_and_going_are_told() {
     assert_eq!(sheet_text(&mut page, &again["styleSheetId"]), "i {}");
 }
 
+/// A new iframe's `srcdoc` document's sheet is told as it is drawn, though
+/// its frame is drawn in the turn its document commits: the sheets are
+/// listed of the frames as they are then (Blink's CSS agent collects them
+/// from the document), not of a list kept of the frames before the commit,
+/// which would tell none and, the sheets' versions taken, never again.
+#[test]
+fn a_new_frames_sheet_is_told_though_it_is_drawn_as_it_commits() {
+    let (_machopo, mut page, _document, _server) =
+        css_site(&[("/", Route::ok("text/html", "<!DOCTYPE html><p>p</p>"))]);
+    evaluate(
+        &mut page,
+        "const frame = document.createElement('iframe'); \
+         frame.srcdoc = '<style>i { color: red }</style><script>const until = Date.now() + 150; while (Date.now() < until);</scr' + 'ipt>'; \
+         document.body.append(frame)",
+        None,
+    );
+    page.event("CSS.styleSheetAdded");
+    evaluate(&mut page, "document.querySelector('iframe').remove()", None);
+    page.event("CSS.styleSheetRemoved");
+}
+
 /// A `<link>`'s sheet loaded before DevTools came is fetched again as its
 /// text is first asked for, as its `<link>` fetched it (with CORS for one
 /// with `crossorigin`): the text as it came now if it has the sheet's

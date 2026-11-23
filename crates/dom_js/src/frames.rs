@@ -63,6 +63,13 @@ impl Frames {
         self.get(id)?.token
     }
 
+    /// The child frame whose token is `token`.
+    pub(crate) fn of_token(&self, token: FrameToken) -> Option<&Frame> {
+        self.frames
+            .iter()
+            .find(|frame| frame.token == Some(token))
+    }
+
     /// The frames, in the order they were made (the top-level one first):
     /// for what doesn't go in tree order, without walking the trees.
     pub(crate) fn iter(&self) -> impl Iterator<Item = &Frame> {
@@ -102,15 +109,18 @@ impl Frames {
     /// The child frames gone (the top-level frame has a new document): the
     /// host told of those of its document.
     pub(crate) fn clear_children(&mut self) {
-        for child in self.frames.iter().filter(|frame| frame.parent == Some(TOP)) {
-            if let Some(token) = child.token {
-                self.requests.push(FrameRequest::Removed {
-                    frame: child.id,
-                    token,
-                });
-            }
-        }
-        self.frames.retain(|frame| frame.id == TOP);
+        let removed: Vec<Frame> = std::mem::take(&mut self.frames)
+            .into_iter()
+            .filter_map(|frame| {
+                if frame.id == TOP {
+                    self.frames.push(frame);
+                    None
+                } else {
+                    Some(frame)
+                }
+            })
+            .collect();
+        tell_removed(&mut self.requests, &removed, TOP);
     }
 
     fn next_id(&mut self) -> FrameId {
@@ -545,10 +555,16 @@ pub(crate) fn discard_child(scope: &mut Scope<'_, '_, '_>, document: &NodeRoot) 
             sink.frame_gone(removed.id);
         }
     }
-    state
-        .frames
-        .requests
-        .push(FrameRequest::Removed { frame, token });
+    let parent = removed
+        .first()
+        .and_then(|removed| removed.parent)
+        .unwrap_or(TOP);
+    state.frames.requests.push(FrameRequest::Removed {
+        frame,
+        token,
+        parent,
+        gone: removed.iter().map(|removed| removed.id).collect(),
+    });
     // Their realms have gone for the inspector too.
     for removed in &removed {
         crate::devtools::realm_destroyed(scope.scope(), &removed.context);
@@ -579,6 +595,33 @@ pub(crate) fn terminate_workers<'a>(
     });
 }
 
+/// The host told of `removed`, the frames that were in `parent`'s document:
+/// one `Removed` for each of its children, with the frames inside it.
+fn tell_removed(requests: &mut Vec<FrameRequest>, removed: &[Frame], parent: FrameId) {
+    for child in removed.iter().filter(|frame| frame.parent == Some(parent)) {
+        let Some(token) = child.token else {
+            continue;
+        };
+        let mut gone = vec![child.id];
+        let mut at = 0;
+        while let Some(&above) = gone.get(at) {
+            gone.extend(
+                removed
+                    .iter()
+                    .filter(|frame| frame.parent == Some(above))
+                    .map(|frame| frame.id),
+            );
+            at = at.saturating_add(1);
+        }
+        requests.push(FrameRequest::Removed {
+            frame: child.id,
+            token,
+            parent,
+            gone,
+        });
+    }
+}
+
 /// The frames inside child frame `frame`'s document, as it navigates to
 /// another (Blink's `FrameLoader::DetachChildren`): gone as a removed
 /// iframe's are, `frame` itself kept.
@@ -591,18 +634,7 @@ pub(crate) fn discard_descendants(scope: &mut Scope<'_, '_, '_>, frame: FrameId)
             sink.frame_gone(removed.id);
         }
     }
-    // The renderer takes each child's frames out with it.
-    for child in removed
-        .iter()
-        .filter(|removed| removed.parent == Some(frame))
-    {
-        if let Some(token) = child.token {
-            state.frames.requests.push(FrameRequest::Removed {
-                frame: child.id,
-                token,
-            });
-        }
-    }
+    tell_removed(&mut state.frames.requests, &removed, frame);
     for removed in &removed {
         crate::devtools::realm_destroyed(scope.scope(), &removed.context);
     }

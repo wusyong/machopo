@@ -143,6 +143,30 @@ pub trait ScriptEngine: ParserHost {
     /// The top-level browsing context's number.
     fn top_frame(&self) -> crate::FrameId;
 
+    /// Child frame `frame`'s token, which the browser and DevTools call it
+    /// by; none for one the engine doesn't have (any more: it goes as its
+    /// iframe does). The engine's frames are the one list of them (Blink's
+    /// `FrameTree`): the host asks, keeping none of its own.
+    fn frame_token(&mut self, _frame: crate::FrameId) -> Option<crate::FrameToken> {
+        None
+    }
+
+    /// The child frame whose token is `token`, if the engine has it.
+    fn frame_of_token(&mut self, _token: crate::FrameToken) -> Option<crate::FrameId> {
+        None
+    }
+
+    /// Child frame `frame`'s parent and iframe; none for the top-level
+    /// frame, or one the engine doesn't have.
+    fn frame_parent(&mut self, _frame: crate::FrameId) -> Option<(crate::FrameId, NodeRoot)> {
+        None
+    }
+
+    /// The child frames of `frame`, in the order they were made.
+    fn child_frames(&mut self, _frame: crate::FrameId) -> Vec<crate::FrameId> {
+        Vec::new()
+    }
+
     /// `frame`'s document's navigation timing is `timing` (the network's
     /// half, which the browser told at the commit; times since its window's
     /// time origin): what `performance`'s navigation entry and

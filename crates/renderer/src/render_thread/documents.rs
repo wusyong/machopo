@@ -45,12 +45,11 @@ use crate::{document, encoding};
 
 /// A committed document of the DOM: its navigation and URL, its
 /// parser until the input is all parsed, its parser-blocking script and
-/// deferred scripts.
+/// deferred scripts. A child frame's parent and iframe are the engine's
+/// (`RenderThread::child_parent`).
 pub(super) struct FrameDocument {
-    /// The browsing context it is the document of; a child frame's
-    /// parent and iframe.
+    /// The browsing context it is the document of.
     frame: FrameId,
-    child_of: Option<(FrameId, NodeRoot)>,
     navigation_id: u64,
     url: Url,
     /// Its MIME type and markup as they came, for DevTools (the markup
@@ -210,12 +209,10 @@ pub(super) struct PendingScriptFetch {
 }
 
 impl FrameDocument {
-    /// `frame`'s new document (a child frame's, of `child_of`), loading:
-    /// nothing asked for, run or rendered yet.
-    #[expect(clippy::too_many_arguments, reason = "a document has that many parts")]
+    /// `frame`'s new document, loading: nothing asked for, run or rendered
+    /// yet.
     fn new(
         frame: FrameId,
-        child_of: Option<(FrameId, NodeRoot)>,
         url: Url,
         mime_type: &str,
         source: Rc<str>,
@@ -225,7 +222,6 @@ impl FrameDocument {
     ) -> Self {
         Self {
             frame,
-            child_of,
             navigation_id: 0,
             url,
             mime_type: mime_type.to_owned(),
@@ -283,15 +279,12 @@ impl FrameDocument {
     }
 }
 
-/// The DOM's child frames (`FrameRequest::Created`): each one's parent
-/// and iframe, the documents loading in them, and the navigations the
-/// browser has for them.
+/// What the renderer has of the DOM's child frames (`FrameRequest::Created`):
+/// the documents loading in them, and the navigations the browser has for
+/// them. Which frames there are, their parents, iframes and tokens, are the
+/// engine's (`RenderThread::child_parent`, `child_token`).
 #[derive(Default)]
 pub(super) struct ChildFrames {
-    frames: HashMap<FrameId, (FrameId, NodeRoot)>,
-    /// Each one's token, the engine's: what the browser and DevTools call
-    /// it.
-    tokens: HashMap<FrameId, protocol::FrameToken>,
     documents: Vec<FrameDocument>,
     /// A child frame's navigation the browser has (`BeginNavigation`),
     /// until it commits or is dropped: one a frame.
@@ -360,39 +353,14 @@ pub(super) struct ChildCommit<'a> {
 }
 
 impl ChildFrames {
-    /// `frame` and the frames below it gone: their documents and fetches.
-    fn remove(&mut self, frame: FrameId) {
-        let mut gone = vec![frame];
-        let mut at = 0;
-        while let Some(&parent) = gone.get(at) {
-            gone.extend(
-                self.frames
-                    .iter()
-                    .filter(|(_, (of, _))| *of == parent)
-                    .map(|(id, _)| *id),
-            );
-            at = at.saturating_add(1);
-        }
-        self.frames.retain(|id, _| !gone.contains(id));
-        self.tokens.retain(|id, _| !gone.contains(id));
+    /// The frames `gone` (a frame and those in it) gone: what of them the
+    /// renderer had.
+    fn remove(&mut self, gone: &[FrameId]) {
         self.documents
             .retain(|document| !gone.contains(&document.frame));
         self.navigations.retain(|id, _| !gone.contains(id));
         self.commits.retain(|(id, _, _)| !gone.contains(id));
         self.creation_stacks.retain(|id, _| !gone.contains(id));
-    }
-
-    /// Child frame `frame`'s token.
-    pub(super) fn token(&self, frame: FrameId) -> Option<protocol::FrameToken> {
-        self.tokens.get(&frame).copied()
-    }
-
-    /// The child frame whose token is `token`.
-    pub(super) fn of_token(&self, token: protocol::FrameToken) -> Option<FrameId> {
-        self.tokens
-            .iter()
-            .find(|(_, known)| **known == token)
-            .map(|(frame, _)| *frame)
     }
 
     /// `frame`'s navigation started: one it started before doesn't
@@ -402,23 +370,14 @@ impl ChildFrames {
         self.commits.retain(|(id, _, _)| *id != frame);
     }
 
-    /// Whether a child of `frame` is still loading: its navigation the
+    /// Whether one of `children` is still loading: its navigation the
     /// browser's, its document to commit, or not loaded (HTML's: an iframe
     /// delays its document's `load` event).
-    fn loading_in(&self, frame: FrameId) -> bool {
-        let child_of_frame = |id: &FrameId| {
-            self.frames
-                .get(id)
-                .is_some_and(|(parent, _)| *parent == frame)
-        };
-        self.navigations.keys().any(child_of_frame)
-            || self.commits.iter().any(|(id, _, _)| child_of_frame(id))
+    fn loading(&self, children: &[FrameId]) -> bool {
+        self.navigations.keys().any(|id| children.contains(id))
+            || self.commits.iter().any(|(id, _, _)| children.contains(id))
             || self.documents.iter().any(|document| {
-                document
-                    .child_of
-                    .as_ref()
-                    .is_some_and(|(parent, _)| *parent == frame)
-                    && document.readiness != Readiness::Loaded
+                children.contains(&document.frame) && document.readiness != Readiness::Loaded
             })
     }
 }
@@ -491,11 +450,15 @@ fn main_frame_info(
 /// `WebFrameWidgetImpl::UpdateLifecycle` and `LayerTreeHost::DoUpdateLayers`):
 /// what the event loop's rendering update and script paused's draw alike,
 /// before they commit.
+/// `frames`: the frames as they are now, for DevTools' `CSS` to list the
+/// sheets of (none: the `DOM` agent's, as last told: while script is
+/// paused, when the engine's frames can't be asked).
 pub(super) fn update_lifecycle_and_layers(
     dom: &mut Dom,
     frame: &mut Frame,
     overlay_agent: &super::overlay_agent::OverlayAgent,
     css_agent: &super::css_agent::CssAgent,
+    frames: Option<&[super::dom_agent::DomFrame]>,
 ) {
     let lifecycle = trace_event::trace_event!("WebFrameWidgetImpl::UpdateLifecycle");
     // What the canvases shown recorded, onto their bitmaps.
@@ -510,7 +473,7 @@ pub(super) fn update_lifecycle_and_layers(
     // if they did.
     css_agent.dom_agent().lifecycle_updated(dom, frame);
     css_agent.styles_updated(dom, frame);
-    css_agent.sheets_updated(dom, frame);
+    css_agent.sheets_updated(dom, frame, frames);
     let update_layers = trace_event::trace_event!("LayerTreeHost::DoUpdateLayers");
     let unchanged = frame
         .widget
@@ -733,7 +696,6 @@ impl RenderThread {
             time_origin,
             ..FrameDocument::new(
                 top,
-                None,
                 document_url,
                 mime_type,
                 source,
@@ -830,9 +792,69 @@ impl RenderThread {
             {
                 return loader;
             }
-            at = self.children.frames.get(&frame).map(|(parent, _)| *parent);
+            at = self.child_parent(frame).map(|(parent, _)| parent);
         }
         0
+    }
+
+    /// Child frame `frame`'s token, the engine's (its frames are the one
+    /// list of them).
+    pub(super) fn child_token(&mut self, frame: FrameId) -> Option<protocol::FrameToken> {
+        self.engine.as_mut()?.frame_token(frame)
+    }
+
+    /// The child frame whose token is `token`, if the engine has it.
+    pub(super) fn child_of_token(&mut self, token: protocol::FrameToken) -> Option<FrameId> {
+        self.engine.as_mut()?.frame_of_token(token)
+    }
+
+    /// Child frame `frame`'s parent and iframe, the engine's: none for the
+    /// top-level frame, or a frame gone (as its iframe went).
+    pub(super) fn child_parent(&mut self, frame: FrameId) -> Option<(FrameId, NodeRoot)> {
+        self.engine.as_mut()?.frame_parent(frame)
+    }
+
+    /// The frames below `frame`, each with its parent and iframe, as the
+    /// engine has them: parents before their children.
+    pub(super) fn child_frames_below(&mut self, frame: FrameId) -> Vec<(FrameId, FrameId, NodeRoot)> {
+        let Some(engine) = self.engine.as_mut() else {
+            return Vec::new();
+        };
+        let mut below = Vec::new();
+        let mut parents = std::collections::VecDeque::from([frame]);
+        while let Some(parent) = parents.pop_front() {
+            for child in engine.child_frames(parent) {
+                if let Some((_, owner)) = engine.frame_parent(child) {
+                    below.push((child, parent, owner));
+                    parents.push_back(child);
+                }
+            }
+        }
+        below
+    }
+
+    /// Whether a child of `frame` is still loading (`ChildFrames::loading`).
+    fn children_loading(&mut self, frame: FrameId) -> bool {
+        let children = self
+            .engine
+            .as_mut()
+            .map(|engine| engine.child_frames(frame))
+            .unwrap_or_default();
+        self.children.loading(&children)
+    }
+
+    /// Whether `frame` is the top-level frame.
+    fn is_top(&self, frame: FrameId) -> bool {
+        self.document.as_ref().is_some_and(|next| next.frame == frame)
+    }
+
+    /// Where `frame` is: the top-level frame (none), or a child frame (its
+    /// parent and iframe); none at all for a frame gone.
+    fn place_of(&mut self, frame: FrameId) -> Option<Option<(FrameId, NodeRoot)>> {
+        if self.is_top(frame) {
+            return Some(None);
+        }
+        self.child_parent(frame).map(Some)
     }
 
     /// The loader the DOM has for the document `document`
@@ -917,7 +939,7 @@ impl RenderThread {
                         let parent_token = if Some(parent) == top {
                             self.devtools_main_frame_token
                         } else {
-                            self.children.token(parent)
+                            self.child_token(parent)
                         };
                         if let Some(parent) = parent_token {
                             let _ = self.to_browser.send(RendererHostMsg::DidCreateChildFrame {
@@ -927,7 +949,6 @@ impl RenderThread {
                                 created_by_script,
                             });
                         }
-                        self.children.tokens.insert(frame, token);
                         let document_id = self.new_document_id();
                         let Some((dom, next)) = engine_frame(&mut self.engine) else {
                             continue;
@@ -972,7 +993,6 @@ impl RenderThread {
                         let url = Url::parse("about:blank").expect("about:blank");
                         let mut initial = FrameDocument::new(
                             frame,
-                            Some((parent, owner.clone())),
                             url,
                             "text/html",
                             Rc::from(""),
@@ -983,7 +1003,6 @@ impl RenderThread {
                         initial.readiness = Readiness::Loaded;
                         initial.initial = true;
                         self.children.documents.push(initial);
-                        self.children.frames.insert(frame, (parent, owner));
                         self.request_main_frame();
                     }
                     FrameRequest::Navigate { frame, navigation } => {
@@ -1001,7 +1020,12 @@ impl RenderThread {
                             .register(&url, frame, data.type_(), data.shared_bytes());
                     }
                     FrameRequest::RevokeBlobUrl { url } => self.blob_urls.revoke(&url),
-                    FrameRequest::Removed { frame, token } => {
+                    FrameRequest::Removed {
+                        frame,
+                        token,
+                        parent,
+                        gone,
+                    } => {
                         let _ = self
                             .to_browser
                             .send(RendererHostMsg::DidDetachFrame { frame: token });
@@ -1010,13 +1034,10 @@ impl RenderThread {
                         if let Some((_, next)) = engine_frame(&mut self.engine) {
                             next.view.remove_child(frame);
                         }
-                        let parent = self.children.frames.get(&frame).map(|(parent, _)| *parent);
-                        self.children.remove(frame);
+                        self.children.remove(&gone);
                         self.request_main_frame();
                         // Its parent's `load` may have waited for it.
-                        if let Some(parent) = parent {
-                            self.finish_load(parent);
-                        }
+                        self.finish_load(parent);
                     }
                 }
             }
@@ -1056,7 +1077,7 @@ impl RenderThread {
 
     /// The token the browser knows `frame` by: the main frame's, the
     /// browser's; a child frame's, the engine's.
-    pub(super) fn frame_token(&self, frame: FrameId) -> Option<protocol::FrameToken> {
+    pub(super) fn frame_token(&mut self, frame: FrameId) -> Option<protocol::FrameToken> {
         if self
             .document
             .as_ref()
@@ -1064,7 +1085,7 @@ impl RenderThread {
         {
             self.devtools_main_frame_token
         } else {
-            self.children.token(frame)
+            self.child_token(frame)
         }
     }
 
@@ -1216,7 +1237,7 @@ impl RenderThread {
         let frame = if self.devtools_main_frame_token == Some(token) {
             self.document.as_ref().map(|next| next.frame)
         } else {
-            self.children.of_token(token)
+            self.child_of_token(token)
         };
         let frame = frame.filter(|frame| {
             self.doc(*frame)
@@ -1276,7 +1297,7 @@ impl RenderThread {
     /// (`navigate_child_to`); `srcdoc`'s markup and `about:blank` committed
     /// here.
     fn navigate_child(&mut self, frame: FrameId, navigation: ChildNavigation) {
-        let Some(parent) = self.children.frames.get(&frame).map(|(parent, _)| *parent) else {
+        let Some(parent) = self.child_parent(frame).map(|(parent, _)| parent) else {
             return;
         };
         // The browser has its iframe's `srcdoc` as it is now, which an
@@ -1286,7 +1307,7 @@ impl RenderThread {
             ChildNavigation::Srcdoc(markup) => markup.clone(),
             ChildNavigation::Src(_) | ChildNavigation::AboutBlank => String::new(),
         };
-        if let Some(token) = self.children.token(frame) {
+        if let Some(token) = self.child_token(frame) {
             let _ = self.to_browser.send(RendererHostMsg::DidChangeSrcDoc {
                 frame: token,
                 srcdoc,
@@ -1347,7 +1368,7 @@ impl RenderThread {
     /// back or forward loaded, hasn't had its `load` yet. A frame script
     /// makes after isn't.
     fn is_history_navigation_in_new_child_frame(&mut self, frame: FrameId) -> bool {
-        let Some(parent) = self.children.frames.get(&frame).map(|(parent, _)| *parent) else {
+        let Some(parent) = self.child_parent(frame).map(|(parent, _)| parent) else {
             return false;
         };
         if !self.doc(frame).is_none_or(|next| next.initial) {
@@ -1439,7 +1460,7 @@ impl RenderThread {
     /// `Network.Initiator` (JSON): its iframe, in its parent's document
     /// (the script that inserted it, or the parser).
     fn iframe_initiator(&mut self, frame: FrameId) -> Option<String> {
-        let (parent, owner) = self.children.frames.get(&frame)?.clone();
+        let (parent, owner) = self.child_parent(frame)?;
         let engine = self.engine.as_mut()?;
         let owner = engine.dom_mut().read(|cx| cx.node_id(owner.get(cx.gc)));
         let initiator = self.initiator(parent, &dom::LoadInitiator::Element(owner));
@@ -1459,7 +1480,7 @@ impl RenderThread {
         document: ChildDocument<'_>,
         navigation: ChildCommit<'_>,
     ) -> bool {
-        let Some(frame) = self.children.of_token(token) else {
+        let Some(frame) = self.child_of_token(token) else {
             return false;
         };
         if let Some(begin_id) = begin_id
@@ -1501,12 +1522,11 @@ impl RenderThread {
     /// renderer's `begin_id` reads its response's timing with a
     /// `no-referrer` policy (its iframe's, as it asked).
     pub(super) fn child_no_referrer_of(
-        &self,
+        &mut self,
         token: protocol::FrameToken,
         begin_id: Option<u64>,
     ) -> bool {
-        self.children
-            .of_token(token)
+        self.child_of_token(token)
             .and_then(|frame| self.children.navigations.get(&frame))
             .is_some_and(|asked| Some(asked.begin_id) == begin_id && asked.no_referrer)
     }
@@ -1515,7 +1535,7 @@ impl RenderThread {
     /// (`NavigationDropped`): it no longer loads, and its parent's `load`
     /// no longer waits for it, unless it asked for another since.
     pub(super) fn navigation_dropped(&mut self, token: protocol::FrameToken, id: u64) {
-        let Some(frame) = self.children.of_token(token) else {
+        let Some(frame) = self.child_of_token(token) else {
             return;
         };
         if self
@@ -1527,7 +1547,7 @@ impl RenderThread {
             return;
         }
         self.children.navigations.remove(&frame);
-        let parent = self.children.frames.get(&frame).map(|(parent, _)| *parent);
+        let parent = self.child_parent(frame).map(|(parent, _)| parent);
         if let Some(parent) = parent {
             self.finish_load(parent);
         }
@@ -1536,7 +1556,7 @@ impl RenderThread {
     /// Whether `frame`'s iframe's referrer policy is `no-referrer` (its
     /// `referrerpolicy`, ASCII case-insensitively).
     fn child_no_referrer(&mut self, frame: FrameId) -> bool {
-        let Some((_, owner)) = self.children.frames.get(&frame) else {
+        let Some((_, owner)) = self.child_parent(frame) else {
             return false;
         };
         let Some(engine) = self.engine.as_mut() else {
@@ -1604,12 +1624,7 @@ impl RenderThread {
             .collect();
         for frame in due {
             self.children.owner_loads.remove(&frame);
-            let Some(owner) = self
-                .children
-                .frames
-                .get(&frame)
-                .map(|(_, owner)| owner.clone())
-            else {
+            let Some((_, owner)) = self.child_parent(frame) else {
                 continue;
             };
             if let Some(engine) = &mut self.engine {
@@ -1643,7 +1658,7 @@ impl RenderThread {
             // The browser hears of it as of a commit it didn't send (Chromium's
             // renderer's synchronous commit, which the browser hears of
             // after): its URL is the frame's.
-            if let Some(token) = self.children.token(frame) {
+            if let Some(token) = self.child_token(frame) {
                 let _ = self.to_browser.send(RendererHostMsg::DidCommitNavigation {
                     frame: token,
                     navigation_id: RENDERER_COMMIT,
@@ -1671,9 +1686,16 @@ impl RenderThread {
         navigation: Option<ChildCommit<'_>>,
     ) {
         let _span = trace_event::info_event!("commit_child", %url, %mime_type);
-        let Some((parent, owner)) = self.children.frames.get(&frame).cloned() else {
+        let Some((parent, owner)) = self.child_parent(frame) else {
             return;
         };
+        // The frames in its document before, which the engine takes out as
+        // it makes its next (`create_window`).
+        let below: Vec<FrameId> = self
+            .child_frames_below(frame)
+            .into_iter()
+            .map(|(child, _, _)| child)
+            .collect();
         // The browser's loader for it; one the renderer commits itself (a
         // `javascript:` URL's) goes through the frame's document's before.
         let loader = match &navigation {
@@ -1788,16 +1810,7 @@ impl RenderThread {
         next.view
             .show_child((Some(parent) != top).then_some(parent), view);
         // Its children before go with the document before.
-        let below: Vec<FrameId> = self
-            .children
-            .frames
-            .iter()
-            .filter(|(_, (of, _))| *of == frame)
-            .map(|(id, _)| *id)
-            .collect();
-        for child in below {
-            self.children.remove(child);
-        }
+        self.children.remove(&below);
         self.children.documents.retain(|next| next.frame != frame);
         // The document before's `fetch()`es go with it.
         self.cancel_fetches_of_gone_documents();
@@ -1814,7 +1827,6 @@ impl RenderThread {
             time_origin,
             ..FrameDocument::new(
                 frame,
-                Some((parent, owner)),
                 url,
                 mime_type,
                 Rc::from(""),
@@ -1972,11 +1984,11 @@ impl RenderThread {
 
     /// The document `token`'s navigation `navigation_id` committed in it,
     /// while its body comes: its frame.
-    fn frame_with_body(&self, token: protocol::FrameToken, navigation_id: u64) -> Option<FrameId> {
+    fn frame_with_body(&mut self, token: protocol::FrameToken, navigation_id: u64) -> Option<FrameId> {
         let frame = if Some(token) == self.devtools_main_frame_token {
             self.document.as_ref()?.frame
         } else {
-            self.children.of_token(token)?
+            self.child_of_token(token)?
         };
         self.doc(frame)
             .filter(|next| next.navigation_id == navigation_id && next.body.is_some())
@@ -2613,7 +2625,7 @@ impl RenderThread {
         };
         next.deferred_scripts.clear();
         next.readiness = Readiness::Loaded;
-        let child_of = next.child_of.clone();
+        let place = self.place_of(frame);
         let Some(engine) = &mut self.engine else {
             return;
         };
@@ -2625,13 +2637,15 @@ impl RenderThread {
         engine.document_ready(frame, DocumentReadiness::Aborted);
         self.handle_frame_requests();
         self.send_harness_results();
-        match child_of {
-            Some((parent, _)) => self.finish_load(parent),
-            None => {
+        match place {
+            Some(Some((parent, _))) => self.finish_load(parent),
+            Some(None) => {
                 if let Some(next) = &mut self.document {
                     next.load_finished = true;
                 }
             }
+            // Its frame gone: no one waits for it.
+            None => {}
         }
         self.request_main_frame();
     }
@@ -2662,11 +2676,11 @@ impl RenderThread {
             };
             self.execute_parser_script(frame, script);
         }
+        let top = self.is_top(frame);
         let Some(next) = self.doc_mut(frame) else {
             return;
         };
         next.readiness = Readiness::Parsed;
-        let top = next.child_of.is_none();
         let Some(engine) = &mut self.engine else {
             return;
         };
@@ -2856,13 +2870,12 @@ impl RenderThread {
         // The `<link>`s the last of the input brought looked for before the
         // style update below takes the flag that says the sheets changed.
         self.start_loads();
+        // Before its document is borrowed: its children are the engine's.
+        let children_loading = self.children_loading(frame);
         let Some(next) = self.doc(frame) else {
             return;
         };
-        if next.readiness != Readiness::Parsed
-            || !next.pending_sheets.is_empty()
-            || self.children.loading_in(frame)
-        {
+        if next.readiness != Readiness::Parsed || !next.pending_sheets.is_empty() || children_loading {
             return;
         }
         // Its backgrounds' images looked for first: its style brought up to
@@ -2924,15 +2937,17 @@ impl RenderThread {
             return;
         }
         next.readiness = Readiness::Loaded;
-        let child_of = next.child_of.clone();
+        let place = self.place_of(frame);
         let Some(engine) = &mut self.engine else {
             return;
         };
-        match child_of {
+        match place {
+            // Its frame gone: no `load` of its iframe's.
+            None => {}
             // A child frame's: its iframe's `load` (HTML's "iframe load
             // event steps", in its parent's realm), and its parent's
             // `load` if it waited for it.
-            Some((parent, owner)) => {
+            Some(Some((parent, owner))) => {
                 engine.fire_event(&owner, dom::names::event::LOAD);
                 self.handle_frame_requests();
                 self.send_harness_results();
@@ -2942,7 +2957,7 @@ impl RenderThread {
                 self.request_main_frame();
                 self.finish_load(parent);
             }
-            None => {
+            Some(None) => {
                 self.handle_frame_requests();
                 self.send_harness_results();
                 self.page_agent.load_fired();
@@ -3041,12 +3056,7 @@ impl RenderThread {
         let Some(top) = self.document.as_ref().map(|next| next.frame) else {
             return Vec::new();
         };
-        let mut children: Vec<(FrameId, FrameId, NodeRoot)> = self
-            .children
-            .frames
-            .iter()
-            .map(|(frame, (parent, owner))| (*frame, *parent, owner.clone()))
-            .collect();
+        let mut children = self.child_frames_below(top);
         // In the order they were made, each after its parent below.
         children.sort_by_key(|(frame, _, _)| *frame);
         let mut frames = vec![(top, main)];
@@ -3072,11 +3082,12 @@ impl RenderThread {
         let Some(top) = self.document.as_ref().map(|next| next.document.clone()) else {
             return Vec::new();
         };
-        let children: Vec<(FrameId, NodeRoot)> = self
-            .children
-            .frames
-            .iter()
-            .map(|(frame, (_, owner))| (*frame, owner.clone()))
+        let top_frame = self.document.as_ref().map(|next| next.frame);
+        let children: Vec<(FrameId, NodeRoot)> = top_frame
+            .map(|frame| self.child_frames_below(frame))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(frame, _, owner)| (frame, owner))
             .collect();
         let ids: Vec<String> = children
             .iter()
@@ -3420,7 +3431,7 @@ impl RenderThread {
     /// its document's sheets start and finish loading: it isn't styled or
     /// laid out meanwhile.
     fn update_child_blocking(&mut self, frame: FrameId) {
-        if self.doc(frame).is_none_or(|next| next.child_of.is_none()) {
+        if self.doc(frame).is_none() || self.is_top(frame) {
             return;
         }
         let blocked = self.frame_render_blocked(frame);
@@ -4061,13 +4072,23 @@ impl RenderThread {
         // Drawn: the page before goes now.
         self.new_content_due = None;
         self.empty_frame_wanted = false;
+        // The frames as the engine has them now, if DevTools' `CSS` lists
+        // their sheets: a frame's document committed in this turn is one
+        // of them already.
+        let frames = self.css_agent.on().then(|| self.dom_frames());
         let (Some((dom, frame)), Some(next)) = (engine_frame(&mut self.engine), &mut self.document)
         else {
             return false;
         };
         (next.rendered_version, next.rendered_canvas_draws) =
             dom.read(|cx| (cx.tree_version(), cx.canvas_draws_version()));
-        update_lifecycle_and_layers(dom, frame, &self.overlay_agent, &self.css_agent);
+        update_lifecycle_and_layers(
+            dom,
+            frame,
+            &self.overlay_agent,
+            &self.css_agent,
+            frames.as_deref(),
+        );
         // A caret that came or moved shows, then blinks from there.
         if frame.view.take_caret_moved() {
             self.next_caret_blink = self

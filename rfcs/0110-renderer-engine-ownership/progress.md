@@ -12,6 +12,17 @@
 | 0c'. 獨立的審查；原型：`fetch()` 的登記，做法三 | 做完，待審查 | 2026-11-23 |
 | 0d. 交給使用者決定做法和範圍 | 做完：做法第 5 條，DevTools agent 第 6 條，範圍第 7 條 | 2026-11-23 |
 | 1. 請求和 loader 交給 `dom`（已決定的事項第 7 條的第 1 步，第 10 條） | 做完，待審查 | 2026-11-23 |
+| 2. frame 的表只有一份，建立和移除當場做完（第 7 條的第 2 步，第 11 條） | 進行中 | |
+| 2a. 必壞的測試：A1、A5；移除 iframe 時 parent 的 `load` 和子 frame 的 unload（先對照 Chrome） | A1、A5 的做完，待審查；移除的兩個留到 2e | 2026-11-23 |
+| 2b. renderer 向 engine 查 frame 的 token、parent、owner；拿掉 `ChildFrames` 的樹和 token、`FrameDocument.child_of`；WebDriver 和 DevTools 的 frame 清單讀 engine（A5、A1） | 做完，待審查（兩條 mutation 沒抓到，見做過的檢查） | 2026-11-23 |
+| 2c. 建立和移除時 child view 和給 Browser 的訊息由 hook 當場做 | 沒開始 | |
+| 2d. 文件的載入狀態（readiness、還在等的載入）搬到 DOM，「載完了沒」的判斷移到 `dom_api` | 沒開始（開始前列出要決定的事） | |
+| 2e. 移除時 engine 當場發子 frame 的 `pagehide`、`unload`，檢查 parent、排它的 `load` | 沒開始（開始前列出要決定的事） | |
+| 2f. 初始的 `about:blank` 不先建 `FrameDocument`；拿掉 `Created`、`Removed` 的便條 | 沒開始 | |
+| 3. 同一份文件內的捲動當場做，拿掉 renderer 那份文件網址的副本（第 7 條的第 3 步） | 沒開始 | |
+| 4. `javascript:` 網址在 `dom_api` 裡排成綁在 Document 上的 task（第 4 步） | 沒開始 | |
+| 5. intersection 的通知排成真的 task（第 5 步） | 沒開始 | |
+| 6. 圖片和 script 開始載入的記錄交給 `dom`（第 6 步） | 沒開始 | |
 
 ## 驗收
 
@@ -56,4 +67,19 @@
 **Mutation test**（`mutants-1.toml`）：16 條都抓到。`a cookie set through no loader` 第一次只跑 `shell`，沒抓到；寫入再讀回的測試在 `browser` 的 `cookies::document_cookie_and_cookie_enabled`，spec 改成跑它之後抓到。跑完檔案都還原了（`target/mutate/originals` 是空的）。
 
 **測試**：`dom` 254 個、`dom_api` 201 個、`dom_js` 550 個（1 個 ignored）、`renderer` 128 個、`browser` 191 個、`shell` 649 個都通過（加上新的測試之後 `shell` 是 650 個，新的那一個另外跑過）。WPT：`fetch/api/basic/`、`abort/`、`redirect/`、`cors/`、`cookies/`、`document-cookie.html`，3742 項，非預期的 0 個。`sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs 通過。`cargo test --workspace`、`cargo fmt --check`、clippy 照規定在整個階段做完時跑。
+
+### 第 2a、2b 步：必壞的測試；renderer 向 engine 查 frame（2026-11-23，Linux：Fedora 45、debug build，`56cb7e1` 之上）
+
+**2a**：
+- A5（`automation_pipe::a_removed_frame_is_gone_for_the_next_command`）：頁面的 script 移除 iframe，用 `postMessage` 排一個忙 300 ms 的 task，下一個 WebDriver 指令在 renderer 處理 `Removed` 之前進來。只在 timer 裡移除、或在 microtask 裡忙，都不會壞（回覆在 microtask checkpoint 之後才送）。改之前 10 次壞 10 次，症狀和 A5 一樣（`javascript error`，不是 `no such window`）。
+- A1（`devtools_css::a_new_frames_sheet_is_told_though_it_is_drawn_as_it_commits`，0109 的 `det-test.diff`）：加暫時的 log 量到 rendering 時 sheet 的版本有子 frame 的 srcdoc 文件，DOM agent 的清單卻還是它初始的 `about:blank`。改之前 10 次壞 10 次（0109 量時 9 次壞 5 次：第 1 步之後時序變了）。
+- 移除 iframe 時 parent 的 `load` 和子 frame 的 unload 對照 Chrome 的兩個，留到 2e 改到它們時寫。
+
+**2b**：`ScriptEngine` 加了 `frame_token`、`frame_of_token`、`frame_parent`、`child_frames`（dom_js 照它的 `Frames` 答，`dom_wasm` 用預設的：只有頂層的 frame）；`FrameRequest::Removed` 帶 parent 和一起拿掉的每個 frame（`gone`）；renderer 拿掉 `ChildFrames` 的樹和 token、`FrameDocument.child_of`，各處改問 engine（`child_token`、`child_of_token`、`child_parent`、`child_frames_below`、`place_of`），WebDriver 的 frame 和 DevTools 的 frame 清單也是；rendering 列 sheet 時用當下算的 frame 清單（`CssAgent::sheets_updated` 的 `frames`；debugger 暫停時照舊是 DOM agent 的）。A1、A5 的測試改之後各 5 次都通過。`dom_js` 的 `frames::a_frame_goes_with_its_token` 加了 engine 的查詢和 `gone` 的檢查。
+
+**Mutation test**（`mutants-2b.toml`）：8 條，6 條抓到。`a Removed names the frame alone` 第一次沒抓到：換文件時的測試沒有巢狀的 frame，補了一層之後抓到。沒抓到的兩條：
+- `a gone frame taken for the top-level one`（`place_of`）：要走到，iframe 移除之後它的文件還得載完或中止；移除之後文件不再 fully active，它的 window `load` task 不跑，被丟掉的導覽在 `navigation_dropped` 一開始就因為查不到 frame 返回。推論為走不到的路，等價；沒有證明。
+- `a navigated child's frames before kept by the renderer`（`commit_child` 當場清掉舊文件裡 frame 的帳）：engine 在 `create_window` 時照樣為它們送 `Removed`，下一次處理便條時清掉，差別只在中間的空檔；空檔裡舊文件的 parser 會不會被續跑沒有排除。2f 拿掉便條、重新設計清帳時一起處理，補測試。
+
+跑完檔案都還原了。**測試**：`dom_api` 201 個、`dom_js` 550 個（1 個 ignored）、`renderer` 128 個、`browser` 191 個、`shell` 652 個都通過。
 

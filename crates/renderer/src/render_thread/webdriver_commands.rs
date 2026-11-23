@@ -298,16 +298,16 @@ impl RenderThread {
     /// The id of child frame `frame`, for the browser and the driver: its
     /// token (the same as its documents change, as WebDriver's browsing
     /// context is). Empty for none the renderer was told of.
-    pub(super) fn frame_id(&self, frame: FrameId) -> String {
-        self.children
-            .token(frame)
+    pub(super) fn frame_id(&mut self, frame: FrameId) -> String {
+        self.child_token(frame)
             .map(|token| token.to_string())
             .unwrap_or_default()
     }
 
-    /// The child frame `id` names, if it is one of this renderer's.
-    fn frame_id_of(&self, id: &str) -> Option<FrameId> {
-        self.children.of_token(protocol::FrameToken::parse(id)?)
+    /// The child frame `id` names, if the engine has it: one gone as its
+    /// iframe went is no frame's at once.
+    fn frame_id_of(&mut self, id: &str) -> Option<FrameId> {
+        self.child_of_token(protocol::FrameToken::parse(id)?)
     }
 
     /// Switch To Frame's work in the page: the child frame of the context's

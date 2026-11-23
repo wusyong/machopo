@@ -1838,6 +1838,39 @@ fn switch_in(
     webdriver(browser, session, "Machopo.switchToFrame", params)
 }
 
+/// A frame its parent's script removes: the next command in it, which comes
+/// before the renderer's loop has turned again, finds it gone (`no such
+/// window`), as Chrome detaches a frame as its iframe goes; not a
+/// `javascript error` of a frame the renderer still held.
+#[test]
+fn a_removed_frame_is_gone_for_the_next_command() {
+    let server = server(&[
+        (
+            "/top",
+            Route::ok("text/html", "<!DOCTYPE html><iframe id=one src=/one></iframe>"),
+        ),
+        ("/one", Route::ok("text/html", "<!DOCTYPE html><p>one</p>")),
+    ]);
+    let mut browser = Browser::start();
+    let session = browser.attach();
+    browser.navigate(&session, &server.url("/top"));
+    let b = &mut browser;
+    let one = switch_in(b, &session, None, json!({ "index": 0 }))
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // Removed; its answer sent, the renderer busy in a task the script
+    // queued (a message's), while the next command comes.
+    let script = "one.remove(); onmessage = () => { const until = Date.now() + 300; while (Date.now() < until); }; \
+                  postMessage('', '*'); return 0";
+    script_in(b, &session, None, script, json!([])).unwrap();
+    assert_eq!(
+        script_in(b, &session, Some(&one), "return 1", json!([])),
+        Err("no such window".into())
+    );
+}
+
 /// `Machopo.switchToFrame` gives a child frame's id, by its index in its
 /// parent's `window` or by its iframe; the `Machopo` WebDriver methods work in
 /// the frame they are given. A frame's id stays its own as it navigates,

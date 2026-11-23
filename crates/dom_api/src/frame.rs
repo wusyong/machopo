@@ -72,8 +72,14 @@ pub enum FrameRequest {
     },
     /// `frame`, whose token was `token`, went with the frames in it: its
     /// iframe was removed, or the document it was in was navigated from
-    /// (one for each frame that document had).
-    Removed { frame: FrameId, token: FrameToken },
+    /// (one for each frame that document had). Its parent, and every frame
+    /// gone with it (it first): the engine's frames have none of them now.
+    Removed {
+        frame: FrameId,
+        token: FrameToken,
+        parent: FrameId,
+        gone: Vec<FrameId>,
+    },
     /// Script navigated `frame` (`location`, `history`), as script in
     /// `initiator` asked (`frame` itself for what isn't asked by another):
     /// to another document, its host loads it (the top-level frame's, the

@@ -424,6 +424,34 @@ impl ScriptEngine for V8Engine {
         crate::frames::TOP
     }
 
+    fn frame_token(&mut self, frame: dom_api::FrameId) -> Option<dom_api::FrameToken> {
+        if frame == crate::frames::TOP {
+            return None;
+        }
+        self.state().frames.token(frame)
+    }
+
+    fn frame_of_token(&mut self, token: dom_api::FrameToken) -> Option<dom_api::FrameId> {
+        self.state().frames.of_token(token).map(|frame| frame.id)
+    }
+
+    fn frame_parent(
+        &mut self,
+        frame: dom_api::FrameId,
+    ) -> Option<(dom_api::FrameId, NodeRoot)> {
+        let frame = self.state().frames.get(frame)?;
+        Some((frame.parent?, frame.owner.clone()?))
+    }
+
+    fn child_frames(&mut self, frame: dom_api::FrameId) -> Vec<dom_api::FrameId> {
+        self.state()
+            .frames
+            .iter()
+            .filter(|child| child.parent == Some(frame))
+            .map(|child| child.id)
+            .collect()
+    }
+
     fn set_navigation_timing(&mut self, frame: dom_api::FrameId, timing: dom::NavigationTiming) {
         let Some((_, document)) = self.frame_context_and_document(frame) else {
             return;

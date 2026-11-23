@@ -417,6 +417,7 @@ impl dom_api::DevToolsQueue for DevToolsQueueHandle {
                     frame,
                     &self.overlay_agent,
                     &self.css_agent,
+                    None,
                 );
                 let widget = &mut frame.widget;
                 let mut promises = std::mem::take(&mut widget.pending_input_acks);

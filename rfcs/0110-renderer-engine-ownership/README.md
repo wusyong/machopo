@@ -146,6 +146,10 @@ A4（捲動）可以用現有的 `FrameLayout` 加一個 hook 當場做（0109 �
 8. **導覽交給 Browser 的時機不改**（2026-11-23，使用者同意；原本「待決定」的第 1 條）：`location` 和 `history` 的導覽照 RFC 0019 第 24、35 條在 event loop 的最上層送。盤點沒有找到它造成的問題：導覽本來就是跨 process 的訊息，差別只在送出比 Chrome 晚那個 task 剩下的時間。不選改成呼叫的當下送：要推翻 RFC 0019 的兩條，好處只在時間上。
 9. **這份先做完，再做 RFC 0109 剩下的**（2026-11-23，使用者決定；原本「待決定」的第 2 條）：0109 的第 2 階段（2-1 以外）和第 3、4 階段都排在這份之後。理由：最單純，兩份都要改 `RenderThread`（這份改欄位，0109 的第 3、4 階段改結束的路），先後排開就不衝突。代價：這份做的期間，CI 上 0109 的 B 類、port、啟動失敗的 crash 照樣不穩定，判斷這份的回歸時要先排除它們。不選先做 0109 第 2 階段的小修正：CI 的訊號會乾淨一些，但切換的次數多；不選 0109 全部先做：這份要 rebase 到改過的結束路徑上。
 10. **第 1 步：拿掉「沒有 sink」的路；順便取消頂層文件換掉時的 `fetch()`**（2026-11-23，使用者同意）。`FrameRequest` 的 `Fetch`、`FetchSent`、`CancelFetch` 和 renderer 對應的處理都拿掉，`dom_js` 的測試改用測試的 sink：只有一條送出的路，記錄只有一個地方寫。不選留給測試：engine 裡會留著第二條送出的路，mutation test 也會有等價的 mutant。頂層的文件換掉時，取消它和它的 frame 還在路上的 `fetch()`（Chrome 在 execution context 不在時取消），`docs/limitations.md` 那一條跟著刪：記錄搬進 DOM 之後，碰的是同一張表。不選維持限制：範圍最小，但回應不來的請求一直留著。
+11. **第 2 步：frame 的表在 engine 那一側；建立和移除照 Chrome 當場做完；分成小步**（2026-11-23，使用者決定；更正第 7 條第 2 步的寫法）。
+    - **唯一的一份是 engine 那一側的**：dom_js 的 `Frames`（id、token、parent、owner、文件、V8 context）和 `dom` 的 `content_document`、`frame_owner`，在同一個操作裡一起改，不是跨邊界的副本（`dom_wasm` 只有頂層的）。renderer 經過 `ScriptEngine` 查，`FrameId`、`FrameToken` 不搬到 `dom`（第 7 條原本寫搬：`FrameToken` 是 `protocol` 的，`dom` 不依賴它，換來的好處這樣都有；Chromium 的 frame 樹也在 Blink core）。
+    - **建立和移除當場做完，照 Chrome**：子 frame 的 unload、parent 的載入檢查和它的 `load`、child view、告訴 Browser，都在移除（和建立）的當下；renderer 不再靠 `Created`、`Removed` 的便條補做。前提是文件的載入狀態（readiness、還在等的載入，Blink 的 `DocumentLoader` 那一層）先搬到 engine 那一側，engine 在 `update_elements` 裡做（那裡本來就能執行 script）；這也修掉「拿掉 iframe 時不發 `pagehide`、`unload`」的限制。不選便條只留給 renderer 自己的帳：A1、A5 修得掉，但 parent 的 `load` 晚到移除的 task 之後（網頁看得到），renderer 還要保留便條。
+    - **分成小步**，各自測試、mutation test、審核，太大就再拆；先寫出 A1、A5 的必壞測試。
 
 ## 待決定
 

@@ -276,10 +276,13 @@ impl CssAgent {
 
     /// Every sheet of the frames' documents now, with its header and text.
     fn list_sheets(&self, dom: &Dom) -> Vec<SheetInfo> {
-        let frames = self.dom_agent.frames();
+        self.list_sheets_of(dom, &self.dom_agent.frames())
+    }
+
+    fn list_sheets_of(&self, dom: &Dom, frames: &[super::dom_agent::DomFrame]) -> Vec<SheetInfo> {
         dom.read(|cx| {
             let mut sheets = Vec::new();
-            for frame in &frames {
+            for frame in frames {
                 let Some(document) = cx.node_by_id(frame.document) else {
                     continue;
                 };
@@ -694,11 +697,22 @@ impl CssAgent {
         }
     }
 
+    /// Whether a session turned `CSS` on.
+    pub(crate) fn on(&self) -> bool {
+        !self.sessions.borrow().is_empty()
+    }
+
     /// After a frame's style recalc: the sheets listed again and the
     /// sessions told of what changed, if a document's style collected its
     /// sheets since they were last listed (Blink's `ActiveStyleSheetsUpdated`
-    /// probe).
-    pub(crate) fn sheets_updated(&self, dom: &Dom, frame: &crate::frame_view::Frame) {
+    /// probe): of `frames`, the frames as they are now (Blink's agent
+    /// collects them from the document), or the `DOM` agent's as last told.
+    pub(crate) fn sheets_updated(
+        &self,
+        dom: &Dom,
+        frame: &crate::frame_view::Frame,
+        frames: Option<&[super::dom_agent::DomFrame]>,
+    ) {
         if self.sessions.borrow().is_empty() {
             return;
         }
@@ -708,7 +722,10 @@ impl CssAgent {
             return;
         }
         *self.sheets_versions.borrow_mut() = versions;
-        let sheets = self.list_sheets(dom);
+        let sheets = match frames {
+            Some(frames) => self.list_sheets_of(dom, frames),
+            None => self.list_sheets(dom),
+        };
         self.tell_sheets(&sheets);
     }
 

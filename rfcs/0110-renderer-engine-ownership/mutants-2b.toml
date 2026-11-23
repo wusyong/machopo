@@ -1,0 +1,58 @@
+# Stage 1, step 2b: the renderer asks the engine of its frames.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "env", "MACHOPO_GPU_ADAPTER=cpu", "cargo", "test", "-q", "-p", "shell", "--test", "it"]
+timeout = 900
+
+[[mutant]]
+name = "a removed frame stays the engine's"
+file = "crates/dom_js/src/frames.rs"
+from = '''    let removed = state.frames.remove(frame);'''
+to = '''    let removed: Vec<Frame> = state.frames.get(frame).map(|_| Vec::new()).unwrap_or_default();'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "env", "MACHOPO_GPU_ADAPTER=cpu", "cargo", "test", "-q", "-p", "shell", "--test", "it", "automation_pipe::a_removed_frame_is_gone_for_the_next_command"]
+
+[[mutant]]
+name = "sheets listed of the DOM agent's frames as last told"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        let frames = self.css_agent.on().then(|| self.dom_frames());'''
+to = '''        let frames = self.css_agent.on().then(|| self.dom_frames()).filter(|_| false);'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "env", "MACHOPO_GPU_ADAPTER=cpu", "cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_css::a_new_frames_sheet_is_told_though_it_is_drawn_as_it_commits"]
+
+[[mutant]]
+name = "a Removed names the frame alone, not those in it"
+file = "crates/dom_js/src/frames.rs"
+from = '''        while let Some(&above) = gone.get(at) {'''
+to = '''        while let Some(&above) = gone.get(at).filter(|_| false) {'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "frames::a_frame_goes_with_its_token"]
+
+[[mutant]]
+name = "the frames gone kept by the renderer"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                        self.children.remove(&gone);'''
+to = '''                        self.children.remove(&gone[..0]);'''
+
+[[mutant]]
+name = "a parent's load waits for no child"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            .map(|engine| engine.child_frames(frame))
+            .unwrap_or_default();
+        self.children.loading(&children)'''
+to = '''            .map(|engine| engine.child_frames(frame))
+            .unwrap_or_default();
+        self.children.loading(&children[..0])'''
+
+[[mutant]]
+name = "a gone frame taken for the top-level one"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        self.child_parent(frame).map(Some)'''
+to = '''        Some(self.child_parent(frame))'''
+
+[[mutant]]
+name = "a navigated child's frames before kept by the renderer"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        self.children.remove(&below);'''
+to = '''        self.children.remove(&below[..0]);'''
+
+[[mutant]]
+name = "the engine knows no child frame's parent"
+file = "crates/dom_js/src/engine.rs"
+from = '''        Some((frame.parent?, frame.owner.clone()?))'''
+to = '''        Some((frame.parent.filter(|_| false)?, frame.owner.clone()?))'''
