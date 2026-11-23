@@ -1,0 +1,128 @@
+# Stage 2's mutants: `python3 scripts/test.py mutate rfcs/0111-measuring-across-processes/mutants-2.toml`.
+test = ["python3", "scripts/bench/speedometer/speedometer_test.py", "MemoryTests", "CompareTests", "SingleProcessTests"]
+timeout = 600
+
+[[mutant]]
+name = "the total leaves out the renderer processes"
+file = "scripts/bench/common.py"
+from = '''    total = None if browser_peak is None or renderer is None else browser_peak + renderer'''
+to = '''    total = None if browser_peak is None or renderer is None else browser_peak'''
+
+[[mutant]]
+name = "an unread renderer process counts as nothing"
+file = "scripts/bench/common.py"
+from = '''    renderer = None if None in peaks else sum(peaks)'''
+to = '''    renderer = sum(peak or 0 for peak in peaks)'''
+
+[[mutant]]
+name = "a version that can't tell its processes has the browser's as its total"
+file = "scripts/bench/common.py"
+from = '''        return {"browser": browser_peak, "renderer": None, "total": None}
+    if not pids:'''
+to = '''        return {"browser": browser_peak, "renderer": None, "total": browser_peak}
+    if not pids:'''
+
+[[mutant]]
+name = "a renderer of the browser's threads leaves no total"
+file = "scripts/bench/common.py"
+from = '''        return {"browser": browser_peak, "renderer": None, "total": browser_peak}
+    peaks'''
+to = '''        return {"browser": browser_peak, "renderer": None, "total": None}
+    peaks'''
+
+[[mutant]]
+name = "a version whose renderers are threads still has no total"
+file = "scripts/bench/common.py"
+from = '''    return {**memory, "total": memory["browser"]}'''
+to = '''    return memory'''
+
+[[mutant]]
+name = "every version's renderers taken for threads"
+file = "scripts/bench/common.py"
+from = '''    return not is_ancestor(RENDERER_PROCESSES_SINCE, rev)'''
+to = '''    return True'''
+
+[[mutant]]
+name = "the old version's total not made of its browser's"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''                if side == "against" and threads:
+                    memory = with_renderers_in_browser(memory)'''
+to = '''                if side == "against" and threads:
+                    pass'''
+
+[[mutant]]
+name = "the by-process table swaps the browser and the renderer"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''            for side in ("against", "current") for process in ("browser", "renderer")) + " |")'''
+to = '''            for side in ("against", "current") for process in ("renderer", "browser")) + " |")'''
+
+[[mutant]]
+name = "run_in_machopo's memory isn't the total"
+file = "scripts/bench/common.py"
+from = '''"memory": by_process and by_process["total"],'''
+to = '''"memory": by_process and by_process["browser"],'''
+test = ["python3", "scripts/bench/speedometer/speedometer_test.py", "MachopoTests.test_machopos_peak_memory_with_its_run"]
+
+[[mutant]]
+name = "--single-process not handed to machopo"
+file = "scripts/bench/common.py"
+from = '''                on_browser_cpus([*(wrapper or []), str(binary), "--automation-pipe", *machopo_switches(binary)]),'''
+to = '''                on_browser_cpus([*(wrapper or []), str(binary), "--automation-pipe"]),'''
+test = ["python3", "scripts/bench/speedometer/speedometer_test.py", "MachopoTests.test_with_single_process_the_renderer_is_the_browsers"]
+
+[[mutant]]
+name = "--single-process handed to a build that doesn't take it"
+file = "scripts/bench/common.py"
+from = '''    return ["--single-process"] if SINGLE_PROCESS and binary not in WITHOUT_SINGLE_PROCESS else []'''
+to = '''    return ["--single-process"] if SINGLE_PROCESS else []'''
+
+[[mutant]]
+name = "an old against version is handed --single-process"
+file = "scripts/bench/common.py"
+from = '''        WITHOUT_SINGLE_PROCESS.add(binaries["against"])'''
+to = '''        pass'''
+
+[[mutant]]
+name = "a report says --single-process for a version that doesn't take it"
+file = "scripts/bench/common.py"
+from = '''    if SINGLE_PROCESS and (rev is None or takes_single_process(rev)):'''
+to = '''    if SINGLE_PROCESS:'''
+
+[[mutant]]
+name = "census reads the browser's file alone"
+file = "scripts/bench/census/census.py"
+from = '''                  if path.suffix == ".tsv" or (path.suffix[1:].isdigit() and path.stem.endswith(".tsv")))'''
+to = '''                  if path.suffix == ".tsv")'''
+test = ["python3", "scripts/bench/census/census_test.py"]
+
+[[mutant]]
+name = "census reads any file beside a page's"
+file = "scripts/bench/census/census.py"
+from = '''                  if path.suffix == ".tsv" or (path.suffix[1:].isdigit() and path.stem.endswith(".tsv")))'''
+to = '''                  if path.suffix == ".tsv" or path.stem.endswith(".tsv"))'''
+test = ["python3", "scripts/bench/census/census_test.py"]
+
+[[mutant]]
+name = "census takes a renderer process that wrote nothing"
+file = "scripts/bench/census/census.py"
+from = '''    return f"the renderer process wrote no counts ({', '.join(missing)} missing)" if missing else None'''
+to = '''    return None'''
+test = ["python3", "scripts/bench/census/census_test.py"]
+
+[[mutant]]
+name = "a process of its own writes the browser's census file"
+file = "crates/base/src/census.rs"
+from = '''        if let Some(pid) = pid {
+            path.push(format!(".{pid}"));
+        }'''
+to = '''        if let Some(pid) = pid {
+            let _ = pid;
+        }'''
+test = ["cargo", "test", "-q", "-p", "base", "--features", "census", "census"]
+
+[[mutant]]
+name = "a renderer process writes the browser's census file"
+file = "crates/shell/src/main.rs"
+from = '''        base::census::own_file();'''
+to = '''        let _ = base::census::own_file;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--features", "census", "--test", "it", "automation_pipe::a_renderer_process_counts"]

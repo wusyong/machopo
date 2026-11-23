@@ -499,6 +499,37 @@ class CdpPipe:
                 pass
 
 
+# Whether the tools run machopo with each tab's renderer threads of its
+# own process (their `--single-process`, machopo's), not the process of
+# its own it is by default. A build too old to take the switch (an
+# `--against` version's before `SINGLE_PROCESS_SINCE`) runs as it does.
+SINGLE_PROCESS = False
+SINGLE_PROCESS_SINCE = "96a940c"
+WITHOUT_SINGLE_PROCESS: set[Path] = set()
+
+
+def machopo_switches(binary: Path) -> list[str]:
+    """What `binary` is run with past `--automation-pipe`: `--single-process`
+    when the tools are asked for it and it takes the switch."""
+    return ["--single-process"] if SINGLE_PROCESS and binary not in WITHOUT_SINGLE_PROCESS else []
+
+
+def takes_single_process(rev: str) -> bool:
+    """Whether machopo at `rev` takes `--single-process`."""
+    return is_ancestor(SINGLE_PROCESS_SINCE, rev)
+
+
+def renderers_text(rev: str | None = None) -> str:
+    """Where machopo's renderers ran, for a report: the working tree's, or
+    at `rev` (an `--against` version's). A version that takes no
+    `--single-process` is older than any whose renderers are processes."""
+    if SINGLE_PROCESS and (rev is None or takes_single_process(rev)):
+        return "threads of the browser's process (--single-process)"
+    if rev is not None and renderers_are_threads(rev):
+        return "threads of the browser's process"
+    return "processes of their own"
+
+
 class MachopoPipe(CdpPipe):
     """`machopo --automation-pipe`, through its standard input and output; run
     by `wrapper` (a sampler), if any, which passes the pipe through."""
@@ -508,7 +539,7 @@ class MachopoPipe(CdpPipe):
     def __init__(self, binary: Path, log, env: dict | None = None, wrapper: list[str] | None = None) -> None:
         with browser_affinity():
             process = subprocess.Popen(
-                on_browser_cpus([*(wrapper or []), str(binary), "--automation-pipe"]),
+                on_browser_cpus([*(wrapper or []), str(binary), "--automation-pipe", *machopo_switches(binary)]),
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=log,
@@ -671,7 +702,8 @@ def versions_text(rev: str) -> str:
     dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=ROOT, capture_output=True,
                            text=True).stdout.strip()
     return (f"`against` is {rev} ({resolved.stdout.strip()}), `current` the working tree "
-            f"({git_head()}{', with changes' if dirty else ''})")
+            f"({git_head()}{', with changes' if dirty else ''}); machopo's renderers: against's "
+            f"{renderers_text(rev)}, current's {renderers_text()}")
 
 
 def interval_text(values: list[float]) -> str:
@@ -683,10 +715,13 @@ def interval_text(values: list[float]) -> str:
 def against_binaries(rev: str) -> dict[str, Path]:
     """machopo at `rev` (built in a worktree, `against_tree`, into its own
     target directory) and the working tree's."""
-    return {
+    binaries = {
         "against": machopo_binary(MACHOPO_PROFILE, against_tree(rev), ROOT / "target" / "against"),
         "current": machopo_binary(MACHOPO_PROFILE),
     }
+    if SINGLE_PROCESS and not takes_single_process(rev):
+        WITHOUT_SINGLE_PROCESS.add(binaries["against"])
+    return binaries
 
 
 # --- what is valid ----------------------------------------------------------
@@ -1020,6 +1055,56 @@ def renderer_trace(trace: Path, processes: list[dict] | None) -> tuple[Path, boo
     return max(found, key=lambda path: sum(len(marks) for marks in perfetto_marks(path).values())), True
 
 
+def memory_by_process(browser: int, processes: list[dict] | None) -> dict:
+    """machopo's peak memory (`peak_memory`), its browser process's (pid
+    `browser`) and its renderer processes' (`processes`, summed), read
+    while they run: `{browser, renderer, total}`. The total is the sum of
+    each process's peak, as Telemetry's `all_processes` sums each
+    process's peak resident size: the most the whole could have held, two
+    processes' peaks needn't come at once. With no renderer process (its
+    renderer the browser's threads) the browser's is the total. `None`
+    where it can't be read: a renderer process's, or from a version that
+    can't tell its processes (`processes` `None`), the renderer's and the
+    total (`with_renderers_in_browser` makes the total of a version whose
+    renderers are the browser's threads)."""
+    browser_peak = peak_memory(browser)
+    pids = renderer_pids(processes)
+    if pids is None:
+        return {"browser": browser_peak, "renderer": None, "total": None}
+    if not pids:
+        return {"browser": browser_peak, "renderer": None, "total": browser_peak}
+    peaks = [peak_memory(pid) for pid in pids]
+    renderer = None if None in peaks else sum(peaks)
+    total = None if browser_peak is None or renderer is None else browser_peak + renderer
+    return {"browser": browser_peak, "renderer": renderer, "total": total}
+
+
+def with_renderers_in_browser(memory: dict | None) -> dict | None:
+    """`memory` (`memory_by_process`) of a version that couldn't tell its
+    processes, known to have its renderers the browser's threads: the
+    browser's peak is the total."""
+    if memory is None or memory["total"] is not None:
+        return memory
+    return {**memory, "total": memory["browser"]}
+
+
+# The first commit whose renderers are processes of their own unless told
+# otherwise; a version before it has them the browser's threads.
+RENDERER_PROCESSES_SINCE = "0f36205"
+
+
+def is_ancestor(commit: str, rev: str) -> bool:
+    """Whether `commit` is in `rev`'s history (or is it)."""
+    return subprocess.run(["git", "merge-base", "--is-ancestor", commit, rev], cwd=ROOT,
+                          capture_output=True).returncode == 0
+
+
+def renderers_are_threads(rev: str) -> bool:
+    """Whether machopo at `rev` runs its renderers as the browser's
+    threads, as every version before `RENDERER_PROCESSES_SINCE` does."""
+    return not is_ancestor(RENDERER_PROCESSES_SINCE, rev)
+
+
 def run_in_machopo(server: Server, binary: Path, url: str, timeout: float, log, trace: Path | None = None,
                samples: Path | None = None, cpu_profile: Path | None = None, env: dict | None = None) -> dict:
     """`url` in a new `machopo --automation-pipe`: what its page posted
@@ -1062,7 +1147,8 @@ def run_in_machopo(server: Server, binary: Path, url: str, timeout: float, log, 
             except RuntimeError as e:
                 return {"error": f"machopo's processes: {e}"}
             # A wrapper's process is the sampler's, not machopo's.
-            return {"body": body, "memory": None if wrapper else peak_memory(machopo.process.pid),
+            by_process = None if wrapper else memory_by_process(machopo.process.pid, processes)
+            return {"body": body, "memory": by_process and by_process["total"], "memory_by_process": by_process,
                     "processes": processes}
         return {"error": f"machopo ended (exit status {machopo.process.returncode})" if machopo.process.poll() is not None
                 else f"no report in {timeout:.0f} s"}
@@ -1334,6 +1420,7 @@ def environment(profile: str) -> dict:
         "cpus": cpu_list(browser_cpus()) if browser_cpus() else "all",
         "power": power,
         "gpu": "unknown",
+        "renderers": renderers_text(),
     }
 
 

@@ -481,7 +481,7 @@ def write_measure_report(rows: list[dict], env: dict, iterations: int) -> Path:
         "",
         f"machopo `{env['machopo']}` (the `{env['profile']}` profile: ThinLTO, no PGO), Chrome for Testing {env['chrome']} "
         f"(ThinLTO and PGO); {env['os']}, {env['cpu']} (the browsers on CPUs: {env.get('cpus', 'all')}), {env['cores']} cores, power: {env['power']}, "
-        f"machopo's GPU: {env.get('gpu', 'unknown')}. "
+        f"machopo's GPU: {env.get('gpu', 'unknown')}, machopo's renderers: {env.get('renderers', 'unknown')}. "
         f"Each suite in a new browser, {iterations} iterations, the browsers one after the other. "
         "Median ms of the suite's total in each iteration (95% interval); the first iteration's alone.",
         "",
@@ -1187,8 +1187,12 @@ def compare_suite(name: str, runs: dict[str, list[Folded]]) -> list[str]:
 MEMORY_WORDS = {"darwin": "the most phys footprint", "linux": "the peak resident set, VmHWM",
                 "win32": "the peak private bytes"}
 
+# What a report's peak memory is, after `MEMORY_WORDS`.
+MEMORY_SUM = ("each process's, the browser's and its renderer processes' summed: the most all of it could "
+              "have held, as two processes' peaks needn't come at once")
 
-def time_problem(sides: dict[str, list[tuple[dict, int | None]]]) -> str | None:
+
+def time_problem(sides: dict[str, list[tuple[dict, dict | None]]]) -> str | None:
     """Why a suite has no times to compare: the first problem of a run of
     either version (`run_problems`), or a version with no run."""
     for side, timed in sides.items():
@@ -1201,12 +1205,18 @@ def time_problem(sides: dict[str, list[tuple[dict, int | None]]]) -> str | None:
     return None
 
 
+def process_memory_text(peaks: list[int]) -> str:
+    """A process's peak memory over a version's runs, their median."""
+    return f"{median(peaks) / 2**20:.0f} MB" if peaks else "–"
+
+
 def write_time_report(rev: str, runs: int, iterations: int,
-                      by_suite: dict[str, dict[str, list[tuple[dict, int | None]]]], env: dict) -> Path:
+                      by_suite: dict[str, dict[str, list[tuple[dict, dict | None]]]], env: dict) -> Path:
     """`compare.md` of times: for each suite, each version's total in every
     iteration of its runs, their median and its 95% interval, and the
-    medians' change; machopo's peak memory, the median of each version's runs,
-    and its change; the geometric mean of the suites' changes; and each
+    medians' change; machopo's peak memory (`memory_by_process`: the total,
+    and by process in a table of its own), the median of each version's
+    runs, and the total's change; the geometric mean of the suites' changes; and each
     run's median, in the order they ran, for the drift."""
     lines = [
         "# machopo against another version, in Speedometer's times",
@@ -1214,12 +1224,12 @@ def write_time_report(rev: str, runs: int, iterations: int,
         f"{date.today().isoformat()}: {versions_text(rev)}; {runs} runs each, taking turns, {iterations} iterations "
         f"a run; {env['os']}, {env['cpu']} (the browsers on CPUs: {env.get('cpus', 'all')}), power: {env['power']}, machopo's GPU: {env.get('gpu', 'unknown')}. Each suite's total in every iteration of a "
         "version's runs: their median in ms (95% interval); machopo's peak memory "
-        f"({MEMORY_WORDS.get(sys.platform, 'not read here')}), the median of its runs.",
+        f"({MEMORY_WORDS.get(sys.platform, 'not read here')}; {MEMORY_SUM}), the median of its runs.",
         "",
         "| Suite | against | current | change | memory, against | memory, current | change |",
         "| --- | --- | --- | --- | --- | --- | --- |",
     ]
-    ratios, memory_changes, each_run = [], [], []
+    ratios, memory_changes, each_run, by_process = [], [], [], []
     for name, sides in by_suite.items():
         problem = time_problem(sides)
         if problem:
@@ -1229,7 +1239,11 @@ def write_time_report(rev: str, runs: int, iterations: int,
                   for side, timed in sides.items()}
         before, after = median(totals["against"]), median(totals["current"])
         ratios.append(after / before)
-        memory = {side: [peak for _, peak in timed if peak] for side, timed in sides.items()}
+        memory = {side: [peak["total"] for _, peak in timed if peak and peak["total"]]
+                  for side, timed in sides.items()}
+        by_process.append(f"| {name} | " + " | ".join(
+            process_memory_text([peak[process] for _, peak in sides[side] if peak and peak[process]])
+            for side in ("against", "current") for process in ("browser", "renderer")) + " |")
         cells = [f"{median(memory[side]) / 2**20:.0f} MB" if memory[side] else "–" for side in ("against", "current")]
         moved = "–"
         if memory["against"] and memory["current"]:
@@ -1247,6 +1261,12 @@ def write_time_report(rev: str, runs: int, iterations: int,
     if memory_changes:
         lines.append(f"Peak memory: {100 * (min(memory_changes) - 1):+.1f}% to {100 * (max(memory_changes) - 1):+.1f}% "
                      "by suite.")
+    lines += ["", "## Peak memory by process", "",
+              "The browser's process and its renderer processes', the median of each version's runs "
+              "(none for a renderer that is threads of the browser's process, or a version that can't tell "
+              "its processes).", "",
+              "| Suite | against: browser | against: renderer | current: browser | current: renderer |",
+              "| --- | --- | --- | --- | --- |", *by_process]
     lines += ["", "## Each run", "", "Each run's median, in the order they ran.", "",
               "| Suite | against | current |", "| --- | --- | --- |", *each_run]
     report = RESULTS / "compare.md"
@@ -1797,6 +1817,7 @@ def sample_elevated(jobs: list[SampleJob]) -> list[tuple[list[tuple[str, Folded,
                  for label, binary, names, folder, iterations in jobs],
         "env": dict(os.environ), "cwd": os.getcwd(), "log": str(log), "results": str(results),
         "globals": {name: str(globals()[name]) for name in ELEVATED_GLOBALS},
+        "single_process": common.SINGLE_PROCESS,
     }), encoding="utf-8", newline="\n")
     print("sampling as Administrator (ETW needs it): UAC asks once")
     status = run_elevated([str(Path(__file__).resolve()), "--elevated", str(state)], log)
@@ -1818,6 +1839,7 @@ def elevated_main(state: Path) -> int:
     os.chdir(given["cwd"])
     for name, value in given["globals"].items():
         globals()[name] = Path(value)
+    common.SINGLE_PROCESS = given.get("single_process", False)
     with open(given["log"], "a", encoding="utf-8", buffering=1) as log:
         sys.stdout = sys.stderr = log
         try:
@@ -1830,9 +1852,10 @@ def elevated_main(state: Path) -> int:
     return 0
 
 
-def time_suites(binary: Path, names: list[str], iterations: int) -> dict[str, tuple[dict, int | None]]:
+def time_suites(binary: Path, names: list[str], iterations: int) -> dict[str, tuple[dict, dict | None]]:
     """Each suite of `names` once in machopo (`binary`), `iterations` in a
-    row: its run, as `measure.mjs` posts it, and machopo's peak memory."""
+    row: its run, as `measure.mjs` posts it, and machopo's peak memory by
+    process (`memory_by_process`)."""
     RESULTS.mkdir(parents=True, exist_ok=True)
     server = Server()
     server.mode = "measure"
@@ -1845,7 +1868,7 @@ def time_suites(binary: Path, names: list[str], iterations: int) -> dict[str, tu
                 started = time.monotonic()
                 result = run_in_machopo(server, binary, suite_url(server, name, iterations), timeout, log)
                 run = parse_run(result)
-                timed[name] = (run, result.get("memory"))
+                timed[name] = (run, result.get("memory_by_process"))
                 print(f"  {name}: {run.get('status') or run['error']}, {time.monotonic() - started:.0f} s")
     finally:
         server.close()
@@ -1870,11 +1893,16 @@ def cmd_time_compare(args, names: list[str]) -> int:
     if problem := gpu_problem(gpu):
         print(f"warning: {problem}")
     by_suite: dict[str, dict[str, list]] = {name: {"against": [], "current": []} for name in names}
+    # A version too old to tell its processes whose renderers are the
+    # browser's threads: the browser's peak is all of its memory.
+    threads = renderers_are_threads(args.against)
     for run in range(1, args.runs + 1):
         for side in ("against", "current"):
             print(f"{side}, run {run} of {args.runs}:")
-            for name, timed in time_suites(binaries[side], names, args.iterations).items():
-                by_suite[name][side].append(timed)
+            for name, (timed, memory) in time_suites(binaries[side], names, args.iterations).items():
+                if side == "against" and threads:
+                    memory = with_renderers_in_browser(memory)
+                by_suite[name][side].append((timed, memory))
     report = write_time_report(args.against, args.runs, args.iterations, by_suite, env)
     print(report.read_text(encoding="utf-8"))
     return 0
@@ -1905,6 +1933,7 @@ def cmd_compare(args, names: list[str]) -> int:
 
 
 def cmd_speedometer(args) -> int:
+    common.SINGLE_PROCESS = getattr(args, "single_process", False)
     if not (SPEEDOMETER / "index.html").exists():
         print(f"no Speedometer at {SPEEDOMETER}: `python3 scripts/ci.py third-party`")
         return 1

@@ -1,7 +1,7 @@
 # RFC 0111：量測工具跟著 process 走
 
 - 開始日期：2026-11-23
-- 狀態：🚧 已排程：2026-11-23（第 1 階段做完、待審查）
+- 狀態：🚧 已排程：2026-11-23（第 1 階段 merge 回 `main`；第 2 階段做完、待審查）
 - 細節：`details.md`；進度：`progress.md`
 
 ## 摘要
@@ -83,12 +83,13 @@ P3 給 pid 和種類（`crates/shell/src/automation_session.rs`；不給 Chrome 
 
 - 每個 process 的峰值照現在各平台的量法（macOS 的 phys footprint 的 lifetime max、Linux 的 `VmHWM`、Windows 的 peak private bytes），在報告送回、還沒關掉 machopo 時讀（renderer 那時還在）。
 - 報告列 Browser、renderer、合計。**合計是各 process 峰值的和**，是整個瀏覽器峰值的上限：兩個 process 的峰值不一定同時。Telemetry 取的是 dump 的時間點、照種類加總（`details.md`），沒有整次的峰值；machopo 要接近它得定期取樣每個 process 的目前值（「待決定」第 2 條）。
-- `--against` 的變化照合計算；一邊是 single-process 時那一邊只有合計。
+- `--against` 的變化照合計算，另一張表照 process 分開列兩邊的 Browser 和 renderer（`speedometer.py` 的 `write_time_report`）；renderer 在 Browser 的 process 裡的那一邊（舊版本、`--single-process`）renderer 那一欄是空的，合計就是 Browser 的。
+- renderer process 的峰值讀不到時合計是空的，不拿 Browser 的代替（`common.py` 的 `memory_by_process`）。列不出 process 的舊版本（沒有 `getProcessInfo`）也是空的，除非它的 renderer 本來就是 Browser 的 thread：`--against` 照 git 的歷史判斷，`0f36205`（renderer 預設是 process 的第一個 commit）之前的版本的合計是 Browser 的（`renderers_are_threads`），之後、`getProcessInfo` 之前的那幾個是空的。
 
 ### `census`
 
-- renderer process 的 `base::census` 寫 `MACHOPO_CENSUS` 加 `.<pid>`（和 trace 一樣，改 `crates/base/src/census.rs` 的 `write`），Browser 的照舊。
-- `scripts/bench/census/census.py` 把一頁的每一份加總：一個 callback 只會在一個 process 裡跑，加總不會重複算。
+- renderer process 的 `base::census` 寫 `MACHOPO_CENSUS` 加 `.<pid>`（和 trace 一樣）：`crates/base/src/census.rs` 的 `own_file`，由 `crates/shell/src/main.rs` 在 renderer process 一開始、還沒有任何計數之前呼叫；`base` 不知道自己在哪一種 process 裡。Browser 的照舊。
+- `scripts/bench/census/census.py` 把一頁的每一份加總（`count_files`）：一個 callback 只會在一個 process 裡跑，加總不會重複算。`getProcessInfo` 說有 renderer process、卻沒有它的那一份時，那一頁是錯誤（`renderer_problem`）：只有 Browser 的那份，看起來像一頁沒什麼呼叫。
 
 ### 量不到時報錯
 
@@ -101,7 +102,7 @@ P3 給 pid 和種類（`crates/shell/src/automation_session.rs`；不給 Chrome 
 
 ### `--single-process`
 
-Speedometer 和 Blink 的 perf tests 的工具加 `--single-process`（`raster` 已經有），交給 machopo：比 RFC 0004 之前的版本時讓兩邊同一種組態，或看多 process 的成本（同一個版本兩種組態比）。預設不加。舊的版本沒有這個 switch（`96a940c` 之前），`--against` 只交給認得它的那一邊、報告寫明。
+Speedometer 和 Blink 的 perf tests 的工具加 `--single-process`（`raster` 已經有），交給 machopo：比 RFC 0004 之前的版本時讓兩邊同一種組態，或看多 process 的成本（同一個版本兩種組態比）。預設不加。`common.py` 的 `SINGLE_PROCESS` 和 `machopo_switches`：`MachopoPipe` 啟動 machopo 時加上它；`--against` 的版本不認得這個 switch 時（`96a940c` 之前）不交給它，那一邊照它原本的樣子跑。不認得的版本都比 renderer 預設是 process 的版本（`0f36205`）舊，它的 renderer 本來就是 thread，兩邊還是同一種組態。報告（`measure.md`、`compare.md`）寫明每一邊的 renderer 在哪裡（`renderers_text`）。Windows 上取樣時以系統管理員跑的那一份也拿到這個設定。
 
 ### 測試
 
@@ -113,7 +114,7 @@ Speedometer 和 Blink 的 perf tests 的工具加 `--single-process`（`raster` 
 ### 分階段
 
 1. **process 和 trace**：automation pipe 的 `SystemInfo.getProcessInfo` 和共用的介面、讀一次執行的每一份 trace、Speedometer 的 `--trace` 和 `--sample`、`blink-perf --gc`、量不到時報錯。
-2. **記憶體和 `census`**：三欄的記憶體和 `--against` 的比較、`census` 每個 process 一份；`--single-process`。
+2. **記憶體和 `census`**：照 process 的記憶體和 `--against` 的比較、`census` 每個 process 一份；`--single-process`。
 3. **Linux 和 Windows**：在那兩台機器上跑一次工具的測試和一次 Speedometer 的 `--sample`、`--trace`（使用者在自己的裝置上跑），確認 `perf` 和 ETW 取到 renderer process 的樣本。
 
 ## 缺點
@@ -138,18 +139,21 @@ Speedometer 和 Blink 的 perf tests 的工具加 `--single-process`（`raster` 
 
 1. **一次執行的 process 用 P3 加 P1 找**（2026-11-23，使用者同意草稿的看法；原本「待決定」的第 1 條）：machopo 的 automation pipe 照 Chrome 加 CDP 的 `SystemInfo.getProcessInfo`（browser target 上，回傳 `{type, id, cpuTime}`），工具用它拿每個 process 的 pid 和種類；trace 的檔案照檔名找（`<trace>.<pid>`，`raster` 現在的做法），不另外問。理由：種類由瀏覽器自己說，不用從命令列猜；同一個呼叫在 Chrome 上也有，之後要量 Chrome 的 process 時工具不用分兩條路。不選 P2（OS 的 process 樹）：三個平台各寫一套，種類要從 renderer 的 switch 猜，之後多了別種子 process 時也要跟著猜。不選只用 P1：沒開 trace 時（量時間和記憶體的那次）就沒有 pid。
 2. **工具的測試由 `CLAUDE.md` 的規則守住，不進 CI**（2026-11-23，使用者決定；原本「待決定」的第 4 條）：`CLAUDE.md` 的「測試」寫明，改了 renderer 怎麼啟動、`MACHOPO_TRACE` 的 trace、`base::census` 或 automation pipe 的 CDP 方法時，跑 `scripts/bench/` 底下讀 trace、取樣和記憶體的工具的測試（`speedometer`、`blink_perf`、`raster`、`census`）。理由：這次漏掉是因為沒有規則說改了這些要跑它們，不是因為沒有測試；不加 CI 的時間（它們要編 `perf` profile 或 dev 的 machopo，一部分要 Chrome for Testing）。不選每週的 CI：會自動抓到，但多一組要下載 Chrome、跑很久的工作，而且壞了要等到下一週。規則在 2026-11-23 先寫進 `CLAUDE.md`；這份 RFC 做完之前，`speedometer_test.py` 的 trace 和取樣的測試照規則跑也是失敗的（「動機」）。
+3. **記憶體的合計是各 process 峰值的和**（2026-11-23，使用者同意；原本「待決定」的第 2 條）：Browser 和每個 renderer process 各讀自己的峰值，合計是它們的和，報告寫明是上限。使用者先問了 Chrome 怎麼算：Telemetry 的 memory metric 兩種都有，每次 dump 照 process 的種類加總（`private_footprint_size` 這類是同一個時間點的和），`all_processes` 的 `peak_resident_size` 則是每個 process 的 OS 峰值的和（`details.md`）；這裡照後者，量的是 phys footprint 的峰值（macOS）。理由：量法和以前一樣、沒有取樣的間隔和雜訊，`--against` 比兩個版本要的是穩定。不選定期取樣、取和的峰值：要一條取樣的 thread，間隔之間的尖峰會漏掉；要看執行中怎麼變化時再做（「之後的可能」）。
+4. **這份 RFC 不量 Chrome 的記憶體**（2026-11-23，使用者決定；原本「待決定」的第 3 條）：記憶體照舊只量 machopo。Chrome 的 GPU、network 這些 process 算不算進去才公平（machopo 的 Viz 在 Browser 裡），要另外決定；留在「之後的可能」。
 
 ## 待決定
 
 1. ~~怎麼找到 renderer 的 pid~~：已決定的事項第 1 條。
-2. **記憶體的合計**：各 process 峰值的和（簡單，是上限），還是定期取樣每個 process 的目前值、取和的峰值（接近 Telemetry 的 dump，但要一條取樣的 thread，取樣的間隔決定會不會漏掉尖峰）。2026-11-23 的看法：先做峰值的和，報告寫明它是上限。
-3. **要不要也量 Chrome 的記憶體**：P3 的同一個呼叫拿得到 Chrome 的 pid，兩邊就能並列；但 Chrome 有 GPU 和其他 service 的 process，要決定哪些算進去才公平（machopo 的 Viz 在 Browser 裡）。
+2. ~~記憶體的合計~~：已決定的事項第 3 條。
+3. ~~要不要也量 Chrome 的記憶體~~：已決定的事項第 4 條。
 4. ~~工具的測試誰跑~~：已決定的事項第 2 條。
 5. ~~macOS 的 samply 跟不跟子 process~~：跟（2026-11-23 確認，「取樣」）。Linux 和 Windows 的在第 3 階段確認；不跟時改成 attach 到 renderer 的 pid，或像 Chromium 的 `--renderer-cmd-prefix` 那樣由 machopo 在啟動 renderer 時包一層取樣器。
 
 ## 之後的可能
 
 - **合成一份 trace**（C）：DevTools 的 `Tracing` 要整個瀏覽器的 trace，或 Perfetto UI 要一次看所有 process 時。
-- **和 Chrome 比記憶體**（「待決定」第 3 條決定不在這份做時）。
+- **和 Chrome 比記憶體**（已決定的事項第 4 條：不在這份做）。
+- **定期取樣記憶體**：照 Telemetry 的 dump，每隔一段時間讀每個 process 目前的值，看執行中怎麼變化、同一個時間點的合計（已決定的事項第 3 條沒有選它當合計）。
 - **多 process 的成本當成一欄**：同一個版本 `--single-process` 和預設各跑一次，報告並列，看 IPC 的成本在哪個 suite 上最多。
 - 之後多了 GPU、network 或 utility 的 process 時，照同一個介面加種類。

@@ -501,6 +501,8 @@ fn main() -> ExitCode {
     // id after it: a trace is one process's, and two writing one file
     // would spoil it. The two are on one clock, the machine's.
     if std::env::args().nth(1).as_deref() == Some(shell::RENDERER_PROCESS_SWITCH) {
+        // Its census too is a file of its own, as its trace is.
+        base::census::own_file();
         let filter = tracing_subscriber::EnvFilter::try_from_default_env()
             .unwrap_or_else(|_| DEFAULT_LOG_FILTER.into());
         let log_records = filter

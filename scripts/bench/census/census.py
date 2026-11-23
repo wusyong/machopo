@@ -60,10 +60,29 @@ def callback_name(row: dict) -> tuple[str, str]:
     return kind, re.sub(r"\w+::", "", entry)
 
 
+def count_files(folder: Path) -> list[Path]:
+    """Every process's file of every page in `folder`: the browser's
+    `<page>.tsv`, and each renderer process's beside it, with its id after
+    the name (`base::census::own_file`)."""
+    return sorted(path for path in folder.glob("*.tsv*")
+                  if path.suffix == ".tsv" or (path.suffix[1:].isdigit() and path.stem.endswith(".tsv")))
+
+
+def renderer_problem(counts: Path, posted: dict) -> str | None:
+    """Why a run that `posted` this (`common.run_in_machopo`) counted
+    nothing of its page: a renderer process of its own that wrote no file
+    beside the browser's `counts` (then the counts would be the
+    browser's alone, which look like a page that calls little)."""
+    missing = [f"{counts.name}.{pid}" for pid in common.renderer_pids(posted.get("processes")) or []
+               if not counts.with_name(f"{counts.name}.{pid}").exists()]
+    return f"the renderer process wrote no counts ({', '.join(missing)} missing)" if missing else None
+
+
 def read(folder: Path) -> dict[tuple[str, str], collections.Counter]:
-    """The counts of every page's file in `folder`, summed by callback."""
+    """The counts of every page's files in `folder` (each process's, a
+    callback runs in one of them), summed by callback."""
     sums: dict[tuple[str, str], collections.Counter] = collections.defaultdict(collections.Counter)
-    for path in sorted(folder.glob("*.tsv")):
+    for path in count_files(folder):
         with open(path, encoding="utf-8", newline="") as file:
             for row in csv.DictReader(file, delimiter="\t"):
                 counts = sums[callback_name(row)]
@@ -120,9 +139,11 @@ def run_blink_perf(binary: Path, folder: Path, args) -> None:
                 if "excluded" in blink_perf.scan(root, page):
                     continue
                 counts = folder / (page.replace("/", "__") + ".tsv")
-                got = blink_perf.result(common.run_in_machopo(server, binary, server.url("/" + page), args.timeout,
-                                                              log, env={"MACHOPO_CENSUS": str(counts)}))
-                print(f"  {page}: " + (got["error"].splitlines()[0] if "error" in got else "counted"), flush=True)
+                posted = common.run_in_machopo(server, binary, server.url("/" + page), args.timeout,
+                                               log, env={"MACHOPO_CENSUS": str(counts)})
+                got = blink_perf.result(posted)
+                problem = got["error"].splitlines()[0] if "error" in got else renderer_problem(counts, posted)
+                print(f"  {page}: {problem or 'counted'}", flush=True)
     finally:
         server.close()
 
@@ -140,10 +161,13 @@ def run_speedometer(binary: Path, folder: Path, args) -> None:
     try:
         with open(folder / "machopo.log", "w", encoding="utf-8") as log:
             for name in names:
-                got = speedometer.parse_run(common.run_in_machopo(
+                counts = folder / (name + ".tsv")
+                posted = common.run_in_machopo(
                     server, binary, speedometer.suite_url(server, name, 1), timeout, log,
-                    env={"MACHOPO_CENSUS": str(folder / (name + ".tsv"))}))
-                print(f"  {name}: {got.get('status') or got['error']}", flush=True)
+                    env={"MACHOPO_CENSUS": str(counts)})
+                got = speedometer.parse_run(posted)
+                problem = got.get("error") or renderer_problem(counts, posted)
+                print(f"  {name}: {problem or got['status']}", flush=True)
     finally:
         server.close()
 
@@ -151,7 +175,7 @@ def run_speedometer(binary: Path, folder: Path, args) -> None:
 def cmd_census(args) -> int:
     folder = RESULTS / args.workload
     folder.mkdir(parents=True, exist_ok=True)
-    for old in folder.glob("*.tsv"):
+    for old in count_files(folder):
         old.unlink()
     binary = build()
     print(f"the census of {args.workload}, in machopo with the census feature")

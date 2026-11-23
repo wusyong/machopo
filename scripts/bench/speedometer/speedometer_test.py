@@ -641,10 +641,32 @@ class MachopoTests(BrowserTests, unittest.TestCase):
             self.assertEqual(cpu["type"], "Cpu")
 
     def test_machopos_peak_memory_with_its_run(self):
+        # Each process's: the browser's and its renderer process's (machopo's
+        # default), and their sum.
         result = self.load(speedometer.suite_url(self.server, "list", 1))
         self.assertEqual(speedometer.parse_run(result)["status"], "done")
         if sys.platform == "darwin" or sys.platform.startswith("linux"):
-            self.assertGreater(result["memory"], 20 << 20)
+            memory = result["memory_by_process"]
+            self.assertGreater(memory["browser"], 20 << 20)
+            self.assertGreater(memory["renderer"], 20 << 20)
+            self.assertEqual(memory["total"], memory["browser"] + memory["renderer"])
+            self.assertEqual(result["memory"], memory["total"])
+
+    def test_with_single_process_the_renderer_is_the_browsers(self):
+        # Its process the only one: its trace and memory the browser's.
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(common, "SINGLE_PROCESS", True):
+            trace = Path(folder) / "list-machopo.pftrace"
+            result = speedometer.run_in_machopo(
+                self.server, self.binary, speedometer.suite_url(self.server, "list", 1), TIMEOUT, self.log, trace)
+            self.assertEqual(speedometer.parse_run(result)["status"], "done")
+            self.assertEqual([process["type"] for process in result["processes"]], ["browser"])
+            self.assertEqual(speedometer.renderer_traces(trace), [])
+            self.assertEqual(speedometer.renderer_trace(trace, result["processes"]), (trace, False))
+            self.assertIn("CrRendererMain", speedometer.perfetto_marks(trace))
+        if sys.platform == "darwin" or sys.platform.startswith("linux"):
+            memory = result["memory_by_process"]
+            self.assertIsNone(memory["renderer"])
+            self.assertEqual(memory["total"], memory["browser"])
 
     def test_the_windows_are_the_runners_times(self):
         # Each test's window by the runner's marks in machopo's trace is the
@@ -1996,6 +2018,52 @@ class RendererTraceTests(unittest.TestCase):
         self.assertIn("no samples in the 1 windows the runner timed", out)
 
 
+class SingleProcessTests(unittest.TestCase):
+    """`--single-process`: machopo run with each tab's renderer threads of
+    its own process, the builds that take the switch."""
+
+    def setUp(self):
+        patch = mock.patch.object(common, "WITHOUT_SINGLE_PROCESS", set())
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_the_switch_for_the_builds_that_take_it(self):
+        old = Path("target/against/perf/machopo")
+        with mock.patch.object(common, "SINGLE_PROCESS", False):
+            self.assertEqual(common.machopo_switches(Path("machopo")), [])
+        with mock.patch.object(common, "SINGLE_PROCESS", True):
+            self.assertEqual(common.machopo_switches(Path("machopo")), ["--single-process"])
+            common.WITHOUT_SINGLE_PROCESS.add(old)
+            self.assertEqual(common.machopo_switches(old), [])
+
+    def test_an_against_version_that_takes_no_switch(self):
+        built = {"against": Path("against"), "current": Path("current")}
+        for single, takes, without in ((True, False, {Path("against")}), (True, True, set()), (False, False, set())):
+            common.WITHOUT_SINGLE_PROCESS.clear()
+            with mock.patch.object(common, "SINGLE_PROCESS", single), \
+                    mock.patch.object(common, "takes_single_process", return_value=takes), \
+                    mock.patch.object(common, "against_tree", return_value=Path("tree")), \
+                    mock.patch.object(common, "machopo_binary",
+                                      side_effect=lambda profile, *where: built["against" if where else "current"]):
+                self.assertEqual(common.against_binaries("REV"), built)
+            self.assertEqual(common.WITHOUT_SINGLE_PROCESS, without, (single, takes))
+
+    def test_where_each_versions_renderers_ran(self):
+        threads_by_default = f"{common.RENDERER_PROCESSES_SINCE}~1"
+        with mock.patch.object(common, "SINGLE_PROCESS", False):
+            self.assertEqual(common.renderers_text(), "processes of their own")
+            self.assertEqual(common.renderers_text("HEAD"), "processes of their own")
+            self.assertEqual(common.renderers_text(threads_by_default), "threads of the browser's process")
+        with mock.patch.object(common, "SINGLE_PROCESS", True):
+            self.assertEqual(common.renderers_text(), "threads of the browser's process (--single-process)")
+            self.assertEqual(common.renderers_text("HEAD"), "threads of the browser's process (--single-process)")
+            # Too old for the switch: threads anyway, as its renderers are.
+            self.assertEqual(common.renderers_text(f"{common.SINGLE_PROCESS_SINCE}~1"),
+                             "threads of the browser's process")
+        self.assertIn("machopo's renderers: against's threads of the browser's process, current's processes of "
+                      "their own", common.versions_text(threads_by_default))
+
+
 class CompareTests(unittest.TestCase):
     """`--sample --against REV`: machopo at another commit and the working
     tree's, sampled in turn."""
@@ -2090,7 +2158,10 @@ class CompareTests(unittest.TestCase):
         def time_suites(binary, names, iterations):
             order.append((binary.name, tuple(names), iterations))
             run = {"status": "done", "errors": [], "summaries": [], "iterations": [{"list": {"total": 5.0}}]}
-            return {name: (run, 1 << 20) for name in names}
+            # A version too old to tell its processes: its total unknown,
+            # but for one whose renderers are the browser's threads.
+            total = None if binary.name == "against" else 1 << 20
+            return {name: (run, {"browser": 1 << 20, "renderer": None, "total": total}) for name in names}
 
         args = argparse.Namespace(suites="list", against="HEAD~1", sample=False, inventory=False, trace=False,
                                   runs=2, iterations=4)
@@ -2102,9 +2173,11 @@ class CompareTests(unittest.TestCase):
                 mock.patch.object(speedometer, "against_binaries",
                                   return_value={"against": Path("against"), "current": Path("current")}), \
                 mock.patch.object(speedometer, "time_suites", side_effect=time_suites), \
+                mock.patch.object(speedometer, "renderers_are_threads", return_value=True) as threads, \
                 mock.patch("sys.stdout", new=open(os.devnull, "w", encoding="utf-8")):
             self.assertEqual(speedometer.cmd_speedometer(args), 0)
             report = (Path(results) / "compare.md").read_text(encoding="utf-8")
+        threads.assert_called_with("HEAD~1")
         self.assertEqual(order, [("against", ("list",), 4), ("current", ("list",), 4)] * 2)
         self.assertIn("# machopo against another version, in Speedometer's times", report)
         self.assertIn("| list | 5.0 | 5.0 | +0.0% | 1 MB | 1 MB | +0.0% |", report)
@@ -2114,15 +2187,21 @@ class CompareTests(unittest.TestCase):
             return {"status": status, "errors": [], "summaries": [],
                     "iterations": [{"A": {"total": t}, "B": {"total": t}, "C": {"total": t}} for t in totals]}
         mib = 1 << 20
+
+        def memory(total, browser=None, renderer=None):
+            return {"browser": browser or total, "renderer": renderer, "total": total}
+
         by_suite = {
             # Every iteration of every run: the median of all of them, not
-            # of the first run's (11).
-            "A": {"against": [(run([10, 11, 12]), 100 * mib), (run([13, 14, 15]), 100 * mib),
-                              (run([13, 14, 15]), 100 * mib)],
-                  "current": [(run([9, 10, 11]), 110 * mib), (run([9, 10, 11]), 108 * mib),
+            # of the first run's (11). The against's renderer the browser's
+            # threads; the current's a process of its own.
+            "A": {"against": [(run([10, 11, 12]), memory(100 * mib)), (run([13, 14, 15]), memory(100 * mib)),
+                              (run([13, 14, 15]), memory(100 * mib))],
+                  "current": [(run([9, 10, 11]), memory(110 * mib, 30 * mib, 80 * mib)),
+                              (run([9, 10, 11]), memory(108 * mib, 30 * mib, 78 * mib)),
                               (run([9, 10, 11]), None)]},
-            "B": {"against": [(run([5]), mib)], "current": [(run([5], "stalled"), mib)]},
-            "C": {"against": [(run([10]), mib)], "current": [(run([20]), mib)]},
+            "B": {"against": [(run([5]), memory(mib))], "current": [(run([5], "stalled"), memory(mib))]},
+            "C": {"against": [(run([10]), memory(mib))], "current": [(run([20]), memory(None, mib))]},
         }
         env = {"os": "macOS", "cpu": "arm", "power": "AC"}
         with tempfile.TemporaryDirectory() as results, mock.patch.object(speedometer, "RESULTS", Path(results)):
@@ -2135,7 +2214,12 @@ class CompareTests(unittest.TestCase):
         self.assertIn("| B | not valid: current: stalled | | | | | |", text)
         # sqrt(10/13 × 20/10), not their mean (1.385).
         self.assertIn("The geometric mean of the 2 valid suites' current / against: 1.240 (+24.0%).", text)
-        self.assertIn("Peak memory: +0.0% to +9.0% by suite.", text)
+        # A version without the total has no change.
+        self.assertIn("| C | 10.0 | 20.0 | +100.0% | 1 MB | – | – |", text)
+        self.assertIn("Peak memory: +9.0% to +9.0% by suite.", text)
+        self.assertIn("each process's, the browser's and its renderer processes' summed", text)
+        # By process: the medians of the runs that read each.
+        self.assertIn("| A | 100 MB | – | 30 MB | 79 MB |", text)
         self.assertIn("| A | 11.0, 14.0, 14.0 | 10.0, 10.0, 10.0 |", text)
 
 
@@ -2168,6 +2252,34 @@ class MemoryTests(unittest.TestCase):
 
     def test_no_process_no_memory(self):
         self.assertIsNone(speedometer.peak_memory(2**22 + 12345))
+
+    def test_the_browsers_and_its_renderer_processes_summed(self):
+        peaks = {1: 30, 42: 70, 43: 50}
+        browser = {"type": "browser", "id": 1}
+        with mock.patch.object(common, "peak_memory", side_effect=peaks.get):
+            self.assertEqual(common.memory_by_process(1, [browser, {"type": "renderer", "id": 42}]),
+                             {"browser": 30, "renderer": 70, "total": 100})
+            self.assertEqual(common.memory_by_process(
+                1, [browser, {"type": "renderer", "id": 42}, {"type": "renderer", "id": 43}]),
+                {"browser": 30, "renderer": 120, "total": 150})
+            # Its renderer the browser's threads: the browser's is all.
+            self.assertEqual(common.memory_by_process(1, [browser]), {"browser": 30, "renderer": None, "total": 30})
+            # A renderer process's unread: no total, not the browser's
+            # alone.
+            self.assertEqual(common.memory_by_process(1, [browser, {"type": "renderer", "id": 9}]),
+                             {"browser": 30, "renderer": None, "total": None})
+            # A version that can't tell its processes.
+            self.assertEqual(common.memory_by_process(1, None), {"browser": 30, "renderer": None, "total": None})
+        self.assertEqual(common.with_renderers_in_browser({"browser": 30, "renderer": None, "total": None}),
+                         {"browser": 30, "renderer": None, "total": 30})
+        self.assertEqual(common.with_renderers_in_browser({"browser": 30, "renderer": 70, "total": 100}),
+                         {"browser": 30, "renderer": 70, "total": 100})
+        self.assertIsNone(common.with_renderers_in_browser(None))
+
+    def test_which_versions_renderers_are_threads(self):
+        self.assertTrue(common.renderers_are_threads(f"{common.RENDERER_PROCESSES_SINCE}~1"))
+        self.assertFalse(common.renderers_are_threads(common.RENDERER_PROCESSES_SINCE))
+        self.assertFalse(common.renderers_are_threads("HEAD"))
 
 
 class SampleTests(unittest.TestCase):

@@ -47,6 +47,35 @@ class CensusTests(unittest.TestCase):
         self.assertEqual((counts["calls"], counts["scopes"], counts["reads"], counts["roots"], counts["with_root"]),
                          (15, 1, 15, 2, 2))
 
+    def test_each_processs_file_of_a_page_is_summed(self):
+        # The browser's `a.tsv` and its renderer process's `a.tsv.42`; the
+        # rest beside them aren't counts.
+        with tempfile.TemporaryDirectory() as folder:
+            browser = row(census.OUTSIDE, ("", "", ""), 0, [1, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0])
+            renderer = row(MEMBER, ("Element", "id", "getter"), 7, [0, 0, 0, 7, 0, 0], [0, 0, 0, 7, 0, 0])
+            Path(folder, "a.tsv").write_text(HEADER + browser, encoding="utf-8")
+            Path(folder, "a.tsv.42").write_text(HEADER + renderer, encoding="utf-8")
+            Path(folder, "a.tsv.partial").write_text("half", encoding="utf-8")
+            Path(folder, "machopo.log").write_text("", encoding="utf-8")
+            self.assertEqual([path.name for path in census.count_files(Path(folder))], ["a.tsv", "a.tsv.42"])
+            sums = census.read(Path(folder))
+        self.assertEqual(sums[("InfoMember", "Element.id (getter)")]["calls"], 7)
+        self.assertEqual(sums[(census.OUTSIDE, census.OUTSIDE)]["scopes"], 1)
+
+    def test_a_renderer_process_that_wrote_no_counts(self):
+        processes = [{"type": "browser", "id": 1}, {"type": "renderer", "id": 42}]
+        with tempfile.TemporaryDirectory() as folder:
+            counts = Path(folder, "a.tsv")
+            counts.write_text(HEADER, encoding="utf-8")
+            self.assertEqual(census.renderer_problem(counts, {"processes": processes}),
+                             "the renderer process wrote no counts (a.tsv.42 missing)")
+            Path(folder, "a.tsv.42").write_text(HEADER, encoding="utf-8")
+            self.assertIsNone(census.renderer_problem(counts, {"processes": processes}))
+            # A renderer of the browser's process, or a version that can't
+            # tell its processes: the browser's file alone.
+            self.assertIsNone(census.renderer_problem(counts, {"processes": processes[:1]}))
+            self.assertIsNone(census.renderer_problem(counts, {"processes": None}))
+
     def test_the_report_gives_the_share_of_calls_and_ranks_the_callbacks(self):
         with tempfile.TemporaryDirectory() as folder:
             rows = (row(MEMBER, ("Element", "id", "getter"), 30, [0, 0, 0, 30, 0, 0], [0, 0, 0, 30, 0, 0])

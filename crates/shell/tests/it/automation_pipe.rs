@@ -813,6 +813,42 @@ fn the_process_info_tells_the_browser_and_each_renderer() {
     assert!(browser.end().success());
 }
 
+/// With the `census` feature, a renderer process counts into a file of its
+/// own, `MACHOPO_CENSUS`'s with its id after it: the browser's process
+/// writes that one, and two writing one file would lose one's counts.
+#[cfg(feature = "census")]
+#[test]
+fn a_renderer_process_counts_into_a_census_of_its_own() {
+    let server = server(&[(
+        "/",
+        Route::ok(
+            "text/html",
+            "<!DOCTYPE html><script>document.title = document.body ? 'a' : 'b';</script>",
+        ),
+    )]);
+    let folder = std::env::temp_dir().join(format!("machopo-census-{}", std::process::id()));
+    std::fs::create_dir_all(&folder).unwrap();
+    let counts = folder.join("c.tsv");
+    let mut browser = Browser::start_with_args_and_env(
+        &["--process-per-tab"],
+        &[("MACHOPO_CENSUS", counts.as_os_str())],
+    );
+    let session = browser.attach();
+    let loader = browser.start_navigation(&session, &server.url("/"));
+    browser.load(&loader);
+    let info = browser
+        .call(None, "SystemInfo.getProcessInfo", json!({}))
+        .unwrap();
+    let renderer = info["processInfo"][1]["id"].as_u64().unwrap();
+    assert!(browser.end().success());
+    let own = folder.join(format!("c.tsv.{renderer}"));
+    let written = std::fs::read_to_string(&own);
+    let _ = std::fs::remove_dir_all(&folder);
+    let written = written.unwrap_or_else(|e| panic!("{}: {e}", own.display()));
+    assert!(written.starts_with("entry\t"), "{written}");
+    assert!(written.lines().count() > 1, "{written}");
+}
+
 /// With `--single-process` the browser's process is the only one.
 #[test]
 fn the_process_info_of_a_single_process() {

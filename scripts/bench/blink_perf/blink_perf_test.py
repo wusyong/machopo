@@ -745,7 +745,8 @@ class CommandTests(unittest.TestCase):
         if list_text is not None:
             path.write_text(list_text, encoding="utf-8")
         ran, reported = [], []
-        args = mock.Mock(dirs=dirs, pages=pages, timeout=5, areas=list(areas), against=None, gc=False)
+        args = mock.Mock(dirs=dirs, pages=pages, timeout=5, areas=list(areas), against=None, gc=False,
+                         single_process=False)
         with mock.patch.object(blink_perf, "BLINK_PERF", FAKE), mock.patch.object(blink_perf, "PAGES", path), \
                 mock.patch.object(blink_perf, "RESULTS", Path(folder.name)), \
                 mock.patch.object(blink_perf, "run_pages", lambda names, *rest: ran.extend(names) or {}), \
@@ -780,7 +781,8 @@ class CommandTests(unittest.TestCase):
         self.addCleanup(folder.cleanup)
         path = Path(folder.name) / "pages.txt"
         path.write_text("dom/time.html\nother/catches.html\n", encoding="utf-8")
-        args = mock.Mock(dirs=None, pages=None, timeout=5, areas=["dom/"], against="HEAD~1", runs=2, gc=False)
+        args = mock.Mock(dirs=None, pages=None, timeout=5, areas=["dom/"], against="HEAD~1", runs=2, gc=False,
+                         single_process=False)
         with mock.patch.object(blink_perf, "BLINK_PERF", FAKE), mock.patch.object(blink_perf, "PAGES", path), \
                 mock.patch.object(blink_perf, "cmd_against", lambda a, names, root: compared.append(names) or 0), \
                 contextlib.redirect_stdout(io.StringIO()):
@@ -795,7 +797,8 @@ class CommandTests(unittest.TestCase):
         path.write_text("dom/time.html\nother/catches.html\n", encoding="utf-8")
         for against, code, pages_traced in ((None, 0, [["dom/time.html"]]), ("HEAD~1", 1, [])):
             traced.clear()
-            args = mock.Mock(dirs=None, pages=None, timeout=5, areas=["dom/"], against=against, runs=2, gc=True)
+            args = mock.Mock(dirs=None, pages=None, timeout=5, areas=["dom/"], against=against, runs=2, gc=True,
+                             single_process=False)
             with mock.patch.object(blink_perf, "BLINK_PERF", FAKE), mock.patch.object(blink_perf, "PAGES", path), \
                     mock.patch.object(blink_perf, "cmd_gc", lambda a, names, root: traced.append(names) or 0), \
                     mock.patch.object(blink_perf, "cmd_against", lambda a, names, root: traced.append(names) or 0), \

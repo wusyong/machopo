@@ -89,6 +89,9 @@ def main() -> int:
         help="use Chrome's last results: its recording with --inventory (target/bench/speedometer/chrome.json), "
         "else its runs, to check machopo's against (chrome-runs.json)",
     )
+    speedometer.add_argument("--single-process", action="store_true",
+                        help="each tab's renderer threads of machopo's own process (machopo's --single-process), not "
+                        "the process of its own it is by default; with --against, for a version that takes it")
     speedometer.set_defaults(func=cmd_speedometer)
 
     raster = sub.add_parser(
@@ -141,6 +144,9 @@ def main() -> int:
         help="with --against: how many times each version runs the pages; with --gc, each page in each browser "
         "(default 3)"
     )
+    blink_perf.add_argument("--single-process", action="store_true",
+                        help="each tab's renderer threads of machopo's own process (machopo's --single-process), not "
+                        "the process of its own it is by default; with --against, for a version that takes it")
     blink_perf.set_defaults(func=cmd_blink_perf)
 
     calls = sub.add_parser(

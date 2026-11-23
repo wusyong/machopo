@@ -55,6 +55,15 @@ pub fn label(interface: &'static str, member: &'static str, kind: &'static str) 
     let _ = (interface, member, kind);
 }
 
+/// This process's counts go to a file of its own: the one `MACHOPO_CENSUS`
+/// names with this process's id after it, as a renderer process's trace
+/// does, so that two processes don't write over each other's. Called
+/// before anything is counted (a renderer process's start).
+pub fn own_file() {
+    #[cfg(feature = "census")]
+    imp::own_file();
+}
+
 /// A callback's run: from `enter` to its drop.
 #[must_use]
 pub struct Call {
@@ -89,6 +98,7 @@ mod imp {
     use std::cell::Cell;
     use std::collections::HashMap;
     use std::io::Write as _;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Mutex, OnceLock};
     use std::time::{Duration, Instant};
 
@@ -235,9 +245,33 @@ mod imp {
     /// outermost callback ends, since a renderer's end isn't one place.
     /// `made` is what the thread made so far, for what it made outside any
     /// callback; none as the thread ends (its counts may be gone).
+    /// Whether this process writes a file of its own (`own_file`).
+    static OWN_FILE: AtomicBool = AtomicBool::new(false);
+
+    pub(super) fn own_file() {
+        OWN_FILE.store(true, Ordering::Relaxed);
+    }
+
+    /// The file a process's counts go to: `path`, or with `pid`, `path`
+    /// with it after.
+    pub(super) fn file_of(path: std::ffi::OsString, pid: Option<u32>) -> std::ffi::OsString {
+        let mut path = path;
+        if let Some(pid) = pid {
+            path.push(format!(".{pid}"));
+        }
+        path
+    }
+
     fn write(made: Option<Counts>) {
         static PATH: OnceLock<Option<std::ffi::OsString>> = OnceLock::new();
-        let Some(path) = PATH.get_or_init(|| std::env::var_os("MACHOPO_CENSUS")) else {
+        let Some(path) = PATH.get_or_init(|| {
+            std::env::var_os("MACHOPO_CENSUS").map(|path| {
+                file_of(
+                    path,
+                    OWN_FILE.load(Ordering::Relaxed).then(std::process::id),
+                )
+            })
+        }) else {
             return;
         };
         let mut table = table().lock().expect("the census's table");
@@ -304,5 +338,13 @@ mod tests {
         // Scope, trampoline scope, report scope, read, mutate, root.
         assert_eq!(imp::row("outer"), Some((1, [1, 0, 0, 2, 0, 0])));
         assert_eq!(imp::row("inner"), Some((1, [0, 0, 0, 1, 1, 0])));
+    }
+
+    /// A process of its own file writes `MACHOPO_CENSUS`'s with its id
+    /// after it; another, that one.
+    #[test]
+    fn a_process_of_its_own_file_has_its_id_after_the_name() {
+        assert_eq!(imp::file_of("c.tsv".into(), Some(42)), "c.tsv.42");
+        assert_eq!(imp::file_of("c.tsv".into(), None), "c.tsv");
     }
 }

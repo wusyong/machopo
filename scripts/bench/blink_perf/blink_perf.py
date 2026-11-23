@@ -955,6 +955,7 @@ def cmd_against(args, names: list[str], root: Path) -> int:
 
 
 def cmd_blink_perf(args) -> int:
+    common.SINGLE_PROCESS = getattr(args, "single_process", False)
     root = BLINK_PERF
     if not (root / "resources" / "runner.js").is_file():
         print(f"no Blink perf tests at {root}: `python3 scripts/ci.py third-party`")
