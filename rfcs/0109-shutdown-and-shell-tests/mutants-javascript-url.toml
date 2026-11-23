@@ -1,0 +1,60 @@
+# A javascript: URL is its target's origin's alone (on main since 97262a6).
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "cross_origin::a_javascript_url_is_its_targets_origins_alone"]
+timeout = 900
+
+[[mutant]]
+name = "no check at all"
+file = "crates/dom_api/src/history.rs"
+from = '''    if url.scheme() != "javascript" {
+        return true;
+    }'''
+to = '''    if true {
+        return true;
+    }'''
+
+[[mutant]]
+name = "no check at all, end to end"
+file = "crates/dom_api/src/history.rs"
+from = '''    if url.scheme() != "javascript" {
+        return true;
+    }'''
+to = '''    if true {
+        return true;
+    }'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "env", "MACHOPO_GPU_ADAPTER=cpu", "cargo", "test", "-q", "-p", "shell", "--test", "it", "documents::a_javascript_url_of_another_origin_does_not_run"]
+
+[[mutant]]
+name = "a link not checked"
+file = "crates/dom_api/src/history.rs"
+from = '''    if !may_navigate(cx, document, &url, initiator) {
+        return;
+    }'''
+to = '''    if false {
+        return;
+    }'''
+
+[[mutant]]
+name = "href's setter doesn't throw"
+file = "crates/dom_api/src/location.rs"
+from = '''    check_may_navigate(cx, this, &url, by)?;
+    navigate(cx, this, url, false, by);'''
+to = '''    navigate(cx, this, url, false, by);'''
+
+[[mutant]]
+name = "replace() doesn't throw"
+file = "crates/dom_api/src/location.rs"
+from = '''    check_may_navigate(cx, this, &url, by)?;
+    navigate(cx, this, url, true, by);'''
+to = '''    navigate(cx, this, url, true, by);'''
+
+[[mutant]]
+name = "a realm's document not found"
+file = "crates/dom_api/src/history.rs"
+from = '''            .and_then(|id| cx.node_by_id(id)),'''
+to = '''            .and(None),'''
+
+[[mutant]]
+name = "a link's document taken for its target"
+file = "crates/dom_api/src/history.rs"
+from = '''        dom::NavigationInitiator::Document(initiator) => Some(initiator),'''
+to = '''        dom::NavigationInitiator::Document(_) => Some(document),'''

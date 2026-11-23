@@ -1,8 +1,8 @@
 # RFC 0109：結束的流程，和 `shell` 的測試
 
 - 開始日期：2026-11-22
-- 狀態：📝 草稿
-- 細節：`details.md`
+- 狀態：🚧 已排程：2026-11-22（第 0、1 階段的盤點做完、待審查）
+- 細節：`details.md`；進度：`progress.md`
 
 ## 摘要
 
@@ -11,14 +11,17 @@
 - **結束的流程**：machopo 的每一種跑法（視窗、automation pipe、headless、renderer process、machopodriver 啟動的）怎麼結束，從來沒有從頭到尾盤過；出事時都是一次修一個。這份先把每條 thread、每個 process、每個有狀態的全域變數怎麼結束盤一遍，定成一套規則，再照規則改。
 - **`shell` 的測試**：CI 最近壞掉的幾乎都是 `shell` 的測試。這份審查它們為什麼不穩定（等的方式和時間、好幾個測試搶同一個裝置或同一份全域狀態、產品自己的競爭），修掉或隔開，讓 CI 的紅燈重新代表「真的壞了」。
 
-做法還沒有選：這是草稿，先做兩個不改程式的盤點（「分階段」的第 0、1 階段），照結果再定。
+兩個不改程式的盤點（「分階段」的第 0、1 階段）做完了，做法還沒有選。盤點的結論：
+
+- **CI 的主犯是產品的競爭，不是結束的問題**：renderer 把 Blink 當下做的事延後、讀延後更新的副本、或沒有把該排隊的排成 task（`details.md` 的 A 類，六個測試，其中一個是推論）。捲到 fragment 是網頁看得到的錯，機器不忙也錯。其餘壞過的是測試等錯了東西（八個）和搶 port（兩個）。
+- **結束的六條目標在 Linux 上只有第 5 條成立**：`--single-process` 的頁面卡住時永遠不結束、卡住的分頁各等 5 秒、SIGTERM 時 profile 不寫、client 不讀 stdout 時不結束、啟動到一半失敗時約一半的機率 crash。
 
 ## 動機
 
 **CI 的紅燈現在不代表什麼**（2026-11-18 到 22 的 60 次 CI：24 次成功、23 次失敗、12 次取消；每一次壞的是什麼在 `details.md` 的「CI 上壞過的」）：
 
 - 23 次失敗裡 22 次是測試（1 次只有 lint），其中 18 次壞在 `shell`，3 次在 `ipc`，1 次在 `browser`。
-- 15 次是同一個測試，`devtools_css::sheets_coming_and_going_are_told`，每次都死在同一行：頁面加了一個 `srcdoc` 的 iframe 之後，等 30 秒收不到它的 `CSS.styleSheetAdded`，machopo 還活著。它在 `main` 和 branch 上都壞，最早的一次是 2026-11-19。看起來是產品自己的競爭（iframe 的文件的 sheet 什麼時候告訴 DevTools），不是結束的問題；還沒有查。
+- 15 次是同一個測試，`devtools_css::sheets_coming_and_going_are_told`，每次都死在同一行：頁面加了一個 `srcdoc` 的 iframe 之後，等 30 秒收不到它的 `CSS.styleSheetAdded`，machopo 還活著。它在 `main` 和 branch 上都壞，最早的一次是 2026-11-19。查到了，是產品自己的競爭（iframe 的文件的 sheet 什麼時候告訴 DevTools），不是結束的問題（`details.md` 的 A1）。
 - 其餘的每一種都只出現一兩次，各有各的原因（下面的「已經知道的」）。
 - 這段期間做多 process 的那份 RFC 時，每次 push 都要先分辨「這次紅的是不是又是那一個」，有三次真的壞了是混在裡面才看到的。
 
@@ -40,7 +43,7 @@
   - **在測試的 process 裡建瀏覽器**（`documents.rs` 等）：所有測試共用同一個 process 的全域狀態（一個 GPU device、一個 V8 platform）。
   - **啟動真的 `machopo`**（pipe、DevTools、遠端除錯、WebDriver）：每個測試一個 Browser，現在預設再加每個分頁一個 renderer process。CI 的機器是 4 顆 CPU、沒有 GPU（wgpu 用 lavapipe 在 CPU 上畫），同時有好幾組在搶。
 - 等的方式不一致：有的等事件，有的等固定的時間，時限寫死 30 秒。
-- 出過的事：兩個 process 共用 stderr 時一行被插隊（已修）；`documents::history_through_the_browser` 兩個事件的順序相反（一次）；`automation_pipe::the_system_info_tells_the_gpu_adapter`（一次）；都沒有查到原因。
+- 出過的事：兩個 process 共用 stderr 時一行被插隊（已修）；`documents::history_through_the_browser` 兩個事件的順序相反（一次）；`automation_pipe::the_system_info_tells_the_gpu_adapter`（一次）。兩個都查到了（`details.md` 的 A4、D1）。
 
 **目標**：
 
@@ -74,7 +77,12 @@
 - 2026-11-10 那兩次「machopo 沒有結束」原因不明。盤點找不到的話，這份能給的是「結束的順序寫下來了、有測試，那個現象沒有再出現」，不是「確定修掉了那一個」。
 - 盤點可能發現要動比較大的地方（例如 thread 的擁有關係要重排）。那時列選項決定，範圍可能比現在想的大。
 
-要解決的 `docs/limitations.md` 和 `docs/test-gaps.md` 裡的項目在第 0 階段盤點時列出來，補在這裡。
+要解決的 `docs/limitations.md` 和 `docs/test-gaps.md` 裡的項目（2026-11-23 盤點時列的）：
+
+- `limitations.md` 的「平台和建置」：盤點時加的「結束」那一項（第 4 階段），和 renderer process 那一項裡寫到結束、共用輸出的部分。
+- `limitations.md` 的「WebDriver 和自動化」：盤點時加的「忙的時候」那一項（第 2 階段）。
+- `limitations.md` 的「隔離」的「renderer 還有兩條路能讓 Browser 結束」：只有 Viz 遇到錯誤時怎麼結束那一半（第 3 階段）。
+- `test-gaps.md`：通道因為壞訊息、佇列滿了而結束時沒有測試；macOS 上 renderer 隨 Browser 結束只在 Linux 上跑過；`--remote-debugging-port` 的 server 停下時等 websocket 沒有測試。
 
 ## 設計概要
 
@@ -88,7 +96,7 @@
 
 ## 詳細設計
 
-草稿：這一節只寫兩個盤點要產出什麼。規則和改法等盤點的結果。
+這一節寫兩個盤點產出什麼，結果在 `details.md`。規則和改法在第 2、3 階段開始時定。
 
 **結束的流程的盤點**（第 0 階段，產出放在 `details.md`）：
 
@@ -116,7 +124,7 @@
 每個階段開始前只決定那個階段的事。
 
 0. **盤點結束的流程**：不改程式。產出上面那幾張表和量到的時間。
-1. **審查 `shell` 的測試**：不改產品。產出分類表、壞過的每個測試的原因。第 0、1 階段互不相依，先後見「待決定」。
+1. **審查 `shell` 的測試**：不改產品。產出分類表、壞過的每個測試的原因。第 0、1 階段互不相依。
 2. **修 `shell` 的測試**：照第 1 階段的分類，一類一類修。產品的競爭各自是一步。
 3. **定結束的規則**：照第 0 階段的結果列選項、定下來（Browser 結束時等不等 renderer、全域變數怎麼收、Viz 遇到錯誤怎麼結束）。
 4. **照規則改**，一種跑法一步。
@@ -140,25 +148,52 @@
 
 ## 先例
 
-盤點時對照原始碼補上。就我們的了解（還沒有查證）：
+對照了 152.0.7977.82 的原始碼，逐項的比較在 `details.md` 的「對照 Chromium」：
 
-- **Chromium 的結束**：`BrowserMainLoop` 照固定的順序停各條 thread；renderer 沒有 `beforeunload`、`unload` 的處理時 Browser 直接結束它，不等它收尾（fast shutdown）；POSIX 上 child process 在通道出錯時從 IO thread 直接結束自己，Windows 上靠 job object。
+- **Chromium 的結束**：`BrowserMainLoop` 照固定的順序停各條 thread；renderer 沒有 `beforeunload`、`unload` 的處理時 Browser 直接結束它，不等它收尾（fast shutdown）；POSIX 上 child process 在通道出錯時從 IO thread 直接結束自己；renderer 正常結束時也不收尾、直接 `_exit`；等不到的 child 2 秒後在背景 kill。Windows 上靠 job object（這次沒有對照）。
 - **Chromium 的測試**：測試的 launcher 把測試分批放進各自的 process 跑，壞掉的自動重試、另外統計不穩定的。machopo 的規定是不重試。
 
 ## 已決定的事項
 
-無。
+1. **開始做**（2026-11-22，使用者要求）：先做不改程式的第 0、1 階段。兩個互不相依，所以一起做了，原本「待決定」的先後和 `devtools_css` 那一個放在哪一步不再需要決定。
+2. **A 類的根因不在這份修**（2026-11-23，使用者決定）：A1 到 A6 的共同原因是 renderer 和 engine 在同一個 thread 上卻各留一份狀態、用便條（`FrameRequest`）和外圈的收尾互相通知，根本是擁有權的問題（engine 執行中借不到 `RenderThread`），不是 `FrameRequest` 本身。要不要、能不能像 Blink 和 content 層那樣每份狀態只有一個擁有者、同步呼叫，另寫 RFC 0110 評估；2-1 等它。這段期間 A 類維持現狀，不做選項 A 的過渡（它會被 0110 取代；放大時修得掉，但同一個 task 裡照樣是舊的）。2-2 到 2-5 和第 3、4 階段不受影響。
 
 ## 待決定
 
-- **第 0、1 階段的先後**。2026-11-22 的看法：先審查 `shell` 的測試。CI 的紅燈大多來自它，先讓 CI 可信，結束流程的每一步才看得出有沒有弄壞東西。
-- **`devtools_css::sheets_coming_and_going_are_told` 放在哪一步**。原本說等結束的流程時一起查；看了 CI 的 log 之後，它不像是結束的問題。2026-11-22 的看法：放在第 1 階段的第一個。
-- **結束的時限**（目標的第 1 條）：暫定 2 秒。第 0 階段量到現在每一種跑法實際花多久之後定；要分「正常的」和「有卡住的頁面」兩個數字也可以。
-- **怎麼算「穩定了」**：CI 連續幾次綠燈、本機照 CI 的跑法重複幾次。`docs/testing.md` 對新測試的規定是上千次。
-- **讓測試壞的條件要做到多像 CI**：只限 CPU 和換成 CPU 的 adapter，還是要在 Linux 的機器上（或容器裡）跑。
-- **搶資源的測試怎麼隔開**：排隊（一把鎖）、分成另一個執行檔（和「每個 crate 的整合測試是一個執行檔」的規定衝突）、每個測試自己一份資源。等第 1 階段知道搶的是什麼再定。
-- **Browser 結束時等不等 renderer**：直接結束它們（Chromium 的 fast shutdown），還是先請它們收尾、有時限。牽涉到 trace 寫不寫得完、`beforeunload` 之後要不要做。第 3 階段。
-- **全域變數怎麼收**：明確的結束順序，還是結束時不解構（直接 `_exit`）。第 3 階段。
+### 第 2 階段開始前（2026-11-23 的看法，等確認）
+
+**2-1. A 類的根因怎麼修**：等 RFC 0110（已決定的事項第 2 條）。2026-11-23 比較過的結論留給 0110：
+
+- **A**（每個 task 之後呼叫 `handle_frame_requests` 和 `tell_frames`）：放大的測試修得掉，但不是根治：同一個 task、同一次 rendering、連著的 timer、idle callback 之後的 frame 照樣看到舊狀態（五個探針只有一個和 Chromium 一樣，和不改相同）。
+- **B**（每個讀的人讀之前先補）：漏一處就是下一個同類的 bug。
+- **C**（Blink 當下做的當下做、排 task 的排成真的 task、DevTools 在改變的當下被告知）：方向對，捲動的原型讓五個探針都和 Chromium 一樣；成本主要在擁有權，不在效能：frame 的表和 `fetch()` 的登記要搬到 engine 執行中借得到的地方，否則要更多 `Rc<RefCell>`。照程式看到的其他成本：跑過 script 之後 frame 可能已經不在（renderer 的 `self.children` 59 處要逐一看）；layout 已經借出時同步的 hook 會默默不做；`dom_wasm` 要各做一次；`fetch()` 的登記要查 frame 的表，所以 frame 的建立和移除要先同步；導覽在呼叫的當下送出要推翻 RFC 0019 第 35 條，好處只在時間上，CI 壞過的測試都不需要它。
+
+**2-2. 「拒絕連線」的 port**（C1、C2）：
+
+| 選項 | 做什麼 | 優點 | 缺點、成本 | 和 Chromium |
+| --- | --- | --- | --- | --- |
+| A（建議） | 回傳一個 guard：整個測試期間 bind 著、不 listen | 沒有別人拿得到；不拖慢測試 | 連它是不是馬上被拒絕，三個平台都還沒有驗證 | `EmbeddedTestServer` 分 `InitializeAndListen` 和開始接受兩步，port 先占著再用；要失敗的載入也可以由 `URLLoaderInterceptor` 直接給錯誤 |
+| B | 用固定、沒有人 listen 的 port（例如 1） | 最簡單 | 靠機器上剛好沒人用；Fetch 的 bad port 會先擋掉一些 | |
+| C | 用到的測試和所有建 server 的測試排隊 | 不動 helper | 幾乎整組都要排隊，慢很多 | test launcher 分批、各批一個 process |
+
+**2-3. B 類的測試怎麼改**：
+
+| 選項 | 做什麼 | 優點 | 缺點、成本 | 和 Chromium |
+| --- | --- | --- | --- | --- |
+| A（建議） | 一個一個改成斷言真正要守的事（怎麼改在 `details.md` 那張表的最後一欄）；B7、B8 先和 Chrome 比過再決定改哪一邊 | 測試不再量機器的速度 | 八個各自要想，各要 mutation test 確認還守得住 | 一樣：`base::test::RunUntil` 等條件成立，註解寫明用別的等法會不穩定 |
+| B | 放寬門檻和時限 | 快 | 只是比較少壞，守的也變弱 | |
+| C | 對時間敏感的排隊、不和別的同時跑 | 斷言不用改 | 慢；CI 的機器本身忙時照樣壞 | 壞掉的測試另外重試；machopo 不重試 |
+
+**2-4. 怎麼算穩定**：建議修過的每一個在 4 顆 CPU、lavapipe、加負載下重複 1000 次 0 失敗，整組照同樣的條件 300 次 0 失敗（五份同時約 45 分鐘），再加 CI 連續 20 次綠燈。另一個選項是整組也跑 1000 次（約 2.5 小時一輪）。
+
+**2-5. 啟動失敗時的 crash（S6）要不要提前**：建議提前到第 2 階段的第一步。改動是幾行（失敗的路也呼叫 `shutdown`），不牽涉第 3 階段的任何選擇；不提前的話要等到第 4 階段。
+
+### 第 3 階段開始時
+
+- **結束的時限**（目標的第 1 條）：暫定 2 秒。量到的在 `details.md`。
+- **Browser 結束時等不等 renderer**：牽涉到 trace 寫不寫得完、`beforeunload` 之後要不要做。
+- **全域變數怎麼收**：明確的結束順序，還是結束時不解構。
+- 盤點多出來的：同一個 process 的 renderer 卡住時怎麼結束（S1）、訊號（S4）、卡住的 writer（S5）。
 
 ## 之後的可能
 
