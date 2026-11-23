@@ -1,16 +1,17 @@
 # RFC 0111：量測工具跟著 process 走
 
 - 開始日期：2026-11-23
-- 狀態：🚧 已排程：2026-11-23（第 1 階段 merge 回 `main`；第 2 階段做完、待審查；第 3 階段做完、待審查）
-- 細節：`details.md`；進度：`progress.md`
+- 狀態：✅ 已完成：2026-11-23
+- 進度：`progress.md`
+- 細節：`details.md`
 
 ## 摘要
 
-RFC 0004 讓 renderer 預設是每個分頁一個 process 之後，`scripts/bench/` 的幾個工具只看 Browser 那個 process：Speedometer 的 `--trace`（各階段的表）、`--sample` 和 peak memory，`census`，照程式看 `blink-perf --gc` 也是。它們不出錯，而是交出 0、照 frame 猜的區間、少了一半的記憶體（2026-11-23 的盤點，`details.md`）。這份 RFC 讓每個工具在預設的組態下量到 renderer：一次執行有哪些 process 由一個共用的地方回答，trace 讀那次執行的每一份，取樣和記憶體照 process 的種類分開、再加總，`census` 每個 process 寫自己的一份；量不到 renderer 時報錯，不交出看起來正常的數字。照 Chromium 的工具，量的是預設的 multi-process，不改用 `--single-process`；trace 不合成一份（Chrome 由 tracing service 收成一份），工具讀幾份就夠了。
+RFC 0004 讓 renderer 預設是每個分頁一個 process 之後，`scripts/bench/` 的幾個工具只看 Browser 那個 process：Speedometer 的 `--trace`（各階段的表）、`--sample` 和 peak memory，`census`，照程式看 `blink-perf --gc` 也是。它們不出錯，而是交出 0、照 frame 猜的區間、少了一半的記憶體（2026-11-23 的盤點，`details.md`）。這份 RFC 讓每個工具在預設的組態下量到 renderer：一次執行有哪些 process 由一個共用的地方回答，trace 讀那次執行的每一份，取樣和記憶體照 process 的種類分開、再加總，`census` 每個 process 寫自己的一份；量不到 renderer 時報錯，不交出看起來正常的數字。照 Chromium 的工具，量的是預設的 multi-process，不改用 `--single-process`；trace 不合成一份（Chrome 由 tracing service 收成一份），工具讀幾份就夠了。做完之後在 macOS、Linux 和 Windows 上，Speedometer 的 `--trace`、`--sample`、記憶體，`blink-perf --gc` 和 `census` 都量到 renderer process；三個平台的取樣器都照預設跟著子 process（`progress.md`）。
 
 ## 動機
 
-**現況**（2026-11-23，`details.md` 的「盤點」）：
+**原本**（2026-11-23，`details.md` 的「盤點」）：
 
 - `MACHOPO_TRACE` 一個 process 一份：Browser 的是那個路徑，renderer 的是它加上 `.<pid>`（`crates/shell/src/main.rs` 的 `main`），兩者用同一個時鐘。
 - `scripts/bench/common.py` 的 trace 函式（`perfetto_slices`、`perfetto_marks`、`perfetto_thread_tracks`……）和 `scripts/bench/speedometer/speedometer.py`、`scripts/bench/blink_perf/blink_perf.py` 的呼叫都只讀一個路徑；`peak_memory` 只讀 `machopo.process.pid`。
@@ -57,7 +58,7 @@ RFC 0004 讓 renderer 預設是每個分頁一個 process 之後，`scripts/benc
 
 ### 一次執行有哪些 process
 
-`common.py` 加一個共用的介面（暫名 `MachopoProcesses`），由啟動 machopo 的 `MachopoPipe` 交出：Browser 和每個 renderer 的 pid、種類，和它們各自的 trace。怎麼知道 renderer 的 pid 比過三種做法，用 P3 加 P1（已決定的事項第 1 條）：
+`common.py` 的 `machopo_processes` 回答一次執行有哪些 process（Browser 和每個 renderer 的 pid、種類），`renderer_trace` 照它找 renderer 的 trace，`run_in_machopo` 把 process 交回給工具。怎麼知道 renderer 的 pid 比過三種做法，用 P3 加 P1（已決定的事項第 1 條）：
 
 - **P1：從 trace 的檔名**。`<trace>.<pid>`，`raster` 現在的做法。只在有 trace 時有；記憶體要在 process 結束前讀，那時 trace 還沒寫完，檔名已經在了（開始錄時就建檔）。
 - **P2：從 OS 的 process 樹**。macOS 的 `proc_listchildpids`、Linux 的 `/proc/<pid>/task/*/children`、Windows 的 Toolhelp32 snapshot。不用 machopo 配合，但種類要另外猜（命令列有 renderer 的 switch）。
@@ -106,7 +107,7 @@ Speedometer 和 Blink 的 perf tests 的工具加 `--single-process`（`raster` 
 
 ### 測試
 
-- 工具的測試在預設的組態下跑（現在就是），加上：`--trace` 和 `--sample` 的 renderer 那一份讀到了、mark 照 runner 的、各階段不是 0（`MeasureTests.test_traces_of_both`、`MachopoTests.test_the_windows_are_the_runners_times`、`SampleTests.test_the_stacks_in_the_timed_windows` 已經檢查，現在失敗）；記憶體三欄都有、renderer 那一欄不是 0、合計是兩欄的和（`test_machopos_peak_memory_with_its_run` 只檢查超過 20 MB）；`census` 的兩份加總；量不到時是錯誤（合成的 trace：只有 Browser 的那份、renderer 的沒有 mark）。
+- 工具的測試在預設的組態下跑（現在就是），加上：`--trace` 和 `--sample` 的 renderer 那一份讀到了、mark 照 runner 的、各階段不是 0（`MeasureTests.test_traces_of_both`、`MachopoTests.test_the_windows_are_the_runners_times`、`SampleTests.test_the_stacks_in_the_timed_windows`；改之前這三個都失敗）；記憶體三欄都有、renderer 那一欄不是 0、合計是兩欄的和（`test_machopos_peak_memory_with_its_run`，原本只檢查超過 20 MB）；`census` 的兩份加總；量不到時是錯誤（合成的 trace：只有 Browser 的那份、renderer 的沒有 mark）。
 - `--single-process` 的路至少一個測試（`raster_test.py` 有類似的）。
 - 誰跑這些測試：`CLAUDE.md` 的規則（已決定的事項第 2 條），不在 CI 裡。
 - mutation test 照 `docs/testing.md` 的做法，對象是 Python 的工具：例如讀 trace 時只讀第一份、合計少加一欄、拿掉「量不到時報錯」的檢查。
@@ -144,11 +145,7 @@ Speedometer 和 Blink 的 perf tests 的工具加 `--single-process`（`raster` 
 
 ## 待決定
 
-1. ~~怎麼找到 renderer 的 pid~~：已決定的事項第 1 條。
-2. ~~記憶體的合計~~：已決定的事項第 3 條。
-3. ~~要不要也量 Chrome 的記憶體~~：已決定的事項第 4 條。
-4. ~~工具的測試誰跑~~：已決定的事項第 2 條。
-5. ~~macOS 的 samply 跟不跟子 process~~：跟（2026-11-23 確認，「取樣」）；Windows 經過 ETW 的也跟（2026-11-23）；Linux 的 `perf record` 也跟（2026-11-23，第 3 階段）。三個平台都不用 attach 到 renderer 的 pid，或像 Chromium 的 `--renderer-cmd-prefix` 那樣包一層取樣器。
+無。原本的五條：怎麼找到 renderer 的 pid、記憶體的合計、要不要也量 Chrome 的記憶體、工具的測試誰跑，見已決定的事項第 1 到 4 條；取樣器跟不跟子 process，三個平台都跟（macOS 的 samply、Windows 經過 ETW 的 samply、Linux 的 `perf record`，2026-11-23 確認，「取樣」），不用 attach 到 renderer 的 pid，也不用像 Chromium 的 `--renderer-cmd-prefix` 那樣包一層取樣器。
 
 ## 之後的可能
 
