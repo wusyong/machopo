@@ -503,6 +503,10 @@ fn main() -> ExitCode {
     if std::env::args().nth(1).as_deref() == Some(shell::RENDERER_PROCESS_SWITCH) {
         let filter = tracing_subscriber::EnvFilter::try_from_default_env()
             .unwrap_or_else(|_| DEFAULT_LOG_FILTER.into());
+        let log_records = filter
+            .max_level_hint()
+            .unwrap_or(LevelFilter::TRACE)
+            .as_log();
         let file = std::env::var_os("MACHOPO_TRACE").map(|file| {
             let mut file = file;
             file.push(format!(".{}", std::process::id()));
@@ -514,6 +518,10 @@ fn main() -> ExitCode {
             .with(log_layer(filter))
             .with(trace)
             .init();
+        // As the browser's: only as many of the `log` crate's records as the
+        // log takes, not every one the trace's layer would let through
+        // (html5ever's for each token, made only to be dropped).
+        tracing_log::log::set_max_level(log_records);
         return ExitCode::from(shell::renderer_main());
     }
     let args = match parse_args(std::env::args().skip(1)) {
