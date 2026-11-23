@@ -294,6 +294,45 @@ impl crate::Dom {
     }
 }
 
+/// An image's request that the host sent (`Dom::note_image_sent`): its
+/// URL and the document that asked for it. The DOM's own record of it,
+/// which the host reads its response by.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SentImage {
+    pub url: String,
+    pub document: crate::NodeId,
+}
+
+impl crate::Dom {
+    /// The host sent the request of the image `sent` as `request_id`.
+    pub fn note_image_sent(&self, request_id: u64, sent: SentImage) {
+        self.changes
+            .sent_images
+            .borrow_mut()
+            .insert(request_id, sent);
+    }
+
+    /// The image whose request is `request_id`, if one is.
+    pub fn sent_image(&self, request_id: u64) -> Option<SentImage> {
+        self.changes.sent_images.borrow().get(&request_id).cloned()
+    }
+
+    /// The image whose request is `request_id`, its request answered.
+    pub fn take_sent_image(&self, request_id: u64) -> Option<SentImage> {
+        self.changes.sent_images.borrow_mut().remove(&request_id)
+    }
+
+    /// How many of the images' requests sent are `document`'s.
+    pub fn sent_images_of(&self, document: crate::NodeId) -> usize {
+        self.changes
+            .sent_images
+            .borrow()
+            .values()
+            .filter(|sent| sent.document == document)
+            .count()
+    }
+}
+
 /// What a `FetchRecord` says of its fetch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FetchState {

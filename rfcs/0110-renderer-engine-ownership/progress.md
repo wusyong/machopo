@@ -25,7 +25,7 @@
 | 4. `javascript:` 網址在 `dom_api` 裡排成綁在 Document 上的 task（第 7 條的第 4 步、第 23 條） | 做完，待審查 | 2026-11-23 |
 | 5. intersection 的通知排成真的 task（第 7 條的第 5 步） | 做完，待審查 | 2026-11-23 |
 | 6a. DevTools 的 initiator 要的 parser 行號搬進 DOM（第 24 條） | 做完，待審查 | 2026-11-23 |
-| 6b. 圖片的請求由 engine 經過 `LoadSink` 送出，記錄在 DOM（第 24 條） | 沒開始 | |
+| 6b. 圖片的請求由 engine 經過 `LoadSink` 送出，記錄在 DOM（第 24 條） | 做完，待審查 | 2026-11-23 |
 | 6c. script 的請求由 engine 經過 `LoadSink` 送出，記錄在 DOM（第 24 條） | 沒開始 | |
 
 ## 驗收
@@ -210,4 +210,20 @@
 **Mutation test**（`mutants-6a.toml`）：3 條全部抓到，跑完檔案都還原了。
 
 **測試**：`html` 49 個、`dom` 254 個、`renderer` 127 個、`shell` 668 個都通過。
+
+### 第 6b 步：圖片的請求由 engine 送出（2026-11-23，Linux：Fedora 45、debug build，`1e34bd8` 之上）
+
+**必壞的測試**：`shell` 的 `devtools_network::an_image_is_requested_in_its_microtask`（`new Image().src` 之後，`setTimeout(0)` 裡的 `fetch()`；DevTools 的 `requestWillBeSent` 要圖片在前），改之前 3 次壞 3 次（`fetch()` 在前：renderer 在外圈、DOM 的 task 之後才送圖片）。
+
+**做的事**：`dom` 加 `SentImage` 和 `note_image_sent`、`sent_image`、`take_sent_image`、`sent_images_of`（`fetch()` 的 `SentFetch` 的做法）。`dom_api` 的 `FetchOrigin` 加 `parser_line`、`stylesheet`，`LoadSink` 加 `start_image_fetch`（預設是「沒送出」），`send_image_fetches` 是兩個 engine 共用的那一圈：取 DOM 排著的圖片，照文件的 loader（沒有的時候用 `frame_of` 給的 frame 的文件的：iframe 拿掉了的初始 `about:blank` 找不到自己的）、文件的 origin、DevTools 要的 stack、parser 行號、stylesheet 送，記下請求，送不出的（撤銷了的 blob URL）當場失敗。`dom_api` 的圖片 microtask（`run_image_updates`）之後呼叫 `ScriptHost::send_image_fetches`（Blink 的時機），`ScriptEngine::send_image_fetches` 給 renderer 在它原本送的地方呼叫（外圈、`finish_load`：背景圖和其他不是在 engine 呼叫裡排的）。dom_js 的 `frames::send_image_fetches`（照 frame 的表找 frame，暫時拿出 sink）；`dom_wasm` 改成留著 sink 和最上層的 token，也送它文件的圖片（只在 renderer 呼叫時）。renderer 的 `RendererLoadSink::start_image_fetch`（撤銷了的 blob URL、請求的 origin、DevTools 的 initiator 照原本的規則：要 stack 時用 stack，否則 parser 行號，否則 stylesheet）；`start_image_fetches` 改成請 engine 送；`images`、`loader_of_document` 拿掉，回應、DevTools 的 resource type、網路閒置的計數、失敗的網址都讀 DOM 的記錄。
+
+**跑 WPT 時抓到的**：`the-img-element/document-destroyed-crash.html` 逾時：iframe 拿掉之後它初始的 `about:blank` 沒有自己的 loader（`document_loader` 跟著 iframe 找，iframe 已經不連著），請求帶 0，Browser 當成 bad message（`UnknownLoader`）結束 renderer。原本的 `loader_of_document` 退回 frame 的（或最上層的）loader，共用的那一圈漏了，補回（`frame_of` 也給 frame 的文件）；補了 `documents::an_image_of_a_document_whose_iframe_went_is_no_bad_message`。
+
+**WPT**：`html/semantics/embedded-content/the-img-element/`、`intersection-observer/`、`css/css-backgrounds/`、`html/canvas/element/drawing-images-to-the-canvas/`、`html/semantics/embedded-content/the-iframe-element/`，808 個，0 個非預期的結果（補了上面那個之後）。
+
+**測試**：dom_js 的 `devtools::the_stacks_of_script_that_asks_for_loads_are_captured` 改成從 sink 讀圖片的 stack 和請求的 origin（測試的 `Sink` 也記圖片）。
+
+**Mutation test**（`mutants-6b.toml`）：9 條全部抓到，跑完檔案都還原了。
+
+**測試**：`dom` 254 個、`dom_api` 201 個、`dom_js` 553 個（1 個 ignored）、`dom_wasm` 49 個、`renderer` 127 個、`browser` 191 個、`shell` 670 個都通過。
 

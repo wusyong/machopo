@@ -249,6 +249,10 @@ impl<'s> ScriptHost for Host<'_, '_, 's, '_> {
         });
     }
 
+    fn send_image_fetches(&mut self) {
+        crate::frames::send_image_fetches(self.scope.state_mut().0);
+    }
+
     fn unload_child(&mut self, document: &dom::NodeRoot) {
         crate::frames::unload_child(self.scope, document);
     }

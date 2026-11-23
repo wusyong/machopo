@@ -1694,6 +1694,10 @@ impl ScriptEngine for V8Engine {
         self.state().frames.client = Some(client);
     }
 
+    fn send_image_fetches(&mut self) {
+        crate::frames::send_image_fetches(self.state());
+    }
+
     fn set_load_sink(&mut self, sink: Box<dyn dom_api::LoadSink>) {
         self.state().frames.load_sink = Some(sink);
     }

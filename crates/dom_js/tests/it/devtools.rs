@@ -629,20 +629,6 @@ fn the_stacks_of_script_that_asks_for_loads_are_captured() {
     );
     page.engine.perform_microtask_checkpoint();
     let dom = page.engine.dom_mut();
-    let images = dom.take_image_fetches();
-    let [
-        dom::ImageFetch {
-            initiator: LoadInitiator::Element(image),
-            ..
-        },
-    ] = images.as_slice()
-    else {
-        panic!("{images:?}");
-    };
-    assert_eq!(
-        top_function(dom.take_request_stack(StackAsker::Element(*image))),
-        "addImage"
-    );
     let scripts = dom.take_script_fetches();
     let [
         dom::ScriptFetch {
@@ -654,12 +640,20 @@ fn the_stacks_of_script_that_asks_for_loads_are_captured() {
         panic!("{scripts:?}");
     };
     assert_eq!(top_function(Some(stack.clone())), "lazily");
-    // The `fetch()`'s, handed to the load sink with it.
+    // The `fetch()`'s and the image's, handed to the load sink with them
+    // (the image's in its microtask, after the `fetch()`).
     let sent = sink.take();
-    let [crate::fetch::Sent::Fetch(_, origin)] = sent.as_slice() else {
+    let [
+        crate::fetch::Sent::Fetch(_, origin),
+        crate::fetch::Sent::Image(url, request_origin, image),
+    ] = sent.as_slice()
+    else {
         panic!("{sent:?}");
     };
     assert_eq!(top_function(origin.stack.clone()), "go");
+    assert_eq!(url, "https://example.test/a/x.png");
+    assert_eq!(request_origin.as_deref(), Some("https://example.test"), "its document's");
+    assert_eq!(top_function(image.stack.clone()), "addImage");
     let top = page.engine.top_frame();
     let (child, _) = only_child(&mut page.engine, top);
     let (_, owner) = page.engine.frame_parent(child).expect("the frame");

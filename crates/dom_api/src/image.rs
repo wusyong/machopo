@@ -35,6 +35,87 @@ pub fn run_image_updates<H: ScriptHost>(host: &mut H) {
             cx.run_image_update(element, selected);
         }
     });
+    // Their requests sent in the microtask (Blink's `ImageLoader`).
+    host.send_image_fetches();
+}
+
+/// The images the DOM queued to fetch (`Dom::take_image_fetches`) sent
+/// through `sink` now, each from the frame `frame_of` finds for the
+/// document that asked (and that frame's token, for DevTools, and its
+/// document), through that document's loader (the frame's document's for
+/// one that has none: an initial `about:blank` whose iframe went), from its
+/// origin, with what DevTools names as
+/// having asked (the script's stack, the parser's line, a stylesheet);
+/// recorded by the request each went as (`Dom::note_image_sent`), the one
+/// that went nowhere failed at once.
+pub fn send_image_fetches(
+    dom: &mut dom::Dom,
+    sink: &mut dyn crate::LoadSink,
+    frame_of: &dyn Fn(dom::NodeId) -> (crate::FrameId, Option<String>, Option<dom::NodeRoot>),
+) {
+    for fetch in dom.take_image_fetches() {
+        let (frame, frame_token, frame_document) = frame_of(fetch.document);
+        let (loader, document_url, request_origin, parser_line) = dom.read(|cx| {
+            let document = cx.node_by_id(fetch.document);
+            let loader = document
+                .and_then(|document| cx.document_loader(document))
+                .or_else(|| cx.document_loader(frame_document.as_ref()?.get(cx.gc)));
+            let parser_line = match &fetch.initiator {
+                dom::LoadInitiator::Element(element) => cx
+                    .node_by_id(*element)
+                    .and_then(|element| cx.take_parser_load_line(element)),
+                _ => None,
+            };
+            (
+                loader,
+                document
+                    .and_then(|document| cx.document_url(document))
+                    .map(|url| url.to_str().to_string()),
+                // HTML's "create a potential-CORS request" (no-cors): the
+                // network service taints another origin's response.
+                document.map(|document| match crate::origin(cx, document) {
+                    Some(origin @ url::Origin::Tuple(..)) => origin.ascii_serialization(),
+                    _ => "null".to_owned(),
+                }),
+                parser_line,
+            )
+        });
+        let stack = match &fetch.initiator {
+            dom::LoadInitiator::Element(element) => {
+                dom.take_request_stack(dom::StackAsker::Element(*element))
+            }
+            dom::LoadInitiator::Script(stack) => Some(stack.clone()),
+            _ => None,
+        };
+        let stylesheet = match &fetch.initiator {
+            dom::LoadInitiator::Stylesheet(url) => Some(url.clone()),
+            _ => None,
+        };
+        let origin = crate::FetchOrigin {
+            loader,
+            frame_token,
+            document_url,
+            stack,
+            parser_line,
+            stylesheet,
+        };
+        match sink.start_image_fetch(
+            frame,
+            fetch.document,
+            &fetch.url,
+            request_origin.as_deref(),
+            &origin,
+        ) {
+            Some(request_id) => dom.note_image_sent(
+                request_id,
+                dom::SentImage {
+                    url: fetch.url,
+                    document: fetch.document,
+                },
+            ),
+            None => dom.mutate(|cx| cx.image_fetched(&fetch.url, None, true)),
+        }
+    }
 }
 
 /// HTML's "react to environment changes" for `document`, whose viewport or

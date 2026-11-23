@@ -521,6 +521,7 @@ pub(crate) fn send_fetches(scope: &mut Scope<'_, '_, '_>) {
                     stack: state
                         .dom
                         .take_request_stack(dom::StackAsker::Fetch(request.id)),
+                    ..dom_api::FetchOrigin::default()
                 };
                 // What the host's responses come by: the DOM's own record
                 // (none went for one that went nowhere: the host gives its
@@ -555,6 +556,26 @@ pub(crate) fn send_fetches(scope: &mut Scope<'_, '_, '_>) {
 }
 
 /// The frame showing `document` went, with those in it: the host told.
+/// The images the DOM queued to fetch sent now through the host's load sink
+/// (`dom_api::send_image_fetches`), each from the frame showing the
+/// document that asked (the top-level one's for a document none shows):
+/// none without a sink, the queue left for whoever takes it.
+pub(crate) fn send_image_fetches(state: &mut crate::state::State) {
+    let Some(mut sink) = state.frames.load_sink.take() else {
+        return;
+    };
+    let frames = &state.frames;
+    dom_api::send_image_fetches(&mut state.dom, sink.as_mut(), &|document| {
+        let frame = frames.of_document(document).map_or(TOP, |frame| frame.id);
+        (
+            frame,
+            frames.token(frame).map(|token| token.to_string()),
+            frames.get(frame).map(|frame| frame.document.clone()),
+        )
+    });
+    state.frames.load_sink = Some(sink);
+}
+
 /// Child frame `document`'s, its iframe removed, unloads, then those in it
 /// (`ScriptHost::unload_child`).
 pub(crate) fn unload_child(scope: &mut Scope<'_, '_, '_>, document: &NodeRoot) {

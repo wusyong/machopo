@@ -168,7 +168,7 @@ pub use history::{
     traverse_within_document, update_target_element,
 };
 pub use idle::run_idle_callback;
-pub use image::{react_to_environment_changes, run_image_updates};
+pub use image::{react_to_environment_changes, run_image_updates, send_image_fetches};
 pub use input::{
     EventHandler, KeyInput, KeyResult, MouseAction, MouseButton, MouseInput, WheelInput,
 };

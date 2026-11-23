@@ -1,0 +1,78 @@
+# Stage 1, step 6b: images' requests sent by the engine through its load sink, recorded in the DOM.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "env", "MACHOPO_GPU_ADAPTER=cpu", "cargo", "test", "-q", "-p", "shell", "--test", "it"]
+timeout = 240
+
+[[mutant]]
+name = "the image microtask sends nothing"
+file = "crates/dom_api/src/image.rs"
+from = '''    host.send_image_fetches();
+}'''
+to = '''}'''
+
+[[mutant]]
+name = "the engine's host sends no images"
+file = "crates/dom_js/src/listeners.rs"
+from = '''        crate::frames::send_image_fetches(self.scope.state_mut().0);'''
+to = '''        let _ = &self.scope;'''
+
+[[mutant]]
+name = "the renderer leaves the images the engine didn't send"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        if let Some(engine) = &mut self.engine {
+            engine.send_image_fetches();
+        }'''
+to = '''        let _ = &self.engine;'''
+
+[[mutant]]
+name = "an image's request not recorded"
+file = "crates/dom_api/src/image.rs"
+from = '''            Some(request_id) => dom.note_image_sent(
+                request_id,
+                dom::SentImage {
+                    url: fetch.url,
+                    document: fetch.document,
+                },
+            ),'''
+to = '''            Some(request_id) => drop((request_id, fetch.url)),'''
+
+[[mutant]]
+name = "an image that went nowhere never fails"
+file = "crates/dom_api/src/image.rs"
+from = '''            None => dom.mutate(|cx| cx.image_fetched(&fetch.url, None, true)),'''
+to = '''            None => drop(fetch.url),'''
+
+[[mutant]]
+name = "a revoked blob URL's image requested"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            && parsed.scheme() == "blob"
+            && self.blob_urls.is_revoked(&parsed)
+        {
+            return None;
+        }
+        let mut request = ResourceRequest::new(url, RequestDestination::Image);'''
+to = '''            && parsed.scheme() == "blob"
+            && self.blob_urls.is_revoked(&parsed)
+            && false
+        {
+            return None;
+        }
+        let mut request = ResourceRequest::new(url, RequestDestination::Image);'''
+
+[[mutant]]
+name = "no loader for an initial about:blank whose iframe went"
+file = "crates/dom_api/src/image.rs"
+from = '''                .or_else(|| cx.document_loader(frame_document.as_ref()?.get(cx.gc)));'''
+to = '''                .or_else(|| frame_document.as_ref().and(None));'''
+
+[[mutant]]
+name = "an image's request from no origin"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        request.initiator = request_origin.map(String::from);'''
+to = '''        request.initiator = request_origin.map(String::from).filter(|_| false);'''
+
+[[mutant]]
+name = "a wasm document's images never sent"
+file = "crates/dom_wasm/src/engine.rs"
+from = '''        dom_api::send_image_fetches(self.dom(), sink.as_mut(), &|_| {'''
+to = '''        let _ = &self.dom;
+        dom_api::send_image_fetches(&mut dom::Dom::new(), sink.as_mut(), &|_| {'''

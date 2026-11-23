@@ -2093,6 +2093,10 @@ pub trait ScriptHost {
         let _ = document;
     }
 
+    /// The images the DOM queued to fetch sent now, through the host's
+    /// load sink (`image::send_image_fetches`). Nothing by default.
+    fn send_image_fetches(&mut self) {}
+
     /// `document`, a child browsing context's, went with its iframe: the
     /// browsing context discarded, with those in it. Nothing by default.
     fn discard_child(&mut self, document: &dom::NodeRoot) {

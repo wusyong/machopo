@@ -18,11 +18,13 @@ use protocol::network::ResponseTainting;
 use crate::history::Page;
 
 /// What a test's load sink was asked: a `fetch()`'s request sent, with
-/// where it came from; a request cancelled, by its number.
+/// where it came from; a request cancelled, by its number; an image's
+/// request sent, its URL, request's origin and where it came from.
 #[derive(Debug)]
 pub(crate) enum Sent {
     Fetch(dom::FetchRequest, FetchOrigin),
     Cancel(u64),
+    Image(String, Option<String>, FetchOrigin),
 }
 
 /// A load sink that records what it is asked, numbering each request as
@@ -59,6 +61,23 @@ impl LoadSink for Sink {
 
     fn cancel_fetch(&mut self, request_id: u64) {
         self.0.borrow_mut().push(Sent::Cancel(request_id));
+    }
+
+    fn start_image_fetch(
+        &mut self,
+        _: FrameId,
+        _: dom::NodeId,
+        url: &str,
+        request_origin: Option<&str>,
+        origin: &FetchOrigin,
+    ) -> Option<u64> {
+        let mut sent = self.0.borrow_mut();
+        sent.push(Sent::Image(
+            url.to_owned(),
+            request_origin.map(String::from),
+            origin.clone(),
+        ));
+        Some(u64::try_from(sent.len()).expect("fewer than 2^64 requests"))
     }
 
     fn register_blob_url(&self, _: FrameId, _: &str, _: &dom::BlobData) {}

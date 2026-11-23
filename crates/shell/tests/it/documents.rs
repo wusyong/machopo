@@ -1238,6 +1238,28 @@ fn what_a_javascript_url_queues_comes_after_load() {
     assert_eq!(run(&url), "load,message");
 }
 
+/// An image an initial `about:blank` asks for as its iframe goes (in the
+/// microtask after the removal: its document has no loader of its own any
+/// more) goes through its frame's loader before, one the browser knows: the
+/// renderer isn't ended for a loader it doesn't (WPT's
+/// `the-img-element/document-destroyed-crash.html`).
+#[test]
+fn an_image_of_a_document_whose_iframe_went_is_no_bad_message() {
+    let url = site(
+        "an_image_of_a_document_whose_iframe_went_is_no_bad_message",
+        &[(
+            "index.html",
+            "<!DOCTYPE html><iframe></iframe><script>onload = () => {\
+               const f = document.querySelector('iframe');\
+               f.contentDocument.createElement('div').innerHTML =\
+                 '<img src=\"data:image/gif;base64,R0lGODlhAQABAAAAACw=\">';\
+               f.remove();\
+               setTimeout(() => testRunner.reportHarnessResults('alive'), 50); };</script>",
+        )],
+    );
+    assert_eq!(run(&url), "alive");
+}
+
 /// A `javascript:` URL that another origin's page sets a child's
 /// `location` to: a `SecurityError`, nothing run in the child (whose
 /// realm it would be); the same origin's runs, after (so the other's

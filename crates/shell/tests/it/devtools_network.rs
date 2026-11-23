@@ -272,6 +272,34 @@ fn a_fetch_is_told_as_it_is_sent_before_its_redirect() {
     assert_eq!(sent, 2, "{events:?}");
 }
 
+/// An image's request is sent in the microtask that updates its image
+/// data (Blink's `ImageLoader`), told to DevTools then: before a `fetch()`
+/// of a task queued after it.
+#[test]
+fn an_image_is_requested_in_its_microtask() {
+    let server = server(&[
+        ("/", Route::ok("text/html", "<!DOCTYPE html>page")),
+        ("/a.png", Route::ok("image/png", "")),
+        ("/plain", Route::ok("text/plain", "plain")),
+    ]);
+    let machopo = Machopo::start();
+    let (mut page, _) = page(&machopo);
+    load(&mut page, &server.url("/"));
+    page.call(None, "Network.enable", json!({}));
+    evaluate(
+        &mut page,
+        "new Image().src = '/a.png'; setTimeout(() => fetch('/plain'), 0); 0",
+        None,
+    );
+    let events = network_events(&mut page, 2);
+    let sent: Vec<String> = events
+        .iter()
+        .filter(|event| event["method"] == "Network.requestWillBeSent")
+        .map(|event| event["params"]["request"]["url"].as_str().unwrap_or_default().to_owned())
+        .collect();
+    assert_eq!(sent, [server.url("/a.png"), server.url("/plain")]);
+}
+
 /// A `fetch()`'s `requestWillBeSent` is stamped as it is sent, not once the
 /// script that sent it is done: before its `loadingFinished`, which may
 /// come while the script is busy.

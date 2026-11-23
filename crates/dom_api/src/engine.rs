@@ -53,6 +53,25 @@ pub trait LoadSink {
     /// its document gone): no response is wanted.
     fn cancel_fetch(&mut self, request_id: u64);
 
+    /// The image at `url`, which `document` (`frame`'s, or one no frame
+    /// shows) asked for first, its request sent from `request_origin`
+    /// (HTML's "create a potential-CORS request", no-cors: none for an
+    /// opaque origin), `origin` naming where it comes from, as the DOM
+    /// asks (`send_image_fetches`; Blink's `ImageLoader` in its microtask):
+    /// its request's number; none if it went nowhere (a revoked blob
+    /// URL's), which fails it at once. None by default.
+    fn start_image_fetch(
+        &mut self,
+        frame: crate::FrameId,
+        document: dom::NodeId,
+        url: &str,
+        request_origin: Option<&str>,
+        origin: &FetchOrigin,
+    ) -> Option<u64> {
+        let _ = (frame, document, url, request_origin, origin);
+        None
+    }
+
     /// `url` made a blob URL for `data` in `frame`'s realm
     /// (`URL.createObjectURL`).
     fn register_blob_url(&self, frame: crate::FrameId, url: &str, data: &dom::BlobData);
@@ -100,6 +119,11 @@ pub struct FetchOrigin {
     pub frame_token: Option<String>,
     pub document_url: Option<String>,
     pub stack: Option<std::rc::Rc<str>>,
+    /// An element's load the document's parser asked for: the line it
+    /// made the element at (`Cx::take_parser_load_line`).
+    pub parser_line: Option<u32>,
+    /// A background's: the URL of the stylesheet whose `url()` it is.
+    pub stylesheet: Option<std::sync::Arc<str>>,
 }
 
 /// What an engine is made with, as its host's settings say.
@@ -609,6 +633,12 @@ pub trait ScriptEngine: ParserHost {
     /// (`FrameRequest::RegisterBlobUrl`, `RevokeBlobUrl`). Without one, a
     /// `fetch()` goes nowhere: its promise stays pending.
     fn set_load_sink(&mut self, sink: Box<dyn LoadSink>);
+
+    /// The images the DOM queued to fetch, sent now through the load sink
+    /// (`send_image_fetches`): those queued outside the engine's calls (a
+    /// background the host's style update found) and any still waiting.
+    /// Nothing by default.
+    fn send_image_fetches(&mut self) {}
 
     /// Whether a child frame was made or went since the last ask: what the
     /// host keeps of its frames follows them then (`child_frames`,

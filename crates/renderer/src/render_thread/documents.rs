@@ -714,7 +714,6 @@ impl RenderThread {
         self.main_origin_source = None;
         // What was asked for its documents: a response still to come is
         // no one's (the next DOM's nodes are numbered from the start).
-        self.images.clear();
         // Its `fetch()`es' requests go with its DOM.
         self.script_fetches.clear();
         self.css_refetches.clear();
@@ -965,18 +964,6 @@ impl RenderThread {
         let document = self.doc(frame)?.document.clone();
         let engine = self.engine.as_mut()?;
         Some(engine.dom_mut().read(|cx| cx.node_id(document.get(cx.gc))))
-    }
-
-    /// The loader the document `document` goes through: the browser's for
-    /// it, else that of the frame showing it (or the top-level one's).
-    fn loader_of_document(&mut self, document: dom::NodeId) -> u64 {
-        if let Some(loader) = self.loader_in_dom(document) {
-            return loader;
-        }
-        let frame = self
-            .frame_of_document(document)
-            .or_else(|| self.document.as_ref().map(|next| next.frame));
-        frame.map_or(0, |frame| self.loader_of(frame))
     }
 
     fn doc(&self, frame: FrameId) -> Option<&FrameDocument> {
@@ -3101,11 +3088,12 @@ impl RenderThread {
     /// the images it asked for first, its `fetch()`es. Not a child frame's
     /// `src` (its own document's request).
     fn requests_in_flight(&mut self, frame: FrameId, document: dom::NodeId) -> usize {
-        // Before its document is borrowed: the DOM has them.
-        let fetches = self
-            .engine
-            .as_mut()
-            .map_or(0, |engine| engine.dom_mut().sent_fetches_of(document));
+        // Before its document is borrowed: the DOM has them, its images
+        // too.
+        let (fetches, images) = self.engine.as_mut().map_or((0, 0), |engine| {
+            let dom = engine.dom_mut();
+            (dom.sent_fetches_of(document), dom.sent_images_of(document))
+        });
         let Some(next) = self.doc(frame) else {
             return 0;
         };
@@ -3119,11 +3107,6 @@ impl RenderThread {
             .script_fetches
             .values()
             .filter(|fetching| fetching.frame == frame)
-            .count();
-        let images = self
-            .images
-            .values()
-            .filter(|(_, of)| *of == document)
             .count();
         // Each fewer than the requests the renderer has made.
         next.pending_sheets
@@ -4217,75 +4200,17 @@ impl RenderThread {
     }
 
     /// The images the DOM's list of available images waits for
-    /// (`Dom::take_image_fetches`), fetched.
+    /// (`Dom::take_image_fetches`), fetched: those the engine's calls
+    /// queued it sent already, in the image microtask.
     pub(super) fn start_image_fetches(&mut self) {
         // What the engine asked for since the frame requests were last
-        // handled (a task's blob URLs among them): the browser hears of a
-        // blob URL before a load of it.
+        // handled first.
         self.handle_frame_requests();
-        let Some(engine) = &mut self.engine else {
-            return;
-        };
-        let fetches = engine.dom_mut().take_image_fetches();
-        for dom::ImageFetch {
-            url,
-            document,
-            initiator: asker,
-        } in fetches
-        {
-            // A blob URL revoked before the element resolved it (in its
-            // task, before the browser heard): a network error, without
-            // asking.
-            if let Ok(parsed) = Url::parse(&url)
-                && parsed.scheme() == "blob"
-                && self.blob_urls.is_revoked(&parsed)
-            {
-                if let Some(engine) = &mut self.engine {
-                    engine
-                        .dom_mut()
-                        .mutate(|cx| cx.image_fetched(&url, None, true));
-                }
-                continue;
-            }
-            let mut request = ResourceRequest::new(&url, RequestDestination::Image);
-            // From its document's origin (HTML's "create a potential-CORS
-            // request", no-cors): the network service taints another
-            // origin's response (opaque), which a canvas that draws it
-            // can't be read after.
-            request.initiator = self.engine.as_mut().and_then(|engine| {
-                engine.dom_mut().read(|cx| {
-                    let document = cx.node_by_id(document)?;
-                    Some(match dom_api::origin(cx, document) {
-                        Some(origin @ url::Origin::Tuple(..)) => origin.ascii_serialization(),
-                        _ => "null".to_owned(),
-                    })
-                })
-            });
-            // Told from its document's frame, which asked first (the
-            // top-level one's, if none shows it now), through its
-            // document's loader.
-            let loader = self.loader_of_document(document);
-            let frame = self
-                .frame_of_document(document)
-                .or_else(|| self.document.as_ref().map(|next| next.frame));
-            let request_id = match frame {
-                Some(frame) if self.network_agent.enabled() => {
-                    let request_id = crate::loader::next_request_id();
-                    let initiator = self.initiator(frame, &asker);
-                    if let Some(at) = self.request_frame(frame) {
-                        self.network_agent
-                            .will_send(request_id, &request, at, initiator.as_ref());
-                    }
-                    self.send_request(request_id, loader, request);
-                    request_id
-                }
-                _ => {
-                    let request_id = crate::loader::next_request_id();
-                    self.send_request(request_id, loader, request);
-                    request_id
-                }
-            };
-            self.images.insert(request_id, (url, document));
+        // The engine's load sink sends them (`RendererLoadSink::
+        // start_image_fetch`): those it hasn't yet, a background's that a
+        // style update found among them.
+        if let Some(engine) = &mut self.engine {
+            engine.send_image_fetches();
         }
     }
 
@@ -4478,7 +4403,11 @@ impl RenderThread {
             self.fetch_answered(sent.fetch, result);
             return true;
         }
-        if let Some((url, document)) = self.images.remove(&request_id) {
+        let image = self
+            .engine
+            .as_mut()
+            .and_then(|engine| engine.dom_mut().take_sent_image(request_id));
+        if let Some(dom::SentImage { url, document }) = image {
             if !self.image_loaded(&url, result) {
                 let frame = self
                     .frame_of_document(document)
@@ -4685,8 +4614,12 @@ impl RenderThread {
         url: Option<&str>,
         result: &LoadResult,
     ) {
-        let found = if let Some(&(_, document)) = self.images.get(&request_id) {
-            self.frame_of_document(document)
+        let image = self
+            .engine
+            .as_mut()
+            .and_then(|engine| engine.dom_mut().sent_image(request_id));
+        let found = if let Some(image) = image {
+            self.frame_of_document(image.document)
                 .map(|frame| (frame, "Image"))
         } else if let Some(fetching) = self.script_fetches.get(&request_id) {
             Some((fetching.frame, "Script"))
@@ -5013,6 +4946,60 @@ impl dom_api::LoadSink for RendererLoadSink {
 
     fn cancel_fetch(&mut self, request_id: u64) {
         cancel_request(&self.to_browser, &self.network_agent, request_id);
+    }
+
+    fn start_image_fetch(
+        &mut self,
+        _: FrameId,
+        document: dom::NodeId,
+        url: &str,
+        request_origin: Option<&str>,
+        origin: &dom_api::FetchOrigin,
+    ) -> Option<u64> {
+        // A blob URL revoked before the element resolved it: a network
+        // error, without asking.
+        if let Ok(parsed) = Url::parse(url)
+            && parsed.scheme() == "blob"
+            && self.blob_urls.is_revoked(&parsed)
+        {
+            return None;
+        }
+        let mut request = ResourceRequest::new(url, RequestDestination::Image);
+        request.initiator = request_origin.map(String::from);
+        let request_id = crate::loader::next_request_id();
+        // Told to DevTools as it is sent: who asked, the script's stack if
+        // it wants stacks, else the parser's line, else the stylesheet.
+        if self.network_agent.enabled()
+            && let (Some(frame_id), Some(document_url)) =
+                (origin.frame_token.clone(), origin.document_url.clone())
+        {
+            let initiator = match (&origin.stack, origin.parser_line, &origin.stylesheet) {
+                (Some(stack), ..) if self.network_agent.wants_stacks() => {
+                    Some(Initiator::Script(stack.clone()))
+                }
+                (_, Some(line), _) => Some(Initiator::Parser {
+                    url: document_url.split('#').next().unwrap_or_default().to_owned(),
+                    line: line.saturating_sub(1),
+                }),
+                (.., Some(sheet)) => Some(Initiator::Css(sheet.clone())),
+                _ => None,
+            };
+            let at = super::network_agent::RequestFrame {
+                frame_id,
+                loader_id: crate::loader::devtools_loader_id(origin.loader, document),
+                document_url,
+            };
+            self.network_agent
+                .will_send(request_id, &request, at, initiator.as_ref());
+        }
+        let loader = origin.loader.map_or(0, |loader| loader.loader);
+        let _ = self.to_browser.send(RendererHostMsg::FetchResource {
+            request_id,
+            worker: None,
+            loader,
+            request,
+        });
+        Some(request_id)
     }
 
     fn register_blob_url(&self, frame: FrameId, url: &str, data: &dom::BlobData) {

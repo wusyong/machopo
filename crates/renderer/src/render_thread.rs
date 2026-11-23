@@ -9,7 +9,7 @@ use compositor::{
     SwapPromise, ToMainThread,
 };
 use dom::NavigationType;
-use gfx::{NodeId, PointF, RectF, SizeF};
+use gfx::{PointF, RectF, SizeF};
 use protocol::control_channel::BrowserSender;
 use protocol::input::{InputEvent, Modifiers};
 use protocol::network::{LoadResult, RedirectInfo};
@@ -481,11 +481,6 @@ struct RenderThread {
     /// Whether `engine` is the wasm one (the page's document declared its
     /// scripts wasm): a document of the other kind takes another engine.
     engine_is_wasm: bool,
-    /// The images the DOM's list of available images is fetching, by
-    /// request: the renderer's, not a document's, as the list is (Blink's
-    /// memory cache); with the document that asked first, whose network
-    /// idleness counts it.
-    images: std::collections::HashMap<u64, (String, NodeId)>,
     /// The scripts the DOM queued being fetched, by request.
     script_fetches: std::collections::HashMap<u64, documents::PendingScriptFetch>,
     /// DevTools' `Page` domain, the renderer's part (Blink's
@@ -616,7 +611,6 @@ impl RenderThread {
             scheduler,
             engine: None,
             engine_is_wasm: false,
-            images: std::collections::HashMap::new(),
             script_fetches: std::collections::HashMap::new(),
             document: None,
             children: documents::ChildFrames::default(),
@@ -1738,10 +1732,12 @@ impl RenderThread {
         // (`FrameRequest::FetchSent`): this may be one's response.
         self.handle_frame_requests();
         self.network_agent.did_finish(request_id, &result);
-        // A `fetch()`'s is the DOM's record's.
+        // A `fetch()`'s and an image's are the DOM's records'.
         let url = self.request_urls.answered(request_id).or_else(|| {
-            let engine = self.engine.as_mut()?;
-            Some(engine.dom_mut().sent_fetch(request_id)?.url)
+            let dom = self.engine.as_mut()?.dom_mut();
+            dom.sent_fetch(request_id)
+                .map(|sent| sent.url)
+                .or_else(|| dom.sent_image(request_id).map(|sent| sent.url))
         });
         // DevTools' `CSS`'s: a sheet's text, its alone.
         if let Some((key, frame)) = self.css_refetches.remove(&request_id) {

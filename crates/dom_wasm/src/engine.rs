@@ -232,6 +232,11 @@ pub struct WasmEngine {
     rendering_documents: Option<Vec<NodeId>>,
     layout: Box<LayoutCell>,
     console: Option<ConsoleSink>,
+    /// What sends the images its document asks for (`send_image_fetches`),
+    /// the host's, and the top-level frame's token, once the browser told
+    /// it, for DevTools to name them by.
+    load_sink: Option<Box<dyn dom_api::LoadSink>>,
+    main_token: Option<dom_api::FrameToken>,
     /// The lines the guests wrote since the last turn: their sink is the
     /// stores' (`Send`), the console's isn't.
     output: Arc<Mutex<Vec<(Output, String)>>>,
@@ -274,6 +279,8 @@ impl WasmEngine {
             rendering_documents: None,
             layout: Box::new(std::cell::Cell::new(None)),
             console: None,
+            load_sink: None,
+            main_token: None,
             output: Arc::default(),
             clock,
             scripts: Vec::new(),
@@ -1152,8 +1159,22 @@ impl ScriptEngine for WasmEngine {
         self.console = Some(sink);
     }
 
-    // A guest starts no load of its own.
-    fn set_load_sink(&mut self, _: Box<dyn dom_api::LoadSink>) {}
+    // A guest starts no load of its own; its document's images load.
+    fn set_load_sink(&mut self, sink: Box<dyn dom_api::LoadSink>) {
+        self.load_sink = Some(sink);
+    }
+
+    fn send_image_fetches(&mut self) {
+        let Some(mut sink) = self.load_sink.take() else {
+            return;
+        };
+        let token = self.main_token.map(|token| token.to_string());
+        let document = self.document.clone();
+        dom_api::send_image_fetches(self.dom(), sink.as_mut(), &|_| {
+            (TOP, token.clone(), document.clone())
+        });
+        self.load_sink = Some(sink);
+    }
 
     fn take_harness_results(&mut self) -> Option<String> {
         None
@@ -1162,7 +1183,9 @@ impl ScriptEngine for WasmEngine {
     fn set_idle(&mut self, _: bool) {}
 
     // No inspector, and no child frame: the token names nothing here.
-    fn set_main_frame_token(&mut self, _: dom_api::FrameToken) {}
+    fn set_main_frame_token(&mut self, token: dom_api::FrameToken) {
+        self.main_token = Some(token);
+    }
 
     // No inspector: DevTools' sessions hear nothing of script here.
     fn devtools_attach(&mut self, _: String, _: DevToolsSend) {}

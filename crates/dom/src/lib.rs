@@ -145,6 +145,7 @@ pub use event::{
 pub use execution_context::ExecutionContext;
 pub use fetch::{
     FetchHostRequest, FetchRecord, FetchRequest, FetchState, Referrer, Request, RequestCache, SentFetch,
+    SentImage,
     RequestCredentials, RequestData, RequestMode, RequestPriority, RequestRedirect, Response,
     ResponseData, ResponseType,
 };
@@ -918,6 +919,9 @@ struct Changes {
     /// `RefCell`, as the other changes here: the DOM's API is `&self`, and
     /// no borrow of it outlives the call that takes it.
     sent_fetches: std::cell::RefCell<std::collections::HashMap<u64, fetch::SentFetch>>,
+    /// The images' requests the host sent, by request, until their
+    /// responses come (`Dom::note_image_sent`): as `sent_fetches`.
+    sent_images: std::cell::RefCell<std::collections::HashMap<u64, fetch::SentImage>>,
     /// The browser's user agent and whether automation controls it, its
     /// host's (`Dom::set_agent`, `navigator`).
     user_agent: std::cell::RefCell<String>,
