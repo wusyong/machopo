@@ -141,7 +141,7 @@ V0 原本就有、四個都沒改的（審查推的）：同一個 task 裡建 i
   - 取消還是便條（`CancelFetch`）：記錄已經在 DOM，sink 加一個取消的 hook 就能當場做。
   - 換 engine 之後才失敗的請求，log 印空的網址（原本印舊頁的網址）；兩種都把舊頁的失敗記到新頁，丟掉不記比較好。
   - 原本就有的：頂層文件換掉時不取消舊文件的 `fetch()`（`docs/limitations.md` 有一條相近的），回應不來的請求留在記錄裡；`cancel_fetches_of_gone_documents` 是 O(n²)，順序照 `HashMap`。
-- **frame 的樹**：做得到，成本比原本寫的大（`README.md` 的「不管哪一種都要處理的」）。`dom` 已經有樹（`content_document`、`frame_owner`、`discard_document_tree`），建立和移除本來就在 engine 呼叫的尾端當場做（`update_elements`），慢的只是 renderer 那一側。`dom_wasm` 沒有自己的 frame 樹（只有 `TOP`，`create_window` 時清掉便條）。不牽動 process 的邊界，送給 Browser 的 `DidCreateChildFrame` 會排到同一個 task 裡的 `FetchResource` 之前（改善）。machopo 移除 iframe 時不發 unload（Blink 在 `LocalFrame::DetachImpl` 先 unload，`local_frame.cc`，審查對過）；要照做的話是 engine 在 `update_elements` 的移除步驟裡發，不是 renderer 的 hook。
+- **frame 的樹**：做得到，成本比原本寫的大（第 0 階段時 `README.md` 列的那幾項，完成時併進它的「詳細設計」）。`dom` 已經有樹（`content_document`、`frame_owner`、`discard_document_tree`），建立和移除本來就在 engine 呼叫的尾端當場做（`update_elements`），慢的只是 renderer 那一側。`dom_wasm` 沒有自己的 frame 樹（只有 `TOP`，`create_window` 時清掉便條）。不牽動 process 的邊界，送給 Browser 的 `DidCreateChildFrame` 會排到同一個 task 裡的 `FetchResource` 之前（改善）。machopo 移除 iframe 時不發 unload（Blink 在 `LocalFrame::DetachImpl` 先 unload，`local_frame.cc`，審查對過）；要照做的話是 engine 在 `update_elements` 的移除步驟裡發，不是 renderer 的 hook。
 - **範圍「乙」**：A1 到 A6 都對得到乙的一組，沒有找到做完還不穩定的直接理由，前提是：G2 一起處理 DevTools 的順序（DOM 變動先送、stack 的順序對調）；`Created` 的補救換成 assert；WebDriver 改讀 `dom`；寫明移除時哪兩件仍然延後；文件的 loader（G1）在 G2 之前；hook 拿 agent 的 `Rc` 要明文決定。
 - **它沒能驗證的**：沒有執行任何東西；Blink 的 detach 之後 parent 的 `CheckCompleted`；`devtools.rs` 註解說 ResizeObserver 的 callback 執行時 layout 被借走了，但它在 `run_resize_observer_loop` 的路上沒看到借出（影響同步的 hook 在 callback 裡會不會默默不做）；stack 的順序能不能對調。
 

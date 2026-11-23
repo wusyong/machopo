@@ -20,17 +20,19 @@ test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "fetch::an_aborte
 [[mutant]]
 name = "not told to DevTools as it is sent"
 file = "crates/renderer/src/render_thread/documents.rs"
-from = '''        if self.network_agent.enabled()
-            && let (Some(frame_id), Some(document_url)) ='''
-to = '''        if false
-            && let (Some(frame_id), Some(document_url)) ='''
+from = '''        // can come (Blink's `ResourceLoadObserverForFrame::WillSendRequest`).
+        if self.network_agent.enabled()'''
+to = '''        // can come (Blink's `ResourceLoadObserverForFrame::WillSendRequest`).
+        if false'''
 test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "env", "MACHOPO_GPU_ADAPTER=cpu", "cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_network::a_fetch_is_told_as_it_is_sent_before_its_redirect"]
 
 [[mutant]]
 name = "a fetch through no loader"
 file = "crates/renderer/src/render_thread/documents.rs"
-from = '''        let loader = origin.loader.map_or(0, |loader| loader.loader);'''
-to = '''        let loader = origin.loader.map_or(0, |_| 0);'''
+from = '''        // none, for a document it gave none.
+        let loader = origin.loader.map_or(0, |loader| loader.loader);'''
+to = '''        // none, for a document it gave none.
+        let loader = origin.loader.map_or(0, |_| 0);'''
 
 [[mutant]]
 name = "an initial about:blank without its creator's loader"
@@ -109,8 +111,8 @@ to = '''        let url = self.request_urls.answered(request_id).or_else(|| -> O
 [[mutant]]
 name = "DevTools names every loader by its document"
 file = "crates/renderer/src/loader.rs"
-from = '''        .and_then(|loader| loader.navigation)'''
-to = '''        .and_then(|_| None::<u64>)'''
+from = '''    loader.and_then(|loader| loader.navigation).map_or_else('''
+to = '''    loader.and_then(|_| None::<u64>).map_or_else('''
 
 [[mutant]]
 name = "the top-level document's navigation not recorded"

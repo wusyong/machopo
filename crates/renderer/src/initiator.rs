@@ -2,8 +2,9 @@
 //! (Blink's `FetchInitiatorInfo`, which `InspectorNetworkAgent`'s
 //! `BuildInitiatorObject` makes into one).
 //!
-//! The renderer starts most of a document's loads once script is done or
-//! the parser stops, not as script asks for them as Blink does: what script
+//! The engine sends the loads script asks for as it asks (`fetch()`,
+//! images, queued scripts), the renderer the rest (sheets, iframes, the
+//! parser's scripts) once script is done or the parser stops: what script
 //! asked for, the engine captured the stack of then (the DOM keeps it,
 //! `dom::StackAsker`), and the load takes it as it starts; what the
 //! parser made, the line of its start tag, the DOM's too

@@ -61,7 +61,7 @@ name = "the frame client's creation stack not kept"
 file = "crates/renderer/src/render_thread/documents.rs"
 from = '''                self.children.creation_stacks.insert(frame, stack);
             }
-            let url = Url::parse("about:blank").expect("about:blank");'''
+            let mut initial = FrameDocument::new('''
 to = '''                let _ = stack;
             }
-            let url = Url::parse("about:blank").expect("about:blank");'''
+            let mut initial = FrameDocument::new('''

@@ -78,14 +78,3 @@ name = "no style update before load"
 file = "crates/dom_api/src/lifecycle.rs"
 from = '''        layout.update_style_and_layout(cx);'''
 to = '''        let _ = layout;'''
-
-[[mutant]]
-name = "a frame gone in the call that made it kept"
-file = "crates/renderer/src/render_thread/documents.rs"
-from = '''                        if self.child_parent(frame).is_none() {
-                            continue;
-                        }'''
-to = '''                        if self.child_parent(frame).is_none() && false {
-                            continue;
-                        }'''
-test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "env", "MACHOPO_GPU_ADAPTER=cpu", "cargo", "test", "-q", "-p", "shell", "--test", "it", "automation_pipe::a_frame_made_and_removed_in_one_script_leaves_nothing"]

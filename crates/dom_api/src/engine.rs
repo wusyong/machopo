@@ -345,8 +345,8 @@ pub trait ScriptEngine: ParserHost {
     }
 
     /// What the engine asks the host to do for its frames since the last
-    /// time (a child made, to navigate, gone, a `fetch()` to send), in
-    /// order, taken.
+    /// time (a child to navigate, a navigation script made, a blob URL
+    /// registered or revoked), in order, taken.
     fn take_frame_requests(&mut self) -> Vec<crate::FrameRequest>;
 
     /// The response to the fetch numbered `id` came (`Err`: a network

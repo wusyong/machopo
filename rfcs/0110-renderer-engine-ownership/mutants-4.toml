@@ -25,7 +25,13 @@ to = '''    cx.request_navigation_from('''
 [[mutant]]
 name = "a javascript: URL's task never queued"
 file = "crates/dom/src/window.rs"
-from = '''            self.push_element_task(window, document, crate::names::event::LOAD, JAVASCRIPT_URLS, 0);'''
+from = '''            self.push_element_task(
+                window,
+                document,
+                crate::names::event::LOAD,
+                JAVASCRIPT_URLS,
+                0,
+            );'''
 to = '''            let _ = window;'''
 test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "cross_origin::"]
 

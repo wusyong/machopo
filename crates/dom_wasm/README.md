@@ -35,7 +35,7 @@ set.with(index, |mut cx| run.call(&mut cx, args))?;  // 呼叫都經過 set 借�
   - **guest 自己的分派**（它呼叫 `click()`、`focus()`、`blur()`，host 函式是 `front::add_scripted` 加的）：`WasmFront::call_listener` 在 guest 的那次呼叫的 stack 上直接 `call` 它的 `handle-event`（fork 讓 set 的 Store 在 fiber 上接受同步的呼叫）。**這條路只呼叫同一個 Store 的 listener**，其他 script 的 listener 和 event handler 屬性的（JS）跳過。
   - 事件的 handle 只在那次呼叫裡是 guest 的：回來時 host 收回（guest 自己 `release` 過也可以），之後拿它呼叫成員會 trap。listener trap 時報到 console（`uncaught`、script 的 URL），那個 script 的 Store 結束、它的 listener 都不再被呼叫；在 guest 自己的分派裡 trap 時，同一次分派剩下的 listener 不跑，trap 往上經過 guest 的那次呼叫。
   - host 不告訴 guest 哪個 callback 不用了：guest 自己的「編號對到什麼」的表只會長。
-- **只有最上層的 frame**：`create_window` 對其他 frame 回 `None`，iframe 沒有子文件。DOM 的工作要 host 做的事只轉導覽（連結、表單、fragment：`take_frame_requests` 的 `Navigation`）。
+- **只有最上層的 frame**：`create_window` 對其他 frame 回 `None`，iframe 沒有子文件。DOM 的工作要 host 做的事：導覽（連結、表單、fragment：`take_frame_requests` 的 `Navigation`），和文件要的圖、排著的 script 的請求（`set_load_sink` 給的 sink，`send_image_fetches`、`send_script_fetches`，帶著 browser 給的 main frame 的 token）。
 - **一個 script 一個 Store**（`run_wasm_script`，bytes 是 component，world 是 `wit/script.wit` 的 `script`）：在呼叫的 thread 上同步編譯、建 Store、實例化、呼叫 `start(document)`（頁面的 document 在這個 Store 的 handle）。`start` 第一次等待時這個 script 對頁面就算執行完了，Store 留著。編不過、import 對不上、trap 都報到 console（`uncaught`，URL 是 script 的），trap 的 Store 丟掉；之後的 script 照常跑。新的 window（換頁）時前一份文件的 Store 全部丟掉。
 - **guest 的等待是 engine 的 timer**：`until_next_timer()` 是 DOM 自己的下一個 task 和各個 Store 最早的期限裡比較早的（renderer 的 loop 照它醒來），`run_due_tasks()`（和 `run_timers()`）讓期限到了的 Store 各跑一輪。期限在每一輪結束時從 Store 讀出來記著（時鐘在 Store 裡，只有一輪裡拿得到）。
 - **guest 印的東西**在每一輪結束時一行一行交給 console 的 sink（不是 `uncaught`）。

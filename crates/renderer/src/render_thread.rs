@@ -1725,8 +1725,8 @@ impl RenderThread {
     /// navigation, of whichever frame asked for it. One for a document
     /// that has gone (or a navigation another replaced) is dropped.
     fn did_receive_resource(&mut self, request_id: u64, result: LoadResult) {
-        // The `fetch()`es script sent since the loop last looked
-        // (`FrameRequest::FetchSent`): this may be one's response.
+        // What the engine asked of the host since the loop last looked,
+        // and its frames followed, before the response finds its document.
         self.handle_frame_requests();
         self.network_agent.did_finish(request_id, &result);
         // A `fetch()`'s, an image's and a queued script's are the DOM's

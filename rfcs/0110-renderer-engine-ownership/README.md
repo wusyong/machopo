@@ -1,129 +1,116 @@
 # RFC 0110：renderer 和 engine 的狀態只有一個擁有者
 
 - 開始日期：2026-11-23
-- 狀態：🚧 已排程：2026-11-23（第 0 階段的評估做完、待審查）
-- 細節：`details.md`；進度：`progress.md`
+- 狀態：✅ 已完成：2026-11-23
+- 進度：`progress.md`
+- 細節：`details.md`
 
 ## 摘要
 
-renderer 和 script engine 在同一個 thread 上，彼此卻像隔著 process：engine 改了 renderer 要知道的事，記成便條（`FrameRequest`），renderer 等 event loop 的外圈才補做；renderer 自己也留著副本（DevTools 的 frame 清單），等外圈才更新。RFC 0109 盤點到的不穩定測試 A1 到 A6 都出在這裡，網頁也看得到（設了 `location.hash` 之後，同一個 task 讀到的捲動位置是舊的）。延後的原因有三種（「動機」）：處理時要用 renderer 自己留的副本，而 engine 執行中借不到 `RenderThread`；處理的過程會執行 script 或用 layout，不能在 engine 的呼叫中回頭做；收尾點排在整批 task 之後。目標照 Blink 和 content 層：同一個 renderer 裡每份狀態只有一個擁有者，另一層要知道時同步呼叫；跨 process 的才用訊息。第一階段只評估、不改產品：盤點每一份副本和每一種延後的機制，用三種擁有權的做法在同一條路上各做一個原型，結果交給使用者決定做法和範圍。
+renderer 和 script engine 在同一個 thread 上，彼此卻像隔著 process：engine 改了 renderer 要知道的事，記成便條（`FrameRequest`），renderer 等 event loop 的外圈才補做；renderer 自己也留著副本（frame 的樹、文件的網址和載入狀態、圖片和 script 的請求），等外圈才更新。RFC 0109 盤點到的不穩定測試 A1 到 A6 都出在這裡，網頁也看得到（設了 `location.hash` 之後，同一個 task 讀到的捲動位置是舊的）。照 Blink 和 content 層改成每份狀態一個擁有者：兩邊都要的資料由 `dom` 或 engine 擁有，engine 呼叫 host 的 hook 時把 hook 要的當參數帶過去，只有 renderer 自己用的留在 renderer；Blink 當下做的當下做（`fetch()`、圖片、script 的請求送出，frame 的建立和移除，捲到 fragment），Blink 排成 task 的排成真的 task（`javascript:` 網址、intersection 的通知）。A1 到 A6 都有在原本的程式上必壞的測試，改完都通過。renderer 的共享的 `Rc<RefCell>`（`DocumentLoaders`、`RequestIds`）拿掉了；新加的只有 DOM 照它原本的做法的 `RefCell` 欄位（送出的請求的記錄）、兩個 thread-local 的計數器，和第 6 條允許的 Network agent 的 `Rc`；沒有新的 `unsafe`。
 
 ## 動機
 
-**現況**（2026-11-23 照程式看的）：
+**原本**（2026-11-23 照程式看的）：
 
 - renderer 把 `Box<dyn FrameLayout>`（renderer 的 `Frame`）和 `Box<dyn LoadSink>` 交給 engine 擁有；呼叫 engine 時，engine 從 `RenderThread` 借出 `&mut`，這段期間借不到 `RenderThread` 的其他欄位。engine 要碰 renderer 的東西時只剩兩條路：
-  - **便條**：`FrameRequest`（`crates/dom_api/src/frame.rs`，九種）照它的註解是「after the call that made it so」才交給 renderer；renderer 在 `crates/renderer/src/render_thread.rs` 和 `render_thread/documents.rs` 共 19 處取出來處理（包括 `RenderThread::run` 的外圈）。外圈另外補做 `tell_frames`、`tell_dom_changes`、`run_intersection_task` 等。
-  - **共享**：`RendererLoadSink` 的 `RequestIds`、`DocumentLoaders`、`BlobUrls` 是 `Rc<RefCell<…>>`（`crates/renderer/src/loader.rs`）；DevTools 的 agent 是 `Rc`，因為 engine 的 inspector 在 `RenderThread` 借不到的時候也要用它們（`render_thread/devtools.rs` 的 `DevToolsQueueHandle`）。
+  - **便條**：`FrameRequest`（九種）在 engine 的呼叫返回之後才交給 renderer；renderer 在 19 處取出來處理（包括 `RenderThread::run` 的外圈），外圈另外補做 intersection 的通知、圖片和 script 的請求。
+  - **共享**：`RendererLoadSink` 的 `RequestIds`、`DocumentLoaders` 是 `Rc<RefCell<…>>`。
 - 結果是同一件事在兩邊各有一份，什麼時候對得上取決於外圈什麼時候跑到。
-- `dom_wasm` 沒有 `fetch()` 也沒有 load sink（`set_load_sink` 是空的），導覽只留便條。
 
-engine 也有同步呼叫 renderer 的路（建 iframe 時的 `FrameLayout::child_frame_created`、`LoadSink` 的 `start_fetch`、`frame_gone`、`register_blob_url`），哪些延後是逐項選的。延後的有三種原因（2026-11-23 的審查，`details.md` 的「審查」）：
-
-1. **處理時要用 renderer 留的副本**（A1、A3、A5）：`ChildFrames`、`FrameDocument.url`、DevTools 的 frame 清單；engine 執行中借不到 `RenderThread`。拿掉副本（讀 `dom`，或由 engine 當 hook 的參數帶過去）就不用借。
-2. **處理的過程會執行 script 或用 layout**：`javascript:` 網址的執行、iframe 移除之後的 `finish_load`（layout、圖片、`load`）。不管擁有權怎麼改，都不能在 engine 的呼叫中回頭做。
-3. **收尾點的位置**：外圈的收尾排在整批 task 之後；A2 只是 `did_receive_redirect` 沒有像 `did_receive_resource` 那樣先收尾。
-
-A4（捲動）可以用現有的 `FrameLayout` 加一個 hook 當場做（0109 的原型就是），A6（intersection）、`javascript:` 網址綁在文件上都不需要改擁有權。
+延後的有三種原因（`details.md` 的「審查」）：處理時要用 renderer 留的副本（A1、A3、A5），engine 執行中借不到 `RenderThread`；處理的過程會執行 script 或用 layout（`javascript:` 網址、iframe 移除之後的 `load`）；收尾點排在整批 task 之後（A2）。
 
 **問題**：
 
-- **不穩定的測試**：RFC 0109 的 A1 到 A6（`0109` branch 上的 `details.md`，`cb5930d`）。DevTools 收不到新 iframe 的 `CSS.styleSheetAdded`、`fetch()` 的 redirect 漏報和時間倒過來、`location.hash` 的捲動晚了兩個 frame、拿掉的 iframe 在 WebDriver 回錯的錯誤、intersection 的通知排錯順序。CI 上 2026-11-19 到 22 壞的多半是這些。
-- **網頁看得到**：同一份文件內的導覽之後，同一個 task 裡讀 `scrollY` 是舊的（Chrome 是新的；0109 的探針，Chrome 156 和 machopo 各量過）。
-- **順序靠收尾點維持**：19 處呼叫 `handle_frame_requests`，有的只是為了排在某件事之前（`SetHistoryOffsetAndLength` 的註解寫著不先處理會掉）。少一處就是下一個同類的 bug。
-- **該檢查的事落在兩邊之間**：別的 origin 的 `javascript:` 網址會在子 frame 裡執行，engine 只轉交、renderer 只執行，兩邊都沒比對 origin（2026-11-23 找到，`97262a6` 修了）。
-- **便條認的是 frame，不是文件**：等外圈的期間 frame 換了文件，舊文件的要求可能套到新文件上。2026-11-23 試了子 frame 和頂層兩條路沒有重現，擋住它的是剛好存在的收尾點，不是規則；其他 commit 的路沒有試。
+- **不穩定的測試**：RFC 0109 的 A1 到 A6（`0109` branch 上的 `details.md`，`cb5930d`）。DevTools 收不到新 iframe 的 `CSS.styleSheetAdded`、`fetch()` 的 redirect 漏報和時間倒過來、`location.hash` 的捲動晚了兩個 frame、拿掉的 iframe 在 WebDriver 回錯的錯誤、intersection 的通知排錯順序。
+- **網頁看得到**：同一份文件內的導覽之後，同一個 task 裡讀 `scrollY` 是舊的；拿掉 iframe 時不發 `pagehide`、`unload`；parent 的 `load` 晚到拿掉 iframe 的 task 之後。
+- **順序靠收尾點維持**：少一處收尾就是下一個同類的 bug。
+- **該檢查的事落在兩邊之間**：別的 origin 的 `javascript:` 網址曾在子 frame 裡執行（`97262a6` 修了）；便條認的是 frame 不是文件，等外圈的期間 frame 換了文件時，舊文件的要求可能套到新文件上。
 
-要解決的 `docs/limitations.md` 裡的限制：
-
-- 「導覽到同一份文件的 `#fragment` 之後，捲動等到 event loop 的最上層才排定、下一個 frame 才捲」。
-- 0109 的 branch 加的「renderer 忙的時候，有些事晚一輪才做」（還沒 merge 到 `main`）。
-
-**目標**：
-
-1. 盤點同一個 renderer 裡每一份重複的狀態和每一種延後的機制，對照 Blink 和 content 層，分成「跨 process，要留」「同一個 thread 的副本，拿掉」「該同步卻延後了」三類。
-2. 定規則：同一個 renderer 裡每份狀態只有一個擁有者；Blink 當下做的當下做；Blink 排成 task 的排成真的 task；DevTools 在改變的當下被告知；跨 process 的用訊息。
-3. 選一種擁有權的做法，照規則改，不加新的 `Rc`、`RefCell`（例外是 hook 拿 DevTools agent 的 `Rc`，已決定的事項第 6 條），現有的能拿掉就拿掉。
-
-**不在範圍內**：
-
-- 外圈的其他工作（timer、parser 的續跑、child 的 commit）搬進 scheduler：event loop 的改動，見「之後的可能」。
-- 跨 process 的狀態（Browser 的 session history 和 renderer 記的 index、length）：Chromium 也是兩份、靠訊息。
-- 導覽交給 Browser 的時機（RFC 0019 第 24、35 條：`location` 和 `history` 的導覽在 event loop 的最上層送）：盤點沒有找到它造成的問題，不改（已決定的事項第 8 條）。
-- 0109 的其他不穩定原因（B 類、port、啟動失敗時的 crash）和結束的流程。
+**不在範圍內**（已決定的事項第 7、8 條）：外圈的其他工作（timer、parser 的續跑、`srcdoc` 的 commit）搬進 scheduler；跨 process 的狀態（Browser 的 session history）；導覽交給 Browser 的時機；console、DOM 的變動和 frame 的事件交給 DevTools 的時機；DevTools agent 之間的 `Rc`、`BlobUrls`、worker thread 的 `Rc<RefCell>`；0109 的其他不穩定原因。
 
 ## 設計概要
 
-給之後改這部分程式的人：engine 裡的 DOM API 要讓 renderer 知道一件事時，直接呼叫 host 的 hook，呼叫返回時 renderer 的狀態已經更新，沒有「等一下才會發生」的便條；renderer 和 DevTools 要讀 frame 的樹、一份文件的 sheet 時，讀唯一的那一份。例如：
+給之後改這部分程式的人：engine 裡的 DOM API 要讓 renderer 知道一件事時，直接呼叫 host 的 hook，呼叫返回時 renderer 的狀態已經更新；renderer、WebDriver 和 DevTools 要讀 frame 的樹、文件的網址、載入狀態、送出的請求時，讀 `dom` 或 engine 那唯一的一份。例如：
 
 - `location.hash = 'x'` 返回時已經捲過去，同一個 task 讀 `scrollY` 是新的。
-- 插入 iframe 返回時 frame 已經建好，DevTools 已經收到 `frameAttached`；拿掉 iframe 返回時 frame 已經不在，下一個 WebDriver 指令是 `no such window`。
-- `fetch()` 返回時 Network agent 已經記下請求和送出的時間。
+- 插入 iframe 返回時 frame 已經建好，Browser 已經聽到；`iframe.remove()` 返回之前，它和子孫的 `pagehide`、`unload` 已經發了，frame 已經不在，parent 的 `load` 已經排了，下一個 WebDriver 指令是 `no such window`。
+- `fetch()`、`new Image().src = …`、插入的 `<script>` 在 Blink 送請求的時機送出，Network agent 在那時記下請求和時間。
 
-被同步呼叫的 renderer 不能回頭執行 script。Blink 在幾處是同步執行 script 的（iframe 移除時子 frame 的 unload、之後 parent 的 `CheckCompleted` 和 `load`；審查照 `local_frame.cc`、`frame_loader.cc`、`document.cc` 推的，沒有追完），machopo 的 hook 結構上做不到，這幾處的時機會和 Blink 不同，WPT 可能看得出來，要一處處決定。
+被同步呼叫的 renderer 不能回頭執行 script，也拿不到 `RenderThread` 的其他欄位。所以會執行 script 的步驟（unload、iframe 的 `load`、`javascript:` 網址）都在 `dom_api` 裡、由 engine 做；renderer 只留自己用的帳（parser、body、Browser 那裡的導覽），在每次呼叫 engine 之後對照 engine 的 frame（「frame」一節）。
 
 ## 詳細設計
 
-草稿：第 0 階段的評估之後才寫得定。三種擁有權的做法：
+### 擁有權：兩邊都要的在 `dom` 和 engine，hook 拿參數
 
-**做法一：engine 擁有 host 的物件**（現在的 `Frame` 就是這樣）。frame 的樹搬進兩個 engine 共用的 `dom`，renderer 照讀 DOM 的方式讀它（`engine.dom_mut().read(…)`）；renderer 自己的表放進 engine 擁有的 host 物件，renderer 要用時經過 engine 取回（`FrameLayout` 是 `Any`，renderer 已經這樣 downcast 它的 `Frame`）。不需要 `unsafe`。要回答的：renderer 同時要用 engine 和自己的表時，需要一個同時借出兩者的介面；哪些表放進哪個物件會牽動分層（例如 DevTools 的 agent）。
+第 0 階段在 `fetch()` 的登記上比了三種做法的原型（`details.md` 的「原型」，patch 在 `prototypes/`）：engine 擁有 host 的物件（V1）、每次呼叫時把 renderer 的狀態借給 engine（V2）、兩邊都要的放進 `dom`、engine 把 hook 要的當參數帶過去（V3）。選了做法三（已決定的事項第 5 條）：它是唯一沒有借出、拿回的執行期失敗的（換 engine 時 unload 裡的 `fetch()`，V2 panic、V1 的請求編號從 1 重來），也符合 Chromium 的分層（請求的記錄、frame 的樹、inspector 的 agent 都在 Blink core）。
 
-**做法二：每次呼叫時把 renderer 的狀態借給 engine**。`RenderThread` 拆成 engine 和其他欄位（host），呼叫寫成 `engine.run_…(&mut host, …)`；V8 的 callback 經過 isolate 拿到 host，借用的期限綁在 scope 上，和 `bindings` 現在借 engine 的狀態一樣（`crates/bindings/src/isolate_state.rs`：狀態在 isolate 的 data slot，只經過 isolate 借出，借著的時候不能呼叫 V8）。host 裡沒有 engine，所以被呼叫時不可能回頭執行 script：Blink 在執行期用 `ScriptForbiddenScope` 守的事，在這裡是編譯錯誤。要回答的：在 `bindings` 加有期限的借用要 `unsafe`，論證寫進 `crates/bindings/soundness.md`；`ScriptEngine` 的每個入口都要改，兩個 engine 和它們的測試都是；`RenderThread` 要拆欄位。小的先例是 `dom_api` 的 `LentLayout`（host 為 DevTools 的一次操作借出 layout）。
+- **請求**：每個 renderer thread 一個請求編號的計數器（`loader::next_request_id`，Blink 的 `CreateUniqueIdentifier`）；`fetch()`、圖片、DOM 排著的 script 送出的請求照編號記在 DOM（`SentFetch`、`SentImage`、`SentScript`），回應來時 renderer 查 DOM 的記錄；文件的 loader 和帶來它的導覽記在 DOM（`Cx::document_loader`）。
+- **hook 的參數**：engine 送請求時經過 `dom_api::load_origin` 組出 `FetchOrigin`（loader、frame 的 token、文件的網址、script 的 stack、parser 的行號、引用它的 sheet、import 它的 module），sink 用它告訴 Browser 和 DevTools，不用回頭查 renderer 的表。
+- **DevTools**：hook 可以拿 agent 的 `Rc`（已決定的事項第 6 條：agent 是同一個 thread 上的觀察者，沒開 DevTools 時先問 `enabled()`）。
+- **renderer 自己的**：只有 renderer 用的留在 renderer：`<link>` 的 sheet 細節（擋 render、擋 script 的旗標）、Browser 那裡的導覽和排著的 `srcdoc`、`about:` commit、parser 和 body、解碼。DOM 只記它判斷 `load` 要的：sheet 請求的編號、子 frame 的導覽進行中的旗標（第 13、15 條）。
 
-**做法三：兩邊都要的放進 `dom`，engine 把 hook 要的當參數帶過去**（2026-11-23 的審查提的）：frame 的樹、文件的 loader、`fetch()` 送出的請求這類兩邊都要讀的資料由 `dom` 擁有（Chromium 裡它們都在 Blink core：`ResourceFetcher`、inspector 的 agent、frame 的樹）；engine 呼叫 hook 時把 hook 要的帶過去（`FetchOrigin` 的推廣）；只有 renderer 自己用的資料由 renderer 擁有，不借給誰。請求的編號照 Blink 的 `CreateUniqueIdentifier`，每個 renderer 自己的計數器，誰要就取，不共享。
+### frame
 
-**第 0 階段的原型**（`details.md` 的「原型」）：三種做法都在 `fetch()` 的登記上做了，都修掉 A2、A3、都不需要 `unsafe`。做法二不必在 `bindings` 加有期限的借用：把狀態**移進** engine 擁有的 sink（取 engine 時借出、取狀態時拿回），不是借參照給 V8 的 callback。但借用檢查器只保證 slot 不會同時交出 engine 和狀態，不保證每條會執行 script 的路都借出了：本質上和 `RefCell` 一樣是執行期的檢查。審查找到、之後重現的：換 engine 時 unload 裡的 `fetch()`，做法二在 sink 的 `expect` panic（狀態在 unload 之前就拿回來了），做法一的請求編號從 1 重來（讀程式確認，沒有重現）。做法三沒有借出、拿回，這條路照樣正常。
+- **frame 的表只有 engine 一份**（第 11 條）：dom_js 的 `Frames`（id、token、parent、owner、文件、V8 context）和 `dom` 的 `content_document`、`frame_owner` 在同一個操作裡一起改。renderer、WebDriver 和 DevTools 經過 `ScriptEngine` 的 `frame_token`、`frame_of_token`、`frame_parent`、`child_frames` 查，renderer 的 `ChildFrames` 的樹和 token 拿掉了。
+- **建立和移除當場告訴外面**：Browser 經過 `dom_api::FrameClient`（Blink 的 `LocalFrameClient`，第 12 條）當場聽到 `DidCreateChildFrame`、`DidDetachFrame`；child view 經過 `FrameLayout::child_frame_created`、`child_frame_removed` 當場建立和移除，它的 compositor `DocumentId` 來自 thread-local 的計數器。
+- **renderer 的帳對照 engine**（第 22 條）：`FrameRequest` 不再有 `Created`、`Removed`。engine 有 frame 建了或不在了時記一個旗標（`take_frames_changed`），renderer 每次呼叫 engine 之後對帳（`follow_child_frames`）：engine 有、renderer 沒有 `FrameDocument` 的子 frame 補一份初始 `about:blank` 的，engine 已經沒有的 frame 的帳拿掉、還在路上的 `fetch()` 取消。對帳在任何東西用到之前，外面看不出差別；不在 hook 裡當場做，因為 hook 改 `RenderThread` 的狀態要 `Rc<RefCell>`。
 
-**不管哪一種都要處理的**（照程式看的）：
+### 文件的載入狀態和 `load`
 
-- **跑過 script 之後 frame 可能已經不在**：同步移除之後，每個會執行 script 的地方回來時都要容忍 frame 不見了；renderer 的 `self.children` 有 52 處要逐一看（`documents.rs` 50、`webdriver_commands.rs` 2；之前寫 59 多算了 DOM agent 自己的欄位）。Blink 為此到處檢查 detached，漏掉的歷史上常是記憶體錯誤；Rust 裡會是 `None` 或編譯錯誤。
-- **layout 已經借出時同步的 hook 會默默不做**：`LayoutCell` 的借用是 move，借出時拿到 `None`（`crates/dom_api/src/layout.rs`）。每個新的 hook 要證明或 assert 那時借得到，否則「晚一點做」變成「永遠沒做」。
-- **兩個 engine 都要做**：`dom_wasm` 的導覽只留便條（它沒有 `fetch()`）。
-- **DevTools 開著時的成本**：frame 一個個同步告知時不能每次重建整份清單（現在的清單是 frame 數的平方），要改成增量。一次插入很多 iframe 時不再批次處理。
-- **過渡期的順序**：一部分同步、一部分還在佇列時會交錯。文件的 loader 要先交給 `dom`，frame 才能同步建立（子 frame 初始的 `about:blank` 的 loader 現在是在 `Created` 的便條裡照 parent 設的）。
-- **frame 的樹放進 `dom`，實際是**（2026-11-23 第二次審查，`details.md` 的「審查」）：`dom` 擁有樹和 id（`FrameId` 要從 `dom_api` 往下搬，token 的型別要定），dom_js 留一張 FrameId 到 V8 context 的表（像 Blink 的 `LocalFrame` 和 `WindowProxy`）；`FrameView` 的 child view 保留巢狀、用 `FrameLayout` 的 hook 同步更新（建立的已經有，加一個移除的），不改成讀 `dom`；`Created` 的便條現在是 hook 沒做到時的補救（parent 的 view 不在、layout 被借走），拿掉之前要改成 assert 或證明做得到。
-- **移除當場完成，仍然有兩件延後**：parent 的 `finish_load`（要 renderer 的 readiness、sheet 和 layout），和 renderer 私有資料（`FrameDocument` 的 parser、body）的清理。外面看得到的（DevTools、Browser、WebDriver）改讀 `dom`；WebDriver 現在照 `self.children` 找 frame，不改讀 `dom` 的話 A5 還在。
-- **DevTools 的順序**：Blink 先送 `childNodeInserted`，才建 frame、送 `frameAttached`，`frameAttached` 又在 `executionContextCreated` 之前。machopo 的 DOM 變動在外圈才送；iframe 建立時 script 的 stack 要等 `note_request_stacks`，排在 `update_elements` 之後（`dom_js/src/state.rs`）。同步的 `frameAttached` 要先送出 DOM 的變動，並把這兩步的順序對調（沒有驗證能不能調）。
-- **hook 要拿 DevTools agent 的 `Rc`**：在改變的當下告訴 DevTools，hook 就要拿得到 agent（V3 的 sink 已經拿了 `Rc<NetworkAgent>`，frame 的要 Page 和 DOM agent），和目標第 3 條「不加新的 `Rc`」衝突，要明文決定。
+- **載入狀態在 DOM**（第 14、16 條）：`LoadProgress`（`Loading`、`Deferring`、`Parsed`、`LoadQueued`、`Loaded`）由 DOM 從 `readyState`、`DOMContentLoaded` 發過了、`load` 排了、「載入結束了」推出來。「載完了沒」是 `dom_api::check_completed`（Blink 的 `Document::CheckCompleted`、`ShouldComplete`）：文件是 `Parsed`、沒有在等的 sheet 請求、子 frame 都不在載入、沒有延後 `load` 的圖，就排 window 的 `load`。parent 的 `load` 照 HTML 排成 task，不照 Blink 在 `CheckCompleted` 裡同步發（第 20 條：同步發要讓每個呼叫的地方都能執行 script）。
+- **拿掉 iframe**（第 17、18 條，照 Chrome 的 `LocalFrame::DetachImpl`）：`dom_api` 先 unload（它和子孫的 `pagehide`、`unload`，各在自己的 realm，可以執行 script），再 discard，再當場 `check_completed(parent)`。unload 的期間，文件的 unload counter（HTML 的名字）大於 0，擋住在它裡面建子 frame 和導覽它（Chrome 的 `SubframeLoadingDisabler`、`FrameNavigationDisabler`），一直到子孫都 unload 完；導覽離開文件時的 unload 也一樣。
+- **iframe 的 `load`**（第 19 條，照 Chrome 的 `LocalDOMWindow::DispatchLoadEvent`）：子 frame 的 window `load` 的 task 發完 window 的 `load`，iframe 還連著、文件沒有被 discard 時接著在 iframe 上發 `load`，再設「載入結束了」、檢查 parent（`dom_api::lifecycle::end_load`）。在目前的 realm 直接發：dom_js 發事件時依賴 realm 的地方都照物件自己的。
+
+### 導覽
+
+- **捲到 fragment 在 engine 的呼叫裡做**：`dom_api` 的 `navigate` 找到目標（`fragment_target`）就經過 `FrameLayout::scroll_to_fragment` 捲（A4）；renderer 的文件網址的副本拿掉了，讀 DOM 的。
+- **`javascript:` 網址排在文件上**（第 23 條，照 Blink 的 `ProcessJavaScriptUrl`）：網址放進文件自己的清單，排一個綁在文件上的 element task 一次跑完（`dom_api::history::run_javascript_urls`）；discard 了的文件的 task 不跑；script 讓那份文件導覽到別處時清掉清單。`load` 不等清單：machopo 的 `load` 是 task，排著的網址本來就在之後才排的 `load` 之前跑，等只會把 `load` 推到那段 script 排的 task 後面（Blink 在 `ExecuteJavaScriptUrls` 裡同步發 `load`，在那些 task 之前，所以不等才和 Chrome 的順序一樣）。
+
+### intersection 的通知
+
+第一個 observer 有了 entry 時，DOM 排一個 element task 送出通知（Blink 的 `PostTaskToDeliverNotifications`），不再由 renderer 在外圈補做（A6）。A6 的原因在寫必壞的測試時確定：一個 frame 算出 entry 之後，通道上排著的 task 讓外圈晚到下一個 frame 的 `requestAnimationFrame` 之後。
+
+### 請求在 Blink 的時機送出
+
+- **`fetch()`** 在呼叫的當下經過 `LoadSink::start_fetch` 送，同時告訴 Network agent（A2、A3；第 10 條）；取消也在 sink 當場做；文件換掉時取消它和它的 frame 還在路上的 `fetch()`（Chrome 在 execution context 不在時取消）。
+- **圖片**在 DOM 的圖片 microtask 之後、**DOM 排著的 script**（不是 parser 自己的）在每次 binding 呼叫的結尾和 module graph 要它時，經過 `LoadSink::start_image_fetch`、`start_script_fetch` 送（第 24 條；Blink 的 `ImageLoader` 在 microtask、`ScriptLoader::PrepareScript` 在 prepare 的當下送）。兩個 engine 共用 `dom_api::send_image_fetches`、`send_script_fetches`。背景圖照樣由 renderer 在它的 style 更新之後送（Blink 也在 style recalc 裡找到它們）。
+- **撤銷了的 blob URL**：請求在內圈就送，比外圈的撤銷先到 Browser，所以 renderer 的 sink 先查，排一個 Browser 會給的網路錯誤（`ERR_FILE_NOT_FOUND`）。導覽還沒有這一步（`docs/limitations.md`，「之後的可能」）。
+- **DevTools 的 initiator** 要的 parser 行號記在 DOM 的元素上，送出時取一次。
+
+### 外圈剩下的
+
+外圈還在，但只剩排程的角色（timer、parser 的續跑、`srcdoc` 和 `about:` 的 commit、DevTools 的 frame 事件和 DOM 的變動），不再拿來補狀態。frame 的 DevTools 事件（`frameAttached`……）照樣在外圈送（第 6 條），記在 `docs/limitations.md`。
 
 ### 測試
 
-- 0109 寫的放大版測試（A1 到 A5 的必壞測試）照規則變成必過；0109 的五個探針和 Chrome 一樣。A6 的原因是推論，先寫出必壞的測試。
-- 每個同步的 hook 有測試，跑 mutation test。
-- 計數的測試：一次插入很多 iframe 時，DevTools 收到的通知和做的工作是線性的。
-- 相關的 WPT 目錄：導覽、iframe、history、fetch。
-- 動到 `bindings` 的 `unsafe` 時，`matrix` 和 `fuzz` 由 CI 跑（`gc.yml` 手動開始一次）。
+驗收和做過的檢查在 `progress.md`。A1 到 A6 和這份改的每件網頁看得到的事，各有一個在原本的程式上必壞的測試（A6、parent 的 `load`、unload 的期間擋的事、`javascript:` 網址的取消和順序……）；每一步跑 mutation test，沒抓到的寫進 `docs/test-gaps.md`；相關的 WPT 目錄每一步跑。
 
 ### 分階段
 
-0. **評估，不改產品**：
-   - 盤點：每一份副本、每一種便條和外圈的收尾、每一個為了共享而用的 `Rc`、`RefCell`，各自對照 Blink 和 content 層，分成目標第 1 條的三類，寫成 `details.md` 的表。
-   - 原型：三種做法在同一條路上各做一個：`fetch()` 的登記（已決定的事項第 2 條），patch 放在 `prototypes/`（第 3 條）。記下借用切不切得開、要不要 `unsafe`、改了多少、兩個 engine 各要做什麼。
-   - 交給使用者決定做法和範圍。
-1. 之後的階段照已決定的事項第 7 條的六步（文件的 loader 要在 frame 的樹之前，「不管哪一種都要處理的」）。每一步各自測試、mutation test、審核。
+0. **評估，不改產品**：盤點、三種做法的原型、兩次審查，交給使用者決定（第 1 到 7 條）。
+1. **實作**：照第 7 條的六步，第 2 步分成 2a 到 2f（第 11、21 條），第 6 步分成 6a 到 6c（第 24 條），每一步各自測試、mutation test、commit。
 
 ## 缺點
 
-- 大重構：`dom`、`dom_api`、`dom_js`、`dom_wasm`、renderer。
-- 回歸的風險集中在 frame 的生命週期：frame 當場不見之後的每一條路；導覽和 iframe 的 WPT 最可能變動，整套只有 CI 跑。
-- 做法二是執行期的借出和拿回，用錯時是 panic（原型裡換 engine 時就碰到了）。做法三沒有這一類，但 `dom` 多了 host 讀的記錄（`fetch()` 送出的請求），renderer 要經過 engine 讀。
-- 每次操作變重，不再批次；DevTools 開著時要增量的通知。
-- RFC 0109 的 2-1 要等這份。
+- 大重構：`dom`、`dom_api`、`dom_js`、`dom_wasm`、`html`、renderer。
+- `dom` 多了 host 讀的記錄（送出的請求、sheet 請求的編號、導覽進行中的旗標），renderer 要經過 engine 讀。
+- renderer 的帳在呼叫 engine 之後才對照 engine 的 frame，不在 hook 裡當場（不加 `Rc<RefCell>` 的代價）；中間沒有東西讀它，外面看不出差別，但要記得每次呼叫 engine 之後對帳。
+- 拿掉 iframe 時會執行 script（unload），之後的程式要容忍 frame 和文件不在；unload counter 擋的事要照 Chrome 一條條加。
+- 請求在內圈送出之後，比外圈的事（blob URL 的撤銷）先到 Browser，要在 renderer 補檢查。
 
 ## 理由和其他做法
 
-在 RFC 0109 的 2-1 比較過（`0109` branch 上的 `README.md`，`cb5930d`）：
-
-- **每個 task 之後收尾**：放大的測試修得掉，但同一個 task、同一次 rendering、連著的 timer 照樣看到舊狀態，五個探針只有一個和 Chromium 一樣。
+- **擁有權的另外兩種做法**：見「擁有權：兩邊都要的在 `dom` 和 engine，hook 拿參數」和第 4、5 條（做法一的狀態跟著 engine 走，engine 的生命週期每一處都要另外處理；做法二的借出、拿回是執行期的檢查，和 `RefCell` 同一類）。
+- **每個 task 之後收尾**（RFC 0109 的 2-1 比較過）：放大的測試修得掉，但同一個 task、同一次 rendering 照樣看到舊狀態，五個探針只有一個和 Chromium 一樣。
 - **讀之前先補**：漏一處就是下一個同類的 bug。
-- **逐個改成同步、不動擁有權**：方向和這份一樣，但搬不動的狀態只能再加 `Rc<RefCell>`，正是這份要避免的；成本也主要在這裡，所以拆成這份 RFC 先評估擁有權（原型 V0 就是這樣，多了一張共享的表）。
-- **集中收尾**（審查提的）：每次呼叫 engine 之後收尾一次（例如包一層 `with_engine`），19 個收尾點就不再各自脆弱。修得掉收尾點排錯的那一類（A2），修不掉同一個 task 裡看到舊狀態的那一類（A4）；可以和這份的做法並用，處理會執行 script、不能同步的那幾項。
-- **不做**：A 類繼續不穩定（2026-11-23 起維持現狀，不做過渡），同類的 bug 繼續長出來。
+- **逐個改成同步、不動擁有權**：搬不動的狀態只能再加 `Rc<RefCell>`（原型 V0 就是這樣，多了一張共享的表）。
+- **集中收尾**（每次呼叫 engine 之後收尾一次）：修得掉收尾點排錯的那一類（A2），修不掉同一個 task 裡看到舊狀態的那一類（A4）。renderer 的帳對照 engine 用的就是這個位置，但只補 renderer 自己用的帳。
+- **便條只留給 renderer 自己的帳**（第 11 條沒選的）：A1、A5 修得掉，但 parent 的 `load` 晚到移除的 task 之後，renderer 還要保留便條。
 
 ## 先例
 
-- **Chromium**：renderer 裡也有兩層，Blink（`LocalFrame`、DOM、inspector 的 agent）和 content 層（`RenderFrameImpl`），在同一個 thread 上。Blink 要讓 content 層知道一件事時當場呼叫 `WebLocalFrameClient`，不留便條；DevTools 的 agent 由 `probe::` 在改變的當下呼叫，CSS agent 列 sheet 時直接讀 document（`inspector_css_agent.cc`），請求送出的當下就告訴 Network agent（`resource_load_observer_for_frame.cc`）；同一份文件內的導覽同步 commit（`FrameLoader::StartNavigation`）；跨 process 的用 mojo 的訊息。以上對過 152.0.7977.82 的原始碼。Blink 靠 raw pointer 和 Oilpan 互相指，同步呼叫沒有借用的問題，代價是到處檢查 frame 還在不在，以及執行期的 `ScriptForbiddenScope`。
-- **分層**（2026-11-23 的審查更正）：這份要處理的狀態，在 Chromium 都在 Blink core，不在 content 層：請求的編號（`CreateUniqueIdentifier`，一個 process 的 atomic 計數器，`unique_identifier.cc`，對過）、`fetch()` 的記錄（`ResourceFetcher`、`FetchManager`）、Network、Page、CSS 的 inspector agent、frame 的樹。照 Chromium 的分層它們在 machopo 的 `dom` 和 engine 那一側，支持做法三，不支持「renderer 擁有、借給 engine」。另外，Blink 的同步呼叫可以重入：content 層被呼叫時可能執行 script（`CheckCompletedInternal` 的註解），machopo 的 hook 不行（「設計概要」的最後一段）。
+- **Chromium**：renderer 裡也有兩層，Blink（`LocalFrame`、DOM、inspector 的 agent）和 content 層（`RenderFrameImpl`），在同一個 thread 上。Blink 要讓 content 層知道一件事時當場呼叫 `LocalFrameClient`，不留便條；DevTools 的 agent 由 `probe::` 在改變的當下呼叫，請求送出的當下就告訴 Network agent（`resource_load_observer_for_frame.cc`）；同一份文件內的導覽同步 commit；跨 process 的用 mojo 的訊息。這份要處理的狀態在 Chromium 都在 Blink core，不在 content 層（請求的編號、`ResourceFetcher`、inspector 的 agent、frame 的樹），照這個分層它們在 machopo 的 `dom` 和 engine 那一側。Blink 靠 raw pointer 和 Oilpan 互相指，同步呼叫沒有借用的問題，代價是到處檢查 frame 還在不在，以及執行期的 `ScriptForbiddenScope`；Blink 的同步呼叫可以重入（content 層被呼叫時可能執行 script），machopo 的 hook 不行，會執行 script 的步驟因此都在 `dom_api`。以上對過 152.0.7977.82 和 Chromium main 的原始碼（各條已決定的事項寫了對過哪些）。
 - 其他瀏覽器沒有對照。
 
 ## 已決定的事項
@@ -170,6 +157,7 @@ A4（捲動）可以用現有的 `FrameLayout` 加一個 hook 當場做（0109 �
 
 ## 之後的可能
 
-- 把外圈的其他工作（DOM 的 task 和 timer、parser 的續跑、`srcdoc` 的 commit、iframe 晚到的 `load`）搬進 scheduler，讓它們都是真的 task：通道上不斷有 task 時，外圈的工作現在都會晚。排在這份之後（已決定的事項第 7 條）。
+- 把外圈的其他工作（timer、parser 的續跑、`srcdoc` 的 commit）搬進 scheduler，讓它們都是真的 task：通道上不斷有 task 時，外圈的工作現在都會晚。排在這份之後（已決定的事項第 7 條）。
 - console、DOM 的變動和 frame 的事件在改變的當下交給 DevTools（已決定的事項第 6 條沒選的那一項）：先驗證 iframe 建立時取 stack 和建 frame 的順序能不能對調。
 - 導覽在呼叫的當下交給 Browser（照 Chromium）。
+- 導覽照 Chrome 帶著解析好的 blob（`BlobURLToken`）：先撤銷再導覽的失敗、撤銷之後重新載入的成功，兩個都修掉（2026-11-23 評估過，不在這份做：它是 blob URL 的生命週期，和擁有權無關，也不是不穩定的原因；只帶「撤銷了沒」的做法修不了重新載入）。

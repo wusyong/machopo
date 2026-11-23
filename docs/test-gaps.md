@@ -143,6 +143,7 @@
 
 | 項目 | 為什麼還沒有測試 | 現在靠什麼 | 之後怎麼處理 |
 | --- | --- | --- | --- |
+| 文件的 parser 中止時先設「host 結束了它的載入」（`renderer` 的 `documents.rs` 的 `document_aborted` 的 `set_load_ended`；拿掉時中止的文件的 `readyState` 是 complete、沒有排 `load`，`load_progress` 照樣推成 `Loaded`） | 差別只在中止時 interactive 的 `readystatechange` 的 handler 執行的期間：那時 parent 被判斷（handler 拿掉 parent 的另一個 iframe），子 frame 看起來還在載入；測試要一個 body 收到一半中斷、handler 裡拿掉兄弟 iframe 的子 frame，parent 的 `load` 要在那時就排 | 審查 | 照上面的寫法補 `shell` 的測試 |
 | 子 frame 載完時當場檢查 parent（`dom_api` 的 `lifecycle.rs` 的 `end_load` 的 `check_parent_completed`；parent 的 `load` 的 task 在子 frame 的 `load` 的 task 裡排） | 拿掉時 renderer 在那一批 task 跑完之後照樣對每個 frame 判斷（`run_due_tasks` 的 `finish_loads`），差別只在同一批裡、子 frame 的 `load` 之後才跑的 task 排的 task 和 parent 的 `load` 的先後；排不出那樣的一批 | 審查 | headless 在一批 task 裡照順序跑兩個 frame 的 task 的 hook，或 renderer 不再在一批之後替每個 frame 判斷時（之後拿掉那個判斷的話）就有測試抓得到 |
 | 只剩圖片在等時，送出圖片的請求之後再判斷一次 `load`（`renderer` 的 `documents.rs` 的 `finish_load` 的第二次 `check_completed`；撤銷了的 blob URL 的圖片在送的時候就失敗） | 拿掉時 `load` 只是延到下一個 task 跑完（`run_due_tasks` 對每個 frame 再判斷一次），測試的頁面之後總有 task；要一個之後完全沒有 task 的頁面 | 審查 | headless 在文件不再有 task 時停下、看 `load` 發了沒，或測試能數 `finish_load` 判斷了幾次 |
 | 子 frame 的文件在 parser 做出 body 之前不畫（`renderer` 的 `documents.rs` 的 `commit_child` 裡 commit 時的 `update_child_blocking`；拿掉就先畫出只有 `<head>` 的文件） | headless 的 `render` 只回最後一張 frame 和畫了幾張，parent 的 frame 照樣在畫，看不出子 frame 在暫停的期間畫了什麼 | 審查；main frame 的同樣的判斷有 `shell` 的 `a_document_is_drawn_once_it_has_a_body` | 情境裡在子 frame 的 body 暫停時截圖，或 headless 記下每一張 frame 在某一點的顏色 |
@@ -281,6 +282,7 @@
 **renderer 對照 engine 的 frame（`documents.rs` 的 `follow_child_frames`）**
 
 - 子 frame 換文件時（`commit_child`）不在 `create_window` 之後當場對帳：接著 parse 新的文件時的 `handle_frame_requests` 照樣對帳，中間只有這個 frame 自己的 `update_child_blocking` 和 `request_main_frame`，沒有東西推動舊文件裡的 frame。留著是讓舊的帳在最早的時候拿掉，不靠之後一定有 `handle_frame_requests`。
+- 文件的載入中止或載完時，engine 已經沒有它的 frame 就當成最上層的（`place_of` 改成 `Some(child_parent(frame))`）：推論走不到：iframe 拿掉之後它的文件不再 fully active，window 的 `load` 的 task 不跑；被丟掉的導覽在 `navigation_dropped` 一開始就因為查不到 frame 返回。沒有證明。
 
 **`dom_api` 的 unload counter 和文件的載入（`lifecycle.rs`）**
 

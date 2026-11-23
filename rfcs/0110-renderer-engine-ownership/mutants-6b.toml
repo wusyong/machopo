@@ -60,15 +60,17 @@ to = '''            && parsed.scheme() == "blob"
 
 [[mutant]]
 name = "no loader for an initial about:blank whose iframe went"
-file = "crates/dom_api/src/image.rs"
-from = '''                .or_else(|| cx.document_loader(frame_document.as_ref()?.get(cx.gc)));'''
-to = '''                .or_else(|| frame_document.as_ref().and(None));'''
+file = "crates/dom_api/src/engine.rs"
+from = '''            .or_else(|| cx.document_loader(frame_document?.get(cx.gc)));'''
+to = '''            .or_else(|| frame_document.and(None));'''
 
 [[mutant]]
 name = "an image's request from no origin"
 file = "crates/renderer/src/render_thread/documents.rs"
-from = '''        request.initiator = request_origin.map(String::from);'''
-to = '''        request.initiator = request_origin.map(String::from).filter(|_| false);'''
+from = '''        let mut request = ResourceRequest::new(url, RequestDestination::Image);
+        request.initiator = request_origin.map(String::from);'''
+to = '''        let mut request = ResourceRequest::new(url, RequestDestination::Image);
+        request.initiator = request_origin.map(String::from).filter(|_| false);'''
 
 [[mutant]]
 name = "a wasm document's images never sent"

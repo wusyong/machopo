@@ -31,7 +31,9 @@ to = '''        let _ = (RendererHostMsg::DidCreateChildFrame {'''
 [[mutant]]
 name = "the browser not told of a frame gone"
 file = "crates/renderer/src/render_thread/documents.rs"
-from = '''        let _ = self.to_browser.send(RendererHostMsg::DidDetachFrame { frame });'''
+from = '''        let _ = self
+            .to_browser
+            .send(RendererHostMsg::DidDetachFrame { frame });'''
 to = '''        let _ = RendererHostMsg::DidDetachFrame { frame };'''
 
 [[mutant]]

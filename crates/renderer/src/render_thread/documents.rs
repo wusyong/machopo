@@ -4,10 +4,11 @@
 //! scripts (`html::parser::Parser`), its parser-blocking and deferred
 //! classic scripts run in order (an external one fetched first, none while
 //! a stylesheet blocks scripts), the DOM's other external scripts fetched
-//! for it (`Dom::take_script_fetches`), shown by its own frame
-//! view (`FrameView`: style, layout and paint of the DOM), told
-//! to DevTools' `Page` agent as the main frame; its iframes' child frames
-//! load and show their documents alike (`ChildFrames`).
+//! as the engine sends them (`RendererLoadSink::start_script_fetch`),
+//! shown by its own frame view (`FrameView`: style, layout and paint of
+//! the DOM), told to DevTools' `Page` agent as the main frame; its
+//! iframes' child frames load and show their documents alike
+//! (`ChildFrames`).
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -43,8 +44,8 @@ use crate::svg_image::SvgImage;
 use crate::task_queue::TaskQueues;
 use crate::{document, encoding};
 
-/// A committed document of the DOM: its navigation and URL, its
-/// parser until the input is all parsed, its parser-blocking script and
+/// A committed document of the DOM: its navigation (its URL is the
+/// DOM's, `document_url`), its parser until the input is all parsed, its parser-blocking script and
 /// deferred scripts. A child frame's parent and iframe are the engine's
 /// (`RenderThread::child_parent`).
 pub(super) struct FrameDocument {
@@ -245,7 +246,8 @@ impl FrameDocument {
     }
 }
 
-/// What the renderer has of the DOM's child frames (`FrameRequest::Created`):
+/// What the renderer has of the DOM's child frames (the engine's, followed
+/// by `follow_child_frames`):
 /// the documents loading in them, and the navigations the browser has for
 /// them. Which frames there are, their parents, iframes and tokens, are the
 /// engine's (`RenderThread::child_parent`, `child_token`).
@@ -1079,8 +1081,8 @@ impl RenderThread {
     /// reload go to the browser (`BeginNavigation`, Blink's
     /// `LocalFrameHost`), as do a traversal and a scroll restoration mode
     /// (its session history), but a child frame's to an `about:` URL, which
-    /// commits here; one within the document scrolls to the fragment, if
-    /// it is to, and the browser hears of it.
+    /// commits here; one within the document was scrolled to its fragment
+    /// in the engine's call already, and the browser hears of it.
     fn frame_navigated(
         &mut self,
         frame: FrameId,
@@ -1093,7 +1095,6 @@ impl RenderThread {
             .as_ref()
             .is_some_and(|next| next.frame == frame);
         match navigation {
-            // A `javascript:` URL's script runs in the frame.
             FrameNavigation::To { url, replace } if top => {
                 let kind = protocol::renderer::BeginNavigationKind::To { url, replace };
                 self.begin_navigation(frame, initiator, kind);

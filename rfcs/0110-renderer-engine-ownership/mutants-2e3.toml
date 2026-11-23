@@ -18,7 +18,13 @@ to = '''        if cx.is_discarded(document) {'''
 [[mutant]]
 name = "no iframe load"
 file = "crates/dom_api/src/lifecycle.rs"
-from = '''    fire_event(host, &TargetRoot::Node(owner.clone()), event::LOAD, false, false);'''
+from = '''    fire_event(
+        host,
+        &TargetRoot::Node(owner.clone()),
+        event::LOAD,
+        false,
+        false,
+    );'''
 to = ''''''
 
 [[mutant]]

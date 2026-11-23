@@ -41,5 +41,7 @@ to = '''            url.and_then(|_| None)
 [[mutant]]
 name = "the URL before a top-level commit not the document's then"
 file = "crates/renderer/src/render_thread/documents.rs"
-from = '''        let kept_url = replaced.is_none().then(|| self.top_document_url()).flatten();'''
-to = '''        let kept_url = replaced.is_none().then(|| None).flatten();'''
+from = '''            .then(|| self.top_document_url())
+            .flatten();'''
+to = '''            .then(|| None)
+            .flatten();'''

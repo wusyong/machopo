@@ -63,8 +63,8 @@ pub enum FrameRequest {
     /// Script navigated `frame` (`location`, `history`), as script in
     /// `initiator` asked (`frame` itself for what isn't asked by another):
     /// to another document, its host loads it (the top-level frame's, the
-    /// browser); within its document, it happened (the host scrolls, the
-    /// top-level frame's session history hears of it).
+    /// browser); within its document, it happened, its fragment scrolled
+    /// to already (the top-level frame's session history hears of it).
     Navigation {
         frame: FrameId,
         initiator: FrameId,
