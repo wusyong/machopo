@@ -102,7 +102,8 @@ fn a_fresh_response_answers_without_the_network() {
 fn heuristic_freshness_from_last_modified() {
     let server = server(&[(
         "/i",
-        Route::ok("image/png", "pixels").with_header("Last-Modified", "Mon, 01 Jan 2024 00:00:00 GMT"),
+        Route::ok("image/png", "pixels")
+            .with_header("Last-Modified", "Mon, 01 Jan 2024 00:00:00 GMT"),
     )]);
     let network = network();
     body(&network, image(&server.url("/i")));
@@ -151,7 +152,10 @@ fn a_stale_one_is_validated_and_a_304_answers_with_it() {
     assert_eq!(again.head.status, 200);
     assert_eq!(again.body.to_vec(), b"pixels");
     assert_eq!(hits(&server, "/i"), 2);
-    assert_eq!(sent(&server, "/i", 1, "if-none-match").as_deref(), Some("\"v1\""));
+    assert_eq!(
+        sent(&server, "/i", 1, "if-none-match").as_deref(),
+        Some("\"v1\"")
+    );
     assert_eq!(
         sent(&server, "/i", 1, "if-modified-since").as_deref(),
         Some("Mon, 01 Jan 2024 00:00:00 GMT")
@@ -191,7 +195,10 @@ fn a_304_that_says_no_store_drops_the_entry() {
     // The second was validated and answered; the third had nothing to
     // validate.
     assert_eq!(hits(&server, "/i"), 3);
-    assert_eq!(sent(&server, "/i", 1, "if-none-match").as_deref(), Some("\"v1\""));
+    assert_eq!(
+        sent(&server, "/i", 1, "if-none-match").as_deref(),
+        Some("\"v1\"")
+    );
     assert_eq!(sent(&server, "/i", 2, "if-none-match"), None);
 }
 
@@ -330,12 +337,37 @@ fn request_headers_say_how_the_cache_is_used() {
     body(&network, image(&url));
     assert_eq!(hits(&server, "/i"), 2);
     // `max-age=0`: validated.
-    body(&network, with_header(image(&url), "cache-control", "max-age=0"));
+    body(
+        &network,
+        with_header(image(&url), "cache-control", "max-age=0"),
+    );
     assert_eq!(hits(&server, "/i"), 3);
-    assert_eq!(sent(&server, "/i", 2, "if-none-match").as_deref(), Some("\"v1\""));
+    assert_eq!(
+        sent(&server, "/i", 2, "if-none-match").as_deref(),
+        Some("\"v1\"")
+    );
     // `If-Match`: past the cache.
     body(&network, with_header(image(&url), "if-match", "\"v1\""));
     assert_eq!(hits(&server, "/i"), 4);
+    // `Range`: past it too, the cache keeping no part of the resource.
+    body(&network, with_header(image(&url), "range", "bytes=0-1"));
+    assert_eq!(hits(&server, "/i"), 5);
+}
+
+#[test]
+fn a_part_of_the_resource_isnt_kept() {
+    let server = server(&[(
+        "/i",
+        Route::new(206, "012")
+            .with_header("Content-Type", "image/png")
+            .with_header("Content-Range", "bytes 0-2/5")
+            .with_header("Cache-Control", "max-age=60"),
+    )]);
+    let network = network();
+    let url = server.url("/i");
+    assert_eq!(body(&network, image(&url)), b"012");
+    assert_eq!(body(&network, image(&url)), b"012");
+    assert_eq!(hits(&server, "/i"), 2);
 }
 
 #[test]
@@ -351,8 +383,11 @@ fn the_callers_own_validation_goes_out_and_updates_the_entry() {
     let url = server.url("/i");
     body(&network, image(&url));
     // Its own validators: out as it is, and the caller gets the 304.
-    let response = load(&network, with_header(image(&url), "if-none-match", "\"v1\""))
-        .expect("it loads");
+    let response = load(
+        &network,
+        with_header(image(&url), "if-none-match", "\"v1\""),
+    )
+    .expect("it loads");
     assert_eq!(response.head.status, 304);
     assert_eq!(hits(&server, "/i"), 2);
     // The 304 freshened the entry.
@@ -370,8 +405,11 @@ fn the_callers_own_validation_of_nothing_stored_isnt_kept() {
     )]);
     let network = network();
     let url = server.url("/i");
-    let response = load(&network, with_header(image(&url), "if-none-match", "\"other\""))
-        .expect("it loads");
+    let response = load(
+        &network,
+        with_header(image(&url), "if-none-match", "\"other\""),
+    )
+    .expect("it loads");
     assert_eq!(response.head.status, 200);
     body(&network, image(&url));
     assert_eq!(hits(&server, "/i"), 2);
@@ -415,7 +453,10 @@ fn a_head_answered_whole_drops_the_entry() {
     let mut head = image(&server.url("/i"));
     head.method = "HEAD".to_owned();
     load(&network, head).expect("it loads");
-    assert_eq!(sent(&server, "/i", 1, "if-none-match").as_deref(), Some("\"v1\""));
+    assert_eq!(
+        sent(&server, "/i", 1, "if-none-match").as_deref(),
+        Some("\"v1\"")
+    );
     // Nothing left to validate.
     body(&network, image(&server.url("/i")));
     assert_eq!(sent(&server, "/i", 2, "if-none-match"), None);
@@ -449,8 +490,14 @@ fn a_body_in_its_coding_is_kept_so_and_undone_again() {
             .with_header("Cache-Control", "max-age=60"),
     )]);
     let network = network();
-    assert_eq!(body(&network, image(&server.url("/i"))), b"pixels, compressed");
-    assert_eq!(body(&network, image(&server.url("/i"))), b"pixels, compressed");
+    assert_eq!(
+        body(&network, image(&server.url("/i"))),
+        b"pixels, compressed"
+    );
+    assert_eq!(
+        body(&network, image(&server.url("/i"))),
+        b"pixels, compressed"
+    );
     assert_eq!(hits(&server, "/i"), 1);
 }
 
@@ -523,8 +570,14 @@ fn validate_cache_validates_a_fresh_one_and_says_max_age_0() {
     let validate = flagged(&server.url("/i"), |f| f.validate_cache = true);
     assert_eq!(body(&network, validate), b"pixels");
     assert_eq!(hits(&server, "/i"), 2);
-    assert_eq!(sent(&server, "/i", 1, "if-none-match").as_deref(), Some("\"v1\""));
-    assert_eq!(sent(&server, "/i", 1, "cache-control").as_deref(), Some("max-age=0"));
+    assert_eq!(
+        sent(&server, "/i", 1, "if-none-match").as_deref(),
+        Some("\"v1\"")
+    );
+    assert_eq!(
+        sent(&server, "/i", 1, "cache-control").as_deref(),
+        Some("max-age=0")
+    );
 }
 
 #[test]
@@ -532,11 +585,20 @@ fn bypass_cache_doesnt_read_but_keeps_and_says_no_cache() {
     let server = server(&[("/i", fresh_route())]);
     let network = network();
     body(&network, image(&server.url("/i")));
-    body(&network, flagged(&server.url("/i"), |f| f.bypass_cache = true));
+    body(
+        &network,
+        flagged(&server.url("/i"), |f| f.bypass_cache = true),
+    );
     assert_eq!(hits(&server, "/i"), 2);
     assert_eq!(sent(&server, "/i", 1, "if-none-match"), None);
-    assert_eq!(sent(&server, "/i", 1, "pragma").as_deref(), Some("no-cache"));
-    assert_eq!(sent(&server, "/i", 1, "cache-control").as_deref(), Some("no-cache"));
+    assert_eq!(
+        sent(&server, "/i", 1, "pragma").as_deref(),
+        Some("no-cache")
+    );
+    assert_eq!(
+        sent(&server, "/i", 1, "cache-control").as_deref(),
+        Some("no-cache")
+    );
     // What it got is kept.
     body(&network, image(&server.url("/i")));
     assert_eq!(hits(&server, "/i"), 2);
@@ -548,8 +610,14 @@ fn a_headers_no_cache_sends_no_more_headers() {
     // doesn't (Chromium's network transaction sees the request's flags).
     let server = server(&[("/i", fresh_route())]);
     let network = network();
-    body(&network, with_header(image(&server.url("/i")), "pragma", "no-cache"));
-    assert_eq!(sent(&server, "/i", 0, "pragma").as_deref(), Some("no-cache"));
+    body(
+        &network,
+        with_header(image(&server.url("/i")), "pragma", "no-cache"),
+    );
+    assert_eq!(
+        sent(&server, "/i", 0, "pragma").as_deref(),
+        Some("no-cache")
+    );
     assert_eq!(sent(&server, "/i", 0, "cache-control"), None);
     // Nor one past the cache.
     let mut untrusted = with_header(image(&server.url("/i")), "pragma", "no-cache");
@@ -559,19 +627,37 @@ fn a_headers_no_cache_sends_no_more_headers() {
 }
 
 #[test]
-fn the_flags_header_takes_the_place_of_the_requests_own() {
+fn the_requests_own_header_stays_in_place_of_the_flags() {
     let server = server(&[("/i", fresh_route())]);
     let network = network();
+    // The request's values, each alone, and the one it didn't give added.
+    let values = |n: usize, header: &str| -> Vec<String> {
+        server
+            .requests()
+            .iter()
+            .filter(|request| request.target == "/i")
+            .nth(n)
+            .unwrap()
+            .headers
+            .iter()
+            .filter(|(name, _)| name == header)
+            .map(|(_, value)| value.clone())
+            .collect()
+    };
     let bypass = flagged(&server.url("/i"), |f| f.bypass_cache = true);
     body(&network, with_header(bypass, "Cache-Control", "max-age=5"));
-    let request = &server.requests()[0];
-    let cache_control: Vec<&str> = request
-        .headers
-        .iter()
-        .filter(|(name, _)| name == "cache-control")
-        .map(|(_, value)| value.as_str())
-        .collect();
-    assert_eq!(cache_control, ["no-cache"]);
+    assert_eq!(values(0, "cache-control"), ["max-age=5"]);
+    assert_eq!(values(0, "pragma"), ["no-cache"]);
+    let bypass = flagged(&server.url("/i"), |f| f.bypass_cache = true);
+    body(&network, with_header(bypass, "Pragma", "x"));
+    assert_eq!(values(1, "pragma"), ["x"]);
+    assert_eq!(values(1, "cache-control"), ["no-cache"]);
+    let validate = flagged(&server.url("/i"), |f| f.validate_cache = true);
+    body(
+        &network,
+        with_header(validate, "Cache-Control", "max-age=5"),
+    );
+    assert_eq!(values(2, "cache-control"), ["max-age=5"]);
 }
 
 #[test]
@@ -579,8 +665,11 @@ fn an_empty_validator_goes_past_the_cache() {
     let server = server(&[("/i", fresh_route())]);
     let network = network();
     body(&network, image(&server.url("/i")));
-    let response = load(&network, with_header(image(&server.url("/i")), "if-none-match", ""))
-        .expect("it loads");
+    let response = load(
+        &network,
+        with_header(image(&server.url("/i")), "if-none-match", ""),
+    )
+    .expect("it loads");
     assert_eq!(response.head.status, 200);
     assert_eq!(hits(&server, "/i"), 2);
 }
@@ -608,7 +697,10 @@ fn skip_cache_validation_uses_a_stale_one_unless_vary_differs() {
     });
     body(&network, both);
     assert_eq!(hits(&server, "/i"), 1);
-    body(&network, with_header(image(&server.url("/v")), "x-mode", "a"));
+    body(
+        &network,
+        with_header(image(&server.url("/v")), "x-mode", "a"),
+    );
     body(&network, with_header(skip("/v"), "x-mode", "b"));
     assert_eq!(hits(&server, "/v"), 2);
 }
@@ -633,7 +725,10 @@ fn only_from_cache_answers_from_it_or_misses() {
     // Stored, but stale: it would have to be validated.
     miss(only("/i", |_| {}));
     // Stale is fine when validation is skipped (`only-if-cached`).
-    assert_eq!(body(&network, only("/i", |f| f.skip_cache_validation = true)), b"pixels");
+    assert_eq!(
+        body(&network, only("/i", |f| f.skip_cache_validation = true)),
+        b"pixels"
+    );
     // Nonsense.
     miss(only("/i", |f| {
         f.skip_cache_validation = true;
@@ -647,7 +742,11 @@ fn only_from_cache_answers_from_it_or_misses() {
     let mut post = only("/i", |f| f.skip_cache_validation = true);
     post.method = "POST".to_owned();
     miss(post);
-    miss(with_header(only("/i", |f| f.skip_cache_validation = true), "if-none-match", "\"v1\""));
+    miss(with_header(
+        only("/i", |f| f.skip_cache_validation = true),
+        "if-none-match",
+        "\"v1\"",
+    ));
     assert_eq!(hits(&server, "/i"), 1);
     assert_eq!(hits(&server, "/none"), 0);
 }

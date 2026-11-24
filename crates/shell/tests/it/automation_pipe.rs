@@ -2973,8 +2973,11 @@ fn reloads_and_history_use_the_http_cache() {
         ("/stale.js", stale("text/javascript", "", "\"s\"")),
         (
             "/frame",
-            Route::ok("text/html", "<!DOCTYPE html><script src=/frame.js></script>frame")
-                .with_header("Cache-Control", "max-age=60"),
+            Route::ok(
+                "text/html",
+                "<!DOCTYPE html><script src=/frame.js></script>frame",
+            )
+            .with_header("Cache-Control", "max-age=60"),
         ),
         (
             "/frame.js",
@@ -3011,7 +3014,12 @@ fn reloads_and_history_use_the_http_cache() {
     let session = browser.attach();
     browser.navigate(&session, &server.url("/a"));
     navigated(&mut browser, &session, "Page.reload", json!({}));
-    navigated(&mut browser, &session, "Page.reload", json!({ "ignoreCache": true }));
+    navigated(
+        &mut browser,
+        &session,
+        "Page.reload",
+        json!({ "ignoreCache": true }),
+    );
     browser.navigate(&session, &server.url("/b"));
     let history = browser
         .call(Some(&session), "Page.getNavigationHistory", json!({}))
@@ -3041,7 +3049,11 @@ fn reloads_and_history_use_the_http_cache() {
     assert_eq!(sent("/fresh.css"), [(None, None, None), no_cache.clone()]);
     assert_eq!(
         sent("/stale.js"),
-        [(None, None, None), (None, None, some("\"s\"")), no_cache.clone()]
+        [
+            (None, None, None),
+            (None, None, some("\"s\"")),
+            no_cache.clone()
+        ]
     );
     assert_eq!(sent("/frame"), [(None, None, None), no_cache.clone()]);
     assert_eq!(sent("/frame.js"), [(None, None, None), no_cache.clone()]);

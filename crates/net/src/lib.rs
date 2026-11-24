@@ -578,10 +578,11 @@ async fn run(
                 tell: &mut **tell,
                 state,
             });
-            let result = match url_loader::load(&transport, &cookies, &cache, &request, redirects).await {
-                Ok(response) => collect(response).await,
-                Err(err) => Err(err),
-            };
+            let result =
+                match url_loader::load(&transport, &cookies, &cache, &request, redirects).await {
+                    Ok(response) => collect(response).await,
+                    Err(err) => Err(err),
+                };
             if let Err(err) = &result {
                 log_failure(&request, err);
             }

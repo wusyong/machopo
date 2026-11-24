@@ -63,9 +63,9 @@ pub(crate) async fn send(
     let asked = request.load_flags;
     let mut flags = asked;
     match header_flag(hop.headers) {
-        Some(HeaderFlag::DisableCache) => flags.disable_cache = true,
-        Some(HeaderFlag::BypassCache) => flags.bypass_cache = true,
-        Some(HeaderFlag::ValidateCache) => flags.validate_cache = true,
+        Some(HeaderFlag::Disable) => flags.disable_cache = true,
+        Some(HeaderFlag::Bypass) => flags.bypass_cache = true,
+        Some(HeaderFlag::Validate) => flags.validate_cache = true,
         None => {}
     }
     let external = ExternalValidation::of(hop.headers).unwrap_or_else(|_| {
@@ -111,7 +111,10 @@ pub(crate) async fn send(
     // What the cache sees of the request: its headers, with the `Accept`
     // the transport adds (one a `Vary` may name).
     let mut seen = hop.headers.to_vec();
-    if !seen.iter().any(|(name, _)| name.eq_ignore_ascii_case("accept")) {
+    if !seen
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("accept"))
+    {
         seen.push(("accept".to_owned(), hop.accept.to_owned()));
     }
     let slot = loop {
@@ -136,11 +139,26 @@ pub(crate) async fn send(
         let response_time = Time::now();
         if response.status == 304 {
             if let Some(stored) = stored {
-                update(cache, &key, stored, &response, &seen, request_time, response_time);
+                update(
+                    cache,
+                    &key,
+                    stored,
+                    &response,
+                    &seen,
+                    request_time,
+                    response_time,
+                );
             }
             return Ok(response);
         }
-        return Ok(keep(slot, response, head, &seen, request_time, response_time));
+        return Ok(keep(
+            slot,
+            response,
+            head,
+            &seen,
+            request_time,
+            response_time,
+        ));
     }
     let stored = match stored {
         Some(stored) if !flags.bypass_cache => stored,
@@ -153,7 +171,14 @@ pub(crate) async fn send(
             let request_time = Time::now();
             let response = network(transport, &hop, hop.headers, asked).await?;
             let response_time = Time::now();
-            return Ok(keep(slot, response, false, &seen, request_time, response_time));
+            return Ok(keep(
+                slot,
+                response,
+                false,
+                &seen,
+                request_time,
+                response_time,
+            ));
         }
     };
     let vary_mismatch = stored
@@ -182,8 +207,12 @@ pub(crate) async fn send(
     if flags.only_from_cache {
         return miss();
     }
-    let validators =
-        headers::validation_headers(stored.status, stored.protocol, &stored.headers, vary_mismatch);
+    let validators = headers::validation_headers(
+        stored.status,
+        stored.protocol,
+        &stored.headers,
+        vary_mismatch,
+    );
     let mut sent = hop.headers.to_vec();
     if let Some(validators) = &validators {
         sent.extend(validators.iter().cloned());
@@ -192,17 +221,33 @@ pub(crate) async fn send(
     let response = network(transport, &hop, &sent, asked).await?;
     let response_time = Time::now();
     if validators.is_some() && response.status == 304 {
-        let updated = update(cache, &key, stored, &response, &seen, request_time, response_time);
+        let updated = update(
+            cache,
+            &key,
+            stored,
+            &response,
+            &seen,
+            request_time,
+            response_time,
+        );
         return Ok(answer(updated, hop.url, head));
     }
-    Ok(keep(slot, response, head, &seen, request_time, response_time))
+    Ok(keep(
+        slot,
+        response,
+        head,
+        &seen,
+        request_time,
+        response_time,
+    ))
 }
 
 /// `hop` over the network, with `headers`, and the headers its request's
 /// own `flags` send (`HttpNetworkTransaction::BuildRequestHeaders`, under
 /// the cache, which doesn't see them): `Pragma: no-cache` and
 /// `Cache-Control: no-cache` when it bypasses the cache, `Cache-Control:
-/// max-age=0` when it validates.
+/// max-age=0` when it validates; each unless the request has its own
+/// (Fetch's HTTP-network-or-cache fetch appends them only then).
 async fn network(
     transport: &HttpTransport,
     hop: &Hop<'_>,
@@ -221,13 +266,17 @@ async fn network(
             .send(hop.method, hop.url, hop.accept, headers, hop.body)
             .await;
     }
-    // Each in place of the request's own (`SetHeader`).
-    let mut sent: Vec<(String, String)> = headers
-        .iter()
-        .filter(|(name, _)| !added.iter().any(|(added, _)| name.eq_ignore_ascii_case(added)))
-        .cloned()
-        .collect();
-    sent.extend(added.iter().map(|(name, value)| ((*name).to_owned(), (*value).to_owned())));
+    let mut sent = headers.to_vec();
+    sent.extend(
+        added
+            .iter()
+            .filter(|(added, _)| {
+                !headers
+                    .iter()
+                    .any(|(name, _)| name.eq_ignore_ascii_case(added))
+            })
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned())),
+    );
     transport
         .send(hop.method, hop.url, hop.accept, &sent, hop.body)
         .await
@@ -245,7 +294,8 @@ fn keep(
     request_time: Time,
     response_time: Time,
 ) -> RawResponse {
-    if head || !headers::is_storable(&response.headers) {
+    // Nor a part of the resource: the cache keeps none (no `Range` uses it).
+    if head || response.status == 206 || !headers::is_storable(&response.headers) {
         slot.cache.remove(&slot.key);
         return response;
     }
@@ -292,7 +342,9 @@ fn update(
 fn without_cookies(headers: &[(String, String)]) -> Vec<(String, String)> {
     headers
         .iter()
-        .filter(|(name, _)| !name.eq_ignore_ascii_case("set-cookie") && !name.eq_ignore_ascii_case("set-cookie2"))
+        .filter(|(name, _)| {
+            !name.eq_ignore_ascii_case("set-cookie") && !name.eq_ignore_ascii_case("set-cookie2")
+        })
         .cloned()
         .collect()
 }
@@ -414,4 +466,3 @@ mod tests {
         );
     }
 }
-

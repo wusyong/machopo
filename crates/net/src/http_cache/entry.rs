@@ -32,7 +32,8 @@ impl StoredResponse {
     pub(crate) fn size(&self) -> u64 {
         let len = |n: usize| u64::try_from(n).unwrap_or(u64::MAX);
         let headers = self.headers.iter().fold(0u64, |sum, (name, value)| {
-            sum.saturating_add(len(name.len())).saturating_add(len(value.len()))
+            sum.saturating_add(len(name.len()))
+                .saturating_add(len(value.len()))
         });
         let vary = match &self.vary {
             Some(VaryData::Values(values)) => len(values.len()),
@@ -48,7 +49,6 @@ impl StoredResponse {
             .saturating_add(body)
     }
 }
-
 
 #[cfg(test)]
 mod tests {

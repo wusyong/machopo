@@ -57,7 +57,7 @@ pub(crate) async fn load(url: Url) -> Result<Response, NetError> {
             remote_address: None,
             protocol: "file".to_owned(),
             encoded_headers_length: 0,
-        was_fetched_via_cache: false,
+            was_fetched_via_cache: false,
         },
         body,
         local: true,

@@ -22,8 +22,8 @@ pub(crate) mod headers;
 pub(crate) mod key;
 pub(crate) mod memory;
 pub(crate) mod request_headers;
-pub(crate) mod vary;
 pub(crate) mod transaction;
+pub(crate) mod vary;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};

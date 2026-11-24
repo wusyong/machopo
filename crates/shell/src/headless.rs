@@ -52,6 +52,11 @@ const FRAME_TIMEOUT: Duration = Duration::from_secs(30);
 /// What the headless loop waits on: frames for Viz, and messages from the
 /// renderer. They come on two channels; forwarding both into one keeps
 /// their order and lets one `recv` wait for either.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "every renderer message is a `Host`: boxing it would allocate for each, to save \
+              room only in the few others"
+)]
 enum Event {
     Viz(VizMsg),
     /// From a renderer: the tab's, or one it ended.

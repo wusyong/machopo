@@ -738,7 +738,10 @@ mod tests {
         let third = tree.loader_params(token(1), &origin("https://b.example/"));
         assert_eq!(sites(&third), (None, a()));
         // Its own site, not the top-level frame's.
-        assert_eq!(third.trusted.frame_site.as_deref(), Some("https://b.example"));
+        assert_eq!(
+            third.trusted.frame_site.as_deref(),
+            Some("https://b.example")
+        );
         assert_eq!(main.trusted.frame_site, a());
         // `a.example` in `b.example` in `a.example`: no site's first party.
         commit_at(&mut tree, token(1), 2, "https://b.example/");

@@ -9,7 +9,7 @@ use protocol::network::{
     RequestDestination, ResourceRequest, ResponseHead,
 };
 use protocol::renderer::{
-    BeginNavigationKind, HistoryEntryParams, NavigationLoad, FrameLoadType, RedirectHop,
+    BeginNavigationKind, FrameLoadType, HistoryEntryParams, NavigationLoad, RedirectHop,
     RendererHostMsg, RendererMsg, StorageKind, VisualProperties, WindowOpenDisposition,
 };
 use protocol::viz::{
@@ -651,6 +651,10 @@ impl WebContents {
     /// (`page_may_navigate_to`), and a child frame's reload before the
     /// browser loaded it anything, go nowhere: the renderer hears it is
     /// dropped (`NavigationDropped`).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the renderer's `BeginNavigation` has that many parts"
+    )]
     fn begin_renderer_navigation(
         &mut self,
         frame: FrameToken,
@@ -2015,4 +2019,3 @@ fn navigation_load_flags(load_type: FrameLoadType) -> LoadFlags {
     }
     flags
 }
-

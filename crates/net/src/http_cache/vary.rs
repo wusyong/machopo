@@ -25,10 +25,7 @@ pub(crate) enum VaryData {
 impl VaryData {
     /// The `Vary` of a response to a request of `request` headers; `None`
     /// if it has none (any request matches it).
-    pub(crate) fn new(
-        request: &[(String, String)],
-        response: &[(String, String)],
-    ) -> Option<Self> {
+    pub(crate) fn new(request: &[(String, String)], response: &[(String, String)]) -> Option<Self> {
         if is_star(response) {
             return Some(Self::Star);
         }
@@ -44,7 +41,11 @@ impl VaryData {
 
     /// Whether a request of `request` headers gets the response stored with
     /// this, whose headers are `response` (`MatchesRequest`).
-    pub(crate) fn matches(&self, request: &[(String, String)], response: &[(String, String)]) -> bool {
+    pub(crate) fn matches(
+        &self,
+        request: &[(String, String)],
+        response: &[(String, String)],
+    ) -> bool {
         match self {
             Self::Star => false,
             Self::Values(_) => Self::new(request, response).as_ref() == Some(self),
@@ -87,12 +88,22 @@ mod tests {
         let request = headers(&[("Accept-Language", "en"), ("accept", "*/*")]);
         let vary = VaryData::new(&request, &response).expect("a vary");
         assert_eq!(vary, VaryData::Values("en\n\n*/*\n".to_owned()));
-        assert!(vary.matches(&headers(&[("accept", "*/*"), ("ACCEPT-LANGUAGE", "en")]), &response));
+        assert!(vary.matches(
+            &headers(&[("accept", "*/*"), ("ACCEPT-LANGUAGE", "en")]),
+            &response
+        ));
         // Values as they are: not trimmed, not lowercased.
-        assert!(!vary.matches(&headers(&[("accept-language", "EN"), ("accept", "*/*")]), &response));
+        assert!(!vary.matches(
+            &headers(&[("accept-language", "EN"), ("accept", "*/*")]),
+            &response
+        ));
         // A header there now that wasn't then.
         assert!(!vary.matches(
-            &headers(&[("accept-language", "en"), ("x-mode", "1"), ("accept", "*/*")]),
+            &headers(&[
+                ("accept-language", "en"),
+                ("x-mode", "1"),
+                ("accept", "*/*")
+            ]),
             &response
         ));
     }

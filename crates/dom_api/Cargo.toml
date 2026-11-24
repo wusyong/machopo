@@ -16,8 +16,10 @@ workspace = true
 
 [dependencies]
 base.workspace = true
-# `toDataURL`'s URL.
+# `toDataURL`'s URL, `btoa`.
 base64.workspace = true
+# `atob`'s forgiving-base64 decode (Infra's, as `net` decodes `data:` URLs).
+data-url.workspace = true
 getrandom.workspace = true
 encoding_rs.workspace = true
 # Canvas's data and steps, apart from the DOM.

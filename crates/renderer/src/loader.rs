@@ -219,7 +219,9 @@ pub(crate) fn subresource_load_flags(
     }
     let mut flags = LoadFlags::default();
     match mode {
-        dom::SubresourceCacheMode::Default => flags.validate_cache = is_conditional(&request.headers),
+        dom::SubresourceCacheMode::Default => {
+            flags.validate_cache = is_conditional(&request.headers)
+        }
         dom::SubresourceCacheMode::BypassCache => flags.bypass_cache = true,
         dom::SubresourceCacheMode::ForceCache => flags.skip_cache_validation = true,
     }
@@ -362,13 +364,22 @@ mod tests {
             request
         };
         let plain = request(&[]);
-        assert_eq!(subresource_load_flags(&plain, Mode::Default), LoadFlags::default());
+        assert_eq!(
+            subresource_load_flags(&plain, Mode::Default),
+            LoadFlags::default()
+        );
         let bypass = subresource_load_flags(&plain, Mode::BypassCache);
         assert!(bypass.bypass_cache && !bypass.skip_cache_validation);
         let force = subresource_load_flags(&plain, Mode::ForceCache);
         assert!(force.skip_cache_validation && !force.bypass_cache);
         // Its own validators: validated.
-        for name in ["If-None-Match", "if-modified-since", "if-match", "if-range", "if-unmodified-since"] {
+        for name in [
+            "If-None-Match",
+            "if-modified-since",
+            "if-match",
+            "if-range",
+            "if-unmodified-since",
+        ] {
             assert!(
                 subresource_load_flags(&request(&[(name, "x")]), Mode::Default).validate_cache,
                 "{name}"
@@ -406,7 +417,10 @@ mod tests {
             set(&mut flags);
             flags
         };
-        assert_eq!(cache_load_flags(RequestCache::Default), LoadFlags::default());
+        assert_eq!(
+            cache_load_flags(RequestCache::Default),
+            LoadFlags::default()
+        );
         assert_eq!(
             cache_load_flags(RequestCache::NoStore),
             flags(|f| {

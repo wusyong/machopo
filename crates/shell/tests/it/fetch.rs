@@ -612,7 +612,10 @@ fn a_fetchs_cache_mode() {
         ),
         ("/other", Route::ok("text/plain", "other")),
     ]);
-    assert_eq!(report(&server.url("/")), "d / d / d / d / d / d / TypeError");
+    assert_eq!(
+        report(&server.url("/")),
+        "d / d / d / d / d / d / TypeError"
+    );
     let sent: Vec<_> = server
         .requests()
         .into_iter()
@@ -635,5 +638,10 @@ fn a_fetchs_cache_mode() {
             (some("no-cache"), some("no-cache"), None),
         ]
     );
-    assert!(server.requests().iter().all(|request| request.target != "/other"));
+    assert!(
+        server
+            .requests()
+            .iter()
+            .all(|request| request.target != "/other")
+    );
 }

@@ -1208,6 +1208,7 @@ dependencies = [
  "compositor_paint",
  "computed_style",
  "css",
+ "data-url",
  "dom",
  "dom_api_macros",
  "elise",

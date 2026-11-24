@@ -8,13 +8,13 @@
 
 | 步驟 | 狀態 | 完成日期 |
 | --- | --- | --- |
-| 1. 記憶體的 cache 和規則 | | |
+| 1. 記憶體的 cache 和規則 | 做完，待審查 | 2026-11-24 |
 | 1a. 新鮮度和驗證的規則（照 Chromium 的 `HttpResponseHeaders`、`HttpVaryData`、`http_cache_util`） | 做完，待審查 | 2026-11-24 |
 | 1b. 記憶體的 backend（上限、淘汰，已決定的第 5、7 條） | 做完，待審查 | 2026-11-24 |
 | 1c. key：`TrustedParams` 加 `frame_site`（已決定的第 1、2 條） | 做完，待審查 | 2026-11-24 |
 | 1d. cache 接進 `url_loader`：查、條件請求和 `304`、存、作廢、同時的請求（已決定的第 3、8、9、10 條） | 做完，待審查 | 2026-11-24 |
 | 1e. load flag：`fetch()` 的 `cache`、重新整理、上一頁、DevTools（已決定的第 11 條） | 做完，待審查 | 2026-11-24 |
-| 1f. WPT 的 `fetch/http-cache/`、情境、文件、mutation test | | |
+| 1f. WPT 的 `fetch/http-cache/`、情境、文件、mutation test；`btoa`、`atob`（已決定的第 12 條） | 做完，待審查 | 2026-11-24 |
 | 2. 磁碟的 backend | | |
 | 3. 重量網路版的 Speedometer | | |
 
@@ -35,6 +35,10 @@
 | `fetch()` 的 `cache` 的每一種模式經過整條路（renderer、Browser、`net`） | `cargo test -p shell --test it fetch::a_fetchs_cache_mode` |
 | 重新整理、強制重新整理（CDP 的 `Page.reload` 的 `ignoreCache`）、上一頁：文件、stylesheet、script、iframe 和它的 script、`fetch()`、圖片各自照 Chromium 的 flag 送出或從 cache 拿 | `cargo test -p shell --test it automation_pipe::reloads_and_history_use_the_http_cache` |
 | 強制重新整理的快捷鍵（Shift+Cmd+R、Shift+F5、Ctrl+F5、Ctrl+Shift+R）和它的效果 | `cargo test -p shell --lib browser_view::tests::shortcuts_per_platform`、`cargo test -p shell --test it browser_view::shift_reload_goes_past_the_http_cache` |
+| WPT 的 `fetch/http-cache/` 和 `fetch/api/request/request-cache-*`：失敗的子測試和 Chrome 158 的一樣（`.ini` 寫著原因），除了沒有 `No-Vary-Search`、不從完整的回應給 `Range` 和沒有 `window.open`（`split-cache.html`） | `python3 scripts/test.py wpt fetch/http-cache/ fetch/api/request/` |
+| 帶 `Range` 的請求不經過 cache，`206` 不存；送出時的 `Pragma`、`Cache-Control` 只在請求自己沒有時加 | `cargo test -p net --test it http_cache` |
+| `btoa`、`atob`（window 和 worker） | `python3 scripts/test.py wpt html/webappapis/atob/` |
+| 強制重新整理的快捷鍵在視窗裡重新載入頁面 | `python3 scripts/test.py scenarios navigation` |
 | DevTools：`fromDiskCache`；`Network.setCacheDisabled` 讓導覽和子資源（parser、stylesheet、圖片、`fetch()`）繞過 cache，`Network` 沒打開時是錯誤，`disable`、session 離開、client 斷線時取消，別的分頁的 session 不影響；`Network.clearBrowserCache` 清完才回答 | `cargo test -p shell --test it devtools_network::devtools_sees_the_http_cache` |
 
 ## 做過的檢查
@@ -95,3 +99,22 @@
 **檢查**：`cargo test -p net -p protocol -p renderer -p browser -p dom -p dom_api -p dom_js -p shell` 通過（`shell` 的整合測試 694 個）；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs` 通過。
 
 **mutation test**（`mutants-1e.toml`，71 個：1e-1 的交易 16 個、1e-2 的 `fetch()` 和 1e-3 的重新整理、上一頁、快捷鍵 33 個、1e-4 的 DevTools 22 個）：71 個都抓到。沒抓到、補了測試的：空的 validator 讓 cache 停用、不受信任的 request header 不給 flag、繞過時換掉請求自己的 `Cache-Control`、端到端的測試原本沒有圖片和 `fetch()`（renderer 的三條送出的路只測到一條）、快捷鍵的分派；DevTools 的測試原本只有一個分頁，「別的分頁的 session 也算」沒抓到（那個 session 只讓它自己的分頁重算），補了「這個分頁的 session 再設一次時不被別的分頁的蓋過」。1e-4 讓文件的載入那兩條 mutation 的 `from` 對不上了（它們包含下一個函式的開頭，1e-4 在中間加了函式），改短之後重跑，照樣抓到。
+
+### 1f（2026-11-24，macOS 26.6.2、Apple M4、debug build，`9bb29e4` 之上）
+
+**`btoa`、`atob`**：WPT 的 `fetch/http-cache/` 的共用框架用 `btoa`，machopo 沒有它時整個目錄跑不了，所以加上（已決定的第 12 條）。解碼用 `net` 已經依賴的 `data-url` crate 的 forgiving-base64，編碼用 `dom_api` 已經有的 `base64`。WPT 的 `html/webappapis/atob/base64.any.js`（window 和 worker，760 個子測試）全部通過。
+
+**WPT**：`fetch/http-cache/` 加進清單；`fetch/api/request/request-cache-*` 本來就在清單裡，cache 的子測試現在全部通過（拿掉 152 行預期的失敗）。`fetch/http-cache/` 的失敗逐一和 wpt.fyi 上 Chrome 158（2026-11-23 的 Linux run）的結果對照：`cc-request`、`credentials`、`heuristic`、`invalidate`、`post-patch`、`pragma-no-cache-with-cache-control`、`vary` 失敗的子測試和 Chrome 一樣；Chrome 通過、machopo 失敗的是 `no-vary-search`（沒有 `No-Vary-Search`）、`partial` 的三個（從存的完整回應給較小的範圍）和 `split-cache`（用 `window.open`，machopo 沒有；分區由 machopo 自己的測試守著），都記進了 `docs/limitations.md` 或已經在那裡。每個 `.ini` 開頭寫著原因。
+
+**WPT 找到的 bug**（都修了、補了測試）：
+- 繞過和驗證時送出的 `Pragma`、`Cache-Control` 換掉了請求自己的（1e 照記得的 Chromium 寫的，連測試也是照它寫的）：Fetch 規定請求自己有時不加，`cache-mode.any.js` 的三個子測試因此失敗。改成只在沒有時加，那個測試改成檢查請求自己的留著。
+- 帶 `Range` 的請求的 `206` 被存下來，之後要別的範圍、或要整份的請求拿到它（`partial.any.js`：要 `bytes=2-4` 拿到 `01234`，要整份的拿到 `206`）：machopo 不存資源的一部分，改成帶 `Range` 的請求不經過 cache（Chromium 處理不了的範圍也是 `LOAD_DISABLE_CACHE`），`206` 不存。
+
+**情境**：cache 本身在情境裡看不到（情境的頁面是 `file:` 的，不經過 HTTP cache），由 `shell` 的整合測試守著；`navigation.txt` 加上強制重新整理的三組快捷鍵（Shift 加平台的重新整理、Shift+F5、Ctrl+F5）重新載入頁面，macOS 和其他平台的快捷鍵都通過。`about:demo` 沒有加東西：它是 machopo 自己的頁面，不經過 HTTP cache。
+
+**清單裡其他的 WPT**：`python3 scripts/test.py wpt fetch/api/ fetch/http-cache/ html/webappapis/atob/`（531 個測試）沒有新的失敗，多了兩個通過：`fetch/api/basic/conditional-get.any.js`（cache 用 `ETag` 驗證）；`keepalive.any.js` 的 iframe 在 `unload`、`pagehide` 送的四個請求，cache 整個關掉時、在這份 RFC 開始之前的 `5094ac2` 上也通過，不是這份做的（之前的變更沒有更新預期結果），照實更新了預期結果和註解。
+
+**階段做完時的檢查**：`cargo fmt --check`（`cargo fmt` 修了 1c 到 1e 留下的格式，都在這份改過的檔案裡）、`cargo clippy --workspace --all-targets -- -D warnings`（`HeaderFlag` 的值都以 `Cache` 結尾，改名成 `Disable`、`Bypass`、`Validate`；`begin_renderer_navigation` 多了 `load_flags` 之後超過參數的上限，照 `start_navigation` 寫帶理由的 `#[expect]`；`ResourceRequest` 多了 `LoadFlags`，`RendererHostMsg` 從 272 bytes 變成 280，`headless` 的 `Event` 的大小差超過上限，寫帶理由的 `#[expect]`：每個 renderer 的訊息都是 `Host`，box 它每個訊息都要配置一次）、`cargo test --workspace` 都通過；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs` 通過。
+
+**mutation test**（`mutants-1f.toml`，9 個）：9 個都抓到（`btoa`、`atob` 的 6 個由 WPT 的 `base64.any.js` 抓到）。1f 改了 1e 的一條 mutation 改的程式（加 header 的方式），`mutants-1e.toml` 的那一條改成對著新的程式；`HeaderFlag` 改名也照著改了 `mutants-1d.toml`、`mutants-1e.toml`；`cargo fmt` 改了 `renderer` 的 `loader.rs` 的兩處，1e 的兩條 mutation 的 `from` 跟著改、重跑，照樣抓到。
+

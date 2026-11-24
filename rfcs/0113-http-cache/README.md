@@ -184,6 +184,12 @@ machopo 自己寫（已決定的第 4 條），照 RFC 9111 和 Chromium 的 `Ht
     - 理由：有了 cache，使用者需要一個繞過它的方法；只是在現有的重新整理旁邊多一組按鍵，加一份情境測試。
     - 不選只留 CDP 的 `ignoreCache`（B）：視窗裡碰到舊的 cache 時只能等它過期。
 
+12. **1f 裡加上 HTML 的 `btoa()`、`atob()`**（2026-11-24，使用者決定；A）：
+    - window 和 worker 的 global 都有（`WindowOrWorkerGlobalScope`），照 HTML 的 forgiving-base64：`btoa` 的字串有超過 U+00FF 的字元時是 `InvalidCharacterError`，`atob` 先拿掉 ASCII 的空白、照規則補齊 `=`，不合法的是 `InvalidCharacterError`。WPT 的 `html/webappapis/atob/base64.any.js` 加進清單。
+    - 理由：WPT 的 `fetch/http-cache/` 的共用框架（`http-cache.js`）用 `btoa` 把每個請求的設定編進網址，machopo 沒有它時整個目錄一個 cache 的測試都跑不了；它只是兩個純字串的函式，`structuredClone` 已經照這樣在兩種 global 上。
+    - 對照 Chrome：Blink 的 `WindowOrWorkerGlobalScope::btoa`、`atob`（`Base64Encode` 和 forgiving 的 `Base64Decode`，記得的，沒有讀原始碼：行為照規範，由 WPT 驗證）。
+    - 不選另開一份小的 RFC 先做（B）：多一次草稿和確認，`fetch/http-cache/` 要等它做完才加，範圍分得清楚是唯一的好處。
+
 ## 待決定
 
 2026-11-24 的看法寫在每一條後面，還沒確認：

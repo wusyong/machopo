@@ -5,7 +5,7 @@ timeout = 600
 [[mutant]]
 name = "If-Match doesn't keep a load from the cache"
 file = "crates/net/src/http_cache/transaction.rs"
-from = '''    let key = cache_key(request, hop.url).filter(|_| flag != Some(HeaderFlag::DisableCache));'''
+from = '''    let key = cache_key(request, hop.url).filter(|_| flag != Some(HeaderFlag::Disable));'''
 to = '''    let key = cache_key(request, hop.url);'''
 
 [[mutant]]
@@ -129,19 +129,19 @@ to = '''    if false {'''
 [[mutant]]
 name = "a Vary that doesn't match is used"
 file = "crates/net/src/http_cache/transaction.rs"
-from = '''    let validation = if vary_mismatch || flag == Some(HeaderFlag::ValidateCache) {'''
-to = '''    let validation = if flag == Some(HeaderFlag::ValidateCache) {'''
+from = '''    let validation = if vary_mismatch || flag == Some(HeaderFlag::Validate) {'''
+to = '''    let validation = if flag == Some(HeaderFlag::Validate) {'''
 
 [[mutant]]
 name = "max-age=0 in the request doesn't validate"
 file = "crates/net/src/http_cache/transaction.rs"
-from = '''    let validation = if vary_mismatch || flag == Some(HeaderFlag::ValidateCache) {'''
+from = '''    let validation = if vary_mismatch || flag == Some(HeaderFlag::Validate) {'''
 to = '''    let validation = if vary_mismatch {'''
 
 [[mutant]]
 name = "no-cache in the request reads the cache"
 file = "crates/net/src/http_cache/transaction.rs"
-from = '''        Some(stored) if flag != Some(HeaderFlag::BypassCache) => stored,'''
+from = '''        Some(stored) if flag != Some(HeaderFlag::Bypass) => stored,'''
 to = '''        Some(stored) => stored,'''
 
 [[mutant]]

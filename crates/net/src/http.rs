@@ -18,8 +18,8 @@ use url::Url;
 
 use crate::NetworkContextParams;
 use crate::content_encoding;
-use crate::http_cache;
 use crate::host_mapping::{HostMapping, HostMappingRules};
+use crate::http_cache;
 
 /// A response as the wire gave it, before `URLLoader` looks at it: its
 /// head, and its body to come.

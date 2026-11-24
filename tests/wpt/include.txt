@@ -5771,3 +5771,10 @@ css/css-writing-modes/unicode-bidi-parsing-002.html
 css/css-overflow/overflow-rtl-scroll-left.html
 css/css-overflow/scrollbar-gutter-rtl-002.html
 css/css-overflow/single-axis-overflow-clip-rtl.html
+
+# HTML's `btoa()` and `atob()`, a window's and a worker's.
+html/webappapis/atob/
+
+# The HTTP cache: freshness, validation and `304`, `Vary`, invalidation,
+# the request's `Cache-Control` and `fetch()`'s `cache`.
+fetch/http-cache/

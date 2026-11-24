@@ -50,7 +50,8 @@ use crate::{
     location, markup, media_query_list, menu_list, message, mutation_observer, navigator, node,
     parent_node, performance, query, range, reflect, request, resize_observer, response, script,
     scroll, select, selection, shadow_root, slot, storage, svg, svg_geometry, table, text_control,
-    timer, token_list, traversal, ui_event, url, wake_lock, window, worker,
+    timer, token_list, traversal, ui_event, url, wake_lock, window, window_or_worker_global_scope,
+    worker,
 };
 
 crate::declare! {
@@ -267,7 +268,7 @@ crate::declare! {
     // itself, its members are its prototype's, which the global's inherits
     // (`DedicatedWorkerGlobalScope`'s are the global's own). Of
     // `WindowOrWorkerGlobalScope` the members a window has too (its timers,
-    // `structuredClone`, `crypto`), its execution context's.
+    // `structuredClone`, `btoa`, `atob`, `crypto`), its execution context's.
     #[exposed(Worker)]
     interface WorkerGlobalScope : EventTarget [type = dom::WorkerGlobalScope] {
         attribute self: WorkerGlobalScope, get = worker::global_self;
@@ -287,6 +288,8 @@ crate::declare! {
         method clearTimeout(id?: i32) = timer::worker_clear_timer;
         method clearInterval(id?: i32) = timer::worker_clear_timer;
         method structuredClone(value: CloneValue) -> Cloned = crypto::worker_structured_clone;
+        method btoa(data: DomString) -> DomString = window_or_worker_global_scope::worker_btoa;
+        method atob(data: DomString) -> DomString = window_or_worker_global_scope::worker_atob;
         #[front]
         method fetch(input: RequestInfo, init?: RequestInit) -> PendingPromise<Response> = fetch::worker_fetch;
         #[calls_script]
@@ -1151,6 +1154,9 @@ crate::declare! {
         // argument after it, which `CloneValue` reads), then deserialized
         // in this realm.
         method structuredClone(value: CloneValue) -> Cloned = crypto::structured_clone;
+        // HTML's base64 utility methods.
+        method btoa(data: DomString) -> DomString = window_or_worker_global_scope::btoa;
+        method atob(data: DomString) -> DomString = window_or_worker_global_scope::atob;
         // No auxiliary browsing contexts: none opened by script, so none
         // that script may close (HTML's script-closable), and no opener.
         #[cross_origin]

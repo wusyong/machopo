@@ -121,7 +121,10 @@ mod tests {
     #[test]
     fn no_site_no_key() {
         let url = url("https://c.example/i.png");
-        assert_eq!(cache_key(&request(RequestDestination::Image, None), &url), None);
+        assert_eq!(
+            cache_key(&request(RequestDestination::Image, None), &url),
+            None
+        );
         let opaque_top = TrustedParams {
             frame_site: Some("https://a.example".to_owned()),
             ..TrustedParams::default()
@@ -135,7 +138,10 @@ mod tests {
             ..TrustedParams::default()
         };
         assert_eq!(
-            cache_key(&request(RequestDestination::Image, Some(opaque_frame)), &url),
+            cache_key(
+                &request(RequestDestination::Image, Some(opaque_frame)),
+                &url
+            ),
             None
         );
     }

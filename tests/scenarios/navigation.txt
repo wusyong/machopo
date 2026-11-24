@@ -47,6 +47,24 @@ click #count-me
 wait-text #count "1"
 key F5
 wait-text #count "0"
+# Reloading past the HTTP cache: Shift with the platform's shortcut,
+# Shift+F5 and Ctrl+F5 load the page again too (what goes past the cache
+# isn't seen in a page served from files).
+wait-loaded
+click #count-me
+wait-text #count "1"
+key primary+shift+r
+wait-text #count "0"
+wait-loaded
+click #count-me
+wait-text #count "1"
+key shift+F5
+wait-text #count "0"
+wait-loaded
+click #count-me
+wait-text #count "1"
+key ctrl+F5
+wait-text #count "0"
 # A link to a fragment of the page scrolls there, without loading it again.
 wait-loaded
 click #count-me

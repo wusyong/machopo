@@ -197,7 +197,7 @@ impl BlobUrlRegistry {
                 remote_address: None,
                 protocol: "blob".to_owned(),
                 encoded_headers_length: 0,
-        was_fetched_via_cache: false,
+                was_fetched_via_cache: false,
             },
             encoded_body_length: 0,
             body: body.into(),

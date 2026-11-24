@@ -768,7 +768,7 @@ mod tests {
                 remote_address: None,
                 protocol: "http/1.1".into(),
                 encoded_headers_length: 10,
-        was_fetched_via_cache: false,
+                was_fetched_via_cache: false,
             },
             encoded_body_length: 3,
             body: protocol::BigBuffer::copy_from_slice(body),

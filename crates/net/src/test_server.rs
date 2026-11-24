@@ -155,7 +155,8 @@ impl Route {
         let same = |asked: &str, ours: &str| {
             header(headers, asked).is_some_and(|value| header(&self.headers, ours) == Some(value))
         };
-        self.revalidates && (same("if-none-match", "etag") || same("if-modified-since", "last-modified"))
+        self.revalidates
+            && (same("if-none-match", "etag") || same("if-modified-since", "last-modified"))
     }
 }
 

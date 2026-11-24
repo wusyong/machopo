@@ -7,7 +7,7 @@ use bytes::Bytes;
 use ipc::data_pipe::{Consumer, Read};
 use protocol::FrameToken;
 use protocol::network::CompletionStatus;
-use protocol::renderer::{HistoryEntryParams, NavigationLoad, FrameLoadType};
+use protocol::renderer::{FrameLoadType, HistoryEntryParams, NavigationLoad};
 
 use crate::document::MarkupFilter;
 use crate::encoding::DocumentDecoder;

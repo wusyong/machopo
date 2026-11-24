@@ -1,0 +1,79 @@
+# Step 1f's mutants: `python3 scripts/test.py mutate rfcs/0113-http-cache/mutants-1f.toml`.
+test = ["python3", "scripts/test.py", "wpt", "html/webappapis/atob/"]
+# A change to `dom_api` rebuilds the engines and the shell.
+timeout = 1800
+
+[[mutant]]
+name = "btoa takes what is past U+00FF"
+file = "crates/dom_api/src/window_or_worker_global_scope.rs"
+from = '''        .map(|c| u8::try_from(u32::from(c)))'''
+to = '''        .map(|c| u8::try_from(u32::from(c) & 0xff))'''
+
+[[mutant]]
+name = "btoa doesn't encode"
+file = "crates/dom_api/src/window_or_worker_global_scope.rs"
+from = '''        base64::engine::general_purpose::STANDARD.encode(bytes),'''
+to = '''        String::from_utf8_lossy(&bytes).into_owned(),'''
+
+[[mutant]]
+name = "atob takes what doesn't decode"
+file = "crates/dom_api/src/window_or_worker_global_scope.rs"
+from = '''        .map_err(|_| ApiError::dom(ExceptionName::InvalidCharacter))?;
+    Ok(DomStr::fresh(
+        bytes.into_iter()'''
+to = '''        .unwrap_or_default();
+    Ok(DomStr::fresh(
+        bytes.into_iter()'''
+
+[[mutant]]
+name = "atob's bytes are ASCII"
+file = "crates/dom_api/src/window_or_worker_global_scope.rs"
+from = '''        bytes.into_iter().map(char::from).collect::<String>(),'''
+to = '''        bytes.into_iter().map(|b| char::from(b & 0x7f)).collect::<String>(),'''
+
+[[mutant]]
+name = "a worker's btoa is a window's atob"
+file = "crates/dom_api/src/window_or_worker_global_scope.rs"
+from = '''    _: Gc<'gc, dom::WorkerGlobalScope>,
+    data: &str,
+) -> Result<DomStr<'gc>, ApiError> {
+    encode(data)'''
+to = '''    _: Gc<'gc, dom::WorkerGlobalScope>,
+    data: &str,
+) -> Result<DomStr<'gc>, ApiError> {
+    decode(data)'''
+
+[[mutant]]
+name = "a worker's atob is a window's btoa"
+file = "crates/dom_api/src/window_or_worker_global_scope.rs"
+from = '''    _: Gc<'gc, dom::WorkerGlobalScope>,
+    data: &str,
+) -> Result<DomStr<'gc>, ApiError> {
+    decode(data)'''
+to = '''    _: Gc<'gc, dom::WorkerGlobalScope>,
+    data: &str,
+) -> Result<DomStr<'gc>, ApiError> {
+    encode(data)'''
+
+[[mutant]]
+name = "the flags' header goes beside the request's own"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''            .filter(|(added, _)| {
+                !headers'''
+to = '''            .filter(|(added, _)| {
+                true || !headers'''
+test = ["cargo", "test", "-q", "-p", "net", "http_cache"]
+
+[[mutant]]
+name = "a Range uses the cache"
+file = "crates/net/src/http_cache/request_headers.rs"
+from = '''    if ["if-unmodified-since", "if-match", "if-range", "range"]'''
+to = '''    if ["if-unmodified-since", "if-match", "if-range"]'''
+test = ["cargo", "test", "-q", "-p", "net", "http_cache"]
+
+[[mutant]]
+name = "a 206 is kept"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''response.status == 206 ||'''
+to = '''response.status == 0 ||'''
+test = ["cargo", "test", "-q", "-p", "net", "http_cache"]

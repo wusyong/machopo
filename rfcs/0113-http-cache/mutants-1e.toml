@@ -8,8 +8,8 @@ timeout = 1800
 [[mutant]]
 name = "a header's no-cache doesn't bypass"
 file = "crates/net/src/http_cache/transaction.rs"
-from = '''        Some(HeaderFlag::BypassCache) => flags.bypass_cache = true,'''
-to = '''        Some(HeaderFlag::BypassCache) => {}'''
+from = '''        Some(HeaderFlag::Bypass) => flags.bypass_cache = true,'''
+to = '''        Some(HeaderFlag::Bypass) => {}'''
 
 [[mutant]]
 name = "an empty validator doesn't keep the load from the cache"
@@ -126,10 +126,12 @@ to = '''            network(transport, &hop, hop.headers, flags).await
     };'''
 
 [[mutant]]
-name = "a request's own Cache-Control stays beside the added one"
+name = "the flags' header goes beside the request's own"
 file = "crates/net/src/http_cache/transaction.rs"
-from = '''        .filter(|(name, _)| !added.iter().any(|(added, _)| name.eq_ignore_ascii_case(added)))'''
-to = '''        .filter(|_| true)'''
+from = '''            .filter(|(added, _)| {
+                !headers'''
+to = '''            .filter(|(added, _)| {
+                true || !headers'''
 
 # 1e-2: fetch()'s cache mode.
 
@@ -333,15 +335,17 @@ test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "loader"]
 [[mutant]]
 name = "a conditional subresource isn't validated"
 file = "crates/renderer/src/loader.rs"
-from = '''        dom::SubresourceCacheMode::Default => flags.validate_cache = is_conditional(&request.headers),'''
-to = '''        dom::SubresourceCacheMode::Default => {}'''
+from = '''            flags.validate_cache = is_conditional(&request.headers)'''
+to = '''            let _ = &mut flags;'''
 test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "loader"]
 
 [[mutant]]
 name = "If-Range isn't conditional"
 file = "crates/renderer/src/loader.rs"
-from = '''            "if-range",'''
-to = '''            "if-rangx",'''
+from = '''            "if-none-match",
+            "if-range",'''
+to = '''            "if-none-match",
+            "if-rangx",'''
 test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "loader"]
 
 [[mutant]]

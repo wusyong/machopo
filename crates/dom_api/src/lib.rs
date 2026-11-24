@@ -132,6 +132,7 @@ mod url;
 mod wake_lock;
 mod webdriver;
 mod window;
+mod window_or_worker_global_scope;
 mod worker;
 
 /// What `EventHandler` says the pointer looks like: `cursor`'s keyword,

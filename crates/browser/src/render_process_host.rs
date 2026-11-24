@@ -18,8 +18,7 @@ use protocol::network::{
     LoadResult, NetError, NetErrorCode, RequestDestination, ResourceRequest, TrustedParams,
 };
 use protocol::renderer::{
-    CompositorMsg, HistoryEntryParams, NavigationLoad, FrameLoadType, RendererHostMsg,
-    RendererMsg,
+    CompositorMsg, FrameLoadType, HistoryEntryParams, NavigationLoad, RendererHostMsg, RendererMsg,
 };
 use protocol::viz::{
     BeginFrameArgs, CompositorFrameSinkMsg, CompositorFrameSinkSender, ContextLostObserver,

@@ -278,7 +278,9 @@ pub(crate) fn freshness_lifetimes(
         // One in the future gives nothing.
         && last_modified <= date
     {
-        lifetimes.freshness = date.saturating_micros_since(last_modified).saturating_div(10);
+        lifetimes.freshness = date
+            .saturating_micros_since(last_modified)
+            .saturating_div(10);
         return lifetimes;
     }
     if matches!(status, 300 | 301 | 308 | 410) {
@@ -399,8 +401,12 @@ fn at_least_http_1_1(protocol: &str) -> bool {
 /// stored one of its name (every line of it), unless it describes the body,
 /// the connection or a challenge (`NON_UPDATED`); the stored ones it
 /// doesn't have stay.
-pub(crate) fn update(stored: &[(String, String)], new: &[(String, String)]) -> Vec<(String, String)> {
-    let updated: Vec<&(String, String)> = new.iter().filter(|(name, _)| should_update(name)).collect();
+pub(crate) fn update(
+    stored: &[(String, String)],
+    new: &[(String, String)],
+) -> Vec<(String, String)> {
+    let updated: Vec<&(String, String)> =
+        new.iter().filter(|(name, _)| should_update(name)).collect();
     stored
         .iter()
         .filter(|(name, _)| {
@@ -448,9 +454,17 @@ mod tests {
         ]);
         assert_eq!(
             values(&h, "cache-control").collect::<Vec<_>>(),
-            ["max-age=10", r#"no-cache="a, b""#, "private", "must-revalidate"]
+            [
+                "max-age=10",
+                r#"no-cache="a, b""#,
+                "private",
+                "must-revalidate"
+            ]
         );
-        assert_eq!(values(&h, "etag").collect::<Vec<_>>(), [r#""a\"b, c""#, r#"W/"d""#]);
+        assert_eq!(
+            values(&h, "etag").collect::<Vec<_>>(),
+            [r#""a\"b, c""#, r#"W/"d""#]
+        );
     }
 
     #[test]
@@ -572,7 +586,11 @@ mod tests {
             );
         }
         for status in [204, 302, 404] {
-            assert_eq!(freshness_lifetimes(status, &h, date).freshness, 0, "{status}");
+            assert_eq!(
+                freshness_lifetimes(status, &h, date).freshness,
+                0,
+                "{status}"
+            );
         }
         // Not with `must-revalidate`, nor from the future.
         let mut must = h.clone();
@@ -653,7 +671,10 @@ mod tests {
         let t = at("Tue, 24 Nov 2026 00:00:00 GMT");
         let h = headers(&[("cache-control", "max-age=10, stale-while-revalidate=20")]);
         let at_seconds = |s| t.saturating_add_seconds(s);
-        assert_eq!(requires_validation(200, &h, t, t, at_seconds(9)), Validation::None);
+        assert_eq!(
+            requires_validation(200, &h, t, t, at_seconds(9)),
+            Validation::None
+        );
         assert_eq!(
             requires_validation(200, &h, t, t, at_seconds(10)),
             Validation::Asynchronous
@@ -662,7 +683,10 @@ mod tests {
             requires_validation(200, &h, t, t, at_seconds(30)),
             Validation::Synchronous
         );
-        assert_eq!(requires_validation(200, &[], t, t, t), Validation::Synchronous);
+        assert_eq!(
+            requires_validation(200, &[], t, t, t),
+            Validation::Synchronous
+        );
         // A clock gone back makes the age negative: nothing to go by is
         // still validated, not taken as fresh.
         let earlier = t.saturating_add_seconds(-60);
@@ -674,8 +698,14 @@ mod tests {
 
     #[test]
     fn only_no_store_isnt_stored() {
-        assert!(is_storable(&headers(&[("cache-control", "no-cache, private")])));
-        assert!(!is_storable(&headers(&[("cache-control", "max-age=5, no-store")])));
+        assert!(is_storable(&headers(&[(
+            "cache-control",
+            "no-cache, private"
+        )])));
+        assert!(!is_storable(&headers(&[(
+            "cache-control",
+            "max-age=5, no-store"
+        )])));
     }
 
     #[test]
