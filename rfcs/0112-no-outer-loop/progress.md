@@ -2,7 +2,7 @@
 
 <!-- 怎麼更新見 docs/README.md 的「完成一步時」和「一份 RFC 做完時」。設計理由寫在 README.md，目前仍然成立的限制寫在 docs/limitations.md。 -->
 
-開始日期：2026-11-24。第 0 到 5 階段做完：2026-11-24（Linux：Fedora 45）；做完之後量 Speedometer 找到的問題在修（第 25 條之後）。
+開始日期：2026-11-24。完成日期：2026-11-24（Linux：Fedora 45）。
 
 ## 步驟
 
@@ -127,4 +127,12 @@ Linux（Fedora 45）、debug build，2026-11-24。RFC 的草稿是 `0a459d1`；�
 **驗證**：`a_timer_set_after_an_earlier_ones_time_runs` 改之前 3 次都卡滿 30 秒，改之後 3 次都通過；`cargo test --workspace` 通過（60 個 binary，4723 個通過、1 個 ignored，偵測沒有觸發）；`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`sanity.py` 的各項通過。還沒做：第 25 條的 mutation test、相關的 WPT 目錄和情境。
 
 **順便查過、沒有問題的**：parser 的續跑不會沒有 `ParseOn` 排著（`parse_due` 只在 post 它的地方設）；iframe 的導覽送出之後同一次呼叫裡 frame 被拿掉，renderer 不為它結束取消窗口，但 Browser 扣著的 commit 存在 frame 的節點上，跟著 frame 一起丟掉。
+
+### 做完之後：Speedometer 慢的 3.3% 查到哪裡（2026-11-24，Fedora 45，`perf` profile）
+
+- `requestAnimationFrame` 的修正（第 26 條）之後，Svelte、Preact 各量 3 次：時間沒有變，要 frame 的時機不是原因。
+- `--trace`（兩個版本各錄一次 Svelte、Preact）：style、box tree、layout、paint 一樣；script 和 GC 多。照 span 比計時的區間：`EventDispatch` 916 → 1565 次（Svelte）、919 → 1911 次（Preact）。暫時的 probe 數了整個 suite 分派的事件，兩個版本一樣（`click` 2000、`input` 1000、`transitionrun` 1000……），所以是落在區間裡的不同，不是多分派了；GC 也一樣：scavenge 總數 12 → 13，區間裡 1 → 5（Svelte）。
+- 原因之一是 V8 的 foreground task（`ScavengeJob`）：`79a0ecc` 用 V8 預設的 platform，renderer 在外圈 pump（`run_platform_tasks` 114 次），多半在計時區間外；第 4 段之後是 scheduler 的 task，輪到就跑，和 Chrome 一樣。實驗：讓它等 scheduler 沒有別的 task 才跑，Svelte、Preact 各量 3 次，Preact 16.8 → 16.1 ms（`79a0ecc` 15.5），Svelte 16.3 → 15.7 到 16.3 ms（14.1），沒有留下這個改動。兩個版本的 platform 都不支援 idle task。
+- 沒查清楚的：Svelte 的 `Adding100Items` 同步的步驟裡 `v8.callFunction` 自己的時間 0.32 → 0.72 ms，指令卻沒多。要 kernel 的時間、context switch 或 cache 的計數（`perf_event_paranoid` 要放寬），留給「之後的可能」。
+- 完整的和 Chrome 比（`d9eae09`）：比值的幾何平均 1.445，數字記在 Speedometer 量測工具那份 RFC 的 `progress.md`。
 

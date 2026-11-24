@@ -161,6 +161,15 @@
 
 新的在前。2026-10-13 的盤點時，Complex-DOM 和 NewsSite 在 kun 上還少算了用 `var()` 的 style 和 `::before`、`::after` 的 box，那時以前的比較表裡它們的比值偏低；「2d-2 之後的 trace」的 `ParseHTML` 被高估，以最後一次為準。
 
+### RFC 0112（拿掉 event loop 的外圈）做完之後（2026-11-24，Fedora 45，接電源）
+
+使用者要求量的（branch `0112` 的 `d9eae09`）。`bench.py speedometer`（20 個 default suite，各 10 個 iteration，只跑一次），Linux 7.3.3（Fedora 45）、AMD Ryzen AI 9 HX 370（瀏覽器綁在 CPU 0 到 3、12 到 15），machopo 的 `perf` profile，Chrome for Testing 152.0.7977.82。20 個都有效。各 suite 的中位數合計：machopo 1002.0 ms、Chrome 676.0 ms，比值的幾何平均 **1.445**。差最多的：Editor-TipTap 1.96、Perf-Dashboard 1.84、NewsSite-Next 1.83、TodoMVC-Svelte-Complex-DOM 1.69、TodoMVC-WebComponents 1.65；最少的：Charts-chartjs 1.07、TodoMVC-React-Redux 1.11、TodoMVC-JavaScript-ES5 1.17。這台上一次完整的是 2026-11-06（Fedora 44，換完 DOM 之後的 1.61），之間的改動很多、只跑一次，不拿來算變化。
+
+和 RFC 0112 開始之前的 `79a0ecc` 比（`--against 79a0ecc5 --runs 3`）：
+- 第一次：9 個 suite 不時卡住（3 輪 18 次「160 s 沒有報告」，`79a0ecc` 0 次）。原因是 DOM 的 task 的記號只認 queue 的第一個，忙過一個 timer 的時間之後再設一個已經到期的，記號白白用掉、那個 timer 和之後的永遠不跑；修好（RFC 0112 的第 25 條）之後 0 次。
+- 修好之後：20 個 suite 的幾何平均 **1.033**（+3.3%），TodoMVC-Svelte-Complex-DOM +16.0%、TodoMVC-Preact-Complex-DOM +8.4%、TodoMVC-Backbone +5.9%，其他在 −1.7% 到 +4.8%。
+- 查到的：兩個版本分派的事件和 GC 的次數一樣；計時區間裡 main thread 的指令數多約 1%、使用者空間的 CPU 時間一樣。多的一部分是 GC 落的位置：`79a0ecc` 的 V8 foreground task（`ScavengeJob`）等 event loop 的外圈才跑，多半在計時區間外，現在照 Chrome 輪到就跑（Svelte 區間裡的 scavenge 1 → 5 次，總數 12 → 13）；讓它等 thread 閒下來的實驗把 Preact 拿回一半左右、Svelte 沒有變。Svelte 的 `Adding100Items` 同步的步驟裡 JS 跑得比較久、指令卻沒多，像是 CPU 層面的效應（這台的 `perf_event_paranoid` 是 2，看不到 kernel 和硬體的計數），還沒查清楚。細節在 RFC 0112 的 `progress.md`。
+
 ### renderer 預設是自己的 process、RFC 0108 和 RFC 0110 的第 1 階段之後（2026-11-23，macOS Apple Silicon，接電源）
 
 使用者要求量的，看 2026-11-19 之後有沒有變慢（`main` 的 `9e7d93d`，比 `9691a36` 多 130 個 commit：RFC 0004 做完，renderer 預設是自己的 process、tile 在共用記憶體裡畫；RFC 0108；RFC 0110 的第 1 階段）。`bench.py speedometer`（20 個 default suite，各 10 個 iteration，只跑一次），同一台 macOS 26.6.2、Apple M4，machopo 的 `perf` profile，Chrome for Testing 152.0.7977.82。20 個都有效。各 suite 的中位數合計：machopo 635.8 ms（11-19 是 624.8，+1.8%）、Chrome 412.3 ms（414.0，−0.4%），比值的幾何平均 **1.49**（1.48）。差最多的：Editor-TipTap 2.18（2.06）、TodoMVC-Lit-Complex-DOM 1.78（1.73）、NewsSite-Nuxt 1.76（1.75）、TodoMVC-WebComponents 1.69（1.77）、Charts-chartjs 1.68；最少的：TodoMVC-JavaScript-ES5 1.15（1.24）、Editor-CodeMirror 1.17（1.22）、TodoMVC-React-Redux 1.17（1.23）。11-19 有記下的 8 個 suite 的比值有升有降，合計的差在只跑一次的雜訊（同一個 build 兩次差好幾 %）以內；變最多的是 Editor-TipTap（+6%）。

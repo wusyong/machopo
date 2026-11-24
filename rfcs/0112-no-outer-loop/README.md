@@ -1,7 +1,7 @@
 # RFC 0112：拿掉 event loop 的外圈
 
 - 開始日期：2026-11-24
-- 狀態：🚧 已排程：2026-11-24（第 0 到 5 階段做完；做完之後量 Speedometer 找到的問題在修，`progress.md` 的第 7、8 步）
+- 狀態：✅ 已完成：2026-11-24
 - 細節：`details.md`；進度：`progress.md`
 
 ## 摘要
@@ -196,3 +196,4 @@ renderer 的 event loop 原本分兩層：內圈一個個跑 scheduler 的 task�
 - **DOM 的 task 只有一套順序，主 thread 和 worker 一樣**（一份 RFC）：主 thread 的記號跑它自己的那一個 task（第 25 條），順序只在 scheduler；但 `dom` 自己還有一套 `(時間, 編號)` 的順序（`next_task`、一輪的 `begin_task_pass`），給 worker 的 loop、測試和 debug build 的偵測用。兩套之間另外補的還在：port 的訊息照佇列的順序拿編號、port 啟用時重送記號（WPT 的 `webmessaging/` 才抓到），兩個時鐘差一點時照 scheduler 交出的時間跑（`dom_now().max(task.at)`，只靠審查），取消的 task 的記號跑到才知道沒事。主 thread 和 worker 也是兩種模型，worker 照舊一輪一輪跑。做法：`dom` 只照編號存 task 的內容（有 GC 的參照，不能進跨 thread 的 scheduler），順序只在 scheduler；worker 的 loop 改用同樣的 scheduler（DOM、自己的工作、V8 的 platform task 各是一個 task），拿掉 `dom` 的 `next_task`、一輪的機制和時鐘的換算，port 的訊息到能送的時候才拿編號。兩件要一起做：worker 還在用 `dom` 的順序時，那一套拿不掉。
 - Chrome 的 scheduler 優先權（input、rendering）：通道更忙時需要；那時 DOM 和 renderer 自己的 task 照 task type 分 queue（第 15、17 條沒有分）。那時一起做 rendering 的防餓死（Chrome 的 compositor 的 queue 超過 100 ms 沒有 main frame 時升到很高的優先度）。
 - 導覽帶著解析好的 blob（`BlobURLToken`）。
+- **Speedometer 比這份 RFC 之前慢 3.3%**（20 個 suite 的幾何平均，Svelte +16%、Preact +8%；`progress.md` 的最後兩節）：兩個版本做的事一樣多（事件、GC 的次數），一部分是 V8 的 GC task 照 Chrome 輪到就跑、落進計時的區間（以前等外圈）；Svelte 的 `Adding100Items` 同步的步驟裡 JS 跑得比較久、指令卻沒多的那一段還沒查清楚，要 kernel 和硬體的計數（`perf_event_paranoid` 放寬）。和 V8 的 idle task（Chrome 的 V8 在 idle 時間做 GC）一起看：platform 現在不支援 idle task。
