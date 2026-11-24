@@ -361,8 +361,10 @@ impl<'gc> Cx<'_, 'gc> {
 
     /// The document whose URL gives `document` its origin: the one it has
     /// it from (`set_origin_source`), itself, or for an `about:` document
-    /// of a child frame (its initial `about:blank`, an `about:srcdoc`), its
-    /// iframe's document's, as its creator's (HTML's).
+    /// of a child frame (its initial `about:blank`, an `about:srcdoc`) or a
+    /// `javascript:` URL's (the empty document its host commits), its
+    /// iframe's document's, as its creator's (HTML's: a `javascript:` URL's
+    /// document has its initiator's origin).
     pub fn origin_document(&self, document: NodeRef<'gc>) -> NodeRef<'gc> {
         let mut at = document;
         // A frame tree is fewer than u16::MAX deep.
@@ -376,7 +378,7 @@ impl<'gc> Cx<'_, 'gc> {
             let about = self
                 .document_url(at)
                 .and_then(|url| url::Url::parse(&url.to_str()).ok())
-                .is_some_and(|url| url.scheme() == "about");
+                .is_some_and(|url| matches!(url.scheme(), "about" | "javascript"));
             match self.frame_owner(at) {
                 Some(owner) if about => at = self.document_of(owner),
                 _ => break,

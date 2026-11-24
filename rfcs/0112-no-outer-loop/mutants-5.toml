@@ -1,0 +1,137 @@
+# Stage 5's mutants: `python3 scripts/test.py mutate rfcs/0112-no-outer-loop/mutants-5.toml`.
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it"]
+timeout = 240
+
+[[mutant]]
+name = "a task's toBlob calls aren't encoded"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        // Its `toBlob` calls, to the encoder.
+        self.start_canvas_encodes();'''
+to = '''        // Its `toBlob` calls, to the encoder.'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "event_loop::"]
+
+[[mutant]]
+name = "a task's dropdown isn't shown"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        self.handle_popup_requests();
+        self.handle_frame_requests();
+        self.start_image_fetches();'''
+to = '''        self.handle_frame_requests();
+        self.start_image_fetches();'''
+
+[[mutant]]
+name = "a task's WebDriver results aren't sent"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        self.send_webdriver_results();
+        self.log_canvas_raster_failure();'''
+to = '''        self.log_canvas_raster_failure();'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "webdriver::"]
+
+[[mutant]]
+name = "a CSS command's sheets wait for the task's end"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''            self.start_css_refetches();
+            return;'''
+to = '''            return;'''
+
+[[mutant]]
+name = "the sheets CSS wants after a lifecycle aren't asked for"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        // task).
+        self.start_css_refetches();'''
+to = '''        // task).'''
+
+[[mutant]]
+name = "the network isn't looked at after a task"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        self.check_network_idle();
+        self.post_network_idle();'''
+to = '''        self.post_network_idle();'''
+
+[[mutant]]
+name = "no task looks at the network once it is quiet"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        if let Some(at) = Instant::now().checked_add(wait) {
+            self.scheduler
+                .post_internal_at(InternalTask::NetworkIdle, at);
+        }'''
+to = '''        if let Some(at) = Instant::now().checked_add(wait) {
+            let _ = at;
+        }'''
+
+[[mutant]]
+name = "no task runs the guests when their wait is over"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        self.guests_posted = Some(at);
+        self.scheduler.post_internal_at(InternalTask::Guests, at);'''
+to = '''        self.guests_posted = Some(at);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "wasm_documents::"]
+
+[[mutant]]
+name = "no main frame is ever asked for"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            if !self.scheduler.has_task(TaskQueues::ALL) {
+                self.update_begin_main_frame();
+            }'''
+to = '''            if !self.scheduler.has_task(TaskQueues::ALL) && false {
+                self.update_begin_main_frame();
+            }'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "canvas::"]
+
+[[mutant]]
+name = "a main frame is decided after every task"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            if !self.scheduler.has_task(TaskQueues::ALL) {
+                self.update_begin_main_frame();
+            }'''
+to = '''            if !self.scheduler.has_task(TaskQueues::ALL) || true {
+                self.update_begin_main_frame();
+            }'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "canvas::"]
+
+[[mutant]]
+name = "no idle callback runs"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                    || self.run_idle_callback(),'''
+to = '''                    || (),'''
+
+[[mutant]]
+name = "a DOM change asks for no frame"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        self.request_next_frame_if_dom_changed();
+        // The loads the task asked for have started'''
+to = '''        // The loads the task asked for have started'''
+
+[[mutant]]
+name = "the stacks no load took stay"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        // script that asked, and that no load took, go.
+        self.clear_request_stacks();'''
+to = '''        // script that asked, and that no load took, go.'''
+
+[[mutant]]
+name = "the overlay asks for no frame"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        if self.overlay_agent.showing()
+            || self.overlay_agent.version() != self.widget().overlay_version
+        {
+            self.request_main_frame();
+        }'''
+to = '''        if (self.overlay_agent.showing()
+            || self.overlay_agent.version() != self.widget().overlay_version)
+            && false
+        {
+            self.request_main_frame();
+        }'''
+
+[[mutant]]
+name = "a javascript: URL's document has its own origin"
+file = "crates/dom/src/frame.rs"
+from = '''                .is_some_and(|url| matches!(url.scheme(), "about" | "javascript"));'''
+to = '''                .is_some_and(|url| matches!(url.scheme(), "about"));'''
+
+[[mutant]]
+name = "a javascript: URL's document has a window of its own"
+file = "crates/dom_js/src/engine.rs"
+from = '''        if url.starts_with("about:") || url.starts_with("javascript:") {'''
+to = '''        if url.starts_with("about:") {'''

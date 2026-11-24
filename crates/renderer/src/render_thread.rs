@@ -443,6 +443,11 @@ struct RenderThread {
     /// When the task for the intersections held back by their `delay` is
     /// posted for (the renderer's clock), if it is.
     intersections_posted: Option<f64>,
+    /// When the task that looks at the documents' network is posted for,
+    /// if it is.
+    network_idle_posted: Option<ipc::TimeTicks>,
+    /// When the task that runs the engine's guests is posted for, if it is.
+    guests_posted: Option<Instant>,
     /// The top-level frame's latest navigation to `about:blank` it asked
     /// for, by its number, and the document its document is to have its
     /// origin from (the initiator's).
@@ -612,6 +617,8 @@ impl RenderThread {
             navigations_asked: Vec::new(),
             retried_blocked_scripts: false,
             intersections_posted: None,
+            network_idle_posted: None,
+            guests_posted: None,
             main_origin_source: None,
             pending_input,
             clock: Clock::new(),
@@ -644,91 +651,37 @@ impl RenderThread {
     /// tells it whether a main frame is needed, and runs the rendering
     /// update when it asks for one (`begin_main_frame`).
     fn run(&mut self) {
-        'run: loop {
-            // Wait for a task, or until the next timer or heap task is due:
-            // idle, for DevTools' profile of the script (as Blink tells V8's
-            // inspector around each task).
+        loop {
+            // Wait for the next task, or until an idle period's callback
+            // may run: idle, for DevTools' profile of the script (as Blink
+            // tells V8's inspector around each task).
             self.set_idle(true);
-            let wait = self.until_next_due();
-            let first = self.scheduler.next(TaskQueues::ALL, wait);
+            let wait = self.until_idle();
+            let task = self.scheduler.next(TaskQueues::ALL, wait);
             self.set_idle(false);
-            let mut next = first;
-            while let Some(task) = next.take() {
-                // Chrome's top-level slice for a task, in its traces.
-                let _task = trace_event::trace_event!("ThreadControllerImpl::RunTask");
-                if !self.run_task(task) {
-                    break 'run;
+            match task {
+                Some(task) => {
+                    // Chrome's top-level slice for a task, in its traces.
+                    let _task = trace_event::trace_event!("ThreadControllerImpl::RunTask");
+                    if !self.run_task(task) {
+                        break;
+                    }
                 }
-                self.after_task();
-                self.update_title();
-                next = self.scheduler.try_next(TaskQueues::ALL);
-            }
-            // What the loop does between tasks, each a span of its own
-            // where it may take time: none of it is a task's.
-            let _between = trace_event::trace_event!("RenderThread::between_tasks");
-            // What the tasks' script asked of the frame (a dropdown, a
-            // navigation), now that none runs.
-            self.handle_popup_requests();
-            self.handle_frame_requests();
-            // The engine's guests whose waits are over (a wasm guest's: the
-            // DOM's tasks are the scheduler's, `MainThreadTask::DomTask`).
-            self.run_due_guests();
-            self.start_image_fetches();
-            self.start_script_fetches();
-            self.start_canvas_encodes();
-            self.send_webdriver_results();
-            self.log_canvas_raster_failure();
-            self.update_title();
-            // The blob URLs the tasks revoked, now that the loads they
-            // asked for went, and the navigations they asked for may commit.
-            self.blob_urls.flush_revoked();
-            self.end_cancellation_windows();
-            // The frames whose network went quiet, to DevTools; and what the
-            // steps above left for it, as after a task (they aren't the
-            // scheduler's tasks).
-            self.check_network_idle();
-            if let Some(engine) = &mut self.engine {
-                engine.number_port_messages();
-            }
-            self.tell_devtools_after_task();
-            // The sheets DevTools' `CSS` wants the texts of, asked for.
-            self.start_css_refetches();
-            // What DevTools' overlay shows follows its node at each frame,
-            // and draws once it changes.
-            if self.overlay_agent.showing()
-                || self.overlay_agent.version() != self.widget().overlay_version
-            {
-                self.request_main_frame();
-            }
-            // An idle period's callbacks, once no task waits (Blink's
-            // scheduler runs idle tasks when it has nothing else to).
-            if !self.scheduler.has_task(TaskQueues::ALL) {
-                trace_event::in_scope(
+                // None waits: an idle period's callback (Blink's scheduler
+                // runs idle tasks when it has nothing else to).
+                None => trace_event::in_scope(
                     trace_event::trace_event!("RenderThread::run_idle_callback"),
                     || self.run_idle_callback(),
-                );
+                ),
             }
-            // A DOM change asks for a frame itself, as Blink's do
-            // (`Document::ScheduleLayoutTreeUpdate`), whichever task made
-            // it: tasks that run script ask anyway, but a checkpoint after
-            // one that doesn't (the platform tasks') may change the DOM
-            // too, and nothing else would draw it.
-            self.request_next_frame_if_dom_changed();
-            // The loads the tasks asked for have started: the stacks of the
-            // script that asked, and that no load took, go.
-            self.clear_request_stacks();
-            let animation_frames = self.wants_animation_frame();
-            // Running transitions and CSS animations move on at each
-            // frame (script played or canceled one).
-            let animations = self.animations_want_frames();
-            let needs = self.needs_begin_main_frame
-                || animation_frames
-                || self.resize_loop_error
-                || animations
-                || self.pending_mouse_move.is_some();
-            self.widget()
-                .layer_tree_host
-                .set_needs_begin_main_frame(needs);
+            self.after_task();
+            // Whether the compositor is to send a main frame, as the thread
+            // is to wait: what the tasks asked of it (a frame they asked for
+            // the task after them may have had already, its flag cleared
+            // as it is drawn).
+            if !self.scheduler.has_task(TaskQueues::ALL) {
+                self.update_begin_main_frame();
+            }
         }
         tracing::debug!("renderer main thread exiting");
     }
@@ -757,6 +710,14 @@ impl RenderThread {
             // (Blink runs Oilpan's and V8's on the main thread's scheduler):
             // they may run script (FinalizationRegistry cleanup), and they
             // are what finalizes garbage.
+            InternalTask::NetworkIdle => {
+                self.network_idle_posted = None;
+                self.check_network_idle();
+            }
+            InternalTask::Guests => {
+                self.guests_posted = None;
+                self.run_due_guests();
+            }
             InternalTask::PlatformTasks => {
                 self.scheduler.platform_tasks_taken();
                 trace_event::in_scope(
@@ -773,8 +734,17 @@ impl RenderThread {
         if let Some(engine) = &mut self.engine {
             engine.number_port_messages();
         }
+        // What its script asked of the frame (a dropdown; the navigations
+        // and blob URLs the engine's calls left), now that none runs.
+        self.handle_popup_requests();
+        self.handle_frame_requests();
         self.start_image_fetches();
         self.start_script_fetches();
+        // Its `toBlob` calls, to the encoder.
+        self.start_canvas_encodes();
+        self.send_webdriver_results();
+        self.log_canvas_raster_failure();
+        self.update_title();
         self.blob_urls.flush_revoked();
         self.end_cancellation_windows();
         // The parser's scripts that wait for a sheet that blocks scripts,
@@ -784,7 +754,87 @@ impl RenderThread {
             self.scheduler
                 .post_internal(InternalTask::RetryBlockedScripts);
         }
+        // The frames whose network went quiet, to DevTools; and a task for
+        // when the next may have.
+        self.check_network_idle();
+        self.post_network_idle();
+        // A task for the engine's guests' next wait to be over.
+        self.post_guests();
         self.tell_devtools_after_task();
+        // The sheets DevTools' `CSS` wants the texts of, asked for (those a
+        // lifecycle update found it wants; a command's are asked for in its
+        // task).
+        self.start_css_refetches();
+        // What DevTools' overlay shows follows its node at each frame,
+        // and draws once it changes.
+        if self.overlay_agent.showing()
+            || self.overlay_agent.version() != self.widget().overlay_version
+        {
+            self.request_main_frame();
+        }
+        // A DOM change asks for a frame itself, as Blink's do
+        // (`Document::ScheduleLayoutTreeUpdate`), whichever task made it.
+        self.request_next_frame_if_dom_changed();
+        // The loads the task asked for have started: the stacks of the
+        // script that asked, and that no load took, go.
+        self.clear_request_stacks();
+    }
+
+    /// The task that looks at the documents' network as the first may
+    /// have been quiet long enough, unless one is posted for then or
+    /// sooner (Blink's `IdlenessDetector` has a timer of its own).
+    fn post_network_idle(&mut self) {
+        let Some(due) = self.next_idleness_due() else {
+            return;
+        };
+        if self.network_idle_posted.is_some_and(|posted| posted <= due) {
+            return;
+        }
+        self.network_idle_posted = Some(due);
+        let wait = due.saturating_since(ipc::TimeTicks::now());
+        if let Some(at) = Instant::now().checked_add(wait) {
+            self.scheduler
+                .post_internal_at(InternalTask::NetworkIdle, at);
+        }
+    }
+
+    /// The task that runs the engine's guests as the first's wait is over,
+    /// unless one is posted for then or sooner.
+    fn post_guests(&mut self) {
+        let Some(wait) = self
+            .engine
+            .as_mut()
+            .and_then(|engine| engine.until_due_guests())
+        else {
+            return;
+        };
+        let Some(at) = Instant::now().checked_add(wait) else {
+            return;
+        };
+        if self.guests_posted.is_some_and(|posted| posted <= at) {
+            return;
+        }
+        self.guests_posted = Some(at);
+        self.scheduler.post_internal_at(InternalTask::Guests, at);
+    }
+
+    /// Whether the compositor is to send a main frame (Blink's
+    /// `SetNeedsAnimate`, as each asks): one was asked for, an animation
+    /// frame callback waits, a resize loop error is to be reported,
+    /// transitions and animations run, or a mouse move waits for the frame.
+    fn update_begin_main_frame(&mut self) {
+        let animation_frames = self.wants_animation_frame();
+        // Running transitions and CSS animations move on at each frame
+        // (script played or canceled one).
+        let animations = self.animations_want_frames();
+        let needs = self.needs_begin_main_frame
+            || animation_frames
+            || self.resize_loop_error
+            || animations
+            || self.pending_mouse_move.is_some();
+        self.widget()
+            .layer_tree_host
+            .set_needs_begin_main_frame(needs);
     }
 
     /// The navigations the task asked for may commit now
@@ -1509,25 +1559,6 @@ impl RenderThread {
         self.run_document_idle_callback(deadline);
     }
 
-    /// How long the loop may wait for a task: until the next timer, idle
-    /// callback or intersection observation, the caret's next blink, or a
-    /// document's network may have been quiet long enough.
-    fn until_next_due(&mut self) -> Option<Duration> {
-        // A document's network may have been quiet long enough by then.
-        let idle = self
-            .next_idleness_due()
-            .map(|due| due.saturating_since(ipc::TimeTicks::now()));
-        // The engine's guests' waits (the DOM's timers wake the scheduler
-        // themselves, `dom_task_waker`).
-        let next = self
-            .engine
-            .as_mut()
-            .and_then(|engine| engine.until_due_guests());
-        // The renderer's own timers wake the scheduler themselves
-        // (`post_internal_at`).
-        sooner(sooner(self.until_idle(), idle), next)
-    }
-
     /// A main frame for the observations held back by their `delay`, once
     /// the first is due.
     fn intersections_due_now(&mut self) {
@@ -1978,14 +2009,6 @@ fn viewport(properties: &VisualProperties) -> (SizeF, f32) {
     (size, dsf)
 }
 
-/// The shorter of two waits, where `None` is "forever".
-fn sooner(a: Option<Duration>, b: Option<Duration>) -> Option<Duration> {
-    match (a, b) {
-        (Some(a), Some(b)) => Some(a.min(b)),
-        (a, b) => a.or(b),
-    }
-}
-
 /// The pointer's move, waiting for the next main frame.
 #[derive(Debug, Clone, Copy)]
 struct MouseMove {
@@ -2018,15 +2041,5 @@ mod tests {
             ParserBudget::yield_every_slice(64).of_run(0),
             Duration::ZERO
         );
-    }
-
-    #[test]
-    fn the_sooner_wait() {
-        let ms = Duration::from_millis;
-        assert_eq!(sooner(Some(ms(5)), Some(ms(3))), Some(ms(3)));
-        assert_eq!(sooner(Some(ms(3)), Some(ms(5))), Some(ms(3)));
-        assert_eq!(sooner(None, Some(ms(5))), Some(ms(5)));
-        assert_eq!(sooner(Some(ms(5)), None), Some(ms(5)));
-        assert_eq!(sooner(None, None), None);
     }
 }

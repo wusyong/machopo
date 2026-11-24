@@ -126,9 +126,12 @@ impl V8Engine {
 
     /// Whether a document at `url` in a child frame of `parent` is of the
     /// origin its initial `about:blank` has, its parent's: an `about:` one
-    /// (`about:srcdoc`, `about:blank`), or one of the same tuple origin.
+    /// (`about:srcdoc`, `about:blank`) or a `javascript:` URL's, or one of
+    /// the same tuple origin.
     fn inherits_origin(&mut self, parent: Option<dom_api::FrameId>, url: &str) -> bool {
-        if url.starts_with("about:") {
+        // A `javascript:` URL's document has its initiator's origin
+        // (HTML's), as an `about:` one has.
+        if url.starts_with("about:") || url.starts_with("javascript:") {
             return true;
         }
         let Some(parent) = parent.and_then(|parent| self.state().frames.get(parent)) else {

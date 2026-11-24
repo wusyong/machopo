@@ -34,7 +34,12 @@
 | 4d. renderer 的 timer（caret、intersection、延後的 iframe `load`、新內容的逾時）排成延後的 task | 做完，待審查 | 2026-11-24 |
 | 4e. V8 的 platform task 經過 `PlatformImpl` 進 scheduler | 做完，待審查 | 2026-11-24 |
 | 4f. 文件、mutation test | 做完，待審查 | 2026-11-24 |
-| 5. 剩下的步驟，拿掉外圈 | | |
+| 5. 剩下的步驟，拿掉外圈（第 19 到 23 條） | 做完，待審查 | 2026-11-24 |
+| 5a. 必壞的測試：通道一直有 task 時 `toBlob` 照樣完成 | 做完，待審查：原本的程式上壞（`encoded after -1`），5b 之後過 | 2026-11-24 |
+| 5b. 剩下的步驟改成 task 之後的觀察者（選單、WebDriver 的結果、`toBlob`、raster 失敗的 log、network idle、overlay、DOM 變了要 frame、request stack 的清理）；`CSS` 的重抓當場 | 做完，待審查 | 2026-11-24 |
+| 5c. network idle 和 wasm guest 的等待是延後的 task | 做完，待審查 | 2026-11-24 |
+| 5d. `RenderThread::run` 只剩取 task、跑它、task 之後的觀察者、idle period、要不要 frame | 做完，待審查 | 2026-11-24 |
+| 5e. 文件、mutation test | 做完，待審查 | 2026-11-24 |
 
 ## 驗收
 
@@ -132,3 +137,21 @@
 
 **階段結束的檢查**：`cargo test --workspace` 通過（60 個 binary，4721 個通過、1 個 ignored）；`cargo fmt --check` 和 `cargo clippy --workspace --all-targets -- -D warnings` 通過（clippy 抓到一個多餘的空行和一個 `match`，改了）；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs` 通過（`boundary` 的例外加了 `bindings` 的 `TASKS`：V8 的 platform 的 foreground task，照 isolate 分開，和已經在例外裡的 `PLATFORM` 同一個 process 一份的 platform）。
 
+### 第 5 階段（2026-11-24，Linux：Fedora 45、debug build，`5f243e5` 之上）
+
+**必壞的測試**：`event_loop::a_canvas_blob_comes_while_responses_keep_coming`（`fetch()` 的接力裡呼叫 `toBlob`，blob 要在接力結束之前來）：原本的程式上壞（`encoded after -1`），5b 之後過。
+
+**過程中發現、修掉的**：
+- 要不要 main frame 改成每個 task 之後決定時，`shell` 的 6 個測試壞了（`canvas::a_draw_asks_for_a_frame` 多畫了一個 frame：task 要的 frame，下一個 task 之前可能已經畫了、旗標清了，在那之間決定又要了一次）。一步一步拿掉試，確認是這一步；改成 loop 要等下一個 task 之前才決定（和以前外圈在一批 task 之後決定一樣），6 個都過。
+- WPT 的 `webmessaging/with-ports/018.html`、`without-ports/018.html` 逾時：第 4 段把 iframe 的 `javascript:` 的 commit 排成 task，它排在頁面的 `postMessage` 前面，建了新的 window，送給 `window[0]` 的訊息丟了（第 4 段的 WPT 沒有跑 `webmessaging/`）。照第 23 條改成繼承建立它的文件的 origin、沿用初始 `about:blank` 的視窗，兩個都過；`devtools::a_child_frames_document_is_told_before_its_script` 的 `javascript:` 那一種少了一個 context，改了預期；`history_pushstate_url_rewriting.html` 多通過一個子測試（`javascript:'foo'?newsearch`），更新了預期結果，重跑兩次都通過。
+- `until_next_due` 和只有它用的 `sooner` 拿掉了（loop 不再自己算醒來的時間，連同 `sooner` 的單元測試）。
+
+**WPT**（`html/webappapis/timers/`、`html/webappapis/scripting/event-loops/`、`html/browsers/history/`、`webmessaging/`、`intersection-observer/`、`html/semantics/forms/the-select-element/`、`html/syntax/parsing/`、`requestidlecallback/`、`workers/`、`html/semantics/embedded-content/the-iframe-element/`，836 個）：修好上面兩個之後沒有新的失敗；預期 FAIL 或 ERROR、結果通過的（`same-hash.html` 的 7 個子測試、第 3 段記下的 2 個），原本的預期結果就舊了，沒改。
+
+**情境**：`test.py scenarios`（沒有視窗的）98 個都通過。
+
+**mutation test**（`mutants-5.toml`，16 個）：11 個抓到、5 個沒抓到。`javascript:` 的文件有自己的 window 的那個，在 `devtools` 的測試裡加了「沒有其他的 context」的檢查，重跑抓到。沒抓到的 4 個記進 `docs/test-gaps.md`：`CSS` 的命令當場抓 sheet 和在 task 之後抓（等價：都在同一個 task 結束前送出請求）、lifecycle 之後才要的 sheet 在 task 之後抓（測試裡要原文的都是命令）、overlay 要 frame（測試裡命令和畫面本來就要了 frame）、wasm guest 的延後的 task（畫面的 frame 照樣叫醒 loop）。第 1 到 3 段的 spec 裡改外圈的 mutant（`the outer turn's steps leave nothing for DevTools` 等 6 個），程式這一段拿掉了，沒有改。
+
+**相關 crate 的測試**：`dom`、`dom_js`、`renderer`、`browser`、`shell` 都通過。
+
+**階段結束的檢查**：`cargo test --workspace` 通過（60 個 binary，4721 個通過、1 個 ignored）；`cargo fmt --check`（rustfmt 改了 `render_thread.rs` 一處，`mutants-5.toml` 跟著改）和 `cargo clippy --workspace --all-targets -- -D warnings` 通過；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs` 通過。

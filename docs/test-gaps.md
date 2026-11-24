@@ -222,6 +222,12 @@
 - intersection observer 的 `delay` 的 task 提早一點被叫到（renderer 的時鐘和 `Instant` 的換算差了一點）時再排一次：測試造不出那一點差，拿掉之後那個 delay 的 frame 就不來了。靠審查。
 - V8 延後的 platform task 到期時才跑（`platform_tasks::take_due` 的 `delayed`）、worker 為它醒來（`worker_thread` 的 `platform_due`）：`FinalizationRegistry` 的 cleanup 不是延後的，測試裡沒有看得出延後的 task 的地方（V8 的 memory reducer、idle 的 GC 之類）。之後找到頁面看得到的延後的 task 時補。
 
+**task 之後的觀察者（`render_thread.rs` 的 `after_task`）**
+
+- DevTools 的 `CSS` 在 lifecycle 之後才要的 sheet 的原文，在 task 之後抓（`start_css_refetches`）：拿掉之後沒有測試失敗，測試裡要原文的都是命令，命令的 task 裡當場就抓了。
+- overlay 跟著節點、要一個 frame（`overlay_agent.showing()` 的那一段）：拿掉之後沒有測試失敗，`devtools_overlay` 的測試裡 overlay 的命令和畫面的 frame 本來就要了 frame。要一個框著的節點在沒有其他 frame 時移動的測試。
+- wasm guest 的等待結束時跑它的延後的 task（`post_guests`）：`wasm_documents` 的測試裡畫面的 frame 照樣叫醒 loop、跑到它（和「loop 等待時為 renderer 自己的延後的 task 醒來」同一個原因）。
+
 ## 沒有計數守著的優化
 
 下面這些捷徑被拿掉時結果照樣對（debug build 的交叉檢查只比結果），只是多做事，沒有測試會失敗。2026-10-20 逐項讀過測試盤點：其他的優化（style 的 invalidation、MPC、祖先的 Bloom filter、增量的 pre-paint 和 paint、raster invalidation、tile 的跳過、root 的計數、parse 的 fast path……）都有 debug build 的計數（各 crate 的 `*_for_testing`、`layout` 的 `BoxTreeUpdate` 和 `LayoutUpdate`）和斷言它的測試。改到這些地方時特別注意；量到變慢時（Speedometer 用 git 二分，`--sample` 看多出來的函式）先對照這份。之後照下面的順序補計數，補了就從這裡刪掉。
@@ -285,6 +291,10 @@
 ## 等價、不用處理的 mutation
 
 弄壞之後行為完全一樣，記在這裡免得重複追查。
+
+**DevTools 的 `CSS` 的命令要的 sheet 的原文（`devtools.rs` 的 `devtools_message`）**
+
+- 在命令的 task 裡當場抓，和在那個 task 之後抓（`after_task` 的 `start_css_refetches`）看不出差別：兩者都在同一個 task 結束之前送出請求，回答在請求之前就送了。留著當場的，是照 Chrome 在 `CSS.enable` 的 task 裡抓。
 
 **DOM 的 task 是 scheduler 的 task（`render_thread.rs` 的 `after_task`、`dom` 的 `worker.rs`）**
 

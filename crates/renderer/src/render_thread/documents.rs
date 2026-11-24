@@ -2989,7 +2989,7 @@ impl RenderThread {
                     .read(|cx| cx.document_origin(source.get(cx.gc))),
             ),
             // An `about:` document's own is its parent's (`origin_document`).
-            None if url.scheme() == "about" => parent.origin.clone(),
+            None if matches!(url.scheme(), "about" | "javascript") => parent.origin.clone(),
             None => serialize(Some(url.origin())),
         };
         Some(FrameInfo {

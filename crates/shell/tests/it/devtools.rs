@@ -1218,8 +1218,9 @@ fn a_new_frames_events_come_in_chromes_order() {
 /// a `srcdoc` one, both in their initial `about:blank`'s window; one of
 /// another origin, in a realm of its own; and a `javascript:` URL's empty
 /// document, which the renderer commits itself (named by the document,
-/// no navigation of the browser's bringing it). Each named as the frame
-/// tree names it after.
+/// no navigation of the browser's bringing it), of its creator's origin,
+/// in its initial `about:blank`'s window too. Each named as the frame tree
+/// names it after.
 #[test]
 fn a_child_frames_document_is_told_before_its_script() {
     let server = server(&[
@@ -1257,7 +1258,7 @@ fn a_child_frames_document_is_told_before_its_script() {
         (
             "f.src = 'javascript:1'",
             "javascript:1".to_owned(),
-            &["context", "navigated", "context"][..],
+            &["context", "navigated"][..],
         ),
     ] {
         let id = page.send(
@@ -1290,10 +1291,18 @@ fn a_child_frames_document_is_told_before_its_script() {
         assert_eq!(order, expected, "{navigate}");
         assert_eq!(navigated["url"], json!(url), "{navigated}");
         page.answer(id);
-        // Not told again as the task ends: the same document.
+        // Not told again as the task ends: the same document; and no
+        // other context for it than those counted (one in its initial
+        // window has none of its own).
         evaluate(&mut page, "0", None);
         let again = page.take_events("Page.frameNavigated");
         assert_eq!(again, Vec::<Value>::new(), "{navigate}");
+        let contexts: Vec<Value> = page
+            .take_events("Runtime.executionContextCreated")
+            .into_iter()
+            .filter(|event| event["params"]["context"]["auxData"]["frameId"] == navigated["id"])
+            .collect();
+        assert_eq!(contexts, Vec::<Value>::new(), "{navigate}");
         let tree = page.call(None, "Page.getFrameTree", json!({}));
         let child = tree["result"]["frameTree"]["childFrames"]
             .as_array()

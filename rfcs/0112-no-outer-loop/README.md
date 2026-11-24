@@ -1,7 +1,7 @@
 # RFC 0112：拿掉 event loop 的外圈
 
 - 開始日期：2026-11-24
-- 狀態：🚧 已排程：2026-11-24（第 0 到 3 階段做完；第 4 段待審查）
+- 狀態：🚧 已排程：2026-11-24（第 0 到 5 階段都做完，待審查）
 - 細節：`details.md`；進度：`progress.md`
 
 ## 摘要
@@ -161,6 +161,13 @@ parser 的續跑和子 frame 的 commit 是 renderer 自己的工作，直接排
 16. **第 4 段：renderer 自己的 timer 是 scheduler 的延後 task**（2026-11-24，使用者決定；A）：caret 的閃爍、intersection observer 的 `delay`、延後的 iframe `load`、新內容的逾時在設定時 post 一個延後的 task（沿用第 3 段的 delayed heap，到期、挑下一個 task 時才排進去），輪到時再看它還該不該做（取消了、改了時間的什麼都不做）。parser 的續跑、等 sheet 的 script、`javascript:` 網址的 commit 在要做的時候 post 一個 task（Chrome 都是排 0 ms 的 task，kNetworking）。對照 Chrome：這些都是 `TaskRunner::PostDelayedTask` 的 timer（`FrameCaret`、`ScheduleDelayedIntersection`、`DispatchLoad` 的 100 ms、Browser 的 `TimeoutMonitor`），取消的在輪到時略過。不選照舊由 loop 算醒來的時間（B）：順序還是 loop 決定的，第 5 段拿掉外圈時要再改。
 17. **第 4 段：這些工作在一個 `TaskQueue::Internal`**（2026-11-24，使用者決定；A）：script 停在斷點時不取它，和 DOM 的 queue 一樣。對照 Chrome：kInternalDefault、kInternalLoading、kNetworking 和 V8 的 queue 大多是同一個優先度。不選照 task type 分（B）：現在沒有東西需要分開。
 18. **第 4 段：V8 的 platform task 經過 `PlatformImpl` 送到它的 isolate 的 thread 的 scheduler**（2026-11-24，使用者決定；A）：`bindings` 改用 rusty_v8 的 `PlatformImpl`（V8 的 `PostTask`、`PostDelayedTask` 交給 Rust，不改 V8 的 C++、不用重編）：照 isolate 送到那個 thread（主 thread 的進 `TaskQueue::Internal`，延後的進 delayed heap；worker 的進它的 inbox），idle task 交給 idle period。對照 Chrome：V8 的三種 foreground task runner 是主 thread scheduler 的 `kMainThreadTaskQueueV8*`。代價：platform 是整個 process 共用的，要一張 isolate 到 thread 的對照表（一個 lock），worker 的 loop 要接收；動到 `bindings` 的 platform，照 `crates/bindings/soundness.md` 檢查。不選每個 task 之後拉一次（B）：V8 延後的 task 照舊沒有東西叫醒 loop。不選這一段不做（C）。
+
+19. **第 5 段：DevTools 的 `CSS` 重抓當場做，`<select>` 的選單和 WebDriver 的結果在每個 task 之後**（2026-11-24，使用者決定；A）：`CSS` 的重抓是 renderer 自己的 agent 的，在處理命令的那個 task 裡就送（Chrome 的 `InspectorResourceContentLoader` 在 `CSS.enable` 的 task 裡同步 fetch）；選單（Chrome 的 `ExternalPopupMenu::Show` 當場送 mojo）和 WebDriver 的結果（V8 inspector 在 promise 的 reaction 裡當場送）改成 task 之後的觀察者，差別只在同一個 task 之內。不選三個都當場（B）：選單和 WebDriver 的結果各要一個 engine 的 hook，改動大、外面看不出差別。不選三個都在 task 之後（C）：CSS 重抓比 Chrome 晚一點，又沒有省下什麼。
+20. **第 5 段：`toBlob` 的編碼在每個 task 之後送到 encoder thread**（2026-11-24，使用者決定；A）：Chrome 在 main thread 的 idle task 裡逐段編碼、1 秒沒開始就改成立即；machopo 的編碼本來就在另一個 thread，task 之後送比 Chrome 早開始，結果一樣。不選照 Chrome 在 idle period 送（B）：多一套「1 秒之後改成立即」的 timer，換不到什麼。
+21. **第 5 段：network idle 在每個 task 之後檢查，另外一個延後的 task 在安靜的窗口結束時**（2026-11-24，使用者決定；A）：Chrome 的 `IdlenessDetector` 是 `TaskTimeObserver`（task 的交界檢查），另有 watchdog 的 timer；延後的 task 取代 loop 為它算的醒來時間。不選照舊由 loop 算（B）：loop 就沒辦法只剩取 task、跑 task。
+22. **第 5 段：wasm guest 的等待是延後的 task**（2026-11-24，使用者決定；A）：每次跑完 guest 之後，照它最早的期限排一個延後的 task（`TaskQueue::Internal`），和 renderer 其他的 timer 一樣，loop 的等待不再問 engine。不選照舊由 loop 問 engine（B）。
+
+23. **第 5 段：`javascript:` 網址的文件有建立它的文件的 origin，沿用初始 `about:blank` 的視窗**（2026-11-24，使用者決定；A）：第 4 段把 iframe 的 `javascript:` 的 `src` 的 commit 改成 task 之後，WPT 的 `webmessaging/*/018.html` 逾時：commit 排在頁面的 `postMessage` 前面，建了新的 window，送給 `window[0]` 的訊息丟了（以前靠外圈晚一點 commit 才沒事；第 4 段沒有跑 `webmessaging/`）。照 HTML 和 Chrome，`javascript:` 網址的文件有發起它的文件的 origin，初始 `about:blank` 的視窗沿用：`origin_document` 和 engine 的 `inherits_origin` 把它當成 `about:` 的一樣。影響：這類文件的 origin 從 opaque 變成它的 iframe 的文件的。不選只讓 commit 晚一點（B）：要另外挑一個晚一點的位置，和 Chrome 不同，只是繞過這個測試。
 
 ## 待決定
 

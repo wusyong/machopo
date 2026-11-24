@@ -89,6 +89,11 @@ pub(crate) enum InternalTask {
     /// The engine's platform tasks that are due (V8's foreground tasks:
     /// Blink's `kMainThreadTaskQueueV8`).
     PlatformTasks,
+    /// A document's network may have been quiet long enough (Blink's
+    /// `IdlenessDetector`'s timer).
+    NetworkIdle,
+    /// The engine's guests whose waits are over (a wasm guest's).
+    Guests,
 }
 
 /// The scheduler's task queues (Blink's task queues by type), each in the

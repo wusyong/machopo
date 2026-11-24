@@ -162,17 +162,21 @@ impl RenderThread {
         if self.engine.is_none() {
             self.engine = Some(self.make_engine());
         }
-        if let Some(engine) = &mut self.engine {
+        let answered = self.engine.as_mut().is_some_and(|engine| {
             let mut page = engine.devtools_page();
             if self.dom_agent.handle(session, message, &mut *page) {
                 self.css_agent.dom_answered(session, &mut *page);
-                return;
+                return true;
             }
-            if self.css_agent.handle(session, message, &mut *page)
+            self.css_agent.handle(session, message, &mut *page)
                 || self.overlay_agent.handle(session, message, &mut *page)
-            {
-                return;
-            }
+        });
+        if answered {
+            // The sheets `CSS` wants the texts of, asked for in the task
+            // that wanted them (Blink's `InspectorResourceContentLoader`
+            // fetches in `CSS.enable`'s).
+            self.start_css_refetches();
+            return;
         }
         let handled = self
             .engine
