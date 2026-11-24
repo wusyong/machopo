@@ -351,6 +351,17 @@ impl FrameTree {
         self.nodes.get(&frame)?.navigation.as_ref()
     }
 
+    /// The frame whose navigation on its way is the renderer's `begin_id`
+    /// (`BeginNavigation`'s), and the browser's number for it.
+    pub(crate) fn navigation_of_begin_id(&self, begin_id: u64) -> Option<(FrameToken, u64)> {
+        self.nodes.iter().find_map(|(frame, node)| {
+            node.navigation
+                .as_ref()
+                .filter(|navigation| navigation.begin_id == Some(begin_id))
+                .map(|navigation| (*frame, navigation.id))
+        })
+    }
+
     /// `frame`'s navigation on its way, if it is `navigation_id`.
     pub(crate) fn navigation_mut(
         &mut self,

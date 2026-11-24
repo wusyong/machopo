@@ -1,7 +1,7 @@
 # RFC 0112：拿掉 event loop 的外圈
 
 - 開始日期：2026-11-24
-- 狀態：🚧 已排程：2026-11-24（第 0、1 階段做完，第 1 段待審查）
+- 狀態：🚧 已排程：2026-11-24（第 0、1 階段做完；第 2 段進行中）
 - 細節：`details.md`；進度：`progress.md`
 
 ## 摘要
@@ -22,7 +22,7 @@ renderer 的 event loop 分兩層：內圈一個個跑 scheduler 的 task，跑�
 - **通道一直有 task 時外圈一直晚**：內圈不停，timer、parser、commit、DevTools 的事件都等著。RFC 0110 的 A6 就是這一類（一個 frame 算出 intersection 的 entry 之後，通道上排著的 task 讓外圈晚到下一個 frame 的 `requestAnimationFrame` 之後），它改成 DOM 的 task 才修掉；其他留在外圈的照樣會。
 - **先後由清單決定**：DOM 的 timer 和 scheduler 的 task 之間、parser 的續跑和 timer 之間的順序，是外圈的步驟排在哪裡，不是 HTML 的 task source 和 Chrome 的 scheduler 的規則。加一個新的步驟就要在清單裡挑位置，排錯了是下一個同類的 bug。
 - **DevTools 看到的順序和 Chrome 不同**：frame 的事件在那一輪最後才送，同一個 task 裡建了又拿掉的 iframe 看不到，新的 frame 的 `executionContextCreated` 在它的 `frameAttached` 之前。
-- **導覽晚交給 Browser**：差 task 剩下的時間；同一個 task 裡的幾個導覽 machopo 只留最後一個（第 24 條），Chrome 是每個都送、後一個取消前一個。
+- **導覽晚交給 Browser**：差 task 剩下的時間；同一個 task 裡的幾個導覽也都等那時才依序送（RFC 0019 第 24 條寫的「只留最後一個」已經不是現在的行為，見第 10 條），Chrome 在每個 setter 裡送、後一個取消前一個。
 
 要解決的 `docs/limitations.md` 裡的限制：
 
@@ -123,16 +123,31 @@ parser 的續跑和子 frame 的 commit 是 renderer 自己的工作，直接排
    - 子 frame 的 commit（`commit_child`，子 frame 的 commit 只經過它）在 `create_window` 之前把新文件的 `FrameInfo` 交給 Page agent（沒有 node id）；dom_js 的 `create_window` 在建好文件之後、告訴 inspector 新 realm 之前，呼叫 `FrameClient` 新的 `child_document_created`（沿用初始 `about:blank` 視窗的那條路也呼叫），Page agent 補上文件的編號，renderer 自己 commit 的文件連 loaderId 也一起補上，然後送 `frameStartedLoading`、`init`、`frameNavigated`；之後的比對認得是同一份文件，不再重送。頂層的 commit 本來就在 `create_window` 之前告訴 Page agent。
    - 對照 Chrome：`frameNavigated` 在 `WillCommitNavigation` 送，在新文件的 context 和 script 之前。
    - B 的前提錯在哪：當初以為 commit 自己是一個 task，task 結束時比對看不出差別。但子 frame 的 commit 在同一個 task 裡建 realm（送 `executionContextCreated`）、跑 inline script，所以 `frameNavigated` 會晚到它們之後（臨時的測試量到 `console` 在前）。
-   - loaderId 的做法：renderer 自己 commit 的文件（`srcdoc`、`about:blank`、`javascript:`），loaderId 是文件的 node id，`create_window` 之前還不知道。所以由引擎的 hook 補上。不選改用 commit 前就分配好的 `DocumentId`：它和 browser 的導覽編號是兩個不同的計數器，同一個 frame 可能出現相同的 loaderId。
+   - loaderId 的做法：renderer 自己 commit 的文件（`javascript:` 網址的空文件；`srcdoc` 和 `about:blank` 也經過 browser），loaderId 是文件的 node id，`create_window` 之前還不知道。所以由引擎的 hook 補上。不選改用 commit 前就分配好的 `DocumentId`：它和 browser 的導覽編號是兩個不同的計數器，同一個 frame 可能出現相同的 loaderId。
    - 不選每個 task 之後都比對（A）：開著 DevTools 時每個 task 都要重建整份清單（frame 數的平方）。
    - 不選照舊比對、把差別記進限制（B）：Puppeteer 這類工具等 `frameNavigated` 之後才找 context，會接不上。
    - 當初不選 C 的理由是「commit 的路很多、會漏」，實作時發現不成立：子 frame 的 commit 只有一條路。
 9. **第 1 段的第 4 項：DOM 的變動和 console 警告在每個 task 之後、renderer 的 agent 回應之前送**（2026-11-24，使用者決定；A）：內圈每個 task 之後（有 DOM agent 開著才取），`frameAttached` 之前（第 7 條）；renderer 的 agent 的回應之前不用另外取：實作時發現 DOM、CSS、Overlay agent 的指令都不改 DOM（machopo 沒有 `DOM.setAttributeValue` 這類），它們本來就在處理指令之前先取，回應之前已經沒有排著的。對照 Chrome：通知在改變的當下產生、進佇列，`DidProcessTask`、送每個 CDP 回應之前、`flush()` 時送出。和 Chrome 不同、記進 `docs/limitations.md` 的：engine 的 inspector 的回應（`Runtime.evaluate` 裡改了 DOM）照樣先到，變動在那個 task 結束時才到。不選連 engine 的 inspector 的回應之前也送（B）：回應在 V8 裡經過 `devtools_send` 送出，那時手上沒有 `Dom`，要給兩個 engine 的 inspector channel 加拿 `&Dom` 的 hook；script 暫停時訊息要當場送，不能先存起來。
 
+10. **第 2 段：導覽由 hook 當場送，renderer 的帳在呼叫之後對照**（2026-11-24，使用者決定；原本「待決定」的第 1 條；C）：
+   - `FrameClient` 加一個導覽的 hook，在 setter 裡當場送 `BeginNavigation`、`DidChangeSrcDoc`、同一份文件內的 commit、`GoToEntryAtOffset`、`OpenUrl`。
+   - 請求的編號改成 thread-local 的計數器（RFC 0110 的請求編號的做法）；iframe 的 `referrerpolicy` 和「上一頁載入的父文件裡新建的 frame」用 `&Dom` 讀；DevTools 的 initiator 由 hook 拿 Network agent 的 `Rc` 算（load sink 的做法）。
+   - 送了什麼記成一筆，renderer 在呼叫之後照舊更新自己的帳（子 frame 的導覽、繼承 origin 的文件、frame 在載入中）；不送 browser 的 `javascript:` 和 fragment 照舊在呼叫之後。
+   - 理由：和 Chrome 一樣在 setter 裡送（Blink 的 `LocalFrameClient::BeginNavigation` 呼叫 content 的 `RenderFrameImpl::BeginNavigation`，當場組參數、經過 mojo 送；這一段憑記憶）；帳晚一點更新不會錯，讀它的只有 browser 之後的 commit 和 dropped，都是之後的 task；和第 6 條、RFC 0110 第 22 條同一種做法。
+   - 代價：送和記帳在兩個地方，要寫在一起、對得上；「frame 在載入中」要在呼叫裡就讓 DOM 知道（同一個呼叫裡父文件的 `load` 會不會先檢查到，實作時確認）。
+   - 讀程式時發現：RFC 0019 第 24 條的「同一個 task 只留最後一個」已經不是現在的行為，每個導覽都依序送，browser 收到同一個 frame 的下一個 `BeginNavigation` 時丟掉前一個（`take_any_navigation`、`NavigationDropped`）；和 Chrome 不同的只剩送出的時間。
+   - 不選帳搬進 `dom`（A）：renderer 讀 `ChildFrames.navigations` 的幾十處都要改，`dom` 多了 browser 那一層的概念。不選 engine 當參數帶（B）：「上一頁載入的父文件」和 DevTools 的 initiator 是 renderer 的，engine 給不出來，最後還是要像 C 那樣補一份。
+11. **第 2 段：同一個 task 裡連續的導覽照 Chrome 的取消窗口**（2026-11-24，使用者決定；原本「待決定」的第 2 條；A）：renderer 在發起導覽的 task 之後告訴 browser 那些導覽的取消窗口結束了（新的訊息，Chrome 的 `NotifyNavigationCancellationWindowEnded`）；browser 在那之前不送 renderer 發起的導覽的 commit（Chrome 的 `RendererCancellationThrottle`），同一個 frame 的下一個 `BeginNavigation` 在那之前到了就取消前一個。理由：導覽在 setter 當場送之後，script 送出第一個再忙一陣、才送第二個時，browser 可能已經拿到第一個的回應；沒有這個窗口，頂層 frame 會先 commit 第一個再 commit 第二個（多一筆 session history，閃過第一份文件），子 frame 的被 renderer 丟掉、browser 卻以為 commit 了。代價：多一個訊息和 browser 的等待狀態，導覽最快在發起它的 task 結束後 commit（和 Chrome 一樣）。不選 renderer 丟掉過期的 commit（B）：browser 和 renderer 的帳不一致。不選照舊等 task 結束才送（C）：第 2 段的目標不成立。
+
+12. **第 2 段：取消窗口在 task 之後結束，blob URL 的撤銷也在 task 之後送；parser 的 script 和背景圖的請求先改成當場送**（2026-11-24，使用者決定）：
+   - 實作 2b 時發現：導覽在 setter 當場送之後，browser 可能在 renderer 送出那個 task 撤銷的 blob URL（`flush_revoked`，原本在外圈）之前就 commit，之後再導覽到那個 URL 會成功（browser 的 `blobs` 測試在整組跑時逾時）。
+   - 做法：parser 的 script（`start_script_fetches`）和 style 找到的背景圖（`start_image_fetches`）的請求在每個 task 之後就經過 load sink 送出（原本等外圈）；Chrome 在 `ScriptLoader::PrepareScript`、style recalc 的 `LoadPendingImages` 裡同步發 fetch（`details.md` 的盤點），差別只在同一個 task 之內，外面看不出來。接著 `flush_revoked`（每個 task 要的載入都已經送出），再結束第 11 條的取消窗口（Chrome 的位置），最後是 DevTools 的事件。
+   - 推翻第 4 條的例外：`flush_revoked` 不再留給「導覽帶著解析好的 blob」那一份，改成 task 之後的觀察者；那一份要做的只剩導覽帶 `BlobURLToken`。
+   - 不選取消窗口暫時在外圈的 `flush_revoked` 之後結束（A）：第 2 段比較小，但這兩種請求改成當場送之前，renderer 發起的導覽的 commit 都要等外圈，和 Chrome 不同。不選窗口在 task 之後結束、撤銷照舊在外圈（C）：導覽到 blob URL 立刻撤銷時，外圈跑到之前 browser 還拿得到它。
+
 ## 待決定
 
-1. **導覽的帳在哪裡**：搬進 `dom`、由 engine 當參數帶，或 hook 當場送、renderer 在呼叫之後對照（RFC 0110 第 22 條的做法）。
-2. **同一個 task 裡連續的導覽**：照 Chrome 每個都送、Browser 取消前一個，還是保留第 24 條的「只留最後一個」。
+目前沒有。
 
 ## 之後的可能
 

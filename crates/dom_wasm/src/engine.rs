@@ -92,6 +92,10 @@ struct Host<'a> {
     /// host for its frame (`ScriptEngine::take_frame_requests`).
     top: Option<NodeId>,
     requests: &'a mut Vec<dom_api::FrameRequest>,
+    /// The host's client, told of a navigation as it is asked, and the
+    /// window's token (the browser's) to name the frame by.
+    frame_client: &'a mut Option<Box<dyn dom_api::FrameClient>>,
+    main_token: Option<dom_api::FrameToken>,
     wasm: &'a WasmDom,
     set: &'a mut Option<StoreSet<Data>>,
     scripts: &'a mut Vec<Script>,
@@ -135,17 +139,32 @@ impl ScriptHost for Host<'_> {
     }
 
     /// The window's document navigated, or is to (a link followed, a form
-    /// submitted, a fragment gone to): the host told.
+    /// submitted, a fragment gone to): the host told, its client at once
+    /// (`FrameClient::navigate`), then as the call ends.
     fn navigate(&mut self, document: &NodeRoot, _: &NodeRoot, navigation: dom::FrameNavigation) {
         let id = self.dom().read(|cx| cx.node_id(document.get(cx.gc)));
-        if self.top == Some(id) {
-            // The one frame: whatever asked is in it.
-            self.requests.push(dom_api::FrameRequest::Navigation {
-                frame: TOP,
-                initiator: TOP,
-                navigation,
-            });
+        if self.top != Some(id) {
+            return;
         }
+        // The one frame: whatever asked is in it.
+        let asked = dom_api::NavigationAsked {
+            frame: self.main_token,
+            initiator: self.main_token,
+            top: true,
+            document,
+            navigation: &navigation,
+        };
+        let dom = self.dom.as_ref().expect("the DOM, outside a guest's turn");
+        let begin_id = self
+            .frame_client
+            .as_mut()
+            .and_then(|client| client.navigate(&asked, dom));
+        self.requests.push(dom_api::FrameRequest::Navigation {
+            frame: TOP,
+            initiator: TOP,
+            navigation,
+            begin_id,
+        });
     }
 
     /// A guest's listener, through its store's `handle-event`: the DOM
@@ -237,6 +256,10 @@ pub struct WasmEngine {
     /// it, for DevTools to name them by.
     load_sink: Option<Box<dyn dom_api::LoadSink>>,
     main_token: Option<dom_api::FrameToken>,
+    /// The host's, told of the window's navigations as they are asked
+    /// (`ScriptEngine::set_frame_client`): the engine makes no child
+    /// frames.
+    frame_client: Option<Box<dyn dom_api::FrameClient>>,
     /// The lines the guests wrote since the last turn: their sink is the
     /// stores' (`Send`), the console's isn't.
     output: Arc<Mutex<Vec<(Output, String)>>>,
@@ -281,6 +304,7 @@ impl WasmEngine {
             console: None,
             load_sink: None,
             main_token: None,
+            frame_client: None,
             output: Arc::default(),
             clock,
             scripts: Vec::new(),
@@ -313,6 +337,8 @@ impl WasmEngine {
             layout: &self.layout,
             top: self.document_id,
             requests: &mut self.requests,
+            frame_client: &mut self.frame_client,
+            main_token: self.main_token,
             wasm: &self.wasm,
             set: &mut self.set,
             scripts: &mut self.scripts,
@@ -992,6 +1018,7 @@ impl ScriptEngine for WasmEngine {
         url: &str,
         state: Option<Vec<u8>>,
         manual_scroll_restoration: bool,
+        committed: &mut dyn FnMut(),
     ) -> bool {
         let Some(document) = self.document.clone().filter(|_| frame == TOP) else {
             return false;
@@ -1002,6 +1029,7 @@ impl ScriptEngine for WasmEngine {
             url,
             state,
             manual_scroll_restoration,
+            committed,
         );
         self.perform_microtask_checkpoint();
         traversed
@@ -1194,6 +1222,10 @@ impl ScriptEngine for WasmEngine {
     fn set_idle(&mut self, _: bool) {}
 
     // No inspector, and no child frame: the token names nothing here.
+    fn set_frame_client(&mut self, client: Box<dyn dom_api::FrameClient>) {
+        self.frame_client = Some(client);
+    }
+
     fn set_main_frame_token(&mut self, token: dom_api::FrameToken) {
         self.main_token = Some(token);
     }

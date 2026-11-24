@@ -151,7 +151,8 @@ pub use dom_api_macros::declare;
 pub use engine::{
     ClassicScript, ConsoleMessage, ConsoleSink, DevToolsInterrupter, DevToolsObjects, DevToolsPage,
     DevToolsQueue, DevToolsQueued, DevToolsSend, EngineSettings, FetchOrigin, FrameClient,
-    LoadFrame, LoadSink, ScriptEngine, WasmScript, WorkerEngine, WorkerGlobalParams,
+    LoadFrame, LoadSink, NavigationAsked, ScriptEngine, WasmScript, WorkerEngine,
+    WorkerGlobalParams,
 };
 pub use event::{cancel as cancel_event, coarsen};
 pub use event_target::{dispatch, fire_event};

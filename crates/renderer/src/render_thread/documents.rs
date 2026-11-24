@@ -1008,8 +1008,9 @@ impl RenderThread {
                         frame,
                         initiator,
                         navigation,
+                        begin_id,
                     } => {
-                        self.frame_navigated(frame, initiator, navigation);
+                        self.frame_navigated(frame, initiator, navigation, begin_id);
                     }
                     FrameRequest::RegisterBlobUrl { frame, url, data } => {
                         self.blob_urls
@@ -1019,37 +1020,6 @@ impl RenderThread {
                 }
             }
         }
-    }
-
-    /// The browser's `BeginNavigation` of the top-level frame `frame`, as
-    /// `initiator` asked: by their tokens, with a number of the renderer's
-    /// own for the request. Nothing if either has none the browser knows
-    /// (the main frame before the browser told its token, which it does
-    /// first). A child frame's: `begin_child_navigation`.
-    fn begin_navigation(
-        &mut self,
-        frame: FrameId,
-        initiator: FrameId,
-        kind: protocol::renderer::BeginNavigationKind,
-    ) {
-        let origin_source = self.about_blank_origin_source(initiator, &kind);
-        let (Some(frame), Some(initiator)) = (self.frame_token(frame), self.frame_token(initiator))
-        else {
-            tracing::warn!(?kind, "a navigation of a frame the browser doesn't know");
-            return;
-        };
-        let id = self.begin_navigation_ids.get_next();
-        if let Some(source) = origin_source {
-            self.main_origin_source = Some((id, source));
-        }
-        let _ = self.to_browser.send(RendererHostMsg::BeginNavigation {
-            frame,
-            initiator,
-            id,
-            kind,
-            devtools_initiator: None,
-            history_in_new_child_frame: false,
-        });
     }
 
     /// The token the browser knows `frame` by: the main frame's, the
@@ -1067,89 +1037,68 @@ impl RenderThread {
     }
 
     /// What script's navigation of `frame`, as script in `initiator`
-    /// asked, comes to (`FrameNavigation`): one to another document and a
-    /// reload go to the browser (`BeginNavigation`, Blink's
-    /// `LocalFrameHost`), as do a traversal and a scroll restoration mode
-    /// (its session history), but a child frame's to an `about:` URL, which
-    /// commits here; one within the document was scrolled to its fragment
-    /// in the engine's call already, and the browser hears of it.
+    /// asked, comes to (`FrameNavigation`), after the engine's call: what
+    /// went to the browser went as it was asked (`RendererFrameClient::
+    /// navigate`, `begin_id` the number of the navigation it sent, if it
+    /// sent one), and the renderer's own of it follows now (the child
+    /// frame's navigation, the document an `about:blank` has its origin
+    /// from, the session history's entries). A child frame's navigation to
+    /// a fragment of its document, or to a `javascript:` URL, which go
+    /// nowhere, is done here.
     fn frame_navigated(
         &mut self,
         frame: FrameId,
         initiator: FrameId,
         navigation: dom::FrameNavigation,
+        begin_id: Option<u64>,
     ) {
         use dom::FrameNavigation;
+        use protocol::renderer::BeginNavigationKind;
+        if let Some(id) = begin_id {
+            self.navigations_asked.push(id);
+        }
         let top = self
             .document
             .as_ref()
             .is_some_and(|next| next.frame == frame);
         match navigation {
             FrameNavigation::To { url, replace } if top => {
-                let kind = protocol::renderer::BeginNavigationKind::To { url, replace };
-                self.begin_navigation(frame, initiator, kind);
+                let kind = BeginNavigationKind::To { url, replace };
+                if let Some(id) = begin_id
+                    && let Some(source) = self.about_blank_origin_source(initiator, &kind)
+                {
+                    self.main_origin_source = Some((id, source));
+                }
             }
-            FrameNavigation::To { url, replace } => {
-                self.navigate_child_to(frame, initiator, &url, replace, false);
+            FrameNavigation::To { url, replace } => match begin_id {
+                Some(id) => {
+                    let kind = BeginNavigationKind::To { url, replace };
+                    self.child_navigation_sent(frame, initiator, &kind, id);
+                }
+                None => {
+                    self.child_navigation_not_sent(frame, initiator, &url);
+                }
+            },
+            FrameNavigation::Reload if top => {}
+            FrameNavigation::Reload => {
+                if let Some(id) = begin_id {
+                    self.child_navigation_sent(frame, frame, &BeginNavigationKind::Reload, id);
+                }
             }
-            FrameNavigation::Reload if top => {
-                let kind = protocol::renderer::BeginNavigationKind::Reload;
-                self.begin_navigation(frame, frame, kind);
-            }
-            FrameNavigation::Reload => self.reload_child(frame),
-            FrameNavigation::SameDocument {
-                url,
-                replace,
-                state,
-                ..
-            } => {
+            FrameNavigation::SameDocument { replace, .. } => {
+                // A new entry the browser heard of (`DidCommitSameDocumentNavigation`).
+                if !replace && self.frame_token(frame).is_some() {
+                    self.own_history_entries.sent_one();
+                }
                 // Its URL the DOM's already; a fragment's scrolled to, in
                 // the engine's call (`FrameLayout::scroll_to_fragment`).
-                if self.doc(frame).is_none() {
-                    return;
-                }
-                // Every frame's: a child frame's URL is the browser's too
-                // (what its reload loads).
-                if let Some(frame) = self.frame_token(frame) {
-                    if !replace {
-                        self.own_history_entries.sent_one();
-                    }
-                    let _ =
-                        self.to_browser
-                            .send(RendererHostMsg::DidCommitSameDocumentNavigation {
-                                frame,
-                                url,
-                                replace,
-                                state: state.map(protocol::BigBuffer::from),
-                                navigation_id: None,
-                            });
-                }
-                self.request_main_frame();
-            }
-            // Whichever frame's link: the browser opens the tab.
-            FrameNavigation::NewTab { url, background } => {
-                let disposition = if background {
-                    protocol::renderer::WindowOpenDisposition::NewBackgroundTab
-                } else {
-                    protocol::renderer::WindowOpenDisposition::NewForegroundTab
-                };
-                let _ = self
-                    .to_browser
-                    .send(RendererHostMsg::OpenUrl { url, disposition });
-            }
-            FrameNavigation::GoToOffset(delta) => {
-                let _ = self
-                    .to_browser
-                    .send(RendererHostMsg::GoToEntryAtOffset(delta));
-            }
-            FrameNavigation::ScrollRestoration { manual } => {
-                if let Some(frame) = self.frame_token(frame) {
-                    let _ = self.to_browser.send(RendererHostMsg::UpdateState {
-                        frame,
-                        manual_scroll_restoration: manual,
-                    });
+                if self.doc(frame).is_some() {
+                    self.request_main_frame();
                 }
             }
+            FrameNavigation::NewTab { .. }
+            | FrameNavigation::GoToOffset(_)
+            | FrameNavigation::ScrollRestoration { .. } => {}
         }
     }
 
@@ -1176,6 +1125,7 @@ impl RenderThread {
             self.doc(*frame)
                 .is_some_and(|next| next.navigation_id == document)
         });
+        let token = frame.and_then(|frame| self.frame_token(frame));
         let (Some(frame), Ok(new_url), Some(engine)) = (frame, Url::parse(url), &mut self.engine)
         else {
             let _ = self
@@ -1190,11 +1140,26 @@ impl RenderThread {
             index: history.index,
             length: history.length,
         });
+        // The browser hears it committed before `popstate` fires, as
+        // Blink tells it: a navigation a handler asks for comes after.
+        let to_browser = &self.to_browser;
+        let mut committed = || {
+            if let Some(token) = token {
+                let _ = to_browser.send(RendererHostMsg::DidCommitSameDocumentNavigation {
+                    frame: token,
+                    url: new_url.as_str().into(),
+                    replace: false,
+                    state: None,
+                    navigation_id: Some(navigation_id),
+                });
+            }
+        };
         if !engine.traverse_within_document(
             frame,
             url,
             history.state.map(Vec::from),
             history.manual_scroll_restoration,
+            &mut committed,
         ) {
             let _ = self
                 .to_browser
@@ -1207,17 +1172,6 @@ impl RenderThread {
             self.scroll_to_fragment(frame);
         }
         self.request_main_frame();
-        if let Some(token) = self.frame_token(frame) {
-            let _ = self
-                .to_browser
-                .send(RendererHostMsg::DidCommitSameDocumentNavigation {
-                    frame: token,
-                    url: new_url.into(),
-                    replace: false,
-                    state: None,
-                    navigation_id: Some(navigation_id),
-                });
-        }
         self.handle_frame_requests();
         self.request_next_frame_if_dom_changed();
         self.send_harness_results();
@@ -1269,14 +1223,7 @@ impl RenderThread {
         let Ok(url) = Url::parse(src) else {
             return;
         };
-        if url.fragment().is_some() && self.navigate_to_fragment(frame, &url) {
-            self.owner_load_later(frame, initiator);
-            return;
-        }
-        // A `javascript:` one isn't run: an empty document commits, as its
-        // load failed when the renderer fetched it.
-        if url.scheme() == "javascript" {
-            self.queue_child_commit(frame, url, String::new());
+        if self.child_navigation_not_sent(frame, initiator, src) {
             return;
         }
         // Its iframe asked, in its parent's document, as DevTools has it.
@@ -1320,11 +1267,25 @@ impl RenderThread {
             .read(|cx| cx.is_completely_loaded(document.get(cx.gc)))
     }
 
-    /// Child frame `frame`'s document loaded again (`location.reload()`):
-    /// by the browser, from the URL it has.
-    fn reload_child(&mut self, frame: FrameId) {
-        let kind = protocol::renderer::BeginNavigationKind::Reload;
-        self.begin_child_navigation(frame, frame, kind, None, false);
+    /// Child frame `frame`'s navigation to `src`, as `initiator` asked,
+    /// that goes nowhere, done here: to a fragment of the document it
+    /// shows, its URL is that, scrolled there (HTML's navigate to a
+    /// fragment); to a `javascript:` URL, an empty document commits (it
+    /// isn't run: as its load failed when the renderer fetched it).
+    /// Whether it was one.
+    fn child_navigation_not_sent(&mut self, frame: FrameId, initiator: FrameId, src: &str) -> bool {
+        let Ok(url) = Url::parse(src) else {
+            return false;
+        };
+        if url.fragment().is_some() && self.navigate_to_fragment(frame, &url) {
+            self.owner_load_later(frame, initiator);
+            return true;
+        }
+        if url.scheme() == "javascript" {
+            self.queue_child_commit(frame, url, String::new());
+            return true;
+        }
+        false
     }
 
     /// The browser's `BeginNavigation` of child frame `frame`: it loads
@@ -1339,13 +1300,36 @@ impl RenderThread {
         devtools_initiator: Option<String>,
         history_in_new_child_frame: bool,
     ) {
-        let no_referrer = self.child_no_referrer(frame);
         let (Some(token), Some(by)) = (self.frame_token(frame), self.frame_token(initiator)) else {
             tracing::warn!(?kind, "a navigation of a frame the browser doesn't know");
             return;
         };
-        let origin_source = self.about_blank_origin_source(initiator, &kind);
-        let begin_id = self.begin_navigation_ids.get_next();
+        let begin_id = crate::loader::next_begin_navigation_id();
+        self.navigations_asked.push(begin_id);
+        self.child_navigation_sent(frame, initiator, &kind, begin_id);
+        let _ = self.to_browser.send(RendererHostMsg::BeginNavigation {
+            frame: token,
+            initiator: by,
+            id: begin_id,
+            kind,
+            devtools_initiator,
+            history_in_new_child_frame,
+        });
+    }
+
+    /// Child frame `frame`'s navigation `kind` went to the browser as
+    /// `begin_id`, as `initiator` asked: it loads until the browser commits
+    /// it, or drops it, its parent's `load` waiting for it; one asked for
+    /// before doesn't commit.
+    fn child_navigation_sent(
+        &mut self,
+        frame: FrameId,
+        initiator: FrameId,
+        kind: &protocol::renderer::BeginNavigationKind,
+        begin_id: u64,
+    ) {
+        let no_referrer = self.child_no_referrer(frame);
+        let origin_source = self.about_blank_origin_source(initiator, kind);
         self.children.navigating(frame);
         self.children.navigations.insert(
             frame,
@@ -1356,17 +1340,8 @@ impl RenderThread {
             },
         );
         self.sync_child_navigating(frame);
-        // DevTools hears of the frame, loading, before the browser tells
-        // of its navigation (Blink tells `frameAttached` as it is made).
+        // DevTools' frames list it loading.
         self.tell_frames();
-        let _ = self.to_browser.send(RendererHostMsg::BeginNavigation {
-            frame: token,
-            initiator: by,
-            id: begin_id,
-            kind,
-            devtools_initiator,
-            history_in_new_child_frame,
-        });
     }
 
     /// The document whose origin a navigation `kind` as `initiator` asked
@@ -2732,13 +2707,10 @@ impl RenderThread {
     /// the fragment: the document's URL `url`, scrolled to the fragment.
     /// Whether it was.
     fn navigate_to_fragment(&mut self, frame: FrameId, url: &Url) -> bool {
-        let Some(mut current) = self.document_url(frame) else {
+        let Some(current) = self.document_url(frame) else {
             return false;
         };
-        let mut wanted = url.clone();
-        current.set_fragment(None);
-        wanted.set_fragment(None);
-        if current != wanted {
+        if !same_but_fragment(&current, url) {
             return false;
         }
         let Some(document) = self.doc(frame).map(|next| next.document.clone()) else {
@@ -4969,6 +4941,130 @@ impl dom_api::FrameClient for RendererFrameClient {
             .send(RendererHostMsg::DidDetachFrame { frame });
         self.page_agent.frame_detached(&frame.to_string());
     }
+
+    /// What goes to the browser of script's navigation, sent as it is
+    /// asked (content's `RenderFrameImpl::BeginNavigation`, from Blink's
+    /// setter): one to another document and a reload (`BeginNavigation`,
+    /// numbered here), one within the document, a traversal, a new tab,
+    /// the scroll restoration mode. A child frame's to a fragment of its
+    /// document or to a `javascript:` URL goes nowhere (the render thread
+    /// does it after the call, `frame_navigated`).
+    fn navigate(&mut self, asked: &dom_api::NavigationAsked<'_>, dom: &dom::Dom) -> Option<u64> {
+        use dom::FrameNavigation;
+        use protocol::renderer::BeginNavigationKind;
+        let kind = match asked.navigation {
+            FrameNavigation::To { url, replace } => {
+                if !asked.top && child_navigation_goes_nowhere(asked.document, url, dom) {
+                    return None;
+                }
+                BeginNavigationKind::To {
+                    url: url.clone(),
+                    replace: *replace,
+                }
+            }
+            FrameNavigation::Reload => BeginNavigationKind::Reload,
+            FrameNavigation::SameDocument {
+                url,
+                replace,
+                state,
+                ..
+            } => {
+                // Every frame's: a child frame's URL is the browser's too
+                // (what its reload loads).
+                if let Some(frame) = asked.frame {
+                    let _ =
+                        self.to_browser
+                            .send(RendererHostMsg::DidCommitSameDocumentNavigation {
+                                frame,
+                                url: url.clone(),
+                                replace: *replace,
+                                state: state.clone().map(protocol::BigBuffer::from),
+                                navigation_id: None,
+                            });
+                }
+                return None;
+            }
+            // Whichever frame's link: the browser opens the tab.
+            FrameNavigation::NewTab { url, background } => {
+                let disposition = if *background {
+                    protocol::renderer::WindowOpenDisposition::NewBackgroundTab
+                } else {
+                    protocol::renderer::WindowOpenDisposition::NewForegroundTab
+                };
+                let _ = self.to_browser.send(RendererHostMsg::OpenUrl {
+                    url: url.clone(),
+                    disposition,
+                });
+                return None;
+            }
+            FrameNavigation::GoToOffset(delta) => {
+                let _ = self
+                    .to_browser
+                    .send(RendererHostMsg::GoToEntryAtOffset(*delta));
+                return None;
+            }
+            FrameNavigation::ScrollRestoration { manual } => {
+                if let Some(frame) = asked.frame {
+                    let _ = self.to_browser.send(RendererHostMsg::UpdateState {
+                        frame,
+                        manual_scroll_restoration: *manual,
+                    });
+                }
+                return None;
+            }
+        };
+        // A reload is the frame's own.
+        let initiator = match kind {
+            BeginNavigationKind::Reload => asked.frame,
+            BeginNavigationKind::To { .. } => asked.initiator,
+        };
+        let (Some(frame), Some(initiator)) = (asked.frame, initiator) else {
+            tracing::warn!(?kind, "a navigation of a frame the browser doesn't know");
+            return None;
+        };
+        let id = crate::loader::next_begin_navigation_id();
+        let _ = self.to_browser.send(RendererHostMsg::BeginNavigation {
+            frame,
+            initiator,
+            id,
+            kind,
+            devtools_initiator: None,
+            history_in_new_child_frame: false,
+        });
+        Some(id)
+    }
+}
+
+/// Whether a child frame's navigation to `url`, its document `document`
+/// now, goes nowhere (`RenderThread::child_navigation_not_sent` does it):
+/// one to a fragment of the document, or to a `javascript:` URL. One to a
+/// URL that doesn't parse goes nowhere either.
+fn child_navigation_goes_nowhere(document: &NodeRoot, url: &str, dom: &dom::Dom) -> bool {
+    let Ok(wanted) = Url::parse(url) else {
+        return true;
+    };
+    if wanted.scheme() == "javascript" {
+        return true;
+    }
+    if wanted.fragment().is_none() {
+        return false;
+    }
+    let current = dom.read(|cx| {
+        cx.document_url(document.get(cx.gc))
+            .map(|url| url.to_string())
+    });
+    let current = current
+        .and_then(|url| Url::parse(&url).ok())
+        .unwrap_or_else(|| Url::parse("about:blank").expect("about:blank"));
+    same_but_fragment(&current, &wanted)
+}
+
+/// Whether `a` and `b` are the same URL but for their fragments.
+fn same_but_fragment(a: &Url, b: &Url) -> bool {
+    let (mut a, mut b) = (a.clone(), b.clone());
+    a.set_fragment(None);
+    b.set_fragment(None);
+    a == b
 }
 
 impl RendererLoadSink {

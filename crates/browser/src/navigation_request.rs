@@ -26,6 +26,31 @@ pub(crate) struct NavigationRequest {
     pub(crate) response: Option<NavigationResponse>,
     /// How its load ended, if it has before it committed.
     pub(crate) end: Option<CompletionStatus>,
+    /// The renderer asked for it, and the task that asked may still ask
+    /// for another in its place: it doesn't commit till the renderer says
+    /// that task is over (Chromium's `RendererCancellationThrottle`,
+    /// `NavigationCancellationWindowEnded`).
+    pub(crate) cancellation_window: bool,
+    /// What it commits with as its cancellation window ends, if it was
+    /// ready before.
+    pub(crate) held: Option<HeldCommit>,
+}
+
+/// A navigation's commit, ready but held till its cancellation window
+/// ends: what it commits with then.
+pub(crate) enum HeldCommit {
+    /// Its response and the start of its body (`NavigationRequest::
+    /// response`).
+    Response,
+    /// Its load failed without a response, as `end` says: its error page.
+    Failed,
+    /// A blob URL's blob, whole, or how getting it failed.
+    Blob(protocol::network::LoadResult),
+    /// A document of the browser's own (`about:blank`, `about:srcdoc`).
+    Page(
+        crate::render_process_host::CommittedDocument,
+        crate::frame_tree::CommittedOrigin,
+    ),
 }
 
 /// A navigation's response before it commits: the head, the body's pipe,

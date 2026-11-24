@@ -1348,6 +1348,17 @@ impl dom_api::FrameClient for Client {
     fn frame_detached(&mut self, frame: dom_api::FrameToken) {
         self.0.borrow_mut().push(format!("detached {frame}"));
     }
+
+    fn navigate(&mut self, asked: &dom_api::NavigationAsked<'_>, _dom: &dom::Dom) -> Option<u64> {
+        let frame = asked
+            .frame
+            .map(|frame| frame.to_string())
+            .unwrap_or_default();
+        self.0
+            .borrow_mut()
+            .push(format!("navigate {frame} {:?}", asked.navigation));
+        None
+    }
 }
 
 /// The host's client hears of a child frame's new document as the engine

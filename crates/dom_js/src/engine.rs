@@ -1233,6 +1233,7 @@ impl ScriptEngine for V8Engine {
         url: &str,
         state: Option<Vec<u8>>,
         manual_scroll_restoration: bool,
+        committed: &mut dyn FnMut(),
     ) -> bool {
         let Some((context, document)) = self.frame_context_and_document(frame) else {
             return false;
@@ -1245,6 +1246,7 @@ impl ScriptEngine for V8Engine {
                 url,
                 state,
                 manual_scroll_restoration,
+                committed,
             )
         });
         self.perform_microtask_checkpoint();

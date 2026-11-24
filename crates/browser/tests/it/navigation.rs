@@ -4386,9 +4386,11 @@ document.querySelector('base').setAttribute('href', '/later/');
         let (mut web_contents, host_rx) = tab();
         let main = web_contents.devtools_frame_token();
         web_contents.navigate(server.url("/"));
-        // The renderer's ask for `/b` and `/a`'s end, held.
+        // The renderer's ask for `/b` and `/a`'s end, held; and the end of
+        // the cancellation window of `/b`'s, which comes after it.
         let mut a = None;
         let mut b = None;
+        let mut b_window = None;
         while a.is_none() || b.is_none() {
             let event = host_rx.recv_timeout(TIMEOUT).expect("events come");
             match event {
@@ -4408,6 +4410,10 @@ document.querySelector('base').setAttribute('href', '/later/');
                 {
                     b = Some(msg.clone())
                 }
+                ContentsEvent::Renderer {
+                    msg: ref msg @ RendererHostMsg::NavigationCancellationWindowEnded { .. },
+                    ..
+                } if b.is_some() && b_window.is_none() => b_window = Some(msg.clone()),
                 event => {
                     if let Some(msg) = renderer_message(&mut web_contents, event) {
                         assert!(child_commit(main, &msg).is_none(), "{msg:?}");
@@ -4419,6 +4425,9 @@ document.querySelector('base').setAttribute('href', '/later/');
         // `/a` commits as the browser knows of no other; then `/b` is asked.
         assert!(renderer_message(&mut web_contents, a.unwrap()).is_none());
         web_contents.on_renderer_message(&b.unwrap());
+        if let Some(window) = b_window {
+            web_contents.on_renderer_message(&window);
+        }
         let (_, url) = wait_for(&mut web_contents, &host_rx, |msg| child_commit(main, msg));
         assert_eq!(url, server.url("/b"));
         web_contents.shutdown();
@@ -5662,13 +5671,17 @@ document.querySelector('base').setAttribute('href', '/later/');
     }
 
     /// A child frame's commit the browser sends before it hears of the
-    /// main frame's `pushState`: the child frame's document counts the
-    /// push from the start.
+    /// main frame's `pushState`, a later task's (the browser commits none
+    /// of a task's navigations before the task is over, so one of the same
+    /// task's is heard first): the child frame's document counts the push
+    /// from the start.
     #[test]
     fn a_child_frames_commit_counts_the_new_entries_the_browser_has_not_heard_of() {
         let html = format!(
             "{}<iframe src=/a></iframe>",
-            logging("frames[0].location.href = '/b'; history.pushState(null, '', '/p');")
+            logging(
+                "frames[0].location.href = '/b'; setTimeout(() => history.pushState(null, '', '/p'));"
+            )
         );
         let server = server(&[
             ("/", Route::ok("text/html", html)),

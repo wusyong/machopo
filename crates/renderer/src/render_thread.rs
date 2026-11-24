@@ -429,17 +429,18 @@ struct RenderThread {
     /// Whether the page has the system's focus, as last told
     /// (`RendererMsg::SetFocus`), for an engine not made yet.
     page_focused: bool,
-    /// The main frame's token, the browser's
-    /// (`RendererMsg::DevToolsMainFrameToken`): what DevTools calls it, and
-    /// the browser's frame tree its child frames' parent; none until told.
-    /// Numbers the navigations asked of the browser (`BeginNavigation`),
-    /// from 1.
-    begin_navigation_ids: base::SequenceNumber<u64>,
     own_history_entries: OwnHistoryEntries,
+    /// The navigations the task that runs asked of the browser, by their
+    /// numbers: the browser commits none of them till the task is over
+    /// (`end_cancellation_windows`).
+    navigations_asked: Vec<u64>,
     /// The top-level frame's latest navigation to `about:blank` it asked
     /// for, by its number, and the document its document is to have its
     /// origin from (the initiator's).
     main_origin_source: Option<(u64, dom::NodeRoot)>,
+    /// The main frame's token, the browser's
+    /// (`RendererMsg::DevToolsMainFrameToken`): what DevTools calls it, and
+    /// the browser's frame tree its child frames' parent; none until told.
     devtools_main_frame_token: Option<protocol::FrameToken>,
     /// The input the compositor thread handed on and the main thread
     /// hasn't taken yet (what `isInputPending()` reads).
@@ -598,8 +599,8 @@ impl RenderThread {
             page_hidden: false,
             page_focused: false,
             devtools_main_frame_token: None,
-            begin_navigation_ids: base::SequenceNumber::starting_at(1),
             own_history_entries: OwnHistoryEntries::default(),
+            navigations_asked: Vec::new(),
             main_origin_source: None,
             pending_input,
             clock: Clock::new(),
@@ -647,11 +648,11 @@ impl RenderThread {
                 if !self.run_task(task) {
                     break 'run;
                 }
-                self.tell_devtools_after_task();
+                self.after_task();
                 // What it queued for the DOM (input's `hashchange`) runs
                 // before the next task comes off the channel.
                 self.run_queued_tasks();
-                self.tell_devtools_after_task();
+                self.after_task();
                 self.update_title();
                 next = self.scheduler.try_next(TaskQueues::ALL);
             }
@@ -682,8 +683,9 @@ impl RenderThread {
             self.log_canvas_raster_failure();
             self.update_title();
             // The blob URLs the tasks revoked, now that the loads they
-            // asked for went.
+            // asked for went, and the navigations they asked for may commit.
             self.blob_urls.flush_revoked();
+            self.end_cancellation_windows();
             // The frames whose network went quiet, to DevTools; and what the
             // steps above left for it, as after a task (they aren't the
             // scheduler's tasks).
@@ -737,6 +739,35 @@ impl RenderThread {
                 .set_needs_begin_main_frame(needs);
         }
         tracing::debug!("renderer main thread exiting");
+    }
+
+    /// What a task leaves for when it ends (Chromium's task observers,
+    /// `DidProcessTask`): the loads it asked for that the engine hasn't
+    /// sent yet (a parser's scripts, the backgrounds a style update
+    /// found), then the blob URLs it revoked, after those loads (each got
+    /// its blob); then what DevTools is to hear of.
+    fn after_task(&mut self) {
+        self.start_image_fetches();
+        self.start_script_fetches();
+        self.blob_urls.flush_revoked();
+        self.end_cancellation_windows();
+        self.tell_devtools_after_task();
+    }
+
+    /// The navigations the task asked for may commit now
+    /// (`NavigationCancellationWindowEnded`; Blink posts
+    /// `NotifyNavigationCancellationWindowEnded` to run after the task):
+    /// after what the task asked before them went (its loads, the blob URLs
+    /// it revoked), and with none of them replaced by another of the same
+    /// task's committing first.
+    fn end_cancellation_windows(&mut self) {
+        if self.navigations_asked.is_empty() {
+            return;
+        }
+        let ids = std::mem::take(&mut self.navigations_asked);
+        let _ = self
+            .to_browser
+            .send(RendererHostMsg::NavigationCancellationWindowEnded { ids });
     }
 
     /// What the dedicated worker numbered `id` sent its `Worker`, given to

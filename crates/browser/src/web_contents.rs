@@ -23,7 +23,9 @@ use crate::frame_tree::{CommittedOrigin, FrameTree};
 
 use crate::debug_urls::{DebugUrl, debug_url};
 use crate::navigation_controller::{HistoryLoad, NavigationController, NavigationType};
-use crate::navigation_request::{DocumentLoad, Loading, NavigationRequest, NavigationResponse};
+use crate::navigation_request::{
+    DocumentLoad, HeldCommit, Loading, NavigationRequest, NavigationResponse,
+};
 use crate::render_process_host::{CommittedDocument, Committer, is_file_url};
 use crate::{RenderProcessHost, RendererFlags, RendererId, RendererLauncher, StoragePartition};
 
@@ -713,6 +715,45 @@ impl WebContents {
         );
     }
 
+    /// The tasks that asked for the renderer's navigations `ids` are over
+    /// (`NavigationCancellationWindowEnded`): each still on its way may
+    /// commit, and one ready commits now, as it was to.
+    fn cancellation_windows_ended(&mut self, ids: &[u64]) {
+        for &id in ids {
+            let Some((frame, navigation_id)) = self.frame_tree.navigation_of_begin_id(id) else {
+                continue;
+            };
+            let Some(navigation) = self.frame_tree.navigation_mut(frame, navigation_id) else {
+                continue;
+            };
+            navigation.cancellation_window = false;
+            match navigation.held.take() {
+                None => {}
+                Some(HeldCommit::Response) => self.commit_response(frame, navigation_id),
+                Some(HeldCommit::Failed) => {
+                    if let Some(status) = navigation.end.take() {
+                        self.on_navigation_completed(frame, navigation_id, status);
+                    }
+                }
+                Some(HeldCommit::Blob(result)) => {
+                    self.on_navigation_blob_loaded(frame, navigation_id, result);
+                }
+                Some(HeldCommit::Page(document, origin)) => {
+                    if let Some(navigation) = self.frame_tree.take_navigation(frame, navigation_id)
+                    {
+                        self.commit(
+                            frame,
+                            navigation_id,
+                            navigation.committer,
+                            document,
+                            Some(origin),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     /// The renderer's navigation `id` of `frame` won't commit.
     fn dropped(&self, frame: FrameToken, id: u64) {
         self.process
@@ -937,6 +978,25 @@ impl WebContents {
             navigation_type,
         );
         if let Some((document, origin)) = page {
+            // The renderer's: held till the task that asked is over.
+            if asked.begin_id.is_some() {
+                let navigation = NavigationRequest {
+                    id: navigation_id,
+                    begin_id: asked.begin_id,
+                    url,
+                    redirects: Vec::new(),
+                    committer,
+                    load: Loading::default(),
+                    response: None,
+                    end: None,
+                    cancellation_window: true,
+                    held: Some(HeldCommit::Page(document, origin)),
+                };
+                if let Ok(Some(before)) = self.frame_tree.set_navigation(frame, navigation) {
+                    self.replaced(frame, before);
+                }
+                return;
+            }
             if let Some(before) = self.frame_tree.take_any_navigation(frame) {
                 self.replaced(frame, before);
             }
@@ -962,6 +1022,8 @@ impl WebContents {
             load: Loading::default(),
             response: None,
             end: None,
+            cancellation_window: asked.begin_id.is_some(),
+            held: None,
         };
         match self.frame_tree.set_navigation(frame, navigation) {
             Ok(Some(before)) => self.replaced(frame, before),
@@ -1285,6 +1347,11 @@ impl WebContents {
             self.read_body_start(frame, navigation_id);
             return;
         }
+        if navigation.cancellation_window {
+            navigation.end = Some(status);
+            navigation.held = Some(HeldCommit::Failed);
+            return;
+        }
         let Some(navigation) = self.frame_tree.take_navigation(frame, navigation_id) else {
             return;
         };
@@ -1303,6 +1370,12 @@ impl WebContents {
     /// the start of its body, commits: its load, if it hasn't ended, kept
     /// until it does.
     fn commit_response(&mut self, frame: FrameToken, navigation_id: u64) {
+        if let Some(navigation) = self.frame_tree.navigation_mut(frame, navigation_id)
+            && navigation.cancellation_window
+        {
+            navigation.held = Some(HeldCommit::Response);
+            return;
+        }
         let Some(navigation) = self.frame_tree.take_navigation(frame, navigation_id) else {
             return;
         };
@@ -1369,6 +1442,12 @@ impl WebContents {
         navigation_id: u64,
         result: LoadResult,
     ) {
+        if let Some(navigation) = self.frame_tree.navigation_mut(frame, navigation_id)
+            && navigation.cancellation_window
+        {
+            navigation.held = Some(HeldCommit::Blob(result));
+            return;
+        }
         let Some(navigation) = self.frame_tree.take_navigation(frame, navigation_id) else {
             return;
         };
@@ -1724,6 +1803,9 @@ impl WebContents {
             }
             RendererHostMsg::GoToEntryAtOffset(offset) => {
                 self.go_to_offset(*offset as isize);
+            }
+            RendererHostMsg::NavigationCancellationWindowEnded { ids } => {
+                self.cancellation_windows_ended(ids);
             }
             RendererHostMsg::UpdateState {
                 frame,

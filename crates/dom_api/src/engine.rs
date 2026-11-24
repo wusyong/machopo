@@ -103,10 +103,12 @@ pub trait LoadSink {
 }
 
 /// The host's side of the engine's frames, told as they are made and as
-/// they go, before the call returns (Blink's `LocalFrameClient`, whose
-/// `CreateFrame` and `Detached` content's `RenderFrameImpl` answers by
-/// telling the browser at once): so that the browser's frame tree has a
-/// frame as script goes on with it, and has it no more as its iframe goes.
+/// they go, and of their navigations as script asks, before the call
+/// returns (Blink's `LocalFrameClient`, whose `CreateFrame`, `Detached`
+/// and `BeginNavigation` content's `RenderFrameImpl` answers by telling
+/// the browser at once): so that the browser's frame tree has a frame as
+/// script goes on with it, and has it no more as its iframe goes, and the
+/// browser starts a navigation as script asks for it.
 /// Frames are named by their tokens, the browser's names for them.
 pub trait FrameClient {
     /// Child frame `frame` made for an iframe in the frame `parent`, its
@@ -136,6 +138,33 @@ pub trait FrameClient {
     /// Child frame `frame` gone, and the frames in it with it: its iframe
     /// removed, or the document it was in replaced.
     fn frame_detached(&mut self, frame: crate::FrameToken);
+
+    /// Script's navigation of a frame, `asked`, as the operation that
+    /// asked for it ends (Blink's `LocalFrameClient::BeginNavigation`,
+    /// called from the setter): what goes to the browser goes now, before
+    /// script goes on (a navigation to another document, a reload, one
+    /// within the document, a traversal, a new tab, the scroll restoration
+    /// mode). The number the host gave a navigation to another document it
+    /// sent (`BeginNavigation`'s); none for what it didn't send, or isn't
+    /// one: what the host does after the call (`FrameRequest::Navigation`)
+    /// goes by it. `dom` as it is then.
+    fn navigate(&mut self, asked: &NavigationAsked<'_>, dom: &dom::Dom) -> Option<u64>;
+}
+
+/// A navigation script asked for, as the engine tells its host's
+/// `FrameClient::navigate`.
+#[derive(Debug, Clone, Copy)]
+pub struct NavigationAsked<'a> {
+    /// The frame navigated: its token, the top-level frame's the
+    /// browser's (none before the browser told it).
+    pub frame: Option<crate::FrameToken>,
+    /// The frame whose script asked.
+    pub initiator: Option<crate::FrameToken>,
+    /// The frame navigated is the top-level one.
+    pub top: bool,
+    /// The document it shows now.
+    pub document: &'a dom::NodeRoot,
+    pub navigation: &'a dom::FrameNavigation,
 }
 
 /// Where a `fetch()` comes from, as the engine knows it as it is sent:
@@ -592,15 +621,17 @@ pub trait ScriptEngine: ParserHost {
 
     /// The browser's traversal to another entry of `frame`'s document
     /// (`traverse_within_document`): its URL `url`, its history's state
-    /// (serialized; none: `null`) and scroll restoration mode; `popstate`
-    /// fires now, `hashchange` in a task if the fragment changed. Whether
-    /// the frame shows a document with a window.
+    /// (serialized; none: `null`) and scroll restoration mode; `committed`
+    /// called then, before `popstate` fires (for the host to tell the
+    /// browser first), `hashchange` in a task if the fragment changed.
+    /// Whether the frame shows a document with a window.
     fn traverse_within_document(
         &mut self,
         frame: crate::FrameId,
         url: &str,
         state: Option<Vec<u8>>,
         manual_scroll_restoration: bool,
+        committed: &mut dyn FnMut(),
     ) -> bool;
 
     /// `frame`'s new document's entry's history state and scroll
@@ -754,8 +785,9 @@ pub trait ScriptEngine: ParserHost {
         false
     }
 
-    /// What the engine tells of its child frames as they are made and go
-    /// (`FrameClient`). Nothing by default: an engine with no child frames.
+    /// What the engine tells of its child frames as they are made and go,
+    /// and of script's navigations as they are asked (`FrameClient`).
+    /// Nothing by default: an engine with no frames to tell of.
     fn set_frame_client(&mut self, client: Box<dyn FrameClient>) {
         let _ = client;
     }

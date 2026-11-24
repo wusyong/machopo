@@ -636,6 +636,16 @@ pub enum RendererHostMsg {
     /// `FrameHost::GoToEntryAtOffset`: `history.go(offset)` (and `back`,
     /// `forward`), within range as the renderer knew it.
     GoToEntryAtOffset(i32),
+    /// `NavigationClient`'s `NotifyNavigationCancellationWindowEnded`: the
+    /// task that asked for the renderer's navigations `ids`
+    /// (`BeginNavigation`'s) is over, and what it asked of the browser
+    /// before them has gone (the loads, the blob URLs it revoked): the
+    /// browser may commit them now, which it holds till then (Chromium's
+    /// `RendererCancellationThrottle`), so that one the same task replaced
+    /// never commits.
+    NavigationCancellationWindowEnded {
+        ids: Vec<u64>,
+    },
     /// `FrameHost::UpdateState`: script in `frame` changed its item's
     /// scroll restoration mode in the current entry
     /// (`history.scrollRestoration`).

@@ -243,6 +243,7 @@ fn a_navigation_says_who_asked() {
                     frame,
                     initiator,
                     navigation: FrameNavigation::To { .. },
+                    ..
                 } => Some((frame, initiator)),
                 _ => None,
             })

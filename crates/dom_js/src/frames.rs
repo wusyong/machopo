@@ -367,9 +367,11 @@ pub(crate) fn navigate_child(
 }
 
 /// The frame showing `document` navigated, or is to (`FrameNavigation`),
-/// as the frame showing `initiator` asked: the host told. One to another
-/// document that a document no frame shows now asked for goes nowhere
-/// (HTML navigates from a fully active document alone).
+/// as the frame showing `initiator` asked: the host told, its client at
+/// once (`FrameClient::navigate`: what goes to the browser goes now), then
+/// as the call ends (`FrameRequest::Navigation`). One to another document
+/// that a document no frame shows now asked for goes nowhere (HTML
+/// navigates from a fully active document alone).
 pub(crate) fn navigate(
     scope: &mut Scope<'_, '_, '_>,
     document: &NodeRoot,
@@ -391,10 +393,23 @@ pub(crate) fn navigate(
         None if matches!(navigation, dom::FrameNavigation::To { .. }) => return,
         None => frame,
     };
+    let asked = dom_api::NavigationAsked {
+        frame: state.frames.token(frame),
+        initiator: state.frames.token(initiator),
+        top: frame == TOP,
+        document,
+        navigation: &navigation,
+    };
+    let begin_id = state
+        .frames
+        .client
+        .as_mut()
+        .and_then(|client| client.navigate(&asked, &state.dom));
     state.frames.requests.push(FrameRequest::Navigation {
         frame,
         initiator,
         navigation,
+        begin_id,
     });
 }
 

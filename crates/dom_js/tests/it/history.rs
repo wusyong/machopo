@@ -367,7 +367,8 @@ fn the_hosts_traversal_and_restored_state() {
         top,
         "https://example.test/a.html#y",
         Some(state.clone()),
-        true
+        true,
+        &mut || {}
     ));
     assert_eq!(page.eval("log.join()"), "7,true,#y,y,manual");
     assert!(page.engine.run_element_tasks());

@@ -1531,3 +1531,90 @@ fn a_frame_made_and_removed_at_once_is_told() {
         events[1]["params"]["frameId"]
     );
 }
+
+/// A navigation script asks for reaches the browser as it asks, before
+/// the script after it has run (Chrome's `BeginNavigation` from the
+/// setter): `Page.frameStartedNavigating` comes before the answer to the
+/// command whose script navigated and then went on a while.
+#[test]
+fn a_navigation_reaches_the_browser_as_script_asks() {
+    let server = server(&[
+        ("/", Route::ok("text/html", "<!DOCTYPE html><body></body>")),
+        ("/next", Route::ok("text/html", "<!DOCTYPE html>next")),
+    ]);
+    let machopo = Machopo::start();
+    let (mut page, target) = page(&machopo);
+    load(&mut page, &server.url("/"));
+    page.call(None, "Page.enable", json!({}));
+    page.take_events("");
+    let id = page.send(
+        None,
+        "Runtime.evaluate",
+        json!({ "expression": "location.href = '/next';
+                               const end = performance.now() + 500;
+                               while (performance.now() < end) {}
+                               0" }),
+    );
+    let mut order = Vec::new();
+    while order.len() < 2 {
+        let message = page.read().expect("messages");
+        if message["id"] == id {
+            order.push("answered");
+        } else if message["method"] == "Page.frameStartedNavigating"
+            && message["params"]["frameId"] == target.as_str()
+        {
+            order.push("started");
+        } else {
+            page.keep(message);
+        }
+    }
+    assert_eq!(order, ["started", "answered"]);
+}
+
+/// Two navigations of a frame in one task, the first's response there
+/// before the second is asked for: the second takes the first's place, as
+/// in Chrome (whose browser commits neither before the task that asked
+/// ends): only it commits, and the session history has it alone. The
+/// top-level frame's, and a child frame's.
+#[test]
+fn of_two_navigations_in_a_task_the_second_alone_commits() {
+    let server = server(&[
+        ("/", Route::ok("text/html", "<!DOCTYPE html><body></body>")),
+        (
+            "/parent",
+            Route::ok("text/html", "<!DOCTYPE html><iframe src='/child'></iframe>"),
+        ),
+        ("/child", Route::ok("text/html", "<!DOCTYPE html>child")),
+        ("/a", Route::ok("text/html", "<!DOCTYPE html>a")),
+        ("/b", Route::ok("text/html", "<!DOCTYPE html>b")),
+    ]);
+    let busy = "const end = performance.now() + 500; while (performance.now() < end) {}";
+    for (start, navigate, child) in [
+        ("/", "location", false),
+        ("/parent", "frames[0].location", true),
+    ] {
+        let machopo = Machopo::start();
+        let (mut page, _target) = page(&machopo);
+        load(&mut page, &server.url(start));
+        page.call(None, "Page.enable", json!({}));
+        let length = evaluate(&mut page, "history.length", None);
+        page.take_events("");
+        evaluate(
+            &mut page,
+            &format!("{navigate}.href = '/a'; {busy} {navigate}.href = '/b'; 0"),
+            None,
+        );
+        let navigated = loop {
+            let event = page.event("Page.frameNavigated");
+            if event["params"]["frame"]["parentId"].is_string() == child {
+                break event["params"]["frame"]["url"].clone();
+            }
+        };
+        assert_eq!(navigated, json!(server.url("/b")), "{navigate}");
+        assert_eq!(
+            evaluate(&mut page, "history.length", None),
+            json!(length.as_i64().unwrap() + 1),
+            "{navigate}"
+        );
+    }
+}

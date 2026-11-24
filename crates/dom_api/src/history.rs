@@ -689,14 +689,18 @@ pub(crate) fn update_navigations<H: ScriptHost>(host: &mut H) {
 /// document for history step application"; Blink's
 /// `CommitSameDocumentNavigation` of a history navigation): its URL is
 /// `url`, its history's state `state` and mode `manual`, its target
-/// element the fragment's; `popstate` fires now; `hashchange` is queued if
-/// the fragment changed. Whether the document has a window.
+/// element the fragment's; `committed` is called, then `popstate` fires
+/// (Blink tells the browser of the commit, `DidFinishSameDocumentNavigation`,
+/// before it dispatches `popstate`: what its handlers ask of the browser
+/// comes after); `hashchange` is queued if the fragment changed. Whether
+/// the document has a window.
 pub fn traverse_within_document<H: ScriptHost>(
     host: &mut H,
     document: &NodeRoot,
     url: &str,
     state: Option<Vec<u8>>,
     manual: bool,
+    committed: &mut dyn FnMut(),
 ) -> bool {
     let Ok(new_url) = Url::parse(url) else {
         return false;
@@ -720,6 +724,7 @@ pub fn traverse_within_document<H: ScriptHost>(
     let Some(window) = window else {
         return false;
     };
+    committed();
     fire_pop_state(host, &window);
     true
 }

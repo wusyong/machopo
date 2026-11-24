@@ -65,10 +65,14 @@ pub enum FrameRequest {
     /// to another document, its host loads it (the top-level frame's, the
     /// browser); within its document, it happened, its fragment scrolled
     /// to already (the top-level frame's session history hears of it).
+    /// What went to the browser went as it was asked
+    /// (`FrameClient::navigate`): `begin_id`, the host's number for the
+    /// navigation to another document it sent, if it sent one.
     Navigation {
         frame: FrameId,
         initiator: FrameId,
         navigation: dom::FrameNavigation,
+        begin_id: Option<u64>,
     },
     /// Script in `frame`'s realm made `url` a blob URL for `data`
     /// (`URL.createObjectURL`): the host keeps it, until it is revoked or

@@ -47,6 +47,20 @@ pub(crate) fn next_request_id() -> u64 {
     NEXT_REQUEST_ID.with_borrow_mut(SequenceNumber::get_next)
 }
 
+thread_local! {
+    /// The renderer's number for its next navigation (`BeginNavigation`'s
+    /// `id`): its thread's own, as `NEXT_REQUEST_ID` is, so what the render
+    /// thread sends and what the engine's frame client sends are numbered
+    /// apart without sharing anything.
+    static NEXT_BEGIN_NAVIGATION_ID: RefCell<SequenceNumber<u64>> =
+        const { RefCell::new(SequenceNumber::starting_at(1)) };
+}
+
+/// A new navigation number, unique in this renderer.
+pub(crate) fn next_begin_navigation_id() -> u64 {
+    NEXT_BEGIN_NAVIGATION_ID.with_borrow_mut(SequenceNumber::get_next)
+}
+
 /// The URL of each request the render thread sent, until it is answered,
 /// which the page's log names a failed load by (a `fetch()`'s is the
 /// DOM's, `Dom::sent_fetch`).
