@@ -74,9 +74,11 @@ pub fn run_file(
 }
 
 /// Hears that the GPU device was lost and Viz has a new one: the toolbar's
-/// tiles go on it again (the window's `ContextLost` event).
+/// tiles go on it again (the window's `ContextLost` event); or that it has
+/// none that draws, and machopo is to end (`failed`).
 pub struct ContextLost {
     pub receiver: Receiver<()>,
+    pub failed: Receiver<String>,
     _observer: Arc<dyn ContextLostObserver>,
 }
 
@@ -101,12 +103,19 @@ pub fn start(
 ) -> Result<(BrowserWindow, ContextLost), String> {
     let shared_images = viz::GpuSharedImages::new();
     let gpu: Arc<dyn ContextProvider> = shared_images.clone();
+    let (failure, failed) = unbounded();
     let browser = BrowserWindow::start(
         options,
         size,
         scale,
         Some(gpu.clone()),
-        move || viz::WgpuRenderer::offscreen(size, shared_images),
+        move || {
+            viz::WgpuRenderer::offscreen(size, shared_images).map(|renderer| {
+                renderer.on_failure(move |error| {
+                    let _ = failure.send(error);
+                })
+            })
+        },
         clipboard,
         on_message,
     )?;
@@ -117,6 +126,7 @@ pub fn start(
         browser,
         ContextLost {
             receiver,
+            failed,
             _observer: observer,
         },
     ))
@@ -191,6 +201,7 @@ pub fn run(scenario: &Scenario, context: &Context, options: &Options) -> Result<
             "the window closed before the scenario ended".into(),
         )),
         Ended::RendererGone => Err(failure("the renderer has gone".into())),
+        Ended::GpuFailed(error) => Err(failure(format!("Viz can't draw: {error}"))),
     }
 }
 
@@ -203,6 +214,9 @@ pub enum Ended<T> {
     Closed,
     /// The renderers' messages stopped.
     RendererGone,
+    /// Viz has no GPU device that draws (`WgpuRenderer::on_failure`):
+    /// machopo ends as closing it does, with an error.
+    GpuFailed(String),
 }
 
 /// Drives `browser` with the driver's commands `commands` brings, and what
@@ -242,6 +256,13 @@ pub fn drive<T>(
             }
             recv(context_lost.receiver) -> _ => {
                 browser.view_mut().did_lose_context();
+            }
+            // Its sender goes with Viz's renderer: gone while this runs,
+            // Viz never had one that draws.
+            recv(context_lost.failed) -> error => {
+                return Ended::GpuFailed(
+                    error.unwrap_or_else(|_| "Viz has ended without a renderer".into()),
+                );
             }
             recv(commands) -> read => match read {
                 Ok(Ok(command)) => {

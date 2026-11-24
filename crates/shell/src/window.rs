@@ -65,6 +65,9 @@ enum ShellEvent {
     DevTools(ClientEvent),
     /// SIGTERM, SIGINT or SIGHUP: machopo ends as when the window closes.
     Signal,
+    /// Viz has no GPU device that draws: machopo ends as when the window
+    /// closes, with an error.
+    GpuFailed(String),
 }
 
 /// The window's half of a run that drives it (`machopo --automation-pipe
@@ -323,6 +326,7 @@ impl App {
         // Tiles go straight onto the GPU Viz draws with once its device is up
         // (Chromium's `ContextProvider` to the GPU process).
         let shared_images = viz::GpuSharedImages::new();
+        let failed = self.proxy.clone();
         let gpu: Arc<dyn ContextProvider> = shared_images.clone();
         let clipboard = arboard::Clipboard::new()
             .map_err(|err| tracing::warn!(%err, "no clipboard"))
@@ -348,6 +352,11 @@ impl App {
                     shared_images,
                     automation,
                 )
+                .map(|renderer| {
+                    renderer.on_failure(move |error| {
+                        let _ = failed.send_event(ShellEvent::GpuFailed(error));
+                    })
+                })
             },
             Box::new(SystemClipboard(clipboard)),
             Box::new(move |tab, msg| {
@@ -712,6 +721,10 @@ impl ApplicationHandler<ShellEvent> for App {
             }
             return self.exit(event_loop);
         }
+        if let ShellEvent::GpuFailed(error) = event {
+            self.error = Some(automation_pipe::gpu_failed(&error));
+            return self.exit(event_loop);
+        }
         let Some(running) = &mut self.running else {
             return;
         };
@@ -768,7 +781,7 @@ impl ApplicationHandler<ShellEvent> for App {
                 }
                 return self.exit(event_loop);
             }
-            ShellEvent::Signal => return,
+            ShellEvent::Signal | ShellEvent::GpuFailed(_) => return,
             ShellEvent::DevTools(event) => {
                 let Some(session) = self.session.as_mut() else {
                     return;

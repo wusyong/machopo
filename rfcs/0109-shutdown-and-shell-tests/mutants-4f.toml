@@ -1,0 +1,37 @@
+# Stage 4f's mutants: `python3 scripts/test.py mutate rfcs/0109-shutdown-and-shell-tests/mutants-4f.toml`.
+test = ["cargo", "test", "-q", "-p", "viz", "--lib", "a_renderer_that_cant_draw"]
+timeout = 300
+
+[[mutant]]
+name = "a renderer that can't draw tells nothing"
+file = "crates/viz/src/wgpu_renderer.rs"
+from = '''            told(error);'''
+to = '''            drop((told, error));'''
+
+[[mutant]]
+name = "a renderer that can't draw draws all the same"
+file = "crates/viz/src/wgpu_renderer.rs"
+from = '''        if self.failed {
+            return Ok(None);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a renderer that can't draw resizes all the same"
+file = "crates/viz/src/wgpu_renderer.rs"
+from = '''        if size.is_empty() || self.failed {'''
+to = '''        if size.is_empty() {'''
+
+[[mutant]]
+name = "a renderer that can't draw copies all the same"
+file = "crates/viz/src/wgpu_renderer.rs"
+from = '''        if self.failed {
+            return Err(CopyFailure::Unsupported);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a renderer without an output has no size"
+file = "crates/viz/src/wgpu_renderer.rs"
+from = '''        self.output.as_ref().map_or(Size::default(), Output::size)'''
+to = '''        self.output().size()'''

@@ -171,6 +171,18 @@ pub fn wait_for_writer(writer: JoinHandle<()>, ending: std::time::Instant) {
     let _ = writer.join();
 }
 
+/// Viz has no GPU device that draws, `error` says why: a line, as a step
+/// of the end that couldn't be as it should, and the error machopo ends
+/// with (as closing it does, its profile and trace written).
+pub fn gpu_failed(error: &str) -> String {
+    browser::shutdown::gave_up(
+        "drawing",
+        &format!("Viz having no GPU device that draws ({error})"),
+        std::time::Duration::ZERO,
+    );
+    format!("Viz can't draw: {error}")
+}
+
 /// Runs the browser, without the platform's window, on the pipe until its
 /// input ends or `Browser.close`.
 pub fn run(options: Options) -> Result<(), String> {
@@ -249,5 +261,6 @@ pub fn run(options: Options) -> Result<(), String> {
     match ended {
         windowless::Ended::Done(_) | windowless::Ended::Closed => Ok(()),
         windowless::Ended::RendererGone => Err("the renderer has gone".into()),
+        windowless::Ended::GpuFailed(error) => Err(gpu_failed(&error)),
     }
 }

@@ -355,11 +355,17 @@ impl Output {
 }
 
 pub struct WgpuRenderer {
-    /// `None` only while a lost device's next one is being made.
+    /// `None` only while a lost device's next one is being made, or once
+    /// it has failed to be.
     output: Option<Output>,
     shared_images: Arc<GpuSharedImages>,
     context: Arc<GpuContext>,
     resources: HashMap<ResourceId, UploadedResource>,
+    /// Told, once, that a lost device's next one can't draw
+    /// ([`on_failure`](Self::on_failure)).
+    on_failure: Option<Box<dyn FnOnce(String) + Send>>,
+    /// That has happened: nothing is drawn any more.
+    failed: bool,
 }
 
 impl WgpuRenderer {
@@ -401,18 +407,41 @@ impl WgpuRenderer {
             shared_images,
             context,
             resources: HashMap::new(),
+            on_failure: None,
+            failed: false,
         };
         renderer.share_device();
         renderer
+    }
+
+    /// What is told, once, if the device is lost and no next one can draw
+    /// (none can be made, or the window's surface can't take it): nothing
+    /// is drawn after. Chromium's GPU process ends itself so, and the
+    /// browser decides what next; Viz here is a thread of the browser's,
+    /// which is to end as closing it does, its profile and trace written.
+    #[must_use]
+    pub fn on_failure(mut self, told: impl FnOnce(String) + Send + 'static) -> Self {
+        self.on_failure = Some(Box::new(told));
+        self
     }
 
     fn output(&self) -> &Output {
         self.output.as_ref().expect("an output")
     }
 
-    /// The size it draws, in physical pixels.
+    /// The size it draws, in physical pixels (none once it has failed
+    /// without one).
     pub fn size(&self) -> Size {
-        self.output().size()
+        self.output.as_ref().map_or(Size::default(), Output::size)
+    }
+
+    /// Draws no more, and says why.
+    fn fail(&mut self, error: String) {
+        tracing::error!(%error, "viz: can't draw any more");
+        self.failed = true;
+        if let Some(told) = self.on_failure.take() {
+            told(error);
+        }
     }
 
     /// The adapter it draws with (for logs and reports).
@@ -427,9 +456,9 @@ impl WgpuRenderer {
 
     /// The device was lost: moves to the next one (made now, unless
     /// another renderer has), and tells the clients, whose shared images
-    /// were on the old one. Exits the process if it can't: there is nothing
-    /// to draw with.
-    fn recreate_context(&mut self) {
+    /// were on the old one. An error if it can't: there is nothing to draw
+    /// with.
+    fn recreate_context(&mut self) -> Result<(), String> {
         self.shared_images.set_gpu(None);
         self.resources.clear();
         let size = self.output().size();
@@ -445,13 +474,7 @@ impl WgpuRenderer {
                 ..
             }) = &mut self.output
         {
-            let new = match make_surface() {
-                Ok(new) => new,
-                Err(err) => {
-                    tracing::error!(%err, "viz: no new surface for the window; exiting");
-                    std::process::exit(1);
-                }
-            };
+            let new = make_surface().map_err(|err| format!("no new surface for the window: {err}"))?;
             // The old one goes before the new one is configured: a window
             // has one swap chain.
             drop(std::mem::replace(surface, new));
@@ -491,20 +514,16 @@ impl WgpuRenderer {
                     self.output = Some(output);
                     self.share_device();
                     self.shared_images.context_lost();
-                    return;
+                    return Ok(());
                 }
-                Err(err) => {
-                    // The surface went with the failed configuration.
-                    tracing::error!(%err, "viz: the new GPU device can't draw to the window; exiting");
-                    std::process::exit(1);
-                }
+                // The surface went with the failed configuration.
+                Err(err) => return Err(format!("the new GPU device can't draw to the window: {err}")),
             }
         }
-        tracing::error!(
-            attempts = RECREATE_WAITS.len(),
-            "viz: the GPU device was lost and no new one could be made; exiting"
-        );
-        std::process::exit(1);
+        Err(format!(
+            "the GPU device was lost and no new one could be made in {} attempts",
+            RECREATE_WAITS.len()
+        ))
     }
 
     fn sync_resources(&mut self, frame: &AggregatedFrame<'_>) {
@@ -574,7 +593,7 @@ impl WgpuRenderer {
 
 impl DirectRenderer for WgpuRenderer {
     fn resize(&mut self, size: Size) {
-        if size.is_empty() {
+        if size.is_empty() || self.failed {
             return; // minimised; keep the old configuration
         }
         match self.output.as_mut().expect("an output") {
@@ -624,6 +643,9 @@ impl DirectRenderer for WgpuRenderer {
         &mut self,
         frame: &AggregatedFrame<'_>,
     ) -> Result<CopyOutputResult, CopyFailure> {
+        if self.failed {
+            return Err(CopyFailure::Unsupported);
+        }
         // The device may be made again by the draw, and its output made as
         // it was.
         if !self.output().readback() {
@@ -727,8 +749,14 @@ impl WgpuRenderer {
         frame: &AggregatedFrame<'_>,
         copy: bool,
     ) -> Result<Option<CopyOutputResult>, CopyFailure> {
-        if self.context.is_lost() {
-            self.recreate_context();
+        if self.failed {
+            return Ok(None);
+        }
+        if self.context.is_lost()
+            && let Err(error) = self.recreate_context()
+        {
+            self.fail(error);
+            return Ok(None);
         }
         if let Some(Output::Surface {
             needs_reconfigure, ..
@@ -1275,6 +1303,63 @@ mod drawing_tests {
             actual.iter().zip(expected).all(|(a, e)| a.abs_diff(e) <= 1),
             "{actual:?} is not within 1 of {expected:?}"
         );
+    }
+
+    /// A renderer whose lost device's next one can't draw says so, once,
+    /// and draws nothing after (machopo then ends as closing it does):
+    /// what it is asked then neither draws nor panics, its output gone or
+    /// not.
+    #[test]
+    fn a_renderer_that_cant_draw_says_so_once_and_draws_no_more() {
+        let _gpu = gpu();
+        let size = Size::new(4, 4);
+        let told = Arc::new(AtomicU64::new(0));
+        let counted = told.clone();
+        let mut renderer = WgpuRenderer::offscreen(size, GpuSharedImages::new())
+            .expect("an adapter")
+            .on_failure(move |_| {
+                counted.fetch_add(1, Ordering::Relaxed);
+            });
+        renderer.fail("the test's".into());
+        renderer.fail("again".into());
+        assert_eq!(told.load(Ordering::Relaxed), 1);
+        let mut display = Display::new(renderer, SINK);
+        // A frame with a texture: drawn, its pixels would be uploaded.
+        let mut f = frame(
+            size,
+            SharedQuadState::default(),
+            vec![DrawQuad {
+                rect: RectF::new(0.0, 0.0, 2.0, 2.0),
+                shared_quad_state: 0,
+                material: Material::Texture {
+                    resource_id: ResourceId(7),
+                    tex_coord_rect: RectF::new(0.0, 0.0, 2.0, 2.0),
+                    nearest_neighbor: true,
+                },
+            }],
+        );
+        f.resource_list.push(TransferableResource {
+            id: ResourceId(7),
+            size: Size::new(2, 2),
+            format: ResourceFormat::Rgba8Premul,
+            pixels: protocol::BigBuffer::from([0, 0, 255, 255].repeat(4)),
+            shared_image: None,
+        });
+        display.submit_compositor_frame(SINK, LocalSurfaceId::default(), f.clone());
+        display.draw_and_swap();
+        assert!(display.renderer().resources.is_empty());
+        // As a failed configuration leaves it.
+        display.renderer_mut().output = None;
+        assert_eq!(display.renderer().size(), Size::default());
+        display.resize(Size::new(8, 8));
+        display.submit_compositor_frame(SINK, LocalSurfaceId::default(), f);
+        let copy = Arc::new(Mutex::new(None));
+        let into = copy.clone();
+        display.request_copy_of_output(CopyOutputRequest::new(move |result| {
+            *into.lock().unwrap() = Some(result);
+        }));
+        display.draw_and_swap();
+        assert!(matches!(copy.lock().unwrap().take(), Some(None)));
     }
 
     #[test]

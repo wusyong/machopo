@@ -21,6 +21,7 @@
 | 4c. 同一個 process 的 renderer 打斷 script 再有時限地等（第 10 條） | 做完，待審查 | 2026-11-25 |
 | 4d. SIGTERM、SIGINT、SIGHUP 走正常的結束，第二次立刻結束（第 11、12 條） | 做完，待審查 | 2026-11-25 |
 | 4e. automation pipe 的 writer 有時限地等（第 14 條） | 做完，待審查 | 2026-11-25 |
+| 4f. Viz 畫不下去時交給 main（第 15 條） | 做完，待審查 | 2026-11-25 |
 | 5. 驗收 | 沒開始 | |
 
 ## 驗收
@@ -31,6 +32,14 @@
 | `shell` 的測試：每個模組的分類、壞過的每一個的原因和把握 | `details.md` 的「`shell` 的測試的審查」；不改程式，所以沒有測試 |
 
 ## 做過的檢查
+
+### 第 4 段的 4f（2026-11-25，Linux：Fedora 45，debug build，`8a0f502` 之上）
+
+**做了什麼**：`WgpuRenderer::recreate_context` 的三處 `std::process::exit(1)` 改成回錯誤；`draw` 拿到錯誤時呼叫 `on_failure` 一次、之後不畫、不拷貝、不改大小（`failed`），沒有 output 時 `size` 是 0。沒有視窗的跑法經過 `drive` 的迴圈（`ContextLost::failed`，sender 不在了也算：Viz 沒有能畫的 renderer）回 `Ended::GpuFailed`，視窗經過 `ShellEvent::GpuFailed`；兩邊都記一行（`automation_pipe::gpu_failed`），以錯誤結束（結束碼 1），收尾照關掉的流程。headless 沒有接 `on_failure`：照舊等不到 frame 而失敗。
+
+**測試**：`viz` 的 `a_renderer_that_cant_draw_says_so_once_and_draws_no_more`。第一輪 mutation test「畫不下去之後照樣畫」沒抓到：測試只經過要拷貝的那條路畫，那條路有自己的檢查；補上一次不拷貝的畫（畫了的話 texture 會被上傳），重跑抓到。`viz`、`shell` 的測試和沒有平台視窗的情境（98 個）通過。
+
+**mutation test**（`mutants-4f.toml`，5 個，第二輪都抓到）：不說、照樣畫、照樣改大小、照樣拷貝、沒有 output 時 `size` panic。shell 那一半（從失敗到結束碼 1）沒有測試：要讓新的 device 建不出來（`docs/test-gaps.md`）。
 
 ### 第 4 段的 4e（2026-11-25，Linux：Fedora 45，debug build，`876b4d7` 之上）
 
