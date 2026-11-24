@@ -1,0 +1,205 @@
+# Step 1d's mutants: `python3 scripts/test.py mutate rfcs/0113-http-cache/mutants-1d.toml`.
+test = ["cargo", "test", "-q", "-p", "net", "http_cache"]
+timeout = 600
+
+[[mutant]]
+name = "If-Match doesn't keep a load from the cache"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''    let key = cache_key(request, hop.url).filter(|_| flag != Some(HeaderFlag::DisableCache));'''
+to = '''    let key = cache_key(request, hop.url);'''
+
+[[mutant]]
+name = "a POST that works keeps the entry"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''            if (200..400).contains(&response.status) {
+                cache.remove(&key);'''
+to = '''            if (200..400).contains(&response.status) {
+                let _ = &key;'''
+
+[[mutant]]
+name = "a POST that fails drops the entry"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''            if (200..400).contains(&response.status) {'''
+to = '''            if (200..600).contains(&response.status) {'''
+
+[[mutant]]
+name = "a HEAD is a GET"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''        "HEAD" => true,'''
+to = '''        "HEAD" => false,'''
+
+[[mutant]]
+name = "the transport's Accept isn't seen"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''        seen.push(("accept".to_owned(), hop.accept.to_owned()));'''
+to = '''        let _ = &mut seen;'''
+
+[[mutant]]
+name = "a load doesn't wait for another of its key"
+file = "crates/net/src/http_cache/mod.rs"
+from = '''        if let Some(waiting) = state.writing.get_mut(key) {'''
+to = '''        if let Some(waiting) = state.writing.get_mut(key).filter(|_| false) {'''
+
+[[mutant]]
+name = "the loads waiting aren't told"
+file = "crates/net/src/http_cache/mod.rs"
+from = '''            let _ = tell.send(());'''
+to = '''            std::mem::forget(tell);'''
+
+[[mutant]]
+name = "the caller's validation of another response is taken as of this one"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''        if !validating {
+            return network(transport, &hop, hop.headers).await;
+        }'''
+to = '''        if !validating && false {
+            return network(transport, &hop, hop.headers).await;
+        }'''
+
+[[mutant]]
+name = "the caller's 304 doesn't update the entry"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''            if let Some(stored) = stored {
+                update(cache, &key, stored, &response, &seen, request_time, response_time);
+            }'''
+to = '''            if let Some(stored) = stored {
+                let _ = stored;
+            }'''
+
+[[mutant]]
+name = "an update isn't kept"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''        cache.put(key, stored.clone());'''
+to = '''        let _ = stored.clone();'''
+
+[[mutant]]
+name = "an update that says no-store is kept"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''    if headers::is_storable(&stored.headers) {
+        cache.put(key, stored.clone());'''
+to = '''    if true {
+        cache.put(key, stored.clone());'''
+
+[[mutant]]
+name = "an update keeps the old times"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''    stored.request_time = request_time;
+    stored.response_time = response_time;'''
+to = '''    let _ = (request_time, response_time);
+'''
+
+[[mutant]]
+name = "an update keeps the old Vary"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''    stored.vary = VaryData::new(seen, &stored.headers);'''
+to = '''    let _ = seen;'''
+
+[[mutant]]
+name = "a HEAD answered whole leaves the entry"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''    if head || !headers::is_storable(&response.headers) {
+        slot.cache.remove(&slot.key);'''
+to = '''    if head || !headers::is_storable(&response.headers) {
+        let _ = &slot;'''
+
+[[mutant]]
+name = "no-store is kept"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''    if head || !headers::is_storable(&response.headers) {'''
+to = '''    if head {'''
+
+[[mutant]]
+name = "a response is kept without its Vary"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''        vary: VaryData::new(seen, &response.headers),'''
+to = '''        vary: None,'''
+
+[[mutant]]
+name = "a validation sends no validators"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''        sent.extend(validators.iter().cloned());'''
+to = '''        let _ = validators;'''
+
+[[mutant]]
+name = "a fresh one isn't used"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''    if validation == Validation::None {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "a Vary that doesn't match is used"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''    let validation = if vary_mismatch || flag == Some(HeaderFlag::ValidateCache) {'''
+to = '''    let validation = if flag == Some(HeaderFlag::ValidateCache) {'''
+
+[[mutant]]
+name = "max-age=0 in the request doesn't validate"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''    let validation = if vary_mismatch || flag == Some(HeaderFlag::ValidateCache) {'''
+to = '''    let validation = if vary_mismatch {'''
+
+[[mutant]]
+name = "no-cache in the request reads the cache"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''        Some(stored) if flag != Some(HeaderFlag::BypassCache) => stored,'''
+to = '''        Some(stored) => stored,'''
+
+[[mutant]]
+name = "a HEAD without an entry makes one"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''        _ if head => return network(transport, &hop, hop.headers).await,'''
+to = '''        _ if head && false => return network(transport, &hop, hop.headers).await,'''
+
+[[mutant]]
+name = "a 304 to a validation isn't used"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''    if validators.is_some() && response.status == 304 {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "a HEAD from the cache has the body"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''    let body = if head { Vec::new() } else { stored.body };'''
+to = '''    let body = stored.body;'''
+
+[[mutant]]
+name = "cookies are kept"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''        .filter(|(name, _)| !name.eq_ignore_ascii_case("set-cookie") && !name.eq_ignore_ascii_case("set-cookie2"))'''
+to = '''        .filter(|(name, _)| !name.eq_ignore_ascii_case("set-cookie"))'''
+
+[[mutant]]
+name = "a body too big is stored"
+file = "crates/net/src/http_cache/mod.rs"
+from = '''        if self.size <= self.max_size {
+            self.slot.cache.put(&self.slot.key, self.response);'''
+to = '''        if true {
+            self.slot.cache.put(&self.slot.key, self.response);'''
+
+[[mutant]]
+name = "a body's pieces aren't kept"
+file = "crates/net/src/http_cache/mod.rs"
+from = '''            self.response.body.push(piece.clone());'''
+to = '''            let _ = piece;'''
+
+[[mutant]]
+name = "a redirect's body isn't done with"
+file = "crates/net/src/url_loader.rs"
+from = '''                raw.body.done_reading();'''
+to = '''                let _ = &mut raw;'''
+
+[[mutant]]
+name = "a body's end doesn't store it"
+file = "crates/net/src/http.rs"
+from = '''            if self.source.is_none() {
+                self.done_reading();
+            }'''
+to = '''            if self.source.is_none() && false {
+                self.done_reading();
+            }'''
+
+[[mutant]]
+name = "a stored body counts as having come over the network"
+file = "crates/net/src/http.rs"
+from = '''                    if wire {'''
+to = '''                    if wire || true {'''

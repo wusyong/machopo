@@ -96,6 +96,7 @@ fn first_party(site: &str) -> TrustedParams {
     TrustedParams {
         site_for_cookies: Some(format!("http://{site}")),
         top_frame_site: Some(format!("http://{site}")),
+        frame_site: Some(format!("http://{site}")),
         initiator: Some(format!("http://{site}")),
         is_main_frame_navigation: false,
     }
@@ -221,6 +222,7 @@ fn same_site_by_the_requests_context() {
     let navigation = |initiator: Option<&str>| TrustedParams {
         site_for_cookies: None,
         top_frame_site: None,
+        frame_site: None,
         initiator: initiator.map(|site| format!("http://{site}")),
         is_main_frame_navigation: true,
     };
@@ -257,6 +259,7 @@ fn a_third_partys_cookies_by_the_policy() {
     let third_party = |site_for_cookies: Option<&str>| TrustedParams {
         site_for_cookies: site_for_cookies.map(str::to_owned),
         top_frame_site: Some("http://b.localhost".to_owned()),
+        frame_site: Some("http://b.localhost".to_owned()),
         initiator: Some("http://b.localhost".to_owned()),
         is_main_frame_navigation: false,
     };
@@ -288,6 +291,7 @@ fn embedded_in(top: &str) -> TrustedParams {
     TrustedParams {
         site_for_cookies: None,
         top_frame_site: Some(format!("http://{top}")),
+        frame_site: Some(format!("http://{top}")),
         initiator: Some(format!("http://{top}")),
         is_main_frame_navigation: false,
     }

@@ -18,6 +18,7 @@ use url::Url;
 
 use crate::NetworkContextParams;
 use crate::content_encoding;
+use crate::http_cache;
 use crate::host_mapping::{HostMapping, HostMappingRules};
 
 /// A response as the wire gave it, before `URLLoader` looks at it: its
@@ -37,6 +38,10 @@ pub(crate) struct RawResponse {
     pub(crate) protocol: &'static str,
     /// The bytes the head took on the wire.
     pub(crate) encoded_headers_length: u64,
+    /// The HTTP cache answered it from a stored response
+    /// (`HttpResponseInfo::was_cached`), not the network.
+    #[expect(dead_code, reason = "DevTools' responses tell it, in a later step")]
+    pub(crate) from_cache: bool,
 }
 
 impl RawResponse {
@@ -240,11 +245,12 @@ impl HttpTransport {
         let decoder =
             content_encoding::Decoder::new(headers_value(&headers, "content-encoding").as_deref());
         let body = HttpBody {
-            response: Some(response),
+            source: Some(Source::Wire(response)),
             url: url.clone(),
             close_delimited,
             decoder,
             encoded_length: 0,
+            recorder: None,
         };
         let encoded_headers_length = head_length(&status_text, &headers);
         let (dns, connect) = connection_timing(connecting);
@@ -264,6 +270,7 @@ impl HttpTransport {
             remote_address,
             protocol,
             encoded_headers_length,
+            from_cache: false,
         })
     }
 }
@@ -272,10 +279,11 @@ impl HttpTransport {
 /// its codings undone (`HttpStreamParser::ReadResponseBody`, then the
 /// `SourceStream`s). Dropping it before its end closes the connection
 /// (HTTP/1) or the stream (HTTP/2): a preflight's and a redirect's aren't
-/// read.
+/// read. One the HTTP cache answers has the pieces it stored instead, still
+/// in their codings, which it undoes the same way.
 pub(crate) struct HttpBody {
     /// Until the body is over.
-    response: Option<reqwest::Response>,
+    source: Option<Source>,
     url: Url,
     /// HTTP/1 with neither a length nor chunks: the body ends where the
     /// connection does.
@@ -283,43 +291,92 @@ pub(crate) struct HttpBody {
     decoder: content_encoding::Decoder,
     /// How many bytes came on the wire so far, before decoding.
     encoded_length: u64,
+    /// What keeps the pieces as they come, for the HTTP cache.
+    recorder: Option<http_cache::Recorder>,
+}
+
+enum Source {
+    Wire(reqwest::Response),
+    Stored(std::collections::VecDeque<Bytes>),
 }
 
 impl HttpBody {
+    /// A stored body, its pieces as they came on the wire, in
+    /// `content_encoding`.
+    pub(crate) fn stored(url: Url, pieces: Vec<Bytes>, content_encoding: Option<&str>) -> Self {
+        Self {
+            source: Some(Source::Stored(pieces.into())),
+            url,
+            close_delimited: false,
+            decoder: content_encoding::Decoder::new(content_encoding),
+            encoded_length: 0,
+            recorder: None,
+        }
+    }
+
+    /// Has each piece kept by `recorder` as it comes, and told once it is
+    /// all there.
+    pub(crate) fn record(&mut self, recorder: http_cache::Recorder) {
+        self.recorder = Some(recorder);
+    }
+
+    /// The rest won't be read (a redirect's): what was kept so far is all
+    /// of it (`HttpTransaction::DoneReading`).
+    pub(crate) fn done_reading(&mut self) {
+        if let Some(recorder) = self.recorder.take() {
+            recorder.finish();
+        }
+    }
+
     /// The next piece of the body, decoded; `None` once it is over.
     pub(crate) async fn next(&mut self) -> Result<Option<Bytes>, NetError> {
-        while let Some(response) = &mut self.response {
-            let chunk = match response.chunk().await {
-                Ok(chunk) => chunk,
-                // Servers that end such a body by closing the connection
-                // without TLS's close_notify (Python's `ssl`, so wptserve)
-                // are common; Chromium takes the body as complete, and so
-                // do we. A body with a length still has to have all of it.
-                Err(e) if self.close_delimited && is_unexpected_eof(&e) => None,
-                Err(e) => {
-                    self.response = None;
-                    return Err(net_error(&self.url, &e));
-                }
+        while let Some(source) = &mut self.source {
+            let wire = matches!(source, Source::Wire(_));
+            let chunk = match source {
+                Source::Wire(response) => match response.chunk().await {
+                    Ok(chunk) => chunk,
+                    // Servers that end such a body by closing the connection
+                    // without TLS's close_notify (Python's `ssl`, so wptserve)
+                    // are common; Chromium takes the body as complete, and so
+                    // do we. A body with a length still has to have all of it.
+                    Err(e) if self.close_delimited && is_unexpected_eof(&e) => None,
+                    // Not all of it: the recorder never finishes, and stores
+                    // nothing.
+                    Err(e) => {
+                        self.source = None;
+                        return Err(net_error(&self.url, &e));
+                    }
+                },
+                Source::Stored(pieces) => pieces.pop_front(),
             };
             let decoded = match chunk {
                 Some(chunk) => {
-                    self.encoded_length = self
-                        .encoded_length
-                        .saturating_add(u64::try_from(chunk.len()).unwrap_or(u64::MAX));
+                    // A stored body didn't come over the network.
+                    if wire {
+                        self.encoded_length = self
+                            .encoded_length
+                            .saturating_add(u64::try_from(chunk.len()).unwrap_or(u64::MAX));
+                    }
+                    if let Some(recorder) = &mut self.recorder {
+                        recorder.push(&chunk);
+                    }
                     self.decoder.push(chunk)
                 }
                 None => {
-                    self.response = None;
+                    self.source = None;
                     self.decoder.finish()
                 }
             };
             let decoded = decoded.map_err(|e| {
-                self.response = None;
+                self.source = None;
                 NetError::new(
                     NetErrorCode::ContentDecodingFailed,
                     format!("{}: {e}", self.url),
                 )
             })?;
+            if self.source.is_none() {
+                self.done_reading();
+            }
             if !decoded.is_empty() {
                 return Ok(Some(decoded));
             }
@@ -328,7 +385,7 @@ impl HttpBody {
     }
 
     /// The bytes the body took on the wire so far (before `Content-Encoding`
-    /// was undone): all of them, once it is over.
+    /// was undone): all of them, once it is over; none for a stored one.
     pub(crate) fn encoded_length(&self) -> u64 {
         self.encoded_length
     }
@@ -336,7 +393,7 @@ impl HttpBody {
 
 /// The value of header `name` (lowercase), the values of every such header
 /// joined with ", ".
-fn headers_value(headers: &[(String, String)], name: &str) -> Option<String> {
+pub(crate) fn headers_value(headers: &[(String, String)], name: &str) -> Option<String> {
     let values: Vec<&str> = headers
         .iter()
         .filter(|(n, _)| n == name)

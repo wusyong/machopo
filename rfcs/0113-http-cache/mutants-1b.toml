@@ -1,0 +1,98 @@
+# Step 1b's mutants: `python3 scripts/test.py mutate rfcs/0113-http-cache/mutants-1b.toml`.
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache"]
+timeout = 600
+
+[[mutant]]
+name = "a read doesn't make an entry the most recently used"
+file = "crates/net/src/http_cache/memory.rs"
+from = '''        self.by_use.remove(&stored.used);
+        self.by_use.insert(used, key.to_owned());
+        stored.used = used;'''
+to = '''        let _ = used;
+
+'''
+
+[[mutant]]
+name = "a new entry doesn't drop the one it replaces"
+file = "crates/net/src/http_cache/memory.rs"
+from = '''        self.remove(key);
+        if size > self.max_entry_size() {'''
+to = '''        if size > self.max_entry_size() {'''
+
+[[mutant]]
+name = "an entry may take a quarter"
+file = "crates/net/src/http_cache/memory.rs"
+from = '''        self.max_size / 8'''
+to = '''        self.max_size / 4'''
+
+[[mutant]]
+name = "an entry bigger than an eighth is kept"
+file = "crates/net/src/http_cache/memory.rs"
+from = '''        if size > self.max_entry_size() {'''
+to = '''        if size > self.max_entry_size().saturating_mul(2) {'''
+
+[[mutant]]
+name = "the key doesn't count"
+file = "crates/net/src/http_cache/memory.rs"
+from = '''            .saturating_add(u64::try_from(key.len()).unwrap_or(u64::MAX));'''
+to = '''            .saturating_add(0);'''
+
+[[mutant]]
+name = "nothing goes past the bound"
+file = "crates/net/src/http_cache/memory.rs"
+from = '''        if self.size <= self.max_size {
+            return;'''
+to = '''        if self.size <= self.max_size.saturating_mul(2) {
+            return;'''
+
+[[mutant]]
+name = "eviction stops at the bound"
+file = "crates/net/src/http_cache/memory.rs"
+from = '''        let target = self.max_size.saturating_sub(self.max_size / 10);'''
+to = '''        let target = self.max_size;'''
+
+[[mutant]]
+name = "the most recently used go first"
+file = "crates/net/src/http_cache/memory.rs"
+from = '''            let Some((_, key)) = self.by_use.pop_first() else {'''
+to = '''            let Some((_, key)) = self.by_use.pop_last() else {'''
+
+[[mutant]]
+name = "removing keeps its size"
+file = "crates/net/src/http_cache/memory.rs"
+from = '''            self.by_use.remove(&stored.used);
+            self.size = self.size.saturating_sub(stored.size);'''
+to = '''            self.by_use.remove(&stored.used);
+            let _ = stored.size;'''
+
+[[mutant]]
+name = "clearing keeps the size"
+file = "crates/net/src/http_cache/memory.rs"
+from = '''        self.by_use.clear();
+        self.size = 0;'''
+to = '''        self.by_use.clear();
+'''
+
+[[mutant]]
+name = "the bound is 10 MiB"
+file = "crates/net/src/http_cache/memory.rs"
+from = '''pub(crate) const MAX_SIZE: u64 = 50 * 1024 * 1024;'''
+to = '''pub(crate) const MAX_SIZE: u64 = 10 * 1024 * 1024;'''
+
+[[mutant]]
+name = "an entry's headers don't count"
+file = "crates/net/src/http_cache/entry.rs"
+from = '''            sum.saturating_add(len(name.len())).saturating_add(len(value.len()))'''
+to = '''            sum.saturating_add(len(name.len()))'''
+
+[[mutant]]
+name = "an entry's Vary doesn't count"
+file = "crates/net/src/http_cache/entry.rs"
+from = '''            Some(VaryData::Values(values)) => len(values.len()),'''
+to = '''            Some(VaryData::Values(values)) => len(values.len()) & 0,'''
+
+[[mutant]]
+name = "an entry's status text doesn't count"
+file = "crates/net/src/http_cache/entry.rs"
+from = '''            .saturating_add(len(self.status_text.len()))'''
+to = '''            .saturating_add(0)'''

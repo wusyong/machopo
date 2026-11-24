@@ -35,6 +35,13 @@ pub struct Route {
     /// Over HTTP, when the server reads the request and closes the
     /// connection without answering.
     pub unanswered: Unanswered,
+    /// Answers a request whose `If-None-Match` is the route's `ETag`, or
+    /// whose `If-Modified-Since` is its `Last-Modified`, with a `304`: its
+    /// headers, no body.
+    pub revalidates: bool,
+    /// What its `304` says in place of the route's headers of the same
+    /// names (a server telling a new freshness, say).
+    pub not_modified_headers: Vec<(String, String)>,
 }
 
 /// When a route's request is read and its connection closed without an
@@ -68,6 +75,8 @@ impl Route {
             close_delimited: false,
             corrupt_after_body: false,
             unanswered: Unanswered::Never,
+            revalidates: false,
+            not_modified_headers: Vec::new(),
         }
     }
 
@@ -119,6 +128,34 @@ impl Route {
     pub fn unanswered(mut self, when: Unanswered) -> Self {
         self.unanswered = when;
         self
+    }
+
+    /// See [`revalidates`](Self::revalidates).
+    pub fn revalidated(mut self) -> Self {
+        self.revalidates = true;
+        self
+    }
+
+    /// Revalidated (see [`revalidated`](Self::revalidated)), its `304`
+    /// saying `name: value` in place of the route's `name`.
+    pub fn with_304_header(mut self, name: &str, value: &str) -> Self {
+        self.revalidates = true;
+        self.not_modified_headers.push((name.into(), value.into()));
+        self
+    }
+
+    /// Whether a request of `headers` (names lowercase) is answered with a
+    /// `304`, as [`revalidates`](Self::revalidates) says.
+    fn not_modified(&self, headers: &[(String, String)]) -> bool {
+        let header = |list: &[(String, String)], name: &str| {
+            list.iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case(name))
+                .map(|(_, v)| v.clone())
+        };
+        let same = |asked: &str, ours: &str| {
+            header(headers, asked).is_some_and(|value| header(&self.headers, ours) == Some(value))
+        };
+        self.revalidates && (same("if-none-match", "etag") || same("if-modified-since", "last-modified"))
     }
 }
 
@@ -445,6 +482,7 @@ fn serve(
     reader.read_exact(&mut body).ok()?;
     let path = target.split('?').next().unwrap_or("/").to_owned();
     let head_only = method == "HEAD";
+    let asked = headers.clone();
     // A route for the method (`OPTIONS /a`) before the path's.
     let route_key = format!("{method} {path}");
     let index = {
@@ -477,15 +515,29 @@ fn serve(
         requests.lock().unwrap()[index].abandoned = true;
         return None;
     }
-    let status = route.status;
+    let not_modified = route.not_modified(&asked);
+    let status = if not_modified { 304 } else { route.status };
+    let head_only = head_only || not_modified;
     let keep_alive = site.keep_alive && !route.close_delimited;
     let connection = if keep_alive { "keep-alive" } else { "close" };
     let mut head = format!("HTTP/1.1 {status} X\r\nConnection: {connection}\r\n");
-    if !route.close_delimited {
+    if !route.close_delimited && !not_modified {
         head.push_str(&format!("Content-Length: {}\r\n", route.body.len()));
     }
-    for (name, value) in &route.headers {
+    let replaced = |name: &str| {
+        not_modified
+            && route
+                .not_modified_headers
+                .iter()
+                .any(|(other, _)| other.eq_ignore_ascii_case(name))
+    };
+    for (name, value) in route.headers.iter().filter(|(name, _)| !replaced(name)) {
         head.push_str(&format!("{name}: {value}\r\n"));
+    }
+    if not_modified {
+        for (name, value) in &route.not_modified_headers {
+            head.push_str(&format!("{name}: {value}\r\n"));
+        }
     }
     head.push_str("\r\n");
     let stream = reader.get_mut();

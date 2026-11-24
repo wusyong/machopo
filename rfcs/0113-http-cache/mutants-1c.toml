@@ -1,0 +1,85 @@
+# Step 1c's mutants: `python3 scripts/test.py mutate rfcs/0113-http-cache/mutants-1c.toml`.
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache::key"]
+timeout = 600
+
+[[mutant]]
+name = "a subresource is kept under its top-level site twice"
+file = "crates/net/src/http_cache/key.rs"
+from = '''            trusted.frame_site.clone()?,
+            false,'''
+to = '''            trusted.top_frame_site.clone()?,
+            false,'''
+
+[[mutant]]
+name = "a subresource without a frame site has a key"
+file = "crates/net/src/http_cache/key.rs"
+from = '''            trusted.frame_site.clone()?,
+            false,'''
+to = '''            trusted.frame_site.clone().unwrap_or_default(),
+            false,'''
+
+[[mutant]]
+name = "a main frame's navigation keeps the top-level site it came with"
+file = "crates/net/src/http_cache/key.rs"
+from = '''        RequestDestination::Document => (url_site.serialize(), url_site.serialize(), false),'''
+to = '''        RequestDestination::Document => (trusted.top_frame_site.clone()?, url_site.serialize(), false),'''
+
+[[mutant]]
+name = "a child frame's document has no s_"
+file = "crates/net/src/http_cache/key.rs"
+from = '''        RequestDestination::Iframe => (trusted.top_frame_site.clone()?, url_site.serialize(), true),'''
+to = '''        RequestDestination::Iframe => (trusted.top_frame_site.clone()?, url_site.serialize(), false),'''
+
+[[mutant]]
+name = "cn_ for a child frame too"
+file = "crates/net/src/http_cache/key.rs"
+from = '''    let cross_site_navigation = request.destination == RequestDestination::Document
+        && trusted'''
+to = '''    let cross_site_navigation = request.destination != RequestDestination::Image
+        && trusted'''
+
+[[mutant]]
+name = "an initiator that doesn't parse is of the same site"
+file = "crates/net/src/http_cache/key.rs"
+from = '''    Url::parse(initiator).is_ok_and(|initiator| Site::of(&initiator.origin()) == *site)'''
+to = '''    Url::parse(initiator).map_or(true, |initiator| Site::of(&initiator.origin()) == *site)'''
+
+[[mutant]]
+name = "the fragment counts"
+file = "crates/net/src/http_cache/key.rs"
+from = '''    spec.set_fragment(None);'''
+to = '''    let _ = &mut spec;'''
+
+[[mutant]]
+name = "the user name counts"
+file = "crates/net/src/http_cache/key.rs"
+from = '''    let _ = spec.set_username("");'''
+to = '''    let _ = &mut spec;'''
+
+[[mutant]]
+name = "a request without trusted params has a key"
+file = "crates/net/src/http_cache/key.rs"
+from = '''    let trusted = request.trusted.as_ref()?;'''
+to = '''    let fallback = protocol::network::TrustedParams { top_frame_site: Some("x".to_owned()), frame_site: Some("x".to_owned()), ..Default::default() };
+    let trusted = request.trusted.as_ref().unwrap_or(&fallback);'''
+
+[[mutant]]
+name = "a loader's frame site is its top-level frame's"
+file = "crates/browser/src/frame_tree.rs"
+from = '''        let frame_site = Site::of(origin);'''
+to = '''        let frame_site = Site::of(top);'''
+test = ["cargo", "test", "-q", "-p", "browser", "--lib", "frame_tree"]
+
+[[mutant]]
+name = "an opaque frame has a frame site"
+file = "crates/browser/src/frame_tree.rs"
+from = '''                frame_site: (!frame_site.is_opaque()).then(|| frame_site.serialize()),'''
+to = '''                frame_site: Some(frame_site.serialize()),'''
+test = ["cargo", "test", "-q", "-p", "browser", "--lib", "frame_tree"]
+
+[[mutant]]
+name = "a child frame's navigation keeps its parent's frame site"
+file = "crates/browser/src/frame_tree.rs"
+from = '''        params.frame_site = None;'''
+to = '''        let _ = &mut params;'''
+test = ["cargo", "test", "-q", "-p", "browser", "--lib", "frame_tree"]

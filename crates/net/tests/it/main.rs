@@ -14,6 +14,7 @@ mod content_encoding;
 mod cookie_loads;
 mod cookie_monster;
 mod cookies;
+mod http_cache;
 mod load;
 mod redirects;
 mod resend;

@@ -115,6 +115,12 @@ pub struct ResourceRequest {
 pub struct TrustedParams {
     pub site_for_cookies: Option<String>,
     pub top_frame_site: Option<String>,
+    /// The site of the frame a subresource's request is for (the frame
+    /// site of Chromium's `NetworkIsolationKey`), what its HTTP cache entry
+    /// is kept under with `top_frame_site`; none for an opaque one, and for
+    /// a navigation, whose frame site is its URL's at each hop, as the
+    /// network service works out.
+    pub frame_site: Option<String>,
     /// The origin of the document that started it, serialized (`null` for
     /// an opaque one): a subresource's, its loader's (the
     /// `request_initiator` its lock checked); a navigation's, the frame's

@@ -1,0 +1,231 @@
+# Step 1a's mutants: `python3 scripts/test.py mutate rfcs/0113-http-cache/mutants-1a.toml`.
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache"]
+timeout = 600
+
+[[mutant]]
+name = "a comma in a quoted string separates values"
+file = "crates/net/src/http_cache/headers.rs"
+from = '''            } else if c == '"' {
+                quoted = true;'''
+to = '''            } else if c == '\u{0}' {
+                quoted = true;'''
+
+[[mutant]]
+name = "a backslash in a quoted string escapes nothing"
+file = "crates/net/src/http_cache/headers.rs"
+from = '''                    '\\' => escaped = true,'''
+to = '''                    '\\' => {}'''
+
+[[mutant]]
+name = "Date is a list"
+file = "crates/net/src/http_cache/headers.rs"
+from = '''const NON_COALESCING: [&str; 9] = [
+    "date",'''
+to = '''const NON_COALESCING: [&str; 9] = [
+    "dat_",'''
+
+[[mutant]]
+name = "empty values are kept"
+file = "crates/net/src/http_cache/headers.rs"
+from = '''            pieces.map(trim_lws).filter(|value| !value.is_empty())'''
+to = '''            pieces.map(trim_lws).filter(|_| true)'''
+
+[[mutant]]
+name = "no-store doesn't keep it from being fresh"
+file = "crates/net/src/http_cache/headers.rs"
+from = '''        .any(|v| v.eq_ignore_ascii_case("no-cache") || v.eq_ignore_ascii_case("no-store"))'''
+to = '''        .any(|v| v.eq_ignore_ascii_case("no-cache") || false)'''
+
+[[mutant]]
+name = "Pragma: no-cache doesn't keep it from being fresh"
+file = "crates/net/src/http_cache/headers.rs"
+from = '''    if has_value(headers, "pragma", "no-cache") {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "must-revalidate doesn't drop stale-while-revalidate"
+file = "crates/net/src/http_cache/headers.rs"
+from = '''    lifetimes.staleness = if directives.must_revalidate {'''
+to = '''    lifetimes.staleness = if false {'''
+
+[[mutant]]
+name = "max-age doesn't count"
+file = "crates/net/src/http_cache/headers.rs"
+from = '''    if let Some(max_age) = directives.max_age {'''
+to = '''    if let Some(max_age) = directives.max_age.filter(|_| false) {'''
+
+[[mutant]]
+name = "a later max-age replaces the first"
+file = "crates/net/src/http_cache/headers.rs"
+from = '''        } else if let Some(seconds) = directives
+            .max_age
+            .is_none()'''
+to = '''        } else if let Some(seconds) = directives
+            .max_age
+            .is_none_or(|_| true)'''
+
+[[mutant]]
+name = "a max-age that isn't digits counts"
+file = "crates/net/src/http_cache/headers.rs"
+from = '''    let value = value.trim_matches(' ');
+    if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {'''
+to = '''    let value = value.trim_matches(' ');
+    if value.is_empty() {'''
+
+[[mutant]]
+name = "Expires in the past is fresh by its difference"
+file = "crates/net/src/http_cache/headers.rs"
+from = '''        if expires > date {'''
+to = '''        if true {'''
+
+[[mutant]]
+name = "Expires: 0 doesn't parse"
+file = "crates/net/src/http_cache/headers.rs"
+from = '''        return Some(Time::MIN);'''
+to = '''        return None;'''
+
+[[mutant]]
+name = "the heuristic for a 404"
+file = "crates/net/src/http_cache/headers.rs"
+from = '''    if matches!(status, 200 | 203 | 206)'''
+to = '''    if matches!(status, 200 | 203 | 206 | 404)'''
+
+[[mutant]]
+name = "the heuristic despite must-revalidate"
+file = "crates/net/src/http_cache/headers.rs"
+from = '''        && !directives.must_revalidate
+        && let Some(last_modified)'''
+to = '''        && directives.must_revalidate | true
+        && let Some(last_modified)'''
+
+[[mutant]]
+name = "the heuristic from a Last-Modified in the future"
+file = "crates/net/src/http_cache/headers.rs"
+from = '''        && last_modified <= date'''
+to = '''        && true'''
+
+[[mutant]]
+name = "the heuristic is a fifth"
+file = "crates/net/src/http_cache/headers.rs"
+from = '''saturating_micros_since(last_modified).saturating_div(10);'''
+to = '''saturating_micros_since(last_modified).saturating_div(5);'''
+
+[[mutant]]
+name = "a 410 isn't fresh forever"
+file = "crates/net/src/http_cache/headers.rs"
+from = '''    if matches!(status, 300 | 301 | 308 | 410) {'''
+to = '''    if matches!(status, 300 | 301 | 308) {'''
+
+[[mutant]]
+name = "the age leaves out the response's delay"
+file = "crates/net/src/http_cache/headers.rs"
+from = '''    let corrected_age = age.saturating_add(response_delay);'''
+to = '''    let corrected_age = age;'''
+
+[[mutant]]
+name = "the age leaves out the time since"
+file = "crates/net/src/http_cache/headers.rs"
+from = '''    corrected_initial_age.saturating_add(resident_time)'''
+to = '''    corrected_initial_age'''
+
+[[mutant]]
+name = "an Age too big for 32 bits is none"
+file = "crates/net/src/http_cache/headers.rs"
+from = '''    let seconds = value.parse::<u32>().unwrap_or(u32::MAX);'''
+to = '''    let seconds = value.parse::<u32>().unwrap_or(0);'''
+
+[[mutant]]
+name = "nothing to go by isn't validated"
+file = "crates/net/src/http_cache/headers.rs"
+from = '''    if lifetimes.freshness == 0 && lifetimes.staleness == 0 {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "stale-while-revalidate is never asynchronous"
+file = "crates/net/src/http_cache/headers.rs"
+from = '''    if lifetimes.freshness.saturating_add(lifetimes.staleness) > age {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "no-store is stored"
+file = "crates/net/src/http_cache/headers.rs"
+from = '''    !has_value(headers, "cache-control", "no-store")'''
+to = '''    true'''
+
+[[mutant]]
+name = "any status is validated"
+file = "crates/net/src/http_cache/headers.rs"
+from = '''    if !matches!(status, 200 | 206) {
+        return None;'''
+to = '''    if false {
+        return None;'''
+
+[[mutant]]
+name = "an ETag before HTTP/1.1"
+file = "crates/net/src/http_cache/headers.rs"
+from = '''    !matches!(protocol, "http/0.9" | "http/1.0")'''
+to = '''    true'''
+
+[[mutant]]
+name = "a Vary that didn't match keeps Last-Modified"
+file = "crates/net/src/http_cache/headers.rs"
+from = '''    let last_modified = if vary_mismatch {'''
+to = '''    let last_modified = if false {'''
+
+[[mutant]]
+name = "a 304 updates the X-Content- headers"
+file = "crates/net/src/http_cache/headers.rs"
+from = '''            .any(|prefix| strip_prefix_ignore_case(name, prefix).is_some())'''
+to = '''            .any(|_| false)'''
+
+[[mutant]]
+name = "a 304 keeps the stored lines it replaces"
+file = "crates/net/src/http_cache/headers.rs"
+from = '''            !updated
+                .iter()'''
+to = '''            true || !updated
+                .iter()'''
+
+[[mutant]]
+name = "Vary: Authorization isn't a star"
+file = "crates/net/src/http_cache/vary.rs"
+from = '''    has_value(response, "vary", "*") || has_value(response, "vary", "authorization")'''
+to = '''    has_value(response, "vary", "*") || false'''
+
+[[mutant]]
+name = "a Vary's values run together"
+file = "crates/net/src/http_cache/vary.rs"
+from = '''            joined.push('\n');'''
+to = '''            joined.push_str("");'''
+
+[[mutant]]
+name = "a star matches"
+file = "crates/net/src/http_cache/vary.rs"
+from = '''            Self::Star => false,'''
+to = '''            Self::Star => true,'''
+
+[[mutant]]
+name = "If-Match doesn't keep the load from the cache"
+file = "crates/net/src/http_cache/request_headers.rs"
+from = '''    if ["if-unmodified-since", "if-match", "if-range"]'''
+to = '''    if ["if-unmodified-since", "if-matcx", "if-range"]'''
+
+[[mutant]]
+name = "Cache-Control: max-age=0 doesn't validate"
+file = "crates/net/src/http_cache/request_headers.rs"
+from = '''    if has_request_value(request, "cache-control", "max-age=0") {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "an empty validation header is no validation"
+file = "crates/net/src/http_cache/request_headers.rs"
+from = '''            Some("") => Err(EmptyValidationHeader),'''
+to = '''            Some("") => Ok(None),'''
+
+[[mutant]]
+name = "a validator the response doesn't have counts against it"
+file = "crates/net/src/http_cache/request_headers.rs"
+from = '''            _ => true,
+        };'''
+to = '''            _ => false,
+        };'''

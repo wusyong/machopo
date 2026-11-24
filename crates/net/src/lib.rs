@@ -21,8 +21,9 @@
 //!
 //! [`cookies`] (`//net/cookies`) is the cookie jar and the rules it keeps;
 //! each hop of a load sends and keeps cookies through the context's jar,
-//! whose persistent cookies are in the profile's `Cookies` database. No
-//! HTTP cache.
+//! whose persistent cookies are in the profile's `Cookies` database.
+//! [`http_cache`] (`//net/http`'s `HttpCache`) sits between each hop and
+//! the transport, in memory.
 //!
 //! [`NetworkContextParams`] has the profile's folder and, for web tests, host mapping rules and extra trusted roots, so
 //! WPT's domains reach the local wptserve over HTTPS.
@@ -49,6 +50,7 @@ mod data;
 mod file;
 mod host_mapping;
 mod http;
+mod http_cache;
 mod mime;
 pub mod test_server;
 mod url_loader;
@@ -272,8 +274,10 @@ impl NetworkContext {
                     .expect("tokio runtime for the network service");
                 runtime.block_on(async move {
                     let transport = http::HttpTransport::new(&params);
-                    // The context's cookies, which its loads share.
+                    // The context's cookies and HTTP cache, which its
+                    // loads share.
                     let cookies = cookies::CookieJar::new(store);
+                    let cache = http_cache::HttpCache::default();
                     while let Some(job) = rx.recv().await {
                         let job = match job {
                             Job::Load(load) => load,
@@ -296,6 +300,7 @@ impl NetworkContext {
                         };
                         let transport = transport.clone();
                         let cookies = cookies.clone();
+                        let cache = cache.clone();
                         let mut state = job.state.lock().expect("a load's state");
                         if state.cancelled {
                             continue;
@@ -303,6 +308,7 @@ impl NetworkContext {
                         let task = tokio::spawn(run(
                             transport,
                             cookies,
+                            cache,
                             job.request,
                             job.listener,
                             job.state.clone(),
@@ -539,6 +545,7 @@ impl NetworkContext {
 async fn run(
     transport: http::HttpTransport,
     cookies: cookies::CookieJar,
+    cache: http_cache::HttpCache,
     request: ResourceRequest,
     listener: Listener,
     state: Arc<Mutex<LoadState>>,
@@ -552,7 +559,7 @@ async fn run(
                 tell: &mut **tell,
                 state,
             });
-            let result = match url_loader::load(&transport, &cookies, &request, redirects).await {
+            let result = match url_loader::load(&transport, &cookies, &cache, &request, redirects).await {
                 Ok(response) => collect(response).await,
                 Err(err) => Err(err),
             };
@@ -571,7 +578,7 @@ async fn run(
                     tell: &mut tell,
                     state,
                 });
-                url_loader::load(&transport, &cookies, &request, redirects).await
+                url_loader::load(&transport, &cookies, &cache, &request, redirects).await
             };
             let status = match result {
                 Ok(response) => stream_body(response, &mut *client).await,

@@ -1,8 +1,9 @@
 # RFC 0113：HTTP cache
 
 - 開始日期：2026-11-24
-- 狀態：👍 已接受：2026-11-24
+- 狀態：🚧 已排程：2026-11-24
 - 細節：`details.md`
+- 進度：`progress.md`
 
 ## 摘要
 
@@ -67,11 +68,13 @@ Chromium 怎麼做、每個選項的比較在 `details.md`。這裡寫打算怎�
 
 ### key
 
-照 Chromium（已決定的第 1 條）：最上層的網站、frame 的網站和網址（去掉 fragment）。`TrustedParams` 加上 `frame_site`，由 Browser 的 `frame_tree.rs` 在 `loader_params`（子資源：frame 自己的 origin 的網站）和 `navigation_params`（導覽：要去的網址的網站）給，和 `top_frame_site` 一樣不信任 renderer。worker 的請求用它的 owner 的。最上層或 frame 的網站是 opaque 的（`sandbox` 沒有 `allow-same-origin` 的 iframe、`data:` 的頁面），和沒有 `trusted` 的請求，不經過 cache：不讀也不寫（已決定的第 2 條）。
+照 Chromium（已決定的第 1 條）：最上層的網站、frame 的網站和網址（去掉 fragment、帳號和密碼）。`TrustedParams` 加上 `frame_site`，由 Browser 的 `frame_tree.rs` 在 `loader_params`（子資源：frame 自己的 origin 的網站）給，和 `top_frame_site` 一樣不信任 renderer；worker 的請求用它的 owner 的 loader 的。導覽不帶 `frame_site`：`net` 照每一跳的網址算（主框架的導覽兩個網站都是網址的，子 frame 的是它自己的），和現在主框架的 `top_frame_site` 一樣。最上層或 frame 的網站是 opaque 的（`sandbox` 沒有 `allow-same-origin` 的 iframe、`data:` 的頁面），和沒有 `trusted` 的請求，不經過 cache：不讀也不寫（已決定的第 2 條）。
+
+key 的字串照 Chromium 的 `HttpCache::GenerateCacheKey`（`net` 的 `http_cache::key`）：`1/0/_dk_`，子 frame 的文件加 `s_`，別的網站發起的主框架導覽加 `cn_`，再接兩個網站和網址，各隔一個空格。2026-11-24 讀 Chromium `main` 的 `http_cache.cc` 和 `features.cc` 確認：分區由 `HttpCache::SplitCacheFeatureEnableByDefault()` 打開（`kSplitCacheByNetworkIsolationKey` 本身預設關），分區時 `s_` 和 `cn_` 一律加；credential 的前綴（`0/`）在 `kSplitCacheByIncludeCredentials` 後面，預設關，所以一律是 `1/`。
 
 ### 新鮮度和驗證
 
-machopo 自己寫（已決定的第 4 條），照 RFC 9111 和 Chromium 的 `HttpResponseHeaders`（`GetFreshnessLifetimes`、`RequiresValidation`）和 `HttpVaryData` 逐條對照；日期用 `httpdate`（HTTP 的三種日期格式都收）。`max-age`、`Expires`（`s-maxage` 不算，私有 cache）、沒有時對預設可以 cache 的狀態碼用 heuristic（`Date` 減 `Last-Modified` 的 10%）；`Age` 和收到時的時間算現在的年齡。不新鮮或 `no-cache` 時送條件請求，`304` 時用存的 body、合併 header、更新 entry。`Vary` 的 header 和存的請求 header 比，不同時當成沒有。`stale-while-revalidate` 之後再做（「之後的可能」）。
+machopo 自己寫（已決定的第 4 條），照 RFC 9111 和 Chromium 的 `HttpResponseHeaders`（`GetFreshnessLifetimes`、`RequiresValidation`）和 `HttpVaryData` 逐條對照；日期照已決定的第 6 條解析。`max-age`、`Expires`（`s-maxage` 不算，私有 cache）、沒有時對預設可以 cache 的狀態碼用 heuristic（`Date` 減 `Last-Modified` 的 10%）；`Age` 和收到時的時間算現在的年齡。不新鮮或 `no-cache` 時送條件請求，`304` 時用存的 body、合併 header、更新 entry。`Vary` 的 header 和存的請求 header 比，不同時當成沒有。`stale-while-revalidate` 之後再做（「之後的可能」）。
 
 ### load flag
 
@@ -79,7 +82,7 @@ machopo 自己寫（已決定的第 4 條），照 RFC 9111 和 Chromium 的 `Ht
 
 ### 儲存
 
-兩種 backend 同一個介面（Chromium 的 `disk_cache::Backend`）：記憶體的（記憶體裡的 profile，Chromium 無痕模式的 `MemBackendImpl`）和磁碟的（profile 資料夾的 `Cache`）。磁碟的格式和上限待決定（第 1、2 條）。記憶體的照 Chromium 的 `MemBackendImpl`（已決定的第 5 條）：上限是實體記憶體的 2%，2.5 GiB 以上是 50 MiB，讀不到時 10 MiB；單一個 entry 最多是上限的 1/8，超過的不存；超過上限時照最近用過的順序淘汰到上限的 90%，正在用的 entry 跳過。entry 在 body 整份收完、寫完才算數；載入取消、出錯的不留。
+兩種 backend 同一個介面（Chromium 的 `disk_cache::Backend`）：記憶體的（記憶體裡的 profile，Chromium 無痕模式的 `MemBackendImpl`）和磁碟的（profile 資料夾的 `Cache`）。磁碟的格式和上限待決定（第 1、2 條）。記憶體的照 Chromium 的 `MemBackendImpl`（已決定的第 5 條）：上限固定 50 MiB（Chromium 在 2.5 GiB 以上的機器的值，已決定的第 7 條；Chromium 照實體記憶體算：2.5 GiB 以下是它的 2%，讀不到時 10 MiB）；單一個 entry 最多是上限的 1/8，超過的不存；超過上限時照最近用過的順序淘汰到上限的 90%，正在用的 entry 跳過。entry 在 body 整份收完、寫完才算數；載入取消、出錯的不留。
 
 ### 同時的請求
 
@@ -138,7 +141,7 @@ machopo 自己寫（已決定的第 4 條），照 RFC 9111 和 Chromium 的 `Ht
    - 不選 shared writers（A）：entry 要能一邊寫一邊讀，第一個被取消時要讓後到的接手繼續收，複雜度高。不選後到的直接送出去（B，2026-11-24 原本的看法）：server 收到兩次，和 Chrome 不同。
 
 4. **新鮮度和驗證的規則自己寫，照 Chromium 逐條對照**（2026-11-24，使用者決定；A）：
-   - 照 Chromium 的 `HttpResponseHeaders` 和 `HttpVaryData`，日期用已經是依賴的 `httpdate`。`http-cache-semantics` 的測試案例可以參考（BSD-2-Clause，只參考案例，不複製程式）。
+   - 照 Chromium 的 `HttpResponseHeaders` 和 `HttpVaryData`。日期的解析見第 6 條（原本寫成用「已經是依賴的 `httpdate`」：它只經過 hyper 出現在 `Cargo.lock`，不是 `net` 的依賴，而且比 Chromium 的解析嚴格）。`http-cache-semantics` 的測試案例可以參考（BSD-2-Clause，只參考案例，不複製程式）。
    - 理由：目標是和 Chrome 的行為一樣，規則要能逐條對照；要寫的量不大（Chromium 這部分的核心是幾個函式）。
    - 不選 `http-cache-semantics` 3.0.0（B）：它照 RFC 7234，`Expires`、`Last-Modified` 只解析 RFC 2822 的格式（RFC 850 和 asctime 的日期當成已經過期，Chromium 都收），`immutable` 預設至少新鮮 24 小時，heuristic 的狀態碼照 RFC 的清單（Chromium 的還沒對照）；日期和狀態碼調不了，要 fork 或在外面補（2026-11-24 讀它的 `src/lib.rs`）。效能上兩者一樣。
 
@@ -148,11 +151,39 @@ machopo 自己寫（已決定的第 4 條），照 RFC 9111 和 Chromium 的 `Ht
    - 理由：和 Chrome 一樣；50 MiB 裝得下 Speedometer 所有 suite 的檔案（建好的檔案合計最多約 23 MB，最大的 1.9 MB），網路版的目標達得到。淘汰在寫入時順便做，成本小。
    - 不選第 1 階段給磁碟上的 profile 一個大的記憶體 cache（B，例如 Chromium 磁碟 cache 的 320 MiB）：只是過渡，平常瀏覽最多多吃 320 MB 的記憶體。不選固定 10 MiB（C）：裝不下 Speedometer，網路版照樣每次重新下載。
 
+6. **HTTP 的日期用 machopo 已經有的 cookie 日期解析**（2026-11-24，使用者決定；B；更正第 4 條原本的「用 `httpdate`」）：
+   - `Date`、`Expires`、`Last-Modified` 用 `cookies::cookie_util::parse_cookie_expiration_time`（照 Chromium 的 `cookie_util::ParseCookieExpirationTime` 寫的）解析；`Expires: 0` 是最早的時間；解析不了的照 Chromium 當成沒有這個 header（`Expires` 也是：接著走 heuristic，不是當成過期）。
+   - 對照 Chrome：Chromium 用 `base::Time::FromUTCString`（NSPR 的 `PR_ParseTimeString`，2026-11-24 讀 `main` 的 `GetTimeValuedHeader`），很寬鬆，認明寫的時區，沒寫時當 GMT。cookie 的解析也寬鬆，HTTP 的三種格式（IMF-fixdate、RFC 850、asctime）的結果一樣；不同的是寫了 GMT 以外的時區時，cookie 的解析忽略時區。這一點記進 `docs/limitations.md`。
+   - 理由：HTTP 規定日期用 GMT，寫別的時區的伺服器很少；不用新寫解析。
+   - 不選移植 `PR_ParseTimeString`（A）：幾百行加測試，換來的只是很少見的情況；之後需要時再換。不選 `httpdate`（C）：多一個依賴，而且標準格式以外的日期一律當成沒有，和 Chrome 差最多。
+
+7. **記憶體的 backend 的上限固定 50 MiB，不讀實體記憶體**（2026-11-24，使用者決定；B）：
+   - Chromium 的 `CalculateDefaultMaxSize` 在 2.5 GiB 以上的機器是 50 MiB，以下是實體記憶體的 2%，讀不到時 10 MiB；machopo 一律 50 MiB。小記憶體的機器上 machopo 的 cache 比 Chrome 的大，記進 `docs/limitations.md`。
+   - 理由：讀實體記憶體要系統呼叫，`unsafe` 只能在 `bindings` 和 `ipc`；machopo 開發和驗收的機器都遠超過 2.5 GiB，結果和 Chrome 一樣。之後照 Chromium 在記憶體吃緊時降低上限時，也要系統的記憶體壓力通知，到時候在 `ipc` 的平台層一起做總記憶體和壓力通知。
+   - 不選在 `ipc` 的平台層現在就讀實體記憶體（A）：三個平台各一段 `unsafe` 和論證，換來的只是小記憶體的機器。不選 `sysinfo`（C）：只要一個數字，它的 `system` feature 卻拉進 Windows 的十幾個 API 模組、`ntapi` 和 macOS 的 IOKit binding；0.x 的版本常有不相容的改版；之後的記憶體壓力通知它也沒有，還是要自己寫。
+
+8. **cache 的狀態和 cookie jar 一樣用 `Arc<Mutex<…>>` 讓載入共用**（2026-11-24，使用者決定；A）：
+   - backend 和「寫入中」的名單（已決定的第 3 條）在同一把鎖後面；鎖只在同步的小動作裡拿（查、存、刪、登記等候），從不跨 `await`。
+   - 理由：每個載入是 `NetworkService` thread 上的一個 tokio task（`tokio::spawn`，要 `Send`），和 cookie jar 的理由一樣；鎖從不跨 `await`，所以沒人搶、也不在等待裡，每次只是幾十 ns。對照 Chromium：`HttpCache` 是 network thread 上的一份，交易直接拿它，沒有鎖。
+   - 不選 cache 自己的 task 和 channel（B）：每個動作多一次 channel 的來回和 task 切換，每個動作都要訊息和回覆的型別。不選 `LocalSet` 和 `Rc<RefCell<…>>`（C）：最像 Chromium，但 `net` 的每個 task 和 cookie jar 都要改，超出這份的範圍。
+
+9. **呼叫者自己帶 `If-None-Match`、`If-Modified-Since` 的請求照 Chromium 的 `UPDATE` 模式**（2026-11-24，使用者決定；A）：
+   - 這種請求從不直接從 cache 回答，照呼叫者的 header 送出去。存的 entry 是完整的 `200`、而且 validator 和請求的相符時（`ExternalValidation::matches`），回應是 `304` 就合併 header、更新 entry，呼叫者拿到 `304`；是 `200` 就用它蓋掉 entry。不相符時和 cache 無關，回應也不存。`HEAD` 也一樣。
+   - 對照 Chrome：2026-11-24 讀 Chromium `main` 的 `http_cache_transaction.cc`（`BeginExternallyConditionalizedRequest`，和決定模式時「有 `external_validation_` 就降成 `UPDATE`」的那一段）。
+   - 理由：`304` 的合併和新的 `200` 蓋掉 entry 本來就要寫，多的只是相不相符的判斷；WPT 的 `fetch/http-cache/` 有自己帶 validator 的 `fetch()`。
+   - 不選先當成不經過 cache（B）：script 自己的條件請求拿到 `304` 時不更新 entry、拿到 `200` 時不存，和 Chrome 不同。
+
+10. **`HEAD` 照 Chromium 用 `GET` 存的 entry**（2026-11-24，使用者決定；A）：
+    - `HEAD` 的 key 和 `GET` 一樣（method 不在 key 裡）。它只用已經有的 entry，從不建新的：新鮮時用它的 header 回答、沒有 body；不新鮮時送條件式的 `HEAD`，`304` 更新 entry，`200` 把 entry 拿掉（`HEAD` 的回應沒有 body，存不了，舊的又可能變了）；沒有 entry 時直接送出去，回應不存。
+    - 對照 Chrome：2026-11-24 讀 Chromium `main` 的 `http_cache_transaction.cc`（`ShouldOpenOnlyMethods`、`DoCacheReadData`、`DoOverwriteCachedResponse` 的 `HEAD`）。
+    - 理由：多的只是交易裡的幾個分支，行為照 Chrome。網頁很少用 `HEAD`，WPT 的 `fetch/http-cache/` 也沒有它的測試。
+    - 不選 `HEAD` 不經過 cache（B）：每次都上網路，不新鮮的 entry 也不會因此更新或拿掉。
+
 ## 待決定
 
 2026-11-24 的看法寫在每一條後面，還沒確認：
 
-1. **磁碟的格式**：(a) 每個 entry 一個檔案（header 和 body）加一個 index，像 Chromium 的 Simple Cache 和 Firefox 的 `cache2`；(b) 用 `sql` 的 SQLite，header 和小的 body 放在表裡、大的 body 放檔案；(c) 全放 SQLite。看法：body 一律放檔案（它是一段一段寫進去的大塊資料，SQLite 的 blob 要整份或另外處理增量的寫入），header 和 index 在 (a) 和 (b) 之間，第 2 階段開始前決定。比較在 `details.md` 的「磁碟的格式」。
+1. **磁碟的格式**：(a) 每個 entry 一個檔案（header 和 body）加一個 index，像 Chromium 的 Simple Cache 和 Firefox 的 `cache2`；(b) 用 `sql` 的 SQLite，header 和小的 body 放在表裡、大的 body 放檔案；(c) 全放 SQLite。看法：body 一律放檔案（它是一段一段寫進去的大塊資料，SQLite 的 blob 要整份或另外處理增量的寫入），header 和 index 在 (a) 和 (b) 之間，第 2 階段開始前決定。比較在 `details.md` 的「磁碟的格式」。 不管哪一種，`Vary` 的值存成 hash（Chromium 存 SHA-256：`Vary: Cookie` 時不讓 cookie 明文落地）；記憶體的 backend 直接存值。
 2. **磁碟的大小上限**：固定的值，或照磁碟的可用空間（Chromium 的 `disk_cache::PreferredCacheSize`，`details.md` 的「Chromium 怎麼做」）。看法：照 Chromium 的算法。第 2 階段開始前決定。
 
 ## 之後的可能

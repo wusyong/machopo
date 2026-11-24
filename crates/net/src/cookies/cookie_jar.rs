@@ -568,6 +568,7 @@ mod tests {
         TrustedParams {
             site_for_cookies: Some("https://a.example".to_owned()),
             top_frame_site: Some("https://a.example".to_owned()),
+            frame_site: Some("https://a.example".to_owned()),
             initiator: Some("https://a.example".to_owned()),
             is_main_frame_navigation: false,
         }
@@ -613,6 +614,7 @@ mod tests {
         let from_b = TrustedParams {
             site_for_cookies: Some("https://b.example".to_owned()),
             top_frame_site: Some("https://b.example".to_owned()),
+            frame_site: None,
             initiator: None,
             is_main_frame_navigation: true,
         };

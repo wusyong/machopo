@@ -162,6 +162,7 @@ pub fn concat(mut pieces: Vec<Bytes>) -> Bytes {
 pub(crate) async fn load(
     transport: &HttpTransport,
     cookies: &crate::cookies::CookieJar,
+    cache: &crate::http_cache::HttpCache,
     request: &ResourceRequest,
     mut redirects: Option<Redirects<'_>>,
 ) -> Result<Response, NetError> {
@@ -268,9 +269,19 @@ pub(crate) async fn load(
                 cors.check_preflight(&url, &answer, &method, &headers)?;
             }
         }
-        let raw = transport
-            .send(&method, &url, accept, &sent, body.as_deref())
-            .await?;
+        let mut raw = crate::http_cache::transaction::send(
+            cache,
+            transport,
+            request,
+            crate::http_cache::transaction::Hop {
+                method: &method,
+                url: &url,
+                accept,
+                headers: &sent,
+                body: body.as_deref(),
+            },
+        )
+        .await?;
         // A redirect's cookies are kept too, before it is followed (or
         // refused by CORS: the server set them all the same, as
         // Chromium's `URLRequestHttpJob` keeps them before its checks).
@@ -297,6 +308,9 @@ pub(crate) async fn load(
         }
         match redirect_target(&url, &raw)? {
             Some(next) => {
+                // Followed, so its body isn't read: the cache keeps it as it
+                // is (`DoneReading`).
+                raw.body.done_reading();
                 if let Some(cors) = &mut cors {
                     cors.redirect(&url, &next)?;
                 }
