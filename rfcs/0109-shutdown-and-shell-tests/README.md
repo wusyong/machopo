@@ -140,20 +140,25 @@ C1、C2：`unused_port` 改成回傳一個 guard，整個測試期間 bind 著�
 5. **第 2 段：「拒絕連線」的 port 是一個 guard**（2026-11-24，使用者決定；A）：`unused_port` 回傳的 guard 整個測試期間 bind 著、不 listen，沒有別人拿得到。對照 Chromium：`EmbeddedTestServer` 分 `InitializeAndListen` 和開始接受兩步，port 先占著再用。不選固定、沒人 listen 的 port：靠機器上剛好沒人用。不選排隊：幾乎整組都要排，慢很多。
 6. **第 2 段：怎麼算穩定**（2026-11-24，使用者決定）：不另外在本機重複跑，靠 CI；之後 CI 再壞，看是哪裡不符合結束的規則或測試的寫法再修。原本選了改過的每一個測試在 4 顆 CPU、lavapipe、加負載下單獨重複 1000 次（C），第一個（`documents::idle_callbacks`）1000 次 0 失敗之後，使用者改成這樣：重複跑八個要兩到四個小時，而這一段改的都是測試自己的等法，理由寫在各自的註解裡，和其他的不穩定一樣看 CI 就夠。不選整組 300 次、CI 連續 20 次綠燈：更慢。
 7. **第 2 段：S6 在這一段修**（2026-11-24，使用者決定；A）：啟動失敗的路和正常結束走同一條（`BrowserWindow::shutdown`）。不管第 3 段選哪一種結束的規則，啟動失敗都該和正常結束一樣，所以不會白做；現在修掉，第 3 段重量時啟動失敗那一格不混進 crash。不選等第 4 段：crash 留到那時。
+8. **第 3 段：結束的時限是 2 秒**（2026-11-24，使用者決定）：要它結束之後最多 2 秒就結束，不管開了幾個分頁、頁面在做什麼。重量時閒著的是 0.02 到 0.06 秒，遠低於它。對照 Chromium：等不到的 child 2 秒後在背景 kill（`base::EnsureProcessTerminated`）。不選 1 秒：CI 那種忙的機器上，正常收尾的 renderer（寫 trace）可能來不及。不選 5 秒：和 machopodriver 等 Browser 的 5 秒一樣長，它照樣會 kill 掉 Browser（S3）。
+9. **第 3 段：Browser 同時請每個 renderer 結束，共用一個時限**（2026-11-24，使用者決定）：一次送 `Shutdown` 給全部，等它們一起結束，2 秒到了還沒結束的 kill。閒著的照樣自己收尾、寫完 trace（量測工具靠它）；卡住的不管幾個都只等一次時限。不選照 Chromium 的 fast shutdown（送了就走）：renderer 的 trace 幾乎都寫不完，Chromium 的 trace 是另一個 service 收的，machopo 沒有。不選照舊一個一個等、縮短各自的時限：總時間還是跟著卡住的分頁數變長。
+10. **第 3 段：同一個 process 的 renderer 卡住時，先打斷它的 script，再有時限地等**（2026-11-24，使用者決定）：`--single-process` 和 headless 結束時，對 renderer 的 isolate 呼叫 `TerminateExecution`（worker 已經這樣做），join 有時限；還是不結束（卡在 native 的程式裡）就不等它，照樣結束 process。要給 `bindings` 一個跨 thread 的 isolate handle。不選只有時限、不打斷：V8 還在跑的時候全域變數被解構，可能 crash（S7）。不選不處理：headless 的測試遇到卡住的頁面時整組停住。
+11. **第 3 段：SIGTERM、SIGINT、SIGHUP 都走正常結束**（2026-11-24，使用者決定）：照時限收尾、寫完 profile 和 trace；再收到一次就立刻結束。繼承來就是「忽略」的訊號照 Unix 的慣例不接（`nohup`、shell 的背景 job）。對照 Chromium：SIGINT、SIGHUP 走正常結束，SIGTERM 走 `SessionEnding`（machopo 沒有 session 要存，兩者相同）。不選只接 SIGTERM：Ctrl-C 和終端機關掉時照舊什麼都不寫。不選不接：目標的第 1、4 條要拿掉「收到 SIGTERM」。
+12. **第 3 段：沒有照規則收尾的每一處，當下記一行**（2026-11-24，使用者決定；A）：時限到了被 kill 的 renderer、打斷之後還不結束而不等的 renderer thread、第二次收到訊號、Viz 不得不結束、被放棄的 pipe writer，各在 stderr 記一行固定格式的警告（哪個 process 或 thread、在哪一步、等了多久），也記成 trace 的事件；測試檢查正常結束時沒有這一行。CI 再壞時從 log 看得出是哪一步。不選在 profile 裡留「沒有乾淨結束」的記號（Chromium 的 `Local State` 的 `exited_cleanly`，下次啟動時才知道，連 SIGKILL、crash 都抓得到）：要寫 profile，主要用在告訴使用者和還原 session，不在這份的範圍，記進「之後的可能」。
+13. **第 3 段：收尾完就直接結束，不跑解構子**（2026-11-24，使用者決定；A）：Browser 和 renderer 都照順序停自己的 thread、明確地寫完 profile 和 trace，然後直接結束（`_exit`），不跑 C++ 的解構子（S7）。這樣 `exit` 時 Mesa、LLVM、V8 的解構子和停不了的 thread（GPU 驅動程式自己的、V8 的 worker、Browser 的 IO thread）撞在一起的那一類 crash 不會再有（2026-11-18 和 S6 是這一類）。對照 Chromium（2026-11-24 對的，`main`）：renderer 收尾後直接結束（`RenderThreadImpl::Shutdown`）；GPU process 也是，`VizMainImpl::ExitProcess` 呼叫 `base::Process::TerminateCurrentProcessImmediately`，註解寫 "Atomically shut down GPU process to make it faster and simpler."；Browser 照 `ShutdownThreadsAndCleanUp` 的順序正常 exit，但它沒有載入 GPU 驅動程式。machopo 的 Browser 帶著 Viz 和驅動程式，照 GPU process 的做法。代價：靠解構子才寫的東西會漏，第 4 段開始時先盤點哪些寫檔在解構子裡、改成明確地寫。不選 Browser 照明確的順序、正常 exit（C，Chromium 的 Browser 和 in-process GPU 模式的做法）：要靠驅動程式的 thread 剛好閒著，每多一個全域的東西都要排進順序。不選兩邊都明確的順序（B）：和 Chromium 的 renderer 也不同。
+14. **第 3 段：automation pipe 的 writer 有時限地等**（2026-11-24，使用者決定；A）：結束時 `join` writer 共用同一個 2 秒，到了還寫不出去（client 不讀 stdout，S5）就不等它、記一行（第 12 條）、照樣結束；正常時最後的回答（`Browser.close` 的）照樣寫完。被放棄的 thread 不會和解構子撞在一起（第 13 條）。對照 Chromium：`PipeIOBase::Shutdown` 先關 pipe，join 丟給不擋結束的背景工作（`CONTINUE_ON_SHUTDOWN`）。不選結束時不等 writer：正常時最後幾個回答可能還沒寫出去。
+15. **第 3 段：Viz 畫不下去時告訴 main，走正常的結束**（2026-11-24，使用者決定；A）：`WgpuRenderer::recreate_context` 的三處 `std::process::exit(1)`（Direct3D 12 建不出新的 surface、新的 device 畫不到視窗、一直建不出新的 device）改成把錯誤交給 main；main 照時限收尾、寫完 profile 和 trace、記一行（第 12 條），以結束碼 1 結束（S8）。結束只有一條路。對照 Chromium：GPU process 壞了自己結束，Browser 重新啟動一個（`RestartGpuProcessForContextLoss`）；machopo 的 Viz 在 Browser 裡，重新啟動不在這份的範圍。不選先寫 profile 再 `exit(1)`：其他 thread 照跑、trace 不寫，Viz 要碰不屬於它的 profile，多一條正常結束以外的路。
+16. **第 3 段：renderer process 的 stdin 接 `/dev/null`、stdout 轉到 stderr、stderr 繼承**（2026-11-24，使用者決定；A）：automation pipe 只在 Browser 手上，client 關掉之後不用等 renderer 才讀得到 EOF，renderer 寫到 stdout 的東西不混進 CDP 的訊息、照樣看得到（S9）。對照 Chromium（`base/process/launch_posix.cc`、`launch_mac.cc` 的 `LaunchProcess`，`launch.h` 的註解）：child 的 stdin 一律接 `/dev/null`，stdout、stderr 繼承；Chromium 能繼承 stdout，是因為 `--remote-debugging-pipe` 用另外兩個 fd，machopo 的 `--automation-pipe` 在 stdin、stdout，所以 stdout 移開。根本的解法是把 pipe 移到 fd 3、4（「之後的可能」），那時 renderer 的 stdio 照 Chromium。不選 stdout 接 `/dev/null`：renderer 印的東西丟掉。不選照 Chromium 繼承 stdout：pipe 照樣被 renderer 握著。不選在這份就把 pipe 移到 fd 3、4：改的是 machopodriver、wptrunner、量測工具和測試都在用的對外介面，Windows 要另外傳 handle，和結束的流程關係不大。
+17. **第 3 段：remote debugging 的 port 綁不上時照舊啟動失敗**（2026-11-24，使用者決定；A）：以結束碼 1 結束、說明原因（第 2 段之後不會 crash）。給了 `--remote-debugging-port` 的人就是要 DevTools，machopo 的使用者主要是自動化，啟動時明確地失敗比啟動成功卻沒有 DevTools 好查。和 Chrome 不同（`DevToolsHttpHandler::StartServerOnHandlerThread` 記一行 `Cannot start http server for devtools.`，照樣啟動），記進 `docs/limitations.md`。不選照 Chrome：自動化要連不上 DevTools 才發現、自己判斷原因。
 
 ## 待決定
 
-### 第 3 段開始時
-
-- **結束的時限**（目標的第 1 條）：暫定 2 秒，照重量的結果定。
-- **Browser 結束時等不等 renderer**：照 Chromium 的 fast shutdown 直接結束、在背景等，還是先請它們收尾、有時限。牽涉到 trace 寫不寫得完。
-- **同一個 process 的 renderer 卡住時怎麼結束**（S1）：main thread 的 script 怎麼打斷。
-- **全域變數怎麼收**（S7）：明確的結束順序，還是結束時不解構。
-- **訊號**（S4）、**卡住的 writer**（S5）、**Viz 遇到錯誤時**（S8）、**renderer 的 stdio**（S9）。
-- **remote debugging 的 port 綁不上時**：現在是啟動失敗、結束；Chrome 只記一行 `Cannot start http server for devtools.`，照樣啟動（`DevToolsHttpHandler` 的 `StartServerOnHandlerThread`）。
+目前沒有：第 3 段的規則都定了（第 8 到 17 條）。
 
 ## 之後的可能
 
 - 作業系統的 sandbox 的那一份 RFC。
 - 偵測「不回應」的 renderer。
 - `beforeunload`、`unload`、`pagehide` 在分頁關掉和瀏覽器結束時的行為。
+- automation pipe 移到 fd 3、4（一份 RFC）：照 Chromium 的 `--remote-debugging-pipe`，Browser 從 fd 3 讀、寫到 fd 4，stdin、stdout 留給一般用途；Puppeteer、Playwright 用 pipe 啟動時預設就是這兩個。要改 machopodriver、`tests/wpt/wptrunner_machopo/`、`scripts/bench` 的 `MachopoPipe`、`shell` 的測試和 `--help`；Windows 上 Chromium 用命令列傳 handle（`--remote-debugging-io-pipes`），要另外做。做完之後 renderer 的 stdout 不用再轉向（第 16 條），照 Chromium 繼承。
+- 在 profile 裡留「沒有乾淨結束」的記號（Chromium 的 `exited_cleanly`）：下次啟動時知道上次被 kill、crash 或斷電，告訴使用者、還原 session。

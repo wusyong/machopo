@@ -52,6 +52,28 @@ RFC 0110、0111、0112 merge 之後（`main` 的 `4e5e0ef`）對照程式和 CI 
 
 ## 結束的流程的盤點
 
+### 重量（第 3 段，2026-11-24，`59492771`）
+
+量法同下面的「量法」，只量 automation pipe（視窗和 machopodriver 走的程式沒變，照程式對）：每一格三次，debug build、預設的 GPU，頁面用 `localStorage` 寫一筆，結束之後另一個 machopo 用同一個 profile 讀回來（「寫完」），並看結束時 renderer process 留下沒有。卡住的頁面是 timer 裡的無窮迴圈。
+
+| 要它怎麼結束 | 分頁 | 時間（秒） | renderer 留下 | profile |
+| --- | --- | --- | --- | --- |
+| EOF | 閒著 1 個 | 0.02–0.03 | 沒有 | 寫完 |
+| EOF | 閒著 8 個 | 0.06 | 沒有 | 寫完 |
+| EOF | 卡住 1、2、3 個 | **5.02、10.03–10.06、15.04–15.07** | 沒有 | 寫完 |
+| EOF，`--single-process` | 卡住 1 個 | **20 秒內不結束**（之後 kill） | | 寫完（`localStorage` 在那之前照它的時間表寫了，和結束無關） |
+| EOF，`--single-process` | 閒著 1 個 | 0.02 | | 寫完 |
+| `Browser.close` | 卡住 1 個 | **5.02–5.05** | 沒有 | 寫完 |
+| `Browser.close` | 閒著 1 個 | 0.02–0.03 | 沒有 | 寫完 |
+| SIGTERM、SIGHUP | 閒著、卡住 | 0.01–0.02，被訊號結束 | 沒有 | **沒寫** |
+| SIGINT | 閒著 | 0.01，被訊號結束（第一輪）；**20 秒內不結束**（第二、三輪） | 沒有 | 第一輪沒寫 |
+
+SIGINT 的兩種結果是量法造成的：第二、三輪的量測從 shell 的 `&` 啟動，非互動的 shell 讓背景的 job 生下來就忽略 SIGINT，machopo 照 Unix 的慣例留著繼承來的「忽略」。
+
+和盤點時（`647ab5a`）一樣：S1（`--single-process` 卡住）、S2（一個一個各等 5 秒）、S4（訊號什麼都不寫）。S3、S5、S7、S8、S9 照程式對過都還在。S6 第 2 段修掉了。
+
+多的 thread：`HttpCacheStore`（RFC 0113）。它和 `CookieStore` 一樣：擁有它的 `SqlStoreThread` 被丟掉時送 `Close`、`join`，沒有時限；在最後一份 handle 被丟掉的那條 thread 上等。
+
 ### 量法
 
 真的 `machopo` 和 `machopodriver`，每一格三次：載入頁面、等它卡住、要它結束，記 Browser 結束和最後一個子 process 結束的時間，15 秒沒有結束就用 gdb 抓所有 thread 的堆疊（超過 15 秒的另外用 25 秒再量）。視窗在沒有螢幕的 mutter 裡量。關視窗的按鈕沒有量：它和 pipe 的 EOF 走同一個 `App::exit`。
