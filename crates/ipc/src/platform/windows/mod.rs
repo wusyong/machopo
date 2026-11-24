@@ -8,7 +8,7 @@ mod job;
 pub mod memory;
 mod process;
 
-pub use process::terminate_current_process_immediately;
+pub use process::{on_shutdown_signals, terminate_current_process_immediately};
 
 /// Held by a test that counts this process's handles, or has hundreds
 /// of its own at once: the count is the whole process's, and another

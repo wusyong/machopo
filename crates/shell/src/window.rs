@@ -63,6 +63,8 @@ enum ShellEvent {
     AutomationDone,
     /// From the remote debugging server's thread.
     DevTools(ClientEvent),
+    /// SIGTERM, SIGINT or SIGHUP: machopo ends as when the window closes.
+    Signal,
 }
 
 /// The window's half of a run that drives it (`machopo --automation-pipe
@@ -702,6 +704,13 @@ impl ApplicationHandler<ShellEvent> for App {
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: ShellEvent) {
+        // Asked to end: what drives the window is done with it too.
+        if let ShellEvent::Signal = event {
+            if let Some(automating) = &mut self.automating {
+                automating.done = true;
+            }
+            return self.exit(event_loop);
+        }
         let Some(running) = &mut self.running else {
             return;
         };
@@ -758,6 +767,7 @@ impl ApplicationHandler<ShellEvent> for App {
                 }
                 return self.exit(event_loop);
             }
+            ShellEvent::Signal => return,
             ShellEvent::DevTools(event) => {
                 let Some(session) = self.session.as_mut() else {
                     return;
@@ -832,6 +842,10 @@ pub fn run(options: Options) -> Result<(), String> {
     let event_loop = EventLoop::<ShellEvent>::with_user_event()
         .build()
         .map_err(|e| format!("event loop: {e}"))?;
+    let signalled = event_loop.create_proxy();
+    shell::shutdown_signals::listen(move || {
+        let _ = signalled.send_event(ShellEvent::Signal);
+    });
     let mut app = App {
         initial_url: url,
         ui_layout,

@@ -1,0 +1,43 @@
+# Stage 4d's mutants: `python3 scripts/test.py mutate rfcs/0109-shutdown-and-shell-tests/mutants-4d.toml`.
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "a_signal_", "a_second_signal"]
+timeout = 300
+
+[[mutant]]
+name = "no signal is handled"
+file = "crates/ipc/src/platform/unix.rs"
+from = '''        if old.sa_sigaction == libc::SIG_IGN {'''
+to = '''        if old.sa_sigaction == libc::SIG_IGN || signal > 0 {'''
+
+[[mutant]]
+name = "a signal started ignored is handled all the same"
+file = "crates/ipc/src/platform/unix.rs"
+from = '''        if old.sa_sigaction == libc::SIG_IGN {'''
+to = '''        if old.sa_sigaction == libc::SIG_IGN && signal < 0 {'''
+
+[[mutant]]
+name = "the handler writes nothing"
+file = "crates/ipc/src/platform/unix.rs"
+from = '''        libc::write(SIGNAL_PIPE.load(Ordering::Acquire), (&raw const byte).cast(), 1);'''
+to = '''        libc::write(SIGNAL_PIPE.load(Ordering::Acquire), (&raw const byte).cast(), 0);'''
+
+[[mutant]]
+name = "a signal doesn't end the pipe's run"
+file = "crates/shell/src/automation_pipe.rs"
+from = '''        let _ = signalled.send(());'''
+to = '''        let _ = &signalled;'''
+
+[[mutant]]
+name = "a second signal doesn't end machopo at once"
+file = "crates/shell/src/shutdown_signals.rs"
+from = '''            ipc::platform::terminate_current_process_immediately(128_i32.saturating_add(signal));'''
+to = ''''''
+
+[[mutant]]
+name = "a second signal says nothing"
+file = "crates/shell/src/shutdown_signals.rs"
+from = '''            browser::shutdown::gave_up(
+                "winding down",
+                &format!("a second signal ({signal}), ending at once"),
+                at.elapsed(),
+            );'''
+to = '''            let _ = at;'''

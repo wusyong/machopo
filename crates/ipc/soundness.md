@@ -118,6 +118,8 @@ macOS 那一層的測試在 `src/platform/macos/` 各檔的單元測試和 `crat
 
 | 地方 | 為什麼安全 |
 | --- | --- |
+| `platform/unix.rs` 的 `install`（`libc::sigaction`、`sigemptyset`） | 兩個結構都是清成 0 的區域變數（全 0 是合法的 `sigaction`：沒有旗標、空的 mask、預設的動作），活到呼叫結束；`sigaction` 只讀一個、寫另一個。裝上的 `handle` 是 `extern "C" fn(c_int)`，沒有 `SA_SIGINFO` 時 `sa_sigaction` 要的就是這種，而且它只做 handler 能做的事（下一列） |
+| `platform/unix.rs` 的 `handle`（`libc::write`、讀寫 `errno`）、`errno_location`（`__errno_location`、`__error`） | handler 在任何一條 thread、任何兩個指令之間跑：`write` 和讀寫 `errno` 是 POSIX 列為 async-signal-safe 的，不配置、不拿鎖。socket 在 `install` 之前就設好、之後一直開著（`into_raw_fd`，沒有人關它），nonblocking，所以 handler 不會等；寫的 byte 是活到 `write` 回來的區域變數。`errno` 是這條 thread 的，寫完放回原本的值，被打斷的程式之後讀得到它自己的。`errno` 的位址由 C library 自己的 accessor 給，不帶參數、一直可以呼叫，在 thread 活著時有效 |
 | `platform/unix.rs` 的 `terminate_current_process_immediately`（`libc::_exit`） | `_exit` 接受任何代碼、不回來，不讀也不寫這個 process 的記憶體：它就是結束 process 的系統呼叫，kernel 停掉每一條 thread、關掉 process 開著的東西。呼叫之後這個 process 沒有程式再跑，所以沒有東西會看到沒被 drop 的值。不跑 exit handler 和 destructor 正是用它的理由（其他 thread 還在跑），不是安全上的問題：留下的只是沒寫出去的緩衝區 |
 
 ### Windows（`platform/windows/`）

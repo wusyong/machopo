@@ -37,10 +37,10 @@ pub use linux::channel::{Channel, child_gone, inherited, spawn};
 #[cfg(target_os = "macos")]
 pub use macos::channel::{Channel, child_gone, inherited, spawn};
 #[cfg(unix)]
-pub use unix::{available_disk_space, terminate_current_process_immediately};
+pub use unix::{available_disk_space, on_shutdown_signals, terminate_current_process_immediately};
 #[cfg(windows)]
 pub use windows::channel::{Channel, child_gone, inherited, spawn};
 #[cfg(windows)]
 pub use windows::disk::available_disk_space;
 #[cfg(windows)]
-pub use windows::terminate_current_process_immediately;
+pub use windows::{on_shutdown_signals, terminate_current_process_immediately};

@@ -3010,6 +3010,122 @@ fn a_single_processs_hung_renderers_have_their_script_stopped() {
     assert!(!said.contains(browser::shutdown::GAVE_UP), "{said}");
 }
 
+/// Sends `signal` (`TERM`, `INT`, `HUP`) to machopo's process.
+#[cfg(unix)]
+fn signal(browser: &Browser, signal: &str) {
+    let sent = Process::new("kill")
+        .args([format!("-{signal}"), browser.child.id().to_string()])
+        .status()
+        .expect("kill runs");
+    assert!(sent.success());
+}
+
+/// SIGTERM ends machopo as closing it does: what the page stored is in
+/// the profile for the next machopo, and it ends with success, saying
+/// nothing of giving up; SIGINT and SIGHUP too.
+#[cfg(unix)]
+#[test]
+fn a_signal_ends_machopo_as_closing_it_does() {
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("shell-profile-signalled");
+    let _ = std::fs::remove_dir_all(&dir);
+    let dir_arg = dir.to_str().expect("UTF-8");
+    let log = dir.with_extension("log");
+    let server = server(&[("/", Route::ok("text/html", "<!DOCTYPE html>page"))]);
+    let mut first = Browser::start_logging(
+        &["--user-data-dir", dir_arg],
+        Stdio::from(std::fs::File::create(&log).unwrap()),
+    );
+    let session = first.attach();
+    first.navigate(&session, &server.url("/"));
+    let stored = "document.cookie = 'a=1; max-age=3600'; localStorage.setItem('k', 'v')";
+    script(&mut first, &session, stored, json!([])).unwrap();
+    signal(&first, "TERM");
+    assert!(wait(&mut first.child).success());
+    let said = std::fs::read_to_string(&log).unwrap();
+    assert!(!said.contains(browser::shutdown::GAVE_UP), "{said}");
+
+    let mut second = Browser::start_with(&["--user-data-dir", dir_arg]);
+    let session = second.attach();
+    second.navigate(&session, &server.url("/"));
+    let read = "return [document.cookie, localStorage.getItem('k')]";
+    assert_eq!(
+        script(&mut second, &session, read, json!([])),
+        Ok(json!(["a=1", "v"]))
+    );
+    drop(second);
+
+    for name in ["INT", "HUP"] {
+        let mut browser = Browser::start();
+        let session = browser.attach();
+        browser.navigate(&session, "about:blank");
+        signal(&browser, name);
+        assert!(wait(&mut browser.child).success(), "SIG{name}");
+    }
+}
+
+/// A second signal, while machopo winds down (here waiting for a hung
+/// renderer), ends it at once, saying so, with the code a shell gives a
+/// process the signal ended.
+#[cfg(unix)]
+#[test]
+fn a_second_signal_ends_machopo_at_once() {
+    let server = server(&[("/", Route::ok("text/html", "<!DOCTYPE html>page"))]);
+    let log = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("shell-second-signal.log");
+    let mut browser = Browser::start_logging(
+        &["--process-per-tab"],
+        Stdio::from(std::fs::File::create(&log).unwrap()),
+    );
+    let session = browser.attach();
+    browser.navigate(&session, &server.url("/"));
+    browser.send(
+        Some(&session),
+        "Machopo.executeScript",
+        json!({ "script": "while (true) {}", "async": false }),
+    );
+    std::thread::sleep(Duration::from_millis(300));
+    signal(&browser, "TERM");
+    std::thread::sleep(Duration::from_millis(300));
+    let asked = std::time::Instant::now();
+    signal(&browser, "TERM");
+    let status = wait(&mut browser.child);
+    // Before the renderer's limit, two seconds after the first.
+    assert!(asked.elapsed() < Duration::from_millis(1500));
+    assert_eq!(status.code(), Some(128 + 15));
+    let said = std::fs::read_to_string(&log).unwrap();
+    assert!(said.contains("a second signal (15), ending at once"), "{said}");
+}
+
+/// A signal machopo was started ignoring (`nohup`'s SIGHUP) stays ignored.
+#[cfg(unix)]
+#[test]
+fn a_signal_started_ignored_stays_so() {
+    let mut child = Process::new("nohup")
+        .args([env!("CARGO_BIN_EXE_machopo"), "--automation-pipe"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("nohup runs machopo");
+    // Up once it answers.
+    let mut input = child.stdin.take().unwrap();
+    input
+        .write_all(br#"{"id":1,"method":"Browser.getVersion"}"#)
+        .unwrap();
+    input.write_all(&[0]).unwrap();
+    let mut output = BufReader::new(child.stdout.take().unwrap());
+    let mut answer = Vec::new();
+    output.read_until(0, &mut answer).unwrap();
+    let sent = Process::new("kill")
+        .args(["-HUP".to_owned(), child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(sent.success());
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(child.try_wait().unwrap().is_none(), "SIGHUP ended it");
+    drop(input);
+    assert!(wait(&mut child).success());
+}
+
 /// Starts a machopo with a tab for each of `scripts`, in a renderer
 /// process of its own that is left running its script (or doing nothing),
 /// and kills the machopo: whether every renderer went with it. They had

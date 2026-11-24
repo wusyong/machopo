@@ -21,3 +21,11 @@ pub fn terminate_current_process_immediately(status: i32) -> ! {
     // process ends all the same, as Chromium's does.
     std::process::abort()
 }
+
+/// SIGTERM, SIGINT and SIGHUP are the Unix layer's: on Windows nothing
+/// calls `on_signal` yet (a console's Ctrl+C ends the process at once, as
+/// before).
+pub fn on_shutdown_signals(on_signal: impl Fn(i32) + Send + 'static) -> std::io::Result<()> {
+    let _ = on_signal;
+    Ok(())
+}

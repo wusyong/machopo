@@ -173,6 +173,11 @@ pub fn run(options: Options) -> Result<(), String> {
     let writer = spawn_writer(messages).map_err(|e| format!("start the pipe's writer: {e}"))?;
     let (command_tx, commands) = unbounded::<Read>();
     let (ended_tx, ended) = unbounded::<()>();
+    // A signal ends it as the input's end does.
+    let signalled = ended_tx.clone();
+    crate::shutdown_signals::listen(move || {
+        let _ = signalled.send(());
+    });
     spawn_reader(
         move |read| command_tx.send(read).is_ok(),
         move || {

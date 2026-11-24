@@ -19,6 +19,7 @@
 | 4a. 一條收尾的路、記一行的機制、profile 的 10 秒（第 12、13、18 條） | 做完，待審查 | 2026-11-25 |
 | 4b. renderer 同時請、共用 2 秒，到了 kill、記一行（第 8、9、12、19 條） | 做完，待審查 | 2026-11-25 |
 | 4c. 同一個 process 的 renderer 打斷 script 再有時限地等（第 10 條） | 做完，待審查 | 2026-11-25 |
+| 4d. SIGTERM、SIGINT、SIGHUP 走正常的結束，第二次立刻結束（第 11、12 條） | 做完，待審查 | 2026-11-25 |
 | 5. 驗收 | 沒開始 | |
 
 ## 驗收
@@ -29,6 +30,14 @@
 | `shell` 的測試：每個模組的分類、壞過的每一個的原因和把握 | `details.md` 的「`shell` 的測試的審查」；不改程式，所以沒有測試 |
 
 ## 做過的檢查
+
+### 第 4 段的 4d（2026-11-25，Linux：Fedora 45，debug build，`b2521f5` 之上）
+
+**做了什麼**（使用者決定：系統呼叫自己寫在 `ipc` 的平台層，照 Chromium 的 `shutdown_signal_handlers_posix.cc`）：`ipc::platform::on_shutdown_signals` 裝 SIGTERM、SIGINT、SIGHUP 的 handler（繼承來是 `SIG_IGN` 的不裝），handler 只把號碼寫進一對 nonblocking 的 socket，`ShutdownDetector` thread 讀它。`shell::shutdown_signals::listen` 第一次叫 UI 結束（automation pipe：和輸入結束同一個 channel；視窗：`ShellEvent::Signal`），第二次記一行、以 128 加上號碼直接結束。Windows 上什麼都不做。
+
+**測試**：`automation_pipe::a_signal_ends_machopo_as_closing_it_does`（SIGTERM：profile 寫完、下一個 machopo 讀得到，結束碼 0，沒有放棄的那一行；SIGINT、SIGHUP：結束碼 0；原本被訊號殺掉）、`a_second_signal_ends_machopo_at_once`（收尾在等卡住的 renderer 時再送一次：1.5 秒內以 143 結束、記一行）、`a_signal_started_ignored_stays_so`（經過 `nohup`，SIGHUP 不讓它結束）。`ipc`、`shell` 的測試通過，`ipc` 的 clippy 和對 Windows 的 target 的 `cargo check` 通過。
+
+**mutation test**（`mutants-4d.toml`，6 個，都抓到）：一個訊號都不接、繼承來忽略的照樣接、handler 沒寫、automation pipe 收到也不結束、第二次不立刻結束、第二次不記。視窗那一條和放回 `errno` 沒有測試（`docs/test-gaps.md`）。
 
 ### 第 4 段的 4c（2026-11-25，Linux：Fedora 45，debug build，`3839e01` 之上）
 

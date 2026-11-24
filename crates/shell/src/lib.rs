@@ -29,6 +29,7 @@ pub mod omnibox;
 pub mod popup_menu;
 pub mod sad_tab;
 pub mod scenario;
+pub mod shutdown_signals;
 pub mod sidebar;
 pub mod system_colors;
 pub mod tab_strip;
