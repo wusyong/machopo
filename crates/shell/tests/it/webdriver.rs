@@ -136,6 +136,29 @@ fn server(routes: &[(&str, Route)]) -> TestServer {
     .expect("test server starts")
 }
 
+/// A session whose page's script never returns ends within machopo's
+/// limit: machopo ends by itself, its renderer killed, before
+/// machopodriver gives up on it (five seconds) and kills machopo, its
+/// profile and trace unwritten.
+#[test]
+fn a_session_with_a_hung_page_ends_in_time() {
+    let server = server(&[(
+        "/",
+        Route::ok(
+            "text/html",
+            "<!DOCTYPE html><script>setTimeout(() => { for (;;) {} }, 100)</script>",
+        ),
+    )]);
+    let addr = driver();
+    let (session, _) = Session::new(addr, json!({}));
+    ok(session.navigate(&server.url("/")));
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let asked = std::time::Instant::now();
+    session.delete();
+    let took = asked.elapsed();
+    assert!(took < std::time::Duration::from_secs(4), "{took:?}");
+}
+
 /// One session at a time: Status says whether one can start; its
 /// capabilities are machopo's, with WebDriver's defaults.
 #[test]

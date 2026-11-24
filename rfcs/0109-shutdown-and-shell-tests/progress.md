@@ -23,7 +23,7 @@
 | 4e. automation pipe 的 writer 有時限地等（第 14 條） | 做完，待審查 | 2026-11-25 |
 | 4f. Viz 畫不下去時交給 main（第 15 條） | 做完，待審查 | 2026-11-25 |
 | 4g. renderer process 的 stdio（第 16 條） | 做完，待審查 | 2026-11-25 |
-| 5. 驗收 | 沒開始 | |
+| 5. 驗收 | 進行中：六條對到測試、重量做完；等 merge 之後的 CI | |
 
 ## 驗收
 
@@ -31,6 +31,15 @@
 | --- | --- |
 | 結束的流程：每一種跑法、情況、thread、全域變數、child process，和 Chromium 的對照 | `details.md` 的「結束的流程的盤點」；不改程式，所以沒有測試 |
 | `shell` 的測試：每個模組的分類、壞過的每一個的原因和把握 | `details.md` 的「`shell` 的測試的審查」；不改程式，所以沒有測試 |
+| 目標 1，一定結束：automation pipe | `shell` 的 `automation_pipe::hung_renderers_take_the_limit_once`（三個卡住的 renderer process，4 秒內）、`a_single_processs_hung_renderers_have_their_script_stopped`、`a_hung_renderer_leaves_the_writer_its_time`（`Browser.close`）、`a_signal_ends_machopo_as_closing_it_does`、`a_second_signal_ends_machopo_at_once`、`a_client_not_reading_doesnt_hold_machopo_up`；`details.md` 的「驗收時的重量」 |
+| 目標 1：headless | `shell` 的 `script::a_page_that_never_returns_ends_its_test` |
+| 目標 1：machopodriver 啟動的 | `shell` 的 `webdriver::a_session_with_a_hung_page_ends_in_time`（刪 session 在 machopodriver 的 5 秒之前回來；`mutants-5.toml`） |
+| 目標 1：視窗 | 和 automation pipe 同一段程式（`BrowserView::shutdown`、`StoragePartition::close`、`automation_pipe::wait_for_writer`、`main` 的 `end`）；視窗自己的那幾行（`App::exit`、`ShellEvent::Signal`、`ShellEvent::GpuFailed`）沒有自動測試（`docs/test-gaps.md`），`test.py scenarios --window` 跑過正常的關閉 |
+| 目標 2，不留東西 | `automation_pipe::hung_renderers_take_the_limit_once`（結束之後 renderer process 都不在了）、`a_renderer_process_hasnt_the_pipe`（renderer 不拿著 pipe）、`a_client_not_reading_doesnt_hold_machopo_up`（writer 被放掉時 process 照樣結束）；重量時每一格都沒有留下 renderer |
+| 目標 3，順序固定、不 crash | 收尾的順序在 `docs/architecture.md` 的「machopo 怎麼結束」；直接結束、不跑解構子（第 13 條）；`remote_debugging::a_port_taken_ends_it_with_an_error`（啟動到一半失敗，30 次）；上面每個測試都檢查結束碼 |
+| 目標 4，該寫完的寫完 | `automation_pipe::a_profile_is_written_as_machopo_ends`（cookie、`localStorage`、HTTP cache）、`a_signal_ends_machopo_as_closing_it_does`（SIGTERM 之後）、`trace::`（Browser 和 renderer process 的 trace，`mutants-4a.toml`）；放棄時的那一支在 `docs/test-gaps.md` |
+| 目標 5，被 kill 也乾淨 | `automation_pipe::a_killed_browsers_*`（四個，等 renderer 的 pid 都不在） |
+| 目標 6，重複跑不壞 | 照第 6 條看 CI：merge 之後 CI 連續綠燈 |
 
 ## 做過的檢查
 

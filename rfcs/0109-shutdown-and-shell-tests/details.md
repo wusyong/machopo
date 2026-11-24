@@ -52,6 +52,22 @@ RFC 0110、0111、0112 merge 之後（`main` 的 `4e5e0ef`）對照程式和 CI 
 
 ## 結束的流程的盤點
 
+### 驗收時的重量
+
+第 5 段，2026-11-25，`64d2d959`。量法同第 3 段（`scripts` 外的同一份腳本，每一格三次，debug build、預設的 GPU），子 process 的 SIGINT 先設回預設的動作（第 3 段的 SIGINT 第二、三輪是背景啟動、生下來就忽略），多量卡住 8 個分頁、`--single-process` 卡住 2 個、SIGINT 遇上卡住的分頁。
+
+| 要它怎麼結束 | 分頁 | 時間（秒） | 結束碼 | renderer 留下 | profile |
+| --- | --- | --- | --- | --- | --- |
+| EOF | 閒著 1 個、8 個 | 0.02–0.03 | 0 | 沒有 | 寫完 |
+| EOF | 卡住 1、2、3、8 個 | 2.02–2.07（原本 5、10、15） | 0 | 沒有 | 寫完 |
+| EOF，`--single-process` | 卡住 1、2 個，閒著 1 個 | 0.03–0.06（原本卡住的不結束） | 0 | | 寫完 |
+| `Browser.close` | 卡住 1 個、閒著 1 個 | 2.02–2.03、0.02 | 0 | 沒有 | 寫完 |
+| `Browser.close`，`--single-process` | 卡住 1 個 | 0.03 | 0 | | 寫完 |
+| SIGTERM、SIGINT、SIGHUP | 閒著 1 個 | 0.02–0.03（原本被訊號結束） | 0 | 沒有 | 寫完（原本沒寫） |
+| SIGTERM、SIGINT | 卡住 1 個 | 2.02–2.07 | 0 | 沒有 | 寫完 |
+
+`--single-process` 卡住的那幾格比 2 秒短得多：script 被打斷之後 renderer 自己走完結束，不用等到期限。
+
 ### 重量（第 3 段，2026-11-24，`59492771`）
 
 量法同下面的「量法」，只量 automation pipe（視窗和 machopodriver 走的程式沒變，照程式對）：每一格三次，debug build、預設的 GPU，頁面用 `localStorage` 寫一筆，結束之後另一個 machopo 用同一個 profile 讀回來（「寫完」），並看結束時 renderer process 留下沒有。卡住的頁面是 timer 裡的無窮迴圈。

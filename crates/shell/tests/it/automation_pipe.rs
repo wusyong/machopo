@@ -2929,7 +2929,7 @@ fn a_profile_is_written_as_machopo_ends() {
 /// Renderers whose script never returns don't hold machopo up past its
 /// limit, however many they are: each is asked to exit at once, all are
 /// waited for until one deadline, and those still running then are
-/// killed, a line for each.
+/// killed, a line for each: none is left once machopo has ended.
 #[test]
 fn hung_renderers_take_the_limit_once() {
     let server = server(&[("/", Route::ok("text/html", "<!DOCTYPE html>page"))]);
@@ -2955,6 +2955,8 @@ fn hung_renderers_take_the_limit_once() {
             json!({ "script": "while (true) {}", "async": false }),
         );
     }
+    let renderers = renderer_pids(&mut browser);
+    assert_eq!(renderers.len(), 3, "{renderers:?}");
     std::thread::sleep(Duration::from_millis(300));
     let asked = std::time::Instant::now();
     assert!(browser.end().success());
@@ -2962,6 +2964,8 @@ fn hung_renderers_take_the_limit_once() {
     // The limit, once, and the time to start and end; one renderer after
     // another was five seconds each.
     assert!(took < Duration::from_secs(4), "{took:?}");
+    // Killed and reaped before machopo ended.
+    assert!(!renderers.iter().any(|&pid| alive(pid)), "{renderers:?}");
     let said = std::fs::read_to_string(&log).unwrap();
     let killed = said
         .lines()
