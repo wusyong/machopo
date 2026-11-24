@@ -20,6 +20,7 @@
 | 4b. renderer 同時請、共用 2 秒，到了 kill、記一行（第 8、9、12、19 條） | 做完，待審查 | 2026-11-25 |
 | 4c. 同一個 process 的 renderer 打斷 script 再有時限地等（第 10 條） | 做完，待審查 | 2026-11-25 |
 | 4d. SIGTERM、SIGINT、SIGHUP 走正常的結束，第二次立刻結束（第 11、12 條） | 做完，待審查 | 2026-11-25 |
+| 4e. automation pipe 的 writer 有時限地等（第 14 條） | 做完，待審查 | 2026-11-25 |
 | 5. 驗收 | 沒開始 | |
 
 ## 驗收
@@ -30,6 +31,14 @@
 | `shell` 的測試：每個模組的分類、壞過的每一個的原因和把握 | `details.md` 的「`shell` 的測試的審查」；不改程式，所以沒有測試 |
 
 ## 做過的檢查
+
+### 第 4 段的 4e（2026-11-25，Linux：Fedora 45，debug build，`876b4d7` 之上）
+
+**做了什麼**：`automation_pipe::wait_for_writer` 等 pipe 的 writer 到收尾開始後 2 秒（和 renderer 共用），但最後一個 sender 放掉之後至少再等 100 ms（`WRITER_GRACE`）：renderer 用掉整整 2 秒時，writer 還在寫最後一點，不該被當成放棄（第 14 條的「正常時最後的回答照樣寫完」）。到了還沒寫完的留下、記一行（`the automation pipe's writer, left, its client not reading`）。`automation_pipe::run` 和視窗的 `App::exit` 都用它。
+
+**測試**：`automation_pipe::a_client_not_reading_doesnt_hold_machopo_up`（送 5000 個命令、一直不讀 stdout，關掉輸入：5 秒內結束（2 秒）、記一行；原本永遠不結束）、`a_hung_renderer_leaves_the_writer_its_time`（renderer 卡住、用掉整個期限時，`Browser.close` 的回答照樣送到，只有 renderer 的那一行、沒有 writer 的）。`shell` 的測試通過。
+
+**mutation test**（`mutants-4e.toml`，3 個，都抓到）：writer 沒有時限地等、沒有寬限、留下不記。「沒有寬限」靠的是時機（第一次檢查時 writer 還沒做完），另外單獨跑了三次，四次都抓到。視窗那一條沒有測試（`docs/test-gaps.md`）。
 
 ### 第 4 段的 4d（2026-11-25，Linux：Fedora 45，debug build，`b2521f5` 之上）
 

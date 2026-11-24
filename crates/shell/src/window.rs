@@ -554,6 +554,7 @@ impl App {
     }
 
     fn exit(&mut self, event_loop: &ActiveEventLoop) {
+        let ending = std::time::Instant::now();
         if let Some(mut running) = self.running.take() {
             running.shutdown();
         }
@@ -564,7 +565,7 @@ impl App {
         if let Some(automating) = &mut self.automating
             && let Some(writer) = automating.writer.take()
         {
-            let _ = writer.join();
+            automation_pipe::wait_for_writer(writer, ending);
         }
         event_loop.exit();
     }

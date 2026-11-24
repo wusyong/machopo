@@ -1,0 +1,25 @@
+# Stage 4e's mutants: `python3 scripts/test.py mutate rfcs/0109-shutdown-and-shell-tests/mutants-4e.toml`.
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "a_client_not_reading", "a_hung_renderer_leaves_the_writer"]
+timeout = 300
+
+[[mutant]]
+name = "the pipe's writer is waited for without a limit"
+file = "crates/shell/src/automation_pipe.rs"
+from = '''    wait_for_writer(writer, ending);'''
+to = '''    let _ = (writer.join(), ending);'''
+
+[[mutant]]
+name = "the writer has no time past the limit"
+file = "crates/shell/src/automation_pipe.rs"
+from = '''    let deadline = (ending + browser::shutdown::LIMIT).max(std::time::Instant::now() + WRITER_GRACE);'''
+to = '''    let deadline = ending + browser::shutdown::LIMIT;'''
+
+[[mutant]]
+name = "a writer left says nothing"
+file = "crates/shell/src/automation_pipe.rs"
+from = '''            browser::shutdown::gave_up(
+                "the automation pipe's writer",
+                "left, its client not reading",
+                ending.elapsed(),
+            );'''
+to = ''''''

@@ -3126,6 +3126,70 @@ fn a_signal_started_ignored_stays_so() {
     assert!(wait(&mut child).success());
 }
 
+/// A client that never reads machopo's answers doesn't hold it up as it
+/// ends: the pipe full, its writer can't finish, and is left once the
+/// limit has passed, with a line.
+#[test]
+fn a_client_not_reading_doesnt_hold_machopo_up() {
+    let log = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("shell-not-read.log");
+    let mut child = Process::new(env!("CARGO_BIN_EXE_machopo"))
+        .arg("--automation-pipe")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::from(std::fs::File::create(&log).unwrap()))
+        .spawn()
+        .expect("machopo starts");
+    // Kept and never read.
+    let _output = child.stdout.take();
+    let mut input = child.stdin.take().unwrap();
+    // Far more answers than a pipe holds (64 KiB on Linux, less on macOS).
+    for id in 0..5000 {
+        let command = format!(r#"{{"id":{id},"method":"Browser.getVersion"}}"#);
+        input.write_all(command.as_bytes()).unwrap();
+        input.write_all(&[0]).unwrap();
+    }
+    drop(input);
+    let asked = std::time::Instant::now();
+    let status = wait(&mut child);
+    let took = asked.elapsed();
+    assert!(took < Duration::from_secs(5), "{took:?}");
+    assert!(status.success());
+    let said = std::fs::read_to_string(&log).unwrap();
+    assert!(
+        said.contains("gave up on the automation pipe's writer, left, its client not reading"),
+        "{said}"
+    );
+}
+
+/// A renderer that takes the whole limit doesn't cost a client that reads
+/// the end of what machopo writes: the writer, done a moment after the
+/// limit, isn't given up on.
+#[test]
+fn a_hung_renderer_leaves_the_writer_its_time() {
+    let server = server(&[("/", Route::ok("text/html", "<!DOCTYPE html>page"))]);
+    let log = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("shell-writer-time.log");
+    let mut browser = Browser::start_logging(
+        &["--process-per-tab"],
+        Stdio::from(std::fs::File::create(&log).unwrap()),
+    );
+    let session = browser.attach();
+    browser.navigate(&session, &server.url("/"));
+    browser.send(
+        Some(&session),
+        "Machopo.executeScript",
+        json!({ "script": "while (true) {}", "async": false }),
+    );
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(
+        browser.call(None, "Browser.close", json!({})),
+        Ok(json!({}))
+    );
+    assert!(wait(&mut browser.child).success());
+    let said = std::fs::read_to_string(&log).unwrap();
+    assert!(said.contains("renderer process"), "{said}");
+    assert!(!said.contains("writer"), "{said}");
+}
+
 /// Starts a machopo with a tab for each of `scripts`, in a renderer
 /// process of its own that is left running its script (or doing nothing),
 /// and kills the machopo: whether every renderer went with it. They had

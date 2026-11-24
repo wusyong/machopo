@@ -144,6 +144,33 @@ pub fn spawn_writer(messages: Receiver<Message>) -> std::io::Result<JoinHandle<(
         })
 }
 
+/// How long the pipe's writer has, past machopo's limit, to write what the
+/// session left it once the session has gone: its last answers
+/// (`Browser.close`'s), to a client that reads them.
+const WRITER_GRACE: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Waits for the pipe's writer, its senders gone, until machopo's limit
+/// since it began `ending` (or [`WRITER_GRACE`] from now, if that is
+/// later): a client that doesn't read machopo's standard output, the pipe
+/// full, would hold it up for ever (Chromium's `PipeIOBase::Shutdown`
+/// joins its threads in a task that doesn't hold the end up). One not done
+/// by then is left, with a line; the process ends without it.
+pub fn wait_for_writer(writer: JoinHandle<()>, ending: std::time::Instant) {
+    let deadline = (ending + browser::shutdown::LIMIT).max(std::time::Instant::now() + WRITER_GRACE);
+    while !writer.is_finished() {
+        if std::time::Instant::now() >= deadline {
+            browser::shutdown::gave_up(
+                "the automation pipe's writer",
+                "left, its client not reading",
+                ending.elapsed(),
+            );
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    let _ = writer.join();
+}
+
 /// Runs the browser, without the platform's window, on the pipe until its
 /// input ends or `Browser.close`.
 pub fn run(options: Options) -> Result<(), String> {
@@ -209,6 +236,7 @@ pub fn run(options: Options) -> Result<(), String> {
         &ended,
         options.scale,
     );
+    let ending = std::time::Instant::now();
     browser.shutdown();
     // The writer ends with the outbox's last sender, the session's (a
     // frame Viz still copies holds one only until it answers), having
@@ -217,7 +245,7 @@ pub fn run(options: Options) -> Result<(), String> {
     drop(session);
     drop(server);
     drop(clients_tx);
-    let _ = writer.join();
+    wait_for_writer(writer, ending);
     match ended {
         windowless::Ended::Done(_) | windowless::Ended::Closed => Ok(()),
         windowless::Ended::RendererGone => Err("the renderer has gone".into()),
