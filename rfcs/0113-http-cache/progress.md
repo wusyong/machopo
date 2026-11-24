@@ -2,183 +2,93 @@
 
 <!-- 怎麼更新見 docs/README.md 的「完成一步時」和「一份 RFC 做完時」。設計理由寫在 README.md，目前仍然成立的限制寫在 docs/limitations.md。 -->
 
-開始日期：2026-11-24
+開始日期：2026-11-24。完成日期：2026-11-24（macOS 26.6.2、Apple M4；Windows 上只跑過 `ipc` 的 `disk_space`）。
 
 ## 步驟
 
 | 步驟 | 狀態 | 完成日期 |
 | --- | --- | --- |
-| 1. 記憶體的 cache 和規則 | 做完，待審查 | 2026-11-24 |
-| 1a. 新鮮度和驗證的規則（照 Chromium 的 `HttpResponseHeaders`、`HttpVaryData`、`http_cache_util`） | 做完，待審查 | 2026-11-24 |
-| 1b. 記憶體的 backend（上限、淘汰，已決定的第 5、7 條） | 做完，待審查 | 2026-11-24 |
-| 1c. key：`TrustedParams` 加 `frame_site`（已決定的第 1、2 條） | 做完，待審查 | 2026-11-24 |
-| 1d. cache 接進 `url_loader`：查、條件請求和 `304`、存、作廢、同時的請求（已決定的第 3、8、9、10 條） | 做完，待審查 | 2026-11-24 |
-| 1e. load flag：`fetch()` 的 `cache`、重新整理、上一頁、DevTools（已決定的第 11 條） | 做完，待審查 | 2026-11-24 |
-| 1f. WPT 的 `fetch/http-cache/`、情境、文件、mutation test；`btoa`、`atob`（已決定的第 12 條） | 做完，待審查 | 2026-11-24 |
-| 2. 磁碟的 backend（已決定的第 13 到 20 條） | 做完，待審查 | 2026-11-24 |
-| 2a. SQLite 的 store：schema、自己的 thread、讀寫、壞掉的檔案（已決定的第 16 到 19 條） | 做完，待審查 | 2026-11-24 |
-| 2b. `HttpCache` 接上兩種 backend（記憶體的、SQLite 的），交易經過它讀寫（已決定的第 20 條） | 做完，待審查 | 2026-11-24 |
-| 2c. 大小上限：`ipc` 的平台層讀磁碟剩下的空間，照 `PreferredCacheSize` 算（已決定的第 14 條） | 做完，待審查 | 2026-11-24 |
-| 2d. cache 的資料夾：profile 對到各平台的 cache 資料夾，network context 打開它（已決定的第 15 條） | 做完，待審查 | 2026-11-24 |
-| 2e. 重新啟動之後照樣用（整合測試）、文件、mutation test | 做完，待審查 | 2026-11-24 |
-| 3. 重量網路版的 Speedometer | | |
+| 1. 記憶體的 cache 和規則：新鮮度和驗證、記憶體的 backend、key 和 `frame_site`、接進 `url_loader`（條件請求、`304`、作廢、同時的請求）、load flag（`fetch()`、重新整理、上一頁、DevTools、強制重新整理的快捷鍵）、WPT 的 `fetch/http-cache/` 和它要的 `btoa`、`atob` | 完成 | 2026-11-24 |
+| 2. 磁碟的 backend：SQLite 的 store、`HttpCache` 的兩種 backend 和磁碟的 index、照磁碟剩下的空間算大小、平台的 cache 資料夾 | 完成 | 2026-11-24 |
+| 3. 重量網路版的 Speedometer | 完成 | 2026-11-24 |
 
 ## 驗收
 
-| 項目 | 怎麼驗證 |
-| --- | --- |
-| 回應的 header 的規則：值怎麼列（逗號、引號、不合併的 header）、新鮮度（`max-age`、`Expires`、heuristic、永久的狀態碼、`stale-while-revalidate`）、年齡、要不要驗證、能不能存、條件請求的 header、`304` 的合併 | `cargo test -p net --lib http_cache::headers` |
-| `Vary` 的比對（`*`、`Authorization`、沒有的 header、值照原樣比） | `cargo test -p net --lib http_cache::vary` |
-| request header 對 cache 的影響（`If-Match` 這類、`no-cache`、`max-age=0`）和呼叫者自己的驗證 | `cargo test -p net --lib http_cache::request_headers` |
-| cache 的 key：子資源照最上層和 frame 的網站，主框架的導覽照網址的網站，子 frame 的文件加 `s_`，別的網站發起的主框架導覽加 `cn_`；opaque 和沒有 `trusted` 的沒有 key；fragment、帳號、密碼不算 | `cargo test -p net --lib http_cache::key` |
-| Browser 給子資源的 loader 它自己的網站（opaque 的沒有），導覽不給 | `cargo test -p browser --lib frame_tree` |
-| 經過 cache 的載入（`net` 的 `NetworkService` 對著本機的測試 server）：新鮮的不上網路、heuristic、`no-store` 和沒有依據的每次都上網路、不新鮮的帶 `ETag` 和 `Last-Modified` 驗證、`304` 帶來的新鮮度和 `no-store`、`Vary`（含 transport 加的 `Accept`）、照最上層和 frame 的網站分開、沒有網站的不經過、成功的 `POST` 拿掉 entry（失敗的不）、request header 的 `no-cache`、`max-age=0`、`If-Match`、呼叫者自己的驗證、`HEAD`、永久的 redirect、`Content-Encoding` 照原樣存、太大的不存、同時的請求只到 server 一次 | `cargo test -p net --test it http_cache` |
-| `304` 更新 entry 的時間、header 和 `Vary`，存的 header 不留 `Set-Cookie` | `cargo test -p net --lib http_cache::transaction` |
-| 記憶體的 backend：上限 50 MiB、一個 entry 最多 1/8、超過時照最近用過的順序淘汰到 90%、entry 的大小（key、header、`Vary`、status text、body） | `cargo test -p net --lib http_cache::memory`、`http_cache::entry` |
-| cache 的 load flag：`LOAD_VALIDATE_CACHE`、`BYPASS_CACHE`（送出時加 `Pragma: no-cache` 和 `Cache-Control: no-cache`，換掉請求自己的）、`SKIP_CACHE_VALIDATION`、`ONLY_FROM_CACHE`（沒有能用的是 `ERR_CACHE_MISS`）、`DISABLE_CACHE`；request header 對到的 flag 和請求的 flag 合起來；清空 cache 時正在存的也不留 | `cargo test -p net --test it http_cache` |
-| renderer 給子資源的 flag：`fetch()` 的 `cache` 照 Blink 的 `GetLoadFlagsForWebURLRequest`，其他的照文件的載入（`DetermineFrameCacheMode`：強制重新整理的文件在 `load` 之前繞過、上一頁的不驗證，子 frame 跟著 parent），條件請求的驗證；DevTools 停用 cache 時繞過（只能用 cache 的變成找不到） | `cargo test -p renderer --lib loader`、`cargo test -p dom --test it frames::a_documents_load` |
-| `fetch()` 的 `cache` 的每一種模式經過整條路（renderer、Browser、`net`） | `cargo test -p shell --test it fetch::a_fetchs_cache_mode` |
-| 重新整理、強制重新整理（CDP 的 `Page.reload` 的 `ignoreCache`）、上一頁：文件、stylesheet、script、iframe 和它的 script、`fetch()`、圖片各自照 Chromium 的 flag 送出或從 cache 拿 | `cargo test -p shell --test it automation_pipe::reloads_and_history_use_the_http_cache` |
-| 強制重新整理的快捷鍵（Shift+Cmd+R、Shift+F5、Ctrl+F5、Ctrl+Shift+R）和它的效果 | `cargo test -p shell --lib browser_view::tests::shortcuts_per_platform`、`cargo test -p shell --test it browser_view::shift_reload_goes_past_the_http_cache` |
-| WPT 的 `fetch/http-cache/` 和 `fetch/api/request/request-cache-*`：失敗的子測試和 Chrome 158 的一樣（`.ini` 寫著原因），除了沒有 `No-Vary-Search`、不從完整的回應給 `Range` 和沒有 `window.open`（`split-cache.html`） | `python3 scripts/test.py wpt fetch/http-cache/ fetch/api/request/` |
-| 帶 `Range` 的請求不經過 cache，`206` 不存；送出時的 `Pragma`、`Cache-Control` 只在請求自己沒有時加 | `cargo test -p net --test it http_cache` |
-| `btoa`、`atob`（window 和 worker） | `python3 scripts/test.py wpt html/webappapis/atob/` |
-| 強制重新整理的快捷鍵在視窗裡重新載入頁面 | `python3 scripts/test.py scenarios navigation` |
-| `sql` 的資料庫可以打開成 `synchronous=OFF`，`raze` 刪掉檔案和 journal、照原本的設定重來 | `cargo test -p sql` |
-| `Vary` 存到磁碟時只存值的 SHA-256，照樣比對 | `cargo test -p net --lib http_cache::vary`、`http_cache::entry` |
-| 磁碟的 store：寫進去的重新打開之後讀得回來（header、時間、`Vary`、body），body 邊收邊寫、每滿 512 KiB 一列，沒收完的不讀、下次啟動時刪掉，放棄的刪掉、留著上一個，完成的取代上一個，刪、更新使用的時間、清空（正在寫的也是），`Vary` 的值不在檔案裡，壞掉的資料庫清掉重來，打不開的什麼都不留 | `cargo test -p net --lib http_cache::sql_store` |
-| 磁碟的 cache 的 index 和淘汰：超過上限的 95% 時照「多久沒用 ×（大小 + 300）」淘汰到 90%，一個 entry 最多上限的 1/8 或 5 MiB，讀到的是用過（也寫回去），`304` 讓 entry 變大時也淘汰，store 沒有的 entry 從 index 拿掉 | `cargo test -p net --lib http_cache::disk`、`http_cache::tests` |
-| network context 的 cache 在磁碟上（`http_cache_directory`、`http_cache_max_size`）：重新啟動之後照樣用（照樣分區）、`304` 的更新留在磁碟上、清空也清掉磁碟（正在寫的也是）、照上限淘汰、中途斷掉的不留 | `cargo test -p net --test it http_cache` |
-| 磁碟剩下的空間（`ipc::platform::available_disk_space`）：和 `df -kP` 的一樣，不在的路徑是錯誤 | `cargo test -p ipc --test it disk_space` |
-| 磁碟的 cache 的大小上限照 Chromium 的 `PreferredCacheSize`：Windows 以外和 Windows 的每一段、讀不到剩下的空間時；資料夾先建好再問 | `cargo test -p net --lib http_cache::disk` |
-| profile 的 cache 資料夾：macOS 的 `~/Library/Caches`、其他 Unix 的 `$XDG_CACHE_HOME`（`~/.cache`）底下、profile 在使用者資料夾底下的同一個位置；Windows、不在那底下的、使用者資料夾本身是 profile 自己的資料夾；相對和空的 XDG 變數不算 | `cargo test -p browser --test it profile::` |
-| profile 的 HTTP cache 在它的 cache 資料夾的 `Cache` 裡，重新打開 profile 之後頁面和圖片從那裡來 | `cargo test -p browser --test it a_profiles_http_cache_outlasts_its_storage` |
-| DevTools：`fromDiskCache`；`Network.setCacheDisabled` 讓導覽和子資源（parser、stylesheet、圖片、`fetch()`）繞過 cache，`Network` 沒打開時是錯誤，`disable`、session 離開、client 斷線時取消，別的分頁的 session 不影響；`Network.clearBrowserCache` 清完才回答 | `cargo test -p shell --test it devtools_network::devtools_sees_the_http_cache` |
+| 領域 | 項目 | 怎麼驗證 |
+| --- | --- | --- |
+| 規則 | 回應的 header：值怎麼列（逗號、引號、不合併的 header）、新鮮度（`max-age`、`Expires`、heuristic、永久的狀態碼、`stale-while-revalidate`）、年齡、要不要驗證、能不能存、條件請求的 header、`304` 的合併 | `cargo test -p net --lib http_cache::headers` |
+| 規則 | `Vary` 的比對（`*`、`Authorization`、沒有的 header、值照原樣比）；存到磁碟時只存值的 SHA-256，照樣比對 | `cargo test -p net --lib http_cache::vary`、`http_cache::entry` |
+| 規則 | request header 對 cache 的影響（`If-Match` 這類、`Range`、`no-cache`、`max-age=0`）和呼叫者自己的驗證 | `cargo test -p net --lib http_cache::request_headers` |
+| key | 子資源照最上層和 frame 的網站，主框架的導覽照網址的網站，子 frame 的文件加 `s_`，別的網站發起的主框架導覽加 `cn_`；opaque 和沒有 `trusted` 的沒有 key；fragment、帳號、密碼不算 | `cargo test -p net --lib http_cache::key` |
+| key | Browser 給子資源的 loader 它自己的網站（opaque 的沒有），導覽不給 | `cargo test -p browser --lib frame_tree` |
+| 載入 | 經過 cache 的載入（`NetworkService` 對著本機的測試 server）：新鮮的不上網路、heuristic、`no-store` 和沒有依據的每次都上網路、不新鮮的帶 `ETag` 和 `Last-Modified` 驗證、`304` 帶來的新鮮度和 `no-store`、`Vary`（含 transport 加的 `Accept`）、照最上層和 frame 的網站分開、沒有網站的不經過、成功的 `POST` 拿掉 entry（失敗的不）、`HEAD`、永久的 redirect、`Content-Encoding` 照原樣存、太大的不存、`Range` 不經過、`206` 不存、同時的請求只到 server 一次 | `cargo test -p net --test it http_cache` |
+| 載入 | load flag：`LOAD_VALIDATE_CACHE`、`BYPASS_CACHE`（送出時加 `Pragma: no-cache` 和 `Cache-Control: no-cache`，請求自己有的留著）、`SKIP_CACHE_VALIDATION`、`ONLY_FROM_CACHE`（沒有能用的是 `ERR_CACHE_MISS`）、`DISABLE_CACHE`；request header 對到的 flag 和請求的 flag 合起來；清空時正在存的也不留 | 同上 |
+| 載入 | `304` 更新 entry 的時間、header 和 `Vary`，存的 header 不留 `Set-Cookie` | `cargo test -p net --lib http_cache::transaction` |
+| 記憶體 | 上限 50 MiB、一個 entry 最多 1/8、超過時照最近用過的順序淘汰到 90%、entry 的大小（header、`Vary`、status text、body） | `cargo test -p net --lib http_cache::memory`、`http_cache::entry` |
+| 磁碟 | `sql` 的資料庫可以打開成 `synchronous=OFF`，`raze` 刪掉檔案和 journal、照原本的設定重來 | `cargo test -p sql` |
+| 磁碟 | store：寫進去的重新打開之後讀得回來（header、時間、`Vary`、body），body 邊收邊寫、每滿 512 KiB 一列，沒收完的不讀、下次啟動時刪掉，放棄的刪掉、留著上一個，完成的取代上一個，換掉 head，刪、更新使用的時間、清空（正在寫的也是），`Vary` 的值不在檔案裡，壞掉的資料庫清掉重來，打不開的什麼都不留 | `cargo test -p net --lib http_cache::sql_store` |
+| 磁碟 | index 和淘汰：超過上限的 95% 時照「多久沒用 ×（大小 + 300）」淘汰到 90%，一個 entry 最多上限的 1/8 或 5 MiB，讀到的是用過（也寫回去），`304` 讓 entry 變大時也淘汰，store 沒有的 entry 從 index 拿掉；`Recorder` 在磁碟上邊收邊寫，太大、沒收完時當場放棄；大小照 Chromium 的 `PreferredCacheSize`（Windows 以外和 Windows 的每一段、讀不到剩下的空間時） | `cargo test -p net --lib http_cache::disk`、`http_cache::tests` |
+| 磁碟 | network context 的 cache 在磁碟上（`http_cache_directory`、`http_cache_max_size`）：重新啟動之後照樣用（照樣分區）、`304` 的更新留在磁碟上、清空也清掉磁碟（正在寫的也是）、照上限淘汰、中途斷掉的不留 | `cargo test -p net --test it http_cache` |
+| 磁碟 | 磁碟剩下的空間（`ipc::platform::available_disk_space`）：和 `df -kP` 的一樣，不在的路徑是錯誤；Windows 上也跑過 | `cargo test -p ipc --test it disk_space` |
+| profile | cache 資料夾：macOS 的 `~/Library/Caches`、其他 Unix 的 `$XDG_CACHE_HOME`（`~/.cache`）底下、profile 在使用者資料夾底下的同一個位置；Windows、不在那底下的、使用者資料夾本身是 profile 自己的資料夾；相對和空的 XDG 變數不算 | `cargo test -p browser --test it profile::` |
+| profile | profile 的 HTTP cache 在它的 cache 資料夾的 `Cache` 裡，重新打開 profile 之後頁面和圖片從那裡來 | `cargo test -p browser --test it a_profiles_http_cache_outlasts_its_storage` |
+| renderer | 子資源的 flag：`fetch()` 的 `cache` 照 Blink 的 `GetLoadFlagsForWebURLRequest`，其他的照文件的載入（`DetermineFrameCacheMode`：強制重新整理的文件在 `load` 之前繞過、上一頁的不驗證，子 frame 跟著 parent），條件請求的驗證；DevTools 停用 cache 時繞過（只能用 cache 的變成找不到） | `cargo test -p renderer --lib loader`、`cargo test -p dom --test it frames::a_documents_load` |
+| 整條路 | `fetch()` 的 `cache` 的每一種模式經過 renderer、Browser、`net` | `cargo test -p shell --test it fetch::a_fetchs_cache_mode` |
+| 整條路 | 重新整理、強制重新整理（CDP 的 `Page.reload` 的 `ignoreCache`）、上一頁：文件、stylesheet、script、iframe 和它的 script、`fetch()`、圖片各自照 Chromium 的 flag 送出或從 cache 拿 | `cargo test -p shell --test it automation_pipe::reloads_and_history_use_the_http_cache` |
+| 視窗 | 強制重新整理的快捷鍵（Shift+Cmd+R、Shift+F5、Ctrl+F5、Ctrl+Shift+R）：分派、繞過 cache、在視窗裡重新載入頁面 | `cargo test -p shell --lib browser_view::tests::shortcuts_per_platform`、`cargo test -p shell --test it browser_view::shift_reload_goes_past_the_http_cache`、`python3 scripts/test.py scenarios navigation` |
+| DevTools | `fromDiskCache`；`Network.setCacheDisabled` 讓導覽和子資源（parser、stylesheet、圖片、`fetch()`）繞過 cache，`Network` 沒打開時是錯誤，`disable`、session 離開、client 斷線時取消，別的分頁的 session 不影響；`Network.clearBrowserCache` 清完才回答 | `cargo test -p shell --test it devtools_network::devtools_sees_the_http_cache` |
+| WPT | `fetch/http-cache/` 和 `fetch/api/request/request-cache-*`：失敗的子測試和 Chrome 158 的一樣（`.ini` 寫著原因），除了沒有 `No-Vary-Search`、不從完整的回應給 `Range` 和沒有 `window.open`（`split-cache.html`）；`btoa`、`atob`（window 和 worker） | `python3 scripts/test.py wpt fetch/http-cache/ fetch/api/request/ html/webappapis/atob/` |
+| 全部 | 守著這些的測試擋得住弄壞的實作 | `python3 scripts/test.py mutate --keep-going rfcs/0113-http-cache/mutants-<段>.toml`（`1a` 到 `1f`、`2a` 到 `2d`） |
 
 ## 做過的檢查
 
-每一步一段：日期和平台；新的測試；mutation test（弄壞了什麼、哪個測試失敗、沒抓到的和原因）；視窗裡的手動確認；找到的 bug；不穩定的測試；跑過的檢查和測試數字。
+macOS 26.6.2（Apple M4），debug build，2026-11-24；branch `0113` 從 `main` 的 `5094ac2` 開始。Windows：push `69179e0` 之後，使用者在自己的 Windows 機器上跑了 `cargo test -p ipc --test it disk_space`，通過；其他部分沒有在 Windows 和 Linux 上跑過（每天的 CI 在 Linux 上跑）。
 
-### 1a（2026-11-24，macOS 26.6.2、Apple M4、debug build，`5094ac2` 之上）
+### 對照的原始碼
 
-**對照的原始碼**：Chromium `main` 的 `0e8fa24e`（2026-11-24）的 `net/http/http_response_headers.cc`、`.h`、`http_vary_data.cc`、`http_cache_transaction.cc`、`http_cache_util.cc`、`http_util.cc`，下載到本機逐條讀。和原本記得的不同、改寫了 `details.md` 和程式的：存的條件只有 `no-store`（任何狀態碼都存，能不能用交給新鮮度）；`Expires` 解析不了時當成沒有（不是過期）；`Vary` 有 `Authorization` 時和 `Vary: *` 一樣；`Cache-Control: immutable` 在 Chromium 預設不改變 `Pragma: no-cache`（`kCacheControlImmutable` 預設關）。
+每條規則對著 Chromium `main`（2026-11-24）的原始碼寫：`net/http/` 的 `http_response_headers.cc`、`http_vary_data.cc`、`http_cache.cc`、`http_cache_transaction.cc`、`http_cache_util.cc`、`http_util.cc` 下載到本機逐條讀；`net/disk_cache/`（記憶體的、Simple Cache、SQL backend、`cache_util.cc`）、Blink 的 load flag（`web_url_request.cc`、`request_conversion.cc`、`frame_fetch_context.cc`、`fetch_manager.cc`、`inspector_network_agent.cc`）、content 的 `navigation_request.cc`、`browser_initiated_resource_request.cc`、`devtools_instrumentation.cc` 和 `chrome/common/chrome_paths_*` 下載或由 agent 讀 Gitiles。和原本記得的不同、照原始碼改了的：
 
-**新的測試**：`net` 的 `http_cache` 的單元測試 23 個，全部通過；寫的過程中補了「時鐘往回走時，沒有新鮮度的回應照樣要驗證」（沒有它，「新鮮度和 staleness 都是 0 就要驗證」那一行拿掉也不會失敗）。
+- 能不能存只看 `no-store`（任何狀態碼都存，能不能用交給新鮮度）；`Expires` 解析不了時當成沒有；`Vary` 有 `Authorization` 時和 `Vary: *` 一樣；`Cache-Control: immutable` 預設不改變 `Pragma: no-cache`。
+- 分區由 `SplitCacheFeatureEnableByDefault` 打開（agent 一開始從 `features.cc` 讀到「預設關」，和 Chrome 的實測不一致）。
+- DevTools 停用 cache 是繞過（`LOAD_BYPASS_CACHE`），不是 `LOAD_DISABLE_CACHE`；繞過和驗證時送的 `Pragma`、`Cache-Control` 只在請求自己沒有時加（Fetch；照記得的寫成了換掉，WPT 的 `cache-mode.any.js` 抓到）。
 
-**mutation test**（`mutants-1a.toml`，35 個）：35 個都抓到。第一次跑時「`304` 留著被取代的舊行」沒抓到：那條 mutation 寫成 `updated.is_empty() || !updated…`，和原本的程式等價，改成 `true || !updated…` 之後抓到。
+Chrome for Testing 152 的實測：最上層換網站、或只換 iframe 的網站都重新要（三段的 key）；opaque 的 frame 不經過 cache；同時的請求只到 server 一次；強制重新整理時 iframe 的文件也帶 `no-cache` 重新要。
 
-**檢查**：`cargo test -p net --lib http_cache` 通過；`sanity.py` 的 `numerics`、`tests`、`unsafe`、`deps`、`docs` 通過。
+### 找到的 bug（都修好了）
 
-### 1b（2026-11-24，macOS 26.6.2、Apple M4、debug build，`5094ac2` 之上）
+- 從 cache 回答的 `HEAD` 帶著 body：以為 `url_loader` 丟掉每個 `HEAD` 的 body，其實只有 `file:`、`data:`（整合測試抓到）。
+- 從 cache 回答的 body 算進 `encoded_body_length`（那個欄位寫著沒有經過網路時是 0）。
+- 清空時正在存的回應寫完照樣存進去：cache 改成記著清過幾次，記錄器存之前比對（Chromium dooms 正在寫的 entry）。
+- 帶 `Range` 的請求的 `206` 被存下來，之後要別的範圍、或要整份的請求拿到它（WPT 的 `partial.any.js`）：改成 `Range` 不經過 cache，`206` 不存。
+- 繞過 cache 時換掉請求自己的 `Cache-Control`、`Pragma`（上面）。
+- 上一頁、下一頁照 Chromium 從 cache 拿之後，`browser` 的三個導覽的測試和 `shell` 的 `webdriver::a_session_navigates` 數 server 收到的次數各少一次：照 Chromium 改了預期（1e 做完時只跑了 `cargo check`，整套的測試跑到才看到）。
 
-**對照的原始碼**：同一份 Chromium 的 `net/disk_cache/memory/mem_backend_impl.cc`、`mem_entry_impl.cc`（由 agent 讀 Gitiles，關鍵的常數和淘汰的規則它引了原文）：上限、`MaxFileSize` 是上限的 1/8、寫入讓總量變大時淘汰到 90%。和 Chromium 不同的：上限固定 50 MiB（已決定的第 7 條）；讀出來的是 body 的 `Bytes` 的副本（共用同一塊記憶體），所以淘汰不用跳過正在讀的 entry；一個新的 entry 太大時，它要取代的舊 entry 也拿掉（Chromium 的交易這時已經把舊的換掉）。
+### Mutation test
 
-**新的測試**：`http_cache::memory` 5 個、`http_cache::entry` 1 個；寫 mutation 時發現 entry 的大小只有 body 有測，補了 header、`Vary`、status text 的那一個。`http_cache` 合計 29 個，全部通過。
+`mutants-1a.toml` 到 `mutants-2d.toml`，合計 250 個：1a 35、1b 14、1c 12、1d 30、1e 71、1f 9、2a 27、2b 29、2c 14、2d 9。沒抓到的都補了測試（呼叫者自己的驗證不相符時不存、空的 validator、不受信任的 header、端到端的圖片和 `fetch()`、快捷鍵的分派、別的分頁的 DevTools session、`raze` 留著 journal、`304` 讓 entry 變大時的淘汰、讀到時更新最後用的時間並寫回、中途斷掉時當場刪掉列、相對的 `XDG_CONFIG_HOME`……），或是等價的：寫 mutation 之前拿掉了會變成等價 mutation 的多餘程式（`ExternalValidation` 的 `is_ok`、記錄器出錯時設成 `None`、只能用 cache 又繞過的提早檢查、子 frame 的 commit 的 `bypass_cache`、讀 index 時的 `WHERE complete = 1`、`Recorder` 的 `done`）。`ipc` 的 `available_disk_space` 用 `f_bfree` 代替 `f_bavail` 在 macOS 上等價（APFS 沒有保留給 superuser 的空間），記在 `docs/test-gaps.md` 的「等價、不用處理的 mutation」。測不到的：磁碟的 store 用到一半出錯（清掉重來時忘掉正在寫的、`HttpCache` 清空 index、完成的交易失敗、寫一段失敗），記在 `docs/test-gaps.md` 的「只靠審查」；`Profile::cache_dir` 接上目前的平台的那一行（要用使用者真的資料夾才測得到）。
 
-**mutation test**（`mutants-1b.toml`，14 個）：14 個都抓到。
+### 跑過的檢查
 
-**檢查**：`cargo test -p net --lib http_cache` 通過。
+- 第 1、2 階段做完時各跑一次 `cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace`，都通過（clippy 要求的：`HeaderFlag` 的值不以 `Cache` 結尾；`begin_renderer_navigation` 和 `headless` 的 `Event` 帶理由的 `#[expect]`；2a 的一個測試用了會默默繞回的 `fetch_add`）。
+- `sanity.py` 的 `deps`、`unsafe`、`tests`、`numerics`、`boundary`、`spans`、`docs` 在每一段做完時通過。
+- WPT：`python3 scripts/test.py wpt fetch/api/ fetch/http-cache/ html/webappapis/atob/`（531 個測試）沒有新的失敗；多了兩個通過：`conditional-get.any.js`（cache 用 `ETag` 驗證），和 `keepalive.any.js` 的 iframe 在 `unload`、`pagehide` 送的四個請求（cache 整個關掉、在 `5094ac2` 上也通過，不是這份做的），照實更新了預期結果。
+- 情境：`python3 scripts/test.py scenarios navigation`（macOS 和其他平台的快捷鍵）。
+- 不穩定的測試：沒有碰到；磁碟的 cache 的整合測試連跑 5 次都通過。
 
-### 1c（2026-11-24，macOS 26.6.2、Apple M4、debug build，`5094ac2` 之上）
+### 網路版的 Speedometer（2026-11-24，用電池）
 
-**對照的原始碼**：Chromium `main` 的 `0e8fa24e` 的 `net/http/http_cache.cc`（`GenerateCacheKey`、`SplitCacheFeatureEnableByDefault`、`IsSplitCacheEnabled`）和 `net/base/features.cc`。之前 agent 從 `features.cc` 讀到分區「預設關」，和實測不一致；原因是 Chrome 啟動時另外打開它。
+machopo 是 `0113` 的 `f450e27`（`perf` build，`machopo --automation-pipe`），Chrome 是 Chrome for Testing 152.0.7977.82（headless，新的 profile）。都經過 CDP 開 `https://browserbench.org/Speedometer3.1/?startAutomatically`（20 個預設的 suite、10 個 iteration），量法照 `details.md` 的「網路版的 Speedometer」：讀 runner 自己的結果和 mark，「載入 suite 的頁面」是每個 suite 的 `prepare-start` 到 `prepare-end` 加起來，「計分的區間」是每個 suite 的 total 加起來。五組同一個時段、同一個執行檔接連跑；沒有 cache 的那組是同一個執行檔經過 DevTools 的 `Network.setCacheDisabled`（導覽和子資源都繞過 cache）。
 
-**新的測試**：`net` 的 `http_cache::key` 5 個；`browser` 的 `frame_tree` 兩個現有的測試加上 `frame_site` 的檢查。`TrustedParams` 的新欄位讓 `net` 的 `cookie_jar` 和 `tests/it/cookie_loads.rs` 的幾個測試要補上它（照它們的 initiator 給）。`cargo test -p net`（212 個）、`cargo test -p browser --lib frame_tree` 通過；`cargo check --workspace --all-targets` 沒有錯誤和警告。
+| | 分數 | 整頁 | 載入 suite 的頁面 | 計分的區間 |
+| --- | --- | --- | --- | --- |
+| machopo，沒有 cache | 27.5 | 110.7 s | 91.1 s | 9.0 s |
+| machopo，記憶體的 cache（自動化的 profile） | 38.2 | 33.9 s | 17.8 s | 6.5 s |
+| machopo，磁碟的 cache（新的資料夾） | 37.8 | 34.9 s | 18.5 s | 6.6 s |
+| machopo，同一個資料夾，重新啟動之後 | 38.2 | 24.5 s | 9.1 s | 6.6 s |
+| Chrome（新的 profile） | 57.4 | 22.7 s | 10.6 s | 4.2 s |
 
-**mutation test**（`mutants-1c.toml`，12 個）：12 個都抓到。第一次跑時多一條「opaque 的 initiator 當成同網站」沒抓到：serialize 過的 opaque origin 一律是 `null`，parse 不了，而且 `url_site` 在前面已經確定不是 opaque，opaque 的網站不會等於它，所以那個 `!initiator.is_opaque()` 是多餘的，拿掉之後那條 mutation 也拿掉。
-
-### 1d（2026-11-24，macOS 26.6.2、Apple M4、debug build，`5094ac2` 之上）
-
-**做法**：`net::http_cache::transaction::send` 接在 `url_loader::load` 每一跳的 `transport.send` 的位置（cookie、CORS 的 `Origin` 和 preflight 之後，CORS 的檢查和 redirect 之前）。body 經過 `HttpBody` 時，記錄器（`http_cache::Recorder`）留下線上還沒解碼的 chunk，整份收完才存；出錯或被取消時記錄器跟著 body drop，什麼都不存，並放開等候的載入。從 cache 回答的 `HttpBody` 是存的 chunk，經過同一個解碼器。被跟著走的 redirect 的 body 不讀，`done_reading` 把它當成完整的（Chromium 的 `DoneReading`），所以 `301` 存得下來。測試用的 server 加了 `Route::revalidated`、`with_304_header`：照 `ETag`、`Last-Modified` 回 `304`，可以帶不同的 header。
-
-**改掉的判斷**：原本以為 `url_loader` 對每個 `HEAD` 都丟掉 body，所以從 cache 回答 `HEAD` 時不用另外清空；整合測試抓到：它只對 `file:`、`data:` 這麼做，HTTP 的 `HEAD` 靠 server 不送 body，所以從 cache 回答時要清空。另外，從 cache 回答的 body 原本也算進 `encoded_body_length`，改成只算線上來的（那個欄位寫著沒有經過網路時是 0）。
-
-**新的測試**：`net` 的 `tests/it/http_cache.rs` 20 個，`http_cache::transaction` 的單元測試 3 個；`net` 合計 235 個，全部通過，cache 的整合測試連跑 3 次都通過。cache 接上之後 `browser` 和 `shell` 的測試照樣全部通過（現有的測試 server 多半不帶可以 cache 的 header；重新整理和上一頁的 load flag 在 1e）。
-
-**mutation test**（`mutants-1d.toml`，30 個）：30 個都抓到。第一次跑時「呼叫者的驗證和存的 entry 不相符時也照相符處理」沒抓到：沒有測「不相符時回應不存」，補了 `the_callers_own_validation_of_nothing_stored_isnt_kept`。「等候的載入沒被叫醒」要等到載入的 30 秒期限才失敗（33 s）。寫 mutation 之前拿掉了三處多餘的程式（`ExternalValidation` 的 `is_ok` 的檢查、body 出錯時把記錄器設成 `None` 的兩行），它們會變成等價的 mutation。
-
-**檢查**：`cargo test -p net`、`cargo test -p browser -p shell` 通過；`sanity.py` 的 `numerics`、`tests`、`unsafe`、`deps`、`boundary`、`spans`、`docs` 通過。
-
-
-### 1e（2026-11-24，macOS 26.6.2、Apple M4、debug build，`fb27fa9` 之上）
-
-**對照的原始碼**：Chromium `main`（2026-11-24）的 `net/base/load_flags_list.h`、`net/http/http_cache_transaction.cc`；Blink 的 `platform/exported/web_url_request.cc`、`platform/loader/fetch/url_loader/request_conversion.cc`（`GetLoadFlagsForWebURLRequest`）、`core/loader/frame_fetch_context.cc`（`DetermineFrameCacheMode`）、`core/fetch/fetch_manager.cc`、`core/inspector/inspector_network_agent.cc`；content 的 `browser/renderer_host/navigation_request.cc`、`browser/loader/browser_initiated_resource_request.cc`、`browser/devtools/devtools_instrumentation.cc`（`ApplyNetworkRequestOverrides`），下載到本機逐條讀。和 RFC 原本寫的不同、改了 RFC 的：DevTools 停用 cache 是繞過（`LOAD_BYPASS_CACHE`，回應照樣存），不是 `LOAD_DISABLE_CACHE`。繞過和驗證時送出的 `Pragma`、`Cache-Control`（Chromium 的 `HttpNetworkTransaction` 加的）是照記得的寫的，沒有讀原始碼，1f 的 WPT `fetch/api/request/request-cache-*` 會驗證。Chrome for Testing 152 的實測：強制重新整理時 iframe 的文件也帶 `no-cache` 重新要（`frame_fetch_context` 的 frame 的 cache 模式跟著 parent）。
-
-**做法**：`ResourceRequest` 有 `LoadFlags`，`net` 的交易把它和 request header 對到的 flag 合起來。renderer 給子資源 flag（`fetch()` 的 `cache`，其他的照文件的載入：`dom` 的文件記著它是不是強制重新整理載入的，`load` 之前的子資源繞過；上一頁的不驗證；子 frame 跟著 parent），子 frame 的導覽在 `BeginNavigation` 帶它的 flag。Browser 照導覽的種類（`FrameLoadType`）給 flag。DevTools 的 `setCacheDisabled` 由 browser 照每個 session 記著（給導覽），也轉給 renderer（給子資源）；`clearBrowserCache` 是 `NetworkContext::clear_http_cache`，正在存的回應也不留（cache 記著清過幾次，記錄器存之前比對）。和 Chromium 不同的：`Network` 沒打開時 `setCacheDisabled` 是錯誤（Blink 先記著，打開時生效），已經打開時再 `enable` 會取消它（Blink 不會），和 machopo 的 `setAttachDebugStack` 一樣照 session 的狀態。
-
-**拿掉的程式**：只能用 cache 又要繞過的請求的提早檢查（後面的分支本來就回 `ERR_CACHE_MISS`，mutation 是等價的）；子 frame 的 commit 帶的 `bypass_cache`（永遠是 false：子 frame 的強制重新整理在 renderer 這一側照 parent 算）；`DocumentLoader` 讀回 `bypass_cache` 的欄位（沒人讀，換成 commit 時直接告訴 `dom`）。
-
-**新的測試**：`net` 的 `tests/it/http_cache.rs` 的 load flag 和清空的測試；`renderer` 的 `loader` 的單元測試；`dom` 的 `frames::a_documents_load_says_how_its_subresources_use_the_cache`；`shell` 的 `fetch::a_fetchs_cache_mode`、`automation_pipe::reloads_and_history_use_the_http_cache`、`browser_view::shift_reload_goes_past_the_http_cache`、`devtools_network::devtools_sees_the_http_cache_and_can_go_past_it_or_clear_it`，和 `browser_view` 的快捷鍵的單元測試。現有的測試要改的：`browser` 的三個導覽的測試（`a_link_navigates_and_history_goes_back_and_forward`、`the_state_comes_back_with_the_entry`、`a_traversal_within_a_document_gone_loads_the_entry`）和 `shell` 的 `webdriver::a_session_navigates` 數 server 收到幾次，上一頁、下一頁從 cache 拿之後各少了一次，照 Chromium 改了預期（文件照樣重新載入、commit）。
-
-**檢查**：`cargo test -p net -p protocol -p renderer -p browser -p dom -p dom_api -p dom_js -p shell` 通過（`shell` 的整合測試 694 個）；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs` 通過。
-
-**mutation test**（`mutants-1e.toml`，71 個：1e-1 的交易 16 個、1e-2 的 `fetch()` 和 1e-3 的重新整理、上一頁、快捷鍵 33 個、1e-4 的 DevTools 22 個）：71 個都抓到。沒抓到、補了測試的：空的 validator 讓 cache 停用、不受信任的 request header 不給 flag、繞過時換掉請求自己的 `Cache-Control`、端到端的測試原本沒有圖片和 `fetch()`（renderer 的三條送出的路只測到一條）、快捷鍵的分派；DevTools 的測試原本只有一個分頁，「別的分頁的 session 也算」沒抓到（那個 session 只讓它自己的分頁重算），補了「這個分頁的 session 再設一次時不被別的分頁的蓋過」。1e-4 讓文件的載入那兩條 mutation 的 `from` 對不上了（它們包含下一個函式的開頭，1e-4 在中間加了函式），改短之後重跑，照樣抓到。
-
-### 1f（2026-11-24，macOS 26.6.2、Apple M4、debug build，`9bb29e4` 之上）
-
-**`btoa`、`atob`**：WPT 的 `fetch/http-cache/` 的共用框架用 `btoa`，machopo 沒有它時整個目錄跑不了，所以加上（已決定的第 12 條）。解碼用 `net` 已經依賴的 `data-url` crate 的 forgiving-base64，編碼用 `dom_api` 已經有的 `base64`。WPT 的 `html/webappapis/atob/base64.any.js`（window 和 worker，760 個子測試）全部通過。
-
-**WPT**：`fetch/http-cache/` 加進清單；`fetch/api/request/request-cache-*` 本來就在清單裡，cache 的子測試現在全部通過（拿掉 152 行預期的失敗）。`fetch/http-cache/` 的失敗逐一和 wpt.fyi 上 Chrome 158（2026-11-23 的 Linux run）的結果對照：`cc-request`、`credentials`、`heuristic`、`invalidate`、`post-patch`、`pragma-no-cache-with-cache-control`、`vary` 失敗的子測試和 Chrome 一樣；Chrome 通過、machopo 失敗的是 `no-vary-search`（沒有 `No-Vary-Search`）、`partial` 的三個（從存的完整回應給較小的範圍）和 `split-cache`（用 `window.open`，machopo 沒有；分區由 machopo 自己的測試守著），都記進了 `docs/limitations.md` 或已經在那裡。每個 `.ini` 開頭寫著原因。
-
-**WPT 找到的 bug**（都修了、補了測試）：
-- 繞過和驗證時送出的 `Pragma`、`Cache-Control` 換掉了請求自己的（1e 照記得的 Chromium 寫的，連測試也是照它寫的）：Fetch 規定請求自己有時不加，`cache-mode.any.js` 的三個子測試因此失敗。改成只在沒有時加，那個測試改成檢查請求自己的留著。
-- 帶 `Range` 的請求的 `206` 被存下來，之後要別的範圍、或要整份的請求拿到它（`partial.any.js`：要 `bytes=2-4` 拿到 `01234`，要整份的拿到 `206`）：machopo 不存資源的一部分，改成帶 `Range` 的請求不經過 cache（Chromium 處理不了的範圍也是 `LOAD_DISABLE_CACHE`），`206` 不存。
-
-**情境**：cache 本身在情境裡看不到（情境的頁面是 `file:` 的，不經過 HTTP cache），由 `shell` 的整合測試守著；`navigation.txt` 加上強制重新整理的三組快捷鍵（Shift 加平台的重新整理、Shift+F5、Ctrl+F5）重新載入頁面，macOS 和其他平台的快捷鍵都通過。`about:demo` 沒有加東西：它是 machopo 自己的頁面，不經過 HTTP cache。
-
-**清單裡其他的 WPT**：`python3 scripts/test.py wpt fetch/api/ fetch/http-cache/ html/webappapis/atob/`（531 個測試）沒有新的失敗，多了兩個通過：`fetch/api/basic/conditional-get.any.js`（cache 用 `ETag` 驗證）；`keepalive.any.js` 的 iframe 在 `unload`、`pagehide` 送的四個請求，cache 整個關掉時、在這份 RFC 開始之前的 `5094ac2` 上也通過，不是這份做的（之前的變更沒有更新預期結果），照實更新了預期結果和註解。
-
-**階段做完時的檢查**：`cargo fmt --check`（`cargo fmt` 修了 1c 到 1e 留下的格式，都在這份改過的檔案裡）、`cargo clippy --workspace --all-targets -- -D warnings`（`HeaderFlag` 的值都以 `Cache` 結尾，改名成 `Disable`、`Bypass`、`Validate`；`begin_renderer_navigation` 多了 `load_flags` 之後超過參數的上限，照 `start_navigation` 寫帶理由的 `#[expect]`；`ResourceRequest` 多了 `LoadFlags`，`RendererHostMsg` 從 272 bytes 變成 280，`headless` 的 `Event` 的大小差超過上限，寫帶理由的 `#[expect]`：每個 renderer 的訊息都是 `Host`，box 它每個訊息都要配置一次）、`cargo test --workspace` 都通過；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs` 通過。
-
-**mutation test**（`mutants-1f.toml`，9 個）：9 個都抓到（`btoa`、`atob` 的 6 個由 WPT 的 `base64.any.js` 抓到）。1f 改了 1e 的一條 mutation 改的程式（加 header 的方式），`mutants-1e.toml` 的那一條改成對著新的程式；`HeaderFlag` 改名也照著改了 `mutants-1d.toml`、`mutants-1e.toml`；`cargo fmt` 改了 `renderer` 的 `loader.rs` 的兩處，1e 的兩條 mutation 的 `from` 跟著改、重跑，照樣抓到。
-
-### 2a（2026-11-24，macOS 26.6.2、Apple M4、debug build，`14a651e` 之上）
-
-**對照的原始碼**：Chromium `main` 的 `net/disk_cache/sql/`（由 agent 讀 Gitiles：README 的 schema、`EntryWriteBuffer`、記憶體裡的 index、shard、`synchronous` 和 WAL 的預設）和 `net/disk_cache/` 其他的 backend（`details.md` 的「磁碟的格式」）。和它不同的：一個資料庫、一個 thread（已決定的第 19 條）；`blobs` 沒有 checksum（SQLite 的 page 沒有 checksum，Chromium 自己算；machopo 靠 SQLite 回報壞掉的檔案）；key 照原樣存（Chromium 另外存 hash 給 index 用；machopo 的 index 在 2b，照 key）。
-
-**做法**：`sql` 加 `Database::open_with` 的 `Synchronous::Off` 和 `raze`（關掉、刪掉檔案和 journal、照原本的設定建新的）。`net` 的 `http_cache::sql_store`：store 的 thread 拿著資料庫（照 cookie 的資料庫），收 `Read`、`Begin`、`Append`、`Finish`、`Abandon`、`Remove`、`Touch`、`Clear`；寫入照 key 認（cache 一次只讓一個載入寫一個 key），body 在 thread 裡每個 entry 留到 512 KiB 才寫成一列；完成時在一個交易裡刪掉 key 上一個完成的 entry、把這個標成完成。打開時刪掉沒完成的，讀出完成的 entry 的 key、大小、最後用的時間，給 2b 的 index。任何語句碰到壞掉的資料庫就 `raze`、重跑 schema、忘掉正在寫的，告訴 cache（`on_razed`）。`Vary` 的值存成 SHA-256（`VaryData::Digest`，`sha2` 已經在依賴樹裡）。store 在 2b 接上之前沒有人用（`cargo build` 有 dead code 的警告，2b 接上時消失）。
-
-**新的測試**：`sql` 3 個（`synchronous`、`raze`、壞掉的檔案是 `is_corrupt`）；`net` 的 `http_cache::sql_store` 11 個、`vary` 1 個，`entry` 的大小加上 digest 的；`net` 的 `http_cache` 的單元測試 49 個、`sql` 9 個都通過。
-
-**mutation test**（`mutants-2a.toml`，27 個）：27 個都抓到。第一次跑時「`raze` 留著 journal」沒抓到：TRUNCATE 模式的 journal 平常是空的，留著也看不出差別；補了「commit 之後 journal 在、`raze` 之後不在」（當掉時留下的 hot journal 會被放進新的檔案）。寫 mutation 之前拿掉了讀 index 時多餘的 `WHERE complete = 1`（前一句剛刪掉沒完成的，會是等價的 mutation），補了「同一個 key 又開始寫時丟掉前一個」和 digest 佔的大小的測試。資料庫用到一半出錯的三條路（清掉重來時忘掉正在寫的、完成的交易失敗、寫一段失敗）測不到，記進了 `docs/test-gaps.md`。
-
-### 2b（2026-11-24，macOS 26.6.2、Apple M4、debug build，`d17c4ce` 之上）
-
-**對照的原始碼**：Chromium `main` 的 `net/disk_cache/sql/` 和 `simple/simple_index.cc` 的淘汰、entry 的上限、最後用的時間和 `304` 的寫法（由 agent 讀 Gitiles，`details.md` 的「磁碟的淘汰」）。和它不同的：沒有請求的優先度，淘汰的分數不除以優先度的係數；只在寫入和讀進 index 時檢查要不要淘汰（Chromium 另有閒下來時的 92.5%）。
-
-**做法**：`HttpCache` 的 backend 是記憶體的（照舊）或磁碟的（`http_cache::disk::DiskBackend`：store 加上記憶體裡的 index，照第 16、20 條）。store 拆成能 clone 的 `SqlStore` 和 `SqlStoreThread`：thread 的 handle 由 `NetworkContext` 的 handle 們拿著（照 cookie 的資料庫），最後一個放掉時等它寫完，下一個打開同一個資料夾的 context 不會碰到鎖。載入在看 cache 之前等 index 讀完（`wait_for_load`，照 cookie 的 jar）；`get` 變成 async（磁碟的在 store 的 thread 上讀）；`Recorder` 在磁碟上時邊收邊交給 store，太大或沒收完時當場放棄（不等到下次啟動）；`304` 只換掉 head（store 加了 `UpdateHead`）；清空等 store 刪完才回答；store 清掉重來時 index 跟著清空、算成清空過一次。`NetworkContextParams` 加 `http_cache_directory` 和 `http_cache_max_size`（Chromium 的名稱）：沒給大小時是 320 MiB（Chromium 讀不到剩下的空間時，Windows 以外的）；目前只有測試給資料夾，browser 在 2d 給。
-
-**新的測試**：`net` 的 `http_cache::disk` 7 個、`http_cache::tests` 6 個、`sql_store` 1 個（換掉 head），`tests/it/http_cache.rs` 5 個；寫的過程中把淘汰的測試的數字算錯了一次（第一次淘汰之後已經低於 90%，測不到「淘汰到 90%」），改了大小。cache 的整合測試連跑 5 次都通過；`cargo test -p net`（276 個）通過，`cargo check --workspace --all-targets` 沒有錯誤和警告。
-
-**mutation test**（`mutants-2b.toml`，29 個）：29 個都抓到。第一次跑時 4 個沒抓到，都補了測試：`304` 讓 entry 變大時的淘汰、讀到時更新 index 的最後用的時間、把它寫回資料庫、中途斷掉時當場刪掉寫了的列（下次啟動也會刪，所以要在重新打開之前看資料庫）。寫 mutation 之前拿掉了 `Recorder` 的 `done` 旗標（多放棄一次沒有差別，會是等價的 mutation），改成看還有沒有 response。2a 的兩條 mutation 的程式搬到 `vary_column`，`from` 跟著改。store 清掉重來時 `HttpCache` 清空 index 的那一段測不到（和 store 用到一半出錯的同一個原因），加進了 `docs/test-gaps.md` 的那一條。
-
-### 2c（2026-11-24，macOS 26.6.2、Apple M4、debug build，`ad0f6a6` 之上）
-
-**對照的原始碼**：Chromium `main` 的 `net/disk_cache/cache_util.cc` 的 `PreferredCacheSize`、`PreferredCacheSizeInternal`、`PreferredCacheSizeForPath`（由 agent 讀 Gitiles，`details.md` 的「磁碟的大小上限」）。表裡的每一個數字照程式手算核對過。
-
-**做法**：`ipc::platform::available_disk_space`：macOS 和 Linux 是 `rustix` 的 `statvfs` 的 `f_bavail` 乘 `f_frsize`（沒有自己的 `unsafe`），Windows 是 `GetDiskFreeSpaceExW`（一處 `unsafe`，論證寫進 `crates/ipc/soundness.md` 的表；路徑裡有 0 時不呼叫）。`net` 的 `http_cache::disk::preferred_size` 照 Chromium 的算法（`kDefaultCacheSize` 80 MiB，Windows 以外放大成 400%、不超過剩下的五分之一，最多預設的 4 倍），`preferred_size_for` 先建好資料夾再問剩下的空間（Chromium 在 backend 初始化時算）；`NetworkContextParams` 的 `http_cache_max_size` 是 0 時用它，取代 2b 暫時固定的 320 MiB。
-
-**Windows**：`platform/windows/disk.rs` 在 macOS 上沒有編（沒有 Windows 的 target）；push `0113`（`69179e0`）之後，使用者在自己的 Windows 機器上跑了 `cargo test -p ipc --test it disk_space`，通過（2026-11-24）。
-
-**新的測試**：`ipc` 的 `tests/it/disk_space.rs` 2 個（和 `df -kP` 比、不在的路徑），`net` 的 `http_cache::disk` 3 個（兩種平台的表、資料夾）。寫 2c 時 clippy 抓到 2a 的一個測試用了會默默繞回的 `fetch_add`，改成 `Mutex` 裡 `saturating_add` 的計數。`cargo test -p ipc -p net -p sql`、`clippy -p net -p ipc -p sql`、`sanity.py` 的 `deps`、`unsafe`、`tests`、`numerics`、`boundary`、`spans`、`docs` 通過。
-
-**mutation test**（`mutants-2c.toml`，14 個）：13 個抓到。沒抓到的「把 superuser 保留的空間也算進去」（`f_bfree` 代替 `f_bavail`）在 macOS 上是等價的：APFS 沒有保留的空間，兩個數一樣（實測：差 0）；Linux 的 ext4 預設保留 5%，同一個測試在那裡抓得到。記進了 `docs/test-gaps.md` 的「等價、不用處理的 mutation」。寫 mutation 時發現「Windows 以外放大成 400%」那個常數沒有被守著（資料夾的測試兩邊都用它），改成在測試裡照平台寫出 400 和 100。
-
-### 2d（2026-11-24，macOS 26.6.2、Apple M4、debug build，`69179e0` 之上）
-
-**對照的原始碼**：Chromium `main` 的 `chrome/common/chrome_paths_mac.mm`、`chrome_paths_linux.cc`、`chrome_paths_win.cc` 的 `GetUserCacheDirectory`，`base/base_paths_mac.mm`、`base_paths_posix.cc` 的 `DIR_CACHE`（macOS 的 `NSCachesDirectory`；Linux 的 `$XDG_CACHE_HOME`，沒有時 `~/.cache`），`base/nix/xdg_util.cc`，`chrome/common/chrome_constants.h` 的 `kCacheDirname`（`Cache`）（由 agent 讀 Gitiles）。和它不同的：XDG 的變數是相對路徑時不算（machopo 的 `user_data_dir_on` 照 XDG 的規範這樣做，Chromium 照用）；Chrome 的 cache 資料夾底下的 `Cache_Data` 從哪裡來沒有找到，machopo 只有 `Cache`，裡面是 `Cache` 資料庫。
-
-**做法**：`browser` 的 `user_cache_dir_on`（照 `user_data_dir_on` 的寫法，平台和環境由呼叫的人給）和 `Profile::cache_dir`；profile 要在使用者資料夾的「底下」才換位置（使用者資料夾本身照 Chromium 的 `AppendRelativePath` 不算）。`StoragePartition` 給 network context `http_cache_directory`：profile 的 cache 資料夾的 `Cache`。人用的視窗的預設 profile 的 cache 因此在 `~/Library/Caches/machopo/Cache`（macOS）；自動化和測試的 profile 在記憶體裡，照舊。
-
-**新的測試**：`browser` 的 `profile::a_profiles_cache_is_where_the_platform_keeps_caches`、`cookies::a_profiles_http_cache_outlasts_its_storage`（用 `loaders.rs` 的 1x1 PNG，改成 `pub(crate)`）。
-
-**mutation test**（`mutants-2d.toml`，9 個）：9 個都抓到。`Profile::cache_dir` 用的平台（`Platform::current()`）沒有做 mutation：測試的 profile 不在真的使用者資料夾底下，換成哪個平台結果都是 profile 自己的資料夾，要測得用使用者真的資料夾；它只是把 `user_cache_dir_on` 接上目前的平台，靠審查。
-
-### 2e 和第 2 階段做完時（2026-11-24，macOS 26.6.2、Apple M4、debug build，`4caaa89` 之上）
-
-**重新啟動之後照樣用**：`net` 的 `a_cache_on_disk_answers_after_a_restart`、`a_304_updates_the_entry_on_disk` 等（2b），`browser` 的 `a_profiles_http_cache_outlasts_its_storage`（2d，經過 profile、`StoragePartition`、分頁的導覽和圖片）。情境沒有加：情境的頁面是 `file:` 的，不經過 HTTP cache，視窗看得到的只有重新整理的快捷鍵（1f 已經加進 `navigation.txt`）。
-
-**文件**：`machopo --help` 的 `--user-data-dir` 寫出 HTTP cache 在哪裡（預設的 profile 的照平台算出來，macOS 是 `~/Library/Caches/machopo/Cache`）；`docs/limitations.md`、`docs/architecture.md`（thread 和 `browser` 的那一列）、`crates/ipc/` 的 README 和 soundness、`crates/sql/README.md`、`crates/shell/README.md` 在各段裡改過了。
-
-**第 2 階段做完時的檢查**：`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace` 都通過（`bindings` 的 `gc_platform` 印出的兩個 panic 是測試刻意做的）；`sanity.py` 的 `deps`、`unsafe`、`tests`、`numerics`、`boundary`、`spans`、`docs` 通過。Windows 上只跑過 `ipc` 的 `disk_space`（2c）；`browser` 在 Windows 上 cache 的資料夾是 profile 自己的，沒有在 Windows 上跑過。
-
+- 有了 cache，整頁從 110.7 秒變成 33.9 秒，分數從 27.5 變成 38.2：和 `details.md` 裡本機版的 38.5（整頁 23.5 秒）一樣。沒有 cache 的數字和 `details.md` 第一次量的（`main` 的 `4b78749`、接電源：28.0、115.3 秒）差不多。
+- 計分的區間從 9.0 秒回到 6.5 秒（本機版 6.4 秒）：`details.md` 的「計分的區間也變慢」說的，每次載入在網路上閒置之後 CPU 變慢，在 suite 從 cache 來之後就沒有了。
+- 第一次跑時，載入 suite 的頁面還有 17.8 秒：第一個 iteration 每個檔案都要下載（Chrome 也一樣，它是 10.6 秒）；重新啟動、從磁碟的 cache 拿時是 9.1 秒，和本機版（8.9 秒）一樣。剩下的是 machopo 自己載入、解析和編譯 suite 的頁面的時間：沒有 V8 的 code cache，每個 iteration 都重新編譯（「之後的可能」）。
+- 記憶體和磁碟的 cache 差不到 3%。
+- 第一次跑沒有 cache 的那組時，browserbench.org 對一個 suite 的檔案（`react-stockcharts` 的一個 chunk）回了 `503`，頁面停在那裡，等了 900 秒沒有跑完；重跑一次就沒有碰到。Chrome 那組第一次是量測的腳本的錯（沒等分頁出現就 attach），修了之後重跑。

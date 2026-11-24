@@ -23,10 +23,12 @@
 //! each hop of a load sends and keeps cookies through the context's jar,
 //! whose persistent cookies are in the profile's `Cookies` database.
 //! [`http_cache`] (`//net/http`'s `HttpCache`) sits between each hop and
-//! the transport, in memory.
+//! the transport: in memory, or, for a profile in a folder, in a SQLite
+//! database in its cache folder.
 //!
-//! [`NetworkContextParams`] has the profile's folder and, for web tests, host mapping rules and extra trusted roots, so
-//! WPT's domains reach the local wptserve over HTTPS.
+//! [`NetworkContextParams`] has the profile's folder and its HTTP cache's,
+//! and, for web tests, host mapping rules and extra trusted roots, so WPT's
+//! domains reach the local wptserve over HTTPS.
 //!
 //! [`load`]: NetworkContext::load
 //! [`fetch`]: NetworkContext::fetch

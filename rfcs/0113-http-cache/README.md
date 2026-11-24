@@ -1,13 +1,13 @@
 # RFC 0113：HTTP cache
 
 - 開始日期：2026-11-24
-- 狀態：🚧 已排程：2026-11-24
+- 狀態：✅ 已完成：2026-11-24
 - 細節：`details.md`
 - 進度：`progress.md`
 
 ## 摘要
 
-machopo 沒有 HTTP cache：每次載入都重新向伺服器要。這份在 `net` 裡、HTTP 的請求送出去之前加一層 cache（Chromium 的 `HttpCache`）：照 RFC 9111 決定存不存、能不能直接用、要不要先問伺服器（條件請求和 `304`），key 照 Chromium 用最上層的網站和 frame 的網站分區（已決定），`fetch()` 的 `Request.cache`、重新整理和 DevTools 的「停用 cache」照 Chromium 的 load flag 走。先做記憶體裡的 cache，再做 profile 資料夾裡的。第 1 階段的選擇都確認了（「已決定的事項」）；磁碟的格式和上限在第 2 階段開始前決定（「待決定」）。
+machopo 本來沒有 HTTP cache：每次載入都重新向伺服器要。這份在 `net` 裡、HTTP 的請求送出去之前加了一層 cache（Chromium 的 `HttpCache`）：照 Chromium 的 RFC 9111 的規則決定存不存、能不能直接用、要不要先問伺服器（條件請求和 `304`），key 照 Chromium 用最上層的網站和 frame 的網站分區，`fetch()` 的 `Request.cache`、重新整理、上一頁、強制重新整理和 DevTools 的「停用 cache」照 Chromium 的 load flag 走。記憶體裡的 profile 用記憶體的 backend；資料夾裡的 profile 用平台的 cache 資料夾裡的一個 SQLite 資料庫（照 Chromium 實驗中的 SQL backend），大小照 Chromium 依磁碟剩下的空間算。網路版的 Speedometer 從 110.7 秒（分數 27.5）變成 33.9 秒（38.2），和本機版一樣（`progress.md`）。
 
 ## 動機
 
@@ -20,7 +20,7 @@ machopo 沒有 HTTP cache：每次載入都重新向伺服器要。這份在 `ne
 
 ### 開始時的狀況
 
-2026-11-24 讀程式得到的（`main` 的 `0a459d17`；逐項的位置在 `details.md` 的「machopo 現在的載入」）：
+2026-11-24 讀程式得到的（`main` 的 `0a459d17`；逐項的位置在 `details.md` 的「開始前 machopo 的載入」）：
 
 - **網路**：`net` 的 `url_loader::load` 每一跳先加上 cookie、CORS 的 `Origin`，再呼叫 `http::HttpTransport::send`（reqwest）拿 `RawResponse`，之後才是 CORS 的檢查、redirect、`Content-Encoding` 的解碼和 MIME 的 sniff。中間沒有任何 cache；`net` 的 crate 文件寫著「No HTTP cache」。
 - **請求的來歷**：`ResourceRequest::trusted`（`TrustedParams`）有 `site_for_cookies` 和 `top_frame_site`，沒有 frame 自己的網站（Chromium 的 `IsolationInfo` 的 `frame_origin`）。
@@ -34,8 +34,8 @@ machopo 沒有 HTTP cache：每次載入都重新向伺服器要。這份在 `ne
 1. 照 RFC 9111 的私有 cache：存得了的回應存起來；新鮮的直接用；不新鮮的帶 `If-None-Match`、`If-Modified-Since` 問伺服器，`304` 時用存的 body、更新 header；`Vary`、`no-store`、`no-cache`、`must-revalidate`、heuristic freshness。
 2. key 照 Chromium 分區：同一個網址在不同的最上層網站底下是不同的 entry，第三方不能用 cache 探測使用者去過哪裡。
 3. `fetch()` 的 `Request.cache` 的六種模式、重新整理（照 Chromium：只驗證主要的資源）、DevTools 的停用和清除 cache 都照 Chromium。
-4. 磁碟上的 cache 在 profile 的資料夾裡，有大小上限，壞掉的檔案不讓瀏覽器壞掉。
-5. WPT 的 `fetch/http-cache/` 和 `fetch/api/request/` 的 `request-cache-*` 大部分通過；網路版的 Speedometer 第二個 iteration 起不再向伺服器要 suite 的檔案。
+4. 磁碟上的 cache 照 Chrome 在平台的 cache 資料夾裡（原本寫 profile 的資料夾，第 15 條改了），有大小上限，壞掉的檔案不讓瀏覽器壞掉。
+5. WPT 的 `fetch/http-cache/` 和 `fetch/api/request/` 的 `request-cache-*` 大部分通過；網路版的 Speedometer 第二個 iteration 起不再向伺服器要 suite 的檔案。結果：`request-cache-*` 的 cache 的部分全部通過，`fetch/http-cache/` 失敗的和 Chrome 的一樣，除了第 3 個「不照做」的那幾項；Speedometer 的數字在 `progress.md`。
 
 ### 不在範圍內
 
@@ -52,19 +52,19 @@ machopo 沒有 HTTP cache：每次載入都重新向伺服器要。這份在 `ne
 
 對網頁的作者：回應照 `Cache-Control`、`Expires`、`ETag`、`Last-Modified` 被 cache，和 Chrome 一樣；`fetch(url, {cache: "no-store"})` 這類模式照規範。嵌在別的網站裡的 iframe 有自己的一份 cache。Resource Timing 和 Navigation Timing 的 `transferSize` 在從 cache 拿時是 0（之後 machopo 有 Resource Timing 時）。
 
-對 machopo 的使用者：同一個網站的第二頁、上一頁和重新整理不再重新下載全部；磁碟上的 cache 在 profile 資料夾的 `Cache` 底下，自動化和測試的 profile 只有記憶體裡的一份，每次從空的開始。DevTools 的 Network 面板勾「Disable cache」就不用 cache。
+對 machopo 的使用者：同一個網站的第二頁、上一頁和重新整理不再重新下載全部，重新啟動之後也一樣；磁碟上的 cache 在平台的 cache 資料夾裡（macOS 的 `~/Library/Caches/machopo/Cache`，`--user-data-dir` 給的資料夾是它自己的 `Cache`），自動化和測試的 profile 只有記憶體裡的一份，每次從空的開始。Shift+Cmd+R（Shift+F5、Ctrl+F5、Ctrl+Shift+R）強制重新整理；DevTools 的 Network 面板勾「Disable cache」就不用 cache。
 
 對之後改這部分程式的人：cache 在 `net` 的 HTTP 那一層，`url_loader` 看到的仍然是 `RawResponse`；cookie、CORS、redirect 和解碼的程式不變。要 cache 的請求不用做任何事；不要 cache 的照 load flag 說。
 
 ## 詳細設計
 
-Chromium 怎麼做、每個選項的比較在 `details.md`。這裡寫打算怎麼接，選項還沒確認的地方標「待決定」。
+Chromium 怎麼做、每個選項的比較在 `details.md`。
 
 ### 位置
 
-新的模組 `net::http_cache`（Chromium 的 `net::HttpCache` 和它的 `Transaction`），夾在 `url_loader::load` 每一跳和 `HttpTransport::send` 之間：`url_loader` 呼叫 cache，cache 決定從 entry 回答、先送條件請求，或直接送出去。它回答的仍然是 `RawResponse`，所以之後的 cookie（cache 回答的回應不再設 cookie，存的 header 本來就拿掉了 `Set-Cookie`，Chromium 的 `PERSIST_SANS_COOKIES`）、CORS、redirect（`301` 和有新鮮度的 redirect 也存）、`Content-Encoding` 的解碼和 sniff 都照舊。存的是還沒解碼的 bytes，和 Chromium 一樣。
+模組 `net::http_cache`（Chromium 的 `net::HttpCache` 和它的 `Transaction`），夾在 `url_loader::load` 每一跳和 `HttpTransport::send` 之間：`url_loader` 呼叫 cache，cache 決定從 entry 回答、先送條件請求，或直接送出去。它回答的仍然是 `RawResponse`，所以之後的 cookie（cache 回答的回應不再設 cookie，存的 header 本來就拿掉了 `Set-Cookie`，Chromium 的 `PERSIST_SANS_COOKIES`）、CORS、redirect（`301` 和有新鮮度的 redirect 也存）、`Content-Encoding` 的解碼和 sniff 都照舊。存的是還沒解碼的 bytes，和 Chromium 一樣。
 
-只有 `http:`、`https:` 的 `GET` 經過 cache（Chromium 的 cache 也存 `POST` 給上一頁用，這份不做）；`POST`、`PUT`、`DELETE` 成功時，把同一個 key 的 entry 作廢（RFC 9111 的 4.4，WPT 的 `invalidate.any.js`）。
+只有 `http:`、`https:` 的 `GET` 經過 cache（Chromium 的 cache 也存 `POST` 給上一頁用，這份不做）；`HEAD` 用 `GET` 的 entry、不建新的（已決定的第 10 條）；`POST`、`PUT`、`DELETE`、`PATCH` 成功時，把同一個 key 的 entry 作廢（照 Chromium：不看 `Location`、`Content-Location`，不認得的 method 不作廢）。cache 不存資源的一部分：帶 `Range` 的請求不經過 cache，`206` 不存（Chromium 存，也從完整的 entry 給較小的範圍；WPT 的 `partial.any.js` 抓到原本存下的 `206` 被拿去回答別的範圍）。
 
 ### key
 
@@ -78,11 +78,21 @@ machopo 自己寫（已決定的第 4 條），照 RFC 9111 和 Chromium 的 `Ht
 
 ### load flag
 
-`ResourceRequest` 加一個 cache 的模式（Chromium 的 `LOAD_VALIDATE_CACHE`、`LOAD_BYPASS_CACHE`、`LOAD_SKIP_CACHE_VALIDATION`、`LOAD_ONLY_FROM_CACHE`、`LOAD_DISABLE_CACHE`）：`fetch()` 的 `Request.cache` 照 Blink 對到它們；重新整理時主要的資源 `LOAD_VALIDATE_CACHE`、子資源照常（Chromium 2016 年之後的做法）；強制重新整理全部 `LOAD_BYPASS_CACHE`；上一頁、下一頁 `LOAD_SKIP_CACHE_VALIDATION`；DevTools 的 `Network.setCacheDisabled` 讓那個分頁的請求都 `LOAD_BYPASS_CACHE`（Blink 的 `InspectorNetworkAgent` 給子資源 `kBypassCache`、只能用 cache 的變成找不到；browser 的 `ApplyNetworkRequestOverrides` 給導覽 `LOAD_BYPASS_CACHE`：回應照樣存進 cache。原本寫的 `LOAD_DISABLE_CACHE` 是記錯的，2026-11-24 讀原始碼更正），`Network.clearBrowserCache` 清掉整個 cache。DevTools 的回應帶 `fromDiskCache`。
+`ResourceRequest` 帶 `LoadFlags`（Chromium 的 `LOAD_VALIDATE_CACHE`、`LOAD_BYPASS_CACHE`、`LOAD_SKIP_CACHE_VALIDATION`、`LOAD_ONLY_FROM_CACHE`、`LOAD_DISABLE_CACHE`），`net` 的交易把它和 request header 對到的 flag（`If-Match` 這類和 `Range` 是 `DISABLE_CACHE`，`no-cache` 是繞過，`max-age=0` 是驗證；Chromium 的 `GetLoadFlagsForExtraHeaders`）合起來：
+
+- renderer 給子資源的：`fetch()` 的 `Request.cache` 照 Blink 的 `GetLoadFlagsForWebURLRequest`；其他的照文件怎麼載入的（Blink 的 `DetermineFrameCacheMode`）：強制重新整理載入的文件在它的 `load` 之前繞過、上一頁載入的不驗證，子 frame 跟著 parent；自己帶條件 header 的請求驗證。子 frame 的導覽在 `BeginNavigation` 帶它的 flag（Chromium 的 `kAllowedBeginParamsLoadFlags`）。
+- Browser 照導覽的種類給：重新整理 `LOAD_VALIDATE_CACHE`（子資源照常，Chromium 2016 年之後的做法），強制重新整理（CDP 的 `Page.reload` 的 `ignoreCache`、視窗的快捷鍵，已決定的第 11 條）`LOAD_BYPASS_CACHE`，上一頁、下一頁 `LOAD_SKIP_CACHE_VALIDATION`。
+- 送出去時，繞過的請求加 `Pragma: no-cache` 和 `Cache-Control: no-cache`、驗證的加 `Cache-Control: max-age=0`（Chromium 的 `HttpNetworkTransaction`），請求自己有那個 header 時不加（Fetch 的 HTTP-network-or-cache fetch）。
+- DevTools：`Network.setCacheDisabled` 讓那個分頁的導覽和子資源都繞過 cache，回應照樣存（browser 的 `ApplyNetworkRequestOverrides`、Blink 的 `InspectorNetworkAgent` 的 `kBypassCache`，只能用 cache 的變成找不到）：browser 照每個打開 `Network` 的 session 記著，也轉給 renderer。`Network.clearBrowserCache` 清掉 profile 的 cache，清完才回答；從 cache 來的回應帶 `fromDiskCache`。
 
 ### 儲存
 
-兩種 backend 同一個介面（Chromium 的 `disk_cache::Backend`）：記憶體的（記憶體裡的 profile，Chromium 無痕模式的 `MemBackendImpl`）和磁碟的（profile 資料夾的 `Cache`）。磁碟的格式和上限待決定（第 1、2 條）。記憶體的照 Chromium 的 `MemBackendImpl`（已決定的第 5 條）：上限固定 50 MiB（Chromium 在 2.5 GiB 以上的機器的值，已決定的第 7 條；Chromium 照實體記憶體算：2.5 GiB 以下是它的 2%，讀不到時 10 MiB）；單一個 entry 最多是上限的 1/8，超過的不存；超過上限時照最近用過的順序淘汰到上限的 90%，正在用的 entry 跳過。entry 在 body 整份收完、寫完才算數；載入取消、出錯的不留。
+`HttpCache` 的 backend 是兩種之一（Chromium 的 `disk_cache::Backend`）：
+
+- **記憶體的**（記憶體裡的 profile：自動化和測試的，Chromium 無痕模式的 `MemBackendImpl`，已決定的第 5、7 條）：上限固定 50 MiB（Chromium 在 2.5 GiB 以上的機器的值；Chromium 照實體記憶體算：2.5 GiB 以下是它的 2%，讀不到時 10 MiB）；一個 entry 最多是上限的 1/8，超過的不存；超過上限時照最近用過的順序淘汰到 90%。body 整份收完才存；載入取消、出錯的不留。
+- **磁碟的**（資料夾裡的 profile，已決定的第 13 到 20 條）：一個 SQLite 資料庫（`sql`，`synchronous=OFF`），照 Chromium 實驗中的 SQL backend：`resources` 表是每個 entry 的 head（key、header、時間、`Vary` 的值的 SHA-256、大小、最後用的時間、收完了沒有），`blobs` 表是 body 一段一段的，每個 entry 收到 512 KiB 寫一列。開始收時先建列、標成還沒收完，收完時在一個交易裡取代 key 上一個完成的 entry；放棄的刪掉，下次啟動時刪掉沒收完的（上次當掉留下的）。資料庫在 store 自己的 thread 上（和 cookie 的一樣），`HttpCache` 的鎖後面是它的 index：每個完成的 entry 的大小和最後用的時間，啟動時讀進來，讀完之前的載入等著；index 沒有的 key 當場是 miss，有的才去 thread 讀。`304` 只換掉 head。資料庫用到一半壞掉時清掉重來（`Database::raze`），index 跟著清空。
+  - 大小照 Chromium 的 `PreferredCacheSize` 依磁碟剩下的空間算（`ipc` 的平台層讀，打開時一次）：macOS、Linux 上剩 20 GB 以上時是 4%、最多 1280 MiB，Windows 1%、最多 320 MiB；一個 entry 最多是上限的 1/8 或 5 MiB。超過上限的 95% 時照「多久沒用 ×（大小 + 300 bytes）」淘汰到 90%（舊且大的先走）。
+  - 資料夾照 Chrome 的 `GetUserCacheDirectory`：macOS 是 `~/Library/Caches`、其他 Unix 是 `$XDG_CACHE_HOME`（`~/.cache`）底下、profile 在使用者資料夾底下的同一個位置；Windows 和不在那底下的 profile 是 profile 自己的資料夾；其下的 `Cache`。store 的 thread 由 network context 的 handle 們拿著，最後一個放掉時等它寫完。
 
 ### 同時的請求
 
@@ -90,22 +100,24 @@ machopo 自己寫（已決定的第 4 條），照 RFC 9111 和 Chromium 的 `Ht
 
 ### 測試
 
-- `net` 的整合測試（`crates/net/tests/it/` 的新模組），用 `test_server` 控制回應的 header 和次數：新鮮的不送請求、不新鮮的送條件請求、`304` 合併、`Vary`、`no-store`、分區、load flag、`POST` 作廢、取消的載入不留 entry、大小上限的淘汰、磁碟上壞掉的 entry。
-- WPT：`fetch/http-cache/` 加進 `tests/wpt/include.txt`（`freshness`、`heuristic`、`304-update`、`vary`、`invalidate`、`cc-request`、`cache-mode`、`status`、`split-cache` 等），`fetch/api/request/` 的 `request-cache-*` 已經在清單上，更新預期結果。
-- 情境：重新整理和上一頁時不再向 server 要子資源（server 數請求的次數）。
-- mutation test 照 `CLAUDE.md`。
+- `net` 的單元測試（`http_cache` 的每個模組：規則、key、兩種 backend、store、index 和淘汰、大小）和整合測試（`crates/net/tests/it/http_cache.rs`，`test_server` 控制回應的 header、`304` 和次數；磁碟上的重新啟動、清空、上限、中途斷掉）。
+- 整條路：`shell` 的 `fetch`、`automation_pipe`（重新整理、強制重新整理、上一頁）、`browser_view`（快捷鍵）、`devtools_network`；`browser` 的 profile 的 cache 資料夾和重新打開之後照樣用。
+- WPT：`fetch/http-cache/` 加進清單，失敗的子測試和 Chrome 158 對照過（`.ini` 寫著原因）；它的框架用 `btoa`，所以加了 `btoa`、`atob`（已決定的第 12 條）和 `html/webappapis/atob/`；`fetch/api/request/` 的 `request-cache-*` 的 cache 的部分全部通過。
+- 情境：cache 本身在情境裡看不到（情境的頁面是 `file:` 的），`navigation.txt` 只加了強制重新整理的快捷鍵。
+- mutation test 照 `CLAUDE.md`（`mutants-*.toml`，`progress.md`）。
 
 ### 分階段
 
-1. **記憶體的 cache 和規則**：`http_cache` 模組、key 和 `TrustedParams` 的 frame 網站、新鮮度和驗證、`Vary`、作廢、load flag（`fetch()`、重新整理、上一頁、DevTools）。這時磁碟上的 profile 也先用記憶體的 backend。WPT 的 `fetch/http-cache/` 在這一階段加進清單。
-2. **磁碟的 backend**：profile 的 `Cache`、格式、大小上限和淘汰、壞掉的檔案、啟動時的 index。
-3. 重量網路版的 Speedometer（量法照 `details.md`），結果寫進 `progress.md`。
+1. **記憶體的 cache 和規則**（1a 到 1f）：新鮮度和驗證的規則、記憶體的 backend、key 和 `TrustedParams` 的 `frame_site`、接進 `url_loader`（條件請求、`304`、作廢、同時的請求）、load flag（`fetch()`、重新整理、上一頁、DevTools、快捷鍵）、WPT 的 `fetch/http-cache/` 和 `btoa`、`atob`。
+2. **磁碟的 backend**（2a 到 2e）：SQLite 的 store、`HttpCache` 的兩種 backend 和磁碟的 index、照磁碟剩下的空間算大小、平台的 cache 資料夾。
+3. 重量網路版的 Speedometer（量法照 `details.md`），結果在 `progress.md`。
 
 ## 缺點
 
 - 多一層狀態：cache 的 bug 讓頁面拿到舊的或別人的內容，比沒有 cache 難查；所以分區和 `Vary` 一開始就照 Chromium 做。
 - 磁碟的 backend 要維護 schema 和並行（格式和損毀交給 `sql` 的 SQLite，已決定的第 13 條）。
-- 測試多了「上一次載入留下了什麼」：記憶體裡的 profile 每次從空的開始，測試之間不互相影響，但同一個測試裡的載入會。
+- 測試多了「上一次載入留下了什麼」：記憶體裡的 profile 每次從空的開始，測試之間不互相影響，但同一個測試裡的載入會。數 server 收到幾次的舊測試在上一頁從 cache 拿之後要改預期。
+- 磁碟的資料庫 commit 不等磁碟：作業系統當掉或斷電時可能整個壞掉、清掉重來（Simple Cache 只丟壞掉的那一個 entry）；cache 的資料夾在 profile 的資料夾外面時，刪掉 profile 要另外刪它（和 Chrome 一樣）。
 
 ## 理由和其他做法
 
@@ -115,7 +127,7 @@ machopo 自己寫（已決定的第 4 條），照 RFC 9111 和 Chromium 的 `Ht
 
 ## 先例
 
-- **Chromium**：`net::HttpCache`、`HttpCache::Transaction` 的狀態機，`disk_cache` 的 backend（blockfile、Simple Cache、記憶體的），2020 年起照 Network Isolation Key 分區；`HttpResponseHeaders` 的新鮮度和 heuristic；存 header 時拿掉 `Set-Cookie`；load flag。照做：位置、分區、新鮮度、load flag、記憶體的 backend 給不存檔的 profile。不照做（這份）：`POST` 的 entry、sparse entry、`stale-while-revalidate` 的背景驗證、shared writers（已決定的第 3 條）。
+- **Chromium**：`net::HttpCache`、`HttpCache::Transaction` 的狀態機，`disk_cache` 的 backend（Windows 的 blockfile、其他平台的 Simple Cache、記憶體的，實驗中的 SQL backend），2020 年起照 Network Isolation Key 分區；`HttpResponseHeaders` 的新鮮度和 heuristic；存 header 時拿掉 `Set-Cookie`；load flag。照做：位置、分區、新鮮度、load flag、記憶體的 backend 給不存檔的 profile、SQL backend 的 schema 和寫入的 buffer、`PreferredCacheSize`、淘汰的分數、cache 的資料夾。不照做（這份）：`POST` 的 entry、sparse entry 和 `Range`、`stale-while-revalidate` 的背景驗證、shared writers（已決定的第 3 條）、SQL backend 的 shard（第 19 條）、`No-Vary-Search`。
 - **Firefox**：`cache2`，每個 entry 一個檔案加一個 index；照最上層的網站分區（`partitionKey`）。
 - **Ladybird**：RequestServer 有 HTTP 的磁碟 cache 的選項，WebContent 有 HTTP 的 memory cache（2026-11-24 從 2026.47.7 啟動 helper process 的參數看到的：RequestServer 的 `--http-disk-cache-mode disabled`、WebContent 的 `--enable-http-memory-cache`；它的程式沒有讀過）。
 
@@ -239,7 +251,7 @@ machopo 自己寫（已決定的第 4 條），照 RFC 9111 和 Chromium 的 `Ht
 
 ## 待決定
 
-第 2 階段開始前的都決定了（已決定的第 13 到 15 條）；實作時要決定的寫在各段開始前。
+（無）
 
 ## 之後的可能
 
@@ -248,3 +260,6 @@ machopo 自己寫（已決定的第 4 條），照 RFC 9111 和 Chromium 的 `Ht
 - V8 的 code cache（Chromium 存在另一個 `GeneratedCodeCache`，key 也照網站分）：Speedometer 每次載入都重新編譯 suite 的 script。
 - renderer 的 memory cache、back-forward cache。
 - `bench.py` 加一種量法：server 回可以 cache 的 header，量有 cache 時的整體時間（現在的 `no-store` 只量沒有 cache 的）。
+- `No-Vary-Search`（Chrome 有，WPT 的 `no-vary-search.tentative.any.js`）。
+- 磁碟的 cache 閒下來時的淘汰（Chromium 的 92.5%）、磁碟變滿時重算大小。
+- Windows 上的 profile 的 cache（profile 自己的資料夾）還沒在 Windows 上跑過整套的測試。

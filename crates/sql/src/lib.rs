@@ -1,6 +1,7 @@
 //! The profile's databases (Chromium's `//sql`): each kind of data a
-//! database of its own, in a file of the profile's folder (or in memory,
-//! for a profile there), used on its own thread through its own
+//! database of its own, in a file of the profile's folder (the HTTP
+//! cache's, of its cache folder; or in memory, for a profile there), used
+//! on its own thread through its own
 //! connection, as Chromium isolates each feature's database and page
 //! cache. SQLite, built in (`rusqlite`, which this crate re-exports: what
 //! uses a database depends on this crate alone).
@@ -82,9 +83,10 @@ impl From<rusqlite::Error> for Error {
 }
 
 impl Database {
-    /// The database `name` in the profile's folder `dir` (a file of that
-    /// name, made if it isn't there), or in memory if `dir` is none, set up
-    /// as Chromium's `sql::Database` is by default: exclusive locking (no
+    /// The database `name` in the folder `dir`, the profile's or its cache
+    /// folder (a file of that name, made if it isn't there), or in memory
+    /// if `dir` is none, set up as Chromium's `sql::Database` is by
+    /// default: exclusive locking (no
     /// other connection opens it while this one has it), a rollback
     /// journal truncated at each commit, every commit synced. A file that
     /// isn't a database (or is one damaged past reading its schema) is put

@@ -1,6 +1,6 @@
 # sql
 
-對應 Chromium 的 `//sql`：profile 的資料庫。每種資料一個資料庫，是 profile 的資料夾裡的一個檔案（只在記憶體的 profile 開在記憶體裡，走同一套程式），用的一方在自己的 thread 上拿著自己的連線：Chromium 的每個功能各自的資料庫和 page cache。SQLite 連同原始碼一起編（`rusqlite` 的 `bundled`）；這個 crate re-export `rusqlite`，用資料庫的 crate 只依賴 `sql`。
+對應 Chromium 的 `//sql`：profile 的資料庫。每種資料一個資料庫，是 profile 的資料夾（HTTP cache 的是 profile 的 cache 資料夾）裡的一個檔案（只在記憶體的 profile 開在記憶體裡，走同一套程式），用的一方在自己的 thread 上拿著自己的連線：Chromium 的每個功能各自的資料庫和 page cache。SQLite 連同原始碼一起編（`rusqlite` 的 `bundled`）；這個 crate re-export `rusqlite`，用資料庫的 crate 只依賴 `sql`。
 
 ```rust
 let mut db = sql::Database::open(profile.dir(), "Cookies")?; // dir 是 None：在記憶體裡

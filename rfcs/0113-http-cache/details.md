@@ -43,7 +43,7 @@ Chrome 每個 suite 兩邊差不到 5%。`MACHOPO_TRACE` 錄 TodoMVC-JavaScript-
 
 兩個瀏覽器都慢一倍：每次載入閒置一段時間之後，計分的那幾十 ms 跑得慢（Apple Silicon 降頻或把 thread 排到 E-core；machopo 沒有設 thread 的 QoS，但 Chrome 也一樣，所以不是 QoS）。Chrome 在網路版上不受影響，是因為它從 cache 拿、不閒置。
 
-## machopo 現在的載入
+## 開始前 machopo 的載入
 
 `main` 的 `0a459d17`：
 
@@ -116,7 +116,7 @@ Chrome 2020 年的說明（`https://developer.chrome.com/blog/http-cache-partiti
 | 損毀 | 單一 entry 壞掉只丟它 | 表和檔案要對得上 | SQLite 自己處理 |
 | 先例 | Chromium 的 Simple Cache（Windows 以外的預設）、Firefox 的 `cache2` | 無 | Chromium 實驗中的 SQL backend（預設關） |
 
-body 是串流的大塊資料（`ipc::data_pipe` 一段一段給），整份放 SQLite 不划算；index 和淘汰的順序放 SQLite 可以省下自己的格式和損毀的處理。2026-11-24 的看法：body 放檔案，header 和 index 在第一欄和第二欄之間，第 2 階段開始前決定。
+body 是串流的大塊資料（`ipc::data_pipe` 一段一段給），整份放成一個 blob 不划算；index 和淘汰的順序放 SQLite 可以省下自己的格式和損毀的處理。原本的看法是 body 放檔案，讀了 Chromium 的 SQL backend（下面，body 拆成每段最多 512 KiB 的列）之後改成全放 SQLite（已決定的第 13 條）。
 
 **Chromium 的 backend**（2026-11-24 讀 `main` 的 `net/disk_cache/`）：
 - 預設：`net/disk_cache/sql/README.md` 和 `backend_experiment.h` 的 `IsSimpleBackendEnabledByDefaultPlatform` 是 Android、Linux、ChromeOS、macOS 用 Simple Cache，Windows 用 blockfile（`disk_cache.cc` 的 `CacheCreator::Run` 對 `CACHE_BACKEND_DEFAULT` 只在 Android、Fuchsia 選 Simple，其他平台由呼叫的一方指定 Simple，呼叫的一方沒有讀到）。

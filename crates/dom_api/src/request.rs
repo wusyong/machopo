@@ -1,9 +1,9 @@
 //! Fetch's `Request` (https://fetch.spec.whatwg.org/#request-class, Blink's
 //! `core/fetch/request.cc`): its constructor, which
 //! `fetch()` runs too, and its members. machopo keeps `referrer`,
-//! `referrerPolicy`, `cache`, `integrity`, `keepalive` and `priority` as
-//! script gave them, checked, but acts on none of them: it sends no
-//! `Referer`, and has no HTTP cache or SRI.
+//! `referrerPolicy`, `integrity`, `keepalive` and `priority` as script gave
+//! them, checked, but acts on none of them: it sends no `Referer`, and has
+//! no SRI. `cache` goes with the request, as the HTTP cache's load flags.
 
 use dom::{
     DomString, EventTargetImpl, ExecutionContext, HeadersGuard, Referrer, Request, RequestCache,

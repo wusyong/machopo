@@ -789,9 +789,8 @@ url/urlsearchparams-sort.any.js
 url/urlsearchparams-stringifier.any.js
 
 # Fetch's `fetch()`, `Headers`, `Request`, `Response`, redirects, aborting and CORS:
-# the whole directories. The files that also use streams, `Blob`,
-# `FormData`, cookies, HTTP's cache or `XMLHttpRequest` fail those parts
-# until they exist.
+# the whole directories. The files that also use streams, `FormData` or
+# `XMLHttpRequest` fail those parts until they exist.
 fetch/api/headers/
 fetch/api/response/
 fetch/api/basic/
