@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use crossbeam_channel::unbounded;
-use net::test_server::{Route, TestServer, unused_port};
+use net::test_server::{Route, TestServer, refused_port};
 use net::{NetworkContext, NetworkContextParams};
 use protocol::network::{
     CredentialsMode, LoadResult, NetErrorCode, RedirectMode, RequestDestination, RequestMode,
@@ -221,9 +221,10 @@ fn redirect_limits() {
 #[test]
 fn connection_failures() {
     let network = NetworkContext::start(params()).unwrap();
+    let refused_port = refused_port();
     let refused = fetch(
         &network,
-        &format!("http://127.0.0.1:{}/", unused_port()),
+        &format!("http://127.0.0.1:{}/", refused_port.port()),
         RequestDestination::Document,
     )
     .unwrap_err();

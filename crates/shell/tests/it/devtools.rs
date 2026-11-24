@@ -8,7 +8,7 @@
 
 use std::time::{Duration, Instant};
 
-use net::test_server::{Route, unused_port};
+use net::test_server::{Route, refused_port};
 use serde_json::{Value, json};
 
 use crate::automation_pipe::server;
@@ -828,7 +828,8 @@ fn a_documents_markup_is_its_content() {
 /// since it was turned on, as text or base64.
 #[test]
 fn subresources_are_listed_with_their_content() {
-    let refused = format!("http://127.0.0.1:{}/gone.png", unused_port());
+    let refused_port = refused_port();
+    let refused = format!("http://127.0.0.1:{}/gone.png", refused_port.port());
     let html = format!(
         "<!DOCTYPE html><link rel=stylesheet href=/s.css><img src=/i.png>\
          <img src={refused:?}><script src=/a.js></script>"
@@ -1872,7 +1873,8 @@ fn a_failed_navigation_commits_its_error_page_once_its_task_is_over() {
     load(&mut page, &server.url("/"));
     page.call(None, "Page.enable", json!({}));
     page.take_events("");
-    let refused = format!("http://127.0.0.1:{}/", unused_port());
+    let refused_port = refused_port();
+    let refused = format!("http://127.0.0.1:{}/", refused_port.port());
     evaluate(
         &mut page,
         &format!(

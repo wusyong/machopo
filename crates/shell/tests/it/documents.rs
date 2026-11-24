@@ -2393,28 +2393,47 @@ onload = () => setTimeout(() => {
 /// The DOM's idle callbacks in the renderer's idle periods: one with
 /// time left before the next frame or a long period's 50 ms, those a
 /// callback requests in the next period; a timeout's while frames keep
-/// the loop from idling.
+/// the loop from idling; with nothing to draw, a long one of 50 ms at most.
+/// A callback may begin as its period's deadline has passed, the thread
+/// kept from it (`timeRemaining()` is 0 then, as HTML has it): those that
+/// look for time left ask again till one has it.
 #[test]
 fn idle_callbacks() {
     let page = r#"<!DOCTYPE html><script>
 const log = [];
-requestIdleCallback(d => {
+let tries = 0;
+let stop = false;
+requestIdleCallback(function first(d) {
   const left = d.timeRemaining();
+  if (left === 0 && !d.didTimeout && ++tries < 50) { requestIdleCallback(first); return; }
   log.push(`first ${d.didTimeout} ${left > 0 && left <= 50}`);
   requestIdleCallback(d => {
     log.push(`second ${d.didTimeout}`);
     // Frames each 16 ms, and a callback that keeps it busy: its timeout.
-    const frame = () => { const start = performance.now(); while (performance.now() - start < 20) {} requestAnimationFrame(frame); };
+    const frame = () => { if (stop) return; const start = performance.now(); while (performance.now() - start < 20) {} requestAnimationFrame(frame); };
     requestAnimationFrame(frame);
     requestIdleCallback(d => {
       log.push(`busy ${d.didTimeout ? 'timed out' : d.timeRemaining() <= 16}`);
-      testRunner.reportHarnessResults(log.join(', '));
+      stop = true;
+      // Nothing to draw: a long period, of 50 ms at most.
+      setTimeout(() => {
+        let tries = 0;
+        requestIdleCallback(function long(d) {
+          const left = d.timeRemaining();
+          if (left <= 16 && ++tries < 50) { requestIdleCallback(long); return; }
+          log.push(`long ${left > 16 && left <= 50}`);
+          testRunner.reportHarnessResults(log.join(', '));
+        });
+      }, 100);
     }, { timeout: 100 });
   });
 });
 </script>"#;
     let url = site("idle-callbacks", &[("index.html", page)]);
-    assert_eq!(run(&url), "first false true, second false, busy timed out");
+    assert_eq!(
+        run(&url),
+        "first false true, second false, busy timed out, long true"
+    );
 }
 
 /// No idle period starts while the DOM's timers are due: a chain of
@@ -2493,8 +2512,10 @@ fn about_blank_has_its_initiators_origin() {
         host_resolver_rules: net::HostMappingRules::parse("MAP other.test 127.0.0.1").unwrap(),
         ..Default::default()
     };
+    // Each frame navigated once its handlers are set: the parser may let
+    // other tasks run between an iframe and the script after it.
     let page = r#"<!DOCTYPE html>
-<iframe id=other></iframe><iframe id=same src=/child.html></iframe><iframe id=third></iframe>
+<iframe id=other></iframe><iframe id=same></iframe><iframe id=third></iframe>
 <script>
 other.src = location.href.replace('127.0.0.1', 'other.test') + 'child.html';
 // Its document through the DOM, and its window's members through V8.
@@ -2512,6 +2533,7 @@ const done = () => {
 // Each to `about:blank`: the same origin's by this document; the third by
 // the other origin's, which is still there; the other origin's by itself.
 same.onload = () => { same.onload = done; same.src = 'about:blank'; };
+same.src = '/child.html';
 onmessage = e => {
   if (e.source !== other.contentWindow) return;
   third.onload = () => {

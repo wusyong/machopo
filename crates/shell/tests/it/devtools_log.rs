@@ -7,7 +7,7 @@
 //! what script asked (an observer of an entry type machopo doesn't make) is
 //! the page's, as a load's error is.
 
-use net::test_server::{Route, unused_port};
+use net::test_server::{Route, refused_port};
 use serde_json::{Value, json};
 
 use crate::automation_pipe::server;
@@ -48,7 +48,8 @@ fn failed_loads_are_logged_and_kept() {
         machopo.error_line("[console]"),
         format!("[console] {NOT_FOUND} ({missing})")
     );
-    let refused = format!("http://127.0.0.1:{}/x", unused_port());
+    let refused_port = refused_port();
+    let refused = format!("http://127.0.0.1:{}/x", refused_port.port());
     evaluate(
         &mut page,
         &format!("fetch({refused:?}).catch(() => {{}}); 0"),

@@ -9,7 +9,7 @@
 
 use std::time::{Duration, Instant};
 
-use net::test_server::{Route, unused_port};
+use net::test_server::{Route, refused_port};
 use serde_json::{Value, json};
 
 use crate::automation_pipe::server;
@@ -367,7 +367,8 @@ fn a_navigation_is_answered_as_it_is_ready_to_commit() {
             .any(|event| event["params"]["loaderId"] == loader),
         "{navigated}"
     );
-    let refused = format!("http://127.0.0.1:{}/", unused_port());
+    let refused_port = refused_port();
+    let refused = format!("http://127.0.0.1:{}/", refused_port.port());
     let failed = page.call(None, "Page.navigate", json!({ "url": refused }));
     assert_eq!(
         failed["result"]["errorText"], "net::ERR_CONNECTION_REFUSED",

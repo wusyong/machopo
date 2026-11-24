@@ -227,6 +227,11 @@
 - debug build 偵測沒有記號的 DOM task（`render_thread.rs` 的 `assert_no_dom_task_lost`）：它是檢查，拿掉之後測試照樣通過；engine 找不到記號的 task 時清掉 `target_task`（`run_dom_task`），沒清的話只有這個檢查看不到別的 task，測試也看不出來。
 - wasm guest 的等待結束時跑它的延後的 task（`post_guests`）：`wasm_documents` 的測試裡畫面的 frame 照樣叫醒 loop、跑到它（和「loop 等待時為 renderer 自己的延後的 task 醒來」同一個原因）。
 
+**啟動和結束（`shell` 的 `browser_window.rs`、`net` 的 `test_server.rs`）**
+
+- 沒有 `shutdown` 就丟掉的 `BrowserWindow` 照樣 shutdown（`Drop`）：拿掉之後只有機率性地壞。它守的是啟動到一半失敗時（例如 `--remote-debugging-port` 被占用），Viz 還在建 GPU device、process 就 `exit` 而 crash；2026-11-24 在 CPU 的 adapter 上量，拿掉它時 1600 次啟動 crash 5 次（約 0.3%，綁 4 顆 CPU 加負載也差不多），有它時 1200 次 0 次。`remote_debugging::a_port_taken_ends_it_with_an_error` 每次啟動 30 次，碰到的機會約一成。要讓 Viz 在建 device 時停一下的 hook，才能每次重現。
+- 「拒絕連線」的 port 整個測試期間占著（`RefusedPort`）：守的是同時跑的別的測試的 server 拿不到同一個 port，一個測試裡看不出來；guard 改成 listen 有 `net` 的測試抓到（連線不再被拒絕）。
+
 ## 沒有計數守著的優化
 
 下面這些捷徑被拿掉時結果照樣對（debug build 的交叉檢查只比結果），只是多做事，沒有測試會失敗。2026-10-20 逐項讀過測試盤點：其他的優化（style 的 invalidation、MPC、祖先的 Bloom filter、增量的 pre-paint 和 paint、raster invalidation、tile 的跳過、root 的計數、parse 的 fast path……）都有 debug build 的計數（各 crate 的 `*_for_testing`、`layout` 的 `BoxTreeUpdate` 和 `LayoutUpdate`）和斷言它的測試。改到這些地方時特別注意；量到變慢時（Speedometer 用 git 二分，`--sample` 看多出來的函式）先對照這份。之後照下面的順序補計數，補了就從這裡刪掉。

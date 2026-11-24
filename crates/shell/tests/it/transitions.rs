@@ -93,14 +93,17 @@ setTimeout(() => {
 /// The events of a frame go in the order they were scheduled, then by
 /// the transitions' order (the style change makes them in tree order):
 /// `transitionrun` at the frame where they are pending, then two that
-/// start and end within the next frame, the shorter's end first.
+/// start and end within the next frame, the shorter's end first. A
+/// millisecond's delay: a transition pending until its first tick
+/// starts as it runs, and those events would go by the transitions'
+/// order (Chrome's go by transition anyway).
 #[test]
 fn a_frames_events_go_by_when() {
     let url = page(
         "order.html",
         r#"<!DOCTYPE html>
 <style>
-  #a, #b { width: 0px; transition: width 50ms linear }
+  #a, #b { width: 0px; transition: width 50ms linear 1ms }
   #a { transition-duration: 100ms }
   #a.wide, #b.wide { width: 100px }
 </style>

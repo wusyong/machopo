@@ -347,10 +347,34 @@ impl Drop for TestServer {
     }
 }
 
-/// A local port nothing listens on, for connection-refused tests.
-pub fn unused_port() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind a free port");
-    listener.local_addr().expect("local address").port()
+/// A port of this machine that no server listens on, nor can while it is
+/// kept: bound and not listening, so a connection to it is refused at once
+/// (Chromium's `EmbeddedTestServer` holds its port the same way before it
+/// listens). Kept for as long as the test that wants a refused connection
+/// runs: a port let go is another test's server's to take.
+pub struct RefusedPort {
+    // Bound, never listening: what keeps the port.
+    _socket: tokio::net::TcpSocket,
+    port: u16,
+}
+
+impl RefusedPort {
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+}
+
+/// A port connections to are refused, kept till the guard goes.
+pub fn refused_port() -> RefusedPort {
+    let socket = tokio::net::TcpSocket::new_v4().expect("a socket");
+    socket
+        .bind(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+        .expect("bind a free port");
+    let port = socket.local_addr().expect("local address").port();
+    RefusedPort {
+        _socket: socket,
+        port,
+    }
 }
 
 fn accept(mut stream: TcpStream, site: &Site, requests: &Mutex<Vec<Request>>, connection: u64) {

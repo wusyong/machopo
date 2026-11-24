@@ -2763,11 +2763,24 @@ fn the_profiler_samples_the_pages_script() {
             .find(|node| node["callFrame"]["functionName"] == name);
         assert_eq!(node.expect(name)["callFrame"]["url"], url.as_str());
         let count = profile["samples"].as_array().unwrap().len();
-        assert_eq!(profile["timeDeltas"].as_array().unwrap().len(), count);
-        samples.push(count);
+        let mut deltas: Vec<u64> = profile["timeDeltas"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|delta| delta.as_u64().unwrap())
+            .collect();
+        assert_eq!(deltas.len(), count);
+        assert!(count >= 3, "{name}: {count} samples");
+        deltas.sort_unstable();
+        samples.push(deltas[deltas.len() / 2]);
     }
-    // 200 ms: about 10 samples 20 ms apart, about 400 0.5 ms apart.
-    assert!(samples[0] <= 25 && samples[1] >= 100, "{samples:?}");
+    // The time between samples (µs), not how many came: the sampler takes
+    // what CPU it gets. 20 ms apart, and 0.5 ms (a starved sampler's more,
+    // still far less).
+    assert!(
+        samples[0] >= 15_000 && samples[1] <= samples[0] / 4,
+        "{samples:?}"
+    );
     // A tab whose renderer has gone: an error at once.
     browser
         .call(
@@ -2815,19 +2828,29 @@ fn the_profile_tells_waiting_from_rendering() {
     call(b, "Page.captureScreenshot", json!({})).unwrap();
     std::thread::sleep(Duration::from_millis(200));
     let profile = call(b, "Profiler.stop", json!({})).unwrap()["profile"].clone();
-    let hits = |name: &str| -> u64 {
-        profile["nodes"]
+    // The time (µs) in each, from the time before each sample: how many
+    // samples came is what CPU the sampler got.
+    let time = |name: &str| -> u64 {
+        let nodes: Vec<u64> = profile["nodes"]
             .as_array()
             .unwrap()
             .iter()
             .filter(|node| node["callFrame"]["functionName"] == name)
-            .map(|node| node["hitCount"].as_u64().unwrap())
+            .map(|node| node["id"].as_u64().unwrap())
+            .collect();
+        let samples = profile["samples"].as_array().unwrap();
+        let deltas = profile["timeDeltas"].as_array().unwrap();
+        samples
+            .iter()
+            .zip(deltas)
+            .filter(|(sample, _)| nodes.contains(&sample.as_u64().unwrap()))
+            .map(|(_, delta)| delta.as_u64().unwrap())
             .sum()
     };
-    let (idle, program) = (hits("(idle)"), hits("(program)"));
-    // 200 ms waiting, 0.5 ms apart: about 400.
-    assert!(idle >= 200, "(idle) {idle}, (program) {program}");
-    assert!(program >= 10, "(idle) {idle}, (program) {program}");
+    let (idle, program) = (time("(idle)"), time("(program)"));
+    // 200 ms waiting: most of it.
+    assert!(idle >= 100_000, "(idle) {idle} µs, (program) {program} µs");
+    assert!(program >= 2_000, "(idle) {idle} µs, (program) {program} µs");
     assert!(browser.end().success());
 }
 

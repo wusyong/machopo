@@ -5,7 +5,7 @@
 //! within each session's own limits; the commands machopo can't carry out are
 //! errors, the rest succeed.
 
-use net::test_server::{Route, unused_port};
+use net::test_server::{Route, refused_port};
 use serde_json::{Value, json};
 
 use crate::automation_pipe::server;
@@ -477,7 +477,8 @@ fn redirects_and_failures_are_told() {
     let received = of(&events, "Network.responseReceived", &sent[0]["requestId"]);
     assert_eq!(received["response"]["url"], server.url("/plain").as_str());
 
-    let refused = format!("http://127.0.0.1:{}/", unused_port());
+    let refused_port = refused_port();
+    let refused = format!("http://127.0.0.1:{}/", refused_port.port());
     evaluate(
         &mut page,
         &format!("fetch({refused:?}).catch(() => 0); 0"),
@@ -1011,7 +1012,8 @@ fn a_navigation_that_fails_is_a_failed_request() {
     let (mut page, _) = page(&machopo);
     load(&mut page, &server.url("/"));
     page.call(None, "Network.enable", json!({}));
-    let refused = format!("http://127.0.0.1:{}/", unused_port());
+    let refused_port = refused_port();
+    let refused = format!("http://127.0.0.1:{}/", refused_port.port());
     let navigated = page.call(None, "Page.navigate", json!({ "url": refused }));
     let loader = navigated["result"]["loaderId"].clone();
     let events = network_events(&mut page, 1);

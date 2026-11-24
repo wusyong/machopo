@@ -186,6 +186,8 @@ Rust 的 `static` 都不解構，所以要注意的是它們背後的 C++ 在 `e
 | 訊號 | `chrome_browser_main_posix.cc`：SIGINT、SIGHUP 走正常結束，SIGTERM 走 `SessionEnding` | 沒有處理 |
 | thread 的順序 | `BrowserMainLoop::ShutdownThreadsAndCleanUp`：renderer（同一個 process 時）、network service、child 的 host、compositor 和 GPU 的通道、IPC、IO thread、tracing、thread pool，固定的順序 | renderer、Viz、pipe 和 server；network、storage 看最後一份 handle 在哪裡；IO thread 不停 |
 | DevTools pipe 的 thread | `PipeIOBase::Shutdown`：先關 pipe，join 丟給 `CONTINUE_ON_SHUTDOWN` 的背景工作，不擋結束 | main join writer，沒有時限 |
+| 啟動到一半失敗（2026-11-24 對的，`main`） | `BrowserMainRunnerImpl::Initialize` 從哪裡提早 return 都一樣：runner 的解構子 `if (initialization_started_ && !is_shutdown_) { Shutdown(); }`，照樣 `PreShutdown`、`ShutdownThreadsAndCleanUp` | 提早 return 時沒有 shutdown（S6）；第 2 段照 Chromium，`BrowserWindow` 的 `Drop` |
+| remote debugging 的 port 綁不上（同上） | 不算啟動失敗：`StartServerOnHandlerThread` 記一行 `Cannot start http server for devtools.`，照樣啟動，`DevToolsHttpHandler` 不 listen | 啟動失敗、結束（第 3 段定要不要照 Chrome） |
 
 GPU process 的結束沒有對照：machopo 沒有 GPU process，抓原始碼時那個檔案的路徑也不對，沒有再找。
 

@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use ipc::data_pipe::{Consumer, Read};
-use net::test_server::{Route, TestServer, unused_port};
+use net::test_server::{Route, TestServer, refused_port};
 use net::{AtRedirects, LoadHandle, NetworkContext, NetworkContextParams, UrlLoaderClient};
 use protocol::network::{
     CompletionStatus, NetErrorCode, RedirectInfo, RequestDestination, ResourceRequest, ResponseHead,
@@ -170,7 +170,8 @@ fn the_head_then_the_body_then_the_end() {
 #[test]
 fn a_load_without_a_response_tells_only_of_its_end() {
     let network = network();
-    let url = format!("http://127.0.0.1:{}/", unused_port());
+    let refused = refused_port();
+    let url = format!("http://127.0.0.1:{}/", refused.port());
     let (_handle, events) = start(&network, get(&url), AtRedirects::Follow, false);
     let status = complete(&events);
     assert_eq!(

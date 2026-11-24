@@ -814,3 +814,37 @@ fn any_client_closes_the_browser() {
     let status = machopo.ended();
     assert!(status.success(), "{status}");
 }
+
+/// A port taken already: machopo says so and ends with an error, every
+/// time, having stopped what it had started (Viz, still making its GPU
+/// device, once crashed it as it ended: about one time in two on the CPU's
+/// adapter, which takes longest to make one, as CI's machines have).
+#[test]
+fn a_port_taken_ends_it_with_an_error() {
+    let taken = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+    let port = taken.local_addr().expect("its address").port();
+    for _ in 0..30 {
+        let mut child = Process::new(env!("CARGO_BIN_EXE_machopo"))
+            .args([
+                "--automation-pipe",
+                "--test-fonts",
+                &format!("--remote-debugging-port={port}"),
+            ])
+            .env("MACHOPO_GPU_ADAPTER", "cpu")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("machopo starts");
+        let mut errors = String::new();
+        child
+            .stderr
+            .take()
+            .expect("piped")
+            .read_to_string(&mut errors)
+            .expect("its standard error");
+        let status = child.wait().expect("it ends");
+        assert_eq!(status.code(), Some(1), "{status}: {errors}");
+        assert!(errors.contains("--remote-debugging-port"), "{errors}");
+    }
+}

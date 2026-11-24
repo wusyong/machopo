@@ -340,7 +340,8 @@ fn a_navigation_that_fails_is_an_error() {
     )]);
     let addr = driver();
     let (session, _) = Session::new(addr, json!({}));
-    let refused = format!("http://127.0.0.1:{}/", net::test_server::unused_port());
+    let refused_port = net::test_server::refused_port();
+    let refused = format!("http://127.0.0.1:{}/", refused_port.port());
     let (status, answer) = session.navigate(&refused);
     assert_eq!(status, 500, "{answer}");
     assert_eq!(answer["value"]["error"], "unknown error", "{answer}");

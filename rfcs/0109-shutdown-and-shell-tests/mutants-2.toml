@@ -1,0 +1,82 @@
+# Stage 2's mutants: `python3 scripts/test.py mutate rfcs/0109-shutdown-and-shell-tests/mutants-2.toml`.
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it"]
+timeout = 300
+
+[[mutant]]
+name = "an idle period has no time"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        let end = sooner_ms(Some(now + LONG_IDLE_PERIOD), next)?;
+        (now < end).then_some(end)'''
+to = '''        let end = sooner_ms(Some(now + LONG_IDLE_PERIOD), next)?;
+        (now < end).then_some(now)'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "documents::idle_callbacks"]
+
+[[mutant]]
+name = "a long idle period is longer than 50 ms"
+file = "crates/renderer/src/render_thread.rs"
+from = '''const LONG_IDLE_PERIOD: f64 = 50.0;'''
+to = '''const LONG_IDLE_PERIOD: f64 = 80.0;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "documents::idle_callbacks"]
+
+[[mutant]]
+name = "the inspector isn't told the thread is idle"
+file = "crates/bindings/src/script_state.rs"
+from = '''        if idle {
+            self.devtools.idle_started();
+        } else {'''
+to = '''        if idle {
+        } else {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "automation_pipe::the_profile"]
+
+[[mutant]]
+name = "an about:blank has no initiator's origin"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        blank.then(|| self.doc(initiator).map(|next| next.document.clone()))?'''
+to = '''        blank.then(|| None::<NodeRoot>)?'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "documents::about_blank_has_its_initiators_origin"]
+
+[[mutant]]
+name = "animation events don't go by their time"
+file = "crates/dom_api/src/animations.rs"
+from = '''        a.0.total_cmp(&b.0)
+            .then(a.1.cmp(&b.1))'''
+to = '''        std::cmp::Ordering::Equal
+            .then(a.1.cmp(&b.1))'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "web_animations::a_replaced_animation_is_removed", "transitions::a_frames_events_go_by_when"]
+
+[[mutant]]
+name = "animation events of a time don't go by the transitions' order"
+file = "crates/dom_api/src/animations.rs"
+from = '''            .then(a.2.cmp(&b.2))
+            .then(a.3.cmp(&b.3))'''
+to = '''            .then(b.2.cmp(&a.2))
+            .then(a.3.cmp(&b.3))'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "web_animations::a_replaced_animation_is_removed", "transitions::a_frames_events_go_by_when"]
+
+[[mutant]]
+name = "a refused port listens"
+file = "crates/net/src/test_server.rs"
+from = '''    let port = socket.local_addr().expect("local address").port();
+    RefusedPort {
+        _socket: socket,
+        port,
+    }'''
+to = '''    let port = socket.local_addr().expect("local address").port();
+    let listener = socket.listen(16).expect("listen");
+    std::mem::forget(listener);
+    RefusedPort {
+        _socket: tokio::net::TcpSocket::new_v4().expect("a socket"),
+        port,
+    }'''
+test = ["cargo", "test", "-q", "-p", "net", "--test", "it", "a_load_without_a_response_tells_only_of_its_end"]
+
+[[mutant]]
+name = "a window gone without shutdown isn't shut down"
+file = "crates/shell/src/browser_window.rs"
+from = '''        if self.viz_thread.is_some() {
+            self.shutdown();
+        }'''
+to = '''        if self.viz_thread.is_some() && false {
+            self.shutdown();
+        }'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "remote_debugging::a_port_taken_ends_it_with_an_error"]

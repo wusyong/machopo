@@ -296,7 +296,9 @@ fn a_replaced_animation_is_removed() {
 <script>
 const t = document.getElementById('t');
 const log = [];
-const f = { duration: 50, fill: 'forwards' };
+// Not a whole number of frames: the frames' times are a 60th of a
+// second apart, and events of the same time go in composite order.
+const f = { duration: 45, fill: 'forwards' };
 const a = t.animate({ opacity: [0, 0.2] }, f);
 const b = t.animate({ opacity: [0, 0.4] }, f);
 a.onfinish = () => log.push('finish a');
@@ -315,6 +317,6 @@ a.onremove = e => {
     );
     assert_eq!(
         report(&url),
-        "finish a finish b remove a removed 50 frame 0.4 0.2 0.2"
+        "finish a finish b remove a removed 45 frame 0.4 0.2 0.2"
     );
 }

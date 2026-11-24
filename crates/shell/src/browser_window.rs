@@ -154,6 +154,19 @@ impl BrowserWindow {
     }
 }
 
+/// One that goes without `shutdown` (a start that failed part way, an
+/// early return) is shut down all the same, as Chromium's
+/// `BrowserMainRunnerImpl` is as it goes: else Viz may still be making its
+/// GPU device as the process exits, and the drivers' destructors run while
+/// it does.
+impl Drop for BrowserWindow {
+    fn drop(&mut self) {
+        if self.viz_thread.is_some() {
+            self.shutdown();
+        }
+    }
+}
+
 /// Makes the window's tabs, all alike (Chromium's `Browser` with the
 /// window's profile), and tells Viz of their frame sinks
 /// (`HostFrameSinkManager`).

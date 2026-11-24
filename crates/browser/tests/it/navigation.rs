@@ -11,7 +11,7 @@ use browser::{
     ContentsEvent, NetworkContextParams, OpenUrlParams, Profile, StoragePartition, WebContents,
 };
 use crossbeam_channel::{Receiver, RecvTimeoutError, unbounded};
-use net::test_server::{Route, TestServer, unused_port};
+use net::test_server::{Route, TestServer, refused_port};
 use protocol::TabId;
 use protocol::renderer::{BeginNavigationKind, RendererHostMsg, WindowOpenDisposition};
 use protocol::viz::{
@@ -1413,8 +1413,9 @@ fn failed_loads_commit_an_error_page() {
         navigate("file:///definitely/not/here.html").1,
         "ERR_FILE_NOT_FOUND"
     );
+    let refused = refused_port();
     assert_eq!(
-        navigate(&format!("http://127.0.0.1:{}/", unused_port())).1,
+        navigate(&format!("http://127.0.0.1:{}/", refused.port())).1,
         "ERR_CONNECTION_REFUSED"
     );
     assert_eq!(

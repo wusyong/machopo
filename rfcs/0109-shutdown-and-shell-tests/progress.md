@@ -9,7 +9,11 @@
 | 0. 盤點結束的流程 | 做完，待審查（只在 Linux 上量） | 2026-11-23 |
 | 1. 審查 `shell` 的測試 | 做完，待審查 | 2026-11-23 |
 | 1b. 重新評估（RFC 0110、0111、0112 之後）：A 類修掉、B1 和 B2 改寫，B3 到 B8 審核、對過 Chrome，範圍改成以結束為主（已決定的事項第 3 條） | 做完，待審查 | 2026-11-24 |
-| 2. 收掉 `shell` 測試的尾巴（B3 到 B8、C1 和 C2、S6） | 等「待決定」的第 2 段那幾項 | |
+| 2. 收掉 `shell` 測試的尾巴（B3 到 B8、C1 和 C2、S6；已決定的事項第 4 到 7 條） | 做完，待審查 | 2026-11-24 |
+| 2a. B3 到 B8 改寫（已決定的事項第 4 條） | 做完，待審查 | 2026-11-24 |
+| 2b. 「拒絕連線」的 port 是 guard（第 5 條） | 做完，待審查 | 2026-11-24 |
+| 2c. S6：`BrowserWindow` 沒有 shutdown 就丟掉時照樣 shutdown（第 7 條） | 做完，待審查 | 2026-11-24 |
+| 2d. mutation test、文件（穩定性照第 6 條看 CI） | 做完，待審查 | 2026-11-24 |
 | 3. 重量、定結束的規則 | 沒開始 | |
 | 4. 照規則改 | 沒開始 | |
 | 5. 驗收 | 沒開始 | |
@@ -22,6 +26,28 @@
 | `shell` 的測試：每個模組的分類、壞過的每一個的原因和把握 | `details.md` 的「`shell` 的測試的審查」；不改程式，所以沒有測試 |
 
 ## 做過的檢查
+
+### 第 2 段（2026-11-24，Linux：Fedora 45，debug build，`ec06953` 之上）
+
+**B3 到 B8 改寫**：六個各跑一次都通過。mutation test（`mutants-2.toml`）每個配一條，弄壞它守的行為：idle period 沒有時間、長的 idle period 超過 50 ms、inspector 沒聽到 thread 閒著、`about:blank` 沒有 initiator 的 origin、動畫的事件不照時間排、同時的不照 transition 的順序排。第一輪「長的 idle period 超過 50 ms」沒抓到：原本的測試也抓不到，它的第一個 idle callback 落在載入期間，期限被下一個 frame 截短；`idle_callbacks` 加一段在畫面靜下來之後要一個 idle callback（重試到剩下的時間超過一個 frame），重跑抓到。B4 的 sampling 的間隔是 V8 的 inspector 自己的，machopo 這一側沒有可以弄壞的，它守的轉送由 B5 的那條抓到。
+
+**C1、C2**：`refused_port()` 的 guard 只 bind、不 listen；Linux 上連到它馬上被拒絕（`net` 279 個、`browser` 229 個、`shell` 用到它的 62 個測試都通過）。mutant「guard 改成 listen」被 `net` 的測試抓到；同時跑的別的測試拿不到同一個 port 這一點，一個測試裡看不出來（`docs/test-gaps.md`）。
+
+**S6**：先對了 Chromium（`BrowserMainRunnerImpl` 的解構子在還沒 shutdown 時呼叫 `Shutdown()`），`BrowserWindow` 照做加 `Drop`。crash 的機率比盤點時低很多，直接啟動 `machopo --automation-pipe --remote-debugging-port=<占著的>` 數結束的方式（CPU 的 adapter）：
+
+| | 次數 | crash（SIGSEGV、SIGABRT） |
+| --- | --- | --- |
+| 沒有修正，預設的 GPU | 200 | 0 |
+| 沒有修正，CPU 的 adapter | 200 + 1000 | 3 + 1 |
+| 沒有修正，CPU 的 adapter，綁 4 顆 CPU 加兩個忙碌的 process | 200 | 1 |
+| 有修正，CPU 的 adapter | 1000 | 0 |
+| 有修正，CPU 的 adapter，綁 4 顆 CPU 加負載 | 200 | 0 |
+
+沒有修正 1600 次裡 5 次（約 0.3%），有修正 1200 次 0 次；修正沒有作用的話 1200 次都不 crash 的機率約 2%。盤點時（`647ab5a`）是約一半，差這麼多的原因沒有查。必壞的測試 `remote_debugging::a_port_taken_ends_it_with_an_error`（CPU 的 adapter，啟動 30 次，每次要以結束碼 1 結束、說明原因）在原本的程式上第一次跑就壞了（被訊號結束），之後的 5 遍沒有再壞；mutant「沒有 shutdown 就丟掉時不 shutdown」沒抓到，記進 `docs/test-gaps.md`。
+
+**穩定性**：照第 6 條原本的做法開始跑，第一個（`documents::idle_callbacks`）在 4 顆 CPU、lavapipe、加負載下 1000 次 0 失敗（298 s），之後使用者改成看 CI，停掉了。
+
+**階段結束的檢查**：`cargo test --workspace` 通過（60 個 binary，4841 個通過、1 個 ignored）；`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs` 通過。
 
 ### 重新評估（2026-11-24，Linux：Fedora 45，`main` 的 `4e5e0ef`）
 

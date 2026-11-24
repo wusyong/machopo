@@ -18,7 +18,7 @@ machopo 的每一種跑法（視窗、automation pipe、headless、renderer proc
 - **S2、S3**：卡住的 renderer 一個一個等，各 5 秒；machopodriver 也只等 Browser 5 秒，所以一個卡住的分頁就一定被 kill，什麼都來不及寫。
 - **S4**：沒有處理 SIGTERM、SIGINT、SIGHUP：照預設直接死，profile（cookie、`localStorage`）和 trace 都沒寫完。
 - **S5**：client 不讀 stdout 時，automation pipe 的 writer 卡在 `write`，main 永遠 `join` 它。
-- **S6**：啟動到一半失敗時（`--remote-debugging-port` 被占用）約一半的機率 crash：沒有呼叫 `BrowserWindow::shutdown`，Viz 還在建 device 時 `exit` 跑了 C++ 的解構子。
+- **S6**：啟動到一半失敗時（`--remote-debugging-port` 被占用）會 crash：沒有呼叫 `BrowserWindow::shutdown`，Viz 還在建 device 時 `exit` 跑了 C++ 的解構子。盤點時約一半；2026-11-24 在 CPU 的 adapter 上約 0.3%（第 2 段修掉）。
 - **S7**：`exit` 時還有 thread 在跑（Browser 的 IO thread、GPU 驅動程式的、V8 的 worker），正常結束時它們閒著，但沒有東西保證。
 - **S8**：Viz 有三處遇到 wgpu 的錯誤就 `process::exit(1)`，其他 thread 照跑、profile 不寫。
 - **S9**：renderer process 繼承 Browser 的 stdin 和 stdout，也就是 automation 的 pipe：它活著時讀的人等不到 EOF，它寫到 stdout 的東西會混進訊息。
@@ -42,7 +42,7 @@ machopo 的每一種跑法（視窗、automation pipe、headless、renderer proc
 5. **被 kill 也乾淨**：Browser 被強制結束時 renderer 跟著結束（多 process 的那份做完時已經有，這份把它列進表裡、和其他幾條一起守著）。
 6. **每一條有測試守著**，而且這些測試照 CI 的跑法重複跑不會壞。
 
-`shell` 的測試：B3 到 B8 改寫成守它們真正要守的事，C1、C2 的 port 整個測試期間占著；照 CI 的條件重複跑不會壞（次數見「待決定」）。
+`shell` 的測試：B3 到 B8 改寫成守它們真正要守的事，C1、C2 的 port 整個測試期間占著；CI 照常跑，再壞時查原因（已決定的事項第 6 條）。
 
 **不在範圍內**：
 
@@ -91,12 +91,12 @@ machopo 的每一種跑法（視窗、automation pipe、headless、renderer proc
 | B7 | `web_animations::a_replaced_animation_is_removed` | 50 ms 剛好是 3 個 headless 的 frame：時間相等時照 composite order 排（合規範），Chrome 的 frame 照真的時間、碰不到 | `duration` 改成不是 frame 間隔的倍數 |
 | B8 | `transitions::a_frames_events_go_by_when` | `run` 和 `start` 剛好同時，照 composite order 排（合規範） | 加一點 `transition-delay`，`start` 一定晚於 `run`；Chrome 照 transition 分組（`run b / start b / end b / run a …`），和規範不同，記進 `docs/limitations.md` |
 
-C1、C2：`unused_port` 改成回傳一個 guard，整個測試期間 bind 著、不 listen（「待決定」2-2）。
+C1、C2：`unused_port` 改成回傳一個 guard，整個測試期間 bind 著、不 listen（已決定的事項第 5 條）。
 
 ### 測試
 
 - 結束的流程：每一種跑法、每一種情況一個測試，量結束花的時間和留下的 process（多 process 的那幾個已經有：`shell` 的 `a_killed_browsers_*`）。
-- `shell` 的測試本身：改過的每一個照 CI 的跑法重複跑（次數見「待決定」），還守得住原本要守的事（mutation test），寫進 `progress.md`。
+- `shell` 的測試本身：改過的每一個還守得住原本要守的事（mutation test），寫進 `progress.md`；穩不穩定看 CI（已決定的事項第 6 條）。
 - 產品的改動照平常的規定：新的測試、mutation test。
 
 ### 分階段
@@ -136,24 +136,12 @@ C1、C2：`unused_port` 改成回傳一個 guard，整個測試期間 bind 著�
 1. **開始做**（2026-11-22，使用者要求）：先做不改程式的第 0、1 階段。兩個互不相依，所以一起做了。
 2. **A 類的根因不在這份修**（2026-11-23，使用者決定）：A1 到 A6 的共同原因是 renderer 和 engine 在同一個 thread 上卻各留一份狀態、用便條（`FrameRequest`）和外圈的收尾互相通知，根本是擁有權的問題，另寫 RFC 0110 評估。0110 修掉了 A1 到 A6（每一個都有必壞的測試），RFC 0112 拿掉了外圈。
 3. **重新評估之後改成以結束為主**（2026-11-24，使用者決定；A）：A 類修掉、CI 連續綠燈之後，`shell` 的測試剩下 B3 到 B8 和 C1、C2，縮成第 2 段；結束的流程是這份的主體。B3 到 B8 審過再決定改測試還是修產品（使用者要求）：六個都是測試的問題，產品照規範是對的（`details.md`）。不選拆成兩份：`shell` 的那份剩很少，兩件事互相擋路的理由仍在。不選照原本並重的寫法：動機已經過時。
+4. **第 2 段：B3 到 B8 改寫測試，產品不改**（2026-11-24，使用者決定；A）：照「詳細設計」的表。B8 和 Chrome 不同的順序（Chrome 照 transition 分組）記進 `docs/limitations.md`，產品照規範（先照排定的時間、同時的照 composite order）。不選 B8 改產品照 Chrome：偏離規範，別的瀏覽器的順序沒有對過。不選放寬門檻和時限：只是比較少壞，守的也變弱，B7、B8 的相等時間照樣會碰到。
+5. **第 2 段：「拒絕連線」的 port 是一個 guard**（2026-11-24，使用者決定；A）：`unused_port` 回傳的 guard 整個測試期間 bind 著、不 listen，沒有別人拿得到。對照 Chromium：`EmbeddedTestServer` 分 `InitializeAndListen` 和開始接受兩步，port 先占著再用。不選固定、沒人 listen 的 port：靠機器上剛好沒人用。不選排隊：幾乎整組都要排，慢很多。
+6. **第 2 段：怎麼算穩定**（2026-11-24，使用者決定）：不另外在本機重複跑，靠 CI；之後 CI 再壞，看是哪裡不符合結束的規則或測試的寫法再修。原本選了改過的每一個測試在 4 顆 CPU、lavapipe、加負載下單獨重複 1000 次（C），第一個（`documents::idle_callbacks`）1000 次 0 失敗之後，使用者改成這樣：重複跑八個要兩到四個小時，而這一段改的都是測試自己的等法，理由寫在各自的註解裡，和其他的不穩定一樣看 CI 就夠。不選整組 300 次、CI 連續 20 次綠燈：更慢。
+7. **第 2 段：S6 在這一段修**（2026-11-24，使用者決定；A）：啟動失敗的路和正常結束走同一條（`BrowserWindow::shutdown`）。不管第 3 段選哪一種結束的規則，啟動失敗都該和正常結束一樣，所以不會白做；現在修掉，第 3 段重量時啟動失敗那一格不混進 crash。不選等第 4 段：crash 留到那時。
 
 ## 待決定
-
-### 第 2 段開始前
-
-**2-1. B3 到 B8 照「詳細設計」的表改寫**（建議）：六個都只改測試。B8 和 Chrome 不同的順序（Chrome 照 transition 分組）記進 `docs/limitations.md`，不改產品去照 Chrome：規範要先照時間排，Chrome 的做法和它不同。另一個做法是 B8 照 Chrome 改產品：和 Chrome 一樣，但偏離規範，別的瀏覽器的順序沒有對過。
-
-**2-2. 「拒絕連線」的 port**（C1、C2）：
-
-| 選項 | 做什麼 | 優點 | 缺點、成本 | 和 Chromium |
-| --- | --- | --- | --- | --- |
-| A（建議） | 回傳一個 guard：整個測試期間 bind 著、不 listen | 沒有別人拿得到；不拖慢測試 | 連它是不是馬上被拒絕，三個平台都還沒有驗證 | `EmbeddedTestServer` 分 `InitializeAndListen` 和開始接受兩步，port 先占著再用；要失敗的載入也可以由 `URLLoaderInterceptor` 直接給錯誤 |
-| B | 用固定、沒有人 listen 的 port（例如 1） | 最簡單 | 靠機器上剛好沒人用；Fetch 的 bad port 會先擋掉一些 | |
-| C | 用到的測試和所有建 server 的測試排隊 | 不動 helper | 幾乎整組都要排隊，慢很多 | test launcher 分批、各批一個 process |
-
-**2-3. 怎麼算穩定**：建議改過的每一個在 4 顆 CPU、lavapipe、加負載下重複 1000 次 0 失敗，整組照同樣的條件 300 次 0 失敗（五份同時約 45 分鐘），再加 CI 連續 20 次綠燈。另一個選項是整組也跑 1000 次（約 2.5 小時一輪）。
-
-**2-4. S6 放在第 2 段**（建議）：改動是幾行（失敗的路也呼叫 `shutdown`），不牽涉第 3 段的任何選擇；不放的話要等到第 4 段。
 
 ### 第 3 段開始時
 
@@ -162,6 +150,7 @@ C1、C2：`unused_port` 改成回傳一個 guard，整個測試期間 bind 著�
 - **同一個 process 的 renderer 卡住時怎麼結束**（S1）：main thread 的 script 怎麼打斷。
 - **全域變數怎麼收**（S7）：明確的結束順序，還是結束時不解構。
 - **訊號**（S4）、**卡住的 writer**（S5）、**Viz 遇到錯誤時**（S8）、**renderer 的 stdio**（S9）。
+- **remote debugging 的 port 綁不上時**：現在是啟動失敗、結束；Chrome 只記一行 `Cannot start http server for devtools.`，照樣啟動（`DevToolsHttpHandler` 的 `StartServerOnHandlerThread`）。
 
 ## 之後的可能
 
