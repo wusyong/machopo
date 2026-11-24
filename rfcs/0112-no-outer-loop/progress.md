@@ -15,8 +15,8 @@
 | 4. renderer 自己的工作和 V8 的 platform task 排成 task（第 16 到 18 條） | 完成 | 2026-11-24 |
 | 5. 剩下的步驟改成 task 之後的觀察者和延後的 task，拿掉外圈（第 19 到 23 條） | 完成 | 2026-11-24 |
 | 6. 做完之後：不重複排的延後 task 收進 scheduler、加新工作的說明（第 24 條） | 完成 | 2026-11-24 |
-| 7. 做完之後：Speedometer 卡住，記號跑它自己的那一個 task、debug build 偵測丟掉的 task（第 25 條） | 做完，mutation test 還沒跑 | 2026-11-24 |
-| 8. `requestAnimationFrame` 在通道一直有 task 時不來：要 frame 的當下告訴 compositor，headless 等 renderer 閒下來 | 進行中 | |
+| 7. 做完之後：Speedometer 卡住，記號跑它自己的那一個 task、debug build 偵測丟掉的 task（第 25 條） | 完成 | 2026-11-24 |
+| 8. `requestAnimationFrame` 在通道一直有 task 時不來：要不要 main frame 在每個 task 結束時告訴 compositor，headless 等 renderer 閒下來的 frame（第 26 條） | 完成 | 2026-11-24 |
 
 ## 驗收
 
@@ -38,6 +38,7 @@
 | 觀察者 | 通道一直有 task 時 `toBlob` 照樣完成（必壞）；選單、WebDriver 的結果、network idle、DOM 變了要 frame、一個 draw 只多一個 frame | `event_loop::a_canvas_blob_comes_while_responses_keep_coming`；`browser_view::a_selects_dropdown_is_over_the_page` 等選單的測試、`webdriver::`、`devtools_lifecycle` 的 `networkIdle`、`canvas::a_draw_asks_for_a_frame` |
 | scheduler | 一直被要求的延後 task 只排最早的一個：同一個、比較晚、早不到 1 ms 的不再排，更早的再排，取出之後重新排 | `renderer` 的單元測試 `task_queue::tests::a_task_asked_for_again_is_posted_once` |
 | 丟掉的 task | thread 忙過一個 timer 的時間之後再設一個已經到期的，兩個都跑，順序和 Chrome 一樣（`b,a`，必壞：改之前卡滿 30 秒）；debug build 在 loop 要等之前檢查沒有到期卻沒有記號的 DOM task | `event_loop::a_timer_set_after_an_earlier_ones_time_runs`；整套測試都經過 `assert_no_dom_task_lost` |
+| main frame | 通道一直有 task 時 `requestAnimationFrame` 照樣來（必壞：改之前 3 次都是 `the frame came after -1`）；input 留下的 task（連結的 `hashchange`）在 headless 拿的 frame 之前跑完；sheet、body 之前沒畫、alternate 的 sheet 不擋畫面、canvas 的 draw 有自己的 frame | `event_loop::an_animation_frame_comes_while_responses_keep_coming`；`forms::the_users_clicks_check_boxes` 等 5 個；`network::a_document_is_drawn_once_it_has_a_body`、`a_stylesheet_blocks_rendering_until_it_loads`，`documents::a_linked_sheet_blocks_rendering`、`an_alternate_sheet_doesnt_block_or_apply`，`canvas::a_draw_asks_for_a_frame` |
 | 全部 | 守著這些的測試擋得住弄壞的實作 | `python3 scripts/test.py mutate rfcs/0112-no-outer-loop/mutants-<段>.toml`（`1` 到 `5`） |
 
 ## 做過的檢查
@@ -74,11 +75,12 @@ Linux（Fedora 45）、debug build，2026-11-24。RFC 的草稿是 `0a459d1`；�
 | `mutants-2.toml` | 26 | 24 | 先結束取消窗口、再送撤銷：等價；task 之後不送 parser 的 script 和背景圖的請求（`docs/test-gaps.md`） |
 | `mutants-3.toml` | 18 | 15 | 只看 DOM 自己的時鐘、worker 關閉時丟的錯誤（`docs/test-gaps.md`）；關閉了的 worker 照樣收訊息：等價 |
 | `mutants-4.toml` | 16 | 12 | loop 等待時為 renderer 的延後 task 醒來、intersection 的 `delay` 提早時再排、V8 延後的 platform task、worker 為它醒來（`docs/test-gaps.md`） |
-| `mutants-5.toml` | 19 | 15 | `CSS` 的命令當場抓 sheet：等價；lifecycle 之後的 sheet、overlay 要 frame、wasm guest 的延後 task（`docs/test-gaps.md`） |
+| `mutants-6.toml`（第 25、26 條） | 8 | 4 | element task 照編號找、engine 跑完時清掉 `target_task`：等價；engine 找不到時清掉（只有 debug 的偵測看得到）、headless 等那張 frame 畫出來（兩條通道的先後排不出）：`docs/test-gaps.md` |
+| `mutants-5.toml` | 17 | 13 | `CSS` 的命令當場抓 sheet：等價；lifecycle 之後的 sheet、overlay 要 frame、wasm guest 的延後 task（`docs/test-gaps.md`） |
 
 - 每一段第一輪沒抓到的，多半補了測試或改了 mutant 的測試命令（caret 的情境、`browser` 的延後的 iframe `load` 和新內容的逾時的測試、`webdriver::`）之後重跑抓到；補的測試在「驗收」。
 - 第 3 段第一輪的上限設 1800 秒，第一個 mutant 卡滿 30 分鐘：停掉、`--restore` 還原，上限改成 240 秒，會讓測試一直等的 mutant 只跑 `event_loop::`。
-- 做完時 spec 照最後的程式更新：拿掉外圈之後沒有對應程式的 2 條刪了（`mutants-1.toml` 的「off the channel」、`mutants-3.toml` 的 guest 的等待），程式搬到 `after_task` 或改了寫法的 4 條改寫，照新的 spec 重跑：3 條抓到，「task 之後不送 parser 的 script 和背景圖的請求」照舊沒抓到（同上）。`mutants-3.toml` 的「task 之後不掃描 port」原本是等價的（外圈也掃描），拿掉外圈之後重跑抓到。101 條的 `from` 在檔案裡都剛好出現一次。
+- 做完時 spec 照最後的程式更新：拿掉外圈之後沒有對應程式的 2 條刪了（`mutants-1.toml` 的「off the channel」、`mutants-3.toml` 的 guest 的等待），程式搬到 `after_task` 或改了寫法的 4 條改寫，照新的 spec 重跑：3 條抓到，「task 之後不送 parser 的 script 和背景圖的請求」照舊沒抓到（同上）。`mutants-3.toml` 的「task 之後不掃描 port」原本是等價的（外圈也掃描），拿掉外圈之後重跑抓到。107 條的 `from` 在檔案裡都剛好出現一次（`mutants-5.toml` 決定要不要 main frame 的 2 條，第 26 條改掉了那段程式，刪了）。
 - `docs/test-gaps.md` 裡 parser 停下時馬上開始載入的那一列：loop 一次跑一批時 `browser` 的 `a_child_frame_waits_for_its_stylesheets` 拿掉它時約六次失敗一次，拿掉外圈之後同樣的 mutant 跑 12 次都通過（停下的 task 之後馬上就是觀察者），改寫了那一列。
 - `docs/test-gaps.md` 裡另外兩列在拿掉外圈之後有測試守著了，臨時的 mutant 確認之後刪掉：主 thread 不跑 V8 的 platform task（`shell` 的測試抓到）、task 之後不看標題（`shell` 或 `browser` 的測試抓到；以前一批的最後也看）。
 - 做完之後的整理（第 24 條）：三處各自記著排了哪個時間的改成 scheduler 的 `post_internal_once_at`，`mutants-5.toml` 改寫 network idle 和 guest 的 2 條（照舊一條抓到、一條沒抓到），加 3 條：不看排過的、不留 1 ms 的餘裕、取出時不清掉，都抓到（餘裕的那條第一次沒抓到：單元測試只試了晚一點的，那本來就不排；改成試早一點的之後抓到）。`mutants-4.toml` 的 intersection 的 2 條照新的程式重跑，結果和第 4 段一樣（一條抓到，提早時再排一次的那條照舊沒抓到）。
@@ -114,6 +116,13 @@ Linux（Fedora 45）、debug build，2026-11-24。RFC 的草稿是 `0a459d1`；�
 - 兩個版本各量一次每個測試的 sync 和 async：多在 Svelte、Preact 的 `Adding100Items`（sync 約多 0.7 ms、async 約多 1.3 ms），其他的差在 0.3 ms 以內。整個 suite 裡 main thread 的使用者空間 CPU 時間一樣（`perf stat` 的 `task-clock:u`：1768 對 1745 ms）。
 - 試過、排除的：scheduler 每 post 一個 task 都 `notify_one`（Linux 上每次一個 `futex`）。改成只在有 thread 在等時才 notify，Svelte、Preact 各量 3 次，數字沒有變，改動還原了。
 - 還沒驗證的：async 多的那一段可能是要 frame 的時機（第 8 步）；sync 多、指令沒多的那一段要看 kernel 的時間和 context switch（這台的 `perf_event_paranoid` 是 2，看不到）。
+
+**第 26 條**（`requestAnimationFrame`）：
+- 必壞的測試改之前 3 次都壞，改之後通過。照 A 改了之後 `shell` 有 5 個 input 的測試讀到舊的標題（headless 的 harness 的假設，第 26 條），改成等 renderer 閒下來的 frame 之後都通過；算畫了幾張的 5 個測試照本意改寫，單獨跑 5 次、整組跑 3 次都通過。
+- 同時找到的不穩定：`devtools_dom::queued_tasks_changes_are_told_before_the_next_task` 整組跑時失敗過一次（第 3 段起的時序，和第 26 條無關），改成等第一個命令印出一行才送第二個，5 次都通過，它守的 `mutants-1.toml` 的 2 條照樣抓到。
+- Speedometer（Svelte、Preact 各 3 次）：`Adding100Items` 的 sync 1.8 到 2.0 ms、async 6.6 ms，和改之前一樣；suite 的總時間也沒變。變慢的原因還沒找到。
+- mutation test（`mutants-6.toml`）：第一輪 12 條 4 條抓到；沒抓到的 5 條看出 `dom` 取出 task 時清掉 `target_task`（`task_taken`）和 engine 的清除重複，拿掉 `task_taken`；「不要 main frame 等閒下來才說」也是多的，拿掉。照新的程式改寫之後 8 條 4 條抓到，沒抓到的見上表。
+- 相關的 crate、`shell` 整組跑 3 次、98 個情境、152 個 machopo 的 reftest 都通過；WPT（`html/webappapis/`、`intersection-observer/`、`resize-observer/`、`requestidlecallback/`、`webmessaging/`、`workers/`、`html/syntax/parsing/`、`html/browsers/history/`、`the-iframe-element/`，892 個）沒有新的失敗。
 
 **驗證**：`a_timer_set_after_an_earlier_ones_time_runs` 改之前 3 次都卡滿 30 秒，改之後 3 次都通過；`cargo test --workspace` 通過（60 個 binary，4723 個通過、1 個 ignored，偵測沒有觸發）；`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`sanity.py` 的各項通過。還沒做：第 25 條的 mutation test、相關的 WPT 目錄和情境。
 

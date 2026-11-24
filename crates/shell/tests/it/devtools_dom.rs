@@ -1010,7 +1010,8 @@ fn a_tasks_changes_are_told_before_the_next_task() {
 
 /// The changes of the DOM's tasks a task queued (here a message a command
 /// posted) are told before the next task's: the command after, sent
-/// while the first runs, whose `console.log` is told at once.
+/// while the first runs (once it has posted the message, so that it is
+/// queued after it), whose `console.log` is told at once.
 #[test]
 fn queued_tasks_changes_are_told_before_the_next_task() {
     let (_machopo, mut page, _target, _server) = dom_page(&[("/", Route::ok("text/html", PAGE))]);
@@ -1023,10 +1024,18 @@ fn queued_tasks_changes_are_told_before_the_next_task() {
         "Runtime.evaluate",
         json!({ "expression": "onmessage = () => document.body.append(document.createElement('span'));
                                postMessage('', '*');
+                               console.log('posted');
                                const end = performance.now() + 200;
                                while (performance.now() < end) {}
                                0" }),
     );
+    loop {
+        let message = page.read().expect("messages");
+        if message["method"] == "Runtime.consoleAPICalled" {
+            break;
+        }
+        page.keep(message);
+    }
     let second = page.send(
         None,
         "Runtime.evaluate",

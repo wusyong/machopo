@@ -1545,7 +1545,6 @@ impl ScriptEngine for V8Engine {
             let context = scope.get_current_context();
             crate::window::run_task(scope, context, task.queue, now)
         });
-        // Taken as it ran; not, if it ran nothing.
         self.state().dom.read(|cx| cx.target_task(None));
         if ran {
             // Its own checkpoint ran; the rejections it left.

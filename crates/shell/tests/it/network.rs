@@ -30,6 +30,12 @@ fn pixel(frame: &Frame, x: u32, y: u32) -> [u8; 4] {
     frame.pixels[i..i + 4].try_into().unwrap()
 }
 
+/// The first frame drawn's, of `frame`'s navigation.
+fn first_pixel(frame: &Frame, x: u32, y: u32) -> [u8; 4] {
+    let i = ((y * frame.size.width + x) * 4) as usize;
+    frame.first_pixels[i..i + 4].try_into().unwrap()
+}
+
 const GREEN: [u8; 4] = [0, 128, 0, 255];
 
 #[test]
@@ -261,7 +267,7 @@ fn a_stylesheet_blocks_rendering_until_it_loads() {
     let frame = render(&server.url("/"));
     assert_eq!(pixel(&frame, 10, 10), GREEN);
     // Nothing was drawn before the sheet arrived.
-    assert_eq!(frame.frames_drawn, 1);
+    assert_eq!(first_pixel(&frame, 10, 10), GREEN);
 }
 
 /// A document isn't drawn till its parser has made its body (Blink's
@@ -280,7 +286,11 @@ fn a_document_is_drawn_once_it_has_a_body() {
     )]);
     let frame = render(&server.url("/"));
     assert_eq!(pixel(&frame, 10, 10), GREEN);
-    assert_eq!(frame.frames_drawn, 1, "nothing drawn before the body");
+    assert_eq!(
+        first_pixel(&frame, 10, 10),
+        GREEN,
+        "nothing drawn before the body"
+    );
 }
 
 /// Once it has its body, a document is drawn while the rest still comes:

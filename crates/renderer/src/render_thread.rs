@@ -415,6 +415,9 @@ struct RenderThread {
     /// handed it on: it waits until dispatched.
     pending_move_input: Option<Pending>,
     web_tests: bool,
+    /// The browser asked for a frame once the thread is idle
+    /// (`RendererMsg::RequestIdleFrame`, web tests' alone).
+    idle_frame_wanted: bool,
     /// `RendererFlags::automation`: WebDriver's webdriver-active flag too.
     automation: bool,
     /// `RendererFlags::user_agent`.
@@ -599,6 +602,7 @@ impl RenderThread {
             under_mouse_pre_paints: None,
             pending_move_input: None,
             mouse_move_acks: 0,
+            idle_frame_wanted: false,
             web_tests: flags.web_tests,
             automation: flags.automation,
             user_agent: Rc::from(flags.user_agent.as_str()),
@@ -668,12 +672,14 @@ impl RenderThread {
                 ),
             }
             self.after_task();
-            // Whether the compositor is to send a main frame, as the thread
-            // is to wait: what the tasks asked of it (a frame they asked for
-            // the task after them may have had already, its flag cleared
-            // as it is drawn).
-            if !self.scheduler.has_task(TaskQueues::ALL) {
-                self.update_begin_main_frame();
+            // Whether the task wants a main frame, to the compositor as it
+            // ends (Blink's `SetNeedsAnimate` as it is asked for), a task
+            // waiting or not: a page that keeps queuing tasks still has its
+            // frames.
+            let needs = self.update_begin_main_frame();
+            if !needs && self.idle_frame_wanted && !self.scheduler.has_task(TaskQueues::ALL) {
+                self.idle_frame_wanted = false;
+                self.request_idle_frame();
             }
         }
         tracing::debug!("renderer main thread exiting");
@@ -820,7 +826,7 @@ impl RenderThread {
     /// `SetNeedsAnimate`, as each asks): one was asked for, an animation
     /// frame callback waits, a resize loop error is to be reported,
     /// transitions and animations run, or a mouse move waits for the frame.
-    fn update_begin_main_frame(&mut self) {
+    fn update_begin_main_frame(&mut self) -> bool {
         let animation_frames = self.wants_animation_frame();
         // Running transitions and CSS animations move on at each frame
         // (script played or canceled one).
@@ -833,6 +839,20 @@ impl RenderThread {
         self.widget()
             .layer_tree_host
             .set_needs_begin_main_frame(needs);
+        needs
+    }
+
+    /// `RendererMsg::RequestIdleFrame`'s, now the thread has no task and
+    /// wants no frame: a main frame, answered once it has gone to Viz.
+    fn request_idle_frame(&mut self) {
+        let to_browser = self.to_browser.clone();
+        self.request_main_frame();
+        self.widget()
+            .pending_visual_states
+            .push(SwapPromise::new(move |frame_token| {
+                let _ = to_browser.send(RendererHostMsg::IdleFrameReady { frame_token });
+            }));
+        self.update_begin_main_frame();
     }
 
     /// The navigations the task asked for may commit now
@@ -1281,6 +1301,10 @@ impl RenderThread {
                 self.scroll_into_view_if_needed(&frames, &selector)
             }
             RendererMsg::RequestVisualState { request_id } => self.request_visual_state(request_id),
+            RendererMsg::RequestIdleFrame if self.web_tests => self.idle_frame_wanted = true,
+            RendererMsg::RequestIdleFrame => {
+                tracing::warn!("RequestIdleFrame without RendererFlags::web_tests; ignored");
+            }
             RendererMsg::WebDriver {
                 request_id,
                 frame,

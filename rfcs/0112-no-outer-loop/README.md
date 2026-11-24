@@ -6,7 +6,7 @@
 
 ## 摘要
 
-renderer 的 event loop 原本分兩層：內圈一個個跑 scheduler 的 task，跑完通道上排著的每一個之後，才輪到外圈（`RenderThread::run` 在那一批之後的二十來個步驟）：DOM 的 timer 和其他 task、parser 的續跑、子 frame 的 commit、DevTools 的 frame 事件、導覽、blob URL 的撤銷……。通道一直有 task 時它們就一直晚，先後由外圈的那張清單決定。Blink 沒有外圈：一件事不是在發生的當下做，就是 scheduler 上某個 task queue 的 task，或是每個 task 結束時的觀察者（`TaskObserver`）。這份 RFC 讓 machopo 照同樣的三類：導覽在 setter 裡交給 Browser、DevTools 的 frame 事件在改變的當下送；DOM 的 task、parser 的續跑、commit、renderer 自己的 timer 和 V8 的 platform task 都是 scheduler 的 task；Chrome 也在 task 之後做的是 task 之後的觀察者。外圈拿掉了：`RenderThread::run` 只剩取一個 task、跑它、task 之後的觀察者、沒有 task 時的 idle callback，和要等下一個 task 之前決定要不要 main frame。
+renderer 的 event loop 原本分兩層：內圈一個個跑 scheduler 的 task，跑完通道上排著的每一個之後，才輪到外圈（`RenderThread::run` 在那一批之後的二十來個步驟）：DOM 的 timer 和其他 task、parser 的續跑、子 frame 的 commit、DevTools 的 frame 事件、導覽、blob URL 的撤銷……。通道一直有 task 時它們就一直晚，先後由外圈的那張清單決定。Blink 沒有外圈：一件事不是在發生的當下做，就是 scheduler 上某個 task queue 的 task，或是每個 task 結束時的觀察者（`TaskObserver`）。這份 RFC 讓 machopo 照同樣的三類：導覽在 setter 裡交給 Browser、DevTools 的 frame 事件在改變的當下送；DOM 的 task、parser 的續跑、commit、renderer 自己的 timer 和 V8 的 platform task 都是 scheduler 的 task；Chrome 也在 task 之後做的是 task 之後的觀察者。外圈拿掉了：`RenderThread::run` 只剩取一個 task、跑它、task 之後的觀察者、沒有 task 時的 idle callback，和要不要 main frame（每個 task 結束時告訴 compositor）。
 
 ## 動機
 
@@ -45,13 +45,13 @@ renderer 的 event loop 原本分兩層：內圈一個個跑 scheduler 的 task�
 
 - **發生的當下**：`location.href = x` 返回時 Browser 已經收到導覽；插入 iframe 返回時 DevTools 已經收到 `frameAttached`，在那個 frame 的 `executionContextCreated` 之前；子 frame 的 `frameNavigated` 在它的 realm 和 script 之前；DevTools 的 `CSS` 的命令要的 sheet 在命令的 task 裡就去抓。
 - **scheduler 的 task**：`setTimeout` 的 callback、element task、訊息各是一個 task（`TaskQueue::Dom`）；parser 讓出之後的續跑、子 frame 的 commit、等 sheet 的 script、`javascript:` 網址的 commit、renderer 自己的 timer（caret、intersection 的 `delay`、延後的 iframe `load`、新內容的逾時、network idle、wasm guest 的等待）、V8 的 platform task 是 `TaskQueue::Internal` 的 task。和其他 task 照排進來的先後輪到，延後的到期、scheduler 挑下一個時才排進去；輪到時再看還該不該做。
-- **task 之後的觀察者**（`after_task`，Chrome 的 `TaskObserver::DidProcessTask`）：每個 task 之後依序做，加新的步驟時寫明對應 Chrome 的哪一個；沒有 task 時跑一個 idle callback；loop 要等下一個 task 之前決定要不要 main frame。
+- **task 之後的觀察者**（`after_task`，Chrome 的 `TaskObserver::DidProcessTask`）：每個 task 之後依序做，加新的步驟時寫明對應 Chrome 的哪一個；沒有 task 時跑一個 idle callback；要不要 main frame 在每個 task 結束時告訴 compositor（Blink 的 `SetNeedsAnimate` 在要求的當下）。
 
 ## 詳細設計
 
 ### loop
 
-`RenderThread::run` 每一圈：標成 idle（給 DevTools 的 profile）、等下一個 task 或到 idle callback 能跑的時候（`scheduler.next(TaskQueues::ALL, until_idle)`）、跑那個 task（`run_task`）或一個 idle callback、`after_task`；接著沒有 task 了才決定要不要 main frame（`update_begin_main_frame`：要求了 frame、animation frame 的 callback、resize loop 的錯誤、跑著的 transition 和 animation、等著的 mouse move）。要不要 frame 放在要等之前，不在每個 task 之後：一個 task 要的 frame 在下一個 task 之前可能已經畫了、旗標清了，在那之間決定會多要一個（`canvas::a_draw_asks_for_a_frame` 抓到的），和原本外圈在一批之後決定一樣。
+`RenderThread::run` 每一圈：標成 idle（給 DevTools 的 profile）、等下一個 task 或到 idle callback 能跑的時候（`scheduler.next(TaskQueues::ALL, until_idle)`）、跑那個 task（`run_task`）或一個 idle callback、`after_task`；接著看要不要 main frame（`update_begin_main_frame`：要求了 frame、animation frame 的 callback、resize loop 的錯誤、跑著的 transition 和 animation、等著的 mouse move）：每個 task 結束時照實告訴 compositor（Blink 的 `SetNeedsAnimate` 在要求的當下），後面還有 task 也一樣，頁面一直排 task 給自己時 frame 照樣來（第 26 條）。
 
 ### 當場做的
 
@@ -74,7 +74,6 @@ renderer 的 event loop 原本分兩層：內圈一個個跑 scheduler 的 task�
 
 - scheduler 沒有優先度：`TaskQueue::Dom`、`TaskQueue::Internal` 和其他 queue 照排進來的先後（第 15、17 條）；Chrome 的 input 比較高，machopo 的 `forms::reset_buttons_and_links` 的兩個 click 照先後跑（第 13 條）。
 - `<select>` 的選單、WebDriver 的結果、`toBlob` 在 task 之後，不是當場或 idle task（第 19、20 條）：差別只在同一個 task 之內。
-- 要不要 main frame 在要等之前決定，不在要求的當下（上面的「loop」）。
 - engine 的 inspector 的回答（`Runtime.evaluate` 裡改了 DOM）比那個 task 的 DOM 變動先到（第 9 條，記在 `docs/limitations.md`）。
 - worker 的 loop 照舊一輪一輪跑（第 14 條）。
 
@@ -181,6 +180,13 @@ renderer 的 event loop 原本分兩層：內圈一個個跑 scheduler 的 task�
    - 不選 scheduler 的延後 task 一律經過 heap（A）：順序變成 `a,b`，和 Chrome 不同，也只修這一種對不上。不選記號找不到時跑 queue 的第一個當安全網（B）：不會丟 task，但順序是 DOM 的，和 Chrome 不同。
    - 同時找到、沒有修的：通道一直有 task 時（頁面一直排 task 給自己也算），要不要 main frame 只在通道空了時才決定，`requestAnimationFrame` 一直不來。改成每個 task 之後就告訴 compositor 時，shell 有 7 個測試的 headless 以為「input 之後的那一張 frame 已經有 input 引起的全部」，記進 `docs/limitations.md`，之後另外處理。
 
+26. **做完之後：要 main frame 的當下告訴 compositor；headless 等 renderer 閒下來的 frame**（2026-11-24，使用者決定；A）：第 25 條最後一項記下的 `requestAnimationFrame` 在通道一直有 task 時不來（`event_loop::an_animation_frame_comes_while_responses_keep_coming` 改之前 3 次都壞），Speedometer 的 async 也可能因此變長（量的是到下一個 frame 畫完）。
+   - 做法：每個 task 之後照實告訴 compositor 要不要 main frame。對照 Chrome：`SetNeedsAnimate` 在要求的當下，另有 rendering 的防餓死（優先度，留給「之後的可能」）。第 5 段改成只在沒有 task 時才決定，是因為那時 6 個 `shell` 的測試壞了，當時以為是「多要了一張 frame」，其實是 headless 的 harness 的假設（下一項）；mutation test 看出「不要了等閒下來才說」是多的（`needs` 是 false 時本來就沒有理由要 frame），拿掉了。
+   - headless 的 harness 原本把最後一個 input 的 ack 指定的 frame 當成 input 處理完了：只在「通道空了才要 frame」時成立，改了之後那張 frame 排在 input 留下的 task（連結導覽之後的 `hashchange`）前面，`shell` 有 5 個測試讀到舊的標題。改成 input 都 ack、那張 frame 也畫了之後，再要一張 renderer 沒有 task、也不要 frame 時的 frame（新的 `RendererMsg::RequestIdleFrame`，只在 `web_tests`；回答 `IdleFrameReady` 帶著那張 frame 的 token，像 input 的 ack），畫出來才結束。不選只送一個「閒下來了」的訊息：它走 Browser 的通道、frame 走 Viz 的，兩者不保證先後，harness 可能在最後那張 frame 到之前結束。不改 `VisualStateReady`（加 token）：瀏覽器的測試裡有十幾處照它的欄位 match。content_shell 的 web test 也不是靠某一張 frame，是等頁面說完成，或擷取前要 renderer 再畫一次。
+   - 算畫了幾張的測試照 task 怎麼切、begin frame 什麼時候到而變（每個 task 之後就要 frame，載入期間 parse、sheet、`load` 的 task 各可能畫一張；整組一起跑時 canvas 的那一個失敗過），改成照它們的本意：headless 的 `Frame` 多給第一張 frame 的像素和它畫出來的時間、load 之後畫了幾張（照 frame 的 token），「sheet、body 之前沒畫」看第一張就是完整的，alternate 的 sheet 不擋畫面看第一張在它到之前就畫了（它的延遲從 500 ms 拉長到 2 s），canvas 看 load 之後剛好兩張。
+   - 同時發現、和 A 無關的：`devtools_dom::queued_tasks_changes_are_told_before_the_next_task` 整組跑時失敗過一次：第二個命令可能在第一個執行到 `postMessage` 之前就排進 scheduler（第 3 段起就是這樣），改成等第一個命令印出一行才送第二個，它守的 2 個 mutant 照樣抓到。
+   - `target_task` 只在 engine 跑那個記號的期間設著（mutation test 看出 `dom` 取出 task 時再清一次是等價的：一個 task 執行中沒有地方另外挑 DOM 的 task），`dom` 的 `task_taken` 拿掉。
+
 ## 待決定
 
 目前沒有。
@@ -188,5 +194,5 @@ renderer 的 event loop 原本分兩層：內圈一個個跑 scheduler 的 task�
 ## 之後的可能
 
 - **DOM 的 task 只有一套順序，主 thread 和 worker 一樣**（一份 RFC）：主 thread 的記號跑它自己的那一個 task（第 25 條），順序只在 scheduler；但 `dom` 自己還有一套 `(時間, 編號)` 的順序（`next_task`、一輪的 `begin_task_pass`），給 worker 的 loop、測試和 debug build 的偵測用。兩套之間另外補的還在：port 的訊息照佇列的順序拿編號、port 啟用時重送記號（WPT 的 `webmessaging/` 才抓到），兩個時鐘差一點時照 scheduler 交出的時間跑（`dom_now().max(task.at)`，只靠審查），取消的 task 的記號跑到才知道沒事。主 thread 和 worker 也是兩種模型，worker 照舊一輪一輪跑。做法：`dom` 只照編號存 task 的內容（有 GC 的參照，不能進跨 thread 的 scheduler），順序只在 scheduler；worker 的 loop 改用同樣的 scheduler（DOM、自己的工作、V8 的 platform task 各是一個 task），拿掉 `dom` 的 `next_task`、一輪的機制和時鐘的換算，port 的訊息到能送的時候才拿編號。兩件要一起做：worker 還在用 `dom` 的順序時，那一套拿不掉。
-- Chrome 的 scheduler 優先權（input、rendering）：通道更忙時需要；那時 DOM 和 renderer 自己的 task 照 task type 分 queue（第 15、17 條沒有分）。和要 main frame 的時機一起做：Chrome 在要求的當下 `SetNeedsAnimate`，另有 rendering 的防餓死；machopo 等通道空了才告訴 compositor（第 25 條的最後一項）。
+- Chrome 的 scheduler 優先權（input、rendering）：通道更忙時需要；那時 DOM 和 renderer 自己的 task 照 task type 分 queue（第 15、17 條沒有分）。那時一起做 rendering 的防餓死（Chrome 的 compositor 的 queue 超過 100 ms 沒有 main frame 時升到很高的優先度）。
 - 導覽帶著解析好的 blob（`BlobURLToken`）。

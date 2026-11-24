@@ -68,28 +68,6 @@ to = '''            let _ = at;'''
 test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "wasm_documents::"]
 
 [[mutant]]
-name = "no main frame is ever asked for"
-file = "crates/renderer/src/render_thread.rs"
-from = '''            if !self.scheduler.has_task(TaskQueues::ALL) {
-                self.update_begin_main_frame();
-            }'''
-to = '''            if !self.scheduler.has_task(TaskQueues::ALL) && false {
-                self.update_begin_main_frame();
-            }'''
-test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "canvas::"]
-
-[[mutant]]
-name = "a main frame is decided after every task"
-file = "crates/renderer/src/render_thread.rs"
-from = '''            if !self.scheduler.has_task(TaskQueues::ALL) {
-                self.update_begin_main_frame();
-            }'''
-to = '''            if !self.scheduler.has_task(TaskQueues::ALL) || true {
-                self.update_begin_main_frame();
-            }'''
-test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "canvas::"]
-
-[[mutant]]
 name = "no idle callback runs"
 file = "crates/renderer/src/render_thread.rs"
 from = '''                    || self.run_idle_callback(),'''

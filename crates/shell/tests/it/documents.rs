@@ -121,6 +121,12 @@ fn pixel(frame: &headless::Frame, x: u32, y: u32) -> [u8; 4] {
     frame.pixels[i..i + 4].try_into().unwrap()
 }
 
+/// The first frame drawn's, of `frame`'s navigation.
+fn first_pixel(frame: &headless::Frame, x: u32, y: u32) -> [u8; 4] {
+    let i = ((y * frame.size.width + x) * 4) as usize;
+    frame.first_pixels[i..i + 4].try_into().unwrap()
+}
+
 const GREEN: [u8; 4] = [0, 128, 0, 255];
 const WHITE: [u8; 4] = [255, 255, 255, 255];
 
@@ -284,7 +290,11 @@ fn a_linked_sheet_blocks_rendering() {
     )
     .expect("drawn");
     assert_eq!(pixel(&frame, 10, 10), GREEN);
-    assert_eq!(frame.frames_drawn, 1, "nothing drawn before the sheet");
+    assert_eq!(
+        first_pixel(&frame, 10, 10),
+        GREEN,
+        "nothing drawn before the sheet"
+    );
 }
 
 /// An alternate `<link>`'s sheet loads (the window's `load` waits for it),
@@ -317,17 +327,24 @@ fn an_alternate_sheet_doesnt_block_or_apply() {
                  <style>body { margin: 0 }</style><div style='height: 20px; background: green'></div>",
             ),
         ),
-        ("/alt.css".to_owned(), sheet("div { visibility: hidden }", 500)),
+        ("/alt.css".to_owned(), sheet("div { visibility: hidden }", 2000)),
         ("/plain.css".to_owned(), plain),
     ]))
     .expect("the test server starts");
     let size = gfx::Size::new(100, 100);
     // Green before the alternate one came (the other one, `text/plain`,
-    // in), blue from the window's `load` after it: two frames.
+    // in), blue from the window's `load` after it.
     let frame = headless::render_after_input(&server.url("/index.html"), size, 1.0, true, &[])
         .expect("drawn");
     assert_eq!(pixel(&frame, 10, 10), [0, 0, 255, 255], "neither applies");
-    assert_eq!(frame.frames_drawn, 2, "drawn before the alternate one came");
+    assert_eq!(first_pixel(&frame, 10, 10), GREEN);
+    assert!(
+        frame
+            .first_drawn_after
+            .is_some_and(|after| after < Duration::from_millis(2000)),
+        "drawn before the alternate one came: {:?}",
+        frame.first_drawn_after
+    );
     let frame = headless::render_after_input(&server.url("/quirks.html"), size, 1.0, true, &[])
         .expect("drawn");
     assert_eq!(pixel(&frame, 10, 10), WHITE, "quirks mode takes it");

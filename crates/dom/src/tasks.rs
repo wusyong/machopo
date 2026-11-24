@@ -141,20 +141,14 @@ impl<'gc> Cx<'_, 'gc> {
     }
 
     /// The host's scheduler runs task `number` (a token of its own stands
-    /// for each task, `TaskWaker`), or none: until it is taken out of its
-    /// queue it is the first of its queue and the only one that may run,
-    /// as each of Blink's tasks is a closure of its own whatever was
-    /// queued before it (a timer set as the thread ran past an earlier
-    /// one's time comes first: its token was queued first). Taken, the
-    /// others may run again (what it runs may run other tasks).
+    /// for each task, `TaskWaker`), or none once it has: meanwhile it is
+    /// the first of its queue and the only one that may run, as each of
+    /// Blink's tasks is a closure of its own whatever was queued before it
+    /// (a timer set as the thread ran past an earlier one's time comes
+    /// first: its token was queued first). Nothing takes another of the
+    /// DOM's tasks as one runs: each is the scheduler's own.
     pub fn target_task(&self, number: Option<u64>) {
         self.changes.task_target.set(number);
-    }
-
-    /// The task the host's scheduler runs is taken out of its queue: the
-    /// others may run again.
-    pub(crate) fn task_taken(&self) {
-        self.changes.task_target.set(None);
     }
 
     /// A pass of the host's begins: until it ends, only the tasks numbered

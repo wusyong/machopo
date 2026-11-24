@@ -656,7 +656,6 @@ impl<'gc> Cx<'_, 'gc> {
         if timer.due.get() > now {
             return None;
         }
-        self.task_taken();
         timers.remove(self.gc, index);
         Some(DueNativeTimer {
             element: timer.element.get(self.gc),
@@ -689,7 +688,6 @@ impl<'gc> Cx<'_, 'gc> {
         let tasks = context.element_tasks.get(self.gc)?;
         let index = self.first_element_task(context)?;
         let task = tasks.get(self.gc, index)?;
-        self.task_taken();
         tasks.remove(self.gc, index);
         let data = task.data.get();
         let kind = match task.action.get() {
@@ -1353,7 +1351,6 @@ impl<'gc> Cx<'_, 'gc> {
         if timer.due.get() > now {
             return None;
         }
-        self.task_taken();
         let running = timer.nesting.get();
         match timer.interval.get() {
             Some(interval) => {

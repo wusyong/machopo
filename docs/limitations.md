@@ -209,7 +209,7 @@
 - 不等 main thread 的模式（視窗）沒有 deadline：main thread 的結果一律晚一個 frame 才畫出來，即使它在那個 frame 裡就 commit 了。
 - 視窗被遮住或縮小時，renderer 照樣每個 `BeginFrame` 跑 main frame，只是 Viz 不畫：CPU 照樣在用（Chromium 會把被遮住的分頁設成隱藏，`WasHidden`，停掉 `BeginFrame` 和 `requestAnimationFrame`）。
 - 視窗模式的 `BeginFrame` 照固定的 16.7 ms，不跟 vsync；headless 一回答就送下一個。
-- 要不要 main frame 等 renderer 的 main thread 沒有 task 時才告訴 compositor（Chrome 在要求的當下 `SetNeedsAnimate`，另有 rendering 的防餓死）：通道一直有 task 時（網路的回應接力、頁面一直排 timer 或訊息給自己），`requestAnimationFrame` 和畫面的更新一直不來，直到 task 停下。
+- scheduler 沒有 rendering 的防餓死（Chrome 的 compositor 的 queue 超過 100 ms 沒有 main frame 時升到很高的優先度）：main frame 的 task 和其他 task 照排進來的先後，通道很忙時 frame 照樣來，但排在已經排著的 task 後面。
 - 滑鼠的按下、放開、按鍵和交給 main thread 的滾輪會分派事件、跑 script，跑 script 一律要求 main frame，所以它們的 ack 都等下一個 frame，即使 script 什麼都沒改；滑鼠移動在下一個 main frame 才分派（rAF 對齊），ack 等分派之後（分頁隱藏時當場分派）；分派了 `mousemove` 的 frame 也一律跑一次 rendering update（Chrome 只在有東西變了時才更新）。
 - 和以前全部由 main 依序處理不同、和 Chromium 相同的兩點：一批 input 一起送時，main 把容器捲不完的量傳給 viewport，要到下一次 commit compositor 才知道；已經捲到底、而讓頁面變長的 commit 還沒到時，這期間的滾輪被丟掉。compositor 的 ack 也可能比更早轉給 main 的 ack 先到。
 - `navigator.scheduling.isInputPending()` 的滑鼠和滾輪算給哪個 frame，compositor 照 paint 記下的範圍判斷：子 frame 的內容框，和祖先 frame 在它之後畫的、打得到的目標的框（`HitTestData` 的 rect，蓋到的地方算「不知道」）；Chrome 照 cc 的 layer 判斷。所以 layer 的範圍比打得到的目標大時不同：`box-shadow` 伸到 iframe 上時，Chrome 照 layer 的範圍（元素和 shadow 的聯集）也算「不知道」，machopo 照元素的框算給 iframe；好幾個蓋在 iframe 上的東西被 Chrome 合成一個 layer 時，點在它們之間的空隙裡 Chrome 是「不知道」，machopo 算給 iframe（2026-10-24 對照 Chrome 152）。被合併的 `mousemove` 一直算到下一個 main frame 分派它（Chrome 一樣等 rAF 對齊的分派）。跨 origin 的 iframe 和外面的頁面在同一個 renderer 裡，計數也是同一份，判斷照 Blink 的 `CanAccessEvent` 擋掉看不到的（Chrome 的跨 site iframe 在另一個 renderer process，各數各的）。

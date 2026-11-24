@@ -301,7 +301,7 @@ fn drawn_the_same_by_both_headless_runs() {
 }
 
 /// A timer's draw, which changes nothing else, is drawn in a frame of its
-/// own: the load's, the draw's, and the one that shows `reftest-wait`
+/// own: once loaded, the draw's and the one that shows `reftest-wait`
 /// gone.
 #[test]
 fn a_draw_asks_for_a_frame() {
@@ -320,7 +320,7 @@ onload = () => {
 </script>"#,
     );
     let frame = headless::render_after_input(&url, SIZE, 1.0, true, &[]).expect("drawn");
-    assert_eq!(frame.frames_drawn, 3);
+    assert_eq!(frame.frames_drawn_after_load, 2);
     assert_eq!(&frame.pixels[..4], [0, 0, 0, 255]);
 }
 

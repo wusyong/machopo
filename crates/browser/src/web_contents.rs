@@ -1681,6 +1681,13 @@ impl WebContents {
             .send(RendererMsg::RequestVisualState { request_id });
     }
 
+    /// Asks the renderer, with `RendererFlags::web_tests`, for a frame once
+    /// it has no task and wants no frame, answered with
+    /// `RendererHostMsg::IdleFrameReady` (the test harness's, after input).
+    pub fn request_idle_frame(&self) {
+        self.process.send(RendererMsg::RequestIdleFrame);
+    }
+
     /// Tells the renderer where the current entry is and how many there
     /// are (`SetHistoryOffsetAndLength`), as of the new entries of its own
     /// it has heard of.
@@ -1883,6 +1890,7 @@ impl WebContents {
             | RendererHostMsg::TestharnessResults { .. }
             | RendererHostMsg::QueryElementResult { .. }
             | RendererHostMsg::VisualStateReady { .. }
+            | RendererHostMsg::IdleFrameReady { .. }
             | RendererHostMsg::WebDriverReply { .. }
             | RendererHostMsg::DevToolsMessage { .. } => {}
             // What was in flight will never be acknowledged; the next

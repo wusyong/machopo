@@ -1,0 +1,76 @@
+# After the stages (decisions 25 and 26): `python3 scripts/test.py mutate rfcs/0112-no-outer-loop/mutants-6.toml`.
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it"]
+timeout = 240
+
+[[mutant]]
+name = "a token runs its queue's first task alone"
+file = "crates/dom/src/tasks.rs"
+from = '''        if let Some(target) = self.changes.task_target.get() {
+            return number == target;
+        }'''
+to = '''        if let Some(target) = self.changes.task_target.get() {
+            let _ = target;
+        }'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "event_loop::"]
+
+[[mutant]]
+name = "an element task behind the first isn't found"
+file = "crates/dom/src/window.rs"
+from = '''        (0..tasks.len()).find(|&index| {'''
+to = '''        (0..tasks.len().min(1)).find(|&index| {'''
+
+[[mutant]]
+name = "a token that finds nothing leaves it the only one"
+file = "crates/dom_js/src/engine.rs"
+from = '''        let Some((task, index, now)) = found else {
+            self.state().dom.read(|cx| cx.target_task(None));'''
+to = '''        let Some((task, index, now)) = found else {'''
+
+[[mutant]]
+name = "headless takes the frame its last ack names"
+file = "crates/shell/src/headless.rs"
+from = '''                if input.is_empty() {
+                    break Ok(());
+                }'''
+to = '''                if input.len() < usize::MAX {
+                    break Ok(());
+                }'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "forms::"]
+
+[[mutant]]
+name = "a token that ran leaves its task the only one"
+file = "crates/dom_js/src/engine.rs"
+from = '''            crate::window::run_task(scope, context, task.queue, now)
+        });
+        self.state().dom.read(|cx| cx.target_task(None));'''
+to = '''            crate::window::run_task(scope, context, task.queue, now)
+        });'''
+
+[[mutant]]
+name = "the compositor hears of a frame wanted only as the thread is idle"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        self.widget()
+            .layer_tree_host
+            .set_needs_begin_main_frame(needs);
+        needs'''
+to = '''        if !needs || !self.scheduler.has_task(TaskQueues::ALL) {
+            self.widget()
+                .layer_tree_host
+                .set_needs_begin_main_frame(needs);
+        }
+        needs'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "event_loop::"]
+
+[[mutant]]
+name = "the idle frame is never asked for"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                self.idle_frame_wanted = false;
+                self.request_idle_frame();'''
+to = '''                self.idle_frame_wanted = false;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "forms::"]
+
+[[mutant]]
+name = "headless doesn't wait for the idle frame to be drawn"
+file = "crates/shell/src/headless.rs"
+from = '''                if idle_frame.is_some_and(|frame| frame.is_none_or(|frame| drawn >= frame)) {'''
+to = '''                if idle_frame.is_some() {'''

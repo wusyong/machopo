@@ -1152,7 +1152,6 @@ impl ScriptEngine for WasmEngine {
             task.queue,
             now,
         );
-        // Taken as it ran; not, if it ran nothing.
         self.dom().read(|cx| cx.target_task(None));
         ran
     }

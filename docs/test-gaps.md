@@ -222,6 +222,8 @@
 
 - DevTools 的 `CSS` 在 lifecycle 之後才要的 sheet 的原文，在 task 之後抓（`start_css_refetches`）：拿掉之後沒有測試失敗，測試裡要原文的都是命令，命令的 task 裡當場就抓了。
 - overlay 跟著節點、要一個 frame（`overlay_agent.showing()` 的那一段）：拿掉之後沒有測試失敗，`devtools_overlay` 的測試裡 overlay 的命令和畫面的 frame 本來就要了 frame。要一個框著的節點在沒有其他 frame 時移動的測試。
+- headless 在 input 之後等 renderer 閒下來的那一張 frame 畫出來才結束（`headless.rs` 的 `idle_frame` 比 `drawn`）：拿掉之後沒有測試失敗。`IdleFrameReady` 走 Browser 的通道、frame 走 Viz 的，要前者先到才看得出差別，測試排不出那個順序。
+- debug build 偵測沒有記號的 DOM task（`render_thread.rs` 的 `assert_no_dom_task_lost`）：它是檢查，拿掉之後測試照樣通過；engine 找不到記號的 task 時清掉 `target_task`（`run_dom_task`），沒清的話只有這個檢查看不到別的 task，測試也看不出來。
 - wasm guest 的等待結束時跑它的延後的 task（`post_guests`）：`wasm_documents` 的測試裡畫面的 frame 照樣叫醒 loop、跑到它（和「loop 等待時為 renderer 自己的延後的 task 醒來」同一個原因）。
 
 ## 沒有計數守著的優化
@@ -291,6 +293,11 @@
 **DevTools 的 `CSS` 的命令要的 sheet 的原文（`devtools.rs` 的 `devtools_message`）**
 
 - 在命令的 task 裡當場抓，和在那個 task 之後抓（`after_task` 的 `start_css_refetches`）看不出差別：兩者都在同一個 task 結束之前送出請求，回答在請求之前就送了。留著當場的，是照 Chrome 在 `CSS.enable` 的 task 裡抓。
+
+**記號跑它自己的那一個 task（`dom` 的 `target_task`、engine 的 `run_dom_task`）**
+
+- element task 照編號在整個 queue 裡找（`first_element_task`），不只看第一個：記號照排進來的順序 post，要跑的那一個總是第一個。
+- engine 跑完那個記號時清掉 `target_task`：下一個記號輪到時會先設成它的，一個 task 執行中也沒有地方另外挑 DOM 的 task；留著是讓 `target_task` 只在跑那個記號的期間設著（debug build 的偵測和測試直接跑 DOM 的 task 時看到全部）。
 
 **DOM 的 task 是 scheduler 的 task（`render_thread.rs` 的 `after_task`、`dom` 的 `worker.rs`）**
 

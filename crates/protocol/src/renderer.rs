@@ -369,6 +369,14 @@ pub enum RendererMsg {
     /// main frame and answers once it has swapped, even with nothing new to
     /// draw: the last commit may not have reached Viz yet.
     RequestVisualState { request_id: u64 },
+    /// With `RendererFlags::web_tests`: once the main thread has no task
+    /// and wants no frame (what the input before ran, and the tasks it
+    /// left), answer with `IdleFrameReady` once a main frame asked for
+    /// then has gone to Viz. A frame that shows what input led to, for the
+    /// test harness: its ack's frame may come before tasks the input
+    /// queued (a link's `hashchange`), as a main frame is asked for as a
+    /// task ends.
+    RequestIdleFrame,
     /// With `RendererFlags::automation`: WebDriver's work in a frame of the
     /// tab (`frame`, a frame id `WebDriverCommand::SwitchToFrame` gave; the
     /// top-level one if none), answered with `WebDriverReply` (a script
@@ -901,6 +909,11 @@ pub enum RendererHostMsg {
     QueryElementResult {
         query_id: u64,
         element: Option<QueriedElement>,
+    },
+    /// The answer to `RendererMsg::RequestIdleFrame`: the frame that went
+    /// to Viz, if one did (its token, as an input's ack names its frame).
+    IdleFrameReady {
+        frame_token: Option<u64>,
     },
     /// The answer to `RendererMsg::RequestVisualState`: the frame showing
     /// it has gone to Viz before this.

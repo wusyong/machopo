@@ -31,8 +31,18 @@ pub struct Frame {
     /// changed it to.
     pub url: Option<String>,
     /// Frames Viz drew for the navigation, this one included. More than
-    /// one means the page showed before it finished loading.
+    /// one means the page showed before it finished loading; how many it
+    /// takes to load depends on when the begin frames come (a main frame
+    /// is asked for as each task ends), so a test of what was drawn before
+    /// the load reads `first_pixels`.
     pub frames_drawn: usize,
+    /// Of them, those after the frame `DidFinishLoad` named (the page's
+    /// `load` and what came of it): what the page did once loaded.
+    pub frames_drawn_after_load: usize,
+    /// The first frame drawn, as `pixels` (empty if none was): what showed
+    /// before anything else did; and how long after the navigation began.
+    pub first_pixels: Vec<u8>,
+    pub first_drawn_after: Option<Duration>,
     /// The subresources that failed to load (see `DidFinishLoad`).
     pub failed_subresources: Vec<String>,
 }
@@ -106,9 +116,10 @@ pub fn render_with_reftest_wait_timeout(
 /// Like [`render`], then sends `input` once the page has loaded and drawn,
 /// and returns the frame that shows what it did, once the renderer has
 /// handled it all (acknowledged every event, after sending what they led
-/// to): the frame the last ack that waited for one names, or the frame
-/// already drawn if none did; if the input started a navigation (a click
-/// on a link), the first frame with that page loaded.
+/// to) and run the tasks it left: a frame asked for once the renderer has
+/// no task and wants no frame (`RendererMsg::RequestIdleFrame`), or the
+/// frame already drawn if none went; if the input started a navigation (a
+/// click on a link), one with that page loaded.
 pub fn render_after_input(
     url: &str,
     viewport_size: Size,
@@ -291,11 +302,22 @@ fn drive(
     // The newest frame drawn so far.
     let mut drawn_token = None;
     let mut frames_drawn = 0;
+    // Each frame drawn's token, the one `DidFinishLoad` named, and the
+    // first frame read back as it is drawn.
+    let mut drawn_tokens = Vec::new();
+    let mut load_token = None;
+    let first_copy = Arc::new(Mutex::new(None));
+    let started = Instant::now();
+    let mut first_drawn_after = None;
     // Once the loaded page is drawn: the input goes out, and then every ack,
     // and the newest frame they name.
     let mut input_sent = input.is_empty();
     let mut acks = 0;
     let mut acked_frame = None;
+    // Then a frame asked for once the renderer is idle (for which loaded
+    // navigation), and its answer: the frame it names, if one went.
+    let mut idle_frame_asked = None;
+    let mut idle_frame: Option<Option<u64>> = None;
     let result = loop {
         if let Some(deadline) = deadline
             && Instant::now() >= deadline
@@ -324,7 +346,20 @@ fn drive(
                 && acks == input.len()
                 && acked_frame.is_none_or(|acked| drawn >= acked)
             {
-                break Ok(());
+                if input.is_empty() {
+                    break Ok(());
+                }
+                // What the input led to may go on in tasks after the frame
+                // its ack names (a link's `hashchange`): a frame once the
+                // renderer has none left.
+                if idle_frame_asked != Some(navigation_id) {
+                    web_contents.request_idle_frame();
+                    idle_frame_asked = Some(navigation_id);
+                    idle_frame = None;
+                }
+                if idle_frame.is_some_and(|frame| frame.is_none_or(|frame| drawn >= frame)) {
+                    break Ok(());
+                }
             }
         }
         if begin_frames.wants_begin_frame() {
@@ -370,8 +405,16 @@ fn drive(
             ))) => {
                 let token = frame.metadata.frame_token;
                 display.submit_compositor_frame(sink, local_surface_id, frame);
+                if frames_drawn == 0 && display.needs_draw() {
+                    let into = first_copy.clone();
+                    display.request_copy_of_output(CopyOutputRequest::new(move |result| {
+                        *into.lock().unwrap_or_else(|e| e.into_inner()) = result;
+                    }));
+                }
                 if display.needs_draw() && display.draw_and_swap() {
                     drawn_token = Some(token);
+                    drawn_tokens.push(token);
+                    first_drawn_after.get_or_insert_with(|| started.elapsed());
                     // A count for tests: wrapping only miscounts.
                     frames_drawn = usize::wrapping_add(frames_drawn, 1);
                 }
@@ -415,6 +458,9 @@ fn drive(
                 web_contents.on_renderer_message(&msg);
                 match msg {
                     RendererHostMsg::UpdateTitle(t) => title = Some(t),
+                    RendererHostMsg::IdleFrameReady { frame_token } => {
+                        idle_frame = Some(frame_token);
+                    }
                     RendererHostMsg::InputEventAck { frame_token } => {
                         // Only compared with the inputs sent.
                         acks = usize::saturating_add(acks, 1);
@@ -427,6 +473,7 @@ fn drive(
                         reftest_wait,
                     } => {
                         failed_subresources = failed;
+                        load_token = Some(token);
                         if reftest_wait {
                             reftest_waiting =
                                 Some((0, crate::automation::deadline(reftest_wait_timeout)));
@@ -495,12 +542,24 @@ fn drive(
         Some(copied) => (copied.size, copied.pixels),
         None => (viewport_size, vec![0; transparent_len(viewport_size)]),
     };
+    let first_pixels = first_copy
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+        .map(|copied| copied.pixels)
+        .unwrap_or_default();
+    let frames_drawn_after_load = load_token.map_or(0, |load| {
+        drawn_tokens.iter().filter(|&&token| token > load).count()
+    });
     let frame = Frame {
         size,
         pixels,
         title,
         url,
         frames_drawn,
+        frames_drawn_after_load,
+        first_pixels,
+        first_drawn_after,
         failed_subresources,
     };
     Ok((frame, results))

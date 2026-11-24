@@ -512,7 +512,6 @@ impl<'gc> Cx<'_, 'gc> {
         context: Gc<'gc, crate::ExecutionContext>,
     ) -> Option<TakenMessage<'gc>> {
         let (port, (_, number)) = self.first_message(context)?;
-        self.task_taken();
         let (mut payload, origin, source, target) = match port {
             None => {
                 let queue = context.posted_messages.get(self.gc)?;

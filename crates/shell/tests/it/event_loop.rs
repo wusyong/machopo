@@ -372,3 +372,35 @@ onload = () => {
     let report = report(&[("/", Route::ok("text/html", page))]);
     assert_eq!(report, "b,a");
 }
+
+/// An animation frame callback asked for runs while the responses to a
+/// chain of `fetch()`es keep coming: the compositor hears a main frame is
+/// wanted as the task that asked ends, though another always waits
+/// (Blink's `SetNeedsAnimate` as it is asked for).
+#[test]
+fn an_animation_frame_comes_while_responses_keep_coming() {
+    let page = r#"<!DOCTYPE html><script>
+const busy = ms => { const until = performance.now() + ms; while (performance.now() < until); };
+let responses = 0;
+let frame = -1;
+const next = () => fetch('/r?' + responses, { cache: 'no-store' }).then(() => {
+  responses++;
+  if (responses < 40) { next(); busy(20); return; }
+  testRunner.reportHarnessResults(frame >= 0 && frame < 40 ? 'the frame came as they came' : `the frame came after ${frame}`);
+});
+fetch('/start', { cache: 'no-store' }).then(() => {
+  requestAnimationFrame(() => { frame = responses; });
+  next();
+  busy(20);
+});
+</script>"#;
+    let report = report(&[
+        ("/", Route::ok("text/html", page)),
+        ("/r", Route::ok("text/plain", "r")),
+        (
+            "/start",
+            Route::ok("text/plain", "start").with_delay(Duration::from_millis(300)),
+        ),
+    ]);
+    assert_eq!(report, "the frame came as they came");
+}
