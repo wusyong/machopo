@@ -126,9 +126,12 @@ Options:
                       With --automation-pipe: trust the root certificates in
                       the PEM file too, as web tests do WPT's.
   --user-data-dir DIR Keep the profile (what pages store) in the folder DIR,
-                      made if it isn't there, as Chrome's switch. Without
-                      it a window's is the user's own
-                      ({default_profile}), and
+                      made if it isn't there, as Chrome's switch, its HTTP
+                      cache in DIR's Cache (for a DIR in the user's data
+                      folder, at the same place in the system's folder
+                      for caches, as the user's own is). Without it a
+                      window's is the user's own ({default_profile}, its
+                      HTTP cache in {default_cache}), and
                       --automation-pipe's is in memory, gone as it ends.
                       Only one machopo has a folder at a time: a second one
                       doesn't start.
@@ -184,6 +187,15 @@ Keyboard and mouse shortcuts in the window: see crates/shell/README.md.",
         default_profile = browser::default_user_data_dir().map_or_else(
             || "nowhere here: the environment doesn't say where".to_owned(),
             |dir| dir.display().to_string()
+        ),
+        default_cache = browser::default_user_data_dir().map_or_else(
+            || "nowhere".to_owned(),
+            |dir| browser::user_cache_dir_on(browser::Platform::current(), &dir, |name| {
+                std::env::var_os(name)
+            })
+            .join("Cache")
+            .display()
+            .to_string()
         ),
     )
 }

@@ -15,12 +15,12 @@
 | 1d. cache 接進 `url_loader`：查、條件請求和 `304`、存、作廢、同時的請求（已決定的第 3、8、9、10 條） | 做完，待審查 | 2026-11-24 |
 | 1e. load flag：`fetch()` 的 `cache`、重新整理、上一頁、DevTools（已決定的第 11 條） | 做完，待審查 | 2026-11-24 |
 | 1f. WPT 的 `fetch/http-cache/`、情境、文件、mutation test；`btoa`、`atob`（已決定的第 12 條） | 做完，待審查 | 2026-11-24 |
-| 2. 磁碟的 backend（已決定的第 13 到 15 條） | | |
+| 2. 磁碟的 backend（已決定的第 13 到 20 條） | 做完，待審查 | 2026-11-24 |
 | 2a. SQLite 的 store：schema、自己的 thread、讀寫、壞掉的檔案（已決定的第 16 到 19 條） | 做完，待審查 | 2026-11-24 |
 | 2b. `HttpCache` 接上兩種 backend（記憶體的、SQLite 的），交易經過它讀寫（已決定的第 20 條） | 做完，待審查 | 2026-11-24 |
 | 2c. 大小上限：`ipc` 的平台層讀磁碟剩下的空間，照 `PreferredCacheSize` 算（已決定的第 14 條） | 做完，待審查 | 2026-11-24 |
 | 2d. cache 的資料夾：profile 對到各平台的 cache 資料夾，network context 打開它（已決定的第 15 條） | 做完，待審查 | 2026-11-24 |
-| 2e. 重新啟動之後照樣用（整合測試）、文件、mutation test | | |
+| 2e. 重新啟動之後照樣用（整合測試）、文件、mutation test | 做完，待審查 | 2026-11-24 |
 | 3. 重量網路版的 Speedometer | | |
 
 ## 驗收
@@ -173,4 +173,12 @@
 **新的測試**：`browser` 的 `profile::a_profiles_cache_is_where_the_platform_keeps_caches`、`cookies::a_profiles_http_cache_outlasts_its_storage`（用 `loaders.rs` 的 1x1 PNG，改成 `pub(crate)`）。
 
 **mutation test**（`mutants-2d.toml`，9 個）：9 個都抓到。`Profile::cache_dir` 用的平台（`Platform::current()`）沒有做 mutation：測試的 profile 不在真的使用者資料夾底下，換成哪個平台結果都是 profile 自己的資料夾，要測得用使用者真的資料夾；它只是把 `user_cache_dir_on` 接上目前的平台，靠審查。
+
+### 2e 和第 2 階段做完時（2026-11-24，macOS 26.6.2、Apple M4、debug build，`4caaa89` 之上）
+
+**重新啟動之後照樣用**：`net` 的 `a_cache_on_disk_answers_after_a_restart`、`a_304_updates_the_entry_on_disk` 等（2b），`browser` 的 `a_profiles_http_cache_outlasts_its_storage`（2d，經過 profile、`StoragePartition`、分頁的導覽和圖片）。情境沒有加：情境的頁面是 `file:` 的，不經過 HTTP cache，視窗看得到的只有重新整理的快捷鍵（1f 已經加進 `navigation.txt`）。
+
+**文件**：`machopo --help` 的 `--user-data-dir` 寫出 HTTP cache 在哪裡（預設的 profile 的照平台算出來，macOS 是 `~/Library/Caches/machopo/Cache`）；`docs/limitations.md`、`docs/architecture.md`（thread 和 `browser` 的那一列）、`crates/ipc/` 的 README 和 soundness、`crates/sql/README.md`、`crates/shell/README.md` 在各段裡改過了。
+
+**第 2 階段做完時的檢查**：`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace` 都通過（`bindings` 的 `gc_platform` 印出的兩個 panic 是測試刻意做的）；`sanity.py` 的 `deps`、`unsafe`、`tests`、`numerics`、`boundary`、`spans`、`docs` 通過。Windows 上只跑過 `ipc` 的 `disk_space`（2c）；`browser` 在 Windows 上 cache 的資料夾是 profile 自己的，沒有在 Windows 上跑過。
 
