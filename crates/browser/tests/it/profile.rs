@@ -2,9 +2,9 @@
 //! where a person's is by default on each platform.
 
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use browser::{Platform, Profile, ProfileError, user_data_dir_on};
+use browser::{Platform, Profile, ProfileError, user_cache_dir_on, user_data_dir_on};
 
 /// A new, empty folder for one test.
 fn scratch(name: &str) -> PathBuf {
@@ -143,4 +143,97 @@ fn a_persons_profile_is_where_the_platform_keeps_a_users_data() {
         );
     }
     assert_eq!(user_data_dir_on(Platform::Windows, env(&home)), None);
+}
+
+/// Each platform's place for what a profile may lose, as Chromium's
+/// `GetUserCacheDirectory`: its path under the user's data folder, under
+/// the cache folder; the profile's own folder on Windows and for a profile
+/// elsewhere.
+#[test]
+fn a_profiles_cache_is_where_the_platform_keeps_caches() {
+    let cache = |platform, profile: &str, vars: &[(&str, &str)]| {
+        user_cache_dir_on(platform, Path::new(profile), env(vars))
+    };
+    let home = [("HOME", "/home/a")];
+    assert_eq!(
+        cache(
+            Platform::MacOs,
+            "/home/a/Library/Application Support/machopo",
+            &home
+        ),
+        PathBuf::from("/home/a/Library/Caches/machopo")
+    );
+    assert_eq!(
+        cache(
+            Platform::MacOs,
+            "/home/a/Library/Application Support/x/y",
+            &home
+        ),
+        PathBuf::from("/home/a/Library/Caches/x/y")
+    );
+    assert_eq!(
+        cache(Platform::Xdg, "/home/a/.config/machopo", &home),
+        PathBuf::from("/home/a/.cache/machopo")
+    );
+    let xdg = [
+        ("HOME", "/home/a"),
+        ("XDG_CONFIG_HOME", "/cfg"),
+        ("XDG_CACHE_HOME", "/caches"),
+    ];
+    assert_eq!(
+        cache(Platform::Xdg, "/cfg/machopo", &xdg),
+        PathBuf::from("/caches/machopo")
+    );
+    // Relative and empty ones are ignored, as for the data folder.
+    for relative in ["caches", ""] {
+        let vars = [("HOME", "/home/a"), ("XDG_CACHE_HOME", relative)];
+        assert_eq!(
+            cache(Platform::Xdg, "/home/a/.config/machopo", &vars),
+            PathBuf::from("/home/a/.cache/machopo"),
+            "{relative:?}"
+        );
+        let vars = [("HOME", "/home/a"), ("XDG_CONFIG_HOME", relative)];
+        assert_eq!(
+            cache(Platform::Xdg, "/home/a/.config/machopo", &vars),
+            PathBuf::from("/home/a/.cache/machopo"),
+            "{relative:?}"
+        );
+    }
+    // The profile's own: on Windows, for one elsewhere, for the data
+    // folder itself, and where the environment doesn't say.
+    let windows = "C:/Users/a/AppData/Local/machopo/User Data";
+    assert_eq!(
+        cache(
+            Platform::Windows,
+            windows,
+            &[("LOCALAPPDATA", "C:/Users/a/AppData/Local")]
+        ),
+        PathBuf::from(windows)
+    );
+    for (platform, profile) in [
+        (Platform::MacOs, "/tmp/profile"),
+        (Platform::MacOs, "/home/a/Library/Application Support"),
+        (Platform::Xdg, "/tmp/profile"),
+        (Platform::Xdg, "/home/a/.config"),
+    ] {
+        assert_eq!(
+            cache(platform, profile, &home),
+            PathBuf::from(profile),
+            "{platform:?} {profile}"
+        );
+    }
+    assert_eq!(
+        cache(
+            Platform::MacOs,
+            "/home/a/Library/Application Support/m",
+            &[]
+        ),
+        PathBuf::from("/home/a/Library/Application Support/m")
+    );
+    assert_eq!(
+        cache(Platform::Xdg, "/home/a/.config/m", &[]),
+        PathBuf::from("/home/a/.config/m")
+    );
+    // A profile in memory has none; one elsewhere, its own folder.
+    assert_eq!(Profile::in_memory().cache_dir(), None);
 }

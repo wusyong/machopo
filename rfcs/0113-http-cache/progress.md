@@ -18,8 +18,8 @@
 | 2. 磁碟的 backend（已決定的第 13 到 15 條） | | |
 | 2a. SQLite 的 store：schema、自己的 thread、讀寫、壞掉的檔案（已決定的第 16 到 19 條） | 做完，待審查 | 2026-11-24 |
 | 2b. `HttpCache` 接上兩種 backend（記憶體的、SQLite 的），交易經過它讀寫（已決定的第 20 條） | 做完，待審查 | 2026-11-24 |
-| 2c. 大小上限：`ipc` 的平台層讀磁碟剩下的空間，照 `PreferredCacheSize` 算（已決定的第 14 條） | 做完，待審查（Windows 的那一段沒有編過） | 2026-11-24 |
-| 2d. cache 的資料夾：profile 對到各平台的 cache 資料夾，network context 打開它 | | |
+| 2c. 大小上限：`ipc` 的平台層讀磁碟剩下的空間，照 `PreferredCacheSize` 算（已決定的第 14 條） | 做完，待審查 | 2026-11-24 |
+| 2d. cache 的資料夾：profile 對到各平台的 cache 資料夾，network context 打開它（已決定的第 15 條） | 做完，待審查 | 2026-11-24 |
 | 2e. 重新啟動之後照樣用（整合測試）、文件、mutation test | | |
 | 3. 重量網路版的 Speedometer | | |
 
@@ -51,6 +51,8 @@
 | network context 的 cache 在磁碟上（`http_cache_directory`、`http_cache_max_size`）：重新啟動之後照樣用（照樣分區）、`304` 的更新留在磁碟上、清空也清掉磁碟（正在寫的也是）、照上限淘汰、中途斷掉的不留 | `cargo test -p net --test it http_cache` |
 | 磁碟剩下的空間（`ipc::platform::available_disk_space`）：和 `df -kP` 的一樣，不在的路徑是錯誤 | `cargo test -p ipc --test it disk_space` |
 | 磁碟的 cache 的大小上限照 Chromium 的 `PreferredCacheSize`：Windows 以外和 Windows 的每一段、讀不到剩下的空間時；資料夾先建好再問 | `cargo test -p net --lib http_cache::disk` |
+| profile 的 cache 資料夾：macOS 的 `~/Library/Caches`、其他 Unix 的 `$XDG_CACHE_HOME`（`~/.cache`）底下、profile 在使用者資料夾底下的同一個位置；Windows、不在那底下的、使用者資料夾本身是 profile 自己的資料夾；相對和空的 XDG 變數不算 | `cargo test -p browser --test it profile::` |
+| profile 的 HTTP cache 在它的 cache 資料夾的 `Cache` 裡，重新打開 profile 之後頁面和圖片從那裡來 | `cargo test -p browser --test it a_profiles_http_cache_outlasts_its_storage` |
 | DevTools：`fromDiskCache`；`Network.setCacheDisabled` 讓導覽和子資源（parser、stylesheet、圖片、`fetch()`）繞過 cache，`Network` 沒打開時是錯誤，`disable`、session 離開、client 斷線時取消，別的分頁的 session 不影響；`Network.clearBrowserCache` 清完才回答 | `cargo test -p shell --test it devtools_network::devtools_sees_the_http_cache` |
 
 ## 做過的檢查
@@ -156,9 +158,19 @@
 
 **做法**：`ipc::platform::available_disk_space`：macOS 和 Linux 是 `rustix` 的 `statvfs` 的 `f_bavail` 乘 `f_frsize`（沒有自己的 `unsafe`），Windows 是 `GetDiskFreeSpaceExW`（一處 `unsafe`，論證寫進 `crates/ipc/soundness.md` 的表；路徑裡有 0 時不呼叫）。`net` 的 `http_cache::disk::preferred_size` 照 Chromium 的算法（`kDefaultCacheSize` 80 MiB，Windows 以外放大成 400%、不超過剩下的五分之一，最多預設的 4 倍），`preferred_size_for` 先建好資料夾再問剩下的空間（Chromium 在 backend 初始化時算）；`NetworkContextParams` 的 `http_cache_max_size` 是 0 時用它，取代 2b 暫時固定的 320 MiB。
 
-**沒有驗證的**：Windows 的 `platform/windows/disk.rs` 在這台機器上沒有編（沒有 Windows 的 target），也沒有在 Windows 上跑過測試。
+**Windows**：`platform/windows/disk.rs` 在 macOS 上沒有編（沒有 Windows 的 target）；push `0113`（`69179e0`）之後，使用者在自己的 Windows 機器上跑了 `cargo test -p ipc --test it disk_space`，通過（2026-11-24）。
 
 **新的測試**：`ipc` 的 `tests/it/disk_space.rs` 2 個（和 `df -kP` 比、不在的路徑），`net` 的 `http_cache::disk` 3 個（兩種平台的表、資料夾）。寫 2c 時 clippy 抓到 2a 的一個測試用了會默默繞回的 `fetch_add`，改成 `Mutex` 裡 `saturating_add` 的計數。`cargo test -p ipc -p net -p sql`、`clippy -p net -p ipc -p sql`、`sanity.py` 的 `deps`、`unsafe`、`tests`、`numerics`、`boundary`、`spans`、`docs` 通過。
 
 **mutation test**（`mutants-2c.toml`，14 個）：13 個抓到。沒抓到的「把 superuser 保留的空間也算進去」（`f_bfree` 代替 `f_bavail`）在 macOS 上是等價的：APFS 沒有保留的空間，兩個數一樣（實測：差 0）；Linux 的 ext4 預設保留 5%，同一個測試在那裡抓得到。記進了 `docs/test-gaps.md` 的「等價、不用處理的 mutation」。寫 mutation 時發現「Windows 以外放大成 400%」那個常數沒有被守著（資料夾的測試兩邊都用它），改成在測試裡照平台寫出 400 和 100。
+
+### 2d（2026-11-24，macOS 26.6.2、Apple M4、debug build，`69179e0` 之上）
+
+**對照的原始碼**：Chromium `main` 的 `chrome/common/chrome_paths_mac.mm`、`chrome_paths_linux.cc`、`chrome_paths_win.cc` 的 `GetUserCacheDirectory`，`base/base_paths_mac.mm`、`base_paths_posix.cc` 的 `DIR_CACHE`（macOS 的 `NSCachesDirectory`；Linux 的 `$XDG_CACHE_HOME`，沒有時 `~/.cache`），`base/nix/xdg_util.cc`，`chrome/common/chrome_constants.h` 的 `kCacheDirname`（`Cache`）（由 agent 讀 Gitiles）。和它不同的：XDG 的變數是相對路徑時不算（machopo 的 `user_data_dir_on` 照 XDG 的規範這樣做，Chromium 照用）；Chrome 的 cache 資料夾底下的 `Cache_Data` 從哪裡來沒有找到，machopo 只有 `Cache`，裡面是 `Cache` 資料庫。
+
+**做法**：`browser` 的 `user_cache_dir_on`（照 `user_data_dir_on` 的寫法，平台和環境由呼叫的人給）和 `Profile::cache_dir`；profile 要在使用者資料夾的「底下」才換位置（使用者資料夾本身照 Chromium 的 `AppendRelativePath` 不算）。`StoragePartition` 給 network context `http_cache_directory`：profile 的 cache 資料夾的 `Cache`。人用的視窗的預設 profile 的 cache 因此在 `~/Library/Caches/machopo/Cache`（macOS）；自動化和測試的 profile 在記憶體裡，照舊。
+
+**新的測試**：`browser` 的 `profile::a_profiles_cache_is_where_the_platform_keeps_caches`、`cookies::a_profiles_http_cache_outlasts_its_storage`（用 `loaders.rs` 的 1x1 PNG，改成 `pub(crate)`）。
+
+**mutation test**（`mutants-2d.toml`，9 個）：9 個都抓到。`Profile::cache_dir` 用的平台（`Platform::current()`）沒有做 mutation：測試的 profile 不在真的使用者資料夾底下，換成哪個平台結果都是 profile 自己的資料夾，要測得用使用者真的資料夾；它只是把 `user_cache_dir_on` 接上目前的平台，靠審查。
 

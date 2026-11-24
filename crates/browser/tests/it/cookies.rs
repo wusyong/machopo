@@ -113,6 +113,49 @@ fn a_profiles_cookies_outlast_its_storage() {
     web_contents.shutdown();
 }
 
+/// A profile's HTTP cache, in its cache folder (here its own folder: a
+/// test's is under no user's data folder), outlasts its storage too: the
+/// page and its image, fresh, come from it after the profile is opened
+/// again.
+#[test]
+fn a_profiles_http_cache_outlasts_its_storage() {
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("browser-cookies")
+        .join("http-cache");
+    let _ = std::fs::remove_dir_all(&dir);
+    let fresh = |route: Route| route.with_header("Cache-Control", "max-age=3600");
+    let server = server(&[
+        (
+            "/page",
+            fresh(Route::ok(
+                "text/html",
+                "<img src=/i.png onload=\"document.title = 'loaded'\">",
+            )),
+        ),
+        (
+            "/i.png",
+            fresh(Route::ok("image/png", crate::loaders::PIXEL.to_vec())),
+        ),
+    ]);
+    for _ in 0..2 {
+        let profile = Profile::open(&dir).unwrap();
+        assert_eq!(profile.cache_dir().as_deref(), Some(dir.as_path()));
+        let (mut web_contents, host_rx) = tab_in(partition_of(&profile));
+        web_contents.navigate(server.url_for_host("a.localhost", "/page"));
+        titles_until(&mut web_contents, &host_rx, |title| title == "loaded");
+        web_contents.shutdown();
+    }
+    assert!(dir.join("Cache").join("Cache").is_file());
+    let hits = |target: &str| {
+        server
+            .requests()
+            .iter()
+            .filter(|request| request.target == target)
+            .count()
+    };
+    assert_eq!((hits("/page"), hits("/i.png")), (1, 1));
+}
+
 /// `document.cookie`: script reads the page's cookies but `HttpOnly` ones,
 /// and what it sets goes with the page's next request; an `about:blank`
 /// iframe's document reads its creator's; a document of no browsing

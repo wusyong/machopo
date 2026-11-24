@@ -1,5 +1,5 @@
 //! The cache's entries in memory (Chromium's `disk_cache::MemBackendImpl`):
-//! what a profile in memory has, and for now every profile.
+//! what a profile in memory has.
 //!
 //! Its size is bounded: Chromium's is 2% of the machine's memory, 50 MiB at
 //! 2.5 GiB and more, which is what this one always is (reading the

@@ -128,6 +128,16 @@ impl Profile {
     pub fn dir(&self) -> Option<&Path> {
         self.dir.as_ref().map(|dir| dir.path.as_path())
     }
+
+    /// The folder it keeps what may be lost in (its HTTP cache): as
+    /// [`user_cache_dir_on`] has it for this platform; none for one in
+    /// memory.
+    pub fn cache_dir(&self) -> Option<PathBuf> {
+        let dir = self.dir()?;
+        Some(user_cache_dir_on(Platform::current(), dir, |name| {
+            std::env::var_os(name)
+        }))
+    }
 }
 
 /// The platforms' places for a user's data.
@@ -191,4 +201,47 @@ pub fn user_data_dir_on(
             Some(config.join("machopo"))
         }
     }
+}
+
+/// The folder the profile in `profile_dir` keeps what may be lost in, its
+/// HTTP cache, on `platform`, the environment read with `env` (Chromium's
+/// `chrome::GetUserCacheDirectory`): the platform's folder for caches, at
+/// the place the profile is under the platform's folder for a user's data.
+/// `~/Library/Caches/machopo` for `~/Library/Application Support/machopo`
+/// on macOS; elsewhere `$XDG_CACHE_HOME/machopo` (or `~/.cache/machopo`)
+/// for `$XDG_CONFIG_HOME/machopo` (or `~/.config/machopo`), relative and
+/// empty variables ignored as for [`user_data_dir_on`]. On Windows, and
+/// for a profile not under that folder (`--user-data-dir`'s, a test's),
+/// the profile's own folder.
+pub fn user_cache_dir_on(
+    platform: Platform,
+    profile_dir: &Path,
+    env: impl Fn(&str) -> Option<OsString>,
+) -> PathBuf {
+    let dir = |name: &str| {
+        env(name)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    let places = match platform {
+        Platform::MacOs => dir("HOME").map(|home| {
+            let library = home.join("Library");
+            (library.join("Application Support"), library.join("Caches"))
+        }),
+        Platform::Xdg => {
+            let absolute = |name: &str| dir(name).filter(|path| path.has_root());
+            let home = dir("HOME");
+            let config =
+                absolute("XDG_CONFIG_HOME").or_else(|| Some(home.clone()?.join(".config")));
+            let cache = absolute("XDG_CACHE_HOME").or_else(|| Some(home?.join(".cache")));
+            config.zip(cache)
+        }
+        Platform::Windows => None,
+    };
+    // Under it, not it (`AppendRelativePath`).
+    let under = places.and_then(|(data, cache)| {
+        let relative = profile_dir.strip_prefix(&data).ok()?;
+        (relative != Path::new("")).then(|| cache.join(relative))
+    });
+    under.unwrap_or_else(|| profile_dir.to_owned())
 }

@@ -1,0 +1,66 @@
+# Step 2d's mutants: `python3 scripts/test.py mutate rfcs/0113-http-cache/mutants-2d.toml`.
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "profile::"]
+timeout = 1800
+
+[[mutant]]
+name = "macOS's caches aren't Caches"
+file = "crates/browser/src/profile.rs"
+from = '''            (library.join("Application Support"), library.join("Caches"))'''
+to = '''            (library.join("Application Support"), library.join("Cache"))'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "profile::"]
+
+[[mutant]]
+name = "macOS's data isn't Application Support"
+file = "crates/browser/src/profile.rs"
+from = '''            (library.join("Application Support"), library.join("Caches"))'''
+to = '''            (library.join("Preferences"), library.join("Caches"))'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "profile::"]
+
+[[mutant]]
+name = "a relative XDG_CONFIG_HOME counts"
+file = "crates/browser/src/profile.rs"
+from = '''                absolute("XDG_CONFIG_HOME").or_else(|| Some(home.clone()?.join(".config")));'''
+to = '''                dir("XDG_CONFIG_HOME").or_else(|| Some(home.clone()?.join(".config")));'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "profile::"]
+
+[[mutant]]
+name = "a relative XDG_CACHE_HOME counts"
+file = "crates/browser/src/profile.rs"
+from = '''            let cache = absolute("XDG_CACHE_HOME").or_else(|| Some(home?.join(".cache")));'''
+to = '''            let cache = dir("XDG_CACHE_HOME").or_else(|| Some(home?.join(".cache")));'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "profile::"]
+
+[[mutant]]
+name = "the XDG cache isn't ~/.cache"
+file = "crates/browser/src/profile.rs"
+from = '''            let cache = absolute("XDG_CACHE_HOME").or_else(|| Some(home?.join(".cache")));'''
+to = '''            let cache = absolute("XDG_CACHE_HOME").or_else(|| Some(home?.join(".caches")));'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "profile::"]
+
+[[mutant]]
+name = "the data folder itself goes to the cache"
+file = "crates/browser/src/profile.rs"
+from = '''        (relative != Path::new("")).then(|| cache.join(relative))'''
+to = '''        Some(cache.join(relative))'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "profile::"]
+
+[[mutant]]
+name = "Windows's goes elsewhere"
+file = "crates/browser/src/profile.rs"
+from = '''        Platform::Windows => None,'''
+to = '''        Platform::Windows => dir("LOCALAPPDATA").map(|local| (local.clone(), local.join("Cache"))),'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "profile::"]
+
+[[mutant]]
+name = "a profile's HTTP cache isn't on disk"
+file = "crates/browser/src/storage_partition.rs"
+from = '''                http_cache_directory: profile.cache_dir().map(|dir| dir.join(CACHE_DIRNAME)),'''
+to = '''                http_cache_directory: None,'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "a_profiles_http_cache"]
+
+[[mutant]]
+name = "the cache's folder isn't Cache"
+file = "crates/browser/src/storage_partition.rs"
+from = '''const CACHE_DIRNAME: &str = "Cache";'''
+to = '''const CACHE_DIRNAME: &str = "HttpCache";'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "a_profiles_http_cache"]
