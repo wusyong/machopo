@@ -17,6 +17,7 @@
 | 3. 重量、定結束的規則（已決定的事項第 8 到 17 條） | 做完，待審查 | 2026-11-24 |
 | 4. 照規則改（4a 到 4g） | 進行中 | |
 | 4a. 一條收尾的路、記一行的機制、profile 的 10 秒（第 12、13、18 條） | 做完，待審查 | 2026-11-25 |
+| 4b. renderer 同時請、共用 2 秒，到了 kill、記一行（第 8、9、12、19 條） | 做完，待審查 | 2026-11-25 |
 | 5. 驗收 | 沒開始 | |
 
 ## 驗收
@@ -27,6 +28,14 @@
 | `shell` 的測試：每個模組的分類、壞過的每一個的原因和把握 | `details.md` 的「`shell` 的測試的審查」；不改程式，所以沒有測試 |
 
 ## 做過的檢查
+
+### 第 4 段的 4b（2026-11-25，Linux：Fedora 45，debug build，`7e3ca01` 之上）
+
+**做了什麼**：`RenderProcessHost` 和 `WebContents` 的 shutdown 拆成「請它結束」和「等到期限」；`BrowserView::shutdown` 先請每個分頁的 renderer，再用同一個期限（請的時候起 2 秒）等，到了還沒結束的 process kill 掉，每個記一行（`machopo: shutdown gave up on tab 0's renderer process 1050649, killed, not having exited, after 2004 ms`）。只關一個分頁時照舊（第 19 條）。順帶拿掉 `docs/limitations.md` 裡第 2 段已經修掉的一句（啟動到一半失敗時以 SIGSEGV 結束）。
+
+**測試**：`automation_pipe::hung_renderers_take_the_limit_once`：三個分頁的 renderer process 都卡在 `while (true) {}`，pipe 關掉之後 machopo 在 4 秒內結束（2.5 秒；原本一個接一個是 15 秒），stderr 有三行放棄的訊息。`browser`、`shell` 的測試通過。
+
+**mutation test**（`mutants-4b.toml`，4 個，都抓到）：每個 renderer 各有自己的期限、等之前沒先請（閒著的也被 kill，profile 的測試看到放棄的那一行）、kill 了不記、時限是 5 秒。
 
 ### 第 4 段的 4a（2026-11-25，Linux：Fedora 45，debug build，`9109d9f` 之上）
 

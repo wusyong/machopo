@@ -2926,6 +2926,49 @@ fn a_profile_is_written_as_machopo_ends() {
     assert_eq!(scripts.filter(|r| r.target == "/kept.js").count(), 1);
 }
 
+/// Renderers whose script never returns don't hold machopo up past its
+/// limit, however many they are: each is asked to exit at once, all are
+/// waited for until one deadline, and those still running then are
+/// killed, a line for each.
+#[test]
+fn hung_renderers_take_the_limit_once() {
+    let server = server(&[("/", Route::ok("text/html", "<!DOCTYPE html>page"))]);
+    let log = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("shell-hung-renderers.log");
+    let mut browser = Browser::start_logging(
+        &["--process-per-tab"],
+        Stdio::from(std::fs::File::create(&log).unwrap()),
+    );
+    for tab in 0..3 {
+        let session = if tab == 0 {
+            browser.attach()
+        } else {
+            let created = browser
+                .call(None, "Target.createTarget", json!({ "url": "about:blank" }))
+                .unwrap();
+            browser.attach_to(created["targetId"].as_str().unwrap())
+        };
+        browser.navigate(&session, &server.url("/"));
+        browser.send(
+            Some(&session),
+            "Machopo.executeScript",
+            json!({ "script": "while (true) {}", "async": false }),
+        );
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    let asked = std::time::Instant::now();
+    assert!(browser.end().success());
+    let took = asked.elapsed();
+    // The limit, once, and the time to start and end; one renderer after
+    // another was five seconds each.
+    assert!(took < Duration::from_secs(4), "{took:?}");
+    let said = std::fs::read_to_string(&log).unwrap();
+    let killed = said
+        .lines()
+        .filter(|line| line.starts_with(browser::shutdown::GAVE_UP) && line.contains("renderer process"))
+        .count();
+    assert_eq!(killed, 3, "{said}");
+}
+
 /// Starts a machopo with a tab for each of `scripts`, in a renderer
 /// process of its own that is left running its script (or doing nothing),
 /// and kills the machopo: whether every renderer went with it. They had

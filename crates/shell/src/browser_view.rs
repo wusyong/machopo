@@ -1860,9 +1860,18 @@ impl BrowserView {
         }
     }
 
+    /// machopo is ending: every tab's renderer is asked to exit, then
+    /// waited for until one deadline, [`browser::shutdown::LIMIT`] after
+    /// the asking; those that haven't exited by then are killed. Hung
+    /// renderers take that long however many they are.
     pub fn shutdown(&mut self) {
+        let asked = std::time::Instant::now();
         for contents in self.tabs.iter_mut().chain(&mut self.others) {
-            contents.shutdown();
+            contents.ask_to_shut_down();
+        }
+        let deadline = asked + browser::shutdown::LIMIT;
+        for contents in self.tabs.iter_mut().chain(&mut self.others) {
+            contents.wait_for_shutdown(asked, deadline);
         }
     }
 }

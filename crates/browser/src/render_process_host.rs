@@ -494,7 +494,7 @@ impl RenderProcessHost {
     pub fn kill(&mut self) {
         self.forwarding.store(false, Ordering::Release);
         match self.child.take() {
-            Some((child, link)) => self.exit = end_child(child, &link, None),
+            Some((child, link)) => self.exit = end_child(child, &link, None).status,
             None => self.send(RendererMsg::Shutdown),
         }
     }
@@ -506,7 +506,7 @@ impl RenderProcessHost {
     /// and is killed.
     pub(crate) fn ended(&mut self) {
         if let Some((child, link)) = self.child.take() {
-            self.exit = end_child(child, &link, Some(GONE_EXIT_WAIT));
+            self.exit = end_child(child, &link, Some(GONE_EXIT_WAIT)).status;
         }
     }
 
@@ -523,7 +523,7 @@ impl RenderProcessHost {
         };
         self.forwarding.store(false, Ordering::Release);
         self.send(RendererMsg::Crash);
-        self.exit = end_child(child, &link, Some(CRASH_WAIT));
+        self.exit = end_child(child, &link, Some(CRASH_WAIT)).status;
         true
     }
 
@@ -622,9 +622,27 @@ impl RenderProcessHost {
         }
     }
 
-    /// Asks the renderer to exit and waits for it.
+    /// Asks the renderer to exit and waits for it (a tab closed), a
+    /// process for [`CHILD_EXIT_WAIT`] at most.
     pub fn shutdown(&mut self) {
+        self.ask_to_shut_down();
+        self.wait_for_shutdown(std::time::Instant::now() + CHILD_EXIT_WAIT);
+    }
+
+    /// Asks the renderer to exit, without waiting: machopo, ending, asks
+    /// every renderer first, then waits for them all with one deadline
+    /// ([`wait_for_shutdown`](Self::wait_for_shutdown)), so that hung ones
+    /// take that long however many they are.
+    pub fn ask_to_shut_down(&self) {
         let _ = self.to_renderer.send(RendererMsg::Shutdown);
+    }
+
+    /// Waits for the renderer [`ask_to_shut_down`](Self::ask_to_shut_down)
+    /// asked to exit: its process until `deadline`, then killed (its
+    /// trace not written): the killed process's id. (Chromium kills a
+    /// child it can't wait for, `base::EnsureProcessTerminated`.) Threads
+    /// of this process are joined.
+    pub fn wait_for_shutdown(&mut self, deadline: std::time::Instant) -> Option<u32> {
         for handle in [self.renderer_thread.take(), self.io_thread.take()]
             .into_iter()
             .flatten()
@@ -633,9 +651,10 @@ impl RenderProcessHost {
                 tracing::error!("renderer-side thread panicked");
             }
         }
-        if let Some((child, link)) = self.child.take() {
-            end_child(child, &link, Some(CHILD_EXIT_WAIT));
-        }
+        let (child, link) = self.child.take()?;
+        let pid = child.id();
+        let wait = deadline.saturating_duration_since(std::time::Instant::now());
+        end_child(child, &link, Some(wait)).killed.then_some(pid)
     }
 }
 
@@ -656,14 +675,18 @@ const TILE_REGION_LEN: usize = 256 << 10;
 /// before the system says the process is) before it is killed.
 const GONE_EXIT_WAIT: std::time::Duration = std::time::Duration::from_millis(200);
 
+/// How [`end_child`] ended a process.
+struct ChildEnd {
+    /// What the system says of it.
+    status: Option<std::process::ExitStatus>,
+    /// It didn't exit by itself in time, and was killed.
+    killed: bool,
+}
+
 /// Ends a renderer process: waits `wait` for it to exit by itself (it was
 /// asked to), then kills it; closes this end of its channel, and tells
 /// the platform it has gone (a child that never took its end).
-fn end_child(
-    mut child: Child,
-    link: &ChannelLink,
-    wait: Option<std::time::Duration>,
-) -> Option<std::process::ExitStatus> {
+fn end_child(mut child: Child, link: &ChannelLink, wait: Option<std::time::Duration>) -> ChildEnd {
     let asked = std::time::Instant::now();
     let exited = wait.is_some_and(|wait| {
         loop {
@@ -690,7 +713,10 @@ fn end_child(
     );
     link.close();
     ipc::platform::child_gone(child.id());
-    status
+    ChildEnd {
+        status,
+        killed: !exited,
+    }
 }
 
 impl Drop for RenderProcessHost {

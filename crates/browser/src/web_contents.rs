@@ -1988,11 +1988,47 @@ impl WebContents {
         self.frame_tree.reset();
     }
 
+    /// The tab closes: its renderer is asked to exit and waited for.
     pub fn shutdown(&mut self) {
-        // Every frame's navigation stops.
+        self.stop_navigations();
+        self.process.shutdown();
+        self.shut_down();
+    }
+
+    /// machopo is ending: the tab's navigations stop, and its renderer is
+    /// asked to exit, without waiting; [`wait_for_shutdown`] waits, until
+    /// a deadline every tab shares (`BrowserView::shutdown` asks every
+    /// tab first).
+    ///
+    /// [`wait_for_shutdown`]: Self::wait_for_shutdown
+    pub fn ask_to_shut_down(&mut self) {
+        self.stop_navigations();
+        self.process.ask_to_shut_down();
+    }
+
+    /// Every frame's navigation stops.
+    fn stop_navigations(&mut self) {
         drop(self.frame_tree.take_any_navigation(self.frame_tree.root()));
         self.frame_tree.reset();
-        self.process.shutdown();
+    }
+
+    /// Waits for the renderer [`ask_to_shut_down`](Self::ask_to_shut_down)
+    /// asked to exit until `deadline`: a process that hasn't exited by then
+    /// is killed, and a line says so (`shutdown::gave_up`), with how long
+    /// since `asked`.
+    pub fn wait_for_shutdown(&mut self, asked: std::time::Instant, deadline: std::time::Instant) {
+        if let Some(pid) = self.process.wait_for_shutdown(deadline) {
+            crate::shutdown::gave_up(
+                &format!("tab {}'s renderer process {pid}", self.tab.0),
+                "killed, not having exited",
+                asked.elapsed(),
+            );
+        }
+        self.shut_down();
+    }
+
+    /// What goes once the renderer has.
+    fn shut_down(&mut self) {
         // The tab's `sessionStorage` goes with it.
         self.partition.dom_storage().forget_namespace(self.tab);
         // No renderer is launched again: the messages' way out goes, its

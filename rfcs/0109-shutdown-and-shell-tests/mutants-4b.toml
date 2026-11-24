@@ -1,0 +1,27 @@
+# Stage 4b's mutants: `python3 scripts/test.py mutate rfcs/0109-shutdown-and-shell-tests/mutants-4b.toml`.
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "automation_pipe::"]
+timeout = 300
+
+[[mutant]]
+name = "each renderer is given a limit of its own"
+file = "crates/shell/src/browser_view.rs"
+from = '''            contents.wait_for_shutdown(asked, deadline);'''
+to = '''            contents.wait_for_shutdown(asked, std::time::Instant::now() + browser::shutdown::LIMIT);'''
+
+[[mutant]]
+name = "the renderers aren't asked before they are waited for"
+file = "crates/shell/src/browser_view.rs"
+from = '''            contents.ask_to_shut_down();'''
+to = ''''''
+
+[[mutant]]
+name = "a killed renderer says nothing"
+file = "crates/browser/src/web_contents.rs"
+from = '''        if let Some(pid) = self.process.wait_for_shutdown(deadline) {'''
+to = '''        if let Some(pid) = self.process.wait_for_shutdown(deadline).filter(|_| false) {'''
+
+[[mutant]]
+name = "the limit is five seconds"
+file = "crates/browser/src/shutdown.rs"
+from = '''pub const LIMIT: Duration = Duration::from_secs(2);'''
+to = '''pub const LIMIT: Duration = Duration::from_secs(5);'''

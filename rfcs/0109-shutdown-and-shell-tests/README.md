@@ -155,6 +155,7 @@ C1、C2：`unused_port` 改成回傳一個 guard，整個測試期間 bind 著�
     - 盤點（`details.md` 的「只在解構子裡寫的東西」）：cookie、HTTP cache、`localStorage` 的 store 在最後一份 handle 被丟掉時才寫完、關掉（`join`，沒有時限），`StoragePartition` 被複製給每個分頁和 IO thread，所以加一個明確的 `close`，時限到了還沒結束的，handle 被丟掉時也不再等；trace 的結尾也只在正常結束時寫。census 的報告和 stdout 的緩衝區不用另外做（計數的 thread 結束時自己寫；pipe 的 writer 每則都 flush）。
     - 關 profile 在 renderer 和 thread 的 2 秒之後，自己有 10 秒，到了放棄、記一行（第 12 條）、照樣結束：資料幾乎一定寫完，最壞也在 12 秒內結束。對照 Chromium：結束時 profile 的寫入沒有短的時限，另有 `ShutdownWatcherHelper` 在結束卡了很久時讓瀏覽器 crash。不選算進同一個 2 秒：磁碟慢時丟掉還沒寫的 cookie 和 `localStorage`。不選沒有時限：磁碟卡住時永遠不結束。
     - 直接結束只在 `machopo` 的 `main`（Browser 和 renderer process）：headless 在測試的 process 裡，照樣做明確的收尾，最後正常 return。Windows 上照 Chromium 用 `TerminateProcess(GetCurrentProcess(), code)`，加在 `ipc`（和 Unix 的 `terminate_current_process_immediately` 一起）。
+19. **第 4 段的 4b：只關一個分頁時照舊等 5 秒**（2026-11-25，使用者決定）：machopo 結束時同時請每個 renderer 結束、共用 2 秒（第 9 條，`BrowserView::shutdown`）；machopo 還在跑、只關掉一個分頁時（UI 的關閉、`Target.closeTarget`），UI thread 照舊等那個 renderer process 最多 5 秒才 kill，記進 `docs/limitations.md`。這份只管 machopo 怎麼結束。對照 Chromium：關分頁不擋 UI，renderer 由 hang monitor 和之後的 fast shutdown 處理。不選改成同樣的 2 秒：改的是結束以外的行為。不選這份就做成不擋 UI：要讓 `RenderProcessHost` 在背景等、kill，分頁已經不在了，log 和 process 的回收要另外有人管，範圍變大（「之後的可能」）。
 
 ## 待決定
 
@@ -165,5 +166,6 @@ C1、C2：`unused_port` 改成回傳一個 guard，整個測試期間 bind 著�
 - 作業系統的 sandbox 的那一份 RFC。
 - 偵測「不回應」的 renderer。
 - `beforeunload`、`unload`、`pagehide` 在分頁關掉和瀏覽器結束時的行為。
+- 關分頁不擋 UI（第 19 條）：照 Chromium，renderer process 在背景等、kill，UI thread 不等它；要有人在分頁不在之後回收 process、記下它怎麼結束的。
 - automation pipe 移到 fd 3、4（一份 RFC）：照 Chromium 的 `--remote-debugging-pipe`，Browser 從 fd 3 讀、寫到 fd 4，stdin、stdout 留給一般用途；Puppeteer、Playwright 用 pipe 啟動時預設就是這兩個。要改 machopodriver、`tests/wpt/wptrunner_machopo/`、`scripts/bench` 的 `MachopoPipe`、`shell` 的測試和 `--help`；Windows 上 Chromium 用命令列傳 handle（`--remote-debugging-io-pipes`），要另外做。做完之後 renderer 的 stdout 不用再轉向（第 16 條），照 Chromium 繼承。
 - 在 profile 裡留「沒有乾淨結束」的記號（Chromium 的 `exited_cleanly`）：下次啟動時知道上次被 kill、crash 或斷電，告訴使用者、還原 session。
