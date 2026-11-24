@@ -453,6 +453,13 @@ struct RenderThread {
     webdriver_state: webdriver::WebDriverState,
     /// The browser's DevTools sessions.
     devtools_sessions: Vec<String>,
+    /// A child frame was made, went or committed a document since
+    /// DevTools last looked at the frames: they are looked at again after
+    /// the task, the `Page` agent telling of a new frame's initial
+    /// document, the `DOM` agent of an iframe's new document. (A commit,
+    /// a frame attached or detached, the `Page` agent tells as they
+    /// happen.)
+    frames_changed: bool,
     /// The main thread's tasks (`MainThreadScheduler`): what the browser,
     /// the compositor and DevTools ask of it, which script paused takes some
     /// of too.
@@ -599,6 +606,7 @@ impl RenderThread {
             script_engine,
             webdriver_state: webdriver::WebDriverState::new(id_prefix),
             devtools_sessions: Vec::new(),
+            frames_changed: false,
             page_agent,
             network_agent,
             log_agent,
@@ -639,9 +647,11 @@ impl RenderThread {
                 if !self.run_task(task) {
                     break 'run;
                 }
+                self.tell_devtools_after_task();
                 // What it queued for the DOM (input's `hashchange`) runs
                 // before the next task comes off the channel.
                 self.run_queued_tasks();
+                self.tell_devtools_after_task();
                 self.update_title();
                 next = self.scheduler.try_next(TaskQueues::ALL);
             }
@@ -669,19 +679,17 @@ impl RenderThread {
             self.retry_scripts_blocked_by_sheets();
             self.start_canvas_encodes();
             self.send_webdriver_results();
-            self.log_console_warnings();
             self.log_canvas_raster_failure();
             self.update_title();
             // The blob URLs the tasks revoked, now that the loads they
             // asked for went.
             self.blob_urls.flush_revoked();
-            // The frames whose network went quiet, and the frames the tasks
-            // attached, navigated and removed, to DevTools.
+            // The frames whose network went quiet, to DevTools; and what the
+            // steps above left for it, as after a task (they aren't the
+            // scheduler's tasks).
             self.check_network_idle();
-            self.tell_frames();
-            // The DOM's changes the tasks made, to DevTools; the sheets its
-            // `CSS` wants the texts of, asked for.
-            self.tell_dom_changes();
+            self.tell_devtools_after_task();
+            // The sheets DevTools' `CSS` wants the texts of, asked for.
             self.start_css_refetches();
             // What DevTools' overlay shows follows its node at each frame,
             // and draws once it changes.

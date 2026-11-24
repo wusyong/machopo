@@ -70,6 +70,15 @@ impl Frames {
         self.get(id)?.token
     }
 
+    /// Child frame `id` has its new document `document`: its client hears
+    /// of it (`FrameClient::child_document_created`). Not for the
+    /// top-level frame, whose host makes its document.
+    pub(crate) fn tell_document_created(&mut self, id: FrameId, document: NodeId) {
+        if let (Some(token), Some(client)) = (self.token(id), &mut self.client) {
+            client.child_document_created(token, document);
+        }
+    }
+
     /// The child frame whose token is `token`.
     pub(crate) fn of_token(&self, token: FrameToken) -> Option<&Frame> {
         self.frames.iter().find(|frame| frame.token == Some(token))
@@ -255,6 +264,40 @@ pub(crate) fn create_child(scope: &mut Scope<'_, '_, '_>, owner: &NodeRoot) -> O
     let (document, document_id) = window_document(scope, context);
     let id = scope.state_mut().0.frames.next_id();
     let token = dom_api::new_frame_token();
+    // The browser's frame tree and DevTools have it at once, before its
+    // realm (Blink's `LocalFrame` constructor tells `frameAttached`
+    // before the frame's context is made), with the stack of the script
+    // that made it if DevTools wants it (taken now, as Blink's
+    // `FrameAttachedToParent` takes its own).
+    let stack = scope
+        .state()
+        .0
+        .dom
+        .frame_stacks_wanted()
+        .then(|| crate::state::capture_stack(scope))
+        .flatten();
+    {
+        let (state, _) = scope.state_mut();
+        // Its name, its iframe's now (HTML gives the attribute to the
+        // navigable as it is made alone).
+        let name = state.dom.read(|cx| {
+            cx.attribute_value_by_id(owner.get(cx.gc), dom::names::local::NAME)
+                .map(|name| name.borrow().to_string())
+                .unwrap_or_default()
+        });
+        if let (Some(parent_token), Some(client)) =
+            (state.frames.token(parent), &mut state.frames.client)
+        {
+            client.child_frame_created(
+                parent_token,
+                token,
+                &name,
+                created_by_script,
+                stack.as_deref(),
+                &state.dom,
+            );
+        }
+    }
     // The inspector hears of it, of its parent's origin.
     let parent_document = {
         let (state, _) = scope.state();
@@ -288,20 +331,6 @@ pub(crate) fn create_child(scope: &mut Scope<'_, '_, '_>, owner: &NodeRoot) -> O
             true,
         )
     });
-    // Its name, its iframe's now (HTML gives the attribute to the
-    // navigable as it is made alone); whether script made it, as Blink's
-    // `is_created_by_script` (script on the stack).
-    let name = state.dom.read(|cx| {
-        cx.attribute_value_by_id(owner.get(cx.gc), dom::names::local::NAME)
-            .map(|name| name.borrow().to_string())
-            .unwrap_or_default()
-    });
-    // The browser's frame tree has it at once.
-    if let (Some(parent_token), Some(client)) =
-        (state.frames.token(parent), &mut state.frames.client)
-    {
-        client.child_frame_created(parent_token, token, &name, created_by_script);
-    }
     state.frames.changed = true;
     // Its layout is there for what script reads of it next.
     if let Some(mut layout) = state.layout.take() {

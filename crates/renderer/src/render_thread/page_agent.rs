@@ -132,9 +132,6 @@ pub(crate) struct FrameInfo {
     /// The subresources its document loaded, as of when it was told (the
     /// document's, shared until it loads another).
     pub(crate) resources: Rc<FrameResources>,
-    /// The stack of the script whose iframe made it, if DevTools wanted it
-    /// then (`Page.frameAttached`'s).
-    pub(crate) creation_stack: Option<Rc<str>>,
 }
 
 impl FrameInfo {
@@ -199,6 +196,22 @@ pub(crate) struct PageAgent {
     lifecycles: RefCell<HashMap<String, Lifecycle>>,
     /// The frames as last told, parents first.
     frames: RefCell<Vec<FrameInfo>>,
+    /// The frames told attached as they were made (`frame_attached`) that
+    /// `frames` doesn't have yet, by id with their parent's: those a frame
+    /// detached at once takes with it.
+    attached: RefCell<Vec<(String, String)>>,
+    /// A child frame's document committing (`child_committing`), told as
+    /// the engine makes it (`child_document_created`).
+    committing: RefCell<Option<Committing>>,
+}
+
+/// A child frame's document as it commits, before the engine has made it.
+struct Committing {
+    /// All but its number (`FrameInfo::document`), which the engine gives.
+    frame: FrameInfo,
+    /// Its loader is named by the document's number: none of the
+    /// browser's navigations brought it (the renderer committed it).
+    loader_is_document: bool,
 }
 
 impl PageAgent {
@@ -210,6 +223,109 @@ impl PageAgent {
             lifecycle: RefCell::new(Vec::new()),
             lifecycles: RefCell::new(HashMap::new()),
             frames: RefCell::new(Vec::new()),
+            attached: RefCell::new(Vec::new()),
+            committing: RefCell::new(None),
+        }
+    }
+
+    /// Child frame `frame.id`'s document commits: told once the engine has
+    /// made it (`child_document_created`), its number then known, and its
+    /// loader's if `loader_is_document`.
+    pub(crate) fn child_committing(&self, frame: FrameInfo, loader_is_document: bool) {
+        *self.committing.borrow_mut() = Some(Committing {
+            frame,
+            loader_is_document,
+        });
+    }
+
+    /// The engine made child frame `id`'s document committing, numbered
+    /// `document`, before its realm: told navigated now (before
+    /// `Runtime.executionContextCreated` and the document's script, as
+    /// Chrome tells `Page.frameNavigated` as the navigation commits), and
+    /// the frame's from now on; `update` finds it the same document.
+    pub(crate) fn child_document_created(&self, id: &str, document: u64) {
+        let Some(Committing {
+            mut frame,
+            loader_is_document,
+        }) = self
+            .committing
+            .borrow_mut()
+            .take_if(|committing| committing.frame.id == id)
+        else {
+            return;
+        };
+        frame.document = document;
+        if loader_is_document {
+            frame.loader_id = document.to_string();
+        }
+        {
+            let mut frames = self.frames.borrow_mut();
+            match frames.iter_mut().find(|known| known.id == frame.id) {
+                Some(known) => *known = frame.clone(),
+                None => frames.push(frame.clone()),
+            }
+        }
+        self.attached
+            .borrow_mut()
+            .retain(|(known, _)| *known != frame.id);
+        self.navigated(&frame);
+    }
+
+    /// Child frame `id` made in frame `parent`, by script whose stack (as
+    /// `Runtime.StackTrace`'s JSON) is `stack`: told at once, as Blink's
+    /// `InspectorPageAgent::FrameAttachedToParent` tells it in the frame's
+    /// constructor (before the frame's context, and before the browser
+    /// tells of its navigation). Its documents are told as `update` finds
+    /// them.
+    pub(crate) fn frame_attached(&self, id: String, parent: String, stack: Option<&str>) {
+        if self.enabled.borrow().is_empty() {
+            return;
+        }
+        let mut attached = json!({ "frameId": id, "parentFrameId": parent });
+        if let Some(stack) = stack.and_then(|stack| serde_json::from_str::<Value>(stack).ok()) {
+            attached["stack"] = stack;
+        }
+        self.tell("Page.frameAttached", attached);
+        self.attached.borrow_mut().push((id, parent));
+    }
+
+    /// Child frame `id` gone, and the frames in it: each told detached at
+    /// once, those in it first (Blink's `FrameDetachedFromParent`, in each
+    /// frame's `DetachImpl`), and no longer the agent's.
+    pub(crate) fn frame_detached(&self, id: &str) {
+        let mut frames = self.frames.borrow_mut();
+        let mut attached = self.attached.borrow_mut();
+        // Parents before the frames in them.
+        let known: Vec<(String, Option<String>)> = frames
+            .iter()
+            .map(|frame| (frame.id.clone(), frame.parent_id.clone()))
+            .chain(
+                attached
+                    .iter()
+                    .map(|(frame, parent)| (frame.clone(), Some(parent.clone()))),
+            )
+            .collect();
+        let mut gone = vec![id.to_owned()];
+        for (frame, parent) in &known {
+            if parent.as_ref().is_some_and(|parent| gone.contains(parent)) && !gone.contains(frame)
+            {
+                gone.push(frame.clone());
+            }
+        }
+        frames.retain(|frame| !gone.contains(&frame.id));
+        attached.retain(|(frame, _)| !gone.contains(frame));
+        drop((frames, attached));
+        self.lifecycles
+            .borrow_mut()
+            .retain(|frame, _| !gone.contains(frame));
+        if self.enabled.borrow().is_empty() {
+            return;
+        }
+        for frame in gone.iter().rev() {
+            self.tell(
+                "Page.frameDetached",
+                json!({ "frameId": frame, "reason": "remove" }),
+            );
         }
     }
 
@@ -424,12 +540,6 @@ impl PageAgent {
             .ok_or_else(|| (SERVER_ERROR, "No resource with given URL found".into()))
     }
 
-    /// The frames now, parents first: what changed since last told goes
-    /// to the sessions that turned `Page` on (frames gone, then new and
-    /// navigated ones). The main frame's new document is told before its
-    /// realm is (as Chrome tells `Page.frameNavigated` before
-    /// `Runtime.executionContextCreated`): its old document's frames go
-    /// with it.
     /// The markup of the document the frame `id` has, as it came.
     pub(crate) fn source_of(&self, id: &str) -> Option<Rc<str>> {
         self.frames
@@ -439,12 +549,22 @@ impl PageAgent {
             .map(|frame| frame.source.clone())
     }
 
+    /// The frames now, parents first: what changed since last told goes
+    /// to the sessions that turned `Page` on (frames gone, then new and
+    /// navigated ones). The main frame's new document is told before its
+    /// realm is (as Chrome tells `Page.frameNavigated` before
+    /// `Runtime.executionContextCreated`): its old document's frames go
+    /// with it. A child frame's is told as the engine makes it
+    /// (`child_document_created`), and found the same here.
     pub(crate) fn update(&self, frames: Vec<FrameInfo>) {
         let old = std::mem::replace(&mut *self.frames.borrow_mut(), frames);
         let new = self.frames.borrow().clone();
         self.lifecycles
             .borrow_mut()
             .retain(|id, _| new.iter().any(|frame| frame.id == *id));
+        self.attached
+            .borrow_mut()
+            .retain(|(id, _)| !new.iter().any(|frame| frame.id == *id));
         if self.enabled.borrow().is_empty() {
             return;
         }
@@ -459,18 +579,8 @@ impl PageAgent {
         }
         for frame in &new {
             match old.iter().find(|known| known.id == frame.id) {
+                // Told attached as it was made (`frame_attached`).
                 None => {
-                    if let Some(parent) = &frame.parent_id {
-                        let mut attached = json!({ "frameId": frame.id, "parentFrameId": parent });
-                        if let Some(stack) = frame
-                            .creation_stack
-                            .as_deref()
-                            .and_then(|stack| serde_json::from_str::<Value>(stack).ok())
-                        {
-                            attached["stack"] = stack;
-                        }
-                        self.tell("Page.frameAttached", attached);
-                    }
                     if frame.initial {
                         self.initial_document(frame);
                     } else {

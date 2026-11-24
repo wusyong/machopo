@@ -262,9 +262,6 @@ pub(super) struct ChildFrames {
     /// would (Chrome's goes through a navigation request too): its frame,
     /// its URL and its markup, in order (`run_child_commits`).
     commits: std::collections::VecDeque<(FrameId, Url, String)>,
-    /// The stack of the script whose iframe made each frame, if DevTools
-    /// wanted it then (`Page.frameAttached`'s).
-    creation_stacks: HashMap<FrameId, Rc<str>>,
     /// When each frame's iframe fires `load` for a navigation within its
     /// document that another origin asked for (`owner_load_later`), on
     /// the clock.
@@ -326,7 +323,6 @@ impl ChildFrames {
         let mut known: Vec<FrameId> = self.documents.iter().map(|next| next.frame).collect();
         known.extend(self.navigations.keys());
         known.extend(self.commits.iter().map(|(frame, _, _)| *frame));
-        known.extend(self.creation_stacks.keys());
         known.extend(self.owner_loads.keys());
         known.sort_unstable();
         known.dedup();
@@ -340,7 +336,6 @@ impl ChildFrames {
             .retain(|document| !gone.contains(&document.frame));
         self.navigations.retain(|id, _| !gone.contains(id));
         self.commits.retain(|(id, _, _)| !gone.contains(id));
-        self.creation_stacks.retain(|id, _| !gone.contains(id));
     }
 
     /// `frame`'s navigation started: one it started before doesn't
@@ -410,7 +405,6 @@ fn main_frame_info(
         secure_context: super::devtools::secure_context(url.as_str(), None),
         source: source.clone(),
         resources: resources.clone(),
-        creation_stack: None,
     })
 }
 
@@ -661,6 +655,9 @@ impl RenderThread {
         self.set_viewport();
         // The child frames of the document before go with it.
         self.children = ChildFrames::default();
+        // DevTools' agents look at the frames again after the task (the
+        // `DOM` agent's frames have the new document).
+        self.frames_changed = true;
         self.document = Some(FrameDocument {
             navigation_id,
             history_load: timing.navigation_type == dom::NavigationType::BackForward,
@@ -788,6 +785,7 @@ impl RenderThread {
         if !engine.take_frames_changed() {
             return;
         }
+        self.frames_changed = true;
         let frames = match self.document.as_ref().map(|next| next.frame) {
             Some(top) => self.child_frames_below(top),
             None => Vec::new(),
@@ -812,12 +810,9 @@ impl RenderThread {
             let Some((dom, view)) = engine_frame(&mut self.engine) else {
                 continue;
             };
-            let (owner_id, document) = dom.read(|cx| {
-                let owner = owner.get(cx.gc);
-                (
-                    cx.node_id(owner),
-                    cx.content_document(owner).map(|document| cx.root(document)),
-                )
+            let document = dom.read(|cx| {
+                cx.content_document(owner.get(cx.gc))
+                    .map(|document| cx.root(document))
             });
             let Some(document) = document else {
                 continue;
@@ -829,11 +824,6 @@ impl RenderThread {
                 view.view.child_mut(frame).is_some(),
                 "child frame {frame:?} not shown as it was made"
             );
-            if self.page_agent.any_enabled()
-                && let Some(stack) = dom.request_stack(dom::StackAsker::Element(owner_id))
-            {
-                self.children.creation_stacks.insert(frame, stack);
-            }
             let mut initial = FrameDocument::new(
                 frame,
                 "text/html",
@@ -1667,6 +1657,14 @@ impl RenderThread {
             }
         };
         let previous = self.document_url(frame);
+        // DevTools hears of the new document as the engine makes it, before
+        // its realm (`PageAgent::child_document_created`).
+        if !self.devtools_sessions.is_empty()
+            && let Some(info) =
+                self.committing_child_info(frame, &url, mime_type, navigation.as_ref())
+        {
+            self.page_agent.child_committing(info, navigation.is_none());
+        }
         // The realm before it goes, and the blob URLs it made.
         self.blob_urls.revoke_frame(frame);
         let clock = self.clock;
@@ -1759,6 +1757,9 @@ impl RenderThread {
                 navigation.timing.navigation_type == dom::NavigationType::BackForward,
             )
         });
+        // DevTools' `DOM` agent tells of the iframe's new document as the
+        // frames are looked at after the task.
+        self.frames_changed = true;
         self.children.documents.push(FrameDocument {
             navigation_id,
             history_load,
@@ -3029,7 +3030,6 @@ impl RenderThread {
                 next.initial,
             )
         });
-        let creation_stack = self.children.creation_stacks.get(&frame).cloned();
         let engine = self.engine.as_mut()?;
         let (document, url, origin, name, loader) = engine.dom_mut().read(|cx| {
             let owner = owner.get(cx.gc);
@@ -3070,7 +3070,65 @@ impl RenderThread {
             secure_context,
             source,
             resources,
-            creation_stack,
+        })
+    }
+
+    /// Child frame `frame`'s document committing at `url`, of `mime_type`,
+    /// as DevTools tells it, before the engine makes it: its number to come
+    /// (`PageAgent::child_document_created`), its loader the browser's
+    /// `navigation`'s (none: the document's number, to come too), its
+    /// origin the document's it inherits one from, if it does, as the
+    /// commit gives it (`ScriptEngine::inherit_origin`). None for a frame
+    /// DevTools doesn't have now.
+    fn committing_child_info(
+        &mut self,
+        frame: FrameId,
+        url: &Url,
+        mime_type: &str,
+        navigation: Option<&ChildCommit<'_>>,
+    ) -> Option<FrameInfo> {
+        let frames = self.document_frame_infos();
+        let id = self.frame_id(frame);
+        let known = frames.iter().find(|info| info.id == id)?;
+        let parent = frames
+            .iter()
+            .find(|info| Some(&info.id) == known.parent_id.as_ref())?;
+        // As Blink's `SecurityOrigin::ToRawString`: an opaque one's scheme
+        // and host are empty.
+        let serialize = |origin: Option<url::Origin>| match origin {
+            Some(origin @ url::Origin::Tuple(..)) => origin.ascii_serialization(),
+            _ => "://".to_owned(),
+        };
+        let origin = match navigation.and_then(|navigation| navigation.origin_source.as_ref()) {
+            Some(source) => serialize(
+                self.engine
+                    .as_mut()?
+                    .dom_mut()
+                    .read(|cx| cx.document_origin(source.get(cx.gc))),
+            ),
+            // An `about:` document's own is its parent's (`origin_document`).
+            None if url.scheme() == "about" => parent.origin.clone(),
+            None => serialize(Some(url.origin())),
+        };
+        Some(FrameInfo {
+            id,
+            parent_id: known.parent_id.clone(),
+            loader_id: navigation
+                .map(|navigation| navigation.navigation_id.to_string())
+                .unwrap_or_default(),
+            document: 0,
+            name: known.name.clone(),
+            initial: false,
+            navigating: self.children.navigations.contains_key(&frame),
+            url: url.to_string(),
+            origin,
+            mime_type: mime_type.to_owned(),
+            secure_context: super::devtools::secure_context(
+                url.as_str(),
+                Some(parent.secure_context),
+            ),
+            source: Rc::from(""),
+            resources: Rc::default(),
         })
     }
 
@@ -4862,6 +4920,12 @@ fn script_loaded(
 /// What the DOM's engine tells of its child frames (`dom_api::FrameClient`).
 pub(super) struct RendererFrameClient {
     pub(super) to_browser: BrowserSender,
+    /// DevTools' agents, told of a frame as it comes and goes (Blink's
+    /// `probe::FrameAttachedToParent`): observers on this thread, which
+    /// the hook may hold as the load sink holds the `Network` one, asked
+    /// whether a session is on before they do anything.
+    pub(super) page_agent: Rc<super::page_agent::PageAgent>,
+    pub(super) dom_agent: Rc<super::dom_agent::DomAgent>,
 }
 
 /// The engine's child frames told to the browser as they are made and go,
@@ -4876,6 +4940,8 @@ impl dom_api::FrameClient for RendererFrameClient {
         frame: protocol::FrameToken,
         name: &str,
         created_by_script: bool,
+        stack: Option<&str>,
+        dom: &dom::Dom,
     ) {
         let _ = self.to_browser.send(RendererHostMsg::DidCreateChildFrame {
             parent,
@@ -4883,12 +4949,25 @@ impl dom_api::FrameClient for RendererFrameClient {
             name: name.to_owned(),
             created_by_script,
         });
+        // DevTools' queued events first (its iframe's `childNodeInserted`),
+        // as Blink's `frameAttached` flushes the session's queue.
+        if self.dom_agent.any_enabled() {
+            self.dom_agent.take_changes(dom);
+        }
+        self.page_agent
+            .frame_attached(frame.to_string(), parent.to_string(), stack);
+    }
+
+    fn child_document_created(&mut self, frame: protocol::FrameToken, document: dom::NodeId) {
+        self.page_agent
+            .child_document_created(&frame.to_string(), u64::from(document.get()));
     }
 
     fn frame_detached(&mut self, frame: protocol::FrameToken) {
         let _ = self
             .to_browser
             .send(RendererHostMsg::DidDetachFrame { frame });
+        self.page_agent.frame_detached(&frame.to_string());
     }
 }
 

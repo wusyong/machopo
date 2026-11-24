@@ -111,14 +111,27 @@ pub trait LoadSink {
 pub trait FrameClient {
     /// Child frame `frame` made for an iframe in the frame `parent`, its
     /// iframe's name `name`; `created_by_script` if script was running
-    /// (Blink's `is_created_by_script`).
+    /// (Blink's `is_created_by_script`), `stack` that script's if the DOM
+    /// wants frames' stacks (`Dom::frame_stacks_wanted`). Before its realm
+    /// is (as Blink's `LocalFrame` constructor tells DevTools, before the
+    /// frame's context comes); `dom` as it is then, for what DevTools has
+    /// queued of it to go first.
     fn child_frame_created(
         &mut self,
         parent: crate::FrameToken,
         frame: crate::FrameToken,
         name: &str,
         created_by_script: bool,
+        stack: Option<&str>,
+        dom: &dom::Dom,
     );
+
+    /// Child frame `frame` has its new document `document`, a navigation's
+    /// (`ScriptEngine::create_window`): before its realm is told to the
+    /// inspector and any of its script runs, as Chrome tells
+    /// `Page.frameNavigated` as the navigation commits, before the
+    /// frame's context comes.
+    fn child_document_created(&mut self, frame: crate::FrameToken, document: dom::NodeId);
 
     /// Child frame `frame` gone, and the frames in it with it: its iframe
     /// removed, or the document it was in replaced.

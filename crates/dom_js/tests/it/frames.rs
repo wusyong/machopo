@@ -1326,15 +1326,85 @@ impl dom_api::FrameClient for Client {
         frame: dom_api::FrameToken,
         name: &str,
         created_by_script: bool,
+        stack: Option<&str>,
+        _dom: &dom::Dom,
     ) {
+        let stack = if stack.is_some() {
+            " with its stack"
+        } else {
+            ""
+        };
         self.0.borrow_mut().push(format!(
-            "created {frame} in {parent} {name:?} {created_by_script}"
+            "created {frame} in {parent} {name:?} {created_by_script}{stack}"
         ));
+    }
+
+    fn child_document_created(&mut self, frame: dom_api::FrameToken, document: dom::NodeId) {
+        self.0
+            .borrow_mut()
+            .push(format!("document {} of {frame}", document.get()));
     }
 
     fn frame_detached(&mut self, frame: dom_api::FrameToken) {
         self.0.borrow_mut().push(format!("detached {frame}"));
     }
+}
+
+/// The host's client hears of a child frame's new document as the engine
+/// makes it, its iframe's content document: one its initial `about:blank`'s
+/// window takes (of its parent's origin) and one in a realm of its own,
+/// the frames in the document before told gone first; not the top-level
+/// frame's, whose host makes it.
+#[test]
+fn the_frame_client_hears_of_a_child_frames_new_document() {
+    let mut engine = engine();
+    engine.set_main_frame_token(dom_api::new_frame_token());
+    let client = Client::default();
+    engine.set_frame_client(Box::new(client.clone()));
+    let told = || std::mem::take(&mut *client.0.borrow_mut());
+    run(
+        &mut engine,
+        "var f = document.body.appendChild(document.createElement('iframe'));",
+    );
+    let made = created(&mut engine, &[]);
+    let [(child, token)] = made[..] else {
+        panic!("{made:?}");
+    };
+    told();
+    let id_of = |engine: &mut V8Engine, document: &dom::NodeRoot| {
+        engine
+            .dom_mut()
+            .read(|cx| cx.node_id(document.get(cx.gc)).get())
+    };
+    let same = engine
+        .create_window(child, "https://example.test/a/child.html", Instant::now())
+        .expect("its frame");
+    let same = id_of(&mut engine, &same);
+    assert_eq!(told(), [format!("document {same} of {token}")]);
+    run(
+        &mut engine,
+        "f.contentDocument.appendChild(f.contentDocument.createElement('iframe'));",
+    );
+    let inner = created(&mut engine, &[child]);
+    let [(_, inner)] = inner[..] else {
+        panic!("{inner:?}");
+    };
+    told();
+    let other = engine
+        .create_window(child, "https://other.test/", Instant::now())
+        .expect("its frame");
+    let other = id_of(&mut engine, &other);
+    assert_eq!(
+        told(),
+        [
+            format!("detached {inner}"),
+            format!("document {other} of {token}")
+        ]
+    );
+    engine
+        .create_window(engine.top_frame(), "https://example.test/b", Instant::now())
+        .expect("a window");
+    assert_eq!(told(), [format!("detached {token}")]);
 }
 
 /// The host's client hears of each child frame as it is made, in its

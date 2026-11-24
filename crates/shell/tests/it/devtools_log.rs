@@ -261,3 +261,29 @@ fn script_warnings_are_logged() {
     assert_eq!(machopo.error_line("[console]"), format!("[console] {text}"));
     assert_eq!(next_entry(&mut page)["text"], text);
 }
+
+/// A page no DevTools session is attached to logs script's warnings too
+/// (printed), as they come: those of its parser's script, and those of a
+/// timer's that comes when nothing else does.
+#[test]
+fn script_warnings_are_logged_without_a_session() {
+    let html = "<!DOCTYPE html><script>
+         new PerformanceObserver(() => {}).observe({ type: 'first' });
+         setTimeout(() => new PerformanceObserver(() => {}).observe({ type: 'later' }), 300);
+       </script>";
+    let server = server(&[("/", Route::ok("text/html", html))]);
+    let machopo = Machopo::start();
+    let mut browser = machopo.connect_browser();
+    let created = browser.call(
+        None,
+        "Target.createTarget",
+        json!({ "url": server.url("/") }),
+    );
+    assert!(created.get("result").is_some(), "{created}");
+    for name in ["first", "later"] {
+        assert_eq!(
+            machopo.error_line("[console]"),
+            format!("[console] The entry type '{name}' does not exist or isn't supported.")
+        );
+    }
+}

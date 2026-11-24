@@ -78,6 +78,13 @@ impl Dom {
         }
     }
 
+    /// Whether the host wants the stack of the script whose iframe makes a
+    /// frame (`set_stacks_wanted`'s `frames`): the engine takes it as the
+    /// frame is made, for the host's frame client.
+    pub fn frame_stacks_wanted(&self) -> bool {
+        self.changes.stacks.frames.get()
+    }
+
     /// Whether the host wants the requests' stacks: an engine that starts
     /// a load itself (an `import()`'s) captures it then.
     pub fn request_stacks_wanted(&self) -> bool {

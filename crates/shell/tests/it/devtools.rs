@@ -1170,3 +1170,364 @@ fn a_child_frames_navigation_within_its_document_is_told() {
         ]
     );
 }
+
+/// A frame script inserts is told as Chrome tells it: its iframe's
+/// `DOM.childNodeInserted` (queued), then `Page.frameAttached` as the
+/// frame is made (`InspectorPageAgent::FrameAttachedToParent` flushes
+/// what was queued), then its realm's context.
+#[test]
+fn a_new_frames_events_come_in_chromes_order() {
+    let server = server(&[("/", Route::ok("text/html", "<!DOCTYPE html><body></body>"))]);
+    let machopo = Machopo::start();
+    let (mut page, target) = page(&machopo);
+    load(&mut page, &server.url("/"));
+    page.call(None, "Page.enable", json!({}));
+    page.call(None, "DOM.enable", json!({}));
+    let root = page.call(None, "DOM.getDocument", json!({ "depth": -1 }));
+    assert!(root.get("result").is_some(), "{root}");
+    page.call(None, "Runtime.enable", json!({}));
+    page.take_events("");
+    let id = page.send(
+        None,
+        "Runtime.evaluate",
+        json!({ "expression": "document.body.append(document.createElement('iframe')); 0" }),
+    );
+    let mut order = Vec::new();
+    while order.len() < 3 {
+        let message = page.read().expect("messages");
+        match message["method"].as_str() {
+            Some("DOM.childNodeInserted") if message["params"]["node"]["localName"] == "iframe" => {
+                order.push("inserted");
+            }
+            Some("Page.frameAttached") => order.push("attached"),
+            Some("Runtime.executionContextCreated")
+                if message["params"]["context"]["auxData"]["frameId"] != target.as_str() =>
+            {
+                order.push("context");
+            }
+            _ => page.keep(message),
+        }
+    }
+    assert_eq!(order, ["inserted", "attached", "context"]);
+    page.answer(id);
+}
+
+/// A child frame's new document is told as Chrome tells it, as it
+/// commits: `Page.frameNavigated` before its script runs, and before its
+/// realm's context if it has one of its own. One of the page's origin and
+/// a `srcdoc` one, both in their initial `about:blank`'s window; one of
+/// another origin, in a realm of its own; and a `javascript:` URL's empty
+/// document, which the renderer commits itself (named by the document,
+/// no navigation of the browser's bringing it). Each named as the frame
+/// tree names it after.
+#[test]
+fn a_child_frames_document_is_told_before_its_script() {
+    let server = server(&[
+        ("/", Route::ok("text/html", "<!DOCTYPE html><body></body>")),
+        (
+            "/child",
+            Route::ok(
+                "text/html",
+                "<!DOCTYPE html><script>console.log('fetched')</script>",
+            ),
+        ),
+    ]);
+    let machopo = Machopo::start();
+    let (mut page, target) = page(&machopo);
+    load(&mut page, &server.url("/"));
+    page.call(None, "Page.enable", json!({}));
+    page.call(None, "Runtime.enable", json!({}));
+    page.take_events("");
+    for (navigate, url, expected) in [
+        (
+            "f.src = '/child'",
+            server.url("/child"),
+            &["context", "navigated", "console"][..],
+        ),
+        (
+            "f.srcdoc = '<script>console.log(1)</script>'",
+            "about:srcdoc".to_owned(),
+            &["context", "navigated", "console"][..],
+        ),
+        (
+            "f.src = location.href.replace('127.0.0.1', 'localhost') + 'child'",
+            server.url("/child").replace("127.0.0.1", "localhost"),
+            &["context", "navigated", "context", "console"][..],
+        ),
+        (
+            "f.src = 'javascript:1'",
+            "javascript:1".to_owned(),
+            &["context", "navigated", "context"][..],
+        ),
+    ] {
+        let id = page.send(
+            None,
+            "Runtime.evaluate",
+            json!({ "expression": format!(
+                "var f = document.createElement('iframe'); document.body.append(f); {navigate}; 0"
+            ) }),
+        );
+        let mut order = Vec::new();
+        let mut navigated = Value::Null;
+        while order.len() < expected.len() {
+            let message = page.read().expect("messages");
+            match message["method"].as_str() {
+                Some("Page.frameNavigated")
+                    if message["params"]["frame"]["parentId"].is_string() =>
+                {
+                    navigated = message["params"]["frame"].clone();
+                    order.push("navigated");
+                }
+                Some("Runtime.executionContextCreated")
+                    if message["params"]["context"]["auxData"]["frameId"] != target.as_str() =>
+                {
+                    order.push("context");
+                }
+                Some("Runtime.consoleAPICalled") => order.push("console"),
+                _ => page.keep(message),
+            }
+        }
+        assert_eq!(order, expected, "{navigate}");
+        assert_eq!(navigated["url"], json!(url), "{navigated}");
+        page.answer(id);
+        // Not told again as the task ends: the same document.
+        evaluate(&mut page, "0", None);
+        let again = page.take_events("Page.frameNavigated");
+        assert_eq!(again, Vec::<Value>::new(), "{navigate}");
+        let tree = page.call(None, "Page.getFrameTree", json!({}));
+        let child = tree["result"]["frameTree"]["childFrames"]
+            .as_array()
+            .and_then(|children| {
+                children
+                    .iter()
+                    .find(|child| child["frame"]["id"] == navigated["id"])
+            })
+            .unwrap_or_else(|| panic!("{tree}"));
+        assert_eq!(child["frame"]["loaderId"], navigated["loaderId"], "{tree}");
+        assert_eq!(
+            child["frame"]["securityOrigin"], navigated["securityOrigin"],
+            "{tree}"
+        );
+        evaluate(&mut page, "f.remove(); 0", None);
+        page.take_events("");
+    }
+}
+
+/// A frame script makes has its initial `about:blank` told as the task
+/// that made it ends (it has loaded as it starts), with no command after
+/// to ask for it.
+#[test]
+fn a_new_frames_initial_document_is_told_as_its_task_ends() {
+    let server = server(&[("/", Route::ok("text/html", "<!DOCTYPE html><body></body>"))]);
+    let machopo = Machopo::start();
+    let (mut page, _target) = page(&machopo);
+    load(&mut page, &server.url("/"));
+    page.call(None, "Page.enable", json!({}));
+    page.take_events("");
+    evaluate(
+        &mut page,
+        "document.body.append(document.createElement('iframe')); 0",
+        None,
+    );
+    let attached = page.event("Page.frameAttached")["params"]["frameId"].clone();
+    let stopped = page.event("Page.frameStoppedLoading")["params"]["frameId"].clone();
+    assert_eq!(stopped, attached);
+}
+
+/// A frame whose `src` is still loading has its initial `about:blank`
+/// told as the task that made it ends: its lifecycle's `init`, then its
+/// own document's as it commits.
+#[test]
+fn a_loading_frames_initial_document_is_told_before_its_own() {
+    let server = server(&[
+        ("/", Route::ok("text/html", "<!DOCTYPE html><body></body>")),
+        (
+            "/slow",
+            Route::ok("text/html", "<!DOCTYPE html>slow").with_delay(Duration::from_millis(500)),
+        ),
+    ]);
+    let machopo = Machopo::start();
+    let (mut page, target) = page(&machopo);
+    load(&mut page, &server.url("/"));
+    page.call(None, "Page.enable", json!({}));
+    page.call(
+        None,
+        "Page.setLifecycleEventsEnabled",
+        json!({ "enabled": true }),
+    );
+    page.take_events("");
+    evaluate(
+        &mut page,
+        "const s = document.createElement('iframe'); s.src = '/slow'; document.body.append(s); 0",
+        None,
+    );
+    let mut order = Vec::new();
+    while order.last().is_none_or(|(told, _)| *told != "navigated") {
+        let message = page.read().expect("messages");
+        match message["method"].as_str() {
+            Some("Page.lifecycleEvent")
+                if message["params"]["name"] == "init"
+                    && message["params"]["frameId"] != target.as_str() =>
+            {
+                order.push(("init", message["params"]["loaderId"].clone()));
+            }
+            Some("Page.frameNavigated") if message["params"]["frame"]["parentId"].is_string() => {
+                order.push(("navigated", message["params"]["frame"]["loaderId"].clone()));
+            }
+            _ => page.keep(message),
+        }
+    }
+    let [("init", initial), ("init", own), ("navigated", navigated)] = &order[..] else {
+        panic!("{order:?}");
+    };
+    assert_ne!(initial, own);
+    assert_eq!(own, navigated);
+}
+
+/// An iframe removed with one in it is told detached after the one in
+/// it, as Chrome's `DetachImpl` detaches the frame's children before it
+/// tells of the frame.
+#[test]
+fn a_frame_gone_is_told_after_the_frames_in_it() {
+    let server = server(&[("/", Route::ok("text/html", "<!DOCTYPE html><body></body>"))]);
+    let machopo = Machopo::start();
+    let (mut page, _target) = page(&machopo);
+    load(&mut page, &server.url("/"));
+    page.call(None, "Page.enable", json!({}));
+    evaluate(
+        &mut page,
+        "var f = document.body.appendChild(document.createElement('iframe'));
+         const d = f.contentDocument;
+         (d.body || d.documentElement || d).appendChild(d.createElement('iframe')); 0",
+        None,
+    );
+    let attached: Vec<Value> = page
+        .take_events("Page.frameAttached")
+        .iter()
+        .map(|event| event["params"]["frameId"].clone())
+        .collect();
+    assert_eq!(attached.len(), 2, "{attached:?}");
+    evaluate(&mut page, "f.remove(); 0", None);
+    evaluate(&mut page, "0", None);
+    let detached: Vec<Value> = page
+        .take_events("Page.frameDetached")
+        .iter()
+        .map(|event| event["params"]["frameId"].clone())
+        .collect();
+    assert_eq!(detached, [attached[1].clone(), attached[0].clone()]);
+    // Both made in the task that removes them: the one in it too, though
+    // no task's end has listed them yet.
+    evaluate(
+        &mut page,
+        "const g = document.body.appendChild(document.createElement('iframe'));
+         const e = g.contentDocument;
+         (e.body || e.documentElement || e).appendChild(e.createElement('iframe'));
+         g.remove(); 0",
+        None,
+    );
+    evaluate(&mut page, "0", None);
+    let told: Vec<(Value, Value)> = page
+        .take_events("Page.frame")
+        .iter()
+        .filter(|event| {
+            event["method"] != "Page.frameStoppedLoading"
+                && event["method"] != "Page.frameStartedLoading"
+        })
+        .map(|event| (event["method"].clone(), event["params"]["frameId"].clone()))
+        .collect();
+    let [_, (_, inner), _, _] = &told[..] else {
+        panic!("{told:?}");
+    };
+    let outer = &told[0].1;
+    assert_eq!(
+        told,
+        [
+            (json!("Page.frameAttached"), outer.clone()),
+            (json!("Page.frameAttached"), inner.clone()),
+            (json!("Page.frameDetached"), inner.clone()),
+            (json!("Page.frameDetached"), outer.clone()),
+        ]
+    );
+}
+
+/// An `about:blank` that another origin's document navigated a frame to
+/// has that document's origin, not its parent's: told so as it commits,
+/// as the frame tree has it after.
+#[test]
+fn an_about_blank_of_its_initiators_origin_is_told_so() {
+    let server = server(&[
+        ("/", Route::ok("text/html", "<!DOCTYPE html><body></body>")),
+        (
+            "/nav",
+            Route::ok(
+                "text/html",
+                "<!DOCTYPE html><script>parent.frames[0].location.href = 'about:blank'</script>",
+            ),
+        ),
+    ]);
+    let machopo = Machopo::start();
+    let (mut page, _target) = page(&machopo);
+    load(&mut page, &server.url("/"));
+    page.call(None, "Page.enable", json!({}));
+    page.take_events("");
+    evaluate(
+        &mut page,
+        "var f = document.body.appendChild(document.createElement('iframe'));
+         var g = document.createElement('iframe');
+         g.src = location.href.replace('127.0.0.1', 'localhost') + 'nav';
+         document.body.append(g); 0",
+        None,
+    );
+    let other = server.url("/").replace("127.0.0.1", "localhost");
+    let other = other.trim_end_matches('/');
+    let blank = loop {
+        let event = page.event("Page.frameNavigated");
+        if event["params"]["frame"]["url"] == "about:blank" {
+            break event["params"]["frame"].clone();
+        }
+    };
+    assert_eq!(blank["securityOrigin"], json!(other), "{blank}");
+    let tree = page.call(None, "Page.getFrameTree", json!({}));
+    let child = tree["result"]["frameTree"]["childFrames"]
+        .as_array()
+        .and_then(|children| {
+            children
+                .iter()
+                .find(|child| child["frame"]["id"] == blank["id"])
+        })
+        .unwrap_or_else(|| panic!("{tree}"));
+    assert_eq!(child["frame"]["securityOrigin"], json!(other), "{tree}");
+}
+
+/// An iframe made and removed in one task is told as both, as Chrome
+/// tells each as it happens.
+#[test]
+fn a_frame_made_and_removed_at_once_is_told() {
+    let server = server(&[("/", Route::ok("text/html", "<!DOCTYPE html><body></body>"))]);
+    let machopo = Machopo::start();
+    let (mut page, _target) = page(&machopo);
+    load(&mut page, &server.url("/"));
+    page.call(None, "Page.enable", json!({}));
+    page.take_events("");
+    evaluate(
+        &mut page,
+        "const f = document.createElement('iframe'); document.body.append(f); f.remove(); 0",
+        None,
+    );
+    // A command after: what the task told is in by its answer.
+    evaluate(&mut page, "0", None);
+    let events = page.take_events("Page.frame");
+    let methods: Vec<&str> = events
+        .iter()
+        .map(|event| event["method"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        methods,
+        ["Page.frameAttached", "Page.frameDetached"],
+        "{events:?}"
+    );
+    assert_eq!(
+        events[0]["params"]["frameId"],
+        events[1]["params"]["frameId"]
+    );
+}

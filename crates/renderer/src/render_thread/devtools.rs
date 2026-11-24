@@ -82,6 +82,27 @@ impl RenderThread {
         }
     }
 
+    /// What a task left for DevTools, told as it ends (Blink's
+    /// `WebDevToolsAgentImpl::DidProcessTask` flushes each session's
+    /// queued events): the warnings script earned, the frames if one was
+    /// made, went or committed a document (a new frame's initial document
+    /// and an iframe's new document are what the agents' comparing
+    /// tells), and the DOM's changes. The warnings go to the page's log whether or not a
+    /// session is attached (it keeps them for one to come); the rest only
+    /// while one is.
+    pub(super) fn tell_devtools_after_task(&mut self) {
+        self.log_console_warnings();
+        if self.devtools_sessions.is_empty() {
+            return;
+        }
+        if std::mem::take(&mut self.frames_changed) {
+            self.tell_frames();
+        }
+        if self.dom_agent.any_enabled() {
+            self.tell_dom_changes();
+        }
+    }
+
     /// Tells the `DOM` agent's sessions of the DOM's changes since.
     pub(super) fn tell_dom_changes(&mut self) {
         if let Some(engine) = &mut self.engine {
@@ -115,7 +136,6 @@ impl RenderThread {
                 secure_context: secure_context("", None),
                 source: Rc::from(""),
                 resources: Rc::default(),
-                creation_stack: None,
             });
         }
         frames
@@ -207,6 +227,8 @@ impl RenderThread {
         // Its child frames told to the browser as they are made and go.
         engine.set_frame_client(Box::new(super::documents::RendererFrameClient {
             to_browser: self.to_browser.clone(),
+            page_agent: self.page_agent.clone(),
+            dom_agent: self.dom_agent.clone(),
         }));
         // `localStorage`, its areas opened waiting for the browser.
         engine.set_storage_host(Box::new(super::documents::RendererStorageHost {

@@ -1,7 +1,7 @@
 # RFC 0112：拿掉 event loop 的外圈
 
 - 開始日期：2026-11-24
-- 狀態：🚧 已排程：2026-11-24（第 0 階段做完；範圍和做法已決定，第 1 段還沒開始）
+- 狀態：🚧 已排程：2026-11-24（第 0、1 階段做完，第 1 段待審查）
 - 細節：`details.md`；進度：`progress.md`
 
 ## 摘要
@@ -116,6 +116,18 @@ parser 的續跑和子 frame 的 commit 是 renderer 自己的工作，直接排
 3. **DOM 的 task 用 T1：排的當下告訴 scheduler**（2026-11-24，使用者同意；原本「待決定」的第 2 條）：`dom` 擁有 host 設的 `TaskWaker`，排 task 時送一個記號、timer 的記號在到期時排進 scheduler（編號在那時給，和 Chrome 的 delayed task 到期時才拿到 enqueue order 一樣），scheduler 輪到記號時跑一個 DOM 的 task；task 的內容照 RFC 0110 留在 `dom`。理由：和 Blink 一樣（`ExecutionContext::GetTaskRunner(type)->PostTask`），順序只在 scheduler 一個地方決定；waker 在 `dom` 裡，兩個 engine 一處設好（`make_engine`）；之後 `until_next_due` 不用再問 DOM 的 timer。代價：DOM 每排一個 task 多一次 scheduler 的 lock 和 push；取消的 task 留下的記號要跑到才知道沒有事。不選 T2（scheduler 取 task 時問 DOM）：改動比較少（+62 對 +107 行），但順序由內圈的程式比兩邊，每個 engine 都要實作查詢（原型的 wasm engine 沒有），順序比 Chrome 早。不選 T3（只把 `run_due_tasks` 搬進內圈）：順序還是清單決定的。原型和比較在 `details.md` 的「原型」。
 4. **範圍：拿掉整個外圈**（2026-11-24，使用者同意；原本「待決定」的第 1 條；A）：外圈的每一步照 `details.md` 的盤點去它在 Chrome 的位置（當場、scheduler 的 task、每個 task 之後），只有 blob URL 的撤銷（`flush_revoked`）例外，留給導覽帶著解析好的 blob 那一份。理由：只做導覽、DevTools 的事件和 DOM 的 task（B）時外圈還在，剩下的步驟照樣會晚，之後還要另一份 RFC 才拿得掉；盤點之後每一步在 Chrome 都有明確的位置，沒有要另外設計的。代價：parser、commit 和 renderer 自己的 timer 都改成 task，WPT 的時序要整套重看（CI）。
 5. **分五段**（2026-11-24，使用者同意）：照「分階段」的第 1 到 5 段，由小到大，每段做完可以先 merge。理由：DevTools 的事件和導覽是當場做的 hook，不牽動 event loop，先做風險最低；DOM 的 task 要先進 scheduler，renderer 自己的工作才有一致的規則可循；拿掉外圈放最後，那時剩下的步驟最少。
+6. **第 1 段的第 1 項：`frameAttached`、`frameDetached` 在 `FrameClient` 的 hook 裡當場送**（2026-11-24，使用者決定；A）：`RendererFrameClient` 拿 Page agent 的 `Rc`（RFC 0110 第 6 條允許的那一類），`child_frame_created` 送 `frameAttached`、`frame_detached` 送 `frameDetached`，Page agent 記下哪些已經告訴過，之後的比對不再重送。對照 Chrome：`InspectorPageAgent::FrameAttachedToParent` 在 `LocalFrame` 的 constructor 裡送、接著 `flush()`（註解：Browser 會報告這個 frame 的網路事件，`frameAttached` 要先到前端），`FrameDetachedFromParent` 在 `DetachImpl` 裡送。不選照舊比對、改成每個 task 之後（B）：同一個 task 裡建了又拿掉的 iframe 照樣看不到，也排不出 `frameAttached` 在 `executionContextCreated` 之前。
+7. **第 1 段的第 2 項：新 frame 的 `childNodeInserted`、`frameAttached`、`executionContextCreated` 照 Chrome 的順序**（2026-11-24，使用者決定）：`frameAttached` 的 stack 由 dom_js 的 `create_child` 在 DevTools 要 frame 的 stack 時當場取一份、當參數給 hook（Chrome 的 `FrameAttachedToParent` 也是自己 `SourceLocation::CaptureWithFullStackTrace()`，和導覽請求的 initiator 分開取）；`create_child` 先呼叫 client，再建 realm、告訴 inspector；`child_frame_created` 多拿 `&Dom`，`RendererFrameClient` 也拿 DOM agent 的 `Rc`，送 `frameAttached` 之前先送出排著的 DOM 變動。不選把 operation 結束時取 stack 移到 `update_elements` 之前、讓 `create_child` 讀它：只取一次，但改了每個 operation 的順序，和 Chrome 分開取的做法也不同。
+8. **第 1 段的第 3 項：子 frame 的 `frameNavigated` 在 commit 的當下、realm 之前送；比對出來的其他 Page 事件在有變化的 task 之後比對**（2026-11-24，使用者決定；先選 B，實作時發現 B 的前提對子 frame 不成立，改成 C1）：
+   - frame 建立或拿掉、頂層和子 frame 的 commit 時設一個旗標，每個 task 之後旗標有設才比對（B 的部分：新 frame 初始的 `about:blank`，和 DOM agent 拿到 iframe 的新文件）；收到 DevTools 的指令時和子 frame 送導覽之前照舊先比對。導覽開始或結束不設：它只改 `navigating`，比對只在新的 frame 上用到它（mutation test 看出來的）。外圈的步驟在第 4 段之前還不是 scheduler 的 task，外圈最後也呼叫同一個「task 之後」，照樣看旗標；console 的警告不管有沒有 session 都先交給 log agent（它印出來、留給之後的 session）。
+   - 子 frame 的 commit（`commit_child`，子 frame 的 commit 只經過它）在 `create_window` 之前把新文件的 `FrameInfo` 交給 Page agent（沒有 node id）；dom_js 的 `create_window` 在建好文件之後、告訴 inspector 新 realm 之前，呼叫 `FrameClient` 新的 `child_document_created`（沿用初始 `about:blank` 視窗的那條路也呼叫），Page agent 補上文件的編號，renderer 自己 commit 的文件連 loaderId 也一起補上，然後送 `frameStartedLoading`、`init`、`frameNavigated`；之後的比對認得是同一份文件，不再重送。頂層的 commit 本來就在 `create_window` 之前告訴 Page agent。
+   - 對照 Chrome：`frameNavigated` 在 `WillCommitNavigation` 送，在新文件的 context 和 script 之前。
+   - B 的前提錯在哪：當初以為 commit 自己是一個 task，task 結束時比對看不出差別。但子 frame 的 commit 在同一個 task 裡建 realm（送 `executionContextCreated`）、跑 inline script，所以 `frameNavigated` 會晚到它們之後（臨時的測試量到 `console` 在前）。
+   - loaderId 的做法：renderer 自己 commit 的文件（`srcdoc`、`about:blank`、`javascript:`），loaderId 是文件的 node id，`create_window` 之前還不知道。所以由引擎的 hook 補上。不選改用 commit 前就分配好的 `DocumentId`：它和 browser 的導覽編號是兩個不同的計數器，同一個 frame 可能出現相同的 loaderId。
+   - 不選每個 task 之後都比對（A）：開著 DevTools 時每個 task 都要重建整份清單（frame 數的平方）。
+   - 不選照舊比對、把差別記進限制（B）：Puppeteer 這類工具等 `frameNavigated` 之後才找 context，會接不上。
+   - 當初不選 C 的理由是「commit 的路很多、會漏」，實作時發現不成立：子 frame 的 commit 只有一條路。
+9. **第 1 段的第 4 項：DOM 的變動和 console 警告在每個 task 之後、renderer 的 agent 回應之前送**（2026-11-24，使用者決定；A）：內圈每個 task 之後（有 DOM agent 開著才取），`frameAttached` 之前（第 7 條）；renderer 的 agent 的回應之前不用另外取：實作時發現 DOM、CSS、Overlay agent 的指令都不改 DOM（machopo 沒有 `DOM.setAttributeValue` 這類），它們本來就在處理指令之前先取，回應之前已經沒有排著的。對照 Chrome：通知在改變的當下產生、進佇列，`DidProcessTask`、送每個 CDP 回應之前、`flush()` 時送出。和 Chrome 不同、記進 `docs/limitations.md` 的：engine 的 inspector 的回應（`Runtime.evaluate` 裡改了 DOM）照樣先到，變動在那個 task 結束時才到。不選連 engine 的 inspector 的回應之前也送（B）：回應在 V8 裡經過 `devtools_send` 送出，那時手上沒有 `Dom`，要給兩個 engine 的 inspector channel 加拿 `&Dom` 的 hook；script 暫停時訊息要當場送，不能先存起來。
 
 ## 待決定
 

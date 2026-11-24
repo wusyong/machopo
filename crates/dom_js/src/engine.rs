@@ -184,6 +184,7 @@ impl V8Engine {
             Some(owner.clone()),
             false,
         ));
+        state.frames.tell_document_created(frame, document_id);
         // The global's `document` is the new one now.
         crate::window::update_cached_accessors(&mut scope, global);
         document
@@ -588,6 +589,15 @@ impl ScriptEngine for V8Engine {
                 (cx.root(document), cx.node_id(document))
             })
         };
+        // A child frame's new document is told before its realm is.
+        if place.is_some() {
+            let mut state_scope = state::scope(scope).expect("the engine's DOM");
+            state_scope
+                .state_mut()
+                .0
+                .frames
+                .tell_document_created(frame, document_id);
+        }
         {
             let scope = &mut v8::ContextScope::new(scope, context);
             // A child frame's realm before has gone for the inspector, and

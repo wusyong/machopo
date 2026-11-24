@@ -973,3 +973,75 @@ fn pseudo_elements_are_nodes() {
         "Could not find node with given id"
     );
 }
+
+/// The DOM's changes a task made are told as it ends (Chrome's
+/// `WebDevToolsAgentImpl::DidProcessTask`), before the next task's: here
+/// the message the task posted, whose `console.log` is told at once.
+#[test]
+fn a_tasks_changes_are_told_before_the_next_task() {
+    let (_machopo, mut page, _target, _server) = dom_page(&[
+        ("/", Route::ok("text/html", PAGE)),
+        ("/x", Route::ok("text/plain", "x")),
+    ]);
+    result(page.call(None, "DOM.getDocument", json!({ "depth": -1 })));
+    result(page.call(None, "Runtime.enable", json!({})));
+    page.take_events("");
+    evaluate(
+        &mut page,
+        "onmessage = () => console.log('next');
+         fetch('/x').then(() => {
+           document.body.append(document.createElement('span'));
+           postMessage('', '*');
+         });
+         0",
+        None,
+    );
+    let mut order = Vec::new();
+    while order.len() < 2 {
+        let message = page.read().expect("messages");
+        match message["method"].as_str() {
+            Some("DOM.childNodeInserted") => order.push("inserted"),
+            Some("Runtime.consoleAPICalled") => order.push("next"),
+            _ => page.keep(message),
+        }
+    }
+    assert_eq!(order, ["inserted", "next"]);
+}
+
+/// The changes of the DOM's tasks a task queued (here a message a command
+/// posted) are told before the next task's: the command after, sent
+/// while the first runs, whose `console.log` is told at once.
+#[test]
+fn queued_tasks_changes_are_told_before_the_next_task() {
+    let (_machopo, mut page, _target, _server) = dom_page(&[("/", Route::ok("text/html", PAGE))]);
+    result(page.call(None, "DOM.getDocument", json!({ "depth": -1 })));
+    result(page.call(None, "Runtime.enable", json!({})));
+    page.take_events("");
+    // Long enough for the next command to be waiting as it ends.
+    let first = page.send(
+        None,
+        "Runtime.evaluate",
+        json!({ "expression": "onmessage = () => document.body.append(document.createElement('span'));
+                               postMessage('', '*');
+                               const end = performance.now() + 200;
+                               while (performance.now() < end) {}
+                               0" }),
+    );
+    let second = page.send(
+        None,
+        "Runtime.evaluate",
+        json!({ "expression": "console.log('next'); 0" }),
+    );
+    let mut order = Vec::new();
+    while order.len() < 2 {
+        let message = page.read().expect("messages");
+        match message["method"].as_str() {
+            Some("DOM.childNodeInserted") => order.push("inserted"),
+            Some("Runtime.consoleAPICalled") => order.push("next"),
+            _ => page.keep(message),
+        }
+    }
+    assert_eq!(order, ["inserted", "next"]);
+    page.answer(first);
+    page.answer(second);
+}

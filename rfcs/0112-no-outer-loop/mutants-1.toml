@@ -1,0 +1,200 @@
+# Stage 1's mutants: `python3 scripts/test.py mutate rfcs/0112-no-outer-loop/mutants-1.toml`.
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools"]
+timeout = 1200
+
+[[mutant]]
+name = "a frame made isn't told attached as it is made"
+file = "crates/renderer/src/render_thread/page_agent.rs"
+from = '''        if self.enabled.borrow().is_empty() {
+            return;
+        }
+        let mut attached = json!({ "frameId": id, "parentFrameId": parent });'''
+to = '''        if self.enabled.borrow().len() < 9 {
+            return;
+        }
+        let mut attached = json!({ "frameId": id, "parentFrameId": parent });'''
+
+[[mutant]]
+name = "a frame made doesn't flush the DOM's changes first"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        if self.dom_agent.any_enabled() {
+            self.dom_agent.take_changes(dom);
+        }'''
+to = '''        if self.dom_agent.any_enabled() && false {
+            self.dom_agent.take_changes(dom);
+        }'''
+
+[[mutant]]
+name = "a frame made isn't told to the host"
+file = "crates/dom_js/src/frames.rs"
+from = '''            client.child_frame_created(
+                parent_token,
+                token,
+                &name,
+                created_by_script,
+                stack.as_deref(),
+                &state.dom,
+            );'''
+to = '''            let _ = (parent_token, client, created_by_script, &name);'''
+
+[[mutant]]
+name = "a frame made has no stack"
+file = "crates/dom_js/src/frames.rs"
+from = '''        .then(|| crate::state::capture_stack(scope))'''
+to = '''        .then(|| None::<String>)'''
+
+[[mutant]]
+name = "a frame gone isn't told at once"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        self.page_agent.frame_detached(&frame.to_string());'''
+to = '''        let _ = frame;'''
+
+[[mutant]]
+name = "a frame gone is told before the frames in it"
+file = "crates/renderer/src/render_thread/page_agent.rs"
+from = '''        for frame in gone.iter().rev() {'''
+to = '''        for frame in gone.iter() {'''
+
+[[mutant]]
+name = "a frame gone doesn't take the frames attached in it"
+file = "crates/renderer/src/render_thread/page_agent.rs"
+from = '''            .chain(
+                attached
+                    .iter()
+                    .map(|(frame, parent)| (frame.clone(), Some(parent.clone()))),
+            )'''
+to = '''            .chain(
+                attached
+                    .iter()
+                    .map(|(frame, parent)| (frame.clone(), Some(parent.clone())))
+                    .filter(|_| false),
+            )'''
+
+[[mutant]]
+name = "the frames aren't looked at after a task"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''        if std::mem::take(&mut self.frames_changed) {'''
+to = '''        if std::mem::take(&mut self.frames_changed) && false {'''
+
+[[mutant]]
+name = "the DOM's changes aren't told after a task"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''        if self.dom_agent.any_enabled() {
+            self.tell_dom_changes();'''
+to = '''        if self.dom_agent.any_enabled() && false {
+            self.tell_dom_changes();'''
+
+[[mutant]]
+name = "nothing is told after a task off the channel"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                self.tell_devtools_after_task();
+                // What it queued for the DOM'''
+to = '''                // What it queued for the DOM'''
+
+[[mutant]]
+name = "nothing is told after the DOM's queued tasks"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                self.run_queued_tasks();
+                self.tell_devtools_after_task();'''
+to = '''                self.run_queued_tasks();'''
+
+[[mutant]]
+name = "frames made or gone don't mark the frames changed"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        if !engine.take_frames_changed() {
+            return;
+        }
+        self.frames_changed = true;'''
+to = '''        if !engine.take_frames_changed() {
+            return;
+        }'''
+
+[[mutant]]
+name = "a child frame's commit isn't told before the engine makes it"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            self.page_agent.child_committing(info, navigation.is_none());'''
+to = '''            let _ = info;'''
+
+[[mutant]]
+name = "a child frame's new document in a realm of its own isn't told before it"
+file = "crates/dom_js/src/engine.rs"
+from = '''        if place.is_some() {
+            let mut state_scope = state::scope(scope).expect("the engine's DOM");'''
+to = '''        if place.is_some() && false {
+            let mut state_scope = state::scope(scope).expect("the engine's DOM");'''
+
+[[mutant]]
+name = "a child frame's new document in its initial window isn't told"
+file = "crates/dom_js/src/engine.rs"
+from = '''        state.frames.tell_document_created(frame, document_id);
+        // The global's `document` is the new one now.'''
+to = '''        // The global's `document` is the new one now.'''
+
+[[mutant]]
+name = "a document the renderer commits isn't named by its number"
+file = "crates/renderer/src/render_thread/page_agent.rs"
+from = '''        if loader_is_document {
+            frame.loader_id = document.to_string();
+        }'''
+to = '''        if loader_is_document && document == 0 {
+            frame.loader_id = document.to_string();
+        }'''
+
+[[mutant]]
+name = "a committing frame's number isn't the engine's"
+file = "crates/renderer/src/render_thread/page_agent.rs"
+from = '''        frame.document = document;'''
+to = '''        frame.document = document.wrapping_add(1);'''
+
+[[mutant]]
+name = "an about: document committing has its URL's origin"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            None if url.scheme() == "about" => parent.origin.clone(),'''
+to = '''            None if url.scheme() == "about" => serialize(Some(url.origin())),'''
+
+[[mutant]]
+name = "a committing document that inherits its origin has its URL's"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        let origin = match navigation.and_then(|navigation| navigation.origin_source.as_ref()) {'''
+to = '''        let origin = match navigation.and_then(|navigation| navigation.origin_source.as_ref()).filter(|_| false) {'''
+
+[[mutant]]
+name = "a committed frame isn't the agent's"
+file = "crates/renderer/src/render_thread/page_agent.rs"
+from = '''                Some(known) => *known = frame.clone(),'''
+to = '''                Some(_) => {}'''
+
+[[mutant]]
+name = "the outer turn's steps leave nothing for DevTools"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            self.check_network_idle();
+            self.tell_devtools_after_task();'''
+to = '''            self.check_network_idle();'''
+
+[[mutant]]
+name = "the warnings go to the page's log only while a session is attached"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''        self.log_console_warnings();
+        if self.devtools_sessions.is_empty() {
+            return;
+        }'''
+to = '''        if self.devtools_sessions.is_empty() {
+            return;
+        }
+        self.log_console_warnings();'''
+
+[[mutant]]
+name = "a child commit doesn't mark the frames changed"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        self.frames_changed = true;
+        self.children.documents.push(FrameDocument {'''
+to = '''        self.children.documents.push(FrameDocument {'''
+
+[[mutant]]
+name = "a top-level commit doesn't mark the frames changed"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        self.children = ChildFrames::default();
+        // DevTools' agents look at the frames again after the task (the
+        // `DOM` agent's frames have the new document).
+        self.frames_changed = true;'''
+to = '''        self.children = ChildFrames::default();'''
