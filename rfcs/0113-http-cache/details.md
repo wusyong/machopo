@@ -140,3 +140,13 @@ body 是串流的大塊資料（`ipc::data_pipe` 一段一段給），整份放 
 | 讀不到 | 320 MiB | 80 MiB |
 
 Chrome 的 browser 另外可以照 `DiskCacheSize` 的設定給 `http_cache_max_size`（沒有讀到它的預設）。
+
+## 磁碟的淘汰
+
+2026-11-24 讀 `main` 的 `net/disk_cache/sql/`（`sql_backend_constants.h`、`sql_persistent_store.cc`、`sql_persistent_store_backend.cc`、`eviction_candidate_aggregator.cc`、`sql_entry_impl.cc`、`sql_persistent_store_queries.h`）和 `simple/simple_index.cc`、`simple_backend_impl.cc`（由 agent 讀，部分檔案的後半只有摘要，下面只寫讀到原文的）：
+
+- 什麼時候：總大小超過上限的 95% 時開始（SQL backend 的 `kSqlBackendEvictionHighWaterMarkPermille` 950，另有閒下來時才做的 92.5%；Simple Cache 的 `high_watermark_` 是上限減上限的 1/20），淘汰到 90%（`kSqlBackendEvictionLowWaterMarkPermille` 900；Simple 的 `low_watermark_`）。記憶體的 backend 是超過上限才淘汰到 90%。
+- 淘汰哪些：SQL backend 的 `SqlDiskCacheSizeAndPriorityAwareEviction`（在它的實驗裡預設開）和 Simple Cache 都照「多久沒用 ×（大小 + 固定的額外量）」由大到小淘汰（SQL 的額外量 `kSqlBackendStaticResourceSize` 300，Simple 的 `kEstimatedEntryOverhead` 512）：一樣舊時大的先走。最近一天用過的高優先度的 entry 除以 10（`kSimpleCachePrioritizedCaching`，預設開）。那個開關關掉時 SQL backend 照 `last_used` 的順序（LRU）。
+- 一個 entry 最大：上限的 1/8 和 5 MiB 取大的（SQL 的 `CalculateMaxFileSize`，Simple 的 `MaxFileSize`）；SQL backend 的 body 寫超過時 `ERR_FAILED`。
+- 最後用的時間：讀寫時記在 entry 上，entry 放掉時連同 metadata 寫回；沒開著的 entry 被用到時當場 `UPDATE resources SET last_used=?`，沒有批次。
+- `304` 只改 header：`head`、`last_used` 和大小（`bytes_usage` 加上 header 的差）一起改（`kUpdateLastUsedHeader`）。

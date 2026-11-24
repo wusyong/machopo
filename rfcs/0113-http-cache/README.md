@@ -231,6 +231,12 @@ machopo 自己寫（已決定的第 4 條），照 RFC 9111 和 Chromium 的 `Ht
     - 理由：最簡單，淘汰直接照最後用的時間挑，不用合併幾個 shard 的候選（Chromium 的 `EvictionCandidateAggregator`）；`synchronous=OFF` 之後每次寫入不等磁碟，排隊很短；network service 本來就只有一個 thread。真的成為瓶頸時只改 store 這一層，schema 不變；第 3 階段量網路版的 Speedometer 時看得出要不要分。
     - 不選照 Chromium 分成 3 個（B）：多三個 thread，淘汰要合併候選、和讀寫協調，清空和壞掉時的重來要三個一起。
 
+20. **磁碟的 cache 照 Chrome 的分數淘汰：舊且大的先走**（2026-11-24，使用者決定；A，2b）：
+    - 總大小超過上限的 95% 時，照「多久沒用 ×（大小 + 300 bytes）」由大到小淘汰到 90%；一個 entry 最大是上限的 1/8 和 5 MiB 取大的；最後用的時間每次用到就寫回；`304` 只改 head（header、時間、大小）。記憶體的 backend 照舊（`MemBackendImpl`：超過上限時照最近用過的順序淘汰到 90%）。
+    - 對照 Chrome：2026-11-24 讀 `main` 的 `net/disk_cache/sql/` 和 `simple/simple_index.cc`（`details.md` 的「磁碟的淘汰」）：Simple Cache（Chrome 在 macOS、Linux 的預設）和 SQL backend 的預設都照這個分數（額外量各是 512 和 300 bytes），最近一天用過的高優先度的 entry 除以 10；machopo 的請求沒有優先度，這部分沒有。
+    - 理由：和 Chrome 預設的行為一樣，大檔案先走，留下比較多的小檔案（網路版的 Speedometer 是幾千個小檔案）；95% 到 90% 的間隔讓淘汰不常發生，每次把 index 排序一次，10 萬個 entry 約幾 ms。
+    - 不選最久沒用的先走（B，和記憶體的 backend 一樣）：最簡單，但一個很大、最近才用過的檔案會擠掉很多小的、稍舊的，和 Chrome 不同。
+
 ## 待決定
 
 第 2 階段開始前的都決定了（已決定的第 13 到 15 條）；實作時要決定的寫在各段開始前。

@@ -82,20 +82,31 @@ enum Op {
     Finish(String, Time),
     /// The load ended short: what was written of it goes.
     Abandon(String),
+    /// The key's complete entry has a new head (a `304`'s), the size it
+    /// makes, and was used then.
+    UpdateHead(String, Box<StoredResponse>, u64, Time),
     Remove(String),
     Touch(String, Time),
     Clear(Box<dyn FnOnce() + Send>),
     Close,
 }
 
-/// The cache's way to the database thread, which ends (what it was told
-/// written) once this is dropped.
+/// The cache's way to the database thread.
+#[derive(Clone)]
 pub(crate) struct SqlStore {
+    ops: Sender<Op>,
+}
+
+/// The database thread, which ends (what it was told written) once this is
+/// dropped: the network context's handles keep it, so the last of them to
+/// go waits for the writes, and a context opened on the folder after finds
+/// it unlocked.
+pub(crate) struct SqlStoreThread {
     ops: Sender<Op>,
     thread: Option<JoinHandle<()>>,
 }
 
-impl Drop for SqlStore {
+impl Drop for SqlStoreThread {
     fn drop(&mut self) {
         let _ = self.ops.send(Op::Close);
         if let Some(thread) = self.thread.take() {
@@ -111,14 +122,15 @@ pub(crate) type Loaded = oneshot::Receiver<Vec<IndexEntry>>;
 impl SqlStore {
     /// Opens the `Cache` database of the cache folder `dir` on a thread of
     /// its own, which deletes what wasn't complete and reads in the
-    /// complete entries; the store, and those entries once they are (none
-    /// if the database can't be opened: then nothing is kept). `on_razed`
-    /// is called on the thread each time the database, found damaged, is
-    /// razed: what the cache knew of it is gone.
+    /// complete entries; the store, the thread's handle, and those entries
+    /// once they are (none if the database can't be opened: then nothing
+    /// is kept). `on_razed` is called on the thread each time the
+    /// database, found damaged, is razed: what the cache knew of it is
+    /// gone.
     pub(crate) fn open(
         dir: &Path,
         on_razed: impl Fn() + Send + 'static,
-    ) -> std::io::Result<(Self, Loaded)> {
+    ) -> std::io::Result<(Self, SqlStoreThread, Loaded)> {
         let (ops, received) = mpsc::channel();
         let (loaded, loaded_rx) = oneshot::channel();
         let dir = dir.to_owned();
@@ -126,7 +138,8 @@ impl SqlStore {
             .name("HttpCacheStore".into())
             .spawn(move || run(&dir, &received, loaded, &on_razed))?;
         Ok((
-            Self {
+            Self { ops: ops.clone() },
+            SqlStoreThread {
                 ops,
                 thread: Some(thread),
             },
@@ -163,6 +176,12 @@ impl SqlStore {
         self.send(Op::Abandon(key.to_owned()));
     }
 
+    /// The key's complete entry has `head` (its body ignored), which makes
+    /// it `size`, and was used at `at`.
+    pub(crate) fn update_head(&self, key: &str, head: StoredResponse, size: u64, at: Time) {
+        self.send(Op::UpdateHead(key.to_owned(), Box::new(head), size, at));
+    }
+
     /// The key's complete entry goes (one being written stays).
     pub(crate) fn remove(&self, key: &str) {
         self.send(Op::Remove(key.to_owned()));
@@ -179,7 +198,7 @@ impl SqlStore {
     }
 
     fn send(&self, op: Op) {
-        // Gone only once the thread has closed, with the store.
+        // Gone only once the thread has closed.
         let _ = self.ops.send(op);
     }
 }
@@ -208,10 +227,17 @@ fn run(
     loaded: oneshot::Sender<Vec<IndexEntry>>,
     on_razed: &dyn Fn(),
 ) {
-    let opened = Database::open_with(Some(dir), DATABASE, Synchronous::Off).and_then(|mut db| {
-        db.migrate(MIGRATIONS)?;
-        Ok(db)
-    });
+    // The folder made if it isn't there (`CreateProfileDirectory`).
+    let opened = std::fs::create_dir_all(dir)
+        .map_err(|error| sql::Error::Io {
+            path: dir.to_owned(),
+            error,
+        })
+        .and_then(|()| Database::open_with(Some(dir), DATABASE, Synchronous::Off))
+        .and_then(|mut db| {
+            db.migrate(MIGRATIONS)?;
+            Ok(db)
+        });
     let database = opened
         .inspect_err(|error| {
             tracing::warn!(%error, "couldn't open the HTTP cache's database: nothing is kept");
@@ -248,6 +274,7 @@ impl Store<'_> {
                     self.with(|db| delete_rows(db, writing.res_id));
                 }
             }
+            Op::UpdateHead(key, head, size, at) => self.update_head(&key, &head, size, at),
             Op::Remove(key) => {
                 self.with(|db| delete_complete(db, &key));
             }
@@ -298,11 +325,7 @@ impl Store<'_> {
         let Some(headers) = encode_headers(&head.headers) else {
             return;
         };
-        // Its values never: their digest.
-        let vary: Option<Vec<u8>> = head.vary.as_ref().map(|vary| {
-            vary.digest()
-                .map_or_else(Vec::new, |digest| digest.to_vec())
-        });
+        let vary = vary_column(head.vary.as_ref());
         let res_id = self.with(|db| {
             db.execute(
                 "INSERT INTO resources (cache_key, complete, last_used, size, status, status_text,
@@ -338,6 +361,32 @@ impl Store<'_> {
                 },
             );
         }
+    }
+
+    fn update_head(&mut self, key: &str, head: &StoredResponse, size: u64, at: Time) {
+        let Some(headers) = encode_headers(&head.headers) else {
+            return;
+        };
+        let vary = vary_column(head.vary.as_ref());
+        self.with(|db| {
+            db.execute(
+                "UPDATE resources SET last_used = ?, size = ?, status = ?, status_text = ?,
+                     protocol = ?, headers = ?, request_time = ?, response_time = ?, vary = ?
+                 WHERE cache_key = ? AND complete = 1",
+                params![
+                    at.unix_micros(),
+                    i64::try_from(size).unwrap_or(i64::MAX),
+                    head.status,
+                    head.status_text,
+                    head.protocol,
+                    headers,
+                    head.request_time.unix_micros(),
+                    head.response_time.unix_micros(),
+                    vary,
+                    key,
+                ],
+            )
+        });
     }
 
     fn append(&mut self, key: &str, piece: Bytes) {
@@ -435,6 +484,14 @@ impl Store<'_> {
         }
         (self.on_razed)();
     }
+}
+
+/// The `vary` column of a `Vary`: never its values, their digest.
+fn vary_column(vary: Option<&VaryData>) -> Option<Vec<u8>> {
+    vary.map(|vary| {
+        vary.digest()
+            .map_or_else(Vec::new, |digest| digest.to_vec())
+    })
 }
 
 /// The key's complete entry (and its body), if any.
@@ -544,6 +601,18 @@ fn decode_headers(mut bytes: &[u8]) -> Option<Vec<(String, String)>> {
     Some(headers)
 }
 
+/// How many rows `table` of the database in `dir` has, read once the
+/// store has closed.
+#[cfg(test)]
+pub(crate) fn rows(dir: &Path, table: &str) -> i64 {
+    let mut db = Database::open(Some(dir), DATABASE).unwrap();
+    db.connection()
+        .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+            row.get(0)
+        })
+        .unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -562,9 +631,9 @@ mod tests {
         dir
     }
 
-    fn open(dir: &Path) -> (SqlStore, Vec<IndexEntry>) {
-        let (store, loaded) = SqlStore::open(dir, || {}).unwrap();
-        (store, loaded.blocking_recv().unwrap())
+    fn open(dir: &Path) -> (SqlStore, SqlStoreThread, Vec<IndexEntry>) {
+        let (store, thread, loaded) = SqlStore::open(dir, || {}).unwrap();
+        (store, thread, loaded.blocking_recv().unwrap())
     }
 
     fn head() -> StoredResponse {
@@ -592,28 +661,18 @@ mod tests {
         response.body.concat()
     }
 
-    /// A row's count in `table`, read once the store has closed.
-    fn rows(dir: &Path, table: &str) -> i64 {
-        let mut db = Database::open(Some(dir), DATABASE).unwrap();
-        db.connection()
-            .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
-                row.get(0)
-            })
-            .unwrap()
-    }
-
     #[test]
     fn an_entry_written_is_read_again_after_a_restart() {
         let dir = scratch("restart");
-        let (store, entries) = open(&dir);
+        let (store, thread, entries) = open(&dir);
         assert_eq!(entries, []);
         store.begin("k", head());
         store.append("k", Bytes::from_static(b"p {"));
         store.append("k", Bytes::from_static(b"}"));
         store.finish("k", Time::from_unix_micros(5_000));
         let read_now = read(&store, "k").unwrap();
-        drop(store);
-        let (store, entries) = open(&dir);
+        drop(thread);
+        let (store, _thread, entries) = open(&dir);
         let again = read(&store, "k").unwrap();
         assert_eq!(read_now, again);
         // Its head as it was, its body as it came, in one piece.
@@ -649,7 +708,7 @@ mod tests {
     #[test]
     fn a_body_is_written_in_pieces_as_it_comes() {
         let dir = scratch("pieces");
-        let (store, _) = open(&dir);
+        let (store, thread, _) = open(&dir);
         store.begin("k", head());
         let piece = Bytes::from(vec![7u8; 200 * 1024]);
         for _ in 0..6 {
@@ -658,7 +717,7 @@ mod tests {
         store.finish("k", Time::UNIX_EPOCH);
         let response = read(&store, "k").unwrap();
         assert_eq!(body(&response), [7u8; 1200 * 1024]);
-        drop(store);
+        drop(thread);
         // 600 KiB, 600 KiB: a row each time 512 KiB or more is held.
         assert_eq!(rows(&dir, "blobs"), 2);
     }
@@ -666,17 +725,17 @@ mod tests {
     #[test]
     fn what_isnt_complete_isnt_read_and_goes_at_the_next_start() {
         let dir = scratch("incomplete");
-        let (store, _) = open(&dir);
+        let (store, thread, _) = open(&dir);
         store.begin("k", head());
         store.append("k", Bytes::from(vec![1u8; WRITE_BUFFER]));
         assert_eq!(read(&store, "k"), None);
         // The browser goes before the load ends.
-        drop(store);
+        drop(thread);
         assert_eq!(rows(&dir, "resources"), 1);
         assert_eq!(rows(&dir, "blobs"), 1);
-        let (store, entries) = open(&dir);
+        let (_store, thread, entries) = open(&dir);
         assert_eq!(entries, []);
-        drop(store);
+        drop(thread);
         assert_eq!(rows(&dir, "resources"), 0);
         assert_eq!(rows(&dir, "blobs"), 0);
     }
@@ -684,14 +743,14 @@ mod tests {
     #[test]
     fn a_write_begun_again_drops_the_one_before() {
         let dir = scratch("begun-again");
-        let (store, _) = open(&dir);
+        let (store, thread, _) = open(&dir);
         store.begin("k", head());
         store.append("k", Bytes::from(vec![1u8; WRITE_BUFFER]));
         store.begin("k", head());
         store.append("k", Bytes::from_static(b"x"));
         store.finish("k", Time::UNIX_EPOCH);
         assert_eq!(body(&read(&store, "k").unwrap()), b"x");
-        drop(store);
+        drop(thread);
         assert_eq!(rows(&dir, "resources"), 1);
         assert_eq!(rows(&dir, "blobs"), 1);
     }
@@ -699,7 +758,7 @@ mod tests {
     #[test]
     fn an_abandoned_write_goes_and_leaves_the_last_entry() {
         let dir = scratch("abandon");
-        let (store, _) = open(&dir);
+        let (store, thread, _) = open(&dir);
         store.begin("k", head());
         store.append("k", Bytes::from_static(b"old"));
         store.finish("k", Time::UNIX_EPOCH);
@@ -707,7 +766,7 @@ mod tests {
         store.append("k", Bytes::from(vec![1u8; WRITE_BUFFER]));
         store.abandon("k");
         assert_eq!(body(&read(&store, "k").unwrap()), b"old");
-        drop(store);
+        drop(thread);
         assert_eq!(rows(&dir, "resources"), 1);
         assert_eq!(rows(&dir, "blobs"), 1);
     }
@@ -715,7 +774,7 @@ mod tests {
     #[test]
     fn a_finished_write_replaces_the_last_entry() {
         let dir = scratch("replace");
-        let (store, _) = open(&dir);
+        let (store, thread, _) = open(&dir);
         for text in [&b"old"[..], b"new"] {
             store.begin("k", head());
             store.append("k", Bytes::copy_from_slice(text));
@@ -726,7 +785,7 @@ mod tests {
             store.finish("k", Time::UNIX_EPOCH);
         }
         assert_eq!(body(&read(&store, "k").unwrap()), b"new");
-        drop(store);
+        drop(thread);
         assert_eq!(rows(&dir, "resources"), 1);
         assert_eq!(rows(&dir, "blobs"), 1);
     }
@@ -734,7 +793,7 @@ mod tests {
     #[test]
     fn remove_touch_and_clear() {
         let dir = scratch("remove");
-        let (store, _) = open(&dir);
+        let (store, thread, _) = open(&dir);
         for key in ["a", "b"] {
             store.begin(key, head());
             store.append(key, Bytes::from_static(b"x"));
@@ -743,8 +802,8 @@ mod tests {
         store.touch("b", Time::from_unix_micros(9));
         store.remove("a");
         assert_eq!(read(&store, "a"), None);
-        drop(store);
-        let (store, entries) = open(&dir);
+        drop(thread);
+        let (store, thread, entries) = open(&dir);
         let entries: Vec<_> = entries
             .into_iter()
             .map(|entry| (entry.key, entry.last_used))
@@ -761,7 +820,7 @@ mod tests {
         store.finish("c", Time::UNIX_EPOCH);
         assert_eq!(read(&store, "b"), None);
         assert_eq!(read(&store, "c"), None);
-        drop(store);
+        drop(thread);
         assert_eq!(rows(&dir, "resources"), 0);
         assert_eq!(rows(&dir, "blobs"), 0);
     }
@@ -769,7 +828,7 @@ mod tests {
     #[test]
     fn vary_is_kept_as_its_digest() {
         let dir = scratch("vary");
-        let (store, _) = open(&dir);
+        let (store, thread, _) = open(&dir);
         let request = [("cookie".to_owned(), "id=a-secret".to_owned())];
         let response = [("vary".to_owned(), "Cookie".to_owned())];
         for (key, vary) in [
@@ -784,7 +843,7 @@ mod tests {
         assert!(values.matches(&request, &response));
         assert!(!values.matches(&[], &response));
         assert_eq!(read(&store, "star").unwrap().vary, Some(VaryData::Star));
-        drop(store);
+        drop(thread);
         let file = std::fs::read(dir.join(DATABASE)).unwrap();
         assert!(!file.windows(11).any(|bytes| bytes == b"id=a-secret"));
     }
@@ -792,13 +851,13 @@ mod tests {
     #[test]
     fn a_damaged_database_is_razed_and_the_cache_starts_over() {
         let dir = scratch("razed");
-        let (store, _) = open(&dir);
+        let (store, thread, _) = open(&dir);
         for key in ["a", "b"] {
             store.begin(key, head());
             store.append(key, Bytes::from(vec![1u8; 64 * 1024]));
             store.finish(key, Time::UNIX_EPOCH);
         }
-        drop(store);
+        drop(thread);
         // Its schema readable, its tables' pages not.
         let path = dir.join(DATABASE);
         let mut file = std::fs::read(&path).unwrap();
@@ -808,7 +867,7 @@ mod tests {
         std::fs::write(&path, file).unwrap();
         let razed = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&razed);
-        let (store, loaded) = SqlStore::open(&dir, move || {
+        let (store, thread, loaded) = SqlStore::open(&dir, move || {
             counted.fetch_add(1, Ordering::Relaxed);
         })
         .unwrap();
@@ -819,7 +878,7 @@ mod tests {
         store.append("c", Bytes::from_static(b"x"));
         store.finish("c", Time::UNIX_EPOCH);
         assert_eq!(body(&read(&store, "c").unwrap()), b"x");
-        drop(store);
+        drop(thread);
         assert_eq!(rows(&dir, "resources"), 1);
     }
 
@@ -832,11 +891,51 @@ mod tests {
                 .pragma_update(None, "user_version", 99)
                 .unwrap();
         }
-        let (store, entries) = open(&dir);
+        let (store, _thread, entries) = open(&dir);
         assert_eq!(entries, []);
         store.begin("k", head());
         store.finish("k", Time::UNIX_EPOCH);
         assert_eq!(read(&store, "k"), None);
+    }
+
+    #[test]
+    fn a_head_is_replaced_and_the_body_kept() {
+        let dir = scratch("head");
+        let (store, thread, _) = open(&dir);
+        store.begin("k", head());
+        store.append("k", Bytes::from_static(b"body"));
+        store.finish("k", Time::UNIX_EPOCH);
+        let request = [("accept".to_owned(), "text/css".to_owned())];
+        let new = StoredResponse {
+            status_text: "Fine".to_owned(),
+            headers: vec![("etag".to_owned(), "\"v2\"".to_owned())],
+            request_time: Time::from_unix_micros(7),
+            response_time: Time::from_unix_micros(8),
+            vary: VaryData::new(&request, &[("vary".to_owned(), "Accept".to_owned())]),
+            ..head()
+        };
+        store.update_head("k", new.clone(), 99, Time::from_unix_micros(9));
+        // A key with no complete entry has none to update.
+        store.update_head("none", new.clone(), 99, Time::from_unix_micros(9));
+        drop(thread);
+        let (store, _thread, entries) = open(&dir);
+        let read = read(&store, "k").unwrap();
+        assert_eq!(
+            read,
+            StoredResponse {
+                vary: new.vary.clone().map(VaryData::digested),
+                body: vec![Bytes::from_static(b"body")],
+                ..new
+            }
+        );
+        assert_eq!(
+            entries,
+            [IndexEntry {
+                key: "k".to_owned(),
+                size: 99,
+                last_used: Time::from_unix_micros(9),
+            }]
+        );
     }
 
     #[test]

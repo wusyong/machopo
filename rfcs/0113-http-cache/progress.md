@@ -17,7 +17,7 @@
 | 1f. WPT 的 `fetch/http-cache/`、情境、文件、mutation test；`btoa`、`atob`（已決定的第 12 條） | 做完，待審查 | 2026-11-24 |
 | 2. 磁碟的 backend（已決定的第 13 到 15 條） | | |
 | 2a. SQLite 的 store：schema、自己的 thread、讀寫、壞掉的檔案（已決定的第 16 到 19 條） | 做完，待審查 | 2026-11-24 |
-| 2b. `HttpCache` 接上兩種 backend（記憶體的、SQLite 的），交易經過它讀寫 | | |
+| 2b. `HttpCache` 接上兩種 backend（記憶體的、SQLite 的），交易經過它讀寫（已決定的第 20 條） | 做完，待審查 | 2026-11-24 |
 | 2c. 大小上限：`ipc` 的平台層讀磁碟剩下的空間，照 `PreferredCacheSize` 算 | | |
 | 2d. cache 的資料夾：profile 對到各平台的 cache 資料夾，network context 打開它 | | |
 | 2e. 重新啟動之後照樣用（整合測試）、文件、mutation test | | |
@@ -47,6 +47,8 @@
 | `sql` 的資料庫可以打開成 `synchronous=OFF`，`raze` 刪掉檔案和 journal、照原本的設定重來 | `cargo test -p sql` |
 | `Vary` 存到磁碟時只存值的 SHA-256，照樣比對 | `cargo test -p net --lib http_cache::vary`、`http_cache::entry` |
 | 磁碟的 store：寫進去的重新打開之後讀得回來（header、時間、`Vary`、body），body 邊收邊寫、每滿 512 KiB 一列，沒收完的不讀、下次啟動時刪掉，放棄的刪掉、留著上一個，完成的取代上一個，刪、更新使用的時間、清空（正在寫的也是），`Vary` 的值不在檔案裡，壞掉的資料庫清掉重來，打不開的什麼都不留 | `cargo test -p net --lib http_cache::sql_store` |
+| 磁碟的 cache 的 index 和淘汰：超過上限的 95% 時照「多久沒用 ×（大小 + 300）」淘汰到 90%，一個 entry 最多上限的 1/8 或 5 MiB，讀到的是用過（也寫回去），`304` 讓 entry 變大時也淘汰，store 沒有的 entry 從 index 拿掉 | `cargo test -p net --lib http_cache::disk`、`http_cache::tests` |
+| network context 的 cache 在磁碟上（`http_cache_directory`、`http_cache_max_size`）：重新啟動之後照樣用（照樣分區）、`304` 的更新留在磁碟上、清空也清掉磁碟（正在寫的也是）、照上限淘汰、中途斷掉的不留 | `cargo test -p net --test it http_cache` |
 | DevTools：`fromDiskCache`；`Network.setCacheDisabled` 讓導覽和子資源（parser、stylesheet、圖片、`fetch()`）繞過 cache，`Network` 沒打開時是錯誤，`disable`、session 離開、client 斷線時取消，別的分頁的 session 不影響；`Network.clearBrowserCache` 清完才回答 | `cargo test -p shell --test it devtools_network::devtools_sees_the_http_cache` |
 
 ## 做過的檢查
@@ -135,4 +137,14 @@
 **新的測試**：`sql` 3 個（`synchronous`、`raze`、壞掉的檔案是 `is_corrupt`）；`net` 的 `http_cache::sql_store` 11 個、`vary` 1 個，`entry` 的大小加上 digest 的；`net` 的 `http_cache` 的單元測試 49 個、`sql` 9 個都通過。
 
 **mutation test**（`mutants-2a.toml`，27 個）：27 個都抓到。第一次跑時「`raze` 留著 journal」沒抓到：TRUNCATE 模式的 journal 平常是空的，留著也看不出差別；補了「commit 之後 journal 在、`raze` 之後不在」（當掉時留下的 hot journal 會被放進新的檔案）。寫 mutation 之前拿掉了讀 index 時多餘的 `WHERE complete = 1`（前一句剛刪掉沒完成的，會是等價的 mutation），補了「同一個 key 又開始寫時丟掉前一個」和 digest 佔的大小的測試。資料庫用到一半出錯的三條路（清掉重來時忘掉正在寫的、完成的交易失敗、寫一段失敗）測不到，記進了 `docs/test-gaps.md`。
+
+### 2b（2026-11-24，macOS 26.6.2、Apple M4、debug build，`d17c4ce` 之上）
+
+**對照的原始碼**：Chromium `main` 的 `net/disk_cache/sql/` 和 `simple/simple_index.cc` 的淘汰、entry 的上限、最後用的時間和 `304` 的寫法（由 agent 讀 Gitiles，`details.md` 的「磁碟的淘汰」）。和它不同的：沒有請求的優先度，淘汰的分數不除以優先度的係數；只在寫入和讀進 index 時檢查要不要淘汰（Chromium 另有閒下來時的 92.5%）。
+
+**做法**：`HttpCache` 的 backend 是記憶體的（照舊）或磁碟的（`http_cache::disk::DiskBackend`：store 加上記憶體裡的 index，照第 16、20 條）。store 拆成能 clone 的 `SqlStore` 和 `SqlStoreThread`：thread 的 handle 由 `NetworkContext` 的 handle 們拿著（照 cookie 的資料庫），最後一個放掉時等它寫完，下一個打開同一個資料夾的 context 不會碰到鎖。載入在看 cache 之前等 index 讀完（`wait_for_load`，照 cookie 的 jar）；`get` 變成 async（磁碟的在 store 的 thread 上讀）；`Recorder` 在磁碟上時邊收邊交給 store，太大或沒收完時當場放棄（不等到下次啟動）；`304` 只換掉 head（store 加了 `UpdateHead`）；清空等 store 刪完才回答；store 清掉重來時 index 跟著清空、算成清空過一次。`NetworkContextParams` 加 `http_cache_directory` 和 `http_cache_max_size`（Chromium 的名稱）：沒給大小時是 320 MiB（Chromium 讀不到剩下的空間時，Windows 以外的）；目前只有測試給資料夾，browser 在 2d 給。
+
+**新的測試**：`net` 的 `http_cache::disk` 7 個、`http_cache::tests` 6 個、`sql_store` 1 個（換掉 head），`tests/it/http_cache.rs` 5 個；寫的過程中把淘汰的測試的數字算錯了一次（第一次淘汰之後已經低於 90%，測不到「淘汰到 90%」），改了大小。cache 的整合測試連跑 5 次都通過；`cargo test -p net`（276 個）通過，`cargo check --workspace --all-targets` 沒有錯誤和警告。
+
+**mutation test**（`mutants-2b.toml`，29 個）：29 個都抓到。第一次跑時 4 個沒抓到，都補了測試：`304` 讓 entry 變大時的淘汰、讀到時更新 index 的最後用的時間、把它寫回資料庫、中途斷掉時當場刪掉寫了的列（下次啟動也會刪，所以要在重新打開之前看資料庫）。寫 mutation 之前拿掉了 `Recorder` 的 `done` 旗標（多放棄一次沒有差別，會是等價的 mutation），改成看還有沒有 response。2a 的兩條 mutation 的程式搬到 `vary_column`，`from` 跟著改。store 清掉重來時 `HttpCache` 清空 index 的那一段測不到（和 store 用到一半出錯的同一個原因），加進了 `docs/test-gaps.md` 的那一條。
 

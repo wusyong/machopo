@@ -163,15 +163,15 @@ test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache"]
 [[mutant]]
 name = "Vary: * isn't kept"
 file = "crates/net/src/http_cache/sql_store.rs"
-from = '''                .map_or_else(Vec::new, |digest| digest.to_vec())'''
-to = '''                .map_or_else(|| vec![0; 32], |digest| digest.to_vec())'''
+from = '''            .map_or_else(Vec::new, |digest| digest.to_vec())'''
+to = '''            .map_or_else(|| vec![0; 32], |digest| digest.to_vec())'''
 test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache"]
 
 [[mutant]]
 name = "a Vary's digest isn't kept"
 file = "crates/net/src/http_cache/sql_store.rs"
-from = '''                .map_or_else(Vec::new, |digest| digest.to_vec())'''
-to = '''                .map_or_else(Vec::new, |_| Vec::new())'''
+from = '''            .map_or_else(Vec::new, |digest| digest.to_vec())'''
+to = '''            .map_or_else(Vec::new, |_| Vec::new())'''
 test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache"]
 
 [[mutant]]

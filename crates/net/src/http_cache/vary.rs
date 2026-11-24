@@ -68,7 +68,8 @@ impl VaryData {
         }
     }
 
-    /// The same, its values as their SHA-256: to be written to disk.
+    /// The same, its values as their SHA-256: as one on disk reads back.
+    #[cfg(test)]
     pub(crate) fn digested(self) -> Self {
         self.digest().map_or(self, Self::Digest)
     }

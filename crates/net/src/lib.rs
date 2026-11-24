@@ -218,6 +218,13 @@ pub struct NetworkContextParams {
     /// persistent cookies are kept in its `Cookies` database. None: in
     /// memory alone.
     pub data_directory: Option<std::path::PathBuf>,
+    /// The HTTP cache's folder (`NetworkContextFilePaths::
+    /// http_cache_directory`): responses are kept in its `Cache` database,
+    /// made with the folder if it isn't there. None: in memory alone.
+    pub http_cache_directory: Option<std::path::PathBuf>,
+    /// The most the HTTP cache on disk keeps, in bytes
+    /// (`NetworkContextParams::http_cache_max_size`); 0 for the default.
+    pub http_cache_max_size: u64,
 }
 
 impl NetworkContextParams {
@@ -250,6 +257,8 @@ pub struct NetworkContext {
     /// changes written, whether or not the `NetworkService` thread has let
     /// the jar go by then.
     _cookie_store: Option<Arc<cookies::sqlite_persistent_cookie_store::CookieStoreThread>>,
+    /// The HTTP cache's database's thread, the same.
+    _http_cache_store: Option<Arc<http_cache::sql_store::SqlStoreThread>>,
 }
 
 impl NetworkContext {
@@ -268,6 +277,17 @@ impl NetworkContext {
             }
             None => (None, None),
         };
+        let (cache, http_cache_store) = match &params.http_cache_directory {
+            Some(dir) => {
+                let max_size = match params.http_cache_max_size {
+                    0 => http_cache::disk::DEFAULT_MAX_SIZE,
+                    max_size => max_size,
+                };
+                let (cache, thread) = http_cache::HttpCache::on_disk(dir, max_size)?;
+                (cache, Some(Arc::new(thread)))
+            }
+            None => (http_cache::HttpCache::default(), None),
+        };
         std::thread::Builder::new()
             .name("NetworkService".into())
             .spawn(move || {
@@ -280,7 +300,6 @@ impl NetworkContext {
                     // The context's cookies and HTTP cache, which its
                     // loads share.
                     let cookies = cookies::CookieJar::new(store);
-                    let cache = http_cache::HttpCache::default();
                     while let Some(job) = rx.recv().await {
                         let job = match job {
                             Job::Load(load) => load,
@@ -302,8 +321,8 @@ impl NetworkContext {
                             }
                             // The loads after it find nothing stored before.
                             Job::ClearHttpCache(done) => {
-                                cache.clear();
-                                done();
+                                cache.wait_for_load().await;
+                                cache.clear(done);
                                 continue;
                             }
                         };
@@ -330,6 +349,7 @@ impl NetworkContext {
             jobs,
             blob_urls: blob::BlobUrlRegistry::default(),
             _cookie_store: cookie_store,
+            _http_cache_store: http_cache_store,
         })
     }
 

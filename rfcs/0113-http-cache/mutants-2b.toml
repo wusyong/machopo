@@ -1,0 +1,204 @@
+# Step 2b's mutants: `python3 scripts/test.py mutate rfcs/0113-http-cache/mutants-2b.toml`.
+test = ["cargo", "test", "-q", "-p", "net", "http_cache"]
+timeout = 900
+
+[[mutant]]
+name = "an entry may take no less than 5 MiB"
+file = "crates/net/src/http_cache/disk.rs"
+from = '''        (self.max_size / 8).max(MIN_MAX_ENTRY_SIZE)'''
+to = '''        self.max_size / 8'''
+
+[[mutant]]
+name = "an entry may take a quarter"
+file = "crates/net/src/http_cache/disk.rs"
+from = '''        (self.max_size / 8).max(MIN_MAX_ENTRY_SIZE)'''
+to = '''        (self.max_size / 4).max(MIN_MAX_ENTRY_SIZE)'''
+
+[[mutant]]
+name = "what is read in isn't evicted"
+file = "crates/net/src/http_cache/disk.rs"
+from = '''            self.set(entry.key, entry.size, entry.last_used);
+        }
+        self.evict(now);'''
+to = '''            self.set(entry.key, entry.size, entry.last_used);
+        }
+        let _ = now;'''
+
+[[mutant]]
+name = "a new entry doesn't evict"
+file = "crates/net/src/http_cache/disk.rs"
+from = '''        self.store.finish(key, now);
+        self.set(key.to_owned(), size, now);
+        self.evict(now);'''
+to = '''        self.store.finish(key, now);
+        self.set(key.to_owned(), size, now);'''
+
+[[mutant]]
+name = "a 304 doesn't evict"
+file = "crates/net/src/http_cache/disk.rs"
+from = '''            size,
+            now,
+        );
+        self.set(key.to_owned(), size, now);
+        self.evict(now);'''
+to = '''            size,
+            now,
+        );
+        self.set(key.to_owned(), size, now);'''
+
+[[mutant]]
+name = "a read isn't a use"
+file = "crates/net/src/http_cache/disk.rs"
+from = '''        indexed.last_used = now;'''
+to = '''        let _ = &indexed;'''
+
+[[mutant]]
+name = "a use isn't written"
+file = "crates/net/src/http_cache/disk.rs"
+from = '''        self.store.touch(key, now);'''
+to = '''        let _ = now;'''
+
+[[mutant]]
+name = "a 304 for none makes one"
+file = "crates/net/src/http_cache/disk.rs"
+from = '''        if !self.index.contains_key(key) {
+            return;
+        }'''
+to = '''        if false {
+            return;
+        }'''
+
+[[mutant]]
+name = "a 304 too big is kept"
+file = "crates/net/src/http_cache/disk.rs"
+from = '''        if size > self.max_entry_size() {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a 304 isn't written"
+file = "crates/net/src/http_cache/disk.rs"
+from = '''        self.store.update_head('''
+to = '''        let _ = ('''
+
+[[mutant]]
+name = "a removed entry stays on disk"
+file = "crates/net/src/http_cache/disk.rs"
+from = '''        if self.forget(key) {
+            self.store.remove(key);
+        }'''
+to = '''        self.forget(key);'''
+
+[[mutant]]
+name = "a forgotten entry's size stays"
+file = "crates/net/src/http_cache/disk.rs"
+from = '''        self.size = self.size.saturating_sub(gone.size);'''
+to = '''        let _ = gone;'''
+
+[[mutant]]
+name = "a replaced entry's size stays"
+file = "crates/net/src/http_cache/disk.rs"
+from = '''            self.size = self.size.saturating_sub(old.size);'''
+to = '''            let _ = old;'''
+
+[[mutant]]
+name = "eviction waits for the bound"
+file = "crates/net/src/http_cache/disk.rs"
+from = '''        if self.size <= self.max_size.saturating_sub(twentieth) {'''
+to = '''        if self.size <= self.max_size {'''
+
+[[mutant]]
+name = "eviction stops at 95%"
+file = "crates/net/src/http_cache/disk.rs"
+from = '''        let low = self.max_size.saturating_sub(twentieth.saturating_mul(2));'''
+to = '''        let low = self.max_size.saturating_sub(twentieth);'''
+
+[[mutant]]
+name = "the newest and smallest go first"
+file = "crates/net/src/http_cache/disk.rs"
+from = '''        by_score.sort_unstable_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(b.1)));'''
+to = '''        by_score.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)));'''
+
+[[mutant]]
+name = "eviction takes everything"
+file = "crates/net/src/http_cache/disk.rs"
+from = '''            if size <= low {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "an entry counts only its size"
+file = "crates/net/src/http_cache/disk.rs"
+from = '''const ENTRY_OVERHEAD: u64 = 300;'''
+to = '''const ENTRY_OVERHEAD: u64 = 0;'''
+
+[[mutant]]
+name = "one used later than now goes first"
+file = "crates/net/src/http_cache/disk.rs"
+from = '''    let age = u128::try_from(age).unwrap_or(0);'''
+to = '''    let age = u128::try_from(age).unwrap_or(u128::MAX);'''
+
+[[mutant]]
+name = "the index isn't read in"
+file = "crates/net/src/http_cache/mod.rs"
+from = '''                        disk.load(entries, Time::now());'''
+to = '''                        let _ = entries;'''
+
+[[mutant]]
+name = "an entry the store hasn't stays known"
+file = "crates/net/src/http_cache/mod.rs"
+from = '''            disk.forget(key);'''
+to = '''            let _ = key;'''
+
+[[mutant]]
+name = "clearing lets a write finish"
+file = "crates/net/src/http_cache/mod.rs"
+from = '''    pub(crate) fn clear(&self, done: impl FnOnce() + Send + 'static) {
+        let mut state = self.state();
+        state.cleared();'''
+to = '''    pub(crate) fn clear(&self, done: impl FnOnce() + Send + 'static) {
+        let mut state = self.state();'''
+
+[[mutant]]
+name = "a write cleared since is kept"
+file = "crates/net/src/http_cache/mod.rs"
+from = '''        if state.clears != clears {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a response on disk is kept whole in memory"
+file = "crates/net/src/http_cache/mod.rs"
+from = '''            self.slot.cache.append(&self.slot.key, piece.clone());'''
+to = '''            let _ = piece;'''
+
+[[mutant]]
+name = "one cut short is kept on disk"
+file = "crates/net/src/http_cache/mod.rs"
+from = '''        if self.response.take().is_some() && self.on_disk {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a load before the index is in finds nothing"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''    cache.wait_for_load().await;'''
+to = '''    let _ = &cache;'''
+
+[[mutant]]
+name = "no size is no room"
+file = "crates/net/src/lib.rs"
+from = '''                    0 => http_cache::disk::DEFAULT_MAX_SIZE,'''
+to = '''                    0 => 0,'''
+
+[[mutant]]
+name = "the folder isn't made"
+file = "crates/net/src/http_cache/sql_store.rs"
+from = '''    let opened = std::fs::create_dir_all(dir)'''
+to = '''    let opened = Ok::<(), std::io::Error>(())'''
+
+[[mutant]]
+name = "a 304 updates what isn't complete"
+file = "crates/net/src/http_cache/sql_store.rs"
+from = '''                 WHERE cache_key = ? AND complete = 1",
+                params![
+                    at.unix_micros(),'''
+to = '''                 WHERE cache_key = ? AND complete = 0",
+                params![
+                    at.unix_micros(),'''

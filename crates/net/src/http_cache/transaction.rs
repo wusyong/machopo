@@ -89,6 +89,8 @@ pub(crate) async fn send(
             network(transport, &hop, hop.headers, asked).await
         };
     };
+    // Until the disk's index is in, nothing is known of what it has.
+    cache.wait_for_load().await;
     let head = match hop.method {
         "GET" => false,
         "HEAD" => true,
@@ -126,7 +128,7 @@ pub(crate) async fn send(
             }
         }
     };
-    let stored = cache.get(&key);
+    let stored = cache.get(&key).await;
     if let Some(external) = external {
         let validating = stored
             .as_ref()
@@ -330,7 +332,7 @@ fn update(
     stored.response_time = response_time;
     stored.vary = VaryData::new(seen, &stored.headers);
     if headers::is_storable(&stored.headers) {
-        cache.put(key, stored.clone());
+        cache.update(key, stored.clone());
     } else {
         cache.remove(key);
     }
@@ -405,6 +407,13 @@ mod tests {
         }
     }
 
+    fn get(cache: &HttpCache, key: &str) -> Option<StoredResponse> {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(cache.get(key))
+    }
+
     #[test]
     fn a_304_updates_the_headers_times_and_vary() {
         let cache = HttpCache::default();
@@ -429,13 +438,13 @@ mod tests {
         assert_eq!((updated.request_time, updated.response_time), (asked, came));
         assert_eq!(updated.vary, Some(VaryData::Values("new\n".to_owned())));
         assert_eq!(updated.body, stored().body);
-        assert_eq!(cache.get("k"), Some(updated));
+        assert_eq!(get(&cache, "k"), Some(updated));
     }
 
     #[test]
     fn a_304_that_says_no_store_drops_it() {
         let cache = HttpCache::default();
-        cache.put("k", stored());
+        cache.update("k", stored());
         let updated = update(
             &cache,
             "k",
@@ -447,7 +456,7 @@ mod tests {
         );
         // It still answers this time.
         assert_eq!(updated.body, stored().body);
-        assert_eq!(cache.get("k"), None);
+        assert_eq!(get(&cache, "k"), None);
     }
 
     #[test]

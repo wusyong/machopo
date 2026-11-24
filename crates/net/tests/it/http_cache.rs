@@ -801,3 +801,150 @@ fn clearing_drops_what_is_stored_and_what_is_being_stored() {
     body(&network, image(&server.url("/slow")));
     assert_eq!(hits(&server, "/slow"), 2);
 }
+
+/// A new, empty folder for one test's cache on disk.
+fn scratch(name: &str) -> std::path::PathBuf {
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("net-http-cache")
+        .join(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    dir
+}
+
+/// A network context whose cache is on disk, in `dir`, at most `max_size`
+/// bytes (0: the default).
+fn on_disk(dir: &std::path::Path, max_size: u64) -> NetworkContext {
+    NetworkContext::start(NetworkContextParams {
+        http_cache_directory: Some(dir.to_owned()),
+        http_cache_max_size: max_size,
+        ..NetworkContextParams::default()
+    })
+    .expect("the network service starts")
+}
+
+#[test]
+fn a_cache_on_disk_answers_after_a_restart() {
+    let server = server(&[(
+        "/i",
+        Route::ok("image/png", "pixels").with_header("Cache-Control", "max-age=60"),
+    )]);
+    let dir = scratch("restart");
+    let network = on_disk(&dir, 0);
+    let first = load(&network, image(&server.url("/i"))).unwrap();
+    assert!(!first.head.was_fetched_via_cache);
+    // The folder is made, with the database in it.
+    assert!(dir.join("Cache").is_file());
+    drop(network);
+    let network = on_disk(&dir, 0);
+    let again = load(&network, image(&server.url("/i"))).unwrap();
+    assert!(again.head.was_fetched_via_cache);
+    assert_eq!(again.body.to_vec(), b"pixels");
+    assert_eq!(hits(&server, "/i"), 1);
+    // Another partition's isn't it.
+    let mut other = image(&server.url("/i"));
+    other.trusted = in_frame("http://b.test", "http://b.test");
+    body(&network, other);
+    assert_eq!(hits(&server, "/i"), 2);
+}
+
+#[test]
+fn a_304_updates_the_entry_on_disk() {
+    let server = server(&[(
+        "/i",
+        Route::ok("image/png", "pixels")
+            .with_header("Cache-Control", "no-cache")
+            .with_header("ETag", "\"v1\"")
+            .revalidated()
+            .with_304_header("Cache-Control", "max-age=60"),
+    )]);
+    let dir = scratch("304");
+    let network = on_disk(&dir, 0);
+    body(&network, image(&server.url("/i")));
+    // Validated: the 304 makes it fresh.
+    assert_eq!(body(&network, image(&server.url("/i"))), b"pixels");
+    assert_eq!(hits(&server, "/i"), 2);
+    drop(network);
+    // Fresh from the disk, its body as it was.
+    let network = on_disk(&dir, 0);
+    assert_eq!(body(&network, image(&server.url("/i"))), b"pixels");
+    assert_eq!(hits(&server, "/i"), 2);
+}
+
+#[test]
+fn clearing_a_cache_on_disk_clears_the_disk() {
+    let server = server(&[
+        ("/i", fresh_route()),
+        (
+            "/slow",
+            fresh_route().with_body_delay(Duration::from_millis(300)),
+        ),
+    ]);
+    let dir = scratch("clear");
+    let network = on_disk(&dir, 0);
+    body(&network, image(&server.url("/i")));
+    clear(&network);
+    drop(network);
+    let network = on_disk(&dir, 0);
+    body(&network, image(&server.url("/i")));
+    assert_eq!(hits(&server, "/i"), 2);
+    // Cleared while its body comes: not kept, now or after.
+    let (tx, rx) = unbounded();
+    network.fetch(image(&server.url("/slow")), move |result| {
+        let _ = tx.send(result);
+    });
+    std::thread::sleep(Duration::from_millis(100));
+    clear(&network);
+    rx.recv_timeout(Duration::from_secs(30))
+        .expect("the network service answers")
+        .expect("it loads");
+    body(&network, image(&server.url("/slow")));
+    assert_eq!(hits(&server, "/slow"), 2);
+    drop(network);
+    let network = on_disk(&dir, 0);
+    body(&network, image(&server.url("/slow")));
+    assert_eq!(hits(&server, "/slow"), 2);
+}
+
+#[test]
+fn a_cache_on_disk_keeps_to_its_size() {
+    let fresh = |body: &[u8]| {
+        Route::ok("image/png", body.to_vec()).with_header("Cache-Control", "max-age=60")
+    };
+    let server = server(&[("/a", fresh(&[1; 600])), ("/b", fresh(&[2; 600]))]);
+    let dir = scratch("size");
+    // Room for one of them.
+    let network = on_disk(&dir, 1000);
+    body(&network, image(&server.url("/a")));
+    body(&network, image(&server.url("/b")));
+    // `/a`, older, went for `/b`.
+    body(&network, image(&server.url("/b")));
+    assert_eq!(hits(&server, "/b"), 1);
+    body(&network, image(&server.url("/a")));
+    assert_eq!(hits(&server, "/a"), 2);
+    drop(network);
+    // And from the disk too: `/a` is in again, `/b` gone for it.
+    let network = on_disk(&dir, 1000);
+    body(&network, image(&server.url("/a")));
+    assert_eq!(hits(&server, "/a"), 2);
+    body(&network, image(&server.url("/b")));
+    assert_eq!(hits(&server, "/b"), 2);
+}
+
+#[test]
+fn a_load_cut_short_leaves_nothing_on_disk() {
+    let server = server(&[(
+        "/i",
+        Route::ok("image/png", vec![7; 2 * 1024 * 1024])
+            .with_header("Cache-Control", "max-age=60")
+            .with_pause_in_body(1024 * 1024, Duration::from_millis(500)),
+    )]);
+    let dir = scratch("cut-short");
+    let network = on_disk(&dir, 0);
+    // The browser goes while the body comes.
+    network.fetch(image(&server.url("/i")), |_| {});
+    std::thread::sleep(Duration::from_millis(200));
+    drop(network);
+    let network = on_disk(&dir, 0);
+    body(&network, image(&server.url("/i")));
+    assert_eq!(hits(&server, "/i"), 2);
+}
