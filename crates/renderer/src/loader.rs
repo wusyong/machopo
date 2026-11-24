@@ -13,7 +13,8 @@ use base::SequenceNumber;
 use dom_api::FrameId;
 use protocol::control_channel::BrowserSender;
 use protocol::network::{
-    CredentialsMode, LoadResult, RedirectMode, RequestDestination, RequestMode, ResourceRequest,
+    CredentialsMode, LoadFlags, LoadResult, RedirectMode, RequestDestination, RequestMode,
+    ResourceRequest,
 };
 use protocol::renderer::RendererHostMsg;
 
@@ -198,7 +199,83 @@ pub(crate) fn fetch_resource_request(request: &dom::FetchRequest) -> ResourceReq
         dom::RequestCredentials::SameOrigin => CredentialsMode::SameOrigin,
         dom::RequestCredentials::Include => CredentialsMode::Include,
     };
+    resource.load_flags = cache_load_flags(request.cache);
     resource
+}
+
+/// The load flags of `request`, a subresource of a document whose load has
+/// them use the HTTP cache as `mode` says (Blink's `ResourceFetcher` gives a
+/// request of the default cache mode `FrameFetchContext::
+/// ResourceRequestCachePolicy`): a request that says how keeps it; else past
+/// the cache, or what is stored taken stale or not, as the document's load
+/// does; else validated if it is conditional (its own `If-None-Match` and
+/// the like).
+pub(crate) fn subresource_load_flags(
+    request: &ResourceRequest,
+    mode: dom::SubresourceCacheMode,
+) -> LoadFlags {
+    if request.load_flags != LoadFlags::default() {
+        return request.load_flags;
+    }
+    let mut flags = LoadFlags::default();
+    match mode {
+        dom::SubresourceCacheMode::Default => flags.validate_cache = is_conditional(&request.headers),
+        dom::SubresourceCacheMode::BypassCache => flags.bypass_cache = true,
+        dom::SubresourceCacheMode::ForceCache => flags.skip_cache_validation = true,
+    }
+    flags
+}
+
+/// `flags` with DevTools' cache disabled (Blink's `InspectorNetworkAgent::
+/// PrepareRequest`): past the HTTP cache, whatever the request asked; one
+/// that may only use the cache finds nothing there
+/// (`kUnspecifiedForceCacheMiss`).
+pub(crate) fn cache_disabled_load_flags(flags: LoadFlags) -> LoadFlags {
+    LoadFlags {
+        only_from_cache: flags.only_from_cache,
+        bypass_cache: true,
+        ..LoadFlags::default()
+    }
+}
+
+/// Whether a request of `headers` validates a response of its own (Blink's
+/// `ResourceRequest::IsConditional`).
+fn is_conditional(headers: &[(String, String)]) -> bool {
+    headers.iter().any(|(name, _)| {
+        [
+            "if-unmodified-since",
+            "if-modified-since",
+            "if-none-match",
+            "if-range",
+            "if-match",
+        ]
+        .iter()
+        .any(|conditional| name.eq_ignore_ascii_case(conditional))
+    })
+}
+
+/// The HTTP cache's load flags of a request's cache mode (Blink's
+/// `FetchCacheMode` of Fetch's mode, then `WebURLRequest::
+/// GetLoadFlagsForWebURLRequest`): `no-store` neither reads nor keeps (and
+/// says `no-cache`), `reload` doesn't read but keeps, `no-cache` validates,
+/// `force-cache` uses a stale one, `only-if-cached` that and nothing else.
+pub(crate) fn cache_load_flags(cache: dom::RequestCache) -> LoadFlags {
+    let mut flags = LoadFlags::default();
+    match cache {
+        dom::RequestCache::Default => {}
+        dom::RequestCache::NoStore => {
+            flags.disable_cache = true;
+            flags.bypass_cache = true;
+        }
+        dom::RequestCache::Reload => flags.bypass_cache = true,
+        dom::RequestCache::NoCache => flags.validate_cache = true,
+        dom::RequestCache::ForceCache => flags.skip_cache_validation = true,
+        dom::RequestCache::OnlyIfCached => {
+            flags.only_from_cache = true;
+            flags.skip_cache_validation = true;
+        }
+    }
+    flags
 }
 
 /// A `fetch()`'s response as the DOM takes it, or a network error, of
@@ -272,6 +349,91 @@ pub(crate) fn script_credentials(cors: dom::ScriptCors) -> CredentialsMode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_subresource_goes_by_its_documents_load_unless_it_says() {
+        use dom::SubresourceCacheMode as Mode;
+        let request = |headers: &[(&str, &str)]| {
+            let mut request = ResourceRequest::new("https://a.test/i", RequestDestination::Image);
+            request.headers = headers
+                .iter()
+                .map(|(n, v)| ((*n).to_owned(), (*v).to_owned()))
+                .collect();
+            request
+        };
+        let plain = request(&[]);
+        assert_eq!(subresource_load_flags(&plain, Mode::Default), LoadFlags::default());
+        let bypass = subresource_load_flags(&plain, Mode::BypassCache);
+        assert!(bypass.bypass_cache && !bypass.skip_cache_validation);
+        let force = subresource_load_flags(&plain, Mode::ForceCache);
+        assert!(force.skip_cache_validation && !force.bypass_cache);
+        // Its own validators: validated.
+        for name in ["If-None-Match", "if-modified-since", "if-match", "if-range", "if-unmodified-since"] {
+            assert!(
+                subresource_load_flags(&request(&[(name, "x")]), Mode::Default).validate_cache,
+                "{name}"
+            );
+        }
+        // One that says how keeps it.
+        let mut no_store = plain.clone();
+        no_store.load_flags = cache_load_flags(dom::RequestCache::NoStore);
+        assert_eq!(
+            subresource_load_flags(&no_store, Mode::ForceCache),
+            no_store.load_flags
+        );
+    }
+
+    #[test]
+    fn devtools_cache_disabled_bypasses_it_or_misses() {
+        let mut only = cache_load_flags(dom::RequestCache::OnlyIfCached);
+        only = cache_disabled_load_flags(only);
+        assert!(only.only_from_cache && only.bypass_cache && !only.skip_cache_validation);
+        let force = cache_disabled_load_flags(cache_load_flags(dom::RequestCache::ForceCache));
+        assert_eq!(
+            force,
+            LoadFlags {
+                bypass_cache: true,
+                ..LoadFlags::default()
+            }
+        );
+    }
+
+    #[test]
+    fn a_fetchs_cache_mode_is_blinks_load_flags() {
+        use dom::RequestCache;
+        let flags = |set: fn(&mut LoadFlags)| {
+            let mut flags = LoadFlags::default();
+            set(&mut flags);
+            flags
+        };
+        assert_eq!(cache_load_flags(RequestCache::Default), LoadFlags::default());
+        assert_eq!(
+            cache_load_flags(RequestCache::NoStore),
+            flags(|f| {
+                f.disable_cache = true;
+                f.bypass_cache = true;
+            })
+        );
+        assert_eq!(
+            cache_load_flags(RequestCache::Reload),
+            flags(|f| f.bypass_cache = true)
+        );
+        assert_eq!(
+            cache_load_flags(RequestCache::NoCache),
+            flags(|f| f.validate_cache = true)
+        );
+        assert_eq!(
+            cache_load_flags(RequestCache::ForceCache),
+            flags(|f| f.skip_cache_validation = true)
+        );
+        assert_eq!(
+            cache_load_flags(RequestCache::OnlyIfCached),
+            flags(|f| {
+                f.only_from_cache = true;
+                f.skip_cache_validation = true;
+            })
+        );
+    }
 
     /// A blob URL is registered with the browser at once, with the blob's
     /// type and bytes; a revoke is the renderer's at once (`is_revoked`,

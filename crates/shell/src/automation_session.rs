@@ -161,6 +161,9 @@ struct Attached {
     lifecycle: bool,
     /// `Network.enable`: the session hears of the tab's navigations' requests.
     network: bool,
+    /// `Network.setCacheDisabled`, while `Network` is on: the tab's loads go
+    /// past the HTTP cache, its navigations as the browser starts them.
+    cache_disabled: bool,
     /// `Log.enable`: the session hears of what it asked of the browser's
     /// `Network` that machopo can't do.
     log: bool,
@@ -370,14 +373,13 @@ pub struct AutomationSession {
 }
 
 /// The `Network` commands only the browser answers (Chromium's
-/// `NetworkHandler`: the cache, network conditions; its cookies are
-/// `automation_cookies`'), as machopo can: what holds anyway succeeds (it
-/// keeps no cache, and loads at full speed), what it can't do is an error.
-/// `None` for the others, which the renderer answers.
+/// `NetworkHandler`: network conditions; its cookies are
+/// `automation_cookies`', clearing its cache the dispatch's), as machopo
+/// can: what holds anyway succeeds (it loads at full speed), what it can't
+/// do is an error. `None` for the others, which the renderer answers.
 fn network_answer(name: &str, params: &Value) -> Option<Result<Value, Error>> {
     let cant = |what: &str| Err(Error::new(SERVER_ERROR, format!("machopo can't {what}")));
     Some(match name {
-        "Network.clearBrowserCache" => Ok(json!({})),
         "Network.canClearBrowserCache" | "Network.canClearBrowserCookies" => {
             Ok(json!({ "result": true }))
         }
@@ -586,13 +588,28 @@ impl AutomationSession {
     /// `client`'s session `session`, of `tab`, goes, in the renderer too:
     /// `Target.detachedFromTarget`, and its commands' answers have no one
     /// to go to.
-    fn detach(&mut self, browser: &BrowserWindow, client: ClientId, session: &str, tab: TabId) {
+    fn detach(&mut self, browser: &mut BrowserWindow, client: ClientId, session: &str, tab: TabId) {
         self.sessions.remove(session);
         if let Some(contents) = browser.view().contents(tab) {
             contents.devtools_detach(session);
         }
+        self.update_cache_disabled(browser, tab);
         self.forwarded.retain(|(of, _), _| of != session);
         self.detached_from_target(client, session, tab);
+    }
+
+    /// Tells `tab`'s web contents whether a session of it has the HTTP cache
+    /// disabled, for the navigations it starts (Chromium's
+    /// `ApplyNetworkRequestOverrides`: each enabled `NetworkHandler` of the
+    /// frame may).
+    fn update_cache_disabled(&self, browser: &mut BrowserWindow, tab: TabId) {
+        let disabled = self
+            .sessions
+            .values()
+            .any(|attached| attached.tab == tab && attached.cache_disabled);
+        if let Some(contents) = browser.view_mut().contents_mut(tab) {
+            contents.set_cache_disabled(disabled);
+        }
     }
 
     /// Tells `client` its session `session` of `tab` has gone
@@ -614,9 +631,10 @@ impl AutomationSession {
     }
 
     /// The client has gone: its sessions with it, in the renderers too.
-    pub fn disconnect(&mut self, client: ClientId, browser: &BrowserWindow) {
+    pub fn disconnect(&mut self, client: ClientId, browser: &mut BrowserWindow) {
         self.clients.remove(&client);
         let view = browser.view();
+        let mut tabs = Vec::new();
         self.sessions.retain(|id, attached| {
             if attached.client != client {
                 return true;
@@ -624,8 +642,12 @@ impl AutomationSession {
             if let Some(contents) = view.contents(attached.tab) {
                 contents.devtools_detach(id);
             }
+            tabs.push(attached.tab);
             false
         });
+        for tab in tabs {
+            self.update_cache_disabled(browser, tab);
+        }
         // Its commands' answers have no one to go to.
         let sessions = &self.sessions;
         self.forwarded
@@ -759,6 +781,7 @@ impl AutomationSession {
                 page: false,
                 lifecycle: false,
                 network: false,
+                cache_disabled: false,
                 log: false,
             },
         );
@@ -1881,9 +1904,11 @@ impl AutomationSession {
             _ => {}
         }
         if let Method::Other { name, params } = &command.method {
-            // Cookies: the session's tab's profile's, or (the browser's
-            // own session) the active tab's; all tabs share it.
-            if crate::automation_cookies::is_cookie_command(name) {
+            // Cookies and the HTTP cache: the session's tab's profile's, or
+            // (the browser's own session) the active tab's; all tabs share
+            // them.
+            let clearing_cache = name == "Network.clearBrowserCache";
+            if clearing_cache || crate::automation_cookies::is_cookie_command(name) {
                 let contents = match &command.session_id {
                     Some(session) => {
                         let Some(attached) = self.session_of(client, session) else {
@@ -1896,7 +1921,12 @@ impl AutomationSession {
                 let Some(contents) = contents else {
                     return Dispatched::Now(Err(no_target()));
                 };
-                crate::automation_cookies::run(name, params, contents, self.reply(client, command));
+                let reply = self.reply(client, command);
+                if clearing_cache {
+                    contents.network().clear_http_cache(move || reply.done());
+                } else {
+                    crate::automation_cookies::run(name, params, contents, reply);
+                }
                 return Dispatched::Later;
             }
             if let Some(answer) = network_answer(name, params) {
@@ -1926,6 +1956,26 @@ impl AutomationSession {
                     .filter(|attached| attached.client == client)
             {
                 attached.network = name == "Network.enable";
+                // Anew with the domain, as the renderer's agent keeps it
+                // (Blink's `InspectorNetworkAgent::disable` clears it).
+                attached.cache_disabled = false;
+                let tab = attached.tab;
+                self.update_cache_disabled(browser, tab);
+            }
+            // Noted for the navigations the browser starts, and passed on:
+            // the renderer goes past the cache for the rest (and refuses it,
+            // as noted here, while `Network` is off).
+            if name == "Network.setCacheDisabled"
+                && let Some(session) = &command.session_id
+                && let Some(attached) = self
+                    .sessions
+                    .get_mut(session)
+                    .filter(|attached| attached.client == client)
+            {
+                attached.cache_disabled = attached.network
+                    && params.get("cacheDisabled").and_then(Value::as_bool) == Some(true);
+                let tab = attached.tab;
+                self.update_cache_disabled(browser, tab);
             }
             // Noted for the warnings above, and passed on: the renderer
             // keeps the page's log.
@@ -2300,8 +2350,12 @@ impl AutomationSession {
                     return Err(Error::new(SERVER_ERROR, "Not the current loader"));
                 }
                 self.starting.insert(tab, "reload");
-                view.update_contents(tab, WebContents::reload)
-                    .ok_or_else(no_target)?;
+                let reload = if params.ignore_cache == Some(true) {
+                    WebContents::reload_bypassing_cache
+                } else {
+                    WebContents::reload
+                };
+                view.update_contents(tab, reload).ok_or_else(no_target)?;
                 Ok(json!({}))
             }
             Method::PageGetNavigationHistory => {

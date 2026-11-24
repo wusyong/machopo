@@ -638,8 +638,8 @@ fn an_iframes_document_is_its_own_request() {
     assert_eq!(navigated["loaderId"], id, "{navigated}");
 }
 
-/// What holds in machopo anyway succeeds (no cache, no service workers,
-/// the network as it is); what it can't do is an error. Cookies are
+/// What holds in machopo anyway succeeds (no service workers, the network
+/// as it is); what it can't do is an error. Cookies are
 /// `devtools_cookies`'.
 #[test]
 fn commands_machopo_cant_carry_out_are_errors() {
@@ -745,6 +745,162 @@ fn commands_machopo_cant_carry_out_are_errors() {
         ok(&mut page, "Network.canEmulateNetworkConditions", json!({})),
         json!({ "result": false })
     );
+}
+
+/// A response from the HTTP cache is told as `fromDiskCache`; while a
+/// session with `Network` on has the cache disabled, the tab's navigations
+/// and subresources go past it, until it turns it back on, turns `Network`
+/// off or goes; `clearBrowserCache` empties it.
+#[test]
+fn devtools_sees_the_http_cache_and_can_go_past_it_or_clear_it() {
+    let fresh = |content_type: &str, body: &str| {
+        Route::ok(content_type, body).with_header("Cache-Control", "max-age=60")
+    };
+    let server = server(&[
+        (
+            "/",
+            fresh(
+                "text/html",
+                "<!DOCTYPE html><link rel=stylesheet href=/s.css><img src=/i.png>\
+                 <script>fetch('/f')</script>page",
+            ),
+        ),
+        ("/s.css", fresh("text/css", "p {}")),
+        ("/i.png", fresh("image/png", "")),
+        ("/f", fresh("text/plain", "")),
+    ]);
+    let machopo = Machopo::start();
+    let (mut page, target) = page(&machopo);
+    let ok = |page: &mut Client, session: Option<&str>, method: &str, params: Value| {
+        let answer = page.call(session, method, params);
+        assert!(answer.get("result").is_some(), "{method}: {answer}");
+    };
+    // Loads `/`: whether the document, its stylesheet, image and fetch came
+    // from the cache, and how many times each has reached the server.
+    let paths = ["/", "/s.css", "/i.png", "/f"];
+    let visit = |page: &mut Client| {
+        load(page, &server.url("/"));
+        let events = network_events(page, paths.len());
+        paths.map(|path| {
+            let response =
+                &of(&events, "Network.responseReceived", &id_of(&events, path))["response"];
+            let reached = server
+                .requests()
+                .iter()
+                .filter(|request| request.target == path)
+                .count();
+            (response["fromDiskCache"] == true, reached)
+        })
+    };
+    ok(&mut page, None, "Network.enable", json!({}));
+    assert_eq!(visit(&mut page), [(false, 1); 4]);
+    assert_eq!(visit(&mut page), [(true, 1); 4]);
+
+    ok(
+        &mut page,
+        None,
+        "Network.setCacheDisabled",
+        json!({ "cacheDisabled": true }),
+    );
+    assert_eq!(visit(&mut page), [(false, 2); 4]);
+    for path in paths {
+        let request = server
+            .requests()
+            .into_iter()
+            .rfind(|request| request.target == path)
+            .unwrap();
+        assert_eq!(request.header("cache-control"), Some("no-cache"), "{path}");
+        assert_eq!(request.header("pragma"), Some("no-cache"), "{path}");
+    }
+    // What went past it is kept.
+    ok(
+        &mut page,
+        None,
+        "Network.setCacheDisabled",
+        json!({ "cacheDisabled": false }),
+    );
+    assert_eq!(visit(&mut page), [(true, 2); 4]);
+
+    ok(&mut page, None, "Network.clearBrowserCache", json!({}));
+    assert_eq!(visit(&mut page), [(false, 3); 4]);
+
+    ok(
+        &mut page,
+        None,
+        "Network.setCacheDisabled",
+        json!({ "cacheDisabled": true }),
+    );
+    ok(&mut page, None, "Network.disable", json!({}));
+    ok(&mut page, None, "Network.enable", json!({}));
+    assert_eq!(visit(&mut page), [(true, 3); 4]);
+
+    // Another session's: the tab goes past the cache while one of them has
+    // it disabled.
+    let mut browser = machopo.connect_browser();
+    let attach = |browser: &mut Client, target: &str| {
+        browser.call(
+            None,
+            "Target.attachToTarget",
+            json!({ "targetId": target, "flatten": true }),
+        )["result"]["sessionId"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let disable_cache = |browser: &mut Client, session: &str| {
+        ok(browser, Some(session), "Network.enable", json!({}));
+        ok(
+            browser,
+            Some(session),
+            "Network.setCacheDisabled",
+            json!({ "cacheDisabled": true }),
+        );
+    };
+    let session = attach(&mut browser, &target);
+    // Not while its `Network` is off.
+    let refused = browser.call(
+        Some(&session),
+        "Network.setCacheDisabled",
+        json!({ "cacheDisabled": true }),
+    );
+    assert!(refused.get("error").is_some(), "{refused}");
+    assert_eq!(visit(&mut page), [(true, 3); 4]);
+    disable_cache(&mut browser, &session);
+    assert_eq!(visit(&mut page), [(false, 4); 4]);
+    ok(
+        &mut browser,
+        None,
+        "Target.detachFromTarget",
+        json!({ "sessionId": session }),
+    );
+    assert_eq!(visit(&mut page), [(true, 4); 4]);
+
+    // Another tab's session: that tab's.
+    let other = browser.call(None, "Target.createTarget", json!({ "url": "about:blank" }));
+    let other = other["result"]["targetId"].as_str().unwrap().to_owned();
+    let other = attach(&mut browser, &other);
+    disable_cache(&mut browser, &other);
+    // This tab's own, told again, isn't overruled by it.
+    ok(
+        &mut page,
+        None,
+        "Network.setCacheDisabled",
+        json!({ "cacheDisabled": false }),
+    );
+    assert_eq!(visit(&mut page), [(true, 4); 4]);
+
+    // A client gone takes its sessions' with it.
+    let session = attach(&mut browser, &target);
+    disable_cache(&mut browser, &session);
+    assert_eq!(visit(&mut page), [(false, 5); 4]);
+    drop(browser);
+    let start = std::time::Instant::now();
+    while !visit(&mut page).iter().all(|(cached, _)| *cached) {
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(10),
+            "the cache stays disabled"
+        );
+    }
 }
 
 /// A navigation of the main frame is a request too: the browser tells of

@@ -213,6 +213,9 @@ pub struct FetchOrigin {
     pub stylesheet: Option<std::sync::Arc<str>>,
     /// A module's static `import`: the importing module's URL.
     pub importer: Option<String>,
+    /// How the document's load has its subresources use the HTTP cache
+    /// (`Cx::subresource_cache_mode`), for a request that doesn't say.
+    pub cache_mode: dom::SubresourceCacheMode,
 }
 
 /// The frame a document's load goes from, as an engine finds it for the
@@ -236,7 +239,7 @@ pub(crate) fn load_origin(
     frame_document: Option<&dom::NodeRoot>,
     initiator: &dom::LoadInitiator,
 ) -> (FetchOrigin, Option<String>) {
-    let (loader, document_url, request_origin, parser_line) = dom.read(|cx| {
+    let (loader, document_url, request_origin, parser_line, cache_mode) = dom.read(|cx| {
         let node = cx.node_by_id(document);
         let loader = node
             .and_then(|node| cx.document_loader(node))
@@ -256,6 +259,8 @@ pub(crate) fn load_origin(
                 _ => "null".to_owned(),
             }),
             parser_line,
+            node.map(|node| cx.subresource_cache_mode(node))
+                .unwrap_or_default(),
         )
     });
     let stack = match initiator {
@@ -279,6 +284,7 @@ pub(crate) fn load_origin(
             dom::LoadInitiator::Import(url) => Some(url.clone()),
             _ => None,
         },
+        cache_mode,
     };
     (origin, request_origin)
 }

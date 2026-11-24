@@ -101,6 +101,19 @@ pub struct DocumentLoader {
     pub navigation: Option<u64>,
 }
 
+/// How a document's subresources use the HTTP cache by how the document
+/// was loaded, until its `load` (Blink's `DetermineFrameCacheMode`, its
+/// `FetchCacheMode`): a reload past the cache bypasses it, back and forward
+/// take what is stored, stale or not; a child frame's go by its parent's
+/// when that one's do something special.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SubresourceCacheMode {
+    #[default]
+    Default,
+    BypassCache,
+    ForceCache,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum NavigationInitiator<'gc> {
     Document(NodeRef<'gc>),
@@ -413,6 +426,55 @@ impl<'gc> Cx<'_, 'gc> {
         let data = self.ensure_document_data(document);
         data.loader.set(Some(loader.loader));
         data.loader_navigation.set(loader.navigation);
+    }
+
+    /// `document` was loaded by a reload past the HTTP cache (Blink's
+    /// `WebFrameLoadType::kReloadBypassingCache`): its subresources go past
+    /// it too, until its `load` (`subresource_cache_mode`).
+    pub fn set_reloaded_past_cache(&self, document: NodeRef<'gc>) {
+        self.ensure_document_data(document)
+            .reloaded_past_cache
+            .set(true);
+    }
+
+    /// How `document`'s subresources use the HTTP cache
+    /// (`DetermineFrameCacheMode`): as usual once its `load` fired; past it
+    /// for a reload that bypassed it; else its parent's, if special; else
+    /// what is stored, stale or not, for a document back or forward loaded.
+    pub fn subresource_cache_mode(&self, document: NodeRef<'gc>) -> SubresourceCacheMode {
+        // A frame tree is fewer than u16::MAX deep.
+        self.cache_mode_within(document, u16::MAX)
+    }
+
+    fn cache_mode_within(&self, document: NodeRef<'gc>, depth: u16) -> SubresourceCacheMode {
+        if self.is_completely_loaded(document) {
+            return SubresourceCacheMode::Default;
+        }
+        if self
+            .document_data(document)
+            .is_some_and(|data| data.reloaded_past_cache.get())
+        {
+            return SubresourceCacheMode::BypassCache;
+        }
+        let parent = self
+            .frame_owner(document)
+            .map(|owner| self.document_of(owner))
+            .filter(|_| depth > 0);
+        if let Some(parent) = parent {
+            let mode = self.cache_mode_within(parent, depth.saturating_sub(1));
+            if mode != SubresourceCacheMode::Default {
+                return mode;
+            }
+        }
+        let back_forward = self
+            .window_of(document)
+            .and_then(|window| self.navigation_timing(window))
+            .is_some_and(|timing| timing.navigation_type == crate::NavigationType::BackForward);
+        if back_forward {
+            SubresourceCacheMode::ForceCache
+        } else {
+            SubresourceCacheMode::Default
+        }
     }
 
     /// What `document`'s subresources go through: the loader its host gave

@@ -144,6 +144,7 @@ fn start<'gc, O: OpFront>(
         mode: data.mode,
         credentials: data.credentials,
         redirect: data.redirect,
+        cache: data.cache,
         initiator,
     }));
     Ok(promise)

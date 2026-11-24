@@ -7,7 +7,7 @@ use bytes::Bytes;
 use ipc::data_pipe::{Consumer, Read};
 use protocol::FrameToken;
 use protocol::network::CompletionStatus;
-use protocol::renderer::{HistoryEntryParams, NavigationLoad, NavigationTimingType};
+use protocol::renderer::{HistoryEntryParams, NavigationLoad, FrameLoadType};
 
 use crate::document::MarkupFilter;
 use crate::encoding::DocumentDecoder;
@@ -28,7 +28,7 @@ pub(super) struct NavigationCommit {
     pub(super) navigation_start: ipc::TimeTicks,
     /// Its load as far as its head, with its end once it has one.
     pub(super) loaded: Option<Box<NavigationLoad>>,
-    pub(super) navigation_type: NavigationTimingType,
+    pub(super) navigation_type: FrameLoadType,
 }
 
 /// A document's body as a commit brings it: its start (all of it, for one

@@ -33,6 +33,7 @@ pub(crate) fn load(url: &Url) -> LoadResult {
             remote_address: None,
             protocol: "data".to_owned(),
             encoded_headers_length: 0,
+        was_fetched_via_cache: false,
         },
         encoded_body_length: 0,
         body: body.into(),

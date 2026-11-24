@@ -2303,3 +2303,49 @@ fn local_storage_outlasts_the_engine_taken_for_a_wasm_document() {
     assert_eq!(title, "kept yes");
     window.close();
 }
+
+/// F5 reloads, validating the page with the server; Shift+F5 reloads past
+/// the HTTP cache (`no-cache`), as Chrome's do.
+#[test]
+fn shift_reload_goes_past_the_http_cache() {
+    let server = TestServer::start(
+        [(
+            "/".to_owned(),
+            Route::ok("text/html", GREEN_PAGE)
+                .with_header("Cache-Control", "max-age=60")
+                .with_header("ETag", "\"g\"")
+                .revalidated(),
+        )]
+        .into_iter()
+        .collect(),
+    )
+    .expect("test server starts");
+    let mut window = Window::open(Size::new(400, 300), 1.0);
+    window.load(&server.url("/"));
+    window.key(NamedKey::F5);
+    window.until_loaded();
+    window.view.set_modifiers(ModifiersState::SHIFT);
+    window.key(NamedKey::F5);
+    window.view.set_modifiers(ModifiersState::empty());
+    window.until_loaded();
+    let sent: Vec<_> = server
+        .requests()
+        .into_iter()
+        .filter(|request| request.target == "/")
+        .map(|request| {
+            (
+                request.header("cache-control").map(str::to_owned),
+                request.header("if-none-match").map(str::to_owned),
+            )
+        })
+        .collect();
+    assert_eq!(
+        sent,
+        [
+            (None, None),
+            (Some("max-age=0".to_owned()), Some("\"g\"".to_owned())),
+            (Some("no-cache".to_owned()), None),
+        ]
+    );
+    window.close();
+}

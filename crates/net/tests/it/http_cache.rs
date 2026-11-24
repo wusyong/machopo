@@ -9,7 +9,9 @@ use std::time::Duration;
 use crossbeam_channel::unbounded;
 use net::test_server::{Route, TestServer};
 use net::{NetworkContext, NetworkContextParams};
-use protocol::network::{LoadResult, RequestDestination, ResourceRequest, TrustedParams};
+use protocol::network::{
+    LoadFlags, LoadResult, NetErrorCode, RequestDestination, ResourceRequest, TrustedParams,
+};
 
 fn server(routes: &[(&str, Route)]) -> TestServer {
     TestServer::start(
@@ -489,4 +491,214 @@ fn loads_at_once_for_one_key_reach_the_server_once() {
         assert_eq!(result.expect("it loads").body.to_vec(), b"pixels");
     }
     assert_eq!(hits(&server, "/slow"), 1);
+}
+
+fn flagged(url: &str, set: impl FnOnce(&mut LoadFlags)) -> ResourceRequest {
+    let mut request = image(url);
+    set(&mut request.load_flags);
+    request
+}
+
+/// A route fresh for a minute, with an `ETag` it validates.
+fn fresh_route() -> Route {
+    Route::ok("image/png", "pixels")
+        .with_header("Cache-Control", "max-age=60")
+        .with_header("ETag", "\"v1\"")
+        .revalidated()
+}
+
+/// A route stale as it comes, with an `ETag` it validates.
+fn stale_route() -> Route {
+    Route::ok("image/png", "pixels")
+        .with_header("Cache-Control", "no-cache")
+        .with_header("ETag", "\"v1\"")
+        .revalidated()
+}
+
+#[test]
+fn validate_cache_validates_a_fresh_one_and_says_max_age_0() {
+    let server = server(&[("/i", fresh_route())]);
+    let network = network();
+    body(&network, image(&server.url("/i")));
+    let validate = flagged(&server.url("/i"), |f| f.validate_cache = true);
+    assert_eq!(body(&network, validate), b"pixels");
+    assert_eq!(hits(&server, "/i"), 2);
+    assert_eq!(sent(&server, "/i", 1, "if-none-match").as_deref(), Some("\"v1\""));
+    assert_eq!(sent(&server, "/i", 1, "cache-control").as_deref(), Some("max-age=0"));
+}
+
+#[test]
+fn bypass_cache_doesnt_read_but_keeps_and_says_no_cache() {
+    let server = server(&[("/i", fresh_route())]);
+    let network = network();
+    body(&network, image(&server.url("/i")));
+    body(&network, flagged(&server.url("/i"), |f| f.bypass_cache = true));
+    assert_eq!(hits(&server, "/i"), 2);
+    assert_eq!(sent(&server, "/i", 1, "if-none-match"), None);
+    assert_eq!(sent(&server, "/i", 1, "pragma").as_deref(), Some("no-cache"));
+    assert_eq!(sent(&server, "/i", 1, "cache-control").as_deref(), Some("no-cache"));
+    // What it got is kept.
+    body(&network, image(&server.url("/i")));
+    assert_eq!(hits(&server, "/i"), 2);
+}
+
+#[test]
+fn a_headers_no_cache_sends_no_more_headers() {
+    // Only the request's own flags add headers: one its headers give
+    // doesn't (Chromium's network transaction sees the request's flags).
+    let server = server(&[("/i", fresh_route())]);
+    let network = network();
+    body(&network, with_header(image(&server.url("/i")), "pragma", "no-cache"));
+    assert_eq!(sent(&server, "/i", 0, "pragma").as_deref(), Some("no-cache"));
+    assert_eq!(sent(&server, "/i", 0, "cache-control"), None);
+    // Nor one past the cache.
+    let mut untrusted = with_header(image(&server.url("/i")), "pragma", "no-cache");
+    untrusted.trusted = None;
+    body(&network, untrusted);
+    assert_eq!(sent(&server, "/i", 1, "cache-control"), None);
+}
+
+#[test]
+fn the_flags_header_takes_the_place_of_the_requests_own() {
+    let server = server(&[("/i", fresh_route())]);
+    let network = network();
+    let bypass = flagged(&server.url("/i"), |f| f.bypass_cache = true);
+    body(&network, with_header(bypass, "Cache-Control", "max-age=5"));
+    let request = &server.requests()[0];
+    let cache_control: Vec<&str> = request
+        .headers
+        .iter()
+        .filter(|(name, _)| name == "cache-control")
+        .map(|(_, value)| value.as_str())
+        .collect();
+    assert_eq!(cache_control, ["no-cache"]);
+}
+
+#[test]
+fn an_empty_validator_goes_past_the_cache() {
+    let server = server(&[("/i", fresh_route())]);
+    let network = network();
+    body(&network, image(&server.url("/i")));
+    let response = load(&network, with_header(image(&server.url("/i")), "if-none-match", ""))
+        .expect("it loads");
+    assert_eq!(response.head.status, 200);
+    assert_eq!(hits(&server, "/i"), 2);
+}
+
+#[test]
+fn skip_cache_validation_uses_a_stale_one_unless_vary_differs() {
+    let server = server(&[
+        ("/i", stale_route()),
+        (
+            "/v",
+            Route::ok("image/png", "pixels")
+                .with_header("Cache-Control", "no-cache")
+                .with_header("Vary", "X-Mode"),
+        ),
+    ]);
+    let network = network();
+    let skip = |path: &str| flagged(&server.url(path), |f| f.skip_cache_validation = true);
+    body(&network, image(&server.url("/i")));
+    assert_eq!(body(&network, skip("/i")), b"pixels");
+    assert_eq!(hits(&server, "/i"), 1);
+    // Even asked to validate: skipping wins.
+    let both = flagged(&server.url("/i"), |f| {
+        f.skip_cache_validation = true;
+        f.validate_cache = true;
+    });
+    body(&network, both);
+    assert_eq!(hits(&server, "/i"), 1);
+    body(&network, with_header(image(&server.url("/v")), "x-mode", "a"));
+    body(&network, with_header(skip("/v"), "x-mode", "b"));
+    assert_eq!(hits(&server, "/v"), 2);
+}
+
+#[test]
+fn only_from_cache_answers_from_it_or_misses() {
+    let server = server(&[("/i", stale_route()), ("/none", fresh_route())]);
+    let network = network();
+    let only = |path: &str, set: fn(&mut LoadFlags)| {
+        flagged(&server.url(path), |f| {
+            f.only_from_cache = true;
+            set(f);
+        })
+    };
+    let miss = |request: ResourceRequest| {
+        let error = load(&network, request).expect_err("a miss");
+        assert_eq!(error.code, NetErrorCode::CacheMiss);
+    };
+    // Nothing stored.
+    miss(only("/none", |_| {}));
+    body(&network, image(&server.url("/i")));
+    // Stored, but stale: it would have to be validated.
+    miss(only("/i", |_| {}));
+    // Stale is fine when validation is skipped (`only-if-cached`).
+    assert_eq!(body(&network, only("/i", |f| f.skip_cache_validation = true)), b"pixels");
+    // Nonsense.
+    miss(only("/i", |f| {
+        f.skip_cache_validation = true;
+        f.bypass_cache = true;
+    }));
+    // Past the cache, so nothing there.
+    miss(only("/i", |f| f.disable_cache = true));
+    let mut untrusted = only("/i", |f| f.skip_cache_validation = true);
+    untrusted.trusted = None;
+    miss(untrusted);
+    let mut post = only("/i", |f| f.skip_cache_validation = true);
+    post.method = "POST".to_owned();
+    miss(post);
+    miss(with_header(only("/i", |f| f.skip_cache_validation = true), "if-none-match", "\"v1\""));
+    assert_eq!(hits(&server, "/i"), 1);
+    assert_eq!(hits(&server, "/none"), 0);
+}
+
+#[test]
+fn disable_cache_neither_reads_nor_keeps() {
+    let server = server(&[("/i", fresh_route())]);
+    let network = network();
+    let disabled = || flagged(&server.url("/i"), |f| f.disable_cache = true);
+    body(&network, disabled());
+    body(&network, image(&server.url("/i")));
+    body(&network, disabled());
+    assert_eq!(hits(&server, "/i"), 3);
+    // It doesn't say anything to the server.
+    assert_eq!(sent(&server, "/i", 0, "cache-control"), None);
+    assert_eq!(sent(&server, "/i", 2, "if-none-match"), None);
+}
+
+fn clear(network: &NetworkContext) {
+    let (tx, rx) = unbounded();
+    network.clear_http_cache(move || {
+        let _ = tx.send(());
+    });
+    rx.recv_timeout(Duration::from_secs(30))
+        .expect("the network service clears it");
+}
+
+#[test]
+fn clearing_drops_what_is_stored_and_what_is_being_stored() {
+    let server = server(&[
+        ("/i", fresh_route()),
+        (
+            "/slow",
+            fresh_route().with_body_delay(Duration::from_millis(300)),
+        ),
+    ]);
+    let network = network();
+    body(&network, image(&server.url("/i")));
+    clear(&network);
+    body(&network, image(&server.url("/i")));
+    assert_eq!(hits(&server, "/i"), 2);
+    // Cleared while its body comes: not kept.
+    let (tx, rx) = unbounded();
+    network.fetch(image(&server.url("/slow")), move |result| {
+        let _ = tx.send(result);
+    });
+    std::thread::sleep(Duration::from_millis(100));
+    clear(&network);
+    rx.recv_timeout(Duration::from_secs(30))
+        .expect("the network service answers")
+        .expect("it loads");
+    body(&network, image(&server.url("/slow")));
+    assert_eq!(hits(&server, "/slow"), 2);
 }

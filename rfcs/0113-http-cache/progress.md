@@ -13,7 +13,7 @@
 | 1b. 記憶體的 backend（上限、淘汰，已決定的第 5、7 條） | 做完，待審查 | 2026-11-24 |
 | 1c. key：`TrustedParams` 加 `frame_site`（已決定的第 1、2 條） | 做完，待審查 | 2026-11-24 |
 | 1d. cache 接進 `url_loader`：查、條件請求和 `304`、存、作廢、同時的請求（已決定的第 3、8、9、10 條） | 做完，待審查 | 2026-11-24 |
-| 1e. load flag：`fetch()` 的 `cache`、重新整理、上一頁、DevTools | | |
+| 1e. load flag：`fetch()` 的 `cache`、重新整理、上一頁、DevTools（已決定的第 11 條） | 做完，待審查 | 2026-11-24 |
 | 1f. WPT 的 `fetch/http-cache/`、情境、文件、mutation test | | |
 | 2. 磁碟的 backend | | |
 | 3. 重量網路版的 Speedometer | | |
@@ -30,6 +30,12 @@
 | 經過 cache 的載入（`net` 的 `NetworkService` 對著本機的測試 server）：新鮮的不上網路、heuristic、`no-store` 和沒有依據的每次都上網路、不新鮮的帶 `ETag` 和 `Last-Modified` 驗證、`304` 帶來的新鮮度和 `no-store`、`Vary`（含 transport 加的 `Accept`）、照最上層和 frame 的網站分開、沒有網站的不經過、成功的 `POST` 拿掉 entry（失敗的不）、request header 的 `no-cache`、`max-age=0`、`If-Match`、呼叫者自己的驗證、`HEAD`、永久的 redirect、`Content-Encoding` 照原樣存、太大的不存、同時的請求只到 server 一次 | `cargo test -p net --test it http_cache` |
 | `304` 更新 entry 的時間、header 和 `Vary`，存的 header 不留 `Set-Cookie` | `cargo test -p net --lib http_cache::transaction` |
 | 記憶體的 backend：上限 50 MiB、一個 entry 最多 1/8、超過時照最近用過的順序淘汰到 90%、entry 的大小（key、header、`Vary`、status text、body） | `cargo test -p net --lib http_cache::memory`、`http_cache::entry` |
+| cache 的 load flag：`LOAD_VALIDATE_CACHE`、`BYPASS_CACHE`（送出時加 `Pragma: no-cache` 和 `Cache-Control: no-cache`，換掉請求自己的）、`SKIP_CACHE_VALIDATION`、`ONLY_FROM_CACHE`（沒有能用的是 `ERR_CACHE_MISS`）、`DISABLE_CACHE`；request header 對到的 flag 和請求的 flag 合起來；清空 cache 時正在存的也不留 | `cargo test -p net --test it http_cache` |
+| renderer 給子資源的 flag：`fetch()` 的 `cache` 照 Blink 的 `GetLoadFlagsForWebURLRequest`，其他的照文件的載入（`DetermineFrameCacheMode`：強制重新整理的文件在 `load` 之前繞過、上一頁的不驗證，子 frame 跟著 parent），條件請求的驗證；DevTools 停用 cache 時繞過（只能用 cache 的變成找不到） | `cargo test -p renderer --lib loader`、`cargo test -p dom --test it frames::a_documents_load` |
+| `fetch()` 的 `cache` 的每一種模式經過整條路（renderer、Browser、`net`） | `cargo test -p shell --test it fetch::a_fetchs_cache_mode` |
+| 重新整理、強制重新整理（CDP 的 `Page.reload` 的 `ignoreCache`）、上一頁：文件、stylesheet、script、iframe 和它的 script、`fetch()`、圖片各自照 Chromium 的 flag 送出或從 cache 拿 | `cargo test -p shell --test it automation_pipe::reloads_and_history_use_the_http_cache` |
+| 強制重新整理的快捷鍵（Shift+Cmd+R、Shift+F5、Ctrl+F5、Ctrl+Shift+R）和它的效果 | `cargo test -p shell --lib browser_view::tests::shortcuts_per_platform`、`cargo test -p shell --test it browser_view::shift_reload_goes_past_the_http_cache` |
+| DevTools：`fromDiskCache`；`Network.setCacheDisabled` 讓導覽和子資源（parser、stylesheet、圖片、`fetch()`）繞過 cache，`Network` 沒打開時是錯誤，`disable`、session 離開、client 斷線時取消，別的分頁的 session 不影響；`Network.clearBrowserCache` 清完才回答 | `cargo test -p shell --test it devtools_network::devtools_sees_the_http_cache` |
 
 ## 做過的檢查
 
@@ -75,3 +81,17 @@
 
 **檢查**：`cargo test -p net`、`cargo test -p browser -p shell` 通過；`sanity.py` 的 `numerics`、`tests`、`unsafe`、`deps`、`boundary`、`spans`、`docs` 通過。
 
+
+### 1e（2026-11-24，macOS 26.6.2、Apple M4、debug build，`fb27fa9` 之上）
+
+**對照的原始碼**：Chromium `main`（2026-11-24）的 `net/base/load_flags_list.h`、`net/http/http_cache_transaction.cc`；Blink 的 `platform/exported/web_url_request.cc`、`platform/loader/fetch/url_loader/request_conversion.cc`（`GetLoadFlagsForWebURLRequest`）、`core/loader/frame_fetch_context.cc`（`DetermineFrameCacheMode`）、`core/fetch/fetch_manager.cc`、`core/inspector/inspector_network_agent.cc`；content 的 `browser/renderer_host/navigation_request.cc`、`browser/loader/browser_initiated_resource_request.cc`、`browser/devtools/devtools_instrumentation.cc`（`ApplyNetworkRequestOverrides`），下載到本機逐條讀。和 RFC 原本寫的不同、改了 RFC 的：DevTools 停用 cache 是繞過（`LOAD_BYPASS_CACHE`，回應照樣存），不是 `LOAD_DISABLE_CACHE`。繞過和驗證時送出的 `Pragma`、`Cache-Control`（Chromium 的 `HttpNetworkTransaction` 加的）是照記得的寫的，沒有讀原始碼，1f 的 WPT `fetch/api/request/request-cache-*` 會驗證。Chrome for Testing 152 的實測：強制重新整理時 iframe 的文件也帶 `no-cache` 重新要（`frame_fetch_context` 的 frame 的 cache 模式跟著 parent）。
+
+**做法**：`ResourceRequest` 有 `LoadFlags`，`net` 的交易把它和 request header 對到的 flag 合起來。renderer 給子資源 flag（`fetch()` 的 `cache`，其他的照文件的載入：`dom` 的文件記著它是不是強制重新整理載入的，`load` 之前的子資源繞過；上一頁的不驗證；子 frame 跟著 parent），子 frame 的導覽在 `BeginNavigation` 帶它的 flag。Browser 照導覽的種類（`FrameLoadType`）給 flag。DevTools 的 `setCacheDisabled` 由 browser 照每個 session 記著（給導覽），也轉給 renderer（給子資源）；`clearBrowserCache` 是 `NetworkContext::clear_http_cache`，正在存的回應也不留（cache 記著清過幾次，記錄器存之前比對）。和 Chromium 不同的：`Network` 沒打開時 `setCacheDisabled` 是錯誤（Blink 先記著，打開時生效），已經打開時再 `enable` 會取消它（Blink 不會），和 machopo 的 `setAttachDebugStack` 一樣照 session 的狀態。
+
+**拿掉的程式**：只能用 cache 又要繞過的請求的提早檢查（後面的分支本來就回 `ERR_CACHE_MISS`，mutation 是等價的）；子 frame 的 commit 帶的 `bypass_cache`（永遠是 false：子 frame 的強制重新整理在 renderer 這一側照 parent 算）；`DocumentLoader` 讀回 `bypass_cache` 的欄位（沒人讀，換成 commit 時直接告訴 `dom`）。
+
+**新的測試**：`net` 的 `tests/it/http_cache.rs` 的 load flag 和清空的測試；`renderer` 的 `loader` 的單元測試；`dom` 的 `frames::a_documents_load_says_how_its_subresources_use_the_cache`；`shell` 的 `fetch::a_fetchs_cache_mode`、`automation_pipe::reloads_and_history_use_the_http_cache`、`browser_view::shift_reload_goes_past_the_http_cache`、`devtools_network::devtools_sees_the_http_cache_and_can_go_past_it_or_clear_it`，和 `browser_view` 的快捷鍵的單元測試。現有的測試要改的：`browser` 的三個導覽的測試（`a_link_navigates_and_history_goes_back_and_forward`、`the_state_comes_back_with_the_entry`、`a_traversal_within_a_document_gone_loads_the_entry`）和 `shell` 的 `webdriver::a_session_navigates` 數 server 收到幾次，上一頁、下一頁從 cache 拿之後各少了一次，照 Chromium 改了預期（文件照樣重新載入、commit）。
+
+**檢查**：`cargo test -p net -p protocol -p renderer -p browser -p dom -p dom_api -p dom_js -p shell` 通過（`shell` 的整合測試 694 個）；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs` 通過。
+
+**mutation test**（`mutants-1e.toml`，71 個：1e-1 的交易 16 個、1e-2 的 `fetch()` 和 1e-3 的重新整理、上一頁、快捷鍵 33 個、1e-4 的 DevTools 22 個）：71 個都抓到。沒抓到、補了測試的：空的 validator 讓 cache 停用、不受信任的 request header 不給 flag、繞過時換掉請求自己的 `Cache-Control`、端到端的測試原本沒有圖片和 `fetch()`（renderer 的三條送出的路只測到一條）、快捷鍵的分派；DevTools 的測試原本只有一個分頁，「別的分頁的 session 也算」沒抓到（那個 session 只讓它自己的分頁重算），補了「這個分頁的 session 再設一次時不被別的分頁的蓋過」。1e-4 讓文件的載入那兩條 mutation 的 `from` 對不上了（它們包含下一個函式的開頭，1e-4 在中間加了函式），改短之後重跑，照樣抓到。

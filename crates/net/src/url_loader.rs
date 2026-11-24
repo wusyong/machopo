@@ -522,6 +522,7 @@ fn split(
         remote_address: raw.remote_address,
         protocol: raw.protocol.to_owned(),
         encoded_headers_length: raw.encoded_headers_length,
+        was_fetched_via_cache: raw.from_cache,
     };
     (head, raw.body)
 }

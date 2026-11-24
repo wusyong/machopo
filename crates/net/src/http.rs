@@ -40,7 +40,6 @@ pub(crate) struct RawResponse {
     pub(crate) encoded_headers_length: u64,
     /// The HTTP cache answered it from a stored response
     /// (`HttpResponseInfo::was_cached`), not the network.
-    #[expect(dead_code, reason = "DevTools' responses tell it, in a later step")]
     pub(crate) from_cache: bool,
 }
 

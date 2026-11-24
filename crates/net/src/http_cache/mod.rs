@@ -50,6 +50,10 @@ struct State {
     /// waiting for it to be over: a later one waits, then looks again
     /// (Chromium's `ActiveEntry` lets one transaction write at a time).
     writing: HashMap<String, Vec<oneshot::Sender<()>>>,
+    /// How many times it was cleared: a response being written when it was
+    /// is dropped once it is all there (Chromium dooms the active entries
+    /// too).
+    clears: u64,
 }
 
 impl HttpCache {
@@ -70,6 +74,7 @@ impl HttpCache {
         Ok(Slot {
             cache: self.clone(),
             key: key.to_owned(),
+            clears: state.clears,
         })
     }
 
@@ -85,6 +90,22 @@ impl HttpCache {
     /// Drops `key`'s entry (`DoomEntry`).
     pub(crate) fn remove(&self, key: &str) {
         self.state().backend.remove(key);
+    }
+
+    /// Drops every entry (`DoomAllEntries`), and those being written.
+    pub(crate) fn clear(&self) {
+        let mut state = self.state();
+        state.backend.clear();
+        state.clears = state.clears.saturating_add(1);
+    }
+
+    /// Keeps `response` as `key`'s, unless the cache was cleared since
+    /// `clears`.
+    fn put_unless_cleared(&self, key: &str, response: StoredResponse, clears: u64) {
+        let mut state = self.state();
+        if state.clears == clears {
+            state.backend.put(key, response);
+        }
     }
 
     /// The most a stored response may take.
@@ -105,6 +126,8 @@ impl HttpCache {
 pub(crate) struct Slot {
     cache: HttpCache,
     key: String,
+    /// The cache's clears as it was taken.
+    clears: u64,
 }
 
 impl Drop for Slot {
@@ -155,7 +178,9 @@ impl Recorder {
     /// The body is all there: stores the response, if it isn't too big.
     pub(crate) fn finish(self) {
         if self.size <= self.max_size {
-            self.slot.cache.put(&self.slot.key, self.response);
+            self.slot
+                .cache
+                .put_unless_cleared(&self.slot.key, self.response, self.slot.clears);
         }
     }
 }

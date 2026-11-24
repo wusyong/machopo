@@ -66,6 +66,8 @@ struct Session {
     /// `Network.setAttachDebugStack`: the requests script asks for are
     /// told with its stack.
     attach_debug_stack: bool,
+    /// `Network.setCacheDisabled`: the requests go past the HTTP cache.
+    cache_disabled: bool,
     /// The bodies kept, oldest first; `None` for one not kept (too big, or
     /// dropped for newer ones).
     bodies: VecDeque<(String, Option<KeptBody>)>,
@@ -89,6 +91,7 @@ impl Session {
             max_resource_buffer_size: size("maxResourceBufferSize", DEFAULT_RESOURCE_BUFFER_SIZE),
             max_post_data_size: size("maxPostDataSize", 0),
             attach_debug_stack: false,
+            cache_disabled: false,
             bodies: VecDeque::new(),
             kept: 0,
             post_data: HashMap::new(),
@@ -166,6 +169,15 @@ impl NetworkAgent {
     /// telling of (none is looked at otherwise).
     pub(crate) fn enabled(&self) -> bool {
         !self.sessions.borrow().is_empty()
+    }
+
+    /// Whether a session has the HTTP cache disabled
+    /// (`Network.setCacheDisabled`, until `Network.disable`).
+    pub(crate) fn cache_disabled(&self) -> bool {
+        self.sessions
+            .borrow()
+            .values()
+            .any(|state| state.cache_disabled)
     }
 
     /// Whether a session wants the requests' stacks
@@ -529,8 +541,18 @@ impl NetworkAgent {
                 }
                 None => Err((SERVER_ERROR, "Domain must be enabled".to_owned())),
             },
-            // What machopo does anyway: no HTTP cache, no service workers.
-            "Network.setCacheDisabled" | "Network.setBypassServiceWorker" => Ok(json!({})),
+            "Network.setCacheDisabled" => match self.sessions.borrow_mut().get_mut(session) {
+                Some(state) => {
+                    state.cache_disabled = params
+                        .get("cacheDisabled")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    Ok(json!({}))
+                }
+                None => Err((SERVER_ERROR, "Domain must be enabled".to_owned())),
+            },
+            // What machopo does anyway: no service workers.
+            "Network.setBypassServiceWorker" => Ok(json!({})),
             "Network.setBlockedURLs" => {
                 let blocks = params
                     .get("urlPatterns")
@@ -746,6 +768,7 @@ mod tests {
                 remote_address: None,
                 protocol: "http/1.1".into(),
                 encoded_headers_length: 10,
+        was_fetched_via_cache: false,
             },
             encoded_body_length: 3,
             body: protocol::BigBuffer::copy_from_slice(body),

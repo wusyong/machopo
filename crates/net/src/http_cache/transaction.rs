@@ -4,10 +4,16 @@
 //!
 //! - Only `GET` and `HEAD` are answered from it. A `POST`, `PUT`, `DELETE`
 //!   or `PATCH` that succeeds (a 2xx or 3xx) drops the entry of its URL.
-//! - A request whose headers say so goes past it (`If-Match` and the like,
-//!   an empty `If-None-Match`), is fetched again and stored
-//!   (`Cache-Control: no-cache`, `Pragma: no-cache`), or is validated even
-//!   if fresh (`Cache-Control: max-age=0`).
+//! - Its request's load flags say how it uses the cache, with what its
+//!   headers add (Chromium's effective load flags): past it, in and out
+//!   (`disable_cache`; `If-Match` and the like, an empty `If-None-Match`);
+//!   fetched again and stored (`bypass_cache`; `Cache-Control: no-cache`,
+//!   `Pragma: no-cache`); validated even if fresh (`validate_cache`;
+//!   `Cache-Control: max-age=0`); used even if stale (`skip_cache_
+//!   validation`, unless its `Vary` differs); from the cache or not at all
+//!   (`only_from_cache`: `ERR_CACHE_MISS` when it has nothing it may use
+//!   as it is). The request's own flags also send their headers, under the
+//!   cache.
 //! - One with its own `If-None-Match` or `If-Modified-Since` is never
 //!   answered from it (`UPDATE` mode): it goes out as it is; if the stored
 //!   `200`'s validators are the ones it sends, a `304` updates the entry and
@@ -23,7 +29,7 @@
 //!   key waits until it is over, then looks again: what it stored, if it
 //!   could store it.
 
-use protocol::network::{NetError, ResourceRequest};
+use protocol::network::{LoadFlags, NetError, NetErrorCode, ResourceRequest};
 use url::Url;
 
 use super::entry::StoredResponse;
@@ -54,26 +60,54 @@ pub(crate) async fn send(
     request: &ResourceRequest,
     hop: Hop<'_>,
 ) -> Result<RawResponse, NetError> {
-    let flag = header_flag(hop.headers);
-    let external = ExternalValidation::of(hop.headers);
-    let key = cache_key(request, hop.url).filter(|_| flag != Some(HeaderFlag::DisableCache));
-    let (Some(key), Ok(external)) = (key, external) else {
-        return network(transport, &hop, hop.headers).await;
+    let asked = request.load_flags;
+    let mut flags = asked;
+    match header_flag(hop.headers) {
+        Some(HeaderFlag::DisableCache) => flags.disable_cache = true,
+        Some(HeaderFlag::BypassCache) => flags.bypass_cache = true,
+        Some(HeaderFlag::ValidateCache) => flags.validate_cache = true,
+        None => {}
+    }
+    let external = ExternalValidation::of(hop.headers).unwrap_or_else(|_| {
+        // An empty validator: past the cache.
+        flags.disable_cache = true;
+        None
+    });
+    let miss = || {
+        Err(NetError::new(
+            NetErrorCode::CacheMiss,
+            format!("{}: not in the HTTP cache", hop.url),
+        ))
+    };
+    let key = (!flags.disable_cache)
+        .then(|| cache_key(request, hop.url))
+        .flatten();
+    let Some(key) = key else {
+        return if flags.only_from_cache {
+            miss()
+        } else {
+            network(transport, &hop, hop.headers, asked).await
+        };
     };
     let head = match hop.method {
         "GET" => false,
         "HEAD" => true,
+        _ if flags.only_from_cache => return miss(),
         // A change to the resource: what was kept of it is gone, if it
         // worked (`NonErrorResponse`).
         "POST" | "PUT" | "DELETE" | "PATCH" => {
-            let response = network(transport, &hop, hop.headers).await?;
+            let response = network(transport, &hop, hop.headers, asked).await?;
             if (200..400).contains(&response.status) {
                 cache.remove(&key);
             }
             return Ok(response);
         }
-        _ => return network(transport, &hop, hop.headers).await,
+        _ => return network(transport, &hop, hop.headers, asked).await,
     };
+    // The caller's own validation is never answered from the cache.
+    if external.is_some() && flags.only_from_cache {
+        return miss();
+    }
     // What the cache sees of the request: its headers, with the `Accept`
     // the transport adds (one a `Vary` may name).
     let mut seen = hop.headers.to_vec();
@@ -95,10 +129,10 @@ pub(crate) async fn send(
             .as_ref()
             .is_some_and(|stored| stored.status == 200 && external.matches(&stored.headers));
         if !validating {
-            return network(transport, &hop, hop.headers).await;
+            return network(transport, &hop, hop.headers, asked).await;
         }
         let request_time = Time::now();
-        let response = network(transport, &hop, hop.headers).await?;
+        let response = network(transport, &hop, hop.headers, asked).await?;
         let response_time = Time::now();
         if response.status == 304 {
             if let Some(stored) = stored {
@@ -109,12 +143,15 @@ pub(crate) async fn send(
         return Ok(keep(slot, response, head, &seen, request_time, response_time));
     }
     let stored = match stored {
-        Some(stored) if flag != Some(HeaderFlag::BypassCache) => stored,
+        Some(stored) if !flags.bypass_cache => stored,
+        // Nothing, or from the cache only and not from it (nonsense, in
+        // Chromium's words): a miss either way.
+        _ if flags.only_from_cache => return miss(),
         // Nothing to use: a `HEAD` makes no entry.
-        _ if head => return network(transport, &hop, hop.headers).await,
+        _ if head => return network(transport, &hop, hop.headers, asked).await,
         _ => {
             let request_time = Time::now();
-            let response = network(transport, &hop, hop.headers).await?;
+            let response = network(transport, &hop, hop.headers, asked).await?;
             let response_time = Time::now();
             return Ok(keep(slot, response, false, &seen, request_time, response_time));
         }
@@ -123,7 +160,11 @@ pub(crate) async fn send(
         .vary
         .as_ref()
         .is_some_and(|vary| !vary.matches(&seen, &stored.headers));
-    let validation = if vary_mismatch || flag == Some(HeaderFlag::ValidateCache) {
+    let validation = if vary_mismatch {
+        Validation::Synchronous
+    } else if flags.skip_cache_validation {
+        Validation::None
+    } else if flags.validate_cache {
         Validation::Synchronous
     } else {
         headers::requires_validation(
@@ -137,6 +178,10 @@ pub(crate) async fn send(
     if validation == Validation::None {
         return Ok(answer(stored, hop.url, head));
     }
+    // From the cache only, but it has to be validated first.
+    if flags.only_from_cache {
+        return miss();
+    }
     let validators =
         headers::validation_headers(stored.status, stored.protocol, &stored.headers, vary_mismatch);
     let mut sent = hop.headers.to_vec();
@@ -144,7 +189,7 @@ pub(crate) async fn send(
         sent.extend(validators.iter().cloned());
     }
     let request_time = Time::now();
-    let response = network(transport, &hop, &sent).await?;
+    let response = network(transport, &hop, &sent, asked).await?;
     let response_time = Time::now();
     if validators.is_some() && response.status == 304 {
         let updated = update(cache, &key, stored, &response, &seen, request_time, response_time);
@@ -153,14 +198,38 @@ pub(crate) async fn send(
     Ok(keep(slot, response, head, &seen, request_time, response_time))
 }
 
-/// `hop` over the network, with `headers`.
+/// `hop` over the network, with `headers`, and the headers its request's
+/// own `flags` send (`HttpNetworkTransaction::BuildRequestHeaders`, under
+/// the cache, which doesn't see them): `Pragma: no-cache` and
+/// `Cache-Control: no-cache` when it bypasses the cache, `Cache-Control:
+/// max-age=0` when it validates.
 async fn network(
     transport: &HttpTransport,
     hop: &Hop<'_>,
     headers: &[(String, String)],
+    flags: LoadFlags,
 ) -> Result<RawResponse, NetError> {
+    let added: &[(&str, &str)] = if flags.bypass_cache {
+        &[("pragma", "no-cache"), ("cache-control", "no-cache")]
+    } else if flags.validate_cache {
+        &[("cache-control", "max-age=0")]
+    } else {
+        &[]
+    };
+    if added.is_empty() {
+        return transport
+            .send(hop.method, hop.url, hop.accept, headers, hop.body)
+            .await;
+    }
+    // Each in place of the request's own (`SetHeader`).
+    let mut sent: Vec<(String, String)> = headers
+        .iter()
+        .filter(|(name, _)| !added.iter().any(|(added, _)| name.eq_ignore_ascii_case(added)))
+        .cloned()
+        .collect();
+    sent.extend(added.iter().map(|(name, value)| ((*name).to_owned(), (*value).to_owned())));
     transport
-        .send(hop.method, hop.url, hop.accept, headers, hop.body)
+        .send(hop.method, hop.url, hop.accept, &sent, hop.body)
         .await
 }
 

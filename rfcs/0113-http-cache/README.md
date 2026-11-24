@@ -78,7 +78,7 @@ machopo 自己寫（已決定的第 4 條），照 RFC 9111 和 Chromium 的 `Ht
 
 ### load flag
 
-`ResourceRequest` 加一個 cache 的模式（Chromium 的 `LOAD_VALIDATE_CACHE`、`LOAD_BYPASS_CACHE`、`LOAD_SKIP_CACHE_VALIDATION`、`LOAD_ONLY_FROM_CACHE`、`LOAD_DISABLE_CACHE`）：`fetch()` 的 `Request.cache` 照 Blink 對到它們；重新整理時主要的資源 `LOAD_VALIDATE_CACHE`、子資源照常（Chromium 2016 年之後的做法）；強制重新整理全部 `LOAD_BYPASS_CACHE`；上一頁、下一頁 `LOAD_SKIP_CACHE_VALIDATION`；DevTools 的 `Network.setCacheDisabled` 讓那個分頁的請求都 `LOAD_DISABLE_CACHE`，`Network.clearBrowserCache` 清掉整個 cache。DevTools 的回應帶 `fromDiskCache`。
+`ResourceRequest` 加一個 cache 的模式（Chromium 的 `LOAD_VALIDATE_CACHE`、`LOAD_BYPASS_CACHE`、`LOAD_SKIP_CACHE_VALIDATION`、`LOAD_ONLY_FROM_CACHE`、`LOAD_DISABLE_CACHE`）：`fetch()` 的 `Request.cache` 照 Blink 對到它們；重新整理時主要的資源 `LOAD_VALIDATE_CACHE`、子資源照常（Chromium 2016 年之後的做法）；強制重新整理全部 `LOAD_BYPASS_CACHE`；上一頁、下一頁 `LOAD_SKIP_CACHE_VALIDATION`；DevTools 的 `Network.setCacheDisabled` 讓那個分頁的請求都 `LOAD_BYPASS_CACHE`（Blink 的 `InspectorNetworkAgent` 給子資源 `kBypassCache`、只能用 cache 的變成找不到；browser 的 `ApplyNetworkRequestOverrides` 給導覽 `LOAD_BYPASS_CACHE`：回應照樣存進 cache。原本寫的 `LOAD_DISABLE_CACHE` 是記錯的，2026-11-24 讀原始碼更正），`Network.clearBrowserCache` 清掉整個 cache。DevTools 的回應帶 `fromDiskCache`。
 
 ### 儲存
 
@@ -178,6 +178,11 @@ machopo 自己寫（已決定的第 4 條），照 RFC 9111 和 Chromium 的 `Ht
     - 對照 Chrome：2026-11-24 讀 Chromium `main` 的 `http_cache_transaction.cc`（`ShouldOpenOnlyMethods`、`DoCacheReadData`、`DoOverwriteCachedResponse` 的 `HEAD`）。
     - 理由：多的只是交易裡的幾個分支，行為照 Chrome。網頁很少用 `HEAD`，WPT 的 `fetch/http-cache/` 也沒有它的測試。
     - 不選 `HEAD` 不經過 cache（B）：每次都上網路，不新鮮的 entry 也不會因此更新或拿掉。
+
+11. **視窗裡照 Chrome 加強制重新整理的快捷鍵**（2026-11-24，使用者決定；A）：
+    - macOS 的 Shift+Cmd+R，其他平台的 Shift+F5、Ctrl+F5、Ctrl+Shift+R，和 CDP 的 `Page.reload` 的 `ignoreCache` 一樣是 Chromium 的 `RELOAD_BYPASSING_CACHE`：導覽 `LOAD_BYPASS_CACHE`，文件的 `load` 之前的子資源也繞過 cache。
+    - 理由：有了 cache，使用者需要一個繞過它的方法；只是在現有的重新整理旁邊多一組按鍵，加一份情境測試。
+    - 不選只留 CDP 的 `ignoreCache`（B）：視窗裡碰到舊的 cache 時只能等它過期。
 
 ## 待決定
 

@@ -576,3 +576,64 @@ fn a_star_exposes_every_header_but_with_credentials() {
     let url = format!("{}?other={}", page_server.url("/"), other.url("/data"));
     assert_eq!(report(&url), "1 / null");
 }
+
+/// A `fetch()`'s `cache` says how it uses the HTTP cache: `only-if-cached`
+/// and `force-cache` take the stored response, `no-cache` validates it
+/// (`Cache-Control: max-age=0` and its `ETag`), `reload` and `no-store`
+/// fetch it again (`Pragma: no-cache`), and `only-if-cached` of nothing
+/// stored is a network error.
+#[test]
+fn a_fetchs_cache_mode() {
+    let server = server(&[
+        (
+            "/",
+            Route::ok(
+                "text/html",
+                page(
+                    "const text = async (init) => (await fetch('/d', init)).text();
+                     log.push(await text());
+                     log.push(await text({ cache: 'only-if-cached', mode: 'same-origin' }));
+                     log.push(await text({ cache: 'force-cache' }));
+                     log.push(await text({ cache: 'no-cache' }));
+                     log.push(await text({ cache: 'reload' }));
+                     log.push(await text({ cache: 'no-store' }));
+                     try {
+                       await fetch('/other', { cache: 'only-if-cached', mode: 'same-origin' });
+                     } catch (e) { log.push(e.name); }",
+                ),
+            ),
+        ),
+        (
+            "/d",
+            Route::ok("text/plain", "d")
+                .with_header("Cache-Control", "max-age=60")
+                .with_header("ETag", "\"v1\"")
+                .revalidated(),
+        ),
+        ("/other", Route::ok("text/plain", "other")),
+    ]);
+    assert_eq!(report(&server.url("/")), "d / d / d / d / d / d / TypeError");
+    let sent: Vec<_> = server
+        .requests()
+        .into_iter()
+        .filter(|request| request.target == "/d")
+        .map(|request| {
+            (
+                request.header("cache-control").map(str::to_owned),
+                request.header("pragma").map(str::to_owned),
+                request.header("if-none-match").map(str::to_owned),
+            )
+        })
+        .collect();
+    let some = |value: &str| Some(value.to_owned());
+    assert_eq!(
+        sent,
+        [
+            (None, None, None),
+            (some("max-age=0"), None, some("\"v1\"")),
+            (some("no-cache"), some("no-cache"), None),
+            (some("no-cache"), some("no-cache"), None),
+        ]
+    );
+    assert!(server.requests().iter().all(|request| request.target != "/other"));
+}

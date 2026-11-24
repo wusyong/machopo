@@ -103,10 +103,6 @@ impl MemoryBackend {
     }
 
     /// Drops every entry (`DoomAllEntries`).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "DevTools' clearing the cache calls it, in a later step")
-    )]
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
         self.by_use.clear();

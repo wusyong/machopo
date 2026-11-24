@@ -495,6 +495,7 @@ impl RenderThread {
         time_origin: f64,
         timing: &crate::navigation_timing::NavigationTiming,
         loader: u64,
+        bypass_cache: bool,
     ) {
         let _span = trace_event::info_event!("commit_navigation", %url);
         let document_id = crate::frame_view::next_document_id();
@@ -619,6 +620,9 @@ impl RenderThread {
                     navigation: Some(navigation_id),
                 },
             );
+            if bypass_cache {
+                cx.set_reloaded_past_cache(document.get(cx.gc));
+            }
         });
         let view = FrameView::new(document.clone(), node, document_id, self.system_colors);
         match engine
@@ -940,6 +944,23 @@ impl RenderThread {
 
     /// The loader the DOM has for the document `document`
     /// (`Cx::document_loader`).
+    /// How the document `frame` shows has its subresources use the HTTP
+    /// cache (`Cx::subresource_cache_mode`); as usual for a frame that shows
+    /// none of the browser's.
+    fn subresource_cache_mode(&mut self, frame: FrameId) -> dom::SubresourceCacheMode {
+        let Some(document) = self.document_of_frame(frame) else {
+            return dom::SubresourceCacheMode::Default;
+        };
+        let Some(engine) = self.engine.as_mut() else {
+            return dom::SubresourceCacheMode::Default;
+        };
+        engine.dom_mut().read(|cx| {
+            cx.node_by_id(document)
+                .map(|document| cx.subresource_cache_mode(document))
+                .unwrap_or_default()
+        })
+    }
+
     fn loader_in_dom(&mut self, document: dom::NodeId) -> Option<u64> {
         let engine = self.engine.as_mut()?;
         engine.dom_mut().read(|cx| {
@@ -4464,9 +4485,14 @@ impl RenderThread {
     fn send_request_with_initiator(
         &mut self,
         frame: FrameId,
-        request: ResourceRequest,
+        mut request: ResourceRequest,
         initiator: impl FnOnce(&mut Self) -> Option<Initiator>,
     ) -> u64 {
+        let mode = self.subresource_cache_mode(frame);
+        request.load_flags = crate::loader::subresource_load_flags(&request, mode);
+        if self.network_agent.cache_disabled() {
+            request.load_flags = crate::loader::cache_disabled_load_flags(request.load_flags);
+        }
         let request_id = crate::loader::next_request_id();
         if self.network_agent.enabled() {
             let initiator = initiator(self);
@@ -4954,6 +4980,7 @@ impl dom_api::FrameClient for RendererFrameClient {
             kind,
             devtools_initiator: None,
             history_in_new_child_frame: false,
+            load_flags: protocol::network::LoadFlags::default(),
         });
         Some(id)
     }
@@ -5012,6 +5039,7 @@ impl dom_api::FrameClient for RendererFrameClient {
                 asked.initial,
                 dom,
             ),
+            load_flags: child_navigation_load_flags(asked.owner, dom),
         });
         Some(id)
     }
@@ -5053,6 +5081,21 @@ fn child_navigation_url(navigation: ChildNavigation) -> String {
         ChildNavigation::Srcdoc(_) => "about:srcdoc".to_owned(),
         ChildNavigation::AboutBlank => "about:blank".to_owned(),
     }
+}
+
+/// How an iframe's navigation uses the HTTP cache by its parent's document's
+/// load (`owner`'s, its iframe's document: Blink's `DetermineFrameCacheMode`
+/// for the frame), until that one's `load`: past the cache in a reload that
+/// bypassed it, stale or not back or forward.
+fn child_navigation_load_flags(owner: &NodeRoot, dom: &dom::Dom) -> protocol::network::LoadFlags {
+    let mode = dom.read(|cx| cx.subresource_cache_mode(cx.document_of(owner.get(cx.gc))));
+    let mut flags = protocol::network::LoadFlags::default();
+    match mode {
+        dom::SubresourceCacheMode::Default => {}
+        dom::SubresourceCacheMode::BypassCache => flags.bypass_cache = true,
+        dom::SubresourceCacheMode::ForceCache => flags.skip_cache_validation = true,
+    }
+    flags
 }
 
 /// Whether an iframe's navigation of a frame that shows its initial
@@ -5114,9 +5157,13 @@ impl RendererLoadSink {
         &self,
         request_id: u64,
         document: dom::NodeId,
-        request: ResourceRequest,
+        mut request: ResourceRequest,
         origin: &dom_api::FetchOrigin,
     ) {
+        request.load_flags = crate::loader::subresource_load_flags(&request, origin.cache_mode);
+        if self.network_agent.cache_disabled() {
+            request.load_flags = crate::loader::cache_disabled_load_flags(request.load_flags);
+        }
         if self.network_agent.enabled()
             && let (Some(frame_id), Some(document_url)) =
                 (origin.frame_token.clone(), origin.document_url.clone())
@@ -5190,7 +5237,11 @@ impl dom_api::LoadSink for RendererLoadSink {
             self.scheduler.post_fetch_failed(request.id);
             return None;
         }
-        let resource = crate::loader::fetch_resource_request(request);
+        let mut resource = crate::loader::fetch_resource_request(request);
+        resource.load_flags = crate::loader::subresource_load_flags(&resource, origin.cache_mode);
+        if self.network_agent.cache_disabled() {
+            resource.load_flags = crate::loader::cache_disabled_load_flags(resource.load_flags);
+        }
         let request_id = crate::loader::next_request_id();
         // Told to DevTools as it is sent, before anything of its response
         // can come (Blink's `ResourceLoadObserverForFrame::WillSendRequest`).

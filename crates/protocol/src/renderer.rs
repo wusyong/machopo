@@ -58,13 +58,21 @@ impl RedirectHop {
     }
 }
 
-/// How a navigation came about, as Navigation Timing tells it
-/// (`PerformanceNavigationTiming.type`; Blink's `WebNavigationType`).
+/// How a navigation came about (Blink's `WebFrameLoadType`): what
+/// Navigation Timing tells (`PerformanceNavigationTiming.type`: both reloads
+/// are `reload`), and how the load and the document's subresources use the
+/// HTTP cache.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum NavigationTimingType {
-    Navigate,
-    Reload,
+pub enum FrameLoadType {
+    /// A new document: a link, a URL typed, `location`.
+    Standard,
+    /// Back or forward: what is in the cache is used, stale or not.
     BackForward,
+    /// The document loaded again: validated with the server.
+    Reload,
+    /// Loaded again past the HTTP cache (Shift+Reload, DevTools'
+    /// `ignoreCache`): its subresources too, until its `load`.
+    ReloadBypassingCache,
 }
 use crate::viz::{BeginFrameArgs, LocalSurfaceId};
 use crate::webdriver::{WebDriverCommand, WebDriverError, WebDriverValue};
@@ -222,7 +230,7 @@ pub enum RendererMsg {
         /// Boxed: most messages are far smaller.
         loaded: Option<Box<NavigationLoad>>,
         /// How the navigation came about.
-        navigation_type: NavigationTimingType,
+        navigation_type: FrameLoadType,
     },
     /// `URLLoaderClient::OnComplete` of the load of the document navigation
     /// `navigation_id` committed in `frame`, which hadn't ended when it
@@ -681,6 +689,15 @@ pub enum RendererHostMsg {
         /// what the session history has for the frame there, if it has
         /// any, instead.
         history_in_new_child_frame: bool,
+        /// How the renderer has it use the HTTP cache (Blink's, Chromium's
+        /// `BeginNavigationParams::load_flags`): a child frame's by its
+        /// parent's document's load (past the cache in a reload that
+        /// bypasses it, stale or not back or forward), until that one's
+        /// `load`. The browser adds its own by the kind of navigation
+        /// (Chromium takes these cache flags of the renderer's,
+        /// `kAllowedBeginParamsLoadFlags`: they only touch the frame's own
+        /// entries).
+        load_flags: crate::network::LoadFlags,
     },
     /// `FrameHost::OpenURL`: a link followed to a new tab, which the
     /// browser decides whether to open.

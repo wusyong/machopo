@@ -216,14 +216,15 @@ fn a_session_navigates() {
     assert_eq!(session.get("/url"), b.as_str());
     ok(session.call("POST", "/refresh", None));
     assert_eq!(session.get("/title"), "B");
-    // Navigated to, forward to (no back-forward cache), refreshed.
+    // Navigated to and refreshed; forward to from the HTTP cache (no
+    // back-forward cache).
     assert_eq!(
         server
             .requests()
             .iter()
             .filter(|r| r.target == "/b")
             .count(),
-        3
+        2
     );
     let (status, value) = session.navigate("not a url");
     assert_eq!(error((status, value)), (400, "invalid argument".into()));

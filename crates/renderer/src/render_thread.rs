@@ -1029,10 +1029,10 @@ impl RenderThread {
         url: &str,
         mime_type: &str,
         loaded: Option<(&protocol::renderer::NavigationLoad, bool)>,
-        navigation_type: protocol::renderer::NavigationTimingType,
+        navigation_type: protocol::renderer::FrameLoadType,
         time_origin: f64,
     ) -> NavigationTiming {
-        use protocol::renderer::NavigationTimingType;
+        use protocol::renderer::FrameLoadType;
         let url = Url::parse(url).unwrap_or_else(|_| Url::parse("about:blank").unwrap());
         let load = loaded.map(
             |(loaded, no_referrer)| crate::navigation_timing::DocumentLoad {
@@ -1052,9 +1052,9 @@ impl RenderThread {
             },
         );
         let navigation_type = match navigation_type {
-            NavigationTimingType::Navigate => NavigationType::Navigate,
-            NavigationTimingType::Reload => NavigationType::Reload,
-            NavigationTimingType::BackForward => NavigationType::BackForward,
+            FrameLoadType::Standard => NavigationType::Navigate,
+            FrameLoadType::Reload | FrameLoadType::ReloadBypassingCache => NavigationType::Reload,
+            FrameLoadType::BackForward => NavigationType::BackForward,
         };
         let clock = self.clock;
         let at =
@@ -1110,6 +1110,9 @@ impl RenderThread {
         let time_origin = self
             .clock
             .before_now(ipc::TimeTicks::now().saturating_since(navigation_start));
+        // Its subresources bypass the HTTP cache too, until its `load`.
+        let bypass_cache =
+            navigation_type == protocol::renderer::FrameLoadType::ReloadBypassingCache;
         // An error page's is a URL of no origin's, the browser still
         // hearing of the one that failed.
         let document_url = if error_page {
@@ -1154,6 +1157,7 @@ impl RenderThread {
                 time_origin,
                 timing,
                 loader,
+                bypass_cache,
             )
         } else {
             let Ok(document_url) = Url::parse(&document_url) else {
@@ -1462,6 +1466,7 @@ impl RenderThread {
         time_origin: f64,
         timing: NavigationTiming,
         loader: u64,
+        bypass_cache: bool,
     ) -> bool {
         if self
             .document
@@ -1488,6 +1493,7 @@ impl RenderThread {
             time_origin,
             &timing,
             loader,
+            bypass_cache,
         );
         true
     }

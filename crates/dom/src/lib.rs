@@ -155,7 +155,7 @@ pub use flat::FlatChildren;
 pub use form::{FormAssociation, FormItem, PastNames, RadioList, disabled_walks, form_walks};
 pub use frame::{
     BlobUrlRequest, DocumentLoader, ElementChange, FrameNavigation, FrameOwnerChange,
-    NavigationInitiator, NavigationRequest,
+    NavigationInitiator, NavigationRequest, SubresourceCacheMode,
 };
 pub use geolocation::{GeoRequest, Geolocation, GeolocationPositionError, GeolocationStep};
 pub use headers::{Headers, HeadersGuard};
@@ -526,6 +526,9 @@ pub struct DocumentData {
     /// brought it, as its host gave them (`frame`'s `document_loader`).
     pub(crate) loader: Cell<Option<u64>>,
     pub(crate) loader_navigation: Cell<Option<u64>>,
+    /// Its host loaded it by a reload past the HTTP cache (`frame`'s
+    /// `subresource_cache_mode`).
+    pub(crate) reloaded_past_cache: Cell<bool>,
     /// Its base URL as last worked out (`base`).
     pub(crate) base_url: LocalExternal<base::BaseUrlCell>,
     /// An `about:blank` document's about base URL (HTML's), its creator's

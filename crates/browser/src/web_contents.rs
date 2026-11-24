@@ -5,11 +5,11 @@ use crossbeam_channel::Sender;
 use gfx::{RectF, Size};
 use ipc::TimeTicks;
 use protocol::network::{
-    CompletionStatus, LoadResult, NetError, NetErrorCode, RedirectInfo, RequestDestination,
-    ResourceRequest, ResponseHead,
+    CompletionStatus, LoadFlags, LoadResult, NetError, NetErrorCode, RedirectInfo,
+    RequestDestination, ResourceRequest, ResponseHead,
 };
 use protocol::renderer::{
-    BeginNavigationKind, HistoryEntryParams, NavigationLoad, NavigationTimingType, RedirectHop,
+    BeginNavigationKind, HistoryEntryParams, NavigationLoad, FrameLoadType, RedirectHop,
     RendererHostMsg, RendererMsg, StorageKind, VisualProperties, WindowOpenDisposition,
 };
 use protocol::viz::{
@@ -209,6 +209,9 @@ pub struct WebContents {
     /// The renderer has gone (`WebContents::IsCrashed`): the next
     /// navigation launches another.
     crashed: bool,
+    /// DevTools has the HTTP cache disabled for the tab
+    /// (`Network.setCacheDisabled`): its navigations go past it.
+    cache_disabled: bool,
     /// How many of the renderer's own new entries it has heard of
     /// (`DidCommitSameDocumentNavigation`s neither `replace` nor a
     /// traversal), which every place it gives the renderer says
@@ -223,7 +226,8 @@ pub struct WebContents {
 }
 
 /// What the renderer said of a navigation it asked for: its number for
-/// it, and who asked, for DevTools. Nothing for the browser's own.
+/// it, and who asked, for DevTools; nothing for the browser's own, but
+/// whether its reload bypasses the HTTP cache.
 #[derive(Debug, Default)]
 struct Asked {
     begin_id: Option<u64>,
@@ -231,6 +235,12 @@ struct Asked {
     /// document's origin.
     initiator: Option<FrameToken>,
     devtools_initiator: Option<String>,
+    /// A reload that bypasses the HTTP cache (Shift+Reload, DevTools'
+    /// `ignoreCache`: Chromium's `RELOAD_BYPASSING_CACHE`).
+    bypass_cache: bool,
+    /// The renderer's say on how it uses the HTTP cache (a child frame's
+    /// in a reload past it), added to the browser's own.
+    load_flags: LoadFlags,
 }
 
 /// What launches this tab's renderers.
@@ -357,6 +367,7 @@ impl WebContents {
             visible: true,
             focused: false,
             crashed: false,
+            cache_disabled: false,
             entries_heard: SequenceNumber::new(),
             launch,
             input_in_flight: 0,
@@ -524,6 +535,23 @@ impl WebContents {
         self.reload_as(Asked::default());
     }
 
+    /// DevTools has the HTTP cache disabled for the tab, or not
+    /// (`Network.setCacheDisabled`, as Chromium's `NetworkHandler` keeps it
+    /// for the navigations): its navigations go past it while it does.
+    pub fn set_cache_disabled(&mut self, disabled: bool) {
+        self.cache_disabled = disabled;
+    }
+
+    /// `NavigationController::Reload` with `RELOAD_BYPASSING_CACHE`: loads
+    /// the entry shown again past the HTTP cache, its subresources too until
+    /// its `load`.
+    pub fn reload_bypassing_cache(&mut self) {
+        self.reload_as(Asked {
+            bypass_cache: true,
+            ..Asked::default()
+        });
+    }
+
     fn reload_as(&mut self, asked: Asked) {
         let current = self.controller.current_index();
         if let Some(entry) = current.and_then(|current| self.controller.entry(current)) {
@@ -611,7 +639,7 @@ impl WebContents {
             url,
             asked,
             history,
-            NavigationTimingType::BackForward,
+            FrameLoadType::BackForward,
             TimeTicks::now(),
         );
     }
@@ -631,6 +659,7 @@ impl WebContents {
         kind: &BeginNavigationKind,
         devtools_initiator: Option<&str>,
         history_in_new_child_frame: bool,
+        load_flags: LoadFlags,
     ) {
         if !self.frame_tree.contains(frame) {
             return self.received_bad_message(BadMessageReason::NavigationOfUnknownFrame);
@@ -643,6 +672,10 @@ impl WebContents {
             begin_id: Some(id),
             initiator: Some(initiator),
             devtools_initiator: devtools_initiator.map(String::from),
+            // A page's `location.reload()` validates; only the browser
+            // reloads past the cache.
+            bypass_cache: false,
+            load_flags,
         };
         // A new child frame of a document back or forward loaded: what the
         // session history has for it in the entry its parent's document is
@@ -669,11 +702,11 @@ impl WebContents {
                     tracing::warn!(%url, why, "a page's navigation goes nowhere");
                     return self.dropped(frame, id);
                 }
-                (url.clone(), NavigationTimingType::Navigate)
+                (url.clone(), FrameLoadType::Standard)
             }
             BeginNavigationKind::Reload if main_frame => return self.reload_as(asked),
             BeginNavigationKind::Reload => match self.frame_tree.url(frame) {
-                Some(url) => (url.to_owned(), NavigationTimingType::Reload),
+                Some(url) => (url.to_owned(), FrameLoadType::Reload),
                 None => return self.dropped(frame, id),
             },
         };
@@ -924,10 +957,11 @@ impl WebContents {
         tracing::info!(%url, navigation_id, ?kind, "navigate");
         self.url = Some(url.clone());
         let navigation_type = match kind {
-            NavigationType::Reload => NavigationTimingType::Reload,
-            NavigationType::HistoryIndex(_) => NavigationTimingType::BackForward,
+            NavigationType::Reload if asked.bypass_cache => FrameLoadType::ReloadBypassingCache,
+            NavigationType::Reload => FrameLoadType::Reload,
+            NavigationType::HistoryIndex(_) => FrameLoadType::BackForward,
             NavigationType::NewEntry | NavigationType::Replace | NavigationType::Initial => {
-                NavigationTimingType::Navigate
+                FrameLoadType::Standard
             }
         };
         self.start_navigation(
@@ -957,7 +991,7 @@ impl WebContents {
         url: String,
         asked: Asked,
         history: HistoryEntryParams,
-        navigation_type: NavigationTimingType,
+        navigation_type: FrameLoadType,
         navigation_start: TimeTicks,
     ) {
         let main_frame = frame == self.frame_tree.root();
@@ -1013,6 +1047,15 @@ impl WebContents {
             self.frame_tree
                 .navigation_params(frame, &url, asked.initiator),
         );
+        request.load_flags = navigation_load_flags(navigation_type).union(asked.load_flags);
+        // DevTools' cache disabled: past it, whatever the navigation
+        // (`ApplyNetworkRequestOverrides`).
+        if self.cache_disabled {
+            request.load_flags = LoadFlags {
+                bypass_cache: true,
+                ..LoadFlags::default()
+            };
+        }
         let navigation = NavigationRequest {
             id: navigation_id,
             begin_id: asked.begin_id,
@@ -1834,6 +1877,7 @@ impl WebContents {
                 kind,
                 devtools_initiator,
                 history_in_new_child_frame,
+                load_flags,
             } => self.begin_renderer_navigation(
                 *frame,
                 *initiator,
@@ -1841,6 +1885,7 @@ impl WebContents {
                 kind,
                 devtools_initiator.as_deref(),
                 *history_in_new_child_frame,
+                *load_flags,
             ),
             RendererHostMsg::OpenUrl { url, disposition } => self.open_url(url, *disposition),
             // The embedder shows it.
@@ -1955,3 +2000,19 @@ impl WebContents {
             .unwrap_or_else(|e| e.into_inner()) = Box::new(|_, _| {});
     }
 }
+
+/// How a navigation of `load_type` uses the HTTP cache, the browser's
+/// say, not the renderer's (`CalculateCacheLoadFlags`, for a `GET`: machopo's
+/// navigations have no body): a reload validates, a reload bypassing it
+/// doesn't read it, back and forward use it stale or not.
+fn navigation_load_flags(load_type: FrameLoadType) -> LoadFlags {
+    let mut flags = LoadFlags::default();
+    match load_type {
+        FrameLoadType::Standard => {}
+        FrameLoadType::Reload => flags.validate_cache = true,
+        FrameLoadType::ReloadBypassingCache => flags.bypass_cache = true,
+        FrameLoadType::BackForward => flags.skip_cache_validation = true,
+    }
+    flags
+}
+

@@ -99,6 +99,11 @@ pub struct ResourceRequest {
     /// Its body, whole; `None` for a null one.
     pub body: Option<BigBuffer>,
     pub redirect: RedirectMode,
+    /// How it uses the HTTP cache (Chromium's `load_flags`, its cache
+    /// bits): a renderer's say what `fetch()`'s `cache` and its document's
+    /// load ask for (they only touch its own entries); a navigation's are
+    /// the browser's, by the kind of navigation.
+    pub load_flags: LoadFlags,
     /// What only the browser gives a request (Chromium's
     /// `ResourceRequest::TrustedParams`): none from a renderer, whose
     /// requests the browser gives their document's loader's (one a
@@ -148,7 +153,42 @@ impl ResourceRequest {
             credentials: CredentialsMode::Include,
             body: None,
             redirect: RedirectMode::Follow,
+            load_flags: LoadFlags::default(),
             trusted: None,
+        }
+    }
+}
+
+/// How a request uses the HTTP cache: Chromium's cache load flags
+/// (`net/base/load_flags_list.h`), each its own; none is the normal use.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LoadFlags {
+    /// Validated with the server even if fresh (`LOAD_VALIDATE_CACHE`: a
+    /// reload; sends `Cache-Control: max-age=0`).
+    pub validate_cache: bool,
+    /// Not read from the cache, but stored (`LOAD_BYPASS_CACHE`: a reload
+    /// that bypasses it; sends `Pragma: no-cache`, `Cache-Control:
+    /// no-cache`).
+    pub bypass_cache: bool,
+    /// A stored response is used even if stale (`LOAD_SKIP_CACHE_VALIDATION`:
+    /// back and forward).
+    pub skip_cache_validation: bool,
+    /// From the cache or not at all (`LOAD_ONLY_FROM_CACHE`):
+    /// `ERR_CACHE_MISS` when it has nothing to use.
+    pub only_from_cache: bool,
+    /// Neither read from the cache nor stored (`LOAD_DISABLE_CACHE`).
+    pub disable_cache: bool,
+}
+
+impl LoadFlags {
+    /// The flags either has (`a | b`).
+    pub fn union(self, other: Self) -> Self {
+        Self {
+            validate_cache: self.validate_cache || other.validate_cache,
+            bypass_cache: self.bypass_cache || other.bypass_cache,
+            skip_cache_validation: self.skip_cache_validation || other.skip_cache_validation,
+            only_from_cache: self.only_from_cache || other.only_from_cache,
+            disable_cache: self.disable_cache || other.disable_cache,
         }
     }
 }
@@ -403,6 +443,9 @@ pub struct ResponseHead {
     /// headers aren't counted as such); 0 when it didn't come over the
     /// network.
     pub encoded_headers_length: u64,
+    /// The HTTP cache answered it from a stored response
+    /// (`URLResponseHead::was_fetched_via_cache`): DevTools' `fromDiskCache`.
+    pub was_fetched_via_cache: bool,
 }
 
 /// A response with the whole of its body, for those who take it in one
@@ -504,6 +547,8 @@ pub enum NetErrorCode {
     CertInvalid,
     /// The body's `Content-Encoding` didn't decode.
     ContentDecodingFailed,
+    /// A load that may only use the HTTP cache had nothing there to use.
+    CacheMiss,
 }
 
 impl NetErrorCode {
@@ -530,6 +575,7 @@ impl NetErrorCode {
             Self::CertCommonNameInvalid => "ERR_CERT_COMMON_NAME_INVALID",
             Self::CertInvalid => "ERR_CERT_INVALID",
             Self::ContentDecodingFailed => "ERR_CONTENT_DECODING_FAILED",
+            Self::CacheMiss => "ERR_CACHE_MISS",
         }
     }
 }

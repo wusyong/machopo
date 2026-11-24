@@ -588,19 +588,23 @@ pub(crate) fn send_fetches(scope: &mut Scope<'_, '_, '_>) {
                 let Some(frame) = state.frames.of_document(document).map(|frame| frame.id) else {
                     continue;
                 };
-                let (loader, document_url) = state.dom.read(|cx| {
+                let (loader, document_url, cache_mode) = state.dom.read(|cx| {
                     let document = cx.node_by_id(document);
                     (
                         document.and_then(|document| cx.document_loader(document)),
                         document
                             .and_then(|document| cx.document_url(document))
                             .map(|url| url.to_str().to_string()),
+                        document
+                            .map(|document| cx.subresource_cache_mode(document))
+                            .unwrap_or_default(),
                     )
                 });
                 let origin = dom_api::FetchOrigin {
                     loader,
                     frame_token: state.frames.token(frame).map(|token| token.to_string()),
                     document_url,
+                    cache_mode,
                     stack: state
                         .dom
                         .take_request_stack(dom::StackAsker::Fetch(request.id)),

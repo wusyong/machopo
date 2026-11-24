@@ -232,3 +232,62 @@ fn about_documents_base_urls() {
         assert_eq!(base(cx, blank), "https://example.test/first/own/");
     });
 }
+
+/// How a document's subresources use the HTTP cache by how it was loaded
+/// (`subresource_cache_mode`, Blink's `DetermineFrameCacheMode`): as usual
+/// once its `load` fired; past the cache for a reload that bypassed it;
+/// stored, stale or not, for one back or forward loaded; a child frame's by
+/// its parent's while that one's is special, unless its own bypasses.
+#[test]
+fn a_documents_load_says_how_its_subresources_use_the_cache() {
+    use dom::{NavigationTiming, NavigationType, SubresourceCacheMode as Mode};
+    let mut dom = Dom::new();
+    dom.mutate(|cx| {
+        let bypass = |document| cx.set_reloaded_past_cache(document);
+        let timing = |document, navigation_type| {
+            let window = cx.window_of(document).expect("a window");
+            cx.set_navigation_timing(
+                window,
+                NavigationTiming {
+                    navigation_type,
+                    ..NavigationTiming::default()
+                },
+            );
+        };
+        let body = page(cx);
+        let top = cx.document_of(body);
+        let iframe = cx.create_element(top, QualName::html("iframe"));
+        cx.append_child(body, iframe).unwrap();
+        let child = cx.document_of(page(cx));
+        cx.set_content_document(iframe, Some(child));
+        assert_eq!(cx.subresource_cache_mode(top), Mode::Default);
+        assert_eq!(cx.subresource_cache_mode(child), Mode::Default);
+        // Back or forward: the child goes by its parent's.
+        timing(top, NavigationType::BackForward);
+        assert_eq!(cx.subresource_cache_mode(top), Mode::ForceCache);
+        assert_eq!(cx.subresource_cache_mode(child), Mode::ForceCache);
+        // A child's own reload past the cache comes first.
+        bypass(child);
+        assert_eq!(cx.subresource_cache_mode(child), Mode::BypassCache);
+        // Once the parent has had its `load`, the child goes by its own,
+        // until its own `load`.
+        cx.set_completely_loaded(top);
+        assert_eq!(cx.subresource_cache_mode(top), Mode::Default);
+        assert_eq!(cx.subresource_cache_mode(child), Mode::BypassCache);
+        cx.set_completely_loaded(child);
+        assert_eq!(cx.subresource_cache_mode(child), Mode::Default);
+        // A parent reloaded past the cache: its child goes past it too.
+        let body = page(cx);
+        let reloaded = cx.document_of(body);
+        let iframe = cx.create_element(reloaded, QualName::html("iframe"));
+        cx.append_child(body, iframe).unwrap();
+        let inner = cx.document_of(page(cx));
+        cx.set_content_document(iframe, Some(inner));
+        bypass(reloaded);
+        assert_eq!(cx.subresource_cache_mode(inner), Mode::BypassCache);
+        // A reload that validates is as usual for its subresources.
+        let other = cx.document_of(page(cx));
+        timing(other, NavigationType::Reload);
+        assert_eq!(cx.subresource_cache_mode(other), Mode::Default);
+    });
+}

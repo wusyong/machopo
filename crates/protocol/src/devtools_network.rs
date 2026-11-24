@@ -94,7 +94,7 @@ pub fn response_json(head: &ResponseHead) -> Value {
             && !head.protocol.is_empty()
             && head.remote_address.is_some(),
         "connectionId": 0,
-        "fromDiskCache": false,
+        "fromDiskCache": head.was_fetched_via_cache,
         "fromServiceWorker": false,
         "fromPrefetchCache": false,
         "encodedDataLength": head.encoded_headers_length,

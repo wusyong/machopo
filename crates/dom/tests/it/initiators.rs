@@ -40,6 +40,7 @@ fn fetch(id: u64) -> FetchHostRequest {
         mode: RequestMode::Cors,
         credentials: RequestCredentials::SameOrigin,
         redirect: RequestRedirect::Follow,
+        cache: dom::RequestCache::Default,
         initiator: "null".into(),
     })
 }

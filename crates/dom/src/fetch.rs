@@ -217,6 +217,7 @@ pub struct FetchRequest {
     pub mode: RequestMode,
     pub credentials: RequestCredentials,
     pub redirect: RequestRedirect,
+    pub cache: RequestCache,
     /// The fetching global's origin, serialized (`null` for an opaque
     /// one).
     pub initiator: String,

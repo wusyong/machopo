@@ -2931,3 +2931,121 @@ fn a_killed_browsers_allocating_renderer_goes_with_it() {
 fn a_killed_browsers_hung_renderers_all_go_with_it() {
     renderers_go_with_a_killed_browser(&[Some(HUNG), Some(HUNG)]);
 }
+
+/// The page's loader after a navigation that `method` starts with `params`,
+/// once the page has loaded.
+fn navigated(browser: &mut Browser, session: &str, method: &str, params: Value) {
+    browser.call(Some(session), method, params).unwrap();
+    let loader = browser.wait_for(|event| match &event.event {
+        EventKind::FrameStartedNavigating { loader_id, .. } => Some(loader_id.clone()),
+        _ => None,
+    });
+    browser.load(&loader);
+}
+
+/// A reload validates the page, saying `max-age=0`, and its subresources go
+/// as usual (a fresh one isn't asked for, a stale one is validated), its
+/// iframe's document and its subresources too; one that ignores the cache
+/// asks for all of them again, saying `no-cache`; back to the page takes
+/// what is stored, stale or not.
+#[test]
+fn reloads_and_history_use_the_http_cache() {
+    let stale = |content_type: &str, body: &str, etag: &str| {
+        Route::ok(content_type, body)
+            .with_header("Cache-Control", "no-cache")
+            .with_header("ETag", etag)
+            .revalidated()
+    };
+    let server = server(&[
+        (
+            "/a",
+            stale(
+                "text/html",
+                "<!DOCTYPE html><link rel=stylesheet href=/fresh.css><script src=/stale.js></script>\
+                 <iframe src=/frame></iframe><script>fetch('/fetched')</script><img src=/fresh.png>a",
+                "\"a\"",
+            ),
+        ),
+        (
+            "/fresh.css",
+            Route::ok("text/css", "p {}").with_header("Cache-Control", "max-age=60"),
+        ),
+        ("/stale.js", stale("text/javascript", "", "\"s\"")),
+        (
+            "/frame",
+            Route::ok("text/html", "<!DOCTYPE html><script src=/frame.js></script>frame")
+                .with_header("Cache-Control", "max-age=60"),
+        ),
+        (
+            "/frame.js",
+            Route::ok("text/javascript", "").with_header("Cache-Control", "max-age=60"),
+        ),
+        (
+            "/fetched",
+            Route::ok("text/plain", "").with_header("Cache-Control", "max-age=60"),
+        ),
+        (
+            "/fresh.png",
+            Route::ok("image/png", "").with_header("Cache-Control", "max-age=60"),
+        ),
+        ("/b", Route::ok("text/html", "<!DOCTYPE html>b")),
+    ]);
+    // What each request of `target` said: its `Cache-Control`, `Pragma` and
+    // `If-None-Match`.
+    let sent = |target: &str| -> Vec<(Option<String>, Option<String>, Option<String>)> {
+        server
+            .requests()
+            .into_iter()
+            .filter(|request| request.target == target)
+            .map(|request| {
+                (
+                    request.header("cache-control").map(str::to_owned),
+                    request.header("pragma").map(str::to_owned),
+                    request.header("if-none-match").map(str::to_owned),
+                )
+            })
+            .collect()
+    };
+    let some = |value: &str| Some(value.to_owned());
+    let mut browser = Browser::start();
+    let session = browser.attach();
+    browser.navigate(&session, &server.url("/a"));
+    navigated(&mut browser, &session, "Page.reload", json!({}));
+    navigated(&mut browser, &session, "Page.reload", json!({ "ignoreCache": true }));
+    browser.navigate(&session, &server.url("/b"));
+    let history = browser
+        .call(Some(&session), "Page.getNavigationHistory", json!({}))
+        .unwrap();
+    let a = history["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["url"] == server.url("/a"))
+        .unwrap()["id"]
+        .clone();
+    navigated(
+        &mut browser,
+        &session,
+        "Page.navigateToHistoryEntry",
+        json!({ "entryId": a }),
+    );
+    let no_cache = (some("no-cache"), some("no-cache"), None);
+    assert_eq!(
+        sent("/a"),
+        [
+            (None, None, None),
+            (some("max-age=0"), None, some("\"a\"")),
+            no_cache.clone(),
+        ]
+    );
+    assert_eq!(sent("/fresh.css"), [(None, None, None), no_cache.clone()]);
+    assert_eq!(
+        sent("/stale.js"),
+        [(None, None, None), (None, None, some("\"s\"")), no_cache.clone()]
+    );
+    assert_eq!(sent("/frame"), [(None, None, None), no_cache.clone()]);
+    assert_eq!(sent("/frame.js"), [(None, None, None), no_cache.clone()]);
+    assert_eq!(sent("/fetched"), [(None, None, None), no_cache.clone()]);
+    assert_eq!(sent("/fresh.png"), [(None, None, None), no_cache]);
+    assert!(browser.end().success());
+}

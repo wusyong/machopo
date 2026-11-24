@@ -18,7 +18,7 @@ use protocol::network::{
     LoadResult, NetError, NetErrorCode, RequestDestination, ResourceRequest, TrustedParams,
 };
 use protocol::renderer::{
-    CompositorMsg, HistoryEntryParams, NavigationLoad, NavigationTimingType, RendererHostMsg,
+    CompositorMsg, HistoryEntryParams, NavigationLoad, FrameLoadType, RendererHostMsg,
     RendererMsg,
 };
 use protocol::viz::{
@@ -611,7 +611,7 @@ impl RenderProcessHost {
         begin_id: Option<u64>,
         history: HistoryEntryParams,
         navigation_start: ipc::TimeTicks,
-        navigation_type: NavigationTimingType,
+        navigation_type: FrameLoadType,
     ) -> Committer {
         Committer {
             to_renderer: self.to_renderer.clone(),
@@ -709,7 +709,7 @@ pub(crate) struct Committer {
     /// When the navigation started (`NavigationRequest`'s
     /// `navigation_start`).
     navigation_start: ipc::TimeTicks,
-    navigation_type: NavigationTimingType,
+    navigation_type: FrameLoadType,
 }
 
 /// A navigation's document as it commits.

@@ -99,6 +99,8 @@ pub enum Command {
     Back,
     Forward,
     Reload,
+    /// Reload past the HTTP cache (Chrome's `IDC_RELOAD_BYPASSING_CACHE`).
+    ReloadBypassingCache,
     /// Focus the address field, everything selected.
     FocusLocation,
     /// A new tab after the others, shown.
@@ -123,7 +125,8 @@ pub enum Command {
 /// - back / forward: Cmd+[ / Cmd+] and Cmd+← / Cmd+→ on macOS (the arrows
 ///   only outside the address field, where they move the caret), Alt+← /
 ///   Alt+→ elsewhere;
-/// - reload: Cmd+R / Ctrl+R, and F5;
+/// - reload: Cmd+R / Ctrl+R, and F5; past the HTTP cache, with Shift
+///   (Shift+Cmd+R / Ctrl+Shift+R, Shift+F5), and Ctrl+F5;
 /// - the address field: Cmd+L / Ctrl+L, Alt+D, F6;
 /// - tabs: Cmd+T / Ctrl+T opens one, Cmd+W / Ctrl+W closes one; Ctrl+Tab
 ///   and Ctrl+Shift+Tab show the next and the previous, as do
@@ -152,6 +155,8 @@ pub fn command_for(
     let shift = modifiers.shift_key();
     let mac_tabs = mac && modifiers.super_key() && modifiers.alt_key();
     match key {
+        // Shift+F5 and Ctrl+F5 bypass the cache, as in Chrome.
+        Key::Named(NamedKey::F5) if shift || ctrl => Some(Command::ReloadBypassingCache),
         Key::Named(NamedKey::F5) => Some(Command::Reload),
         Key::Named(NamedKey::F6) => Some(Command::FocusLocation),
         Key::Named(NamedKey::Tab) if ctrl && shift => Some(Command::PreviousTab),
@@ -165,6 +170,7 @@ pub fn command_for(
         // winit's logical key ignores Ctrl, so this is the letter. Shift
         // makes [ and ] the braces on most layouts.
         Key::Character(c) => match c.to_lowercase().as_str() {
+            "r" if primary && shift => Some(Command::ReloadBypassingCache),
             "r" if primary => Some(Command::Reload),
             // Safari's to show or hide its sidebar; before Cmd+L.
             "l" if primary && shift => Some(Command::ToggleSidebarCollapsed),
@@ -1444,6 +1450,7 @@ impl BrowserView {
                 self.tabs.active_mut().go_forward();
             }
             Command::Reload => self.tabs.active_mut().reload(),
+            Command::ReloadBypassingCache => self.tabs.active_mut().reload_bypassing_cache(),
             Command::FocusLocation => self.chrome.focus_omnibox(),
             Command::NewTab => self.new_tab(),
             Command::CloseTab => self.close_tab(self.tabs.active_index()),
@@ -1895,6 +1902,10 @@ mod tests {
         assert_eq!(on(&left, cmd, true), Some(Command::Back));
         assert_eq!(on(&right, cmd, true), Some(Command::Forward));
         assert_eq!(on(&char("R"), cmd, true), Some(Command::Reload));
+        assert_eq!(
+            on(&char("R"), cmd | ModifiersState::SHIFT, true),
+            Some(Command::ReloadBypassingCache)
+        );
         assert_eq!(on(&char("l"), cmd, true), Some(Command::FocusLocation));
         assert_eq!(on(&left, alt, true), None);
         assert_eq!(on(&char("r"), ctrl, true), None);
@@ -1911,6 +1922,10 @@ mod tests {
         assert_eq!(on(&right, alt, false), Some(Command::Forward));
         assert_eq!(command_for(&left, alt, false, true), Some(Command::Back));
         assert_eq!(on(&char("r"), ctrl, false), Some(Command::Reload));
+        assert_eq!(
+            on(&char("R"), ctrl | ModifiersState::SHIFT, false),
+            Some(Command::ReloadBypassingCache)
+        );
         assert_eq!(on(&char("l"), ctrl, false), Some(Command::FocusLocation));
         assert_eq!(on(&char("d"), alt, false), Some(Command::FocusLocation));
         assert_eq!(on(&char("["), ctrl, false), None);
@@ -1921,6 +1936,12 @@ mod tests {
             on(&Key::Named(NamedKey::F5), none, false),
             Some(Command::Reload)
         );
+        for bypass in [ModifiersState::SHIFT, ctrl] {
+            assert_eq!(
+                on(&Key::Named(NamedKey::F5), bypass, false),
+                Some(Command::ReloadBypassingCache)
+            );
+        }
         assert_eq!(
             on(&Key::Named(NamedKey::F6), none, true),
             Some(Command::FocusLocation)

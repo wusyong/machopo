@@ -1350,6 +1350,7 @@ fn page_navigates(web_contents: &mut WebContents, url: &str) {
         },
         devtools_initiator: None,
         history_in_new_child_frame: false,
+        load_flags: Default::default(),
     });
 }
 
@@ -1591,7 +1592,9 @@ mod links {
         web_contents.reload();
         assert_eq!(wait_for(&mut web_contents, &host_rx, committed), two);
         assert_eq!(history(&web_contents), (vec![one, two], Some(1)));
-        // Back, forward and reload each loaded the page again.
+        // Back and forward each loaded the page again from the HTTP cache
+        // (stale as it is: Chromium's `LOAD_SKIP_CACHE_VALIDATION`), the
+        // reload from the server.
         let loads = |path: &str| {
             server
                 .requests()
@@ -1599,7 +1602,7 @@ mod links {
                 .filter(|r| r.target == path)
                 .count()
         };
-        assert_eq!((loads("/"), loads("/two")), (2, 3));
+        assert_eq!((loads("/"), loads("/two")), (1, 2));
         web_contents.shutdown();
     }
 
@@ -4482,6 +4485,7 @@ document.querySelector('base').setAttribute('href', '/later/');
                 kind: BeginNavigationKind::Reload,
                 devtools_initiator: None,
                 history_in_new_child_frame: false,
+                load_flags: Default::default(),
             },
             |main, _| RendererHostMsg::BeginNavigation {
                 frame: main,
@@ -4490,6 +4494,7 @@ document.querySelector('base').setAttribute('href', '/later/');
                 kind: BeginNavigationKind::Reload,
                 devtools_initiator: None,
                 history_in_new_child_frame: false,
+                load_flags: Default::default(),
             },
             // A commit in a frame not there.
             |_, _| RendererHostMsg::DidCommitNavigation {
@@ -4874,7 +4879,8 @@ document.querySelector('base').setAttribute('href', '/later/');
         );
         assert!(web_contents.go_back());
         assert_eq!(logged(&mut web_contents, &host_rx), "state-7");
-        assert_eq!(loads_of_the_page(&server), 3);
+        // The reload from the server, back from the HTTP cache.
+        assert_eq!(loads_of_the_page(&server), 2);
         web_contents.shutdown();
     }
 
@@ -4958,7 +4964,8 @@ document.querySelector('base').setAttribute('href', '/later/');
                 Some(0)
             )
         );
-        assert_eq!(loads_of_the_page(&server), 2);
+        // Loaded again from the HTTP cache.
+        assert_eq!(loads_of_the_page(&server), 1);
         web_contents.shutdown();
     }
 

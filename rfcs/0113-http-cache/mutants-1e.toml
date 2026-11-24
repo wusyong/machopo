@@ -1,0 +1,587 @@
+# Step 1e's mutants: `python3 scripts/test.py mutate rfcs/0113-http-cache/mutants-1e.toml`.
+test = ["cargo", "test", "-q", "-p", "net", "http_cache"]
+# A change to `dom_api` rebuilds the engines and the shell.
+timeout = 1800
+
+# 1e-1: the load flags in the cache.
+
+[[mutant]]
+name = "a header's no-cache doesn't bypass"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''        Some(HeaderFlag::BypassCache) => flags.bypass_cache = true,'''
+to = '''        Some(HeaderFlag::BypassCache) => {}'''
+
+[[mutant]]
+name = "an empty validator doesn't keep the load from the cache"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''        flags.disable_cache = true;
+        None
+    });'''
+to = '''        None
+    });
+'''
+
+[[mutant]]
+name = "disable_cache doesn't keep the load from the cache"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''    let key = (!flags.disable_cache)
+        .then(|| cache_key(request, hop.url))'''
+to = '''    let key = true
+        .then(|| cache_key(request, hop.url))'''
+
+[[mutant]]
+name = "only from the cache without a key goes to the network"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''        return if flags.only_from_cache {
+            miss()'''
+to = '''        return if flags.only_from_cache && false {
+            miss()'''
+
+[[mutant]]
+name = "only from the cache for a POST goes to the network"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''        _ if flags.only_from_cache => return miss(),
+        // A change to the resource'''
+to = '''        _ if flags.only_from_cache && false => return miss(),
+        // A change to the resource'''
+
+[[mutant]]
+name = "only from the cache with the caller's validation goes to the network"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''    if external.is_some() && flags.only_from_cache {'''
+to = '''    if external.is_some() && flags.only_from_cache && false {'''
+
+[[mutant]]
+name = "only from the cache with nothing stored goes to the network"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''        _ if flags.only_from_cache => return miss(),
+        // Nothing to use'''
+to = '''        _ if flags.only_from_cache && false => return miss(),
+        // Nothing to use'''
+
+[[mutant]]
+name = "only from the cache validates"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''    if flags.only_from_cache {
+        return miss();
+    }
+    let validators ='''
+to = '''    if flags.only_from_cache && false {
+        return miss();
+    }
+    let validators ='''
+
+[[mutant]]
+name = "bypass_cache reads the cache"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''        Some(stored) if !flags.bypass_cache => stored,'''
+to = '''        Some(stored) => stored,'''
+
+[[mutant]]
+name = "skipping validation doesn't skip it"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''    } else if flags.skip_cache_validation {
+        Validation::None'''
+to = '''    } else if flags.skip_cache_validation && false {
+        Validation::None'''
+
+[[mutant]]
+name = "skipping validation goes before a Vary that differs"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''    let validation = if vary_mismatch {
+        Validation::Synchronous
+    } else if flags.skip_cache_validation {'''
+to = '''    let validation = if vary_mismatch && !flags.skip_cache_validation {
+        Validation::Synchronous
+    } else if flags.skip_cache_validation {'''
+
+[[mutant]]
+name = "validate_cache doesn't validate"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''    } else if flags.validate_cache {
+        Validation::Synchronous'''
+to = '''    } else if flags.validate_cache && false {
+        Validation::Synchronous'''
+
+[[mutant]]
+name = "bypassing sends no Pragma"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''        &[("pragma", "no-cache"), ("cache-control", "no-cache")]'''
+to = '''        &[("cache-control", "no-cache")]'''
+
+[[mutant]]
+name = "validating sends nothing"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''        &[("cache-control", "max-age=0")]'''
+to = '''        &[]'''
+
+[[mutant]]
+name = "the headers a request's flags send follow the effective flags"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''            network(transport, &hop, hop.headers, asked).await
+        };
+    };'''
+to = '''            network(transport, &hop, hop.headers, flags).await
+        };
+    };'''
+
+[[mutant]]
+name = "a request's own Cache-Control stays beside the added one"
+file = "crates/net/src/http_cache/transaction.rs"
+from = '''        .filter(|(name, _)| !added.iter().any(|(added, _)| name.eq_ignore_ascii_case(added)))'''
+to = '''        .filter(|_| true)'''
+
+# 1e-2: fetch()'s cache mode.
+
+[[mutant]]
+name = "no-store keeps the response"
+file = "crates/renderer/src/loader.rs"
+from = '''        dom::RequestCache::NoStore => {
+            flags.disable_cache = true;'''
+to = '''        dom::RequestCache::NoStore => {
+            let _ = &mut flags;'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "loader"]
+
+[[mutant]]
+name = "reload validates"
+file = "crates/renderer/src/loader.rs"
+from = '''        dom::RequestCache::Reload => flags.bypass_cache = true,'''
+to = '''        dom::RequestCache::Reload => flags.validate_cache = true,'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "loader"]
+
+[[mutant]]
+name = "no-cache doesn't validate"
+file = "crates/renderer/src/loader.rs"
+from = '''        dom::RequestCache::NoCache => flags.validate_cache = true,'''
+to = '''        dom::RequestCache::NoCache => {}'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "loader"]
+
+[[mutant]]
+name = "force-cache validates a stale one"
+file = "crates/renderer/src/loader.rs"
+from = '''        dom::RequestCache::ForceCache => flags.skip_cache_validation = true,'''
+to = '''        dom::RequestCache::ForceCache => {}'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "loader"]
+
+[[mutant]]
+name = "only-if-cached may go to the network"
+file = "crates/renderer/src/loader.rs"
+from = '''            flags.only_from_cache = true;
+            flags.skip_cache_validation = true;
+        }
+    }
+    flags'''
+to = '''            flags.skip_cache_validation = true;
+        }
+    }
+    flags'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "loader"]
+
+[[mutant]]
+name = "a fetch's request has no load flags"
+file = "crates/renderer/src/loader.rs"
+from = '''    resource.load_flags = cache_load_flags(request.cache);'''
+to = '''    let _ = cache_load_flags(request.cache);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "fetch::a_fetchs_cache_mode"]
+
+[[mutant]]
+name = "fetch() doesn't hand its cache mode to the host"
+file = "crates/dom_api/src/fetch.rs"
+from = '''        cache: data.cache,
+        initiator,'''
+to = '''        cache: dom::RequestCache::Default,
+        initiator,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "fetch::a_fetchs_cache_mode"]
+
+# 1e-3: navigations, and the subresources of a document by its load.
+
+[[mutant]]
+name = "a reload doesn't validate"
+file = "crates/browser/src/web_contents.rs"
+from = '''        FrameLoadType::Reload => flags.validate_cache = true,'''
+to = '''        FrameLoadType::Reload => {}'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "automation_pipe::reloads_and_history"]
+
+[[mutant]]
+name = "a reload past the cache reads it"
+file = "crates/browser/src/web_contents.rs"
+from = '''        FrameLoadType::ReloadBypassingCache => flags.bypass_cache = true,'''
+to = '''        FrameLoadType::ReloadBypassingCache => {}'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "automation_pipe::reloads_and_history"]
+
+[[mutant]]
+name = "back validates"
+file = "crates/browser/src/web_contents.rs"
+from = '''        FrameLoadType::BackForward => flags.skip_cache_validation = true,'''
+to = '''        FrameLoadType::BackForward => {}'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "automation_pipe::reloads_and_history"]
+
+[[mutant]]
+name = "a reload asked to bypass the cache doesn't"
+file = "crates/browser/src/web_contents.rs"
+from = '''            NavigationType::Reload if asked.bypass_cache => FrameLoadType::ReloadBypassingCache,'''
+to = '''            NavigationType::Reload if asked.bypass_cache && false => FrameLoadType::ReloadBypassingCache,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "automation_pipe::reloads_and_history"]
+
+[[mutant]]
+name = "the renderer's flags for a navigation are left out"
+file = "crates/browser/src/web_contents.rs"
+from = '''        request.load_flags = navigation_load_flags(navigation_type).union(asked.load_flags);'''
+to = '''        request.load_flags = navigation_load_flags(navigation_type);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "automation_pipe::reloads_and_history"]
+
+[[mutant]]
+name = "a union keeps only the first's bypass"
+file = "crates/protocol/src/network.rs"
+from = '''            bypass_cache: self.bypass_cache || other.bypass_cache,'''
+to = '''            bypass_cache: self.bypass_cache,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "automation_pipe::reloads_and_history"]
+
+[[mutant]]
+name = "Page.reload's ignoreCache is ignored"
+file = "crates/shell/src/automation_session.rs"
+from = '''                let reload = if params.ignore_cache == Some(true) {'''
+to = '''                let reload = if params.ignore_cache == Some(true) && false {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "automation_pipe::reloads_and_history"]
+
+[[mutant]]
+name = "Shift+Cmd+R is a reload that validates"
+file = "crates/shell/src/browser_view.rs"
+from = '''            "r" if primary && shift => Some(Command::ReloadBypassingCache),'''
+to = '''            "r" if primary && shift && false => Some(Command::ReloadBypassingCache),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "browser_view"]
+
+[[mutant]]
+name = "Ctrl+F5 is a reload that validates"
+file = "crates/shell/src/browser_view.rs"
+from = '''        Key::Named(NamedKey::F5) if shift || ctrl => Some(Command::ReloadBypassingCache),'''
+to = '''        Key::Named(NamedKey::F5) if shift => Some(Command::ReloadBypassingCache),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "browser_view"]
+
+[[mutant]]
+name = "the shortcut to reload past the cache reloads as usual"
+file = "crates/shell/src/browser_view.rs"
+from = '''            Command::ReloadBypassingCache => self.tabs.active_mut().reload_bypassing_cache(),'''
+to = '''            Command::ReloadBypassingCache => self.tabs.active_mut().reload(),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "browser_view::shift_reload"]
+
+[[mutant]]
+name = "a page reloaded past the cache isn't marked so"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        let bypass_cache =
+            navigation_type == protocol::renderer::FrameLoadType::ReloadBypassingCache;'''
+to = '''        let bypass_cache =
+            navigation_type == protocol::renderer::FrameLoadType::ReloadBypassingCache && false;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "automation_pipe::reloads_and_history"]
+
+[[mutant]]
+name = "an element's load doesn't go by its document's"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        request.load_flags = crate::loader::subresource_load_flags(&request, origin.cache_mode);'''
+to = '''        let _ = origin.cache_mode;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "automation_pipe::reloads_and_history"]
+
+[[mutant]]
+name = "a fetch doesn't go by its document's load"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        resource.load_flags = crate::loader::subresource_load_flags(&resource, origin.cache_mode);'''
+to = '''        let _ = &mut resource;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "automation_pipe::reloads_and_history"]
+
+[[mutant]]
+name = "the renderer's own loads don't go by their document's"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        let mode = self.subresource_cache_mode(frame);
+        request.load_flags = crate::loader::subresource_load_flags(&request, mode);'''
+to = '''        let _ = &mut request;
+'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "automation_pipe::reloads_and_history"]
+
+[[mutant]]
+name = "an iframe's navigation doesn't go by its parent's load"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        dom::SubresourceCacheMode::BypassCache => flags.bypass_cache = true,
+        dom::SubresourceCacheMode::ForceCache => flags.skip_cache_validation = true,
+    }
+    flags
+}
+
+/// Whether an iframe's navigation'''
+to = '''        dom::SubresourceCacheMode::BypassCache => {}
+        dom::SubresourceCacheMode::ForceCache => flags.skip_cache_validation = true,
+    }
+    flags
+}
+
+/// Whether an iframe's navigation'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "automation_pipe::reloads_and_history"]
+
+[[mutant]]
+name = "a subresource of a document reloaded past the cache reads it"
+file = "crates/renderer/src/loader.rs"
+from = '''        dom::SubresourceCacheMode::BypassCache => flags.bypass_cache = true,'''
+to = '''        dom::SubresourceCacheMode::BypassCache => {}'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "loader"]
+
+[[mutant]]
+name = "a subresource of a document back loaded validates"
+file = "crates/renderer/src/loader.rs"
+from = '''        dom::SubresourceCacheMode::ForceCache => flags.skip_cache_validation = true,'''
+to = '''        dom::SubresourceCacheMode::ForceCache => {}'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "loader"]
+
+[[mutant]]
+name = "a conditional subresource isn't validated"
+file = "crates/renderer/src/loader.rs"
+from = '''        dom::SubresourceCacheMode::Default => flags.validate_cache = is_conditional(&request.headers),'''
+to = '''        dom::SubresourceCacheMode::Default => {}'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "loader"]
+
+[[mutant]]
+name = "If-Range isn't conditional"
+file = "crates/renderer/src/loader.rs"
+from = '''            "if-range",'''
+to = '''            "if-rangx",'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "loader"]
+
+[[mutant]]
+name = "a subresource that says how goes by its document's"
+file = "crates/renderer/src/loader.rs"
+from = '''    if request.load_flags != LoadFlags::default() {
+        return request.load_flags;
+    }'''
+to = '''    if request.load_flags != LoadFlags::default() && false {
+        return request.load_flags;
+    }'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "loader"]
+
+[[mutant]]
+name = "an element's load origin has no cache mode"
+file = "crates/dom_api/src/engine.rs"
+from = '''            node.map(|node| cx.subresource_cache_mode(node))
+                .unwrap_or_default(),'''
+to = '''            node.map(|_| dom::SubresourceCacheMode::Default)
+                .unwrap_or_default(),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "automation_pipe::reloads_and_history"]
+
+[[mutant]]
+name = "a fetch's origin has no cache mode"
+file = "crates/dom_js/src/frames.rs"
+from = '''                        document
+                            .map(|document| cx.subresource_cache_mode(document))
+                            .unwrap_or_default(),'''
+to = '''                        document
+                            .map(|_| dom::SubresourceCacheMode::Default)
+                            .unwrap_or_default(),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "automation_pipe::reloads_and_history"]
+
+[[mutant]]
+name = "after its load a document's subresources still go by its load"
+file = "crates/dom/src/frame.rs"
+from = '''        if self.is_completely_loaded(document) {
+            return SubresourceCacheMode::Default;
+        }'''
+to = '''        if self.is_completely_loaded(document) && false {
+            return SubresourceCacheMode::Default;
+        }'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "frames::a_documents_load"]
+
+[[mutant]]
+name = "a reload past the cache isn't seen"
+file = "crates/dom/src/frame.rs"
+from = '''            .is_some_and(|data| data.reloaded_past_cache.get())'''
+to = '''            .is_some_and(|data| data.reloaded_past_cache.get() && false)'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "frames::a_documents_load"]
+
+[[mutant]]
+name = "a child frame doesn't go by its parent's"
+file = "crates/dom/src/frame.rs"
+from = '''            if mode != SubresourceCacheMode::Default {
+                return mode;
+            }'''
+to = '''            if mode != SubresourceCacheMode::Default && false {
+                return mode;
+            }'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "frames::a_documents_load"]
+
+[[mutant]]
+name = "back or forward isn't seen"
+file = "crates/dom/src/frame.rs"
+from = '''            .is_some_and(|timing| timing.navigation_type == crate::NavigationType::BackForward);'''
+to = '''            .is_some_and(|timing| timing.navigation_type == crate::NavigationType::Reload);'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "frames::a_documents_load"]
+
+# 1e-4: DevTools.
+
+[[mutant]]
+name = "clearing doesn't drop what is stored"
+file = "crates/net/src/http_cache/mod.rs"
+from = '''        state.backend.clear();'''
+to = '''        let _ = &mut state.backend;'''
+test = ["cargo", "test", "-q", "-p", "net", "http_cache"]
+
+[[mutant]]
+name = "clearing doesn't drop what is being stored"
+file = "crates/net/src/http_cache/mod.rs"
+from = '''        state.clears = state.clears.saturating_add(1);'''
+to = '''        let _ = &mut state.clears;'''
+test = ["cargo", "test", "-q", "-p", "net", "http_cache"]
+
+[[mutant]]
+name = "what is being stored is kept after a clear"
+file = "crates/net/src/http_cache/mod.rs"
+from = '''        if state.clears == clears {'''
+to = '''        if true {'''
+test = ["cargo", "test", "-q", "-p", "net", "http_cache"]
+
+[[mutant]]
+name = "the network service doesn't clear"
+file = "crates/net/src/lib.rs"
+from = '''                                cache.clear();
+                                done();'''
+to = '''                                done();'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_network::devtools_sees"]
+
+[[mutant]]
+name = "a response from the cache isn't told as one"
+file = "crates/net/src/url_loader.rs"
+from = '''        was_fetched_via_cache: raw.from_cache,'''
+to = '''        was_fetched_via_cache: false,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_network::devtools_sees"]
+
+[[mutant]]
+name = "DevTools isn't told what came from the cache"
+file = "crates/protocol/src/devtools_network.rs"
+from = '''        "fromDiskCache": head.was_fetched_via_cache,'''
+to = '''        "fromDiskCache": false,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_network::devtools_sees"]
+
+[[mutant]]
+name = "the renderer's agent doesn't keep setCacheDisabled"
+file = "crates/renderer/src/render_thread/network_agent.rs"
+from = '''                    state.cache_disabled = params'''
+to = '''                    state.cache_disabled = false && params'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_network::devtools_sees"]
+
+[[mutant]]
+name = "the renderer's agent never has the cache disabled"
+file = "crates/renderer/src/render_thread/network_agent.rs"
+from = '''            .any(|state| state.cache_disabled)'''
+to = '''            .any(|_| false)'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_network::devtools_sees"]
+
+[[mutant]]
+name = "a subresource the parser or a stylesheet asks for goes to the cache"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        request.load_flags = crate::loader::subresource_load_flags(&request, origin.cache_mode);
+        if self.network_agent.cache_disabled() {'''
+to = '''        request.load_flags = crate::loader::subresource_load_flags(&request, origin.cache_mode);
+        if false {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_network::devtools_sees"]
+
+[[mutant]]
+name = "a subresource sent with its initiator goes to the cache"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        request.load_flags = crate::loader::subresource_load_flags(&request, mode);
+        if self.network_agent.cache_disabled() {'''
+to = '''        request.load_flags = crate::loader::subresource_load_flags(&request, mode);
+        if false {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_network::devtools_sees"]
+
+[[mutant]]
+name = "a fetch goes to the cache"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        if self.network_agent.cache_disabled() {
+            resource.load_flags'''
+to = '''        if false {
+            resource.load_flags'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_network::devtools_sees"]
+
+[[mutant]]
+name = "a navigation goes to the cache"
+file = "crates/browser/src/web_contents.rs"
+from = '''        if self.cache_disabled {'''
+to = '''        if false {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_network::devtools_sees"]
+
+[[mutant]]
+name = "the tab isn't told"
+file = "crates/browser/src/web_contents.rs"
+from = '''        self.cache_disabled = disabled;'''
+to = '''        let _ = disabled;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_network::devtools_sees"]
+
+[[mutant]]
+name = "another tab's session disables the cache"
+file = "crates/shell/src/automation_session.rs"
+from = '''            .any(|attached| attached.tab == tab && attached.cache_disabled);'''
+to = '''            .any(|attached| attached.cache_disabled);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_network::devtools_sees"]
+
+[[mutant]]
+name = "a session detached keeps it disabled"
+file = "crates/shell/src/automation_session.rs"
+from = '''        self.update_cache_disabled(browser, tab);
+        self.forwarded.retain'''
+to = '''        self.forwarded.retain'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_network::devtools_sees"]
+
+[[mutant]]
+name = "a client gone keeps it disabled"
+file = "crates/shell/src/automation_session.rs"
+from = '''            tabs.push(attached.tab);'''
+to = '''            let _ = &mut tabs;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_network::devtools_sees"]
+
+[[mutant]]
+name = "Network.disable keeps it disabled"
+file = "crates/shell/src/automation_session.rs"
+from = '''                attached.cache_disabled = false;
+                let tab = attached.tab;'''
+to = '''                let tab = attached.tab;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_network::devtools_sees"]
+
+[[mutant]]
+name = "Network on or off isn't told to the tab"
+file = "crates/shell/src/automation_session.rs"
+from = '''                attached.cache_disabled = false;
+                let tab = attached.tab;
+                self.update_cache_disabled(browser, tab);'''
+to = '''                attached.cache_disabled = false;
+                let _ = attached.tab;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_network::devtools_sees"]
+
+[[mutant]]
+name = "setCacheDisabled is kept with Network off"
+file = "crates/shell/src/automation_session.rs"
+from = '''                attached.cache_disabled = attached.network
+                    &&'''
+to = '''                attached.cache_disabled = true
+                    &&'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_network::devtools_sees"]
+
+[[mutant]]
+name = "setCacheDisabled isn't kept"
+file = "crates/shell/src/automation_session.rs"
+from = '''                attached.cache_disabled = attached.network
+                    &&'''
+to = '''                attached.cache_disabled = false
+                    &&'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_network::devtools_sees"]
+
+[[mutant]]
+name = "setCacheDisabled isn't told to the tab"
+file = "crates/shell/src/automation_session.rs"
+from = '''                    && params.get("cacheDisabled").and_then(Value::as_bool) == Some(true);
+                let tab = attached.tab;
+                self.update_cache_disabled(browser, tab);'''
+to = '''                    && params.get("cacheDisabled").and_then(Value::as_bool) == Some(true);
+                let _ = attached.tab;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_network::devtools_sees"]
+
+[[mutant]]
+name = "clearBrowserCache doesn't clear"
+file = "crates/shell/src/automation_session.rs"
+from = '''                    contents.network().clear_http_cache(move || reply.done());'''
+to = '''                    reply.done();'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_network::devtools_sees"]

@@ -130,6 +130,9 @@ enum Job {
     Load(Load),
     Cookies(cookies::ScriptCookies),
     Manager(cookies::CookieManagerCall),
+    /// Drop every stored response (`NetworkContext::ClearHttpCache`), then
+    /// tell `done`.
+    ClearHttpCache(Box<dyn FnOnce() + Send>),
 }
 
 struct Load {
@@ -295,6 +298,12 @@ impl NetworkContext {
                             Job::Manager(call) => {
                                 cookies.wait_for_load().await;
                                 cookies.answer_manager(call);
+                                continue;
+                            }
+                            // The loads after it find nothing stored before.
+                            Job::ClearHttpCache(done) => {
+                                cache.clear();
+                                done();
                                 continue;
                             }
                         };
@@ -489,6 +498,16 @@ impl NetworkContext {
             filter,
             done: Box::new(done),
         });
+    }
+
+    /// Drops every response the HTTP cache keeps
+    /// (`NetworkContext::ClearHttpCache`), then calls `done` on the
+    /// `NetworkService` thread: a load asked for after this finds none of
+    /// them.
+    pub fn clear_http_cache(&self, done: impl FnOnce() + Send + 'static) {
+        if self.jobs.send(Job::ClearHttpCache(Box::new(done))).is_err() {
+            tracing::warn!("network service is gone; dropping the browser's clearing its cache");
+        }
     }
 
     fn send_manager(&self, call: cookies::CookieManagerCall) {
