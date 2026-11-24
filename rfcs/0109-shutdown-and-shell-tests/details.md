@@ -1,8 +1,36 @@
-# RFC 0109 的細節：結束的流程，和 `shell` 的測試
+# RFC 0109 的細節：結束的流程（graceful shutdown）
 
 這份是 `README.md` 的補充，放支撐它的細節。`README.md` 裡的結論和決定以那邊為準，這裡不重複。
 
 兩個盤點（結束的流程、`shell` 的測試）是 2026-11-22 到 23 做的，基準是 `647ab5a`，在 Linux 上（Fedora 45、24 個邏輯 CPU、`MACHOPO_GPU_ADAPTER=cpu` 的 lavapipe、debug build）。重複跑了幾次、各壞幾次在 `progress.md`。macOS 和 Windows 沒有量。
+
+## 2026-11-24 的重新評估
+
+RFC 0110、0111、0112 merge 之後（`main` 的 `4e5e0ef`）對照程式和 CI 重看兩個盤點。
+
+**每一類現在的狀態**：
+
+| 類 | 盤點時（`647ab5a`） | 2026-11-24 |
+| --- | --- | --- |
+| A1 到 A6（產品的競爭） | 根因是擁有權，等 RFC 0110 | 0110 修掉，每一個都有必壞的測試（0110 的 `progress.md`） |
+| B1、B2（算畫了幾張） | 測試等錯了東西 | RFC 0112 照本意改寫：第一張 frame 的像素和時間、load 之後畫了幾張 |
+| B3 到 B8 | 測試等錯了東西 | 程式沒動，照下面的審核改寫 |
+| C1、C2（`unused_port`） | 搶資源 | 程式沒動（`net::test_server::unused_port` 照樣放掉 port 才回傳） |
+| D1 | 修掉了 | |
+| S1 到 S9（結束） | 盤點 | 對過程式都還在：`CHILD_EXIT_WAIT`、machopodriver 的 `CLOSE_TIMEOUT` 都是 5 秒，`shell` 沒有處理訊號，`BrowserWindow` 沒有 `Drop`，pipe 的 writer 照樣 `join`。量到的時間在第 3 段重量 |
+
+**CI**（`gh run list --workflow CI --limit 40`，2026-11-22 到 24）：0110 merge（2026-11-23 13:52）之後 9 次，壞過 1 次（45197631781，B1，之後 0112 改寫了），之後 7 次綠燈。之前壞的是 A1、A2、A3。
+
+### B3 到 B8 的審核
+
+逐一讀過測試和它要守的行為，六個都是測試假設了機器不忙、或時間不會剛好相等，產品照規範是對的：
+
+- **B3**（`documents::idle_callbacks`）：要求第一個 idle callback 的 `timeRemaining()` 大於 0。HTML 的 `timeRemaining()` 在 idle period 的期限過了之後是 0，CPU 被搶走時 callback 開始的那一刻期限已經過了。
+- **B4**（`automation_pipe::the_profiler_samples_the_pages_script`）：200 ms 的 script 要求 20 ms 間隔的樣本不超過 25 個、0.5 ms 的至少 100 個。樣本的個數取決於 V8 的 sampler thread 拿到多少 CPU；`Profile` 的 `timeDeltas` 記著每個樣本之間的時間，不受影響。
+- **B5**（`automation_pipe::the_profile_tells_waiting_from_rendering`）：200 ms 的 sleep 要求 `(idle)` 至少 200 個樣本，同 B4。
+- **B6**（`documents::about_blank_has_its_initiators_origin`）：`<iframe id=same src=/child.html>` 在 `<script>` 之前，parser 照時間讓出時，iframe 在 script 設 `same.onload` 之前就載完，`load` 等不到。parser 讓出合規範（Chrome 也讓出）。
+- **B7**（`web_animations::a_replaced_animation_is_removed`）：兩個動畫的 `duration` 都是 50 ms，剛好是 3 個 headless 的 frame（frame 的時間是 1000/60 的倍數），有時 `finish` 和 `remove` 排定的時間完全相等；Web Animations 的事件先照排定的時間、同時的照 composite order 排，a 的兩個事件就排在一起（`finish a remove a finish b`）。Chrome for Testing 152 跑 5 次都是測試要的 `finish a finish b remove a …`：它的 frame 照真的時間，碰不到相等。
+- **B8**（`transitions::a_frames_events_go_by_when`）：transition 的 pending 在第一次 tick 之前解決時，`transitionrun` 和 `transitionstart` 的時間相同，照 composite order 排成 `run b / start b / run a / start a`（合規範）。Chrome for Testing 152 跑 5 次都是 `run b / start b / end b / run a / start a / end a`：照 transition 分組，和規範的先照時間排不同，也和測試要的 `run b / run a / start b / start a / end b / end a` 不同。
 
 ## CI 上壞過的
 

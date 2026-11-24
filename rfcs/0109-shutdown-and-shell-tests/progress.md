@@ -1,4 +1,4 @@
-# RFC 0109 的進度：結束的流程，和 `shell` 的測試
+# RFC 0109 的進度：結束的流程（graceful shutdown）
 
 開始日期：2026-11-22
 
@@ -8,8 +8,9 @@
 | --- | --- | --- |
 | 0. 盤點結束的流程 | 做完，待審查（只在 Linux 上量） | 2026-11-23 |
 | 1. 審查 `shell` 的測試 | 做完，待審查 | 2026-11-23 |
-| 2. 修 `shell` 的測試 | 等「待決定」的第 2 階段那幾項 | |
-| 3. 定結束的規則 | 沒開始 | |
+| 1b. 重新評估（RFC 0110、0111、0112 之後）：A 類修掉、B1 和 B2 改寫，B3 到 B8 審核、對過 Chrome，範圍改成以結束為主（已決定的事項第 3 條） | 做完，待審查 | 2026-11-24 |
+| 2. 收掉 `shell` 測試的尾巴（B3 到 B8、C1 和 C2、S6） | 等「待決定」的第 2 段那幾項 | |
+| 3. 重量、定結束的規則 | 沒開始 | |
 | 4. 照規則改 | 沒開始 | |
 | 5. 驗收 | 沒開始 | |
 
@@ -21,6 +22,10 @@
 | `shell` 的測試：每個模組的分類、壞過的每一個的原因和把握 | `details.md` 的「`shell` 的測試的審查」；不改程式，所以沒有測試 |
 
 ## 做過的檢查
+
+### 重新評估（2026-11-24，Linux：Fedora 45，`main` 的 `4e5e0ef`）
+
+沒有改程式。對照程式確認 S1 到 S9、B3 到 B8、C1 和 C2 都還在（`details.md` 的「2026-11-24 的重新評估」）；`gh run list` 看 0110 merge 之後的 9 次 CI（1 次失敗，是 B1）。B7、B8 的頁面在 Chrome for Testing 152 各跑 5 次（經過 `scripts/bench` 的 server 和 `run_in_chrome`，`testRunner.reportHarnessResults` 換成 `POST`）：B7 5 次都是 `finish a finish b remove a removed 50 frame 0.4 0.2 0.2`，B8 5 次都是 `run b / start b / end b / run a / start a / end a`。
 
 ### 第 0、1 階段（2026-11-22 到 23，Linux：Fedora 45、24 個邏輯 CPU、lavapipe、debug build，`647ab5a`）
 
