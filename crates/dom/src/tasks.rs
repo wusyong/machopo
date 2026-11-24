@@ -127,13 +127,34 @@ impl<'gc> Cx<'_, 'gc> {
         }
     }
 
-    /// Whether a task of number `number` may run now: in a pass, only one
-    /// numbered before it began.
+    /// Whether a task of number `number` may run now: the one the host's
+    /// scheduler runs (`target_task`), wherever it is in its queue; in a
+    /// pass, only one numbered before it began.
     pub(crate) fn task_may_run(&self, number: u64) -> bool {
+        if let Some(target) = self.changes.task_target.get() {
+            return number == target;
+        }
         self.changes
             .task_limit
             .get()
             .is_none_or(|limit| number < limit)
+    }
+
+    /// The host's scheduler runs task `number` (a token of its own stands
+    /// for each task, `TaskWaker`), or none: until it is taken out of its
+    /// queue it is the first of its queue and the only one that may run,
+    /// as each of Blink's tasks is a closure of its own whatever was
+    /// queued before it (a timer set as the thread ran past an earlier
+    /// one's time comes first: its token was queued first). Taken, the
+    /// others may run again (what it runs may run other tasks).
+    pub fn target_task(&self, number: Option<u64>) {
+        self.changes.task_target.set(number);
+    }
+
+    /// The task the host's scheduler runs is taken out of its queue: the
+    /// others may run again.
+    pub(crate) fn task_taken(&self) {
+        self.changes.task_target.set(None);
     }
 
     /// A pass of the host's begins: until it ends, only the tasks numbered
@@ -155,10 +176,10 @@ impl<'gc> Cx<'_, 'gc> {
         self.changes.tasks_queued.set(queued);
     }
 
-    /// `context`'s next task of one of its queues if it is task `number`,
-    /// the one a token of the host's scheduler stands for: none if that
-    /// task is no more (cancelled, run, its window gone), or isn't next in
-    /// its queue. Whether it is due is the scheduler's to say.
+    /// `context`'s task `number` and the queue it is in, the one a token
+    /// of the host's scheduler stands for (`target_task` set to it, so it
+    /// is its queue's first): none if that task is no more (cancelled,
+    /// run, its window gone). Whether it is due is the scheduler's to say.
     pub fn task_numbered(
         &self,
         context: Gc<'gc, ExecutionContext>,

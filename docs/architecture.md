@@ -247,3 +247,16 @@ style、layout、paint 和 parse 有很多「沒變就沿用上一次的結果�
 - **hit test 的走訪改了**（新的目標、順序、`pointer-events` 的規則）：paint 記錄目標的地方（`Painter::push_hit`）要跟著改，兩者必須一樣。
 - **新的 effect（blend、mask）或 effect node 的新理由**（`will-change`、合成）：`IntersectionObserver` 判斷扭曲的效果時（`paint` 的 `intersection::Mapper::distorted`）只認 opacity 和 filter，新的真效果要加進去；有了不是真效果的 effect node 之後，往祖先找的那一步才有作用。text 的 item 的 visual rect 留給 glyph 的空間只在 `glyph_reach`、`svg_glyph_reach` 改：可見的判斷照它們扣掉。
 - **parse 的 fast path 認得的元素**（`html` 的 `fast_path`、`fast_path_build`）：只能加 tree builder 在「in body」照巢狀建樹、parser 不必替它做別的事的元素；會關掉開著的元素的（像 `p`、`li`、標題），要在 `scan` 加對應的檢查（`closes_p`、`is_special` 這類）。debug build 每次也用 fragment parsing algorithm parse 一次，比對兩棵樹。
+
+### Event loop：加新的工作時要跟著改的地方
+
+renderer 的 main thread 沒有「task 之間」另外做的事：`RenderThread::run` 只取一個 task、跑它、跑 task 之後的觀察者（`after_task`）、沒有 task 時跑一個 idle callback，要等下一個 task 之前決定要不要 main frame。新的工作照 Chrome 在哪裡做，放進下面三類之一，不加進 loop、也不讓 loop 替它算醒來的時間。漏改的結果多半不是 crash，而是那件事不發生或晚發生，而且畫面的 frame 和輸入照樣叫醒 loop，測試常常看不出來：寫一個只有它在等的測試（`shell` 的 `event_loop` 的接力的寫法：通道一直有 task 時它照樣發生）或情境。
+
+- **當場**（Blink 在發生的當下做的：`probe::`、`LocalFrameClient`）：在 engine 的呼叫裡經過 host 的 hook 做（`FrameClient`、`LoadSink`，hook 可以拿 DevTools agent 的 `Rc`）。hook 不能回頭執行 script；DevTools 的先問有沒有 session 要。導覽是這一類：hook 當場送給 Browser，renderer 的帳在呼叫之後照送了什麼對照，兩邊要一起改。
+- **scheduler 的 task**：
+  - DOM 的 task（timer、element task、訊息）由 `dom` 排，`TaskWaker` 送記號給 scheduler，renderer 不用改。記號輪到時跑它自己的那一個 task，不管它在 DOM 的 queue 裡排第幾（`Cx::target_task`，像 Blink 的 task 是自己的 closure）：DOM 裡新的一種 task 要在挑 task 的地方經過 `task_may_run`、取出時呼叫 `task_taken`，否則記號找不到它，它永遠不跑。debug build 在 loop 要等之前檢查有沒有到期卻沒有記號的 DOM task（`assert_no_dom_task_lost`）。
+  - renderer 自己的工作：加一種 `InternalTask`、在 `run_internal` 處理。處理的地方自己檢查還該不該做（取消了、改了時間的什麼都不做；用另一個時鐘比的提早一點被叫到時再排一次，像 intersection 的 `delay`）。在每個設定或改時間的地方都 post（`post_internal`、`post_internal_at`）：只在 timer 跑的時候排下一次，會漏掉第一次。同一個最早的時間一直被要求的（每個 task 之後、每個 frame 重算的）用 `post_internal_once_at`，不要自己記排了哪個時間。
+  - 延後的 task 到期之後、scheduler 挑下一個 task 時才排進去（Blink 的 `SelectNextTask`），排在那時已經 post 的 task 之後；script 停在斷點時不取 DOM 和 renderer 自己的 queue。
+- **task 之後**（Chrome 的 `TaskObserver::DidProcessTask`）：在 `after_task` 加一步，註解寫明對應 Chrome 的哪一個。先後有依賴：engine 留下的請求（`start_image_fetches`、`start_script_fetches`）送出之後才送 blob URL 的撤銷，撤銷之後才結束導覽的取消窗口（Browser 在那之後才 commit），DevTools 的事件在這些之後，要 frame 的和 request stack 的清理在最後。只在 DOM 的 task 之後要做的放進 `after_dom_tasks`（`load` 的判斷、testharness 的結果）。
+- **要不要 main frame**：新的理由加進 `update_begin_main_frame`，不在每個 task 之後另外決定：一個 task 要的 frame 在下一個 task 之前可能已經畫了，在那之間決定會多要一個。
+- **worker 的 loop 不一樣**：一輪一輪跑 DOM 的 task（`begin_task_pass`），訊息和 V8 的 platform task 經過它自己的 inbox（`WorkerTask`）。

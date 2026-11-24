@@ -53,7 +53,7 @@ name = "no task looks at the network once it is quiet"
 file = "crates/renderer/src/render_thread.rs"
 from = '''        if let Some(at) = Instant::now().checked_add(wait) {
             self.scheduler
-                .post_internal_at(InternalTask::NetworkIdle, at);
+                .post_internal_once_at(InternalTask::NetworkIdle, at);
         }'''
 to = '''        if let Some(at) = Instant::now().checked_add(wait) {
             let _ = at;
@@ -62,9 +62,9 @@ to = '''        if let Some(at) = Instant::now().checked_add(wait) {
 [[mutant]]
 name = "no task runs the guests when their wait is over"
 file = "crates/renderer/src/render_thread.rs"
-from = '''        self.guests_posted = Some(at);
-        self.scheduler.post_internal_at(InternalTask::Guests, at);'''
-to = '''        self.guests_posted = Some(at);'''
+from = '''            self.scheduler
+                .post_internal_once_at(InternalTask::Guests, at);'''
+to = '''            let _ = at;'''
 test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "wasm_documents::"]
 
 [[mutant]]
@@ -135,3 +135,27 @@ name = "a javascript: URL's document has a window of its own"
 file = "crates/dom_js/src/engine.rs"
 from = '''        if url.starts_with("about:") || url.starts_with("javascript:") {'''
 to = '''        if url.starts_with("about:") {'''
+
+[[mutant]]
+name = "a task asked for again is posted again"
+file = "crates/renderer/src/task_queue.rs"
+from = '''                    .any(|&(posted, when)| posted == task && when <= near)'''
+to = '''                    .any(|&(posted, when)| posted == task && when <= near && false)'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "task_queue"]
+
+[[mutant]]
+name = "a task asked for again a little sooner is posted again"
+file = "crates/renderer/src/task_queue.rs"
+from = '''        let near = at.checked_add(Duration::from_millis(1)).unwrap_or(at);'''
+to = '''        let near = at;'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "task_queue"]
+
+[[mutant]]
+name = "a task asked for once is never posted again"
+file = "crates/renderer/src/task_queue.rs"
+from = '''        if let MainThreadTask::Internal(taken) = task {
+            self.posted_once.retain(|&(posted, _)| posted != taken);
+        }'''
+to = '''        if let MainThreadTask::Internal(taken) = task {
+            let _ = taken;
+        }'''

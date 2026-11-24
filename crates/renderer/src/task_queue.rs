@@ -180,6 +180,10 @@ struct State {
     delayed: std::collections::BinaryHeap<std::cmp::Reverse<Delayed>>,
     /// The next delayed task's place among those due at once, from 1.
     delayed_order: u64,
+    /// The renderer's own tasks posted for the earliest of what keeps
+    /// asking for them (`post_internal_once_at`), and when: until the
+    /// first of each is taken.
+    posted_once: Vec<(InternalTask, Instant)>,
     /// The next task's number, from 1: 0 is what was put back first
     /// (`put_back`).
     next: u64,
@@ -257,6 +261,16 @@ impl State {
                 interrupt: false,
             });
         }
+    }
+
+    /// `queue`'s first task, taken: the next of the same renderer's own
+    /// task posted for the earliest is posted anew.
+    fn take(&mut self, queue: TaskQueue) -> Option<MainThreadTask> {
+        let task = self.queues[queue.index()].pop_front()?.task;
+        if let MainThreadTask::Internal(taken) = task {
+            self.posted_once.retain(|&(posted, _)| posted != taken);
+        }
+        Some(task)
     }
 
     /// When the first of the tasks not due yet is.
@@ -513,6 +527,43 @@ impl MainThreadScheduler {
         self.post_at(TaskQueue::Internal, MainThreadTask::Internal(task), at);
     }
 
+    /// The renderer's own work as `at` comes, unless the same is posted
+    /// this way for then or sooner, or less than a millisecond later: one
+    /// task for the earliest of a time asked for again and again (after
+    /// each task, as each frame is made), which is converted to an
+    /// `Instant` from another clock as it is asked for, and comes out a
+    /// little different each time. One for a later time is posted all the
+    /// same, and does nothing as it comes; once the one posted is taken,
+    /// the next is posted anew.
+    pub(crate) fn post_internal_once_at(&self, task: InternalTask, at: Instant) {
+        let near = at.checked_add(Duration::from_millis(1)).unwrap_or(at);
+        {
+            let mut state = self.lock();
+            if state.closed
+                || state
+                    .posted_once
+                    .iter()
+                    .any(|&(posted, when)| posted == task && when <= near)
+            {
+                return;
+            }
+            state.posted_once.retain(|&(posted, _)| posted != task);
+            state.posted_once.push((task, at));
+            let task = MainThreadTask::Internal(task);
+            if at <= Instant::now() {
+                let sequence = state.next_sequence();
+                state.queues[TaskQueue::Internal.index()].push_back(Queued {
+                    sequence,
+                    task,
+                    interrupt: false,
+                });
+            } else {
+                state.push_delayed(at, TaskQueue::Internal, task);
+            }
+        }
+        self.ready.notify_one();
+    }
+
     /// What wakes worker `id`'s thread for its ports' messages from other
     /// threads; nothing once it is no more.
     pub(crate) fn worker_port_waker(self: &Arc<Self>, id: u64) -> dom::PortWaker {
@@ -617,9 +668,7 @@ impl MainThreadScheduler {
         loop {
             state.queue_due();
             if let Some(queue) = state.earliest(queues) {
-                return state.queues[queue.index()]
-                    .pop_front()
-                    .map(|queued| queued.task);
+                return state.take(queue);
             }
             if timeout.is_some() && deadline.is_some_and(|deadline| deadline <= Instant::now()) {
                 return None;
@@ -655,9 +704,7 @@ impl MainThreadScheduler {
         let mut state = self.lock();
         state.queue_due();
         let queue = state.earliest(queues)?;
-        state.queues[queue.index()]
-            .pop_front()
-            .map(|queued| queued.task)
+        state.take(queue)
     }
 
     /// Which of `queues` the earliest task is in, waiting for one: what
@@ -1195,5 +1242,43 @@ mod tests {
         ));
         receiver.scheduler.close();
         assert_eq!(sender.send(RendererMsg::WasHidden), Err(RendererGone));
+    }
+    /// A renderer's own task asked for again and again is posted once for
+    /// the earliest time: not again for the same time, a later one or one
+    /// a little sooner (the clocks' converting), again for one sooner than
+    /// that, and anew once it is taken.
+    #[test]
+    fn a_task_asked_for_again_is_posted_once() {
+        let (_sender, _compositor, receiver) = channel();
+        let scheduler = &receiver.scheduler;
+        let now = Instant::now();
+        let soon = now.checked_sub(Duration::from_millis(5)).unwrap_or(now);
+        scheduler.post_internal_once_at(InternalTask::NetworkIdle, soon);
+        scheduler.post_internal_once_at(InternalTask::NetworkIdle, soon);
+        let later = soon.checked_add(Duration::from_millis(5)).unwrap();
+        scheduler.post_internal_once_at(InternalTask::NetworkIdle, later);
+        let near = soon.checked_sub(Duration::from_micros(500)).unwrap_or(soon);
+        scheduler.post_internal_once_at(InternalTask::NetworkIdle, near);
+        // Another task isn't the same.
+        scheduler.post_internal_once_at(InternalTask::Guests, soon);
+        let sooner = soon.checked_sub(Duration::from_millis(2)).unwrap_or(soon);
+        scheduler.post_internal_once_at(InternalTask::NetworkIdle, sooner);
+        let taken: Vec<String> = std::iter::from_fn(|| scheduler.try_next(TaskQueues::ALL))
+            .map(|task| kind(&task))
+            .collect();
+        assert_eq!(
+            taken,
+            [
+                "internal NetworkIdle",
+                "internal Guests",
+                "internal NetworkIdle"
+            ]
+        );
+        // Taken: asked for again, it is posted again.
+        scheduler.post_internal_once_at(InternalTask::NetworkIdle, sooner);
+        assert_eq!(
+            scheduler.try_next(TaskQueues::ALL).map(|task| kind(&task)),
+            Some("internal NetworkIdle".to_owned())
+        );
     }
 }

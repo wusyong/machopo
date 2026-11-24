@@ -718,6 +718,15 @@ pub trait ScriptEngine: ParserHost {
         None
     }
 
+    /// Whether a task of the DOM's in the windows was due `ms` or more
+    /// before now (the DOM's clock): with nothing in the host's scheduler
+    /// for it, its token was lost and it never runs (debug builds check
+    /// as the thread is to wait). None by default.
+    fn has_dom_task_due_for(&mut self, ms: f64) -> bool {
+        let _ = ms;
+        false
+    }
+
     /// The guests whose waits are over (`until_due_guests`), run. Whether
     /// one ran.
     fn run_due_guests(&mut self) -> bool {

@@ -906,6 +906,9 @@ struct Changes {
     task_sequence: Cell<u64>,
     tasks_queued: Cell<bool>,
     task_limit: Cell<Option<u64>>,
+    /// The task the host's scheduler runs now (`Cx::target_task`): until
+    /// it is taken out of its queue, the only one that may run.
+    task_target: Cell<Option<u64>>,
     /// What wakes this DOM's thread for its ports' messages from other
     /// threads (`Dom::set_port_waker`).
     port_waker: Option<message_pipe::PortWaker>,

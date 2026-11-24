@@ -15,6 +15,7 @@
 - 動到 `bindings` 的 GC、`unsafe`、執行 script 的入口：先讀 `crates/bindings/soundness.md`。動到 `ipc` 的 `unsafe`、訊息的檢查或平台層：先讀 `crates/ipc/soundness.md`。動到 DOM 的 GC（elise，`../third_party/elise`）：先讀 `../third_party/elise/docs/soundness.md`、`../third_party/elise/docs/api.md` 和 `../third_party/elise/docs/contributing.md`。
 - 加新的繪圖功能（新的 `PaintOp`、filter、shader、blend mode），或動 `raster` 的 playback：先看 `docs/render-gaps.md`（raster 用的 Vello 缺什麼、現在補在哪）。
 - 加新的 CSS property、pseudo-class、會影響 style 的 DOM 狀態、box 畫的新輸入，或改 hit test、parse 的 fast path：先看 `docs/architecture.md` 的「快取和增量：加新東西時要跟著改的地方」，漏改的多半是畫面不更新，不是 crash。
+- 加 renderer 的 main thread 要做的新工作（新的 timer、task、task 之後的步驟、DevTools 或 Browser 要當場知道的事），或改 `RenderThread::run`、`after_task`、scheduler：先看 `docs/architecture.md` 的「Event loop：加新的工作時要跟著改的地方」，漏改的多半是那件事不發生或晚發生，測試常常看不出來。
 - 各 crate 的 `README.md`：API、使用規則、怎麼新增東西（例如 `crates/dom_api/README.md` 的「怎麼新增一個 API」）。
 
 ## 怎麼做決定

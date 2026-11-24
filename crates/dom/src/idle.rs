@@ -161,7 +161,10 @@ impl<'gc> Cx<'_, 'gc> {
         now: f64,
     ) -> Option<Gc<'gc, IdleCallback>> {
         let (index, due, _) = self.first_idle_timeout(window)?;
-        (due <= now).then(|| self.remove_idle_callback(window, index))
+        (due <= now).then(|| {
+            self.task_taken();
+            self.remove_idle_callback(window, index)
+        })
     }
 
     /// When `window`'s idle callback timeout to run first is due (since its

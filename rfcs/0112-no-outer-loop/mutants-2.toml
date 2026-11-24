@@ -170,21 +170,19 @@ to = '''        self.end_cancellation_windows();
 test = ["cargo", "test", "-q", "-p", "browser"]
 
 [[mutant]]
-name = "the revokes go in the outer turn alone"
+name = "a task's revokes aren't sent"
 file = "crates/renderer/src/render_thread.rs"
-from = '''        self.start_script_fetches();
-        self.blob_urls.flush_revoked();
-        self.end_cancellation_windows();'''
-to = '''        self.start_script_fetches();
-        self.end_cancellation_windows();'''
+from = '''        self.update_title();
+        self.blob_urls.flush_revoked();'''
+to = '''        self.update_title();'''
 
 [[mutant]]
-name = "a task's scripts and backgrounds wait for the outer turn"
+name = "a task's scripts and backgrounds aren't fetched after it"
 file = "crates/renderer/src/render_thread.rs"
 from = '''        self.start_image_fetches();
         self.start_script_fetches();
-        self.blob_urls.flush_revoked();'''
-to = '''        self.blob_urls.flush_revoked();'''
+        // Its `toBlob` calls, to the encoder.'''
+to = '''        // Its `toBlob` calls, to the encoder.'''
 test = ["cargo", "test", "-q", "-p", "browser"]
 
 [[mutant]]

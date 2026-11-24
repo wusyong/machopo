@@ -67,7 +67,7 @@ pub(super) struct FrameDocument {
     /// What came of its body that its parser hasn't been given yet.
     input: ParserInput,
     /// How many times its parser let the loop's other work run, and
-    /// whether it is to parse on in the loop's next turn (`parse_on`).
+    /// whether it is to parse on in the task it posted (`parse_on`).
     yields: u32,
     parse_due: bool,
     /// Its window's time origin, on the renderer's clock.
@@ -1733,8 +1733,8 @@ impl RenderThread {
         {
             self.body_ended(frame);
         }
-        // A parser that let other work run parses what came in the loop's
-        // next turn (Blink's parser, once scheduled, isn't pumped by what
+        // A parser that let other work run parses what came in the task it
+        // posted (Blink's parser, once scheduled, isn't pumped by what
         // comes).
         if self.doc(frame).is_some_and(|next| !next.parse_due) {
             self.advance_document(frame);
@@ -3905,8 +3905,8 @@ impl RenderThread {
         self.new_content_due = None;
         self.empty_frame_wanted = false;
         // The frames as the engine has them now, if DevTools' `CSS` lists
-        // their sheets: a frame's document committed in this turn is one
-        // of them already.
+        // their sheets: a frame's document committed since the last frame
+        // is one of them already.
         let frames = self.css_agent.on().then(|| self.dom_frames());
         let (Some((dom, frame)), Some(next)) = (engine_frame(&mut self.engine), &mut self.document)
         else {

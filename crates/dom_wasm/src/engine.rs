@@ -1133,6 +1133,8 @@ impl ScriptEngine for WasmEngine {
         let Some(window) = self.window() else {
             return false;
         };
+        // The one task the token stands for, wherever it is in its queue.
+        self.dom().read(|cx| cx.target_task(Some(number)));
         let found = self.dom().read(|cx| {
             let window = window.get(cx.gc);
             let task = cx.task_numbered(cx.window_context(window), number)?;
@@ -1141,14 +1143,29 @@ impl ScriptEngine for WasmEngine {
             Some((task, now - cx.window_time_origin(window)))
         });
         let Some((task, now)) = found else {
+            self.dom().read(|cx| cx.target_task(None));
             return false;
         };
-        dom_api::run_task(
+        let ran = dom_api::run_task(
             &mut self.host(),
             &dom::GlobalRoot::Window(window),
             task.queue,
             now,
-        )
+        );
+        // Taken as it ran; not, if it ran nothing.
+        self.dom().read(|cx| cx.target_task(None));
+        ran
+    }
+
+    fn has_dom_task_due_for(&mut self, ms: f64) -> bool {
+        let Some(window) = self.window() else {
+            return false;
+        };
+        self.dom().read(|cx| {
+            let by = cx.dom_now() - ms;
+            cx.next_task(cx.window_context(window.get(cx.gc)), by)
+                .is_some()
+        })
     }
 
     fn number_port_messages(&mut self) {

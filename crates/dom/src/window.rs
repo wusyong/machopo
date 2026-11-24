@@ -656,6 +656,7 @@ impl<'gc> Cx<'_, 'gc> {
         if timer.due.get() > now {
             return None;
         }
+        self.task_taken();
         timers.remove(self.gc, index);
         Some(DueNativeTimer {
             element: timer.element.get(self.gc),
@@ -673,9 +674,10 @@ impl<'gc> Cx<'_, 'gc> {
             .is_some_and(|tasks| !tasks.is_empty())
     }
 
-    /// `context`'s first element task taken out, if the host's pass lets it
-    /// run (`tasks`): its element (none for a worker's of no element), what
-    /// it does, and the event target it is of if it is of no element's.
+    /// `context`'s first element task taken out, of those that may run
+    /// (`tasks`: the one the host's scheduler runs, or those a pass lets
+    /// run): its element (none for a worker's of no element), what it
+    /// does, and the event target it is of if it is of no element's.
     pub fn take_element_task(
         &self,
         context: Gc<'gc, crate::ExecutionContext>,
@@ -685,11 +687,10 @@ impl<'gc> Cx<'_, 'gc> {
         Option<Gc<'gc, crate::EventTargetImpl>>,
     )> {
         let tasks = context.element_tasks.get(self.gc)?;
-        let task = tasks.get(self.gc, 0)?;
-        if !self.task_may_run(task.number.get()) {
-            return None;
-        }
-        tasks.remove(self.gc, 0);
+        let index = self.first_element_task(context)?;
+        let task = tasks.get(self.gc, index)?;
+        self.task_taken();
+        tasks.remove(self.gc, index);
         let data = task.data.get();
         let kind = match task.action.get() {
             HASH_CHANGE => {
@@ -1352,6 +1353,7 @@ impl<'gc> Cx<'_, 'gc> {
         if timer.due.get() > now {
             return None;
         }
+        self.task_taken();
         let running = timer.nesting.get();
         match timer.interval.get() {
             Some(interval) => {
@@ -1444,16 +1446,26 @@ impl<'gc> Cx<'_, 'gc> {
             .map(|(_, timer)| (timer.due.get(), timer.number.get()))
     }
 
-    /// When `context`'s first element task was queued (the DOM's clock), and
-    /// its number, if the host's pass lets it run (`tasks`).
+    /// When `context`'s first element task that may run was queued (the
+    /// DOM's clock), and its number (`tasks`).
     pub(crate) fn next_element_task(
         &self,
         context: Gc<'gc, crate::ExecutionContext>,
     ) -> Option<(f64, u64)> {
-        let task = context.element_tasks.get(self.gc)?.get(self.gc, 0)?;
-        let number = task.number.get();
-        self.task_may_run(number)
-            .then(|| (task.queued.get(), number))
+        let index = self.first_element_task(context)?;
+        let task = context.element_tasks.get(self.gc)?.get(self.gc, index)?;
+        Some((task.queued.get(), task.number.get()))
+    }
+
+    /// Where `context`'s first element task that may run is (`tasks`):
+    /// the first queued, or the one the host's scheduler runs.
+    fn first_element_task(&self, context: Gc<'gc, crate::ExecutionContext>) -> Option<usize> {
+        let tasks = context.element_tasks.get(self.gc)?;
+        (0..tasks.len()).find(|&index| {
+            tasks
+                .get(self.gc, index)
+                .is_some_and(|task| self.task_may_run(task.number.get()))
+        })
     }
 
     /// HTML's "the end"'s window `load`: a task of the DOM manipulation

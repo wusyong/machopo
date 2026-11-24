@@ -137,10 +137,3 @@ name = "a self-closed worker still takes messages"
 file = "crates/dom/src/worker.rs"
 from = '''        data.terminated.get() || data.closed.get()'''
 to = '''        data.terminated.get()'''
-
-[[mutant]]
-name = "the engine's guests wait for nothing"
-file = "crates/renderer/src/render_thread.rs"
-from = '''            .and_then(|engine| engine.until_due_guests());'''
-to = '''            .and_then(|engine| engine.until_due_guests().filter(|_| false));'''
-test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "wasm_documents::"]

@@ -87,13 +87,6 @@ to = '''        if self.dom_agent.any_enabled() && false {
             self.tell_dom_changes();'''
 
 [[mutant]]
-name = "nothing is told after a task off the channel"
-file = "crates/renderer/src/render_thread.rs"
-from = '''                self.after_task();
-                self.update_title();'''
-to = '''                self.update_title();'''
-
-[[mutant]]
 name = "frames made or gone don't mark the frames changed"
 file = "crates/renderer/src/render_thread/documents.rs"
 from = '''        if !engine.take_frames_changed() {
@@ -144,8 +137,8 @@ to = '''        frame.document = document.wrapping_add(1);'''
 [[mutant]]
 name = "an about: document committing has its URL's origin"
 file = "crates/renderer/src/render_thread/documents.rs"
-from = '''            None if url.scheme() == "about" => parent.origin.clone(),'''
-to = '''            None if url.scheme() == "about" => serialize(Some(url.origin())),'''
+from = '''            None if matches!(url.scheme(), "about" | "javascript") => parent.origin.clone(),'''
+to = '''            None if matches!(url.scheme(), "about" | "javascript") => serialize(Some(url.origin())),'''
 
 [[mutant]]
 name = "a committing document that inherits its origin has its URL's"
@@ -160,13 +153,11 @@ from = '''                Some(known) => *known = frame.clone(),'''
 to = '''                Some(_) => {}'''
 
 [[mutant]]
-name = "the outer turn's steps leave nothing for DevTools"
+name = "nothing is told to DevTools after a task"
 file = "crates/renderer/src/render_thread.rs"
-from = '''                engine.number_port_messages();
-            }
-            self.tell_devtools_after_task();'''
-to = '''                engine.number_port_messages();
-            }'''
+from = '''        self.post_guests();
+        self.tell_devtools_after_task();'''
+to = '''        self.post_guests();'''
 
 [[mutant]]
 name = "the warnings go to the page's log only while a session is attached"

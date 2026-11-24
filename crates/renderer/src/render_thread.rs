@@ -442,12 +442,6 @@ struct RenderThread {
     retried_blocked_scripts: bool,
     /// When the task for the intersections held back by their `delay` is
     /// posted for (the renderer's clock), if it is.
-    intersections_posted: Option<f64>,
-    /// When the task that looks at the documents' network is posted for,
-    /// if it is.
-    network_idle_posted: Option<ipc::TimeTicks>,
-    /// When the task that runs the engine's guests is posted for, if it is.
-    guests_posted: Option<Instant>,
     /// The top-level frame's latest navigation to `about:blank` it asked
     /// for, by its number, and the document its document is to have its
     /// origin from (the initiator's).
@@ -616,9 +610,6 @@ impl RenderThread {
             own_history_entries: OwnHistoryEntries::default(),
             navigations_asked: Vec::new(),
             retried_blocked_scripts: false,
-            intersections_posted: None,
-            network_idle_posted: None,
-            guests_posted: None,
             main_origin_source: None,
             pending_input,
             clock: Clock::new(),
@@ -652,6 +643,8 @@ impl RenderThread {
     /// update when it asks for one (`begin_main_frame`).
     fn run(&mut self) {
         loop {
+            #[cfg(debug_assertions)]
+            self.assert_no_dom_task_lost();
             // Wait for the next task, or until an idle period's callback
             // may run: idle, for DevTools' profile of the script (as Blink
             // tells V8's inspector around each task).
@@ -710,14 +703,8 @@ impl RenderThread {
             // (Blink runs Oilpan's and V8's on the main thread's scheduler):
             // they may run script (FinalizationRegistry cleanup), and they
             // are what finalizes garbage.
-            InternalTask::NetworkIdle => {
-                self.network_idle_posted = None;
-                self.check_network_idle();
-            }
-            InternalTask::Guests => {
-                self.guests_posted = None;
-                self.run_due_guests();
-            }
+            InternalTask::NetworkIdle => self.check_network_idle(),
+            InternalTask::Guests => self.run_due_guests(),
             InternalTask::PlatformTasks => {
                 self.scheduler.platform_tasks_taken();
                 trace_event::in_scope(
@@ -780,6 +767,25 @@ impl RenderThread {
         self.clear_request_stacks();
     }
 
+    /// A task of the DOM's due a while ago with nothing in the scheduler
+    /// for it never runs (its token was lost: each task is run by its own,
+    /// `run_dom_task`), and nothing else says so: debug builds stop there,
+    /// as the thread is to wait. Due 5 ms ago, past the clocks' rounding.
+    #[cfg(debug_assertions)]
+    fn assert_no_dom_task_lost(&mut self) {
+        if self.scheduler.has_task(TaskQueues::ALL) {
+            return;
+        }
+        let lost = self
+            .engine
+            .as_mut()
+            .is_some_and(|engine| engine.has_dom_task_due_for(5.0));
+        assert!(
+            !lost,
+            "a task of the DOM's is due with nothing in the scheduler to run it"
+        );
+    }
+
     /// The task that looks at the documents' network as the first may
     /// have been quiet long enough, unless one is posted for then or
     /// sooner (Blink's `IdlenessDetector` has a timer of its own).
@@ -787,14 +793,10 @@ impl RenderThread {
         let Some(due) = self.next_idleness_due() else {
             return;
         };
-        if self.network_idle_posted.is_some_and(|posted| posted <= due) {
-            return;
-        }
-        self.network_idle_posted = Some(due);
         let wait = due.saturating_since(ipc::TimeTicks::now());
         if let Some(at) = Instant::now().checked_add(wait) {
             self.scheduler
-                .post_internal_at(InternalTask::NetworkIdle, at);
+                .post_internal_once_at(InternalTask::NetworkIdle, at);
         }
     }
 
@@ -808,14 +810,10 @@ impl RenderThread {
         else {
             return;
         };
-        let Some(at) = Instant::now().checked_add(wait) else {
-            return;
-        };
-        if self.guests_posted.is_some_and(|posted| posted <= at) {
-            return;
+        if let Some(at) = Instant::now().checked_add(wait) {
+            self.scheduler
+                .post_internal_once_at(InternalTask::Guests, at);
         }
-        self.guests_posted = Some(at);
-        self.scheduler.post_internal_at(InternalTask::Guests, at);
     }
 
     /// Whether the compositor is to send a main frame (Blink's
@@ -1232,10 +1230,10 @@ impl RenderThread {
                 length,
                 entries_heard,
             } => {
-                // The new entries script made in the tasks before this one
-                // go to the browser first, so they are counted among those
-                // it hadn't heard of (they wait for the loop's turn else,
-                // and this place would drop them).
+                // The new entries script made go to the browser first, so
+                // they are counted among those it hadn't heard of: a task's
+                // went as it ended, an engine call's outside a task would
+                // wait else, and this place would drop them.
                 self.handle_frame_requests();
                 let history = self.own_history_entries.place(index, length, entries_heard);
                 if let Some(engine) = &mut self.engine {
@@ -1562,7 +1560,6 @@ impl RenderThread {
     /// A main frame for the observations held back by their `delay`, once
     /// the first is due.
     fn intersections_due_now(&mut self) {
-        self.intersections_posted = None;
         let Some(due) = self.intersections_due else {
             return;
         };
@@ -1580,14 +1577,10 @@ impl RenderThread {
     /// their `delay`, posted for `due` (the renderer's clock) unless one is
     /// for then or sooner.
     pub(super) fn post_intersections(&mut self, due: f64) {
-        if self
-            .intersections_posted
-            .is_some_and(|posted| posted <= due)
-        {
-            return;
+        if let Some(at) = self.clock.instant_at(due) {
+            self.scheduler
+                .post_internal_once_at(InternalTask::Intersections, at);
         }
-        self.intersections_posted = Some(due);
-        self.post_internal_after(InternalTask::Intersections, due - self.clock.now());
     }
 
     /// The main frame's new document still can't be drawn when its delay

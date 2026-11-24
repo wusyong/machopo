@@ -511,11 +511,17 @@ impl<'gc> Cx<'_, 'gc> {
         &self,
         context: Gc<'gc, crate::ExecutionContext>,
     ) -> Option<TakenMessage<'gc>> {
-        let (port, _) = self.first_message(context)?;
+        let (port, (_, number)) = self.first_message(context)?;
+        self.task_taken();
         let (mut payload, origin, source, target) = match port {
             None => {
                 let queue = context.posted_messages.get(self.gc)?;
-                let message = queue.remove(self.gc, 0);
+                let index = (0..queue.len()).find(|&index| {
+                    queue
+                        .get(self.gc, index)
+                        .is_some_and(|message| message.number.get() == number)
+                })?;
+                let message = queue.remove(self.gc, index);
                 let target = match message.target.get(self.gc) {
                     Some(worker) => TargetRef::EventTarget(worker),
                     None => self.context_target(context),
@@ -573,11 +579,14 @@ impl<'gc> Cx<'_, 'gc> {
         &self,
         context: Gc<'gc, crate::ExecutionContext>,
     ) -> Option<(Option<Gc<'gc, EventTargetImpl>>, TaskStamp)> {
-        let own = context
-            .posted_messages
-            .get(self.gc)
-            .and_then(|queue| queue.get(self.gc, 0))
-            .map(|message| (None, (message.queued.get(), message.number.get())));
+        // Its own queue's first that may run: the first, or the one the
+        // host's scheduler runs.
+        let own = context.posted_messages.get(self.gc).and_then(|queue| {
+            (0..queue.len())
+                .filter_map(|index| queue.get(self.gc, index))
+                .map(|message| (None, (message.queued.get(), message.number.get())))
+                .find(|&(_, (_, number))| self.task_may_run(number))
+        });
         let mut ports = Vec::new();
         for port in list_items(self, context.message_ports.get(self.gc)) {
             let Some(data) = self.port_data(port) else {

@@ -1522,6 +1522,8 @@ impl ScriptEngine for V8Engine {
 
     fn run_dom_task(&mut self, number: u64) -> bool {
         let frames = self.frames_as_made();
+        // The one task the token stands for, wherever it is in its queue.
+        self.state().dom.read(|cx| cx.target_task(Some(number)));
         let found = self.state().dom.read(|cx| {
             frames
                 .iter()
@@ -1535,6 +1537,7 @@ impl ScriptEngine for V8Engine {
                 })
         });
         let Some((task, index, now)) = found else {
+            self.state().dom.read(|cx| cx.target_task(None));
             return false;
         };
         let context = frames[index].1.clone();
@@ -1542,11 +1545,24 @@ impl ScriptEngine for V8Engine {
             let context = scope.get_current_context();
             crate::window::run_task(scope, context, task.queue, now)
         });
+        // Taken as it ran; not, if it ran nothing.
+        self.state().dom.read(|cx| cx.target_task(None));
         if ran {
             // Its own checkpoint ran; the rejections it left.
             self.notify_rejected_promises();
         }
         ran
+    }
+
+    fn has_dom_task_due_for(&mut self, ms: f64) -> bool {
+        let frames = self.frames_as_made();
+        self.state().dom.read(|cx| {
+            let by = cx.dom_now() - ms;
+            frames.iter().any(|(_, _, document)| {
+                cx.window_of(document.get(cx.gc))
+                    .is_some_and(|window| cx.next_task(cx.window_context(window), by).is_some())
+            })
+        })
     }
 
     fn number_port_messages(&mut self) {

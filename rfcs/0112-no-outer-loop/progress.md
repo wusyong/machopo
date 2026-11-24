@@ -2,156 +2,120 @@
 
 <!-- 怎麼更新見 docs/README.md 的「完成一步時」和「一份 RFC 做完時」。設計理由寫在 README.md，目前仍然成立的限制寫在 docs/limitations.md。 -->
 
-開始日期：2026-11-24
+開始日期：2026-11-24。第 0 到 5 階段做完：2026-11-24（Linux：Fedora 45）；做完之後量 Speedometer 找到的問題在修（第 25 條之後）。
 
 ## 步驟
 
 | 步驟 | 狀態 | 完成日期 |
 | --- | --- | --- |
-| 0a. 盤點：外圈和內圈每個 task 之後的每一步，對照 Chromium 的原始碼 | 做完，待審查 | 2026-11-24 |
-| 0b. 必壞的測試：通道一直有 task 時的 timer | 做完，待審查 | 2026-11-24 |
-| 0c. 原型：DOM 的 task 進 scheduler，T1 | 做完，待審查 | 2026-11-24 |
-| 0d. 原型：DOM 的 task 進 scheduler，T2 | 做完，待審查 | 2026-11-24 |
-| 0e. 交給使用者決定範圍和做法 | 做完：做法第 3 條（T1），範圍第 4 條（A），分段第 5 條 | 2026-11-24 |
-| 1. DevTools 的事件（第 6 到 9 條） | 做完，待審查 | 2026-11-24 |
-| 2. 導覽在呼叫的當下送（第 10 到 12 條） | 做完，待審查 | 2026-11-24 |
-| 2a. 必壞的測試：script 忙完之前 Browser 就收到導覽；同一個 task 的兩個導覽之間忙一陣，只 commit 第二個 | 做完，待審查：第一個在原本的程式上壞、2b 之後過；第二個在 2b 之後壞、2d 之後過 | 2026-11-24 |
-| 2b. script 的導覽（`location`、`history`、連結）由 hook 當場送，帳在呼叫之後對照（第 10 條）；同一份文件內的 traversal 在 `popstate` 之前告訴 browser | 做完，待審查 | 2026-11-24 |
-| 2c. parser 的 script 和背景圖的請求在每個 task 之後送，接著 blob URL 的撤銷（第 12 條） | 做完，待審查 | 2026-11-24 |
-| 2d. 取消窗口（第 11、12 條）：發起導覽的 task 結束前，browser 不送它的 commit | 做完，待審查 | 2026-11-24 |
-| 2e. iframe 的 `src`、`srcdoc` 的導覽也由 hook 當場送；frame 在載入中由 engine 當場告訴 DOM | 做完，待審查 | 2026-11-24 |
-| 2f. 文件、mutation test | 做完，待審查 | 2026-11-24 |
-| 3. DOM 的 task 是 scheduler 的 task（第 3、13 到 15 條） | 做完，待審查 | 2026-11-24 |
-| 3a. 必壞的測試：通道一直有 task 時 timer 照樣按時間跑（第 0 階段的原型的）；設 timer 之後、跑過它的時間的 task 裡 post 的訊息在 timer 前面 | 做完，待審查 | 2026-11-24 |
-| 3b. `dom` 的 `TaskWaker`：排 task 時送帶著它是哪一個的記號，timer、UA 的 timer、idle callback 的 timeout 送到期的時間 | 做完，待審查 | 2026-11-24 |
-| 3c. scheduler 的 `TaskQueue::Dom` 和 delayed 的記號；engine 照記號跑一個 task | 做完，待審查 | 2026-11-24 |
-| 3d. 主 thread 拿掉一輪的機制、`run_due_tasks`、`run_queued_tasks`；`until_next_due` 不問 DOM 的 timer | 做完，待審查 | 2026-11-24 |
-| 3e. 文件、mutation test | 做完，待審查 | 2026-11-24 |
-| 4. renderer 自己的工作排成 task（第 16 到 18 條） | 做完，待審查 | 2026-11-24 |
-| 4a. 必壞的測試：通道一直有 task 時 parser 照樣續跑 | 做完，待審查：原本的程式上壞（`parsed after -1`），4c 之後過 | 2026-11-24 |
-| 4b. scheduler 的 `TaskQueue::Internal` 和通用的延後 task | 做完，待審查 | 2026-11-24 |
-| 4c. parser 的續跑、等 sheet 的 script、`javascript:` 的 commit 排成 task | 做完，待審查 | 2026-11-24 |
-| 4d. renderer 的 timer（caret、intersection、延後的 iframe `load`、新內容的逾時）排成延後的 task | 做完，待審查 | 2026-11-24 |
-| 4e. V8 的 platform task 經過 `PlatformImpl` 進 scheduler | 做完，待審查 | 2026-11-24 |
-| 4f. 文件、mutation test | 做完，待審查 | 2026-11-24 |
-| 5. 剩下的步驟，拿掉外圈（第 19 到 23 條） | 做完，待審查 | 2026-11-24 |
-| 5a. 必壞的測試：通道一直有 task 時 `toBlob` 照樣完成 | 做完，待審查：原本的程式上壞（`encoded after -1`），5b 之後過 | 2026-11-24 |
-| 5b. 剩下的步驟改成 task 之後的觀察者（選單、WebDriver 的結果、`toBlob`、raster 失敗的 log、network idle、overlay、DOM 變了要 frame、request stack 的清理）；`CSS` 的重抓當場 | 做完，待審查 | 2026-11-24 |
-| 5c. network idle 和 wasm guest 的等待是延後的 task | 做完，待審查 | 2026-11-24 |
-| 5d. `RenderThread::run` 只剩取 task、跑它、task 之後的觀察者、idle period、要不要 frame | 做完，待審查 | 2026-11-24 |
-| 5e. 文件、mutation test | 做完，待審查 | 2026-11-24 |
+| 0. 評估：盤點外圈的每一步、對照 Chromium 的原始碼，DOM 的 task 進 scheduler 的 T1、T2 原型，交給使用者決定（已決定的事項第 1 到 5 條） | 完成 | 2026-11-24 |
+| 1. DevTools 的 frame 事件當場送，DOM 的變動和 console 的警告在每個 task 之後（第 6 到 9 條） | 完成 | 2026-11-24 |
+| 2. 導覽在呼叫的當下送、發起它的 task 結束才 commit；parser 的 script、背景圖的請求和 blob URL 的撤銷在每個 task 之後（第 10 到 12 條） | 完成 | 2026-11-24 |
+| 3. DOM 的 task 是 scheduler 的 task，主 thread 拿掉一輪的機制（第 13 到 15 條） | 完成 | 2026-11-24 |
+| 4. renderer 自己的工作和 V8 的 platform task 排成 task（第 16 到 18 條） | 完成 | 2026-11-24 |
+| 5. 剩下的步驟改成 task 之後的觀察者和延後的 task，拿掉外圈（第 19 到 23 條） | 完成 | 2026-11-24 |
+| 6. 做完之後：不重複排的延後 task 收進 scheduler、加新工作的說明（第 24 條） | 完成 | 2026-11-24 |
+| 7. 做完之後：Speedometer 卡住，記號跑它自己的那一個 task、debug build 偵測丟掉的 task（第 25 條） | 做完，mutation test 還沒跑 | 2026-11-24 |
+| 8. `requestAnimationFrame` 在通道一直有 task 時不來：要 frame 的當下告訴 compositor，headless 等 renderer 閒下來 | 進行中 | |
 
 ## 驗收
 
-| 項目 | 怎麼驗證 |
-| --- | --- |
-| 盤點 | `details.md` 的表；不改程式，所以沒有測試 |
-| 原型 | 各自的 patch 在 `prototypes/`；通道一直有 task 時的 timer 的必壞測試必過，比較改動、成本、兩個 engine 各要做什麼 |
+`shell` 的測試是 `cargo test -p shell --test it <名稱>`，其他 crate 的同樣是 `cargo test -p <crate> --test it <名稱>`。「必壞」：改之前在原本的程式上每次都失敗。
+
+| 領域 | 項目 | 怎麼驗證 |
+| --- | --- | --- |
+| 評估 | 盤點和原型 | `details.md` 的表和「原型」；patch 在 `prototypes/` |
+| DevTools | 新 frame 的 `childNodeInserted`、`frameAttached`、`executionContextCreated` 照 Chrome 的順序（必壞）；同一個 task 裡建了又拿掉的 iframe 也收到 `frameAttached` 和 `frameDetached`（必壞）；拿掉的 frame 先送裡面的 | `devtools::a_new_frames_events_come_in_chromes_order`、`a_frame_made_and_removed_at_once_is_told`、`a_frame_gone_is_told_after_the_frames_in_it` |
+| DevTools | 子 frame 的 `frameNavigated` 在它的 script 之前（必壞），`javascript:` 網址的文件沿用初始 `about:blank` 的 context；新 frame 和載入中的 frame 的初始文件；繼承 origin 的 `about:blank` | `devtools::a_child_frames_document_is_told_before_its_script`、`a_new_frames_initial_document_is_told_as_its_task_ends`、`a_loading_frames_initial_document_is_told_before_its_own`、`an_about_blank_of_its_initiators_origin_is_told_so`；`dom_js` 的 `frames::the_frame_client_hears_of_a_child_frames_new_document` |
+| DevTools | 一個 task 的 DOM 變動在下一個 task 之前（必壞），DOM 排著的 task 的也是；沒有 session 的頁面照樣印出警告 | `devtools_dom::a_tasks_changes_are_told_before_the_next_task`、`queued_tasks_changes_are_told_before_the_next_task`；`devtools_log::script_warnings_are_logged_without_a_session` |
+| 導覽 | `location.href` 之後忙一陣，Browser 在忙完之前收到導覽（必壞）；插入有 `src` 的 iframe 也是（必壞）；wasm engine 的 client 也當場聽到 | `devtools::a_navigation_reaches_the_browser_as_script_asks`、`an_iframes_navigation_reaches_the_browser_as_it_is_inserted`；`dom_wasm` 的 `engine::a_navigation_is_told_to_the_frame_client_as_it_is_asked` |
+| 導覽 | 同一個 task 的兩個導覽之間忙一陣，只 commit 第二個（頂層、子 frame、第一個是 `about:blank`）；錯誤頁也等 task 結束才 commit；通道一直有 task 時取消窗口和撤銷在 task 之後 | `devtools::of_two_navigations_in_a_task_the_second_alone_commits`、`a_failed_navigation_commits_its_error_page_once_its_task_is_over`、`what_a_task_leaves_for_the_browser_goes_as_it_ends`；`browser` 的 `navigation::links::blobs` |
+| 導覽 | 同一次呼叫裡導覽子 frame、再拿掉父文件最後等著的 iframe，父文件的 `load` 等它（原本就有的問題，必壞）；子 frame 到 fragment 的導覽留在同一份文件 | `devtools::a_frame_navigated_as_the_last_wait_goes_delays_the_load`、`a_child_frames_navigation_to_a_fragment_stays_in_its_document`；`browser` 的 4 個 history 的測試（`popstate` 之前送 traversal 的 commit） |
+| DOM 的 task | 通道一直有 task 時 timer 照樣按時間跑（必壞）；設 timer 之後、跑過它的時間的 task 裡 post 的訊息在 timer 前面（必壞，Chrome 的順序）；閒著的頁面的 timer、interval、UA 的 timer、忙著的頁面的 idle callback 的 timeout | `event_loop::a_timer_runs_while_responses_keep_coming`、`a_timer_takes_its_turn_as_it_is_due`、`an_idle_page_wakes_for_its_timer`、`an_interval_comes_again`、`a_ua_timer_comes`、`an_idle_callbacks_timeout_comes_while_the_page_is_busy` |
+| DOM 的 task | 轉送的 port 的訊息照順序、啟用之前送到 port 的訊息；worker 關閉之前送的訊息和錯誤照樣送到 | `event_loop::a_moved_ports_messages_come_in_order`、`a_ports_message_waits_for_it_to_be_enabled`、`what_a_worker_posted_before_it_closed_comes`、`what_a_worker_threw_before_it_closed_comes`；WPT 的 `webmessaging/`、`workers/WorkerGlobalScope-close.html` |
+| renderer 的 task | 通道一直有 task 時 parser 照樣續跑（必壞）；caret 照樣閃；延後的 iframe `load`；新內容的逾時 | `event_loop::a_parser_parses_on_while_responses_keep_coming`；`test.py scenarios caret`；`browser` 的 `navigation::a_cross_origin_frames_fragment_navigation_fires_its_iframes_load`、`a_new_document_that_cant_be_drawn_shows_empty_after_the_delay` |
+| platform task | V8 的 `FinalizationRegistry` 的 cleanup 在 GC 之後跑（主 thread 和 worker） | `event_loop::a_finalization_registrys_callback_runs_after_a_gc` |
+| 觀察者 | 通道一直有 task 時 `toBlob` 照樣完成（必壞）；選單、WebDriver 的結果、network idle、DOM 變了要 frame、一個 draw 只多一個 frame | `event_loop::a_canvas_blob_comes_while_responses_keep_coming`；`browser_view::a_selects_dropdown_is_over_the_page` 等選單的測試、`webdriver::`、`devtools_lifecycle` 的 `networkIdle`、`canvas::a_draw_asks_for_a_frame` |
+| scheduler | 一直被要求的延後 task 只排最早的一個：同一個、比較晚、早不到 1 ms 的不再排，更早的再排，取出之後重新排 | `renderer` 的單元測試 `task_queue::tests::a_task_asked_for_again_is_posted_once` |
+| 丟掉的 task | thread 忙過一個 timer 的時間之後再設一個已經到期的，兩個都跑，順序和 Chrome 一樣（`b,a`，必壞：改之前卡滿 30 秒）；debug build 在 loop 要等之前檢查沒有到期卻沒有記號的 DOM task | `event_loop::a_timer_set_after_an_earlier_ones_time_runs`；整套測試都經過 `assert_no_dom_task_lost` |
+| 全部 | 守著這些的測試擋得住弄壞的實作 | `python3 scripts/test.py mutate rfcs/0112-no-outer-loop/mutants-<段>.toml`（`1` 到 `5`） |
 
 ## 做過的檢查
 
-### 第 0 階段（2026-11-24，Linux：Fedora 45、debug build，`0a459d1` 之上）
+Linux（Fedora 45）、debug build，2026-11-24。RFC 的草稿是 `0a459d1`；第 0 到 2 段（`970c695` 到 `937061c`）先 merge 回 `main`，第 3 到 5 段（`b52b562`、`5f243e5`、`7fbb149`）在它之上。
 
-**盤點**：一個 subagent 唯讀地從 Gitiles 讀 Chromium `main` 的 `28312288d3ac`（2026-11-23）的原始碼，對了 `details.md` 的表的每一列和三個問題（scheduler 怎麼挑、同一個 task 的兩個導覽、iframe 插入時 DevTools 的順序）；它的關鍵說法（DevTools 的 DOM 變動每個 task 之後才送、delayed task 到期時才拿到 enqueue order）我對過它引的段落。沒對到的三項列在 `details.md`。
+### 第 0 階段：評估
 
-**必壞的測試**：沒改 13 次壞 13 次；Chrome for Testing 152 跑同一頁 5 次都是對的那一邊（`details.md` 的「原型」）。
+盤點由一個 subagent 唯讀地從 Gitiles 讀 Chromium `main` 的 `28312288d3ac`（2026-11-23），對了 `details.md` 的表的每一列和三個問題；它的關鍵說法我對過它引的段落，沒對到的三項列在 `details.md`。必壞的測試（通道一直有 task 時的 timer）沒改 13 次壞 13 次，Chrome for Testing 152 跑 5 次都是對的那一邊；T1、T2 的原型各 5 次都通過，相關 crate 的整組也通過（`renderer` 127、`dom` 256、`dom_api` 228、`dom_js` 556、`shell` 779、`browser` 227 個）。原型不是要合併的程式，沒有 mutation test、clippy、WPT，效能沒有量。
 
-**原型**：T1、T2 的必壞測試各 5 次都通過；整組通過：T1 是 `renderer` 127 個、`dom` 256 個、`dom_api` 228 個、`dom_js` 556 個、`shell` 779 個、`browser` 227 個；T2 是 `renderer` 127 個、`dom_api` 228 個、`dom_js` 556 個、`shell` 779 個、`browser` 227 個（T2 沒有改 `dom`）。原型不是要合併的程式，沒有 mutation test、clippy、WPT，效能沒有量；patch 都套得回 `0a459d1`。
+### 實作時找到的
 
-### 第 1 階段（2026-11-24，Linux：Fedora 45、debug build，`e297d88` 之上）
+- **第 1 段，子 frame 的 `frameNavigated`**：第 8 條原本選 B（task 結束時比對），以為 commit 自己是一個 task；實際上子 frame 的 commit 在同一個 task 裡建 realm、跑 inline script，`console` 先到（臨時的測試量到），改成 C1（engine 的 hook）。
+- **第 2 段**：
+  - `popstate` 的 handler 發起的導覽比 traversal 的 commit 先到 browser（4 個 history 測試）：traversal 改在 `popstate` 之前送。
+  - browser 的 `blobs` 測試整組跑時逾時：導覽當場送之後，browser 在外圈送出撤銷之前就 commit 了（暫時的 probe 印出訊息才找到），第 12 條。
+  - 載入中的 frame 的初始文件的 `init` 排到 `frameStartedNavigating` 後面：改成 hook 送導覽之前由 Page agent 送。
+  - 父文件的 `load` 不等同一次呼叫裡導覽的子 frame：原本就有的問題，engine 送出時當場告訴 DOM frame 在載入中。
+- **第 3 段**：
+  - WPT 的 `webmessaging/`：port 的訊息照佇列的順序拿編號、啟用時重送記號（用暫時的 shell 測試印出順序才找到）。
+  - WPT 的 `webmessaging/message-channels/worker*`、`workers/WorkerGlobalScope-close.html`：worker 自己關閉時它之前送的訊息和錯誤被丟掉，分開自己關閉和 `terminate()`。
+  - 到期的 timer 照原型在 post 時排進去，`a_timer_takes_its_turn_as_it_is_due` 還是壞：改成 scheduler 挑下一個時才排（Blink 的 `SelectNextTask`）。
+  - `forms::reset_buttons_and_links` 改成讀 `hashchange` 的 `newURL`（兩個 click 照 scheduler 的先後）。
+- **第 4 段**：caret 和新內容的逾時的 task 提早被叫到時重新排自己，每次重新設定多一條鏈，改成只在設定的地方排；caret 的情境抓到 caret 來了、移了的地方沒排 task。`bindings` 改用 custom platform 之後 worker 的 loop 也跑 V8 的 platform task（以前不跑）。
+- **第 5 段**：
+  - 要不要 main frame 在每個 task 之後決定時，`shell` 的 6 個測試多畫一個 frame：一步一步拿掉試才確定，改成要等下一個 task 之前決定。
+  - WPT 的 `webmessaging/*/018.html` 逾時：第 4 段把 `javascript:` 的 commit 排成 task，它排在頁面的 `postMessage` 前面、建了新的 window（第 4 段沒有跑 `webmessaging/`），第 23 條。
 
-**必壞的測試**：在第 1 段之前的程式上各跑 3 次、3 次都壞：新 frame 的三個事件的順序、建了又拿掉的 iframe、task 的 DOM 變動先於下一個 task。子 frame 的 `frameNavigated` 在它的 script 之前（`a_child_frames_document_is_told_before_its_script`）：第 8 條原本的做法（B）下，臨時的測試量到 `console` 先到；mutation test 的「子 frame 的 commit 沒有在引擎建文件之前告訴 Page agent」就是 B，這個測試抓到它。
+### Mutation test
 
-**mutation test**（`mutants-1.toml`，24 個）：22 個抓到，2 個沒抓到，都是現在的程式裡別的地方也做了同一件事：
-- 「frame 建立或拿掉時沒設旗標」：新的 frame 有 `src` 時，子 frame 送導覽之前照舊先比對；沒有 `src` 時，它的 `about:blank` 的 commit 設旗標；拿掉的 frame 由 hook 當場送 `frameDetached`。留著它，因為旗標的意思就是 frame 變了，第 2 段改了導覽、第 4 段把 commit 排成 task 之後可能就要靠它。
-- 「頂層的 commit 沒設旗標」：DOM agent 在頂層 commit 時清掉每個 session 的節點，`documentUpdated` 之後 client 用命令重新要文件，回答命令之前一定先比對；Page agent 在 `create_window` 之前已經直接拿到新文件。留著它，讓 DOM agent 的 frame 清單跟著 DOM。
+| spec | 條數 | 抓到 | 沒抓到的 |
+| --- | --- | --- | --- |
+| `mutants-1.toml` | 22 | 20 | frame 建立或拿掉、頂層的 commit 不設旗標：別的地方也做了同一件事 |
+| `mutants-2.toml` | 26 | 24 | 先結束取消窗口、再送撤銷：等價；task 之後不送 parser 的 script 和背景圖的請求（`docs/test-gaps.md`） |
+| `mutants-3.toml` | 18 | 15 | 只看 DOM 自己的時鐘、worker 關閉時丟的錯誤（`docs/test-gaps.md`）；關閉了的 worker 照樣收訊息：等價 |
+| `mutants-4.toml` | 16 | 12 | loop 等待時為 renderer 的延後 task 醒來、intersection 的 `delay` 提早時再排、V8 延後的 platform task、worker 為它醒來（`docs/test-gaps.md`） |
+| `mutants-5.toml` | 19 | 15 | `CSS` 的命令當場抓 sheet：等價；lifecycle 之後的 sheet、overlay 要 frame、wasm guest 的延後 task（`docs/test-gaps.md`） |
 
-跑的過程裡補的測試：拿掉的 frame 先送裡面的 frame（`a_frame_gone_is_told_after_the_frames_in_it`，連同一個 task 裡建了外層和裡層又拿掉外層）、`javascript:` 的空文件的 loaderId（原本以為 `srcdoc` 是 renderer 自己 commit 的，其實也交給 browser）、繼承 origin 的 `about:blank`（`an_about_blank_of_its_initiators_origin_is_told_so`）、DOM 排著的 task 的變動先於下一個 task（`queued_tasks_changes_are_told_before_the_next_task`：第二個命令要在第一個跑完之前到，所以第一個命令忙 200 ms；時機不對時它照樣通過、只是抓不到）、新 frame 初始的 `about:blank` 不用等下一個命令（`a_new_frames_initial_document_is_told_as_its_task_ends`）、載入中的 frame 初始文件的 `init` 先到（`a_loading_frames_initial_document_is_told_before_its_own`）、沒有 session 的頁面照樣印出警告，timer 的也是（`script_warnings_are_logged_without_a_session`）。
+- 每一段第一輪沒抓到的，多半補了測試或改了 mutant 的測試命令（caret 的情境、`browser` 的延後的 iframe `load` 和新內容的逾時的測試、`webdriver::`）之後重跑抓到；補的測試在「驗收」。
+- 第 3 段第一輪的上限設 1800 秒，第一個 mutant 卡滿 30 分鐘：停掉、`--restore` 還原，上限改成 240 秒，會讓測試一直等的 mutant 只跑 `event_loop::`。
+- 做完時 spec 照最後的程式更新：拿掉外圈之後沒有對應程式的 2 條刪了（`mutants-1.toml` 的「off the channel」、`mutants-3.toml` 的 guest 的等待），程式搬到 `after_task` 或改了寫法的 4 條改寫，照新的 spec 重跑：3 條抓到，「task 之後不送 parser 的 script 和背景圖的請求」照舊沒抓到（同上）。`mutants-3.toml` 的「task 之後不掃描 port」原本是等價的（外圈也掃描），拿掉外圈之後重跑抓到。101 條的 `from` 在檔案裡都剛好出現一次。
+- `docs/test-gaps.md` 裡 parser 停下時馬上開始載入的那一列：loop 一次跑一批時 `browser` 的 `a_child_frame_waits_for_its_stylesheets` 拿掉它時約六次失敗一次，拿掉外圈之後同樣的 mutant 跑 12 次都通過（停下的 task 之後馬上就是觀察者），改寫了那一列。
+- `docs/test-gaps.md` 裡另外兩列在拿掉外圈之後有測試守著了，臨時的 mutant 確認之後刪掉：主 thread 不跑 V8 的 platform task（`shell` 的測試抓到）、task 之後不看標題（`shell` 或 `browser` 的測試抓到；以前一批的最後也看）。
+- 做完之後的整理（第 24 條）：三處各自記著排了哪個時間的改成 scheduler 的 `post_internal_once_at`，`mutants-5.toml` 改寫 network idle 和 guest 的 2 條（照舊一條抓到、一條沒抓到），加 3 條：不看排過的、不留 1 ms 的餘裕、取出時不清掉，都抓到（餘裕的那條第一次沒抓到：單元測試只試了晚一點的，那本來就不排；改成試早一點的之後抓到）。`mutants-4.toml` 的 intersection 的 2 條照新的程式重跑，結果和第 4 段一樣（一條抓到，提早時再排一次的那條照舊沒抓到）。
+- 每次跑完檔案都還原了。
 
-過程中改的實作：拿掉「導覽開始或結束時設旗標」（只改 `navigating`，比對只在新的 frame 用到它，mutation test 看出來的）；外圈最後原本無條件的 `tell_frames`、`tell_dom_changes`、`log_console_warnings` 換成同一個「task 之後」（看旗標）；`log_console_warnings` 移到「沒有 session 就不做」之前（原本沒開 DevTools 的頁面的警告會一直堆在 DOM 裡）；`tell_document_created` 裡多餘的頂層判斷拿掉（呼叫它的地方只在子 frame 上，那個 mutant 和原本的程式等價）。
+### WPT
 
-**相關 crate 的測試**：`dom`、`dom_api`、`dom_js`、`renderer`、`shell`、`browser` 都通過。
+每一段跑相關的目錄：第 3 段 `html/webappapis/timers/`、`html/webappapis/scripting/event-loops/`、`webmessaging/`、`workers/`、`html/browsers/history/`、`the-iframe-element/`、`html/syntax/parsing/`（632 個）；第 4 段 parsing、`the-script-element/`、`intersection-observer/`、iframe、timers、`workers/`（798 個）；第 5 段再加 `the-select-element/`、`requestidlecallback/`（836 個）。最後一次沒有非預期的失敗。更新的預期結果：`history_pushstate_url_rewriting.html` 的 `javascript:'foo'?newsearch`（第 23 條，重跑兩次都通過）。和這份無關的非預期 PASS（在改之前的 commit 上也一樣，沒有改）：`negative-settimeout.any.worker.html`、`workers/baseurl/alpha/xhr-in-moduleworker.html`、`script-crossorigin-network.sub.html`、`module/credentials.sub.html`；`same-hash.html` 是標著的 known intermittent。
 
-**階段結束的檢查**：`cargo test --workspace` 通過（60 個 binary，4701 個通過、1 個 ignored）；`cargo fmt --check` 和 `cargo clippy --workspace --all-targets -- -D warnings` 通過；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs` 通過。
+### 不穩定的測試
 
-### 第 2 階段（2026-11-24，Linux：Fedora 45、debug build，`27be26c` 之上）
+沒有新的。
 
-**必壞的測試**：
-- `a_navigation_reaches_the_browser_as_script_asks`（`location.href` 之後忙 500 ms，browser 在忙完之前收到導覽）：原本的程式上壞（順序是回答、才開始導覽），2b 之後過。
-- `an_iframes_navigation_reaches_the_browser_as_it_is_inserted`（插入有 `src` 的 iframe 之後忙 500 ms）：2e 之前壞，之後過。
-- `of_two_navigations_in_a_task_the_second_alone_commits`（同一個 task 導覽兩次、中間忙 500 ms，只 commit 第二個、session history 只多一筆；頂層、子 frame、第一個是 `about:blank`）：原本的程式上過（兩個都在呼叫之後才送），2b 之後壞（頂層先 commit `/a`），2d 之後過。
-- `a_frame_navigated_as_the_last_wait_goes_delays_the_load`（同一次呼叫裡導覽子 frame、再拿掉父文件最後等著的 iframe，父文件的 `load` 要等它；`src` 和 `location` 兩種）：原本的程式上就壞（`load,again`），是原本就有的問題，2e 修掉。
+### 跑過的檢查
 
-**過程中發現、修掉的**：
-- `popstate` 的 handler 發起的導覽比 traversal 的 commit 先到 browser（browser 的 4 個 history 測試壞了）：traversal 的 commit 改在 `popstate` 之前送。
-- browser 的 `blobs` 測試在整組跑時逾時（單獨跑會過；原本的程式上整組 3.5 秒都過）：導覽當場送之後，browser 在外圈送出撤銷之前就 commit 了。用暫時的 probe 印出 renderer 的訊息才找到（第 12 條）。
-- 兩個 browser 的測試改了：`a_child_frame_commits_its_latest_navigation_alone` 扣住 `/b` 的 `BeginNavigation` 時也扣住它的窗口結束；`a_child_frames_commit_counts_the_new_entries_the_browser_has_not_heard_of` 的 `pushState` 移到下一個 task（同一個 task 的現在一定先到 browser）。
-- `the_child_frames_are_told` 壞了：載入中的 frame 的初始文件的 `init` 排到 `frameStartedNavigating` 後面，改成 hook 送導覽之前由 Page agent 送；`a_loading_frames_initial_document_is_told_before_its_own` 改成在一個迴圈裡讀所有訊息（`init` 現在比 `Runtime.evaluate` 的回答早到）。
+- 每一段結束時 `cargo test --workspace`：最後一次（第 24 條的整理之後）60 個 binary，4722 個通過、0 個失敗、1 個 ignored（`bindings` 的 `gc_platform` 印出的 panic 是測試預期的）。
+- `cargo clippy --workspace --all-targets -- -D warnings`、`cargo fmt --check`：通過。
+- `python3 scripts/sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs：通過；`boundary` 的例外加了 `NEXT_BEGIN_NAVIGATION_ID`（導覽的請求編號）和 `bindings` 的 `TASKS`（V8 的 platform 的 foreground task）。
+- `test.py scenarios`（沒有視窗的）：第 4、5 段和第 24 條的整理之後，98 個都通過。
+- 整套的 `wpt`、`wdspec`、`reftest`、`scenarios` 和 `matrix`、`fuzz` 由 CI 跑；這份動到 `bindings` 的 platform（V8 的 foreground task），merge 之後手動開始一次 `gc.yml` 看結果。
 
-**mutation test**（`mutants-2.toml`，26 個）：24 個抓到，2 個沒抓到（記進 `docs/test-gaps.md`）：
-- 「先結束取消窗口、再送撤銷」：等價，兩個訊息在同一次 `after_task` 裡接連送，commit 的結果要經過 renderer 才傳得出來。
-- 「parser 的 script 和背景圖的請求等外圈才送」：parser 的 script（擋住 parser 的和 `async` 的）在 task 裡就由別的路送了；style 在畫 frame 時找到的背景圖可能只靠它，畫 frame 的時機不固定，沒有穩定的測試。
+### 做完之後：Speedometer 和丟掉的 task（2026-11-24，Linux：Fedora 45，`perf` profile）
 
-第一輪 17 個抓到、9 個沒抓到，補的測試：wasm engine 的 client（`a_navigation_is_told_to_the_frame_client_as_it_is_asked`）、`location` 導覽子 frame 的載入中（上面的 `load` 測試的第二種）、iframe 的 `src` 到 fragment（`a_child_frames_navigation_to_a_fragment_stays_in_its_document`；先用 `location.href` 寫抓不到，DOM 自己就當成同一份文件內的導覽）、通道一直有 task 時窗口和撤銷在 task 之後（`what_a_task_leaves_for_the_browser_goes_as_it_ends`，第 0 階段的 `fetch()` 串的做法）、`about:blank` 的 commit 被擋下（兩個導覽的測試的第三種）、擋下的錯誤頁（`a_failed_navigation_commits_its_error_page_once_its_task_is_over`）。第二輪有一個因為 spec 指定的測試命令（`browser`）不含新的測試而沒抓到，改成 `shell` 單獨重跑抓到了。第 1 段的 `mutants-1.toml` 有三個 `from` 對不上第 2 段改過的程式，更新了。
+**和 RFC 開始之前的 `79a0ecc` 比**（`bench.py speedometer --against 79a0ecc5 --runs 3`）：
+- 第一次：這一版 9 個 suite 不時卡住（3 輪共 18 次「160 s 沒有報告」，`79a0ecc` 0 次）；能比的 11 個的幾何平均 +5.9%。
+- 二分（只跑 `Editor-TipTap`、`NewsSite-Next`）：`937061c`（第 2 段）不卡，`b52b562`（第 3 段）卡 `NewsSite-Next`。
+- 卡住時 renderer 的 main thread 停在等下一個 task（`eu-stack`），CPU 幾乎是 0；頁面的 `setInterval` 也不跑。暫時的 probe 看到記號找不到它的 task：記號 `1189` 輪到時 timer queue 的第一個是 `894`。原因和做法在第 25 條。
+- 先試的「每個 task 之後就要 frame」沒有修好卡住（5 個 suite 還卡 4 個）：`requestAnimationFrame` 在通道一直有 task 時不來是另一個問題（`event_loop` 的測試 3 次都壞），第 8 步做。
+- 修好之後：卡過的 9 個 suite 單獨跑都完成；完整的比較 20 個 suite × 3 輪 0 次卡住，幾何平均 +3.3%（`TodoMVC-Svelte-Complex-DOM` +16.0%、`TodoMVC-Preact-Complex-DOM` +8.4%、`TodoMVC-Backbone` +5.9%，`TodoMVC-jQuery` -0.1%）。
 
-**相關 crate 的測試**：`dom_api`、`dom_js`、`dom_wasm`、`renderer`、`browser`、`shell`、`protocol` 都通過。
+**變慢在哪**：
+- `--sample --against`：計時區間裡 main thread 的指令數 +0.1% 到 +2.3%（大多約 1%），cycle -4.4% 到 +8.0%（同一份程式換 build 本來就可能差 5%）；這份 RFC 加的程式（`after_task`、scheduler、照編號找 task）不在變最多的函式裡。
+- 兩個版本各量一次每個測試的 sync 和 async：多在 Svelte、Preact 的 `Adding100Items`（sync 約多 0.7 ms、async 約多 1.3 ms），其他的差在 0.3 ms 以內。整個 suite 裡 main thread 的使用者空間 CPU 時間一樣（`perf stat` 的 `task-clock:u`：1768 對 1745 ms）。
+- 試過、排除的：scheduler 每 post 一個 task 都 `notify_one`（Linux 上每次一個 `futex`）。改成只在有 thread 在等時才 notify，Svelte、Preact 各量 3 次，數字沒有變，改動還原了。
+- 還沒驗證的：async 多的那一段可能是要 frame 的時機（第 8 步）；sync 多、指令沒多的那一段要看 kernel 的時間和 context switch（這台的 `perf_event_paranoid` 是 2，看不到）。
 
-**階段結束的檢查**：`cargo test --workspace` 通過（60 個 binary，4709 個通過、1 個 ignored）；`cargo fmt --check` 和 `cargo clippy --workspace --all-targets -- -D warnings` 通過；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs` 通過（`boundary` 的例外加了新的 thread-local 計數器 `NEXT_BEGIN_NAVIGATION_ID`，和請求的編號同一類）。
+**驗證**：`a_timer_set_after_an_earlier_ones_time_runs` 改之前 3 次都卡滿 30 秒，改之後 3 次都通過；`cargo test --workspace` 通過（60 個 binary，4723 個通過、1 個 ignored，偵測沒有觸發）；`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`sanity.py` 的各項通過。還沒做：第 25 條的 mutation test、相關的 WPT 目錄和情境。
 
-### 第 3 階段（2026-11-24，Linux：Fedora 45、debug build，`937061c` 之上）
+**順便查過、沒有問題的**：parser 的續跑不會沒有 `ParseOn` 排著（`parse_due` 只在 post 它的地方設）；iframe 的導覽送出之後同一次呼叫裡 frame 被拿掉，renderer 不為它結束取消窗口，但 Browser 扣著的 commit 存在 frame 的節點上，跟著 frame 一起丟掉。
 
-**必壞的測試**（`shell` 的 `event_loop`）：
-- `a_timer_runs_while_responses_keep_coming`（第 0 階段的原型的）：原本的程式上壞（`the timer ran after -1`），3d 之後過。
-- `a_timer_takes_its_turn_as_it_is_due`（`setTimeout(f, 30)` 之後忙 60 ms 再 `postMessage`，訊息在 timer 前面）：原本的程式上壞（`timer,message`）；Chrome for Testing 152 跑 5 次都是 `message,timer`。3d 的第一版照原型在 post 時把到期的 timer 排進去，還是壞，改成挑下一個 task 時才排之後過（第 13 條）。
-
-**過程中發現、修掉的**：
-- WPT 的 `webmessaging/`：port 轉送之後的訊息卡住（4 個逾時）。一個是送給還沒啟用的 port 的訊息當場拿了編號，記號輪到時 port 不在清單裡，之後沒有記號了：port 啟用時重送。另一個是轉送清掉編號的訊息比後來的訊息晚拿編號，queue 的第一個不是記號的那個：同一個 port 照佇列順序拿編號。用暫時的 shell 測試印出順序才找到（`t0,t1,got1`，少了 2、3）。
-- WPT 的 `webmessaging/message-channels/worker*`、`workers/WorkerGlobalScope-close.html`：worker 自己關閉時，它之前送的訊息和錯誤被丟掉（以前靠 loop 在處理 `Closed` 之前先跑完排著的 task）。
-- `shell` 的 `forms::reset_buttons_and_links` 改成讀 `hashchange` 的 `newURL`（第 13 條）。
-- 第一輪 mutation test 的上限設 1800 秒，第一個 mutant（排的 task 不送記號）卡滿 30 分鐘才算 hung：停掉、`--restore` 還原，上限改成 240 秒（最慢的正常的一輪含重新編譯約 190 秒），會讓測試一直等的 6 個 mutant 只跑 `event_loop::`（測試自己 30 秒就失敗）。
-
-**WPT**（`html/webappapis/timers/`、`html/webappapis/scripting/event-loops/`、`webmessaging/`、`workers/`、`html/browsers/history/`、`html/semantics/embedded-content/the-iframe-element/`、`html/syntax/parsing/`，632 個）：沒有新的失敗；`negative-settimeout.any.worker.html` 和 `workers/baseurl/alpha/xhr-in-moduleworker.html` 是 OK、預期 ERROR，在 `937061c` 上也一樣（原本的預期結果就舊了，沒改）；`same-hash.html` 是標著的 known intermittent。
-
-**mutation test**（`mutants-3.toml`，19 個）：第一輪 9 個抓到、11 個沒抓到；補了 `event_loop` 的 6 個測試（閒著的頁面的 timer、interval、`AbortSignal.timeout()`、忙著的頁面的 idle callback 的 timeout、啟用之前送到 port 的訊息、worker 關閉時丟的錯誤），拿掉 `PortMessages` 裡多餘的編號（它本身是 task，`after_task` 會掃描）和它的 mutant，重跑抓到 5 個。沒抓到的（記進 `docs/test-gaps.md`）：只看 DOM 自己的時鐘（造不出兩個時鐘的那一點差）、worker 關閉時丟的錯誤（`shell` 裡錯誤總是先跑；WPT 的 `WorkerGlobalScope-close.html` 抓得到）、wasm guest 的等待不叫醒 loop（畫面的 frame 照樣叫醒它）；等價的：task 之後不掃描 port（外圈也掃描）、關閉了的 worker 照樣收訊息（它的 thread 不跑了）。另外 `event_loop` 的 `a_moved_ports_messages_come_in_order`、`what_a_worker_posted_before_it_closed_comes` 把 WPT 抓到的兩件事寫成 shell 的測試。第 1、2 段的 spec 跟著更新了對不上的 `from`，第 1 段拿掉「DOM 排著的 task 之後不送」（那一段程式拿掉了）。
-
-**相關 crate 的測試**：`dom`、`dom_api`、`dom_js`、`dom_wasm`、`renderer`、`browser`、`shell` 都通過。
-
-**階段結束的檢查**：`cargo test --workspace` 通過（60 個 binary，4719 個通過、1 個 ignored）；`cargo fmt --check` 和 `cargo clippy --workspace --all-targets -- -D warnings` 通過；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs` 通過。
-
-### 第 4 階段（2026-11-24，Linux：Fedora 45、debug build，`b52b562` 之上）
-
-**必壞的測試**：`event_loop::a_parser_parses_on_while_responses_keep_coming`（`fetch()` 的接力裡插入一個 iframe，它的長文件要在接力結束之前 parse 完）：原本的程式上壞（`parsed after -1`），4c 之後過。
-
-**過程中發現、修掉的**：
-- caret 和新內容的逾時的 task 在提早被叫到時重新排自己：每次重新設定都多一條重複的鏈，跑測試之前改掉了（它們和 scheduler 比的是同一個 `Instant`，不會因為換算提早；只在設定的地方排）。intersection 的 `delay` 和延後的 iframe `load` 用 renderer 的時鐘（`f64`），提早時再排一次，intersection 的另外記著排了哪個時間，每個 frame 重算時不重複排。
-- caret 的情境（`test.py scenarios caret`）抓到 caret 不閃了：caret 來了、移了的地方設了時間，卻沒排 task（只在閃的時候排了下一次）。mutation test 一開始給它的命令是整組 `shell` 的測試，沒有跑情境才沒發現；改好之後 98 個情境都通過。
-- `bindings` 改用 custom platform 之後，V8 的 foreground task 都經過 embedder 的佇列（暫時的 probe：一個 `bindings` 的測試 1083 個）；worker 的 loop 以前不跑 V8 的 platform task，現在跑（第 18 條），`FinalizationRegistry` 的測試有 worker 的一次。
-
-**WPT**（`html/syntax/parsing/`、`html/semantics/scripting-1/the-script-element/`、`intersection-observer/`、`html/semantics/embedded-content/the-iframe-element/`、`html/webappapis/timers/`、`workers/`，798 個）：沒有新的失敗；預期 FAIL 或 ERROR、結果通過的 9 個（`script-crossorigin-network.sub.html` 和 `module/credentials.sub.html` 的 7 個子測試，和第 3 段記下的 2 個），在 `b52b562` 上也一樣，原本的預期結果就舊了，沒改。
-
-**情境**：`test.py scenarios`（沒有視窗的）98 個都通過。
-
-**mutation test**（`mutants-4.toml`，16 個）：第一輪 7 個抓到、8 個沒抓到；caret、延後的 iframe `load`、新內容的逾時三個改成跑抓得到它們的測試（caret 的情境、`browser` 的 `fires_its_iframes_load`、`empty`），`FinalizationRegistry` 的測試加第二輪 GC（platform 的 task 只 post 一次），加 caret 來了的地方的 mutant，重跑都抓到。沒抓到的 4 個記進 `docs/test-gaps.md`：loop 等待時為 renderer 自己的 timer 醒來（情境裡 frame 和輸入照樣叫醒它）、intersection 的 `delay` 提早時再排一次（造不出那一點差）、V8 延後的 platform task 到期、worker 為它醒來（沒有看得出延後的 task 的地方）。第 2、3 段的 spec 跟著更新了對不上的 `from`。
-
-**相關 crate 的測試**：`bindings`、`dom_js`、`renderer`、`browser`、`shell` 都通過。
-
-**階段結束的檢查**：`cargo test --workspace` 通過（60 個 binary，4721 個通過、1 個 ignored）；`cargo fmt --check` 和 `cargo clippy --workspace --all-targets -- -D warnings` 通過（clippy 抓到一個多餘的空行和一個 `match`，改了）；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs` 通過（`boundary` 的例外加了 `bindings` 的 `TASKS`：V8 的 platform 的 foreground task，照 isolate 分開，和已經在例外裡的 `PLATFORM` 同一個 process 一份的 platform）。
-
-### 第 5 階段（2026-11-24，Linux：Fedora 45、debug build，`5f243e5` 之上）
-
-**必壞的測試**：`event_loop::a_canvas_blob_comes_while_responses_keep_coming`（`fetch()` 的接力裡呼叫 `toBlob`，blob 要在接力結束之前來）：原本的程式上壞（`encoded after -1`），5b 之後過。
-
-**過程中發現、修掉的**：
-- 要不要 main frame 改成每個 task 之後決定時，`shell` 的 6 個測試壞了（`canvas::a_draw_asks_for_a_frame` 多畫了一個 frame：task 要的 frame，下一個 task 之前可能已經畫了、旗標清了，在那之間決定又要了一次）。一步一步拿掉試，確認是這一步；改成 loop 要等下一個 task 之前才決定（和以前外圈在一批 task 之後決定一樣），6 個都過。
-- WPT 的 `webmessaging/with-ports/018.html`、`without-ports/018.html` 逾時：第 4 段把 iframe 的 `javascript:` 的 commit 排成 task，它排在頁面的 `postMessage` 前面，建了新的 window，送給 `window[0]` 的訊息丟了（第 4 段的 WPT 沒有跑 `webmessaging/`）。照第 23 條改成繼承建立它的文件的 origin、沿用初始 `about:blank` 的視窗，兩個都過；`devtools::a_child_frames_document_is_told_before_its_script` 的 `javascript:` 那一種少了一個 context，改了預期；`history_pushstate_url_rewriting.html` 多通過一個子測試（`javascript:'foo'?newsearch`），更新了預期結果，重跑兩次都通過。
-- `until_next_due` 和只有它用的 `sooner` 拿掉了（loop 不再自己算醒來的時間，連同 `sooner` 的單元測試）。
-
-**WPT**（`html/webappapis/timers/`、`html/webappapis/scripting/event-loops/`、`html/browsers/history/`、`webmessaging/`、`intersection-observer/`、`html/semantics/forms/the-select-element/`、`html/syntax/parsing/`、`requestidlecallback/`、`workers/`、`html/semantics/embedded-content/the-iframe-element/`，836 個）：修好上面兩個之後沒有新的失敗；預期 FAIL 或 ERROR、結果通過的（`same-hash.html` 的 7 個子測試、第 3 段記下的 2 個），原本的預期結果就舊了，沒改。
-
-**情境**：`test.py scenarios`（沒有視窗的）98 個都通過。
-
-**mutation test**（`mutants-5.toml`，16 個）：11 個抓到、5 個沒抓到。`javascript:` 的文件有自己的 window 的那個，在 `devtools` 的測試裡加了「沒有其他的 context」的檢查，重跑抓到。沒抓到的 4 個記進 `docs/test-gaps.md`：`CSS` 的命令當場抓 sheet 和在 task 之後抓（等價：都在同一個 task 結束前送出請求）、lifecycle 之後才要的 sheet 在 task 之後抓（測試裡要原文的都是命令）、overlay 要 frame（測試裡命令和畫面本來就要了 frame）、wasm guest 的延後的 task（畫面的 frame 照樣叫醒 loop）。第 1 到 3 段的 spec 裡改外圈的 mutant（`the outer turn's steps leave nothing for DevTools` 等 6 個），程式這一段拿掉了，沒有改。
-
-**相關 crate 的測試**：`dom`、`dom_js`、`renderer`、`browser`、`shell` 都通過。
-
-**階段結束的檢查**：`cargo test --workspace` 通過（60 個 binary，4721 個通過、1 個 ignored）；`cargo fmt --check`（rustfmt 改了 `render_thread.rs` 一處，`mutants-5.toml` 跟著改）和 `cargo clippy --workspace --all-targets -- -D warnings` 通過；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs` 通過。

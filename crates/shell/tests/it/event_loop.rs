@@ -351,3 +351,24 @@ fetch('/start', { cache: 'no-store' }).then(() => {
     ]);
     assert_eq!(report, "encoded as they came");
 }
+
+/// A timer of no timeout set as the thread has run past an earlier one's
+/// time runs, and before it, as in Chrome (each timer is a task of its
+/// own, the earlier one in the scheduler's queue as it is taken: HTML
+/// orders only a timer of a timeout no longer after one set before it);
+/// the others after them run too.
+#[test]
+fn a_timer_set_after_an_earlier_ones_time_runs() {
+    let page = r#"<!DOCTYPE html><script>
+const busy = ms => { const until = performance.now() + ms; while (performance.now() < until); };
+const ran = [];
+const end = setTimeout(() => testRunner.reportHarnessResults(ran.join(',') || 'none'), 2000);
+onload = () => {
+  setTimeout(() => ran.push('a'), 10);
+  busy(20);
+  setTimeout(() => ran.push('b'), 0);
+};
+</script>"#;
+    let report = report(&[("/", Route::ok("text/html", page))]);
+    assert_eq!(report, "b,a");
+}
