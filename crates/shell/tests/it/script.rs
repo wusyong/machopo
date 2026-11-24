@@ -502,7 +502,10 @@ fn a_page_that_never_returns_ends_its_test() {
     let error = ended
         .recv_timeout(std::time::Duration::from_secs(10))
         .expect("the test ends");
-    assert_eq!(error.as_deref(), Some("reftest-wait was still on after 0.5 s"));
+    assert_eq!(
+        error.as_deref(),
+        Some("reftest-wait was still on after 0.5 s")
+    );
 }
 
 /// Child frames take their turns in the tree order of their iframes, not

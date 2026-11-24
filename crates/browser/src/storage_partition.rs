@@ -55,6 +55,10 @@ impl StoragePartition {
     /// [`PROFILE_LIMIT`]: crate::shutdown::PROFILE_LIMIT
     pub fn close(&self) {
         let start = Instant::now();
+        #[expect(
+            clippy::arithmetic_side_effects,
+            reason = "seconds from now: within any clock's range"
+        )]
         let deadline = start + shutdown::PROFILE_LIMIT;
         self.dom_storage.close();
         self.network.close();

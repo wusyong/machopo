@@ -2933,7 +2933,8 @@ fn a_profile_is_written_as_machopo_ends() {
 #[test]
 fn hung_renderers_take_the_limit_once() {
     let server = server(&[("/", Route::ok("text/html", "<!DOCTYPE html>page"))]);
-    let log = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("shell-hung-renderers.log");
+    let log =
+        std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("shell-hung-renderers.log");
     let mut browser = Browser::start_logging(
         &["--process-per-tab"],
         Stdio::from(std::fs::File::create(&log).unwrap()),
@@ -2964,7 +2965,9 @@ fn hung_renderers_take_the_limit_once() {
     let said = std::fs::read_to_string(&log).unwrap();
     let killed = said
         .lines()
-        .filter(|line| line.starts_with(browser::shutdown::GAVE_UP) && line.contains("renderer process"))
+        .filter(|line| {
+            line.starts_with(browser::shutdown::GAVE_UP) && line.contains("renderer process")
+        })
         .count();
     assert_eq!(killed, 3, "{said}");
 }
@@ -3092,7 +3095,10 @@ fn a_second_signal_ends_machopo_at_once() {
     assert!(asked.elapsed() < Duration::from_millis(1500));
     assert_eq!(status.code(), Some(128 + 15));
     let said = std::fs::read_to_string(&log).unwrap();
-    assert!(said.contains("a second signal (15), ending at once"), "{said}");
+    assert!(
+        said.contains("a second signal (15), ending at once"),
+        "{said}"
+    );
 }
 
 /// A signal machopo was started ignoring (`nohup`'s SIGHUP) stays ignored.
@@ -3190,10 +3196,67 @@ fn a_hung_renderer_leaves_the_writer_its_time() {
     assert!(!said.contains("writer"), "{said}");
 }
 
+/// Whether process `pid` is running (or not yet reaped).
+fn alive(pid: u64) -> bool {
+    #[cfg(unix)]
+    let asked = Process::new("kill")
+        .args(["-0", &pid.to_string()])
+        .stderr(Stdio::null())
+        .status()
+        .expect("kill runs")
+        .success();
+    #[cfg(windows)]
+    let asked = {
+        let listed = Process::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+            .output()
+            .expect("tasklist runs");
+        String::from_utf8_lossy(&listed.stdout).contains(&format!(" {pid} "))
+    };
+    asked
+}
+
+/// The ids of machopo's renderer processes (`SystemInfo.getProcessInfo`).
+fn renderer_pids(browser: &mut Browser) -> Vec<u64> {
+    let info = browser
+        .call(None, "SystemInfo.getProcessInfo", json!({}))
+        .unwrap();
+    info["processInfo"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|process| process["type"] == "renderer")
+        .map(|process| process["id"].as_u64().unwrap())
+        .collect()
+}
+
+/// A renderer process doesn't have machopo's automation pipe: its standard
+/// input is nothing, and its standard output machopo's standard error,
+/// so a client hears the pipe end once machopo has, and what a renderer
+/// prints isn't taken for a message.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_renderer_process_hasnt_the_pipe() {
+    let log =
+        std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("shell-renderer-stdio.log");
+    let mut browser = Browser::start_logging(
+        &["--process-per-tab"],
+        Stdio::from(std::fs::File::create(&log).unwrap()),
+    );
+    let session = browser.attach();
+    browser.navigate(&session, "about:blank");
+    let pids = renderer_pids(&mut browser);
+    assert_eq!(pids.len(), 1, "{pids:?}");
+    let fd = |n: u32| std::fs::read_link(format!("/proc/{}/fd/{n}", pids[0])).unwrap();
+    assert_eq!(fd(0), std::path::Path::new("/dev/null"));
+    assert_eq!(fd(1), log);
+    assert_eq!(fd(2), log);
+    assert!(browser.end().success());
+}
+
 /// Starts a machopo with a tab for each of `scripts`, in a renderer
 /// process of its own that is left running its script (or doing nothing),
-/// and kills the machopo: whether every renderer went with it. They had
-/// its output too, so it is at its end only once they are all gone.
+/// and kills the machopo: whether every renderer went with it.
 fn renderers_go_with_a_killed_browser(scripts: &[Option<&str>]) {
     let server = server(&[("/", Route::ok("text/html", "<!DOCTYPE html>page"))]);
     // Whatever the run asks for: this is about the processes.
@@ -3216,20 +3279,18 @@ fn renderers_go_with_a_killed_browser(scripts: &[Option<&str>]) {
             );
         }
     }
+    let pids = renderer_pids(&mut browser);
+    assert_eq!(pids.len(), scripts.len(), "{pids:?}");
     std::thread::sleep(Duration::from_secs(1));
     browser.child.kill().unwrap();
     browser.child.wait().unwrap();
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        let left = deadline.saturating_duration_since(std::time::Instant::now());
-        match browser.messages.recv_timeout(left) {
-            Ok(_) => {}
-            // Its output is at its end: the renderers had it too.
-            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
-            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
-                panic!("a renderer outlived its browser")
-            }
-        }
+    while pids.iter().any(|&pid| alive(pid)) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "a renderer outlived its browser"
+        );
+        std::thread::sleep(Duration::from_millis(20));
     }
 }
 

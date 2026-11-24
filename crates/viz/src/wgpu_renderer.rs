@@ -474,7 +474,8 @@ impl WgpuRenderer {
                 ..
             }) = &mut self.output
         {
-            let new = make_surface().map_err(|err| format!("no new surface for the window: {err}"))?;
+            let new =
+                make_surface().map_err(|err| format!("no new surface for the window: {err}"))?;
             // The old one goes before the new one is configured: a window
             // has one swap chain.
             drop(std::mem::replace(surface, new));
@@ -517,7 +518,11 @@ impl WgpuRenderer {
                     return Ok(());
                 }
                 // The surface went with the failed configuration.
-                Err(err) => return Err(format!("the new GPU device can't draw to the window: {err}")),
+                Err(err) => {
+                    return Err(format!(
+                        "the new GPU device can't draw to the window: {err}"
+                    ));
+                }
             }
         }
         Err(format!(
@@ -1310,6 +1315,7 @@ mod drawing_tests {
     /// what it is asked then neither draws nor panics, its output gone or
     /// not.
     #[test]
+    #[expect(clippy::disallowed_methods, reason = "a test's counter")]
     fn a_renderer_that_cant_draw_says_so_once_and_draws_no_more() {
         let _gpu = gpu();
         let size = Size::new(4, 4);

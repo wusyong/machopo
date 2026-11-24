@@ -1869,6 +1869,10 @@ impl BrowserView {
         for contents in self.tabs.iter_mut().chain(&mut self.others) {
             contents.ask_to_shut_down();
         }
+        #[expect(
+            clippy::arithmetic_side_effects,
+            reason = "seconds from now: within any clock's range"
+        )]
         let deadline = asked + browser::shutdown::LIMIT;
         for contents in self.tabs.iter_mut().chain(&mut self.others) {
             let _ = contents.wait_for_shutdown(asked, deadline);

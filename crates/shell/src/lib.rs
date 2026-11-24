@@ -91,6 +91,15 @@ pub fn renderer_launcher(process_per_tab: bool) -> browser::RendererLauncher {
         let executable = std::env::current_exe().unwrap_or_default();
         let mut command = std::process::Command::new(executable);
         command.arg(RENDERER_PROCESS_SWITCH);
+        // Not the automation pipe, which is the browser's alone: its input
+        // is nothing (as a Chromium child's, `LaunchProcess`), and what it
+        // prints goes with the browser's log, off the pipe's messages. A
+        // client then hears the pipe end as the browser does, not once the
+        // last renderer has. (Chromium's children keep its standard output:
+        // its `--remote-debugging-pipe` is two other descriptors.)
+        command
+            .stdin(std::process::Stdio::null())
+            .stdout(std::io::stderr());
         command
     }))
 }

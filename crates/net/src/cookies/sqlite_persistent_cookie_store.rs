@@ -14,11 +14,11 @@ use sql::rusqlite::{self, params};
 use tokio::sync::oneshot;
 
 use super::canonical_cookie::CanonicalCookie;
-use crate::database_thread::DatabaseThread;
 use super::cookie_constants::{CookieSameSite, CookieSourceScheme, CookieSourceType};
 use super::cookie_monster::PersistentCookieStore;
 use super::cookie_partition_key::CookiePartitionKey;
 use super::time::Time;
+use crate::database_thread::DatabaseThread;
 
 /// The database's file in the profile's folder (Chromium's
 /// `chrome::kCookieFilename`).

@@ -332,83 +332,91 @@ impl RenderProcessHost {
             }
         };
         let mut detached = None;
-        let (to_renderer, to_compositor, renderer_thread, io_thread, terminator, child) = match launcher
-        {
-            RendererLauncher::InProcess(script_engine) => {
-                let (to_renderer, to_compositor, from_browser) = renderer::channel();
-                let (to_browser, from_renderer) = crossbeam_channel::unbounded();
-                let terminator = renderer::MainThreadTerminator::default();
-                let renderer_thread = renderer::spawn_renderer_main_thread(
-                    RendererEndpoints {
-                        from_browser,
-                        to_browser: to_browser.into(),
-                        // Bound to the renderer's sink (`FrameSinkManager`):
-                        // it speaks for no other.
-                        viz: CompositorFrameSinkSender::new(frame_sink_id, viz),
-                        gpu: gpu.is_some(),
-                    },
-                    flags,
-                    *script_engine,
-                    Some(terminator.clone()),
-                )?;
-                // The channel closes once every sender is dropped.
-                let mut host = host(to_renderer.clone());
-                let io_thread = std::thread::Builder::new()
-                    .name("Chrome_IOThread".into())
-                    .spawn(move || {
-                        while let Ok(msg) = from_renderer.recv() {
-                            host.on_message(msg);
-                        }
-                        host.on_channel_closed();
-                    })?;
-                (
-                    to_renderer,
-                    to_compositor,
-                    Some(renderer_thread),
-                    Some(io_thread),
-                    Some(terminator),
-                    None,
-                )
-            }
-            RendererLauncher::Process(command) => {
-                let io = io_thread()
-                    .ok_or_else(|| std::io::Error::other("the browser has no IO thread"))?;
-                let (child, channel) = ipc::platform::spawn(&mut command())?;
-                let (link, endpoint) = endpoint::endpoint(channel, control_channel::config(true));
-                // What the renderer starts with, before anything else is
-                // sent it: its own first message.
-                let init = ChildInit {
-                    flags,
-                    gpu: gpu.is_some(),
-                };
-                let _ = send_over(&link, to_renderer::MAIN, &init);
-                // Shared memory for the tiles it draws, so their pixels
-                // cross without being copied: enough for a frame's worth
-                // of new tiles, and it asks for more when it has none
-                // free.
-                if gpu.is_some() {
-                    for _ in 0..TILE_REGIONS {
-                        link.grant_to_peer(TILE_REGION_LEN);
-                    }
+        let (to_renderer, to_compositor, renderer_thread, io_thread, terminator, child) =
+            match launcher {
+                RendererLauncher::InProcess(script_engine) => {
+                    let (to_renderer, to_compositor, from_browser) = renderer::channel();
+                    let (to_browser, from_renderer) = crossbeam_channel::unbounded();
+                    let terminator = renderer::MainThreadTerminator::default();
+                    let renderer_thread = renderer::spawn_renderer_main_thread(
+                        RendererEndpoints {
+                            from_browser,
+                            to_browser: to_browser.into(),
+                            // Bound to the renderer's sink (`FrameSinkManager`):
+                            // it speaks for no other.
+                            viz: CompositorFrameSinkSender::new(frame_sink_id, viz),
+                            gpu: gpu.is_some(),
+                        },
+                        flags,
+                        *script_engine,
+                        Some(terminator.clone()),
+                    )?;
+                    // The channel closes once every sender is dropped.
+                    let mut host = host(to_renderer.clone());
+                    let io_thread = std::thread::Builder::new()
+                        .name("Chrome_IOThread".into())
+                        .spawn(move || {
+                            while let Ok(msg) = from_renderer.recv() {
+                                host.on_message(msg);
+                            }
+                            host.on_channel_closed();
+                        })?;
+                    (
+                        to_renderer,
+                        to_compositor,
+                        Some(renderer_thread),
+                        Some(io_thread),
+                        Some(terminator),
+                        None,
+                    )
                 }
-                let to_renderer = RendererSender::over(link.clone());
-                io.serve(
-                    endpoint,
-                    ChannelHost {
-                        host: Some(host(to_renderer.clone())),
-                        frame_sink_id,
-                        viz,
-                    },
-                );
-                let to_compositor = CompositorSender::over(link.clone());
-                (to_renderer, to_compositor, None, None, None, Some((child, link)))
-            }
-            RendererLauncher::Detached => {
-                let (to_renderer, to_compositor, from_browser) = renderer::channel();
-                detached = Some((host(to_renderer.clone()), from_browser));
-                (to_renderer, to_compositor, None, None, None, None)
-            }
-        };
+                RendererLauncher::Process(command) => {
+                    let io = io_thread()
+                        .ok_or_else(|| std::io::Error::other("the browser has no IO thread"))?;
+                    let (child, channel) = ipc::platform::spawn(&mut command())?;
+                    let (link, endpoint) =
+                        endpoint::endpoint(channel, control_channel::config(true));
+                    // What the renderer starts with, before anything else is
+                    // sent it: its own first message.
+                    let init = ChildInit {
+                        flags,
+                        gpu: gpu.is_some(),
+                    };
+                    let _ = send_over(&link, to_renderer::MAIN, &init);
+                    // Shared memory for the tiles it draws, so their pixels
+                    // cross without being copied: enough for a frame's worth
+                    // of new tiles, and it asks for more when it has none
+                    // free.
+                    if gpu.is_some() {
+                        for _ in 0..TILE_REGIONS {
+                            link.grant_to_peer(TILE_REGION_LEN);
+                        }
+                    }
+                    let to_renderer = RendererSender::over(link.clone());
+                    io.serve(
+                        endpoint,
+                        ChannelHost {
+                            host: Some(host(to_renderer.clone())),
+                            frame_sink_id,
+                            viz,
+                        },
+                    );
+                    let to_compositor = CompositorSender::over(link.clone());
+                    (
+                        to_renderer,
+                        to_compositor,
+                        None,
+                        None,
+                        None,
+                        Some((child, link)),
+                    )
+                }
+                RendererLauncher::Detached => {
+                    let (to_renderer, to_compositor, from_browser) = renderer::channel();
+                    detached = Some((host(to_renderer.clone()), from_browser));
+                    (to_renderer, to_compositor, None, None, None, None)
+                }
+            };
         let context_lost = gpu.as_ref().map(|gpu| {
             let forwarder: Arc<dyn ContextLostObserver> =
                 Arc::new(ContextLostForwarder(to_compositor.clone()));

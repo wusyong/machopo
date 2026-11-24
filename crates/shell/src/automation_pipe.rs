@@ -156,7 +156,12 @@ const WRITER_GRACE: std::time::Duration = std::time::Duration::from_millis(100);
 /// joins its threads in a task that doesn't hold the end up). One not done
 /// by then is left, with a line; the process ends without it.
 pub fn wait_for_writer(writer: JoinHandle<()>, ending: std::time::Instant) {
-    let deadline = (ending + browser::shutdown::LIMIT).max(std::time::Instant::now() + WRITER_GRACE);
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "seconds from now: within any clock's range"
+    )]
+    let deadline =
+        (ending + browser::shutdown::LIMIT).max(std::time::Instant::now() + WRITER_GRACE);
     while !writer.is_finished() {
         if std::time::Instant::now() >= deadline {
             browser::shutdown::gave_up(

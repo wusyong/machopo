@@ -1,0 +1,17 @@
+# Stage 4g's mutants: `python3 scripts/test.py mutate rfcs/0109-shutdown-and-shell-tests/mutants-4g.toml`.
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "a_renderer_process_hasnt_the_pipe"]
+timeout = 300
+
+[[mutant]]
+name = "a renderer process has the pipe's input"
+file = "crates/shell/src/lib.rs"
+from = '''            .stdin(std::process::Stdio::null())
+            .stdout(std::io::stderr());'''
+to = '''            .stdout(std::io::stderr());'''
+
+[[mutant]]
+name = "a renderer process has the pipe's output"
+file = "crates/shell/src/lib.rs"
+from = '''            .stdin(std::process::Stdio::null())
+            .stdout(std::io::stderr());'''
+to = '''            .stdin(std::process::Stdio::null());'''

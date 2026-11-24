@@ -21,9 +21,9 @@ use sql::{Database, Synchronous};
 use tokio::sync::oneshot;
 
 use super::entry::StoredResponse;
-use crate::database_thread::DatabaseThread;
 use super::vary::VaryData;
 use crate::cookies::Time;
+use crate::database_thread::DatabaseThread;
 
 /// The database's file in the cache folder (Chromium's `Cache_Data` is a
 /// folder of its backend's files).

@@ -15,13 +15,14 @@
 | 2c. S6：`BrowserWindow` 沒有 shutdown 就丟掉時照樣 shutdown（第 7 條） | 做完，待審查 | 2026-11-24 |
 | 2d. mutation test、文件（穩定性照第 6 條看 CI） | 做完，待審查 | 2026-11-24 |
 | 3. 重量、定結束的規則（已決定的事項第 8 到 17 條） | 做完，待審查 | 2026-11-24 |
-| 4. 照規則改（4a 到 4g） | 進行中 | |
+| 4. 照規則改（4a 到 4g） | 做完，待審查 | 2026-11-25 |
 | 4a. 一條收尾的路、記一行的機制、profile 的 10 秒（第 12、13、18 條） | 做完，待審查 | 2026-11-25 |
 | 4b. renderer 同時請、共用 2 秒，到了 kill、記一行（第 8、9、12、19 條） | 做完，待審查 | 2026-11-25 |
 | 4c. 同一個 process 的 renderer 打斷 script 再有時限地等（第 10 條） | 做完，待審查 | 2026-11-25 |
 | 4d. SIGTERM、SIGINT、SIGHUP 走正常的結束，第二次立刻結束（第 11、12 條） | 做完，待審查 | 2026-11-25 |
 | 4e. automation pipe 的 writer 有時限地等（第 14 條） | 做完，待審查 | 2026-11-25 |
 | 4f. Viz 畫不下去時交給 main（第 15 條） | 做完，待審查 | 2026-11-25 |
+| 4g. renderer process 的 stdio（第 16 條） | 做完，待審查 | 2026-11-25 |
 | 5. 驗收 | 沒開始 | |
 
 ## 驗收
@@ -32,6 +33,21 @@
 | `shell` 的測試：每個模組的分類、壞過的每一個的原因和把握 | `details.md` 的「`shell` 的測試的審查」；不改程式，所以沒有測試 |
 
 ## 做過的檢查
+
+### 第 4 段結束的檢查（2026-11-25，Linux：Fedora 45，`f16e8c2` 之上加 4g）
+
+- `cargo test --workspace` 通過（60 個 binary，4855 個通過、1 個 ignored）。`cargo fmt --check`：第 4 段改過的 10 個檔案有排版的差，`cargo fmt` 改好。`cargo clippy --workspace --all-targets -- -D warnings`：三類，都是這一段加的：測試的計數器（`#[expect]`）、`MainThreadTerminator` 的型別太複雜（`Terminate` 的 type alias）、`Instant` 加上時限（照 machopodriver 的寫法加帶理由的 `#[expect]`，五處）；改好之後通過，相關的四個 crate 重跑通過。`sanity.py` 的七項通過。
+- 量測工具的四組測試（4a、4c、4g 各跑一次）通過。
+- `test.py wpt html/webappapis/timers`（automation pipe 改了）：25 個測試，1 個非預期的通過（`negative-settimeout.any.worker.html`，期望值是初始 commit 的 `ERROR`），三次都一樣；`main` 2026-11-24 的 Nightly 上也是 `Test OK, expected ERROR`，不是這份造成的，沒有改期望值。那次 Nightly 的 `wpt (2)`、`wpt (3)`、`wpt (4)`、`wdspec` 都有非預期的結果，另外處理。
+- `test.py scenarios`（沒有平台視窗）98 個通過。`test.py scenarios --window`（4d、4e、4f 改了視窗那一層）：74 個裡 6 個失敗。`intersection-observer`、`resize-observer`、`resize`、`scroll-anchoring` 是 `docs/limitations.md` 記著的 Linux 真視窗的大小問題；`fixed-into-view`（捲到 1500、要 1600）和 `frame-input`（點在 `49.75 20.5`、要 `50 20`）是新的，也是視窗的大小或縮放的那一類：`fixed-into-view` 是 2026-11-22 才加的、之前沒在 Linux 的真視窗上跑過；第 4 段在 `window.rs` 改的（訊號、Viz 的失敗、writer 的等待）不碰大小和座標。沒有在 `main` 上重跑確認。
+
+### 第 4 段的 4g（2026-11-25，Linux：Fedora 45，debug build，`f16e8c2` 之上）
+
+**做了什麼**：`shell::renderer_launcher` 啟動的 renderer process 的 stdin 接 `Stdio::null()`、stdout 是 Browser 的 stderr（`Stdio::from(io::stderr())`，三個平台一樣），stderr 照舊繼承。
+
+**測試**：`automation_pipe::a_renderer_process_hasnt_the_pipe`（Linux：讀 `/proc/<pid>/fd`，renderer 的 fd 0 是 `/dev/null`、fd 1 和 fd 2 是 Browser 的 stderr 的那個檔案；原本的程式上 fd 0 是 pipe，先失敗）。`renderers_go_with_a_killed_browser`（四個 `a_killed_browsers_*`）原本靠「renderer 也拿著 stdout，要等它們都不在 pipe 才讀到結尾」判斷 renderer 有沒有跟著結束，這一步之後那個判斷就沒有作用了：改成 kill 之前用 `SystemInfo.getProcessInfo` 拿 renderer 的 pid，之後等它們在 10 秒內都不在（Unix 的 `kill -0`、Windows 的 `tasklist`）。
+
+**mutation test**（`mutants-4g.toml`，2 個，都抓到）：stdin 還是 pipe、stdout 還是 pipe。
 
 ### 第 4 段的 4f（2026-11-25，Linux：Fedora 45，debug build，`8a0f502` 之上）
 

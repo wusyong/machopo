@@ -55,7 +55,9 @@ pub fn on_shutdown_signals(on_signal: impl Fn(i32) + Send + 'static) -> std::io:
         .compare_exchange(-1, write.as_raw_fd(), Ordering::AcqRel, Ordering::Acquire)
         .is_err()
     {
-        return Err(std::io::Error::other("the shutdown signals are handled already"));
+        return Err(std::io::Error::other(
+            "the shutdown signals are handled already",
+        ));
     }
     // Open for as long as the process: a handler may write to it any time.
     let _ = write.into_raw_fd();
@@ -119,7 +121,11 @@ extern "C" fn handle(signal: libc::c_int) {
     // as it was, for the code the signal interrupted, which may read it.
     unsafe {
         let saved = *errno;
-        libc::write(SIGNAL_PIPE.load(Ordering::Acquire), (&raw const byte).cast(), 1);
+        libc::write(
+            SIGNAL_PIPE.load(Ordering::Acquire),
+            (&raw const byte).cast(),
+            1,
+        );
         *errno = saved;
     }
 }

@@ -531,7 +531,12 @@ fn drive(
     // limit: a test of a page that never returns ends all the same.
     let asked = std::time::Instant::now();
     web_contents.ask_to_shut_down();
-    let left = web_contents.wait_for_shutdown(asked, asked + browser::shutdown::LIMIT);
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "seconds from now: within any clock's range"
+    )]
+    let deadline = asked + browser::shutdown::LIMIT;
+    let left = web_contents.wait_for_shutdown(asked, deadline);
     // The renderer has gone, so the frame forwarder's channel closes; one
     // left running keeps it open, and the forwarder with it.
     drop(web_contents);

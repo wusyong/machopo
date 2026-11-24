@@ -195,18 +195,26 @@ pub struct ScriptEngineFactory {
 /// makes the engine (a page whose scripts are wasm has another). Shared by
 /// the two threads, so a lock, taken only then and as machopo ends.
 #[derive(Clone, Default)]
-pub struct MainThreadTerminator(Arc<Mutex<Option<Box<dyn Fn() + Send>>>>);
+pub struct MainThreadTerminator(Arc<Mutex<Option<Terminate>>>);
+
+/// What an engine gives to stop its script (`ScriptEngine::terminator`).
+type Terminate = Box<dyn Fn() + Send>;
 
 impl MainThreadTerminator {
     /// Stops the script running now, if any; script after it is stopped
     /// too until its stack has unwound.
     pub fn terminate(&self) {
-        if let Some(terminate) = self.0.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
+        if let Some(terminate) = self
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+        {
             terminate();
         }
     }
 
-    fn set(&self, terminate: Box<dyn Fn() + Send>) {
+    fn set(&self, terminate: Terminate) {
         *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(terminate);
     }
 }
