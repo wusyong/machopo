@@ -11,6 +11,7 @@
 
 mod codec;
 mod data_pipe;
+mod disk_space;
 mod endpoint;
 mod endpoint_fuzz;
 mod frame_fuzz;

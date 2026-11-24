@@ -17,3 +17,11 @@ pub fn terminate_current_process_immediately(status: i32) -> ! {
     // that was never dropped.
     unsafe { libc::_exit(status) }
 }
+
+/// The bytes free on the file system `path` is on, for this user (Chromium's
+/// `base::SysInfo::AmountOfFreeDiskSpace`): the blocks `statvfs` says are
+/// available to one who isn't the superuser, times their size.
+pub fn available_disk_space(path: &std::path::Path) -> std::io::Result<u64> {
+    let stat = rustix::fs::statvfs(path)?;
+    Ok(stat.f_bavail.saturating_mul(stat.f_frsize))
+}

@@ -616,8 +616,7 @@ pub(crate) fn rows(dir: &Path, table: &str) -> i64 {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
 
     use super::*;
 
@@ -865,14 +864,15 @@ mod tests {
             *byte = 0xa5;
         }
         std::fs::write(&path, file).unwrap();
-        let razed = Arc::new(AtomicUsize::new(0));
+        let razed = Arc::new(Mutex::new(0u32));
         let counted = Arc::clone(&razed);
         let (store, thread, loaded) = SqlStore::open(&dir, move || {
-            counted.fetch_add(1, Ordering::Relaxed);
+            let mut count = counted.lock().unwrap();
+            *count = count.saturating_add(1);
         })
         .unwrap();
         assert_eq!(loaded.blocking_recv().unwrap(), []);
-        assert_eq!(razed.load(Ordering::Relaxed), 1);
+        assert_eq!(*razed.lock().unwrap(), 1);
         // A new one, which works.
         store.begin("c", head());
         store.append("c", Bytes::from_static(b"x"));

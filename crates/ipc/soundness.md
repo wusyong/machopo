@@ -11,7 +11,7 @@
 
 **這是論證，不是證明。** 機械化證明過的只有兩小塊算術（池子選哪一塊、管道的額度，Verus）；協定用小的模型窮舉過（TLA+、loom）；其餘靠 fuzz、Miri、跨 process 的測試、mutation test 和人工審查。kernel 的行為證明不了，寫成假設，每一條有測試在那個平台上守著。
 
-**分兩層是為了能驗證**：核心（`src/core/`）不做系統呼叫、不分平台（`python3 scripts/sanity.py deps` 檢查），所以能整個放進 Miri、fuzzer 和 loom；平台層（`src/platform/`）只做四件事（搬位元組和 handle、等、建和 map 共用記憶體、啟動時交接一端，Windows 上啟動時也把 child 放進 job；macOS 和 Linux 上另有一個當場結束自己這個 process 的函式），裡面沒有對訊息內容的判斷。
+**分兩層是為了能驗證**：核心（`src/core/`）不做系統呼叫、不分平台（`python3 scripts/sanity.py deps` 檢查），所以能整個放進 Miri、fuzzer 和 loom；平台層（`src/platform/`）只做四件事（搬位元組和 handle、等、建和 map 共用記憶體、啟動時交接一端，Windows 上啟動時也把 child 放進 job；macOS 和 Linux 上另有一個當場結束自己這個 process 的函式；三個平台都另有一個讀磁碟剩下多少空間的函式，給 HTTP cache 算它的大小），裡面沒有對訊息內容的判斷。
 
 ## 信任誰
 
@@ -136,6 +136,7 @@ macOS 那一層的測試在 `src/platform/macos/` 各檔的單元測試和 `crat
 | `platform/windows/channel.rs` 的 `DuplicateHandle`（`to_duplicate_into`、`give`、`take_back`） | handle 都是借來的、呼叫期間開著的，結果寫進活到呼叫結束的區域變數。`take_back` 關的是 `give` 剛放進 child 的那幾個，child 還沒被告知有它們；沒有目標的 `DUPLICATE_CLOSE_SOURCE` 只在來源的 process 裡關掉 |
 | `platform/windows/channel.rs` 的 `inherited`、`end_named`（`std::env::remove_var`、`GetFileType`、`OwnedHandle::from_raw_handle`、`SetHandleInformation`） | `remove_var`：標準庫寫明它在 Windows 上單一和多條 thread 的程式裡都安全（改環境是系統的一個呼叫，別的 thread 可以同時讀）；這個模組只在 Windows 上編。`GetFileType` 只查那個數值，不是 handle 時它自己會說。包成 `OwnedHandle` 的數值是 host（可信）為這件事放進這個 process 的、剛確認過是 pipe，而且 `inherited` 的旗標讓它只被包一次。變數被別人設成這個 process 自己的另一個 pipe 的數值時，那個 pipe 會被當成通道、之後被關掉：能設 child 的環境的人本來就是啟動它的人 |
 | `platform/windows/channel.rs` 的 `named_pipe`、`IocpWaiter` 的 port（`CreateNamedPipeW`、`CreateFileW`、`ConnectNamedPipe`、`CreateIoCompletionPort`、`PostQueuedCompletionStatus`、`GetQueuedCompletionStatus`、`CancelIoEx`） | 名字是以 0 結尾、活到呼叫結束的陣列。回來的 handle 檢查過才包成 `OwnedHandle`（新的，只有這裡拿著）。其餘的呼叫都是對自己拿著、呼叫期間開著的 handle 做的，寫的是活到呼叫結束的區域變數 |
+| `platform/windows/disk.rs` 的 `available_disk_space`（`GetDiskFreeSpaceExW`） | 名字是以 0 結尾、活到呼叫結束的陣列，裡面沒有別的 0（有的話不呼叫，是 `InvalidInput`：會變成另一個比較短的路徑）；結果寫進活到呼叫結束的區域變數，另外兩個輸出是 null（文件寫明可以不要）。不拿、不留任何 handle |
 | `platform/windows/job.rs`（`CreateJobObjectW`、`OwnedHandle::from_raw_handle`、`SetInformationJobObject`、`AssignProcessToJobObject`、`WaitForSingleObject`） | 建 job 時兩個指標都是 null（沒有名字、不被繼承），回來的不是 null 才包成 `OwnedHandle`（新的，只有這裡拿著）。limits 是活到呼叫結束的區域變數，型別和長度照那個 class 要的。放進 job 和等待用的是借來的、呼叫期間開著的 handle；kernel 自己檢查是不是 process、權限夠不夠 |
 
 ## 怎麼驗證的

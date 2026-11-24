@@ -18,7 +18,7 @@
 | 2. 磁碟的 backend（已決定的第 13 到 15 條） | | |
 | 2a. SQLite 的 store：schema、自己的 thread、讀寫、壞掉的檔案（已決定的第 16 到 19 條） | 做完，待審查 | 2026-11-24 |
 | 2b. `HttpCache` 接上兩種 backend（記憶體的、SQLite 的），交易經過它讀寫（已決定的第 20 條） | 做完，待審查 | 2026-11-24 |
-| 2c. 大小上限：`ipc` 的平台層讀磁碟剩下的空間，照 `PreferredCacheSize` 算 | | |
+| 2c. 大小上限：`ipc` 的平台層讀磁碟剩下的空間，照 `PreferredCacheSize` 算（已決定的第 14 條） | 做完，待審查（Windows 的那一段沒有編過） | 2026-11-24 |
 | 2d. cache 的資料夾：profile 對到各平台的 cache 資料夾，network context 打開它 | | |
 | 2e. 重新啟動之後照樣用（整合測試）、文件、mutation test | | |
 | 3. 重量網路版的 Speedometer | | |
@@ -49,6 +49,8 @@
 | 磁碟的 store：寫進去的重新打開之後讀得回來（header、時間、`Vary`、body），body 邊收邊寫、每滿 512 KiB 一列，沒收完的不讀、下次啟動時刪掉，放棄的刪掉、留著上一個，完成的取代上一個，刪、更新使用的時間、清空（正在寫的也是），`Vary` 的值不在檔案裡，壞掉的資料庫清掉重來，打不開的什麼都不留 | `cargo test -p net --lib http_cache::sql_store` |
 | 磁碟的 cache 的 index 和淘汰：超過上限的 95% 時照「多久沒用 ×（大小 + 300）」淘汰到 90%，一個 entry 最多上限的 1/8 或 5 MiB，讀到的是用過（也寫回去），`304` 讓 entry 變大時也淘汰，store 沒有的 entry 從 index 拿掉 | `cargo test -p net --lib http_cache::disk`、`http_cache::tests` |
 | network context 的 cache 在磁碟上（`http_cache_directory`、`http_cache_max_size`）：重新啟動之後照樣用（照樣分區）、`304` 的更新留在磁碟上、清空也清掉磁碟（正在寫的也是）、照上限淘汰、中途斷掉的不留 | `cargo test -p net --test it http_cache` |
+| 磁碟剩下的空間（`ipc::platform::available_disk_space`）：和 `df -kP` 的一樣，不在的路徑是錯誤 | `cargo test -p ipc --test it disk_space` |
+| 磁碟的 cache 的大小上限照 Chromium 的 `PreferredCacheSize`：Windows 以外和 Windows 的每一段、讀不到剩下的空間時；資料夾先建好再問 | `cargo test -p net --lib http_cache::disk` |
 | DevTools：`fromDiskCache`；`Network.setCacheDisabled` 讓導覽和子資源（parser、stylesheet、圖片、`fetch()`）繞過 cache，`Network` 沒打開時是錯誤，`disable`、session 離開、client 斷線時取消，別的分頁的 session 不影響；`Network.clearBrowserCache` 清完才回答 | `cargo test -p shell --test it devtools_network::devtools_sees_the_http_cache` |
 
 ## 做過的檢查
@@ -147,4 +149,16 @@
 **新的測試**：`net` 的 `http_cache::disk` 7 個、`http_cache::tests` 6 個、`sql_store` 1 個（換掉 head），`tests/it/http_cache.rs` 5 個；寫的過程中把淘汰的測試的數字算錯了一次（第一次淘汰之後已經低於 90%，測不到「淘汰到 90%」），改了大小。cache 的整合測試連跑 5 次都通過；`cargo test -p net`（276 個）通過，`cargo check --workspace --all-targets` 沒有錯誤和警告。
 
 **mutation test**（`mutants-2b.toml`，29 個）：29 個都抓到。第一次跑時 4 個沒抓到，都補了測試：`304` 讓 entry 變大時的淘汰、讀到時更新 index 的最後用的時間、把它寫回資料庫、中途斷掉時當場刪掉寫了的列（下次啟動也會刪，所以要在重新打開之前看資料庫）。寫 mutation 之前拿掉了 `Recorder` 的 `done` 旗標（多放棄一次沒有差別，會是等價的 mutation），改成看還有沒有 response。2a 的兩條 mutation 的程式搬到 `vary_column`，`from` 跟著改。store 清掉重來時 `HttpCache` 清空 index 的那一段測不到（和 store 用到一半出錯的同一個原因），加進了 `docs/test-gaps.md` 的那一條。
+
+### 2c（2026-11-24，macOS 26.6.2、Apple M4、debug build，`ad0f6a6` 之上）
+
+**對照的原始碼**：Chromium `main` 的 `net/disk_cache/cache_util.cc` 的 `PreferredCacheSize`、`PreferredCacheSizeInternal`、`PreferredCacheSizeForPath`（由 agent 讀 Gitiles，`details.md` 的「磁碟的大小上限」）。表裡的每一個數字照程式手算核對過。
+
+**做法**：`ipc::platform::available_disk_space`：macOS 和 Linux 是 `rustix` 的 `statvfs` 的 `f_bavail` 乘 `f_frsize`（沒有自己的 `unsafe`），Windows 是 `GetDiskFreeSpaceExW`（一處 `unsafe`，論證寫進 `crates/ipc/soundness.md` 的表；路徑裡有 0 時不呼叫）。`net` 的 `http_cache::disk::preferred_size` 照 Chromium 的算法（`kDefaultCacheSize` 80 MiB，Windows 以外放大成 400%、不超過剩下的五分之一，最多預設的 4 倍），`preferred_size_for` 先建好資料夾再問剩下的空間（Chromium 在 backend 初始化時算）；`NetworkContextParams` 的 `http_cache_max_size` 是 0 時用它，取代 2b 暫時固定的 320 MiB。
+
+**沒有驗證的**：Windows 的 `platform/windows/disk.rs` 在這台機器上沒有編（沒有 Windows 的 target），也沒有在 Windows 上跑過測試。
+
+**新的測試**：`ipc` 的 `tests/it/disk_space.rs` 2 個（和 `df -kP` 比、不在的路徑），`net` 的 `http_cache::disk` 3 個（兩種平台的表、資料夾）。寫 2c 時 clippy 抓到 2a 的一個測試用了會默默繞回的 `fetch_add`，改成 `Mutex` 裡 `saturating_add` 的計數。`cargo test -p ipc -p net -p sql`、`clippy -p net -p ipc -p sql`、`sanity.py` 的 `deps`、`unsafe`、`tests`、`numerics`、`boundary`、`spans`、`docs` 通過。
+
+**mutation test**（`mutants-2c.toml`，14 個）：13 個抓到。沒抓到的「把 superuser 保留的空間也算進去」（`f_bfree` 代替 `f_bavail`）在 macOS 上是等價的：APFS 沒有保留的空間，兩個數一樣（實測：差 0）；Linux 的 ext4 預設保留 5%，同一個測試在那裡抓得到。記進了 `docs/test-gaps.md` 的「等價、不用處理的 mutation」。寫 mutation 時發現「Windows 以外放大成 400%」那個常數沒有被守著（資料夾的測試兩邊都用它），改成在測試裡照平台寫出 400 和 100。
 

@@ -3,6 +3,7 @@
 //! channel is in a job that ends it with this process.
 
 pub mod channel;
+pub mod disk;
 mod job;
 pub mod memory;
 

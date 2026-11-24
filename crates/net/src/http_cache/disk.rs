@@ -6,14 +6,17 @@
 //! doesn't have is a miss at once; one it has is read on the store's
 //! thread.
 //!
-//! Its size is bounded by what it was opened with. One entry may take an
-//! eighth of it, or 5 MiB if that is more. Past 95% of the bound, entries
+//! Its size is bounded by what it was opened with: unless told, what
+//! Chromium's `PreferredCacheSize` makes of what the disk has free
+//! ([`preferred_size_for`]). One entry may take an eighth of it, or 5 MiB if
+//! that is more. Past 95% of the bound, entries
 //! go until it is down to 90%, those longest unused and biggest first: by
 //! how long since each was used times its size and 300 bytes (Chromium's
 //! `CalculateSortValue`, Simple Cache's alike), so of two as old the bigger
 //! goes, of two as big the older.
 
 use std::collections::HashMap;
+use std::path::Path;
 
 use bytes::Bytes;
 use tokio::sync::oneshot;
@@ -22,9 +25,62 @@ use super::entry::StoredResponse;
 use super::sql_store::{IndexEntry, SqlStore};
 use crate::cookies::Time;
 
-/// What it is bounded at unless told: Chromium's when the disk's free space
-/// can't be read, outside Windows (`PreferredCacheSize` without it).
-pub(crate) const DEFAULT_MAX_SIZE: u64 = 320 * 1024 * 1024;
+/// Chromium's `kDefaultCacheSize`.
+const DEFAULT_CACHE_SIZE: u64 = 80 * 1024 * 1024;
+
+/// How `PreferredCacheSize` scales the HTTP cache's (`DISK_CACHE`'s) size:
+/// fourfold, but on Windows.
+const SCALE_PERCENT: u64 = if cfg!(windows) { 100 } else { 400 };
+
+/// What a cache in the folder `dir` is bounded at unless told
+/// (`PreferredCacheSizeForPath`): as [`preferred_size`] has it for what
+/// the disk `dir` is on has free. The folder is made, if it isn't there,
+/// to ask.
+pub(crate) fn preferred_size_for(dir: &Path) -> u64 {
+    let _ = std::fs::create_dir_all(dir);
+    preferred_size(ipc::platform::available_disk_space(dir).ok(), SCALE_PERCENT)
+}
+
+/// Chromium's `PreferredCacheSize` for a disk with `available` bytes free
+/// (none: it couldn't be read), its size scaled by `percent`: for little
+/// room, most of it; then 80 MiB; then a tenth, 200 MiB, a hundredth
+/// (`PreferredCacheSizeInternal`); scaled, but to no more than a fifth of
+/// what is free; and never more than four times the scaled 80 MiB.
+fn preferred_size(available: Option<u64>, percent: u64) -> u64 {
+    let scaled_default = DEFAULT_CACHE_SIZE.saturating_mul(percent) / 100;
+    let preferred = match available {
+        None => scaled_default,
+        Some(available) => {
+            let preferred = preferred_size_internal(available);
+            let fifth = available / 5;
+            if preferred < fifth {
+                (preferred.saturating_mul(percent) / 100).min(fifth)
+            } else {
+                preferred
+            }
+        }
+    };
+    preferred.min(scaled_default.saturating_mul(4))
+}
+
+fn preferred_size_internal(available: u64) -> u64 {
+    const LITTLE: u64 = DEFAULT_CACHE_SIZE * 10 / 8;
+    const ENOUGH: u64 = DEFAULT_CACHE_SIZE * 10;
+    const MORE: u64 = DEFAULT_CACHE_SIZE * 25;
+    const PLENTY: u64 = DEFAULT_CACHE_SIZE * 250;
+    if available < LITTLE {
+        // 80% of it, which fits.
+        u64::try_from(u128::from(available) * 8 / 10).unwrap_or(available)
+    } else if available < ENOUGH {
+        DEFAULT_CACHE_SIZE
+    } else if available < MORE {
+        available / 10
+    } else if available < PLENTY {
+        DEFAULT_CACHE_SIZE * 5 / 2
+    } else {
+        available / 100
+    }
+}
 
 /// What an entry may take at least, whatever the bound
 /// (`kSqlBackendMinFileSizeLimit`).
@@ -385,5 +441,56 @@ mod tests {
             last_used: Time::from_unix_micros(0),
         };
         assert_eq!(score(&past, NOW), 1_000_000 * 310);
+    }
+}
+
+#[cfg(test)]
+mod preferred_size_tests {
+    use super::*;
+
+    const MIB: u64 = 1024 * 1024;
+
+    #[test]
+    fn as_chromium_has_it_outside_windows() {
+        let size = |available_mib: u64| preferred_size(Some(available_mib * MIB), 400);
+        assert_eq!(size(50), 40 * MIB);
+        assert_eq!(size(100), 80 * MIB);
+        assert_eq!(size(400), 80 * MIB);
+        assert_eq!(size(600), 120 * MIB);
+        assert_eq!(size(1000), 200 * MIB);
+        assert_eq!(size(3000), 600 * MIB);
+        assert_eq!(size(4000), 800 * MIB);
+        assert_eq!(size(19_000), 800 * MIB);
+        assert_eq!(size(25_000), 1000 * MIB);
+        assert_eq!(size(500_000), 1280 * MIB);
+        assert_eq!(preferred_size(None, 400), 320 * MIB);
+    }
+
+    #[test]
+    fn as_chromium_has_it_on_windows() {
+        let size = |available_mib: u64| preferred_size(Some(available_mib * MIB), 100);
+        assert_eq!(size(50), 40 * MIB);
+        assert_eq!(size(600), 80 * MIB);
+        assert_eq!(size(1000), 100 * MIB);
+        assert_eq!(size(3000), 200 * MIB);
+        assert_eq!(size(25_000), 250 * MIB);
+        assert_eq!(size(500_000), 320 * MIB);
+        assert_eq!(preferred_size(None, 100), 80 * MIB);
+    }
+
+    #[test]
+    fn a_folders_size_goes_by_its_disk() {
+        let dir = std::env::temp_dir().join(format!(
+            "machopo-http-cache-size-{}/made",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let size = preferred_size_for(&dir);
+        assert!(dir.is_dir());
+        let available = ipc::platform::available_disk_space(&dir).ok();
+        assert!(available.is_some());
+        // Fourfold, but on Windows.
+        let percent = if cfg!(windows) { 100 } else { 400 };
+        assert_eq!(size, preferred_size(available, percent));
     }
 }

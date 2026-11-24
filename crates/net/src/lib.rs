@@ -223,7 +223,8 @@ pub struct NetworkContextParams {
     /// made with the folder if it isn't there. None: in memory alone.
     pub http_cache_directory: Option<std::path::PathBuf>,
     /// The most the HTTP cache on disk keeps, in bytes
-    /// (`NetworkContextParams::http_cache_max_size`); 0 for the default.
+    /// (`NetworkContextParams::http_cache_max_size`); 0: as Chromium's
+    /// `PreferredCacheSize` makes of what its disk has free.
     pub http_cache_max_size: u64,
 }
 
@@ -280,7 +281,7 @@ impl NetworkContext {
         let (cache, http_cache_store) = match &params.http_cache_directory {
             Some(dir) => {
                 let max_size = match params.http_cache_max_size {
-                    0 => http_cache::disk::DEFAULT_MAX_SIZE,
+                    0 => http_cache::disk::preferred_size_for(dir),
                     max_size => max_size,
                 };
                 let (cache, thread) = http_cache::HttpCache::on_disk(dir, max_size)?;

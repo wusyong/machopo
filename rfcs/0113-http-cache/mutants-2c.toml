@@ -1,0 +1,103 @@
+# Step 2c's mutants: `python3 scripts/test.py mutate rfcs/0113-http-cache/mutants-2c.toml`.
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache::disk"]
+timeout = 900
+
+[[mutant]]
+name = "the free space is in blocks"
+file = "crates/ipc/src/platform/unix.rs"
+from = '''    Ok(stat.f_bavail.saturating_mul(stat.f_frsize))'''
+to = '''    Ok(stat.f_bavail)'''
+test = ["cargo", "test", "-q", "-p", "ipc", "--test", "it", "disk_space"]
+
+[[mutant]]
+name = "the free space counts the superuser's"
+file = "crates/ipc/src/platform/unix.rs"
+from = '''    Ok(stat.f_bavail.saturating_mul(stat.f_frsize))'''
+to = '''    Ok(stat.f_bfree.saturating_mul(stat.f_frsize))'''
+test = ["cargo", "test", "-q", "-p", "ipc", "--test", "it", "disk_space"]
+
+[[mutant]]
+name = "for little room, 90% of it"
+file = "crates/net/src/http_cache/disk.rs"
+from = '''        u64::try_from(u128::from(available) * 8 / 10).unwrap_or(available)'''
+to = '''        u64::try_from(u128::from(available) * 9 / 10).unwrap_or(available)'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache::disk"]
+
+[[mutant]]
+name = "80 MiB up to 400 MiB"
+file = "crates/net/src/http_cache/disk.rs"
+from = '''    const ENOUGH: u64 = DEFAULT_CACHE_SIZE * 10;'''
+to = '''    const ENOUGH: u64 = DEFAULT_CACHE_SIZE * 5;'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache::disk"]
+
+[[mutant]]
+name = "a fifth, not a tenth"
+file = "crates/net/src/http_cache/disk.rs"
+from = '''        available / 10
+'''
+to = '''        available / 5
+'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache::disk"]
+
+[[mutant]]
+name = "160 MiB, not 200"
+file = "crates/net/src/http_cache/disk.rs"
+from = '''        DEFAULT_CACHE_SIZE * 5 / 2'''
+to = '''        DEFAULT_CACHE_SIZE * 2'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache::disk"]
+
+[[mutant]]
+name = "a fiftieth, not a hundredth"
+file = "crates/net/src/http_cache/disk.rs"
+from = '''        available / 100'''
+to = '''        available / 50'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache::disk"]
+
+[[mutant]]
+name = "a quarter of what is free, not a fifth"
+file = "crates/net/src/http_cache/disk.rs"
+from = '''            let fifth = available / 5;'''
+to = '''            let fifth = available / 4;'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache::disk"]
+
+[[mutant]]
+name = "always scaled"
+file = "crates/net/src/http_cache/disk.rs"
+from = '''            if preferred < fifth {'''
+to = '''            if true {'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache::disk"]
+
+[[mutant]]
+name = "eight times the default, not four"
+file = "crates/net/src/http_cache/disk.rs"
+from = '''    preferred.min(scaled_default.saturating_mul(4))'''
+to = '''    preferred.min(scaled_default.saturating_mul(8))'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache::disk"]
+
+[[mutant]]
+name = "unknown is 80 MiB everywhere"
+file = "crates/net/src/http_cache/disk.rs"
+from = '''        None => scaled_default,'''
+to = '''        None => DEFAULT_CACHE_SIZE,'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache::disk"]
+
+[[mutant]]
+name = "not fourfold outside Windows"
+file = "crates/net/src/http_cache/disk.rs"
+from = '''const SCALE_PERCENT: u64 = if cfg!(windows) { 100 } else { 400 };'''
+to = '''const SCALE_PERCENT: u64 = 100;'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache::disk"]
+
+[[mutant]]
+name = "the folder isn't made to ask"
+file = "crates/net/src/http_cache/disk.rs"
+from = '''    let _ = std::fs::create_dir_all(dir);'''
+to = '''    let _ = dir;'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache::disk"]
+
+[[mutant]]
+name = "no size given is no room"
+file = "crates/net/src/lib.rs"
+from = '''                    0 => http_cache::disk::preferred_size_for(dir),'''
+to = '''                    0 => 0,'''
+test = ["cargo", "test", "-q", "-p", "net", "--test", "it", "http_cache"]
