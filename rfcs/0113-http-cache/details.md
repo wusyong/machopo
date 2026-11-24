@@ -57,18 +57,53 @@ Chrome 每個 suite 兩邊差不到 5%。`MACHOPO_TRACE` 錄 TodoMVC-JavaScript-
 ## Chromium 怎麼做
 
 - **位置**：`URLRequestHttpJob`（cookie、HSTS 之後）建 `HttpTransaction`，`HttpCache` 的 factory 給 `HttpCache::Transaction`，它在 cache 和 `HttpNetworkTransaction` 之間決定：從 entry 讀、送條件請求、直接送。cache 之上的人看到的都是 `HttpResponseInfo`。
-- **key**：`HttpCache::GenerateCacheKey`：分區時以 `_dk_` 開頭，加上 Network Isolation Key（最上層的網站、frame 的網站）和網址（沒有 fragment）。NIK 是 transient 的（opaque 的最上層）時不存。
+- **key**：`HttpCache::GenerateCacheKey`（2026-11-24 讀 `main` 的 `net/http/http_cache.cc`）：分區時是 `_dk_`，子 frame 的文件加 `s_`，跨網站的最上層導覽（發起的和網址不同網站）加 `cn_`，再加 `NetworkIsolationKey::ToCacheKeyString()`（各段以空格隔開）、空格和網址；最前面還有 credential（`0/`、`1/`）和上傳資料的編號。`NetworkIsolationKey`（`net/base/network_isolation_key.h`）存最上層的網站、frame 的網站、nonce 和 partition，沒有跨網站的 bit。key 是 transient 的（有 nonce 的，opaque）時不存（`IsTransient()`）。`net/base/features.cc` 的 `kSplitCacheByNetworkIsolationKey` 寫的是預設關閉，Chrome 實際上是開的（下一節的實測），開的方式原始碼裡看不出來。
 - **新鮮度**：`HttpResponseHeaders::GetFreshnessLifetimes`：`max-age`、`Expires` 減 `Date`；都沒有時，預設可以 cache 的狀態碼（`200` 等；確切的清單，和永久的 redirect、`410` 沒有明確期限時的特別規則，實作前確認）用 `Date` 減 `Last-Modified` 的 10%；`must-revalidate`、`no-cache`、`no-store`。`stale-while-revalidate` 在新鮮期之後的那段時間先用舊的、背景驗證（async revalidation）。
 - **存的 header**：`HttpResponseInfo::Persist` 用 `PERSIST_SANS_COOKIES` 等選項，拿掉 `Set-Cookie`、`Set-Cookie2`。
 - **load flag**：`LOAD_VALIDATE_CACHE`、`LOAD_BYPASS_CACHE`、`LOAD_SKIP_CACHE_VALIDATION`、`LOAD_ONLY_FROM_CACHE`、`LOAD_DISABLE_CACHE`。Blink 的 `FetchCacheMode` 對到它們：`no-store` 是 `LOAD_DISABLE_CACHE`，`reload` 是 `LOAD_BYPASS_CACHE`，`no-cache` 是 `LOAD_VALIDATE_CACHE`，`force-cache` 是 `LOAD_SKIP_CACHE_VALIDATION`，`only-if-cached` 是 `LOAD_ONLY_FROM_CACHE | LOAD_SKIP_CACHE_VALIDATION`。重新整理只對主要的資源 `LOAD_VALIDATE_CACHE`（2016 年起）。
-- **backend**：`disk_cache::Backend` 的實作有 blockfile、Simple Cache（每個 entry 一到三個檔案加一個 index）和記憶體的 `MemBackendImpl`（無痕模式）；大小上限 `disk_cache::PreferredCacheSize` 照可用空間算。
+- **backend**：`disk_cache::Backend` 的實作有 blockfile、Simple Cache（每個 entry 一到三個檔案加一個 index）和記憶體的 `MemBackendImpl`（無痕模式）。
+- **記憶體的上限**（2026-11-24 讀 `main` 的 `net/disk_cache/memory/mem_backend_impl.cc`、`mem_entry_impl.cc`）：`kDefaultInMemoryCacheSize` 10 MiB、`kMaxMemoryCacheSize` 50 MiB；`CalculateDefaultMaxSize` 在讀不到實體記憶體時 10 MiB，2500 MiB 以上 50 MiB，其他是實體記憶體的 2%。`MaxFileSize` 是上限的 1/8，寫超過的回 `ERR_FAILED`；總量超過時 `ERR_INSUFFICIENT_RESOURCES`。寫入讓總量變大時當場 `EvictIfNeeded`：超過上限就從 LRU 清單最舊的一端淘汰到上限的 90%，正在用的跳過；讀寫都把 entry 移到最新的一端。記憶體吃緊時上限在 1/10 到 1/2 之間調。HTTP cache 實際傳給它的上限沒有查。
+- **磁碟的上限**（同一天讀 `net/disk_cache/cache_util.cc` 的 `PreferredCacheSize`）：預設 80 MiB，非 Windows 的 HTTP 磁碟 cache 乘 4（320 MiB）；照可用空間分級（100 MiB 以下用 80%、800 MiB 以下 80 MiB、2000 MiB 以下 10%、20000 MiB 以下 200 MiB、以上 1%），結果不到可用空間的 1/5 時乘上同樣的倍數、最多到 1/5；上限是預設的 4 倍（非 Windows 1280 MiB）。讀不到可用空間時用 320 MiB。
 - **同時的請求**：`HttpCache::ActiveEntry` 一個時間只讓一個 transaction 寫；後到的排隊（`add_to_entry_queue`），header 決定之後可以一起讀寫入中的 body（shared writers）。
 
 這些是照 Chromium 的類別和函式名稱記下的，實作前對照 Chromium 的原始碼逐條確認。
 
+### Chrome 的分區，實測
+
+2026-11-24，Chrome for Testing 152.0.7977.82（headless、一個 profile、`--host-resolver-rules=MAP *.test 127.0.0.1`）。一個本機的 server 給一張圖（`http://c.test/img.png`，`Cache-Control: max-age=3600`），頁面都是 `no-store`；依序導覽，每一步看 server 有沒有再收到圖的請求：
+
+| 誰載入圖 | 向 server 要 |
+| --- | --- |
+| 最上層 `a.test` | 要（第一次） |
+| 最上層 `a.test`，再一次 | 不要 |
+| 最上層 `b.test` | 要 |
+| `a.test` 裡的 iframe `x.test` | 要 |
+| 同上，再一次 | 不要 |
+| `a.test` 裡的 iframe `y.test` | 要 |
+| `a.test` 裡的 iframe `a.test` | 不要 |
+
+最上層和 frame 的網站都在 key 裡；同網站的 iframe 和最上層共用一個 entry。
+
+同一天、同樣的做法，opaque 的 frame（`a.test` 裡的 `<iframe sandbox>`，沒有 `allow-same-origin`，載入同一張圖）：
+
+| 誰載入圖 | 向 server 要 |
+| --- | --- |
+| 最上層 `a.test` | 要（第一次） |
+| `a.test` 裡的 `sandbox` iframe | 要 |
+| 同上，再一次 | 要 |
+| 最上層 `a.test`，再一次 | 不要 |
+
+opaque 的 frame 的請求不讀也不寫 cache。
+
+Chrome 2020 年的說明（`https://developer.chrome.com/blog/http-cache-partitioning`）：Chrome 86 起分區；量到的代價是 miss rate 多約 3.6%、從網路來的 bytes 多約 4%、FCP 多約 0.3%；當時 Safari 用最上層的 eTLD+1，Firefox 打算用最上層的網站（現在的做法沒有查）。
+
+### Chrome 的同時的請求，實測
+
+2026-11-24，Chrome for Testing 152（headless）。本機的 server 對 `/data`（`Cache-Control: max-age=3600`，200 KB）等 1 秒才回應，body 分兩半、相隔 0.5 秒送；同一頁同時發兩個 `fetch('/data')`。server 只收到一次，兩個 `fetch()` 都拿到完整的 200 KB，從開始到兩個都完成約 1.5 秒（一個回應的時間）。
+
 ## 其他做法
 
-- **reqwest 或 hyper 的 cache 外掛**（`http-cache-reqwest`、`http-cache-semantics`）：前者的 key 只有網址和自己的模式，要分區得改它；machopo 的 reqwest 只在 `net::http`，外掛會讓它的型別進到 cache 的介面。後者只算 RFC 9111 的規則（新鮮度、`Vary`、條件請求的 header），不管儲存：可以考慮拿來算規則，省下自己寫的部分，要看它和 Chromium 的差別（heuristic 的狀態碼、`Age`、`Date` 不對時）。待決定裡沒有列，實作第 1 階段時比較。
+- **reqwest 或 hyper 的 cache 外掛**（`http-cache-reqwest`、`http-cache-semantics`）：前者的 key 只有網址和自己的模式，要分區得改它；machopo 的 reqwest 只在 `net::http`，外掛會讓它的型別進到 cache 的介面。後者只算 RFC 7234 的規則、不管儲存，和 Chromium 有幾處不同，不用它（已決定的第 4 條）。
 - **cache 放在 renderer**：每個 renderer 一份，拆 process 之後彼此不共用，Browser 自己的請求（導覽）也用不到。不選。
 
 ## 磁碟的格式

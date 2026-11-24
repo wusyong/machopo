@@ -1,12 +1,12 @@
 # RFC 0113：HTTP cache
 
 - 開始日期：2026-11-24
-- 狀態：📝 草稿
+- 狀態：👍 已接受：2026-11-24
 - 細節：`details.md`
 
 ## 摘要
 
-machopo 沒有 HTTP cache：每次載入都重新向伺服器要。這份在 `net` 裡、HTTP 的請求送出去之前加一層 cache（Chromium 的 `HttpCache`）：照 RFC 9111 決定存不存、能不能直接用、要不要先問伺服器（條件請求和 `304`），key 照 Chromium 用最上層的網站和 frame 的網站分區，`fetch()` 的 `Request.cache`、重新整理和 DevTools 的「停用 cache」照 Chromium 的 load flag 走。先做記憶體裡的 cache，再做 profile 資料夾裡的。各個選擇還沒確認，見「待決定」。
+machopo 沒有 HTTP cache：每次載入都重新向伺服器要。這份在 `net` 裡、HTTP 的請求送出去之前加一層 cache（Chromium 的 `HttpCache`）：照 RFC 9111 決定存不存、能不能直接用、要不要先問伺服器（條件請求和 `304`），key 照 Chromium 用最上層的網站和 frame 的網站分區（已決定），`fetch()` 的 `Request.cache`、重新整理和 DevTools 的「停用 cache」照 Chromium 的 load flag 走。先做記憶體裡的 cache，再做 profile 資料夾裡的。第 1 階段的選擇都確認了（「已決定的事項」）；磁碟的格式和上限在第 2 階段開始前決定（「待決定」）。
 
 ## 動機
 
@@ -67,11 +67,11 @@ Chromium 怎麼做、每個選項的比較在 `details.md`。這裡寫打算怎�
 
 ### key
 
-Chromium 的 cache key：`_dk_` 加最上層的網站、frame 的網站和網址（去掉 fragment）。machopo 的 `TrustedParams` 加上 frame 的網站（Browser 從 frame 樹給，和 `top_frame_site` 一樣不信任 renderer），沒有 `trusted` 的請求（Browser 自己的）用網址自己的網站。opaque 的最上層（sandbox 的 iframe、`data:` 的頁面）照 Chromium 不 cache（待決定的第 3 條）。
+照 Chromium（已決定的第 1 條）：最上層的網站、frame 的網站和網址（去掉 fragment）。`TrustedParams` 加上 `frame_site`，由 Browser 的 `frame_tree.rs` 在 `loader_params`（子資源：frame 自己的 origin 的網站）和 `navigation_params`（導覽：要去的網址的網站）給，和 `top_frame_site` 一樣不信任 renderer。worker 的請求用它的 owner 的。最上層或 frame 的網站是 opaque 的（`sandbox` 沒有 `allow-same-origin` 的 iframe、`data:` 的頁面），和沒有 `trusted` 的請求，不經過 cache：不讀也不寫（已決定的第 2 條）。
 
 ### 新鮮度和驗證
 
-照 RFC 9111 和 Chromium 的 `HttpResponseHeaders::GetFreshnessLifetimes`：`max-age`、`Expires`（`s-maxage` 不算，私有 cache）、沒有時對預設可以 cache 的狀態碼用 heuristic（`Date` 減 `Last-Modified` 的 10%）；`Age` 和收到時的時間算現在的年齡。不新鮮或 `no-cache` 時送條件請求，`304` 時用存的 body、合併 header、更新 entry。`Vary` 的 header 和存的請求 header 比，不同時當成沒有。`stale-while-revalidate` 之後再做（「之後的可能」）。
+machopo 自己寫（已決定的第 4 條），照 RFC 9111 和 Chromium 的 `HttpResponseHeaders`（`GetFreshnessLifetimes`、`RequiresValidation`）和 `HttpVaryData` 逐條對照；日期用 `httpdate`（HTTP 的三種日期格式都收）。`max-age`、`Expires`（`s-maxage` 不算，私有 cache）、沒有時對預設可以 cache 的狀態碼用 heuristic（`Date` 減 `Last-Modified` 的 10%）；`Age` 和收到時的時間算現在的年齡。不新鮮或 `no-cache` 時送條件請求，`304` 時用存的 body、合併 header、更新 entry。`Vary` 的 header 和存的請求 header 比，不同時當成沒有。`stale-while-revalidate` 之後再做（「之後的可能」）。
 
 ### load flag
 
@@ -79,11 +79,11 @@ Chromium 的 cache key：`_dk_` 加最上層的網站、frame 的網站和網址
 
 ### 儲存
 
-兩種 backend 同一個介面（Chromium 的 `disk_cache::Backend`）：記憶體的（記憶體裡的 profile，Chromium 無痕模式的 `MemBackendImpl`）和磁碟的（profile 資料夾的 `Cache`）。磁碟的格式待決定（第 1 條）。兩者都有大小上限，照最近用過的順序淘汰。entry 在 body 整份收完、寫完才算數；載入取消、出錯的不留。
+兩種 backend 同一個介面（Chromium 的 `disk_cache::Backend`）：記憶體的（記憶體裡的 profile，Chromium 無痕模式的 `MemBackendImpl`）和磁碟的（profile 資料夾的 `Cache`）。磁碟的格式和上限待決定（第 1、2 條）。記憶體的照 Chromium 的 `MemBackendImpl`（已決定的第 5 條）：上限是實體記憶體的 2%，2.5 GiB 以上是 50 MiB，讀不到時 10 MiB；單一個 entry 最多是上限的 1/8，超過的不存；超過上限時照最近用過的順序淘汰到上限的 90%，正在用的 entry 跳過。entry 在 body 整份收完、寫完才算數；載入取消、出錯的不留。
 
 ### 同時的請求
 
-同一個 key 同時有兩個請求時怎麼辦待決定（第 4 條）。
+已決定的第 3 條：同一個 key 已經有一個請求在網路上時，後到的等它的 header。回應不能存（`no-store`、`Vary: *` 這類）就自己送出去；能存就等它整份收完、寫進 entry，再從 entry 讀。entry 多一個「寫入中」的狀態和等候的名單；第一個失敗、被取消或不能存時叫醒它們，各自送出去。
 
 ### 測試
 
@@ -112,7 +112,7 @@ Chromium 的 cache key：`_dk_` 加最上層的網站、frame 的網站和網址
 
 ## 先例
 
-- **Chromium**：`net::HttpCache`、`HttpCache::Transaction` 的狀態機，`disk_cache` 的 backend（blockfile、Simple Cache、記憶體的），2020 年起照 Network Isolation Key 分區；`HttpResponseHeaders` 的新鮮度和 heuristic；存 header 時拿掉 `Set-Cookie`；load flag。照做：位置、分區、新鮮度、load flag、記憶體的 backend 給不存檔的 profile。不照做（這份）：`POST` 的 entry、sparse entry、`stale-while-revalidate` 的背景驗證、shared writers（待決定的第 4 條）。
+- **Chromium**：`net::HttpCache`、`HttpCache::Transaction` 的狀態機，`disk_cache` 的 backend（blockfile、Simple Cache、記憶體的），2020 年起照 Network Isolation Key 分區；`HttpResponseHeaders` 的新鮮度和 heuristic；存 header 時拿掉 `Set-Cookie`；load flag。照做：位置、分區、新鮮度、load flag、記憶體的 backend 給不存檔的 profile。不照做（這份）：`POST` 的 entry、sparse entry、`stale-while-revalidate` 的背景驗證、shared writers（已決定的第 3 條）。
 - **Firefox**：`cache2`，每個 entry 一個檔案加一個 index；照最上層的網站分區（`partitionKey`）。
 - **Ladybird**：RequestServer 有 HTTP 的磁碟 cache 的選項，WebContent 有 HTTP 的 memory cache（2026-11-24 從 2026.47.7 啟動 helper process 的參數看到的：RequestServer 的 `--http-disk-cache-mode disabled`、WebContent 的 `--enable-http-memory-cache`；它的程式沒有讀過）。
 
@@ -120,17 +120,40 @@ Chromium 的 cache key：`_dk_` 加最上層的網站、frame 的網站和網址
 
 ## 已決定的事項
 
-無。
+1. **cache 的 key 照 Chromium 分區：最上層的網站、frame 的網站和網址**（2026-11-24，使用者決定；原本「待決定」的第 5 條，A）：
+   - `TrustedParams` 加 `frame_site`，Browser 從 frame 樹給（「詳細設計」的「key」）。
+   - 對照 Chrome：Chromium `main` 的 `NetworkIsolationKey` 是最上層和 frame 的網站（triple key），cache key 以 `_dk_` 開頭；2026-11-24 在 Chrome for Testing 152 上實測，同一張可以 cache 的圖，最上層換網站、或只換 iframe 的網站（同一個最上層底下的 `x.test` 和 `y.test`）都重新向 server 要，和最上層同網站的 iframe 共用（`details.md` 的「Chrome 的分區，實測」）。
+   - 理由：和 Chrome 的行為一樣，WPT 的 `split-cache.html` 和網頁看到的都對得上；同一個最上層底下，不同網站的 iframe 也不能用 cache 互相探測。代價只是兩個地方多給一個欄位。
+   - 不選最上層的網站加跨網站的 bit（B，可以用 `StorageKey` 的 ancestor chain bit）：同一個最上層底下的跨網站 iframe 互相看得到，和 Chrome 不同。不選只用最上層的網站（C，2020 年時的 Safari）：嵌在同一個網站裡的第三方彼此看得到。不選不分區（D，2020 年前的 Chrome）：任何網站都能探測使用者去過哪裡。四種的效能差不多（key 多一兩段字串）；Chrome 2020 年量到分區讓 miss rate 多約 3.6%、從網路來的 bytes 多約 4%。
+
+2. **沒有網站可分區的請求不經過 cache**（2026-11-24，使用者決定；原本「待決定」的第 3 條，A）：最上層或 frame 的網站是 opaque 的，或請求沒有 `trusted`（現在的程式裡 Browser 都會給，這條防萬一），不讀也不寫 cache。
+   - 對照 Chrome：Chromium 的 key 是 transient 的（opaque 的網站、有 nonce）時不存（`HttpCache::GenerateCacheKey`）；2026-11-24 在 Chrome for Testing 152 上實測，`a.test` 裡的 `sandbox` iframe 載入同一張可以 cache 的圖，每次都向 server 要，也沒用到最上層 `a.test` 存的那份（`details.md` 的「Chrome 的分區，實測」）。
+   - 理由：沒有網站就沒辦法分區；照 Chrome 不 cache 最簡單、不會洩漏。這種頁面少，多跑網路的成本小。
+   - 不選每份 opaque 的文件一個暫時的 key（B）：同一份文件裡重複的載入少見（renderer 已經對圖片去重），多一套 key 的生命週期，和 Chrome 不同。不選退回網址自己的網站或不分區（C）：`sandbox` 的 iframe 能用 cache 探測，正是分區要擋的。
+
+3. **同一個 key 同時有兩個請求：後到的等第一個的 header，能存就等它收完再從 entry 讀**（2026-11-24，使用者決定；原本「待決定」的第 4 條，C）：
+   - 做法在「詳細設計」的「同時的請求」。
+   - 對照 Chrome：Chromium 的 `HttpCache::ActiveEntry` 一次只讓一個 transaction 寫，後到的排隊，header 決定之後一起讀寫入中的 body（shared writers）。2026-11-24 在 Chrome for Testing 152 上實測，同一頁同時兩個 `fetch()` 要同一個可以 cache 的網址，server 只收到一次（`details.md` 的「Chrome 的同時的請求，實測」）。
+   - 理由：server 看到的和 Chrome 一樣只有一次；比 shared writers 簡單，entry 不用一邊寫一邊讀。代價是後到的要等第一個整份收完才拿到資料，兩個請求差不多同時開始時差別小。量到常見、而且是大的回應時再換成 A。
+   - 不選 shared writers（A）：entry 要能一邊寫一邊讀，第一個被取消時要讓後到的接手繼續收，複雜度高。不選後到的直接送出去（B，2026-11-24 原本的看法）：server 收到兩次，和 Chrome 不同。
+
+4. **新鮮度和驗證的規則自己寫，照 Chromium 逐條對照**（2026-11-24，使用者決定；A）：
+   - 照 Chromium 的 `HttpResponseHeaders` 和 `HttpVaryData`，日期用已經是依賴的 `httpdate`。`http-cache-semantics` 的測試案例可以參考（BSD-2-Clause，只參考案例，不複製程式）。
+   - 理由：目標是和 Chrome 的行為一樣，規則要能逐條對照；要寫的量不大（Chromium 這部分的核心是幾個函式）。
+   - 不選 `http-cache-semantics` 3.0.0（B）：它照 RFC 7234，`Expires`、`Last-Modified` 只解析 RFC 2822 的格式（RFC 850 和 asctime 的日期當成已經過期，Chromium 都收），`immutable` 預設至少新鮮 24 小時，heuristic 的狀態碼照 RFC 的清單（Chromium 的還沒對照）；日期和狀態碼調不了，要 fork 或在外面補（2026-11-24 讀它的 `src/lib.rs`）。效能上兩者一樣。
+
+5. **記憶體的 backend 照 Chromium 的 `MemBackendImpl` 定上限和淘汰**（2026-11-24，使用者決定；原本「待決定」的第 2 條的前一半，A）：
+   - 數字和規則在「詳細設計」的「儲存」；系統記憶體吃緊時降低上限（Chromium 降到 1/10 到 1/2）之後再做。第 1 階段裡磁碟上的 profile 也用它。
+   - 對照 Chrome：2026-11-24 讀 Chromium `main` 的 `net/disk_cache/memory/mem_backend_impl.cc` 和 `mem_entry_impl.cc`（`details.md` 的「Chromium 怎麼做」）。
+   - 理由：和 Chrome 一樣；50 MiB 裝得下 Speedometer 所有 suite 的檔案（建好的檔案合計最多約 23 MB，最大的 1.9 MB），網路版的目標達得到。淘汰在寫入時順便做，成本小。
+   - 不選第 1 階段給磁碟上的 profile 一個大的記憶體 cache（B，例如 Chromium 磁碟 cache 的 320 MiB）：只是過渡，平常瀏覽最多多吃 320 MB 的記憶體。不選固定 10 MiB（C）：裝不下 Speedometer，網路版照樣每次重新下載。
 
 ## 待決定
 
 2026-11-24 的看法寫在每一條後面，還沒確認：
 
 1. **磁碟的格式**：(a) 每個 entry 一個檔案（header 和 body）加一個 index，像 Chromium 的 Simple Cache 和 Firefox 的 `cache2`；(b) 用 `sql` 的 SQLite，header 和小的 body 放在表裡、大的 body 放檔案；(c) 全放 SQLite。看法：body 一律放檔案（它是一段一段寫進去的大塊資料，SQLite 的 blob 要整份或另外處理增量的寫入），header 和 index 在 (a) 和 (b) 之間，第 2 階段開始前決定。比較在 `details.md` 的「磁碟的格式」。
-2. **大小上限**：固定的值，或照磁碟的可用空間（Chromium 的 `disk_cache::PreferredCacheSize`）；記憶體的 backend 的上限。看法：照 Chromium 的算法，記憶體的照它的預設。
-3. **沒有網站可分區的請求**（opaque 的最上層、沒有 `trusted` 的）：不 cache，或用另一個 key。看法：照 Chromium 的 `IsolationInfo` 的規則，opaque 的不 cache（它的 key 是 transient 的）。
-4. **同一個 key 同時有兩個請求**：(a) 照 Chromium 的 `ActiveEntry`，後到的等第一個的 header 再決定（shared writers：一起讀同一份 body）；(b) 後到的直接送出去，不寫 entry；(c) 後到的等第一個整份收完。看法：先 (b)，簡單而且不會讓後到的等一個慢的回應；Speedometer 和一般網站的同一頁不常同時要同一個網址（parser 和 preload 去重的部分在 renderer）。量過、真的常見時再做 (a)。
-5. **`TrustedParams` 的 frame 網站**：Browser 從 frame 樹算，給導覽和子資源；worker 的請求給它的 owner 的。和 cookie 用的 `site_for_cookies` 一起檢查一遍是不是每種請求都有。
+2. **磁碟的大小上限**：固定的值，或照磁碟的可用空間（Chromium 的 `disk_cache::PreferredCacheSize`，`details.md` 的「Chromium 怎麼做」）。看法：照 Chromium 的算法。第 2 階段開始前決定。
 
 ## 之後的可能
 
