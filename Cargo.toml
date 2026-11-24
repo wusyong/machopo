@@ -208,6 +208,9 @@ futures-util = { version = "0.3", default-features = false, features = ["sink", 
 # `/json/new?<url>`'s URL, escaped as a query (`url` brings it).
 percent-encoding = "2"
 # `Machopo.captureWindow`'s pixels, as CDP's binary data, a canvas's
+# The HTTP cache's `Vary` on disk (`net`), as Chromium keeps it: a SHA-256
+# of the values. In the tree already, through cranelift and wasmtime.
+sha2 = "0.10"
 # `toDataURL` and DevTools' bodies that aren't text: base64.
 base64 = "0.22"
 # The address bar's copy and paste (`ui::Clipboard`). Text only: without

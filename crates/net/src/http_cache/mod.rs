@@ -22,6 +22,7 @@ pub(crate) mod headers;
 pub(crate) mod key;
 pub(crate) mod memory;
 pub(crate) mod request_headers;
+pub(crate) mod sql_store;
 pub(crate) mod transaction;
 pub(crate) mod vary;
 

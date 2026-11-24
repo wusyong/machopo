@@ -4,9 +4,11 @@
 //! ones.
 //!
 //! Chromium keeps a SHA-256 of the values, not the values: its entries go to
-//! disk, and a `Vary: Cookie` would put the cookie there. These are kept in
-//! memory only, beside the cookies themselves, so the values are kept as
-//! they are; one written to disk has to be hashed as Chromium's is.
+//! disk, and a `Vary: Cookie` would put the cookie there. In memory, beside
+//! the cookies themselves, the values are kept as they are; one written to
+//! disk keeps their SHA-256 as Chromium's does ([`VaryData::digested`]).
+
+use sha2::{Digest, Sha256};
 
 use super::headers::{has_value, values};
 
@@ -20,6 +22,8 @@ pub(crate) enum VaryData {
     /// Each named header's value in the request it was stored for (none is
     /// ""), each followed by `\n` (`AddField`).
     Values(String),
+    /// Those values' SHA-256 (`request_digest_`): what one on disk keeps.
+    Digest([u8; 32]),
 }
 
 impl VaryData {
@@ -49,7 +53,24 @@ impl VaryData {
         match self {
             Self::Star => false,
             Self::Values(_) => Self::new(request, response).as_ref() == Some(self),
+            Self::Digest(digest) => {
+                Self::new(request, response).and_then(|vary| vary.digest()) == Some(*digest)
+            }
         }
+    }
+
+    /// Its values' SHA-256; none for [`Self::Star`].
+    pub(crate) fn digest(&self) -> Option<[u8; 32]> {
+        match self {
+            Self::Star => None,
+            Self::Values(values) => Some(Sha256::digest(values.as_bytes()).into()),
+            Self::Digest(digest) => Some(*digest),
+        }
+    }
+
+    /// The same, its values as their SHA-256: to be written to disk.
+    pub(crate) fn digested(self) -> Self {
+        self.digest().map_or(self, Self::Digest)
     }
 }
 
@@ -106,6 +127,27 @@ mod tests {
             ]),
             &response
         ));
+    }
+
+    #[test]
+    fn a_digest_matches_as_its_values_do_and_keeps_none_of_them() {
+        let response = headers(&[("vary", "Cookie")]);
+        let vary = VaryData::new(&headers(&[("cookie", "id=secret")]), &response)
+            .expect("a vary")
+            .digested();
+        let VaryData::Digest(digest) = &vary else {
+            panic!("{vary:?}");
+        };
+        // SHA-256 of "id=secret\n".
+        assert_eq!(
+            digest[..4],
+            Sha256::digest(b"id=secret\n")[..4],
+            "the values' digest"
+        );
+        assert!(vary.matches(&headers(&[("cookie", "id=secret")]), &response));
+        assert!(!vary.matches(&headers(&[("cookie", "id=other")]), &response));
+        assert!(!vary.matches(&[], &response));
+        assert_eq!(VaryData::Star.digested(), VaryData::Star);
     }
 
     #[test]

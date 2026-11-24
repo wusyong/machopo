@@ -1,0 +1,196 @@
+# Step 2a's mutants: `python3 scripts/test.py mutate rfcs/0113-http-cache/mutants-2a.toml`.
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache"]
+timeout = 900
+
+[[mutant]]
+name = "a cache's database syncs its commits"
+file = "crates/sql/src/lib.rs"
+from = '''        if synchronous == Synchronous::Off {'''
+to = '''        if false {'''
+test = ["cargo", "test", "-q", "-p", "sql"]
+
+[[mutant]]
+name = "a razed database keeps its file"
+file = "crates/sql/src/lib.rs"
+from = '''                    match std::fs::remove_file(&file) {'''
+to = '''                    match Ok::<(), std::io::Error>(()) {'''
+test = ["cargo", "test", "-q", "-p", "sql"]
+
+[[mutant]]
+name = "a razed database forgets its synchronous"
+file = "crates/sql/src/lib.rs"
+from = '''        *self = Self::set_up(connection, self.path.take(), self.synchronous)?;'''
+to = '''        *self = Self::set_up(connection, self.path.take(), Synchronous::Full)?;'''
+test = ["cargo", "test", "-q", "-p", "sql"]
+
+[[mutant]]
+name = "a razed database keeps its journal"
+file = "crates/sql/src/lib.rs"
+from = '''                journal.push("-journal");'''
+to = '''                journal.push("-not-the-journal");'''
+test = ["cargo", "test", "-q", "-p", "sql"]
+
+[[mutant]]
+name = "a digest matches any request"
+file = "crates/net/src/http_cache/vary.rs"
+from = '''                Self::new(request, response).and_then(|vary| vary.digest()) == Some(*digest)'''
+to = '''                true'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache"]
+
+[[mutant]]
+name = "a digest isn't the values'"
+file = "crates/net/src/http_cache/vary.rs"
+from = '''            Self::Values(values) => Some(Sha256::digest(values.as_bytes()).into()),'''
+to = '''            Self::Values(_) => Some([0; 32]),'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache"]
+
+[[mutant]]
+name = "a digest takes no room"
+file = "crates/net/src/http_cache/entry.rs"
+from = '''            Some(VaryData::Digest(digest)) => len(digest.len()),'''
+to = '''            Some(VaryData::Digest(_)) => 0,'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache"]
+
+[[mutant]]
+name = "what isn't complete stays at a start"
+file = "crates/net/src/http_cache/sql_store.rs"
+from = '''                "DELETE FROM blobs WHERE res_id IN (SELECT res_id FROM resources WHERE complete = 0);
+                 DELETE FROM resources WHERE complete = 0;",'''
+to = '''                "SELECT 1;",'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache"]
+
+[[mutant]]
+name = "what isn't complete is read"
+file = "crates/net/src/http_cache/sql_store.rs"
+from = '''             FROM resources WHERE cache_key = ? AND complete = 1",'''
+to = '''             FROM resources WHERE cache_key = ? ORDER BY res_id DESC",'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache"]
+
+[[mutant]]
+name = "a body is held whole"
+file = "crates/net/src/http_cache/sql_store.rs"
+from = '''        if writing.buffered >= WRITE_BUFFER {'''
+to = '''        if false {'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache"]
+
+[[mutant]]
+name = "a body's pieces are written in bigger rows"
+file = "crates/net/src/http_cache/sql_store.rs"
+from = '''pub(crate) const WRITE_BUFFER: usize = 512 * 1024;'''
+to = '''pub(crate) const WRITE_BUFFER: usize = 1024 * 1024;'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache"]
+
+[[mutant]]
+name = "each piece starts at the start"
+file = "crates/net/src/http_cache/sql_store.rs"
+from = '''        writing.written = start.saturating_add(u64::try_from(piece.len()).unwrap_or(u64::MAX));'''
+to = '''        writing.written = start;'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache"]
+
+[[mutant]]
+name = "a finished write leaves the last entry"
+file = "crates/net/src/http_cache/sql_store.rs"
+from = '''            delete_complete(&transaction, key)?;'''
+to = '''            let _ = &transaction;'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache"]
+
+[[mutant]]
+name = "a finished write isn't complete"
+file = "crates/net/src/http_cache/sql_store.rs"
+from = '''                "UPDATE resources SET complete = 1, size = ?, last_used = ? WHERE res_id = ?",'''
+to = '''                "UPDATE resources SET complete = 0, size = ?, last_used = ? WHERE res_id = ?",'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache"]
+
+[[mutant]]
+name = "a finished write's size isn't kept"
+file = "crates/net/src/http_cache/sql_store.rs"
+from = '''                "UPDATE resources SET complete = 1, size = ?, last_used = ? WHERE res_id = ?",'''
+to = '''                "UPDATE resources SET complete = 1, size = 0 + 0 * ?, last_used = ? WHERE res_id = ?",'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache"]
+
+[[mutant]]
+name = "a finished write isn't used now"
+file = "crates/net/src/http_cache/sql_store.rs"
+from = '''                "UPDATE resources SET complete = 1, size = ?, last_used = ? WHERE res_id = ?",'''
+to = '''                "UPDATE resources SET complete = 1, size = ?, last_used = 0 * ? WHERE res_id = ?",'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache"]
+
+[[mutant]]
+name = "an abandoned write stays"
+file = "crates/net/src/http_cache/sql_store.rs"
+from = '''                if let Some(writing) = self.writing.remove(&key) {
+                    self.with(|db| delete_rows(db, writing.res_id));'''
+to = '''                if let Some(writing) = self.writing.remove(&key) {
+                    let _ = writing;'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache"]
+
+[[mutant]]
+name = "a write begun again leaves the one before"
+file = "crates/net/src/http_cache/sql_store.rs"
+from = '''            self.with(|db| delete_rows(db, old.res_id));'''
+to = '''            let _ = old;'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache"]
+
+[[mutant]]
+name = "remove keeps the entry"
+file = "crates/net/src/http_cache/sql_store.rs"
+from = '''                self.with(|db| delete_complete(db, &key));'''
+to = '''                let _ = &key;'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache"]
+
+[[mutant]]
+name = "touch doesn't"
+file = "crates/net/src/http_cache/sql_store.rs"
+from = '''                        "UPDATE resources SET last_used = ? WHERE cache_key = ? AND complete = 1",'''
+to = '''                        "UPDATE resources SET last_used = last_used + 0 * ? WHERE cache_key = ? AND complete = 1",'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache"]
+
+[[mutant]]
+name = "clear lets a write go on"
+file = "crates/net/src/http_cache/sql_store.rs"
+from = '''            Op::Clear(done) => {
+                self.writing.clear();'''
+to = '''            Op::Clear(done) => {'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache"]
+
+[[mutant]]
+name = "clear keeps the entries"
+file = "crates/net/src/http_cache/sql_store.rs"
+from = '''                self.with(|db| db.execute_batch("DELETE FROM blobs; DELETE FROM resources;"));'''
+to = '''                self.with(|db| db.execute_batch("SELECT 1;"));'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache"]
+
+[[mutant]]
+name = "Vary: * isn't kept"
+file = "crates/net/src/http_cache/sql_store.rs"
+from = '''                .map_or_else(Vec::new, |digest| digest.to_vec())'''
+to = '''                .map_or_else(|| vec![0; 32], |digest| digest.to_vec())'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache"]
+
+[[mutant]]
+name = "a Vary's digest isn't kept"
+file = "crates/net/src/http_cache/sql_store.rs"
+from = '''                .map_or_else(Vec::new, |digest| digest.to_vec())'''
+to = '''                .map_or_else(Vec::new, |_| Vec::new())'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache"]
+
+[[mutant]]
+name = "damage isn't razed"
+file = "crates/net/src/http_cache/sql_store.rs"
+from = '''            Err(error) if sql::is_corrupt(&error) => {'''
+to = '''            Err(error) if false && sql::is_corrupt(&error) => {'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache"]
+
+[[mutant]]
+name = "the cache isn't told of a raze"
+file = "crates/net/src/http_cache/sql_store.rs"
+from = '''        (self.on_razed)();'''
+to = '''        let _ = &self.on_razed;'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache"]
+
+[[mutant]]
+name = "headers' lengths are big endian"
+file = "crates/net/src/http_cache/sql_store.rs"
+from = '''        bytes.extend_from_slice(&u32::try_from(text.len()).ok()?.to_le_bytes());'''
+to = '''        bytes.extend_from_slice(&u32::try_from(text.len()).ok()?.to_be_bytes());'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "http_cache"]

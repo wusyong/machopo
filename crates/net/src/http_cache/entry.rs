@@ -37,6 +37,7 @@ impl StoredResponse {
         });
         let vary = match &self.vary {
             Some(VaryData::Values(values)) => len(values.len()),
+            Some(VaryData::Digest(digest)) => len(digest.len()),
             Some(VaryData::Star) | None => 0,
         };
         let body = self
@@ -70,8 +71,14 @@ mod tests {
         assert_eq!(response.size(), 18);
         let star = StoredResponse {
             vary: Some(VaryData::Star),
-            ..response
+            ..response.clone()
         };
         assert_eq!(star.size(), 15);
+        // One on disk: its values' digest.
+        let digest = StoredResponse {
+            vary: response.vary.clone().map(VaryData::digested),
+            ..response
+        };
+        assert_eq!(digest.size(), 15 + 32);
     }
 }

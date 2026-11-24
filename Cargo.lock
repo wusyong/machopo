@@ -2847,6 +2847,7 @@ dependencies = [
  "protocol",
  "reqwest",
  "rustls",
+ "sha2",
  "site",
  "sql",
  "tokio",

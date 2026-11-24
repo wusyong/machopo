@@ -17,6 +17,7 @@ db.connection().execute("INSERT INTO cookies ...", (...))?;
 
 - exclusive locking：打開它的連線之外，沒有人能讀寫它（profile 的資料夾本來就只給一個 machopo）。被鎖住時不等，馬上是錯誤（`rusqlite` 預設等 5 秒，SQLite 和 Chromium 不等）：那表示有另一條連線開了它。
 - `journal_mode=TRUNCATE`（rollback journal，每次 commit 之後截斷），`synchronous` 用 SQLite 預設的 FULL：當掉、斷電時檔案不壞。Chromium 的註解說 WAL 還在開發中，不用。
+- 掉了也沒關係的資料（HTTP cache）用 `open_with(..., Synchronous::Off)`：commit 不等磁碟，machopo 當掉時檔案不壞，作業系統當掉或斷電時可能壞（Chromium 的 SQL disk cache backend 也這樣設）。
 - 打開時就讀 schema：拿到鎖，也找出壞掉的檔案。
 
 ## schema 的版本
@@ -27,6 +28,8 @@ db.connection().execute("INSERT INTO cookies ...", (...))?;
 
 不是資料庫、或 schema 讀不出來的檔案，移到旁邊（`名稱.corrupt`，蓋掉上一個）、建一個新的，log 裡有一筆警告（Chromium 的 `RazeAndPoison` 之後重新開始）。用的一方看到的是一個新的資料庫：存過的資料沒了。
 
+用到一半才發現壞掉的（查詢的錯誤 `is_corrupt`）由用的一方決定怎麼辦：`raze` 關掉它、刪掉檔案和 journal、照原本的設定建一個新的、空的（版本 0，用的一方再 `migrate`；Chromium 的 `Database::Raze`）。
+
 ## 測試
 
-`cargo test -p sql`：記憶體和資料夾、跨開關保留、設定（journal、locking、被鎖住時不等）、schema 的版本（只跑新的、較新的拒絕、失敗的退回）、不是資料庫的檔案和 schema 壞掉的檔案。
+`cargo test -p sql`：記憶體和資料夾、跨開關保留、設定（journal、locking、被鎖住時不等、`synchronous`）、schema 的版本（只跑新的、較新的拒絕、失敗的退回）、不是資料庫的檔案和 schema 壞掉的檔案、`raze`（資料夾裡和記憶體的，設定照舊）。

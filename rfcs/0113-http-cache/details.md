@@ -114,6 +114,29 @@ Chrome 2020 年的說明（`https://developer.chrome.com/blog/http-cache-partiti
 | 讀 body | 一個檔案，可以邊讀邊給 data pipe | 同左 | 一次讀進記憶體或分列讀 |
 | index 和淘汰 | 自己的 index 檔，損毀時重建 | SQLite 的表 | SQLite 的表 |
 | 損毀 | 單一 entry 壞掉只丟它 | 表和檔案要對得上 | SQLite 自己處理 |
-| 先例 | Chromium 的 Simple Cache、Firefox 的 `cache2` | 無 | 無 |
+| 先例 | Chromium 的 Simple Cache（Windows 以外的預設）、Firefox 的 `cache2` | 無 | Chromium 實驗中的 SQL backend（預設關） |
 
 body 是串流的大塊資料（`ipc::data_pipe` 一段一段給），整份放 SQLite 不划算；index 和淘汰的順序放 SQLite 可以省下自己的格式和損毀的處理。2026-11-24 的看法：body 放檔案，header 和 index 在第一欄和第二欄之間，第 2 階段開始前決定。
+
+**Chromium 的 backend**（2026-11-24 讀 `main` 的 `net/disk_cache/`）：
+- 預設：`net/disk_cache/sql/README.md` 和 `backend_experiment.h` 的 `IsSimpleBackendEnabledByDefaultPlatform` 是 Android、Linux、ChromeOS、macOS 用 Simple Cache，Windows 用 blockfile（`disk_cache.cc` 的 `CacheCreator::Run` 對 `CACHE_BACKEND_DEFAULT` 只在 Android、Fuchsia 選 Simple，其他平台由呼叫的一方指定 Simple，呼叫的一方沒有讀到）。
+- Simple Cache：每個 entry 一個檔案（16 個字元的 key hash 加 2 個字元的後綴），裡面是 header、key、stream 1（body）、它的 EOF 記錄（CRC32）、stream 0（HTTP header）、key 的 SHA-256、stream 0 的 EOF；stream 2 和 sparse 的各一個檔案。index（`index-dir/the-real-index`）是每個 entry 的 key hash、最後用的時間、大小，加整份的 CRC32：關閉時、閒下來時寫（先寫 `temp-index` 再 rename），讀不了、CRC 不對、比資料夾舊時掃過整個資料夾重建。
+- SQL backend（`net/disk_cache/sql/`，`kDiskCacheBackendExperiment` 預設關，只在 `ENABLE_DISK_CACHE_SQL_BACKEND` 的 build 裡）：README 說要在「很多小的 entry」時比預設的 backend 穩、快。分成幾個 shard（預設 3 個），每個一個 SQLite 檔；表 `resources`（key、它的 hash、最後用的時間、大小、header 的 blob、checksum）和 `blobs`（每個 entry 的 body 一段一段存，記著起點和終點、checksum）；body 先寫進每個 entry 最多 512 KiB 的 buffer 再寫進去；記憶體裡的 index（key hash 對到列）讓「有沒有」不用查資料庫；淘汰時每個 shard 列出最舊的，合起來挑；預設不是 WAL、`synchronous` 是 OFF（cache 掉了只是重新下載）。
+- Chrome 的 cache 的資料夾由 profile 的資料夾算出來（`ProfileImpl::DoFinalInit` 的 `GetUserCacheDirectory`，`chrome/common/chrome_paths_mac.mm`、`_linux.cc`、`_win.cc`）：macOS 把 profile 在 `DIR_APP_DATA`（`~/Library/Application Support`）底下的相對路徑接到 `DIR_CACHE`（註解的例子是 `~/Library/Caches/Google/Chrome/<profile>`），Linux 把它在 XDG 的 config 資料夾（`~/.config`）底下的相對路徑接到 cache 的資料夾（註解：`~/.config/google-chrome` 對到 `~/.cache/google-chrome`），Windows 就是 profile 的資料夾；profile 不在那底下時是 profile 的資料夾。其下再接 `chrome::kCacheDirname`（值沒有讀到）。
+
+## 磁碟的大小上限
+
+2026-11-24 讀 `main` 的 `net/disk_cache/cache_util.cc`。`PreferredCacheSizeForPath` 用 `base::SysInfo::AmountOfDiskSpace` 讀 cache 的資料夾所在的磁碟剩下的空間 A，交給 `PreferredCacheSize`；Simple Cache 只在初始化、呼叫的一方沒給大小時算一次。`kDefaultCacheSize` 是 80 MiB；`PreferredCacheSizeInternal(A)`：A 小於 100 MiB 時 0.8·A，小於 800 MiB 時 80 MiB，小於 2000 MiB 時 A/10，小於 20000 MiB 時 200 MiB，再大是 A/100。`DISK_CACHE` 在 Windows 以外乘上 400%（固定的，不是實驗），但不超過 A/5，最後不超過預設的 4 倍（Windows 以外 1280 MiB，Windows 320 MiB）。算出來（表是照程式的算術）：
+
+| A | macOS、Linux | Windows |
+| --- | --- | --- |
+| 小於 100 MiB | 0.8·A | 0.8·A |
+| 100 到 400 MiB | 80 MiB | 80 MiB |
+| 400 到 800 MiB | A/5 | 80 MiB |
+| 800 到 2000 MiB | A/5 | A/10 |
+| 2000 到 4000 MiB | A/5 | 200 MiB |
+| 4000 到 20000 MiB | 800 MiB | 200 MiB |
+| 20000 MiB 以上 | 0.04·A，最多 1280 MiB | A/100，最多 320 MiB |
+| 讀不到 | 320 MiB | 80 MiB |
+
+Chrome 的 browser 另外可以照 `DiskCacheSize` 的設定給 `http_cache_max_size`（沒有讀到它的預設）。

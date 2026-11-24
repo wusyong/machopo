@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use sql::{Database, Error};
+use sql::{Database, Error, Synchronous};
 
 /// A new, empty folder for one test.
 fn scratch(name: &str) -> PathBuf {
@@ -158,4 +158,83 @@ fn a_database_with_a_damaged_schema_is_made_again() {
     again.migrate(&SCHEMA).unwrap();
     assert_eq!(count(&mut again), 0);
     assert_eq!(std::fs::read(dir.join("Data.corrupt")).unwrap(), bytes);
+}
+
+/// Commits synced unless asked not to (a cache's).
+#[test]
+fn a_database_syncs_its_commits_unless_asked_not_to() {
+    let dir = scratch("synchronous");
+    let synchronous = |db: &mut Database| -> i64 {
+        db.connection()
+            .query_row("PRAGMA synchronous", [], |row| row.get(0))
+            .unwrap()
+    };
+    // FULL is 2, OFF 0.
+    assert_eq!(
+        synchronous(&mut Database::open(Some(&dir), "Full").unwrap()),
+        2
+    );
+    let mut off = Database::open_with(Some(&dir), "Off", Synchronous::Off).unwrap();
+    assert_eq!(synchronous(&mut off), 0);
+    assert_eq!(
+        synchronous(&mut Database::open_with(None, "Off", Synchronous::Off).unwrap()),
+        0
+    );
+}
+
+/// Razed, it starts over empty, at version 0, set up as it was: in its
+/// folder, its file made again; in memory, a new one.
+#[test]
+fn a_razed_database_starts_over_as_it_was() {
+    let dir = scratch("raze");
+    for folder in [Some(dir.as_path()), None] {
+        let mut db = Database::open_with(folder, "Data", Synchronous::Off).unwrap();
+        db.migrate(&SCHEMA).unwrap();
+        db.connection()
+            .execute("INSERT INTO kv (k, v) VALUES ('a', '1')", [])
+            .unwrap();
+        db.raze().unwrap();
+        assert_eq!(db.version().unwrap(), 0);
+        db.migrate(&SCHEMA).unwrap();
+        assert_eq!(count(&mut db), 0);
+        let synchronous: i64 = db
+            .connection()
+            .query_row("PRAGMA synchronous", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(synchronous, 0);
+        let locking: String = db
+            .connection()
+            .query_row("PRAGMA locking_mode", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(locking, "exclusive");
+    }
+    // Its journal goes with it: one a crash left hot would be played into
+    // the new file.
+    let mut db = Database::open(Some(&dir), "Journal").unwrap();
+    db.migrate(&SCHEMA).unwrap();
+    assert!(dir.join("Journal-journal").exists());
+    db.raze().unwrap();
+    assert!(!dir.join("Journal-journal").exists());
+    // What it has after is kept in its file.
+    let mut db = Database::open(Some(&dir), "Data").unwrap();
+    assert_eq!(db.version().unwrap(), 2);
+    assert_eq!(count(&mut db), 0);
+}
+
+/// A file damaged past reading is corrupt, as `raze` is for.
+#[test]
+fn a_damaged_file_is_corrupt() {
+    let dir = scratch("is-corrupt");
+    std::fs::write(dir.join("Data"), b"not a database, not at all, no").unwrap();
+    let error = rusqlite_open_error(&dir.join("Data"));
+    assert!(sql::is_corrupt(&error));
+}
+
+fn rusqlite_open_error(path: &std::path::Path) -> sql::rusqlite::Error {
+    let connection = sql::rusqlite::Connection::open(path).unwrap();
+    connection
+        .query_row("SELECT count(*) FROM sqlite_master", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap_err()
 }

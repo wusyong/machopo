@@ -15,7 +15,12 @@
 | 1d. cache 接進 `url_loader`：查、條件請求和 `304`、存、作廢、同時的請求（已決定的第 3、8、9、10 條） | 做完，待審查 | 2026-11-24 |
 | 1e. load flag：`fetch()` 的 `cache`、重新整理、上一頁、DevTools（已決定的第 11 條） | 做完，待審查 | 2026-11-24 |
 | 1f. WPT 的 `fetch/http-cache/`、情境、文件、mutation test；`btoa`、`atob`（已決定的第 12 條） | 做完，待審查 | 2026-11-24 |
-| 2. 磁碟的 backend | | |
+| 2. 磁碟的 backend（已決定的第 13 到 15 條） | | |
+| 2a. SQLite 的 store：schema、自己的 thread、讀寫、壞掉的檔案（已決定的第 16 到 19 條） | 做完，待審查 | 2026-11-24 |
+| 2b. `HttpCache` 接上兩種 backend（記憶體的、SQLite 的），交易經過它讀寫 | | |
+| 2c. 大小上限：`ipc` 的平台層讀磁碟剩下的空間，照 `PreferredCacheSize` 算 | | |
+| 2d. cache 的資料夾：profile 對到各平台的 cache 資料夾，network context 打開它 | | |
+| 2e. 重新啟動之後照樣用（整合測試）、文件、mutation test | | |
 | 3. 重量網路版的 Speedometer | | |
 
 ## 驗收
@@ -39,6 +44,9 @@
 | 帶 `Range` 的請求不經過 cache，`206` 不存；送出時的 `Pragma`、`Cache-Control` 只在請求自己沒有時加 | `cargo test -p net --test it http_cache` |
 | `btoa`、`atob`（window 和 worker） | `python3 scripts/test.py wpt html/webappapis/atob/` |
 | 強制重新整理的快捷鍵在視窗裡重新載入頁面 | `python3 scripts/test.py scenarios navigation` |
+| `sql` 的資料庫可以打開成 `synchronous=OFF`，`raze` 刪掉檔案和 journal、照原本的設定重來 | `cargo test -p sql` |
+| `Vary` 存到磁碟時只存值的 SHA-256，照樣比對 | `cargo test -p net --lib http_cache::vary`、`http_cache::entry` |
+| 磁碟的 store：寫進去的重新打開之後讀得回來（header、時間、`Vary`、body），body 邊收邊寫、每滿 512 KiB 一列，沒收完的不讀、下次啟動時刪掉，放棄的刪掉、留著上一個，完成的取代上一個，刪、更新使用的時間、清空（正在寫的也是），`Vary` 的值不在檔案裡，壞掉的資料庫清掉重來，打不開的什麼都不留 | `cargo test -p net --lib http_cache::sql_store` |
 | DevTools：`fromDiskCache`；`Network.setCacheDisabled` 讓導覽和子資源（parser、stylesheet、圖片、`fetch()`）繞過 cache，`Network` 沒打開時是錯誤，`disable`、session 離開、client 斷線時取消，別的分頁的 session 不影響；`Network.clearBrowserCache` 清完才回答 | `cargo test -p shell --test it devtools_network::devtools_sees_the_http_cache` |
 
 ## 做過的檢查
@@ -117,4 +125,14 @@
 **階段做完時的檢查**：`cargo fmt --check`（`cargo fmt` 修了 1c 到 1e 留下的格式，都在這份改過的檔案裡）、`cargo clippy --workspace --all-targets -- -D warnings`（`HeaderFlag` 的值都以 `Cache` 結尾，改名成 `Disable`、`Bypass`、`Validate`；`begin_renderer_navigation` 多了 `load_flags` 之後超過參數的上限，照 `start_navigation` 寫帶理由的 `#[expect]`；`ResourceRequest` 多了 `LoadFlags`，`RendererHostMsg` 從 272 bytes 變成 280，`headless` 的 `Event` 的大小差超過上限，寫帶理由的 `#[expect]`：每個 renderer 的訊息都是 `Host`，box 它每個訊息都要配置一次）、`cargo test --workspace` 都通過；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs` 通過。
 
 **mutation test**（`mutants-1f.toml`，9 個）：9 個都抓到（`btoa`、`atob` 的 6 個由 WPT 的 `base64.any.js` 抓到）。1f 改了 1e 的一條 mutation 改的程式（加 header 的方式），`mutants-1e.toml` 的那一條改成對著新的程式；`HeaderFlag` 改名也照著改了 `mutants-1d.toml`、`mutants-1e.toml`；`cargo fmt` 改了 `renderer` 的 `loader.rs` 的兩處，1e 的兩條 mutation 的 `from` 跟著改、重跑，照樣抓到。
+
+### 2a（2026-11-24，macOS 26.6.2、Apple M4、debug build，`14a651e` 之上）
+
+**對照的原始碼**：Chromium `main` 的 `net/disk_cache/sql/`（由 agent 讀 Gitiles：README 的 schema、`EntryWriteBuffer`、記憶體裡的 index、shard、`synchronous` 和 WAL 的預設）和 `net/disk_cache/` 其他的 backend（`details.md` 的「磁碟的格式」）。和它不同的：一個資料庫、一個 thread（已決定的第 19 條）；`blobs` 沒有 checksum（SQLite 的 page 沒有 checksum，Chromium 自己算；machopo 靠 SQLite 回報壞掉的檔案）；key 照原樣存（Chromium 另外存 hash 給 index 用；machopo 的 index 在 2b，照 key）。
+
+**做法**：`sql` 加 `Database::open_with` 的 `Synchronous::Off` 和 `raze`（關掉、刪掉檔案和 journal、照原本的設定建新的）。`net` 的 `http_cache::sql_store`：store 的 thread 拿著資料庫（照 cookie 的資料庫），收 `Read`、`Begin`、`Append`、`Finish`、`Abandon`、`Remove`、`Touch`、`Clear`；寫入照 key 認（cache 一次只讓一個載入寫一個 key），body 在 thread 裡每個 entry 留到 512 KiB 才寫成一列；完成時在一個交易裡刪掉 key 上一個完成的 entry、把這個標成完成。打開時刪掉沒完成的，讀出完成的 entry 的 key、大小、最後用的時間，給 2b 的 index。任何語句碰到壞掉的資料庫就 `raze`、重跑 schema、忘掉正在寫的，告訴 cache（`on_razed`）。`Vary` 的值存成 SHA-256（`VaryData::Digest`，`sha2` 已經在依賴樹裡）。store 在 2b 接上之前沒有人用（`cargo build` 有 dead code 的警告，2b 接上時消失）。
+
+**新的測試**：`sql` 3 個（`synchronous`、`raze`、壞掉的檔案是 `is_corrupt`）；`net` 的 `http_cache::sql_store` 11 個、`vary` 1 個，`entry` 的大小加上 digest 的；`net` 的 `http_cache` 的單元測試 49 個、`sql` 9 個都通過。
+
+**mutation test**（`mutants-2a.toml`，27 個）：27 個都抓到。第一次跑時「`raze` 留著 journal」沒抓到：TRUNCATE 模式的 journal 平常是空的，留著也看不出差別；補了「commit 之後 journal 在、`raze` 之後不在」（當掉時留下的 hot journal 會被放進新的檔案）。寫 mutation 之前拿掉了讀 index 時多餘的 `WHERE complete = 1`（前一句剛刪掉沒完成的，會是等價的 mutation），補了「同一個 key 又開始寫時丟掉前一個」和 digest 佔的大小的測試。資料庫用到一半出錯的三條路（清掉重來時忘掉正在寫的、完成的交易失敗、寫一段失敗）測不到，記進了 `docs/test-gaps.md`。
 

@@ -104,7 +104,7 @@ machopo 自己寫（已決定的第 4 條），照 RFC 9111 和 Chromium 的 `Ht
 ## 缺點
 
 - 多一層狀態：cache 的 bug 讓頁面拿到舊的或別人的內容，比沒有 cache 難查；所以分區和 `Vary` 一開始就照 Chromium 做。
-- 磁碟的 backend 要自己維護格式、損毀和並行（`sql` 的 SQLite 能省下其中一部分，見待決定的第 1 條）。
+- 磁碟的 backend 要維護 schema 和並行（格式和損毀交給 `sql` 的 SQLite，已決定的第 13 條）。
 - 測試多了「上一次載入留下了什麼」：記憶體裡的 profile 每次從空的開始，測試之間不互相影響，但同一個測試裡的載入會。
 
 ## 理由和其他做法
@@ -190,12 +190,50 @@ machopo 自己寫（已決定的第 4 條），照 RFC 9111 和 Chromium 的 `Ht
     - 對照 Chrome：Blink 的 `WindowOrWorkerGlobalScope::btoa`、`atob`（`Base64Encode` 和 forgiving 的 `Base64Decode`，記得的，沒有讀原始碼：行為照規範，由 WPT 驗證）。
     - 不選另開一份小的 RFC 先做（B）：多一次草稿和確認，`fetch/http-cache/` 要等它做完才加，範圍分得清楚是唯一的好處。
 
+13. **磁碟的 cache 全放在 SQLite**（2026-11-24，使用者決定；C，取代原本「待決定」的第 1 條的看法）：
+    - 用 `sql` 的資料庫，照 Chromium 實驗中的 SQL backend（`net/disk_cache/sql/`）：一張表是每個 entry（key、最後用的時間、大小、header），一張表是 body 一段一段的 blob；淘汰照最後用的時間查。`Vary` 的值存成 hash（Chromium 存 SHA-256：`Vary: Cookie` 時不讓 cookie 明文落地；記憶體的 backend 直接存值）。schema、寫入的 buffer、`synchronous` 和 thread 在實作這一段時決定。
+    - 對照 Chrome：2026-11-24 讀 `main` 的 `net/disk_cache/`（`details.md` 的「磁碟的格式」）：Chrome 在 macOS、Linux 的預設是 Simple Cache（每個 entry 一個檔案加 index），SQL backend 在實驗、預設關，README 說它在「很多小的 entry」時比預設的穩、快。
+    - 理由：不用自己寫檔案格式、檢查碼、index 和當掉之後的重建；SQLite 的交易讓當掉時沒有寫一半的 entry；`sql` 的遷移和壞檔的處理現成；網路版的 Speedometer 正是很多小 entry 的情況。
+    - 不選每個 entry 一個檔案加 index（A，照 Simple Cache）：最接近 Chrome 現在的預設，但格式、index 和重建都要自己寫、自己測，幾千個小檔案每個都要開關檔。不選 header 和 index 在 SQLite、body 在檔案（B）：兩邊不在同一個交易裡，當掉之後要對齊孤兒檔和孤兒列，沒有先例。
+
+14. **磁碟的 cache 的大小上限照 Chromium 的算法**（2026-11-24，使用者決定；A，原本「待決定」的第 2 條）：
+    - 打開 cache 時讀一次 cache 所在的磁碟剩下的空間，照 Chromium 的 `PreferredCacheSize`（`DISK_CACHE`）算：macOS、Linux 上剩 20 GB 以上時是 4%、最多 1280 MiB，Windows 是 1%、最多 320 MiB，空間少時照它的每一段（`details.md` 的「磁碟的大小上限」）；讀不到時 macOS、Linux 320 MiB，Windows 80 MiB。剩下的空間在 `ipc` 的平台層讀：Unix 用 `rustix` 的 `statvfs`，Windows 用 `windows-sys` 的 `GetDiskFreeSpaceExW`（一處 `unsafe`）。
+    - 對照 Chrome：2026-11-24 讀 `main` 的 `net/disk_cache/cache_util.cc`（`PreferredCacheSize`、`PreferredCacheSizeInternal`、`PreferredCacheSizeForPath`）和 `simple/simple_backend_impl.cc`（只在初始化、呼叫的一方沒給大小時算一次）。
+    - 理由：和 Chrome 一樣；磁碟快滿時 cache 跟著變小，不會把它寫滿。`rustix` 和 `windows-sys` 都已經是依賴，多的只是平台層的一個函式。
+    - 不選固定的值（B，macOS、Linux 1280 MiB，Windows 320 MiB）：磁碟只剩 1 GB 時 Chrome 是 200 MiB，machopo 照樣可以寫到 1280 MiB。
+
+15. **磁碟的 cache 的資料夾照 Chrome**（2026-11-24，使用者決定；A）：
+    - macOS 是 `~/Library/Caches` 底下、profile 在 `~/Library/Application Support` 底下的相對路徑（預設的 profile 是 `~/Library/Caches/machopo`）；Linux 是 `$XDG_CACHE_HOME`（沒設時 `~/.cache`）底下、profile 在 `$XDG_CONFIG_HOME`（`~/.config`）底下的相對路徑（`~/.cache/machopo`）；Windows 和不在預設位置底下的 profile（`--user-data-dir` 給的、測試的）是 profile 的資料夾。其下一個 `Cache` 資料夾。記憶體裡的 profile 照舊用記憶體的 backend。
+    - 對照 Chrome：2026-11-24 讀 `main` 的 `chrome/common/chrome_paths_mac.mm`、`chrome_paths_linux.cc`、`chrome_paths_win.cc` 的 `GetUserCacheDirectory`（`details.md` 的「磁碟的格式」最後）；Linux 上看不看 `$XDG_CACHE_HOME`、子資料夾的名稱（`kCacheDirname`）沒有讀到，實作時確認。
+    - 理由：照平台的慣例，系統和清理工具知道 cache 的資料夾可以刪，備份 profile 時不帶上最多 1.25 GB 的 cache；多的只是每個平台一條路徑的規則。
+    - 不選一律放在 profile 的資料夾裡（B）：最簡單，但在 macOS、Linux 上不照慣例，備份時 cache 也跟著。
+
+16. **SQLite 的 store 在自己的 thread 上，記憶體裡留一份 index**（2026-11-24，使用者決定；A，2a）：
+    - connection 由 store 的 thread 拿著（和 cookie 的資料庫一樣），交易經過 channel 要它讀，寫和刪排進它的佇列；`HttpCache` 的鎖後面多一份 index：每個 key 的大小和最後用的時間，打開時讀進全部的 key，讀完之前的載入等著。查不到的當場知道，查得到的才去 thread 讀；總大小和淘汰的順序在記憶體裡算。
+    - 對照 Chrome：Chromium 的 SQL backend 有記憶體裡的 index（`SqlPersistentStoreInMemoryIndex`，key 的 hash 對到列，「快、同步的檢查」），Simple Cache 也有（`SimpleIndex`）；兩者都在背景的 sequence 上碰磁碟。
+    - 理由：沒存過的請求（第一次載入的每個資源）不用來回一趟 thread；每個 entry 約 30 幾 bytes，10 萬個約 3 MB。
+    - 不選每次都去資料庫查（B）：沒存過的也要來回一趟，總大小和淘汰的順序每次都要查。不選 `spawn_blocking` 搶一條 connection：`sql` 的資料庫只能有一條，寫和接著的讀的順序沒有保證。
+
+17. **body 邊收邊寫進 SQLite**（2026-11-24，使用者決定；A，2a）：
+    - 照 Chromium 的 SQL backend 的 `EntryWriteBuffer`：每個正在收的 entry 一個最多 512 KiB 的 buffer，滿了寫成 body 表的一列；開始收時先建 entry 的列、標成還沒收完，收完時在一個交易裡標成完成、記下大小，失敗或被取消時刪掉它的列。讀的一方只看完成的；啟動時刪掉沒完成的（上次當掉留下的）。
+    - 對照 Chrome：`net/disk_cache/sql/` 的 `entry_write_buffer.cc`（每個 entry 最多 512 KiB、全部最多 32 MiB 的 buffer，「把連續的 body 寫入先 buffer 起來再寫到磁碟」），`blobs` 表的每一列是一段，記著起點和終點。
+    - 理由：一個正在收的回應最多佔 512 KiB 的記憶體，和 body 多大無關；磁碟的 entry 最大是上限的 1/8（最多 160 MiB），整份留在記憶體裡時同時收幾個大檔案會讓記憶體跳很高。
+    - 不選收完再一次寫（B，和記憶體的 backend 一樣）：最簡單、資料庫裡沒有沒收完的 entry，但一個正在收的回應最多佔 160 MiB。
+
+18. **cache 的資料庫 `synchronous=OFF`，用到一半壞掉時清掉重來**（2026-11-24，使用者決定；A，2a）：
+    - `sql` 加一個打開時指定 `synchronous` 的選項（其他的資料庫照舊是 FULL）；cache 的 store 碰到資料庫壞掉的錯誤時，關掉、刪掉整個資料庫、建一個新的，記憶體裡的 index 跟著清空，正在讀寫的當成沒有 entry。
+    - 對照 Chrome：Chromium 的 SQL backend 的 `synchronous` 預設 OFF、不是 WAL；Chromium 的 `sql::Database` 出錯時 `RazeAndPoison`。
+    - 理由：commit 不等 fsync，邊收邊寫的每個 entry 至少兩次 commit，網路版的 Speedometer 一次載入就有幾千個；machopo 自己當掉時資料照樣安全，作業系統當掉或斷電時可能壞掉，cache 壞了只是重新下載。用到一半壞掉的處理不管哪種設定都要（磁碟本身也會出錯）。
+    - 不選 NORMAL（B）：rollback journal 時斷電仍有很小的機率壞掉，一樣要處理，又沒有 OFF 快。不選 FULL（C，`sql` 現在的預設）：每個 commit 一次 fsync，要快就得把寫入併成批次（像 cookie 的資料庫每 30 秒一次），當掉時丟掉沒 commit 的，多一套批次的邏輯。
+
+19. **cache 是一個資料庫、一個 thread**（2026-11-24，使用者決定；A，2a）：
+    - 不像 Chromium 的 SQL backend 分 shard（預設 3 個，每個一個 SQLite 檔和自己的 sequence，key 的 hash 決定在哪一個）。
+    - 理由：最簡單，淘汰直接照最後用的時間挑，不用合併幾個 shard 的候選（Chromium 的 `EvictionCandidateAggregator`）；`synchronous=OFF` 之後每次寫入不等磁碟，排隊很短；network service 本來就只有一個 thread。真的成為瓶頸時只改 store 這一層，schema 不變；第 3 階段量網路版的 Speedometer 時看得出要不要分。
+    - 不選照 Chromium 分成 3 個（B）：多三個 thread，淘汰要合併候選、和讀寫協調，清空和壞掉時的重來要三個一起。
+
 ## 待決定
 
-2026-11-24 的看法寫在每一條後面，還沒確認：
-
-1. **磁碟的格式**：(a) 每個 entry 一個檔案（header 和 body）加一個 index，像 Chromium 的 Simple Cache 和 Firefox 的 `cache2`；(b) 用 `sql` 的 SQLite，header 和小的 body 放在表裡、大的 body 放檔案；(c) 全放 SQLite。看法：body 一律放檔案（它是一段一段寫進去的大塊資料，SQLite 的 blob 要整份或另外處理增量的寫入），header 和 index 在 (a) 和 (b) 之間，第 2 階段開始前決定。比較在 `details.md` 的「磁碟的格式」。 不管哪一種，`Vary` 的值存成 hash（Chromium 存 SHA-256：`Vary: Cookie` 時不讓 cookie 明文落地）；記憶體的 backend 直接存值。
-2. **磁碟的大小上限**：固定的值，或照磁碟的可用空間（Chromium 的 `disk_cache::PreferredCacheSize`，`details.md` 的「Chromium 怎麼做」）。看法：照 Chromium 的算法。第 2 階段開始前決定。
+第 2 階段開始前的都決定了（已決定的第 13 到 15 條）；實作時要決定的寫在各段開始前。
 
 ## 之後的可能
 

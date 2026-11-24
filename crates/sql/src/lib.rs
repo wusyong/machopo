@@ -26,6 +26,22 @@ use rusqlite::{Connection, ErrorCode};
 #[derive(Debug)]
 pub struct Database {
     connection: Connection,
+    /// Its file; none in memory.
+    path: Option<PathBuf>,
+    synchronous: Synchronous,
+}
+
+/// When a commit waits for the disk (SQLite's `PRAGMA synchronous`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Synchronous {
+    /// Each commit synced (SQLite's default): the file survives the system
+    /// crashing or losing power.
+    #[default]
+    Full,
+    /// None: a commit is done once the system has it. The file survives
+    /// machopo crashing, not the system: for data that can be lost, as a
+    /// cache (Chromium's SQL disk cache backend sets it so).
+    Off,
 }
 
 /// Why a database couldn't be opened or brought to its schema.
@@ -75,13 +91,22 @@ impl Database {
     /// aside as `name.corrupt` and a new one made in its place (Chromium's
     /// `Database::RazeAndPoison`, after which its users start over).
     pub fn open(dir: Option<&Path>, name: &str) -> Result<Self, Error> {
+        Self::open_with(dir, name, Synchronous::Full)
+    }
+
+    /// [`Self::open`], its commits as `synchronous` says.
+    pub fn open_with(
+        dir: Option<&Path>,
+        name: &str,
+        synchronous: Synchronous,
+    ) -> Result<Self, Error> {
         let Some(dir) = dir else {
-            return Self::set_up(Connection::open_in_memory()?);
+            return Self::set_up(Connection::open_in_memory()?, None, synchronous);
         };
         let path = dir.join(name);
         match Connection::open(&path)
             .map_err(Error::from)
-            .and_then(Self::set_up)
+            .and_then(|connection| Self::set_up(connection, Some(path.clone()), synchronous))
         {
             Err(Error::Sqlite(error)) if is_corrupt(&error) => {
                 let aside = dir.join(format!("{name}.corrupt"));
@@ -90,13 +115,17 @@ impl Database {
                     path: path.clone(),
                     error,
                 })?;
-                Self::set_up(Connection::open(&path)?)
+                Self::set_up(Connection::open(&path)?, Some(path), synchronous)
             }
             opened => opened,
         }
     }
 
-    fn set_up(connection: Connection) -> Result<Self, Error> {
+    fn set_up(
+        connection: Connection,
+        path: Option<PathBuf>,
+        synchronous: Synchronous,
+    ) -> Result<Self, Error> {
         // Locked is another connection's having it, which none should:
         // fail at once, as SQLite does unless told to wait (rusqlite waits
         // 5 seconds).
@@ -105,11 +134,47 @@ impl Database {
         // It answers with the mode it has (in memory, `memory`).
         let _: String =
             connection.query_row("PRAGMA journal_mode=TRUNCATE", [], |row| row.get(0))?;
+        if synchronous == Synchronous::Off {
+            connection.pragma_update(None, "synchronous", "OFF")?;
+        }
         // Reading the schema takes the lock now, and finds a file that
         // isn't a database.
         let _: i64 =
             connection.query_row("SELECT count(*) FROM sqlite_master", [], |row| row.get(0))?;
-        Ok(Self { connection })
+        Ok(Self {
+            connection,
+            path,
+            synchronous,
+        })
+    }
+
+    /// Starts it over, empty, at version 0, set up as it was: its file
+    /// (and journal) deleted and made again (Chromium's `Database::Raze`,
+    /// for one found damaged while in use). One in memory is a new one.
+    pub fn raze(&mut self) -> Result<(), Error> {
+        // Closed first: the lock and the file go with the connection.
+        drop(std::mem::replace(
+            &mut self.connection,
+            Connection::open_in_memory()?,
+        ));
+        let connection = match &self.path {
+            Some(path) => {
+                let mut journal = path.clone().into_os_string();
+                journal.push("-journal");
+                for file in [path.clone(), PathBuf::from(journal)] {
+                    match std::fs::remove_file(&file) {
+                        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                            return Err(Error::Io { path: file, error });
+                        }
+                        _ => {}
+                    }
+                }
+                Connection::open(path)?
+            }
+            None => Connection::open_in_memory()?,
+        };
+        *self = Self::set_up(connection, self.path.take(), self.synchronous)?;
+        Ok(())
     }
 
     /// Brings its schema to version `migrations.len()`: each migration
@@ -146,8 +211,9 @@ impl Database {
     }
 }
 
-/// Whether SQLite found the file isn't a database it can read.
-fn is_corrupt(error: &rusqlite::Error) -> bool {
+/// Whether SQLite found the file isn't a database it can read, or is one
+/// damaged: what [`Database::raze`] is for.
+pub fn is_corrupt(error: &rusqlite::Error) -> bool {
     error
         .sqlite_error_code()
         .is_some_and(|code| matches!(code, ErrorCode::NotADatabase | ErrorCode::DatabaseCorrupt))
