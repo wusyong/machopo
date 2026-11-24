@@ -118,10 +118,6 @@ pub(super) struct FrameDocument {
     resources: Rc<FrameResources>,
     /// A child frame's initial `about:blank`, which no navigation brought.
     initial: bool,
-    /// Back or forward loaded it (Blink's `kBackForward` load): until its
-    /// `load`, a new child frame's first document is the session
-    /// history's (`is_history_navigation_in_new_child_frame`).
-    history_load: bool,
     /// The URLs of its subresources that failed to load, or whose content
     /// was of no use (an image that doesn't decode, a script of no
     /// JavaScript type, a `<link>`'s `href` that doesn't parse), until its
@@ -219,7 +215,6 @@ impl FrameDocument {
             title_version: 0,
             resources: Rc::default(),
             initial: false,
-            history_load: false,
             failed: Vec::new(),
             aborted: false,
         }
@@ -660,7 +655,6 @@ impl RenderThread {
         self.frames_changed = true;
         self.document = Some(FrameDocument {
             navigation_id,
-            history_load: timing.navigation_type == dom::NavigationType::BackForward,
             body: Some(body),
             time_origin,
             ..FrameDocument::new(
@@ -1001,8 +995,12 @@ impl RenderThread {
             }
             for request in requests {
                 match request {
-                    FrameRequest::Navigate { frame, navigation } => {
-                        self.navigate_child(frame, navigation);
+                    FrameRequest::Navigate {
+                        frame,
+                        navigation,
+                        begin_id,
+                    } => {
+                        self.navigate_child(frame, navigation, begin_id);
                     }
                     FrameRequest::Navigation {
                         frame,
@@ -1178,93 +1176,34 @@ impl RenderThread {
     }
 
     /// A child frame's navigation (HTML's "navigate" for its iframe's
-    /// `src` or `srcdoc`): `src` the browser's to load, as its parent asked
-    /// (`navigate_child_to`); `srcdoc`'s markup and `about:blank` committed
-    /// here.
-    fn navigate_child(&mut self, frame: FrameId, navigation: ChildNavigation) {
-        let Some(parent) = self.child_parent(frame).map(|(parent, _)| parent) else {
-            return;
-        };
-        // The browser has its iframe's `srcdoc` as it is now, which an
-        // `about:srcdoc` document is (Blink tells it as the frame is made
-        // and as the attribute changes, each of which navigates it).
-        let srcdoc = match &navigation {
-            ChildNavigation::Srcdoc(markup) => markup.clone(),
-            ChildNavigation::Src(_) | ChildNavigation::AboutBlank => String::new(),
-        };
-        if let Some(token) = self.child_token(frame) {
-            let _ = self.to_browser.send(RendererHostMsg::DidChangeSrcDoc {
-                frame: token,
-                srcdoc,
-            });
-        }
-        let src = match navigation {
-            ChildNavigation::Src(src) => src,
-            ChildNavigation::Srcdoc(_) => "about:srcdoc".to_owned(),
-            ChildNavigation::AboutBlank => "about:blank".to_owned(),
-        };
-        self.navigate_child_to(frame, parent, &src, false, true);
-    }
-
-    /// Child frame `frame`'s navigation to `src`, as `initiator` asked (its
-    /// iframe, if `by_iframe`: its `src`): to a fragment of the document it
-    /// shows, its URL is that, scrolled there (HTML's navigate to a
-    /// fragment); a `javascript:` one commits an empty document here; any
-    /// other the browser loads or commits (`BeginNavigation`), the frame
-    /// loading until it commits or is dropped.
-    fn navigate_child_to(
+    /// `src` or `srcdoc`), after the engine's call: what went to the
+    /// browser went as it was asked (`RendererFrameClient::navigate_child`,
+    /// `begin_id` the number of the navigation it sent), and the renderer's
+    /// own of it follows now; one to a fragment of the frame's document,
+    /// or to a `javascript:` URL, which go nowhere, is done here.
+    fn navigate_child(
         &mut self,
         frame: FrameId,
-        initiator: FrameId,
-        src: &str,
-        replace: bool,
-        by_iframe: bool,
+        navigation: ChildNavigation,
+        begin_id: Option<u64>,
     ) {
-        let Ok(url) = Url::parse(src) else {
-            return;
-        };
-        if self.child_navigation_not_sent(frame, initiator, src) {
-            return;
-        }
-        // Its iframe asked, in its parent's document, as DevTools has it.
-        let devtools_initiator = if by_iframe && self.network_agent.enabled() {
-            self.iframe_initiator(frame)
-        } else {
-            None
-        };
-        let history = by_iframe && self.is_history_navigation_in_new_child_frame(frame);
-        let kind = protocol::renderer::BeginNavigationKind::To {
-            url: url.into(),
-            replace,
-        };
-        self.begin_child_navigation(frame, initiator, kind, devtools_initiator, history);
-    }
-
-    /// Whether child frame `frame`'s navigation by its iframe is the
-    /// session history's (Blink's `IsBackForwardNavigationInProgress`): it
-    /// shows its initial `about:blank` still, and its parent's document,
-    /// back or forward loaded, hasn't had its `load` yet. A frame script
-    /// makes after isn't.
-    fn is_history_navigation_in_new_child_frame(&mut self, frame: FrameId) -> bool {
         let Some(parent) = self.child_parent(frame).map(|(parent, _)| parent) else {
-            return false;
+            return;
         };
-        if !self.doc(frame).is_none_or(|next| next.initial) {
-            return false;
+        let src = child_navigation_url(navigation);
+        match begin_id {
+            Some(id) => {
+                self.navigations_asked.push(id);
+                let kind = protocol::renderer::BeginNavigationKind::To {
+                    url: src,
+                    replace: false,
+                };
+                self.child_navigation_sent(frame, parent, &kind, id);
+            }
+            None => {
+                self.child_navigation_not_sent(frame, parent, &src);
+            }
         }
-        let Some(document) = self
-            .doc(parent)
-            .filter(|next| next.history_load)
-            .map(|next| next.document.clone())
-        else {
-            return false;
-        };
-        let Some(engine) = self.engine.as_mut() else {
-            return false;
-        };
-        !engine
-            .dom_mut()
-            .read(|cx| cx.is_completely_loaded(document.get(cx.gc)))
     }
 
     /// Child frame `frame`'s navigation to `src`, as `initiator` asked,
@@ -1286,35 +1225,6 @@ impl RenderThread {
             return true;
         }
         false
-    }
-
-    /// The browser's `BeginNavigation` of child frame `frame`: it loads
-    /// until the browser commits it, or drops it; one started before
-    /// doesn't commit. The session history's for a new frame if
-    /// `history_in_new_child_frame`.
-    fn begin_child_navigation(
-        &mut self,
-        frame: FrameId,
-        initiator: FrameId,
-        kind: protocol::renderer::BeginNavigationKind,
-        devtools_initiator: Option<String>,
-        history_in_new_child_frame: bool,
-    ) {
-        let (Some(token), Some(by)) = (self.frame_token(frame), self.frame_token(initiator)) else {
-            tracing::warn!(?kind, "a navigation of a frame the browser doesn't know");
-            return;
-        };
-        let begin_id = crate::loader::next_begin_navigation_id();
-        self.navigations_asked.push(begin_id);
-        self.child_navigation_sent(frame, initiator, &kind, begin_id);
-        let _ = self.to_browser.send(RendererHostMsg::BeginNavigation {
-            frame: token,
-            initiator: by,
-            id: begin_id,
-            kind,
-            devtools_initiator,
-            history_in_new_child_frame,
-        });
     }
 
     /// Child frame `frame`'s navigation `kind` went to the browser as
@@ -1361,17 +1271,6 @@ impl RenderThread {
         let blank =
             Url::parse(url).is_ok_and(|url| url.scheme() == "about" && url.path() == "blank");
         blank.then(|| self.doc(initiator).map(|next| next.document.clone()))?
-    }
-
-    /// Who asked for child frame `frame`'s navigation, as DevTools'
-    /// `Network.Initiator` (JSON): its iframe, in its parent's document
-    /// (the script that inserted it, or the parser).
-    fn iframe_initiator(&mut self, frame: FrameId) -> Option<String> {
-        let (parent, owner) = self.child_parent(frame)?;
-        let engine = self.engine.as_mut()?;
-        let owner = engine.dom_mut().read(|cx| cx.node_id(owner.get(cx.gc)));
-        let initiator = self.initiator(parent, &dom::LoadInitiator::Element(owner));
-        Some(Initiator::to_json(initiator.as_ref()).to_string())
     }
 
     /// The browser's commit of child frame `token`'s navigation
@@ -1726,18 +1625,14 @@ impl RenderThread {
         self.children.documents.retain(|next| next.frame != frame);
         // The document before's `fetch()`es go with it.
         self.cancel_fetches_of_gone_documents();
-        let (navigation_id, history_load) = navigation.as_ref().map_or((0, false), |navigation| {
-            (
-                navigation.navigation_id,
-                navigation.timing.navigation_type == dom::NavigationType::BackForward,
-            )
-        });
+        let navigation_id = navigation
+            .as_ref()
+            .map_or(0, |navigation| navigation.navigation_id);
         // DevTools' `DOM` agent tells of the iframe's new document as the
         // frames are looked at after the task.
         self.frames_changed = true;
         self.children.documents.push(FrameDocument {
             navigation_id,
-            history_load,
             body: Some(body),
             time_origin,
             ..FrameDocument::new(
@@ -4898,6 +4793,9 @@ pub(super) struct RendererFrameClient {
     /// whether a session is on before they do anything.
     pub(super) page_agent: Rc<super::page_agent::PageAgent>,
     pub(super) dom_agent: Rc<super::dom_agent::DomAgent>,
+    /// For who asked for an iframe's navigation, as DevTools' `Network`
+    /// has it.
+    pub(super) network_agent: Rc<super::network_agent::NetworkAgent>,
 }
 
 /// The engine's child frames told to the browser as they are made and go,
@@ -5033,6 +4931,120 @@ impl dom_api::FrameClient for RendererFrameClient {
         });
         Some(id)
     }
+    /// An iframe's navigation, sent as it is asked: the browser hears of
+    /// its `srcdoc` as it is now, which an `about:srcdoc` document is
+    /// (Blink tells it as the frame is made and as the attribute changes,
+    /// each of which navigates it); then the navigation (`BeginNavigation`),
+    /// with who asked as DevTools' `Network` has it (the script that set
+    /// the attribute or inserted the iframe, or the parser's line), unless
+    /// it goes nowhere (a fragment of the frame's document, a `javascript:`
+    /// URL: the render thread does it after the call).
+    fn navigate_child(
+        &mut self,
+        asked: &dom_api::ChildNavigationAsked<'_>,
+        dom: &dom::Dom,
+    ) -> Option<u64> {
+        let srcdoc = match asked.navigation {
+            ChildNavigation::Srcdoc(markup) => markup.clone(),
+            ChildNavigation::Src(_) | ChildNavigation::AboutBlank => String::new(),
+        };
+        if let Some(frame) = asked.frame {
+            let _ = self
+                .to_browser
+                .send(RendererHostMsg::DidChangeSrcDoc { frame, srcdoc });
+        }
+        let url = child_navigation_url(asked.navigation.clone());
+        if child_navigation_goes_nowhere(asked.document, &url, dom) {
+            return None;
+        }
+        let kind = protocol::renderer::BeginNavigationKind::To {
+            url,
+            replace: false,
+        };
+        let (Some(frame), Some(initiator)) = (asked.frame, asked.parent) else {
+            tracing::warn!(?kind, "a navigation of a frame the browser doesn't know");
+            return None;
+        };
+        if asked.initial && self.page_agent.any_enabled() {
+            let document = dom.read(|cx| u64::from(cx.node_id(asked.document.get(cx.gc)).get()));
+            self.page_agent
+                .initial_document_navigated_from(&frame.to_string(), document);
+        }
+        let devtools_initiator = self
+            .network_agent
+            .enabled()
+            .then(|| self.iframe_initiator(asked, dom));
+        let id = crate::loader::next_begin_navigation_id();
+        let _ = self.to_browser.send(RendererHostMsg::BeginNavigation {
+            frame,
+            initiator,
+            id,
+            kind,
+            devtools_initiator,
+            history_in_new_child_frame: history_navigation_in_new_child_frame(
+                asked.owner,
+                asked.initial,
+                dom,
+            ),
+        });
+        Some(id)
+    }
+}
+
+impl RendererFrameClient {
+    /// Who asked for an iframe's navigation, as DevTools'
+    /// `Network.Initiator` (JSON): the script that asked, if `Network`
+    /// wants stacks and script ran, else the line the parser made the
+    /// iframe at, in its document.
+    fn iframe_initiator(
+        &self,
+        asked: &dom_api::ChildNavigationAsked<'_>,
+        dom: &dom::Dom,
+    ) -> String {
+        let stacks = self.network_agent.wants_stacks();
+        let initiator = match asked.stack.filter(|_| stacks) {
+            Some(stack) => Some(Initiator::Script(Rc::from(stack))),
+            None => dom.read(|cx| {
+                let owner = asked.owner.get(cx.gc);
+                let line = cx.take_parser_load_line(owner)?;
+                let url = cx.document_url(cx.document_of(owner))?.to_string();
+                let url = url.split('#').next().unwrap_or_default().to_owned();
+                Some(Initiator::Parser {
+                    url,
+                    line: line.saturating_sub(1),
+                })
+            }),
+        };
+        Initiator::to_json(initiator.as_ref()).to_string()
+    }
+}
+
+/// The URL an iframe's navigation goes to: its `src`, `about:srcdoc` for
+/// its `srcdoc`, or `about:blank`.
+fn child_navigation_url(navigation: ChildNavigation) -> String {
+    match navigation {
+        ChildNavigation::Src(src) => src,
+        ChildNavigation::Srcdoc(_) => "about:srcdoc".to_owned(),
+        ChildNavigation::AboutBlank => "about:blank".to_owned(),
+    }
+}
+
+/// Whether an iframe's navigation of a frame that shows its initial
+/// `about:blank`, `initial`, is the session history's (Blink's
+/// `IsBackForwardNavigationInProgress`): its parent's document, its
+/// iframe's (`owner`'s), was back or forward loaded and hasn't had its
+/// `load` yet. A frame script makes after isn't.
+fn history_navigation_in_new_child_frame(owner: &NodeRoot, initial: bool, dom: &dom::Dom) -> bool {
+    initial
+        && dom.read(|cx| {
+            let parent = cx.document_of(owner.get(cx.gc));
+            let history_load = cx.window_of(parent).is_some_and(|window| {
+                cx.navigation_timing(window).is_some_and(|timing| {
+                    timing.navigation_type == dom::NavigationType::BackForward
+                })
+            });
+            history_load && !cx.is_completely_loaded(parent)
+        })
 }
 
 /// Whether a child frame's navigation to `url`, its document `document`

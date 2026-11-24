@@ -149,6 +149,33 @@ pub trait FrameClient {
     /// one: what the host does after the call (`FrameRequest::Navigation`)
     /// goes by it. `dom` as it is then.
     fn navigate(&mut self, asked: &NavigationAsked<'_>, dom: &dom::Dom) -> Option<u64>;
+
+    /// An iframe's navigation of its child frame, `asked` (its `src` or
+    /// `srcdoc`, HTML's "process the iframe attributes"), as the operation
+    /// that asked for it ends: as `navigate`, what goes to the browser
+    /// goes now (Blink's frame owner navigates its frame as its attribute
+    /// changes or it is inserted), and the number of the navigation sent,
+    /// if one was (`FrameRequest::Navigate`).
+    fn navigate_child(&mut self, asked: &ChildNavigationAsked<'_>, dom: &dom::Dom) -> Option<u64>;
+}
+
+/// An iframe's navigation of its frame, as the engine tells its host's
+/// `FrameClient::navigate_child`.
+#[derive(Debug, Clone, Copy)]
+pub struct ChildNavigationAsked<'a> {
+    /// The frame navigated, and its parent: their tokens.
+    pub frame: Option<crate::FrameToken>,
+    pub parent: Option<crate::FrameToken>,
+    /// The iframe.
+    pub owner: &'a dom::NodeRoot,
+    /// The document the frame shows now, and whether it is the initial
+    /// `about:blank` the frame was made with.
+    pub document: &'a dom::NodeRoot,
+    pub initial: bool,
+    pub navigation: &'a crate::ChildNavigation,
+    /// The stack of the script that asked, if the DOM wants requests'
+    /// stacks (`Dom::request_stacks_wanted`) and script ran.
+    pub stack: Option<&'a str>,
 }
 
 /// A navigation script asked for, as the engine tells its host's

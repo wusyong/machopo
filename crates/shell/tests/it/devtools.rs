@@ -1356,10 +1356,12 @@ fn a_loading_frames_initial_document_is_told_before_its_own() {
         json!({ "enabled": true }),
     );
     page.take_events("");
-    evaluate(
-        &mut page,
-        "const s = document.createElement('iframe'); s.src = '/slow'; document.body.append(s); 0",
+    // Read as they come, the answer among them: the initial document's
+    // `init` comes before it.
+    let id = page.send(
         None,
+        "Runtime.evaluate",
+        json!({ "expression": "const s = document.createElement('iframe'); s.src = '/slow'; document.body.append(s); 0" }),
     );
     let mut order = Vec::new();
     while order.last().is_none_or(|(told, _)| *told != "navigated") {
@@ -1382,6 +1384,7 @@ fn a_loading_frames_initial_document_is_told_before_its_own() {
     };
     assert_ne!(initial, own);
     assert_eq!(own, navigated);
+    page.answer(id);
 }
 
 /// An iframe removed with one in it is told detached after the one in
@@ -1589,9 +1592,11 @@ fn of_two_navigations_in_a_task_the_second_alone_commits() {
         ("/b", Route::ok("text/html", "<!DOCTYPE html>b")),
     ]);
     let busy = "const end = performance.now() + 500; while (performance.now() < end) {}";
-    for (start, navigate, child) in [
-        ("/", "location", false),
-        ("/parent", "frames[0].location", true),
+    // The first to a document the browser has at once too.
+    for (start, navigate, child, first) in [
+        ("/", "location", false, "/a"),
+        ("/parent", "frames[0].location", true, "/a"),
+        ("/", "location", false, "about:blank"),
     ] {
         let machopo = Machopo::start();
         let (mut page, _target) = page(&machopo);
@@ -1601,7 +1606,7 @@ fn of_two_navigations_in_a_task_the_second_alone_commits() {
         page.take_events("");
         evaluate(
             &mut page,
-            &format!("{navigate}.href = '/a'; {busy} {navigate}.href = '/b'; 0"),
+            &format!("{navigate}.href = '{first}'; {busy} {navigate}.href = '/b'; 0"),
             None,
         );
         let navigated = loop {
@@ -1617,4 +1622,260 @@ fn of_two_navigations_in_a_task_the_second_alone_commits() {
             "{navigate}"
         );
     }
+}
+
+/// An iframe's navigation reaches the browser as script inserts it, before
+/// the script after it has run (Blink's frame owner navigates its frame
+/// as it is inserted): the child frame's `Page.frameStartedNavigating`
+/// comes before the answer to the command.
+#[test]
+fn an_iframes_navigation_reaches_the_browser_as_it_is_inserted() {
+    let server = server(&[
+        ("/", Route::ok("text/html", "<!DOCTYPE html><body></body>")),
+        ("/child", Route::ok("text/html", "<!DOCTYPE html>child")),
+    ]);
+    let machopo = Machopo::start();
+    let (mut page, target) = page(&machopo);
+    load(&mut page, &server.url("/"));
+    page.call(None, "Page.enable", json!({}));
+    page.take_events("");
+    let id = page.send(
+        None,
+        "Runtime.evaluate",
+        json!({ "expression": "const f = document.createElement('iframe');
+                               f.src = '/child';
+                               document.body.append(f);
+                               const end = performance.now() + 500;
+                               while (performance.now() < end) {}
+                               0" }),
+    );
+    let mut order = Vec::new();
+    while order.len() < 2 {
+        let message = page.read().expect("messages");
+        if message["id"] == id {
+            order.push("answered");
+        } else if message["method"] == "Page.frameStartedNavigating"
+            && message["params"]["frameId"] != target.as_str()
+        {
+            order.push("started");
+        } else {
+            page.keep(message);
+        }
+    }
+    assert_eq!(order, ["started", "answered"]);
+}
+
+/// A document's `load` waits for a child frame navigated in the call that
+/// removed the last thing it waited for: the frame is loading as its
+/// navigation is asked for (HTML's iframe delays its document's load
+/// event from then), not once the call is over.
+#[test]
+fn a_frame_navigated_as_the_last_wait_goes_delays_the_load() {
+    // Its iframe's `src` set, and its `location`.
+    for navigate in [
+        "this.src = '/again'",
+        "this.contentWindow.location.href = '/again'",
+    ] {
+        let html = format!(
+            "<!DOCTYPE html><script>
+            var log = [];
+            onload = () => log.push('load');
+            </script>
+            <iframe id=a src=/a></iframe>
+            <iframe id=b src=/b onload=\"if (this.contentWindow.location.pathname == '/b') {{
+                {navigate}; document.getElementById('a').remove();
+              }} else log.push('again')\"></iframe>"
+        );
+        let server = server(&[
+            ("/", Route::ok("text/html", html)),
+            (
+                "/a",
+                Route::ok("text/html", "a").with_delay(Duration::from_millis(1000)),
+            ),
+            ("/b", Route::ok("text/html", "b")),
+            (
+                "/again",
+                Route::ok("text/html", "again").with_delay(Duration::from_millis(300)),
+            ),
+        ]);
+        let machopo = Machopo::start();
+        let (mut page, _target) = page(&machopo);
+        let navigated = page.call(None, "Page.navigate", json!({ "url": server.url("/") }));
+        assert!(navigated.get("result").is_some(), "{navigated}");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let log = loop {
+            let log = evaluate(&mut page, "typeof log == 'object' ? log.join() : ''", None);
+            if log.as_str().is_some_and(|log| log.split(',').count() == 2)
+                || Instant::now() > deadline
+            {
+                break log;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        assert_eq!(log, json!("again,load"), "{navigate}");
+    }
+}
+
+/// While the renderer's tasks keep coming (each response of a chain of
+/// `fetch()`es asks for the next and keeps the thread busy until it is
+/// in), what a task leaves for the browser goes as the task ends, not
+/// once they stop: a child frame's navigation one asked for commits
+/// among them (its cancellation window ends as its task does), and a
+/// blob URL a task revoked is gone for the browser by the next task's
+/// navigation to it (an error page commits); the script the parser of
+/// the child frame's new document asks for is asked for among them too.
+#[test]
+fn what_a_task_leaves_for_the_browser_goes_as_it_ends() {
+    let html = "<!DOCTYPE html><iframe src=/blank></iframe><iframe src=/blank></iframe><script>
+        const busy = ms => { const until = performance.now() + ms; while (performance.now() < until); };
+        let responses = 0;
+        let blob;
+        const next = () => fetch('/r?' + responses, { cache: 'no-store' }).then(() => {
+          responses++;
+          if (responses == 1) frames[0].location.href = '/doc';
+          if (responses == 2) {
+            blob = URL.createObjectURL(new Blob(['<title>blob</title>'], { type: 'text/html' }));
+            frames[1].location.href = blob;
+            URL.revokeObjectURL(blob);
+          }
+          if (responses == 10) frames[1].location.href = blob;
+          if (responses < 40) { next(); busy(20); }
+        });
+        onload = () => fetch('/start', { cache: 'no-store' }).then(() => { next(); busy(20); });
+        </script>";
+    let server = server(&[
+        ("/", Route::ok("text/html", html)),
+        ("/blank", Route::ok("text/html", "blank")),
+        (
+            "/doc",
+            Route::ok(
+                "text/html",
+                "<!DOCTYPE html><script async src=/s.js></script>",
+            ),
+        ),
+        ("/s.js", Route::ok("text/javascript", "")),
+        ("/r", Route::ok("text/plain", "r")),
+        (
+            "/start",
+            Route::ok("text/plain", "start").with_delay(Duration::from_millis(300)),
+        ),
+    ]);
+    let machopo = Machopo::start();
+    let (mut page, _target) = page(&machopo);
+    load(&mut page, &server.url("/"));
+    page.call(None, "Page.enable", json!({}));
+    page.call(None, "Network.enable", json!({}));
+    page.take_events("");
+    // Each child frame's documents, and how many of the chain's requests
+    // had gone as each came.
+    let mut requests = 0;
+    let mut navigated = Vec::new();
+    let mut script = None;
+    while requests < 40 {
+        let message = page.read().expect("messages");
+        match message["method"].as_str() {
+            Some("Network.requestWillBeSent")
+                if message["params"]["request"]["url"]
+                    .as_str()
+                    .is_some_and(|url| url.contains("/r?")) =>
+            {
+                requests += 1;
+            }
+            Some("Network.requestWillBeSent")
+                if message["params"]["request"]["url"]
+                    .as_str()
+                    .is_some_and(|url| url.ends_with("/s.js")) =>
+            {
+                script = Some(requests);
+            }
+            Some("Page.frameNavigated") if message["params"]["frame"]["parentId"].is_string() => {
+                let url = message["params"]["frame"]["url"].as_str().unwrap();
+                let url = if url.starts_with("blob:") {
+                    "blob"
+                } else {
+                    url
+                };
+                navigated.push((url.replace(&server.url("/"), "/"), requests));
+            }
+            _ => {}
+        }
+    }
+    let urls: Vec<&str> = navigated.iter().map(|(url, _)| url.as_str()).collect();
+    assert_eq!(
+        urls,
+        ["/doc", "blob", "chrome-error://chromewebdata/"],
+        "{navigated:?}"
+    );
+    assert!(
+        navigated.iter().all(|(_, requests)| *requests < 40),
+        "{navigated:?}"
+    );
+    // The parser's script `/doc` has: asked for as its body is parsed, in
+    // the commit's task.
+    assert!(script.is_some_and(|requests| requests < 40), "{script:?}");
+}
+
+/// An iframe's `src` set to a fragment of the document its frame shows
+/// stays in the document (HTML's navigate to a fragment): no navigation
+/// goes to the browser, and the frame's document is the same one, at the
+/// fragment.
+#[test]
+fn a_child_frames_navigation_to_a_fragment_stays_in_its_document() {
+    let server = server(&[
+        (
+            "/",
+            Route::ok("text/html", "<!DOCTYPE html><iframe src=/child></iframe>"),
+        ),
+        ("/child", Route::ok("text/html", "<!DOCTYPE html><p id=x>x")),
+    ]);
+    let machopo = Machopo::start();
+    let (mut page, _target) = page(&machopo);
+    load(&mut page, &server.url("/"));
+    page.call(None, "Page.enable", json!({}));
+    page.take_events("");
+    evaluate(
+        &mut page,
+        "frames[0].marked = true; document.querySelector('iframe').src = '/child#x'; 0",
+        None,
+    );
+    // A command after: anything the browser would start, it has.
+    std::thread::sleep(Duration::from_millis(300));
+    let kept = evaluate(
+        &mut page,
+        "[frames[0].marked === true, frames[0].location.hash].join()",
+        None,
+    );
+    assert_eq!(kept, json!("true,#x"));
+    assert!(
+        !page.came("Page.frameStartedNavigating"),
+        "{:?}",
+        page.take_events("Page.")
+    );
+}
+
+/// A navigation the renderer asked for that fails commits its error page
+/// once the task that asked is over, though it failed before.
+#[test]
+fn a_failed_navigation_commits_its_error_page_once_its_task_is_over() {
+    let server = server(&[("/", Route::ok("text/html", "<!DOCTYPE html><body></body>"))]);
+    let machopo = Machopo::start();
+    let (mut page, target) = page(&machopo);
+    load(&mut page, &server.url("/"));
+    page.call(None, "Page.enable", json!({}));
+    page.take_events("");
+    let refused = format!("http://127.0.0.1:{}/", unused_port());
+    evaluate(
+        &mut page,
+        &format!(
+            "location.href = {refused:?}; const end = performance.now() + 300; while (performance.now() < end) {{}} 0"
+        ),
+        None,
+    );
+    let navigated = loop {
+        let event = page.event("Page.frameNavigated");
+        if event["params"]["frame"]["id"] == target.as_str() {
+            break event["params"]["frame"]["url"].clone();
+        }
+    };
+    assert_eq!(navigated, json!("chrome-error://chromewebdata/"));
 }

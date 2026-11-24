@@ -149,10 +149,10 @@ pub use declare::{
 pub use document::{document_title, set_page_visible};
 pub use dom_api_macros::declare;
 pub use engine::{
-    ClassicScript, ConsoleMessage, ConsoleSink, DevToolsInterrupter, DevToolsObjects, DevToolsPage,
-    DevToolsQueue, DevToolsQueued, DevToolsSend, EngineSettings, FetchOrigin, FrameClient,
-    LoadFrame, LoadSink, NavigationAsked, ScriptEngine, WasmScript, WorkerEngine,
-    WorkerGlobalParams,
+    ChildNavigationAsked, ClassicScript, ConsoleMessage, ConsoleSink, DevToolsInterrupter,
+    DevToolsObjects, DevToolsPage, DevToolsQueue, DevToolsQueued, DevToolsSend, EngineSettings,
+    FetchOrigin, FrameClient, LoadFrame, LoadSink, NavigationAsked, ScriptEngine, WasmScript,
+    WorkerEngine, WorkerGlobalParams,
 };
 pub use event::{cancel as cancel_event, coarsen};
 pub use event_target::{dispatch, fire_event};

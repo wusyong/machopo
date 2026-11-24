@@ -1,0 +1,227 @@
+# Stage 2's mutants: `python3 scripts/test.py mutate rfcs/0112-no-outer-loop/mutants-2.toml`.
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it"]
+timeout = 1800
+
+[[mutant]]
+name = "script's navigation isn't told to the client as it is asked"
+file = "crates/dom_js/src/frames.rs"
+from = '''        .and_then(|client| client.navigate(&asked, &state.dom));'''
+to = '''        .and_then(|client| client.navigate(&asked, &state.dom).filter(|_| false));'''
+
+[[mutant]]
+name = "the wasm engine doesn't tell its client of a navigation"
+file = "crates/dom_wasm/src/engine.rs"
+from = '''            .and_then(|client| client.navigate(&asked, dom));'''
+to = '''            .and_then(|client| client.navigate(&asked, dom).filter(|_| false));'''
+test = ["cargo", "test", "-q", "-p", "dom_wasm", "--test", "it"]
+
+[[mutant]]
+name = "an iframe's navigation isn't told to the client as it is asked"
+file = "crates/dom_js/src/frames.rs"
+from = '''        .and_then(|client| client.navigate_child(&asked, &state.dom));'''
+to = '''        .and_then(|client| client.navigate_child(&asked, &state.dom).filter(|_| false));'''
+
+[[mutant]]
+name = "an iframe's navigation doesn't make its frame loading at once"
+file = "crates/dom_js/src/frames.rs"
+from = '''    if begin_id.is_some() {
+        state
+            .dom
+            .mutate(|cx| cx.set_frame_navigating(frame_document.get(cx.gc), true));
+    }'''
+to = '''    if begin_id.is_some() && false {
+        state
+            .dom
+            .mutate(|cx| cx.set_frame_navigating(frame_document.get(cx.gc), true));
+    }'''
+
+[[mutant]]
+name = "script's navigation of a child frame doesn't make it loading at once"
+file = "crates/dom_js/src/frames.rs"
+from = '''    if begin_id.is_some() && frame != TOP {'''
+to = '''    if begin_id.is_some() && frame != TOP && false {'''
+
+[[mutant]]
+name = "the client sends no navigation to another document"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        let id = crate::loader::next_begin_navigation_id();
+        let _ = self.to_browser.send(RendererHostMsg::BeginNavigation {
+            frame,
+            initiator,
+            id,
+            kind,
+            devtools_initiator: None,
+            history_in_new_child_frame: false,
+        });
+        Some(id)'''
+to = '''        let _ = (frame, initiator, kind);
+        None'''
+
+[[mutant]]
+name = "the client sends a child frame's navigation to a fragment"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''    if wanted.fragment().is_none() {
+        return false;
+    }'''
+to = '''    if wanted.fragment().is_none() || true {
+        return false;
+    }'''
+
+[[mutant]]
+name = "the browser hears of no iframe's srcdoc"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                .send(RendererHostMsg::DidChangeSrcDoc { frame, srcdoc });'''
+to = '''                .send(RendererHostMsg::DidChangeSrcDoc { frame, srcdoc: String::new() });'''
+
+[[mutant]]
+name = "an iframe's navigation has no script's stack for DevTools"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            Some(stack) => Some(Initiator::Script(Rc::from(stack))),'''
+to = '''            Some(_) => None,'''
+
+[[mutant]]
+name = "an iframe's navigation is never the session history's"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            history_in_new_child_frame: history_navigation_in_new_child_frame('''
+to = '''            history_in_new_child_frame: false && history_navigation_in_new_child_frame('''
+test = ["cargo", "test", "-q", "-p", "browser"]
+
+[[mutant]]
+name = "a new frame's initial document isn't told before its navigation"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        if asked.initial && self.page_agent.any_enabled() {'''
+to = '''        if asked.initial && self.page_agent.any_enabled() && false {'''
+
+[[mutant]]
+name = "the initial document's init is told twice"
+file = "crates/renderer/src/render_thread/page_agent.rs"
+from = '''        if !told {
+            event("init");
+        }'''
+to = '''        if !told || true {
+            event("init");
+        }'''
+
+[[mutant]]
+name = "a pushState's entry isn't counted"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                if !replace && self.frame_token(frame).is_some() {
+                    self.own_history_entries.sent_one();
+                }'''
+to = '''                if !replace && self.frame_token(frame).is_some() && false {
+                    self.own_history_entries.sent_one();
+                }'''
+test = ["cargo", "test", "-q", "-p", "browser"]
+
+[[mutant]]
+name = "a traversal is told to the browser after popstate"
+file = "crates/dom_api/src/history.rs"
+from = '''    committed();
+    fire_pop_state(host, &window);'''
+to = '''    fire_pop_state(host, &window);
+    committed();'''
+test = ["cargo", "test", "-q", "-p", "browser"]
+
+[[mutant]]
+name = "the top-level frame's about:blank has no origin source"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                    && let Some(source) = self.about_blank_origin_source(initiator, &kind)
+                {
+                    self.main_origin_source = Some((id, source));
+                }'''
+to = '''                    && let Some(source) = self.about_blank_origin_source(initiator, &kind)
+                {
+                    let _ = (id, source);
+                }'''
+
+[[mutant]]
+name = "a script's navigation's window never ends"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        if let Some(id) = begin_id {
+            self.navigations_asked.push(id);
+        }'''
+to = '''        if let Some(id) = begin_id {
+            let _ = id;
+        }'''
+
+[[mutant]]
+name = "an iframe's navigation's window never ends"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            Some(id) => {
+                self.navigations_asked.push(id);'''
+to = '''            Some(id) => {'''
+
+[[mutant]]
+name = "the windows end in the outer turn alone"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        self.blob_urls.flush_revoked();
+        self.end_cancellation_windows();
+        self.tell_devtools_after_task();'''
+to = '''        self.blob_urls.flush_revoked();
+        self.tell_devtools_after_task();'''
+
+[[mutant]]
+name = "the windows end before the revokes"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        self.blob_urls.flush_revoked();
+        self.end_cancellation_windows();
+        self.tell_devtools_after_task();'''
+to = '''        self.end_cancellation_windows();
+        self.blob_urls.flush_revoked();
+        self.tell_devtools_after_task();'''
+test = ["cargo", "test", "-q", "-p", "browser"]
+
+[[mutant]]
+name = "the revokes go in the outer turn alone"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        self.start_script_fetches();
+        self.blob_urls.flush_revoked();
+        self.end_cancellation_windows();'''
+to = '''        self.start_script_fetches();
+        self.end_cancellation_windows();'''
+
+[[mutant]]
+name = "a task's scripts and backgrounds wait for the outer turn"
+file = "crates/renderer/src/render_thread.rs"
+from = '''    fn after_task(&mut self) {
+        self.start_image_fetches();
+        self.start_script_fetches();'''
+to = '''    fn after_task(&mut self) {'''
+test = ["cargo", "test", "-q", "-p", "browser"]
+
+[[mutant]]
+name = "the browser holds no navigation of the renderer's"
+file = "crates/browser/src/web_contents.rs"
+from = '''            cancellation_window: asked.begin_id.is_some(),'''
+to = '''            cancellation_window: false,'''
+
+[[mutant]]
+name = "the browser commits the renderer's about: document at once"
+file = "crates/browser/src/web_contents.rs"
+from = '''            if asked.begin_id.is_some() {
+                let navigation = NavigationRequest {'''
+to = '''            if asked.begin_id.is_some() && false {
+                let navigation = NavigationRequest {'''
+
+[[mutant]]
+name = "a held error page never commits"
+file = "crates/browser/src/web_contents.rs"
+from = '''                Some(HeldCommit::Failed) => {
+                    if let Some(status) = navigation.end.take() {'''
+to = '''                Some(HeldCommit::Failed) => {
+                    if let Some(status) = navigation.end.take().filter(|_| false) {'''
+
+[[mutant]]
+name = "a held blob never commits"
+file = "crates/browser/src/web_contents.rs"
+from = '''                    self.on_navigation_blob_loaded(frame, navigation_id, result);
+                }'''
+to = '''                    let _ = result;
+                }'''
+test = ["cargo", "test", "-q", "-p", "browser"]
+
+[[mutant]]
+name = "the window's end is heard for no navigation"
+file = "crates/browser/src/frame_tree.rs"
+from = '''                .filter(|navigation| navigation.begin_id == Some(begin_id))'''
+to = '''                .filter(|navigation| navigation.begin_id == Some(begin_id) && false)'''

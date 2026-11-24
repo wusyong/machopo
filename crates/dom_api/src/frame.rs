@@ -55,10 +55,14 @@ pub enum ChildNavigation {
 #[derive(Debug, Clone)]
 pub enum FrameRequest {
     /// `frame` is to navigate (its host loads the document and makes it
-    /// its active one: `ScriptEngine::create_window`).
+    /// its active one: `ScriptEngine::create_window`). What went to the
+    /// browser went as it was asked (`FrameClient::navigate_child`):
+    /// `begin_id`, the host's number for the navigation it sent, if it sent
+    /// one.
     Navigate {
         frame: FrameId,
         navigation: ChildNavigation,
+        begin_id: Option<u64>,
     },
     /// Script navigated `frame` (`location`, `history`), as script in
     /// `initiator` asked (`frame` itself for what isn't asked by another):

@@ -1,7 +1,7 @@
 # RFC 0112：拿掉 event loop 的外圈
 
 - 開始日期：2026-11-24
-- 狀態：🚧 已排程：2026-11-24（第 0、1 階段做完；第 2 段進行中）
+- 狀態：🚧 已排程：2026-11-24（第 0、1 階段做完；第 2 段待審查）
 - 細節：`details.md`；進度：`progress.md`
 
 ## 摘要
@@ -135,6 +135,8 @@ parser 的續跑和子 frame 的 commit 是 renderer 自己的工作，直接排
    - 送了什麼記成一筆，renderer 在呼叫之後照舊更新自己的帳（子 frame 的導覽、繼承 origin 的文件、frame 在載入中）；不送 browser 的 `javascript:` 和 fragment 照舊在呼叫之後。
    - 理由：和 Chrome 一樣在 setter 裡送（Blink 的 `LocalFrameClient::BeginNavigation` 呼叫 content 的 `RenderFrameImpl::BeginNavigation`，當場組參數、經過 mojo 送；這一段憑記憶）；帳晚一點更新不會錯，讀它的只有 browser 之後的 commit 和 dropped，都是之後的 task；和第 6 條、RFC 0110 第 22 條同一種做法。
    - 代價：送和記帳在兩個地方，要寫在一起、對得上；「frame 在載入中」要在呼叫裡就讓 DOM 知道（同一個呼叫裡父文件的 `load` 會不會先檢查到，實作時確認）。
+   - 實作時確認的：「frame 在載入中」由 engine 在 hook 送出導覽時自己告訴 DOM（`set_frame_navigating`），不等 renderer 的帳；原本就有的問題順便修掉：同一次呼叫裡導覽一個子 frame、再拿掉父文件最後等著的東西，父文件的 `load` 不等那個子 frame（`check_parent_completed` 在呼叫裡就檢查；`a_frame_navigated_as_the_last_wait_goes_delays_the_load`）。`javascript:` 網址不送 browser，照舊在呼叫之後才算載入中（記進 `docs/limitations.md`）。
+   - 實作時多的：子 frame 初始的 `about:blank` 的 `init` 在 hook 送出它的第一個導覽之前由 Page agent 送（原本 `begin_child_navigation` 先比對再送導覽）；同一份文件內的 traversal 在 `popstate` 之前告訴 browser（`traverse_within_document` 多一個 callback：Blink 的 `DidFinishSameDocumentNavigation` 在分派 `popstate` 之前，憑記憶），否則 `popstate` 的 handler 發起的導覽比 traversal 的 commit 先到 browser；「上一頁載入的父文件裡新建的 frame」改從 DOM 的 navigation timing 讀，`FrameDocument.history_load` 拿掉。
    - 讀程式時發現：RFC 0019 第 24 條的「同一個 task 只留最後一個」已經不是現在的行為，每個導覽都依序送，browser 收到同一個 frame 的下一個 `BeginNavigation` 時丟掉前一個（`take_any_navigation`、`NavigationDropped`）；和 Chrome 不同的只剩送出的時間。
    - 不選帳搬進 `dom`（A）：renderer 讀 `ChildFrames.navigations` 的幾十處都要改，`dom` 多了 browser 那一層的概念。不選 engine 當參數帶（B）：「上一頁載入的父文件」和 DevTools 的 initiator 是 renderer 的，engine 給不出來，最後還是要像 C 那樣補一份。
 11. **第 2 段：同一個 task 裡連續的導覽照 Chrome 的取消窗口**（2026-11-24，使用者決定；原本「待決定」的第 2 條；A）：renderer 在發起導覽的 task 之後告訴 browser 那些導覽的取消窗口結束了（新的訊息，Chrome 的 `NotifyNavigationCancellationWindowEnded`）；browser 在那之前不送 renderer 發起的導覽的 commit（Chrome 的 `RendererCancellationThrottle`），同一個 frame 的下一個 `BeginNavigation` 在那之前到了就取消前一個。理由：導覽在 setter 當場送之後，script 送出第一個再忙一陣、才送第二個時，browser 可能已經拿到第一個的回應；沒有這個窗口，頂層 frame 會先 commit 第一個再 commit 第二個（多一筆 session history，閃過第一份文件），子 frame 的被 renderer 丟掉、browser 卻以為 commit 了。代價：多一個訊息和 browser 的等待狀態，導覽最快在發起它的 task 結束後 commit（和 Chrome 一樣）。不選 renderer 丟掉過期的 commit（B）：browser 和 renderer 的帳不一致。不選照舊等 task 結束才送（C）：第 2 段的目標不成立。

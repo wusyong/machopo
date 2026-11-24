@@ -229,6 +229,7 @@ impl RenderThread {
             to_browser: self.to_browser.clone(),
             page_agent: self.page_agent.clone(),
             dom_agent: self.dom_agent.clone(),
+            network_agent: self.network_agent.clone(),
         }));
         // `localStorage`, its areas opened waiting for the browser.
         engine.set_storage_host(Box::new(super::documents::RendererStorageHost {

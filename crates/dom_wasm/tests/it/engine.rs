@@ -507,3 +507,75 @@ fn an_events_handle_in_the_guests_own_dispatch_is_its_for_the_call_only() {
     assert_eq!(page.uncaught(), 1);
     assert!(page.console()[0].0.contains("is no handle of this store"));
 }
+
+/// What a `FrameClient` was told of navigations, in order; each to
+/// another document numbered 7.
+#[derive(Clone, Default)]
+struct Navigations(Rc<RefCell<Vec<String>>>);
+
+impl dom_api::FrameClient for Navigations {
+    fn child_frame_created(
+        &mut self,
+        _: dom_api::FrameToken,
+        _: dom_api::FrameToken,
+        _: &str,
+        _: bool,
+        _: Option<&str>,
+        _: &dom::Dom,
+    ) {
+    }
+
+    fn child_document_created(&mut self, _: dom_api::FrameToken, _: dom::NodeId) {}
+
+    fn frame_detached(&mut self, _: dom_api::FrameToken) {}
+
+    fn navigate(&mut self, asked: &dom_api::NavigationAsked<'_>, _: &dom::Dom) -> Option<u64> {
+        self.0.borrow_mut().push(format!("{:?}", asked.navigation));
+        matches!(asked.navigation, dom::FrameNavigation::To { .. }).then_some(7)
+    }
+
+    fn navigate_child(
+        &mut self,
+        _: &dom_api::ChildNavigationAsked<'_>,
+        _: &dom::Dom,
+    ) -> Option<u64> {
+        None
+    }
+}
+
+/// The window's navigation (`location`'s, a link's, as the DOM records
+/// it) reaches the host's frame client as the engine takes it, within
+/// the call; the host hears of it after the call too, with the number the
+/// client gave it.
+#[test]
+fn a_navigation_is_told_to_the_frame_client_as_it_is_asked() {
+    let mut page = Page::new("none");
+    page.engine.set_main_frame_token(dom_api::new_frame_token());
+    let told = Navigations::default();
+    page.engine.set_frame_client(Box::new(told.clone()));
+    let document = page.document.clone();
+    page.engine.dom_mut().mutate(|cx| {
+        cx.request_navigation(
+            document.get(cx.gc),
+            dom::FrameNavigation::To {
+                url: "https://page.test/next".into(),
+                replace: false,
+            },
+        );
+    });
+    page.engine.perform_microtask_checkpoint();
+    assert_eq!(
+        *told.0.borrow(),
+        ["To { url: \"https://page.test/next\", replace: false }"]
+    );
+    let begin_ids: Vec<_> = page
+        .engine
+        .take_frame_requests()
+        .into_iter()
+        .filter_map(|request| match request {
+            dom_api::FrameRequest::Navigation { begin_id, .. } => Some(begin_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(begin_ids, [Some(7)]);
+}

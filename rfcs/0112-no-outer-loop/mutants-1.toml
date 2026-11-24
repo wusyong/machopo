@@ -40,8 +40,10 @@ to = '''            let _ = (parent_token, client, created_by_script, &name);'''
 [[mutant]]
 name = "a frame made has no stack"
 file = "crates/dom_js/src/frames.rs"
-from = '''        .then(|| crate::state::capture_stack(scope))'''
-to = '''        .then(|| None::<String>)'''
+from = '''        .frame_stacks_wanted()
+        .then(|| crate::state::capture_stack(scope))'''
+to = '''        .frame_stacks_wanted()
+        .then(|| None::<std::rc::Rc<str>>)'''
 
 [[mutant]]
 name = "a frame gone isn't told at once"
@@ -87,7 +89,7 @@ to = '''        if self.dom_agent.any_enabled() && false {
 [[mutant]]
 name = "nothing is told after a task off the channel"
 file = "crates/renderer/src/render_thread.rs"
-from = '''                self.tell_devtools_after_task();
+from = '''                self.after_task();
                 // What it queued for the DOM'''
 to = '''                // What it queued for the DOM'''
 
@@ -95,7 +97,7 @@ to = '''                // What it queued for the DOM'''
 name = "nothing is told after the DOM's queued tasks"
 file = "crates/renderer/src/render_thread.rs"
 from = '''                self.run_queued_tasks();
-                self.tell_devtools_after_task();'''
+                self.after_task();'''
 to = '''                self.run_queued_tasks();'''
 
 [[mutant]]

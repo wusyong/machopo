@@ -206,6 +206,10 @@
 | 沒有外框線的 COLR glyph 的 ink bounds 是空的（`raster` 的 `ink.rs`） | 沒有這種字型的測試 | 審查 | 做了 COLR 的範圍之後一起加測試 |
 | DOM 回頭呼叫的 script 被打斷之後，`dom_js` 接住它的地方再要求打斷（`report_caught_of`、node filter、解析 JSON 呼叫 `bindings::stop_again`），被打斷時不建 `DOMException`、`QuotaExceededError`（`exception.rs` 的 `new_dom_exception`、`new_quota_exceeded_error`），node filter 不把打斷交給成員再丟一次，JSON 解析到一半被打斷時不 reject | 測試走得到的巢狀的路上，會清掉打斷的 V8 API 前都有自己的入口檢查，拿掉再要求打斷看不出差別（兩層互相遮住）；沒找到「callback 被打斷之後同一個成員接著丟 `DOMException`」的路；`dom_js` 的 `termination::` 裡解析 JSON 的迴圈不一定在解析中被打斷 | `bindings` 的 `termination::` 直接測再要求打斷和取消；`dom_js` 的 `termination::` 的其他路；審查 | 找到一條「被打斷之後同一個成員裡用了會跑 script 的 V8 API、沒有入口檢查」的路，或「接著丟 `DOMException`」的成員時，加進 `termination::`；JSON 用 1b-5 的 worker 在解析大 body 時 `terminate()` |
 
+**renderer 每個 task 之後送出 engine 還沒送的請求（`render_thread.rs` 的 `after_task` 的 `start_image_fetches`、`start_script_fetches`）**
+
+- 拿掉之後沒有測試失敗：parser 的 script（擋住 parser 的和 `async` 的）在那個 task 裡就由別的路送出了；style 在畫 frame 的 task 裡找到的背景圖可能只靠它送出（之後的 blob URL 撤銷要在它之後），但畫 frame 的時機不固定，沒有穩定的測試。這兩種請求改成在 style recalc、parser 的呼叫裡當場送時（和 Chromium 的 `LoadPendingImages`、`ScriptLoader::PrepareScript` 一樣），拿掉這兩個呼叫；在那之前補背景圖的測試要先有固定畫 frame 時機的辦法。
+
 ## 沒有計數守著的優化
 
 下面這些捷徑被拿掉時結果照樣對（debug build 的交叉檢查只比結果），只是多做事，沒有測試會失敗。2026-10-20 逐項讀過測試盤點：其他的優化（style 的 invalidation、MPC、祖先的 Bloom filter、增量的 pre-paint 和 paint、raster invalidation、tile 的跳過、root 的計數、parse 的 fast path……）都有 debug build 的計數（各 crate 的 `*_for_testing`、`layout` 的 `BoxTreeUpdate` 和 `LayoutUpdate`）和斷言它的測試。改到這些地方時特別注意；量到變慢時（Speedometer 用 git 二分，`--sample` 看多出來的函式）先對照這份。之後照下面的順序補計數，補了就從這裡刪掉。
@@ -269,6 +273,15 @@
 ## 等價、不用處理的 mutation
 
 弄壞之後行為完全一樣，記在這裡免得重複追查。
+
+**renderer 每個 task 之後（`render_thread.rs` 的 `after_task`）**
+
+- 先結束取消窗口、再送 blob URL 的撤銷（兩個訊息對調）：它們在同一次 `after_task` 裡接連送出，browser 依序處理；renderer 發起的導覽 commit 之後，頁面、DevTools 和測試都要經過 renderer 才聽得到，那時撤銷已經處理了。留著現在的順序，是照「窗口結束時，那個 task 要的東西都已經送出」。
+
+**DevTools 的 frame 比對的旗標（`render_thread.rs` 的 `frames_changed`）**
+
+- frame 建立或拿掉時不設旗標（`follow_child_frames`）：新的 frame 有 `src` 時子 frame 送導覽的那一刻會比對，沒有 `src` 時它的 `about:blank` 的 commit 設旗標，拿掉的 frame 由 hook 當場送 `frameDetached`。留著是因為旗標的意思就是 frame 變了，導覽和 commit 改成 task 之後就要靠它。
+- 頂層的 commit 不設旗標：DOM agent 在頂層 commit 時清掉每個 session 的節點，`documentUpdated` 之後 client 用命令重新要文件，回答命令之前一定先比對；Page agent 在 `create_window` 之前已經直接拿到新文件。留著是讓 DOM agent 的 frame 清單跟著 DOM。
 
 **intersection observer 的 task（`dom` 的 `intersection.rs` 的 `queue_intersection_entry`）**
 

@@ -593,6 +593,24 @@ impl PageAgent {
         }
     }
 
+    /// Child frame `id`'s initial `about:blank`, document `document`, is
+    /// navigated from (its first navigation is asked for): its `init`
+    /// now, before the browser tells of the navigation (Chrome tells the
+    /// initial empty document's as the frame is made), unless it was told;
+    /// `update` doesn't tell it again. Its loader is named by its number,
+    /// as no navigation brought it.
+    pub(crate) fn initial_document_navigated_from(&self, id: &str, document: u64) {
+        let told = self
+            .lifecycles
+            .borrow()
+            .get(id)
+            .is_some_and(|lifecycle| lifecycle.document == document);
+        if !told {
+            let loader = document.to_string();
+            self.lifecycle_event(id, document, &loader, "init", TimeTicks::now());
+        }
+    }
+
     /// `frame`'s initial `about:blank` starts, as Blink's; one that stays
     /// (an iframe with no `src`) has loaded as it starts, and its network
     /// is quiet: its whole lifecycle, as Chrome tells it (Puppeteer waits
@@ -602,7 +620,16 @@ impl PageAgent {
         let event = |name| {
             self.lifecycle_event(&frame.id, frame.document, &frame.loader_id, name, now);
         };
-        event("init");
+        // Told as its navigation was asked for, if it was
+        // (`initial_document_navigated_from`).
+        let told = self
+            .lifecycles
+            .borrow()
+            .get(&frame.id)
+            .is_some_and(|lifecycle| lifecycle.document == frame.document);
+        if !told {
+            event("init");
+        }
         if frame.navigating {
             return;
         }

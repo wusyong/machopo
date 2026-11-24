@@ -345,12 +345,22 @@ pub(crate) fn create_child(scope: &mut Scope<'_, '_, '_>, owner: &NodeRoot) -> O
 }
 
 /// The frame `owner`'s content document is shown in is to navigate: the
-/// host told.
+/// host told, its client at once (`FrameClient::navigate_child`, with the
+/// stack of the script that asked if the DOM wants requests' stacks),
+/// then as the call ends (`FrameRequest::Navigate`). A navigation the
+/// client sent delays its parent's `load` from now (`frame_navigating`).
 pub(crate) fn navigate_child(
     scope: &mut Scope<'_, '_, '_>,
     owner: &NodeRoot,
     navigation: ChildNavigation,
 ) {
+    let stack = scope
+        .state()
+        .0
+        .dom
+        .request_stacks_wanted()
+        .then(|| crate::state::capture_stack(scope))
+        .flatten();
     let (state, _) = scope.state_mut();
     let document = state.dom.read(|cx| {
         cx.content_document(owner.get(cx.gc))
@@ -359,11 +369,36 @@ pub(crate) fn navigate_child(
     let Some(frame) = document.and_then(|document| state.frames.of_document(document)) else {
         return;
     };
-    let frame = frame.id;
-    state
+    let (id, parent, initial, frame_document) = (
+        frame.id,
+        frame.parent,
+        frame.initial,
+        frame.document.clone(),
+    );
+    let asked = dom_api::ChildNavigationAsked {
+        frame: state.frames.token(id),
+        parent: parent.and_then(|parent| state.frames.token(parent)),
+        owner,
+        document: &frame_document,
+        initial,
+        navigation: &navigation,
+        stack: stack.as_deref(),
+    };
+    let begin_id = state
         .frames
-        .requests
-        .push(FrameRequest::Navigate { frame, navigation });
+        .client
+        .as_mut()
+        .and_then(|client| client.navigate_child(&asked, &state.dom));
+    if begin_id.is_some() {
+        state
+            .dom
+            .mutate(|cx| cx.set_frame_navigating(frame_document.get(cx.gc), true));
+    }
+    state.frames.requests.push(FrameRequest::Navigate {
+        frame: id,
+        navigation,
+        begin_id,
+    });
 }
 
 /// The frame showing `document` navigated, or is to (`FrameNavigation`),
@@ -405,6 +440,12 @@ pub(crate) fn navigate(
         .client
         .as_mut()
         .and_then(|client| client.navigate(&asked, &state.dom));
+    // A child frame's delays its parent's `load` from now.
+    if begin_id.is_some() && frame != TOP {
+        state
+            .dom
+            .mutate(|cx| cx.set_frame_navigating(document.get(cx.gc), true));
+    }
     state.frames.requests.push(FrameRequest::Navigation {
         frame,
         initiator,

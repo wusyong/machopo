@@ -14,13 +14,13 @@
 | 0d. 原型：DOM 的 task 進 scheduler，T2 | 做完，待審查 | 2026-11-24 |
 | 0e. 交給使用者決定範圍和做法 | 做完：做法第 3 條（T1），範圍第 4 條（A），分段第 5 條 | 2026-11-24 |
 | 1. DevTools 的事件（第 6 到 9 條） | 做完，待審查 | 2026-11-24 |
-| 2. 導覽在呼叫的當下送（第 10、11 條） | 進行中 | |
+| 2. 導覽在呼叫的當下送（第 10 到 12 條） | 做完，待審查 | 2026-11-24 |
 | 2a. 必壞的測試：script 忙完之前 Browser 就收到導覽；同一個 task 的兩個導覽之間忙一陣，只 commit 第二個 | 做完，待審查：第一個在原本的程式上壞、2b 之後過；第二個在 2b 之後壞、2d 之後過 | 2026-11-24 |
 | 2b. script 的導覽（`location`、`history`、連結）由 hook 當場送，帳在呼叫之後對照（第 10 條）；同一份文件內的 traversal 在 `popstate` 之前告訴 browser | 做完，待審查 | 2026-11-24 |
 | 2c. parser 的 script 和背景圖的請求在每個 task 之後送，接著 blob URL 的撤銷（第 12 條） | 做完，待審查 | 2026-11-24 |
 | 2d. 取消窗口（第 11、12 條）：發起導覽的 task 結束前，browser 不送它的 commit | 做完，待審查 | 2026-11-24 |
-| 2e. iframe 的 `src`、`srcdoc` 的導覽也由 hook 當場送 | 進行中 | |
-| 2f. 文件、mutation test | | |
+| 2e. iframe 的 `src`、`srcdoc` 的導覽也由 hook 當場送；frame 在載入中由 engine 當場告訴 DOM | 做完，待審查 | 2026-11-24 |
+| 2f. 文件、mutation test | 做完，待審查 | 2026-11-24 |
 | 3. DOM 的 task 是 scheduler 的 task | | |
 | 4. renderer 自己的工作排成 task | | |
 | 5. 剩下的步驟，拿掉外圈 | | |
@@ -57,4 +57,28 @@
 **相關 crate 的測試**：`dom`、`dom_api`、`dom_js`、`renderer`、`shell`、`browser` 都通過。
 
 **階段結束的檢查**：`cargo test --workspace` 通過（60 個 binary，4701 個通過、1 個 ignored）；`cargo fmt --check` 和 `cargo clippy --workspace --all-targets -- -D warnings` 通過；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs` 通過。
+
+### 第 2 階段（2026-11-24，Linux：Fedora 45、debug build，`27be26c` 之上）
+
+**必壞的測試**：
+- `a_navigation_reaches_the_browser_as_script_asks`（`location.href` 之後忙 500 ms，browser 在忙完之前收到導覽）：原本的程式上壞（順序是回答、才開始導覽），2b 之後過。
+- `an_iframes_navigation_reaches_the_browser_as_it_is_inserted`（插入有 `src` 的 iframe 之後忙 500 ms）：2e 之前壞，之後過。
+- `of_two_navigations_in_a_task_the_second_alone_commits`（同一個 task 導覽兩次、中間忙 500 ms，只 commit 第二個、session history 只多一筆；頂層、子 frame、第一個是 `about:blank`）：原本的程式上過（兩個都在呼叫之後才送），2b 之後壞（頂層先 commit `/a`），2d 之後過。
+- `a_frame_navigated_as_the_last_wait_goes_delays_the_load`（同一次呼叫裡導覽子 frame、再拿掉父文件最後等著的 iframe，父文件的 `load` 要等它；`src` 和 `location` 兩種）：原本的程式上就壞（`load,again`），是原本就有的問題，2e 修掉。
+
+**過程中發現、修掉的**：
+- `popstate` 的 handler 發起的導覽比 traversal 的 commit 先到 browser（browser 的 4 個 history 測試壞了）：traversal 的 commit 改在 `popstate` 之前送。
+- browser 的 `blobs` 測試在整組跑時逾時（單獨跑會過；原本的程式上整組 3.5 秒都過）：導覽當場送之後，browser 在外圈送出撤銷之前就 commit 了。用暫時的 probe 印出 renderer 的訊息才找到（第 12 條）。
+- 兩個 browser 的測試改了：`a_child_frame_commits_its_latest_navigation_alone` 扣住 `/b` 的 `BeginNavigation` 時也扣住它的窗口結束；`a_child_frames_commit_counts_the_new_entries_the_browser_has_not_heard_of` 的 `pushState` 移到下一個 task（同一個 task 的現在一定先到 browser）。
+- `the_child_frames_are_told` 壞了：載入中的 frame 的初始文件的 `init` 排到 `frameStartedNavigating` 後面，改成 hook 送導覽之前由 Page agent 送；`a_loading_frames_initial_document_is_told_before_its_own` 改成在一個迴圈裡讀所有訊息（`init` 現在比 `Runtime.evaluate` 的回答早到）。
+
+**mutation test**（`mutants-2.toml`，26 個）：24 個抓到，2 個沒抓到（記進 `docs/test-gaps.md`）：
+- 「先結束取消窗口、再送撤銷」：等價，兩個訊息在同一次 `after_task` 裡接連送，commit 的結果要經過 renderer 才傳得出來。
+- 「parser 的 script 和背景圖的請求等外圈才送」：parser 的 script（擋住 parser 的和 `async` 的）在 task 裡就由別的路送了；style 在畫 frame 時找到的背景圖可能只靠它，畫 frame 的時機不固定，沒有穩定的測試。
+
+第一輪 17 個抓到、9 個沒抓到，補的測試：wasm engine 的 client（`a_navigation_is_told_to_the_frame_client_as_it_is_asked`）、`location` 導覽子 frame 的載入中（上面的 `load` 測試的第二種）、iframe 的 `src` 到 fragment（`a_child_frames_navigation_to_a_fragment_stays_in_its_document`；先用 `location.href` 寫抓不到，DOM 自己就當成同一份文件內的導覽）、通道一直有 task 時窗口和撤銷在 task 之後（`what_a_task_leaves_for_the_browser_goes_as_it_ends`，第 0 階段的 `fetch()` 串的做法）、`about:blank` 的 commit 被擋下（兩個導覽的測試的第三種）、擋下的錯誤頁（`a_failed_navigation_commits_its_error_page_once_its_task_is_over`）。第二輪有一個因為 spec 指定的測試命令（`browser`）不含新的測試而沒抓到，改成 `shell` 單獨重跑抓到了。第 1 段的 `mutants-1.toml` 有三個 `from` 對不上第 2 段改過的程式，更新了。
+
+**相關 crate 的測試**：`dom_api`、`dom_js`、`dom_wasm`、`renderer`、`browser`、`shell`、`protocol` 都通過。
+
+**階段結束的檢查**：`cargo test --workspace` 通過（60 個 binary，4709 個通過、1 個 ignored）；`cargo fmt --check` 和 `cargo clippy --workspace --all-targets -- -D warnings` 通過；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs` 通過（`boundary` 的例外加了新的 thread-local 計數器 `NEXT_BEGIN_NAVIGATION_ID`，和請求的編號同一類）。
 

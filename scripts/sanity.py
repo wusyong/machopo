@@ -333,6 +333,9 @@ STATICS_ALLOWED = {
     ("crates/renderer/src/loader.rs", "NEXT_REQUEST_ID"):
         "the renderer's next request id (thread-local: each renderer's thread its own; Blink's "
         "`CreateUniqueIdentifier`)",
+    ("crates/renderer/src/loader.rs", "NEXT_BEGIN_NAVIGATION_ID"):
+        "the renderer's next navigation number (thread-local: each renderer's thread its own, as "
+        "its request ids)",
     ("crates/bindings/src/isolate_state.rs", "INFO_SCOPES"): "tests' counters (thread-local)",
     ("crates/bindings/src/isolate_state.rs", "INFO_HANDLES"): "tests' counters (thread-local)",
     ("crates/dom_js/src/info_front.rs", "SIZE_REPORT_SCOPES"): "tests' counters (thread-local)",

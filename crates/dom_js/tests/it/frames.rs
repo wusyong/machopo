@@ -153,6 +153,7 @@ fn src_and_srcdoc_navigate_the_child() {
         FrameRequest::Navigate {
             frame: navigated,
             navigation,
+            ..
         },
     ] = requests.as_slice()
     else {
@@ -1357,6 +1358,21 @@ impl dom_api::FrameClient for Client {
         self.0
             .borrow_mut()
             .push(format!("navigate {frame} {:?}", asked.navigation));
+        None
+    }
+
+    fn navigate_child(
+        &mut self,
+        asked: &dom_api::ChildNavigationAsked<'_>,
+        _dom: &dom::Dom,
+    ) -> Option<u64> {
+        let frame = asked
+            .frame
+            .map(|frame| frame.to_string())
+            .unwrap_or_default();
+        self.0
+            .borrow_mut()
+            .push(format!("navigate child {frame} {:?}", asked.navigation));
         None
     }
 }
