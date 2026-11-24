@@ -15,7 +15,8 @@
 //! A child doesn't outlive its host. On Windows the kernel sees to it
 //! (`spawn` puts the child in a job); on macOS and Linux the child does,
 //! once its channel says the host is gone, with
-//! `terminate_current_process_immediately`.
+//! `terminate_current_process_immediately`, which machopo's processes
+//! also end with once they have wound down.
 //!
 //! Beside the channel, one thing of the system's that the rest asks for:
 //! how much a disk has free ([`available_disk_space`], for the HTTP
@@ -41,3 +42,5 @@ pub use unix::{available_disk_space, terminate_current_process_immediately};
 pub use windows::channel::{Channel, child_gone, inherited, spawn};
 #[cfg(windows)]
 pub use windows::disk::available_disk_space;
+#[cfg(windows)]
+pub use windows::terminate_current_process_immediately;

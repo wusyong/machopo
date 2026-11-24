@@ -7,7 +7,6 @@
 
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use sql::Database;
@@ -15,6 +14,7 @@ use sql::rusqlite::{self, params};
 use tokio::sync::oneshot;
 
 use super::canonical_cookie::CanonicalCookie;
+use crate::database_thread::DatabaseThread;
 use super::cookie_constants::{CookieSameSite, CookieSourceScheme, CookieSourceType};
 use super::cookie_monster::PersistentCookieStore;
 use super::cookie_partition_key::CookiePartitionKey;
@@ -137,20 +137,31 @@ impl PersistentCookieStore for SqlitePersistentCookieStore {
 }
 
 /// The database thread, which ends (what it was told written) once this
-/// is dropped: the network context's handles keep it, so the last of them
-/// to go waits for the writes, wherever the jar is.
+/// is dropped, or closed: the network context's handles keep it, so the
+/// last of them to go waits for the writes, wherever the jar is.
 pub(crate) struct CookieStoreThread {
     ops: Sender<Op>,
-    thread: Option<JoinHandle<()>>,
+    thread: DatabaseThread,
+}
+
+impl CookieStoreThread {
+    /// Tells the thread to end as machopo ends, what it was told written:
+    /// what the jar tells the store after is not.
+    pub(crate) fn close(&self) {
+        self.thread.closing();
+        let _ = self.ops.send(Op::Close);
+    }
+
+    /// Whether the thread has ended by `deadline`.
+    pub(crate) fn ended_by(&self, deadline: Instant) -> bool {
+        self.thread.ended_by(deadline)
+    }
 }
 
 impl Drop for CookieStoreThread {
     fn drop(&mut self) {
         let _ = self.ops.send(Op::Close);
-        if let Some(thread) = self.thread.take() {
-            // Never the database thread itself: nothing of its holds this.
-            let _ = thread.join();
-        }
+        self.thread.join();
     }
 }
 
@@ -172,15 +183,12 @@ pub(crate) fn open(
     let (ops, received) = mpsc::channel();
     let (loaded, loaded_rx) = oneshot::channel();
     let dir = dir.to_owned();
-    let thread = std::thread::Builder::new()
-        .name("CookieStore".into())
-        .spawn(move || run(&dir, options, &received, loaded, committed.as_ref()))?;
+    let thread = DatabaseThread::spawn("CookieStore", move || {
+        run(&dir, options, &received, loaded, committed.as_ref());
+    })?;
     Ok((
         SqlitePersistentCookieStore { ops: ops.clone() },
-        CookieStoreThread {
-            ops,
-            thread: Some(thread),
-        },
+        CookieStoreThread { ops, thread },
         loaded_rx,
     ))
 }

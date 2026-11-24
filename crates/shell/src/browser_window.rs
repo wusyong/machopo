@@ -44,6 +44,9 @@ pub struct BrowserWindow {
     view: BrowserView,
     viz: Sender<VizMsg>,
     viz_thread: Option<JoinHandle<()>>,
+    /// The profile's storage, as the tabs' is: closed as the window shuts
+    /// down, once they have.
+    partition: StoragePartition,
 }
 
 impl BrowserWindow {
@@ -74,6 +77,8 @@ impl BrowserWindow {
             user_agent: user_agent.clone(),
             ..options.network
         };
+        let partition = StoragePartition::new(&options.profile, network)
+            .map_err(|e| format!("start the storage and the network service: {e}"))?;
         let mut tabs = WindowTabs {
             launcher: crate::renderer_launcher(options.process_per_tab),
             flags: RendererFlags {
@@ -91,8 +96,7 @@ impl BrowserWindow {
             },
             viz: viz_tx.clone(),
             gpu: gpu.clone(),
-            partition: StoragePartition::new(&options.profile, network)
-                .map_err(|e| format!("start the storage and the network service: {e}"))?,
+            partition: partition.clone(),
             on_message: Arc::new(Mutex::new(on_message)),
         };
         // Registered with Viz before it starts: the message waits for it.
@@ -122,6 +126,7 @@ impl BrowserWindow {
             view,
             viz: viz_tx,
             viz_thread: Some(viz_thread),
+            partition,
         })
     }
 
@@ -144,13 +149,16 @@ impl BrowserWindow {
         self.view.resize(size, scale);
     }
 
-    /// Stops the tabs' renderers and the Viz thread, waiting for Viz.
+    /// Stops the tabs' renderers and the Viz thread, waiting for Viz, and
+    /// closes the profile, what the tabs stored written: machopo may then
+    /// end at once, its destructors not run.
     pub fn shutdown(&mut self) {
         self.view.shutdown();
         let _ = self.viz.send(VizMsg::Display(DisplayMsg::Shutdown));
         if let Some(t) = self.viz_thread.take() {
             let _ = t.join();
         }
+        self.partition.close();
     }
 }
 

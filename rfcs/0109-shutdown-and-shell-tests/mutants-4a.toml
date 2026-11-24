@@ -1,0 +1,79 @@
+# Stage 4a's mutants: `python3 scripts/test.py mutate rfcs/0109-shutdown-and-shell-tests/mutants-4a.toml`.
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "automation_pipe::a_profile_is_written"]
+timeout = 300
+
+[[mutant]]
+name = "the window's shutdown doesn't close the profile"
+file = "crates/shell/src/browser_window.rs"
+from = '''            let _ = t.join();
+        }
+        self.partition.close();'''
+to = '''            let _ = t.join();
+        }'''
+
+[[mutant]]
+name = "localStorage's close writes nothing"
+file = "crates/browser/src/dom_storage.rs"
+from = '''                Task::Close => {
+                    self.commit_all();
+                    return;'''
+to = '''                Task::Close => {
+                    return;'''
+
+[[mutant]]
+name = "the cookie database isn't told to close"
+file = "crates/net/src/lib.rs"
+from = '''        if let Some(store) = &self.cookie_store {
+            store.close();
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "the HTTP cache's database isn't told to close"
+file = "crates/net/src/lib.rs"
+from = '''        if let Some(store) = &self.http_cache_store {
+            store.close();
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "the profile's databases aren't waited for"
+file = "crates/browser/src/storage_partition.rs"
+from = '''        let deadline = start + shutdown::PROFILE_LIMIT;'''
+to = '''        let deadline = start;'''
+
+[[mutant]]
+name = "the trace's end isn't written as the process ends"
+file = "crates/shell/src/main.rs"
+from = '''    drop(trace_end);
+    base::census::write_now();'''
+to = '''    std::mem::forget(trace_end);
+    base::census::write_now();'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "trace::"]
+
+[[mutant]]
+name = "a database thread given up on is waited for all the same"
+file = "crates/net/src/database_thread.rs"
+from = '''        if *self.closed.get_mut() && !self.ended_by(Instant::now()) {
+            return;
+        }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "database_thread"]
+
+[[mutant]]
+name = "a database thread closed as machopo ends isn't marked so"
+file = "crates/net/src/database_thread.rs"
+from = '''        self.closed.store(true, Ordering::Relaxed);'''
+to = '''        self.closed.store(false, Ordering::Relaxed);'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "database_thread"]
+
+[[mutant]]
+name = "localStorage's thread given up on is waited for all the same"
+file = "crates/browser/src/dom_storage.rs"
+from = '''        if given_up {
+            return;
+        }'''
+to = '''        if given_up && false {
+            return;
+        }'''
+test = ["cargo", "test", "-q", "-p", "browser", "--lib", "dom_storage"]

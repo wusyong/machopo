@@ -131,6 +131,23 @@ profile 和 trace：
 
 只關 stdout 時不結束不算問題：pipe 照設計在輸入結束時結束，Chromium 的 `DevToolsPipeHandler` 寫不進去時也只記一行 log。
 
+### 只在解構子裡寫的東西
+
+2026-11-25，第 4 段的 4a 之前盤點的。第 13 條定了收尾完直接結束、不跑解構子，這些要改成在那之前明確地做：
+
+| 東西 | 現在在哪裡寫 | 明確地做的地方 |
+| --- | --- | --- |
+| cookie（`net` 的 `CookieStoreThread`） | `Drop`：送 `Close`、`join` | 關 profile |
+| HTTP cache（`net` 的 `SqlStoreThread`） | `Drop`：送 `Close`、`join` | 關 profile |
+| `localStorage`（`browser` 的 `dom_storage` 的 `Shared`） | `Drop`：關掉 channel、`join` | 關 profile |
+| trace（`shell` 的 `TraceEnd`，Browser 和 renderer process 的 `main` 各一個） | `Drop`：`trace::stop()` | 直接結束之前 |
+| census 的報告（`base::census` 的 `AT_END`） | 計數的 thread 的 thread-local 被解構時 | 不用改（見下面的更正） |
+| stdout 的緩衝區（automation pipe 的回答） | 正常結束時 flush | 不用改（同上） |
+
+更正（4a 的 mutation test 找到的，三個 mutant 沒抓到，都是等價的）：census 和 stdout 不用另外做：計數的 thread（renderer 的 main thread 是另外起的 thread，`spawn_renderer_main_thread`）在 process 結束之前就被 join、自己寫過了，Browser 的 main thread 不跑 V8；pipe 的 writer 每則都 flush。前三個在現在的路上，`main` 直接結束之前就由 `Drop` 寫完了：`automation_pipe::run` 和視窗的 `App` 在回到 `main` 之前丟掉 `BrowserWindow`，每一份 `StoragePartition` 的 handle 跟著放掉。明確的 `close` 是為了時限（第 18 條）：`Drop` 的 `join` 沒有時限，磁碟卡住時永遠不結束；所以關過、時限到了還沒結束的 thread，`Drop` 也不再等它。
+
+停東西、不是寫東西的 `Drop`（`BrowserWindow`、`RenderProcessHost`、`DevToolsHttpHandler`、machopodriver 的 `Machopo`）在收尾的順序裡明確地做。其他的（V8 的 handle、IPC 的記憶體、GC 的 root）只是釋放，跳過沒有影響。
+
 ### Browser process 的 thread
 
 「`exit` 時」是正常結束、`main` return 的當下實際列出來的。

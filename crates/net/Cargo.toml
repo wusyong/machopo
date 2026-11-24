@@ -18,6 +18,8 @@ workspace = true
 base.workspace = true
 brotli-decompressor.workspace = true
 bytes.workspace = true
+# Waiting for the databases' threads with a deadline as machopo ends.
+crossbeam-channel.workspace = true
 flate2.workspace = true
 # Only to tell its error for a connection that closed before answering
 # (reqwest's error doesn't say), whose request goes out again.
@@ -43,5 +45,4 @@ url.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-crossbeam-channel.workspace = true
 flate2.workspace = true

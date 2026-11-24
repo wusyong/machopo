@@ -49,6 +49,7 @@ mod content_encoding;
 pub mod cookies;
 mod cors;
 mod data;
+mod database_thread;
 mod file;
 mod host_mapping;
 mod http;
@@ -58,6 +59,7 @@ pub mod test_server;
 mod url_loader;
 
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use ipc::TimeTicks;
 use ipc::data_pipe;
@@ -258,10 +260,10 @@ pub struct NetworkContext {
     blob_urls: blob::BlobUrlRegistry,
     /// The cookie database's thread: the last handle to go closes it, its
     /// changes written, whether or not the `NetworkService` thread has let
-    /// the jar go by then.
-    _cookie_store: Option<Arc<cookies::sqlite_persistent_cookie_store::CookieStoreThread>>,
+    /// the jar go by then; or [`close`](Self::close) does.
+    cookie_store: Option<Arc<cookies::sqlite_persistent_cookie_store::CookieStoreThread>>,
     /// The HTTP cache's database's thread, the same.
-    _http_cache_store: Option<Arc<http_cache::sql_store::SqlStoreThread>>,
+    http_cache_store: Option<Arc<http_cache::sql_store::SqlStoreThread>>,
 }
 
 impl NetworkContext {
@@ -351,9 +353,39 @@ impl NetworkContext {
         Ok(Self {
             jobs,
             blob_urls: blob::BlobUrlRegistry::default(),
-            _cookie_store: cookie_store,
-            _http_cache_store: http_cache_store,
+            cookie_store,
+            http_cache_store,
         })
+    }
+
+    /// Closes the profile's databases as machopo ends, whichever handles
+    /// are still about (each tab's, the IO thread's): tells both threads to
+    /// end, what they were told written (what loads tell them after is
+    /// not), without waiting; [`closed_by`](Self::closed_by) waits.
+    pub fn close(&self) {
+        if let Some(store) = &self.cookie_store {
+            store.close();
+        }
+        if let Some(store) = &self.http_cache_store {
+            store.close();
+        }
+    }
+
+    /// Waits until `deadline` for the databases [`close`](Self::close)
+    /// closes: the names of those that haven't closed by then.
+    pub fn closed_by(&self, deadline: Instant) -> Vec<&'static str> {
+        let mut late = Vec::new();
+        if let Some(store) = &self.cookie_store
+            && !store.ended_by(deadline)
+        {
+            late.push("the cookie database");
+        }
+        if let Some(store) = &self.http_cache_store
+            && !store.ended_by(deadline)
+        {
+            late.push("the HTTP cache's database");
+        }
+        late
     }
 
     /// Loads `request`, telling `client` of it as it goes (Chromium's

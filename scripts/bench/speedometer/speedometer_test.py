@@ -885,7 +885,7 @@ class MeasureTests(unittest.TestCase):
             "V8.DeserializeContext", "MinorGC", "V8.GC_SCAVENGER",
             "v8.callFunction", "ParseHTML", "CustomElementRegistry::define",
             "CustomElementReactionQueue::invokeReactions", "v8.callAsConstructor",
-            "RenderThread::between_tasks", "RenderThread::run_platform_tasks",
+            "RenderThread::run_platform_tasks",
             *(step for step in FRAME_STEPS if step not in WHEN_NEEDED_STEPS),
         ):
             self.assertIn(name, main)
@@ -927,11 +927,10 @@ class MeasureTests(unittest.TestCase):
                 self.assertEqual(stack[-1], "CustomElementReactionQueue::invokeReactions")
             if name in FRAME_STEPS:
                 self.assertEqual(stack[-1], FRAME_STEPS[name], name)
-            # The loop's work between tasks is of no task.
-            if name == "RenderThread::between_tasks":
-                self.assertEqual(stack, [])
+            # V8's and the DOM heap's tasks are a task of the loop's, as
+            # Blink posts them to the main thread's scheduler.
             if name == "RenderThread::run_platform_tasks":
-                self.assertEqual(stack, ["RenderThread::between_tasks"])
+                self.assertEqual(stack, ["ThreadControllerImpl::RunTask"])
             stack.append(name)
         self.assertEqual(stack, [])
         self.assertGreater(frames, 0)

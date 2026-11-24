@@ -526,8 +526,8 @@ fn main() -> ExitCode {
             file.push(format!(".{}", std::process::id()));
             std::path::PathBuf::from(file)
         });
-        // Ended, and its last events written, as this returns.
-        let (trace, _trace_end) = start_trace(file.as_deref());
+        // Ended, and its last events written, as the process ends.
+        let (trace, trace_end) = start_trace(file.as_deref());
         tracing_subscriber::registry()
             .with(log_layer(filter))
             .with(trace)
@@ -536,7 +536,7 @@ fn main() -> ExitCode {
         // log takes, not every one the trace's layer would let through
         // (html5ever's for each token, made only to be dropped).
         tracing_log::log::set_max_level(log_records);
-        return ExitCode::from(shell::renderer_main());
+        end(shell::renderer_main(), trace_end);
     }
     let args = match parse_args(std::env::args().skip(1)) {
         Ok(Command::Run(args)) => *args,
@@ -557,11 +557,12 @@ fn main() -> ExitCode {
         .unwrap_or(LevelFilter::TRACE)
         .as_log();
     let log = log_layer(filter);
-    // The trace's end is written when `_trace_end` drops, as `main` returns.
-    // Before anything starts V8, which records its events only if the
-    // trace is up by then.
+    // The trace's end is written as the process ends (or when `trace_end`
+    // drops, as `main` returns before anything has started). Before
+    // anything starts V8, which records its events only if the trace is up
+    // by then.
     let file = std::env::var_os("MACHOPO_TRACE").map(std::path::PathBuf::from);
-    let (trace, _trace_end) = start_trace(file.as_deref());
+    let (trace, trace_end) = start_trace(file.as_deref());
     tracing_subscriber::registry().with(log).with(trace).init();
     // The `log` crate's records go only to the log. `init` lets them through
     // as far as any layer takes anything, and the trace's takes spans of
@@ -615,13 +616,29 @@ fn main() -> ExitCode {
             profile,
         }),
     };
-    match result {
-        Ok(()) => ExitCode::SUCCESS,
+    let code = match result {
+        Ok(()) => 0,
         Err(e) => {
             tracing::error!("{e}");
-            ExitCode::FAILURE
+            1
         }
-    }
+    };
+    end(code, trace_end)
+}
+
+/// Ends this process, its renderers and its threads wound down, with
+/// `code`: the trace's end written, and then at once, its destructors not
+/// run (as Chromium's renderer and GPU process end,
+/// `base::Process::TerminateCurrentProcessImmediately`). The GPU's drivers,
+/// V8 and LLVM have destructors of their own, which would run beside the
+/// threads that can't be stopped (the drivers' own, V8's workers, those a
+/// shutdown gave up on) and crash under them. Nothing else is left to
+/// write by then: the census is written as each thread that counts ends
+/// (none is this one), the pipe's writer flushes each message, and the
+/// profile is closed as the window shuts down.
+fn end(code: u8, trace_end: Option<shell::trace::TraceEnd>) -> ! {
+    drop(trace_end);
+    ipc::platform::terminate_current_process_immediately(i32::from(code))
 }
 
 #[cfg(test)]

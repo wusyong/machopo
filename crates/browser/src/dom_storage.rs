@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -55,6 +56,12 @@ pub struct DomStorageContext {
 struct Shared {
     to_thread: Option<Sender<Task>>,
     thread: Option<JoinHandle<()>>,
+    /// Disconnected as the thread ends: what `closed_by` waits for, with a
+    /// deadline a join doesn't have.
+    ended: crossbeam_channel::Receiver<()>,
+    /// Told to close as machopo ends (`close`); set through the shared
+    /// handle, so atomic.
+    closed: AtomicBool,
 }
 
 impl Drop for Shared {
@@ -62,6 +69,17 @@ impl Drop for Shared {
         // The thread ends once its queue is empty, its database closed:
         // the next machopo of the profile opens it.
         drop(self.to_thread.take());
+        // But one closed as machopo ends that hasn't ended by now was given
+        // up on: machopo ends without it, else the end would wait for a
+        // disk that hangs after all.
+        let given_up = *self.closed.get_mut()
+            && !matches!(
+                self.ended.try_recv(),
+                Err(crossbeam_channel::TryRecvError::Disconnected)
+            );
+        if given_up {
+            return;
+        }
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
@@ -96,6 +114,8 @@ enum Task {
     ForgetNamespace {
         namespace: TabId,
     },
+    /// machopo is ending: what is left is written, and the thread ends.
+    Close,
 }
 
 /// When `localStorage`'s changes are written to disk (Chromium's
@@ -133,13 +153,19 @@ impl DomStorageContext {
     pub fn with_commit_options(profile: &Profile, options: CommitOptions) -> std::io::Result<Self> {
         let (to_thread, tasks) = crossbeam_channel::unbounded();
         let profile = profile.clone();
+        let (end, ended) = crossbeam_channel::bounded(0);
         let thread = std::thread::Builder::new()
             .name("LocalStorage".into())
-            .spawn(move || LocalStorage::new(profile, options).run(&tasks))?;
+            .spawn(move || {
+                let _end: Sender<()> = end;
+                LocalStorage::new(profile, options).run(&tasks);
+            })?;
         Ok(Self {
             shared: Arc::new(Shared {
                 to_thread: Some(to_thread),
                 thread: Some(thread),
+                ended,
+                closed: AtomicBool::new(false),
             }),
         })
     }
@@ -200,6 +226,23 @@ impl DomStorageContext {
     /// Tab `tab` has closed: its `sessionStorage` goes.
     pub fn forget_namespace(&self, tab: TabId) {
         self.send(Task::ForgetNamespace { namespace: tab });
+    }
+
+    /// Closes the database as machopo ends, whichever handles are still
+    /// about: the thread writes what is left and ends (what renderers tell
+    /// it after is not written), without waiting;
+    /// [`closed_by`](Self::closed_by) waits.
+    pub fn close(&self) {
+        self.shared.closed.store(true, Ordering::Relaxed);
+        self.send(Task::Close);
+    }
+
+    /// Whether the thread [`close`](Self::close) ends has by `deadline`.
+    pub fn closed_by(&self, deadline: Instant) -> bool {
+        matches!(
+            self.shared.ended.recv_deadline(deadline),
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected)
+        )
     }
 
     fn send(&self, task: Task) {
@@ -350,10 +393,7 @@ impl LocalStorage {
                 // Every handle gone (machopo closing): what is left is
                 // written now (`ScheduleImmediateCommit`).
                 Err(RecvTimeoutError::Disconnected) => {
-                    let keys: Vec<String> = self.batches.keys().cloned().collect();
-                    for key in keys {
-                        self.commit(&key);
-                    }
+                    self.commit_all();
                     return;
                 }
             };
@@ -381,8 +421,21 @@ impl LocalStorage {
                     self.renderers.remove(&renderer);
                 }
                 Task::ForgetNamespace { namespace } => self.forget_namespace(namespace),
+                // Closed as machopo ends, the handles still about: the same.
+                Task::Close => {
+                    self.commit_all();
+                    return;
+                }
             }
             self.commit_due(Instant::now());
+        }
+    }
+
+    /// Every batch, written now.
+    fn commit_all(&mut self) {
+        let keys: Vec<String> = self.batches.keys().cloned().collect();
+        for key in keys {
+            self.commit(&key);
         }
     }
 
@@ -653,6 +706,36 @@ impl LocalStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The thread closed as machopo ends that hasn't ended by then is let
+    /// go: the last handle goes though the thread never ends.
+    #[test]
+    fn a_closed_thread_given_up_on_is_let_go() {
+        let (release, held) = crossbeam_channel::bounded::<()>(0);
+        let (to_thread, _tasks) = crossbeam_channel::unbounded();
+        let (end, ended) = crossbeam_channel::bounded::<()>(0);
+        let thread = std::thread::spawn(move || {
+            let _end = end;
+            let _ = held.recv();
+        });
+        let context = DomStorageContext {
+            shared: Arc::new(Shared {
+                to_thread: Some(to_thread),
+                thread: Some(thread),
+                ended,
+                closed: AtomicBool::new(false),
+            }),
+        };
+        context.close();
+        assert!(!context.closed_by(Instant::now() + Duration::from_millis(20)));
+        let dropped = std::thread::spawn(move || drop(context));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !dropped.is_finished() {
+            assert!(Instant::now() < deadline, "the drop waited for it");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        drop(release);
+    }
 
     /// A batch waits the delay at least; once the area has committed
     /// often, or written much, in its first hour, longer: the rest of the

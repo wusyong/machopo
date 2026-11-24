@@ -26,6 +26,7 @@ mod navigation_controller;
 mod navigation_request;
 mod profile;
 mod render_process_host;
+pub mod shutdown;
 mod storage_partition;
 mod unique_name;
 mod user_agent;

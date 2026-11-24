@@ -2878,6 +2878,54 @@ fn a_second_machopo_on_a_profiles_folder_doesnt_start() {
     assert!(first.end().success());
 }
 
+/// What a page stores is in its profile's folder once machopo has ended:
+/// its cookies and its `localStorage`, which are written in batches, the
+/// last as machopo winds down (it then ends at once, its destructors not
+/// run), and what the HTTP cache keeps, so the next machopo on the folder
+/// has them. Winding down as it
+/// should, it says nothing of giving up.
+#[test]
+fn a_profile_is_written_as_machopo_ends() {
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("shell-profile-written");
+    let _ = std::fs::remove_dir_all(&dir);
+    let dir_arg = dir.to_str().expect("UTF-8");
+    let log = dir.with_extension("log");
+    let server = server(&[
+        (
+            "/",
+            Route::ok("text/html", "<!DOCTYPE html><script src=/kept.js></script>"),
+        ),
+        (
+            "/kept.js",
+            Route::ok("text/javascript", "document.title = 'kept'")
+                .with_header("Cache-Control", "max-age=3600"),
+        ),
+    ]);
+    let mut first = Browser::start_logging(
+        &["--user-data-dir", dir_arg],
+        Stdio::from(std::fs::File::create(&log).unwrap()),
+    );
+    let session = first.attach();
+    first.navigate(&session, &server.url("/"));
+    let stored = "document.cookie = 'a=1; max-age=3600'; localStorage.setItem('k', 'v')";
+    script(&mut first, &session, stored, json!([])).unwrap();
+    assert!(first.end().success());
+    let said = std::fs::read_to_string(&log).unwrap();
+    assert!(!said.contains(browser::shutdown::GAVE_UP), "{said}");
+
+    let mut second = Browser::start_with(&["--user-data-dir", dir_arg]);
+    let session = second.attach();
+    second.navigate(&session, &server.url("/"));
+    let read = "return [document.cookie, localStorage.getItem('k')]";
+    assert_eq!(
+        script(&mut second, &session, read, json!([])),
+        Ok(json!(["a=1", "v"]))
+    );
+    assert!(second.end().success());
+    let scripts = server.requests().into_iter();
+    assert_eq!(scripts.filter(|r| r.target == "/kept.js").count(), 1);
+}
+
 /// Starts a machopo with a tab for each of `scripts`, in a renderer
 /// process of its own that is left running its script (or doing nothing),
 /// and kills the machopo: whether every renderer went with it. They had

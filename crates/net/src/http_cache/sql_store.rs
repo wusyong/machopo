@@ -14,7 +14,6 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::thread::JoinHandle;
 
 use bytes::Bytes;
 use sql::rusqlite::{self, OptionalExtension, params};
@@ -22,6 +21,7 @@ use sql::{Database, Synchronous};
 use tokio::sync::oneshot;
 
 use super::entry::StoredResponse;
+use crate::database_thread::DatabaseThread;
 use super::vary::VaryData;
 use crate::cookies::Time;
 
@@ -98,21 +98,32 @@ pub(crate) struct SqlStore {
 }
 
 /// The database thread, which ends (what it was told written) once this is
-/// dropped: the network context's handles keep it, so the last of them to
-/// go waits for the writes, and a context opened on the folder after finds
-/// it unlocked.
+/// dropped, or closed: the network context's handles keep it, so the last
+/// of them to go waits for the writes, and a context opened on the folder
+/// after finds it unlocked.
 pub(crate) struct SqlStoreThread {
     ops: Sender<Op>,
-    thread: Option<JoinHandle<()>>,
+    thread: DatabaseThread,
+}
+
+impl SqlStoreThread {
+    /// Tells the thread to end as machopo ends, what it was told written:
+    /// what the cache tells the store after is not.
+    pub(crate) fn close(&self) {
+        self.thread.closing();
+        let _ = self.ops.send(Op::Close);
+    }
+
+    /// Whether the thread has ended by `deadline`.
+    pub(crate) fn ended_by(&self, deadline: std::time::Instant) -> bool {
+        self.thread.ended_by(deadline)
+    }
 }
 
 impl Drop for SqlStoreThread {
     fn drop(&mut self) {
         let _ = self.ops.send(Op::Close);
-        if let Some(thread) = self.thread.take() {
-            // Never the database thread itself: nothing of its holds this.
-            let _ = thread.join();
-        }
+        self.thread.join();
     }
 }
 
@@ -134,15 +145,12 @@ impl SqlStore {
         let (ops, received) = mpsc::channel();
         let (loaded, loaded_rx) = oneshot::channel();
         let dir = dir.to_owned();
-        let thread = std::thread::Builder::new()
-            .name("HttpCacheStore".into())
-            .spawn(move || run(&dir, &received, loaded, &on_razed))?;
+        let thread = DatabaseThread::spawn("HttpCacheStore", move || {
+            run(&dir, &received, loaded, &on_razed);
+        })?;
         Ok((
             Self { ops: ops.clone() },
-            SqlStoreThread {
-                ops,
-                thread: Some(thread),
-            },
+            SqlStoreThread { ops, thread },
             loaded_rx,
         ))
     }

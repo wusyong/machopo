@@ -107,7 +107,7 @@ C1、C2：`unused_port` 改成回傳一個 guard，整個測試期間 bind 著�
 1. **審查 `shell` 的測試**：不改產品。做完（2026-11-23）；2026-11-24 重新評估。
 2. **收掉 `shell` 測試的尾巴**：B3 到 B8 照上表改寫，C1、C2 的 port，S6（啟動到一半失敗時呼叫 `shutdown`，幾行，不牽涉第 3 段的選擇）。
 3. **重量、定結束的規則**：照第 0 階段的量法在現在的程式上重量，列選項、定下來（時限、Browser 等不等 renderer、全域變數怎麼收、Viz 遇到錯誤怎麼結束、訊號、卡住的 writer）。
-4. **照規則改**，一種跑法一步。
+4. **照規則改**（第 18 條起）：4a 一條收尾的路和記一行的機制（第 12、13 條）；4b renderer 同時請、共用 2 秒（第 8、9 條）；4c 同一個 process 的 renderer 打斷 script 再有時限地等（第 10 條）；4d 訊號（第 11 條）；4e pipe 的 writer（第 14 條）；4f Viz 畫不下去時（第 15 條）；4g renderer 的 stdio（第 16 條）。
 5. **驗收**：「目標」的六條逐條對到守它的測試；CI 連續綠燈；`docs/architecture.md` 的表；`docs/limitations.md` 和 `docs/test-gaps.md` 更新。
 
 ## 缺點
@@ -150,6 +150,11 @@ C1、C2：`unused_port` 改成回傳一個 guard，整個測試期間 bind 著�
 15. **第 3 段：Viz 畫不下去時告訴 main，走正常的結束**（2026-11-24，使用者決定；A）：`WgpuRenderer::recreate_context` 的三處 `std::process::exit(1)`（Direct3D 12 建不出新的 surface、新的 device 畫不到視窗、一直建不出新的 device）改成把錯誤交給 main；main 照時限收尾、寫完 profile 和 trace、記一行（第 12 條），以結束碼 1 結束（S8）。結束只有一條路。對照 Chromium：GPU process 壞了自己結束，Browser 重新啟動一個（`RestartGpuProcessForContextLoss`）；machopo 的 Viz 在 Browser 裡，重新啟動不在這份的範圍。不選先寫 profile 再 `exit(1)`：其他 thread 照跑、trace 不寫，Viz 要碰不屬於它的 profile，多一條正常結束以外的路。
 16. **第 3 段：renderer process 的 stdin 接 `/dev/null`、stdout 轉到 stderr、stderr 繼承**（2026-11-24，使用者決定；A）：automation pipe 只在 Browser 手上，client 關掉之後不用等 renderer 才讀得到 EOF，renderer 寫到 stdout 的東西不混進 CDP 的訊息、照樣看得到（S9）。對照 Chromium（`base/process/launch_posix.cc`、`launch_mac.cc` 的 `LaunchProcess`，`launch.h` 的註解）：child 的 stdin 一律接 `/dev/null`，stdout、stderr 繼承；Chromium 能繼承 stdout，是因為 `--remote-debugging-pipe` 用另外兩個 fd，machopo 的 `--automation-pipe` 在 stdin、stdout，所以 stdout 移開。根本的解法是把 pipe 移到 fd 3、4（「之後的可能」），那時 renderer 的 stdio 照 Chromium。不選 stdout 接 `/dev/null`：renderer 印的東西丟掉。不選照 Chromium 繼承 stdout：pipe 照樣被 renderer 握著。不選在這份就把 pipe 移到 fd 3、4：改的是 machopodriver、wptrunner、量測工具和測試都在用的對外介面，Windows 要另外傳 handle，和結束的流程關係不大。
 17. **第 3 段：remote debugging 的 port 綁不上時照舊啟動失敗**（2026-11-24，使用者決定；A）：以結束碼 1 結束、說明原因（第 2 段之後不會 crash）。給了 `--remote-debugging-port` 的人就是要 DevTools，machopo 的使用者主要是自動化，啟動時明確地失敗比啟動成功卻沒有 DevTools 好查。和 Chrome 不同（`DevToolsHttpHandler::StartServerOnHandlerThread` 記一行 `Cannot start http server for devtools.`，照樣啟動），記進 `docs/limitations.md`。不選照 Chrome：自動化要連不上 DevTools 才發現、自己判斷原因。
+18. **第 4 段的 4a：一條收尾的路，profile 有自己的 10 秒**（2026-11-25，使用者決定）：
+    - Browser 的順序（對照 Chromium 的 `ShutdownThreadsAndCleanUp`：renderer、network service、child 的 host、GPU 的通道、IO thread、tracing、thread pool）：不再收新的輸入；分頁和 renderer；Viz；關 profile；DevTools 的 server；pipe 的 writer；結束 trace；直接結束，帶著結束碼。renderer process：停自己的 thread、結束 trace，直接結束。
+    - 盤點（`details.md` 的「只在解構子裡寫的東西」）：cookie、HTTP cache、`localStorage` 的 store 在最後一份 handle 被丟掉時才寫完、關掉（`join`，沒有時限），`StoragePartition` 被複製給每個分頁和 IO thread，所以加一個明確的 `close`，時限到了還沒結束的，handle 被丟掉時也不再等；trace 的結尾也只在正常結束時寫。census 的報告和 stdout 的緩衝區不用另外做（計數的 thread 結束時自己寫；pipe 的 writer 每則都 flush）。
+    - 關 profile 在 renderer 和 thread 的 2 秒之後，自己有 10 秒，到了放棄、記一行（第 12 條）、照樣結束：資料幾乎一定寫完，最壞也在 12 秒內結束。對照 Chromium：結束時 profile 的寫入沒有短的時限，另有 `ShutdownWatcherHelper` 在結束卡了很久時讓瀏覽器 crash。不選算進同一個 2 秒：磁碟慢時丟掉還沒寫的 cookie 和 `localStorage`。不選沒有時限：磁碟卡住時永遠不結束。
+    - 直接結束只在 `machopo` 的 `main`（Browser 和 renderer process）：headless 在測試的 process 裡，照樣做明確的收尾，最後正常 return。Windows 上照 Chromium 用 `TerminateProcess(GetCurrentProcess(), code)`，加在 `ipc`（和 Unix 的 `terminate_current_process_immediately` 一起）。
 
 ## 待決定
 

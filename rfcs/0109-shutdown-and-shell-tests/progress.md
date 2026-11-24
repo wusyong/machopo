@@ -15,7 +15,8 @@
 | 2c. S6：`BrowserWindow` 沒有 shutdown 就丟掉時照樣 shutdown（第 7 條） | 做完，待審查 | 2026-11-24 |
 | 2d. mutation test、文件（穩定性照第 6 條看 CI） | 做完，待審查 | 2026-11-24 |
 | 3. 重量、定結束的規則（已決定的事項第 8 到 17 條） | 做完，待審查 | 2026-11-24 |
-| 4. 照規則改 | 沒開始 | |
+| 4. 照規則改（4a 到 4g） | 進行中 | |
+| 4a. 一條收尾的路、記一行的機制、profile 的 10 秒（第 12、13、18 條） | 做完，待審查 | 2026-11-25 |
 | 5. 驗收 | 沒開始 | |
 
 ## 驗收
@@ -26,6 +27,20 @@
 | `shell` 的測試：每個模組的分類、壞過的每一個的原因和把握 | `details.md` 的「`shell` 的測試的審查」；不改程式，所以沒有測試 |
 
 ## 做過的檢查
+
+### 第 4 段的 4a（2026-11-25，Linux：Fedora 45，debug build，`9109d9f` 之上）
+
+**做了什麼**：Browser 和 renderer process 收尾之後直接結束（`ipc::platform::terminate_current_process_immediately`，Windows 上新加 `TerminateProcess`）；結束之前寫完 trace 的結尾。profile 的三個資料庫有明確的 `close`（`StoragePartition::close`，在 `BrowserWindow::shutdown` 的 Viz 之後，最多等 10 秒，`net` 的兩個共用 `DatabaseThread`），等不到的放掉、記一行（`browser::shutdown::gave_up`），之後 handle 被丟掉時也不再等。
+
+**測試**：`automation_pipe::a_profile_is_written_as_machopo_ends`（cookie、`localStorage`、HTTP cache 在同一個 profile 的下一個 machopo 還在，正常結束時 stderr 沒有放棄的那一行）；`net` 的 `database_thread` 和 `browser` 的 `dom_storage` 各有一個「關過、等不到的 thread，丟掉時不等它」的單元測試。`net`、`browser`、`base`、`ipc`、`shell` 的測試通過，`--features census` 的 `a_renderer_process_counts_into_a_census_of_its_own` 通過；`ipc` 對 `x86_64-pc-windows-msvc` 的 `cargo check` 通過（Windows 上沒跑）。
+
+**mutation test**（`mutants-4a.toml`，第二輪 11 個，8 個抓到）：沒抓到的 3 個都是等價的，查過原因：
+- 視窗收尾時不關 profile：`automation_pipe::run` 和視窗的 `App` 在回到 `main` 之前丟掉 `BrowserWindow`，store 的 `Drop` 照樣寫完。明確的 `close` 留著，是為了時限：第一輪只有前 8 個，這一個沒抓到時發現 `close` 等不到放棄之後，`Drop` 的 `join` 照樣會永遠等（時限沒有作用），補上「放掉」和它的 3 個 mutant，都抓到。
+- 結束前寫 census、flush stdout：計數的 thread 在 process 結束之前就被 join、自己寫過了（renderer 的 main thread 是另外起的 thread，Browser 的 main thread 不跑 V8）；pipe 的 writer 每則都 flush。這兩段程式拿掉了（盤點多列了它們，`details.md` 的「只在解構子裡寫的東西」已更正），spec 裡也拿掉。
+
+**順帶修的**：`scripts/bench/speedometer/speedometer_test.py` 的 `test_traces_of_both` 還在找 RFC 0112 第 5 段拿掉的 `RenderThread::between_tasks`（工具的測試不在 CI 裡，0112 那時沒有觸發要跑它的規則），改成檢查 `RenderThread::run_platform_tasks` 在一個 task 裡。四組量測工具的測試（`census`、`raster`、`blink_perf`、`speedometer`）通過。
+
+**沒有測試的**：profile 在 10 秒內寫不完、放棄的那一支（要卡住的磁碟），記進 `docs/test-gaps.md`；`gave_up` 的那一行的格式由 4b 的 renderer 被 kill 的測試守著。
 
 ### 第 2 段（2026-11-24，Linux：Fedora 45，debug build，`ec06953` 之上）
 
