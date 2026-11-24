@@ -1,0 +1,53 @@
+# Stage 4c's mutants: `python3 scripts/test.py mutate rfcs/0109-shutdown-and-shell-tests/mutants-4c.toml`.
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "a_page_that_never_returns", "a_single_processs_hung"]
+timeout = 300
+
+[[mutant]]
+name = "a renderer of this process hasn't its script stopped"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                terminator.terminate();
+                std::thread::sleep(SCRIPT_STOP_INTERVAL);'''
+to = '''                std::thread::sleep(SCRIPT_STOP_INTERVAL);'''
+
+[[mutant]]
+name = "a renderer of this process has its script stopped once"
+file = "crates/browser/src/render_process_host.rs"
+from = '''            while !thread.is_finished() {
+                if std::time::Instant::now() >= deadline {
+                    // Its IO thread ends with it: both are left.
+                    self.renderer_thread.take();
+                    self.io_thread.take();
+                    return Some(GaveUp::LeftRunning);
+                }
+                terminator.terminate();
+                std::thread::sleep(SCRIPT_STOP_INTERVAL);'''
+to = '''            terminator.terminate();
+            while !thread.is_finished() {
+                if std::time::Instant::now() >= deadline {
+                    // Its IO thread ends with it: both are left.
+                    self.renderer_thread.take();
+                    self.io_thread.take();
+                    return Some(GaveUp::LeftRunning);
+                }
+                std::thread::sleep(SCRIPT_STOP_INTERVAL);'''
+
+[[mutant]]
+name = "an engine made doesn't put in what stops its script"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''            terminator.set(engine.terminator());'''
+to = ''''''
+
+[[mutant]]
+name = "V8's engine stops nothing"
+file = "crates/dom_js/src/engine.rs"
+from = '''        Box::new(move || terminator.terminate())'''
+to = '''        Box::new(move || drop(&terminator))'''
+
+[[mutant]]
+name = "headless waits for its renderer as a tab's close does"
+file = "crates/shell/src/headless.rs"
+from = '''    web_contents.ask_to_shut_down();
+    let left = web_contents.wait_for_shutdown(asked, asked + browser::shutdown::LIMIT);'''
+to = '''    let _ = asked;
+    web_contents.shutdown();
+    let left: Option<browser::GaveUp> = None;'''

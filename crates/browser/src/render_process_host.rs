@@ -143,6 +143,9 @@ pub struct RenderProcessHost {
     /// takes its messages.
     renderer_thread: Option<JoinHandle<()>>,
     io_thread: Option<JoinHandle<()>>,
+    /// What stops its main thread's script, as machopo ends: a thread
+    /// can't be killed.
+    terminator: Option<renderer::MainThreadTerminator>,
     /// A renderer in a process of its own: the process, and this end of
     /// its channel.
     child: Option<(Child, ChannelLink)>,
@@ -329,10 +332,12 @@ impl RenderProcessHost {
             }
         };
         let mut detached = None;
-        let (to_renderer, to_compositor, renderer_thread, io_thread, child) = match launcher {
+        let (to_renderer, to_compositor, renderer_thread, io_thread, terminator, child) = match launcher
+        {
             RendererLauncher::InProcess(script_engine) => {
                 let (to_renderer, to_compositor, from_browser) = renderer::channel();
                 let (to_browser, from_renderer) = crossbeam_channel::unbounded();
+                let terminator = renderer::MainThreadTerminator::default();
                 let renderer_thread = renderer::spawn_renderer_main_thread(
                     RendererEndpoints {
                         from_browser,
@@ -344,6 +349,7 @@ impl RenderProcessHost {
                     },
                     flags,
                     *script_engine,
+                    Some(terminator.clone()),
                 )?;
                 // The channel closes once every sender is dropped.
                 let mut host = host(to_renderer.clone());
@@ -360,6 +366,7 @@ impl RenderProcessHost {
                     to_compositor,
                     Some(renderer_thread),
                     Some(io_thread),
+                    Some(terminator),
                     None,
                 )
             }
@@ -394,12 +401,12 @@ impl RenderProcessHost {
                     },
                 );
                 let to_compositor = CompositorSender::over(link.clone());
-                (to_renderer, to_compositor, None, None, Some((child, link)))
+                (to_renderer, to_compositor, None, None, None, Some((child, link)))
             }
             RendererLauncher::Detached => {
                 let (to_renderer, to_compositor, from_browser) = renderer::channel();
                 detached = Some((host(to_renderer.clone()), from_browser));
-                (to_renderer, to_compositor, None, None, None)
+                (to_renderer, to_compositor, None, None, None, None)
             }
         };
         let context_lost = gpu.as_ref().map(|gpu| {
@@ -415,6 +422,7 @@ impl RenderProcessHost {
             _context_lost: context_lost,
             renderer_thread,
             io_thread,
+            terminator,
             child,
             exit: None,
             detached,
@@ -626,7 +634,10 @@ impl RenderProcessHost {
     /// process for [`CHILD_EXIT_WAIT`] at most.
     pub fn shutdown(&mut self) {
         self.ask_to_shut_down();
-        self.wait_for_shutdown(std::time::Instant::now() + CHILD_EXIT_WAIT);
+        self.join_threads();
+        if let Some((child, link)) = self.child.take() {
+            end_child(child, &link, Some(CHILD_EXIT_WAIT));
+        }
     }
 
     /// Asks the renderer to exit, without waiting: machopo, ending, asks
@@ -638,11 +649,41 @@ impl RenderProcessHost {
     }
 
     /// Waits for the renderer [`ask_to_shut_down`](Self::ask_to_shut_down)
-    /// asked to exit: its process until `deadline`, then killed (its
-    /// trace not written): the killed process's id. (Chromium kills a
-    /// child it can't wait for, `base::EnsureProcessTerminated`.) Threads
-    /// of this process are joined.
-    pub fn wait_for_shutdown(&mut self, deadline: std::time::Instant) -> Option<u32> {
+    /// asked to exit until `deadline`: what was given up on then, if
+    /// anything. A process still running is killed (its trace not
+    /// written; Chromium kills a child it can't wait for,
+    /// `base::EnsureProcessTerminated`). A renderer of this process has its
+    /// script stopped, again and again till its thread ends (the script of
+    /// the tasks queued before the message to exit too): one whose thread
+    /// doesn't end even so (in native code) is left running, machopo to
+    /// end without it. (A tab closed, [`shutdown`](Self::shutdown), waits
+    /// for its threads as long as it takes.)
+    pub fn wait_for_shutdown(&mut self, deadline: std::time::Instant) -> Option<GaveUp> {
+        if let (Some(terminator), Some(thread)) = (&self.terminator, &self.renderer_thread) {
+            while !thread.is_finished() {
+                if std::time::Instant::now() >= deadline {
+                    // Its IO thread ends with it: both are left.
+                    self.renderer_thread.take();
+                    self.io_thread.take();
+                    return Some(GaveUp::LeftRunning);
+                }
+                terminator.terminate();
+                std::thread::sleep(SCRIPT_STOP_INTERVAL);
+            }
+        }
+        self.join_threads();
+        let (child, link) = self.child.take()?;
+        let pid = child.id();
+        let wait = deadline.saturating_duration_since(std::time::Instant::now());
+        end_child(child, &link, Some(wait))
+            .killed
+            .then_some(GaveUp::Killed { pid })
+    }
+}
+
+impl RenderProcessHost {
+    /// The renderer's threads in this process, ended.
+    fn join_threads(&mut self) {
         for handle in [self.renderer_thread.take(), self.io_thread.take()]
             .into_iter()
             .flatten()
@@ -651,12 +692,21 @@ impl RenderProcessHost {
                 tracing::error!("renderer-side thread panicked");
             }
         }
-        let (child, link) = self.child.take()?;
-        let pid = child.id();
-        let wait = deadline.saturating_duration_since(std::time::Instant::now());
-        end_child(child, &link, Some(wait)).killed.then_some(pid)
     }
 }
+
+/// What [`RenderProcessHost::wait_for_shutdown`] gave up on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GaveUp {
+    /// The renderer's process, killed.
+    Killed { pid: u32 },
+    /// The renderer's threads, in this process, left running.
+    LeftRunning,
+}
+
+/// How often the script of a renderer of this process is stopped while
+/// machopo waits for it to end.
+const SCRIPT_STOP_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
 
 /// How long a renderer process asked to exit is given before it is ended.
 const CHILD_EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);

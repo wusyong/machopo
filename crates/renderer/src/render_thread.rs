@@ -1,5 +1,5 @@
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -185,6 +185,32 @@ pub struct ScriptEngineFactory {
     pub worker_engine: Option<fn(dom_api::EngineSettings) -> Box<dyn dom_api::WorkerEngine>>,
 }
 
+/// What stops the script a renderer's main thread runs, from another
+/// thread: for a renderer whose main thread is a thread of the browser's
+/// process (`--single-process`, headless), which can't be killed as
+/// machopo ends while its page's script runs on (V8's
+/// `TerminateExecution`, as `Worker.terminate()` stops a worker's script,
+/// Blink's `WorkerThread::EnsureScriptExecutionTerminates`). It stops the
+/// engine's of the moment: the main thread puts each engine's in as it
+/// makes the engine (a page whose scripts are wasm has another). Shared by
+/// the two threads, so a lock, taken only then and as machopo ends.
+#[derive(Clone, Default)]
+pub struct MainThreadTerminator(Arc<Mutex<Option<Box<dyn Fn() + Send>>>>);
+
+impl MainThreadTerminator {
+    /// Stops the script running now, if any; script after it is stopped
+    /// too until its stack has unwound.
+    pub fn terminate(&self) {
+        if let Some(terminate) = self.0.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
+            terminate();
+        }
+    }
+
+    fn set(&self, terminate: Box<dyn Fn() + Send>) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(terminate);
+    }
+}
+
 /// Spawns the renderer's threads: the compositor thread (`Compositor`,
 /// as `RenderThreadImpl::InitializeCompositorThread` does) and the main
 /// thread (`CrRendererMain`), which owns the other and stops it when it
@@ -193,6 +219,7 @@ pub fn spawn_renderer_main_thread(
     endpoints: RendererEndpoints,
     flags: RendererFlags,
     script_engine: ScriptEngineFactory,
+    terminator: Option<MainThreadTerminator>,
 ) -> std::io::Result<JoinHandle<()>> {
     let RendererEndpoints {
         from_browser,
@@ -274,6 +301,7 @@ pub fn spawn_renderer_main_thread(
                 pending_input,
                 flags,
                 script_engine,
+                terminator,
             );
             thread.run();
             // Nothing is posted to the main thread from now on.
@@ -461,6 +489,9 @@ struct RenderThread {
     /// The redirects of the child frames' navigations in flight, by
     /// request: their navigation timing counts them.
     script_engine: ScriptEngineFactory,
+    /// Where each engine made puts what stops its script, for a renderer
+    /// of the browser's process.
+    terminator: Option<MainThreadTerminator>,
     /// WebDriver's references and the scripts it waits for.
     webdriver_state: webdriver::WebDriverState,
     /// The browser's DevTools sessions.
@@ -532,6 +563,7 @@ impl RenderThread {
         pending_input: PendingUserInput,
         flags: RendererFlags,
         script_engine: ScriptEngineFactory,
+        terminator: Option<MainThreadTerminator>,
     ) -> Self {
         let _span = trace_event::info_event!("RenderThread::new");
         let id_prefix = webdriver::new_id_prefix();
@@ -618,6 +650,7 @@ impl RenderThread {
             pending_input,
             clock: Clock::new(),
             script_engine,
+            terminator,
             webdriver_state: webdriver::WebDriverState::new(id_prefix),
             devtools_sessions: Vec::new(),
             frames_changed: false,

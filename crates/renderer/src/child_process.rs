@@ -156,7 +156,9 @@ pub fn run_child_process(channel: Channel, script_engine: ScriptEngineFactory) -
                 viz: CompositorFrameSinkSender::over(link.clone()),
                 gpu,
             };
-            match spawn_renderer_main_thread(endpoints, flags, script_engine) {
+            // A process of its own is killed if it doesn't end: nothing
+            // stops its script from another thread.
+            match spawn_renderer_main_thread(endpoints, flags, script_engine, None) {
                 Ok(main) => {
                     tracing::info!("the renderer's threads are started");
                     match main.join() {

@@ -2013,18 +2013,31 @@ impl WebContents {
     }
 
     /// Waits for the renderer [`ask_to_shut_down`](Self::ask_to_shut_down)
-    /// asked to exit until `deadline`: a process that hasn't exited by then
-    /// is killed, and a line says so (`shutdown::gave_up`), with how long
-    /// since `asked`.
-    pub fn wait_for_shutdown(&mut self, asked: std::time::Instant, deadline: std::time::Instant) {
-        if let Some(pid) = self.process.wait_for_shutdown(deadline) {
-            crate::shutdown::gave_up(
+    /// asked to exit until `deadline` (a renderer of this process has its
+    /// script stopped meanwhile): a process that hasn't exited by then is
+    /// killed, a thread left, and a line says so (`shutdown::gave_up`),
+    /// with how long since `asked`. What was given up on, if anything.
+    pub fn wait_for_shutdown(
+        &mut self,
+        asked: std::time::Instant,
+        deadline: std::time::Instant,
+    ) -> Option<crate::GaveUp> {
+        let gave_up = self.process.wait_for_shutdown(deadline);
+        match gave_up {
+            Some(crate::GaveUp::Killed { pid }) => crate::shutdown::gave_up(
                 &format!("tab {}'s renderer process {pid}", self.tab.0),
                 "killed, not having exited",
                 asked.elapsed(),
-            );
+            ),
+            Some(crate::GaveUp::LeftRunning) => crate::shutdown::gave_up(
+                &format!("tab {}'s renderer thread", self.tab.0),
+                "left running, its script stopped but not ending",
+                asked.elapsed(),
+            ),
+            None => {}
         }
         self.shut_down();
+        gave_up
     }
 
     /// What goes once the renderer has.

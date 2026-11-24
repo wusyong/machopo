@@ -839,6 +839,11 @@ pub trait ScriptEngine: ParserHost {
         let _ = waker;
     }
 
+    /// What stops the script the engine runs, from any thread, until its
+    /// stack has unwound (V8's `TerminateExecution`): a renderer's owner's
+    /// in its own process, as machopo ends while a page's script runs on.
+    fn terminator(&mut self) -> Box<dyn Fn() + Send>;
+
     /// Where `console` messages go.
     fn set_console_sink(&mut self, sink: ConsoleSink);
 

@@ -1871,7 +1871,7 @@ impl BrowserView {
         }
         let deadline = asked + browser::shutdown::LIMIT;
         for contents in self.tabs.iter_mut().chain(&mut self.others) {
-            contents.wait_for_shutdown(asked, deadline);
+            let _ = contents.wait_for_shutdown(asked, deadline);
         }
     }
 }

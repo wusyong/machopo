@@ -2969,6 +2969,47 @@ fn hung_renderers_take_the_limit_once() {
     assert_eq!(killed, 3, "{said}");
 }
 
+/// With `--single-process` a renderer is a thread, which can't be killed:
+/// one whose script never returns has it stopped as machopo ends, and so
+/// has the script of what it runs after (an interval's), until the
+/// renderer gets to its end. Each ends by itself, nothing given up on.
+#[test]
+fn a_single_processs_hung_renderers_have_their_script_stopped() {
+    let server = server(&[("/", Route::ok("text/html", "<!DOCTYPE html>page"))]);
+    let log = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("shell-hung-threads.log");
+    let mut browser = Browser::start_logging(
+        &["--single-process"],
+        Stdio::from(std::fs::File::create(&log).unwrap()),
+    );
+    let scripts = [
+        "while (true) {}",
+        "setInterval(() => { for (;;) {} }, 0); for (;;) {}",
+    ];
+    for (tab, script) in scripts.into_iter().enumerate() {
+        let session = if tab == 0 {
+            browser.attach()
+        } else {
+            let created = browser
+                .call(None, "Target.createTarget", json!({ "url": "about:blank" }))
+                .unwrap();
+            browser.attach_to(created["targetId"].as_str().unwrap())
+        };
+        browser.navigate(&session, &server.url("/"));
+        browser.send(
+            Some(&session),
+            "Machopo.executeScript",
+            json!({ "script": script, "async": false }),
+        );
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    let asked = std::time::Instant::now();
+    assert!(browser.end().success());
+    let took = asked.elapsed();
+    assert!(took < Duration::from_secs(4), "{took:?}");
+    let said = std::fs::read_to_string(&log).unwrap();
+    assert!(!said.contains(browser::shutdown::GAVE_UP), "{said}");
+}
+
 /// Starts a machopo with a tab for each of `scripts`, in a renderer
 /// process of its own that is left running its script (or doing nothing),
 /// and kills the machopo: whether every renderer went with it. They had

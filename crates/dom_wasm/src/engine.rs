@@ -1241,6 +1241,12 @@ impl ScriptEngine for WasmEngine {
         false
     }
 
+    /// Nothing stops a wasm script midway: the store has no epoch
+    /// interruption. One that never returns is left as machopo ends.
+    fn terminator(&mut self) -> Box<dyn Fn() + Send> {
+        Box::new(|| {})
+    }
+
     fn set_console_sink(&mut self, sink: ConsoleSink) {
         self.console = Some(sink);
     }

@@ -221,6 +221,9 @@ impl RenderThread {
         let mut engine = make(EngineSettings {
             web_tests: self.web_tests,
         });
+        if let Some(terminator) = &self.terminator {
+            terminator.set(engine.terminator());
+        }
         // `fetch()` and blob URLs at the call, on the thread's handles.
         engine.set_load_sink(Box::new(super::documents::RendererLoadSink {
             to_browser: self.to_browser.clone(),

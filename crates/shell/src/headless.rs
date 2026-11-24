@@ -527,11 +527,18 @@ fn drive(
         }
     };
     let url = web_contents.url().map(str::to_owned);
-    web_contents.shutdown();
-    // The renderer has gone, so the frame forwarder's channel closes.
+    // Its script stopped if it runs on, and waited for with machopo's
+    // limit: a test of a page that never returns ends all the same.
+    let asked = std::time::Instant::now();
+    web_contents.ask_to_shut_down();
+    let left = web_contents.wait_for_shutdown(asked, asked + browser::shutdown::LIMIT);
+    // The renderer has gone, so the frame forwarder's channel closes; one
+    // left running keeps it open, and the forwarder with it.
     drop(web_contents);
     drop(events);
-    let _ = forward.join();
+    if left.is_none() {
+        let _ = forward.join();
+    }
     result?;
 
     // The last frame drawn, drawn again and read back; transparent if

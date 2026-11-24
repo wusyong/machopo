@@ -18,6 +18,7 @@
 | 4. 照規則改（4a 到 4g） | 進行中 | |
 | 4a. 一條收尾的路、記一行的機制、profile 的 10 秒（第 12、13、18 條） | 做完，待審查 | 2026-11-25 |
 | 4b. renderer 同時請、共用 2 秒，到了 kill、記一行（第 8、9、12、19 條） | 做完，待審查 | 2026-11-25 |
+| 4c. 同一個 process 的 renderer 打斷 script 再有時限地等（第 10 條） | 做完，待審查 | 2026-11-25 |
 | 5. 驗收 | 沒開始 | |
 
 ## 驗收
@@ -28,6 +29,14 @@
 | `shell` 的測試：每個模組的分類、壞過的每一個的原因和把握 | `details.md` 的「`shell` 的測試的審查」；不改程式，所以沒有測試 |
 
 ## 做過的檢查
+
+### 第 4 段的 4c（2026-11-25，Linux：Fedora 45，debug build，`3839e01` 之上）
+
+**做了什麼**：`ScriptEngine` 多一個 `terminator`（V8 的是 `TerminateExecution`；wasm 的什麼都不做：store 沒開 epoch interruption）；renderer 每建一個 engine，就把它的放進 `renderer::MainThreadTerminator`（in-process 的 renderer 才有，Browser 的 `RenderProcessHost` 拿著）。machopo 結束時等 in-process 的 renderer 的期間，每 10 ms 打斷一次它的 script（使用者決定：排在 `Shutdown` 前面的 task 的 script 也會卡住，打斷一次不夠），期限到了還沒結束的 thread 留下、記一行（`tab 0's renderer thread, left running, its script stopped but not ending`）。headless 結束時也照這樣（之前走關分頁的路，一直 join）；關一個分頁照舊（第 19 條）。
+
+**測試**：`automation_pipe::a_single_processs_hung_renderers_have_their_script_stopped`（`--single-process`，一個分頁卡在 `while (true) {}`，一個卡在迴圈裡、還有 `setInterval` 一直重新進入迴圈：machopo 在 4 秒內結束、沒有放棄的那一行；原本永遠不結束）；`script::a_page_that_never_returns_ends_its_test`（headless 的頁面載入、畫完之後進入無窮迴圈，`render` 在 10 秒內回來）。第一版的頁面在 `load` 傳到 Browser 之前就進入迴圈，headless 等不到載入、等滿自己的 30 秒：改成載入之後 200 ms。`dom_api`、`dom_js`、`dom_wasm`、`renderer`、`browser`、`shell` 的測試通過。
+
+**mutation test**（`mutants-4c.toml`，5 個，都抓到）：不打斷、只打斷一次、engine 沒放進打斷的方法、V8 的打斷什麼都不做、headless 照關分頁的路等。打斷了還不結束、留下 thread 的那一支沒有測試（`docs/test-gaps.md`）。`mutants-4b.toml` 的兩個 `from` 跟著 4c 改過的那兩行更新。
 
 ### 第 4 段的 4b（2026-11-25，Linux：Fedora 45，debug build，`7e3ca01` 之上）
 

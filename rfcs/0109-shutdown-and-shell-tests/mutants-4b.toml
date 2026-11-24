@@ -5,8 +5,8 @@ timeout = 300
 [[mutant]]
 name = "each renderer is given a limit of its own"
 file = "crates/shell/src/browser_view.rs"
-from = '''            contents.wait_for_shutdown(asked, deadline);'''
-to = '''            contents.wait_for_shutdown(asked, std::time::Instant::now() + browser::shutdown::LIMIT);'''
+from = '''            let _ = contents.wait_for_shutdown(asked, deadline);'''
+to = '''            let _ = contents.wait_for_shutdown(asked, std::time::Instant::now() + browser::shutdown::LIMIT);'''
 
 [[mutant]]
 name = "the renderers aren't asked before they are waited for"
@@ -17,8 +17,8 @@ to = ''''''
 [[mutant]]
 name = "a killed renderer says nothing"
 file = "crates/browser/src/web_contents.rs"
-from = '''        if let Some(pid) = self.process.wait_for_shutdown(deadline) {'''
-to = '''        if let Some(pid) = self.process.wait_for_shutdown(deadline).filter(|_| false) {'''
+from = '''        let gave_up = self.process.wait_for_shutdown(deadline);'''
+to = '''        let gave_up = self.process.wait_for_shutdown(deadline).filter(|_| false);'''
 
 [[mutant]]
 name = "the limit is five seconds"

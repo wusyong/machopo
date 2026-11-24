@@ -480,6 +480,31 @@ requestAnimationFrame(() => { notDefined.scrollTop; });
     );
 }
 
+/// A page whose script never returns, once it has loaded and drawn,
+/// doesn't hold its test up: as the test ends, headless stops the renderer's script (a thread of the
+/// test's process can't be killed), and the renderer ends.
+#[test]
+fn a_page_that_never_returns_ends_its_test() {
+    let url = page(
+        "never-returns.html",
+        r#"<!DOCTYPE html><html class="reftest-wait">
+<script>onload = () => setTimeout(() => { for (;;) {} }, 200);</script>"#,
+    );
+    let (done, ended) = crossbeam_channel::bounded(1);
+    std::thread::spawn(move || {
+        let result = headless::render_with_reftest_wait_timeout(
+            &url,
+            Size::new(200, 200),
+            std::time::Duration::from_millis(500),
+        );
+        let _ = done.send(result.err());
+    });
+    let error = ended
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("the test ends");
+    assert_eq!(error.as_deref(), Some("reftest-wait was still on after 0.5 s"));
+}
+
 /// Child frames take their turns in the tree order of their iframes, not
 /// in the order they were made (WPT's `child-document-raf-order`).
 #[test]

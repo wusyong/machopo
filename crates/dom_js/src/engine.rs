@@ -1759,6 +1759,11 @@ impl ScriptEngine for V8Engine {
         self.data.set_platform_task_waker(waker);
     }
 
+    fn terminator(&mut self) -> Box<dyn Fn() + Send> {
+        let terminator = V8Engine::terminator(self);
+        Box::new(move || terminator.terminate())
+    }
+
     fn take_frames_changed(&mut self) -> bool {
         std::mem::take(&mut self.state().frames.changed)
     }
