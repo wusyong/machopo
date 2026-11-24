@@ -78,6 +78,9 @@ impl<'gc> Cx<'_, 'gc> {
             }
         };
         callbacks.push(self.gc, callback);
+        // Its timeout's, if it has one.
+        let origin = self.window_context(window).time_origin.get();
+        self.wake_for_task(callback.number.get(), Some(origin + due));
         callback
     }
 

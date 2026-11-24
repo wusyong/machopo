@@ -164,7 +164,8 @@ pub fn worker_error<H: ScriptHost>(
 
 /// A worker's error's task: an `ErrorEvent` of `info` fired at `worker`,
 /// cancelable, its `error` null; not canceled, reported at its realm's
-/// global as if thrown there (no value). Nothing for one terminated since.
+/// global as if thrown there (no value). Nothing for one terminated since
+/// (one whose worker closed itself after throwing still gets it).
 pub(crate) fn fire_worker_error<H: ScriptHost>(
     host: &mut H,
     worker: &Persistent<EventTargetImpl>,
@@ -172,7 +173,7 @@ pub(crate) fn fire_worker_error<H: ScriptHost>(
 ) {
     let event = host.mutate(|cx| {
         let worker = worker.get(cx.gc);
-        if cx.worker_terminated(worker) {
+        if cx.worker_messages_dropped(worker) {
             return None;
         }
         let context = cx.target_context(TargetRef::EventTarget(worker));

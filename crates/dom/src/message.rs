@@ -316,6 +316,15 @@ impl<'gc> Cx<'_, 'gc> {
             .any(|&kept| Gc::ptr_eq(kept, port))
         {
             ports.push(self.gc, port);
+            // The messages stamped while it wasn't in the list: the host's
+            // scheduler took their tasks then and found none, so it is
+            // told of them again (`Dom::set_task_waker`).
+            for number in self
+                .with_port_end(data, PortEnd::stamped_numbers)
+                .unwrap_or_default()
+            {
+                self.wake_for_task(number, None);
+            }
         }
     }
 

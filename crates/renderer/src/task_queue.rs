@@ -42,8 +42,12 @@ pub(crate) enum MainThreadTask {
         event: crate::worker_thread::WorkerEvent,
     },
     /// From another thread: the DOM's message ports may have messages
-    /// (`dom::PortWaker`), which the loop runs as it runs the DOM's tasks.
+    /// (`dom::PortWaker`), which the DOM numbers as its tasks as this one
+    /// ends, each a `DomTask` of its own.
     PortMessages,
+    /// The DOM's task numbered `number` (`dom::TaskWaker`): queued as the
+    /// DOM numbered it, or as it came due (a timer's).
+    DomTask { number: u64 },
     /// From the network service's thread: the body of the document
     /// navigation `navigation_id` sent `frame` to commit has more in its
     /// pipe, or its pipe is over (the pipe's watcher, Blink's
@@ -73,16 +77,21 @@ pub(crate) enum TaskQueue {
     /// What dedicated workers send their `Worker`s (Blink posts them to
     /// the posted message task source's queue).
     Worker,
+    /// The DOM's tasks (its timers, the UA's, idle callbacks' timeouts,
+    /// element tasks, messages): Blink's frame task queues by task type,
+    /// in one, of the same priority.
+    Dom,
 }
 
 impl TaskQueue {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
         Self::Browser,
         Self::Rendering,
         Self::Input,
         Self::DevTools,
         Self::Canvas,
         Self::Worker,
+        Self::Dom,
     ];
 
     fn index(self) -> usize {
@@ -96,7 +105,7 @@ pub(crate) struct TaskQueues(u8);
 
 impl TaskQueues {
     /// The event loop's: every queue.
-    pub(crate) const ALL: Self = Self(0b11_1111);
+    pub(crate) const ALL: Self = Self(0b111_1111);
     /// DevTools' alone.
     pub(crate) const DEVTOOLS: Self = Self(1 << TaskQueue::DevTools as u8);
     /// The rendering's alone.
@@ -122,7 +131,12 @@ struct Queued {
 
 #[derive(Default)]
 struct State {
-    queues: [VecDeque<Queued>; 6],
+    queues: [VecDeque<Queued>; 7],
+    /// The DOM's tasks not due yet (its timers'), by when they are due and
+    /// their numbers: each queued in `TaskQueue::Dom` as it comes due,
+    /// numbered then (Blink's delayed tasks take their place in the order
+    /// as they become ready).
+    delayed: std::collections::BinaryHeap<std::cmp::Reverse<(Instant, u64)>>,
     /// The next task's number, from 1: 0 is what was put back first
     /// (`put_back`).
     next: u64,
@@ -137,6 +151,43 @@ struct State {
 }
 
 impl State {
+    /// The next task's number.
+    fn next_sequence(&mut self) -> u64 {
+        #[expect(
+            clippy::arithmetic_side_effects,
+            reason = "one per task the main thread is given: a u64 lasts centuries"
+        )]
+        {
+            self.next += 1;
+        }
+        self.next
+    }
+
+    /// The DOM's tasks due by now, queued in their turn: after what was
+    /// posted before they were, the earliest due first. As the next task
+    /// is taken, not as one is posted (Blink's `SequenceManager` moves its
+    /// ready delayed tasks as it selects the next one: a task posted in a
+    /// task that ran past a timer's time is before the timer).
+    fn queue_due(&mut self) {
+        let now = Instant::now();
+        while let Some(&std::cmp::Reverse((at, number))) = self.delayed.peek()
+            && at <= now
+        {
+            self.delayed.pop();
+            let sequence = self.next_sequence();
+            self.queues[TaskQueue::Dom.index()].push_back(Queued {
+                sequence,
+                task: MainThreadTask::DomTask { number },
+                interrupt: false,
+            });
+        }
+    }
+
+    /// When the first of the DOM's tasks not due yet is.
+    fn next_delayed(&self) -> Option<Instant> {
+        self.delayed.peek().map(|std::cmp::Reverse((at, _))| *at)
+    }
+
     /// The queue among `queues` whose first task was posted earliest.
     fn earliest(&self, queues: TaskQueues) -> Option<TaskQueue> {
         TaskQueue::ALL
@@ -211,14 +262,7 @@ impl MainThreadScheduler {
             if state.closed {
                 return Err(RendererGone);
             }
-            #[expect(
-                clippy::arithmetic_side_effects,
-                reason = "one per task the main thread is given: a u64 lasts centuries"
-            )]
-            {
-                state.next += 1;
-            }
-            let sequence = state.next;
+            let sequence = state.next_sequence();
             state.queues[queue.index()].push_back(Queued {
                 sequence,
                 task,
@@ -287,6 +331,31 @@ impl MainThreadScheduler {
         Arc::new(move || {
             if let Some(scheduler) = scheduler.upgrade() {
                 let _ = scheduler.post(TaskQueue::Worker, MainThreadTask::PortMessages, false);
+            }
+        })
+    }
+
+    /// What the main thread's DOM tells of its tasks (`dom::TaskWaker`):
+    /// one due now queued in `TaskQueue::Dom`, a timer's held until it is
+    /// due. On the main thread alone, which owns the DOM.
+    pub(crate) fn dom_task_waker(self: &Arc<Self>) -> dom::TaskWaker {
+        let scheduler = Arc::downgrade(self);
+        Box::new(move |number, at| {
+            let Some(scheduler) = scheduler.upgrade() else {
+                return;
+            };
+            match at.filter(|at| *at > Instant::now()) {
+                Some(at) => {
+                    scheduler
+                        .lock()
+                        .delayed
+                        .push(std::cmp::Reverse((at, number)));
+                    scheduler.ready.notify_one();
+                }
+                None => {
+                    let _ =
+                        scheduler.post(TaskQueue::Dom, MainThreadTask::DomTask { number }, false);
+                }
             }
         })
     }
@@ -393,28 +462,32 @@ impl MainThreadScheduler {
         let deadline = timeout.and_then(|timeout| Instant::now().checked_add(timeout));
         let mut state = self.lock();
         loop {
+            state.queue_due();
             if let Some(queue) = state.earliest(queues) {
                 return state.queues[queue.index()]
                     .pop_front()
                     .map(|queued| queued.task);
             }
-            state = match (timeout, deadline) {
-                (None, _) => self
-                    .ready
-                    .wait(state)
-                    .unwrap_or_else(PoisonError::into_inner),
-                (Some(_), Some(deadline)) => {
-                    let left = deadline.saturating_duration_since(Instant::now());
-                    if left.is_zero() {
-                        return None;
-                    }
+            if timeout.is_some() && deadline.is_some_and(|deadline| deadline <= Instant::now()) {
+                return None;
+            }
+            // Woken for the DOM's next task to come due too, if it is one
+            // of `queues`'.
+            let delayed = state.next_delayed().filter(|_| queues.has(TaskQueue::Dom));
+            let wake = match (deadline.filter(|_| timeout.is_some()), delayed) {
+                (Some(deadline), Some(delayed)) => Some(deadline.min(delayed)),
+                (deadline, delayed) => deadline.or(delayed),
+            };
+            state = match wake {
+                Some(wake) => {
+                    let left = wake.saturating_duration_since(Instant::now());
                     self.ready
                         .wait_timeout(state, left)
                         .unwrap_or_else(PoisonError::into_inner)
                         .0
                 }
-                // A wait too long to count: forever.
-                (Some(_), None) => self
+                // None, or a wait too long to count: forever.
+                None => self
                     .ready
                     .wait(state)
                     .unwrap_or_else(PoisonError::into_inner),
@@ -425,6 +498,7 @@ impl MainThreadScheduler {
     /// The earliest task of `queues`, if there is one.
     pub(crate) fn try_next(&self, queues: TaskQueues) -> Option<MainThreadTask> {
         let mut state = self.lock();
+        state.queue_due();
         let queue = state.earliest(queues)?;
         state.queues[queue.index()]
             .pop_front()
@@ -486,7 +560,9 @@ impl MainThreadScheduler {
 
     /// Whether a task waits in `queues`.
     pub(crate) fn has_task(&self, queues: TaskQueues) -> bool {
-        self.lock().earliest(queues).is_some()
+        let mut state = self.lock();
+        state.queue_due();
+        state.earliest(queues).is_some()
     }
 
     /// The engine's (`ScriptEngine::set_devtools_queue`): the first one given.
@@ -709,6 +785,7 @@ mod tests {
             MainThreadTask::FetchFailed { fetch } => format!("fetch failed {fetch}"),
             MainThreadTask::Worker { id, .. } => format!("worker {id}"),
             MainThreadTask::PortMessages => "ports".to_owned(),
+            MainThreadTask::DomTask { number } => format!("dom {number}"),
             MainThreadTask::NavigationBody { navigation_id, .. } => {
                 format!("navigation body {navigation_id}")
             }

@@ -632,6 +632,7 @@ impl<'gc> Cx<'_, 'gc> {
                 number: Cell::new(self.next_task_number()),
             },
         );
+        self.wake_for_task(timer.number.get(), Some(context.time_origin.get() + due));
         let timers = match context.native_timers.get(self.gc) {
             Some(timers) => timers,
             None => {
@@ -1157,6 +1158,10 @@ impl<'gc> Cx<'_, 'gc> {
             }
         };
         timers.push(self.gc, timer);
+        self.wake_for_task(
+            timer.number.get(),
+            Some(context.time_origin.get() + timer.due.get()),
+        );
         timer
     }
 
@@ -1356,6 +1361,10 @@ impl<'gc> Cx<'_, 'gc> {
                 timer.due.set(now + interval);
                 // Set again: a task numbered after those queued meanwhile.
                 timer.number.set(self.next_task_number());
+                self.wake_for_task(
+                    timer.number.get(),
+                    Some(context.time_origin.get() + now + interval),
+                );
             }
             None => {
                 timers.remove(self.gc, index);

@@ -24,6 +24,7 @@ mod devtools_log;
 mod devtools_network;
 mod devtools_overlay;
 mod documents;
+mod event_loop;
 mod fetch;
 mod file_reader;
 mod focus;

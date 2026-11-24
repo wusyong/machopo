@@ -4048,33 +4048,37 @@ impl RenderThread {
         }
     }
 
-    /// The DOM's document's timers due now (`until_next_due` woke the
-    /// loop for them), then its testharness results if they gave any.
-    pub(super) fn run_due_tasks(&mut self) {
+    /// The DOM's task numbered `number`, as the scheduler took its token
+    /// (`ScriptEngine::run_dom_task`; nothing if it is no more), then what
+    /// it finished: documents it loaded, testharness results it gave.
+    pub(super) fn run_dom_task(&mut self, number: u64) {
         let Some(engine) = &mut self.engine else {
             return;
         };
-        if engine.run_due_tasks() {
-            self.finish_loaded_documents();
-            self.send_harness_results();
-            // A task's image `load` may have been what a `load` waited
-            // for.
-            self.finish_loads();
-            self.request_next_frame_if_dom_changed();
+        if engine.run_dom_task(number) {
+            self.after_dom_tasks();
         }
     }
 
-    /// `run_due_tasks` after one of the loop's own tasks (input, the
-    /// browser's messages), if the DOM may have one queued: what that task
-    /// queued (a fragment navigation's `hashchange`) runs before the next
-    /// such task. One `bool` read otherwise.
-    pub(super) fn run_queued_tasks(&mut self) {
-        if self
-            .engine
-            .as_mut()
-            .is_some_and(|engine| engine.dom_mut().has_queued_tasks())
-        {
-            self.run_due_tasks();
+    /// What the DOM's tasks that ran finished: the documents whose window's
+    /// `load` ran, testharness results, a `load` an image's waited for, a
+    /// frame for what they changed.
+    fn after_dom_tasks(&mut self) {
+        self.finish_loaded_documents();
+        self.send_harness_results();
+        // A task's image `load` may have been what a `load` waited for.
+        self.finish_loads();
+        self.request_next_frame_if_dom_changed();
+    }
+
+    /// The engine's guests whose waits are over (a wasm guest's, not the
+    /// DOM's tasks: `until_due_guests` woke the loop for them).
+    pub(super) fn run_due_guests(&mut self) {
+        let Some(engine) = &mut self.engine else {
+            return;
+        };
+        if engine.run_due_guests() {
+            self.after_dom_tasks();
         }
     }
 

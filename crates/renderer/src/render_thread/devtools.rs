@@ -225,6 +225,11 @@ impl RenderThread {
             network_agent: self.network_agent.clone(),
         }));
         // Its child frames told to the browser as they are made and go.
+        // The DOM's tasks, each a task of the scheduler's in its turn with
+        // the thread's own (Blink's frame task runners).
+        engine
+            .dom_mut()
+            .set_task_waker(self.scheduler.dom_task_waker());
         engine.set_frame_client(Box::new(super::documents::RendererFrameClient {
             to_browser: self.to_browser.clone(),
             page_agent: self.page_agent.clone(),

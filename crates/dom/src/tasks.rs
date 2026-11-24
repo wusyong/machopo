@@ -19,6 +19,11 @@ use elise::Gc;
 
 use crate::{Cx, Dom, ExecutionContext, NodeId, NodeRef};
 
+/// What tells the host's scheduler of a task the DOM numbered
+/// (`Dom::set_task_waker`): its number, and the instant it is due (none:
+/// now).
+pub type TaskWaker = Box<dyn Fn(u64, Option<std::time::Instant>)>;
+
 /// The queue a window's next task is in (`Cx::next_task`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskQueue {
@@ -95,10 +100,31 @@ impl<'gc> Cx<'_, 'gc> {
     }
 
     /// A task queued now, to run as soon as it may: its time and number;
-    /// `has_queued_tasks` is set.
+    /// `has_queued_tasks` is set, and the host's scheduler told.
     pub(crate) fn stamp_queued_task(&self) -> (f64, u64) {
         self.changes.tasks_queued.set(true);
-        (self.dom_now(), self.next_task_number())
+        let number = self.next_task_number();
+        self.wake_for_task(number, None);
+        (self.dom_now(), number)
+    }
+
+    /// The host's scheduler told of task `number` (`Dom::set_task_waker`):
+    /// due now (`None`), or at `at` on the DOM's clock (`dom_now`'s
+    /// milliseconds; one never due, infinite, isn't told).
+    pub(crate) fn wake_for_task(&self, number: u64, at: Option<f64>) {
+        let Some(waker) = &self.changes.task_waker else {
+            return;
+        };
+        match at {
+            None => waker(number, None),
+            Some(at) if at.is_finite() => {
+                let at = std::time::Duration::try_from_secs_f64(at.max(0.0) / 1000.0)
+                    .ok()
+                    .and_then(|since| self.origin.checked_add(since));
+                waker(number, at);
+            }
+            Some(_) => {}
+        }
     }
 
     /// Whether a task of number `number` may run now: in a pass, only one
@@ -129,11 +155,30 @@ impl<'gc> Cx<'_, 'gc> {
         self.changes.tasks_queued.set(queued);
     }
 
-    /// `context`'s task to run next by `now` (the DOM's clock), of those
-    /// the pass lets run: the earliest `(time, number)` of its queues.
-    pub fn next_task(&self, context: Gc<'gc, ExecutionContext>, now: f64) -> Option<NextTask> {
+    /// `context`'s next task of one of its queues if it is task `number`,
+    /// the one a token of the host's scheduler stands for: none if that
+    /// task is no more (cancelled, run, its window gone), or isn't next in
+    /// its queue. Whether it is due is the scheduler's to say.
+    pub fn task_numbered(
+        &self,
+        context: Gc<'gc, ExecutionContext>,
+        number: u64,
+    ) -> Option<NextTask> {
+        self.queue_heads(context)
+            .into_iter()
+            .flatten()
+            .map(|(at, number, queue)| NextTask { at, number, queue })
+            .find(|task| task.number == number)
+    }
+
+    /// The first task of each of `context`'s queues, of those the pass
+    /// lets run: when it may run (the DOM's clock), its number, its queue.
+    fn queue_heads(
+        &self,
+        context: Gc<'gc, ExecutionContext>,
+    ) -> [Option<(f64, u64, TaskQueue)>; 5] {
         let origin = context.time_origin.get();
-        let candidates = [
+        [
             self.next_due_timer(context)
                 .map(|(due, number)| (origin + due, number, TaskQueue::Timer)),
             self.next_due_native_timer(context)
@@ -146,8 +191,20 @@ impl<'gc> Cx<'_, 'gc> {
                 .map(|(at, number)| (at, number, TaskQueue::Element)),
             self.next_posted_message(context)
                 .map(|(at, number)| (at, number, TaskQueue::Message)),
-        ];
-        candidates
+        ]
+    }
+
+    /// The messages that came to `context`'s enabled ports from other
+    /// threads, numbered as tasks of this DOM's now (the host's scheduler
+    /// told of each), if they weren't.
+    pub fn number_port_messages(&self, context: Gc<'gc, ExecutionContext>) {
+        let _ = self.next_posted_message(context);
+    }
+
+    /// `context`'s task to run next by `now` (the DOM's clock), of those
+    /// the pass lets run: the earliest `(time, number)` of its queues.
+    pub fn next_task(&self, context: Gc<'gc, ExecutionContext>, now: f64) -> Option<NextTask> {
+        self.queue_heads(context)
             .into_iter()
             .flatten()
             .filter(|&(at, _, _)| at <= now)

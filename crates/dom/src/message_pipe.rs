@@ -113,9 +113,10 @@ impl PortEnd {
     }
 
     /// `message` posted to the other end: stamped by `stamp` if that end's
-    /// port is on this thread (its DOM's number for it), else when its
-    /// thread looks, which is woken. Given back, to be dropped, if the
-    /// other end is closed.
+    /// port is on this thread (its DOM's number for it) and every message
+    /// before it is stamped, else when its thread looks (which is woken),
+    /// so that the numbers go in the queue's order. Given back, to be
+    /// dropped, if the other end is closed.
     pub(crate) fn post(
         &self,
         message: SerializedMessage,
@@ -128,9 +129,10 @@ impl PortEnd {
                 return Err(message);
             }
             let here = other.home.as_ref().is_some_and(Home::is_current);
+            let in_order = other.queue.back().is_none_or(|last| last.stamp.is_some());
             other.queue.push_back(Queued {
                 message,
-                stamp: here.then(stamp),
+                stamp: (here && in_order).then(stamp),
             });
             if here {
                 None
@@ -158,6 +160,16 @@ impl PortEnd {
             queued.stamp = Some(stamp());
         }
         queue.front().and_then(|queued| queued.stamp)
+    }
+
+    /// The numbers its waiting messages were stamped with, in order (none
+    /// for those not stamped yet).
+    pub(crate) fn stamped_numbers(&self) -> Vec<u64> {
+        self.lock()[self.side]
+            .queue
+            .iter()
+            .filter_map(|queued| queued.stamp.map(|(_, number)| number))
+            .collect()
     }
 
     /// Its first message, taken.

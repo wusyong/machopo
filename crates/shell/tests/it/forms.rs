@@ -165,7 +165,10 @@ document.addEventListener('focusin', e => note(`focus:${{e.target.id}}`));
 
 /// A reset button resets its form, by the user's click or by Space, and
 /// keeps the click from a link around it; a button that neither submits
-/// nor resets (no form, or `type=button`) leaves the click to the link.
+/// nor resets (no form, or `type=button`) leaves the click to the link
+/// (each `hashchange` names the fragment its navigation went to: the input
+/// comes at once, and the second click may come before the first's
+/// `hashchange` runs, as in Chrome, whose input is picked first).
 #[test]
 fn reset_buttons_and_links() {
     let url = page(
@@ -186,7 +189,7 @@ for (const id of ['r', 'n'])
     note(`down:${{t.value}}`);
     t.value = 'x';
   }});
-onhashchange = () => note(location.hash);
+onhashchange = e => note('#' + e.newURL.split('#')[1]);
 t.value = 'x';
 document.getElementById('k').focus();
 </script>"##

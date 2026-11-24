@@ -183,10 +183,10 @@ to = '''        self.start_script_fetches();
 [[mutant]]
 name = "a task's scripts and backgrounds wait for the outer turn"
 file = "crates/renderer/src/render_thread.rs"
-from = '''    fn after_task(&mut self) {
-        self.start_image_fetches();
-        self.start_script_fetches();'''
-to = '''    fn after_task(&mut self) {'''
+from = '''        self.start_image_fetches();
+        self.start_script_fetches();
+        self.blob_urls.flush_revoked();'''
+to = '''        self.blob_urls.flush_revoked();'''
 test = ["cargo", "test", "-q", "-p", "browser"]
 
 [[mutant]]

@@ -90,15 +90,8 @@ to = '''        if self.dom_agent.any_enabled() && false {
 name = "nothing is told after a task off the channel"
 file = "crates/renderer/src/render_thread.rs"
 from = '''                self.after_task();
-                // What it queued for the DOM'''
-to = '''                // What it queued for the DOM'''
-
-[[mutant]]
-name = "nothing is told after the DOM's queued tasks"
-file = "crates/renderer/src/render_thread.rs"
-from = '''                self.run_queued_tasks();
-                self.after_task();'''
-to = '''                self.run_queued_tasks();'''
+                self.update_title();'''
+to = '''                self.update_title();'''
 
 [[mutant]]
 name = "frames made or gone don't mark the frames changed"
@@ -169,9 +162,11 @@ to = '''                Some(_) => {}'''
 [[mutant]]
 name = "the outer turn's steps leave nothing for DevTools"
 file = "crates/renderer/src/render_thread.rs"
-from = '''            self.check_network_idle();
+from = '''                engine.number_port_messages();
+            }
             self.tell_devtools_after_task();'''
-to = '''            self.check_network_idle();'''
+to = '''                engine.number_port_messages();
+            }'''
 
 [[mutant]]
 name = "the warnings go to the page's log only while a session is attached"

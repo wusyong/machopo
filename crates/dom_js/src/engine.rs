@@ -1517,6 +1517,46 @@ impl ScriptEngine for V8Engine {
         ran
     }
 
+    fn run_dom_task(&mut self, number: u64) -> bool {
+        let frames = self.frames_as_made();
+        let found = self.state().dom.read(|cx| {
+            frames
+                .iter()
+                .enumerate()
+                .find_map(|(index, (_, _, document))| {
+                    let window = cx.window_of(document.get(cx.gc))?;
+                    let task = cx.task_numbered(cx.window_context(window), number)?;
+                    // Due as the scheduler took it: by the DOM's clock too.
+                    let now = cx.dom_now().max(task.at);
+                    Some((task, index, now - cx.window_time_origin(window)))
+                })
+        });
+        let Some((task, index, now)) = found else {
+            return false;
+        };
+        let context = frames[index].1.clone();
+        let ran = self.in_context(&context, |scope| {
+            let context = scope.get_current_context();
+            crate::window::run_task(scope, context, task.queue, now)
+        });
+        if ran {
+            // Its own checkpoint ran; the rejections it left.
+            self.notify_rejected_promises();
+        }
+        ran
+    }
+
+    fn number_port_messages(&mut self) {
+        let frames = self.frames_as_made();
+        self.state().dom.read(|cx| {
+            for (_, _, document) in &frames {
+                if let Some(window) = cx.window_of(document.get(cx.gc)) {
+                    cx.number_port_messages(cx.window_context(window));
+                }
+            }
+        });
+    }
+
     fn has_resize_observations(&mut self, frame: dom_api::FrameId) -> bool {
         let Some(context) = self.frame_context(frame) else {
             return false;
@@ -1589,7 +1629,7 @@ impl ScriptEngine for V8Engine {
         if let Some((_, worker)) = self.worker_object(id) {
             self.state()
                 .dom
-                .mutate(|cx| cx.terminate_worker_object(worker.get(cx.gc)));
+                .mutate(|cx| cx.close_worker_object(worker.get(cx.gc)));
         }
     }
 

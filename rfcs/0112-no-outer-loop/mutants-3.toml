@@ -1,0 +1,144 @@
+# Stage 3's mutants: `python3 scripts/test.py mutate rfcs/0112-no-outer-loop/mutants-3.toml`.
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it"]
+timeout = 240
+
+[[mutant]]
+name = "a task queued now isn't told to the scheduler"
+file = "crates/dom/src/tasks.rs"
+from = '''        let number = self.next_task_number();
+        self.wake_for_task(number, None);'''
+to = '''        let number = self.next_task_number();'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "event_loop::"]
+
+[[mutant]]
+name = "a timer set isn't told to the scheduler"
+file = "crates/dom/src/window.rs"
+from = '''        timers.push(self.gc, timer);
+        self.wake_for_task('''
+to = '''        timers.push(self.gc, timer);
+        let _ = ('''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "event_loop::"]
+
+[[mutant]]
+name = "an interval set again isn't told to the scheduler"
+file = "crates/dom/src/window.rs"
+from = '''                timer.number.set(self.next_task_number());
+                self.wake_for_task('''
+to = '''                timer.number.set(self.next_task_number());
+                let _ = ('''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "event_loop::"]
+
+[[mutant]]
+name = "a UA timer isn't told to the scheduler"
+file = "crates/dom/src/window.rs"
+from = '''        self.wake_for_task(timer.number.get(), Some(context.time_origin.get() + due));'''
+to = '''        let _ = (timer.number.get(), Some(context.time_origin.get() + due));'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "event_loop::"]
+
+[[mutant]]
+name = "an idle callback's timeout isn't told to the scheduler"
+file = "crates/dom/src/idle.rs"
+from = '''        self.wake_for_task(callback.number.get(), Some(origin + due));'''
+to = '''        let _ = (callback.number.get(), Some(origin + due));'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "event_loop::"]
+
+[[mutant]]
+name = "a timer's due time is off the DOM's clock"
+file = "crates/dom/src/tasks.rs"
+from = '''                let at = std::time::Duration::try_from_secs_f64(at.max(0.0) / 1000.0)'''
+to = '''                let at = std::time::Duration::try_from_secs_f64(at.max(0.0) / 100.0)'''
+
+[[mutant]]
+name = "a token runs any next task of the window"
+file = "crates/dom/src/tasks.rs"
+from = '''            .find(|task| task.number == number)'''
+to = '''            .find(|task| task.number == number || true)'''
+
+[[mutant]]
+name = "the timers due are queued as a task is posted"
+file = "crates/renderer/src/task_queue.rs"
+from = '''            let sequence = state.next_sequence();
+            state.queues[queue.index()].push_back(Queued {'''
+to = '''            state.queue_due();
+            let sequence = state.next_sequence();
+            state.queues[queue.index()].push_back(Queued {'''
+
+[[mutant]]
+name = "a wait doesn't wake for the DOM's next timer"
+file = "crates/renderer/src/task_queue.rs"
+from = '''            let delayed = state.next_delayed().filter(|_| queues.has(TaskQueue::Dom));'''
+to = '''            let delayed = state.next_delayed().filter(|_| queues.has(TaskQueue::Dom) && false);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "event_loop::"]
+
+[[mutant]]
+name = "a timer due later is queued at once"
+file = "crates/renderer/src/task_queue.rs"
+from = '''            match at.filter(|at| *at > Instant::now()) {'''
+to = '''            match at.filter(|at| *at > Instant::now() && false) {'''
+
+[[mutant]]
+name = "a token's task runs by the DOM's clock alone"
+file = "crates/dom_js/src/engine.rs"
+from = '''                    let now = cx.dom_now().max(task.at);
+                    Some((task, index, now - cx.window_time_origin(window)))'''
+to = '''                    let now = cx.dom_now();
+                    Some((task, index, now - cx.window_time_origin(window)))'''
+
+[[mutant]]
+name = "the wasm engine runs no token's task"
+file = "crates/dom_wasm/src/engine.rs"
+from = '''            let task = cx.task_numbered(cx.window_context(window), number)?;'''
+to = '''            let task = cx.task_numbered(cx.window_context(window), number).filter(|_| false)?;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "wasm_documents::"]
+
+[[mutant]]
+name = "a port's message is stamped ahead of one before it"
+file = "crates/dom/src/message_pipe.rs"
+from = '''                stamp: (here && in_order).then(stamp),'''
+to = '''                stamp: here.then(stamp),'''
+
+[[mutant]]
+name = "a port enabled isn't told of its messages stamped before"
+file = "crates/dom/src/message.rs"
+from = '''            {
+                self.wake_for_task(number, None);
+            }'''
+to = '''            {
+                let _ = number;
+            }'''
+
+[[mutant]]
+name = "the ports aren't looked at after a task"
+file = "crates/renderer/src/render_thread.rs"
+from = '''    fn after_task(&mut self) {
+        // The messages its ports got, numbered as the DOM's tasks (a port
+        // it started may have had them).
+        if let Some(engine) = &mut self.engine {
+            engine.number_port_messages();
+        }'''
+to = '''    fn after_task(&mut self) {'''
+
+[[mutant]]
+name = "a worker that closed itself is terminated"
+file = "crates/dom_js/src/engine.rs"
+from = '''                .mutate(|cx| cx.close_worker_object(worker.get(cx.gc)));'''
+to = '''                .mutate(|cx| cx.terminate_worker_object(worker.get(cx.gc)));'''
+
+[[mutant]]
+name = "a worker's error before it closed is dropped"
+file = "crates/dom_api/src/worker.rs"
+from = '''        if cx.worker_messages_dropped(worker) {'''
+to = '''        if cx.worker_terminated(worker) {'''
+
+[[mutant]]
+name = "a self-closed worker still takes messages"
+file = "crates/dom/src/worker.rs"
+from = '''        data.terminated.get() || data.closed.get()'''
+to = '''        data.terminated.get()'''
+
+[[mutant]]
+name = "the engine's guests wait for nothing"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            .and_then(|engine| engine.until_due_guests());'''
+to = '''            .and_then(|engine| engine.until_due_guests().filter(|_| false));'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "wasm_documents::"]

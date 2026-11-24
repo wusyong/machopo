@@ -649,10 +649,6 @@ impl RenderThread {
                     break 'run;
                 }
                 self.after_task();
-                // What it queued for the DOM (input's `hashchange`) runs
-                // before the next task comes off the channel.
-                self.run_queued_tasks();
-                self.after_task();
                 self.update_title();
                 next = self.scheduler.try_next(TaskQueues::ALL);
             }
@@ -670,9 +666,9 @@ impl RenderThread {
             // The child frames' `srcdoc` and `about:` documents, each a
             // task of its own.
             self.run_child_commits();
-            // The DOM's tasks that are due (timers, element tasks,
-            // messages), in the order they were queued.
-            self.run_due_tasks();
+            // The engine's guests whose waits are over (a wasm guest's: the
+            // DOM's tasks are the scheduler's, `MainThreadTask::DomTask`).
+            self.run_due_guests();
             // The parsers that let the rest run parse on, a run each.
             self.parse_on();
             self.start_image_fetches();
@@ -690,6 +686,9 @@ impl RenderThread {
             // steps above left for it, as after a task (they aren't the
             // scheduler's tasks).
             self.check_network_idle();
+            if let Some(engine) = &mut self.engine {
+                engine.number_port_messages();
+            }
             self.tell_devtools_after_task();
             // The sheets DevTools' `CSS` wants the texts of, asked for.
             self.start_css_refetches();
@@ -747,6 +746,11 @@ impl RenderThread {
     /// found), then the blob URLs it revoked, after those loads (each got
     /// its blob); then what DevTools is to hear of.
     fn after_task(&mut self) {
+        // The messages its ports got, numbered as the DOM's tasks (a port
+        // it started may have had them).
+        if let Some(engine) = &mut self.engine {
+            engine.number_port_messages();
+        }
         self.start_image_fetches();
         self.start_script_fetches();
         self.blob_urls.flush_revoked();
@@ -813,8 +817,13 @@ impl RenderThread {
                 self.worker_event(id, event);
                 true
             }
-            // Run with the DOM's tasks, as the loop next does.
+            // Each a task of the DOM's, numbered as this one ends
+            // (`after_task`).
             MainThreadTask::PortMessages => true,
+            MainThreadTask::DomTask { number } => {
+                self.run_dom_task(number);
+                true
+            }
             MainThreadTask::NavigationBody {
                 frame,
                 navigation_id,
@@ -1497,11 +1506,12 @@ impl RenderThread {
         if self.parse_due() {
             return Some(Duration::ZERO);
         }
-        // The document's timers.
+        // The engine's guests' waits (the DOM's timers wake the scheduler
+        // themselves, `dom_task_waker`).
         let next = self
             .engine
             .as_mut()
-            .and_then(|engine| engine.until_next_timer());
+            .and_then(|engine| engine.until_due_guests());
         sooner(
             sooner(sooner(self.until_idle_or_intersections(), caret), idle),
             next,

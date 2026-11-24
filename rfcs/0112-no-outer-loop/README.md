@@ -1,7 +1,7 @@
 # RFC 0112：拿掉 event loop 的外圈
 
 - 開始日期：2026-11-24
-- 狀態：🚧 已排程：2026-11-24（第 0、1 階段做完；第 2 段待審查）
+- 狀態：🚧 已排程：2026-11-24（第 0 到 2 階段做完；第 3 段待審查）
 - 細節：`details.md`；進度：`progress.md`
 
 ## 摘要
@@ -146,6 +146,17 @@ parser 的續跑和子 frame 的 commit 是 renderer 自己的工作，直接排
    - 做法：parser 的 script（`start_script_fetches`）和 style 找到的背景圖（`start_image_fetches`）的請求在每個 task 之後就經過 load sink 送出（原本等外圈）；Chrome 在 `ScriptLoader::PrepareScript`、style recalc 的 `LoadPendingImages` 裡同步發 fetch（`details.md` 的盤點），差別只在同一個 task 之內，外面看不出來。接著 `flush_revoked`（每個 task 要的載入都已經送出），再結束第 11 條的取消窗口（Chrome 的位置），最後是 DevTools 的事件。
    - 推翻第 4 條的例外：`flush_revoked` 不再留給「導覽帶著解析好的 blob」那一份，改成 task 之後的觀察者；那一份要做的只剩導覽帶 `BlobURLToken`。
    - 不選取消窗口暫時在外圈的 `flush_revoked` 之後結束（A）：第 2 段比較小，但這兩種請求改成當場送之前，renderer 發起的導覽的 commit 都要等外圈，和 Chrome 不同。不選窗口在 task 之後結束、撤銷照舊在外圈（C）：導覽到 blob URL 立刻撤銷時，外圈跑到之前 browser 還拿得到它。
+
+13. **第 3 段：一個記號跑它帶著的那一個 DOM task**（2026-11-24，使用者決定；A）：DOM 排一個 task 時送的記號帶著它是哪一個（佇列的種類、window、DOM 的編號），scheduler 輪到時只跑那一個，之後一次 microtask checkpoint 和 task 之後的觀察者；已經取消的（`clearTimeout`、文件不在了）什麼都不做。對照 Chrome：每個 `PostTask` 是自己的 task，取消的靠 weak pointer 在輪到時略過；timer 到期時才拿到 enqueue order，所以設 timer 之後、到期之前才排的 element task 在它前面。不選記號只說「DOM 有 task」、輪到時跑 DOM 最早的一個（B）：DOM 給 timer 的編號在設定時，會跑在那個 element task 前面，順序變成兩套。
+   - 實作時定下、發現的（2026-11-24，使用者同意這幾項的做法）：記號帶 DOM 的 task 編號（每種 task 都從同一個計數器拿，interval 重新排時拿新的）；engine 找出最前面是那個編號的 queue（`Cx::task_numbered`），照 scheduler 交出的時間跑它（DOM 的時鐘換算回來差一點也照樣跑），不在了就什麼都不做。
+   - 到期的 timer 在 scheduler 挑下一個 task 時才排進 queue，不是有 task post 進來時（原型是後者）：Blink 的 `SequenceManager` 在 `SelectNextTask` 時搬到期的 delayed task；跑過 timer 時間的 task 裡 `postMessage` 的訊息在 timer 前面（Chrome for Testing 152 跑 5 次都是 `message,timer`，`event_loop::a_timer_takes_its_turn_as_it_is_due`）。
+   - port 的訊息照佇列的順序拿編號：前面還有沒編號的（轉送時清掉了，`set_home`），後來的也先不編，等 task 之後掃描時一起編（`number_port_messages`）；port 啟用、加進 window 的清單時，替已經編號的重送記號（記號輪到時找不到它們）。WPT 的 `webmessaging/` 抓到的。
+   - worker 自己關閉（`close()`）時，`Worker` 不再收東西，但它之前送的訊息和錯誤照樣送到；只有頁面的 `terminate()` 丟掉排著的（`Cx::close_worker_object`、`worker_messages_dropped`）。原本兩者一樣，是靠 loop 在處理 `Closed` 之前先跑完排著的 DOM task。WPT 的 `webmessaging/message-channels/worker*`、`workers/WorkerGlobalScope-close.html` 抓到的。
+   - wasm engine 的 guest 的等待不是 DOM 的 task，照舊由 loop 叫醒、在外圈跑（`until_due_guests`、`run_due_guests`），第 5 段拿掉外圈時一起處理。
+   - `shell` 的 `forms::reset_buttons_and_links` 改成讀 `hashchange` 的 `newURL`：測試一次送進兩個 click，第二個現在比第一個的 `hashchange` 先跑（照 scheduler 的先後；Chrome 的 input 優先度更高，同樣先跑，沒有在 Chrome 上確認）。
+
+14. **第 3 段：主 thread 拿掉「一輪」的機制、外圈的 `run_due_tasks` 和內圈的 `run_queued_tasks`**（2026-11-24，使用者決定；A）：每個 DOM task 是 scheduler 的一個 task，畫面和輸入照 scheduler 的先後插進去（Chrome 沒有「一輪」：互相 `postMessage` 的頁照 enqueue order 和其他 task 交錯）。worker 的 loop 不經過這個 scheduler，照舊用一輪的機制（`begin_task_pass`）。不選留著外圈的當保險（B）：DOM 的 task 有兩條路跑，順序看哪條先到，第 3 條的「順序只在 scheduler 一個地方決定」不成立。
+15. **第 3 段：scheduler 裡一個 `TaskQueue::Dom`**（2026-11-24，使用者決定；A）：跨 queue 照編號挑，DOM 的 task 之間、和其他來源之間都照排進來的先後；script 停在斷點時不取它。對照 Chrome：每個 frame、每種 task type 一個 queue，同一個優先度的照 enqueue order 挑；分開主要是為了背景分頁的節流，machopo 還沒有。不選照 task type 分（B）：現在沒有東西需要分開。
 
 ## 待決定
 

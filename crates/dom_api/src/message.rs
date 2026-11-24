@@ -405,9 +405,12 @@ pub fn run_posted_message<H: ScriptHost>(host: &mut H, global: &GlobalRoot) -> b
             return false;
         };
         // For a `Worker` terminated meanwhile: dropped (HTML's
-        // `terminate()` empties its port's message queue).
+        // `terminate()` empties its port's message queue); not for one whose
+        // worker closed itself after posting it.
         let terminated = host.read(|cx| match target.get(cx.gc) {
-            TargetRef::EventTarget(worker) => cx.is_worker(worker) && cx.worker_terminated(worker),
+            TargetRef::EventTarget(worker) => {
+                cx.is_worker(worker) && cx.worker_messages_dropped(worker)
+            }
             _ => false,
         });
         if terminated {

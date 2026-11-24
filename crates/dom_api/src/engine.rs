@@ -696,6 +696,34 @@ pub trait ScriptEngine: ParserHost {
     /// that it ends. Whether any ran.
     fn run_due_tasks(&mut self) -> bool;
 
+    /// Runs the DOM's task numbered `number`, the one a token of the
+    /// host's scheduler stands for (`Dom::set_task_waker`), in its window's
+    /// realm with its microtask checkpoint: if it is still next in its
+    /// queue (`Cx::task_numbered`); its time come, as the scheduler took
+    /// it. Whether it ran. Nothing by default: an engine whose DOM tells
+    /// no scheduler.
+    fn run_dom_task(&mut self, number: u64) -> bool {
+        let _ = number;
+        false
+    }
+
+    /// The messages that came to the windows' enabled ports from other
+    /// threads, numbered as the DOM's tasks (each told to the host's
+    /// scheduler) if they weren't (`Cx::number_port_messages`).
+    fn number_port_messages(&mut self) {}
+
+    /// How long until a guest of the engine's own waits no more (a wasm
+    /// guest's wait, which isn't a task of the DOM's); none with none.
+    fn until_due_guests(&mut self) -> Option<std::time::Duration> {
+        None
+    }
+
+    /// The guests whose waits are over (`until_due_guests`), run. Whether
+    /// one ran.
+    fn run_due_guests(&mut self) -> bool {
+        false
+    }
+
     /// Whether a frame's window has an idle callback waiting
     /// (`requestIdleCallback`'s); and one it may run in the idle period
     /// running.
@@ -845,7 +873,8 @@ pub trait ScriptEngine: ParserHost {
     }
 
     /// The worker numbered `id` closed itself (`close()`): its `Worker`
-    /// gets nothing more of it, and isn't kept alive by it any more.
+    /// gets nothing more of it (what it posted before still comes, in its
+    /// tasks' turn), and isn't kept alive by it any more.
     fn worker_closed(&mut self, id: u64) {
         let _ = id;
     }

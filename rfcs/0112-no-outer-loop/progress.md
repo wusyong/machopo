@@ -21,7 +21,12 @@
 | 2d. 取消窗口（第 11、12 條）：發起導覽的 task 結束前，browser 不送它的 commit | 做完，待審查 | 2026-11-24 |
 | 2e. iframe 的 `src`、`srcdoc` 的導覽也由 hook 當場送；frame 在載入中由 engine 當場告訴 DOM | 做完，待審查 | 2026-11-24 |
 | 2f. 文件、mutation test | 做完，待審查 | 2026-11-24 |
-| 3. DOM 的 task 是 scheduler 的 task | | |
+| 3. DOM 的 task 是 scheduler 的 task（第 3、13 到 15 條） | 做完，待審查 | 2026-11-24 |
+| 3a. 必壞的測試：通道一直有 task 時 timer 照樣按時間跑（第 0 階段的原型的）；設 timer 之後、跑過它的時間的 task 裡 post 的訊息在 timer 前面 | 做完，待審查 | 2026-11-24 |
+| 3b. `dom` 的 `TaskWaker`：排 task 時送帶著它是哪一個的記號，timer、UA 的 timer、idle callback 的 timeout 送到期的時間 | 做完，待審查 | 2026-11-24 |
+| 3c. scheduler 的 `TaskQueue::Dom` 和 delayed 的記號；engine 照記號跑一個 task | 做完，待審查 | 2026-11-24 |
+| 3d. 主 thread 拿掉一輪的機制、`run_due_tasks`、`run_queued_tasks`；`until_next_due` 不問 DOM 的 timer | 做完，待審查 | 2026-11-24 |
+| 3e. 文件、mutation test | 做完，待審查 | 2026-11-24 |
 | 4. renderer 自己的工作排成 task | | |
 | 5. 剩下的步驟，拿掉外圈 | | |
 
@@ -81,4 +86,24 @@
 **相關 crate 的測試**：`dom_api`、`dom_js`、`dom_wasm`、`renderer`、`browser`、`shell`、`protocol` 都通過。
 
 **階段結束的檢查**：`cargo test --workspace` 通過（60 個 binary，4709 個通過、1 個 ignored）；`cargo fmt --check` 和 `cargo clippy --workspace --all-targets -- -D warnings` 通過；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs` 通過（`boundary` 的例外加了新的 thread-local 計數器 `NEXT_BEGIN_NAVIGATION_ID`，和請求的編號同一類）。
+
+### 第 3 階段（2026-11-24，Linux：Fedora 45、debug build，`937061c` 之上）
+
+**必壞的測試**（`shell` 的 `event_loop`）：
+- `a_timer_runs_while_responses_keep_coming`（第 0 階段的原型的）：原本的程式上壞（`the timer ran after -1`），3d 之後過。
+- `a_timer_takes_its_turn_as_it_is_due`（`setTimeout(f, 30)` 之後忙 60 ms 再 `postMessage`，訊息在 timer 前面）：原本的程式上壞（`timer,message`）；Chrome for Testing 152 跑 5 次都是 `message,timer`。3d 的第一版照原型在 post 時把到期的 timer 排進去，還是壞，改成挑下一個 task 時才排之後過（第 13 條）。
+
+**過程中發現、修掉的**：
+- WPT 的 `webmessaging/`：port 轉送之後的訊息卡住（4 個逾時）。一個是送給還沒啟用的 port 的訊息當場拿了編號，記號輪到時 port 不在清單裡，之後沒有記號了：port 啟用時重送。另一個是轉送清掉編號的訊息比後來的訊息晚拿編號，queue 的第一個不是記號的那個：同一個 port 照佇列順序拿編號。用暫時的 shell 測試印出順序才找到（`t0,t1,got1`，少了 2、3）。
+- WPT 的 `webmessaging/message-channels/worker*`、`workers/WorkerGlobalScope-close.html`：worker 自己關閉時，它之前送的訊息和錯誤被丟掉（以前靠 loop 在處理 `Closed` 之前先跑完排著的 task）。
+- `shell` 的 `forms::reset_buttons_and_links` 改成讀 `hashchange` 的 `newURL`（第 13 條）。
+- 第一輪 mutation test 的上限設 1800 秒，第一個 mutant（排的 task 不送記號）卡滿 30 分鐘才算 hung：停掉、`--restore` 還原，上限改成 240 秒（最慢的正常的一輪含重新編譯約 190 秒），會讓測試一直等的 6 個 mutant 只跑 `event_loop::`（測試自己 30 秒就失敗）。
+
+**WPT**（`html/webappapis/timers/`、`html/webappapis/scripting/event-loops/`、`webmessaging/`、`workers/`、`html/browsers/history/`、`html/semantics/embedded-content/the-iframe-element/`、`html/syntax/parsing/`，632 個）：沒有新的失敗；`negative-settimeout.any.worker.html` 和 `workers/baseurl/alpha/xhr-in-moduleworker.html` 是 OK、預期 ERROR，在 `937061c` 上也一樣（原本的預期結果就舊了，沒改）；`same-hash.html` 是標著的 known intermittent。
+
+**mutation test**（`mutants-3.toml`，19 個）：第一輪 9 個抓到、11 個沒抓到；補了 `event_loop` 的 6 個測試（閒著的頁面的 timer、interval、`AbortSignal.timeout()`、忙著的頁面的 idle callback 的 timeout、啟用之前送到 port 的訊息、worker 關閉時丟的錯誤），拿掉 `PortMessages` 裡多餘的編號（它本身是 task，`after_task` 會掃描）和它的 mutant，重跑抓到 5 個。沒抓到的（記進 `docs/test-gaps.md`）：只看 DOM 自己的時鐘（造不出兩個時鐘的那一點差）、worker 關閉時丟的錯誤（`shell` 裡錯誤總是先跑；WPT 的 `WorkerGlobalScope-close.html` 抓得到）、wasm guest 的等待不叫醒 loop（畫面的 frame 照樣叫醒它）；等價的：task 之後不掃描 port（外圈也掃描）、關閉了的 worker 照樣收訊息（它的 thread 不跑了）。另外 `event_loop` 的 `a_moved_ports_messages_come_in_order`、`what_a_worker_posted_before_it_closed_comes` 把 WPT 抓到的兩件事寫成 shell 的測試。第 1、2 段的 spec 跟著更新了對不上的 `from`，第 1 段拿掉「DOM 排著的 task 之後不送」（那一段程式拿掉了）。
+
+**相關 crate 的測試**：`dom`、`dom_api`、`dom_js`、`dom_wasm`、`renderer`、`browser`、`shell` 都通過。
+
+**階段結束的檢查**：`cargo test --workspace` 通過（60 個 binary，4719 個通過、1 個 ignored）；`cargo fmt --check` 和 `cargo clippy --workspace --all-targets -- -D warnings` 通過；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs` 通過。
 

@@ -1129,6 +1129,49 @@ impl ScriptEngine for WasmEngine {
         ran
     }
 
+    fn run_dom_task(&mut self, number: u64) -> bool {
+        let Some(window) = self.window() else {
+            return false;
+        };
+        let found = self.dom().read(|cx| {
+            let window = window.get(cx.gc);
+            let task = cx.task_numbered(cx.window_context(window), number)?;
+            // Due as the scheduler took it: by the DOM's clock too.
+            let now = cx.dom_now().max(task.at);
+            Some((task, now - cx.window_time_origin(window)))
+        });
+        let Some((task, now)) = found else {
+            return false;
+        };
+        dom_api::run_task(
+            &mut self.host(),
+            &dom::GlobalRoot::Window(window),
+            task.queue,
+            now,
+        )
+    }
+
+    fn number_port_messages(&mut self) {
+        let Some(window) = self.window() else {
+            return;
+        };
+        self.dom()
+            .read(|cx| cx.number_port_messages(cx.window_context(window.get(cx.gc))));
+    }
+
+    fn until_due_guests(&mut self) -> Option<Duration> {
+        let now = (self.clock)();
+        self.scripts
+            .iter()
+            .filter_map(|script| script.deadline)
+            .min()
+            .map(|deadline| Duration::from_nanos(deadline.saturating_sub(now)))
+    }
+
+    fn run_due_guests(&mut self) -> bool {
+        WasmEngine::run_due_guests(self)
+    }
+
     fn has_idle_callbacks(&mut self) -> bool {
         false
     }

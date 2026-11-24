@@ -215,7 +215,7 @@ pub use storage::{
 pub use style_sheet::{CssStyleSheet, SheetContents, SheetMedia};
 pub use svg::{SvgAnimatedString, SvgMatrix, SvgPoint, SvgRect};
 pub use svg_use::MAX_COPIES;
-pub use tasks::{NextTask, TaskQueue};
+pub use tasks::{NextTask, TaskQueue, TaskWaker};
 pub use text_control::{SelectionDirection, SelectionMode, TextArea, TextSelection};
 pub use traversal::{NodeIterator, Traversal, TraversalRoot, TreeWalker};
 pub use tree::DOCUMENT_POSITION_FOLLOWING;
@@ -909,6 +909,9 @@ struct Changes {
     /// What wakes this DOM's thread for its ports' messages from other
     /// threads (`Dom::set_port_waker`).
     port_waker: Option<message_pipe::PortWaker>,
+    /// What tells the host's scheduler of each task the DOM numbers
+    /// (`Dom::set_task_waker`).
+    task_waker: Option<tasks::TaskWaker>,
     /// The documents whose window's `load` task ran, until the host takes
     /// them (`Dom::take_loaded_documents`).
     loaded_documents: Cell<Vec<NodeId>>,
@@ -1043,6 +1046,16 @@ impl Dom {
     /// whose ports stay on its thread needs none.
     pub fn set_port_waker(&mut self, waker: message_pipe::PortWaker) {
         self.changes.port_waker = Some(waker);
+    }
+
+    /// What tells the host's scheduler of each task the DOM numbers, as it
+    /// numbers it: its number, and when it is due (none: now), as Blink
+    /// posts each to its frame's task runner (a timer's as a delayed
+    /// task). The host runs each in its turn among its own
+    /// (`Cx::task_numbered`). A DOM whose host runs its tasks in passes
+    /// (`begin_task_pass`) needs none.
+    pub fn set_task_waker(&mut self, waker: tasks::TaskWaker) {
+        self.changes.task_waker = Some(waker);
     }
 
     /// Runs an operation: a binding's call. The heap may collect first.

@@ -17,6 +17,10 @@ pub struct WorkerObjectData {
     /// Whether it was terminated (`terminate()`): nothing more goes to its
     /// worker, nor comes from it.
     terminated: Cell<bool>,
+    /// Whether its worker closed itself (`close()` in it): nothing more
+    /// goes to it, but what it posted before still comes (the tasks queued
+    /// for them run in their turn).
+    closed: Cell<bool>,
     /// What its worker threw, in order, each waiting for its task.
     errors: LocalExternal<Cell<Vec<ErrorInfo>>>,
 }
@@ -36,6 +40,7 @@ impl<'gc> Cx<'_, 'gc> {
             WorkerObjectDataInit {
                 id: Cell::new(id),
                 terminated: Cell::new(false),
+                closed: Cell::new(false),
                 errors: LocalExternal::new(Cell::new(Vec::new())),
             },
         );
@@ -94,8 +99,18 @@ impl<'gc> Cx<'_, 'gc> {
         self.worker_data(worker).id.get()
     }
 
-    /// Whether `worker` was terminated.
+    /// Whether `worker` was terminated, or its worker closed itself:
+    /// nothing goes to it any more.
     pub fn worker_terminated(&self, worker: Gc<'gc, EventTargetImpl>) -> bool {
+        let data = self.worker_data(worker);
+        data.terminated.get() || data.closed.get()
+    }
+
+    /// Whether what `worker`'s worker posted (its messages, its errors)
+    /// and hasn't come yet is dropped: it was terminated (HTML's
+    /// `terminate()` empties its port's message queue), not closed by its
+    /// worker.
+    pub fn worker_messages_dropped(&self, worker: Gc<'gc, EventTargetImpl>) -> bool {
         self.worker_data(worker).terminated.get()
     }
 
@@ -103,6 +118,18 @@ impl<'gc> Cx<'_, 'gc> {
     /// its worker comes to it).
     pub fn terminate_worker_object(&self, worker: Gc<'gc, EventTargetImpl>) {
         self.worker_data(worker).terminated.set(true);
+        self.forget_worker_object(worker);
+    }
+
+    /// `worker`'s worker closed itself: nothing more goes to it, what it
+    /// posted before still comes (`worker_messages_dropped`).
+    pub fn close_worker_object(&self, worker: Gc<'gc, EventTargetImpl>) {
+        self.worker_data(worker).closed.set(true);
+        self.forget_worker_object(worker);
+    }
+
+    /// `worker` out of its realm's workers.
+    fn forget_worker_object(&self, worker: Gc<'gc, EventTargetImpl>) {
         let workers = self
             .target_context(crate::TargetRef::EventTarget(worker))
             .and_then(|context| context.workers.get(self.gc));

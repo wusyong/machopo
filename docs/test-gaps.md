@@ -210,6 +210,12 @@
 
 - 拿掉之後沒有測試失敗：parser 的 script（擋住 parser 的和 `async` 的）在那個 task 裡就由別的路送出了；style 在畫 frame 的 task 裡找到的背景圖可能只靠它送出（之後的 blob URL 撤銷要在它之後），但畫 frame 的時機不固定，沒有穩定的測試。這兩種請求改成在 style recalc、parser 的呼叫裡當場送時（和 Chromium 的 `LoadPendingImages`、`ScriptLoader::PrepareScript` 一樣），拿掉這兩個呼叫；在那之前補背景圖的測試要先有固定畫 frame 時機的辦法。
 
+**DOM 的 task 是 scheduler 的 task（`renderer` 的 `task_queue.rs`、`dom` 的 `tasks.rs`、engine 的 `run_dom_task`）**
+
+- 記號輪到時照 scheduler 交出的時間跑（`cx.dom_now().max(task.at)`），不只看 DOM 自己的時鐘：只在兩個時鐘的換算差了一點（scheduler 的 `Instant` 比 DOM 算的到期時間早幾微秒）時才有差別，那時只看 DOM 的時鐘會讓 timer 沒跑、它的記號用掉，之後再也不跑；測試造不出那一點差。靠審查。
+- worker 自己關閉時，它在關閉的那個 task 裡丟的錯誤照樣送到 `Worker`（`fire_worker_error` 看 `worker_messages_dropped`，不看 `worker_terminated`）：`shell` 的測試裡錯誤的 task 總是在 `Closed` 處理之前就跑了，看不出差別；WPT 的 `workers/WorkerGlobalScope-close.html` 的時序抓得到（CI 每天跑）。
+- wasm engine 的 guest 的等待叫醒 loop（`until_due_guests`）：`wasm_documents` 的測試裡畫面的 frame 照樣叫醒它，拿掉之後沒有測試失敗。第 5 段把 guest 的等待也排成 scheduler 的 task 時補。
+
 ## 沒有計數守著的優化
 
 下面這些捷徑被拿掉時結果照樣對（debug build 的交叉檢查只比結果），只是多做事，沒有測試會失敗。2026-10-20 逐項讀過測試盤點：其他的優化（style 的 invalidation、MPC、祖先的 Bloom filter、增量的 pre-paint 和 paint、raster invalidation、tile 的跳過、root 的計數、parse 的 fast path……）都有 debug build 的計數（各 crate 的 `*_for_testing`、`layout` 的 `BoxTreeUpdate` 和 `LayoutUpdate`）和斷言它的測試。改到這些地方時特別注意；量到變慢時（Speedometer 用 git 二分，`--sample` 看多出來的函式）先對照這份。之後照下面的順序補計數，補了就從這裡刪掉。
@@ -273,6 +279,11 @@
 ## 等價、不用處理的 mutation
 
 弄壞之後行為完全一樣，記在這裡免得重複追查。
+
+**DOM 的 task 是 scheduler 的 task（`render_thread.rs` 的 `after_task`、`dom` 的 `worker.rs`）**
+
+- 每個 task 之後不掃描 port 的訊息（`number_port_messages`）：loop 的外圈最後也掃描，蓋過了它（外圈的步驟還不是 scheduler 的 task）；拿掉外圈之後就只靠它。
+- 自己關閉了的 worker 照樣收頁面送的訊息（`worker_terminated` 不看 `closed`）：它的 thread 已經不跑了，送過去的東西什麼都不會發生。
 
 **renderer 每個 task 之後（`render_thread.rs` 的 `after_task`）**
 
