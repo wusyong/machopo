@@ -812,6 +812,18 @@ pub trait ScriptEngine: ParserHost {
     /// any ran (the host performs a checkpoint after them).
     fn run_platform_tasks(&mut self) -> bool;
 
+    /// What wakes the host's thread for the engine's platform tasks (none
+    /// is due: now; else the instant the next is), as they are posted from
+    /// any thread: the host runs them in a task of its own
+    /// (`run_platform_tasks`). Nothing by default: an engine whose
+    /// platform's tasks the host's loop looks for itself.
+    fn set_platform_task_waker(
+        &mut self,
+        waker: std::sync::Arc<dyn Fn(Option<std::time::Instant>) + Send + Sync>,
+    ) {
+        let _ = waker;
+    }
+
     /// Where `console` messages go.
     fn set_console_sink(&mut self, sink: ConsoleSink);
 
@@ -983,6 +995,21 @@ pub trait WorkerEngine {
     /// How long until it has a task to run (none with none: it waits for a
     /// message).
     fn until_next_task(&mut self) -> Option<std::time::Duration>;
+
+    /// Runs its engine's platform tasks that are due (V8's foreground
+    /// tasks), from its outermost loop: whether any ran. None by default.
+    fn run_platform_tasks(&mut self) -> bool {
+        false
+    }
+
+    /// What wakes its thread for its engine's platform tasks, as they are
+    /// posted from any thread (`ScriptEngine::set_platform_task_waker`).
+    fn set_platform_task_waker(
+        &mut self,
+        waker: std::sync::Arc<dyn Fn(Option<std::time::Instant>) + Send + Sync>,
+    ) {
+        let _ = waker;
+    }
 
     /// Runs its tasks due now, each with its microtask checkpoint, in the
     /// DOM's order (`dom::Cx::next_task`). Whether one ran.

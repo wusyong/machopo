@@ -48,6 +48,9 @@ pub(crate) enum MainThreadTask {
     /// The DOM's task numbered `number` (`dom::TaskWaker`): queued as the
     /// DOM numbered it, or as it came due (a timer's).
     DomTask { number: u64 },
+    /// The renderer's own work, posted by the main thread (`post_internal`,
+    /// `post_internal_at`).
+    Internal(InternalTask),
     /// From the network service's thread: the body of the document
     /// navigation `navigation_id` sent `frame` to commit has more in its
     /// pipe, or its pipe is over (the pipe's watcher, Blink's
@@ -56,6 +59,36 @@ pub(crate) enum MainThreadTask {
         frame: protocol::FrameToken,
         navigation_id: u64,
     },
+}
+
+/// The renderer's own work that is a task of its own (Blink's internal
+/// task types, kInternal* and kNetworking): what it does checks, as it
+/// runs, whether it is still to be done (one cancelled or moved meanwhile
+/// does nothing, as Blink's cancelled tasks are skipped).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InternalTask {
+    /// A parser that gave way parses on (Blink's `SchedulePumpTokenizer`).
+    ParseOn { frame: dom_api::FrameId },
+    /// A child frame's document the renderer commits itself (a
+    /// `javascript:` URL's).
+    ChildCommits,
+    /// The parser's scripts that wait for a sheet that blocks scripts, tried
+    /// again (Blink's `DidLoadAllScriptBlockingResources` posts it).
+    RetryBlockedScripts,
+    /// The caret blinks (Blink's `FrameCaret` timer).
+    CaretBlink,
+    /// The intersection observers' `delay` is up: a frame for them (Blink's
+    /// `ScheduleDelayedIntersection`).
+    Intersections,
+    /// A child frame's iframe's `load`, put off after a navigation within
+    /// its cross-origin document (Blink's 100 ms `DispatchLoad`).
+    OwnerLoads,
+    /// The main frame's new document's delay to be drawn is up
+    /// (`RenderWidgetHostImpl`'s `TimeoutMonitor`).
+    NewContentTimeout,
+    /// The engine's platform tasks that are due (V8's foreground tasks:
+    /// Blink's `kMainThreadTaskQueueV8`).
+    PlatformTasks,
 }
 
 /// The scheduler's task queues (Blink's task queues by type), each in the
@@ -81,10 +114,13 @@ pub(crate) enum TaskQueue {
     /// element tasks, messages): Blink's frame task queues by task type,
     /// in one, of the same priority.
     Dom,
+    /// The renderer's own work (`InternalTask`): Blink's internal and
+    /// networking task queues, in one, of the same priority.
+    Internal,
 }
 
 impl TaskQueue {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 8] = [
         Self::Browser,
         Self::Rendering,
         Self::Input,
@@ -92,6 +128,7 @@ impl TaskQueue {
         Self::Canvas,
         Self::Worker,
         Self::Dom,
+        Self::Internal,
     ];
 
     fn index(self) -> usize {
@@ -105,7 +142,7 @@ pub(crate) struct TaskQueues(u8);
 
 impl TaskQueues {
     /// The event loop's: every queue.
-    pub(crate) const ALL: Self = Self(0b111_1111);
+    pub(crate) const ALL: Self = Self(0b1111_1111);
     /// DevTools' alone.
     pub(crate) const DEVTOOLS: Self = Self(1 << TaskQueue::DevTools as u8);
     /// The rendering's alone.
@@ -131,12 +168,13 @@ struct Queued {
 
 #[derive(Default)]
 struct State {
-    queues: [VecDeque<Queued>; 7],
-    /// The DOM's tasks not due yet (its timers'), by when they are due and
-    /// their numbers: each queued in `TaskQueue::Dom` as it comes due,
-    /// numbered then (Blink's delayed tasks take their place in the order
-    /// as they become ready).
-    delayed: std::collections::BinaryHeap<std::cmp::Reverse<(Instant, u64)>>,
+    queues: [VecDeque<Queued>; 8],
+    /// The tasks not due yet (the DOM's timers', the renderer's own):
+    /// each queued as it comes due, numbered then (Blink's delayed tasks
+    /// take their place in the order as they become ready).
+    delayed: std::collections::BinaryHeap<std::cmp::Reverse<Delayed>>,
+    /// The next delayed task's place among those due at once, from 1.
+    delayed_order: u64,
     /// The next task's number, from 1: 0 is what was put back first
     /// (`put_back`).
     next: u64,
@@ -148,6 +186,35 @@ struct State {
     /// The browser said to shut down: a call waiting gives up, for the
     /// main thread to get to it.
     shutting_down: bool,
+}
+
+/// A task posted to come due at `at`, into `queue`; `order` the order it
+/// was posted in, for those due at once.
+struct Delayed {
+    at: Instant,
+    order: u64,
+    queue: TaskQueue,
+    task: MainThreadTask,
+}
+
+impl PartialEq for Delayed {
+    fn eq(&self, other: &Self) -> bool {
+        (self.at, self.order) == (other.at, other.order)
+    }
+}
+
+impl Eq for Delayed {}
+
+impl PartialOrd for Delayed {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Delayed {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (self.at, self.order).cmp(&(other.at, other.order))
+    }
 }
 
 impl State {
@@ -170,22 +237,46 @@ impl State {
     /// task that ran past a timer's time is before the timer).
     fn queue_due(&mut self) {
         let now = Instant::now();
-        while let Some(&std::cmp::Reverse((at, number))) = self.delayed.peek()
-            && at <= now
+        while self
+            .delayed
+            .peek()
+            .is_some_and(|std::cmp::Reverse(delayed)| delayed.at <= now)
         {
-            self.delayed.pop();
+            let Some(std::cmp::Reverse(delayed)) = self.delayed.pop() else {
+                break;
+            };
             let sequence = self.next_sequence();
-            self.queues[TaskQueue::Dom.index()].push_back(Queued {
+            self.queues[delayed.queue.index()].push_back(Queued {
                 sequence,
-                task: MainThreadTask::DomTask { number },
+                task: delayed.task,
                 interrupt: false,
             });
         }
     }
 
-    /// When the first of the DOM's tasks not due yet is.
+    /// When the first of the tasks not due yet is.
     fn next_delayed(&self) -> Option<Instant> {
-        self.delayed.peek().map(|std::cmp::Reverse((at, _))| *at)
+        self.delayed
+            .peek()
+            .map(|std::cmp::Reverse(delayed)| delayed.at)
+    }
+
+    /// `task` into `queue` as `at` comes.
+    fn push_delayed(&mut self, at: Instant, queue: TaskQueue, task: MainThreadTask) {
+        #[expect(
+            clippy::arithmetic_side_effects,
+            reason = "one per delayed task the main thread is given: a u64 lasts centuries"
+        )]
+        {
+            self.delayed_order += 1;
+        }
+        let order = self.delayed_order;
+        self.delayed.push(std::cmp::Reverse(Delayed {
+            at,
+            order,
+            queue,
+            task,
+        }));
     }
 
     /// The queue among `queues` whose first task was posted earliest.
@@ -221,6 +312,9 @@ pub struct MainThreadScheduler {
     /// The numbers of the main thread's calls that wait for the browser
     /// (`sync_call`), from 1.
     call_ids: CallIds,
+    /// A task for the engine's platform tasks ready waits
+    /// (`platform_task_waker`): V8 posts many at once, from its threads.
+    platform_tasks_posted: std::sync::atomic::AtomicBool,
 }
 
 /// The numbers of the calls that wait, from 1.
@@ -344,20 +438,74 @@ impl MainThreadScheduler {
             let Some(scheduler) = scheduler.upgrade() else {
                 return;
             };
-            match at.filter(|at| *at > Instant::now()) {
-                Some(at) => {
-                    scheduler
-                        .lock()
-                        .delayed
-                        .push(std::cmp::Reverse((at, number)));
-                    scheduler.ready.notify_one();
-                }
+            let task = MainThreadTask::DomTask { number };
+            match at {
+                Some(at) => scheduler.post_at(TaskQueue::Dom, task, at),
                 None => {
-                    let _ =
-                        scheduler.post(TaskQueue::Dom, MainThreadTask::DomTask { number }, false);
+                    let _ = scheduler.post(TaskQueue::Dom, task, false);
                 }
             }
         })
+    }
+
+    /// `task` into `queue` as `at` comes (now, if it has).
+    fn post_at(&self, queue: TaskQueue, task: MainThreadTask, at: Instant) {
+        if at <= Instant::now() {
+            let _ = self.post(queue, task, false);
+            return;
+        }
+        {
+            let mut state = self.lock();
+            if state.closed {
+                return;
+            }
+            state.push_delayed(at, queue, task);
+        }
+        self.ready.notify_one();
+    }
+
+    /// What wakes the main thread for its engine's platform tasks, from any
+    /// thread (`ScriptEngine::set_platform_task_waker`): one task while
+    /// none waits for those ready, one as each delayed one is due.
+    pub(crate) fn platform_task_waker(
+        self: &Arc<Self>,
+    ) -> std::sync::Arc<dyn Fn(Option<Instant>) + Send + Sync> {
+        let scheduler = Arc::downgrade(self);
+        std::sync::Arc::new(move |at| {
+            let Some(scheduler) = scheduler.upgrade() else {
+                return;
+            };
+            match at {
+                Some(at) => scheduler.post_internal_at(InternalTask::PlatformTasks, at),
+                None => {
+                    if !scheduler
+                        .platform_tasks_posted
+                        .swap(true, std::sync::atomic::Ordering::AcqRel)
+                    {
+                        scheduler.post_internal(InternalTask::PlatformTasks);
+                    }
+                }
+            }
+        })
+    }
+
+    /// The main thread takes the platform tasks' task: those posted from
+    /// now on post another.
+    pub(crate) fn platform_tasks_taken(&self) {
+        self.platform_tasks_posted
+            .store(false, std::sync::atomic::Ordering::Release);
+    }
+
+    /// The renderer's own work, a task of its own, after every task posted
+    /// before (Blink's `PostTask` to an internal task runner).
+    pub(crate) fn post_internal(&self, task: InternalTask) {
+        let _ = self.post(TaskQueue::Internal, MainThreadTask::Internal(task), false);
+    }
+
+    /// The renderer's own work, a task of its own as `at` comes (Blink's
+    /// `PostDelayedTask`, a timer's).
+    pub(crate) fn post_internal_at(&self, task: InternalTask, at: Instant) {
+        self.post_at(TaskQueue::Internal, MainThreadTask::Internal(task), at);
     }
 
     /// What wakes worker `id`'s thread for its ports' messages from other
@@ -473,7 +621,9 @@ impl MainThreadScheduler {
             }
             // Woken for the DOM's next task to come due too, if it is one
             // of `queues`'.
-            let delayed = state.next_delayed().filter(|_| queues.has(TaskQueue::Dom));
+            let delayed = state
+                .next_delayed()
+                .filter(|_| queues.has(TaskQueue::Dom) || queues.has(TaskQueue::Internal));
             let wake = match (deadline.filter(|_| timeout.is_some()), delayed) {
                 (Some(deadline), Some(delayed)) => Some(deadline.min(delayed)),
                 (deadline, delayed) => deadline.or(delayed),
@@ -786,6 +936,7 @@ mod tests {
             MainThreadTask::Worker { id, .. } => format!("worker {id}"),
             MainThreadTask::PortMessages => "ports".to_owned(),
             MainThreadTask::DomTask { number } => format!("dom {number}"),
+            MainThreadTask::Internal(task) => format!("internal {task:?}"),
             MainThreadTask::NavigationBody { navigation_id, .. } => {
                 format!("navigation body {navigation_id}")
             }

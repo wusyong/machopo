@@ -162,13 +162,39 @@ impl V8PerIsolateData {
     /// loop, never while unrooted GC pointers are on the stack. Taking
     /// `&mut self` guarantees no DOM scope is alive. Whether any task ran.
     pub fn pump_platform_tasks(&mut self) -> bool {
-        let platform = v8::V8::get_current_platform();
+        // Those V8 posted to the embedder (`platform_tasks`) that are due by
+        // now; those they post wait for the next pump, as the thread's next
+        // task (Blink runs each as a task of its own).
         let mut ran = false;
+        for task in crate::platform_tasks::take_due(self.isolate_key()) {
+            task.run();
+            ran = true;
+        }
+        let platform = v8::V8::get_current_platform();
         #[allow(clippy::disallowed_methods)] // This is the sanctioned wrapper.
         while v8::Platform::pump_message_loop(&platform, &self.isolate, false) {
             ran = true;
         }
         ran
+    }
+
+    /// What wakes the isolate's thread for its platform tasks (the
+    /// thread's scheduler: a task of its own, which pumps them), from now
+    /// on; those waiting already wake it now.
+    pub fn set_platform_task_waker(&mut self, waker: crate::PlatformTaskWaker) {
+        crate::platform_tasks::set_waker(self.isolate_key(), waker);
+    }
+
+    /// The isolate's address, as V8 names it to the platform: the key of
+    /// its platform tasks.
+    fn isolate_key(&self) -> usize {
+        // SAFETY: the pointer is only read as an address, never used to
+        // reach the isolate (`UnsafeRawIsolatePtr` is a transparent
+        // `*mut RealIsolate`, the `v8::Isolate*` V8 passes the platform).
+        let raw = unsafe { self.isolate.as_raw_isolate_ptr() };
+        // SAFETY: as above: a transparent pointer, read as a pointer.
+        let raw: *mut std::ffi::c_void = unsafe { std::mem::transmute(raw) };
+        raw.addr()
     }
 }
 
@@ -338,6 +364,8 @@ impl Drop for V8PerIsolateData {
     /// slot's handle, then the sessions and the last handle as the fields
     /// drop, before the isolate.
     fn drop(&mut self) {
+        // Its platform tasks go unrun: nothing pumps them after.
+        crate::platform_tasks::forget(self.isolate_key());
         // SAFETY: the isolate's owner drops it, as it goes: no callback of
         // it runs after.
         unsafe { crate::drop_isolate_state(&mut self.isolate) };

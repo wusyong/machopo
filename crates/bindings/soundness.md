@@ -187,6 +187,13 @@ V8 推進的 elise 的 heap 的平行工作（marking、scavenge、sweep）經�
 - **panic 不跨過 C++**：`bindings` 的 `Run` 把每次呼叫包在 `catch_unwind` 裡，第一個 panic 記在 `Task`，之後的 run 直接返回、`max_concurrency` 回 0（job 結束）；`run` 在 `Cancel` 之後、posted 的在 handle 的 `cancel` 之後重新拋出，和 `elise::ThreadPool` 一樣。漏到 fork 的 trampoline 的 panic 會 abort。
 - **handle**：fork 的 `JobHandle` 擁有 V8 的 `JobHandle`，`cancel`（等）或 `cancel_and_detach`（不等）各 delete 一次，drop 時 cancel（等）。`bindings` 的 handle 放在 `Mutex<Option<_>>`，取出之後才 cancel，所以只 cancel 一次；它被 drop（包括 unwinding 中）時是 fork 的 handle 自己 cancel、等 run 返回，run 的 panic 跟著丟掉（cancel 讓 run 看到 `should_yield`，等待不會卡住）。
 
+### `bindings` 的 platform task（`src/platform_tasks.rs`）
+
+V8 的 platform 是 rusty_v8 的 custom platform（`v8::new_custom_platform`）：V8 為一個 isolate post 的 foreground task（`PostTask`、`PostDelayedTask` 和它們的 non-nestable 版本）從任何 thread 交給 `EmbedderPlatform`，放進一個 process 共用的表（一個 `Mutex`），照 isolate 的位址分開；isolate 的 thread 經過它的 owner 設的 waker 被叫醒，在自己的 loop 的 task 裡經過 `V8PerIsolateData::pump_platform_tasks` 跑到期的。
+- **跑的地方不變**：這些 task 有的用 `kNoHeapPointers`（不掃 stack）GC，所以只能在最外層的 loop、手上沒有 GC 指標時跑：和 V8 自己的 `PumpMessageLoop` 一樣只經過 `pump_platform_tasks`（`&mut self`，沒有 DOM 的 scope 活著）跑，不在 post 的 thread 上、也不在 waker 裡跑。idle task 不會來（platform 建的時候不支援），來了也不跑（丟掉），不在 post 的 thread 上跑。
+- **isolate 的位址**（`isolate_key`，兩處 `unsafe`：`as_raw_isolate_ptr` 和把 `UnsafeRawIsolatePtr` 讀成指標的 `transmute`）：只當表的 key 用，不經過它碰 isolate；`UnsafeRawIsolatePtr` 是 `#[repr(transparent)]` 的 `*mut RealIsolate`，就是 V8 交給 platform 的 `v8::Isolate*`。isolate 走之前（`V8PerIsolateData` 的 `Drop`，在 isolate 之前）把它的 task 從表裡拿掉、不跑，所以之後用同一個位址的 isolate 不會跑到前一個的 task。
+- **waker 在 lock 外呼叫**：post 和設 waker 都先放掉表的 lock 再叫 waker（它拿 thread 的 scheduler 的 lock），沒有反過來的順序。task 在表裡被 drop（isolate 走了）時也先拿出來、放掉 lock 再 drop。
+
 ### `bindings` 的 inspector（`src/devtools.rs`）
 
 V8 的 inspector 和 isolate 一起建，放在 isolate 的 slot（和 `V8PerIsolateData` 的欄位）裡：

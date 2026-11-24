@@ -25,7 +25,9 @@ use crate::frame_widget::FrameWidget;
 use crate::loader::BlobUrls;
 use crate::navigation_timing::NavigationTiming;
 use crate::pending_user_input::{Pending, PendingUserInput};
-use crate::task_queue::{MainThreadScheduler, MainThreadTask, RendererReceiver, TaskQueues};
+use crate::task_queue::{
+    InternalTask, MainThreadScheduler, MainThreadTask, RendererReceiver, TaskQueues,
+};
 
 mod css_agent;
 mod devtools;
@@ -434,6 +436,13 @@ struct RenderThread {
     /// numbers: the browser commits none of them till the task is over
     /// (`end_cancellation_windows`).
     navigations_asked: Vec<u64>,
+    /// The parser's scripts that wait for sheets were tried again in the
+    /// task that runs (`InternalTask::RetryBlockedScripts`): not posted
+    /// again for it.
+    retried_blocked_scripts: bool,
+    /// When the task for the intersections held back by their `delay` is
+    /// posted for (the renderer's clock), if it is.
+    intersections_posted: Option<f64>,
     /// The top-level frame's latest navigation to `about:blank` it asked
     /// for, by its number, and the document its document is to have its
     /// origin from (the initiator's).
@@ -601,6 +610,8 @@ impl RenderThread {
             devtools_main_frame_token: None,
             own_history_entries: OwnHistoryEntries::default(),
             navigations_asked: Vec::new(),
+            retried_blocked_scripts: false,
+            intersections_posted: None,
             main_origin_source: None,
             pending_input,
             clock: Clock::new(),
@@ -652,10 +663,6 @@ impl RenderThread {
                 self.update_title();
                 next = self.scheduler.try_next(TaskQueues::ALL);
             }
-            self.blink_caret();
-            self.new_content_rendering_timeout();
-            self.intersections_due_now();
-            self.fire_due_owner_loads();
             // What the loop does between tasks, each a span of its own
             // where it may take time: none of it is a task's.
             let _between = trace_event::trace_event!("RenderThread::between_tasks");
@@ -663,17 +670,11 @@ impl RenderThread {
             // navigation), now that none runs.
             self.handle_popup_requests();
             self.handle_frame_requests();
-            // The child frames' `srcdoc` and `about:` documents, each a
-            // task of its own.
-            self.run_child_commits();
             // The engine's guests whose waits are over (a wasm guest's: the
             // DOM's tasks are the scheduler's, `MainThreadTask::DomTask`).
             self.run_due_guests();
-            // The parsers that let the rest run parse on, a run each.
-            self.parse_on();
             self.start_image_fetches();
             self.start_script_fetches();
-            self.retry_scripts_blocked_by_sheets();
             self.start_canvas_encodes();
             self.send_webdriver_results();
             self.log_canvas_raster_failure();
@@ -699,14 +700,6 @@ impl RenderThread {
             {
                 self.request_main_frame();
             }
-            // The engine's platform tasks are tasks too, with a checkpoint
-            // after them (Blink runs Oilpan's and V8's on the main thread's
-            // scheduler): they may run script (FinalizationRegistry
-            // cleanup), and they are what finalizes garbage.
-            trace_event::in_scope(
-                trace_event::trace_event!("RenderThread::run_platform_tasks"),
-                || self.run_platform_tasks(),
-            );
             // An idle period's callbacks, once no task waits (Blink's
             // scheduler runs idle tasks when it has nothing else to).
             if !self.scheduler.has_task(TaskQueues::ALL) {
@@ -745,6 +738,35 @@ impl RenderThread {
     /// sent yet (a parser's scripts, the backgrounds a style update
     /// found), then the blob URLs it revoked, after those loads (each got
     /// its blob); then what DevTools is to hear of.
+    /// The renderer's own work, a task of its own (`InternalTask`): what
+    /// each does checks whether it is still to be done.
+    fn run_internal(&mut self, task: InternalTask) {
+        match task {
+            InternalTask::ParseOn { frame } => self.parse_on(frame),
+            InternalTask::ChildCommits => self.run_child_commit(),
+            InternalTask::RetryBlockedScripts => {
+                self.retry_scripts_blocked_by_sheets();
+                // Not posted again for itself (`after_task`).
+                self.retried_blocked_scripts = true;
+            }
+            InternalTask::CaretBlink => self.blink_caret(),
+            InternalTask::Intersections => self.intersections_due_now(),
+            InternalTask::OwnerLoads => self.fire_due_owner_loads(),
+            InternalTask::NewContentTimeout => self.new_content_rendering_timeout(),
+            // The engine's platform tasks, with a checkpoint after them
+            // (Blink runs Oilpan's and V8's on the main thread's scheduler):
+            // they may run script (FinalizationRegistry cleanup), and they
+            // are what finalizes garbage.
+            InternalTask::PlatformTasks => {
+                self.scheduler.platform_tasks_taken();
+                trace_event::in_scope(
+                    trace_event::trace_event!("RenderThread::run_platform_tasks"),
+                    || self.run_platform_tasks(),
+                );
+            }
+        }
+    }
+
     fn after_task(&mut self) {
         // The messages its ports got, numbered as the DOM's tasks (a port
         // it started may have had them).
@@ -755,6 +777,13 @@ impl RenderThread {
         self.start_script_fetches();
         self.blob_urls.flush_revoked();
         self.end_cancellation_windows();
+        // The parser's scripts that wait for a sheet that blocks scripts,
+        // tried again after it: it may have removed the sheet's `<link>`,
+        // or made it no stylesheet, so they run without its response.
+        if !std::mem::take(&mut self.retried_blocked_scripts) && self.scripts_wait_for_sheets() {
+            self.scheduler
+                .post_internal(InternalTask::RetryBlockedScripts);
+        }
         self.tell_devtools_after_task();
     }
 
@@ -822,6 +851,10 @@ impl RenderThread {
             MainThreadTask::PortMessages => true,
             MainThreadTask::DomTask { number } => {
                 self.run_dom_task(number);
+                true
+            }
+            MainThreadTask::Internal(task) => {
+                self.run_internal(task);
                 true
             }
             MainThreadTask::NavigationBody {
@@ -1391,13 +1424,10 @@ impl RenderThread {
     /// for one, or the first intersection observation held back by its
     /// `delay` is due, or an iframe's `load` for a navigation within a
     /// cross-origin document (zero if one is), or `None` if none.
-    fn until_idle_or_intersections(&mut self) -> Option<Duration> {
+    fn until_idle(&mut self) -> Option<Duration> {
         let now = self.clock.now();
-        let due = sooner_ms(
-            sooner_ms(self.idle_wake(), self.intersections_due),
-            self.owner_loads_due(),
-        );
-        Some(Duration::from_secs_f64((due? - now).max(0.0) / 1000.0))
+        let due = self.idle_wake()?;
+        Some(Duration::from_secs_f64((due - now).max(0.0) / 1000.0))
     }
 
     /// When the loop has idle callbacks to run: now if the idle period
@@ -1483,51 +1513,50 @@ impl RenderThread {
     /// callback or intersection observation, the caret's next blink, or a
     /// document's network may have been quiet long enough.
     fn until_next_due(&mut self) -> Option<Duration> {
-        let now = Instant::now();
-        let caret = self
-            .next_caret_blink
-            .map(|due| due.saturating_duration_since(now));
-        // The new document's delay.
-        let caret = sooner(
-            caret,
-            self.new_content_due
-                .map(|due| due.saturating_duration_since(now)),
-        );
         // A document's network may have been quiet long enough by then.
         let idle = self
             .next_idleness_due()
             .map(|due| due.saturating_since(ipc::TimeTicks::now()));
-        // A child frame's document to commit, queued after the loop
-        // looked.
-        if self.child_commits_due() {
-            return Some(Duration::ZERO);
-        }
-        // A parser to parse on.
-        if self.parse_due() {
-            return Some(Duration::ZERO);
-        }
         // The engine's guests' waits (the DOM's timers wake the scheduler
         // themselves, `dom_task_waker`).
         let next = self
             .engine
             .as_mut()
             .and_then(|engine| engine.until_due_guests());
-        sooner(
-            sooner(sooner(self.until_idle_or_intersections(), caret), idle),
-            next,
-        )
+        // The renderer's own timers wake the scheduler themselves
+        // (`post_internal_at`).
+        sooner(sooner(self.until_idle(), idle), next)
     }
 
     /// A main frame for the observations held back by their `delay`, once
     /// the first is due.
     fn intersections_due_now(&mut self) {
-        if self
-            .intersections_due
-            .is_some_and(|due| due <= self.clock.now())
-        {
-            self.intersections_due = None;
-            self.request_main_frame();
+        self.intersections_posted = None;
+        let Some(due) = self.intersections_due else {
+            return;
+        };
+        let now = self.clock.now();
+        if due > now {
+            // Taken early, by the clocks' rounding: when it is.
+            self.post_intersections(due);
+            return;
         }
+        self.intersections_due = None;
+        self.request_main_frame();
+    }
+
+    /// The task that asks for a frame for the observations held back by
+    /// their `delay`, posted for `due` (the renderer's clock) unless one is
+    /// for then or sooner.
+    pub(super) fn post_intersections(&mut self, due: f64) {
+        if self
+            .intersections_posted
+            .is_some_and(|posted| posted <= due)
+        {
+            return;
+        }
+        self.intersections_posted = Some(due);
+        self.post_internal_after(InternalTask::Intersections, due - self.clock.now());
     }
 
     /// The main frame's new document still can't be drawn when its delay
@@ -1537,6 +1566,8 @@ impl RenderThread {
         let Some(due) = self.new_content_due else {
             return;
         };
+        // One posted for a document before (its own is posted as it
+        // commits).
         if Instant::now() < due {
             return;
         }
@@ -1552,6 +1583,19 @@ impl RenderThread {
     fn start_new_content_rendering_timeout(&mut self) {
         self.empty_frame_wanted = false;
         self.new_content_due = Instant::now().checked_add(self.new_content_rendering_delay);
+        if let Some(due) = self.new_content_due {
+            self.scheduler
+                .post_internal_at(InternalTask::NewContentTimeout, due);
+        }
+    }
+
+    /// `task` posted to come `after` milliseconds from now (the renderer's
+    /// clock's).
+    pub(super) fn post_internal_after(&self, task: InternalTask, after: f64) {
+        let after = Duration::try_from_secs_f64(after.max(0.0) / 1000.0).unwrap_or(Duration::ZERO);
+        if let Some(at) = Instant::now().checked_add(after) {
+            self.scheduler.post_internal_at(task, at);
+        }
     }
 
     /// The caret shows or hides if it is time (Blink's `FrameCaret::
@@ -1561,6 +1605,8 @@ impl RenderThread {
             return;
         };
         let now = Instant::now();
+        // One posted for the caret before it came again (its own is
+        // posted as it comes).
         if now < due {
             return;
         }
@@ -1577,6 +1623,8 @@ impl RenderThread {
         )]
         let next = (due + interval).max(now);
         self.next_caret_blink = Some(next);
+        self.scheduler
+            .post_internal_at(InternalTask::CaretBlink, next);
         self.request_main_frame();
     }
 

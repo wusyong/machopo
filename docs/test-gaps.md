@@ -216,6 +216,12 @@
 - worker 自己關閉時，它在關閉的那個 task 裡丟的錯誤照樣送到 `Worker`（`fire_worker_error` 看 `worker_messages_dropped`，不看 `worker_terminated`）：`shell` 的測試裡錯誤的 task 總是在 `Closed` 處理之前就跑了，看不出差別；WPT 的 `workers/WorkerGlobalScope-close.html` 的時序抓得到（CI 每天跑）。
 - wasm engine 的 guest 的等待叫醒 loop（`until_due_guests`）：`wasm_documents` 的測試裡畫面的 frame 照樣叫醒它，拿掉之後沒有測試失敗。第 5 段把 guest 的等待也排成 scheduler 的 task 時補。
 
+**renderer 自己的工作和 V8 的 platform task 是 scheduler 的 task（`renderer` 的 `task_queue.rs`、`render_thread.rs`，`bindings` 的 `platform_tasks.rs`）**
+
+- loop 等待時為 renderer 自己的延後的 task 醒來（`next` 的 `TaskQueue::Internal`）：拿掉之後沒有測試失敗，caret 的情境、intersection observer 的測試裡畫面的 frame 和輸入照樣叫醒 loop；要一個只有 renderer 的 timer、沒有任何 frame 的頁面才看得出來。
+- intersection observer 的 `delay` 的 task 提早一點被叫到（renderer 的時鐘和 `Instant` 的換算差了一點）時再排一次：測試造不出那一點差，拿掉之後那個 delay 的 frame 就不來了。靠審查。
+- V8 延後的 platform task 到期時才跑（`platform_tasks::take_due` 的 `delayed`）、worker 為它醒來（`worker_thread` 的 `platform_due`）：`FinalizationRegistry` 的 cleanup 不是延後的，測試裡沒有看得出延後的 task 的地方（V8 的 memory reducer、idle 的 GC 之類）。之後找到頁面看得到的延後的 task 時補。
+
 ## 沒有計數守著的優化
 
 下面這些捷徑被拿掉時結果照樣對（debug build 的交叉檢查只比結果），只是多做事，沒有測試會失敗。2026-10-20 逐項讀過測試盤點：其他的優化（style 的 invalidation、MPC、祖先的 Bloom filter、增量的 pre-paint 和 paint、raster invalidation、tile 的跳過、root 的計數、parse 的 fast path……）都有 debug build 的計數（各 crate 的 `*_for_testing`、`layout` 的 `BoxTreeUpdate` 和 `LayoutUpdate`）和斷言它的測試。改到這些地方時特別注意；量到變慢時（Speedometer 用 git 二分，`--sample` 看多出來的函式）先對照這份。之後照下面的順序補計數，補了就從這裡刪掉。

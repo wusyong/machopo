@@ -41,7 +41,7 @@ use crate::frame_view::{Frame, FrameView};
 use crate::initiator::Initiator;
 use crate::pending_user_input::PendingUserInputMonitor;
 use crate::svg_image::SvgImage;
-use crate::task_queue::TaskQueues;
+use crate::task_queue::{InternalTask, TaskQueues};
 use crate::{document, encoding};
 
 /// A committed document of the DOM: its navigation (its URL is the
@@ -1385,6 +1385,7 @@ impl RenderThread {
     fn queue_child_commit(&mut self, frame: FrameId, url: Url, markup: String) {
         self.children.navigating(frame);
         self.children.commits.push_back((frame, url, markup));
+        self.scheduler.post_internal(InternalTask::ChildCommits);
         self.sync_child_navigating(frame);
     }
 
@@ -1411,6 +1412,7 @@ impl RenderThread {
         if other_origin {
             let due = self.clock.now() + OWNER_LOAD_DELAY_MS;
             self.children.owner_loads.insert(frame, due);
+            self.post_internal_after(InternalTask::OwnerLoads, OWNER_LOAD_DELAY_MS);
         }
     }
 
@@ -1443,18 +1445,17 @@ impl RenderThread {
             self.handle_frame_requests();
             self.send_harness_results();
         }
+        // Those not due yet (taken early, by the clocks' rounding): when
+        // the first is.
+        if let Some(due) = self.owner_loads_due() {
+            self.post_internal_after(InternalTask::OwnerLoads, due - self.clock.now());
+        }
     }
 
-    /// Whether a child frame's `about:` document waits to commit: the loop
-    /// doesn't wait for a task to come first.
-    pub(super) fn child_commits_due(&self) -> bool {
-        !self.children.commits.is_empty()
-    }
-
-    /// The child frames' `about:` documents queued to commit, each in a task
-    /// of its own, in order (`queue_child_commit`).
-    pub(super) fn run_child_commits(&mut self) {
-        while let Some((frame, url, markup)) = self.children.commits.pop_front() {
+    /// The first of the child frames' documents queued to commit, in a task
+    /// of its own (`queue_child_commit` posts one for each).
+    pub(super) fn run_child_commit(&mut self) {
+        if let Some((frame, url, markup)) = self.children.commits.pop_front() {
             self.sync_child_navigating(frame);
             let _task = trace_event::trace_event!("ThreadControllerImpl::RunTask");
             let reported = url.to_string();
@@ -1749,30 +1750,17 @@ impl RenderThread {
         self.start_loads();
     }
 
-    /// Whether a document's parser is to parse on in the loop's turn.
-    pub(super) fn parse_due(&self) -> bool {
-        self.document
-            .iter()
-            .chain(&self.children.documents)
-            .any(|next| next.parse_due)
-    }
-
-    /// The documents whose parsers let the loop's other work run parse on,
-    /// each for a run of its budget (Blink's
-    /// `HTMLDocumentParser::DeferredPumpTokenizerIfPossible`).
-    pub(super) fn parse_on(&mut self) {
-        let due: Vec<FrameId> = self
-            .document
-            .iter()
-            .chain(&self.children.documents)
-            .filter(|next| next.parse_due)
-            .map(|next| next.frame)
-            .collect();
-        for frame in due {
-            let _task = trace_event::trace_event!("HTMLDocumentParser::PumpTokenizer");
-            self.advance_document(frame);
-            self.send_harness_results();
+    /// `frame`'s document's parser, which let other tasks run, parses on
+    /// for a run of its budget (Blink's
+    /// `HTMLDocumentParser::DeferredPumpTokenizerIfPossible`), if it still
+    /// is to (its document may have gone, or parsed on meanwhile).
+    pub(super) fn parse_on(&mut self, frame: FrameId) {
+        if !self.doc(frame).is_some_and(|next| next.parse_due) {
+            return;
         }
+        let _task = trace_event::trace_event!("HTMLDocumentParser::PumpTokenizer");
+        self.advance_document(frame);
+        self.send_harness_results();
     }
 
     /// `length` bytes of `frame`'s document's body came, which make
@@ -2007,6 +1995,10 @@ impl RenderThread {
                         let yielded = next.parse_due;
                         next.parser = Some(parser);
                         if yielded {
+                            // It parses on in a task of its own (Blink's
+                            // `SchedulePumpTokenizer`).
+                            self.scheduler
+                                .post_internal(InternalTask::ParseOn { frame });
                             self.parser_stopped();
                             return;
                         }
@@ -2225,6 +2217,29 @@ impl RenderThread {
     /// The parser's scripts that wait for a sheet that blocks scripts, tried
     /// again after the tasks: script may have removed its `<link>`, or made
     /// it no stylesheet, so they run without waiting for its response.
+    /// Whether a parser's scripts wait for a sheet that blocks scripts.
+    pub(super) fn scripts_wait_for_sheets(&mut self) -> bool {
+        let Self {
+            document,
+            children,
+            engine,
+            ..
+        } = self;
+        let Some(engine) = engine else {
+            return false;
+        };
+        let dom = engine.dom_mut();
+        document.iter().chain(&children.documents).any(|next| {
+            (next.blocking_script.is_some()
+                || dom.read(|cx| cx.load_progress(next.document.get(cx.gc)))
+                    == dom::LoadProgress::Deferring)
+                && next
+                    .pending_sheets
+                    .values()
+                    .any(|sheet| sheet.blocks_scripts)
+        })
+    }
+
     pub(super) fn retry_scripts_blocked_by_sheets(&mut self) {
         let Self {
             document,
@@ -3919,6 +3934,10 @@ impl RenderThread {
                     let due = std::time::Instant::now() + interval;
                     due
                 });
+            if let Some(due) = self.next_caret_blink {
+                self.scheduler
+                    .post_internal_at(InternalTask::CaretBlink, due);
+            }
         }
         let Frame { view, widget, .. } = frame;
         let reftest_wait = self.web_tests && {
@@ -4004,6 +4023,9 @@ impl RenderThread {
                 &mut self.intersections_computed,
             );
             self.intersections_due = due.map(|wait| self.clock.now() + wait);
+            if let Some(due) = self.intersections_due {
+                self.post_intersections(due);
+            }
         }
         self.recompute_under_mouse();
         true

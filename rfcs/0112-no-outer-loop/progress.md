@@ -27,7 +27,13 @@
 | 3c. scheduler 的 `TaskQueue::Dom` 和 delayed 的記號；engine 照記號跑一個 task | 做完，待審查 | 2026-11-24 |
 | 3d. 主 thread 拿掉一輪的機制、`run_due_tasks`、`run_queued_tasks`；`until_next_due` 不問 DOM 的 timer | 做完，待審查 | 2026-11-24 |
 | 3e. 文件、mutation test | 做完，待審查 | 2026-11-24 |
-| 4. renderer 自己的工作排成 task | | |
+| 4. renderer 自己的工作排成 task（第 16 到 18 條） | 做完，待審查 | 2026-11-24 |
+| 4a. 必壞的測試：通道一直有 task 時 parser 照樣續跑 | 做完，待審查：原本的程式上壞（`parsed after -1`），4c 之後過 | 2026-11-24 |
+| 4b. scheduler 的 `TaskQueue::Internal` 和通用的延後 task | 做完，待審查 | 2026-11-24 |
+| 4c. parser 的續跑、等 sheet 的 script、`javascript:` 的 commit 排成 task | 做完，待審查 | 2026-11-24 |
+| 4d. renderer 的 timer（caret、intersection、延後的 iframe `load`、新內容的逾時）排成延後的 task | 做完，待審查 | 2026-11-24 |
+| 4e. V8 的 platform task 經過 `PlatformImpl` 進 scheduler | 做完，待審查 | 2026-11-24 |
+| 4f. 文件、mutation test | 做完，待審查 | 2026-11-24 |
 | 5. 剩下的步驟，拿掉外圈 | | |
 
 ## 驗收
@@ -106,4 +112,23 @@
 **相關 crate 的測試**：`dom`、`dom_api`、`dom_js`、`dom_wasm`、`renderer`、`browser`、`shell` 都通過。
 
 **階段結束的檢查**：`cargo test --workspace` 通過（60 個 binary，4719 個通過、1 個 ignored）；`cargo fmt --check` 和 `cargo clippy --workspace --all-targets -- -D warnings` 通過；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs` 通過。
+
+### 第 4 階段（2026-11-24，Linux：Fedora 45、debug build，`b52b562` 之上）
+
+**必壞的測試**：`event_loop::a_parser_parses_on_while_responses_keep_coming`（`fetch()` 的接力裡插入一個 iframe，它的長文件要在接力結束之前 parse 完）：原本的程式上壞（`parsed after -1`），4c 之後過。
+
+**過程中發現、修掉的**：
+- caret 和新內容的逾時的 task 在提早被叫到時重新排自己：每次重新設定都多一條重複的鏈，跑測試之前改掉了（它們和 scheduler 比的是同一個 `Instant`，不會因為換算提早；只在設定的地方排）。intersection 的 `delay` 和延後的 iframe `load` 用 renderer 的時鐘（`f64`），提早時再排一次，intersection 的另外記著排了哪個時間，每個 frame 重算時不重複排。
+- caret 的情境（`test.py scenarios caret`）抓到 caret 不閃了：caret 來了、移了的地方設了時間，卻沒排 task（只在閃的時候排了下一次）。mutation test 一開始給它的命令是整組 `shell` 的測試，沒有跑情境才沒發現；改好之後 98 個情境都通過。
+- `bindings` 改用 custom platform 之後，V8 的 foreground task 都經過 embedder 的佇列（暫時的 probe：一個 `bindings` 的測試 1083 個）；worker 的 loop 以前不跑 V8 的 platform task，現在跑（第 18 條），`FinalizationRegistry` 的測試有 worker 的一次。
+
+**WPT**（`html/syntax/parsing/`、`html/semantics/scripting-1/the-script-element/`、`intersection-observer/`、`html/semantics/embedded-content/the-iframe-element/`、`html/webappapis/timers/`、`workers/`，798 個）：沒有新的失敗；預期 FAIL 或 ERROR、結果通過的 9 個（`script-crossorigin-network.sub.html` 和 `module/credentials.sub.html` 的 7 個子測試，和第 3 段記下的 2 個），在 `b52b562` 上也一樣，原本的預期結果就舊了，沒改。
+
+**情境**：`test.py scenarios`（沒有視窗的）98 個都通過。
+
+**mutation test**（`mutants-4.toml`，16 個）：第一輪 7 個抓到、8 個沒抓到；caret、延後的 iframe `load`、新內容的逾時三個改成跑抓得到它們的測試（caret 的情境、`browser` 的 `fires_its_iframes_load`、`empty`），`FinalizationRegistry` 的測試加第二輪 GC（platform 的 task 只 post 一次），加 caret 來了的地方的 mutant，重跑都抓到。沒抓到的 4 個記進 `docs/test-gaps.md`：loop 等待時為 renderer 自己的 timer 醒來（情境裡 frame 和輸入照樣叫醒它）、intersection 的 `delay` 提早時再排一次（造不出那一點差）、V8 延後的 platform task 到期、worker 為它醒來（沒有看得出延後的 task 的地方）。第 2、3 段的 spec 跟著更新了對不上的 `from`。
+
+**相關 crate 的測試**：`bindings`、`dom_js`、`renderer`、`browser`、`shell` 都通過。
+
+**階段結束的檢查**：`cargo test --workspace` 通過（60 個 binary，4721 個通過、1 個 ignored）；`cargo fmt --check` 和 `cargo clippy --workspace --all-targets -- -D warnings` 通過（clippy 抓到一個多餘的空行和一個 `match`，改了）；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs` 通過（`boundary` 的例外加了 `bindings` 的 `TASKS`：V8 的 platform 的 foreground task，照 isolate 分開，和已經在例外裡的 `PLATFORM` 同一個 process 一份的 platform）。
 

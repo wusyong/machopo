@@ -389,6 +389,23 @@ impl WorkerEngine for V8WorkerEngine {
         self.perform_microtask_checkpoint();
     }
 
+    fn run_platform_tasks(&mut self) -> bool {
+        // V8's own tasks may run script (a finalization registry's cleanup).
+        let _entry = bindings::trace::enter_script();
+        let ran = self.data.pump_platform_tasks();
+        if ran {
+            self.perform_microtask_checkpoint();
+        }
+        ran
+    }
+
+    fn set_platform_task_waker(
+        &mut self,
+        waker: std::sync::Arc<dyn Fn(Option<std::time::Instant>) + Send + Sync>,
+    ) {
+        self.data.set_platform_task_waker(waker);
+    }
+
     fn until_next_task(&mut self) -> Option<Duration> {
         let global = self.global.clone()?;
         self.state()

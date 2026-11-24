@@ -1,0 +1,140 @@
+# Stage 4's mutants: `python3 scripts/test.py mutate rfcs/0112-no-outer-loop/mutants-4.toml`.
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it"]
+timeout = 240
+
+[[mutant]]
+name = "a parser that gave way doesn't post its task"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                            self.scheduler
+                                .post_internal(InternalTask::ParseOn { frame });'''
+to = '''                            let _ = frame;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "event_loop::"]
+
+[[mutant]]
+name = "a javascript: URL's commit doesn't post its task"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        self.scheduler.post_internal(InternalTask::ChildCommits);'''
+to = '''        let _ = InternalTask::ChildCommits;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools::"]
+
+[[mutant]]
+name = "the scripts that wait for sheets aren't tried again"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        if !std::mem::take(&mut self.retried_blocked_scripts) && self.scripts_wait_for_sheets() {'''
+to = '''        if !std::mem::take(&mut self.retried_blocked_scripts) && self.scripts_wait_for_sheets() && false {'''
+
+[[mutant]]
+name = "the caret blinks once"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        self.scheduler
+            .post_internal_at(InternalTask::CaretBlink, next);'''
+to = '''        let _ = next;'''
+test = ["python3", "scripts/test.py", "scenarios", "caret", "caret-editing-host", "caret-inactive"]
+
+[[mutant]]
+name = "an intersection's delay isn't posted"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            if let Some(due) = self.intersections_due {
+                self.post_intersections(due);
+            }'''
+to = '''            if let Some(due) = self.intersections_due {
+                let _ = due;
+            }'''
+
+[[mutant]]
+name = "an intersection's delay taken early is lost"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            // Taken early, by the clocks' rounding: when it is.
+            self.post_intersections(due);
+            return;'''
+to = '''            // Taken early, by the clocks' rounding: when it is.
+            return;'''
+
+[[mutant]]
+name = "an iframe's load put off isn't posted"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            self.post_internal_after(InternalTask::OwnerLoads, OWNER_LOAD_DELAY_MS);'''
+to = '''            let _ = OWNER_LOAD_DELAY_MS;'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "fires_its_iframes_load"]
+
+[[mutant]]
+name = "the new content's timeout isn't posted"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        if let Some(due) = self.new_content_due {
+            self.scheduler
+                .post_internal_at(InternalTask::NewContentTimeout, due);
+        }'''
+to = '''        if let Some(due) = self.new_content_due {
+            let _ = due;
+        }'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "empty"]
+
+[[mutant]]
+name = "the platform's ready tasks post no task"
+file = "crates/renderer/src/task_queue.rs"
+from = '''                        scheduler.post_internal(InternalTask::PlatformTasks);'''
+to = '''                        let _ = &scheduler;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "event_loop::"]
+
+[[mutant]]
+name = "the platform's task posts only once"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                self.scheduler.platform_tasks_taken();'''
+to = '''                let _ = &self.scheduler;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "event_loop::"]
+
+[[mutant]]
+name = "the platform's tasks go to V8's own queue"
+file = "crates/bindings/src/platform.rs"
+from = '''        let platform = v8::new_custom_platform(
+            threads,
+            false,
+            false,
+            crate::platform_tasks::EmbedderPlatform,
+        )
+        .make_shared();'''
+to = '''        let platform = v8::new_default_platform(threads, false).make_shared();'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "event_loop::"]
+
+[[mutant]]
+name = "a delayed platform task never comes due"
+file = "crates/bindings/src/platform_tasks.rs"
+from = '''        if at <= now {
+            due.push(task);'''
+to = '''        if at <= now && false {
+            due.push(task);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "event_loop::"]
+
+[[mutant]]
+name = "a worker runs no platform task"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''        engine.run_platform_tasks();
+        let now = Instant::now();'''
+to = '''        let now = Instant::now();'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "event_loop::"]
+
+[[mutant]]
+name = "a worker doesn't wake for a delayed platform task"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''        let wait = match (engine.until_next_task(), next_platform) {'''
+to = '''        let wait = match (engine.until_next_task(), next_platform.filter(|_| false)) {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "event_loop::"]
+
+[[mutant]]
+name = "a wait doesn't wake for the renderer's own timers"
+file = "crates/renderer/src/task_queue.rs"
+from = '''                .filter(|_| queues.has(TaskQueue::Dom) || queues.has(TaskQueue::Internal));'''
+to = '''                .filter(|_| queues.has(TaskQueue::Dom));'''
+test = ["python3", "scripts/test.py", "scenarios", "caret", "caret-editing-host", "caret-inactive"]
+
+[[mutant]]
+name = "a caret that came doesn't blink"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            if let Some(due) = self.next_caret_blink {
+                self.scheduler
+                    .post_internal_at(InternalTask::CaretBlink, due);
+            }'''
+to = '''            if let Some(due) = self.next_caret_blink {
+                let _ = due;
+            }'''
+test = ["python3", "scripts/test.py", "scenarios", "caret", "caret-editing-host", "caret-inactive"]

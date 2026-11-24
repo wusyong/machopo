@@ -225,6 +225,9 @@ impl RenderThread {
             network_agent: self.network_agent.clone(),
         }));
         // Its child frames told to the browser as they are made and go.
+        // The engine's platform tasks, a task of the scheduler's as V8
+        // posts them (Blink's task runner for V8).
+        engine.set_platform_task_waker(self.scheduler.platform_task_waker());
         // The DOM's tasks, each a task of the scheduler's in its turn with
         // the thread's own (Blink's frame task runners).
         engine

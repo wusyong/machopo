@@ -230,3 +230,92 @@ worker.postMessage('close');
         "error"
     );
 }
+
+/// A parser that gave way parses on while the responses to a chain of
+/// `fetch()`es keep coming (Blink's parser pumps again in a task of its
+/// own, `SchedulePumpTokenizer`): a child frame's long document, asked
+/// for as the chain starts, is parsed to its end before the chain ends.
+#[test]
+fn a_parser_parses_on_while_responses_keep_coming() {
+    let page = r#"<!DOCTYPE html><script>
+const busy = ms => { const until = performance.now() + ms; while (performance.now() < until); };
+var responses = 0;
+var parsed = -1;
+const next = () => fetch('/r?' + responses, { cache: 'no-store' }).then(() => {
+  responses++;
+  if (responses < 150) { next(); busy(20); return; }
+  testRunner.reportHarnessResults(parsed >= 0 && parsed < 150 ? 'parsed as they came' : `parsed after ${parsed}`);
+});
+fetch('/start', { cache: 'no-store' }).then(() => {
+  const frame = document.createElement('iframe');
+  frame.src = '/long';
+  document.body.append(frame);
+  next();
+  busy(20);
+});
+</script>"#;
+    let long = format!(
+        "<!DOCTYPE html>{}<script>parent.parsed = parent.responses</script>",
+        "<div><span>x</span></div>".repeat(60_000)
+    );
+    let report = report(&[
+        ("/", Route::ok("text/html", page)),
+        ("/long", Route::ok("text/html", long.as_str())),
+        ("/r", Route::ok("text/plain", "r")),
+        (
+            "/start",
+            Route::ok("text/plain", "start").with_delay(Duration::from_millis(300)),
+        ),
+    ]);
+    assert_eq!(report, "parsed as they came");
+}
+
+/// The engine's platform tasks are the scheduler's: V8's foreground task
+/// that cleans up after a GC (a `FinalizationRegistry`'s callback) runs as
+/// it is posted, in a task of its own, with nothing else to wake the page
+/// (`gc()`, V8's `--expose-gc`); a worker's in its own loop.
+#[test]
+fn a_finalization_registrys_callback_runs_after_a_gc() {
+    let server = crate::automation_pipe::server(&[(
+        "/",
+        Route::ok(
+            "text/html",
+            r#"<!DOCTYPE html><body><script>
+const registry = new FinalizationRegistry(held => {
+  const p = document.createElement('p');
+  p.id = held;
+  document.body.append(p);
+  // Again, once this one's task ran: the platform's next task wakes it too.
+  if (held == 'cleaned') {
+    (() => registry.register({}, 'cleaned-again'))();
+    setTimeout(() => gc(), 50);
+  }
+});
+(() => registry.register({}, 'cleaned'))();
+setTimeout(() => gc(), 50);
+// A worker's too: what its engine posts runs in its loop.
+const code = `const registry = new FinalizationRegistry(() => postMessage('cleaned-in-worker'));
+(() => registry.register({}, 0))();
+setTimeout(() => gc(), 50);`;
+const worker = new Worker(URL.createObjectURL(new Blob([code], { type: 'text/javascript' })));
+worker.onmessage = e => {
+  const p = document.createElement('p');
+  p.id = e.data;
+  document.body.append(p);
+};
+</script>"#,
+        ),
+    )]);
+    let flags = std::ffi::OsStr::new("--expose-gc");
+    let mut browser =
+        crate::automation_pipe::Browser::start_with_env(&[("MACHOPO_V8_FLAGS", flags)]);
+    let session = browser.attach();
+    browser.navigate(&session, &server.url("/"));
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    for cleaned in ["#cleaned", "#cleaned-again", "#cleaned-in-worker"] {
+        while browser.query(cleaned)["element"].is_null() {
+            assert!(std::time::Instant::now() < deadline, "no {cleaned}");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+}

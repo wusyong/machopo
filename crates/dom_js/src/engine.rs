@@ -1734,6 +1734,13 @@ impl ScriptEngine for V8Engine {
         self.data.pump_platform_tasks()
     }
 
+    fn set_platform_task_waker(
+        &mut self,
+        waker: std::sync::Arc<dyn Fn(Option<std::time::Instant>) + Send + Sync>,
+    ) {
+        self.data.set_platform_task_waker(waker);
+    }
+
     fn take_frames_changed(&mut self) -> bool {
         std::mem::take(&mut self.state().frames.changed)
     }

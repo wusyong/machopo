@@ -1,7 +1,7 @@
 # RFC 0112：拿掉 event loop 的外圈
 
 - 開始日期：2026-11-24
-- 狀態：🚧 已排程：2026-11-24（第 0 到 2 階段做完；第 3 段待審查）
+- 狀態：🚧 已排程：2026-11-24（第 0 到 3 階段做完；第 4 段待審查）
 - 細節：`details.md`；進度：`progress.md`
 
 ## 摘要
@@ -157,6 +157,10 @@ parser 的續跑和子 frame 的 commit 是 renderer 自己的工作，直接排
 
 14. **第 3 段：主 thread 拿掉「一輪」的機制、外圈的 `run_due_tasks` 和內圈的 `run_queued_tasks`**（2026-11-24，使用者決定；A）：每個 DOM task 是 scheduler 的一個 task，畫面和輸入照 scheduler 的先後插進去（Chrome 沒有「一輪」：互相 `postMessage` 的頁照 enqueue order 和其他 task 交錯）。worker 的 loop 不經過這個 scheduler，照舊用一輪的機制（`begin_task_pass`）。不選留著外圈的當保險（B）：DOM 的 task 有兩條路跑，順序看哪條先到，第 3 條的「順序只在 scheduler 一個地方決定」不成立。
 15. **第 3 段：scheduler 裡一個 `TaskQueue::Dom`**（2026-11-24，使用者決定；A）：跨 queue 照編號挑，DOM 的 task 之間、和其他來源之間都照排進來的先後；script 停在斷點時不取它。對照 Chrome：每個 frame、每種 task type 一個 queue，同一個優先度的照 enqueue order 挑；分開主要是為了背景分頁的節流，machopo 還沒有。不選照 task type 分（B）：現在沒有東西需要分開。
+
+16. **第 4 段：renderer 自己的 timer 是 scheduler 的延後 task**（2026-11-24，使用者決定；A）：caret 的閃爍、intersection observer 的 `delay`、延後的 iframe `load`、新內容的逾時在設定時 post 一個延後的 task（沿用第 3 段的 delayed heap，到期、挑下一個 task 時才排進去），輪到時再看它還該不該做（取消了、改了時間的什麼都不做）。parser 的續跑、等 sheet 的 script、`javascript:` 網址的 commit 在要做的時候 post 一個 task（Chrome 都是排 0 ms 的 task，kNetworking）。對照 Chrome：這些都是 `TaskRunner::PostDelayedTask` 的 timer（`FrameCaret`、`ScheduleDelayedIntersection`、`DispatchLoad` 的 100 ms、Browser 的 `TimeoutMonitor`），取消的在輪到時略過。不選照舊由 loop 算醒來的時間（B）：順序還是 loop 決定的，第 5 段拿掉外圈時要再改。
+17. **第 4 段：這些工作在一個 `TaskQueue::Internal`**（2026-11-24，使用者決定；A）：script 停在斷點時不取它，和 DOM 的 queue 一樣。對照 Chrome：kInternalDefault、kInternalLoading、kNetworking 和 V8 的 queue 大多是同一個優先度。不選照 task type 分（B）：現在沒有東西需要分開。
+18. **第 4 段：V8 的 platform task 經過 `PlatformImpl` 送到它的 isolate 的 thread 的 scheduler**（2026-11-24，使用者決定；A）：`bindings` 改用 rusty_v8 的 `PlatformImpl`（V8 的 `PostTask`、`PostDelayedTask` 交給 Rust，不改 V8 的 C++、不用重編）：照 isolate 送到那個 thread（主 thread 的進 `TaskQueue::Internal`，延後的進 delayed heap；worker 的進它的 inbox），idle task 交給 idle period。對照 Chrome：V8 的三種 foreground task runner 是主 thread scheduler 的 `kMainThreadTaskQueueV8*`。代價：platform 是整個 process 共用的，要一張 isolate 到 thread 的對照表（一個 lock），worker 的 loop 要接收；動到 `bindings` 的 platform，照 `crates/bindings/soundness.md` 檢查。不選每個 task 之後拉一次（B）：V8 延後的 task 照舊沒有東西叫醒 loop。不選這一段不做（C）。
 
 ## 待決定
 

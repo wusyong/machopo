@@ -389,6 +389,8 @@ STATICS_ALLOWED = {
     ("crates/compositor/src/layer_tree_host_impl.rs", "TILE_PIXELS"):
         "thread-local: the buffer each thread that rasters tiles draws into",
     ("crates/bindings/src/platform.rs", "PLATFORM"): "V8's platform: one per process, as in Chromium",
+    ("crates/bindings/src/platform_tasks.rs", "TASKS"):
+        "V8's platform's foreground tasks, kept apart by isolate: part of the one platform per process",
     ("crates/bindings/src/script_state.rs", "WRAP_TAGS_CHECKED"): "a one-time check of V8's build",
 }
 

@@ -43,6 +43,7 @@ mod gc_platform;
 mod isolate_state;
 mod module_record;
 mod platform;
+mod platform_tasks;
 mod promise_resolvers;
 mod script_state;
 pub mod trace;
@@ -66,6 +67,7 @@ pub use module_record::{
     finish_dynamic_import, reject_dynamic_import,
 };
 pub use platform::{initialize, initialize_with_flags, platform, v8_version};
+pub use platform_tasks::PlatformTaskWaker;
 
 // For `initialize_v8_before_main!`: its users need not depend on `ctor`.
 #[doc(hidden)]

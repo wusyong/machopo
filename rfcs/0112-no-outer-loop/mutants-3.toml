@@ -66,15 +66,17 @@ to = '''            state.queue_due();
 [[mutant]]
 name = "a wait doesn't wake for the DOM's next timer"
 file = "crates/renderer/src/task_queue.rs"
-from = '''            let delayed = state.next_delayed().filter(|_| queues.has(TaskQueue::Dom));'''
-to = '''            let delayed = state.next_delayed().filter(|_| queues.has(TaskQueue::Dom) && false);'''
+from = '''                .filter(|_| queues.has(TaskQueue::Dom) || queues.has(TaskQueue::Internal));'''
+to = '''                .filter(|_| queues.has(TaskQueue::Internal));'''
 test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "event_loop::"]
 
 [[mutant]]
 name = "a timer due later is queued at once"
 file = "crates/renderer/src/task_queue.rs"
-from = '''            match at.filter(|at| *at > Instant::now()) {'''
-to = '''            match at.filter(|at| *at > Instant::now() && false) {'''
+from = '''        if at <= Instant::now() {
+            let _ = self.post(queue, task, false);'''
+to = '''        if at <= Instant::now() || queue == TaskQueue::Dom {
+            let _ = self.post(queue, task, false);'''
 
 [[mutant]]
 name = "a token's task runs by the DOM's clock alone"

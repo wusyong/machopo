@@ -66,7 +66,15 @@ pub fn initialize_with_flags(flags: &str) {
             .unwrap_or(0);
         // TODO: ship ICU data (e.g. via `deno_core_icudata`) and call
         // `v8::icu::set_common_data_*` here so `Intl` works.
-        let platform = v8::new_default_platform(threads, false).make_shared();
+        // V8's foreground tasks are the embedder's to schedule
+        // (`platform_tasks`), as Blink's `gin::V8Platform`'s are.
+        let platform = v8::new_custom_platform(
+            threads,
+            false,
+            false,
+            crate::platform_tasks::EmbedderPlatform,
+        )
+        .make_shared();
         v8::V8::initialize_platform(platform.clone());
         // cppgc must be up before any `cppgc::Heap` (and so any isolate).
         v8::cppgc::initialize_process(platform.clone());

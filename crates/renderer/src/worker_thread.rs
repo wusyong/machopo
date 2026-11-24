@@ -41,6 +41,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvError, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
+use std::time::Instant;
 
 use dom_api::{ClassicScript, EngineSettings, WorkerEngine, WorkerError, WorkerStart};
 use protocol::control_channel::BrowserSender;
@@ -76,6 +77,9 @@ pub(crate) enum WorkerTask {
     /// From another thread: its DOM's message ports may have messages
     /// (`dom::PortWaker`), which its loop runs as it runs its tasks.
     PortMessages,
+    /// From any thread: its engine has platform tasks ready (V8's
+    /// foreground tasks), which its loop runs next round.
+    PlatformTasks,
     /// What the worker it made numbered `id` sends its `Worker`. Boxed, as
     /// `Browser`.
     Child { id: u64, event: Box<WorkerEvent> },
@@ -459,8 +463,9 @@ impl GlobalHost {
                 Ok(task @ (WorkerTask::Message(_) | WorkerTask::Child { .. })) => {
                     self.inbox.put_off.borrow_mut().push_back(task);
                 }
-                // Its ports are looked at once its loop runs its tasks.
-                Ok(WorkerTask::PortMessages) => {}
+                // Its ports, and its engine's platform tasks, are looked at
+                // once its loop runs its tasks.
+                Ok(WorkerTask::PortMessages | WorkerTask::PlatformTasks) => {}
                 Err(_) => break,
             }
             if self.shared.stopping() {
@@ -661,6 +666,23 @@ fn run(thread: WorkerThread) {
         put_off: RefCell::new(VecDeque::new()),
     });
     let mut engine = make(settings);
+    // Its engine's platform tasks wake it as V8 posts them, from any
+    // thread: a task in its channel for those ready; the delayed ones'
+    // times, for its loop's wait (shared with V8's threads, so behind a
+    // lock).
+    let platform_due: Arc<Mutex<Vec<Instant>>> = Arc::default();
+    {
+        let scheduler = Arc::downgrade(&scheduler);
+        let due = platform_due.clone();
+        engine.set_platform_task_waker(Arc::new(move |at| {
+            if let Some(at) = at {
+                due.lock().unwrap_or_else(PoisonError::into_inner).push(at);
+            }
+            if let Some(scheduler) = scheduler.upgrade() {
+                scheduler.send_worker_task(id, WorkerTask::PlatformTasks);
+            }
+        }));
+    }
     *shared
         .terminator
         .lock()
@@ -690,7 +712,8 @@ fn run(thread: WorkerThread) {
             }
             Ok(WorkerTask::Message(message)) => early.push(message),
             // It has no port, nor worker, yet.
-            Ok(WorkerTask::PortMessages | WorkerTask::Child { .. }) => {}
+            Ok(WorkerTask::PortMessages | WorkerTask::PlatformTasks | WorkerTask::Child { .. }) => {
+            }
             Ok(WorkerTask::Stop) | Err(_) => return,
         }
     };
@@ -798,10 +821,23 @@ fn run(thread: WorkerThread) {
             break;
         }
         engine.run_due_tasks();
+        // Its engine's platform tasks that are due (those a delayed one's
+        // time woke it for done with).
+        engine.run_platform_tasks();
+        let now = Instant::now();
+        let next_platform = {
+            let mut due = platform_due.lock().unwrap_or_else(PoisonError::into_inner);
+            due.retain(|at| *at > now);
+            due.iter().min().map(|at| at.saturating_duration_since(now))
+        };
         if shared.stopping() || closing.get() {
             break;
         }
-        let task = match engine.until_next_task() {
+        let wait = match (engine.until_next_task(), next_platform) {
+            (Some(task), Some(platform)) => Some(task.min(platform)),
+            (task, platform) => task.or(platform),
+        };
+        let task = match wait {
             Some(wait) => match inbox.recv_timeout(wait) {
                 Ok(task) => Some(task),
                 Err(RecvTimeoutError::Timeout) => None,
@@ -819,7 +855,7 @@ fn run(thread: WorkerThread) {
             },
             Some(WorkerTask::Stop) => break,
             // Run with its tasks, next round.
-            Some(WorkerTask::PortMessages) => {}
+            Some(WorkerTask::PortMessages | WorkerTask::PlatformTasks) => {}
             // What a worker it made sends its `Worker`, as the main thread
             // takes it (`RenderThread::worker_event`).
             Some(WorkerTask::Child { id: child, event }) => match *event {

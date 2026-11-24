@@ -154,21 +154,19 @@ to = '''            Some(id) => {'''
 [[mutant]]
 name = "the windows end in the outer turn alone"
 file = "crates/renderer/src/render_thread.rs"
-from = '''        self.blob_urls.flush_revoked();
-        self.end_cancellation_windows();
-        self.tell_devtools_after_task();'''
-to = '''        self.blob_urls.flush_revoked();
-        self.tell_devtools_after_task();'''
+from = '''        self.end_cancellation_windows();
+        // The parser's scripts that wait'''
+to = '''        // The parser's scripts that wait'''
 
 [[mutant]]
 name = "the windows end before the revokes"
 file = "crates/renderer/src/render_thread.rs"
 from = '''        self.blob_urls.flush_revoked();
         self.end_cancellation_windows();
-        self.tell_devtools_after_task();'''
+        // The parser's scripts'''
 to = '''        self.end_cancellation_windows();
         self.blob_urls.flush_revoked();
-        self.tell_devtools_after_task();'''
+        // The parser's scripts'''
 test = ["cargo", "test", "-q", "-p", "browser"]
 
 [[mutant]]
