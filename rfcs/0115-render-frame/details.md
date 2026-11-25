@@ -79,7 +79,7 @@
 | 等著的樣式表（`pending_sheets`、`requested_links`） | renderer 的 `FrameDocument` | `LocalFrame` | `StyleEngine`、`LinkStyle` |
 | `load_finished`、`aborted`、`failed`、owner 的 `load`（`owner_loads`） | renderer | `LocalFrame` | `FrameLoader`、`Document::CheckCompleted` |
 | 「在載入中」 | DOM（`frame_navigating`），由 engine 和 renderer 兩邊設 | `LocalFrame` | `FrameLoader::IsLoading` |
-| fragment 的導覽 | DOM 設網址，renderer 捲動 | `LocalFrame`（捲動見待決定的第 3 條） | `FrameLoader`、`LocalFrameView` |
+| fragment 的導覽 | DOM 設網址，renderer 捲動 | `LocalFrame`（捲動見待決定的第 2 條） | `FrameLoader`、`LocalFrameView` |
 | body 的 pipe（`body`） | renderer 的 `FrameDocument` | `RenderFrame`，bytes 交給 `LocalFrame` | `NavigationBodyLoader`（content） |
 | 進行中的導覽（`ChildNavigationRequest`、`main_origin_source`、`navigations_asked`） | renderer 的三張表 | `RenderFrame` | `RenderFrameImpl`、`NavigationClient` |
 | `navigation_id`、排著的 renderer 自己的 commit（`commits`） | renderer | `RenderFrame` | `RenderFrameImpl` |

@@ -1,7 +1,7 @@
 # RFC 0115：每個 frame 的狀態照 content 和 Blink 的界線各有一個擁有者
 
 - 開始日期：2026-11-25
-- 狀態：👍 已接受：2026-11-25（第 1 段；第 2 到 4 段是方向）
+- 狀態：🚧 已排程：2026-11-25（第 1 段；第 2 到 4 段是方向）
 - 細節：`details.md`
 
 ## 摘要
@@ -30,7 +30,7 @@
 
 - site isolation、remote frame（`RenderFrameProxy`）。
 - 導覽本身的行為（`javascript:` 網址在呼叫之後才算載入中、`BlobURLToken`，`docs/limitations.md` 的那幾條）：界線搬好之後各自比較好修，但不在這份。
-- `FrameView` 和 layout、paint、compositor 怎麼接：`FrameView` 留在 renderer（畫面那一側），這份只讓它問文件「擋著沒」、在 main frame 時捲到 fragment（待決定的第 3 條）。
+- `FrameView` 和 layout、paint、compositor 怎麼接：`FrameView` 留在 renderer（畫面那一側），這份只讓它問文件「擋著沒」、在 main frame 時捲到 fragment（待決定的第 2 條）。
 
 ## 設計概要
 
@@ -63,10 +63,10 @@
 
 第 1 段是要做的；第 2 到 4 段是方向，各段的信心和未知數在下面的「信心和未知數」，第 1 段做完之後重新評估（已決定的事項第 1 條），結論也可能是只搬一部分、接受剩下的接縫。
 
-1. **renderer 那一側收成 `RenderFrame`**：八張表收進一個物件、每種轉換一個方法，最上層和子 frame 同一種；`handle_frame_requests` 的十八處變成一行分派；debug build 在讀帳的地方檢查 engine 裡沒有沒分派的 `FrameRequest`。擁有者照舊是 `RenderThread`，行為和時機不變。之後的每一段都在它上面搬。
+1. **renderer 那一側收成 `RenderFrame`**（已決定的事項第 2 到 8 條）：八張表收進一個物件、每種轉換一個方法，最上層和子 frame 同一種；`handle_frame_requests` 的十八處變成一行分派；debug build 在讀表的地方檢查 engine 裡沒有沒分派的 `FrameRequest`。擁有者照舊是 `RenderThread`，行為和時機不變（除了第 8 條的修正）。之後的每一段都在它上面搬。
 2. **文件的載入搬到 engine 那一側的 `LocalFrame`**：body 的 data pipe 交給它（照 Chromium，它自己收 bytes），parser 和解碼、parser 的 script、樣式表的請求和 render-blocking 的判斷、`load` 和 readiness；發請求經過 `LoadSink` 這類 hook，parser 讓出是 DOM 的一種 task（照 Chromium 的 `kNetworking`），畫面那一側問它擋著沒。畫面那一半（`rendered_*`、`load_finished` 和 reftest 的 swap promise、標題的時機）留在 renderer，跟著 `FrameView`。`documents.rs` 的大半、兩個 engine（`dom_wasm` 只有最上層）都要動，要再分小段。
 3. **`RenderFrame` 由 engine 的 frame 擁有**：導覽在 client 裡送出並記帳，Browser 的訊息經過 engine 往下走；`FrameRequest` 的導覽、`handle_frame_requests`、十八處和第 1 段的檢查拿掉。
-4. **fragment 的捲動排到下一次 main frame**：待決定的第 3 條；可能併進第 3 段。
+4. **fragment 的捲動排到下一次 main frame**：待決定的第 2 條；可能併進第 3 段。
 
 ### 信心和未知數
 
@@ -113,12 +113,18 @@
 ## 已決定的事項
 
 1. **接受的範圍：第 1 段，第 2 到 4 段是方向**（2026-11-25，使用者決定）：第 1 段把 renderer 那一側收成 `RenderFrame`（八張表、每種轉換一個方法、最上層和子 frame 同一種、十八處變成一行分派、debug build 在讀帳的地方檢查 engine 裡沒有沒分派的 `FrameRequest`），擁有者照舊是 `RenderThread`，行為和時機不變；它不管之後選哪個方向都要做。第 2 到 4 段照「分階段」和「信心和未知數」是方向，第 1 段做完之後重新評估，再決定接不接受。理由：依賴的盤點之後，第 1 段的信心高、自己看得出對不對；之後的幾段規模大、信心中等，第 1 段做完依賴會清楚得多。不選一次接受整個方向：第 2 段要拆的函式（兩個 commit、parse 的迴圈）還沒拆過，現在定細節會猜。不選只做第 1 段、不寫方向：第 1 段的形狀（`RenderFrame` 只放對 Browser 的那一面，還是連文件一起）要照之後的方向定。
+2. **第 1 段：`RenderThread` 照 frame 的狀態是一張 `BTreeMap<FrameId, RenderFrame>`**（2026-11-25，使用者決定；A）：`RenderFrames` 取代 `document`、`ChildFrames`（`documents`、`navigations`、`owner_loads`；`commits` 的佇列也在 `RenderFrames` 上，第 4 條）、`main_origin_source`、`devtools_main_frame_token`；最上層和子 frame 同一種，最上層是 `frames[&TOP]`。`FrameId` 是 engine 照建立的順序給的（最上層是 0），走訪的順序和原本的 `Vec` 一樣。對照 Chromium：content 的 `g_frame_map`，每個 frame 一個 `RenderFrameImpl`。不選最上層一個欄位、子 frame 一張表：「照 frame 找」要分兩種情況，`doc`、`is_top` 的特例留著。不選 `Vec` 照 id 找：每次查表掃一遍。
+3. **第 1 段：`RenderFrame` 的欄位，最上層和子 frame 的導覽同一種**（2026-11-25，使用者決定；A）：`document: Option<FrameDocument>`（子 frame 一建立就有 initial 的，最上層第一次 commit 之前沒有）、`navigation: Option<NavigationRequest { begin_id, no_referrer, origin_source }>`（最上層的 `main_origin_source` 併進來，`no_referrer` 是 false；commit 時照舊：子 frame 比 `begin_id`，最上層只拿 `begin_id` 對得上的 `origin_source`）、`devtools_token: Option<FrameToken>`（只有最上層，Browser 給的）、`owner_load_at: Option<f64>`。對照 Chromium：`RenderFrameImpl` 的 `navigation_client_impl_` 不分最上層和子 frame。不選兩種各記各的：特例還在，第 3 段搬到 client 時要搬兩種。不選只搬文件：frame 不見要清每張表的問題還在。
+4. **第 1 段：整個 renderer 的帳和 `javascript:` 的佇列留在外面**（2026-11-25，照建議，使用者同意）：`own_history_entries`（整個分頁的 session history 的計數）和 `navigations_asked`（照送出的順序在 task 結束時一次送 `NavigationCancellationWindowEnded`）留在 `RenderThread`；`javascript:` 的 commit 佇列跨 frame、照排進來的順序，在 `RenderFrames` 上，`RenderFrame` 的方法排和清。不選把 `navigations_asked` 放進每個 frame（Chromium 是每個 `NavigationClient` 一個 window）：送出的順序變成照 frame 的順序，換不到第 1 段要的東西。新的檔案 `render_thread/render_frame.rs` 放 `RenderFrames`、`RenderFrame`、`NavigationRequest` 和 `FrameDocument` 的定義；`documents.rs` 裡用它們的程式先不搬。
+5. **第 1 段：`RenderFrame` 的方法只改自己的資料**（2026-11-25，使用者決定；A，**第 3 段要再看一次**）：方法回傳接下來要做什麼（例如沒送出的導覽是 fragment 還是 `javascript:` 的 commit），要用 renderer 狀態的步驟（子 frame 捲到 fragment、告訴 DevTools、要一個 main frame、排 `javascript:` commit 的 task）由 `RenderThread` 照回傳做。資料和動作分開、`RenderFrame` 可以單獨測。第 3 段 engine 擁有 `RenderFrame` 時它要自己做這些，那時再決定服務怎麼給（對照 Chromium：`RenderFrameImpl` 的欄位拿著 `FrameHost` 的 remote、task runner）。不選服務是 `RenderFrame` 的欄位：捲動和要 main frame 照樣要 `RenderThread`，第 3 段的形狀還沒定就先定了服務。不選服務當參數傳：每個呼叫要先組參數，第 3 段又改一次。
+6. **第 1 段：debug build 在每次讀表時檢查 engine 沒有沒分派的 `FrameRequest`**（2026-11-25，使用者決定；A）：`ScriptEngine` 多一個 `has_frame_requests()`；`RenderFrames` 的讀取（`frame`、`frame_mut`、走訪）在 debug build 斷言它是 false，`handle_frame_requests` 分派的期間例外。忘了在呼叫 engine 之後分派的地方，第一次讀表就 panic。實作時逐一確認有沒有「先讀表、再分派」本來就對的地方。對照 RFC 0114 的 `assert_no_dom_task_lost`。不選只在處理 Browser 的訊息前和 task 結束時檢查：task 結束時本來就分派，抓不到十八處要防的「同一個 task 裡呼叫完馬上讀」。不選不加：十八處照舊只靠審查。
+7. **第 1 段：子 frame 的 `RenderFrame` 照舊在呼叫之後建和拿掉**（2026-11-25，使用者決定；A）：`follow_child_frames` 照 engine 的 frame 清單建和拿掉 `RenderFrame`，時機不變；當場建（Chromium 的 `CreateChildFrame`）是第 3 段 engine 擁有 `RenderFrame` 時的事。不選在 hook 的 `child_frame_created` 當場建：hook 碰不到 `RenderThread` 的表，等於把第 3 段提前做一部分。
+8. **第 1 段：frame 不見時它排著的 owner `load` 一起拿掉，照修**（2026-11-25，使用者決定；A）：現在 `ChildFrames::remove` 沒清 `owner_loads`，`known()` 把不見的 frame 當成還在；收成 `RenderFrame` 之後拿掉 frame 就清掉。加一個測試，記進 `progress.md` 的找到的 bug。這是第 1 段唯一的行為改變。不選第 1 段保留舊行為、之後另外修：要在新的結構裡刻意重現漏清。
 
 ## 待決定
 
-1. **第 1 段的細節**：`RenderFrame` 的欄位和方法、最上層和子 frame 合成一種之後的差別（最上層的 token 是 Browser 給的、`main_origin_source` 只在最上層）、debug build 的檢查放在哪幾個讀帳的地方。第 1 段開始前定。
-2. **第 2 段怎麼搬文件的載入**：`LocalFrame` 放在 `dom_api` 還是各 engine、parser（`html` crate）和 script 的排程搬過去的順序、要不要再分小段。盤點和第 1 段做完之後定。
-3. **`FrameView` 和 fragment 的捲動放哪**：Chromium 的捲動不在導覽的呼叫裡：設好 `FragmentAnchor`、要一個 frame，lifecycle 的 layout 之後才捲。2026-11-25 的看法：照做，fragment 的導覽在 engine 那一側 commit、記下要捲到哪，下一次 main frame 時 `FrameView` 捲；這樣不用在 hook 裡碰 layout，`FrameView` 也不用搬（它留在 renderer，是畫面那一側的）。要確認的：子 frame 的 fragment 捲動和輸入的 ack 的順序（現在 ack 等捲動）。第 3 段之前定。
+1. **第 2 段怎麼搬文件的載入**：`LocalFrame` 放在 `dom_api` 還是各 engine、parser（`html` crate）和 script 的排程搬過去的順序、要不要再分小段。盤點和第 1 段做完之後定。
+2. **`FrameView` 和 fragment 的捲動放哪**：Chromium 的捲動不在導覽的呼叫裡：設好 `FragmentAnchor`、要一個 frame，lifecycle 的 layout 之後才捲。2026-11-25 的看法：照做，fragment 的導覽在 engine 那一側 commit、記下要捲到哪，下一次 main frame 時 `FrameView` 捲；這樣不用在 hook 裡碰 layout，`FrameView` 也不用搬（它留在 renderer，是畫面那一側的）。要確認的：子 frame 的 fragment 捲動和輸入的 ack 的順序（現在 ack 等捲動）。第 3 段之前定。
 
 ## 之後的可能
 
