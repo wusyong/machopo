@@ -1,116 +1,68 @@
 # RFC 0109 的進度：結束的流程（graceful shutdown）
 
-開始日期：2026-11-22
+開始日期：2026-11-22。完成：2026-11-25，Linux（Fedora 45、24 個邏輯 CPU、AMD 的 Mesa；debug build）；macOS 和 Windows 沒有跑，Windows 的 `ipc` 只對 `x86_64-pc-windows-msvc` 編過。目標第 6 條（重複跑不壞）照已決定的事項第 6 條看 merge 之後的 CI。
 
 ## 步驟
 
 | 步驟 | 狀態 | 完成日期 |
 | --- | --- | --- |
-| 0. 盤點結束的流程 | 做完，待審查（只在 Linux 上量） | 2026-11-23 |
-| 1. 審查 `shell` 的測試 | 做完，待審查 | 2026-11-23 |
-| 1b. 重新評估（RFC 0110、0111、0112 之後）：A 類修掉、B1 和 B2 改寫，B3 到 B8 審核、對過 Chrome，範圍改成以結束為主（已決定的事項第 3 條） | 做完，待審查 | 2026-11-24 |
-| 2. 收掉 `shell` 測試的尾巴（B3 到 B8、C1 和 C2、S6；已決定的事項第 4 到 7 條） | 做完，待審查 | 2026-11-24 |
-| 2a. B3 到 B8 改寫（已決定的事項第 4 條） | 做完，待審查 | 2026-11-24 |
-| 2b. 「拒絕連線」的 port 是 guard（第 5 條） | 做完，待審查 | 2026-11-24 |
-| 2c. S6：`BrowserWindow` 沒有 shutdown 就丟掉時照樣 shutdown（第 7 條） | 做完，待審查 | 2026-11-24 |
-| 2d. mutation test、文件（穩定性照第 6 條看 CI） | 做完，待審查 | 2026-11-24 |
-| 3. 重量、定結束的規則（已決定的事項第 8 到 17 條） | 做完，待審查 | 2026-11-24 |
-| 4. 照規則改（4a 到 4g） | 做完，待審查 | 2026-11-25 |
-| 4a. 一條收尾的路、記一行的機制、profile 的 10 秒（第 12、13、18 條） | 做完，待審查 | 2026-11-25 |
-| 4b. renderer 同時請、共用 2 秒，到了 kill、記一行（第 8、9、12、19 條） | 做完，待審查 | 2026-11-25 |
-| 4c. 同一個 process 的 renderer 打斷 script 再有時限地等（第 10 條） | 做完，待審查 | 2026-11-25 |
-| 4d. SIGTERM、SIGINT、SIGHUP 走正常的結束，第二次立刻結束（第 11、12 條） | 做完，待審查 | 2026-11-25 |
-| 4e. automation pipe 的 writer 有時限地等（第 14 條） | 做完，待審查 | 2026-11-25 |
-| 4f. Viz 畫不下去時交給 main（第 15 條） | 做完，待審查 | 2026-11-25 |
-| 4g. renderer process 的 stdio（第 16 條） | 做完，待審查 | 2026-11-25 |
-| 5. 驗收 | 進行中：六條對到測試、重量做完；等 merge 之後的 CI | |
+| 0. 盤點結束的流程 | 做完（只在 Linux 上量） | 2026-11-23 |
+| 1. 審查 `shell` 的測試；2026-11-24 重新評估，範圍改成以結束為主（第 3 條） | 做完 | 2026-11-24 |
+| 2. 收掉 `shell` 測試的尾巴：B3 到 B8、C1 和 C2、S6（第 4 到 7 條） | 做完 | 2026-11-24 |
+| 3. 重量、定結束的規則（第 8 到 17 條） | 做完 | 2026-11-24 |
+| 4. 照規則改：4a 收尾的路和記一行、4b renderer 共用 2 秒、4c 打斷 script、4d 訊號、4e pipe 的 writer、4f Viz、4g renderer 的 stdio（第 18、19 條） | 做完 | 2026-11-25 |
+| 5. 驗收 | 做完（CI 看 merge 之後） | 2026-11-25 |
 
 ## 驗收
 
-| 項目 | 怎麼驗證 |
-| --- | --- |
-| 結束的流程：每一種跑法、情況、thread、全域變數、child process，和 Chromium 的對照 | `details.md` 的「結束的流程的盤點」；不改程式，所以沒有測試 |
-| `shell` 的測試：每個模組的分類、壞過的每一個的原因和把握 | `details.md` 的「`shell` 的測試的審查」；不改程式，所以沒有測試 |
-| 目標 1，一定結束：automation pipe | `shell` 的 `automation_pipe::hung_renderers_take_the_limit_once`（三個卡住的 renderer process，4 秒內）、`a_single_processs_hung_renderers_have_their_script_stopped`、`a_hung_renderer_leaves_the_writer_its_time`（`Browser.close`）、`a_signal_ends_machopo_as_closing_it_does`、`a_second_signal_ends_machopo_at_once`、`a_client_not_reading_doesnt_hold_machopo_up`；`details.md` 的「驗收時的重量」 |
-| 目標 1：headless | `shell` 的 `script::a_page_that_never_returns_ends_its_test` |
-| 目標 1：machopodriver 啟動的 | `shell` 的 `webdriver::a_session_with_a_hung_page_ends_in_time`（刪 session 在 machopodriver 的 5 秒之前回來；`mutants-5.toml`） |
-| 目標 1：視窗 | 和 automation pipe 同一段程式（`BrowserView::shutdown`、`StoragePartition::close`、`automation_pipe::wait_for_writer`、`main` 的 `end`）；視窗自己的那幾行（`App::exit`、`ShellEvent::Signal`、`ShellEvent::GpuFailed`）沒有自動測試（`docs/test-gaps.md`），`test.py scenarios --window` 跑過正常的關閉 |
-| 目標 2，不留東西 | `automation_pipe::hung_renderers_take_the_limit_once`（結束之後 renderer process 都不在了）、`a_renderer_process_hasnt_the_pipe`（renderer 不拿著 pipe）、`a_client_not_reading_doesnt_hold_machopo_up`（writer 被放掉時 process 照樣結束）；重量時每一格都沒有留下 renderer |
-| 目標 3，順序固定、不 crash | 收尾的順序在 `docs/architecture.md` 的「machopo 怎麼結束」；直接結束、不跑解構子（第 13 條）；`remote_debugging::a_port_taken_ends_it_with_an_error`（啟動到一半失敗，30 次）；上面每個測試都檢查結束碼 |
-| 目標 4，該寫完的寫完 | `automation_pipe::a_profile_is_written_as_machopo_ends`（cookie、`localStorage`、HTTP cache）、`a_signal_ends_machopo_as_closing_it_does`（SIGTERM 之後）、`trace::`（Browser 和 renderer process 的 trace，`mutants-4a.toml`）；放棄時的那一支在 `docs/test-gaps.md` |
-| 目標 5，被 kill 也乾淨 | `automation_pipe::a_killed_browsers_*`（四個，等 renderer 的 pid 都不在） |
-| 目標 6，重複跑不壞 | 照第 6 條看 CI：merge 之後 CI 連續綠燈 |
+`shell` 的測試是 `cargo test -p shell --test it <名稱>`。只能靠審查的在 `docs/test-gaps.md`。
+
+| 領域 | 項目 | 怎麼驗證 |
+| --- | --- | --- |
+| 一定結束 | automation pipe：卡住的 renderer process 不管幾個，2 秒的期限只等一次，到了 kill、記一行（原本一個 5 秒） | `automation_pipe::hung_renderers_take_the_limit_once` |
+| 一定結束 | `--single-process`：卡住的 renderer 的 script 被打斷，`setInterval` 一直重新進入的也是，自己結束、不用放棄（原本不結束） | `automation_pipe::a_single_processs_hung_renderers_have_their_script_stopped` |
+| 一定結束 | headless：頁面進入無窮迴圈，測試照樣結束 | `script::a_page_that_never_returns_ends_its_test` |
+| 一定結束 | machopodriver：頁面卡住時刪 session，在它的 5 秒之前回來 | `webdriver::a_session_with_a_hung_page_ends_in_time` |
+| 一定結束 | `Browser.close` 遇上卡住的 renderer，回答照樣送到、writer 不被放掉 | `automation_pipe::a_hung_renderer_leaves_the_writer_its_time` |
+| 一定結束 | client 不讀 stdout：writer 被放掉、記一行（原本不結束） | `automation_pipe::a_client_not_reading_doesnt_hold_machopo_up` |
+| 一定結束 | SIGTERM、SIGINT、SIGHUP 照關掉結束；第二次立刻結束（143）、記一行；`nohup` 的 SIGHUP 照舊忽略 | `automation_pipe::a_signal_ends_machopo_as_closing_it_does`、`a_second_signal_ends_machopo_at_once`、`a_signal_started_ignored_stays_so` |
+| 一定結束 | 視窗：和 automation pipe 同一段收尾；`test.py scenarios --window` 跑過正常的關閉 | 視窗自己的那幾行（`App::exit`、`ShellEvent::Signal`、`ShellEvent::GpuFailed`）靠審查 |
+| 一定結束 | Viz 的 device 重建不了：只說一次、不再畫、不拷貝、不改大小 | `viz` 的 `a_renderer_that_cant_draw_says_so_once_and_draws_no_more`；到結束碼 1 的那一半靠審查 |
+| 一定結束 | 每一種情況量過，2.07 秒內 | `details.md` 的「驗收時的重量」 |
+| 不留東西 | 卡住的 renderer 被 kill 之後都不在了；renderer 不拿著 pipe（stdin 是 `/dev/null`，stdout、stderr 是 Browser 的 stderr） | `automation_pipe::hung_renderers_take_the_limit_once`、`a_renderer_process_hasnt_the_pipe` |
+| 被 kill 也乾淨 | Browser 被 kill 時 renderer 跟著結束（等它們的 pid 不在） | `automation_pipe::a_killed_browsers_*`（四個） |
+| 順序、不 crash | 啟動到一半失敗時照樣 shutdown，以結束碼 1 結束、說明原因（30 次） | `remote_debugging::a_port_taken_ends_it_with_an_error`；上面每個測試都檢查結束碼 |
+| 寫完 | 正常結束時 cookie、`localStorage`、HTTP cache 寫完，沒有放棄的那一行；SIGTERM 之後也是 | `automation_pipe::a_profile_is_written_as_machopo_ends`、`a_signal_ends_machopo_as_closing_it_does` |
+| 寫完 | Browser 和 renderer process 的 trace 寫完 | `trace::`（`mutants-4a.toml` 的「trace 的結尾沒寫」） |
+| 寫完 | profile 的資料庫關過、等不到的 thread，丟掉時不再等 | `net` 的 `database_thread::a_closed_thread_given_up_on_is_let_go`、`browser` 的 `dom_storage` 的同名測試 |
+| `shell` 的測試 | B3 到 B8 守它們本來要守的事 | `mutants-2.toml`（每個一條） |
+| `shell` 的測試 | 「拒絕連線」的 port 整個測試期間占著 | `net` 的測試（mutant「guard 改成 listen」） |
+| 盤點 | 每一種跑法、情況、thread、全域變數、child process，和 Chromium 的對照 | `details.md` 的「結束的流程的盤點」 |
 
 ## 做過的檢查
 
-### 第 4 段結束的檢查（2026-11-25，Linux：Fedora 45，`f16e8c2` 之上加 4g）
+### 第 4、5 段（2026-11-25，`9109d9f` 到 `d54121b`）
 
-- `cargo test --workspace` 通過（60 個 binary，4855 個通過、1 個 ignored）。`cargo fmt --check`：第 4 段改過的 10 個檔案有排版的差，`cargo fmt` 改好。`cargo clippy --workspace --all-targets -- -D warnings`：三類，都是這一段加的：測試的計數器（`#[expect]`）、`MainThreadTerminator` 的型別太複雜（`Terminate` 的 type alias）、`Instant` 加上時限（照 machopodriver 的寫法加帶理由的 `#[expect]`，五處）；改好之後通過，相關的四個 crate 重跑通過。`sanity.py` 的七項通過。
-- 量測工具的四組測試（4a、4c、4g 各跑一次）通過。
-- `test.py wpt html/webappapis/timers`（automation pipe 改了）：25 個測試，1 個非預期的通過（`negative-settimeout.any.worker.html`，期望值是初始 commit 的 `ERROR`），三次都一樣；`main` 2026-11-24 的 Nightly 上也是 `Test OK, expected ERROR`，不是這份造成的，沒有改期望值。那次 Nightly 的 `wpt (2)`、`wpt (3)`、`wpt (4)`、`wdspec` 都有非預期的結果，另外處理。
-- `test.py scenarios`（沒有平台視窗）98 個通過。`test.py scenarios --window`（4d、4e、4f 改了視窗那一層）：74 個裡 6 個失敗。`intersection-observer`、`resize-observer`、`resize`、`scroll-anchoring` 是 `docs/limitations.md` 記著的 Linux 真視窗的大小問題；`fixed-into-view`（捲到 1500、要 1600）和 `frame-input`（點在 `49.75 20.5`、要 `50 20`）是新的，也是視窗的大小或縮放的那一類：`fixed-into-view` 是 2026-11-22 才加的、之前沒在 Linux 的真視窗上跑過；第 4 段在 `window.rs` 改的（訊號、Viz 的失敗、writer 的等待）不碰大小和座標。沒有在 `main` 上重跑確認。
+**mutation test**（每一步一份 spec，都在這個資料夾）：4a 11 個抓到 8 個，4b 4 個、4c 5 個、4d 6 個、4e 3 個、4f 5 個、4g 2 個、第 5 段 1 個都抓到。沒抓到和第一輪沒抓到的：
 
-### 第 4 段的 4g（2026-11-25，Linux：Fedora 45，debug build，`f16e8c2` 之上）
+- 4a「視窗收尾時不關 profile」：等價。回到 `main` 之前每份 `StoragePartition` 的 handle 都已經被丟掉，store 的 `Drop` 照樣寫完。查的時候發現 `close` 等不到放棄之後，`Drop` 的 `join` 照樣永遠等、時限沒有作用；補上「放掉」和它的三個 mutant，都抓到。
+- 4a「結束前寫 census」「結束前 flush stdout」：等價（計數的 thread 在 process 結束之前就被 join、自己寫了；pipe 的 writer 每則都 flush），兩段程式拿掉，`details.md` 的盤點更正。
+- 4e「沒有寬限」靠時機（第一次檢查時 writer 還沒做完），單獨再跑三次，四次都抓到。
+- 4f「畫不下去之後照樣畫」第一輪沒抓到：測試只經過要拷貝的那條路畫，那條路有自己的檢查；補上一次不拷貝的畫（畫了 texture 會被上傳），抓到。
 
-**做了什麼**：`shell::renderer_launcher` 啟動的 renderer process 的 stdin 接 `Stdio::null()`、stdout 是 Browser 的 stderr（`Stdio::from(io::stderr())`，三個平台一樣），stderr 照舊繼承。
+**第一版就錯的測試**：4c 的 headless 測試的頁面在 `load` 傳到 Browser 之前就進入迴圈，headless 等不到載入、等滿自己的 30 秒：改成載入之後 200 ms 才進入迴圈。
 
-**測試**：`automation_pipe::a_renderer_process_hasnt_the_pipe`（Linux：讀 `/proc/<pid>/fd`，renderer 的 fd 0 是 `/dev/null`、fd 1 和 fd 2 是 Browser 的 stderr 的那個檔案；原本的程式上 fd 0 是 pipe，先失敗）。`renderers_go_with_a_killed_browser`（四個 `a_killed_browsers_*`）原本靠「renderer 也拿著 stdout，要等它們都不在 pipe 才讀到結尾」判斷 renderer 有沒有跟著結束，這一步之後那個判斷就沒有作用了：改成 kill 之前用 `SystemInfo.getProcessInfo` 拿 renderer 的 pid，之後等它們在 10 秒內都不在（Unix 的 `kill -0`、Windows 的 `tasklist`）。
+**改寫的測試**：`renderers_go_with_a_killed_browser` 原本等 pipe 讀到結尾判斷 renderer 有沒有跟著結束，4g 之後 renderer 不拿著 stdout，那個判斷沒有作用了：改成 kill 之前用 `SystemInfo.getProcessInfo` 拿 pid，等它們都不在（Unix 的 `kill -0`、Windows 的 `tasklist`）。
 
-**mutation test**（`mutants-4g.toml`，2 個，都抓到）：stdin 還是 pipe、stdout 還是 pipe。
+**順帶修的**：`scripts/bench/speedometer/speedometer_test.py` 的 `test_traces_of_both` 還在找 RFC 0112 第 5 段拿掉的 `RenderThread::between_tasks`（工具的測試不在 CI 裡），改成檢查 `RenderThread::run_platform_tasks` 在一個 task 裡。`docs/limitations.md` 裡 RFC 0110 已經修掉的「renderer 忙的時候，有些事晚一輪才做」（A1 到 A5，各有必壞的測試）和第 2 段修掉的「啟動到一半失敗時 crash」刪掉。
 
-### 第 4 段的 4f（2026-11-25，Linux：Fedora 45，debug build，`8a0f502` 之上）
+**階段結束的檢查**：`cargo test --workspace` 通過（60 個 binary，4855 個通過、1 個 ignored）；`cargo fmt` 改了第 4 段的 10 個檔案的排版；clippy 要求的三類（測試的計數器、`MainThreadTerminator` 的型別、`Instant` 加上時限的五處）改好之後通過；`sanity.py` 的七項通過。量測工具的四組測試（`census`、`raster`、`blink_perf`、`speedometer`）在 4a、4c、4g 之後各跑一次，通過。`test.py scenarios`（沒有平台視窗）98 個通過。
 
-**做了什麼**：`WgpuRenderer::recreate_context` 的三處 `std::process::exit(1)` 改成回錯誤；`draw` 拿到錯誤時呼叫 `on_failure` 一次、之後不畫、不拷貝、不改大小（`failed`），沒有 output 時 `size` 是 0。沒有視窗的跑法經過 `drive` 的迴圈（`ContextLost::failed`，sender 不在了也算：Viz 沒有能畫的 renderer）回 `Ended::GpuFailed`，視窗經過 `ShellEvent::GpuFailed`；兩邊都記一行（`automation_pipe::gpu_failed`），以錯誤結束（結束碼 1），收尾照關掉的流程。headless 沒有接 `on_failure`：照舊等不到 frame 而失敗。
+**WPT**（automation pipe 改了）：`test.py wpt html/webappapis/timers` 25 個測試，1 個非預期的通過（`negative-settimeout.any.worker.html`，期望值是初始 commit 的 `ERROR`），三次都一樣；`main` 2026-11-24 的 Nightly 上也是 `Test OK, expected ERROR`，不是這份造成的，期望值沒有改。那次 Nightly 的 `wpt (2)`、`wpt (3)`、`wpt (4)`、`wdspec` 都有非預期的結果（`wpt (3)` 的 67 個都是通過），不在這份處理。
 
-**測試**：`viz` 的 `a_renderer_that_cant_draw_says_so_once_and_draws_no_more`。第一輪 mutation test「畫不下去之後照樣畫」沒抓到：測試只經過要拷貝的那條路畫，那條路有自己的檢查；補上一次不拷貝的畫（畫了的話 texture 會被上傳），重跑抓到。`viz`、`shell` 的測試和沒有平台視窗的情境（98 個）通過。
+**真的視窗**（`test.py scenarios --window`，4d、4e、4f 改了視窗那一層）：74 個裡 6 個失敗。`intersection-observer`、`resize-observer`、`resize`、`scroll-anchoring` 是 `docs/limitations.md` 記著的 Linux 真視窗的大小問題；`fixed-into-view`（捲到 1500、要 1600）和 `frame-input`（點在 `49.75 20.5`、要 `50 20`）是新的，也是大小或縮放的那一類：`fixed-into-view` 是 2026-11-22 才加的、之前沒在 Linux 的真視窗上跑過；第 4 段在 `window.rs` 改的（訊號、Viz 的失敗、writer 的等待）不碰大小和座標。沒有在 `main` 上重跑確認。
 
-**mutation test**（`mutants-4f.toml`，5 個，第二輪都抓到）：不說、照樣畫、照樣改大小、照樣拷貝、沒有 output 時 `size` panic。shell 那一半（從失敗到結束碼 1）沒有測試：要讓新的 device 建不出來（`docs/test-gaps.md`）。
-
-### 第 4 段的 4e（2026-11-25，Linux：Fedora 45，debug build，`876b4d7` 之上）
-
-**做了什麼**：`automation_pipe::wait_for_writer` 等 pipe 的 writer 到收尾開始後 2 秒（和 renderer 共用），但最後一個 sender 放掉之後至少再等 100 ms（`WRITER_GRACE`）：renderer 用掉整整 2 秒時，writer 還在寫最後一點，不該被當成放棄（第 14 條的「正常時最後的回答照樣寫完」）。到了還沒寫完的留下、記一行（`the automation pipe's writer, left, its client not reading`）。`automation_pipe::run` 和視窗的 `App::exit` 都用它。
-
-**測試**：`automation_pipe::a_client_not_reading_doesnt_hold_machopo_up`（送 5000 個命令、一直不讀 stdout，關掉輸入：5 秒內結束（2 秒）、記一行；原本永遠不結束）、`a_hung_renderer_leaves_the_writer_its_time`（renderer 卡住、用掉整個期限時，`Browser.close` 的回答照樣送到，只有 renderer 的那一行、沒有 writer 的）。`shell` 的測試通過。
-
-**mutation test**（`mutants-4e.toml`，3 個，都抓到）：writer 沒有時限地等、沒有寬限、留下不記。「沒有寬限」靠的是時機（第一次檢查時 writer 還沒做完），另外單獨跑了三次，四次都抓到。視窗那一條沒有測試（`docs/test-gaps.md`）。
-
-### 第 4 段的 4d（2026-11-25，Linux：Fedora 45，debug build，`b2521f5` 之上）
-
-**做了什麼**（使用者決定：系統呼叫自己寫在 `ipc` 的平台層，照 Chromium 的 `shutdown_signal_handlers_posix.cc`）：`ipc::platform::on_shutdown_signals` 裝 SIGTERM、SIGINT、SIGHUP 的 handler（繼承來是 `SIG_IGN` 的不裝），handler 只把號碼寫進一對 nonblocking 的 socket，`ShutdownDetector` thread 讀它。`shell::shutdown_signals::listen` 第一次叫 UI 結束（automation pipe：和輸入結束同一個 channel；視窗：`ShellEvent::Signal`），第二次記一行、以 128 加上號碼直接結束。Windows 上什麼都不做。
-
-**測試**：`automation_pipe::a_signal_ends_machopo_as_closing_it_does`（SIGTERM：profile 寫完、下一個 machopo 讀得到，結束碼 0，沒有放棄的那一行；SIGINT、SIGHUP：結束碼 0；原本被訊號殺掉）、`a_second_signal_ends_machopo_at_once`（收尾在等卡住的 renderer 時再送一次：1.5 秒內以 143 結束、記一行）、`a_signal_started_ignored_stays_so`（經過 `nohup`，SIGHUP 不讓它結束）。`ipc`、`shell` 的測試通過，`ipc` 的 clippy 和對 Windows 的 target 的 `cargo check` 通過。
-
-**mutation test**（`mutants-4d.toml`，6 個，都抓到）：一個訊號都不接、繼承來忽略的照樣接、handler 沒寫、automation pipe 收到也不結束、第二次不立刻結束、第二次不記。視窗那一條和放回 `errno` 沒有測試（`docs/test-gaps.md`）。
-
-### 第 4 段的 4c（2026-11-25，Linux：Fedora 45，debug build，`3839e01` 之上）
-
-**做了什麼**：`ScriptEngine` 多一個 `terminator`（V8 的是 `TerminateExecution`；wasm 的什麼都不做：store 沒開 epoch interruption）；renderer 每建一個 engine，就把它的放進 `renderer::MainThreadTerminator`（in-process 的 renderer 才有，Browser 的 `RenderProcessHost` 拿著）。machopo 結束時等 in-process 的 renderer 的期間，每 10 ms 打斷一次它的 script（使用者決定：排在 `Shutdown` 前面的 task 的 script 也會卡住，打斷一次不夠），期限到了還沒結束的 thread 留下、記一行（`tab 0's renderer thread, left running, its script stopped but not ending`）。headless 結束時也照這樣（之前走關分頁的路，一直 join）；關一個分頁照舊（第 19 條）。
-
-**測試**：`automation_pipe::a_single_processs_hung_renderers_have_their_script_stopped`（`--single-process`，一個分頁卡在 `while (true) {}`，一個卡在迴圈裡、還有 `setInterval` 一直重新進入迴圈：machopo 在 4 秒內結束、沒有放棄的那一行；原本永遠不結束）；`script::a_page_that_never_returns_ends_its_test`（headless 的頁面載入、畫完之後進入無窮迴圈，`render` 在 10 秒內回來）。第一版的頁面在 `load` 傳到 Browser 之前就進入迴圈，headless 等不到載入、等滿自己的 30 秒：改成載入之後 200 ms。`dom_api`、`dom_js`、`dom_wasm`、`renderer`、`browser`、`shell` 的測試通過。
-
-**mutation test**（`mutants-4c.toml`，5 個，都抓到）：不打斷、只打斷一次、engine 沒放進打斷的方法、V8 的打斷什麼都不做、headless 照關分頁的路等。打斷了還不結束、留下 thread 的那一支沒有測試（`docs/test-gaps.md`）。`mutants-4b.toml` 的兩個 `from` 跟著 4c 改過的那兩行更新。
-
-### 第 4 段的 4b（2026-11-25，Linux：Fedora 45，debug build，`7e3ca01` 之上）
-
-**做了什麼**：`RenderProcessHost` 和 `WebContents` 的 shutdown 拆成「請它結束」和「等到期限」；`BrowserView::shutdown` 先請每個分頁的 renderer，再用同一個期限（請的時候起 2 秒）等，到了還沒結束的 process kill 掉，每個記一行（`machopo: shutdown gave up on tab 0's renderer process 1050649, killed, not having exited, after 2004 ms`）。只關一個分頁時照舊（第 19 條）。順帶拿掉 `docs/limitations.md` 裡第 2 段已經修掉的一句（啟動到一半失敗時以 SIGSEGV 結束）。
-
-**測試**：`automation_pipe::hung_renderers_take_the_limit_once`：三個分頁的 renderer process 都卡在 `while (true) {}`，pipe 關掉之後 machopo 在 4 秒內結束（2.5 秒；原本一個接一個是 15 秒），stderr 有三行放棄的訊息。`browser`、`shell` 的測試通過。
-
-**mutation test**（`mutants-4b.toml`，4 個，都抓到）：每個 renderer 各有自己的期限、等之前沒先請（閒著的也被 kill，profile 的測試看到放棄的那一行）、kill 了不記、時限是 5 秒。
-
-### 第 4 段的 4a（2026-11-25，Linux：Fedora 45，debug build，`9109d9f` 之上）
-
-**做了什麼**：Browser 和 renderer process 收尾之後直接結束（`ipc::platform::terminate_current_process_immediately`，Windows 上新加 `TerminateProcess`）；結束之前寫完 trace 的結尾。profile 的三個資料庫有明確的 `close`（`StoragePartition::close`，在 `BrowserWindow::shutdown` 的 Viz 之後，最多等 10 秒，`net` 的兩個共用 `DatabaseThread`），等不到的放掉、記一行（`browser::shutdown::gave_up`），之後 handle 被丟掉時也不再等。
-
-**測試**：`automation_pipe::a_profile_is_written_as_machopo_ends`（cookie、`localStorage`、HTTP cache 在同一個 profile 的下一個 machopo 還在，正常結束時 stderr 沒有放棄的那一行）；`net` 的 `database_thread` 和 `browser` 的 `dom_storage` 各有一個「關過、等不到的 thread，丟掉時不等它」的單元測試。`net`、`browser`、`base`、`ipc`、`shell` 的測試通過，`--features census` 的 `a_renderer_process_counts_into_a_census_of_its_own` 通過；`ipc` 對 `x86_64-pc-windows-msvc` 的 `cargo check` 通過（Windows 上沒跑）。
-
-**mutation test**（`mutants-4a.toml`，第二輪 11 個，8 個抓到）：沒抓到的 3 個都是等價的，查過原因：
-- 視窗收尾時不關 profile：`automation_pipe::run` 和視窗的 `App` 在回到 `main` 之前丟掉 `BrowserWindow`，store 的 `Drop` 照樣寫完。明確的 `close` 留著，是為了時限：第一輪只有前 8 個，這一個沒抓到時發現 `close` 等不到放棄之後，`Drop` 的 `join` 照樣會永遠等（時限沒有作用），補上「放掉」和它的 3 個 mutant，都抓到。
-- 結束前寫 census、flush stdout：計數的 thread 在 process 結束之前就被 join、自己寫過了（renderer 的 main thread 是另外起的 thread，Browser 的 main thread 不跑 V8）；pipe 的 writer 每則都 flush。這兩段程式拿掉了（盤點多列了它們，`details.md` 的「只在解構子裡寫的東西」已更正），spec 裡也拿掉。
-
-**順帶修的**：`scripts/bench/speedometer/speedometer_test.py` 的 `test_traces_of_both` 還在找 RFC 0112 第 5 段拿掉的 `RenderThread::between_tasks`（工具的測試不在 CI 裡，0112 那時沒有觸發要跑它的規則），改成檢查 `RenderThread::run_platform_tasks` 在一個 task 裡。四組量測工具的測試（`census`、`raster`、`blink_perf`、`speedometer`）通過。
-
-**沒有測試的**：profile 在 10 秒內寫不完、放棄的那一支（要卡住的磁碟），記進 `docs/test-gaps.md`；`gave_up` 的那一行的格式由 4b 的 renderer 被 kill 的測試守著。
+**重量**：第 3 段的量法、同一份腳本，每一格三次（`details.md` 的「驗收時的重量」）。
 
 ### 第 2 段（2026-11-24，Linux：Fedora 45，debug build，`ec06953` 之上）
 

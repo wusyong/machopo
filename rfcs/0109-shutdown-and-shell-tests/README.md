@@ -1,48 +1,40 @@
 # RFC 0109：結束的流程（graceful shutdown）
 
 - 開始日期：2026-11-22
-- 狀態：🚧 已排程：2026-11-22（第 0、1 階段的盤點做完；2026-11-24 重新評估、改寫成以結束為主，待審查）
-- 細節：`details.md`；進度：`progress.md`
+- 狀態：✅ 已完成：2026-11-25（Linux）
+- 細節：`details.md`；進度和驗收：`progress.md`
 
 ## 摘要
 
-machopo 的每一種跑法（視窗、automation pipe、headless、renderer process、machopodriver 啟動的）怎麼結束，從來沒有從頭到尾盤過，出事時都是一次修一個。這份照盤點（第 0 階段）定一套結束的規則，再照規則改，做完時有基本的 graceful shutdown：要它結束就在固定的時間內結束、不留 process、該寫的寫完。
+machopo 的每一種跑法（視窗、automation pipe、headless、renderer process、machopodriver 啟動的）怎麼結束，原本從來沒有從頭到尾盤過，出事時都是一次修一個。這份先盤點（第 0 階段），定一套結束的規則（第 3 段），再照規則改（第 4 段）。做完之後：要它結束（關視窗、關 pipe、`Browser.close`、刪 session、SIGTERM、SIGINT、SIGHUP）就在 2 秒內結束，不管開了幾個分頁、頁面在做什麼；不留 process；profile 和 trace 寫完；收尾完直接結束、不跑解構子；沒照規則收尾的每一處記一行。
 
-這份原本也要讓 `shell` 的測試重新可信：2026-11-22 時 CI 的紅燈幾乎都是它。審查（第 1 階段）的主犯是產品的競爭（`details.md` 的 A 類），之後由 RFC 0110 修掉，兩個算畫了幾張的測試在 RFC 0112 照本意改寫。CI 從那之後連續綠燈，所以這份改成以結束為主；`shell` 的測試剩下的（在忙的機器上會壞的六個測試和搶 port 的一個 helper）在第 2 段先收掉，結束流程的測試才站得穩。
+這份原本也要讓 `shell` 的測試重新可信：2026-11-22 時 CI 的紅燈幾乎都是它。審查（第 1 階段）的主犯是產品的競爭（`details.md` 的 A 類），之後由 RFC 0110 修掉、RFC 0112 照本意改寫兩個測試，所以這份改成以結束為主（第 3 條）；剩下的（在忙的機器上會壞的六個測試和搶 port 的一個 helper）在第 2 段收掉。
 
 ## 動機
 
-**結束的流程**（第 0 階段的盤點，`647ab5a`，Linux；`details.md` 的「結束的流程的盤點」）。結束的六條目標（下面）在 Linux 上只有第 5 條成立：
+**結束的流程**（第 0 階段的盤點，`647ab5a`，Linux；`details.md` 的「結束的流程的盤點」）。下面六條目標在 Linux 上只有第 5 條成立：
 
 - **S1**：`--single-process` 時頁面卡住就永遠不結束：`join` 沒有時限，main thread 的 script 也打斷不了（worker 的有 `TerminateExecution`）。headless 一樣。
 - **S2、S3**：卡住的 renderer 一個一個等，各 5 秒；machopodriver 也只等 Browser 5 秒，所以一個卡住的分頁就一定被 kill，什麼都來不及寫。
 - **S4**：沒有處理 SIGTERM、SIGINT、SIGHUP：照預設直接死，profile（cookie、`localStorage`）和 trace 都沒寫完。
 - **S5**：client 不讀 stdout 時，automation pipe 的 writer 卡在 `write`，main 永遠 `join` 它。
-- **S6**：啟動到一半失敗時（`--remote-debugging-port` 被占用）會 crash：沒有呼叫 `BrowserWindow::shutdown`，Viz 還在建 device 時 `exit` 跑了 C++ 的解構子。盤點時約一半；2026-11-24 在 CPU 的 adapter 上約 0.3%（第 2 段修掉）。
+- **S6**：啟動到一半失敗時（`--remote-debugging-port` 被占用）會 crash：沒有呼叫 `BrowserWindow::shutdown`，Viz 還在建 device 時 `exit` 跑了 C++ 的解構子。
 - **S7**：`exit` 時還有 thread 在跑（Browser 的 IO thread、GPU 驅動程式的、V8 的 worker），正常結束時它們閒著，但沒有東西保證。
 - **S8**：Viz 有三處遇到 wgpu 的錯誤就 `process::exit(1)`，其他 thread 照跑、profile 不寫。
 - **S9**：renderer process 繼承 Browser 的 stdin 和 stdout，也就是 automation 的 pipe：它活著時讀的人等不到 EOF，它寫到 stdout 的東西會混進訊息。
 
-2026-11-24 對過程式，S1 到 S9 都還在（之後 RFC 0110、0111、0112 改了 renderer 的 event loop 和量測，沒有碰結束）。量到的時間要在第 3 段重量。另外 2026-11-10 有兩次「machopo 沒有結束」原因不明（`details.md`）。
+另外 2026-11-10 有兩次「machopo 沒有結束」原因不明（`details.md`）。
 
-**`shell` 的測試，剩下的**（`details.md` 的「2026-11-24 的重新評估」）：
+**`shell` 的測試，剩下的**（`details.md` 的「2026-11-24 的重新評估」）：B3 到 B8 六個測試在忙的機器上會壞（照 CI 的條件整組跑 453 次，B5 壞 64 次、B4 24 次、B3 17 次、B6 3 次、B8 2 次、B7 1 次），六個都是測試假設了機器不忙或時間不會剛好相等，產品照規範是對的；C1、C2 是 `net::test_server::unused_port` 放掉 port 才回傳，同時跑的另一個測試拿到同一個。
 
-- A1 到 A6（產品的競爭，CI 的主犯：A1 一個就壞了 15 次）由 RFC 0110 修掉；B1、B2（算畫了幾張）由 RFC 0112 照本意改寫。0110 merge 之後 CI 跑了 9 次，只壞過一次，就是 B1，之後連續 7 次綠燈。
-- B3 到 B8 六個測試在忙的機器上會壞：盤點時照 CI 的條件（4 顆 CPU、加負載）整組跑 453 次，B5 壞 64 次、B4 24 次、B3 17 次、B6 3 次、B8 2 次、B7 1 次。重新審過，六個都是測試假設了機器不忙或時間不會剛好相等，產品照規範是對的；B7、B8 對過 Chrome for Testing。
-- C1、C2：`net::test_server::unused_port` 放掉 port 才回傳，同時跑的另一個測試的 server 拿到同一個（453 次裡各 1、2 次）。
+**目標**（驗收條件，每一種跑法都要滿足；逐條對到的測試在 `progress.md` 的「驗收」）：
 
-**目標**：
-
-做完時要有基本的 graceful shutdown。「基本」定成下面六條，每一種跑法（視窗、automation pipe、headless、machopodriver 啟動的）都要滿足；它們就是這份的驗收條件：
-
-1. **一定結束**：要它結束（關視窗、關 pipe、刪 session、收到 SIGTERM）之後，在固定的時間內結束，不管頁面在做什麼、開了幾個分頁。時限暫定 2 秒（「待決定」）。
+1. **一定結束**：要它結束之後在 2 秒內結束，不管頁面在做什麼、開了幾個分頁（profile 的資料庫另有 10 秒，第 18 條）。
 2. **不留東西**：結束之後沒有殘留的 process，沒有人還握著它的 stdout、stderr。
-3. **順序固定**：每條 thread 有人擁有、有人等它結束，照寫下來的順序停；整個 process 一份的東西（GPU device、V8 的 platform）在還有 thread 用它的時候不會被收掉。結束時不 crash、不卡住。
-4. **該寫完的寫完**：正常結束時，profile（cookie、`localStorage`）和 trace 都寫完。
-5. **被 kill 也乾淨**：Browser 被強制結束時 renderer 跟著結束（多 process 的那份做完時已經有，這份把它列進表裡、和其他幾條一起守著）。
-6. **每一條有測試守著**，而且這些測試照 CI 的跑法重複跑不會壞。
-
-`shell` 的測試：B3 到 B8 改寫成守它們真正要守的事，C1、C2 的 port 整個測試期間占著；CI 照常跑，再壞時查原因（已決定的事項第 6 條）。
+3. **順序固定**：每條 thread 有人擁有、有人等它結束，照寫下來的順序停；結束時不 crash、不卡住。
+4. **該寫完的寫完**：正常結束時，profile（cookie、`localStorage`、HTTP cache）和 trace 都寫完。
+5. **被 kill 也乾淨**：Browser 被強制結束時 renderer 跟著結束。
+6. **每一條有測試守著**，而且照 CI 的跑法重複跑不會壞（看 CI，第 6 條）。
 
 **不在範圍內**：
 
@@ -50,37 +42,45 @@ machopo 的每一種跑法（視窗、automation pipe、headless、renderer proc
 - 結束時存 session、下次還原分頁。
 - 偵測「不回應」的 renderer 並主動處理（hang monitor）。這份只管「要它結束時它一定結束」。
 - 當掉時的收尾（crash reporter 這一類）。
-- GPU 驅動程式自己的問題：這份能做的是結束時不讓它還在忙，不能保證驅動程式不出別的事。
-- 作業系統的 sandbox：另一份。它會多一種結束法（被 sandbox 擋下而死的 renderer），排在這份之後。
-- `shell` 的測試在 B3 到 B8、C1、C2 以外的整理（搬到別的 crate、重寫）；WPT 的 known intermittent 清單（另一套機制）。
+- GPU 驅動程式自己的問題，和 wgpu 的驗證錯誤讓整個程式結束（`docs/limitations.md` 的「隔離」）：這份改的是 Viz 重建 device 失敗時的三處 `exit`。
+- 作業系統的 sandbox：另一份。
+- 只關一個分頁時的行為（第 19 條）。
+- `shell` 的測試在 B3 到 B8、C1、C2 以外的整理；WPT 的 known intermittent 清單。
 
-**事先保證不了的**：
-
-- 2026-11-10 那兩次「machopo 沒有結束」原因不明。這份能給的是「結束的順序寫下來了、有測試，那個現象沒有再出現」，不是「確定修掉了那一個」。
-- 改規則時可能發現要動比較大的地方（例如 thread 的擁有關係要重排）。那時列選項決定，範圍可能比現在想的大。
-
-要解決的 `docs/limitations.md` 和 `docs/test-gaps.md` 裡的項目（2026-11-23 盤點時列的）：
-
-- `limitations.md` 的「平台和建置」：盤點時加的「結束」那一項，和 renderer process 那一項裡寫到結束、共用輸出的部分。
-- `limitations.md` 的「WebDriver 和自動化」：盤點時加的「忙的時候」那一項。
-- `limitations.md` 的「隔離」的「renderer 還有兩條路能讓 Browser 結束」：只有 Viz 遇到錯誤時怎麼結束那一半。
-- `test-gaps.md`：通道因為壞訊息、佇列滿了而結束時沒有測試；macOS 上 renderer 隨 Browser 結束只在 Linux 上跑過；`--remote-debugging-port` 的 server 停下時等 websocket 沒有測試。
+**沒有保證的**：2026-11-10 那兩次「machopo 沒有結束」原因不明。這份給的是「結束的順序寫下來了、有測試，那個現象沒有再出現」，不是「確定修掉了那一個」。
 
 ## 設計概要
 
-給用 machopo 的人：關掉視窗、結束 `machopo --automation-pipe`、machopodriver 刪掉 session、送 SIGTERM，都在固定的時間內結束，不留下 process，不管頁面在做什麼；正常結束時 profile 和 trace 都寫完。
+給用 machopo 的人：關掉視窗、結束 `machopo --automation-pipe`、`Browser.close`、machopodriver 刪掉 session、送 SIGTERM、SIGINT、SIGHUP，都在 2 秒內結束，不留下 process；profile 和 trace 寫完。第二次送訊號就立刻結束（128 加上訊號的號碼）。有東西沒照規則收尾時，stderr 有一行 `machopo: shutdown gave up on ...`。
 
 給改 machopo 的人：
 
-- 一張表寫著每條 thread 和每個 process 怎麼結束（放在 `docs/architecture.md`）。新加一條 thread 時要填：誰擁有、誰 join、結束時它卡在哪裡會怎樣。
-- 結束的規則（第 3 段定）：Browser 等不等 renderer、等多久、全域變數怎麼收、遇到錯誤時怎麼結束。
-- `shell` 的測試不靠機器的快慢：等條件成立，不數樣本、不假設時間不會剛好相等。
+- 收尾的順序寫在 `docs/architecture.md` 的「machopo 怎麼結束」，thread 的表在同一份的「process 和 thread」。新加一條 thread 或一個要寫出去的東西時，排進那個順序：要寫的不能靠 `Drop`（process 最後不跑解構子）。
+- 每一步等東西時都有時限，到了就放掉、用 `browser::shutdown::gave_up` 記一行。
 
 ## 詳細設計
 
-規則和改法在第 3 段開始時照重量的結果定。盤點的產出（每一種跑法的結束順序和時間、每條 thread、每個有狀態的全域變數、每個 child process、和 Chromium 的對照）在 `details.md`。
+**收尾的順序**（第 13、18 條；`docs/architecture.md` 的「machopo 怎麼結束」）：
 
-**`shell` 的測試的改寫**（第 2 段，`details.md` 的「B3 到 B8 的審核」）：
+1. 分頁和 renderer（`BrowserView::shutdown`）：先對每個分頁的 renderer 送 `Shutdown`，再用同一個期限（請的時候起 `browser::shutdown::LIMIT`，2 秒）等。自己的 process 的到了 kill（`RenderProcessHost::wait_for_shutdown`）；同一個 process 的（`--single-process`、headless）等的期間每 10 ms 打斷一次它的 script（`renderer::MainThreadTerminator`，renderer 每建一個 engine 就放進它的 `ScriptEngine::terminator`；V8 是 `TerminateExecution`，wasm 的打斷不了），到了還不結束的 thread 留下不等。
+2. Viz。
+3. profile（`StoragePartition::close`）：cookie、HTTP cache、`localStorage` 的 thread 同時寫完、關掉資料庫，最多等 `PROFILE_LIMIT`（10 秒）；等不到的放掉，之後 handle 被丟掉時也不再等（`net` 的 `DatabaseThread`、`dom_storage` 的 `Shared`）。
+4. DevTools 的 server（等它的 websocket 最多 5 秒，原本就有）。
+5. automation pipe 的 writer（`automation_pipe::wait_for_writer`）：等到同一個期限，最後一個 sender 放掉之後至少再等 100 ms；client 不讀 stdout 時放掉。
+6. trace 的結尾，然後直接結束（`main` 的 `end`：`ipc::platform::terminate_current_process_immediately`，Unix 的 `_exit`、Windows 的 `TerminateProcess`）。renderer process 停自己的 thread、寫完 trace，同樣直接結束。headless 在測試的 process 裡，收尾之後正常 return。
+
+**要它結束的路**都進同一個收尾：
+
+- 關視窗、pipe 的 EOF、`Browser.close`：原本就是。
+- SIGTERM、SIGINT、SIGHUP（第 11 條，macOS 和 Linux）：`ipc::platform::on_shutdown_signals` 的 handler 只把號碼寫進一對 nonblocking 的 socket，`ShutdownDetector` thread 讀它；`shell::shutdown_signals::listen` 第一次叫 UI 結束（automation pipe：和輸入結束同一個 channel；視窗：`ShellEvent::Signal`），第二次記一行、立刻結束。繼承來是 `SIG_IGN` 的不接。
+- Viz 的 device 重建不了（第 15 條）：`WgpuRenderer` 不再畫，經過 `on_failure` 交給 UI thread（`Ended::GpuFailed`、`ShellEvent::GpuFailed`），記一行，以結束碼 1 結束。
+- 啟動到一半失敗（第 7 條）：`BrowserWindow` 的 `Drop` 照樣 `shutdown`。
+
+**renderer process 的 stdio**（第 16 條）：stdin 接 `/dev/null`、stdout 轉到 Browser 的 stderr、stderr 繼承；pipe 只在 Browser 手上。
+
+**記一行**（第 12 條）：`browser::shutdown::gave_up(what, step, waited)` 在 stderr 寫 `machopo: shutdown gave up on <what>, <step>, after <ms> ms`，也記成 trace 的 `ShutdownGaveUp`。被 kill 的 renderer process、留下的 renderer thread、放掉的 profile 資料庫、放掉的 pipe writer、第二次訊號、Viz 畫不下去，各有一行；正常結束時沒有。
+
+**`shell` 的測試的改寫**（第 2 段，第 4、5 條；`details.md` 的「B3 到 B8 的審核」）：
 
 | | 測試 | 為什麼會壞 | 改成 |
 | --- | --- | --- | --- |
@@ -88,48 +88,53 @@ machopo 的每一種跑法（視窗、automation pipe、headless、renderer proc
 | B4 | `automation_pipe::the_profiler_samples_the_pages_script` | 數樣本的個數：sampler 拿到多少 CPU | 比兩種間隔的 `timeDeltas` 的中位數 |
 | B5 | `automation_pipe::the_profile_tells_waiting_from_rendering` | 同上 | 照 `timeDeltas` 算 `(idle)` 佔的時間 |
 | B6 | `documents::about_blank_has_its_initiators_origin` | parser 讓出時，iframe 在設 `onload` 的 script 之前就載完 | iframe 不在標籤上寫 `src`，script 設好 handler 才設 |
-| B7 | `web_animations::a_replaced_animation_is_removed` | 50 ms 剛好是 3 個 headless 的 frame：時間相等時照 composite order 排（合規範），Chrome 的 frame 照真的時間、碰不到 | `duration` 改成不是 frame 間隔的倍數 |
-| B8 | `transitions::a_frames_events_go_by_when` | `run` 和 `start` 剛好同時，照 composite order 排（合規範） | 加一點 `transition-delay`，`start` 一定晚於 `run`；Chrome 照 transition 分組（`run b / start b / end b / run a …`），和規範不同，記進 `docs/limitations.md` |
+| B7 | `web_animations::a_replaced_animation_is_removed` | 50 ms 剛好是 3 個 headless 的 frame：時間相等時照 composite order 排（合規範） | `duration` 改成不是 frame 間隔的倍數 |
+| B8 | `transitions::a_frames_events_go_by_when` | `run` 和 `start` 剛好同時，照 composite order 排（合規範） | 加一點 `transition-delay`；Chrome 照 transition 分組，和規範不同，記在 `docs/limitations.md` |
 
-C1、C2：`unused_port` 改成回傳一個 guard，整個測試期間 bind 著、不 listen（已決定的事項第 5 條）。
+C1、C2：`net::test_server::refused_port` 回傳一個 guard，整個測試期間 bind 著、不 listen。
+
+**踩過的坑**（`progress.md` 的「做過的檢查」）：
+
+- 盤點說 cookie、HTTP cache、`localStorage` 只在解構子裡寫，直接結束會漏；其實回到 `main` 之前每份 handle 都已經被丟掉、`Drop` 照樣寫完。明確的 `close` 是為了時限：mutation test 沒抓到「不關 profile」時才發現，`close` 等不到放棄之後 `Drop` 的 `join` 照樣永遠等，時限沒有作用；補上「放掉」。census 和 stdout 也盤點多列了：計數的 thread 結束時自己寫，pipe 的 writer 每則都 flush。
+- 打斷一次 script 不夠：排在 `Shutdown` 前面的 task（`setInterval`）會再卡住，所以等的期間一直打斷。
+- writer 和 renderer 共用 2 秒時，renderer 用掉整個期限，writer 剩不到 1 ms 就被放掉：加上 100 ms 的寬限。
+- renderer 不再拿著 stdout 之後，「Browser 被 kill 時 renderer 跟著結束」的測試原本等 pipe 讀到結尾的判斷沒有作用了，改成等 renderer 的 pid。
 
 ### 測試
 
-- 結束的流程：每一種跑法、每一種情況一個測試，量結束花的時間和留下的 process（多 process 的那幾個已經有：`shell` 的 `a_killed_browsers_*`）。
-- `shell` 的測試本身：改過的每一個還守得住原本要守的事（mutation test），寫進 `progress.md`；穩不穩定看 CI（已決定的事項第 6 條）。
-- 產品的改動照平常的規定：新的測試、mutation test。
+每一條目標、每一種跑法對到的測試在 `progress.md` 的「驗收」；只能靠審查的（視窗自己的那幾行、profile 寫不完放掉的那一支、打斷了還不結束的 renderer thread、Viz 重建失敗到結束碼 1）在 `docs/test-gaps.md`。每一步都跑了 mutation test（`mutants-2.toml`、`mutants-4a.toml` 到 `mutants-4g.toml`、`mutants-5.toml`）。
 
 ### 分階段
 
-每個階段開始前只決定那個階段的事。
-
 0. **盤點結束的流程**：不改程式。做完（2026-11-23）。
 1. **審查 `shell` 的測試**：不改產品。做完（2026-11-23）；2026-11-24 重新評估。
-2. **收掉 `shell` 測試的尾巴**：B3 到 B8 照上表改寫，C1、C2 的 port，S6（啟動到一半失敗時呼叫 `shutdown`，幾行，不牽涉第 3 段的選擇）。
-3. **重量、定結束的規則**：照第 0 階段的量法在現在的程式上重量，列選項、定下來（時限、Browser 等不等 renderer、全域變數怎麼收、Viz 遇到錯誤怎麼結束、訊號、卡住的 writer）。
-4. **照規則改**（第 18 條起）：4a 一條收尾的路和記一行的機制（第 12、13 條）；4b renderer 同時請、共用 2 秒（第 8、9 條）；4c 同一個 process 的 renderer 打斷 script 再有時限地等（第 10 條）；4d 訊號（第 11 條）；4e pipe 的 writer（第 14 條）；4f Viz 畫不下去時（第 15 條）；4g renderer 的 stdio（第 16 條）。
-5. **驗收**：「目標」的六條逐條對到守它的測試；CI 連續綠燈；`docs/architecture.md` 的表；`docs/limitations.md` 和 `docs/test-gaps.md` 更新。
+2. **收掉 `shell` 測試的尾巴**：B3 到 B8、C1、C2、S6。做完（2026-11-24）。
+3. **重量、定結束的規則**：第 8 到 17 條。做完（2026-11-24）。
+4. **照規則改**：4a 一條收尾的路和記一行（第 12、13、18 條）；4b renderer 同時請、共用 2 秒（第 8、9、19 條）；4c 同一個 process 的 renderer 打斷 script（第 10 條）；4d 訊號（第 11 條）；4e pipe 的 writer（第 14 條）；4f Viz 畫不下去時（第 15 條）；4g renderer 的 stdio（第 16 條）。做完（2026-11-25）。
+5. **驗收**：重量、六條對到測試。做完（2026-11-25）；第 6 條看 merge 之後的 CI。
 
 ## 缺點
 
-- 結束的規則定了之後要維護：每加一條 thread、一個 process 都要照著填。
-- 有些結束的問題只在 CI 的機器上出現（4 顆 CPU、lavapipe、Ubuntu 的 core dump 收集）；本機在 4 顆 CPU、lavapipe、加負載下重現得了 A 類，結束的不一定。
-- macOS 和 Windows 沒有量過；這份只在 Linux 上量，其他平台照程式對。
+- 結束的規則要維護：每加一條 thread、一個要寫出去的東西，都要排進收尾的順序，不能靠 `Drop`。
+- 只在 Linux 上量過、跑過；macOS 和 Windows 照程式對，Windows 上沒有接訊號（console 的 Ctrl+C 照舊立刻結束），`TerminateProcess` 只編過、沒跑過。
+- 時限到了被 kill 的 renderer process、留下的 renderer thread，它們的 trace 寫不完。
+- 2 秒以外的等待：profile 的 10 秒、DevTools 的 server 等 websocket 的 5 秒（`docs/limitations.md`）。
 
 ## 理由和其他做法
 
 - **為什麼還是一份**：`shell` 的測試裡剩下的六個在忙的機器上會壞，不先收掉，結束流程的每一步都分不出是不是自己弄壞的；它們都只是改測試，範圍小，不值得另開一份。
-- **為什麼重新評估之後改成以結束為主**（已決定的事項第 3 條）：原本並重是因為 CI 的紅燈分不出原因，現在那個理由不成立了；照原本的寫法，讀的人會以為 `shell` 的測試還是主要的問題。
-- **不選繼續一次修一個**：2026-11-18 到 22 這五天修了五個結束或生命週期的問題，每一個都是事後從 CI 的 log 猜的；沒有修過的還在（S1 到 S9、2026-11-10 的那兩次）。
+- **為什麼重新評估之後改成以結束為主**（第 3 條）：原本並重是因為 CI 的紅燈分不出原因，A 類修掉之後那個理由不成立了。
+- **不選繼續一次修一個**：2026-11-18 到 22 這五天修了五個結束或生命週期的問題，每一個都是事後從 CI 的 log 猜的。
 - **不選先重跑蓋過去**：`docs/testing.md` 已經規定不這樣做。
-- **不選先做 sandbox**：它做起來會多出很多「卡住」「莫名結束」的失敗，要先有一套結束的規則和乾淨的 CI 才分得出來。
+- **不選先做 sandbox**：它會多出很多「卡住」「莫名結束」的失敗，要先有一套結束的規則才分得出來。
+- 每一條規則的選項和理由在「已決定的事項」。
 
 ## 先例
 
-對照了 152.0.7977.82 的原始碼，逐項的比較在 `details.md` 的「對照 Chromium」：
+對照了 152.0.7977.82 和 2026-11-24 的 `main` 的原始碼，逐項的比較在 `details.md` 的「對照 Chromium」：
 
-- **Chromium 的結束**：`BrowserMainLoop` 照固定的順序停各條 thread；renderer 沒有 `beforeunload`、`unload` 的處理時 Browser 直接結束它，不等它收尾（fast shutdown）；POSIX 上 child process 在通道出錯時從 IO thread 直接結束自己；renderer 正常結束時也不收尾、直接 `_exit`；等不到的 child 2 秒後在背景 kill；SIGINT、SIGHUP 走正常結束，SIGTERM 走 `SessionEnding`。Windows 上靠 job object（這次沒有對照）。
-- **Chromium 的測試**：測試的 launcher 把測試分批放進各自的 process 跑，壞掉的自動重試、另外統計不穩定的；等條件用 `base::test::RunUntil`。machopo 的規定是不重試。
+- **Chromium 的結束**：`BrowserMainLoop::ShutdownThreadsAndCleanUp` 照固定的順序停各條 thread；renderer 沒有 `beforeunload`、`unload` 時 Browser 直接結束它（fast shutdown）；renderer 和 GPU process 收尾完直接結束（`TerminateCurrentProcessImmediately`），Browser 正常 exit（它沒有載入 GPU 驅動程式）；等不到的 child 2 秒後在背景 kill（`base::EnsureProcessTerminated`）；`ShutdownDetector` 的 handler 寫 pipe、第一次走正常結束，之後恢復預設的動作；child 的 stdin 接 `/dev/null`，stdout、stderr 繼承（`--remote-debugging-pipe` 在另外兩個 fd）。
+- **Chromium 的測試**：測試的 launcher 把測試分批放進各自的 process 跑，壞掉的自動重試；等條件用 `base::test::RunUntil`。machopo 的規定是不重試。
 
 ## 已決定的事項
 
@@ -159,7 +164,7 @@ C1、C2：`unused_port` 改成回傳一個 guard，整個測試期間 bind 著�
 
 ## 待決定
 
-目前沒有：第 3 段的規則都定了（第 8 到 17 條）。
+沒有。
 
 ## 之後的可能
 
@@ -169,3 +174,7 @@ C1、C2：`unused_port` 改成回傳一個 guard，整個測試期間 bind 著�
 - 關分頁不擋 UI（第 19 條）：照 Chromium，renderer process 在背景等、kill，UI thread 不等它；要有人在分頁不在之後回收 process、記下它怎麼結束的。
 - automation pipe 移到 fd 3、4（一份 RFC）：照 Chromium 的 `--remote-debugging-pipe`，Browser 從 fd 3 讀、寫到 fd 4，stdin、stdout 留給一般用途；Puppeteer、Playwright 用 pipe 啟動時預設就是這兩個。要改 machopodriver、`tests/wpt/wptrunner_machopo/`、`scripts/bench` 的 `MachopoPipe`、`shell` 的測試和 `--help`；Windows 上 Chromium 用命令列傳 handle（`--remote-debugging-io-pipes`），要另外做。做完之後 renderer 的 stdout 不用再轉向（第 16 條），照 Chromium 繼承。
 - 在 profile 裡留「沒有乾淨結束」的記號（Chromium 的 `exited_cleanly`）：下次啟動時知道上次被 kill、crash 或斷電，告訴使用者、還原 session。
+- DevTools 的 server 等 websocket 的 5 秒併進 2 秒的期限（`docs/limitations.md`）。
+- Windows 的 console 的 Ctrl+C 和關掉 console（`SetConsoleCtrlHandler`）走同一個收尾。
+- wasm 的 script 打斷得了：store 開 epoch interruption；那時「打斷了還不結束的 renderer thread」也有測試做得出來（wasm 的測試 guest 加一個一直跑的 case）。
+- 盤點時列的、這份沒有做到的測試空缺（`docs/test-gaps.md`）：renderer process 的通道因為壞訊息、佇列滿了而結束；macOS 上 renderer 隨 Browser 結束；DevTools 的 server 等 websocket。
