@@ -161,6 +161,14 @@
 
 新的在前。2026-10-13 的盤點時，Complex-DOM 和 NewsSite 在 kun 上還少算了用 `var()` 的 style 和 `::before`、`::after` 的 box，那時以前的比較表裡它們的比值偏低；「2d-2 之後的 trace」的 `ParseHTML` 被高估，以最後一次為準。
 
+### RFC 0114（DOM 的 task 只有一套順序）的第 1 到 3 段之後（2026-11-25，Fedora 45，接電源）
+
+使用者要求量的（branch `0114` 的 `4de628fb`）。`bench.py speedometer --against main`（`main` 是 RFC 0114 被接受、還沒有實作的 `8cabbc17`），兩個版本只跑 machopo，輪流各 3 次（各 10 個 iteration），Linux 7.3.3（Fedora 45）、AMD Ryzen AI 9 HX 370（瀏覽器綁在 CPU 0 到 3、12 到 15），`perf` profile，renderer 兩邊都是自己的 process。20 個 suite 都有效，沒有卡住的。
+
+- 幾何平均 **1.002**（+0.2%），每個 suite 在 −4.5%（TodoMVC-React-Redux）到 +3.9%（NewsSite-Next）之間；變最多的幾個的 95% 區間都和另一邊重疊，或每一輪的中位數本來就漂（NewsSite-Next 的 `main` 三輪是 118.9、119.4、91.1）。沒有看得出的變化。
+- 記憶體的峰值（Browser 和 renderer 的 `VmHWM` 加起來）：各 suite −1.7% 到 +2.1%。
+- 主 thread 上的改動是 DOM 的 task 照編號拿（每次找一個編號，不比時間）、port 的狀態機、debug build 才有的偵測；Speedometer 不用 worker，worker 每個 task 多一次 scheduler 的往返（RFC 的「缺點」）量不到。
+
 ### RFC 0112（拿掉 event loop 的外圈）做完之後（2026-11-24，Fedora 45，接電源）
 
 使用者要求量的（branch `0112` 的 `d9eae09`）。`bench.py speedometer`（20 個 default suite，各 10 個 iteration，只跑一次），Linux 7.3.3（Fedora 45）、AMD Ryzen AI 9 HX 370（瀏覽器綁在 CPU 0 到 3、12 到 15），machopo 的 `perf` profile，Chrome for Testing 152.0.7977.82。20 個都有效。各 suite 的中位數合計：machopo 1002.0 ms、Chrome 676.0 ms，比值的幾何平均 **1.445**。差最多的：Editor-TipTap 1.96、Perf-Dashboard 1.84、NewsSite-Next 1.83、TodoMVC-Svelte-Complex-DOM 1.69、TodoMVC-WebComponents 1.65；最少的：Charts-chartjs 1.07、TodoMVC-React-Redux 1.11、TodoMVC-JavaScript-ES5 1.17。這台上一次完整的是 2026-11-06（Fedora 44，換完 DOM 之後的 1.61），之間的改動很多、只跑一次，不拿來算變化。
