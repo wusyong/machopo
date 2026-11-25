@@ -10,7 +10,7 @@
 | 2. worker 的 loop 改用 scheduler（第 6、8 條） | 做完，待審查 | 2026-11-25 |
 | 3. 拿掉 `dom` 的順序（3a 到 3d） | 進行中 | |
 | 3a. 照編號拿、拿掉 `target_task` 和時鐘的換算（第 2 條） | 做完，待審查 | 2026-11-25 |
-| 3b. port 的狀態機：`Waiting`、`Running`，`enable`、`push`、`ship`、`arrive`；拿掉補號、重送、每個 task 之後的編號（第 3 條） | 沒開始 | |
+| 3b. port 的狀態機：`Waiting`、`Running`，`enable`、`push`、`ship`、`arrive`；拿掉補號、重送、每個 task 之後的編號（第 3 條） | 做完，待審查 | 2026-11-25 |
 | 3c. debug build 的偵測只問「有沒有」，主 thread 和 worker 都裝（第 4 條） | 沒開始 | |
 | 3d. 拿掉 `next_task`、一輪的機制和 engine 只剩測試在用的方法，測試改成經過 `base` 的 scheduler 跑（第 5、9 條） | 沒開始 | |
 
@@ -23,6 +23,16 @@
 | 主 thread 的 scheduler 行為不變 | `renderer` 的 `task_queue::tests`、`shell` 的整合測試（`event_loop::`、`workers::`、DevTools 的）照舊通過 |
 
 ## 做過的檢查
+
+### 第 3 段的 3b（2026-11-25，Linux：Fedora 45，debug build，`9caa3e77` 之上）
+
+**做了什麼**：pipe 的每一端改成狀態機：`incoming`（沒編號）、`ready`（`(Stamp, 訊息)`）、`running`。`Stamp` 只有 `Cx::stamp_task` 造得出來（拿編號、送記號），欄位是 `tasks` 私有的。第 3 條的四個轉換照名字對應到 `PortEnd` 的方法：`enable`、`post`（決定裡的 `push`：對方在這條 thread 上跑就當場編號，先把前面沒編號的編完；否則進 `incoming`）、`move_to`（`ship` 和到了新家：不再跑，`ready` 放回 `incoming` 的最前面）、`arrived`（叫醒之後的 `PortMessages` 的 task 裡，`Cx::port_messages_arrived`）。拿掉 `first_stamp` 的補號、`keep_port` 的重送、「前面的都編過號才編」的條件，和主 thread 的 `after_task`、worker 的 loop 每個 task 之後的 `number_port_messages`。
+
+和決定的寫法不同的兩處：(1) 狀態沒有寫成 enum，是兩個 queue 加一個 `running`：`Waiting` 時 `ready` 一定是空的（`move_to` 放回 `incoming`），`Running` 時 `incoming` 只有別的 thread 送來、還沒 `arrived` 的；同一條 thread 送的要在那些之後（新加的 `a_message_from_here_comes_after_those_from_another_thread`），enum 的 `Running(VecDeque<(Stamp, Message)>)` 放不下它們。(2) 一端關掉時，同一條 thread 上的另一端也叫醒：以前每個 task 之後都看一次，再也收不到的 port 會離開清單；現在只有叫醒排的 task 看，不叫醒的話它一直留在 context 的清單裡（回收不了）。最後一則訊息被拿走、對方已經關了時也當場離開清單。
+
+**測試**：`dom` 的 `message_ports::` 改成在 host 會跑 `PortMessages` 的地方呼叫 `port_messages_arrived`（以前是 `next_task` 順便編號）；`a_port_whose_other_end_closed_gets_what_came_before` 留住 context（以前 context 自己被回收，「不再留住 port」的檢查不成立）。新加：`dom` 的 `a_message_from_here_comes_after_those_from_another_thread`；`shell` 的 `event_loop::a_shipped_ports_messages_wait_for_its_new_port`（啟用了、有一則等著的 port 被傳到同一頁，新的 port 啟用前又來一則，啟用後兩則照順序來）。`dom`、`dom_api`、`dom_js`、`dom_wasm`、`renderer`、`shell` 的測試通過。WPT（`workers/`、`webmessaging/`、`html/webappapis/timers/`，483 個）：0 個退步；非預期的通過 2 個，是 `dedicated-worker-in-data-url-context.window.html` 的（第 2 段記過的那幾個，這次 2 個）。
+
+**mutation test**（`mutants-3b.toml`，12 個，11 個抓到）：第一輪 5 個沒抓到：同一條 thread 送的排到別的 thread 的前面、傳走時丟掉編過號的、傳走之後還在跑、最後一則被拿走時不離開清單、`arrived` 不看在不在跑。補上面的測試和 context 之後，前 4 個抓到；最後一個是等價的（`docs/test-gaps.md`）。
 
 ### 第 3 段的 3a（2026-11-25，Linux：Fedora 45，debug build，`b3d7677f` 之上）
 

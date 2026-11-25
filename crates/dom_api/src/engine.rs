@@ -714,9 +714,9 @@ pub trait ScriptEngine: ParserHost {
     }
 
     /// The messages that came to the windows' enabled ports from other
-    /// threads, numbered as the DOM's tasks (each told to the host's
-    /// scheduler) if they weren't (`Cx::number_port_messages`).
-    fn number_port_messages(&mut self) {}
+    /// threads, numbered as the DOM's tasks, each told to the host's
+    /// scheduler: the task its port waker posts (`Cx::port_messages_arrived`).
+    fn port_messages_arrived(&mut self) {}
 
     /// How long until a guest of the engine's own waits no more (a wasm
     /// guest's wait, which isn't a task of the DOM's); none with none.
@@ -1046,8 +1046,9 @@ pub trait WorkerEngine {
     fn run_dom_task(&mut self, number: u64) -> bool;
 
     /// Numbers the messages its ports got from other threads, each a token
-    /// to its thread's scheduler (`dom::Cx::number_port_messages`).
-    fn number_port_messages(&mut self);
+    /// to its thread's scheduler: the task its port waker posts
+    /// (`dom::Cx::port_messages_arrived`).
+    fn port_messages_arrived(&mut self);
 
     /// What stops its script from another thread (V8's
     /// `TerminateExecution`): `Worker.terminate()`'s.

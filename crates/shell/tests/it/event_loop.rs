@@ -213,6 +213,32 @@ setTimeout(() => {{ channel.port2.onmessage = e => note(e.data, 1); }}, 50);
     assert_eq!(report(&[("/", Route::ok("text/html", page.as_str()))]), "1");
 }
 
+/// A port shipped as it is enabled, a message waiting for it, comes
+/// elsewhere (here, to the same page) with that message, then one posted
+/// as it came, before its new port is enabled: both come once it is, in
+/// order.
+#[test]
+fn a_shipped_ports_messages_wait_for_its_new_port() {
+    let page = format!(
+        "<!DOCTYPE html><script>{REPORT}
+const {{ port1, port2 }} = new MessageChannel();
+port2.onmessage = () => note('old port', 2);
+port1.postMessage('a');
+onmessage = e => {{
+  const port = e.ports[0];
+  port1.postMessage('b');
+  setTimeout(() => {{ port.onmessage = m => note(m.data, 2); }}, 50);
+}};
+postMessage('', '*', [port2]);
+setTimeout(() => testRunner.reportHarnessResults(log.join() || 'none'), 1000);
+</script>"
+    );
+    assert_eq!(
+        report(&[("/", Route::ok("text/html", page.as_str()))]),
+        "a,b"
+    );
+}
+
 /// What a worker threw as it closed itself (in a task of its, after
 /// `close()`) comes to its `Worker`.
 #[test]

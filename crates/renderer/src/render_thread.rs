@@ -763,11 +763,6 @@ impl RenderThread {
     }
 
     fn after_task(&mut self) {
-        // The messages its ports got, numbered as the DOM's tasks (a port
-        // it started may have had them).
-        if let Some(engine) = &mut self.engine {
-            engine.number_port_messages();
-        }
         // What its script asked of the frame (a dropdown; the navigations
         // and blob URLs the engine's calls left), now that none runs.
         self.handle_popup_requests();
@@ -955,9 +950,13 @@ impl RenderThread {
                 self.worker_event(id, event);
                 true
             }
-            // Each a task of the DOM's, numbered as this one ends
-            // (`after_task`).
-            MainThreadTask::PortMessages => true,
+            // Each a task of the DOM's, numbered now (a token each).
+            MainThreadTask::PortMessages => {
+                if let Some(engine) = &mut self.engine {
+                    engine.port_messages_arrived();
+                }
+                true
+            }
             MainThreadTask::DomTask { number } => {
                 self.run_dom_task(number);
                 true

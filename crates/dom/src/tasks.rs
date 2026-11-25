@@ -24,6 +24,26 @@ use crate::{Cx, Dom, ExecutionContext, NodeId, NodeRef};
 /// now).
 pub type TaskWaker = Box<dyn Fn(u64, Option<std::time::Instant>)>;
 
+/// A task's number this DOM gave and when it was queued, its token told to
+/// the host's scheduler (`TaskWaker`): made only by `Cx::stamp_task`, its
+/// fields this module's, so that what holds one holds a task that will run.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Stamp {
+    queued: f64,
+    number: u64,
+}
+
+impl Stamp {
+    /// When the task was queued (the DOM's clock).
+    pub(crate) fn queued(self) -> f64 {
+        self.queued
+    }
+
+    pub(crate) fn number(self) -> u64 {
+        self.number
+    }
+}
+
 /// The queue a window's next task is in (`Cx::next_task`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskQueue {
@@ -106,6 +126,13 @@ impl<'gc> Cx<'_, 'gc> {
         let number = self.next_task_number();
         self.wake_for_task(number, None);
         (self.dom_now(), number)
+    }
+
+    /// `stamp_queued_task`'s, as a `Stamp`: the one way to make one, so
+    /// that a stamp is a token the host's scheduler was told of.
+    pub(crate) fn stamp_task(&self) -> Stamp {
+        let (queued, number) = self.stamp_queued_task();
+        Stamp { queued, number }
     }
 
     /// The host's scheduler told of task `number` (`Dom::set_task_waker`):
@@ -207,13 +234,6 @@ impl<'gc> Cx<'_, 'gc> {
             self.next_posted_message(context)
                 .map(|(at, number)| (at, number, TaskQueue::Message)),
         ]
-    }
-
-    /// The messages that came to `context`'s enabled ports from other
-    /// threads, numbered as tasks of this DOM's now (the host's scheduler
-    /// told of each), if they weren't.
-    pub fn number_port_messages(&self, context: Gc<'gc, ExecutionContext>) {
-        let _ = self.next_posted_message(context);
     }
 
     /// `context`'s task to run next by `now` (the DOM's clock), of those

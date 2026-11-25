@@ -472,12 +472,12 @@ impl WorkerEngine for V8WorkerEngine {
         .unwrap_or(false)
     }
 
-    fn number_port_messages(&mut self) {
+    fn port_messages_arrived(&mut self) {
         let Some(global) = self.global.clone() else {
             return;
         };
         self.state().dom.read(|cx| {
-            cx.number_port_messages(cx.worker_global_context(global.get(cx.gc)));
+            cx.port_messages_arrived(cx.worker_global_context(global.get(cx.gc)));
         });
     }
 

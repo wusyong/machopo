@@ -1,0 +1,105 @@
+# Stage 3b's mutants: `python3 scripts/test.py mutate rfcs/0114-one-dom-task-order/mutants-3b.toml`.
+test = ["sh", "-c", "cargo test -q -p dom --test it -- message_ports:: && cargo test -q -p shell --test it -- event_loop:: workers:: messaging::"]
+timeout = 400
+
+[[mutant]]
+name = "enabled, the messages that waited aren't numbered"
+file = "crates/dom/src/message_pipe.rs"
+from = '''        end.running = true;
+        while let Some(message) = end.incoming.pop_front() {
+            end.ready.push_back((stamp(), message));
+        }'''
+to = '''        end.running = true;'''
+
+[[mutant]]
+name = "a message here is numbered though its port isn't enabled"
+file = "crates/dom/src/message_pipe.rs"
+from = '''            if here && other.running {'''
+to = '''            if here {'''
+
+[[mutant]]
+name = "a message here goes before those that came from another thread"
+file = "crates/dom/src/message_pipe.rs"
+from = '''                while let Some(earlier) = other.incoming.pop_front() {
+                    other.ready.push_back((stamp(), earlier));
+                }
+                other.ready.push_back((stamp(), message));'''
+to = '''                other.ready.push_back((stamp(), message));'''
+
+[[mutant]]
+name = "the messages from another thread are numbered though the port doesn't run"
+file = "crates/dom/src/message_pipe.rs"
+from = '''        if !end.running {
+            return;
+        }
+        while let Some(message) = end.incoming.pop_front() {'''
+to = '''        while let Some(message) = end.incoming.pop_front() {'''
+
+[[mutant]]
+name = "the messages from another thread aren't numbered"
+file = "crates/dom/src/message_pipe.rs"
+from = '''        if !end.running {
+            return;
+        }'''
+to = '''        if !end.running || true {
+            return;
+        }'''
+
+[[mutant]]
+name = "moved, the numbered messages are lost"
+file = "crates/dom/src/message_pipe.rs"
+from = '''        for (_, message) in ready.into_iter().rev() {
+            end.incoming.push_front(message);
+        }'''
+to = '''        drop(ready);'''
+
+[[mutant]]
+name = "moved, it still runs"
+file = "crates/dom/src/message_pipe.rs"
+from = '''        let mut ends = self.lock();
+        let end = &mut ends[self.side];
+        end.running = false;
+        let ready'''
+to = '''        let mut ends = self.lock();
+        let end = &mut ends[self.side];
+        let ready'''
+
+[[mutant]]
+name = "a port closed here doesn't wake its other end"
+file = "crates/dom/src/message_pipe.rs"
+from = '''                .as_ref()
+                .and_then(|home| home.waker.clone());'''
+to = '''                .as_ref()
+                .filter(|home| !home.is_current())
+                .and_then(|home| home.waker.clone());'''
+
+[[mutant]]
+name = "a port that gets no more as the waker's task runs is kept"
+file = "crates/dom/src/message.rs"
+from = '''            if done != Some(false) {
+                self.forget_port(port);
+            }'''
+to = '''            let _ = done;'''
+
+[[mutant]]
+name = "a port that gets no more as its last message is taken is kept"
+file = "crates/dom/src/message.rs"
+from = '''                if done {
+                    self.forget_port(port);
+                }'''
+to = '''                let _ = done;'''
+
+[[mutant]]
+name = "the main thread's port task numbers nothing"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                if let Some(engine) = &mut self.engine {
+                    engine.port_messages_arrived();
+                }
+                true'''
+to = '''                true'''
+
+[[mutant]]
+name = "a worker's port task numbers nothing"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''            WorkerTask::PortMessages => engine.port_messages_arrived(),'''
+to = '''            WorkerTask::PortMessages => {}'''

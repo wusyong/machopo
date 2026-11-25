@@ -888,8 +888,8 @@ fn run(thread: WorkerThread) {
             WorkerTask::DomTask { number } => {
                 engine.run_dom_task(number);
             }
-            // Numbered as the task ends, below.
-            WorkerTask::PortMessages => {}
+            // Each a task of the DOM's, numbered now (a token each).
+            WorkerTask::PortMessages => engine.port_messages_arrived(),
             WorkerTask::PlatformTasks => {
                 platform_posted.store(false, Ordering::Release);
                 engine.run_platform_tasks();
@@ -943,9 +943,6 @@ fn run(thread: WorkerThread) {
                 _ => {}
             },
         }
-        // As each task ends: its ports' messages from other threads
-        // numbered, each a token.
-        engine.number_port_messages();
     }
     // The workers it made end with it (HTML: no owner left; Blink's
     // `DedicatedWorker::Dispose` terminates each), before its engine goes.
@@ -1075,7 +1072,7 @@ mod tests {
             false
         }
 
-        fn number_port_messages(&mut self) {}
+        fn port_messages_arrived(&mut self) {}
 
         fn terminator(&mut self) -> Box<dyn Fn() + Send> {
             Box::new(|| {})

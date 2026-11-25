@@ -189,7 +189,7 @@ impl<'gc> Cx<'_, 'gc> {
         owner: Option<Gc<'gc, crate::ExecutionContext>>,
         end: PortEnd,
     ) -> Gc<'gc, EventTargetImpl> {
-        end.set_home(Some(self.port_home()));
+        end.move_to(Some(self.port_home()));
         let target = self.create_event_target();
         let port = self.gc.alloc_in(
             &sites::OTHER,
@@ -293,10 +293,15 @@ impl<'gc> Cx<'_, 'gc> {
     }
 
     /// `port`, enabled, with its end, in its owner's list of ports: alive
-    /// while messages may come, its queue looked at.
+    /// while messages may come, its queue looked at; its end running, the
+    /// messages that wait for it numbered, each a token.
     fn keep_port(&self, port: Gc<'gc, EventTargetImpl>, data: Gc<'gc, MessagePort>) {
         let state = data.state.get();
-        if state & ENABLED == 0 || state & CLOSED != 0 || self.with_port_end(data, |_| ()).is_none()
+        if state & ENABLED == 0
+            || state & CLOSED != 0
+            || self
+                .with_port_end(data, |end| end.enable(|| self.stamp_task()))
+                .is_none()
         {
             return;
         }
@@ -316,15 +321,6 @@ impl<'gc> Cx<'_, 'gc> {
             .any(|&kept| Gc::ptr_eq(kept, port))
         {
             ports.push(self.gc, port);
-            // The messages stamped while it wasn't in the list: the host's
-            // scheduler took their tasks then and found none, so it is
-            // told of them again (`Dom::set_task_waker`).
-            for number in self
-                .with_port_end(data, PortEnd::stamped_numbers)
-                .unwrap_or_default()
-            {
-                self.wake_for_task(number, None);
-            }
         }
     }
 
@@ -369,7 +365,7 @@ impl<'gc> Cx<'_, 'gc> {
         let Some(end) = data.into_ref().end.get().take() else {
             return PortEnd::pair().0;
         };
-        end.set_home(None);
+        end.move_to(None);
         end
     }
 
@@ -481,7 +477,7 @@ impl<'gc> Cx<'_, 'gc> {
             {
                 return Some(payload);
             }
-            end.post(payload, || self.stamp_queued_task()).err()
+            end.post(payload, || self.stamp_task()).err()
         });
         drop(lost);
     }
@@ -553,8 +549,12 @@ impl<'gc> Cx<'_, 'gc> {
             }
             Some(port) => {
                 let data = self.port_data(port)?;
-                // (Let go once it has no more to come: `first_message`.)
-                let payload = self.with_port_end(data, PortEnd::take)?;
+                let (payload, done) = self.with_port_end(data, |end| (end.take(), end.is_done()))?;
+                // Let go once it has no more to come (else as its other
+                // end closes: `port_messages_arrived`).
+                if done {
+                    self.forget_port(port);
+                }
                 (
                     payload,
                     DomString::new(""),
@@ -588,11 +588,28 @@ impl<'gc> Cx<'_, 'gc> {
             .map(|(_, (queued, number))| (queued, number))
     }
 
+    /// The messages that came to `context`'s enabled ports from other
+    /// threads, numbered now, each a token (the host's task for its port
+    /// waker, `Dom::set_port_waker`); its ports that get no message again
+    /// go out of its list.
+    pub fn port_messages_arrived(&self, context: Gc<'gc, crate::ExecutionContext>) {
+        for port in list_items(self, context.message_ports.get(self.gc)) {
+            let Some(data) = self.port_data(port) else {
+                continue;
+            };
+            let done = self.with_port_end(data, |end| {
+                end.arrived(|| self.stamp_task());
+                end.is_done()
+            });
+            if done != Some(false) {
+                self.forget_port(port);
+            }
+        }
+    }
+
     /// `context`'s first message to deliver: of the first in its own queue
-    /// and those in its enabled ports' (the port), the lowest numbered, if
-    /// the host's pass lets it run. The messages that came to its ports
-    /// from other threads are numbered now, as tasks of this DOM's; its
-    /// ports that get no message again go out of its list.
+    /// and those numbered in its enabled ports' (the port), the lowest
+    /// numbered, if the host's pass lets it run.
     pub(crate) fn first_message(
         &self,
         context: Gc<'gc, crate::ExecutionContext>,
@@ -615,16 +632,8 @@ impl<'gc> Cx<'_, 'gc> {
             let Some(data) = self.port_data(port) else {
                 continue;
             };
-            let first = self.with_port_end(data, |end| {
-                if end.is_done() {
-                    return None;
-                }
-                Some(end.first_stamp(|| self.stamp_queued_task()))
-            });
-            match first.flatten() {
-                Some(Some(stamp)) => ports.push((Some(port), stamp)),
-                Some(None) => {}
-                None => self.forget_port(port),
+            if let Some(stamp) = self.with_port_end(data, PortEnd::first_stamp).flatten() {
+                ports.push((Some(port), (stamp.queued(), stamp.number())));
             }
         }
         own.into_iter()

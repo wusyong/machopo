@@ -1164,12 +1164,12 @@ impl ScriptEngine for WasmEngine {
         })
     }
 
-    fn number_port_messages(&mut self) {
+    fn port_messages_arrived(&mut self) {
         let Some(window) = self.window() else {
             return;
         };
         self.dom()
-            .read(|cx| cx.number_port_messages(cx.window_context(window.get(cx.gc))));
+            .read(|cx| cx.port_messages_arrived(cx.window_context(window.get(cx.gc))));
     }
 
     fn until_due_guests(&mut self) -> Option<Duration> {

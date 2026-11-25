@@ -1560,12 +1560,12 @@ impl ScriptEngine for V8Engine {
         })
     }
 
-    fn number_port_messages(&mut self) {
+    fn port_messages_arrived(&mut self) {
         let frames = self.frames_as_made();
         self.state().dom.read(|cx| {
             for (_, _, document) in &frames {
                 if let Some(window) = cx.window_of(document.get(cx.gc)) {
-                    cx.number_port_messages(cx.window_context(window));
+                    cx.port_messages_arrived(cx.window_context(window));
                 }
             }
         });

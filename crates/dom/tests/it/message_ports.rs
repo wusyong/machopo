@@ -4,8 +4,10 @@
 //! thread's tasks (numbered there), that thread woken; an end closed
 //! (`close()`, its port collected, its DOM gone, the message it was in
 //! lost) leaves the other port getting what came before, then nothing, and
-//! no longer kept alive; a port shipped through the port it is entangled
-//! with is lost with the message ("doomed").
+//! no longer kept alive once its thread's task for its waker ran
+//! (`Cx::port_messages_arrived`, which the tests call where the host's
+//! scheduler would); a port shipped through the port it is entangled with
+//! is lost with the message ("doomed").
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
@@ -96,6 +98,9 @@ fn a_port_s_messages_follow_it_to_another_thread() {
         assert_eq!(woken.load(Ordering::SeqCst), 1);
         dom.mutate(|cx| {
             let (context, port) = (port.0.get(cx.gc), port.1.get(cx.gc));
+            // Not numbered till the task for its waker.
+            assert!(cx.take_posted_message(context).is_none());
+            cx.port_messages_arrived(context);
             assert_eq!(take_all(cx, context, port), [3]);
             cx.post_port_message(port, message(4, Vec::new()));
         });
@@ -109,25 +114,30 @@ fn a_port_s_messages_follow_it_to_another_thread() {
     here.mutate(|cx| {
         let one = one.get(cx.gc);
         let context = cx.message_port_owner(one).unwrap();
+        cx.port_messages_arrived(context);
         assert_eq!(take_all(cx, context, one), [4]);
     });
 }
 
 /// The other end closed by `close()` or its DOM going: the port gets what
-/// came before, then nothing, its thread woken; it is no longer kept
-/// alive (once its context looked).
+/// came before, then nothing, its thread woken; its context kept, it is no
+/// longer kept alive once that came.
 #[test]
 fn a_port_whose_other_end_closed_gets_what_came_before() {
     for drop_dom in [false, true] {
         let (mut here, woken) = counted();
         let (to_there, from_here) = mpsc::channel::<PortEnd>();
-        let (port, weak) = here.mutate(|cx| {
+        let (kept, port, weak) = here.mutate(|cx| {
             let context = context(cx);
             let channel = cx.create_message_channel(Some(context));
             let (one, two) = cx.message_channel_ports(channel);
             cx.start_message_port(one);
             to_there.send(cx.ship_message_port(two)).unwrap();
-            (Persistent::new(cx.gc, one), WeakPersistent::new(cx.gc, one))
+            (
+                Persistent::new(cx.gc, context),
+                Persistent::new(cx.gc, one),
+                WeakPersistent::new(cx.gc, one),
+            )
         });
         std::thread::spawn(move || {
             let mut dom = Dom::new();
@@ -147,6 +157,7 @@ fn a_port_whose_other_end_closed_gets_what_came_before() {
         here.mutate(|cx| {
             let one = port.get(cx.gc);
             let context = cx.message_port_owner(one).unwrap();
+            cx.port_messages_arrived(context);
             assert!(cx.has_posted_message(context));
             assert_eq!(take_all(cx, context, one), [5]);
             assert!(!cx.has_posted_message(context));
@@ -157,14 +168,16 @@ fn a_port_whose_other_end_closed_gets_what_came_before() {
             here.read(|cx| weak.get(cx.gc).is_none()),
             "drop_dom: {drop_dom}"
         );
+        drop(kept);
     }
 }
 
 /// A port collected (unreachable, never started) closes its end: the port
-/// it is entangled with, started, is let go once its context looked.
+/// it is entangled with, started, is let go once its thread's task for its
+/// waker ran (woken by the close, on this thread too).
 #[test]
 fn a_collected_port_closes_its_end() {
-    let (mut dom, _) = counted();
+    let (mut dom, woken) = counted();
     let (context, weak) = dom.mutate(|cx| {
         let context = context(cx);
         let channel = cx.create_message_channel(Some(context));
@@ -178,15 +191,16 @@ fn a_collected_port_closes_its_end() {
     dom.collect();
     // Kept by its context's list till it looks.
     assert!(dom.read(|cx| weak.get(cx.gc).is_some()));
+    assert_eq!(woken.load(Ordering::SeqCst), 1);
     dom.mutate(|cx| assert!(!cx.has_posted_message(context.get(cx.gc))));
-    dom.mutate(|cx| cx.next_task(context.get(cx.gc), cx.dom_now() + 1.0));
+    dom.mutate(|cx| cx.port_messages_arrived(context.get(cx.gc)));
     dom.collect();
     assert!(dom.read(|cx| weak.get(cx.gc).is_none()));
 }
 
 /// A port shipped through the port it is entangled with (HTML's
 /// "doomed"): the message is lost, and the pipe closes: the port is let go
-/// once its context looked.
+/// once its thread's task for its waker ran.
 #[test]
 fn a_port_shipped_through_its_own_pipe_is_lost() {
     let (mut dom, _) = counted();
@@ -198,7 +212,7 @@ fn a_port_shipped_through_its_own_pipe_is_lost() {
         let end = cx.ship_message_port(two);
         cx.post_port_message(one, message(6, vec![end]));
         assert!(!cx.has_posted_message(context));
-        assert!(cx.next_task(context, cx.dom_now() + 1.0).is_none());
+        cx.port_messages_arrived(context);
         (
             Persistent::new(cx.gc, context),
             WeakPersistent::new(cx.gc, one),
@@ -211,7 +225,7 @@ fn a_port_shipped_through_its_own_pipe_is_lost() {
 
 /// The ports in a message that is lost (the port it was for closed before
 /// or after it came) are closed: the ports they were entangled with are
-/// let go once their context looked.
+/// let go once their thread's task for its waker ran.
 #[test]
 fn the_ports_of_a_lost_message_close() {
     let (mut dom, _) = counted();
@@ -230,7 +244,7 @@ fn the_ports_of_a_lost_message_close() {
         cx.close_message_port(two);
         // Posted after.
         cx.post_port_message(one, message(9, vec![ship()]));
-        cx.next_task(context, cx.dom_now() + 1.0);
+        cx.port_messages_arrived(context);
         (Persistent::new(cx.gc, context), kept)
     });
     dom.collect();
@@ -238,6 +252,43 @@ fn the_ports_of_a_lost_message_close() {
         assert!(dom.read(|cx| weak.get(cx.gc).is_none()));
     }
     drop(context);
+}
+
+/// A port's messages from another thread wait for its thread's task for
+/// its waker; one posted through the other end once that end is shipped to
+/// the port's thread (a message of its own thread's, numbered as it is
+/// posted) comes after them, in the order they were posted.
+#[test]
+fn a_message_from_here_comes_after_those_from_another_thread() {
+    let (mut here, _) = counted();
+    let (to_there, from_here) = mpsc::channel::<PortEnd>();
+    let (to_here, from_there) = mpsc::channel::<PortEnd>();
+    let (kept, port) = here.mutate(|cx| {
+        let context = context(cx);
+        let (one, two) = cx.message_channel_ports(cx.create_message_channel(Some(context)));
+        cx.start_message_port(one);
+        to_there.send(cx.ship_message_port(two)).unwrap();
+        (Persistent::new(cx.gc, context), Persistent::new(cx.gc, one))
+    });
+    std::thread::spawn(move || {
+        let mut there = Dom::new();
+        let end = from_here.recv().unwrap();
+        there.mutate(|cx| {
+            let port = cx.receive_message_ports(context(cx), vec![end])[0];
+            cx.post_port_message(port, message(1, Vec::new()));
+            to_here.send(cx.ship_message_port(port)).unwrap();
+        });
+    })
+    .join()
+    .unwrap();
+    let end = from_there.recv().unwrap();
+    here.mutate(|cx| {
+        let (context, port) = (kept.get(cx.gc), port.get(cx.gc));
+        let back = cx.receive_message_ports(context, vec![end])[0];
+        cx.post_port_message(back, message(2, Vec::new()));
+        cx.port_messages_arrived(context);
+        assert_eq!(take_all(cx, context, port), [1, 2]);
+    });
 }
 
 /// The messages that wait for a port as it is shipped are its new DOM's
