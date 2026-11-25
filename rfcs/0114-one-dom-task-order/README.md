@@ -1,7 +1,7 @@
 # RFC 0114：DOM 的 task 只有一套順序，worker 和主 thread 一樣
 
 - 開始日期：2026-11-25
-- 狀態：👍 已接受：2026-11-25
+- 狀態：🚧 已排程：2026-11-25
 - 細節：`details.md`
 
 ## 摘要
@@ -100,6 +100,7 @@
 4. **debug build 的偵測：只問「有沒有」**（2026-11-25，使用者決定；B）：thread 要等待、scheduler 是空的時候，`dom` 回答有沒有任何能跑、早就到期（5 ms）的 task（timer、UA 的 timer、idle callback 的 timeout、element task、`Running` 的 port 裡的訊息），不排順序；有就 panic。主 thread 和 worker 都裝。新的一種 task 要加進這個查詢（漏了只是少抓）。port 的那一類已經由第 3 條的狀態機在型別上擋住，這個主要守其他的 task 漏記號。對照 Chromium：沒有這種偵測（task 就是 closure，post 了就在 queue 裡）；machopo 的 task 的內容在 `dom`、記號在 scheduler，兩邊要對得上。不選拿掉：timer、element task 漏記號時又會靜靜地卡住（RFC 0112 第 25 條那次就是記號的 bug）。不選逐一對帳（兩邊各記送出、還沒跑的記號，每個 task 之後比對）：漏的當下就抓到，但多兩份 debug 用的帳、每個 task 之後比對，debug build 變慢，帳本身也可能寫錯。
 5. **scheduler 的核心放在 `base`，`dom` 系列的測試用真的**（2026-11-25，使用者決定；A）：第 1 條抽出的核心放進 `base`（不加依賴；對照 Chromium 的 `base::sequence_manager`），renderer 的主 thread、worker 和 `dom`、`dom_js`、`dom_wasm` 的測試都用它；測試多一個小的 helper（`TaskWaker` 把記號送進它、跑到沒有為止），取代直接呼叫的 `next_task`、`run_due_tasks` 和 `ScriptEngine` 只剩測試在用的 `run_element_tasks`、`run_posted_messages`、`run_timers`。測試和正式的程式是同一份順序規則。不選核心放在 `renderer`、測試另寫一個照記號排的小 queue：`dom` 的測試不能依賴 `renderer`，兩份規則可能走樣（例如延後的 task 什麼時候搬）。
 6. **worker 的 `close()` 照 Chromium：那個 task 結束時丟掉排好的 task**（2026-11-25，使用者決定；A）：`close()` 只設 closing 的旗標；那個 task 和它的 microtask checkpoint 跑完，worker 的 loop 看到旗標就清掉自己的 scheduler（排好的 task 都不跑），照現在的程序結束。看得到的結果和 HTML 的 close a worker 一樣：剩下的 task 都不跑（解決 `docs/limitations.md` 裡 dedicated worker 的那一條）。對照 Chromium：`WorkerGlobalScope::close` 設 `closing_`，`WorkerThread::DidProcessTask` 跑完 checkpoint 之後 `PrepareForShutdownOnWorkerThread`，`worker_scheduler_->Dispose()`。不選在 `close()` 裡當場丟掉（照 HTML 的字面）：結果一樣，但要在 script 的呼叫裡碰 scheduler，那個 task 剩下的部分還要在 queue 已經清掉的狀態下跑完。
+7. **第 1 段：`base` 的核心連鎖和等待一起包**（2026-11-25，使用者決定；B）：`base::sequence_manager::SequenceManager` 有自己的 `Mutex` 和 `Condvar`，提供 `post`、`post_at`、`post_with`、`next`（可以有時限）、`try_next`、`wait_for`、`has_task`、`take_matching`、`put_back`、`sync_wait`、`post_reply`、`close`；使用的人照 `Spec` 給 queue 的種類、task、回答、同一把鎖底下的狀態（`Extra`）和取走 task 時的 hook（`taken`）。主 thread 留下 task 和 queue 的種類、`posted_once`、`shutting_down`、DevTools 的打斷。等待和叫醒的細節（為延後的 task 醒來、時限、同步等）只有一份。對照 Chromium：`SequenceManager` 連同它的 `ThreadController` 的等待。不選只包沒有鎖的資料結構、等待各自寫：等待寫兩次。
 
 ## 待決定
 

@@ -306,6 +306,10 @@
 
 - 在命令的 task 裡當場抓，和在那個 task 之後抓（`after_task` 的 `start_css_refetches`）看不出差別：兩者都在同一個 task 結束之前送出請求，回答在請求之前就送了。留著當場的，是照 Chrome 在 `CSS.enable` 的 task 裡抓。
 
+**一條 thread 的 task queue 的等待（`base` 的 `sequence_manager` 的 `next_delayed`）**
+
+- 等待只為「要的那幾個 queue」的延後 task 醒來，拿掉這個過濾沒有差別：多醒一次，醒來時沒有要的 task，照樣回去等（主 thread 的延後 task 只在 DOM 和 renderer 自己的 queue）。留著是讓 script 停在斷點時（只取 DevTools 和 rendering 的 queue）不為 timer 醒來。
+
 **記號跑它自己的那一個 task（`dom` 的 `target_task`、engine 的 `run_dom_task`）**
 
 - element task 照編號在整個 queue 裡找（`first_element_task`），不只看第一個：記號照排進來的順序 post，要跑的那一個總是第一個。

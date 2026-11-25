@@ -8,12 +8,13 @@
 //! runs the same scheduler with the page's queues paused), the others
 //! staying where they are, in order.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::mpsc;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use base::AtomicSequenceNumber;
+use base::sequence_manager::{SequenceManager, Spec};
 use compositor::{CompositorReceiver, CompositorSender, ToMainThread};
 use dom_api::{DevToolsInterrupter, DevToolsQueued};
 use protocol::control_channel::{ChannelLink, send_over, to_renderer};
@@ -163,159 +164,55 @@ impl TaskQueues {
     }
 }
 
-/// A task as queued: its number, and (DevTools' messages) whether it is to
-/// interrupt script.
+/// A task as queued, and (DevTools' messages) whether it is to interrupt
+/// script.
 struct Queued {
-    sequence: u64,
     task: MainThreadTask,
     interrupt: bool,
 }
 
+/// What the main thread keeps under its queues' lock.
 #[derive(Default)]
-struct State {
-    queues: [VecDeque<Queued>; 8],
-    /// The tasks not due yet (the DOM's timers', the renderer's own):
-    /// each queued as it comes due, numbered then (Blink's delayed tasks
-    /// take their place in the order as they become ready).
-    delayed: std::collections::BinaryHeap<std::cmp::Reverse<Delayed>>,
-    /// The next delayed task's place among those due at once, from 1.
-    delayed_order: u64,
+struct MainExtra {
     /// The renderer's own tasks posted for the earliest of what keeps
     /// asking for them (`post_internal_once_at`), and when: until the
     /// first of each is taken.
     posted_once: Vec<(InternalTask, Instant)>,
-    /// The next task's number, from 1: 0 is what was put back first
-    /// (`put_back`).
-    next: u64,
-    /// The main thread has gone: nothing is posted any more.
-    closed: bool,
-    /// The browser's answers to the main thread's calls that wait
-    /// (`sync_call`), by number: not tasks, taken by the call alone.
-    replies: HashMap<u64, RendererMsg>,
     /// The browser said to shut down: a call waiting gives up, for the
     /// main thread to get to it.
     shutting_down: bool,
 }
 
-/// A task posted to come due at `at`, into `queue`; `order` the order it
-/// was posted in, for those due at once.
-struct Delayed {
-    at: Instant,
-    order: u64,
-    queue: TaskQueue,
-    task: MainThreadTask,
-}
+/// The main thread's queues as `base::sequence_manager` takes them.
+struct MainSpec;
 
-impl PartialEq for Delayed {
-    fn eq(&self, other: &Self) -> bool {
-        (self.at, self.order) == (other.at, other.order)
+impl Spec for MainSpec {
+    type Queue = TaskQueue;
+    type Task = Queued;
+    type Reply = RendererMsg;
+    type Extra = MainExtra;
+
+    const QUEUES: &'static [TaskQueue] = &TaskQueue::ALL;
+
+    fn index(queue: TaskQueue) -> usize {
+        queue.index()
     }
-}
 
-impl Eq for Delayed {}
-
-impl PartialOrd for Delayed {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Delayed {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        (self.at, self.order).cmp(&(other.at, other.order))
-    }
-}
-
-impl State {
-    /// The next task's number.
-    fn next_sequence(&mut self) -> u64 {
-        #[expect(
-            clippy::arithmetic_side_effects,
-            reason = "one per task the main thread is given: a u64 lasts centuries"
-        )]
-        {
-            self.next += 1;
+    /// The next of the same renderer's own task posted for the earliest
+    /// is posted anew.
+    fn taken(extra: &mut MainExtra, task: &Queued) {
+        if let MainThreadTask::Internal(taken) = task.task {
+            extra.posted_once.retain(|&(posted, _)| posted != taken);
         }
-        self.next
-    }
-
-    /// The DOM's tasks due by now, queued in their turn: after what was
-    /// posted before they were, the earliest due first. As the next task
-    /// is taken, not as one is posted (Blink's `SequenceManager` moves its
-    /// ready delayed tasks as it selects the next one: a task posted in a
-    /// task that ran past a timer's time is before the timer).
-    fn queue_due(&mut self) {
-        let now = Instant::now();
-        while self
-            .delayed
-            .peek()
-            .is_some_and(|std::cmp::Reverse(delayed)| delayed.at <= now)
-        {
-            let Some(std::cmp::Reverse(delayed)) = self.delayed.pop() else {
-                break;
-            };
-            let sequence = self.next_sequence();
-            self.queues[delayed.queue.index()].push_back(Queued {
-                sequence,
-                task: delayed.task,
-                interrupt: false,
-            });
-        }
-    }
-
-    /// `queue`'s first task, taken: the next of the same renderer's own
-    /// task posted for the earliest is posted anew.
-    fn take(&mut self, queue: TaskQueue) -> Option<MainThreadTask> {
-        let task = self.queues[queue.index()].pop_front()?.task;
-        if let MainThreadTask::Internal(taken) = task {
-            self.posted_once.retain(|&(posted, _)| posted != taken);
-        }
-        Some(task)
-    }
-
-    /// When the first of the tasks not due yet is.
-    fn next_delayed(&self) -> Option<Instant> {
-        self.delayed
-            .peek()
-            .map(|std::cmp::Reverse(delayed)| delayed.at)
-    }
-
-    /// `task` into `queue` as `at` comes.
-    fn push_delayed(&mut self, at: Instant, queue: TaskQueue, task: MainThreadTask) {
-        #[expect(
-            clippy::arithmetic_side_effects,
-            reason = "one per delayed task the main thread is given: a u64 lasts centuries"
-        )]
-        {
-            self.delayed_order += 1;
-        }
-        let order = self.delayed_order;
-        self.delayed.push(std::cmp::Reverse(Delayed {
-            at,
-            order,
-            queue,
-            task,
-        }));
-    }
-
-    /// The queue among `queues` whose first task was posted earliest.
-    fn earliest(&self, queues: TaskQueues) -> Option<TaskQueue> {
-        TaskQueue::ALL
-            .into_iter()
-            .filter(|&queue| queues.has(queue))
-            .filter_map(|queue| Some((self.queues[queue.index()].front()?.sequence, queue)))
-            .min_by_key(|&(sequence, _)| sequence)
-            .map(|(_, queue)| queue)
     }
 }
 
 /// The renderer main thread's task queues, which any thread posts to and
-/// the main thread takes from: one lock and one condition for them all
-/// (Blink's `SequenceManager` has a lock for what other threads post).
+/// the main thread takes from (`base::sequence_manager`, as Blink's
+/// `MainThreadSchedulerImpl` is over a `SequenceManager`).
 #[derive(Default)]
 pub struct MainThreadScheduler {
-    state: Mutex<State>,
-    ready: Condvar,
+    state: SequenceManager<MainSpec>,
     /// The engine's, which has its thread take what interrupts script: set
     /// once, as the engine is made.
     interrupter: OnceLock<DevToolsInterrupter>,
@@ -357,10 +254,6 @@ impl Default for WorkerIds {
 }
 
 impl MainThreadScheduler {
-    fn lock(&self) -> MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
     /// Posts `task` to `queue`, after every task posted before (`interrupt`:
     /// a DevTools message that is to interrupt script). Fails once the main
     /// thread has gone.
@@ -370,19 +263,9 @@ impl MainThreadScheduler {
         task: MainThreadTask,
         interrupt: bool,
     ) -> Result<(), RendererGone> {
-        {
-            let mut state = self.lock();
-            if state.closed {
-                return Err(RendererGone);
-            }
-            let sequence = state.next_sequence();
-            state.queues[queue.index()].push_back(Queued {
-                sequence,
-                task,
-                interrupt,
-            });
-        }
-        self.ready.notify_one();
+        self.state
+            .post(queue, Queued { task, interrupt })
+            .map_err(|_| RendererGone)?;
         if interrupt && let Some(interrupter) = self.interrupter.get() {
             interrupter();
         }
@@ -469,18 +352,11 @@ impl MainThreadScheduler {
 
     /// `task` into `queue` as `at` comes (now, if it has).
     fn post_at(&self, queue: TaskQueue, task: MainThreadTask, at: Instant) {
-        if at <= Instant::now() {
-            let _ = self.post(queue, task, false);
-            return;
-        }
-        {
-            let mut state = self.lock();
-            if state.closed {
-                return;
-            }
-            state.push_delayed(at, queue, task);
-        }
-        self.ready.notify_one();
+        let task = Queued {
+            task,
+            interrupt: false,
+        };
+        let _ = self.state.post_at(queue, task, at);
     }
 
     /// What wakes the main thread for its engine's platform tasks, from any
@@ -537,31 +413,22 @@ impl MainThreadScheduler {
     /// the next is posted anew.
     pub(crate) fn post_internal_once_at(&self, task: InternalTask, at: Instant) {
         let near = at.checked_add(Duration::from_millis(1)).unwrap_or(at);
-        {
-            let mut state = self.lock();
-            if state.closed
-                || state
-                    .posted_once
-                    .iter()
-                    .any(|&(posted, when)| posted == task && when <= near)
+        self.state.post_with(|extra| {
+            if extra
+                .posted_once
+                .iter()
+                .any(|&(posted, when)| posted == task && when <= near)
             {
-                return;
+                return None;
             }
-            state.posted_once.retain(|&(posted, _)| posted != task);
-            state.posted_once.push((task, at));
-            let task = MainThreadTask::Internal(task);
-            if at <= Instant::now() {
-                let sequence = state.next_sequence();
-                state.queues[TaskQueue::Internal.index()].push_back(Queued {
-                    sequence,
-                    task,
-                    interrupt: false,
-                });
-            } else {
-                state.push_delayed(at, TaskQueue::Internal, task);
-            }
-        }
-        self.ready.notify_one();
+            extra.posted_once.retain(|&(posted, _)| posted != task);
+            extra.posted_once.push((task, at));
+            let task = Queued {
+                task: MainThreadTask::Internal(task),
+                interrupt: false,
+            };
+            Some((TaskQueue::Internal, task, Some(at)))
+        });
     }
 
     /// What wakes worker `id`'s thread for its ports' messages from other
@@ -663,63 +530,22 @@ impl MainThreadScheduler {
         queues: TaskQueues,
         timeout: Option<Duration>,
     ) -> Option<MainThreadTask> {
-        let deadline = timeout.and_then(|timeout| Instant::now().checked_add(timeout));
-        let mut state = self.lock();
-        loop {
-            state.queue_due();
-            if let Some(queue) = state.earliest(queues) {
-                return state.take(queue);
-            }
-            if timeout.is_some() && deadline.is_some_and(|deadline| deadline <= Instant::now()) {
-                return None;
-            }
-            // Woken for the DOM's next task to come due too, if it is one
-            // of `queues`'.
-            let delayed = state
-                .next_delayed()
-                .filter(|_| queues.has(TaskQueue::Dom) || queues.has(TaskQueue::Internal));
-            let wake = match (deadline.filter(|_| timeout.is_some()), delayed) {
-                (Some(deadline), Some(delayed)) => Some(deadline.min(delayed)),
-                (deadline, delayed) => deadline.or(delayed),
-            };
-            state = match wake {
-                Some(wake) => {
-                    let left = wake.saturating_duration_since(Instant::now());
-                    self.ready
-                        .wait_timeout(state, left)
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .0
-                }
-                // None, or a wait too long to count: forever.
-                None => self
-                    .ready
-                    .wait(state)
-                    .unwrap_or_else(PoisonError::into_inner),
-            };
-        }
+        self.state
+            .next(|queue| queues.has(queue), timeout)
+            .map(|queued| queued.task)
     }
 
     /// The earliest task of `queues`, if there is one.
     pub(crate) fn try_next(&self, queues: TaskQueues) -> Option<MainThreadTask> {
-        let mut state = self.lock();
-        state.queue_due();
-        let queue = state.earliest(queues)?;
-        state.take(queue)
+        self.state
+            .try_next(|queue| queues.has(queue))
+            .map(|queued| queued.task)
     }
 
     /// Which of `queues` the earliest task is in, waiting for one: what
     /// script paused does next, left queued.
     pub(crate) fn wait_for(&self, queues: TaskQueues) -> TaskQueue {
-        let mut state = self.lock();
-        loop {
-            if let Some(queue) = state.earliest(queues) {
-                return queue;
-            }
-            state = self
-                .ready
-                .wait(state)
-                .unwrap_or_else(PoisonError::into_inner);
-        }
+        self.state.wait_for(|queue| queues.has(queue))
     }
 
     /// A call to the browser that waits for its answer (a mojo `[Sync]`
@@ -731,40 +557,23 @@ impl MainThreadScheduler {
     pub(crate) fn sync_call(&self, send: impl FnOnce(u64)) -> Option<RendererMsg> {
         let id = self.call_ids.0.get_next();
         send(id);
-        let mut state = self.lock();
-        loop {
-            if let Some(reply) = state.replies.remove(&id) {
-                return Some(reply);
-            }
-            if state.closed || state.shutting_down {
-                return None;
-            }
-            state = self
-                .ready
-                .wait(state)
-                .unwrap_or_else(PoisonError::into_inner);
-        }
+        self.state.sync_wait(id, |extra| extra.shutting_down)
     }
 
     /// The browser's answer to the call numbered `id` (`sync_call`), for
     /// that call alone.
     fn post_reply(&self, id: u64, reply: RendererMsg) -> Result<(), RendererGone> {
-        {
-            let mut state = self.lock();
-            if state.closed {
-                return Err(RendererGone);
-            }
-            state.replies.insert(id, reply);
-        }
-        self.ready.notify_one();
-        Ok(())
+        self.state.post_reply(id, reply).map_err(|_| RendererGone)
+    }
+
+    /// The browser said to shut down: a call waiting gives up.
+    fn shutting_down(&self) {
+        self.state.with_extra(|extra| extra.shutting_down = true);
     }
 
     /// Whether a task waits in `queues`.
     pub(crate) fn has_task(&self, queues: TaskQueues) -> bool {
-        let mut state = self.lock();
-        state.queue_due();
-        state.earliest(queues).is_some()
+        self.state.has_task(|queue| queues.has(queue))
     }
 
     /// The engine's (`ScriptEngine::set_devtools_queue`): the first one given.
@@ -778,57 +587,42 @@ impl MainThreadScheduler {
     /// order: those before any attach or detach (whose sessions the engine
     /// knows).
     pub(crate) fn take_interrupting(&self) -> Vec<(String, String)> {
-        let mut state = self.lock();
-        let devtools = &mut state.queues[TaskQueue::DevTools.index()];
-        let mut taken = Vec::new();
-        let mut kept = VecDeque::new();
         let mut known = true;
-        for queued in devtools.drain(..) {
-            // After an attach or detach, the sessions aren't known yet.
-            known &= matches!(
-                queued.task,
-                MainThreadTask::DevTools(DevToolsQueued::Message { .. })
-            );
-            match queued.task {
-                MainThreadTask::DevTools(DevToolsQueued::Message { session, message })
-                    if queued.interrupt && known =>
-                {
-                    taken.push((session, message));
+        self.state
+            .take_matching(TaskQueue::DevTools, |queued| {
+                // After an attach or detach, the sessions aren't known yet.
+                known &= matches!(
+                    queued.task,
+                    MainThreadTask::DevTools(DevToolsQueued::Message { .. })
+                );
+                queued.interrupt && known
+            })
+            .into_iter()
+            .filter_map(|queued| match queued.task {
+                MainThreadTask::DevTools(DevToolsQueued::Message { session, message }) => {
+                    Some((session, message))
                 }
-                task => kept.push_back(Queued { task, ..queued }),
-            }
-        }
-        *devtools = kept;
-        taken
+                _ => None,
+            })
+            .collect()
     }
 
     /// Puts `back` first, in order, before every task: what waited for a
     /// pause to end.
     pub(crate) fn put_back(&self, back: Vec<DevToolsQueued>) {
-        if back.is_empty() {
-            return;
-        }
-        {
-            let mut state = self.lock();
-            let devtools = &mut state.queues[TaskQueue::DevTools.index()];
-            for queued in back.into_iter().rev() {
-                devtools.push_front(Queued {
-                    sequence: 0,
-                    task: MainThreadTask::DevTools(queued),
-                    interrupt: false,
-                });
-            }
-        }
-        self.ready.notify_one();
+        let back = back
+            .into_iter()
+            .map(|queued| Queued {
+                task: MainThreadTask::DevTools(queued),
+                interrupt: false,
+            })
+            .collect();
+        self.state.put_back(TaskQueue::DevTools, back);
     }
 
     /// The main thread has gone: what is posted from now on fails.
     pub(crate) fn close(&self) {
-        let mut state = self.lock();
-        state.closed = true;
-        for queue in &mut state.queues {
-            queue.clear();
-        }
+        self.state.close();
     }
 }
 
@@ -922,7 +716,7 @@ impl RendererSender {
                 let shutdown = matches!(msg, RendererMsg::Shutdown);
                 scheduler.post(TaskQueue::Browser, MainThreadTask::Browser(msg), false)?;
                 if shutdown {
-                    scheduler.lock().shutting_down = true;
+                    scheduler.shutting_down();
                     scheduler.post(
                         TaskQueue::DevTools,
                         MainThreadTask::DevTools(DevToolsQueued::Quit),

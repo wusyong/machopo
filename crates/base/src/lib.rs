@@ -1,7 +1,8 @@
 //! What every crate builds on, with no dependencies of its own (Chromium's
 //! `base/`): integer conversions that say what overflow does
-//! ([`numerics`]), and sequence numbers that panic rather than wrap
-//! ([`SequenceNumber`], [`AtomicSequenceNumber`]). The rules for integer
+//! ([`numerics`]), sequence numbers that panic rather than wrap
+//! ([`SequenceNumber`], [`AtomicSequenceNumber`]), and a thread's task
+//! queues ([`sequence_manager`]), the renderer's and each worker's. The rules for integer
 //! arithmetic are in this crate's README.
 
 #![cfg_attr(
@@ -18,5 +19,6 @@
 pub mod census;
 pub mod numerics;
 mod sequence;
+pub mod sequence_manager;
 
 pub use sequence::{AtomicSequenceNumber, SequenceNumber};

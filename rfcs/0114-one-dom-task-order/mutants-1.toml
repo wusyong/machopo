@@ -1,0 +1,92 @@
+# Stage 1's mutants: `python3 scripts/test.py mutate rfcs/0114-one-dom-task-order/mutants-1.toml`.
+test = ["cargo", "test", "-q", "-p", "base", "--lib", "sequence_manager"]
+timeout = 120
+
+[[mutant]]
+name = "the earliest queue is the latest posted"
+file = "crates/base/src/sequence_manager.rs"
+from = '''            .min_by_key(|&(sequence, _)| sequence)'''
+to = '''            .max_by_key(|&(sequence, _)| sequence)'''
+
+[[mutant]]
+name = "delayed tasks due at once come last posted first"
+file = "crates/base/src/sequence_manager.rs"
+from = '''        (self.at, self.order).cmp(&(other.at, other.order))'''
+to = '''        (self.at, other.order).cmp(&(other.at, self.order))'''
+
+[[mutant]]
+name = "a delayed task is numbered as it is posted"
+file = "crates/base/src/sequence_manager.rs"
+from = '''            Some(at) if at > Instant::now() => self.push_delayed(at, queue, task),'''
+to = '''            Some(_) => self.push(queue, task),'''
+
+[[mutant]]
+name = "due tasks aren't queued as the next is taken"
+file = "crates/base/src/sequence_manager.rs"
+from = '''        let mut state = self.lock();
+        loop {
+            state.queue_due();
+            if let Some(queue) = state.earliest(&wanted) {
+                return state.take(queue);
+            }'''
+to = '''        let mut state = self.lock();
+        loop {
+            if let Some(queue) = state.earliest(&wanted) {
+                return state.take(queue);
+            }'''
+
+[[mutant]]
+name = "a wait isn't woken for a delayed task"
+file = "crates/base/src/sequence_manager.rs"
+from = '''            let delayed = state.next_delayed(&wanted);'''
+to = '''            let delayed: Option<Instant> = None;'''
+
+[[mutant]]
+name = "a delayed task of a queue not waited for wakes the wait"
+file = "crates/base/src/sequence_manager.rs"
+from = '''            .filter(|Reverse(delayed)| wanted(delayed.queue))'''
+to = ''''''
+
+[[mutant]]
+name = "the user isn't told of a task taken"
+file = "crates/base/src/sequence_manager.rs"
+from = '''        S::taken(&mut self.extra, &task);'''
+to = ''''''
+
+[[mutant]]
+name = "tasks put back go last"
+file = "crates/base/src/sequence_manager.rs"
+from = '''                    queued.push_front(Queued { sequence: 0, task });'''
+to = '''                    queued.push_back(Queued { sequence: 0, task });'''
+
+[[mutant]]
+name = "tasks kept by take_matching lose their order"
+file = "crates/base/src/sequence_manager.rs"
+from = '''                kept.push_back(item);'''
+to = '''                kept.push_front(item);'''
+
+[[mutant]]
+name = "a call doesn't give up as the user's state says"
+file = "crates/base/src/sequence_manager.rs"
+from = '''            if state.closed || give_up(&state.extra) {'''
+to = '''            if state.closed {'''
+
+[[mutant]]
+name = "a closed manager takes what is decided under the lock"
+file = "crates/base/src/sequence_manager.rs"
+from = '''            let mut state = self.lock();
+            if state.closed {
+                return;
+            }
+            let Some((queue, task, at)) = decide(&mut state.extra) else {'''
+to = '''            let mut state = self.lock();
+            let Some((queue, task, at)) = decide(&mut state.extra) else {'''
+
+[[mutant]]
+name = "the main thread doesn't forget an internal task taken"
+file = "crates/renderer/src/task_queue.rs"
+from = '''            extra.posted_once.retain(|&(posted, _)| posted != taken);
+        }'''
+to = '''            let _ = (extra, taken);
+        }'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "task_queue"]

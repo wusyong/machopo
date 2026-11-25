@@ -55,11 +55,41 @@ let request = next_request.get_next();
 - `AtomicSequenceNumber<T>` 放在 `static` 裡、任何 thread 都能用（`&self`），`T` 是 `u32`、`u64`、`usize`；每個值只發一次，不保證和其他記憶體的順序（`Relaxed`）。
 - 要循環的 ID（例如 timer 的 handle）不用它們，寫自己的規則。
 
+## `sequence_manager`
+
+一條 thread 的 task queue（Chromium 的 `base::sequence_manager::SequenceManager`，連同它的 `ThreadController` 的等待）：任何 thread 都能 post，擁有它的那一條 thread 一次取一個，取它要的那幾個 queue 裡最早 post 的。每條跑 task 的 thread 一份：renderer 的 main thread、每個 dedicated worker。
+
+```rust
+struct MySpec;
+impl Spec for MySpec {
+    type Queue = MyQueue;     // queue 的種類
+    type Task = MyTask;
+    type Reply = MyReply;     // 這條 thread 同步等的回答
+    type Extra = MyExtra;     // 使用的人放在同一把鎖底下的狀態
+    const QUEUES: &'static [MyQueue] = &[/* 每一種 */];
+    fn index(queue: MyQueue) -> usize { /* 在 QUEUES 裡的位置 */ }
+    fn taken(extra: &mut MyExtra, task: &MyTask) { /* 可以不寫 */ }
+}
+
+let manager = SequenceManager::<MySpec>::default();
+manager.post(queue, task)?;                 // 任何 thread
+manager.post_at(queue, task, at)?;          // 到期時才排進去
+let task = manager.next(|q| wanted(q), timeout); // 擁有它的 thread
+```
+
+- **順序**：排進 queue 時編號，取要的那幾個 queue 裡號碼最小的。`post_at` 的 task 到期之後，在**取下一個 task 的時候**才排進 queue、拿號碼（不是到期的當下）：一個 task 跑過了 timer 的時間、期間 post 的 task 排在 timer 前面（Chromium 也是在挑下一個時才搬）。同時到期的照 post 的順序。
+- **等待**：`next` 等到有 task、要的 queue 的延後 task 到期，或 `timeout`；`try_next` 不等；`wait_for` 只回答最早的在哪個 queue、不取，也不看延後的 task（只給沒有延後 task 的 queue 用）。
+- **在同一把鎖底下做的**：`post_with` 照使用的人的狀態決定 post 什麼；`Spec::taken` 在 task 被取走的同時告訴使用的人（例如「同一種只排一個」的紀錄要在取走時清掉，分開做的話別的 thread 剛好在中間檢查，會以為還在而不再 post）；`with_extra` 讀寫那份狀態；`take_matching` 照順序拿出一個 queue 裡符合的、其餘的順序不變；`put_back` 放回最前面。
+- **同步等回答**（mojo 的 `[Sync]` 呼叫）：`sync_wait(id, give_up)` 只等那個編號的回答，task 都留在 queue 裡；thread 不在了、或 `give_up` 照使用的人的狀態說放棄時回 `None`。`post_reply` 交回答。
+- **`close`**：擁有它的 thread 不在了：queue 清掉，之後 post 回 `Closed`。
+
 ## `census`
 
 binding 呼叫的計數（`census` feature，預設關）：`count(Kind)` 記這個 thread 多做了一個 scope、root 以外的東西，`Call::enter` 到它 drop 是一個 callback 的一次執行，`label` 給正在跑的 callback 標上成員的名字。每個 callback 的那一列只算它自己做的（它裡面呼叫的 callback 做的算它們自己的），寫到 `MACHOPO_CENSUS` 指定的檔案。root 的數目由呼叫的一方給（`Call::enter` 的 `roots`）：這個 crate 沒有相依，拿不到 heap 的計數。沒開 feature 時每個函式都是空的，呼叫的地方不用寫 `cfg`。
 
 ## 測試
+
+`sequence_manager` 的單元測試用兩個 queue 的小 `Spec`：順序、延後的 task 取的時候才排、等待、同步等回答、`take_matching` 和 `put_back`、`post_with`、`close`。
 
 ```sh
 cargo test -p base
