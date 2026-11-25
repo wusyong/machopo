@@ -48,4 +48,9 @@
 
 ## 對照 Chromium
 
-還沒對。要對的：`third_party/blink/renderer/platform/scheduler/worker/`（`WorkerThreadScheduler`、`WorkerSchedulerImpl`、`NonMainThreadSchedulerBase`）、`core/workers/worker_thread.cc`（`PrepareForShutdown`、`close()` 之後的 task）、`core/messaging/message_port.cc`（`Start`、`Connector` 什麼時候讀）、`core/frame/dom_timer.cc` 在 worker 裡的 task runner。
+2026-11-25 讀 `main` 的原始碼（chromium.googlesource.com）：
+
+- **worker 的 scheduler**：`NonMainThreadSchedulerBase` 建在一個 `base::sequence_manager::SequenceManager` 上（`non_main_thread_scheduler_base.cc` 的建構子），和主 thread 的 `MainThreadSchedulerImpl` 是同一個底層、不同的類別。每個 worker global 一個 `WorkerSchedulerImpl`，`GetTaskRunner(TaskType)` 照種類分到幾個 queue：JS 的 timer（`kJavascriptTimerImmediate`、`DelayedLowNesting`、`DelayedHighNesting`）和 `kPostedMessage` 在同一個 throttleable 的 queue，網路的在 pausable 的，其餘大多在另一個 pausable 的。
+- **timer**：`DOMTimer`（`core/scheduler/dom_timer.cc`）照 nesting 和 timeout 選 `TaskType`，`MoveToNewTaskRunner(context.GetTaskRunner(task_type))`，再 `StartOneShot` 或 `StartRepeating`：window 和 worker 是同一段程式，只是 `ExecutionContext` 不同。沒有另一份 timer 的順序。
+- **`close()`**：`WorkerGlobalScope::close` 只設 `closing_`（"Let current script run to completion"）。這個 task 結束時 `WorkerThread::DidProcessTask` 跑完 microtask checkpoint、看到 `IsClosing()`，照 HTML 的 close a worker（"Discard any tasks that have been added to workerGlobal's event loop's task queues"）呼叫 `PrepareForShutdownOnWorkerThread`，裡面 `worker_scheduler_->Dispose()` 收掉 worker 的 queue，排好的 task 不跑。
+- **`MessagePort`**：訊息留在 mojo 的 pipe 裡；`start()` 之後 `connector_->StartReceiving(accept_message_task_runner_)`（`kPostedMessage` 的 runner），`Connector` 等 pipe 可讀，在那個 runner 的 task 裡讀（`ReadAllAvailableMessages`）、分派（`MessagePort::Accept`、`DispatchMessageEvent`）。所以 port 的訊息在 port 啟用、到了它的 thread 之後才變成 task；啟用之前不佔 queue 裡的位置。
