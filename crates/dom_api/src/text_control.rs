@@ -312,10 +312,6 @@ pub(crate) fn run_element_task<H: ScriptHost>(
                     crate::wake_lock::run_task(host, window, promise, answered);
                 }
             }
-            // HTML's "the end": complete, the window's `load` (each event
-            // with its checkpoint), a child frame's iframe's `load` and its
-            // parent checked (`lifecycle::end_load`), then the host hears
-            // of it (`Dom::take_loaded_documents`).
             (ElementTaskKind::WorkerError(info), _) => {
                 if let Some(worker) = &target {
                     crate::worker::fire_worker_error(host, worker, &info);
@@ -328,11 +324,23 @@ pub(crate) fn run_element_task<H: ScriptHost>(
                     host.resolve_promise_with_read(promise, read);
                 }
             }
+            // HTML's "the end": complete, the window's `load` (each event
+            // with its checkpoint), a child frame's iframe's `load` and its
+            // parent checked (`lifecycle::end_load`), then the frame client
+            // hears of it, and a frame is asked for (the top-level frame's
+            // tells the browser the load ended).
             (ElementTaskKind::WindowLoad, Some(element)) => {
                 crate::lifecycle::document_ready(host, &element, crate::DocumentReadiness::Loaded);
                 crate::lifecycle::end_load(host, &element);
-                host.mutate(|cx| cx.note_document_loaded(element.get(cx.gc)));
+                host.tell_lifecycle(&element, crate::DocumentLifecycle::Load);
+                host.read(|cx| {
+                    cx.lend_layout(element.get(cx.gc), |layout| layout.schedule_frame());
+                });
             }
+            // A parser's, which `document_loader::run_dom_task` runs
+            // before it comes here (none does, but a parser's that parsed
+            // on meanwhile).
+            (ElementTaskKind::ParseOn, _) => {}
             (ElementTaskKind::JavaScriptUrls, Some(document)) => {
                 crate::history::run_javascript_urls(host, &document);
             }

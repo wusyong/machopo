@@ -1,0 +1,60 @@
+# Stage 2c-3's mutants (the parser's task to parse on, a DOM task): `python3 scripts/test.py mutate rfcs/0115-render-frame/mutants-2c3.toml`.
+# `automation_pipe::a_client_not_reading_doesnt_hold_machopo_up` is left out as in 2a-3 (progress's 2a-3).
+test = ["sh", "-c", "cargo test -q -p dom --test it && cargo test -q -p renderer && cargo test -q -p browser --test it navigation:: && cargo test -q -p shell --test it -- --skip webdriver::a_session_with_a_hung_page_ends_in_time --skip automation_pipe::a_client_not_reading_doesnt_hold_machopo_up"]
+timeout = 150
+
+[[mutant]]
+name = "no task to parse on is queued"
+file = "crates/dom/src/window.rs"
+from = '''        Some(self.push_element_task(window, document, crate::names::NONE, PARSE_ON, 0))'''
+to = '''        let _ = (window, document);
+        None'''
+
+[[mutant]]
+name = "the task to parse on is taken as another"
+file = "crates/dom/src/window.rs"
+from = '''            PARSE_ON => ElementTaskKind::ParseOn,'''
+to = ''''''
+
+[[mutant]]
+name = "a run doesn't take the task's place"
+file = "crates/dom_api/src/document_loader.rs"
+from = '''    loader.parse_task = None;
+    let mut budget = (run.budget)(loader.yields);'''
+to = '''    let mut budget = (run.budget)(loader.yields);'''
+
+[[mutant]]
+name = "the parser's yields aren't counted"
+file = "crates/dom_api/src/document_loader.rs"
+from = '''                            loader.yields = loader.yields.saturating_add(1);'''
+to = ''''''
+
+[[mutant]]
+name = "a parser that is to parse on in its task is pumped by what comes"
+file = "crates/dom_api/src/document_loader.rs"
+from = '''        .is_some_and(|loader| loader.parse_task.is_some())
+    {
+        return (ParseOutcome::Stopped, engine);
+    }'''
+to = '''        .is_some_and(|loader| loader.parse_task.is_some() && false)
+    {
+        return (ParseOutcome::Stopped, engine);
+    }'''
+
+[[mutant]]
+name = "the parser's task isn't taken out"
+file = "crates/dom_api/src/document_loader.rs"
+from = '''                cx.take_element_task_numbered(cx.window_context(window), number);'''
+to = '''                let _ = (window, number);'''
+
+[[mutant]]
+name = "the parser's task is the engine's"
+file = "crates/dom_api/src/document_loader.rs"
+from = '''            .is_some_and(|loader| loader.parse_task == Some(number))'''
+to = '''            .is_some_and(|loader| loader.parse_task == Some(number) && false)'''
+
+[[mutant]]
+name = "the budget doesn't grow as the parser yields"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        let budget = move |yields| parser_budget.of_run(yields);'''
+to = '''        let budget = move |yields: u32| parser_budget.of_run(yields & 0);'''

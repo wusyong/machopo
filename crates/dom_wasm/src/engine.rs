@@ -132,6 +132,23 @@ impl ScriptHost for Host<'_> {
             .read(|cx| f(&ApiCx::with_layout_cell(cx, layout)))
     }
 
+    /// The window's document's (its title told after the task, by the
+    /// host: the engine keeps it, not this guest's host).
+    fn tell_lifecycle(&mut self, document: &dom::NodeRoot, event: dom_api::DocumentLifecycle) {
+        let Some(token) = self.main_token else {
+            return;
+        };
+        let (id, loader) = self.dom().read(|cx| {
+            let document = document.get(cx.gc);
+            (cx.node_id(document), cx.document_loader(document))
+        });
+        if self.top == Some(id)
+            && let Some(client) = self.frame_client.as_mut()
+        {
+            client.document_lifecycle(token, true, id, loader, event);
+        }
+    }
+
     fn mutate<R>(&mut self, f: impl for<'gc> FnOnce(&ApiCx<'_, 'gc>) -> R) -> R {
         let layout = self.layout;
         self.dom()
@@ -1259,6 +1276,25 @@ impl ScriptEngine for WasmEngine {
             &document,
         );
         self.load_sink = Some(sink);
+    }
+
+    fn tell_lifecycle(&mut self, frame: FrameId, event: dom_api::DocumentLifecycle) {
+        if frame != TOP {
+            return;
+        }
+        self.tell_title();
+        if let (Some(dom), Some(document), Some(token), Some(client)) = (
+            self.dom.as_ref(),
+            self.document.as_ref(),
+            self.main_token,
+            self.frame_client.as_mut(),
+        ) {
+            let (id, loader) = dom.read(|cx| {
+                let document = document.get(cx.gc);
+                (cx.node_id(document), cx.document_loader(document))
+            });
+            client.document_lifecycle(token, true, id, loader, event);
+        }
     }
 
     fn tell_title(&mut self) {

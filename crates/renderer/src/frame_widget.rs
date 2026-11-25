@@ -31,6 +31,13 @@ pub(crate) struct FrameWidget {
     /// `VisualStateReady`s waiting for the main frame they asked for: they
     /// go with the next commit, as input acks do.
     pub(crate) pending_visual_states: Vec<SwapPromise>,
+    /// The rendering needs updating at the next main frame
+    /// (`schedule_frame`), and how many times something asked for one:
+    /// input handling compares it before and after, as Blink's
+    /// `LatencyInfoSwapPromiseMonitor` watches for a commit request while
+    /// an event is dispatched.
+    pub(crate) needs_begin_main_frame: bool,
+    pub(crate) main_frame_requests: u64,
 }
 
 impl FrameWidget {
@@ -43,6 +50,23 @@ impl FrameWidget {
             rendered_tree_version: 0,
             pending_input_acks: Vec::new(),
             pending_visual_states: Vec::new(),
+            needs_begin_main_frame: false,
+            main_frame_requests: 0,
+        }
+    }
+
+    /// `ScheduleAnimation` (Blink's `ChromeClient::ScheduleAnimation`, the
+    /// widget's `SetNeedsAnimate`): the rendering needs updating, at the
+    /// next main frame. Asked by the render thread and, through the
+    /// frame's layout, by the engine in its calls.
+    pub(crate) fn schedule_frame(&mut self) {
+        self.needs_begin_main_frame = true;
+        #[expect(
+            clippy::arithmetic_side_effects,
+            reason = "one per request of a main frame: a u64 lasts centuries"
+        )]
+        {
+            self.main_frame_requests += 1;
         }
     }
 }

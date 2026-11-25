@@ -705,6 +705,28 @@ pub(crate) fn send_script_fetches(state: &mut crate::state::State) {
     state.frames.load_sink = Some(sink);
 }
 
+/// `frame`'s document reached `event` of HTML's "the end": the top-level
+/// frame's title told first, then `event` to the host's frame client
+/// (`FrameClient::document_lifecycle`), for a frame the browser named.
+pub(crate) fn tell_lifecycle(
+    state: &mut crate::state::State,
+    frame: FrameId,
+    event: dom_api::DocumentLifecycle,
+) {
+    state.frames.tell_title(&state.dom);
+    let (Some(found), Some(token)) = (state.frames.get(frame), state.frames.token(frame)) else {
+        return;
+    };
+    let document = found.document.clone();
+    let (id, loader) = state.dom.read(|cx| {
+        let document = document.get(cx.gc);
+        (cx.node_id(document), cx.document_loader(document))
+    });
+    if let Some(client) = state.frames.client.as_mut() {
+        client.document_lifecycle(token, frame == TOP, id, loader, event);
+    }
+}
+
 /// The sheets of the `<link>`s of the frames' documents not asked for
 /// yet, asked for now through the host's load sink
 /// (`dom_api::send_sheet_fetches`), each from its frame, their media

@@ -349,6 +349,13 @@ fn a_document_is_drawn_before_its_body_has_all_come() {
         "drawn {} times",
         frame.frames_drawn
     );
+    // The first drawn in the pause: what came before it, not what after.
+    assert_eq!(first_pixel(&frame, 10, 10), GREEN);
+    assert_ne!(
+        first_pixel(&frame, 10, 30),
+        GREEN,
+        "drawn before the rest came"
+    );
 }
 
 /// The parser's scripts wait for the stylesheets the parser's `<link>`s

@@ -314,27 +314,30 @@ pub(crate) fn is_nosniff(headers: &[(String, String)]) -> bool {
 /// request be blocked due to its MIME type?" names; any other passes (Blink's
 /// `AllowedByNosniff::MimeTypeAsScript`, lax for elements and workers).
 pub(crate) fn is_blocked_as_script(essence: &str) -> bool {
-    ["image/", "audio/", "video/"]
-        .iter()
-        .any(|prefix| essence.starts_with(prefix))
-        || essence == "text/csv"
+    dom_api::subresource::is_blocked_as_script(essence)
 }
 
-/// A module's response as HTML's "fetch a single module script" takes it:
-/// none for a failed load (a network error, a CORS failure), a status
-/// that isn't ok, or a MIME type that isn't JavaScript's; else its text,
-/// UTF-8, and its URL after redirects (its base URL).
+/// A module's response as HTML's "fetch a single module script" takes it
+/// (`dom_api::subresource::module_loaded`).
 pub(crate) fn module_loaded(result: &LoadResult) -> Option<dom_api::module::FetchedModule> {
-    let response = result.as_ref().ok()?;
-    if !(200..300).contains(&response.head.status)
-        || !dom_api::is_javascript_mime_type(&response.head.mime_type)
-    {
-        return None;
-    }
-    let (source, _) = encoding_rs::UTF_8.decode_with_bom_removal(&response.body);
-    Some(dom_api::module::FetchedModule {
-        url: url::Url::parse(&response.head.url).ok()?,
-        source: source.into_owned(),
+    dom_api::subresource::module_loaded(&subresource(result, ""))
+}
+
+/// `result`, a subresource's, as the engine's side takes it
+/// (`dom_api::subresource`): a failed load named `failed` (the URL asked
+/// for, else its error's detail).
+pub(crate) fn subresource<'a>(
+    result: &'a LoadResult,
+    failed: &'a str,
+) -> dom_api::subresource::SubresourceResult<'a> {
+    let response = result.as_ref().map_err(|_| failed)?;
+    Ok(dom_api::subresource::SubresourceResponse {
+        status: response.head.status,
+        mime_type: &response.head.mime_type,
+        charset: response.head.charset.as_deref(),
+        url: &response.head.url,
+        opaque: response.head.tainting == protocol::network::ResponseTainting::Opaque,
+        body: &response.body,
     })
 }
 

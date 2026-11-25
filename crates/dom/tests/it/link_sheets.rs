@@ -192,10 +192,10 @@ fn the_hrefs_that_asked_for_nothing_are_taken_once() {
     let mut dom = Dom::new();
     dom.mutate(|cx| {
         let document = cx.document_of(page(cx));
-        assert!(cx.take_failed_sheets(document).is_empty());
-        cx.note_sheet_failed(document, "http://[".to_owned());
-        cx.note_sheet_failed(document, "b.css".to_owned());
-        assert_eq!(cx.take_failed_sheets(document), ["http://[", "b.css"]);
-        assert!(cx.take_failed_sheets(document).is_empty());
+        assert!(cx.take_failed_loads(document).is_empty());
+        cx.note_load_failed(document, "http://[".to_owned());
+        cx.note_load_failed(document, "b.css".to_owned());
+        assert_eq!(cx.take_failed_loads(document), ["http://[", "b.css"]);
+        assert!(cx.take_failed_loads(document).is_empty());
     });
 }

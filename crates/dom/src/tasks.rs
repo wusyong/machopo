@@ -14,7 +14,7 @@
 
 use elise::Gc;
 
-use crate::{Cx, Dom, ExecutionContext, NodeId, NodeRef};
+use crate::{Cx, ExecutionContext};
 
 /// What tells the host's scheduler of a task the DOM numbered
 /// (`Dom::set_task_waker`): its number, and the instant it is due (none:
@@ -57,27 +57,11 @@ pub enum TaskQueue {
     Message,
 }
 
-impl Dom {
-    /// The documents whose window's `load` task ran since the host last
-    /// took them (`Cx::note_document_loaded`), in order.
-    pub fn take_loaded_documents(&self) -> Vec<NodeId> {
-        self.changes.loaded_documents.take()
-    }
-}
-
 impl<'gc> Cx<'_, 'gc> {
     /// Milliseconds since the DOM was made: the clock tasks are ordered
     /// on (windows' time origins differ).
     pub fn dom_now(&self) -> f64 {
         self.origin.elapsed().as_secs_f64() * 1000.0
-    }
-
-    /// `document`'s window's `load` task ran (`queue_window_load`): its host
-    /// finishes its load (`Dom::take_loaded_documents`).
-    pub fn note_document_loaded(&self, document: NodeRef<'gc>) {
-        let mut loaded = self.changes.loaded_documents.take();
-        loaded.push(self.node_id(document));
-        self.changes.loaded_documents.set(loaded);
     }
 
     /// The next task's number, taken.

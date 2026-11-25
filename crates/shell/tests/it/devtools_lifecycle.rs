@@ -144,6 +144,14 @@ fn a_navigation_is_told_through_its_lifecycle_with(args: &[&str]) {
     // The child frame's initial `about:blank` starts too, as Blink's.
     let child_inits = order.iter().filter(|told| *told == "child init").count();
     assert_eq!(child_inits, 2, "{order:#?}");
+    // The page's own events are the main frame's alone.
+    for method in ["Page.domContentEventFired", "Page.loadEventFired"] {
+        let count = events
+            .iter()
+            .filter(|event| event["method"] == method)
+            .count();
+        assert_eq!(count, 1, "{method}: {events:#?}");
+    }
     let init = lifecycle(&events, &main, "init");
     assert_eq!(init["loaderId"], loader, "the navigation's loader: {init}");
     let load = lifecycle(&events, &main, "load");
@@ -374,6 +382,39 @@ fn the_lifecycle_so_far_is_told_as_it_is_turned_on() {
     std::thread::sleep(Duration::from_millis(300));
     evaluate(&mut page, "0", None);
     assert!(!page.came("Page.lifecycleEvent"));
+}
+
+/// A child frame's lifecycle so far is told as the events are turned on
+/// too, from its document's commit: its `DOMContentLoaded` and `load` are
+/// its document's, as its commit was.
+#[test]
+fn a_child_frames_lifecycle_so_far_is_told_as_it_is_turned_on() {
+    let server = server(&[
+        (
+            "/",
+            Route::ok("text/html", "<!DOCTYPE html><iframe src='/child'></iframe>"),
+        ),
+        ("/child", Route::ok("text/html", "<!DOCTYPE html>child")),
+    ]);
+    let machopo = Machopo::start();
+    let (mut page, main) = page(&machopo);
+    crate::devtools::load(&mut page, &server.url("/"));
+    std::thread::sleep(Duration::from_millis(700));
+    page.call(
+        None,
+        "Page.setLifecycleEventsEnabled",
+        json!({ "enabled": true }),
+    );
+    let events = page.take_events("Page.lifecycleEvent");
+    let child: Vec<String> = outline(&events, &main)
+        .into_iter()
+        .filter(|told| told.starts_with("child"))
+        .collect();
+    assert_eq!(
+        child.get(..3),
+        Some(&["child commit", "child DOMContentLoaded", "child load"].map(String::from)[..]),
+        "{child:#?}"
+    );
 }
 
 /// `Page.navigate` is answered as the navigation is about to commit:

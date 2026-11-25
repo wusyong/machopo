@@ -60,6 +60,12 @@ pub trait FrameLayout: Any {
         None
     }
 
+    /// The rendering needs updating, at the next main frame (Blink's
+    /// `LocalFrameView::ScheduleAnimation`, through `ChromeClient` to the
+    /// widget): a fragment scrolled to, a load ended that the next frame
+    /// tells. Nothing by default.
+    fn schedule_frame(&mut self) {}
+
     /// What the media queries of `document`'s frame see now (its viewport
     /// and device pixel ratio): none for a child frame given no size yet,
     /// or a document no frame shows. None by default.

@@ -137,22 +137,15 @@ impl<'gc> Cx<'_, 'gc> {
         Some((sent, link))
     }
 
-    /// `href`, of a `<link>` of `document`, asked for no sheet: it doesn't
-    /// parse (or went nowhere). Its host hears of it with the document's
-    /// load (`take_failed_sheets`).
-    pub fn note_sheet_failed(&self, document: NodeRef<'gc>, href: String) {
-        let data = self.ensure_document_data(document);
-        let mut failed = data.failed_sheets.take();
-        failed.push(href);
-        data.failed_sheets.set(failed);
-    }
-
-    /// The `href`s of `document`'s `<link>`s that asked for no sheet
-    /// (`note_sheet_failed`), taken.
-    pub fn take_failed_sheets(&self, document: NodeRef<'gc>) -> Vec<String> {
-        self.document_data(document)
-            .map(|data| data.failed_sheets.take())
-            .unwrap_or_default()
+    /// Whether a `<link>`'s sheet that blocks `document`'s rendering is
+    /// loading (`Dom::sheets_block_render`, in an operation).
+    pub fn render_blocking_sheet_loading(&self, document: NodeRef<'gc>) -> bool {
+        let id = self.node_id(document);
+        self.changes
+            .sent_sheets
+            .borrow()
+            .values()
+            .any(|sent| sent.document == id && sent.blocks_render)
     }
 
     /// Whether a `<link>`'s sheet that blocks `document`'s parser's scripts

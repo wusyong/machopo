@@ -180,6 +180,14 @@ impl<'s> ScriptHost for Host<'_, '_, 's, '_> {
         crate::modules::start_graph(self.scope, document, start);
     }
 
+    fn tell_lifecycle(&mut self, document: &dom::NodeRoot, event: dom_api::DocumentLifecycle) {
+        let state = self.scope.state_mut().0;
+        let id = state.dom.read(|cx| cx.node_id(document.get(cx.gc)));
+        if let Some(frame) = state.frames.of_document(id).map(|frame| frame.id) {
+            crate::frames::tell_lifecycle(state, frame, event);
+        }
+    }
+
     fn run_module_script(&mut self, document: &dom::NodeRoot, root: u32) {
         run_script(self.scope, |scope| {
             crate::modules::run_module_script(

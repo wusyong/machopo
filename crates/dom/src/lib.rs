@@ -494,9 +494,9 @@ pub struct DocumentData {
     /// Its `<link>`s whose sheets load, kept till their responses come
     /// (`link_sheet`), once it has had one.
     pub(crate) pending_sheet_links: Member<HeapVector<Node>>,
-    /// The `href`s of its `<link>`s that asked for no sheet, till its host
-    /// takes them (`link_sheet`).
-    pub(crate) failed_sheets: External<Cell<Vec<String>>>,
+    /// The URLs of its subresources that failed to load or were of no use,
+    /// till its host takes them (`window`'s `note_load_failed`).
+    pub(crate) failed_loads: External<Cell<Vec<String>>>,
     /// Its `styleSheets`, once script asked for it, and its `<style>`s'
     /// contents by their text (`cssom`; taken and put back, none until
     /// the first).
@@ -921,9 +921,6 @@ struct Changes {
     /// What tells the host's scheduler of each task the DOM numbers
     /// (`Dom::set_task_waker`).
     task_waker: Option<tasks::TaskWaker>,
-    /// The documents whose window's `load` task ran, until the host takes
-    /// them (`Dom::take_loaded_documents`).
-    loaded_documents: Cell<Vec<NodeId>>,
     /// The `fetch()`es' requests the host sent, by request, until their
     /// responses come or they are cancelled (`Dom::note_fetch_sent`): the
     /// DOM's own record, which the host reads its responses by. A

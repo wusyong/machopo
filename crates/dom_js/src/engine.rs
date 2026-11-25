@@ -1651,6 +1651,10 @@ impl ScriptEngine for V8Engine {
         state.frames.tell_title(&state.dom);
     }
 
+    fn tell_lifecycle(&mut self, frame: dom_api::FrameId, event: dom_api::DocumentLifecycle) {
+        crate::frames::tell_lifecycle(self.state(), frame, event);
+    }
+
     fn set_load_sink(&mut self, sink: Box<dyn dom_api::LoadSink>) {
         self.state().frames.load_sink = Some(sink);
     }

@@ -123,6 +123,7 @@ mod selection;
 mod shadow_root;
 mod slot;
 mod storage;
+pub mod subresource;
 mod svg;
 mod svg_geometry;
 mod table;
@@ -155,9 +156,9 @@ pub use document_loader::DocumentLoader;
 pub use dom_api_macros::declare;
 pub use engine::{
     ChildNavigationAsked, ClassicScript, ConsoleMessage, ConsoleSink, DevToolsInterrupter,
-    DevToolsObjects, DevToolsPage, DevToolsQueue, DevToolsQueued, DevToolsSend, EngineSettings,
-    FetchOrigin, FrameClient, LoadFrame, LoadSink, NavigationAsked, ScriptEngine, WasmScript,
-    WorkerEngine, WorkerGlobalParams,
+    DevToolsObjects, DevToolsPage, DevToolsQueue, DevToolsQueued, DevToolsSend, DocumentLifecycle,
+    EngineSettings, FetchOrigin, FrameClient, LoadFrame, LoadSink, NavigationAsked, ScriptEngine,
+    WasmScript, WorkerEngine, WorkerGlobalParams,
 };
 pub use event::{cancel as cancel_event, coarsen};
 pub use event_target::{dispatch, fire_event};

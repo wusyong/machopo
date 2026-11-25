@@ -1,0 +1,168 @@
+# Stage 2c-4's mutants (scripts' and sheets' responses to dom_api): `python3 scripts/test.py mutate rfcs/0115-render-frame/mutants-2c4.toml`.
+# `automation_pipe::a_client_not_reading_doesnt_hold_machopo_up` is left out as in 2a-3 (progress's 2a-3).
+test = ["sh", "-c", "cargo test -q -p dom_api --test it && cargo test -q -p renderer && cargo test -q -p browser --test it navigation:: && cargo test -q -p shell --test it -- --skip webdriver::a_session_with_a_hung_page_ends_in_time --skip automation_pipe::a_client_not_reading_doesnt_hold_machopo_up"]
+timeout = 150
+
+[[mutant]]
+name = "a script of an error status runs"
+file = "crates/dom_api/src/subresource.rs"
+from = '''    if !(200..300).contains(&response.status) || is_blocked_as_script(response.mime_type) {'''
+to = '''    if is_blocked_as_script(response.mime_type) {'''
+
+[[mutant]]
+name = "a script of an image's type runs"
+file = "crates/dom_api/src/subresource.rs"
+from = '''    if !(200..300).contains(&response.status) || is_blocked_as_script(response.mime_type) {'''
+to = '''    if !(200..300).contains(&response.status) {'''
+
+[[mutant]]
+name = "a script's charset attribute is ignored"
+file = "crates/dom_api/src/subresource.rs"
+from = '''        .and_then(|label| encoding_rs::Encoding::for_label(label.trim().as_bytes()))'''
+to = '''        .and_then(|label| encoding_rs::Encoding::for_label(label.trim().as_bytes()).filter(|_| false))'''
+
+[[mutant]]
+name = "another origin's script's errors aren't muted"
+file = "crates/dom_api/src/subresource.rs"
+from = '''        muted: response.opaque,'''
+to = '''        muted: false,'''
+
+[[mutant]]
+name = "a wasm component of another type runs"
+file = "crates/dom_api/src/subresource.rs"
+from = '''    if !(200..300).contains(&response.status) || response.mime_type != "application/wasm" {'''
+to = '''    if !(200..300).contains(&response.status) {'''
+
+[[mutant]]
+name = "a module of another type runs"
+file = "crates/dom_api/src/subresource.rs"
+from = '''    if !(200..300).contains(&response.status) || !crate::is_javascript_mime_type(response.mime_type)
+    {'''
+to = '''    if !(200..300).contains(&response.status) {'''
+
+[[mutant]]
+name = "a sheet of another type applies"
+file = "crates/dom_api/src/subresource.rs"
+from = '''    if !(200..300).contains(&response.status) || (response.mime_type != "text/css" && !quirks) {'''
+to = '''    if !(200..300).contains(&response.status) {'''
+
+[[mutant]]
+name = "a sheet of another type doesn't apply in quirks mode"
+file = "crates/dom_api/src/subresource.rs"
+from = '''    if !(200..300).contains(&response.status) || (response.mime_type != "text/css" && !quirks) {'''
+to = '''    if !(200..300).contains(&response.status) || (response.mime_type != "text/css" && !(quirks && false)) {'''
+
+[[mutant]]
+name = "a failed load is named by nothing"
+file = "crates/dom_api/src/subresource.rs"
+from = '''        Err(name) => (*name).to_owned(),'''
+to = '''        Err(name) => { let _ = name; String::new() }'''
+
+[[mutant]]
+name = "a module's response doesn't run the deferred scripts"
+file = "crates/dom_api/src/document_loader.rs"
+from = '''        // A deferred module script's graph may be in.
+        for frame in engine.frames_in_tree_order() {
+            run_deferred_scripts(engine.as_mut(), frame);
+        }'''
+to = '''        // A deferred module script's graph may be in.'''
+
+[[mutant]]
+name = "a script that failed isn't noted"
+file = "crates/dom_api/src/document_loader.rs"
+from = '''            note_load_failed(engine.dom_mut(), document, subresource::failed_url(result));'''
+to = '''            let _ = (document, result);'''
+
+[[mutant]]
+name = "the parser doesn't go on as its script comes"
+file = "crates/dom_api/src/document_loader.rs"
+from = '''    if parsers && let Some((frame, _)) = at {'''
+to = '''    if parsers && false && let Some((frame, _)) = at {'''
+
+[[mutant]]
+name = "another origin's sheet's rules are readable"
+file = "crates/dom_api/src/document_loader.rs"
+from = '''        Ok(response) => !response.opaque,'''
+to = '''        Ok(_) => true,'''
+
+[[mutant]]
+name = "a sheet that failed from its own origin is unreadable"
+file = "crates/dom_api/src/document_loader.rs"
+from = '''            url.scheme() == "data"
+                || document_url.is_some_and(|document| url.origin() == document.origin())'''
+to = '''            url.scheme() == "data" && document_url.is_some()'''
+
+[[mutant]]
+name = "a sheet of no use isn't noted"
+file = "crates/dom_api/src/document_loader.rs"
+from = '''        note_load_failed(engine.dom_mut(), sent.document, subresource::failed_url(result));'''
+to = '''        let _ = &sent;'''
+
+[[mutant]]
+name = "a sheet's url()s resolve against nothing"
+file = "crates/dom_api/src/document_loader.rs"
+from = '''        .and_then(|response| url::Url::parse(response.url).ok())
+        .map(|url| {'''
+to = '''        .and_then(|response| url::Url::parse(response.url).ok())
+        .filter(|_| false)
+        .map(|url| {'''
+
+[[mutant]]
+name = "DevTools keeps no sheet's text"
+file = "crates/dom_api/src/document_loader.rs"
+from = '''        .filter(|_| keep_text)'''
+to = '''        .filter(|_| false)'''
+
+[[mutant]]
+name = "a sheet's load and error are swapped"
+file = "crates/dom_api/src/document_loader.rs"
+from = '''        if css.is_some() {
+            dom::names::event::LOAD
+        } else {
+            dom::names::event::ERROR
+        },'''
+to = '''        if css.is_some() {
+            dom::names::event::ERROR
+        } else {
+            dom::names::event::LOAD
+        },'''
+
+[[mutant]]
+name = "the parser's scripts a sheet blocked don't run on"
+file = "crates/dom_api/src/document_loader.rs"
+from = '''    if sent.blocks_scripts {
+        let (_, lent) = parse(engine, frame, run);'''
+to = '''    if sent.blocks_scripts && false {
+        let (_, lent) = parse(engine, frame, run);'''
+
+[[mutant]]
+name = "a sheet's response doesn't finish the load"
+file = "crates/dom_api/src/document_loader.rs"
+from = '''    finish_load(engine.as_mut(), &document);
+    schedule_frame(engine.as_mut());
+    (true, kept, engine)'''
+to = '''    let _ = &document;
+    schedule_frame(engine.as_mut());
+    (true, kept, engine)'''
+
+[[mutant]]
+name = "a sheet's response asks for no frame"
+file = "crates/dom_api/src/document_loader.rs"
+from = '''    finish_load(engine.as_mut(), &document);
+    schedule_frame(engine.as_mut());
+    (true, kept, engine)'''
+to = '''    finish_load(engine.as_mut(), &document);
+    (true, kept, engine)'''
+
+[[mutant]]
+name = "the renderer never keeps a sheet's text"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        let keep_text = !self.devtools_sessions.is_empty();'''
+to = '''        let keep_text = false;'''
+
+[[mutant]]
+name = "a response is from no frame"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            .and_then(|frame| self.doc(frame).map(|next| (frame, next.encoding)));'''
+to = '''            .and_then(|frame| self.doc(frame).map(|next| (frame, next.encoding)))
+            .filter(|_| false);'''

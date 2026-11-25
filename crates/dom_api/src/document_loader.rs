@@ -33,8 +33,10 @@ pub struct DocumentLoader {
     /// None while a run has it, and once it is finished.
     parser: Option<Parser<dyn ScriptEngine>>,
     /// The body has all come (its load ended): once its input is spent,
-    /// the parser finishes.
+    /// the parser finishes; aborted if it stopped short (an error, or its
+    /// load was stopped).
     ended: bool,
+    aborted: bool,
     /// Its scripts are wasm components (a wasm document's).
     wasm: bool,
     /// The parser has made the body: a run lets other work go only after.
@@ -45,6 +47,10 @@ pub struct DocumentLoader {
     deferred: VecDeque<ParserScript>,
     /// The document's source so far (DevTools' `Page.getResourceContent`).
     text: String,
+    /// How many times its parser let other work run, and the task it posted
+    /// to parse on in (`Cx::queue_parse_on`) while it is to.
+    yields: u32,
+    parse_task: Option<u64>,
     /// The title last told, and the tree's version it was read at
     /// (`tell_title`).
     told_title: Option<String>,
@@ -82,16 +88,23 @@ impl ParserScript {
     }
 }
 
-/// A run of the parser's limits: its budget (Blink's
-/// `HTMLParserScheduler`'s, the host's), what is left of it after a
-/// script in the body runs, the most bytes given to the parser at a time,
-/// and whether input waits (the run lets it go first, once the body is).
+/// A run of the parser's limits, the host's: its budget after so many
+/// times it let other work run (Blink's `HTMLParserScheduler`'s), what is
+/// left of it after a script in the body runs, the most bytes given to
+/// the parser at a time, and whether input waits (the run lets it go
+/// first, once the body is: the host's scheduler's, Blink's
+/// `ShouldYieldForHighPriorityWork`).
 pub struct ParseRun<'a> {
-    pub budget: Duration,
+    pub budget: &'a dyn Fn(u32) -> Duration,
     pub after_script: Duration,
     pub slice: usize,
     pub input_waits: &'a dyn Fn() -> bool,
 }
+
+/// One of this module's functions that run a frame's document's parser
+/// (`parse`, `parse_unless_due`), the engine lent to it and given back.
+pub type ParseEntry =
+    fn(Box<dyn ScriptEngine>, FrameId, &ParseRun<'_>) -> (ParseOutcome, Box<dyn ScriptEngine>);
 
 /// Where a run of the parser stopped (`parse`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,8 +115,8 @@ pub enum ParseOutcome {
     WaitsForScript,
     /// Its input is spent, the rest of its body still to come.
     WaitsForBody,
-    /// Its budget is spent, or input waits: it is to parse on in a task of
-    /// its own (Blink's `SchedulePumpTokenizer`).
+    /// Its budget is spent, or input waits: it parses on in a task of its
+    /// own, posted (Blink's `SchedulePumpTokenizer`: `Cx::queue_parse_on`).
     Yielded,
     /// It finished now: the document is parsed.
     Parsed,
@@ -136,11 +149,14 @@ impl DocumentLoader {
             input: ParserInput::default(),
             parser: Some(parser),
             ended: false,
+            aborted: false,
             wasm: false,
             body_parsed: false,
             blocking: None,
             deferred: VecDeque::new(),
             text: String::new(),
+            yields: 0,
+            parse_task: None,
             told_title: None,
             title_version: 0,
         }
@@ -168,10 +184,12 @@ impl DocumentLoader {
     }
 
     /// The body has all come and its load ended (Blink's
-    /// `DocumentLoader::BodyLoadingFinished`): the parser finishes once it
-    /// parsed what came.
-    pub fn body_ended(&mut self) {
+    /// `DocumentLoader::BodyLoadingFinished`), stopped short if `aborted`:
+    /// the parser finishes once it parsed what came, then the document is
+    /// parsed or its parser aborted (HTML's "abort a parser").
+    pub fn body_ended(&mut self, aborted: bool) {
         self.ended = true;
+        self.aborted = aborted;
     }
 
     /// The document's source so far.
@@ -198,7 +216,13 @@ pub fn parse(
     run: &ParseRun<'_>,
 ) -> (ParseOutcome, Box<dyn ScriptEngine>) {
     let started = Instant::now();
-    let mut budget = run.budget;
+    // This run parses whatever its task was to: the task, as it comes,
+    // finds it parsed.
+    let Some(loader) = engine.document_loader(frame) else {
+        return (ParseOutcome::Stopped, engine);
+    };
+    loader.parse_task = None;
+    let mut budget = (run.budget)(loader.yields);
     // Whether the run gave the parser a slice: it lets other work go only
     // after (Blink's, after a token).
     let mut gave = false;
@@ -251,6 +275,13 @@ pub fn parse(
                         && body_parsed(engine.as_mut(), frame)
                         && (started.elapsed() >= budget || (run.input_waits)())
                     {
+                        let task = engine
+                            .dom_mut()
+                            .mutate(|cx| cx.queue_parse_on(document.get(cx.gc)));
+                        if let Some(loader) = engine.document_loader(frame) {
+                            loader.yields = loader.yields.saturating_add(1);
+                            loader.parse_task = task;
+                        }
                         return (ParseOutcome::Yielded, engine);
                     }
                     gave = true;
@@ -270,7 +301,9 @@ pub fn parse(
                 else {
                     return (ParseOutcome::Stopped, engine);
                 };
-                return (ParseOutcome::Parsed, parser.finish(engine));
+                let mut engine = parser.finish(engine);
+                parsed(engine.as_mut(), frame, &document);
+                return (ParseOutcome::Parsed, engine);
             }
             ParserState::Script { element, line } => {
                 let element = element.root().clone();
@@ -288,6 +321,236 @@ pub fn parse(
             }
         }
     }
+}
+
+/// `frame`'s document's parser run (`parse`) unless it is to parse on in a
+/// task it posted (Blink's parser, once scheduled, isn't pumped by what
+/// comes): what came of its body, a script it waited for.
+pub fn parse_unless_due(
+    engine: Box<dyn ScriptEngine>,
+    frame: FrameId,
+    run: &ParseRun<'_>,
+) -> (ParseOutcome, Box<dyn ScriptEngine>) {
+    let mut engine = engine;
+    if engine
+        .document_loader(frame)
+        .is_some_and(|loader| loader.parse_task.is_some())
+    {
+        return (ParseOutcome::Stopped, engine);
+    }
+    parse(engine, frame, run)
+}
+
+/// The DOM's task numbered `number`, as the host's scheduler took its token
+/// (`ScriptEngine::run_dom_task`): a document's parser's task to parse on
+/// in, run here (`parse`, the engine lent to the parser), the task taken
+/// out; any other, the engine's. Whether it ran.
+pub fn run_dom_task(
+    mut engine: Box<dyn ScriptEngine>,
+    number: u64,
+    run: &ParseRun<'_>,
+) -> (bool, Box<dyn ScriptEngine>) {
+    let parser = engine.frames_in_tree_order().into_iter().find(|&frame| {
+        engine
+            .document_loader(frame)
+            .is_some_and(|loader| loader.parse_task == Some(number))
+    });
+    let Some(frame) = parser else {
+        let ran = engine.run_dom_task(number);
+        return (ran, engine);
+    };
+    if let Some(document) = engine
+        .document_loader(frame)
+        .map(|loader| loader.document.clone())
+    {
+        engine.dom_mut().mutate(|cx| {
+            let document = document.get(cx.gc);
+            if let Some(window) = cx.window_of(document) {
+                cx.take_element_task_numbered(cx.window_context(window), number);
+            }
+        });
+    }
+    let _task = trace_event::trace_event!("HTMLDocumentParser::PumpTokenizer");
+    let (_, engine) = parse(engine, frame, run);
+    (true, engine)
+}
+
+/// The response of the script the DOM queued whose request is
+/// `request_id` (`dom::SentScript`), `at` the frame showing its document
+/// and that document's encoding (none: no frame shows it, and a classic
+/// one's fails): a module's to the engine's module map, after which a
+/// deferred module script's turn may come in any frame; a classic one's
+/// or a wasm one's decoded and handed to its pending script
+/// (`Cx::script_fetched`), and the parser's then runs on
+/// (`parse_unless_due`) or its deferred scripts do. One that failed, or
+/// was of no use, noted in its document's failed loads. Whether it was
+/// the DOM's.
+pub fn script_fetched(
+    mut engine: Box<dyn ScriptEngine>,
+    request_id: u64,
+    result: &crate::subresource::SubresourceResult<'_>,
+    at: Option<(FrameId, &'static encoding_rs::Encoding)>,
+    run: &ParseRun<'_>,
+) -> (bool, Box<dyn ScriptEngine>) {
+    use crate::subresource;
+    let Some(sent) = engine.dom_mut().take_sent_script(request_id) else {
+        return (false, engine);
+    };
+    let document = sent.document;
+    let note_failed = |engine: &mut dyn ScriptEngine| {
+        if at.is_some() {
+            note_load_failed(engine.dom_mut(), document, subresource::failed_url(result));
+        }
+    };
+    if sent.module {
+        let module = subresource::module_loaded(result);
+        if module.is_none() {
+            note_failed(engine.as_mut());
+        }
+        engine.module_fetched(sent.key, module);
+        // A deferred module script's graph may be in.
+        for frame in engine.frames_in_tree_order() {
+            run_deferred_scripts(engine.as_mut(), frame);
+        }
+        return (true, engine);
+    }
+    let parsers = if sent.wasm {
+        let loaded = subresource::wasm_loaded(result);
+        if loaded.is_none() {
+            note_failed(engine.as_mut());
+        }
+        engine
+            .dom_mut()
+            .mutate(|cx| cx.wasm_script_fetched(sent.key, loaded))
+    } else {
+        let loaded = at.and_then(|(_, encoding)| {
+            subresource::script_loaded(result, sent.charset.as_deref(), encoding)
+        });
+        if loaded.is_none() {
+            note_failed(engine.as_mut());
+        }
+        engine
+            .dom_mut()
+            .mutate(|cx| cx.script_fetched(sent.key, loaded))
+    };
+    // The parser's: the one it waits for (unless it parses on in a task of
+    // its own already), or a deferred one.
+    if parsers && let Some((frame, _)) = at {
+        let (_, lent) = parse_unless_due(engine, frame, run);
+        engine = lent;
+        run_deferred_scripts(engine.as_mut(), frame);
+    }
+    (true, engine)
+}
+
+/// The response of the `<link>`'s sheet whose request is `request_id`
+/// (`dom::SentSheet`), `at` the frame showing its document and that
+/// document's encoding (none: no frame shows it any more, and nothing
+/// waits): its document's `load` waits for it no more; decoded as a sheet
+/// (`stylesheet_text`), one of no use noted as failed; parsed against
+/// where it came from and set as the `<link>`'s sheet, origin-clean if the
+/// document's origin or CORS allowed it (for a network error, if it asked
+/// its own origin or a `data:` URL); then its `load` or `error`; the
+/// parser's scripts it blocked may run on, the document's load may finish,
+/// a frame is asked for. Whether it was one, and its text with what it was
+/// parsed into if `keep_text` (DevTools', Chrome's from its cache).
+pub fn sheet_fetched(
+    mut engine: Box<dyn ScriptEngine>,
+    request_id: u64,
+    result: &crate::subresource::SubresourceResult<'_>,
+    at: Option<(FrameId, &'static encoding_rs::Encoding)>,
+    keep_text: bool,
+    run: &ParseRun<'_>,
+) -> (bool, KeptSheetText, Box<dyn ScriptEngine>) {
+    use crate::subresource;
+    let taken = engine.dom_mut().mutate(|cx| {
+        cx.take_sent_sheet(request_id)
+            .map(|(sent, link)| (sent, link.map(|link| cx.root(link))))
+    });
+    let Some((sent, link)) = taken else {
+        return (false, None, engine);
+    };
+    let (Some((frame, encoding)), Some(link), Ok(url)) = (at, link, url::Url::parse(&sent.url))
+    else {
+        return (true, None, engine);
+    };
+    let Some((document, quirks, document_url)) = engine.dom_mut().read(|cx| {
+        let document = cx.node_by_id(sent.document)?;
+        let quirks = cx.quirks_mode(document) == dom::QuirksMode::Quirks;
+        let url = cx
+            .document_url(document)
+            .and_then(|url| url::Url::parse(&url.to_string()).ok());
+        Some((cx.root(document), quirks, url))
+    }) else {
+        return (true, None, engine);
+    };
+    // Script may read the rules of one of the document's origin or that
+    // CORS allowed; of a network error (a CORS failure among them), if it
+    // asked its own origin.
+    let origin_clean = match result {
+        Ok(response) => !response.opaque,
+        Err(_) => {
+            url.scheme() == "data"
+                || document_url.is_some_and(|document| url.origin() == document.origin())
+        }
+    };
+    let css = subresource::stylesheet_text(result, quirks, encoding);
+    if css.is_none() {
+        note_load_failed(
+            engine.dom_mut(),
+            sent.document,
+            subresource::failed_url(result),
+        );
+    }
+    let base = result
+        .as_ref()
+        .ok()
+        .and_then(|response| url::Url::parse(response.url).ok())
+        .map(|url| {
+            let referrer = url.to_string();
+            css::UrlContext::new(url, &referrer)
+        });
+    let contents = std::sync::Arc::new(css::StyleSheetContents::parse(
+        css.as_deref().unwrap_or_default(),
+        base,
+    ));
+    let kept = css
+        .as_ref()
+        .filter(|_| keep_text)
+        .map(|css| (contents.clone(), css.clone()));
+    engine.dom_mut().mutate(|cx| {
+        cx.set_link_sheet(link.get(cx.gc), contents, url.as_str(), origin_clean);
+    });
+    engine.fire_event(
+        &link,
+        if css.is_some() {
+            dom::names::event::LOAD
+        } else {
+            dom::names::event::ERROR
+        },
+    );
+    // The parser's scripts it blocked may run now.
+    if sent.blocks_scripts {
+        let (_, lent) = parse(engine, frame, run);
+        engine = lent;
+        run_deferred_scripts(engine.as_mut(), frame);
+    }
+    finish_load(engine.as_mut(), &document);
+    schedule_frame(engine.as_mut());
+    (true, kept, engine)
+}
+
+/// A sheet's text and what it was parsed into, kept for DevTools
+/// (`sheet_fetched`'s).
+pub type KeptSheetText = Option<(std::sync::Arc<css::StyleSheetContents>, String)>;
+
+/// `url`, of a subresource of the document `document`, noted as failed.
+fn note_load_failed(dom: &mut Dom, document: dom::NodeId, url: String) {
+    dom.mutate(|cx| {
+        if let Some(document) = cx.node_by_id(document) {
+            cx.note_load_failed(document, url);
+        }
+    });
 }
 
 /// The parser stopped at the end tag of `element`, which starts on `line`:
@@ -527,11 +790,130 @@ fn run_inline(
     engine.perform_microtask_checkpoint();
 }
 
+/// HTML's "the end" for `frame`'s `document`, its parser finished now:
+/// interactive, then its deferred scripts (`run_deferred_scripts`); or,
+/// its body stopped short, its parser aborted (`aborted`).
+fn parsed(engine: &mut dyn ScriptEngine, frame: FrameId, document: &NodeRoot) {
+    // The `<link>`s the last of the input brought asked for first: the
+    // deferred scripts wait for their sheets.
+    engine.send_sheet_fetches();
+    if engine
+        .document_loader(frame)
+        .is_some_and(|loader| loader.aborted)
+    {
+        aborted(engine, frame, document);
+        return;
+    }
+    engine.document_ready(frame, crate::DocumentReadiness::Interactive);
+    run_deferred_scripts(engine, frame);
+}
+
+/// HTML's "abort a parser", once what came of the document's body is
+/// parsed (it stopped short): interactive, then complete, with no deferred
+/// scripts, `DOMContentLoaded` or `load` (Blink's `Document::CancelParsing`,
+/// as a load stopped is). Its load is over nonetheless: a child frame's
+/// parent no longer waits for it, the top-level one's `DidFinishLoad`
+/// goes with the next frame (its host reads the load ended). (The parser
+/// ended what it had as at the end of its input: html5ever has no abort,
+/// which would only pop the elements open.)
+fn aborted(engine: &mut dyn ScriptEngine, frame: FrameId, document: &NodeRoot) {
+    abort_scripts(engine, frame);
+    // Its load over, before its `readystatechange`: no one waits for it.
+    engine
+        .dom_mut()
+        .mutate(|cx| cx.set_load_ended(document.get(cx.gc)));
+    let parent = engine.frame_parent(frame);
+    engine.document_ready(frame, crate::DocumentReadiness::Interactive);
+    engine.document_ready(frame, crate::DocumentReadiness::Aborted);
+    if let Some((_, iframe)) = parent {
+        let parent_document = engine
+            .dom_mut()
+            .read(|cx| cx.root(cx.document_of(iframe.get(cx.gc))));
+        finish_load(engine, &parent_document);
+    }
+    schedule_frame(engine);
+}
+
 /// `frame`'s document's deferred scripts run in order, each once fetched
-/// and no sheet blocks scripts (its host asks while it defers, `dom::
-/// LoadProgress::Deferring`, which none of them changes): whether none is
-/// left (`DOMContentLoaded` may come).
+/// and no sheet blocks scripts (its host asks again as they come, while it
+/// defers: `dom::LoadProgress::Deferring`, which none of them changes);
+/// once none is left, `DOMContentLoaded` (`content_loaded`). Whether none
+/// was left.
 pub fn run_deferred_scripts(engine: &mut dyn ScriptEngine, frame: FrameId) -> bool {
+    let Some(document) = engine
+        .document_loader(frame)
+        .map(|loader| loader.document.clone())
+    else {
+        return false;
+    };
+    if engine
+        .dom_mut()
+        .read(|cx| cx.load_progress(document.get(cx.gc)))
+        != dom::LoadProgress::Deferring
+    {
+        return false;
+    }
+    if !run_deferred(engine, frame) {
+        return false;
+    }
+    content_loaded(engine, frame, &document);
+    true
+}
+
+/// HTML's "the end" once the deferred scripts ran: `DOMContentLoaded`, the
+/// document scrolled to its URL's fragment once laid out (HTML's "scroll
+/// to the fragment"), its title and lifecycle told, then complete and its
+/// window's `load` once nothing delays it (`finish_load`).
+fn content_loaded(engine: &mut dyn ScriptEngine, frame: FrameId, document: &NodeRoot) {
+    engine.document_ready(frame, crate::DocumentReadiness::ContentLoaded);
+    let (dom, layout) = engine.dom_and_layout();
+    let target = dom.mutate(|cx| {
+        let document = document.get(cx.gc);
+        let url = url::Url::parse(&cx.document_url(document)?.to_string()).ok()?;
+        let element = crate::fragment_target(cx, document, &url)?;
+        Some((cx.node_id(document), element))
+    });
+    if let Some(layout) = layout {
+        if let Some((document, element)) = target {
+            layout.scroll_to_fragment(document, element);
+        }
+        layout.schedule_frame();
+    }
+    engine.tell_lifecycle(frame, crate::DocumentLifecycle::DomContentLoaded);
+    finish_load(engine, document);
+}
+
+/// HTML's "the end" for `document` (a frame's) as far as it can go: its
+/// sheets asked for first (the `<link>`s the last of the input brought,
+/// before the style update below takes the flag that says the sheets
+/// changed); then complete, its window's `load` task queued, once nothing
+/// delays it (`check_completed`); once only images delay it, those its
+/// style found fetched, and again (one that fails as it is asked for, a
+/// revoked blob URL's, delays it no more). Its window's `load` task ends
+/// it.
+pub fn finish_load(engine: &mut dyn ScriptEngine, document: &NodeRoot) {
+    engine.send_sheet_fetches();
+    let check = |engine: &mut dyn ScriptEngine| {
+        let (dom, layout) = engine.dom_and_layout();
+        dom.mutate(|cx| crate::check_completed(cx, layout, document.get(cx.gc)))
+    };
+    if check(engine) == crate::LoadCheck::WaitsForImages {
+        engine.send_image_fetches();
+        check(engine);
+    }
+}
+
+/// A frame asked for of the frame's layout: what the end changed is drawn
+/// (and the next frame tells the load it ended).
+fn schedule_frame(engine: &mut dyn ScriptEngine) {
+    if let (_, Some(layout)) = engine.dom_and_layout() {
+        layout.schedule_frame();
+    }
+}
+
+/// The deferred scripts of `frame`'s document run in order while each is
+/// ready: whether none is left.
+fn run_deferred(engine: &mut dyn ScriptEngine, frame: FrameId) -> bool {
     loop {
         let Some(loader) = engine.document_loader(frame) else {
             return false;

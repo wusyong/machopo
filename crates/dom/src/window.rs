@@ -148,6 +148,7 @@ pub(crate) const WORKER_ERROR: u8 = 14;
 pub(crate) const STORAGE_EVENT: u8 = 15;
 const JAVASCRIPT_URLS: u8 = 16;
 pub(crate) const INTERSECTION_OBSERVERS: u8 = 17;
+const PARSE_ON: u8 = 18;
 
 /// What an element task does (`Cx::take_element_task_numbered`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -181,6 +182,10 @@ pub enum ElementTaskKind {
         promise: u64,
         answered: bool,
     },
+    /// The document's parser parses on, as it posted when it let other work
+    /// run (Blink's `HTMLDocumentParser::SchedulePumpTokenizer`): `dom_api`'s
+    /// `document_loader` takes it by its number (`Cx::queue_parse_on`).
+    ParseOn,
     /// The window's `load` (HTML's "the end": a task of the DOM
     /// manipulation task source, so the element tasks queued before it
     /// run first), its document the task's element.
@@ -495,9 +500,9 @@ impl<'gc> Cx<'_, 'gc> {
         event_type: NameId,
         action: u8,
         data: u64,
-    ) {
+    ) -> u64 {
         let context = self.window_context(window);
-        self.push_task(context, Some(element), None, event_type, action, data);
+        self.push_task(context, Some(element), None, event_type, action, data)
     }
 
     /// The element a task or UA timer of no element's is of in `context`:
@@ -549,7 +554,7 @@ impl<'gc> Cx<'_, 'gc> {
         event_type: NameId,
         action: u8,
         data: u64,
-    ) {
+    ) -> u64 {
         let (queued, number) = self.stamp_queued_task();
         let task = self.gc.alloc_in(
             &sites::OTHER,
@@ -572,6 +577,7 @@ impl<'gc> Cx<'_, 'gc> {
             }
         };
         tasks.push(self.gc, task);
+        number
     }
 
     /// A native timer of `element`'s, doing `action` with `data` in
@@ -741,6 +747,7 @@ impl<'gc> Cx<'_, 'gc> {
             },
             WINDOW_LOAD => ElementTaskKind::WindowLoad,
             JAVASCRIPT_URLS => ElementTaskKind::JavaScriptUrls,
+            PARSE_ON => ElementTaskKind::ParseOn,
             INTERSECTION_OBSERVERS => ElementTaskKind::IntersectionObservers,
             STORAGE_EVENT => ElementTaskKind::Storage(
                 self.context_window(context)
@@ -938,6 +945,44 @@ impl<'gc> Cx<'_, 'gc> {
                 DocumentReadyState::Complete => LoadProgress::Loaded,
             }
         }
+    }
+
+    /// `url`, a subresource of `document`'s, failed to load or was of no
+    /// use (an image that doesn't decode, a script of no JavaScript type,
+    /// a sheet that isn't CSS, a `<link>`'s `href` that doesn't parse):
+    /// noted by whoever found it, its host hears of them with the
+    /// document's load (`take_failed_loads`).
+    pub fn note_load_failed(&self, document: NodeRef<'gc>, url: String) {
+        let data = self.ensure_document_data(document);
+        let mut failed = data.failed_loads.take();
+        failed.push(url);
+        data.failed_loads.set(failed);
+    }
+
+    /// The URLs of `document`'s subresources that failed
+    /// (`note_load_failed`), in order, taken.
+    pub fn take_failed_loads(&self, document: NodeRef<'gc>) -> Vec<String> {
+        self.document_data(document)
+            .map(|data| data.failed_loads.take())
+            .unwrap_or_default()
+    }
+
+    /// Whether `document` isn't to be rendered yet (Blink's
+    /// `Document::ShouldScheduleLayout` and `HaveRenderBlockingResourcesLoaded`):
+    /// its parser is at work and hasn't made its body, or a `<link>`'s
+    /// sheet that blocks its rendering is loading. Asked as it is to be
+    /// rendered: nothing pushes it.
+    pub fn render_blocked(&self, document: NodeRef<'gc>) -> bool {
+        (self.load_progress(document) == crate::LoadProgress::Loading
+            && self.body(document).is_none())
+            || self.render_blocking_sheet_loading(document)
+    }
+
+    /// Whether `document`'s `DOMContentLoaded` fired (`set_content_loaded`;
+    /// an aborted parser's never does).
+    pub fn content_loaded(&self, document: NodeRef<'gc>) -> bool {
+        self.document_data(document)
+            .is_some_and(|data| data.content_loaded.get())
     }
 
     /// `document`'s `DOMContentLoaded` is to fire: it is parsed
@@ -1471,6 +1516,14 @@ impl<'gc> Cx<'_, 'gc> {
     /// HTML's "the end"'s window `load`: a task of the DOM manipulation
     /// task source queued in `document`'s window, after the element tasks
     /// queued so far (`ElementTaskKind::WindowLoad`); none without one.
+    /// A task for `document`'s parser to parse on in (`ElementTaskKind::
+    /// ParseOn`), as it lets other work run: its number, none without a
+    /// window.
+    pub fn queue_parse_on(&self, document: NodeRef<'gc>) -> Option<u64> {
+        let window = self.window_of(document)?;
+        Some(self.push_element_task(window, document, crate::names::NONE, PARSE_ON, 0))
+    }
+
     pub fn queue_window_load(&self, document: NodeRef<'gc>) {
         let Some(window) = self.window_of(document) else {
             return;
@@ -1583,7 +1636,7 @@ pub(crate) fn new_document_data<'gc>() -> DocumentDataInit<'gc> {
         selection: None,
         in_order_scripts: None,
         pending_sheet_links: None,
-        failed_sheets: elise::External::new(Cell::new(Vec::new())),
+        failed_loads: elise::External::new(Cell::new(Vec::new())),
         style_sheets: None,
         sheet_texts: elise::External::new(Cell::new(None)),
         media_query_lists: None,

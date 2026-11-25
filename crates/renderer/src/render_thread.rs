@@ -376,7 +376,6 @@ struct RenderThread {
     /// from then on (`widget`).
     widget: Option<FrameWidget>,
     visual_properties: VisualProperties,
-    needs_begin_main_frame: bool,
     /// The clock's time the last `BeginMainFrame` came at: the next is
     /// expected a frame interval later, where an idle period ends.
     last_main_frame: f64,
@@ -415,10 +414,6 @@ struct RenderThread {
     /// The DOM's transitions and CSS animations run: each frame moves
     /// them on (`update_animations`).
     animations_running: bool,
-    /// How many times something asked for a main frame. Input handling
-    /// compares it before and after, as Blink's `LatencyInfoSwapPromiseMonitor`
-    /// watches for a commit request while an event is dispatched.
-    main_frame_requests: u64,
     /// The URLs of the requests the render thread sent (their ids are
     /// unique per renderer, `loader::next_request_id`, so a response for a
     /// document that has gone is recognised and dropped).
@@ -609,7 +604,6 @@ impl RenderThread {
             to_browser,
             widget: Some(FrameWidget::new(layer_tree_host)),
             visual_properties: VisualProperties::default(),
-            needs_begin_main_frame: false,
             last_main_frame: 0.0,
             idle_period_end: None,
             caret_blink_interval: flags.caret_blink_interval.filter(|i| !i.is_zero()),
@@ -622,7 +616,6 @@ impl RenderThread {
             intersections_due: None,
             resize_loop_error: false,
             animations_running: false,
-            main_frame_requests: 0,
             request_urls: crate::loader::RequestUrls::default(),
             blob_urls,
             popup: None,
@@ -722,7 +715,6 @@ impl RenderThread {
     /// each does checks whether it is still to be done.
     fn run_internal(&mut self, task: InternalTask) {
         match task {
-            InternalTask::ParseOn { frame } => self.parse_on(frame),
             InternalTask::ChildCommits => self.run_child_commit(),
             InternalTask::RetryBlockedScripts => {
                 self.retry_scripts_blocked_by_sheets();
@@ -854,7 +846,7 @@ impl RenderThread {
         // Running transitions and CSS animations move on at each frame
         // (script played or canceled one).
         let animations = self.animations_want_frames();
-        let needs = self.needs_begin_main_frame
+        let needs = self.widget().needs_begin_main_frame
             || animation_frames
             || self.resize_loop_error
             || animations
@@ -1037,14 +1029,7 @@ impl RenderThread {
     /// `ScheduleAnimation`: the rendering needs updating, at the next main
     /// frame.
     fn request_main_frame(&mut self) {
-        self.needs_begin_main_frame = true;
-        #[expect(
-            clippy::arithmetic_side_effects,
-            reason = "one per request of a main frame: a u64 lasts centuries"
-        )]
-        {
-            self.main_frame_requests += 1;
-        }
+        self.widget().schedule_frame();
     }
 
     /// A frame's new document's navigation timing, from what the browser
@@ -1585,7 +1570,7 @@ impl RenderThread {
     /// When the next frame is due, while frames are drawn (one asked for, a
     /// mouse move to dispatch, animation frame callbacks waiting).
     fn next_frame_due(&mut self) -> Option<f64> {
-        let drawing = self.needs_begin_main_frame
+        let drawing = self.widget().needs_begin_main_frame
             || self.pending_mouse_move.is_some()
             || self.wants_animation_frame();
         drawing.then_some(self.last_main_frame + FRAME_INTERVAL)
@@ -1752,7 +1737,7 @@ impl RenderThread {
                 .send(RendererHostMsg::InputEventAck { frame_token: None });
             return;
         }
-        let requests = self.main_frame_requests;
+        let requests = self.widget().main_frame_requests;
         let is_move = matches!(event, InputEvent::MouseMove { .. });
         self.handle_input_event(event, cancelable);
         if is_move && self.pending_mouse_move.is_some() {
@@ -1772,7 +1757,9 @@ impl RenderThread {
         self.handle_popup_requests();
         self.handle_frame_requests();
         self.popup_closed_by_press = None;
-        if self.main_frame_requests == requests || !self.widget().layer_tree_host.is_visible() {
+        if self.widget().main_frame_requests == requests
+            || !self.widget().layer_tree_host.is_visible()
+        {
             let _ = self
                 .to_browser
                 .send(RendererHostMsg::InputEventAck { frame_token: None });
@@ -1967,7 +1954,7 @@ impl RenderThread {
         // (Blink sends `DidChangeTitle` as the title changes): what waits
         // for the frame (`ReftestWaitEnded`) comes after it.
         self.update_title();
-        if self.needs_begin_main_frame {
+        if self.widget().needs_begin_main_frame {
             self.update_rendering();
         } else {
             self.widget().layer_tree_host.abort_main_frame();
@@ -1981,7 +1968,7 @@ impl RenderThread {
     /// (`update_rendering`), or an aborted main frame if there is
     /// nothing to commit.
     fn update_rendering(&mut self) {
-        self.needs_begin_main_frame = false;
+        self.widget().needs_begin_main_frame = false;
         if !self.update_document_rendering() {
             self.widget().layer_tree_host.abort_main_frame();
         }

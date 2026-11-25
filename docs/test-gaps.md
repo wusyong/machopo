@@ -146,14 +146,16 @@
 
 | 項目 | 為什麼還沒有測試 | 現在靠什麼 | 之後怎麼處理 |
 | --- | --- | --- | --- |
-| 文件的 parser 中止時先設「host 結束了它的載入」（`renderer` 的 `documents.rs` 的 `document_aborted` 的 `set_load_ended`；拿掉時中止的文件的 `readyState` 是 complete、沒有排 `load`，`load_progress` 照樣推成 `Loaded`） | 差別只在中止時 interactive 的 `readystatechange` 的 handler 執行的期間：那時 parent 被判斷（handler 拿掉 parent 的另一個 iframe），子 frame 看起來還在載入；測試要一個 body 收到一半中斷、handler 裡拿掉兄弟 iframe 的子 frame，parent 的 `load` 要在那時就排 | 審查 | 照上面的寫法補 `shell` 的測試 |
+| 文件的 parser 中止時先設「host 結束了它的載入」（`dom_api` 的 `document_loader.rs` 的 `aborted` 的 `set_load_ended`；拿掉時中止的文件的 `readyState` 是 complete、沒有排 `load`，`load_progress` 照樣推成 `Loaded`） | 差別只在中止時 interactive 的 `readystatechange` 的 handler 執行的期間：那時 parent 被判斷（handler 拿掉 parent 的另一個 iframe），子 frame 看起來還在載入；測試要一個 body 收到一半中斷、handler 裡拿掉兄弟 iframe 的子 frame，parent 的 `load` 要在那時就排 | 審查 | 照上面的寫法補 `shell` 的測試 |
+| 「the end」在 DOMContentLoaded 之後和 parser 中止時、樣式表的回應之後要一張畫面（`dom_api` 的 `document_loader.rs` 的 `content_loaded`、`aborted`、`sheet_fetched` 的 `schedule_frame`）：捲到 fragment、最上層的 `DidFinishLoad`、新的 sheet 的樣式要跟著一張畫面 | 測試裡總有別的東西要了畫面：parse 改了樹（`request_next_frame_if_dom_changed`），`load` 的 task 之後也要（它的拿掉會卡住，有抓到）；要一份樹沒變、`load` 又被圖片拖著的頁面，才看得出 DOMContentLoaded 之後的捲動晚畫 | 審查 | headless 能記下每一張 frame 的捲動位置時，用很慢的圖片拖住 `load`、deferred script 不改樹的頁面測 |
 | 子 frame 載完時當場檢查 parent（`dom_api` 的 `lifecycle.rs` 的 `end_load` 的 `check_parent_completed`；parent 的 `load` 的 task 在子 frame 的 `load` 的 task 裡排） | 拿掉時 renderer 在子 frame 的 `load` 的 task 之後照樣對每個 frame 判斷（`after_dom_tasks` 的 `finish_loads`），差別只在子 frame 的 `load` 的 handler 排的 task 和 parent 的 `load` 的先後 | 審查 | renderer 不再在每個 DOM 的 task 之後替每個 frame 判斷時（之後拿掉那個判斷的話）就有測試抓得到 |
 | 只剩圖片在等時，送出圖片的請求之後再判斷一次 `load`（`renderer` 的 `documents.rs` 的 `finish_load` 的第二次 `check_completed`；撤銷了的 blob URL 的圖片在送的時候就失敗） | 拿掉時 `load` 只是延到下一個 DOM 的 task 跑完（`after_dom_tasks` 對每個 frame 再判斷一次），測試的頁面之後總有 task；要一個之後完全沒有 task 的頁面 | 審查 | headless 在文件不再有 task 時停下、看 `load` 發了沒，或測試能數 `finish_load` 判斷了幾次 |
-| 子 frame 的文件在 parser 做出 body 之前不畫（`renderer` 的 `documents.rs` 的 `commit_child` 裡 commit 時的 `update_child_blocking`；拿掉就先畫出只有 `<head>` 的文件） | headless 的 `render` 只回最後一張 frame 和畫了幾張，parent 的 frame 照樣在畫，看不出子 frame 在暫停的期間畫了什麼 | 審查；main frame 的同樣的判斷有 `shell` 的 `a_document_is_drawn_once_it_has_a_body` | 情境裡在子 frame 的 body 暫停時截圖，或 headless 記下每一張 frame 在某一點的顏色 |
+| 子 frame 的文件在 parser 做出 body 之前不畫（`dom` 的 `window.rs` 的 `render_blocked` 的「parser 還在跑、還沒有 body」那一半，子 frame 的 view 在它的 lifecycle 裡問；拿掉就先畫出只有 `<head>` 的文件） | headless 的 `render` 只回最後一張 frame 和畫了幾張，parent 的 frame 照樣在畫，看不出子 frame 在暫停的期間畫了什麼 | 審查；main frame 的同樣的判斷有 `shell` 的 `a_document_is_drawn_once_it_has_a_body` | 情境裡在子 frame 的 body 暫停時截圖，或 headless 記下每一張 frame 在某一點的顏色 |
 | parser 停下（讓出、或等其餘的 body）時馬上開始它做出的元素要的載入（`renderer` 的 `documents.rs` 的 `parser_stopped`；拿掉時 `<link>` 的 sheet 要等停下的那個 task 之後的 `request_next_frame_if_dom_changed` 才開始） | loop 跑完一個 task 就接著跑它之後的觀察者，compositor 的 frame 排不進中間，差別只在同一個 task 裡、停下之後的工作和請求的先後；測試看不出來 | 審查（loop 一次跑一批 task 時，`browser` 的 `a_child_frame_waits_for_its_stylesheets` 拿掉時約六次失敗一次） | 測試能數請求送出之前 parser 又做了什麼，或 headless 記下每一張 frame 用到的 sheet |
 | parser 在有輸入等著時讓出（`dom_api` 的 `document_loader.rs` 的 `parse` 的 `input_waits`，renderer 的 `advance_document` 給的，Blink 的 `ShouldYieldForHighPriorityWork`；拿掉就只看預算） | 輸入要在 parser 的一次 run 裡排進 Input 的 queue，而新文件畫出來之前對著舊畫面的輸入照樣丟掉：要 `browser` 的測試用 `DrivenViz` 先畫出文件，再在 script 忙的時候送一個按鍵 | 審查 | `browser` 的測試：預算很大、每片很小的 parser，body 裡第一個 script 忙 300 ms，這段時間送 `keydown`，之後的 script 在 `keydown` 之後跑 |
 | body 裡的 parser-blocking script 跑完之後，那次 run 的預算縮回已經用掉的加上 10 ms（`dom_api` 的 `document_loader.rs` 的 `parse` 的 `kHaveTokensAfterScript` 那一段，`ParseRun::after_script`） | 測試的 parser 每片都讓出（預算是 0，縮了也是 0）；預設的預算下差別只在時間 | 審查 | 預算讓測試設得很大、script 忙過預設的預算時，看 script 之後的下一片前有沒有讓出（計時器先跑） |
-| 已經排了 task 接著 parse 的 parser，body 又來一段時不在收到它的 task 裡 parse（`read_body` 結尾的 `parse_due` 判斷，Blink 的 parser 排了下一段之後不被收到的資料推動） | 拿掉時只是在收到資料的 task 裡先 parse 一次，parse 的內容一樣，只有和計時器的先後不同；測試的 body 一次到齊 | 審查 | 每片都讓出的 parser 配上 body 分兩次到的伺服器，看兩段之間的計時器是不是照 scheduler 的順序跑 |
+| parser 讓出的次數讓預算變大（`dom_api` 的 `document_loader.rs` 的 `parse` 的 `yields`，renderer 的 `parse_run` 照它算 `ParserBudget::of_run`：6 次之後一輪 500 ms） | `of_run` 有單元測試（`the_parsers_budget_grows_after_six_yields`），把次數傳進去的這一段只差在時間：測試的 parser 每片都讓出（預算是 0） | 審查 | 預算讓測試設得很大的頁面，script 忙過 10 ms 但不到 500 ms 時，看第 7 次之後還讓不讓出 |
+| 已經排了 task 接著 parse 的 parser，body 又來一段時不在收到它的 task 裡 parse（`dom_api` 的 `document_loader.rs` 的 `parse_unless_due`，renderer 收到 body 和 parser 的 script 時叫它；Blink 的 parser 排了下一段之後不被收到的資料推動；同一類的還有一輪開始時清掉排著的 task，`parse` 的 `parse_task = None`） | 拿掉時只是在收到資料的 task 裡先 parse 一次，parse 的內容一樣，只有和計時器的先後不同；測試的 body 一次到齊 | 審查 | 每片都讓出的 parser 配上 body 分兩次到的伺服器，看兩段之間的計時器是不是照 scheduler 的順序跑 |
 | wasm 文件的 script trap 之後，它的 Store 從 `StoreSet` 拿掉（`dom_wasm` 的 `engine.rs` 的 `turn`，和 listener trap 時的 `Host::call_listener`） | 不拿掉時 Store 只是留到換頁才丟（洩漏到那時候），engine 自己的清單已經沒有它，從外面看不出來 | 審查 | `StoreSet` 能數活著的 Store 時，在 trap 的測試裡斷言少一個 |
 | wasm 的 engine 轉給 `dom_api` 的那些方法（`dom_wasm` 的 `WasmEngine`：輸入、focus、文件的生命週期、元素的 task、動畫、WebDriver 的查詢和輸入、microtask checkpoint） | wasm 文件的情境走到載入、點連結的導覽、guest 的等待（`wasm-document`），滑鼠的點擊、一個按鍵（`wasm-listeners`），和互動的 TodoMVC（`todomvc-app-wasm`：文字欄位的輸入和 `change`、雙擊、滑鼠移過去、`blur`、`keypress`、`keyup`、連結改 fragment 的 `hashchange`、`load`）；捲動、滾輪、動畫、WebDriver 的輸入、頁面失去 focus 和可見性在 wasm 文件裡沒有測試 | 審查：每個和 `dom_js` 的 `V8Engine` 對應的方法呼叫同一個 `dom_api` 的函式 | 有頁面用到時照樣寫成 wasm 文件的情境 |
 | wasm 文件裡 DevTools 連著時的行為，和連著時換 engine（renderer 的 `replace_engine`：agent 記著的節點放掉、session 接到新的 engine） | 沒有 wasm 文件的 DevTools 測試；wasm 的 engine 沒有 inspector | 審查 | `shell` 的 DevTools 測試加一份：連著 `DOM` 的 session 從 JS 文件換到 wasm 文件再換回來 |
@@ -311,8 +313,10 @@
 
 **文件的載入的 parser 的 script（`dom_api` 的 `document_loader.rs`）**
 
+- DOM 的 task 照編號拿出來時把 parser 的那種認成 `ElementTaskKind::ParseOn`（`window.rs` 的 `PARSE_ON`）：parser 的 task 由 `document_loader::run_dom_task` 照編號拿出、不看種類；交給 engine 的只有 parser 在它之前已經 parse 過的舊 task，`ParseOn` 時什麼都不做，認錯成 `Fire` 時在文件上觸發名字是空字串的事件，只有對空字串加了 listener 看得出來。
+- 載入只等圖片時送出 style 找到的圖片的請求（`finish_load` 的 `send_image_fetches`）：拿掉時那些請求在這個 task 之後由 renderer 送出（`start_image_fetches`），`load` 本來就要等它們的回應，回應來了再檢查一次（`finish_loads`），只差在請求晚一個 task 出去。留著是照 Blink 在檢查的當下開始它們。
 - parser 的外部 classic script 跑之前的 microtask checkpoint（`execute`）：走到這裡的路（script 的回應、樣式表的 `load` 之後、task 之後的重試、接著 parse 的 task、`Interactive` 之後的 deferred script）在進來之前都做過 checkpoint，佇列是空的；樣式表的 `load` 的 listener 排的 microtask 在 listener 結束時就跑了（`shell` 的 `documents::a_parsers_external_script_runs_after_the_microtasks_before_it` 守著順序）。留著是照 parser 的 script nesting level 是零。
-- parser 中止時放掉它的 deferred script 的 pending script（`abort_scripts` 的 `take_ready_script`）：中止的文件直接設成載入結束、不排 `load`（renderer 的 `document_aborted`），之後沒有東西讀它的 load delay，deferred script 也不再跑（只在 deferring 時跑）。留著是放掉元素的 root。
+- parser 中止時放掉它的 deferred script 的 pending script（`abort_scripts` 的 `take_ready_script`）：中止的文件直接設成載入結束、不排 `load`（`aborted`），之後沒有東西讀它的 load delay，deferred script 也不再跑（只在 deferring 時跑）。留著是放掉元素的 root。
 
 **renderer 照 frame 的表（`render_thread/render_frame.rs` 的 `RenderFrames`）**
 
@@ -342,7 +346,7 @@
 
 **renderer 對照 engine 的 frame（`documents.rs` 的 `follow_child_frames`）**
 
-- 子 frame 換文件時（`commit_child`）不在 `create_window` 之後當場對帳：接著 parse 新的文件時的 `handle_frame_requests` 照樣對帳，中間只有這個 frame 自己的 `update_child_blocking` 和 `request_main_frame`，沒有東西推動舊文件裡的 frame。留著是讓舊的帳在最早的時候拿掉，不靠之後一定有 `handle_frame_requests`。
+- 子 frame 換文件時（`commit_child`）不在 `create_window` 之後當場對帳：接著 parse 新的文件時的 `handle_frame_requests` 照樣對帳，中間只有這個 frame 自己的 `request_main_frame`，沒有東西推動舊文件裡的 frame。留著是讓舊的帳在最早的時候拿掉，不靠之後一定有 `handle_frame_requests`。
 - 文件的載入中止或載完時，engine 已經沒有它的 frame 就當成最上層的（`place_of` 改成 `Some(child_parent(frame))`）：推論走不到：iframe 拿掉之後它的文件不再 fully active，window 的 `load` 的 task 不跑；被丟掉的導覽在 `navigation_dropped` 一開始就因為查不到 frame 返回。沒有證明。
 
 **`dom_api` 的 unload counter 和文件的載入（`lifecycle.rs`）**

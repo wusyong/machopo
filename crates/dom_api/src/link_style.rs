@@ -111,7 +111,7 @@ pub fn send_sheet_fetches(
             });
         dom.read(|cx| cx.set_sheet_requested(link.link.get(cx.gc)));
         let Some(url) = url else {
-            dom.mutate(|cx| cx.note_sheet_failed(document.get(cx.gc), link.href));
+            dom.mutate(|cx| cx.note_load_failed(document.get(cx.gc), link.href));
             continue;
         };
         let (origin, request_origin) = crate::engine::load_origin(
@@ -129,7 +129,7 @@ pub fn send_sheet_fetches(
             request_origin.as_deref(),
             &origin,
         ) else {
-            dom.mutate(|cx| cx.note_sheet_failed(document.get(cx.gc), url.to_string()));
+            dom.mutate(|cx| cx.note_load_failed(document.get(cx.gc), url.to_string()));
             continue;
         };
         dom.mutate(|cx| {

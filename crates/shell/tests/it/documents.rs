@@ -2309,6 +2309,63 @@ fn a_parsers_inline_scripts_microtasks_run_before_the_parser_goes_on() {
     assert_eq!(run(&url), "early");
 }
 
+/// A `<link>`'s sheet whose load failed (a network error: its body stops
+/// short) from the document's own origin is origin-clean, its (no) rules
+/// readable; another origin's would not be.
+#[test]
+fn a_sheet_that_failed_from_its_own_origin_is_readable() {
+    use std::collections::HashMap;
+
+    use net::test_server::{Route, TestServer};
+    let server = TestServer::start(HashMap::from([
+        (
+            "/index.html".to_owned(),
+            Route::ok(
+                "text/html",
+                "<!doctype html><link rel=stylesheet href=/broken.css onerror=\"\
+                 let read; try { read = String(this.sheet.cssRules.length); } catch (error) { read = error.name; }\
+                 testRunner.reportHarnessResults(read)\">",
+            ),
+        ),
+        (
+            "/broken.css".to_owned(),
+            Route::ok("text/css", crate::devtools_log::deflate_cut_short(b"p {}"))
+                .with_header("Content-Encoding", "deflate"),
+        ),
+    ]))
+    .expect("the test server starts");
+    assert_eq!(run(&server.url("/index.html")), "0");
+}
+
+/// A sheet a `DOMContentLoaded` listener asks for delays the window's
+/// `load` as any does (the sheets asked for as the load finishes, before
+/// nothing is found to delay it).
+#[test]
+fn a_sheet_asked_for_at_dom_content_loaded_delays_the_load() {
+    use std::collections::HashMap;
+
+    use net::test_server::{Route, TestServer};
+    let server = TestServer::start(HashMap::from([
+        (
+            "/index.html".to_owned(),
+            Route::ok(
+                "text/html",
+                "<!doctype html><script>var log = [];\
+                 document.addEventListener('DOMContentLoaded', () => {\
+                   const link = document.createElement('link');\
+                   link.rel = 'stylesheet'; link.href = '/slow.css';\
+                   link.onload = () => log.push('sheet');\
+                   document.head.append(link);\
+                 });\
+                 onload = () => { log.push('load'); testRunner.reportHarnessResults(log.join()); };</script>",
+            ),
+        ),
+        ("/slow.css".to_owned(), sheet("p {}", 300)),
+    ]))
+    .expect("the test server starts");
+    assert_eq!(run(&server.url("/index.html")), "sheet,load");
+}
+
 /// An inline module script's lines are its document's: what it throws is
 /// reported at the line of the document it is on.
 #[test]

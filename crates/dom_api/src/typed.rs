@@ -1999,6 +1999,14 @@ pub trait ScriptHost {
     /// the browsing context showing it: once fetched, its pending script
     /// is told (`Cx::module_graph_fetched`). Nothing by default (a host
     /// with no modules).
+    /// `document` (a frame's) reached `event` of HTML's "the end": its
+    /// title, then `event`, told to the frame client
+    /// (`ScriptEngine::tell_lifecycle`, as a task runs it). Nothing by
+    /// default.
+    fn tell_lifecycle(&mut self, document: &dom::NodeRoot, event: crate::DocumentLifecycle) {
+        let _ = (document, event);
+    }
+
     fn start_module_graph(&mut self, document: &dom::NodeRoot, start: crate::ModuleStart) {
         let _ = (document, start);
     }

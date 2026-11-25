@@ -67,8 +67,6 @@ pub(crate) enum MainThreadTask {
 /// does nothing, as Blink's cancelled tasks are skipped).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InternalTask {
-    /// A parser that gave way parses on (Blink's `SchedulePumpTokenizer`).
-    ParseOn { frame: dom_api::FrameId },
     /// A child frame's document the renderer commits itself (a
     /// `javascript:` URL's).
     ChildCommits,

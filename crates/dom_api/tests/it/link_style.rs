@@ -273,7 +273,7 @@ fn each_links_sheet_is_asked_for_once_blocking_as_it_is() {
     assert_eq!(dom.sent_sheets_of(id), 5);
     dom.mutate(|cx| {
         let document = document.get(cx.gc);
-        assert_eq!(cx.take_failed_sheets(document), ["http://["]);
+        assert_eq!(cx.take_failed_loads(document), ["http://["]);
         assert!(cx.has_load_requests(document));
     });
 
@@ -292,7 +292,7 @@ fn each_links_sheet_is_asked_for_once_blocking_as_it_is() {
     );
     assert_eq!(sink.sheets.len(), 6);
     assert_eq!(sink.sheets[5].0, "https://example.test/dir/g.css");
-    assert!(dom.read(|cx| cx.take_failed_sheets(document.get(cx.gc)).is_empty()));
+    assert!(dom.read(|cx| cx.take_failed_loads(document.get(cx.gc)).is_empty()));
 }
 
 #[test]
@@ -369,7 +369,7 @@ fn a_request_that_went_nowhere_is_noted_failed() {
     dom.mutate(|cx| {
         let document = document.get(cx.gc);
         assert_eq!(
-            cx.take_failed_sheets(document),
+            cx.take_failed_loads(document),
             ["https://example.test/dir/a.css"]
         );
         assert!(!cx.has_load_requests(document));

@@ -61,14 +61,6 @@ pub(crate) struct FrameView {
     /// A child frame whose iframe's `scrolling` keeps the user from
     /// scrolling it (as its iframe was when it was last laid out).
     scrolling_off: bool,
-    /// A child frame whose document waits for a sheet that blocks its
-    /// rendering: neither styled nor laid out meanwhile, so it doesn't
-    /// show unstyled (and its transitions don't start from that style),
-    /// shown as it last was. Its viewport follows its iframe all the same,
-    /// so its media queries see its size (Blink's child frame has it from
-    /// its owner's layout before it is styled). The top-level frame's
-    /// rendering waits as a whole (`RenderThread::render_blocked`).
-    render_blocked: bool,
     /// Given another viewport while blocked: laid out again once it isn't.
     needs_layout: bool,
     /// The child frames' views, as their iframes are in its document: laid
@@ -308,7 +300,6 @@ impl FrameView {
             document_id,
             owner: None,
             scrolling_off: false,
-            render_blocked: false,
             needs_layout: false,
             children: Vec::new(),
             resized: Vec::new(),
@@ -354,12 +345,6 @@ impl FrameView {
     /// documents changed.
     pub(crate) fn take_resized_frames(&mut self) -> Vec<dom_api::FrameId> {
         std::mem::take(&mut self.resized)
-    }
-
-    /// Whether a sheet blocks this child frame's rendering (its document
-    /// waits for one): it isn't styled or laid out till none does.
-    pub(crate) fn set_render_blocked(&mut self, blocked: bool) {
-        self.render_blocked = blocked;
     }
 
     /// This view as `frame`'s, the child frame of iframe `owner`.
@@ -772,7 +757,19 @@ impl FrameView {
             {
                 self.resized.push(frame);
             }
-            if child.render_blocked {
+            // A child frame whose document isn't to be rendered yet (a sheet
+            // that blocks its rendering loads, or its parser hasn't made its
+            // body: `Cx::render_blocked`, asked now) is neither styled nor
+            // laid out, so it doesn't show unstyled (and its transitions
+            // don't start from that style), shown as it last was. Its
+            // viewport follows its iframe all the same, so its media
+            // queries see its size (Blink's child frame has it from its
+            // owner's layout before it is styled). The top-level frame's
+            // rendering waits as a whole (`RenderThread::render_blocked`).
+            if cx
+                .node_by_id(child.document_node)
+                .is_some_and(|document| cx.render_blocked(document))
+            {
                 child.set_viewport_unstyled(child_viewport, device_scale_factor);
                 continue;
             }
@@ -2343,6 +2340,10 @@ impl dom_api::FrameLayout for Frame {
         Frame::media_environment(self, document)
     }
 
+    fn schedule_frame(&mut self) {
+        self.widget.schedule_frame();
+    }
+
     /// The frame whose view shows it is the one queries are of from now
     /// on.
     fn shows(&mut self, document: NodeId) -> bool {
@@ -3501,14 +3502,37 @@ mod tests {
         .root()
         .clone();
         let node = page.dom.read(|cx| cx.node_id(document.get(cx.gc)));
-        let mut view = FrameView::new(
+        let view = FrameView::new(
             document.clone(),
             node,
             DocumentId::default(),
             gfx::SystemColors::DEFAULT,
         )
         .into_child(FrameId(1), iframe);
-        view.set_render_blocked(true);
+        // Blocked as a frame's document is (`Cx::render_blocked`): a sheet
+        // that blocks its rendering loading, or not.
+        let block = |page: &mut Page, blocked: bool| {
+            page.dom.mutate(|cx| {
+                if blocked {
+                    let document = document.get(cx.gc);
+                    let link = cx.create_element(document, dom::QualName::html("link"));
+                    cx.sheet_sent(
+                        link,
+                        1,
+                        dom::SentSheet {
+                            link: cx.node_id(link),
+                            document: cx.node_id(document),
+                            url: "https://example.test/a.css".to_owned(),
+                            blocks_render: true,
+                            blocks_scripts: false,
+                        },
+                    );
+                } else {
+                    cx.take_sent_sheet(1);
+                }
+            });
+        };
+        block(&mut page, true);
         page.view.show_child(None, view);
         page.update(SIZE, 1.0);
         let child = page.view.view_of(node).unwrap();
@@ -3525,20 +3549,14 @@ mod tests {
             })
         };
         assert!(!div_styled(&mut page), "not styled while blocked");
-        page.view
-            .child_mut(FrameId(1))
-            .unwrap()
-            .set_render_blocked(false);
+        block(&mut page, false);
         page.update(SIZE, 1.0);
         assert!(div_styled(&mut page));
         let laid_out = page.view.view_of(node).unwrap().fragment.clone();
         assert!(laid_out.is_some(), "laid out once nothing blocks it");
         // Blocked again while its iframe grows: its last layout stays, at
         // the new size once it goes on.
-        page.view
-            .child_mut(FrameId(1))
-            .unwrap()
-            .set_render_blocked(true);
+        block(&mut page, true);
         page.dom.mutate(|cx| {
             let iframe = cx.node_by_id(iframe).unwrap();
             cx.set_attribute(iframe, "style", "width: 150px; height: 60px; border: 0");
@@ -3550,10 +3568,7 @@ mod tests {
             child.fragment.as_ref().unwrap(),
             laid_out.as_ref().unwrap()
         ));
-        page.view
-            .child_mut(FrameId(1))
-            .unwrap()
-            .set_render_blocked(false);
+        block(&mut page, false);
         page.update(SIZE, 1.0);
         let child = page.view.view_of(node).unwrap();
         assert!(!Arc::ptr_eq(

@@ -1,0 +1,210 @@
+# Stage 2c-2's mutants: `python3 scripts/test.py mutate rfcs/0115-render-frame/mutants-2c2.toml`.
+# `automation_pipe::a_client_not_reading_doesnt_hold_machopo_up` is left out as in 2a-3 (progress's 2a-3).
+test = ["sh", "-c", "cargo test -q -p dom_api --test it && cargo test -q -p renderer && cargo test -q -p browser --test it navigation:: && cargo test -q -p shell --test it -- --skip webdriver::a_session_with_a_hung_page_ends_in_time --skip automation_pipe::a_client_not_reading_doesnt_hold_machopo_up"]
+timeout = 150
+
+[[mutant]]
+name = "the last sheets aren't asked for before the deferred scripts"
+file = "crates/dom_api/src/document_loader.rs"
+from = '''    // deferred scripts wait for their sheets.
+    engine.send_sheet_fetches();'''
+to = '''    // deferred scripts wait for their sheets.'''
+
+[[mutant]]
+name = "a body that stopped short isn't aborted"
+file = "crates/dom_api/src/document_loader.rs"
+from = '''        .is_some_and(|loader| loader.aborted)
+    {
+        aborted(engine, frame, document);'''
+to = '''        .is_some_and(|loader| loader.aborted && false)
+    {
+        aborted(engine, frame, document);'''
+
+[[mutant]]
+name = "an aborted parser's load isn't ended"
+file = "crates/dom_api/src/document_loader.rs"
+from = '''    // Its load over, before its `readystatechange`: no one waits for it.
+    engine
+        .dom_mut()
+        .mutate(|cx| cx.set_load_ended(document.get(cx.gc)));'''
+to = '''    // Its load over, before its `readystatechange`: no one waits for it.'''
+
+[[mutant]]
+name = "an aborted child frame's parent isn't checked"
+file = "crates/dom_api/src/document_loader.rs"
+from = '''        finish_load(engine, &parent_document);'''
+to = '''        let _ = parent_document;'''
+
+[[mutant]]
+name = "an aborted parser asks for no frame"
+file = "crates/dom_api/src/document_loader.rs"
+from = '''        finish_load(engine, &parent_document);
+    }
+    schedule_frame(engine);'''
+to = '''        finish_load(engine, &parent_document);
+    }'''
+
+[[mutant]]
+name = "the deferred scripts run while the document doesn't defer"
+file = "crates/dom_api/src/document_loader.rs"
+from = '''        != dom::LoadProgress::Deferring
+    {
+        return false;
+    }'''
+to = '''        != dom::LoadProgress::Deferring
+        && false
+    {
+        return false;
+    }'''
+
+[[mutant]]
+name = "no DOMContentLoaded"
+file = "crates/dom_api/src/document_loader.rs"
+from = '''    engine.document_ready(frame, crate::DocumentReadiness::ContentLoaded);'''
+to = ''''''
+
+[[mutant]]
+name = "the document isn't scrolled to its fragment"
+file = "crates/dom_api/src/document_loader.rs"
+from = '''            layout.scroll_to_fragment(document, element);'''
+to = '''            let _ = (document, element);'''
+
+[[mutant]]
+name = "DOMContentLoaded asks for no frame"
+file = "crates/dom_api/src/document_loader.rs"
+from = '''            layout.scroll_to_fragment(document, element);
+        }
+        layout.schedule_frame();'''
+to = '''            layout.scroll_to_fragment(document, element);
+        }'''
+
+[[mutant]]
+name = "DOMContentLoaded isn't told"
+file = "crates/dom_api/src/document_loader.rs"
+from = '''    engine.tell_lifecycle(frame, crate::DocumentLifecycle::DomContentLoaded);'''
+to = ''''''
+
+[[mutant]]
+name = "the load isn't finished after DOMContentLoaded"
+file = "crates/dom_api/src/document_loader.rs"
+from = '''    engine.tell_lifecycle(frame, crate::DocumentLifecycle::DomContentLoaded);
+    finish_load(engine, document);'''
+to = '''    engine.tell_lifecycle(frame, crate::DocumentLifecycle::DomContentLoaded);'''
+
+[[mutant]]
+name = "the images a load waits for aren't asked for"
+file = "crates/dom_api/src/document_loader.rs"
+from = '''        engine.send_image_fetches();
+        check(engine);'''
+to = '''        check(engine);'''
+
+[[mutant]]
+name = "the sheets aren't asked for as a load finishes"
+file = "crates/dom_api/src/document_loader.rs"
+from = '''pub fn finish_load(engine: &mut dyn ScriptEngine, document: &NodeRoot) {
+    engine.send_sheet_fetches();'''
+to = '''pub fn finish_load(engine: &mut dyn ScriptEngine, document: &NodeRoot) {'''
+
+[[mutant]]
+name = "the window's load isn't told"
+file = "crates/dom_api/src/text_control.rs"
+from = '''                host.tell_lifecycle(&element, crate::DocumentLifecycle::Load);'''
+to = ''''''
+
+[[mutant]]
+name = "the window's load asks for no frame"
+file = "crates/dom_api/src/text_control.rs"
+from = '''                    cx.lend_layout(element.get(cx.gc), |layout| layout.schedule_frame());'''
+to = '''                    let _ = &element;'''
+
+[[mutant]]
+name = "the title isn't told before the lifecycle"
+file = "crates/dom_js/src/frames.rs"
+from = '''    state.frames.tell_title(&state.dom);
+    let (Some(found), Some(token))'''
+to = '''    let (Some(found), Some(token))'''
+
+[[mutant]]
+name = "the engine tells the frame client no lifecycle"
+file = "crates/dom_js/src/frames.rs"
+from = '''        client.document_lifecycle(token, frame == TOP, id, loader, event);'''
+to = '''        let _ = (client, token, id, loader, event);'''
+
+[[mutant]]
+name = "every frame is told as the top-level one"
+file = "crates/dom_js/src/frames.rs"
+from = '''        client.document_lifecycle(token, frame == TOP, id, loader, event);'''
+to = '''        client.document_lifecycle(token, true, id, loader, event);'''
+
+[[mutant]]
+name = "a task's lifecycle isn't told"
+file = "crates/dom_js/src/listeners.rs"
+from = '''            crate::frames::tell_lifecycle(state, frame, event);'''
+to = '''            let _ = (state, frame, event);'''
+
+[[mutant]]
+name = "DevTools hears of no DOMContentLoaded event"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                    self.page_agent.dom_content_loaded();'''
+to = ''''''
+
+[[mutant]]
+name = "the DOM agent hears of no DOMContentLoaded"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                    self.dom_agent.dom_content_loaded();'''
+to = ''''''
+
+[[mutant]]
+name = "DevTools hears of no load event"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                    self.page_agent.load_fired();'''
+to = ''''''
+
+[[mutant]]
+name = "DevTools hears the frame never stops loading"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                self.page_agent.stopped_loading(&id);'''
+to = ''''''
+
+[[mutant]]
+name = "a child frame's document is named as the main frame's"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                u64::from(document.get()),
+                crate::loader::devtools_loader_id(loader, document),'''
+to = '''                loader.and_then(|loader| loader.navigation).unwrap_or(0),
+                crate::loader::devtools_loader_id(loader, document),'''
+
+[[mutant]]
+name = "DidFinishLoad goes with every frame"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        if load_ended && !std::mem::replace(&mut next.load_told, true) {'''
+to = '''        if load_ended {'''
+
+[[mutant]]
+name = "DidFinishLoad doesn't wait for the load"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        if load_ended && !std::mem::replace(&mut next.load_told, true) {'''
+to = '''        if !std::mem::replace(&mut next.load_told, true) {'''
+
+[[mutant]]
+name = "the network is watched before DOMContentLoaded"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                if content_loaded {
+                    next.idleness.start();
+                }'''
+to = '''                let _ = content_loaded;
+                next.idleness.start();'''
+
+[[mutant]]
+name = "a body that stopped short isn't told"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            loader.body_ended(aborted);'''
+to = '''            loader.body_ended(aborted && false);'''
+
+[[mutant]]
+name = "the frame's layout asks for no frame"
+file = "crates/renderer/src/frame_view.rs"
+from = '''    fn schedule_frame(&mut self) {
+        self.widget.schedule_frame();
+    }'''
+to = '''    fn schedule_frame(&mut self) {}'''

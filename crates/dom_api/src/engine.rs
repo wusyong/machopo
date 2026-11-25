@@ -120,6 +120,15 @@ pub trait LoadSink {
     fn frame_gone(&self, frame: crate::FrameId);
 }
 
+/// What of a document's loading its frame client hears as it comes
+/// (`FrameClient::document_lifecycle`): `DOMContentLoaded` fired, or its
+/// window's `load`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocumentLifecycle {
+    DomContentLoaded,
+    Load,
+}
+
 /// The host's side of the engine's frames, told as they are made and as
 /// they go, and of their navigations as script asks, before the call
 /// returns (Blink's `LocalFrameClient`, whose `CreateFrame`, `Detached`
@@ -156,6 +165,23 @@ pub trait FrameClient {
     /// Child frame `frame` gone, and the frames in it with it: its iframe
     /// removed, or the document it was in replaced.
     fn frame_detached(&mut self, frame: crate::FrameToken);
+
+    /// `frame`'s document (`document`, its loader `loader`: DevTools'
+    /// names for it), the top-level frame's if `top`, reached `event` of
+    /// HTML's "the end", as it does (Blink's `probe::DomContentLoadedEventFired`,
+    /// `probe::LoadEventFired` and `probe::LifecycleEvent`, which
+    /// `InspectorPageAgent` tells at once). Its title was told before.
+    /// Nothing by default.
+    fn document_lifecycle(
+        &mut self,
+        frame: crate::FrameToken,
+        top: bool,
+        document: dom::NodeId,
+        loader: Option<dom::DocumentLoader>,
+        event: DocumentLifecycle,
+    ) {
+        let _ = (frame, top, document, loader, event);
+    }
 
     /// The top-level frame's document's title is `title` now, another than
     /// the one told last (Blink's `LocalFrameClient::DispatchDidReceiveTitle`,
@@ -887,6 +913,14 @@ pub trait ScriptEngine: ParserHost {
     /// the host asks after a task and an animation frame's callbacks; the
     /// parser, before each script. Nothing by default.
     fn tell_title(&mut self) {}
+
+    /// `frame`'s document reached `event` of HTML's "the end": its title,
+    /// then `event`, told to the frame client
+    /// (`FrameClient::document_lifecycle`), for a frame the browser named.
+    /// Nothing by default.
+    fn tell_lifecycle(&mut self, frame: crate::FrameId, event: DocumentLifecycle) {
+        let _ = (frame, event);
+    }
 
     /// Whether a child frame was made or went since the last ask: what the
     /// host keeps of its frames follows them then (`child_frames`,

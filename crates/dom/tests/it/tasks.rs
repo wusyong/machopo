@@ -105,7 +105,7 @@ fn an_interval_set_again_comes_in_the_next_turn() {
 #[test]
 fn the_windows_load_is_an_element_task() {
     let mut dom = run::dom();
-    let id = dom.mutate(|cx| {
+    dom.mutate(|cx| {
         let (window, document) = window(cx);
         let element = cx.create_element(document, QualName::html("p"));
         cx.queue_element_task(element, names::event::ERROR);
@@ -117,11 +117,7 @@ fn the_windows_load_is_an_element_task() {
         assert_eq!(*error, ElementTaskKind::Fire(names::event::ERROR));
         assert_eq!(*load, ElementTaskKind::WindowLoad);
         assert!(Gc::ptr_eq(target.expect("its document"), document));
-        cx.note_document_loaded(document);
-        cx.node_id(document)
     });
-    assert_eq!(dom.take_loaded_documents(), [id]);
-    assert!(dom.take_loaded_documents().is_empty());
 }
 
 /// A window's idle callback with a timeout is one of its tasks once the

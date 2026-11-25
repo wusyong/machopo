@@ -16,8 +16,14 @@
 | 2a-3. parser 擋住的和 deferred 的 script 搬進 `DocumentLoader`（DOM 自己排的 script 的那條路），`advance_document` 的迴圈搬過去；分頁的標題經過 `FrameClient` 的 hook（第 19 條） | 做完，待審查 | 2026-11-25 |
 | 2a-4. 「接著 parse」是 DOM 的一種 task，讓出時問 `InputMonitor`；拿掉 `InternalTask::ParseOn` | 移到 2c（第 20 條） | 2026-11-25 |
 | 2a 的停損點：新增的 hook 和問 engine 的方法、Speedometer 的 Editor 和 NewsSite、parse 迴圈的過期讀法（「信心和未知數」）。第 1 項：2a-2 時跨界線的新方法到了 5 個（`ScriptEngine` 的 `document_loader`、`set_document_loader`、`send_sheet_fetches`，`LoadSink::start_sheet_fetch`，`FrameLayout::media_environment`），使用者 2026-11-25 看過：多出來的是第 18 條把原本 2b 的樣式表併進來，可以接受，不用算得更細；2a 做完時 7 個（多了第 19 條的 `tell_title`、`title_changed`）。第 2 項：Speedometer 幾何平均 +0.2%，都在區間裡（README 的「第 2 段的停損點」）。第 3 項：不在了 | 三項都順 | 2026-11-25 |
-| 2b. 樣式表剩下的：回應的解碼和 parse、`<link>` 的 `load` 和 `error`、DevTools 的原文（第 18 條之後剩下的；決定的事項在這段開始時列） | 沒開始 | |
-| 2c、3、4：方向；2c 開工前先做依賴盤點（README 的「2a 做完之後的評估」） | — | |
+| 2b. 樣式表剩下的：回應的解碼和 parse、`<link>` 的 `load` 和 `error`、DevTools 的原文 | 併進 2c（第 21 條） | 2026-11-25 |
+| 2c 的依賴盤點：「the end」、iframe 的 `load`、「跑完 script 之後 frame 還在不在」、樣式表的回應、「接著 parse」碰到哪些 renderer 的狀態（`details.md` 的「2c 的依賴盤點」） | 做完；決定的事項第 22 到 28 條 | 2026-11-26 |
+| 2c-1. 基礎：「要畫面」的旗標和計數搬到 `Frame` 的 widget（`FrameLayout::schedule_frame`，第 23 條）；擋不擋 render 要用時從 DOM 算，拿掉 `update_child_blocking`、`parsing`、兩份 `body_parsed`（第 26 條）；失敗的子資源全部記在 DOM，拿掉 `FrameDocument::failed`（第 27 條）。行為不變 | 做完，待審查 | 2026-11-26 |
+| 2c-2. 「the end」搬到 engine 那一側：`Interactive`、deferred script 之後的 DOMContentLoaded、捲到 fragment、`load`、中止的文件；DevTools 的 lifecycle 經過 hook（第 22 條），`DidFinishLoad` 和 idleness 由 renderer 問；`parse` 的回傳只剩排程要的 | 做完，待審查 | 2026-11-26 |
+| 2c-3. 「接著 parse」是 DOM 的 task，拿掉 `InternalTask::ParseOn`；`yields`、`parse_due` 搬到 `DocumentLoader`；`dom_api` 的 `run_dom_task` 先看是不是 parse 的（第 14、20、24、28 條）。原本排在回應之後，2026-11-26 對調：回應的函式裡接著 parse 時可能讓出，讓出要先是 DOM 的 task，回應的函式才不用把「讓出了」交回 renderer | 做完，待審查 | 2026-11-26 |
+| 2c-4. 樣式表和 script 的回應交給 `dom_api` 的函式：解碼、parse 成 CSS、設 sheet、`load` 和 `error`、接著 parse；renderer 只交 bytes（第 21、24、27 條） | 做完，待審查 | 2026-11-26 |
+| 2c 的停損點：決定之外又多 3 個以上的 hook 或問 engine 的方法；要共用的 `Rc<RefCell>`，或新的「呼叫之後記得做」；DevTools 的 lifecycle 順序、WPT 或 `shell` 退步而修不乾淨；Speedometer 在使用者要求時量（2c 做完時提醒）。評估在 README 的「2c 做完時」：多兩個、沒有共用的狀態和新的呼叫之後的步驟、沒有退步 | 三項都順；Speedometer 未量 | 2026-11-26 |
+| 3、4：方向，2c 做完照停損點再看；iframe 晚一點的 `load` 在第 3 段（第 25 條） | — | |
 
 ## 驗收
 
@@ -25,6 +31,52 @@
 | --- | --- |
 
 ## 做過的檢查
+
+### 2c 做完時（2026-11-26，Linux：Fedora 45，2c-4 之上，未 commit）
+
+- `cargo fmt`（2c 改過的 5 個檔案）、`cargo clippy --workspace --all-targets -- -D warnings`（修了兩個：`frame_view` 的測試多一個 `mut`，`parse_document` 的參數改用 `dom_api::document_loader::ParseEntry`）：通過。
+- `cargo test --workspace`：4893 個通過，0 個失敗。
+- sanity 的 deps、spans、boundary、unsafe、tests、numerics、docs：通過。
+
+### 2c-4：樣式表和 script 的回應（2026-11-26，Linux：Fedora 45，debug build，2c-3 之上，未 commit）
+
+**做了什麼**：新的 `dom_api::subresource`：回應的型別（`SubresourceResponse`、`SubresourceResult`，和傳輸無關：status、MIME 的 essence 和 charset、URL、是不是 opaque、body；失敗的帶它的名字）和每種的解碼（`script_loaded`、`wasm_loaded`、`module_loaded`、`stylesheet_text`、`is_blocked_as_script`、`failed_url`），原本是 renderer 的；renderer 留 `loader::subresource`（`LoadResult` 轉過去），worker 的 module 和 DevTools 重抓原文也經過它，解碼只有一份。`document_loader::script_fetched`（module 的交給 module map、之後每個 frame 的 deferred script；classic 和 wasm 的解碼、交給 pending script，parser 的接著 `parse_unless_due`、deferred script；失敗的記在 DOM）、`sheet_fetched`（拿掉帳、解碼、parse 成 CSS、設 sheet、`load` 或 `error`、擋著的 parser 接著 parse 和 deferred script、`finish_load`、要畫面；DevTools 要時交回原文）。renderer 照請求的編號找出 frame 和文件的編碼交下去（回應屬於哪個 frame 的路由，`FrameDocument::encoding` 也給 DevTools 重抓用），交回的原文給 `CssAgent`；拿掉 `sheet_loaded`、`LoadedSheet`、`script_loaded`、`wasm_loaded`、`stylesheet_text`。
+
+**測試**：`shell` 新增 `documents::a_sheet_that_failed_from_its_own_origin_is_readable`（同源的網路錯誤：body 截斷的 deflate）。`dom`、`dom_api`、`dom_js`、`dom_wasm`、`renderer`、`shell`、`browser` 的測試通過；WPT（3091 個，加上 `encoding/`）0 個退步；`test.py scenarios`（98 份）和 `test.py reftest tests/reftests` 通過。
+
+**mutation test**（`mutants-2c4.toml`，23 個，timeout 150 秒）：21 個抓到；「同源的樣式表載入失敗時規則讀不到」補了上面的測試之後抓到；「樣式表的回應之後不要畫面」照舊沒抓到，記進 `docs/test-gaps.md` 和 2c-2 的兩個同一列（測試裡總有別的要了畫面）。
+
+### 2c-3：「接著 parse」是 DOM 的 task（2026-11-26，Linux：Fedora 45，debug build，2c-2 之上，未 commit）
+
+**做了什麼**：DOM 多一種 element task `ElementTaskKind::ParseOn`（以文件為目標，`Cx::queue_parse_on` 回傳它的編號；`push_task`、`push_element_task` 改成回傳編號）。parser 讓出時 `dom_api::document_loader::parse` 自己排它，`DocumentLoader` 記讓出的次數和排著的 task（`yields`、`parse_task`，原本是 renderer 的 `FrameDocument::yields`、`parse_due`），每一輪開始時清掉排著的那一個（它來時發現已經 parse 過）；`ParseRun::budget` 改成照讓出的次數算（renderer 的 `parse_run` 給 `ParserBudget::of_run`）。`dom_api` 的 `document_loader::run_dom_task` 照編號認出 parser 的 task，拿出來、parse（span `HTMLDocumentParser::PumpTokenizer` 跟著搬過來，Speedometer 的工具讀它），別的交給 `engine.run_dom_task`；`parse_unless_due` 是 body 和 parser 的 script 來時用的（排著 task 時不 parse）；`dom_api` 的 `run_task` 遇到 `ParseOn`（舊的）什麼都不做。renderer 拿掉 `InternalTask::ParseOn`、`parse_on`，`advance_document` 和 `read_body`、script 的回應經過 `parse_document`，`run_dom_task` 經過 `dom_api` 的。
+
+和原本不同的：「接著 parse」從 renderer 的 internal queue 移到 DOM 的 element task 的 queue（第 14 條說過的先後可能變）；WPT、`shell`、`browser` 的測試沒看到差別。
+
+**測試**：`dom`、`dom_api`、`dom_js`、`dom_wasm`、`renderer`、`shell`、`browser` 的測試通過；WPT（3091 個）0 個退步（非預期的通過是之前的 5 個）；`test.py scenarios`（98 份）通過；span 換了地方，照規則跑了量測工具的測試：`speedometer_test.py`、`blink_perf_test.py` 通過。
+
+**mutation test**（`mutants-2c3.toml`，8 個，timeout 150 秒）：4 個抓到（沒排 task、parser 讓出的次數不算、task 沒拿出來、parser 的 task 交給 engine）。沒抓到的：排著 task 時資料來了照樣 parse、一輪開始時不清排著的 task（`docs/test-gaps.md` 第 156 列本來就有，位置改成 `parse_unless_due`，同一類寫在一起）；預算不隨讓出的次數變大（記進「只靠審查」：只差時間）；`ParseOn` 認成 `Fire`（記進「等價、不用處理的 mutation」：只有 parser 提早 parse 過的舊 task 走得到，觸發名字是空字串的事件）。
+
+### 2c-2（2026-11-26，Linux：Fedora 45，debug build，2c-1 之上，未 commit）
+
+**做了什麼**：HTML 的「the end」在 engine 那一側：`dom_api::document_loader` 的 `parsed`（先送出最後那段輸入帶出的樣式表的請求，再 `Interactive`、deferred script；body 中途斷掉的走 `aborted`：放掉 deferred 的 pending script、結束載入、`Interactive`、`Aborted`，子 frame 的話檢查父的載入，要一張畫面）、`run_deferred_scripts`（自己看還在 deferring 沒）、`content_loaded`（`DOMContentLoaded`，經過 `FrameLayout` 捲到 fragment、要畫面，經過 `ScriptEngine::tell_lifecycle` 告訴 frame client，`finish_load`）、`finish_load`（送樣式表的請求、`check_completed`，只等圖片時送圖片的再查一次）；`parse` 在 parser 結束時接著跑 `parsed`。window 的 `load` 的 task（`dom_api` 的 `text_control.rs`）跑完當場經過 `ScriptHost::tell_lifecycle` 告訴、要畫面；DOM 的 `note_document_loaded`、`take_loaded_documents` 拿掉。新的 hook `FrameClient::document_lifecycle`（第 22 條：frame 的 token、是不是最上層、文件和它的 loader，renderer 的實作照 `main_frame_info`、`child_info` 的規則算出 DevTools 的名字，送 `domContentEventFired`、`loadEventFired`、`lifecycleEvent`、`frameStoppedLoading`），兩個轉手（`ScriptEngine::tell_lifecycle`、`ScriptHost::tell_lifecycle`，先送標題）；`dom_js` 的 engine 和 task 的 `Host` 經過 `frames::tell_lifecycle`，`dom_wasm` 只有最上層。renderer 拿掉 `document_parsed`、`document_aborted`、`finish_loaded_documents`、`document_loaded`、DOMContentLoaded 那一段、`is_top`、`place_of`、`load_progress`、`FrameDocument::aborted`（body 結束時交給 loader：`DocumentLoader::body_ended(aborted)`）、`load_finished`（換成 `load_told`：畫面那一步看 DOM 的 `LoadProgress::Loaded`，送一次 `DidFinishLoad`）；idleness 看 DOM 的 `Cx::content_loaded`（新的）才開始；`finish_load` 叫 `dom_api` 的。
+
+和原本不同的：DevTools 的 lifecycle 不再先 `PageAgent::update(frames)`（盤點：frame 的增減現有的 hook 已經當場告訴，lifecycle 只要 id、文件、loader）；DOMContentLoaded 和 `load` 的 listener 要的導覽、iframe 的載入在呼叫之後才處理（`handle_frame_requests`），testharness 的結果在 DevTools 的事件之後送；wasm 文件的 `load` 的 task 裡不先送標題（wasm 的 `Host` 拿不到 engine 的「上次送的標題」），task 之後照舊送。
+
+**找到的**：第一次跑 `shell` 時 `network::stylesheets_block_the_parsers_scripts` 失敗：最後一個 `<link>`（parse 的最後一輪才做出來）的請求沒在 deferred script 之前送出（原本 renderer 在 parse 完先 `start_loads`），`parsed` 補上。mutation test 第一次的 baseline 連結失敗（`undefined hidden symbol`，incremental 的產物壞了：`cargo clean -p dom_js -p browser` 之後好了），第二次 baseline 在 150 秒的時限內編不完、沒說原因就停了（重編之後第三次跑完）。
+
+**測試**：`shell` 新增 `devtools_lifecycle::a_child_frames_lifecycle_so_far_is_told_as_it_is_turned_on`、`documents::a_sheet_asked_for_at_dom_content_loaded_delays_the_load`，`devtools_lifecycle::a_navigation_is_told_through_its_lifecycle` 加上 `domContentEventFired`、`loadEventFired` 只有主 frame 的一次。`dom`、`dom_api`、`dom_js`、`dom_wasm`、`renderer`、`shell`、`browser` 的測試通過；WPT（3091 個）0 個退步，非預期的通過裡的 `search` 是 2a-3 查過的 `location-setter.html`；`test.py scenarios`（98 份）通過。
+
+**mutation test**（`mutants-2c2.toml`，29 個，timeout 150 秒）：19 個抓到、3 個到時限被砍（沒有 DOMContentLoaded、DOMContentLoaded 之後不 `finish_load`、`load` 之後不要畫面），7 個沒抓到；補了上面的測試之後重跑，抓到「`finish_load` 不送樣式表的請求」「每個 frame 都當成最上層」「子 frame 的文件用主 frame 的名字」。照舊沒抓到的：中止時不設「載入結束」（`docs/test-gaps.md` 的「只靠審查」本來就有，位置改成 `aborted`）；DOMContentLoaded 之後和中止時要畫面（記進同一節：測試裡總有別的要了畫面）；只等圖片時送圖片的請求（記進「等價、不用處理的 mutation」：只差請求晚一個 task 出去）。
+
+### 2c-1（2026-11-26，Linux：Fedora 45，debug build，`ab6695a9` 之上，未 commit）
+
+**做了什麼**：「要畫面」的 `needs_begin_main_frame`、`main_frame_requests` 從 `RenderThread` 搬到 `FrameWidget`（`schedule_frame`；widget 在第一份文件的 frame 之前是 render thread 的，之後是 `Frame` 的，`RenderThread::widget` 照舊找它），`FrameLayout::schedule_frame`（`Frame` 的實作設 widget 的；2c-2 才有人叫）。DOM 新的 `Cx::render_blocked`（`LoadProgress::Loading` 而且沒有 body，或 `Cx::render_blocking_sheet_loading`）：子 frame 的 view 在 lifecycle 裡問，最上層由 `RenderThread::render_blocked` 讀；拿掉 `update_child_blocking`（五個呼叫點）、`FrameView::render_blocked` 和 `set_render_blocked`、`FrameDocument` 的 `parsing`、`body_parsed` 和 `note_body_parsed`（body 剛做出來時的畫面由樹變了之後的 `request_next_frame_if_dom_changed` 要）。DOM 的 `failed_sheets` 改成通用的 `Cx::note_load_failed`、`take_failed_loads`（`window.rs`），renderer 的 `note_failed` 記到 DOM，`FrameDocument::failed` 拿掉，`DidFinishLoad` 只從 DOM 拿。
+
+和原本不同的一點：`body_parsed` 原本一旦是真就一直是真，`render_blocked` 看的是現在有沒有 body（script 在載入中拿掉 body，文件又算 render-blocked 到 parse 完）；Blink 的 `ShouldScheduleLayout` 也看現在的 `body()`。
+
+**測試**：`frame_view` 的 `a_child_frame_whose_rendering_is_blocked_waits` 改成給子 frame 的文件記一份擋 render 的樣式表的請求（`Cx::sheet_sent`、`take_sent_sheet`），不再直接設旗標；`shell` 的 `network::a_document_is_drawn_before_its_body_has_all_come` 加上第一張畫面只有暫停之前的那一半（下面的 mutant）。`dom`、`dom_api`、`renderer`、`shell`、`browser` 的測試通過；WPT（2a-3 的那些加上 `dom/nodes/`，3015 個）0 個退步，4 個非預期的通過是之前記過的；`test.py scenarios`（98 份）通過。
+
+**mutation test**（`mutants-2c1.toml`，12 個，timeout 150 秒）：11 個抓到；「有 body 了還在 parse 的文件也算 render-blocked」沒抓到（原本的測試只看畫了兩張以上、最後一張對），加強上面那個測試之後重跑抓到。`FrameLayout::schedule_frame` 還沒有人叫，它的 mutant 在 2c-2。
 
 ### 2a 做完時（2026-11-25，Linux：Fedora 45，2a-3 之上，未 commit）
 

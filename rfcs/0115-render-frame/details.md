@@ -112,6 +112,24 @@
 - **engine 那一側已經有的**：`dom_api` 的 `lifecycle.rs`（`check_completed`、`document_ready`、`end_load`）、`frame.rs` 的 `check_parent_completed`、`script.rs`（`prepare_script`、`run_script_task`、`send_script_fetches`），`dom` 的 load request 的計數和 `load_progress`，`LoadSink` 的 `start_script_fetch`（DOM 自己排的 script 已經經過 hook 發請求）。兩個 engine 的實作大多是「找到 frame 的 context、進 scope」的薄包裝；`dom_wasm` 只有最上層一個 frame。
 - `encoding.rs` 只依賴 `encoding_rs`；`document_body.rs` 是 data pipe、解碼器、`ParserInput`。
 
+## 2c 的依賴盤點
+
+2026-11-25，`ab6695a9` 上，唯讀。2c 要搬的五件事各碰到 renderer 的什麼、搬過去要 renderer 給什麼。分類：(a) engine 往外叫的 hook；(b) renderer 在呼叫之外問 engine；(c) hook 要 renderer 給的服務（排 task、要 main frame、碰畫面）；(d) 看起來要共用可變的狀態。
+
+**已經有的**：engine 那一側碰得到畫面：`FrameLayout` 是 renderer 的 `Frame`，由 engine 拿著；`FrameLayout::scroll_to_fragment` 已經有，同文件的導覽經過 `cx.lend_layout` 用它（`dom_api` 的 `history.rs`），`check_parent_completed` 也這樣借。排 task 和計時有 `TaskWaker`（收得了時間），輸入在等有 `InputMonitor`。所以 (c) 大多不是新的。
+
+| 要搬的 | renderer 那一側現在碰的 | 搬過去要的 |
+| --- | --- | --- |
+| HTML 的「the end」：`document_parsed`、`document_aborted`、`run_deferred_scripts` 的尾段、`finish_load`、`document_loaded` | `place_of`、`is_top`、`load_progress`；`scroll_to_fragment`（`FrameView` 的 `scroll_into_view_after_layout`、`request_main_frame`）；`page_agent`、`dom_agent` 的 DOMContentLoaded 和 `load`；`idleness.start()`；`tell_lifecycle`；`load_finished`（`DidFinishLoad` 跟著下一張 commit 的畫面送）；`start_loads`、`check_completed`、`start_image_fetches` | DevTools 的 DOMContentLoaded、`loadEventFired`、`frameStoppedLoading`：(a)，`RendererFrameClient` 已經拿著 `Rc<PageAgent>`、`Rc<DomAgent>`。`tell_lifecycle`：**(d)**，要 `document_frame_infos`（`render_frames` 的 MIME、原文、資源、導覽，加上 engine 的 frame），hook 被叫時 engine 借出去了。`load_finished` 和失敗的網址：(b)，畫面那一步問 engine。要 main frame：(c)，可以做成 (b)（呼叫之後問「要不要」，但要在輸入的 ack 比對 `main_frame_requests` 之前）。fragment：已經有。idleness：(b)（每個 task 之後看 DOM 的 load progress） |
+| iframe 晚一點的 `load`（`owner_load_later`、`fire_due_owner_loads`、`RenderFrame::owner_load_at`） | `RenderFrames` 的 `owner_load_at`；scheduler 的 `OwnerLoads`；唯一的觸發點是 `child_navigation_not_sent`（`book_frame_requests` 底下，子 frame 的 fragment 導覽） | DOM 的延後的 element task（`TaskWaker` 收時間）就夠；但觸發點是導覽的帳（第 3 段或待決定的第 1 條），不先搬它就要一個過渡的往下呼叫 |
+| 「跑完 script 之後 frame 還在不在」 | `advance_document`、`document_parsed`、`document_aborted`、`run_deferred_scripts`、`document_loaded`、`sheet_loaded`、`resource` 的 script 那一支、`retry_scripts_blocked_by_sheets`、`fire_due_owner_loads` 裡的 `doc(frame)` 重讀，約 30 處 | 跟著上面搬到 engine 那一側之後不用了；留下的：commit 的那些（第 3 段）、同文件的 traversal 的捲動（待決定的第 1 條）、`resource` 照文件找 frame（回應的路由）、畫面那一側的（改成問 engine） |
+| 「接著 parse」 | `parsing`、`yields`、`parse_due`、`parser_budget`、`scheduler.has_task(INPUT)`、`InternalTask::ParseOn`；`note_body_parsed`、`parser_stopped`；入口：`read_body`、`resource`、`sheet_loaded`、`retry_scripts_blocked_by_sheets` | 每個會接著 parse 的往下的方法（body 的 bytes、script 和樣式表的回應、`run_dom_task`）都要照值借 engine（第 17 條的形狀），或者一律排 DOM 的 task（時機會變）；`InputMonitor` 和 `has_task(INPUT)` 是不是同一個訊號沒有確認；`body_parsed` 現在兩邊各一份 |
+| 樣式表的回應（`sheet_loaded`） | `document_url`、文件的編碼、quirks、`failed`、`css_agent.keep_link_text`（有 session 時）、`set_link_sheet`、`load`／`error`、接著 parse、`finish_load` | 原文：(a)（拿著 `Rc<CssAgent>`）或交回；失敗的網址：DOM 已經有 `failed_sheets`；DevTools 的重抓（`css_refetched`）留在 renderer |
+
+**順序的限制**：`DidFinishLoad` 跟著下一張 commit 的畫面的 swap promise（render-blocked 時等；空的 frame 不帶；`reftest-wait` 在那一張讀）；DevTools 是標題、`page_agent.update`、`lifecycleEvent`，`domContentEventFired` 在 DOMContentLoaded 的 lifecycle 之前，`loadEventFired` 在 `load` 的 lifecycle 和 `frameStoppedLoading` 之前，testharness 的結果在 DevTools 之前；`finish_load` 先 `start_loads` 再 `check_completed`，子 frame 先於父；輸入的 ack 等它要的那一張畫面。
+
+**估計**：hook 2 到 3 個（DevTools 的生命週期、樣式表的原文，也許 `FrameLayout::set_render_blocked`），問 engine 的 3 到 4 個（`load` 結束了沒和失敗的網址、render-blocked、要不要 main frame），新的服務 0 個，另外 3 到 4 個往下的方法改成照值收 engine；合計 6 到 8 個，和 2a 同一個量級。最可能切不乾淨的：`tell_lifecycle`（要嘛呼叫之後送排著的事件，要嘛 `PageAgent` 自己記 frame 的資料）、iframe 晚一點的 `load` 的觸發點、失敗的網址分在兩邊（圖片和 script 的在 renderer，樣式表的在 DOM）。
+
 ## 對照 Chromium（原始碼）
 
 2026-11-25 讀 chromium.googlesource.com 的 `main`（唯讀的 agent 讀、我讀過結果）：

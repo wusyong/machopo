@@ -1,0 +1,79 @@
+# Stage 2c-1's mutants: `python3 scripts/test.py mutate rfcs/0115-render-frame/mutants-2c1.toml`.
+# `automation_pipe::a_client_not_reading_doesnt_hold_machopo_up` is left out as in 2a-3 (progress's 2a-3).
+test = ["sh", "-c", "cargo test -q -p dom --test it && cargo test -q -p renderer && cargo test -q -p browser --test it navigation:: && cargo test -q -p shell --test it -- --skip webdriver::a_session_with_a_hung_page_ends_in_time --skip automation_pipe::a_client_not_reading_doesnt_hold_machopo_up"]
+timeout = 150
+
+[[mutant]]
+name = "a frame asked for isn't wanted"
+file = "crates/renderer/src/frame_widget.rs"
+from = '''        self.needs_begin_main_frame = true;'''
+to = '''        let _ = self.needs_begin_main_frame;'''
+
+[[mutant]]
+name = "a frame asked for isn't counted"
+file = "crates/renderer/src/frame_widget.rs"
+from = '''            self.main_frame_requests += 1;'''
+to = '''            self.main_frame_requests += 0;'''
+
+[[mutant]]
+name = "the rendering isn't wanted after an update"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        self.widget().needs_begin_main_frame = false;'''
+to = '''        let _ = self.widget().needs_begin_main_frame;'''
+
+[[mutant]]
+name = "a document parsing with no body is rendered"
+file = "crates/dom/src/window.rs"
+from = '''        (self.load_progress(document) == crate::LoadProgress::Loading
+            && self.body(document).is_none())
+            || self.render_blocking_sheet_loading(document)'''
+to = '''        self.render_blocking_sheet_loading(document)'''
+
+[[mutant]]
+name = "a document parsing with a body isn't rendered"
+file = "crates/dom/src/window.rs"
+from = '''            && self.body(document).is_none())'''
+to = '''            && true)'''
+
+[[mutant]]
+name = "a sheet blocks no rendering"
+file = "crates/dom/src/window.rs"
+from = '''            || self.render_blocking_sheet_loading(document)'''
+to = '''            || (self.render_blocking_sheet_loading(document) && false)'''
+
+[[mutant]]
+name = "an alternate sheet blocks rendering in an operation"
+file = "crates/dom/src/link_sheet.rs"
+from = '''            .any(|sent| sent.document == id && sent.blocks_render)'''
+to = '''            .any(|sent| sent.document == id)'''
+
+[[mutant]]
+name = "a child frame is rendered while blocked"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                .is_some_and(|document| cx.render_blocked(document))'''
+to = '''                .is_some_and(|document| cx.render_blocked(document) && false)'''
+
+[[mutant]]
+name = "the top-level document is never render-blocked"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                .read(|cx| cx.render_blocked(document.get(cx.gc)))'''
+to = '''                .read(|cx| cx.render_blocked(document.get(cx.gc)) && false)'''
+
+[[mutant]]
+name = "a failed load isn't noted"
+file = "crates/dom/src/window.rs"
+from = '''        failed.push(url);'''
+to = '''        let _ = url;'''
+
+[[mutant]]
+name = "the renderer's failures aren't noted"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                .mutate(|cx| cx.note_load_failed(document.get(cx.gc), url));'''
+to = '''                .mutate(|cx| drop((cx, url, document)));'''
+
+[[mutant]]
+name = "the failures aren't told with the load"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            let failed_subresources =
+                dom.read(|cx| cx.take_failed_loads(next.document.get(cx.gc)));'''
+to = '''            let failed_subresources: Vec<String> = Vec::new();'''
