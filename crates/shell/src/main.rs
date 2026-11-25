@@ -52,12 +52,12 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 const DEFAULT_LOG_FILTER: &str = "info,wgpu_core=warn,wgpu_hal=warn,naga=warn";
 
 const USAGE: &str = "\
-usage: machopo [--ui-layout LAYOUT] [--ui-theme THEME] [--test-fonts]
+usage: machopo [--ui-layout LAYOUT] [--ui-theme THEME] [--scale F] [--test-fonts]
            [--num-raster-threads N] [--user-data-dir DIR]
            [--single-process | --process-per-tab]
            [--remote-debugging-port PORT [--remote-allow-origins ORIGINS]]
            [URL|PATH]
-       machopo --automation-pipe [--window | --scale F] [--host-resolver-rules RULES]
+       machopo --automation-pipe [--window] [--scale F] [--host-resolver-rules RULES]
            [--additional-trust-anchors PEM] [--test-fonts]
            [--num-raster-threads N] [--user-data-dir DIR]
            [--single-process | --process-per-tab]
@@ -89,10 +89,12 @@ Options:
   --ui-theme THEME    In a window (not with --automation-pipe): light or dark,
                       the UI's colors (not the pages'). By default the
                       system's, changing as it does.
-  --scale F           With --automation-pipe (but not --window): the device
-                      scale factor (default 1), as Chromium's
-                      --force-device-scale-factor. The pipe's screenshots
-                      are the viewport times F, in physical pixels.
+  --scale F           The device scale factor, as Chromium's
+                      --force-device-scale-factor. With --automation-pipe
+                      (but not --window) it is 1 by default, and the
+                      pipe's screenshots are the viewport times F, in
+                      physical pixels. A window takes F in place of the
+                      screen's, F physical pixels a CSS pixel.
   --test-fonts        Use only the built-in test fonts: Ahem, and Lato for
                       every generic family, as the reftests do.
   --process-per-tab   Each tab's renderer is a process of its own (machopo
@@ -215,6 +217,8 @@ struct Args {
     ui_theme: Option<ColorMode>,
     test_fonts: bool,
     automation_pipe: Option<AutomationPipe>,
+    /// `--scale` for a real window: in place of the screen's.
+    window_scale: Option<f32>,
     /// `--num-raster-threads`; `None`: the default.
     num_raster_threads: Option<usize>,
     /// Not `--single-process`: each tab's renderer is a process of its
@@ -358,13 +362,6 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
     }
     // A process a tab unless told otherwise, as Chromium.
     let process_per_tab = !single_process;
-    if scale.is_some() && (!automation_pipe || pipe_window) {
-        return Err(
-            "--scale only applies with --automation-pipe; a window takes its scale from the \
-             screen"
-                .into(),
-        );
-    }
     if automation_pipe && ui_layout.is_some() {
         return Err(
             "--ui-layout only applies to a window: what drives the pipe starts horizontal, so \
@@ -403,8 +400,12 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
             .map(AllowedOrigins::parse)
             .unwrap_or_default(),
     });
+    // A real window's, if given; the pipe's window without the platform's
+    // has 1 by default.
+    let window_scale = scale.filter(|_| !automation_pipe || pipe_window);
     let scale = scale.unwrap_or(1.0);
     Ok(Command::Run(Box::new(Args {
+        window_scale,
         url: url.map_or_else(|| DEFAULT_URL.to_owned(), |arg| to_url(&arg)),
         ui_layout: ui_layout.unwrap_or_default(),
         ui_theme,
@@ -588,6 +589,7 @@ fn main() -> ExitCode {
                 pipe: Some(network),
                 remote_debugging: args.remote_debugging,
                 profile,
+                scale: args.window_scale,
             }),
             Ok(network) => automation_pipe::run(automation_pipe::Options {
                 scale: pipe.scale,
@@ -614,6 +616,7 @@ fn main() -> ExitCode {
             pipe: None,
             remote_debugging: args.remote_debugging,
             profile,
+            scale: args.window_scale,
         }),
     };
     let code = match result {
@@ -833,15 +836,16 @@ mod tests {
                 "{n}"
             );
         }
-        for args in [
-            &["--scale", "2"][..],
-            &["--automation-pipe", "--window", "--scale", "2"],
-        ] {
-            assert!(
-                err(args).contains("only applies with --automation-pipe"),
-                "{args:?}"
-            );
-        }
+        // A real window's takes the place of the screen's; the pipe's
+        // window without the platform's has its own.
+        assert_eq!(run(&["--scale", "2"]).window_scale, Some(2.0));
+        let window = run(&["--automation-pipe", "--window", "--scale=1"]);
+        assert_eq!(window.window_scale, Some(1.0));
+        assert_eq!(
+            run(&["--automation-pipe", "--scale", "2"]).window_scale,
+            None
+        );
+        assert_eq!(run(&[]).window_scale, None);
         assert!(err(&["--frobnicate"]).contains("unknown option"));
         // The modes machopo has no more.
         for gone in ["--headless", "--size", "--automation", "--out"] {

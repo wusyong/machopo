@@ -12,7 +12,10 @@
 <button id="inside" class="fixed" style="top: 150px">Scroll to the bar in the transformed box</button>
 <div id="bar" class="fixed" tabindex="0" style="top: 300px; background: orange">Fixed to the window</div>
 <div id="transformed">
-  <div class="fixed" style="top: 100px; background: plum"><span id="in-bar">Fixed to the blue box</span></div>
+  <!-- The bar itself is scrolled to, not its text, whose box the font's
+       ascent may take above the bar's top (1600): the system's fonts in a
+       real window do. -->
+  <div id="in-bar" class="fixed" style="top: 100px; background: plum">Fixed to the blue box</div>
 </div>
 <script>
   const on = (id, run) => document.getElementById(id).addEventListener("click", () => {

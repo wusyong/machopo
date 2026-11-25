@@ -1,0 +1,37 @@
+# The real window's scenarios at a fixed scale: `python3 scripts/test.py mutate rfcs/0109-shutdown-and-shell-tests/mutants-window-scale.toml`.
+test = ["python3", "scripts/test.py", "scenarios", "--window", "frame-input", "geometry", "fixed-into-view", "resize-observer", "position-fixed"]
+timeout = 900
+
+[[mutant]]
+name = "the window's scenarios take the display's scale"
+file = "crates/shell/tests/scenarios.rs"
+from = '''        .arg(format!("--scale={}", scenario.window.scale.unwrap_or(1.0)))'''
+to = ''''''
+
+[[mutant]]
+name = "the input given the window goes by the display's scale"
+file = "crates/shell/src/window.rs"
+from = '''        let scale = running.scale();
+        let device_id = DeviceId::dummy();'''
+to = '''        let scale = running.window.scale_factor();
+        let device_id = DeviceId::dummy();'''
+
+[[mutant]]
+name = "the first window is as big in the forced scale's px"
+file = "crates/shell/src/window.rs"
+from = '''            .with_inner_size(LogicalSize::new(1024.0, 768.0));
+        let pipe'''
+to = '''            .with_inner_size(LogicalSize::new(1024.0, 768.0).to_physical::<u32>(self.forced_scale.unwrap_or(1.0)));
+        let pipe'''
+
+[[mutant]]
+name = "a size the compositor overrode isn't asked for again"
+file = "crates/shell/src/window.rs"
+from = '''                && at.elapsed() < ASKED_SIZE_KEPT'''
+to = '''                && at.elapsed() < std::time::Duration::ZERO'''
+
+[[mutant]]
+name = "the bar's text is scrolled to"
+file = "tests/scenarios/pages/fixed-into-view.html"
+from = '''  <div id="in-bar" class="fixed" style="top: 100px; background: plum">Fixed to the blue box</div>'''
+to = '''  <div class="fixed" style="top: 100px; background: plum"><span id="in-bar">Fixed to the blue box</span></div>'''

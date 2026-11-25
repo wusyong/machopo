@@ -15,8 +15,11 @@
 //! through the pipe as machopodriver drives it, one at a time (the window
 //! stays on top), with the system's keyboard shortcuts only. Its
 //! screenshots, and machopo's log, go to `target/automation-results/<name>/`.
-//! The window's scale is the display's, so `window scale=` is ignored; a
-//! scenario with `window caret-blink=` is skipped, since the pipe has no
+//! The window's scale is the scenario's (`window scale=`, 1 by default),
+//! as without `--window`, not the display's (`machopo --scale`): on a
+//! display scaled by a fraction, the points and sizes a scenario gives
+//! would be rounded to physical pixels and come back off. A scenario with
+//! `window caret-blink=` is skipped, since the pipe has no
 //! way to make the window's caret blink.
 //!
 //! Only scenarios whose file name contains one of the filters run. One that
@@ -262,6 +265,7 @@ fn run_in_window(scenario: &scenario::Scenario, path: &Path, out: &Path) -> Resu
         .map_err(|e| failure(format!("{}: {e}", out.display())))?;
     let mut child = Process::new(env!("CARGO_BIN_EXE_machopo"))
         .args(["--automation-pipe", "--window"])
+        .arg(format!("--scale={}", scenario.window.scale.unwrap_or(1.0)))
         // Each tab's renderer in machopo's own process, when the run asks
         // (`test.py scenarios --window --single-process`); by default it
         // is a process of its own.

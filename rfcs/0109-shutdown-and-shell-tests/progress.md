@@ -60,7 +60,7 @@
 
 **WPT**（automation pipe 改了）：`test.py wpt html/webappapis/timers` 25 個測試，1 個非預期的通過（`negative-settimeout.any.worker.html`，期望值是初始 commit 的 `ERROR`），三次都一樣；`main` 2026-11-24 的 Nightly 上也是 `Test OK, expected ERROR`，不是這份造成的，期望值沒有改。那次 Nightly 的 `wpt (2)`、`wpt (3)`、`wpt (4)`、`wdspec` 都有非預期的結果（`wpt (3)` 的 67 個都是通過），不在這份處理。
 
-**真的視窗**（`test.py scenarios --window`，4d、4e、4f 改了視窗那一層）：74 個裡 6 個失敗。`intersection-observer`、`resize-observer`、`resize`、`scroll-anchoring` 是 `docs/limitations.md` 記著的 Linux 真視窗的大小問題；`fixed-into-view`（捲到 1500、要 1600）和 `frame-input`（點在 `49.75 20.5`、要 `50 20`）是新的，也是大小或縮放的那一類：`fixed-into-view` 是 2026-11-22 才加的、之前沒在 Linux 的真視窗上跑過；第 4 段在 `window.rs` 改的（訊號、Viz 的失敗、writer 的等待）不碰大小和座標。沒有在 `main` 上重跑確認。
+**真的視窗**（`test.py scenarios --window`，4d、4e、4f 改了視窗那一層）：74 個裡 6 個失敗。`intersection-observer`、`resize-observer`、`resize`、`scroll-anchoring` 是 `docs/limitations.md` 記著的 Linux 真視窗的大小問題；`fixed-into-view`（捲到 1500、要 1600）和 `frame-input`（點在 `49.75 20.5`、要 `50 20`）是新的，也是大小或縮放的那一類：`fixed-into-view` 是 2026-11-22 才加的、之前沒在 Linux 的真視窗上跑過；merge 之後（使用者問起）才在這份之前的 `ec069536` 上確認：兩邊各跑三次，兩個都每次失敗、數字一樣，所以不是這份造成的。這個確認應該在驗收之前做，不是只寫「推論是同一類」。之後查出六份的原因、修掉（另一個 branch `force-device-scale-factor`，`mutants-window-scale.toml`）：螢幕的縮放是 1.333，情境照整數的縮放寫，所以真視窗的情境改用情境自己的縮放（`machopo --scale` 用在視窗上，預設 1）；`geometry` 的 `scale=2` 讓第一個視窗比螢幕大而被放到最大，所以第一個視窗照螢幕的邏輯 px 要；Wayland 的 compositor 蓋掉一開始要的大小（`position-fixed`、`resize-observer` 時過時不過），所以被蓋掉時再要一次；`fixed-into-view` 量的是一行字的 box，系統的字型的 ascent 讓它高出容器 1 px、捲到 1599，改成量容器本身。之後 74 份兩輪都通過。
 
 **重量**：第 3 段的量法、同一份腳本，每一格三次（`details.md` 的「驗收時的重量」）。
 

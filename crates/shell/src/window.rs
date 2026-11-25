@@ -144,9 +144,17 @@ struct Running {
     /// (logical px), which it goes by.
     clicks: ClickCounter,
     pointer: PointF,
+    /// `--scale`: the device scale factor in place of the screen's.
+    forced_scale: Option<f64>,
 }
 
 impl Running {
+    /// The device scale factor: `--scale`'s, or the screen's.
+    fn scale(&self) -> f64 {
+        self.forced_scale
+            .unwrap_or_else(|| self.window.scale_factor())
+    }
+
     /// Brings the window's cursor, title and IME in line with the view.
     fn apply(&mut self) {
         let view = self.browser.view_mut();
@@ -174,9 +182,10 @@ impl Running {
                     if self.ime.is_none() {
                         self.window.set_ime_allowed(true);
                     }
+                    let scale = self.scale();
                     self.window.set_ime_cursor_area(
-                        LogicalPosition::new(area.x, area.y),
-                        LogicalSize::new(area.width, area.height),
+                        LogicalPosition::new(area.x, area.y).to_physical::<f64>(scale),
+                        LogicalSize::new(area.width, area.height).to_physical::<f64>(scale),
                     );
                 }
                 None => self.window.set_ime_allowed(false),
@@ -215,7 +224,19 @@ struct App {
     devtools: Option<DevToolsHttpHandler>,
     /// Answered once the window has the size asked for.
     resized: Option<Reply>,
+    /// `--scale`: the device scale factor in place of the screen's.
+    forced_scale: Option<f64>,
+    /// The size what drives the window last asked for, and when: kept
+    /// against a compositor's overriding it (`ASKED_SIZE_KEPT`).
+    asked_size: Option<(PhysicalSize<u32>, std::time::Instant)>,
 }
+
+/// How long after what drives the window asks for a size another size
+/// from the system is taken for its overriding it: a Wayland compositor
+/// configures a new window to the size it was made with, after a size asked
+/// for before that (a scenario's `window size=`), and the window asks
+/// again, once. The system's own resizes come later than this.
+const ASKED_SIZE_KEPT: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// winit's icon for `cursor` (they are CSS's keywords), `None` to hide
 /// the pointer (`ui::mojom::CursorType` to the platform's cursor, as
@@ -266,6 +287,10 @@ fn size_of(p: PhysicalSize<u32>) -> Size {
 
 impl App {
     fn start(&mut self, event_loop: &ActiveEventLoop) -> Result<Running, String> {
+        // In the screen's logical px, with `--scale` too: a window as big
+        // in the forced scale's px may not fit the screen (at 2 on a
+        // laptop's), and the compositor would maximize it, keeping it so
+        // whatever size it is asked for after.
         let mut attrs = Window::default_attributes()
             .with_title("machopo")
             .with_inner_size(LogicalSize::new(1024.0, 768.0));
@@ -295,7 +320,7 @@ impl App {
                 .map_err(|e| format!("create_window: {e}"))?,
         );
         let size = size_of(window.inner_size());
-        let scale = f32_from_f64(window.scale_factor());
+        let scale = f32_from_f64(self.forced_scale.unwrap_or_else(|| window.scale_factor()));
 
         // The surface is created here (it needs the window) and then moved
         // to the Viz thread, which creates the device and does all drawing.
@@ -389,6 +414,7 @@ impl App {
             ime: None,
             clicks: ClickCounter::new(double_click_interval()),
             pointer: PointF::new(0.0, 0.0),
+            forced_scale: self.forced_scale,
         };
         running.apply();
         Ok(running)
@@ -449,7 +475,7 @@ impl App {
         let Some(running) = &mut self.running else {
             return;
         };
-        let scale = running.window.scale_factor();
+        let scale = running.scale();
         let device_id = DeviceId::dummy();
         let pointer = |at: gfx::PointF| WindowEvent::CursorMoved {
             device_id,
@@ -520,17 +546,20 @@ impl App {
                 // platform's; it has the position at once meanwhile.
                 if let Some(origin) = origin {
                     let position = LogicalPosition::new(origin.x, origin.y);
-                    running.window.set_outer_position(position);
+                    running
+                        .window
+                        .set_outer_position(position.to_physical::<i32>(scale));
                     running.browser.view_mut().move_to(origin);
                 }
                 let size = LogicalSize::new(width, height);
                 let wanted: PhysicalSize<u32> = size.to_physical(scale);
                 let now = running.window.inner_size();
+                self.asked_size = Some((wanted, std::time::Instant::now()));
                 if now == wanted {
                     // Already that size: no `Resized` comes (Windows sends
                     // none for the size the window has).
                     done.done();
-                } else if let Some(applied) = running.window.request_inner_size(size) {
+                } else if let Some(applied) = running.window.request_inner_size(wanted) {
                     // Resized at once, and no `Resized` follows: a Wayland
                     // client picks its own size, with no round trip to the
                     // compositor. The window knows, but nothing else does
@@ -611,8 +640,17 @@ impl ApplicationHandler<ShellEvent> for App {
         {
             return;
         }
-        let scale = running.window.scale_factor();
-        if let WindowEvent::Resized(new_size) = event {
+        let scale = running.scale();
+        if let WindowEvent::Resized(mut new_size) = event {
+            // Overridden as soon as asked for: asked for again (and on
+            // Wayland, which answers at once, taken at once).
+            if let Some((asked, at)) = self.asked_size.take()
+                && new_size != asked
+                && at.elapsed() < ASKED_SIZE_KEPT
+                && let Some(applied) = running.window.request_inner_size(asked)
+            {
+                new_size = applied;
+            }
             running
                 .browser
                 .resize(size_of(new_size), f32_from_f64(scale));
@@ -629,11 +667,12 @@ impl ApplicationHandler<ShellEvent> for App {
             WindowEvent::CloseRequested => return self.exit(event_loop),
             // Above: they go to Viz too.
             WindowEvent::Resized(_) | WindowEvent::RedrawRequested => {}
+            // A `Resized` with the new physical size follows. A forced
+            // scale stays.
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                // A `Resized` with the new physical size follows.
                 view.resize(
                     size_of(running.window.inner_size()),
-                    f32_from_f64(scale_factor),
+                    f32_from_f64(running.forced_scale.unwrap_or(scale_factor)),
                 );
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -836,6 +875,12 @@ pub struct Options {
     pub pipe: Option<NetworkContextParams>,
     pub remote_debugging: Option<devtools_http_handler::Options>,
     pub profile: browser::Profile,
+    /// `--scale`: the device scale factor in place of the screen's (as
+    /// Chromium's `--force-device-scale-factor`), the window that many
+    /// physical px a CSS px. The real window's scenarios run with 1, as
+    /// the windowless ones: on a screen scaled by a fraction, their points
+    /// and sizes would be rounded to physical px and come back off.
+    pub scale: Option<f32>,
 }
 
 /// Opens a window at `options.url`, until it is closed; or, with
@@ -852,6 +897,7 @@ pub fn run(options: Options) -> Result<(), String> {
         pipe,
         remote_debugging,
         profile,
+        scale,
     } = options;
     let event_loop = EventLoop::<ShellEvent>::with_user_event()
         .build()
@@ -881,6 +927,8 @@ pub fn run(options: Options) -> Result<(), String> {
         session: None,
         devtools: None,
         resized: None,
+        forced_scale: scale.map(f64::from),
+        asked_size: None,
     };
     event_loop
         .run_app(&mut app)

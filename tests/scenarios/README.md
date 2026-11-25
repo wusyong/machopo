@@ -16,9 +16,12 @@ included), one at a time, driven through the pipe as machopodriver drives
 it; its screenshots and machopo's log go to
 `target/automation-results/<scenario>/`. The window stays on top and ignores
 the mouse and keyboard while it runs. It uses the system's keyboard
-shortcuts (only that platform's `platform` blocks run), the display's scale
-(`window scale=` is ignored) and the system's fonts, so its screenshots look
-like what a person sees. A scenario with `window caret-blink=` is skipped:
+shortcuts (only that platform's `platform` blocks run) and the system's
+fonts, so its screenshots look like what a person sees; its scale is the
+scenario's (`window scale=`, 1 by default) whatever the display's
+(`machopo --scale`), as without `--window`: on a display scaled by a
+fraction (Linux desktops at 125 % or 150 %), the points and sizes a scenario
+gives would be rounded to physical pixels and come back off. A scenario with `window caret-blink=` is skipped:
 the pipe has no way to make the window's caret blink. It needs a display
 and a GPU.
 
