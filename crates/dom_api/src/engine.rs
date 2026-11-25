@@ -1035,6 +1035,20 @@ pub trait WorkerEngine {
     /// DOM's order (`dom::Cx::next_task`). Whether one ran.
     fn run_due_tasks(&mut self) -> bool;
 
+    /// What tells its thread's scheduler of each DOM task as its DOM
+    /// numbers it (`dom::Dom::set_task_waker`): the thread runs each in its
+    /// turn (`run_dom_task`), as the main thread runs a window's.
+    fn set_task_waker(&mut self, waker: dom::TaskWaker);
+
+    /// Runs the DOM task numbered `number` alone, wherever it is in its
+    /// queue (a token of its thread's scheduler's), with its microtask
+    /// checkpoint: whether it ran (none if it has gone: cancelled, or run).
+    fn run_dom_task(&mut self, number: u64) -> bool;
+
+    /// Numbers the messages its ports got from other threads, each a token
+    /// to its thread's scheduler (`dom::Cx::number_port_messages`).
+    fn number_port_messages(&mut self);
+
     /// What stops its script from another thread (V8's
     /// `TerminateExecution`): `Worker.terminate()`'s.
     fn terminator(&mut self) -> Box<dyn Fn() + Send>;

@@ -186,6 +186,23 @@ fn a_busy_worker_is_terminated() {
     );
 }
 
+/// `close()` in a task: the tasks already queued and due don't run either
+/// (HTML's "close a worker" discards them), though they were due before
+/// the task that closed it ran.
+#[test]
+fn a_worker_closed_in_a_task_runs_none_queued() {
+    assert_eq!(
+        report(
+            "const got = []; \
+             const w = worker(`setTimeout(() => { postMessage('a'); close(); }, 0); \
+               setTimeout(() => postMessage('b'), 0);`); \
+             w.onmessage = e => got.push(e.data); \
+             setTimeout(() => report(got.join()), 300);"
+        ),
+        "a"
+    );
+}
+
 /// `close()`: what it posted in that task comes, nothing after (its timer
 /// doesn't run).
 #[test]
@@ -834,4 +851,25 @@ fn a_data_module_worker_imports_for_its_page() {
         ),
         "a refused"
     );
+}
+
+/// A worker's worker that closes itself: what it posted, before its
+/// `close()` or after in the same task, comes to the worker that made it
+/// all the same, as to a page (HTML: closing discards its own tasks, not
+/// its `Worker`'s).
+#[test]
+fn a_worker_s_closed_worker_s_messages_come() {
+    for inner in ["close(); postMessage(true);", "postMessage(true); close();"] {
+        let outer = format!(
+            "const w = new Worker('data:text/javascript,' + encodeURIComponent({inner:?})); \
+             w.onmessage = e => postMessage('inner said ' + e.data);"
+        );
+        assert_eq!(
+            report(&format!(
+                "const w = worker({outer:?}); w.onmessage = e => report(e.data);"
+            )),
+            "inner said true",
+            "{inner}"
+        );
+    }
 }

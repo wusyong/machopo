@@ -9,7 +9,6 @@
 //! staying where they are, in order.
 
 use std::collections::HashMap;
-use std::sync::mpsc;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -221,7 +220,7 @@ pub struct MainThreadScheduler {
     /// the main thread (Chromium gives each worker its own pipes to the
     /// browser, bound on its thread). A lock of its own: a worker's thread
     /// is told while the main thread waits on `state`.
-    worker_routes: Mutex<HashMap<u64, mpsc::Sender<crate::worker_thread::WorkerTask>>>,
+    worker_routes: Mutex<HashMap<u64, Arc<crate::worker_thread::WorkerScheduler>>>,
     /// The dedicated workers' numbers, from 1: the renderer's, as any
     /// thread may make one (a worker makes its own).
     worker_ids: WorkerIds,
@@ -439,17 +438,20 @@ impl MainThreadScheduler {
             if let Some(scheduler) = scheduler.upgrade()
                 && let Some(tasks) = scheduler.lock_routes().get(&id)
             {
-                let _ = tasks.send(crate::worker_thread::WorkerTask::PortMessages);
+                crate::worker_thread::post_task(
+                    tasks,
+                    crate::worker_thread::WorkerTask::PortMessages,
+                );
             }
         })
     }
 
-    /// What the browser sends worker `id` goes to `tasks`, its thread's,
-    /// from now on.
+    /// What the browser sends worker `id` goes to `tasks`, its thread's
+    /// scheduler, from now on.
     pub(crate) fn add_worker_route(
         &self,
         id: u64,
-        tasks: mpsc::Sender<crate::worker_thread::WorkerTask>,
+        tasks: Arc<crate::worker_thread::WorkerScheduler>,
     ) {
         self.lock_routes().insert(id, tasks);
     }
@@ -461,7 +463,7 @@ impl MainThreadScheduler {
 
     fn lock_routes(
         &self,
-    ) -> MutexGuard<'_, HashMap<u64, mpsc::Sender<crate::worker_thread::WorkerTask>>> {
+    ) -> MutexGuard<'_, HashMap<u64, Arc<crate::worker_thread::WorkerScheduler>>> {
         self.worker_routes
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -475,7 +477,7 @@ impl MainThreadScheduler {
     /// `task` to worker `id`'s thread; dropped if it is no more.
     pub(crate) fn send_worker_task(&self, id: u64, task: crate::worker_thread::WorkerTask) {
         if let Some(tasks) = self.lock_routes().get(&id) {
-            let _ = tasks.send(task);
+            crate::worker_thread::post_task(tasks, task);
         }
     }
 

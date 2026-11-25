@@ -223,7 +223,7 @@
 
 - loop 等待時為 renderer 自己的延後的 task 醒來（`next` 的 `TaskQueue::Internal`）：拿掉之後沒有測試失敗，caret 的情境、intersection observer 的測試裡畫面的 frame 和輸入照樣叫醒 loop；要一個只有 renderer 的 timer、沒有任何 frame 的頁面才看得出來。
 - intersection observer 的 `delay` 的 task 提早一點被叫到（renderer 的時鐘和 `Instant` 的換算差了一點）時再排一次：測試造不出那一點差，拿掉之後那個 delay 的 frame 就不來了。靠審查。
-- V8 延後的 platform task 到期時才跑（`platform_tasks::take_due` 的 `delayed`）、worker 為它醒來（`worker_thread` 的 `platform_due`）：`FinalizationRegistry` 的 cleanup 不是延後的，測試裡沒有看得出延後的 task 的地方（V8 的 memory reducer、idle 的 GC 之類）。之後找到頁面看得到的延後的 task 時補。
+- V8 延後的 platform task 到期時才跑（`platform_tasks::take_due` 的 `delayed`）、worker 的 platform task 照 main thread 的做法排（`worker_thread` 的 `platform_posted`：同時只排一個；延後的用 `post_at`），拿掉「取走時重設」也沒有測試失敗：`FinalizationRegistry` 的 cleanup 不是延後的，測試裡沒有看得出延後的 task 的地方（V8 的 memory reducer、idle 的 GC 之類）。之後找到頁面看得到的延後的 task 時補。
 
 **task 之後的觀察者（`render_thread.rs` 的 `after_task`）**
 

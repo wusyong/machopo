@@ -205,6 +205,11 @@ impl<'gc> Cx<'_, 'gc> {
         context.map_or(now, |context| now - context.time_origin.get())
     }
 
+    /// `context`'s time origin, in milliseconds since the DOM was made.
+    pub fn context_time_origin(&self, context: Gc<'gc, ExecutionContext>) -> f64 {
+        context.time_origin.get()
+    }
+
     /// `url` stands for `data` now, for as long as `context`'s realm lives
     /// (`BlobUrlRequest::Register`, for its global's document, or for a
     /// worker's global).

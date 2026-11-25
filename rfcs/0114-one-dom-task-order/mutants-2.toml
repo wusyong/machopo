@@ -1,0 +1,72 @@
+# Stage 2's mutants: `python3 scripts/test.py mutate rfcs/0114-one-dom-task-order/mutants-2.toml`.
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "workers::", "event_loop::", "messaging::"]
+timeout = 300
+
+[[mutant]]
+name = "a worker's DOM tasks get no token"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''            let task = WorkerTask::DomTask { number };
+            match at {'''
+to = '''            let task = WorkerTask::DomTask { number };
+            if number > 0 {
+                return;
+            }
+            match at {'''
+
+[[mutant]]
+name = "a worker's token runs nothing"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''            WorkerTask::DomTask { number } => {
+                engine.run_dom_task(number);
+            }'''
+to = '''            WorkerTask::DomTask { number } => {
+                let _ = number;
+            }'''
+
+[[mutant]]
+name = "a worker closed runs on"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''        if closing.get() {
+            tasks.close();
+            break;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a worker's Worker's messages are taken before its script has run"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''        let wanted = |queue| ran || queue != WorkerQueue::Owner;'''
+to = '''        let wanted = |queue| ran || queue != WorkerQueue::Owner || true;'''
+
+[[mutant]]
+name = "other loads' answers are dropped while importScripts() waits"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''        self.tasks.put_back(WorkerQueue::Browser, others);'''
+to = '''        drop(others);'''
+
+[[mutant]]
+name = "a worker's platform tasks are posted once only"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''                platform_posted.store(false, Ordering::Release);'''
+to = ''''''
+
+[[mutant]]
+name = "a worker's ports' messages from other threads aren't numbered"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''        engine.number_port_messages();
+    }'''
+to = '''    }'''
+
+[[mutant]]
+name = "a worker's closed worker is taken for terminated"
+file = "crates/dom_js/src/worker.rs"
+from = '''                .mutate(|cx| cx.close_worker_object(worker.get(cx.gc)));
+        }
+    }
+
+    fn run_module_graph('''
+to = '''                .mutate(|cx| cx.terminate_worker_object(worker.get(cx.gc)));
+        }
+    }
+
+    fn run_module_graph('''

@@ -447,6 +447,46 @@ impl WorkerEngine for V8WorkerEngine {
         ran
     }
 
+    fn set_task_waker(&mut self, waker: dom::TaskWaker) {
+        self.state().dom.set_task_waker(waker);
+    }
+
+    fn run_dom_task(&mut self, number: u64) -> bool {
+        let Some(global) = self.global.clone() else {
+            return false;
+        };
+        // The one task the token stands for, wherever it is in its queue.
+        let found = self.state().dom.read(|cx| {
+            cx.target_task(Some(number));
+            let context = cx.worker_global_context(global.get(cx.gc));
+            let task = cx.task_numbered(context, number)?;
+            // Due as the scheduler took it: by the DOM's clock too.
+            let now = cx.dom_now().max(task.at) - cx.context_time_origin(context);
+            Some((task, now))
+        });
+        let Some((task, now)) = found else {
+            self.state().dom.read(|cx| cx.target_task(None));
+            return false;
+        };
+        let ran = self
+            .in_realm(|scope| {
+                let context = scope.get_current_context();
+                crate::window::run_task(scope, context, task.queue, now)
+            })
+            .unwrap_or(false);
+        self.state().dom.read(|cx| cx.target_task(None));
+        ran
+    }
+
+    fn number_port_messages(&mut self) {
+        let Some(global) = self.global.clone() else {
+            return;
+        };
+        self.state().dom.read(|cx| {
+            cx.number_port_messages(cx.worker_global_context(global.get(cx.gc)));
+        });
+    }
+
     fn terminator(&mut self) -> Box<dyn Fn() + Send> {
         let handle = self.data.isolate().thread_safe_handle();
         Box::new(move || {
@@ -503,7 +543,7 @@ impl WorkerEngine for V8WorkerEngine {
         if let Some(worker) = self.worker_object(id) {
             self.state()
                 .dom
-                .mutate(|cx| cx.terminate_worker_object(worker.get(cx.gc)));
+                .mutate(|cx| cx.close_worker_object(worker.get(cx.gc)));
         }
     }
 

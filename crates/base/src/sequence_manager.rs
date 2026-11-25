@@ -490,7 +490,10 @@ mod tests {
         }
         assert_eq!(manager.try_next(|queue| queue == Queue::B), Some(2));
         assert_eq!(drain(&manager), [1, 3, 4]);
-        assert_eq!(manager.with_extra(|extra| extra.taken.clone()), [2, 1, 3, 4]);
+        assert_eq!(
+            manager.with_extra(|extra| extra.taken.clone()),
+            [2, 1, 3, 4]
+        );
         assert!(!manager.has_task(all));
     }
 
@@ -590,7 +593,10 @@ mod tests {
             manager.post(Queue::A, task).unwrap();
         }
         manager.post(Queue::B, 5).unwrap();
-        assert_eq!(manager.take_matching(Queue::A, |&task| task % 2 == 0), [2, 4]);
+        assert_eq!(
+            manager.take_matching(Queue::A, |&task| task % 2 == 0),
+            [2, 4]
+        );
         manager.put_back(Queue::B, vec![6, 7]);
         assert_eq!(drain(&manager), [6, 7, 1, 3, 5]);
     }

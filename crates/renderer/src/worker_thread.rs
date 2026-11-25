@@ -6,11 +6,14 @@
 //! (`dom_api::WorkerHost`), or a worker's, whose engine starts its own (a
 //! nested worker), each thread's `Workers`.
 //!
-//! What goes to a worker (a message, the order to stop) is a task of its
-//! thread's, in a channel; what it sends its `Worker` (a message, an error,
-//! that it closed, that its script couldn't be had) is a task of the thread
-//! that made it (`Owner`: the main thread's scheduler's, or that worker's
-//! channel), as Blink's worker posts a cross-thread task to its parent's.
+//! What goes to a worker (a message, the order to stop, the browser's
+//! answers, its DOM's tasks) is a task of its thread's scheduler's
+//! (`WorkerScheduler`, Blink's `WorkerThreadScheduler`: the same
+//! `base::sequence_manager` as the main thread's, a task at a time, the
+//! earliest posted of its queues); what it sends its `Worker` (a message,
+//! an error, that it closed, that its script couldn't be had) is a task of
+//! the thread that made it (`Owner`: the main thread's scheduler's, or that
+//! worker's), as Blink's worker posts a cross-thread task to its parent's.
 //! `terminate()` stops its script at once (V8's `TerminateExecution`, from
 //! the thread that made it) and its loop ends; the thread stops the
 //! workers it made and waits for their threads, then lets go of its engine,
@@ -25,23 +28,23 @@
 //! made it tells the browser of the worker as it starts it
 //! (`DedicatedWorkerCreated`), and the answer goes straight to the worker's
 //! thread (`MainThreadScheduler`'s routes), which waits for it before it
-//! runs anything, what its `Worker` posts meanwhile kept for after.
+//! runs anything, what its `Worker` posts meanwhile left queued.
 //! `importScripts()` asks the browser itself, as a load of the worker's
 //! (`FetchResource` of it), and waits for the answer (Blink's
-//! `WorkerClassicScriptLoader::LoadSynchronously`), its other tasks kept
-//! for after. A `fetch()` goes the same way, its answer a task of the
+//! `WorkerClassicScriptLoader::LoadSynchronously`), its other tasks left
+//! queued. A `fetch()` goes the same way, its answer a task of the
 //! worker's (Blink's `FetchManager` on the worker's thread); a blob URL the
 //! worker makes the browser hears of from its thread too, and lets go of
 //! as the worker goes (its `BlobURLStore`'s).
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, RecvError, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
-use std::time::Instant;
+
+use base::sequence_manager::{SequenceManager, Spec};
 
 use dom_api::{ClassicScript, EngineSettings, WorkerEngine, WorkerError, WorkerStart};
 use protocol::control_channel::BrowserSender;
@@ -75,14 +78,78 @@ pub(crate) enum WorkerTask {
     /// redirect. Boxed: much bigger than the others, and rare.
     Browser(Box<RendererMsg>),
     /// From another thread: its DOM's message ports may have messages
-    /// (`dom::PortWaker`), which its loop runs as it runs its tasks.
+    /// (`dom::PortWaker`), numbered as the task ends.
     PortMessages,
     /// From any thread: its engine has platform tasks ready (V8's
-    /// foreground tasks), which its loop runs next round.
+    /// foreground tasks).
     PlatformTasks,
+    /// Its DOM's task numbered so (`dom::TaskWaker`): its token.
+    DomTask { number: u64 },
     /// What the worker it made numbered `id` sends its `Worker`. Boxed, as
     /// `Browser`.
     Child { id: u64, event: Box<WorkerEvent> },
+}
+
+impl WorkerTask {
+    /// The queue it goes to.
+    fn queue(&self) -> WorkerQueue {
+        match self {
+            Self::Stop => WorkerQueue::Control,
+            Self::Message(_) | Self::Child { .. } => WorkerQueue::Owner,
+            Self::Browser(_) => WorkerQueue::Browser,
+            Self::DomTask { .. } => WorkerQueue::Dom,
+            Self::PortMessages | Self::PlatformTasks => WorkerQueue::Internal,
+        }
+    }
+}
+
+/// A worker's thread's task queues (Blink's `WorkerThreadScheduler`, its
+/// task queues by type), each in the order posted, of the same priority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WorkerQueue {
+    /// Being terminated.
+    Control,
+    /// What its `Worker` posts it, and what the workers it made send
+    /// theirs (Blink posts both to the posted message task source).
+    Owner,
+    /// The browser's answers: its main script, its loads'.
+    Browser,
+    /// Its DOM's tasks: timers, element tasks, messages.
+    Dom,
+    /// Its own work: its engine's platform tasks, its ports' messages from
+    /// other threads to number.
+    Internal,
+}
+
+/// A worker's queues as `base::sequence_manager` takes them.
+pub(crate) struct WorkerSpec;
+
+impl Spec for WorkerSpec {
+    type Queue = WorkerQueue;
+    type Task = WorkerTask;
+    type Reply = ();
+    type Extra = ();
+
+    const QUEUES: &'static [WorkerQueue] = &[
+        WorkerQueue::Control,
+        WorkerQueue::Owner,
+        WorkerQueue::Browser,
+        WorkerQueue::Dom,
+        WorkerQueue::Internal,
+    ];
+
+    fn index(queue: WorkerQueue) -> usize {
+        queue as usize
+    }
+}
+
+/// A worker's thread's scheduler: any thread posts, its thread takes.
+pub(crate) type WorkerScheduler = SequenceManager<WorkerSpec>;
+
+/// Posts `task` to the worker whose scheduler `tasks` is, in its queue;
+/// dropped once its thread has gone.
+pub(crate) fn post_task(tasks: &WorkerScheduler, task: WorkerTask) {
+    let _ = tasks.post(task.queue(), task);
 }
 
 /// The thread that made a worker, which hears from it.
@@ -140,7 +207,7 @@ impl Shared {
 
 /// A worker's, on the main thread: what goes to it, and what it shares.
 struct Running {
-    tasks: Sender<WorkerTask>,
+    tasks: Arc<WorkerScheduler>,
     shared: Arc<Shared>,
 }
 
@@ -213,7 +280,7 @@ impl Workers {
         let gone = self.running.borrow_mut().remove(&id);
         if let Some(worker) = gone {
             worker.shared.stop();
-            let _ = worker.tasks.send(WorkerTask::Stop);
+            post_task(&worker.tasks, WorkerTask::Stop);
             self.gone(id);
         }
     }
@@ -253,7 +320,7 @@ impl Workers {
                 .post(&self.scheduler, id, WorkerEvent::ScriptFailed);
             return id;
         };
-        let (tasks, from_owner) = std::sync::mpsc::channel();
+        let tasks = Arc::new(WorkerScheduler::default());
         let shared = Arc::new(Shared::default());
         let request = script_request(&start);
         let loader = self.loaders.of(&start);
@@ -268,6 +335,7 @@ impl Workers {
                 let agent = self.agent.clone();
                 let to_browser = self.to_browser.clone();
                 let owner = self.home;
+                let tasks = tasks.clone();
                 move || {
                     run(WorkerThread {
                         id,
@@ -276,7 +344,7 @@ impl Workers {
                         agent,
                         make: engine,
                         settings,
-                        from_owner,
+                        tasks,
                         shared,
                         to_browser,
                         scheduler,
@@ -312,7 +380,7 @@ impl Workers {
 
     fn post(&self, id: u64, message: dom::SerializedMessage) {
         if let Some(worker) = self.running.borrow().get(&id) {
-            let _ = worker.tasks.send(WorkerTask::Message(message));
+            post_task(&worker.tasks, WorkerTask::Message(message));
         }
     }
 }
@@ -361,33 +429,6 @@ impl dom_api::WorkerHost for WorkersHost {
     }
 }
 
-/// A worker's tasks as its thread takes them: those it put off while it
-/// waited for a load (`importScripts()`'s) first, in order.
-struct Inbox {
-    from_owner: Receiver<WorkerTask>,
-    put_off: RefCell<VecDeque<WorkerTask>>,
-}
-
-impl Inbox {
-    fn put_off(&self) -> Option<WorkerTask> {
-        self.put_off.borrow_mut().pop_front()
-    }
-
-    fn recv(&self) -> Result<WorkerTask, RecvError> {
-        match self.put_off() {
-            Some(task) => Ok(task),
-            None => self.from_owner.recv(),
-        }
-    }
-
-    fn recv_timeout(&self, wait: std::time::Duration) -> Result<WorkerTask, RecvTimeoutError> {
-        match self.put_off() {
-            Some(task) => Ok(task),
-            None => self.from_owner.recv_timeout(wait),
-        }
-    }
-}
-
 /// A worker's global's host, on its thread: what it sends goes to the
 /// thread that made it for its `Worker`, what it loads to the browser.
 struct GlobalHost {
@@ -395,8 +436,8 @@ struct GlobalHost {
     owner: Owner,
     scheduler: Arc<MainThreadScheduler>,
     to_browser: BrowserSender,
-    /// Its tasks, which it waits on for a load.
-    inbox: Rc<Inbox>,
+    /// Its thread's scheduler, which it waits on for a load.
+    tasks: Arc<WorkerScheduler>,
     /// Its origin, serialized: its loads' initiator.
     origin: String,
     /// The loader its loads go through, its creator's.
@@ -433,14 +474,22 @@ impl GlobalHost {
             loader: self.loader,
             request,
         });
-        loop {
-            match self.inbox.from_owner.recv() {
-                Ok(WorkerTask::Browser(msg)) => match *msg {
+        // Only the browser's answers and the order to stop are looked at:
+        // its other tasks stay queued, in order. Other loads' answers (a
+        // `fetch()`'s) are taken out meanwhile and put back first, in order.
+        let mut others = Vec::new();
+        let answered = loop {
+            if self.shared.stopping() {
+                break None;
+            }
+            let wanted = |queue| matches!(queue, WorkerQueue::Control | WorkerQueue::Browser);
+            match self.tasks.next(wanted, None) {
+                Some(WorkerTask::Browser(msg)) => match *msg {
                     RendererMsg::ResourceResponse {
                         request_id: answered,
                         result,
                         ..
-                    } if answered == request_id => return Some(result),
+                    } if answered == request_id => break Some(result),
                     RendererMsg::ReceivedRedirect {
                         request_id: redirected,
                         ..
@@ -449,28 +498,17 @@ impl GlobalHost {
                             .to_browser
                             .send(RendererHostMsg::FollowRedirect { request_id, worker });
                     }
-                    // Another load's (a `fetch()`'s): for after.
-                    msg => self
-                        .inbox
-                        .put_off
-                        .borrow_mut()
-                        .push_back(WorkerTask::Browser(Box::new(msg))),
+                    msg => others.push(WorkerTask::Browser(Box::new(msg))),
                 },
-                Ok(task @ WorkerTask::Stop) => {
-                    self.inbox.put_off.borrow_mut().push_back(task);
-                    break;
-                }
-                Ok(task @ (WorkerTask::Message(_) | WorkerTask::Child { .. })) => {
-                    self.inbox.put_off.borrow_mut().push_back(task);
-                }
-                // Its ports, and its engine's platform tasks, are looked at
-                // once its loop runs its tasks.
-                Ok(WorkerTask::PortMessages | WorkerTask::PlatformTasks) => {}
-                Err(_) => break,
+                // Only to wake it: being stopped is `shared`'s, which its
+                // loop looks at first.
+                Some(WorkerTask::Stop) => break None,
+                _ => {}
             }
-            if self.shared.stopping() {
-                break;
-            }
+        };
+        self.tasks.put_back(WorkerQueue::Browser, others);
+        if answered.is_some() {
+            return answered;
         }
         let _ = self
             .to_browser
@@ -631,7 +669,8 @@ struct WorkerThread {
     agent: Agent,
     make: fn(EngineSettings) -> Box<dyn WorkerEngine>,
     settings: EngineSettings,
-    from_owner: Receiver<WorkerTask>,
+    /// Its thread's scheduler.
+    tasks: Arc<WorkerScheduler>,
     shared: Arc<Shared>,
     to_browser: BrowserSender,
     scheduler: Arc<MainThreadScheduler>,
@@ -654,32 +693,51 @@ fn run(thread: WorkerThread) {
         agent,
         make,
         settings,
-        from_owner,
+        tasks,
         shared,
         to_browser,
         scheduler,
         owner,
         loader,
     } = thread;
-    let inbox = Rc::new(Inbox {
-        from_owner,
-        put_off: RefCell::new(VecDeque::new()),
-    });
     let mut engine = make(settings);
     // Its engine's platform tasks wake it as V8 posts them, from any
-    // thread: a task in its channel for those ready; the delayed ones'
-    // times, for its loop's wait (shared with V8's threads, so behind a
-    // lock).
-    let platform_due: Arc<Mutex<Vec<Instant>>> = Arc::default();
+    // thread: one task while none waits for those ready, one as each
+    // delayed one is due (as the main thread's).
+    let platform_posted = Arc::new(std::sync::atomic::AtomicBool::new(false));
     {
-        let scheduler = Arc::downgrade(&scheduler);
-        let due = platform_due.clone();
+        let tasks = Arc::downgrade(&tasks);
+        let posted = platform_posted.clone();
         engine.set_platform_task_waker(Arc::new(move |at| {
-            if let Some(at) = at {
-                due.lock().unwrap_or_else(PoisonError::into_inner).push(at);
+            let Some(tasks) = tasks.upgrade() else {
+                return;
+            };
+            match at {
+                Some(at) => {
+                    let _ = tasks.post_at(WorkerQueue::Internal, WorkerTask::PlatformTasks, at);
+                }
+                None => {
+                    if !posted.swap(true, Ordering::AcqRel) {
+                        post_task(&tasks, WorkerTask::PlatformTasks);
+                    }
+                }
             }
-            if let Some(scheduler) = scheduler.upgrade() {
-                scheduler.send_worker_task(id, WorkerTask::PlatformTasks);
+        }));
+    }
+    // Its DOM's tasks, each a task of its scheduler's in its turn with its
+    // own (Blink's worker task runners).
+    {
+        let tasks = Arc::downgrade(&tasks);
+        engine.set_task_waker(Box::new(move |number, at| {
+            let Some(tasks) = tasks.upgrade() else {
+                return;
+            };
+            let task = WorkerTask::DomTask { number };
+            match at {
+                Some(at) => {
+                    let _ = tasks.post_at(WorkerQueue::Dom, task, at);
+                }
+                None => post_task(&tasks, task),
             }
         }));
     }
@@ -699,22 +757,19 @@ fn run(thread: WorkerThread) {
         };
         crate::render_thread::print_console(kind, &message.text, &message.url, message.line);
     }));
-    // Its script; what its `Worker` posts meanwhile waits for it to have
-    // run (HTML enables its port's queue then).
-    let mut early = Vec::new();
+    // Its script; what its `Worker` posts meanwhile stays queued till it
+    // has run (HTML enables its port's queue then).
+    let script = |queue| matches!(queue, WorkerQueue::Control | WorkerQueue::Browser);
     let result = loop {
-        match inbox.recv() {
-            Ok(WorkerTask::Browser(msg)) => {
+        match tasks.next(script, None) {
+            Some(WorkerTask::Browser(msg)) => {
                 // It asked nothing else yet.
                 if let RendererMsg::DedicatedWorkerScript { result, .. } = *msg {
                     break result;
                 }
             }
-            Ok(WorkerTask::Message(message)) => early.push(message),
-            // It has no port, nor worker, yet.
-            Ok(WorkerTask::PortMessages | WorkerTask::PlatformTasks | WorkerTask::Child { .. }) => {
-            }
-            Ok(WorkerTask::Stop) | Err(_) => return,
+            Some(WorkerTask::Stop) | None => return,
+            Some(_) => {}
         }
     };
     if shared.stopping() {
@@ -751,7 +806,7 @@ fn run(thread: WorkerThread) {
         owner,
         scheduler: scheduler.clone(),
         to_browser: to_browser.clone(),
-        inbox: inbox.clone(),
+        tasks: tasks.clone(),
         origin: origin.ascii_serialization(),
         loader,
         owner_origin: start
@@ -808,57 +863,40 @@ fn run(thread: WorkerThread) {
         owner.post(&scheduler, id, WorkerEvent::ScriptFailed);
         return;
     }
-    // What its `Worker` posted waits for its script to have run.
-    let mut early = Some(early);
-    if ran == Some(true) {
-        for message in early.take().into_iter().flatten() {
-            engine.post_message(message);
-        }
-    }
+    // What its `Worker` posts waits in its queue till its script has run:
+    // a module worker's graph may be yet to come.
+    let mut ran = ran == Some(true);
     let mut failed = false;
     loop {
-        if shared.stopping() || closing.get() {
+        if shared.stopping() {
             break;
         }
-        engine.run_due_tasks();
-        // Its engine's platform tasks that are due (those a delayed one's
-        // time woke it for done with).
-        engine.run_platform_tasks();
-        let now = Instant::now();
-        let next_platform = {
-            let mut due = platform_due.lock().unwrap_or_else(PoisonError::into_inner);
-            due.retain(|at| *at > now);
-            due.iter().min().map(|at| at.saturating_duration_since(now))
-        };
-        if shared.stopping() || closing.get() {
+        // Closed by its script or the task before (Blink's `WorkerThread::
+        // DidProcessTask`): what is queued goes, and it runs no more (HTML's
+        // "close a worker": the tasks queued are discarded).
+        if closing.get() {
+            tasks.close();
             break;
         }
-        let wait = match (engine.until_next_task(), next_platform) {
-            (Some(task), Some(platform)) => Some(task.min(platform)),
-            (task, platform) => task.or(platform),
-        };
-        let task = match wait {
-            Some(wait) => match inbox.recv_timeout(wait) {
-                Ok(task) => Some(task),
-                Err(RecvTimeoutError::Timeout) => None,
-                Err(RecvTimeoutError::Disconnected) => break,
-            },
-            None => match inbox.recv() {
-                Ok(task) => Some(task),
-                Err(_) => break,
-            },
+        let wanted = |queue| ran || queue != WorkerQueue::Owner;
+        let Some(task) = tasks.next(wanted, None) else {
+            continue;
         };
         match task {
-            Some(WorkerTask::Message(message)) => match &mut early {
-                Some(early) => early.push(message),
-                None => engine.post_message(message),
-            },
-            Some(WorkerTask::Stop) => break,
-            // Run with its tasks, next round.
-            Some(WorkerTask::PortMessages | WorkerTask::PlatformTasks) => {}
+            WorkerTask::Message(message) => engine.post_message(message),
+            WorkerTask::Stop => break,
+            WorkerTask::DomTask { number } => {
+                engine.run_dom_task(number);
+            }
+            // Numbered as the task ends, below.
+            WorkerTask::PortMessages => {}
+            WorkerTask::PlatformTasks => {
+                platform_posted.store(false, Ordering::Release);
+                engine.run_platform_tasks();
+            }
             // What a worker it made sends its `Worker`, as the main thread
             // takes it (`RenderThread::worker_event`).
-            Some(WorkerTask::Child { id: child, event }) => match *event {
+            WorkerTask::Child { id: child, event } => match *event {
                 WorkerEvent::Message(message) => engine.worker_message(child, message),
                 WorkerEvent::Error(error) => engine.worker_error(child, &error),
                 WorkerEvent::Closed => {
@@ -870,7 +908,7 @@ fn run(thread: WorkerThread) {
                     workers.forget(child);
                 }
             },
-            Some(WorkerTask::Browser(msg)) => match *msg {
+            WorkerTask::Browser(msg) => match *msg {
                 // A `fetch()`'s: its promise settled.
                 RendererMsg::ResourceResponse {
                     request_id, result, ..
@@ -880,13 +918,10 @@ fn run(thread: WorkerThread) {
                         engine.fetch_response(fetch, crate::loader::fetched_response(&result));
                     } else if module_fetches.borrow_mut().remove(&request_id) {
                         let module = crate::loader::module_loaded(&result);
-                        // Its graph, if it was the last of it.
+                        // Its graph, if it was the last of it: its
+                        // `Worker`'s messages may come now.
                         match engine.module_fetched(request_id, module) {
-                            Some(true) => {
-                                for message in early.take().into_iter().flatten() {
-                                    engine.post_message(message);
-                                }
-                            }
+                            Some(true) => ran = true,
                             Some(false) => {
                                 failed = true;
                                 break;
@@ -907,8 +942,10 @@ fn run(thread: WorkerThread) {
                 // An answer to a load it no longer waits for.
                 _ => {}
             },
-            None => {}
         }
+        // As each task ends: its ports' messages from other threads
+        // numbered, each a token.
+        engine.number_port_messages();
     }
     // The workers it made end with it (HTML: no owner left; Blink's
     // `DedicatedWorker::Dispose` terminates each), before its engine goes.
@@ -1031,6 +1068,14 @@ mod tests {
         fn run_due_tasks(&mut self) -> bool {
             false
         }
+
+        fn set_task_waker(&mut self, _: dom::TaskWaker) {}
+
+        fn run_dom_task(&mut self, _: u64) -> bool {
+            false
+        }
+
+        fn number_port_messages(&mut self) {}
 
         fn terminator(&mut self) -> Box<dyn Fn() + Send> {
             Box::new(|| {})

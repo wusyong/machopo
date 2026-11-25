@@ -2763,11 +2763,12 @@ fn the_profiler_samples_the_pages_script() {
             .find(|node| node["callFrame"]["functionName"] == name);
         assert_eq!(node.expect(name)["callFrame"]["url"], url.as_str());
         let count = profile["samples"].as_array().unwrap().len();
-        let mut deltas: Vec<u64> = profile["timeDeltas"]
+        // A delta may be negative: V8 takes some samples out of order.
+        let mut deltas: Vec<i64> = profile["timeDeltas"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|delta| delta.as_u64().unwrap())
+            .map(|delta| delta.as_i64().unwrap())
             .collect();
         assert_eq!(deltas.len(), count);
         assert!(count >= 3, "{name}: {count} samples");
@@ -2829,8 +2830,9 @@ fn the_profile_tells_waiting_from_rendering() {
     std::thread::sleep(Duration::from_millis(200));
     let profile = call(b, "Profiler.stop", json!({})).unwrap()["profile"].clone();
     // The time (µs) in each, from the time before each sample: how many
-    // samples came is what CPU the sampler got.
-    let time = |name: &str| -> u64 {
+    // samples came is what CPU the sampler got. A delta may be negative:
+    // V8 takes some samples out of order.
+    let time = |name: &str| -> i64 {
         let nodes: Vec<u64> = profile["nodes"]
             .as_array()
             .unwrap()
@@ -2844,7 +2846,7 @@ fn the_profile_tells_waiting_from_rendering() {
             .iter()
             .zip(deltas)
             .filter(|(sample, _)| nodes.contains(&sample.as_u64().unwrap()))
-            .map(|(_, delta)| delta.as_u64().unwrap())
+            .map(|(_, delta)| delta.as_i64().unwrap())
             .sum()
     };
     let (idle, program) = (time("(idle)"), time("(program)"));
