@@ -115,7 +115,7 @@ impl RenderThread {
     /// with none, as Chrome's tab has its frame from the start (its
     /// initial empty document: no URL, an opaque origin).
     fn frame_infos(&mut self) -> Vec<FrameInfo> {
-        if self.document.is_some() {
+        if self.render_frames.top_document().is_some() {
             return self.document_frame_infos();
         }
         let mut frames = Vec::new();

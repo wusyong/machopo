@@ -224,6 +224,19 @@ impl FrameDocument {
         self.navigation_id
     }
 
+    /// `frame`'s document `document`, of no parser: the frames' table's
+    /// tests'.
+    #[cfg(test)]
+    pub(super) fn for_test(frame: FrameId, document: NodeRoot) -> Self {
+        Self::new(frame, "text/html", Rc::from(""), None, document, encoding_rs::UTF_8)
+    }
+
+    /// The DOM's document it is of.
+    #[cfg(test)]
+    pub(super) fn node(&self) -> &NodeRoot {
+        &self.document
+    }
+
     /// Whether it isn't to be rendered yet: a sheet that blocks rendering
     /// is loading, or its parser is still to make its body (Blink's
     /// `Document::ShouldScheduleLayout`).
@@ -241,14 +254,11 @@ impl FrameDocument {
     }
 }
 
-/// What the renderer has of the DOM's child frames (the engine's, followed
-/// by `follow_child_frames`):
-/// the documents loading in them, and the navigations the browser has for
-/// them. Which frames there are, their parents, iframes and tokens, are the
-/// engine's (`RenderThread::child_parent`, `child_token`).
+/// What the renderer has of the DOM's child frames' navigations (their
+/// documents are the frames' table's, `render_frame`): the navigations the
+/// browser has for them, the commits queued, the iframes' `load`s due.
 #[derive(Default)]
 pub(super) struct ChildFrames {
-    documents: Vec<FrameDocument>,
     /// A child frame's navigation the browser has (`BeginNavigation`),
     /// until it commits or is dropped: one a frame.
     navigations: HashMap<FrameId, ChildNavigationRequest>,
@@ -315,8 +325,7 @@ pub(super) struct ChildCommit<'a> {
 impl ChildFrames {
     /// The frames the renderer has something of.
     fn known(&self) -> Vec<FrameId> {
-        let mut known: Vec<FrameId> = self.documents.iter().map(|next| next.frame).collect();
-        known.extend(self.navigations.keys());
+        let mut known: Vec<FrameId> = self.navigations.keys().copied().collect();
         known.extend(self.commits.iter().map(|(frame, _, _)| *frame));
         known.extend(self.owner_loads.keys());
         known.sort_unstable();
@@ -327,8 +336,6 @@ impl ChildFrames {
     /// The frames `gone` (a frame and those in it) gone: what of them the
     /// renderer had.
     fn remove(&mut self, gone: &[FrameId]) {
-        self.documents
-            .retain(|document| !gone.contains(&document.frame));
         self.navigations.retain(|id, _| !gone.contains(id));
         self.commits.retain(|(id, _, _)| !gone.contains(id));
     }
@@ -657,7 +664,7 @@ impl RenderThread {
         // DevTools' agents look at the frames again after the task (the
         // `DOM` agent's frames have the new document).
         self.frames_changed = true;
-        self.document = Some(FrameDocument {
+        self.render_frames.commit_top(top, FrameDocument {
             navigation_id,
             body: Some(body),
             time_origin,
@@ -697,7 +704,7 @@ impl RenderThread {
         self.dom_agent.dom_gone();
         self.css_agent.dom_gone();
         self.overlay_agent.dom_gone();
-        self.document = None;
+        self.render_frames.clear();
         self.children = ChildFrames::default();
         self.main_origin_source = None;
         // What was asked for its documents: a response still to come is
@@ -730,17 +737,7 @@ impl RenderThread {
 
     /// The document loading in `frame` (the top-level one's or a child's).
     fn doc_mut(&mut self, frame: FrameId) -> Option<&mut FrameDocument> {
-        if self
-            .document
-            .as_ref()
-            .is_some_and(|next| next.frame == frame)
-        {
-            return self.document.as_mut();
-        }
-        self.children
-            .documents
-            .iter_mut()
-            .find(|next| next.frame == frame)
+        self.render_frames.document_mut(frame)
     }
 
     /// The loader `frame`'s document's subresources go through: the one
@@ -784,25 +781,23 @@ impl RenderThread {
             return;
         }
         self.frames_changed = true;
-        let frames = match self.document.as_ref().map(|next| next.frame) {
+        let frames = match self.render_frames.top() {
             Some(top) => self.child_frames_below(top),
             None => Vec::new(),
         };
-        let gone: Vec<FrameId> = self
-            .children
-            .known()
+        let mut known = self.children.known();
+        known.extend(self.render_frames.children());
+        known.sort_unstable();
+        known.dedup();
+        let gone: Vec<FrameId> = known
             .into_iter()
             .filter(|known| frames.iter().all(|(frame, _, _)| frame != known))
             .collect();
         self.children.remove(&gone);
+        self.render_frames.remove(&gone);
         self.cancel_fetches_of_gone_documents();
         for (frame, _, owner) in frames {
-            if self
-                .children
-                .documents
-                .iter()
-                .any(|next| next.frame == frame)
-            {
+            if self.render_frames.contains(frame) {
                 continue;
             }
             let Some((dom, view)) = engine_frame(&mut self.engine) else {
@@ -831,7 +826,7 @@ impl RenderThread {
                 encoding_rs::UTF_8,
             );
             initial.initial = true;
-            self.children.documents.push(initial);
+            self.render_frames.set_child_document(frame, initial);
         }
         self.request_main_frame();
     }
@@ -853,7 +848,7 @@ impl RenderThread {
 
     /// The top-level frame's document's URL (`document_url`).
     fn top_document_url(&mut self) -> Option<Url> {
-        let top = self.document.as_ref()?.frame;
+        let top = self.render_frames.top()?;
         self.document_url(top)
     }
 
@@ -928,9 +923,7 @@ impl RenderThread {
 
     /// Whether `frame` is the top-level frame.
     fn is_top(&self, frame: FrameId) -> bool {
-        self.document
-            .as_ref()
-            .is_some_and(|next| next.frame == frame)
+        self.render_frames.top() == Some(frame)
     }
 
     /// Where `frame` is: the top-level frame (none), or a child frame (its
@@ -979,24 +972,13 @@ impl RenderThread {
     }
 
     fn doc(&self, frame: FrameId) -> Option<&FrameDocument> {
-        match &self.document {
-            Some(next) if next.frame == frame => Some(next),
-            _ => self
-                .children
-                .documents
-                .iter()
-                .find(|next| next.frame == frame),
-        }
+        self.render_frames.document(frame)
     }
 
     /// The frames whose documents are loading: the top-level one's, then
     /// the children's.
     fn frames(&self) -> Vec<FrameId> {
-        self.document
-            .iter()
-            .chain(&self.children.documents)
-            .map(|next| next.frame)
-            .collect()
+        self.render_frames.ids()
     }
 
     /// What the engine asked for its frames (`ScriptEngine::
@@ -1044,10 +1026,7 @@ impl RenderThread {
     /// The token the browser knows `frame` by: the main frame's, the
     /// browser's; a child frame's, the engine's.
     pub(super) fn frame_token(&mut self, frame: FrameId) -> Option<protocol::FrameToken> {
-        if self
-            .document
-            .as_ref()
-            .is_some_and(|next| next.frame == frame)
+        if self.render_frames.top() == Some(frame)
         {
             self.devtools_main_frame_token
         } else {
@@ -1076,10 +1055,7 @@ impl RenderThread {
         if let Some(id) = begin_id {
             self.navigations_asked.push(id);
         }
-        let top = self
-            .document
-            .as_ref()
-            .is_some_and(|next| next.frame == frame);
+        let top = self.render_frames.top() == Some(frame);
         match navigation {
             FrameNavigation::To { url, replace } if top => {
                 let kind = BeginNavigationKind::To { url, replace };
@@ -1136,7 +1112,7 @@ impl RenderThread {
         history: protocol::renderer::HistoryEntryParams,
     ) {
         let frame = if self.devtools_main_frame_token == Some(token) {
-            self.document.as_ref().map(|next| next.frame)
+            self.render_frames.top()
         } else {
             self.child_of_token(token)
         };
@@ -1321,10 +1297,9 @@ impl RenderThread {
             return false;
         }
         if self
-            .children
-            .documents
-            .iter()
-            .any(|next| next.frame == frame && next.navigation_id > navigation.navigation_id)
+            .render_frames
+            .document(frame)
+            .is_some_and(|next| next.navigation_id > navigation.navigation_id)
         {
             tracing::debug!(url = %document.url, "dropping a commit older than the child frame's document");
             return false;
@@ -1641,11 +1616,11 @@ impl RenderThread {
         });
         let view = FrameView::new(document.clone(), node, document_id, self.system_colors)
             .into_child(frame, owner_id);
-        let top = self.document.as_ref().map(|next| next.frame);
+        let top = self.render_frames.top();
         next.view
             .show_child((Some(parent) != top).then_some(parent), view);
-        self.children.documents.retain(|next| next.frame != frame);
-        // The document before's `fetch()`es go with it.
+        // The document before's `fetch()`es go with it (the DOM has it
+        // discarded).
         self.cancel_fetches_of_gone_documents();
         let navigation_id = navigation
             .as_ref()
@@ -1653,7 +1628,7 @@ impl RenderThread {
         // DevTools' `DOM` agent tells of the iframe's new document as the
         // frames are looked at after the task.
         self.frames_changed = true;
-        self.children.documents.push(FrameDocument {
+        self.render_frames.set_child_document(frame, FrameDocument {
             navigation_id,
             body: Some(body),
             time_origin,
@@ -1812,7 +1787,7 @@ impl RenderThread {
         navigation_id: u64,
     ) -> Option<FrameId> {
         let frame = if Some(token) == self.devtools_main_frame_token {
-            self.document.as_ref()?.frame
+            self.render_frames.top()?
         } else {
             self.child_of_token(token)?
         };
@@ -2241,8 +2216,7 @@ impl RenderThread {
     /// Whether a parser's scripts wait for a sheet that blocks scripts.
     pub(super) fn scripts_wait_for_sheets(&mut self) -> bool {
         let Self {
-            document,
-            children,
+            render_frames,
             engine,
             ..
         } = self;
@@ -2250,7 +2224,7 @@ impl RenderThread {
             return false;
         };
         let dom = engine.dom_mut();
-        document.iter().chain(&children.documents).any(|next| {
+        render_frames.documents().any(|next| {
             (next.blocking_script.is_some()
                 || dom.read(|cx| cx.load_progress(next.document.get(cx.gc)))
                     == dom::LoadProgress::Deferring)
@@ -2263,8 +2237,7 @@ impl RenderThread {
 
     pub(super) fn retry_scripts_blocked_by_sheets(&mut self) {
         let Self {
-            document,
-            children,
+            render_frames,
             engine,
             ..
         } = self;
@@ -2272,9 +2245,8 @@ impl RenderThread {
             return;
         };
         let dom = engine.dom_mut();
-        let waiting: Vec<(FrameId, bool)> = document
-            .iter()
-            .chain(&children.documents)
+        let waiting: Vec<(FrameId, bool)> = render_frames
+            .documents()
             .filter(|next| {
                 (next.blocking_script.is_some()
                     || dom.read(|cx| cx.load_progress(next.document.get(cx.gc)))
@@ -2506,7 +2478,7 @@ impl RenderThread {
         match place {
             Some(Some((parent, _))) => self.finish_load(parent),
             Some(None) => {
-                if let Some(next) = &mut self.document {
+                if let Some(next) = self.render_frames.top_document_mut() {
                     next.load_finished = true;
                 }
             }
@@ -2623,9 +2595,7 @@ impl RenderThread {
     /// The frame whose document `document` is, if one is.
     fn frame_of_document(&mut self, document: dom::NodeId) -> Option<FrameId> {
         let engine = self.engine.as_mut()?;
-        self.document
-            .iter()
-            .chain(&self.children.documents)
+        self.render_frames.documents()
             .find(|next| {
                 engine
                     .dom_mut()
@@ -2758,7 +2728,7 @@ impl RenderThread {
                 if let Some(id) = self.tell_lifecycle(frame, "load", ipc::TimeTicks::now()) {
                     self.page_agent.stopped_loading(&id);
                 }
-                if let Some(next) = &mut self.document {
+                if let Some(next) = self.render_frames.top_document_mut() {
                     next.load_finished = true;
                 }
                 self.request_main_frame();
@@ -2772,7 +2742,7 @@ impl RenderThread {
     /// last one sent (the first, empty or not, at once: the browser shows
     /// the URL for an empty one, as before any).
     pub(super) fn update_title(&mut self) {
-        let (Some(engine), Some(next)) = (&mut self.engine, &mut self.document) else {
+        let (Some(engine), Some(next)) = (&mut self.engine, self.render_frames.top_document_mut()) else {
             return;
         };
         let version = engine.dom_mut().read(|cx| cx.tree_version());
@@ -2796,7 +2766,7 @@ impl RenderThread {
     /// them, once DevTools gave the frame its token.
     pub(super) fn frame_info(&mut self) -> Option<FrameInfo> {
         let url = self.top_document_url()?;
-        let next = self.document.as_ref()?;
+        let next = self.render_frames.top_document()?;
         main_frame_info(
             self.devtools_main_frame_token,
             next.navigation_id,
@@ -2827,7 +2797,7 @@ impl RenderThread {
         if !self.devtools_sessions.is_empty() {
             self.page_agent.update(frames.clone());
         }
-        let top = self.document.as_ref().map(|next| next.frame);
+        let top = self.render_frames.top();
         let id = if Some(frame) == top {
             frames.first()?.id.clone()
         } else {
@@ -2848,7 +2818,7 @@ impl RenderThread {
         let Some(main) = self.frame_info() else {
             return Vec::new();
         };
-        let Some(top) = self.document.as_ref().map(|next| next.frame) else {
+        let Some(top) = self.render_frames.top() else {
             return Vec::new();
         };
         let mut children = self.child_frames_below(top);
@@ -2874,10 +2844,10 @@ impl RenderThread {
     /// first, then each child frame with its iframe; one whose iframe has
     /// no document now left out.
     pub(super) fn dom_frames(&mut self) -> Vec<super::dom_agent::DomFrame> {
-        let Some(top) = self.document.as_ref().map(|next| next.document.clone()) else {
+        let Some(top) = self.render_frames.top_document().map(|next| next.document.clone()) else {
             return Vec::new();
         };
-        let top_frame = self.document.as_ref().map(|next| next.frame);
+        let top_frame = self.render_frames.top();
         let children: Vec<(FrameId, NodeRoot)> = top_frame
             .map(|frame| self.child_frames_below(frame))
             .unwrap_or_default()
@@ -3076,9 +3046,8 @@ impl RenderThread {
             return;
         };
         let documents: Vec<(FrameId, dom::NodeId)> = self
-            .document
-            .iter()
-            .chain(&self.children.documents)
+            .render_frames
+            .documents()
             .map(|next| {
                 (
                     next.frame,
@@ -3110,9 +3079,7 @@ impl RenderThread {
     /// When a new DOM's document's network may next have been quiet long
     /// enough.
     pub(super) fn next_idleness_due(&self) -> Option<ipc::TimeTicks> {
-        self.document
-            .iter()
-            .chain(&self.children.documents)
+        self.render_frames.documents()
             .filter_map(|next| next.idleness.next_due())
             .min()
     }
@@ -3275,8 +3242,8 @@ impl RenderThread {
     /// Whether a sheet that blocks rendering is loading, or the parser
     /// hasn't made the body yet: no frame till then.
     pub(super) fn render_blocked(&self) -> bool {
-        self.document
-            .as_ref()
+        self.render_frames
+            .top_document()
             .is_some_and(FrameDocument::render_blocked)
     }
 
@@ -3719,7 +3686,7 @@ impl RenderThread {
         if let Some((_, frame)) = engine_frame(&mut self.engine) {
             frame.view.child_frames_shown(&mut shown);
         }
-        let top = self.document.as_ref().map(|next| next.frame);
+        let top = self.render_frames.top();
         let Some(engine) = &mut self.engine else {
             return;
         };
@@ -3862,7 +3829,7 @@ impl RenderThread {
     /// Asks for a main frame if the DOM's trees changed since the
     /// rendering was last asked for (`request_main_frame_if_dom_changed`).
     pub(super) fn request_next_frame_if_dom_changed(&mut self) {
-        let (Some(engine), Some(next)) = (&mut self.engine, &mut self.document) else {
+        let (Some(engine), Some(next)) = (&mut self.engine, self.render_frames.top_document_mut()) else {
             return;
         };
         let (version, intersections, resizes, canvas_draws) = engine.dom_mut().read(|cx| {
@@ -3883,7 +3850,7 @@ impl RenderThread {
         // Script's scrolling, which changes no DOM, asks for one too.
         let scrolled = engine_frame(&mut self.engine)
             .is_some_and(|(_, frame)| frame.view.take_scrolled_by_script());
-        let Some(next) = &mut self.document else {
+        let Some(next) = self.render_frames.top_document_mut() else {
             return;
         };
         if version != next.rendered_version {
@@ -3929,7 +3896,7 @@ impl RenderThread {
         // their sheets: a frame's document committed since the last frame
         // is one of them already.
         let frames = self.css_agent.on().then(|| self.dom_frames());
-        let (Some((dom, frame)), Some(next)) = (engine_frame(&mut self.engine), &mut self.document)
+        let (Some((dom, frame)), Some(next)) = (engine_frame(&mut self.engine), self.render_frames.top_document_mut())
         else {
             return false;
         };
@@ -4022,9 +3989,8 @@ impl RenderThread {
         // task that delivers them run between tasks.
         // The child frames' documents whose rendering is blocked.
         let blocked: Vec<NodeRoot> = self
-            .children
-            .documents
-            .iter()
+            .render_frames
+            .child_documents()
             .filter(|next| next.pending_sheets.values().any(|sheet| sheet.blocking))
             .map(|next| next.document.clone())
             .collect();
@@ -4293,7 +4259,7 @@ impl RenderThread {
     /// The DOM's document's testharness results, once its page
     /// reported them (web tests only).
     pub(super) fn send_harness_results(&mut self) {
-        let (Some(engine), Some(next)) = (&mut self.engine, &self.document) else {
+        let (Some(engine), Some(next)) = (&mut self.engine, self.render_frames.top_document()) else {
             return;
         };
         if let Some(results) = engine.take_harness_results() {
@@ -4377,7 +4343,7 @@ impl RenderThread {
             if !self.image_loaded(&url, result) {
                 let frame = self
                     .frame_of_document(document)
-                    .or_else(|| self.document.as_ref().map(|next| next.frame));
+                    .or_else(|| self.render_frames.top());
                 if let Some(frame) = frame {
                     self.note_failed(frame, failed_url(result, Some(&url)));
                 }
@@ -4521,7 +4487,7 @@ impl RenderThread {
     /// document's loader and URL. None before DevTools named the top-level
     /// frame, or once the document has gone.
     fn request_frame(&mut self, frame: FrameId) -> Option<RequestFrame> {
-        let top = self.document.as_ref().map(|next| next.frame);
+        let top = self.render_frames.top();
         let frame_id = if Some(frame) == top {
             self.devtools_main_frame_token?.to_string()
         } else {

@@ -38,6 +38,7 @@ mod log_agent;
 mod network_agent;
 mod overlay_agent;
 mod page_agent;
+mod render_frame;
 mod webdriver;
 mod webdriver_commands;
 
@@ -515,12 +516,12 @@ struct RenderThread {
     /// the compositor and DevTools ask of it, which script paused takes some
     /// of too.
     scheduler: Arc<MainThreadScheduler>,
-    /// The DOM's document committed (`render_thread::next`): before
-    /// the engine, as fields drop in order and its roots go before their
-    /// heap.
-    document: Option<documents::FrameDocument>,
-    /// The DOM's child frames: their documents loading, their `src`s
-    /// being fetched.
+    /// The frames: each one's document loading or loaded (the top-level
+    /// one's once one committed): before the engine, as fields drop in
+    /// order and its roots go before their heap.
+    render_frames: render_frame::RenderFrames,
+    /// The DOM's child frames' navigations: those the browser has, the
+    /// commits queued, the iframes' `load`s due.
     children: documents::ChildFrames,
     /// DevTools' `DOM` domain (Blink's `InspectorDOMAgent`): before the
     /// engine, as the nodes it keeps are roots of the engine's DOM.
@@ -672,7 +673,7 @@ impl RenderThread {
             scheduler,
             engine: None,
             engine_is_wasm: false,
-            document: None,
+            render_frames: render_frame::RenderFrames::default(),
             children: documents::ChildFrames::default(),
         }
     }
@@ -1508,9 +1509,8 @@ impl RenderThread {
         loader: u64,
         bypass_cache: bool,
     ) -> bool {
-        if self
-            .document
-            .as_ref()
+        if self.render_frames
+            .top_document()
             .is_some_and(|next| next.navigation_id() > navigation_id)
         {
             tracing::debug!(%url, navigation_id, "dropping a stale commit");
