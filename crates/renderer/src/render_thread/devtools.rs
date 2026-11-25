@@ -119,7 +119,7 @@ impl RenderThread {
             return self.document_frame_infos();
         }
         let mut frames = Vec::new();
-        if let Some(token) = self.devtools_main_frame_token {
+        if let Some(token) = self.render_frames.top_token() {
             frames.push(FrameInfo {
                 id: token.to_string(),
                 parent_id: None,
@@ -283,7 +283,7 @@ impl RenderThread {
             cannot_render: Cell::new(false),
         }));
         self.scheduler.set_interrupter(interrupter);
-        if let Some(token) = self.devtools_main_frame_token {
+        if let Some(token) = self.render_frames.top_token() {
             engine.set_main_frame_token(token);
         }
         for session in &self.devtools_sessions {

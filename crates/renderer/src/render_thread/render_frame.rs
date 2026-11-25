@@ -7,9 +7,11 @@
 //! (`RenderThread::child_parent`, `child_token`); the renderer follows them
 //! (`follow_child_frames`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
+use dom::NodeRoot;
 use dom_api::FrameId;
+use url::Url;
 
 use super::documents::FrameDocument;
 
@@ -19,6 +21,16 @@ pub(super) struct RenderFrames {
     frames: BTreeMap<FrameId, RenderFrame>,
     /// The top-level frame, once a document committed in it.
     top: Option<FrameId>,
+    /// The browser's token for the top-level frame (`DevToolsMainFrameToken`):
+    /// its frame's, whatever document or engine it has, so it outlasts
+    /// them (a child frame's is the engine's).
+    top_token: Option<protocol::FrameToken>,
+    /// The child frames' `srcdoc` and `about:` documents, which need no
+    /// fetch but commit in a task of their own all the same, as a
+    /// response's would (Chrome's goes through a navigation request too):
+    /// each one's frame, URL and markup, in the order queued across the
+    /// frames (`RenderThread::run_child_commit`).
+    commits: VecDeque<(FrameId, Url, String)>,
 }
 
 /// What the renderer has of one frame.
@@ -27,6 +39,34 @@ pub(super) struct RenderFrame {
     /// made (its first `about:blank`), the top-level frame's from its first
     /// commit.
     document: Option<FrameDocument>,
+    /// The navigation it asked the browser for (`BeginNavigation`), until
+    /// the browser commits or drops it: one a frame, the latest.
+    navigation: Option<NavigationRequest>,
+    /// When its iframe fires `load` for a navigation within its document
+    /// that another origin asked for (`owner_load_later`), on the clock.
+    owner_load_at: Option<f64>,
+}
+
+/// A navigation the renderer asked the browser for: its number for it
+/// (`BeginNavigation`'s id), whether its iframe's referrer policy was
+/// `no-referrer` (what its navigation timing reads of its response's
+/// `Timing-Allow-Origin`; never for the top-level frame), and, for one to
+/// `about:blank`, the initiator's document, which its document has its
+/// origin from (`about_blank_origin_source`).
+pub(super) struct NavigationRequest {
+    pub(super) begin_id: u64,
+    pub(super) no_referrer: bool,
+    pub(super) origin_source: Option<NodeRoot>,
+}
+
+impl RenderFrame {
+    fn with(document: Option<FrameDocument>) -> Self {
+        Self {
+            document,
+            navigation: None,
+            owner_load_at: None,
+        }
+    }
 }
 
 impl RenderFrames {
@@ -93,13 +133,21 @@ impl RenderFrames {
     }
 
     /// `document` committed in the top-level frame `top`: the frames of the
-    /// document before go with it.
+    /// document before go with it, and their commits queued. The
+    /// navigation it asked for stays, if this commit wasn't it (the
+    /// browser drops it).
     pub(super) fn commit_top(&mut self, top: FrameId, document: FrameDocument) {
+        let navigation = self
+            .frames
+            .remove(&top)
+            .and_then(|before| before.navigation);
         self.frames.clear();
+        self.commits.clear();
         self.frames.insert(
             top,
             RenderFrame {
-                document: Some(document),
+                navigation,
+                ..RenderFrame::with(Some(document))
             },
         );
         self.top = Some(top);
@@ -114,7 +162,7 @@ impl RenderFrames {
         );
         self.frames
             .entry(frame)
-            .or_insert(RenderFrame { document: None })
+            .or_insert_with(|| RenderFrame::with(None))
             .document = Some(document);
     }
 
@@ -122,12 +170,112 @@ impl RenderFrames {
     /// renderer had of them.
     pub(super) fn remove(&mut self, gone: &[FrameId]) {
         self.frames.retain(|frame, _| !gone.contains(frame));
+        self.commits.retain(|(frame, _, _)| !gone.contains(frame));
     }
 
-    /// Every frame gone (the engine replaced, its DOM with it).
+    /// Every frame gone (the engine replaced, its DOM with it); the
+    /// browser's token for the top-level frame stays.
     pub(super) fn clear(&mut self) {
         self.frames.clear();
         self.top = None;
+        self.commits.clear();
+    }
+
+    /// The browser's token for the top-level frame.
+    pub(super) fn top_token(&self) -> Option<protocol::FrameToken> {
+        self.top_token
+    }
+
+    pub(super) fn set_top_token(&mut self, token: protocol::FrameToken) {
+        self.top_token = Some(token);
+    }
+
+    /// `frame`'s navigation `request` went to the browser: the one it asked
+    /// for before, and a commit queued, no longer commit (one navigation a
+    /// frame).
+    pub(super) fn navigation_sent(&mut self, frame: FrameId, request: NavigationRequest) {
+        self.navigating(frame);
+        if let Some(next) = self.frames.get_mut(&frame) {
+            next.navigation = Some(request);
+        }
+    }
+
+    /// The navigation `frame` asked the browser for and still waits for.
+    pub(super) fn navigation(&self, frame: FrameId) -> Option<&NavigationRequest> {
+        self.frames.get(&frame)?.navigation.as_ref()
+    }
+
+    /// `frame`'s navigation `begin_id`, taken as the browser commits or
+    /// drops it: none if it asked for another since.
+    pub(super) fn take_navigation(
+        &mut self,
+        frame: FrameId,
+        begin_id: u64,
+    ) -> Option<NavigationRequest> {
+        self.frames
+            .get_mut(&frame)?
+            .navigation
+            .take_if(|asked| asked.begin_id == begin_id)
+    }
+
+    /// `frame`'s navigation, whichever it asked for, taken: one the browser
+    /// started commits in its place.
+    pub(super) fn take_any_navigation(&mut self, frame: FrameId) -> Option<NavigationRequest> {
+        self.frames.get_mut(&frame)?.navigation.take()
+    }
+
+    /// Child frame `frame`'s document of `markup` at `url` queued to commit
+    /// (`commits`): its navigation before no longer commits.
+    pub(super) fn queue_commit(&mut self, frame: FrameId, url: Url, markup: String) {
+        self.navigating(frame);
+        self.commits.push_back((frame, url, markup));
+    }
+
+    /// The first of the commits queued, taken.
+    pub(super) fn next_commit(&mut self) -> Option<(FrameId, Url, String)> {
+        self.commits.pop_front()
+    }
+
+    /// Whether `frame` has a navigation on its way: the browser's, or a
+    /// commit queued.
+    pub(super) fn is_navigating(&self, frame: FrameId) -> bool {
+        self.navigation(frame).is_some() || self.commits.iter().any(|(id, _, _)| *id == frame)
+    }
+
+    /// `frame` navigates anew: what it asked for before no longer commits.
+    fn navigating(&mut self, frame: FrameId) {
+        if let Some(next) = self.frames.get_mut(&frame) {
+            next.navigation = None;
+        }
+        self.commits.retain(|(id, _, _)| *id != frame);
+    }
+
+    /// `frame`'s iframe fires `load` at `due`, on the clock (a later one in
+    /// place of one due before).
+    pub(super) fn owner_load_at(&mut self, frame: FrameId, due: f64) {
+        if let Some(next) = self.frames.get_mut(&frame) {
+            next.owner_load_at = Some(due);
+        }
+    }
+
+    /// When the first iframe's `load` is due.
+    pub(super) fn owner_loads_due(&self) -> Option<f64> {
+        self.frames
+            .values()
+            .filter_map(|next| next.owner_load_at)
+            .reduce(f64::min)
+    }
+
+    /// The frames whose iframes' `load`s are due by `now`, taken.
+    pub(super) fn take_due_owner_loads(&mut self, now: f64) -> Vec<FrameId> {
+        self.frames
+            .iter_mut()
+            .filter_map(|(frame, next)| {
+                next.owner_load_at
+                    .take_if(|due| *due <= now)
+                    .map(|_| *frame)
+            })
+            .collect()
     }
 }
 
@@ -207,5 +355,80 @@ mod tests {
         assert_eq!(frames.top(), None);
         assert!(frames.ids().is_empty());
         assert!(frames.documents().next().is_none());
+    }
+
+    fn asked(begin_id: u64) -> NavigationRequest {
+        NavigationRequest {
+            begin_id,
+            no_referrer: false,
+            origin_source: None,
+        }
+    }
+
+    fn url() -> Url {
+        Url::parse("about:srcdoc").unwrap()
+    }
+
+    /// A frame's navigation: one asked for in place of the one before and
+    /// of a commit queued; taken by its number only; one the browser
+    /// started takes whichever; the top-level frame's stays through a
+    /// commit that wasn't it, the children's commits don't.
+    #[test]
+    fn a_frame_navigates_one_navigation_at_a_time() {
+        let mut dom = Dom::new();
+        let docs = documents(&mut dom, 3);
+        let mut frames = RenderFrames::default();
+        frames.commit_top(TOP, FrameDocument::for_test(TOP, docs[0].clone()));
+        let child = FrameId(1);
+        frames.set_child_document(child, FrameDocument::for_test(child, docs[1].clone()));
+        assert!(!frames.is_navigating(child));
+        frames.queue_commit(child, url(), String::new());
+        assert!(frames.is_navigating(child));
+        frames.navigation_sent(child, asked(7));
+        assert!(frames.next_commit().is_none(), "the commit queued no longer commits");
+        assert!(frames.is_navigating(child));
+        frames.navigation_sent(child, asked(8));
+        assert!(frames.take_navigation(child, 7).is_none(), "one asked for before");
+        assert_eq!(frames.take_navigation(child, 8).map(|asked| asked.begin_id), Some(8));
+        assert!(!frames.is_navigating(child));
+        frames.navigation_sent(child, asked(9));
+        assert_eq!(frames.take_any_navigation(child).map(|asked| asked.begin_id), Some(9));
+        // One asked for, then a commit queued: the commit.
+        frames.navigation_sent(child, asked(10));
+        frames.queue_commit(child, url(), String::new());
+        assert!(frames.navigation(child).is_none());
+        assert!(frames.is_navigating(child));
+        // The top-level frame's, through another document's commit.
+        frames.navigation_sent(TOP, asked(11));
+        frames.commit_top(TOP, FrameDocument::for_test(TOP, docs[2].clone()));
+        assert_eq!(frames.navigation(TOP).map(|asked| asked.begin_id), Some(11));
+        assert!(frames.next_commit().is_none(), "the children's go with their document");
+        assert!(!frames.contains(child));
+    }
+
+    /// The iframes' `load`s due: the earliest first, those due taken; a
+    /// frame gone takes its own with it, and its commits.
+    #[test]
+    fn a_frame_gone_takes_its_owner_load_and_commits() {
+        let mut dom = Dom::new();
+        let docs = documents(&mut dom, 3);
+        let mut frames = RenderFrames::default();
+        frames.commit_top(TOP, FrameDocument::for_test(TOP, docs[0].clone()));
+        for (frame, doc) in [(FrameId(1), &docs[1]), (FrameId(2), &docs[2])] {
+            frames.set_child_document(frame, FrameDocument::for_test(frame, doc.clone()));
+        }
+        frames.owner_load_at(FrameId(1), 30.0);
+        frames.owner_load_at(FrameId(2), 20.0);
+        assert_eq!(frames.owner_loads_due(), Some(20.0));
+        assert_eq!(frames.take_due_owner_loads(25.0), [FrameId(2)]);
+        assert_eq!(frames.owner_loads_due(), Some(30.0));
+        frames.queue_commit(FrameId(1), url(), String::new());
+        frames.remove(&[FrameId(1)]);
+        assert_eq!(frames.owner_loads_due(), None);
+        assert!(frames.next_commit().is_none());
+        // The token outlasts the frames.
+        frames.set_top_token(protocol::FrameToken([1; 16]));
+        frames.clear();
+        assert_eq!(frames.top_token(), Some(protocol::FrameToken([1; 16])));
     }
 }

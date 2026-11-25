@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | 1. renderer 那一側收成 `RenderFrame`（已決定的事項第 2 到 8 條） | 進行中 | |
 | 1a. `render_frame.rs`：`RenderFrames`、`RenderFrame`、`NavigationRequest`，`FrameDocument` 搬進來；最上層的 `document` 和 `ChildFrames::documents` 改成表上的 `document`（第 2、3、4 條） | 做完，待審查 | 2026-11-25 |
-| 1b. 導覽的帳（`ChildFrames::navigations`、`main_origin_source`）、`owner_loads`、`devtools_main_frame_token` 搬進 `RenderFrame`，每種轉換一個方法（第 3、5 條）；frame 不見時一起拿掉（第 8 條） | 沒開始 | |
+| 1b. 導覽的帳（`ChildFrames::navigations`、`main_origin_source`）、`owner_loads`、`devtools_main_frame_token` 搬進 `RenderFrame`，每種轉換一個方法（第 3、5 條）；frame 不見時一起拿掉（第 8 條） | 做完，待審查 | 2026-11-25 |
 | 1c. debug build 在讀表時檢查沒分派的 `FrameRequest`（第 6 條） | 沒開始 | |
 | 2 到 4. 方向（已決定的事項第 1 條）：第 1 段做完之後重新評估 | — | |
 
@@ -18,6 +18,18 @@
 | --- | --- |
 
 ## 做過的檢查
+
+### 1b（2026-11-25，Linux：Fedora 45，debug build，`5b6297dd` 之上）
+
+**做了什麼**：`RenderFrame` 多了 `navigation`（`NavigationRequest`：`begin_id`、`no_referrer`、`origin_source`，最上層和子 frame 同一種）和 `owner_load_at`；表上多了 `top_token`（Browser 給最上層的，換文件、換 engine 都留著）和跨 frame 的 `commits` 佇列。轉換是表的方法：`navigation_sent`（取代之前的導覽和排著的 commit）、`navigation`、`take_navigation`（照編號）、`take_any_navigation`（Browser 發起的 commit 拿走 renderer 在等的那個，照原本的行為）、`queue_commit`、`next_commit`、`is_navigating`、`owner_load_at`、`owner_loads_due`、`take_due_owner_loads`；`commit_top` 清掉子 frame 和它們的 commit、留著最上層在等的導覽，`remove` 連 commit 一起拿掉，`clear` 留著 token。`ChildFrames`、`ChildNavigationRequest`、`RenderThread` 的 `main_origin_source`、`devtools_main_frame_token` 拿掉。最上層每一次送出的導覽都記（原本只記要繼承 origin 的那種）：commit 時只拿 `begin_id` 對得上的，沒有 origin 的結果一樣。
+
+和已決定的事項不同的兩處（改進了 README 的第 3、4 條）：DevTools 的 token 在表上、不在最上層的 `RenderFrame`；`FrameDocument` 的定義留在 `documents.rs`（1a 記過）。
+
+**找到的 bug**（第 8 條）：frame 不見時它排著的 owner `load` 沒有拿掉（`ChildFrames::remove` 漏了 `owner_loads`）。看不到效果：到期時找不到 iframe 就跳過、順便清掉，只是最多多留 100 ms，`known()` 的期間把它當成還在。現在 frame 不見時一起拿掉，由單元測試守。
+
+**測試**：`render_frame::tests` 多兩個：`a_frame_navigates_one_navigation_at_a_time`（取代之前的導覽和 commit、照編號拿、Browser 發起的拿任何一個、最上層的撐過別的 commit、子 frame 的 commit 跟著舊文件走）、`a_frame_gone_takes_its_owner_load_and_commits`（最早到期的先、拿走到期的、frame 不見時帶走它的、token 撐過換 engine）。`renderer`、`shell` 的測試通過。WPT（`html/browsers/`、`html/semantics/embedded-content/the-iframe-element/`，404 個）：0 個退步；2 個非預期的通過（`history_pushstate_url_rewriting.html`、`overlapping-navigations-and-traversals/cross-document-traversal-cross-document-nav.html` 的一個子測試）在沒有 1b 的程式上（`git stash`）三次都通過，是原本就過時的預期結果，沒改。
+
+**mutation test**（`mutants-1b.toml`，14 個，都抓到）：每一種轉換（送出、拿走、排 commit、在不在導覽、最上層的 commit、owner `load` 的三個、frame 不見、換 engine）和「最上層的導覽沒記下來」（`shell` 的測試抓到，其他的是單元測試）。
 
 ### 1a（2026-11-25，Linux：Fedora 45，debug build，`65f6530a` 之上）
 

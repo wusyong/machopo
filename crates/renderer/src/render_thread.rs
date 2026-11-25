@@ -482,14 +482,6 @@ struct RenderThread {
     retried_blocked_scripts: bool,
     /// When the task for the intersections held back by their `delay` is
     /// posted for (the renderer's clock), if it is.
-    /// The top-level frame's latest navigation to `about:blank` it asked
-    /// for, by its number, and the document its document is to have its
-    /// origin from (the initiator's).
-    main_origin_source: Option<(u64, dom::NodeRoot)>,
-    /// The main frame's token, the browser's
-    /// (`RendererMsg::DevToolsMainFrameToken`): what DevTools calls it, and
-    /// the browser's frame tree its child frames' parent; none until told.
-    devtools_main_frame_token: Option<protocol::FrameToken>,
     /// The input the compositor thread handed on and the main thread
     /// hasn't taken yet (what `isInputPending()` reads).
     pending_input: PendingUserInput,
@@ -520,9 +512,6 @@ struct RenderThread {
     /// one's once one committed): before the engine, as fields drop in
     /// order and its roots go before their heap.
     render_frames: render_frame::RenderFrames,
-    /// The DOM's child frames' navigations: those the browser has, the
-    /// commits queued, the iframes' `load`s due.
-    children: documents::ChildFrames,
     /// DevTools' `DOM` domain (Blink's `InspectorDOMAgent`): before the
     /// engine, as the nodes it keeps are roots of the engine's DOM.
     dom_agent: Rc<dom_agent::DomAgent>,
@@ -651,11 +640,9 @@ impl RenderThread {
             window_screen_rect: None,
             page_hidden: false,
             page_focused: false,
-            devtools_main_frame_token: None,
             own_history_entries: OwnHistoryEntries::default(),
             navigations_asked: Vec::new(),
             retried_blocked_scripts: false,
-            main_origin_source: None,
             pending_input,
             clock: Clock::new(),
             script_engine,
@@ -674,7 +661,6 @@ impl RenderThread {
             engine: None,
             engine_is_wasm: false,
             render_frames: render_frame::RenderFrames::default(),
-            children: documents::ChildFrames::default(),
         }
     }
 
@@ -1161,7 +1147,7 @@ impl RenderThread {
         } else {
             url.clone()
         };
-        let main_frame = Some(frame) == self.devtools_main_frame_token;
+        let main_frame = Some(frame) == self.render_frames.top_token();
         let no_referrer = !main_frame && self.child_no_referrer_of(frame, begin_id);
         let timing = self.commit_timing(
             &document_url,
@@ -1183,8 +1169,9 @@ impl RenderThread {
         let loaded_url = url.clone();
         let committed = if main_frame {
             let origin_source = begin_id
-                .and_then(|id| self.main_origin_source.take_if(|(asked, _)| *asked == id))
-                .map(|(_, source)| source);
+                .zip(self.render_frames.top())
+                .and_then(|(id, top)| self.render_frames.take_navigation(top, id))
+                .and_then(|asked| asked.origin_source);
             self.commit_navigation(
                 navigation_id,
                 document_url,
@@ -1361,7 +1348,7 @@ impl RenderThread {
                 unreachable!("RendererSender puts DevTools' in the DevTools queue")
             }
             RendererMsg::DevToolsMainFrameToken(token) => {
-                self.devtools_main_frame_token = Some(token);
+                self.render_frames.set_top_token(token);
                 // The realms made from now on are told by it.
                 if let Some(engine) = &mut self.engine {
                     engine.set_main_frame_token(token);

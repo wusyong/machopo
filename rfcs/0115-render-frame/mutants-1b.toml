@@ -1,0 +1,111 @@
+# Stage 1b's mutants: `python3 scripts/test.py mutate rfcs/0115-render-frame/mutants-1b.toml`.
+test = ["sh", "-c", "cargo test -q -p renderer && cargo test -q -p shell --test it -- --skip webdriver::a_session_with_a_hung_page_ends_in_time"]
+timeout = 900
+
+[[mutant]]
+name = "a navigation asked for leaves a commit queued"
+file = "crates/renderer/src/render_thread/render_frame.rs"
+from = '''    pub(super) fn navigation_sent(&mut self, frame: FrameId, request: NavigationRequest) {
+        self.navigating(frame);'''
+to = '''    pub(super) fn navigation_sent(&mut self, frame: FrameId, request: NavigationRequest) {'''
+
+[[mutant]]
+name = "a navigation asked for isn't kept"
+file = "crates/renderer/src/render_thread/render_frame.rs"
+from = '''            next.navigation = Some(request);'''
+to = '''            let _ = (next, request);'''
+
+[[mutant]]
+name = "a navigation is taken whatever its number"
+file = "crates/renderer/src/render_thread/render_frame.rs"
+from = '''            .take_if(|asked| asked.begin_id == begin_id)'''
+to = '''            .take_if(|_| begin_id > 0)'''
+
+[[mutant]]
+name = "a commit the browser started leaves the renderer's navigation"
+file = "crates/renderer/src/render_thread/render_frame.rs"
+from = '''        self.frames.get_mut(&frame)?.navigation.take()'''
+to = '''        self.frames.get_mut(&frame).and(None)'''
+
+[[mutant]]
+name = "a commit queued leaves the navigation asked for"
+file = "crates/renderer/src/render_thread/render_frame.rs"
+from = '''    pub(super) fn queue_commit(&mut self, frame: FrameId, url: Url, markup: String) {
+        self.navigating(frame);'''
+to = '''    pub(super) fn queue_commit(&mut self, frame: FrameId, url: Url, markup: String) {'''
+
+[[mutant]]
+name = "a frame with a commit queued isn't navigating"
+file = "crates/renderer/src/render_thread/render_frame.rs"
+from = '''        self.navigation(frame).is_some() || self.commits.iter().any(|(id, _, _)| *id == frame)'''
+to = '''        self.navigation(frame).is_some()'''
+
+[[mutant]]
+name = "the top-level frame's navigation goes with another document's commit"
+file = "crates/renderer/src/render_thread/render_frame.rs"
+from = '''            RenderFrame {
+                navigation,
+                ..RenderFrame::with(Some(document))
+            },'''
+to = '''            RenderFrame {
+                navigation: navigation.and(None),
+                ..RenderFrame::with(Some(document))
+            },'''
+
+[[mutant]]
+name = "the children's commits stay through a top-level commit"
+file = "crates/renderer/src/render_thread/render_frame.rs"
+from = '''        self.frames.clear();
+        self.commits.clear();
+        self.frames.insert('''
+to = '''        self.frames.clear();
+        self.frames.insert('''
+
+[[mutant]]
+name = "an iframe's load isn't kept"
+file = "crates/renderer/src/render_thread/render_frame.rs"
+from = '''            next.owner_load_at = Some(due);'''
+to = '''            let _ = (next, due);'''
+
+[[mutant]]
+name = "the latest iframe's load is the first due"
+file = "crates/renderer/src/render_thread/render_frame.rs"
+from = '''            .filter_map(|next| next.owner_load_at)
+            .reduce(f64::min)'''
+to = '''            .filter_map(|next| next.owner_load_at)
+            .reduce(f64::max)'''
+
+[[mutant]]
+name = "the iframes' loads are taken before they are due"
+file = "crates/renderer/src/render_thread/render_frame.rs"
+from = '''                    .take_if(|due| *due <= now)'''
+to = '''                    .take_if(|due| *due <= now + 1e9)'''
+
+[[mutant]]
+name = "a frame gone leaves its commits"
+file = "crates/renderer/src/render_thread/render_frame.rs"
+from = '''        self.frames.retain(|frame, _| !gone.contains(frame));
+        self.commits.retain(|(frame, _, _)| !gone.contains(frame));'''
+to = '''        self.frames.retain(|frame, _| !gone.contains(frame));'''
+
+[[mutant]]
+name = "the top-level frame's token goes with the engine"
+file = "crates/renderer/src/render_thread/render_frame.rs"
+from = '''        self.top = None;
+        self.commits.clear();'''
+to = '''        self.top = None;
+        self.top_token = None;
+        self.commits.clear();'''
+
+[[mutant]]
+name = "the top-level frame's navigation isn't kept"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                    self.render_frames.navigation_sent(
+                        frame,
+                        NavigationRequest {
+                            begin_id: id,
+                            no_referrer: false,
+                            origin_source,
+                        },
+                    );'''
+to = '''                    let _ = (id, origin_source);'''

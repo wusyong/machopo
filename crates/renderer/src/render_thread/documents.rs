@@ -8,7 +8,7 @@
 //! shown by its own frame view (`FrameView`: style, layout and paint of
 //! the DOM), told to DevTools' `Page` agent as the main frame; its
 //! iframes' child frames load and show their documents alike
-//! (`ChildFrames`).
+//! (`render_frame`'s `RenderFrames`, a table of the frames).
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -36,6 +36,7 @@ use url::Url;
 use super::document_body::{BodyRead, DocumentBody, NavigationBody, ParserInput};
 use super::network_agent::RequestFrame;
 use super::page_agent::{FrameInfo, FrameResources};
+use super::render_frame::NavigationRequest;
 use super::{RenderThread, SwapPromise};
 use crate::frame_view::{Frame, FrameView};
 use crate::initiator::Initiator;
@@ -254,42 +255,11 @@ impl FrameDocument {
     }
 }
 
-/// What the renderer has of the DOM's child frames' navigations (their
-/// documents are the frames' table's, `render_frame`): the navigations the
-/// browser has for them, the commits queued, the iframes' `load`s due.
-#[derive(Default)]
-pub(super) struct ChildFrames {
-    /// A child frame's navigation the browser has (`BeginNavigation`),
-    /// until it commits or is dropped: one a frame.
-    navigations: HashMap<FrameId, ChildNavigationRequest>,
-    /// A child frame's `srcdoc` or `about:` document, which needs no fetch
-    /// but commits in a task of its own all the same, as a response's
-    /// would (Chrome's goes through a navigation request too): its frame,
-    /// its URL and its markup, in order (`run_child_commits`).
-    commits: std::collections::VecDeque<(FrameId, Url, String)>,
-    /// When each frame's iframe fires `load` for a navigation within its
-    /// document that another origin asked for (`owner_load_later`), on
-    /// the clock.
-    owner_loads: HashMap<FrameId, f64>,
-}
-
 /// How long after a navigation within a cross-origin child frame's
 /// document its iframe fires `load` (Blink's
 /// `cross_origin_load_event_delay`): one for navigations in a row, as the
 /// later of cross-document ones would cancel the earlier.
 const OWNER_LOAD_DELAY_MS: f64 = 100.0;
-
-/// A child frame's navigation the renderer asked the browser for: its
-/// number for it (`BeginNavigation`'s id), whether its iframe's referrer
-/// policy was `no-referrer` (what its navigation timing reads of its
-/// response's `Timing-Allow-Origin`), and where its origin comes from.
-pub(super) struct ChildNavigationRequest {
-    begin_id: u64,
-    no_referrer: bool,
-    /// For one to `about:blank`: the initiator's document, which its
-    /// document has its origin from (`about_blank_origin_source`).
-    origin_source: Option<NodeRoot>,
-}
 
 use protocol::renderer::RENDERER_COMMIT;
 
@@ -320,32 +290,6 @@ pub(super) struct ChildCommit<'a> {
     pub(super) history: protocol::renderer::HistoryEntryParams,
     /// The loader the browser gave it.
     pub(super) loader: u64,
-}
-
-impl ChildFrames {
-    /// The frames the renderer has something of.
-    fn known(&self) -> Vec<FrameId> {
-        let mut known: Vec<FrameId> = self.navigations.keys().copied().collect();
-        known.extend(self.commits.iter().map(|(frame, _, _)| *frame));
-        known.extend(self.owner_loads.keys());
-        known.sort_unstable();
-        known.dedup();
-        known
-    }
-
-    /// The frames `gone` (a frame and those in it) gone: what of them the
-    /// renderer had.
-    fn remove(&mut self, gone: &[FrameId]) {
-        self.navigations.retain(|id, _| !gone.contains(id));
-        self.commits.retain(|(id, _, _)| !gone.contains(id));
-    }
-
-    /// `frame`'s navigation started: one it started before doesn't
-    /// commit (one navigation a frame).
-    fn navigating(&mut self, frame: FrameId) {
-        self.navigations.remove(&frame);
-        self.commits.retain(|(id, _, _)| *id != frame);
-    }
 }
 
 /// A committed document's content type (its MIME type's essence: the
@@ -558,7 +502,7 @@ impl RenderThread {
         // with it.
         if !self.devtools_sessions.is_empty()
             && let Some(main) = main_frame_info(
-                self.devtools_main_frame_token,
+                self.render_frames.top_token(),
                 navigation_id,
                 &document_url,
                 mime_type,
@@ -659,8 +603,8 @@ impl RenderThread {
             node,
         )));
         self.set_viewport();
-        // The child frames of the document before go with it.
-        self.children = ChildFrames::default();
+        // The child frames of the document before go with it
+        // (`commit_top`).
         // DevTools' agents look at the frames again after the task (the
         // `DOM` agent's frames have the new document).
         self.frames_changed = true;
@@ -678,7 +622,7 @@ impl RenderThread {
             )
         });
         self.request_main_frame();
-        if let Some(frame) = self.devtools_main_frame_token {
+        if let Some(frame) = self.render_frames.top_token() {
             let _ = self.to_browser.send(RendererHostMsg::DidCommitNavigation {
                 frame,
                 navigation_id,
@@ -705,8 +649,6 @@ impl RenderThread {
         self.css_agent.dom_gone();
         self.overlay_agent.dom_gone();
         self.render_frames.clear();
-        self.children = ChildFrames::default();
-        self.main_origin_source = None;
         // What was asked for its documents: a response still to come is
         // no one's (the next DOM's nodes are numbered from the start).
         // Its `fetch()`es', images' and scripts' requests go with its DOM.
@@ -785,15 +727,11 @@ impl RenderThread {
             Some(top) => self.child_frames_below(top),
             None => Vec::new(),
         };
-        let mut known = self.children.known();
-        known.extend(self.render_frames.children());
-        known.sort_unstable();
-        known.dedup();
-        let gone: Vec<FrameId> = known
-            .into_iter()
+        let gone: Vec<FrameId> = self
+            .render_frames
+            .children()
             .filter(|known| frames.iter().all(|(frame, _, _)| frame != known))
             .collect();
-        self.children.remove(&gone);
         self.render_frames.remove(&gone);
         self.cancel_fetches_of_gone_documents();
         for (frame, _, owner) in frames {
@@ -896,8 +834,7 @@ impl RenderThread {
     /// waits for it (`dom_api::check_completed`): after each change to
     /// them.
     fn sync_child_navigating(&mut self, frame: FrameId) {
-        let navigating = self.children.navigations.contains_key(&frame)
-            || self.children.commits.iter().any(|(id, _, _)| *id == frame);
+        let navigating = self.render_frames.is_navigating(frame);
         let Some((_, owner)) = self.child_parent(frame) else {
             return;
         };
@@ -1028,7 +965,7 @@ impl RenderThread {
     pub(super) fn frame_token(&mut self, frame: FrameId) -> Option<protocol::FrameToken> {
         if self.render_frames.top() == Some(frame)
         {
-            self.devtools_main_frame_token
+            self.render_frames.top_token()
         } else {
             self.child_token(frame)
         }
@@ -1059,10 +996,16 @@ impl RenderThread {
         match navigation {
             FrameNavigation::To { url, replace } if top => {
                 let kind = BeginNavigationKind::To { url, replace };
-                if let Some(id) = begin_id
-                    && let Some(source) = self.about_blank_origin_source(initiator, &kind)
-                {
-                    self.main_origin_source = Some((id, source));
+                if let Some(id) = begin_id {
+                    let origin_source = self.about_blank_origin_source(initiator, &kind);
+                    self.render_frames.navigation_sent(
+                        frame,
+                        NavigationRequest {
+                            begin_id: id,
+                            no_referrer: false,
+                            origin_source,
+                        },
+                    );
                 }
             }
             FrameNavigation::To { url, replace } => match begin_id {
@@ -1111,7 +1054,7 @@ impl RenderThread {
         url: &str,
         history: protocol::renderer::HistoryEntryParams,
     ) {
-        let frame = if self.devtools_main_frame_token == Some(token) {
+        let frame = if self.render_frames.top_token() == Some(token) {
             self.render_frames.top()
         } else {
             self.child_of_token(token)
@@ -1237,10 +1180,9 @@ impl RenderThread {
     ) {
         let no_referrer = self.child_no_referrer(frame);
         let origin_source = self.about_blank_origin_source(initiator, kind);
-        self.children.navigating(frame);
-        self.children.navigations.insert(
+        self.render_frames.navigation_sent(
             frame,
-            ChildNavigationRequest {
+            NavigationRequest {
                 begin_id,
                 no_referrer,
                 origin_source,
@@ -1288,9 +1230,8 @@ impl RenderThread {
         };
         if let Some(begin_id) = begin_id
             && self
-                .children
-                .navigations
-                .get(&frame)
+                .render_frames
+                .navigation(frame)
                 .is_none_or(|asked| asked.begin_id != begin_id)
         {
             tracing::debug!(url = %document.url, "dropping a stale commit of a child frame");
@@ -1304,7 +1245,11 @@ impl RenderThread {
             tracing::debug!(url = %document.url, "dropping a commit older than the child frame's document");
             return false;
         }
-        let asked = self.children.navigations.remove(&frame);
+        // One the browser started takes the renderer's place too.
+        let asked = match begin_id {
+            Some(id) => self.render_frames.take_navigation(frame, id),
+            None => self.render_frames.take_any_navigation(frame),
+        };
         self.sync_child_navigating(frame);
         let navigation = ChildCommit {
             origin_source: asked.and_then(|asked| asked.origin_source),
@@ -1330,7 +1275,7 @@ impl RenderThread {
         begin_id: Option<u64>,
     ) -> bool {
         self.child_of_token(token)
-            .and_then(|frame| self.children.navigations.get(&frame))
+            .and_then(|frame| self.render_frames.navigation(frame))
             .is_some_and(|asked| Some(asked.begin_id) == begin_id && asked.no_referrer)
     }
 
@@ -1341,15 +1286,9 @@ impl RenderThread {
         let Some(frame) = self.child_of_token(token) else {
             return;
         };
-        if self
-            .children
-            .navigations
-            .get(&frame)
-            .is_none_or(|asked| asked.begin_id != id)
-        {
+        if self.render_frames.take_navigation(frame, id).is_none() {
             return;
         }
-        self.children.navigations.remove(&frame);
         self.sync_child_navigating(frame);
         let parent = self.child_parent(frame).map(|(parent, _)| parent);
         if let Some(parent) = parent {
@@ -1379,8 +1318,7 @@ impl RenderThread {
     /// (an iframe's `onload` set after it is parsed hears its `load`).
     /// Its iframe delays its parent's `load` meanwhile.
     fn queue_child_commit(&mut self, frame: FrameId, url: Url, markup: String) {
-        self.children.navigating(frame);
-        self.children.commits.push_back((frame, url, markup));
+        self.render_frames.queue_commit(frame, url, markup);
         self.scheduler.post_internal(InternalTask::ChildCommits);
         self.sync_child_navigating(frame);
     }
@@ -1407,7 +1345,7 @@ impl RenderThread {
         });
         if other_origin {
             let due = self.clock.now() + OWNER_LOAD_DELAY_MS;
-            self.children.owner_loads.insert(frame, due);
+            self.render_frames.owner_load_at(frame, due);
             self.post_internal_after(InternalTask::OwnerLoads, OWNER_LOAD_DELAY_MS);
         }
     }
@@ -1415,22 +1353,15 @@ impl RenderThread {
     /// When the first iframe's `load` for a navigation within a
     /// cross-origin document is due, on the clock.
     pub(super) fn owner_loads_due(&self) -> Option<f64> {
-        self.children.owner_loads.values().copied().reduce(f64::min)
+        self.render_frames.owner_loads_due()
     }
 
     /// Fires the iframes' `load`s that are due, for the frames still there
     /// (`owner_load_later`); a gone frame's goes as it comes due.
     pub(super) fn fire_due_owner_loads(&mut self) {
         let now = self.clock.now();
-        let due: Vec<FrameId> = self
-            .children
-            .owner_loads
-            .iter()
-            .filter(|(_, due)| **due <= now)
-            .map(|(frame, _)| *frame)
-            .collect();
+        let due = self.render_frames.take_due_owner_loads(now);
         for frame in due {
-            self.children.owner_loads.remove(&frame);
             let Some((_, owner)) = self.child_parent(frame) else {
                 continue;
             };
@@ -1451,7 +1382,7 @@ impl RenderThread {
     /// The first of the child frames' documents queued to commit, in a task
     /// of its own (`queue_child_commit` posts one for each).
     pub(super) fn run_child_commit(&mut self) {
-        if let Some((frame, url, markup)) = self.children.commits.pop_front() {
+        if let Some((frame, url, markup)) = self.render_frames.next_commit() {
             self.sync_child_navigating(frame);
             let _task = trace_event::trace_event!("ThreadControllerImpl::RunTask");
             let reported = url.to_string();
@@ -1786,7 +1717,7 @@ impl RenderThread {
         token: protocol::FrameToken,
         navigation_id: u64,
     ) -> Option<FrameId> {
-        let frame = if Some(token) == self.devtools_main_frame_token {
+        let frame = if Some(token) == self.render_frames.top_token() {
             self.render_frames.top()?
         } else {
             self.child_of_token(token)?
@@ -2768,7 +2699,7 @@ impl RenderThread {
         let url = self.top_document_url()?;
         let next = self.render_frames.top_document()?;
         main_frame_info(
-            self.devtools_main_frame_token,
+            self.render_frames.top_token(),
             next.navigation_id,
             &url,
             &next.mime_type,
@@ -2858,8 +2789,8 @@ impl RenderThread {
             .iter()
             .map(|(frame, _)| self.frame_id(*frame))
             .collect();
-        let main = self
-            .devtools_main_frame_token
+        let main = self.render_frames
+            .top_token()
             .map(|token| token.to_string())
             .unwrap_or_default();
         let Some(engine) = self.engine.as_mut() else {
@@ -2893,7 +2824,7 @@ impl RenderThread {
         owner: &NodeRoot,
         parent: &FrameInfo,
     ) -> Option<FrameInfo> {
-        let navigating = self.children.navigations.contains_key(&frame);
+        let navigating = self.render_frames.navigation(frame).is_some();
         let id = self.frame_id(frame);
         let committed = self.doc(frame).map(|next| {
             (
@@ -2992,7 +2923,7 @@ impl RenderThread {
             document: 0,
             name: known.name.clone(),
             initial: false,
-            navigating: self.children.navigations.contains_key(&frame),
+            navigating: self.render_frames.navigation(frame).is_some(),
             url: url.to_string(),
             origin,
             mime_type: mime_type.to_owned(),
@@ -4489,7 +4420,7 @@ impl RenderThread {
     fn request_frame(&mut self, frame: FrameId) -> Option<RequestFrame> {
         let top = self.render_frames.top();
         let frame_id = if Some(frame) == top {
-            self.devtools_main_frame_token?.to_string()
+            self.render_frames.top_token()?.to_string()
         } else {
             self.frame_id(frame)
         };
