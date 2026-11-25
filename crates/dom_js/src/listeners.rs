@@ -59,7 +59,7 @@ pub(crate) fn stopped(scope: &v8::Isolate) -> bool {
 }
 
 /// V8 as the DOM's script host out of any member's call: what runs the
-/// timers (`run_timers`), reports an exception (the `error` event's
+/// timers (`run_dom_task`), reports an exception (the `error` event's
 /// listeners) and a rejection; the values it stores, V8's.
 pub(crate) struct Host<'a, 'b, 's, 'i> {
     pub(crate) scope: &'a mut Scope<'b, 's, 'i>,

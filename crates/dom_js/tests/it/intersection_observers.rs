@@ -9,7 +9,6 @@
 use std::time::Instant;
 
 use dom_api::{ApiCx, ClassicScript, ComputedIntersection, EngineSettings, ScriptEngine};
-use dom_js::V8Engine;
 use gfx::RectF;
 
 use crate::env::Env;
@@ -218,11 +217,11 @@ fn the_entrys_constructor() {
 /// next observer called.
 #[test]
 fn the_task_calls_the_observers_back() {
-    let mut engine = V8Engine::new(EngineSettings { web_tests: true });
+    let mut engine = crate::TestEngine::new(EngineSettings { web_tests: true });
     let document = engine
         .create_window(engine.top_frame(), "https://example.test/", Instant::now())
         .expect("a window");
-    let run = |engine: &mut V8Engine, source: &str| {
+    let run = |engine: &mut crate::TestEngine, source: &str| {
         engine.run_classic_script(
             engine.top_frame(),
             &ClassicScript {
@@ -277,7 +276,7 @@ fn the_task_calls_the_observers_back() {
         "log.push('taken ' + taken.takeRecords().length)",
     );
     // The task the DOM queued with the entries.
-    while engine.run_element_tasks() {}
+    while engine.run_due_tasks() {}
     run(
         &mut engine,
         "testRunner.reportHarnessResults(log.join(' / '))",

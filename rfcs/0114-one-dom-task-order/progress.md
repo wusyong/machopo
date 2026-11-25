@@ -8,11 +8,11 @@
 | --- | --- | --- |
 | 1. scheduler 的核心抽到 `base`，主 thread 改用它，行為不變（已決定的事項第 1、5、7 條） | 做完，待審查 | 2026-11-25 |
 | 2. worker 的 loop 改用 scheduler（第 6、8 條） | 做完，待審查 | 2026-11-25 |
-| 3. 拿掉 `dom` 的順序（3a 到 3d） | 進行中 | |
+| 3. 拿掉 `dom` 的順序（3a 到 3d） | 做完，待審查 | 2026-11-25 |
 | 3a. 照編號拿、拿掉 `target_task` 和時鐘的換算（第 2 條） | 做完，待審查 | 2026-11-25 |
 | 3b. port 的狀態機：`Waiting`、`Running`，`enable`、`push`、`ship`、`arrive`；拿掉補號、重送、每個 task 之後的編號（第 3 條） | 做完，待審查 | 2026-11-25 |
 | 3c. debug build 的偵測只問「有沒有」，主 thread 和 worker 都裝（第 4 條） | 做完，待審查 | 2026-11-25 |
-| 3d. 拿掉 `next_task`、一輪的機制和 engine 只剩測試在用的方法，測試改成經過 `base` 的 scheduler 跑（第 5、9 條） | 沒開始 | |
+| 3d. 拿掉 `next_task`、一輪的機制和 engine 只剩測試在用的方法，測試改成經過 `base` 的 scheduler 跑（第 5、9、10 條） | 做完，待審查 | 2026-11-25 |
 
 ## 驗收
 
@@ -23,6 +23,20 @@
 | 主 thread 的 scheduler 行為不變 | `renderer` 的 `task_queue::tests`、`shell` 的整合測試（`event_loop::`、`workers::`、DevTools 的）照舊通過 |
 
 ## 做過的檢查
+
+### 第 3 段的 3d 和第 3 段結束（2026-11-25，Linux：Fedora 45，debug build，`aa335584` 之上）
+
+**做了什麼**：
+- `dom`：拿掉 `next_task`、`NextTask`、一輪（`begin_task_pass`、`end_task_pass`、`task_limit`、`task_may_run`）、`has_queued_tasks`，和「拿第一個」的 take（`take_due`、`take_due_native_timer`、`take_element_task`、`take_posted_message`、`take_due_idle_timeout`）；`first_*` 換成只照編號找的 `find_*`。`TimerState` 多了 `number`；`context_window` 公開；新的 `TaskTokens`（第 10 條）和 `Cx::instant_in`。
+- `base`：`SequenceManager::try_next_by`（照給的時刻，測試自己的時鐘；照 Chromium 的 `TaskEnvironment` 的 mock time）。這是做的時候才發現要的：`dom_api`、`dom_js` 的 timer 測試用假的時間（`1e9` 毫秒之類），只有真的時鐘的話要真的等。規則還是 `queue_due` 那一份，只是「現在」由呼叫的人給。
+- `dom_api`：`run_task` 只收編號；拿掉 `run_due`、`run_next_due`、`run_element_tasks`、`run_posted_messages`。`ScriptEngine` 拿掉 `run_timers`、`run_due_tasks`、`run_element_tasks`、`run_posted_messages`；`WorkerEngine` 拿掉 `run_due_tasks`、`until_next_task`（正式的程式都沒在用）。
+- `dom_js`：拿掉 `run_timers`、`run_element_tasks`、`run_posted_messages` 這些 free function，換成 `run_dom_task`（可以給時間）和 `instant_in`，給 `Env` 用；engine 拿掉 `earliest_due_timer`。`dom_wasm`：拿掉對應的方法，它的測試的 guest 等待改用 `run_due_guests`（renderer 本來就經過它）。
+
+**測試**：`dom` 的 `tests/it/run.rs`（每個測試 thread 一份 `TaskTokens`，照編號拿，回報拿到什麼、是哪個 context 的）；`dom_api` 的 `TestDom` 帶著 `TaskTokens`，`run_due` 照測試的時鐘跑到沒有到期的為止；`dom_js` 的 `TestEngine`（`Deref` 到 engine；engine 的方法拿 engine 自己的 frame 當參數時經過 `DerefMut` 會先借走 engine，所以那幾個方法在 `TestEngine` 上轉呼叫）、`Env` 的 `run_timers`（照測試的時鐘）、`run_due_tasks`、`run_all_due_tasks`，worker 的測試每個 thread 一份 `TaskTokens`。行為改了、跟著改寫的測試：`dom` 的 `tasks::`（一輪的三個拿掉；interval 拿的時候就重新排，排在它的 callback 排的 task 之前；`an_interval_set_again_comes_in_the_next_turn`）、`window::` 的三個 timer 測試（照編號拿，「同時的照建立的順序」改成看編號和記號的時間）、`dom_js` 的 `tasks::a_message_s_message_is_a_task_of_its_own`、`text_controls` 和 `canvas` 的兩處改成跑到沒有為止（listener 和 callback 排的 task 也要跑）。
+
+**檢查**：`cargo test --workspace`（60 個 binary，4869 個通過，1 個 ignored）、`cargo fmt --check`（fmt 改了 15 個檔案，都是這一段的）、`cargo clippy --workspace --all-targets -- -D warnings` 通過；sanity 全部通過。WPT（`workers/`、`webmessaging/`、`html/webappapis/timers/`，483 個）：0 個退步；非預期的通過是 `negative-settimeout.any.worker.html` 和 `dedicated-worker-in-data-url-context.window.html` 的 4 個（第 2 段記過的）。
+
+**mutation test**（`mutants-3d.toml`，6 個，全部抓到）：測試的時鐘換成真的、`instant_in` 不加 time origin、context 自己的訊息和 port 的訊息找不到、`dom_js` 的 `run_dom_task` 不用給的時間、`run_task` 不檢查時間。第一輪還有一個「沒有 timeout 的 idle callback 也照編號找得到」沒抓到：它有編號但從來沒送過記號，沒有人會照它的編號來找，是等價的；那個條件拿掉了（`find_idle_timeout`），mutant 也跟著拿掉。
 
 ### 第 3 段的 3c（2026-11-25，Linux：Fedora 45，debug build，`abcdcfb0` 之上）
 

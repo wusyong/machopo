@@ -26,7 +26,7 @@ fn page<'gc>(cx: &Cx<'_, 'gc>) -> NodeRef<'gc> {
 
 #[test]
 fn script_elements_to_prepare_are_recorded_in_tree_order() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     dom.mutate(|cx| {
         let body = page(cx);
         let document = cx.document_of(body);
@@ -110,7 +110,7 @@ fn script_elements_to_prepare_are_recorded_in_tree_order() {
 /// is looked at.
 #[test]
 fn a_script_the_parser_left_unprepared_is_looked_at() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     dom.mutate(|cx| {
         let body = page(cx);
         let document = cx.document_of(body);
@@ -134,7 +134,7 @@ fn a_script_the_parser_left_unprepared_is_looked_at() {
 /// clone already started if the original is.
 #[test]
 fn a_script_elements_flags() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     dom.mutate(|cx| {
         let body = page(cx);
         let document = cx.document_of(body);
@@ -168,7 +168,7 @@ fn a_script_elements_flags() {
 
 #[test]
 fn queued_scripts_take_their_turns() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     let (scripts, document) = dom.mutate(|cx| {
         let body = page(cx);
         let document = cx.document_of(body);
@@ -215,7 +215,9 @@ fn queued_scripts_take_their_turns() {
         dom.mutate(|cx| {
             let window = cx.window_of(document.get(cx.gc)).expect("a window");
             let mut turns = Vec::new();
-            while let Some((element, kind, _)) = cx.take_element_task(cx.window_context(window)) {
+            for (element, kind, _) in
+                crate::run::take_element_tasks(cx, &[cx.window_context(window)])
+            {
                 assert_eq!(kind, ElementTaskKind::Script);
                 let element = element.expect("a script");
                 let ready = cx.take_ready_script(element).expect("its pending script");
@@ -259,7 +261,7 @@ fn queued_scripts_take_their_turns() {
 /// once taken.
 #[test]
 fn a_moved_scripts_turn_is_its_first_documents() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     let (script, document) = dom.mutate(|cx| {
         let body = page(cx);
         let document = cx.document_of(body);
@@ -279,9 +281,12 @@ fn a_moved_scripts_turn_is_its_first_documents() {
     dom.mutate(|cx| {
         cx.script_fetched(fetches[0].key, None);
         let window = cx.window_of(document.get(cx.gc)).expect("a window");
-        let (element, kind, _) = cx
-            .take_element_task(cx.window_context(window))
-            .expect("its turn");
+        let [(element, kind, _)] =
+            &crate::run::take_element_tasks(cx, &[cx.window_context(window)])[..]
+        else {
+            panic!("its turn");
+        };
+        let (element, kind) = (*element, kind.clone());
         assert_eq!(kind, ElementTaskKind::Script);
         let element = element.expect("a script");
         assert_eq!(cx.node_id(element), cx.node_id(script.get(cx.gc)));

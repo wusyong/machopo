@@ -182,10 +182,7 @@ impl<'gc> Cx<'_, 'gc> {
 
     /// The window `context` is the execution context of, if its global is
     /// one: the DOM's own (`window`).
-    pub(crate) fn context_window(
-        &self,
-        context: Gc<'gc, ExecutionContext>,
-    ) -> Option<Gc<'gc, Window>> {
+    pub fn context_window(&self, context: Gc<'gc, ExecutionContext>) -> Option<Gc<'gc, Window>> {
         context.window.get(self.gc)
     }
 

@@ -3,8 +3,8 @@
 //! window's reporting of exceptions
 //! (https://html.spec.whatwg.org/#report-an-exception). A timer is the
 //! DOM's (`dom::Timer`, on its window), its callback and arguments
-//! the engine's; the host runs the timers due (`run_due`) out of any
-//! operation, by its clock, calling each through `ScriptHost::call_timer`
+//! the engine's; the host runs each as its token comes (`run_task`) out
+//! of any operation, calling each through `ScriptHost::call_timer`
 //! (Blink's `DOMTimer::Fired`). What a listener or a timer throws is
 //! reported at its window (`report_exception`): an `ErrorEvent`, logged by
 //! the engine if no listener cancels it.
@@ -116,75 +116,27 @@ pub(crate) fn worker_clear_timer<'gc>(
     Ok(())
 }
 
-/// Runs `global`'s timers due by `now` (milliseconds since its time
-/// origin), the earliest due first, those due at once in the order they
-/// were made; each out of any operation, its nesting level the global's
-/// while it runs. An interval runs again only once due again after `now`,
-/// so this ends (`dom`'s `take_due`). How many ran.
+/// Runs `global`'s task numbered `number` (a token of the host's
+/// scheduler stands for it, `Cx::task_numbered`), of the queue `queue`
+/// names, due as the scheduler took it, `now` milliseconds since its time
+/// origin (an interval due again an interval after it), with its microtask
+/// checkpoint. Whether it ran (not if it is no more).
 ///
 /// # Panics
 ///
 /// If `now` isn't finite.
-pub fn run_due<H: ScriptHost>(host: &mut H, global: &GlobalRoot, now: f64) -> usize {
-    let mut ran = 0usize;
-    while run_next_due(host, global, now) {
-        ran = ran.saturating_add(1);
-    }
-    ran
-}
-
-/// Runs `global`'s first timer due by `now` (`run_due`'s one task; the
-/// UA's own before script's), followed by a microtask checkpoint for a
-/// UA's one (a script's is the host's `call_timer`'s). Whether one ran.
-///
-/// # Panics
-///
-/// If `now` isn't finite.
-pub fn run_next_due<H: ScriptHost>(host: &mut H, global: &GlobalRoot, now: f64) -> bool {
-    assert!(now.is_finite(), "timers run by a finite time");
-    // The UA's own timers (a spin button's repeat), each a task of its
-    // own too.
-    if run_native_timer(host, global, now, None) {
-        return true;
-    }
-    // An idle callback's timeout is a timer too (Blink posts it as a
-    // delayed task on the same queue): one due before the next timer runs
-    // first, so timers that keep the loop busy don't hold it back. A
-    // window's alone.
-    if let GlobalRoot::Window(window) = global {
-        let idle_first = host.read(|cx| {
-            let window = window.get(cx.gc);
-            cx.next_idle_timeout(window).is_some_and(|idle| {
-                idle <= now
-                    && cx
-                        .next_script_timer_due(cx.window_context(window))
-                        .is_none_or(|timer| idle < timer)
-            })
-        });
-        if idle_first {
-            return crate::idle::run_due_timeout(host, window, now, None);
-        }
-    }
-    run_script_timer(host, global, now, None)
-}
-
-/// Runs the task `queue` names of `global`'s, with its microtask
-/// checkpoint: the one numbered `number` (a token of the host's scheduler
-/// stands for it, `Cx::task_numbered`), or with none the first of that
-/// queue due by `now` (milliseconds since its time origin) that the DOM's
-/// pass lets run (`Cx::next_task` picked it among the page's). Whether one
-/// ran.
 pub fn run_task<H: ScriptHost>(
     host: &mut H,
     global: &GlobalRoot,
     queue: dom::TaskQueue,
     now: f64,
-    number: Option<u64>,
+    number: u64,
 ) -> bool {
+    assert!(now.is_finite(), "tasks run by a finite time");
     match queue {
         dom::TaskQueue::Timer => run_script_timer(host, global, now, number),
         dom::TaskQueue::NativeTimer => run_native_timer(host, global, now, number),
-        // A window's alone (`Cx::next_task` gives none of another's).
+        // A window's alone (`Cx::task_numbered` finds none of another's).
         dom::TaskQueue::IdleTimeout => match global {
             GlobalRoot::Window(window) => crate::idle::run_due_timeout(host, window, now, number),
             GlobalRoot::WorkerGlobal(_) => false,
@@ -194,13 +146,13 @@ pub fn run_task<H: ScriptHost>(
     }
 }
 
-/// `global`'s UA timer numbered `number`, or its first due by `now`, run
-/// as a task (with its microtask checkpoint). Whether one ran.
+/// `global`'s UA timer numbered `number`, run as a task (with its
+/// microtask checkpoint). Whether it ran.
 fn run_native_timer<H: ScriptHost>(
     host: &mut H,
     global: &GlobalRoot,
     now: f64,
-    number: Option<u64>,
+    number: u64,
 ) -> bool {
     let native = host.mutate(|cx| {
         let context = cx.global_context(global.get(cx.gc));
@@ -209,10 +161,7 @@ fn run_native_timer<H: ScriptHost>(
             action,
             data,
             target,
-        } = match number {
-            Some(number) => cx.take_native_timer_numbered(context, number),
-            None => cx.take_due_native_timer(context, now),
-        }?;
+        } = cx.take_native_timer_numbered(context, number)?;
         Some((
             element.map(|element| cx.root(element)),
             action,
@@ -237,22 +186,19 @@ fn run_native_timer<H: ScriptHost>(
     false
 }
 
-/// `global`'s script timer numbered `number`, or its first due by `now`,
-/// run (HTML's timer task: its nesting level the global's while its
-/// callback runs, back to 0 before the host's microtask checkpoint,
-/// `ScriptHost::call_timer`). Whether one ran.
+/// `global`'s script timer numbered `number`, run (HTML's timer task: its
+/// nesting level the global's while its callback runs, back to 0 before
+/// the host's microtask checkpoint, `ScriptHost::call_timer`); an interval
+/// due again from `now`. Whether it ran.
 fn run_script_timer<H: ScriptHost>(
     host: &mut H,
     global: &GlobalRoot,
     now: f64,
-    number: Option<u64>,
+    number: u64,
 ) -> bool {
     let timer = host.mutate(|cx| {
         let context = cx.global_context(global.get(cx.gc));
-        let (timer, nesting) = match number {
-            Some(number) => cx.take_timer_numbered(context, number, now),
-            None => cx.take_due(context, now),
-        }?;
+        let (timer, nesting) = cx.take_timer_numbered(context, number, now)?;
         cx.set_timer_nesting(context, nesting);
         Some(Persistent::new(cx.gc, timer))
     });

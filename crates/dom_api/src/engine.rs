@@ -687,27 +687,12 @@ pub trait ScriptEngine: ParserHost {
     /// timer; now with an element task queued).
     fn until_next_timer(&mut self) -> Option<std::time::Duration>;
 
-    /// Runs the frames' windows' timers due now, the earliest due first
-    /// across the windows (those due at once, the first frame made's), each in its
-    /// window's realm and a microtask checkpoint after it: whether any
-    /// ran.
-    fn run_timers(&mut self) -> bool;
-
-    /// A pass over the page's tasks that are due (the frames' windows'
-    /// timers, the UA's own, idle callbacks' timeouts, element tasks and
-    /// messages): one at a time, the earliest `(time, number)` across the
-    /// windows and their queues first (`dom`'s `tasks`), the clock
-    /// read again before each, each in its window's realm with its
-    /// microtask checkpoint; only those numbered before the pass began, so
-    /// that it ends. Whether any ran.
-    fn run_due_tasks(&mut self) -> bool;
-
     /// Runs the DOM's task numbered `number`, the one a token of the
     /// host's scheduler stands for (`Dom::set_task_waker`), in its window's
-    /// realm with its microtask checkpoint: if it is still next in its
-    /// queue (`Cx::task_numbered`); its time come, as the scheduler took
-    /// it. Whether it ran. Nothing by default: an engine whose DOM tells
-    /// no scheduler.
+    /// realm with its microtask checkpoint: if it is still there
+    /// (`Cx::task_numbered`), wherever in its queue; its time come, as the
+    /// scheduler took it. Whether it ran. Nothing by default: an engine
+    /// whose DOM tells no scheduler.
     fn run_dom_task(&mut self, number: u64) -> bool {
         let _ = number;
         false
@@ -794,16 +779,6 @@ pub trait ScriptEngine: ParserHost {
     fn storage_change_failed(&mut self, area: u64, key: &str, value: Option<String>) {
         let _ = (area, key, value);
     }
-
-    /// Runs the frames' windows' element tasks, a window's after another's
-    /// (`dom_api::run_element_tasks`: a text control's `select`), a
-    /// microtask checkpoint after each: whether any ran.
-    fn run_element_tasks(&mut self) -> bool;
-
-    /// Runs the frames' windows' messages (`run_posted_messages`: HTML's
-    /// posted message task source), a window's after another's, a
-    /// microtask checkpoint after each: whether any ran.
-    fn run_posted_messages(&mut self) -> bool;
 
     /// Whether `frame`'s window's resize observers observe anything: the
     /// host's resize observer loop runs for its document only then.
@@ -1012,10 +987,6 @@ pub trait WorkerEngine {
     /// checkpoint after. Nothing if it was aborted.
     fn fetch_response(&mut self, id: u64, response: Result<crate::FetchedResponse, ()>);
 
-    /// How long until it has a task to run (none with none: it waits for a
-    /// message).
-    fn until_next_task(&mut self) -> Option<std::time::Duration>;
-
     /// Runs its engine's platform tasks that are due (V8's foreground
     /// tasks), from its outermost loop: whether any ran. None by default.
     fn run_platform_tasks(&mut self) -> bool {
@@ -1030,10 +1001,6 @@ pub trait WorkerEngine {
     ) {
         let _ = waker;
     }
-
-    /// Runs its tasks due now, each with its microtask checkpoint, in the
-    /// DOM's order (`dom::Cx::next_task`). Whether one ran.
-    fn run_due_tasks(&mut self) -> bool;
 
     /// What tells its thread's scheduler of each DOM task as its DOM
     /// numbers it (`dom::Dom::set_task_waker`): the thread runs each in its

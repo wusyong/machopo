@@ -185,37 +185,37 @@ fn selectionchange_is_a_task_at_the_document() {
         ),
         "sync"
     );
-    assert_eq!(env.run_element_tasks(), 1);
+    assert_eq!(env.run_due_tasks(), 1);
     assert_eq!(run(&mut env, ""), "true / false / false / true");
     // The same again: nothing; another change: one more.
     run(&mut env, "sel.collapse(t, 2);");
-    assert_eq!(env.run_element_tasks(), 0);
+    assert_eq!(env.run_due_tasks(), 0);
     run(&mut env, "sel.extend(t, 0);");
-    assert_eq!(env.run_element_tasks(), 1);
+    assert_eq!(env.run_due_tasks(), 1);
     run(&mut env, "log = [];");
     // Its data moving it: one; inserting before it: none.
     run(&mut env, "t.insertData(0, 'xx');");
-    assert_eq!(env.run_element_tasks(), 1);
+    assert_eq!(env.run_due_tasks(), 1);
     run(&mut env, "root.prepend(document.createElement('hr'));");
-    assert_eq!(env.run_element_tasks(), 0);
+    assert_eq!(env.run_due_tasks(), 0);
     // Another text's data: none; splitting or joining its text: one.
     run(
         &mut env,
         "root.querySelector('#b').append('far'); root.querySelector('#b').lastChild.insertData(0, 'x');",
     );
-    assert_eq!(env.run_element_tasks(), 0);
+    assert_eq!(env.run_due_tasks(), 0);
     run(&mut env, "sel.collapse(t, 3);");
-    env.run_element_tasks();
+    env.run_due_tasks();
     run(&mut env, "t.splitText(1);");
-    assert_eq!(env.run_element_tasks(), 1);
+    assert_eq!(env.run_due_tasks(), 1);
     run(&mut env, "t.parentNode.normalize();");
-    assert_eq!(env.run_element_tasks(), 1);
+    assert_eq!(env.run_due_tasks(), 1);
     run(&mut env, "sel.collapse(t, 2);");
-    env.run_element_tasks();
+    env.run_due_tasks();
     run(&mut env, "log = [];");
     // Script setting its range: one.
     run(&mut env, "sel.getRangeAt(0).setStart(t, 1);");
-    assert_eq!(env.run_element_tasks(), 1);
+    assert_eq!(env.run_due_tasks(), 1);
     assert_eq!(
         run(&mut env, "log.push(state());"),
         "true / false / false / true / #text 1 #text 2 forward Range"
@@ -235,29 +235,29 @@ fn selectionchange_at_a_text_control() {
          var area = document.body.appendChild(document.createElement('textarea')); area.value = 'abc'; \
          document.addEventListener('selectionchange', (e) => log.push(e.target.nodeName, e.bubbles));",
     );
-    env.run_element_tasks();
+    env.run_due_tasks();
     run(&mut env, "log = [];");
     // Each change's `select` too.
     run(
         &mut env,
         "input.setSelectionRange(1, 3); input.setSelectionRange(2, 3);",
     );
-    assert_eq!(env.run_element_tasks(), 3);
+    assert_eq!(env.run_due_tasks(), 3);
     assert_eq!(run(&mut env, ""), "INPUT / true");
     run(&mut env, "input.setSelectionRange(2, 3);");
-    assert_eq!(env.run_element_tasks(), 0);
+    assert_eq!(env.run_due_tasks(), 0);
     run(
         &mut env,
         "area.select(); input.setRangeText('X', 0, 1, 'select');",
     );
-    env.run_element_tasks();
+    env.run_due_tasks();
     assert_eq!(run(&mut env, ""), "TEXTAREA / true / INPUT / true");
     run(&mut env, "input.value = 'changed'; area.value = 'abc';");
-    env.run_element_tasks();
+    env.run_due_tasks();
     assert_eq!(run(&mut env, ""), "INPUT / true");
     // A new value of the same length: the cursor at its end already.
     run(&mut env, "input.value = 'CHANGED';");
-    assert_eq!(env.run_element_tasks(), 0);
+    assert_eq!(env.run_due_tasks(), 0);
 }
 
 /// `selectAllChildren` of a text: its children, none (not its data).

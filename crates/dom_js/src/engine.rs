@@ -283,44 +283,6 @@ impl V8Engine {
         let scope = &mut v8::ContextScope::new(scope, context);
         f(scope)
     }
-
-    /// The frame whose window's next timer is due first by the clock, of
-    /// those due by their window's now as the timers began to run
-    /// (`nows`, each window's taken the first time it is looked at: an
-    /// interval due again after it waits for the next turn), with that now.
-    /// Those due at once, the first frame made's.
-    fn earliest_due_timer(
-        &mut self,
-        nows: &mut Vec<(dom_api::FrameId, f64)>,
-    ) -> Option<(v8::Global<v8::Context>, f64)> {
-        let frames = self.frames_as_made();
-        let dom = &self.state().dom;
-        let mut best: Option<(f64, v8::Global<v8::Context>, f64)> = None;
-        for (frame, context, document) in frames {
-            let found = dom.read(|cx| {
-                let window = cx.window_of(document.get(cx.gc))?;
-                let now = match nows.iter().find(|(id, _)| *id == frame) {
-                    Some(&(_, now)) => now,
-                    None => {
-                        let now = cx.now_since(Some(window));
-                        nows.push((frame, now));
-                        now
-                    }
-                };
-                let due = cx
-                    .next_due(cx.window_context(window))
-                    .filter(|due| *due <= now)?;
-                // On the DOM's clock: windows' time origins differ.
-                Some((cx.window_time_origin(window) + due, now))
-            });
-            if let Some((at, now)) = found
-                && best.as_ref().is_none_or(|(best, ..)| at < *best)
-            {
-                best = Some((at, context, now));
-            }
-        }
-        best.map(|(_, context, now)| (context, now))
-    }
 }
 
 /// The document's parser's host: its DOM, and the custom elements it
@@ -1444,82 +1406,6 @@ impl ScriptEngine for V8Engine {
         })
     }
 
-    fn run_timers(&mut self) -> bool {
-        let mut nows = Vec::new();
-        let mut ran = false;
-        while let Some((context, now)) = self.earliest_due_timer(&mut nows) {
-            let one = self.in_context(&context, |scope| {
-                let context = scope.get_current_context();
-                crate::window::run_next_timer(scope, context, now)
-            });
-            if !one {
-                break;
-            }
-            ran = true;
-        }
-        if ran {
-            // Each timer's own checkpoint ran; the rejections it left.
-            self.notify_rejected_promises();
-        }
-        ran
-    }
-
-    fn run_due_tasks(&mut self) -> bool {
-        let frames = self.frames_as_made();
-        self.state().dom.read(|cx| cx.begin_task_pass());
-        let mut ran = false;
-        loop {
-            // The clock read again before each: a long task lets the next
-            // timers' turn come.
-            let next = {
-                let dom = &self.state().dom;
-                dom.read(|cx| {
-                    let now = cx.dom_now();
-                    let mut best: Option<(dom::NextTask, usize, f64)> = None;
-                    for (index, (_, _, document)) in frames.iter().enumerate() {
-                        let Some(window) = cx.window_of(document.get(cx.gc)) else {
-                            continue;
-                        };
-                        let Some(task) = cx.next_task(cx.window_context(window), now) else {
-                            continue;
-                        };
-                        if best.as_ref().is_none_or(|(best, ..)| task.before(best)) {
-                            let since = now - cx.window_time_origin(window);
-                            best = Some((task, index, since));
-                        }
-                    }
-                    best
-                })
-            };
-            let Some((task, index, now)) = next else {
-                break;
-            };
-            let context = frames[index].1.clone();
-            let one = self.in_context(&context, |scope| {
-                let context = scope.get_current_context();
-                crate::window::run_task(scope, context, task.queue, now, None)
-            });
-            if !one {
-                break;
-            }
-            ran = true;
-        }
-        let frames = self.frames_as_made();
-        self.state().dom.read(|cx| {
-            let contexts: Vec<_> = frames
-                .iter()
-                .filter_map(|(_, _, document)| cx.window_of(document.get(cx.gc)))
-                .map(|window| cx.window_context(window))
-                .collect();
-            cx.end_task_pass(&contexts);
-        });
-        if ran {
-            // Each task's own checkpoint ran; the rejections it left.
-            self.notify_rejected_promises();
-        }
-        ran
-    }
-
     fn run_dom_task(&mut self, number: u64) -> bool {
         let frames = self.frames_as_made();
         // The one task the token stands for, wherever it is in its queue,
@@ -1540,7 +1426,7 @@ impl ScriptEngine for V8Engine {
         let context = frames[index].1.clone();
         let ran = self.in_context(&context, |scope| {
             let context = scope.get_current_context();
-            crate::window::run_task(scope, context, queue, now, Some(number))
+            crate::window::run_task(scope, context, queue, now, number)
         });
         if ran {
             // Its own checkpoint ran; the rejections it left.
@@ -1647,21 +1533,6 @@ impl ScriptEngine for V8Engine {
         }
     }
 
-    fn run_posted_messages(&mut self) -> bool {
-        let mut ran = false;
-        for (_, context, _) in self.frames_as_made() {
-            ran |= self.in_context(&context, |scope| {
-                let context = scope.get_current_context();
-                crate::window::run_posted_messages(scope, context) > 0
-            });
-        }
-        if ran {
-            // Each message's own checkpoint ran; the rejections it left.
-            self.notify_rejected_promises();
-        }
-        ran
-    }
-
     fn has_idle_callbacks(&mut self) -> bool {
         self.any_window(|cx, window| cx.has_idle_callbacks(window))
     }
@@ -1725,21 +1596,6 @@ impl ScriptEngine for V8Engine {
         self.state()
             .dom
             .mutate(|cx| cx.storage_change_failed(area, key, value));
-    }
-
-    fn run_element_tasks(&mut self) -> bool {
-        let mut ran = false;
-        for (_, context, _) in self.frames_as_made() {
-            ran |= self.in_context(&context, |scope| {
-                let context = scope.get_current_context();
-                crate::window::run_element_tasks(scope, context) > 0
-            });
-        }
-        if ran {
-            // Each task's own checkpoint ran; the rejections it left.
-            self.notify_rejected_promises();
-        }
-        ran
     }
 
     fn run_platform_tasks(&mut self) -> bool {

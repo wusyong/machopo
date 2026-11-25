@@ -7,18 +7,17 @@ use std::time::Instant;
 
 use canvas::CanvasData;
 use dom_api::{ClassicScript, EngineSettings, ScriptEngine};
-use dom_js::V8Engine;
 
 /// A window whose document has `<html><body><canvas id=c>` and its 2D
 /// context `ctx`; `log`, and `error(f)`, the name of what `f` throws.
 struct Page {
     document: dom::NodeRoot,
-    engine: V8Engine,
+    engine: crate::TestEngine,
 }
 
 impl Page {
     fn new() -> Self {
-        let mut engine = V8Engine::new(EngineSettings { web_tests: true });
+        let mut engine = crate::TestEngine::new(EngineSettings { web_tests: true });
         let document = engine
             .create_window(engine.top_frame(), "https://example.test/", Instant::now())
             .expect("a window");
@@ -1165,7 +1164,7 @@ fn to_blob() {
             (4, Some(((300, 150), false)), ImageEncoding::Png),
         ]
     );
-    assert!(!page.engine.run_element_tasks(), "none till the files come");
+    assert!(!page.engine.run_due_tasks(), "none till the files come");
     page.engine.dom_mut().mutate(|cx| {
         cx.canvas_encoded(1, Some(b"png".to_vec()));
         cx.canvas_encoded(2, Some(b"jpeg".to_vec()));
@@ -1175,12 +1174,12 @@ fn to_blob() {
         cx.canvas_encoded(9, None);
     });
     page.run("log = [];");
-    assert!(page.engine.run_element_tasks());
+    assert!(page.engine.run_due_tasks());
     assert_eq!(
         page.log(),
         "true image/png 3 / true image/jpeg 4 / null / thrown"
     );
-    assert!(!page.engine.run_element_tasks(), "each called once");
+    assert!(!page.engine.run_due_tasks(), "each called once");
     page.run("log = []; c.toBlob(b => b.text().then(text => log.push(text)));");
     let [(id, ..)] = canvas_encodes(&mut page)[..] else {
         panic!("one call");
@@ -1188,7 +1187,8 @@ fn to_blob() {
     page.engine
         .dom_mut()
         .mutate(|cx| cx.canvas_encoded(id, Some(b"file".to_vec())));
-    page.engine.run_element_tasks();
+    // Its callback's, then the read's its callback started.
+    page.engine.run_all_due_tasks();
     assert_eq!(page.log(), "file");
 }
 

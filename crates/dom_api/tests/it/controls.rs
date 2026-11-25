@@ -410,9 +410,11 @@ fn a_spin_button_held() {
         .unwrap();
     assert!((due - pressed - 250.0).abs() < 50.0, "{due} {pressed}");
     let run = |page: &mut Page, at: f64| {
-        with_host(&page.dom, |host| {
-            dom_api::run_due(host, &dom::GlobalRoot::Window(window.clone()), pressed + at)
-        })
+        crate::run_due(
+            &page.dom,
+            &dom::GlobalRoot::Window(window.clone()),
+            pressed + at,
+        )
     };
     assert_eq!(run(&mut page, 100.0), 0, "not yet");
     assert_eq!(run(&mut page, 260.0), 1);

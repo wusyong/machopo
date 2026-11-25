@@ -331,9 +331,15 @@ fn deleting_and_moving_by_grapheme_cluster() {
     press(&mut page, "Home", 0);
     let tasks = |page: &mut Page| {
         let document = page.document.clone();
+        let due = page.dom.2.take_due();
         page.dom.mutate(|cx| {
             let window = cx.window_of(document.get(cx.gc)).unwrap();
-            std::iter::from_fn(|| cx.take_element_task(cx.window_context(window))).count()
+            due.into_iter()
+                .filter(|&number| {
+                    cx.take_element_task_numbered(cx.window_context(window), number)
+                        .is_some()
+                })
+                .count()
         })
     };
     tasks(&mut page);

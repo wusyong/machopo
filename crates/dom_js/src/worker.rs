@@ -7,8 +7,6 @@
 //! window's engine's (`state`, `templates`, `listeners`): only the realm and
 //! what runs its tasks are the worker's.
 
-use std::time::Duration;
-
 use bindings::V8PerIsolateData;
 use dom_api::{ClassicScript, ConsoleMessage, ConsoleSink, EngineSettings, WorkerEngine};
 use elise::Persistent;
@@ -406,47 +404,6 @@ impl WorkerEngine for V8WorkerEngine {
         self.data.set_platform_task_waker(waker);
     }
 
-    fn until_next_task(&mut self) -> Option<Duration> {
-        let global = self.global.clone()?;
-        self.state()
-            .dom
-            .read(|cx| dom_api::until_next_due(cx, dom::GlobalRef::WorkerGlobal(global.get(cx.gc))))
-    }
-
-    fn run_due_tasks(&mut self) -> bool {
-        let Some(global) = self.global.clone() else {
-            return false;
-        };
-        self.state().dom.read(|cx| cx.begin_task_pass());
-        let mut ran = false;
-        loop {
-            // The clock read again before each, as a window's engine does.
-            let next = self.state().dom.read(|cx| {
-                let context = cx.worker_global_context(global.get(cx.gc));
-                let now = cx.dom_now();
-                cx.next_task(context, now)
-                    .map(|task| (task, cx.now_in(Some(context))))
-            });
-            let Some((task, now)) = next else {
-                break;
-            };
-            let one = self
-                .in_realm(|scope| {
-                    let context = scope.get_current_context();
-                    crate::window::run_task(scope, context, task.queue, now, None)
-                })
-                .unwrap_or(false);
-            if !one {
-                break;
-            }
-            ran = true;
-        }
-        self.state().dom.read(|cx| {
-            cx.end_task_pass(&[cx.worker_global_context(global.get(cx.gc))]);
-        });
-        ran
-    }
-
     fn set_task_waker(&mut self, waker: dom::TaskWaker) {
         self.state().dom.set_task_waker(waker);
     }
@@ -467,7 +424,7 @@ impl WorkerEngine for V8WorkerEngine {
         };
         self.in_realm(|scope| {
             let context = scope.get_current_context();
-            crate::window::run_task(scope, context, queue, now, Some(number))
+            crate::window::run_task(scope, context, queue, now, number)
         })
         .unwrap_or(false)
     }

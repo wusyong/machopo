@@ -1,19 +1,16 @@
-//! The order a page's tasks run in, across its windows and their task
-//! sources: each task the DOM queues (an element task, a posted or port
-//! message) or arms (a timer, as it is set and as an interval is set
-//! again; the UA's own timers; an idle callback's timeout) gets a number
-//! from one counter, and the time it may run at, on the DOM's clock (when
-//! it was queued, or when a timer is due). The host runs the earliest
-//! `(time, number)` first, one at a time (Chromium's `SequenceManager`
-//! picks among its queues by `EnqueueOrder`, given as an immediate task is
-//! posted and as a delayed one is due): a `setTimeout(f, 0)` set before a
-//! `postMessage` runs before its message, whichever task source each is
-//! of.
-//!
-//! A pass of the host's (`begin_task_pass`) runs only the tasks numbered
-//! before it began: a task one of them queues, or an interval it sets
-//! again, waits for the next pass, so pages that post to each other
-//! forever give way to rendering and input.
+//! A page's tasks, as its host's scheduler runs them: each task the DOM
+//! queues (an element task, a posted message, a port's once it may come)
+//! or arms (a timer, as it is set and as an interval is set again; the
+//! UA's own timers; an idle callback's timeout) gets a number from one
+//! counter, and the host's scheduler is told of it, a token (`TaskWaker`:
+//! due now, or at the instant a timer is due). The scheduler orders the
+//! tokens with its other tasks (Chromium's `SequenceManager` by
+//! `EnqueueOrder`, given as an immediate task is posted and as a delayed
+//! one is due); as one comes, the host runs the task of its number
+//! (`Cx::task_numbered`, and the numbered takes), wherever it is in its
+//! queue, as each of Blink's tasks is a closure of its own: a
+//! `setTimeout(f, 0)` set before a `postMessage` runs before its message,
+//! whichever task source each is of.
 
 use elise::Gc;
 
@@ -44,7 +41,7 @@ impl Stamp {
     }
 }
 
-/// The queue a window's next task is in (`Cx::next_task`).
+/// The queue a task is in (`Cx::task_numbered`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskQueue {
     /// A script's timer (`setTimeout`, `setInterval`).
@@ -60,34 +57,7 @@ pub enum TaskQueue {
     Message,
 }
 
-/// A window's next task: when it may run (milliseconds since the DOM was
-/// made), its number, and its queue.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct NextTask {
-    pub at: f64,
-    pub number: u64,
-    pub queue: TaskQueue,
-}
-
-impl NextTask {
-    /// Whether it runs before `other`: the earlier, ties by number.
-    pub fn before(&self, other: &Self) -> bool {
-        self.at
-            .total_cmp(&other.at)
-            .then(self.number.cmp(&other.number))
-            .is_lt()
-    }
-}
-
 impl Dom {
-    /// Whether a task that is due now (an element task, a message) may be
-    /// queued: one `bool`, which the host reads after each of its own
-    /// tasks. It may still be set once they ran (a pass clears it as it
-    /// ends, `Cx::end_task_pass`).
-    pub fn has_queued_tasks(&self) -> bool {
-        self.changes.tasks_queued.get()
-    }
-
     /// The documents whose window's `load` task ran since the host last
     /// took them (`Cx::note_document_loaded`), in order.
     pub fn take_loaded_documents(&self) -> Vec<NodeId> {
@@ -119,10 +89,9 @@ impl<'gc> Cx<'_, 'gc> {
         number
     }
 
-    /// A task queued now, to run as soon as it may: its time and number;
-    /// `has_queued_tasks` is set, and the host's scheduler told.
+    /// A task queued now, to run as soon as it may: its time and number,
+    /// the host's scheduler told.
     pub(crate) fn stamp_queued_task(&self) -> (f64, u64) {
-        self.changes.tasks_queued.set(true);
         let number = self.next_task_number();
         self.wake_for_task(number, None);
         (self.dom_now(), number)
@@ -144,42 +113,28 @@ impl<'gc> Cx<'_, 'gc> {
         };
         match at {
             None => waker(number, None),
-            Some(at) if at.is_finite() => {
-                let at = std::time::Duration::try_from_secs_f64(at.max(0.0) / 1000.0)
-                    .ok()
-                    .and_then(|since| self.origin.checked_add(since));
-                waker(number, at);
-            }
+            Some(at) if at.is_finite() => waker(number, self.instant_at(at)),
             Some(_) => {}
         }
     }
 
-    /// Whether a task of number `number` may run in a pass: only one
-    /// numbered before it began.
-    pub(crate) fn task_may_run(&self, number: u64) -> bool {
-        self.changes
-            .task_limit
-            .get()
-            .is_none_or(|limit| number < limit)
+    /// The instant the DOM's clock says `at` (`dom_now`'s milliseconds),
+    /// if there is one.
+    fn instant_at(&self, at: f64) -> Option<std::time::Instant> {
+        std::time::Duration::try_from_secs_f64(at.max(0.0) / 1000.0)
+            .ok()
+            .and_then(|since| self.origin.checked_add(since))
     }
 
-    /// A pass of the host's begins: until it ends, only the tasks numbered
-    /// so far run.
-    pub fn begin_task_pass(&self) {
-        self.changes
-            .task_limit
-            .set(Some(self.changes.task_sequence.get()));
-    }
-
-    /// The pass ends: `has_queued_tasks` says whether one of `contexts` has
-    /// a task waiting that doesn't wait for a time (one the pass held
-    /// back, or queued meanwhile).
-    pub fn end_task_pass(&self, contexts: &[Gc<'gc, ExecutionContext>]) {
-        self.changes.task_limit.set(None);
-        let queued = contexts
-            .iter()
-            .any(|&context| self.has_element_task(context) || self.has_posted_message(context));
-        self.changes.tasks_queued.set(queued);
+    /// The instant `ms` milliseconds since `context`'s time origin is, as
+    /// the host's scheduler is told of its tasks: a test's clock
+    /// (`TaskTokens::take_due_by`).
+    pub fn instant_in(
+        &self,
+        context: Gc<'gc, ExecutionContext>,
+        ms: f64,
+    ) -> Option<std::time::Instant> {
+        self.instant_at(context.time_origin.get() + ms)
     }
 
     /// The queue of `context`'s task numbered `number`, the one a token of
@@ -193,47 +148,23 @@ impl<'gc> Cx<'_, 'gc> {
         context: Gc<'gc, ExecutionContext>,
         number: u64,
     ) -> Option<TaskQueue> {
-        let wanted = Some(number);
-        if self.first_timer(context, wanted).is_some() {
+        if self.find_timer(context, number).is_some() {
             Some(TaskQueue::Timer)
-        } else if self.first_native_timer(context, wanted).is_some() {
+        } else if self.find_native_timer(context, number).is_some() {
             Some(TaskQueue::NativeTimer)
         } else if self
             .context_window(context)
-            .and_then(|window| self.first_idle_timeout(window, wanted))
+            .and_then(|window| self.find_idle_timeout(window, number))
             .is_some()
         {
             Some(TaskQueue::IdleTimeout)
-        } else if self.first_element_task(context, wanted).is_some() {
+        } else if self.find_element_task(context, number).is_some() {
             Some(TaskQueue::Element)
-        } else if self.first_message(context, wanted).is_some() {
+        } else if self.find_message(context, number).is_some() {
             Some(TaskQueue::Message)
         } else {
             None
         }
-    }
-
-    /// The first task of each of `context`'s queues, of those the pass
-    /// lets run: when it may run (the DOM's clock), its number, its queue.
-    fn queue_heads(
-        &self,
-        context: Gc<'gc, ExecutionContext>,
-    ) -> [Option<(f64, u64, TaskQueue)>; 5] {
-        let origin = context.time_origin.get();
-        [
-            self.next_due_timer(context)
-                .map(|(due, number)| (origin + due, number, TaskQueue::Timer)),
-            self.next_due_native_timer(context)
-                .map(|(due, number)| (origin + due, number, TaskQueue::NativeTimer)),
-            // A window's only (`requestIdleCallback`).
-            self.context_window(context)
-                .and_then(|window| self.next_due_idle_timeout(window))
-                .map(|(due, number)| (origin + due, number, TaskQueue::IdleTimeout)),
-            self.next_element_task(context)
-                .map(|(at, number)| (at, number, TaskQueue::Element)),
-            self.next_posted_message(context)
-                .map(|(at, number)| (at, number, TaskQueue::Message)),
-        ]
     }
 
     /// Whether a task of `context`'s of any kind is due by `by` (the DOM's
@@ -249,16 +180,5 @@ impl<'gc> Cx<'_, 'gc> {
                 .is_some_and(|window| self.has_idle_timeout_due_by(window, by))
             || self.has_element_task_by(context, by)
             || self.has_message_by(context, by)
-    }
-
-    /// `context`'s task to run next by `now` (the DOM's clock), of those
-    /// the pass lets run: the earliest `(time, number)` of its queues.
-    pub fn next_task(&self, context: Gc<'gc, ExecutionContext>, now: f64) -> Option<NextTask> {
-        self.queue_heads(context)
-            .into_iter()
-            .flatten()
-            .filter(|&(at, _, _)| at <= now)
-            .map(|(at, number, queue)| NextTask { at, number, queue })
-            .reduce(|best, task| if task.before(&best) { task } else { best })
     }
 }

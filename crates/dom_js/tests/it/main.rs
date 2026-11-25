@@ -96,3 +96,127 @@ pub(crate) fn child_frames(engine: &mut dom_js::V8Engine) -> Vec<dom_api::FrameI
     }
     frames
 }
+
+/// An engine as a host's thread runs it: its DOM's tasks' tokens go into a
+/// scheduler of its own (`dom::TaskTokens`), and each due one is run by its
+/// number (`ScriptEngine::run_dom_task`), as the renderer's main thread
+/// runs them. The engine's own calls through it, as one.
+pub(crate) struct TestEngine {
+    engine: dom_js::V8Engine,
+    tokens: dom::TaskTokens,
+}
+
+impl TestEngine {
+    pub(crate) fn new(settings: dom_api::EngineSettings) -> Self {
+        use dom_api::ScriptEngine;
+        let mut engine = dom_js::V8Engine::new(settings);
+        let tokens = dom::TaskTokens::new();
+        engine.dom_mut().set_task_waker(tokens.waker());
+        Self { engine, tokens }
+    }
+
+    /// Runs the tasks whose tokens are due now, each by its number, in the
+    /// scheduler's order (those they queue wait for the next call, as the
+    /// host's thread goes on to its other tasks): whether one ran.
+    pub(crate) fn run_due_tasks(&mut self) -> bool {
+        use dom_api::ScriptEngine;
+        let mut ran = false;
+        for number in self.tokens.take_due() {
+            ran |= self.engine.run_dom_task(number);
+        }
+        ran
+    }
+
+    /// `run_due_tasks`, again until none ran.
+    pub(crate) fn run_all_due_tasks(&mut self) {
+        while self.run_due_tasks() {}
+    }
+}
+
+/// The engine's calls a test makes with the engine's own frame as an
+/// argument (`engine.run_classic_script(engine.top_frame(), ..)`): through
+/// `DerefMut` alone the call's borrow of the engine comes before its
+/// arguments'.
+#[allow(dead_code, reason = "each test file uses some")]
+impl TestEngine {
+    pub(crate) fn run_classic_script(
+        &mut self,
+        frame: dom_api::FrameId,
+        script: &dom_api::ClassicScript<'_>,
+    ) {
+        dom_api::ScriptEngine::run_classic_script(&mut self.engine, frame, script);
+    }
+
+    pub(crate) fn create_window(
+        &mut self,
+        frame: dom_api::FrameId,
+        url: &str,
+        time_origin: std::time::Instant,
+    ) -> Option<dom::NodeRoot> {
+        dom_api::ScriptEngine::create_window(&mut self.engine, frame, url, time_origin)
+    }
+
+    pub(crate) fn document_ready(
+        &mut self,
+        frame: dom_api::FrameId,
+        readiness: dom_api::DocumentReadiness,
+    ) {
+        dom_api::ScriptEngine::document_ready(&mut self.engine, frame, readiness);
+    }
+
+    pub(crate) fn webdriver_element_property(
+        &mut self,
+        frame: dom_api::FrameId,
+        element: dom::NodeId,
+        name: &str,
+    ) -> Result<dom_api::WebDriverValue, dom_api::WebDriverScriptError> {
+        dom_api::ScriptEngine::webdriver_element_property(&mut self.engine, frame, element, name)
+    }
+
+    pub(crate) fn has_resize_observations(&mut self, frame: dom_api::FrameId) -> bool {
+        dom_api::ScriptEngine::has_resize_observations(&mut self.engine, frame)
+    }
+
+    pub(crate) fn unload_document(
+        &mut self,
+        frame: dom_api::FrameId,
+    ) -> Option<(std::time::Instant, std::time::Instant)> {
+        dom_api::ScriptEngine::unload_document(&mut self.engine, frame)
+    }
+
+    pub(crate) fn execute_webdriver_script(
+        &mut self,
+        frame: dom_api::FrameId,
+        id: u64,
+        body: &str,
+        args: &[dom_api::WebDriverValue],
+        is_async: bool,
+    ) -> Result<(), dom_api::WebDriverScriptError> {
+        dom_api::ScriptEngine::execute_webdriver_script(
+            &mut self.engine,
+            frame,
+            id,
+            body,
+            args,
+            is_async,
+        )
+    }
+
+    pub(crate) fn child_frames(&mut self, frame: dom_api::FrameId) -> Vec<dom_api::FrameId> {
+        dom_api::ScriptEngine::child_frames(&mut self.engine, frame)
+    }
+}
+
+impl std::ops::Deref for TestEngine {
+    type Target = dom_js::V8Engine;
+
+    fn deref(&self) -> &dom_js::V8Engine {
+        &self.engine
+    }
+}
+
+impl std::ops::DerefMut for TestEngine {
+    fn deref_mut(&mut self) -> &mut dom_js::V8Engine {
+        &mut self.engine
+    }
+}

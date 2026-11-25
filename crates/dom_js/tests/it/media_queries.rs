@@ -9,7 +9,6 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use dom_api::{ClassicScript, EngineSettings, ScriptEngine};
-use dom_js::V8Engine;
 
 /// A frame's layout of a viewport of the test's width, 1x.
 struct Sized(dom::NodeId, Rc<Cell<f32>>);
@@ -55,13 +54,13 @@ impl dom_api::FrameLayout for Sized {
 }
 
 struct Page {
-    engine: V8Engine,
+    engine: crate::TestEngine,
     width: Rc<Cell<f32>>,
 }
 
 impl Page {
     fn new() -> Self {
-        let mut engine = V8Engine::new(EngineSettings { web_tests: true });
+        let mut engine = crate::TestEngine::new(EngineSettings { web_tests: true });
         let document = engine
             .create_window(engine.top_frame(), "https://example.test/", Instant::now())
             .expect("a window");
@@ -102,8 +101,8 @@ impl Page {
     /// The viewport `width` wide, then the rendering update's step.
     fn resize(&mut self, width: f32) {
         self.width.set(width);
-        self.engine
-            .report_media_query_changes(self.engine.top_frame());
+        let top = self.engine.top_frame();
+        self.engine.report_media_query_changes(top);
     }
 }
 

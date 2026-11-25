@@ -5,7 +5,7 @@
 //! script: `Front::message_arg`); in it, the ports transferred are shipped
 //! (new ones take their places) and the message waits in the target's
 //! queue (`dom`'s `message`), until the host runs it as a task
-//! (`run_posted_messages`): the engine deserializes it in the target's
+//! (`run_task`, as its token comes): the engine deserializes it in the target's
 //! realm (`ScriptHost::deserialize_message`) and a `message` event, or a
 //! `messageerror` one if it can't, is dispatched at the window or the port.
 
@@ -368,35 +368,21 @@ pub(crate) fn init_message_event<'gc, O: OpFront>(
     Ok(())
 }
 
-/// Runs `global`'s messages (the posted message task source's tasks):
-/// each deserialized in its realm (`ScriptHost::
+/// Delivers `global`'s message numbered `number` (a task of the posted
+/// message task source): deserialized in its realm (`ScriptHost::
 /// deserialize_message`) as a trusted `message` event's `data` (a
 /// `messageerror` if it can't be), dispatched at the window or the port it
 /// is for (a worker's global for one posted to it), then a microtask
-/// checkpoint. How many ran.
-pub fn run_posted_messages<H: ScriptHost>(host: &mut H, global: &GlobalRoot) -> usize {
-    let mut ran = 0usize;
-    while run_posted_message(host, global, None) {
-        ran = ran.saturating_add(1);
-    }
-    ran
-}
-
-/// Delivers `global`'s message numbered `number`, or its first
-/// (`run_posted_messages`'s one) if the DOM's pass lets it run. Whether
-/// one was.
-pub fn run_posted_message<H: ScriptHost>(
+/// checkpoint. Whether it was.
+pub(crate) fn run_posted_message<H: ScriptHost>(
     host: &mut H,
     global: &GlobalRoot,
-    number: Option<u64>,
+    number: u64,
 ) -> bool {
     {
         let taken = host.mutate(|cx| {
             let context = cx.global_context(global.get(cx.gc));
-            let taken = match number {
-                Some(number) => cx.take_posted_message_numbered(context, number),
-                None => cx.take_posted_message(context),
-            }?;
+            let taken = cx.take_posted_message_numbered(context, number)?;
             let ports: Vec<_> = taken
                 .ports
                 .iter()

@@ -1,0 +1,49 @@
+# Stage 3d's mutants: `python3 scripts/test.py mutate rfcs/0114-one-dom-task-order/mutants-3d.toml`.
+test = ["sh", "-c", "cargo test -q -p base -- sequence_manager && cargo test -q -p dom --test it && cargo test -q -p dom_api --test it -- timer:: controls:: && cargo test -q -p dom_js --test it -- timers:: tasks:: messages:: worker:: abort:: && cargo test -q -p shell --test it -- event_loop:: messaging:: workers::"]
+timeout = 600
+
+[[mutant]]
+name = "a test's clock is the real one"
+file = "crates/base/src/sequence_manager.rs"
+from = '''        let mut state = self.lock();
+        state.queue_due_by(now);
+        let queue = state.earliest(&wanted)?;'''
+to = '''        let mut state = self.lock();
+        let _ = now;
+        state.queue_due();
+        let queue = state.earliest(&wanted)?;'''
+
+[[mutant]]
+name = "a window's time is the DOM's, its origin left out"
+file = "crates/dom/src/tasks.rs"
+from = '''        self.instant_at(context.time_origin.get() + ms)'''
+to = '''        self.instant_at(ms)'''
+
+[[mutant]]
+name = "a message posted to the context isn't found"
+file = "crates/dom/src/message.rs"
+from = '''        if own {
+            return Some(None);
+        }'''
+to = '''        if own && false {
+            return Some(None);
+        }'''
+
+[[mutant]]
+name = "a port's message isn't found"
+file = "crates/dom/src/message.rs"
+from = '''                    .is_some_and(|stamp| stamp.number() == number)'''
+to = '''                    .is_some_and(|stamp| stamp.number() == number && false)'''
+
+[[mutant]]
+name = "a task run on a test's clock runs on the real one"
+file = "crates/dom_js/src/window.rs"
+from = '''            let now = now.unwrap_or_else(|| cx.now_in(Some(context)));'''
+to = '''            let _ = now;
+            let now = cx.now_in(Some(context));'''
+
+[[mutant]]
+name = "a task's time isn't checked"
+file = "crates/dom_api/src/timer.rs"
+from = '''    assert!(now.is_finite(), "tasks run by a finite time");'''
+to = '''    let _ = now.is_finite();'''

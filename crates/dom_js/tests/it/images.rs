@@ -45,7 +45,7 @@ fn fetches(env: &mut Env) -> Vec<String> {
 /// The host hands `url` back (`None`: it failed), and runs the tasks.
 fn fetched(env: &mut Env, url: &str, image: Option<dom::Image>) {
     env.dom().mutate(|cx| cx.image_fetched(url, image, true));
-    env.run_element_tasks();
+    env.run_due_tasks();
     env.checkpoint();
 }
 
@@ -145,7 +145,7 @@ fn an_image_loads_once_the_host_hands_it_back() {
         ],
     );
     assert!(fetches(&mut env).is_empty());
-    env.run_element_tasks();
+    env.run_due_tasks();
     check(&mut env, &[("log.join()", "load 7,load 7")]);
 }
 
@@ -187,7 +187,7 @@ fn a_new_src_keeps_the_image_till_its_own_comes() {
         ],
     );
     env.checkpoint();
-    env.run_element_tasks();
+    env.run_due_tasks();
     check(&mut env, &[("log.join()", "load 7,load 9")]);
 }
 
@@ -210,7 +210,7 @@ fn a_failed_image_fires_error() {
     // An empty `src`: an error too, with no fetch.
     env.eval("log = []; var e = watch(new Image()); e.src = ''");
     assert!(fetches(&mut env).is_empty());
-    env.run_element_tasks();
+    env.run_due_tasks();
     check(&mut env, &[("log.join()", "error")]);
 }
 
@@ -227,12 +227,12 @@ fn decode_settles_with_the_request() {
     check(&mut env, &[("results.join()", "first ok")]);
     // Of an available image: in a task.
     env.eval("settle('available', i.decode())");
-    env.run_element_tasks();
+    env.run_due_tasks();
     env.checkpoint();
     check(&mut env, &[("results.join()", "first ok,available ok")]);
     // The `src` changed before it loaded: rejected.
     env.eval("i.src = 'b.png'; settle('changed', i.decode()); i.src = 'c.png'");
-    env.run_element_tasks();
+    env.run_due_tasks();
     env.checkpoint();
     check(
         &mut env,

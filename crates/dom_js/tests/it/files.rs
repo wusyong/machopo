@@ -32,7 +32,7 @@ fn a_readers_events_are_tasks() {
          reader.readAsText(new Blob(['h\\u00e9'])); log.push('sync:' + reader.readyState + ':' + reader.result); \
          try { reader.readAsText(new Blob([])); } catch (e) { log.push(e.name); } 0",
     );
-    while page.engine.run_element_tasks() {}
+    while page.engine.run_due_tasks() {}
     assert_eq!(
         page.eval("log.join(' ') + ' ' + reader.result + ' ' + reader.error"),
         "sync:1:null InvalidStateError loadstart:0/3:1:true progress:3/3:1:true load:3/3:2:true loadend:3/3:2:true hé null"
@@ -45,7 +45,7 @@ fn a_readers_events_are_tasks() {
          r.onload = () => { var v = r.result; results.push(v instanceof ArrayBuffer ? [...new Uint8Array(v)].join('|') + ':' + (r.result === v) : JSON.stringify(v)); next(); }; \
          r[read[0]](blob, read[1]); }; next(); 0",
     );
-    while page.engine.run_element_tasks() {}
+    while page.engine.run_due_tasks() {}
     assert_eq!(
         page.eval("results.join(' ')"),
         "\"data:a/b;base64,Qf8=\" \"Aÿ\" 65|255:true \"Aÿ\""
@@ -57,7 +57,7 @@ fn a_readers_events_are_tasks() {
          r2.readAsArrayBuffer(new Blob(['x'])); r2.abort(); log.push(r2.readyState + ':' + r2.result); r2.abort(); \
          var r3 = new FileReader(); r3.onloadstart = r3.onprogress = r3.onloadend = e => log.push('r3 ' + e.type); r3.readAsText(new Blob()); 0",
     );
-    while page.engine.run_element_tasks() {}
+    while page.engine.run_due_tasks() {}
     assert_eq!(
         page.eval("log.join(' ') + ' ' + [FileReader.EMPTY, FileReader.LOADING, FileReader.DONE, new FileReader().readyState].join()"),
         "abort:false loadend:false 2:null r3 loadstart r3 loadend 0,1,2,0"
@@ -69,7 +69,7 @@ fn a_readers_events_are_tasks() {
          r4.onload = () => { log.push('load ' + r4.result); if (first) { first = false; r4.readAsText(new Blob(['b'])); } }; \
          r4.onloadend = () => log.push('loadend ' + r4.result); r4.readAsText(new Blob(['a'])); 0",
     );
-    while page.engine.run_element_tasks() {}
+    while page.engine.run_due_tasks() {}
     assert_eq!(page.eval("log.join(' ')"), "load a load b loadend b");
 }
 

@@ -13,8 +13,8 @@ use dom_js::V8Engine;
 
 /// A window of a document at `https://example.test/a/` with
 /// `<html><body>`; `log`.
-fn engine() -> V8Engine {
-    let mut engine = V8Engine::new(EngineSettings { web_tests: true });
+fn engine() -> crate::TestEngine {
+    let mut engine = crate::TestEngine::new(EngineSettings { web_tests: true });
     engine
         .create_window(
             engine.top_frame(),
@@ -30,7 +30,7 @@ fn engine() -> V8Engine {
     engine
 }
 
-fn run(engine: &mut V8Engine, source: &str) {
+fn run(engine: &mut dom_js::V8Engine, source: &str) {
     engine.run_classic_script(
         engine.top_frame(),
         &ClassicScript {
@@ -44,7 +44,7 @@ fn run(engine: &mut V8Engine, source: &str) {
     );
 }
 
-fn log(engine: &mut V8Engine) -> String {
+fn log(engine: &mut dom_js::V8Engine) -> String {
     run(
         engine,
         "testRunner.reportHarnessResults(log.join(' / ')); log = [];",
@@ -296,7 +296,7 @@ fn a_document_navigated_from_is_no_longer_fully_active() {
          log.push(String(inner.contentWindow));",
     );
     engine.perform_microtask_checkpoint();
-    while engine.run_element_tasks() {}
+    while engine.run_due_tasks() {}
     assert_eq!(log(&mut engine), "null / NotAllowedError");
 }
 
@@ -420,7 +420,7 @@ fn realms_reach_each_other_by_origin() {
 /// inserted, before the parser goes on (not at the next call).
 #[test]
 fn the_parsers_iframe_gets_one_as_it_is_inserted() {
-    let mut engine = Box::new(V8Engine::new(EngineSettings { web_tests: true }));
+    let mut engine = Box::new(dom_js::V8Engine::new(EngineSettings { web_tests: true }));
     let document = engine
         .create_window(
             engine.top_frame(),
@@ -449,7 +449,7 @@ fn the_parsers_iframe_gets_one_as_it_is_inserted() {
 /// element's `connectedCallback`, as a member's call does them.
 #[test]
 fn the_parsers_move_runs_the_iframes_steps_first() {
-    let mut engine = Box::new(V8Engine::new(EngineSettings { web_tests: true }));
+    let mut engine = Box::new(dom_js::V8Engine::new(EngineSettings { web_tests: true }));
     let document = engine
         .create_window(
             engine.top_frame(),
@@ -499,9 +499,9 @@ fn the_frames_timers_run_by_when_they_are_due() {
         "the child's"
     );
     std::thread::sleep(std::time::Duration::from_millis(40));
-    assert!(engine.run_timers());
+    assert!(engine.run_due_tasks());
     assert_eq!(log(&mut engine), "child true / parent");
-    assert!(!engine.run_timers());
+    assert!(!engine.run_due_tasks());
     // Only a child's: its wait, and it doesn't run before.
     run(&mut engine, "w.setTimeout(() => log.push('later'), 10000);");
     assert!(
@@ -509,7 +509,7 @@ fn the_frames_timers_run_by_when_they_are_due() {
             .until_next_timer()
             .is_some_and(|wait| wait > std::time::Duration::from_secs(5))
     );
-    assert!(!engine.run_timers());
+    assert!(!engine.run_due_tasks());
     // An interval due at once: the turn ends, its runs due by the window's
     // now as it began (the first five 0 ms apart, then 4 ms), however long
     // each takes (each 5 ms here; it stops itself after 50).
@@ -524,7 +524,7 @@ fn the_frames_timers_run_by_when_they_are_due() {
          }, 0);",
     );
     std::thread::sleep(std::time::Duration::from_millis(5));
-    assert!(engine.run_timers());
+    assert!(engine.run_due_tasks());
     run(&mut engine, "w.clearInterval(tick);");
     let ticks = log(&mut engine);
     assert!(
@@ -674,7 +674,7 @@ fn a_childs_intersection_observers_are_called_back() {
     });
     assert!(queue);
     // The task the DOM queued with the entries.
-    while engine.run_element_tasks() {}
+    while engine.run_due_tasks() {}
     assert_eq!(log(&mut engine), "child 1");
 }
 
@@ -692,9 +692,9 @@ fn a_childs_element_tasks_run() {
          t.addEventListener('select', () => log.push('select'));
          t.setSelectionRange(1, 2);",
     );
-    assert!(engine.run_element_tasks());
+    assert!(engine.run_due_tasks());
     assert_eq!(log(&mut engine), "select");
-    assert!(!engine.run_element_tasks());
+    assert!(!engine.run_due_tasks());
 }
 
 /// An event handler attribute of a child frame's element is compiled in
@@ -1214,7 +1214,7 @@ fn a_new_nodes_wrapper_is_of_its_documents_realm() {
 /// The engine's child frames not among `before`, each with its token, as
 /// they were made (parents first).
 fn created(
-    engine: &mut V8Engine,
+    engine: &mut dom_js::V8Engine,
     before: &[dom_api::FrameId],
 ) -> Vec<(dom_api::FrameId, dom_api::FrameToken)> {
     crate::child_frames(engine)
@@ -1398,7 +1398,7 @@ fn the_frame_client_hears_of_a_child_frames_new_document() {
         panic!("{made:?}");
     };
     told();
-    let id_of = |engine: &mut V8Engine, document: &dom::NodeRoot| {
+    let id_of = |engine: &mut crate::TestEngine, document: &dom::NodeRoot| {
         engine
             .dom_mut()
             .read(|cx| cx.node_id(document.get(cx.gc)).get())

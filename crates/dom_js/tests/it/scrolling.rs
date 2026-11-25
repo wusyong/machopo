@@ -10,7 +10,6 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use dom_api::{ClassicScript, EngineSettings, ScriptEngine};
-use dom_js::V8Engine;
 
 /// A frame's layout of a 100 by 100 viewport scrolled to (5, 6), logging
 /// each scroll asked of it.
@@ -78,13 +77,13 @@ impl dom_api::FrameLayout for Logging {
 }
 
 struct Page {
-    engine: V8Engine,
+    engine: crate::TestEngine,
     log: Rc<RefCell<Vec<String>>>,
 }
 
 impl Page {
     fn new() -> Self {
-        let mut engine = V8Engine::new(EngineSettings { web_tests: true });
+        let mut engine = crate::TestEngine::new(EngineSettings { web_tests: true });
         let document = engine
             .create_window(engine.top_frame(), "https://example.test/", Instant::now())
             .expect("a window");

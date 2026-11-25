@@ -9,15 +9,14 @@ use std::time::Instant;
 
 use dom::{FrameNavigation, SessionHistory};
 use dom_api::{ClassicScript, DocumentReadiness, EngineSettings, FrameRequest, ScriptEngine};
-use dom_js::V8Engine;
 
 pub(crate) struct Page {
-    pub(crate) engine: V8Engine,
+    pub(crate) engine: crate::TestEngine,
 }
 
 impl Page {
     pub(crate) fn new(url: &str) -> Self {
-        let mut engine = V8Engine::new(EngineSettings { web_tests: true });
+        let mut engine = crate::TestEngine::new(EngineSettings { web_tests: true });
         let document = engine
             .create_window(engine.top_frame(), url, Instant::now())
             .expect("a window");
@@ -168,7 +167,7 @@ fn a_fragment_navigates_within_the_document() {
         }]
     );
     assert_eq!(page.eval("history.length"), "2", "a new entry");
-    assert!(page.engine.run_element_tasks());
+    assert!(page.engine.run_due_tasks());
     assert_eq!(
         page.eval("log.slice(4).join()"),
         "hashchange https://example.test/a.html#one https://example.test/a.html#two true"
@@ -184,13 +183,13 @@ fn a_fragment_navigates_within_the_document() {
     assert_eq!(page.navigations(), []);
     // The URL again: within the document, replacing the entry, no
     // `hashchange`.
-    while page.engine.run_element_tasks() {}
+    while page.engine.run_due_tasks() {}
     page.eval("location.href = location.href");
     assert!(matches!(
         &page.navigations()[..],
         [FrameNavigation::SameDocument { replace: true, .. }]
     ));
-    assert!(!page.engine.run_element_tasks());
+    assert!(!page.engine.run_due_tasks());
     assert_eq!(
         page.eval("location.hash = 'nothing'; String(document.querySelector(':target'))"),
         "null"
@@ -371,7 +370,7 @@ fn the_hosts_traversal_and_restored_state() {
         &mut || {}
     ));
     assert_eq!(page.eval("log.join()"), "7,true,#y,y,manual");
-    assert!(page.engine.run_element_tasks());
+    assert!(page.engine.run_due_tasks());
     assert_eq!(page.eval("log.slice(5).join()"), "hashchange");
     // At a new document's commit.
     let mut other = Page::new("https://example.test/b.html");

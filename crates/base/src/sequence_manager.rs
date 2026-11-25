@@ -163,7 +163,11 @@ impl<S: Spec> State<S> {
     /// The tasks due by now, queued in their turn: after what was posted
     /// before they were, the earliest due first.
     fn queue_due(&mut self) {
-        let now = Instant::now();
+        self.queue_due_by(Instant::now());
+    }
+
+    /// The same, as if it were `now`.
+    fn queue_due_by(&mut self, now: Instant) {
         while self
             .delayed
             .peek()
@@ -361,8 +365,15 @@ impl<S: Spec> SequenceManager<S> {
 
     /// The earliest task of the queues `wanted`, if there is one.
     pub fn try_next(&self, wanted: impl Fn(S::Queue) -> bool) -> Option<S::Task> {
+        self.try_next_by(wanted, Instant::now())
+    }
+
+    /// `try_next`'s, as if it were `now`: those posted for by then are due
+    /// (a test's clock, as Chromium's `TaskEnvironment` mocks time; a task
+    /// posted for later than the real now waits for it otherwise).
+    pub fn try_next_by(&self, wanted: impl Fn(S::Queue) -> bool, now: Instant) -> Option<S::Task> {
         let mut state = self.lock();
-        state.queue_due();
+        state.queue_due_by(now);
         let queue = state.earliest(&wanted)?;
         state.take(queue)
     }
@@ -478,6 +489,23 @@ mod tests {
 
     fn drain(manager: &SequenceManager<Test>) -> Vec<u32> {
         std::iter::from_fn(|| manager.try_next(all)).collect()
+    }
+
+    /// As if it were a time given: what is posted for by then is due, in
+    /// its turn after what was posted before it was taken; not later.
+    #[test]
+    fn tasks_are_taken_as_if_at_a_time() {
+        let manager = SequenceManager::<Test>::default();
+        let now = Instant::now();
+        let hour = Duration::from_secs(3600);
+        manager.post_at(Queue::A, 1, now + hour).unwrap();
+        manager.post_at(Queue::A, 2, now + 2 * hour).unwrap();
+        manager.post(Queue::B, 3).unwrap();
+        assert_eq!(manager.try_next_by(all, now + hour), Some(3));
+        assert_eq!(manager.try_next_by(all, now + hour), Some(1));
+        assert_eq!(manager.try_next_by(all, now + hour), None);
+        assert_eq!(manager.try_next(all), None, "not due by the real clock");
+        assert_eq!(manager.try_next_by(all, now + 2 * hour), Some(2));
     }
 
     /// The earliest posted of the queues asked for, whichever queue it is

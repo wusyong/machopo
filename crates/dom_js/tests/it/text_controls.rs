@@ -264,7 +264,7 @@ fn a_selection_that_changes_queues_select() {
     );
     // And one `selectionchange` (`selections`), scheduled once until it
     // runs.
-    assert_eq!(env.run_element_tasks(), 3);
+    assert_eq!(env.run_due_tasks(), 3);
     check(
         &mut env,
         &[
@@ -277,19 +277,19 @@ fn a_selection_that_changes_queues_select() {
             ),
         ],
     );
-    assert_eq!(env.run_element_tasks(), 1);
+    assert_eq!(env.run_due_tasks(), 1);
     env.eval(
         "t.setRangeText('x', 0, 1, 'select'); t.selectionEnd = 3; t.selectionStart = 2; t.selectionDirection = 'backward'; \
          var n = document.body.appendChild(input('number')); n.select(); var c = document.body.appendChild(input('checkbox')); c.select(); 0",
     );
     // Five `select`s, and `t`'s `selectionchange` (a number input and a
     // checkbox have no selection).
-    assert_eq!(env.run_element_tasks(), 6);
+    assert_eq!(env.run_due_tasks(), 6);
     // A listener's own: run after the one it ran in. `select()`'s
     // `selectionchange` was queued before its `select` and ran first, so
     // the listener's change schedules another.
     env.eval("log = []; t.addEventListener('select', () => t.setSelectionRange(0, 1), { once: true }); t.select(); 0");
-    assert_eq!(env.run_element_tasks(), 4);
+    assert_eq!(env.run_all_due_tasks(), 4);
     check(
         &mut env,
         &[("log.join()", "text/true/true/false,text/true/true/false")],
@@ -299,7 +299,7 @@ fn a_selection_that_changes_queues_select() {
         "var other = document.implementation.createHTMLDocument(''); var o = other.body.appendChild(other.createElement('input')); \
          o.value = 'abc'; o.setSelectionRange(0, 2); 0",
     );
-    assert_eq!(env.run_element_tasks(), 0);
+    assert_eq!(env.run_due_tasks(), 0);
 }
 
 /// (Its focus: the tests' window has no layout, so no control is a

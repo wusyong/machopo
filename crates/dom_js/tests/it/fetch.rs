@@ -349,7 +349,7 @@ fn a_timed_out_fetch_reacts_after_the_abort_listeners() {
          fetch('t', { signal: s }).catch(e => log.push('rejected ' + e.name));
          s.onabort = () => log.push('abort'); 0",
     );
-    assert!(page.engine.run_timers());
+    assert!(page.engine.run_due_tasks());
     assert_eq!(
         page.eval("log.join(' | ')"),
         "abort | rejected TimeoutError"

@@ -10,7 +10,6 @@
 use std::time::{Duration, Instant};
 
 use dom_api::{ClassicScript, EngineSettings, ScriptEngine};
-use dom_js::V8Engine;
 
 /// A frame's layout that styles nothing.
 struct Plain(dom::NodeId);
@@ -56,13 +55,13 @@ impl dom_api::FrameLayout for Plain {
 }
 
 struct Page {
-    engine: V8Engine,
+    engine: crate::TestEngine,
     start: Instant,
 }
 
 impl Page {
     fn new() -> Self {
-        let mut engine = V8Engine::new(EngineSettings { web_tests: true });
+        let mut engine = crate::TestEngine::new(EngineSettings { web_tests: true });
         let start = Instant::now();
         let document = engine
             .create_window(engine.top_frame(), "https://example.test/", start)

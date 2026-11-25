@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use dom_api::{ClassicScript, EngineSettings, ScriptEngine};
 use dom_js::V8Engine;
 
-fn run(engine: &mut V8Engine, source: &str) {
+fn run(engine: &mut dom_js::V8Engine, source: &str) {
     engine.run_classic_script(
         engine.top_frame(),
         &ClassicScript {
@@ -25,7 +25,7 @@ fn run(engine: &mut V8Engine, source: &str) {
 
 #[test]
 fn a_windows_scripts_run_in_its_realm() {
-    let mut engine = V8Engine::new(EngineSettings { web_tests: true });
+    let mut engine = crate::TestEngine::new(EngineSettings { web_tests: true });
     // No window yet: nothing runs.
     run(&mut engine, "throw 1");
     assert_eq!(engine.take_harness_results(), None);
@@ -98,7 +98,7 @@ fn a_windows_scripts_run_in_its_realm() {
 /// execution context's): not from the DOM's start, 30 ms before it.
 #[test]
 fn a_signal_s_event_counts_from_its_realm_s_origin() {
-    let mut engine = V8Engine::new(EngineSettings { web_tests: true });
+    let mut engine = crate::TestEngine::new(EngineSettings { web_tests: true });
     std::thread::sleep(Duration::from_millis(30));
     let origin = Instant::now();
     engine
@@ -128,7 +128,7 @@ fn a_signal_s_event_counts_from_its_realm_s_origin() {
 /// `testRunner`.
 #[test]
 fn time_counts_from_the_origin_given() {
-    let mut engine = V8Engine::new(EngineSettings { web_tests: true });
+    let mut engine = crate::TestEngine::new(EngineSettings { web_tests: true });
     let started = Instant::now();
     std::thread::sleep(Duration::from_millis(30));
     engine
@@ -143,7 +143,7 @@ fn time_counts_from_the_origin_given() {
     // ms before its origin, but at most the time since the origin (however
     // long the GCs of a stressed run take meanwhile; its clock is
     // coarsened, hence the millisecond).
-    let mut later = V8Engine::new(EngineSettings { web_tests: true });
+    let mut later = crate::TestEngine::new(EngineSettings { web_tests: true });
     std::thread::sleep(Duration::from_millis(30));
     let origin = Instant::now();
     later
@@ -163,7 +163,7 @@ fn time_counts_from_the_origin_given() {
         stamp <= since + 1.0,
         "{stamp} ms, {since} ms since the origin"
     );
-    let mut plain = V8Engine::new(EngineSettings::default());
+    let mut plain = crate::TestEngine::new(EngineSettings::default());
     let document = plain
         .create_window(plain.top_frame(), "about:blank", Instant::now())
         .expect("a window");
@@ -180,7 +180,7 @@ fn time_counts_from_the_origin_given() {
     assert_eq!(name, "UNDEFINED");
 }
 
-fn report(engine: &mut V8Engine, expression: &str) -> String {
+fn report(engine: &mut dom_js::V8Engine, expression: &str) -> String {
     run(
         engine,
         &format!("testRunner.reportHarnessResults(String({expression}))"),
@@ -194,7 +194,7 @@ fn report(engine: &mut V8Engine, expression: &str) -> String {
 /// doesn't; a listener canceling it keeps it from the log.
 #[test]
 fn unhandled_rejections_fire_at_the_window() {
-    let mut engine = V8Engine::new(EngineSettings { web_tests: true });
+    let mut engine = crate::TestEngine::new(EngineSettings { web_tests: true });
     engine
         .create_window(engine.top_frame(), "about:blank", Instant::now())
         .expect("a window");
@@ -228,7 +228,7 @@ fn unhandled_rejections_fire_at_the_window() {
 fn console_messages_go_to_the_sink() {
     use std::cell::RefCell;
     use std::rc::Rc;
-    let mut engine = V8Engine::new(EngineSettings::default());
+    let mut engine = crate::TestEngine::new(EngineSettings::default());
     let messages = Rc::new(RefCell::new(Vec::new()));
     let sink = messages.clone();
     engine.set_console_sink(Box::new(move |message| sink.borrow_mut().push(message)));
@@ -268,7 +268,7 @@ fn console_messages_go_to_the_sink() {
 /// events of each step with a checkpoint after them.
 #[test]
 fn the_documents_loading_through_the_engine() {
-    let mut engine = V8Engine::new(EngineSettings { web_tests: true });
+    let mut engine = crate::TestEngine::new(EngineSettings { web_tests: true });
     // Loading, as the parser's.
     engine
         .create_window(engine.top_frame(), "about:blank", Instant::now())
@@ -299,12 +299,12 @@ fn the_documents_loading_through_the_engine() {
 /// Timers through the engine: how long until the next, run once due.
 #[test]
 fn timers_through_the_engine() {
-    let mut engine = V8Engine::new(EngineSettings { web_tests: true });
+    let mut engine = crate::TestEngine::new(EngineSettings { web_tests: true });
     engine
         .create_window(engine.top_frame(), "about:blank", Instant::now())
         .expect("a window");
     assert_eq!(engine.until_next_timer(), None);
-    assert!(!engine.run_timers());
+    assert!(!engine.run_due_tasks());
     run(
         &mut engine,
         "var log = []; setTimeout(() => log.push('ran'), 10000); setTimeout('log.push(\"string\")', 0);",
@@ -312,7 +312,7 @@ fn timers_through_the_engine() {
     let wait = engine.until_next_timer().unwrap();
     assert!(wait < Duration::from_millis(50), "{wait:?}");
     std::thread::sleep(wait);
-    assert!(engine.run_timers());
+    assert!(engine.run_due_tasks());
     assert_eq!(report(&mut engine, "log.join()"), "string");
     let wait = engine.until_next_timer().unwrap();
     assert!(wait > Duration::from_secs(5), "{wait:?}");
@@ -323,11 +323,11 @@ fn timers_through_the_engine() {
 /// a microtask checkpoint after it.
 #[test]
 fn element_tasks_through_the_engine() {
-    let mut engine = V8Engine::new(EngineSettings { web_tests: true });
+    let mut engine = crate::TestEngine::new(EngineSettings { web_tests: true });
     engine
         .create_window(engine.top_frame(), "about:blank", Instant::now())
         .expect("a window");
-    assert!(!engine.run_element_tasks());
+    assert!(!engine.run_due_tasks());
     run(
         &mut engine,
         "var log = []; var i = document.appendChild(document.createElement('input')); i.value = 'abc'; \
@@ -335,14 +335,14 @@ fn element_tasks_through_the_engine() {
          i.setSelectionRange(0, 1); i.setSelectionRange(0, 2); setTimeout(() => {}, 10000);",
     );
     assert_eq!(engine.until_next_timer(), Some(Duration::ZERO));
-    assert!(engine.run_element_tasks());
+    assert!(engine.run_due_tasks());
     assert_eq!(
         report(&mut engine, "log.join()"),
         "select,microtask,select,microtask"
     );
     let wait = engine.until_next_timer().unwrap();
     assert!(wait > Duration::from_secs(5), "{wait:?}");
-    assert!(!engine.run_element_tasks());
+    assert!(!engine.run_due_tasks());
     let _ = engine.run_platform_tasks();
 }
 
@@ -351,7 +351,7 @@ fn element_tasks_through_the_engine() {
 /// microtask first.
 #[test]
 fn the_parsers_changes_reach_observers() {
-    let mut engine = V8Engine::new(EngineSettings { web_tests: true });
+    let mut engine = crate::TestEngine::new(EngineSettings { web_tests: true });
     let document = engine
         .create_window(engine.top_frame(), "about:blank", Instant::now())
         .expect("a window");
@@ -373,7 +373,7 @@ fn the_parsers_changes_reach_observers() {
 /// checkpoint's microtask, not before.
 #[test]
 fn the_parsers_defined_elements_upgrade_at_a_checkpoint() {
-    let mut engine = V8Engine::new(EngineSettings { web_tests: true });
+    let mut engine = crate::TestEngine::new(EngineSettings { web_tests: true });
     let document = engine
         .create_window(engine.top_frame(), "about:blank", Instant::now())
         .expect("a window");
@@ -413,7 +413,7 @@ fn the_parsers_defined_elements_upgrade_at_a_checkpoint() {
 #[test]
 fn the_parser_constructs_defined_elements_at_once() {
     use html::parser::{Parser, ParserState};
-    let mut engine = Box::new(V8Engine::new(EngineSettings { web_tests: true }));
+    let mut engine = Box::new(dom_js::V8Engine::new(EngineSettings { web_tests: true }));
     let document = engine
         .create_window(
             engine.top_frame(),
@@ -482,7 +482,7 @@ fn the_parser_constructs_defined_elements_at_once() {
 #[test]
 fn attach_shadow_takes_over_a_declarative_shadow_root() {
     use html::parser::Parser;
-    let mut engine = Box::new(V8Engine::new(EngineSettings { web_tests: true }));
+    let mut engine = Box::new(dom_js::V8Engine::new(EngineSettings { web_tests: true }));
     let document = engine
         .create_window(
             engine.top_frame(),
@@ -561,7 +561,7 @@ fn a_layout_holding_the_document_goes_before_the_heap() {
             self
         }
     }
-    let mut engine = V8Engine::new(EngineSettings { web_tests: false });
+    let mut engine = crate::TestEngine::new(EngineSettings { web_tests: false });
     let document = engine
         .create_window(
             engine.top_frame(),

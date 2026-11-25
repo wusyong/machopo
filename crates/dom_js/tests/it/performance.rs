@@ -58,7 +58,7 @@ fn the_time_origin_is_the_windows() {
     use std::time::{Duration, Instant};
 
     use dom_api::{ClassicScript, EngineSettings};
-    let mut engine = dom_js::V8Engine::new(EngineSettings { web_tests: true });
+    let mut engine = crate::TestEngine::new(EngineSettings { web_tests: true });
     std::thread::sleep(Duration::from_millis(60));
     let top = engine.top_frame();
     engine
@@ -86,7 +86,7 @@ fn a_time_origin_before_the_engine() {
     let started = Instant::now()
         .checked_sub(Duration::from_millis(500))
         .expect("a monotonic clock past half a second");
-    let mut engine = dom_js::V8Engine::new(EngineSettings { web_tests: true });
+    let mut engine = crate::TestEngine::new(EngineSettings { web_tests: true });
     let top = engine.top_frame();
     drop(
         engine
@@ -113,9 +113,9 @@ fn observers_are_called_in_a_task() {
          performance.mark('early'); o.observe({ type: 'mark', buffered: true }); performance.mark('y', { startTime: 0 }); 0",
     );
     assert_eq!(page.eval("calls.length"), "0", "not yet: a task");
-    while page.engine.run_element_tasks() {}
+    while page.engine.run_due_tasks() {}
     page.eval("performance.mark('z'); performance.measure('w'); 0");
-    while page.engine.run_element_tasks() {}
+    while page.engine.run_due_tasks() {}
     assert_eq!(
         page.eval("calls.join(' ; ')"),
         "y|early 2 1 true {\"droppedEntriesCount\":0} ; z 1 0 true {}"
@@ -141,7 +141,7 @@ fn observers_are_called_in_a_task() {
         ),
         "true,true"
     );
-    while page.engine.run_element_tasks() {}
+    while page.engine.run_due_tasks() {}
     assert_eq!(
         page.eval("calls.length"),
         "2",
@@ -212,7 +212,7 @@ fn the_navigation_entry_and_the_legacy_timing() {
     );
     page.eval("var inLoad; addEventListener('load', () => { inLoad = performance.now(); }); 0");
     page.engine.document_ready(top, DocumentReadiness::Loaded);
-    while page.engine.run_element_tasks() {}
+    while page.engine.run_due_tasks() {}
     assert_eq!(
         page.eval(
             "var t = performance.timing; [log.join(), n.loadEventEnd >= inLoad && inLoad >= n.loadEventStart && n.loadEventStart >= n.domComplete && n.domComplete > 0, n.duration === n.loadEventEnd, \

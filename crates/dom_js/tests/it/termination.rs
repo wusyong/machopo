@@ -9,9 +9,8 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use dom_api::{ClassicScript, EngineSettings, ScriptEngine};
-use dom_js::V8Engine;
 
-fn run(engine: &mut V8Engine, source: &str) {
+fn run(engine: &mut dom_js::V8Engine, source: &str) {
     engine.run_classic_script(
         engine.top_frame(),
         &ClassicScript {
@@ -37,7 +36,7 @@ fn stops(name: &str, source: &str, then_tasks: bool, after: Duration) {
     let thread = std::thread::Builder::new()
         .name("Terminated".into())
         .spawn(move || {
-            let mut engine = V8Engine::new(EngineSettings { web_tests: true });
+            let mut engine = crate::TestEngine::new(EngineSettings { web_tests: true });
             engine
                 .create_window(engine.top_frame(), "https://example.test/", Instant::now())
                 .expect("a window");

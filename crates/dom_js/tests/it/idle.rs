@@ -92,7 +92,7 @@ fn a_timeout_runs_one_as_a_timer() {
          setTimeout(() => log.push('late timer'), 3); 0",
     );
     std::thread::sleep(Duration::from_millis(10));
-    while page.engine.run_timers() {}
+    while page.engine.run_due_tasks() {}
     assert_eq!(
         page.eval("log.join(' ; ')"),
         "early timer ; idle,true,0 ; late timer",
@@ -110,6 +110,6 @@ fn a_timeout_alone_is_due() {
     let wait = page.engine.until_next_timer().expect("a timer due");
     assert!(wait <= Duration::from_millis(5), "{wait:?}");
     std::thread::sleep(Duration::from_millis(10));
-    assert!(page.engine.run_timers());
+    assert!(page.engine.run_due_tasks());
     assert_eq!(page.eval("log.join()"), "true");
 }

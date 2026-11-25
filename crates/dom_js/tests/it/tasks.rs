@@ -1,6 +1,6 @@
-//! The engine's pass over the page's tasks (`ScriptEngine::run_due_tasks`):
-//! timers, element tasks and messages in the order they were queued, one
-//! pass running only those queued before it; the load sink a `fetch()`
+//! The page's tasks as the host's scheduler runs them (`crate::TestEngine`,
+//! by their tokens): timers, element tasks and messages in the order they
+//! were queued, a message's message a task of its own after them; the load sink a `fetch()`
 //! and the blob URLs go through as script calls them; the user agent every
 //! frame's `navigator` answers, the DOM's.
 
@@ -32,11 +32,11 @@ fn timers_and_messages_run_in_the_order_queued() {
     assert!(!page.engine.run_due_tasks());
 }
 
-/// A message a message's listener posts waits for the next pass: windows
-/// posting to each other forever give the loop back between passes, and
-/// the DOM says one is queued.
+/// A message a message's listener posts is a task of its own, after what
+/// was queued before it: windows posting to each other forever give the
+/// thread back between their tasks.
 #[test]
-fn a_pass_runs_only_what_was_queued_before_it() {
+fn a_message_s_message_is_a_task_of_its_own() {
     let mut page = Page::new("https://example.test/");
     page.eval(
         "var count = 0;
@@ -46,7 +46,7 @@ fn a_pass_runs_only_what_was_queued_before_it() {
     );
     assert!(page.engine.run_due_tasks());
     assert_eq!(page.eval("String(count)"), "1");
-    assert!(page.engine.dom_mut().has_queued_tasks());
+    assert!(page.engine.has_dom_task_due_for(0.0));
     assert!(page.engine.run_due_tasks());
     assert_eq!(page.eval("String(count)"), "2");
 }

@@ -9,7 +9,6 @@
 use std::time::Instant;
 
 use dom_api::{ClassicScript, EngineSettings, ScriptEngine};
-use dom_js::V8Engine;
 use gfx::{Path, PointF, RectF, SvgGeometry, SvgTextChar, Transform};
 
 /// A window whose document has `<html><body>` and an `<svg id=s>` with a
@@ -18,12 +17,12 @@ use gfx::{Path, PointF, RectF, SvgGeometry, SvgTextChar, Transform};
 /// name of what `f` throws.
 struct Page {
     document: dom::NodeRoot,
-    engine: V8Engine,
+    engine: crate::TestEngine,
 }
 
 impl Page {
     fn new() -> Self {
-        let mut engine = V8Engine::new(EngineSettings { web_tests: true });
+        let mut engine = crate::TestEngine::new(EngineSettings { web_tests: true });
         let document = engine
             .create_window(engine.top_frame(), "https://example.test/", Instant::now())
             .expect("a window");
@@ -221,8 +220,8 @@ fn a_resize_observer_sees_an_svg_elements_bounding_box() {
          });
          observer.observe($('r')); observer.observe($('d'));",
     );
-    page.engine
-        .gather_and_broadcast_resizes(page.engine.top_frame(), 0);
+    let top = page.engine.top_frame();
+    page.engine.gather_and_broadcast_resizes(top, 0);
     // `#d` isn't rendered: nothing, its bounding box though it has one.
     assert_eq!(page.log(), "r / 0,0,3,4 / 3 / 4 / d / 0,0,0,0 / 0 / 0");
 }

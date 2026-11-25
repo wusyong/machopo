@@ -8,11 +8,10 @@ use std::time::Instant;
 
 use dom::NodeId;
 use dom_api::{ClassicScript, EngineSettings, ScriptEngine, WebDriverScriptError, WebDriverValue};
-use dom_js::V8Engine;
 
 use WebDriverValue::{Array, Bool, Null, Number, Object};
 
-fn run(engine: &mut V8Engine, source: &str) {
+fn run(engine: &mut dom_js::V8Engine, source: &str) {
     engine.run_classic_script(
         engine.top_frame(),
         &ClassicScript {
@@ -29,8 +28,8 @@ fn run(engine: &mut V8Engine, source: &str) {
 
 /// An engine with a window whose document has an `<html id=x>`: the
 /// engine, the document's id and the element's.
-fn page() -> (V8Engine, NodeId, NodeId) {
-    let mut engine = V8Engine::new(EngineSettings { web_tests: false });
+fn page() -> (crate::TestEngine, NodeId, NodeId) {
+    let mut engine = crate::TestEngine::new(EngineSettings { web_tests: false });
     let document = engine
         .create_window(
             engine.top_frame(),
@@ -53,7 +52,10 @@ fn page() -> (V8Engine, NodeId, NodeId) {
 }
 
 /// What script `id` settled with, now.
-fn result(engine: &mut V8Engine, id: u64) -> Option<Result<WebDriverValue, WebDriverScriptError>> {
+fn result(
+    engine: &mut dom_js::V8Engine,
+    id: u64,
+) -> Option<Result<WebDriverValue, WebDriverScriptError>> {
     let mut results = engine.take_webdriver_results();
     assert!(results.len() <= 1, "one script at a time: {results:?}");
     results.pop().map(|(got, result)| {
@@ -63,7 +65,7 @@ fn result(engine: &mut V8Engine, id: u64) -> Option<Result<WebDriverValue, WebDr
 }
 
 fn execute(
-    engine: &mut V8Engine,
+    engine: &mut dom_js::V8Engine,
     body: &str,
     args: &[WebDriverValue],
 ) -> Result<WebDriverValue, WebDriverScriptError> {
@@ -72,7 +74,7 @@ fn execute(
 }
 
 fn execute_async(
-    engine: &mut V8Engine,
+    engine: &mut dom_js::V8Engine,
     body: &str,
 ) -> Option<Result<WebDriverValue, WebDriverScriptError>> {
     let top = engine.top_frame();

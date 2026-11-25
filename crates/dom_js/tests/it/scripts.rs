@@ -14,18 +14,17 @@ use std::time::Instant;
 use dom::{LoadedScript, ScriptCors, ScriptFetch, ScriptRequest};
 use dom_api::module::FetchedModule;
 use dom_api::{ClassicScript, EngineSettings, ScriptEngine};
-use dom_js::V8Engine;
 
 /// A window of a document at `https://example.test/a/` with
 /// `<html><body>`; `log`, and `script(text)` a new script element.
-fn engine() -> V8Engine {
+fn engine() -> crate::TestEngine {
     engine_and_document().0
 }
 
 /// `engine`'s, and its document (to bind after the engine: it drops
 /// first).
-fn engine_and_document() -> (V8Engine, dom::NodeRoot) {
-    let mut engine = V8Engine::new(EngineSettings { web_tests: true });
+fn engine_and_document() -> (crate::TestEngine, dom::NodeRoot) {
+    let mut engine = crate::TestEngine::new(EngineSettings { web_tests: true });
     let document = engine
         .create_window(
             engine.top_frame(),
@@ -42,7 +41,7 @@ fn engine_and_document() -> (V8Engine, dom::NodeRoot) {
     (engine, document)
 }
 
-fn run(engine: &mut V8Engine, source: &str) {
+fn run(engine: &mut dom_js::V8Engine, source: &str) {
     engine.run_classic_script(
         engine.top_frame(),
         &ClassicScript {
@@ -56,7 +55,7 @@ fn run(engine: &mut V8Engine, source: &str) {
     );
 }
 
-fn log(engine: &mut V8Engine) -> String {
+fn log(engine: &mut dom_js::V8Engine) -> String {
     run(
         engine,
         "testRunner.reportHarnessResults(log.join(' / ')); log = [];",
@@ -270,7 +269,7 @@ fn an_inserted_scripts_src() {
          }
          log.push('inserted');"#,
     );
-    assert!(engine.run_element_tasks());
+    assert!(engine.run_due_tasks());
     assert_eq!(
         log(&mut engine),
         r#"inserted / error "" / error " " / error "https://[""#
@@ -279,12 +278,12 @@ fn an_inserted_scripts_src() {
 }
 
 /// The fetches the DOM queued, taken.
-fn fetches(engine: &mut V8Engine) -> Vec<ScriptFetch> {
+fn fetches(engine: &mut dom_js::V8Engine) -> Vec<ScriptFetch> {
     engine.dom_mut().take_script_fetches()
 }
 
 /// `fetch`'s script handed back: `source` from `url`, or (none) failed.
-fn fetched(engine: &mut V8Engine, fetch: &ScriptFetch, source: Option<&str>, muted: bool) {
+fn fetched(engine: &mut dom_js::V8Engine, fetch: &ScriptFetch, source: Option<&str>, muted: bool) {
     let loaded = source.map(|source| LoadedScript {
         source: source.to_owned(),
         url: fetch.request.url.clone(),
@@ -296,7 +295,7 @@ fn fetched(engine: &mut V8Engine, fetch: &ScriptFetch, source: Option<&str>, mut
 }
 
 /// Whether `document`'s load event waits.
-fn load_delayed(engine: &mut V8Engine, document: &dom::NodeRoot) -> bool {
+fn load_delayed(engine: &mut dom_js::V8Engine, document: &dom::NodeRoot) -> bool {
     engine
         .dom_mut()
         .read(|cx| cx.load_event_delayed(document.get(cx.gc)))
@@ -378,13 +377,13 @@ fn external_scripts_run_as_soon_as_they_can_or_in_order() {
     // `b` before `a`; `d` waits for `c`; `c` failed.
     fetched(&mut engine, &fetches[1], Some(&source("ran b")), false);
     fetched(&mut engine, &fetches[3], Some(&source("ran d")), false);
-    assert!(engine.run_element_tasks());
+    assert!(engine.run_due_tasks());
     fetched(&mut engine, &fetches[2], None, false);
     fetched(&mut engine, &fetches[0], Some(&source("ran a")), false);
-    assert!(engine.run_element_tasks());
+    assert!(engine.run_due_tasks());
     assert!(load_delayed(&mut engine, &document), "e not yet");
     fetched(&mut engine, &fetches[4], Some(&source("ran e")), false);
-    assert!(engine.run_element_tasks());
+    assert!(engine.run_due_tasks());
     assert!(!load_delayed(&mut engine, &document));
     assert_eq!(
         log(&mut engine),
@@ -429,7 +428,7 @@ fn a_moved_external_script_doesnt_run() {
     engine
         .dom_mut()
         .mutate(|cx| cx.script_fetched(u64::MAX, None));
-    assert!(engine.run_element_tasks());
+    assert!(engine.run_due_tasks());
     assert!(!load_delayed(&mut engine, &document));
     assert_eq!(
         log(&mut engine),
@@ -458,8 +457,8 @@ fn a_muted_scripts_errors() {
         "\nsetTimeout(() => { throw new Error('later'); }, 0);\nthrow new TypeError('now');";
     fetched(&mut engine, &fetches[0], Some(throws), true);
     fetched(&mut engine, &fetches[1], Some(throws), false);
-    assert!(engine.run_element_tasks());
-    engine.run_timers();
+    assert!(engine.run_due_tasks());
+    engine.run_due_tasks();
     assert_eq!(
         log(&mut engine),
         "Script error.  0 0 null / \
@@ -514,7 +513,7 @@ fn html_script_elements_members() {
 
 /// A module the module map asked for, handed back: `source` from `fetch`'s
 /// URL, or (none) failed.
-fn module_fetched(engine: &mut V8Engine, fetch: &ScriptFetch, source: Option<&str>) {
+fn module_fetched(engine: &mut dom_js::V8Engine, fetch: &ScriptFetch, source: Option<&str>) {
     let response = source.map(|source| FetchedModule {
         url: url::Url::parse(&fetch.request.url).unwrap(),
         source: source.to_owned(),
@@ -544,7 +543,7 @@ fn an_inline_module_script_runs_in_a_task() {
          log.push('inserted');",
     );
     assert!(fetches(&mut engine).is_empty());
-    assert!(engine.run_element_tasks());
+    assert!(engine.run_due_tasks());
     assert_eq!(
         log(&mut engine),
         "inserted / null / https://example.test/a/ / error Uncaught Error: boom"
@@ -626,10 +625,10 @@ fn an_external_module_scripts_graph() {
         &deps[0],
         Some("export const a = 'a'; log.push('dep');"),
     );
-    assert!(engine.run_element_tasks());
+    assert!(engine.run_due_tasks());
     assert!(load_delayed(&mut engine, &document), "main waits for dep2");
     module_fetched(&mut engine, &deps[1], Some("log.push('dep2');"));
-    assert!(engine.run_element_tasks());
+    assert!(engine.run_due_tasks());
     assert!(!load_delayed(&mut engine, &document));
     assert_eq!(
         log(&mut engine),
@@ -655,7 +654,7 @@ fn a_module_script_ignores_classic_attributes() {
              document.body.appendChild(s);
          }",
     );
-    assert!(engine.run_element_tasks());
+    assert!(engine.run_due_tasks());
     assert_eq!(log(&mut engine), "nomodule / for / case");
 }
 
@@ -676,9 +675,9 @@ fn in_order_module_scripts() {
     );
     let roots = fetches(&mut engine);
     module_fetched(&mut engine, &roots[1], Some("log.push('c')"));
-    engine.run_element_tasks();
+    engine.run_due_tasks();
     module_fetched(&mut engine, &roots[0], Some("log.push('a')"));
-    assert!(engine.run_element_tasks());
+    assert!(engine.run_due_tasks());
     assert_eq!(log(&mut engine), "a / b / c");
 }
 
@@ -795,7 +794,7 @@ fn a_modules_dynamic_imports_and_import_meta_resolve() {
              import('./broken.mjs').catch(e => log.push('broken: ' + e.name));",
         ),
     );
-    assert!(engine.run_element_tasks());
+    assert!(engine.run_due_tasks());
     let imports = fetches(&mut engine);
     let requests: Vec<(&str, Option<ScriptCors>)> = imports
         .iter()
@@ -888,7 +887,7 @@ fn module_preloads() {
     );
     module_fetched(&mut engine, &preloads[1], None);
     module_fetched(&mut engine, &preloads[3], Some(""));
-    assert!(engine.run_element_tasks());
+    assert!(engine.run_due_tasks());
     // Its import isn't fetched for the preload; a script of it is.
     assert!(fetches(&mut engine).is_empty());
     run(
@@ -903,7 +902,7 @@ fn module_preloads() {
         ["https://example.test/a/dep.mjs"]
     );
     module_fetched(&mut engine, &dep[0], Some(""));
-    engine.run_element_tasks();
+    engine.run_due_tasks();
     assert_eq!(
         log(&mut engine),
         "error s.css / load p.mjs / error gone.mjs / load second.mjs / p ran"

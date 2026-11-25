@@ -61,7 +61,9 @@ use elise::HeapStats;
 /// that one overlapping the other panics), and for the tests' own; and the
 /// tests' listeners: what each callback (a number, in its listener's
 /// engine word) does when called, and the calls made.
-pub struct TestDom(RefCell<Dom>, pub Listeners);
+/// A DOM, the tests' listeners, and its tasks' tokens (as a host's
+/// scheduler holds them: `run_due`).
+pub struct TestDom(RefCell<Dom>, pub Listeners, pub dom::TaskTokens);
 
 impl Drop for TestDom {
     /// The roots the listeners hold go before the heap (the tests' own
@@ -225,7 +227,10 @@ impl Default for TestDom {
 
 impl TestDom {
     pub fn new() -> Self {
-        Self(RefCell::new(Dom::new()), Listeners::default())
+        let tokens = dom::TaskTokens::new();
+        let mut dom = Dom::new();
+        dom.set_task_waker(tokens.waker());
+        Self(RefCell::new(dom), Listeners::default(), tokens)
     }
 
     pub fn mutate<R>(&mut self, f: impl for<'gc> FnOnce(&dom::Cx<'_, 'gc>) -> R) -> R {
@@ -1375,6 +1380,34 @@ impl dom_api::ScriptHost for TestHost<'_, '_> {
 pub fn with_host<R>(dom: &TestDom, f: impl FnOnce(&mut TestHost<'_, '_>) -> R) -> R {
     let mut front = TestFront::new(dom, This::None, &[]);
     f(&mut TestHost(&mut front))
+}
+
+/// Runs `global`'s tasks due by `now` (milliseconds since its time origin,
+/// the tests' clock) by their tokens, as a scheduler would at that time
+/// (`dom_api::run_task`), and those they queue that are due by then too:
+/// how many ran.
+pub fn run_due(dom: &TestDom, global: &dom::GlobalRoot, now: f64) -> usize {
+    let at = dom
+        .read(|cx| cx.instant_in(cx.global_context(global.get(cx.gc)), now))
+        .expect("a time an instant can be");
+    let mut ran = 0usize;
+    loop {
+        let due = dom.2.take_due_by(at);
+        if due.is_empty() {
+            return ran;
+        }
+        for number in due {
+            let queue =
+                dom.read(|cx| cx.task_numbered(cx.global_context(global.get(cx.gc)), number));
+            if let Some(queue) = queue
+                && with_host(dom, |host| {
+                    dom_api::run_task(host, global, queue, now, number)
+                })
+            {
+                ran += 1;
+            }
+        }
+    }
 }
 
 /// A target's name in the tests' log: a node's name, `#window`, `#target`,

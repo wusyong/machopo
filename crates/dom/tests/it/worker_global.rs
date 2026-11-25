@@ -4,6 +4,7 @@
 //! the DOM has; it is a target of its own (an event's, read back as
 //! one), of no window.
 
+use crate::run::Taken;
 use dom::{
     Cx, Dom, DomString, EventFlags, SerializedMessage, TargetRef, TaskQueue, WorkerGlobalScope,
 };
@@ -62,7 +63,7 @@ fn a_worker_s_global_answers_its_url_and_origin() {
 /// window's.
 #[test]
 fn a_worker_s_global_runs_its_own_timers() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     dom.mutate(|cx| {
         let origin = url::Url::parse("https://example.test/").unwrap().origin();
         let context = cx.worker_global_context(worker(cx, "https://example.test/w.js", origin));
@@ -71,17 +72,15 @@ fn a_worker_s_global_runs_its_own_timers() {
         cx.add_timer(window, 50_000.0, false);
 
         let soon = cx.now_in(Some(context)) + 1.0;
-        assert!(cx.next_task(context, cx.dom_now() + 1.0).is_none());
+        assert!(crate::run::take_due(cx, &[context]).is_empty());
         let timer = cx.add_timer(context, 0.0, true);
-        let next = cx
-            .next_task(context, cx.dom_now() + 1.0)
-            .expect("its timer is due");
-        assert_eq!(next.queue, TaskQueue::Timer);
         assert!(cx.next_due(context).is_some_and(|due| due <= soon));
-        let (taken, _) = cx.take_due(context, soon).expect("its timer");
-        assert!(Gc::ptr_eq(taken, timer));
+        let taken = crate::run::take_due(cx, &[context, window]);
+        assert!(matches!(taken[..], [Taken::Timer(taken)] if Gc::ptr_eq(taken, timer)));
         // The window's, due later, is the window's only.
-        assert!(cx.take_due(window, soon).is_none());
+        let number = cx.timer_state(timer).number;
+        assert_eq!(cx.task_numbered(window, number), None);
+        assert_eq!(cx.task_numbered(context, number), Some(TaskQueue::Timer));
         cx.remove_timer(context, cx.timer_state(timer).id);
         assert!(cx.next_due(context).is_none());
         assert!(cx.next_due(window).is_some());
@@ -92,7 +91,7 @@ fn a_worker_s_global_runs_its_own_timers() {
 /// task, for that port.
 #[test]
 fn a_worker_s_global_delivers_its_ports_messages() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     dom.mutate(|cx| {
         let origin = url::Url::parse("https://example.test/").unwrap().origin();
         let context = cx.worker_global_context(worker(cx, "https://example.test/w.js", origin));
@@ -102,11 +101,10 @@ fn a_worker_s_global_delivers_its_ports_messages() {
         assert!(!cx.has_posted_message(context));
         cx.post_port_message(one, message());
         assert!(cx.has_posted_message(context));
-        let next = cx
-            .next_task(context, cx.dom_now() + 1.0)
-            .expect("its message");
-        assert_eq!(next.queue, TaskQueue::Message);
-        let taken = cx.take_posted_message(context).expect("its message");
+        let taken = crate::run::take_messages(cx, &[context]);
+        let [taken] = &taken[..] else {
+            panic!("its message");
+        };
         assert!(matches!(taken.target, TargetRef::EventTarget(port) if Gc::ptr_eq(port, two)));
         assert!(!cx.has_posted_message(context));
     });

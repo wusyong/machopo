@@ -28,6 +28,7 @@ mod mutation;
 mod names;
 mod probes;
 mod resize;
+mod run;
 mod scripts;
 mod shadow;
 mod sheets;

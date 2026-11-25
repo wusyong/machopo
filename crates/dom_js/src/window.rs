@@ -177,64 +177,66 @@ fn window_of(
     })
 }
 
-/// Runs the timers of the window that is `context`'s global due by `now`
-/// (milliseconds since its time origin; its clock's now if none), each
-/// followed by a microtask checkpoint (each is HTML's task); `scope` is in
-/// `context`, with no script running. How many ran: none for a context
-/// whose global isn't a window of the DOM.
-pub fn run_timers(
+/// Runs the DOM's task numbered `number` of the window or worker that is
+/// `context`'s global (`run_task`, its queue found: `Cx::task_numbered`)
+/// at `now` (milliseconds since its time origin; its clock's now if none),
+/// for a host that runs its tokens itself (tests, on a clock of their own:
+/// `dom::TaskTokens`); `scope` is in `context`, with no script running.
+/// Whether it ran: not if it is no more, or another global's.
+pub fn run_dom_task(
     scope: &mut v8::PinScope<'_, '_>,
     context: v8::Local<'_, v8::Context>,
+    number: u64,
     now: Option<f64>,
-) -> usize {
-    let Some(mut scope) = state::scope(scope) else {
-        return 0;
-    };
-    let Some(global) = global_of(&mut scope, context) else {
-        return 0;
-    };
-    let now = now.unwrap_or_else(|| {
+) -> bool {
+    let found = {
+        let Some(mut scope) = state::scope(scope) else {
+            return false;
+        };
+        let Some(global) = global_of(&mut scope, context) else {
+            return false;
+        };
         let (state, _) = scope.state();
-        state
-            .dom
-            .read(|cx| cx.now_in(Some(cx.global_context(global.get(cx.gc)))))
-    });
-    let ran = dom_api::run_due(&mut Host { scope: &mut scope }, &global, now);
-    state::report(&mut scope);
-    ran
+        state.dom.read(|cx| {
+            let context = cx.global_context(global.get(cx.gc));
+            let now = now.unwrap_or_else(|| cx.now_in(Some(context)));
+            Some((cx.task_numbered(context, number)?, now))
+        })
+    };
+    let Some((queue, now)) = found else {
+        return false;
+    };
+    run_task(scope, context, queue, now, number)
 }
 
-/// Runs the first timer due by `now` (milliseconds since its time origin)
-/// of the window that is `context`'s global, followed by a microtask
-/// checkpoint (`dom_api::run_next_due`); `scope` is in `context`,
-/// with no script running. Whether one ran.
-pub(crate) fn run_next_timer(
+/// The instant `ms` milliseconds since the time origin of the window or
+/// worker that is `context`'s global is (`dom::Cx::instant_in`), for a
+/// host that runs its tokens itself on a clock of its own (tests'
+/// `dom::TaskTokens::take_due_by`); none for another global.
+pub fn instant_in(
     scope: &mut v8::PinScope<'_, '_>,
     context: v8::Local<'_, v8::Context>,
-    now: f64,
-) -> bool {
-    let Some(mut scope) = state::scope(scope) else {
-        return false;
-    };
-    let Some(global) = global_of(&mut scope, context) else {
-        return false;
-    };
-    let ran = dom_api::run_next_due(&mut Host { scope: &mut scope }, &global, now);
-    state::report(&mut scope);
-    ran
+    ms: f64,
+) -> Option<std::time::Instant> {
+    let mut scope = state::scope(scope)?;
+    let global = global_of(&mut scope, context)?;
+    let (state, _) = scope.state();
+    state
+        .dom
+        .read(|cx| cx.instant_in(cx.global_context(global.get(cx.gc)), ms))
 }
 
-/// Runs the task `queue` names of the window that is `context`'s global
-/// (`dom_api::run_task`: the one `Cx::next_task` picked), timers by
-/// `now` (milliseconds since its time origin), with its microtask
+/// Runs the task numbered `number` of the queue `queue` names, of the
+/// window or worker that is `context`'s global (`dom_api::run_task`), due
+/// by `now` (milliseconds since its time origin), with its microtask
 /// checkpoint; `scope` is in `context`, with no script running. Whether
-/// one ran.
+/// it ran.
 pub(crate) fn run_task(
     scope: &mut v8::PinScope<'_, '_>,
     context: v8::Local<'_, v8::Context>,
     queue: dom::TaskQueue,
     now: f64,
-    number: Option<u64>,
+    number: u64,
 ) -> bool {
     let Some(mut scope) = state::scope(scope) else {
         return false;
@@ -243,44 +245,6 @@ pub(crate) fn run_task(
         return false;
     };
     let ran = dom_api::run_task(&mut Host { scope: &mut scope }, &global, queue, now, number);
-    state::report(&mut scope);
-    ran
-}
-
-/// Runs the element tasks of the window that is `context`'s global
-/// (`dom_api::run_element_tasks`), each followed by a microtask
-/// checkpoint; `scope` is in `context`, with no script running. How many
-/// ran.
-pub fn run_element_tasks(
-    scope: &mut v8::PinScope<'_, '_>,
-    context: v8::Local<'_, v8::Context>,
-) -> usize {
-    let Some(mut scope) = state::scope(scope) else {
-        return 0;
-    };
-    let Some(global) = global_of(&mut scope, context) else {
-        return 0;
-    };
-    let ran = dom_api::run_element_tasks(&mut Host { scope: &mut scope }, &global);
-    state::report(&mut scope);
-    ran
-}
-
-/// Runs the messages of the window that is `context`'s global
-/// (`dom_api::run_posted_messages`), each followed by a microtask
-/// checkpoint; `scope` is in `context`, with no script running. How many
-/// ran.
-pub fn run_posted_messages(
-    scope: &mut v8::PinScope<'_, '_>,
-    context: v8::Local<'_, v8::Context>,
-) -> usize {
-    let Some(mut scope) = state::scope(scope) else {
-        return 0;
-    };
-    let Some(global) = global_of(&mut scope, context) else {
-        return 0;
-    };
-    let ran = dom_api::run_posted_messages(&mut Host { scope: &mut scope }, &global);
     state::report(&mut scope);
     ran
 }

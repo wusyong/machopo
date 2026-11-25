@@ -187,7 +187,6 @@ pub use media_query_list::report_media_query_changes;
 pub use menu_list::{
     PopupItem, PopupItemKind, PopupResult, can_keep_popup, popup_items, popup_menu_closed,
 };
-pub use message::run_posted_messages;
 pub use mutation_observer::deliver_mutations;
 pub use navigator::{InputMonitor, PendingInput};
 pub use performance::RANDOMIZED_TRIGGER_RATE;
@@ -199,10 +198,7 @@ pub use script::{
     prepare_wasm_script, run_script_task, send_script_fetches, uses_credentials,
 };
 pub use storage::{OpenedStorageArea, StorageHost, open_for_listeners};
-pub use text_control::run_element_tasks;
-pub use timer::{
-    Reported, next_due, report_exception, run_due, run_next_due, run_task, until_next_due,
-};
+pub use timer::{Reported, next_due, report_exception, run_task, until_next_due};
 pub use typed::{
     Any, AnyArg, AnyOrNull, ArgType, Callback, ConstructorInfo, Created, DictFront, DictMember,
     DictOrBool, Dictionary, DomStr, EmptyStringDefault, ErrorEventObject, Front, FrontHost,

@@ -42,7 +42,8 @@ fn run_updates(cx: &Cx<'_, '_>) {
 /// `document`'s window's element tasks, taken: the images'.
 fn tasks<'gc>(cx: &Cx<'_, 'gc>, document: NodeRef<'gc>) -> Vec<(NodeRef<'gc>, ImageTaskAction)> {
     let window = cx.window_of(document).unwrap();
-    std::iter::from_fn(|| cx.take_element_task(cx.window_context(window)))
+    crate::run::take_element_tasks(cx, &[cx.window_context(window)])
+        .into_iter()
         .map(|(element, kind, _)| match kind {
             ElementTaskKind::Image(action) => (element.expect("an image"), action),
             _ => panic!("an image's task"),
@@ -86,7 +87,7 @@ fn event<'gc>(
 
 #[test]
 fn a_request_waits_for_its_fetch_and_delays_the_load_event() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     let (document, element) = dom.mutate(|cx| {
         let document = window_document(cx);
         let element = img(cx, document, "a.png");
@@ -133,7 +134,7 @@ fn a_request_waits_for_its_fetch_and_delays_the_load_event() {
 
 #[test]
 fn a_fetched_image_is_the_current_requests_its_load_in_a_task() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     let fetches = dom.mutate(|cx| {
         let document = window_document(cx);
         let element = img(cx, document, "a.png");
@@ -162,7 +163,7 @@ fn a_fetched_image_is_the_current_requests_its_load_in_a_task() {
 
 #[test]
 fn the_list_of_available_images_is_the_doms_documents() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     let first = dom.mutate(|cx| {
         let document = window_document(cx);
         let element = img(cx, document, "a.png");
@@ -200,7 +201,7 @@ fn the_list_of_available_images_is_the_doms_documents() {
 /// that comes when no document uses it any more isn't kept.
 #[test]
 fn an_image_leaves_the_list_with_the_documents_that_used_it() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     dom.mutate(|cx| {
         let first = window_document(cx);
         let element = img(cx, first, "a.png");
@@ -235,7 +236,7 @@ fn an_image_leaves_the_list_with_the_documents_that_used_it() {
 
 #[test]
 fn a_new_src_is_the_pending_request_the_old_image_showing() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     let (document, element) = dom.mutate(|cx| {
         let document = window_document(cx);
         let element = img(cx, document, "a.png");
@@ -265,7 +266,7 @@ fn a_new_src_is_the_pending_request_the_old_image_showing() {
 
 #[test]
 fn a_failed_fetch_is_a_broken_image_and_leaves_the_list() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     let (document, element) = dom.mutate(|cx| {
         let document = window_document(cx);
         let element = img(cx, document, "a.png");
@@ -294,7 +295,7 @@ fn a_failed_fetch_is_a_broken_image_and_leaves_the_list() {
 /// ends its load delay; the next update of the image data fires one again.
 #[test]
 fn a_reselected_image_that_fails_fires_no_error() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     dom.mutate(|cx| {
         let document = window_document(cx);
         let element = img(cx, document, "a.png");
@@ -326,7 +327,7 @@ fn a_reselected_image_that_fails_fires_no_error() {
 
 #[test]
 fn no_src_clears_the_image_at_once_and_fires_nothing() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     dom.mutate(|cx| {
         let document = window_document(cx);
         let element = img(cx, document, "a.png");
@@ -350,7 +351,7 @@ fn no_src_clears_the_image_at_once_and_fires_nothing() {
 
 #[test]
 fn an_image_of_a_document_with_no_window_doesnt_load() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     dom.mutate(|cx| {
         let document = cx.create_document(true);
         let element = img(cx, document, "https://example.test/a.png");
@@ -365,7 +366,7 @@ fn an_image_of_a_document_with_no_window_doesnt_load() {
 /// earlier one queued does nothing, no fetch, one `load`.
 #[test]
 fn an_image_available_at_once_ends_an_earlier_update() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     let (document, element) = dom.mutate(|cx| {
         let document = window_document(cx);
         let other = img(cx, document, "a.png");
@@ -392,7 +393,7 @@ fn an_image_available_at_once_ends_an_earlier_update() {
 
 #[test]
 fn an_update_since_makes_an_older_event_do_nothing() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     dom.mutate(|cx| {
         let document = window_document(cx);
         let element = img(cx, document, "a.png");
@@ -407,7 +408,7 @@ fn an_update_since_makes_an_older_event_do_nothing() {
 
 #[test]
 fn decode_waits_for_the_request_it_is_asked_of() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     dom.mutate(|cx| {
         let document = window_document(cx);
         let element = img(cx, document, "a.png");
@@ -463,7 +464,7 @@ fn decode_waits_for_the_request_it_is_asked_of() {
 
 #[test]
 fn adoption_updates_the_image_data() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     dom.mutate(|cx| {
         let inert = cx.create_document(true);
         let element = img(cx, inert, "https://example.test/a.png");
@@ -485,7 +486,7 @@ fn adoption_updates_the_image_data() {
 /// it, another attribute, or another parent don't.
 #[test]
 fn a_pictures_relevant_mutations() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     dom.mutate(|cx| {
         let document = window_document(cx);
         let picture = cx.create_element(document, QualName::html("picture"));
@@ -541,7 +542,7 @@ fn a_pictures_relevant_mutations() {
 /// those that no longer use them, or left for another document, aren't.
 #[test]
 fn the_images_to_select_again() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     dom.mutate(|cx| {
         let document = window_document(cx);
         let plain = img(cx, document, "a.png");
@@ -580,7 +581,7 @@ fn the_images_to_select_again() {
 /// another density changes it alone.
 #[test]
 fn a_density_is_the_natural_sizes() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     dom.mutate(|cx| {
         let document = window_document(cx);
         let element = img(cx, document, "a.png");
@@ -607,7 +608,7 @@ fn a_density_is_the_natural_sizes() {
 /// dimensions are; no canvas draws it.
 #[test]
 fn an_svg_images_natural_size() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     dom.mutate(|cx| {
         let document = window_document(cx);
         let element = img(cx, document, "a.svg");
@@ -678,7 +679,7 @@ fn an_svg_images_natural_size() {
 /// standing (WPT's `image-decode-with-quick-attach.html`).
 #[test]
 fn an_image_loading_is_taken_at_once() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     let (document, second, promise) = dom.mutate(|cx| {
         let document = window_document(cx);
         img(cx, document, "a.png");
@@ -722,7 +723,7 @@ fn an_image_loading_is_taken_at_once() {
 /// the current has is kept, its `decode()` standing, `load` again.
 #[test]
 fn a_responsive_images_update_keeps_its_image() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     dom.mutate(|cx| {
         let document = window_document(cx);
         let picture = cx.create_element(document, QualName::html("picture"));
@@ -779,7 +780,7 @@ impl<'gc> ContainsDecode<'gc> for Vec<(NodeRef<'gc>, ImageTaskAction)> {
 /// observed, and its `load` fires once it comes.
 #[test]
 fn a_lazy_image_waits_for_its_lazy_load() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     dom.mutate(|cx| {
         let document = window_document(cx);
         let element = cx.create_element(document, QualName::html("img"));
@@ -835,7 +836,7 @@ fn a_lazy_image_waits_for_its_lazy_load() {
 /// isn't lazy (scripting is disabled).
 #[test]
 fn a_lazy_image_takes_an_available_one() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     dom.mutate(|cx| {
         let document = window_document(cx);
         let first = img(cx, document, "a.png");
@@ -864,7 +865,7 @@ fn a_lazy_image_takes_an_available_one() {
 /// resumed is fetched.
 #[test]
 fn a_lazy_pending_request_waits_and_resumes() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     let element = dom.mutate(|cx| {
         let document = window_document(cx);
         let element = cx.create_element(document, QualName::html("img"));
@@ -895,7 +896,7 @@ fn a_lazy_pending_request_waits_and_resumes() {
 /// `loading` is then (Blink's parser sets every attribute first).
 #[test]
 fn loading_eager_resumes_and_an_update_begins_as_lazy_as_loading_is() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     dom.mutate(|cx| {
         let document = window_document(cx);
         let element = cx.create_element(document, QualName::html("img"));
@@ -926,7 +927,7 @@ fn loading_eager_resumes_and_an_update_begins_as_lazy_as_loading_is() {
 /// `auto,`).
 #[test]
 fn the_auto_sizes_observer() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     dom.mutate(|cx| {
         let document = window_document(cx);
         let window = cx.window_of(document).unwrap();
@@ -959,7 +960,7 @@ fn the_auto_sizes_observer() {
 /// still fires.
 #[test]
 fn a_waiting_image_is_held_by_its_window() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     let (document, id) = dom.mutate(|cx| {
         let document = window_document(cx);
         let element = img(cx, document, "held.png");

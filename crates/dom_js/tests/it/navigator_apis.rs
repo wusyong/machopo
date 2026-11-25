@@ -14,7 +14,7 @@ use dom_api::{EngineSettings, InputMonitor, PendingInput, ScriptEngine};
 use crate::history::Page;
 
 fn run_tasks(page: &mut Page) {
-    while page.engine.run_element_tasks() {}
+    while page.engine.run_due_tasks() {}
 }
 
 #[test]
@@ -141,7 +141,7 @@ impl InputMonitor for Monitor {
 
 #[test]
 fn is_input_pending_asks_the_hosts_monitor() {
-    let mut engine = dom_js::V8Engine::new(EngineSettings { web_tests: true });
+    let mut engine = crate::TestEngine::new(EngineSettings { web_tests: true });
     let document = engine
         .create_window(engine.top_frame(), "https://example.test/", Instant::now())
         .expect("a window");

@@ -12,7 +12,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 
-use dom::{Cx, Dom, DomString, PortEnd, SerializedMessage, TargetRef, TaskQueue};
+use dom::{Cx, Dom, DomString, PortEnd, SerializedMessage, TargetRef};
 use elise::{Gc, Persistent, WeakPersistent};
 
 fn message(byte: u8, ports: Vec<PortEnd>) -> SerializedMessage {
@@ -31,6 +31,7 @@ fn context<'gc>(cx: &Cx<'_, 'gc>) -> Gc<'gc, dom::ExecutionContext> {
 /// A DOM whose port waker counts its calls.
 fn counted() -> (Dom, Arc<AtomicUsize>) {
     let mut dom = Dom::with_platform(Default::default(), Arc::new(elise::InlinePlatform));
+    crate::run::tokens(|tokens| dom.set_task_waker(tokens.waker()));
     let woken = Arc::new(AtomicUsize::new(0));
     dom.set_port_waker(Arc::new({
         let woken = woken.clone();
@@ -50,7 +51,7 @@ fn take_all<'gc>(
     port: Gc<'gc, dom::EventTargetImpl>,
 ) -> Vec<u8> {
     let mut got = Vec::new();
-    while let Some(taken) = cx.take_posted_message(context) {
+    for taken in crate::run::take_messages(cx, &[context]) {
         assert!(matches!(taken.target, TargetRef::EventTarget(target) if Gc::ptr_eq(target, port)));
         got.extend(taken.payload.unwrap().bytes);
     }
@@ -82,11 +83,6 @@ fn a_port_s_messages_follow_it_to_another_thread() {
             let context = context(cx);
             let port = cx.receive_message_ports(context, vec![end])[0];
             cx.start_message_port(port);
-            assert_eq!(
-                cx.next_task(context, cx.dom_now() + 1.0)
-                    .map(|task| task.queue),
-                Some(TaskQueue::Message)
-            );
             assert_eq!(take_all(cx, context, port), [1, 2]);
             (
                 Persistent::new(cx.gc, context),
@@ -99,7 +95,7 @@ fn a_port_s_messages_follow_it_to_another_thread() {
         dom.mutate(|cx| {
             let (context, port) = (port.0.get(cx.gc), port.1.get(cx.gc));
             // Not numbered till the task for its waker.
-            assert!(cx.take_posted_message(context).is_none());
+            assert!(crate::run::take_messages(cx, &[context]).is_empty());
             cx.port_messages_arrived(context);
             assert_eq!(take_all(cx, context, port), [3]);
             cx.post_port_message(port, message(4, Vec::new()));
@@ -140,7 +136,7 @@ fn a_port_whose_other_end_closed_gets_what_came_before() {
             )
         });
         std::thread::spawn(move || {
-            let mut dom = Dom::new();
+            let mut dom = crate::run::dom();
             let end = from_here.recv().unwrap();
             dom.mutate(|cx| {
                 let port = cx.receive_message_ports(context(cx), vec![end])[0];
@@ -271,7 +267,7 @@ fn a_message_from_here_comes_after_those_from_another_thread() {
         (Persistent::new(cx.gc, context), Persistent::new(cx.gc, one))
     });
     std::thread::spawn(move || {
-        let mut there = Dom::new();
+        let mut there = crate::run::dom();
         let end = from_here.recv().unwrap();
         there.mutate(|cx| {
             let port = cx.receive_message_ports(context(cx), vec![end])[0];
@@ -295,14 +291,14 @@ fn a_message_from_here_comes_after_those_from_another_thread() {
 /// tasks in that DOM's order: after one queued there before they came.
 #[test]
 fn a_shipped_port_s_messages_are_numbered_where_they_come() {
-    let mut here = Dom::new();
+    let mut here = crate::run::dom();
     let end = here.mutate(|cx| {
         let (one, two) = cx.message_channel_ports(cx.create_message_channel(Some(context(cx))));
         cx.post_port_message(one, message(1, Vec::new()));
         cx.ship_message_port(two)
     });
     std::thread::spawn(move || {
-        let mut there = Dom::new();
+        let mut there = crate::run::dom();
         there.mutate(|cx| {
             let document = cx.create_document(true);
             let window = cx.create_window(document);
@@ -310,12 +306,13 @@ fn a_shipped_port_s_messages_are_numbered_where_they_come() {
             // Numbered past what `here` numbered.
             for _ in 0..20 {
                 cx.post_window_message(window, message(0, Vec::new()), DomString::new(""), None);
-                cx.take_posted_message(context);
+                crate::run::take_messages(cx, &[context]);
             }
             cx.post_window_message(window, message(2, Vec::new()), DomString::new(""), None);
             let port = cx.receive_message_ports(context, vec![end])[0];
             cx.start_message_port(port);
-            let order: Vec<u8> = std::iter::from_fn(|| cx.take_posted_message(context))
+            let order: Vec<u8> = crate::run::take_messages(cx, &[context])
+                .into_iter()
                 .map(|taken| taken.payload.unwrap().bytes[0])
                 .collect();
             assert_eq!(order, [2, 1]);
@@ -330,7 +327,7 @@ fn a_shipped_port_s_messages_are_numbered_where_they_come() {
 /// task source.
 #[test]
 fn a_message_on_its_port_s_thread_is_numbered_as_it_is_posted() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     dom.mutate(|cx| {
         let document = cx.create_document(true);
         let window = cx.create_window(document);
@@ -339,7 +336,8 @@ fn a_message_on_its_port_s_thread_is_numbered_as_it_is_posted() {
         cx.start_message_port(two);
         cx.post_port_message(one, message(1, Vec::new()));
         cx.post_window_message(window, message(2, Vec::new()), DomString::new(""), None);
-        let order: Vec<u8> = std::iter::from_fn(|| cx.take_posted_message(context))
+        let order: Vec<u8> = crate::run::take_messages(cx, &[context])
+            .into_iter()
             .map(|taken| taken.payload.unwrap().bytes[0])
             .collect();
         assert_eq!(order, [1, 2]);

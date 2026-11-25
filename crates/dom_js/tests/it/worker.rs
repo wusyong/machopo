@@ -19,7 +19,7 @@ use dom_api::{
     ClassicScript, EngineSettings, ScriptEngine, WorkerEngine, WorkerError, WorkerGlobalHost,
     WorkerHost, WorkerStart,
 };
-use dom_js::{V8Engine, V8WorkerEngine};
+use dom_js::V8WorkerEngine;
 
 /// What the worker sent its host, and what it fetched of it.
 #[derive(Default)]
@@ -126,6 +126,7 @@ fn worker_of_kind(
     module: bool,
 ) -> (V8WorkerEngine, Rc<RefCell<Sent>>) {
     let mut engine = V8WorkerEngine::new(EngineSettings { web_tests: true });
+    TOKENS.with(|tokens| engine.set_task_waker(tokens.waker()));
     let sent = Rc::new(RefCell::new(Sent::default()));
     let url = url::Url::parse(url).unwrap();
     engine.create_global(
@@ -166,13 +167,46 @@ fn result(engine: &mut V8WorkerEngine, source: &str) -> String {
     engine.take_harness_results().expect("a result")
 }
 
+thread_local! {
+    /// The tokens of this test's worker's DOM, as its thread's scheduler
+    /// holds them (each test is a thread of its own, with one worker).
+    static TOKENS: dom::TaskTokens = dom::TaskTokens::new();
+}
+
+/// The worker's tasks whose tokens are due now, each run by its number:
+/// whether one ran.
+fn run_due_tasks(engine: &mut V8WorkerEngine) -> bool {
+    let due = TOKENS.with(dom::TaskTokens::take_due);
+    let mut ran = false;
+    for number in due {
+        ran |= engine.run_dom_task(number);
+    }
+    ran
+}
+
 /// Its tasks run until `done`, or a second passes.
 fn run_tasks_until(engine: &mut V8WorkerEngine, mut done: impl FnMut(&mut V8WorkerEngine) -> bool) {
     let until = Instant::now() + Duration::from_secs(1);
     while !done(engine) {
         assert!(Instant::now() < until, "its tasks ran in time");
-        if !engine.run_due_tasks() {
-            std::thread::sleep(engine.until_next_task().unwrap_or(Duration::from_millis(1)));
+        if !run_due_tasks(engine) {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+}
+
+/// Its tasks run till none runs for a while (10 ms): none is left to run
+/// but those a while off.
+fn run_tasks_till_idle(engine: &mut V8WorkerEngine) {
+    let until = Instant::now() + Duration::from_secs(1);
+    let mut quiet = 0;
+    while quiet < 10 {
+        assert!(Instant::now() < until, "its tasks ran in time");
+        if run_due_tasks(engine) {
+            quiet = 0;
+        } else {
+            quiet += 1;
+            std::thread::sleep(Duration::from_millis(1));
         }
     }
 }
@@ -393,14 +427,14 @@ fn a_worker_s_timers_are_its_tasks() {
          const id = setInterval(() => { log.push('interval'); \
            if (log.filter(entry => entry === 'interval').length === 3) clearInterval(id); }, 1);",
     );
-    assert!(engine.until_next_task().is_some());
     run_tasks_until(&mut engine, |engine| result(engine, "log.length") == "4");
     assert_eq!(
         result(&mut engine, "log.join()"),
         "timeout true,interval,interval,interval"
     );
-    // Cleared: none is due.
-    assert!(engine.until_next_task().is_none());
+    // Cleared: none runs again.
+    run_tasks_till_idle(&mut engine);
+    assert_eq!(result(&mut engine, "log.length"), "4");
 }
 
 /// What the DOM queues of no element's is its tasks too (its global has
@@ -441,7 +475,7 @@ fn a_worker_s_messages_go_both_ways() {
     assert!(sent.borrow().messages.is_empty());
     // The message it sent comes back to it as one from its `Worker`.
     engine.post_message(message);
-    assert_eq!(engine.until_next_task(), Some(Duration::ZERO));
+    assert!(engine.has_dom_task_due_for(0.0), "a task due now");
     run_tasks_until(&mut engine, |engine| result(engine, "got.length") == "2");
     assert_eq!(
         result(&mut engine, "got.join()"),
@@ -516,7 +550,7 @@ fn a_worker_s_uncaught_errors_go_to_its_host() {
          setTimeout(() => { throw new Error('canceled'); }, 0); \
          throw new TypeError('reported');",
     );
-    run_tasks_until(&mut engine, |engine| engine.until_next_task().is_none());
+    run_tasks_till_idle(&mut engine);
     assert_eq!(
         sent.borrow().errors,
         [WorkerError {
@@ -686,7 +720,7 @@ fn an_imported_script_s_errors_are_its_own() {
         "importScripts('own.js', 'https://other.test/muted.js'); \
          for (const boom of booms) setTimeout(boom, 0);",
     );
-    run_tasks_until(&mut engine, |engine| engine.until_next_task().is_none());
+    run_tasks_till_idle(&mut engine);
     let errors: Vec<_> = sent
         .borrow()
         .errors
@@ -748,8 +782,8 @@ impl WorkerHost for OwnerHost {
 
 /// A window's engine at `https://example.test/page.html`, with a workers'
 /// host.
-fn page() -> (V8Engine, Rc<Workers>) {
-    let mut engine = V8Engine::new(EngineSettings { web_tests: true });
+fn page() -> (crate::TestEngine, Rc<Workers>) {
+    let mut engine = crate::TestEngine::new(EngineSettings { web_tests: true });
     engine
         .create_window(
             engine.top_frame(),
@@ -762,7 +796,7 @@ fn page() -> (V8Engine, Rc<Workers>) {
     (engine, workers)
 }
 
-fn page_result(engine: &mut V8Engine, source: &str) -> String {
+fn page_result(engine: &mut dom_js::V8Engine, source: &str) -> String {
     engine.run_classic_script(
         engine.top_frame(),
         &ClassicScript {

@@ -4,16 +4,15 @@
 use std::time::Instant;
 
 use dom_api::{ClassicScript, EngineSettings, ScriptEngine};
-use dom_js::V8Engine;
 
 /// What `source` pushed to `log`, joined with ` / `, its microtasks and
 /// then its tasks run (a read settles in a task).
 fn run(source: &str) -> String {
-    let mut engine = V8Engine::new(EngineSettings { web_tests: true });
+    let mut engine = crate::TestEngine::new(EngineSettings { web_tests: true });
     engine
         .create_window(engine.top_frame(), "https://example.test/", Instant::now())
         .expect("a window");
-    let run = |engine: &mut V8Engine, source: &str| {
+    let run = |engine: &mut crate::TestEngine, source: &str| {
         engine.run_classic_script(
             engine.top_frame(),
             &ClassicScript {
@@ -146,11 +145,11 @@ fn promise_members_reject_what_they_throw() {
 /// asked, not as a microtask of its own.
 #[test]
 fn a_read_settles_in_a_task() {
-    let mut engine = V8Engine::new(EngineSettings { web_tests: true });
+    let mut engine = crate::TestEngine::new(EngineSettings { web_tests: true });
     engine
         .create_window(engine.top_frame(), "https://example.test/", Instant::now())
         .expect("a window");
-    let run = |engine: &mut V8Engine, source: &str| {
+    let run = |engine: &mut crate::TestEngine, source: &str| {
         engine.run_classic_script(
             engine.top_frame(),
             &ClassicScript {
@@ -171,7 +170,7 @@ fn a_read_settles_in_a_task() {
     );
     engine.perform_microtask_checkpoint();
     run(&mut engine, "log.push('before the task')");
-    assert!(engine.dom_mut().has_queued_tasks(), "the read is a task");
+    assert!(engine.has_dom_task_due_for(0.0), "the read is a task");
     assert!(engine.run_due_tasks());
     run(
         &mut engine,

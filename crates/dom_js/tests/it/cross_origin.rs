@@ -9,13 +9,12 @@ use dom::FrameNavigation;
 use dom_api::{
     ChildNavigation, ClassicScript, EngineSettings, FrameId, FrameRequest, ScriptEngine,
 };
-use dom_js::V8Engine;
 
 /// A window of a document at `https://example.test/a/` with
 /// `<html><body>` and `iframes` iframes (`f0`, `f1`...), each child at
 /// its URL of `urls`; `log`, `error(f)`. The children's frames.
-fn engine(urls: &[&str]) -> (V8Engine, Vec<FrameId>) {
-    let mut engine = V8Engine::new(EngineSettings { web_tests: true });
+fn engine(urls: &[&str]) -> (crate::TestEngine, Vec<FrameId>) {
+    let mut engine = crate::TestEngine::new(EngineSettings { web_tests: true });
     engine
         .create_window(
             engine.top_frame(),
@@ -47,7 +46,7 @@ fn engine(urls: &[&str]) -> (V8Engine, Vec<FrameId>) {
     (engine, frames)
 }
 
-fn run(engine: &mut V8Engine, source: &str) {
+fn run(engine: &mut dom_js::V8Engine, source: &str) {
     engine.run_classic_script(
         engine.top_frame(),
         &ClassicScript {
@@ -61,7 +60,7 @@ fn run(engine: &mut V8Engine, source: &str) {
     );
 }
 
-fn run_in(engine: &mut V8Engine, frame: FrameId, url: &str, source: &str) {
+fn run_in(engine: &mut dom_js::V8Engine, frame: FrameId, url: &str, source: &str) {
     engine.run_classic_script(
         frame,
         &ClassicScript {
@@ -75,7 +74,7 @@ fn run_in(engine: &mut V8Engine, frame: FrameId, url: &str, source: &str) {
     );
 }
 
-fn log(engine: &mut V8Engine) -> String {
+fn log(engine: &mut dom_js::V8Engine) -> String {
     run(
         engine,
         "testRunner.reportHarnessResults(log.join(' / ')); log = [];",
@@ -84,7 +83,7 @@ fn log(engine: &mut V8Engine) -> String {
 }
 
 /// The navigations to another document the engine asked for since.
-fn navigations(engine: &mut V8Engine) -> Vec<(FrameId, String)> {
+fn navigations(engine: &mut dom_js::V8Engine) -> Vec<(FrameId, String)> {
     engine
         .take_frame_requests()
         .into_iter()
@@ -231,7 +230,7 @@ fn a_child_of_another_origin_reaches_its_parent_cross_origin() {
          parent.postMessage([e(() => parent.document), parent === top, String(frameElement),
                              e(() => parent.f0)].join(), '*');",
     );
-    engine.run_posted_messages();
+    engine.run_due_tasks();
     assert_eq!(
         log(&mut engine),
         "SecurityError,true,null,SecurityError / https://other.test"
@@ -253,8 +252,8 @@ fn a_child_of_another_origin_reaches_its_parent_cross_origin() {
         &mut engine,
         "f0.contentWindow.postMessage('slash', '/'); f0.contentWindow.postMessage('any', '*');",
     );
-    engine.run_posted_messages();
-    engine.run_posted_messages();
+    engine.run_due_tasks();
+    engine.run_due_tasks();
     assert_eq!(log(&mut engine), "got any / https://other.test");
 }
 
@@ -395,8 +394,8 @@ fn a_javascript_url_is_its_targets_origins_alone() {
     // Each run counted on its document's root once its tasks ran (a
     // `javascript:` URL runs in a task of the document's).
     const JS: &str = "javascript:document.appendChild(document.createComment(\"ran\"))";
-    let ran = |engine: &mut V8Engine, frame: FrameId, _: &str| {
-        while engine.run_element_tasks() {}
+    let ran = |engine: &mut crate::TestEngine, frame: FrameId, _: &str| {
+        while engine.run_due_tasks() {}
         let (_, owner) = engine.frame_parent(frame).expect("a child frame");
         engine.dom_mut().read(|cx| {
             let document = cx.content_document(owner.get(cx.gc)).expect("its document");
@@ -472,7 +471,7 @@ fn javascript_urls_stop_once_their_frame_goes() {
          w.location.href = 'javascript:frameElement.remove()';
          w.location.href = 'javascript:parent.log.push(\"ran\")';",
     );
-    while engine.run_element_tasks() {}
+    while engine.run_due_tasks() {}
     assert_eq!(log(&mut engine), "");
     assert_eq!(
         engine.child_frames(engine.top_frame()),

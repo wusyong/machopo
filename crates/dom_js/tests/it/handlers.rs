@@ -10,7 +10,7 @@ use std::time::Instant;
 use dom_api::{ClassicScript, EngineSettings, ScriptEngine};
 use dom_js::V8Engine;
 
-fn run(engine: &mut V8Engine, source: &str) {
+fn run(engine: &mut dom_js::V8Engine, source: &str) {
     engine.run_classic_script(
         engine.top_frame(),
         &ClassicScript {
@@ -25,7 +25,7 @@ fn run(engine: &mut V8Engine, source: &str) {
     engine.perform_microtask_checkpoint();
 }
 
-fn report(engine: &mut V8Engine, expression: &str) -> String {
+fn report(engine: &mut dom_js::V8Engine, expression: &str) -> String {
     run(
         engine,
         &format!("testRunner.reportHarnessResults(String({expression}))"),
@@ -38,7 +38,7 @@ fn report(engine: &mut V8Engine, expression: &str) -> String {
 /// (`env::slow_paths`): the dispatch is run after the count, as it is the
 /// whole front end's, in a scope of its own. Statements as one expression
 /// (the comma operator), unless `source` is one already.
-fn counted_before_dispatch(engine: &mut V8Engine, source: &str) -> (String, u64) {
+fn counted_before_dispatch(engine: &mut dom_js::V8Engine, source: &str) -> (String, u64) {
     let expression = |statements: &str| format!("({})", statements.replace("; ", ", "));
     if source.starts_with("(() =>") {
         let before = crate::env::slow_paths();
@@ -68,8 +68,8 @@ fn counted_before_dispatch(engine: &mut V8Engine, source: &str) -> (String, u64)
 }
 
 /// An engine whose window's document has `<html><body><div id=d>`.
-fn page() -> V8Engine {
-    let mut engine = V8Engine::new(EngineSettings { web_tests: true });
+fn page() -> crate::TestEngine {
+    let mut engine = crate::TestEngine::new(EngineSettings { web_tests: true });
     engine
         .create_window(
             engine.top_frame(),
@@ -272,7 +272,7 @@ fn a_windows_onerror_gets_the_errors_parts() {
 
 #[test]
 fn the_parsers_handlers_are_at_their_lines() {
-    let mut engine = Box::new(V8Engine::new(EngineSettings { web_tests: true }));
+    let mut engine = Box::new(dom_js::V8Engine::new(EngineSettings { web_tests: true }));
     let document = engine
         .create_window(
             engine.top_frame(),
@@ -511,7 +511,7 @@ fn a_value_rest_arguments_and_a_signal_are_handles() {
         }
     }
     // The timers' callbacks are called with what they were set with.
-    assert!(engine.run_timers());
+    assert!(engine.run_due_tasks());
     assert_eq!(report(&mut engine, "log.splice(0).join()"), "f,f,g1x2,s");
 }
 

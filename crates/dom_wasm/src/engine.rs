@@ -1092,44 +1092,6 @@ impl ScriptEngine for WasmEngine {
         }
     }
 
-    fn run_timers(&mut self) -> bool {
-        self.run_due_guests()
-    }
-
-    /// The guests whose waits are over (the host's loop wakes for them at
-    /// `until_next_timer`), then the window's own tasks that are due.
-    fn run_due_tasks(&mut self) -> bool {
-        let mut ran = self.run_due_guests();
-        let Some(window) = self.window() else {
-            return ran;
-        };
-        self.dom().read(|cx| cx.begin_task_pass());
-        loop {
-            let next = self.dom().read(|cx| {
-                let now = cx.dom_now();
-                let window = window.get(cx.gc);
-                let task = cx.next_task(cx.window_context(window), now)?;
-                Some((task, now - cx.window_time_origin(window)))
-            });
-            let Some((task, now)) = next else {
-                break;
-            };
-            if !dom_api::run_task(
-                &mut self.host(),
-                &dom::GlobalRoot::Window(window.clone()),
-                task.queue,
-                now,
-                None,
-            ) {
-                break;
-            }
-            ran = true;
-        }
-        self.dom()
-            .read(|cx| cx.end_task_pass(&[cx.window_context(window.get(cx.gc))]));
-        ran
-    }
-
     fn run_dom_task(&mut self, number: u64) -> bool {
         let Some(window) = self.window() else {
             return false;
@@ -1149,7 +1111,7 @@ impl ScriptEngine for WasmEngine {
             &dom::GlobalRoot::Window(window),
             queue,
             now,
-            Some(number),
+            number,
         )
     }
 
@@ -1200,23 +1162,6 @@ impl ScriptEngine for WasmEngine {
 
     // What `isInputPending` asks: script's.
     fn set_input_monitor(&mut self, _: Box<dyn dom_api::InputMonitor>) {}
-
-    fn run_element_tasks(&mut self) -> bool {
-        let Some(window) = self.window() else {
-            return false;
-        };
-        let ran =
-            dom_api::run_element_tasks(&mut self.host(), &dom::GlobalRoot::Window(window.clone()))
-                > 0;
-        if ran {
-            self.perform_microtask_checkpoint();
-        }
-        ran
-    }
-
-    fn run_posted_messages(&mut self) -> bool {
-        false
-    }
 
     fn has_resize_observations(&mut self, _: FrameId) -> bool {
         false

@@ -96,6 +96,7 @@ mod style;
 mod style_sheet;
 mod svg;
 mod svg_use;
+mod task_tokens;
 mod tasks;
 mod text_control;
 mod traversal;
@@ -215,7 +216,8 @@ pub use storage::{
 pub use style_sheet::{CssStyleSheet, SheetContents, SheetMedia};
 pub use svg::{SvgAnimatedString, SvgMatrix, SvgPoint, SvgRect};
 pub use svg_use::MAX_COPIES;
-pub use tasks::{NextTask, TaskQueue, TaskWaker};
+pub use task_tokens::TaskTokens;
+pub use tasks::{TaskQueue, TaskWaker};
 pub use text_control::{SelectionDirection, SelectionMode, TextArea, TextSelection};
 pub use traversal::{NodeIterator, Traversal, TraversalRoot, TreeWalker};
 pub use tree::DOCUMENT_POSITION_FOLLOWING;
@@ -903,12 +905,8 @@ struct Changes {
     /// The console warnings script's calls earned, until the host takes
     /// them (`Dom::take_console_warnings`).
     console_warnings: Cell<Vec<String>>,
-    /// The next task's number, whether a task that is due now may be
-    /// queued, and the first number a pass of the host's holds back
-    /// (`tasks`).
+    /// The next task's number (`tasks`).
     task_sequence: Cell<u64>,
-    tasks_queued: Cell<bool>,
-    task_limit: Cell<Option<u64>>,
     /// What wakes this DOM's thread for its ports' messages from other
     /// threads (`Dom::set_port_waker`).
     port_waker: Option<message_pipe::PortWaker>,
@@ -1044,7 +1042,7 @@ impl Dom {
 
     /// What wakes this DOM's thread when one of its message ports may have
     /// a message from another thread, or stopped waiting for one: the
-    /// host's, which has the thread look at its tasks (`next_task`). For
+    /// host's, which has the thread run `Cx::port_messages_arrived`. For
     /// the ports made from now on, and those that come in messages. A DOM
     /// whose ports stay on its thread needs none.
     pub fn set_port_waker(&mut self, waker: message_pipe::PortWaker) {
@@ -1055,8 +1053,8 @@ impl Dom {
     /// numbers it: its number, and when it is due (none: now), as Blink
     /// posts each to its frame's task runner (a timer's as a delayed
     /// task). The host runs each in its turn among its own
-    /// (`Cx::task_numbered`). A DOM whose host runs its tasks in passes
-    /// (`begin_task_pass`) needs none.
+    /// (`Cx::task_numbered`). One with none runs no task (tests that need
+    /// none: `TaskTokens` is the least scheduler, for those that do).
     pub fn set_task_waker(&mut self, waker: tasks::TaskWaker) {
         self.changes.task_waker = Some(waker);
     }

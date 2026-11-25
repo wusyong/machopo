@@ -7,12 +7,11 @@
 use std::time::Instant;
 
 use dom_api::{ClassicScript, EngineSettings, ScriptEngine};
-use dom_js::V8Engine;
 
 /// A window of a document at `https://example.test/a/` with
 /// `<html><body>`; `log`, `error(f)`.
-fn engine() -> V8Engine {
-    let mut engine = V8Engine::new(EngineSettings { web_tests: true });
+fn engine() -> crate::TestEngine {
+    let mut engine = crate::TestEngine::new(EngineSettings { web_tests: true });
     engine
         .create_window(
             engine.top_frame(),
@@ -31,7 +30,7 @@ fn engine() -> V8Engine {
     engine
 }
 
-fn run(engine: &mut V8Engine, source: &str) {
+fn run(engine: &mut dom_js::V8Engine, source: &str) {
     engine.run_classic_script(
         engine.top_frame(),
         &ClassicScript {
@@ -45,7 +44,7 @@ fn run(engine: &mut V8Engine, source: &str) {
     );
 }
 
-fn log(engine: &mut V8Engine) -> String {
+fn log(engine: &mut dom_js::V8Engine) -> String {
     run(
         engine,
         "testRunner.reportHarnessResults(log.join(' / ')); log = [];",
@@ -74,7 +73,7 @@ fn microtasks_run_between_the_listeners_of_a_ua_event() {
     assert_eq!(log(&mut engine), "first / second / dispatched");
     engine.perform_microtask_checkpoint();
     assert_eq!(log(&mut engine), "micro");
-    assert!(engine.run_posted_messages());
+    assert!(engine.run_due_tasks());
     assert_eq!(log(&mut engine), "first / micro / second");
 }
 
@@ -96,12 +95,12 @@ fn a_message_to_a_window() {
         Some(std::time::Duration::ZERO),
         "waiting"
     );
-    assert!(engine.run_posted_messages());
+    assert!(engine.run_due_tasks());
     assert_eq!(
         log(&mut engine),
         "1 1,2 x true https://example.test true true 0 true true"
     );
-    assert!(!engine.run_posted_messages());
+    assert!(!engine.run_due_tasks());
     run(
         &mut engine,
         "postMessage({a: 2, b: [], m: new Map()}, '/');
@@ -110,7 +109,7 @@ fn a_message_to_a_window() {
          log.push(error(() => postMessage(1, 'nonsense')), postMessage.length);",
     );
     assert_eq!(log(&mut engine), "SyntaxError / 1");
-    engine.run_posted_messages();
+    engine.run_due_tasks();
     let delivered = log(&mut engine);
     assert!(
         delivered.starts_with("2 ") && delivered.contains(" / 4 ") && !delivered.contains("3 "),
@@ -141,7 +140,7 @@ fn clones_and_transfers() {
         log(&mut engine),
         "DataCloneError / DataCloneError / DataCloneError / TypeError / DataCloneError / TypeError / TypeError / 0"
     );
-    engine.run_posted_messages();
+    engine.run_due_tasks();
     assert_eq!(log(&mut engine), "1,2,3");
 }
 
@@ -159,7 +158,7 @@ fn a_message_to_a_child_frame() {
     );
     let requests = engine.take_frame_requests();
     assert!(requests.is_empty(), "{requests:?}");
-    engine.run_posted_messages();
+    engine.run_due_tasks();
     assert_eq!(log(&mut engine), "1 / true / true");
 }
 
@@ -178,16 +177,16 @@ fn a_channels_ports() {
          c.port2.postMessage('hi');",
     );
     assert_eq!(log(&mut engine), "[object MessagePort] / true / true");
-    assert!(!engine.run_posted_messages(), "not started");
+    assert!(!engine.run_due_tasks(), "not started");
     run(&mut engine, "c.port1.start();");
-    assert!(engine.run_posted_messages());
+    assert!(engine.run_due_tasks());
     assert_eq!(log(&mut engine), "1 got hi true");
     run(
         &mut engine,
         "c.port2.onmessage = e => log.push('2 got ' + e.data);
          c.port1.postMessage('back');",
     );
-    engine.run_posted_messages();
+    engine.run_due_tasks();
     assert_eq!(log(&mut engine), "2 got back");
     // Transferred.
     run(
@@ -203,8 +202,8 @@ fn a_channels_ports() {
          d.port1.postMessage('through');",
     );
     assert_eq!(log(&mut engine), "DataCloneError");
-    engine.run_posted_messages();
-    engine.run_posted_messages();
+    engine.run_due_tasks();
+    engine.run_due_tasks();
     assert_eq!(
         log(&mut engine),
         "ports 1 true / moved got early / moved got through"
@@ -214,10 +213,10 @@ fn a_channels_ports() {
         &mut engine,
         "c.port1.postMessage('before'); c.port1.close(); c.port2.postMessage('lost');",
     );
-    assert!(engine.run_posted_messages());
+    assert!(engine.run_due_tasks());
     assert_eq!(log(&mut engine), "2 got before");
     run(&mut engine, "c.port1.postMessage('after');");
-    assert!(!engine.run_posted_messages());
+    assert!(!engine.run_due_tasks());
     // A port's options: its transfer list.
     run(
         &mut engine,
@@ -227,7 +226,7 @@ fn a_channels_ports() {
          log.push(error(() => e.port1.postMessage(1, [e.port1])));",
     );
     assert_eq!(log(&mut engine), "DataCloneError");
-    engine.run_posted_messages();
+    engine.run_due_tasks();
     assert_eq!(log(&mut engine), "options 1");
     // `structuredClone`'s transfer: a new port, here, entangled as it was.
     run(
@@ -239,7 +238,7 @@ fn a_channels_ports() {
          g.port2.postMessage('hi');",
     );
     assert_eq!(log(&mut engine), "true / true");
-    engine.run_posted_messages();
+    engine.run_due_tasks();
     assert_eq!(log(&mut engine), "cloned got hi");
 }
 
@@ -287,7 +286,7 @@ fn init_message_event() {
          };
          postMessage('posted', '*');",
     );
-    engine.run_posted_messages();
+    engine.run_due_tasks();
     run(
         &mut engine,
         "posted.initMessageEvent('after', false, false, 9, 'o3');
@@ -317,6 +316,6 @@ fn a_started_port_stays() {
     env.full_gc();
     env.minor_gc();
     env.full_gc();
-    assert_eq!(env.run_posted_messages(), 1);
+    assert_eq!(env.run_due_tasks(), 1);
     assert_eq!(env.eval("got.join()"), "queued");
 }

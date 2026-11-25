@@ -72,9 +72,25 @@ pub fn dom_heap_has_a_nursery() -> bool {
 pub struct Env {
     pub data: V8PerIsolateData,
     context: v8::Global<v8::Context>,
+    /// The DOM's tasks' tokens, as a host's scheduler holds them.
+    tokens: dom::TaskTokens,
 }
 
 impl Env {
+    /// An env of `data`'s isolate, in `context`, its DOM's tokens its own
+    /// (the isolate's DOM made with its first realm).
+    fn with(mut data: V8PerIsolateData, context: v8::Global<v8::Context>) -> Self {
+        let tokens = dom::TaskTokens::new();
+        if let Some(dom) = dom_js::dom_mut(data.isolate()) {
+            dom.set_task_waker(tokens.waker());
+        }
+        Self {
+            data,
+            context,
+            tokens,
+        }
+    }
+
     pub fn new() -> Self {
         let mut data = V8PerIsolateData::new();
         let context = {
@@ -87,7 +103,7 @@ impl Env {
             dom_js::install_machopo_dom(scope, global);
             v8::Global::new(scope, context)
         };
-        Self { data, context }
+        Self::with(data, context)
     }
 
     /// A realm whose global is a window of the DOM, of a document at
@@ -103,7 +119,7 @@ impl Env {
             let context = dom_js::create_window_realm(scope, url, None);
             v8::Global::new(scope, context)
         };
-        Self { data, context }
+        Self::with(data, context)
     }
 
     /// Another realm of the same isolate whose global is a new window, of a
@@ -161,34 +177,63 @@ impl Env {
         }
     }
 
-    /// The window's timers due by `now` (its clock's now if none) run:
-    /// how many (`dom_js::run_timers`).
+    /// The tasks due by `now` (milliseconds since the realm's time origin,
+    /// the tests' clock; its clock's now if none) run by their tokens, as a
+    /// scheduler would at that time (`dom_js::run_dom_task`), and those
+    /// they queue that are due by then too: how many ran.
     pub fn run_timers(&mut self, now: Option<f64>) -> usize {
-        let isolate = self.data.isolate();
-        v8::scope!(let scope, isolate);
-        let context = v8::Local::new(scope, &self.context);
-        let scope = &mut v8::ContextScope::new(scope, context);
-        dom_js::run_timers(scope, context, now)
+        let at = match now {
+            Some(now) => {
+                let isolate = self.data.isolate();
+                v8::scope!(let scope, isolate);
+                let context = v8::Local::new(scope, &self.context);
+                let scope = &mut v8::ContextScope::new(scope, context);
+                dom_js::instant_in(scope, context, now).expect("a window's time")
+            }
+            None => std::time::Instant::now(),
+        };
+        let mut ran = 0usize;
+        loop {
+            let due = self.tokens.take_due_by(at);
+            if due.is_empty() {
+                return ran;
+            }
+            for number in due {
+                if self.run_dom_task(number, now) {
+                    ran += 1;
+                }
+            }
+        }
     }
 
-    /// The window's element tasks run: how many
-    /// (`dom_js::run_element_tasks`).
-    pub fn run_element_tasks(&mut self) -> usize {
-        let isolate = self.data.isolate();
-        v8::scope!(let scope, isolate);
-        let context = v8::Local::new(scope, &self.context);
-        let scope = &mut v8::ContextScope::new(scope, context);
-        dom_js::run_element_tasks(scope, context)
+    /// The tasks whose tokens are due now run, each by its number, in the
+    /// scheduler's order (those they queue wait for the next call): how
+    /// many ran.
+    pub fn run_due_tasks(&mut self) -> usize {
+        let due = self.tokens.take_due();
+        due.into_iter()
+            .filter(|&number| self.run_dom_task(number, None))
+            .count()
     }
 
-    /// The window's messages delivered: how many
-    /// (`dom_js::run_posted_messages`).
-    pub fn run_posted_messages(&mut self) -> usize {
+    /// `run_due_tasks`, again until none ran (those its tasks queue too):
+    /// how many ran.
+    pub fn run_all_due_tasks(&mut self) -> usize {
+        let mut ran = 0usize;
+        loop {
+            match self.run_due_tasks() {
+                0 => return ran,
+                one => ran += one,
+            }
+        }
+    }
+
+    fn run_dom_task(&mut self, number: u64, now: Option<f64>) -> bool {
         let isolate = self.data.isolate();
         v8::scope!(let scope, isolate);
         let context = v8::Local::new(scope, &self.context);
         let scope = &mut v8::ContextScope::new(scope, context);
-        dom_js::run_posted_messages(scope, context)
+        dom_js::run_dom_task(scope, context, number, now)
     }
 
     /// A microtask checkpoint (what a task's end does).

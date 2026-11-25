@@ -60,6 +60,4 @@ pub use machopo_dom::{
 };
 pub use strings::{ArgString, StringCache, arg_string, new_string, string_arg, throw_type_error};
 pub use templates::{GlobalKind, install, overload_interfaces_untold};
-pub use window::{
-    create_window_realm, next_timer, run_element_tasks, run_posted_messages, run_timers,
-};
+pub use window::{create_window_realm, instant_in, next_timer, run_dom_task};

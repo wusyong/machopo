@@ -498,35 +498,17 @@ impl<'gc> Cx<'_, 'gc> {
                 })
     }
 
-    /// `context`'s next message, taken: the first posted, of those posted
-    /// to it and those in its enabled ports' queues (the port it is for,
-    /// the target), that the host's pass lets run (`tasks`); its payload,
-    /// origin, source and ports (new ones of `context`, with the ends it
-    /// shipped).
-    pub fn take_posted_message(
-        &self,
-        context: Gc<'gc, crate::ExecutionContext>,
-    ) -> Option<TakenMessage<'gc>> {
-        self.take_posted_message_of(context, None)
-    }
-
-    /// `context`'s message numbered `number`, taken (`take_posted_message`'s):
-    /// the one a token of the host's scheduler stands for, of those in its
-    /// own queue and first in its enabled ports'.
+    /// `context`'s message numbered `number`, taken: the one a token of the
+    /// host's scheduler stands for, of those posted to it and those first
+    /// in its enabled ports' queues (the port it is for, the target); its
+    /// payload, origin, source and ports (new ones of `context`, with the
+    /// ends it shipped).
     pub fn take_posted_message_numbered(
         &self,
         context: Gc<'gc, crate::ExecutionContext>,
         number: u64,
     ) -> Option<TakenMessage<'gc>> {
-        self.take_posted_message_of(context, Some(number))
-    }
-
-    fn take_posted_message_of(
-        &self,
-        context: Gc<'gc, crate::ExecutionContext>,
-        wanted: Option<u64>,
-    ) -> Option<TakenMessage<'gc>> {
-        let (port, (_, number)) = self.first_message(context, wanted)?;
+        let port = self.find_message(context, number)?;
         let (mut payload, origin, source, target) = match port {
             None => {
                 let queue = context.posted_messages.get(self.gc)?;
@@ -579,16 +561,6 @@ impl<'gc> Cx<'_, 'gc> {
 }
 
 impl<'gc> Cx<'_, 'gc> {
-    /// When `context`'s first message was posted (the DOM's clock) and its
-    /// number, if the host's pass lets it run (`tasks`).
-    pub(crate) fn next_posted_message(
-        &self,
-        context: Gc<'gc, crate::ExecutionContext>,
-    ) -> Option<(f64, u64)> {
-        self.first_message(context, None)
-            .map(|(_, (queued, number))| (queued, number))
-    }
-
     /// The messages that came to `context`'s enabled ports from other
     /// threads, numbered now, each a token (the host's task for its port
     /// waker, `Dom::set_port_waker`); its ports that get no message again
@@ -628,46 +600,36 @@ impl<'gc> Cx<'_, 'gc> {
             .any(|stamp| stamp.queued() <= by)
     }
 
-    /// `context`'s first message to deliver: of the first in its own queue
-    /// and those numbered in its enabled ports' (the port), the lowest
-    /// numbered, if the host's pass lets it run.
-    pub(crate) fn first_message(
+    /// Where `context`'s message numbered `number` is: in its own queue
+    /// (none), or first in one of its enabled ports' (that port). A port's
+    /// are numbered in its queue's order, and their tokens go in it, so the
+    /// one a token stands for is its port's first.
+    pub(crate) fn find_message(
         &self,
         context: Gc<'gc, crate::ExecutionContext>,
-        wanted: Option<u64>,
-    ) -> Option<(Option<Gc<'gc, EventTargetImpl>>, TaskStamp)> {
-        let may_run = |number: u64| match wanted {
-            Some(wanted) => number == wanted,
-            None => self.task_may_run(number),
-        };
-        // Its own queue's first that may run: the first, or the one the
-        // host's scheduler runs.
-        let own = context.posted_messages.get(self.gc).and_then(|queue| {
+        number: u64,
+    ) -> Option<Option<Gc<'gc, EventTargetImpl>>> {
+        let own = context.posted_messages.get(self.gc).is_some_and(|queue| {
             (0..queue.len())
                 .filter_map(|index| queue.get(self.gc, index))
-                .map(|message| (None, (message.queued.get(), message.number.get())))
-                .find(|&(_, (_, number))| may_run(number))
+                .any(|message| message.number.get() == number)
         });
-        let mut ports = Vec::new();
-        for port in list_items(self, context.message_ports.get(self.gc)) {
-            let Some(data) = self.port_data(port) else {
-                continue;
-            };
-            if let Some(stamp) = self.with_port_end(data, PortEnd::first_stamp).flatten() {
-                ports.push((Some(port), (stamp.queued(), stamp.number())));
-            }
+        if own {
+            return Some(None);
         }
-        own.into_iter()
-            .chain(ports)
-            .filter(|&(_, (_, number))| may_run(number))
-            .min_by_key(|&(_, (_, number))| number)
+        list_items(self, context.message_ports.get(self.gc))
+            .into_iter()
+            .find(|&port| {
+                self.port_data(port)
+                    .and_then(|data| self.with_port_end(data, PortEnd::first_stamp))
+                    .flatten()
+                    .is_some_and(|stamp| stamp.number() == number)
+            })
+            .map(Some)
     }
 }
 
-/// When a task was queued (the DOM's clock) and its number (`tasks`).
-type TaskStamp = (f64, u64);
-
-/// A message taken to be delivered (`Cx::take_posted_message`).
+/// A message taken to be delivered (`Cx::take_posted_message_numbered`).
 pub struct TakenMessage<'gc> {
     /// The global, the `Worker` or the port it is for.
     pub target: TargetRef<'gc>,

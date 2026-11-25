@@ -3,7 +3,7 @@
 //! changes taken in, but not over a change made here and not told back
 //! yet; `storage` events at the windows of the area but the source's.
 
-use dom::{Dom, ElementTaskKind, StorageKind, StorageMutation};
+use dom::{ElementTaskKind, StorageKind, StorageMutation};
 
 /// The quota the host gives each area.
 const QUOTA: usize = 10 * 1024 * 1024;
@@ -20,17 +20,17 @@ type Event = (Option<String>, Option<String>, StorageKind);
 
 /// The `storage` events queued at each of `windows`.
 fn events<'gc>(cx: &dom::Cx<'_, 'gc>, windows: &[elise::Gc<'gc, dom::Window>]) -> Vec<Vec<Event>> {
-    windows
+    let contexts: Vec<_> = windows
         .iter()
-        .map(|&window| {
-            std::iter::from_fn(|| cx.take_element_task(cx.window_context(window)))
-                .filter_map(|(_, kind, _)| match kind {
-                    ElementTaskKind::Storage(info) => Some((info.key, info.new_value, info.kind)),
-                    _ => None,
-                })
-                .collect()
-        })
-        .collect()
+        .map(|&window| cx.window_context(window))
+        .collect();
+    let mut events = vec![Vec::new(); windows.len()];
+    for (index, taken) in crate::run::take_due_in(cx, &contexts) {
+        if let crate::run::Taken::Element(_, ElementTaskKind::Storage(info), _) = taken {
+            events[index].push((info.key, info.new_value, info.kind));
+        }
+    }
+    events
 }
 
 /// Two windows of an area share its items: what one sets the other reads;
@@ -38,7 +38,7 @@ fn events<'gc>(cx: &dom::Cx<'_, 'gc>, windows: &[elise::Gc<'gc, dom::Window>]) -
 /// document's URL; one that changes nothing isn't.
 #[test]
 fn windows_of_an_area_share_its_items() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     dom.mutate(|cx| {
         let windows: Vec<_> = (0..2)
             .map(|_| {
@@ -95,7 +95,7 @@ fn windows_of_an_area_share_its_items() {
 /// queued; one that doesn't grow always may.
 #[test]
 fn an_item_grows_within_the_areas_quota() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     dom.mutate(|cx| {
         let window = cx.create_window(cx.create_document(true));
         // 20 bytes: "ab" and "😀😀😀😀" (four characters, eight code units).
@@ -135,7 +135,7 @@ fn an_item_grows_within_the_areas_quota() {
 /// here is of it.
 #[test]
 fn a_refused_change_takes_the_browsers_value() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     dom.mutate(|cx| {
         let window = cx.create_window(cx.create_document(true));
         let storage = cx.set_window_storage(
@@ -168,7 +168,7 @@ fn a_refused_change_takes_the_browsers_value() {
 /// nothing fires none.
 #[test]
 fn a_change_made_here_wins_over_one_the_browser_made_before() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     dom.mutate(|cx| {
         let document = cx.create_document(true);
         let window = cx.create_window(document);
@@ -216,7 +216,7 @@ fn a_change_made_here_wins_over_one_the_browser_made_before() {
 /// of the area, none of `localStorage`'s area of the same number.
 #[test]
 fn a_session_storage_change_fires_at_once() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     dom.mutate(|cx| {
         let windows: Vec<_> = (0..3)
             .map(|_| cx.create_window(cx.create_document(true)))
@@ -249,7 +249,7 @@ fn a_session_storage_change_fires_at_once() {
 /// another target, asks for its areas to be opened.
 #[test]
 fn a_storage_listener_asks_for_its_windows_areas() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     dom.mutate(|cx| {
         let document = cx.create_document(true);
         let window = cx.create_window(document);
@@ -279,7 +279,7 @@ fn a_storage_listener_asks_for_its_windows_areas() {
 /// another renderer's the browser made before it.
 #[test]
 fn a_clear_made_here_holds_back_anothers_changes() {
-    let mut dom = Dom::new();
+    let mut dom = crate::run::dom();
     dom.mutate(|cx| {
         let window = cx.create_window(cx.create_document(true));
         let storage = cx.set_window_storage(

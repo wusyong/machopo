@@ -5,8 +5,8 @@
 //! scheduler's `IdleHelper`): it starts one in each window
 //! (`Cx::start_idle_period`) and runs the callbacks it may run one at a
 //! time (`run_idle_callback`), each a task of its own; a callback whose
-//! timeout is due runs as a timer does (`timer::run_next_due`), without
-//! one. The callbacks are `dom`'s, on the window.
+//! timeout is due runs as a timer does, by its token (`timer::run_task`),
+//! without one. The callbacks are `dom`'s, on the window.
 
 use dom::{IdleDeadline, Window};
 use elise::{Gc, Persistent};
@@ -99,20 +99,17 @@ pub fn run_idle_callback<H: ScriptHost>(
 }
 
 /// HTML's "invoke idle callback timeout algorithm" for `window`: the
-/// callback whose timeout is due by `now` first, if any, called without an
-/// idle period (`didTimeout` true).
+/// callback whose timeout is numbered `number` (its token's), if it is
+/// still there, called without an idle period (`didTimeout` true) at `now`.
 pub(crate) fn run_due_timeout<H: ScriptHost>(
     host: &mut H,
     window: &Persistent<Window>,
     now: f64,
-    number: Option<u64>,
+    number: u64,
 ) -> bool {
     let taken = host.mutate(|cx| {
         let window = window.get(cx.gc);
-        let callback = match number {
-            Some(number) => cx.take_idle_timeout_numbered(window, number),
-            None => cx.take_due_idle_timeout(window, now),
-        }?;
+        let callback = cx.take_idle_timeout_numbered(window, number)?;
         let deadline = cx.create_idle_deadline(window, crate::event::coarsen(now), true);
         Some((
             Persistent::new(cx.gc, callback),

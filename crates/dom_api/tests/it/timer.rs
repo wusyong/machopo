@@ -46,9 +46,7 @@ fn id(ret: Result<Ret, dom_api::ApiError>) -> f64 {
 }
 
 fn run(dom: &mut TestDom, window: &Persistent<dom::Window>, now: f64) -> usize {
-    with_host(dom, |host| {
-        dom_api::run_due(host, &dom::GlobalRoot::Window(window.clone()), now)
-    })
+    crate::run_due(dom, &dom::GlobalRoot::Window(window.clone()), now)
 }
 
 fn calls(dom: &TestDom) -> Vec<(u64, u64, u8)> {
@@ -210,11 +208,19 @@ fn timers_made_by_timers_nest() {
 }
 
 #[test]
-#[should_panic(expected = "timers run by a finite time")]
-fn timers_run_by_a_finite_time() {
+#[should_panic(expected = "tasks run by a finite time")]
+fn tasks_run_by_a_finite_time() {
     let mut dom = TestDom::new();
     let (_, window) = window(&mut dom);
-    run(&mut dom, &window, f64::INFINITY);
+    with_host(&dom, |host| {
+        dom_api::run_task(
+            host,
+            &dom::GlobalRoot::Window(window.clone()),
+            dom::TaskQueue::Timer,
+            f64::INFINITY,
+            0,
+        )
+    });
 }
 
 fn listen(dom: &mut TestDom, window: &Rc<ObjectRoot>, callback: u64, action: Action) {

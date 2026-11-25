@@ -1067,14 +1067,6 @@ mod tests {
 
         fn fetch_response(&mut self, _: u64, _: Result<dom_api::FetchedResponse, ()>) {}
 
-        fn until_next_task(&mut self) -> Option<std::time::Duration> {
-            None
-        }
-
-        fn run_due_tasks(&mut self) -> bool {
-            false
-        }
-
         fn set_task_waker(&mut self, _: dom::TaskWaker) {}
 
         fn run_dom_task(&mut self, _: u64) -> bool {

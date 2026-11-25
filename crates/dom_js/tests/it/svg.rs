@@ -6,15 +6,14 @@
 use std::time::Instant;
 
 use dom_api::{ClassicScript, EngineSettings, ScriptEngine};
-use dom_js::V8Engine;
 
 /// What `source` pushed to `log`, joined with ` / `.
 fn run(source: &str) -> String {
-    let mut engine = V8Engine::new(EngineSettings { web_tests: true });
+    let mut engine = crate::TestEngine::new(EngineSettings { web_tests: true });
     engine
         .create_window(engine.top_frame(), "https://example.test/", Instant::now())
         .expect("a window");
-    let run = |engine: &mut V8Engine, source: &str| {
+    let run = |engine: &mut crate::TestEngine, source: &str| {
         engine.run_classic_script(
             engine.top_frame(),
             &ClassicScript {

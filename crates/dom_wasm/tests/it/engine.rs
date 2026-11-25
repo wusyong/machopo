@@ -168,16 +168,16 @@ fn a_script_that_waits_goes_on_when_its_time_comes() {
         page.engine.until_next_timer(),
         Some(Duration::from_nanos(1))
     );
-    assert!(!page.engine.run_due_tasks());
-    assert!(!page.engine.run_timers());
+    assert!(!page.engine.run_due_guests());
     assert_eq!(page.said(), ["before the wait"]);
     page.advance(1);
     assert_eq!(page.engine.until_next_timer(), Some(Duration::ZERO));
-    // The host's loop runs what is due as the DOM's tasks.
-    assert!(page.engine.run_due_tasks());
+    // The host's loop runs the guests whose waits are over (a task of its
+    // own as `until_due_guests` says).
+    assert!(page.engine.run_due_guests());
     assert_eq!(page.said(), ["before the wait", "after the wait"]);
     assert_eq!(page.engine.until_next_timer(), None);
-    assert!(!page.engine.run_timers());
+    assert!(!page.engine.run_due_guests());
 }
 
 #[test]
@@ -231,7 +231,7 @@ fn a_new_window_drops_the_scripts_of_the_one_before() {
         .unwrap();
     assert_eq!(page.engine.until_next_timer(), None);
     page.advance(10_000_000);
-    assert!(!page.engine.run_timers());
+    assert!(!page.engine.run_due_guests());
     let same = page
         .engine
         .dom_mut()

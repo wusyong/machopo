@@ -3,7 +3,7 @@
 //! selection API of a textarea and the text inputs (`dom`'s
 //! `text_control`). A selection that changes queues `select` as an element
 //! task (Chrome fires it later too), which the host runs
-//! (`run_element_tasks`).
+//! as its token comes (`run_task`).
 
 use dom::{
     ElementTaskKind, GlobalRoot, NodeRef, NodeRoot, SelectionDirection, SelectionMode, TargetRoot,
@@ -237,37 +237,23 @@ pub(crate) fn set_range_text<'gc>(
 
 // --- Element tasks ----------------------------------------------------------------------
 
-/// Runs `window`'s element tasks (`queue_element_task`), each a task of its
-/// own with a microtask checkpoint after it, those their listeners queue
-/// too: `select` fired at its element, trusted, bubbling; `selectionchange`
-/// at a document or a text control (bubbling at the control); an `<img>`'s
-/// `load` or `error` and `decode()` promises (`image`); a `<canvas>`'s
-/// `toBlob` callback (`canvas`); and the tasks of no element's (a
-/// `FileReader`'s read, the performance timeline's, geolocation's and the
-/// wake lock's permissions); the window's `load`. How many ran.
-pub fn run_element_tasks<H: ScriptHost>(host: &mut H, global: &GlobalRoot) -> usize {
-    let mut ran = 0usize;
-    while run_element_task(host, global, None) {
-        ran = ran.saturating_add(1);
-    }
-    ran
-}
-
-/// Runs `window`'s element task numbered `number`, or its first
-/// (`run_element_tasks`'s one) if the DOM's pass lets it run. Whether one
-/// ran.
-pub fn run_element_task<H: ScriptHost>(
+/// Runs `global`'s element task numbered `number` (`queue_element_task`),
+/// a task of its own with a microtask checkpoint after it: `select` fired
+/// at its element, trusted, bubbling; `selectionchange` at a document or a
+/// text control (bubbling at the control); an `<img>`'s `load` or `error`
+/// and `decode()` promises (`image`); a `<canvas>`'s `toBlob` callback
+/// (`canvas`); and the tasks of no element's (a `FileReader`'s read, the
+/// performance timeline's, geolocation's and the wake lock's permissions);
+/// the window's `load`. Whether it ran.
+pub(crate) fn run_element_task<H: ScriptHost>(
     host: &mut H,
     global: &GlobalRoot,
-    number: Option<u64>,
+    number: u64,
 ) -> bool {
     {
         let task = host.mutate(|cx| {
             let context = cx.global_context(global.get(cx.gc));
-            let (element, kind, target) = match number {
-                Some(number) => cx.take_element_task_numbered(context, number),
-                None => cx.take_element_task(context),
-            }?;
+            let (element, kind, target) = cx.take_element_task_numbered(context, number)?;
             Some((
                 element.map(|element| cx.root(element)),
                 kind,

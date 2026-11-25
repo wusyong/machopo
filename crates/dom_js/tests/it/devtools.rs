@@ -15,12 +15,11 @@ use dom_api::{
     ClassicScript, DevToolsPage, DevToolsQueue, DevToolsQueued, EngineSettings, FrameId,
     FrameToken, ScriptEngine,
 };
-use dom_js::V8Engine;
 use serde_json::{Value, json};
 
 /// An engine with a DevTools session, `"s"`, whose messages `sent` has.
 /// `parent`'s one child frame, and its token, as the engine has them.
-fn only_child(engine: &mut V8Engine, parent: FrameId) -> (FrameId, FrameToken) {
+fn only_child(engine: &mut dom_js::V8Engine, parent: FrameId) -> (FrameId, FrameToken) {
     let children = engine.child_frames(parent);
     let [child] = children[..] else {
         panic!("{children:?}");
@@ -32,7 +31,7 @@ fn only_child(engine: &mut V8Engine, parent: FrameId) -> (FrameId, FrameToken) {
 }
 
 struct Inspected {
-    engine: V8Engine,
+    engine: crate::TestEngine,
     sent: Rc<RefCell<Vec<Value>>>,
     next_id: u64,
 }
@@ -44,7 +43,7 @@ impl Inspected {
     /// Its top-level frame's token `TOP_TOKEN`; a child frame's, the one
     /// the engine drew.
     fn new() -> Self {
-        let mut engine = V8Engine::new(EngineSettings::default());
+        let mut engine = crate::TestEngine::new(EngineSettings::default());
         engine.set_main_frame_token(TOP_TOKEN);
         let sent: Rc<RefCell<Vec<Value>>> = Rc::default();
         let to = sent.clone();

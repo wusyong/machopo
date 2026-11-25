@@ -9,18 +9,17 @@ use std::time::Instant;
 
 use dom::ResizeObserverBox;
 use dom_api::{ClassicScript, EngineSettings, ScriptEngine};
-use dom_js::V8Engine;
 
 /// A window whose document has `<html><body><p id=d>`; `log`, `el(id)`, a
 /// new element with that id, and `error(f)`, the name of what `f` throws.
 struct Page {
     document: dom::NodeRoot,
-    engine: V8Engine,
+    engine: crate::TestEngine,
 }
 
 impl Page {
     fn new() -> Self {
-        let mut engine = V8Engine::new(EngineSettings { web_tests: true });
+        let mut engine = crate::TestEngine::new(EngineSettings { web_tests: true });
         let document = engine
             .create_window(engine.top_frame(), "https://example.test/", Instant::now())
             .expect("a window");
@@ -215,9 +214,8 @@ fn a_round_calls_the_observers_back() {
          second.observe(d);",
     );
     assert!(page.engine.has_resize_observations(page.engine.top_frame()));
-    let round = page
-        .engine
-        .gather_and_broadcast_resizes(page.engine.top_frame(), 0);
+    let top = page.engine.top_frame();
+    let round = page.engine.gather_and_broadcast_resizes(top, 0);
     assert_eq!(round.broadcast, Some(3), "html, body, d");
     assert!(!round.skipped);
     assert_eq!(
@@ -226,8 +224,7 @@ fn a_round_calls_the_observers_back() {
          0x0 / 0x0 / microtask / second"
     );
     // Reported: nothing the next round.
-    let round = page
-        .engine
-        .gather_and_broadcast_resizes(page.engine.top_frame(), 0);
+    let top = page.engine.top_frame();
+    let round = page.engine.gather_and_broadcast_resizes(top, 0);
     assert_eq!(round, dom_api::ResizeObserverRound::default());
 }

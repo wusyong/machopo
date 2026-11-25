@@ -13,7 +13,6 @@
 use std::time::Instant;
 
 use dom_api::{ClassicScript, EngineSettings, ScriptEngine};
-use dom_js::V8Engine;
 
 use crate::env::Env;
 
@@ -186,12 +185,12 @@ fn adopted_style_sheets_takes_the_documents_own_sheets() {
 /// renderer makes one; `report(value)` gives what a test reads.
 struct Page {
     document: dom::NodeRoot,
-    engine: V8Engine,
+    engine: crate::TestEngine,
 }
 
 impl Page {
     fn new() -> Self {
-        let mut engine = V8Engine::new(EngineSettings { web_tests: true });
+        let mut engine = crate::TestEngine::new(EngineSettings { web_tests: true });
         let document = engine
             .create_window(engine.top_frame(), "https://example.test/", Instant::now())
             .expect("a window");
