@@ -651,12 +651,31 @@ impl<'gc> Cx<'_, 'gc> {
         context: Gc<'gc, crate::ExecutionContext>,
         now: f64,
     ) -> Option<DueNativeTimer<'gc>> {
-        let timers = context.native_timers.get(self.gc)?;
-        let (index, timer) = self.first_native_timer(context)?;
+        let (index, timer) = self.first_native_timer(context, None)?;
         if timer.due.get() > now {
             return None;
         }
-        timers.remove(self.gc, index);
+        self.take_native_timer(context, index, timer)
+    }
+
+    /// `context`'s UA timer numbered `number`, taken out: the one a token
+    /// of the host's scheduler stands for, due by its clock.
+    pub fn take_native_timer_numbered(
+        &self,
+        context: Gc<'gc, crate::ExecutionContext>,
+        number: u64,
+    ) -> Option<DueNativeTimer<'gc>> {
+        let (index, timer) = self.first_native_timer(context, Some(number))?;
+        self.take_native_timer(context, index, timer)
+    }
+
+    fn take_native_timer(
+        &self,
+        context: Gc<'gc, crate::ExecutionContext>,
+        index: usize,
+        timer: Gc<'gc, NativeTimer>,
+    ) -> Option<DueNativeTimer<'gc>> {
+        context.native_timers.get(self.gc)?.remove(self.gc, index);
         Some(DueNativeTimer {
             element: timer.element.get(self.gc),
             action: NativeAction::from_raw(timer.action.get()),
@@ -685,8 +704,35 @@ impl<'gc> Cx<'_, 'gc> {
         ElementTaskKind,
         Option<Gc<'gc, crate::EventTargetImpl>>,
     )> {
+        self.take_element_task_of(context, None)
+    }
+
+    /// `context`'s element task numbered `number`, taken out
+    /// (`take_element_task`'s): the one a token of the host's scheduler
+    /// stands for, wherever it is in the queue.
+    pub fn take_element_task_numbered(
+        &self,
+        context: Gc<'gc, crate::ExecutionContext>,
+        number: u64,
+    ) -> Option<(
+        Option<NodeRef<'gc>>,
+        ElementTaskKind,
+        Option<Gc<'gc, crate::EventTargetImpl>>,
+    )> {
+        self.take_element_task_of(context, Some(number))
+    }
+
+    fn take_element_task_of(
+        &self,
+        context: Gc<'gc, crate::ExecutionContext>,
+        number: Option<u64>,
+    ) -> Option<(
+        Option<NodeRef<'gc>>,
+        ElementTaskKind,
+        Option<Gc<'gc, crate::EventTargetImpl>>,
+    )> {
         let tasks = context.element_tasks.get(self.gc)?;
-        let index = self.first_element_task(context)?;
+        let index = self.first_element_task(context, number)?;
         let task = tasks.get(self.gc, index)?;
         tasks.remove(self.gc, index);
         let data = task.data.get();
@@ -1346,11 +1392,34 @@ impl<'gc> Cx<'_, 'gc> {
         context: Gc<'gc, crate::ExecutionContext>,
         now: f64,
     ) -> Option<(Gc<'gc, Timer>, u8)> {
-        let timers = context.timers.get(self.gc)?;
-        let (index, timer) = self.first_timer(context)?;
+        let (index, timer) = self.first_timer(context, None)?;
         if timer.due.get() > now {
             return None;
         }
+        self.take_timer(context, index, timer, now)
+    }
+
+    /// `context`'s timer numbered `number`, taken (`take_due`'s): the one a
+    /// token of the host's scheduler stands for, due by its clock; an
+    /// interval set again from `now`.
+    pub fn take_timer_numbered(
+        &self,
+        context: Gc<'gc, crate::ExecutionContext>,
+        number: u64,
+        now: f64,
+    ) -> Option<(Gc<'gc, Timer>, u8)> {
+        let (index, timer) = self.first_timer(context, Some(number))?;
+        self.take_timer(context, index, timer, now)
+    }
+
+    fn take_timer(
+        &self,
+        context: Gc<'gc, crate::ExecutionContext>,
+        index: usize,
+        timer: Gc<'gc, Timer>,
+        now: f64,
+    ) -> Option<(Gc<'gc, Timer>, u8)> {
+        let timers = context.timers.get(self.gc)?;
         let running = timer.nesting.get();
         match timer.interval.get() {
             Some(interval) => {
@@ -1374,12 +1443,18 @@ impl<'gc> Cx<'_, 'gc> {
 
     /// `context`'s timer to run first, of those the host's pass lets run:
     /// the earliest due, ties by number (the order set; an interval's
-    /// number is its latest).
-    fn first_timer(
+    /// number is its latest); or the one numbered `number`.
+    pub(crate) fn first_timer(
         &self,
         context: Gc<'gc, crate::ExecutionContext>,
+        number: Option<u64>,
     ) -> Option<(usize, Gc<'gc, Timer>)> {
         let timers = context.timers.get(self.gc)?;
+        if let Some(number) = number {
+            return (0..timers.len())
+                .filter_map(|index| Some((index, timers.get(self.gc, index)?)))
+                .find(|(_, timer)| timer.number.get() == number);
+        }
         let mut first: Option<(usize, Gc<'gc, Timer>)> = None;
         for index in 0..timers.len() {
             let timer = timers.get(self.gc, index).expect("below the length");
@@ -1399,12 +1474,19 @@ impl<'gc> Cx<'_, 'gc> {
         first
     }
 
-    /// `context`'s native timer to run first (`first_timer`'s order).
-    fn first_native_timer(
+    /// `context`'s native timer to run first (`first_timer`'s order), or
+    /// the one numbered `number`.
+    pub(crate) fn first_native_timer(
         &self,
         context: Gc<'gc, crate::ExecutionContext>,
+        number: Option<u64>,
     ) -> Option<(usize, Gc<'gc, NativeTimer>)> {
         let timers = context.native_timers.get(self.gc)?;
+        if let Some(number) = number {
+            return (0..timers.len())
+                .filter_map(|index| Some((index, timers.get(self.gc, index)?)))
+                .find(|(_, timer)| timer.number.get() == number);
+        }
         let mut first: Option<(usize, Gc<'gc, NativeTimer>)> = None;
         for index in 0..timers.len() {
             let timer = timers.get(self.gc, index).expect("below the length");
@@ -1430,7 +1512,7 @@ impl<'gc> Cx<'_, 'gc> {
         &self,
         context: Gc<'gc, crate::ExecutionContext>,
     ) -> Option<(f64, u64)> {
-        self.first_timer(context)
+        self.first_timer(context, None)
             .map(|(_, timer)| (timer.due.get(), timer.number.get()))
     }
 
@@ -1439,7 +1521,7 @@ impl<'gc> Cx<'_, 'gc> {
         &self,
         context: Gc<'gc, crate::ExecutionContext>,
     ) -> Option<(f64, u64)> {
-        self.first_native_timer(context)
+        self.first_native_timer(context, None)
             .map(|(_, timer)| (timer.due.get(), timer.number.get()))
     }
 
@@ -1449,19 +1531,25 @@ impl<'gc> Cx<'_, 'gc> {
         &self,
         context: Gc<'gc, crate::ExecutionContext>,
     ) -> Option<(f64, u64)> {
-        let index = self.first_element_task(context)?;
+        let index = self.first_element_task(context, None)?;
         let task = context.element_tasks.get(self.gc)?.get(self.gc, index)?;
         Some((task.queued.get(), task.number.get()))
     }
 
     /// Where `context`'s first element task that may run is (`tasks`):
-    /// the first queued, or the one the host's scheduler runs.
-    fn first_element_task(&self, context: Gc<'gc, crate::ExecutionContext>) -> Option<usize> {
+    /// the first queued that the host's pass lets run, or the one numbered
+    /// `number`.
+    pub(crate) fn first_element_task(
+        &self,
+        context: Gc<'gc, crate::ExecutionContext>,
+        number: Option<u64>,
+    ) -> Option<usize> {
         let tasks = context.element_tasks.get(self.gc)?;
         (0..tasks.len()).find(|&index| {
-            tasks
-                .get(self.gc, index)
-                .is_some_and(|task| self.task_may_run(task.number.get()))
+            tasks.get(self.gc, index).is_some_and(|task| match number {
+                Some(number) => task.number.get() == number,
+                None => self.task_may_run(task.number.get()),
+            })
         })
     }
 

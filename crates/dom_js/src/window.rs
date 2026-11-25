@@ -234,6 +234,7 @@ pub(crate) fn run_task(
     context: v8::Local<'_, v8::Context>,
     queue: dom::TaskQueue,
     now: f64,
+    number: Option<u64>,
 ) -> bool {
     let Some(mut scope) = state::scope(scope) else {
         return false;
@@ -241,7 +242,7 @@ pub(crate) fn run_task(
     let Some(global) = global_of(&mut scope, context) else {
         return false;
     };
-    let ran = dom_api::run_task(&mut Host { scope: &mut scope }, &global, queue, now);
+    let ran = dom_api::run_task(&mut Host { scope: &mut scope }, &global, queue, now, number);
     state::report(&mut scope);
     ran
 }

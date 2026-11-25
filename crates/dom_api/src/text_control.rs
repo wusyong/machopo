@@ -247,19 +247,27 @@ pub(crate) fn set_range_text<'gc>(
 /// wake lock's permissions); the window's `load`. How many ran.
 pub fn run_element_tasks<H: ScriptHost>(host: &mut H, global: &GlobalRoot) -> usize {
     let mut ran = 0usize;
-    while run_element_task(host, global) {
+    while run_element_task(host, global, None) {
         ran = ran.saturating_add(1);
     }
     ran
 }
 
-/// Runs `window`'s first element task (`run_element_tasks`'s one), if the
-/// DOM's pass lets it run. Whether one ran.
-pub fn run_element_task<H: ScriptHost>(host: &mut H, global: &GlobalRoot) -> bool {
+/// Runs `window`'s element task numbered `number`, or its first
+/// (`run_element_tasks`'s one) if the DOM's pass lets it run. Whether one
+/// ran.
+pub fn run_element_task<H: ScriptHost>(
+    host: &mut H,
+    global: &GlobalRoot,
+    number: Option<u64>,
+) -> bool {
     {
         let task = host.mutate(|cx| {
-            let (element, kind, target) =
-                cx.take_element_task(cx.global_context(global.get(cx.gc)))?;
+            let context = cx.global_context(global.get(cx.gc));
+            let (element, kind, target) = match number {
+                Some(number) => cx.take_element_task_numbered(context, number),
+                None => cx.take_element_task(context),
+            }?;
             Some((
                 element.map(|element| cx.root(element)),
                 kind,

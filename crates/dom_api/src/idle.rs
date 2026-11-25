@@ -105,10 +105,14 @@ pub(crate) fn run_due_timeout<H: ScriptHost>(
     host: &mut H,
     window: &Persistent<Window>,
     now: f64,
+    number: Option<u64>,
 ) -> bool {
     let taken = host.mutate(|cx| {
         let window = window.get(cx.gc);
-        let callback = cx.take_due_idle_timeout(window, now)?;
+        let callback = match number {
+            Some(number) => cx.take_idle_timeout_numbered(window, number),
+            None => cx.take_due_idle_timeout(window, now),
+        }?;
         let deadline = cx.create_idle_deadline(window, crate::event::coarsen(now), true);
         Some((
             Persistent::new(cx.gc, callback),

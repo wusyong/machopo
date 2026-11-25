@@ -127,28 +127,13 @@ impl<'gc> Cx<'_, 'gc> {
         }
     }
 
-    /// Whether a task of number `number` may run now: the one the host's
-    /// scheduler runs (`target_task`), wherever it is in its queue; in a
-    /// pass, only one numbered before it began.
+    /// Whether a task of number `number` may run in a pass: only one
+    /// numbered before it began.
     pub(crate) fn task_may_run(&self, number: u64) -> bool {
-        if let Some(target) = self.changes.task_target.get() {
-            return number == target;
-        }
         self.changes
             .task_limit
             .get()
             .is_none_or(|limit| number < limit)
-    }
-
-    /// The host's scheduler runs task `number` (a token of its own stands
-    /// for each task, `TaskWaker`), or none once it has: meanwhile it is
-    /// the first of its queue and the only one that may run, as each of
-    /// Blink's tasks is a closure of its own whatever was queued before it
-    /// (a timer set as the thread ran past an earlier one's time comes
-    /// first: its token was queued first). Nothing takes another of the
-    /// DOM's tasks as one runs: each is the scheduler's own.
-    pub fn target_task(&self, number: Option<u64>) {
-        self.changes.task_target.set(number);
     }
 
     /// A pass of the host's begins: until it ends, only the tasks numbered
@@ -170,20 +155,35 @@ impl<'gc> Cx<'_, 'gc> {
         self.changes.tasks_queued.set(queued);
     }
 
-    /// `context`'s task `number` and the queue it is in, the one a token
-    /// of the host's scheduler stands for (`target_task` set to it, so it
-    /// is its queue's first): none if that task is no more (cancelled,
-    /// run, its window gone). Whether it is due is the scheduler's to say.
+    /// The queue of `context`'s task numbered `number`, the one a token of
+    /// the host's scheduler stands for, wherever it is in that queue (as
+    /// each of Blink's tasks is a closure of its own, whatever was queued
+    /// before it): none if that task is no more (cancelled, run, its window
+    /// gone). Whether it is due is the scheduler's to say: the host takes
+    /// it by its number (`take_timer_numbered` and the others).
     pub fn task_numbered(
         &self,
         context: Gc<'gc, ExecutionContext>,
         number: u64,
-    ) -> Option<NextTask> {
-        self.queue_heads(context)
-            .into_iter()
-            .flatten()
-            .map(|(at, number, queue)| NextTask { at, number, queue })
-            .find(|task| task.number == number)
+    ) -> Option<TaskQueue> {
+        let wanted = Some(number);
+        if self.first_timer(context, wanted).is_some() {
+            Some(TaskQueue::Timer)
+        } else if self.first_native_timer(context, wanted).is_some() {
+            Some(TaskQueue::NativeTimer)
+        } else if self
+            .context_window(context)
+            .and_then(|window| self.first_idle_timeout(window, wanted))
+            .is_some()
+        {
+            Some(TaskQueue::IdleTimeout)
+        } else if self.first_element_task(context, wanted).is_some() {
+            Some(TaskQueue::Element)
+        } else if self.first_message(context, wanted).is_some() {
+            Some(TaskQueue::Message)
+        } else {
+            None
+        }
     }
 
     /// The first task of each of `context`'s queues, of those the pass

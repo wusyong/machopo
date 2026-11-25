@@ -160,27 +160,50 @@ impl<'gc> Cx<'_, 'gc> {
         window: Gc<'gc, Window>,
         now: f64,
     ) -> Option<Gc<'gc, IdleCallback>> {
-        let (index, due, _) = self.first_idle_timeout(window)?;
+        let (index, due, _) = self.first_idle_timeout(window, None)?;
         (due <= now).then(|| self.remove_idle_callback(window, index))
+    }
+
+    /// `window`'s idle callback whose timeout is numbered `number`, taken
+    /// out (`take_due_idle_timeout`'s): the one a token of the host's
+    /// scheduler stands for, due by its clock.
+    pub fn take_idle_timeout_numbered(
+        &self,
+        window: Gc<'gc, Window>,
+        number: u64,
+    ) -> Option<Gc<'gc, IdleCallback>> {
+        let (index, _, _) = self.first_idle_timeout(window, Some(number))?;
+        Some(self.remove_idle_callback(window, index))
     }
 
     /// When `window`'s idle callback timeout to run first is due (since its
     /// time origin), and its number (`tasks`).
     pub(crate) fn next_due_idle_timeout(&self, window: Gc<'gc, Window>) -> Option<(f64, u64)> {
-        self.first_idle_timeout(window)
+        self.first_idle_timeout(window, None)
             .map(|(_, due, number)| (due, number))
     }
 
     /// `window`'s idle callback whose timeout runs first, of those with one
-    /// the host's pass lets run: the earliest due, ties by number.
-    fn first_idle_timeout(&self, window: Gc<'gc, Window>) -> Option<(usize, f64, u64)> {
+    /// the host's pass lets run: the earliest due, ties by number; or the
+    /// one whose timeout is numbered `wanted`.
+    pub(crate) fn first_idle_timeout(
+        &self,
+        window: Gc<'gc, Window>,
+        wanted: Option<u64>,
+    ) -> Option<(usize, f64, u64)> {
         let callbacks = window.idle_callbacks.get(self.gc)?;
         let mut first: Option<(usize, f64, u64)> = None;
         for index in 0..callbacks.len() {
             let callback = callbacks.get(self.gc, index).expect("below the length");
             let (due, number) = (callback.due.get(), callback.number.get());
-            if !due.is_finite() || !self.task_may_run(number) {
+            if !due.is_finite() {
                 continue;
+            }
+            match wanted {
+                Some(wanted) if number == wanted => return Some((index, due, number)),
+                Some(_) => continue,
+                None if !self.task_may_run(number) => continue,
+                None => {}
             }
             if first.is_none_or(|(_, best, best_number)| {
                 due.total_cmp(&best).then(number.cmp(&best_number)).is_lt()

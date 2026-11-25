@@ -1119,6 +1119,7 @@ impl ScriptEngine for WasmEngine {
                 &dom::GlobalRoot::Window(window.clone()),
                 task.queue,
                 now,
+                None,
             ) {
                 break;
             }
@@ -1133,27 +1134,23 @@ impl ScriptEngine for WasmEngine {
         let Some(window) = self.window() else {
             return false;
         };
-        // The one task the token stands for, wherever it is in its queue.
-        self.dom().read(|cx| cx.target_task(Some(number)));
+        // The one task the token stands for, wherever it is in its queue,
+        // taken by its number: the scheduler said it is due.
         let found = self.dom().read(|cx| {
             let window = window.get(cx.gc);
-            let task = cx.task_numbered(cx.window_context(window), number)?;
-            // Due as the scheduler took it: by the DOM's clock too.
-            let now = cx.dom_now().max(task.at);
-            Some((task, now - cx.window_time_origin(window)))
+            let queue = cx.task_numbered(cx.window_context(window), number)?;
+            Some((queue, cx.now_since(Some(window))))
         });
-        let Some((task, now)) = found else {
-            self.dom().read(|cx| cx.target_task(None));
+        let Some((queue, now)) = found else {
             return false;
         };
-        let ran = dom_api::run_task(
+        dom_api::run_task(
             &mut self.host(),
             &dom::GlobalRoot::Window(window),
-            task.queue,
+            queue,
             now,
-        );
-        self.dom().read(|cx| cx.target_task(None));
-        ran
+            Some(number),
+        )
     }
 
     fn has_dom_task_due_for(&mut self, ms: f64) -> bool {

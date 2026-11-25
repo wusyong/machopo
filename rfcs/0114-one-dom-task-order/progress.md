@@ -8,7 +8,11 @@
 | --- | --- | --- |
 | 1. scheduler 的核心抽到 `base`，主 thread 改用它，行為不變（已決定的事項第 1、5、7 條） | 做完，待審查 | 2026-11-25 |
 | 2. worker 的 loop 改用 scheduler（第 6、8 條） | 做完，待審查 | 2026-11-25 |
-| 3. 拿掉 `dom` 的順序 | 沒開始 | |
+| 3. 拿掉 `dom` 的順序（3a 到 3d） | 進行中 | |
+| 3a. 照編號拿、拿掉 `target_task` 和時鐘的換算（第 2 條） | 做完，待審查 | 2026-11-25 |
+| 3b. port 的狀態機：`Waiting`、`Running`，`enable`、`push`、`ship`、`arrive`；拿掉補號、重送、每個 task 之後的編號（第 3 條） | 沒開始 | |
+| 3c. debug build 的偵測只問「有沒有」，主 thread 和 worker 都裝（第 4 條） | 沒開始 | |
+| 3d. 拿掉 `next_task`、一輪的機制和 engine 只剩測試在用的方法，測試改成經過 `base` 的 scheduler 跑（第 5、9 條） | 沒開始 | |
 
 ## 驗收
 
@@ -19,6 +23,14 @@
 | 主 thread 的 scheduler 行為不變 | `renderer` 的 `task_queue::tests`、`shell` 的整合測試（`event_loop::`、`workers::`、DevTools 的）照舊通過 |
 
 ## 做過的檢查
+
+### 第 3 段的 3a（2026-11-25，Linux：Fedora 45，debug build，`b3d7677f` 之上）
+
+**做了什麼**：`dom` 的每一種 task 有照編號拿的 take（`take_timer_numbered`、`take_native_timer_numbered`、`take_idle_timeout_numbered`、`take_element_task_numbered`、`take_posted_message_numbered`，共用的 `first_*` 多一個 `Option<u64>`），給了編號就不比時間（scheduler 說它到期了）；`task_numbered` 照編號在每一種 queue 裡找，只回答在哪一種；`dom_api::run_task` 多一個 `number`；三個 engine 的 `run_dom_task` 照編號跑，不設 `target_task`、不算 `max(task.at)`。`task_target`、`target_task` 拿掉，`task_may_run` 只剩一輪的上限。舊的「拿第一個」（`None`）留給 3d 之前還在用一輪的地方。
+
+**測試**：mutation test 沒抓到時補的兩個：`event_loop::a_ua_timer_set_after_an_earlier_ones_time_runs`（`AbortSignal.timeout()` 的 timer 照 script timer 的那一個寫：忙過一個的時間再設一個已經到期的，`abort b,abort a`）、`idle_timeouts_run_earliest_due_first`（後設的 timeout 比較短的先跑，`b,a`）。`dom`、`dom_api`、`dom_js`、`dom_wasm`、`renderer`、`shell` 的測試通過。
+
+**mutation test**（`mutants-3a.toml`，11 個，9 個抓到）：照編號拿的每一種換成拿第一個、`task_numbered` 的每一種找不到。第一輪 UA 的 timer 和 idle callback 的 timeout（拿第一個設的）沒抓到，補上面兩個測試後抓到。沒抓到的兩個是等價的：訊息照編號拿換成拿最前面那一則、idle callback 的 timeout 照編號拿換成拿最早到期的（`docs/test-gaps.md`）。我一開始把 idle 的「拿第一個設的」也當成等價寫進 test-gaps，和 mutant 對不上，加了 mutant 分開兩種才改對。
 
 ### 第 2 段（2026-11-25，Linux：Fedora 45，debug build，`bb9a6c09` 之上）
 

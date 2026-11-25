@@ -376,18 +376,27 @@ pub(crate) fn init_message_event<'gc, O: OpFront>(
 /// checkpoint. How many ran.
 pub fn run_posted_messages<H: ScriptHost>(host: &mut H, global: &GlobalRoot) -> usize {
     let mut ran = 0usize;
-    while run_posted_message(host, global) {
+    while run_posted_message(host, global, None) {
         ran = ran.saturating_add(1);
     }
     ran
 }
 
-/// Delivers `global`'s first message (`run_posted_messages`'s one), if the
-/// DOM's pass lets it run. Whether one was.
-pub fn run_posted_message<H: ScriptHost>(host: &mut H, global: &GlobalRoot) -> bool {
+/// Delivers `global`'s message numbered `number`, or its first
+/// (`run_posted_messages`'s one) if the DOM's pass lets it run. Whether
+/// one was.
+pub fn run_posted_message<H: ScriptHost>(
+    host: &mut H,
+    global: &GlobalRoot,
+    number: Option<u64>,
+) -> bool {
     {
         let taken = host.mutate(|cx| {
-            let taken = cx.take_posted_message(cx.global_context(global.get(cx.gc)))?;
+            let context = cx.global_context(global.get(cx.gc));
+            let taken = match number {
+                Some(number) => cx.take_posted_message_numbered(context, number),
+                None => cx.take_posted_message(context),
+            }?;
             let ports: Vec<_> = taken
                 .ports
                 .iter()

@@ -433,7 +433,7 @@ impl WorkerEngine for V8WorkerEngine {
             let one = self
                 .in_realm(|scope| {
                     let context = scope.get_current_context();
-                    crate::window::run_task(scope, context, task.queue, now)
+                    crate::window::run_task(scope, context, task.queue, now, None)
                 })
                 .unwrap_or(false);
             if !one {
@@ -455,27 +455,21 @@ impl WorkerEngine for V8WorkerEngine {
         let Some(global) = self.global.clone() else {
             return false;
         };
-        // The one task the token stands for, wherever it is in its queue.
+        // The one task the token stands for, wherever it is in its queue,
+        // taken by its number: the scheduler said it is due.
         let found = self.state().dom.read(|cx| {
-            cx.target_task(Some(number));
             let context = cx.worker_global_context(global.get(cx.gc));
-            let task = cx.task_numbered(context, number)?;
-            // Due as the scheduler took it: by the DOM's clock too.
-            let now = cx.dom_now().max(task.at) - cx.context_time_origin(context);
-            Some((task, now))
+            let queue = cx.task_numbered(context, number)?;
+            Some((queue, cx.now_in(Some(context))))
         });
-        let Some((task, now)) = found else {
-            self.state().dom.read(|cx| cx.target_task(None));
+        let Some((queue, now)) = found else {
             return false;
         };
-        let ran = self
-            .in_realm(|scope| {
-                let context = scope.get_current_context();
-                crate::window::run_task(scope, context, task.queue, now)
-            })
-            .unwrap_or(false);
-        self.state().dom.read(|cx| cx.target_task(None));
-        ran
+        self.in_realm(|scope| {
+            let context = scope.get_current_context();
+            crate::window::run_task(scope, context, queue, now, Some(number))
+        })
+        .unwrap_or(false)
     }
 
     fn number_port_messages(&mut self) {

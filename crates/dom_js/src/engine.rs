@@ -1497,7 +1497,7 @@ impl ScriptEngine for V8Engine {
             let context = frames[index].1.clone();
             let one = self.in_context(&context, |scope| {
                 let context = scope.get_current_context();
-                crate::window::run_task(scope, context, task.queue, now)
+                crate::window::run_task(scope, context, task.queue, now, None)
             });
             if !one {
                 break;
@@ -1522,30 +1522,26 @@ impl ScriptEngine for V8Engine {
 
     fn run_dom_task(&mut self, number: u64) -> bool {
         let frames = self.frames_as_made();
-        // The one task the token stands for, wherever it is in its queue.
-        self.state().dom.read(|cx| cx.target_task(Some(number)));
+        // The one task the token stands for, wherever it is in its queue,
+        // taken by its number: the scheduler said it is due.
         let found = self.state().dom.read(|cx| {
             frames
                 .iter()
                 .enumerate()
                 .find_map(|(index, (_, _, document))| {
                     let window = cx.window_of(document.get(cx.gc))?;
-                    let task = cx.task_numbered(cx.window_context(window), number)?;
-                    // Due as the scheduler took it: by the DOM's clock too.
-                    let now = cx.dom_now().max(task.at);
-                    Some((task, index, now - cx.window_time_origin(window)))
+                    let queue = cx.task_numbered(cx.window_context(window), number)?;
+                    Some((queue, index, cx.now_since(Some(window))))
                 })
         });
-        let Some((task, index, now)) = found else {
-            self.state().dom.read(|cx| cx.target_task(None));
+        let Some((queue, index, now)) = found else {
             return false;
         };
         let context = frames[index].1.clone();
         let ran = self.in_context(&context, |scope| {
             let context = scope.get_current_context();
-            crate::window::run_task(scope, context, task.queue, now)
+            crate::window::run_task(scope, context, queue, now, Some(number))
         });
-        self.state().dom.read(|cx| cx.target_task(None));
         if ran {
             // Its own checkpoint ran; the rejections it left.
             self.notify_rejected_promises();

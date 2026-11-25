@@ -144,7 +144,7 @@ pub fn run_next_due<H: ScriptHost>(host: &mut H, global: &GlobalRoot, now: f64) 
     assert!(now.is_finite(), "timers run by a finite time");
     // The UA's own timers (a spin button's repeat), each a task of its
     // own too.
-    if run_native_timer(host, global, now) {
+    if run_native_timer(host, global, now, None) {
         return true;
     }
     // An idle callback's timeout is a timer too (Blink posts it as a
@@ -162,45 +162,57 @@ pub fn run_next_due<H: ScriptHost>(host: &mut H, global: &GlobalRoot, now: f64) 
             })
         });
         if idle_first {
-            return crate::idle::run_due_timeout(host, window, now);
+            return crate::idle::run_due_timeout(host, window, now, None);
         }
     }
-    run_script_timer(host, global, now)
+    run_script_timer(host, global, now, None)
 }
 
-/// Runs the task `queue` names of `global`'s, the first of that queue due
-/// by `now` (milliseconds since its time origin) that the DOM's pass lets
-/// run (`Cx::next_task` picked it among the page's), with its microtask
-/// checkpoint. Whether one ran.
+/// Runs the task `queue` names of `global`'s, with its microtask
+/// checkpoint: the one numbered `number` (a token of the host's scheduler
+/// stands for it, `Cx::task_numbered`), or with none the first of that
+/// queue due by `now` (milliseconds since its time origin) that the DOM's
+/// pass lets run (`Cx::next_task` picked it among the page's). Whether one
+/// ran.
 pub fn run_task<H: ScriptHost>(
     host: &mut H,
     global: &GlobalRoot,
     queue: dom::TaskQueue,
     now: f64,
+    number: Option<u64>,
 ) -> bool {
     match queue {
-        dom::TaskQueue::Timer => run_script_timer(host, global, now),
-        dom::TaskQueue::NativeTimer => run_native_timer(host, global, now),
+        dom::TaskQueue::Timer => run_script_timer(host, global, now, number),
+        dom::TaskQueue::NativeTimer => run_native_timer(host, global, now, number),
         // A window's alone (`Cx::next_task` gives none of another's).
         dom::TaskQueue::IdleTimeout => match global {
-            GlobalRoot::Window(window) => crate::idle::run_due_timeout(host, window, now),
+            GlobalRoot::Window(window) => crate::idle::run_due_timeout(host, window, now, number),
             GlobalRoot::WorkerGlobal(_) => false,
         },
-        dom::TaskQueue::Element => crate::text_control::run_element_task(host, global),
-        dom::TaskQueue::Message => crate::message::run_posted_message(host, global),
+        dom::TaskQueue::Element => crate::text_control::run_element_task(host, global, number),
+        dom::TaskQueue::Message => crate::message::run_posted_message(host, global, number),
     }
 }
 
-/// `global`'s first UA timer due by `now`, run as a task (with its
-/// microtask checkpoint). Whether one ran.
-fn run_native_timer<H: ScriptHost>(host: &mut H, global: &GlobalRoot, now: f64) -> bool {
+/// `global`'s UA timer numbered `number`, or its first due by `now`, run
+/// as a task (with its microtask checkpoint). Whether one ran.
+fn run_native_timer<H: ScriptHost>(
+    host: &mut H,
+    global: &GlobalRoot,
+    now: f64,
+    number: Option<u64>,
+) -> bool {
     let native = host.mutate(|cx| {
+        let context = cx.global_context(global.get(cx.gc));
         let dom::DueNativeTimer {
             element,
             action,
             data,
             target,
-        } = cx.take_due_native_timer(cx.global_context(global.get(cx.gc)), now)?;
+        } = match number {
+            Some(number) => cx.take_native_timer_numbered(context, number),
+            None => cx.take_due_native_timer(context, now),
+        }?;
         Some((
             element.map(|element| cx.root(element)),
             action,
@@ -225,14 +237,22 @@ fn run_native_timer<H: ScriptHost>(host: &mut H, global: &GlobalRoot, now: f64) 
     false
 }
 
-/// `global`'s first script timer due by `now`, run (HTML's timer task:
-/// its nesting level the global's while its callback runs, back to 0
-/// before the host's microtask checkpoint, `ScriptHost::call_timer`).
-/// Whether one ran.
-fn run_script_timer<H: ScriptHost>(host: &mut H, global: &GlobalRoot, now: f64) -> bool {
+/// `global`'s script timer numbered `number`, or its first due by `now`,
+/// run (HTML's timer task: its nesting level the global's while its
+/// callback runs, back to 0 before the host's microtask checkpoint,
+/// `ScriptHost::call_timer`). Whether one ran.
+fn run_script_timer<H: ScriptHost>(
+    host: &mut H,
+    global: &GlobalRoot,
+    now: f64,
+    number: Option<u64>,
+) -> bool {
     let timer = host.mutate(|cx| {
         let context = cx.global_context(global.get(cx.gc));
-        let (timer, nesting) = cx.take_due(context, now)?;
+        let (timer, nesting) = match number {
+            Some(number) => cx.take_timer_numbered(context, number, now),
+            None => cx.take_due(context, now),
+        }?;
         cx.set_timer_nesting(context, nesting);
         Some(Persistent::new(cx.gc, timer))
     });

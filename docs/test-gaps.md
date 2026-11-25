@@ -216,7 +216,6 @@
 
 **DOM 的 task 是 scheduler 的 task（`renderer` 的 `task_queue.rs`、`dom` 的 `tasks.rs`、engine 的 `run_dom_task`）**
 
-- 記號輪到時照 scheduler 交出的時間跑（`cx.dom_now().max(task.at)`），不只看 DOM 自己的時鐘：只在兩個時鐘的換算差了一點（scheduler 的 `Instant` 比 DOM 算的到期時間早幾微秒）時才有差別，那時只看 DOM 的時鐘會讓 timer 沒跑、它的記號用掉，之後再也不跑；測試造不出那一點差。靠審查。
 - worker 自己關閉時，它在關閉的那個 task 裡丟的錯誤照樣送到 `Worker`（`fire_worker_error` 看 `worker_messages_dropped`，不看 `worker_terminated`）：`shell` 的測試裡錯誤的 task 總是在 `Closed` 處理之前就跑了，看不出差別；WPT 的 `workers/WorkerGlobalScope-close.html` 的時序抓得到（CI 每天跑）。
 
 **renderer 自己的工作和 V8 的 platform task 是 scheduler 的 task（`renderer` 的 `task_queue.rs`、`render_thread.rs`，`bindings` 的 `platform_tasks.rs`）**
@@ -230,7 +229,7 @@
 - DevTools 的 `CSS` 在 lifecycle 之後才要的 sheet 的原文，在 task 之後抓（`start_css_refetches`）：拿掉之後沒有測試失敗，測試裡要原文的都是命令，命令的 task 裡當場就抓了。
 - overlay 跟著節點、要一個 frame（`overlay_agent.showing()` 的那一段）：拿掉之後沒有測試失敗，`devtools_overlay` 的測試裡 overlay 的命令和畫面的 frame 本來就要了 frame。要一個框著的節點在沒有其他 frame 時移動的測試。
 - headless 在 input 之後等 renderer 閒下來的那一張 frame 畫出來才結束（`headless.rs` 的 `idle_frame` 比 `drawn`）：拿掉之後沒有測試失敗。`IdleFrameReady` 走 Browser 的通道、frame 走 Viz 的，要前者先到才看得出差別，測試排不出那個順序。
-- debug build 偵測沒有記號的 DOM task（`render_thread.rs` 的 `assert_no_dom_task_lost`）：它是檢查，拿掉之後測試照樣通過；engine 找不到記號的 task 時清掉 `target_task`（`run_dom_task`），沒清的話只有這個檢查看不到別的 task，測試也看不出來。
+- debug build 偵測沒有記號的 DOM task（`render_thread.rs` 的 `assert_no_dom_task_lost`）：它是檢查，拿掉之後測試照樣通過。
 - wasm guest 的等待結束時跑它的延後的 task（`post_guests`）：`wasm_documents` 的測試裡畫面的 frame 照樣叫醒 loop、跑到它（和「loop 等待時為 renderer 自己的延後的 task 醒來」同一個原因）。
 
 **啟動和結束（`shell` 的 `browser_window.rs`、`net` 的 `test_server.rs`）**
@@ -310,10 +309,10 @@
 
 - 等待只為「要的那幾個 queue」的延後 task 醒來，拿掉這個過濾沒有差別：多醒一次，醒來時沒有要的 task，照樣回去等（主 thread 的延後 task 只在 DOM 和 renderer 自己的 queue）。留著是讓 script 停在斷點時（只取 DevTools 和 rendering 的 queue）不為 timer 醒來。
 
-**記號跑它自己的那一個 task（`dom` 的 `target_task`、engine 的 `run_dom_task`）**
+**記號照編號拿它自己的那一個 task（`dom` 的 `take_*_numbered`、`task_numbered`）**
 
-- element task 照編號在整個 queue 裡找（`first_element_task`），不只看第一個：記號照排進來的順序 post，要跑的那一個總是第一個。
-- engine 跑完那個記號時清掉 `target_task`：下一個記號輪到時會先設成它的，一個 task 執行中也沒有地方另外挑 DOM 的 task；留著是讓 `target_task` 只在跑那個記號的期間設著（debug build 的偵測和測試直接跑 DOM 的 task 時看到全部）。
+- 訊息照編號拿（`first_message` 的 `wanted`），換成拿第一則沒有差別：自己的和 port 的訊息都照排進來的順序編號，記號也照這個順序送，輪到的一定是最前面的那一則。
+- idle callback 的 timeout 照編號拿（`first_idle_timeout` 的 `wanted`），換成拿最早到期的沒有差別：有 timeout 的一定是延後的 task（HTML 的 `timeout` 要大於 0），記號只照到期的順序從 scheduler 的 heap 出來，不會有 script timer 那種「設下去就到期、排在還在 heap 裡的前面」的情況。
 
 **DOM 的 task 是 scheduler 的 task（`render_thread.rs` 的 `after_task`、`dom` 的 `worker.rs`）**
 

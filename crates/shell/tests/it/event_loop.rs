@@ -373,6 +373,45 @@ onload = () => {
     assert_eq!(report, "b,a");
 }
 
+/// The same of the UA's timers (`AbortSignal.timeout()`'s): each runs as
+/// its own token comes, the one set as the thread had run past the other's
+/// time first, as script timers do.
+#[test]
+fn a_ua_timer_set_after_an_earlier_ones_time_runs() {
+    let page = r#"<!DOCTYPE html><script>
+const busy = ms => { const until = performance.now() + ms; while (performance.now() < until); };
+const ran = [];
+setTimeout(() => testRunner.reportHarnessResults(ran.join(',') || 'none'), 2000);
+onload = () => {
+  AbortSignal.timeout(10).onabort = () => ran.push('abort a');
+  busy(20);
+  AbortSignal.timeout(0).onabort = () => ran.push('abort b');
+};
+</script>"#;
+    let report = report(&[("/", Route::ok("text/html", page))]);
+    assert_eq!(report, "abort b,abort a");
+}
+
+/// Idle callbacks' timeouts run by their tokens, the earliest due first,
+/// whatever order they were asked for in: the page busy, only their
+/// timeouts run them.
+#[test]
+fn idle_timeouts_run_earliest_due_first() {
+    let page = r#"<!DOCTYPE html><script>
+const busy = ms => { const until = performance.now() + ms; while (performance.now() < until); };
+const ran = [];
+setTimeout(() => testRunner.reportHarnessResults(ran.join(',') || 'none'), 2000);
+onload = () => {
+  requestIdleCallback(() => ran.push('a'), { timeout: 60 });
+  requestIdleCallback(() => ran.push('b'), { timeout: 20 });
+  // Busy past both timeouts, a task at a time.
+  for (let i = 0; i < 10; i++) setTimeout(() => busy(15), 0);
+};
+</script>"#;
+    let report = report(&[("/", Route::ok("text/html", page))]);
+    assert_eq!(report, "b,a");
+}
+
 /// An animation frame callback asked for runs while the responses to a
 /// chain of `fetch()`es keep coming: the compositor hears a main frame is
 /// wanted as the task that asked ends, though another always waits

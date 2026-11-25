@@ -511,7 +511,26 @@ impl<'gc> Cx<'_, 'gc> {
         &self,
         context: Gc<'gc, crate::ExecutionContext>,
     ) -> Option<TakenMessage<'gc>> {
-        let (port, (_, number)) = self.first_message(context)?;
+        self.take_posted_message_of(context, None)
+    }
+
+    /// `context`'s message numbered `number`, taken (`take_posted_message`'s):
+    /// the one a token of the host's scheduler stands for, of those in its
+    /// own queue and first in its enabled ports'.
+    pub fn take_posted_message_numbered(
+        &self,
+        context: Gc<'gc, crate::ExecutionContext>,
+        number: u64,
+    ) -> Option<TakenMessage<'gc>> {
+        self.take_posted_message_of(context, Some(number))
+    }
+
+    fn take_posted_message_of(
+        &self,
+        context: Gc<'gc, crate::ExecutionContext>,
+        wanted: Option<u64>,
+    ) -> Option<TakenMessage<'gc>> {
+        let (port, (_, number)) = self.first_message(context, wanted)?;
         let (mut payload, origin, source, target) = match port {
             None => {
                 let queue = context.posted_messages.get(self.gc)?;
@@ -565,7 +584,7 @@ impl<'gc> Cx<'_, 'gc> {
         &self,
         context: Gc<'gc, crate::ExecutionContext>,
     ) -> Option<(f64, u64)> {
-        self.first_message(context)
+        self.first_message(context, None)
             .map(|(_, (queued, number))| (queued, number))
     }
 
@@ -574,17 +593,22 @@ impl<'gc> Cx<'_, 'gc> {
     /// the host's pass lets it run. The messages that came to its ports
     /// from other threads are numbered now, as tasks of this DOM's; its
     /// ports that get no message again go out of its list.
-    fn first_message(
+    pub(crate) fn first_message(
         &self,
         context: Gc<'gc, crate::ExecutionContext>,
+        wanted: Option<u64>,
     ) -> Option<(Option<Gc<'gc, EventTargetImpl>>, TaskStamp)> {
+        let may_run = |number: u64| match wanted {
+            Some(wanted) => number == wanted,
+            None => self.task_may_run(number),
+        };
         // Its own queue's first that may run: the first, or the one the
         // host's scheduler runs.
         let own = context.posted_messages.get(self.gc).and_then(|queue| {
             (0..queue.len())
                 .filter_map(|index| queue.get(self.gc, index))
                 .map(|message| (None, (message.queued.get(), message.number.get())))
-                .find(|&(_, (_, number))| self.task_may_run(number))
+                .find(|&(_, (_, number))| may_run(number))
         });
         let mut ports = Vec::new();
         for port in list_items(self, context.message_ports.get(self.gc)) {
@@ -605,7 +629,7 @@ impl<'gc> Cx<'_, 'gc> {
         }
         own.into_iter()
             .chain(ports)
-            .filter(|&(_, (_, number))| self.task_may_run(number))
+            .filter(|&(_, (_, number))| may_run(number))
             .min_by_key(|&(_, (_, number))| number)
     }
 }

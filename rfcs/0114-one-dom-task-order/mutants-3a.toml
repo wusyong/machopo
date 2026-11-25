@@ -1,0 +1,86 @@
+# Stage 3a's mutants: `python3 scripts/test.py mutate rfcs/0114-one-dom-task-order/mutants-3a.toml`.
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "event_loop::", "documents::idle", "workers::", "messaging::", "forms::"]
+timeout = 300
+
+[[mutant]]
+name = "a token's timer is the first due"
+file = "crates/dom/src/window.rs"
+from = '''    ) -> Option<(usize, Gc<'gc, Timer>)> {
+        let timers = context.timers.get(self.gc)?;
+        if let Some(number) = number {'''
+to = '''    ) -> Option<(usize, Gc<'gc, Timer>)> {
+        let timers = context.timers.get(self.gc)?;
+        let number = number.filter(|_| false);
+        if let Some(number) = number {'''
+
+[[mutant]]
+name = "a token's UA timer is the first due"
+file = "crates/dom/src/window.rs"
+from = '''    ) -> Option<(usize, Gc<'gc, NativeTimer>)> {
+        let timers = context.native_timers.get(self.gc)?;
+        if let Some(number) = number {'''
+to = '''    ) -> Option<(usize, Gc<'gc, NativeTimer>)> {
+        let timers = context.native_timers.get(self.gc)?;
+        let number = number.filter(|_| false);
+        if let Some(number) = number {'''
+
+[[mutant]]
+name = "a token's element task is the first queued"
+file = "crates/dom/src/window.rs"
+from = '''                Some(number) => task.number.get() == number,'''
+to = '''                Some(_) => true,'''
+
+[[mutant]]
+name = "a token's idle timeout is the first asked for"
+file = "crates/dom/src/idle.rs"
+from = '''                Some(wanted) if number == wanted => return Some((index, due, number)),
+                Some(_) => continue,'''
+to = '''                Some(_) => return Some((index, due, number)),'''
+
+[[mutant]]
+name = "a token's idle timeout is the earliest due"
+file = "crates/dom/src/idle.rs"
+from = '''        let callbacks = window.idle_callbacks.get(self.gc)?;
+        let mut first: Option<(usize, f64, u64)> = None;'''
+to = '''        let callbacks = window.idle_callbacks.get(self.gc)?;
+        let wanted = wanted.filter(|_| false);
+        let mut first: Option<(usize, f64, u64)> = None;'''
+
+[[mutant]]
+name = "a token's message is the first"
+file = "crates/dom/src/message.rs"
+from = '''            Some(wanted) => number == wanted,'''
+to = '''            Some(_) => true,'''
+
+[[mutant]]
+name = "a token of a timer finds no task"
+file = "crates/dom/src/tasks.rs"
+from = '''        if self.first_timer(context, wanted).is_some() {'''
+to = '''        if self.first_timer(context, wanted).is_some() && false {'''
+
+[[mutant]]
+name = "a token of a UA timer finds no task"
+file = "crates/dom/src/tasks.rs"
+from = '''        } else if self.first_native_timer(context, wanted).is_some() {'''
+to = '''        } else if self.first_native_timer(context, wanted).is_some() && false {'''
+
+[[mutant]]
+name = "a token of an idle timeout finds no task"
+file = "crates/dom/src/tasks.rs"
+from = '''            .and_then(|window| self.first_idle_timeout(window, wanted))
+            .is_some()'''
+to = '''            .and_then(|window| self.first_idle_timeout(window, wanted))
+            .is_some()
+            && false'''
+
+[[mutant]]
+name = "a token of an element task finds no task"
+file = "crates/dom/src/tasks.rs"
+from = '''        } else if self.first_element_task(context, wanted).is_some() {'''
+to = '''        } else if self.first_element_task(context, wanted).is_some() && false {'''
+
+[[mutant]]
+name = "a token of a message finds no task"
+file = "crates/dom/src/tasks.rs"
+from = '''        } else if self.first_message(context, wanted).is_some() {'''
+to = '''        } else if self.first_message(context, wanted).is_some() && false {'''
