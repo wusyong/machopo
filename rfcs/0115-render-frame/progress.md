@@ -10,7 +10,12 @@
 | 1a. `render_frame.rs`：`RenderFrames`、`RenderFrame`、`NavigationRequest`，`FrameDocument` 搬進來；最上層的 `document` 和 `ChildFrames::documents` 改成表上的 `document`（第 2、3、4 條） | 做完，待審查 | 2026-11-25 |
 | 1b. 導覽的帳（`ChildFrames::navigations`、`main_origin_source`）、`owner_loads`、`devtools_main_frame_token` 搬進 `RenderFrame`，每種轉換一個方法（第 3、5 條）；frame 不見時一起拿掉（第 8 條） | 做完，待審查 | 2026-11-25 |
 | 1c. debug build 在讀導覽的帳時檢查沒分派的 `FrameRequest`（第 6 條，做法照第 9 條） | 做完，待審查 | 2026-11-25 |
-| 2 到 4. 方向（已決定的事項第 1 條）：第 1 段做完之後重新評估 | — | |
+| 2a. body 的解碼和 parse、parser 的 script 搬到 `dom_api` 的 `LocalFrame`（已決定的事項第 11 到 16 條） | 沒開始 | |
+| 2a-1. `dom_api` 的 `LocalFrame`：解碼器、parser、parser 的輸入；engine 的 `body_data`、`body_ended` 和「parse 到 script 或沒輸入為止」，renderer 只交 pipe 讀到的 bytes（parse 照舊由 renderer 的 `ParseOn` 排，碰到 script 是回傳值） | 沒開始 | |
+| 2a-2. parser 擋住的和 deferred 的 script 搬進 `LocalFrame`（DOM 自己排的 script 的那條路），`advance_document` 的迴圈搬過去；`set_scripts_blocked` | 沒開始 | |
+| 2a-3. 「接著 parse」是 DOM 的一種 task，讓出時問 `InputMonitor`；拿掉 `InternalTask::ParseOn` | 沒開始 | |
+| 2a 的停損點：新增的 hook 和問 engine 的方法、Speedometer 的 Editor 和 NewsSite、parse 迴圈的過期讀法（「信心和未知數」） | — | |
+| 2b、2c、3、4：方向，2a 做完照停損點再看 | — | |
 
 ## 驗收
 
