@@ -78,7 +78,7 @@ let task = manager.next(|q| wanted(q), timeout); // 擁有它的 thread
 ```
 
 - **順序**：排進 queue 時編號，取要的那幾個 queue 裡號碼最小的。`post_at` 的 task 到期之後，在**取下一個 task 的時候**才排進 queue、拿號碼（不是到期的當下）：一個 task 跑過了 timer 的時間、期間 post 的 task 排在 timer 前面（Chromium 也是在挑下一個時才搬）。同時到期的照 post 的順序。
-- **等待**：`next` 等到有 task、要的 queue 的延後 task 到期，或 `timeout`；`try_next` 不等；`wait_for` 只回答最早的在哪個 queue、不取，也不看延後的 task（只給沒有延後 task 的 queue 用）。
+- **等待**：`next` 等到有 task、要的 queue 的延後 task 到期，或 `timeout`；`try_next` 不等；`try_next_by` 也不等，照給的時刻算哪些延後的 task 到期了（測試自己的時鐘，Chromium 的 `TaskEnvironment` 的 mock time：`dom` 的 `TaskTokens` 用）；`wait_for` 只回答最早的在哪個 queue、不取，也不看延後的 task（只給沒有延後 task 的 queue 用）。
 - **在同一把鎖底下做的**：`post_with` 照使用的人的狀態決定 post 什麼；`Spec::taken` 在 task 被取走的同時告訴使用的人（例如「同一種只排一個」的紀錄要在取走時清掉，分開做的話別的 thread 剛好在中間檢查，會以為還在而不再 post）；`with_extra` 讀寫那份狀態；`take_matching` 照順序拿出一個 queue 裡符合的、其餘的順序不變；`put_back` 放回最前面。
 - **同步等回答**（mojo 的 `[Sync]` 呼叫）：`sync_wait(id, give_up)` 只等那個編號的回答，task 都留在 queue 裡；thread 不在了、或 `give_up` 照使用的人的狀態說放棄時回 `None`。`post_reply` 交回答。
 - **`close`**：擁有它的 thread 不在了：queue 清掉，之後 post 回 `Closed`。
@@ -89,7 +89,7 @@ binding 呼叫的計數（`census` feature，預設關）：`count(Kind)` 記這
 
 ## 測試
 
-`sequence_manager` 的單元測試用兩個 queue 的小 `Spec`：順序、延後的 task 取的時候才排、等待、同步等回答、`take_matching` 和 `put_back`、`post_with`、`close`。
+`sequence_manager` 的單元測試用兩個 queue 的小 `Spec`：順序、延後的 task 取的時候才排、照給的時刻取、等待、同步等回答、`take_matching` 和 `put_back`、`post_with`、`close`。
 
 ```sh
 cargo test -p base

@@ -309,11 +309,6 @@
 
 - 等待只為「要的那幾個 queue」的延後 task 醒來，拿掉這個過濾沒有差別：多醒一次，醒來時沒有要的 task，照樣回去等（主 thread 的延後 task 只在 DOM 和 renderer 自己的 queue）。留著是讓 script 停在斷點時（只取 DevTools 和 rendering 的 queue）不為 timer 醒來。
 
-**記號照編號拿它自己的那一個 task（`dom` 的 `take_*_numbered`、`task_numbered`）**
-
-- 訊息照編號拿（`first_message` 的 `wanted`），換成拿第一則沒有差別：自己的和 port 的訊息都照排進來的順序編號，記號也照這個順序送，輪到的一定是最前面的那一則。
-- idle callback 的 timeout 照編號拿（`first_idle_timeout` 的 `wanted`），換成拿最早到期的沒有差別：有 timeout 的一定是延後的 task（HTML 的 `timeout` 要大於 0），記號只照到期的順序從 scheduler 的 heap 出來，不會有 script timer 那種「設下去就到期、排在還在 heap 裡的前面」的情況。
-
 **DOM 的 task 是 scheduler 的 task（`render_thread.rs` 的 `after_task`、`dom` 的 `worker.rs`）**
 
 - 自己關閉了的 worker 照樣收頁面送的訊息（`worker_terminated` 不看 `closed`）：它的 thread 已經不跑了，送過去的東西什麼都不會發生。
