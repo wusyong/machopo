@@ -196,7 +196,10 @@ impl PortEnd {
     /// Its first message's stamp, if it is numbered (it runs, and the
     /// message reached it here).
     pub(crate) fn first_stamp(&self) -> Option<Stamp> {
-        self.lock()[self.side].ready.front().map(|&(stamp, _)| stamp)
+        self.lock()[self.side]
+            .ready
+            .front()
+            .map(|&(stamp, _)| stamp)
     }
 
     /// Its first numbered message, taken.
@@ -228,7 +231,10 @@ impl Drop for PortEnd {
             end.closed = true;
             end.home = None;
             end.running = false;
-            let lost = (std::mem::take(&mut end.incoming), std::mem::take(&mut end.ready));
+            let lost = (
+                std::mem::take(&mut end.incoming),
+                std::mem::take(&mut end.ready),
+            );
             let waker = ends[self.other()]
                 .home
                 .as_ref()

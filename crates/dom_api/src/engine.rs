@@ -1050,6 +1050,12 @@ pub trait WorkerEngine {
     /// (`dom::Cx::port_messages_arrived`).
     fn port_messages_arrived(&mut self);
 
+    /// Whether a task of its DOM's was due `ms` or more before now (the
+    /// DOM's clock, `dom::Cx::has_task_due_by`): with nothing in its
+    /// thread's scheduler for it, its token was lost and it never runs
+    /// (debug builds check as the thread is to wait).
+    fn has_dom_task_due_for(&mut self, ms: f64) -> bool;
+
     /// What stops its script from another thread (V8's
     /// `TerminateExecution`): `Worker.terminate()`'s.
     fn terminator(&mut self) -> Box<dyn Fn() + Send>;

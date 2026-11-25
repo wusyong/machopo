@@ -1,0 +1,65 @@
+# Stage 3c's mutants: `python3 scripts/test.py mutate rfcs/0114-one-dom-task-order/mutants-3c.toml`.
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "tasks::"]
+timeout = 300
+
+[[mutant]]
+name = "no script timer is due"
+file = "crates/dom/src/tasks.rs"
+from = '''        self.has_timer_due_by(context, by)
+            ||'''
+to = '''        false
+            ||'''
+
+[[mutant]]
+name = "no UA timer is due"
+file = "crates/dom/src/tasks.rs"
+from = '''            || self.has_native_timer_due_by(context, by)'''
+to = '''            || false'''
+
+[[mutant]]
+name = "no idle timeout is due"
+file = "crates/dom/src/tasks.rs"
+from = '''                .is_some_and(|window| self.has_idle_timeout_due_by(window, by))'''
+to = '''                .is_some_and(|_| false)'''
+
+[[mutant]]
+name = "no element task is due"
+file = "crates/dom/src/tasks.rs"
+from = '''            || self.has_element_task_by(context, by)'''
+to = '''            || false'''
+
+[[mutant]]
+name = "no message is due"
+file = "crates/dom/src/tasks.rs"
+from = '''            || self.has_message_by(context, by)'''
+to = '''            || false'''
+
+[[mutant]]
+name = "no port's message is due"
+file = "crates/dom/src/message.rs"
+from = '''            .any(|stamp| stamp.queued() <= by)'''
+to = '''            .any(|_| false)'''
+
+[[mutant]]
+name = "a window's own message is never due"
+file = "crates/dom/src/message.rs"
+from = '''                .any(|message| message.queued.get() <= by)'''
+to = '''                .any(|_| false)'''
+
+[[mutant]]
+name = "a script timer is due whenever"
+file = "crates/dom/src/window.rs"
+from = '''        context.timers.get(self.gc).is_some_and(|timers| {
+            (0..timers.len())
+                .filter_map(|index| timers.get(self.gc, index))
+                .any(|timer| origin + timer.due.get() <= by)'''
+to = '''        context.timers.get(self.gc).is_some_and(|timers| {
+            (0..timers.len())
+                .filter_map(|index| timers.get(self.gc, index))
+                .any(|timer| origin + timer.due.get() <= by + 1e9)'''
+
+[[mutant]]
+name = "an element task is due whenever"
+file = "crates/dom/src/window.rs"
+from = '''                .any(|task| task.queued.get() <= by)'''
+to = '''                .any(|_| true)'''

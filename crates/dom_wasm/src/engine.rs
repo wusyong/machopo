@@ -1159,8 +1159,7 @@ impl ScriptEngine for WasmEngine {
         };
         self.dom().read(|cx| {
             let by = cx.dom_now() - ms;
-            cx.next_task(cx.window_context(window.get(cx.gc)), by)
-                .is_some()
+            cx.has_task_due_by(cx.window_context(window.get(cx.gc)), by)
         })
     }
 

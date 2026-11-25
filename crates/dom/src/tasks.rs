@@ -236,6 +236,21 @@ impl<'gc> Cx<'_, 'gc> {
         ]
     }
 
+    /// Whether a task of `context`'s of any kind is due by `by` (the DOM's
+    /// clock), in no order: debug builds' check as the host's thread is to
+    /// wait with nothing in its scheduler, when such a task's token was
+    /// lost and it never runs. A new kind of task is to be asked of here
+    /// too (one left out is only not caught).
+    pub fn has_task_due_by(&self, context: Gc<'gc, ExecutionContext>, by: f64) -> bool {
+        self.has_timer_due_by(context, by)
+            || self.has_native_timer_due_by(context, by)
+            || self
+                .context_window(context)
+                .is_some_and(|window| self.has_idle_timeout_due_by(window, by))
+            || self.has_element_task_by(context, by)
+            || self.has_message_by(context, by)
+    }
+
     /// `context`'s task to run next by `now` (the DOM's clock), of those
     /// the pass lets run: the earliest `(time, number)` of its queues.
     pub fn next_task(&self, context: Gc<'gc, ExecutionContext>, now: f64) -> Option<NextTask> {

@@ -549,7 +549,8 @@ impl<'gc> Cx<'_, 'gc> {
             }
             Some(port) => {
                 let data = self.port_data(port)?;
-                let (payload, done) = self.with_port_end(data, |end| (end.take(), end.is_done()))?;
+                let (payload, done) =
+                    self.with_port_end(data, |end| (end.take(), end.is_done()))?;
                 // Let go once it has no more to come (else as its other
                 // end closes: `port_messages_arrived`).
                 if done {
@@ -605,6 +606,26 @@ impl<'gc> Cx<'_, 'gc> {
                 self.forget_port(port);
             }
         }
+    }
+
+    /// Whether one of `context`'s messages was queued by `by` (the DOM's
+    /// clock): one posted to it, or one numbered in an enabled port's
+    /// (`Cx::has_task_due_by`).
+    pub(crate) fn has_message_by(
+        &self,
+        context: Gc<'gc, crate::ExecutionContext>,
+        by: f64,
+    ) -> bool {
+        let own = context.posted_messages.get(self.gc).is_some_and(|queue| {
+            (0..queue.len())
+                .filter_map(|index| queue.get(self.gc, index))
+                .any(|message| message.queued.get() <= by)
+        });
+        own || list_items(self, context.message_ports.get(self.gc))
+            .into_iter()
+            .filter_map(|port| self.port_data(port))
+            .filter_map(|data| self.with_port_end(data, PortEnd::first_stamp).flatten())
+            .any(|stamp| stamp.queued() <= by)
     }
 
     /// `context`'s first message to deliver: of the first in its own queue

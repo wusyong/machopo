@@ -1555,7 +1555,7 @@ impl ScriptEngine for V8Engine {
             let by = cx.dom_now() - ms;
             frames.iter().any(|(_, _, document)| {
                 cx.window_of(document.get(cx.gc))
-                    .is_some_and(|window| cx.next_task(cx.window_context(window), by).is_some())
+                    .is_some_and(|window| cx.has_task_due_by(cx.window_context(window), by))
             })
         })
     }

@@ -214,6 +214,18 @@ impl<'gc> Cx<'_, 'gc> {
         first
     }
 
+    /// Whether one of `window`'s idle callbacks' timeouts is due by `by`
+    /// (the DOM's clock; `Cx::has_task_due_by`): one of no timeout is due
+    /// at infinity, never.
+    pub(crate) fn has_idle_timeout_due_by(&self, window: Gc<'gc, Window>, by: f64) -> bool {
+        let origin = self.window_context(window).time_origin.get();
+        window.idle_callbacks.get(self.gc).is_some_and(|callbacks| {
+            (0..callbacks.len())
+                .filter_map(|index| callbacks.get(self.gc, index))
+                .any(|callback| origin + callback.due.get() <= by)
+        })
+    }
+
     fn idle_callback_index(
         &self,
         window: Gc<'gc, Window>,

@@ -3,11 +3,12 @@
 //! their task sources; a pass of the host's runs only those numbered before
 //! it began; `Dom::has_queued_tasks` says whether one that is due now may
 //! wait; the window's `load` is an element task after those queued before
-//! it.
+//! it; whether a task of each kind is due, in no order (`Cx::has_task_due_by`,
+//! debug builds' check for a lost token).
 
 use dom::{
-    Cx, Dom, DomString, ElementTaskKind, NodeRef, QualName, SerializedMessage, TaskQueue, Window,
-    names,
+    Cx, Dom, DomString, ElementTaskKind, NativeAction, NodeRef, QualName, SerializedMessage,
+    TaskQueue, Window, names,
 };
 use elise::Gc;
 
@@ -233,5 +234,60 @@ fn an_idle_callback_s_timeout_is_a_task_once_due() {
             .next_task(context, cx.dom_now() + 10.0)
             .expect("its timeout is due");
         assert_eq!(next.queue, TaskQueue::IdleTimeout);
+    });
+}
+
+/// Each kind of task is due by a time a little past now, none before it:
+/// a script timer, a UA timer, an idle callback's timeout, an element task,
+/// a window's message, and a port's (once its port is enabled).
+#[test]
+fn a_task_of_each_kind_is_due() {
+    type Add = for<'c, 'gc> fn(&Cx<'c, 'gc>, Gc<'gc, Window>, NodeRef<'gc>);
+    let kinds: [Add; 6] = [
+        |cx, window, _| {
+            cx.add_timer(cx.window_context(window), 0.0, false);
+        },
+        |cx, _, document| {
+            let element = cx.create_element(document, QualName::html("input"));
+            cx.append_child(document, element);
+            cx.add_native_timer(element, NativeAction::SpinRepeat, 0, 0.0, None);
+        },
+        |cx, window, _| {
+            cx.add_idle_callback(window, 1);
+        },
+        |cx, _, document| {
+            let element = cx.create_element(document, QualName::html("p"));
+            cx.queue_element_task(element, names::event::SELECT);
+        },
+        |cx, window, _| cx.post_window_message(window, message(), DomString::new(""), None),
+        |cx, window, _| {
+            let channel = cx.create_message_channel(Some(cx.window_context(window)));
+            let (one, two) = cx.message_channel_ports(channel);
+            cx.post_port_message(one, message());
+            cx.start_message_port(two);
+        },
+    ];
+    for (index, add) in kinds.iter().enumerate() {
+        let mut dom = Dom::new();
+        dom.mutate(|cx| {
+            let (window, document) = window(cx);
+            let context = cx.window_context(window);
+            add(cx, window, document);
+            assert!(!cx.has_task_due_by(context, cx.dom_now() - 1.0), "kind {index}");
+            assert!(cx.has_task_due_by(context, cx.dom_now() + 2.0), "kind {index}");
+        });
+    }
+}
+
+/// A port's message isn't a task due till its port is enabled.
+#[test]
+fn a_port_s_message_is_no_task_due_before_its_port_is_enabled() {
+    let mut dom = Dom::new();
+    dom.mutate(|cx| {
+        let (window, _) = window(cx);
+        let context = cx.window_context(window);
+        let (one, _) = cx.message_channel_ports(cx.create_message_channel(Some(context)));
+        cx.post_port_message(one, message());
+        assert!(!cx.has_task_due_by(context, cx.dom_now() + 2.0));
     });
 }

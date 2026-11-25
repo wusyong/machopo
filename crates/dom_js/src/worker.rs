@@ -472,6 +472,16 @@ impl WorkerEngine for V8WorkerEngine {
         .unwrap_or(false)
     }
 
+    fn has_dom_task_due_for(&mut self, ms: f64) -> bool {
+        let Some(global) = self.global.clone() else {
+            return false;
+        };
+        self.state().dom.read(|cx| {
+            let by = cx.dom_now() - ms;
+            cx.has_task_due_by(cx.worker_global_context(global.get(cx.gc)), by)
+        })
+    }
+
     fn port_messages_arrived(&mut self) {
         let Some(global) = self.global.clone() else {
             return;

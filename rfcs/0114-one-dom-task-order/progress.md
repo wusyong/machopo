@@ -11,7 +11,7 @@
 | 3. 拿掉 `dom` 的順序（3a 到 3d） | 進行中 | |
 | 3a. 照編號拿、拿掉 `target_task` 和時鐘的換算（第 2 條） | 做完，待審查 | 2026-11-25 |
 | 3b. port 的狀態機：`Waiting`、`Running`，`enable`、`push`、`ship`、`arrive`；拿掉補號、重送、每個 task 之後的編號（第 3 條） | 做完，待審查 | 2026-11-25 |
-| 3c. debug build 的偵測只問「有沒有」，主 thread 和 worker 都裝（第 4 條） | 沒開始 | |
+| 3c. debug build 的偵測只問「有沒有」，主 thread 和 worker 都裝（第 4 條） | 做完，待審查 | 2026-11-25 |
 | 3d. 拿掉 `next_task`、一輪的機制和 engine 只剩測試在用的方法，測試改成經過 `base` 的 scheduler 跑（第 5、9 條） | 沒開始 | |
 
 ## 驗收
@@ -23,6 +23,14 @@
 | 主 thread 的 scheduler 行為不變 | `renderer` 的 `task_queue::tests`、`shell` 的整合測試（`event_loop::`、`workers::`、DevTools 的）照舊通過 |
 
 ## 做過的檢查
+
+### 第 3 段的 3c（2026-11-25，Linux：Fedora 45，debug build，`abcdcfb0` 之上）
+
+**做了什麼**：`dom` 的 `Cx::has_task_due_by`：每一種 task（script timer、UA 的 timer、idle callback 的 timeout、element task、window 的訊息、啟用了的 port 編過號的訊息）有沒有一個在給的時間之前到期，不排順序、不看一輪。主 thread 的 `assert_no_dom_task_lost` 改用它（以前用 `next_task`）；`WorkerEngine` 多一個 `has_dom_task_due_for`，worker 的 loop 在 `next` 之前、scheduler 是空的時候同樣檢查。
+
+**測試**：`dom` 的 `tasks::a_task_of_each_kind_is_due`（六種各一個：之前不到期、之後到期）、`a_port_s_message_is_no_task_due_before_its_port_is_enabled`。`dom`、`dom_api`、`dom_js`、`dom_wasm`、`renderer`、`shell` 的測試通過（debug build：兩條 thread 的偵測都開著）。
+
+**mutation test**（`mutants-3c.toml`，9 個，全部抓到）：每一種換成永遠不到期、window 的訊息和 port 的訊息分開、script timer 和 element task 換成永遠到期。偵測本身拿掉沒有測試失敗（它是檢查，`docs/test-gaps.md`）。
 
 ### 第 3 段的 3b（2026-11-25，Linux：Fedora 45，debug build，`9caa3e77` 之上）
 

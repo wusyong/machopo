@@ -879,6 +879,15 @@ fn run(thread: WorkerThread) {
             break;
         }
         let wanted = |queue| ran || queue != WorkerQueue::Owner;
+        // A task of the DOM's due a while ago with nothing in the scheduler
+        // for it never runs (its token was lost), and nothing else says
+        // so: debug builds stop there, as the main thread does. Due 5 ms
+        // ago, past the clocks' rounding.
+        #[cfg(debug_assertions)]
+        assert!(
+            tasks.has_task(|_| true) || !engine.has_dom_task_due_for(5.0),
+            "a task of the worker's DOM is due with nothing in its scheduler to run it"
+        );
         let Some(task) = tasks.next(wanted, None) else {
             continue;
         };
@@ -1073,6 +1082,10 @@ mod tests {
         }
 
         fn port_messages_arrived(&mut self) {}
+
+        fn has_dom_task_due_for(&mut self, _: f64) -> bool {
+            false
+        }
 
         fn terminator(&mut self) -> Box<dyn Fn() + Send> {
             Box::new(|| {})

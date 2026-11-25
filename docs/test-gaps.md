@@ -229,7 +229,7 @@
 - DevTools 的 `CSS` 在 lifecycle 之後才要的 sheet 的原文，在 task 之後抓（`start_css_refetches`）：拿掉之後沒有測試失敗，測試裡要原文的都是命令，命令的 task 裡當場就抓了。
 - overlay 跟著節點、要一個 frame（`overlay_agent.showing()` 的那一段）：拿掉之後沒有測試失敗，`devtools_overlay` 的測試裡 overlay 的命令和畫面的 frame 本來就要了 frame。要一個框著的節點在沒有其他 frame 時移動的測試。
 - headless 在 input 之後等 renderer 閒下來的那一張 frame 畫出來才結束（`headless.rs` 的 `idle_frame` 比 `drawn`）：拿掉之後沒有測試失敗。`IdleFrameReady` 走 Browser 的通道、frame 走 Viz 的，要前者先到才看得出差別，測試排不出那個順序。
-- debug build 偵測沒有記號的 DOM task（`render_thread.rs` 的 `assert_no_dom_task_lost`）：它是檢查，拿掉之後測試照樣通過。
+- debug build 偵測沒有記號的 DOM task（`render_thread.rs` 的 `assert_no_dom_task_lost`、`worker_thread.rs` 的 loop 等待之前的 `assert!`）：它們是檢查，拿掉之後測試照樣通過。它們問的 `Cx::has_task_due_by` 每一種 task 由 `dom` 的 `tasks::a_task_of_each_kind_is_due` 守著。
 - wasm guest 的等待結束時跑它的延後的 task（`post_guests`）：`wasm_documents` 的測試裡畫面的 frame 照樣叫醒 loop、跑到它（和「loop 等待時為 renderer 自己的延後的 task 醒來」同一個原因）。
 
 **啟動和結束（`shell` 的 `browser_window.rs`、`net` 的 `test_server.rs`）**

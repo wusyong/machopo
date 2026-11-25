@@ -1506,6 +1506,48 @@ impl<'gc> Cx<'_, 'gc> {
         first
     }
 
+    /// Whether one of `context`'s script timers is due by `by` (the DOM's
+    /// clock), and one of its UA timers (`Cx::has_task_due_by`).
+    pub(crate) fn has_timer_due_by(
+        &self,
+        context: Gc<'gc, crate::ExecutionContext>,
+        by: f64,
+    ) -> bool {
+        let origin = context.time_origin.get();
+        context.timers.get(self.gc).is_some_and(|timers| {
+            (0..timers.len())
+                .filter_map(|index| timers.get(self.gc, index))
+                .any(|timer| origin + timer.due.get() <= by)
+        })
+    }
+
+    pub(crate) fn has_native_timer_due_by(
+        &self,
+        context: Gc<'gc, crate::ExecutionContext>,
+        by: f64,
+    ) -> bool {
+        let origin = context.time_origin.get();
+        context.native_timers.get(self.gc).is_some_and(|timers| {
+            (0..timers.len())
+                .filter_map(|index| timers.get(self.gc, index))
+                .any(|timer| origin + timer.due.get() <= by)
+        })
+    }
+
+    /// Whether one of `context`'s element tasks was queued by `by` (the
+    /// DOM's clock).
+    pub(crate) fn has_element_task_by(
+        &self,
+        context: Gc<'gc, crate::ExecutionContext>,
+        by: f64,
+    ) -> bool {
+        context.element_tasks.get(self.gc).is_some_and(|tasks| {
+            (0..tasks.len())
+                .filter_map(|index| tasks.get(self.gc, index))
+                .any(|task| task.queued.get() <= by)
+        })
+    }
+
     /// When `context`'s script timer to run first is due (since its time
     /// origin), and its number (`tasks`).
     pub(crate) fn next_due_timer(
