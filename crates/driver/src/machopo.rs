@@ -145,13 +145,30 @@ impl Machopo {
 
     /// [`call`](Self::call), a CDP error being an `unknown error`.
     pub fn call_ok(&mut self, session: Option<&str>, method: Method) -> Result<Value> {
+        Ok(self
+            .call_ok_until(session, method, None)?
+            .expect("no deadline to pass"))
+    }
+
+    /// [`call_ok`](Self::call_ok), giving up at `deadline` (`None`: never):
+    /// `None` then.
+    pub fn call_ok_until(
+        &mut self,
+        session: Option<&str>,
+        method: Method,
+        deadline: Option<Instant>,
+    ) -> Result<Option<Value>> {
         let name = method.name().to_owned();
-        self.call(session, method)?.map_err(|e| {
-            Failure::new(
-                webdriver::error::ErrorStatus::UnknownError,
-                format!("{name}: {e}"),
-            )
-        })
+        self.call_until(session, method, deadline)?
+            .map(|answer| {
+                answer.map_err(|e| {
+                    Failure::new(
+                        webdriver::error::ErrorStatus::UnknownError,
+                        format!("{name}: {e}"),
+                    )
+                })
+            })
+            .transpose()
     }
 
     fn keep(&mut self, event: Event) {

@@ -1250,11 +1250,18 @@ impl Session {
         match reached {
             None => Err(self.timed_out()),
             Some(Err(failure)) => Err(failure),
+            // The frame by the same deadline: a page whose script hangs
+            // after `load`, before the frame, never draws it.
             Some(Ok(())) if self.page_load_strategy == PageLoadStrategy::Normal => {
                 let page = self.page();
-                self.machopo
-                    .call_ok(Some(&page), Method::MachopoWaitForLoad)
-                    .map(drop)
+                match self.machopo.call_ok_until(
+                    Some(&page),
+                    Method::MachopoWaitForLoad,
+                    deadline,
+                )? {
+                    Some(_) => Ok(()),
+                    None => Err(self.timed_out()),
+                }
             }
             Some(Ok(())) => Ok(()),
         }

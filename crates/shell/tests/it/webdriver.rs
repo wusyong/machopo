@@ -139,7 +139,8 @@ fn server(routes: &[(&str, Route)]) -> TestServer {
 /// A session whose page's script never returns ends within machopo's
 /// limit: machopo ends by itself, its renderer killed, before
 /// machopodriver gives up on it (five seconds) and kills machopo, its
-/// profile and trace unwritten.
+/// profile and trace unwritten. The navigation may end either way: the
+/// script hangs before the frame after `load` is drawn on a busy machine.
 #[test]
 fn a_session_with_a_hung_page_ends_in_time() {
     let server = server(&[(
@@ -150,8 +151,11 @@ fn a_session_with_a_hung_page_ends_in_time() {
         ),
     )]);
     let addr = driver();
-    let (session, _) = Session::new(addr, json!({}));
-    ok(session.navigate(&server.url("/")));
+    let (session, _) = Session::new(addr, json!({ "timeouts": { "pageLoad": 2000 } }));
+    let navigated = session.navigate(&server.url("/"));
+    if navigated.0 != 200 {
+        assert_eq!(error(navigated), (500, "timeout".into()));
+    }
     std::thread::sleep(std::time::Duration::from_millis(300));
     let asked = std::time::Instant::now();
     session.delete();
@@ -289,6 +293,29 @@ fn navigations_wait_as_the_page_load_strategy_says() {
     let start = Instant::now();
     ok(session.navigate(&slow));
     assert!(start.elapsed() < Duration::from_secs(3));
+    session.delete();
+}
+
+/// `normal` waits for the frame after `load` by the same timeout: a
+/// script that hangs right after `load` keeps that frame from being drawn,
+/// and the navigation ends in `timeout`, not never.
+#[test]
+fn the_frame_after_load_is_waited_for_by_the_page_load_timeout() {
+    let server = server(&[(
+        "/",
+        Route::ok(
+            "text/html",
+            "<!DOCTYPE html><script>onload = () => setTimeout(() => { for (;;) {} })</script>",
+        ),
+    )]);
+    let addr = driver();
+    let (session, _) = Session::new(addr, json!({ "timeouts": { "pageLoad": 1000 } }));
+    let start = Instant::now();
+    assert_eq!(
+        error(session.navigate(&server.url("/"))),
+        (500, "timeout".into())
+    );
+    assert!(start.elapsed() < Duration::from_secs(10));
     session.delete();
 }
 
