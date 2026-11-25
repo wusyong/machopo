@@ -337,8 +337,8 @@ impl crate::Dom {
 /// A queued script's request that the host sent (`Dom::note_script_sent`):
 /// its URL, the number it was queued by (`ScriptFetch::key`), the document
 /// that asked, its `charset` attribute's label, and whether it is a
-/// module's. The DOM's own record of it, which the host reads its response
-/// by.
+/// module's or a wasm component's. The DOM's own record of it, which the
+/// host reads its response by.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SentScript {
     pub url: String,
@@ -346,6 +346,7 @@ pub struct SentScript {
     pub document: crate::NodeId,
     pub charset: Option<String>,
     pub module: bool,
+    pub wasm: bool,
 }
 
 impl crate::Dom {

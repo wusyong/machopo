@@ -6,7 +6,7 @@
 //! host is told what to do for them (`ScriptEngine::take_frame_requests`). In
 //! the isolate's state: a call that inserts an iframe makes its realm.
 
-use dom::{NodeId, NodeRoot, Window};
+use dom::{Dom, NodeId, NodeRoot, Window};
 use dom_api::{ChildNavigation, FrameId, FrameRequest, FrameToken};
 
 use crate::state::Scope;
@@ -31,6 +31,9 @@ pub(crate) struct Frame {
     pub(crate) initial: bool,
     /// Its realm's modules, from its first module script (`modules`).
     pub(crate) modules: Option<Box<crate::modules::RealmModules>>,
+    /// Its document's loading, the host's to start (`set_document_loader`):
+    /// a new document's frame starts with none.
+    pub(crate) loader: Option<Box<dom_api::DocumentLoader>>,
 }
 
 #[derive(Default)]
@@ -60,6 +63,24 @@ pub(crate) struct Frames {
 impl Frames {
     pub(crate) fn get(&self, id: FrameId) -> Option<&Frame> {
         self.frames.iter().find(|frame| frame.id == id)
+    }
+
+    pub(crate) fn get_mut(&mut self, id: FrameId) -> Option<&mut Frame> {
+        self.frames.iter_mut().find(|frame| frame.id == id)
+    }
+
+    /// The top-level frame's document's title told to the host's frame
+    /// client, if it changed (`dom_api::document_loader::tell_title`).
+    pub(crate) fn tell_title(&mut self, dom: &Dom) {
+        let Self { frames, client, .. } = self;
+        if let Some(client) = client
+            && let Some(loader) = frames
+                .iter_mut()
+                .find(|frame| frame.id == TOP)
+                .and_then(|frame| frame.loader.as_deref_mut())
+        {
+            dom_api::document_loader::tell_title(dom, loader, client.as_mut());
+        }
     }
 
     /// The token of frame `id`, the browser's for the top-level one.
@@ -214,6 +235,7 @@ impl Frame {
             owner,
             initial,
             modules: None,
+            loader: None,
         }
     }
 }
@@ -680,6 +702,40 @@ pub(crate) fn send_script_fetches(state: &mut crate::state::State) {
             Some(frame.document.clone()),
         ))
     });
+    state.frames.load_sink = Some(sink);
+}
+
+/// The sheets of the `<link>`s of the frames' documents not asked for
+/// yet, asked for now through the host's load sink
+/// (`dom_api::send_sheet_fetches`), each from its frame, their media
+/// matched against the host's layout: none without a sink.
+pub(crate) fn send_sheet_fetches(state: &mut crate::state::State) {
+    let Some(mut sink) = state.frames.load_sink.take() else {
+        return;
+    };
+    let documents: Vec<(FrameId, Option<String>, NodeRoot)> = state
+        .frames
+        .iter()
+        .map(|frame| {
+            (
+                frame.id,
+                state.frames.token(frame.id).map(|token| token.to_string()),
+                frame.document.clone(),
+            )
+        })
+        .collect();
+    let mut layout = state.layout.take();
+    for (frame, token, document) in documents {
+        dom_api::send_sheet_fetches(
+            &mut state.dom,
+            layout.as_deref_mut(),
+            sink.as_mut(),
+            frame,
+            token,
+            &document,
+        );
+    }
+    state.layout.set(layout);
     state.frames.load_sink = Some(sink);
 }
 

@@ -10,19 +10,19 @@
 //! iframes' child frames load and show their documents alike
 //! (`render_frame`'s `RenderFrames`, a table of the frames).
 
-use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use compositor::DocumentId;
 use dom::{Dom, NodeRoot};
 use dom_api::FrameLayout as _;
+use dom_api::document_loader::ParseOutcome;
+use dom_api::encoding;
 use dom_api::{
-    ChildNavigation, ClassicScript, DocumentReadiness, FrameId, FrameRequest, KeyInput, KeyResult,
-    MouseAction, MouseInput, Prepared, ScriptEngine, WheelInput,
+    ChildNavigation, DocumentReadiness, FrameId, FrameRequest, KeyInput, KeyResult, MouseAction,
+    MouseInput, ScriptEngine, WheelInput,
 };
 use gfx::PointF;
-use html::parser::{Parser, ParserState, SinkHandle};
 use protocol::control_channel::BrowserSender;
 use protocol::input::{InputEvent, Modifiers, MouseButton};
 use protocol::network::{
@@ -33,17 +33,17 @@ use protocol::renderer::{
 };
 use url::Url;
 
-use super::document_body::{BodyRead, DocumentBody, NavigationBody, ParserInput};
+use super::document_body::{BodyRead, DocumentBody, NavigationBody};
 use super::network_agent::RequestFrame;
 use super::page_agent::{FrameInfo, FrameResources};
 use super::render_frame::NavigationRequest;
 use super::{RenderThread, SwapPromise};
+use crate::document;
 use crate::frame_view::{Frame, FrameView};
 use crate::initiator::Initiator;
 use crate::pending_user_input::PendingUserInputMonitor;
 use crate::svg_image::SvgImage;
 use crate::task_queue::{InternalTask, TaskQueues};
-use crate::{document, encoding};
 
 /// A committed document of the DOM: its navigation (its URL is the
 /// DOM's, `document_url`), its parser until the input is all parsed, its parser-blocking script and
@@ -54,30 +54,27 @@ pub(super) struct FrameDocument {
     frame: FrameId,
     navigation_id: u64,
     /// Its MIME type and markup as they came, for DevTools (the markup
-    /// once its body has all come: its `body`'s until then).
+    /// once its body has all come: the engine's loading of it has it until
+    /// then, `document_source`).
     mime_type: String,
     source: Rc<str>,
-    parser: Option<Parser<dyn ScriptEngine>>,
+    /// Its parser isn't finished (the engine's loading of it has the
+    /// parser, `dom_api::DocumentLoader`).
+    parsing: bool,
     /// Its body, until it has all come and its load has ended: what of it
-    /// comes is handed to the parser, and the parser waits for the rest.
+    /// comes is handed to the engine's loading of the document, whose
+    /// parser waits for the rest.
     body: Option<DocumentBody>,
     /// Its parser has made its body element (or a `<frameset>`): until
     /// then, or the parser's end, it isn't rendered (Blink's
     /// `Document::ShouldScheduleLayout`), so the page before stays.
     body_parsed: bool,
-    /// What came of its body that its parser hasn't been given yet.
-    input: ParserInput,
     /// How many times its parser let the loop's other work run, and
     /// whether it is to parse on in the task it posted (`parse_on`).
     yields: u32,
     parse_due: bool,
     /// Its window's time origin, on the renderer's clock.
     time_origin: f64,
-    /// HTML's "pending parsing-blocking script", and its "list of scripts
-    /// that will execute when the document has finished parsing" (Blink's
-    /// `HTMLParserScriptRunner`'s).
-    blocking_script: Option<ParserScript>,
-    deferred_scripts: std::collections::VecDeque<ParserScript>,
     /// The document; its view is the engine's (`engine_frame`).
     document: NodeRoot,
     /// The DOM's tree version the rendering was last asked for at, and its
@@ -99,20 +96,9 @@ pub(super) struct FrameDocument {
     waiting_for_reftest: bool,
     /// What the document's text was decoded as: its sheets' default.
     encoding: &'static encoding_rs::Encoding,
-    /// The `<link>`s whose sheet was asked for, by element: each loads
-    /// once.
-    requested_links: dom::NodeIdHashSet,
-    /// The `<link>`s' sheets loading, by request: the DOM has their
-    /// numbers too, as its `load` waits for them (`Cx::add_load_request`).
-    /// How far its loading is, is the DOM's (`Cx::load_progress`).
-    pending_sheets: HashMap<u64, PendingSheet>,
     /// When its network goes quiet, for DevTools (Blink's
     /// `IdlenessDetector`, one a frame), from `DOMContentLoaded` on.
     idleness: crate::idleness_detector::IdlenessDetector,
-    /// The title last sent to the browser, and the tree's version it was
-    /// read at.
-    sent_title: Option<String>,
-    title_version: u64,
     /// The subresources it loaded, for DevTools' `Page.getResourceTree`
     /// (shared with what the `Page` agent was told: copied as it changes
     /// after).
@@ -131,49 +117,13 @@ pub(super) struct FrameDocument {
     aborted: bool,
 }
 
-/// A `<link>`'s sheet being fetched: its element, whether it blocks
-/// rendering (one that isn't alternate does), and whether it blocks the
-/// parser's scripts (the document's parser made it: HTML's "script-blocking
-/// style sheet", Blink's pending script-blocking sheets).
-struct PendingSheet {
+/// A `<link>`'s sheet whose response came (the DOM kept what it asked
+/// and blocks, `dom::SentSheet`): its element, the URL asked for (its
+/// `href`), and whether it blocked the parser's scripts.
+struct LoadedSheet {
     link: NodeRoot,
-    /// The URL asked for: the sheet's `href`.
     url: Url,
-    blocking: bool,
     blocks_scripts: bool,
-}
-
-/// A script the parser waits for, or that runs after parsing: its
-/// element, its fetch (none for an inline one), and once it is ready what
-/// it runs (none: it failed to load, `error` is due).
-struct ParserScript {
-    element: NodeRoot,
-    /// A wasm document's wasm script: its response is a component's bytes.
-    wasm: bool,
-    /// A deferred module script: the DOM holds what its graph fetched
-    /// (`Cx::pending_script_fetched`), and the engine runs it.
-    module: bool,
-    request_id: Option<u64>,
-    /// An external one's `charset` attribute's label.
-    charset: Option<String>,
-    ready: Option<Option<ParserSource>>,
-}
-
-/// What the parser's script runs: an inline one's text (the line it
-/// starts on, and its base URL as it was prepared), or what an external
-/// one fetched.
-enum ParserSource {
-    Inline {
-        source: String,
-        line: u32,
-        base_url: Option<String>,
-    },
-    External(dom::LoadedScript),
-    /// A wasm script's component, and its URL after redirects.
-    Wasm {
-        bytes: Vec<u8>,
-        url: String,
-    },
 }
 
 impl FrameDocument {
@@ -183,7 +133,7 @@ impl FrameDocument {
         frame: FrameId,
         mime_type: &str,
         source: Rc<str>,
-        parser: Option<Parser<dyn ScriptEngine>>,
+        parsing: bool,
         document: NodeRoot,
         encoding: &'static encoding_rs::Encoding,
     ) -> Self {
@@ -192,15 +142,12 @@ impl FrameDocument {
             navigation_id: 0,
             mime_type: mime_type.to_owned(),
             source,
-            parser,
+            parsing,
             body: None,
             body_parsed: false,
-            input: ParserInput::default(),
             yields: 0,
             parse_due: false,
             time_origin: 0.0,
-            blocking_script: None,
-            deferred_scripts: std::collections::VecDeque::new(),
             document,
             rendered_version: 0,
             rendered_intersections: 0,
@@ -209,11 +156,7 @@ impl FrameDocument {
             load_finished: false,
             waiting_for_reftest: false,
             encoding,
-            requested_links: dom::NodeIdHashSet::default(),
-            pending_sheets: HashMap::new(),
             idleness: crate::idleness_detector::IdlenessDetector::default(),
-            sent_title: None,
-            title_version: 0,
             resources: Rc::default(),
             initial: false,
             failed: Vec::new(),
@@ -233,7 +176,7 @@ impl FrameDocument {
             frame,
             "text/html",
             Rc::from(""),
-            None,
+            false,
             document,
             encoding_rs::UTF_8,
         )
@@ -246,19 +189,10 @@ impl FrameDocument {
     }
 
     /// Whether it isn't to be rendered yet: a sheet that blocks rendering
-    /// is loading, or its parser is still to make its body (Blink's
-    /// `Document::ShouldScheduleLayout`).
-    fn render_blocked(&self) -> bool {
-        self.pending_sheets.values().any(|sheet| sheet.blocking)
-            || (self.parser.is_some() && !self.body_parsed)
-    }
-
-    /// Its markup as it came, so far while its body comes (a copy then,
-    /// each time DevTools' `Page` agent is told of the frames).
-    fn source(&self) -> Rc<str> {
-        self.body
-            .as_ref()
-            .map_or_else(|| self.source.clone(), |body| Rc::from(body.text()))
+    /// is loading (the DOM's), or its parser is still to make its body
+    /// (Blink's `Document::ShouldScheduleLayout`).
+    fn render_blocked(&self, dom: &Dom) -> bool {
+        (self.parsing && !self.body_parsed) || sheets_block_render(dom, &self.document)
     }
 }
 
@@ -487,8 +421,8 @@ impl RenderThread {
         engine.set_page_focused(self.page_focused);
         // And the page's visibility (a background tab opens hidden).
         engine.set_page_visible(!self.page_hidden);
-        let (body, start) = DocumentBody::new(mime_type, charset, body);
-        let document_encoding = body.encoding();
+        let more = body.pipe.is_some();
+        let (body, start) = DocumentBody::new(body);
         let source: Rc<str> = Rc::from("");
         let document_url =
             Url::parse(&url).unwrap_or_else(|_| Url::parse("about:blank").expect("about:blank"));
@@ -539,6 +473,25 @@ impl RenderThread {
         let document = engine
             .create_window(top, document_url.as_str(), origin)
             .expect("the top-level frame is the engine's");
+        // Its loading: its body decoded as its start says, and parsed.
+        let loading = dom_api::DocumentLoader::new(
+            engine.dom_mut(),
+            &document,
+            false,
+            mime_type,
+            charset,
+            &start,
+            more,
+        );
+        // A wasm document's scripts are wasm (its top-level frame's: it
+        // has no other).
+        let loading = if wasm {
+            loading.with_wasm_scripts()
+        } else {
+            loading
+        };
+        let document_encoding = loading.encoding();
+        engine.set_document_loader(top, loading);
         if let Some(source) = &origin_source {
             engine.inherit_origin(top, &document, source);
         }
@@ -566,7 +519,6 @@ impl RenderThread {
             history.state.as_deref().map(<[u8]>::to_vec),
             history.manual_scroll_restoration,
         );
-        let parser = Parser::new(engine.dom_mut(), &document);
         let node = engine.dom_mut().read(|cx| cx.node_id(document.get(cx.gc)));
         // Its subresources, its scripts' as it parses too, go through the
         // browser's loader for it.
@@ -621,14 +573,7 @@ impl RenderThread {
                 navigation_id,
                 body: Some(body),
                 time_origin,
-                ..FrameDocument::new(
-                    top,
-                    mime_type,
-                    source,
-                    Some(parser),
-                    document,
-                    document_encoding,
-                )
+                ..FrameDocument::new(top, mime_type, source, true, document, document_encoding)
             },
         );
         self.request_main_frame();
@@ -769,7 +714,7 @@ impl RenderThread {
                 frame,
                 "text/html",
                 Rc::from(""),
-                None,
+                false,
                 document,
                 encoding_rs::UTF_8,
             );
@@ -920,6 +865,23 @@ impl RenderThread {
 
     fn doc(&self, frame: FrameId) -> Option<&FrameDocument> {
         self.render_frames.document(frame)
+    }
+
+    /// `frame`'s document's markup as it came: so far while its body comes
+    /// (the engine's loading of it has it, a copy each time DevTools'
+    /// `Page` agent is told of the frames), whole once it has.
+    fn document_source(&mut self, frame: FrameId) -> Rc<str> {
+        let loading = self.doc(frame).is_some_and(|next| next.body.is_some());
+        if loading
+            && let Some(loader) = self
+                .engine
+                .as_mut()
+                .and_then(|engine| engine.document_loader(frame))
+        {
+            return Rc::from(loader.text());
+        }
+        self.doc(frame)
+            .map_or_else(|| Rc::from(""), |next| next.source.clone())
     }
 
     /// The frames whose documents are loading: the top-level one's, then
@@ -1489,8 +1451,8 @@ impl RenderThread {
         let Some(engine) = &mut self.engine else {
             return;
         };
-        let (body, start) = DocumentBody::new(mime_type, charset, body);
-        let document_encoding = body.encoding();
+        let more = body.pipe.is_some();
+        let (body, start) = DocumentBody::new(body);
         // The document it shows unloaded first, its `unload` timed.
         let unloaded = engine
             .unload_document(frame)
@@ -1500,6 +1462,19 @@ impl RenderThread {
         let Some(document) = engine.create_window(frame, url.as_str(), now) else {
             return;
         };
+        // Its loading: its body decoded as its start says, and parsed (an
+        // iframe's `srcdoc` document never in quirks mode).
+        let loading = dom_api::DocumentLoader::new(
+            engine.dom_mut(),
+            &document,
+            url.as_str() == "about:srcdoc",
+            mime_type,
+            charset,
+            &start,
+            more,
+        );
+        let document_encoding = loading.encoding();
+        engine.set_document_loader(frame, loading);
         if let Some(source) = navigation
             .as_ref()
             .and_then(|navigation| navigation.origin_source.as_ref())
@@ -1536,11 +1511,6 @@ impl RenderThread {
                 history.manual_scroll_restoration,
             );
         }
-        let parser = if url.as_str() == "about:srcdoc" {
-            Parser::new_srcdoc(engine.dom_mut(), &document)
-        } else {
-            Parser::new(engine.dom_mut(), &document)
-        };
         let Some((dom, next)) = engine_frame(&mut self.engine) else {
             return;
         };
@@ -1585,7 +1555,7 @@ impl RenderThread {
                     frame,
                     mime_type,
                     Rc::from(""),
-                    Some(parser),
+                    true,
                     document,
                     document_encoding,
                 )
@@ -1617,9 +1587,8 @@ impl RenderThread {
             return;
         };
         let last = body.pipe_mut().is_none();
-        let length = start.len();
-        let markup = body.take(start, last);
-        self.body_data(frame, length, markup);
+        body.take(&start);
+        self.body_data(frame, &start, last);
         self.read_body(frame);
     }
 
@@ -1654,9 +1623,9 @@ impl RenderThread {
                 break;
             }
             match body.read(left) {
-                BodyRead::Data(length, markup) => {
-                    read = read.saturating_add(length);
-                    self.body_data(frame, length, markup);
+                BodyRead::Data(bytes) => {
+                    read = read.saturating_add(bytes.len());
+                    self.body_data(frame, &bytes, false);
                 }
                 BodyRead::Waiting => {
                     if let Some(token) = token
@@ -1666,10 +1635,11 @@ impl RenderThread {
                     }
                     break;
                 }
-                BodyRead::Over(markup) => {
-                    self.body_data(frame, 0, markup);
+                BodyRead::Over => {
+                    self.body_data(frame, &[], true);
                     break;
                 }
+                BodyRead::Ended => break,
             }
         }
         if self
@@ -1709,15 +1679,23 @@ impl RenderThread {
         self.send_harness_results();
     }
 
-    /// `length` bytes of `frame`'s document's body came, which make
-    /// `markup`: it goes to the end of its parser's input, and DevTools
-    /// hears of the bytes of a document it loaded (`Network.dataReceived`,
-    /// Blink's `probe::DidReceiveData`).
-    fn body_data(&mut self, frame: FrameId, length: usize, markup: String) {
+    /// `bytes` of `frame`'s document's body came (`last`: the end of it):
+    /// they go to the engine's loading of the document, which decodes them
+    /// to the end of its parser's input, and DevTools hears of the bytes of
+    /// a document it loaded (`Network.dataReceived`, Blink's
+    /// `probe::DidReceiveData`).
+    fn body_data(&mut self, frame: FrameId, bytes: &[u8], last: bool) {
+        if let Some(loader) = self
+            .engine
+            .as_mut()
+            .and_then(|engine| engine.document_loader(frame))
+        {
+            loader.body_data(bytes, last);
+        }
+        let length = bytes.len();
         let Some(next) = self.doc_mut(frame) else {
             return;
         };
-        next.input.push(markup);
         let navigation_id = next.navigation_id;
         let loaded = next
             .body
@@ -1779,6 +1757,7 @@ impl RenderThread {
     /// DevTools hears it finished (or failed: its parser is aborted once
     /// what came is parsed), and the log has a body that stopped short.
     fn body_ended(&mut self, frame: FrameId) {
+        let source = self.document_source(frame);
         let Some(next) = self.doc_mut(frame) else {
             return;
         };
@@ -1786,7 +1765,17 @@ impl RenderThread {
             return;
         };
         let finished = body.finish();
-        next.source = Rc::from(finished.text);
+        next.source = source;
+        if let Some(loader) = self
+            .engine
+            .as_mut()
+            .and_then(|engine| engine.document_loader(frame))
+        {
+            loader.body_ended();
+        }
+        let Some(next) = self.doc_mut(frame) else {
+            return;
+        };
         let navigation_id = next.navigation_id;
         let time_origin = next.time_origin;
         let mime_type = next.mime_type.clone();
@@ -1858,306 +1847,71 @@ impl RenderThread {
         self.request_main_frame();
     }
 
-    /// Parses the DOM's document until a script must be fetched or the
-    /// input is all parsed, running each parser-inserted classic script as
-    /// the parser stops at it (HTML's "parser pause"): an inline one at
-    /// once, an external one once fetched (`resource`), neither while
-    /// a stylesheet that blocks scripts loads; a deferred one fetched to
-    /// run after parsing (`run_deferred_scripts`), one that waits for
-    /// no parser queued in the DOM.
+    /// Parses `frame`'s document for a run of its budget (the engine's
+    /// loading of it, `dom_api::document_loader::parse`: the parser's
+    /// scripts run as it stops at them, each once it is ready), then what
+    /// came of it: the frames its iframes made and the loads of its
+    /// `<link>`s start (so its sheets block its rendering before a frame
+    /// comes), and, as it stopped, it parses on in a task of its own, or is
+    /// parsed (HTML's "the end", `document_parsed`).
     pub(super) fn advance_document(&mut self, frame: FrameId) {
-        // This run's budget, once the document has its body.
-        let started = std::time::Instant::now();
         let parser_budget = self.parser_budget;
-        let mut budget = match self.doc_mut(frame) {
-            Some(next) => {
+        let budget = match self.doc_mut(frame) {
+            Some(next) if next.parsing => {
                 next.parse_due = false;
                 parser_budget.of_run(next.yields)
             }
-            None => return,
+            _ => return,
         };
-        // Whether the run has given the parser a slice: it lets other work
-        // run only after (Blink's, after a token).
-        let mut gave = false;
-        loop {
-            self.start_loads();
-            self.handle_frame_requests();
-            if self.engine.is_none() {
-                return;
-            }
-            if self
-                .doc(frame)
-                .is_some_and(|next| next.blocking_script.is_some())
-            {
-                if !self.script_ready(frame, |next| next.blocking_script.as_ref()) {
-                    return;
-                }
-                let Some(script) = self
-                    .doc_mut(frame)
-                    .and_then(|next| next.blocking_script.take())
-                else {
-                    return;
-                };
-                self.execute_parser_script(frame, script);
-                // Having run a script in the body, it is to let other work
-                // run soon (Blink's `kHaveTokensAfterScript`).
-                if self.doc(frame).is_some_and(|next| next.body_parsed) {
-                    budget =
-                        budget.min(started.elapsed().saturating_add(self.parser_budget.budget));
-                }
-                continue;
-            }
-            let Some(next) = self.doc_mut(frame) else {
-                return;
-            };
-            let Some(mut parser) = next.parser.take() else {
-                return;
-            };
-            // The engine lent to the parser for its run (it constructs the
-            // custom elements it defines at once), and given back.
-            let lent = self.engine.take().expect("the engine, checked above");
-            let (state, engine) = parser.resume(lent);
-            self.engine = Some(engine);
-            self.note_body_parsed(frame);
-            match state {
-                ParserState::NeedsInput => {
-                    let input_waits = self.scheduler.has_task(TaskQueues::INPUT);
-                    let slice = self.parser_budget.slice_bytes;
-                    let Some(next) = self.doc_mut(frame) else {
-                        return;
-                    };
-                    if !next.input.is_empty() {
-                        // Its run's budget spent, or input waiting, it lets
-                        // the loop's other work run, once it has its body
-                        // (Blink's `PumpTokenizer`); else the next slice.
-                        if gave && next.body_parsed && (started.elapsed() >= budget || input_waits)
-                        {
-                            next.yields = next.yields.saturating_add(1);
-                            next.parse_due = true;
-                        } else {
-                            next.input.give(slice, |text| parser.push(text));
-                            gave = true;
-                        }
-                        let yielded = next.parse_due;
-                        next.parser = Some(parser);
-                        if yielded {
-                            // It parses on in a task of its own (Blink's
-                            // `SchedulePumpTokenizer`).
-                            self.scheduler
-                                .post_internal(InternalTask::ParseOn { frame });
-                            self.parser_stopped();
-                            return;
-                        }
-                        continue;
-                    }
-                    // The rest of its body is still to come: the parser
-                    // waits for it (`read_body`).
-                    if next.body.is_some() {
-                        next.parser = Some(parser);
-                        self.parser_stopped();
-                        return;
-                    }
-                    if let Some(engine) = self.engine.take() {
-                        self.engine = Some(parser.finish(engine));
-                    }
-                    // Parsed: it may be rendered now, body or not.
-                    self.update_child_blocking(frame);
-                    self.request_main_frame();
-                    self.handle_frame_requests();
-                    // The `<link>`s the last of the input brought start
-                    // loading first: the deferred scripts wait for them.
-                    self.start_loads();
-                    if self.doc(frame).is_some_and(|next| next.aborted) {
-                        self.document_aborted(frame);
-                    } else {
-                        self.document_parsed(frame);
-                    }
-                    return;
-                }
-                ParserState::Script { element, line } => {
-                    // The title parsed so far goes before the script runs
-                    // (Blink tells it as its `<title>` ends; a script may
-                    // set another at once).
-                    self.update_title();
-                    let Some(next) = self.doc_mut(frame) else {
-                        return;
-                    };
-                    next.parser = Some(parser);
-                    let script = element.root().clone();
-                    // HTML's "an end tag whose tag name is script": a
-                    // microtask checkpoint first, so the mutation observers
-                    // hear of what the parser inserted before the script is
-                    // prepared (Blink's
-                    // `HTMLParserScriptRunner::ProcessScriptElement`).
-                    if let Some(engine) = &mut self.engine {
-                        engine.perform_microtask_checkpoint();
-                    }
-                    let line = u32::try_from(line).unwrap_or(u32::MAX);
-                    match self.prepare_script(frame, &element) {
-                        Prepared::Nothing | Prepared::Queued => {}
-                        Prepared::Inline { source, base_url } => {
-                            let ready = Some(Some(ParserSource::Inline {
-                                source,
-                                line,
-                                base_url,
-                            }));
-                            if let Some(next) = self.doc_mut(frame) {
-                                next.blocking_script = Some(ParserScript {
-                                    element: script,
-                                    wasm: false,
-                                    module: false,
-                                    request_id: None,
-                                    charset: None,
-                                    ready,
-                                });
-                            }
-                        }
-                        Prepared::Blocking(request) => {
-                            self.fetch_parser_script(frame, script, &request, false)
-                        }
-                        Prepared::Defer(request) => {
-                            self.fetch_parser_script(frame, script, &request, true)
-                        }
-                        Prepared::Wasm(request) => {
-                            self.fetch_parser_script(frame, script, &request, true);
-                            if let Some(script) = self
-                                .doc_mut(frame)
-                                .and_then(|next| next.deferred_scripts.back_mut())
-                            {
-                                script.wasm = true;
-                            }
-                        }
-                        Prepared::Module(start) => {
-                            self.start_parser_module(frame, script, start, line)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// The parser's external script `element` fetched (`request`): the
-    /// parser waits for it, or (`defer`) it runs after parsing, in order.
-    fn fetch_parser_script(
-        &mut self,
-        frame: FrameId,
-        element: NodeRoot,
-        request: &dom::ScriptRequest,
-        defer: bool,
-    ) {
-        // The parser's element, for DevTools (no one looks otherwise).
-        let asker = self
-            .engine
-            .as_mut()
-            .filter(|_| self.network_agent.enabled())
-            .map_or(dom::LoadInitiator::Other, |engine| {
-                let id = engine.dom_mut().read(|cx| cx.node_id(element.get(cx.gc)));
-                dom::LoadInitiator::Element(id)
-            });
-        let request_id = self.fetch_script(frame, request, asker);
-        let Some(next) = self.doc_mut(frame) else {
+        let Some(lent) = self.engine.take() else {
             return;
         };
-        let script = ParserScript {
-            element,
-            wasm: false,
-            module: false,
-            request_id: Some(request_id),
-            charset: request.charset.clone(),
-            ready: None,
-        };
-        if defer {
-            next.deferred_scripts.push_back(script);
-        } else {
-            next.blocking_script = Some(script);
-        }
-    }
-
-    /// The parser's module script `element` (`start`, its inline text from
-    /// `line`): its graph fetched by the engine; a deferred one runs after
-    /// parsing in its turn, an `async` one as soon as it can (the DOM's).
-    fn start_parser_module(
-        &mut self,
-        frame: FrameId,
-        element: NodeRoot,
-        mut start: dom_api::ModuleStart,
-        line: u32,
-    ) {
-        if let dom_api::ModuleSource::Inline { line: at, .. } = &mut start.source {
-            *at = line;
-        }
-        let deferred = start.deferred;
-        let Some(document) = self.doc(frame).map(|next| next.document.clone()) else {
-            return;
-        };
-        if deferred && let Some(next) = self.doc_mut(frame) {
-            next.deferred_scripts.push_back(ParserScript {
-                element,
-                wasm: false,
-                module: true,
-                request_id: None,
-                charset: None,
-                ready: None,
-            });
-        }
-        if let Some(engine) = &mut self.engine {
-            engine.start_module_graph(&document, start);
-        }
-    }
-
-    /// Whether the parser's script `which` picks is ready to run: fetched
-    /// (a module script's graph, the DOM says), and no stylesheet that
-    /// blocks scripts is loading.
-    fn script_ready(
-        &mut self,
-        frame: FrameId,
-        which: impl FnOnce(&FrameDocument) -> Option<&ParserScript>,
-    ) -> bool {
-        let Some(next) = self.doc(frame) else {
-            return false;
-        };
-        // A sheet stops blocking them once script removed its `<link>` or
-        // made it no stylesheet, though it still loads (Blink's
-        // `StyleEngine::RemovePendingBlockingSheet`, as the link goes).
-        let blocking: Vec<NodeRoot> = next
-            .pending_sheets
-            .values()
-            .filter(|sheet| sheet.blocks_scripts)
-            .map(|sheet| sheet.link.clone())
-            .collect();
-        if !blocking.is_empty() {
-            let document = next.document.clone();
-            let blocked = self.engine.as_mut().is_some_and(|engine| {
-                engine.dom_mut().read(|cx| {
-                    let document = document.get(cx.gc);
-                    blocking.iter().any(|link| {
-                        let link = link.get(cx.gc);
-                        cx.is_connected(link)
-                            && cx.containing_shadow_root(link).is_none()
-                            && cx.node_id(cx.document_of(link)) == cx.node_id(document)
-                            && cx.stylesheet_link_href(link).is_some()
-                    })
-                })
-            });
-            if blocked {
-                return false;
+        let scheduler = self.scheduler.clone();
+        let input_waits = move || scheduler.has_task(TaskQueues::INPUT);
+        let (outcome, engine) = dom_api::document_loader::parse(
+            lent,
+            frame,
+            &dom_api::document_loader::ParseRun {
+                budget,
+                after_script: parser_budget.budget,
+                slice: parser_budget.slice_bytes,
+                input_waits: &input_waits,
+            },
+        );
+        self.engine = Some(engine);
+        self.note_body_parsed(frame);
+        self.handle_frame_requests();
+        self.send_harness_results();
+        match outcome {
+            ParseOutcome::Stopped => {}
+            ParseOutcome::WaitsForScript | ParseOutcome::WaitsForBody => self.parser_stopped(),
+            ParseOutcome::Yielded => {
+                if let Some(next) = self.doc_mut(frame) {
+                    next.yields = next.yields.saturating_add(1);
+                    next.parse_due = true;
+                }
+                self.scheduler
+                    .post_internal(InternalTask::ParseOn { frame });
+                self.parser_stopped();
+            }
+            ParseOutcome::Parsed => {
+                if let Some(next) = self.doc_mut(frame) {
+                    next.parsing = false;
+                }
+                // Parsed: it may be rendered now, body or not.
+                self.update_child_blocking(frame);
+                self.request_main_frame();
+                self.handle_frame_requests();
+                // The `<link>`s the last of the input brought start
+                // loading first: the deferred scripts wait for them.
+                self.start_loads();
+                if self.doc(frame).is_some_and(|next| next.aborted) {
+                    self.document_aborted(frame);
+                } else {
+                    self.document_parsed(frame);
+                }
             }
         }
-        let Some(next) = self.doc(frame) else {
-            return false;
-        };
-        let Some(script) = which(next) else {
-            return false;
-        };
-        if !script.module {
-            return script.ready.is_some();
-        }
-        let element = script.element.clone();
-        self.engine.as_mut().is_some_and(|engine| {
-            engine
-                .dom_mut()
-                .read(|cx| cx.pending_script_fetched(element.get(cx.gc)))
-        })
     }
 
     /// The parser's scripts that wait for a sheet that blocks scripts, tried
@@ -2165,50 +1919,11 @@ impl RenderThread {
     /// it no stylesheet, so they run without waiting for its response.
     /// Whether a parser's scripts wait for a sheet that blocks scripts.
     pub(super) fn scripts_wait_for_sheets(&mut self) -> bool {
-        let Self {
-            render_frames,
-            engine,
-            ..
-        } = self;
-        let Some(engine) = engine else {
-            return false;
-        };
-        let dom = engine.dom_mut();
-        render_frames.documents().any(|next| {
-            (next.blocking_script.is_some()
-                || dom.read(|cx| cx.load_progress(next.document.get(cx.gc)))
-                    == dom::LoadProgress::Deferring)
-                && next
-                    .pending_sheets
-                    .values()
-                    .any(|sheet| sheet.blocks_scripts)
-        })
+        !self.scripts_blocked_by_sheets().is_empty()
     }
 
     pub(super) fn retry_scripts_blocked_by_sheets(&mut self) {
-        let Self {
-            render_frames,
-            engine,
-            ..
-        } = self;
-        let Some(engine) = engine else {
-            return;
-        };
-        let dom = engine.dom_mut();
-        let waiting: Vec<(FrameId, bool)> = render_frames
-            .documents()
-            .filter(|next| {
-                (next.blocking_script.is_some()
-                    || dom.read(|cx| cx.load_progress(next.document.get(cx.gc)))
-                        == dom::LoadProgress::Deferring)
-                    && next
-                        .pending_sheets
-                        .values()
-                        .any(|sheet| sheet.blocks_scripts)
-            })
-            .map(|next| (next.frame, next.blocking_script.is_some()))
-            .collect();
-        for (frame, parser_blocked) in waiting {
+        for (frame, parser_blocked) in self.scripts_blocked_by_sheets() {
             if parser_blocked {
                 self.advance_document(frame);
             } else {
@@ -2217,164 +1932,34 @@ impl RenderThread {
         }
     }
 
-    /// HTML's "execute the script element" for the parser's script: none if
-    /// script moved it to another document meanwhile; its `error` if it
-    /// failed to load; else it runs (an external one from its response's
-    /// URL, then its `load`).
-    fn execute_parser_script(&mut self, frame: FrameId, script: ParserScript) {
-        // A module script's, the engine's (which looks at where it is).
-        if script.module {
-            if let Some(engine) = &mut self.engine {
-                engine.run_ready_script(&script.element);
-            }
-            self.send_harness_results();
-            return;
-        }
-        let Some(next) = self.doc(frame) else {
-            return;
+    /// The frames whose parser's script, or deferred scripts, a sheet that
+    /// blocks scripts may hold back: whether it is the parser's.
+    fn scripts_blocked_by_sheets(&mut self) -> Vec<(FrameId, bool)> {
+        let Self {
+            render_frames,
+            engine,
+            ..
+        } = self;
+        let Some(engine) = engine else {
+            return Vec::new();
         };
-        let document = next.document.clone();
-        let Some(url) = self.document_url(frame) else {
-            return;
-        };
-        let Some(engine) = &mut self.engine else {
-            return;
-        };
-        let moved = engine.dom_mut().read(|cx| {
-            cx.node_id(cx.document_of(script.element.get(cx.gc))) != cx.node_id(document.get(cx.gc))
-        });
-        if moved {
-            return;
-        }
-        match script.ready.flatten() {
-            None => {
-                engine.fire_event(&script.element, dom::names::event::ERROR);
-                self.send_harness_results();
-            }
-            Some(ParserSource::Inline {
-                source,
-                line,
-                base_url,
-            }) => {
-                self.run_script(
-                    frame,
-                    &script.element,
-                    &ClassicScript {
-                        source: &source,
-                        url: url.as_str(),
-                        base_url: base_url.as_deref(),
-                        line,
-                        muted: false,
-                        use_credentials: false,
-                    },
-                );
-            }
-            Some(ParserSource::Wasm { bytes, url }) => {
-                engine.run_wasm_script(
-                    frame,
-                    &dom_api::WasmScript {
-                        bytes: &bytes,
-                        url: &url,
-                    },
-                );
-                engine.fire_event(&script.element, dom::names::event::LOAD);
-                self.send_harness_results();
-                self.request_main_frame();
-            }
-            Some(ParserSource::External(loaded)) => {
-                self.run_script(
-                    frame,
-                    &script.element,
-                    &ClassicScript {
-                        source: &loaded.source,
-                        url: &loaded.url,
-                        base_url: None,
-                        line: 1,
-                        muted: loaded.muted,
-                        use_credentials: false,
-                    },
-                );
-                if let Some(engine) = &mut self.engine {
-                    engine.fire_event(&script.element, dom::names::event::LOAD);
-                }
-                self.send_harness_results();
-            }
-        }
-    }
-
-    /// HTML's "prepare the script element" for a parser-inserted script
-    /// (`dom_api::prepare_script`), in the document the parser is
-    /// for: one script moved to another document meanwhile doesn't run.
-    fn prepare_script(&mut self, frame: FrameId, element: &SinkHandle) -> Prepared {
-        let Some(document) = self.doc(frame).map(|next| next.document.clone()) else {
-            return Prepared::Nothing;
-        };
-        // A wasm document's scripts are wasm (its top-level frame's: it
-        // has no other).
-        let wasm = self.engine_is_wasm;
-        let Some(engine) = &mut self.engine else {
-            return Prepared::Nothing;
-        };
-        engine.dom_mut().mutate(|cx| {
-            let script = element.root().get(cx.gc);
-            if cx.node_id(cx.document_of(script)) != cx.node_id(document.get(cx.gc)) {
-                return Prepared::Nothing;
-            }
-            if wasm {
-                dom_api::prepare_wasm_script(cx, script)
-            } else {
-                dom_api::prepare_script(cx, script)
-            }
-        })
-    }
-
-    /// Runs `classic`, the classic script of element `script` of the new
-    /// DOM's document (its credentials mode the element's), a microtask checkpoint before it (the tree builder's at a
-    /// script's end tag: what the parser changed reaches the mutation
-    /// observers first) and after it (HTML's "clean up after running
-    /// script"), the document's `currentScript` it meanwhile (HTML's
-    /// "execute the script element": none for one in a shadow tree), and
-    /// reports testharness's results if it gave any.
-    fn run_script(&mut self, frame: FrameId, script: &NodeRoot, classic: &ClassicScript<'_>) {
-        let Some(engine) = &mut self.engine else {
-            return;
-        };
-        engine.perform_microtask_checkpoint();
-        // The document it was set on gets it back, if the script moved
-        // the element meanwhile.
-        let (document, before, use_credentials) = engine.dom_mut().mutate(|cx| {
-            let script = script.get(cx.gc);
-            let document = cx.document_of(script);
-            let current = cx
-                .containing_shadow_root(script)
-                .is_none()
-                .then_some(script);
-            let before = cx
-                .set_current_script(document, current)
-                .map(|before| cx.root(before));
-            (
-                cx.root(document),
-                before,
-                dom_api::uses_credentials(cx, script),
-            )
-        });
-        // Its fetch options' credentials mode, its element's as it runs.
-        engine.run_classic_script(
-            frame,
-            &ClassicScript {
-                use_credentials,
-                ..*classic
-            },
-        );
-        engine.dom_mut().mutate(|cx| {
-            cx.set_current_script(
-                document.get(cx.gc),
-                before.as_ref().map(|before| before.get(cx.gc)),
-            );
-        });
-        engine.perform_microtask_checkpoint();
-        self.handle_frame_requests();
-        self.send_harness_results();
+        let documents: Vec<(FrameId, NodeRoot)> = render_frames
+            .documents()
+            .map(|next| (next.frame, next.document.clone()))
+            .collect();
+        documents
+            .into_iter()
+            .filter_map(|(frame, document)| {
+                let parser_blocked = engine
+                    .document_loader(frame)
+                    .is_some_and(|loader| loader.waits_for_script());
+                let dom = engine.dom_mut();
+                let deferring = dom.read(|cx| cx.load_progress(document.get(cx.gc)))
+                    == dom::LoadProgress::Deferring;
+                ((parser_blocked || deferring) && sheets_pending_for_scripts(dom, &document))
+                    .then_some((frame, parser_blocked))
+            })
+            .collect()
     }
 
     /// HTML's "the end", once the document is parsed and its
@@ -2402,13 +1987,12 @@ impl RenderThread {
     /// parser ends what it has as at the end of its input: html5ever has
     /// no abort, which would only pop the elements open.)
     fn document_aborted(&mut self, frame: FrameId) {
-        let Some(next) = self.doc_mut(frame) else {
+        let Some(document) = self.doc(frame).map(|next| next.document.clone()) else {
             return;
         };
-        next.deferred_scripts.clear();
         // Its load over, before its `readystatechange`: no one waits for it.
-        let document = next.document.clone();
         if let Some(engine) = &mut self.engine {
+            dom_api::document_loader::abort_scripts(engine.as_mut(), frame);
             engine
                 .dom_mut()
                 .mutate(|cx| cx.set_load_ended(document.get(cx.gc)));
@@ -2443,26 +2027,21 @@ impl RenderThread {
     /// none is left, `DOMContentLoaded`, then complete and the window's
     /// `load` once nothing delays it (`finish_load`).
     fn run_deferred_scripts(&mut self, frame: FrameId) {
-        loop {
-            if self.load_progress(frame) != Some(dom::LoadProgress::Deferring) {
-                return;
-            }
-            let Some(next) = self.doc(frame) else {
-                return;
-            };
-            if next.deferred_scripts.is_empty() {
-                break;
-            }
-            if !self.script_ready(frame, |next| next.deferred_scripts.front()) {
-                return;
-            }
-            let Some(script) = self
-                .doc_mut(frame)
-                .and_then(|next| next.deferred_scripts.pop_front())
-            else {
-                return;
-            };
-            self.execute_parser_script(frame, script);
+        if self.load_progress(frame) != Some(dom::LoadProgress::Deferring) {
+            return;
+        }
+        let Some(engine) = &mut self.engine else {
+            return;
+        };
+        let done = dom_api::document_loader::run_deferred_scripts(engine.as_mut(), frame);
+        self.handle_frame_requests();
+        self.send_harness_results();
+        // A wasm script may have drawn.
+        if self.engine_is_wasm {
+            self.request_main_frame();
+        }
+        if !done || self.load_progress(frame) != Some(dom::LoadProgress::Deferring) {
+            return;
         }
         let top = self.is_top(frame);
         let Some(engine) = &mut self.engine else {
@@ -2482,27 +2061,6 @@ impl RenderThread {
         }
         self.tell_lifecycle(frame, "DOMContentLoaded", ipc::TimeTicks::now());
         self.finish_load(frame);
-    }
-
-    /// A classic script of `frame`'s document fetched (`request`, HTML's
-    /// "fetch a classic script"): from the document's origin (the network
-    /// service taints another origin's `no-cors` response opaque: its
-    /// errors are muted), by CORS with `crossorigin`'s credentials mode;
-    /// `asker` asked for it. The request's number.
-    fn fetch_script(
-        &mut self,
-        frame: FrameId,
-        request: &dom::ScriptRequest,
-        asker: dom::LoadInitiator,
-    ) -> u64 {
-        let initiator = self.document_origin(frame);
-        let mut fetching = ResourceRequest::new(&request.url, RequestDestination::Script);
-        fetching.initiator = initiator;
-        if let Some(cors) = request.cors {
-            fetching.mode = RequestMode::Cors;
-            fetching.credentials = crate::loader::script_credentials(cors);
-        }
-        self.send_request_with_initiator(frame, fetching, |this| this.initiator(frame, &asker))
     }
 
     /// The scripts the DOM queued that wait for no parser
@@ -2689,28 +2247,13 @@ impl RenderThread {
 
     /// The tab's title, the DOM's document's (Blink's
     /// `Document::UpdateTitle` and `DispatchDidReceiveTitle`), after each
-    /// task: read again once the tree changed, sent if it differs from the
-    /// last one sent (the first, empty or not, at once: the browser shows
-    /// the URL for an empty one, as before any).
+    /// task: told by the engine through the frame client if it differs
+    /// from the last one told (`ScriptEngine::tell_title`: the first,
+    /// empty or not, at once; the browser shows the URL for an empty one,
+    /// as before any).
     pub(super) fn update_title(&mut self) {
-        let (Some(engine), Some(next)) = (&mut self.engine, self.render_frames.top_document_mut())
-        else {
-            return;
-        };
-        let version = engine.dom_mut().read(|cx| cx.tree_version());
-        if next.sent_title.is_some() && version == next.title_version {
-            return;
-        }
-        next.title_version = version;
-        let document = &next.document;
-        let title = engine
-            .dom_mut()
-            .read(|cx| dom_api::document_title(&dom_api::ApiCx::new(cx), document.get(cx.gc)));
-        if next.sent_title.as_deref() != Some(title.as_str()) {
-            let _ = self
-                .to_browser
-                .send(RendererHostMsg::UpdateTitle(title.clone()));
-            next.sent_title = Some(title);
+        if let Some(engine) = &mut self.engine {
+            engine.tell_title();
         }
     }
 
@@ -2718,13 +2261,14 @@ impl RenderThread {
     /// them, once DevTools gave the frame its token.
     pub(super) fn frame_info(&mut self) -> Option<FrameInfo> {
         let url = self.top_document_url()?;
+        let source = self.document_source(self.render_frames.top()?);
         let next = self.render_frames.top_document()?;
         main_frame_info(
             self.render_frames.top_token(),
             next.navigation_id,
             &url,
             &next.mime_type,
-            &next.source(),
+            &source,
             &next.resources,
         )
     }
@@ -2852,10 +2396,11 @@ impl RenderThread {
     ) -> Option<FrameInfo> {
         let navigating = self.render_frames.navigation(frame).is_some();
         let id = self.frame_id(frame);
+        let source = self.document_source(frame);
         let committed = self.doc(frame).map(|next| {
             (
                 next.mime_type.clone(),
-                next.source(),
+                source,
                 next.resources.clone(),
                 next.initial,
             )
@@ -2962,35 +2507,24 @@ impl RenderThread {
         })
     }
 
-    /// The requests in flight that `frame`'s document (`document`) made
-    /// (its document's `ResourceFetcher`'s, as Blink's `IdlenessDetector`
-    /// counts): its sheets, its parser's scripts and those its DOM queued,
-    /// the images it asked for first, its `fetch()`es. Not a child frame's
-    /// `src` (its own document's request).
-    fn requests_in_flight(&mut self, frame: FrameId, document: dom::NodeId) -> usize {
-        // Before its document is borrowed: the DOM has them, its images
-        // too.
-        let (fetches, images, queued) = self.engine.as_mut().map_or((0, 0, 0), |engine| {
-            let dom = engine.dom_mut();
-            (
-                dom.sent_fetches_of(document),
-                dom.sent_images_of(document),
-                dom.sent_scripts_of(document),
-            )
-        });
-        let Some(next) = self.doc(frame) else {
-            return 0;
-        };
-        let parser = next
-            .blocking_script
-            .iter()
-            .chain(&next.deferred_scripts)
-            .filter(|script| script.request_id.is_some() && script.ready.is_none())
-            .count();
+    /// The requests in flight that `document` made (its
+    /// `ResourceFetcher`'s, as Blink's `IdlenessDetector` counts): its
+    /// sheets, its scripts (the parser's and the others), the images it
+    /// asked for first, its `fetch()`es, as the DOM records them. Not a
+    /// child frame's `src` (its own document's request).
+    fn requests_in_flight(&mut self, document: dom::NodeId) -> usize {
+        let (fetches, images, queued, sheets) =
+            self.engine.as_mut().map_or((0, 0, 0, 0), |engine| {
+                let dom = engine.dom_mut();
+                (
+                    dom.sent_fetches_of(document),
+                    dom.sent_images_of(document),
+                    dom.sent_scripts_of(document),
+                    dom.sent_sheets_of(document),
+                )
+            });
         // Each fewer than the requests the renderer has made.
-        next.pending_sheets
-            .len()
-            .saturating_add(parser)
+        sheets
             .saturating_add(queued)
             .saturating_add(images)
             .saturating_add(fetches)
@@ -3018,7 +2552,7 @@ impl RenderThread {
         let now = ipc::TimeTicks::now();
         let mut due = Vec::new();
         for (frame, document) in documents {
-            let active = self.requests_in_flight(frame, document);
+            let active = self.requests_in_flight(document);
             if let Some(next) = self.doc_mut(frame) {
                 due.extend(
                     next.idleness
@@ -3052,157 +2586,20 @@ impl RenderThread {
     /// loads start before the document is complete and include what
     /// script added.
     fn start_loads(&mut self) {
+        if let Some(engine) = &mut self.engine {
+            engine.send_sheet_fetches();
+        }
         for frame in self.frames() {
-            self.start_loads_of(frame);
+            self.update_child_blocking(frame);
         }
-    }
-
-    /// `start_loads` for the document loading in `frame`: its tree's
-    /// `<link>`s, and those of the shadow trees in it.
-    fn start_loads_of(&mut self, frame: FrameId) {
-        let Some(next) = self.doc(frame) else {
-            return;
-        };
-        let document = next.document.clone();
-        let requested = next.requested_links.clone();
-        let Some(engine) = &mut self.engine else {
-            return;
-        };
-        let links: Vec<LinkToLoad> = engine.dom_mut().read(|cx| {
-            let document = document.get(cx.gc);
-            let mut roots: Vec<(dom::NodeRef<'_>, bool)> = cx
-                .sheet_changed_roots(document)
-                .into_iter()
-                .map(|root| (root, true))
-                .collect();
-            if cx
-                .style_flags(document)
-                .contains(dom::StyleFlags::STYLE_SHEETS_CHANGED)
-            {
-                roots.insert(0, (document, false));
-            }
-            let mut links = Vec::new();
-            for (root, in_shadow) in roots {
-                let mut node = cx.first_child(root);
-                while let Some(at) = node {
-                    if let Some(href) = cx.stylesheet_link_href(at) {
-                        let id = cx.node_id(at);
-                        if !requested.contains(&id) {
-                            // HTML's CORS settings attribute: by CORS with
-                            // one, `use-credentials` including them.
-                            let cors = cx.get_attribute(at, "crossorigin").map(|value| {
-                                if value.to_str().eq_ignore_ascii_case("use-credentials") {
-                                    CredentialsMode::Include
-                                } else {
-                                    CredentialsMode::SameOrigin
-                                }
-                            });
-                            links.push(LinkToLoad {
-                                link: cx.root(at),
-                                id,
-                                href,
-                                cors,
-                                blocks_nothing: in_shadow || cx.is_alternate_stylesheet(at),
-                                // The document's parser made it: it blocks
-                                // the parser's scripts while it loads.
-                                parsers: cx.script_flags(at).parser_inserted,
-                                media: cx
-                                    .get_attribute(at, "media")
-                                    .map(|media| media.to_str().into_owned()),
-                            });
-                        }
-                    }
-                    node = next_in_tree_order(cx, at, root);
-                }
-            }
-            links
-        });
-        for LinkToLoad {
-            link,
-            id,
-            href,
-            cors,
-            blocks_nothing,
-            parsers,
-            media,
-        } in links
-        {
-            // The parser's, for media that match as it starts loading:
-            // the parser's scripts wait for it (HTML's "a style sheet that
-            // is blocking scripts"; Blink's `PendingSheetType::kBlocking`
-            // looks at its media then too). A child frame given no size
-            // yet matches, so its scripts may as well wait.
-            let blocks_scripts = !blocks_nothing
-                && parsers
-                && media.is_none_or(|media| {
-                    let Some((dom, top)) = engine_frame(&mut self.engine) else {
-                        return true;
-                    };
-                    let document = dom.read(|cx| cx.node_id(cx.document_of(link.get(cx.gc))));
-                    top.media_environment(document).is_none_or(|environment| {
-                        css::media::MediaQueryList::parse(&media).matches(&environment)
-                    })
-                });
-            // Against the document's base URL.
-            let Some(document) = self.doc(frame).map(|next| next.document.clone()) else {
-                return;
-            };
-            let url = self.engine.as_mut().and_then(|engine| {
-                engine
-                    .dom_mut()
-                    .read(|cx| cx.resolve_url(document.get(cx.gc), href.trim()))
-            });
-            let initiator = self.document_origin(frame);
-            let Some(next) = self.doc_mut(frame) else {
-                return;
-            };
-            next.requested_links.insert(id);
-            let Some(url) = url else {
-                next.failed.push(href);
-                continue;
-            };
-            let mut request = ResourceRequest::new(url.as_str(), RequestDestination::Style);
-            request.initiator = initiator;
-            // By CORS, which an origin that allows it makes origin-clean
-            // (and one that doesn't, a network error).
-            if let Some(credentials) = cors {
-                request.mode = RequestMode::Cors;
-                request.credentials = credentials;
-            }
-            let request_id = self.send_request_with_initiator(frame, request, |this| {
-                this.initiator(frame, &dom::LoadInitiator::Element(id))
-            });
-            let Some(next) = self.doc_mut(frame) else {
-                return;
-            };
-            // An alternate one (or a shadow tree's) loads, but blocks
-            // nothing.
-            let document = next.document.clone();
-            next.pending_sheets.insert(
-                request_id,
-                PendingSheet {
-                    link,
-                    url,
-                    blocking: !blocks_nothing,
-                    blocks_scripts,
-                },
-            );
-            // Its document's `load` waits for it.
-            if let Some(engine) = &mut self.engine {
-                engine
-                    .dom_mut()
-                    .mutate(|cx| cx.add_load_request(document.get(cx.gc), request_id));
-            }
-        }
-        self.update_child_blocking(frame);
     }
 
     /// Whether a sheet that blocks rendering is loading, or the parser
     /// hasn't made the body yet: no frame till then.
-    pub(super) fn render_blocked(&self) -> bool {
+    pub(super) fn render_blocked(&mut self) -> bool {
         self.render_frames
-            .top_document()
-            .is_some_and(FrameDocument::render_blocked)
+            .top()
+            .is_some_and(|top| self.frame_render_blocked(top))
     }
 
     /// A child frame's view told whether a sheet blocks its rendering, as
@@ -3222,8 +2619,19 @@ impl RenderThread {
 
     /// Whether `frame`'s document waits for a sheet that blocks its
     /// rendering (`render_blocked`'s, for any frame).
-    fn frame_render_blocked(&self, frame: FrameId) -> bool {
-        self.doc(frame).is_some_and(FrameDocument::render_blocked)
+    fn frame_render_blocked(&mut self, frame: FrameId) -> bool {
+        let Self {
+            render_frames,
+            engine,
+            ..
+        } = self;
+        let Some(next) = render_frames.document(frame) else {
+            return false;
+        };
+        match engine {
+            Some(engine) => next.render_blocked(engine.dom_mut()),
+            None => next.parsing && !next.body_parsed,
+        }
     }
 
     /// The main frame's document, which can't be drawn yet, shown empty in
@@ -3899,7 +3307,9 @@ impl RenderThread {
         let navigation_id = next.navigation_id;
         if std::mem::take(&mut next.load_finished) {
             next.waiting_for_reftest = reftest_wait;
-            let failed_subresources = std::mem::take(&mut next.failed);
+            let mut failed_subresources = std::mem::take(&mut next.failed);
+            failed_subresources
+                .extend(dom.read(|cx| cx.take_failed_sheets(next.document.get(cx.gc))));
             promises.push(SwapPromise::new(move |frame_token| {
                 let _ = to_browser.send(RendererHostMsg::DidFinishLoad {
                     navigation_id,
@@ -3949,12 +3359,17 @@ impl RenderThread {
         // them in `RunPostLifecycleSteps`), the entries queued now, the
         // task that delivers them run between tasks.
         // The child frames' documents whose rendering is blocked.
-        let blocked: Vec<NodeRoot> = self
-            .render_frames
-            .child_documents()
-            .filter(|next| next.pending_sheets.values().any(|sheet| sheet.blocking))
-            .map(|next| next.document.clone())
-            .collect();
+        let blocked: Vec<NodeRoot> = match &mut self.engine {
+            Some(engine) => {
+                let dom = engine.dom_mut();
+                self.render_frames
+                    .child_documents()
+                    .filter(|next| sheets_block_render(dom, &next.document))
+                    .map(|next| next.document.clone())
+                    .collect()
+            }
+            None => Vec::new(),
+        };
         let documents = self
             .engine
             .as_mut()
@@ -4335,65 +3750,68 @@ impl RenderThread {
                 }
                 return true;
             }
-            let encoding = frame
-                .and_then(|frame| self.doc(frame))
-                .map(|next| next.encoding);
-            let loaded = encoding
-                .and_then(|encoding| script_loaded(result, fetching.charset.as_deref(), encoding));
-            if loaded.is_none()
-                && let Some(frame) = frame
-            {
-                self.note_failed(frame, failed_url(result, asked));
-            }
-            if let Some(engine) = &mut self.engine {
-                engine
-                    .dom_mut()
-                    .mutate(|cx| cx.script_fetched(fetching.key, loaded));
+            let parsers = if fetching.wasm {
+                let loaded = wasm_loaded(result);
+                if loaded.is_none()
+                    && let Some(frame) = frame
+                {
+                    self.note_failed(frame, failed_url(result, asked));
+                }
+                self.engine.as_mut().is_some_and(|engine| {
+                    engine
+                        .dom_mut()
+                        .mutate(|cx| cx.wasm_script_fetched(fetching.key, loaded))
+                })
+            } else {
+                let encoding = frame
+                    .and_then(|frame| self.doc(frame))
+                    .map(|next| next.encoding);
+                let loaded = encoding.and_then(|encoding| {
+                    script_loaded(result, fetching.charset.as_deref(), encoding)
+                });
+                if loaded.is_none()
+                    && let Some(frame) = frame
+                {
+                    self.note_failed(frame, failed_url(result, asked));
+                }
+                self.engine.as_mut().is_some_and(|engine| {
+                    engine
+                        .dom_mut()
+                        .mutate(|cx| cx.script_fetched(fetching.key, loaded))
+                })
+            };
+            // The parser's: the one it waits for (unless it parses on in a
+            // task of its own already), or a deferred one.
+            if parsers && let Some(frame) = frame {
+                if self.doc(frame).is_some_and(|next| !next.parse_due) {
+                    self.advance_document(frame);
+                }
+                self.run_deferred_scripts(frame);
             }
             return true;
         }
-        for frame in self.frames() {
-            let Some(next) = self.doc_mut(frame) else {
-                continue;
-            };
-            if let Some(sheet) = next.pending_sheets.remove(&request_id) {
-                let document = next.document.clone();
-                if let Some(engine) = &mut self.engine {
-                    engine
-                        .dom_mut()
-                        .mutate(|cx| cx.remove_load_request(document.get(cx.gc), request_id));
-                }
+        // A `<link>`'s sheet: its document's `load` no longer waits for it.
+        let sheet = self.engine.as_mut().and_then(|engine| {
+            engine.dom_mut().mutate(|cx| {
+                cx.take_sent_sheet(request_id)
+                    .map(|(sent, link)| (sent, link.map(|link| cx.root(link))))
+            })
+        });
+        if let Some((sent, link)) = sheet {
+            // One of a document no frame shows any more: nothing waits.
+            if let Some(frame) = self.frame_of_document(sent.document)
+                && let (Some(link), Ok(url)) = (link, Url::parse(&sent.url))
+            {
                 self.update_child_blocking(frame);
-                self.sheet_loaded(frame, sheet, result);
-                return true;
-            }
-            let encoding = next.encoding;
-            // The parser's: the one it waits for, or a deferred one.
-            let (script, blocking) = match &mut next.blocking_script {
-                Some(script) if script.request_id == Some(request_id) => (script, true),
-                _ => match next
-                    .deferred_scripts
-                    .iter_mut()
-                    .find(|script| script.request_id == Some(request_id))
-                {
-                    Some(script) => (script, false),
-                    None => continue,
-                },
-            };
-            let loaded = if script.wasm {
-                wasm_loaded(result).map(|(bytes, url)| ParserSource::Wasm { bytes, url })
-            } else {
-                script_loaded(result, script.charset.as_deref(), encoding)
-                    .map(ParserSource::External)
-            };
-            if loaded.is_none() {
-                next.failed.push(failed_url(result, asked));
-            }
-            script.ready = Some(loaded);
-            if blocking {
-                self.advance_document(frame);
-            } else {
-                self.run_deferred_scripts(frame);
+                self.sheet_loaded(
+                    frame,
+                    LoadedSheet {
+                        link,
+                        url,
+                        blocks_scripts: sent.blocks_scripts,
+                    },
+                    result,
+                );
             }
             return true;
         }
@@ -4476,44 +3894,6 @@ impl RenderThread {
         }))
     }
 
-    /// Who asked for a load, as the DOM says (`initiator`), as DevTools
-    /// names it: for an element, the script that asked (its stack, if a
-    /// session wants stacks), else the parser of `frame`'s document that
-    /// made it (its start tag's line, once: a later load of it is
-    /// script's); a stylesheet, an importing module, `import()`'s script.
-    /// None: no one it names.
-    fn initiator(&mut self, frame: FrameId, initiator: &dom::LoadInitiator) -> Option<Initiator> {
-        use dom::LoadInitiator;
-        let stacks = self.network_agent.wants_stacks();
-        match initiator {
-            LoadInitiator::Other => None,
-            LoadInitiator::Stylesheet(url) => Some(Initiator::Css(url.clone())),
-            LoadInitiator::Import(url) => Some(Initiator::Import(url.clone())),
-            LoadInitiator::Script(stack) => stacks.then(|| Initiator::Script(stack.clone())),
-            LoadInitiator::Element(element) => {
-                let stack = self.engine.as_mut().and_then(|engine| {
-                    engine
-                        .dom_mut()
-                        .take_request_stack(dom::StackAsker::Element(*element))
-                });
-                if let Some(stack) = stack.filter(|_| stacks) {
-                    return Some(Initiator::Script(stack));
-                }
-                // Where the parser made it, the DOM's (`set_parser_load_line`).
-                let line = self.engine.as_mut()?.dom_mut().read(|cx| {
-                    cx.node_by_id(*element)
-                        .and_then(|element| cx.take_parser_load_line(element))
-                })?;
-                let document_url = self.document_url(frame)?;
-                let url = document_url.as_str().split('#').next().unwrap_or_default();
-                Some(Initiator::Parser {
-                    url: url.to_owned(),
-                    line: line.saturating_sub(1),
-                })
-            }
-        }
-    }
-
     /// Notes request `request_id`'s `result` in the subresources of the
     /// document whose it is (`url`, the request's, names one that failed):
     /// its sheets, scripts and images, not its `fetch()`es or its child
@@ -4538,18 +3918,15 @@ impl RenderThread {
         {
             self.frame_of_document(script.document)
                 .map(|frame| (frame, "Script"))
+        } else if let Some(sheet) = self
+            .engine
+            .as_mut()
+            .and_then(|engine| engine.dom_mut().sent_sheet(request_id))
+        {
+            self.frame_of_document(sheet.document)
+                .map(|frame| (frame, "Stylesheet"))
         } else {
-            self.frames().into_iter().find_map(|frame| {
-                let next = self.doc(frame)?;
-                if next.pending_sheets.contains_key(&request_id) {
-                    return Some((frame, "Stylesheet"));
-                }
-                next.blocking_script
-                    .iter()
-                    .chain(&next.deferred_scripts)
-                    .any(|script| script.request_id == Some(request_id))
-                    .then_some((frame, "Script"))
-            })
+            None
         };
         let Some((frame, kind)) = found else {
             return;
@@ -4640,7 +4017,7 @@ impl RenderThread {
         self.css_agent.refetched(key, text, base);
     }
 
-    fn sheet_loaded(&mut self, frame: FrameId, sheet: PendingSheet, result: &LoadResult) {
+    fn sheet_loaded(&mut self, frame: FrameId, sheet: LoadedSheet, result: &LoadResult) {
         let Some(document_url) = self.document_url(frame) else {
             return;
         };
@@ -4804,6 +4181,12 @@ impl dom_api::FrameClient for RendererFrameClient {
 
     fn child_document_created(&mut self, frame: protocol::FrameToken, document: dom::NodeId) {
         self.child_document_created_now(frame, document);
+    }
+
+    fn title_changed(&mut self, title: &str) {
+        let _ = self
+            .to_browser
+            .send(RendererHostMsg::UpdateTitle(title.to_owned()));
     }
 
     fn frame_detached(&mut self, frame: protocol::FrameToken) {
@@ -5308,6 +4691,28 @@ impl dom_api::LoadSink for RendererLoadSink {
         Some(request_id)
     }
 
+    fn start_sheet_fetch(
+        &mut self,
+        _: FrameId,
+        document: dom::NodeId,
+        url: &str,
+        cors: Option<dom::ScriptCors>,
+        request_origin: Option<&str>,
+        origin: &dom_api::FetchOrigin,
+    ) -> Option<u64> {
+        let mut request = ResourceRequest::new(url, RequestDestination::Style);
+        request.initiator = request_origin.map(String::from);
+        // By CORS, which an origin that allows it makes origin-clean (and
+        // one that doesn't, a network error).
+        if let Some(cors) = cors {
+            request.mode = RequestMode::Cors;
+            request.credentials = crate::loader::script_credentials(cors);
+        }
+        let request_id = crate::loader::next_request_id();
+        self.send(request_id, document, request, origin);
+        Some(request_id)
+    }
+
     fn register_blob_url(&self, frame: FrameId, url: &str, data: &dom::BlobData) {
         self.blob_urls
             .register(url, frame, data.type_(), data.shared_bytes());
@@ -5495,40 +4900,17 @@ fn stylesheet_text(
     ))
 }
 
-/// A `<link>` of a sheet to load: its element, its `href`, its CORS
-/// credentials mode (none: no CORS), whether it blocks nothing (an
-/// alternate one, a shadow tree's), whether the parser made it, and its
-/// `media`.
-struct LinkToLoad {
-    link: NodeRoot,
-    id: dom::NodeId,
-    href: String,
-    cors: Option<CredentialsMode>,
-    blocks_nothing: bool,
-    parsers: bool,
-    /// Its `media`, if it has one.
-    media: Option<String>,
+/// Whether a `<link>`'s sheet that blocks `document`'s rendering is
+/// loading (the DOM's, `Dom::sheets_block_render`).
+fn sheets_block_render(dom: &Dom, document: &NodeRoot) -> bool {
+    dom.sheets_block_render(dom.read(|cx| cx.node_id(document.get(cx.gc))))
 }
 
-/// The node after `node` in tree order, within `root`'s subtree.
-fn next_in_tree_order<'gc>(
-    cx: &dom::Cx<'_, 'gc>,
-    node: dom::NodeRef<'gc>,
-    root: dom::NodeRef<'gc>,
-) -> Option<dom::NodeRef<'gc>> {
-    if let Some(child) = cx.first_child(node) {
-        return Some(child);
-    }
-    let mut at = node;
-    loop {
-        if dom::NodeRef::ptr_eq(at, root) {
-            return None;
-        }
-        if let Some(next) = cx.next_sibling(at) {
-            return Some(next);
-        }
-        at = cx.parent(at)?;
-    }
+/// Whether a `<link>`'s sheet that blocks `document`'s parser's scripts is
+/// loading, though script may have taken its `<link>` away
+/// (`Dom::sheets_pending_for_scripts`).
+fn sheets_pending_for_scripts(dom: &Dom, document: &NodeRoot) -> bool {
+    dom.sheets_pending_for_scripts(dom.read(|cx| cx.node_id(document.get(cx.gc))))
 }
 
 /// The DOM's name of a button.

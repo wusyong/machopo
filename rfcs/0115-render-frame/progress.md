@@ -10,12 +10,14 @@
 | 1a. `render_frame.rs`：`RenderFrames`、`RenderFrame`、`NavigationRequest`，`FrameDocument` 搬進來；最上層的 `document` 和 `ChildFrames::documents` 改成表上的 `document`（第 2、3、4 條） | 做完，待審查 | 2026-11-25 |
 | 1b. 導覽的帳（`ChildFrames::navigations`、`main_origin_source`）、`owner_loads`、`devtools_main_frame_token` 搬進 `RenderFrame`，每種轉換一個方法（第 3、5 條）；frame 不見時一起拿掉（第 8 條） | 做完，待審查 | 2026-11-25 |
 | 1c. debug build 在讀導覽的帳時檢查沒分派的 `FrameRequest`（第 6 條，做法照第 9 條） | 做完，待審查 | 2026-11-25 |
-| 2a. body 的解碼和 parse、parser 的 script 搬到 `dom_api` 的 `LocalFrame`（已決定的事項第 11 到 16 條） | 沒開始 | |
-| 2a-1. `dom_api` 的 `LocalFrame`：解碼器、parser、parser 的輸入；engine 的 `body_data`、`body_ended` 和「parse 到 script 或沒輸入為止」，renderer 只交 pipe 讀到的 bytes（parse 照舊由 renderer 的 `ParseOn` 排，碰到 script 是回傳值） | 沒開始 | |
-| 2a-2. parser 擋住的和 deferred 的 script 搬進 `LocalFrame`（DOM 自己排的 script 的那條路），`advance_document` 的迴圈搬過去；`set_scripts_blocked` | 沒開始 | |
-| 2a-3. 「接著 parse」是 DOM 的一種 task，讓出時問 `InputMonitor`；拿掉 `InternalTask::ParseOn` | 沒開始 | |
-| 2a 的停損點：新增的 hook 和問 engine 的方法、Speedometer 的 Editor 和 NewsSite、parse 迴圈的過期讀法（「信心和未知數」） | — | |
-| 2b、2c、3、4：方向，2a 做完照停損點再看 | — | |
+| 2a. body 的解碼和 parse、parser 的 script、`<link>` 的樣式表的請求和帳搬到 engine 那一側（已決定的事項第 11 到 20 條） | 做完 2a-1 到 2a-3，待階段的檢查 | |
+| 2a-1. `dom_api` 的 `LocalFrame`：解碼器、parser、parser 的輸入；engine 的 `body_data`、`body_ended` 和「parse 到 script 或沒輸入為止」，renderer 只交 pipe 讀到的 bytes（parse 照舊由 renderer 的 `ParseOn` 排，碰到 script 是回傳值） | 做完，待審查 | 2026-11-25 |
+| 2a-2. `<link>` 的樣式表：掃描、media 的判斷、請求（`LoadSink` 的 hook）、「擋 script、擋 render、`load` 等著」的帳搬到 DOM 和 `dom_api`（第 18 條）；回應照舊由 renderer 收、解 CSS、交給 DOM。parse 的迴圈還在 renderer，跑 script 之前叫 engine 送出樣式表的請求 | 做完，待審查 | 2026-11-25 |
+| 2a-3. parser 擋住的和 deferred 的 script 搬進 `DocumentLoader`（DOM 自己排的 script 的那條路），`advance_document` 的迴圈搬過去；分頁的標題經過 `FrameClient` 的 hook（第 19 條） | 做完，待審查 | 2026-11-25 |
+| 2a-4. 「接著 parse」是 DOM 的一種 task，讓出時問 `InputMonitor`；拿掉 `InternalTask::ParseOn` | 移到 2c（第 20 條） | 2026-11-25 |
+| 2a 的停損點：新增的 hook 和問 engine 的方法、Speedometer 的 Editor 和 NewsSite、parse 迴圈的過期讀法（「信心和未知數」）。第 1 項：2a-2 時跨界線的新方法到了 5 個（`ScriptEngine` 的 `document_loader`、`set_document_loader`、`send_sheet_fetches`，`LoadSink::start_sheet_fetch`，`FrameLayout::media_environment`），使用者 2026-11-25 看過：多出來的是第 18 條把原本 2b 的樣式表併進來，可以接受，不用算得更細；2a 做完時 7 個（多了第 19 條的 `tell_title`、`title_changed`）。第 2 項：Speedometer 幾何平均 +0.2%，都在區間裡（README 的「第 2 段的停損點」）。第 3 項：不在了 | 三項都順 | 2026-11-25 |
+| 2b. 樣式表剩下的：回應的解碼和 parse、`<link>` 的 `load` 和 `error`、DevTools 的原文（第 18 條之後剩下的；決定的事項在這段開始時列） | 沒開始 | |
+| 2c、3、4：方向；2c 開工前先做依賴盤點（README 的「2a 做完之後的評估」） | — | |
 
 ## 驗收
 
@@ -23,6 +25,55 @@
 | --- | --- |
 
 ## 做過的檢查
+
+### 2a 做完時（2026-11-25，Linux：Fedora 45，2a-3 之上，未 commit）
+
+- `cargo fmt`（只動到 2a 改過的 8 個檔案）、`cargo clippy --workspace --all-targets -- -D warnings`：通過。
+- `cargo test --workspace`：4890 個通過，0 個失敗。
+- Speedometer 3.1（使用者要求，`bench.py speedometer --against 66110866`，各 3 次輪流，10 iterations，AC 電源，renderer 是自己的 process）：20 個 suite 的幾何平均 1.002（+0.2%），每個 suite 的中位數都在兩邊的 95% 區間裡（最大 TodoMVC-Backbone -2.7%、TodoMVC-React-Complex-DOM +2.4%）；記憶體峰值 -1.2% 到 +3.9%（Perf-Dashboard：Browser 的 process 151 → 159 MB、renderer 270 → 278 MB）。
+
+### 2a-3（2026-11-25，Linux：Fedora 45，debug build，2a-2 之上，未 commit）
+
+**做了什麼**：parser 的外部 script（擋住 parser 的、`defer` 的、wasm 文件的）是 DOM 的 pending script，標成 parser 的（`Cx::queue_parser_script`）：請求和回應走 DOM 排的 script 那條路（`send_script_fetches`、`script_fetched`），抓好之後不排 task，`script_fetched` 回答是不是 parser 的；wasm 的回應是 `ScriptResult::Wasm`（`wasm_script_fetched`，`ScriptFetch`、`SentScript` 多 `wasm`）。`DocumentLoader` 拿著擋住 parser 的那一個和 deferred 的清單，`dom_api::document_loader::parse` 是原本 `advance_document` 的迴圈：每一輪先送出樣式表的請求、等或跑擋住 parser 的 script（inline 的等樣式表，外部的等 DOM 說抓好了；classic 的經過 `run_ready_script`），再跑 parser、prepare 它停下的 script；回傳 `ParseOutcome`（沒東西 parse、等 script、等 body、讓出、parse 完）。`run_deferred_scripts`、`abort_scripts`。body 到齊由 renderer 告訴（`DocumentLoader::body_ended`，原本看 `FrameDocument::body` 還在不在）。renderer 拿掉 `blocking_script`、`deferred_scripts`、`ParserScript`、`ParserSource` 和 `fetch_parser_script`、`start_parser_module`、`script_ready`、`execute_parser_script`、`prepare_script`、`run_script`、`fetch_script`、`initiator`；`advance_document` 只照回傳的結果排 `ParseOn`、等、或做「the end」；`yields`、`parse_due`、`body_parsed`（畫面那一側的）、`aborted` 和 DOMContentLoaded 之後的事照舊在 renderer（2c）。迴圈裡原本在每個 script 之前送的標題，照已決定的事項第 19 條改成 `FrameClient::title_changed`，帳搬到 `DocumentLoader`。
+
+拿掉的：迴圈裡的 `start_loads`、`handle_frame_requests`、`send_harness_results` 改成呼叫之後各一次（同一個 task 裡，順序對頁面看不出差別）；外部 classic script 移到別的文件的檢查（`run_script_task` 本來就比 prepare 時的文件）；deferred 的迴圈裡的 deferring 檢查（renderer 呼叫前後查，呼叫裡沒有東西改它）；inline script 跑完之後還原「之前的」`currentScript`（parser 的 script 跑時沒有別的在跑，之前的一定是空的，改成還原成空的）。
+
+**停損點第 3 項**：parse 的迴圈裡讀 renderer 的帳的地方（`advance_document` 的開頭、迴圈裡的 `note_body_parsed`）不在迴圈裡了：`note_body_parsed` 在呼叫之後讀一次 DOM。
+
+**測試**：`shell` 新增 5 個（`documents::a_parsers_script_moved_away_before_it_is_prepared_doesnt_run`、`a_parsers_script_moved_away_while_it_waits_doesnt_run`、`a_parsers_external_script_runs_after_the_microtasks_before_it`、`an_inline_module_scripts_lines_are_its_documents`、`a_parsers_inline_scripts_microtasks_run_before_the_parser_goes_on`）。`dom`、`dom_api`、`dom_js`、`dom_wasm`、`renderer`、`shell`、`browser` 的測試通過；`test.py scenarios`（98 份）和 `test.py reftest tests/reftests` 通過。WPT（2a-2 的 1907 個加上 `html/semantics/scripting-1/`、`html/syntax/`、`html/browsers/`、`the-iframe-element/`、`html/webappapis/`、`dom/nodes/`、`encoding/`，3091 個）：0 個退步。非預期的通過多了兩個，都是原本就有的（`git stash` 回到 2a 之前各跑 6 次）：`replace-before-load/location-setter.html` 的 `href`（之前和之後都是時過時不過，一次連 `search` 也過）、`html/webappapis/timers/negative-settimeout.any.worker.html`（`.ini` 預期 `ERROR`，之前和之後都是 `OK`）。sanity 的 deps、spans、boundary、unsafe、tests、numerics、docs 通過。
+
+**不穩定的測試**：`shell` 的 `automation_pipe::a_client_not_reading_doesnt_hold_machopo_up` 在整套 `cargo test -p dom -p dom_api -p renderer -p shell` 裡失敗過一次（`took < 5s` 那一行：machopo 結束得比 5 秒慢）；它不載入頁面，和這段的改動無關；單獨跑 3 次、整套 `shell` 再跑 2 次都通過。原因還沒查，和 0115 開頭記的 `webdriver::a_session_with_a_hung_page_ends_in_time` 一起之後再查；這段的 mutation test 跳過它。
+
+**mutation test**（`mutants-2a3.toml`，36 個，timeout 120 秒）：第一輪（33 個，指令裡沒有 `browser` 的測試）沒抓到 14 個，用 WPT（`scripting-1/`、`html/syntax/`、`html/dom/`、`dom/nodes/`、`document-metadata/`、`html/webappapis/scripting/`、`browsing-the-web/`，只算非預期的失敗）再跑也都沒抓到；處理之後：
+- parser 的預算和讓出的測試在 `browser` 的 `navigation::`（`a_parser_lets_timers_run_between_its_slices` 等），指令加上它：「body 之前就讓出」「沒給一片就讓出」「body 永遠算沒做出來」抓到；加上之後 `navigation::the_tab_title_follows_document_title` 失敗，找到上面的標題（第 19 條）。
+- 等價、程式拿掉的 3 個（上面「拿掉的」）。
+- 補 `shell` 的測試抓到的：prepare 之前被移走的、inline 的等著時被移走的、inline module 的行號、inline script 之後的 checkpoint。
+- 照舊只靠審查的（`docs/test-gaps.md` 的「只靠審查」，位置改成 `dom_api` 的）：有輸入在等時讓出、body 裡的 script 之後縮短預算、wasm 的 script 的 `load`。
+- 等價的（記進 `docs/test-gaps.md` 的「等價、不用處理的 mutation」）：外部 classic script 之前的 checkpoint、中止時放掉 deferred 的 pending script。
+最後一輪：36 個裡抓到 28 個、到時限被砍 1 個（「沒告訴 loader body 到齊了」）、上面 5 個照舊沒抓到（3 個只靠審查、2 個等價），1 個 mutant 寫錯編不過（標題送空的，改過之後重跑抓到）；inline script 之後的 checkpoint 補了測試之後重跑抓到。
+
+### 2a-2（2026-11-25，Linux：Fedora 45，debug build，2a-1 之上，未 commit）
+
+**做了什麼**：照已決定的事項第 18 條，`<link>` 的樣式表的請求和帳搬到 engine 那一側。`dom` 新的 `link_sheet.rs`：每個 `<link>` 在它的文件裡要一次（元素的旗標，借 script 的 already started 那個 bit，adopt 時清掉；原本是 renderer 每份文件一個 `requested_links`），送出的請求照編號記成 `SentSheet`（擋 render、擋 parser 的 script，文件的 `load` 等它；`<link>` 放在文件的 `pending_sheet_links` 裡留到回應來，原本是 renderer 的 `NodeRoot`），`sheets_block_scripts`（`<link>` 拿出文件、進 shadow tree、到別的文件、不再是 stylesheet 之後不擋；原本在 renderer 的 `script_ready`），`href` 解析不了的記在文件上（`take_failed_sheets`，和 `DidFinishLoad` 一起送，排在 renderer 自己記的失敗之後）。`dom_api` 新的 `link_style.rs`：`send_sheet_fetches`（原本 renderer 的 `start_loads_of`），media 經過新的 `FrameLayout::media_environment`，請求經過新的 `LoadSink::start_sheet_fetch`（DevTools 的 initiator 和 cache 的 flag 照圖片、script 那條路）；`ScriptEngine::send_sheet_fetches`，兩個 engine 都實作。renderer 拿掉 `pending_sheets`、`requested_links`、`LinkToLoad` 和掃描；`start_loads` 叫 engine 送、再告訴每個子 frame 的 view 擋不擋；render-blocking、擋 script、在路上的請求數、DevTools 的資源種類和失敗的網址改成問 DOM；回應照舊由 renderer 收、解 CSS（`LoadedSheet`）。parse 的迴圈照舊在 renderer，每一輪開頭的 `start_loads` 讓 parser 停下時先送出樣式表的請求。
+
+**測試**：`dom` 的 `link_sheets`（5 個：送出到回應之間擋什麼、`load` 等著；`<link>` 拿走之後不擋 script；每份文件要一次、adopt 之後再要；GC 之後 `<link>` 還在；失敗的 `href` 拿一次）；`dom_api` 的 `link_style`（3 個：每種 `<link>` 擋什麼、CORS、請求的 origin、要一次；media 照 layout 的環境，沒有 layout 時算符合；沒送出去的記成失敗）；`shell` 新增 3 個（下面）。`dom`、`dom_api`、`dom_js`、`dom_wasm`、`renderer`、`shell` 的測試通過。WPT：`include.txt` 裡用到 `<link rel=stylesheet>` 的 1907 個，加上 `the-script-element/`、`html/syntax/`、`html/browsers/`，共 2512 個：0 個退步，4 個非預期的通過是之前記過的。`test.py reftest tests/reftests/link`、情境 `cursor`、`iframe-loads`、`position-absolute`、`demo-script` 通過。sanity 的 deps、spans、boundary、unsafe、tests、numerics、docs 通過。
+
+**mutation test**（`mutants-2a2.toml`，30 個，timeout 120 秒）：第一輪 27 個抓到、3 個沒抓到，補了測試之後重跑那 3 個都抓到：
+- `start_loads` 不告訴子 frame 的 view 擋不擋：parser 的 `<link>` 在 parse 結束時另外告訴了，只有載入之後 script 才要的樣式表看得出來；補 `shell` 的 `network::a_child_frames_sheet_asked_for_later_blocks_its_rendering`（載入期間子 frame 停在上次的畫面）。這條路在搬之前一樣沒有測試。
+- 在路上的請求數不算樣式表：補 `devtools_lifecycle::a_sheet_on_its_way_keeps_the_network_busy`（`media=print` 的樣式表不擋 `DOMContentLoaded`，`networkIdle` 等它）。
+- 樣式表的請求的網址查不到：只有失敗的回應用得到（log 和 DevTools 的資源樹），補 `devtools_log::a_sheet_that_fails_is_logged_with_its_url`。
+
+### 2a-1（2026-11-25，Linux：Fedora 45，debug build，`66110866` 之上）
+
+**做了什麼**：`renderer` 的 `encoding.rs` 整個搬到 `dom_api::encoding`（文件、script、樣式表的解碼，Blink 的 `TextResourceDecoder`；只依賴 `encoding_rs`）。新的 `dom_api::DocumentLoader`（`document_loader.rs`）：解碼器、`MarkupFilter`（從 renderer 的 `document.rs` 搬來）、parser 的輸入（`ParserInput`，從 `document_body.rs` 搬來）、parser、原始碼；`ScriptEngine` 多 `document_loader`、`set_document_loader`，`dom_js` 放在每個 `Frame` 上（換文件時 `Frames::set` 整個換掉，它跟著走），`dom_wasm` 放在最上層；`resume_parser`、`finish_parser` 收 `Box<dyn ScriptEngine>` 借給 parser（第 17 條）。renderer 的 `DocumentBody` 只剩 pipe、載入的狀態、DevTools 的 bytes；commit 時在 `create_window` 之後建 `DocumentLoader`（編碼從它來），pipe 讀到的 bytes 交給它；`FrameDocument` 拿掉 parser 和輸入，多一個 `parsing`（render-blocking 用）；DevTools 要原始碼時問 engine（`document_source`）。parse 的迴圈這一段照舊在 renderer。
+
+叫做 `DocumentLoader`，不是已決定的事項第 12 條的 `LocalFrame`：2a 這一段只是文件的載入（Chromium 的名字），`LocalFrame` 之後有沒有、裝什麼，到 2b、2c 再看。
+
+**找到的 bug**（這一段自己的）：沒有 pipe 的 body，開頭那一份已經當成最後一份解碼，之後讀 pipe 回報「結束」又解碼一次最後一份，`encoding_rs` panic；`BodyRead` 分成「這一刻才結束」（`Over`）和「早就結束」（`Ended`）。
+
+**測試**：`MarkupFilter` 和 `ParserInput` 的單元測試跟著搬到 `dom_api`。`dom_api`、`renderer`、`shell` 的測試通過。WPT（`html/browsers/`、`html/syntax/`、`the-iframe-element/`、`the-script-element/`、`html/semantics/document-metadata/`、`encoding/`，743 個）：0 個退步；4 個非預期的通過是 1b、1c 記過的。
+
+**mutation test**（`mutants-2a1.toml`，10 個，都抓到，3 個是到時限被砍的「hung」）：原始碼沒留、markup 沒進輸入、parser 拿不到輸入、「還有輸入」永遠說沒有、`srcdoc` 當一般的、parser 跑完沒放回去、parser 沒結束、DevTools 只在 body 全到之後讀、早就結束的 pipe 又結束一次、commit 時不算在 parse。第一輪的 timeout 是 900 秒：讓頁面一直等不到的 mutant，`shell` 的七百多個測試各等滿 30 秒才失敗，一個要四百多秒；停掉、`--restore`，剩下的改成 120 秒重跑（正確的程式跑一次約 30 到 50 秒，留兩倍多，免得沒抓到的被砍掉、誤記成抓到）。
 
 ### 第 1 段結束（2026-11-25，Linux：Fedora 45）
 

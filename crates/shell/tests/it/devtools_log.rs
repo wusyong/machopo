@@ -108,6 +108,23 @@ fn failed_loads_are_logged_and_kept() {
     assert_eq!(entries(&mut page), Vec::<Value>::new());
 }
 
+/// A `<link>`'s sheet that went nowhere is logged with the URL it asked
+/// for (no response tells one).
+#[test]
+fn a_sheet_that_fails_is_logged_with_its_url() {
+    let refused_port = refused_port();
+    let refused = format!("http://127.0.0.1:{}/s.css", refused_port.port());
+    let html = format!("<!DOCTYPE html><link rel=stylesheet href={refused:?}>");
+    let server = server(&[("/", Route::ok("text/html", html))]);
+    let machopo = Machopo::start();
+    let (mut page, _) = page(&machopo);
+    load(&mut page, &server.url("/"));
+    assert_eq!(
+        machopo.error_line("[console]"),
+        format!("[console] Failed to load resource: net::ERR_CONNECTION_REFUSED ({refused})")
+    );
+}
+
 /// A document of 404 is logged too, linked to its navigation.
 #[test]
 fn a_document_not_found_is_logged() {

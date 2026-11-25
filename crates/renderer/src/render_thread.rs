@@ -1916,6 +1916,7 @@ impl RenderThread {
                 .map(|sent| sent.url)
                 .or_else(|| dom.sent_image(request_id).map(|sent| sent.url))
                 .or_else(|| dom.sent_script(request_id).map(|sent| sent.url))
+                .or_else(|| dom.sent_sheet(request_id).map(|sent| sent.url))
         });
         // DevTools' `CSS`'s: a sheet's text, its alone.
         if let Some((key, frame)) = self.css_refetches.remove(&request_id) {

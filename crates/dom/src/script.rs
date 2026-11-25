@@ -61,16 +61,18 @@ pub enum ScriptCors {
 
 /// A script the host is to fetch (`Dom::take_script_fetches`): its number,
 /// to hand it back by (`Cx::script_fetched`; a module's, the engine's
-/// module map's), the request, the document it was prepared in, whether it
-/// is a module (fetched by CORS, its credentials mode same-origin without a
-/// `crossorigin`; a JavaScript MIME type its response's), and who asked
-/// for it (a classic one's element; a module's, the module map's).
+/// module map's; a wasm one's, `Cx::wasm_script_fetched`), the request, the
+/// document it was prepared in, whether it is a module (fetched by CORS,
+/// its credentials mode same-origin without a `crossorigin`; a JavaScript
+/// MIME type its response's) or a wasm document's component, and who
+/// asked for it (a classic one's element; a module's, the module map's).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScriptFetch {
     pub key: u64,
     pub request: ScriptRequest,
     pub document: NodeId,
     pub module: bool,
+    pub wasm: bool,
     pub initiator: crate::LoadInitiator,
 }
 
@@ -85,13 +87,15 @@ pub struct LoadedScript {
     pub muted: bool,
 }
 
-/// What a pending script's fetch gave: a classic script, or a module
+/// What a pending script's fetch gave: a classic script, a module
 /// script's graph, by its root's number in the engine's realm (linked, or
-/// with an error to rethrow).
+/// with an error to rethrow), or a wasm document's component (its bytes,
+/// and its URL after redirects), which its parser runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScriptResult {
     Classic(LoadedScript),
     Module(u32),
+    Wasm { bytes: Vec<u8>, url: String },
 }
 
 /// A script whose turn it is (`Cx::take_ready_script`): the document it
@@ -104,10 +108,11 @@ pub struct ReadyScript<'gc> {
 }
 
 /// A script that waits for its fetch (Blink's `PendingScript`), its
-/// element's: an external classic one that waits for no parser, or any
-/// module script (whose graph is fetched, the parser's deferred one's
-/// too); its preparation-time document (whose load it delays), its
-/// number, and what the fetch gave once it did.
+/// element's: an external classic one (the parser's, which it waits for
+/// or runs after parsing, or one that waits for no parser), or any module
+/// script (whose graph is fetched, the parser's deferred one's too), or a
+/// wasm document's component; its preparation-time document (whose load
+/// it delays), its number, and what the fetch gave once it did.
 #[derive(GcObject)]
 pub struct PendingScript {
     document: Member<Node>,
@@ -116,8 +121,8 @@ pub struct PendingScript {
     fetched: Cell<bool>,
     /// In order: its document's list holds it too.
     in_order: Cell<bool>,
-    /// The parser's to run once fetched (a deferred module script): no
-    /// task of its own.
+    /// The parser's to run once fetched (one it waits for, or a deferred
+    /// one): no task of its own.
     parser: Cell<bool>,
     /// From `src`: `load` after it runs.
     external: Cell<bool>,
@@ -242,8 +247,36 @@ impl<'gc> Cx<'_, 'gc> {
             request,
             document: self.node_id(document),
             module: false,
+            wasm: false,
             initiator: crate::LoadInitiator::Element(id),
         });
+    }
+
+    /// The parser's external script `element` queued (`request`), a wasm
+    /// component if `wasm`: fetched by the host and handed back as any
+    /// other, but run by the parser, once fetched (one it waits for, or
+    /// after parsing: `pending_script_fetched`, `take_ready_script`). Its
+    /// number.
+    pub fn queue_parser_script(
+        &self,
+        element: NodeRef<'gc>,
+        request: ScriptRequest,
+        wasm: bool,
+    ) -> u64 {
+        let key = self.pend_script(element, false, true, true);
+        let document = self.document_of(element);
+        let state = &self.changes.scripts;
+        let id = self.node_id(element);
+        state.fetching.borrow_mut().insert(key, id);
+        state.fetches.borrow_mut().push(ScriptFetch {
+            key,
+            request,
+            document: self.node_id(document),
+            module: false,
+            wasm,
+            initiator: crate::LoadInitiator::Element(id),
+        });
+        key
     }
 
     /// `element`'s module script queued, its graph for the engine to fetch
@@ -284,6 +317,7 @@ impl<'gc> Cx<'_, 'gc> {
             request,
             document: self.node_id(document),
             module: true,
+            wasm: false,
             initiator,
         });
         key
@@ -336,9 +370,20 @@ impl<'gc> Cx<'_, 'gc> {
     /// The fetch `key` numbers is over: `loaded` its script, none if it
     /// failed. Its element's turn may come: an element task queued for it
     /// (`ElementTaskKind::Script`), or, in order, for each of its
-    /// document's list from the first while they have been fetched.
-    pub fn script_fetched(&self, key: u64, loaded: Option<LoadedScript>) {
-        self.pending_fetched(key, loaded.map(ScriptResult::Classic));
+    /// document's list from the first while they have been fetched; or,
+    /// the parser's, the parser's to run. Whether it is the parser's.
+    pub fn script_fetched(&self, key: u64, loaded: Option<LoadedScript>) -> bool {
+        self.pending_fetched(key, loaded.map(ScriptResult::Classic))
+    }
+
+    /// The wasm component `key` numbers fetched (`queue_parser_script`):
+    /// its bytes and its URL after redirects, none if it failed; as
+    /// `script_fetched`, the parser's to run.
+    pub fn wasm_script_fetched(&self, key: u64, loaded: Option<(Vec<u8>, String)>) -> bool {
+        self.pending_fetched(
+            key,
+            loaded.map(|(bytes, url)| ScriptResult::Wasm { bytes, url }),
+        )
     }
 
     /// The module graph `key` numbers is fetched (`queue_module_script`):
@@ -348,7 +393,7 @@ impl<'gc> Cx<'_, 'gc> {
         self.pending_fetched(key, root.map(ScriptResult::Module));
     }
 
-    fn pending_fetched(&self, key: u64, loaded: Option<ScriptResult>) {
+    fn pending_fetched(&self, key: u64, loaded: Option<ScriptResult>) -> bool {
         let Some(element) = self
             .changes
             .scripts
@@ -357,13 +402,13 @@ impl<'gc> Cx<'_, 'gc> {
             .remove(&key)
             .and_then(|id| self.node_by_id(id))
         else {
-            return;
+            return false;
         };
         let Some(pending) = self
             .pending_script(element)
             .filter(|pending| pending.key.get() == key)
         else {
-            return;
+            return false;
         };
         pending.loaded.set(loaded.map(Box::new));
         pending.fetched.set(true);
@@ -372,17 +417,17 @@ impl<'gc> Cx<'_, 'gc> {
             .get(self.gc)
             .expect("a pending script's document");
         if pending.parser.get() {
-            return;
+            return true;
         }
         if !pending.in_order.get() {
             self.queue_script_task(element, document);
-            return;
+            return false;
         }
         let Some(list) = self
             .document_data(document)
             .and_then(|data| data.in_order_scripts.get(self.gc))
         else {
-            return;
+            return false;
         };
         while let Some(first) = list.get(self.gc, 0)
             && self
@@ -392,6 +437,7 @@ impl<'gc> Cx<'_, 'gc> {
             list.remove(self.gc, 0);
             self.queue_script_task(first, document);
         }
+        false
     }
 
     fn pending_script(&self, element: NodeRef<'gc>) -> Option<Gc<'gc, PendingScript>> {

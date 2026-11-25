@@ -241,6 +241,9 @@ pub struct WasmEngine {
     /// The window's document, once there is one, and its number.
     document: Option<NodeRoot>,
     document_id: Option<NodeId>,
+    /// Its loading, the host's to start (`set_document_loader`): none with
+    /// each new window.
+    loader: Option<Box<dom_api::DocumentLoader>>,
     /// What the DOM's work asked of the host since it last took them.
     requests: Vec<dom_api::FrameRequest>,
     /// The window's mouse state (a new one with each window).
@@ -295,6 +298,7 @@ impl WasmEngine {
         Self {
             document: None,
             document_id: None,
+            loader: None,
             requests: Vec::new(),
             event_handler: dom_api::EventHandler::default(),
             page_focused: false,
@@ -631,8 +635,9 @@ impl ScriptEngine for WasmEngine {
         if frame != TOP {
             return None;
         }
-        // The document before goes, its scripts with it.
+        // The document before goes, its scripts and its loading with it.
         self.drop_scripts();
+        self.loader = None;
         let (page_focused, page_hidden) = (self.page_focused, self.page_hidden);
         let document = self.dom().mutate(|cx| {
             let document = cx.create_document(true);
@@ -656,6 +661,19 @@ impl ScriptEngine for WasmEngine {
 
     fn take_frame_requests(&mut self) -> Vec<dom_api::FrameRequest> {
         std::mem::take(&mut self.requests)
+    }
+
+    fn document_loader(&mut self, frame: FrameId) -> Option<&mut dom_api::DocumentLoader> {
+        if frame != TOP {
+            return None;
+        }
+        self.loader.as_deref_mut()
+    }
+
+    fn set_document_loader(&mut self, frame: FrameId, loader: dom_api::DocumentLoader) {
+        if frame == TOP {
+            self.loader = Some(Box::new(loader));
+        }
     }
 
     fn fetch_response(&mut self, _: u64, _: Result<dom_api::FetchedResponse, ()>) -> bool {
@@ -1219,6 +1237,38 @@ impl ScriptEngine for WasmEngine {
             Some((TOP, token.clone(), document.clone()))
         });
         self.load_sink = Some(sink);
+    }
+
+    fn send_sheet_fetches(&mut self) {
+        let Some(document) = self.document.clone() else {
+            return;
+        };
+        let Some(dom) = self.dom.as_mut() else {
+            return;
+        };
+        let Some(mut sink) = self.load_sink.take() else {
+            return;
+        };
+        let token = self.main_token.map(|token| token.to_string());
+        dom_api::send_sheet_fetches(
+            dom,
+            self.layout.get_mut().as_deref_mut(),
+            sink.as_mut(),
+            TOP,
+            token,
+            &document,
+        );
+        self.load_sink = Some(sink);
+    }
+
+    fn tell_title(&mut self) {
+        if let (Some(dom), Some(loader), Some(client)) = (
+            self.dom.as_ref(),
+            self.loader.as_deref_mut(),
+            self.frame_client.as_mut(),
+        ) {
+            dom_api::document_loader::tell_title(dom, loader, client.as_mut());
+        }
     }
 
     fn take_harness_results(&mut self) -> Option<String> {

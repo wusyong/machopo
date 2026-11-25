@@ -1,0 +1,217 @@
+# Stage 2a-2's mutants: `python3 scripts/test.py mutate rfcs/0115-render-frame/mutants-2a2.toml`.
+test = ["sh", "-c", "cargo test -q -p dom --test it link_sheets && cargo test -q -p dom_api --test it link_style && cargo test -q -p renderer && cargo test -q -p shell --test it -- --skip webdriver::a_session_with_a_hung_page_ends_in_time"]
+timeout = 120
+
+[[mutant]]
+name = "an alternate sheet blocks rendering"
+file = "crates/dom/src/link_sheet.rs"
+from = '''            .any(|sent| sent.document == document && sent.blocks_render)'''
+to = '''            .any(|sent| sent.document == document)'''
+
+[[mutant]]
+name = "no sheet is pending for scripts"
+file = "crates/dom/src/link_sheet.rs"
+from = '''            .any(|sent| sent.document == document && sent.blocks_scripts)'''
+to = '''            .any(|sent| sent.document == document && false)'''
+
+[[mutant]]
+name = "a sheet's response leaves the load waiting"
+file = "crates/dom/src/link_sheet.rs"
+from = '''            self.remove_load_request(document, request_id);'''
+to = '''            let _ = request_id;'''
+
+[[mutant]]
+name = "a link taken out still blocks scripts"
+file = "crates/dom/src/link_sheet.rs"
+from = '''                self.is_connected(link)
+                    && self.containing_shadow_root(link).is_none()'''
+to = '''                self.containing_shadow_root(link).is_none()'''
+
+[[mutant]]
+name = "a link in a shadow tree still blocks scripts"
+file = "crates/dom/src/link_sheet.rs"
+from = '''                    && self.containing_shadow_root(link).is_none()
+                    && self.node_id(self.document_of(link)) == id'''
+to = '''                    && self.node_id(self.document_of(link)) == id'''
+
+[[mutant]]
+name = "a link of another document still blocks scripts"
+file = "crates/dom/src/link_sheet.rs"
+from = '''                    && self.node_id(self.document_of(link)) == id
+                    && self.stylesheet_link_href(link).is_some()'''
+to = '''                    && self.stylesheet_link_href(link).is_some()'''
+
+[[mutant]]
+name = "a link of no stylesheet still blocks scripts"
+file = "crates/dom/src/link_sheet.rs"
+from = '''                    && self.stylesheet_link_href(link).is_some()
+            })'''
+to = '''            })'''
+
+[[mutant]]
+name = "a link adopted isn't asked for again"
+file = "crates/dom/src/link_sheet.rs"
+from = '''        if self.flag(node, SHEET_REQUESTED) && self.is_link_element(node) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a link whose sheet loads isn't kept"
+file = "crates/dom/src/link_sheet.rs"
+from = '''        list.push(self.gc, link);'''
+to = '''        let _ = (list, link);'''
+
+[[mutant]]
+name = "any element is marked asked for"
+file = "crates/dom/src/link_sheet.rs"
+from = '''        if self.is_link_element(link) {
+            self.set_flag(link, SHEET_REQUESTED, true);'''
+to = '''        {
+            self.set_flag(link, SHEET_REQUESTED, true);'''
+
+[[mutant]]
+name = "the failed hrefs aren't kept"
+file = "crates/dom/src/link_sheet.rs"
+from = '''        failed.push(href);'''
+to = '''        let _ = href;'''
+
+[[mutant]]
+name = "a script's link blocks scripts"
+file = "crates/dom_api/src/link_style.rs"
+from = '''            && link.parser_inserted
+'''
+to = '''
+'''
+
+[[mutant]]
+name = "media don't matter"
+file = "crates/dom_api/src/link_style.rs"
+from = '''                        css::media::MediaQueryList::parse(media).matches(&environment)'''
+to = '''                        css::media::MediaQueryList::parse(media).matches(&environment) || true'''
+
+[[mutant]]
+name = "an alternate sheet blocks"
+file = "crates/dom_api/src/link_style.rs"
+from = '''                        blocks_nothing: in_shadow || cx.is_alternate_stylesheet(at),'''
+to = '''                        blocks_nothing: in_shadow,'''
+
+[[mutant]]
+name = "a shadow tree's sheet blocks"
+file = "crates/dom_api/src/link_style.rs"
+from = '''                        blocks_nothing: in_shadow || cx.is_alternate_stylesheet(at),'''
+to = '''                        blocks_nothing: cx.is_alternate_stylesheet(at),'''
+
+[[mutant]]
+name = "the shadow trees aren't looked at"
+file = "crates/dom_api/src/link_style.rs"
+from = '''            .map(|root| (root, true))
+            .collect();'''
+to = '''            .map(|root| (root, true))
+            .filter(|_| false)
+            .collect();'''
+
+[[mutant]]
+name = "a link is asked for each time"
+file = "crates/dom_api/src/link_style.rs"
+from = '''                    && !cx.sheet_requested(at)'''
+to = '''                    && true'''
+
+[[mutant]]
+name = "an href that doesn't parse isn't noted"
+file = "crates/dom_api/src/link_style.rs"
+from = '''            dom.mutate(|cx| cx.note_sheet_failed(document.get(cx.gc), link.href));'''
+to = '''            let _ = link.href;'''
+
+[[mutant]]
+name = "use-credentials isn't told"
+file = "crates/dom_api/src/link_style.rs"
+from = '''                            ScriptCors::UseCredentials
+                        } else {'''
+to = '''                            ScriptCors::Anonymous
+                        } else {'''
+
+[[mutant]]
+name = "the renderer doesn't ask for the sheets"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            engine.send_sheet_fetches();'''
+to = '''            let _ = engine;'''
+
+[[mutant]]
+name = "a sheet doesn't block rendering"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        (self.parsing && !self.body_parsed) || sheets_block_render(dom, &self.document)'''
+to = '''        (self.parsing && !self.body_parsed) || (sheets_block_render(dom, &self.document) && false)'''
+
+[[mutant]]
+name = "a sheet doesn't block scripts"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        if blocked {
+            return false;
+        }
+        let Some(next) = self.doc(frame) else {'''
+to = '''        if blocked && false {
+            return false;
+        }
+        let Some(next) = self.doc(frame) else {'''
+
+[[mutant]]
+name = "a sheet's response isn't given to the DOM"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                self.update_child_blocking(frame);
+                self.sheet_loaded('''
+to = '''                self.update_child_blocking(frame);
+                let _ = Self::sheet_loaded;
+                (|_: FrameId, _: LoadedSheet, _: &LoadResult| ())('''
+
+[[mutant]]
+name = "a child frame's view isn't told its sheets block it"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        for frame in self.frames() {
+            self.update_child_blocking(frame);
+        }'''
+to = '''        for frame in self.frames() {
+            let _ = frame;
+        }'''
+
+[[mutant]]
+name = "the links' failed hrefs aren't told"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            failed_subresources
+                .extend(dom.read(|cx| cx.take_failed_sheets(next.document.get(cx.gc))));'''
+to = '''            let _ = &mut failed_subresources;'''
+
+[[mutant]]
+name = "the sheets aren't counted in flight"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        sheets
+            .saturating_add(parser)'''
+to = '''        (sheets & 0)
+            .saturating_add(parser)'''
+
+[[mutant]]
+name = "DevTools isn't told a sheet is a stylesheet"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                .map(|frame| (frame, "Stylesheet"))'''
+to = '''                .map(|frame| (frame, "Other"))'''
+
+[[mutant]]
+name = "a sheet's request URL isn't known"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                .or_else(|| dom.sent_sheet(request_id).map(|sent| sent.url))'''
+to = ''''''
+
+[[mutant]]
+name = "the frame's media are never known"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        Frame::media_environment(self, document)'''
+to = '''        let _ = document;
+        None'''
+
+[[mutant]]
+name = "a sheet's CORS isn't asked"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        // By CORS, which an origin that allows it makes origin-clean (and
+        // one that doesn't, a network error).
+        if let Some(cors) = cors {'''
+to = '''        // By CORS, which an origin that allows it makes origin-clean (and
+        // one that doesn't, a network error).
+        if let Some(cors) = cors.filter(|_| false) {'''

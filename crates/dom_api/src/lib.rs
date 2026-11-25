@@ -34,6 +34,7 @@ use dom::{Cx, NodeKind, NodeRef, names};
 extern crate self as dom_api;
 
 pub mod declare;
+pub mod encoding;
 mod engine;
 mod exception;
 pub mod interfaces;
@@ -70,6 +71,7 @@ mod body;
 mod crypto;
 mod dataset;
 mod document;
+pub mod document_loader;
 mod document_type;
 mod dom_implementation;
 mod editing;
@@ -95,6 +97,7 @@ mod input;
 mod intersection_observer;
 mod layout;
 mod lifecycle;
+mod link_style;
 mod list_box;
 mod location;
 mod markup;
@@ -148,6 +151,7 @@ pub use declare::{
     resolve_overload,
 };
 pub use document::{document_title, set_page_visible};
+pub use document_loader::DocumentLoader;
 pub use dom_api_macros::declare;
 pub use engine::{
     ChildNavigationAsked, ClassicScript, ConsoleMessage, ConsoleSink, DevToolsInterrupter,
@@ -183,6 +187,7 @@ pub use lifecycle::{
     DocumentReadiness, LoadCheck, check_completed, document_ready, report_unhandled_rejection,
     unload_document,
 };
+pub use link_style::send_sheet_fetches;
 pub use media_query_list::report_media_query_changes;
 pub use menu_list::{
     PopupItem, PopupItemKind, PopupResult, can_keep_popup, popup_items, popup_menu_closed,

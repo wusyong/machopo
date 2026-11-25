@@ -2209,6 +2209,126 @@ fn the_parsers_checkpoint_comes_before_it_prepares_a_script() {
     assert_eq!(run(&url), "none");
 }
 
+/// A script the parser made that a mutation observer moved into another
+/// document (an iframe's, with a window) before the parser prepared it
+/// isn't prepared there (HTML's "prepare the script element": its parser
+/// document isn't its document): it doesn't run in either.
+#[test]
+fn a_parsers_script_moved_away_before_it_is_prepared_doesnt_run() {
+    use std::collections::HashMap;
+
+    use net::test_server::{Route, TestServer};
+    let server = TestServer::start(HashMap::from([
+        (
+            "/index.html".to_owned(),
+            Route::ok(
+                "text/html",
+                "<!doctype html><iframe></iframe><script>var log = [];\
+                 new MutationObserver(records => { for (const record of records) for (const node of record.addedNodes)\
+                   if (node.id === 'moved') document.querySelector('iframe').contentDocument.body.append(node); })\
+                 .observe(document, {childList: true, subtree: true});\
+                 </script><script id=moved src=/moved.js></script>\
+                 <script>onload = () => testRunner.reportHarnessResults(log.join() || 'none')</script>",
+            ),
+        ),
+        ("/moved.js".to_owned(), script("parent.log.push('ran')", 0)),
+    ]))
+    .expect("the test server starts");
+    assert_eq!(run(&server.url("/index.html")), "none");
+}
+
+/// The parser's inline script that a sheet holds back, moved into another
+/// document meanwhile (by a timer that ran as the parser waited), doesn't
+/// run once the sheet is in (HTML's "execute the script element": its
+/// document isn't the one it was prepared in).
+#[test]
+fn a_parsers_script_moved_away_while_it_waits_doesnt_run() {
+    use std::collections::HashMap;
+
+    use net::test_server::{Route, TestServer};
+    let server = TestServer::start(HashMap::from([
+        (
+            "/index.html".to_owned(),
+            Route::ok(
+                "text/html",
+                "<!doctype html><iframe></iframe><script>var log = [];\
+                 setTimeout(() => document.querySelector('iframe').contentDocument.body\
+                   .append(document.getElementById('moved')), 50);</script>\
+                 <link rel=stylesheet href=/slow.css>\
+                 <script id=moved>log.push('ran')</script>\
+                 <script>testRunner.reportHarnessResults(log.join() || 'none')</script>",
+            ),
+        ),
+        ("/slow.css".to_owned(), sheet("p {}", 400)),
+    ]))
+    .expect("the test server starts");
+    assert_eq!(run(&server.url("/index.html")), "none");
+}
+
+/// The parser's external script a sheet held back runs after the
+/// microtasks the sheet's `load` queued (the parser's script nesting level
+/// is zero as it runs).
+#[test]
+fn a_parsers_external_script_runs_after_the_microtasks_before_it() {
+    use std::collections::HashMap;
+
+    use net::test_server::{Route, TestServer};
+    let server = TestServer::start(HashMap::from([
+        (
+            "/index.html".to_owned(),
+            Route::ok(
+                "text/html",
+                "<!doctype html><script>var log = [];</script>\
+                 <link rel=stylesheet href=/slow.css onload=\"Promise.resolve().then(() => log.push('microtask'))\">\
+                 <script src=/a.js></script>\
+                 <script>testRunner.reportHarnessResults(log.join())</script>",
+            ),
+        ),
+        ("/slow.css".to_owned(), sheet("p {}", 300)),
+        ("/a.js".to_owned(), script("log.push('script')", 0)),
+    ]))
+    .expect("the test server starts");
+    assert_eq!(run(&server.url("/index.html")), "microtask,script");
+}
+
+/// The microtasks the parser's inline script queued run as it ends
+/// (HTML's "clean up after running script"), before the parser goes on:
+/// they don't see the element after it.
+#[test]
+fn a_parsers_inline_scripts_microtasks_run_before_the_parser_goes_on() {
+    let url = site(
+        "inline-microtasks",
+        &[(
+            "index.html",
+            "<!DOCTYPE html><script>var log = [];\
+             Promise.resolve().then(() => log.push(document.getElementById('after') ? 'late' : 'early'));</script>\
+             <p id=after></p>\
+             <script>testRunner.reportHarnessResults(log.join())</script>",
+        )],
+    );
+    assert_eq!(run(&url), "early");
+}
+
+/// An inline module script's lines are its document's: what it throws is
+/// reported at the line of the document it is on.
+#[test]
+fn an_inline_module_scripts_lines_are_its_documents() {
+    let url = site(
+        "module-lines",
+        &[(
+            "index.html",
+            "<!DOCTYPE html>\n<script>var log = [];\n\
+             window.onerror = (message, file, line) => log.push(line);\n\
+             window.addEventListener('load', () => testRunner.reportHarnessResults(log.join()));</script>\n\
+             \n\
+             <script type=module>\n\
+             \n\
+             throw new Error('x');</script>",
+        )],
+    );
+    assert_eq!(run(&url), "8");
+}
+
 /// The parser's module scripts: deferred, in document order with the
 /// classic deferred ones (an external one after its imports, an inline
 /// one, one served as another MIME type than JavaScript's: `error`),

@@ -2339,6 +2339,10 @@ impl Frame {
 }
 
 impl dom_api::FrameLayout for Frame {
+    fn media_environment(&self, document: NodeId) -> Option<css::media::MediaEnvironment> {
+        Frame::media_environment(self, document)
+    }
+
     /// The frame whose view shows it is the one queries are of from now
     /// on.
     fn shows(&mut self, document: NodeId) -> bool {

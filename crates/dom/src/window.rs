@@ -1582,6 +1582,8 @@ pub(crate) fn new_document_data<'gc>() -> DocumentDataInit<'gc> {
         node_iterators: None,
         selection: None,
         in_order_scripts: None,
+        pending_sheet_links: None,
+        failed_sheets: elise::External::new(Cell::new(Vec::new())),
         style_sheets: None,
         sheet_texts: elise::External::new(Cell::new(None)),
         media_query_lists: None,

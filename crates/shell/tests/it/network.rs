@@ -270,6 +270,41 @@ fn a_stylesheet_blocks_rendering_until_it_loads() {
     assert_eq!(first_pixel(&frame, 10, 10), GREEN);
 }
 
+/// A child frame's document is render-blocked by a sheet script asked for
+/// after it loaded, as its top-level one would be: while the sheet loads
+/// it isn't styled again, its last frame drawn (the green it had, not the
+/// red script gave it meanwhile).
+#[test]
+fn a_child_frames_sheet_asked_for_later_blocks_its_rendering() {
+    let page = r#"<!DOCTYPE html>
+        <html class="reftest-wait">
+        <style>html, body { margin: 0 } iframe { border: 0; width: 50px; height: 50px }</style>
+        <iframe srcdoc="<style>html, body { margin: 0 }</style>
+            <div id=d style='width: 20px; height: 20px; background: green'></div>"></iframe>
+        <script>
+        onload = () => requestAnimationFrame(() => requestAnimationFrame(() => {
+            const child = document.querySelector('iframe').contentDocument;
+            const link = child.createElement('link');
+            link.rel = 'stylesheet';
+            link.href = '/slow.css';
+            child.head.append(link);
+            child.getElementById('d').style.background = 'red';
+            requestAnimationFrame(() => requestAnimationFrame(() =>
+                document.documentElement.classList.remove('reftest-wait')));
+        }));
+        </script>"#;
+    let server = server(&[
+        ("/", Route::ok("text/html", page)),
+        (
+            "/slow.css",
+            Route::ok("text/css", "#d { background: blue !important }")
+                .with_delay(Duration::from_secs(5)),
+        ),
+    ]);
+    let frame = render(&server.url("/"));
+    assert_eq!(pixel(&frame, 10, 10), GREEN);
+}
+
 /// A document isn't drawn till its parser has made its body (Blink's
 /// `Document::ShouldScheduleLayout`): its head, which came a while before
 /// the rest, isn't drawn alone.

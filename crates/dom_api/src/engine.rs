@@ -90,6 +90,24 @@ pub trait LoadSink {
         None
     }
 
+    /// The sheet at `url` of a `<link>` of `document` (`frame`'s), by CORS
+    /// with `cors` (none: no CORS), its request sent from
+    /// `request_origin`, `origin` naming where it comes from, as the DOM
+    /// asks (`send_sheet_fetches`; Blink's `LinkStyle::Process` as it is
+    /// inserted): its request's number; none if it went nowhere, which the
+    /// DOM notes as failed. None by default.
+    fn start_sheet_fetch(
+        &mut self,
+        frame: crate::FrameId,
+        document: dom::NodeId,
+        url: &str,
+        cors: Option<dom::ScriptCors>,
+        request_origin: Option<&str>,
+        origin: &FetchOrigin,
+    ) -> Option<u64> {
+        let _ = (frame, document, url, cors, request_origin, origin);
+        None
+    }
     /// `url` made a blob URL for `data` in `frame`'s realm
     /// (`URL.createObjectURL`).
     fn register_blob_url(&self, frame: crate::FrameId, url: &str, data: &dom::BlobData);
@@ -138,6 +156,15 @@ pub trait FrameClient {
     /// Child frame `frame` gone, and the frames in it with it: its iframe
     /// removed, or the document it was in replaced.
     fn frame_detached(&mut self, frame: crate::FrameToken);
+
+    /// The top-level frame's document's title is `title` now, another than
+    /// the one told last (Blink's `LocalFrameClient::DispatchDidReceiveTitle`,
+    /// which content's `RenderFrameImpl` sends the browser at once): before
+    /// the parser's script that may set another runs, and after a task.
+    /// Nothing by default.
+    fn title_changed(&mut self, title: &str) {
+        let _ = title;
+    }
 
     /// Script's navigation of a frame, `asked`, as the operation that
     /// asked for it ends (Blink's `LocalFrameClient::BeginNavigation`,
@@ -423,6 +450,15 @@ pub trait ScriptEngine: ParserHost {
     /// time (a child to navigate, a navigation script made, a blob URL
     /// registered or revoked), in order, taken.
     fn take_frame_requests(&mut self) -> Vec<crate::FrameRequest>;
+
+    /// The loading of `frame`'s document (`DocumentLoader`), the frame's:
+    /// none for a frame gone, or a document the host loads no body of.
+    fn document_loader(&mut self, frame: crate::FrameId) -> Option<&mut crate::DocumentLoader>;
+
+    /// `frame`'s document's loading is `loader` from now on (its document
+    /// just made, `create_window`): it goes with the frame, or its next
+    /// document.
+    fn set_document_loader(&mut self, frame: crate::FrameId, loader: crate::DocumentLoader);
 
     /// The response to the fetch numbered `id` came (`Err`: a network
     /// error), as a task of its own: its promise settled in its window's
@@ -839,6 +875,18 @@ pub trait ScriptEngine: ParserHost {
     /// (a module's imports its response brought, the parser's) and any
     /// still waiting. Nothing by default.
     fn send_script_fetches(&mut self) {}
+
+    /// The sheets of the `<link>`s of its frames' documents not asked for
+    /// yet, asked for now through the load sink (`send_sheet_fetches`):
+    /// those script inserted or changed (the parser's ask before the
+    /// scripts they block run). Nothing by default.
+    fn send_sheet_fetches(&mut self) {}
+
+    /// The top-level frame's document's title told to the frame client if
+    /// it changed since it was last told (`document_loader::tell_title`):
+    /// the host asks after a task and an animation frame's callbacks; the
+    /// parser, before each script. Nothing by default.
+    fn tell_title(&mut self) {}
 
     /// Whether a child frame was made or went since the last ask: what the
     /// host keeps of its frames follows them then (`child_frames`,

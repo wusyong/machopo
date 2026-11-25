@@ -225,6 +225,7 @@ fn queued_scripts_take_their_turns() {
                 turns.push(ready.loaded.map(|loaded| match loaded {
                     ScriptResult::Classic(loaded) => loaded.source,
                     ScriptResult::Module(root) => format!("module {root}"),
+                    ScriptResult::Wasm { url, .. } => format!("wasm {url}"),
                 }));
             }
             turns

@@ -60,6 +60,14 @@ pub trait FrameLayout: Any {
         None
     }
 
+    /// What the media queries of `document`'s frame see now (its viewport
+    /// and device pixel ratio): none for a child frame given no size yet,
+    /// or a document no frame shows. None by default.
+    fn media_environment(&self, document: NodeId) -> Option<css::media::MediaEnvironment> {
+        let _ = document;
+        None
+    }
+
     /// The boxes of text `text`'s data from `start` to `end` (UTF-16 code
     /// units), CSS px of the viewport (scrolled, unless it is in a box
     /// fixed to it), as last laid out (Blink's

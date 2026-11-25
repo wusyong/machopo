@@ -454,6 +454,8 @@ pub fn run_script_task<H: ScriptHost>(host: &mut H, element: &NodeRoot) {
     match loaded {
         // HTML's "run a module script" (`currentScript` stays null).
         ScriptResult::Module(root) => host.run_module_script(&document, root),
+        // A wasm document's are its parser's, which runs them itself.
+        ScriptResult::Wasm { .. } => {}
         ScriptResult::Classic(loaded) => {
             let (before, use_credentials) = host.mutate(|cx| {
                 let script = element.get(cx.gc);
@@ -586,6 +588,7 @@ pub fn send_script_fetches(
                     document: fetch.document,
                     charset: fetch.request.charset,
                     module: fetch.module,
+                    wasm: fetch.wasm,
                 },
             );
         }

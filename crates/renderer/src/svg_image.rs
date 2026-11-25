@@ -106,7 +106,7 @@ impl SvgImage {
         charset: Option<&str>,
         body: &[u8],
     ) -> Option<Self> {
-        let text = crate::encoding::decode_xml(charset, body);
+        let text = dom_api::encoding::decode_xml(charset, body);
         let document = html::parser::parse_xml_document(dom, &text).root().clone();
         let natural = dom.mutate(|cx| {
             let root = svg_root(cx, &document)?;

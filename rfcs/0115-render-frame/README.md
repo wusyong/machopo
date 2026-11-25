@@ -65,10 +65,10 @@
 
 1. **renderer 那一側收成 `RenderFrame`**（已決定的事項第 2 到 8 條）：八張表收進一個物件、每種轉換一個方法，最上層和子 frame 同一種；`handle_frame_requests` 的十八處變成一行分派；debug build 在讀表的地方檢查 engine 裡沒有沒分派的 `FrameRequest`。擁有者照舊是 `RenderThread`，行為和時機不變（除了第 8 條的修正）。之後的每一段都在它上面搬。
 2. **文件的載入搬到 engine 那一側的 `LocalFrame`**（分小段，已決定的事項第 11 條：先只排 2a）：
-   - 2a：body 的解碼和 parse、parser 擋住的和 deferred 的 script（第 12 到 16 條）；renderer 只交 pipe 讀到的 bytes。
-   - 2b：樣式表的請求、擋 script 和 render-blocking 的判斷（拿掉 2a 的 `set_scripts_blocked`），畫面那一側問它擋著沒。
-   - 2c：`load` 和 readiness、「跑完 script 之後這個 frame 還在不在」。
-   畫面那一半（`rendered_*`、`load_finished` 和 reftest 的 swap promise、標題的時機）留在 renderer，跟著 `FrameView`。`documents.rs` 的大半、兩個 engine（`dom_wasm` 只有最上層）都要動。
+   - 2a：body 的解碼和 parse、parser 擋住的和 deferred 的 script（第 12 到 16 條）、`<link>` 的樣式表的請求和「擋 script、擋 render」的帳（第 18 條）；renderer 只交 pipe 讀到的 bytes 和樣式表的回應。
+   - 2b：樣式表剩下的（回應的解碼、`load` 和 `error`、DevTools 的原始文字），畫面那一側問它擋著沒。
+   - 2c：`load` 和 readiness、「跑完 script 之後這個 frame 還在不在」、「接著 parse」是 DOM 的 task（第 14、20 條）。
+   畫面那一半（`rendered_*`、`load_finished` 和 reftest 的 swap promise）留在 renderer（標題的時機原本也算在這裡，第 19 條搬到 engine 那一側），跟著 `FrameView`。`documents.rs` 的大半、兩個 engine（`dom_wasm` 只有最上層）都要動。
 3. **`RenderFrame` 由 engine 的 frame 擁有**：導覽在 client 裡送出並記帳，Browser 的訊息經過 engine 往下走；`FrameRequest` 的導覽、`handle_frame_requests`、十八處和第 1 段的檢查拿掉。
 4. **fragment 的捲動排到下一次 main frame**：待決定的第 1 條；可能併進第 3 段。
 
@@ -102,6 +102,16 @@
 3. parse 的迴圈裡的過期讀法（`advance_document` 的開頭、`note_body_parsed`）是不是真的不見了。
 
 三件都順就接著做 2b（樣式表）；不順就停下來，回頭考慮停在第 1 段，或重新切界線。
+
+2a 做完時（2026-11-25，做到 2a-3，2a-4 照第 20 條移到 2c）的評估：
+
+1. 跨界線的新方法 7 個：`ScriptEngine` 的 `document_loader`、`set_document_loader`、`send_sheet_fetches`、`tell_title`，`LoadSink::start_sheet_fetch`，`FrameLayout::media_environment`，`FrameClient::title_changed`。超過五個，多出來的是第 18 條把原本 2b 的樣式表的請求併進來（使用者看過，可以接受）和第 19 條的標題（使用者選了 hook）；沒有為了對帳加的。
+2. Speedometer（`--against 66110866`，各 3 次）：20 個 suite 的幾何平均 +0.2%，每個 suite 的變化都在兩邊的 95% 區間裡；NewsSite-Next +1.5%、NewsSite-Nuxt -0.9%、Editor-CodeMirror +0.9%、Editor-TipTap -1.9%。記憶體峰值 -1.2% 到 +3.9%（+3.9% 的 Perf-Dashboard 多在 Browser 的 process，renderer 的 +3%）。
+3. parse 的迴圈裡的過期讀法不在了：迴圈在 engine 的呼叫裡，renderer 在呼叫之後讀一次 DOM（`note_body_parsed`）。
+
+三件都順。
+
+2a 做完之後的評估（2026-11-25，和使用者討論過）：整份做完是值得的，每段照舊設停損點。理由：每一段單獨都是改進（停在中間不用退回，最壞是停在比原本乾淨的地方）；使用者在意的「送和帳分開」在第 3 段、「很多地方要做檢查」分在 2a、2c 和第 3 段，「狀態在一處」由 2b、2c 做完，也是第 3 段的前提（先跳到第 3 段的話，做到一半很可能又要回頭搬 2c 的東西）；界線的形狀（往外是 hook、往內是問 engine，Blink 和 content 之間的形狀）2a 和標題都做過一次。信心：2b 約八成；2c 切得乾淨約五到六成（最可能卡住的是 hook 要排 task、要 main frame，已決定的事項第 5 條留到這時再看）；2c 順利之後第 3 段約六到七成；一路到底約一半。條件：2c 開工前先做依賴盤點，再逐條定「待決定」的第 1 條和第 5 條留下的事；哪一段要共用的 `Rc<RefCell>` 才接得起來、或對帳只是換了地方，就停下來。
 
 未知數（2026-11-25 的依賴盤點之後，`details.md` 的「依賴的盤點」和「盤點之後的看法」）：
 
@@ -151,7 +161,11 @@
 13. **2a：renderer 讀 data pipe，`LocalFrame` 解碼和 parse**（2026-11-25，使用者決定；A）：renderer 只管傳輸（從 pipe 讀 bytes、排下一次讀），bytes 交給 engine；判斷編碼（`encoding.rs` 的 `DocumentDecoder` 搬到 engine 那一側）、文件的編碼、parse 是 `LocalFrame` 的。DevTools 要的原始碼改成問 engine。界線是「傳輸」對「文件」，`dom_api` 不依賴 `ipc`。對照 Chromium：Blink 的 `NavigationBodyLoader` 自己讀 mojo 的 pipe、解碼器是 parser 的；machopo 的 pipe 是 `ipc` 的、process 之間的東西，留在 renderer。不選 `LocalFrame` 自己讀 pipe：`dom_api` 要依賴 `ipc`，讀的訊號要經過 hook 叫醒 thread。不選 renderer 也解碼：文件的編碼是文件的事（它的 script 和樣式表用它解碼），留在 renderer 要再給 engine 一份。
 14. **2a：「接著 parse」是 DOM 的一種 task**（2026-11-25，使用者決定；A）：parser 讓出時 `dom` 編號、經過 `TaskWaker` 送記號，和 timer、element task 一樣（Chromium 的文件的 `kNetworking` task runner）；讓出照時間的預算和「有輸入在等」（既有的 `InputMonitor`，`isInputPending()` 用的那個 hook）。從 renderer 的 `InternalTask::ParseOn` 移到 DOM 的 queue，和別的 task 的先後可能變（兩個 queue 都照 post 的順序，差在 DevTools 暫停時取哪些 queue）：WPT 和 `shell` 的測試守著。不選經過 hook 排 renderer 的 task：多一個 hook，文件的事繞回 renderer。
 15. **2a：parser 擋住的和 deferred 的 script 跟著 parser 一起搬**（2026-11-25，使用者決定；A）：第 14 條讓 parse 在 engine 的呼叫裡跑，script 留在 renderer 的話，parser 碰到 script 只能記一筆、呼叫之後處理，又是一種對帳。所以 2a 是 body 的解碼加上 parser 加上 parser 的 script：請求走 DOM 自己排的 script 那條路（`LoadSink::start_script_fetch`、回應交給 engine），`advance_document` 整個搬到 `LocalFrame`（對照 Chromium 的 `HTMLParserScriptRunner`，parser 的）。原本的 2b 併進來，2a 變大，但中間沒有對帳的過渡形狀。不選 script 留到 2b、2a 的 parse 經過 renderer 的 task：過渡形狀，2b 又要改一次 parse 怎麼排。不選碰到 script 時記一筆對帳：和這份的目標相反。
-16. **2a：renderer 和 engine 之間的方法**（2026-11-25，照建議，使用者同意）：renderer 往下：commit 時建 `LocalFrame`（`create_window` 多帶 MIME type、transport 的 charset、要不要 parse）、`body_data(frame, bytes)`、`body_ended(frame, status)`、script 的回應（DOM 自己排的 script 那條路）、`set_scripts_blocked(frame, bool)`（樣式表擋不擋 script：樣式表的帳在搬之前還在 renderer，變了時推給 `LocalFrame`，它不用在呼叫裡回頭問；這是過渡的，樣式表搬過去時拿掉）。engine 往上：script 的請求（`LoadSink::start_script_fetch`）、有沒有輸入在等（`InputMonitor`）。renderer 在呼叫之外問 engine：DevTools 要的原始碼、編碼、body 做出來了沒（render-blocking）。名稱和參數實作時可能調整，改了寫回這一條。對照 Chromium：往下的是 `WebNavigationBodyLoader::Client` 和 `WebLocalFrame` 的那幾個方法，往上的是既有的 hook。
+16. **2a：renderer 和 engine 之間的方法**（2026-11-25，照建議，使用者同意）：renderer 往下：commit 時建 `LocalFrame`（`create_window` 多帶 MIME type、transport 的 charset、要不要 parse）、`body_data(frame, bytes)`、`body_ended(frame, status)`、script 的回應（DOM 自己排的 script 那條路）（原本還有 `set_scripts_blocked(frame, bool)`：樣式表擋不擋 script 由 renderer 推下去；來不及，第 18 條拿掉）。engine 往上：script 的請求（`LoadSink::start_script_fetch`）、有沒有輸入在等（`InputMonitor`）。renderer 在呼叫之外問 engine：DevTools 要的原始碼、編碼、body 做出來了沒（render-blocking）。名稱和參數實作時可能調整，改了寫回這一條。對照 Chromium：往下的是 `WebNavigationBodyLoader::Client` 和 `WebLocalFrame` 的那幾個方法，往上的是既有的 hook。
+17. **2a：會 parse 的 engine 方法照值收 engine**（2026-11-25，使用者決定；A）：`html` 的 parser 照值借它的 host（`Parser::resume(Box<H>) -> (ParserState, Box<H>)`：html5ever 的 sink 是 `&self`，host 放在 sink 的 `RefCell` 裡，跨好幾次 `resume` 的 tokenizer 存不了一次的借用），所以 engine 那一側要 parse，就要能把自己照值借給 parser：`ScriptEngine` 的 `parse` 和 `run_dom_task`（「接著 parse」的記號在它裡面跑）收 `self: Box<Self>`、回傳 `Box<dyn ScriptEngine>`（object-safe），parse 的迴圈在 `dom_api`。renderer 呼叫它們時 `take()` engine、再放回去（現在 `advance_document` 就是這樣）。不是新的 hook，是 engine 方法的接收方式。對照 Chromium：Blink 的 parser 拿著 `Document` 的指標、script 在 Blink 裡跑，沒有這個擁有權的問題。不選 `run_dom_task` 回傳「parse frame X」、renderer 再叫 `parse`：parse 怎麼排要經過 renderer 轉一手。不選讓 parser 用 `unsafe` 的「在這段呼叫裡借給 callback」拿 host（`bindings` 才能有 `unsafe`，`html` 又不能依賴 `bindings`）：多一個要論證的機制。
+18. **2a：`<link>` 的樣式表的請求和「擋 script、擋 render」的帳併進 2a**（2026-11-25，使用者決定；A）：實作 2a-2 時發現，第 16 條的 `set_scripts_blocked`（樣式表的帳變了時由 renderer 推下去）來不及：parser 在同一次 engine 的呼叫裡 parse 出 `<link rel=stylesheet>` 和後面的 `<script>`，renderer 在呼叫之外，沒機會先掃出 `<link>`、照 media 判斷、送出請求，script 就會在樣式表到之前跑。呼叫裡回頭叫 renderer 的 `start_loads` 也不行：engine 借給了 parser，renderer 碰不到 DOM，要共用 `pending_sheets` 就得 `Rc<RefCell>`。所以 `<link>` 的掃描、media 的判斷（經過 `FrameLayout`）、請求（新的 `LoadSink` 的 hook，和圖片、script 的一樣）和「擋 script、擋 render、`load` 等著」的帳搬到 engine 那一側，帳記在 DOM（和 script 的請求一樣，照請求的編號）；回應照舊由 renderer 收、解 CSS，交給 DOM；renderer 要知道 render-blocking、要不要等時問 engine。拿掉第 16 條的 `set_scripts_blocked`。對照 Chromium：`HTMLLinkElement` 插進樹時 `LinkStyle` 當場在 Blink 裡送出請求，`StyleEngine` 記著擋 script 的樣式表，`HTMLParserScriptRunner` 問 `Document::IsScriptExecutionReady`，全在 parser 的那串呼叫裡。不選 parser 碰到每個 script 都回 renderer（renderer 跑 `start_loads` 再叫 engine 跑 script）：迴圈照舊跨著界線，「接著 parse」改成 DOM 的 task（第 14 條）時，task 跑到 script 還是要回 renderer。不選停在 2a-1：parse 迴圈裡的過期讀法還在。新增的介面（hook 和問 engine 的方法）因此多三個左右，第 1 個停損點照算。
+19. **2a：分頁的標題經過 `FrameClient` 的 hook，由 engine 那一側告訴**（2026-11-25，使用者決定；A）：實作 2a-3 時發現，parse 的迴圈搬進 engine 的呼叫之後，renderer 沒辦法在 parser 的 script 跑之前送出 parse 到那裡的標題（原本迴圈裡的 `update_title`）：script 馬上改掉的標題就不送了，`browser` 的 `navigation::the_tab_title_follows_document_title` 守著這件事（和 Blink 一樣，`</title>` 結束就告訴 Browser）。所以 `FrameClient` 多 `title_changed`（renderer 的實作送 `UpdateTitle`），「上次告訴的標題、在樹的哪個版本讀的」從 `FrameDocument` 搬到 `DocumentLoader`（每份文件一份），`ScriptEngine::tell_title` 由 parser 在每個 script 之前、renderer 在 task 和 animation frame 之後叫。對照 Chromium：`LocalFrameClient::DispatchDidReceiveTitle`，content 的 `RenderFrameImpl` 當場送給 Browser。不選把 renderer 上次送的標題放進 `ParseRun`、標題變了就回傳新的停下原因再接著 parse：標題留在 renderer，但多一種往返。不選只在呼叫結束時送：script 改掉的標題不送，和 Chrome 不同。這把標題的時機從「畫面那一半」移到 engine 那一側；新增的介面多兩個（`title_changed`、`tell_title`）。
+20. **「接著 parse」是 DOM 的 task（第 14 條）從 2a 移到 2c**（2026-11-25，使用者決定；B）：2a-3 做完時發現，parse 完之後的事（`Interactive`、deferred script 之後的 DOMContentLoaded、DevTools、`finish_load`；讓出、等 body 時的 `parser_stopped`）還在 renderer，要到 2c 才搬；在那之前讓 DOM 的 task 去 parse，`run_dom_task` 得收 `Box<Self>`、把停下的原因交回 renderer（第 17 條），預算、讓出的次數、`parse_due` 搬到 engine 那一側，換來的只是拿掉 `InternalTask::ParseOn`，回傳值到 2c 又要再改。所以 2a 做到 2a-3，「接著 parse」和「the end」一起在 2c 做，`run_dom_task` 只改一次。對照 Chromium：`HTMLDocumentParser::SchedulePumpTokenizer` 排在文件的 `kNetworking` task runner 上，parse 完的「the end」也在 Blink 裡（`Document::FinishedParsing`），不用交回 content。不選照第 14 條現在做：過渡的回傳值。不選一直留在 renderer 的 scheduler：2c 之後 renderer 為了排它還要知道 parse 停在哪裡。
 
 ## 待決定
 

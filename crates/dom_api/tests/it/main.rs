@@ -29,6 +29,7 @@ mod images;
 mod input;
 mod intersection;
 mod kinds;
+mod link_style;
 mod markup;
 mod members;
 mod mutation_observer;

@@ -1029,7 +1029,7 @@ fn worker_script(result: &LoadResult) -> Option<WorkerScript> {
     {
         return None;
     }
-    let source = crate::encoding::decode_script(
+    let source = dom_api::encoding::decode_script(
         response.head.charset.as_deref(),
         &response.body,
         encoding_rs::UTF_8,

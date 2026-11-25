@@ -6,13 +6,13 @@
 use encoding_rs::{Encoding, UTF_8, UTF_16BE, UTF_16LE, WINDOWS_1252, X_USER_DEFINED};
 
 /// How far `<meta charset>` (and `<meta name="script">`) is looked for.
-pub(crate) const PRESCAN_BYTES: usize = 1024;
+pub const PRESCAN_BYTES: usize = 1024;
 
 /// A document's text as its body comes (Blink's `TextResourceDecoder`, which
 /// the document's parser feeds as the bytes come): in the encoding its start
 /// says, never another after, a character cut between two pieces decoded
 /// whole.
-pub(crate) struct DocumentDecoder {
+pub struct DocumentDecoder {
     decoder: encoding_rs::Decoder,
     /// The BOM's bytes still to skip.
     bom: usize,
@@ -22,7 +22,7 @@ impl DocumentDecoder {
     /// The decoder of a document of `mime_type` whose transport said
     /// `charset`, from `start`, its body's first `PRESCAN_BYTES` (or all of
     /// a shorter one); `more`: more of it may come after.
-    pub(crate) fn new(mime_type: &str, charset: Option<&str>, start: &[u8], more: bool) -> Self {
+    pub fn new(mime_type: &str, charset: Option<&str>, start: &[u8], more: bool) -> Self {
         let (encoding, bom) = document_encoding(mime_type, charset, start, more);
         Self {
             decoder: encoding.new_decoder_without_bom_handling(),
@@ -31,13 +31,13 @@ impl DocumentDecoder {
     }
 
     /// What the document's text is read in: its sheets' default.
-    pub(crate) fn encoding(&self) -> &'static Encoding {
+    pub fn encoding(&self) -> &'static Encoding {
         self.decoder.encoding()
     }
 
     /// The text of the body's next `bytes` (`last`: the end of it); what
     /// ends cut short of a character waits for the next.
-    pub(crate) fn decode(&mut self, bytes: &[u8], last: bool) -> String {
+    pub fn decode(&mut self, bytes: &[u8], last: bool) -> String {
         let skip = self.bom.min(bytes.len());
         self.bom = self.bom.saturating_sub(skip);
         let mut rest = &bytes[skip..];
@@ -102,7 +102,7 @@ fn document_encoding(
 /// An XML file's text (an SVG image's; Blink's `TextResourceDecoder` for
 /// XML): a BOM, the transport's `charset`, the XML declaration's
 /// `encoding`, then UTF-8, XML's default.
-pub(crate) fn decode_xml(charset: Option<&str>, body: &[u8]) -> String {
+pub fn decode_xml(charset: Option<&str>, body: &[u8]) -> String {
     let (encoding, bom_len) = Encoding::for_bom(body)
         .or_else(|| {
             charset
@@ -139,7 +139,7 @@ fn xml_declaration_encoding(body: &[u8]) -> Option<&'static Encoding> {
 
 /// A stylesheet's text (css-syntax "decode bytes"): a BOM, the transport's
 /// `charset`, `@charset`, then the document's encoding.
-pub(crate) fn decode_stylesheet(
+pub fn decode_stylesheet(
     charset: Option<&str>,
     body: &[u8],
     document_encoding: &'static Encoding,
@@ -158,7 +158,7 @@ pub(crate) fn decode_stylesheet(
 
 /// A classic script's text (HTML "fetch a classic script"): a BOM, the
 /// transport's `charset`, then the document's encoding.
-pub(crate) fn decode_script(
+pub fn decode_script(
     charset: Option<&str>,
     body: &[u8],
     document_encoding: &'static Encoding,
@@ -199,7 +199,7 @@ fn prescan(bytes: &[u8]) -> Option<&'static Encoding> {
 /// `<meta name="script" content="wasm">` in its first 1024 bytes, found as
 /// the encoding's `<meta>` is (the document's engine is chosen before it
 /// is parsed). The values ASCII case-insensitively.
-pub(crate) fn declares_wasm_scripts(body: &[u8]) -> bool {
+pub fn declares_wasm_scripts(body: &[u8]) -> bool {
     prescan_metas(&body[..body.len().min(PRESCAN_BYTES)], |attributes| {
         let value = |name: &[u8]| {
             attributes
@@ -220,7 +220,7 @@ pub(crate) fn declares_wasm_scripts(body: &[u8]) -> bool {
     clippy::arithmetic_side_effects,
     reason = "`i` is a position in `bytes`, moved past what was found in it: at most its length (a slice's, <= isize::MAX) and a few bytes"
 )]
-pub(crate) fn prescan_metas<T>(
+pub fn prescan_metas<T>(
     bytes: &[u8],
     mut found: impl FnMut(&[(Vec<u8>, Vec<u8>)]) -> Option<T>,
 ) -> Option<T> {

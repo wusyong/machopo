@@ -71,6 +71,7 @@ mod initiator;
 mod input;
 mod intersection;
 mod language;
+mod link_sheet;
 mod lists;
 mod media_query;
 mod message;
@@ -175,6 +176,7 @@ pub use intersection::{
     IntersectionEntryValues, IntersectionObservationState, IntersectionObserver,
     IntersectionObserverEntry, IntersectionObserverOptions, IntersectionObserverRoot,
 };
+pub use link_sheet::SentSheet;
 pub use lists::{
     CssStyleDeclaration, DeclarationOwner, DomImplementation, DomRect, DomRectList, DomStringMap,
     DomTokenList, NodeList, StyleTarget,
@@ -489,6 +491,12 @@ pub struct DocumentData {
     /// Its list of scripts that will execute in order as soon as possible
     /// (their elements; `script`), once it has had one.
     pub(crate) in_order_scripts: Member<HeapVector<Node>>,
+    /// Its `<link>`s whose sheets load, kept till their responses come
+    /// (`link_sheet`), once it has had one.
+    pub(crate) pending_sheet_links: Member<HeapVector<Node>>,
+    /// The `href`s of its `<link>`s that asked for no sheet, till its host
+    /// takes them (`link_sheet`).
+    pub(crate) failed_sheets: External<Cell<Vec<String>>>,
     /// Its `styleSheets`, once script asked for it, and its `<style>`s'
     /// contents by their text (`cssom`; taken and put back, none until
     /// the first).
@@ -928,6 +936,9 @@ struct Changes {
     /// The queued scripts' requests the host sent, by request, until their
     /// responses come (`Dom::note_script_sent`): as `sent_fetches`.
     sent_scripts: std::cell::RefCell<std::collections::HashMap<u64, fetch::SentScript>>,
+    /// The `<link>`s' sheets' requests the host sent, by request, until
+    /// their responses come (`Cx::sheet_sent`): as `sent_fetches`.
+    sent_sheets: std::cell::RefCell<std::collections::HashMap<u64, link_sheet::SentSheet>>,
     /// The browser's user agent and whether automation controls it, its
     /// host's (`Dom::set_agent`, `navigator`).
     user_agent: std::cell::RefCell<String>,
@@ -2428,6 +2439,7 @@ impl<'gc> Cx<'_, 'gc> {
             }
             self.adopt_attr_nodes(at, document);
             self.image_adopted(at);
+            self.link_adopted(at);
             if let Some(content) = self.template_content(at) {
                 self.adopt(content, self.template_document(document));
             }

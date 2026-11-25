@@ -205,6 +205,40 @@ fn a_subresource_on_its_way_keeps_the_network_busy_with(args: &[&str]) {
     );
 }
 
+/// A `<link>`'s sheet on its way keeps the network from being idle too:
+/// one of other media, which blocks no script, so `DOMContentLoaded`
+/// doesn't wait for it.
+#[test]
+fn a_sheet_on_its_way_keeps_the_network_busy() {
+    let html = "<!DOCTYPE html><link rel=stylesheet media=print href='/slow.css'>";
+    let server = server(&[
+        ("/", Route::ok("text/html", html)),
+        (
+            "/slow.css",
+            Route::ok("text/css", "p {}").with_delay(Duration::from_millis(400)),
+        ),
+    ]);
+    let machopo = Machopo::start();
+    let (mut page, main) = page(&machopo);
+    enable(&mut page);
+    page.take_events("Page.");
+    page.call(None, "Page.navigate", json!({ "url": server.url("/") }));
+    let events = page_events_until(&mut page, |event| {
+        event["params"]["name"] == "networkIdle" && event["params"]["frameId"] == main.as_str()
+    });
+    let loaded = lifecycle(&events, &main, "DOMContentLoaded")["timestamp"]
+        .as_f64()
+        .unwrap();
+    let idle = lifecycle(&events, &main, "networkIdle")["timestamp"]
+        .as_f64()
+        .unwrap();
+    // At when the quiet began: the sheet came.
+    assert!(
+        (0.3..0.8).contains(&(idle - loaded)),
+        "idle at {idle}, DOMContentLoaded at {loaded}"
+    );
+}
+
 /// An iframe with no `src` keeps its initial `about:blank`: loaded as it
 /// starts, its whole lifecycle is told (as Chrome's: Puppeteer waits for
 /// every frame's), and it isn't navigated. One whose document is on its

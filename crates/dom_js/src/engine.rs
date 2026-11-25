@@ -655,6 +655,16 @@ impl ScriptEngine for V8Engine {
         std::mem::take(&mut self.state().frames.requests)
     }
 
+    fn document_loader(&mut self, frame: dom_api::FrameId) -> Option<&mut dom_api::DocumentLoader> {
+        self.state().frames.get_mut(frame)?.loader.as_deref_mut()
+    }
+
+    fn set_document_loader(&mut self, frame: dom_api::FrameId, loader: dom_api::DocumentLoader) {
+        if let Some(next) = self.state().frames.get_mut(frame) {
+            next.loader = Some(Box::new(loader));
+        }
+    }
+
     fn fetch_response(&mut self, id: u64, response: Result<dom_api::FetchedResponse, ()>) -> bool {
         // The window whose fetch it is.
         let frames = self.frames_as_made();
@@ -1630,6 +1640,15 @@ impl ScriptEngine for V8Engine {
 
     fn send_script_fetches(&mut self) {
         crate::frames::send_script_fetches(self.state());
+    }
+
+    fn send_sheet_fetches(&mut self) {
+        crate::frames::send_sheet_fetches(self.state());
+    }
+
+    fn tell_title(&mut self) {
+        let state = self.state();
+        state.frames.tell_title(&state.dom);
     }
 
     fn set_load_sink(&mut self, sink: Box<dyn dom_api::LoadSink>) {

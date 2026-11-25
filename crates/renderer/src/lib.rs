@@ -37,7 +37,6 @@ mod child_process;
 mod clock;
 mod compositing;
 mod document;
-mod encoding;
 mod frame_view;
 mod frame_widget;
 mod idleness_detector;
