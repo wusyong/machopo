@@ -1,0 +1,37 @@
+# Stage 1c's mutants: `python3 scripts/test.py mutate rfcs/0115-render-frame/mutants-1c.toml`.
+test = ["sh", "-c", "cargo test -q -p renderer && cargo test -q -p shell --test it -- --skip webdriver::a_session_with_a_hung_page_ends_in_time"]
+timeout = 900
+
+[[mutant]]
+name = "the navigations are read whatever was sent"
+file = "crates/renderer/src/render_thread/render_frame.rs"
+from = '''            self.booking > 0 || !self.asked.0.get(),'''
+to = '''            self.booking > 0 || !self.asked.0.get() || true,'''
+
+[[mutant]]
+name = "booking doesn't let the navigations be read"
+file = "crates/renderer/src/render_thread/render_frame.rs"
+from = '''            self.booking = self.booking.checked_add(1).expect("booking nests a few deep");'''
+to = '''            let _ = self.booking;'''
+
+[[mutant]]
+name = "what was sent stays unbooked once taken"
+file = "crates/renderer/src/render_thread/render_frame.rs"
+from = '''    pub(super) fn take_asked(&mut self) {
+        #[cfg(debug_assertions)]
+        self.asked.0.set(false);'''
+to = '''    pub(super) fn take_asked(&mut self) {'''
+
+[[mutant]]
+name = "booking never ends"
+file = "crates/renderer/src/render_thread/render_frame.rs"
+from = '''            self.booking = self.booking.checked_sub(1).expect("as many ends as begins");'''
+to = '''            let _ = self.booking;'''
+
+[[mutant]]
+name = "the hook tells nothing as it sends a navigation"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''    fn navigate(&mut self, asked: &dom_api::NavigationAsked<'_>, dom: &dom::Dom) -> Option<u64> {
+        #[cfg(debug_assertions)]
+        self.asked.set();'''
+to = '''    fn navigate(&mut self, asked: &dom_api::NavigationAsked<'_>, dom: &dom::Dom) -> Option<u64> {'''

@@ -229,7 +229,14 @@ impl FrameDocument {
     /// tests'.
     #[cfg(test)]
     pub(super) fn for_test(frame: FrameId, document: NodeRoot) -> Self {
-        Self::new(frame, "text/html", Rc::from(""), None, document, encoding_rs::UTF_8)
+        Self::new(
+            frame,
+            "text/html",
+            Rc::from(""),
+            None,
+            document,
+            encoding_rs::UTF_8,
+        )
     }
 
     /// The DOM's document it is of.
@@ -608,19 +615,22 @@ impl RenderThread {
         // DevTools' agents look at the frames again after the task (the
         // `DOM` agent's frames have the new document).
         self.frames_changed = true;
-        self.render_frames.commit_top(top, FrameDocument {
-            navigation_id,
-            body: Some(body),
-            time_origin,
-            ..FrameDocument::new(
-                top,
-                mime_type,
-                source,
-                Some(parser),
-                document,
-                document_encoding,
-            )
-        });
+        self.render_frames.commit_top(
+            top,
+            FrameDocument {
+                navigation_id,
+                body: Some(body),
+                time_origin,
+                ..FrameDocument::new(
+                    top,
+                    mime_type,
+                    source,
+                    Some(parser),
+                    document,
+                    document_encoding,
+                )
+            },
+        );
         self.request_main_frame();
         if let Some(frame) = self.render_frames.top_token() {
             let _ = self.to_browser.send(RendererHostMsg::DidCommitNavigation {
@@ -924,7 +934,14 @@ impl RenderThread {
     /// the renderer's own of the frames made and gone since brought to the
     /// engine's first (`follow_child_frames`).
     pub(super) fn handle_frame_requests(&mut self) {
+        self.render_frames.begin_booking();
+        self.book_frame_requests();
+        self.render_frames.end_booking();
+    }
+
+    fn book_frame_requests(&mut self) {
         loop {
+            self.render_frames.take_asked();
             self.follow_child_frames();
             let Some(engine) = &mut self.engine else {
                 return;
@@ -963,8 +980,7 @@ impl RenderThread {
     /// The token the browser knows `frame` by: the main frame's, the
     /// browser's; a child frame's, the engine's.
     pub(super) fn frame_token(&mut self, frame: FrameId) -> Option<protocol::FrameToken> {
-        if self.render_frames.top() == Some(frame)
-        {
+        if self.render_frames.top() == Some(frame) {
             self.render_frames.top_token()
         } else {
             self.child_token(frame)
@@ -1559,19 +1575,22 @@ impl RenderThread {
         // DevTools' `DOM` agent tells of the iframe's new document as the
         // frames are looked at after the task.
         self.frames_changed = true;
-        self.render_frames.set_child_document(frame, FrameDocument {
-            navigation_id,
-            body: Some(body),
-            time_origin,
-            ..FrameDocument::new(
-                frame,
-                mime_type,
-                Rc::from(""),
-                Some(parser),
-                document,
-                document_encoding,
-            )
-        });
+        self.render_frames.set_child_document(
+            frame,
+            FrameDocument {
+                navigation_id,
+                body: Some(body),
+                time_origin,
+                ..FrameDocument::new(
+                    frame,
+                    mime_type,
+                    Rc::from(""),
+                    Some(parser),
+                    document,
+                    document_encoding,
+                )
+            },
+        );
         // Its children before went with the document before, the engine's
         // as it made this one (`create_window`): what the renderer had of
         // them, before anything drives them.
@@ -2526,7 +2545,8 @@ impl RenderThread {
     /// The frame whose document `document` is, if one is.
     fn frame_of_document(&mut self, document: dom::NodeId) -> Option<FrameId> {
         let engine = self.engine.as_mut()?;
-        self.render_frames.documents()
+        self.render_frames
+            .documents()
             .find(|next| {
                 engine
                     .dom_mut()
@@ -2673,7 +2693,8 @@ impl RenderThread {
     /// last one sent (the first, empty or not, at once: the browser shows
     /// the URL for an empty one, as before any).
     pub(super) fn update_title(&mut self) {
-        let (Some(engine), Some(next)) = (&mut self.engine, self.render_frames.top_document_mut()) else {
+        let (Some(engine), Some(next)) = (&mut self.engine, self.render_frames.top_document_mut())
+        else {
             return;
         };
         let version = engine.dom_mut().read(|cx| cx.tree_version());
@@ -2775,7 +2796,11 @@ impl RenderThread {
     /// first, then each child frame with its iframe; one whose iframe has
     /// no document now left out.
     pub(super) fn dom_frames(&mut self) -> Vec<super::dom_agent::DomFrame> {
-        let Some(top) = self.render_frames.top_document().map(|next| next.document.clone()) else {
+        let Some(top) = self
+            .render_frames
+            .top_document()
+            .map(|next| next.document.clone())
+        else {
             return Vec::new();
         };
         let top_frame = self.render_frames.top();
@@ -2789,7 +2814,8 @@ impl RenderThread {
             .iter()
             .map(|(frame, _)| self.frame_id(*frame))
             .collect();
-        let main = self.render_frames
+        let main = self
+            .render_frames
             .top_token()
             .map(|token| token.to_string())
             .unwrap_or_default();
@@ -3010,7 +3036,8 @@ impl RenderThread {
     /// When a new DOM's document's network may next have been quiet long
     /// enough.
     pub(super) fn next_idleness_due(&self) -> Option<ipc::TimeTicks> {
-        self.render_frames.documents()
+        self.render_frames
+            .documents()
             .filter_map(|next| next.idleness.next_due())
             .min()
     }
@@ -3760,7 +3787,8 @@ impl RenderThread {
     /// Asks for a main frame if the DOM's trees changed since the
     /// rendering was last asked for (`request_main_frame_if_dom_changed`).
     pub(super) fn request_next_frame_if_dom_changed(&mut self) {
-        let (Some(engine), Some(next)) = (&mut self.engine, self.render_frames.top_document_mut()) else {
+        let (Some(engine), Some(next)) = (&mut self.engine, self.render_frames.top_document_mut())
+        else {
             return;
         };
         let (version, intersections, resizes, canvas_draws) = engine.dom_mut().read(|cx| {
@@ -3827,8 +3855,10 @@ impl RenderThread {
         // their sheets: a frame's document committed since the last frame
         // is one of them already.
         let frames = self.css_agent.on().then(|| self.dom_frames());
-        let (Some((dom, frame)), Some(next)) = (engine_frame(&mut self.engine), self.render_frames.top_document_mut())
-        else {
+        let (Some((dom, frame)), Some(next)) = (
+            engine_frame(&mut self.engine),
+            self.render_frames.top_document_mut(),
+        ) else {
             return false;
         };
         (next.rendered_version, next.rendered_canvas_draws) =
@@ -4190,7 +4220,8 @@ impl RenderThread {
     /// The DOM's document's testharness results, once its page
     /// reported them (web tests only).
     pub(super) fn send_harness_results(&mut self) {
-        let (Some(engine), Some(next)) = (&mut self.engine, self.render_frames.top_document()) else {
+        let (Some(engine), Some(next)) = (&mut self.engine, self.render_frames.top_document())
+        else {
             return;
         };
         if let Some(results) = engine.take_harness_results() {
@@ -4745,6 +4776,10 @@ pub(super) struct RendererFrameClient {
     /// For who asked for an iframe's navigation, as DevTools' `Network`
     /// has it.
     pub(super) network_agent: Rc<super::network_agent::NetworkAgent>,
+    /// The frames' table's flag that what the hook sent is yet to be
+    /// booked (`RenderFrames::asked`): debug builds' check.
+    #[cfg(debug_assertions)]
+    pub(super) asked: super::render_frame::Asked,
 }
 
 /// The engine's child frames told to the browser as they are made and go,
@@ -4754,6 +4789,53 @@ pub(super) struct RendererFrameClient {
 /// for the browser before anything after its removal is.
 impl dom_api::FrameClient for RendererFrameClient {
     fn child_frame_created(
+        &mut self,
+        parent: protocol::FrameToken,
+        frame: protocol::FrameToken,
+        name: &str,
+        created_by_script: bool,
+        stack: Option<&str>,
+        dom: &dom::Dom,
+    ) {
+        #[cfg(debug_assertions)]
+        self.asked.set();
+        self.child_frame_created_now(parent, frame, name, created_by_script, stack, dom);
+    }
+
+    fn child_document_created(&mut self, frame: protocol::FrameToken, document: dom::NodeId) {
+        self.child_document_created_now(frame, document);
+    }
+
+    fn frame_detached(&mut self, frame: protocol::FrameToken) {
+        #[cfg(debug_assertions)]
+        self.asked.set();
+        let _ = self
+            .to_browser
+            .send(RendererHostMsg::DidDetachFrame { frame });
+        self.page_agent.frame_detached(&frame.to_string());
+    }
+
+    fn navigate(&mut self, asked: &dom_api::NavigationAsked<'_>, dom: &dom::Dom) -> Option<u64> {
+        #[cfg(debug_assertions)]
+        self.asked.set();
+        self.navigate_now(asked, dom)
+    }
+
+    fn navigate_child(
+        &mut self,
+        asked: &dom_api::ChildNavigationAsked<'_>,
+        dom: &dom::Dom,
+    ) -> Option<u64> {
+        #[cfg(debug_assertions)]
+        self.asked.set();
+        self.navigate_child_now(asked, dom)
+    }
+}
+
+/// The hook's work, each method's (the trait's methods set the debug
+/// builds' flag first).
+impl RendererFrameClient {
+    fn child_frame_created_now(
         &mut self,
         parent: protocol::FrameToken,
         frame: protocol::FrameToken,
@@ -4777,16 +4859,9 @@ impl dom_api::FrameClient for RendererFrameClient {
             .frame_attached(frame.to_string(), parent.to_string(), stack);
     }
 
-    fn child_document_created(&mut self, frame: protocol::FrameToken, document: dom::NodeId) {
+    fn child_document_created_now(&mut self, frame: protocol::FrameToken, document: dom::NodeId) {
         self.page_agent
             .child_document_created(&frame.to_string(), u64::from(document.get()));
-    }
-
-    fn frame_detached(&mut self, frame: protocol::FrameToken) {
-        let _ = self
-            .to_browser
-            .send(RendererHostMsg::DidDetachFrame { frame });
-        self.page_agent.frame_detached(&frame.to_string());
     }
 
     /// What goes to the browser of script's navigation, sent as it is
@@ -4796,7 +4871,11 @@ impl dom_api::FrameClient for RendererFrameClient {
     /// the scroll restoration mode. A child frame's to a fragment of its
     /// document or to a `javascript:` URL goes nowhere (the render thread
     /// does it after the call, `frame_navigated`).
-    fn navigate(&mut self, asked: &dom_api::NavigationAsked<'_>, dom: &dom::Dom) -> Option<u64> {
+    fn navigate_now(
+        &mut self,
+        asked: &dom_api::NavigationAsked<'_>,
+        dom: &dom::Dom,
+    ) -> Option<u64> {
         use dom::FrameNavigation;
         use protocol::renderer::BeginNavigationKind;
         let kind = match asked.navigation {
@@ -4889,7 +4968,7 @@ impl dom_api::FrameClient for RendererFrameClient {
     /// the attribute or inserted the iframe, or the parser's line), unless
     /// it goes nowhere (a fragment of the frame's document, a `javascript:`
     /// URL: the render thread does it after the call).
-    fn navigate_child(
+    fn navigate_child_now(
         &mut self,
         asked: &dom_api::ChildNavigationAsked<'_>,
         dom: &dom::Dom,

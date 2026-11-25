@@ -309,6 +309,11 @@
 
 - 等待只為「要的那幾個 queue」的延後 task 醒來，拿掉這個過濾沒有差別：多醒一次，醒來時沒有要的 task，照樣回去等（主 thread 的延後 task 只在 DOM 和 renderer 自己的 queue）。留著是讓 script 停在斷點時（只取 DevTools 和 rendering 的 queue）不為 timer 醒來。
 
+**renderer 照 frame 的表（`render_thread/render_frame.rs` 的 `RenderFrames`）**
+
+- debug build 的「hook 送出的還沒對帳就讀了導覽的帳」的檢查：renderer 的 hook（`RendererFrameClient` 的每個 `FrameClient` 方法）送出時設旗標，拿掉其中一個設的地方沒有測試失敗，只是那一種送出之後少檢查一次；旗標和讀的檢查本身由 `render_frame::tests` 守。
+- 子 frame 的清單在 engine 的呼叫之後、`follow_child_frames` 之前是過期的（剛建的 iframe 不在表上、剛拿掉的還在），這個檢查不守它：renderer 有幾處在那之前就讀，會晚一步處理新的 frame，或在已經不見的 frame 上多做一步。2026-11-25 用一個也守清單的檢查跑 `shell` 和 WPT（`html/browsers/`、iframe、`the-script-element/`、`html/syntax/parsing/`、`css/cssom/`）找到的：`documents.rs` 的 `advance_document` 迴圈的開頭（`start_loads` 在 `handle_frame_requests` 之前）、parser 跑完之後的 `note_body_parsed`（它的 script 可能建了 iframe，或把自己的 frame 拿掉了）、DOM 的 task 之後的 `finish_loaded_documents`（`frame_of_document`）、`request_next_frame_if_dom_changed` 的 `start_loads`、畫面那一步的 script 之後的 `update_document_rendering`（子 frame 的 render-blocking）、`document_url`（`history_go_to_uri.html` 的路上）、`frame_render_blocked`（`joint-session-history-remove-iframe.html` 的路上）、`resource` 收到 module 的回應之後的 `run_deferred_scripts`。每處先對帳就修得掉，但對帳的動作（捲到 fragment、告訴 DevTools、排 `javascript:` 的 commit）跟著提早；文件的載入搬到 engine 那一側、frame 由 engine 當場建和丟之後，這些讀法讀的是 engine 自己的 frame，不會過期，剩下的是「跑完 script 之後這個 frame 還在不在」（Blink 的 `IsDetached`）。
+
 **DOM 的 task 是 scheduler 的 task（`render_thread.rs` 的 `after_task`、`dom` 的 `worker.rs`）**
 
 - 自己關閉了的 worker 照樣收頁面送的訊息（`worker_terminated` 不看 `closed`）：它的 thread 已經不跑了，送過去的東西什麼都不會發生。

@@ -1496,7 +1496,8 @@ impl RenderThread {
         loader: u64,
         bypass_cache: bool,
     ) -> bool {
-        if self.render_frames
+        if self
+            .render_frames
             .top_document()
             .is_some_and(|next| next.navigation_id() > navigation_id)
         {

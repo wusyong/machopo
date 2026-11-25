@@ -6,10 +6,10 @@
 
 | 步驟 | 狀態 | 完成日期 |
 | --- | --- | --- |
-| 1. renderer 那一側收成 `RenderFrame`（已決定的事項第 2 到 8 條） | 進行中 | |
+| 1. renderer 那一側收成 `RenderFrame`（已決定的事項第 2 到 10 條） | 做完，待審查 | 2026-11-25 |
 | 1a. `render_frame.rs`：`RenderFrames`、`RenderFrame`、`NavigationRequest`，`FrameDocument` 搬進來；最上層的 `document` 和 `ChildFrames::documents` 改成表上的 `document`（第 2、3、4 條） | 做完，待審查 | 2026-11-25 |
 | 1b. 導覽的帳（`ChildFrames::navigations`、`main_origin_source`）、`owner_loads`、`devtools_main_frame_token` 搬進 `RenderFrame`，每種轉換一個方法（第 3、5 條）；frame 不見時一起拿掉（第 8 條） | 做完，待審查 | 2026-11-25 |
-| 1c. debug build 在讀表時檢查沒分派的 `FrameRequest`（第 6 條） | 沒開始 | |
+| 1c. debug build 在讀導覽的帳時檢查沒分派的 `FrameRequest`（第 6 條，做法照第 9 條） | 做完，待審查 | 2026-11-25 |
 | 2 到 4. 方向（已決定的事項第 1 條）：第 1 段做完之後重新評估 | — | |
 
 ## 驗收
@@ -18,6 +18,20 @@
 | --- | --- |
 
 ## 做過的檢查
+
+### 第 1 段結束（2026-11-25，Linux：Fedora 45）
+
+`cargo fmt`（改了這一段的四個檔案的排版）、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace`（60 個 binary，4874 個通過，1 個 ignored）、`sanity.py` 的每一項通過。
+
+### 1c（2026-11-25，Linux：Fedora 45，debug build，`de04cac5` 之上）
+
+**做了什麼**：renderer 的 hook（`RendererFrameClient`）每個 `FrameClient` 方法先設一個旗標（`render_frame::Asked`，`Rc<Cell<bool>>`，只在 debug build），表的導覽的讀法（`navigation`、`take_navigation`、`take_any_navigation`，`is_navigating` 經過 `navigation`）斷言它沒設，`handle_frame_requests` 對帳的期間例外（深度，可以巢狀），每一輪拿走 `FrameRequest` 之前清掉。release build 沒有旗標。
+
+**和已決定的事項不同的一處**（README 的第 6、9 條）：第 6 條原本是 `ScriptEngine::has_frame_requests()`；`dom_js` 的佇列在 isolate 的狀態裡，要 `&mut self`，讀表的地方多半只有 `&self`，改成 hook 設旗標（使用者選的，第 9 條）。第一版連子 frame 的清單也守：`shell` 找到五處、WPT 找到三處 renderer 在 engine 的呼叫之後、對帳之前就讀了清單（`docs/test-gaps.md` 的清單）；逐一先對帳修得掉，但對帳的動作跟著提早，和第 1 段「時機不變」不合，而且照這樣會變成每個會跑 script 的 engine 呼叫之後都要對帳（比較過的 (a)）。使用者選只守導覽的帳（B，第 10 條），加過的五處對帳改回原樣，八處記下來給第 2 段。
+
+**測試**：`render_frame::tests::the_navigations_are_read_once_what_was_sent_is_booked`（送了沒對帳就讀會 panic、對帳中可以讀、拿走之後可以讀、之後再送又檢查、清單和文件不檢查）。`renderer`、`shell` 的測試通過（檢查開著）；`cargo check --release -p renderer` 通過。WPT（`html/browsers/`、`html/semantics/embedded-content/the-iframe-element/`、`html/semantics/scripting-1/the-script-element/`、`html/syntax/parsing/`、`css/cssom/`，970 個）：0 個退步；4 個非預期的通過：1b 記過的 2 個，和 `css-module`、`json-module`、`module` 的 `credentials.sub.html`、`script-crossorigin-network.sub.html` 裡的（在沒有 1c 的程式上照樣通過）。
+
+**mutation test**（`mutants-1c.toml`，5 個，4 個抓到）：檢查失效、對帳不放行、旗標不清、對帳不結束都抓到。沒抓到的「hook 送出導覽時不設旗標」只是少檢查一次（`docs/test-gaps.md`）。第一輪另有「`is_navigating` 不檢查」沒抓到：它經過 `navigation`，自己的那一行多餘，拿掉了那一行和這個 mutant。
 
 ### 1b（2026-11-25，Linux：Fedora 45，debug build，`5b6297dd` 之上）
 

@@ -31,6 +31,33 @@ pub(super) struct RenderFrames {
     /// each one's frame, URL and markup, in the order queued across the
     /// frames (`RenderThread::run_child_commit`).
     commits: VecDeque<(FrameId, Url, String)>,
+    /// Debug builds' check that the navigations are read only once what
+    /// the renderer's hook sent in the engine's call is booked: the hook
+    /// sets it as it sends a navigation or tells of a frame made or gone,
+    /// the render thread clears it as it books them (`handle_frame_requests`,
+    /// its `FrameRequest`s and the frames followed), and each read of the
+    /// navigations asserts it isn't set but while they are booked.
+    #[cfg(debug_assertions)]
+    asked: Asked,
+    /// How deep in booking the render thread is (`handle_frame_requests`
+    /// may run again in what it does).
+    #[cfg(debug_assertions)]
+    booking: u32,
+}
+
+/// The flag the renderer's hook sets (`RenderFrames::asked`). The hook is
+/// the engine's (`FrameClient`), the table the render thread's, and the
+/// engine calls the hook in its call, so the one way they share it is a
+/// shared cell; on this thread alone, and in debug builds only.
+#[cfg(debug_assertions)]
+#[derive(Clone, Default)]
+pub(super) struct Asked(std::rc::Rc<std::cell::Cell<bool>>);
+
+#[cfg(debug_assertions)]
+impl Asked {
+    pub(super) fn set(&self) {
+        self.0.set(true);
+    }
 }
 
 /// What the renderer has of one frame.
@@ -70,6 +97,59 @@ impl RenderFrame {
 }
 
 impl RenderFrames {
+    /// The flag the renderer's hook sets as it sends what the render
+    /// thread books after the engine's call: the hook's copy.
+    #[cfg(debug_assertions)]
+    pub(super) fn asked(&self) -> Asked {
+        self.asked.clone()
+    }
+
+    /// What the hook sent is being booked (`handle_frame_requests`): the
+    /// table may be read meanwhile.
+    pub(super) fn begin_booking(&mut self) {
+        #[cfg(debug_assertions)]
+        {
+            self.booking = self
+                .booking
+                .checked_add(1)
+                .expect("booking nests a few deep");
+        }
+    }
+
+    /// What the hook sent so far is about to be taken from the engine (its
+    /// `FrameRequest`s, the frames followed): what it sends from now on is
+    /// for the next look.
+    pub(super) fn take_asked(&mut self) {
+        #[cfg(debug_assertions)]
+        self.asked.0.set(false);
+    }
+
+    /// Booked: the table is read only once it is again.
+    pub(super) fn end_booking(&mut self) {
+        #[cfg(debug_assertions)]
+        {
+            self.booking = self.booking.checked_sub(1).expect("as many ends as begins");
+        }
+    }
+
+    /// Debug builds: the navigations read with what the hook sent still
+    /// unbooked (the render thread forgot `handle_frame_requests` after an
+    /// engine call, and reads books out of date). The frames the engine's
+    /// call made or let go are out of date too till they are followed, but
+    /// the renderer reads them before that in places (the parser's run,
+    /// the DOM's tasks, a module's response, the rendering's script): those
+    /// go as the documents' loading moves to the engine's side, where the
+    /// frames are the engine's own.
+    #[track_caller]
+    fn read(&self) {
+        #[cfg(debug_assertions)]
+        assert!(
+            self.booking > 0 || !self.asked.0.get(),
+            "the frames' table read before what the engine's call sent was booked \
+             (`handle_frame_requests`)"
+        );
+    }
+
     /// The top-level frame, if a document committed in it.
     pub(super) fn top(&self) -> Option<FrameId> {
         self.top
@@ -77,12 +157,12 @@ impl RenderFrames {
 
     /// The top-level frame's document.
     pub(super) fn top_document(&self) -> Option<&FrameDocument> {
-        self.document(self.top?)
+        self.frames.get(&self.top?)?.document.as_ref()
     }
 
     pub(super) fn top_document_mut(&mut self) -> Option<&mut FrameDocument> {
         let top = self.top?;
-        self.document_mut(top)
+        self.frames.get_mut(&top)?.document.as_mut()
     }
 
     /// `frame`'s document, if the renderer has the frame.
@@ -118,10 +198,7 @@ impl RenderFrames {
 
     /// The frames, the top-level one first.
     pub(super) fn ids(&self) -> Vec<FrameId> {
-        self.top
-            .into_iter()
-            .chain(self.children())
-            .collect()
+        self.top.into_iter().chain(self.children()).collect()
     }
 
     /// The child frames, in the order they were made.
@@ -201,17 +278,21 @@ impl RenderFrames {
     }
 
     /// The navigation `frame` asked the browser for and still waits for.
+    #[track_caller]
     pub(super) fn navigation(&self, frame: FrameId) -> Option<&NavigationRequest> {
+        self.read();
         self.frames.get(&frame)?.navigation.as_ref()
     }
 
     /// `frame`'s navigation `begin_id`, taken as the browser commits or
     /// drops it: none if it asked for another since.
+    #[track_caller]
     pub(super) fn take_navigation(
         &mut self,
         frame: FrameId,
         begin_id: u64,
     ) -> Option<NavigationRequest> {
+        self.read();
         self.frames
             .get_mut(&frame)?
             .navigation
@@ -220,7 +301,9 @@ impl RenderFrames {
 
     /// `frame`'s navigation, whichever it asked for, taken: one the browser
     /// started commits in its place.
+    #[track_caller]
     pub(super) fn take_any_navigation(&mut self, frame: FrameId) -> Option<NavigationRequest> {
+        self.read();
         self.frames.get_mut(&frame)?.navigation.take()
     }
 
@@ -238,6 +321,7 @@ impl RenderFrames {
 
     /// Whether `frame` has a navigation on its way: the browser's, or a
     /// commit queued.
+    #[track_caller]
     pub(super) fn is_navigating(&self, frame: FrameId) -> bool {
         self.navigation(frame).is_some() || self.commits.iter().any(|(id, _, _)| *id == frame)
     }
@@ -316,19 +400,37 @@ mod tests {
         let mut dom = Dom::new();
         let docs = documents(&mut dom, 3);
         let mut frames = RenderFrames::default();
-        frames.set_child_document(FrameId(2), FrameDocument::for_test(FrameId(2), docs[2].clone()));
-        frames.set_child_document(FrameId(1), FrameDocument::for_test(FrameId(1), docs[1].clone()));
+        frames.set_child_document(
+            FrameId(2),
+            FrameDocument::for_test(FrameId(2), docs[2].clone()),
+        );
+        frames.set_child_document(
+            FrameId(1),
+            FrameDocument::for_test(FrameId(1), docs[1].clone()),
+        );
         assert_eq!(frames.top(), None);
         assert_eq!(frames.ids(), [FrameId(1), FrameId(2)]);
         // A commit in the top-level frame drops those of the document before.
         frames.commit_top(TOP, FrameDocument::for_test(TOP, docs[0].clone()));
         assert_eq!(frames.ids(), [TOP]);
-        frames.set_child_document(FrameId(2), FrameDocument::for_test(FrameId(2), docs[2].clone()));
-        frames.set_child_document(FrameId(1), FrameDocument::for_test(FrameId(1), docs[1].clone()));
+        frames.set_child_document(
+            FrameId(2),
+            FrameDocument::for_test(FrameId(2), docs[2].clone()),
+        );
+        frames.set_child_document(
+            FrameId(1),
+            FrameDocument::for_test(FrameId(1), docs[1].clone()),
+        );
         assert_eq!(frames.top(), Some(TOP));
         assert_eq!(frames.ids(), [TOP, FrameId(1), FrameId(2)]);
-        assert_eq!(frames.children().collect::<Vec<_>>(), [FrameId(1), FrameId(2)]);
-        assert_eq!(of(&frames, &dom), docs.iter().map(|doc| id(&dom, doc)).collect::<Vec<_>>());
+        assert_eq!(
+            frames.children().collect::<Vec<_>>(),
+            [FrameId(1), FrameId(2)]
+        );
+        assert_eq!(
+            of(&frames, &dom),
+            docs.iter().map(|doc| id(&dom, doc)).collect::<Vec<_>>()
+        );
         assert_eq!(frames.child_documents().count(), 2);
         drop(frames);
     }
@@ -341,11 +443,22 @@ mod tests {
         let docs = documents(&mut dom, 4);
         let mut frames = RenderFrames::default();
         frames.commit_top(TOP, FrameDocument::for_test(TOP, docs[0].clone()));
-        frames.set_child_document(FrameId(1), FrameDocument::for_test(FrameId(1), docs[1].clone()));
-        frames.set_child_document(FrameId(2), FrameDocument::for_test(FrameId(2), docs[2].clone()));
-        frames.set_child_document(FrameId(1), FrameDocument::for_test(FrameId(1), docs[3].clone()));
+        frames.set_child_document(
+            FrameId(1),
+            FrameDocument::for_test(FrameId(1), docs[1].clone()),
+        );
+        frames.set_child_document(
+            FrameId(2),
+            FrameDocument::for_test(FrameId(2), docs[2].clone()),
+        );
+        frames.set_child_document(
+            FrameId(1),
+            FrameDocument::for_test(FrameId(1), docs[3].clone()),
+        );
         assert_eq!(
-            frames.document(FrameId(1)).map(|next| id(&dom, next.node())),
+            frames
+                .document(FrameId(1))
+                .map(|next| id(&dom, next.node())),
             Some(id(&dom, &docs[3]))
         );
         frames.remove(&[FrameId(1)]);
@@ -385,14 +498,28 @@ mod tests {
         frames.queue_commit(child, url(), String::new());
         assert!(frames.is_navigating(child));
         frames.navigation_sent(child, asked(7));
-        assert!(frames.next_commit().is_none(), "the commit queued no longer commits");
+        assert!(
+            frames.next_commit().is_none(),
+            "the commit queued no longer commits"
+        );
         assert!(frames.is_navigating(child));
         frames.navigation_sent(child, asked(8));
-        assert!(frames.take_navigation(child, 7).is_none(), "one asked for before");
-        assert_eq!(frames.take_navigation(child, 8).map(|asked| asked.begin_id), Some(8));
+        assert!(
+            frames.take_navigation(child, 7).is_none(),
+            "one asked for before"
+        );
+        assert_eq!(
+            frames.take_navigation(child, 8).map(|asked| asked.begin_id),
+            Some(8)
+        );
         assert!(!frames.is_navigating(child));
         frames.navigation_sent(child, asked(9));
-        assert_eq!(frames.take_any_navigation(child).map(|asked| asked.begin_id), Some(9));
+        assert_eq!(
+            frames
+                .take_any_navigation(child)
+                .map(|asked| asked.begin_id),
+            Some(9)
+        );
         // One asked for, then a commit queued: the commit.
         frames.navigation_sent(child, asked(10));
         frames.queue_commit(child, url(), String::new());
@@ -402,7 +529,10 @@ mod tests {
         frames.navigation_sent(TOP, asked(11));
         frames.commit_top(TOP, FrameDocument::for_test(TOP, docs[2].clone()));
         assert_eq!(frames.navigation(TOP).map(|asked| asked.begin_id), Some(11));
-        assert!(frames.next_commit().is_none(), "the children's go with their document");
+        assert!(
+            frames.next_commit().is_none(),
+            "the children's go with their document"
+        );
         assert!(!frames.contains(child));
     }
 
@@ -430,5 +560,37 @@ mod tests {
         frames.set_top_token(protocol::FrameToken([1; 16]));
         frames.clear();
         assert_eq!(frames.top_token(), Some(protocol::FrameToken([1; 16])));
+    }
+
+    /// Debug builds: the navigations read as the hook has sent something
+    /// not booked yet is a bug of the render thread's; while it books
+    /// them, and once it took them, they are read.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn the_navigations_are_read_once_what_was_sent_is_booked() {
+        let mut frames = RenderFrames::default();
+        let hook = frames.asked();
+        assert!(frames.navigation(TOP).is_none());
+        hook.set();
+        let read =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| frames.is_navigating(TOP)));
+        assert!(read.is_err(), "read before it was booked");
+        frames.begin_booking();
+        assert!(frames.navigation(TOP).is_none(), "read as it is booked");
+        frames.take_asked();
+        frames.end_booking();
+        assert!(frames.take_navigation(TOP, 1).is_none());
+        assert!(frames.take_any_navigation(TOP).is_none());
+        // Sent again after: checked again.
+        hook.set();
+        let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            frames.navigation(TOP).is_some()
+        }));
+        assert!(read.is_err(), "read before the next booking");
+        frames.take_asked();
+        // The frames and documents need no booking to be read.
+        hook.set();
+        assert!(frames.documents().next().is_none());
+        assert!(frames.children().next().is_none());
     }
 }
