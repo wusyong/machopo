@@ -121,15 +121,20 @@ fn a_browsers_renderer_is_in_the_sandbox_unless_the_browser_is_told_otherwise() 
     assert!(!in_app_container(open(id).unwrap().as_handle()).unwrap());
 }
 
-/// In the sandbox a renderer finds the system's fonts, the font that has
-/// a character the page's lack, and the time zone, as it does outside.
+/// A page of the system's fonts: generic families, and scripts the
+/// families named lack.
+const FONTS_PAGE: &str = "data:text/html;charset=utf-8,<span style='font: 40px serif'>Sandbox mmmm</span>\
+    <span style='font: 40px monospace'>Sandbox mmmm</span>\
+    <span style='font: 40px sans-serif'>中文字</span><span style='font: 40px serif'>日本語</span>\
+    <span style='font: 40px serif'>한국어</span><span style='font: 40px serif'>العربية</span>\
+    <span style='font: 40px serif'>ไทย</span><span style='font: 40px system-ui'>System</span>";
+
+/// In the sandbox a renderer has the system's fonts, the font that has a
+/// character the page's lack, and the time zone, as it does outside, and
+/// as a renderer that is a thread of the browser's.
 #[test]
 fn a_sandboxed_renderer_shows_a_page_as_one_outside_does() {
-    let page = "data:text/html;charset=utf-8,<span style='font: 40px serif'>Sandbox mmmm</span>\
-        <span style='font: 40px monospace'>Sandbox mmmm</span>\
-        <span style='font: 40px sans-serif'>中文字</span><span style='font: 40px serif'>日本語</span>\
-        <span style='font: 40px serif'>한국어</span><span style='font: 40px serif'>العربية</span>\
-        <span style='font: 40px serif'>ไทย</span><span style='font: 40px system-ui'>System</span>";
+    let page = FONTS_PAGE;
     let seen = |args: &[&str]| {
         let mut browser = Browser::start_with_system_fonts(args);
         let session = browser.attach();
@@ -147,6 +152,57 @@ fn a_sandboxed_renderer_shows_a_page_as_one_outside_does() {
         "{inside}"
     );
     assert_eq!(inside, seen(&["--process-per-tab", "--no-sandbox"]));
+    assert_eq!(inside, seen(&[]));
+}
+
+/// The names of the DLLs process `id` has loaded, as the system lists
+/// them, in lower case.
+fn modules_of(id: u32) -> Vec<String> {
+    let listed = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command"])
+        .arg(format!("(Get-Process -Id {id}).Modules.ModuleName"))
+        .stdin(Stdio::null())
+        .output()
+        .expect("powershell runs");
+    String::from_utf8_lossy(&listed.stdout)
+        .lines()
+        .map(|line| line.trim().to_ascii_lowercase())
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
+/// A renderer process asks its browser for the system's fonts, in the
+/// sandbox and out of it: it lays text of them out without loading
+/// DirectWrite, which is what finds them.
+#[test]
+fn a_renderer_process_has_the_systems_fonts_from_its_browser() {
+    for (args, lowered) in [
+        (&["--process-per-tab"][..], true),
+        (&["--process-per-tab", "--no-sandbox"][..], false),
+    ] {
+        let mut browser = Browser::start_with_system_fonts(args);
+        let session = browser.attach();
+        browser.navigate(&session, FONTS_PAGE);
+        let read = "return [...document.querySelectorAll('span')].map(s => s.offsetWidth)";
+        let widths = script(&mut browser, &session, read, serde_json::json!([])).unwrap();
+        assert!(
+            widths
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|width| width.as_f64().unwrap() > 50.0),
+            "{widths}"
+        );
+        let modules = modules_of(renderer_of(&browser, lowered));
+        assert!(
+            modules.iter().any(|name| name == "ntdll.dll"),
+            "{modules:?}"
+        );
+        assert!(
+            !modules.iter().any(|name| name == "dwrite.dll"),
+            "{args:?}: {modules:?}"
+        );
+    }
 }
 
 /// What the probe did: its line (`ok N`, `error CODE`), or what the

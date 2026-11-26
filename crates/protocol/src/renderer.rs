@@ -314,6 +314,23 @@ pub enum RendererMsg {
     /// The answer to `RendererHostMsg::CookiesEnabled` (`[Sync]
     /// CookiesEnabledFor`). Not a task, as `Cookies`.
     CookiesEnabled { request_id: u64, enabled: bool },
+    /// The answer to `RendererHostMsg::GetFontFamily`: the family's faces,
+    /// none if it has none the browser could give. Not a task, as
+    /// `Cookies`.
+    FontFamily {
+        request_id: u64,
+        faces: Option<crate::font::FontFamilyFaces>,
+    },
+    /// The answer to `RendererHostMsg::GetFontFallback`: the families, by
+    /// number. Not a task, as `Cookies`.
+    FontFallback { request_id: u64, families: Vec<u32> },
+    /// The answer to `RendererHostMsg::GetFontFiles`: each file asked for,
+    /// open to read, in order; none for one the browser couldn't open. Not
+    /// a task, as `Cookies`.
+    FontFiles {
+        request_id: u64,
+        files: Vec<Option<ipc::file::ReadOnlyFile>>,
+    },
     /// A change to the `localStorage` area `area`, which this renderer
     /// opened (`StorageAreaObserver::KeyChanged`, `KeyDeleted`,
     /// `AllDeleted`), in the order the browser made them: the value before
@@ -866,6 +883,34 @@ pub enum RendererHostMsg {
     CookiesEnabled {
         loader: u64,
         url: String,
+        request_id: u64,
+    },
+    /// The faces of the system's font family `family` (a number of the
+    /// `FontNames` the renderer started with), the first time its text
+    /// needs the family (`FontDataService::MatchFamilyName`). Answered with
+    /// `FontFamily` of the same `request_id`, which the main thread waits
+    /// for. Checked on the IO thread (a family the renderer wasn't told
+    /// of is a bad message), answered by the browser's font thread.
+    GetFontFamily {
+        family: u32,
+        request_id: u64,
+    },
+    /// The families text of `script` (an ISO 15924 tag) falls back to, the
+    /// first time the renderer's text has a character of it
+    /// (`FontDataService::MatchFamilyNameCharacter`, by script). Answered
+    /// with `FontFallback`, as `GetFontFamily`.
+    GetFontFallback {
+        script: [u8; 4],
+        request_id: u64,
+    },
+    /// The font files `files` (numbers of `FontFamily`'s faces, at most
+    /// `font::FONT_FILES_PER_CALL`), each the first time a face in it is
+    /// registered (Chromium's `MatchFamilyName` answers with the file).
+    /// Answered with `FontFiles`, as `GetFontFamily`: a number no answer
+    /// has given (to any renderer: every file is one any family's answer
+    /// could give it), or more files, is a bad message.
+    GetFontFiles {
+        files: Vec<u32>,
         request_id: u64,
     },
     /// A change to the area `area` (`LocalStorageOpened`'s), which this

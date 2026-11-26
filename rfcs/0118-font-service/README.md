@@ -1,7 +1,7 @@
 # RFC 0118：字型服務（系統字型由 Browser 給 renderer）
 
 - 開始日期：2026-11-26
-- 狀態：🚧 已排程：2026-11-27（第 1 段：`ipc` 跟著訊息交開著的檔案，Windows；進度在 `progress.md`）
+- 狀態：🚧 已排程：2026-11-27（第 1 段做完；第 2 段：Windows 的字型服務；進度在 `progress.md`）
 - 細節：`details.md`
 
 ## 摘要
@@ -173,18 +173,20 @@ fontique 建一個 family 時要每個字型的寬度、樣式、粗細、可變
 5. **開著的檔案是訊息的值裡的一種欄位（F1）**（2026-11-27，第 1 段開始時，使用者決定）：`ipc` 多一個欄位的型別，序列化成「這則訊息跟著的第幾個 handle」，codec 的 `Place` 和 `Resolve` 各多一個方法；同一個 process 裡不經過 codec 時它就是檔案本身。理由：和 `data_pipe::Consumer`、`SharedBuffer` 同一個做法，協定的型別直接寫它，號碼由 codec 對，不會由協定對錯；Mojo 也是這樣（`mojo_base.mojom.ReadOnlyFile` 是訊息裡的欄位，handle 照索引帶過去）。不選 `send` 另外帶一串檔案、收的一側另外拿（F2：`ipc` 改得少，但協定要自己對號碼，對錯了是安靜的錯）。跟著定的：map 在 `ipc` 裡做（`unsafe` 只在那裡），renderer 拿到的是 map 好的唯讀位元組。論證的前提是 map 著的期間檔案的內容不變：fontique 現在自己 map 系統字型時也是這個前提；Windows 上由 kernel 守住（Browser 開檔時不讓別人寫，map 著的檔案不能截短），Linux 和 macOS 上是假設，寫在 `crates/ipc/soundness.md`。
 6. **Windows 上交的是檔案的 handle（W1）**（2026-11-27，使用者決定）：只留讀的權限，renderer 這一側的 `ipc` 自己建 mapping。理由：三個平台交的都是開著的檔案，意思一樣；和 Chromium 一樣（`FontDataService` 和舊的 DirectWrite proxy 交的都是檔案的 handle）。代價：renderer 能用 handle 查到檔案的路徑、`ReadFile` 它；照路徑它在 AppContainer 裡開不了。不選 Browser 先建好唯讀的 section、只交 map 的權限（W2：權限最少，但 Windows 和另外兩個平台不同，長度要另外跟著訊息送）。
 7. **一則訊息最多 16 個 handle 不改，字型服務分批交檔案（H1）**（2026-11-27，使用者決定）：回答一個 family 時給每個字型的資料和檔案的編號，renderer 對還沒拿到的檔案，每次要最多 16 個。理由：上限定多大都擋不住一個 family 的檔案比它多（Linux 上整套不是可變字型的 Noto Sans 有幾十個檔案），協定本來就要能分批；照編號要的話，同一個檔案被好幾個 family 用到（`Segoe UI Variable` 的三個光學尺寸）也只交一次，Chromium 的檔案也帶一個編號，為的是同一件事。核心收 handle 的規則和 Windows 的表頭都不用改。不選把上限提高到 64 或 256（H2，Mojo 是 256：多數的 family 一次交完，但核心最多留住的 handle 跟著變多，大的 family 還是要分批）。
+8. **三種 renderer 都走字型服務（N1）**（2026-11-27，第 2 段開始時，使用者決定）：sandbox 裡的 renderer process、`--no-sandbox` 的 renderer process、`--single-process` 的 renderer thread 都向 Browser 問；只有測試用的內建字型（Ahem、Lato）不問。理由：只有一條路，`--single-process` 和 `--no-sandbox` 的測試跑的就是真的那條；同一個 process 裡的不經過 codec，開著的檔案直接搬過去。不選只有 sandbox 裡的走、其他的照舊自己問系統（N2：改得少，但兩條路一直並存，除錯時的模式和真的不同）。
+9. **Browser 那一側在自己的一條 thread 上回答（T2）**（2026-11-27，使用者決定）：系統字型的 `Collection` 只屬於這條字型 thread；renderer 的問題在 IO thread 上檢查過之後轉給它，它直接回答 renderer。理由：第一次問一個 family 時 fontique 要打開它的每個檔案讀屬性（原型量到一個 renderer 合計 3 到 4 ms），在 IO thread 上做會讓所有 renderer 的訊息跟著等，而 IO thread 上的程式不等任何東西；`Collection` 有一個擁有者，不用鎖。代價：每個問題多轉一手。Chromium 一樣：`FontDataService` 跑在一個允許等待的背景 sequence 上。不選在 IO thread 上直接回答（T1：cookie 是這樣答的，最快，但開檔的那幾 ms 卡住所有通道）。不選 UI thread（T3：Browser 忙時 renderer 的排版跟著等）。
+10. **generic family 用到哪一種才要哪一種（G2）**（2026-11-27，使用者決定）：啟動時的名字清單裡已經有每種 generic 是哪幾個 family，用到時照那幾個 family 要，和一般的 family 同一條路。理由：不用另外的機制；沒用到的（`cursive`、`fantasy`……）不交檔案。不選第一次排版時全部要來（G1，原型的做法：少幾次來回，每個 renderer 多交十幾個檔案）。
+11. **名字的清單整個 Browser 只列一次**（2026-11-27，第 2 段做的時候，使用者決定）：字型 thread 在第一個 renderer 啟動時列出系統的字型，之後的每個 renderer 都拿這一份，family 和檔案的編號也是這一份的。所以 Browser 執行期間新裝的字型，新的分頁也看不到，要重開 machopo：比第 2 條寫的代價（已經開著的分頁看不到，新的分頁看得到）多一點。理由：照第 2 條的話每啟動一個 renderer 就要重列一次（DirectWrite 重新拿系統的字型集合），清單變了時建一份新的、舊的 renderer 繼續問舊的那份，字型 thread 要同時留著幾份、編號要分得出是哪一份的；這和「字型變了時通知 renderer 重拿清單」（之後的可能）是同一件事，到那時一起做。不選每啟動一個 renderer 就重列。
+
+第 2 段開始時查到、不用決定的兩件：worker 裡沒有文字（machopo 沒有 `OffscreenCanvas`，worker 不排版），之後有了走同一條路；machopo 不把 `lang` 交給 parley（沒有 `StyleProperty::Locale`），所以 fallback 一律照 script、不帶語言，和現在一樣，這一段照這樣做。
 
 ## 待決定
 
 探測之前要定的四條都定了（已決定的事項第 1 到 4 條），第 1 段的三條也定了（第 5 到 7 條）。每一段開始前只定那一段的。
 
-第 2 段（Windows）開始時：
+第 2 段的五件定了（第 8 到 10 條，和它們後面的兩件），做的時候多出的一件也定了（第 11 條）。
 
-- `--no-sandbox` 的 renderer process 走不走字型服務（看法：一樣走，少一條只有除錯時才走的路）。
-- Browser 那一側放在哪個 thread（Chromium：一個會等待的背景 sequence；量的時候 Browser 是閒的，它的 UI thread 在忙時 renderer 的排版會等多久沒有量）。
-- worker 裡的文字（`OffscreenCanvas` 之類）現在怎麼拿字型、要不要經過同一條路：還沒查。
-- generic family 一次全部要來，還是用到哪一種才要哪一種（原型是一次全部，每個 renderer 因此多交十幾個檔案）。
-- 帶 `lang` 的文字：fallback 的 key 帶語言，掃文字時要連語言一起（原型一律不帶）。
+做的時候照設計細化、不用決定的：Browser 檢查檔案的編號只看「字型 thread 給過這個編號」，不看「給過這個 renderer」：每個檔案都能經過問它的 family 拿到，照 renderer 分開記換不到什麼，還要每個 renderer 一張表。
 
 之後的段落：
 
@@ -197,4 +199,6 @@ fontique 建一個 family 時要每個字型的寬度、樣式、粗細、可變
 - 字型裝了、移除了時 Browser 通知 renderer 重拿名字的清單，開著的分頁也看得到新的字型。
 - 字型的清單放進共用記憶體（A2），如果量到同步的來回是問題。
 - renderer 啟動時先把常用的 family 問好（Chromium 有一個預設關著的 prewarm）。
+- `lang` 影響選字型（`StyleProperty::Locale`）：掃文字時連語言一起，fallback 的 key 帶語言。
+- worker 裡的文字（`OffscreenCanvas`）：走同一條路，worker 的 thread 也要能同步地問。
 - `src: local()` 照名字找系統字型：現在有沒有、走哪條路還沒查；Chromium 是另一個呼叫（`MatchLocalFont`）。

@@ -18,6 +18,7 @@ mod flex;
 mod float;
 mod font_features;
 mod font_selection;
+mod font_service;
 mod form_controls;
 mod generated;
 mod geometry;

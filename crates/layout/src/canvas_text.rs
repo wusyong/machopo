@@ -40,6 +40,7 @@ fn shape(cx: &mut TextContext, text: &str, style: &CanvasTextStyle) -> (Vec<Glyp
     if text.is_empty() {
         return (Vec::new(), 0.0);
     }
+    cx.resolve_text(text);
     cx.resolve_families(&style.font.family);
     let (fonts, layouts, families) = cx.contexts();
     let mut builder = layouts.ranged_builder(fonts, text, 1.0, true);

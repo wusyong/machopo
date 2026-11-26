@@ -1911,7 +1911,10 @@ impl WebContents {
             | RendererHostMsg::ForgetStorageAreas
             | RendererHostMsg::GetCookies { .. }
             | RendererHostMsg::SetCookie { .. }
-            | RendererHostMsg::CookiesEnabled { .. } => {}
+            | RendererHostMsg::CookiesEnabled { .. }
+            | RendererHostMsg::GetFontFamily { .. }
+            | RendererHostMsg::GetFontFallback { .. }
+            | RendererHostMsg::GetFontFiles { .. } => {}
             // Revoked for its loads already; the navigations asked for
             // before it, which came before it, have their blob.
             RendererHostMsg::RevokeBlobUrl { url } => {

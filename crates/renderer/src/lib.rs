@@ -37,6 +37,7 @@ mod child_process;
 mod clock;
 mod compositing;
 mod document;
+mod font_data;
 mod frame_view;
 mod frame_widget;
 mod idleness_detector;
@@ -56,9 +57,10 @@ mod worker_thread;
 
 pub use child_process::{ChildExit, ChildInit, run_child_process};
 pub use compositor::{CompositorGone, CompositorSender};
-pub use layout::SystemFonts;
+// What the browser answers of the system's fonts with.
+pub use layout::{FaceStyle, FontFamilyFaces, FontNames, SystemFontManager, SystemFonts};
 pub use render_thread::{
     MainThreadTerminator, NEW_CONTENT_RENDERING_DELAY, ParserBudget, RendererEndpoints,
-    RendererFlags, ScriptEngineFactory, spawn_renderer_main_thread,
+    RendererFlags, ScriptEngineFactory, SystemFontSource, spawn_renderer_main_thread,
 };
 pub use task_queue::{RendererGone, RendererReceiver, RendererSender, channel};

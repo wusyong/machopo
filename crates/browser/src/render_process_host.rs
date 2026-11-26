@@ -32,6 +32,7 @@ use renderer::{
 
 use crate::StoragePartition;
 use crate::bad_message::BadMessageReason;
+use crate::font_data_service::{FontDataService, FontRequest, SERVES_SYSTEM_FONTS};
 
 /// A renderer process to start: its command, and what its starter gives
 /// it beside the command where the operating system has the starter give
@@ -332,6 +333,11 @@ impl RenderProcessHost {
         let forwarding = Arc::new(AtomicBool::new(true));
         let renderer_id = RENDERER_IDS.get_next();
         let loaders = Arc::new(Mutex::new(Loaders::default()));
+        // The system's fonts, which the renderer's text asks the browser
+        // for, where it does: none of it finds them itself.
+        let fonts = (SERVES_SYSTEM_FONTS && !flags.test_fonts)
+            .then(FontDataService::get)
+            .flatten();
         // `BrowserThread::IO`: where a renderer's messages land before
         // being posted to the UI thread. Subresource requests stop here,
         // as a renderer's `URLLoaderFactory` talks to the network service
@@ -345,6 +351,7 @@ impl RenderProcessHost {
                 network,
                 dom_storage,
                 to_renderer,
+                fonts,
                 file_access: file_access.clone(),
                 loaders: loaders.clone(),
                 forward: Box::new(move |msg| {
@@ -376,9 +383,14 @@ impl RenderProcessHost {
                         flags,
                         *script_engine,
                         Some(terminator.clone()),
-                        // Found by the renderer's main thread: a thread of
-                        // this process has the file system.
-                        None,
+                        match fonts {
+                            Some(fonts) => {
+                                renderer::SystemFontSource::Browser(fonts.names().clone())
+                            }
+                            // Found by the renderer's main thread: a thread
+                            // of this process has the file system.
+                            None => renderer::SystemFontSource::FindHere,
+                        },
                     )?;
                     // The channel closes once every sender is dropped.
                     let mut host = host(to_renderer.clone());
@@ -424,6 +436,7 @@ impl RenderProcessHost {
                     let init = ChildInit {
                         flags,
                         gpu: gpu.is_some(),
+                        fonts: fonts.map(|fonts| fonts.names().clone()),
                     };
                     let _ = send_over(&link, to_renderer::MAIN, &init);
                     // Shared memory for the tiles it draws, so their pixels
@@ -1020,6 +1033,9 @@ struct IoThreadHost {
     network: NetworkContext,
     dom_storage: crate::dom_storage::DomStorageContext,
     to_renderer: RendererSender,
+    /// What answers the renderer's questions of the system's fonts, if it
+    /// was given them.
+    fonts: Option<&'static FontDataService>,
     file_access: Arc<AtomicBool>,
     /// The loaders the browser gave the renderer's documents.
     loaders: Arc<Mutex<Loaders>>,
@@ -1037,6 +1053,22 @@ struct IoThreadHost {
 impl IoThreadHost {
     fn forward_on(&self, msg: RendererHostMsg) {
         (self.forward)(Ok(msg));
+    }
+
+    /// A question of the system's fonts, to the font thread, which
+    /// answers the renderer; a bad one answered with nothing all the same,
+    /// so the main thread waits no more.
+    fn ask_fonts(&self, request: FontRequest) {
+        let asked = match self.fonts {
+            Some(fonts) => fonts.ask(&self.to_renderer, request),
+            None => {
+                request.refuse(&self.to_renderer);
+                Err(BadMessageReason::FontRequest)
+            }
+        };
+        if let Err(reason) = asked {
+            (self.forward)(Err(reason));
+        }
     }
 
     fn fetch(&self, load: LoadKey, request: ResourceRequest) {
@@ -1269,6 +1301,15 @@ impl IoThreadHost {
                         (self.forward)(Err(reason));
                     }
                 }
+            }
+            RendererHostMsg::GetFontFamily { family, request_id } => {
+                self.ask_fonts(FontRequest::Family { family, request_id });
+            }
+            RendererHostMsg::GetFontFallback { script, request_id } => {
+                self.ask_fonts(FontRequest::Fallback { script, request_id });
+            }
+            RendererHostMsg::GetFontFiles { files, request_id } => {
+                self.ask_fonts(FontRequest::Files { files, request_id });
             }
             RendererHostMsg::FollowRedirect { request_id, worker } => {
                 if let Some(load) = self
@@ -1518,6 +1559,7 @@ mod tests {
             dom_storage: crate::dom_storage::DomStorageContext::new(&crate::Profile::in_memory())
                 .unwrap(),
             to_renderer,
+            fonts: None,
             file_access: Arc::new(AtomicBool::new(false)),
             loaders: Arc::new(Mutex::new(loaders())),
             forward: Box::new(move |msg| {
@@ -1637,6 +1679,175 @@ mod tests {
             forwarded.try_recv(),
             Ok(Ok(RendererHostMsg::RendererGone))
         ));
+        assert!(forwarded.try_recv().is_err());
+    }
+
+    /// A font thread of the test's own, the test fonts its system's.
+    fn test_font_service() -> &'static FontDataService {
+        let service = FontDataService::start(|| {
+            let fonts = std::path::Path::new(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../resources/test_fonts"
+            ));
+            renderer::SystemFontManager::for_testing(&[fonts], &[("serif", "Lato")])
+        })
+        .expect("a font thread");
+        Box::leak(Box::new(service))
+    }
+
+    /// The answer to call `request_id` that reaches `renderer`, waited
+    /// for no longer than a test would.
+    fn reply(renderer: &'static renderer::RendererReceiver, request_id: u64) -> RendererMsg {
+        let (got, reply) = crossbeam_channel::bounded(1);
+        std::thread::spawn(move || {
+            let _ = got.send(renderer.reply_for_testing(request_id));
+        });
+        reply
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .expect("an answer")
+            .expect("the renderer's queue is there")
+    }
+
+    fn family_named(fonts: &FontDataService, name: &str) -> u32 {
+        fonts
+            .names()
+            .names
+            .iter()
+            .find(|(each, _)| each == name)
+            .expect("the family")
+            .1
+    }
+
+    /// A renderer's questions of the system's fonts go to the font thread,
+    /// which answers the renderer itself: a family's faces, each with its
+    /// file's number, the file of that number open to read, a script's
+    /// fallback.
+    #[test]
+    fn the_font_thread_answers_what_the_io_thread_passes_on() {
+        let (mut host, forwarded, renderer) = io_thread_host();
+        let fonts = test_font_service();
+        host.fonts = Some(fonts);
+        let renderer = &*Box::leak(Box::new(renderer));
+        host.on_message(RendererHostMsg::GetFontFamily {
+            family: family_named(fonts, "Ahem"),
+            request_id: 1,
+        });
+        let RendererMsg::FontFamily {
+            faces: Some(faces), ..
+        } = reply(renderer, 1)
+        else {
+            panic!("no faces");
+        };
+        assert_eq!(faces.name, "Ahem");
+        assert_eq!(faces.faces.len(), 1);
+        assert_eq!(faces.faces[0].index, 0);
+        host.on_message(RendererHostMsg::GetFontFiles {
+            files: vec![faces.faces[0].file],
+            request_id: 2,
+        });
+        let RendererMsg::FontFiles { files, .. } = reply(renderer, 2) else {
+            panic!("no files");
+        };
+        let [Some(file)] = <[_; 1]>::try_from(files).expect("one file") else {
+            panic!("the file wasn't opened");
+        };
+        let ahem = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../resources/test_fonts/Ahem.ttf"
+        ))
+        .unwrap();
+        assert_eq!(&file.map().expect("mapped")[..], &ahem[..]);
+        host.on_message(RendererHostMsg::GetFontFallback {
+            script: *b"Latn",
+            request_id: 3,
+        });
+        assert!(matches!(
+            reply(renderer, 3),
+            RendererMsg::FontFallback { families, .. } if families.is_empty()
+        ));
+        assert!(forwarded.try_recv().is_err());
+    }
+
+    /// What the browser gave no number, more files than go with a message,
+    /// no file, a script that is no tag, and any question from a renderer
+    /// it doesn't serve the fonts are bad: answered with nothing, so the
+    /// renderer waits no more, and told to the UI thread as the reason.
+    #[test]
+    fn the_io_thread_refuses_font_questions_of_nothing_it_gave() {
+        let (mut host, forwarded, renderer) = io_thread_host();
+        let fonts = test_font_service();
+        host.fonts = Some(fonts);
+        let renderer = &*Box::leak(Box::new(renderer));
+        let refused = |request_id| {
+            assert_eq!(
+                forwarded.try_recv().unwrap().err(),
+                Some(BadMessageReason::FontRequest),
+                "{request_id}"
+            );
+            match reply(renderer, request_id) {
+                RendererMsg::FontFamily { faces, .. } => assert!(faces.is_none()),
+                RendererMsg::FontFallback { families, .. } => assert!(families.is_empty()),
+                RendererMsg::FontFiles { files, .. } => assert!(files.is_empty()),
+                other => panic!("{other:?}"),
+            }
+        };
+        host.on_message(RendererHostMsg::GetFontFamily {
+            family: fonts.names().families,
+            request_id: 1,
+        });
+        refused(1);
+        // No family answered yet: no file numbered.
+        host.on_message(RendererHostMsg::GetFontFiles {
+            files: vec![0],
+            request_id: 2,
+        });
+        refused(2);
+        host.on_message(RendererHostMsg::GetFontFamily {
+            family: family_named(fonts, "Lato"),
+            request_id: 3,
+        });
+        let RendererMsg::FontFamily {
+            faces: Some(faces), ..
+        } = reply(renderer, 3)
+        else {
+            panic!("no faces");
+        };
+        let file = faces.faces[0].file;
+        host.on_message(RendererHostMsg::GetFontFiles {
+            files: vec![file.checked_add(1).unwrap()],
+            request_id: 4,
+        });
+        refused(4);
+        host.on_message(RendererHostMsg::GetFontFiles {
+            files: vec![file; 17],
+            request_id: 5,
+        });
+        refused(5);
+        host.on_message(RendererHostMsg::GetFontFiles {
+            files: Vec::new(),
+            request_id: 6,
+        });
+        refused(6);
+        host.on_message(RendererHostMsg::GetFontFallback {
+            script: *b"La1n",
+            request_id: 7,
+        });
+        refused(7);
+        // Sixteen of it is one message's worth.
+        host.on_message(RendererHostMsg::GetFontFiles {
+            files: vec![file; 16],
+            request_id: 8,
+        });
+        assert!(matches!(
+            reply(renderer, 8),
+            RendererMsg::FontFiles { files, .. } if files.len() == 16 && files.iter().all(Option::is_some)
+        ));
+        host.fonts = None;
+        host.on_message(RendererHostMsg::GetFontFamily {
+            family: 0,
+            request_id: 9,
+        });
+        refused(9);
         assert!(forwarded.try_recv().is_err());
     }
 }

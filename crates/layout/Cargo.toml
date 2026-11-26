@@ -26,6 +26,9 @@ gfx.workspace = true
 kurbo.workspace = true
 svgtypes.workspace = true
 icu_segmenter.workspace = true
+# The scripts of a text, whose fallback the browser's fonts give before it
+# is shaped (`font_service`).
+icu_properties.workspace = true
 taffy.workspace = true
 parley.workspace = true
 read-fonts.workspace = true

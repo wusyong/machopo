@@ -60,6 +60,7 @@ mod control;
 mod counters;
 mod font_families;
 mod font_features;
+mod font_service;
 mod fragment;
 mod geometry;
 mod list_items;
@@ -108,6 +109,10 @@ pub use canvas_text::shape_canvas_text;
 pub use caret::first_caret_position;
 pub use clip_path::ClipPaths;
 pub use control::empty_caret_metrics;
+pub use font_service::{
+    FONT_FILES_PER_CALL, FaceStyle, FontDataService, FontFace, FontFamilyFaces, FontFileBytes,
+    FontNames, SystemFontManager,
+};
 pub use fragment::{
     AtomicInline, BoxFragment, BoxRole, CollapsedBorder, CollapsedBorders, ControlState,
     FragmentLink, InlineBoxFragment, InlineLines, LineEnd, LineEndKind, LineFragment,

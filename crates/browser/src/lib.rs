@@ -20,6 +20,7 @@
 mod bad_message;
 mod debug_urls;
 mod dom_storage;
+mod font_data_service;
 mod frame_tree;
 pub mod loader;
 mod navigation_controller;

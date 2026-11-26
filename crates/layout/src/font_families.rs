@@ -147,10 +147,31 @@ pub(crate) struct FontFallbackMap {
     looked_up: usize,
 }
 
+/// Where a family list's names and generic families are found: the font
+/// collection itself, or what the browser gives of the system's fonts
+/// (`font_service`), which machopo looks names up in itself.
+pub(crate) trait FamilyLookup {
+    /// The family `name` is, as the shaper finds a name: a family it can't
+    /// load isn't one.
+    fn named(&mut self, name: &str) -> Option<FamilyId>;
+    /// The families `generic` stands for.
+    fn generic(&mut self, generic: parley::GenericFamily) -> Vec<FamilyId>;
+}
+
+impl FamilyLookup for Collection {
+    fn named(&mut self, name: &str) -> Option<FamilyId> {
+        self.family_by_name(name).map(|family| family.id())
+    }
+
+    fn generic(&mut self, generic: parley::GenericFamily) -> Vec<FamilyId> {
+        self.generic_families(generic).collect()
+    }
+}
+
 impl FontFallbackMap {
-    /// Looks `families` up in `collection`, unless it has been: before the
+    /// Looks `families` up in `fonts`, unless it has been: before the
     /// shaper borrows the collection, which is when [`Self::ids`] is asked.
-    pub(crate) fn resolve(&mut self, collection: &mut Collection, families: &[FontFamily]) {
+    pub(crate) fn resolve(&mut self, fonts: &mut impl FamilyLookup, families: &[FontFamily]) {
         if self.lists.contains_key(families) {
             return;
         }
@@ -159,12 +180,10 @@ impl FontFallbackMap {
             match family {
                 FontFamilyName::Named(name) => {
                     self.looked_up = self.looked_up.wrapping_add(1);
-                    // As the shaper finds a name: a family it can't load
-                    // isn't one.
-                    ids.extend(collection.family_by_name(&name).map(|family| family.id()));
+                    ids.extend(fonts.named(&name));
                 }
                 FontFamilyName::Generic(generic) => {
-                    ids.extend(collection.generic_families(generic));
+                    ids.extend(fonts.generic(generic));
                 }
             }
         }

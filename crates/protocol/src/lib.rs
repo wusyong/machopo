@@ -31,6 +31,7 @@ pub mod automation;
 mod big_buffer;
 pub mod control_channel;
 pub mod devtools_network;
+pub mod font;
 pub mod header_list;
 pub mod input;
 pub mod network;

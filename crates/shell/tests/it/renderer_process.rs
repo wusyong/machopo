@@ -167,6 +167,7 @@ impl RunningRenderer {
                 new_content_rendering_delay: browser::NEW_CONTENT_RENDERING_DELAY,
             },
             gpu: false,
+            fonts: None,
         };
         send_over(&link, to_renderer::MAIN, &init).expect("the channel is there");
         until_it_says(&mut said, "the renderer's threads are started");

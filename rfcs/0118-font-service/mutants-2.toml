@@ -1,0 +1,298 @@
+# Stage 2's mutants (the system's fonts served by the browser, Windows): `python scripts/test.py mutate rfcs/0118-font-service/mutants-2.toml`, on Windows.
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "font_service::"]
+timeout = 900
+
+# The renderer's side (`layout`'s `ServedFonts`).
+
+[[mutant]]
+name = "a font collection is registered as one face"
+file = "crates/layout/src/font_service.rs"
+from = '''            let id = if is_font_collection(blob.as_ref()) {'''
+to = '''            let id = if is_font_collection(blob.as_ref()) && false {'''
+
+[[mutant]]
+name = "a face is registered under its file's own family name"
+file = "crates/layout/src/font_service.rs"
+from = '''                    family_name: Some(&name),'''
+to = '''                    family_name: None,'''
+
+[[mutant]]
+name = "a collection's face is its first family's"
+file = "crates/layout/src/font_service.rs"
+from = '''                    .find(|(_, indices)| indices.contains(&face.index))'''
+to = '''                    .find(|_| true)'''
+
+[[mutant]]
+name = "a file is asked for once for each face in it"
+file = "crates/layout/src/font_service.rs"
+from = '''            if !self.files.contains_key(&face.file) && !missing.contains(&face.file) {'''
+to = '''            if !self.files.contains_key(&face.file) {'''
+
+[[mutant]]
+name = "a family's files are asked for all at once"
+file = "crates/layout/src/font_service.rs"
+from = '''        for files in missing.chunks(FONT_FILES_PER_CALL) {'''
+to = '''        for files in missing.chunks(usize::MAX) {'''
+
+[[mutant]]
+name = "a family is asked for every time"
+file = "crates/layout/src/font_service.rs"
+from = '''        if let Some(&known) = self.loaded.get(&family) {
+            return known;
+        }'''
+to = '''        if let Some(&known) = self.loaded.get(&family).filter(|_| false) {
+            return known;
+        }'''
+
+[[mutant]]
+name = "no script's fallback is asked for"
+file = "crates/layout/src/font_service.rs"
+from = '''        let mut new: Vec<[u8; 4]> = Vec::new();'''
+to = '''        let mut new: Vec<[u8; 4]> = Vec::new(); if text.len() < usize::MAX { return; }'''
+
+[[mutant]]
+name = "Han's fallback isn't asked for"
+file = "crates/layout/src/font_service.rs"
+from = '''        if !self.scripts.contains(&HAN) {
+            new.push(HAN);
+        }'''
+to = '''        if !self.scripts.contains(&HAN) && false {
+            new.push(HAN);
+        }'''
+
+[[mutant]]
+name = "ASCII text asks for no Latin"
+file = "crates/layout/src/font_service.rs"
+from = '''            if !self.scripts.contains(&LATIN) {
+                new.push(LATIN);
+            }'''
+to = '''            if !self.scripts.contains(&LATIN) && false {
+                new.push(LATIN);
+            }'''
+
+[[mutant]]
+name = "the ASCII letters of other text ask for no Latin"
+file = "crates/layout/src/font_service.rs"
+from = '''                        if !self.scripts.contains(&LATIN) && !new.contains(&LATIN) {'''
+to = '''                        if !self.scripts.contains(&LATIN) && !new.contains(&LATIN) && false {'''
+
+[[mutant]]
+name = "text of no script asks for no Latin"
+file = "crates/layout/src/font_service.rs"
+from = '''        if !any_script && !self.scripts.contains(&LATIN) && !new.contains(&LATIN) {'''
+to = '''        if !any_script && !self.scripts.contains(&LATIN) && !new.contains(&LATIN) && false {'''
+
+[[mutant]]
+name = "characters of no script of their own are asked for as a script"
+file = "crates/layout/src/font_service.rs"
+from = '''                        | icu_properties::props::Script::Unknown
+                ) {'''
+to = '''                        | icu_properties::props::Script::Unknown
+                ) && false {'''
+
+[[mutant]]
+name = "a script is asked for again"
+file = "crates/layout/src/font_service.rs"
+from = '''            self.scripts.insert(script);'''
+to = '''            '''
+
+[[mutant]]
+name = "a script's fallback isn't set"
+file = "crates/layout/src/font_service.rs"
+from = '''            if !ours.is_empty() {
+                collection.set_fallbacks('''
+to = '''            if ours.is_empty() {
+                collection.set_fallbacks('''
+
+[[mutant]]
+name = "a name is looked up as it is written"
+file = "crates/layout/src/font_service.rs"
+from = '''        match self.served.names.get(&fold(name)) {'''
+to = '''        match self.served.names.get(name) {'''
+
+[[mutant]]
+name = "a name the browser didn't give isn't looked up among the collection's own"
+file = "crates/layout/src/font_service.rs"
+from = '''            None => self
+                .collection
+                .family_by_name(name)
+                .map(|family| family.id()),'''
+to = '''            None => None,'''
+
+[[mutant]]
+name = "a generic family's families aren't asked for"
+file = "crates/layout/src/font_service.rs"
+from = '''                .filter_map(|family| self.served.family(self.collection, family))
+                .collect();
+            self.collection
+                .set_generic_families(generic, ours.into_iter());'''
+to = '''                .filter_map(|family| self.served.family(self.collection, family))
+                .collect();
+            self.collection
+                .set_generic_families(generic, ours.into_iter().take(0));'''
+
+[[mutant]]
+name = "the generic families are taken in another order"
+file = "crates/layout/src/font_service.rs"
+from = '''                .position(|&each| each == generic);'''
+to = '''                .position(|&each| each != generic);'''
+
+[[mutant]]
+name = "a block's text asks for no fallback"
+file = "crates/layout/src/text.rs"
+from = '''        cx.resolve_text(&text);
+        cx.resolve_families(&container.font.family);'''
+to = '''        cx.resolve_families(&container.font.family);'''
+
+[[mutant]]
+name = "SVG's text asks for no fallback"
+file = "crates/layout/src/text.rs"
+from = '''    cx.resolve_text(text);
+    for (_, style) in spans {'''
+to = '''    for (_, style) in spans {'''
+
+[[mutant]]
+name = "a canvas's text asks for no fallback"
+file = "crates/layout/src/canvas_text.rs"
+from = '''    cx.resolve_text(text);
+    cx.resolve_families(&style.font.family);'''
+to = '''    cx.resolve_families(&style.font.family);'''
+
+[[mutant]]
+name = "a served family list is looked up in the collection"
+file = "crates/layout/src/text.rs"
+from = '''            Some(served) => self
+                .families
+                .resolve(&mut served.lookup(&mut self.fonts.collection), families),'''
+to = '''            Some(_) => self.families.resolve(&mut self.fonts.collection, families),'''
+
+# The browser's side (`layout`'s `SystemFontManager`).
+
+[[mutant]]
+name = "the fallback is Latin's whatever the script"
+file = "crates/layout/src/font_service.rs"
+from = '''        let key = FallbackKey::new(Script::from_bytes(script), None);'''
+to = '''        let key = FallbackKey::new(Script::from_bytes({ let _ = script; *b"Latn" }), None);'''
+
+[[mutant]]
+name = "a family's other names aren't given"
+file = "crates/layout/src/font_service.rs"
+from = '''        let mut names: Vec<String> = collection.family_names().map(str::to_owned).collect();'''
+to = '''        let mut names: Vec<String> = collection.family_ids().collect::<Vec<_>>().into_iter().filter_map(|id| collection.family_name(id).map(str::to_owned)).collect();'''
+
+[[mutant]]
+name = "every file is the first file"
+file = "crates/layout/src/font_service.rs"
+from = '''        if let Some(&number) = self.file_numbers.get(path) {
+            return Some(number);
+        }'''
+to = '''        if let Some(&number) = self.file_numbers.get(path).or(self.file_numbers.values().next()) {
+            return Some(number);
+        }'''
+
+# The browser's IO thread and font thread.
+
+[[mutant]]
+name = "a family past the names is passed on"
+file = "crates/browser/src/font_data_service.rs"
+from = '''            FontRequest::Family { family, .. } => *family < self.names.families,'''
+to = '''            FontRequest::Family { family, .. } => *family <= self.names.families,'''
+test = ["cargo", "test", "-q", "-p", "browser", "--lib", "--", "font"]
+
+[[mutant]]
+name = "a script that is no tag is passed on"
+file = "crates/browser/src/font_data_service.rs"
+from = '''            FontRequest::Fallback { script, .. } => script.iter().all(u8::is_ascii_alphabetic),'''
+to = '''            FontRequest::Fallback { script, .. } => script.iter().any(u8::is_ascii_alphabetic),'''
+test = ["cargo", "test", "-q", "-p", "browser", "--lib", "--", "font"]
+
+[[mutant]]
+name = "no file is passed on"
+file = "crates/browser/src/font_data_service.rs"
+from = '''                !files.is_empty()
+                    && files.len() <= FONT_FILES_PER_CALL'''
+to = '''                files.len() <= FONT_FILES_PER_CALL'''
+test = ["cargo", "test", "-q", "-p", "browser", "--lib", "--", "font"]
+
+[[mutant]]
+name = "more files than go with a message are passed on"
+file = "crates/browser/src/font_data_service.rs"
+from = '''                    && files.len() <= FONT_FILES_PER_CALL'''
+to = '''                    && files.len() <= usize::MAX'''
+test = ["cargo", "test", "-q", "-p", "browser", "--lib", "--", "font"]
+
+[[mutant]]
+name = "a file not numbered is passed on"
+file = "crates/browser/src/font_data_service.rs"
+from = '''                    && files.iter().all(|&file| file < numbered)'''
+to = '''                    && files.iter().all(|&file| file <= numbered)'''
+test = ["cargo", "test", "-q", "-p", "browser", "--lib", "--", "font"]
+
+[[mutant]]
+name = "the IO thread never hears of the files numbered"
+file = "crates/browser/src/font_data_service.rs"
+from = '''                    numbered.store(fonts.files_numbered(), Ordering::Release);'''
+to = '''                    '''
+test = ["cargo", "test", "-q", "-p", "browser", "--lib", "--", "font"]
+
+[[mutant]]
+name = "a bad question isn't told to the UI thread"
+file = "crates/browser/src/render_process_host.rs"
+from = '''        if let Err(reason) = asked {
+            (self.forward)(Err(reason));
+        }'''
+to = '''        if let Err(reason) = asked {
+            let _ = reason;
+        }'''
+test = ["cargo", "test", "-q", "-p", "browser", "--lib", "--", "font"]
+
+[[mutant]]
+name = "a renderer that isn't served may ask"
+file = "crates/browser/src/render_process_host.rs"
+from = '''            None => {
+                request.refuse(&self.to_renderer);
+                Err(BadMessageReason::FontRequest)
+            }'''
+to = '''            None => {
+                request.refuse(&self.to_renderer);
+                Ok(())
+            }'''
+test = ["cargo", "test", "-q", "-p", "browser", "--lib", "--", "font"]
+
+[[mutant]]
+name = "the font thread opens no file"
+file = "crates/browser/src/font_data_service.rs"
+from = '''                .map(|&file| ipc::file::ReadOnlyFile::open(fonts.file(file)?).ok())'''
+to = '''                .map(|&file| ipc::file::ReadOnlyFile::open(fonts.file(file)?).ok().filter(|_| false))'''
+test = ["cargo", "test", "-q", "-p", "browser", "--lib", "--", "font"]
+
+# A renderer process (machopo's own, in the sandbox and out of it).
+
+[[mutant]]
+name = "Windows's renderers find the system's fonts themselves"
+file = "crates/browser/src/font_data_service.rs"
+from = '''pub(crate) const SERVES_SYSTEM_FONTS: bool = cfg!(windows);'''
+to = '''pub(crate) const SERVES_SYSTEM_FONTS: bool = cfg!(windows) && false;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "renderer_sandbox_windows::a_renderer_process_has_the_systems_fonts_from_its_browser"]
+
+[[mutant]]
+name = "a renderer process isn't given the names"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                        fonts: fonts.map(|fonts| fonts.names().clone()),'''
+to = '''                        fonts: fonts.map(|fonts| fonts.names().clone()).filter(|_| false),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "renderer_sandbox_windows::a_renderer_process_has_the_systems_fonts_from_its_browser"]
+
+[[mutant]]
+name = "the renderer maps none of the files it is given"
+file = "crates/renderer/src/font_data.rs"
+from = '''                    let bytes: layout::FontFileBytes = Arc::new(file?.map()?);'''
+to = '''                    let bytes: layout::FontFileBytes = Arc::new(file.filter(|_| false)?.map()?);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "renderer_sandbox_windows::a_renderer_process_has_the_systems_fonts_from_its_browser"]
+
+[[mutant]]
+name = "a family's answer is a task, not the answer a call waits for"
+file = "crates/renderer/src/task_queue.rs"
+from = '''        | RendererMsg::FontFamily { request_id, .. }
+        | RendererMsg::FontFallback { request_id, .. }'''
+to = '''        | RendererMsg::FontFallback { request_id, .. }'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "renderer_sandbox_windows::a_renderer_process_has_the_systems_fonts_from_its_browser"]

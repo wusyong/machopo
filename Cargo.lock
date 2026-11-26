@@ -2536,6 +2536,7 @@ dependencies = [
  "dom",
  "gfx",
  "html",
+ "icu_properties",
  "icu_segmenter",
  "kurbo",
  "parley",

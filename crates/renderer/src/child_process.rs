@@ -19,7 +19,7 @@ use protocol::viz::CompositorFrameSinkSender;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    RendererEndpoints, RendererFlags, RendererSender, ScriptEngineFactory,
+    RendererEndpoints, RendererFlags, RendererSender, ScriptEngineFactory, SystemFontSource,
     spawn_renderer_main_thread,
 };
 
@@ -33,6 +33,9 @@ pub struct ChildInit {
     /// Whether Viz has a GPU for the renderer's shared images
     /// ([`RendererEndpoints::gpu`]).
     pub gpu: bool,
+    /// What the browser says of the system's fonts, if the renderer's text
+    /// is to ask it for them ([`SystemFontSource::Browser`]).
+    pub fonts: Option<protocol::font::FontNames>,
 }
 
 /// How a renderer process ended.
@@ -121,7 +124,8 @@ fn crash() -> ! {
 /// process's end of the channel to its browser
 /// (`ipc::platform::inherited`), and `script_engine` the engines whoever
 /// built the process picked; `system_fonts` the system's fonts if the
-/// process found them before this (as one in a sandbox has to). Returns on
+/// process found them before this (as one in a sandbox has to), for a
+/// browser that doesn't serve them. Returns on
 /// the thread it was called on, once the renderer's main thread and the
 /// IO thread are over.
 pub fn run_child_process(
@@ -155,7 +159,7 @@ pub fn run_child_process(
     // start (a test) knows from here that it hears its browser go.
     tracing::info!("the renderer process has its channel");
     let exit = match first.recv() {
-        Ok(ChildInit { flags, gpu }) => {
+        Ok(ChildInit { flags, gpu, fonts }) => {
             let endpoints = RendererEndpoints {
                 from_browser,
                 to_browser: BrowserSender::over(link.clone()),
@@ -164,6 +168,11 @@ pub fn run_child_process(
             };
             // A process of its own is killed if it doesn't end: nothing
             // stops its script from another thread.
+            let system_fonts = match (fonts, system_fonts) {
+                (Some(names), _) => SystemFontSource::Browser(names),
+                (None, Some(fonts)) => SystemFontSource::Found(Box::new(fonts)),
+                (None, None) => SystemFontSource::FindHere,
+            };
             match spawn_renderer_main_thread(endpoints, flags, script_engine, None, system_fonts) {
                 Ok(main) => {
                     tracing::info!("the renderer's threads are started");

@@ -37,6 +37,7 @@ use parley::{
 use taffy::AvailableSpace;
 
 use crate::font_families::FontFallbackMap;
+use crate::font_service::{FontDataService, FontNames, ServedFonts};
 use crate::fragment::{
     AtomicInline, InlineBoxFragment, LineEnd, LineEndAt, LineFragment, ShapedSpan, TextCluster,
     TextEnd, TextFragment, TextGlyphs,
@@ -51,6 +52,9 @@ pub struct TextContext {
     layout: LayoutContext<u32>,
     /// What each `font-family` value shaped so far is in `fonts`.
     families: FontFallbackMap,
+    /// Where `fonts` gets the system's fonts from as it needs them, when
+    /// the browser has them for it.
+    served: Option<ServedFonts>,
 }
 
 /// The system's fonts, found: the list of them and what the operating
@@ -84,6 +88,10 @@ impl SystemFonts {
             }
         }
         directories.into_iter().collect()
+    }
+
+    pub(crate) fn into_context(self) -> FontContext {
+        self.0
     }
 }
 
@@ -119,6 +127,21 @@ impl TextContext {
         Self::with_fonts(fonts.0)
     }
 
+    /// The system's fonts as the browser has them, `names` all it says of
+    /// them to begin with: the rest is asked of `service` as text needs it.
+    /// None of the system's fonts are found here.
+    pub fn with_font_service(names: FontNames, service: Box<dyn FontDataService>) -> Self {
+        let mut cx = Self::with_fonts(FontContext {
+            collection: Collection::new(CollectionOptions {
+                shared: false,
+                system_fonts: false,
+            }),
+            source_cache: SourceCache::default(),
+        });
+        cx.served = Some(ServedFonts::new(names, service));
+        cx
+    }
+
     fn with_fonts(fonts: FontContext) -> Self {
         let mut layout = LayoutContext::new();
         // Nothing moves through this text by words with parley's clusters:
@@ -128,6 +151,7 @@ impl TextContext {
             fonts,
             layout,
             families: FontFallbackMap::default(),
+            served: None,
         }
     }
 
@@ -140,7 +164,21 @@ impl TextContext {
     /// Looks `families` up in the fonts, unless it has been, for a layout
     /// about to be built with it.
     pub(crate) fn resolve_families(&mut self, families: &[computed_style::FontFamily]) {
-        self.families.resolve(&mut self.fonts.collection, families);
+        match &mut self.served {
+            Some(served) => self
+                .families
+                .resolve(&mut served.lookup(&mut self.fonts.collection), families),
+            None => self.families.resolve(&mut self.fonts.collection, families),
+        }
+    }
+
+    /// `text` is about to be shaped: the fonts have what it falls back to.
+    /// Only the browser's fonts need it: a collection of the system's own
+    /// asks the system as it shapes.
+    pub(crate) fn resolve_text(&mut self, text: &str) {
+        if let Some(served) = &mut self.served {
+            served.prepare_text(&mut self.fonts.collection, text);
+        }
     }
 
     /// How many layouts took the shaping of one alike (parley keeps what
@@ -244,6 +282,7 @@ pub(crate) fn shape_line(
     text: &str,
     spans: &[(std::ops::Range<usize>, &ComputedStyle)],
 ) -> Layout<u32> {
+    cx.resolve_text(text);
     for (_, style) in spans {
         cx.resolve_families(&style.font.family);
     }
@@ -1030,7 +1069,9 @@ impl InlineContent {
             hyphens: &hyphen_advances,
         };
         // The font families of every span, looked up (those not seen
-        // before) while the fonts aren't the builder's.
+        // before), and what the text falls back to, while the fonts aren't
+        // the builder's.
+        cx.resolve_text(&text);
         cx.resolve_families(&container.font.family);
         for element in &elements {
             cx.resolve_families(&element.style.font.family);

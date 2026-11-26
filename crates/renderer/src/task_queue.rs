@@ -694,7 +694,10 @@ impl RendererSender {
         // An answer the main thread waits for, not a task.
         if let RendererMsg::StorageAreaOpened { request_id, .. }
         | RendererMsg::Cookies { request_id, .. }
-        | RendererMsg::CookiesEnabled { request_id, .. } = msg
+        | RendererMsg::CookiesEnabled { request_id, .. }
+        | RendererMsg::FontFamily { request_id, .. }
+        | RendererMsg::FontFallback { request_id, .. }
+        | RendererMsg::FontFiles { request_id, .. } = msg
         {
             return scheduler.post_reply(request_id, msg);
         }
@@ -743,6 +746,17 @@ pub struct RendererGone;
 pub struct RendererReceiver {
     pub(crate) scheduler: Arc<MainThreadScheduler>,
     pub(crate) compositor: CompositorReceiver,
+}
+
+impl RendererReceiver {
+    /// The browser's answer to the call numbered `request_id`, waited for
+    /// as the main thread waits for it, for tests that stand in for a
+    /// renderer.
+    pub fn reply_for_testing(&self, request_id: u64) -> Option<RendererMsg> {
+        self.scheduler
+            .state
+            .sync_wait(request_id, |extra| extra.shutting_down)
+    }
 }
 
 #[cfg(test)]

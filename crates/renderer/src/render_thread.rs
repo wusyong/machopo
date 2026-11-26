@@ -63,6 +63,19 @@ pub struct RendererEndpoints {
     pub gpu: bool,
 }
 
+/// Where a renderer's text gets the system's fonts.
+pub enum SystemFontSource {
+    /// From the browser, as it needs them (Chromium's `FontDataService`):
+    /// what the browser says of them to begin with. The renderer opens no
+    /// font file and asks the system nothing.
+    Browser(protocol::font::FontNames),
+    /// As this process found them already (one that finds them before it
+    /// loses the file system). Boxed: the other two are a fraction of it.
+    Found(Box<layout::SystemFonts>),
+    /// As the main thread finds them.
+    FindHere,
+}
+
 /// Switches the browser passes down when it launches a renderer
 /// (`RenderProcessHostImpl::PropagateBrowserCommandLineToRenderer`):
 /// values only, which a renderer process of its own would get on its
@@ -226,15 +239,14 @@ impl MainThreadTerminator {
 /// thread (`CrRendererMain`), which owns the other and stops it when it
 /// exits. The handle is the main thread's.
 ///
-/// `system_fonts`: the system's fonts where they were found already (a
-/// process that finds them before it loses the file system); otherwise
-/// the main thread finds them itself.
+/// `system_fonts`: where the text gets the system's fonts (none of it with
+/// `flags.test_fonts`).
 pub fn spawn_renderer_main_thread(
     endpoints: RendererEndpoints,
     flags: RendererFlags,
     script_engine: ScriptEngineFactory,
     terminator: Option<MainThreadTerminator>,
-    system_fonts: Option<layout::SystemFonts>,
+    system_fonts: SystemFontSource,
 ) -> std::io::Result<JoinHandle<()>> {
     let RendererEndpoints {
         from_browser,
@@ -571,7 +583,7 @@ impl RenderThread {
         flags: RendererFlags,
         script_engine: ScriptEngineFactory,
         terminator: Option<MainThreadTerminator>,
-        system_fonts: Option<layout::SystemFonts>,
+        system_fonts: SystemFontSource,
     ) -> Self {
         let _span = trace_event::info_event!("RenderThread::new");
         let id_prefix = webdriver::new_id_prefix();
@@ -601,8 +613,16 @@ impl RenderThread {
         let _ = to_browser.send(RendererHostMsg::RendererReady);
         Self {
             text: match system_fonts {
-                Some(fonts) if !flags.test_fonts => TextContext::with_system_fonts(fonts),
-                _ => TextContext::new(flags.test_fonts),
+                _ if flags.test_fonts => TextContext::new(true),
+                SystemFontSource::Browser(names) => TextContext::with_font_service(
+                    crate::font_data::font_names(names),
+                    Box::new(crate::font_data::BrowserFontDataService {
+                        to_browser: to_browser.clone(),
+                        scheduler: scheduler.clone(),
+                    }),
+                ),
+                SystemFontSource::Found(fonts) => TextContext::with_system_fonts(*fonts),
+                SystemFontSource::FindHere => TextContext::new(false),
             },
             canvas_encoder: CanvasEncoder::new(scheduler.clone()),
             workers: Rc::new(crate::worker_thread::Workers::new(
@@ -1356,7 +1376,10 @@ impl RenderThread {
             // The sender puts it aside for the call waiting for it.
             RendererMsg::StorageAreaOpened { .. }
             | RendererMsg::Cookies { .. }
-            | RendererMsg::CookiesEnabled { .. } => {}
+            | RendererMsg::CookiesEnabled { .. }
+            | RendererMsg::FontFamily { .. }
+            | RendererMsg::FontFallback { .. }
+            | RendererMsg::FontFiles { .. } => {}
             RendererMsg::StorageAreaChangeFailed { area, key, value } => {
                 if let Some(engine) = self.engine.as_mut() {
                     engine.storage_change_failed(area, &key, value);
