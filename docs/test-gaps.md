@@ -236,7 +236,7 @@
 **啟動和結束（`shell` 的 `browser_window.rs`、`net` 的 `test_server.rs`）**
 
 - 沒有 `shutdown` 就丟掉的 `BrowserWindow` 照樣 shutdown（`Drop`）：拿掉之後只有機率性地壞。它守的是啟動到一半失敗時（例如 `--remote-debugging-port` 被占用），Viz 還在建 GPU device、process 就 `exit` 而 crash；2026-11-24 在 CPU 的 adapter 上量，拿掉它時 1600 次啟動 crash 5 次（約 0.3%，綁 4 顆 CPU 加負載也差不多），有它時 1200 次 0 次。`remote_debugging::a_port_taken_ends_it_with_an_error` 每次啟動 30 次，碰到的機會約一成。要讓 Viz 在建 device 時停一下的 hook，才能每次重現。
-- 「拒絕連線」的 port 整個測試期間占著（`RefusedPort`）：守的是同時跑的別的測試的 server 拿不到同一個 port，一個測試裡看不出來；guard 改成 listen 有 `net` 的測試抓到（連線不再被拒絕）。
+- 「拒絕連線」的 port 整個測試期間占著（`RefusedPort`）：守的是同時跑的別的測試的 server 拿不到同一個 port，一個測試裡看不出來；guard 改成 listen 有 `net` 的測試抓到（連線不再被拒絕）。macOS 上不占（它的 TCP 對 bind 了、沒有 listen 的 socket 不回 reset，連線等到 timeout），拿到就放掉，靠的是 macOS 照順序分配 port（2026-11-26 在 macOS 26.6.2 上試過：連續 bind 2000 次，剛放掉的 port 沒有回來）；在 macOS 上把「占著」改回去，`net` 用到它的測試抓到（`ERR_TIMED_OUT`）；改成每個平台都放掉，在 macOS 上和原本一樣、抓不到，在 Linux 上的差別就是上面說的同時跑的測試。Windows 照舊占著，連到這樣的 port 是不是馬上被拒絕還沒在 Windows 上確認。
 
 ## 沒有計數守著的優化
 

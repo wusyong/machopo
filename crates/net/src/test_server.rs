@@ -351,10 +351,17 @@ impl Drop for TestServer {
 /// kept: bound and not listening, so a connection to it is refused at once
 /// (Chromium's `EmbeddedTestServer` holds its port the same way before it
 /// listens). Kept for as long as the test that wants a refused connection
-/// runs: a port let go is another test's server's to take.
+/// runs: a port let go is another test's server's to take, as Linux hands
+/// out a free port from a random place in its range.
+///
+/// On macOS it isn't kept: its TCP (BSD's) drops a connection's first
+/// segment to a socket that is bound and not listening, without a reset,
+/// so the connection would wait for its timeout instead of being refused.
+/// There a port let go is safe enough: macOS hands out free ports in turn
+/// (from 49152 up), so one comes back only once the range has gone round.
 pub struct RefusedPort {
-    // Bound, never listening: what keeps the port.
-    _socket: tokio::net::TcpSocket,
+    // Bound, never listening: what keeps the port (none on macOS).
+    _socket: Option<tokio::net::TcpSocket>,
     port: u16,
 }
 
@@ -371,6 +378,8 @@ pub fn refused_port() -> RefusedPort {
         .bind(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
         .expect("bind a free port");
     let port = socket.local_addr().expect("local address").port();
+    // macOS: let go, to be refused (above).
+    let socket = (!cfg!(target_os = "macos")).then_some(socket);
     RefusedPort {
         _socket: socket,
         port,
