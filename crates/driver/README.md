@@ -1,6 +1,6 @@
 # driver
 
-machopodriver：machopo 的 WebDriver（classic）server，對應 Chromium 的 chromedriver。它提供 WebDriver 的 HTTP API，每個 session 啟動一個 `machopo --automation-pipe`，經過 machopo 的 stdin 和 stdout 送照 CDP 格式的訊息（`protocol::automation`，訊息的清單見 `crates/shell/README.md` 的「自動化的 pipe」）。
+machopodriver：machopo 的 WebDriver（classic）server，對應 Chromium 的 chromedriver。它提供 WebDriver 的 HTTP API，每個 session 啟動一個 `machopo --remote-debugging-pipe --headless`，經過 machopo 的 pipe（照 Chrome 的 `--remote-debugging-pipe`：fd 3 和 4，Windows 是 `--remote-debugging-io-pipes` 指名的 handle；`ipc::platform::spawn_with_pipe`）送照 CDP 格式的訊息；machopo 的 stdout 和 stderr 是 machopodriver 的（`protocol::automation`，訊息的清單見 `crates/shell/README.md` 的「自動化的 pipe」）。
 
 ```sh
 cargo build -p shell -p driver

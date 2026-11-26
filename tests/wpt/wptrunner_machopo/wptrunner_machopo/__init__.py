@@ -64,7 +64,7 @@ def executor_kwargs(logger, test_type, test_environment, run_info_data, subsuite
 
     rv = base_executor_kwargs(test_type, test_environment, run_info_data, subsuite, **kwargs)
     rv["capabilities"] = {}
-    # The driver's machopo is windowless (`--automation-pipe`): wdspec's
+    # The driver's machopo is windowless (`--headless`): wdspec's
     # `is_wayland_headful` must not take its window for a Wayland one, which
     # the compositor won't let move.
     rv["headless"] = True

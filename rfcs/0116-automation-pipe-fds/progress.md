@@ -7,10 +7,10 @@
 | 步驟 | 狀態 | 完成日期 |
 | --- | --- | --- |
 | 1. `ipc` 的兩個入口：`inherited_pipe`、`spawn_with_pipe`（Unix、Windows）和它們的測試（已決定的事項第 4 到 8 條） | 做完（Windows 的那一份留到第 3 段才編譯和測試） | 2026-11-26 |
-| 2. 換過去（已決定的事項第 1、9 到 11 條） | 進行中 | |
+| 2. 換過去（已決定的事項第 1、9 到 11 條） | 做完（macOS） | 2026-11-26 |
 | 2a. `shell` 的開關、拿 pipe、reader 和 writer、renderer 的 stdout；machopodriver、`shell` 的測試和情境；`ipc` 照第 10 條忽略 Unix 上的 handle 開關 | 做完 | 2026-11-26 |
 | 2b. Python 的工具（`MachopoPipe`、`ChromePipe`、`raster.py`）和 bench 工具的四份測試 | 做完 | 2026-11-26 |
-| 2c. 文件和限制 | 沒開始 | |
+| 2c. 文件和限制 | 做完 | 2026-11-26 |
 | 3. Windows：在使用者的裝置上跑第 1、2 段的測試和 bench | 沒開始 | |
 
 ## 驗收
@@ -61,3 +61,15 @@
 - **測試**：`speedometer_test.py` 多了 `PipeTests` 的 4 個；`blink_perf_test.py` 的兩個照新的命令改：`taskset` 的那個看 `sh` 之後是取樣器和 machopo；Windows 的 affinity 的那個在假的 Windows 上改用舊版本那條路（新的那條要真的 `msvcrt`），新的那條和 `ChromePipe` 一起只在真的 Windows 上跑。
 - **mutation test**（`mutants-2b.toml`）：5 個都抓到：新的 machopo 當成舊的、`--against` 的舊版本沒標記、每個版本都當成新的、pipe 的兩端放反、工具留著 browser 的那兩端。最後一個一開始是測試卡住、跑到時限（120 秒）才算抓到：讀到結尾改到另一條 thread、等 10 秒之後當場失敗。
 - **檢查**：bench 工具的四份測試（`speedometer_test.py` 126 個、`blink_perf_test.py` 37 個、`raster_test.py` 13 個、`census_test.py` 5 個）通過；用真的 machopo 跑 `machopo_gpu` 回報 `Apple M4 (IntegratedGpu, Metal)`（2a 時是 `unknown`），`test.py wpt dom/lists/` 沒有意外的結果、印出的也是那個 GPU。Windows 上的 `start_with_pipe`（`msvcrt`、`handle_list`）在第 3 段跑。
+
+### 2c（2026-11-26）
+
+- **改了什麼**：`docs/architecture.md`（`AutomationPipeReader`、`AutomationPipeWriter` 讀寫的地方、machopodriver 怎麼啟動 machopo、renderer 的 stdio、`shell` 和 `driver` 的模組表、和 Chromium 刻意不同的地方的「自動化的通道」：現在和 Chrome 一樣，只剩 Windows 不收 C runtime 的 fd）、`docs/testing.md`、`docs/test-gaps.md`、`docs/benchmarks.md`（工具兩邊都經過 `--remote-debugging-pipe`，`--against` 的舊版本照舊）、`crates/shell/README.md`（「自動化的 pipe」改寫）、`crates/driver/README.md`、`tests/scenarios/README.md` 和 wptrunner 的一行註解。
+- **`docs/limitations.md`**：「pipe 是 stdin 和 stdout」那一條改寫成 Playwright、Puppeteer 還差什麼（Chrome 的其他開關、pipe 時的網址、`waitForDebuggerOnStart`、isolated world、`Emulation`、`Fetch`、browser context；Windows 上的 C runtime 的 fd）；「網頁的輸出和 log 混在 stderr」那一條的理由改成照 Chrome；真的視窗不理會輸入那一條和 `about:blank` 那一條換成新的開關，前者補上和 Chrome 的不同（Chrome 經過 pipe 驅動時照樣收使用者的輸入）。
+- **檢查**：`sanity.py docs` 通過；文件裡剩下的 `automation_pipe` 是測試模組（`crates/shell/tests/it/automation_pipe.rs`，沒有改名），`--automation-pipe` 只剩 `docs/benchmarks.md` 說明 `--against` 的舊版本那一處。
+
+### 第 2 段結束的檢查（2026-11-26，macOS 26.6.2 Apple Silicon）
+
+- `cargo test --workspace`：4934 個通過、0 個失敗、1 個 ignored（第 1 段時失敗的 9 個 `refused_port` 的測試，在 `main` 修好、rebase 進來之後通過）。
+- `cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`sanity.py` 的 `unsafe`、`tests`、`numerics`、`deps`、`spans`、`boundary`、`docs` 通過。
+- Windows 的程式（`ipc` 的 handle、`start_with_pipe` 的 `msvcrt`）在第 3 段在使用者的裝置上編譯和測試。

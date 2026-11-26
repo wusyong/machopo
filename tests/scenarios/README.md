@@ -11,8 +11,8 @@ python3 scripts/test.py scenarios --window   # each in a real window (see below)
 ```
 
 **In a real window**: with `--window`, each scenario runs in a `machopo
---automation-pipe --window` of its own (`machopo`'s own window, winit and wgpu
-included), one at a time, driven through the pipe as machopodriver drives
+--remote-debugging-pipe` of its own (no `--headless`: `machopo`'s own window,
+winit and wgpu included), one at a time, driven through the pipe as machopodriver drives
 it; its screenshots and machopo's log go to
 `target/automation-results/<scenario>/`. The window stays on top and ignores
 the mouse and keyboard while it runs. It uses the system's keyboard
