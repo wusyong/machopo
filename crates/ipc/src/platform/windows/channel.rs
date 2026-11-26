@@ -33,10 +33,12 @@ use std::collections::VecDeque;
 use std::hash::{BuildHasher, RandomState};
 use std::io;
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
-use std::process::{Child, Command};
+use std::process::Command;
+
 use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use sunaba::windows::{Child, Policy as Sandbox};
 
 use base::AtomicSequenceNumber;
 use windows_sys::Win32::Foundation::{
@@ -46,8 +48,8 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_APPEND_DATA, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED,
-    FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_TYPE_PIPE, GetFileType, OPEN_EXISTING,
-    PIPE_ACCESS_DUPLEX, ReadFile, SECURITY_ANONYMOUS, SECURITY_SQOS_PRESENT,
+    FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_TYPE_DISK, FILE_TYPE_PIPE, GetFileType,
+    OPEN_EXISTING, PIPE_ACCESS_DUPLEX, ReadFile, SECURITY_ANONYMOUS, SECURITY_SQOS_PRESENT,
     SetFileCompletionNotificationModes, WriteFile,
 };
 use windows_sys::Win32::System::IO::{
@@ -707,25 +709,95 @@ pub(crate) fn inherited_by_children(handle: BorrowedHandle<'_>, inherited: bool)
 }
 
 /// Held while this process starts a child with handles made inheritable
-/// for it ([`spawn`], and `spawn_with_pipe`'s): every child started in the
-/// meantime would inherit them too, so one is started at a time, and the
-/// handles are inheritable only while it is.
+/// for it ([`spawn_in`], and `spawn_with_pipe`'s): a child the standard
+/// library starts in the meantime (`spawn_with_pipe`'s) would inherit them
+/// too, so one is started at a time, and the handles are inheritable only
+/// while it is.
 pub(crate) fn starting_a_child() -> MutexGuard<'static, ()> {
     static STARTING: Mutex<()> = Mutex::new(());
     lock(&STARTING)
 }
 
 /// Starts `command` as a child that has the other end of a new channel,
-/// which it takes with [`inherited`]. The child inherits its end, as
-/// every child this process starts meanwhile would: one is started here
-/// at a time, and the end is inherited only while it is. A process
-/// started elsewhere in that time has the end too; nothing here can
-/// keep it from that.
+/// which it takes with [`inherited`]: [`spawn_in`] with no sandbox.
+pub fn spawn(command: &mut Command) -> io::Result<(Child, Channel)> {
+    spawn_in(command, None)
+}
+
+/// Starts `command` as a child that has the other end of a new channel,
+/// which it takes with [`inherited`], in `sandbox` when there is one
+/// (Chromium's `StartSandboxedProcess`, and its `LaunchProcess` when
+/// there is none). The process is made by `sunaba`, which hands it the
+/// handles named and no others: the child has its end, its output and
+/// its errors, and nothing else of this process's. What `command` says
+/// of its standard streams isn't followed: its input is nothing, its
+/// output and errors this process's.
+///
+/// The end is made inheritable for the child, so a process started
+/// meanwhile by the standard library ([`super::super::spawn_with_pipe`])
+/// would have it too: those and this are started one at a time.
 ///
 /// The child doesn't outlive this process, however either of them is
-/// doing (`job`): hearing that the channel is over is only enough for a
-/// child that isn't stuck. Chromium likewise puts each child in a job.
-pub fn spawn(command: &mut Command) -> io::Result<(Child, Channel)> {
+/// doing: one in a sandbox is in a job of its own that ends it when the
+/// `Child` is dropped, and one with none is put in this process's job
+/// (`job`). Hearing that the channel is over is only enough for a child
+/// that isn't stuck. Chromium likewise puts each child in a job.
+pub fn spawn_in(command: &mut Command, sandbox: Option<&Sandbox>) -> io::Result<(Child, Channel)> {
+    start(command, sandbox, None, &[])
+}
+
+/// [`spawn_in`], with `files` handed to the child beside its end of the
+/// channel: each open in the child under the same value as here, which
+/// the command is to tell it (it takes one with [`inherited_file`]). For
+/// what a child in a sandbox is to write and couldn't open itself. The
+/// files stay the caller's to close: the child's are its own.
+pub fn spawn_handing(
+    command: &mut Command,
+    sandbox: Option<&Sandbox>,
+    files: &[std::fs::File],
+) -> io::Result<(Child, Channel)> {
+    start(command, sandbox, None, files)
+}
+
+/// In a process started with a file handed to it ([`spawn_handing`]): the
+/// file whose handle has the value `value`, which is this process's alone
+/// from here on. `None` when the value names no file. A value is to be
+/// taken once: it is what the process's starter told it, and the starter
+/// is trusted to have told it of a handle it handed over.
+pub fn inherited_file(value: usize) -> Option<std::fs::File> {
+    let handle: HANDLE = std::ptr::with_exposed_provenance_mut(value);
+    // SAFETY: the call only looks the value up: asked of what is no
+    // handle, it says so.
+    if unsafe { GetFileType(handle) } != FILE_TYPE_DISK {
+        return None;
+    }
+    // SAFETY: the value is a handle to a file (just asked), which the
+    // process's starter made for it and told it of, and which nothing
+    // else in this process was told of: this value alone closes it.
+    let file = unsafe { OwnedHandle::from_raw_handle(handle) };
+    // What this process starts doesn't have it.
+    inherited_by_children(file.as_handle(), false).then(|| std::fs::File::from(file))
+}
+
+/// [`spawn_in`], with what the child writes to its standard error read
+/// from the reader, not written where this process's goes.
+pub fn spawn_reading_errors(
+    command: &mut Command,
+    sandbox: Option<&Sandbox>,
+) -> io::Result<(Child, Channel, io::PipeReader)> {
+    let (reader, writer) = io::pipe()?;
+    // The writer closes here once the child has its copy: the reader
+    // reads the end when the child goes.
+    let (child, channel) = start(command, sandbox, Some(writer.as_handle()), &[])?;
+    Ok((child, channel, reader))
+}
+
+fn start(
+    command: &mut Command,
+    sandbox: Option<&Sandbox>,
+    errors: Option<BorrowedHandle<'_>>,
+    files: &[std::fs::File],
+) -> io::Result<(Child, Channel)> {
     let (server, client) = pipe().ok_or_else(|| io::Error::other("no pipe could be made"))?;
     let value = client.as_raw_handle().expose_provenance();
     let spawned = {
@@ -733,11 +805,28 @@ pub fn spawn(command: &mut Command) -> io::Result<(Child, Channel)> {
         if !inherited_by_children(client.as_handle(), true) {
             return Err(io::Error::last_os_error());
         }
-        command.env(CHANNEL_VARIABLE, value.to_string());
-        let spawned = command.spawn();
-        // The command is the caller's: a child it starts by itself
-        // later is told of no end.
-        command.env_remove(CHANNEL_VARIABLE);
+        let mut start = sunaba::windows::Command::from_std(command);
+        start.env(CHANNEL_VARIABLE, value.to_string());
+        start.inherit(client.as_handle());
+        if let Some(errors) = errors {
+            start.stderr(errors);
+        }
+        // Inheritable only while the child is started, as its end is.
+        let mut handed = Vec::new();
+        for file in files {
+            if inherited_by_children(file.as_handle(), true) {
+                start.inherit(file.as_handle());
+                handed.push(file);
+            }
+        }
+        let spawned = if handed.len() == files.len() {
+            start.spawn(sandbox).map_err(io::Error::from)
+        } else {
+            Err(io::Error::last_os_error())
+        };
+        for file in handed {
+            inherited_by_children(file.as_handle(), false);
+        }
         // This process's own client end goes here, with the lock held:
         // the child's is the only one, so the child going is the pipe
         // broken.
@@ -747,7 +836,9 @@ pub fn spawn(command: &mut Command) -> io::Result<(Child, Channel)> {
     let mut child = spawned?;
     // It has been told nothing yet, so it isn't stuck in anything: were
     // this process to end before this, the child would hear that and go.
-    if let Err(error) = job::end_with_this_process(child.as_handle()) {
+    if !child.ends_with_this()
+        && let Err(error) = job::end_with_this_process(child.as_handle())
+    {
         // It would be left running when this process is gone.
         let _ = child.kill();
         return Err(error);
@@ -1075,6 +1166,34 @@ mod tests {
     use windows_sys::Win32::System::Threading::GetProcessHandleCount;
 
     use super::*;
+
+    #[test]
+    fn a_handed_file_is_taken_by_its_value_and_nothing_else_is() {
+        use std::io::Write as _;
+        use std::os::windows::io::IntoRawHandle as _;
+
+        let path = std::env::temp_dir().join(format!("machopo-ipc-{}.txt", std::process::id()));
+        let file = std::fs::File::create(&path).unwrap();
+        // As a child has it: inheritable, and its own by the value alone.
+        assert!(inherited_by_children(file.as_handle(), true));
+        let value = file.into_raw_handle().expose_provenance();
+        let mut taken = inherited_file(value).expect("a file's handle");
+        taken.write_all(b"written").unwrap();
+        let mut flags = 0;
+        // SAFETY: the file is open for the call, which writes `flags`.
+        assert!(unsafe { GetHandleInformation(taken.as_raw_handle(), &raw mut flags) } != 0);
+        assert_eq!(flags & HANDLE_FLAG_INHERIT, 0, "a child would inherit it");
+        drop(taken);
+        assert_eq!(std::fs::read(&path).unwrap(), b"written");
+        let _ = std::fs::remove_file(&path);
+
+        // A pipe's end is no file, and stays its owner's.
+        let (_reader, writer) = io::pipe().unwrap();
+        assert!(inherited_file(writer.as_raw_handle().expose_provenance()).is_none());
+        (&writer).write_all(b"x").unwrap();
+        // Nor is a number that is no handle.
+        assert!(inherited_file(0x7FFF_FFF0).is_none());
+    }
 
     /// Runs a test that waits on a channel, which waits as long as it
     /// takes: a wait that never ends is the test failing, said so.

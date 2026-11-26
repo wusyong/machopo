@@ -104,7 +104,7 @@ fn launching(role: &'static str) -> RendererLauncher {
                 "--test-threads=1",
             ])
             .env(RENDERER, role);
-        command
+        browser::RendererProcess::new(command)
     }))
 }
 

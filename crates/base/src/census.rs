@@ -66,6 +66,16 @@ pub fn own_file() {
     imp::own_file();
 }
 
+/// As [`own_file`], into `file`, already open for writing: for a process
+/// that couldn't open it (one started inside its sandbox, handed the file
+/// by whoever started it).
+pub fn own_file_from(file: std::fs::File) {
+    #[cfg(feature = "census")]
+    imp::own_file_from(file);
+    #[cfg(not(feature = "census"))]
+    drop(file);
+}
+
 /// A callback's run: from `enter` to its drop.
 #[must_use]
 pub struct Call {
@@ -271,6 +281,11 @@ mod imp {
                 std::path::Path::new(&path).display()
             ),
         }
+    }
+
+    pub(super) fn own_file_from(file: std::fs::File) {
+        OWN_FILE.store(true, Ordering::Relaxed);
+        let _ = OPENED.set(std::sync::Mutex::new(file));
     }
 
     /// The file a process's counts go to: `path`, or with `pid`, `path`

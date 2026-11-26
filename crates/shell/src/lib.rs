@@ -106,8 +106,8 @@ pub fn renderer_main(start: RendererStart) -> u8 {
 /// How the tabs' renderers are run: each in a process of its own when
 /// `process_per_tab` (this executable again, as a renderer:
 /// [`RENDERER_PROCESS_SWITCH`], and what it is to know before it enters
-/// its sandbox), or as threads of this process. `test_fonts` as the
-/// renderers' flags have it.
+/// its sandbox; on Windows, started in it), or as threads of this
+/// process. `test_fonts` as the renderers' flags have it.
 pub fn renderer_launcher(process_per_tab: bool, test_fonts: bool) -> browser::RendererLauncher {
     if !process_per_tab {
         return browser::RendererLauncher::InProcess(SCRIPT_ENGINES);
@@ -135,7 +135,15 @@ pub fn renderer_launcher(process_per_tab: bool, test_fonts: bool) -> browser::Re
         // close-on-exec (not inheritable on Windows), so a client hears the
         // pipe end as the browser does, not once the last renderer has.
         command.stdin(std::process::Stdio::null());
-        command
+        let mut process = browser::RendererProcess::new(command);
+        process.sandbox = renderer_sandbox::sandbox();
+        // Started inside its sandbox, it can open nothing: what it writes
+        // is opened for it here.
+        #[cfg(windows)]
+        if process.sandbox.is_some() {
+            renderer_sandbox::windows::hand_files(&mut process);
+        }
+        process
     }))
 }
 

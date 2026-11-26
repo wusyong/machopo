@@ -50,6 +50,8 @@ mach2.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true
+# Starting a child with only the handles named, and in a sandbox.
+sunaba.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

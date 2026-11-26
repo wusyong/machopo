@@ -21,13 +21,25 @@ pub enum Reason {
     /// Its process couldn't enter the operating system's sandbox and
     /// didn't start: another renderer wouldn't either.
     NoSandbox,
+    /// Its process ended before it ran any of its own code, at loading
+    /// what it is made of (Windows): something other than the system's
+    /// may have been put in its way.
+    NotLoaded,
 }
+
+/// What Windows ends a process with when a DLL it needs isn't found,
+/// isn't signed as the process requires, or fails as it starts
+/// (`STATUS_DLL_NOT_FOUND`, `STATUS_INVALID_IMAGE_HASH`,
+/// `STATUS_DLL_INIT_FAILED`), as exit codes.
+const NOT_LOADED: [u32; 3] = [0xC000_0135, 0xC000_0428, 0xC000_0142];
 
 impl Reason {
     /// From what the renderer's process exited with, if it has.
     pub fn of_exit(code: Option<i32>) -> Self {
         if code == Some(i32::from(crate::renderer_sandbox::NO_SANDBOX_EXIT)) {
             Self::NoSandbox
+        } else if code.is_some_and(|code| NOT_LOADED.contains(&code.cast_unsigned())) {
+            Self::NotLoaded
         } else {
             Self::Crashed
         }
@@ -36,7 +48,7 @@ impl Reason {
     fn title(self) -> &'static str {
         match self {
             Self::Crashed => TITLE,
-            Self::NoSandbox => "This page can't be shown",
+            Self::NoSandbox | Self::NotLoaded => "This page can't be shown",
         }
     }
 
@@ -44,6 +56,10 @@ impl Reason {
         match self {
             Self::Crashed => MESSAGE,
             Self::NoSandbox => "Its renderer couldn't enter the system's sandbox: see the log.",
+            Self::NotLoaded => {
+                "Its renderer didn't start. If other software loads into every program, try \
+                 --allow-third-party-modules."
+            }
         }
     }
 }
@@ -247,6 +263,24 @@ mod tests {
         assert_eq!(Reason::of_exit(Some(4)), Reason::Crashed);
         assert_ne!(Reason::NoSandbox.title(), Reason::Crashed.title());
         assert!(Reason::NoSandbox.message().contains("sandbox"));
+        // A process Windows ended at loading its DLLs.
+        for status in [0xC000_0135_u32, 0xC000_0428, 0xC000_0142] {
+            assert_eq!(
+                Reason::of_exit(Some(status.cast_signed())),
+                Reason::NotLoaded,
+                "{status:#x}"
+            );
+        }
+        // One that crashed is no such thing (a fast fail).
+        assert_eq!(
+            Reason::of_exit(Some(0xC000_0409_u32.cast_signed())),
+            Reason::Crashed
+        );
+        assert!(
+            Reason::NotLoaded
+                .message()
+                .contains(crate::renderer_sandbox::ALLOW_THIRD_PARTY_MODULES_SWITCH)
+        );
         // Each paints its own words: other glyphs.
         let glyphs = |reason| {
             let list = SadTab::new().paint(&mut TextContexts::new(true), SIZE, reason);

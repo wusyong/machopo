@@ -40,8 +40,8 @@ where
 
 /// As [`layer`], into `file`, already open for writing: a renderer
 /// process opens it before it enters its sandbox and starts the trace
-/// after (the trace starts a thread).
-#[cfg(unix)]
+/// after (the trace starts a thread); on Windows, where it is in its
+/// sandbox from its start, its browser opens it and hands it over.
 pub fn layer_into<S>(
     file: std::fs::File,
 ) -> Result<(impl Layer<S> + Send + Sync + 'static, TraceEnd), trace::StartError>

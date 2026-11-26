@@ -8,7 +8,9 @@
 //! files the sandbox then closes off, and it is entered while the process
 //! is one thread); on macOS entering is the first thing it does, and the
 //! system's font service is among what it can still reach. Elsewhere
-//! [`enter`] does nothing.
+//! On Windows a renderer process is in its sandbox from its start: its
+//! browser starts it in one ([`sandbox`]), and entering is the renderer
+//! lowering itself the rest of the way. Elsewhere [`enter`] does nothing.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -51,8 +53,44 @@ pub fn disabled() -> bool {
     DISABLED.load(Ordering::Relaxed)
 }
 
+/// DLLs Microsoft didn't sign may be loaded into a renderer process: the
+/// browser's switch (Chromium's `--allow-third-party-modules`), for a
+/// machine where other software puts its own into every process and a
+/// renderer doesn't start without. Only Windows has the restriction.
+pub const ALLOW_THIRD_PARTY_MODULES_SWITCH: &str = "--allow-third-party-modules";
+
+static THIRD_PARTY_MODULES: AtomicBool = AtomicBool::new(false);
+
+/// The browser was started with `--allow-third-party-modules`.
+pub fn allow_third_party_modules() {
+    THIRD_PARTY_MODULES.store(true, Ordering::Relaxed);
+}
+
+/// What a renderer process is started in, where its sandbox is its
+/// starter's to give (Windows): an app container of its own, by a name
+/// no other process of this browser's is given. `None` where a renderer
+/// enters its own, or the browser was told `--no-sandbox`.
+pub fn sandbox() -> Option<ipc::platform::Sandbox> {
+    if disabled() {
+        return None;
+    }
+    #[cfg(windows)]
+    {
+        static NEXT: base::AtomicSequenceNumber<u64> = base::AtomicSequenceNumber::<u64>::new();
+        let number = NEXT.get_next();
+        let mut policy =
+            sunaba::windows::Policy::new(windows::app_container(std::process::id(), number));
+        if THIRD_PARTY_MODULES.load(Ordering::Relaxed) {
+            policy.allow_third_party_modules();
+        }
+        Some(policy)
+    }
+    #[cfg(not(windows))]
+    None
+}
+
 /// Whether this build puts a renderer process in a sandbox at all.
-pub const SUPPORTED: bool = cfg!(any(target_os = "linux", target_os = "macos"));
+pub const SUPPORTED: bool = cfg!(any(target_os = "linux", target_os = "macos", windows));
 
 /// Whether a renderer is told where the system's font files are
 /// ([`font_directories`]): where the sandbox lets files be read by the
@@ -148,7 +186,14 @@ pub fn enter(switches: &ChildSwitches) -> Result<Option<browser::SystemFonts>, S
             .map_err(|error| error.to_string())?;
         Ok(None)
     }
-    #[cfg(not(target_os = "macos"))]
+    // The renderer was started in its sandbox; it gives up what it could
+    // only be started with. The system's fonts are found inside.
+    #[cfg(windows)]
+    {
+        sunaba::windows::lower().map_err(|error| error.to_string())?;
+        Ok(None)
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
     {
         let fonts = (!switches.test_fonts).then(browser::SystemFonts::find);
         #[cfg(target_os = "linux")]
@@ -183,12 +228,196 @@ pub fn probe(arguments: impl IntoIterator<Item = OsString>) -> ! {
         Ok(_) => eprintln!("machopo: {NO_SANDBOX_SWITCH}: there is no sandbox to probe"),
         Err(error) => eprintln!("machopo: the sandbox wasn't entered: {error}"),
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    // The sandbox is the starter's to give: the executable starts itself
+    // as its browser starts a renderer, and that process lowers itself
+    // and makes the attempt.
+    #[cfg(windows)]
+    {
+        let attempt: Vec<OsString> = arguments.collect();
+        if attempt.first().is_some_and(|word| word == windows::INSIDE) {
+            match enter(&switches) {
+                Ok(_) => sunaba::windows::probe::attempt_and_exit(
+                    attempt
+                        .iter()
+                        .skip(1)
+                        .map(|argument| argument.to_string_lossy().into_owned()),
+                ),
+                Err(error) => eprintln!("machopo: the sandbox wasn't entered: {error}"),
+            }
+        } else if switches.no_sandbox {
+            eprintln!("machopo: {NO_SANDBOX_SWITCH}: there is no sandbox to probe");
+        } else {
+            let mut command =
+                sunaba::windows::Command::new(std::env::current_exe().unwrap_or_default());
+            command.arg(PROBE_SWITCH);
+            if switches.test_fonts {
+                command.arg(TEST_FONTS_SWITCH);
+            }
+            command.arg("--").arg(windows::INSIDE);
+            for word in attempt {
+                command.arg(word);
+            }
+            match command.spawn(sandbox().as_ref()) {
+                Ok(mut child) => {
+                    let code = child.wait().ok().and_then(|status| status.code());
+                    std::process::exit(code.unwrap_or(2));
+                }
+                Err(error) => eprintln!("machopo: the probe wasn't started: {error}"),
+            }
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
         let _ = (switches, arguments);
         eprintln!("machopo: this build has no renderer sandbox to probe");
     }
     std::process::exit(2);
+}
+
+#[cfg(windows)]
+pub mod windows {
+    use std::ffi::{OsStr, OsString};
+    use std::fs::File;
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use std::os::windows::io::AsRawHandle as _;
+    use std::path::PathBuf;
+
+    /// The file a renderer process's trace goes to, open, by its handle's
+    /// value in the next argument: a renderer started in its sandbox can't
+    /// open it, so its browser does and hands it over.
+    pub const TRACE_FILE_SWITCH: &str = "--trace-file";
+    /// Likewise the file its census goes to.
+    pub const CENSUS_FILE_SWITCH: &str = "--census-file";
+
+    /// The values after [`TRACE_FILE_SWITCH`] and [`CENSUS_FILE_SWITCH`]
+    /// among a renderer process's arguments.
+    #[derive(Debug, Default, PartialEq, Eq)]
+    pub struct HandedFiles {
+        pub trace: Option<usize>,
+        pub census: Option<usize>,
+    }
+
+    impl HandedFiles {
+        pub fn parse(arguments: impl IntoIterator<Item = OsString>) -> Self {
+            let mut files = Self::default();
+            let mut arguments = arguments.into_iter();
+            while let Some(argument) = arguments.next() {
+                let slot = if argument == TRACE_FILE_SWITCH {
+                    &mut files.trace
+                } else if argument == CENSUS_FILE_SWITCH {
+                    &mut files.census
+                } else {
+                    continue;
+                };
+                *slot = arguments
+                    .next()
+                    .and_then(|value| value.to_str()?.parse().ok());
+            }
+            files
+        }
+    }
+
+    /// A file a renderer process is to write, opened for it before it is
+    /// started: `<path>.<the renderer's id>` is what it is to be called,
+    /// and the id isn't known until the process is, so it is made under
+    /// another name and given its own ([`Self::name_for`]) once it is.
+    pub struct Handed {
+        pub file: File,
+        made_as: PathBuf,
+        path: OsString,
+    }
+
+    impl Handed {
+        /// A new file beside `path`, open for writing, that may be renamed
+        /// while it is open.
+        pub fn make(path: &OsStr) -> std::io::Result<Self> {
+            // Told apart from this browser's others in the making.
+            static NEXT: base::AtomicSequenceNumber<u64> = base::AtomicSequenceNumber::<u64>::new();
+            let number = NEXT.get_next();
+            let mut made_as = path.to_owned();
+            made_as.push(format!(".starting.{}.{number}", std::process::id()));
+            let made_as = PathBuf::from(made_as);
+            // `FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE`: the
+            // last is what lets it be renamed with the renderer writing it.
+            let file = File::options()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .share_mode(0x1 | 0x2 | 0x4)
+                .open(&made_as)?;
+            Ok(Self {
+                file,
+                made_as,
+                path: path.to_owned(),
+            })
+        }
+
+        /// The handle's value, as the renderer is told it: the same in the
+        /// renderer, which inherits the handle.
+        pub fn value(&self) -> usize {
+            self.file.as_raw_handle().expose_provenance()
+        }
+
+        /// What gives the file its name once the renderer has an id.
+        pub fn name_for(&self) -> impl FnOnce(u32) + Send + 'static {
+            let (made_as, path) = (self.made_as.clone(), self.path.clone());
+            move |renderer| {
+                let mut named = path;
+                named.push(format!(".{renderer}"));
+                if let Err(error) = std::fs::rename(&made_as, &named) {
+                    eprintln!(
+                        "machopo: {} couldn't be named {}: {error}",
+                        made_as.display(),
+                        PathBuf::from(named).display()
+                    );
+                }
+            }
+        }
+    }
+
+    /// A renderer started in its sandbox is handed the files it writes:
+    /// its trace's when `MACHOPO_TRACE` names one, and its census's when
+    /// `MACHOPO_CENSUS` does and this build keeps one.
+    pub fn hand_files(process: &mut browser::RendererProcess) {
+        let mut named: Vec<Box<dyn FnOnce(u32) + Send>> = Vec::new();
+        let census = cfg!(feature = "census").then_some(("MACHOPO_CENSUS", CENSUS_FILE_SWITCH));
+        for (variable, switch) in [Some(("MACHOPO_TRACE", TRACE_FILE_SWITCH)), census]
+            .into_iter()
+            .flatten()
+        {
+            let Some(path) = std::env::var_os(variable) else {
+                continue;
+            };
+            match Handed::make(&path) {
+                Ok(handed) => {
+                    process.command.arg(switch).arg(handed.value().to_string());
+                    named.push(Box::new(handed.name_for()));
+                    process.files.push(handed.file);
+                }
+                Err(error) => eprintln!(
+                    "machopo: {variable}: no file for a renderer beside {}: {error}",
+                    PathBuf::from(path).display()
+                ),
+            }
+        }
+        if !named.is_empty() {
+            process.started = Some(Box::new(move |renderer| {
+                for name in named {
+                    name(renderer);
+                }
+            }));
+        }
+    }
+    /// The first word of a probe's attempt in the process the probe
+    /// started: it is inside, and is to make the attempt itself.
+    pub const INSIDE: &str = "inside";
+
+    /// The name of the app container of the renderer `number` of the
+    /// browser `browser`: one no other renderer has, of this browser or
+    /// of another running beside it.
+    pub fn app_container(browser: u32, number: u64) -> String {
+        format!("machopo.renderer.{browser}.{number}")
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -556,6 +785,75 @@ mod tests {
         assert!(!parsed(&["--something-else"]).no_sandbox);
         // A directory switch with nothing after it names none.
         assert!(parsed(&["--font-directory"]).font_directories.is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_renderers_app_container_is_its_own() {
+        assert_ne!(windows::app_container(1, 2), windows::app_container(1, 3));
+        assert_ne!(windows::app_container(1, 2), windows::app_container(2, 2));
+        // One for each renderer this browser starts.
+        let name = |policy: Option<ipc::platform::Sandbox>| format!("{policy:?}");
+        assert_ne!(name(sandbox()), name(sandbox()));
+        assert!(sandbox().is_some());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_renderer_is_told_the_files_it_is_handed_by_their_handles_values() {
+        use windows::HandedFiles;
+        let parsed = |arguments: &[&str]| HandedFiles::parse(arguments.iter().map(OsString::from));
+        assert_eq!(parsed(&[]), HandedFiles::default());
+        assert_eq!(
+            parsed(&["--test-fonts", "--trace-file", "612", "--census-file", "88"]),
+            HandedFiles {
+                trace: Some(612),
+                census: Some(88)
+            }
+        );
+        assert_eq!(
+            parsed(&["--census-file", "4"]),
+            HandedFiles {
+                trace: None,
+                census: Some(4)
+            }
+        );
+        // No value, or one that is no number, is no file.
+        assert_eq!(parsed(&["--trace-file"]), HandedFiles::default());
+        assert_eq!(parsed(&["--trace-file", "x"]), HandedFiles::default());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_file_handed_to_a_renderer_is_named_after_it_once_it_has_an_id() {
+        use std::io::Write as _;
+        let dir = std::env::temp_dir().join(format!("machopo-handed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("trace.pftrace");
+        let mut handed = windows::Handed::make(path.as_os_str()).unwrap();
+        assert_ne!(handed.value(), 0);
+        // Made beside the path, under another name.
+        let made: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert_eq!(made.len(), 1);
+        assert!(made[0].starts_with("trace.pftrace.starting."), "{made:?}");
+        // Renamed with the file open and written to, before and after.
+        handed.file.write_all(b"before ").unwrap();
+        (handed.name_for())(4321);
+        handed.file.write_all(b"after").unwrap();
+        drop(handed);
+        let named = dir.join("trace.pftrace.4321");
+        assert_eq!(std::fs::read(&named).unwrap(), b"before after");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        // Another for the same path is another file.
+        let first = windows::Handed::make(path.as_os_str()).unwrap();
+        let second = windows::Handed::make(path.as_os_str()).unwrap();
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 3);
+        drop((first, second));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[cfg(target_os = "macos")]

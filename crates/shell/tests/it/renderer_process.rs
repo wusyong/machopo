@@ -12,8 +12,9 @@ use crate::automation_pipe::start_machopo;
 
 pub(crate) const MACHOPO: &str = env!("CARGO_BIN_EXE_machopo");
 
-/// What the process exited with, if it did before long.
-fn exit_of(child: &mut std::process::Child) -> Option<i32> {
+/// What the process exited with, if it did before long. A child as
+/// `ipc` starts one, which is the standard library's but on Windows.
+fn exit_of(child: &mut ipc::platform::Child) -> Option<i32> {
     let started = Instant::now();
     loop {
         match child.try_wait().expect("the child is ours to wait for") {
@@ -71,10 +72,10 @@ fn a_renderer_whose_browser_goes_ends() {
     command
         .arg(shell::RENDERER_PROCESS_SWITCH)
         // It says when it reads its channel.
-        .env("RUST_LOG", "renderer=info")
-        .stderr(Stdio::piped());
-    let (mut child, channel) = ipc::platform::spawn(&mut command).expect("machopo starts");
-    let mut said = BufReader::new(child.stderr.take().expect("its standard error"));
+        .env("RUST_LOG", "renderer=info");
+    let (mut child, channel, errors) =
+        ipc::platform::spawn_reading_errors(&mut command, None).expect("machopo starts");
+    let mut said = BufReader::new(errors);
     let mut line = String::new();
     loop {
         line.clear();
@@ -121,7 +122,7 @@ impl ipc::endpoint::Handler<ipc::platform::Channel> for Deaf {
 /// started. Its browser's side goes when [`RunningRenderer::browser_goes`]
 /// is called.
 pub(crate) struct RunningRenderer {
-    pub(crate) child: std::process::Child,
+    pub(crate) child: ipc::platform::Child,
     link: ipc::endpoint::Link<ipc::platform::Channel>,
     io_handle: ipc::endpoint::LoopHandle<ipc::platform::Channel>,
     io_thread: std::thread::JoinHandle<()>,
@@ -135,10 +136,18 @@ impl RunningRenderer {
         command
             .arg(shell::RENDERER_PROCESS_SWITCH)
             .args(switches)
-            .env("RUST_LOG", "renderer=info")
-            .stderr(Stdio::piped());
-        let (mut child, channel) = ipc::platform::spawn(&mut command).expect("machopo starts");
-        let mut said = BufReader::new(child.stderr.take().expect("its standard error"));
+            .env("RUST_LOG", "renderer=info");
+        // Started as its browser starts it: in its sandbox, where that is
+        // the starter's to give, unless it is told it has none.
+        let sandbox = if switches.contains(&shell::renderer_sandbox::NO_SANDBOX_SWITCH) {
+            None
+        } else {
+            shell::renderer_sandbox::sandbox()
+        };
+        let (child, channel, errors) =
+            ipc::platform::spawn_reading_errors(&mut command, sandbox.as_ref())
+                .expect("machopo starts");
+        let mut said = BufReader::new(errors);
         // The browser's side: an IO thread, and what a renderer starts with.
         let (link, endpoint) = ipc::endpoint::endpoint(channel, config(true));
         let (io, io_handle) = ipc::endpoint::IoLoop::new().expect("a way to wait");

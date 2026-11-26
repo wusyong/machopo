@@ -130,8 +130,26 @@ fn stays(as_what: u8) -> i32 {
     0
 }
 
-fn exit_code(mut child: std::process::Child) -> Option<i32> {
-    child.wait().unwrap().code()
+/// A child however it was started: by this layer, or by the standard
+/// library.
+trait Exited {
+    fn code(self) -> Option<i32>;
+}
+
+impl Exited for ipc::platform::Child {
+    fn code(mut self) -> Option<i32> {
+        self.wait().unwrap().code()
+    }
+}
+
+impl Exited for std::process::Child {
+    fn code(mut self) -> Option<i32> {
+        self.wait().unwrap().code()
+    }
+}
+
+fn exit_code(child: impl Exited) -> Option<i32> {
+    child.code()
 }
 
 #[test]

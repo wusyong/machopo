@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::process::{Child, Command};
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::thread::JoinHandle;
@@ -33,6 +33,32 @@ use renderer::{
 use crate::StoragePartition;
 use crate::bad_message::BadMessageReason;
 
+/// A renderer process to start: its command, and what its starter gives
+/// it beside the command where the operating system has the starter give
+/// it (Windows): the sandbox it is started in, and files it is to write
+/// and couldn't open inside one (each told to it on the command, by its
+/// handle's value). Elsewhere a renderer enters its own sandbox and opens
+/// its own files before, and both are left empty.
+pub struct RendererProcess {
+    pub command: Command,
+    pub sandbox: Option<ipc::platform::Sandbox>,
+    pub files: Vec<std::fs::File>,
+    /// Called with the process's id once it has started.
+    pub started: Option<Box<dyn FnOnce(u32) + Send>>,
+}
+
+impl RendererProcess {
+    /// `command`, with no sandbox of its starter's and no files.
+    pub fn new(command: Command) -> Self {
+        Self {
+            command,
+            sandbox: None,
+            files: Vec::new(),
+            started: None,
+        }
+    }
+}
+
 /// How a renderer is run (Chromium's `--single-process`, or not).
 #[derive(Clone)]
 pub enum RendererLauncher {
@@ -43,7 +69,7 @@ pub enum RendererLauncher {
     /// starts one: the embedder's executable, told to be a renderer (it
     /// takes its end with `ipc::platform::inherited` and runs
     /// `renderer::run_child_process`, with the engines it picks itself).
-    Process(Arc<dyn Fn() -> Command + Send + Sync>),
+    Process(Arc<dyn Fn() -> RendererProcess + Send + Sync>),
     /// With nothing at the other end, for tests and fuzzing: what the
     /// browser sends the renderer waits in queues nobody reads, and the
     /// renderer's messages are whatever the caller hands in
@@ -148,7 +174,7 @@ pub struct RenderProcessHost {
     terminator: Option<renderer::MainThreadTerminator>,
     /// A renderer in a process of its own: the process, and this end of
     /// its channel.
-    child: Option<(Child, ChannelLink)>,
+    child: Option<(ipc::platform::Child, ChannelLink)>,
     /// How the process ended, once it has.
     exit: Option<std::process::ExitStatus>,
     /// A renderer with nothing at the other end: what handles the messages
@@ -376,7 +402,21 @@ impl RenderProcessHost {
                 RendererLauncher::Process(command) => {
                     let io = io_thread()
                         .ok_or_else(|| std::io::Error::other("the browser has no IO thread"))?;
-                    let (child, channel) = ipc::platform::spawn(&mut command())?;
+                    let mut process = command();
+                    #[cfg(windows)]
+                    let (child, channel) = ipc::platform::spawn_handing(
+                        &mut process.command,
+                        process.sandbox.as_ref(),
+                        &process.files,
+                    )?;
+                    #[cfg(not(windows))]
+                    let (child, channel) =
+                        ipc::platform::spawn_in(&mut process.command, process.sandbox.as_ref())?;
+                    // The child has its own; these were the browser's.
+                    drop(std::mem::take(&mut process.files));
+                    if let Some(started) = process.started.take() {
+                        started(child.id());
+                    }
                     let (link, endpoint) =
                         endpoint::endpoint(channel, control_channel::config(true));
                     // What the renderer starts with, before anything else is
@@ -747,7 +787,11 @@ struct ChildEnd {
 /// Ends a renderer process: waits `wait` for it to exit by itself (it was
 /// asked to), then kills it; closes this end of its channel, and tells
 /// the platform it has gone (a child that never took its end).
-fn end_child(mut child: Child, link: &ChannelLink, wait: Option<std::time::Duration>) -> ChildEnd {
+fn end_child(
+    mut child: ipc::platform::Child,
+    link: &ChannelLink,
+    wait: Option<std::time::Duration>,
+) -> ChildEnd {
     let asked = std::time::Instant::now();
     let exited = wait.is_some_and(|wait| {
         loop {

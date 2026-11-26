@@ -8,7 +8,9 @@
 //! Nothing here names a platform: a platform's layer passes these as they
 //! are, and has tests of its own for what only it has.
 
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
+
+use ipc::platform::Child;
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};

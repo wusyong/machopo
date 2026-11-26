@@ -108,8 +108,16 @@ Options:
                       takes over its renderer then has what machopo has.
                       For finding out whether the sandbox is what breaks
                       something. (The sandbox is Linux's, Landlock and
-                      seccomp, and macOS's, a Seatbelt profile; a
-                      renderer process doesn't start without it.)
+                      seccomp, macOS's, a Seatbelt profile, and Windows's,
+                      an app container, a job and the process's
+                      mitigations; a renderer process doesn't start
+                      without it.)
+  --allow-third-party-modules
+                      On Windows, a renderer process may load DLLs that
+                      Microsoft didn't sign, as Chromium's switch: for a
+                      machine where other software puts its own DLL into
+                      every process and a renderer doesn't start without.
+                      The rest of the sandbox stays.
   --num-raster-threads N
                       Threads each page's tiles are rastered on at once, as
                       Chromium's switch (default 1: on the compositor's
@@ -243,6 +251,9 @@ struct Args {
     process_per_tab: bool,
     /// `--no-sandbox`: the renderer processes aren't put in a sandbox.
     no_sandbox: bool,
+    /// `--allow-third-party-modules`: a renderer process may load DLLs
+    /// that Microsoft didn't sign.
+    allow_third_party_modules: bool,
     /// `--remote-debugging-port` and `--remote-allow-origins`.
     remote_debugging: Option<devtools_http_handler::Options>,
     /// `--user-data-dir`.
@@ -293,6 +304,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
     let mut single_process = false;
     let mut process_per_tab = false;
     let mut no_sandbox = false;
+    let mut allow_third_party_modules = false;
     let mut remote_debugging_port = None;
     let mut remote_allow_origins = None;
     let mut user_data_dir = None;
@@ -349,6 +361,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
             "--single-process" => single_process = true,
             "--process-per-tab" => process_per_tab = true,
             "--no-sandbox" => no_sandbox = true,
+            "--allow-third-party-modules" => allow_third_party_modules = true,
             "--remote-debugging-pipe" => pipe = true,
             "--headless" => headless = true,
             "--remote-debugging-io-pipes" => io_pipes = Some(value("--remote-debugging-io-pipes")?),
@@ -459,6 +472,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
         num_raster_threads,
         process_per_tab,
         no_sandbox,
+        allow_third_party_modules,
         remote_debugging,
         user_data_dir,
         pipe: pipe.then_some(PipeArgs {
@@ -557,7 +571,6 @@ where
 }
 
 /// A trace's file, made (or emptied) to be written: said if it can't be.
-#[cfg(unix)]
 fn open_trace(file: &Path) -> Option<(std::fs::File, &Path)> {
     match std::fs::File::create(file) {
         Ok(opened) => Some((opened, file)),
@@ -573,8 +586,7 @@ fn open_trace(file: &Path) -> Option<(std::fs::File, &Path)> {
 
 /// As [`start_trace`], into a file [`open_trace`] opened: a renderer
 /// process, which opens it before it enters its sandbox and starts the
-/// trace after.
-#[cfg(unix)]
+/// trace after (on Windows, is handed it by its browser).
 fn start_trace_into<S>(
     opened: Option<(std::fs::File, &Path)>,
 ) -> (
@@ -632,15 +644,33 @@ fn main() -> ExitCode {
     if std::env::args().nth(1).as_deref() == Some(shell::RENDERER_PROCESS_SWITCH) {
         // What it writes is opened first, while it has the file system:
         // its census's file, a file of its own as its trace is, and its
-        // trace's.
-        base::census::own_file();
+        // trace's. On Windows it is in its sandbox already, and takes the
+        // files its browser opened for it; with no sandbox it opens them
+        // as elsewhere.
+        #[cfg(windows)]
+        let handed =
+            shell::renderer_sandbox::windows::HandedFiles::parse(std::env::args_os().skip(2));
+        #[cfg(windows)]
+        let census = handed.census.and_then(ipc::platform::inherited_file);
+        #[cfg(not(windows))]
+        let census: Option<std::fs::File> = None;
+        match census {
+            Some(census) => base::census::own_file_from(census),
+            None => base::census::own_file(),
+        }
         let file = std::env::var_os("MACHOPO_TRACE").map(|file| {
             let mut file = file;
             file.push(format!(".{}", std::process::id()));
             std::path::PathBuf::from(file)
         });
-        #[cfg(unix)]
-        let opened = file.as_deref().and_then(open_trace);
+        #[cfg(windows)]
+        let trace = handed.trace.and_then(ipc::platform::inherited_file);
+        #[cfg(not(windows))]
+        let trace: Option<std::fs::File> = None;
+        let opened = match (trace, file.as_deref()) {
+            (Some(trace), Some(file)) => Some((trace, file)),
+            (_, file) => file.and_then(open_trace),
+        };
         // Then into its sandbox, before the log and the trace: the trace
         // starts a thread, and the process enters while it is one.
         let start = match shell::start_renderer() {
@@ -654,10 +684,7 @@ fn main() -> ExitCode {
             .unwrap_or(LevelFilter::TRACE)
             .as_log();
         // Ended, and its last events written, as the process ends.
-        #[cfg(unix)]
         let (trace, trace_end) = start_trace_into(opened);
-        #[cfg(not(unix))]
-        let (trace, trace_end) = start_trace(file.as_deref());
         tracing_subscriber::registry()
             .with(log_layer(filter))
             .with(trace)
@@ -695,6 +722,9 @@ fn main() -> ExitCode {
     }
     if args.no_sandbox {
         shell::renderer_sandbox::disable();
+    }
+    if args.allow_third_party_modules {
+        shell::renderer_sandbox::allow_third_party_modules();
     }
 
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
@@ -835,6 +865,9 @@ mod tests {
     #[test]
     fn no_sandbox_is_a_switch_and_renderers_outside_one_are_warned_of() {
         assert!(!run(&["about:blank"]).no_sandbox);
+        assert!(!run(&["about:blank"]).allow_third_party_modules);
+        assert!(run(&["--allow-third-party-modules"]).allow_third_party_modules);
+        assert!(!run(&["--allow-third-party-modules"]).no_sandbox);
         assert!(run(&["--no-sandbox"]).no_sandbox);
         assert!(run(&["--remote-debugging-pipe", "--headless", "--no-sandbox"]).no_sandbox);
         if !shell::renderer_sandbox::SUPPORTED {
@@ -1163,6 +1196,8 @@ mod tests {
             "--additional-trust-anchors",
             "--num-raster-threads",
             "--user-data-dir",
+            "--no-sandbox",
+            "--allow-third-party-modules",
             "--help",
         ] {
             assert!(help.contains(option), "{option}");

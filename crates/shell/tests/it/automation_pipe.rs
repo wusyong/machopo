@@ -34,7 +34,7 @@ const TIMEOUT: Duration = Duration::from_secs(30);
 /// A `machopo --remote-debugging-pipe --headless`, and what it has sent that wasn't asked for
 /// yet. Other modules drive machopo with it too (`trace`).
 pub(crate) struct Browser {
-    child: Child,
+    pub(crate) child: Child,
     input: Option<PipeWriter>,
     messages: Receiver<Message>,
     next_id: i32,

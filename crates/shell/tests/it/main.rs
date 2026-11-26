@@ -50,6 +50,8 @@ mod renderer_process;
 mod renderer_sandbox;
 #[cfg(target_os = "macos")]
 mod renderer_sandbox_macos;
+#[cfg(windows)]
+mod renderer_sandbox_windows;
 mod resize_observers;
 mod scheduling;
 mod script;

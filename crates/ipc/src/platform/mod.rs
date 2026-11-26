@@ -49,7 +49,57 @@ pub use macos::channel::{Channel, child_gone, inherited, spawn};
 #[cfg(unix)]
 pub use unix::{available_disk_space, on_shutdown_signals, terminate_current_process_immediately};
 #[cfg(windows)]
-pub use windows::channel::{Channel, child_gone, inherited, spawn};
+pub use windows::channel::{
+    Channel, child_gone, inherited, inherited_file, spawn, spawn_handing, spawn_in,
+    spawn_reading_errors,
+};
+
+/// A child [`spawn`] started: the standard library's, but on Windows,
+/// where a child is started here with what the standard library can't
+/// say (which handles it inherits, its sandbox), and can't be made one of
+/// the standard library's.
+#[cfg(not(windows))]
+pub use std::process::Child;
+#[cfg(windows)]
+pub use sunaba::windows::Child;
+
+/// What a child is started in ([`spawn_in`]) where the operating system
+/// has a process's sandbox given by whoever starts it: Windows. Elsewhere
+/// a process enters its own, and there is nothing to start it with.
+#[cfg(windows)]
+pub use sunaba::windows::Policy as Sandbox;
+#[cfg(not(windows))]
+#[derive(Clone, Debug)]
+pub enum Sandbox {}
+
+/// [`spawn_in`], with what the child writes to its standard error read
+/// from the reader, not written where this process's goes.
+#[cfg(not(windows))]
+pub fn spawn_reading_errors(
+    command: &mut std::process::Command,
+    sandbox: Option<&Sandbox>,
+) -> std::io::Result<(Child, Channel, std::io::PipeReader)> {
+    let (reader, writer) = std::io::pipe()?;
+    command.stderr(writer);
+    let spawned = spawn_in(command, sandbox);
+    // The command keeps no end of the pipe: the reader reads the end
+    // when the child goes.
+    command.stderr(std::process::Stdio::inherit());
+    let (child, channel) = spawned?;
+    Ok((child, channel, reader))
+}
+
+/// [`spawn`], where a sandbox isn't the starter's to give.
+#[cfg(not(windows))]
+pub fn spawn_in(
+    command: &mut std::process::Command,
+    sandbox: Option<&Sandbox>,
+) -> std::io::Result<(Child, Channel)> {
+    match sandbox {
+        Some(sandbox) => match *sandbox {},
+        None => spawn(command),
+    }
+}
 #[cfg(windows)]
 pub use windows::disk::available_disk_space;
 #[cfg(windows)]
