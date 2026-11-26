@@ -221,7 +221,8 @@ pub enum Ended<T> {
 
 /// Drives `browser` with the driver's commands `commands` brings, and what
 /// remote debugging's clients ask (`clients`), through `session`, until
-/// `done` brings something, the commands stop, or the window closes: the
+/// `done` brings something (the commands that came before it answered
+/// first), the commands stop, or the window closes: the
 /// renderers' messages go to the view and then to the session, and the
 /// input the session hands back is given to the view as the platform's
 /// would be, at `scale`.
@@ -265,16 +266,11 @@ pub fn drive<T>(
                 );
             }
             recv(commands) -> read => match read {
-                Ok(Ok(command)) => {
-                    if let Some((input, reply)) = session.command(command, browser) {
-                        give(browser, input, scale);
-                        reply.done();
-                    }
-                    if session.close_requested() || browser.view().close_requested() {
-                        return Ended::Closed;
+                Ok(read) => {
+                    if let Some(ended) = run_command(browser, session, read, scale) {
+                        return ended;
                     }
                 }
-                Ok(Err((id, error))) => session.refuse(id, error),
                 // A runner sends what it came to before its commands'
                 // channel closes, but `select!` may see the close first.
                 Err(_) => return Ended::Done(done.try_recv().ok()),
@@ -291,8 +287,41 @@ pub fn drive<T>(
                 }
             }
             recv(done) -> result => {
+                // The commands that came before the end are answered first:
+                // the pipe's reader sends them, then its input's end, on
+                // two channels, and `select!` picks between those ready at
+                // random (Chromium's pipe handles its messages in order).
+                while let Ok(read) = commands.try_recv() {
+                    if let Some(ended) = run_command(browser, session, read, scale) {
+                        return ended;
+                    }
+                }
                 return Ended::Done(result.ok());
             }
+        }
+    }
+}
+
+/// `read`, a command of the driver's, run through `session`, with the
+/// input it hands back given to the view; how the drive ends, if the
+/// command closed the browser.
+fn run_command<T>(
+    browser: &mut BrowserWindow,
+    session: &mut AutomationSession,
+    read: Read,
+    scale: f32,
+) -> Option<Ended<T>> {
+    match read {
+        Ok(command) => {
+            if let Some((input, reply)) = session.command(command, browser) {
+                give(browser, input, scale);
+                reply.done();
+            }
+            (session.close_requested() || browser.view().close_requested()).then_some(Ended::Closed)
+        }
+        Err((id, error)) => {
+            session.refuse(id, error);
+            None
         }
     }
 }

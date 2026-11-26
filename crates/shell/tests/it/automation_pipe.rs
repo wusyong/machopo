@@ -3138,6 +3138,38 @@ fn a_signal_started_ignored_stays_so() {
     assert!(wait(&mut child).success());
 }
 
+/// The commands a client sent before its input's end are each answered
+/// before machopo ends, as they came: none lost to the end, which reaches
+/// machopo by another way than they do.
+#[test]
+fn the_commands_before_the_inputs_end_are_answered() {
+    let mut child = Process::new(env!("CARGO_BIN_EXE_machopo"))
+        .arg("--automation-pipe")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("machopo starts");
+    let mut output = child.stdout.take().unwrap();
+    let mut input = child.stdin.take().unwrap();
+    const SENT: usize = 1000;
+    for id in 0..SENT {
+        let command = format!(r#"{{"id":{id},"method":"Browser.getVersion"}}"#);
+        input.write_all(command.as_bytes()).unwrap();
+        input.write_all(&[0]).unwrap();
+    }
+    drop(input);
+    let mut answers = Vec::new();
+    output.read_to_end(&mut answers).unwrap();
+    assert!(wait(&mut child).success());
+    let ids: Vec<u64> = answers
+        .split(|byte| *byte == 0)
+        .filter(|message| !message.is_empty())
+        .filter_map(|message| serde_json::from_slice::<Value>(message).ok()?["id"].as_u64())
+        .collect();
+    assert_eq!(ids, (0..SENT as u64).collect::<Vec<_>>());
+}
+
 /// A client that never reads machopo's answers doesn't hold it up as it
 /// ends: the pipe full, its writer can't finish, and is left once the
 /// limit has passed, with a line.
