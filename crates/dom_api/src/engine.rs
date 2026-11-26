@@ -645,6 +645,12 @@ pub trait ScriptEngine: ParserHost {
     /// frames found as it began that are still there.
     fn frames_in_tree_order(&mut self) -> Vec<crate::FrameId>;
 
+    /// The frames the engine has, in the order it made them (the top-level
+    /// one first): its own list, without walking the documents' trees (as
+    /// `frames_in_tree_order` does outside a rendering update), for what
+    /// asks after every task.
+    fn frames(&mut self) -> Vec<crate::FrameId>;
+
     /// `frames_in_tree_order`'s documents.
     fn documents_in_tree_order(&mut self) -> Vec<NodeId>;
 

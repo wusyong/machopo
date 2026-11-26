@@ -888,6 +888,10 @@ impl ScriptEngine for WasmEngine {
         self.document.iter().map(|_| TOP).collect()
     }
 
+    fn frames(&mut self) -> Vec<FrameId> {
+        self.frames_in_tree_order()
+    }
+
     fn documents_in_tree_order(&mut self) -> Vec<NodeId> {
         if let Some(documents) = &self.rendering_documents {
             return documents.clone();

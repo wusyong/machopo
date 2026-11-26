@@ -350,7 +350,9 @@ pub fn run_dom_task(
     number: u64,
     run: &ParseRun<'_>,
 ) -> (bool, Box<dyn ScriptEngine>) {
-    let parser = engine.frames_in_tree_order().into_iter().find(|&frame| {
+    // Every DOM task comes here: the engine's list of frames, not a walk of
+    // the documents' trees.
+    let parser = engine.frames().into_iter().find(|&frame| {
         engine
             .document_loader(frame)
             .is_some_and(|loader| loader.parse_task == Some(number))
@@ -409,7 +411,7 @@ pub fn script_fetched(
         }
         engine.module_fetched(sent.key, module);
         // A deferred module script's graph may be in.
-        for frame in engine.frames_in_tree_order() {
+        for frame in engine.frames() {
             run_deferred_scripts(engine.as_mut(), frame);
         }
         return (true, engine);

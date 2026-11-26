@@ -680,13 +680,14 @@ impl RenderThread {
         true
     }
 
-    /// The frames the engine has, in tree order (the top-level one first),
-    /// with what the renderer keeps of each.
+    /// The frames the engine has, in the order it made them (the top-level
+    /// one first), with what the renderer keeps of each: asked after every
+    /// task, so the engine's list, not a walk of the documents' trees.
     fn frames_with_documents(&mut self) -> Vec<FrameId> {
         let mut frames = self
             .engine
             .as_mut()
-            .map(|engine| engine.frames_in_tree_order())
+            .map(|engine| engine.frames())
             .unwrap_or_default();
         frames.retain(|frame| self.has_frame_document(*frame));
         frames
@@ -1626,12 +1627,13 @@ impl RenderThread {
     }
 
     /// `finish_load` of every frame the engine has, the children's before
-    /// their parents' (whose `load` waits for theirs).
+    /// their parents' (whose `load` waits for theirs): the later made
+    /// first, as a child frame is made after its parent.
     fn finish_loads(&mut self) {
         let Some(engine) = &mut self.engine else {
             return;
         };
-        let mut frames = engine.frames_in_tree_order();
+        let mut frames = engine.frames();
         frames.reverse();
         for frame in frames {
             self.finish_load(frame);

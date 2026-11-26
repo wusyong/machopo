@@ -95,6 +95,14 @@ pub(crate) struct Frames {
 }
 
 impl Frames {
+    /// The frames' numbers, in the order they were made (the top-level
+    /// frame's first, as it is made first).
+    pub(crate) fn ids(&self) -> Vec<FrameId> {
+        let mut ids: Vec<FrameId> = self.frames.iter().map(|frame| frame.id).collect();
+        ids.sort_unstable();
+        ids
+    }
+
     pub(crate) fn get(&self, id: FrameId) -> Option<&Frame> {
         self.frames.iter().find(|frame| frame.id == id)
     }

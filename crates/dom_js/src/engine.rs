@@ -1070,6 +1070,10 @@ impl ScriptEngine for V8Engine {
             .collect()
     }
 
+    fn frames(&mut self) -> Vec<dom_api::FrameId> {
+        self.state().frames.ids()
+    }
+
     fn documents_in_tree_order(&mut self) -> Vec<NodeId> {
         let documents = match &self.rendering_documents {
             Some(documents) => documents.clone(),

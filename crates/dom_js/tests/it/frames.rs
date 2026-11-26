@@ -614,6 +614,51 @@ fn the_hosts_loop_walks_no_frame_tree() {
     assert_eq!(walks(), before);
 }
 
+/// What the host asks after every task walks no frame tree: the engine's
+/// frames (`ScriptEngine::frames`, in the order they were made), and the
+/// DOM's task the host's scheduler runs through `dom_api`, which looks for
+/// a parser's task among the frames' loaders.
+#[test]
+fn what_is_asked_after_every_task_walks_no_frame_tree() {
+    let mut engine = Box::new(dom_js::V8Engine::new(EngineSettings { web_tests: true }));
+    let tokens = dom::TaskTokens::new();
+    engine.dom_mut().set_task_waker(tokens.waker());
+    engine
+        .create_window(
+            engine.top_frame(),
+            "https://example.test/a/",
+            Instant::now(),
+        )
+        .expect("a window");
+    run(
+        &mut engine,
+        "var log = [];
+         document.appendChild(document.createElement('html')).appendChild(document.createElement('body'));
+         var f = document.body.appendChild(document.createElement('iframe'));
+         setTimeout(() => log.push('timer'), 0);",
+    );
+    let before = walks();
+    let top = engine.top_frame();
+    let frames = engine.frames();
+    assert_eq!(frames.len(), 2);
+    assert_eq!(frames[0], top, "the top-level frame first");
+    let run = dom_api::document_loader::ParseRun {
+        budget: &|_| std::time::Duration::from_millis(10),
+        after_script: std::time::Duration::from_millis(10),
+        slice: 1 << 14,
+        input_waits: &|| false,
+    };
+    let mut lent: Box<dyn ScriptEngine> = engine;
+    let mut ran = false;
+    for number in tokens.take_due() {
+        let (done, back) = dom_api::document_loader::run_dom_task(lent, number, &run);
+        ran |= done;
+        lent = back;
+    }
+    assert!(ran, "the timer's task");
+    assert_eq!(walks(), before);
+}
+
 /// A frame that goes during a rendering update is left out of the rest of
 /// it; one that comes is the next update's (HTML's `docs`, made as the
 /// update begins).
