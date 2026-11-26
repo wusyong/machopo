@@ -1,12 +1,20 @@
 # RFC 0115：每個 frame 的狀態照 content 和 Blink 的界線各有一個擁有者
 
 - 開始日期：2026-11-25
-- 狀態：🚧 已排程：2026-11-25（第 1 段；第 2 到 4 段是方向）
+- 狀態：✅ 已完成：2026-11-26（第 1 到 4 段，第 3 段做到 engine 的 frame 清單是唯一的一份；驗收在 `progress.md`）
 - 細節：`details.md`
 
 ## 摘要
 
-一次導覽現在橫跨三處：engine 擁有的 hook（`RendererFrameClient`）在 setter 裡送 `BeginNavigation`；renderer 的 `RenderThread` 在 engine 的呼叫回來之後照 engine 記下的 `FrameRequest` 記帳（`handle_frame_requests`，十八個呼叫的地方）、收到 Browser 的 commit 時建文件、餵 parser、捲到 fragment；「frame 在載入中」、網址、session history 在 DOM 裡。照 frame 記的狀態在 `RenderThread` 散成八張表。根源是界線：`renderer` 同時做 Chromium 的 content 層（對 Browser 的導覽、commit、IPC）和一部分 Blink（文件的載入、parser、script 的排程、`FrameView`），engine 只有 DOM 和 script；擁有權又是單向的（renderer 擁有 engine，engine 擁有 hook），engine 呼叫 hook 時碰不到 renderer，只好呼叫之後再補。這份照 Chromium 的界線重新分：engine 那一側每個 frame 一個 `LocalFrame`（DOM 的 frame、文件和它的載入、parser、`load`），renderer 那一側每個 frame 一個 `RenderFrame`（對 Browser 的那一面），每一份狀態只有一個擁有者；`RenderFrame` 是它那個 frame 的 client，由 engine 的 frame 擁有，兩邊用同步的呼叫互通，事情發生的那次呼叫裡各自更新自己的狀態，沒有呼叫之後的對帳。分幾段做：第一段先把 renderer 那一側收成 `RenderFrame`，行為不變；之後的幾段是方向，信心不高（machopo 的 Blink 那一半分在兩邊：DOM 在 engine，layout、`FrameView` 在 renderer，界線不像 Chromium 那樣跟著 crate 走），等依賴的盤點和第一段做完再重新評估。
+一次導覽原本橫跨三處：engine 擁有的 hook（`RendererFrameClient`）在 setter 裡送 `BeginNavigation`，renderer 的 `RenderThread` 在 engine 的呼叫回來之後照 engine 記下的 `FrameRequest` 記帳（`handle_frame_requests`，十八個呼叫的地方）、收到 Browser 的 commit 時建文件、餵 parser、捲到 fragment；照 frame 記的狀態在 `RenderThread` 散成八張表。根源是界線：`renderer` 同時做 Chromium 的 content 層和一部分 Blink（文件的載入、parser、script 的排程），engine 呼叫 hook 時碰不到 renderer，只好呼叫之後再補。
+
+這份照 Chromium 的界線重新分，做完的樣子：
+
+- **engine 那一側的每個 frame**（Blink 的 `LocalFrame` 加上 `DocumentLoader`）：文件和它的載入（`dom_api` 的 `DocumentLoader`：解碼、parser、parser 的 script、樣式表的請求和帳、HTML 的「the end」、「接著 parse」是 DOM 的 task），和這個 frame 在路上的導覽（送給 Browser 的，或 renderer 要 commit 的 `javascript:` 的空文件），在送出的那次呼叫裡就記好。iframe 不送給 Browser 的導覽（同一份文件的 fragment、`javascript:`）和 traversal 的捲動也在這一側。
+- **renderer 那一側**（content 的 `RenderFrameImpl`）：hook（`FrameClient`、`LoadSink`）在 engine 的呼叫裡當場送 Browser 的訊息、告訴 DevTools；Browser 的 commit、drop 時 renderer 從 engine 的 frame 拿走那個導覽，commit 照舊由 renderer 做（畫面、body 的 pipe、DevTools、navigation timing 是它的）。renderer 照 frame 存的 `FrameDocument` 只放它自己的東西，是 engine 的 frame 的附屬資料：哪些 frame 存在只問 engine，沒有第二份清單。
+- **沒有呼叫之後的對帳**：`FrameRequest` 只剩沒有 load sink 的 engine 的 blob URL；`handle_frame_requests` 只在 task 之後放掉不見的 frame 的資料，正確性不靠它的時機。
+
+和原本的目標不同的地方：renderer 的 per-frame 物件沒有由 engine 的 frame 擁有、當場建（Chromium 的形狀），而是 renderer 擁有、照 engine 的清單在第一次用到時建（已決定的事項第 34 條）；`FrameView` 和畫面那一步留在 renderer。
 
 ## 動機
 
@@ -34,124 +42,68 @@
 
 ## 設計概要
 
-給改 machopo 的人，做完之後：
+給改 machopo 的人：
 
-- 要知道一個文件的載入到哪（parser、script、`load`），看 engine 那一側的 `LocalFrame`；要知道一個 frame 和 Browser 之間的事（它在不在導覽、commit 的編號、timing），看它的 `RenderFrame`。
-- 加一種導覽：engine 在 setter 裡呼叫那個 frame 的 client，client 送出、同時記帳。Browser 回的訊息到 `RenderThread`，交給 engine 的那個 frame，frame 做完自己的部分再呼叫 client。不用在任何地方對帳。
-- 加一個 engine 的入口：不用記得任何事。
+- 要知道一個文件的載入到哪（parser、script、樣式表、`load`），看 engine 那一側的 `DocumentLoader`（`ScriptEngine::document_loader`）和 DOM；要知道一個 frame 在路上的導覽，問 engine（`ScriptEngine::navigation`）；要知道 renderer 這一側的事（Browser 的 navigation id、body 的 pipe、畫到哪一版、DevTools 的資源），看它的 `FrameDocument`（`RenderThread::doc`，先問 engine 還有沒有那個 frame）。
+- 加一種導覽：engine 在 setter 裡呼叫 frame client，client 當場送出，engine 當場記在 frame 上。Browser 回的訊息到 `RenderThread`，它從 engine 的 frame 拿走那個導覽、commit。不用在任何地方對帳。
+- 加一個 engine 的入口、或在 task 中間讀 frame：不用記得任何事（frame 的清單只有 engine 那一份）。
 
-給寫網頁的人：沒有看得到的改變。
+給寫網頁的人：沒有看得到的改變（iframe 的 fragment 導覽和規範不同的那一點原本就是這樣，記在 `docs/limitations.md`）。
 
 ## 詳細設計
 
-目標的樣子（每一段開始前對 Chromium 的原始碼、定那一段的細節，寫進「已決定的事項」）：
-
-- **engine 那一側：`LocalFrame`**（Blink 的 `LocalFrame` 加上 `DocumentLoader`、`ScriptRunner`）：每個 DOM 的 frame 一個，在 `dom_api`（兩個 engine 共用）。擁有它的文件、文件的載入：body 的 bytes 由 renderer 交進來（Blink 的 `DocumentLoader::BodyDataReceived`），parser、編碼的判斷、parser 擋住的和 deferred 的 script、等著的樣式表、`load` 和 readiness、fragment 的導覽、「在載入中」。現在這些在 renderer 的 `FrameDocument`（`details.md` 的「狀態的歸屬」）。
-- **renderer 那一側：`RenderFrame`**（content 的 `RenderFrameImpl`）：每個 frame 一個，是那個 frame 的 `FrameClient`。擁有：進行中的導覽（`begin_id`、Browser 的 `navigation_id`、origin 的來源、`referrerpolicy`）、commit 的參數、navigation timing、cancellation window 的編號、這個 frame 的 fetch 和 loader 的帳、DevTools 的 frame token。送 Browser 的訊息都經過它。
-- **擁有權和呼叫的方向**：renderer 給 engine 一個工廠，engine 建 frame 時建它的 `RenderFrame`、frame 不見時丟掉（Blink 的 frame 和 `RenderFrameImpl` 一起建、一起走）。engine 往上的呼叫（要送 Browser 的事）在 engine 的呼叫裡當場經過那個 frame 的 client；renderer 往下的呼叫（Browser 的 commit、丟掉、body、載入完成）是 engine 的方法，帶著 frame，engine 交給那個 `LocalFrame`，它做完再呼叫 client。renderer 要讀一個 frame 的 `RenderFrame`（DevTools、測試）時經過 engine 借。沒有 `Rc<RefCell>`：每一份狀態只在一個物件裡，借用跟著呼叫的方向。
-- **`RenderThread`**：scheduler、IPC 的分派（訊息照 frame 交給 engine）、compositor 和 widget、DevTools 的分派、整個 renderer 的東西（blob URL 的表、名稱表）。
-- **Process 的邊界**：`RenderFrame` 是 renderer 這一側、送 Browser 的那一面，照 `docs/architecture.md` 的「Process 的邊界」，所有往 Browser 的訊息都經過它。
+- **engine 那一側**：
+  - 文件的載入是 `dom_api` 的 `DocumentLoader`，每個 frame 一個（`dom_js` 的 `Frame::loader`、`dom_wasm` 的最上層）：renderer 交 body 的 bytes（Blink 的 `BodyDataReceived`），`DocumentLoader` 解碼、parse，跑 parser 擋住的和 deferred 的 script（DOM 的 pending script），送 `<link>` 的樣式表的請求（`LoadSink::start_sheet_fetch`），script 和樣式表的回應交給它（`script_fetched`、`sheet_fetched`、`dom_api::subresource` 解碼），讓出時排 DOM 的 task（`Cx::queue_parse_on`），做 HTML 的「the end」（`finish_load`：`Interactive`、DOMContentLoaded、捲到 fragment、`load`）。擋不擋 render、失敗的子資源是 DOM 的（`Cx::render_blocked`、`Cx::note_load_failed`），要畫面是 widget 的（`FrameLayout::schedule_frame`）。標題和 DevTools 的 lifecycle 經過 hook 當場告訴（`FrameClient::title_changed`、`document_lifecycle`）。
+  - 導覽的帳：client 送出導覽時回傳它的編號，engine 當場記在那個 frame 上（`dom_api::NavigationRequest`：編號、iframe 的 `no-referrer`、到 `about:blank` 時發起的文件；`dom_js` 的 `frames::Pending`，換文件時帶著）。iframe 的導覽不送給 Browser 的種類由 engine 判斷一次（`dom_api::child_navigation_here`，`ChildNavigationAsked::here` 告訴 client 不送）：同一份文件的 fragment 當場改網址、捲過去（`navigate_child_to_fragment`），別的 origin 的、載完的文件的 iframe 晚 100 ms 發 `load`（DOM 的 native timer `NativeAction::OwnerLoad`，一串只發最後一次）；`javascript:` 的記在同一格（一個 frame 一個，新的取代舊的），叫 `FrameClient::commit_here`。拿走帳時 engine 自己清掉「父 frame 的 `load` 要等它」。同文件的導覽和 traversal 在 engine 的呼叫裡要畫面，traversal 的捲動在 `traverse_within_document`（`popstate` 之後）。
+- **renderer 那一側**：
+  - hook 當場送 Browser 的訊息：`BeginNavigation`，並為它 post 一個 task 結束取消窗口（`InternalTask::NavigationCancellationWindowEnded`，Blink 的 `NotifyNavigationCancellationWindowEnded`）；同文件的導覽加一的歷史計數和 `RenderThread` 共用（`OwnHistoryEntries`，`Rc<Cell<u64>>`，換 engine 時留著）；`commit_here` post `InternalTask::ChildCommit`。
+  - Browser 的訊息：`CommitNavigation`、`NavigationDropped` 從 engine 的 frame 拿走導覽（`ScriptEngine::take_navigation`），`ChildCommit` 的 task 拿走 `javascript:` 的（`take_commit_here`）；commit 由 renderer 做（`commit_document_navigation`、`commit_child`：建 window、`FrameView`、body 的 pipe、DevTools、navigation timing）。
+  - `RenderFrames`：最上層的 token 和每個 frame 的 `FrameDocument`（Browser 的 navigation id、MIME、原文、body 的 pipe、time origin、編碼、畫到哪一版、網路是否安靜、DevTools 的資源）。哪些 frame 存在、它們的 parent、iframe、token、文件都是 engine 的：`doc`、`doc_mut` 先問 engine 還有沒有那個 frame（`has_frame_document`），子 frame 初始文件的那一份第一次用到時建；走 frame 的地方照 engine 的 `frames_in_tree_order()`，用文件找 frame 問 engine（`ScriptEngine::frame_of_document`）。`forget_gone_frames`（task 之後）放掉 engine 沒有的 frame 的資料、取消不見的文件的 fetch、讓 DevTools 重新比對 frame。
+- **擁有權和呼叫的方向**：renderer 擁有 engine，engine 擁有 hook；往外（要送 Browser、告訴 DevTools）是 engine 的呼叫裡的 hook，往內（Browser 的訊息、body、回應）是 engine 的方法或 `dom_api` 的函式（`dom_api` 的函式拿 `Box<dyn ScriptEngine>`，因為 html5ever 的 parser 拿著它的 host）。共用的可變狀態只有歷史計數（`Rc<Cell<u64>>`）；沒有 `Rc<RefCell>`。
+- **Process 的邊界**：往 Browser 的訊息都由 renderer 的 hook 和 `RenderThread` 送，照 `docs/architecture.md` 的「Process 的邊界」。
 
 ### 測試
 
-- 每一段照舊通過：`shell` 的 `documents::`（文件、iframe、導覽）、`history::`、`navigation_timing::`、`script::`、`inserted_scripts::`、`modules::`、`style_sheets::`、`devtools_lifecycle::`、`devtools_network::`；`renderer`、`dom_api`、`dom_js`、`dom_wasm` 的測試；WPT 的 `html/browsers/`、`html/semantics/embedded-content/the-iframe-element/`、`html/browsers/history/`、`html/syntax/parsing/`、`html/semantics/scripting-1/the-script-element/`。
-- 新的：frame 不見時它的帳一起走（排著的 owner `load` 不再觸發）；送出導覽之後、同一個呼叫裡讀到的帳已經是新的（現在做不到的順序）。
-- mutation test：每一段的轉換（送出、commit、丟掉、`javascript:` 的 commit、frame 不見）、body 交給 `LocalFrame` 的路。
-- Speedometer：段落做完、使用者要求時量（parser 和 script 的排程搬家，Editor、NewsSite 的 suite 會受影響）。
+每一段的測試、WPT 的目錄、mutation test 的結果在 `progress.md`。新的測試守的是：送出的導覽記在 frame 上、一個 frame 一個導覽、iframe 的 fragment 和 `javascript:`、同文件的導覽和 traversal 要畫面、parser 和樣式表的先後、被擋住渲染的子 frame、輸入結束之前的命令都有回答。
 
 ### 分階段
 
-第 1 段是要做的；第 2 到 4 段是方向，各段的信心和未知數在下面的「信心和未知數」，第 1 段做完之後重新評估（已決定的事項第 1 條），結論也可能是只搬一部分、接受剩下的接縫。
+1. **renderer 那一側收成 `RenderFrames`**（已決定的事項第 2 到 10 條）：八張表收成一張、每種轉換一個方法、frame 不見時一起拿掉（修了漏清 owner `load` 的 bug）、debug build 檢查沒對帳就讀（第 3 段拿掉）。
+2. **文件的載入搬到 engine 那一側**（第 11 到 28 條）：2a body 和 parser、parser 的 script、樣式表的請求、標題；2b 併進 2c；2c 要畫面、擋 render 和失敗的子資源、「the end」和 lifecycle、「接著 parse」、回應。`documents.rs` 從 5765 行到 4743 行（`dom_api` 的 `document_loader.rs` 1154 行）。
+3. **導覽的帳在送出時記在 engine 的 frame 上**（第 29 到 34 條）：先做小步（3a 導覽的帳、3b iframe 不送的導覽和 traversal 的捲動、3c 拿掉 11 處 `handle_frame_requests`），做完評估之後做完整的那一半的 D（3d：engine 的 frame 清單是唯一的一份）。
+4. **fragment 的捲動**：併進第 3 段（第 32 條：「記下、下一次 layout 時捲」本來就是 Chromium 的 `FragmentAnchor` 的形狀，觸發的地方搬進 engine）。
 
-1. **renderer 那一側收成 `RenderFrame`**（已決定的事項第 2 到 8 條）：八張表收進一個物件、每種轉換一個方法，最上層和子 frame 同一種；`handle_frame_requests` 的十八處變成一行分派；debug build 在讀表的地方檢查 engine 裡沒有沒分派的 `FrameRequest`。擁有者照舊是 `RenderThread`，行為和時機不變（除了第 8 條的修正）。之後的每一段都在它上面搬。
-2. **文件的載入搬到 engine 那一側的 `LocalFrame`**（分小段，已決定的事項第 11 條：先只排 2a）：
-   - 2a：body 的解碼和 parse、parser 擋住的和 deferred 的 script（第 12 到 16 條）、`<link>` 的樣式表的請求和「擋 script、擋 render」的帳（第 18 條）；renderer 只交 pipe 讀到的 bytes 和樣式表的回應。
-   - 2b：併進 2c（第 21 條）。
-   - 2c：`load` 和 readiness、「跑完 script 之後這個 frame 還在不在」、「接著 parse」是 DOM 的 task（第 14、20 條）、樣式表的回應（第 21 條）。
-   畫面那一半（`rendered_*`、`load_finished` 和 reftest 的 swap promise）留在 renderer（標題的時機原本也算在這裡，第 19 條搬到 engine 那一側），跟著 `FrameView`。`documents.rs` 的大半、兩個 engine（`dom_wasm` 只有最上層）都要動。
-3. **`RenderFrame` 由 engine 的 frame 擁有**：導覽在 client 裡送出並記帳，Browser 的訊息經過 engine 往下走；`FrameRequest` 的導覽、`handle_frame_requests`、十八處和第 1 段的檢查拿掉。
-4. **fragment 的捲動**：併進第 3 段的小步（已決定的事項第 32 條：照現在的「下一次 layout」，觸發的地方搬進 engine）。
+每一段都有停損點（新增的 hook 和問 engine 的方法、共用的可變狀態、新的「呼叫之後記得做」、DevTools 和 WPT 的退步、Speedometer），都沒碰到。
 
-### 信心和未知數
+### 做完時的評估
 
-2026-11-25 的估計：
+| 目標 | 做完之後 |
+| --- | --- |
+| 1. 每份 per-frame 狀態一個擁有者 | 成立：文件和它的載入、導覽的帳在 engine 那一側；Browser 的 navigation id、body 的 pipe、畫面、DevTools 的那一份在 renderer 的 `FrameDocument`；兩邊沒有交集（engine 從不讀 `FrameDocument`） |
+| 2. 沒有呼叫之後的對帳 | 成立：導覽在送出時記好，十八處和八處過期的讀法都不在了；task 之後只剩放掉不見的 frame 的資料 |
+| 3. frame 的生命週期一處管 | 成立：frame 的清單只有 engine 那一份；renderer 的資料第一次用到時建、task 之後放掉（不是當場，第 34 條） |
+| 4. `RenderThread` 只剩整個 renderer 的事 | 部分：文件的載入搬走了，commit、body 的 pipe、畫面那一步、DevTools、回應的路由還在 `RenderThread` 照 frame 走 |
+| 5. 行為不變、Speedometer 不變慢 | 成立（`progress.md`）：WPT 和 `shell` 沒有退步；Speedometer 整份 +0.3%，都在區間裡（第一次量到 +6.6%：2c 和第 3 段在每個 task 之後走 frame tree 找 frame，改成 engine 自己的清單 `ScriptEngine::frames`） |
 
-| 部分 | 信心 | 理由 |
-| --- | --- | --- |
-| 第 1 段 | 高 | 機械的搬移，行為和時機不變，測試守得住 |
-| 第 3 段：導覽的送出和記帳在 client 裡，十八處裡導覽的那幾處拿掉 | 中 | 要第 2 段先把文件的載入搬開 |
-| 第 2 段：文件的載入搬到 engine 那一側 | 中（盤點之前是中偏低） | 要搬的比只搬 parser 多（發子資源的請求、擋畫面的判斷），但機制大多已經有：hook（`LoadSink`、`TaskWaker`）和「畫面問 engine」；見下面的未知數 |
-| 全部做完、每份狀態一個擁有者、哪裡都不用對帳 | 中偏低 | 文件和畫面之間會剩一道「畫面問文件擋著沒」的界線，但那是問的，不是對帳；風險在第 2 段的規模和 parse 的迴圈的效能 |
-
-第 1 段做完之後的評估（2026-11-25）：照這個方向做完，各個目標會怎樣：
-
-| 目標 | 做完會怎樣 | 信心 | 可能卡住的地方 |
-| --- | --- | --- | --- |
-| 1. 每份 per-frame 狀態一個擁有者 | 大致成立，但一個 frame 有三個物件：engine 那一側的 `LocalFrame`（文件和它的載入）、`RenderFrame`（對 Browser 的那一面）、畫面那一側（`FrameView`，和 `rendered_*`、commit 的 swap promise、標題的時機） | 中 | 畫面那一份的主人還沒定；navigation timing 由 `RenderFrame` 給、`LocalFrame` 用，誰擁有要說清楚 |
-| 2. 沒有呼叫之後的對帳 | `handle_frame_requests` 做的每件事都在呼叫裡有地方時成立：導覽在 client 送出時記；frame 由 engine 當場建和丟；blob URL 走 hook；fragment 的捲動排到下一次 main frame；告訴 DevTools、要 main frame 由 client 經過它的服務做；八處過期的讀法隨文件的載入搬走 | 中 | client 要能要 main frame、排 task（已決定的事項第 5 條說第 3 段再看），服務怎麼給還沒定 |
-| 3. frame 的生命週期一處管 | 第 3 段成立：engine 建 frame 時建 `RenderFrame`，拆時一起丟；`FrameView` 的子 frame 已經在 hook 裡當場建 | 中偏高 | renderer 讀 `RenderFrame` 要經過 engine 借，Browser 的每種訊息變成 engine 的方法，兩個 engine 都要實作 |
-| 4. `RenderThread` 只剩整個 renderer 的事 | 部分成立：文件的載入搬走、`documents.rs` 大幅變小，但畫面那一步（`update_document_rendering`）照樣在 `RenderThread` 照 frame 走 | 中偏低 | 要連畫面那一側的 per-frame 狀態整理，超出這份 |
-| 5. 行為不變、Speedometer 不變慢 | 可能，要花力氣守：parser 讓出變成 DOM 的 task 之後和別的 task 的先後可能變（Chromium 本來是文件的 `kNetworking` 的 task runner），每個子資源的請求多經過一層 hook | 中 | 熱的路搬家，Editor、NewsSite 的 suite 要在 2a、2b 之後量 |
-
-和 Chromium 對照：送出導覽時 Blink 和 content 各記一份（`FrameLoader::client_navigation_` 和 `navigation_client_impl_`），都在送出的那串呼叫裡。所以做完的樣子是「沒有呼叫之後的對帳」，不是「帳在一個地方」。最可能的結果：導覽送出時就記好、十八處和八處過期的讀法消失、frame 的增減一處管；剩下的接縫是畫面那一側的 per-frame 狀態（另一個題目）。
-
-**第 2 段的停損點**（2026-11-25 的看法：第 2 段先只排 2a，當成有停損點的探測）：2a（body 和 parser 搬到 `LocalFrame`、renderer 只交 data pipe）做完時看三件事：
-
-1. 為了它新增的 hook 和「問 engine」的方法有幾個：超過五個左右，表示界線切得不順（第 16 條列的是預期的）。
-2. Speedometer 的 Editor、NewsSite 的 suite 有沒有變慢（使用者要求時量）。
-3. parse 的迴圈裡的過期讀法（`advance_document` 的開頭、`note_body_parsed`）是不是真的不見了。
-
-三件都順就接著做 2b（樣式表）；不順就停下來，回頭考慮停在第 1 段，或重新切界線。
-
-2a 做完時（2026-11-25，做到 2a-3，2a-4 照第 20 條移到 2c）的評估：
-
-1. 跨界線的新方法 7 個：`ScriptEngine` 的 `document_loader`、`set_document_loader`、`send_sheet_fetches`、`tell_title`，`LoadSink::start_sheet_fetch`，`FrameLayout::media_environment`，`FrameClient::title_changed`。超過五個，多出來的是第 18 條把原本 2b 的樣式表的請求併進來（使用者看過，可以接受）和第 19 條的標題（使用者選了 hook）；沒有為了對帳加的。
-2. Speedometer（`--against 66110866`，各 3 次）：20 個 suite 的幾何平均 +0.2%，每個 suite 的變化都在兩邊的 95% 區間裡；NewsSite-Next +1.5%、NewsSite-Nuxt -0.9%、Editor-CodeMirror +0.9%、Editor-TipTap -1.9%。記憶體峰值 -1.2% 到 +3.9%（+3.9% 的 Perf-Dashboard 多在 Browser 的 process，renderer 的 +3%）。
-3. parse 的迴圈裡的過期讀法不在了：迴圈在 engine 的呼叫裡，renderer 在呼叫之後讀一次 DOM（`note_body_parsed`）。
-
-三件都順。
-
-2a 做完之後的評估（2026-11-25，和使用者討論過）：整份做完是值得的，每段照舊設停損點。理由：每一段單獨都是改進（停在中間不用退回，最壞是停在比原本乾淨的地方）；使用者在意的「送和帳分開」在第 3 段、「很多地方要做檢查」分在 2a、2c 和第 3 段，「狀態在一處」由 2b、2c 做完，也是第 3 段的前提（先跳到第 3 段的話，做到一半很可能又要回頭搬 2c 的東西）；界線的形狀（往外是 hook、往內是問 engine，Blink 和 content 之間的形狀）2a 和標題都做過一次。信心：2b 約八成；2c 切得乾淨約五到六成（最可能卡住的是 hook 要排 task、要 main frame，已決定的事項第 5 條留到這時再看）；2c 順利之後第 3 段約六到七成；一路到底約一半。條件：2c 開工前先做依賴盤點，再逐條定「待決定」的第 1 條和第 5 條留下的事；哪一段要共用的 `Rc<RefCell>` 才接得起來、或對帳只是換了地方，就停下來。
-
-2c 做完時（2026-11-26，2c-1 到 2c-4；iframe 晚一點的 `load` 照第 25 條留到第 3 段）照停損點的評估：
-
-1. 決定之外多的 hook 和問 engine 的方法：`ScriptHost::tell_lifecycle`（`load` 的 task 在 `ScriptHost` 裡跑，要第二個轉手）和 `Cx::content_loaded`（idleness 從 DOMContentLoaded 開始算）兩個，不到三個。決定裡的：`FrameClient::document_lifecycle` 和 `ScriptEngine::tell_lifecycle`（第 22 條）、`FrameLayout::schedule_frame`（第 23 條）、`dom_api` 的入口（第 24 條：`parse_unless_due`、`run_dom_task`、`script_fetched`、`sheet_fetched`，加上 renderer 也叫的 `finish_load`）、`Cx::render_blocked`（第 26 條）、`Cx::note_load_failed`（第 27 條）、`Cx::queue_parse_on`（第 14 條）。
-2. 沒有用共用的 `Rc<RefCell>`。呼叫之後的步驟沒有新的：renderer 在 engine 的呼叫之後照舊 `handle_frame_requests`、`send_harness_results`（這兩件第 3 段再看）；樣式表的原文是函式交回、renderer 給 `CssAgent`，不是查狀態。拿掉的：`update_child_blocking` 的五個時機、`take_loaded_documents` 的收集、`FrameDocument` 的 `parsing`、`body_parsed`、`aborted`、`failed`、`yields`、`parse_due`、`load_finished`（換成畫面那一側的 `load_told`），「the end」那串函式裡約三十處「frame 還在不在」的重讀。
-3. DevTools 的 lifecycle 的順序（`devtools_lifecycle` 的測試，第 22 條擔心的 `frameNavigated` 的先後）、WPT、`shell`、`browser` 都沒有退步。
-4. Speedometer：使用者要求時量。
-
-三件都順。`renderer` 的 `documents.rs` 從 2a 之前（`66110866`）的 5765 行到 4743 行（`dom_api` 的 `document_loader.rs` 1154 行）；留下的是 commit（第 3 段）、body 的 pipe、畫面那一步、DevTools、回應的路由（照請求的編號找 frame）。
-
-未知數（2026-11-25 的依賴盤點之後，`details.md` 的「依賴的盤點」和「盤點之後的看法」）：
-
-- **沒有一個欄位只屬於文件的載入**：`FrameDocument` 的 64 處使用，33 處同時碰畫面、30 處碰載入、17 處碰 scheduler、20 處碰 DevTools；最纏的是兩個 commit、parse 的迴圈（`advance_document`）、`update_document_rendering`、`start_loads_of`、`sheet_loaded`。這些函式要先拆開才搬得動。
-- **界線不跟著 crate 走**：Blink 的工作在 machopo 分在兩邊：DOM 和 binding 在 `dom`、`dom_api`、`dom_js`，layout、paint、`FrameView`（`frame_view.rs` 4861 行）和驅動 parser 在 `renderer`。文件的載入搬到 engine 那一側之後，和畫面有關的（`FrameView`、fragment 的捲動、擋住第一次畫面的樣式表、`FrameDocument` 的 `rendered_*`、reftest 的等待）還在 renderer，接縫可能只是從「導覽」移到「文件和畫面」之間。
-- **parser 讓出 event loop**：`yields`、`parse_due` 現在是 renderer 的 scheduler 的 task；搬過去之後要經過像 `TaskWaker` 的東西排 task。
-- **樣式表和 script 的抓取**：經過 loader 和 load sink，`css_refetches` 這類帳要找到它的主人。
-- **兩個 engine**：`dom_js` 和 `dom_wasm` 都要有 `LocalFrame`；放在 `dom_api` 共用要先確認不碰 engine 專屬的東西。
-- **效能**：parse 的迴圈和 parser 的 script 是熱的路；搬過去之後每次讓出、每個子資源的請求都經過 hook。
+跨界線的新方法比原本多（2a 7 個、2c 的決定裡的和多出的 2 個、第 3 段的 `commit_here`、`navigation`、`take_navigation`、`take_commit_here`、`frame_of_document`、`frames`），每個都在決定的事項裡；沒有為了對帳加的。
 
 ## 缺點
 
-- 規模：`render_thread/documents.rs`（5789 行）的大半、`render_thread.rs`、`dom_js` 和 `dom_wasm` 的 frame、`dom_api` 的 `FrameClient` 和 `ParserHost`；比 RFC 0114 大好幾倍，要很多段。
-- 第 2 段搬的是熱的路（parser、script 的排程），要留意 Speedometer。
-- renderer 讀一個 frame 的 `RenderFrame` 要經過 engine 借（不能同時借 engine 的別的部分）。
-- 做到一半時（第 1、2 段之後）界線是新舊混著的，文件要跟著每一段寫清楚。
+- 規模：`render_thread/documents.rs` 的大半、`render_thread.rs`、`dom_js` 和 `dom_wasm` 的 frame、`dom_api` 的新模組（`document_loader`、`link_style`、`subresource`）和 `FrameClient`、`ScriptEngine` 的方法。
+- renderer 讀一個 frame 的 `FrameDocument` 多問 engine 一次（`child_parent`）；子 frame 初始文件的資料第一次用到才建，不見的 frame 的資料到 task 之後才放掉。
+- `RenderThread` 照舊照 frame 走畫面那一步和 commit，這一半的整理不在這份。
 
 ## 理由和其他做法
 
-完整的比較在 `details.md` 的「做法的比較」。
+完整的比較在 `details.md` 的「做法的比較」和第 3 段的兩份盤點。
 
-- **不選只在 renderer 這一側補**（2026-11-25 討論過）：
-  - 只收成 `RenderFrame`（C）：表乾淨了，十八處照舊；加 debug build 的檢查可以讓「忘了叫」在測試裡 panic，但送和帳照樣分開。它是這份的第 1 段。
-  - 導覽的帳搬進 hook（A）：送出時就記帳，但文件、parser 留在 `RenderThread`（要和 engine 同時借），fragment 的捲動要 layout，一個 frame 照樣兩半，讀帳要經過 engine 的 downcast。
-  - 共用的 `Rc<RefCell>`（B）：能搬進去的是帳、scheduler、DevTools，搬不進去的是要 engine 的那幾件；171 處碰 engine 的地方任何一處借著格子呼叫 engine 就在執行時 panic，型別擋不住。要歸零還得把剩下的改成排 task，改了時機。
-- **不考慮 engine 的入口多收一個 `&mut` 的 host**：hook 在 V8 的 callback 裡被呼叫，從 isolate 的 slot 拿狀態，借用存不進去（要 `'static`，或在 `bindings` 加有 `unsafe` 的機制）。
-- **不做的話**：導覽的每個改動照舊改三處、新的 engine 入口要記得對帳，site isolation 時再一次拆表。
+- **不選只在 renderer 這一側補**（2026-11-25）：只收成 `RenderFrames`（第 1 段本身）十八處照舊；導覽的帳搬進 hook，文件和 parser 留在 `RenderThread`，一個 frame 照樣兩半；共用的 `Rc<RefCell>`，要 engine 的那幾件搬不進去，借著格子呼叫 engine 就在執行時 panic。
+- **不考慮 engine 的入口多收一個 `&mut` 的 host**：hook 在 V8 的 callback 裡被呼叫，從 isolate 的 slot 拿狀態，借用存不進去。
+- **第 3 段完整的那一半**（第 34 條）：不選停在小步（task 中間讀 frame 要讀 engine 的只靠約定）或加 debug 檢查（承認兩份清單）；不選 `FrameDocument` 放進 engine 的 frame（trait 加 downcast、經過 engine 借、分開借的方法）；不選把表交給 engine 擁有的 client、hook 當場建（renderer 跟 engine 借自己的資料、分開借、換 engine 時表要搬）。
 
 ## 先例
 
-- **Chromium**（2026-11-25 對過原始碼，`details.md` 的「對照 Chromium（原始碼）」）：每個 local frame 兩個物件：Blink 的 `LocalFrame`（`DocumentLoader` 擁有 body 的 loader、parser 和解碼器；`HTMLParserScriptRunner`、`ScriptRunner`、`RenderBlockingResourceManager`、`Document::CheckCompleted`、`LocalFrameView`）和 content 的 `RenderFrameImpl`（`blink::WebLocalFrameClient`，對 Browser 的 `FrameHost`、`NavigationClient`）。送出導覽時兩邊各記一份：Blink 記這個 frame 在導覽（`FrameLoader::client_navigation_`），content 記對 Browser 的這次請求（`navigation_client_impl_`、`is_requesting_navigation_`），都在送出的那串呼叫裡；commit 時 content 把 Browser 的 data pipe 交給 Blink，Blink 建 `DocumentLoader`、自己收 body。parser 自己 post 到文件的 task runner；fragment 的導覽同步 commit，捲動排到下一次 lifecycle。兩個物件一起建、一起走，但靠 raw 指標和約定（content 先建、交給 Blink 的工廠，Blink 拆 frame 時告訴它）。照做：兩個 per-frame 物件、各自的狀態、同步的呼叫互通、一起建一起走、body 交給文件那一側、fragment 的捲動排到下一次 main frame。不照做：擁有權（Rust 裡不互相拿著指標；machopo 由 engine 的 frame 擁有 client，renderer 經過 engine 借）。
+- **Chromium**（2026-11-25 對過原始碼，`details.md` 的「對照 Chromium（原始碼）」）：每個 local frame 兩個物件：Blink 的 `LocalFrame`（`DocumentLoader` 擁有 body 的 loader、parser 和解碼器；`HTMLParserScriptRunner`、`ScriptRunner`、`RenderBlockingResourceManager`、`Document::CheckCompleted`、`LocalFrameView`）和 content 的 `RenderFrameImpl`（`blink::WebLocalFrameClient`，對 Browser 的 `FrameHost`、`NavigationClient`）。送出導覽時兩邊各記一份：Blink 記這個 frame 在導覽（`FrameLoader::client_navigation_`），content 記對 Browser 的這次請求（`navigation_client_impl_`、`is_requesting_navigation_`），都在送出的那串呼叫裡；commit 時 content 把 Browser 的 data pipe 交給 Blink，Blink 建 `DocumentLoader`、自己收 body。parser 自己 post 到文件的 task runner；fragment 的導覽同步 commit，捲動排到下一次 lifecycle。兩個物件一起建、一起走，但靠 raw 指標和約定（content 先建、交給 Blink 的工廠，Blink 拆 frame 時告訴它）。照做：兩邊各自的狀態、在送出的那串呼叫裡各記一份、同步的呼叫互通、body 交給文件那一側、fragment 的捲動「記下、下一次 layout 時捲」。不照做：renderer 的 per-frame 物件不是 Blink 建 frame 時當場建（Rust 裡不互相拿著指標：renderer 擁有它，照 engine 的 frame 清單在第一次用到時建，第 34 條）；fragment 在下一次 layout 捲（script 讀 `scrollY` 讀得到），不是下一次 main frame。
 
 ## 已決定的事項
 
@@ -192,11 +144,13 @@
 
 ## 待決定
 
-（第 1 條「`FrameView` 和 fragment 的捲動放哪」2026-11-26 定了：已決定的事項第 32 條。）
+（無。）
 
 ## 之後的可能
 
 - site isolation：不是 local 的 frame 是 `RenderFrameProxy`，engine 那一側是 remote frame。
-- 導覽的限制（`javascript:` 在呼叫之後才算載入中、`BlobURLToken`）：界線搬好之後，在 `LocalFrame` 和 `RenderFrame` 裡各自修。
-- DevTools 的 agent 照 frame 的清單跟著 `RenderFrame` 的生命週期。
+- 導覽的限制（`BlobURLToken` 這些，`docs/limitations.md`）：界線搬好了，在 engine 的 frame 和 renderer 的 hook 裡各自修。
+- DevTools 的 agent 照 engine 的 frame 清單。
+- renderer 的 per-frame 資料當場建、當場放（第 34 條沒選的 C：表交給 engine 擁有的 client，hook 當場建；要分開借的方法）：要在 `FrameDetached` 的當下放掉資料，或拆成 process、site isolation 時再看。
+- 畫面那一步（`update_document_rendering`）和 commit 的 per-frame 狀態的整理。
 - iframe 的 `src` 只換 fragment 時照規範做同文件的導覽（`history::navigate`：子 frame 裡的 `hashchange`、history 的項目、`DidCommitSameDocumentNavigation`）：現在只改網址、捲動（第 32 條）；要新的測試，WPT 的預期要重看。
