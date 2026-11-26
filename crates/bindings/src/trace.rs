@@ -80,6 +80,23 @@ pub fn start(file: &Path) -> Result<(), StartError> {
     }
 }
 
+/// As [`start`], into `file`, already open for writing: for a process that
+/// opens its trace's file while it can and starts the trace once it no
+/// longer could (a renderer in its sandbox: starting the trace makes a
+/// thread, which the process may not have as it enters).
+#[cfg(unix)]
+pub fn start_into(file: std::fs::File) -> Result<(), StartError> {
+    if platform::is_initialized() {
+        return Err(StartError::V8Started);
+    }
+    if v8::machopo_trace::start_into(file, CATEGORIES, BUFFER_KB) {
+        RECORDING.store(true, Ordering::Relaxed);
+        Ok(())
+    } else {
+        Err(StartError::File)
+    }
+}
+
 /// Stops the trace: the rest of it is written and the file closed. Does
 /// nothing if none was started.
 pub fn stop() {

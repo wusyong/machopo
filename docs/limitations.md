@@ -26,7 +26,11 @@
 
 ## 隔離
 
-- **renderer 是獨立的 process，但沒有被關起來**：V8 沒開 sandbox（machopo 用的是自己 fork 編的 V8，已經可以開，但還沒開），作業系統的 sandbox 也沒有。renderer 裡 V8 或 DOM 的 heap（elise）的記憶體錯誤碰不到 Browser 和其他分頁的記憶體了，但被攻破的 renderer 還是用使用者的身分在跑，照樣能開檔案、連網路。真的 renderer 在 sandbox 裡還需要系統的哪些東西（列字型、V8 的 JIT、wasmtime）沒有驗過。`--single-process`（和在測試的 process 裡建分頁的測試）時 renderer 是 Browser 的 thread，連 process 的隔離都沒有。
+- **renderer process 只在 Linux 上關進作業系統的 sandbox**（Landlock 加 seccomp，`shell` 的 `renderer_sandbox`）；macOS 和 Windows 上還沒有：被攻破的 renderer 用使用者的身分在跑，照樣能開檔案、連網路。V8 的 sandbox 在哪個平台都沒開（machopo 用的是自己 fork 編的 V8，已經可以開）。`--single-process`（和在測試的 process 裡建分頁的測試）時 renderer 是 Browser 的 thread，沒有 process 的隔離，也沒有 sandbox；`--no-sandbox` 時 renderer process 不進 sandbox。兩者啟動時都印警告。
+- **Linux 的 sandbox 擋不住的**：(1) renderer 看得到檔案在不在、多大、什麼時候改的（`stat`、`access`、`readlink`：Landlock 只管打開；要 mount namespace 或 chroot 才擋得住），讀不到內容。(2) 字型檔的目錄整個可讀（系統的和使用者自己的字型目錄；放在裡面的其他檔案也讀得到）。(3) JIT 要可執行的記憶體，所以被攻破的 renderer 照樣能跑它注入的程式碼，只是出不了 sandbox。(4) 放行的 system call 都是 renderer 碰得到的 kernel 程式碼，kernel 自己的洞擋不住。(5) 已經開著的東西照用：控制通道、共用記憶體、標準錯誤。
+- **Linux 的 sandbox 要 kernel 有 Landlock**（5.13 起，編進去而且開機時開著）：沒有時 renderer process 不啟動（分頁顯示原因，log 有 kernel 的說法），要 `--no-sandbox` 才能用。沒有比較弱的退路。
+- **sandbox 裡的 renderer 建不了檔案**（Linux）：它自己的 trace 檔和 census 檔是進 sandbox 之前開好的；其他會讓 V8 自己寫檔案的 `MACHOPO_V8_FLAGS`（`--perf-basic-prof` 的 `/tmp/perf-<pid>.map`、`--prof` 和 `--logfile` 的 log）在 renderer 裡寫不出來，要加 `--no-sandbox`（`bench.py speedometer --sample` 自己加；Chrome 的 `--perf-prof` 也要 `--no-sandbox`）。trace 裡 renderer 的 process 名稱這類 Perfetto 從 `/proc/self/stat`、`/proc/self/cmdline` 讀的資料沒有。
+- **Browser 執行期間新裝的字型，renderer 要重開 machopo 才讀得到**（Linux）：字型檔的目錄是 Browser 啟動時列一次、交給每個 renderer 的；新的目錄不在 sandbox 放行的清單裡。fontconfig 的 cache 過期時也由 Browser 那一次更新，renderer 不寫。
 - **renderer 還有兩條路能讓 Browser 結束**：它送的 frame 是在 Browser 裡交給 GPU 的，而 wgpu 的驗證錯誤會結束整個程式（Viz 收到 frame 時的檢查沒有涵蓋所有會走到 wgpu 的值）；Browser 處理 renderer 訊息的程式裡如果有 `unwrap` 或越界，壞訊息能讓它 panic（有 fuzz target 在找，跑過的時間不長、涵蓋還在增加）。
 - **`--single-process` 時 renderer 記憶體耗盡、abort 或記憶體出錯，結束的是整個程式**（renderer 是自己的 process 時只結束那個 renderer，分頁顯示 sad tab、可以重新載入）。例如 `border-collapse: collapse` 的表格的邊是一個密的陣列（Blink 的 `TableBorders` 也是），一列 1000 個 `colspan=1000` 再加上幾千列的表格要好幾十 GB，配置不到時 process 就結束。
 - `gfx::FontData` 和 `gfx::ImageData` 不能序列化：現在字型和圖片都留在 renderer 這一側（raster 在 renderer 裡），不用過 process 的邊界；raster 搬到 Viz 那一側時要改成像 Chromium 那樣傳 typeface 和圖片。

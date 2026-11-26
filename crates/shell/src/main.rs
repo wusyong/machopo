@@ -556,6 +556,49 @@ where
     }
 }
 
+/// A trace's file, made (or emptied) to be written: said if it can't be.
+#[cfg(unix)]
+fn open_trace(file: &Path) -> Option<(std::fs::File, &Path)> {
+    match std::fs::File::create(file) {
+        Ok(opened) => Some((opened, file)),
+        Err(e) => {
+            eprintln!(
+                "machopo: MACHOPO_TRACE: can't trace into {}: {e}",
+                file.display()
+            );
+            None
+        }
+    }
+}
+
+/// As [`start_trace`], into a file [`open_trace`] opened: a renderer
+/// process, which opens it before it enters its sandbox and starts the
+/// trace after.
+#[cfg(unix)]
+fn start_trace_into<S>(
+    opened: Option<(std::fs::File, &Path)>,
+) -> (
+    Option<impl tracing_subscriber::Layer<S> + Send + Sync + 'static>,
+    Option<shell::trace::TraceEnd>,
+)
+where
+    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a> + Send + Sync,
+{
+    let Some((opened, file)) = opened else {
+        return (None, None);
+    };
+    match shell::trace::layer_into(opened) {
+        Ok((layer, end)) => (Some(layer), Some(end)),
+        Err(e) => {
+            eprintln!(
+                "machopo: MACHOPO_TRACE: can't trace into {}: {e:?}",
+                file.display()
+            );
+            (None, None)
+        }
+    }
+}
+
 /// What to say of renderers that run outside the operating system's
 /// sandbox, where this build has one: a page that takes over its renderer
 /// then has everything machopo has.
@@ -587,26 +630,33 @@ fn main() -> ExitCode {
         shell::renderer_sandbox::probe(std::env::args_os().skip(2));
     }
     if std::env::args().nth(1).as_deref() == Some(shell::RENDERER_PROCESS_SWITCH) {
-        // Into its sandbox before anything else: before the log and the
-        // trace, which may start threads.
+        // What it writes is opened first, while it has the file system:
+        // its census's file, a file of its own as its trace is, and its
+        // trace's.
+        base::census::own_file();
+        let file = std::env::var_os("MACHOPO_TRACE").map(|file| {
+            let mut file = file;
+            file.push(format!(".{}", std::process::id()));
+            std::path::PathBuf::from(file)
+        });
+        #[cfg(unix)]
+        let opened = file.as_deref().and_then(open_trace);
+        // Then into its sandbox, before the log and the trace: the trace
+        // starts a thread, and the process enters while it is one.
         let start = match shell::start_renderer() {
             Ok(start) => start,
             Err(code) => return ExitCode::from(code),
         };
-        // Its census too is a file of its own, as its trace is.
-        base::census::own_file();
         let filter = tracing_subscriber::EnvFilter::try_from_default_env()
             .unwrap_or_else(|_| DEFAULT_LOG_FILTER.into());
         let log_records = filter
             .max_level_hint()
             .unwrap_or(LevelFilter::TRACE)
             .as_log();
-        let file = std::env::var_os("MACHOPO_TRACE").map(|file| {
-            let mut file = file;
-            file.push(format!(".{}", std::process::id()));
-            std::path::PathBuf::from(file)
-        });
         // Ended, and its last events written, as the process ends.
+        #[cfg(unix)]
+        let (trace, trace_end) = start_trace_into(opened);
+        #[cfg(not(unix))]
         let (trace, trace_end) = start_trace(file.as_deref());
         tracing_subscriber::registry()
             .with(log_layer(filter))

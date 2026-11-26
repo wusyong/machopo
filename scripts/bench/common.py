@@ -15,6 +15,7 @@ import base64
 import collections
 import contextlib
 import ctypes
+import functools
 import json
 import math
 import os
@@ -590,6 +591,23 @@ def has_stdio_pipe(binary: Path) -> bool:
     return "--automation-pipe" in shown.stdout
 
 
+@functools.lru_cache(maxsize=None)
+def takes_no_sandbox(binary: Path) -> bool:
+    """Whether `binary` knows `--no-sandbox` (its `--help` says): one built
+    before machopo's renderers had a sandbox refuses the switch."""
+    said = subprocess.run([str(binary), "--help"], capture_output=True, text=True, errors="replace")
+    return "--no-sandbox" in said.stdout
+
+
+def sampled_switches(binary: Path) -> list[str]:
+    """What machopo is run with when it is sampled: no sandbox, since the V8
+    flags that name JS functions for the sampler have each renderer write
+    files of its own choosing (`/tmp/perf-<pid>.map`, V8's log), which a
+    renderer in its sandbox can't make. As Chrome, whose `--perf-prof`
+    takes `--no-sandbox`."""
+    return ["--no-sandbox"] if takes_no_sandbox(binary) else []
+
+
 class MachopoPipe(CdpPipe):
     """`machopo --remote-debugging-pipe --headless`, through its pipe (as
     Chrome's: `start_with_pipe`); an `--against` version from before that,
@@ -601,10 +619,12 @@ class MachopoPipe(CdpPipe):
 
     def __init__(self, binary: Path, log, env: dict | None = None, wrapper: list[str] | None = None) -> None:
         env = {**os.environ, **(env or {})}
+        sampled = sampled_switches(binary) if wrapper else []
         if binary in WITH_STDIO_PIPE:
             with browser_affinity():
                 process = subprocess.Popen(
-                    on_browser_cpus([*(wrapper or []), str(binary), "--automation-pipe", *machopo_switches(binary)]),
+                    on_browser_cpus([*(wrapper or []), str(binary), "--automation-pipe", *machopo_switches(binary),
+                                     *sampled]),
                     stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
                     stderr=log,
@@ -613,7 +633,8 @@ class MachopoPipe(CdpPipe):
             super().__init__(process, process.stdin, process.stdout)
             return
         process, to_browser, from_browser = start_with_pipe(
-            [*(wrapper or []), str(binary), "--remote-debugging-pipe", "--headless", *machopo_switches(binary)],
+            [*(wrapper or []), str(binary), "--remote-debugging-pipe", "--headless", *machopo_switches(binary),
+             *sampled],
             stdin=subprocess.DEVNULL,
             stdout=log,
             stderr=log,

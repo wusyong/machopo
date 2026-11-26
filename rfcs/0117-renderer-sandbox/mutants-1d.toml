@@ -1,0 +1,22 @@
+# Step 1d's mutants (a sandboxed renderer's trace: its file opened before it enters, the trace started after): `python3 scripts/test.py mutate rfcs/0117-renderer-sandbox/mutants-1d.toml`, with RUSTY_V8_ARCHIVE set while the fork's release doesn't have `start_into`.
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "trace"]
+timeout = 240
+
+[[mutant]]
+name = "a renderer's trace file isn't opened before it enters"
+file = "crates/shell/src/main.rs"
+from = "        let opened = file.as_deref().and_then(open_trace);"
+to = "        let opened = file.as_deref().and_then(open_trace).filter(|_| false);"
+
+[[mutant]]
+name = "the trace can't read a thread's name"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = "            libc::PR_GET_NAME,\n"
+to = ""
+
+[[mutant]]
+name = "a trace started into a file isn't said to record"
+file = "crates/bindings/src/trace.rs"
+from = '''    if v8::machopo_trace::start_into(file, CATEGORIES, BUFFER_KB) {
+        RECORDING.store(true, Ordering::Relaxed);'''
+to = '''    if v8::machopo_trace::start_into(file, CATEGORIES, BUFFER_KB) {'''

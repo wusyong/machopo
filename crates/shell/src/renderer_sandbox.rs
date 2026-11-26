@@ -287,9 +287,15 @@ pub mod linux {
             .allow_when(libc::SYS_tgkill, &[Arg::int(0, Test::Equals(this))])
             .allow_when(libc::SYS_kill, &[Arg::int(0, Test::Equals(this))]);
 
-        // A thread's name, a mapping's name, the auxiliary vector, and no
-        // core dump of a crash that was asked for.
-        for option in [libc::PR_SET_NAME, libc::PR_SET_VMA, PR_GET_AUXV] {
+        // A thread's name (set, and read by the trace), a mapping's name,
+        // the auxiliary vector, and no core dump of a crash that was asked
+        // for.
+        for option in [
+            libc::PR_SET_NAME,
+            libc::PR_GET_NAME,
+            libc::PR_SET_VMA,
+            PR_GET_AUXV,
+        ] {
             policy.allow_when(libc::SYS_prctl, &[Arg::int(0, Test::Equals(int(option)))]);
         }
         policy.allow_when(
@@ -446,9 +452,6 @@ mod tests {
         assert_eq!(parsed(&[]), ChildSwitches::default());
         assert!(!parsed(&["--something-else"]).no_sandbox);
         // A directory switch with nothing after it names none.
-        assert_eq!(
-            parsed(&["--font-directory"]).font_directories,
-            [PathBuf::new(); 0]
-        );
+        assert!(parsed(&["--font-directory"]).font_directories.is_empty());
     }
 }

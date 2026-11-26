@@ -57,8 +57,10 @@ pub fn label(interface: &'static str, member: &'static str, kind: &'static str) 
 
 /// This process's counts go to a file of its own: the one `MACHOPO_CENSUS`
 /// names with this process's id after it, as a renderer process's trace
-/// does, so that two processes don't write over each other's. Called
-/// before anything is counted (a renderer process's start).
+/// does, so that two processes don't write over each other's. Opened
+/// here and written over in place from then on: called before anything
+/// is counted and before the process loses the file system (a renderer
+/// process's start, ahead of its sandbox).
 pub fn own_file() {
     #[cfg(feature = "census")]
     imp::own_file();
@@ -248,8 +250,27 @@ mod imp {
     /// Whether this process writes a file of its own (`own_file`).
     static OWN_FILE: AtomicBool = AtomicBool::new(false);
 
+    /// That file, opened by `own_file` and written over in place from
+    /// then on: the process may since have lost the file system (a
+    /// renderer in its sandbox), where the browser's file is written
+    /// beside itself and renamed.
+    static OPENED: OnceLock<std::sync::Mutex<std::fs::File>> = OnceLock::new();
+
     pub(super) fn own_file() {
         OWN_FILE.store(true, Ordering::Relaxed);
+        let Some(path) = std::env::var_os("MACHOPO_CENSUS") else {
+            return;
+        };
+        let path = file_of(path, Some(std::process::id()));
+        match std::fs::File::create(&path) {
+            Ok(file) => {
+                let _ = OPENED.set(std::sync::Mutex::new(file));
+            }
+            Err(e) => eprintln!(
+                "machopo: MACHOPO_CENSUS: can't write {}: {e}",
+                std::path::Path::new(&path).display()
+            ),
+        }
     }
 
     /// The file a process's counts go to: `path`, or with `pid`, `path`
@@ -298,6 +319,25 @@ mod imp {
             text.push('\n');
         }
         drop(table);
+        if let Some(file) = OPENED.get() {
+            use std::io::{Seek, SeekFrom};
+            let mut file = file.lock().expect("the census's file");
+            let written = file
+                .seek(SeekFrom::Start(0))
+                .and_then(|_| file.set_len(0))
+                .and_then(|()| file.write_all(text.as_bytes()));
+            if let Err(e) = written {
+                eprintln!(
+                    "machopo: MACHOPO_CENSUS: can't write {}: {e}",
+                    std::path::Path::new(path).display()
+                );
+            }
+            return;
+        }
+        if OWN_FILE.load(Ordering::Relaxed) {
+            // It said so when it couldn't open it.
+            return;
+        }
         let mut partial = path.clone();
         partial.push(".partial");
         let written = std::fs::File::create(&partial)

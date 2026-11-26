@@ -35,13 +35,35 @@ where
     S: Subscriber + for<'a> LookupSpan<'a> + Send + Sync,
 {
     trace::start(file)?;
+    Ok(recording())
+}
+
+/// As [`layer`], into `file`, already open for writing: a renderer
+/// process opens it before it enters its sandbox and starts the trace
+/// after (the trace starts a thread).
+#[cfg(unix)]
+pub fn layer_into<S>(
+    file: std::fs::File,
+) -> Result<(impl Layer<S> + Send + Sync + 'static, TraceEnd), trace::StartError>
+where
+    S: Subscriber + for<'a> LookupSpan<'a> + Send + Sync,
+{
+    trace::start_into(file)?;
+    Ok(recording())
+}
+
+/// The layer of a trace that has started, and its end.
+fn recording<S>() -> (impl Layer<S> + Send + Sync + 'static, TraceEnd)
+where
+    S: Subscriber + for<'a> LookupSpan<'a> + Send + Sync,
+{
     let writer = TraceWriter {
         begin: trace::begin,
         end: trace::end,
         mark: trace::mark,
         measure: trace::measure,
     };
-    Ok((writer.with_filter(filter_fn(is_traced)), TraceEnd(())))
+    (writer.with_filter(filter_fn(is_traced)), TraceEnd(()))
 }
 
 /// Ends the trace when dropped.

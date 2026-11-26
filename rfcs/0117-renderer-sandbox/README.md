@@ -12,7 +12,7 @@ renderer 已經是自己的 process（RFC 0004），但沒有被關起來：被�
 
 現況（2026-11-26 的 `main`，`52dc5adc`）：
 
-- `docs/limitations.md` 的「renderer 是獨立的 process，但沒有被關起來」：V8 或 DOM 的 heap（elise）、wasmtime 的 JIT、`bindings` 的 `unsafe` 裡任何一個記憶體錯誤被利用之後，攻擊者拿到的是使用者的身分：讀寫家目錄、連網路、啟動程式、碰同一個使用者的其他 process。
+- `docs/limitations.md` 的「隔離」（這份開始時的第一條：renderer 是獨立的 process，但沒有被關起來）：V8 或 DOM 的 heap（elise）、wasmtime 的 JIT、`bindings` 的 `unsafe` 裡任何一個記憶體錯誤被利用之後，攻擊者拿到的是使用者的身分：讀寫家目錄、連網路、啟動程式、碰同一個使用者的其他 process。
 - `crates/ipc/soundness.md` 的 K5（「同一個使用者的其他 process」）靠審查：Windows 啟動 child 時的繼承（`docs/limitations.md` 裡 `ipc` 在 Windows 上啟動 child 的那一條：要自己呼叫 `CreateProcessW`、指定繼承的清單，寫明和 sandbox 一起做）、pipe 建立時的保護（`docs/test-gaps.md` 寫「sandbox 做的時候重看一次」）。
 - RFC 0004 的設計照「之後會有 sandbox」做（renderer 不碰檔案系統、網路、GPU，不建共用記憶體），IPC 的那一半在原型驗過；renderer 自己的那一半（字型、V8 的 JIT、wasmtime、elise 的 worker pool 在 sandbox 裡要什麼）沒驗過，探測移到這份當第一步。
 

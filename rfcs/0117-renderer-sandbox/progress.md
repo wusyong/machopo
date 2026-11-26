@@ -9,9 +9,9 @@
 | 0. 草稿、Linux 的第一次探測（`details.md` 的「Linux 的探測」）、第 1 段之前的九條決定 | 做完 | 2026-11-26 |
 | 1a. 補探測：wasm 的文件（wasmtime 的 JIT）、`MACHOPO_TRACE`、`about:crash` 和 panic 的路；`strace -k` 找出零星的讀取是誰讀的；fontconfig 的 cache 過期、寫不了時怎麼辦；發行版和 CI 的 kernel 有沒有 Landlock。之後定第 1 段的細節（README 的「待決定」） | 探測做完；第 1 段的細節待定 | |
 | 1b. 新的 crate `sunaba`：Linux 的 Landlock 規則和 seccomp 的清單、`SIGSYS` 的 handler、最低要求的檢查；輔助的執行檔和「做不到」的測試；`soundness.md`；`unsafe` 的規則和 `sanity.py unsafe` 加上它 | 做完（2026-11-26；policy 的清單是 machopo 的，在 1c） | |
-| 1c. 接上 machopo：child 的 `main` 一開始進 sandbox；Browser 問 fontconfig 的路徑、啟動時交給 renderer；`--no-sandbox` 和警告；套不上時分頁說明原因；`shell` 的測試從 `/proc` 看真的 renderer | 做到一半（2026-11-26）：進 sandbox、字型、`--no-sandbox`、sad tab 的原因、測試和 mutation test 做完；trace 的 3 個測試要等 1d；文件和 WPT、情境還沒 | |
-| 1d. trace 和 census 的輸出檔由 Browser 開好、啟動時交給 renderer；工具拿掉暫時的 `--no-sandbox` | 沒開始 | |
-| 1e. 第 1 段的檢查和文件：整個 workspace 的測試、WPT、情境、Speedometer（使用者要求時）、`docs/limitations.md`、`docs/architecture.md`、CI | 沒開始 | |
+| 1c. 接上 machopo：child 的 `main` 一開始進 sandbox；Browser 問 fontconfig 的路徑、啟動時交給 renderer；`--no-sandbox` 和警告；套不上時分頁說明原因；`shell` 的測試從 `/proc` 看真的 renderer | 做完（2026-11-26） | |
+| 1d. trace 和 census 的輸出檔由 Browser 開好、啟動時交給 renderer；工具拿掉暫時的 `--no-sandbox` | 做完（2026-11-26；做法照已決定的事項第 16 條：renderer 自己在鎖之前開，fork 的 trace 多一個入口；**fork 的 commit、新的 release tag 和 machopo 的 pin 還沒做，等使用者**） | |
+| 1e. 第 1 段的檢查和文件：整個 workspace 的測試、WPT、情境、Speedometer（使用者要求時）、`docs/limitations.md`、`docs/architecture.md`、CI | 做完（2026-11-26；Speedometer 沒量：等使用者要求；CI 等 fork 的新 release） | |
 | 2. macOS | 沒開始 | |
 | 3. Windows | 沒開始 | |
 
@@ -62,3 +62,22 @@
 - mutation test（`mutants-1c.toml`）：18 個都抓到，跑完檔案都還原了。
 - 等價、沒有列進去的：`open` 的旗標少擋 `O_TRUNC`、`O_WRONLY` 等：這台的 Landlock（ABI 11）本來就擋，結果一樣；守的是 6.2 之前的 kernel，要那樣的 kernel 才測得到（記進 `docs/test-gaps.md`，1e）。
 - 測試守不住的（1e 記進 `docs/test-gaps.md`）：`start_renderer` 進不了 sandbox 的那條路（要沒有 Landlock 的 kernel；sad tab 的說明只有單元測試）。
+
+### 1d：trace 和 census（2026-11-26）
+
+- rusty_v8 的 fork：`v8::machopo_trace::start_into`（`machopo__Trace__StartInto`：接受已經開好的檔案；Unix），`README.machopo.md` 加一條。**還沒 commit**；改了 C++，prebuilt 的 V8（`machopo-v152.2.0-29`）沒有這個函式：本機用 `python3 scripts/ci.py v8 --profile release` 編的（要先在 fork 裡 `git submodule update --init --recursive` 和 `build/linux/sysroot_scripts/install-sysroot.py --arch=amd64`，`LIBCLANG_PATH=/usr/lib64`；release 13 分半），測試都帶 `RUSTY_V8_ARCHIVE`。
+- machopo：renderer process 先開 census 檔（`base::census::own_file`：之後在同一個檔案上覆寫，不再寫旁邊再改名）和 trace 檔（`<檔名>.<pid>`），再進 sandbox，再開始 trace（`bindings::trace::start_into`、`shell::trace::layer_into`）。
+- policy 多許 `prctl(PR_GET_NAME)`：Perfetto 讀 thread 的名字，沒有就被結束。
+- Perfetto 讀 `/proc/self/stat`、`/proc/self/cmdline`、`/proc/stat`、`/sys/devices/system/cpu/possible` 都被擋（`EACCES`）：trace 照樣寫出來，`shell` 的 trace 測試和量測工具的測試都過，所以照已決定的事項第 10 條不放行。
+- `bench.py speedometer --sample`：V8 的 `--perf-basic-prof` 讓每個 renderer 寫 `/tmp/perf-<pid>.map`，sandbox 裡寫不出來；取樣時工具自己加 `--no-sandbox`（`scripts/bench/common.py` 的 `sampled_switches`；照記憶 Chrome 的 `--perf-prof` 也要 `--no-sandbox`）。其他量測照樣在 sandbox 裡。
+- mutation test（`mutants-1d.toml`）：3 個都抓到，檔案都還原了。`cargo test -p shell --features census --test it census`：過。
+
+### 1e：第 1 段的檢查（2026-11-26，都帶 `RUSTY_V8_ARCHIVE`）
+
+- `cargo test --workspace`：4941 個通過，0 失敗（1 分 56 秒）；整個過程沒有 renderer 被 `SIGSYS` 結束。`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`sanity.py` 七項：過。
+- `test.py scenarios`：98 個都過。`test.py reftest`：過。
+- `test.py wpt dom/nodes html/canvas/element/text workers wasm/jsapi/memory css/css-fonts/parsing`：18460 個檢查，和預期不同的 4 個都是「預期失敗、結果通過」，在 `workers` 的同一份 data URL 的測試（和 sandbox 無關的預期結果過期，沒有動）。
+- 量測工具的測試：`speedometer_test.py`（123 個）、`blink_perf_test.py`、`raster_test.py`、`census_test.py`：過。
+- 文件：`docs/architecture.md`（「Process 的邊界」第 5 條的命令列、crate 表的 `sunaba`、`unsafe` 的位置）、`docs/limitations.md`（「隔離」改成現況）、`docs/test-gaps.md`（三條只靠審查的）、`docs/README.md`、`CLAUDE.md`。
+- 還沒做、等使用者：fork 的 commit 和 push、新的 release tag（`machopo-v152.2.0-30`）、machopo 的 `RUSTY_V8_MIRROR_TAG` 和 `third_party.toml`；之後 CI 才編得過。CI 的 runner 有沒有開 Landlock 到時候看（已決定的事項第 12 條）。
+- 編 V8 時 fork 的 `gen/src_binding_ptrcomp_release_x86_64-unknown-linux-gnu.sum` 變成刪除的狀態（開始前它和 debug 的那一份就有沒 commit 的修改，不是這份改的）。

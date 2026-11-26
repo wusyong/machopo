@@ -562,6 +562,7 @@ impl Drop for RenderThread {
 }
 
 impl RenderThread {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         to_browser: BrowserSender,
         scheduler: Arc<MainThreadScheduler>,
