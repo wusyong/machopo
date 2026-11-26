@@ -64,8 +64,27 @@ fn child() {
         thread::sleep(Duration::from_secs(4));
         std::process::exit(0);
     }
+    // Is there until it is killed (or the limit above).
+    if role == "stay" {
+        thread::sleep(Duration::from_secs(50));
+        std::process::exit(0);
+    }
     if role == "launcher" {
         std::process::exit(launch());
+    }
+    // Asks with its output named otherwise than it was: by a value that
+    // names no handle, or by its input's own (Windows).
+    if role == "output-no-pipe" || role == "one-handle" {
+        let named = io_pipes();
+        let Some((input, _)) = named.as_deref().and_then(|named| named.split_once(',')) else {
+            std::process::exit(SETUP);
+        };
+        let output = if role == "one-handle" { input } else { "1" };
+        let outcome = match platform::inherited_pipe(Some(&format!("{input},{output}"))) {
+            Ok(_) => 0,
+            Err(error) => code(&error),
+        };
+        std::process::exit(outcome);
     }
     let (input, output) = match platform::inherited_pipe(io_pipes().as_deref()) {
         Ok(ends) => ends,
@@ -342,4 +361,62 @@ fn a_child_named_no_pipe_says_why() {
     assert_eq!(with(Some("a,b")), Some(BAD_HANDLES));
     // Values that name no handle of the child's.
     assert_eq!(with(Some("1,2")), Some(INPUT_NOT_A_PIPE));
+}
+
+#[cfg(windows)]
+#[test]
+fn a_channels_child_started_meanwhile_has_no_end_of_a_pipe() {
+    // Children with a channel, which stay, and children with a pipe are
+    // started at once, several from each of a few threads. A handle is
+    // inheritable while its child is started, by any child started then:
+    // one of the channel's that had a pipe's ends would keep that pipe's
+    // reader from its end once the pipe's own child is gone.
+    const THREADS: usize = 4;
+    const EACH: usize = 6;
+    let together = std::sync::Arc::new(std::sync::Barrier::new(2 * THREADS));
+    let (mut with_channel, mut with_pipe) = (Vec::new(), Vec::new());
+    for _ in 0..THREADS {
+        let start = together.clone();
+        with_channel.push(thread::spawn(move || {
+            start.wait();
+            let started = (0..EACH).map(|_| platform::spawn(&mut command("stay")).unwrap());
+            started.collect::<Vec<_>>()
+        }));
+        let start = together.clone();
+        with_pipe.push(thread::spawn(move || {
+            start.wait();
+            let started =
+                (0..EACH).map(|_| platform::spawn_with_pipe(&mut command("echo")).unwrap());
+            started.collect::<Vec<_>>()
+        }));
+    }
+    let staying: Vec<_> = with_channel
+        .into_iter()
+        .flat_map(|t| t.join().unwrap())
+        .collect();
+    for (child, writer, reader) in with_pipe.into_iter().flat_map(|t| t.join().unwrap()) {
+        drop(writer);
+        assert_eq!(exit_code(child), Some(0));
+        assert!(ends_soon(reader));
+    }
+    for (mut child, _channel) in staying {
+        // Still there: what the readers' ends were read beside.
+        assert_eq!(child.try_wait().unwrap(), None);
+        child.kill().unwrap();
+        child.wait().unwrap();
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn a_childs_output_is_looked_at_as_its_input_is() {
+    // The child has a pipe for its input, and asks with another value
+    // for its output.
+    let found = |role| {
+        let (child, _writer, _reader) = platform::spawn_with_pipe(&mut command(role)).unwrap();
+        exit_code(child)
+    };
+    assert_eq!(found("output-no-pipe"), Some(OUTPUT_NOT_A_PIPE));
+    // One handle for both ends would be owned, and closed, twice.
+    assert_eq!(found("one-handle"), Some(BAD_HANDLES));
 }

@@ -11,7 +11,7 @@
 | 2a. `shell` 的開關、拿 pipe、reader 和 writer、renderer 的 stdout；machopodriver、`shell` 的測試和情境；`ipc` 照第 10 條忽略 Unix 上的 handle 開關 | 做完 | 2026-11-26 |
 | 2b. Python 的工具（`MachopoPipe`、`ChromePipe`、`raster.py`）和 bench 工具的四份測試 | 做完 | 2026-11-26 |
 | 2c. 文件和限制 | 做完 | 2026-11-26 |
-| 3. Windows：在使用者的裝置上跑第 1、2 段的測試和 bench | 沒開始 | |
+| 3. Windows：在使用者的裝置上跑第 1、2 段的測試和 bench | 測試、mutation test 和 bench 跑完；`hung_renderers_take_the_limit_once` 不穩定的原因是推測的（pid 重用）、沒有當場證實，測試沒有改；Python 的 `start_with_pipe` 在 Windows 上的 mutant 還沒決定要不要寫（下面的「第 3 段」） | |
 
 ## 驗收
 
@@ -22,7 +22,8 @@
 | 同時啟動的 child 互相拿不到對方的兩端 | `children_started_at_once_each_have_their_own_ends_alone`（八條 thread） |
 | 一個 process 只問一次 | `the_ends_are_taken_once` |
 | shell 交的 pipe、Node 那樣的 socketpair 都收 | `ends_a_shell_puts_at_3_and_4_are_taken`、`a_socket_pair_at_3_and_4_is_taken` |
-| 沒開著、不是 pipe，各自回對的原因；Unix 上給了 handle 的開關照樣讀寫 3、4（第 10 條，2a 改的） | `a_child_started_without_a_pipe_says_what_is_missing`、`handles_named_on_macos_and_linux_are_let_be`；Windows 的是 `a_child_named_no_pipe_says_why`（第 3 段跑） |
+| 沒開著、不是 pipe，各自回對的原因；Unix 上給了 handle 的開關照樣讀寫 3、4（第 10 條，2a 改的） | `a_child_started_without_a_pipe_says_what_is_missing`、`handles_named_on_macos_and_linux_are_let_be`；Windows 的是 `a_child_named_no_pipe_says_why` 和 `a_childs_output_is_looked_at_as_its_input_is`（輸出那一端不是 pipe、兩端是同一個 handle） |
+| Windows：通道的 child 和 pipe 的 child 同時啟動時，通道的 child 拿不到 pipe 的兩端（兩邊共用啟動 child 的那把鎖） | `a_channels_child_started_meanwhile_has_no_end_of_a_pipe`（各 4 條 thread、每條啟動 6 個） |
 | 3、4 是空的 process（新的 pipe 建在 3、4）啟動得了有 pipe 的 child | `a_process_with_3_and_4_free_starts_a_child_with_a_pipe` |
 | `--remote-debugging-pipe`、`--headless`、`--remote-debugging-io-pipes` 的解析；`--automation-pipe`、`--window` 說明換成什麼；`--remote-debugging-pipe=cbor` 報錯 | `shell` 的 `main.rs` 的單元測試 |
 | 沒有 pipe 時說出原因（附上 `3<&0 4>&1`）、結束碼 2 | `crates/shell/tests/it/automation_pipe.rs` 的 `without_its_pipe_machopo_says_so` |
@@ -73,3 +74,23 @@
 - `cargo test --workspace`：4934 個通過、0 個失敗、1 個 ignored（第 1 段時失敗的 9 個 `refused_port` 的測試，在 `main` 修好、rebase 進來之後通過）。
 - `cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`sanity.py` 的 `unsafe`、`tests`、`numerics`、`deps`、`spans`、`boundary`、`docs` 通過。
 - Windows 的程式（`ipc` 的 handle、`start_with_pipe` 的 `msvcrt`）在第 3 段在使用者的裝置上編譯和測試。
+
+### 第 3 段（2026-11-26，Windows 11 10.0.26300，x86-64，`e5bb7ec9`）
+
+- **編譯和測試**：Windows 的那一份第一次編譯，沒有錯誤。`cargo test -p ipc`：unit 102 個、`tests/it` 100 個通過（1 個手動的量測 ignored）。`cargo test -p shell -p driver`：`driver` 14 個、`shell` 的 lib 95 個、`machopo` 的 bin 12 個通過，`shell` 的 `tests/it` 741 個通過、1 個失敗（下面的「不穩定的測試」）。測試把開關放在 `--` 之後、讓測試框架當成多一個測試名稱的做法，在 Windows 上行得通。
+- **clippy 找到的**：`crates/shell/tests/it/renderer_process.rs` 的 `use crate::automation_pipe::start_machopo;` 沒有 `cfg`，用到它的兩個測試都只在 Unix 編譯，Windows 上是 unused import；加上 `#[cfg(unix)]`。之後 `cargo clippy -p ipc -p shell -p driver --all-targets -- -D warnings` 通過。
+- **經過 machopodriver 的 WPT**：`test.py wpt dom/lists/ dom/abort/` 18 個測試、261 個子測試，沒有意外的結果（2 個測試跳過）。
+- **補的測試**（`crates/ipc/tests/it/inherited_pipe.rs`，Windows）：
+  - `a_childs_output_is_looked_at_as_its_input_is`：原本 Windows 上不是 pipe 的值只有 `1,2` 一組，輸入那一端先失敗，輸出那一端的檢查和「兩端是同一個 handle」沒有測試走到。child 多兩個角色（`output-no-pipe`、`one-handle`）：拿到真的開關值之後，把輸出那一端換成 `1` 或輸入的值再問。
+  - `a_channels_child_started_meanwhile_has_no_end_of_a_pipe`：原本沒有測試同時啟動通道的 child 和 pipe 的 child，`spawn_with_pipe` 改用自己的鎖時沒有測試失敗。child 多一個 `stay` 角色（待到被 kill）。第一版每種 child 各 8 條 thread、每條啟動一個，「pipe 用自己的鎖」的 mutant 20 次只抓到 9 次；改成各 4 條 thread、每條連續啟動 6 個之後，12 次都抓到。它靠撞上時序，漏抓時是測試通過，不會誤報失敗。
+- **mutation test**（`mutants-3.toml`，Windows 的那一份）：12 個都抓到：收下的兩端沒設成不可繼承、可以問兩次、什麼都當成 pipe（不看 `GetFileType`）、沒給開關當成格式不對、不是數字當成不是 pipe、不檢查輸出那一端、兩端是同一個 handle 也收、child 的兩端沒設成可繼承、開關裡兩端放反、host 留著 child 的兩端、不拿鎖就設成可繼承（另外單獨跑 6 次都抓到）、pipe 用自己的鎖。補了測試之後 `cargo test -p ipc` 連跑 20 次都通過，`ipc` 的 clippy 和 `cargo fmt --check` 通過。
+- **不穩定的測試**（原因還沒找到）：`automation_pipe::hung_renderers_take_the_limit_once` 在 `cargo test -p shell -p driver` 整套一起跑時失敗一次（只跑了一次），單獨跑 8 次都通過。失敗的是「machopo 結束之後 renderer 都不在了」那一個 assert（`tasklist` 還列得到三個 pid 之中的至少一個），前面的時限有過。這個測試和它的 `alive` 不是這份 RFC 改的，沒有在 `main` 上跑整套對照。
+  - **查到的**：整套 `cargo test -p shell --test it` 再跑 8 輪重現 1 次，那次 `tasklist` 列到的是 `machopo.exe`、85,624 K。之後帶著更多診斷（parent pid、建立時間、CPU 時間）跑了 27 輪都沒有重現，所以沒有當場抓到那個 process 是誰。machopo 這一側 `end_child` 是 `kill()` 之後 `wait()`，回來時 process 已經結束。
+  - **直接量的**（閒置的機器，PowerShell）：kill 並等過的 process（握著它的 handle，pid 不會被重用）400 次都沒有再出現在 process 清單裡；釋放的 pid 在接下來 40 個新 process 裡 200 次都沒有被重用，但連續啟動 process 時 6 次裡有 4 次在 209、430、623、1670 個之後回來（3.5 到 29 秒；另外 2 次 4000 個之內沒有）。pid 和 thread 的 id 用同一張表，整套測試平行跑時每秒啟動的 process 和 thread 比這個實驗多得多。
+  - **推測的原因**（沒有當場證實）：pid 在 machopo 結束到測試問 `tasklist` 之間被別的測試的 `machopo.exe` 重用，`alive` 把它當成原本的 renderer。85 MB 的工作集、只在整套平行跑時出現、kill 過的 process 不再被列到，都和它吻合。
+  - **沒有改**：測試照原樣。修法是不要事後用 pid 問系統（`renderers_go_with_a_killed_browser` 也用 `alive`），這是 machopo 怎麼結束的那些測試的事，不在這份 RFC 裡。
+- **另一個不穩定的測試**（沒有查）：上面重跑的 35 輪裡，`event_loop::an_idle_callbacks_timeout_comes_while_the_page_is_busy` 失敗 1 次（`crates/shell/tests/it/event_loop.rs` 的最後一個 assert，預期 `didTimeout` 是 `true`；當時拿到什麼沒有記下來）。它靠 50 ms 的 timeout 和 20 ms 的忙等，同樣只在整套平行跑時出現，這份 RFC 沒有動到它。
+- **bench 工具的測試**：第一次跑時這台機器沒有 Chrome for Testing，真的驅動 browser 的測試都跳過；Speedometer 下載之後重跑：`blink_perf_test.py` 46 個通過、沒有跳過（`RunTests`、`GcRunTests` 經過 `ChromePipe` 和 `MachopoPipe` 的 handle）；`speedometer_test.py` 142 個、跳過 4 個（`PipeTests` 用 shell script 當 browser 的 2 個、要 Linux perf 的 `ChromeSampleTests`、要 xperf 和 Administrator 的 `SampleTests`）；`raster_test.py` 13 個、跳過 1 個（macOS、Linux 的 trace clock）；`census_test.py` 5 個。
+- **Speedometer**（`bench.py speedometer`，跑一次；machopo 的 `perf` profile 對 Chrome for Testing 152.0.7977.82，renderer 是自己的 process）：20 個 suite 兩邊都量到，machopo / Chrome 在 1.37（TodoMVC-JavaScript-ES5）到 2.11（TodoMVC-Svelte-Complex-DOM）之間，20 個比值的幾何平均約 1.64。
+- **Speedometer 印出的 traceback**：bench 的 HTTP server 印了 11 次 `ConnectionAbortedError: [WinError 10053]`（`scripts/bench/common.py` 的 `do_GET` 寫回應時對面關了連線）。量測沒有因此失敗。各用一個 browser 跑 4 個 suite、3 次 iteration：只跑 machopo 時 0 次，只跑 Chrome 時 1 次；Chrome 在什麼時候關連線沒有查。`common.py` 沒有改。
+- **還沒做的**：Python 的 `start_with_pipe` 的 Windows 分支（`msvcrt`、`handle_list`）沒有 mutant（`mutants-2b.toml` 的測試在 Windows 上跳過，它只由真的 browser 的測試走到）。

@@ -1,0 +1,80 @@
+# Stage 3's mutants: `python scripts/test.py mutate rfcs/0116-automation-pipe-fds/mutants-3.toml`.
+# Windows: the handles' half of `pipe.rs` (macOS's and Linux's is `mutants-1.toml`).
+test = ["cargo", "test", "-q", "-p", "ipc", "--test", "it", "inherited_pipe::"]
+timeout = 300
+
+[[mutant]]
+name = "the ends taken stay inheritable"
+file = "crates/ipc/src/platform/pipe.rs"
+from = '''            if !inherited_by_children(handle.as_handle(), false) {'''
+to = '''            if false && !inherited_by_children(handle.as_handle(), false) {'''
+
+[[mutant]]
+name = "the ends may be taken twice"
+file = "crates/ipc/src/platform/pipe.rs"
+from = '''        // Asked once, whatever comes of it, as on macOS and Linux.
+        if TAKEN.swap(true, Ordering::SeqCst) {'''
+to = '''        // Asked once, whatever comes of it, as on macOS and Linux.
+        if TAKEN.swap(true, Ordering::SeqCst) && false {'''
+
+[[mutant]]
+name = "anything named is a pipe"
+file = "crates/ipc/src/platform/pipe.rs"
+from = '''        if unsafe { GetFileType(handle) } != FILE_TYPE_PIPE {'''
+to = '''        if false && unsafe { GetFileType(handle) } != FILE_TYPE_PIPE {'''
+
+[[mutant]]
+name = "no handles named are bad handles"
+file = "crates/ipc/src/platform/pipe.rs"
+from = '''        let value = io_pipes.ok_or(InheritError::NoHandles)?;'''
+to = '''        let value = io_pipes.ok_or(InheritError::BadHandles)?;'''
+
+[[mutant]]
+name = "what is no number is no pipe"
+file = "crates/ipc/src/platform/pipe.rs"
+from = '''        let value: usize = value.parse().map_err(|_| InheritError::BadHandles)?;'''
+to = '''        let value: usize = value.parse().map_err(|_| InheritError::NotAPipe(end))?;'''
+
+[[mutant]]
+name = "the output isn't looked at"
+file = "crates/ipc/src/platform/pipe.rs"
+from = '''        let output = named(output, PipeEnd::Output)?;'''
+to = '''        let output: HANDLE = std::ptr::with_exposed_provenance_mut(output.parse().map_err(|_| InheritError::BadHandles)?);'''
+
+[[mutant]]
+name = "one handle is taken for both ends"
+file = "crates/ipc/src/platform/pipe.rs"
+from = '''        if input == output {'''
+to = '''        if false && input == output {'''
+
+[[mutant]]
+name = "a child's ends aren't made inheritable"
+file = "crates/ipc/src/platform/pipe.rs"
+from = '''                if !inherited_by_children(handle.as_handle(), true) {'''
+to = '''                if false && !inherited_by_children(handle.as_handle(), true) {'''
+
+[[mutant]]
+name = "the switch names the ends the other way round"
+file = "crates/ipc/src/platform/pipe.rs"
+from = '''        command.arg(format!("{IO_PIPES_SWITCH}={},{}", values[0], values[1]));'''
+to = '''        command.arg(format!("{IO_PIPES_SWITCH}={},{}", values[1], values[0]));'''
+
+[[mutant]]
+name = "the host keeps the child's ends"
+file = "crates/ipc/src/platform/pipe.rs"
+from = '''            drop((their_input, their_output));
+            child?'''
+to = '''            std::mem::forget((their_input, their_output));
+            child?'''
+
+[[mutant]]
+name = "a child's ends are made inheritable without the lock"
+file = "crates/ipc/src/platform/pipe.rs"
+from = '''            let _one_at_a_time = starting_a_child();'''
+to = '''            drop(starting_a_child());'''
+
+[[mutant]]
+name = "a pipe's children are started under a lock of their own"
+file = "crates/ipc/src/platform/pipe.rs"
+from = '''            let _one_at_a_time = starting_a_child();'''
+to = '''            static OWN: std::sync::Mutex<()> = std::sync::Mutex::new(()); let _ = starting_a_child; let _one_at_a_time = OWN.lock();'''

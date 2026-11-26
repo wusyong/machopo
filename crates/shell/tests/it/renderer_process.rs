@@ -7,6 +7,7 @@ use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
 use crate::automation_pipe::start_machopo;
 
 const MACHOPO: &str = env!("CARGO_BIN_EXE_machopo");
