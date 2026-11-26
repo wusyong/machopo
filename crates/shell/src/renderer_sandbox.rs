@@ -3,9 +3,11 @@
 //! it handles a page, and the switches its browser starts it with for
 //! that. The mechanism is `sunaba`'s; this is machopo's list.
 //!
-//! A renderer process finds the system's fonts (the one thing it reads
-//! through the file system that it can't be handed), then enters, then
-//! takes its channel and starts its threads. Linux alone so far: elsewhere
+//! A renderer process enters, then takes its channel and starts its
+//! threads. On Linux it finds the system's fonts first (their list is in
+//! files the sandbox then closes off, and it is entered while the process
+//! is one thread); on macOS entering is the first thing it does, and the
+//! system's font service is among what it can still reach. Elsewhere
 //! [`enter`] does nothing.
 
 use std::ffi::OsString;
@@ -50,7 +52,14 @@ pub fn disabled() -> bool {
 }
 
 /// Whether this build puts a renderer process in a sandbox at all.
-pub const SUPPORTED: bool = cfg!(target_os = "linux");
+pub const SUPPORTED: bool = cfg!(any(target_os = "linux", target_os = "macos"));
+
+/// Whether a renderer is told where the system's font files are
+/// ([`font_directories`]): where the sandbox lets files be read by the
+/// directories a policy names, and the system's fonts are wherever its
+/// configuration says. macOS keeps them in places a profile can name
+/// outright.
+pub const LISTS_FONT_DIRECTORIES: bool = cfg!(target_os = "linux");
 
 /// The directories the system's font files are in, found once for the
 /// browser: finding them opens every font file, which each renderer
@@ -79,7 +88,7 @@ impl ChildSwitches {
         Self {
             no_sandbox,
             test_fonts,
-            font_directories: if SUPPORTED && !no_sandbox && !test_fonts {
+            font_directories: if LISTS_FONT_DIRECTORIES && !no_sandbox && !test_fonts {
                 font_directories().to_vec()
             } else {
                 Vec::new()
@@ -119,22 +128,34 @@ impl ChildSwitches {
     }
 }
 
-/// A renderer process enters its sandbox, unless told not to: first the
-/// system's fonts are found (their list and what the system says of each,
-/// read from files the sandbox then closes off), which the renderer's
-/// main thread is handed in place of finding them itself. Called before
-/// the process has a second thread.
+/// A renderer process enters its sandbox, unless told not to. On Linux
+/// the system's fonts are found first (their list and what the system
+/// says of each, read from files the sandbox then closes off), which the
+/// renderer's main thread is handed in place of finding them itself; on
+/// macOS nothing comes first, and the fonts are found inside. Called
+/// before the process has a second thread.
 ///
 /// An error is why the process isn't in a sandbox, and it is not to go on.
 pub fn enter(switches: &ChildSwitches) -> Result<Option<browser::SystemFonts>, String> {
     if switches.no_sandbox || !SUPPORTED {
         return Ok(None);
     }
-    let fonts = (!switches.test_fonts).then(browser::SystemFonts::find);
-    #[cfg(target_os = "linux")]
-    sunaba::linux::enter(&linux::policy(&switches.font_directories))
-        .map_err(|error| error.to_string())?;
-    Ok(fonts)
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var("HOME").ok();
+        let browser = std::os::unix::process::parent_id();
+        sunaba::macos::enter(&macos::profile(switches, browser, home.as_deref()))
+            .map_err(|error| error.to_string())?;
+        Ok(None)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let fonts = (!switches.test_fonts).then(browser::SystemFonts::find);
+        #[cfg(target_os = "linux")]
+        sunaba::linux::enter(&linux::policy(&switches.font_directories))
+            .map_err(|error| error.to_string())?;
+        Ok(fonts)
+    }
 }
 
 /// The executable as [`PROBE_SWITCH`] has it: `arguments` are a renderer's
@@ -154,12 +175,90 @@ pub fn probe(arguments: impl IntoIterator<Item = OsString>) -> ! {
             Err(error) => eprintln!("machopo: the sandbox wasn't entered: {error}"),
         }
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    match enter(&switches) {
+        Ok(_) if !switches.no_sandbox => sunaba::macos::probe::attempt_and_exit(
+            arguments.map(|argument| argument.to_string_lossy().into_owned()),
+        ),
+        Ok(_) => eprintln!("machopo: {NO_SANDBOX_SWITCH}: there is no sandbox to probe"),
+        Err(error) => eprintln!("machopo: the sandbox wasn't entered: {error}"),
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = (switches, arguments);
         eprintln!("machopo: this build has no renderer sandbox to probe");
     }
     std::process::exit(2);
+}
+
+#[cfg(target_os = "macos")]
+pub mod macos {
+    use sunaba::macos::Profile;
+
+    use super::ChildSwitches;
+
+    /// The renderer's profile (Chromium's `sandbox/policy/mac`:
+    /// `common.sb` and `renderer.sb`, of which this is the part a
+    /// renderer with no Cocoa, no GPU and no preferences needs). Nothing
+    /// is allowed but what is named here: no file is written, no socket
+    /// or process made, no process signalled, and of the system's
+    /// services only the two named are spoken to.
+    const SOURCE: &str = r#"(version 1)
+(deny default)
+; What `(deny default)` leaves allowed.
+(deny iokit-get-properties process-info* nvram*)
+(deny distributed-notification-post)
+
+; Its threads' names, for whoever looks at the process from outside.
+(allow process-info-setcontrol (target self))
+
+; Its end of the channel waits at its browser's rendezvous server.
+(allow mach-lookup
+  (global-name (string-append "org.machopo.MachPortRendezvousServer." (param "BROWSER_PID"))))
+
+; The time zone (ICU reads the link and the zone's file; `/etc` and
+; `/var` are links themselves).
+(allow file-read-metadata (literal "/etc") (literal "/var"))
+(allow file-read*
+  (literal "/private/etc/localtime")
+  (subpath "/private/var/db/timezone"))
+
+; The number of CPUs (V8's and the standard library's thread counts) and
+; what the CPU can do (which instructions the JITs and the standard
+; library pick).
+(allow sysctl-read
+  (sysctl-name "hw.ncpu")
+  (sysctl-name-prefix "hw.optional."))
+
+; The system's fonts: their files, and the font service, which says
+; which font has a character that the page's fonts lack.
+(if (string=? (param "SYSTEM_FONTS") "TRUE")
+  (begin
+    (allow mach-lookup (global-name "com.apple.fonts"))
+    (allow file-read*
+      (subpath "/System/Library/Fonts")
+      (subpath "/Library/Fonts")
+      (subpath "/System/Library/PrivateFrameworks/FontServices.framework")
+      (regex #"^/System/Library/AssetsV2/com_apple_MobileAsset_Font[0-9]+(/|$)"))
+    (if (string? (param "HOME"))
+      (allow file-read* (subpath (string-append (param "HOME") "/Library/Fonts"))))))
+"#;
+
+    /// The profile of a renderer started with `switches` by the process
+    /// `browser`, for a user whose home directory is `home`.
+    pub fn profile(switches: &ChildSwitches, browser: u32, home: Option<&str>) -> Profile {
+        let mut profile = Profile::new(SOURCE);
+        profile
+            .parameter("BROWSER_PID", browser.to_string())
+            .parameter(
+                "SYSTEM_FONTS",
+                if switches.test_fonts { "FALSE" } else { "TRUE" },
+            );
+        if let Some(home) = home {
+            profile.parameter("HOME", home);
+        }
+        profile
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -443,7 +542,11 @@ mod tests {
         );
         let system = ChildSwitches::for_renderer(false);
         assert!(!system.test_fonts);
-        let expected = if SUPPORTED { font_directories() } else { &[] };
+        let expected = if LISTS_FONT_DIRECTORIES {
+            font_directories()
+        } else {
+            &[]
+        };
         assert_eq!(system.font_directories, expected);
     }
 
@@ -453,5 +556,32 @@ mod tests {
         assert!(!parsed(&["--something-else"]).no_sandbox);
         // A directory switch with nothing after it names none.
         assert!(parsed(&["--font-directory"]).font_directories.is_empty());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_renderers_profile_is_told_its_browser_its_home_and_whether_it_reads_fonts() {
+        let parameters = |switches: &[&str], home| {
+            let profile = macos::profile(&parsed(switches), 42, home);
+            assert!(
+                profile
+                    .source()
+                    .starts_with("(version 1)\n(deny default)\n")
+            );
+            profile.parameters().to_vec()
+        };
+        let pair = |name: &str, value: &str| (name.to_owned(), value.to_owned());
+        assert_eq!(
+            parameters(&[], Some("/Users/someone")),
+            [
+                pair("BROWSER_PID", "42"),
+                pair("SYSTEM_FONTS", "TRUE"),
+                pair("HOME", "/Users/someone")
+            ]
+        );
+        assert_eq!(
+            parameters(&["--test-fonts"], None),
+            [pair("BROWSER_PID", "42"), pair("SYSTEM_FONTS", "FALSE")]
+        );
     }
 }

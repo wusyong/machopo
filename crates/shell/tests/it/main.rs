@@ -48,6 +48,8 @@ mod remote_debugging;
 mod renderer_process;
 #[cfg(target_os = "linux")]
 mod renderer_sandbox;
+#[cfg(target_os = "macos")]
+mod renderer_sandbox_macos;
 mod resize_observers;
 mod scheduling;
 mod script;

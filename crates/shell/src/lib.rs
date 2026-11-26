@@ -114,7 +114,7 @@ pub fn renderer_launcher(process_per_tab: bool, test_fonts: bool) -> browser::Re
     }
     // The fonts' directories are found off the thread that starts the
     // first renderer, which then waits only for what is left of it.
-    if renderer_sandbox::SUPPORTED && !renderer_sandbox::disabled() && !test_fonts {
+    if renderer_sandbox::LISTS_FONT_DIRECTORIES && !renderer_sandbox::disabled() && !test_fonts {
         let _ = std::thread::Builder::new()
             .name("FontDirectories".into())
             .spawn(|| {

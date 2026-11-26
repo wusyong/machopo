@@ -107,9 +107,9 @@ Options:
                       system's sandbox, as Chromium's switch: a page that
                       takes over its renderer then has what machopo has.
                       For finding out whether the sandbox is what breaks
-                      something. (The sandbox is Linux's so far: Landlock
-                      and seccomp, which a renderer process doesn't start
-                      without.)
+                      something. (The sandbox is Linux's, Landlock and
+                      seccomp, and macOS's, a Seatbelt profile; a
+                      renderer process doesn't start without it.)
   --num-raster-threads N
                       Threads each page's tiles are rastered on at once, as
                       Chromium's switch (default 1: on the compositor's

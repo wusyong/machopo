@@ -78,12 +78,18 @@ net.workspace = true
 sunaba.workspace = true
 libc.workspace = true
 
+# The renderer process's sandbox: its profile is text, and the tests name
+# the error a refusal is.
 [target.'cfg(target_os = "macos")'.dependencies]
+sunaba.workspace = true
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSEvent"] }
 
 # The system colors (`system_colors`): the registry, through a safe API.
 [target.'cfg(windows)'.dependencies]
 windows-registry = "0.6"
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+libc.workspace = true
 
 [dev-dependencies]
 base.workspace = true
