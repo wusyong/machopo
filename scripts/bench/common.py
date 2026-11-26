@@ -15,7 +15,6 @@ import base64
 import collections
 import contextlib
 import ctypes
-import functools
 import json
 import math
 import os
@@ -591,12 +590,20 @@ def has_stdio_pipe(binary: Path) -> bool:
     return "--automation-pipe" in shown.stdout
 
 
-@functools.lru_cache(maxsize=None)
+# The `--against` versions that refuse `--no-sandbox`: machopo before its
+# renderers had a sandbox.
+WITHOUT_NO_SANDBOX: set[Path] = set()
+
+
 def takes_no_sandbox(binary: Path) -> bool:
-    """Whether `binary` knows `--no-sandbox` (its `--help` says): one built
-    before machopo's renderers had a sandbox refuses the switch."""
-    said = subprocess.run([str(binary), "--help"], capture_output=True, text=True, errors="replace")
-    return "--no-sandbox" in said.stdout
+    """Whether `binary` knows `--no-sandbox` (its `--help` says). Asked of
+    the binary, as `has_stdio_pipe`."""
+    try:
+        shown = subprocess.run([str(binary), "--help"], capture_output=True, text=True, errors="replace")
+    except OSError:
+        # One that doesn't run takes nothing.
+        return False
+    return "--no-sandbox" in shown.stdout
 
 
 def sampled_switches(binary: Path) -> list[str]:
@@ -605,7 +612,9 @@ def sampled_switches(binary: Path) -> list[str]:
     files of its own choosing (`/tmp/perf-<pid>.map`, V8's log), which a
     renderer in its sandbox can't make. As Chrome, whose `--perf-prof`
     takes `--no-sandbox`."""
-    return ["--no-sandbox"] if takes_no_sandbox(binary) else []
+    # One driven through its standard input and output is older than the
+    # sandbox too.
+    return [] if binary in WITHOUT_NO_SANDBOX or binary in WITH_STDIO_PIPE else ["--no-sandbox"]
 
 
 class MachopoPipe(CdpPipe):
@@ -796,6 +805,8 @@ def against_binaries(rev: str) -> dict[str, Path]:
         WITHOUT_SINGLE_PROCESS.add(binaries["against"])
     if has_stdio_pipe(binaries["against"]):
         WITH_STDIO_PIPE.add(binaries["against"])
+    if not takes_no_sandbox(binaries["against"]):
+        WITHOUT_NO_SANDBOX.add(binaries["against"])
     return binaries
 
 

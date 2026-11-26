@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Runs machopo --automation-pipe under strace, loads a page in its renderer
+"""Runs machopo --remote-debugging-pipe --headless under strace, loads a page in its renderer
 process, and says what the renderer process asked of the kernel.
 
     probe.py OUT_DIR [machopo's extra arguments...]
@@ -43,17 +43,27 @@ def main():
     extra = sys.argv[2:]
     os.makedirs(out, exist_ok=True)
     trace = os.path.join(out, "trace.txt")
+    # The pipe is file descriptors 3 (what machopo reads) and 4 (what it
+    # writes), as Chrome's: `sh` moves the ends there, and strace hands
+    # them on.
+    to_child, to_browser = os.pipe()
+    from_browser, from_child = os.pipe()
     child = subprocess.Popen(
-        ["strace", "-f", "-qq", "-s", "200", "-o", trace, MACHOPO, "--automation-pipe", *extra],
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        ["sh", "-c", f'exec "$0" "$@" 3<&{to_child} 4>&{from_child}',
+         "strace", "-f", "-qq", "-s", "200", "-o", trace, MACHOPO,
+         "--remote-debugging-pipe", "--headless", *extra],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, pass_fds=(to_child, from_child),
         stderr=open(os.path.join(out, "machopo.log"), "wb"))
+    os.close(to_child)
+    os.close(from_child)
+    to_browser = os.fdopen(to_browser, "wb")
     buffered = b""
     ids = iter(range(1, 1000))
 
     def read():
         nonlocal buffered
         while b"\0" not in buffered:
-            chunk = os.read(child.stdout.fileno(), 65536)
+            chunk = os.read(from_browser, 65536)
             if not chunk:
                 raise SystemExit("machopo ended early")
             buffered += chunk
@@ -65,8 +75,8 @@ def main():
         command = {"id": number, "method": method, "params": params or {}}
         if session:
             command["sessionId"] = session
-        child.stdin.write(json.dumps(command).encode() + b"\0")
-        child.stdin.flush()
+        to_browser.write(json.dumps(command).encode() + b"\0")
+        to_browser.flush()
         while True:
             message = read()
             if message.get("id") == number:
@@ -92,7 +102,7 @@ def main():
         call("Browser.close")
     except SystemExit:
         pass
-    child.stdin.close()
+    to_browser.close()
     child.wait(timeout=60)
     report(trace, out)
 
