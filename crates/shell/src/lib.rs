@@ -27,6 +27,7 @@ pub mod keyboard;
 pub mod mouse;
 pub mod omnibox;
 pub mod popup_menu;
+pub mod renderer_sandbox;
 pub mod sad_tab;
 pub mod scenario;
 pub mod shutdown_signals;
@@ -58,11 +59,36 @@ pub const RENDERER_PROCESS_SWITCH: &str = "--type=renderer";
 /// channel to a browser (it was started by hand).
 pub const NO_CHANNEL_EXIT: u8 = 2;
 
+/// A renderer process as it has started, before it is anything else: in
+/// its sandbox, with what it had to find before entering.
+pub struct RendererStart {
+    system_fonts: Option<browser::SystemFonts>,
+}
+
+/// The first thing a renderer process does, before it has a second thread
+/// (a log, a trace): it enters its sandbox, as its arguments after
+/// [`RENDERER_PROCESS_SWITCH`] say. An error is what the process exits
+/// with, the reason said on standard error.
+pub fn start_renderer() -> Result<RendererStart, u8> {
+    let switches = renderer_sandbox::ChildSwitches::parse(std::env::args_os().skip(2));
+    match renderer_sandbox::enter(&switches) {
+        Ok(system_fonts) => Ok(RendererStart { system_fonts }),
+        Err(error) => {
+            eprintln!(
+                "machopo: the renderer process isn't started: it couldn't enter its sandbox: \
+                 {error}. ({} runs it without one.)",
+                renderer_sandbox::NO_SANDBOX_SWITCH
+            );
+            Err(renderer_sandbox::NO_SANDBOX_EXIT)
+        }
+    }
+}
+
 /// Is a renderer process until it ends (Chromium's `RendererMain`): the
 /// end of the channel its browser started it with, and the renderer run
 /// on it with this executable's script engines. What the process exits
 /// with.
-pub fn renderer_main() -> u8 {
+pub fn renderer_main(start: RendererStart) -> u8 {
     let Some(channel) = ipc::platform::inherited() else {
         eprintln!(
             "machopo: {RENDERER_PROCESS_SWITCH} is how machopo starts its own renderers: \
@@ -70,7 +96,7 @@ pub fn renderer_main() -> u8 {
         );
         return NO_CHANNEL_EXIT;
     };
-    match browser::run_child_process(channel, SCRIPT_ENGINES) {
+    match browser::run_child_process(channel, SCRIPT_ENGINES, start.system_fonts) {
         browser::ChildExit::Ended => 0,
         browser::ChildExit::NotStarted => 3,
         browser::ChildExit::Crashed => 4,
@@ -79,18 +105,30 @@ pub fn renderer_main() -> u8 {
 
 /// How the tabs' renderers are run: each in a process of its own when
 /// `process_per_tab` (this executable again, as a renderer:
-/// [`RENDERER_PROCESS_SWITCH`]), or as threads of this process.
-pub fn renderer_launcher(process_per_tab: bool) -> browser::RendererLauncher {
+/// [`RENDERER_PROCESS_SWITCH`], and what it is to know before it enters
+/// its sandbox), or as threads of this process. `test_fonts` as the
+/// renderers' flags have it.
+pub fn renderer_launcher(process_per_tab: bool, test_fonts: bool) -> browser::RendererLauncher {
     if !process_per_tab {
         return browser::RendererLauncher::InProcess(SCRIPT_ENGINES);
     }
-    browser::RendererLauncher::Process(std::sync::Arc::new(|| {
+    // The fonts' directories are found off the thread that starts the
+    // first renderer, which then waits only for what is left of it.
+    if renderer_sandbox::SUPPORTED && !renderer_sandbox::disabled() && !test_fonts {
+        let _ = std::thread::Builder::new()
+            .name("FontDirectories".into())
+            .spawn(|| {
+                renderer_sandbox::font_directories();
+            });
+    }
+    browser::RendererLauncher::Process(std::sync::Arc::new(move || {
         // The executable as it was started: one replaced on disk since is
         // another build, which may speak otherwise. A path that can't be
         // had starts nothing, and the tab says its renderer didn't start.
         let executable = std::env::current_exe().unwrap_or_default();
         let mut command = std::process::Command::new(executable);
         command.arg(RENDERER_PROCESS_SWITCH);
+        renderer_sandbox::ChildSwitches::for_renderer(test_fonts).append_to(&mut command);
         // Its input is nothing, as a Chromium child's (`LaunchProcess`); its
         // output and errors are the browser's, as a Chromium child's are.
         // The pipe isn't among them: the browser took its ends

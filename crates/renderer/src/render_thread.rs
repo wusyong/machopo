@@ -225,11 +225,16 @@ impl MainThreadTerminator {
 /// as `RenderThreadImpl::InitializeCompositorThread` does) and the main
 /// thread (`CrRendererMain`), which owns the other and stops it when it
 /// exits. The handle is the main thread's.
+///
+/// `system_fonts`: the system's fonts where they were found already (a
+/// process that finds them before it loses the file system); otherwise
+/// the main thread finds them itself.
 pub fn spawn_renderer_main_thread(
     endpoints: RendererEndpoints,
     flags: RendererFlags,
     script_engine: ScriptEngineFactory,
     terminator: Option<MainThreadTerminator>,
+    system_fonts: Option<layout::SystemFonts>,
 ) -> std::io::Result<JoinHandle<()>> {
     let RendererEndpoints {
         from_browser,
@@ -312,6 +317,7 @@ pub fn spawn_renderer_main_thread(
                 flags,
                 script_engine,
                 terminator,
+                system_fonts,
             );
             thread.run();
             // Nothing is posted to the main thread from now on.
@@ -564,6 +570,7 @@ impl RenderThread {
         flags: RendererFlags,
         script_engine: ScriptEngineFactory,
         terminator: Option<MainThreadTerminator>,
+        system_fonts: Option<layout::SystemFonts>,
     ) -> Self {
         let _span = trace_event::info_event!("RenderThread::new");
         let id_prefix = webdriver::new_id_prefix();
@@ -592,7 +599,10 @@ impl RenderThread {
         tracing::info!(raster = raster::BACKEND, "renderer main thread up");
         let _ = to_browser.send(RendererHostMsg::RendererReady);
         Self {
-            text: TextContext::new(flags.test_fonts),
+            text: match system_fonts {
+                Some(fonts) if !flags.test_fonts => TextContext::with_system_fonts(fonts),
+                _ => TextContext::new(flags.test_fonts),
+            },
             canvas_encoder: CanvasEncoder::new(scheduler.clone()),
             workers: Rc::new(crate::worker_thread::Workers::new(
                 script_engine.worker_engine,

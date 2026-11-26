@@ -120,9 +120,15 @@ fn crash() -> ! {
 /// Runs a renderer in this process until it ends: `channel` is the
 /// process's end of the channel to its browser
 /// (`ipc::platform::inherited`), and `script_engine` the engines whoever
-/// built the process picked. Returns on the thread it was called on, once
-/// the renderer's main thread and the IO thread are over.
-pub fn run_child_process(channel: Channel, script_engine: ScriptEngineFactory) -> ChildExit {
+/// built the process picked; `system_fonts` the system's fonts if the
+/// process found them before this (as one in a sandbox has to). Returns on
+/// the thread it was called on, once the renderer's main thread and the
+/// IO thread are over.
+pub fn run_child_process(
+    channel: Channel,
+    script_engine: ScriptEngineFactory,
+    system_fonts: Option<layout::SystemFonts>,
+) -> ChildExit {
     let (link, endpoint) = endpoint::endpoint(channel, control_channel::config(false));
     let Some((io, io_handle)) = IoLoop::new() else {
         return ChildExit::NotStarted;
@@ -158,7 +164,7 @@ pub fn run_child_process(channel: Channel, script_engine: ScriptEngineFactory) -
             };
             // A process of its own is killed if it doesn't end: nothing
             // stops its script from another thread.
-            match spawn_renderer_main_thread(endpoints, flags, script_engine, None) {
+            match spawn_renderer_main_thread(endpoints, flags, script_engine, None, system_fonts) {
                 Ok(main) => {
                     tracing::info!("the renderer's threads are started");
                     match main.join() {

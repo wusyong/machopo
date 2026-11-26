@@ -133,11 +133,11 @@ pub use svg::{SvgNaturalSize, svg_image_fragment, svg_natural_size};
 pub use svg_geometry::{svg_geometry, svg_node, svg_shape_path, svg_text_chars};
 pub use svg_gradient::{Spread, SvgGradient, SvgGradientKind, SvgPaintServer};
 pub use svg_text::{SvgText, SvgTextCell, SvgTextRun};
-pub use text::TextContext;
 use text::{
     AtomicInlines, AtomicLayout, Edge, FloatBand, FloatBands, InlineContent, InlineItem, PassedUp,
     relative_offset,
 };
+pub use text::{SystemFonts, TextContext};
 pub use tree_builder::svg_element;
 
 /// How far a content box's width worked out from its border box may be

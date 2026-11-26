@@ -14,6 +14,40 @@ const TITLE: &str = "This page crashed";
 const MESSAGE: &str = "Something went wrong while showing this page.";
 const RELOAD: &str = "Reload";
 
+/// Why a renderer has gone, as far as the sad tab tells them apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reason {
+    Crashed,
+    /// Its process couldn't enter the operating system's sandbox and
+    /// didn't start: another renderer wouldn't either.
+    NoSandbox,
+}
+
+impl Reason {
+    /// From what the renderer's process exited with, if it has.
+    pub fn of_exit(code: Option<i32>) -> Self {
+        if code == Some(i32::from(crate::renderer_sandbox::NO_SANDBOX_EXIT)) {
+            Self::NoSandbox
+        } else {
+            Self::Crashed
+        }
+    }
+
+    fn title(self) -> &'static str {
+        match self {
+            Self::Crashed => TITLE,
+            Self::NoSandbox => "This page can't be shown",
+        }
+    }
+
+    fn message(self) -> &'static str {
+        match self {
+            Self::Crashed => MESSAGE,
+            Self::NoSandbox => "Its renderer couldn't enter the system's sandbox: see the log.",
+        }
+    }
+}
+
 /// Where the content starts: a column at most this wide, centered, a
 /// quarter of the way down.
 const COLUMN: f32 = 400.0;
@@ -82,8 +116,14 @@ impl SadTab {
         std::mem::take(&mut self.pressed) && Self::reload_rect(size).contains(point)
     }
 
-    /// The sad tab for a web view `size` CSS px.
-    pub fn paint(&mut self, text: &mut TextContexts, size: SizeF) -> DisplayItemList {
+    /// The sad tab for a web view `size` CSS px whose renderer has gone
+    /// for `reason`.
+    pub fn paint(
+        &mut self,
+        text: &mut TextContexts,
+        size: SizeF,
+        reason: Reason,
+    ) -> DisplayItemList {
         let mut list = DisplayItemList::new();
         list.push_op(PaintOp::DrawRect {
             rect: RectF::from_size(size),
@@ -101,7 +141,7 @@ impl SadTab {
         label(
             text,
             &mut list,
-            TITLE,
+            reason.title(),
             TITLE_SIZE,
             PointF::new(x, Self::title_top(size)),
             TEXT,
@@ -109,7 +149,7 @@ impl SadTab {
         label(
             text,
             &mut list,
-            MESSAGE,
+            reason.message(),
             MESSAGE_SIZE,
             PointF::new(x, Self::message_top(size)),
             SECONDARY,
@@ -199,6 +239,23 @@ mod tests {
     }
 
     #[test]
+    fn a_renderer_that_couldnt_enter_its_sandbox_is_told_apart_from_a_crash() {
+        let no_sandbox = i32::from(crate::renderer_sandbox::NO_SANDBOX_EXIT);
+        assert_eq!(Reason::of_exit(Some(no_sandbox)), Reason::NoSandbox);
+        // Still running, killed by a signal, or exited otherwise.
+        assert_eq!(Reason::of_exit(None), Reason::Crashed);
+        assert_eq!(Reason::of_exit(Some(4)), Reason::Crashed);
+        assert_ne!(Reason::NoSandbox.title(), Reason::Crashed.title());
+        assert!(Reason::NoSandbox.message().contains("sandbox"));
+        // Each paints its own words: other glyphs.
+        let glyphs = |reason| {
+            let list = SadTab::new().paint(&mut TextContexts::new(true), SIZE, reason);
+            format!("{:?}", list.ops())
+        };
+        assert_ne!(glyphs(Reason::NoSandbox), glyphs(Reason::Crashed));
+    }
+
+    #[test]
     fn the_button_reloads_on_down_and_up_on_it() {
         let mut sad = SadTab::new();
         let button = center(SadTab::reload_rect(SIZE));
@@ -215,7 +272,7 @@ mod tests {
     #[test]
     fn it_paints_the_page_the_face_the_words_and_the_button() {
         let mut sad = SadTab::new();
-        let list = sad.paint(&mut TextContexts::new(true), SIZE);
+        let list = sad.paint(&mut TextContexts::new(true), SIZE, Reason::Crashed);
         let ops = list.ops();
         assert!(matches!(
             ops.first(),

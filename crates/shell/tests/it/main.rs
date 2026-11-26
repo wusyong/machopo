@@ -46,6 +46,8 @@ mod network;
 mod performance;
 mod remote_debugging;
 mod renderer_process;
+#[cfg(target_os = "linux")]
+mod renderer_sandbox;
 mod resize_observers;
 mod scheduling;
 mod script;

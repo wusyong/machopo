@@ -55,13 +55,13 @@ const DEFAULT_LOG_FILTER: &str = "info,wgpu_core=warn,wgpu_hal=warn,naga=warn";
 const USAGE: &str = "\
 usage: machopo [--ui-layout LAYOUT] [--ui-theme THEME] [--scale F] [--test-fonts]
            [--num-raster-threads N] [--user-data-dir DIR]
-           [--single-process | --process-per-tab]
+           [--single-process | --process-per-tab] [--no-sandbox]
            [--remote-debugging-port PORT [--remote-allow-origins ORIGINS]]
            [URL|PATH]
        machopo --remote-debugging-pipe [--headless] [--scale F]
            [--host-resolver-rules RULES] [--additional-trust-anchors PEM] [--test-fonts]
            [--num-raster-threads N] [--user-data-dir DIR]
-           [--single-process | --process-per-tab]
+           [--single-process | --process-per-tab] [--no-sandbox]
            [--remote-debugging-port PORT [--remote-allow-origins ORIGINS]]
 
 Options that take a value take it as --name VALUE or --name=VALUE.";
@@ -101,7 +101,15 @@ Options:
                       started again with --type=renderer), which a page
                       that crashes takes down alone. The default.
   --single-process    Every tab's renderer is threads of machopo's own
-                      process, as Chromium's switch.
+                      process, as Chromium's switch. They are then outside
+                      the operating system's sandbox.
+  --no-sandbox        A renderer process isn't put in the operating
+                      system's sandbox, as Chromium's switch: a page that
+                      takes over its renderer then has what machopo has.
+                      For finding out whether the sandbox is what breaks
+                      something. (The sandbox is Linux's so far: Landlock
+                      and seccomp, which a renderer process doesn't start
+                      without.)
   --num-raster-threads N
                       Threads each page's tiles are rastered on at once, as
                       Chromium's switch (default 1: on the compositor's
@@ -233,6 +241,8 @@ struct Args {
     /// Not `--single-process`: each tab's renderer is a process of its
     /// own.
     process_per_tab: bool,
+    /// `--no-sandbox`: the renderer processes aren't put in a sandbox.
+    no_sandbox: bool,
     /// `--remote-debugging-port` and `--remote-allow-origins`.
     remote_debugging: Option<devtools_http_handler::Options>,
     /// `--user-data-dir`.
@@ -282,6 +292,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
     let mut num_raster_threads = None;
     let mut single_process = false;
     let mut process_per_tab = false;
+    let mut no_sandbox = false;
     let mut remote_debugging_port = None;
     let mut remote_allow_origins = None;
     let mut user_data_dir = None;
@@ -337,6 +348,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
             }
             "--single-process" => single_process = true,
             "--process-per-tab" => process_per_tab = true,
+            "--no-sandbox" => no_sandbox = true,
             "--remote-debugging-pipe" => pipe = true,
             "--headless" => headless = true,
             "--remote-debugging-io-pipes" => io_pipes = Some(value("--remote-debugging-io-pipes")?),
@@ -446,6 +458,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
         test_fonts,
         num_raster_threads,
         process_per_tab,
+        no_sandbox,
         remote_debugging,
         user_data_dir,
         pipe: pipe.then_some(PipeArgs {
@@ -543,12 +556,43 @@ where
     }
 }
 
+/// What to say of renderers that run outside the operating system's
+/// sandbox, where this build has one: a page that takes over its renderer
+/// then has everything machopo has.
+fn sandbox_warning(no_sandbox: bool, process_per_tab: bool) -> Option<&'static str> {
+    if !shell::renderer_sandbox::SUPPORTED {
+        return None;
+    }
+    if !process_per_tab {
+        Some(
+            "--single-process: the renderers are threads of this process, outside the \
+             operating system's sandbox. Only for pages you trust.",
+        )
+    } else if no_sandbox {
+        Some(
+            "--no-sandbox: the renderer processes run outside the operating system's \
+             sandbox. Only for pages you trust.",
+        )
+    } else {
+        None
+    }
+}
+
 fn main() -> ExitCode {
     // A renderer process: nothing of the browser's is read or started.
     // Its trace is a file of its own, the browser's with this process's
     // id after it: a trace is one process's, and two writing one file
     // would spoil it. The two are on one clock, the machine's.
+    if std::env::args().nth(1).as_deref() == Some(shell::renderer_sandbox::PROBE_SWITCH) {
+        shell::renderer_sandbox::probe(std::env::args_os().skip(2));
+    }
     if std::env::args().nth(1).as_deref() == Some(shell::RENDERER_PROCESS_SWITCH) {
+        // Into its sandbox before anything else: before the log and the
+        // trace, which may start threads.
+        let start = match shell::start_renderer() {
+            Ok(start) => start,
+            Err(code) => return ExitCode::from(code),
+        };
         // Its census too is a file of its own, as its trace is.
         base::census::own_file();
         let filter = tracing_subscriber::EnvFilter::try_from_default_env()
@@ -572,7 +616,7 @@ fn main() -> ExitCode {
         // log takes, not every one the trace's layer would let through
         // (html5ever's for each token, made only to be dropped).
         tracing_log::log::set_max_level(log_records);
-        end(shell::renderer_main(), trace_end);
+        end(shell::renderer_main(start), trace_end);
     }
     let args = match parse_args(std::env::args().skip(1)) {
         Ok(Command::Run(args)) => *args,
@@ -595,6 +639,13 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+
+    if let Some(warning) = sandbox_warning(args.no_sandbox, args.process_per_tab) {
+        eprintln!("machopo: {warning}");
+    }
+    if args.no_sandbox {
+        shell::renderer_sandbox::disable();
+    }
 
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| DEFAULT_LOG_FILTER.into());
@@ -731,6 +782,33 @@ mod tests {
     /// Rust's allocations in machopo are mimalloc's (`GLOBAL`): a big one
     /// shows in mimalloc's own statistics, which the platform's
     /// allocator's wouldn't move.
+    #[test]
+    fn no_sandbox_is_a_switch_and_renderers_outside_one_are_warned_of() {
+        assert!(!run(&["about:blank"]).no_sandbox);
+        assert!(run(&["--no-sandbox"]).no_sandbox);
+        assert!(run(&["--remote-debugging-pipe", "--headless", "--no-sandbox"]).no_sandbox);
+        if !shell::renderer_sandbox::SUPPORTED {
+            assert_eq!(sandbox_warning(true, true), None);
+            return;
+        }
+        assert_eq!(sandbox_warning(false, true), None);
+        assert!(
+            sandbox_warning(true, true)
+                .unwrap()
+                .starts_with("--no-sandbox")
+        );
+        assert!(
+            sandbox_warning(false, false)
+                .unwrap()
+                .starts_with("--single-process")
+        );
+        assert!(
+            sandbox_warning(true, false)
+                .unwrap()
+                .starts_with("--single-process")
+        );
+    }
+
     #[test]
     fn renderers_are_processes_unless_told_otherwise() {
         let run = |args: &[&str]| match parse(args) {

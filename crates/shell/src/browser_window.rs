@@ -80,7 +80,7 @@ impl BrowserWindow {
         let partition = StoragePartition::new(&options.profile, network)
             .map_err(|e| format!("start the storage and the network service: {e}"))?;
         let mut tabs = WindowTabs {
-            launcher: crate::renderer_launcher(options.process_per_tab),
+            launcher: crate::renderer_launcher(options.process_per_tab, options.test_fonts),
             flags: RendererFlags {
                 test_fonts: options.test_fonts,
                 web_tests: false,
@@ -230,7 +230,7 @@ mod tests {
     fn window_tabs_tell_viz_of_their_frame_sinks() {
         let (viz, viz_rx) = crossbeam_channel::unbounded();
         let mut tabs = WindowTabs {
-            launcher: crate::renderer_launcher(false),
+            launcher: crate::renderer_launcher(false, true),
             flags: RendererFlags {
                 test_fonts: true,
                 web_tests: false,

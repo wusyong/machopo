@@ -1,0 +1,118 @@
+# Step 1c's mutants (the renderer's policy and entering, in shell; what sunaba gained for it): `python3 scripts/test.py mutate rfcs/0117-renderer-sandbox/mutants-1c.toml`.
+test = ["sh", "-c", "cargo test -q -p sunaba && cargo test -q -p shell --lib renderer_sandbox && cargo test -q -p shell --test it renderer_sandbox"]
+timeout = 240
+
+[[mutant]]
+name = "a renderer told nothing isn't sandboxed, and one told --no-sandbox is"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = "    if switches.no_sandbox || !SUPPORTED {"
+to = "    if !switches.no_sandbox || !SUPPORTED {"
+
+[[mutant]]
+name = "the fonts aren't found before entering"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = "    let fonts = (!switches.test_fonts).then(browser::SystemFonts::find);"
+to = "    let fonts = (!switches.test_fonts && false).then(browser::SystemFonts::find);"
+
+[[mutant]]
+name = "the fonts found before entering aren't the renderer's"
+file = "crates/renderer/src/render_thread.rs"
+from = "                Some(fonts) if !flags.test_fonts => TextContext::with_system_fonts(fonts),"
+to = "                Some(_) if false => unreachable!(),"
+
+[[mutant]]
+name = "the font directories aren't readable"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = "            policy.read_only(directory);"
+to = "            let _ = directory;"
+
+[[mutant]]
+name = "all of /etc is readable"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''            .read_only("/etc/localtime")'''
+to = '''            .read_only("/etc")'''
+
+[[mutant]]
+name = "no thread can be made"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = "        policy.allow_threads();"
+to = ""
+
+[[mutant]]
+name = "tgkill reaches any process"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = "            .allow_when(libc::SYS_tgkill, &[Arg::int(0, Test::Equals(this))])"
+to = "            .allow(&[libc::SYS_tgkill])"
+
+[[mutant]]
+name = "kill reaches any process"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = "            .allow_when(libc::SYS_kill, &[Arg::int(0, Test::Equals(this))]);"
+to = "            .allow(&[libc::SYS_kill]);"
+
+[[mutant]]
+name = "a process can be made dumpable again"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = "                Arg::long(1, Test::Equals(0)),"
+to = ""
+
+[[mutant]]
+name = "any ioctl"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = "            policy.allow_when(libc::SYS_ioctl, &[Arg::int(1, Test::Equals(request))]);"
+to = "            policy.allow(&[libc::SYS_ioctl, i64::try_from(request).unwrap_or(0) * 0 + libc::SYS_ioctl]);"
+
+[[mutant]]
+name = "any madvise"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = "            policy.allow_when(libc::SYS_madvise, &[Arg::int(2, Test::Equals(int(advice)))]);"
+to = "            policy.allow(&[libc::SYS_madvise, i64::from(advice) * 0 + libc::SYS_madvise]);"
+
+[[mutant]]
+name = "another process's limits are read"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = "            &[Arg::int(0, Test::Equals(0)), Arg::long(2, Test::Equals(0))],"
+to = "            &[Arg::long(2, Test::Equals(0))],"
+
+[[mutant]]
+name = "its limits can be set"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = "            &[Arg::int(0, Test::Equals(0)), Arg::long(2, Test::Equals(0))],"
+to = "            &[Arg::int(0, Test::Equals(0))],"
+
+[[mutant]]
+name = "chmod is allowed"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''            libc::SYS_creat,
+        ] {
+            policy.fail(call, libc::EACCES);
+        }'''
+to = '''            libc::SYS_creat,
+        ] {
+            policy.fail(call, libc::EACCES);
+        }
+        policy.allow(&[libc::SYS_chmod, libc::SYS_fchmodat]);'''
+
+[[mutant]]
+name = "openat2 is trapped, not failed"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = "        policy.fail(libc::SYS_openat2, libc::ENOSYS);"
+to = ""
+
+[[mutant]]
+name = "a call failed for some arguments is trapped for them where it isn't named"
+file = "crates/sunaba/src/linux.rs"
+from = "            if !whatever {"
+to = "            if !whatever && false {"
+
+[[mutant]]
+name = "a call that always fails fails only for the arguments said later"
+file = "crates/sunaba/src/linux.rs"
+from = "            if always.contains(&(*errno, *number)) {"
+to = "            if always.contains(&(*errno, *number)) && false {"
+
+[[mutant]]
+name = "a call failed for some arguments fails for none"
+file = "crates/sunaba/src/linux.rs"
+from = "        for (number, args, errno) in &self.failing_when {"
+to = "        for (number, args, errno) in self.failing_when.iter().take(0) {"

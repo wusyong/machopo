@@ -277,7 +277,7 @@ pub struct BrowserView {
     /// What a web view whose renderer has gone shows.
     sad_tab: SadTab,
     /// Where sad tabs were last drawn, physical px, and their corners.
-    sad_drawn: Vec<(Rect, f32)>,
+    sad_drawn: Vec<(Rect, f32, sad_tab::Reason)>,
     /// Physical px.
     size: Size,
     scale: f32,
@@ -1704,11 +1704,17 @@ impl BrowserView {
         let css = move |rect: Rect| rect.to_f32().scale(1.0 / scale);
         // The web views whose renderer has gone show their sad tab instead
         // (Chromium's `SadTabView`, over the contents).
-        let sad: Vec<(Rect, f32)> = self
+        let sad: Vec<(Rect, f32, sad_tab::Reason)> = self
             .web_views
             .iter()
             .filter(|view| !view.bounds.is_empty() && self.crashed(view.contents))
-            .map(|view| (view.bounds, view.radius))
+            .map(|view| {
+                let exit = self
+                    .contents(view.contents)
+                    .and_then(WebContents::renderer_exit)
+                    .and_then(|status| status.code());
+                (view.bounds, view.radius, sad_tab::Reason::of_exit(exit))
+            })
             .collect();
         let popup_dirty = std::mem::take(&mut self.popup_dirty);
         // The UI's tree, painted where it changed (`None`: nothing did).
@@ -1781,7 +1787,7 @@ impl BrowserView {
                     }
                 }
             }
-            for (&(bounds, radius), id) in sad.iter().zip(100..) {
+            for (&(bounds, radius, reason), id) in sad.iter().zip(100..) {
                 let at = css(bounds);
                 // A card's corners, as its web view's.
                 let clip = ClipNodeId(trees.clip.len());
@@ -1794,7 +1800,11 @@ impl BrowserView {
                 layers.push(PictureLayer {
                     id: LayerId(id),
                     bounds: at.size(),
-                    display_list: Arc::new(self.sad_tab.paint(self.chrome.tree.text(), at.size())),
+                    display_list: Arc::new(self.sad_tab.paint(
+                        self.chrome.tree.text(),
+                        at.size(),
+                        reason,
+                    )),
                     contents_opaque: true,
                     background_color: sad_tab::BACKGROUND,
                     invalidation: None,

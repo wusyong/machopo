@@ -350,6 +350,9 @@ impl RenderProcessHost {
                         flags,
                         *script_engine,
                         Some(terminator.clone()),
+                        // Found by the renderer's main thread: a thread of
+                        // this process has the file system.
+                        None,
                     )?;
                     // The channel closes once every sender is dropped.
                     let mut host = host(to_renderer.clone());

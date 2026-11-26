@@ -72,6 +72,12 @@ percent-encoding.workspace = true
 net.workspace = true
 
 # The system's double-click interval (`mouse`): a safe class method.
+# The renderer process's sandbox, and the system call numbers its policy
+# names.
+[target.'cfg(target_os = "linux")'.dependencies]
+sunaba.workspace = true
+libc.workspace = true
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSEvent"] }
 

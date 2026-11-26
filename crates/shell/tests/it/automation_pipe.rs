@@ -74,24 +74,32 @@ impl Browser {
         Self::start_in(args, env, Stdio::null())
     }
 
+    /// With the system's fonts, not the built-in ones every other test
+    /// here has: what is drawn is the machine's.
+    pub(crate) fn start_with_system_fonts(args: &[&str]) -> Self {
+        Self::start_headless_or_not(true, false, args, &[], Stdio::null())
+    }
+
     fn start_in(args: &[&str], env: &[(&str, &std::ffi::OsStr)], stderr: Stdio) -> Self {
-        Self::start_headless_or_not(true, args, env, stderr)
+        Self::start_headless_or_not(true, true, args, env, stderr)
     }
 
     /// In the platform's window (no `--headless`).
     fn start_in_the_real_window() -> Self {
-        Self::start_headless_or_not(false, &[], &[], Stdio::null())
+        Self::start_headless_or_not(false, true, &[], &[], Stdio::null())
     }
 
     fn start_headless_or_not(
         headless: bool,
+        test_fonts: bool,
         args: &[&str],
         env: &[(&str, &std::ffi::OsStr)],
         stderr: Stdio,
     ) -> Self {
         let mut command = Process::new(env!("CARGO_BIN_EXE_machopo"));
         command
-            .args(["--remote-debugging-pipe", "--test-fonts"])
+            .arg("--remote-debugging-pipe")
+            .args(test_fonts.then_some("--test-fonts"))
             .args(headless.then_some("--headless"))
             // The same tests with each tab's renderer in machopo's own
             // process, when the run asks for it (but for a test that says
@@ -1220,7 +1228,12 @@ fn webdriver(
         })
 }
 
-fn script(browser: &mut Browser, session: &str, body: &str, args: Value) -> Result<Value, String> {
+pub(crate) fn script(
+    browser: &mut Browser,
+    session: &str,
+    body: &str,
+    args: Value,
+) -> Result<Value, String> {
     let params = json!({ "script": body, "args": args });
     webdriver(browser, session, "Machopo.executeScript", params)
 }

@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 #[cfg(unix)]
 use crate::automation_pipe::start_machopo;
 
-const MACHOPO: &str = env!("CARGO_BIN_EXE_machopo");
+pub(crate) const MACHOPO: &str = env!("CARGO_BIN_EXE_machopo");
 
 /// What the process exited with, if it did before long.
 fn exit_of(child: &mut std::process::Child) -> Option<i32> {
@@ -116,45 +116,73 @@ impl ipc::endpoint::Handler<ipc::platform::Channel> for Deaf {
     }
 }
 
+/// A renderer process with its threads running: started with `switches`
+/// after `--type=renderer`, told what to start with, and heard to have
+/// started. Its browser's side goes when [`RunningRenderer::browser_goes`]
+/// is called.
+pub(crate) struct RunningRenderer {
+    pub(crate) child: std::process::Child,
+    link: ipc::endpoint::Link<ipc::platform::Channel>,
+    io_handle: ipc::endpoint::LoopHandle<ipc::platform::Channel>,
+    io_thread: std::thread::JoinHandle<()>,
+}
+
+impl RunningRenderer {
+    pub(crate) fn start(switches: &[&str]) -> Self {
+        use protocol::control_channel::{config, send_over, to_renderer};
+
+        let mut command = Command::new(MACHOPO);
+        command
+            .arg(shell::RENDERER_PROCESS_SWITCH)
+            .args(switches)
+            .env("RUST_LOG", "renderer=info")
+            .stderr(Stdio::piped());
+        let (mut child, channel) = ipc::platform::spawn(&mut command).expect("machopo starts");
+        let mut said = BufReader::new(child.stderr.take().expect("its standard error"));
+        // The browser's side: an IO thread, and what a renderer starts with.
+        let (link, endpoint) = ipc::endpoint::endpoint(channel, config(true));
+        let (io, io_handle) = ipc::endpoint::IoLoop::new().expect("a way to wait");
+        io_handle.serve(endpoint, Deaf);
+        let io_thread = std::thread::spawn(move || io.run());
+        let init = browser::ChildInit {
+            flags: browser::RendererFlags {
+                test_fonts: true,
+                web_tests: false,
+                wait_for_all_pipeline_stages_before_draw: true,
+                automation: false,
+                user_agent: browser::user_agent(),
+                system_colors: gfx::SystemColors::DEFAULT,
+                num_raster_threads: None,
+                caret_blink_interval: None,
+                parser_budget: Default::default(),
+                new_content_rendering_delay: browser::NEW_CONTENT_RENDERING_DELAY,
+            },
+            gpu: false,
+        };
+        send_over(&link, to_renderer::MAIN, &init).expect("the channel is there");
+        until_it_says(&mut said, "the renderer's threads are started");
+        Self {
+            child,
+            link,
+            io_handle,
+            io_thread,
+        }
+    }
+
+    /// The browser goes, with the renderer's threads running and nothing
+    /// said to them: what the renderer's process exits with.
+    pub(crate) fn browser_goes(mut self) -> Option<i32> {
+        self.io_handle.stop();
+        self.io_thread.join().expect("the IO thread ends");
+        drop(self.link);
+        exit_of(&mut self.child)
+    }
+}
+
 #[test]
 fn a_running_renderer_whose_browser_goes_ends() {
-    use protocol::control_channel::{config, send_over, to_renderer};
-
-    let mut command = Command::new(MACHOPO);
-    command
-        .arg(shell::RENDERER_PROCESS_SWITCH)
-        .env("RUST_LOG", "renderer=info")
-        .stderr(Stdio::piped());
-    let (mut child, channel) = ipc::platform::spawn(&mut command).expect("machopo starts");
-    let mut said = BufReader::new(child.stderr.take().expect("its standard error"));
-    // The browser's side: an IO thread, and what a renderer starts with.
-    let (link, endpoint) = ipc::endpoint::endpoint(channel, config(true));
-    let (io, io_handle) = ipc::endpoint::IoLoop::new().expect("a way to wait");
-    io_handle.serve(endpoint, Deaf);
-    let io_thread = std::thread::spawn(move || io.run());
-    let init = browser::ChildInit {
-        flags: browser::RendererFlags {
-            test_fonts: true,
-            web_tests: false,
-            wait_for_all_pipeline_stages_before_draw: true,
-            automation: false,
-            user_agent: browser::user_agent(),
-            system_colors: gfx::SystemColors::DEFAULT,
-            num_raster_threads: None,
-            caret_blink_interval: None,
-            parser_budget: Default::default(),
-            new_content_rendering_delay: browser::NEW_CONTENT_RENDERING_DELAY,
-        },
-        gpu: false,
-    };
-    send_over(&link, to_renderer::MAIN, &init).expect("the channel is there");
-    until_it_says(&mut said, "the renderer's threads are started");
-    // The browser goes, with the renderer's threads running and nothing
-    // said to them: they are ended for it.
-    io_handle.stop();
-    io_thread.join().expect("the IO thread ends");
-    drop(link);
-    assert_eq!(exit_of(&mut child), Some(0));
+    // They are ended for it.
+    assert_eq!(RunningRenderer::start(&[]).browser_goes(), Some(0));
 }
 
 #[test]

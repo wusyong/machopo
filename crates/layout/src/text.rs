@@ -53,12 +53,49 @@ pub struct TextContext {
     families: FontFallbackMap,
 }
 
+/// The system's fonts, found: the list of them and what the operating
+/// system says of each (on Linux, fontconfig's configuration and caches,
+/// read here and not again). A process that is about to lose the file
+/// system finds them first, then keeps only the font files' directories
+/// readable ([`Self::directories`]).
+pub struct SystemFonts(FontContext);
+
+impl SystemFonts {
+    pub fn find() -> Self {
+        Self(FontContext::new())
+    }
+
+    /// The directories the system's font files are in: all a text needs
+    /// to read from here on.
+    pub fn directories(&mut self) -> Vec<std::path::PathBuf> {
+        let collection = &mut self.0.collection;
+        let families: Vec<_> = collection.family_ids().collect();
+        let mut directories = std::collections::BTreeSet::new();
+        for family in families {
+            let Some(family) = collection.family(family) else {
+                continue;
+            };
+            for font in family.fonts() {
+                if let parley::fontique::SourceKind::Path(path) = font.source().kind()
+                    && let Some(directory) = path.parent()
+                {
+                    directories.insert(directory.to_path_buf());
+                }
+            }
+        }
+        directories.into_iter().collect()
+    }
+}
+
 impl TextContext {
     /// `test_fonts`: only the built-in Ahem and Lato, with every generic
     /// family mapped to Lato, so text renders the same on every machine.
     /// Otherwise the system's fonts.
     pub fn new(test_fonts: bool) -> Self {
-        let fonts = if test_fonts {
+        if !test_fonts {
+            return Self::with_system_fonts(SystemFonts::find());
+        }
+        let fonts = {
             let mut collection = Collection::new(CollectionOptions {
                 shared: false,
                 system_fonts: false,
@@ -73,9 +110,16 @@ impl TextContext {
                 collection,
                 source_cache: SourceCache::default(),
             }
-        } else {
-            FontContext::new()
         };
+        Self::with_fonts(fonts)
+    }
+
+    /// The system's fonts as `fonts` found them.
+    pub fn with_system_fonts(fonts: SystemFonts) -> Self {
+        Self::with_fonts(fonts.0)
+    }
+
+    fn with_fonts(fonts: FontContext) -> Self {
         let mut layout = LayoutContext::new();
         // Nothing moves through this text by words with parley's clusters:
         // editing and `text-transform: capitalize` find words themselves.
