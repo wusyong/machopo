@@ -1,0 +1,80 @@
+# Stage 1's mutants: `python3 scripts/test.py mutate rfcs/0116-automation-pipe-fds/mutants-1.toml`.
+# macOS and Linux: the Windows half is run on Windows (stage 3).
+test = ["cargo", "test", "-q", "-p", "ipc", "--test", "it", "inherited_pipe::"]
+timeout = 300
+
+[[mutant]]
+name = "the ends taken stay inheritable"
+file = "crates/ipc/src/platform/pipe.rs"
+from = '''            fcntl_setfd(fd, FdFlags::CLOEXEC).map_err(|e| InheritError::Io(e.into()))?;'''
+to = '''            let _ = fd;'''
+
+[[mutant]]
+name = "the ends may be taken twice"
+file = "crates/ipc/src/platform/pipe.rs"
+from = '''        if TAKEN.swap(true, Ordering::SeqCst) {
+            return Err(InheritError::Taken);
+        }
+        check(INPUT_FD, PipeEnd::Input)?;'''
+to = '''        let _ = &TAKEN;
+        check(INPUT_FD, PipeEnd::Input)?;'''
+
+[[mutant]]
+name = "anything open is a pipe"
+file = "crates/ipc/src/platform/pipe.rs"
+from = '''                _ => Err(InheritError::NotAPipe(end)),'''
+to = '''                _ => Ok(()),'''
+
+[[mutant]]
+name = "a socket is no pipe"
+file = "crates/ipc/src/platform/pipe.rs"
+from = '''                FileType::Fifo | FileType::Socket => Ok(()),'''
+to = '''                FileType::Fifo => Ok(()),'''
+
+[[mutant]]
+name = "nothing open is no pipe"
+file = "crates/ipc/src/platform/pipe.rs"
+from = '''            Err(Errno::BADF) => Err(InheritError::Missing(end)),'''
+to = '''            Err(Errno::BADF) => Err(InheritError::NotAPipe(end)),'''
+
+[[mutant]]
+name = "the output isn't looked at"
+file = "crates/ipc/src/platform/pipe.rs"
+from = '''        check(OUTPUT_FD, PipeEnd::Output)?;'''
+to = '''        let _ = (OUTPUT_FD, PipeEnd::Output);'''
+
+[[mutant]]
+name = "handles are taken on macOS and Linux too"
+file = "crates/ipc/src/platform/pipe.rs"
+from = '''        if io_pipes.is_some() {
+            return Err(InheritError::HandlesOnlyOnWindows);
+        }
+        // Asked once, whatever comes of it: once 3 and 4 are taken, or'''
+to = '''        let _ = io_pipes;
+        // Asked once, whatever comes of it: once 3 and 4 are taken, or'''
+
+[[mutant]]
+name = "a child's ends aren't moved past 4"
+file = "crates/ipc/src/platform/pipe.rs"
+from = '''        if fd.as_raw_fd() >= PAST_THE_PIPE {'''
+to = '''        if fd.as_raw_fd() >= 0 {'''
+
+[[mutant]]
+name = "the child's output isn't put at 4"
+file = "crates/ipc/src/platform/pipe.rs"
+from = '''                for (from, to) in [(input, INPUT_FD), (output, OUTPUT_FD)] {'''
+to = '''                for (from, to) in [(input, INPUT_FD)] { let _ = (output, OUTPUT_FD);'''
+
+[[mutant]]
+name = "the host keeps the child's ends"
+file = "crates/ipc/src/platform/pipe.rs"
+from = '''        drop((their_input, their_output));
+        Ok((child, our_writer, our_reader))
+    }
+
+    /// `fd`, at a number past the pipe's'''
+to = '''        std::mem::forget((their_input, their_output));
+        Ok((child, our_writer, our_reader))
+    }
+
+    /// `fd`, at a number past the pipe's'''

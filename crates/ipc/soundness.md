@@ -11,7 +11,7 @@
 
 **這是論證，不是證明。** 機械化證明過的只有兩小塊算術（池子選哪一塊、管道的額度，Verus）；協定用小的模型窮舉過（TLA+、loom）；其餘靠 fuzz、Miri、跨 process 的測試、mutation test 和人工審查。kernel 的行為證明不了，寫成假設，每一條有測試在那個平台上守著。
 
-**分兩層是為了能驗證**：核心（`src/core/`）不做系統呼叫、不分平台（`python3 scripts/sanity.py deps` 檢查），所以能整個放進 Miri、fuzzer 和 loom；平台層（`src/platform/`）只做四件事（搬位元組和 handle、等、建和 map 共用記憶體、啟動時交接一端，Windows 上啟動時也把 child 放進 job；macOS 和 Linux 上另有一個當場結束自己這個 process 的函式；三個平台都另有一個讀磁碟剩下多少空間的函式，給 HTTP cache 算它的大小），裡面沒有對訊息內容的判斷。
+**分兩層是為了能驗證**：核心（`src/core/`）不做系統呼叫、不分平台（`python3 scripts/sanity.py deps` 檢查），所以能整個放進 Miri、fuzzer 和 loom；平台層（`src/platform/`）只做四件事（搬位元組和 handle、等、建和 map 共用記憶體、啟動時交接一端（通道的一端，或被 pipe 驅動的 process 的兩端），Windows 上啟動時也把 child 放進 job；macOS 和 Linux 上另有一個當場結束自己這個 process 的函式；三個平台都另有一個讀磁碟剩下多少空間的函式，給 HTTP cache 算它的大小），裡面沒有對訊息內容的判斷。
 
 ## 信任誰
 
@@ -62,7 +62,7 @@ macOS 那一層的測試在 `src/platform/macos/` 各檔的單元測試和 `crat
 | I2 | **`Memory` 的實作**：值活著的期間 `ptr()` 起 `len()` 個位元組可讀（放進 `Pool` 的還要可寫）、不搬動、不比底下的物件長 | `unsafe trait`：每個實作有自己的 `// SAFETY:`（下面的表）；平台的 `map` 在 map 之前確認長度（Linux 先看 seal 再量；macOS 和 Windows 由 kernel 拒絕） |
 | I3 | **對方可能在寫的共用記憶體只被複製出來**，不當成有不變量的型別、不借成 `&[u8]` 或 `&T` 交出去 | 對方寫的 region（表裡的）只有三個讀的地方，都在 `core/region.rs`：`Table::read`（整段複製到 `Vec`）、`copy_out`（複製到呼叫的人給的 slice）、`chunks_out`（一段一段以值交出去，給只能寫、拿不到 slice 的目的地）。`SharedBuffer` 拿著 region 時只提供後兩種，`as_bytes` 回 `None`。複製出來之後才解碼。審查；`crates/ipc/tests/it/shared_buffer.rs` |
 | I4 | **交給核心的 handle 是 kernel 為這則訊息搬進來的**，不是對方寫的數值 | macOS、Linux：假設 K3。Windows：child 寫的位元組沒有這一層的表頭，host 那一端沒有把數值包成 handle 的程式，所以對方不能附 handle 的一端看不到任何數值（`a_child_gives_no_handle_and_a_host_takes_no_value_for_one`） |
-| I5 | **child 信任 host 的地方只有這幾處** | Windows 的 child 把 host 寫的數值包成 handle（`End::next`）、不檢查收到的 section 是哪一種；三個平台的 child 照環境變數或 rendezvous 拿它那一端；child 把 host 給它寫的 region 借成 slice 來畫（I10），相信 host 不寫那一塊。新增一處要寫在這裡 |
+| I5 | **child 信任 host 的地方只有這幾處** | Windows 的 child 把 host 寫的數值包成 handle（`End::next`）、不檢查收到的 section 是哪一種；三個平台的 child 照環境變數或 rendezvous 拿它那一端；被 pipe 驅動的 process 收下 3、4 或命令列指名的 handle（`inherited_pipe`）；child 把 host 給它寫的 region 借成 slice 來畫（I10），相信 host 不寫那一塊。新增一處要寫在這裡 |
 | I6 | **平台的函式除了 `wait` 都不等**（啟動 child 的 `spawn` 不算：不在核心的鎖底下呼叫，Windows 上 child 放不進 job 時最多等它 1 秒） | 審查；`core/channel.rs` 在自己的鎖底下呼叫 `write` |
 | I7 | **一條通道只有一條 thread 讀**（IO thread） | `Endpoint` 交給迴圈時是搬進去的，只能交一次；Linux 的 waiter 拒絕已經被別的 waiter 等著的一端（`an_end_has_one_waiter`），Windows 的 pipe 只上得了一個 completion port |
 | I8 | **Windows 上進行中的操作讓它的通道活著**，直到它的通知從 port 取走：那之前 kernel 隨時會寫它的 `OVERLAPPED` 和緩衝區 | `hold`、`let_go` 和 `wait` 裡的 `Arc::from_raw` 成對（下面的表）。waiter 丟掉時還在進行的不釋放：刻意洩漏 |
@@ -122,6 +122,16 @@ macOS 那一層的測試在 `src/platform/macos/` 各檔的單元測試和 `crat
 | `platform/unix.rs` 的 `handle`（`libc::write`、讀寫 `errno`）、`errno_location`（`__errno_location`、`__error`） | handler 在任何一條 thread、任何兩個指令之間跑：`write` 和讀寫 `errno` 是 POSIX 列為 async-signal-safe 的，不配置、不拿鎖。socket 在 `install` 之前就設好、之後一直開著（`into_raw_fd`，沒有人關它），nonblocking，所以 handler 不會等；寫的 byte 是活到 `write` 回來的區域變數。`errno` 是這條 thread 的，寫完放回原本的值，被打斷的程式之後讀得到它自己的。`errno` 的位址由 C library 自己的 accessor 給，不帶參數、一直可以呼叫，在 thread 活著時有效 |
 | `platform/unix.rs` 的 `terminate_current_process_immediately`（`libc::_exit`） | `_exit` 接受任何代碼、不回來，不讀也不寫這個 process 的記憶體：它就是結束 process 的系統呼叫，kernel 停掉每一條 thread、關掉 process 開著的東西。呼叫之後這個 process 沒有程式再跑，所以沒有東西會看到沒被 drop 的值。不跑 exit handler 和 destructor 正是用它的理由（其他 thread 還在跑），不是安全上的問題：留下的只是沒寫出去的緩衝區 |
 
+### 被 pipe 驅動的 process 的兩端（`platform/pipe.rs`）
+
+| 地方 | 為什麼安全 |
+| --- | --- |
+| macOS 和 Linux 的 `check`（`BorrowedFd::borrow_raw`） | 借來只做一次 `fstat`，問它是什麼；號碼沒開著時那個呼叫是錯誤（`EBADF`）。借用只到那一次呼叫結束。和 Linux 的通道的 `inherited` 同一個做法 |
+| macOS 和 Linux 的 `inherited_pipe`（`OwnedFd::from_raw_fd`） | 3 和 4 剛確認開著、是 pipe 或 socket；它們是啟動這個 process 的人為這件事留著開的，這個 process 裡沒有別人拿過它們（呼叫的人在開任何東西之前先拿）。一個 process 只問一次（`TAKEN`，在看之前就設），所以只有這兩個值會關它們。啟動的人在 3、4 放了別的 pipe 時，收下的是那兩個：能這樣做的人本來就決定這個 process 怎麼啟動（I5） |
+| macOS 和 Linux 的 `spawn_with_pipe`（`pre_exec` 和裡面的 `libc::dup2`） | closure 在 child 裡、fork 和 exec 之間跑，只能做 async-signal-safe 的事：它只做兩次 `dup2` 的系統呼叫，不配置記憶體（錯誤只帶一個號碼）。兩個來源在 child 裡是開著的：擁有它們的值在 host 活到 `spawn` 回來之後，fork 時還在；兩者都在 4 以上（不是的先複製過去），所以不會是對方的目標、`dup2` 也不會因為來源和目標相同而留下 close-on-exec |
+| Windows 的 `named`（`GetFileType`） | 只查那個數值，不是 handle 時它自己會說 |
+| Windows 的 `inherited_pipe`（`OwnedHandle::from_raw_handle`） | 兩個數值是啟動這個 process 的人（可信，I5）為這件事放進來、在命令列上指名的；剛確認過都是 pipe、不是同一個，而且一個 process 只問一次（`TAKEN`），所以各自只被包一次。命令列被別人改成這個 process 自己的另一個 pipe 時，那個 pipe 會被當成這條、之後被關掉：能改命令列的人本來就是啟動它的人 |
+
 ### Windows（`platform/windows/`）
 
 | 地方 | 為什麼安全 |
@@ -178,5 +188,6 @@ Miri 和 fuzzer 碰不到平台層（系統呼叫）：那一層靠跨 process �
 - **改送出的佇列、鎖或通道的結束**（`core/channel.rs`）：跑 loom 和 shuttle；鎖底下不能等（I6）。
 - **新的平台，或改平台的 `Platform`、`Waiter`**：對過 K1 到 K6 每一條在那個平台靠什麼、有沒有測試；`crates/ipc/tests/it/process_channel.rs` 不改就要過；handle 如果是數值，照 Windows 的做法守 I4。
 - **child 這一側新增一處不檢查 host 的**：寫進 I5。
+- **改 `platform/pipe.rs`**：收下的兩端在任何東西啟動之前設成 close-on-exec 或不可繼承嗎（不然 child 的 child 拿著 pipe，client 等不到結尾）；Windows 上設成可繼承的那一段在 `starting_a_child` 的鎖底下嗎；`pre_exec` 裡只有 async-signal-safe 的呼叫嗎。`crates/ipc/tests/it/inherited_pipe.rs` 守這幾條。
 - **改 Windows 的 job**：handle 不能被繼承、不能複製給別的 process、host 活著時不能關：前兩種讓 child 在 host 不在之後留著，最後一種把活著的 child 全部結束（K10）。
 - **升級作業系統的版本**：重跑那個平台的 `cargo test -p ipc`，標「實測」的假設先看。

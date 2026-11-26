@@ -18,6 +18,11 @@
 //! `terminate_current_process_immediately`, which machopo's processes
 //! also end with once they have wound down.
 //!
+//! A process driven through a pipe, as Chrome's `--remote-debugging-pipe`
+//! is, gets its two ends the same way, apart from the channel: whatever
+//! starts it hands them over with [`spawn_with_pipe`], or as Chrome's
+//! clients do, and it takes them with [`inherited_pipe`].
+//!
 //! Beside the channel, one thing of the system's that the rest asks for:
 //! how much a disk has free ([`available_disk_space`], for the HTTP
 //! cache's size), a system call like the others, in the one place that
@@ -27,10 +32,15 @@
 pub mod linux;
 #[cfg(target_os = "macos")]
 pub mod macos;
+mod pipe;
 #[cfg(unix)]
 mod unix;
 #[cfg(windows)]
 pub mod windows;
+
+#[cfg(unix)]
+pub use pipe::{INPUT_FD, OUTPUT_FD};
+pub use pipe::{IO_PIPES_SWITCH, InheritError, PipeEnd, inherited_pipe, spawn_with_pipe};
 
 #[cfg(target_os = "linux")]
 pub use linux::channel::{Channel, child_gone, inherited, spawn};

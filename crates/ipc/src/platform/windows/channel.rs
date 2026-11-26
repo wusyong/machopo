@@ -700,10 +700,19 @@ pub fn pipe() -> Option<(OwnedHandle, OwnedHandle)> {
 pub const CHANNEL_VARIABLE: &str = "MACHOPO_IPC_CHANNEL";
 
 /// Whether a child this process starts inherits `handle`.
-fn inherited_by_children(handle: &OwnedHandle, inherited: bool) -> bool {
+pub(crate) fn inherited_by_children(handle: BorrowedHandle<'_>, inherited: bool) -> bool {
     let flag = if inherited { HANDLE_FLAG_INHERIT } else { 0 };
     // SAFETY: `handle` is open for the call.
     unsafe { SetHandleInformation(handle.as_raw_handle(), HANDLE_FLAG_INHERIT, flag) != 0 }
+}
+
+/// Held while this process starts a child with handles made inheritable
+/// for it ([`spawn`], and `spawn_with_pipe`'s): every child started in the
+/// meantime would inherit them too, so one is started at a time, and the
+/// handles are inheritable only while it is.
+pub(crate) fn starting_a_child() -> MutexGuard<'static, ()> {
+    static STARTING: Mutex<()> = Mutex::new(());
+    lock(&STARTING)
 }
 
 /// Starts `command` as a child that has the other end of a new channel,
@@ -717,12 +726,11 @@ fn inherited_by_children(handle: &OwnedHandle, inherited: bool) -> bool {
 /// doing (`job`): hearing that the channel is over is only enough for a
 /// child that isn't stuck. Chromium likewise puts each child in a job.
 pub fn spawn(command: &mut Command) -> io::Result<(Child, Channel)> {
-    static STARTING: Mutex<()> = Mutex::new(());
     let (server, client) = pipe().ok_or_else(|| io::Error::other("no pipe could be made"))?;
     let value = client.as_raw_handle().expose_provenance();
     let spawned = {
-        let _one_at_a_time = lock(&STARTING);
-        if !inherited_by_children(&client, true) {
+        let _one_at_a_time = starting_a_child();
+        if !inherited_by_children(client.as_handle(), true) {
             return Err(io::Error::last_os_error());
         }
         command.env(CHANNEL_VARIABLE, value.to_string());
@@ -787,7 +795,7 @@ fn end_named(value: &str) -> Option<Channel> {
     let pipe = unsafe { OwnedHandle::from_raw_handle(handle) };
     // Inherited, it would be inherited again by this process's own
     // children.
-    inherited_by_children(&pipe, false).then(|| Channel::child(pipe))
+    inherited_by_children(pipe.as_handle(), false).then(|| Channel::child(pipe))
 }
 
 /// Nothing: a child gone has let go of its end, taken or not, and this
@@ -2032,7 +2040,7 @@ mod tests {
         };
         let (_server, client) = pipe().unwrap();
         // As a child finds it: inherited, and so to be inherited again.
-        assert!(inherited_by_children(&client, true));
+        assert!(inherited_by_children(client.as_handle(), true));
         let handle = client.into_raw_handle();
         assert!(inheritable(handle));
         let value = handle.expose_provenance().to_string();

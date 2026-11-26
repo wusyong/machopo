@@ -15,6 +15,9 @@ mod disk_space;
 mod endpoint;
 mod endpoint_fuzz;
 mod frame_fuzz;
+// Wherever there is a platform's pipe to be driven through.
+#[cfg(any(unix, windows))]
+mod inherited_pipe;
 #[cfg(target_os = "linux")]
 mod linux_channel;
 #[cfg(target_os = "macos")]
