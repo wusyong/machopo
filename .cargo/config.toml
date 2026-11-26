@@ -10,7 +10,7 @@
 # the environment (`python scripts/ci.py v8` prints how); it wins over the
 # mirror.
 RUSTY_V8_MIRROR = "https://github.com/wusyong/rusty_v8/releases/download"
-RUSTY_V8_MIRROR_TAG = "machopo-v152.2.0-29"
+RUSTY_V8_MIRROR_TAG = "machopo-v152.2.0-30"
 
 # V8 is built with the static CRT (/MT, Chromium's default for non-component
 # builds), so its objects ask for libcmt.lib; Rust, Skia and aws-lc use the
