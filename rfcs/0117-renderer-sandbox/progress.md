@@ -81,3 +81,4 @@
 - 文件：`docs/architecture.md`（「Process 的邊界」第 5 條的命令列、crate 表的 `sunaba`、`unsafe` 的位置）、`docs/limitations.md`（「隔離」改成現況）、`docs/test-gaps.md`（三條只靠審查的）、`docs/README.md`、`CLAUDE.md`。
 - 還沒做、等使用者：fork 的 commit 和 push、新的 release tag（`machopo-v152.2.0-30`）、machopo 的 `RUSTY_V8_MIRROR_TAG` 和 `third_party.toml`；之後 CI 才編得過。CI 的 runner 有沒有開 Landlock 到時候看（已決定的事項第 12 條）。
 - 編 V8 時 fork 的 `gen/src_binding_ptrcomp_release_x86_64-unknown-linux-gnu.sum` 變成刪除的狀態（開始前它和 debug 的那一份就有沒 commit 的修改，不是這份改的）。
+- Speedometer（2026-11-26，使用者要求；`bench.py speedometer --against e27b751d`，各 3 次，20 個 suite）：sandbox 裡的 renderer（`4817809f`）對接上 sandbox 之前的程式，時間的幾何平均 0.997（-0.3%，在雜訊裡），各 suite 從 -3.3% 到 +1.7%；記憶體的峰值各 suite 從 -3.5% 到 +3.8%。seccomp 的成本量不出來。基準 `e27b751d` 是只為量測做的 commit（`e6b65653` 加上現在的 `third_party.toml`：工具要兩邊的 pin 一樣），不在任何 branch 上。
