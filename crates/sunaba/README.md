@@ -1,6 +1,6 @@
 # sunaba
 
-A process's sandbox, entered by the process itself as it starts. A process that is about to handle what it can't trust (a web page, a file from elsewhere) says what it will still need of the kernel, a policy, and enters it; from then on the kernel refuses the rest, whatever the process's own code has been made to do.
+A process's sandbox, entered by the process itself as it starts. A process that is about to handle what it can't trust (a web page, a file from elsewhere) says what it will still need of the kernel, a policy, and enters it; from then on the kernel refuses the rest, whatever the process's own code has been made to do. On Windows the sandbox is given to a process by whoever starts it, so there the crate starts the process.
 
 The crate is the mechanism alone and knows no program's policy (Chromium's split: `sandbox/` and `sandbox/policy/`). It depends on nothing of the workspace it sits in.
 
@@ -8,6 +8,7 @@ The crate is the mechanism alone and knows no program's policy (Chromium's split
 | --- | --- | --- |
 | Linux | Landlock (which files open), seccomp-bpf (which system calls are made) | `sunaba::linux` |
 | macOS | The kernel's sandbox (Seatbelt) under a profile: which files, Mach services and `sysctl`s, and no sockets or processes | `sunaba::macos` |
+| Windows | An app container with no capabilities (no files of the user's, no network, no other process), a job (one process, no user interface), the process's mitigations (no win32k, no DLL but the system's); given as the process is started | `sunaba::windows` |
 
 Why it holds, what it doesn't promise, and what to review when changing it: `soundness.md`.
 
@@ -127,3 +128,62 @@ target/debug/sunaba_probe --rule '(allow file-read* (subpath "/private/etc"))' -
 target/debug/sunaba_probe -- lookup com.apple.fonts                                                # error 1100
 ```
 
+
+## Windows
+
+What restricts a process on Windows is given when the process is made: its token, its job, its mitigations, the handles it inherits. So the starter does it, and the started process only lowers itself the rest of the way.
+
+```rust
+use sunaba::windows::{Command, Policy};
+
+// The starter.
+let mut command = Command::new(std::env::current_exe()?);
+command.arg("--worker").inherit(pipe.as_handle());
+let mut child = command.spawn(Some(&Policy::new("example.worker.1")))?;
+
+// The started process, first thing in `main`.
+if let Err(error) = sunaba::windows::lower() {
+    eprintln!("{error}");
+    std::process::exit(1);
+}
+```
+
+### Starting a process
+
+`Command` is a program, its arguments, its whole environment (this process's, with what `env` and `env_remove` change), its directory, and the handles of this process's it inherits (`inherit`; each has to be inheritable). `Command::from_std` takes those from a standard library's command. `spawn(None)` starts it as usual, except that it has no handle of the starter's but the ones named, where the standard library's lets it have every inheritable one: that is all the crate adds for a process with no sandbox, and a reason to start one here.
+
+The started process's output and errors are the starter's where those are a file or a pipe (`stderr` hands it another); its input is nothing. Where neither is, it is left to its console's.
+
+`Child` is the process: `id`, `kill`, `wait`, `try_wait`. One started under a policy ends when its `Child` is dropped.
+
+### The policy
+
+`Policy::new(name)` is the whole of it; the name is the app container's, and a process given a name no other has is in a container of its own. Nothing is registered under the name. A process started under it:
+
+- is in an **app container** with no capabilities: it reads nothing of the user's and writes nothing anywhere, reaches no network (not the machine's own ports either), and opens no other process. It does read what the system lets every application read (`C:\Windows`, its fonts);
+- is in a **job** of one process with every user interface restriction, which ends it when the job's handle closes or an exception goes unhandled;
+- has, from its first instruction, Chromium's **mitigations** for a renderer: no calls into win32k, no file system control codes, no extension points, only DLLs Microsoft signed, only the system's fonts in the kernel, no DLL from another machine or from where a low-integrity process could write, no child processes, branch prediction kept to itself, no transaction manager, and DEP, SEHOP, heap termination and bottom-up ASLR.
+
+Two things a program may need of it: `allow_win32k` for one that loads `user32.dll` or `gdi32.dll` as it starts (it doesn't start otherwise; link them to be loaded on first use instead, `/DELAYLOAD`), and `allow_third_party_modules` for a machine where other software puts its DLL into every process.
+
+### Lowering
+
+`lower()`, first thing in the started process's `main`: its integrity level goes from low to untrusted, DLLs are looked for in the system's directories and its own, and a handle that isn't one ends the process. None of it can be undone. On an error the process is to end.
+
+### Looking from outside
+
+`open(id)` and then `in_app_container`, `integrity`, `mitigation` and `running` say what a process is in, for the starter's tests of the real thing.
+
+### Testing a policy
+
+`sunaba::windows::probe::attempt_and_exit(arguments)` is the started process's `main` after `lower`: it tries the one thing its arguments say (read, list, write, remove or stat a path; a TCP connection or a listener; a program; another process; whether a number is a handle; its own integrity level, container and mitigations; any of these on a new thread) and prints `ok N` or `error CODE`.
+
+The crate's own tests (`tests/it/windows.rs`) run `sunaba_probe`, which starts itself under the whole policy, less what its arguments say:
+
+```sh
+cargo test -p sunaba
+target/debug/sunaba_probe -- read C:\Users\me\notes.txt                # error 5
+target/debug/sunaba_probe --no-policy -- read C:\Users\me\notes.txt    # ok 120
+target/debug/sunaba_probe -- connect 192.0.2.1:80                       # error 10013
+target/debug/sunaba_probe --no-lower -- integrity                       # ok 4096
+```

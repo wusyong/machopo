@@ -1,6 +1,6 @@
 [package]
 name = "sunaba"
-description = "A process's sandbox, entered by the process itself as it starts: on Linux, Landlock and seccomp-bpf; on macOS, Seatbelt."
+description = "A process's sandbox: on Linux, Landlock and seccomp-bpf, and on macOS, Seatbelt, entered by the process itself as it starts; on Windows, an app container, a job and mitigations, given as the process is started."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -25,3 +25,14 @@ libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Isolation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }

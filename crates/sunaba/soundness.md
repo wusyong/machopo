@@ -21,11 +21,26 @@ After `sunaba::macos::enter(&profile)` returns `Ok`, for every thread of the pro
 
 If `enter` returns `Err`, the process isn't restricted at all, and the caller is to end it.
 
+## What is promised (Windows)
+
+For a process `Command::spawn(Some(&policy))` returned `Ok` for, from its first instruction, whatever code it runs:
+
+1. **The app container.** Its token is an app container's with no capabilities: an object is opened only if its security descriptor grants the container (or all application packages) the access. So no file of the user's is read, nothing is written anywhere the user alone may write, no socket reaches another machine or a port of this one, and no other process of the user's is opened.
+2. **The job.** It is alone in a job of one process, with every user interface restriction; the job ends it when its handle closes (the `Child` dropped, or its starter gone) or an exception goes unhandled.
+3. **The mitigations**, in the kernel's account of the process from its creation: no win32k system calls (unless `allow_win32k`), no file system control codes, no extension points, Microsoft-signed DLLs only (unless `allow_third_party_modules`), the system's fonts only, no remote or low-integrity images, no child processes.
+4. **Its handles.** It has none of its starter's but those named with `inherit` and copies of the two standard streams. This holds for `spawn(None)` too.
+5. **For good.** A process can't leave its app container or its job, raise its integrity level, or turn a mitigation off.
+
+After `lower()` returns `Ok` in that process: its integrity level is untrusted, and a handle value that is no handle ends it.
+
+If `spawn` returns `Err`, no process was started. If `lower` returns `Err`, the process has what `spawn` gave it and maybe part of the rest, and is to end.
+
 ## What is trusted
 
 - **The kernel**: that Landlock and seccomp do what their documentation says. In particular: a Landlock domain and a seccomp filter are inherited by `clone`, `fork` and across `execve` and can't be removed; when several filters are installed all run and the strictest answer wins (`SECCOMP_RET_TRAP` over `SECCOMP_RET_ERRNO` over `SECCOMP_RET_ALLOW`); a filter is run before the system call's number is looked up, so a number the kernel doesn't have is refused as any other; a `SECCOMP_RET_TRAP` that can't be delivered because `SIGSYS` is blocked ends the process.
 - **The `landlock` and `seccompiler` crates**: that the rules and the BPF program they build are the ones asked for. The crate's tests run real processes in real sandboxes for this reason: they test the kernel's answer, not the builder's output.
 - **macOS's sandbox** (the kernel's `Sandbox.kext` and `libsystem_sandbox`): that a profile is compiled and enforced as its language says, for the whole process and its children, and that a second, different profile is refused. `sandbox_init_with_parameters` is undocumented; the tests run real processes under real profiles for this reason.
+- **Windows**: that an app container's token, a job's limits and a process's mitigation policies are enforced as documented, and that `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` limits inheritance to the list. `CreateAppContainerToken` is exported by `kernelbase.dll` and in no header (Chromium's `AccessToken::CreateAppContainer` declares it the same way): that it returns a primary token of the container named, from the token given. The tests run real processes for this reason, and ask the kernel what each is in.
 - **The caller's policy.** The crate enforces what the policy says, and a policy can say too much: allowing `ptrace`, `process_vm_writev`, `socket` or `execve`, or making a path readable that holds secrets, is the policy's doing.
 - **The process before it enters.** What is already open stays open and usable: file descriptors, mapped memory, sockets. Entering first thing in `main` is what keeps this small; what is inherited from the parent is the parent's to choose.
 
@@ -47,6 +62,18 @@ If `enter` returns `Err`, the process isn't restricted at all, and the caller is
 - **What is already held.** Open descriptors and Mach ports the process has (its bootstrap port among them: lookups through it are what the profile decides) stay usable.
 - **Executable memory**, as on Linux.
 
+### On Windows
+
+- **What every application may read.** An app container reads what the system grants all application packages: the system's directories, its fonts, other programs' installed files. It learns what is installed; it reads nothing of the user's.
+- **Listening.** A socket may be bound and listened on; nothing can connect to it.
+- **Whether a path exists**, where the directory it is in may be listed by all application packages.
+- **Another desktop.** The process is on its starter's window station and desktop. With win32k's calls refused it can't use either; a process started with `allow_win32k` can send what the job's restrictions and its integrity level leave it.
+- **Before `lower`.** From its start until it calls `lower`, a process is at low integrity, not untrusted: it may write what low-integrity processes may, where the app container doesn't already refuse it.
+- **Which handles are named.** Each handle given to `inherit` is the starter's to hand on, with whatever access it has.
+- **A console.** A process whose starter's output and errors are both a console's is attached to that console.
+- **Executable memory**, as on Linux: dynamic code isn't prohibited (a JIT needs it).
+- **The process's environment and command line** are what the starter gave it: the starter's whole environment unless it removed from it.
+
 ## How it holds
 
 - **Order.** `enter` checks the thread count, builds every filter (a policy that makes none fails here, with nothing restricted), installs the `SIGSYS` handler, restricts the files, then installs the filters: the `errno` ones first, since each allows `seccomp`, and the one that traps last, since it refuses `seccomp` and `landlock_restrict_self` (unless the policy allows them, which only lets the process restrict itself further).
@@ -55,6 +82,14 @@ If `enter` returns `Err`, the process isn't restricted at all, and the caller is
 - **`clone3`.** A filter can't read its arguments, so `allow_threads` fails it with `ENOSYS` and tests `clone`'s flags: `CLONE_THREAD` set and no `CLONE_NEW*`. With `CLONE_THREAD` the kernel requires `CLONE_SIGHAND` and `CLONE_VM`: the result is a thread of this process, under the same filters.
 - **The handler isn't load-bearing.** `SECCOMP_RET_TRAP` skips the system call before the signal is sent. A process that blocks `SIGSYS` is ended by the kernel at the next trap; one that installs a handler that returns gets back a system call that did nothing.
 - **Landlock's minimum.** The first ABI's file accesses are a hard requirement (`CompatLevel::HardRequirement`); what later ABIs add is best effort. `enter` then checks the status it gets back and returns `Error::NoLandlock` when nothing was enforced.
+
+### On Windows
+
+- **All at creation, or no process.** The token, the job, the mitigations and the handle list are arguments of the one `CreateProcessAsUserW` call; every one of them is built first, and a failure to build any returns before the call. There is no window in which the process runs with part of them, and no later step whose failure would leave it running with less: the process isn't suspended and patched, it is made whole.
+- **The job, by the attribute.** The process is put in the job by `PROC_THREAD_ATTRIBUTE_JOB_LIST`, as it is made, not assigned after: it never runs outside. The job's only handle is the `Child`'s.
+- **Only the list.** `bInheritHandles` is true only with a `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`, which the system then takes as the whole of what is inherited. The standard streams are copies made inheritable for the call and closed after it; the originals are never made inheritable.
+- **The command line.** Arguments are quoted by the C runtime's rules (`CommandLineToArgvW`'s), so that each arrives as one argument whatever is in it; a NUL in the program, an argument or the environment is refused, since it would end the string early.
+- **`lower`.** The integrity level is lowered on the process's own primary token, which the system lets a process do and not undo.
 
 ## Each `unsafe`
 
@@ -69,6 +104,17 @@ If `enter` returns `Err`, the process isn't restricted at all, and the caller is
 | `macos.rs`, `enter` | `sandbox_init_with_parameters`; `CStr::from_ptr` and `sandbox_free_error` on its message | The profile and each parameter are `CString`s that outlive the call; the parameter array is name, value, name, value, null, as the function reads it. On failure the function leaves a string it allocated: copied, then freed once with the function meant for it. The declaration is Chromium's and Firefox's (`const char*`, `uint64_t`, `const char* const[]`, `char**`). |
 | `macos.rs`, `sandboxed` | `sandbox_check(pid, NULL, 0)` | With no operation it reads only the pid; no pointer is passed but null. |
 | `macos/probe.rs`, `attempt` | `fork`, `kill` with signal 0, `proc_pidinfo`, `bootstrap_look_up`, `sysctlbyname`, `shm_open` | A test's process, one call each: integers, C strings that outlive the call, and out-parameters of the size passed. The forked child calls `_exit` alone. |
+| `windows.rs`, `owned` | `OwnedHandle::from_raw_handle` | Called only with a handle a call that succeeded just returned for this process: nothing else has it, and it is closed once. |
+| `windows.rs`, `Command::spawn` | `CreateProcessAsUserW`, `CreateProcessW` | Every string is NUL-terminated (a NUL inside is refused before) and alive for the call; the command line is this function's buffer to be written to; the environment block ends with an empty string; the startup structure is the extended one and says so in `cb` and the flags; the attribute list and each value it points to outlive the call (`Attributes<'a>`); the token is a primary token, open. |
+| `windows.rs`, `Attributes` | `InitializeProcThreadAttributeList`, `UpdateProcThreadAttribute`, `DeleteProcThreadAttributeList` | The buffer is the size the first call asked for, aligned to 8, and never moves (a `Vec` that isn't grown). Each value is a slice of plain numbers or handles, `size_of_val` bytes, borrowed for `'a`, which the list doesn't outlive. Deleted once, in `drop`. |
+| `windows.rs`, `standard_handle`, `inheritable_copy` | `GetStdHandle`, `GetFileType`, `DuplicateHandle` | No pointer but the out-parameter; a handle that isn't open is an error the code takes as "none". |
+| `windows.rs`, `app_container_token` | `DeriveAppContainerSidFromAppContainerName`, `CreateAppContainerToken`, `FreeSid` | The name is NUL-terminated; the SID is the system's allocation, alive until freed once, after the token is made; the capabilities structure has a count of zero and a null list. |
+| `windows.rs`, `lockdown_job` | `CreateJobObjectW`, `SetInformationJobObject` | No name or attributes; each structure is the one its information class reads, with its own size. |
+| `windows.rs`, `Child` | `TerminateProcess`, `WaitForSingleObject`, `GetExitCodeProcess` | On the process's handle, which the `Child` owns. |
+| `windows.rs`, `lower` | `CreateWellKnownSid`, `SetTokenInformation`, `SetDefaultDllDirectories`, `SetProcessMitigationPolicy` | The SID's buffer is the largest a SID is; the label points to it and both live across the call; the mitigation's structure is one word of flags. |
+| `windows.rs`, `open`, `running`, `this_process`, `token_information`, `integrity`, `in_app_container`, `mitigation` | `OpenProcess`, `OpenProcessToken`, `GetTokenInformation`, `GetSidSubAuthority`, `GetProcessMitigationPolicy` | Buffers are sized by the call's own first answer and aligned to 8; the SID read is inside the buffer the call filled, and its last number is read only when its count is at least one. The pseudo-handle borrowed for `'static` is a constant. |
+| `windows/probe.rs`, `attempt` | `OpenProcess`; `GetHandleInformation` and `GetFileType` on a number from the command line | A test's process. The second is the test's point (is this number a handle here): the calls read nothing through it. |
+| `windows/probe.rs`, `set_inheritable` | `SetHandleInformation` | On a borrowed, open handle; one flag. |
 
 `names::name`, which the handler calls, reads `static` tables and nothing else.
 
@@ -82,6 +128,10 @@ Not tested, checked by review: the handler's async-signal-safety; a kernel witho
 
 Not tested on macOS, checked by review: operations a profile could allow that the probe has no attempt for (IOKit, NVRAM, distributed notifications, `process-exec` of an allowed path keeping the profile).
 
+`tests/it/windows.rs` does the same on Windows, where the probe starts itself under the policy: the app container and both integrity levels; the user's files not read, listed or looked at, none made, changed or removed; the system's read; no connection off the machine or to it (a listener that hears nothing); no program started; no other process opened; each mitigation by the kernel's account, absent with no policy, and the two a policy may allow; only the named handle inherited; a bad handle fatal once lowered; the process ended with its starter's `Child`; arguments and environment as given; two containers at once.
+
+Not tested on Windows, checked by review: the transaction manager's filter (nothing reads it back); DEP, SEHOP, heap termination and ASLR (on in any 64-bit process, or with no account to read); that the job's user interface restrictions are set (the process can't call win32k to try them); a failure of `CreateAppContainerToken` or of an attribute (it needs a Windows without them); the console path of the standard streams (a test's are pipes); Windows 10.
+
 ## Reviewing a change
 
 - A new `unsafe`: a `// SAFETY:` comment and a row in the table above.
@@ -90,3 +140,4 @@ Not tested on macOS, checked by review: operations a profile could allow that th
 - A change to how filters are built: the trapping filter's default must stay the trap, and every failed call must stay allowed in it.
 - Raising the `landlock` crate's version: `NEWEST` follows its newest ABI, and what that ABI adds is read to see that best effort is still right for it.
 - macOS: the declaration of `sandbox_init_with_parameters` against Chromium's `sandbox/mac/seatbelt.cc` when a new macOS is supported; the parameter array stays null-terminated and its strings alive across the call.
+- Windows: nothing may be added between making the process and its being whole (no suspend-and-patch step that can fail with the process alive); a new attribute's value must be borrowed for the list's lifetime; a new standard stream or handle source must go through a copy, never by making the original inheritable; the declaration of `CreateAppContainerToken` against Chromium's `base/win/access_token.cc` when a new Windows is supported.
