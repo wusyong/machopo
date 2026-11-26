@@ -1,12 +1,12 @@
 # RFC 0117：renderer process 關進作業系統的 sandbox
 
 - 開始日期：2026-11-26
-- 狀態：🚧 已排程：2026-11-26（第 1 段 Linux、第 2 段 macOS 做完；Windows 的在它的那一段定）
+- 狀態：🚧 已排程：2026-11-26（第 1 段 Linux、第 2 段 macOS 做完；第 3 段 Windows 探測完、定了，實作中）
 - 細節：`details.md`
 
 ## 摘要
 
-renderer 已經是自己的 process（RFC 0004），但沒有被關起來：被攻破的 renderer 照樣用使用者的身分開檔案、連網路。這份把 renderer process 關進作業系統的 sandbox：Linux、macOS、Windows 各用自己的機制，在 child 的 `main` 一開始、任何其他程式碼之前就鎖（RFC 0004 的「為 sandbox 留的條件」假設的時機），套不上就不跑。分段做，Linux 先：Landlock（檔案照路徑唯讀放行）加 seccomp-bpf（只放行清單上的 system call，其餘當掉並說是哪一個）；字型照舊由 renderer 讀，放行的路徑由 Browser 問 fontconfig；程式在新的 crate `sunaba`；開關是 `--no-sandbox`。macOS 是 Seatbelt 的 profile（`deny default`，只放行 renderer 要的那幾樣），renderer 的 `main` 第一件事就套，字型照舊由 renderer 讀、加上系統的字型服務（已決定的事項第 17 到 20 條）。Windows 的機制在它的那一段、探測之後定。兩個平台的探測（真的 renderer 向系統要了什麼）在 `details.md`。
+renderer 已經是自己的 process（RFC 0004），但沒有被關起來：被攻破的 renderer 照樣用使用者的身分開檔案、連網路。這份把 renderer process 關進作業系統的 sandbox：Linux、macOS、Windows 各用自己的機制，在 child 的 `main` 一開始、任何其他程式碼之前就鎖（RFC 0004 的「為 sandbox 留的條件」假設的時機），套不上就不跑。分段做，Linux 先：Landlock（檔案照路徑唯讀放行）加 seccomp-bpf（只放行清單上的 system call，其餘當掉並說是哪一個）；字型照舊由 renderer 讀，放行的路徑由 Browser 問 fontconfig；程式在新的 crate `sunaba`；開關是 `--no-sandbox`。macOS 是 Seatbelt 的 profile（`deny default`，只放行 renderer 要的那幾樣），renderer 的 `main` 第一件事就套，字型照舊由 renderer 讀、加上系統的字型服務（已決定的事項第 17 到 20 條）。Windows 是 AppContainer（不給任何 capability）加 job 和 process 的 mitigation（連同關掉 win32k 的 system call），由 Browser 在建立 renderer process 時給，renderer 再自己降到 Untrusted integrity；字型照舊由 renderer 讀（已決定的事項第 21 到 27 條）。三個平台的探測（真的 renderer 向系統要了什麼、加上限制之後壞了什麼）在 `details.md`。
 
 ## 動機
 
@@ -44,7 +44,7 @@ renderer 已經是自己的 process（RFC 0004），但沒有被關起來：被�
 
 ## 詳細設計
 
-下面每一節是選項和比較；定了的寫明是哪一條決定，其餘是 2026-11-26 的看法。Chromium 的 Linux 和 macOS 那兩部分對過原始碼了（`details.md` 的「Chromium 的 Linux sandbox」「Chromium 的 macOS sandbox」）；Windows 的還是照記憶寫的，那一段定案之前對（`details.md` 的「要對原始碼的地方」）。
+下面每一節是選項和比較；定了的寫明是哪一條決定，其餘是 2026-11-26 的看法。Chromium 的三個平台都對過原始碼了（`details.md` 的「Chromium 的 Linux sandbox」「Chromium 的 macOS sandbox」「Chromium 的 Windows sandbox」）；Firefox 的 Linux 和 macOS 還是照記憶寫的（`details.md` 的「要對原始碼的地方」）。
 
 ### 現在 renderer 向作業系統要什麼（Linux 的探測）
 
@@ -95,10 +95,20 @@ renderer 已經是自己的 process（RFC 0004），但沒有被關起來：被�
 
 | | 做法 | 說明 |
 | --- | --- | --- |
-| W1 | restricted token、低的 integrity level、job 的限制、process 的 mitigation（renderer 不用 GUI，可以關掉 win32k 的 system call） | Chromium 的 renderer 的做法；由啟動的一方（Browser）在 `CreateProcess` 時給 |
-| W2 | AppContainer（或 LPAC） | 比較新的機制，照 capability 放行；Chromium 用在部分 process |
+| W1 | restricted token（最緊的一級：什麼都開不了）、低的 integrity level、job 的限制、process 的 mitigation | Chromium 的 renderer 的做法；由啟動的一方（Browser）在 `CreateProcess` 時給，child 啟動後再自己降完。探測：系統字型整頁空白（DirectWrite 連不上系統的字型服務），要先有 Browser 那一側的字型服務 |
+| W2 | AppContainer，加 job 和 mitigation | 應用程式的那一套隔離，照 capability 放行；Chromium 的 renderer 預設不用（開的時候是疊在 W1 上）。探測：不給任何 capability 時系統字型照常，使用者的檔案、寫檔、網路、其他 process 都擋；讀得到開放給所有應用程式的地方（`C:\Windows` 這類） |
+| W3 | AppContainer 的 less privileged（LPAC） | 連「所有應用程式」那一組都拿掉。探測：系統字型同樣整頁空白 |
 
-還沒有看法：要先在 Windows 上探測，並且和「自己呼叫 `CreateProcessW`、指定繼承的 handle」（現在的限制）一起設計。job 已經有了（`platform/windows/job.rs`，child 不比 host 活得久）。
+定了 **W2**（已決定的事項第 21 條），token 照 Chromium 自己建、每個 renderer 一個 AppContainer（第 22 條）。探測（`details.md` 的「Windows 的探測」）顯示 W1 和 W2 都做得到，差在字型：W1 要等字型服務，做好之前 Windows 上只有 `--test-fonts` 能進 sandbox。W2 之後可以變成 Chromium 實驗中的組合（AppContainer 疊在 restricted token 上，「之後的可能」）。
+
+和 Linux、macOS 不同的地方：
+
+- **由 Browser 在建立 process 時給，不是 renderer 自己鎖**：token、job、mitigation、繼承哪些 handle 都是 `CreateProcess` 的參數；renderer 從第一個指令起就在裡面，`main` 之前沒有「還沒鎖」的時候。renderer 自己做的只有一步（降到 Untrusted，第 27 條）。所以「鎖之前先開好」的做法在這裡用不上：renderer 要寫的檔案由 Browser 開好、交給它（第 24 條）。
+- **要自己呼叫 `CreateProcessW`**：標準庫啟動 process 時不能指定 token、屬性和繼承的清單（第 23 條）。
+- **被擋的呼叫回錯誤，不結束 process**（`ERROR_ACCESS_DENIED`、Winsock 的 `WSAEACCES`；job 擋的啟動程式是 `ERROR_NOT_ENOUGH_QUOTA`），和 macOS 一樣。
+- **mitigation 是另一類東西**：不是「renderer 能要什麼」，是「被攻破之後能用什麼手法」（關掉 win32k 的 system call、不許載入別人的 DLL……，第 25、26 條）。Linux 的 seccomp 清單兼有這個作用，macOS 沒有對應的。
+
+job 原本就有一個（`ipc` 的 `platform/windows/job.rs`，child 不比 host 活得久）；renderer 的 job 另外加上限制。
 
 ### 字型
 
@@ -110,7 +120,7 @@ renderer 已經是自己的 process（RFC 0004），但沒有被關起來：被�
 | F2 | Browser 列字型，把字型的資料（唯讀的共用記憶體）和 fallback 的答案經過通道給 renderer | sandbox 最緊：renderer 一個檔案都不用開 | 要一個同步的查詢（fallback：這個字、這個語言用哪個字型）；fontique 要能從別人給的清單建 collection 和 fallback；三個平台都要做 |
 | F3 | 平台各自選：能只靠讀檔的用 F1，要系統服務的用 F2 | 工作量照實際需要 | 兩套做法 |
 
-Linux 定了 **F1**（已決定的事項第 3 條）；macOS 也是 F1，另外放行系統的字型服務（第 18 條）；Windows 等它的探測。對照 Chromium：macOS 的 renderer 直接讀系統字型、連 `com.apple.fonts`（F1，`common.sb` 的 `allow-font-access`）；Linux 和 Windows 經過 Browser 的字型服務（F2，因為 L3 的 chroot 和 DirectWrite 的字型 cache 服務）。
+Linux 定了 **F1**（已決定的事項第 3 條）；macOS 也是 F1，另外放行系統的字型服務（第 18 條）；Windows 也是 F1，不用另外放行什麼（AppContainer 裡 DirectWrite 和系統的字型目錄照常，第 21 條）。對照 Chromium：macOS 的 renderer 直接讀系統字型、連 `com.apple.fonts`（F1，`common.sb` 的 `allow-font-access`）；Linux 和 Windows 經過 Browser 的字型服務（F2，因為 L3 的 chroot 和 DirectWrite 的字型 cache 服務）。
 
 ### 其他讀的東西
 
@@ -140,7 +150,12 @@ Linux 定了 **F1**（已決定的事項第 3 條）；macOS 也是 F1，另外�
 0. 草稿和 Linux 的探測（這一版）。
 1. **Linux**（做完）：Landlock 加 seccomp（已決定的事項第 2 條）、字型、其他讀的東西、套不上時怎麼辦、工具、測試。
 2. **macOS**（做完）：先探測（真的 renderer 在 `deny default` 底下被擋了什麼），再定 profile 和字型（第 17 到 20 條）。
-3. **Windows**：先探測；`CreateProcessW` 和繼承的清單、token、integrity、job、mitigation、字型。
+3. **Windows**（探測完、定了，實作中）：先探測（每一種機制底下壞了什麼），再定機制（第 21 到 27 條）。實作分幾步：
+   - 3b. `sunaba::windows`：啟動 process 的函式（只繼承指定的 handle；可以不帶 policy）、policy（AppContainer 的 token、job、mitigation）、renderer 自己降 integrity；`sunaba_probe` 的 Windows 版和「做不到」的測試；README 和 `soundness.md`。
+   - 3c. `ipc` 的 `spawn`、`spawn_with_pipe` 改用它：自己的 `Child`，拿掉「一次啟動一個」的鎖。
+   - 3d. 接上 machopo：`shell::renderer_sandbox` 的 Windows policy、延後載入視窗和繪圖的 DLL、renderer 的 `main` 降 integrity、`--allow-third-party-modules`、從外面看真的 renderer 的測試。
+   - 3e. trace 和 census 的檔案由 Browser 開好交給 renderer（rusty_v8 的 fork 的 Rust 加 Windows 的入口）。
+   - 3f. 第 3 段的檢查和文件。
 
 每個平台做完可以先 merge（`rfcs/README.md` 的「階段的 merge」）：沒做的平台照舊沒有 sandbox，`docs/limitations.md` 寫明哪些平台有。
 
@@ -159,9 +174,9 @@ Linux 定了 **F1**（已決定的事項第 3 條）；macOS 也是 F1，另外�
 
 ## 先例
 
-Chromium 的 Linux 和 macOS 的部分 2026-11-26 對過原始碼（`details.md` 的「Chromium 的 Linux sandbox」「Chromium 的 macOS sandbox」），其餘照記憶寫的，定案前對：
+Chromium 的部分 2026-11-26 對過原始碼（`details.md` 的「Chromium 的 Linux sandbox」「Chromium 的 macOS sandbox」「Chromium 的 Windows sandbox」），Firefox 的 Linux 和 macOS 照記憶寫的：
 
-- **Chromium**：renderer 在每個平台都在 sandbox 裡。Linux：zygote 建的 namespace 那一層加 seccomp-bpf 的 policy（違規預設當掉），檔案系統的呼叫一律擋，字型經過 Browser 那一側的 font service；macOS：Seatbelt 的 profile，child 一開始就套；Windows：restricted token、integrity level、job、mitigation，字型經過 DirectWrite 的 proxy。
+- **Chromium**：renderer 在每個平台都在 sandbox 裡。Linux：zygote 建的 namespace 那一層加 seccomp-bpf 的 policy（違規預設當掉），檔案系統的呼叫一律擋，字型經過 Browser 那一側的 font service；macOS：Seatbelt 的 profile，child 一開始就套；Windows：restricted token、integrity level、job、mitigation、另一個 desktop，字型經過 DirectWrite 的 proxy；AppContainer 對 renderer 預設關。
 - **Firefox**：content process 在 Linux 是 seccomp-bpf 加（有的話）namespace，檔案經過一個 broker 照 policy 開；macOS 是 Seatbelt；Windows 和 Chromium 用同一套 sandbox 的程式。
 - **Landlock**：Chromium 和 Firefox 的 Linux sandbox 都比它早（kernel 5.13 才有）；Chromium 的 README 說還沒用、想用，有一份 GPU process 的 Landlock policy。其他用它的先例待查。
 
@@ -189,23 +204,35 @@ Chromium 的 Linux 和 macOS 的部分 2026-11-26 對過原始碼（`details.md`
 19. **macOS：路徑的 metadata 只放行用到的**（2026-11-26，使用者決定）：`/etc`、`/var` 兩個 symlink（時區的路徑經過它們），和放行讀取的那些路徑。不照 Chromium 放行整個檔案系統的 metadata（`common.sb` 的 `(allow file-read-metadata (subpath "/"))`，理由是讓 `realpath` 能用）：探測顯示畫面和行為不變；之後某個函式庫要 `realpath` 時測試會壞、再加。**實作時發現、和決定時說的不同**：這擋的是路徑的大小、時間和種類，不是「在不在」：不存在的路徑回 `ENOENT`，被擋的回 `EPERM`，renderer 還是分得出來（測試寫明這個限制，`docs/limitations.md`）。
 20. **macOS：系統的函式庫會試、但 renderer 不需要的，一律不放行**（2026-11-26，照探測；原則和第 10 條一樣）：使用者的偏好設定（`cfprefsd`、偏好設定的檔案）、`/etc/passwd` 和 `opendirectoryd`（問家目錄）、log 和通知中心的服務、診斷的服務、自己的執行檔、IOKit。探測裡這些全部被擋時，頁面的截圖和沒有 sandbox 時逐 byte 相同，wasm 的文件、crash、trace 都正常。Chromium 的 renderer 放行其中好幾樣（偏好設定、`/etc/passwd`、`logd`、通知中心、IOSurface）：它的 renderer 載入 AppKit 那一層、畫面經 IOSurface 交出去，machopo 的不用。sysctl 只放行 CPU 的數目和 CPU 的功能（`hw.optional.`：JIT 和標準庫照它選指令）；對自己送訊號、系統的 ICU 的資料檔、系統的版本原本放行，mutation test 顯示沒有東西需要，拿掉了（`abort` 不經過 sandbox 管的訊號那一種）；thread 的名字要放行一條（`process-info-setcontrol` 對自己），否則取樣和除錯的工具看不到名字；trace 開著時 Perfetto 問機器的名字和 kernel 的版本被擋，trace 照樣寫出來（少那幾欄，stderr 多一行）。`(deny default)` 之後還允許的幾種操作照 Chromium 明寫擋掉（問其他 process 的資料、IOKit 的屬性、NVRAM、發分散式通知；第一種有測試，其餘靠審查）。
 
+21. **Windows 的機制：AppContainer，不給任何 capability，加 job 和 mitigation（W2）；字型照舊由 renderer 讀（F1）**（2026-11-26，使用者決定；探測在 `details.md` 的「Windows 的探測」）：Browser 建立 renderer process 時給它一個 AppContainer 的 token、一個 job（一個 process、UI 的限制全開、job 關掉時結束）、建立時的 mitigation（第 25、26 條），只繼承指定的 handle（第 23 條）。探測：這樣的 renderer 的頁面截圖（系統字型、測試字型、wasm 的文件）和沒有 sandbox 時逐 byte 相同；從裡面試，使用者家目錄的檔案讀不到、哪裡都建不了檔案、連不出去（連本機的 port 也不行）、開不了其他 process、啟動不了程式（job 擋）。字型不用改：AppContainer 裡 DirectWrite 照常，`C:\Windows\Fonts` 讀得到。套不上（token 建不出來、`CreateProcess` 不收某個屬性）時照第 4 條不跑：Browser 不啟動 renderer，分頁顯示當掉和原因；沒有另外的最低要求（開發機是 Windows 11；Windows 10 上沒試）。做完還留著的（`docs/limitations.md`）：renderer 讀得到開放給所有應用程式的地方（`C:\Windows`、`Program Files` 這類：看得出裝了哪些軟體，沒有使用者的資料）；綁一個本機的 port 來聽會成功（別人連不進來）。不選 Chromium 的 restricted token（W1，`USER_LOCKDOWN`：什麼都開不了，最緊）：探測顯示 machopo 的 renderer 在它底下加一步暖機就跑得起來，但系統字型整頁空白（壞的是 DirectWrite，不是讀不到字型檔），要先有 Browser 那一側的字型服務（另一份 RFC，要改 parley 的 fork）；做好之前 Windows 上只有 `--test-fonts` 能進 sandbox，等於平常用的 machopo 沒有 sandbox。不選兩者疊加（Chromium 實驗中的 `kRendererAppContainer`，預設關）：字型的問題和 W1 一樣；字型服務做完之後把 restricted token 疊上去（「之後的可能」）。不選 LPAC（W3）：系統字型同樣整頁空白。不選 `USER_LIMITED` 那一級的 restricted token：字型照常，但連得出去、啟動得了程式。對照 Chromium：renderer 是 W1 加 job、mitigation、另一個 desktop，字型經過 Browser 的 proxy。
+22. **AppContainer 的 token 照 Chromium 自己建，每個 renderer process 一個 AppContainer**（2026-11-26，使用者決定；先探測再定的）：算出 SID（`DeriveAppContainerSidFromAppContainerName`，名字裡帶一個每個 renderer 不同的部分），用 `kernelbase.dll` 匯出的 `CreateAppContainerToken` 從 Browser 自己的 token 建一個帶 AppContainer 的，`CreateProcessAsUserW` 用它。那個函式不在公開的 header 裡；Chromium 的 `AccessToken::CreateAppContainer` 一樣宣告它來用。它不在時（Windows 拿掉了）照套不上處理。理由：不在使用者的機器上留任何東西；每個 renderer 一個不用先登記，renderer 之間多一層隔離；之後疊 restricted token 時把它當成輸入就好，啟動的程式不用重寫。不選登記 profile（`CreateAppContainerProfile` 加 `CreateProcessW` 的屬性：全是公開的 API，探測過也能用，但在使用者的登錄和 `%LOCALAPPDATA%\Packages` 留一筆、machopo 沒有解除安裝的程式；每個 renderer 一個要登記很多個；之後疊 restricted token 要改寫）。不選所有 renderer 共用一個（Chromium 的 renderer 是一個固定的 SID）。原本以為自己建 token 要用 `NtCreateLowBoxToken`、自己建有名字的物件的目錄：讀了 Chromium 的原始碼，不用。
+23. **`CreateProcessW` 在 `sunaba`，`ipc` 啟動 renderer 時用它**（2026-11-26，使用者決定 S1；`spawn_with_pipe` 的部分實作時修正了，同一天；第 7 條留到這一段定的）：`sunaba::windows` 提供通用的啟動（`Command`）：程式、參數、環境、要繼承的 handle 的清單，和可選的 policy；不帶 policy 時就是一般的啟動，只多了「只繼承指定的 handle」。`ipc::platform` 的 `spawn`（Browser 啟動 renderer，帶通道）在 Windows 上改用它，`ipc` 依賴 `sunaba`；多一個 `spawn_in`（帶 sandbox）和 `spawn_reading_errors`（測試要讀 renderer 的 stderr）。標準庫做不出 `std::process::Child`，所以 `ipc::platform::Child` 在 Windows 上是 `sunaba` 的（`id`、`kill`、`wait`、`try_wait`），其他平台照舊是標準庫的。命令列的引號、環境的區塊、屬性的清單這幾段 `unsafe` 只寫一次、只論證一次（`sunaba` 的 `soundness.md`）。Browser 啟動的 renderer 因此只繼承通道的那一端和 stdout、stderr，`--no-sandbox` 時也是。**`spawn_with_pipe` 沒有改**（machopodriver 和測試啟動 machopo，帶 DevTools 的 pipe）：它的呼叫端用標準庫的 `Command` 設定 stdout、stderr（接 pipe、接檔案、丟掉），再從標準庫的 `Child` 讀；那些設定從 `Command` 讀不出來，要改就得換掉它的介面和二十幾處測試。它留在標準庫，所以「一次啟動一個」的鎖還在：通道的那一端為了能放進繼承的清單要暫時設成可繼承，那段時間標準庫啟動的 child 會拿到它。Browser 自己不用 `spawn_with_pipe`，所以 `docs/limitations.md` 那一條對 Browser 解掉了，對同一個 process 裡兩種都用的（測試）還在。不選 `ipc` 自己一份沒有 sandbox 的、`spawn` 另外收一個啟動的函式（`ipc` 不依賴 `sunaba`，但同樣的 `unsafe` 寫兩份，函式要從 `shell` 一路傳到 `ipc`）。不選兩邊各一份、互不相干（Chromium 的樣子：`base::LaunchProcess` 和 `sandbox/win` 的 broker）。
+24. **Windows 上 renderer 的 trace 和 census 檔由 Browser 開好、交給它；檔案先用別的名字建，process 建好再改名**（2026-11-26，使用者決定；T2 和 H1；第 6 條原本的做法，第 16 條在 Windows 上用不上）：AppContainer 是 process 一建立就在裡面，renderer 沒有「鎖之前自己開」的時候（探測：開不了檔）。量測工具照 `<檔名>.<pid>` 找，而 pid 要 process 建出來才有，所以 Browser 啟動 renderer 之前先在旁邊用暫時的名字建好檔案（開的時候允許它開著時被改名），handle 放進繼承的清單，命令列說它的值（`--trace-file`、`--census-file`）；process 建好之後 Browser 把檔案改名成 `<檔名>.<pid>`。renderer 的 `main` 照 Linux、macOS 的順序：拿到檔案（這裡是接手，不是開）、降權、才開始 trace；trace 涵蓋的範圍和其他平台一樣。沒有 sandbox（`--no-sandbox`）時 renderer 照其他平台自己開。**rusty_v8 的 fork 只改了 Rust，不用重編 V8**（原本以為要改 C++）：fork 的 C++ 收的是 C runtime 的 file descriptor，每個平台都一樣，只有 Rust 的包裝標了只限 Unix；Windows 上用 `_open_osfhandle` 把 handle 變成 descriptor。census 的檔案是 machopo 自己寫的，`base::census` 多一個接受開好的檔案的入口。不選 process 建好才開檔、經控制通道的第一則訊息給（H2：不用改名，但 trace 要等讀到那則訊息才開始，renderer 最早的那一段沒有；控制通道的協定在 Windows 上要多帶 handle）。不選量測時加 `--no-sandbox`（量到的永遠不是 sandbox 裡的 renderer；AppContainer 的成本預期在雜訊裡，但那是推論）。不選讓那一個檔案可寫（Browser 先建檔、把這個 renderer 的 AppContainer 加進它的權限：流程最繞，沒探測）。
+25. **建立時的 mitigation：Chromium 的清單，連同「只許 Microsoft 簽章的 DLL」；附 `--allow-third-party-modules`**（2026-11-26，使用者決定；每一個都探測過，`details.md` 的「其餘的 mitigation」）：DEP 和不許 ATL thunk、SEHOP、heap 損壞時結束、bottom-up ASLR、不許 extension point、不許非系統的字型（kernel 不解析頁面給的字型；machopo 的 web font 在 process 裡自己解析）、不許從遠端和低 integrity 的位置載入 DLL、限制 indirect branch 的預測、關掉 KTM、關掉 FSCTL 的 system call、不許建 child process，和只許載入 Microsoft 簽章的 DLL；renderer 啟動後自己開的兩個（Windows 自己啟動 process 的過程會違反它們，建立時給不了）：DLL 只在系統的目錄找、嚴格的 handle 檢查。全部一起開時截圖和沒有 sandbox 時相同。「只許 Microsoft 簽章的」在建立時就給，不照 Chromium 底層的 sandbox 等啟動之後才開：Chromium 要等，是因為它自己的 `chrome.dll` 不是 Microsoft 簽的（它的 renderer 另外在建立時也給，配一套放行自己的 DLL 的機制）；machopo 是一個執行檔、沒有自己的 DLL，主執行檔不受這個 policy 管，所以建立時給不用放行什麼，連啟動時被注入的 DLL 都擋。它會和把 DLL 注入其他 process 的軟體（防毒、錄影、顯示卡的 overlay）衝突，開發機上沒有那種軟體、沒試到：所以附一個開關 `--allow-third-party-modules`（和 Chromium 同名）關掉這一個，renderer 起不來時分頁的說明提示它。不選不加（沒有機器可以測相容性；但 Chromium 預設就開著）。不選沒有開關（衝突時只剩 `--no-sandbox`，為一個 mitigation 丟掉整個 sandbox）。不加的（Chromium 對 renderer 也不開）：不許動態產生程式碼（和 JIT 衝突）、CET（V8 換 stack 的方式不合）。
+26. **關掉 win32k 的 system call：視窗和繪圖的 DLL 改成延後載入；另一個 desktop 不做**（2026-11-26，使用者決定；W1；兩個都探測過）：`machopo.exe` 是 Browser 和 renderer 共用的執行檔，靜態連著 `user32`、`gdi32`，建立時關 win32k 則 process 起不來，啟動後關被系統拒絕。連結時把 renderer 用不到的 DLL 標成延後載入（`/DELAYLOAD`；清單在 `details.md`）：第一次呼叫到才載入，renderer 永遠不載入它們（41 個 DLL 變成 19 個），建立時關 win32k 就可以了；`dwrite` 用到時才載入，不帶進 `user32`、`gdi32`。探測：全部都開的截圖相同，有視窗的 Browser 照常。對照 Chromium：renderer 一樣關 win32k，一樣不讓 `user32` 在啟動時載入。另一個 window station 和 desktop（Chromium 的 `kAlternateWinstation`）不做：它擋的是對同一個 desktop 上其他視窗送訊息、裝 hook，那些全是 win32k 的 system call，關掉之後 renderer 叫不出去；探測顯示加上去沒有壞，但 renderer 沒有一個 thread 會連到任何 desktop，測不出它擋了什麼，而建它要暫時換 Browser 整個 process 的 window station。不做的代價（`docs/limitations.md`）：win32k 的限制是單點，被繞過時 renderer 在使用者的 desktop 上（還有 job 的 UI 限制、AppContainer 和 integrity 擋掉大部分）；之後 win32k 的限制因為任何原因要拿掉時，先補上另一個 desktop（「之後的可能」）。
+27. **renderer 啟動後自己降到 Untrusted integrity，降不下去就不跑**（2026-11-26，使用者決定；U1；探測過）：AppContainer 的 token 建立時是 Low；renderer 的 `main` 第一件事把自己的 token 降到 Untrusted（之後回不去），再開第 25 條那兩個啟動後才能開的 mitigation，然後才建通道和它的 thread。任何一步失敗就結束，和 Linux、macOS 進不了 sandbox 同一條路（結束碼、分頁的說明）。多擋的是寫 Low integrity 的物件（Chromium：「Prevents the renderers from manipulating low-integrity processes」）；探測裡看不出差別（AppContainer 已經擋了試的那幾樣），截圖相同。這是 Windows 上 renderer 自己要做的唯一一段；在那之前它已經在 AppContainer、job 和建立時的 mitigation 裡。之後疊 restricted token 時，還回啟動用的 token 也在這裡。不選留在 Low（renderer 這一側完全不用做事）。
+
 ## 待決定
 
-第 1 段（Linux）之前要定的九條都定了（已決定的事項第 1 到 9 條），第 2 段（macOS）的是第 17 到 20 條。每一段開始前只定那一段的：
+第 1 段（Linux）之前要定的九條都定了（已決定的事項第 1 到 9 條），第 2 段（macOS）的是第 17 到 20 條，第 3 段（Windows）的是第 21 到 27 條。每一段開始前只定那一段的：
 
 - **第 1 段開始時**（細節，照已決定的方向）：seccomp 放行的清單和回錯誤的名單（探測的 55 種，加上 wasm 的文件、trace、crash 的路再探一次）；`/proc/self/maps`、`/proc/sys/vm/overcommit_memory`、`/sys` 的那幾個、`/dev/urandom`、時區，每一個放行還是讓它失敗（先用 `strace -k` 找出是誰讀的）；fontconfig 的 cache 過期、寫不了時它怎麼辦；Browser 把字型的路徑和開好的 trace 檔交給 renderer 的方式（命令列、繼承的 fd）；renderer 的 trace 檔名和工具怎麼對上；還在支援期的發行版和 CI 的 kernel 有沒有 Landlock；輔助的執行檔怎麼放（`sunaba` 的 bin）。
-- **第 3 段（Windows）**：探測；`CreateProcessW` 和繼承的清單、`sunaba` 和 `ipc::platform::spawn` 怎麼接；token、integrity、job、mitigation；字型；最低要求。
+- **第 3 段（Windows）**：都定了（第 21 到 27 條）。
 
 ## 之後的可能
 
 **sandbox 收緊的順序**（2026-11-26 和使用者討論過；這份做完之後照這個順序，每一步都是在前一步上加，不用重做）：
 
-1. **字型服務**（另一份 RFC；F2）：Browser 列字型，把字型的清單、fallback 的表和字型檔的內容經過通道給 renderer，renderer 不開任何字型的檔案。等這份的 macOS、Windows 的探測做完再設計（那兩個平台可能本來就需要它：照記憶，Chromium 在 Windows 上經過 DirectWrite 的 proxy）。做完把 Linux 放行的字型路徑（已決定的事項第 3 條）拿掉；時區和其他零星的讀取（`/etc/localtime`、`/proc/self/maps`……）一起改成由 Browser 給或不需要。那時 Landlock 一個路徑都不放行，renderer 讀不到任何檔案的內容。
+1. **字型服務**（另一份 RFC；F2）：Browser 列字型，把字型的清單、fallback 的表和字型檔的內容經過通道給 renderer，renderer 不開任何字型的檔案。三個平台的探測都做完了：macOS 要交給 renderer 的是字型的內容（第 18 條），Windows 上 renderer 要改成不用 DirectWrite 的系統字型集合（它在更緊的 token 底下壞掉，`details.md` 的「Windows 的探測」；Chromium 在 Windows 上經過 DirectWrite 的 proxy）。做完把 Linux 放行的字型路徑（已決定的事項第 3 條）拿掉；時區和其他零星的讀取（`/etc/localtime`、`/proc/self/maps`……）一起改成由 Browser 給或不需要。那時 Landlock 一個路徑都不放行，renderer 讀不到任何檔案的內容。
 2. **Linux 加 PID 和 network namespace**（機器允許沒有特權的 user namespace 時；不允許時只有 Landlock 和 seccomp，不做 setuid 的 helper）：外面的 process 在 renderer 裡沒有編號、沒有網路介面，「其他 process」和「網路」多一層不靠 seccomp 的清單寫對的保護。要改啟動 child 的那一段、多 fork 一次、丟掉 user namespace 裡的特權。
 3. **Linux chroot 到空的目錄**（完整的 L3，要第 1、2 步）：連路徑在不在都探不出來、`/proc` 整個看不到。
 
 其他：
 
+- **Windows 在 AppContainer 上疊 restricted token**（Chromium 的 `USER_LOCKDOWN`；字型服務做完之後）：renderer 連開放給所有應用程式的地方都讀不到。探測過：machopo 的 renderer 在它底下要在 process 的第一個 thread 上先要一次亂數（C runtime 的 `rand_s` 第一次要載入系統的 DLL），之後還回啟動用的 token；啟動的程式不用重寫（第 22 條）。
+- **Windows 的另一個 window station 和 desktop**（第 26 條沒做的）：探測過、加上去沒有壞。win32k 的限制要拿掉時先補它。
+- **過濾 renderer 的環境變數**（三個平台；2026-11-26 和使用者討論過，先不做）：現在 renderer 繼承 Browser 整份環境，使用者放在環境變數裡的東西（API key、token、路徑）被攻破的 renderer 讀得到，不經過任何一個平台的 sandbox：它們在啟動時就在 renderer 的記憶體裡。Chromium 在 Windows 上只留七個（`Path`、`SystemDrive`、`SystemRoot`、`TEMP`、`TMP`、`LOCALAPPDATA` 和它自己 crash 回報用的一個；`sandbox/win/src/broker_services.cc`）；Linux 和 macOS 上有沒有過濾沒查到。做法：Browser 組 renderer 的命令時清掉環境、只放回清單上的（machopo 自己的 `MACHOPO_` 開頭的、開發用的 `RUST_LOG` 這幾個、各平台的函式庫要的：Windows 的 `SystemRoot`，Linux 的 fontconfig 要的 `HOME`、`XDG_*`、`FONTCONFIG_*`，ICU 要的 `TZ`，macOS 的 profile 要的 `HOME`）。清單漏一個時壞得安靜（字型、時區不對），每個平台要在那個平台上跑過；所以沒有跟著 Windows 這一段做。
+- **renderer 的記憶體上限**（Windows 的 job 可以設；Chromium 的 job 有）：不是隔離，是失控的 renderer 不拖垮整台機器。
 - **macOS 照 system call 的號碼再擋一層**（Seatbelt 的 `syscall-unix`、`syscall-mach` 和 Mach 訊息的過濾）：現在的 profile 照種類放行，renderer 碰得到的 kernel 介面還是全部的 system call；Linux 的 seccomp 清單那種「只放行用到的」在 macOS 上還沒有。Chromium 的 renderer 也沒有用。要先有 macOS 上的 system call 探測（`dtruss` 要關 SIP）。
 - **`sunaba` 變成獨立的 crate**（使用者 2026-11-26 的打算；像 elise：machopo 旁邊自己的專案，`third_party.toml` 釘 commit）：這份照那個樣子寫（已決定的事項第 12 條：不依賴 machopo 的 crate、只放通用的機制、自己的 README 和 soundness 文件、自己的測試和輔助的執行檔）。搬出去時要做的：它自己的 repo 和 CI（三個平台、幾種 kernel 的版本；machopo 的 CI 不跑它的測試）、授權和 `contributing` 的文件、machopo 這一側改成照 `third_party.toml` 釘的路徑相依、`sanity.py unsafe` 的允許清單拿掉它（像 elise 一樣照它自己的規則）、`CLAUDE.md` 的「第三方的 fork」那一節加上它。
 - trace 照 Chromium（Perfetto）寫進和 Browser 共用的記憶體、由 Browser 寫檔：trace 要變成常駐、隨時可以開的功能時。

@@ -17,7 +17,7 @@
 
 - **host 不信任 child**（Browser 對 renderer）：child 送的每個位元組、在共用記憶體裡寫的每個位元組都可能是惡意的。
 - **child 信任 host**：host 啟動它、決定它的環境，本來就能對它做任何事。child 這一側有幾處因此不檢查，列在「不變式」的 I5。
-- **同一個使用者的其他 process**：不是通道的對端，但碰得到有名字的東西（macOS 的 bootstrap 名字、Windows 的 pipe 名字）和同一個使用者擁有的物件。靠的是下面的假設；作業系統的 sandbox 還沒有做。
+- **同一個使用者的其他 process**：不是通道的對端，但碰得到有名字的東西（macOS 的 bootstrap 名字、Windows 的 pipe 名字）和同一個使用者擁有的物件。靠的是下面的假設。renderer 在作業系統的 sandbox 裡時碰不到這些（那是 `sunaba` 和 renderer 的 policy 的事）；這裡守的是沒有 sandbox 的 process。
 
 ## 要保證的性質
 
@@ -176,7 +176,7 @@ Miri 和 fuzzer 碰不到平台層（系統呼叫）：那一層靠跨 process �
 - **共用記憶體被對方同時寫**：這一端用 `ptr::copy_nonoverlapping` 和 `read_unaligned` 讀對方可能正在寫的位元組。Rust 的模型裡這是和另一個 process 的 data race；`ipc` 把它當成「讀到任意位元組」處理（I3），這也是用共用記憶體的程式通常的做法，但不是語言保證的。
 - **這一端寫 region 的 slice 靠對方不寫那一塊**（I10）：renderer 這一側靠的是 Browser 的程式不寫它給出去的 region，不是 kernel。同一個 process 裡的平台（`local`，測試用）兩端共用同一塊記憶體：一端太早說「讀完了」而另一端還拿著那塊 region 的 `SharedBuffer` 時，是同一個 process 裡的 data race；只有故意寫成那樣的測試做得到，現有的測試沒有。
 - **macOS 和 Windows 的平台層 CI 不跑**，fuzz、Miri、loom、TLA+、Verus 也只在本機跑：改了而沒有跑時沒有東西會發現。
-- **作業系統的 sandbox 還沒有做**：K5 對「同一個使用者的其他 process」的部分（Windows 啟動 child 時的繼承、pipe 建立時的保護）只靠審查。
+- **K5 對「同一個使用者的其他 process」的部分只靠審查**：Windows 的 pipe 建立時的保護，和 `spawn_with_pipe` 啟動 child 時的繼承（經過標準庫，靠一把鎖）。`spawn` 啟動的 child 只繼承指定的 handle，由 `sunaba` 的 `Command` 保證，有測試。
 - **Windows 的 `hold` 和 `let_go` 成對**：弄壞是釋放後被 kernel 寫，測試看不出來，沒有列成 mutant。
 - **標「實測」的假設**只在一個版本的系統上試過。
 

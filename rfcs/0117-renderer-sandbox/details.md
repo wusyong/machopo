@@ -216,6 +216,128 @@ kernel 對同一個 process、同一種操作、同一個對象短時間內只�
 - **`sandbox_check(pid, NULL, 0)`**：從外面問一個 process 在不在 sandbox 裡（測試用它看真的 renderer）；pid 不存在時也回「在」。
 - symlink：規則比的是解開之後的路徑（`/etc/localtime` 要寫 `/private/etc/localtime`），路徑上的 symlink 本身要 metadata（`/etc`）。
 
+## Windows 的探測
+
+2026-11-26，Windows 11（10.0.26300，x86-64），debug build，`3ce52b1c` 加上只為探測寫的原型（沒有 commit）：`sunaba` 的一個啟動函式（自己呼叫 `CreateProcessW`、`CreateProcessAsUserW`，可以選 token、integrity、AppContainer、job、mitigation，只繼承指定的 handle），`ipc` 的 `spawn` 在環境變數 `MACHOPO_SANDBOX_PROBE` 有值時改用它；renderer 這一側在 `main` 的開頭照 `MACHOPO_SANDBOX_PROBE_LOWER` 做降權的步驟（暖機、降到 Untrusted、還回啟動時的 token）。`probe_windows.py`（同一個資料夾）：`machopo --remote-debugging-pipe --headless` 載入和 Linux、macOS 的探測同一頁，印出標題、截圖的雜湊，和從外面看到的 renderer process（token 的 integrity 和限制、載入的 DLL）。每一種限制拿截圖和沒有 sandbox 的比（沒有 sandbox 的兩次、經過原型但不加限制的一次，三張逐 byte 相同）。
+
+這台機器不是管理員、沒有 Process Monitor 和 debugger：沒有「renderer 開了哪些檔案、登錄機碼」的清單（kernel 的 ETW 要管理員）；做法是 macOS 那種「加上限制、看壞了什麼」。renderer 被結束時要看是誰結束的，用 `crashwatch_windows.py`（同一個資料夾：接上 renderer 當它的 debugger，印出當掉的 thread 的堆疊）。
+
+**沒有限制時的 renderer**：25 個 thread，41 個 DLL：`machopo.exe` 是 Browser 和 renderer 共用的一個執行檔，所以 renderer 也靜態連著視窗和繪圖的那些（`user32`、`gdi32`、`opengl32`、`dxgi`、`dwmapi`、`shell32`、`ws2_32`、`crypt32`……），雖然它用不到。
+
+### 每一種限制的結果
+
+| 限制 | 系統字型的頁面 | 測試字型的頁面（`--test-fonts`） |
+| --- | --- | --- |
+| job（一個 process、UI 的限制全開、job 關掉時結束） | 相同 | 相同 |
+| 建立時的 mitigation（Chromium 的清單，不含 win32k：DEP、SEHOP、heap 損壞時結束、ASLR、不許 extension point、不許非系統的字型、不許從遠端和低 integrity 的位置載入 DLL） | 相同 | 相同 |
+| 建立時關掉 win32k 的 system call | process 起不來（`STATUS_DLL_INIT_FAILED`：靜態連著的 `user32`、`gdi32` 初始化失敗） | 同左 |
+| 啟動之後才關 win32k（`SetProcessMitigationPolicy`） | 被拒絕（`ERROR_WRITE_PROTECT`）：`user32` 已經載入 | 同左 |
+| restricted token，Chromium 的 `USER_LIMITED`（只剩 Users、Everyone、Interactive；限制在它們、RESTRICTED 和 logon session），Low integrity | 相同 | 相同 |
+| restricted token，`USER_LOCKDOWN`（全部的 group 和使用者都 deny-only；限制在 null SID），Low integrity，沒有暖機 | renderer 被結束（下面） | 同左 |
+| `USER_LOCKDOWN`，Low，暖機之後降到 Untrusted、還回啟動時的 token，加 job 和 mitigation（Chromium 的 renderer 的設定，少 win32k 和另一個 desktop） | **整頁空白**（標題照樣算出來：script、時區、語系都對） | **相同** |
+| AppContainer（沒有任何 capability），加 job 和 mitigation | **相同** | 相同 |
+| AppContainer，less privileged（LPAC） | 整頁空白 | 沒試 |
+
+- **`USER_LOCKDOWN` 沒有暖機時**：renderer 以 `0xC0000409` 結束，沒有訊息。堆疊：renderer 的 main thread（`CrRendererMain`，不是 process 的第一個 thread）建 V8 時，`cppgc::InitializeProcess` 要一個隨機的位址，V8 的 `RandomNumberGenerator` 叫 C runtime 的 `rand_s`，`rand_s` 第一次被呼叫時要載入系統的 DLL，lockdown 的 token 開不了檔案，失敗就 `abort`。process 的第一個 thread 還帶著啟動時的 token 時先要一次亂數（`RtlGenRandom`）就好了：Chromium 的 `WarmupRandomnessInfrastructure` 做的就是這件事。
+- **啟動時的 token 只有第一個 thread 有**：其他 thread 從一開始就只有 lockdown 的 token。machopo 的 renderer 的工作幾乎都不在第一個 thread 上（它等著 IO），所以「降權之前先做」的事一定要在第一個 thread 上做。
+- **系統字型在 lockdown 和 LPAC 底下整頁空白，不是讀不到字型檔**：LPAC 裡 `C:\Windows\Fonts` 列得出來、字型檔讀得到（下面的表），頁面一樣是空的。壞的是 DirectWrite 自己（fontique 用它列字型、找 fallback）：Chromium 的註解「the sandbox interferes with DirectWrite's communication with the system font service」。所以在這兩種底下要系統字型，renderer 不能用 DirectWrite 的系統字型集合，要像 Chromium 由 Browser 給。
+- **Low integrity 加沒有限制的 token**（只是試驗，不是哪一種設計）：有啟動時的 token 時同樣死在 `rand_s`，沒有時 process 起不來（`STATUS_ACCESS_DENIED`）；沒有查原因。
+- **AppContainer 要先登記過**：只算出 SID、沒有登記 profile 時 `CreateProcessW` 回「找不到檔案」；`CreateAppContainerProfile` 登記之後就可以。登記留下的是這個使用者的登錄裡一筆，和 `%LOCALAPPDATA%\Packages` 底下一個資料夾（探測用的登記，做完用 `DeleteAppContainerProfile` 刪掉了）。Chromium 不登記，自己建帶 AppContainer 的 token（下面的「AppContainer 的 token 自己建（Chromium 的做法）」）。
+- **AppContainer 不用改執行檔的權限**：從 `target/debug`（沒有給 ALL APPLICATION PACKAGES 權限）啟動的 renderer 一樣跑得起來、截圖相同。（machopo 是一個執行檔、沒有自己的 DLL。）
+
+### 從裡面試（每一種各啟動一個小的執行檔、試一件事）
+
+| 嘗試 | 沒有限制 | `USER_LIMITED`，Untrusted | `USER_LOCKDOWN`，Untrusted | AppContainer | LPAC |
+| --- | --- | --- | --- | --- | --- |
+| 讀、列、`stat` 使用者家目錄裡的檔案 | 可以 | 擋 | 擋 | 擋 | 擋 |
+| 讀 `C:\Windows\win.ini` | 可以 | 可以 | 擋 | 可以 | 可以 |
+| 讀、列 `C:\Windows\Fonts` | 可以 | 可以 | 擋 | 可以 | 可以 |
+| 列 `C:\ProgramData` | 可以 | 可以 | 擋 | 擋 | 擋 |
+| 在使用者的 Temp、`LocalLow` 建檔案 | 可以 | 擋 | 擋 | 擋 | 擋 |
+| TCP 連本機的 port | 可以 | **可以** | 擋（Winsock 起不來） | 擋（逾時） | 擋 |
+| TCP 連外面的位址 | 可以 | **可以** | 擋 | 擋（`WSAEACCES`） | 擋 |
+| 啟動 `cmd.exe`（這一輪沒有加 job） | 可以 | **可以** | 擋 | **可以**（在同一個 AppContainer 裡） | 擋 |
+| 開 parent 的 process（讀記憶體、查詢、結束） | 可以 | 擋 | 擋 | 擋 | 擋 |
+
+啟動其他程式由 job 擋（一個 process 的上限）；頁面的探測裡加了 job 的都正常。
+
+### wasm 的文件、trace、crash（AppContainer 加 job 和 mitigation）
+
+| 頁面 | 結果 |
+| --- | --- |
+| wasm 的文件（`dom_wasm` 的 `page.wasm`） | 截圖和沒有 sandbox 時相同 |
+| `about:crash` | Browser 照 renderer 當掉處理（`0xC0000409`） |
+| `MACHOPO_TRACE` | Browser 的 trace 寫出來；renderer 的開不了檔（stderr 一行）：AppContainer 是 process 一建立就在裡面，沒有「鎖之前先開」的時候 |
+
+### AppContainer 的 token 自己建（Chromium 的做法）
+
+不登記 profile：算出 SID（`DeriveAppContainerSidFromAppContainerName`），用 `kernelbase.dll` 匯出的 `CreateAppContainerToken`（不在公開的 header 裡；Chromium 的 `AccessToken::CreateAppContainer` 一樣宣告它來用）從自己的 token 建一個帶 AppContainer 的，再 `CreateProcessAsUserW`。有名字的物件的目錄由那個函式自己處理，不用另外建。
+
+- 加 job 和 mitigation：系統字型、測試字型的頁面的截圖都和沒有 sandbox 時相同；`%LOCALAPPDATA%\Packages` 和登錄裡沒有留下東西。
+- 從裡面試的 12 件事，結果和登記 profile 的 AppContainer 一樣；加了 job 之後啟動 `cmd.exe` 被擋（`ERROR_NOT_ENOUGH_QUOTA`）。綁一個本機的 port 來聽還是可以（別人連不進來：連本機的 port 是逾時）。
+- 換一個名字（另一個 SID）一樣能用，不用先做任何事：每個 renderer 一個 AppContainer 做得到。
+- **renderer 自己再降到 Untrusted**（AppContainer 的 token 建立時是 Low）：成功，頁面的截圖相同，裡面試的 12 件事結果不變。
+
+### 其餘的 mitigation
+
+Chromium 的清單裡第一輪沒試的，在自己建 token 的 AppContainer 加 job 和第一輪的 mitigation 上各加一個、各跑一次：
+
+| | 怎麼給 | 結果 |
+| --- | --- | --- |
+| 限制 indirect branch 的預測 | 建立時（mitigation 的第二個字） | 截圖相同 |
+| 關掉 FSCTL 的 system call | 同上 | 相同 |
+| 關掉 KTM | 建立時的 `PROC_THREAD_ATTRIBUTE_COMPONENT_FILTER` | 相同 |
+| 不許建 child process | 建立時的 `PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY` | 相同 |
+| DLL 只在系統的目錄找 | renderer 自己，`SetDefaultDllDirectories` | 相同 |
+| 嚴格的 handle 檢查 | renderer 自己，`SetProcessMitigationPolicy` | 相同 |
+| 只許 Microsoft 簽章的 DLL | 同上 | 相同（這台的 renderer 只載入系統的 DLL） |
+
+全部一起開、再降到 Untrusted：系統字型的頁面、測試字型的頁面、wasm 的文件的截圖都和沒有 sandbox 時相同，`about:crash` 照 renderer 當掉處理。這台沒有會把 DLL 注入其他 process 的軟體：「只許 Microsoft 簽章的」在有那種軟體的機器上會怎樣沒有試到。「只許 Microsoft 簽章的」改在建立時就給（mitigation 的第一個字，machopo 自己的執行檔不受它管）也一樣：三張截圖都相同。這一輪只確認了「加上去沒有壞」，沒有從外面讀每一個是不是真的生效（實作時的測試讀）。
+
+### win32k：把視窗和繪圖的 DLL 改成延後載入
+
+連結時把 renderer 用不到的 DLL 標成延後載入（`/DELAYLOAD`：`user32`、`gdi32`、`imm32`、`ole32`、`dwmapi`、`uxtheme`、`shell32`、`oleaut32`、`setupapi`、`dxgi`、`opengl32`、`winmm`、`dbghelp`、`crypt32`、`ws2_32`、`userenv`、`dwrite`，加上 `delayimp.lib`；只試了一次連結，用 `cargo rustc` 給最後那一步的參數，沒有改專案的設定）：第一次呼叫到某個 DLL 的函式時才載入它。
+
+- renderer 載入的 DLL 從 41 個變成 19 個，沒有 `user32`、`gdi32`（`dwrite` 用到時才載入，它不帶進那兩個）。Browser 照常（headless 的頁面截圖相同）。
+- **建立時關掉 win32k 的 system call 就可以了**：連同其他全部的 mitigation、AppContainer、job、Untrusted，系統字型的頁面、測試字型的頁面、wasm 的文件的截圖都和沒有 sandbox 時相同，`about:crash` 照舊。
+- 有視窗的 Browser（`--remote-debugging-pipe` 不加 `--headless`）：沒有 sandbox 和全部都開的兩次，頁面的截圖相同，視窗照常開、照常關。
+- 沒試的：release build；連結和啟動的時間；`test.py scenarios --window` 整套。
+
+### 另一個 window station 和 desktop
+
+啟動的一方建一個新的 window station、在裡面建一個 desktop（建的時候暫時把自己的 window station 換過去，Chromium 一樣），名字放進 `STARTUPINFO` 的 `lpDesktop`。
+
+- 加在全部都開的設定上（AppContainer、job、Untrusted、全部的 mitigation 連同 win32k）：系統字型、測試字型的頁面截圖相同；有視窗的 Browser 也照常。
+- win32k 沒關時加它：截圖也相同。
+- **沒有確認 renderer 真的在那個 desktop 上**：win32k 關掉、`user32` 沒載入時，renderer 沒有一個 thread 會連到任何 desktop，這一層擋的事（對其他視窗送訊息、裝 hook）它本來就做不到。沒有改 window station 和 desktop 的權限就能用，也是因為這樣。
+- 探測裡建的 window station 和 desktop 沒有關（Browser 結束時系統收掉）；正式的要跟著 renderer 的壽命關，或所有 renderer 共用一個。
+
+
+沒試的：使用者自己裝的字型（`%LOCALAPPDATA%\Microsoft\Windows\Fonts`，這台沒有這個資料夾）；`census` 的 build；Windows 10。
+
+## Chromium 的 Windows sandbox
+
+2026-11-26 讀的（`main`）：它的設計文件裡的 `sandbox.md`、`sandbox/policy/win/sandbox_win.cc`、`sandbox/win/src/` 的 `restricted_token_utils.cc`、`restricted_token.cc`、`broker_services.cc`、`target_services.cc`、`job.cc`、`startup_information_helper.cc`、`security_level.h`、`process_mitigations.cc`、`sandbox_policy_base.cc`，`content/browser/renderer_host/renderer_sandboxed_process_launcher_delegate.cc`、`content/renderer/renderer_main.cc`、`renderer_main_platform_delegate_win.cc`、`content/child/dwrite_font_proxy/`、`sandbox/policy/features.cc`。
+
+- **由啟動的一方（broker）給，child 再自己降完**：`CreateProcessAsUserW`（`CREATE_SUSPENDED`、`DETACHED_PROCESS`），token、job、mitigation、繼承的 handle 都在建立時給；之後 `SetThreadToken` 給第一個 thread 一個啟動用的 token（註解：「This allows the target to start; otherwise it will crash too early for us to help」），再 `ResumeThread`。child 準備好之後呼叫 `LowerToken`：降 integrity、`RevertToSelf`、設 delayed 的 mitigation；任何一步失敗就結束 process（「Failure here is a breach of security」）。
+- **token**：`SetTokenLevel(USER_RESTRICTED_SAME_ACCESS, USER_LOCKDOWN)`。lockdown：使用者和所有 group 都 deny-only（logon SID 和 integrity 的除外），限制在 null SID，privilege 全部拿掉。啟動用的是「限制在它本來就有的全部」（「The initial token has to be restricted if the main token is restricted」）。
+- **integrity**：建立時 Low，`LowerToken` 裡降到 Untrusted。
+- **job**：`JobLevel::kLockdown`：一個 process、unhandled exception 時結束、job 關掉時結束，UI 的限制全開；經 `PROC_THREAD_ATTRIBUTE_JOB_LIST` 在建立時給。
+- **mitigation**：建立時 `HEAP_TERMINATE`、`BOTTOM_UP_ASLR`、`DEP`、`DEP_NO_ATL_THUNK`、`EXTENSION_POINT_DISABLE`、`SEHOP`、`NONSYSTEM_FONT_DISABLE`、`IMAGE_LOAD_NO_REMOTE`、`IMAGE_LOAD_NO_LOW_LABEL`、`RESTRICT_INDIRECT_BRANCH_PREDICTION`、`KTM_COMPONENT`、`FSCTL_DISABLED`，renderer 另加 `WIN32K_DISABLE`；之後才設的 `DLL_SEARCH_ORDER`、`FORCE_MS_SIGNED_BINS`、`STRICT_HANDLE_CHECKS`。不許動態產生程式碼（ACG）只在 JIT 關掉時；CET 對 renderer 關掉（V8 換 stack 的方式不合）。`security_level.h`：連著 `user32`、`gdi32` 的程式在啟動時就會呼叫 win32k，關 win32k 要另外處理。
+- **繼承**：`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`，清單不是空的才繼承（「Allowing inheritance of handles is only secure now that we have limited which handles will be inherited」）；stdout、stderr 只在不是 official build 時傳，而且只收檔案和 pipe（console 的 handle 不能經過這份清單繼承）。
+- **降權之前做的**：`icu::TimeZone::createDefault()`（時區要讀登錄）、`WarmupRandomnessInfrastructure()`；`renderer_main.cc`：「Sandbox is enabled before RenderProcess initialization on all platforms, except Windows and Mac」。
+- **AppContainer**：`kRendererAppContainer` 預設關。開的時候是在 restricted token 上再加 AppContainer（「takes the existing restricted token and adds the Low Box attributes, without granting any Capabilities」），不是取代它。
+- **desktop**：另一個 window station 和 desktop（`Desktop::kAlternateWinstation`）。
+- **字型**：renderer 不用系統的字型集合：`DWriteCreateFactory(DWRITE_FACTORY_TYPE_ISOLATED)` 加自己的 collection loader，問 Browser（`dwrite_font_proxy.mojom`，都是同步的：`FindFamily`、`GetFamilyNames`、`GetFontFileHandles`、`MapCharacters`……）；Browser 回的是字型檔開好的 handle（「We pass handles for every path as the sandbox blocks direct access to font files in the renderer」）。
+- **套不上時**：不啟動，不退回沒有 sandbox。`--no-sandbox` 時用一般的方式啟動，只帶繼承的清單。
+- **Firefox 的 content process**（`security/sandbox/win/src/sandboxbroker/sandboxBroker.cpp`，預設的 level 9）：同一套程式；lockdown 的 job、`USER_LOCKDOWN_WITH_TRAVERSE`（它自己加的一級）、Low 再到 Untrusted、另一個 desktop、win32k 關掉；字型不同：renderer 讀字型檔，由 broker 照已安裝的字型檢查（`AllowFontFileAccess`）。
+
+建帶 AppContainer 的 token（之後讀的：`sandbox/win/src/app_container_base.cc`、`base/win/access_token.cc`）：`CreateAppContainerToken`（`kernelbase.dll` 匯出的，用 `GetProcAddress` 取），renderer 的那一種（`kLowbox`）不登記；登記的那一種（`kProfile`）才呼叫 `AppContainerRegisterSid`、建 profile 的資料夾。
+
+沒有查到的：renderer 在哪裡、相對於 `LowerToken` 什麼時候初始化字型的 proxy；DirectWrite 連字型服務用的是什麼（只有上面那句註解和它 patch 掉的 service manager、ALPC 的呼叫）。
+
+對 machopo 的意思：Chromium 的那一套（lockdown 的 token）machopo 的 renderer 加一步暖機就跑得起來，但系統字型要先有 Browser 那一側的字型服務；AppContainer 單獨用時字型照舊能用，擋得住的少一點（讀得到 `C:\Windows` 這類給所有應用程式讀的地方）。關 win32k 要 renderer 的執行檔不連 `user32`、`gdi32`。
+
 ## Linux 的機制的比較
 
 2026-11-26 對過 kernel 的文件（`docs.kernel.org/userspace-api/landlock.html`，7.4-rc4 的版本）；seccomp 和 namespace 的版本是照記憶寫的：
@@ -291,7 +413,7 @@ README 的「先例」和各節「對照 Chromium」裡 Windows、Firefox 的部
 
 - Chromium 的 Linux：對過了（上面的「Chromium 的 Linux sandbox」）；還沒讀的：`RestrictKillTarget`、`RestrictMprotectFlags`、`RestrictPrctl` 這些函式的內容（`syscall_parameters_restrictions.cc`），第 1 段寫 policy 時讀。
 - Chromium 的 macOS：對過了（上面的「Chromium 的 macOS sandbox」）。
-- Chromium 的 Windows：`sandbox/win/`、`sandbox/policy/win/sandbox_win.cc`（renderer 的 token、integrity、job、mitigation）、`content/child/dwrite_font_proxy/`。
+- Chromium 的 Windows：對過了（上面的「Chromium 的 Windows sandbox」）；還沒讀的列在那一節的最後。
 - Firefox：`security/sandbox/linux/`（`SandboxFilter.cpp`、broker）、`security/sandbox/mac/SandboxPolicyContent.h`。
 - 有沒有用 Landlock 的瀏覽器或類似的程式（先例）。
 

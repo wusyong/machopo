@@ -16,7 +16,12 @@
 | 2b. `sunaba::macos`：`Profile`、`enter`、`entered`、`sandboxed`、`probe`；`sunaba_probe` 的 macOS 版和「做不到」的測試；README 和 `soundness.md` | 做完 | 2026-11-26 |
 | 2c. 接上 machopo：`shell::renderer_sandbox::macos` 的 profile、renderer 的 `main` 第一件事進 sandbox、`--type=renderer-sandbox-probe`；`shell` 的測試從外面看真的 renderer、從裡面試 profile | 做完 | 2026-11-26 |
 | 2d. 第 2 段的檢查和文件 | 做完（Speedometer 沒量：等使用者要求） | 2026-11-26 |
-| 3. Windows | 沒開始 | |
+| 3a. Windows 的探測（`details.md` 的「Windows 的探測」）、對 Chromium 的 Windows sandbox 的原始碼、定這一段的事（已決定的事項第 21 到 27 條） | 做完 | 2026-11-26 |
+| 3b. `sunaba::windows`：啟動 process 的函式、policy（AppContainer 的 token、job、mitigation）、降 integrity；`sunaba_probe` 的 Windows 版和「做不到」的測試；README 和 `soundness.md` | 做完 | 2026-11-26 |
+| 3c. `ipc` 的 `spawn` 改用它：自己的 `Child`、`spawn_in`、`spawn_reading_errors`（`spawn_with_pipe` 沒有改，鎖還在：已決定的事項第 23 條） | 做完 | 2026-11-26 |
+| 3d. 接上 machopo：`shell::renderer_sandbox` 的 Windows policy、延後載入、renderer 的 `main` 降 integrity、`--allow-third-party-modules`、從外面看真的 renderer 的測試 | 做完 | 2026-11-26 |
+| 3e. trace 和 census 的檔案由 Browser 開好交給 renderer（fork 的 Rust 加 Windows 的入口） | 做完（**fork 的 commit、push 和 machopo 的 `third_party.toml` 的 `rev` 還沒做，等使用者**） | 2026-11-26 |
+| 3f. 第 3 段的檢查和文件 | 做完（只在 Windows 上；Linux 和 macOS 上還沒跑過這一段的改動） | 2026-11-26 |
 
 ## 驗收
 
@@ -121,3 +126,56 @@
 - 量測工具的測試：`speedometer_test.py`（126 個，跳過 4 個）、`blink_perf_test.py`（37 個，跳過 3 個）、`raster_test.py`（13 個）、`census_test.py`（5 個）：過。
 - 探測的頁面、wasm 的文件在最後的 profile 底下的截圖和沒有 sandbox 時逐 byte 相同；`about:crash` 照 renderer 當掉處理；`MACHOPO_TRACE` 寫得出 renderer 的 trace。
 - 沒有做的：Speedometer（等使用者要求）；`scenarios --window`（沒有動到視窗那一層）；`census` feature 的 build 在 sandbox 裡的測試（`cargo test -p shell --features census` 沒有在 macOS 上跑）；Linux 上重跑（這一段沒有改 Linux 的 policy，改到的共用程式是 `renderer_sandbox.rs` 的 `enter`、`probe`、`ChildSwitches::for_renderer` 和 `lib.rs` 的 `renderer_launcher`：Linux 那一側由 CI 和使用者在 Linux 的機器上確認）。
+
+### 3a：Windows 的探測（2026-11-26，Windows 11 10.0.26300，x86-64，debug build，`3ce52b1c` 加沒有 commit 的原型）
+
+- `probe_windows.py`：每一種限制（job、mitigation、三級 restricted token、integrity、AppContainer、LPAC）各跑一次，拿截圖和沒有 sandbox 的比；另外用一個小的執行檔在每一種裡面各試 17 件事。結果在 `details.md` 的「Windows 的探測」。
+- 這台不是管理員、沒有 debugger：renderer 被結束時用 `crashwatch_windows.py` 接上去看堆疊。lockdown 的 token 底下 renderer 死在 V8 第一次要亂數（`rand_s` 要載入系統的 DLL）：先在第一個 thread 上要一次亂數就好了。
+- 探測用的原型在工作目錄裡、沒有 commit：`sunaba` 的 `windows.rs`（啟動函式）和 `sunaba_probe` 的 Windows 版、`ipc` 的 `windows/child.rs` 和 `spawn` 裡的分支、`browser` 的 `render_process_host.rs`（`Child` 的型別）、`shell` 的 `renderer_sandbox.rs`（降權的步驟）。都標著 `PROBE`；定了機制之後改寫成正式的，或丟掉。
+- 探測時登記過一個 AppContainer（`machopo.probe.renderer`），做完用 `DeleteAppContainerProfile` 刪掉了；在家目錄和 Temp 建過的測試檔也刪了。
+- 沒有做的：Process Monitor 那種「開了哪些檔案和登錄機碼」的清單（要管理員）；另一個 desktop；使用者自己裝的字型；Windows 10。
+- 補的探測（同一天）：AppContainer 的 token 照 Chromium 自己建（`CreateAppContainerToken`，不登記 profile），和 renderer 自己再降到 Untrusted：都成功，截圖相同（`details.md` 的「AppContainer 的 token 自己建（Chromium 的做法）」）。原本照記憶說 Chromium 用的是 `NtCreateLowBoxToken`、要自己建物件的目錄：讀了原始碼，不是。
+- 補的探測（同一天）：Chromium 的清單裡第一輪沒試的七個 mitigation，各自和全部一起都沒有改變截圖（`details.md` 的「其餘的 mitigation」）。
+- 補的探測（同一天）：把視窗和繪圖的 DLL 改成延後載入之後，建立時關掉 win32k 可以了（`details.md` 的「win32k：把視窗和繪圖的 DLL 改成延後載入」）。**`target/debug/machopo.exe` 現在是那一次試驗連結出來的**，要用一般的之前先重新 build。
+- 補的探測（同一天）：延後載入之後有視窗的 Browser 照常；另一個 window station 和 desktop 加上去沒有壞（`details.md` 的「另一個 window station 和 desktop」）。
+
+### 3b、3c、3d：`sunaba::windows`、`ipc`、接上 machopo（2026-11-26，同一台，debug build）
+
+- 探測的原型都換掉了：`sunaba` 的 `windows.rs` 重寫成 `Command`、`Policy`、`Child`、`lower` 和從外面問一個 process 的幾個函式；`ipc`、`browser`、`shell` 裡標著 `PROBE` 的分支和環境變數拿掉了。
+- `cargo test -p sunaba`：單元測試 5 個，整合測試 21 個（`tests/it/windows.rs`：每個測試跑 `sunaba_probe`，它在整個 policy 底下啟動自己、試一件事），整合測試連跑 3 次都過。`cargo test -p ipc`：都過。`cargo test -p browser -p driver`：都過。`cargo test -p shell`：3 個沒過，都是 trace 的（`trace::a_renderer_process_writes_a_trace_of_its_own`、`marks_and_measures_are_chromes_user_timing_events`、`a_js_documents_cppgc_phases_are_traced`：renderer 在 sandbox 裡開不了自己的 trace 檔），等 3e；其餘都過，其中 `renderer_sandbox_windows` 9 個。
+- 真的 machopo（一般的 build）：renderer 在 AppContainer 裡、Untrusted、19 個 DLL，探測的頁面的截圖和 `--no-sandbox` 時、和 3a 的基準都相同（系統字型、測試字型）。
+- `sanity.py` 七項：過。
+- 做的時候發現的：
+  - **`spawn_with_pipe` 換不過去**：它的呼叫端用標準庫的 `Command` 設定 stdout、stderr 再從標準庫的 `Child` 讀，那些設定讀不出來。第 23 條照實改了。同一個原因，`shell` 的測試讀 renderer 的 stderr 的地方改用新的 `ipc::platform::spawn_reading_errors`（三個平台都有）。
+  - **AppContainer 裡的 process 本來就有嚴格的 handle 檢查**（還沒 `lower` 時讀 mitigation 就是開的）：`lower` 裡開它的那一行拿掉也看不出差別（`docs/test-gaps.md`）。
+  - **在 sandbox 裡啟動程式是被 process 自己的屬性擋的**（`ERROR_CHILD_PROCESS_BLOCKED`），不是 job（探測時沒有那個屬性，是 job 擋的）：job 的「一個 process」這個上限因此沒有測試單獨守著。
+  - 測試裡「一個號碼在 child 裡是不是 handle」一開始只看 `GetHandleInformation`：child 自己剛好有一個同號碼的別的 handle 時會誤判（跑第一次就遇到）。改成還要是同一種物件（開的是 `NUL`）。
+  - 從真的 console 啟動（stdout、stderr 都是 console）時，sandbox 裡的 process 起得來（手動確認，`docs/test-gaps.md`）。
+- mutation test（`mutants-3.toml`）：33 個都抓到，跑完檔案都還原了。第一次跑時測試的篩選字把還沒修的 trace 測試也選進去，基準沒過、一個都沒跑；改了篩選重跑。兩個 mutant 寫壞了重寫：一個編不過；一個把「降 integrity 失敗時回錯誤」換成不看結果，呼叫還是做了，測不出來（要一個會失敗的 `SetTokenInformation`，沒有），換成「成功當成失敗」。
+- 等價、沒有列進去的：`lower` 裡不開嚴格的 handle 檢查（上面）；不設 job 的「一個 process」上限（上面）。
+- 測試守不住的（`docs/test-gaps.md`）：關掉 KTM、job 的 UI 限制、DEP 那幾個（沒有讀得回來的狀態）；DLL 的搜尋順序；建不出 sandbox 時不啟動；`--allow-third-party-modules` 在有注入 DLL 的軟體的機器上；console。
+- 沒有做的：`cargo test --workspace`、fmt、clippy（這一段全部做完時跑）；`test.py scenarios --window`（延後載入動到整個執行檔，3f 跑）；release build；Linux 和 macOS 上重跑（改到的共用程式：`ipc::platform` 的 `Child`、`Sandbox`、`spawn_in`、`spawn_reading_errors`，`browser` 的 `RendererLauncher::Process` 的回傳值，`shell` 的 `renderer_launcher`、`renderer_sandbox::sandbox`、`sad_tab` 的新原因，和 `shell`、`ipc` 的測試讀 stderr 的方式：那兩個平台由 CI 和使用者在那裡的機器上確認）。
+
+### 3e：trace 和 census（2026-11-26，同一台）
+
+- rusty_v8 的 fork：只改了 Rust。`machopo__Trace__StartInto` 收的是 C runtime 的 file descriptor，C++ 在每個平台都編進去了，prebuilt 裡本來就有；只有 Rust 的 `start_into` 標了只限 Unix。加了 Windows 版（`_open_osfhandle` 把 handle 變成 descriptor，帶 `_O_BINARY`），`README.machopo.md` 跟著改。**沒有重編 V8**；原本以為要改 C++（第 24 條照實改了）。**fork 的兩個檔案改了、沒有 commit**。
+- machopo：`browser::RendererProcess`（命令、sandbox、交出去的檔案、process 建好之後叫的函式）；`ipc::platform` 的 `spawn_handing`、`inherited_file`（Windows）；`shell` 的 `renderer_sandbox::windows`（`Handed`：先用別的名字建檔、建好再改名；`HandedFiles`：renderer 讀命令列的 `--trace-file`、`--census-file`）；renderer 的 `main` 接手檔案、降權、才開始 trace；`base::census::own_file_from`；`bindings::trace::start_into` 和 `shell::trace::layer_into` 不再只限 Unix。
+- 原本沒過的 3 個 trace 測試過了。`cargo test -p shell --features census --test it census`：過。新的單元測試 3 個（命令列的值、開著時改名、每個 renderer 自己的 AppContainer），`ipc` 1 個（`a_handed_file_is_taken_by_its_value_and_nothing_else_is`）。
+- 量測工具的測試：`speedometer_test.py`（142 個，跳過 4 個）、`blink_perf_test.py`（46 個）、`raster_test.py`（13 個，跳過 1 個）、`census_test.py`（5 個）：過。
+- mutation test（`mutants-3.toml` 裡 3e 的 9 個，和因為程式改了而重寫的 3 個）：都抓到，檔案都還原了。第一次有一個沒抓到：`inherited_file` 把不是檔案的 handle 當成檔案；補了 `ipc` 的那個測試之後抓到。整份 `mutants-3.toml` 是 42 個。
+- 沒有列進去、靠審查的：fork 的 `_open_osfhandle` 的 `_O_BINARY`（少了它，寫出去的 trace 裡的換行會被改掉；trace 的測試讀得回事件，但沒有專門守這一點）。
+
+### 3f：第 3 段的檢查（2026-11-26，Windows 11 10.0.26300，x86-64，debug build；renderer process 都在 sandbox 裡）
+
+- `cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`sanity.py` 七項：過。clippy 抓到的兩處改了（計數器換成 `base::AtomicSequenceNumber`、一個多餘的 `.ok()`）。**Windows 上的 clippy 和編譯看不到 Linux、macOS 專屬的程式**：這一段改到共用的型別和函式（3b 到 3d 那一節列的，加上 3e 的 `RendererProcess` 和 renderer 的 `main` 開檔的那一段），那兩個平台連編不編得過都沒有確認（這台沒有那兩個 target）。
+- `cargo test --workspace --no-fail-fast`：跑了 4 次，每次 4969 個通過、0 失敗、2 個略過。
+- `test.py scenarios`：98 個都過。`test.py scenarios --window`（延後載入動到整個執行檔）：74 個都過；更早在背景和其他檢查排在一起跑的那一次以失敗結束，當時只留了輸出的最後幾行、不知道是哪一個，單獨重跑沒有重現。
+- `test.py reftest`：152 個，都和預期一樣。`test.py wpt dom/nodes`：15617 個檢查，沒有和預期不同的。`test.py wpt css/css-fonts/parsing`：1256 個檢查，沒有和預期不同的。
+- **不穩定的測試**：第一次跑整個 workspace 時 `shell` 的整合測試有 1 個失敗（當時沒留下名字）。之後 `shell` 的整合測試連跑 20 次，2 次各有 1 個失敗：`event_loop::an_idle_callbacks_timeout_comes_while_the_page_is_busy`（`didTimeout` 是 false）和 `automation_pipe::the_window_has_bounds_to_set`（等 machopo 回答逾時）。兩個都不經過這一段改的程式：
+  - 前一個的 renderer 是測試的 process 裡的 thread。頁面用一個接一個的 `fetch` 讓 thread 忙著，兩個回應之間 thread 閒下來時 idle callback 就照常跑了。
+  - 後一個截一張 8192×8192 的圖。8 個同時、各跑 40 次（每次連同兩個啟動 sandbox 裡的 renderer 的測試）：它失敗 1 次，machopo 寫那張圖的訊息寫到一半就結束了；另外兩個測試 640 次啟動都沒有失敗。**Browser 為什麼寫到一半結束沒有查**（猜是記憶體或 GPU 撐不住）。
+  - 沒有拿這一段之前的程式重跑來對照：「和 sandbox 無關」靠的是上面兩點，不是前後的比較。
+  - 這兩個測試，和 CI 最近 40 次裡失敗過的 `navigation::links::location_navigates_to_other_documents_through_the_browser`（同一個 task 裡被取代的那次導覽，請求有時來得及送出去），另外改了（`6523c436`，和這份無關的一個 commit）：改完各跑 320 次、8 個同時，都沒有失敗。
+- 文件：`docs/limitations.md`（「隔離」改成三個平台、Windows 擋不住的、環境變數、`--allow-third-party-modules`、console；`ipc` 在 Windows 上啟動 child 的那一條改成只剩 `spawn_with_pipe`）、`docs/architecture.md`（「Process 的邊界」第 5 條、crate 表的 `sunaba`、`unsafe` 的位置）、`docs/test-gaps.md`（五條）、`crates/sunaba` 的 README 和 `soundness.md`、`crates/ipc` 的 README 和 `soundness.md`、`machopo --help`。
+- 沒有做的：Speedometer（等使用者要求）；release build（延後載入和 sandbox 只在 debug build 上跑過）；Windows 10；Linux 和 macOS 上重跑。
+- 還沒做、等使用者：fork 的 commit 和 push、`third_party.toml` 的 `rev`（之後別的機器和 CI 才編得過）；這一段的 commit。

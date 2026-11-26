@@ -1,0 +1,277 @@
+# Stage 3's mutants (Windows: sunaba's starting a process in its sandbox, ipc's spawn through it, the renderer's sandbox in shell): `python scripts/test.py mutate rfcs/0117-renderer-sandbox/mutants-3.toml`, on Windows.
+test = ["cmd", "/c", "cargo test -q -p sunaba && cargo test -q -p shell --lib && cargo test -q -p shell --test it -- renderer_process:: renderer_sandbox_windows:: trace::"]
+timeout = 900
+
+[[mutant]]
+name = "a policy's process gets no app container"
+file = "crates/sunaba/src/windows.rs"
+from = '''            Some(policy) => Some(app_container_token(&policy.app_container)?),'''
+to = '''            Some(policy) => { let _ = &policy.app_container; None::<OwnedHandle> }'''
+
+[[mutant]]
+name = "win32k's calls aren't turned off"
+file = "crates/sunaba/src/windows.rs"
+from = '''            first |= creation::WIN32K_DISABLE;'''
+to = '''            first |= 0;'''
+
+[[mutant]]
+name = "any DLL may be loaded"
+file = "crates/sunaba/src/windows.rs"
+from = '''            first |= creation::MICROSOFT_SIGNED_ONLY;'''
+to = '''            first |= 0;'''
+
+[[mutant]]
+name = "extension points are left"
+file = "crates/sunaba/src/windows.rs"
+from = '''            | creation::EXTENSION_POINT_DISABLE'''
+to = '''            | 0'''
+
+[[mutant]]
+name = "the kernel parses any font"
+file = "crates/sunaba/src/windows.rs"
+from = '''            | creation::NON_SYSTEM_FONT_DISABLE'''
+to = '''            | 0'''
+
+[[mutant]]
+name = "remote images load"
+file = "crates/sunaba/src/windows.rs"
+from = '''            | creation::IMAGE_LOAD_NO_REMOTE
+'''
+to = '''            | 0
+'''
+
+[[mutant]]
+name = "low-integrity images load"
+file = "crates/sunaba/src/windows.rs"
+from = '''            | creation::IMAGE_LOAD_NO_LOW_LABEL;'''
+to = '''            | 0;'''
+
+[[mutant]]
+name = "the second word of mitigations is empty"
+file = "crates/sunaba/src/windows.rs"
+from = '''            creation2::RESTRICT_INDIRECT_BRANCH_PREDICTION | creation2::FSCTL_DISABLE,'''
+to = '''            0,'''
+
+[[mutant]]
+name = "allowing win32k allows nothing"
+file = "crates/sunaba/src/windows.rs"
+from = '''        self.win32k = true;'''
+to = '''        self.win32k = false;'''
+
+[[mutant]]
+name = "allowing other people's DLLs allows nothing"
+file = "crates/sunaba/src/windows.rs"
+from = '''        self.third_party_modules = true;'''
+to = '''        self.third_party_modules = false;'''
+
+[[mutant]]
+name = "the process isn't put in its job"
+file = "crates/sunaba/src/windows.rs"
+from = '''            attributes.add(PROC_THREAD_ATTRIBUTE_JOB_LIST, jobs.as_slice())?;'''
+to = '''            let _ = &jobs;'''
+
+[[mutant]]
+name = "the job doesn't end its process when it closes"
+file = "crates/sunaba/src/windows.rs"
+from = '''        | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+'''
+to = '''        | 0
+'''
+
+[[mutant]]
+name = "child processes aren't refused by the process's attribute"
+file = "crates/sunaba/src/windows.rs"
+from = '''                PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY,
+                std::slice::from_ref(&one),'''
+to = '''                PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY,
+                std::slice::from_ref(&0u32),'''
+
+[[mutant]]
+name = "every inheritable handle is inherited"
+file = "crates/sunaba/src/windows.rs"
+from = '''            attributes.add(PROC_THREAD_ATTRIBUTE_HANDLE_LIST, handles.as_slice())?;'''
+to = '''            let _ = &handles;'''
+
+[[mutant]]
+name = "no handle is inherited"
+file = "crates/sunaba/src/windows.rs"
+from = '''        let inherit = i32::from(!handles.is_empty());'''
+to = '''        let inherit = i32::from(handles.is_empty());'''
+
+[[mutant]]
+name = "lowering takes the integrity level's being set for a failure"
+file = "crates/sunaba/src/windows.rs"
+from = '''    check("SetTokenInformation", set != 0)?;'''
+to = '''    check("SetTokenInformation", set == 0)?;'''
+
+[[mutant]]
+name = "lowering goes to low, not untrusted"
+file = "crates/sunaba/src/windows.rs"
+from = '''            WinUntrustedLabelSid,
+'''
+to = '''            windows_sys::Win32::Security::WinLowLabelSid,
+'''
+
+[[mutant]]
+name = "backslashes before a quote aren't doubled"
+file = "crates/sunaba/src/windows.rs"
+from = '''            backslashes = backslashes.saturating_add(1);'''
+to = '''            backslashes = 0;'''
+
+[[mutant]]
+name = "an environment variable's name is told apart by case"
+file = "crates/sunaba/src/windows.rs"
+from = '''    name.to_string_lossy().to_uppercase().into()'''
+to = '''    name.to_string_lossy().into_owned().into()'''
+
+[[mutant]]
+name = "the errors go where the starter's go"
+file = "crates/sunaba/src/windows.rs"
+from = '''            self.errors.or_else(|| standard_handle(STD_ERROR_HANDLE)),'''
+to = '''            standard_handle(STD_ERROR_HANDLE),'''
+
+[[mutant]]
+name = "every process is said to be running"
+file = "crates/sunaba/src/windows.rs"
+from = '''    unsafe { WaitForSingleObject(process.as_raw_handle(), 0) == WAIT_TIMEOUT }'''
+to = '''    unsafe { WaitForSingleObject(process.as_raw_handle(), 0) == WAIT_TIMEOUT || true }'''
+
+[[mutant]]
+name = "every process is said to be in an app container"
+file = "crates/sunaba/src/windows.rs"
+from = '''    Ok(answer.first().is_some_and(|word| *word & 0xFFFF_FFFF != 0))'''
+to = '''    Ok(answer.first().is_some_and(|word| *word & 0xFFFF_FFFF != 0 || true))'''
+
+[[mutant]]
+name = "the browser gives its renderers no sandbox"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''    if disabled() {'''
+to = '''    if !disabled() {'''
+
+[[mutant]]
+name = "the launcher hands no sandbox on"
+file = "crates/shell/src/lib.rs"
+from = '''        process.sandbox = renderer_sandbox::sandbox();'''
+to = '''        process.sandbox = None;'''
+
+[[mutant]]
+name = "the browser's switch for other people's DLLs does nothing"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''            policy.allow_third_party_modules();'''
+to = '''            let _ = &mut policy;'''
+
+[[mutant]]
+name = "a renderer doesn't lower itself"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''        sunaba::windows::lower().map_err(|error| error.to_string())?;'''
+to = '''        if false { sunaba::windows::lower().map_err(|error| error.to_string())?; }'''
+
+[[mutant]]
+name = "the probe is started with no sandbox"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''            match command.spawn(sandbox().as_ref()) {'''
+to = '''            match command.spawn(None) {'''
+
+[[mutant]]
+name = "user32 is loaded as the executable starts"
+file = "crates/shell/build.rs"
+from = '''    "user32", "gdi32", "imm32",'''
+to = '''    "imm32",'''
+
+[[mutant]]
+name = "a process that didn't load is taken for a crash"
+file = "crates/shell/src/sad_tab.rs"
+from = '''        } else if code.is_some_and(|code| NOT_LOADED.contains(&code.cast_unsigned())) {'''
+to = '''        } else if code.is_some_and(|code| NOT_LOADED.contains(&code.cast_unsigned()) && false) {'''
+
+[[mutant]]
+name = "the browser starts a renderer with no sandbox"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                        process.sandbox.as_ref(),
+                        &process.files,'''
+to = '''                        process.sandbox.as_ref().filter(|_| false),
+                        &process.files,'''
+
+[[mutant]]
+name = "ipc starts the child with no sandbox"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''            start.spawn(sandbox).map_err(io::Error::from)'''
+to = '''            start.spawn(sandbox.filter(|_| false)).map_err(io::Error::from)'''
+
+[[mutant]]
+name = "the child isn't given its end of the channel"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''        start.inherit(client.as_handle());'''
+to = '''        let _ = &client;'''
+
+[[mutant]]
+name = "the child's errors aren't read"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''            start.stderr(errors);'''
+to = '''            let _ = errors;'''
+
+[[mutant]]
+name = "a renderer in its sandbox is handed no files"
+file = "crates/shell/src/lib.rs"
+from = '''        if process.sandbox.is_some() {'''
+to = '''        if process.sandbox.is_none() {'''
+
+[[mutant]]
+name = "a handed file keeps the name it was made under"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''                if let Err(error) = std::fs::rename(&made_as, &named) {'''
+to = '''                if let Err(error) = std::fs::rename(&made_as, &made_as) {'''
+
+[[mutant]]
+name = "a handed file can't be renamed while it is open"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''                .share_mode(0x1 | 0x2 | 0x4)'''
+to = '''                .share_mode(0x1 | 0x2)'''
+
+[[mutant]]
+name = "the renderer isn't told of its trace's file"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''                    process.command.arg(switch).arg(handed.value().to_string());'''
+to = '''                    let _ = (switch, handed.value());'''
+
+[[mutant]]
+name = "the renderer leaves the trace file it was handed"
+file = "crates/shell/src/main.rs"
+from = '''            (Some(trace), Some(file)) => Some((trace, file)),'''
+to = '''            (Some(_), Some(file)) => open_trace(file),'''
+
+[[mutant]]
+name = "the browser doesn't say the renderer has started"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                        started(child.id());'''
+to = '''                        drop(started);'''
+
+[[mutant]]
+name = "the files aren't handed to the child"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''                start.inherit(file.as_handle());
+                handed.push(file);'''
+to = '''                handed.push(file);
+'''
+
+[[mutant]]
+name = "a value that names no file is taken for one"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''    if unsafe { GetFileType(handle) } != FILE_TYPE_DISK {
+        return None;'''
+to = '''    if unsafe { GetFileType(handle) } != FILE_TYPE_DISK && false {
+        return None;'''
+test = ["cargo", "test", "-q", "-p", "ipc", "--lib", "a_handed_file"]
+
+[[mutant]]
+name = "the census handed to a renderer isn't written"
+file = "crates/base/src/census.rs"
+from = '''        let _ = OPENED.set(std::sync::Mutex::new(file));
+    }
+
+    /// The file a process's counts go to'''
+to = '''        drop(file);
+    }
+
+    /// The file a process's counts go to'''
+test = ["cargo", "test", "-q", "-p", "shell", "--features", "census", "--test", "it", "census"]
