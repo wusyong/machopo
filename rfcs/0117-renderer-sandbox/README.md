@@ -1,12 +1,12 @@
 # RFC 0117：renderer process 關進作業系統的 sandbox
 
 - 開始日期：2026-11-26
-- 狀態：🚧 已排程：2026-11-26（第 1 段：Linux；macOS、Windows 的在各自的那一段定）
+- 狀態：🚧 已排程：2026-11-26（第 1 段 Linux、第 2 段 macOS 做完；Windows 的在它的那一段定）
 - 細節：`details.md`
 
 ## 摘要
 
-renderer 已經是自己的 process（RFC 0004），但沒有被關起來：被攻破的 renderer 照樣用使用者的身分開檔案、連網路。這份把 renderer process 關進作業系統的 sandbox：Linux、macOS、Windows 各用自己的機制，在 child 的 `main` 一開始、任何其他程式碼之前就鎖（RFC 0004 的「為 sandbox 留的條件」假設的時機），套不上就不跑。分段做，Linux 先：Landlock（檔案照路徑唯讀放行）加 seccomp-bpf（只放行清單上的 system call，其餘當掉並說是哪一個）；字型照舊由 renderer 讀，放行的路徑由 Browser 問 fontconfig；程式在新的 crate `sunaba`；開關是 `--no-sandbox`。macOS（Seatbelt）和 Windows 的機制在各自的那一段、探測之後定。2026-11-26 在 Linux 上做了第一次探測（真的 renderer 向 kernel 要了什麼），結果在 `details.md`。
+renderer 已經是自己的 process（RFC 0004），但沒有被關起來：被攻破的 renderer 照樣用使用者的身分開檔案、連網路。這份把 renderer process 關進作業系統的 sandbox：Linux、macOS、Windows 各用自己的機制，在 child 的 `main` 一開始、任何其他程式碼之前就鎖（RFC 0004 的「為 sandbox 留的條件」假設的時機），套不上就不跑。分段做，Linux 先：Landlock（檔案照路徑唯讀放行）加 seccomp-bpf（只放行清單上的 system call，其餘當掉並說是哪一個）；字型照舊由 renderer 讀，放行的路徑由 Browser 問 fontconfig；程式在新的 crate `sunaba`；開關是 `--no-sandbox`。macOS 是 Seatbelt 的 profile（`deny default`，只放行 renderer 要的那幾樣），renderer 的 `main` 第一件事就套，字型照舊由 renderer 讀、加上系統的字型服務（已決定的事項第 17 到 20 條）。Windows 的機制在它的那一段、探測之後定。兩個平台的探測（真的 renderer 向系統要了什麼）在 `details.md`。
 
 ## 動機
 
@@ -44,7 +44,7 @@ renderer 已經是自己的 process（RFC 0004），但沒有被關起來：被�
 
 ## 詳細設計
 
-下面每一節是選項和比較；定了的寫明是哪一條決定，其餘是 2026-11-26 的看法。Chromium 的 Linux 那一部分對過原始碼了（`details.md` 的「Chromium 的 Linux sandbox」）；macOS、Windows 的還是照記憶寫的，那兩段定案之前對（`details.md` 的「要對原始碼的地方」）。
+下面每一節是選項和比較；定了的寫明是哪一條決定，其餘是 2026-11-26 的看法。Chromium 的 Linux 和 macOS 那兩部分對過原始碼了（`details.md` 的「Chromium 的 Linux sandbox」「Chromium 的 macOS sandbox」）；Windows 的還是照記憶寫的，那一段定案之前對（`details.md` 的「要對原始碼的地方」）。
 
 ### 現在 renderer 向作業系統要什麼（Linux 的探測）
 
@@ -82,7 +82,14 @@ renderer 已經是自己的 process（RFC 0004），但沒有被關起來：被�
 | M1 | Seatbelt 的 profile（`sandbox_init_with_parameters`，`deny default`），child 一開始自己套 | Chromium、Firefox 的做法；RFC 0004 的原型試過 IPC 的那一半（rendezvous 的名字、控制通道、共用記憶體）；API 是私有的但各家都用 |
 | M2 | App Sandbox 的 entitlement（簽章時給） | 要簽章和 container，粒度粗，開發時的 build 不好用 |
 
-2026-11-26 的看法：**M1**。未知數（要在 macOS 上探測）：CoreText 列字型要不要連系統的字型服務、V8 的 JIT（`MAP_JIT`）、elise 的 worker pool。
+定了 **M1**（已決定的事項第 17 條）。探測（`details.md` 的「macOS 的探測」）回答了原本的未知數：CoreText 列字型和讀字型檔不用系統的字型服務，但找 fallback 的字型要（`com.apple.fonts`，少了它 CJK 選到別的字型）；V8 和 wasmtime 的 JIT、elise 的 worker pool 在 `deny default` 底下不用放行任何東西。
+
+和 Linux 不同的地方：
+
+- **鎖是 `main` 的第一件事，前面沒有準備**：Seatbelt 是整個 process 的（不管有幾個 thread），字型在裡面找得到，所以不用像 Linux 先初始化字型再鎖；trace 和 census 的檔案照舊在鎖之前開（第 16 條）。
+- **被擋的呼叫回錯誤，不結束 process**（`EPERM`；Mach 服務的查詢是 launchd 回「沒有權限」），kernel 在系統的 log 記一行（`log stream --predicate 'sender == "Sandbox"'` 看得到是哪個 process、哪種操作、對象是什麼）。第 5 條的「當掉並說是哪一個」是 seccomp 的；系統的函式庫在 sandbox 裡本來就會試很多東西（`details.md` 列了），失敗了各有退路，Chromium 的 profile 也是回錯誤。
+- **照種類放行，不照 system call**：profile 說的是「哪些路徑能讀」「哪些 Mach 服務能查」「哪些 sysctl 能讀」。Seatbelt 也能照 system call 的號碼擋，這份沒有用（Chromium 的 renderer 也沒有；「之後的可能」）。
+- **路徑的 metadata 也擋**（Linux 的 Landlock 不管 `stat`）：只放行用到的（第 19 條）。但路徑在不在還是探得出來：不存在的回 `ENOENT`，被擋的回 `EPERM`。
 
 ### Windows 的機制
 
@@ -103,7 +110,7 @@ renderer 已經是自己的 process（RFC 0004），但沒有被關起來：被�
 | F2 | Browser 列字型，把字型的資料（唯讀的共用記憶體）和 fallback 的答案經過通道給 renderer | sandbox 最緊：renderer 一個檔案都不用開 | 要一個同步的查詢（fallback：這個字、這個語言用哪個字型）；fontique 要能從別人給的清單建 collection 和 fallback；三個平台都要做 |
 | F3 | 平台各自選：能只靠讀檔的用 F1，要系統服務的用 F2 | 工作量照實際需要 | 兩套做法 |
 
-Linux 定了 **F1**（已決定的事項第 3 條）；macOS 和 Windows 等各自的探測（2026-11-26 的看法：傾向 F3，能只靠讀檔的用 F1）。對照 Chromium：macOS 的 renderer 直接讀系統字型（F1）；Linux 和 Windows 經過 Browser 的字型服務（F2，因為 L3 的 chroot 和 DirectWrite 的字型 cache 服務）。
+Linux 定了 **F1**（已決定的事項第 3 條）；macOS 也是 F1，另外放行系統的字型服務（第 18 條）；Windows 等它的探測。對照 Chromium：macOS 的 renderer 直接讀系統字型、連 `com.apple.fonts`（F1，`common.sb` 的 `allow-font-access`）；Linux 和 Windows 經過 Browser 的字型服務（F2，因為 L3 的 chroot 和 DirectWrite 的字型 cache 服務）。
 
 ### 其他讀的東西
 
@@ -131,8 +138,8 @@ Linux 定了 **F1**（已決定的事項第 3 條）；macOS 和 Windows 等各�
 ### 分階段
 
 0. 草稿和 Linux 的探測（這一版）。
-1. **Linux**：Landlock 加 seccomp（已決定的事項第 2 條）、字型、其他讀的東西、套不上時怎麼辦、工具、測試。開發機是 Linux，先做它。
-2. **macOS**：先探測（真的 renderer 在 `deny default` 底下被擋了什麼），再定 profile 和字型。
+1. **Linux**（做完）：Landlock 加 seccomp（已決定的事項第 2 條）、字型、其他讀的東西、套不上時怎麼辦、工具、測試。
+2. **macOS**（做完）：先探測（真的 renderer 在 `deny default` 底下被擋了什麼），再定 profile 和字型（第 17 到 20 條）。
 3. **Windows**：先探測；`CreateProcessW` 和繼承的清單、token、integrity、job、mitigation、字型。
 
 每個平台做完可以先 merge（`rfcs/README.md` 的「階段的 merge」）：沒做的平台照舊沒有 sandbox，`docs/limitations.md` 寫明哪些平台有。
@@ -152,7 +159,7 @@ Linux 定了 **F1**（已決定的事項第 3 條）；macOS 和 Windows 等各�
 
 ## 先例
 
-Linux 的部分 2026-11-26 對過原始碼（`details.md` 的「Chromium 的 Linux sandbox」），其餘照記憶寫的，定案前對：
+Chromium 的 Linux 和 macOS 的部分 2026-11-26 對過原始碼（`details.md` 的「Chromium 的 Linux sandbox」「Chromium 的 macOS sandbox」），其餘照記憶寫的，定案前對：
 
 - **Chromium**：renderer 在每個平台都在 sandbox 裡。Linux：zygote 建的 namespace 那一層加 seccomp-bpf 的 policy（違規預設當掉），檔案系統的呼叫一律擋，字型經過 Browser 那一側的 font service；macOS：Seatbelt 的 profile，child 一開始就套；Windows：restricted token、integrity level、job、mitigation，字型經過 DirectWrite 的 proxy。
 - **Firefox**：content process 在 Linux 是 seccomp-bpf 加（有的話）namespace，檔案經過一個 broker 照 policy 開；macOS 是 Seatbelt；Windows 和 Chromium 用同一套 sandbox 的程式。
@@ -177,12 +184,16 @@ Linux 的部分 2026-11-26 對過原始碼（`details.md` 的「Chromium 的 Lin
 15. **字型檔的目錄由 Browser 列一次，經命令列交給 renderer**（2026-11-26，使用者決定；1b；改第 14 條的「renderer 自己取目錄」和「路徑不經過命令列」）：實作時量到 fontique 列出每個字型檔的路徑時會把每個字型檔打開讀一次（開發機 153 個字型檔、32 個目錄：debug 212 ms，release 38 到 79 ms；初始化 fontconfig 本身 13 到 19 ms，現在每個 renderer 本來就做）。照第 14 條原樣，每開一個 renderer process 都付一次。改成 Browser 啟動時在背景列一次目錄，放在每個 renderer 的命令列上（第 11 條原本的那一項）；renderer 鎖之前只初始化 fontconfig，不多花時間。其餘照第 14 條：不改 fork，設定和 cache 的目錄不放行。Browser 執行期間新裝的字型要重開才看得到（寫進 `docs/limitations.md`）。和字型服務的方向一致：Browser 這一側「啟動時載入字型、列出清單」留下來是它的起點，做完時拿掉的是命令列的路徑和 renderer 鎖之前的初始化。不選每個 renderer 自己列（每個分頁的啟動多 40 到 80 ms，debug 的測試每個 renderer 多 200 ms；全部是暫時的）。
 16. **trace 檔：renderer 在鎖之前自己開，fork 的 trace 多一個接受開好的檔案的入口**（2026-11-26，使用者決定；A；改第 6 條的「Browser 開好、啟動時交給 renderer」）：實作時發現 trace 是 rusty_v8 的 fork 裡的 C++（Perfetto）做的，它自己照路徑開檔，而且一開始就建一個 thread（`TracingMuxer`）：不能在鎖之前開始（`sunaba` 要 process 只有一個 thread），鎖之後又開不了檔案。改 fork：trace 的開始多一個接受已經開好的檔案的入口；renderer 在鎖之前自己開 `<檔名>.<pid>`（和字型一樣，鎖之前的準備），鎖之後才開始 trace。檔名和量測工具都不用改，不用 Browser 傳檔案（第 11 條的「繼承的檔案的編號」用不到了）。代價：改 rusty_v8 的 C++ 要重編 V8，共用的 artifact 跟著換，fork 多一個 commit。census 的輸出檔是 machopo 自己寫的，同樣改成鎖之前開好。不選開著 `MACHOPO_TRACE` 時 renderer 不進 sandbox（量測工具量到的永遠是沒有 sandbox 的 renderer，seccomp 的成本量不到）；不選 sandbox 放行可寫的那一個檔案（要放寬「開檔不准帶寫入的旗標」，6.2 之前的 kernel 上清空檔案的洞回來一部分）。
 
+17. **macOS 的機制：Seatbelt 的 profile，renderer 在 `main` 的第一件事自己套（M1）**（2026-11-26，照先前的看法和探測；沒有另一個合理的選項）：`sunaba::macos` 的 `enter` 把 profile 的文字和參數交給 `sandbox_init_with_parameters`（不在公開的 header 裡；Chromium、Firefox 一樣宣告它來用）。profile 是 `(deny default)` 加 renderer 要的那幾樣；跟著機器變的值（Browser 的 pid、家目錄、要不要讀系統字型）是參數，不拼進 profile 的文字（參數的內容不會被當成規則，`sunaba` 有測試）。參數由 renderer 自己取：parent 的 pid、環境變數 `HOME`、命令列的 `--test-fonts`；都是 Browser 啟動它時給的。套不上（profile 編不過、系統不收）時照第 4 條不跑，結束碼和 sad tab 的說明和 Linux 同一條路；macOS 沒有「kernel 沒有這個功能」的情況，所以沒有另外的最低要求。進去之後不能換 profile：再套一份不同的會被系統拒絕（測試守著）。不選 App Sandbox（M2：要簽章和 entitlement，開發時的 build 不好用，粒度粗）。不照 Chromium 由 Browser 編好 profile、經一條 pipe 交給 child（`sandbox/mac/seatbelt_exec.cc`，child 在載入自己的 framework 之前讀 pipe、套上）：它的參數（bundle 的路徑、各種目錄）要 Browser 才知道，machopo 的三個 renderer 自己就拿得到，不用多一條 pipe 和鎖之前的一段讀取。違規時回錯誤、不當掉（Seatbelt 的行為，「macOS 的機制」）。
+18. **macOS 的字型：renderer 自己讀字型檔，加上系統的字型服務；目錄是固定的四處**（2026-11-26，使用者決定目錄怎麼來，問的是「之後會做字型服務的話選哪個」；其餘照探測）：放行讀 `/System/Library/Fonts`、`/Library/Fonts`、`~/Library/Fonts`、`/System/Library/AssetsV2/com_apple_MobileAsset_Font<數字>`（系統下載的字型，每個一個目錄）和 `FontServices.framework`（系統自己留著用的字型），和查 `com.apple.fonts` 這一個 Mach 服務。字型服務是探測找到的：沒有它頁面照樣畫得出來，但 CoreText 找 fallback 的字型時選到別的（CJK 的字重不同），截圖和沒有 sandbox 時不一樣。`--test-fonts` 時這些全部不放行。目錄固定而不照 Linux 由 Browser 列了經命令列給（第 15 條）：這一段在字型服務做完時要拿掉，固定的是 profile 裡的幾行；Browser 列的話 macOS 上要把五百多個字型檔各開一次、命令列多一百多個目錄（每個下載的字型一個），而之後的字型服務在 macOS 上要交給 renderer 的是字型的內容，用不到目錄的清單。代價：字型管理軟體裝在別處的字型，renderer 列得到、讀不到（`docs/limitations.md`）。對照 Chromium（`common.sb` 的 `allow-font-access`）：前三個目錄、`com.apple.fonts` 和 `com.apple.FontObjectsServer` 兩個服務，下載的字型用系統發的 extension 放行；`FontObjectsServer` 探測裡沒有人查，不放行。
+19. **macOS：路徑的 metadata 只放行用到的**（2026-11-26，使用者決定）：`/etc`、`/var` 兩個 symlink（時區的路徑經過它們），和放行讀取的那些路徑。不照 Chromium 放行整個檔案系統的 metadata（`common.sb` 的 `(allow file-read-metadata (subpath "/"))`，理由是讓 `realpath` 能用）：探測顯示畫面和行為不變；之後某個函式庫要 `realpath` 時測試會壞、再加。**實作時發現、和決定時說的不同**：這擋的是路徑的大小、時間和種類，不是「在不在」：不存在的路徑回 `ENOENT`，被擋的回 `EPERM`，renderer 還是分得出來（測試寫明這個限制，`docs/limitations.md`）。
+20. **macOS：系統的函式庫會試、但 renderer 不需要的，一律不放行**（2026-11-26，照探測；原則和第 10 條一樣）：使用者的偏好設定（`cfprefsd`、偏好設定的檔案）、`/etc/passwd` 和 `opendirectoryd`（問家目錄）、log 和通知中心的服務、診斷的服務、自己的執行檔、IOKit。探測裡這些全部被擋時，頁面的截圖和沒有 sandbox 時逐 byte 相同，wasm 的文件、crash、trace 都正常。Chromium 的 renderer 放行其中好幾樣（偏好設定、`/etc/passwd`、`logd`、通知中心、IOSurface）：它的 renderer 載入 AppKit 那一層、畫面經 IOSurface 交出去，machopo 的不用。sysctl 只放行 CPU 的數目和 CPU 的功能（`hw.optional.`：JIT 和標準庫照它選指令）；對自己送訊號、系統的 ICU 的資料檔、系統的版本原本放行，mutation test 顯示沒有東西需要，拿掉了（`abort` 不經過 sandbox 管的訊號那一種）；thread 的名字要放行一條（`process-info-setcontrol` 對自己），否則取樣和除錯的工具看不到名字；trace 開著時 Perfetto 問機器的名字和 kernel 的版本被擋，trace 照樣寫出來（少那幾欄，stderr 多一行）。`(deny default)` 之後還允許的幾種操作照 Chromium 明寫擋掉（問其他 process 的資料、IOKit 的屬性、NVRAM、發分散式通知；第一種有測試，其餘靠審查）。
+
 ## 待決定
 
-第 1 段（Linux）之前要定的九條都定了（已決定的事項第 1 到 9 條）。每一段開始前只定那一段的：
+第 1 段（Linux）之前要定的九條都定了（已決定的事項第 1 到 9 條），第 2 段（macOS）的是第 17 到 20 條。每一段開始前只定那一段的：
 
 - **第 1 段開始時**（細節，照已決定的方向）：seccomp 放行的清單和回錯誤的名單（探測的 55 種，加上 wasm 的文件、trace、crash 的路再探一次）；`/proc/self/maps`、`/proc/sys/vm/overcommit_memory`、`/sys` 的那幾個、`/dev/urandom`、時區，每一個放行還是讓它失敗（先用 `strace -k` 找出是誰讀的）；fontconfig 的 cache 過期、寫不了時它怎麼辦；Browser 把字型的路徑和開好的 trace 檔交給 renderer 的方式（命令列、繼承的 fd）；renderer 的 trace 檔名和工具怎麼對上；還在支援期的發行版和 CI 的 kernel 有沒有 Landlock；輔助的執行檔怎麼放（`sunaba` 的 bin）。
-- **第 2 段（macOS）**：探測；Seatbelt 的 profile；字型（F1 還是要系統的字型服務）；最低要求。
 - **第 3 段（Windows）**：探測；`CreateProcessW` 和繼承的清單、`sunaba` 和 `ipc::platform::spawn` 怎麼接；token、integrity、job、mitigation；字型；最低要求。
 
 ## 之後的可能
@@ -195,6 +206,7 @@ Linux 的部分 2026-11-26 對過原始碼（`details.md` 的「Chromium 的 Lin
 
 其他：
 
+- **macOS 照 system call 的號碼再擋一層**（Seatbelt 的 `syscall-unix`、`syscall-mach` 和 Mach 訊息的過濾）：現在的 profile 照種類放行，renderer 碰得到的 kernel 介面還是全部的 system call；Linux 的 seccomp 清單那種「只放行用到的」在 macOS 上還沒有。Chromium 的 renderer 也沒有用。要先有 macOS 上的 system call 探測（`dtruss` 要關 SIP）。
 - **`sunaba` 變成獨立的 crate**（使用者 2026-11-26 的打算；像 elise：machopo 旁邊自己的專案，`third_party.toml` 釘 commit）：這份照那個樣子寫（已決定的事項第 12 條：不依賴 machopo 的 crate、只放通用的機制、自己的 README 和 soundness 文件、自己的測試和輔助的執行檔）。搬出去時要做的：它自己的 repo 和 CI（三個平台、幾種 kernel 的版本；machopo 的 CI 不跑它的測試）、授權和 `contributing` 的文件、machopo 這一側改成照 `third_party.toml` 釘的路徑相依、`sanity.py unsafe` 的允許清單拿掉它（像 elise 一樣照它自己的規則）、`CLAUDE.md` 的「第三方的 fork」那一節加上它。
 - trace 照 Chromium（Perfetto）寫進和 Browser 共用的記憶體、由 Browser 寫檔：trace 要變成常駐、隨時可以開的功能時。
 - V8 的 sandbox：開 `v8_enable_sandbox`、`bindings` 的論證改成不信任 V8 heap 裡讀到的東西。

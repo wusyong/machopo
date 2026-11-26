@@ -1,0 +1,191 @@
+# Stage 2's mutants (macOS: sunaba's Seatbelt entering, the renderer's profile in shell): `python3 scripts/test.py mutate rfcs/0117-renderer-sandbox/mutants-2.toml`, on macOS.
+test = ["sh", "-c", "cargo test -q -p sunaba && cargo test -q -p shell --lib renderer_sandbox && cargo test -q -p shell --test it renderer_sandbox"]
+timeout = 300
+
+[[mutant]]
+name = "entering asks the system for nothing"
+file = "crates/sunaba/src/macos.rs"
+from = "        sandbox_init_with_parameters(source.as_ptr(), 0, parameters.as_ptr(), &raw mut message)"
+to = "        { let _ = (&source, &parameters, &raw mut message); 0 }"
+
+[[mutant]]
+name = "a refused profile is taken for entered"
+file = "crates/sunaba/src/macos.rs"
+from = "    if result == 0 {"
+to = "    if result == 0 || true {"
+
+[[mutant]]
+name = "the parameters aren't handed over"
+file = "crates/sunaba/src/macos.rs"
+from = "    let mut parameters: Vec<*const c_char> = strings.iter().map(|string| string.as_ptr()).collect();"
+to = "    let mut parameters: Vec<*const c_char> = strings.iter().take(0).map(|string| string.as_ptr()).collect();"
+
+[[mutant]]
+name = "every process is said to be sandboxed"
+file = "crates/sunaba/src/macos.rs"
+from = "    unsafe { sandbox_check(pid, std::ptr::null(), 0) == 1 }"
+to = "    unsafe { sandbox_check(pid, std::ptr::null(), 0) == 1 || true }"
+
+[[mutant]]
+name = "no process is said to be sandboxed"
+file = "crates/sunaba/src/macos.rs"
+from = "    unsafe { sandbox_check(pid, std::ptr::null(), 0) == 1 }"
+to = "    unsafe { sandbox_check(pid, std::ptr::null(), 0) == 2 }"
+
+[[mutant]]
+name = "a renderer told nothing isn't sandboxed, and one told --no-sandbox is"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = "    if switches.no_sandbox || !SUPPORTED {"
+to = "    if !switches.no_sandbox || !SUPPORTED {"
+
+[[mutant]]
+name = "the profile allows what it doesn't name"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''(deny default)
+; What'''
+to = '''(allow default)
+; What'''
+
+[[mutant]]
+name = "other processes are asked about"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = "(deny iokit-get-properties process-info* nvram*)"
+to = "(deny iokit-get-properties nvram*)"
+
+[[mutant]]
+name = "a renderer signals anyone"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = "; Its threads' names, for whoever looks at the process from outside."
+to = "(allow signal)"
+
+[[mutant]]
+name = "the browser's rendezvous isn't looked up"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''  (global-name (string-append "org.machopo.MachPortRendezvousServer." (param "BROWSER_PID"))))'''
+to = '''  (global-name (string-append "org.machopo.MachPortRendezvousServer.x" (param "BROWSER_PID"))))'''
+
+[[mutant]]
+name = "any browser's rendezvous is looked up"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''  (global-name (string-append "org.machopo.MachPortRendezvousServer." (param "BROWSER_PID"))))'''
+to = '''  (global-name-prefix "org.machopo.MachPortRendezvousServer."))'''
+
+[[mutant]]
+name = "the browser's pid isn't its parent's"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''            .parameter("BROWSER_PID", browser.to_string())'''
+to = '''            .parameter("BROWSER_PID", "1")'''
+
+[[mutant]]
+name = "/etc and /var aren't followed"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''(allow file-read-metadata (literal "/etc") (literal "/var"))'''
+to = ""
+
+[[mutant]]
+name = "every path's metadata is read"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''(allow file-read-metadata (literal "/etc") (literal "/var"))'''
+to = '''(allow file-read-metadata (subpath "/"))'''
+
+[[mutant]]
+name = "the time zone's link isn't read"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''  (literal "/private/etc/localtime")'''
+to = ""
+
+[[mutant]]
+name = "all of /etc is read"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''  (literal "/private/etc/localtime")'''
+to = '''  (subpath "/private/etc")'''
+
+[[mutant]]
+name = "the time zones aren't read"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''  (subpath "/private/var/db/timezone")'''
+to = ""
+
+[[mutant]]
+name = "the number of CPUs isn't read"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''  (sysctl-name "hw.ncpu")'''
+to = ""
+
+[[mutant]]
+name = "what the CPU can do isn't read"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''  (sysctl-name-prefix "hw.optional."))'''
+to = ")"
+
+[[mutant]]
+name = "every sysctl is read"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''  (sysctl-name-prefix "hw.optional."))'''
+to = '''  (sysctl-name-prefix "hw.optional.") (sysctl-name-prefix "kern."))'''
+
+[[mutant]]
+name = "the fonts are read by a renderer that uses only its own"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''(if (string=? (param "SYSTEM_FONTS") "TRUE")'''
+to = '''(if (string=? (param "SYSTEM_FONTS") "FALSE")'''
+
+[[mutant]]
+name = "a renderer with --test-fonts is told it reads the system's"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''                if switches.test_fonts { "FALSE" } else { "TRUE" },'''
+to = '''                if switches.test_fonts { "TRUE" } else { "TRUE" },'''
+
+[[mutant]]
+name = "the font service isn't looked up"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''    (allow mach-lookup (global-name "com.apple.fonts"))'''
+to = ""
+
+[[mutant]]
+name = "the system's fonts aren't read"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''      (subpath "/System/Library/Fonts")'''
+to = ""
+
+[[mutant]]
+name = "everyone's fonts aren't read"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''      (subpath "/Library/Fonts")'''
+to = ""
+
+[[mutant]]
+name = "the fonts the system keeps for itself aren't read"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''      (subpath "/System/Library/PrivateFrameworks/FontServices.framework")'''
+to = ""
+
+[[mutant]]
+name = "the downloaded fonts aren't read"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''      (regex #"^/System/Library/AssetsV2/com_apple_MobileAsset_Font[0-9]+(/|$)"))'''
+to = ")"
+
+[[mutant]]
+name = "every asset is read"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''      (regex #"^/System/Library/AssetsV2/com_apple_MobileAsset_Font[0-9]+(/|$)"))'''
+to = '''      (subpath "/System/Library/AssetsV2"))'''
+
+[[mutant]]
+name = "the user's fonts aren't read"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''      (allow file-read* (subpath (string-append (param "HOME") "/Library/Fonts"))))))'''
+to = ")))"
+
+[[mutant]]
+name = "the user's home is read"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''      (allow file-read* (subpath (string-append (param "HOME") "/Library/Fonts"))))))'''
+to = '''      (allow file-read* (subpath (param "HOME")))))))'''
+
+[[mutant]]
+name = "the profile isn't told the user's home"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''            profile.parameter("HOME", home);'''
+to = '''            let _ = home;'''
