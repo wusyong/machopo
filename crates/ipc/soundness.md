@@ -25,7 +25,7 @@
 | --- | --- | --- | --- |
 | G1 | **記憶體**：不管對方在共用記憶體裡寫什麼、在訊息裡給什麼編號和長度，這一端讀寫的都在它自己 map 的那一塊裡面 | `core/region.rs`：訊息提到的編號和長度由 `Table::named` 檢查（超過是 `OutsideRegion`、不在表裡是 `UnknownRegion`），`Table::read` 和訊息帶來的 `SharedBuffer` 都經過它；之後從 `SharedBuffer` 讀的每一段（`copy_out`、`chunks_out`）再和訊息說的長度比一次。`Pool::put` 寫的和 `Pool::take` 交出去的那一塊由 `core/fit.rs` 的 `best_fit` 選，夠長是證明過的。mapping 不會比物件長：I2 和假設 K1 | `core/region.rs` 的單元測試；`crates/ipc/tests/it/shared_buffer.rs`；`region` fuzzer（對著一個簡單的模型，開 ASan）；核心在 Miri 底下；`fit.rs` 的 Verus 證明；三個平台各自的 `no_more_than_a_region_has_is_mapped` |
 | G2 | **壞的輸入**：從通道讀到的任何位元組，結果只有兩種：照規則處理，或當成壞訊息關掉通道。不 panic、不卡住、不 stack overflow，用掉的記憶體有上限 | `core/frame.rs`：長度上限（`MAX_PAYLOAD_LEN`）、照實際收到的量配置、序號、handle 的個數；`codec.rs`：巢狀深度上限（`MAX_DEPTH`）；`core/channel.rs`：目的地要認得；`endpoint.rs`：上層解不出來就是壞訊息 | `frame`、`endpoint` 兩個 fuzzer（任何輸入都不 panic，怎麼切結果都一樣）；`crates/ipc/tests/it/codec.rs`；`crates/ipc/tests/it/endpoint.rs` 裡亂送的對端；跨 process 的 `what_a_child_may_not_send_closes_its_channel` |
-| G3 | **handle**：沒有權限的一端送的訊息，不會讓收的一端留下任何 handle | `core/frame.rs` 的 `Decoder`：對方不能附時，有 handle 到了就是 `HandlesNotAllowed`，到了的全部丟掉；個數超過是 `TooManyHandles`。交給核心的 handle 一定是 kernel 搬進來的：I4 | `frame` fuzzer（沒有權限的一端留不下 handle，留著的不比到了的多）；跨 process 的 `what_a_child_may_not_send_closes_its_channel`；macOS 的 `a_receive_right_isnt_a_handle`；Windows 的 `a_child_gives_no_handle_and_a_host_takes_no_value_for_one` |
+| G3 | **handle**：沒有權限的一端送的訊息，不會讓收的一端留下任何 handle；有權限的一端送的，每個 handle 最多變成值裡的一個檔案，沒被拿走的跟著訊息關掉 | `core/frame.rs` 的 `Decoder`：對方不能附時，有 handle 到了就是 `HandlesNotAllowed`，到了的全部丟掉；個數超過是 `TooManyHandles`。交給核心的 handle 一定是 kernel 搬進來的：I4。給上層的訊息的 handle 由 `endpoint.rs` 照值說的第幾個交出去，交過的就不在了，再提到或提到沒有的是 `UnknownHandle`；不是檔案的是 `Rejected` | `frame` fuzzer（沒有權限的一端留不下 handle，留著的不比到了的多）；跨 process 的 `what_a_child_may_not_send_closes_its_channel`；macOS 的 `a_receive_right_isnt_a_handle`；Windows 的 `a_child_gives_no_handle_and_a_host_takes_no_value_for_one`；值裡的檔案：`crates/ipc/tests/it/file_in_message.rs` |
 | G4 | **region 的歸屬**：一塊 region 只在建它時指定的那條通道的表裡；收回之後不在任何表裡 | 池子和表是每個端點自己的（`endpoint.rs`），兩個方向的 region 都由能附 handle 的一端編號；對方提到沒給過它的、還沒寫過的、還兩次的、這一端拿去寫還沒送出去的（I10）都是壞訊息（`UnknownRegion`、`RegionNotOut`）。一個 Browser 對好幾個 renderer 時「不交給別的 renderer」由上層守，`ipc` 這一層只有一條通道 | `crates/ipc/tla/Regions.tla`；`region` fuzzer；`crates/ipc/tests/it/endpoint.rs` |
 | G5 | **不被卡住**：送訊息不等對方；對方不讀時，這一端的佇列到上限就關掉通道 | `core/channel.rs`：`send` 不等，收不下的排隊，超過 `MAX_QUEUED_BYTES` 是 `Gone::QueueFull`；平台的 `write` 不等（I6） | `core/channel.rs` 的單元測試；loom、shuttle；跨 process 的 `a_child_that_isnt_reading_delays_nothing_for_good` |
 | G6 | **順序**：一條通道上，收的一端交出訊息的順序就是送的一端送的順序，不重複、不漏 | `core/channel.rs`：一把鎖守著編號和寫出去的順序；`core/frame.rs`：序號不連續是 `OutOfOrder` | loom（每一種交錯）、shuttle；`crates/ipc/tla/Channel.tla`；`frame` fuzzer |
@@ -48,6 +48,7 @@ kernel 和標準庫的行為，`ipc` 證明不了。每一條有測試在那個�
 | K7 | **out-of-line 收到的記憶體是這個 process 自己的一份**（只有 macOS 用） | 送的一方那幾頁的 copy-on-write，之後它再改也看不到。測試：`what_is_sent_out_of_line_is_the_bytes_as_they_were_when_sent` | | |
 | K8 | **進行中的 I/O 的規則**（只有 Windows 用） | | | 在 completion port 上的 handle，發出操作的 thread 結束時操作不會被取消（`a_write_outlives_the_thread_that_started_it`）；每筆進行中的操作恰好留下一個通知，被取消的也是；設了 `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` 之後當場完成的不留（`what_goes_on_holds_its_end_until_its_completion_is_taken`、`what_is_done_at_once_holds_nothing`） |
 | K9 | **`std::env::remove_var` 在 Windows 上多條 thread 也安全**（標準庫的文件寫明） | | 不成立，所以 Linux 的 child 不拿掉變數 | `inherited` 靠它 |
+| K11 | **map 著的檔案的內容不變**：沒有人寫它、截短它（只有 Windows 交檔案） | | 還不交檔案 | `ReadOnlyFile::open` 開檔時不讓別人寫（只允許讀和刪除），這個限制在檔案的任何一個 handle 還開著時都在（兩端的 handle 是同一個檔案物件），`MappedFile` 一直拿著它的 handle；map 著的檔案不能截短（文件寫明）。測試：`nobody_writes_an_open_file_but_it_may_be_renamed`、跨 process 的 `a_child_maps_the_files_its_host_sends_and_nobody_writes_them`（host 放掉自己的之後，child 的還擋著） |
 | K10 | **job 最後一個 handle 關掉時，kernel 結束裡面的 process**，而一個 process 怎麼結束，它的 handle 都會被關掉（只有 Windows 用） | | | 設了 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`（文件寫明）。測試：`children_share_a_job_and_end_when_it_closes`、`a_hosts_children_go_with_it_whatever_they_are_doing`。正在結束的 process 放不進 job，而那時它還不算結束（實測，Windows 11 10.0.26300：最久差 16 ms），所以被拒絕時最多等 1 秒看它是不是正在結束。測試：`a_child_that_is_exiting_needs_no_job` |
 
 macOS 那一層的測試在 `src/platform/macos/` 各檔的單元測試和 `crates/ipc/tests/it/mach_channel.rs`；Linux 的在 `src/platform/linux/` 和 `crates/ipc/tests/it/linux_channel.rs`；Windows 的在 `src/platform/windows/` 和 `crates/ipc/tests/it/windows_channel.rs`；三個平台共用的跨 process 測試是 `crates/ipc/tests/it/process_channel.rs`。
@@ -62,12 +63,13 @@ macOS 那一層的測試在 `src/platform/macos/` 各檔的單元測試和 `crat
 | I2 | **`Memory` 的實作**：值活著的期間 `ptr()` 起 `len()` 個位元組可讀（放進 `Pool` 的還要可寫）、不搬動、不比底下的物件長 | `unsafe trait`：每個實作有自己的 `// SAFETY:`（下面的表）；平台的 `map` 在 map 之前確認長度（Linux 先看 seal 再量；macOS 和 Windows 由 kernel 拒絕） |
 | I3 | **對方可能在寫的共用記憶體只被複製出來**，不當成有不變量的型別、不借成 `&[u8]` 或 `&T` 交出去 | 對方寫的 region（表裡的）只有三個讀的地方，都在 `core/region.rs`：`Table::read`（整段複製到 `Vec`）、`copy_out`（複製到呼叫的人給的 slice）、`chunks_out`（一段一段以值交出去，給只能寫、拿不到 slice 的目的地）。`SharedBuffer` 拿著 region 時只提供後兩種，`as_bytes` 回 `None`。複製出來之後才解碼。審查；`crates/ipc/tests/it/shared_buffer.rs` |
 | I4 | **交給核心的 handle 是 kernel 為這則訊息搬進來的**，不是對方寫的數值 | macOS、Linux：假設 K3。Windows：child 寫的位元組沒有這一層的表頭，host 那一端沒有把數值包成 handle 的程式，所以對方不能附 handle 的一端看不到任何數值（`a_child_gives_no_handle_and_a_host_takes_no_value_for_one`） |
-| I5 | **child 信任 host 的地方只有這幾處** | Windows 的 child 把 host 寫的數值包成 handle（`End::next`）、不檢查收到的 section 是哪一種；三個平台的 child 照環境變數或 rendezvous 拿它那一端；被 pipe 驅動的 process 收下 3、4 或命令列指名的 handle（`inherited_pipe`）；child 把 host 給它寫的 region 借成 slice 來畫（I10），相信 host 不寫那一塊。新增一處要寫在這裡 |
+| I5 | **child 信任 host 的地方只有這幾處** | Windows 的 child 把 host 寫的數值包成 handle（`End::next`）、不檢查收到的 section 是哪一種；三個平台的 child 照環境變數或 rendezvous 拿它那一端；被 pipe 驅動的 process 收下 3、4 或命令列指名的 handle（`inherited_pipe`）；child 把 host 給它寫的 region 借成 slice 來畫（I10），相信 host 不寫那一塊；child 相信 host 給的檔案是 `ReadOnlyFile::open` 開的（K11 在 Windows 上靠開檔的方式），Windows 的 child 把 host 說是檔案的 handle 當成檔案。新增一處要寫在這裡 |
 | I6 | **平台的函式除了 `wait` 都不等**（啟動 child 的 `spawn` 不算：不在核心的鎖底下呼叫，Windows 上 child 放不進 job 時最多等它 1 秒） | 審查；`core/channel.rs` 在自己的鎖底下呼叫 `write` |
 | I7 | **一條通道只有一條 thread 讀**（IO thread） | `Endpoint` 交給迴圈時是搬進去的，只能交一次；Linux 的 waiter 拒絕已經被別的 waiter 等著的一端（`an_end_has_one_waiter`），Windows 的 pipe 只上得了一個 completion port |
 | I8 | **Windows 上進行中的操作讓它的通道活著**，直到它的通知從 port 取走：那之前 kernel 隨時會寫它的 `OVERLAPPED` 和緩衝區 | `hold`、`let_go` 和 `wait` 裡的 `Arc::from_raw` 成對（下面的表）。waiter 丟掉時還在進行的不釋放：刻意洩漏 |
 | I10 | **這一端寫的 region 只在一個時候是 slice：被拿出池子（`Pool::take`）、還沒交給訊息（`Pool::lend`）的期間，而且只給拿的那一個人**（`shared_buffer::Writer`） | 那段期間池子記著它被拿著（`held`）：不會再被 `take` 或 `put` 選到，對方說「讀完了」是壞訊息（`RegionNotOut`，不然下一個拿的人會寫同一塊）。`Writer` 變成 `SharedBuffer` 時被消耗掉，之後沒有東西能寫它；`SharedBuffer` 還給池子只有一次（訊息沒送出去時由送的那一步還，`sent` 旗標讓它自己 drop 時不再還）。對方那一側的 mapping 不寫這一塊：Browser 寫的 region，renderer 拿到的是唯讀的（K1）；renderer 寫的 region，Browser 的程式只讀（I5 的方向相反：這裡是 child 信任 host）。`core/region.rs` 和 `crates/ipc/tests/it/shared_buffer.rs` 的測試（`a_region_its_taker_still_writes_isnt_the_peers_to_free`）；Miri；審查 |
 | I11 | **值裡的 region 和管道一樣，只在同一條 thread 的同一次序列化或解碼裡交接**：`SharedBuffer` 把它的編號經過一個 thread-local 交給 codec，codec 把訊息提到的 region 經過另一個交給值 | codec 不是這條通道的（別的序列化器、別的通道）時編號留在原地，`SharedBuffer` 的 region 還是它的；解碼時交出之後再清一次。記憶體安全不靠這一條（能寫 region 的 `Writer` 在這之前已經沒有了）：放錯的後果是一塊 region 不被還回來，或訊息被拒絕。`crates/ipc/tests/it/shared_buffer.rs` 的 `a_region_crosses_once_and_only_its_own_channel` |
+| I12 | **值裡的檔案和管道一樣，只在同一條 thread 的同一次序列化或解碼裡交接**：`ReadOnlyFile` 把另一個 handle 經過一個 thread-local 交給 codec，codec 把訊息的 handle 經過同一個交給值 | `ReadOnlyFile` 的 `Serialize` 之後不管 codec 拿走了沒有都清掉，解碼時交出之後再清一次，所以別的序列化器碰不到上一次留下的；值自己的 handle 不交出去（送的是另一個）。`crates/ipc/tests/it/file_in_message.rs` 的 `only_the_codec_sends_a_file_and_only_to_an_end_that_attaches`。放錯的後果是一個檔案被當成別的值的，不是記憶體錯誤 |
 | I9 | **值裡的管道只在同一條 thread 的同一次序列化或解碼裡交接**：`Consumer` 經過一個 thread-local 交給 codec（或從 codec 交給值），交接的兩邊一定把它拿走或還回去，不留給下一個值 | `data_pipe` 的 `Serialize`（codec 沒拿走就還給值）、codec 解碼時交出之後再清一次；`crates/ipc/tests/it/pipe_in_message.rs` 的「只有 codec 序列化」「冒用名字的型別」兩個測試。沒有 `unsafe`：放錯地方的後果是一條管道提早結束，不是記憶體錯誤 |
 
 ## 每一處 `unsafe`
@@ -86,6 +88,12 @@ macOS 那一層的測試在 `src/platform/macos/` 各檔的單元測試和 `crat
 | `core/region.rs` 的 `Table::read`（從 region 複製出來、`set_len`） | 長度先和 region 的長度比過（`Table::named`，超過的是 `OutsideRegion`）；目的地是剛 `reserve` 過的多餘容量，`set_len` 只涵蓋剛寫的那幾個位元組。對方可能同時在寫那一塊：讀到的是位元組，不當成有不變量的型別，複製出來之後才交給上層 |
 | `core/region.rs` 的 `HeapMemory`（`Box::into_raw`、`from_raw`、`Send`、`Sync`） | 指標來自 `new` 裡的 `Box::into_raw`，只在 `drop` 還回去一次；配置是這個值自己的，經過 `Memory` 的讀寫都是整段位元組的複製，兩端同時複製和跨 process 的 mapping 是同一種情況 |
 | `time_ticks.rs` 的 `QueryPerformanceFrequency`、`QueryPerformanceCounter`（只在 Windows） | 傳進去的指標指向一個活著的 `i64`，呼叫只寫它、不留著它；Windows XP 以後這兩個呼叫不會失敗。頻率讀成 0 時當成 1，不會除以 0 |
+
+### 跟著訊息的檔案（`file.rs`）
+
+| 地方 | 為什麼安全 |
+| --- | --- |
+| `file.rs` 的 `ReadOnlyFile::map`（`memmap2::Mmap::map`） | 只 map 成唯讀，`MappedFile` 拿著檔案，mapping 活多久檔案就開多久，借出去的 `&[u8]` 活不過 `MappedFile`。memmap2 要求的是 map 著的期間檔案不被別人寫或截短：Windows 上 K11；macOS 和 Linux 上還不交檔案，交了之後是假設（交的是沒有人寫的系統字型）。長度 0 的檔案是空的 mapping（memmap2 不呼叫系統） |
 
 ### macOS（`platform/macos/`）
 
@@ -179,6 +187,7 @@ Miri 和 fuzzer 碰不到平台層（系統呼叫）：那一層靠跨 process �
 - **K5 對「同一個使用者的其他 process」的部分只靠審查**：Windows 的 pipe 建立時的保護，和 `spawn_with_pipe` 啟動 child 時的繼承（經過標準庫，靠一把鎖）。`spawn` 啟動的 child 只繼承指定的 handle，由 `sunaba` 的 `Command` 保證，有測試。
 - **Windows 的 `hold` 和 `let_go` 成對**：弄壞是釋放後被 kernel 寫，測試看不出來，沒有列成 mutant。
 - **標「實測」的假設**只在一個版本的系統上試過。
+- **K11 只在 Windows 上由 kernel 守住**：macOS 和 Linux 上檔案交過去之後，有寫入權限的人（系統字型是 root 的）改了它，map 著的位元組就變了。fontique 自己 map 系統字型時也是這個前提。
 
 ## 修改時要審查的
 
@@ -188,6 +197,7 @@ Miri 和 fuzzer 碰不到平台層（系統呼叫）：那一層靠跨 process �
 - **改送出的佇列、鎖或通道的結束**（`core/channel.rs`）：跑 loom 和 shuttle；鎖底下不能等（I6）。
 - **新的平台，或改平台的 `Platform`、`Waiter`**：對過 K1 到 K6 每一條在那個平台靠什麼、有沒有測試；`crates/ipc/tests/it/process_channel.rs` 不改就要過；handle 如果是數值，照 Windows 的做法守 I4。
 - **child 這一側新增一處不檢查 host 的**：寫進 I5。
+- **改 `file.rs`**：`open` 在 Windows 上還是不讓別人寫嗎（K11）；`MappedFile` 還拿著檔案嗎；`Serialize` 之後 thread-local 還清掉嗎（I12）。新的平台交檔案時，對過 K11 在那個平台靠什麼。
 - **改 `platform/pipe.rs`**：收下的兩端在任何東西啟動之前設成 close-on-exec 或不可繼承嗎（不然 child 的 child 拿著 pipe，client 等不到結尾）；Windows 上設成可繼承的那一段在 `starting_a_child` 的鎖底下嗎；`pre_exec` 裡只有 async-signal-safe 的呼叫嗎。`crates/ipc/tests/it/inherited_pipe.rs` 守這幾條。
 - **改 Windows 的 job**：handle 不能被繼承、不能複製給別的 process、host 活著時不能關：前兩種讓 child 在 host 不在之後留著，最後一種把活著的 child 全部結束（K10）。
 - **升級作業系統的版本**：重跑那個平台的 `cargo test -p ipc`，標「實測」的假設先看。

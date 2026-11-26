@@ -63,6 +63,8 @@ pub enum BadMessage {
     PipeOverRead { pipe: u32 },
     /// More of a pipe's bytes sent than its reader has room for.
     PipeOverrun { pipe: u32 },
+    /// A handle the message didn't come with, or one named twice.
+    UnknownHandle { index: u32 },
 }
 
 impl fmt::Display for BadMessage {
@@ -97,6 +99,9 @@ impl fmt::Display for BadMessage {
             Self::PipeOverRead { pipe } => write!(f, "more of pipe {pipe} read than was sent"),
             Self::PipeOverrun { pipe } => {
                 write!(f, "more of pipe {pipe} sent than there is room for")
+            }
+            Self::UnknownHandle { index } => {
+                write!(f, "handle {index}, which the message didn't come with")
             }
         }
     }

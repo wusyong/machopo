@@ -11,6 +11,8 @@
 //! ([`crate::data_pipe::Consumer`]) in a value goes with it: a pipe over
 //! the channel is opened for it and the payload holds the pipe's number,
 //! which reads back as the consumer of the pipe the other end made.
+//! And an open file ([`crate::file::ReadOnlyFile`]) in a value goes with
+//! it: its handle is one of the message's, and the payload holds which.
 //!
 //! Both are wrappers around serde's serializer and deserializer that pass
 //! everything else through, so the regions are arguments, not state
@@ -18,6 +20,7 @@
 
 use std::cell::RefCell;
 use std::fmt;
+use std::fs::File;
 
 use serde::de::{
     self, DeserializeOwned, DeserializeSeed, Deserializer, EnumAccess, MapAccess, SeqAccess,
@@ -28,6 +31,7 @@ use serde::ser::{self, Serialize, Serializer};
 use crate::core::frame::BadMessage;
 use crate::core::region::{MIN_REGION_LEN, Memory, Pool, Table};
 use crate::data_pipe::{self, CONSUMER_NAME, Consumer};
+use crate::file::{self as open_file, FILE_NAME};
 use crate::shared_buffer::{self, BUFFER_NAME, LENT_NAME};
 
 /// How deep a value read from a peer may nest: every sequence, map,
@@ -67,6 +71,15 @@ pub trait Place {
     fn unpipe(&mut self, number: u32) {
         let _ = number;
     }
+
+    /// Attaches `file`'s handle to the message: which of its handles it
+    /// is. `None` when this end attaches none (the value doesn't
+    /// serialize, and the file goes). Nothing is taken back if the value
+    /// fails after: the handles go with the message that isn't sent.
+    fn file(&mut self, file: File) -> Option<u32> {
+        drop(file);
+        None
+    }
 }
 
 /// Where large bytes are on their way in.
@@ -87,6 +100,12 @@ pub trait Resolve {
     /// message has named yet.
     fn pipe(&mut self, number: u32) -> Result<Consumer, BadMessage> {
         Err(BadMessage::UnknownPipe { pipe: number })
+    }
+
+    /// The file that is the message's handle `index`, which no part of
+    /// the value has taken yet.
+    fn file(&mut self, index: u32) -> Result<File, BadMessage> {
+        Err(BadMessage::UnknownHandle { index })
     }
 }
 
@@ -371,6 +390,20 @@ impl<'a, 'r, S: Serializer> Serializer for Ser<'a, 'r, S> {
             placing.piped.push(number);
             drop(placing);
             return self.inner.serialize_newtype_struct(name, &number);
+        }
+        // An open file, which left another handle to it beside the value:
+        // the handle goes with the message, and which of its handles it
+        // is is what is written.
+        if name == FILE_NAME {
+            let file =
+                open_file::take_crossing().ok_or_else(|| ser::Error::custom("no file to send"))?;
+            let index = self
+                .placing
+                .borrow_mut()
+                .regions
+                .file(file)
+                .ok_or_else(|| ser::Error::custom("this end attaches no files"))?;
+            return self.inner.serialize_newtype_struct(name, &index);
         }
         self.inner.serialize_newtype_struct(
             name,
@@ -731,6 +764,24 @@ impl<'de, D: Deserializer<'de>> Deserializer<'de> for De<'_, '_, D> {
             let value = visitor.visit_u32(number);
             // A visitor that isn't a consumer's took none: it goes.
             drop(data_pipe::take_crossing());
+            return value;
+        }
+        // An open file: the index the peer wrote is which of the
+        // message's handles it is, which goes beside the index to the
+        // visitor that asked by this name.
+        if name == FILE_NAME {
+            let index = <u32 as de::Deserialize>::deserialize(self.inner)?;
+            let file = match self.resolving.regions.file(index) {
+                Ok(file) => file,
+                Err(bad) => {
+                    self.resolving.bad.get_or_insert(bad);
+                    return Err(de::Error::custom("no such handle"));
+                }
+            };
+            open_file::set_crossing(file);
+            let value = visitor.visit_u32(index);
+            // A visitor that isn't a file's took none: it goes.
+            drop(open_file::take_crossing());
             return value;
         }
         // Bytes whose region isn't copied out of: the region goes beside

@@ -5,6 +5,7 @@
 //! under it.
 
 use std::collections::VecDeque;
+use std::fs::File;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use crate::core::channel::{Transport, WriteError};
@@ -15,11 +16,23 @@ use crate::shared_buffer::{Mapped, Owner, SharedBuffer, Writer};
 /// A region, as a handle and as a mapping: the memory itself, shared.
 pub type Region = Arc<HeapMemory>;
 
+/// What crosses beside the bytes: a region, or an open file, as they are.
+pub enum Handle {
+    Region(Region),
+    File(File),
+}
+
+impl From<Region> for Handle {
+    fn from(region: Region) -> Self {
+        Self::Region(region)
+    }
+}
+
 /// What one end has waiting for it.
 #[derive(Default)]
 struct Side {
     /// What the peer wrote, a write at a time.
-    packets: VecDeque<(Vec<u8>, Vec<Region>)>,
+    packets: VecDeque<(Vec<u8>, Vec<Handle>)>,
     /// Their bytes.
     waiting: usize,
     /// The peer's end was shut or dropped.
@@ -98,7 +111,7 @@ impl End {
     fn next(
         &self,
         bytes: &mut Vec<u8>,
-        handles: &mut Vec<Region>,
+        handles: &mut Vec<Handle>,
     ) -> (Option<Event>, Option<Wake>) {
         let mut sides = self.sides();
         let (mine, theirs) = self.split(&mut sides);
@@ -148,7 +161,7 @@ impl Local {
 
     /// What there is for this end to do, if anything, without waiting:
     /// for a test that turns an endpoint by hand.
-    pub fn poll(&self, bytes: &mut Vec<u8>, handles: &mut Vec<Region>) -> Option<Event> {
+    pub fn poll(&self, bytes: &mut Vec<u8>, handles: &mut Vec<Handle>) -> Option<Event> {
         let (event, tell) = self.0.next(bytes, handles);
         if let Some(tell) = tell {
             tell();
@@ -158,9 +171,9 @@ impl Local {
 }
 
 impl Transport for Local {
-    type Handle = Region;
+    type Handle = Handle;
 
-    fn write(&self, bytes: &[u8], handles: &mut Vec<Region>) -> Result<usize, WriteError> {
+    fn write(&self, bytes: &[u8], handles: &mut Vec<Handle>) -> Result<usize, WriteError> {
         let mut sides = self.0.sides();
         let (mine, theirs) = self.0.split(&mut sides);
         if mine.peer_gone {
@@ -189,17 +202,31 @@ impl Platform for Local {
     type Memory = Region;
     type Waiter = LocalWaiter;
 
-    fn map(&self, handle: Region, len: usize, _writable: bool) -> Option<Region> {
-        (handle.len() == len).then_some(handle)
+    fn map(&self, handle: Handle, len: usize, _writable: bool) -> Option<Region> {
+        match handle {
+            Handle::Region(region) => (region.len() == len).then_some(region),
+            Handle::File(_) => None,
+        }
     }
 
-    fn create(&self, len: usize, _peer_writes: bool) -> Option<(Region, Region)> {
+    fn create(&self, len: usize, _peer_writes: bool) -> Option<(Region, Handle)> {
         let mut sides = self.0.sides();
         let mine = self.0.split(&mut sides).0;
         mine.created = mine.created.saturating_add(1);
         drop(sides);
         let region = Arc::new(HeapMemory::new(len));
-        Some((region.clone(), region))
+        Some((region.clone(), Handle::Region(region)))
+    }
+
+    fn send_file(&self, file: File) -> Option<Handle> {
+        Some(Handle::File(file))
+    }
+
+    fn file(&self, handle: Handle) -> Option<File> {
+        match handle {
+            Handle::File(file) => Some(file),
+            Handle::Region(_) => None,
+        }
     }
 
     fn shut(&self) {
@@ -277,7 +304,7 @@ impl Waiter<Local> for LocalWaiter {
         });
     }
 
-    fn wait<R>(&mut self, then: impl FnOnce(Waited<'_, Region>) -> R) -> R {
+    fn wait<R>(&mut self, then: impl FnOnce(Waited<'_, Handle>) -> R) -> R {
         let mut bytes = Vec::new();
         let mut handles = Vec::new();
         loop {

@@ -700,6 +700,7 @@ impl Rogue {
     fn control(&self, control: &Control<'_>, handles: Vec<local::Region>) {
         let mut payload = Vec::new();
         control.encode(&mut payload);
+        let handles = handles.into_iter().map(local::Handle::from).collect();
         self.sender
             .send(CONTROL_DESTINATION, &payload, handles)
             .unwrap();
@@ -816,7 +817,10 @@ fn whatever_a_child_sends_that_ours_wouldnt_closes_the_channel() {
     assert_eq!(
         host_says(|_, rogue| {
             let payload = postcard::to_allocvec(&text("with a handle")).unwrap();
-            rogue.sender.send(0, &payload, vec![region()]).unwrap();
+            rogue
+                .sender
+                .send(0, &payload, vec![region().into()])
+                .unwrap();
         }),
         bad(BadMessage::HandlesNotAllowed)
     );
@@ -893,9 +897,10 @@ fn whatever_a_child_sends_that_ours_wouldnt_closes_the_channel() {
 }
 
 #[test]
-fn only_the_cores_own_messages_come_with_handles() {
+fn a_hosts_handles_that_a_value_doesnt_take_go_with_the_message() {
     // A peer that may attach handles (a host), to a child: a handle on a
-    // message for the layer above is still a bad message.
+    // message for the layer above that its value has no place for is
+    // let go, and the message is handed up.
     let (child_end, host_end) = local::pair(None);
     let (sender, _) = channel::channel(
         host_end,
@@ -912,13 +917,16 @@ fn only_the_cores_own_messages_come_with_handles() {
     while child.turn() {}
     assert_eq!(child.gone, None);
     let region = std::sync::Arc::new(HeapMemory::new(64 * KIB));
-    sender.send(0, &payload, vec![region]).unwrap();
+    sender
+        .send(0, &payload, vec![region.clone().into()])
+        .unwrap();
     while child.turn() {}
-    assert_eq!(child.gone, Some(Gone::BadMessage(BadMessage::Rejected)));
+    assert_eq!(child.gone, None);
+    assert_eq!(child.recorder.got, [(0, text("fine")), (0, text("fine"))]);
     assert_eq!(
-        child.recorder.got,
-        [(0, text("fine"))],
-        "and it wasn't handed up"
+        std::sync::Arc::strong_count(&region),
+        1,
+        "the child kept nothing of it"
     );
 }
 

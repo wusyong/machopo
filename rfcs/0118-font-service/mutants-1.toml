@@ -1,0 +1,86 @@
+# Stage 1's mutants (ipc: an open file in a message's value, Windows's channel handing it over): `python scripts/test.py mutate rfcs/0118-font-service/mutants-1.toml`, on Windows.
+test = ["cargo", "test", "-q", "-p", "ipc", "--test", "it", "--", "file_in_message::", "endpoint::"]
+timeout = 900
+
+[[mutant]]
+name = "others may open a file to write while it is open"
+file = "crates/ipc/src/file.rs"
+from = '''            options.share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE);'''
+to = '''            options.share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE | 2);'''
+
+[[mutant]]
+name = "an open file may not be renamed"
+file = "crates/ipc/src/file.rs"
+from = '''            options.share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE);'''
+to = '''            options.share_mode(FILE_SHARE_READ | (FILE_SHARE_DELETE & 0));'''
+
+[[mutant]]
+name = "a file another serializer was refused stays beside the value"
+file = "crates/ipc/src/file.rs"
+from = '''        // Not taken: the serializer wasn't the codec.
+        drop(take_crossing());'''
+to = '''        // Not taken: the serializer wasn't the codec.
+        '''
+
+[[mutant]]
+name = "the codec writes the first handle for every file"
+file = "crates/ipc/src/codec.rs"
+from = '''            return self.inner.serialize_newtype_struct(name, &index);'''
+to = '''            return self.inner.serialize_newtype_struct(name, &{ let _ = index; 0u32 });'''
+
+[[mutant]]
+name = "a file is the message's first handle whichever it names"
+file = "crates/ipc/src/endpoint.rs"
+from = '''            .and_then(|i| self.handles.get_mut(i))'''
+to = '''            .and_then(|_| self.handles.get_mut(0))'''
+
+[[mutant]]
+name = "a message's files are left behind"
+file = "crates/ipc/src/endpoint.rs"
+from = '''        let sent = self.0.sender.send(destination, scratch, handles);'''
+to = '''        let sent = self.0.sender.send(destination, scratch, { drop(handles); Vec::new() });'''
+
+[[mutant]]
+name = "a message is handed up without its handles"
+file = "crates/ipc/src/endpoint.rs"
+from = '''                handles: message.handles.into_iter().map(Some).collect(),'''
+to = '''                handles: { drop(message.handles); Vec::new() },'''
+
+[[mutant]]
+name = "a message for the layer above with handles is refused, as before"
+file = "crates/ipc/src/endpoint.rs"
+from = '''            handler.message(Received {
+                destination: message.destination,'''
+to = '''            if !message.handles.is_empty() { return Err(BadMessage::Rejected); }
+            handler.message(Received {
+                destination: message.destination,'''
+
+[[mutant]]
+name = "a handle that isn't a file is taken for one"
+file = "crates/ipc/src/local.rs"
+from = '''            Handle::Region(_) => None,
+        }
+    }'''
+to = '''            Handle::Region(_) => std::fs::File::open(std::env::current_exe().unwrap()).ok(),
+        }
+    }'''
+
+[[mutant]]
+name = "Windows's host sends no file"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''        Some(file.into())
+    }
+
+    fn file('''
+to = '''        { drop(file); None }
+    }
+
+    fn file('''
+
+[[mutant]]
+name = "Windows's child takes no file"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''        Some(handle.into())
+    }'''
+to = '''        { drop(handle); None }
+    }'''

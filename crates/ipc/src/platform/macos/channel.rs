@@ -16,6 +16,7 @@
 //! sent it. A message with a notification's id from anyone else is
 //! nothing.
 
+use std::fs::File;
 use std::io;
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -218,6 +219,15 @@ impl Platform for Channel {
 
     fn create(&self, len: usize, peer_writes: bool) -> Option<(Mapping, SendRight)> {
         memory::create(len, peer_writes)
+    }
+
+    // Files don't cross on this platform yet: a descriptor isn't a port.
+    fn send_file(&self, _: File) -> Option<SendRight> {
+        None
+    }
+
+    fn file(&self, _: SendRight) -> Option<File> {
+        None
     }
 
     fn shut(&self) {

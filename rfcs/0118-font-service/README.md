@@ -1,7 +1,7 @@
 # RFC 0118：字型服務（系統字型由 Browser 給 renderer）
 
 - 開始日期：2026-11-26
-- 狀態：👍 已接受：2026-11-27（探測之前要定的四條定了；還沒排程）
+- 狀態：🚧 已排程：2026-11-27（第 1 段：`ipc` 跟著訊息交開著的檔案，Windows；進度在 `progress.md`）
 - 細節：`details.md`
 
 ## 摘要
@@ -170,10 +170,13 @@ fontique 建一個 family 時要每個字型的寬度、樣式、粗細、可變
 2. **Browser 回答，renderer 記著；family 的名字的清單在 renderer 啟動時一次給（A3）**（2026-11-27，使用者決定）：renderer 的第一則訊息裡有每個名字（含同一個 family 的其他寫法）指到哪個 family、generic family 各是哪幾個；排版遇到一個名字時自己查表，有才向 Browser 要那個 family 的字型；遇到一種新的 script 時問 fallback 是哪個 family；要到的都記著，同一個 process 不問第二次。問的都是同步的（renderer 現有的 `sync_call`）。理由：答案和現在一樣（Browser 用現在同一份 fontique 的系統後端回答）；量到一般的頁面每個 process 約 10 個問題、最多的一頁 31 個，一次來回約 27 微秒，合計不到 1 ms（`details.md`）；名字本來就要由 machopo 自己對（第 1 條），啟動時給齊比邊問邊長直接；不在這台機器上的名字（CSS 的字型清單常常列一串）不用各問一次；renderer 不用自己建字型的清單。代價：Browser 執行期間新裝的字型，已經開著的分頁看不到，新的分頁才看得到（現在 macOS 和 Windows 上看得到，Linux 上看不到）；字型變了時通知 renderer 重拿清單記在「之後的可能」。不選全部用到才問（A1，Chromium：新裝的字型立刻看得到，不在的名字每個多一次來回）。不選整份清單放共用記憶體（A2，Firefox：省下的是那不到 1 ms，要一套跨 process 的表，而且 fallback 改成 renderer 自己照字找，答案會和系統的不同）。
 3. **字型檔的內容：Browser 開好，把開著的檔案交給 renderer，renderer 自己 mmap（D1）**（2026-11-27，使用者決定）：`ipc` 的通道底層本來就帶得了這種東西（Linux 是 file descriptor、Windows 是 handle、macOS 是 Mach port），訊息這一層多一種「開著的檔案」；macOS 把 file descriptor 包成 port、另一側還原。renderer 拿到的是那個檔案的讀取權，拿不到路徑；map 了之後不放（已經交出去的字型還指著它）。理由：不多用記憶體（同一個字型檔在每個 process 裡是同一批頁面，用到才載入）；三個平台的 sandbox 都不擋已經開著的檔案。不選複製進共用記憶體（D2：不改 fork 之後一個 renderer 要三四十個字型檔，中日韓的一個十幾到三十 MB，每個分頁都多一份）。Chromium 的 `FontDataService` 優先給檔案的 handle，拿不到檔案時才複製；machopo 的系統字型都有路徑，那條退路不做。要驗的：macOS 上 sandbox 裡的 renderer 還原那個 port、mmap 它。
 4. **三個平台都做，分段，Windows 先（R1）**（2026-11-27，使用者決定）：Browser 的字型服務和 renderer 那一側不分平台（Browser 用 fontique 回答，哪個平台由 fontique 自己知道），做一次；每個平台是「分階段」的一段：那個平台的 renderer 切過去、sandbox 跟著收緊、在那個平台上驗。Windows 先：它是唯一不做就上不了下一級 sandbox 的，原型和比對也是在它上面做的。理由：只切一個平台的話，文字的路永遠分成「經過 Browser 的」和「直接問系統的」兩種，之後每個文字的問題都要分兩種看、兩條路都要測試。代價：Linux 和 macOS 的那兩段要在那兩台機器上做；macOS 那一段收益最小、未知最多（Chromium 在 macOS 上沒有字型服務，renderer 直接讀字型的目錄、連系統的字型服務；`ipc` 在 macOS 上傳檔案沒驗過）。做完之後 macOS 的 renderer 比 Chromium 的緊。不選只做 Windows（R2：工作量最少、都驗過）。不選 Windows 和 Linux、macOS 不做（R3：對齊 Chromium）。
+5. **開著的檔案是訊息的值裡的一種欄位（F1）**（2026-11-27，第 1 段開始時，使用者決定）：`ipc` 多一個欄位的型別，序列化成「這則訊息跟著的第幾個 handle」，codec 的 `Place` 和 `Resolve` 各多一個方法；同一個 process 裡不經過 codec 時它就是檔案本身。理由：和 `data_pipe::Consumer`、`SharedBuffer` 同一個做法，協定的型別直接寫它，號碼由 codec 對，不會由協定對錯；Mojo 也是這樣（`mojo_base.mojom.ReadOnlyFile` 是訊息裡的欄位，handle 照索引帶過去）。不選 `send` 另外帶一串檔案、收的一側另外拿（F2：`ipc` 改得少，但協定要自己對號碼，對錯了是安靜的錯）。跟著定的：map 在 `ipc` 裡做（`unsafe` 只在那裡），renderer 拿到的是 map 好的唯讀位元組。論證的前提是 map 著的期間檔案的內容不變：fontique 現在自己 map 系統字型時也是這個前提；Windows 上由 kernel 守住（Browser 開檔時不讓別人寫，map 著的檔案不能截短），Linux 和 macOS 上是假設，寫在 `crates/ipc/soundness.md`。
+6. **Windows 上交的是檔案的 handle（W1）**（2026-11-27，使用者決定）：只留讀的權限，renderer 這一側的 `ipc` 自己建 mapping。理由：三個平台交的都是開著的檔案，意思一樣；和 Chromium 一樣（`FontDataService` 和舊的 DirectWrite proxy 交的都是檔案的 handle）。代價：renderer 能用 handle 查到檔案的路徑、`ReadFile` 它；照路徑它在 AppContainer 裡開不了。不選 Browser 先建好唯讀的 section、只交 map 的權限（W2：權限最少，但 Windows 和另外兩個平台不同，長度要另外跟著訊息送）。
+7. **一則訊息最多 16 個 handle 不改，字型服務分批交檔案（H1）**（2026-11-27，使用者決定）：回答一個 family 時給每個字型的資料和檔案的編號，renderer 對還沒拿到的檔案，每次要最多 16 個。理由：上限定多大都擋不住一個 family 的檔案比它多（Linux 上整套不是可變字型的 Noto Sans 有幾十個檔案），協定本來就要能分批；照編號要的話，同一個檔案被好幾個 family 用到（`Segoe UI Variable` 的三個光學尺寸）也只交一次，Chromium 的檔案也帶一個編號，為的是同一件事。核心收 handle 的規則和 Windows 的表頭都不用改。不選把上限提高到 64 或 256（H2，Mojo 是 256：多數的 family 一次交完，但核心最多留住的 handle 跟著變多，大的 family 還是要分批）。
 
 ## 待決定
 
-探測之前要定的四條都定了（已決定的事項第 1 到 4 條）。每一段開始前只定那一段的。
+探測之前要定的四條都定了（已決定的事項第 1 到 4 條），第 1 段的三條也定了（第 5 到 7 條）。每一段開始前只定那一段的。
 
 第 2 段（Windows）開始時：
 

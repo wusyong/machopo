@@ -15,6 +15,7 @@
 //! differs between kernels.
 
 use std::collections::VecDeque;
+use std::fs::File;
 use std::io::{self, IoSlice, IoSliceMut};
 use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
@@ -280,6 +281,15 @@ impl Platform for Channel {
 
     fn create(&self, len: usize, peer_writes: bool) -> Option<(Mapping, OwnedFd)> {
         memory::create(len, peer_writes)
+    }
+
+    // Files don't cross on this platform yet.
+    fn send_file(&self, _: File) -> Option<OwnedFd> {
+        None
+    }
+
+    fn file(&self, _: OwnedFd) -> Option<File> {
+        None
     }
 
     fn shut(&self) {

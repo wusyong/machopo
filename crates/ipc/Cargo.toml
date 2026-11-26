@@ -20,6 +20,9 @@ verify = true
 [dependencies]
 base.workspace = true
 bytes.workspace = true
+# Mapping a memfd (the channel's shared memory on Linux), and a file that
+# crossed with a message.
+memmap2.workspace = true
 postcard.workspace = true
 serde.workspace = true
 tokio.workspace = true
@@ -39,10 +42,6 @@ shuttle = "0.9"
 rustix.workspace = true
 # `_exit`: how a child whose host is gone ends.
 libc.workspace = true
-
-# Mapping a memfd: the channel's shared memory.
-[target.'cfg(target_os = "linux")'.dependencies]
-memmap2.workspace = true
 
 # Mach ports and memory entries: the channel and its shared memory.
 [target.'cfg(target_os = "macos")'.dependencies]

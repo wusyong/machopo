@@ -33,6 +33,7 @@ pub mod codec;
 pub mod core;
 pub mod data_pipe;
 pub mod endpoint;
+pub mod file;
 pub mod local;
 pub mod platform;
 pub mod shared_buffer;

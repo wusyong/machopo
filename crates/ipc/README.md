@@ -215,6 +215,7 @@ let message: Msg = ipc::codec::decode(&payload, &mut table)?; // table：Resolve
 ```
 
 - **大的位元組走 region**：值用 `serialize_bytes` 寫的一段位元組（`protocol::BigBuffer` 就是這樣寫自己的）到 64 KiB（`MIN_REGION_LEN`）時，向 `Place` 要一塊；有的話內容寫進 region，訊息裡只有編號和長度。沒有空塊、或比最大的 region 還長，就照樣放在訊息裡。寫出來的是一個兩種 variant 的 enum（放在訊息裡的、在 region 裡的），所以不走 region 的位元組前面多一個位元組。
+- **值裡的開著的檔案跟著過去**（`file::ReadOnlyFile`）：序列化時向 `Place` 附上它的另一個 handle（`Place::file`），訊息裡只寫它是這則訊息的第幾個 handle；解碼到那個號碼時向 `Resolve` 要那個 handle 的檔案（`Resolve::file`），交過的就沒有了。值自己的 handle 留著：送出去的是另一個。這一端不附 handle（`Place::file` 回 `None`，預設就是）時那個值送不出去；號碼不是這則訊息的、同一個提兩次是 `BadMessage::UnknownHandle`。值寫到一半失敗時，附上的 handle 跟著沒送的訊息關掉。
 - **值裡的管道跟著過去**：序列化到 `data_pipe::Consumer` 時，向 `Place` 開一條過通道的管道（`Place::pipe`），訊息裡只寫它的編號；解碼到編號時向 `Resolve` 要這一端替那條管道建好的 `Consumer`（`Resolve::pipe`）。它在值的哪一層都一樣。這一端不開管道（`Place::pipe` 回 `None`，預設就是）時那個值送不出去；對方寫的編號不是一條等著被拿的管道是 `BadMessage::UnknownPipe`，同一個編號提兩次也是。
 - **值寫到一半失敗**：已經放進 region 的還回去，為它開的管道結束掉（`Place::unpipe`；管道已經從值裡取走了，來源跟著放掉），`out` 回到原來的樣子。
 - **巢狀的深度有上限**（`MAX_DEPTH`，128）：sequence、map、struct、tuple、enum、option、newtype 各算一層。postcard 自己沒有上限，對方送一個包了幾萬層的值就能讓 stack overflow，那接不住。超過的是 `BadMessage::TooDeep`。
@@ -257,7 +258,7 @@ impl Handler<P> for MyHandler {
 ```
 
 - **平台的介面是兩個角色**，裡面都沒有判斷：
-  - `Platform`（每條通道一個）：`write`（`Transport`）、`map`（對方給的 handle 變成記憶體）、`create`（建一塊 region：這一端的 mapping 和給對方的 handle）、`shut`（通道結束時關掉傳輸，對方的平台才知道）。
+  - `Platform`（每條通道一個）：`write`（`Transport`）、`map`（對方給的 handle 變成記憶體）、`create`（建一塊 region：這一端的 mapping 和給對方的 handle）、`send_file` 和 `file`（開著的檔案和 handle 之間；不交檔案的平台回 `None`）、`shut`（通道結束時關掉傳輸，對方的平台才知道）。
   - `Waiter`（每條 IO thread 一個）：`add` 和 `remove`（哪些通道要等）、`interrupter`（別的 thread 打斷它的等待用的）、`wait`（等到有事做：哪一條通道讀到位元組和 handle、又有空間、對方不在了，或是被打斷）。位元組是「借」出來的，平台自己記憶體裡有的（例如 out-of-line 的訊息）不用再複製一次。
 - **一個 process 一條 IO thread**：`IoLoop` 等這個 process 所有的通道，來了什麼就推那一條通道的端點一步。Browser 只開一個，所有 renderer 的端點都交給它；child 開一個，裡面只有它那一條。型別不擋一個 process 開兩個（測試會這樣扮演兩端），這是用法上的規定。
 - **通道被叫醒**（佇列有東西要寫、管道有資料要送、別的 thread 關了它）：迴圈在端點交給它時把 callback 裝到通道上（核心的 `Sender::on_wake`），callback 記下是哪一條、打斷那條 thread 的等待，迴圈推它一步。這一段不經過平台。還沒交給迴圈的通道叫醒沒有作用；交給迴圈時先推一步，所以之前排著的不會掉。「通道被叫醒」（`Event::Woken`）和「等待被打斷」（`Waited::Interrupted`）是兩件事：後者只是迴圈自己有事（有通道被叫醒、有端點交進來、要停）。
@@ -298,9 +299,31 @@ drop(tile);                                     // 這時才告訴對方「可�
 
 為什麼 `&mut [u8]` 成立、對方太早說「讀完了」會怎樣，在 `crates/ipc/soundness.md` 的 I10。
 
+## `file`
+
+跟著訊息過去、給對方讀的檔案（Chromium 的 `base::File` 放在 `mojo_base.mojom.ReadOnlyFile` 裡）：給自己不能開檔案的 process（sandbox 裡的 renderer）讀字型檔這一類的東西。
+
+```rust
+// 能附 handle 的一端（Browser）
+let file = ReadOnlyFile::open(&path)?;
+link.send(destination, &Fonts { files: vec![file] })?;   // 訊息的值裡就是它
+
+// 另一端：解碼出來的值裡有它自己的 handle
+let Fonts { files } = message.decode()?;
+let bytes: MappedFile = files.into_iter().next().unwrap().map().unwrap();
+&bytes[..];                                               // map 成唯讀的位元組
+```
+
+- **只有能附 handle 的一端送**（`Config::may_attach`）：另一端送是 `SendError::Refused`。一則訊息最多 `MAX_HANDLES`（16）個，多的整則送不出去（`Refused`），通道照常。
+- **送出去的值還是這一端的**：對方拿到的是自己的 handle，兩邊各自關。
+- **拿到的是 map 好的位元組，不是路徑**：`map` 只 map 一般的檔案，長度 0 的是空的。`MappedFile` 拿著檔案，map 多久就開多久。
+- **map 著的期間沒有人寫它**：Windows 上 `open` 開檔時只允許別人讀和刪除（改名、刪除後原本的位元組不變），這在檔案的任何一個 handle 還開著時都成立，兩端的 handle 是同一個檔案物件。其他平台上還不交檔案。為什麼重要在 `crates/ipc/soundness.md` 的 K11。
+- **哪個平台交得了**：Windows（`platform::windows::channel`，host 往 child）和同一個 process 裡的 `local`；macOS 和 Linux 的平台層還不交（`send_file` 回 `None`，值送不出去）。
+- 給上層的訊息帶的 handle，值沒拿走的跟著訊息關掉，不是壞訊息。
+
 ## `local`
 
-同一個 process 裡的 `Platform`：兩端各在一條 thread 上，一端寫的原樣交給另一端，region 是一般配置的記憶體（`HeapMemory`）。端點的測試和 fuzzer 跑在它上面，Miri 也跑得起來。`pair(room)` 的 `room` 是一端最多堆多少位元組沒讀（測傳輸沒有空間的情況）。`LocalWaiter` 是它的 `Waiter`：等好幾個這樣的一端，輪流看，一條很忙的不會讓別條一直等。`poll` 是不等、只看一端的版本，測試用它一步一步推（叫醒不經過它：手動推的測試自己用 `Link::on_wake` 接）。
+同一個 process 裡的 `Platform`：兩端各在一條 thread 上，一端寫的原樣交給另一端，region 是一般配置的記憶體（`HeapMemory`），handle 是 region 或開著的檔案本身（`local::Handle`）。端點的測試和 fuzzer 跑在它上面，Miri 也跑得起來。`pair(room)` 的 `room` 是一端最多堆多少位元組沒讀（測傳輸沒有空間的情況）。`LocalWaiter` 是它的 `Waiter`：等好幾個這樣的一端，輪流看，一條很忙的不會讓別條一直等。`poll` 是不等、只看一端的版本，測試用它一步一步推（叫醒不經過它：手動推的測試自己用 `Link::on_wake` 接）。
 
 ## `platform`
 
@@ -481,7 +504,7 @@ let child = Channel::child(client);                 // 在 child 裡
 - **為什麼要 completion port**：pipe 滿了的時候寫入在 `write` 回來之後還在 kernel 裡進行，而 Windows 在 thread 結束時取消它發出的 I/O，除非 handle 在 completion port 上。任何 thread 都會送，送完就結束的 thread 不能把訊息帶走。
 - **交給迴圈之前不寫**：pipe 要到 `add` 才在 port 上，在那之前 `write` 回 `WouldBlock`，訊息留在核心的佇列；加入時被拒絕過的那一端收到 `Writable`。一個通道只能加入一個 waiter、一次。
 - **寫**：一次最多 64 KiB（`RECORD_MAX`，pipe 的緩衝區，host 的連表頭），其餘的核心留著。pipe 有空間時寫入在呼叫裡就完成，下一筆可以馬上寫，不用等 IO thread（pipe 設了「當場完成的不到 port」）；沒有空間時那一筆在 kernel 裡進行，這段時間 `write` 回 `WouldBlock`，它的通知被 IO thread 從 port 取走時，被拒絕過的收到 `Writable`。量過：每筆都等 port 的話，連續送慢 2 倍（一條通道）到 8 倍（四條）。
-- **handle 只從 host 往 child**：host 的每次寫入前面有這一層的表頭（後面幾個位元組、幾個 handle，各 `u32`；每個 handle 一個 8 位元組的數值）。host 寫入當下把 handle 複製進 child 的 process（它留的 process handle 只有 `PROCESS_DUP_HANDLE`），數值是 handle 在 child 裡的值；寫入沒發出去時把放進去的從 child 裡關掉。child 那一端照表頭把數值包成 handle（信任 host），handle 跟著那一次寫入的位元組借出去。
+- **handle 只從 host 往 child**（region 的 section 和值裡的開著的檔案）：host 的每次寫入前面有這一層的表頭（後面幾個位元組、幾個 handle，各 `u32`；每個 handle 一個 8 位元組的數值）。host 寫入當下把 handle 複製進 child 的 process（它留的 process handle 只有 `PROCESS_DUP_HANDLE`），數值是 handle 在 child 裡的值；寫入沒發出去時把放進去的從 child 裡關掉。child 那一端照表頭把數值包成 handle（信任 host），handle 跟著那一次寫入的位元組借出去。
 - **child 往 host 沒有表頭**：寫的就是核心的位元組，host 讀到什麼原樣借給核心。host 這一側沒有任何一行把位元組變成 handle；child 的訊息說它有 handle 時由核心當成壞訊息。child 那一端被交了 handle 時放掉它們。
 - **讀**：每條通道一塊 64 KiB 的緩衝區（一次寫入的上限），讀在 IO thread 上發出；資料已經在的話當場拿到，不在的話等 port 的通知。child 那一端一次借出一次寫入的位元組（一次讀到好幾筆時一筆一筆借，切到一半的等下一次讀接起來）。
 - **一條很忙的通道不讓別條等**：借出一筆之後，下一輪換別條已經有東西的通道；連續 8 輪都在處理已經讀到的之後，一定看一次 port（只看、不等），所以別條通道在 port 裡的通知最多等 8 輪。

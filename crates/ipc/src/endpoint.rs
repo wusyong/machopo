@@ -15,8 +15,9 @@
 //!
 //! Only one end of a channel makes regions (the one that may attach
 //! handles, a Browser): the numbers of both directions' regions are its
-//! own.
+//! own. It is the one that sends open files too.
 
+use std::fs::File;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use bytes::Bytes;
@@ -82,6 +83,14 @@ pub trait Platform: Transport<Handle: Send> + Send + Sync + Sized + 'static {
     /// handle that gives the peer its own, to write when `peer_writes` and
     /// only to read otherwise.
     fn create(&self, len: usize, peer_writes: bool) -> Option<(Self::Memory, Self::Handle)>;
+
+    /// The handle that takes `file` to the peer. `None` when files don't
+    /// cross on this platform.
+    fn send_file(&self, file: File) -> Option<Self::Handle>;
+
+    /// The file a handle from the peer is. `None` when files don't cross
+    /// on this platform, or it isn't one.
+    fn file(&self, handle: Self::Handle) -> Option<File>;
 }
 
 /// Which of an IO thread's channels: the loop's name for one.
@@ -243,6 +252,8 @@ struct Placing<'a, P: Platform> {
     /// back if it isn't sent.
     placed: Vec<u32>,
     piped: Vec<u32>,
+    /// The handles of the files in it, which go with it.
+    handles: Vec<P::Handle>,
 }
 
 /// Opens a pipe to the peer that holds at most `capacity` unread bytes,
@@ -351,6 +362,16 @@ impl<P: Platform> Place for Placing<'_, P> {
                 .control(&Control::PipeEnded { pipe: number }, Vec::new());
         }
     }
+
+    fn file(&mut self, file: File) -> Option<u32> {
+        if !self.inner.config.may_attach {
+            return None;
+        }
+        // Past the most a message has, the core refuses the message.
+        let index = u32::try_from(self.handles.len()).ok()?;
+        self.handles.push(self.inner.platform().send_file(file)?);
+        Some(index)
+    }
 }
 
 /// An endpoint's sending side, for any thread.
@@ -369,7 +390,10 @@ impl<P: Platform> Link<P> {
     /// for the next time), and the data pipes
     /// in it ([`Consumer`]) go with it: each is opened to the peer before
     /// the message, and fed from then on. A message that isn't sent ends
-    /// the pipes it had.
+    /// the pipes it had. So do the open files in it
+    /// ([`ReadOnlyFile`](crate::file::ReadOnlyFile)), from the end that
+    /// may attach handles: the peer is given handles of its own, at most
+    /// [`MAX_HANDLES`](crate::core::frame::MAX_HANDLES) a message.
     pub fn send<T: Serialize + ?Sized>(
         &self,
         destination: u32,
@@ -393,9 +417,11 @@ impl<P: Platform> Link<P> {
             feeding,
             placed: Vec::new(),
             piped: Vec::new(),
+            handles: Vec::new(),
         };
         codec::encode(message, &mut placing, scratch).map_err(|_| SendError::Refused)?;
-        let sent = self.0.sender.send(destination, scratch, Vec::new());
+        let handles = std::mem::take(&mut placing.handles);
+        let sent = self.0.sender.send(destination, scratch, handles);
         if sent.is_err() {
             // The peer gets no message that names what was placed for
             // this one, or the pipes opened for it: nobody will read
@@ -516,6 +542,9 @@ pub struct Received<'a, P: Platform> {
     inner: &'a Arc<Inner<P>>,
     table: &'a mut Table<Arc<P::Memory>>,
     arrived: &'a mut Vec<(u32, Consumer)>,
+    /// The handles that came with it, until its value takes them. Those
+    /// it doesn't take go with it.
+    handles: Vec<Option<P::Handle>>,
 }
 
 impl<P: Platform> Received<'_, P> {
@@ -536,6 +565,7 @@ impl<P: Platform> Received<'_, P> {
                 inner: self.inner,
                 table: self.table,
                 arrived: self.arrived,
+                handles: &mut self.handles,
             },
         )
     }
@@ -552,12 +582,14 @@ impl<P: Platform> Received<'_, P> {
     }
 }
 
-/// What a message's value is read out of: the peer's regions, and the
-/// pipes it opened that no message has named yet.
+/// What a message's value is read out of: the peer's regions, the pipes
+/// it opened that no message has named yet, and the handles that came
+/// with the message.
 struct Arriving<'a, P: Platform> {
     inner: &'a Arc<Inner<P>>,
     table: &'a mut Table<Arc<P::Memory>>,
     arrived: &'a mut Vec<(u32, Consumer)>,
+    handles: &'a mut [Option<P::Handle>],
 }
 
 impl<P: Platform> Resolve for Arriving<'_, P> {
@@ -579,6 +611,18 @@ impl<P: Platform> Resolve for Arriving<'_, P> {
             .position(|(pipe, _)| *pipe == number)
             .ok_or(BadMessage::UnknownPipe { pipe: number })?;
         Ok(self.arrived.swap_remove(i).1)
+    }
+
+    fn file(&mut self, index: u32) -> Result<File, BadMessage> {
+        let handle = usize::try_from(index)
+            .ok()
+            .and_then(|i| self.handles.get_mut(i))
+            .and_then(Option::take)
+            .ok_or(BadMessage::UnknownHandle { index })?;
+        self.inner
+            .platform()
+            .file(handle)
+            .ok_or(BadMessage::Rejected)
     }
 }
 
@@ -723,16 +767,15 @@ impl<P: Platform> Endpoint<P> {
             if message.destination == CONTROL_DESTINATION {
                 return control(inner, table, incoming, arrived, message);
             }
-            // Only the core's own messages come with handles.
-            if !message.handles.is_empty() {
-                return Err(BadMessage::Rejected);
-            }
+            // Whether it may come with any is the core's to say: only from
+            // a peer that may attach them.
             handler.message(Received {
                 destination: message.destination,
                 payload: message.payload,
                 inner,
                 table,
                 arrived,
+                handles: message.handles.into_iter().map(Some).collect(),
             })
         });
         if gone.is_some() {

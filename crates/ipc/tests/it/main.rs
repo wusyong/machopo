@@ -14,6 +14,7 @@ mod data_pipe;
 mod disk_space;
 mod endpoint;
 mod endpoint_fuzz;
+mod file_in_message;
 mod frame_fuzz;
 // Wherever there is a platform's pipe to be driven through.
 #[cfg(any(unix, windows))]

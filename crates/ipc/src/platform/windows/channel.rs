@@ -30,6 +30,7 @@
 //! take a value for a handle.
 
 use std::collections::VecDeque;
+use std::fs::File;
 use std::hash::{BuildHasher, RandomState};
 use std::io;
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
@@ -610,6 +611,17 @@ impl Platform for Channel {
 
     fn create(&self, len: usize, peer_writes: bool) -> Option<(Mapping, OwnedHandle)> {
         memory::create(len, peer_writes)
+    }
+
+    fn send_file(&self, file: File) -> Option<OwnedHandle> {
+        // Put in the child with the rights it has here: to read.
+        Some(file.into())
+    }
+
+    fn file(&self, handle: OwnedHandle) -> Option<File> {
+        // The host's word for what it is (as for a region's); a handle
+        // that isn't a file doesn't map.
+        Some(handle.into())
     }
 
     fn shut(&self) {

@@ -100,7 +100,7 @@ pub fn run(data: &[u8]) {
                     n => u32::from(n),
                 };
                 let handles = (0..arg >> 6)
-                    .map(|_| Arc::new(HeapMemory::new(MIN_REGION_LEN)))
+                    .map(|_| Arc::new(HeapMemory::new(MIN_REGION_LEN)).into())
                     .collect();
                 // To a channel the host shut, nothing goes.
                 let _ = child.send(destination, bytes, handles);

@@ -507,6 +507,7 @@ fn rogue_host() -> (channel::Sender<Local>, End) {
 }
 
 fn control(sender: &channel::Sender<Local>, control: &Control<'_>, handles: Vec<local::Region>) {
+    let handles = handles.into_iter().map(local::Handle::from).collect();
     let mut payload = Vec::new();
     control.encode(&mut payload);
     sender.send(CONTROL_DESTINATION, &payload, handles).unwrap();
