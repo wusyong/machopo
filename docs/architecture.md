@@ -145,7 +145,7 @@ canvas 的快照是沒有 mipmap 的雙線性，`<img>` 和背景有 mipmap；2D
 ### V8 和 `unsafe` 的位置
 
 - **V8 專屬的程式只在 `bindings` 和 `dom_js`**（`dom_js` 是 DOM 的 JS 前端，頁面用它；量測用的 `gc_bench` 也用 `bindings`：它要量 V8 自己的 heap，不在 `machopo` 裡）；`dom_api` 和 renderer 與 engine 無關，renderer 只透過 `dom_api::ScriptEngine`。DOM 的語意因此只寫一次：另一個 engine（wasm guest 的 `dom_wasm`）只要寫值的轉換和把宣告表裝進 engine 的那一層，新增 DOM API 也只改宣告表和 `dom_api`。`python3 scripts/sanity.py deps` 檢查。
-- **`unsafe` 只在 `bindings` 和 `ipc`**：workspace 設了 `unsafe_code = "deny"`，只有這兩個 crate 的 crate root 和整合測試能打開。`bindings` 是 V8 的 FFI，`ipc` 是作業系統的 API（現在是 Windows 的 `QueryPerformanceCounter`；之後拆 process 時加上兩個 process 共用的記憶體）；其他 crate 都是 safe code，要審的 `unsafe` 集中在這幾處。每一處都有 `// SAFETY:`，`bindings` 的論證在 `crates/bindings/soundness.md`，`ipc` 的在它的 README。DOM 的 GC 的 `unsafe` 在 elise 裡，論證在 `../third_party/elise/docs/soundness.md`。`python3 scripts/sanity.py unsafe` 檢查。
+- **`unsafe` 只在 `bindings`、`ipc` 和 `sunaba`**：workspace 設了 `unsafe_code = "deny"`，只有這幾個 crate 的 crate root（`bindings`、`ipc` 還有整合測試）能打開。`bindings` 是 V8 的 FFI，`ipc` 是作業系統的 API（現在是 Windows 的 `QueryPerformanceCounter`；之後拆 process 時加上兩個 process 共用的記憶體）；其他 crate 都是 safe code，要審的 `unsafe` 集中在這幾處。每一處都有 `// SAFETY:`，`bindings` 的論證在 `crates/bindings/soundness.md`，`ipc` 的在它的 README；`sunaba` 是 process 的 sandbox（收到被擋的 system call 時的 signal handler），論證在 `crates/sunaba/soundness.md`。DOM 的 GC 的 `unsafe` 在 elise 裡，論證在 `../third_party/elise/docs/soundness.md`。`python3 scripts/sanity.py unsafe` 檢查。
 
 ## Crate 選型
 

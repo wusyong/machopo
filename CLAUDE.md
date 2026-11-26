@@ -12,7 +12,7 @@
 - `rfcs/README.md` 和各份 RFC：MVP 之後的功能和設計；正在做的 RFC 的進度在它的 `progress.md`。
 - `rfcs/pre-rfcs/`：MVP 的規劃、各階段最後的設計和理由（包括試過、改掉的做法），2026-10-04 起凍結。找某個設計為什麼這樣做時讀它，不要再改它。
 - `docs/README.md`：每份文件放什麼、怎麼更新。**改文件前一定要讀**。
-- 動到 `bindings` 的 GC、`unsafe`、執行 script 的入口：先讀 `crates/bindings/soundness.md`。動到 `ipc` 的 `unsafe`、訊息的檢查或平台層：先讀 `crates/ipc/soundness.md`。動到 DOM 的 GC（elise，`../third_party/elise`）：先讀 `../third_party/elise/docs/soundness.md`、`../third_party/elise/docs/api.md` 和 `../third_party/elise/docs/contributing.md`。
+- 動到 `bindings` 的 GC、`unsafe`、執行 script 的入口：先讀 `crates/bindings/soundness.md`。動到 `ipc` 的 `unsafe`、訊息的檢查或平台層：先讀 `crates/ipc/soundness.md`。動到 `sunaba`（process 的 sandbox）或 renderer 的 sandbox policy：先讀 `crates/sunaba/soundness.md`。動到 DOM 的 GC（elise，`../third_party/elise`）：先讀 `../third_party/elise/docs/soundness.md`、`../third_party/elise/docs/api.md` 和 `../third_party/elise/docs/contributing.md`。
 - 加新的繪圖功能（新的 `PaintOp`、filter、shader、blend mode），或動 `raster` 的 playback：先看 `docs/render-gaps.md`（raster 用的 Vello 缺什麼、現在補在哪）。
 - 加新的 CSS property、pseudo-class、會影響 style 的 DOM 狀態、box 畫的新輸入，或改 hit test、parse 的 fast path：先看 `docs/architecture.md` 的「快取和增量：加新東西時要跟著改的地方」，漏改的多半是畫面不更新，不是 crash。
 - 加 renderer 的 main thread 要做的新工作（新的 timer、task、task 之後的步驟、DevTools 或 Browser 要當場知道的事），或改 `RenderThread::run`、`after_task`、scheduler：先看 `docs/architecture.md` 的「Event loop：加新的工作時要跟著改的地方」，漏改的多半是那件事不發生或晚發生，測試常常看不出來。
@@ -50,7 +50,7 @@
   python3 scripts/sanity.py deps              # V8 只在 bindings、dom_js
   python3 scripts/sanity.py spans             # span 用 trace_event 的 macro（沒開 trace 時不建）
   python3 scripts/sanity.py boundary          # renderer 守住 process 的邊界
-  python3 scripts/sanity.py unsafe            # unsafe 只在 bindings 和 ipc
+  python3 scripts/sanity.py unsafe            # unsafe 只在 bindings、ipc 和 sunaba
   python3 scripts/sanity.py tests             # 每個 crate 的整合測試是一個 binary（tests/it/）
   python3 scripts/sanity.py numerics          # 整數運算寫明溢位時怎麼辦（crates/base/README.md）
   python3 scripts/sanity.py docs              # 改了文件時
@@ -80,7 +80,7 @@
 - 型別和模組盡量對應 Chromium 的名字和分層（`FrameView`、`LayerTreeHost`、`ScriptState`……），在註解裡寫出對應的 Chromium 類別。
 - **擁有權和借用先設計好，不預設用 `Rc`、`RefCell`、`Arc`**：先想清楚誰擁有、借用能不能靜態地保證（從擁有者借、分開借欄位、綁在像 `&mut Isolate` 這樣的通行證上）。執行時的計數和借用檢查只在說得出理由時用（真的共享擁有、跨 thread、外部 API 的限制，例如 html5ever 的 `&self` sink、V8 的 finalizer），在註解寫明，而且不放在每次呼叫都會走到的路上。對照 Chromium：Blink 的 `StringImpl`、`RefCounted` 是 thread 自己的、計數不是 atomic 的。
 - **整數運算和轉型寫明溢位時怎麼辦**：照 `crates/base/README.md` 的規則（大小和配置 checked、CSS 和 layout 的值飽和或 clamp、ID 用 `SequenceNumber`、float 轉整數用 `base::numerics`），證明過不會溢位的寫帶理由的 `#[expect]`，不用 `#[allow]`；clippy 和 `sanity.py numerics` 檢查。
-- **`unsafe` 只在 `bindings` 和 `ipc`**，每一處都有 `// SAFETY:` 說明，改了論證要更新那個 crate 的 soundness 文件（`bindings` 是 `crates/bindings/soundness.md`；`ipc` 是 `crates/ipc/soundness.md`）。elise 的 `unsafe` 照它自己的規則，論證在 `../third_party/elise/docs/soundness.md`。
+- **`unsafe` 只在 `bindings`、`ipc` 和 `sunaba`**，每一處都有 `// SAFETY:` 說明，改了論證要更新那個 crate 的 soundness 文件（`bindings` 是 `crates/bindings/soundness.md`；`ipc` 是 `crates/ipc/soundness.md`；`sunaba` 是 `crates/sunaba/soundness.md`）。elise 的 `unsafe` 照它自己的規則，論證在 `../third_party/elise/docs/soundness.md`。
 - **renderer 照 process 的邊界寫**：renderer 現在是 Browser process 裡的 thread，但之後要能拆成 process。改到 renderer 和 Browser、Viz 之間的東西（`protocol`、啟動 renderer 的參數、renderer 這一側的全域狀態）前，先看 `docs/architecture.md` 的「Process 的邊界」。
 - **V8 專屬的程式只在 `bindings` 和 `dom_js`**（量測用的 `gc_bench` 例外：它要量 V8 自己的 heap）；`dom_api` 和 renderer 與 engine 無關（`docs/architecture.md` 的「V8 和 `unsafe` 的位置」）。
 - Toolchain 釘在 `rust-toolchain.toml`，和 workspace 的 `rust-version` 一起改；elise 釘同樣的版本，一起改（它的 compile-fail 預期輸出要重新產生，並確認錯誤的種類沒變；`docs/README.md` 的「其他會牽動文件的變更」）。

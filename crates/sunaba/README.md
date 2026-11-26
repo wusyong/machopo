@@ -1,0 +1,69 @@
+# sunaba
+
+A process's sandbox, entered by the process itself as it starts. A process that is about to handle what it can't trust (a web page, a file from elsewhere) says what it will still need of the kernel, a policy, and enters it; from then on the kernel refuses the rest, whatever the process's own code has been made to do.
+
+The crate is the mechanism alone and knows no program's policy (Chromium's split: `sandbox/` and `sandbox/policy/`). It depends on nothing of the workspace it sits in.
+
+| Operating system | Mechanism | Module |
+| --- | --- | --- |
+| Linux | Landlock (which files open), seccomp-bpf (which system calls are made) | `sunaba::linux` |
+
+Why it holds, what it doesn't promise, and what to review when changing it: `soundness.md`.
+
+## Linux
+
+```rust
+use sunaba::linux::{Arg, Policy, Test, enter};
+
+fn main() {
+    let mut policy = Policy::new();
+    policy
+        .read_only("/usr/share/fonts")
+        .allow(&[libc::SYS_read, libc::SYS_write, libc::SYS_openat, libc::SYS_mmap /* ... */])
+        .allow_when(libc::SYS_ioctl, &[Arg::int(1, Test::Equals(libc::TCGETS as u64))])
+        .fail(libc::SYS_statx, libc::ENOSYS)
+        .allow_threads();
+    if let Err(error) = enter(&policy) {
+        eprintln!("{error}");
+        std::process::exit(1);
+    }
+    // From here on: the policy.
+}
+```
+
+### The policy
+
+- **`read_only(path)`**: the file, or everything beneath the directory, can be opened for reading. Nothing else can be opened, and nothing can be written, made, removed or renamed anywhere. A path that isn't there when the process enters is left out. What was opened before entering stays open: a file the process is to write is opened first (or handed to it).
+- **`allow(calls)`**: these system calls, whatever their arguments.
+- **`allow_when(call, args)`**: the call when every `Arg` holds; said again for the same call, when either set holds. `Arg::int` tests an argument's low 32 bits (what the kernel reads of an `int`), `Arg::long` all 64. A filter reads the arguments' values and never the memory a pointer leads to.
+- **`fail(call, errno)`**: the call isn't made and returns `errno`: for what a library tries first and has another way without.
+- **`fail_when(call, args, errno)`**: the same, only when every `Arg` holds; the call's other uses are as the policy says elsewhere. For a call that is fine but for some flags: `openat`, but not with `O_TRUNC`.
+- **`allow_threads()`**: threads and nothing else. `clone3` returns `ENOSYS` (its arguments are in memory), and `clone` is allowed with `CLONE_THREAD` and no new namespace.
+- **Anything else ends the process**, by `SIGSYS`, after one line on stderr: `sunaba: system call 41 (socket) isn't allowed in this sandbox`. The line is missing when the call was made with signals blocked (libc does so around `clone`): the process ends by `SIGSYS` all the same.
+
+The file system calls (`openat`, `unlinkat`…) are for the policy to allow: Landlock then decides by path, and a refusal there is `EACCES`, not the process's end. Not all of them: Landlock doesn't decide a file's mode, owner, times or extended attributes (`chmod`, `chown`, `utimensat`, `setxattr`…), and before its third ABI (Linux 6.2) not truncation either (`truncate`, and `open` with `O_TRUNC` of a file that can be read). A policy leaves those calls out, or fails them (`fail`, `fail_when`).
+
+### Entering
+
+`enter` is for the first thing in `main`:
+
+- **One thread.** Both restrictions are the calling thread's and those of what it makes later. With a second thread already running, `enter` restricts nothing and returns `Error::Threads`.
+- **For good.** Nothing takes a restriction off; a policy is everything the process will ever need.
+- **An error means end the process.** `Error::Seccomp` can come after the files were restricted.
+
+### What the kernel has to have
+
+Landlock (Linux 5.13, built with `CONFIG_SECURITY_LANDLOCK` and named in the boot's `lsm=`) and seccomp filters. Without Landlock `enter` returns `Error::NoLandlock` and restricts nothing: there is no weaker sandbox to fall back to. A newer kernel's Landlock also refuses TCP's `bind` and `connect`, abstract Unix sockets and signals to other processes; these are asked for and taken where they are, and a policy's seccomp list is what refuses them everywhere.
+
+### Testing a policy
+
+What a sandbox refuses can only be seen from inside one, and a process can't leave to try the next thing. `sunaba::linux::probe::run(&policy, arguments)` is a `main` that enters the policy, tries the one thing its arguments say (read, list, write, remove or stat a path; a raw system call; any of these on a new thread) and prints `ok N` or `error ERRNO`. A test runs it once for each thing and reads the line or the signal. `probe::baseline()` is the policy the probe's own code needs, for a test to add to.
+
+The crate's own tests (`tests/it/linux.rs`) run `sunaba_probe`, the baseline with what its arguments add:
+
+```sh
+cargo test -p sunaba
+target/debug/sunaba_probe --read-only /etc -- read /etc/hostname      # ok 7
+target/debug/sunaba_probe -- read /etc/hostname                       # error 13
+target/debug/sunaba_probe -- syscall 41 2 1 0                         # killed by SIGSYS
+```

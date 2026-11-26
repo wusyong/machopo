@@ -41,6 +41,8 @@ UNSAFE_ALLOWED = [
     "crates/ipc/src/lib.rs",
     "crates/bindings/tests/",
     "crates/ipc/tests/",
+    # The process's sandbox: a signal handler, and its tests' raw system calls.
+    "crates/sunaba/src/lib.rs",
 ]
 
 ALLOW_UNSAFE = re.compile(r"#!?\[\s*(?:allow|expect)\s*\([^\]]*\bunsafe_code\b", re.S)
@@ -72,13 +74,13 @@ def cmd_unsafe(args: argparse.Namespace) -> int:
         for match in ALLOW_UNSAFE.finditer(text):
             if not any(rel == a or (a.endswith("/") and rel.startswith(a)) for a in UNSAFE_ALLOWED):
                 line = text.count("\n", 0, match.start()) + 1
-                problems.append(f"{rel}:{line}: allows unsafe_code outside bindings / ipc / gc")
+                problems.append(f"{rel}:{line}: allows unsafe_code outside bindings / ipc / sunaba")
 
     for problem in problems:
         print(problem)
     if problems:
         return 1
-    print("unsafe is confined to bindings and ipc")
+    print("unsafe is confined to bindings, ipc and sunaba")
     return 0
 
 

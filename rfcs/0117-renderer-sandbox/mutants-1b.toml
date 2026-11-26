@@ -1,0 +1,125 @@
+# Step 1b's mutants (sunaba: the policy, entering, the SIGSYS handler): `python3 scripts/test.py mutate rfcs/0117-renderer-sandbox/mutants-1b.toml`.
+test = ["cargo", "test", "-q", "-p", "sunaba"]
+timeout = 120
+
+[[mutant]]
+name = "a process with other threads enters all the same"
+file = "crates/sunaba/src/linux.rs"
+from = "    if threads != 1 {"
+to = "    if threads == 0 {"
+
+[[mutant]]
+name = "the files aren't restricted"
+file = "crates/sunaba/src/linux.rs"
+from = "    let landlock_abi = restrict_files(&policy.read_only)?;"
+to = "    let landlock_abi = 0;"
+
+[[mutant]]
+name = "no filter is installed"
+file = "crates/sunaba/src/linux.rs"
+from = "    for filter in &filters {"
+to = "    for filter in filters.iter().take(0) {"
+
+[[mutant]]
+name = "only the trapping filter is installed"
+file = "crates/sunaba/src/linux.rs"
+from = "    for filter in &filters {"
+to = "    for filter in filters.last() {"
+
+[[mutant]]
+name = "a system call not named fails instead of ending the process"
+file = "crates/sunaba/src/linux.rs"
+from = "SeccompFilter::new(named, SeccompAction::Trap, SeccompAction::Allow, arch)"
+to = "SeccompFilter::new(named, SeccompAction::Errno(1), SeccompAction::Allow, arch)"
+
+[[mutant]]
+name = "a read-only path can be written too"
+file = "crates/sunaba/src/linux.rs"
+from = "    let read = AccessFs::ReadFile | AccessFs::ReadDir;"
+to = "    let read = AccessFs::from_all(NEWEST);"
+
+[[mutant]]
+name = "only reads are restricted"
+file = "crates/sunaba/src/linux.rs"
+from = '''        .handle_access(AccessFs::from_all(ABI::V1))
+        .and_then(|ruleset| {
+            ruleset
+                .set_compatibility(CompatLevel::BestEffort)
+                .handle_access(AccessFs::from_all(NEWEST))?'''
+to = '''        .handle_access(AccessFs::from_read(ABI::V1))
+        .and_then(|ruleset| {
+            ruleset
+                .set_compatibility(CompatLevel::BestEffort)
+                .handle_access(AccessFs::from_read(NEWEST))?'''
+
+[[mutant]]
+name = "an int argument is compared whole and a long by half"
+file = "crates/sunaba/src/linux.rs"
+from = "                                let length = if arg.wide {"
+to = "                                let length = if !arg.wide {"
+
+[[mutant]]
+name = "a call's second set of arguments replaces the first"
+file = "crates/sunaba/src/linux.rs"
+from = "            Some(Call::AllowWhen(any)) => any.push(args.to_vec()),"
+to = "            Some(Call::AllowWhen(any)) => *any = vec![args.to_vec()],"
+
+[[mutant]]
+name = "a thread may come with a new namespace"
+file = "crates/sunaba/src/linux.rs"
+from = "        let mask = u64::from((libc::CLONE_THREAD | namespaces).unsigned_abs());"
+to = "        let mask = u64::from((libc::CLONE_THREAD | (namespaces & 0)).unsigned_abs());"
+
+[[mutant]]
+name = "clone is allowed without CLONE_THREAD, not with"
+file = "crates/sunaba/src/linux.rs"
+from = "                    value: thread,"
+to = "                    value: thread & 0,"
+
+[[mutant]]
+name = "a failing call is allowed"
+file = "crates/sunaba/src/linux.rs"
+from = "        self.calls.insert(call, Call::Fail(errno.unsigned_abs()));"
+to = "        self.calls.insert(call, Call::Allow);"
+
+[[mutant]]
+name = "every failing call fails with EPERM"
+file = "crates/sunaba/src/linux.rs"
+from = "                SeccompAction::Errno(errno),"
+to = "                SeccompAction::Errno(1),"
+
+[[mutant]]
+name = "a masked test compares the whole argument"
+file = "crates/sunaba/src/linux.rs"
+from = "                                        (SeccompCmpOp::MaskedEq(mask), value)"
+to = "                                        (SeccompCmpOp::MaskedEq(mask | u64::MAX), value)"
+
+[[mutant]]
+name = "an equality test is turned around"
+file = "crates/sunaba/src/linux.rs"
+from = "                                    Test::Equals(value) => (SeccompCmpOp::Eq, value),"
+to = "                                    Test::Equals(value) => (SeccompCmpOp::Ne, value),"
+
+[[mutant]]
+name = "the SIGSYS handler isn't installed"
+file = "crates/sunaba/src/linux/sigsys.rs"
+from = '''pub(super) fn install() -> io::Result<()> {
+'''
+to = '''pub(super) fn install() -> io::Result<()> {
+    if SYS_SECCOMP == 1 {
+        return Ok(());
+    }
+'''
+
+[[mutant]]
+name = "the handler says which call and returns"
+file = "crates/sunaba/src/linux/sigsys.rs"
+from = '''        libc::syscall(NO_SUCH_CALL);
+        libc::abort();'''
+to = '''        let _ = NO_SUCH_CALL;'''
+
+[[mutant]]
+name = "the handler doesn't name the call"
+file = "crates/sunaba/src/linux/sigsys.rs"
+from = "        if let Some(name) = names::name(i64::from(call)) {"
+to = "        if let Some(name) = names::name(i64::from(call)).filter(|_| false) {"
