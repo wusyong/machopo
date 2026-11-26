@@ -3758,7 +3758,10 @@ document.querySelector('base').setAttribute('href', '/later/');
     /// `location` to another document goes through the browser: `href` adds
     /// an entry, `replace` takes the current one's place, and so does any
     /// navigation before the document is completely loaded; of two in one
-    /// task, only the second.
+    /// task, only the second commits. (Whether the first was asked of the
+    /// server isn't checked: the renderer tells the browser of both in
+    /// turn, and the browser drops the first's request as the second
+    /// comes, which may be after it was sent.)
     #[test]
     fn location_navigates_to_other_documents_through_the_browser() {
         let server = server(&[
@@ -3795,8 +3798,6 @@ document.querySelector('base').setAttribute('href', '/later/');
             history(&web_contents),
             (vec![url("/"), url("/d"), url("/f")], Some(2))
         );
-        let requested: Vec<String> = server.requests().iter().map(|r| r.target.clone()).collect();
-        assert!(!requested.contains(&"/e".to_owned()), "{requested:?}");
         web_contents.shutdown();
     }
 

@@ -170,21 +170,24 @@ AbortSignal.timeout(50).onabort = e => note(e.target.reason.name, 1);
 }
 
 /// An idle callback whose page never goes idle runs as its timeout comes,
-/// while the responses of a chain of `fetch()`es keep the thread busy.
+/// while the responses of its `fetch()`es keep the thread busy.
+///
+/// The page is busy past the timeout in the task that asks for the
+/// callback, with every request already sent: when that task ends the
+/// timeout is due and the responses are what the thread has next, however
+/// long the server took. (Asking for one response at a time left the
+/// thread idle between two of them on a slow machine, and the callback ran
+/// then, in time.) A timeout that waited for the page to go idle would
+/// come after the last response, with the page idle: `didTimeout` false.
 #[test]
 fn an_idle_callbacks_timeout_comes_while_the_page_is_busy() {
     let page = format!(
         "<!DOCTYPE html><script>{REPORT}
 const busy = ms => {{ const until = performance.now() + ms; while (performance.now() < until); }};
-let responses = 0;
-const next = () => fetch('/r?' + responses, {{ cache: 'no-store' }}).then(() => {{
-  responses++;
-  if (responses < 40) {{ next(); busy(20); }}
-}});
 fetch('/start', {{ cache: 'no-store' }}).then(() => {{
   requestIdleCallback(deadline => note(String(deadline.didTimeout), 1), {{ timeout: 50 }});
-  next();
-  busy(20);
+  for (let i = 0; i < 40; i++) fetch('/r?' + i, {{ cache: 'no-store' }}).then(() => busy(20));
+  busy(80);
 }});
 </script>"
     );
