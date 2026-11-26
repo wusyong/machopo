@@ -12,10 +12,20 @@ After `sunaba::linux::enter(&policy)` returns `Ok`, for the calling thread and e
 
 If `enter` returns `Err`, nothing is promised, and the caller is to end the process (`Error::Threads`, `Error::Policy`, `Error::Signal` and `Error::NoLandlock` are returned before anything is restricted; `Error::Landlock` and `Error::Seccomp` may come after part of it).
 
+## What is promised (macOS)
+
+After `sunaba::macos::enter(&profile)` returns `Ok`, for every thread of the process and every process it starts from then on, whatever code they run:
+
+1. **The profile.** An operation the sandbox mediates is done only if the profile allows it; a refused one fails (`EPERM`, or launchd's refusal of a lookup) and isn't done.
+2. **For good.** No later call replaces the profile with another.
+
+If `enter` returns `Err`, the process isn't restricted at all, and the caller is to end it.
+
 ## What is trusted
 
 - **The kernel**: that Landlock and seccomp do what their documentation says. In particular: a Landlock domain and a seccomp filter are inherited by `clone`, `fork` and across `execve` and can't be removed; when several filters are installed all run and the strictest answer wins (`SECCOMP_RET_TRAP` over `SECCOMP_RET_ERRNO` over `SECCOMP_RET_ALLOW`); a filter is run before the system call's number is looked up, so a number the kernel doesn't have is refused as any other; a `SECCOMP_RET_TRAP` that can't be delivered because `SIGSYS` is blocked ends the process.
 - **The `landlock` and `seccompiler` crates**: that the rules and the BPF program they build are the ones asked for. The crate's tests run real processes in real sandboxes for this reason: they test the kernel's answer, not the builder's output.
+- **macOS's sandbox** (the kernel's `Sandbox.kext` and `libsystem_sandbox`): that a profile is compiled and enforced as its language says, for the whole process and its children, and that a second, different profile is refused. `sandbox_init_with_parameters` is undocumented; the tests run real processes under real profiles for this reason.
 - **The caller's policy.** The crate enforces what the policy says, and a policy can say too much: allowing `ptrace`, `process_vm_writev`, `socket` or `execve`, or making a path readable that holds secrets, is the policy's doing.
 - **The process before it enters.** What is already open stays open and usable: file descriptors, mapped memory, sockets. Entering first thing in `main` is what keeps this small; what is inherited from the parent is the parent's to choose.
 
@@ -28,6 +38,14 @@ If `enter` returns `Err`, nothing is promised, and the caller is to end the proc
 - **What the allowed system calls do.** `write` to an inherited descriptor, `sendmsg` on an inherited socket, signals to itself, as much memory and CPU as the process's limits allow.
 - **Other threads.** A thread running when `enter` is called would be outside; `enter` refuses to go on when the process has more than one, by `/proc/self/status`. A process with no `/proc` isn't entered at all (the count reads as 0).
 - **The line on stderr.** It is a convenience. It is missing when the call was made with `SIGSYS` blocked, when stderr is closed, or when the process has replaced the handler.
+
+### On macOS
+
+- **What a profile doesn't name isn't always refused.** `(deny default)` leaves some operations allowed (another process's information; by Chromium's account also IOKit properties, NVRAM and distributed notifications): a profile is to deny them by name. The crate doesn't add these denials: the profile is the caller's whole text.
+- **System calls.** The profile used here decides by kind of operation. Every system call and Mach trap is still reachable kernel code; what the sandbox doesn't mediate (memory, threads, clocks, what is already open) is as outside.
+- **Whether a path exists.** A refused path fails with `EPERM`, one that isn't there with `ENOENT`.
+- **What is already held.** Open descriptors and Mach ports the process has (its bootstrap port among them: lookups through it are what the profile decides) stay usable.
+- **Executable memory**, as on Linux.
 
 ## How it holds
 
@@ -48,6 +66,10 @@ If `enter` returns `Err`, nothing is promised, and the caller is to end the proc
 | `linux/probe.rs`, `no_core_dumps` | `libc::prctl(PR_SET_DUMPABLE, 0)` | Integer arguments only. |
 | `linux/probe.rs`, `system_call` | `libc::syscall` with the caller's number and arguments | Not sound for arbitrary arguments, and not meant to be: it is a test's process, which makes the one call and ends. The tests pass numbers and flags, and no pointer but null. It is public only through `probe::run`'s command line. |
 
+| `macos.rs`, `enter` | `sandbox_init_with_parameters`; `CStr::from_ptr` and `sandbox_free_error` on its message | The profile and each parameter are `CString`s that outlive the call; the parameter array is name, value, name, value, null, as the function reads it. On failure the function leaves a string it allocated: copied, then freed once with the function meant for it. The declaration is Chromium's and Firefox's (`const char*`, `uint64_t`, `const char* const[]`, `char**`). |
+| `macos.rs`, `sandboxed` | `sandbox_check(pid, NULL, 0)` | With no operation it reads only the pid; no pointer is passed but null. |
+| `macos/probe.rs`, `attempt` | `fork`, `kill` with signal 0, `proc_pidinfo`, `bootstrap_look_up`, `sysctlbyname`, `shm_open` | A test's process, one call each: integers, C strings that outlive the call, and out-parameters of the size passed. The forked child calls `_exit` alone. |
+
 `names::name`, which the handler calls, reads `static` tables and nothing else.
 
 ## What the tests check, and don't
@@ -56,6 +78,10 @@ If `enter` returns `Err`, nothing is promised, and the caller is to end the proc
 
 Not tested, checked by review: the handler's async-signal-safety; a kernel without Landlock, or with it turned off (the path is `Error::NoLandlock`; it needs such a kernel); the best-effort Landlock restrictions (they are behind system calls the tests' policy refuses anyway); architectures other than x86-64.
 
+`tests/it/macos.rs` does the same on macOS: the file system refused by default (read, list, metadata), a directory allowed for reading and the rest still refused, nothing written, removed or changed where it can be read, metadata as its own permission, a parameter's value not read as rules, no socket, no process, signals, another process's information, a Mach service by name, a `sysctl` by name, no shared memory, a thread made before or after entering, a second profile refused, a profile that doesn't compile, and a sandboxed process seen from outside. Two tests state limits: a missing path is told from a refused one, and `(deny default)` alone lets another process be asked about.
+
+Not tested on macOS, checked by review: operations a profile could allow that the probe has no attempt for (IOKit, NVRAM, distributed notifications, `process-exec` of an allowed path keeping the profile).
+
 ## Reviewing a change
 
 - A new `unsafe`: a `// SAFETY:` comment and a row in the table above.
@@ -63,3 +89,4 @@ Not tested, checked by review: the handler's async-signal-safety; a kernel witho
 - The order in `enter`: nothing that needs a system call the trapping filter refuses may come after that filter, and nothing is restricted before the checks that can fail cleanly.
 - A change to how filters are built: the trapping filter's default must stay the trap, and every failed call must stay allowed in it.
 - Raising the `landlock` crate's version: `NEWEST` follows its newest ABI, and what that ABI adds is read to see that best effort is still right for it.
+- macOS: the declaration of `sandbox_init_with_parameters` against Chromium's `sandbox/mac/seatbelt.cc` when a new macOS is supported; the parameter array stays null-terminated and its strings alive across the call.

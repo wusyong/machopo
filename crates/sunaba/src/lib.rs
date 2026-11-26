@@ -5,11 +5,12 @@
 //! kernel refuses the rest, whatever the process's own code has become.
 //!
 //! One module for each operating system, since what a policy says is the
-//! operating system's: [`linux`] (Landlock for the files, seccomp-bpf for
-//! the system calls).
+//! operating system's: `linux` (Landlock for the files, seccomp-bpf for
+//! the system calls) and `macos` (the kernel's sandbox under a profile).
 //!
 //! `unsafe` is allowed here: the signal handler that says which system
-//! call was refused, and the raw system calls a policy's test makes. Each
+//! call was refused, the system's function a profile is entered with, and
+//! the raw calls a policy's test makes. Each
 //! use says why it is sound; `soundness.md` has the whole argument.
 
 #![cfg_attr(
@@ -24,8 +25,10 @@
 )]
 #![allow(
     unsafe_code,
-    reason = "the signal handler for a refused system call; a policy's test makes raw system calls"
+    reason = "the signal handler for a refused system call; entering a profile; a policy's test makes raw system calls"
 )]
 
 #[cfg(target_os = "linux")]
 pub mod linux;
+#[cfg(target_os = "macos")]
+pub mod macos;

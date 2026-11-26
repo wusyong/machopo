@@ -7,6 +7,7 @@ The crate is the mechanism alone and knows no program's policy (Chromium's split
 | Operating system | Mechanism | Module |
 | --- | --- | --- |
 | Linux | Landlock (which files open), seccomp-bpf (which system calls are made) | `sunaba::linux` |
+| macOS | The kernel's sandbox (Seatbelt) under a profile: which files, Mach services and `sysctl`s, and no sockets or processes | `sunaba::macos` |
 
 Why it holds, what it doesn't promise, and what to review when changing it: `soundness.md`.
 
@@ -67,3 +68,62 @@ target/debug/sunaba_probe --read-only /etc -- read /etc/hostname      # ok 7
 target/debug/sunaba_probe -- read /etc/hostname                       # error 13
 target/debug/sunaba_probe -- syscall 41 2 1 0                         # killed by SIGSYS
 ```
+
+## macOS
+
+```rust
+use sunaba::macos::{Profile, enter};
+
+fn main() {
+    let mut profile = Profile::new(
+        r#"(version 1)
+(deny default)
+(allow signal (target self))
+(allow file-read* (subpath (param "FONTS")))
+(allow mach-lookup (global-name "com.apple.fonts"))
+(allow sysctl-read (sysctl-name "hw.ncpu"))
+"#,
+    );
+    profile.parameter("FONTS", "/System/Library/Fonts");
+    if let Err(error) = enter(&profile) {
+        eprintln!("{error}");
+        std::process::exit(1);
+    }
+    // From here on: the profile.
+}
+```
+
+### The profile
+
+A profile is a program in the sandbox's own language (`sandbox(7)`'s, a Scheme: Apple's own profiles are in `/System/Library/Sandbox/Profiles`). It allows by kind of operation, not by system call: files by path (`file-read*`, `file-read-metadata`, `file-write*`), Mach services by name (`mach-lookup`), `sysctl`s by name, signals by target, sockets (`network*`), processes (`process-fork`, `process-exec`), shared memory (`ipc-posix-shm*`).
+
+- **Start from `(deny default)`** and allow what the process needs.
+- **`(deny default)` leaves some operations allowed.** What the kernel says of another process of the same user is one (`process-info*`); Chromium's profiles also name `iokit-get-properties`, `nvram*` and `distributed-notification-post`. A profile denies these by name, before what it allows of them.
+- **`parameter(name, value)`** is what `(param "name")` reads in the profile: for what is only known as the process runs (a directory, a process's id). A value is a string to the profile whatever is in it, so it is never spliced into the profile's text.
+- **Paths are as the kernel resolves them**: `/etc/hosts` is `/private/etc/hosts` to a rule, and following the link `/etc` takes `file-read-metadata` of `/etc` itself.
+- **A refusal is an error, not the process's end**: `EPERM` from the call, and from launchd `BOOTSTRAP_NOT_PRIVILEGED` (1100) for a service's lookup. The kernel logs each: `log stream --predicate 'sender == "Sandbox"'` shows the process, the operation and what it was on, which is how a profile is written (run under `(deny default)`, read what was refused, decide of each).
+- **A path that isn't there is `ENOENT`**, a refused one `EPERM`: a process told nothing of a path's metadata can still tell whether the path exists.
+
+### Entering
+
+`enter` is for the first thing in `main`, and unlike Linux's it is the whole process's, whatever threads it has already.
+
+- **For good.** Entering again with another profile is refused, looser or stricter (the same profile again is taken, and changes nothing).
+- **An error means end the process**: the profile didn't compile (`Error::Refused`, with the system's message) or held a NUL (`Error::Nul`). Nothing was restricted.
+- **`entered()`** says whether this process is in a sandbox; **`sandboxed(pid)`** whether a running process is, for whoever started it to check.
+
+`sandbox_init_with_parameters` is in no public header, and `sandbox_init` is deprecated in the ones it is in: the system's own daemons, Chromium and Firefox all enter this way, and there is no other for a process that isn't an App Store app.
+
+### Testing a profile
+
+`sunaba::macos::probe::run(&profile, arguments)` is a `main` that enters the profile, tries the one thing its arguments say (read, list, write, remove, stat or chmod a path; a TCP or Unix socket; a program or a fork; a signal; another process's information; a Mach service's lookup; a `sysctl`; POSIX shared memory; any of these on a new thread) and prints `ok N` or `error ERRNO`. `probe::attempt_and_exit` is the same for a program that has entered its own way.
+
+The crate's own tests (`tests/it/macos.rs`) run `sunaba_probe`, `(deny default)` with the rules its arguments add:
+
+```sh
+cargo test -p sunaba
+target/debug/sunaba_probe -- read /private/etc/hosts                                               # error 1
+target/debug/sunaba_probe --rule '(allow file-read* (subpath "/private/etc"))' -- read /private/etc/hosts   # ok 213
+target/debug/sunaba_probe -- lookup com.apple.fonts                                                # error 1100
+```
+

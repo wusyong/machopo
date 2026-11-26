@@ -9,6 +9,19 @@
 //!
 //! `--thread-first` has a second thread running when the sandbox is
 //! entered, which is refused.
+//!
+//! On macOS the profile is `(deny default)` and the rules the arguments
+//! add, in order:
+//!
+//! ```text
+//! sunaba_probe [--rule RULE]... [--parameter NAME VALUE]... [--profile SOURCE]
+//!              [--thread-first] [--again SOURCE] -- ATTEMPT...
+//! ```
+//!
+//! `--profile` is the whole profile in place of that; `--thread-first`
+//! has a second thread running when the sandbox is entered, which is
+//! inside it all the same; `--again` enters a second time, with that
+//! profile, once inside the first.
 
 #![cfg_attr(
     test,
@@ -85,5 +98,70 @@ fn main() {
     probe::run(&policy, arguments);
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+fn main() {
+    use sunaba::macos::{Profile, enter, probe};
+
+    let mut source = String::from("(version 1)\n(deny default)\n");
+    let mut parameters = Vec::new();
+    let mut again = None;
+    let mut thread = None;
+    let mut arguments = std::env::args().skip(1);
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "--" => break,
+            "--rule" => {
+                source.push_str(&arguments.next().unwrap_or_default());
+                source.push('\n');
+            }
+            "--profile" => source = arguments.next().unwrap_or_default(),
+            "--parameter" => {
+                let name = arguments.next().unwrap_or_default();
+                parameters.push((name, arguments.next().unwrap_or_default()));
+            }
+            "--again" => again = arguments.next(),
+            "--thread-first" => {
+                // Running before the process enters; it makes the attempt
+                // once it is told what it is.
+                let (send, receive) = std::sync::mpsc::channel::<Vec<String>>();
+                std::thread::spawn(move || {
+                    if let Ok(attempt) = receive.recv() {
+                        probe::attempt_and_exit(attempt);
+                    }
+                });
+                thread = Some(send);
+            }
+            other => {
+                eprintln!("sunaba_probe: no such option: {other}");
+                std::process::exit(2);
+            }
+        }
+    }
+    let mut profile = Profile::new(source);
+    for (name, value) in parameters {
+        profile.parameter(name, value);
+    }
+    if let Err(error) = enter(&profile) {
+        eprintln!("sunaba: {error}");
+        std::process::exit(2);
+    }
+    if let Some(source) = again
+        && let Err(error) = enter(&Profile::new(source))
+    {
+        eprintln!("sunaba: again: {error}");
+        std::process::exit(3);
+    }
+    let attempt: Vec<String> = arguments.collect();
+    match thread {
+        Some(send) => {
+            let _ = send.send(attempt);
+            loop {
+                std::thread::park();
+            }
+        }
+        None => probe::attempt_and_exit(attempt),
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn main() {}
