@@ -1,6 +1,6 @@
 # RFC 0117 的進度：renderer process 關進作業系統的 sandbox
 
-開始日期：2026-11-26
+開始日期：2026-11-26。完成日期：2026-11-26（Linux：Fedora 45，kernel 7.3.3；macOS 26.6.2，Apple M4；Windows 11 10.0.26300；每一段在它的平台上做和驗。第 3 段改到三個平台共用的程式：Linux 上由 CI 跑過（`a2c7f2be`：clippy 和 `cargo test --workspace` 都過）；macOS 上沒有重跑）。
 
 ## 步驟
 
@@ -21,12 +21,22 @@
 | 3c. `ipc` 的 `spawn` 改用它：自己的 `Child`、`spawn_in`、`spawn_reading_errors`（`spawn_with_pipe` 沒有改，鎖還在：已決定的事項第 23 條） | 做完 | 2026-11-26 |
 | 3d. 接上 machopo：`shell::renderer_sandbox` 的 Windows policy、延後載入、renderer 的 `main` 降 integrity、`--allow-third-party-modules`、從外面看真的 renderer 的測試 | 做完 | 2026-11-26 |
 | 3e. trace 和 census 的檔案由 Browser 開好交給 renderer（fork 的 Rust 加 Windows 的入口） | 做完 | 2026-11-26 |
-| 3f. 第 3 段的檢查和文件 | 做完（只在 Windows 上；Linux 和 macOS 上還沒跑過這一段的改動） | 2026-11-26 |
+| 3f. 第 3 段的檢查和文件 | 做完（在 Windows 上；Linux 由 CI 跑過；macOS 上沒有重跑這一段的改動） | 2026-11-26 |
 
 ## 驗收
 
+照 RFC 的五個目標。每個平台的指令在那個平台上跑。
+
 | 項目 | 怎麼驗證 |
 | --- | --- |
+| 1. 被攻破的 renderer 讀寫不了使用者的檔案、連不了網路、啟動不了程式、碰不了其他 process、開不了新的 IPC：機制 | `cargo test -p sunaba`（`tests/it/` 的 `linux.rs`、`macos.rs`、`windows.rs`：每個測試在真的 sandbox 裡試一件事） |
+| 1. 同上：renderer 的那一份 policy，由執行檔自己從裡面試 | Linux：`cargo test -p shell --test it renderer_sandbox::`；macOS：`cargo test -p shell --test it renderer_sandbox_macos::`；Windows：`cargo test -p shell --test it renderer_sandbox_windows::` |
+| 2. 三個平台都做，各自保證什麼、差在哪寫得出來 | `crates/sunaba/soundness.md` 的三節「What is promised」和「What is not promised」；`docs/limitations.md` 的「隔離」每個平台一條「擋不住的」 |
+| 3. 真的 renderer 在裡面，而且沒有一行在外面跑 | 同第 1 項的三個模組裡從外面看 renderer process 的測試：Linux 每個 thread 都有 seccomp 和 `NoNewPrivs`；macOS 由 kernel 說它在 sandbox 裡；Windows 在 AppContainer 裡、Untrusted、每個 mitigation 都開著。`--no-sandbox` 的都沒有 |
+| 3. 套不上時不跑 | 靠審查（`docs/test-gaps.md`：要沒有 Landlock 的 kernel、不收 profile 的 macOS、沒有 `CreateAppContainerToken` 的 Windows）；結束碼對到 sad tab 的說明：`cargo test -p shell --lib sad_tab` |
+| 4. 平常的行為不變 | `cargo test --workspace`、`python3 scripts/test.py scenarios`、`reftest`、`wpt dom/nodes`（renderer process 預設在 sandbox 裡）；sandbox 裡外畫出來一樣：三個模組各自的 `a_sandboxed_renderer_shows_a_page_as_one_outside_does`（Linux 的叫法見那個檔案） |
+| 4. Speedometer 不變慢 | 只在 Linux 上量過（下面的 1e：時間的幾何平均 0.997）；macOS 和 Windows 沒量 |
+| 5. trace 和量測工具照舊能用 | `cargo test -p shell --test it trace::`、`cargo test -p shell --features census --test it census`、`scripts/bench/` 底下四份工具的測試 |
 
 ## 做過的檢查
 
@@ -179,3 +189,4 @@
 - 文件：`docs/limitations.md`（「隔離」改成三個平台、Windows 擋不住的、環境變數、`--allow-third-party-modules`、console；`ipc` 在 Windows 上啟動 child 的那一條改成只剩 `spawn_with_pipe`）、`docs/architecture.md`（「Process 的邊界」第 5 條、crate 表的 `sunaba`、`unsafe` 的位置）、`docs/test-gaps.md`（五條）、`crates/sunaba` 的 README 和 `soundness.md`、`crates/ipc` 的 README 和 `soundness.md`、`machopo --help`。
 - 沒有做的：Speedometer（等使用者要求）；release build（延後載入和 sandbox 只在 debug build 上跑過）；Windows 10；Linux 和 macOS 上重跑。
 - 還沒做、等使用者：在 Linux 和 macOS 上跑這一段的改動；release build。這個 branch 還沒有 push。
+- 收尾（2026-11-26）：release build 上 `cargo test --release -p sunaba` 和 `cargo test --release -p shell --test it -- renderer_process:: renderer_sandbox_windows:: trace::`：過。push 之後 CI（Ubuntu）：Linux 上由 CI 跑過（`a2c7f2be`：clippy 和 `cargo test --workspace` 都過）。這一段改到的 Linux、macOS 專屬的分支在這台只讀過、編不了；macOS 的要在那裡的機器上跑一次 `cargo test -p shell --test it renderer_sandbox_macos::` 才算驗過。

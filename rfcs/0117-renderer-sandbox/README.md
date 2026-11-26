@@ -1,7 +1,8 @@
 # RFC 0117：renderer process 關進作業系統的 sandbox
 
 - 開始日期：2026-11-26
-- 狀態：🚧 已排程：2026-11-26（第 1 段 Linux、第 2 段 macOS 做完；第 3 段 Windows 探測完、定了，實作中）
+- 狀態：✅ 已完成：2026-11-26（Linux、macOS、Windows 各在自己的機器上做完；第 3 段改到的共用程式在 Linux 上由 CI 跑過，在 macOS 上沒有重跑）
+- 進度和驗收：`progress.md`
 - 細節：`details.md`
 
 ## 摘要
@@ -150,14 +151,14 @@ Linux 定了 **F1**（已決定的事項第 3 條）；macOS 也是 F1，另外�
 0. 草稿和 Linux 的探測（這一版）。
 1. **Linux**（做完）：Landlock 加 seccomp（已決定的事項第 2 條）、字型、其他讀的東西、套不上時怎麼辦、工具、測試。
 2. **macOS**（做完）：先探測（真的 renderer 在 `deny default` 底下被擋了什麼），再定 profile 和字型（第 17 到 20 條）。
-3. **Windows**（探測完、定了，實作中）：先探測（每一種機制底下壞了什麼），再定機制（第 21 到 27 條）。實作分幾步：
+3. **Windows**（做完）：先探測（每一種機制底下壞了什麼），再定機制（第 21 到 27 條）。實作分幾步：
    - 3b. `sunaba::windows`：啟動 process 的函式（只繼承指定的 handle；可以不帶 policy）、policy（AppContainer 的 token、job、mitigation）、renderer 自己降 integrity；`sunaba_probe` 的 Windows 版和「做不到」的測試；README 和 `soundness.md`。
    - 3c. `ipc` 的 `spawn`、`spawn_with_pipe` 改用它：自己的 `Child`，拿掉「一次啟動一個」的鎖。
    - 3d. 接上 machopo：`shell::renderer_sandbox` 的 Windows policy、延後載入視窗和繪圖的 DLL、renderer 的 `main` 降 integrity、`--allow-third-party-modules`、從外面看真的 renderer 的測試。
    - 3e. trace 和 census 的檔案由 Browser 開好交給 renderer（rusty_v8 的 fork 的 Rust 加 Windows 的入口）。
    - 3f. 第 3 段的檢查和文件。
 
-每個平台做完可以先 merge（`rfcs/README.md` 的「階段的 merge」）：沒做的平台照舊沒有 sandbox，`docs/limitations.md` 寫明哪些平台有。
+每個平台做完可以先 merge（`rfcs/README.md` 的「階段的 merge」）；三段都做完了，三個平台都有。
 
 ## 缺點
 
@@ -214,10 +215,7 @@ Chromium 的部分 2026-11-26 對過原始碼（`details.md` 的「Chromium 的 
 
 ## 待決定
 
-第 1 段（Linux）之前要定的九條都定了（已決定的事項第 1 到 9 條），第 2 段（macOS）的是第 17 到 20 條，第 3 段（Windows）的是第 21 到 27 條。每一段開始前只定那一段的：
-
-- **第 1 段開始時**（細節，照已決定的方向）：seccomp 放行的清單和回錯誤的名單（探測的 55 種，加上 wasm 的文件、trace、crash 的路再探一次）；`/proc/self/maps`、`/proc/sys/vm/overcommit_memory`、`/sys` 的那幾個、`/dev/urandom`、時區，每一個放行還是讓它失敗（先用 `strace -k` 找出是誰讀的）；fontconfig 的 cache 過期、寫不了時它怎麼辦；Browser 把字型的路徑和開好的 trace 檔交給 renderer 的方式（命令列、繼承的 fd）；renderer 的 trace 檔名和工具怎麼對上；還在支援期的發行版和 CI 的 kernel 有沒有 Landlock；輔助的執行檔怎麼放（`sunaba` 的 bin）。
-- **第 3 段（Windows）**：都定了（第 21 到 27 條）。
+沒有。三段各自開始前要定的都定了（已決定的事項第 1 到 9 條、第 17 到 20 條、第 21 到 27 條）；沒做的在「之後的可能」，還留著的限制在 `docs/limitations.md` 的「隔離」。
 
 ## 之後的可能
 
