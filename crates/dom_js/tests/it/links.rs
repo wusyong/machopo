@@ -5,7 +5,7 @@
 //! script's clicks open no tab), and `document.title`.
 
 use dom::FrameNavigation;
-use dom_api::{FrameRequest, ScriptEngine};
+use dom_api::ScriptEngine;
 
 use crate::history::{Page, to};
 
@@ -111,15 +111,9 @@ fn following_hyperlinks() {
     let top = page.engine.top_frame();
     let followed = |page: &mut Page, source: &str| {
         page.eval(source);
-        page.engine
-            .take_frame_requests()
+        page.navigated()
             .into_iter()
-            .filter_map(|request| match request {
-                FrameRequest::Navigation {
-                    frame, navigation, ..
-                } => Some((frame, navigation)),
-                _ => None,
-            })
+            .map(|(frame, _, navigation)| (frame, navigation))
             .collect::<Vec<_>>()
     };
     // Script's click: the document's frame, without the user replacing
@@ -235,17 +229,10 @@ fn a_navigation_says_who_asked() {
     let top = page.engine.top_frame();
     let asked = |page: &mut Page, source: &str| {
         page.eval(source);
-        page.engine
-            .take_frame_requests()
+        page.navigated()
             .into_iter()
-            .filter_map(|request| match request {
-                FrameRequest::Navigation {
-                    frame,
-                    initiator,
-                    navigation: FrameNavigation::To { .. },
-                    ..
-                } => Some((frame, initiator)),
-                _ => None,
+            .filter_map(|(frame, initiator, navigation)| {
+                matches!(navigation, FrameNavigation::To { .. }).then_some((frame, initiator))
             })
             .collect::<Vec<_>>()
     };

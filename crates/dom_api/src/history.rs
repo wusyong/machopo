@@ -681,7 +681,15 @@ pub(crate) fn update_navigations<H: ScriptHost>(host: &mut H) {
         {
             fire_pop_state(host, window);
         }
+        let same_document = matches!(request.navigation, FrameNavigation::SameDocument { .. });
         host.navigate(&document, &initiator, request.navigation);
+        // Within its document: what changed (its URL, a fragment scrolled
+        // to) is drawn at the next frame.
+        if same_document {
+            host.read(|cx| {
+                cx.lend_layout(document.get(cx.gc), |layout| layout.schedule_frame());
+            });
+        }
     }
 }
 
@@ -726,6 +734,20 @@ pub fn traverse_within_document<H: ScriptHost>(
     };
     committed();
     fire_pop_state(host, &window);
+    // Its fragment scrolled to, unless the mode is manual (as its URL is
+    // after `popstate`'s handlers), drawn at the next frame.
+    host.mutate(|cx| {
+        let document = document.get(cx.gc);
+        if !manual
+            && new_url.fragment().is_some()
+            && let Some(url) = document_url(cx, document)
+            && let Some(target) = fragment_target(cx, document, &url)
+        {
+            let id = cx.node_id(document);
+            cx.lend_layout(document, |layout| layout.scroll_to_fragment(id, target));
+        }
+        cx.lend_layout(document, |layout| layout.schedule_frame());
+    });
     true
 }
 

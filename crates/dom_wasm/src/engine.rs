@@ -88,10 +88,10 @@ struct Host<'a> {
     /// The engine's DOM: lent to a guest for each listener of its.
     dom: &'a mut Option<Dom>,
     layout: &'a LayoutCell,
-    /// The window's document's number, and what the DOM's work asks of the
-    /// host for its frame (`ScriptEngine::take_frame_requests`).
+    /// The window's document's number, and its frame's navigation on its
+    /// way (`ScriptEngine::navigation`).
     top: Option<NodeId>,
-    requests: &'a mut Vec<dom_api::FrameRequest>,
+    navigation: &'a mut Option<dom_api::NavigationRequest>,
     /// The host's client, told of a navigation as it is asked, and the
     /// window's token (the browser's) to name the frame by.
     frame_client: &'a mut Option<Box<dyn dom_api::FrameClient>>,
@@ -176,12 +176,16 @@ impl ScriptHost for Host<'_> {
             .frame_client
             .as_mut()
             .and_then(|client| client.navigate(&asked, dom));
-        self.requests.push(dom_api::FrameRequest::Navigation {
-            frame: TOP,
-            initiator: TOP,
-            navigation,
-            begin_id,
-        });
+        // Booked on the frame as it went (one to another document, a reload).
+        if let Some(begin_id) = begin_id {
+            let url = match &navigation {
+                dom::FrameNavigation::To { url, .. } => Some(url.as_str()),
+                _ => None,
+            };
+            *self.navigation = Some(dom.read(|cx| {
+                dom_api::NavigationRequest::new(cx, begin_id, None, document.get(cx.gc), url)
+            }));
+        }
     }
 
     /// A guest's listener, through its store's `handle-event`: the DOM
@@ -261,8 +265,10 @@ pub struct WasmEngine {
     /// Its loading, the host's to start (`set_document_loader`): none with
     /// each new window.
     loader: Option<Box<dom_api::DocumentLoader>>,
-    /// What the DOM's work asked of the host since it last took them.
-    requests: Vec<dom_api::FrameRequest>,
+    /// The window's frame's navigation to another document on its way,
+    /// booked as the frame client sent it: the frame's, so a new window
+    /// keeps it (the browser's commit of another one may come first).
+    navigation: Option<dom_api::NavigationRequest>,
     /// The window's mouse state (a new one with each window).
     event_handler: dom_api::EventHandler,
     page_focused: bool,
@@ -316,7 +322,7 @@ impl WasmEngine {
             document: None,
             document_id: None,
             loader: None,
-            requests: Vec::new(),
+            navigation: None,
             event_handler: dom_api::EventHandler::default(),
             page_focused: false,
             page_hidden: false,
@@ -357,7 +363,7 @@ impl WasmEngine {
             dom: &mut self.dom,
             layout: &self.layout,
             top: self.document_id,
-            requests: &mut self.requests,
+            navigation: &mut self.navigation,
             frame_client: &mut self.frame_client,
             main_token: self.main_token,
             wasm: &self.wasm,
@@ -610,6 +616,10 @@ impl ScriptEngine for WasmEngine {
         TOP
     }
 
+    fn frame_of_document(&mut self, document: NodeId) -> Option<FrameId> {
+        (self.document_id == Some(document)).then_some(TOP)
+    }
+
     fn set_navigation_timing(&mut self, frame: FrameId, timing: dom::NavigationTiming) {
         let Some(document) = self.document.clone().filter(|_| frame == TOP) else {
             return;
@@ -671,13 +681,29 @@ impl ScriptEngine for WasmEngine {
         let (document, id) = document;
         self.document = Some(document.clone());
         self.document_id = Some(id);
-        self.requests.clear();
         self.event_handler = dom_api::EventHandler::default();
         Some(document)
     }
 
     fn take_frame_requests(&mut self) -> Vec<dom_api::FrameRequest> {
-        std::mem::take(&mut self.requests)
+        // The one frame's navigations are booked on it; it has no others.
+        Vec::new()
+    }
+
+    fn navigation(&mut self, frame: dom_api::FrameId) -> Option<dom_api::NavigationRequest> {
+        self.navigation.clone().filter(|_| frame == TOP)
+    }
+
+    fn take_navigation(
+        &mut self,
+        frame: dom_api::FrameId,
+        begin_id: Option<u64>,
+    ) -> Option<dom_api::NavigationRequest> {
+        if frame != TOP {
+            return None;
+        }
+        self.navigation
+            .take_if(|booked| begin_id.is_none_or(|id| booked.begin_id == id))
     }
 
     fn document_loader(&mut self, frame: FrameId) -> Option<&mut dom_api::DocumentLoader> {

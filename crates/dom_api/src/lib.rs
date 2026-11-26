@@ -166,8 +166,9 @@ pub use exception::{ApiError, DomException, ExceptionName, LEGACY_CODES, legacy_
 pub use fetch::{FetchedResponse, did_receive_response};
 pub use focus::{flush_autofocus_candidates, focus_fixup, set_initial_focus, set_page_focused};
 pub use frame::{
-    ChildNavigation, FrameId, FrameRequest, FrameToken, child_windows, documents_in_tree_order,
-    frame_tree_walks_for_testing, named_child_windows, new_frame_token, origin, same_origin,
+    ChildNavigation, FrameId, FrameRequest, FrameToken, NavigationHere, NavigationRequest,
+    child_navigation_here, child_windows, documents_in_tree_order, frame_tree_walks_for_testing,
+    named_child_windows, navigate_child_to_fragment, new_frame_token, origin, same_origin,
     update_elements,
 };
 pub use history::{

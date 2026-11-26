@@ -146,7 +146,7 @@ fn is_input_pending_asks_the_hosts_monitor() {
         .create_window(engine.top_frame(), "https://example.test/", Instant::now())
         .expect("a window");
     let id = engine.dom_mut().read(|cx| cx.node_id(document.get(cx.gc)));
-    let mut page = Page { engine };
+    let mut page = Page::of(engine);
     let check = "var s = navigator.scheduling; [s.isInputPending(), s.isInputPending({ includeContinuous: true })].join()";
     assert_eq!(page.eval(check), "false,false", "no monitor");
     page.engine.set_input_monitor(Box::new(Monitor {

@@ -2,13 +2,14 @@
 //! connected (its realm, a window of an initial `about:blank`, whose `load`
 //! fires at once), `contentDocument`, `contentWindow`, the window's
 //! `parent`, `top`, `frames`, `length`, `frameElement`, `window[i]`; what
-//! the host is asked (`ScriptEngine::take_frame_requests`): a frame made, to
-//! navigate to `src` or `srcdoc`, gone; and a frame's new document
+//! the host's client is told (`FrameClient`): a frame made, to navigate to
+//! `src` or `srcdoc`, gone; the navigations booked on the frames
+//! (`ScriptEngine::navigation`); and a frame's new document
 //! (`ScriptEngine::create_window`), its iframe's content document.
 
 use std::time::Instant;
 
-use dom_api::{ChildNavigation, ClassicScript, EngineSettings, FrameRequest, ScriptEngine};
+use dom_api::{ChildNavigation, ClassicScript, EngineSettings, ScriptEngine};
 use dom_js::V8Engine;
 
 /// A window of a document at `https://example.test/a/` with
@@ -135,6 +136,7 @@ fn an_iframe_connected_gets_a_browsing_context() {
 #[test]
 fn src_and_srcdoc_navigate_the_child() {
     let mut engine = engine();
+    let watched = crate::navigations::Navigations::watch(&mut engine);
     run(
         &mut engine,
         "var f = document.createElement('iframe');
@@ -148,16 +150,16 @@ fn src_and_srcdoc_navigate_the_child() {
         log(&mut engine),
         "about:blank / https://example.test/a/b.html"
     );
-    let requests = engine.take_frame_requests();
+    let told = watched.take(&mut engine);
     let [
-        FrameRequest::Navigate {
+        crate::navigations::Navigated {
             frame: navigated,
-            navigation,
+            navigation: crate::navigations::Navigation::Child(navigation),
             ..
         },
-    ] = requests.as_slice()
+    ] = told.as_slice()
     else {
-        panic!("{requests:?}");
+        panic!("{told:?}");
     };
     let [frame] = crate::child_frames(&mut engine)[..] else {
         panic!("one frame made");
@@ -176,11 +178,11 @@ fn src_and_srcdoc_navigate_the_child() {
         &mut engine,
         "f.srcdoc = '<p>hi'; f.src = 'c.html'; f.removeAttribute('srcdoc'); f.src = 'about:blank';",
     );
-    let navigations: Vec<_> = engine
-        .take_frame_requests()
+    let navigations: Vec<_> = watched
+        .take(&mut engine)
         .into_iter()
-        .map(|request| match request {
-            FrameRequest::Navigate { navigation, .. } => navigation,
+        .map(|told| match told.navigation {
+            crate::navigations::Navigation::Child(navigation) => navigation,
             other => panic!("{other:?}"),
         })
         .collect();
@@ -428,19 +430,22 @@ fn the_parsers_iframe_gets_one_as_it_is_inserted() {
             Instant::now(),
         )
         .expect("a window");
+    let watched = crate::navigations::Navigations::watch(&mut engine);
     let mut parser = html::parser::Parser::<V8Engine>::new(engine.dom_mut(), &document);
     parser.push("<!DOCTYPE html><body><iframe id=f src=b.html></iframe><p>");
     let (_, back) = parser.resume(engine);
     // Into the same binding: it drops after `document`'s root.
     engine = parser.finish(back);
-    let requests = engine.take_frame_requests();
+    let told = watched.take(&mut engine);
     assert!(
         matches!(
-            requests.as_slice(),
-            [FrameRequest::Navigate { navigation: ChildNavigation::Src(src), .. }]
-                if src == "https://example.test/a/b.html"
+            told.as_slice(),
+            [crate::navigations::Navigated {
+                navigation: crate::navigations::Navigation::Child(ChildNavigation::Src(src)),
+                ..
+            }] if src == "https://example.test/a/b.html"
         ),
-        "{requests:?}"
+        "{told:?}"
     );
 }
 
@@ -1524,4 +1529,78 @@ fn a_document_navigated_from_is_unloading_as_the_frames_in_it_unload() {
     );
     engine.unload_document(engine.top_frame());
     assert_eq!(log(&mut engine), " / null");
+}
+
+/// What the host's client sent is booked on the frame as it is sent
+/// (`ScriptEngine::navigation`): an iframe's, with its `no-referrer`
+/// policy and, to `about:blank`, the document that asked (its origin's);
+/// script's of the top-level frame. One sent after takes its place; it is
+/// taken by its number alone, or whichever; a new document of the frame
+/// keeps it (the browser may commit another first).
+#[test]
+fn the_navigations_sent_are_booked_on_their_frames() {
+    let mut engine = engine();
+    engine.set_main_frame_token(dom_api::new_frame_token());
+    let _client = crate::navigations::Navigations::numbering(&mut engine);
+    let top = engine.top_frame();
+    run(
+        &mut engine,
+        "var f = document.createElement('iframe');
+         f.referrerPolicy = 'no-referrer';
+         f.src = 'b.html';
+         document.body.appendChild(f);",
+    );
+    let [child] = crate::child_frames(&mut engine)[..] else {
+        panic!("one frame made");
+    };
+    let booked = engine.navigation(child).expect("booked");
+    assert_eq!(
+        (
+            booked.begin_id,
+            booked.no_referrer,
+            booked.origin_source.is_some()
+        ),
+        (1, true, false)
+    );
+    // To `about:blank`: from its parent's document.
+    run(&mut engine, "f.referrerPolicy = ''; f.src = 'about:blank';");
+    let booked = engine.navigation(child).expect("booked");
+    let top_document = engine.dom_mut().read(|cx| {
+        let parent = booked
+            .origin_source
+            .as_ref()
+            .map(|source| cx.node_id(source.get(cx.gc)));
+        (booked.begin_id, booked.no_referrer, parent)
+    });
+    let (_, owner) = engine.frame_parent(child).expect("a child frame");
+    let document = Some(
+        engine
+            .dom_mut()
+            .read(|cx| cx.node_id(cx.document_of(owner.get(cx.gc)))),
+    );
+    assert_eq!(top_document, (2, false, document));
+    assert!(
+        engine.take_navigation(child, Some(1)).is_none(),
+        "one before"
+    );
+    assert_eq!(
+        engine
+            .take_navigation(child, Some(2))
+            .map(|asked| asked.begin_id),
+        Some(2)
+    );
+    assert!(engine.navigation(child).is_none());
+    // The top-level frame's: kept through its next document.
+    run(&mut engine, "location.href = 'c.html';");
+    assert_eq!(engine.navigation(top).map(|asked| asked.begin_id), Some(3));
+    engine
+        .create_window(top, "https://example.test/d.html", Instant::now())
+        .expect("a window");
+    assert_eq!(engine.navigation(top).map(|asked| asked.begin_id), Some(3));
+    assert_eq!(
+        engine
+            .take_navigation(top, None)
+            .map(|asked| asked.begin_id),
+        Some(3)
+    );
 }

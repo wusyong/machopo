@@ -6,9 +6,7 @@
 use std::time::Instant;
 
 use dom::FrameNavigation;
-use dom_api::{
-    ChildNavigation, ClassicScript, EngineSettings, FrameId, FrameRequest, ScriptEngine,
-};
+use dom_api::{ChildNavigation, ClassicScript, EngineSettings, FrameId, ScriptEngine};
 
 /// A window of a document at `https://example.test/a/` with
 /// `<html><body>` and `iframes` iframes (`f0`, `f1`...), each child at
@@ -82,22 +80,19 @@ fn log(engine: &mut dom_js::V8Engine) -> String {
     engine.take_harness_results().expect("reported")
 }
 
-/// The navigations to another document the engine asked for since.
-fn navigations(engine: &mut dom_js::V8Engine) -> Vec<(FrameId, String)> {
-    engine
-        .take_frame_requests()
+/// The navigations to another document script asked for since, as
+/// `watched` was told.
+fn navigations(
+    engine: &mut dom_js::V8Engine,
+    watched: &crate::navigations::Navigations,
+) -> Vec<(FrameId, String)> {
+    use crate::navigations::Navigation;
+    watched
+        .take(engine)
         .into_iter()
-        .filter_map(|request| match request {
-            FrameRequest::Navigate {
-                frame,
-                navigation: ChildNavigation::Src(url),
-                ..
-            }
-            | FrameRequest::Navigation {
-                frame,
-                navigation: FrameNavigation::To { url, .. },
-                ..
-            } => Some((frame, url)),
+        .filter_map(|navigated| match navigated.navigation {
+            Navigation::Child(ChildNavigation::Src(url))
+            | Navigation::Frame(FrameNavigation::To { url, .. }) => Some((navigated.frame, url)),
             _ => None,
         })
         .collect()
@@ -308,6 +303,7 @@ fn a_cross_origin_windows_children_are_reached_by_index() {
 #[test]
 fn a_childs_location_navigates_it() {
     let (mut engine, frames) = engine(&["https://example.test/b/c.html", "https://other.test/x/"]);
+    let watched = crate::navigations::Navigations::watch(&mut engine);
     let [same, other] = frames[..] else {
         unreachable!("two");
     };
@@ -324,7 +320,7 @@ fn a_childs_location_navigates_it() {
     );
     assert_eq!(log(&mut engine), "SyntaxError");
     assert_eq!(
-        navigations(&mut engine),
+        navigations(&mut engine, &watched),
         [
             (same, "https://example.test/a/d.html".to_owned()),
             (same, "https://example.test/e.html".to_owned()),
@@ -346,7 +342,7 @@ fn a_childs_location_navigates_it() {
     );
     assert_eq!(log(&mut engine), "true / true / null / TypeError");
     assert_eq!(
-        navigations(&mut engine),
+        navigations(&mut engine, &watched),
         [(same, "https://example.test/a/m.html".to_owned())]
     );
     // From the child: against its own document.
@@ -357,7 +353,7 @@ fn a_childs_location_navigates_it() {
         "location.href = 'k.html';",
     );
     assert_eq!(
-        navigations(&mut engine),
+        navigations(&mut engine, &watched),
         [(other, "https://other.test/x/k.html".to_owned())]
     );
     // A child's entries are the page's session history's.
@@ -370,7 +366,7 @@ fn a_childs_location_navigates_it() {
     run(&mut engine, "location.href = 'l.html';");
     let top = engine.top_frame();
     assert_eq!(
-        navigations(&mut engine),
+        navigations(&mut engine, &watched),
         [(top, "https://example.test/a/l.html".to_owned())]
     );
 }
@@ -388,6 +384,7 @@ fn a_javascript_url_is_its_targets_origins_alone() {
         "https://other.test/x/",
         "data:text/html,",
     ]);
+    let watched = crate::navigations::Navigations::watch(&mut engine);
     let [same, other, opaque] = frames[..] else {
         unreachable!("three");
     };
@@ -456,7 +453,11 @@ fn a_javascript_url_is_its_targets_origins_alone() {
         &format!("location.href = '{JS}';"),
     );
     assert_eq!(ran(&mut engine, other, "https://other.test/x/"), "2");
-    assert_eq!(navigations(&mut engine), [], "none for the host to load");
+    assert_eq!(
+        navigations(&mut engine, &watched),
+        [],
+        "none for the host to load"
+    );
 }
 
 /// A `javascript:` URL whose script takes its frame away (its iframe

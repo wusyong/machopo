@@ -207,7 +207,9 @@ impl<'s> ScriptHost for Host<'_, '_, 's, '_> {
     }
 
     fn navigate_child(&mut self, owner: &dom::NodeRoot, navigation: dom_api::ChildNavigation) {
-        crate::frames::navigate_child(self.scope, owner, navigation);
+        if let Some(fragment) = crate::frames::navigate_child(self.scope, owner, navigation) {
+            dom_api::navigate_child_to_fragment(self, owner, &fragment);
+        }
     }
 
     fn navigate(

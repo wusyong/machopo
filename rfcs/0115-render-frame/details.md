@@ -130,6 +130,52 @@
 
 **估計**：hook 2 到 3 個（DevTools 的生命週期、樣式表的原文，也許 `FrameLayout::set_render_blocked`），問 engine 的 3 到 4 個（`load` 結束了沒和失敗的網址、render-blocked、要不要 main frame），新的服務 0 個，另外 3 到 4 個往下的方法改成照值收 engine；合計 6 到 8 個，和 2a 同一個量級。最可能切不乾淨的：`tell_lifecycle`（要嘛呼叫之後送排著的事件，要嘛 `PageAgent` 自己記 frame 的資料）、iframe 晚一點的 `load` 的觸發點、失敗的網址分在兩邊（圖片和 script 的在 renderer，樣式表的在 DOM）。
 
+## 第 3 段的依賴盤點
+
+2026-11-26，`fb1c1d3e` 上，唯讀。分類同「2c 的依賴盤點」：(a) hook、(b) 呼叫之外問 engine、(c) hook 要的服務、(d) 看起來要共用可變的狀態。
+
+**對帳現在的樣子**：`handle_frame_requests` 的呼叫剩 13 處（`after_task` 和 12 處；2a、2c 拿掉了 parse 迴圈裡的），每一輪 `book_frame_requests` 先 `take_asked` 加 `follow_child_frames`（成員的跟隨），再分派 `FrameRequest`；`commit_child` 另外直接 `follow_child_frames`。
+
+| 要搬的 | renderer 那一側現在碰的 | 搬到送出的那次呼叫裡要的 |
+| --- | --- | --- |
+| 最上層的導覽（`Navigation` 的 `To`、`Reload`、`NewTab`、`GoToOffset`、`ScrollRestoration`） | `navigations_asked`（整個 renderer、照送出順序的帳）；`about_blank_origin_source`（DOM）；`render_frames.navigation_sent` | origin 的來源只要 DOM（`NavigationAsked` 多帶發起者的文件）；`navigations_asked` 是 (d)，或改成 engine 那一側的帳加 (b)，或 client 經過 `Arc` 的 scheduler 每個 post 一個 task（(c)，scheduler 本來就是 `Arc`） |
+| 子 frame 的導覽（有 `begin_id`） | `child_no_referrer`、origin 的來源、`navigation_sent`、`sync_child_navigating`（DOM）；`tell_frames`（`frame_infos` 讀 `render_frames` 的 MIME、原文、資源、導覽） | 前幾樣 DOM 算得出；`tell_frames` 是 (d)，和 2c 的 `tell_lifecycle` 同一種：`PageAgent` 多一個當場的入口，或延到 task 結束 |
+| iframe 的 `src` 是 fragment（`navigate_to_fragment`）和晚一點的 `load`（第 25 條） | `set_document_url`、`scroll_to_fragment`、`request_main_frame`；`owner_load_later`（`clock`、`owner_load_at`、`OwnerLoads`） | engine 自己做：`lend_layout` 加 `FrameLayout::scroll_to_fragment`、`schedule_frame`，晚一點的 `load` 是 DOM 延後的 element task（`TaskWaker` 收時間）；行為要定：照現在只改網址和捲動，或照規範走 `history::navigate`（多 `hashchange` 和 history 的項目） |
+| iframe 的 `src` 是 `javascript:`（`queue_child_commit`） | `RenderFrames.commits`（跨 frame 的佇列）、`ChildCommits` 的 task | 佇列和導覽放在一起（`is_navigating` 兩個都讀）；post task 用 (c)，`run_child_commit` 用 (b) 拿 |
+| 同文件的導覽（`SameDocument`） | `own_history_entries.sent_one()`（跨 engine 留著，commit 和 `SetHistoryOffsetAndLength` 也讀）；`request_main_frame` | 計數是 (d)：放在 engine 那一側、換 engine 時帶過去（(b) 兩個方法），或 `Rc<Cell<u64>>`；要畫面用 `schedule_frame` |
+| blob URL 的登記和撤銷 | `blob_urls` | renderer 一定設 `LoadSink`，在 sink 裡當場做，這兩支走不到（只有沒有 sink 的 engine 用） |
+| 成員的跟隨（`follow_child_frames`） | `render_frames.remove`、`set_child_document`（初始的 `FrameDocument`）、取消不在的文件的 fetch、`request_main_frame` | 只有 engine 建 frame 時當場建 `RenderFrame`（工廠，(a)），`FrameDocument` 也跟著搬，才拿得掉；只搬導覽的帳拿不掉 |
+
+**Browser 的訊息**：`CommitNavigation`（最上層的拿 `take_navigation(top, begin_id)`，子 frame 的比 `begin_id`、`navigation_id`）、`NavigationDropped`、`CommitSameDocumentNavigation`、`SetHistoryOffsetAndLength`：帳在 engine 的 frame 上之後換成 (b) `navigation(frame)`、`take_navigation(frame, begin_id)`。`dom_js` 的 `Frames::set` 換文件時把 frame 整個換掉（只帶 token 和 modules），帳要一樣帶過去（第 3 條：最上層 commit 了別的文件時，它等的導覽留著）。`dom_wasm` 只有最上層，每個 (b) 一份薄的實作。
+
+**commit 照舊由 renderer 驅動切得開**：`commit_document_navigation`、`commit_child`、`run_child_commit` 用的是畫面（`FrameView`、widget）、DevTools、`blob_urls`、`clock`、body 的 pipe、`DidCommitNavigation`，都是 renderer 那一側的；只要在開頭從 engine 拿走導覽（(b)）。
+
+**八處過期的讀法和 1c 的檢查**：八處裡四處 2a、2c 之後已經不在；還在的四處（`finish_loads` 的 `frames()`、resize observer 的 `frame_render_blocked`、給 intersection 的 `child_documents()`、traversal 的 `scroll_to_fragment`）改成讀 engine 的 frame 的文件就好，和導覽的帳無關。1c 的檢查只守導覽的帳（第 10 條）：帳在送出的那次呼叫裡記好，就沒有東西會過期，整個拿掉。
+
+**fragment（待決定的第 1 條）**：「記下、下一次 layout 時捲」已經有（`scroll_into_view_after_layout` 只設 `scroll_target`，Chromium 的 `FragmentAnchor` 的形狀）；輸入的 ack 只要 engine 在同一次呼叫裡 `schedule_frame` 就照舊等那張畫面。剩下要定的：iframe 的 `src` 是 fragment 時照現在的做還是走 `history::navigate`；「下一次 layout」（現在的，script 讀得到捲好的位置）還是「下一次 main frame」（Chromium 的）；traversal 的捲動搬進 `traverse_within_document`。
+
+**估計**：小步（只把導覽的帳、`javascript:` 的 commit 佇列、晚一點的 `load` 搬到 engine 的 frame，commit 照舊由 renderer 做，`FrameDocument` 的表留著）：hook 0 到 1 個，問 engine 的 5 到 7 個，新的服務 1 個（`PageAgent` 當場的入口），和 2a、2c 同一個量級；拿掉 `FrameRequest` 的兩種導覽、`book_frame_requests` 的分派、1c 的檢查和 12 處額外呼叫裡的大約 11 處；`follow_child_frames` 留著（成員的跟隨還是呼叫之後）。完整的第 3 段（`RenderFrame` 和 `FrameDocument` 由 engine 的 frame 擁有）：`FrameDocument` 是 `renderer` 的型別，engine 叫不出它（`renderer` 依賴 engine，反過來是循環），要用 `dom_api` 的 trait 拿著、用時 downcast，和 `Frame` 當 `FrameLayout` 的前例一樣（`engine_frame`）；難的是 `read_body` 這類要同時借 `FrameDocument` 和 engine 的別的部分（engine 要給分開借的方法），約 60 處 `doc()` 要經過 engine 借：風險明顯高。（盤點原本寫成「帶著 `ipc` 的 pipe，只能型別抹除」：不對，`dom_api` 經過 `protocol` 本來就依賴 `ipc`，型別抹除的原因是 crate 的方向。）最危險的：送出時的 `tell_frames`（DevTools 的時機）、`Frames::set` 帶帳、拿掉中間的對帳時跟著消失的副作用（`request_main_frame` 讓輸入的 ack 等、取消不在的文件的 fetch 的時機）、history 的計數跨 engine、`dom_js` 八個用 `take_frame_requests` 的測試檔要改。
+
+## 第 3 段完整的那一半的盤點
+
+2026-11-26，3c 之上，唯讀。小步之後，呼叫之後的對帳只剩 `follow_child_frames`（`after_task` 一次、`commit_child` 一次）：照 engine 的 frame 清單補上新 frame 的 `FrameDocument`（初始的 `about:blank`）、拿掉不見的、取消不見的文件的 fetch、設 DevTools 的「frame 變了」、要一個 main frame。engine 那一側從沒讀過 `FrameDocument`（`dom`、`dom_api`、`dom_js`、`dom_wasm` 裡沒有它；hook 傳的是 DOM 和 `DocumentLoader` 的東西），它只放 renderer 自己的：Browser 的 navigation id、MIME、原文、body 的 pipe、time origin、編碼、畫到哪一版的計數、網路是否安靜、DevTools 的資源。
+
+**做法的比較**：B（`FrameDocument` 放進 engine 的 frame：trait 加 downcast、每次經過 engine 借、分開借的方法）；C（整張表交給 renderer 的 `RendererFrameClient`，hook 當場建和拿掉：只有拿回 client 的一個 downcast，但讀表時 engine 被借走，一樣要分開借，換 engine 時表要搬）；D（engine 的清單是唯一的一份，renderer 的表只是照 frame 存附屬資料的快取：讀之前確認 engine 還有那個 frame，新 frame 的資料第一次用到時才建，不見的在 task 之後清掉，正確性不靠清的時機）；E（`Rc<RefCell>` 共用：每次讀都有執行時的檢查，不考慮）。D 不用碰型別和借用，盤點 D。
+
+**讀表的地方**（`doc`、`doc_mut` 22 處，直接讀 `render_frames` 的其餘）：最上層的（`top`、`top_token`、`top_document`，約 25 處）不受影響：最上層的 `FrameDocument` 是 renderer 在 commit 時建的，script 不建也不拿掉它。子 frame 的分三種：
+
+| 種類 | 哪些 | D 要怎麼改 |
+| --- | --- | --- |
+| 只要文件的 root | `document_url`、`document_of_frame`（`loader_of`、`subresource_cache_mode` 經過它）、`document_source` 的一半、`document_origin`、`note_failed`、`loader_id` | 改讀 `engine_document`（3c 加的），不經過表 |
+| renderer 自己的狀態 | body 的（`start_body`、`body_data`、`body_ended`、`read_body`、`frame_with_body`、`document_load_completed`）、`commit_child_navigation` 和 traversal 的 navigation id、`parse_document`：都只讀 commit 過的文件，`commit_child` 當場建了；初始文件也會用到的：網路是否安靜（`check_network_idle`）、DevTools 的資源（`record_resource`、`css_refetched`、`child_info`）、回應的編碼（`resource`） | `doc`、`doc_mut` 只回傳 engine 還有的 frame 的（`child_parent`）；`doc_mut` 在 engine 有、表上沒有時建初始文件的那一份（計數、偵測、資源都是預設值，和現在 task 之後建的一樣） |
+| 走過整張表 | `scripts_blocked_by_sheets`、`frame_of_document`（回應找 frame、DOM agent）、`check_network_idle`、`next_idleness_due` | 照 engine 的 `frames_in_tree_order()` 走、查表；`frame_of_document` 問 engine（`dom_js` 有 `Frames::of_document`：`ScriptEngine` 多一個方法）；`next_idleness_due` 是 `&self`，照舊走快取（不見的 frame 留著的只會讓 loop 早醒一次，醒來什麼都不做） |
+
+**`follow_child_frames` 剩下什麼**：建的那一半拿掉（第一次用到時建）；`commit_child` 裡直接叫的那一次拿掉。task 之後留一步清理，不再是跟隨：拿掉 engine 沒有的 frame 的資料（它們拿著不見的文件的 `NodeRoot` 和 body 的 pipe，和現在一樣在 task 之後放掉）、取消不見的文件的 fetch（本來就照 DOM 的 `sent_fetches` 判斷，不讀表）、DevTools 的「frame 變了」（照 `take_frames_changed`）。要 main frame 的那一行：iframe 加進、拿掉本身是 DOM 的改變，照理是多的，實作時用 mutation test 確認。讀表的地方都先問 engine，這一步晚做、漏做只影響記憶體，不影響讀到什麼。
+
+**`doc()` 改成 `&mut self`**：呼叫它的函式只有 `doc` 自己是 `&self`，其餘都已經是 `&mut self`；`next_idleness_due` 不經過 `doc`。
+
+**估計**：hook 0 個；問 engine 的 0 到 1 個（`frame_of_document`）；改約 15 處（6 處讀 root、4 處走表、`doc`/`doc_mut`、`follow_child_frames` 和 `commit_child`），和 3c 同一個量級。最危險的：初始文件的資料改成第一次用到才建，以前在 task 之後就有（DevTools 的 frame 清單和網路是否安靜是不是在那之前就要它）；清理晚了的那段期間，`next_idleness_due` 和 DevTools 會不會看到不見的 frame。對照 Chromium：content 的 `RenderFrameImpl` 是 Blink 建 `LocalFrame` 時當場建的（C 的形狀）；D 不同的是 renderer 的資料晚一點才建，但兩者都只有一份 frame 的清單。
+
 ## 對照 Chromium（原始碼）
 
 2026-11-25 讀 chromium.googlesource.com 的 `main`（唯讀的 agent 讀、我讀過結果）：

@@ -1,0 +1,183 @@
+# Stage 3a's mutants (the navigations booked on the engine's frame): `python3 scripts/test.py mutate rfcs/0115-render-frame/mutants-3a.toml`.
+# `automation_pipe::a_client_not_reading_doesnt_hold_machopo_up` is left out as in 2a-3 (progress's 2a-3).
+# 240 s: a mutant of `dom_js` rebuilds it and relinks every test binary after it (about 140 s of the run).
+test = ["sh", "-c", "cargo test -q -p dom_api --test it && cargo test -q -p dom_js --test it && cargo test -q -p dom_wasm --test it && cargo test -q -p renderer && cargo test -q -p browser --test it navigation:: && cargo test -q -p shell --test it -- --skip webdriver::a_session_with_a_hung_page_ends_in_time --skip automation_pipe::a_client_not_reading_doesnt_hold_machopo_up"]
+timeout = 240
+
+[[mutant]]
+name = "an iframe's navigation isn't booked"
+file = "crates/dom_js/src/frames.rs"
+from = '''            found.navigation = request;'''
+to = '''            found.navigation = request.filter(|_| false);'''
+
+[[mutant]]
+name = "script's navigation isn't booked"
+file = "crates/dom_js/src/frames.rs"
+from = '''            found.navigation = Some(request);'''
+to = '''            found.navigation = Some(request).filter(|_| false);'''
+
+[[mutant]]
+name = "a new document drops its frame's navigation"
+file = "crates/dom_js/src/frames.rs"
+from = '''                frame.navigation = old.navigation.take();'''
+to = '''                frame.navigation = old.navigation.take().filter(|_| false);'''
+
+[[mutant]]
+name = "an iframe's navigation doesn't hold its parent's load"
+file = "crates/dom_js/src/frames.rs"
+from = '''                cx.set_frame_navigating(frame_document.get(cx.gc), true);'''
+to = '''                cx.set_frame_navigating(frame_document.get(cx.gc), false);'''
+
+[[mutant]]
+name = "a child's location navigation doesn't hold its parent's load"
+file = "crates/dom_js/src/frames.rs"
+from = '''                cx.set_frame_navigating(document, true);'''
+to = '''                cx.set_frame_navigating(document, false);'''
+
+[[mutant]]
+name = "a navigation is taken by any number"
+file = "crates/dom_js/src/engine.rs"
+from = '''            .take_if(|booked| begin_id.is_none_or(|id| booked.begin_id == id))'''
+to = '''            .take_if(|_| true)'''
+
+[[mutant]]
+name = "the wasm frame's navigation isn't booked"
+file = "crates/dom_wasm/src/engine.rs"
+from = '''        // Booked on the frame as it went (one to another document, a reload).
+        if let Some(begin_id) = begin_id {'''
+to = '''        // Booked on the frame as it went (one to another document, a reload).
+        if let Some(begin_id) = begin_id.filter(|_| false) {'''
+
+[[mutant]]
+name = "the wasm frame's navigation is taken by any number"
+file = "crates/dom_wasm/src/engine.rs"
+from = '''            .take_if(|booked| begin_id.is_none_or(|id| booked.begin_id == id))'''
+to = '''            .take_if(|_| true)'''
+
+[[mutant]]
+name = "an iframe's no-referrer policy isn't kept"
+file = "crates/dom_api/src/frame.rs"
+from = '''        let no_referrer = owner.is_some_and(|owner| {'''
+to = '''        let no_referrer = owner.is_some_and(|owner| false && {'''
+
+[[mutant]]
+name = "about:blank has no initiator's origin"
+file = "crates/dom_api/src/frame.rs"
+from = '''            origin_source: blank.then(|| cx.root(initiator)),'''
+to = '''            origin_source: blank.then(|| cx.root(initiator)).filter(|_| false),'''
+
+[[mutant]]
+name = "every URL has the initiator's origin"
+file = "crates/dom_api/src/frame.rs"
+from = '''            url::Url::parse(url).is_ok_and(|url| url.scheme() == "about" && url.path() == "blank")'''
+to = '''            url::Url::parse(url).is_ok()'''
+
+[[mutant]]
+name = "a navigation within the document isn't drawn"
+file = "crates/dom_api/src/history.rs"
+from = '''        if same_document {
+            host.read(|cx| {'''
+to = '''        if false {
+            host.read(|cx| {'''
+
+[[mutant]]
+name = "the renderer's history entries aren't counted"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                    if !*replace {
+                        self.own_history_entries.sent_one();'''
+to = '''                    if false {
+                        self.own_history_entries.sent_one();'''
+
+[[mutant]]
+name = "the client counts entries of its own"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''            own_history_entries: self.own_history_entries.clone(),'''
+to = '''            own_history_entries: super::OwnHistoryEntries::default(),'''
+
+[[mutant]]
+name = "a navigation's cancellation window doesn't end"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''    fn end_cancellation_window_after_task(&self, id: u64) {
+        self.scheduler'''
+to = '''    fn end_cancellation_window_after_task(&self, id: u64) {
+        return;
+        self.scheduler'''
+
+[[mutant]]
+name = "the cancellation window's end isn't sent"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                    .send(RendererHostMsg::NavigationCancellationWindowEnded { ids: vec![id] });'''
+to = '''                    .send(RendererHostMsg::NavigationCancellationWindowEnded { ids: vec![] });'''
+
+[[mutant]]
+name = "a commit queued outlasts the navigation taken"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        self.render_frames.drop_commits(frame);
+        Some(asked)'''
+to = '''        Some(asked)'''
+
+[[mutant]]
+name = "a commit queued commits over a navigation sent after"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                .is_some_and(|engine| engine.navigation(frame).is_some())
+            {
+                return;
+            }'''
+to = '''                .is_some_and(|engine| engine.navigation(frame).is_some())
+            {
+            }'''
+
+[[mutant]]
+name = "a commit queued leaves the navigation before"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            engine.take_navigation(frame, None);'''
+to = '''            engine.take_navigation(frame, Some(u64::MAX));'''
+
+[[mutant]]
+name = "an older child commit isn't dropped"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                .and_then(|engine| engine.navigation(frame))
+                .is_none_or(|asked| asked.begin_id != begin_id)'''
+to = '''                .and_then(|engine| engine.navigation(frame))
+                .is_some_and(|asked| asked.begin_id != begin_id)'''
+
+[[mutant]]
+name = "a child's timing never reads no-referrer"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            .is_some_and(|asked| Some(asked.begin_id) == begin_id && asked.no_referrer)'''
+to = '''            .is_some_and(|asked| Some(asked.begin_id) == begin_id && false)'''
+
+[[mutant]]
+name = "the top-level about:blank has no initiator's origin"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                .and_then(|(id, top)| self.take_navigation(top, Some(id)))'''
+to = '''                .and_then(|(id, top)| self.take_navigation(top, Some(id)).filter(|_| false))'''
+
+[[mutant]]
+name = "DevTools' child frame is never loading"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        let navigating = self
+            .engine
+            .as_mut()
+            .is_some_and(|engine| engine.navigation(frame).is_some());'''
+to = '''        let navigating = false;'''
+
+[[mutant]]
+name = "the browser's drop of a child's navigation is ignored"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        if self.take_navigation(frame, Some(id)).is_none() {'''
+to = '''        if self.take_navigation(frame, Some(id)).is_none() || true {'''
+
+[[mutant]]
+name = "a javascript: URL replaced in the call still commits"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            if !replaced {
+                self.queue_child_commit(frame, url, String::new());'''
+to = '''            if true {
+                self.queue_child_commit(frame, url, String::new());'''
+
+[[mutant]]
+name = "a navigation sent before a javascript: URL replaces it"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                            .any(|(sent, after)| *sent == frame && *after > index);'''
+to = '''                            .any(|(sent, _)| *sent == frame);'''

@@ -1,0 +1,112 @@
+# Stage 3d's mutants (the engine's frames the one list; the renderer's table what it keeps of them): `python3 scripts/test.py mutate rfcs/0115-render-frame/mutants-3d.toml`.
+# `automation_pipe::a_client_not_reading_doesnt_hold_machopo_up` is left out as in 2a-3 (its cause: progress's "第 3 段做完時").
+test = ["sh", "-c", "cargo test -q -p dom_js --test it && cargo test -q -p renderer && cargo test -q -p browser --test it && cargo test -q -p shell --test it -- --skip webdriver::a_session_with_a_hung_page_ends_in_time --skip automation_pipe::a_client_not_reading_doesnt_hold_machopo_up"]
+timeout = 240
+
+[[mutant]]
+name = "a gone frame's document is still read"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        let Some((_, owner)) = self.child_parent(frame) else {
+            return false;
+        };
+        if self.render_frames.contains(frame) {
+            return true;
+        }'''
+to = '''        if self.render_frames.contains(frame) {
+            return true;
+        }
+        let Some((_, owner)) = self.child_parent(frame) else {
+            return false;
+        };'''
+
+[[mutant]]
+name = "a new frame's initial document isn't kept"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        if self.render_frames.contains(frame) {
+            return true;
+        }
+        let Some((dom, view)) = engine_frame(&mut self.engine) else {'''
+to = '''        if self.render_frames.contains(frame) {
+            return true;
+        }
+        let _ = &owner;
+        if true {
+            return false;
+        }
+        let Some((dom, view)) = engine_frame(&mut self.engine) else {'''
+
+[[mutant]]
+name = "a new frame's document isn't the initial one"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        initial.initial = true;
+        self.render_frames.set_child_document(frame, initial);
+        true'''
+to = '''        self.render_frames.set_child_document(frame, initial);
+        true'''
+
+[[mutant]]
+name = "a gone frame's data isn't let go of"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        self.render_frames.remove(&gone);
+        // Their iframes'''
+to = '''        let _ = gone;
+        // Their iframes'''
+
+[[mutant]]
+name = "a gone document's fetches aren't cancelled"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        // shows them made or gone.
+        self.cancel_fetches_of_gone_documents();'''
+to = '''        // shows them made or gone.'''
+
+[[mutant]]
+name = "DevTools' frames aren't compared after frames are made or gone"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        if !engine.take_frames_changed() {
+            return;
+        }
+        self.frames_changed = true;
+        let known'''
+to = '''        if !engine.take_frames_changed() {
+            return;
+        }
+        let known'''
+
+[[mutant]]
+name = "a document's frame is never found"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        let frame = self.engine.as_mut()?.frame_of_document(document)?;'''
+to = '''        let frame = self.engine.as_mut()?.frame_of_document(document).filter(|_| false)?;'''
+
+[[mutant]]
+name = "dom_js finds no document's frame"
+file = "crates/dom_js/src/engine.rs"
+from = '''            .of_document(document)
+            .map(|frame| frame.id)
+    }'''
+to = '''            .of_document(document)
+            .map(|frame| frame.id)
+            .filter(|_| false)
+    }'''
+
+[[mutant]]
+name = "only the top-level frame's scripts are retried"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        let documents: Vec<(FrameId, NodeRoot)> = self
+            .frames_with_documents()
+            .into_iter()'''
+to = '''        let documents: Vec<(FrameId, NodeRoot)> = self
+            .frames_with_documents()
+            .into_iter()
+            .take(1)'''
+
+[[mutant]]
+name = "only the top-level frame's network is watched"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        let roots: Vec<(FrameId, NodeRoot)> = self
+            .frames_with_documents()
+            .into_iter()'''
+to = '''        let roots: Vec<(FrameId, NodeRoot)> = self
+            .frames_with_documents()
+            .into_iter()
+            .take(1)'''

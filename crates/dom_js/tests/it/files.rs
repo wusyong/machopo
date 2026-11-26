@@ -100,7 +100,6 @@ fn blob_urls_go_to_the_host() {
                 format!("register {url} {} {:?}", data.type_(), data.bytes())
             }
             FrameRequest::RevokeBlobUrl { url } => format!("revoke {url}"),
-            other => format!("{other:?}"),
         })
         .collect();
     assert_eq!(

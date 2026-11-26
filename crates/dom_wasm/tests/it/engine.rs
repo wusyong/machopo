@@ -568,14 +568,23 @@ fn a_navigation_is_told_to_the_frame_client_as_it_is_asked() {
         *told.0.borrow(),
         ["To { url: \"https://page.test/next\", replace: false }"]
     );
-    let begin_ids: Vec<_> = page
-        .engine
-        .take_frame_requests()
-        .into_iter()
-        .filter_map(|request| match request {
-            dom_api::FrameRequest::Navigation { begin_id, .. } => Some(begin_id),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(begin_ids, [Some(7)]);
+    // Booked on the frame as it went, till the host takes it.
+    let top = page.engine.top_frame();
+    assert_eq!(
+        page.engine.navigation(top).map(|asked| asked.begin_id),
+        Some(7)
+    );
+    assert_eq!(
+        page.engine
+            .take_navigation(top, Some(6))
+            .map(|asked| asked.begin_id),
+        None
+    );
+    assert_eq!(
+        page.engine
+            .take_navigation(top, Some(7))
+            .map(|asked| asked.begin_id),
+        Some(7)
+    );
+    assert!(page.engine.navigation(top).is_none());
 }

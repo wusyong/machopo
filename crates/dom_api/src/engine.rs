@@ -198,9 +198,9 @@ pub trait FrameClient {
     /// script goes on (a navigation to another document, a reload, one
     /// within the document, a traversal, a new tab, the scroll restoration
     /// mode). The number the host gave a navigation to another document it
-    /// sent (`BeginNavigation`'s); none for what it didn't send, or isn't
-    /// one: what the host does after the call (`FrameRequest::Navigation`)
-    /// goes by it. `dom` as it is then.
+    /// sent (`BeginNavigation`'s), which the engine books on the frame
+    /// (`ScriptEngine::navigation`); none for what it didn't send, or isn't
+    /// one. `dom` as it is then.
     fn navigate(&mut self, asked: &NavigationAsked<'_>, dom: &dom::Dom) -> Option<u64>;
 
     /// An iframe's navigation of its child frame, `asked` (its `src` or
@@ -208,8 +208,19 @@ pub trait FrameClient {
     /// that asked for it ends: as `navigate`, what goes to the browser
     /// goes now (Blink's frame owner navigates its frame as its attribute
     /// changes or it is inserted), and the number of the navigation sent,
-    /// if one was (`FrameRequest::Navigate`).
+    /// if one was, booked on the frame as `navigate`'s
+    /// (`FrameRequest::Navigate` without one).
     fn navigate_child(&mut self, asked: &ChildNavigationAsked<'_>, dom: &dom::Dom) -> Option<u64>;
+
+    /// Child frame `frame` navigated to a `javascript:` URL
+    /// (`NavigationHere::JavaScript`), booked on it: the host commits an
+    /// empty document in it in a task of its own, as a response's would
+    /// come, so the script that navigated it and the parser go on first,
+    /// taking it then (`ScriptEngine::take_commit_here`: none if a
+    /// navigation asked for since took its place). Nothing by default.
+    fn commit_here(&mut self, frame: crate::FrameToken) {
+        let _ = frame;
+    }
 }
 
 /// An iframe's navigation of its frame, as the engine tells its host's
@@ -226,6 +237,9 @@ pub struct ChildNavigationAsked<'a> {
     pub document: &'a dom::NodeRoot,
     pub initial: bool,
     pub navigation: &'a crate::ChildNavigation,
+    /// It goes nowhere the browser is told of (`NavigationHere`): the
+    /// engine does it, the host sends the browser its `srcdoc` alone.
+    pub here: bool,
     /// The stack of the script that asked, if the DOM wants requests'
     /// stacks (`Dom::request_stacks_wanted`) and script ran.
     pub stack: Option<&'a str>,
@@ -419,6 +433,11 @@ pub trait ScriptEngine: ParserHost {
         None
     }
 
+    /// The frame that shows `document` now, if one does.
+    fn frame_of_document(&mut self, _document: dom::NodeId) -> Option<crate::FrameId> {
+        None
+    }
+
     /// Child frame `frame`'s parent and iframe; none for the top-level
     /// frame, or one the engine doesn't have.
     fn frame_parent(&mut self, _frame: crate::FrameId) -> Option<(crate::FrameId, NodeRoot)> {
@@ -476,6 +495,35 @@ pub trait ScriptEngine: ParserHost {
     /// time (a child to navigate, a navigation script made, a blob URL
     /// registered or revoked), in order, taken.
     fn take_frame_requests(&mut self) -> Vec<crate::FrameRequest>;
+
+    /// `frame`'s navigation to another document on its way, booked as the
+    /// frame client sent it (`NavigationRequest`); none by default (an
+    /// engine with no frames to navigate).
+    fn navigation(&mut self, frame: crate::FrameId) -> Option<crate::NavigationRequest> {
+        let _ = frame;
+        None
+    }
+
+    /// `frame`'s navigation to a `javascript:` URL booked on it
+    /// (`FrameClient::commit_here`), taken as its host commits its empty
+    /// document: none if another navigation took its place. None by
+    /// default.
+    fn take_commit_here(&mut self, frame: crate::FrameId) -> Option<url::Url> {
+        let _ = frame;
+        None
+    }
+
+    /// `frame`'s navigation `begin_id` (none: whichever it has) taken, as
+    /// the browser commits or drops it: none if it has another (one asked
+    /// for since takes its place). None by default.
+    fn take_navigation(
+        &mut self,
+        frame: crate::FrameId,
+        begin_id: Option<u64>,
+    ) -> Option<crate::NavigationRequest> {
+        let _ = (frame, begin_id);
+        None
+    }
 
     /// The loading of `frame`'s document (`DocumentLoader`), the frame's:
     /// none for a frame gone, or a document the host loads no body of.

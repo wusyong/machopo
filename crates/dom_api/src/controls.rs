@@ -324,6 +324,7 @@ pub fn run_native_timer<H: ScriptHost>(
 ) {
     match action {
         NativeAction::SpinRepeat => repeat(host, element, data, now),
+        NativeAction::OwnerLoad => crate::frame::owner_load_due(host, element, data),
         // An abort signal's, which has no element (`timer::run_task`).
         NativeAction::AbortTimeout => {}
     }

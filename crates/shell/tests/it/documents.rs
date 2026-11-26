@@ -1221,6 +1221,112 @@ fn a_navigation_cancels_a_javascript_url_not_run_yet() {
     assert_eq!(run(&server.url("/index.html")), "|");
 }
 
+/// A child frame's parser waiting for a sheet that blocks its script goes
+/// on once the sheet's `<link>` is gone (its parent removing it): the
+/// script runs then, not as the sheet comes.
+#[test]
+fn a_child_frames_script_goes_on_once_its_blocking_sheet_is_gone() {
+    let server = frames_server(
+        "<!DOCTYPE html><iframe src=/child></iframe><script>const start = performance.now();\
+           onmessage = e => {\
+             if (e.data === 'ready') setTimeout(() => frames[0].document.getElementById('l').remove(), 50);\
+             else testRunner.reportHarnessResults(String(performance.now() - start < 2000));\
+           };</script>",
+        "<!DOCTYPE html><head><script>parent.postMessage('ready', '*')</script>\
+         <link id=l rel=stylesheet href=/slow.css>\
+         <script>parent.postMessage('ran', '*')</script></head><body>child</body>",
+        &[(
+            "/slow.css",
+            net::test_server::Route::ok("text/css", "body { color: green }")
+                .with_delay(Duration::from_secs(5)),
+        )],
+    );
+    assert_eq!(run(&server.url("/index.html")), "true");
+}
+
+/// A child frame's document whose rendering a sheet blocks has no
+/// intersections till it is rendered: its observer's first entry comes once
+/// the sheet came.
+#[test]
+fn a_render_blocked_child_frame_has_no_intersections() {
+    let server = frames_server(
+        "<!DOCTYPE html><iframe src=/child></iframe>\
+         <script>onmessage = e => testRunner.reportHarnessResults(e.data);</script>",
+        "<!DOCTYPE html><head><script>const start = performance.now();\
+           new IntersectionObserver(() => parent.postMessage(String(performance.now() - start >= 300), '*'))\
+             .observe(document.documentElement);</script>\
+         <link rel=stylesheet href=/slow.css></head><body>child</body>",
+        &[(
+            "/slow.css",
+            net::test_server::Route::ok("text/css", "body { color: green }")
+                .with_delay(Duration::from_millis(400)),
+        )],
+    );
+    assert_eq!(run(&server.url("/index.html")), "true");
+}
+
+/// An iframe's `src` set to a fragment of the document its frame shows:
+/// its URL that, scrolled there (as its window reads it next); not loaded
+/// again.
+#[test]
+fn an_iframes_fragment_navigation_scrolls_its_frame() {
+    let server = frames_server(
+        "<!DOCTYPE html><iframe src=/child></iframe><script>\
+           onload = () => { const f = document.querySelector('iframe'); let loads = 0;\
+             f.onload = () => loads++;\
+             const before = f.contentWindow.scrollY;\
+             f.src = '/child#far';\
+             const w = f.contentWindow;\
+             setTimeout(() => testRunner.reportHarnessResults(\
+               [before, w.scrollY > 1000, w.location.hash, loads].join()), 100); };</script>",
+        "<!DOCTYPE html><div style='height: 3000px'></div><p id=far>far</p>",
+        &[],
+    );
+    assert_eq!(run(&server.url("/index.html")), "0,true,#far,0");
+}
+
+/// An iframe's `javascript:` URL's empty document commits in a task of its
+/// own, and its parent's `load` waits for it: the iframe's `load` first.
+#[test]
+fn a_parents_load_waits_for_an_iframes_javascript_url() {
+    let url = site(
+        "a_parents_load_waits_for_an_iframes_javascript_url",
+        &[(
+            "index.html",
+            "<!DOCTYPE html><iframe></iframe><script>const log = [];\
+               const f = document.querySelector('iframe');\
+               f.onload = () => log.push('iframe');\
+               f.src = 'javascript:\"script\"';\
+               onload = () => { log.push('window'); testRunner.reportHarnessResults(log.join()); };</script>",
+        )],
+    );
+    assert_eq!(run(&url), "iframe,window");
+}
+
+/// An iframe's `src` set to a `javascript:` URL and then to another
+/// document, and the other way round, in one script: the latest is the one
+/// that commits (one navigation a frame), the `javascript:` URL's an empty
+/// document (its script not run), the other's response, if it comes after,
+/// dropped.
+#[test]
+fn an_iframes_latest_navigation_commits() {
+    let server = frames_server(
+        "<!DOCTYPE html><iframe src=/child></iframe><script>var log = [];\
+           onload = () => { const f = document.querySelector('iframe');\
+             f.onload = () => log.push(f.contentDocument.URL.startsWith('javascript:') ? 'empty' : f.contentDocument.body.textContent);\
+             f.src = 'javascript:\"script\"'; f.src = '/other';\
+             setTimeout(() => { log.push('|');\
+               f.src = '/other?again'; f.src = 'javascript:\"script\"';\
+               setTimeout(() => testRunner.reportHarnessResults(log.join()), 500); }, 500); };</script>",
+        "<!DOCTYPE html><p>child</p>",
+        &[(
+            "/other",
+            net::test_server::Route::ok("text/html", "<!DOCTYPE html><p>other</p>"),
+        )],
+    );
+    assert_eq!(run(&server.url("/index.html")), "other,|,empty");
+}
+
 /// A `javascript:` URL's document gone before its task runs (its iframe
 /// removed): it never runs, in that document or another.
 #[test]

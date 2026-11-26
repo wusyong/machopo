@@ -47,6 +47,149 @@ pub enum ChildNavigation {
     AboutBlank,
 }
 
+/// A frame's navigation to another document its host sent the browser
+/// (`FrameClient::navigate`, `navigate_child`), booked on the frame as it
+/// was sent, till the browser commits it or drops it
+/// (`ScriptEngine::take_navigation`): the host's number for it, whether its
+/// iframe's referrer policy is `no-referrer` (what its navigation timing
+/// reads of its response's `Timing-Allow-Origin`; never the top-level
+/// frame's), and, for one to `about:blank`, the document that asked, which
+/// its document has its origin from (HTML's initiator origin; Chromium's
+/// `origin_to_commit`, taken as the navigation starts: an opaque one is
+/// that document's alone, which a value through the browser and back
+/// wouldn't be). A frame has one at a time: one asked for after another
+/// takes its place.
+#[derive(Debug, Clone)]
+pub struct NavigationRequest {
+    pub begin_id: u64,
+    pub no_referrer: bool,
+    pub origin_source: Option<dom::NodeRoot>,
+}
+
+impl NavigationRequest {
+    /// The navigation numbered `begin_id` to `url` (none: a reload), of the
+    /// frame whose iframe is `owner` (none: the top-level frame's), as
+    /// script in `initiator` asked.
+    pub fn new<'gc>(
+        cx: &dom::Cx<'_, 'gc>,
+        begin_id: u64,
+        owner: Option<dom::NodeRef<'gc>>,
+        initiator: dom::NodeRef<'gc>,
+        url: Option<&str>,
+    ) -> Self {
+        let no_referrer = owner.is_some_and(|owner| {
+            cx.attribute_value_by_id(owner, dom::names::local::REFERRERPOLICY)
+                .is_some_and(|policy| policy.borrow().to_str().eq_ignore_ascii_case("no-referrer"))
+        });
+        let blank = url.is_some_and(|url| {
+            url::Url::parse(url).is_ok_and(|url| url.scheme() == "about" && url.path() == "blank")
+        });
+        Self {
+            begin_id,
+            no_referrer,
+            origin_source: blank.then(|| cx.root(initiator)),
+        }
+    }
+}
+
+/// How long an iframe's `load` is put off after a navigation within its
+/// frame's document that another origin asked for (Blink's 100 ms
+/// `DispatchLoad`, crbug.com/1248444).
+const OWNER_LOAD_DELAY_MS: f64 = 100.0;
+
+/// An iframe's navigation that goes nowhere its host sends the browser
+/// (`child_navigation_here`): the engine's to do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NavigationHere {
+    /// To a fragment of the document its frame shows: its URL that,
+    /// scrolled there (`navigate_child_to_fragment`; HTML's navigate to a
+    /// fragment, but for `hashchange` and a history entry).
+    Fragment(url::Url),
+    /// To a `javascript:` URL: an empty document commits, its script not
+    /// run (as its load failed when its host fetched it), in a task of its
+    /// host's (`FrameClient::commit_here`).
+    JavaScript(url::Url),
+}
+
+/// What an iframe's navigation of its frame, which shows `document`, is,
+/// if it goes nowhere its host sends the browser: none for one that does
+/// (one to another document, `srcdoc`, `about:blank`).
+pub fn child_navigation_here<'gc>(
+    cx: &dom::Cx<'_, 'gc>,
+    document: dom::NodeRef<'gc>,
+    navigation: &ChildNavigation,
+) -> Option<NavigationHere> {
+    let ChildNavigation::Src(src) = navigation else {
+        return None;
+    };
+    let url = url::Url::parse(src).ok()?;
+    if url.scheme() == "javascript" {
+        return Some(NavigationHere::JavaScript(url));
+    }
+    url.fragment()?;
+    let current = cx
+        .document_url(document)
+        .and_then(|current| url::Url::parse(&current.to_str()).ok())
+        .unwrap_or_else(|| url::Url::parse("about:blank").expect("about:blank"));
+    let without = |url: &url::Url| {
+        let mut url = url.clone();
+        url.set_fragment(None);
+        url
+    };
+    (without(&current) == without(&url)).then_some(NavigationHere::Fragment(url))
+}
+
+/// `owner`'s frame navigated to `url`, a fragment of the document it
+/// shows (`NavigationHere::Fragment`): the document's URL that, scrolled
+/// to the fragment once laid out (the iframe's attribute that changed asks
+/// for the frame that shows it). If its document
+/// is completely loaded and of another origin than `owner`'s (whose
+/// script asked), `owner` fires `load` a while after (the last of such
+/// navigations in a row's), as it would for another document, so that
+/// script can't tell which the URL was (Blink's
+/// `DocumentLoader::CommitSameDocumentNavigation`).
+pub fn navigate_child_to_fragment<H: ScriptHost>(host: &mut H, owner: &NodeRoot, url: &url::Url) {
+    host.mutate(|cx| {
+        let owner = owner.get(cx.gc);
+        let Some(document) = cx.content_document(owner) else {
+            return;
+        };
+        cx.set_document_url(document, url.as_str());
+        let id = cx.node_id(document);
+        if let Some(target) = crate::history::fragment_target(cx, document, url) {
+            cx.lend_layout(document, |layout| layout.scroll_to_fragment(id, target));
+        }
+        if cx.is_completely_loaded(document) && !same_origin(cx, document, cx.document_of(owner)) {
+            let number = cx.next_owner_load(document);
+            cx.add_native_timer(
+                owner,
+                dom::NativeAction::OwnerLoad,
+                number,
+                OWNER_LOAD_DELAY_MS,
+                None,
+            );
+        }
+    });
+}
+
+/// `owner`'s `load` put off as `number` is due (`navigate_child_to_fragment`):
+/// fired, unless another was put off since, or its frame went.
+pub(crate) fn owner_load_due<H: ScriptHost>(host: &mut H, owner: &NodeRoot, number: u64) {
+    let latest = host.read(|cx| {
+        cx.content_document(owner.get(cx.gc))
+            .is_some_and(|document| cx.owner_load(document) == number)
+    });
+    if latest {
+        crate::fire_event(
+            host,
+            &TargetRoot::Node(owner.clone()),
+            names::event::LOAD,
+            false,
+            false,
+        );
+    }
+}
+
 /// What the engine asks of its host for its frames, after the call that
 /// made it so (`ScriptEngine::take_frame_requests`), in order. Frames made
 /// and gone are told as they come and go (`FrameClient`, `FrameLayout`),
@@ -54,30 +197,6 @@ pub enum ChildNavigation {
 /// `take_frames_changed`).
 #[derive(Debug, Clone)]
 pub enum FrameRequest {
-    /// `frame` is to navigate (its host loads the document and makes it
-    /// its active one: `ScriptEngine::create_window`). What went to the
-    /// browser went as it was asked (`FrameClient::navigate_child`):
-    /// `begin_id`, the host's number for the navigation it sent, if it sent
-    /// one.
-    Navigate {
-        frame: FrameId,
-        navigation: ChildNavigation,
-        begin_id: Option<u64>,
-    },
-    /// Script navigated `frame` (`location`, `history`), as script in
-    /// `initiator` asked (`frame` itself for what isn't asked by another):
-    /// to another document, its host loads it (the top-level frame's, the
-    /// browser); within its document, it happened, its fragment scrolled
-    /// to already (the top-level frame's session history hears of it).
-    /// What went to the browser went as it was asked
-    /// (`FrameClient::navigate`): `begin_id`, the host's number for the
-    /// navigation to another document it sent, if it sent one.
-    Navigation {
-        frame: FrameId,
-        initiator: FrameId,
-        navigation: dom::FrameNavigation,
-        begin_id: Option<u64>,
-    },
     /// Script in `frame`'s realm made `url` a blob URL for `data`
     /// (`URL.createObjectURL`): the host keeps it, until it is revoked or
     /// the realm goes (the frame's next document, or the frame).

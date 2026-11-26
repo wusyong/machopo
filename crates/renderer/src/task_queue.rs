@@ -68,8 +68,8 @@ pub(crate) enum MainThreadTask {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InternalTask {
     /// A child frame's document the renderer commits itself (a
-    /// `javascript:` URL's).
-    ChildCommits,
+    /// `javascript:` URL's, which the engine booked on the frame).
+    ChildCommit(protocol::FrameToken),
     /// The parser's scripts that wait for a sheet that blocks scripts, tried
     /// again (Blink's `DidLoadAllScriptBlockingResources` posts it).
     RetryBlockedScripts,
@@ -78,9 +78,9 @@ pub(crate) enum InternalTask {
     /// The intersection observers' `delay` is up: a frame for them (Blink's
     /// `ScheduleDelayedIntersection`).
     Intersections,
-    /// A child frame's iframe's `load`, put off after a navigation within
-    /// its cross-origin document (Blink's 100 ms `DispatchLoad`).
-    OwnerLoads,
+    /// The browser may commit navigation numbered so now: the task that
+    /// asked for it is over (Blink's `NotifyNavigationCancellationWindowEnded`).
+    NavigationCancellationWindowEnded(u64),
     /// The main frame's new document's delay to be drawn is up
     /// (`RenderWidgetHostImpl`'s `TimeoutMonitor`).
     NewContentTimeout,

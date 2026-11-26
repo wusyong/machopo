@@ -23,7 +23,12 @@
 | 2c-3. 「接著 parse」是 DOM 的 task，拿掉 `InternalTask::ParseOn`；`yields`、`parse_due` 搬到 `DocumentLoader`；`dom_api` 的 `run_dom_task` 先看是不是 parse 的（第 14、20、24、28 條）。原本排在回應之後，2026-11-26 對調：回應的函式裡接著 parse 時可能讓出，讓出要先是 DOM 的 task，回應的函式才不用把「讓出了」交回 renderer | 做完，待審查 | 2026-11-26 |
 | 2c-4. 樣式表和 script 的回應交給 `dom_api` 的函式：解碼、parse 成 CSS、設 sheet、`load` 和 `error`、接著 parse；renderer 只交 bytes（第 21、24、27 條） | 做完，待審查 | 2026-11-26 |
 | 2c 的停損點：決定之外又多 3 個以上的 hook 或問 engine 的方法；要共用的 `Rc<RefCell>`，或新的「呼叫之後記得做」；DevTools 的 lifecycle 順序、WPT 或 `shell` 退步而修不乾淨；Speedometer 在使用者要求時量（2c 做完時提醒）。評估在 README 的「2c 做完時」：多兩個、沒有共用的狀態和新的呼叫之後的步驟、沒有退步 | 三項都順；Speedometer 未量 | 2026-11-26 |
-| 3、4：方向，2c 做完照停損點再看；iframe 晚一點的 `load` 在第 3 段（第 25 條） | — | |
+| 第 3 段的依賴盤點（`details.md` 的「第 3 段的依賴盤點」） | 做完；決定的事項第 29 到 32 條 | 2026-11-26 |
+| 3a. 導覽的帳在 engine 的 frame 上：`NavigationRequest` 搬到 `dom_api`，`FrameClient` 送出導覽時 engine 當場記在那個 frame 上（`dom_js` 的 `Frame`，換文件時帶過去；`dom_wasm` 的最上層），Browser 的 commit 和 `NavigationDropped` 經過 engine 拿；取消窗口結束由 client post 的 task 送（第 30 條）；同文件的歷史計數共用（第 31 條）。拿掉 `FrameRequest::Navigation`、`navigations_asked`、`RenderFrame` 的導覽、第 1 段的檢查 | 做完，待審查 | 2026-11-26 |
+| 3b. iframe 的 `src`（`FrameRequest::Navigate`）在 engine 那一側：fragment 的照現在的行為，經過 `FrameLayout` 捲、要畫面，traversal 的捲動也是（第 32 條）；`javascript:` 的 commit 記在 frame 上導覽的同一格，經過 `FrameClient::commit_here` 叫 renderer 跑（第 33 條）；晚一點的 `load` 是 DOM 延後的 element task（第 25 條）。拿掉 `RenderFrames` 的 `commits`、`owner_load_at` 和 `OwnerLoads` | 做完，待審查 | 2026-11-26 |
+| 3c. 拿掉只為了對帳的 `handle_frame_requests`（12 處裡的大約 11 處），還在的四處過期的讀法改成讀 engine 的 frame 的文件 | 做完，待審查（12 處拿掉 11 處，只留 `after_task` 的） | 2026-11-26 |
+| 3d. engine 的 frame 清單是唯一的一份（第 34 條）：`doc`、`doc_mut` 只回傳 engine 還有的 frame 的、初始文件的那一份第一次用到時建；走表的四處照 engine 的 frame；`ScriptEngine::frame_of_document`；`follow_child_frames` 只剩 task 之後的清理，`commit_child` 裡的那一次拿掉。停損點：要新的 hook、或要第 31 條之外的共用可變狀態；有地方在 task 結束之前就要初始文件的資料而晚建不行；DevTools、WPT、`shell`、`browser` 退步而修不乾淨 | 做完，待審查（停損點都沒碰到） | 2026-11-26 |
+| 第 3 段小步的停損點：決定之外又多 3 個以上的 hook 或問 engine 的方法；要第 31 條之外的共用可變狀態，或新的「呼叫之後記得做」；DevTools、WPT、`shell`、`browser` 退步而修不乾淨；Speedometer 在使用者要求時量（做完時提醒）。做完再評估完整的那一半（第 29 條） | — | |
 
 ## 驗收
 
@@ -31,6 +36,48 @@
 | --- | --- |
 
 ## 做過的檢查
+
+### 第 3 段做完時（2026-11-26，Linux：Fedora 45，3d 和 automation pipe 的修正之上，未 commit）
+
+- `cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`（3c 之後修了一個：`dom_js` 的 `navigate_child` 的 `let ... else` 改成 `?`）：通過。
+- `cargo test --workspace --no-fail-fast`：4900 個通過，0 個失敗（3c 之後第一次跑時停在下面的 `a_client_not_reading_doesnt_hold_machopo_up`）。
+- `test.py scenarios`（98 份）、`test.py reftest tests/reftests`（3c 之後）、`test.py wpt dom/events/`（改了 automation pipe：217 個，0 個非預期）、sanity 的 deps、spans、boundary、unsafe、tests、numerics、docs：通過。
+- **`automation_pipe::a_client_not_reading_doesnt_hold_machopo_up` 的原因和修正**（2a-3 記的那個）：automation pipe 的 reader 把命令送進 `commands`、讀到 EOF 時在另一個 channel 送結束，`windowless::drive` 用 crossbeam 的 `select!` 同時等兩個，兩邊都有東西時隨機挑：機器忙、主迴圈落後時，排著幾百個命令也可能先挑到結束、提早返回，寫出去的回答不夠填滿 pipe，writer 沒卡住，沒有那一行（另一次「結束得比 5 秒慢」是同一處的時序）。和這份 RFC 無關，原本就有；使用者決定在 0115 上另一個 commit 修：`drive` 收到結束時先照順序處理 `commands` 裡排著的（`run_command`，兩處共用），Chromium 的 pipe 也照順序處理訊息。新增 `automation_pipe::the_commands_before_the_inputs_end_are_answered`（送 1000 個命令後關掉輸入、讀完輸出，每個都有回答）：把舊的行為放回去當 mutant，三次都抓到；修好之後那個測試單獨跑 10 次、整套 `shell` 跑 3 次都通過。
+- 停損點：hook 和問 engine 的方法比原本多 `FrameClient::commit_here`（第 33 條）和 `ScriptEngine::navigation`、`take_navigation`、`take_commit_here`、`frame_of_document`；共用的可變狀態只有第 31 條的計數；沒有新的「呼叫之後記得做」（拿掉了 `FrameRequest` 的兩種導覽、`navigations_asked`、11 處 `handle_frame_requests`、第 1 段的檢查，`follow_child_frames` 只剩 task 之後的清理）；DevTools、WPT、`shell`、`browser` 沒有退步：都沒碰到。Speedometer 還沒量（使用者要求時量）。
+
+### 3d：engine 的 frame 清單是唯一的一份（2026-11-26，Linux：Fedora 45，debug build，3c 之上，未 commit）
+
+**做了什麼**：`doc`、`doc_mut` 先問 engine 有沒有那個 frame（`has_frame_document`：最上層的是 commit 時建的那一份；子 frame 的要 engine 還有它，初始文件的那一份第一次用到時建，`initial`、預設的計數和偵測，和原本 task 之後建的一樣），`doc` 改成 `&mut self`。走表的地方照 engine 的 frame（`frames_with_documents`：`frames_in_tree_order()`）：`scripts_blocked_by_sheets`、`check_network_idle`；`frame_of_document` 問 engine（新的 `ScriptEngine::frame_of_document`，`dom_js` 照 `Frames::of_document`、`dom_wasm` 照它唯一的文件）；`next_idleness_due`（`&self`）照舊走表（不見的 frame 留著的只會讓 loop 早醒一次）。`follow_child_frames` 改成 `forget_gone_frames`：只在 task 之後放掉 engine 沒有的 frame 的資料、取消不見的文件的 fetch、設 DevTools 的「frame 變了」；建的那一半、`commit_child` 裡的那一次、要 main frame 的那一行拿掉。test-gaps 拿掉兩條不再成立的（task 中間過期的清單、`commit_child` 不當場對帳）和一節早就過時的（`place_of` 已經不在了）。
+
+**測試**：`shell` 新增 `documents::a_child_frames_script_goes_on_once_its_blocking_sheet_is_gone`（子 frame 的 parser 被一個 5 秒的樣式表擋住，父 frame 拿掉它的 `<link>`，script 馬上跑）。`dom_api`、`dom_js`、`dom_wasm`、`renderer`、`shell`（744 個）、`browser` 的測試和 sanity 通過；WPT 同 3c 那一組：只有之前看過、原本就有的。
+
+**mutation test**（`mutants-3d.toml`，10 個，timeout 240 秒）：第一輪 12 個裡 6 個抓到；「只重試最上層的 frame 被樣式表擋住的 script」補了上面的測試之後抓到；「不照建立的順序走」（只差子 frame 之間重試和偵測的先後）和「清理時要 main frame」（iframe 加進、拿掉本身就讓 DOM 變了）是等價的，拿掉排序和那一行，不在清單裡。照舊沒抓到的三個：「`doc` 不先問 engine」（現在沒有地方在 frame 拿掉之後、task 結束之前讀它）和「不放掉不見的 frame 的資料」（只是記憶體）記進 `docs/test-gaps.md`；「frame 增減時不讓 DevTools 重新比對」是 test-gaps 裡原本就有的那一條。
+
+### 3c：只在 task 之後跟上 frame，之間讀的是 engine 的 frame（2026-11-26，Linux：Fedora 45，debug build，3b 之上，未 commit）
+
+**做了什麼**：`handle_frame_requests` 的 12 處呼叫拿掉 11 處，只留 `after_task` 的（跟上 engine 建了、丟了的 frame，和沒有 load sink 的 engine 的 blob URL）。拿掉的：`SetHistoryOffsetAndLength`（計數在送出時就算了，第 31 條）、輸入的 ack（導覽的畫面在 engine 的呼叫裡要了）、子資源的回應、traversal、`parser_stopped`（`start_loads` 只叫 engine 的 `send_sheet_fetches`）、`parse_document`、deferred script、送 script 和圖片的請求、`finish_load`、script 的回應：都是為了先記好導覽的帳，或在自己的 task 裡跑、前一個 task 的 `after_task` 已經跟上了。盤點列的過期的讀法改成讀 engine 的 frame：`finish_loads` 照 `frames_in_tree_order()`，`finish_load`、`frame_render_blocked` 和給 intersection 的被擋住渲染的子 frame 的文件讀 `engine_document`（子 frame 的：iframe 的 content document）；traversal 的那一處 3b 已經拿掉。`RenderFrames::ids` 只剩測試用，搬進測試；`child_documents` 改成私有。
+
+**測試**：`shell` 新增 `documents::a_render_blocked_child_frame_has_no_intersections`（子 frame 的樣式表晚 400 ms 到，它的 observer 的第一個 entry 在那之後）。`renderer`、`shell`（743 個）、`browser` 的測試通過；WPT 的 `html/browsers/`、iframe、`the-script-element/`、`html/syntax/parsing/`、`css/cssom/`、`intersection-observer/`、`resize-observer/`、`navigation-timing/`：之前的 unexpected pass 之外，多兩個：`module/credentials.sub.html`、`script-crossorigin-network.sub.html`，`git stash` 回到 3a 之前的程式照樣是：原本就有的，這台機器上。
+
+**mutation test**（`mutants-3c.toml`，5 個，timeout 240 秒）：3 個抓到；「子 frame 擋住渲染時不擋它的 intersection」補了上面的測試之後抓到；「載完時父 frame 先於子 frame」是等價的：父 frame 的 `check_completed` 等子 frame 的文件真的「載完」（它的 window 的 `load` task 跑完），同一輪 `finish_loads` 只是替它們排 task，先後不改結果。
+
+### 3b：iframe 不送給 Browser 的導覽和 traversal 的捲動在 engine 那一側（2026-11-26，Linux：Fedora 45，debug build，3a 之上，未 commit）
+
+**做了什麼**：`dom_api::child_navigation_here`（iframe 的導覽不送給 Browser 的種類：同一份文件的 fragment、`javascript:`）由 `dom_js` 判斷一次，`ChildNavigationAsked::here` 告訴 client 不送（client 不再自己判斷）。fragment 的由 `dom_api::navigate_child_to_fragment` 當場做（網址、經過 `FrameLayout` 捲；要畫面的是 iframe 的 attribute 的改變），別的 origin、載完的文件的 iframe 晚一點的 `load` 是 DOM 的 native timer（`NativeAction::OwnerLoad`，文件上記最後一次的編號：一串只發最後一次）。`javascript:` 的記在 `dom_js` 的 frame 上和送出的導覽同一格（`frames::Pending`），叫 `FrameClient::commit_here`（第 33 條），client post `InternalTask::ChildCommit(token)`，task 裡 `ScriptEngine::take_commit_here`。engine 拿走 frame 上的導覽時自己清掉「父 frame 的 `load` 要等它」（`take_pending`），renderer 的 `sync_child_navigating` 拿掉。traversal 的捲動和要畫面搬進 `traverse_within_document`（`popstate` 之後，照那時的網址）。拿掉 `FrameRequest::Navigate`（`FrameRequest` 只剩 blob URL）、3a 暫時的 `replaced`、`RenderFrames` 的 commit 佇列和晚一點的 `load`、`InternalTask::OwnerLoads`、`post_internal_after`、renderer 的 `scroll_to_fragment`、`navigate_to_fragment`、`child_navigation_goes_nowhere`、`same_but_fragment`；test-gaps 裡講 event loop 為晚一點的 `load` 醒來的那一列（那段程式早就不在了，native timer 照一般的 timer 叫醒 loop）。
+
+**測試**：`shell` 新增 `documents::an_iframes_fragment_navigation_scrolls_its_frame`、`documents::a_parents_load_waits_for_an_iframes_javascript_url`、`browser_view::a_traversal_within_the_document_is_drawn`；3a 的 `a_navigation_to_a_fragment_is_drawn` 和它都改成按鍵推進（每一步是按鍵排的 timer，前一步畫出來才按：原本 200 ms 一步的 timer 在機器忙時可能錯過中間的那一格）。iframe 晚一點的 `load` 由 `browser` 的 `navigation::a_cross_origin_frames_fragment_navigation_fires_its_iframes_load` 守著。`dom`、`dom_api`、`dom_js`、`dom_wasm`、`renderer`、`shell`（742 個）、`browser` 的測試和 sanity 通過。WPT 的導覽那幾個目錄：3a 的 3 個 unexpected pass 照舊；`navigation-timing/test-timing-attributes-dependent-on-document-load.html` 偶爾通過：`redirectStart` 是第一個 redirect 的請求開始減掉 time origin、小於 0 算 0，這台機器上兩者幾乎同時，大約十幾次大於 0 一次；`git stash` 回到 3a 之前的程式各跑 10 次，兩邊都是 0 次通過，看不出差別：在 `.ini` 標成 known intermittent，附上原因。
+
+**mutation test**（`mutants-3b.toml`，23 個，timeout 240 秒）：第一輪 24 個裡 19 個抓到。「iframe 的 fragment 不捲」補了 `an_iframes_fragment_navigation_scrolls_its_frame`、「traversal 不要畫面」補了 `a_traversal_within_the_document_is_drawn`、「`javascript:` 不擋父 frame 的 `load`」補了 `a_parents_load_waits_for_an_iframes_javascript_url` 之後抓到；「iframe 的 fragment 不要畫面」是等價的（設 `src` 本身就讓 DOM 變了、要畫面），拿掉那一行，不在清單裡；「Browser 開始的 commit 取代排著的 `javascript:`」照舊沒抓到，記進 `docs/test-gaps.md`。重跑漏抓的那幾個之前有一次基準沒通過，失敗的測試名字被我篩輸出時濾掉了；同一條指令接著跑 5 次都通過，沒有重現，原因沒找到（可能是上面改成按鍵推進的兩個視窗測試，不確定），之後再碰到時看完整的 log。
+
+### 3a：導覽的帳在 engine 的 frame 上（2026-11-26，Linux：Fedora 45，debug build，`fb1c1d3e` 之上，未 commit）
+
+**做了什麼**：`dom_api::NavigationRequest`（`begin_id`、iframe 的 `no-referrer`、到 `about:blank` 時發起的文件）和 `ScriptEngine::navigation`、`take_navigation`；`dom_js` 在 hook 送出的那次呼叫裡記在 `Frame::navigation`（`Frames::set` 換文件時帶著），`dom_wasm` 記在它唯一的 frame 上。renderer 在 Browser 的 `CommitNavigation`、`NavigationDropped`、DevTools 的 frame 清單裡跟 engine 拿；`RenderFrames` 只剩文件、`srcdoc` 和 `javascript:` 的 commit 佇列、晚一點的 `load`。取消窗口照第 30 條（`InternalTask::NavigationCancellationWindowEnded`，client 送出時 post），同文件的歷史計數照第 31 條（`OwnHistoryEntries` 是共用的 `Rc<Cell<u64>>`），同文件的導覽在 `history::navigate_from_requests` 裡當場 `schedule_frame`。拿掉 `FrameRequest::Navigation`、`frame_navigated`、`navigate_child`、`child_navigation_sent`、`about_blank_origin_source`、`child_no_referrer`、`navigations_asked`、`end_cancellation_windows`、第 1 段的 debug 檢查（`Asked`、booking）和為它留的 `_now` 包裝。`dom_js` 的測試改用記錄導覽的 client（`tests/it/navigations.rs`）。
+
+**查到的**：(1) 子 frame 的 `location` 導覽到同一份文件的 fragment、或到 `javascript:` 時，engine 的 `history::navigate` 自己就做了（同文件的導覽、文件的 `javascript:` task），renderer 原本的「沒有送出的子 frame 導覽」那一支走不到：不搬，拿掉。(2) 第一版先 `javascript:` 再一般的 `src` 時 `javascript:` 贏了：一般的在呼叫裡就記好了，`javascript:` 的在呼叫之後才排、拿走了它（「送和帳分開」本身）。3b 之前先照同一批 `FrameRequest` 的順序：後面有送出的導覽的 `javascript:` 不排（`replaced`）；3b 讓它們在同一格裡，這段拿掉。(3) 送出導覽時設「frame 變了」（DevTools 的 frame 清單）是多的：`navigating` 只用在新建的 frame 的初始文件，新建的那次呼叫已經設了；拿掉。`sync_child_navigating` 和 commit 時的 `navigating` 讀到的導覽一定已經拿走了，改成不讀。
+
+**測試**：`dom_js` 新增 `frames::the_navigations_sent_are_booked_on_their_frames`；`shell` 新增 `browser_view::a_navigation_to_a_fragment_is_drawn`（再到一次同一個 fragment：`:target` 和 DOM 都沒變，捲回去要畫面；`location.hash` 的 setter 對同一個 fragment 什麼都不做，用 `location.assign`）和 `documents::an_iframes_latest_navigation_commits`（`javascript:` 和一般的 `src` 兩種先後）。`dom_api`、`dom_js`、`dom_wasm`、`renderer`、`shell`（739 個）、`browser` 的測試和 sanity 通過；WPT 的 `html/browsers/history/`、`browsing-the-web/`、iframe、`navigation-timing/` 有 3 個 unexpected pass（`history_pushstate_url_rewriting.html`、`cross-document-traversal-cross-document-nav.html` 的 slow 那一個、`nav2-test-timing-persistent.html` 的 Part 1），`git stash` 回到 `fb1c1d3e` 的程式照樣是：原本就有的，這台機器上，預期結果沒改。
+
+**mutation test**（`mutants-3a.toml`，26 個，timeout 240 秒：改 `dom_js` 的要重編它、重新 link 後面每個測試 binary，約 140 秒）：24 個抓到。「換文件時帶著導覽」補了 `the_navigations_sent_are_booked_on_their_frames` 之後抓到；「同文件的導覽不要畫面」補了 `a_navigation_to_a_fragment_is_drawn` 之後抓到；`dom_wasm` 的「不記」原本的 mutant 編不過，改寫之後抓到。沒抓到的兩個都是 3b 拿掉的暫時的佇列：「拿走導覽時不丟排好的 commit」（要 Browser 的回應比 commit 的 internal task 先跑）和「排好的 commit 蓋過之後送出的導覽」（要兩次呼叫之間剛好沒跑到 commit 的 task），時序測不穩；3b 之後導覽和 `javascript:` 的 commit 在 frame 的同一格，結構上沒有這兩種。拿掉的五個（上面「查到的」(1)、(3)）不在清單裡。基準前兩次沒跑成：`git stash` 之後 `dom_js` 的增量輸出舊了，`shell` link 失敗（`undefined hidden symbol`，`cargo clean -p dom_js -p shell -p browser` 修好），之後基準要重編超過 150 秒。
 
 ### 2c 做完時（2026-11-26，Linux：Fedora 45，2c-4 之上，未 commit）
 

@@ -451,6 +451,8 @@ pub struct DocumentData {
     /// its host told (`window`'s `set_frame_navigating`), which delays its
     /// parent's load event as it loads (Blink's provisional navigation).
     pub(crate) frame_navigating: Cell<bool>,
+    /// The latest `load` its iframe puts off (`window`'s `next_owner_load`).
+    pub(crate) owner_load: Cell<u64>,
     /// HTML's unload counter: its `pagehide` and `unload` being fired
     /// (`window`'s `unloading`), while which it makes no child frame and
     /// navigates nowhere.

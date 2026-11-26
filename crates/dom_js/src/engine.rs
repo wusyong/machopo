@@ -401,6 +401,13 @@ impl ScriptEngine for V8Engine {
         self.state().frames.of_token(token).map(|frame| frame.id)
     }
 
+    fn frame_of_document(&mut self, document: dom::NodeId) -> Option<dom_api::FrameId> {
+        self.state()
+            .frames
+            .of_document(document)
+            .map(|frame| frame.id)
+    }
+
     fn frame_parent(&mut self, frame: dom_api::FrameId) -> Option<(dom_api::FrameId, NodeRoot)> {
         let frame = self.state().frames.get(frame)?;
         Some((frame.parent?, frame.owner.clone()?))
@@ -653,6 +660,38 @@ impl ScriptEngine for V8Engine {
 
     fn take_frame_requests(&mut self) -> Vec<dom_api::FrameRequest> {
         std::mem::take(&mut self.state().frames.requests)
+    }
+
+    fn navigation(&mut self, frame: dom_api::FrameId) -> Option<dom_api::NavigationRequest> {
+        match self.state().frames.get(frame)?.navigation.as_ref()? {
+            crate::frames::Pending::Sent(request) => Some(request.clone()),
+            crate::frames::Pending::Here(_) => None,
+        }
+    }
+
+    fn take_navigation(
+        &mut self,
+        frame: dom_api::FrameId,
+        begin_id: Option<u64>,
+    ) -> Option<dom_api::NavigationRequest> {
+        let taken = crate::frames::take_pending(self.state(), frame, |pending| {
+            matches!(pending, crate::frames::Pending::Sent(booked)
+                if begin_id.is_none_or(|id| booked.begin_id == id))
+        });
+        match taken? {
+            crate::frames::Pending::Sent(request) => Some(request),
+            crate::frames::Pending::Here(_) => None,
+        }
+    }
+
+    fn take_commit_here(&mut self, frame: dom_api::FrameId) -> Option<url::Url> {
+        let taken = crate::frames::take_pending(self.state(), frame, |pending| {
+            matches!(pending, crate::frames::Pending::Here(_))
+        });
+        match taken? {
+            crate::frames::Pending::Here(url) => Some(url),
+            crate::frames::Pending::Sent(_) => None,
+        }
     }
 
     fn document_loader(&mut self, frame: dom_api::FrameId) -> Option<&mut dom_api::DocumentLoader> {

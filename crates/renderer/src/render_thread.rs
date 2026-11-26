@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
@@ -337,15 +338,25 @@ pub fn spawn_renderer_main_thread(
 /// one; here every frame is in the one renderer, which hears of every
 /// commit, a child frame's too. Not the engine's: a new engine (a page of
 /// the other kind) doesn't start the count again, the browser's goes on.
-#[derive(Default)]
-struct OwnHistoryEntries {
-    sent: base::SequenceNumber<u64>,
+///
+/// The render thread reads it, its frame client counts them as it sends
+/// them (in the engine's call): both the renderer's, on this thread, so
+/// they share one cell, which outlasts the client an engine has (Chromium
+/// keeps the count in content's `RenderViewImpl`, not in Blink).
+#[derive(Clone, Default)]
+pub(super) struct OwnHistoryEntries {
+    sent: Rc<Cell<u64>>,
 }
 
 impl OwnHistoryEntries {
     /// One more is on its way to the browser.
-    fn sent_one(&mut self) {
-        self.sent.get_next();
+    pub(super) fn sent_one(&self) {
+        let sent = self
+            .sent
+            .get()
+            .checked_add(1)
+            .expect("fewer entries than a u64 counts");
+        self.sent.set(sent);
     }
 
     /// The place the browser gave, `index` of `length` as it was when it
@@ -353,7 +364,7 @@ impl OwnHistoryEntries {
     fn place(&self, index: u32, length: u32, heard: u64) -> dom::SessionHistory {
         // The browser counts them as it has their messages, which were
         // all sent before: it has never heard of more than were sent.
-        let unheard = self.sent.peek().saturating_sub(heard);
+        let unheard = self.sent.get().saturating_sub(heard);
         dom::SessionHistory { index, length }.after_new_entries(unheard)
     }
 }
@@ -467,10 +478,6 @@ struct RenderThread {
     /// (`RendererMsg::SetFocus`), for an engine not made yet.
     page_focused: bool,
     own_history_entries: OwnHistoryEntries,
-    /// The navigations the task that runs asked of the browser, by their
-    /// numbers: the browser commits none of them till the task is over
-    /// (`end_cancellation_windows`).
-    navigations_asked: Vec<u64>,
     /// The parser's scripts that wait for sheets were tried again in the
     /// task that runs (`InternalTask::RetryBlockedScripts`): not posted
     /// again for it.
@@ -634,7 +641,6 @@ impl RenderThread {
             page_hidden: false,
             page_focused: false,
             own_history_entries: OwnHistoryEntries::default(),
-            navigations_asked: Vec::new(),
             retried_blocked_scripts: false,
             pending_input,
             clock: Clock::new(),
@@ -715,7 +721,7 @@ impl RenderThread {
     /// each does checks whether it is still to be done.
     fn run_internal(&mut self, task: InternalTask) {
         match task {
-            InternalTask::ChildCommits => self.run_child_commit(),
+            InternalTask::ChildCommit(frame) => self.run_child_commit(frame),
             InternalTask::RetryBlockedScripts => {
                 self.retry_scripts_blocked_by_sheets();
                 // Not posted again for itself (`after_task`).
@@ -723,7 +729,11 @@ impl RenderThread {
             }
             InternalTask::CaretBlink => self.blink_caret(),
             InternalTask::Intersections => self.intersections_due_now(),
-            InternalTask::OwnerLoads => self.fire_due_owner_loads(),
+            InternalTask::NavigationCancellationWindowEnded(id) => {
+                let _ = self
+                    .to_browser
+                    .send(RendererHostMsg::NavigationCancellationWindowEnded { ids: vec![id] });
+            }
             InternalTask::NewContentTimeout => self.new_content_rendering_timeout(),
             // The engine's platform tasks, with a checkpoint after them
             // (Blink runs Oilpan's and V8's on the main thread's scheduler):
@@ -742,8 +752,8 @@ impl RenderThread {
     }
 
     fn after_task(&mut self) {
-        // What its script asked of the frame (a dropdown; the navigations
-        // and blob URLs the engine's calls left), now that none runs.
+        // What its script asked of the frame (a dropdown; the frames its
+        // engine calls made and let go), now that none runs.
         self.handle_popup_requests();
         self.handle_frame_requests();
         self.start_image_fetches();
@@ -754,7 +764,6 @@ impl RenderThread {
         self.log_canvas_raster_failure();
         self.update_title();
         self.blob_urls.flush_revoked();
-        self.end_cancellation_windows();
         // The parser's scripts that wait for a sheet that blocks scripts,
         // tried again after it: it may have removed the sheet's `<link>`,
         // or made it no stylesheet, so they run without its response.
@@ -868,22 +877,6 @@ impl RenderThread {
                 let _ = to_browser.send(RendererHostMsg::IdleFrameReady { frame_token });
             }));
         self.update_begin_main_frame();
-    }
-
-    /// The navigations the task asked for may commit now
-    /// (`NavigationCancellationWindowEnded`; Blink posts
-    /// `NotifyNavigationCancellationWindowEnded` to run after the task):
-    /// after what the task asked before them went (its loads, the blob URLs
-    /// it revoked), and with none of them replaced by another of the same
-    /// task's committing first.
-    fn end_cancellation_windows(&mut self) {
-        if self.navigations_asked.is_empty() {
-            return;
-        }
-        let ids = std::mem::take(&mut self.navigations_asked);
-        let _ = self
-            .to_browser
-            .send(RendererHostMsg::NavigationCancellationWindowEnded { ids });
     }
 
     /// What the dedicated worker numbered `id` sent its `Worker`, given to
@@ -1155,7 +1148,8 @@ impl RenderThread {
         let committed = if main_frame {
             let origin_source = begin_id
                 .zip(self.render_frames.top())
-                .and_then(|(id, top)| self.render_frames.take_navigation(top, id))
+                .zip(self.engine.as_mut())
+                .and_then(|((id, top), engine)| engine.take_navigation(top, Some(id)))
                 .and_then(|asked| asked.origin_source);
             self.commit_navigation(
                 navigation_id,
@@ -1267,11 +1261,8 @@ impl RenderThread {
                 length,
                 entries_heard,
             } => {
-                // The new entries script made go to the browser first, so
-                // they are counted among those it hadn't heard of: a task's
-                // went as it ended, an engine call's outside a task would
-                // wait else, and this place would drop them.
-                self.handle_frame_requests();
+                // The new entries script made were counted as they went
+                // (`OwnHistoryEntries`), among those it hadn't heard of.
                 let history = self.own_history_entries.place(index, length, entries_heard);
                 if let Some(engine) = &mut self.engine {
                     engine.set_session_history(history);
@@ -1656,15 +1647,6 @@ impl RenderThread {
         }
     }
 
-    /// `task` posted to come `after` milliseconds from now (the renderer's
-    /// clock's).
-    pub(super) fn post_internal_after(&self, task: InternalTask, after: f64) {
-        let after = Duration::try_from_secs_f64(after.max(0.0) / 1000.0).unwrap_or(Duration::ZERO);
-        if let Some(at) = Instant::now().checked_add(after) {
-            self.scheduler.post_internal_at(task, at);
-        }
-    }
-
     /// The caret shows or hides if it is time (Blink's `FrameCaret::
     /// CaretBlinkTimerFired`): its block paints again in a main frame.
     fn blink_caret(&mut self) {
@@ -1751,11 +1733,10 @@ impl RenderThread {
             return;
         }
         // A dropdown the input opened or closed goes first, before the
-        // browser hears the input is done; so does a navigation it asked
-        // for (a link it followed, by a key too), whose frame the ack then
-        // waits for when it scrolls to a fragment.
+        // browser hears the input is done. A navigation it asked for (a
+        // link it followed, by a key too) went as it was asked, and one to
+        // a fragment asked for the frame the ack then waits for.
         self.handle_popup_requests();
-        self.handle_frame_requests();
         self.popup_closed_by_press = None;
         if self.widget().main_frame_requests == requests
             || !self.widget().layer_tree_host.is_visible()
@@ -1891,9 +1872,6 @@ impl RenderThread {
     /// navigation, of whichever frame asked for it. One for a document
     /// that has gone (or a navigation another replaced) is dropped.
     fn did_receive_resource(&mut self, request_id: u64, result: LoadResult) {
-        // What the engine asked of the host since the loop last looked,
-        // and its frames followed, before the response finds its document.
-        self.handle_frame_requests();
         self.network_agent.did_finish(request_id, &result);
         // A `fetch()`'s, an image's and a queued script's are the DOM's
         // records'.

@@ -1,0 +1,182 @@
+# Stage 3b's mutants (an iframe's navigations that go nowhere, and the traversal's scroll, in the engine): `python3 scripts/test.py mutate rfcs/0115-render-frame/mutants-3b.toml`.
+# `automation_pipe::a_client_not_reading_doesnt_hold_machopo_up` is left out as in 2a-3 (progress's 2a-3).
+# 240 s: a mutant of `dom` or `dom_api` rebuilds every crate after it and relinks every test binary (as 3a's).
+test = ["sh", "-c", "cargo test -q -p dom_api --test it && cargo test -q -p dom_js --test it && cargo test -q -p dom_wasm --test it && cargo test -q -p renderer && cargo test -q -p browser --test it navigation:: && cargo test -q -p shell --test it -- --skip webdriver::a_session_with_a_hung_page_ends_in_time --skip automation_pipe::a_client_not_reading_doesnt_hold_machopo_up"]
+timeout = 240
+
+[[mutant]]
+name = "an iframe's loads put off aren't numbered anew"
+file = "crates/dom/src/window.rs"
+from = '''        data.owner_load.set(next);'''
+to = '''        data.owner_load.set(next - 1);'''
+
+[[mutant]]
+name = "an iframe's javascript: URL is sent"
+file = "crates/dom_api/src/frame.rs"
+from = '''        return Some(NavigationHere::JavaScript(url));'''
+to = '''        return None;'''
+
+[[mutant]]
+name = "an iframe's other document is a fragment"
+file = "crates/dom_api/src/frame.rs"
+from = '''    (without(&current) == without(&url)).then_some(NavigationHere::Fragment(url))'''
+to = '''    true.then_some(NavigationHere::Fragment(url))'''
+
+[[mutant]]
+name = "an iframe's fragment isn't its document's URL"
+file = "crates/dom_api/src/frame.rs"
+from = '''        cx.set_document_url(document, url.as_str());
+        let id = cx.node_id(document);'''
+to = '''        let id = cx.node_id(document);'''
+
+[[mutant]]
+name = "an iframe's fragment isn't scrolled to"
+file = "crates/dom_api/src/frame.rs"
+from = '''            cx.lend_layout(document, |layout| layout.scroll_to_fragment(id, target));
+        }
+        if cx.is_completely_loaded'''
+to = '''            let _ = (id, target);
+        }
+        if cx.is_completely_loaded'''
+
+[[mutant]]
+name = "the same origin's iframe fires load later"
+file = "crates/dom_api/src/frame.rs"
+from = '''        if cx.is_completely_loaded(document) && !same_origin(cx, document, cx.document_of(owner)) {'''
+to = '''        if cx.is_completely_loaded(document) {'''
+
+[[mutant]]
+name = "a loading iframe fires load later"
+file = "crates/dom_api/src/frame.rs"
+from = '''        if cx.is_completely_loaded(document) && !same_origin(cx, document, cx.document_of(owner)) {'''
+to = '''        if !same_origin(cx, document, cx.document_of(owner)) {'''
+
+[[mutant]]
+name = "an iframe's load isn't put off"
+file = "crates/dom_api/src/frame.rs"
+from = '''const OWNER_LOAD_DELAY_MS: f64 = 100.0;'''
+to = '''const OWNER_LOAD_DELAY_MS: f64 = 0.0;'''
+
+[[mutant]]
+name = "every load put off fires"
+file = "crates/dom_api/src/frame.rs"
+from = '''            .is_some_and(|document| cx.owner_load(document) == number)'''
+to = '''            .is_some_and(|_| true)'''
+
+[[mutant]]
+name = "an iframe's load put off never fires"
+file = "crates/dom_api/src/controls.rs"
+from = '''        NativeAction::OwnerLoad => crate::frame::owner_load_due(host, element, data),'''
+to = '''        NativeAction::OwnerLoad => {}'''
+
+[[mutant]]
+name = "a manual traversal scrolls"
+file = "crates/dom_api/src/history.rs"
+from = '''        if !manual
+            && new_url.fragment().is_some()'''
+to = '''        if new_url.fragment().is_some()'''
+
+[[mutant]]
+name = "a traversal doesn't scroll"
+file = "crates/dom_api/src/history.rs"
+from = '''            let id = cx.node_id(document);
+            cx.lend_layout(document, |layout| layout.scroll_to_fragment(id, target));
+        }
+        cx.lend_layout(document, |layout| layout.schedule_frame());
+    });
+    true'''
+to = '''            let _ = (cx.node_id(document), target);
+        }
+        cx.lend_layout(document, |layout| layout.schedule_frame());
+    });
+    true'''
+
+[[mutant]]
+name = "a traversal isn't drawn"
+file = "crates/dom_api/src/history.rs"
+from = '''        cx.lend_layout(document, |layout| layout.schedule_frame());
+    });
+    true'''
+to = '''    });
+    true'''
+
+[[mutant]]
+name = "the client isn't told the iframe's navigation goes nowhere"
+file = "crates/dom_js/src/frames.rs"
+from = '''        here: here.is_some(),'''
+to = '''        here: false,'''
+
+[[mutant]]
+name = "a javascript: URL doesn't hold its parent's load"
+file = "crates/dom_js/src/frames.rs"
+from = '''                .mutate(|cx| cx.set_frame_navigating(frame_document.get(cx.gc), true));
+            if let Some(found) = state.frames.get_mut(id) {
+                found.navigation = Some(Pending::Here(url));'''
+to = '''                .mutate(|cx| cx.set_frame_navigating(frame_document.get(cx.gc), false));
+            if let Some(found) = state.frames.get_mut(id) {
+                found.navigation = Some(Pending::Here(url));'''
+
+[[mutant]]
+name = "a javascript: URL isn't booked"
+file = "crates/dom_js/src/frames.rs"
+from = '''                found.navigation = Some(Pending::Here(url));'''
+to = '''                let _ = url;'''
+
+[[mutant]]
+name = "the host isn't told to commit a javascript: URL"
+file = "crates/dom_js/src/frames.rs"
+from = '''                client.commit_here(token);'''
+to = '''                let _ = (client, token);'''
+
+[[mutant]]
+name = "a navigation taken still holds the parent's load"
+file = "crates/dom_js/src/frames.rs"
+from = '''            .mutate(|cx| cx.set_frame_navigating(document.get(cx.gc), false));
+    }
+    Some(pending)'''
+to = '''            .mutate(|cx| cx.set_frame_navigating(document.get(cx.gc), true));
+    }
+    Some(pending)'''
+
+[[mutant]]
+name = "the browser's commit takes a javascript: URL's place"
+file = "crates/dom_js/src/engine.rs"
+from = '''            matches!(pending, crate::frames::Pending::Sent(booked)
+                if begin_id.is_none_or(|id| booked.begin_id == id))'''
+to = '''            matches!(pending, crate::frames::Pending::Sent(booked)
+                if begin_id.is_none_or(|id| booked.begin_id == id)) || begin_id.is_none()'''
+
+[[mutant]]
+name = "an iframe's fragment isn't gone to"
+file = "crates/dom_js/src/listeners.rs"
+from = '''            dom_api::navigate_child_to_fragment(self, owner, &fragment);'''
+to = '''            let _ = fragment;'''
+
+[[mutant]]
+name = "the renderer posts no commit of a javascript: URL"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        self.scheduler
+            .post_internal(InternalTask::ChildCommit(frame));'''
+to = '''        let _ = frame;'''
+
+[[mutant]]
+name = "the client sends a navigation that goes nowhere"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        if asked.here {
+            return None;
+        }'''
+to = '''        if asked.here && false {
+            return None;
+        }'''
+
+[[mutant]]
+name = "the browser doesn't hear of a javascript: URL's commit"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        if let Some(token) = self.child_token(frame) {
+            let _ = self.to_browser.send(RendererHostMsg::DidCommitNavigation {
+                frame: token,
+                navigation_id: RENDERER_COMMIT,'''
+to = '''        if let Some(token) = self.child_token(frame).filter(|_| false) {
+            let _ = self.to_browser.send(RendererHostMsg::DidCommitNavigation {
+                frame: token,
+                navigation_id: RENDERER_COMMIT,'''

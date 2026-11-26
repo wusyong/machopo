@@ -34,6 +34,40 @@ pub(crate) struct Frame {
     /// Its document's loading, the host's to start (`set_document_loader`):
     /// a new document's frame starts with none.
     pub(crate) loader: Option<Box<dom_api::DocumentLoader>>,
+    /// Its navigation on its way, booked as it was asked for, till the
+    /// host takes it (`ScriptEngine::take_navigation`, `take_commit_here`):
+    /// the frame's, so a new document keeps it (the browser's commit of
+    /// another one may come before it).
+    pub(crate) navigation: Option<Pending>,
+}
+
+/// A frame's navigation on its way: one to another document its host sent
+/// the browser, till the browser commits or drops it; or one to a
+/// `javascript:` URL, whose empty document its host commits
+/// (`FrameClient::commit_here`). One a frame: one asked for after takes
+/// its place.
+#[derive(Clone)]
+pub(crate) enum Pending {
+    Sent(dom_api::NavigationRequest),
+    Here(url::Url),
+}
+
+/// `frame`'s navigation on its way taken, if `pick` picks it: a child
+/// frame's no longer delays its parent's `load`.
+pub(crate) fn take_pending(
+    state: &mut crate::state::State,
+    frame: FrameId,
+    pick: impl FnOnce(&Pending) -> bool,
+) -> Option<Pending> {
+    let found = state.frames.get_mut(frame)?;
+    let pending = found.navigation.take_if(|pending| pick(pending))?;
+    if found.parent.is_some() {
+        let document = found.document.clone();
+        state
+            .dom
+            .mutate(|cx| cx.set_frame_navigating(document.get(cx.gc), false));
+    }
+    Some(pending)
 }
 
 #[derive(Default)]
@@ -126,12 +160,13 @@ impl Frames {
 
     /// `frame`'s realm and document are these now (a new one's, or one it
     /// navigated to): its token the one it had (a frame's own as it
-    /// navigates), its modules the realm's, kept if the realm is (the
-    /// initial `about:blank`'s window reused).
+    /// navigates), and its navigation on its way, its modules the realm's,
+    /// kept if the realm is (the initial `about:blank`'s window reused).
     pub(crate) fn set(&mut self, mut frame: Frame) {
         match self.frames.iter_mut().find(|old| old.id == frame.id) {
             Some(old) => {
                 frame.token = old.token;
+                frame.navigation = old.navigation.take();
                 if old.context == frame.context {
                     frame.modules = old.modules.take();
                 }
@@ -236,6 +271,7 @@ impl Frame {
             initial,
             modules: None,
             loader: None,
+            navigation: None,
         }
     }
 }
@@ -368,14 +404,17 @@ pub(crate) fn create_child(scope: &mut Scope<'_, '_, '_>, owner: &NodeRoot) -> O
 
 /// The frame `owner`'s content document is shown in is to navigate: the
 /// host told, its client at once (`FrameClient::navigate_child`, with the
-/// stack of the script that asked if the DOM wants requests' stacks),
-/// then as the call ends (`FrameRequest::Navigate`). A navigation the
-/// client sent delays its parent's `load` from now (`frame_navigating`).
+/// stack of the script that asked if the DOM wants requests' stacks); one
+/// the client sent, or to a `javascript:` URL, booked on the frame, which
+/// delays its parent's `load` from now (`frame_navigating`). One that goes
+/// nowhere (`NavigationHere`): a `javascript:` URL's commit its host's
+/// (`FrameClient::commit_here`); a fragment's URL, given back for the
+/// caller to go to (`dom_api::navigate_child_to_fragment`).
 pub(crate) fn navigate_child(
     scope: &mut Scope<'_, '_, '_>,
     owner: &NodeRoot,
     navigation: ChildNavigation,
-) {
+) -> Option<url::Url> {
     let stack = scope
         .state()
         .0
@@ -388,22 +427,25 @@ pub(crate) fn navigate_child(
         cx.content_document(owner.get(cx.gc))
             .map(|document| cx.node_id(document))
     });
-    let Some(frame) = document.and_then(|document| state.frames.of_document(document)) else {
-        return;
-    };
+    let frame = document.and_then(|document| state.frames.of_document(document))?;
     let (id, parent, initial, frame_document) = (
         frame.id,
         frame.parent,
         frame.initial,
         frame.document.clone(),
     );
+    let here = state
+        .dom
+        .read(|cx| dom_api::child_navigation_here(cx, frame_document.get(cx.gc), &navigation));
+    let token = state.frames.token(id);
     let asked = dom_api::ChildNavigationAsked {
-        frame: state.frames.token(id),
+        frame: token,
         parent: parent.and_then(|parent| state.frames.token(parent)),
         owner,
         document: &frame_document,
         initial,
         navigation: &navigation,
+        here: here.is_some(),
         stack: stack.as_deref(),
     };
     let begin_id = state
@@ -411,22 +453,58 @@ pub(crate) fn navigate_child(
         .client
         .as_mut()
         .and_then(|client| client.navigate_child(&asked, &state.dom));
-    if begin_id.is_some() {
-        state
-            .dom
-            .mutate(|cx| cx.set_frame_navigating(frame_document.get(cx.gc), true));
+    if let Some(begin_id) = begin_id {
+        // Booked as it went, from its parent's document (what an
+        // `about:blank` has its origin from), its iframe's policy.
+        let parent_document = parent
+            .and_then(|parent| state.frames.get(parent))
+            .map(|parent| parent.document.clone());
+        let url = match &navigation {
+            dom_api::ChildNavigation::Src(src) => src.as_str(),
+            dom_api::ChildNavigation::Srcdoc(_) => "about:srcdoc",
+            dom_api::ChildNavigation::AboutBlank => "about:blank",
+        };
+        let request = parent_document.map(|parent_document| {
+            state.dom.mutate(|cx| {
+                cx.set_frame_navigating(frame_document.get(cx.gc), true);
+                dom_api::NavigationRequest::new(
+                    cx,
+                    begin_id,
+                    Some(owner.get(cx.gc)),
+                    parent_document.get(cx.gc),
+                    Some(url),
+                )
+            })
+        });
+        if let Some(found) = state.frames.get_mut(id) {
+            found.navigation = request.map(Pending::Sent);
+        }
+        return None;
     }
-    state.frames.requests.push(FrameRequest::Navigate {
-        frame: id,
-        navigation,
-        begin_id,
-    });
+    match here? {
+        // The caller's to do (`dom_api::navigate_child_to_fragment`).
+        dom_api::NavigationHere::Fragment(url) => Some(url),
+        // Booked in place of what was, its parent's `load` waiting for it,
+        // its host told to commit it.
+        dom_api::NavigationHere::JavaScript(url) => {
+            state
+                .dom
+                .mutate(|cx| cx.set_frame_navigating(frame_document.get(cx.gc), true));
+            if let Some(found) = state.frames.get_mut(id) {
+                found.navigation = Some(Pending::Here(url));
+            }
+            if let (Some(client), Some(token)) = (state.frames.client.as_mut(), token) {
+                client.commit_here(token);
+            }
+            None
+        }
+    }
 }
 
 /// The frame showing `document` navigated, or is to (`FrameNavigation`),
 /// as the frame showing `initiator` asked: the host told, its client at
 /// once (`FrameClient::navigate`: what goes to the browser goes now), then
-/// as the call ends (`FrameRequest::Navigation`). One to another document
+/// booked on the frame (`Frame::navigation`). One to another document
 /// that a document no frame shows now asked for goes nowhere (HTML
 /// navigates from a fully active document alone).
 pub(crate) fn navigate(
@@ -445,6 +523,7 @@ pub(crate) fn navigate(
     let Some(frame) = state.frames.of_document(id).map(|frame| frame.id) else {
         return;
     };
+    let initiator_document = initiator.clone();
     let initiator = match state.frames.of_document(by) {
         Some(initiator) => initiator.id,
         None if matches!(navigation, dom::FrameNavigation::To { .. }) => return,
@@ -462,18 +541,32 @@ pub(crate) fn navigate(
         .client
         .as_mut()
         .and_then(|client| client.navigate(&asked, &state.dom));
-    // A child frame's delays its parent's `load` from now.
-    if begin_id.is_some() && frame != TOP {
-        state
-            .dom
-            .mutate(|cx| cx.set_frame_navigating(document.get(cx.gc), true));
+    // Booked on the frame as it went (one to another document, a reload),
+    // from the document that asked; a child frame's delays its parent's
+    // `load` from now.
+    if let Some(begin_id) = begin_id {
+        let url = match &navigation {
+            dom::FrameNavigation::To { url, .. } => Some(url.as_str()),
+            _ => None,
+        };
+        let child = frame != TOP;
+        let request = state.dom.mutate(|cx| {
+            let document = document.get(cx.gc);
+            if child {
+                cx.set_frame_navigating(document, true);
+            }
+            dom_api::NavigationRequest::new(
+                cx,
+                begin_id,
+                cx.frame_owner(document).filter(|_| child),
+                initiator_document.get(cx.gc),
+                url,
+            )
+        });
+        if let Some(found) = state.frames.get_mut(frame) {
+            found.navigation = Some(Pending::Sent(request));
+        }
     }
-    state.frames.requests.push(FrameRequest::Navigation {
-        frame,
-        initiator,
-        navigation,
-        begin_id,
-    });
 }
 
 /// A blob URL of the realm of the frame showing `document`: the host told.

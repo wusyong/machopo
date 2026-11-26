@@ -239,6 +239,9 @@ pub enum NativeAction {
     SpinRepeat,
     /// `AbortSignal.timeout()`'s signal (the timer's target) aborts.
     AbortTimeout,
+    /// An iframe's `load`, put off after a navigation within its frame's
+    /// document, of the one its data numbers (`Cx::owner_load`).
+    OwnerLoad,
 }
 
 impl NativeAction {
@@ -246,13 +249,15 @@ impl NativeAction {
         match self {
             Self::SpinRepeat => 0,
             Self::AbortTimeout => 1,
+            Self::OwnerLoad => 2,
         }
     }
 
     fn from_raw(raw: u8) -> Self {
         match raw {
             0 => Self::SpinRepeat,
-            _ => Self::AbortTimeout,
+            1 => Self::AbortTimeout,
+            _ => Self::OwnerLoad,
         }
     }
 }
@@ -1005,6 +1010,26 @@ impl<'gc> Cx<'_, 'gc> {
             .is_some_and(|data| data.frame_navigating.get())
     }
 
+    /// The latest of the `load`s `document`'s iframe puts off
+    /// (`NativeAction::OwnerLoad`), by number: none (0) yet.
+    pub fn owner_load(&self, document: NodeRef<'gc>) -> u64 {
+        self.document_data(document)
+            .map_or(0, |data| data.owner_load.get())
+    }
+
+    /// Another `load` `document`'s iframe puts off, in place of the one
+    /// before: its number.
+    pub fn next_owner_load(&self, document: NodeRef<'gc>) -> u64 {
+        let data = self.ensure_document_data(document);
+        let next = data
+            .owner_load
+            .get()
+            .checked_add(1)
+            .expect("fewer than 2^64 loads put off");
+        data.owner_load.set(next);
+        next
+    }
+
     /// `document`'s frame has a navigation on its way (`navigating`) or
     /// none now, as its host has it: one that commits brings a document
     /// of its own, which has none.
@@ -1620,6 +1645,7 @@ pub(crate) fn new_document_data<'gc>() -> DocumentDataInit<'gc> {
         load_queued: Cell::new(false),
         load_ended: Cell::new(false),
         frame_navigating: Cell::new(false),
+        owner_load: Cell::new(0),
         unload_counter: Cell::new(0),
         javascript_urls: elise::External::new(Cell::new(Vec::new())),
         javascript_url_task: Cell::new(false),

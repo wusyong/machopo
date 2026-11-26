@@ -1336,6 +1336,66 @@ fn tabs_open_switch_and_close_with_shortcuts() {
     window.close();
 }
 
+/// A navigation within the document that changes nothing else is drawn:
+/// script going to the fragment it is at again, scrolled away from
+/// (`location.assign`: no `hashchange`, its target the same; the `hash`
+/// setter does nothing for the same fragment), scrolls back to it in the next
+/// frame, the engine asking for it as it navigates.
+#[test]
+fn a_navigation_to_a_fragment_is_drawn() {
+    let server = server(&[(
+        "/",
+        "<!DOCTYPE html><body style='margin: 0'>\
+         <div style='height: 2000px; background: red'></div>\
+         <div id=far style='height: 2000px; background: blue'></div>\
+         <script>\
+           const steps = [() => location.hash = '#far', () => scrollTo(0, 0),\
+                          () => location.assign('#far')];\
+           addEventListener('keydown', () => setTimeout(steps.shift(), 50));\
+         </script>",
+    )]);
+    let mut window = Window::open(Size::new(400, 300), 1.0);
+    window.load(&server.url("/"));
+    // Each step in a timer a key starts, once the one before shows: the
+    // key's own frame comes before it.
+    window.until_pixel(1, 299, RED);
+    for color in [BLUE, RED, BLUE] {
+        window.key(NamedKey::Escape);
+        window.until_pixel(1, 299, color);
+    }
+    window.close();
+}
+
+/// The browser's traversal within the document that changes nothing else
+/// is drawn: back to an entry of the fragment it is at (its target the
+/// same, no `hashchange`), scrolled away from, scrolls to it again in the
+/// next frame, the engine asking for it as it traverses.
+#[test]
+fn a_traversal_within_the_document_is_drawn() {
+    let server = server(&[(
+        "/",
+        "<!DOCTYPE html><body style='margin: 0'>\
+         <div style='height: 2000px; background: red'></div>\
+         <div id=far style='height: 2000px; background: blue'></div>\
+         <script>\
+           const steps = [() => location.hash = '#far',\
+                          () => { history.pushState(null, '', '#far'); scrollTo(0, 0); },\
+                          () => history.back()];\
+           addEventListener('keydown', () => setTimeout(steps.shift(), 50));\
+         </script>",
+    )]);
+    let mut window = Window::open(Size::new(400, 300), 1.0);
+    window.load(&server.url("/"));
+    // Each step in a timer a key starts, once the one before shows: the
+    // key's own frame comes before it.
+    window.until_pixel(1, 299, RED);
+    for color in [BLUE, RED, BLUE] {
+        window.key(NamedKey::Escape);
+        window.until_pixel(1, 299, color);
+    }
+    window.close();
+}
+
 /// Asks for a frame after each one, changing it.
 const ANIMATED: &str = "<!DOCTYPE html><style>.a { background-color: green }</style>
      <script>let n = 0;

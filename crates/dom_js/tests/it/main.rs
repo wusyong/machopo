@@ -48,6 +48,7 @@ mod media_queries;
 mod messages;
 mod mutation_observer;
 mod named_properties;
+mod navigations;
 mod navigator;
 mod navigator_apis;
 mod node_tree;

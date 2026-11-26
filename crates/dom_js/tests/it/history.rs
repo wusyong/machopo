@@ -3,25 +3,33 @@
 //! fragment (its URL, `:target`, `popstate` as the call ends, `hashchange`
 //! in a task), the host's traversal and restored state, and the
 //! `PopStateEvent` and `HashChangeEvent` interfaces: in an engine's
-//! top-level frame, whose navigations are the frame requests it gives.
+//! top-level frame, whose navigations its frame client is told.
 
 use std::time::Instant;
 
 use dom::{FrameNavigation, SessionHistory};
-use dom_api::{ClassicScript, DocumentReadiness, EngineSettings, FrameRequest, ScriptEngine};
+use dom_api::{ClassicScript, DocumentReadiness, EngineSettings, FrameId, ScriptEngine};
 
 pub(crate) struct Page {
     pub(crate) engine: crate::TestEngine,
+    /// What its frame client was told of script's navigations.
+    watched: crate::navigations::Navigations,
 }
 
 impl Page {
+    /// A page of `engine`, its navigations watched from now on.
+    pub(crate) fn of(mut engine: crate::TestEngine) -> Self {
+        let watched = crate::navigations::Navigations::watch(&mut engine);
+        Self { engine, watched }
+    }
+
     pub(crate) fn new(url: &str) -> Self {
         let mut engine = crate::TestEngine::new(EngineSettings { web_tests: true });
         let document = engine
             .create_window(engine.top_frame(), url, Instant::now())
             .expect("a window");
         drop(document);
-        let mut page = Self { engine };
+        let mut page = Self::of(engine);
         page.eval("document.appendChild(document.createElement('html')).appendChild(document.createElement('body')); 0");
         page
     }
@@ -48,14 +56,25 @@ impl Page {
         self.engine.take_harness_results().expect("reported")
     }
 
-    /// The navigations the engine asked for since.
+    /// The navigations script asked for since.
     pub(crate) fn navigations(&mut self) -> Vec<FrameNavigation> {
-        self.engine
-            .take_frame_requests()
+        self.navigated()
             .into_iter()
-            .filter_map(|request| match request {
-                FrameRequest::Navigation { navigation, .. } => Some(navigation),
-                _ => None,
+            .map(|(_, _, navigation)| navigation)
+            .collect()
+    }
+
+    /// The navigations script asked for since, each with its frame and
+    /// the one whose script asked; an iframe's left out.
+    pub(crate) fn navigated(&mut self) -> Vec<(FrameId, FrameId, FrameNavigation)> {
+        self.watched
+            .take(&mut self.engine)
+            .into_iter()
+            .filter_map(|navigated| match navigated.navigation {
+                crate::navigations::Navigation::Frame(navigation) => {
+                    Some((navigated.frame, navigated.initiator, navigation))
+                }
+                crate::navigations::Navigation::Child(_) => None,
             })
             .collect()
     }

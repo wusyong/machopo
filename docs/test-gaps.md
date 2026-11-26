@@ -24,7 +24,6 @@
 | Windows 的 waiter 丟掉時還在進行的讀寫的記憶體不釋放（`platform/windows/channel.rs` 的 `IocpWaiter`） | 刻意的洩漏（釋放才不安全），process 結束時才發生；測試裡每條這樣結束的通道留下約 128 KiB | 審查；`shut` 關掉所有 handle 有測試守著（通道放掉之後 process 的 handle 沒有變多） | 量到測試的 process 記憶體是問題時，改成丟掉前把通知收完 |
 | macOS 的共用記憶體的 mapping 不被 child process 繼承（`ipc` 的 `platform/macos/memory.rs` 的 `map` 給 `mach_vm_map` 的 `VM_INHERIT_NONE`） | 要 `fork` 才看得到，machopo 不 `fork`（child 是重新執行同一個執行檔） | 審查 | 不處理：沒有 `fork` 的路；之後有的話在那時補 |
 | layout 自己的演算法在直排時換成物理座標的那一半：inline 內容區的起點（`content_origin`）、table 的 caption、row group、row、cell 的位置、靜態位置、`vertical-align` 的位移、欄的背景，collapsed border 給 paint 的格線怎麼轉置（`layout` 的 `table.rs`） | style 還不解析 `writing-mode`，`ComputedStyle::writing_direction()` 一律是橫排：直排該轉的地方沒轉抓不到；mutation test 把這類錯誤記成等價。`rtl` 的那一半由 `layout` 的 `direction::`、`lists::` 和 WPT（`css-tables/paint/col-paint-htb-rtl` 這些）測 | 審查；converter、`content_box_origin`、`to_physical_delta` 自己在每種 writing mode 的單元測試（`logical::`） | 直排等 `writing-mode` 的 RFC |
-| event loop 等下一個 task 時，也照跨 origin 的子 frame 的 fragment 導覽之後要在 iframe 上發的 `load` 的時間醒來（`renderer` 的 `until_idle_or_intersections` 裡的 `owner_loads_due`） | 拿掉時 `load` 等到 loop 為別的事醒來才發：頁面剛載入完，loop 本來就會為 DevTools 的網路是否安靜（`next_idleness_due`）、caret、timer 醒來，在幾百 ms 內，測試看不出晚了 | 審查；`load` 發不發、什麼時候不發、有沒有延遲由 `browser` 的 `a_cross_origin_frames_fragment_navigation_fires_its_iframes_load` 守著 | 要守時：在沒有其他東西會叫醒 loop 的頁面（沒有 timer、沒有 caret、DevTools 的網路安靜早就過了）上量 `load` 和導覽之間隔多久 |
 | 頁面換 engine（wasm 文件和 JS 文件之間）的那次 commit 不用發起者的文件當 origin 的來源（`renderer` 的 `commit_document_navigation` 的 `replacing`）：那份文件是舊的 engine 的，renderer 拿著的要在它的 heap 之前放掉 | 要 wasm 的文件把 main frame 導覽到 `about:blank` 才走得到，沒有這樣的測試；拿掉時沒有測試失敗 | 審查；renderer 換 engine 時放掉它拿著的 DOM 的其他東西（`replace_engine`）有測試 | 補一份 wasm 的文件導覽到 `about:blank` 的情境（`wasm_documents`） |
 | renderer 送出文件的請求（`FetchResource` 的 destination 是 `Document` 或 `Iframe`）時，IO thread 回錯誤、叫 UI thread 結束它（`browser` 的 `render_process_host.rs`、`ContentsEvent::BadMessage`） | renderer 不會送：所有 frame 的文件都由 browser 載入，測試沒有辦法讓真的 renderer 送一則 | 審查；UI thread 收到 `BadMessage` 之後的處理和其他壞掉的訊息同一個函式（`received_bad_message`，`a_bad_message_ends_the_renderer` 守著） | 拆成 process、有能直接寫 renderer 的通道的測試工具時，補一則假的文件請求 |
 | machopo 結束時 profile 的資料庫在 `browser::shutdown::PROFILE_LIMIT` 內寫不完，就不等它、記一行、照樣結束（`browser` 的 `StoragePartition::close`） | 要一個寫到一半卡住的磁碟，測試造不出來；寫得完的那一支有測試（`shell` 的 `a_profile_is_written_as_machopo_ends`） | 審查 | 不處理：放棄之後的那一行和其他步驟共用 `shutdown::gave_up`，那一行的格式由 renderer 被 kill 的測試守著 |
@@ -320,20 +319,17 @@
 
 **renderer 照 frame 的表（`render_thread/render_frame.rs` 的 `RenderFrames`）**
 
-- debug build 的「hook 送出的還沒對帳就讀了導覽的帳」的檢查：renderer 的 hook（`RendererFrameClient` 的每個 `FrameClient` 方法）送出時設旗標，拿掉其中一個設的地方沒有測試失敗，只是那一種送出之後少檢查一次；旗標和讀的檢查本身由 `render_frame::tests` 守。
-- 子 frame 的清單在 engine 的呼叫之後、`follow_child_frames` 之前是過期的（剛建的 iframe 不在表上、剛拿掉的還在），這個檢查不守它：renderer 有幾處在那之前就讀，會晚一步處理新的 frame，或在已經不見的 frame 上多做一步。2026-11-25 用一個也守清單的檢查跑 `shell` 和 WPT（`html/browsers/`、iframe、`the-script-element/`、`html/syntax/parsing/`、`css/cssom/`）找到的：`documents.rs` 的 `advance_document` 迴圈的開頭（`start_loads` 在 `handle_frame_requests` 之前）、parser 跑完之後的 `note_body_parsed`（它的 script 可能建了 iframe，或把自己的 frame 拿掉了）、DOM 的 task 之後的 `finish_loaded_documents`（`frame_of_document`）、`request_next_frame_if_dom_changed` 的 `start_loads`、畫面那一步的 script 之後的 `update_document_rendering`（子 frame 的 render-blocking）、`document_url`（`history_go_to_uri.html` 的路上）、`frame_render_blocked`（`joint-session-history-remove-iframe.html` 的路上）、`resource` 收到 module 的回應之後的 `run_deferred_scripts`。每處先對帳就修得掉，但對帳的動作（捲到 fragment、告訴 DevTools、排 `javascript:` 的 commit）跟著提早；文件的載入搬到 engine 那一側、frame 由 engine 當場建和丟之後，這些讀法讀的是 engine 自己的 frame，不會過期，剩下的是「跑完 script 之後這個 frame 還在不在」（Blink 的 `IsDetached`）。
+- `doc`、`doc_mut` 先問 engine 有沒有那個 frame（`has_frame_document` 的 `child_parent`）：拿掉時讀到的是 engine 已經丟掉的 frame 的資料，但現在沒有地方在 frame 拿掉之後、task 結束之前讀它（task 中間讀 frame 的都問 engine：`engine_document`、`frames_with_documents`），task 之後 `forget_gone_frames` 就放掉了，沒有測試失敗。留著是讓 engine 的清單是唯一的一份：之後在 task 中間加的讀法，不用記得先對帳。之後有在 task 中間讀 `doc` 的地方時，補一個拿掉 iframe 之後當場讀的測試。
+- `forget_gone_frames` 放掉不見的 frame 的資料：拿掉時那些資料（不見的文件的 `NodeRoot`、body 的 pipe、網路是否安靜的偵測）留到 engine 換掉或最上層 commit 為止，是記憶體，讀表的地方先問 engine，讀不到它們；沒有測試失敗。留著是照 frame 不見就放掉它的資料（Chromium 的 `RenderFrameImpl` 在 `FrameDetached` 時刪）。之後有量 renderer 留著的 DOM 節點數的測試工具時補。
+- Browser 自己開始的子 frame commit（沒有 `begin_id`）不取代排著的 `javascript:` 的空文件（`dom_js` 的 `take_navigation` 只拿送出的那一種，`frames::Pending::Here` 留著，之後它的 task 照樣 commit）：要 Browser 開始的 commit（子 frame 的 traversal）剛好落在 `javascript:` 的 commit task 跑之前，測試排不出這個先後；讓它也被取代時沒有測試失敗。留著是照 Browser 的 commit 和 renderer 自己的 commit 互不取消（Chromium 的 renderer 發起的 `javascript:` 和 Browser 的 commit 各走各的）。之後有能在一個 task 裡同時送兩者的測試工具時補。
 
 **DOM 的 task 是 scheduler 的 task（`render_thread.rs` 的 `after_task`、`dom` 的 `worker.rs`）**
 
 - 自己關閉了的 worker 照樣收頁面送的訊息（`worker_terminated` 不看 `closed`）：它的 thread 已經不跑了，送過去的東西什麼都不會發生。
 
-**renderer 每個 task 之後（`render_thread.rs` 的 `after_task`）**
-
-- 先結束取消窗口、再送 blob URL 的撤銷（兩個訊息對調）：它們在同一次 `after_task` 裡接連送出，browser 依序處理；renderer 發起的導覽 commit 之後，頁面、DevTools 和測試都要經過 renderer 才聽得到，那時撤銷已經處理了。留著現在的順序，是照「窗口結束時，那個 task 要的東西都已經送出」。
-
 **DevTools 的 frame 比對的旗標（`render_thread.rs` 的 `frames_changed`）**
 
-- frame 建立或拿掉時不設旗標（`follow_child_frames`）：新的 frame 有 `src` 時子 frame 送導覽的那一刻會比對，沒有 `src` 時它的 `about:blank` 的 commit 設旗標，拿掉的 frame 由 hook 當場送 `frameDetached`。留著是因為旗標的意思就是 frame 變了，導覽和 commit 改成 task 之後就要靠它。
+- frame 建立或拿掉時不設旗標（`forget_gone_frames`）：新的 frame 有 `src` 時子 frame 送導覽的那一刻會比對，沒有 `src` 時它的 `about:blank` 的 commit 設旗標，拿掉的 frame 由 hook 當場送 `frameDetached`。留著是因為旗標的意思就是 frame 變了，導覽和 commit 改成 task 之後就要靠它。
 - 頂層的 commit 不設旗標：DOM agent 在頂層 commit 時清掉每個 session 的節點，`documentUpdated` 之後 client 用命令重新要文件，回答命令之前一定先比對；Page agent 在 `create_window` 之前已經直接拿到新文件。留著是讓 DOM agent 的 frame 清單跟著 DOM。
 
 **intersection observer 的 task（`dom` 的 `intersection.rs` 的 `queue_intersection_entry`）**
@@ -343,11 +339,6 @@
 **`javascript:` 網址的 task（`dom_api` 的 `history.rs` 的 `run_javascript_urls`）**
 
 - 文件被 discard 之後不再跑清單裡之後的網址：frame 不在了時，engine 照文件找不到 realm，`run_classic_script` 本來就不執行。留著是對應 Blink 的 `if (!GetFrame()) break;`，不靠 engine 的這個行為。
-
-**renderer 對照 engine 的 frame（`documents.rs` 的 `follow_child_frames`）**
-
-- 子 frame 換文件時（`commit_child`）不在 `create_window` 之後當場對帳：接著 parse 新的文件時的 `handle_frame_requests` 照樣對帳，中間只有這個 frame 自己的 `request_main_frame`，沒有東西推動舊文件裡的 frame。留著是讓舊的帳在最早的時候拿掉，不靠之後一定有 `handle_frame_requests`。
-- 文件的載入中止或載完時，engine 已經沒有它的 frame 就當成最上層的（`place_of` 改成 `Some(child_parent(frame))`）：推論走不到：iframe 拿掉之後它的文件不再 fully active，window 的 `load` 的 task 不跑；被丟掉的導覽在 `navigation_dropped` 一開始就因為查不到 frame 返回。沒有證明。
 
 **`dom_api` 的 unload counter 和文件的載入（`lifecycle.rs`）**
 
