@@ -1,5 +1,5 @@
 //! A browser window without the platform's window, for the scenario tests
-//! and `machopo --automation-pipe`: a [`BrowserWindow`] whose Viz thread draws
+//! and `machopo --remote-debugging-pipe --headless`: a [`BrowserWindow`] whose Viz thread draws
 //! into a texture of its own on the process's GPU device ([`start`]), with
 //! input given straight to its `BrowserView` (what
 //! `window` does with winit's events), driven by `protocol::automation`'s
@@ -22,9 +22,9 @@ use protocol::viz::{ContextLostObserver, ContextProvider};
 use winit::keyboard::ModifiersState;
 
 use crate::automation::{self, Client, Context, Failure};
-use crate::automation_pipe::Read;
 use crate::automation_session::{AutomationSession, ClientEvent, Input};
 use crate::browser_window::{self, BrowserWindow};
+use crate::devtools_pipe_handler::Read;
 use crate::keyboard::KeyInput;
 use crate::omnibox::Clipboard;
 use crate::scenario::{self, Scenario};

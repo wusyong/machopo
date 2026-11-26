@@ -45,8 +45,8 @@ use tokio_tungstenite::tungstenite::Message as Frame;
 use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
 use tokio_tungstenite::tungstenite::protocol::{Role, WebSocketConfig};
 
-use crate::automation_pipe::{self, MAX_MESSAGE_SIZE};
 use crate::automation_session::{ClientEvent, ClientId, JsonAnswer, JsonRequest, Outbox};
+use crate::devtools_pipe_handler::{self, MAX_MESSAGE_SIZE};
 
 /// The largest websocket frame a client may send; a message may be
 /// several (tungstenite's default, as the message's limit is).
@@ -539,8 +539,8 @@ async fn connection<S>(
         tokio::select! {
             incoming = stream.next() => {
                 let read = match incoming {
-                    Some(Ok(Frame::Text(text))) => automation_pipe::read(text.as_bytes()),
-                    Some(Ok(Frame::Binary(bytes))) => automation_pipe::read(&bytes),
+                    Some(Ok(Frame::Text(text))) => devtools_pipe_handler::read(text.as_bytes()),
+                    Some(Ok(Frame::Binary(bytes))) => devtools_pipe_handler::read(&bytes),
                     // tungstenite answers a ping itself.
                     Some(Ok(Frame::Ping(_) | Frame::Pong(_) | Frame::Frame(_))) => continue,
                     Some(Ok(Frame::Close(_)) | Err(_)) | None => break,

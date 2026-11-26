@@ -22,7 +22,6 @@ const INPUT_NOT_A_PIPE: i32 = 32;
 const OUTPUT_NOT_A_PIPE: i32 = 33;
 const NO_HANDLES: i32 = 34;
 const BAD_HANDLES: i32 = 35;
-const HANDLES_ONLY_ON_WINDOWS: i32 = 36;
 const TAKEN: i32 = 37;
 const IO: i32 = 38;
 const TAKEN_TWICE: i32 = 39;
@@ -36,7 +35,6 @@ fn code(error: &InheritError) -> i32 {
         InheritError::NotAPipe(PipeEnd::Output) => OUTPUT_NOT_A_PIPE,
         InheritError::NoHandles => NO_HANDLES,
         InheritError::BadHandles => BAD_HANDLES,
-        InheritError::HandlesOnlyOnWindows => HANDLES_ONLY_ON_WINDOWS,
         InheritError::Taken => TAKEN,
         InheritError::Io(_) => IO,
     }
@@ -314,13 +312,19 @@ fn a_process_with_3_and_4_free_starts_a_child_with_a_pipe() {
 
 #[cfg(unix)]
 #[test]
-fn handles_are_windows_alone() {
-    // Refused before anything is looked at: nothing of this process's is
-    // taken.
-    assert!(matches!(
-        platform::inherited_pipe(Some("1,2")),
-        Err(InheritError::HandlesOnlyOnWindows)
-    ));
+fn handles_named_on_macos_and_linux_are_let_be() {
+    // As Chromium, which reads the switch on Windows alone: the child's
+    // ends are 3 and 4 whatever it names.
+    let mut command = command("echo");
+    command.arg(format!("{}=1,2", platform::IO_PIPES_SWITCH));
+    let (child, mut writer, reader) = platform::spawn_with_pipe(&mut command).unwrap();
+    let mut reader = BufReader::new(reader);
+    writeln!(writer, "named").unwrap();
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    assert_eq!(line, "echo: named\n");
+    drop(writer);
+    assert_eq!(exit_code(child), Some(0));
 }
 
 #[cfg(windows)]

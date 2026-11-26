@@ -48,8 +48,6 @@ pub enum InheritError {
     NoHandles,
     /// Windows: what names the handles isn't two numbers, by a comma.
     BadHandles,
-    /// macOS and Linux: handles were named, which only Windows takes.
-    HandlesOnlyOnWindows,
     /// The ends were taken already, by an earlier call.
     Taken,
     /// The system wouldn't keep them from what this process starts.
@@ -63,10 +61,6 @@ impl fmt::Display for InheritError {
             Self::NotAPipe(end) => write!(f, "{} is no pipe", end.name()),
             Self::NoHandles => write!(f, "no {IO_PIPES_SWITCH}=<read>,<write> names the pipe"),
             Self::BadHandles => write!(f, "{IO_PIPES_SWITCH} wants two handles: <read>,<write>"),
-            Self::HandlesOnlyOnWindows => write!(
-                f,
-                "{IO_PIPES_SWITCH} is Windows'; elsewhere the pipe is descriptors 3 and 4"
-            ),
             Self::Taken => write!(f, "the pipe was taken already"),
             Self::Io(error) => write!(f, "the pipe couldn't be kept to this process: {error}"),
         }
@@ -88,7 +82,8 @@ impl PipeEnd {
 
 /// In a process started with a pipe: its ends, the one it reads and the
 /// one it writes, once. `io_pipes` is `--remote-debugging-io-pipes`'
-/// value, which the caller parsed (Windows alone takes it). Asked for a
+/// value, which the caller parsed: Windows alone looks at it, and macOS
+/// and Linux read 3 and 4 whatever it says, as Chromium does. Asked for a
 /// second time, whatever came of the first, it is [`InheritError::Taken`].
 ///
 /// Both are checked to be pipes (or, on macOS and Linux, sockets: Node's
@@ -138,12 +133,9 @@ mod imp {
     const PAST_THE_PIPE: RawFd = OUTPUT_FD + 1;
 
     pub(super) fn inherited_pipe(
-        io_pipes: Option<&str>,
+        _io_pipes: Option<&str>,
     ) -> Result<(PipeReader, PipeWriter), InheritError> {
         static TAKEN: AtomicBool = AtomicBool::new(false);
-        if io_pipes.is_some() {
-            return Err(InheritError::HandlesOnlyOnWindows);
-        }
         // Asked once, whatever comes of it: once 3 and 4 are taken, or
         // found to be no pipe, what is at those numbers later is whatever
         // this process opened there.

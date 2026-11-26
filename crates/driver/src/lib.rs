@@ -1,8 +1,8 @@
 //! machopodriver: machopo's WebDriver (classic) server, as Chromium's
 //! chromedriver is Chrome's. It serves WebDriver's HTTP API, and for each
-//! session starts a `machopo --automation-pipe`, which it drives with
-//! DevTools-protocol-shaped messages (`protocol::automation`) on machopo's
-//! standard input and output.
+//! session starts a `machopo --remote-debugging-pipe --headless`, which it
+//! drives with DevTools-protocol messages (`protocol::automation`) on a
+//! pipe at machopo's file descriptors 3 and 4, as Chrome's is.
 //!
 //! Three parts, on threads of their own:
 //! - [`http`]: HTTP/1.1 (hyper, on a single-threaded tokio runtime). Each
@@ -43,7 +43,7 @@ pub use error::Failure;
 pub struct Options {
     /// The `machopo` to start.
     pub binary: PathBuf,
-    /// Its arguments, after `--automation-pipe` (`--test-fonts`, WPT's
+    /// Its arguments, after `--remote-debugging-pipe --headless` (`--test-fonts`, WPT's
     /// `--host-resolver-rules`...).
     pub binary_args: Vec<String>,
 }

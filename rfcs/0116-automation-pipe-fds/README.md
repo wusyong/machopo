@@ -13,7 +13,7 @@
 
 **現況**（2026-11-26，`details.md` 的「盤點」）：
 
-- `crates/shell/src/automation_pipe.rs` 的 `spawn_reader` 讀 `std::io::stdin()`、`spawn_writer` 寫 `std::io::stdout()`；`--window` 的 `crates/shell/src/window.rs` 用同兩個函式。
+- `shell` 的 `automation_pipe` 模組（第 2 段改名成 `crates/shell/src/devtools_pipe_handler.rs`） 的 `spawn_reader` 讀 `std::io::stdin()`、`spawn_writer` 寫 `std::io::stdout()`；`--window` 的 `crates/shell/src/window.rs` 用同兩個函式。
 - `crates/shell/src/lib.rs` 的 `renderer_launcher`：renderer 的 stdin 接 null、stdout 轉到 Browser 的 stderr，讓 pipe 只在 Browser 手上（client 在 Browser 結束時就讀到 EOF，renderer 寫的東西不混進訊息）。註解自己寫著 Chromium 的子 process 是保留 stdout 的，因為它的 pipe 是另外兩個 fd。
 - `crates/shell/src/main.rs` 的 log 和 `crates/renderer/src/render_thread.rs` 的 `print_console`（`console`、沒接住的例外、wasm guest 的輸出）一律寫 stderr，理由都是「stdout 是 pipe 的」。
 - `crates/shell/src/main.rs` 的 `parse_args`：`--automation-pipe` 同時代表「經過 pipe 驅動」（`Machopo` domain、`--host-resolver-rules` 和 `--additional-trust-anchors`、不理平台的輸入、從 `about:blank` 開始、淺色和橫式的 UI、profile 預設在記憶體裡）和「沒有平台視窗」，加 `--window` 才有真的視窗。`--headless` 是不認得的開關（machopo 以前有一個畫一張圖就結束的 `--headless`，拿掉了）。
@@ -111,6 +111,7 @@ pipe.write_all(b"{\"id\":1,\"method\":\"Browser.getVersion\"}\0")?;
 
 ### 2. `shell`
 
+- **拿 pipe**（第 11 條）：`main` 解析完開關之後、開 log 和 trace 之前呼叫 `inherited_pipe`，把 `--remote-debugging-io-pipes` 的值交給它（每個平台都收這個開關，只在 Windows 上有作用，第 10 條）；拿不到時把原因印到 stderr、附上 `3<&0 4>&1` 的寫法，照開關寫錯的方式結束。
 - **開關**（`main.rs` 的 `parse_args`、help、usage）：`--remote-debugging-pipe` 取代 `--automation-pipe`，不收值（`=cbor` 這類報錯）；`--headless` 只在 `--remote-debugging-pipe` 時收，取代「沒有 `--window`」；`--automation-pipe`、`--window` 變成不認得的開關，加進 `main.rs` 測試裡「machopo 沒有的模式」那一份清單。`--scale`、`--ui-layout`、`--ui-theme`、`--host-resolver-rules`、`--additional-trust-anchors`、網址的規則照舊，條件換成新的開關。
 - **模組**：`automation_pipe.rs` 改名 `devtools_pipe_handler.rs`（Chromium 的 `DevToolsPipeHandler`），和已經有的 `devtools_http_handler.rs` 成對；`spawn_reader`、`spawn_writer` 改收 `PipeReader`、`PipeWriter`，`run` 和 `window.rs` 從 `main` 拿到 `inherited_pipe()` 的結果傳進去。`automation_session.rs`、`automation.rs` 這些不是傳輸的模組名字不動。
 - 結束的條件照舊：fd 3 讀到結尾（Chrome 是 `CloseBrowserSoon`）、`Browser.close`、訊號。writer 寫不出去時照 `wait_for_writer` 的規則放掉。
@@ -151,7 +152,7 @@ pipe.write_all(b"{\"id\":1,\"method\":\"Browser.getVersion\"}\0")?;
 ### 分階段
 
 1. **`ipc`**：兩個入口（Unix、Windows）和它們的測試（第 4 到 8 條）。之後的段落才用到，可以先 merge（`main` 上多一個沒人用的 API，但有測試）。
-2. **換過去**：`shell` 的開關、reader、writer 和 `main`、renderer 的 stdout、所有啟動的程式、文件和限制。一次換完，中間不留兩種開關和接法。
+2. **換過去**（第 9 到 11 條）：2a `shell` 的開關、reader、writer 和 `main`、renderer 的 stdout，連同 Rust 的啟動程式；2b Python 的工具；2c 文件和限制。一次換完，中間不留兩種開關和接法。
 3. **Windows**：在使用者的裝置上跑第 1、2 段的測試和 bench，修平台上的問題。
 
 ## 缺點
@@ -189,16 +190,19 @@ pipe.write_all(b"{\"id\":1,\"method\":\"Browser.getVersion\"}\0")?;
 
 ## 已決定的事項
 
-2026-11-26 和使用者逐條確認，同一天接受（第 1 到 3 條）；第 1 段的細節在排程時確認（第 4 到 8 條）。
+2026-11-26 和使用者逐條確認，同一天接受（第 1 到 3 條）；第 1 段的細節在排程時確認（第 4 到 8 條），第 2 段的在它開始前（第 9 到 11 條）。
 
 1. **開關照 Chrome 拆成 `--remote-debugging-pipe` 和 `--headless`（N3b）**（2026-11-26，使用者）：`--remote-debugging-pipe` 是經過 pipe 驅動（fd 3、4，連同現在只在 pipe 時有的 `Machopo` domain、測試的網路設定、不理平台的輸入、`about:blank`、淺色和橫式的 UI、記憶體裡的 profile），`--headless` 是沒有平台視窗、只在 pipe 時收；`--automation-pipe` 和 `--window` 拿掉。Linux、macOS 只有 fd 3、4 這一種接法，不留 stdin、stdout 的模式。不選 N1（留 `--automation-pipe`：開關和 Chrome 不同，Playwright 的 RFC 要再改一次）、N2（另留 stdio 模式：兩種接法要測，renderer 的 stdout 的例外留著，`3<&0 4>&1` 就做得到）、N3a（只改名：和 Chrome 的意思相反）、N3c（兩個名字都留：同一件事兩個名字）。
 2. **Windows 只收 `--remote-debugging-io-pipes` 的 handle（W2）**（2026-11-26，使用者）：我們自己啟動 machopo 的程式（std 的 `Command`、Python 的 `subprocess`）填不了 `lpReserved2`，只能給 handle，經過 samply 也傳得下去；Node 給的 C runtime 的 fd 3、4 這份不做，Windows 上的 Playwright、Puppeteer 在傳輸這一層連不上，留到之後（「之後的可能」）。不選 W1（兩種都收：多一個入口、一處 `unsafe`，還要在 Windows 上確認 Rust 的程式拿得到 C runtime 的 fd，現在沒有使用者）、W3（只收 C runtime 的 fd：每個啟動的程式都要自己呼叫 `CreateProcessW`，samply 那一層可能把 `lpReserved2` 丟掉）。
 3. **wasm guest 的 stdout 和 stderr 照舊當成 console 的訊息、寫 stderr（O1）**（2026-11-26，使用者）：網頁寫得出來的東西只有一條路，和 `console.log` 一致，照 Chrome 留在 log 裡（Chrome 的 `console` 開了 log 時印在 stderr，從不寫 stdout）；stdout 空出來是給 renderer 和除錯的。不選 O2（guest 的 stdout 寫 machopo 的 stdout：WASI 的本意，但網頁就能寫滿終端機、讓不讀 stdout 的 client 塞住 renderer，wasm 文件的 stdout 也進不了 console）。
 4. **第 1 段：兩端是 std 的 `PipeReader`、`PipeWriter`**（2026-11-26，照建議，使用者同意）：Rust 1.87 起有的 `std::io::pipe()` 建出來的就是這兩種，本來就是 close-on-exec、不可繼承，啟動的一側建 pipe 不需要 `unsafe`；拿到的 fd 和 handle 也轉成它們（`From<OwnedFd>`、`From<OwnedHandle>`）。不選 `File`：讀寫得了，但名字看不出是 pipe。
-5. **第 1 段：`inherited_pipe(io_pipes: Option<&str>) -> Result<(PipeReader, PipeWriter), InheritError>`**（2026-11-26，照建議，使用者同意；原本「待決定」的第 1 條）：Windows 的 `--remote-debugging-io-pipes` 的值由 `shell` 的 `parse_args` 解析後傳進來，`ipc` 不讀命令列；Unix 上給了值是錯誤。回傳原因（沒有、不是 pipe、開關的值不對、已經拿過），`shell` 照它印出錯誤。不選回 `Option`（`inherited()` 的寫法）：印不出為什麼。不選 `ipc` 自己讀命令列：命令列由 `shell` 負責。
+5. **第 1 段：`inherited_pipe(io_pipes: Option<&str>) -> Result<(PipeReader, PipeWriter), InheritError>`**（2026-11-26，照建議，使用者同意；原本「待決定」的第 1 條）：Windows 的 `--remote-debugging-io-pipes` 的值由 `shell` 的 `parse_args` 解析後傳進來，`ipc` 不讀命令列；Unix 上不看這個值，照 Chrome 忽略（原本是錯誤，第 10 條改掉：正常使用時沒有人在 Unix 上給它）。回傳原因（沒有、不是 pipe、開關的值不對、已經拿過），`shell` 照它印出錯誤。不選回 `Option`（`inherited()` 的寫法）：印不出為什麼。不選 `ipc` 自己讀命令列：命令列由 `shell` 負責。
 6. **第 1 段：Unix 上 fd 3、4 收 FIFO 和 socket，Windows 上收 `FILE_TYPE_PIPE`**（2026-11-26，照建議，使用者同意）：Node 的 `'pipe'` stdio 在 Unix 上是 socketpair（libuv），Playwright、Puppeteer 給的就是 socket；Python 的 `os.pipe()` 和 `std::io::pipe()` 是 FIFO。Windows 照 Chrome 的 `AdoptPipes`。對照 Chromium：POSIX 上不檢查、照樣讀，讀不到時斷線；machopo 兩邊都檢查。不選只收 FIFO：Playwright 連不上。
 7. **第 1 段：`spawn_with_pipe(&mut Command) -> io::Result<(Child, PipeWriter, PipeReader)>`**（2026-11-26，照建議，使用者同意）：寫的一端是 child 的 fd 3，讀的一端是 child 的 fd 4；對應 Chromium 的 `LaunchOptions::fds_to_remap`（Windows 是 `handles_to_inherit`）。
 8. **第 1 段：測試照 `process_channel.rs` 讓測試自己再啟動一次當 child**（2026-11-26，照建議，使用者同意）：`crates/ipc/tests/it/` 一個新的模組，環境變數說 child 要做什麼；測 child 在 3、4 讀寫得到、child 再啟動的 grandchild 拿不到 3、4、沒有 3、4 和 3、4 是一般檔案和拿第二次各自回對的原因。
+9. **第 2 段分成三小段**（2026-11-26，照建議，使用者同意）：2a 是 `shell` 的開關、拿 pipe、reader 和 writer、renderer 的 stdout，連同 Rust 的啟動程式（machopodriver、`shell` 的測試、情境），它們要一起改，不然測試連不上；2b 是 Python 的工具（`MachopoPipe` 和 `ChromePipe` 共用接 fd 的那一段、`raster.py`）和 bench 工具的四份測試；2c 是文件和限制。不選一次做完：一個 commit 碰到四、五十個檔案，難審。
+10. **第 2 段：macOS、Linux 上照 Chrome 忽略 `--remote-debugging-io-pipes`（b3）**（2026-11-26，使用者決定）：`shell` 在每個平台都收這個開關（只在 `--remote-debugging-pipe` 時），值交給 `inherited_pipe`；Unix 上它不看這個值，照樣讀 fd 3、4。改掉第 5 條的「Unix 上給了值是錯誤」：`InheritError::HandlesOnlyOnWindows` 和它的測試、mutant 在 2a 拿掉，換成「Unix 上給了也照樣讀寫 fd 3、4」的測試。對照 Chromium：只在 Windows 的程式裡讀這個開關。不選 b1（每個平台都收、Unix 上報錯）：正常使用時沒有人在 Unix 上給它，和 Chrome 一樣忽略就夠了。不選 b2（只在 Windows 上收、其他平台是不認得的開關）：`parse_args` 要分平台，錯誤訊息也沒說為什麼。
+11. **第 2 段：沒有 pipe 時說出原因再結束（c1）**（2026-11-26，照建議，使用者同意）：`main` 解析完開關之後、開 log 和 trace 之前拿 pipe（開任何檔案之前拿，本來就是第 1 段的要求），拿不到就把 `InheritError` 的原因印到 stderr、附上 `3<&0 4>&1` 的寫法，照開關寫錯的方式結束。對照 Chromium：POSIX 上不檢查，讀失敗就 `CloseBrowserSoon`。不選照 Chrome（c2）：使用者只看到 machopo 馬上結束，fd 3 剛好開著別的東西時還會把它當成命令讀。
 
 ## 待決定
 

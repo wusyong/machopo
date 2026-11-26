@@ -1294,6 +1294,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "icu_segmenter",
+ "ipc",
  "protocol",
  "serde_json",
  "tokio",

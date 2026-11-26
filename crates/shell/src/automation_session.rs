@@ -1,4 +1,4 @@
-//! What drives the browser (machopodriver through `machopo --automation-pipe`, and
+//! What drives the browser (machopodriver through `machopo --remote-debugging-pipe`, and
 //! the scenarios): carries out `protocol::automation`'s commands against a
 //! [`BrowserWindow`] and tells of what happens in it, as DevTools'
 //! protocol does (Chromium's `DevToolsSession` with the `Target`, `Page`
@@ -62,8 +62,8 @@ use serde_json::{Value, json};
 use url::Url;
 use winit::keyboard::{Key, ModifiersState};
 
-use crate::automation_pipe::Read;
 use crate::browser_window::BrowserWindow;
+use crate::devtools_pipe_handler::Read;
 
 /// machopo's one window (`Browser.getWindowForTarget`).
 const WINDOW_ID: u64 = 1;
@@ -794,8 +794,9 @@ impl AutomationSession {
             .filter(|attached| attached.client == client)
     }
 
-    /// The browser is the platform's window (`machopo --automation-pipe
-    /// --window`), which `Browser.getVersion` tells.
+    /// The browser is the platform's window (`machopo
+    /// --remote-debugging-pipe`, no `--headless`), which `Browser.getVersion`
+    /// tells.
     pub fn in_platform_window(mut self) -> Self {
         self.windowed = true;
         self

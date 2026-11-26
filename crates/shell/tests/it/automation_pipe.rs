@@ -1,14 +1,15 @@
-//! `machopo --automation-pipe`: the browser driven through its
-//! standard input and output with DevTools-protocol-shaped messages, each
-//! followed by a NUL. What a driver relies on: the tabs as targets, a
+//! `machopo --remote-debugging-pipe --headless`: the browser driven through
+//! a pipe at its file descriptors 3 and 4 (on Windows, the handles
+//! `--remote-debugging-io-pipes` names) with DevTools-protocol messages,
+//! each followed by a NUL, as Chrome's `--remote-debugging-pipe` is. What a driver relies on: the tabs as targets, a
 //! session's navigations, their loaders and lifecycle events, the history,
 //! the errors, and the browser ending when its input does or at
 //! `Browser.close`; and the window, as machopo's `Machopo` domain and `Browser`'s
 //! window methods use it.
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read, Write};
-use std::process::{Child, ChildStdin, Command as Process, Stdio};
+use std::io::{BufRead, BufReader, PipeReader, PipeWriter, Read, Write};
+use std::process::{Child, Command as Process, Stdio};
 use std::time::Duration;
 
 use base64::Engine;
@@ -30,11 +31,11 @@ const PROCESS_SWITCHES: [&str; 2] = ["--process-per-tab", "--single-process"];
 
 const TIMEOUT: Duration = Duration::from_secs(30);
 
-/// A `machopo --automation-pipe`, and what it has sent that wasn't asked for
+/// A `machopo --remote-debugging-pipe --headless`, and what it has sent that wasn't asked for
 /// yet. Other modules drive machopo with it too (`trace`).
 pub(crate) struct Browser {
     child: Child,
-    input: Option<ChildStdin>,
+    input: Option<PipeWriter>,
     messages: Receiver<Message>,
     next_id: i32,
     events: Vec<Event>,
@@ -74,8 +75,24 @@ impl Browser {
     }
 
     fn start_in(args: &[&str], env: &[(&str, &std::ffi::OsStr)], stderr: Stdio) -> Self {
-        let mut child = Process::new(env!("CARGO_BIN_EXE_machopo"))
-            .args(["--automation-pipe", "--test-fonts"])
+        Self::start_headless_or_not(true, args, env, stderr)
+    }
+
+    /// In the platform's window (no `--headless`).
+    fn start_in_the_real_window() -> Self {
+        Self::start_headless_or_not(false, &[], &[], Stdio::null())
+    }
+
+    fn start_headless_or_not(
+        headless: bool,
+        args: &[&str],
+        env: &[(&str, &std::ffi::OsStr)],
+        stderr: Stdio,
+    ) -> Self {
+        let mut command = Process::new(env!("CARGO_BIN_EXE_machopo"));
+        command
+            .args(["--remote-debugging-pipe", "--test-fonts"])
+            .args(headless.then_some("--headless"))
             // The same tests with each tab's renderer in machopo's own
             // process, when the run asks for it (but for a test that says
             // which itself).
@@ -86,13 +103,10 @@ impl Browser {
             )
             .args(args)
             .envs(env.iter().copied())
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(stderr)
-            .spawn()
-            .expect("machopo starts");
-        let input = child.stdin.take();
-        let output = child.stdout.take().expect("piped");
+            .stdout(Stdio::null())
+            .stderr(stderr);
+        let (child, input, output) = start_machopo(&mut command);
+        let input = Some(input);
         let (tx, messages) = unbounded();
         std::thread::spawn(move || {
             let mut output = BufReader::new(output);
@@ -325,6 +339,15 @@ impl Drop for Browser {
     fn drop(&mut self) {
         let _ = self.child.kill();
     }
+}
+
+/// Starts `command` (machopo's executable, with `--remote-debugging-pipe`) with
+/// a pipe, as Chrome's clients start Chrome: what is written to the
+/// [`PipeWriter`] is its input, and the [`PipeReader`] has what it writes.
+/// Its standard input is nothing; its output is what `command` says.
+pub(crate) fn start_machopo(command: &mut Process) -> (Child, PipeWriter, PipeReader) {
+    command.stdin(Stdio::null());
+    ipc::platform::spawn_with_pipe(command).expect("machopo starts")
 }
 
 fn wait(child: &mut Child) -> std::process::ExitStatus {
@@ -1137,9 +1160,9 @@ fn waits_end_with_the_frame_that_shows_them() {
     assert!(browser.end().success());
 }
 
-/// `--window`: the same, in the real window. It needs a display (and a
-/// GPU), so it runs only with `MACHOPO_WINDOW_TESTS` (`test.py scenarios
-/// --window`).
+/// Without `--headless`: the same, in the real window. It needs a display
+/// (and a GPU), so it runs only with `MACHOPO_WINDOW_TESTS` (`test.py
+/// scenarios --window`).
 #[test]
 fn the_real_window_is_driven_the_same() {
     if std::env::var_os("MACHOPO_WINDOW_TESTS").is_none() {
@@ -1147,7 +1170,7 @@ fn the_real_window_is_driven_the_same() {
         return;
     }
     let server = server(&[("/", Route::ok("text/html", machopo_page()))]);
-    let mut browser = Browser::start_with(&["--window"]);
+    let mut browser = Browser::start_in_the_real_window();
     // The platform's window, not one without it.
     let version = browser.call(None, "Browser.getVersion", json!({})).unwrap();
     let product = version["product"].as_str().unwrap();
@@ -2867,11 +2890,18 @@ fn a_second_machopo_on_a_profiles_folder_doesnt_start() {
     let session = first.attach();
     // Its folder is made and locked by now.
     first.navigate(&session, "about:blank");
-    let second = Process::new(env!("CARGO_BIN_EXE_machopo"))
-        .args(["--automation-pipe", "--user-data-dir", dir_arg])
-        .stdin(Stdio::null())
-        .output()
-        .expect("machopo runs");
+    let mut second = Process::new(env!("CARGO_BIN_EXE_machopo"));
+    second
+        .args([
+            "--remote-debugging-pipe",
+            "--headless",
+            "--user-data-dir",
+            dir_arg,
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    let (second, _input, _output) = start_machopo(&mut second);
+    let second = second.wait_with_output().expect("machopo runs");
     assert!(!second.status.success());
     let said = String::from_utf8_lossy(&second.stderr);
     assert!(said.contains("in use by another machopo"), "{said}");
@@ -3111,20 +3141,23 @@ fn a_second_signal_ends_machopo_at_once() {
 #[cfg(unix)]
 #[test]
 fn a_signal_started_ignored_stays_so() {
-    let mut child = Process::new("nohup")
-        .args([env!("CARGO_BIN_EXE_machopo"), "--automation-pipe"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("nohup runs machopo");
+    let mut nohup = Process::new("nohup");
+    nohup
+        .args([
+            env!("CARGO_BIN_EXE_machopo"),
+            "--remote-debugging-pipe",
+            "--headless",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // `nohup` hands the pipe on, as it is at 3 and 4.
+    let (mut child, mut input, output) = start_machopo(&mut nohup);
     // Up once it answers.
-    let mut input = child.stdin.take().unwrap();
     input
         .write_all(br#"{"id":1,"method":"Browser.getVersion"}"#)
         .unwrap();
     input.write_all(&[0]).unwrap();
-    let mut output = BufReader::new(child.stdout.take().unwrap());
+    let mut output = BufReader::new(output);
     let mut answer = Vec::new();
     output.read_until(0, &mut answer).unwrap();
     let sent = Process::new("kill")
@@ -3143,15 +3176,12 @@ fn a_signal_started_ignored_stays_so() {
 /// machopo by another way than they do.
 #[test]
 fn the_commands_before_the_inputs_end_are_answered() {
-    let mut child = Process::new(env!("CARGO_BIN_EXE_machopo"))
-        .arg("--automation-pipe")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("machopo starts");
-    let mut output = child.stdout.take().unwrap();
-    let mut input = child.stdin.take().unwrap();
+    let mut command = Process::new(env!("CARGO_BIN_EXE_machopo"));
+    command
+        .args(["--remote-debugging-pipe", "--headless"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let (mut child, mut input, mut output) = start_machopo(&mut command);
     const SENT: usize = 1000;
     for id in 0..SENT {
         let command = format!(r#"{{"id":{id},"method":"Browser.getVersion"}}"#);
@@ -3176,16 +3206,13 @@ fn the_commands_before_the_inputs_end_are_answered() {
 #[test]
 fn a_client_not_reading_doesnt_hold_machopo_up() {
     let log = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("shell-not-read.log");
-    let mut child = Process::new(env!("CARGO_BIN_EXE_machopo"))
-        .arg("--automation-pipe")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::from(std::fs::File::create(&log).unwrap()))
-        .spawn()
-        .expect("machopo starts");
-    // Kept and never read.
-    let _output = child.stdout.take();
-    let mut input = child.stdin.take().unwrap();
+    let mut command = Process::new(env!("CARGO_BIN_EXE_machopo"));
+    command
+        .args(["--remote-debugging-pipe", "--headless"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(std::fs::File::create(&log).unwrap()));
+    // Its output is kept and never read.
+    let (mut child, mut input, _output) = start_machopo(&mut command);
     // Far more answers than a pipe holds (64 KiB on Linux, less on macOS).
     for id in 0..5000 {
         let command = format!(r#"{{"id":{id},"method":"Browser.getVersion"}}"#);
@@ -3494,4 +3521,48 @@ fn reloads_and_history_use_the_http_cache() {
     assert_eq!(sent("/fetched"), [(None, None, None), no_cache.clone()]);
     assert_eq!(sent("/fresh.png"), [(None, None, None), no_cache]);
     assert!(browser.end().success());
+}
+
+/// Started with nothing at 3 and 4 (by hand, in a shell), machopo says
+/// what is missing and how a shell gives it, and doesn't start.
+#[cfg(unix)]
+#[test]
+fn without_its_pipe_machopo_says_so() {
+    let said = Process::new("sh")
+        .arg("-c")
+        .arg(r#"exec "$0" --remote-debugging-pipe --headless 3<&- 4>&-"#)
+        .arg(env!("CARGO_BIN_EXE_machopo"))
+        .stdin(Stdio::null())
+        .output()
+        .expect("machopo runs");
+    assert_eq!(said.status.code(), Some(2));
+    let said = String::from_utf8_lossy(&said.stderr);
+    assert!(said.contains("nothing is open at descriptor 3"), "{said}");
+    assert!(said.contains("3<&0 4>&1"), "{said}");
+}
+
+/// Standard input is no part of the pipe: Puppeteer's is a pipe it keeps
+/// open and never writes. machopo answers on the pipe, and ends with the
+/// pipe's input, the other still open.
+#[test]
+fn standard_input_left_open_is_no_part_of_the_pipe() {
+    let mut command = Process::new(env!("CARGO_BIN_EXE_machopo"));
+    command
+        .args(["--remote-debugging-pipe", "--headless"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let (mut child, mut input, output) = ipc::platform::spawn_with_pipe(&mut command).unwrap();
+    // Open till the test ends, never written.
+    let _stdin = child.stdin.take().expect("piped");
+    input
+        .write_all(br#"{"id":1,"method":"Browser.getVersion"}"#)
+        .unwrap();
+    input.write_all(&[0]).unwrap();
+    let mut output = BufReader::new(output);
+    let mut answer = Vec::new();
+    output.read_until(0, &mut answer).unwrap();
+    assert!(String::from_utf8_lossy(&answer).contains(r#""id":1"#));
+    drop(input);
+    assert!(wait(&mut child).success());
 }

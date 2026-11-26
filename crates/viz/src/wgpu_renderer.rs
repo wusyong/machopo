@@ -1,7 +1,7 @@
 //! GPU `DirectRenderer` on wgpu. Plays the role of Chromium's `SkiaRenderer`
 //! plus its output device: every `DrawQuad` becomes a textured quad drawn
 //! into a window's swap chain image (`SkiaOutputDevice`), or, with no
-//! window (headless, `--automation-pipe`, tests), into a texture of its own
+//! window (`--headless`, tests), into a texture of its own
 //! that frames are read back from (`SkiaOutputDeviceOffscreen`).
 //!
 //! It draws with the process's one device ([`GpuContext`]). A resource is

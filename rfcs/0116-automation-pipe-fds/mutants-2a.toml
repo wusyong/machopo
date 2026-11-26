@@ -1,0 +1,55 @@
+# Stage 2a's mutants: `python3 scripts/test.py mutate rfcs/0116-automation-pipe-fds/mutants-2a.toml`.
+# macOS and Linux. The one marked so opens the real window (it stays on top while it runs).
+test = ["sh", "-c", "cargo test -q -p shell --bin machopo && cargo test -q -p shell --test it -- renderer_process:: automation_pipe::without_its_pipe_machopo_says_so automation_pipe::standard_input_left_open_is_no_part_of_the_pipe automation_pipe::a_signal_started_ignored_stays_so"]
+timeout = 600
+
+[[mutant]]
+name = "a renderer's output goes to the browser's errors again"
+file = "crates/shell/src/lib.rs"
+from = '''        command.stdin(std::process::Stdio::null());
+        command
+    }))'''
+to = '''        command.stdin(std::process::Stdio::null()).stdout(std::io::stderr());
+        command
+    }))'''
+
+[[mutant]]
+name = "without its pipe machopo doesn't say how a shell gives it"
+file = "crates/shell/src/main.rs"
+from = '''        Err(e @ (InheritError::Missing(_) | InheritError::NotAPipe(_))) if cfg!(unix) => {'''
+to = '''        Err(e @ (InheritError::Missing(_) | InheritError::NotAPipe(_))) if false => {'''
+
+[[mutant]]
+name = "--headless is taken as nothing"
+file = "crates/shell/src/main.rs"
+from = '''            "--headless" => headless = true,'''
+to = '''            "--headless" => {}'''
+
+[[mutant]]
+name = "--headless is taken without the pipe"
+file = "crates/shell/src/main.rs"
+from = '''    if !pipe
+        && (headless
+            || host_resolver_rules.is_some()'''
+to = '''    if !pipe
+        && (false
+            || host_resolver_rules.is_some()'''
+
+[[mutant]]
+name = "a headless window takes its scale as a real one's"
+file = "crates/shell/src/main.rs"
+from = '''    let window_scale = scale.filter(|_| !headless);'''
+to = '''    let window_scale = scale;'''
+
+[[mutant]]
+name = "--automation-pipe is taken as an unknown option"
+file = "crates/shell/src/main.rs"
+from = '''            "--automation-pipe" => {'''
+to = '''            "--automation-pipe-gone" => {'''
+
+[[mutant]]
+name = "the real window is headless (opens the real window)"
+file = "crates/shell/src/main.rs"
+from = '''            Ok(network) if !args_pipe.headless => window::run(window::Options {'''
+to = '''            Ok(network) if false && !args_pipe.headless => window::run(window::Options {'''
+test = ["sh", "-c", "MACHOPO_WINDOW_TESTS=1 cargo test -q -p shell --test it -- --exact automation_pipe::the_real_window_is_driven_the_same"]

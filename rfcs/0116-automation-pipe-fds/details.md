@@ -6,7 +6,7 @@
 
 **machopo 這一側**：
 
-- `crates/shell/src/automation_pipe.rs`：`spawn_reader` 用 `std::io::stdin().lock()`，一則訊息讀到 NUL，上限 `MAX_MESSAGE_SIZE`（64 MiB）；`spawn_writer` 用 `std::io::stdout().lock()`，每則加 NUL、`flush`。讀到結尾時 `ended`，`run` 結束。
+- `shell` 的 `automation_pipe` 模組（第 2 段改名成 `crates/shell/src/devtools_pipe_handler.rs`）：`spawn_reader` 用 `std::io::stdin().lock()`，一則訊息讀到 NUL，上限 `MAX_MESSAGE_SIZE`（64 MiB）；`spawn_writer` 用 `std::io::stdout().lock()`，每則加 NUL、`flush`。讀到結尾時 `ended`，`run` 結束。
 - `crates/shell/src/window.rs`（`--automation-pipe --window`）：同樣的 `spawn_reader`、`spawn_writer`。
 - `crates/shell/src/lib.rs` 的 `renderer_launcher`：`.stdin(Stdio::null()).stdout(std::io::stderr())`。註解寫著理由（pipe 只在 Browser 手上，client 在 Browser 結束時讀到 EOF）和 Chromium 的不同（它的子 process 保留 stdout）。這是 RFC 0109 的第 16 條。
 - `crates/shell/src/main.rs` 的 `log_layer`：`with_writer(std::io::stderr)`，註解「Standard output is `--automation-pipe`'s」。

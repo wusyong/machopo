@@ -4,8 +4,8 @@
 //! asks of the window (cursor, title, IME); the rest of the browser is a
 //! [`BrowserWindow`].
 //!
-//! With `--automation-pipe --window`, what reads and writes machopo's
-//! standard input and output drives the window (`shell::automation_pipe`:
+//! With `--remote-debugging-pipe` (and no `--headless`), what started machopo
+//! drives the window through the pipe (`shell::devtools_pipe_handler`:
 //! machopodriver, or the scenario tests' runner), through the window's
 //! `AutomationSession`, whose input goes in as winit's events would. The
 //! platform's own input is ignored meanwhile, as `interactive_ui_tests` own
@@ -25,12 +25,12 @@ use protocol::automation::Message;
 use protocol::input::{MouseButton, ScrollDelta};
 use protocol::renderer::CursorType;
 use protocol::viz::{ContextLostObserver, ContextProvider, DisplayMsg, VizMsg};
-use shell::automation_pipe::{self, Read};
 use shell::automation_session::{AutomationSession, ClientEvent, Input, Reply};
 use shell::browser_view::Command;
 use shell::browser_window::{self, BrowserWindow};
 use shell::chrome::UiLayout;
 use shell::devtools_http_handler::{self, DevToolsHttpHandler};
+use shell::devtools_pipe_handler::{self, Pipe, Read};
 use shell::keyboard::KeyInput;
 use shell::mouse::{ClickCounter, double_click_interval};
 use shell::omnibox::Clipboard;
@@ -70,12 +70,14 @@ enum ShellEvent {
     GpuFailed(String),
 }
 
-/// The window's half of a run that drives it (`machopo --automation-pipe
-/// --window`).
+/// The window's half of a run that drives it (`machopo
+/// --remote-debugging-pipe`, no `--headless`).
 struct Automating {
     /// The network settings given, until the window is up and the pipe
     /// starts.
     pending: Option<NetworkContextParams>,
+    /// The pipe's ends, until then too.
+    pipe: Option<Pipe>,
     /// The pipe's writer, to wait for once the session has gone.
     writer: Option<std::thread::JoinHandle<()>>,
     /// Set while the window gives itself the driver's input, which goes
@@ -391,7 +393,7 @@ impl App {
         // Through the pipe the tab starts with a document, as Chrome's
         // does, and the pipe navigates.
         if automation {
-            automation_pipe::start_blank(&mut browser);
+            devtools_pipe_handler::start_blank(&mut browser);
         } else {
             browser.view_mut().set_ui_layout(self.ui_layout);
             // Driven through the pipe the UI stays light, whatever the
@@ -429,15 +431,18 @@ impl App {
         if automating.pending.take().is_none() {
             return;
         }
+        let Some(Pipe { input, output }) = automating.pipe.take() else {
+            return;
+        };
         let (outbox, messages) = unbounded::<Message>();
         self.session = Some(AutomationSession::new(&running.browser, outbox).in_platform_window());
         let proxy = self.proxy.clone();
         let send = move |read| proxy.send_event(ShellEvent::Automation(read)).is_ok();
         let done = self.proxy.clone();
-        let spawned = automation_pipe::spawn_writer(messages)
+        let spawned = devtools_pipe_handler::spawn_writer(output, messages)
             .and_then(|writer| {
                 automating.writer = Some(writer);
-                automation_pipe::spawn_reader(send, move || {
+                devtools_pipe_handler::spawn_reader(input, send, move || {
                     let _ = done.send_event(ShellEvent::AutomationDone);
                 })
             })
@@ -603,7 +608,7 @@ impl App {
         if let Some(automating) = &mut self.automating
             && let Some(writer) = automating.writer.take()
         {
-            automation_pipe::wait_for_writer(writer, ending);
+            devtools_pipe_handler::wait_for_writer(writer, ending);
         }
         event_loop.exit();
     }
@@ -761,7 +766,7 @@ impl ApplicationHandler<ShellEvent> for App {
             return self.exit(event_loop);
         }
         if let ShellEvent::GpuFailed(error) = event {
-            self.error = Some(automation_pipe::gpu_failed(&error));
+            self.error = Some(devtools_pipe_handler::gpu_failed(&error));
             return self.exit(event_loop);
         }
         let Some(running) = &mut self.running else {
@@ -870,9 +875,9 @@ pub struct Options {
     pub num_raster_threads: Option<usize>,
     /// Each tab's renderer is a process of its own (`--process-per-tab`).
     pub process_per_tab: bool,
-    /// The network settings `--automation-pipe --window` gives: the pipe
-    /// drives the window.
-    pub pipe: Option<NetworkContextParams>,
+    /// The network settings `--remote-debugging-pipe` (no `--headless`)
+    /// gives, and the pipe's ends: the pipe drives the window.
+    pub pipe: Option<(NetworkContextParams, Pipe)>,
     pub remote_debugging: Option<devtools_http_handler::Options>,
     pub profile: browser::Profile,
     /// `--scale`: the device scale factor in place of the screen's (as
@@ -917,8 +922,9 @@ pub fn run(options: Options) -> Result<(), String> {
         proxy: event_loop.create_proxy(),
         running: None,
         error: None,
-        automating: pipe.map(|network| Automating {
+        automating: pipe.map(|(network, pipe)| Automating {
             pending: Some(network),
+            pipe: Some(pipe),
             writer: None,
             injecting: false,
             done: false,

@@ -514,7 +514,7 @@ impl WebContents {
     /// The tab's first document, `url`, as an initial entry: the first
     /// new entry takes its place (Chromium's `IsInitialEntry`), so there is
     /// no going back to it. What starts a tab that something drives (`machopo
-    /// --automation-pipe`), as Chrome's new tab has its `about:blank`.
+    /// --remote-debugging-pipe`), as Chrome's new tab has its `about:blank`.
     pub fn navigate_initial(&mut self, url: impl Into<String>) {
         self.begin_navigation(url.into(), NavigationType::Initial, Asked::default());
     }

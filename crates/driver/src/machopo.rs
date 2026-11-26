@@ -1,13 +1,16 @@
-//! A session's machopo: `machopo --automation-pipe`, driven through its standard
-//! input and output with `protocol::automation`'s messages, each followed
+//! A session's machopo: `machopo --remote-debugging-pipe --headless`, driven
+//! through a pipe at its file descriptors 3 and 4 (on Windows, the handles
+//! `--remote-debugging-io-pipes` names), as chromedriver may drive Chrome,
+//! with `protocol::automation`'s messages, each followed
 //! by a NUL. A thread reads what machopo sends; answers are matched to
 //! commands by id, and events wait in order until a command looks for
 //! them. Which tabs' renderers have gone is kept from the events as they
 //! go by (`Target.targetCrashed`, until the tab navigates again).
 
 use std::collections::{HashSet, VecDeque};
+use std::io::PipeWriter;
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, ChildStdin, Command as Process, Stdio};
+use std::process::{Child, Command as Process, Stdio};
 use std::time::{Duration, Instant};
 
 use base::SequenceNumber;
@@ -23,7 +26,7 @@ const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct Machopo {
     child: Child,
-    input: Option<ChildStdin>,
+    input: Option<PipeWriter>,
     messages: Receiver<Message>,
     /// Command ids, from 1 (`int`s, as CDP's are).
     ids: SequenceNumber<u32>,
@@ -34,16 +37,18 @@ pub struct Machopo {
 
 impl Machopo {
     pub fn start(options: &Options) -> std::result::Result<Machopo, String> {
-        let mut child = Process::new(&options.binary)
-            .arg("--automation-pipe")
+        let mut command = Process::new(&options.binary);
+        command
+            .args(["--remote-debugging-pipe", "--headless"])
             .args(&options.binary_args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
+            // Its output and errors are machopodriver's, as Chrome's are
+            // chromedriver's log: the pipe is apart from them.
+            .stdin(Stdio::null())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit());
+        let (child, input, output) = ipc::platform::spawn_with_pipe(&mut command)
             .map_err(|e| format!("starting {}: {e}", options.binary.display()))?;
-        let input = child.stdin.take();
-        let output = child.stdout.take().expect("piped");
+        let input = Some(input);
         let (tx, messages) = unbounded();
         std::thread::Builder::new()
             .name("MachopoPipeReader".into())

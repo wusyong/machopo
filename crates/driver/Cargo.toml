@@ -1,6 +1,6 @@
 [package]
 name = "driver"
-description = "machopodriver: machopo's WebDriver (classic) server, which drives machopo through --automation-pipe."
+description = "machopodriver: machopo's WebDriver (classic) server, which drives machopo through --remote-debugging-pipe."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -19,6 +19,8 @@ workspace = true
 
 [dependencies]
 base.workspace = true
+# Starting machopo with its pipe at 3 and 4 (or Windows' handles).
+ipc.workspace = true
 protocol.workspace = true
 webdriver.workspace = true
 hyper.workspace = true

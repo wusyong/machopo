@@ -1,7 +1,7 @@
 //! Runs a [`scenario`](crate::scenario) against a browser window, for the
 //! scenario tests, as Chromium's `interactive_ui_tests` drive a browser:
 //! a window without the platform's (`windowless`), or the real one
-//! (`machopo --automation-pipe --window`).
+//! (`machopo --remote-debugging-pipe`).
 //!
 //! The runner is a client of `protocol::automation`, as machopodriver is:
 //! it steps through the scenario on a thread of its own and sends

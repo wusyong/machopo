@@ -84,7 +84,7 @@ pub struct RendererFlags {
     /// `LayerTreeSettings::wait_for_all_pipeline_stages_before_draw`.
     pub wait_for_all_pipeline_stages_before_draw: bool,
     /// Answer `RendererMsg::QueryElement`, for automated checks of a
-    /// browser window (`machopo --automation-pipe`, the scenario tests), as
+    /// browser window (`machopo --remote-debugging-pipe`, the scenario tests), as
     /// `content_shell --run-web-tests` exposes `internals` only to tests.
     pub automation: bool,
     /// The browser's user agent string, which `navigator.userAgent` gives
@@ -1993,8 +1993,8 @@ fn sooner_ms(a: Option<f64>, b: Option<f64>) -> Option<f64> {
 /// A `console` message (`kind` `console`), or what script left uncaught
 /// (`uncaught`), printed to stderr with the browser's log, as Chrome prints
 /// console messages: one that is nothing (`console.log("")`, an array too
-/// long to write) isn't printed, as Chrome's isn't. Never stdout:
-/// `--automation-pipe` writes its messages there.
+/// long to write) isn't printed, as Chrome's isn't. Not stdout, which a
+/// page doesn't write to in Chrome either.
 pub(crate) fn print_console(kind: &str, text: &str, url: &str, line: u32) {
     if text.is_empty() {
         return;

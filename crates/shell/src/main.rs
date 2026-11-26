@@ -30,10 +30,11 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use browser::{HostMappingRules, NetworkContextParams};
+use ipc::platform::InheritError;
 use shell::chrome::UiLayout;
 use shell::devtools_http_handler::{self, AllowedOrigins};
 use shell::theme::ColorMode;
-use shell::{automation_pipe, to_url};
+use shell::{devtools_pipe_handler, to_url};
 use tracing_log::AsLog;
 use tracing_subscriber::Layer;
 use tracing_subscriber::filter::LevelFilter;
@@ -57,8 +58,8 @@ usage: machopo [--ui-layout LAYOUT] [--ui-theme THEME] [--scale F] [--test-fonts
            [--single-process | --process-per-tab]
            [--remote-debugging-port PORT [--remote-allow-origins ORIGINS]]
            [URL|PATH]
-       machopo --automation-pipe [--window] [--scale F] [--host-resolver-rules RULES]
-           [--additional-trust-anchors PEM] [--test-fonts]
+       machopo --remote-debugging-pipe [--headless] [--scale F]
+           [--host-resolver-rules RULES] [--additional-trust-anchors PEM] [--test-fonts]
            [--num-raster-threads N] [--user-data-dir DIR]
            [--single-process | --process-per-tab]
            [--remote-debugging-port PORT [--remote-allow-origins ORIGINS]]
@@ -74,25 +75,24 @@ machopo: a Chromium-like browser in Rust.
 
 {USAGE}
 
-Opens URL or the file at PATH in a window, or with --automation-pipe is
-driven by what reads and writes its standard input and output. URLs:
+Opens URL or the file at PATH in a window, or with --remote-debugging-pipe
+is driven through a pipe by what started it. URLs:
 http://..., https://..., file://..., about:blank, about:demo (the built-in
 demo page, the default). Anything else is taken as a path; a relative one
 is resolved against the working directory.
 
 Options:
-  --ui-layout LAYOUT  In a window (not with --automation-pipe): how the UI is
-                      laid out at first, horizontal (the default: the tabs
-                      above the toolbar) or sidebar (the toolbar and the
-                      tabs down the left). Cmd+Shift+, (Ctrl+Shift+,
+  --ui-layout LAYOUT  In a window (not with --remote-debugging-pipe): how the
+                      UI is laid out at first, horizontal (the default: the
+                      tabs above the toolbar) or sidebar (the toolbar and
+                      the tabs down the left). Cmd+Shift+, (Ctrl+Shift+,
                       elsewhere) switches between them.
-  --ui-theme THEME    In a window (not with --automation-pipe): light or dark,
-                      the UI's colors (not the pages'). By default the
+  --ui-theme THEME    In a window (not with --remote-debugging-pipe): light or
+                      dark, the UI's colors (not the pages'). By default the
                       system's, changing as it does.
   --scale F           The device scale factor, as Chromium's
-                      --force-device-scale-factor. With --automation-pipe
-                      (but not --window) it is 1 by default, and the
-                      pipe's screenshots are the viewport times F, in
+                      --force-device-scale-factor. With --headless it is 1
+                      by default, and the pipe's screenshots are the viewport times F, in
                       physical pixels. A window takes F in place of the
                       screen's, F physical pixels a CSS pixel.
   --test-fonts        Use only the built-in test fonts: Ahem, and Lato for
@@ -109,24 +109,31 @@ Options:
                       (resizing it: about 4 times on 9 threads), but take
                       CPU and memory from the page while it runs; here,
                       {threads} would leave a processor to its main thread.
-  --automation-pipe   Be driven through standard input and output, by machopo's
-                      WebDriver driver (machopodriver) or the scenario
-                      tests' runner: DevTools-protocol-shaped
-                      JSON messages, each followed by a NUL (as Chromium's
-                      --remote-debugging-pipe). The window is a window
-                      without the platform's: nothing shows (but with
-                      --window). Ends when the input does. Logs go to
-                      standard error, as always.
-  --window            With --automation-pipe: a real window, which stays on
-                      top and ignores the mouse and keyboard meanwhile.
+  --remote-debugging-pipe
+                      Be driven through a pipe, as Chrome's switch, by
+                      machopo's WebDriver driver (machopodriver), the
+                      scenario tests' runner or Chrome's clients
+                      (Playwright, Puppeteer): DevTools-protocol JSON
+                      messages, each followed by a NUL, read from file
+                      descriptor 3 and written to 4 (on Windows, the
+                      handles --remote-debugging-io-pipes=READ,WRITE
+                      names). In a shell, 3<&0 4>&1 makes them standard
+                      input and output. The window is a real one, which
+                      stays on top and ignores the mouse and keyboard
+                      meanwhile (but with --headless). Ends when the
+                      pipe's input does. Logs go to standard error, as
+                      always.
+  --headless          With --remote-debugging-pipe: a window without the
+                      platform's, as Chrome's switch: nothing shows.
   --host-resolver-rules RULES
-                      With --automation-pipe: hosts that resolve to a fixed
+                      With --remote-debugging-pipe: hosts that resolve to a fixed
                       address, or not at all, as Chromium's switch; web
                       tests map WPT's domains to this machine with
                       \"MAP nonexistent.*.test ^NOTFOUND, MAP *.test 127.0.0.1\".
   --additional-trust-anchors PEM
-                      With --automation-pipe: trust the root certificates in
-                      the PEM file too, as web tests do WPT's.
+                      With --remote-debugging-pipe: trust the root
+                      certificates in the PEM file too, as web tests do
+                      WPT's.
   --user-data-dir DIR Keep the profile (what pages store) in the folder DIR,
                       made if it isn't there, as Chrome's switch, its HTTP
                       cache in DIR's Cache (for a DIR in the user's data
@@ -134,18 +141,19 @@ Options:
                       for caches, as the user's own is). Without it a
                       window's is the user's own ({default_profile}, its
                       HTTP cache in {default_cache}), and
-                      --automation-pipe's is in memory, gone as it ends.
+                      --remote-debugging-pipe's is in memory, gone as it
+                      ends.
                       Only one machopo has a folder at a time: a second one
                       doesn't start.
   --remote-debugging-port PORT
-                      In a window or with --automation-pipe: serve the
+                      In a window or with --remote-debugging-pipe: serve the
                       DevTools protocol on 127.0.0.1:PORT (0: a free port),
                       as Chrome's switch, for Chrome's DevTools
                       (chrome://inspect) and other CDP clients: /json/list
                       lists the tabs, and websockets connect to the
                       browser or straight to a tab. Where it listens goes
                       to standard error. The methods are the pipe's; its
-                      Machopo domain only with --automation-pipe.
+                      Machopo domain only with --remote-debugging-pipe.
   --remote-allow-origins ORIGINS
                       Pages of these origins (comma-separated, or *) may
                       connect too, as Chrome's switch; by default no page
@@ -216,7 +224,8 @@ struct Args {
     /// `--ui-theme`; `None`: the system's.
     ui_theme: Option<ColorMode>,
     test_fonts: bool,
-    automation_pipe: Option<AutomationPipe>,
+    /// `--remote-debugging-pipe`.
+    pipe: Option<PipeArgs>,
     /// `--scale` for a real window: in place of the screen's.
     window_scale: Option<f32>,
     /// `--num-raster-threads`; `None`: the default.
@@ -230,26 +239,30 @@ struct Args {
     user_data_dir: Option<PathBuf>,
 }
 
-/// `--automation-pipe`, and the settings that go with it.
+/// `--remote-debugging-pipe`, and the settings that go with it.
 #[derive(Debug, PartialEq)]
-struct AutomationPipe {
-    /// `--window`: the real window.
-    window: bool,
+struct PipeArgs {
+    /// `--headless`: the window without the platform's; else the real one.
+    headless: bool,
     /// `--scale`: the device scale factor of the window without the
     /// platform's (a real window takes the screen's).
     scale: f32,
     host_resolver_rules: Option<String>,
     additional_trust_anchors: Option<PathBuf>,
+    /// `--remote-debugging-io-pipes`: on Windows, the pipe's two handles
+    /// (elsewhere it is 3 and 4, whatever this says, as Chrome's).
+    io_pipes: Option<String>,
 }
 
-impl Default for AutomationPipe {
-    /// No window, at 1x, the network as it is.
+impl Default for PipeArgs {
+    /// Headless, at 1x, the network as it is, no handles named.
     fn default() -> Self {
         Self {
-            window: false,
+            headless: true,
             scale: 1.0,
             host_resolver_rules: None,
             additional_trust_anchors: None,
+            io_pipes: None,
         }
     }
 }
@@ -261,8 +274,9 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
     let mut ui_theme = None;
     let mut scale = None;
     let mut test_fonts = false;
-    let mut automation_pipe = false;
-    let mut pipe_window = false;
+    let mut pipe = false;
+    let mut headless = false;
+    let mut io_pipes = None;
     let mut host_resolver_rules = None;
     let mut additional_trust_anchors = None;
     let mut num_raster_threads = None;
@@ -323,8 +337,24 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
             }
             "--single-process" => single_process = true,
             "--process-per-tab" => process_per_tab = true,
-            "--automation-pipe" => automation_pipe = true,
-            "--window" => pipe_window = true,
+            "--remote-debugging-pipe" => pipe = true,
+            "--headless" => headless = true,
+            "--remote-debugging-io-pipes" => io_pipes = Some(value("--remote-debugging-io-pipes")?),
+            // What these were, now Chrome's.
+            "--automation-pipe" => {
+                return Err(
+                    "--automation-pipe is --remote-debugging-pipe --headless now: the \
+                            pipe is file descriptors 3 and 4, as Chrome's"
+                        .into(),
+                );
+            }
+            "--window" => {
+                return Err(
+                    "--window is gone: --remote-debugging-pipe without --headless is the real \
+                     window"
+                        .into(),
+                );
+            }
             "--host-resolver-rules" => host_resolver_rules = Some(value("--host-resolver-rules")?),
             "--additional-trust-anchors" => {
                 additional_trust_anchors =
@@ -362,31 +392,35 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
     }
     // A process a tab unless told otherwise, as Chromium.
     let process_per_tab = !single_process;
-    if automation_pipe && ui_layout.is_some() {
+    if pipe && ui_layout.is_some() {
         return Err(
             "--ui-layout only applies to a window: what drives the pipe starts horizontal, so \
              that the page's size doesn't change with it"
                 .into(),
         );
     }
-    if automation_pipe && ui_theme.is_some() {
+    if pipe && ui_theme.is_some() {
         return Err(
             "--ui-theme only applies to a window: what drives the pipe sees the light UI, so \
              that its screenshots don't change with the machine"
                 .into(),
         );
     }
-    if automation_pipe && url.is_some() {
+    if pipe && url.is_some() {
         return Err(
-            "--automation-pipe is driven through the pipe, which navigates: no URL or path".into(),
+            "--remote-debugging-pipe is driven through the pipe, which navigates: no URL or path"
+                .into(),
         );
     }
-    if !automation_pipe
-        && (pipe_window || host_resolver_rules.is_some() || additional_trust_anchors.is_some())
+    if !pipe
+        && (headless
+            || host_resolver_rules.is_some()
+            || additional_trust_anchors.is_some()
+            || io_pipes.is_some())
     {
         return Err(
-            "--window, --host-resolver-rules and --additional-trust-anchors only apply with \
-             --automation-pipe"
+            "--headless, --host-resolver-rules, --additional-trust-anchors and \
+             --remote-debugging-io-pipes only apply with --remote-debugging-pipe"
                 .into(),
         );
     }
@@ -402,7 +436,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
     });
     // A real window's, if given; the pipe's window without the platform's
     // has 1 by default.
-    let window_scale = scale.filter(|_| !automation_pipe || pipe_window);
+    let window_scale = scale.filter(|_| !headless);
     let scale = scale.unwrap_or(1.0);
     Ok(Command::Run(Box::new(Args {
         window_scale,
@@ -414,18 +448,19 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
         process_per_tab,
         remote_debugging,
         user_data_dir,
-        automation_pipe: automation_pipe.then_some(AutomationPipe {
-            window: pipe_window,
+        pipe: pipe.then_some(PipeArgs {
+            headless,
             scale,
             host_resolver_rules,
             additional_trust_anchors,
+            io_pipes,
         }),
     })))
 }
 
-/// The network service's settings `--automation-pipe`'s options ask for:
-/// the rules parsed, the certificates read.
-fn network_params(pipe: &AutomationPipe) -> Result<NetworkContextParams, String> {
+/// The network service's settings `--remote-debugging-pipe`'s options ask
+/// for: the rules parsed, the certificates read.
+fn network_params(pipe: &PipeArgs) -> Result<NetworkContextParams, String> {
     let mut params = NetworkContextParams::default();
     if let Some(rules) = &pipe.host_resolver_rules {
         params.host_resolver_rules =
@@ -448,7 +483,7 @@ fn network_params(pipe: &AutomationPipe) -> Result<NetworkContextParams, String>
 fn profile_dir(args: &Args) -> Option<PathBuf> {
     match &args.user_data_dir {
         Some(dir) => Some(std::path::absolute(dir).unwrap_or_else(|_| dir.clone())),
-        None if args.automation_pipe.is_some() => None,
+        None if args.pipe.is_some() => None,
         None => browser::default_user_data_dir(),
     }
 }
@@ -458,7 +493,7 @@ fn profile(args: &Args) -> Result<browser::Profile, browser::ProfileError> {
     match profile_dir(args) {
         Some(dir) => browser::Profile::open(dir),
         None => {
-            if args.automation_pipe.is_none() {
+            if args.pipe.is_none() {
                 tracing::warn!(
                     "the environment doesn't say where the user's files are: nothing pages store \
                      is kept (--user-data-dir says where)"
@@ -476,7 +511,7 @@ where
 {
     tracing_subscriber::fmt::layer()
         .with_thread_names(true)
-        // Standard output is `--automation-pipe`'s.
+        // As Chrome's, with standard output left to what writes there.
         .with_writer(std::io::stderr)
         .with_filter(filter)
 }
@@ -550,6 +585,16 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // Before anything is opened (the trace's file, the profile's): with 3
+    // and 4 closed as machopo started, what it opened next would be given
+    // those numbers, and taken for the pipe.
+    let pipe = match args.pipe.as_ref().map(take_pipe).transpose() {
+        Ok(pipe) => pipe,
+        Err(e) => {
+            eprintln!("machopo: --remote-debugging-pipe: {e}");
+            return ExitCode::from(2);
+        }
+    };
 
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| DEFAULT_LOG_FILTER.into());
@@ -577,36 +622,39 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let result = match &args.automation_pipe {
-        Some(pipe) => match network_params(pipe) {
-            Ok(network) if pipe.window => window::run(window::Options {
+    let result = match (&args.pipe, pipe) {
+        (Some(args_pipe), Some(pipe)) => match network_params(args_pipe) {
+            Ok(network) if !args_pipe.headless => window::run(window::Options {
                 url: args.url,
                 ui_layout: UiLayout::Horizontal,
                 ui_theme: Some(ColorMode::Light),
                 test_fonts: args.test_fonts,
                 num_raster_threads: args.num_raster_threads,
                 process_per_tab: args.process_per_tab,
-                pipe: Some(network),
+                pipe: Some((network, pipe)),
                 remote_debugging: args.remote_debugging,
                 profile,
                 scale: args.window_scale,
             }),
-            Ok(network) => automation_pipe::run(automation_pipe::Options {
-                scale: pipe.scale,
-                test_fonts: args.test_fonts,
-                network,
-                num_raster_threads: args.num_raster_threads,
-                process_per_tab: args.process_per_tab,
-                remote_debugging: args.remote_debugging,
-                profile,
-                ..Default::default()
-            }),
+            Ok(network) => devtools_pipe_handler::run(
+                pipe,
+                devtools_pipe_handler::Options {
+                    scale: args_pipe.scale,
+                    test_fonts: args.test_fonts,
+                    network,
+                    num_raster_threads: args.num_raster_threads,
+                    process_per_tab: args.process_per_tab,
+                    remote_debugging: args.remote_debugging,
+                    profile,
+                    ..Default::default()
+                },
+            ),
             Err(e) => {
                 eprintln!("machopo: {e}");
                 return ExitCode::from(2);
             }
         },
-        None => window::run(window::Options {
+        _ => window::run(window::Options {
             url: args.url,
             ui_layout: args.ui_layout,
             ui_theme: args.ui_theme,
@@ -627,6 +675,23 @@ fn main() -> ExitCode {
         }
     };
     end(code, trace_end)
+}
+
+/// The pipe this process was started with, for `--remote-debugging-pipe`
+/// (`pipe`'s handles on Windows), or why there is none.
+fn take_pipe(pipe: &PipeArgs) -> Result<devtools_pipe_handler::Pipe, String> {
+    match ipc::platform::inherited_pipe(pipe.io_pipes.as_deref()) {
+        Ok((input, output)) => Ok(devtools_pipe_handler::Pipe { input, output }),
+        // What a person who started machopo in a shell is most likely to
+        // need.
+        Err(e @ (InheritError::Missing(_) | InheritError::NotAPipe(_))) if cfg!(unix) => {
+            Err(format!(
+                "{e}: what starts machopo gives it the pipe at file descriptors 3 and 4 (in a \
+                 shell, 3<&0 4>&1 makes them standard input and output)"
+            ))
+        }
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// Ends this process, its renderers and its threads wound down, with
@@ -674,14 +739,18 @@ mod tests {
         };
         // The default, and said outright; in a window and by the pipe.
         assert!(run(&["about:blank"]).process_per_tab);
-        assert!(run(&["--automation-pipe"]).process_per_tab);
-        assert!(run(&["--automation-pipe", "--window"]).process_per_tab);
+        assert!(run(&["--remote-debugging-pipe", "--headless"]).process_per_tab);
+        assert!(run(&["--remote-debugging-pipe"]).process_per_tab);
         assert!(!run(&["--single-process"]).process_per_tab);
-        assert!(!run(&["--automation-pipe", "--single-process"]).process_per_tab);
-        assert!(!run(&["--automation-pipe", "--window", "--single-process"]).process_per_tab);
+        assert!(
+            !run(&["--remote-debugging-pipe", "--headless", "--single-process"]).process_per_tab
+        );
+        assert!(!run(&["--remote-debugging-pipe", "--single-process"]).process_per_tab);
         assert!(run(&["--process-per-tab"]).process_per_tab);
-        assert!(run(&["--automation-pipe", "--process-per-tab"]).process_per_tab);
-        assert!(run(&["--automation-pipe", "--window", "--process-per-tab"]).process_per_tab);
+        assert!(
+            run(&["--remote-debugging-pipe", "--headless", "--process-per-tab"]).process_per_tab
+        );
+        assert!(run(&["--remote-debugging-pipe", "--process-per-tab"]).process_per_tab);
         let both = parse(&["--single-process", "--process-per-tab"]);
         assert!(
             matches!(&both, Err(e) if e.contains("opposite")),
@@ -713,7 +782,7 @@ mod tests {
     fn defaults() {
         let args = run(&[]);
         assert_eq!(args.url, DEFAULT_URL);
-        assert!(args.automation_pipe.is_none());
+        assert!(args.pipe.is_none());
         assert!(!args.test_fonts);
         assert_eq!(args.num_raster_threads, None);
         assert!(args.process_per_tab);
@@ -730,11 +799,14 @@ mod tests {
         assert_eq!(dir, Some(PathBuf::from("profile")));
         let absolute = std::env::temp_dir().join("p");
         let flag = format!("--user-data-dir={}", absolute.display());
-        let piped = run(&["--automation-pipe", &flag]);
+        let piped = run(&["--remote-debugging-pipe", "--headless", &flag]);
         assert_eq!(piped.user_data_dir.as_ref(), Some(&absolute));
         assert!(parse(&["--user-data-dir="]).is_err());
         assert!(parse(&["--user-data-dir"]).is_err());
-        assert_eq!(profile_dir(&run(&["--automation-pipe"])), None);
+        assert_eq!(
+            profile_dir(&run(&["--remote-debugging-pipe", "--headless"])),
+            None
+        );
         assert_eq!(profile_dir(&run(&[])), browser::default_user_data_dir());
         // As the working directory has it as machopo starts.
         assert_eq!(
@@ -768,7 +840,15 @@ mod tests {
         let err = |args: &[&str]| parse(args).unwrap_err();
         assert!(err(&["--ui-layout", "vertical"]).contains("horizontal or sidebar"));
         // What drives the pipe starts horizontal.
-        assert!(err(&["--automation-pipe", "--ui-layout", "sidebar"]).contains("only applies"));
+        assert!(
+            err(&[
+                "--remote-debugging-pipe",
+                "--headless",
+                "--ui-layout",
+                "sidebar"
+            ])
+            .contains("only applies")
+        );
     }
 
     #[test]
@@ -779,7 +859,15 @@ mod tests {
         let err = |args: &[&str]| parse(args).unwrap_err();
         assert!(err(&["--ui-theme", "auto"]).contains("light or dark"));
         // What drives the pipe sees the light UI.
-        assert!(err(&["--automation-pipe", "--ui-theme", "dark"]).contains("only applies"));
+        assert!(
+            err(&[
+                "--remote-debugging-pipe",
+                "--headless",
+                "--ui-theme",
+                "dark"
+            ])
+            .contains("only applies")
+        );
     }
 
     #[test]
@@ -787,8 +875,8 @@ mod tests {
         let args = run(&["--num-raster-threads=2", "about:blank?a=b"]);
         assert_eq!(args.url, "about:blank?a=b");
         assert_eq!(args.num_raster_threads, Some(2));
-        let args = run(&["--automation-pipe", "--scale=1.5"]);
-        assert_eq!(args.automation_pipe.map(|pipe| pipe.scale), Some(1.5));
+        let args = run(&["--remote-debugging-pipe", "--headless", "--scale=1.5"]);
+        assert_eq!(args.pipe.map(|pipe| pipe.scale), Some(1.5));
         let err = |args: &[&str]| parse(args).unwrap_err();
         assert!(err(&["--test-fonts=yes"]).contains("--test-fonts takes no value"));
     }
@@ -804,7 +892,8 @@ mod tests {
             })
         );
         let args = run(&[
-            "--automation-pipe",
+            "--remote-debugging-pipe",
+            "--headless",
             "--remote-debugging-port",
             "9222",
             "--remote-allow-origins=*",
@@ -828,8 +917,13 @@ mod tests {
     #[test]
     fn errors_say_what_is_wrong() {
         let err = |args: &[&str]| parse(args).unwrap_err();
-        assert!(err(&["--automation-pipe", "--scale", "-1"]).contains("positive"));
-        assert!(err(&["--automation-pipe", "--scale"]).contains("--scale needs a value"));
+        assert!(
+            err(&["--remote-debugging-pipe", "--headless", "--scale", "-1"]).contains("positive")
+        );
+        assert!(
+            err(&["--remote-debugging-pipe", "--headless", "--scale"])
+                .contains("--scale needs a value")
+        );
         for n in ["0", "-1", "two"] {
             assert!(
                 err(&["--num-raster-threads", n]).contains("whole number from 1"),
@@ -839,63 +933,76 @@ mod tests {
         // A real window's takes the place of the screen's; the pipe's
         // window without the platform's has its own.
         assert_eq!(run(&["--scale", "2"]).window_scale, Some(2.0));
-        let window = run(&["--automation-pipe", "--window", "--scale=1"]);
+        let window = run(&["--remote-debugging-pipe", "--scale=1"]);
         assert_eq!(window.window_scale, Some(1.0));
         assert_eq!(
-            run(&["--automation-pipe", "--scale", "2"]).window_scale,
+            run(&["--remote-debugging-pipe", "--headless", "--scale", "2"]).window_scale,
             None
         );
         assert_eq!(run(&[]).window_scale, None);
         assert!(err(&["--frobnicate"]).contains("unknown option"));
         // The modes machopo has no more.
-        for gone in ["--headless", "--size", "--automation", "--out"] {
+        for gone in ["--size", "--automation", "--out"] {
             assert!(err(&[gone, "x"]).contains("unknown option"), "{gone}");
         }
+        // The switches Chrome's took the place of say what they are now.
+        assert!(err(&["--automation-pipe"]).contains("--remote-debugging-pipe --headless now"));
+        assert!(err(&["--window"]).contains("without --headless is the real window"));
+        // As Chrome's: no value (`=cbor`, its other format, isn't machopo's).
+        assert!(
+            err(&["--remote-debugging-pipe=cbor"])
+                .contains("--remote-debugging-pipe takes no value")
+        );
         assert!(err(&["a.html", "b.html"]).contains("more than one"));
         assert!(err(&["--script", "wasm"]).contains("--script"));
-        assert!(err(&["--automation-pipe", "about:blank"]).contains("driven through the pipe"));
+        assert!(
+            err(&["--remote-debugging-pipe", "--headless", "about:blank"])
+                .contains("driven through the pipe")
+        );
         assert!(err(&["--host-resolver-rules", "MAP * 127.0.0.1"]).contains("only apply with"));
-        assert!(err(&["--window"]).contains("only apply with"));
+        assert!(err(&["--headless"]).contains("only apply with"));
         assert!(err(&["--additional-trust-anchors", "a.pem"]).contains("only apply with"));
+        assert!(err(&["--remote-debugging-io-pipes=1,2"]).contains("only apply with"));
         assert!(err(&["--host-resolver-rules"]).contains("needs a value"));
     }
 
     #[test]
-    fn automation_pipe() {
+    fn remote_debugging_pipe() {
         let args = run(&[
-            "--automation-pipe",
+            "--remote-debugging-pipe",
             "--host-resolver-rules",
             "MAP *.test 127.0.0.1",
             "--additional-trust-anchors",
             "ca.pem",
             "--test-fonts",
-            "--window",
+            "--remote-debugging-io-pipes=12,34",
         ]);
         assert_eq!(
-            args.automation_pipe,
-            Some(AutomationPipe {
-                window: true,
+            args.pipe,
+            Some(PipeArgs {
+                headless: false,
                 scale: 1.0,
                 host_resolver_rules: Some("MAP *.test 127.0.0.1".into()),
                 additional_trust_anchors: Some("ca.pem".into()),
+                io_pipes: Some("12,34".into()),
             })
         );
         assert!(args.test_fonts);
         assert_eq!(
-            run(&["--automation-pipe"]).automation_pipe,
-            Some(AutomationPipe::default())
+            run(&["--remote-debugging-pipe", "--headless"]).pipe,
+            Some(PipeArgs::default())
         );
         assert_eq!(
-            run(&["--automation-pipe", "--scale", "2"]).automation_pipe,
-            Some(AutomationPipe {
+            run(&["--remote-debugging-pipe", "--headless", "--scale", "2"]).pipe,
+            Some(PipeArgs {
                 scale: 2.0,
                 ..Default::default()
             })
         );
-        assert_eq!(run(&[]).automation_pipe, None);
+        assert_eq!(run(&[]).pipe, None);
         // The rules are checked, and the certificates read, before the
         // browser starts.
-        let bad = AutomationPipe {
+        let bad = PipeArgs {
             host_resolver_rules: Some("FLY *".into()),
             ..Default::default()
         };
@@ -904,7 +1011,7 @@ mod tests {
                 .unwrap_err()
                 .starts_with("--host-resolver-rules: ")
         );
-        let missing = AutomationPipe {
+        let missing = PipeArgs {
             additional_trust_anchors: Some("no-such.pem".into()),
             ..Default::default()
         };
@@ -921,8 +1028,9 @@ mod tests {
         for option in [
             "--scale",
             "--test-fonts",
-            "--automation-pipe",
-            "--window",
+            "--remote-debugging-pipe",
+            "--headless",
+            "--remote-debugging-io-pipes",
             "--host-resolver-rules",
             "--additional-trust-anchors",
             "--num-raster-threads",

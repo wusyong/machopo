@@ -7,6 +7,8 @@ use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use crate::automation_pipe::start_machopo;
+
 const MACHOPO: &str = env!("CARGO_BIN_EXE_machopo");
 
 /// What the process exited with, if it did before long.
@@ -210,14 +212,13 @@ fn tabs_renderers_are_processes_unless_machopo_is_told_otherwise() {
         (None, 1),
         (Some("--single-process"), 0),
     ] {
-        let mut browser = Command::new(MACHOPO)
-            .args(["--automation-pipe", "--test-fonts"])
+        let mut command = Command::new(MACHOPO);
+        command
+            .args(["--remote-debugging-pipe", "--headless", "--test-fonts"])
             .args(switch)
-            .stdin(Stdio::piped())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("machopo starts");
+            .stderr(Stdio::null());
+        let (mut browser, input, _output) = start_machopo(&mut command);
         // As long as a renderer takes to be started, and to be seen not
         // to have been.
         let started = Instant::now();
@@ -233,8 +234,69 @@ fn tabs_renderers_are_processes_unless_machopo_is_told_otherwise() {
         // The pipe closed is the browser's end, and its renderer's with
         // it.
         let pid = browser.id();
-        drop(browser.stdin.take());
+        drop(input);
         assert_eq!(exit_of(&mut browser), Some(0), "{switch:?}");
         assert_eq!(renderers_of(pid), 0, "{switch:?}");
     }
+}
+
+/// What descriptor 1 of process `pid` is, as the system tells it: the
+/// same for two processes that write to the same pipe.
+#[cfg(target_os = "linux")]
+fn standard_output_of(pid: u32) -> String {
+    std::fs::read_link(format!("/proc/{pid}/fd/1"))
+        .expect("its standard output")
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// What descriptor 1 of process `pid` is, as `lsof` tells it: its type,
+/// and for a pipe the other end's address, the same for two processes
+/// that write to the same pipe.
+#[cfg(target_os = "macos")]
+fn standard_output_of(pid: u32) -> String {
+    let found = Command::new("lsof")
+        .args(["-a", "-p", &pid.to_string(), "-d", "1", "-F", "tn"])
+        .output()
+        .expect("lsof runs");
+    String::from_utf8_lossy(&found.stdout)
+        .lines()
+        .filter(|line| line.starts_with('t') || line.starts_with('n'))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A renderer's standard output is the browser's, as a Chromium child's
+/// is: the pipe is apart from it, at 3 and 4.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn a_renderers_standard_output_is_the_browsers() {
+    let mut command = Command::new(MACHOPO);
+    command
+        .args(["--remote-debugging-pipe", "--headless", "--test-fonts"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let (mut browser, input, _output) = start_machopo(&mut command);
+    let started = Instant::now();
+    let renderer = loop {
+        let found = Command::new("pgrep")
+            .args(["-P", &browser.id().to_string(), "-f"])
+            .arg(shell::RENDERER_PROCESS_SWITCH.trim_start_matches('-'))
+            .output()
+            .expect("pgrep runs");
+        if let Some(pid) = String::from_utf8_lossy(&found.stdout)
+            .lines()
+            .next()
+            .and_then(|line| line.trim().parse::<u32>().ok())
+        {
+            break pid;
+        }
+        assert!(started.elapsed() < Duration::from_secs(20), "no renderer");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let browsers = standard_output_of(browser.id());
+    assert!(browsers.to_lowercase().contains("pipe"), "{browsers}");
+    assert_eq!(standard_output_of(renderer), browsers);
+    drop(input);
+    assert_eq!(exit_of(&mut browser), Some(0));
 }

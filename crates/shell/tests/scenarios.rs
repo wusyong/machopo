@@ -10,8 +10,8 @@
 //! Without `MACHOPO_SLOW_TESTS` it does nothing: the scenarios wait in real
 //! time, which a plain `cargo test --workspace` shouldn't.
 //!
-//! With `--window`, each scenario runs in a `machopo --automation-pipe
-//! --window` of its own (winit opens one event loop a process), driven
+//! With `--window`, each scenario runs in a `machopo --remote-debugging-pipe`
+//! (no `--headless`: the real window) of its own (winit opens one event loop a process), driven
 //! through the pipe as machopodriver drives it, one at a time (the window
 //! stays on top), with the system's keyboard shortcuts only. Its
 //! screenshots, and machopo's log, go to `target/automation-results/<name>/`.
@@ -255,28 +255,27 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long machopo has to end once its input has, before it is killed.
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Runs `scenario` (the file at `path`) in `machopo --automation-pipe
-/// --window`, as a client of its pipe: `protocol::automation`'s messages,
-/// each followed by a NUL. Its screenshots and machopo's log go to `out`.
+/// Runs `scenario` (the file at `path`) in `machopo --remote-debugging-pipe`
+/// (the real window), as a client of its pipe: `protocol::automation`'s
+/// messages, each followed by a NUL, on its descriptors 3 and 4. Its screenshots and machopo's log go to `out`.
 fn run_in_window(scenario: &scenario::Scenario, path: &Path, out: &Path) -> Result<(), Failure> {
     let failure = |message: String| Failure { line: 0, message };
     std::fs::create_dir_all(out).map_err(|e| failure(format!("{}: {e}", out.display())))?;
     let log = File::create(out.join("machopo.log"))
         .map_err(|e| failure(format!("{}: {e}", out.display())))?;
-    let mut child = Process::new(env!("CARGO_BIN_EXE_machopo"))
-        .args(["--automation-pipe", "--window"])
+    let mut command = Process::new(env!("CARGO_BIN_EXE_machopo"));
+    command
+        .arg("--remote-debugging-pipe")
         .arg(format!("--scale={}", scenario.window.scale.unwrap_or(1.0)))
         // Each tab's renderer in machopo's own process, when the run asks
         // (`test.py scenarios --window --single-process`); by default it
         // is a process of its own.
         .args(std::env::var_os("MACHOPO_SINGLE_PROCESS").map(|_| "--single-process"))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(log)
-        .spawn()
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(log);
+    let (mut child, mut input, output) = ipc::platform::spawn_with_pipe(&mut command)
         .map_err(|e| failure(format!("starting machopo: {e}")))?;
-    let mut input = child.stdin.take().expect("piped");
-    let output = child.stdout.take().expect("piped");
     // The writer and the reader are threads of their own: the runner's
     // `Client` sends from wherever it runs, and waits on a channel.
     let (commands, to_write) = unbounded::<Command>();

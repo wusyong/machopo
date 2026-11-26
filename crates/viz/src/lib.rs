@@ -5,7 +5,7 @@
 //! ([`surface_aggregator`]) and hands it to a [`DirectRenderer`], which
 //! draws it to the output: with wgpu ([`WgpuRenderer`], our `SkiaRenderer`
 //! and `SkiaOutputSurface`), into a window's surface or, with no window
-//! (headless, `--automation-pipe`, tests), a texture of its own, on the
+//! (`--headless`, tests), a texture of its own, on the
 //! process's one device ([`gpu_context`]). There is no software
 //! compositing: without a GPU, wgpu's CPU adapter draws.
 //!

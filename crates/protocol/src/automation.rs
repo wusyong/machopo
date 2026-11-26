@@ -1,5 +1,5 @@
 //! Automation <-> Browser: what drives a browser from outside it (machopo's
-//! WebDriver driver, `machopodriver`, through `machopo --automation-pipe`), shaped
+//! WebDriver driver, `machopodriver`, through `machopo --remote-debugging-pipe`), shaped
 //! as the Chrome DevTools Protocol (Chromium's `browser_protocol.pdl`).
 //!
 //! The envelope is CDP's: a command is `{id, method, params, sessionId}`,
@@ -8,8 +8,8 @@
 //! is `{method, params, sessionId}`. A method CDP has keeps CDP's name,
 //! parameters and meaning; a parameter machopo doesn't take is
 //! `INVALID_PARAMS`, never ignored. What CDP has no method for is in machopo's
-//! own `Machopo` domain. On the pipe each message is followed by a NUL, as on
-//! Chromium's `--remote-debugging-pipe`.
+//! own `Machopo` domain. On the pipe (`--remote-debugging-pipe`, file
+//! descriptors 3 and 4) each message is followed by a NUL, as on Chromium's.
 //!
 //! A page's methods go to a session (`sessionId`), which
 //! `Target.attachToTarget` makes for a tab (CDP's flat sessions); the

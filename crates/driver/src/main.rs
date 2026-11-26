@@ -28,14 +28,16 @@ machopodriver: machopo's WebDriver (classic) server.
 {USAGE}
 
 Serves WebDriver on 127.0.0.1. Each session starts a machopo of its own, with
---automation-pipe (nothing shows), and ends it with the session.
+--remote-debugging-pipe --headless (nothing shows), and ends it with the
+session.
 
 Options:
   --port N            The port (default {DEFAULT_PORT}); 0 picks a free one, which
                       it prints.
   --binary MACHOPO        The machopo to start (default: the machopo next to machopodriver).
-  --binary-arg ARG    An argument for machopo, after --automation-pipe; once per
-                      argument, e.g. --binary-arg --test-fonts.
+  --binary-arg ARG    An argument for machopo, after --remote-debugging-pipe
+                      --headless; once per argument, e.g. --binary-arg
+                      --test-fonts.
   -h, --help          Print this help.
 
 Environment:

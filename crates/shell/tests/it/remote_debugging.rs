@@ -5,13 +5,15 @@
 //! `PUT` for `/json/new`, ids they can't guess); and the clients kept
 //! apart, each with its own sessions and events.
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, PipeWriter, Read, Write};
 use std::net::TcpStream;
-use std::process::{Child, ChildStdin, Command as Process, ExitStatus, Stdio};
+use std::process::{Child, Command as Process, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, unbounded};
 use protocol::automation::Message;
+
+use crate::automation_pipe::start_machopo;
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::handshake::client::Response;
@@ -21,11 +23,11 @@ use tokio_tungstenite::tungstenite::{self, HandshakeError, Message as Frame, Web
 
 const TIMEOUT: Duration = Duration::from_secs(30);
 
-/// A `machopo --automation-pipe --remote-debugging-port=0`, its pipe and the
+/// A `machopo --remote-debugging-pipe --headless --remote-debugging-port=0`, its pipe and the
 /// server's port. Other modules drive machopo with it too (`devtools`).
 pub(crate) struct Machopo {
     child: Child,
-    input: Option<ChildStdin>,
+    input: Option<PipeWriter>,
     pipe: Receiver<Message>,
     /// The pipe's events read while waiting for an answer.
     pipe_events: Vec<String>,
@@ -43,21 +45,20 @@ impl Machopo {
     }
 
     pub(crate) fn start_with(args: &[&str]) -> Self {
-        let mut child = Process::new(env!("CARGO_BIN_EXE_machopo"))
+        let mut command = Process::new(env!("CARGO_BIN_EXE_machopo"));
+        command
             .args([
-                "--automation-pipe",
+                "--remote-debugging-pipe",
+                "--headless",
                 "--test-fonts",
                 "--remote-debugging-port=0",
             ])
             .args(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("machopo starts");
-        let input = child.stdin.take();
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        let (mut child, input, output) = start_machopo(&mut command);
+        let input = Some(input);
         let (tx, pipe) = unbounded();
-        let output = child.stdout.take().expect("piped");
         std::thread::spawn(move || {
             let mut output = BufReader::new(output);
             let mut bytes = Vec::new();
@@ -824,18 +825,18 @@ fn a_port_taken_ends_it_with_an_error() {
     let taken = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
     let port = taken.local_addr().expect("its address").port();
     for _ in 0..30 {
-        let mut child = Process::new(env!("CARGO_BIN_EXE_machopo"))
+        let mut command = Process::new(env!("CARGO_BIN_EXE_machopo"));
+        command
             .args([
-                "--automation-pipe",
+                "--remote-debugging-pipe",
+                "--headless",
                 "--test-fonts",
                 &format!("--remote-debugging-port={port}"),
             ])
             .env("MACHOPO_GPU_ADAPTER", "cpu")
-            .stdin(Stdio::piped())
             .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("machopo starts");
+            .stderr(Stdio::piped());
+        let (mut child, _input, _output) = start_machopo(&mut command);
         let mut errors = String::new();
         child
             .stderr

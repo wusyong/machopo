@@ -15,13 +15,13 @@
 
 pub mod automation;
 mod automation_cookies;
-pub mod automation_pipe;
 pub mod automation_session;
 pub mod browser_view;
 pub mod browser_view_layout;
 pub mod browser_window;
 pub mod chrome;
 pub mod devtools_http_handler;
+pub mod devtools_pipe_handler;
 pub mod headless;
 pub mod keyboard;
 pub mod mouse;
@@ -91,15 +91,12 @@ pub fn renderer_launcher(process_per_tab: bool) -> browser::RendererLauncher {
         let executable = std::env::current_exe().unwrap_or_default();
         let mut command = std::process::Command::new(executable);
         command.arg(RENDERER_PROCESS_SWITCH);
-        // Not the automation pipe, which is the browser's alone: its input
-        // is nothing (as a Chromium child's, `LaunchProcess`), and what it
-        // prints goes with the browser's log, off the pipe's messages. A
-        // client then hears the pipe end as the browser does, not once the
-        // last renderer has. (Chromium's children keep its standard output:
-        // its `--remote-debugging-pipe` is two other descriptors.)
-        command
-            .stdin(std::process::Stdio::null())
-            .stdout(std::io::stderr());
+        // Its input is nothing, as a Chromium child's (`LaunchProcess`); its
+        // output and errors are the browser's, as a Chromium child's are.
+        // The pipe isn't among them: the browser took its ends
+        // close-on-exec (not inheritable on Windows), so a client hears the
+        // pipe end as the browser does, not once the last renderer has.
+        command.stdin(std::process::Stdio::null());
         command
     }))
 }

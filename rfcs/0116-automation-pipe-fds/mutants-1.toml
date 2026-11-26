@@ -44,16 +44,6 @@ from = '''        check(OUTPUT_FD, PipeEnd::Output)?;'''
 to = '''        let _ = (OUTPUT_FD, PipeEnd::Output);'''
 
 [[mutant]]
-name = "handles are taken on macOS and Linux too"
-file = "crates/ipc/src/platform/pipe.rs"
-from = '''        if io_pipes.is_some() {
-            return Err(InheritError::HandlesOnlyOnWindows);
-        }
-        // Asked once, whatever comes of it: once 3 and 4 are taken, or'''
-to = '''        let _ = io_pipes;
-        // Asked once, whatever comes of it: once 3 and 4 are taken, or'''
-
-[[mutant]]
 name = "a child's ends aren't moved past 4"
 file = "crates/ipc/src/platform/pipe.rs"
 from = '''        if fd.as_raw_fd() >= PAST_THE_PIPE {'''
