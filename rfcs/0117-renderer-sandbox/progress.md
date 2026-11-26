@@ -20,7 +20,7 @@
 | 3b. `sunaba::windows`：啟動 process 的函式、policy（AppContainer 的 token、job、mitigation）、降 integrity；`sunaba_probe` 的 Windows 版和「做不到」的測試；README 和 `soundness.md` | 做完 | 2026-11-26 |
 | 3c. `ipc` 的 `spawn` 改用它：自己的 `Child`、`spawn_in`、`spawn_reading_errors`（`spawn_with_pipe` 沒有改，鎖還在：已決定的事項第 23 條） | 做完 | 2026-11-26 |
 | 3d. 接上 machopo：`shell::renderer_sandbox` 的 Windows policy、延後載入、renderer 的 `main` 降 integrity、`--allow-third-party-modules`、從外面看真的 renderer 的測試 | 做完 | 2026-11-26 |
-| 3e. trace 和 census 的檔案由 Browser 開好交給 renderer（fork 的 Rust 加 Windows 的入口） | 做完（**fork 的 commit、push 和 machopo 的 `third_party.toml` 的 `rev` 還沒做，等使用者**） | 2026-11-26 |
+| 3e. trace 和 census 的檔案由 Browser 開好交給 renderer（fork 的 Rust 加 Windows 的入口） | 做完 | 2026-11-26 |
 | 3f. 第 3 段的檢查和文件 | 做完（只在 Windows 上；Linux 和 macOS 上還沒跑過這一段的改動） | 2026-11-26 |
 
 ## 驗收
@@ -158,7 +158,7 @@
 
 ### 3e：trace 和 census（2026-11-26，同一台）
 
-- rusty_v8 的 fork：只改了 Rust。`machopo__Trace__StartInto` 收的是 C runtime 的 file descriptor，C++ 在每個平台都編進去了，prebuilt 裡本來就有；只有 Rust 的 `start_into` 標了只限 Unix。加了 Windows 版（`_open_osfhandle` 把 handle 變成 descriptor，帶 `_O_BINARY`），`README.machopo.md` 跟著改。**沒有重編 V8**；原本以為要改 C++（第 24 條照實改了）。**fork 的兩個檔案改了、沒有 commit**。
+- rusty_v8 的 fork：只改了 Rust。`machopo__Trace__StartInto` 收的是 C runtime 的 file descriptor，C++ 在每個平台都編進去了，prebuilt 裡本來就有；只有 Rust 的 `start_into` 標了只限 Unix。加了 Windows 版（`_open_osfhandle` 把 handle 變成 descriptor，帶 `_O_BINARY`），`README.machopo.md` 跟著改。**沒有重編 V8**；原本以為要改 C++（第 24 條照實改了）。fork 的 commit 是 `92a2314`，推到了 `machopo`；machopo 的 `third_party.toml` 的 `rev` 指到它（只改 Rust，不發新的 release），`ci.py third-party` 過。
 - machopo：`browser::RendererProcess`（命令、sandbox、交出去的檔案、process 建好之後叫的函式）；`ipc::platform` 的 `spawn_handing`、`inherited_file`（Windows）；`shell` 的 `renderer_sandbox::windows`（`Handed`：先用別的名字建檔、建好再改名；`HandedFiles`：renderer 讀命令列的 `--trace-file`、`--census-file`）；renderer 的 `main` 接手檔案、降權、才開始 trace；`base::census::own_file_from`；`bindings::trace::start_into` 和 `shell::trace::layer_into` 不再只限 Unix。
 - 原本沒過的 3 個 trace 測試過了。`cargo test -p shell --features census --test it census`：過。新的單元測試 3 個（命令列的值、開著時改名、每個 renderer 自己的 AppContainer），`ipc` 1 個（`a_handed_file_is_taken_by_its_value_and_nothing_else_is`）。
 - 量測工具的測試：`speedometer_test.py`（142 個，跳過 4 個）、`blink_perf_test.py`（46 個）、`raster_test.py`（13 個，跳過 1 個）、`census_test.py`（5 個）：過。
@@ -178,4 +178,4 @@
   - 這兩個測試，和 CI 最近 40 次裡失敗過的 `navigation::links::location_navigates_to_other_documents_through_the_browser`（同一個 task 裡被取代的那次導覽，請求有時來得及送出去），另外改了（`6523c436`，和這份無關的一個 commit）：改完各跑 320 次、8 個同時，都沒有失敗。
 - 文件：`docs/limitations.md`（「隔離」改成三個平台、Windows 擋不住的、環境變數、`--allow-third-party-modules`、console；`ipc` 在 Windows 上啟動 child 的那一條改成只剩 `spawn_with_pipe`）、`docs/architecture.md`（「Process 的邊界」第 5 條、crate 表的 `sunaba`、`unsafe` 的位置）、`docs/test-gaps.md`（五條）、`crates/sunaba` 的 README 和 `soundness.md`、`crates/ipc` 的 README 和 `soundness.md`、`machopo --help`。
 - 沒有做的：Speedometer（等使用者要求）；release build（延後載入和 sandbox 只在 debug build 上跑過）；Windows 10；Linux 和 macOS 上重跑。
-- 還沒做、等使用者：fork 的 commit 和 push、`third_party.toml` 的 `rev`（之後別的機器和 CI 才編得過）；這一段的 commit。
+- 還沒做、等使用者：在 Linux 和 macOS 上跑這一段的改動；release build。這個 branch 還沒有 push。
