@@ -3296,9 +3296,9 @@ fn renderer_pids(browser: &mut Browser) -> Vec<u64> {
 }
 
 /// A renderer process doesn't have machopo's automation pipe: its standard
-/// input is nothing, and its standard output machopo's standard error,
-/// so a client hears the pipe end once machopo has, and what a renderer
-/// prints isn't taken for a message.
+/// input is nothing, and its standard error machopo's, so a client hears
+/// the pipe end once machopo has. (Its standard output is machopo's, as
+/// `renderer_process` tests.)
 #[cfg(target_os = "linux")]
 #[test]
 fn a_renderer_process_hasnt_the_pipe() {
@@ -3314,7 +3314,6 @@ fn a_renderer_process_hasnt_the_pipe() {
     assert_eq!(pids.len(), 1, "{pids:?}");
     let fd = |n: u32| std::fs::read_link(format!("/proc/{}/fd/{n}", pids[0])).unwrap();
     assert_eq!(fd(0), std::path::Path::new("/dev/null"));
-    assert_eq!(fd(1), log);
     assert_eq!(fd(2), log);
     assert!(browser.end().success());
 }
