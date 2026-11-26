@@ -1,0 +1,308 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 79b9bfe7..f0ae2bd9 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -2536,6 +2536,7 @@ dependencies = [
+  "dom",
+  "gfx",
+  "html",
++ "icu_properties",
+  "icu_segmenter",
+  "kurbo",
+  "parley",
+diff --git a/crates/layout/Cargo.toml b/crates/layout/Cargo.toml
+index 3dea9344..c861899f 100644
+--- a/crates/layout/Cargo.toml
++++ b/crates/layout/Cargo.toml
+@@ -26,6 +26,8 @@ gfx.workspace = true
+ kurbo.workspace = true
+ svgtypes.workspace = true
+ icu_segmenter.workspace = true
++# PROTOTYPE
++icu_properties.workspace = true
+ taffy.workspace = true
+ parley.workspace = true
+ read-fonts.workspace = true
+diff --git a/crates/layout/src/canvas_text.rs b/crates/layout/src/canvas_text.rs
+index 0ce298af..1c0f51a4 100644
+--- a/crates/layout/src/canvas_text.rs
++++ b/crates/layout/src/canvas_text.rs
+@@ -40,6 +40,7 @@ fn shape(cx: &mut TextContext, text: &str, style: &CanvasTextStyle) -> (Vec<Glyp
+     if text.is_empty() {
+         return (Vec::new(), 0.0);
+     }
++    cx.resolve_text(text);
+     cx.resolve_families(&style.font.family);
+     let (fonts, layouts, families) = cx.contexts();
+     let mut builder = layouts.ranged_builder(fonts, text, 1.0, true);
+diff --git a/crates/layout/src/text.rs b/crates/layout/src/text.rs
+index bd519aaf..8a9133c3 100644
+--- a/crates/layout/src/text.rs
++++ b/crates/layout/src/text.rs
+@@ -51,6 +51,198 @@ pub struct TextContext {
+     layout: LayoutContext<u32>,
+     /// What each `font-family` value shaped so far is in `fonts`.
+     families: FontFallbackMap,
++    /// PROTOTYPE: where `fonts` gets the system's from, when it has none
++    /// of its own.
++    relay: Option<Relay>,
++}
++
++/// PROTOTYPE: the system's fonts as a browser would have them, and what
++/// of them the renderer's collection was given so far.
++struct Relay {
++    system: FontContext,
++    /// A system family's name, lower case, and what it is in the
++    /// renderer's collection.
++    families: rustc_hash::FxHashMap<String, Option<parley::fontique::FamilyId>>,
++    /// A font file's faces as registered.
++    files: rustc_hash::FxHashMap<
++        u64,
++        Vec<(parley::fontique::FamilyId, Vec<parley::fontique::FontInfo>)>,
++    >,
++    prepared: bool,
++    /// Fallbacks only for the scripts texts have had.
++    lazy: bool,
++    scripts: rustc_hash::FxHashSet<[u8; 4]>,
++}
++
++impl Relay {
++    fn family(&mut self, fonts: &mut FontContext, name: &str) -> Option<parley::fontique::FamilyId> {
++        let key = name.to_lowercase();
++        if let Some(known) = self.families.get(&key) {
++            return *known;
++        }
++        let started = std::time::Instant::now();
++        let mut ours = None;
++        let mut split = false;
++        if let Some(family) = self.system.collection.family_by_name(name) {
++            for font in family.fonts() {
++                let source = font.source().clone();
++                let id = source.id().to_u64();
++                if !self.files.contains_key(&id) {
++                    let registered = match self.system.source_cache.get(&source) {
++                        Some(blob) => {
++                            let single = !matches!(
++                                read_fonts::FileRef::new(blob.as_ref()),
++                                Ok(read_fonts::FileRef::Collection(_))
++                            );
++                            // A file of one face is the system's family's
++                            // as the system has it; a collection's faces
++                            // are whatever families they name.
++                            let over = single.then(|| parley::fontique::FontInfoOverride {
++                                family_name: Some(family.name()),
++                                width: Some(font.width()),
++                                style: Some(font.style()),
++                                weight: Some(font.weight()),
++                                axes: None,
++                            });
++                            eprintln!(
++                                "FONTRELAY file bytes={} collection={}",
++                                blob.len(),
++                                !single
++                            );
++                            fonts.collection.register_fonts(blob, over)
++                        }
++                        None => Vec::new(),
++                    };
++                    self.files.insert(id, registered);
++                }
++                let found = self.files[&id].iter().find_map(|(family, infos)| {
++                    infos
++                        .iter()
++                        .any(|info| info.index() == font.index())
++                        .then_some(*family)
++                });
++                match (ours, found) {
++                    (None, Some(found)) => ours = Some(found),
++                    (Some(first), Some(found)) if first != found => split = true,
++                    _ => {}
++                }
++            }
++        }
++        let named = ours.and_then(|id| fonts.collection.family_name(id).map(str::to_owned));
++        eprintln!(
++            "FONTRELAY family {name:?} -> {named:?} split={split} us={}",
++            started.elapsed().as_micros()
++        );
++        self.families.insert(key, ours);
++        ours
++    }
++
++    /// Before `text` is shaped: the fallback of each script it has a
++    /// character of, and Han's (which the shaper asks of every text), for
++    /// those not asked before.
++    fn scripts_of(&mut self, fonts: &mut FontContext, text: &str) {
++        use parley::fontique::{FallbackKey, Script};
++        if !self.lazy {
++            return;
++        }
++        let names = icu_properties::PropertyNamesShort::<icu_properties::props::Script>::new();
++        let scripts = icu_properties::CodePointMapData::<icu_properties::props::Script>::new();
++        let mut new: Vec<[u8; 4]> = Vec::new();
++        if self.scripts.insert(*b"Hani") {
++            new.push(*b"Hani");
++        }
++        for ch in text.chars() {
++            let Some(name) = names.get(scripts.get(ch)) else {
++                continue;
++            };
++            let Ok(tag) = <[u8; 4]>::try_from(name.as_bytes()) else {
++                continue;
++            };
++            if self.scripts.insert(tag) {
++                new.push(tag);
++            }
++        }
++        for tag in new {
++            let key = FallbackKey::new(Script::from_bytes(tag), None);
++            let ids: Vec<_> = self.system.collection.fallback_families(key).collect();
++            let names: Vec<String> = ids
++                .into_iter()
++                .filter_map(|id| self.system.collection.family_name(id).map(str::to_owned))
++                .collect();
++            let ours: Vec<_> = names
++                .iter()
++                .filter_map(|name| self.family(fonts, name))
++                .collect();
++            eprintln!(
++                "FONTRELAY script {} -> {names:?}",
++                String::from_utf8_lossy(&tag)
++            );
++            if !ours.is_empty() {
++                fonts.collection.set_fallbacks(key, ours.into_iter());
++            }
++        }
++    }
++
++    /// Before a layout with `families`: the generic families and every
++    /// script's fallback once, then the families named.
++    fn prepare(&mut self, fonts: &mut FontContext, families: &[computed_style::FontFamily]) {
++        use parley::fontique::{FallbackKey, Script, ScriptExt as _};
++        if !self.prepared {
++            self.prepared = true;
++            let started = std::time::Instant::now();
++            for &generic in parley::GenericFamily::all() {
++                let ids: Vec<_> = self.system.collection.generic_families(generic).collect();
++                let names: Vec<String> = ids
++                    .into_iter()
++                    .filter_map(|id| self.system.collection.family_name(id).map(str::to_owned))
++                    .collect();
++                let ours: Vec<_> = names
++                    .iter()
++                    .filter_map(|name| self.family(fonts, name))
++                    .collect();
++                fonts.collection.set_generic_families(generic, ours.into_iter());
++            }
++            eprintln!("FONTRELAY generics us={}", started.elapsed().as_micros());
++            let started = std::time::Instant::now();
++            let mut keys = 0;
++            let all: &[(Script, &str)] = if self.lazy { &[] } else { Script::all_samples() };
++            for (script, _) in all {
++                let mut locales: Vec<Option<&str>> = vec![None];
++                if &script.to_bytes() == b"Hani" {
++                    locales.extend([Some("zh-Hans"), Some("zh-Hant"), Some("ja"), Some("ko")]);
++                }
++                for locale in locales {
++                    let key = match locale {
++                        Some(locale) => FallbackKey::from((*script, locale)),
++                        None => FallbackKey::new(*script, None),
++                    };
++                    let ids: Vec<_> = self.system.collection.fallback_families(key).collect();
++                    let names: Vec<String> = ids
++                        .into_iter()
++                        .filter_map(|id| self.system.collection.family_name(id).map(str::to_owned))
++                        .collect();
++                    let ours: Vec<_> = names
++                        .iter()
++                        .filter_map(|name| self.family(fonts, name))
++                        .collect();
++                    if !ours.is_empty() {
++                        keys += 1;
++                        fonts.collection.set_fallbacks(key, ours.into_iter());
++                    }
++                }
++            }
++            eprintln!(
++                "FONTRELAY fallbacks keys={keys} us={}",
++                started.elapsed().as_micros()
++            );
++        }
++        for family in crate::font_families::font_stack(families, crate::font_families::Platform::CURRENT)
++        {
++            if let parley::FontFamilyName::Named(name) = family {
++                self.family(fonts, &name);
++            }
++        }
++    }
+ }
+ 
+ /// The system's fonts, found: the list of them and what the operating
+@@ -116,6 +308,25 @@ impl TextContext {
+ 
+     /// The system's fonts as `fonts` found them.
+     pub fn with_system_fonts(fonts: SystemFonts) -> Self {
++        // PROTOTYPE
++        if std::env::var_os("MACHOPO_FONT_RELAY").is_some() {
++            let mut cx = Self::with_fonts(FontContext {
++                collection: Collection::new(CollectionOptions {
++                    shared: false,
++                    system_fonts: false,
++                }),
++                source_cache: SourceCache::default(),
++            });
++            cx.relay = Some(Relay {
++                system: fonts.0,
++                families: Default::default(),
++                files: Default::default(),
++                prepared: false,
++                lazy: std::env::var("MACHOPO_FONT_RELAY").is_ok_and(|how| how == "lazy"),
++                scripts: Default::default(),
++            });
++            return cx;
++        }
+         Self::with_fonts(fonts.0)
+     }
+ 
+@@ -128,6 +339,7 @@ impl TextContext {
+             fonts,
+             layout,
+             families: FontFallbackMap::default(),
++            relay: None,
+         }
+     }
+ 
+@@ -139,7 +351,17 @@ impl TextContext {
+ 
+     /// Looks `families` up in the fonts, unless it has been, for a layout
+     /// about to be built with it.
++    /// PROTOTYPE: `text` is about to be shaped.
++    pub(crate) fn resolve_text(&mut self, text: &str) {
++        if let Some(relay) = &mut self.relay {
++            relay.scripts_of(&mut self.fonts, text);
++        }
++    }
++
+     pub(crate) fn resolve_families(&mut self, families: &[computed_style::FontFamily]) {
++        if let Some(relay) = &mut self.relay {
++            relay.prepare(&mut self.fonts, families);
++        }
+         self.families.resolve(&mut self.fonts.collection, families);
+     }
+ 
+@@ -244,6 +466,7 @@ pub(crate) fn shape_line(
+     text: &str,
+     spans: &[(std::ops::Range<usize>, &ComputedStyle)],
+ ) -> Layout<u32> {
++    cx.resolve_text(text);
+     for (_, style) in spans {
+         cx.resolve_families(&style.font.family);
+     }
+@@ -1031,6 +1254,7 @@ impl InlineContent {
+         };
+         // The font families of every span, looked up (those not seen
+         // before) while the fonts aren't the builder's.
++        cx.resolve_text(&text);
+         cx.resolve_families(&container.font.family);
+         for element in &elements {
+             cx.resolve_families(&element.style.font.family);
