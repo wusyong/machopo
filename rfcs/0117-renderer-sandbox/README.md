@@ -1,7 +1,7 @@
 # RFC 0117：renderer process 關進作業系統的 sandbox
 
 - 開始日期：2026-11-26
-- 狀態：👍 已接受：2026-11-26（第 1 段之前要定的九條；macOS、Windows 的在各自的那一段定）
+- 狀態：🚧 已排程：2026-11-26（第 1 段：Linux；macOS、Windows 的在各自的那一段定）
 - 細節：`details.md`
 
 ## 摘要
