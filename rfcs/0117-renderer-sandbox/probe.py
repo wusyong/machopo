@@ -3,6 +3,10 @@
 process, and says what the renderer process asked of the kernel.
 
     probe.py OUT_DIR [machopo's extra arguments...]
+    probe.py --report OUT_DIR      (the report again, from OUT_DIR's trace)
+
+`PROBE_URL` in the environment: the page to load in place of the built-in
+one (a wasm document's `file:` URL, `about:crash`).
 """
 import collections
 import json
@@ -73,12 +77,17 @@ def main():
     target = call("Target.getTargets")["targetInfos"][0]["targetId"]
     session = call("Target.attachToTarget", {"targetId": target, "flatten": True})["sessionId"]
     call("Page.enable", session=session)
-    call("Page.navigate", {"url": "data:text/html;charset=utf-8," + urllib.parse.quote(PAGE)},
-         session=session)
+    url = os.environ.get("PROBE_URL") or (
+        "data:text/html;charset=utf-8," + urllib.parse.quote(PAGE))
+    call("Page.navigate", {"url": url}, session=session)
     time.sleep(4)
-    title = call("Runtime.evaluate", {"expression": "document.title"}, session=session)
-    print("the page's title:", title.get("result", {}).get("value"))
-    call("Page.captureScreenshot", session=session)
+    # A page that crashed its renderer answers none of these.
+    try:
+        title = call("Runtime.evaluate", {"expression": "document.title"}, session=session)
+        print("the page's title:", title.get("result", {}).get("value"))
+        call("Page.captureScreenshot", session=session)
+    except SystemExit as failed:
+        print("after the load:", failed)
     try:
         call("Browser.close")
     except SystemExit:

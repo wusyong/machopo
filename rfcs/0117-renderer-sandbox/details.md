@@ -103,6 +103,51 @@
 
 **沒走到的**：wasm 的文件（`dom_wasm`、wasmtime 的 JIT）、`MACHOPO_TRACE`（renderer 寫自己的 trace 檔）、`census` 的 build、crash（`about:crash`、panic 的訊息）、很多 worker、記憶體的壓力（GC 還記憶體給 kernel 的路）、列印和下載（現在沒有）。第 1 段開始前補。
 
+### 零星的讀取是誰讀的
+
+2026-11-26，`strace -f -k`（帶呼叫的堆疊）只看這幾個路徑的 `open`、`openat`、`readlink`：
+
+| 路徑 | 誰讀的 | 什麼時候 | 第 1 段怎麼辦（看法） |
+| --- | --- | --- | --- |
+| `/proc/sys/vm/overcommit_memory`、`/sys/kernel/mm/transparent_hugepage/enabled` | mimalloc 的初始化（`_mi_prim_mem_init`） | `main` 之前（`__libc_start_main` 裡） | 鎖之前就讀完了，不用放行 |
+| `/proc/sys/vm/overcommit_memory`（第二次） | glibc 的 malloc 在 thread 結束時要不要縮 heap（`_int_free_maybe_trim`） | 鎖之後 | 讓它失敗（glibc 讀不到就照預設） |
+| `/proc/self/maps` | Rust 的 runtime 找 main thread 的 stack（`std::rt::lang_start_internal` 的 `pthread_getattr_np`） | `main` 之前 | 不用放行 |
+| `/sys/devices/system/cpu/online` | glibc 的 `get_nprocs`：V8 的 platform 和 absl 問 CPU 數、glibc 的 malloc 建 arena | 鎖之後，好幾個 thread | 唯讀放行這一個檔案（讀不到時 glibc 的退路和 V8 拿到的數字要另外確認） |
+| `/dev/urandom` | V8 的亂數（`v8::base::RandomNumberGenerator` 用 `fopen`） | 鎖之後 | 唯讀放行（讀不到時 V8 用弱的種子），或改給 V8 一個用 `getrandom` 的 entropy source |
+| `/etc/localtime` | 這一輪沒載入頁面，沒走到（上一輪：ICU 的時區） | 鎖之後 | 唯讀放行它和 zoneinfo，第 1 段再看一次堆疊 |
+| `/proc/self/exe` | Browser 啟動 renderer 時問自己的路徑（`std::env::current_exe`），不是 renderer | — | — |
+
+### fontconfig 的 cache 不在時
+
+2026-11-26，`XDG_CACHE_HOME` 指到空的目錄再跑一次系統字型的探測。**renderer process 寫了檔案**：`libfontconfig` 發現使用者的字型目錄（`~/.local/share/fonts`）沒有 cache，就在 cache 目錄建 `<hash>-le64.cache-12.TMP-*`、`.NEW`、`rename` 成 cache 檔、建和刪 `.LCK`、刪舊版的 cache（`.cache-9` 到 `-11`），還試了 `chmod` 系統的 cache 目錄（`EPERM`）和 `unlink` 字型目錄裡的 `.uuid`（沒有）。Browser 自己也用 fontconfig（UI 的文字），它的 process 也寫了同一批。
+
+對設計的意思：
+
+- sandbox 裡這些寫入會失敗。`libfontconfig` 寫不了 cache 時照理是自己在記憶體裡掃一遍、照樣能用（要在 1b 用真的 sandbox 確認），但每個 renderer 啟動都要重掃。
+- 所以要 Browser 先把 cache 建好：Browser 啟動 renderer 之前本來就要問 fontconfig 的路徑（已決定的事項第 3 條），那時它初始化 fontconfig、cache 就寫好了；renderer 進來時 cache 是新的，不會想寫。
+- seccomp 的清單要讓這幾個檔案的呼叫（`unlink`、`rename`、`chmod`、`mkdir`、可寫的 `openat`）回錯誤而不是當掉：cache 剛好過期時 `libfontconfig` 會叫它們（Chromium 也是檔案系統的呼叫一律回 `EPERM`）。Landlock 擋的本來就是回錯誤，seccomp 放行這幾個讓 Landlock 擋就可以。
+
+### wasm 的文件、trace、crash
+
+2026-11-26，`--test-fonts`，和第一次的 `--test-fonts` 比多出來的（`PROBE_URL` 換頁面）：
+
+| 跑法 | 多的 system call | 多的路徑 | 說明 |
+| --- | --- | --- | --- |
+| wasm 的文件（`dom_wasm` 的 `page.wasm`，`file:` 的頁面） | `memfd_create`、`statx` | `/proc/self/cgroup`、`/sys/fs/cgroup/.../cpu.max` 一路往上 | wasmtime 建 `memfd_create("wasm-memory-image", MFD_CLOEXEC\|MFD_ALLOW_SEALING)`（記憶體的初始映像）；JIT 的 code 是 `mprotect(PROT_READ\|PROT_EXEC)`（先寫再改成可執行，不是 V8 的 pkey）；cgroup 的是問可以用幾個 CPU（Rust 的 `available_parallelism`，讀不到時有退路） |
+| `MACHOPO_TRACE` | `writev`、`dup`、`geteuid`、`fdatasync` | renderer 自己建 `<檔名>.<pid>`（`O_WRONLY\|O_CREAT\|O_TRUNC`）；`/proc/self/stat`、`/proc/self/cmdline`、`/sys/devices/system/cpu/possible` | 那個檔案就是已決定的事項第 6 條要改成 Browser 開的；其餘是 trace 的 metadata |
+| `about:crash` | `tgkill` | 無 | `tgkill(自己的 pid, 自己的 tid, SIGABRT)`：`abort`。seccomp 要許對自己的；`SIGSEGV` 的 handler 是 V8 裝的（`rt_sigaction`） |
+
+「只有 Browser 建共用記憶體」沒有被打破：renderer 的 `memfd_create` 是 wasmtime 自己用的匿名記憶體，不交給別人（`machopo-region` 的都是 Browser 的 process 建的）。
+
+### kernel 和 CI
+
+2026-11-26（`man7.org` 的 `landlock(7)`，man-pages 6.19；GitHub 的 runner image 的說明）：
+
+- Landlock 的 ABI 和 kernel：1 是 5.13、2 是 5.19、3 是 6.2、4 是 6.7、5 是 6.10、6 是 6.12、7 是 6.15、8 是 7.0、9 是 7.1（man page 列到 9；開發機的 7.3.3 回 11）。man page：「Users should use the Landlock ABI version rather than the kernel version」。
+- 要用得到：kernel 編進去（`CONFIG_SECURITY_LANDLOCK`）而且開機時在 LSM 的清單裡（`CONFIG_LSM` 或 `lsm=`）。問 ABI 的那個呼叫失敗時：kernel 文件的範例把 `ENOSYS` 說成「not supported by the current kernel」、`EOPNOTSUPP` 說成「currently disabled」。
+- CI 是 GitHub 的 `ubuntu-24.04`：image 的說明寫 kernel 7.0.0-1017-azure（ABI 8）。有沒有開著沒寫：1b 在 CI 上跑一次問 ABI 的呼叫確認。
+- 各發行版預設開不開：查的幾頁都沒寫。第 1 段不靠這個（已決定的事項第 4 條：沒有就不跑、說原因），做完時在 `docs/limitations.md` 寫最低要求。
+
 ## Linux 的機制的比較
 
 2026-11-26 對過 kernel 的文件（`docs.kernel.org/userspace-api/landlock.html`，7.4-rc4 的版本）；seccomp 和 namespace 的版本是照記憶寫的：
@@ -115,7 +160,7 @@
 | 看不到路徑 | 是（指標指到的字串讀不了） | 不是 | 不適用 |
 | 套了之後 | 新的 thread 繼承；可以再疊更緊的 | 套的那個 thread 和它之後建的 thread、child 繼承；已經在跑的其他 thread 不會（ABI 8 起有對全部 thread 套的旗標）；拿不掉 | 不能再放寬 |
 
-Landlock 的 ABI（文件裡每一版拿掉的限制；kernel 的版本文件沒寫，1 到 7 是照記憶：5.13、5.19、6.2、6.7、6.10、6.12、6.15）：1 檔案；2 `REFER`；3 `TRUNCATE`；4 TCP 的 bind 和 connect；5 裝置的 `ioctl`；6 範圍（`LANDLOCK_SCOPE_SIGNAL`：只能對同一個或更裡面的 domain 的 process 送訊號；`LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET`）；7 紀錄的旗標；8 對全部 thread 套；9 有路徑的 unix socket（`RESOLVE_UNIX`）；10 UDP；11 `restrict_self` 順便設 `no_new_privs` 的旗標；12 capability 和 namespace 的規則。**開發機（kernel 7.3.3）回的是 ABI 11**。
+Landlock 的 ABI（文件裡每一版拿掉的限制；kernel 的版本在上面的「kernel 和 CI」）：1 檔案；2 `REFER`；3 `TRUNCATE`；4 TCP 的 bind 和 connect；5 裝置的 `ioctl`；6 範圍（`LANDLOCK_SCOPE_SIGNAL`：只能對同一個或更裡面的 domain 的 process 送訊號；`LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET`）；7 紀錄的旗標；8 對全部 thread 套；9 有路徑的 unix socket（`RESOLVE_UNIX`）；10 UDP；11 `restrict_self` 順便設 `no_new_privs` 的旗標；12 capability 和 namespace 的規則。**開發機（kernel 7.3.3）回的是 ABI 11**。
 
 Landlock 管不到的（文件）：`stat`、`access`、`chdir`、`chmod`、`chown`、`flock`、`fcntl`、`utime`、`setxattr` 這幾族（探得出路徑在不在、讀得到 metadata，讀不到內容）；建 socket 本身（只管 TCP、UDP 的 bind 和 connect）；經過 `/proc/<pid>/fd` 拿到的 pipe 和 socket。ptrace：「a sandboxed process should have a superset of the target process's access rights」，所以關起來的 renderer ptrace 不了外面的 process。文件建議 best-effort：執行時問 ABI，只套那一版有的。
 
