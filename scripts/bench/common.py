@@ -1,6 +1,6 @@
 """What the benchmarks share: Chrome for Testing (downloaded under
-`target/`), machopo's build, the CDP pipes that drive both browsers (Chrome's
-`--remote-debugging-pipe`, machopo's `--automation-pipe`), a page in a new
+`target/`), machopo's build, the CDP pipes that drive both browsers (each's
+`--remote-debugging-pipe`), a page in a new
 browser (`run_in_chrome`, `run_in_machopo`), the server the pages come from and
 post to, reading Perfetto traces, sampling with Linux's `perf` or samply
 (macOS, Windows), running as Administrator on Windows, and the machine's
@@ -28,6 +28,7 @@ import sys
 import tempfile
 import threading
 import time
+import typing
 import urllib.request
 import zipfile
 from datetime import date
@@ -374,11 +375,54 @@ def browser_affinity():
         process_affinity(before)
 
 
+def start_with_pipe(command: list[str], **options) -> tuple[subprocess.Popen, typing.BinaryIO, typing.BinaryIO]:
+    """`command` (a browser, after whatever wraps it: a sampler) started with
+    a pipe where Chrome's `--remote-debugging-pipe` takes it, and machopo's:
+    on Windows two handles `--remote-debugging-io-pipes` names (put at the
+    end of `command`), which it inherits and nothing else does; elsewhere
+    file descriptors 3 (what it reads) and 4 (what it writes), which `sh`
+    moves the pipe's ends to (`subprocess` keeps a descriptor's number, and
+    a wrapper hands them on). On `browser_cpus`. `options` are `Popen`'s.
+    The process, the file its input is written to, and the one its output
+    is read from."""
+    to_child, to_browser = os.pipe()
+    from_browser, from_child = os.pipe()
+    if sys.platform == "win32":
+        import msvcrt
+
+        handles = [msvcrt.get_osfhandle(to_child), msvcrt.get_osfhandle(from_child)]
+        for handle in handles:
+            os.set_handle_inheritable(handle, True)
+        command = [*command, f"--remote-debugging-io-pipes={handles[0]},{handles[1]}"]
+        startup = subprocess.STARTUPINFO()
+        # The pipe's two handles and the standard ones (which `subprocess`
+        # adds), no others.
+        startup.lpAttributeList = {"handle_list": handles}
+        options = {**options, "startupinfo": startup, "close_fds": True}
+        command = on_browser_cpus(command)
+    else:
+        command = on_browser_cpus(["sh", "-c", f'exec "$0" "$@" 3<&{to_child} 4>&{from_child}', *command])
+        options = {**options, "pass_fds": (to_child, from_child)}
+    try:
+        with browser_affinity():
+            process = subprocess.Popen(command, **options)
+    except BaseException:
+        os.close(to_browser)
+        os.close(from_browser)
+        raise
+    finally:
+        # The browser's ends are the browser's alone: when it goes, its
+        # output reads the end.
+        os.close(to_child)
+        os.close(from_child)
+    return process, os.fdopen(to_browser, "wb"), os.fdopen(from_browser, "rb")
+
+
 class CdpPipe:
     """A browser's `process`, driven with CDP's messages through a pipe,
-    each followed by a NUL: Chrome's `--remote-debugging-pipe`, and machopo's
-    `--automation-pipe`, which takes them Chrome's way (as machopodriver does).
-    Answers go to the `call` that waits for them; events wait for `event`."""
+    each followed by a NUL: Chrome's `--remote-debugging-pipe`, and machopo's,
+    which takes them Chrome's way (as machopodriver does). Answers go to the
+    `call` that waits for them; events wait for `event`."""
 
     name = "the browser"
 
@@ -509,7 +553,7 @@ WITHOUT_SINGLE_PROCESS: set[Path] = set()
 
 
 def machopo_switches(binary: Path) -> list[str]:
-    """What `binary` is run with past `--automation-pipe`: `--single-process`
+    """What `binary` is run with past its pipe's switches: `--single-process`
     when the tools are asked for it and it takes the switch."""
     return ["--single-process"] if SINGLE_PROCESS and binary not in WITHOUT_SINGLE_PROCESS else []
 
@@ -530,22 +574,52 @@ def renderers_text(rev: str | None = None) -> str:
     return "processes of their own"
 
 
+# The `--against` versions driven through their standard input and output:
+# machopo before its pipe was Chrome's (`--remote-debugging-pipe` at file
+# descriptors 3 and 4), whose switch was `--automation-pipe`.
+WITH_STDIO_PIPE: set[Path] = set()
+
+
+def has_stdio_pipe(binary: Path) -> bool:
+    """Whether `binary` is a machopo driven through its standard input and
+    output (`--automation-pipe`, which its `--help` names), as every version
+    before its pipe was Chrome's is. Asked of the binary, not its commit:
+    the commit that changed it is one of a branch, whose hash a rebase
+    changes."""
+    shown = subprocess.run([str(binary), "--help"], capture_output=True, text=True)
+    return "--automation-pipe" in shown.stdout
+
+
 class MachopoPipe(CdpPipe):
-    """`machopo --automation-pipe`, through its standard input and output; run
-    by `wrapper` (a sampler), if any, which passes the pipe through."""
+    """`machopo --remote-debugging-pipe --headless`, through its pipe (as
+    Chrome's: `start_with_pipe`); an `--against` version from before that,
+    `machopo --automation-pipe`, through its standard input and output
+    (`WITH_STDIO_PIPE`). Run by `wrapper` (a sampler), if any, which passes
+    the pipe through. Its standard output and error go to `log`."""
 
     name = "machopo"
 
     def __init__(self, binary: Path, log, env: dict | None = None, wrapper: list[str] | None = None) -> None:
-        with browser_affinity():
-            process = subprocess.Popen(
-                on_browser_cpus([*(wrapper or []), str(binary), "--automation-pipe", *machopo_switches(binary)]),
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=log,
-                env={**os.environ, **(env or {})},
-            )
-        super().__init__(process, process.stdin, process.stdout)
+        env = {**os.environ, **(env or {})}
+        if binary in WITH_STDIO_PIPE:
+            with browser_affinity():
+                process = subprocess.Popen(
+                    on_browser_cpus([*(wrapper or []), str(binary), "--automation-pipe", *machopo_switches(binary)]),
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=log,
+                    env=env,
+                )
+            super().__init__(process, process.stdin, process.stdout)
+            return
+        process, to_browser, from_browser = start_with_pipe(
+            [*(wrapper or []), str(binary), "--remote-debugging-pipe", "--headless", *machopo_switches(binary)],
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=log,
+            env=env,
+        )
+        super().__init__(process, to_browser, from_browser)
 
     def open(self, url: str) -> None:
         """Its window at `WINDOW`, and its tab navigated to `url`."""
@@ -558,43 +632,21 @@ class MachopoPipe(CdpPipe):
 
 
 class ChromePipe(CdpPipe):
-    """Chrome, run with `arguments`, through its `--remote-debugging-pipe`:
-    on Windows the pipe's two handles are named on the command line
-    (`--remote-debugging-io-pipes`, which Chrome ignores without the other
-    switch); elsewhere Chrome reads file descriptor 3 and writes 4, which
-    `sh` moves the pipe's ends to (`subprocess` keeps a descriptor's
-    number)."""
+    """Chrome, run with `arguments`, through its `--remote-debugging-pipe`
+    (`start_with_pipe`: on Windows `--remote-debugging-io-pipes`, which
+    Chrome ignores without the other switch)."""
 
     name = "Chrome"
 
     def __init__(self, arguments: list[str], binary: Path | None = None, wrapper: list[str] | None = None) -> None:
         """`binary`: another Chrome than Chrome for Testing (a Chromium);
         `wrapper`: what runs it (a sampler, ending in `--`)."""
-        to_chrome, to_browser = os.pipe()
-        from_browser, from_chrome = os.pipe()
-        command = [*(wrapper or []), str(binary or chrome_binary()), "--remote-debugging-pipe", *arguments]
-        if sys.platform == "win32":
-            import msvcrt
-
-            handles = [msvcrt.get_osfhandle(to_chrome), msvcrt.get_osfhandle(from_chrome)]
-            for handle in handles:
-                os.set_handle_inheritable(handle, True)
-            command.insert(2, f"--remote-debugging-io-pipes={handles[0]},{handles[1]}")
-            startup = subprocess.STARTUPINFO()
-            # Chrome inherits the pipe's two handles and the standard ones
-            # (which `subprocess` adds), no others.
-            startup.lpAttributeList = {"handle_list": handles}
-            options = {"startupinfo": startup, "close_fds": True}
-        else:
-            command = on_browser_cpus(["sh", "-c", f'exec "$0" "$@" 3<&{to_chrome} 4>&{from_chrome}', *command])
-            options = {"pass_fds": (to_chrome, from_chrome)}
-        try:
-            with browser_affinity():
-                process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **options)
-        finally:
-            os.close(to_chrome)
-            os.close(from_chrome)
-        super().__init__(process, os.fdopen(to_browser, "wb"), os.fdopen(from_browser, "rb"))
+        process, to_browser, from_browser = start_with_pipe(
+            [*(wrapper or []), str(binary or chrome_binary()), "--remote-debugging-pipe", *arguments],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        super().__init__(process, to_browser, from_browser)
 
     def open(self, url: str) -> None:
         """Its tab brought to the front, navigated to `url`, and left: the
@@ -721,6 +773,8 @@ def against_binaries(rev: str) -> dict[str, Path]:
     }
     if SINGLE_PROCESS and not takes_single_process(rev):
         WITHOUT_SINGLE_PROCESS.add(binaries["against"])
+    if has_stdio_pipe(binaries["against"]):
+        WITH_STDIO_PIPE.add(binaries["against"])
     return binaries
 
 
@@ -1107,7 +1161,7 @@ def renderers_are_threads(rev: str) -> bool:
 
 def run_in_machopo(server: Server, binary: Path, url: str, timeout: float, log, trace: Path | None = None,
                samples: Path | None = None, cpu_profile: Path | None = None, env: dict | None = None) -> dict:
-    """`url` in a new `machopo --automation-pipe`: what its page posted
+    """`url` in a new `machopo --remote-debugging-pipe --headless`: what its page posted
     (`{"body"}`, and machopo's `peak_memory` by then as `memory` when nothing
     wraps it, and its processes then as `processes`, `machopo_processes`),
     or why there is nothing (`{"error"}`). With `trace`, machopo writes a

@@ -6,7 +6,7 @@
                                        # random GC configurations (numfuzz-style)
     python scripts/test.py scenarios [--window] [FILTER ...]
                                        # the scenarios without the platform's window (cargo test skips them);
-                                       # --window: in a real one (machopo --automation-pipe --window), and
+                                       # --window: in a real one (machopo --remote-debugging-pipe), and
                                        # the pipe's test with one
     python scripts/test.py wpt [TEST ...] [--processes N] [--chunk I/N] [--profile NAME] [--no-build]
                                        # WPT's testharness.js tests, reftests and crashtests, against
@@ -796,8 +796,8 @@ def cmd_scenarios(args: argparse.Namespace) -> int:
     passes fails the run (to be taken off).
 
     With `--window`, each in a real window of its own (`machopo
-    --automation-pipe --window`), one at a time, with the system's keyboard
-    shortcuts, its screenshots and machopo's log in
+    --remote-debugging-pipe`, without `--headless`), one at a time, with
+    the system's keyboard shortcuts, its screenshots and machopo's log in
     `target/automation-results/`; then the pipe's test that drives the
     window. Needs a display and a GPU. Each tab's renderer is a process of
     its own, machopo's default; with `--single-process` too, threads of
@@ -814,7 +814,7 @@ def cmd_scenarios(args: argparse.Namespace) -> int:
         subprocess.Popen(["caffeinate", "-d", "-i", "-w", str(os.getpid())])
     env = {SINGLE_PROCESS_ENV: "1"} if args.single_process else None
     failures = 1 if run_slow_test("scenarios", ["--window", *args.filter], env) else 0
-    # `machopo --automation-pipe --window`: the pipe's test that needs the window.
+    # `machopo --remote-debugging-pipe` (the real window): the pipe's test that needs the window.
     if not args.filter or any(f in "pipe" for f in args.filter):
         start = time.monotonic()
         pipe = subprocess.run(
@@ -1980,7 +1980,7 @@ def main() -> int:
         "scenarios",
         cmd_scenarios,
         "the scenarios in a browser window without the platform's (skipped by cargo test), or with "
-        "--window in a real one (machopo --automation-pipe --window)",
+        "--window in a real one (machopo --remote-debugging-pipe)",
     )
     scenarios.add_argument(
         "--window",

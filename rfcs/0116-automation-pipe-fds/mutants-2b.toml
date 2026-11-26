@@ -1,0 +1,41 @@
+# Stage 2b's mutants: `python3 scripts/test.py mutate rfcs/0116-automation-pipe-fds/mutants-2b.toml`.
+# macOS and Linux (the pipe's tests run a shell script for a browser).
+test = ["python3", "scripts/bench/speedometer/speedometer_test.py", "PipeTests"]
+timeout = 120
+
+[[mutant]]
+name = "a new machopo is taken for an old one"
+file = "scripts/bench/common.py"
+from = '''    return "--automation-pipe" in shown.stdout'''
+to = '''    return "--automation-pipe" not in shown.stdout'''
+
+[[mutant]]
+name = "an old against version is driven as a new one"
+file = "scripts/bench/common.py"
+from = '''    if has_stdio_pipe(binaries["against"]):
+        WITH_STDIO_PIPE.add(binaries["against"])'''
+to = '''    if has_stdio_pipe(binaries["against"]):
+        pass'''
+
+[[mutant]]
+name = "every machopo is driven as a new one"
+file = "scripts/bench/common.py"
+from = '''        if binary in WITH_STDIO_PIPE:
+            with browser_affinity():'''
+to = '''        if False:
+            with browser_affinity():'''
+
+[[mutant]]
+name = "the pipe's ends are put the other way round"
+file = "scripts/bench/common.py"
+from = '''f'exec "$0" "$@" 3<&{to_child} 4>&{from_child}''''
+to = '''f'exec "$0" "$@" 3<&{from_child} 4>&{to_child}''''
+
+[[mutant]]
+name = "the tool keeps the browser's ends"
+file = "scripts/bench/common.py"
+from = '''        os.close(to_child)
+        os.close(from_child)
+    return process, os.fdopen(to_browser, "wb"), os.fdopen(from_browser, "rb")'''
+to = '''        pass
+    return process, os.fdopen(to_browser, "wb"), os.fdopen(from_browser, "rb")'''

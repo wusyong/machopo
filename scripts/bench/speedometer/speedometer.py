@@ -6,7 +6,7 @@ which adds `scripts/bench/speedometer/`'s scripts to the pages on the way;
 Speedometer itself is never changed. What a page has to hand back it posts
 to the server. Both are driven with CDP through a pipe: Chrome for Testing
 (`CHROME_VERSION`, downloaded under `target/`) runs headless with
-`--remote-debugging-pipe`, machopo as `machopo --automation-pipe` (a browser
+`--remote-debugging-pipe`, machopo with its own and `--headless` (a browser
 window without the platform's window, its frames every 16.7 ms); each is
 told through it to navigate, and to close, so that it ends on its own.
 Each page gets a new process of its own. The results go to

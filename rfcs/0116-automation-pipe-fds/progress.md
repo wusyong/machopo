@@ -9,7 +9,7 @@
 | 1. `ipc` 的兩個入口：`inherited_pipe`、`spawn_with_pipe`（Unix、Windows）和它們的測試（已決定的事項第 4 到 8 條） | 做完（Windows 的那一份留到第 3 段才編譯和測試） | 2026-11-26 |
 | 2. 換過去（已決定的事項第 1、9 到 11 條） | 進行中 | |
 | 2a. `shell` 的開關、拿 pipe、reader 和 writer、renderer 的 stdout；machopodriver、`shell` 的測試和情境；`ipc` 照第 10 條忽略 Unix 上的 handle 開關 | 做完 | 2026-11-26 |
-| 2b. Python 的工具（`MachopoPipe`、`ChromePipe`、`raster.py`）和 bench 工具的四份測試 | 沒開始 | |
+| 2b. Python 的工具（`MachopoPipe`、`ChromePipe`、`raster.py`）和 bench 工具的四份測試 | 做完 | 2026-11-26 |
 | 2c. 文件和限制 | 沒開始 | |
 | 3. Windows：在使用者的裝置上跑第 1、2 段的測試和 bench | 沒開始 | |
 
@@ -30,6 +30,8 @@
 | renderer 的 stdout 是 Browser 的 stdout | `crates/shell/tests/it/renderer_process.rs` 的 `a_renderers_standard_output_is_the_browsers`（Linux 比對 `/proc/<pid>/fd/1`，macOS 比對 `lsof` 說的 pipe 的另一端） |
 | 經過 machopodriver 的 WPT | `test.py wpt dom/lists/ dom/abort/` |
 | 現有的 pipe 的測試全部經過新的開關和接法 | `cargo test -p shell`（連同 `devtools_*`、`webdriver`、`remote_debugging`、`renderer_process`） |
+| Python 的工具照 Chrome 的方式接 machopo 的 pipe（和 `ChromePipe` 共用 `start_with_pipe`），經過取樣器也一樣 | `scripts/bench/speedometer/speedometer_test.py` 的 `PipeTests`（一個讀 3、寫 4 的假 browser）、`blink_perf_test.py` 的 `taskset` 的測試；用真的 machopo 跑 `machopo_gpu`、`Browser.getVersion` 和 `Browser.close` |
+| `--against` 的舊版本（還是 `--automation-pipe`）照舊經過 stdin、stdout | `PipeTests` 的 `test_a_version_is_known_by_its_help`、`test_an_against_version_from_before_its_pipe_was_chromes`、`test_each_version_is_started_its_way` |
 
 ## 做過的檢查
 
@@ -51,3 +53,11 @@
 - **檢查**：`cargo test -p ipc -p shell -p driver` 1072 個通過；`test.py wpt dom/lists/ dom/abort/` 18 個測試、261 個子測試，沒有意外的結果；`clippy`（`ipc`、`shell`、`driver`）、`cargo fmt --check` 和 `sanity.py` 的 `docs`、`unsafe`、`tests`、`numerics`、`deps`、`spans`、`boundary` 通過。
 - **真的視窗**（`window.rs` 和情境的 `--window` 那一路改了）：`test.py scenarios --window` 74 個裡 73 個通過；`demo-busy` 失敗（第 19 行：主執行緒忙的時候，滾輪沒讓第二個盒子那一區的畫面變），單獨跑 3 次都一樣，把 2a 的改動 stash 起來、在第 1 段的程式上跑也一樣，所以和這一段無關（log 在開頭有一次 Viz 的 `occluded`，原因沒有追；RFC 0107 那時在 macOS 的真視窗裡它通過，之間的改動和這台機器的環境都可能是原因）。因為它失敗，`scenarios --window` 停在 pipe 驅動真的視窗的那個測試之前：另外用 `MACHOPO_WINDOW_TESTS=1` 跑了 `automation_pipe::the_real_window_is_driven_the_same`，通過。看了截圖（`grid`、`wasm-listeners`），視窗的 UI 和頁面都畫出來了。
 - **2b 的事**：`test.py wpt` 印出的 `machopo draws with: unknown`：`speedometer.machopo_gpu` 經過 Python 的 `MachopoPipe` 啟動 machopo，還在用舊的開關，問不到 GPU（有 GPU 的機器不受影響；CPU adapter 的機器上 wptrunner 的 `--processes` 算不出來）。
+
+### 2b（2026-11-26，macOS 26.6.2 Apple Silicon）
+
+- **改了什麼**：`scripts/bench/common.py` 的 `start_with_pipe`：照 Chrome 的方式啟動一個 browser 和它的 pipe（Linux、macOS 經過 `sh` 把兩端搬到 3、4，Windows 給 `--remote-debugging-io-pipes` 和只繼承那兩個 handle），`ChromePipe` 和 `MachopoPipe` 共用。`ChromePipe` 原本在 Windows 上把開關插在命令的第三個位置（有取樣器包著時位置不對），現在放在最後。`MachopoPipe` 給 `--remote-debugging-pipe --headless`，stdout 和 stderr 都寫 log。`raster.py` 用 `start_with_pipe`，`--window` 時不給 `--headless`。`scripts/test.py` 和 `speedometer.py` 的說明跟著改。
+- **原本沒想到的**：`--against` 會建出舊版本的 machopo 來比較，那些版本還是 `--automation-pipe`、經過 stdin、stdout。照 `WITHOUT_SINGLE_PROCESS` 的前例在 `against_binaries` 標記（`WITH_STDIO_PIPE`），不過不照 commit 判斷（這份 RFC 的 commit 在 merge 前 rebase 時 hash 會變），改成問執行檔：舊版本的 `--help` 有 `--automation-pipe`，新版本沒有（`has_stdio_pipe`）。
+- **測試**：`speedometer_test.py` 多了 `PipeTests` 的 4 個；`blink_perf_test.py` 的兩個照新的命令改：`taskset` 的那個看 `sh` 之後是取樣器和 machopo；Windows 的 affinity 的那個在假的 Windows 上改用舊版本那條路（新的那條要真的 `msvcrt`），新的那條和 `ChromePipe` 一起只在真的 Windows 上跑。
+- **mutation test**（`mutants-2b.toml`）：5 個都抓到：新的 machopo 當成舊的、`--against` 的舊版本沒標記、每個版本都當成新的、pipe 的兩端放反、工具留著 browser 的那兩端。最後一個一開始是測試卡住、跑到時限（120 秒）才算抓到：讀到結尾改到另一條 thread、等 10 秒之後當場失敗。
+- **檢查**：bench 工具的四份測試（`speedometer_test.py` 126 個、`blink_perf_test.py` 37 個、`raster_test.py` 13 個、`census_test.py` 5 個）通過；用真的 machopo 跑 `machopo_gpu` 回報 `Apple M4 (IntegratedGpu, Metal)`（2a 時是 `unknown`），`test.py wpt dom/lists/` 沒有意外的結果、印出的也是那個 GPU。Windows 上的 `start_with_pipe`（`msvcrt`、`handle_list`）在第 3 段跑。

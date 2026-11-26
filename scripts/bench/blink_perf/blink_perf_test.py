@@ -150,7 +150,10 @@ class CpuTests(unittest.TestCase):
                 common.MachopoPipe(Path("machopo"), None, wrapper=["perf", "record"])
             with self.assertRaises(OSError):
                 common.ChromePipe(["--headless=new"])
-        self.assertEqual(started[0][:6], ["taskset", "-c", "0-1,12", "perf", "record", "machopo"])
+        # Both through `sh`, which puts the pipe at 3 and 4, and runs what it
+        # was given in its place: machopo under its sampler.
+        self.assertEqual(started[0][:5], ["taskset", "-c", "0-1,12", "sh", "-c"])
+        self.assertEqual(started[0][6:9], ["perf", "record", "machopo"])
         self.assertEqual(started[1][:4], ["taskset", "-c", "0-1,12", "sh"])
         with mock.patch.object(common, "browser_cpus", lambda: None):
             self.assertEqual(common.on_browser_cpus(["machopo"]), ["machopo"])
@@ -215,9 +218,13 @@ class CpuTests(unittest.TestCase):
             started.append((command, masks[-1]))
             raise OSError("not started")
 
+        # An `--against` machopo from before its pipe was Chrome's (through
+        # standard input and output): the pipe's handles need the real
+        # platform, which the test of `ChromePipe` below has.
         with mock.patch.object(common, "browser_cpus", lambda: [0, 1, 12]), \
                 mock.patch.object(common.sys, "platform", "win32"), \
                 mock.patch.object(common, "process_affinity", process_affinity), \
+                mock.patch.object(common, "WITH_STDIO_PIPE", {Path("machopo")}), \
                 mock.patch.object(common.subprocess, "Popen", popen):
             self.assertEqual(common.on_browser_cpus(["machopo"]), ["machopo"])
             common.MachopoPipe(Path("machopo"), None, wrapper=["samply", "record"])
@@ -229,20 +236,27 @@ class CpuTests(unittest.TestCase):
         self.assertEqual(started[1], (["machopo", "--automation-pipe"], 0b1000000000011))
         self.assertEqual(masks, [0xFFFFFFFF, 0b1000000000011, 0xFFFFFFFF, 0b1000000000011, 0xFFFFFFFF])
         if sys.platform == "win32":
-            # Chrome's pipe takes handles, which need the real platform.
+            # Chrome's pipe, and machopo's, take handles, which need the
+            # real platform.
             masks[:] = [0xFFFFFFFF]
             with mock.patch.object(common, "browser_cpus", lambda: [0, 1, 12]), \
                     mock.patch.object(common, "process_affinity", process_affinity), \
                     mock.patch.object(common, "chrome_binary", lambda: Path("chrome")), \
-                    mock.patch.object(common.subprocess, "Popen", failing), self.assertRaises(OSError):
-                common.ChromePipe(["--headless=new"])
+                    mock.patch.object(common.subprocess, "Popen", failing):
+                with self.assertRaises(OSError):
+                    common.ChromePipe(["--headless=new"])
+                with self.assertRaises(OSError):
+                    common.MachopoPipe(Path("machopo"), None)
             self.assertEqual(started[2][1], 0b1000000000011)
+            self.assertEqual(started[3][1], 0b1000000000011)
+            self.assertEqual(started[3][0][:3], ["machopo", "--remote-debugging-pipe", "--headless"])
             self.assertEqual(masks[-1], 0xFFFFFFFF)
         # Not pinned: the affinity isn't touched.
         masks[:] = [0xFFFFFFFF]
         with mock.patch.object(common, "browser_cpus", lambda: None), \
                 mock.patch.object(common.sys, "platform", "win32"), \
                 mock.patch.object(common, "process_affinity", process_affinity), \
+                mock.patch.object(common, "WITH_STDIO_PIPE", {Path("machopo")}), \
                 mock.patch.object(common.subprocess, "Popen", popen):
             common.MachopoPipe(Path("machopo"), None)
         self.assertEqual(masks, [0xFFFFFFFF])

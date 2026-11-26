@@ -2,8 +2,8 @@
 """`bench.py raster`: how long machopo rasters its tiles while a page scrolls and
 while its window is resized.
 
-machopo runs a few pages (`PAGES`) one after the other: `machopo --automation-pipe`
-(headless, or a real window with `--window`), with `MACHOPO_TRACE` and the
+machopo runs a few pages (`PAGES`) one after the other: `machopo --remote-debugging-pipe`
+(`--headless`, or a real window with `--window`), with `MACHOPO_TRACE` and the
 compositor's debug log. On each page, once it has loaded, the tool scrolls
 it (`SCROLL_STEPS` wheel events down) and then resizes the window (from
 `WINDOW` down to `SMALLEST` and back, `RESIZE_STEPS` sizes each way). For
@@ -143,13 +143,14 @@ def run_page(binary: Path, url: str, folder: Path, name: str, window: bool, scal
     for old in [trace, *renderer_traces(trace)]:
         old.unlink(missing_ok=True)
     env = {**os.environ, "MACHOPO_TRACE": str(trace), "RUST_LOG": "info,compositor=debug,viz=debug"}
-    arguments = [str(binary), "--automation-pipe", *(["--window"] if window else ["--scale", str(scale)]),
+    arguments = [str(binary), "--remote-debugging-pipe", *([] if window else ["--headless", "--scale", str(scale)]),
                  *(["--num-raster-threads", str(raster_threads)] if raster_threads else []),
                  *(["--single-process"] if single_process else [])]
     phases = {}
     with open(log_path, "w", encoding="utf-8") as log:
-        process = subprocess.Popen(arguments, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, env=env)
-        machopo = speedometer.CdpPipe(process, process.stdin, process.stdout)
+        process, to_browser, from_browser = speedometer.start_with_pipe(
+            arguments, stdin=subprocess.DEVNULL, stdout=log, stderr=log, env=env)
+        machopo = speedometer.CdpPipe(process, to_browser, from_browser)
         machopo.name = "machopo"
         try:
             bounds = {"width": WINDOW[0], "height": WINDOW[1]}

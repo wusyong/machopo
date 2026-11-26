@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from collections.abc import Callable
 from pathlib import Path
@@ -2019,6 +2020,95 @@ class RendererTraceTests(unittest.TestCase):
         self.assertIn("no samples in the 1 windows the runner timed", out)
 
 
+class PipeTests(unittest.TestCase):
+    """machopo's pipe: `--remote-debugging-pipe` at file descriptors 3 and
+    4, as Chrome's, and an `--against` version from before it, driven
+    through its standard input and output (`--automation-pipe`)."""
+
+    def setUp(self):
+        patch = mock.patch.object(common, "WITH_STDIO_PIPE", set())
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    @staticmethod
+    def fake_machopo(folder: Path, help_text: str) -> Path:
+        """A `machopo` whose `--help` says `help_text`."""
+        binary = folder / "machopo"
+        binary.write_text(f"#!/bin/sh\ncat <<'EOF'\n{help_text}\nEOF\n", encoding="utf-8")
+        binary.chmod(0o755)
+        return binary
+
+    @unittest.skipIf(sys.platform == "win32", "a shell script for machopo")
+    def test_a_version_is_known_by_its_help(self):
+        with tempfile.TemporaryDirectory() as folder:
+            old = self.fake_machopo(Path(folder), "machopo --automation-pipe [--window]")
+            self.assertTrue(common.has_stdio_pipe(old))
+            new = self.fake_machopo(Path(folder), "machopo --remote-debugging-pipe [--headless]")
+            self.assertFalse(common.has_stdio_pipe(new))
+
+    def test_an_against_version_from_before_its_pipe_was_chromes(self):
+        built = {"against": Path("against"), "current": Path("current")}
+        for stdio, expected in ((True, {Path("against")}), (False, set())):
+            common.WITH_STDIO_PIPE.clear()
+            with mock.patch.object(common, "against_tree", return_value=Path("tree")), \
+                    mock.patch.object(common, "has_stdio_pipe", return_value=stdio), \
+                    mock.patch.object(common, "machopo_binary",
+                                      side_effect=lambda profile, *where: built["against" if where else "current"]):
+                self.assertEqual(common.against_binaries("REV"), built)
+            self.assertEqual(common.WITH_STDIO_PIPE, expected, stdio)
+
+    def test_each_version_is_started_its_way(self):
+        started = []
+
+        def popen(command, **options):
+            started.append((command, options))
+            raise OSError("not started")
+
+        old = Path("target/against/perf/machopo")
+        common.WITH_STDIO_PIPE.add(old)
+        with mock.patch.object(common, "browser_cpus", lambda: None), \
+                mock.patch.object(common.subprocess, "Popen", popen):
+            for binary in (Path("machopo"), old):
+                with self.assertRaises(OSError):
+                    common.MachopoPipe(binary, None)
+        (new_command, new_options), (old_command, old_options) = started
+        if sys.platform == "win32":
+            self.assertEqual(new_command[:3], ["machopo", "--remote-debugging-pipe", "--headless"])
+            self.assertTrue(new_command[-1].startswith("--remote-debugging-io-pipes="), new_command)
+        else:
+            # `sh` puts the pipe at 3 and 4, and machopo runs in its place.
+            self.assertEqual(new_command[:2], ["sh", "-c"])
+            self.assertRegex(new_command[2], r'^exec "\$0" "\$@" 3<&\d+ 4>&\d+$')
+            self.assertEqual(new_command[3:], ["machopo", "--remote-debugging-pipe", "--headless"])
+            self.assertEqual(len(new_options["pass_fds"]), 2)
+        self.assertEqual(new_options["stdin"], subprocess.DEVNULL)
+        self.assertEqual(old_command, [str(old), "--automation-pipe"])
+        self.assertEqual(old_options["stdin"], subprocess.PIPE)
+        self.assertEqual(old_options["stdout"], subprocess.PIPE)
+
+    @unittest.skipIf(sys.platform == "win32", "a shell script for the browser")
+    def test_a_browser_reads_3_and_writes_4(self):
+        # A browser that answers each message on its pipe with the same,
+        # and ends with its input.
+        with tempfile.TemporaryDirectory() as folder:
+            browser = Path(folder) / "browser"
+            browser.write_text("#!/bin/sh\nexec cat <&3 >&4\n", encoding="utf-8")
+            browser.chmod(0o755)
+            process, to_browser, from_browser = common.start_with_pipe([str(browser)])
+            to_browser.write(b'{"id":1}\0')
+            to_browser.close()
+            # Its output's end comes as it ends, only if the browser had its
+            # ends alone: read on a thread, so that a test that waits for it
+            # ends.
+            read = []
+            reader = threading.Thread(target=lambda: read.append(from_browser.read()), daemon=True)
+            reader.start()
+            reader.join(timeout=10)
+            self.assertEqual(read, [b'{"id":1}\0'])
+            self.assertEqual(process.wait(timeout=10), 0)
+            from_browser.close()
+
+
 class SingleProcessTests(unittest.TestCase):
     """`--single-process`: machopo run with each tab's renderer threads of
     its own process, the builds that take the switch."""
@@ -2044,6 +2134,7 @@ class SingleProcessTests(unittest.TestCase):
             with mock.patch.object(common, "SINGLE_PROCESS", single), \
                     mock.patch.object(common, "takes_single_process", return_value=takes), \
                     mock.patch.object(common, "against_tree", return_value=Path("tree")), \
+                    mock.patch.object(common, "has_stdio_pipe", return_value=False), \
                     mock.patch.object(common, "machopo_binary",
                                       side_effect=lambda profile, *where: built["against" if where else "current"]):
                 self.assertEqual(common.against_binaries("REV"), built)
@@ -2132,6 +2223,7 @@ class CompareTests(unittest.TestCase):
                 mock.patch.object(speedometer, "RESULTS", Path(results)), \
                 mock.patch.object(speedometer, "against_problems", return_value=[]), \
                 mock.patch.object(common, "against_tree", return_value=Path("/w")), \
+                mock.patch.object(common, "has_stdio_pipe", return_value=False), \
                 mock.patch.object(common, "machopo_binary",
                                   side_effect=lambda profile, root=None, target=None: Path(
                                       "against" if target else "current")), \
