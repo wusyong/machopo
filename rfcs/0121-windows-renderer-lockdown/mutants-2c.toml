@@ -1,0 +1,52 @@
+# RFC 0121, 2c: V8's out-of-memory handler, and the sad tab telling its exit code.
+test = ["cargo", "test", "-q", "-p", "bindings", "--test", "it", "out_of_memory::"]
+timeout = 900
+
+[[mutant]]
+name = "the isolate has no out-of-memory handler"
+file = "crates/bindings/src/script_state.rs"
+from = '''        isolate.set_oom_error_handler(crate::oom::out_of_memory);'''
+to = '''        let _ = crate::oom::out_of_memory;'''
+
+[[mutant]]
+name = "the process ends with another code"
+file = "crates/bindings/src/oom.rs"
+from = '''    ipc::platform::terminate_current_process_immediately(i32::from(OUT_OF_MEMORY_EXIT))'''
+to = '''    ipc::platform::terminate_current_process_immediately(1)'''
+
+[[mutant]]
+name = "the process ends at an ordinary exit"
+file = "crates/bindings/src/oom.rs"
+from = '''    ipc::platform::terminate_current_process_immediately(i32::from(OUT_OF_MEMORY_EXIT))'''
+to = '''    std::process::exit(i32::from(OUT_OF_MEMORY_EXIT))'''
+
+[[mutant]]
+name = "nothing is said on stderr"
+file = "crates/bindings/src/oom.rs"
+from = '''        let _ = stderr.write_all(piece);'''
+to = '''        let _ = piece;'''
+
+[[mutant]]
+name = "running out of the heap is said as of the process"
+file = "crates/bindings/src/oom.rs"
+from = '''    let what: &[u8] = if details.is_heap_oom {'''
+to = '''    let what: &[u8] = if !details.is_heap_oom {'''
+
+[[mutant]]
+name = "V8's location isn't said"
+file = "crates/bindings/src/oom.rs"
+from = '''b" (", location, b")"];'''
+to = '''b" (", b"", b")"];'''
+
+[[mutant]]
+name = "V8's detail isn't said"
+file = "crates/bindings/src/oom.rs"
+from = '''    if !detail.is_empty() {'''
+to = '''    if false && !detail.is_empty() {'''
+
+[[mutant]]
+name = "the sad tab doesn't know V8's exit code"
+file = "crates/shell/src/sad_tab.rs"
+from = '''        } else if code == Some(i32::from(dom_js::OUT_OF_MEMORY_EXIT)) {'''
+to = '''        } else if false && code == Some(i32::from(dom_js::OUT_OF_MEMORY_EXIT)) {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "sad_tab"]

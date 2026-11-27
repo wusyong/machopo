@@ -1,0 +1,76 @@
+# RFC 0121, 2b: the renderer's memory limit, and the browser and sad tab telling it.
+test = ["cargo", "test", "-q", "-p", "sunaba", "--test", "it", "windows::"]
+timeout = 900
+
+[[mutant]]
+name = "the job doesn't limit memory"
+file = "crates/sunaba/src/windows.rs"
+from = '''        limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_PROCESS_MEMORY;'''
+to = '''        let _ = JOB_OBJECT_LIMIT_PROCESS_MEMORY;'''
+
+[[mutant]]
+name = "a limited job has no port"
+file = "crates/sunaba/src/windows.rs"
+from = '''        Some(_) => Some(completion_port(&job)?),'''
+to = '''        Some(_) => None,'''
+
+[[mutant]]
+name = "every message of the job's is taken for the limit"
+file = "crates/sunaba/src/windows.rs"
+from = '''            if message == JOB_OBJECT_MSG_PROCESS_MEMORY_LIMIT {'''
+to = '''            if message != JOB_OBJECT_MSG_PROCESS_MEMORY_LIMIT {'''
+
+[[mutant]]
+name = "only the job's first message is read"
+file = "crates/sunaba/src/windows.rs"
+from = '''            if message == JOB_OBJECT_MSG_PROCESS_MEMORY_LIMIT {
+                self.exceeded_memory_limit = true;
+            }'''
+to = '''            if message == JOB_OBJECT_MSG_PROCESS_MEMORY_LIMIT {
+                self.exceeded_memory_limit = true;
+            }
+            break;'''
+
+[[mutant]]
+name = "the browser doesn't ask whether the renderer ran out"
+file = "crates/browser/src/render_process_host.rs"
+from = '''    let out_of_memory = child.exceeded_memory_limit();'''
+to = '''    let out_of_memory = { let _ = &mut child; false };'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "renderer_process::a_renderer_process_that_ran_out"]
+
+[[mutant]]
+name = "the sad tab doesn't tell running out of memory apart"
+file = "crates/shell/src/sad_tab.rs"
+from = '''            Some(exit) if exit.out_of_memory => Self::OutOfMemory,'''
+to = '''            Some(exit) if false && exit.out_of_memory => Self::OutOfMemory,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "sad_tab"]
+
+[[mutant]]
+name = "a renderer's memory isn't limited"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''        policy.limit_memory(windows::renderer_memory_limit(
+            sunaba::windows::physical_memory(),
+        ));'''
+to = '''        let _ = sunaba::windows::physical_memory();'''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "renderer_sandbox"]
+
+[[mutant]]
+name = "a renderer may commit all the machine's memory"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''        let half = physical.map_or(0, |physical| physical / 2);'''
+to = '''        let half = physical.map_or(0, |physical| physical);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "renderer_sandbox"]
+
+[[mutant]]
+name = "a renderer's limit is at most 4 GiB"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''        usize::try_from(half.max(LEAST_MEMORY_LIMIT)).unwrap_or(usize::MAX)'''
+to = '''        usize::try_from(half.min(LEAST_MEMORY_LIMIT)).unwrap_or(usize::MAX)'''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "renderer_sandbox"]
+
+[[mutant]]
+name = "the view gives the sad tab only the exit code"
+file = "crates/shell/src/browser_view.rs"
+from = '''                (view.bounds, view.radius, sad_tab::Reason::of(exit))'''
+to = '''                (view.bounds, view.radius, sad_tab::Reason::of_exit(exit.and_then(|exit| exit.status).and_then(|status| status.code())))'''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib"]

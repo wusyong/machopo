@@ -219,6 +219,70 @@ fn the_loader_of_a_process_under_the_policy_has_one_thread() {
     child.kill().unwrap();
 }
 
+/// The device the system's random numbers are seeded from, which the
+/// first random number a process asks for opens.
+const KERNEL_SECURITY_DEVICE: &str = r"\Device\KsecDD";
+
+/// The handles of the process `id` to [`KERNEL_SECURITY_DEVICE`], as its
+/// starter sees them.
+fn to_the_kernels_security_device(id: u32) -> Vec<sunaba::windows::Handle> {
+    sunaba::windows::handles(id)
+        .expect("its handles")
+        .into_iter()
+        .filter(|handle| {
+            handle.kind.as_deref() == Some("File".as_ref())
+                && handle.name.as_deref() == Some(KERNEL_SECURITY_DEVICE.as_ref())
+        })
+        .collect()
+}
+
+#[test]
+fn a_process_that_lowered_itself_has_no_handle_to_the_kernels_security_device() {
+    // One that made a random number as `lower` does, under the policy,
+    // and didn't lower itself: it has the device open.
+    let mut command = sunaba::windows::Command::new(env!("CARGO_BIN_EXE_sunaba_probe"));
+    command
+        .arg("--inside")
+        .arg("--no-lower")
+        .arg("random")
+        .arg("sleep")
+        .arg("20");
+    let policy =
+        sunaba::windows::Policy::new(format!("sunaba.test.{}.ksecdd.1", std::process::id()));
+    let mut unlowered = command.spawn(Some(&policy)).unwrap();
+    let mut opened = Vec::new();
+    for _ in 0..500 {
+        opened = to_the_kernels_security_device(unlowered.id());
+        if !opened.is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    unlowered.kill().unwrap();
+    assert!(!opened.is_empty(), "it was never opened");
+
+    let mut child = lowered("ksecdd.2");
+    let handles = sunaba::windows::handles(child.id()).expect("its handles");
+    child.kill().unwrap();
+    assert_eq!(
+        to_the_kernels_security_device(child.id()),
+        [],
+        "{handles:#?}"
+    );
+    // Each slot it was in has a copy of one event's handle, and the event
+    // its own: as many handles to one event as there were to the device,
+    // and one.
+    let copies = handles
+        .iter()
+        .filter(|handle| {
+            handle.kind.as_deref() == Some("Event".as_ref()) && handle.count == opened.len() + 1
+        })
+        .count();
+    assert_eq!(copies, opened.len() + 1, "{handles:#?}");
+    // The system still makes random numbers for it.
+    assert_eq!(inside(&["random"]), Outcome::Ok(16));
+}
+
 #[test]
 fn a_process_under_the_policy_is_on_a_desktop_its_starter_made() {
     let mut first = lowered("desktop.1");

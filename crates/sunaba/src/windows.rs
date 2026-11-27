@@ -11,7 +11,10 @@
 //! handles named. The started process calls [`lower`] first thing in
 //! `main`.
 
+mod handles;
 pub mod probe;
+
+pub use handles::{Handle, handles};
 
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString, c_void};
@@ -1445,7 +1448,9 @@ unsafe extern "system" fn delay_load_failed(
 /// from; and the first thread gives back the token it started with,
 /// after which the process opens no file and loads no DLL. Before that
 /// it has the system make a random number once, which the first time
-/// loads what makes them (Chromium's `WarmupRandomnessInfrastructure`).
+/// loads what makes them (Chromium's `WarmupRandomnessInfrastructure`),
+/// then closes the device that opened (`\Device\KsecDD`), as Chromium's
+/// handle closer does, before handles are checked.
 ///
 /// A process started with no policy may call it too: it lowers its
 /// integrity level, and the rest is the same, but it has no token to
@@ -1481,6 +1486,18 @@ pub fn lower() -> Result<(), Error> {
     // SAFETY: takes flags alone.
     let searched = unsafe { SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS) };
     check("SetDefaultDllDirectories", searched != 0)?;
+    let mut random = [0_u8; 16];
+    // SAFETY: the buffer is this function's, as long as said.
+    let made = unsafe {
+        RtlGenRandom(
+            random.as_mut_ptr().cast(),
+            size32("a number", random.len())?,
+        )
+    };
+    check("RtlGenRandom", made != 0)?;
+    // Before handles are checked: a handle another thread closes while
+    // they are looked through is then an error, not the process's end.
+    handles::close_kernel_security_device()?;
     // Invalid handles raise, for good.
     let strict: u32 = 0b11;
     // SAFETY: the policy's structure is one word of flags, four bytes.
@@ -1492,15 +1509,6 @@ pub fn lower() -> Result<(), Error> {
         )
     };
     check("SetProcessMitigationPolicy", set != 0)?;
-    let mut random = [0_u8; 16];
-    // SAFETY: the buffer is this function's, as long as said.
-    let made = unsafe {
-        RtlGenRandom(
-            random.as_mut_ptr().cast(),
-            size32("a number", random.len())?,
-        )
-    };
-    check("RtlGenRandom", made != 0)?;
     // SAFETY: takes no argument; on a thread that impersonates nothing
     // it does nothing.
     let reverted = unsafe { RevertToSelf() };

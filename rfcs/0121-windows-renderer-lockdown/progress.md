@@ -14,7 +14,10 @@
 | 2b. job 的記憶體上限（實體記憶體的一半，最少 4 GB）、job 的 completion port、Browser 存的結束帶「碰過記憶體上限」、sad tab 的「記憶體不夠」；測試 | 做完 | 2026-11-27 |
 | 2c. V8 的 OOM：`bindings` 設 `set_oom_error_handler`、固定的結束碼、sad tab 對到「記憶體不夠」（三個平台）；測試 | 做完 | 2026-11-27 |
 | 2d. 第 2 段的檢查和文件 | 做完 | 2026-11-27 |
-| 3. 探測的三件（handle、CSRSS、shim） | 還沒開始 | |
+| 3 之前. 探測（`details.md` 的「探測：handle、CSRSS、shim（第 3 段之前）」）、第 3 段的決定（已決定的事項第 11 條） | 做完 | 2026-11-27 |
+| 3a. 降權時關掉 `\Device\KsecDD`、空出的位置放 event 的複本（`sunaba` 的 `windows/handles.rs`）；從外面列 process 的 handle（`handles`）；測試 | 做完 | 2026-11-27 |
+| 3b. 建立時把 `pShimData` 寫成 0、開了 CIG 時加 module tampering protection；測試 | 還沒開始 | |
+| 3c. 第 3 段的檢查和文件 | 還沒開始 | |
 
 ## 驗收
 
@@ -83,3 +86,11 @@
 - **第 2 段的檢查**：`cargo fmt --check` 只有 2b 的三個檔案的排版（`cargo fmt` 改了，在這一段的 commit 裡）；`cargo clippy --workspace --all-targets -- -D warnings` 沒有警告；`cargo test --workspace`（63 個測試 binary，5012 個通過、2 個 ignored，沒有失敗）。
 - **情境**：沒有加。「記憶體不夠」的 sad tab 是 Browser 畫的，不在 DOM 裡，情境只能截圖給人看；情境也沒有辦法給 renderer 一個小的 heap（不然要用掉好幾 GB）。沒有平台視窗的情境不存截圖（試過一份暫時的、用 `MACHOPO_V8_FLAGS=--max-old-space-size=16` 跑，看完刪掉了），`--window` 的那時沒跑（這台機器在跑 VR 遊戲，GPU 被佔住）。字和當掉的不同由 `sad_tab` 的 unit test 守著，畫的是和 `sad-tab.txt` 截的同一條路。
 - **文件**：驗收加上記憶體上限、V8 的 OOM、sad tab 的五項；`docs/limitations.md` 的兩條（Windows 的上限、V8 的 OOM 沒涵蓋的）、`docs/test-gaps.md` 的三條（另一個 desktop 的 DACL、`browser_view` 交給 sad tab 的、V8 的細節）在各段裡加了；`sanity.py docs` 通過。
+
+### 3a（2026-11-27，同一台）
+
+- **做法**：照已決定的事項第 11 條（D1）。`lower` 在要過一次亂數之後、開嚴格的 handle 檢查之前，列出自己的 handle（`ProcessHandleInformation`），問每個的種類和名字（pipe 不問名字：會等著別人在讀的那一次），關掉 `\Device\KsecDD` 的；每關一個，讓 thread 留在同一個處理器上，複製一個 event 的 handle 直到複本落在空出的位置（Chromium 的 `AttemptToStuffHandleSlot`），event 和那個複本留到 process 結束。排在嚴格的檢查之前，是因為另一條 thread 在列的期間關掉的 handle 這時只是錯誤、跳過，不會結束 process（Chromium 也是關完 handle 才開這個 mitigation）。`sunaba` 加上從外面列 handle 的 `handles(id)`（值、種類、名字、物件的 handle 數），`sunaba_probe` 加上 `random` 的嘗試。
+- **新的測試**：`sunaba` 的整合測試 1 個：policy 底下、要過亂數但沒有降權的 process 開著那個裝置；降權的沒有，有「裝置的 handle 數加一」個 handle 指到同一個 event，而且亂數照常。實際的 renderer 用探測的腳本從外面看：KsecDD 從 2 個變成 0 個，頁面的 `crypto.getRandomValues`、`Math.random`、`crypto.randomUUID` 照常。
+- **Mutation test**（`mutants-3a.toml`，11 個，`--keep-going`）：抓到 8 個：降權不關、關別的裝置、不放複本、複本不留、event 不留、名字從錯的位置讀、handle 的值讀錯、handle 數讀錯。沒抓到 3 個（預期的，記進 `docs/test-gaps.md` 的「只靠審查」）：不拿掉不許關的保護、問 pipe 的名字、thread 不留在同一個處理器上：測試的 process 沒有這三種情況。複本是不是在空出的那個位置也只靠審查：handle 的值每個 process 不一樣，從外面看不出來。跑完確認改過的檔案都還原了。
+- **整理**：第 2 段的三份 spec（`mutants-2a.toml`、`mutants-2b.toml`、`mutants-2c.toml`）當時只留在本機，補進這個資料夾；`mutants-1.toml` 的「降權前不要亂數」那一條照 `cargo fmt` 之後的排版更新。現在五份的每一條都還對得上程式。
+- **跑過的檢查**：`cargo test -p sunaba -p shell`（`sunaba` 的 Windows 整合測試 28 個、`shell` 的整合測試 755 個，和其他的都通過）；`sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs（都通過）。`cargo test --workspace`、fmt 和 clippy 等第 3 段做完時跑。

@@ -120,7 +120,7 @@ Chromium 的 renderer 啟動時是 `USER_RESTRICTED_SAME_ACCESS`（限制在全�
 0. 草稿和探測（這一版；`details.md`）。
 1. **token**（A 和 C；T1 探測過，已決定的事項第 1 到 5 條）：`sunaba` 建 lockdown 加 AppContainer 的 token、第一個 thread 帶 same-access 加 AppContainer 的 token、寫 `LoaderThreads`；`lower` 暖機、還回；延後載入失敗的 hook；斷言舊行為的測試改過來；測試。
 2. **desktop 和記憶體上限**（B 和 F；已決定的事項第 6 到 9 條）：Browser 建、關 window station 和 desktop；`sunaba` 讀 `DesktopInfo`；job 的上限（實體記憶體的一半，最少 4 GB）和它的 completion port；bindings 設 V8 的 OOM 處理（三個平台）；sad tab 的「記憶體不夠」；測試。
-3. **探測的三件**（D、E、H）：各自探測，做了的加進 policy 和測試，不做的寫下理由。
+3. **探測的三件**（D、E、H；已決定的事項第 11 條，另加 module tampering protection）：各自探測，做了的加進 policy 和測試，不做的寫下理由。
 
 每一段做完可以先 merge（`rfcs/README.md` 的「階段的 merge」）。都在 Windows 上做和驗。
 
@@ -160,10 +160,16 @@ Chromium 的 renderer 啟動時是 `USER_RESTRICTED_SAME_ACCESS`（限制在全�
 
 10. **V8 的 OOM 只設 isolate 的 handler（O1）**（2026-11-27，使用者決定）：`bindings` 在每個 isolate 上設 `set_oom_error_handler`（renderer 和 worker 的 isolate 都經過 `V8PerIsolateData::new`）：往 stderr 寫一行（heap 的上限或 process 的記憶體、V8 給的位置），不配置記憶體，再用 `ipc::platform::terminate_current_process_immediately` 以結束碼 6（`OUT_OF_MEMORY_EXIT`）結束，`ipc` 已經有兩個平台的實作，`bindings` 不用多一處 `unsafe` 的結束；sad tab 照這個結束碼說記憶體不夠。不選 O2（照 Chromium 再設 process 層的 `V8::SetFatalMemoryErrorCallback`：`v8` crate 沒有綁它，要改 rusty_v8 的 C++、重編 V8、換共用的 artifact）。O1 沒涵蓋的是 V8 沒有 isolate 的 thread（背景編譯、GC 的 worker）上的 OOM，照 V8 原本的做法印出 stack、abort：Windows 上那多半是碰到 job 的上限，分頁照第 8 條已經說記憶體不夠，只是 stderr 是 V8 的；Linux、macOS 沒有上限，背景 thread 的配置很少失敗（Linux 上多半是 OOM killer 的 `SIGKILL`，兩種做法都分不出來）。對照 Chromium：gin 在 `InitializePlatform` 之後就設 process 層的那一個，每個 isolate 的 `CreateParams` 也帶同一個（`gin/v8_initializer.cc`、`gin/isolate_holder.cc`）；Blink 的 `ReportV8OOMError`（`v8_oom.cc`）記一行 log 再 `OOM_CRASH`。
 
+11. **第 3 段：關掉 KsecDD、不載入 shim、加上 module tampering protection；不斷開 CSRSS、不清 registry 的快取（D1、E2、H1、M1、R2）**（2026-11-27，使用者逐條決定；探測過，`details.md` 的「探測：handle、CSRSS、shim（第 3 段之前）」）：
+    - **D1**：`lower` 還回 token 之後照 Chromium 的 `HandleCloserAgent` 列出自己的 handle，關掉 `\Device\KsecDD`（降權前暖機的 `RtlGenRandom` 載入 `cryptbase.dll` 時開的兩個），關掉的位置照 Chromium 塞一個沒用的 event，之後的新 handle 不會拿到同一個值、被還記著舊值的程式碼誤用。Chromium 關的另外兩種（`\Device\DeviceApi`、shell 的 global counters 的 section）machopo 的 renderer 沒有，不找。關掉之後頁面的亂數照常：降權之後的亂數走 `ProcessPrng`。不選留著（D2）：Chromium 一定關，成本是列一次約 160 個 handle。
+    - **E2**：不斷開 CSRSS。只關 ALPC Port 時 renderer 以 `0xC0000005` 結束；Chromium 的做法（`EnumSystemLocalesEx` 暖機、照樣子找 CSR 的 port 的 heap 再 `HeapDestroy`）靠沒有文件的 heap 的結構，Windows 改了就是 renderer 莫名地當掉，而且 Chromium 自己預設不開（`kEnableCsrssLockdown`）。
+    - **H1**：`spawn` 寫 `LoaderThreads` 的地方，同時把暫停著的 process 的 PEB 的 `pShimData`（x64 的 `+0x2D8`）寫成 0（Chromium 的 `ApplyZeroAppShimToSuspendedProcess`，`kWinSboxZeroAppShim` 預設開）；ARM64 上模擬 x64 時不做（Chromium 也跳過）。這台機器上 apphelp 本來就沒有載入，但使用者或系統的相容性設定替 `machopo.exe` 套了 shim 時，apphelp 和它攔的系統呼叫會進 renderer。不選不做（H2：靠的是這台機器剛好沒有設定）。
+    - **M1**：開了 CIG（只載入 Microsoft 簽章的 DLL，沒有 `--allow-third-party-modules`）時，建立 process 的 mitigation 加上 `MODULE_TAMPERING_PROTECTION_ALWAYS_ON`：主程式的 IAT 被改過（注入每個 process 的軟體加的、沒有簽章的 import）時，loader 換上乾淨的映像，renderer 不會因為 CIG 擋下那個 DLL 而起不來。Chromium 的 renderer 用不到（它的 CIG 是降權之後才開的），這個開關（`kWinSboxModuleTamperingProtection`，預設開）是給建立時就開 CIG 的 process 的；machopo 的 renderer 的 CIG 是建立時的。效果這台機器造不出來，記進 `docs/test-gaps.md`。不選不做（M2：碰到注入的軟體只能關掉 CIG）。
+    - **R2**：不清 registry 的快取（Chromium 的 `LowerToken` 的 `FlushCachedRegHandles`、`RegDisablePredefinedCache`）。降權之後的 renderer 拿著六個 key，清了只少一個 `\REGISTRY\MACHINE`，其他的是 loader、combase、NLS 開的，Chromium 也不關；而且從這些 handle 開底下的 key 時，系統照樣用 renderer 的 token 檢查，它們只讓 renderer 讀到那幾個 key 自己的值和子 key 的名字。
+
 ## 待決定
 
-- 第 3 段開始前：三件各自做不做（探測之後定）。
-- 草稿時新找到、還沒放進範圍的：Chromium 的 `kWinSboxModuleTamperingProtection` 預設開，但讀到的 `sandbox_win.cc` 沒有用到它，不知道它在 renderer 上做什麼；要不要查、放進第 3 段。
+- 沒有。
 
 ## 之後的可能
 

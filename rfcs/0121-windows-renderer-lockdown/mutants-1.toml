@@ -50,7 +50,12 @@ to = ''''''
 [[mutant]]
 name = "no random number before the token is given back"
 file = "crates/sunaba/src/windows.rs"
-from = '''    let made = unsafe { RtlGenRandom(random.as_mut_ptr().cast(), size32("a number", random.len())?) };
+from = '''    let made = unsafe {
+        RtlGenRandom(
+            random.as_mut_ptr().cast(),
+            size32("a number", random.len())?,
+        )
+    };
     check("RtlGenRandom", made != 0)?;'''
 to = '''    let _ = &mut random;'''
 

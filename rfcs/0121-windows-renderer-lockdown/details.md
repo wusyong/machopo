@@ -141,6 +141,31 @@ machopo 現在的（`sunaba::windows` 的 `Command::spawn` 和 `lower`，`shell:
 
 正常的頁面離 1 GB 都還遠，V8 的 heap 自己停在 1.5 GB 左右；擋不住的是 DOM、layout、圖片、canvas、wasm 的記憶體這些 V8 的 heap 以外的。
 
+## 探測：handle、CSRSS、shim（第 3 段之前）
+
+2026-11-27，同一台機器，debug build，`55a76e03` 加上只為探測寫的原型（沒有 commit）：`lower` 還回 token 之後，照環境變數關掉 `\Device\KsecDD` 的 handle（照 Chromium 的 handle closer：`NtQueryInformationProcess` 的 `ProcessHandleTable` 列出自己的 handle，`NtQueryObject` 讀型別和名字）、關掉 ALPC Port，或照 Chromium 的 `FlushCachedRegHandles` 關掉 HKLM、HKCR、HKU 的快取再 `RegDisablePredefinedCache`；`spawn` 照 Chromium 的 `ApplyZeroAppShimToSuspendedProcess` 把暫停著的 process 的 PEB 的 `pShimData`（x64 的 `+0x2D8`）寫成 0；policy 的第二個字加上 `MODULE_TAMPERING_PROTECTION_ALWAYS_ON`（第 12 位元）。`machopo --remote-debugging-pipe --headless` 開 `about:demo`，頁面跑 `crypto.getRandomValues`、`Math.random`、`crypto.randomUUID`、`Intl.DateTimeFormat` 和讀標題，再從外面列 renderer 的 handle（`NtQuerySystemInformation` 的 `SystemExtendedHandleInformation`，複製過來讀名字）、module 和 PEB。
+
+這次也讀了 Chromium 上次沒讀到的：`sandbox/win/src/handle_closer_agent.cc`（`HandleCloserAgent`）、`sandbox_policy_base.cc`（`ApplyZeroAppShimToSuspendedProcess`）、`target_services.cc`（`LowerToken`）、`process_mitigations.cc` 和 `security_level.h`（module tampering）。
+
+**降權之後的 renderer 拿著的**（159 個 handle）：
+
+| 型別 | 有什麼 | Chromium |
+| --- | --- | --- |
+| File | Browser 給的字型檔（同一個檔案常有兩個）、通道的 named pipe、stdio（`\Device\ConDrv` 兩個，或 Browser 的 log 檔）、`\Device\CNG`、**`\Device\KsecDD` 兩個** | 關 `KsecDD`（只有 renderer，註解說和 `cryptbase.dll` 有關）、`DeviceApi`（這裡沒有） |
+| Section | **沒有**（沒有 shell 的 global counters） | 關 `windows_shell_global_counters` |
+| ALPC Port | 一個（CSRSS 的連線） | `kEnableCsrssLockdown` 時關，預設不關 |
+| Key | `\REGISTRY\MACHINE` 兩個、`Image File Execution Options`、`Session Manager`、`Nls\Sorting\Versions`、`Software\Microsoft\Ole` | `LowerToken` 關 advapi32 快取的 HKLM、HKCR、HKU，再 `RegDisablePredefinedCache` |
+| 其他 | thread 21 個、event、semaphore、`\KnownDlls`、ETW 的註冊；沒有 token、沒有別的 process | — |
+
+module 15 個，有 `CRYPTBASE.DLL`、`bcrypt.dll`、`bcryptprimitives.dll`，沒有 `user32`、`gdi32`、`apphelp.dll`。`pShimData` 不是 0（系統交了 shim 的資料，這台機器上沒有套用的 shim，`apphelp` 沒有載入）。
+
+- **KsecDD**：是 `lower` 降權前的 `RtlGenRandom`（`rand_s` 底下的那一個，暖機用）載入 `cryptbase.dll` 時開的。關掉之後頁面的亂數、`randomUUID` 照常：降權之後的亂數走 `bcryptprimitives` 的 `ProcessPrng`（Rust、getrandom、V8 的 entropy），不用它。Chromium 一樣是先暖機、再關。
+- **registry 的快取**：關掉之後少了一個 `\REGISTRY\MACHINE`，其他五個留著：ntdll 的 loader 開的（`Image File Execution Options`、`Session Manager`）和 combase、NLS 開的，Chromium 也不關。這些 handle 不是門：從它們開底下的 key 時，系統照樣用 renderer 的 token 檢查那個 key，只有那個 key 自己的值和子 key 的名字讀得到。頁面照常。
+- **CSRSS**：只關 ALPC Port（沒有照 Chromium 先 `EnumSystemLocalesEx` 暖機、找出 CSR 的 port 的 heap 再 `HeapDestroy`）時，renderer 在回答 `Runtime.evaluate` 之前就以 `0xC0000005`（access violation）結束。Chromium 的做法靠一個沒有文件的 heap 的樣子去找它（`FindCsrPortHeap`），而且它自己預設不開。
+- **zero app shim**：`pShimData` 變成 0，頁面照常。
+- **module tampering protection**：Chromium 的 renderer 的 CIG 是降權之後才開的（`SetDelayedProcessMitigations`），這個保護是給建立時就開 CIG 的 process（`security_level.h`：IAT 被改時換上乾淨的主程式映像，不讓注入的、沒有 Microsoft 簽章的 import 讓 process 起不來）；machopo 的 renderer 的 CIG 是建立時的。加上之後 renderer 起得來，頁面照常；IAT 被改的情況這台機器造不出來。
+- **一起開時**（KsecDD、registry、zero shim、module tampering protection）：`shell` 的整合測試 755 個都通過。
+
 ## 要探測的
 
 第 1 段之前（做了，上一節；4 的後半「實際讓另一個 renderer 開」由第 1 段的測試做了：另一個 AppContainer 的 lockdown 的 process，用 lockdown 的 token 或啟動用的 token，都開不了它的 process（process 的安全描述來自它的 default DACL），使用者的一般 process 開得了）：

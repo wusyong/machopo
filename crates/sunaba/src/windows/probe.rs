@@ -17,6 +17,7 @@
 //! container                       (1 in an app container, 0 outside)
 //! mitigation NUMBER               (the flags of that mitigation policy)
 //! thread ATTEMPT...               (the attempt, on a new thread)
+//! random [ATTEMPT...]             (16 random bytes from the system, then the attempt)
 //! words WORD...                   (how many arguments it was given)
 //! length WORD                     (how many bytes the argument is)
 //! env NAME                        (how many bytes the variable is)
@@ -143,6 +144,20 @@ fn attempt(arguments: &[String]) -> std::io::Result<usize> {
                 .spawn(move || attempt(&rest))?
                 .join()
                 .unwrap_or_else(|_| Err(invalid()))
+        }
+        ["random", rest @ ..] => {
+            let mut bytes = [0_u8; 16];
+            // SAFETY: the buffer is a local array, as long as said.
+            let made = unsafe { super::RtlGenRandom(bytes.as_mut_ptr().cast(), 16) };
+            if made == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if rest.is_empty() {
+                Ok(bytes.len())
+            } else {
+                let rest: Vec<String> = rest.iter().map(|word| (*word).to_owned()).collect();
+                attempt(&rest)
+            }
         }
         ["words", rest @ ..] => Ok(rest.len()),
         ["length", word] => Ok(word.len()),

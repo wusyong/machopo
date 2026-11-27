@@ -1,0 +1,74 @@
+# 3a's mutants (Windows: a process that lowers itself closes its handles to the kernel's security device, and fills their slots with copies of an event's): `python3 scripts/test.py mutate rfcs/0121-windows-renderer-lockdown/mutants-3a.toml --keep-going`, on Windows.
+test = ["cargo", "test", "-q", "-p", "sunaba"]
+timeout = 900
+
+[[mutant]]
+name = "lowering closes nothing"
+file = "crates/sunaba/src/windows.rs"
+from = '''    handles::close_kernel_security_device()?;'''
+to = ''''''
+
+[[mutant]]
+name = "another device's handles are closed"
+file = "crates/sunaba/src/windows/handles.rs"
+from = '''const KERNEL_SECURITY_DEVICE: &str = r"\Device\KsecDD";'''
+to = '''const KERNEL_SECURITY_DEVICE: &str = r"\Device\CNG";'''
+
+[[mutant]]
+name = "a closed handle's slot isn't filled"
+file = "crates/sunaba/src/windows/handles.rs"
+from = '''        fill(value, event);'''
+to = ''''''
+
+[[mutant]]
+name = "the copy in the slot isn't kept"
+file = "crates/sunaba/src/windows/handles.rs"
+from = '''        if copy.addr() == slot {
+            return;'''
+to = '''        if copy.addr() == slot {
+            others.push(owned(copy));
+            return;'''
+
+[[mutant]]
+name = "the event the copies are of isn't kept"
+file = "crates/sunaba/src/windows/handles.rs"
+from = '''        let _ = event.into_raw_handle();'''
+to = '''        drop(event);'''
+
+[[mutant]]
+name = "a name's text is read from the wrong place"
+file = "crates/sunaba/src/windows/handles.rs"
+from = '''        let start = at.checked_sub(self.words.as_ptr().addr())?;'''
+to = '''        let start = at.checked_sub(self.words.as_ptr().addr())?.saturating_add(2);'''
+
+[[mutant]]
+name = "a snapshot's handle is read from the wrong word"
+file = "crates/sunaba/src/windows/handles.rs"
+from = '''                value: entry[0],'''
+to = '''                value: entry[1],'''
+
+[[mutant]]
+name = "a handle's count of its object's handles isn't read"
+file = "crates/sunaba/src/windows/handles.rs"
+from = '''                count: entry[1],'''
+to = '''                count: 1,'''
+
+# Expected to be missed: no handle of a process the tests start is protected from closing, or a pipe that a read waits on, and its one thread doesn't move between processors between the close and the copy.
+
+[[mutant]]
+name = "a handle's protection from closing isn't taken off"
+file = "crates/sunaba/src/windows/handles.rs"
+from = '''        SetHandleInformation(handle, HANDLE_FLAG_PROTECT_FROM_CLOSE, 0);'''
+to = ''''''
+
+[[mutant]]
+name = "a pipe's name is asked for"
+file = "crates/sunaba/src/windows/handles.rs"
+from = '''        if kind == "File" && unsafe { GetFileType(handle.as_raw_handle()) } == FILE_TYPE_PIPE {'''
+to = '''        if kind == "File" && unsafe { GetFileType(handle.as_raw_handle()) } == u32::MAX {'''
+
+[[mutant]]
+name = "the thread isn't kept on one processor"
+file = "crates/sunaba/src/windows/handles.rs"
+from = '''        unsafe { SetThreadAffinityMask(thread, mask) }'''
+to = '''        { let _ = (thread, mask); 0 }'''

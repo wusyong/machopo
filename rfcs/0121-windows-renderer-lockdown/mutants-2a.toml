@@ -1,0 +1,58 @@
+# RFC 0121, 2a: the window station and desktop a process under a policy is started on.
+test = ["cargo", "test", "-q", "-p", "sunaba"]
+timeout = 900
+
+[[mutant]]
+name = "a process under a policy isn't given the desktop"
+file = "crates/sunaba/src/windows.rs"
+from = '''            startup.StartupInfo.lpDesktop = desktop.as_mut_ptr();'''
+to = '''            let _ = desktop;'''
+
+[[mutant]]
+name = "a renderer isn't given the desktop (machopo's tests)"
+file = "crates/sunaba/src/windows.rs"
+from = '''            startup.StartupInfo.lpDesktop = desktop.as_mut_ptr();'''
+to = '''            let _ = desktop;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "renderer_sandbox_windows"]
+
+[[mutant]]
+name = "a process that may call into win32k is given the desktop too"
+file = "crates/sunaba/src/windows.rs"
+from = '''            Some(policy) if !policy.win32k => Some(alternate_desktop()?),'''
+to = '''            Some(_) => Some(alternate_desktop()?),'''
+
+[[mutant]]
+name = "this process stays on the window station it made"
+file = "crates/sunaba/src/windows.rs"
+from = '''    let back = unsafe { SetProcessWindowStation(current) };'''
+to = '''    let back = { let _ = current; 1 };'''
+
+[[mutant]]
+name = "the desktop made isn't kept for the next start"
+file = "crates/sunaba/src/windows.rs"
+from = '''    *made = Some(name.clone());'''
+to = '''    let _ = &mut made;'''
+
+[[mutant]]
+name = "the desktop isn't this process's own"
+file = "crates/sunaba/src/windows.rs"
+from = '''    let desktop = OsString::from(format!("sunaba-{}", std::process::id()));'''
+to = '''    let desktop = OsString::from("sunaba");'''
+
+[[mutant]]
+name = "the name made isn't told"
+file = "crates/sunaba/src/windows.rs"
+from = '''        .map(|name| OsString::from_wide(name.strip_suffix(&[0]).unwrap_or(name)))'''
+to = '''        .and(None::<OsString>)'''
+
+[[mutant]]
+name = "DesktopInfo is read elsewhere"
+file = "crates/sunaba/src/windows.rs"
+from = '''    pub const DESKTOP_INFO: usize = 0xC0;'''
+to = '''    pub const DESKTOP_INFO: usize = 0xB0;'''
+
+[[mutant]]
+name = "DesktopInfo's length is its most"
+file = "crates/sunaba/src/windows.rs"
+from = '''    let length = usize::from(u16::from_le_bytes([string[0], string[1]]));'''
+to = '''    let length = usize::from(u16::from_le_bytes([string[2], string[3]]));'''
