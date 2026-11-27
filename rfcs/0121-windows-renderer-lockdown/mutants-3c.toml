@@ -1,0 +1,15 @@
+# 3c's mutants (Windows: a real renderer process has closed its handles to the kernel's security device, and was given no compatibility shim): `python3 scripts/test.py mutate rfcs/0121-windows-renderer-lockdown/mutants-3c.toml`, on Windows.
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "renderer_sandbox_windows::"]
+timeout = 900
+
+[[mutant]]
+name = "the renderer closes nothing as it lowers itself"
+file = "crates/sunaba/src/windows.rs"
+from = '''    handles::close_kernel_security_device()?;'''
+to = ''''''
+
+[[mutant]]
+name = "the renderer is given its shims"
+file = "crates/sunaba/src/windows.rs"
+from = '''    no_app_shim(process)?;'''
+to = ''''''

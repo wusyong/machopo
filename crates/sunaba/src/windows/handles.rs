@@ -88,12 +88,13 @@ fn snapshot(process: BorrowedHandle<'_>) -> Option<Vec<Entry>> {
         break;
     }
     let count = *words.first()?;
-    let entries = words.get(SNAPSHOT_HEADER..)?.chunks_exact(ENTRY_WORDS);
+    let (entries, _) = words.get(SNAPSHOT_HEADER..)?.as_chunks::<ENTRY_WORDS>();
     if entries.len() < count {
         return None;
     }
     Some(
         entries
+            .iter()
             .take(count)
             .map(|entry| Entry {
                 value: entry[0],

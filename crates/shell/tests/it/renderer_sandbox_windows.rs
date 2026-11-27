@@ -11,8 +11,8 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use sunaba::windows::{
-    AccessToken, LOW, Mitigation, UNTRUSTED, alternate_desktop_name, desktop, in_app_container,
-    integrity, loader_threads, mitigation, open,
+    AccessToken, LOW, Mitigation, UNTRUSTED, alternate_desktop_name, desktop, handles,
+    in_app_container, integrity, loader_threads, mitigation, open, shim_data,
 };
 
 use crate::automation_pipe::{Browser, renderer_pids, script};
@@ -63,6 +63,15 @@ fn a_renderer_process_is_in_the_sandbox() {
     assert_eq!(desktop(id), alternate_desktop_name());
     // It has lowered itself by the time its threads are started.
     assert_eq!(integrity(process.as_handle()).unwrap(), UNTRUSTED);
+    // It was given no compatibility shim, and has closed what made its
+    // first random number.
+    assert_eq!(shim_data(id), Some(0));
+    let kernel_security = handles(id)
+        .unwrap()
+        .into_iter()
+        .filter(|handle| handle.name.as_deref() == Some(r"\Device\KsecDD".as_ref()))
+        .count();
+    assert_eq!(kernel_security, 0);
     // No win32k, no file system control codes; no extension points; only
     // Microsoft's DLLs; only the system's fonts; no remote or
     // low-integrity images; no child processes; branch prediction kept to

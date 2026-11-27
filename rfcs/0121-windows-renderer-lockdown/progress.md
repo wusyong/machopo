@@ -17,7 +17,7 @@
 | 3 之前. 探測（`details.md` 的「探測：handle、CSRSS、shim（第 3 段之前）」）、第 3 段的決定（已決定的事項第 11 條） | 做完 | 2026-11-27 |
 | 3a. 降權時關掉 `\Device\KsecDD`、空出的位置放 event 的複本（`sunaba` 的 `windows/handles.rs`）；從外面列 process 的 handle（`handles`）；測試 | 做完 | 2026-11-27 |
 | 3b. 建立時把 `pShimData` 寫成 0（x64 在 ARM64 上模擬時不寫）、開了 CIG 時加 module tampering protection；從外面讀 `pShimData`（`shim_data`）；測試 | 做完 | 2026-11-27 |
-| 3c. 第 3 段的檢查和文件 | 還沒開始 | |
+| 3c. 第 3 段的檢查和文件；renderer process 的 KsecDD 和 `pShimData` 加進 `shell` 的測試 | 做完 | 2026-11-27 |
 
 ## 驗收
 
@@ -37,6 +37,10 @@
 | 記憶體上限 | Browser 存下的 renderer 的結束帶「碰過上限」：一直要記憶體的 renderer 有，同樣上限底下 `about:crash` 的沒有 | `cargo test -p browser --test it renderer_process::`（`a_renderer_process_that_ran_out_of_its_memory_is_told_apart`） |
 | V8 的 OOM | V8 用完 heap 時 process 當場以結束碼 6 結束（緩衝裡的不寫出、測試框架的結尾不出現），stderr 有一行說是 heap、V8 給的位置 | `cargo test -p bindings --test it out_of_memory::`（`a_script_that_runs_v8_out_of_its_heap_ends_its_process_saying_so`） |
 | sad tab | 碰過上限的（不管結束碼）、以結束碼 6 結束的都說記憶體不夠，字和當掉的不同；sandbox 進不去、DLL 載不進來的照舊 | `cargo test -p shell --lib sad_tab`（`a_renderer_that_ran_out_of_memory_is_told_apart_whatever_it_exited_with`、`a_renderer_that_couldnt_enter_its_sandbox_is_told_apart_from_a_crash`） |
+| handle | 降權之後沒有 `\Device\KsecDD` 的 handle，空出的位置是同一個 event 的複本，亂數照常；policy 底下要過亂數、沒有降權的 process 開著它；renderer process 也沒有 | `cargo test -p sunaba --test it windows::`（`a_process_that_lowered_itself_has_no_handle_to_the_kernels_security_device`）；`shell` 的 `a_renderer_process_is_in_the_sandbox` |
+| shim | policy 底下的 process 的 `pShimData` 是 0（沒有 policy 的讀得到）；renderer process 的也是 | `sunaba` 的 `a_process_under_the_policy_is_given_no_compatibility_shim`；`shell` 的 `a_renderer_process_is_in_the_sandbox` |
+| mitigation | 只載入 Microsoft 簽章的 DLL 時，建立的 mitigation 帶 module tampering protection，允許別人的 DLL 時不帶 | `cargo test -p sunaba --lib`（`a_policy_asks_for_every_mitigation_but_what_it_was_told_to_allow`） |
+| 探測的三件 | handle、CSRSS、shim 和另外查的 module tampering protection、registry 的快取各有結論：做了的有上面的測試，不做的（斷開 CSRSS、清 registry 的快取）寫了理由 | 已決定的事項第 11 條；`details.md` 的「探測：handle、CSRSS、shim（第 3 段之前）」 |
 
 ## 做過的檢查
 
@@ -101,3 +105,10 @@
 - **新的測試**：`sunaba` 的整合測試 1 個（policy 底下的 process 的 `pShimData` 是 0；沒有 policy 的只斷言讀得到：這台機器上它不是 0，別的機器上可能本來就是 0）；`sunaba` 的 mitigation 的單元測試加上 bit 12、`allow_third_party_modules` 時沒有它。實際的 renderer 用探測的腳本從外面看：`pShimData` 是 0（之前不是 0）、沒有 `apphelp.dll`、KsecDD 是 0，頁面照常（開著 module tampering protection 也起得來）。
 - **Mutation test**（`mutants-3b.toml`，8 個，`--keep-going`）：抓到 7 個：不寫 `pShimData`、寫在後面 8 個 byte、每台機器都當成模擬、執行檔當成 ARM64 的、不加 module tampering protection、加成關掉它的那一個 bit、允許別人的 DLL 時也加。沒抓到 1 個（預期的）：寫失敗時不當成錯誤：暫停著的 process 有全部的權限，測試寫不失敗；和 module tampering protection 的效果、模擬時不寫的那條路一起記進 `docs/test-gaps.md` 的「只靠審查」。跑完確認改過的檔案都還原了。
 - **跑過的檢查**：`cargo test -p sunaba -p shell`（`sunaba` 的 Windows 整合測試 29 個、`shell` 的整合測試 755 個，和其他的都通過）；`sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs（都通過）。`cargo test --workspace`、fmt 和 clippy 等第 3 段做完時跑。
+
+### 3c（2026-11-27，同一台）
+
+- **第 3 段的檢查**：`cargo fmt --check` 沒有差異；`cargo clippy --workspace --all-targets -- -D warnings` 一處（`handles.rs` 讀 handle 的清單時用 `chunks_exact`，改成 `as_chunks`）；`cargo test --workspace` 第一次 1 個失敗（下一條），cargo 停在 `shell`，後面 14 個 binary 沒跑；用 `--no-fail-fast` 再跑一次：63 個測試 binary，5014 個通過、2 個 ignored，沒有失敗。`sanity.py` 的七項都通過。
+- **不穩定的測試**：`automation_pipe::hung_renderers_take_the_limit_once`（Windows）在第一次的整套裡失敗：「machopo 結束之後 renderer 都不在了」那一個 assert，`tasklist` 還列得到三個 pid 裡的某一個。單獨跑 10 次都通過。這是已知的（另一份 RFC 的「不穩定的測試」記過同一個 assert：整套平行跑時偶爾失敗，推測是 pid 在 machopo 結束到測試問 `tasklist` 之間被別的測試的 machopo 重用）。這次另外確認了：結束了、但還有人拿著 handle 的 process，`tasklist` 不列，所以不是有人拿著 renderer 的 handle。這一段沒有改到 renderer 怎麼結束；修法還是不要事後用 pid 問系統，沒有在這份 RFC 裡改。
+- **renderer process 的驗收**：`shell` 的 `a_renderer_process_is_in_the_sandbox` 加上從外面看 `pShimData` 是 0、沒有 KsecDD 的 handle（之前只用探測的腳本看過）。`mutants-3c.toml`（2 個：renderer 降權時不關、建立時不寫 `pShimData`）都抓到，跑完確認檔案都還原了。
+- **文件**：驗收加上 handle、shim、mitigation、探測的三件四項；RFC 和 `rfcs/README.md` 的狀態寫上第 3 段做完；`sanity.py docs` 通過。
