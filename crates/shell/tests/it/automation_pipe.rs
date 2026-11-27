@@ -3027,6 +3027,7 @@ fn hung_renderers_take_the_limit_once() {
     }
     let renderers = renderer_pids(&mut browser);
     assert_eq!(renderers.len(), 3, "{renderers:?}");
+    let watched = Watched::new(&renderers);
     std::thread::sleep(Duration::from_millis(300));
     let asked = std::time::Instant::now();
     assert!(browser.end().success());
@@ -3034,9 +3035,11 @@ fn hung_renderers_take_the_limit_once() {
     // The limit, once, and the time to start and end; one renderer after
     // another was five seconds each.
     assert!(took < Duration::from_secs(4), "{took:?}");
-    // Killed and reaped before machopo ended.
-    assert!(!renderers.iter().any(|&pid| alive(pid)), "{renderers:?}");
     let said = std::fs::read_to_string(&log).unwrap();
+    // Killed and reaped before machopo ended (its log says how each
+    // ended). On Windows a renderer's job ends it with machopo anyway, so
+    // there this sees only that none outlives it.
+    assert!(!watched.any_alive(), "{renderers:?}: {said}");
     let killed = said
         .lines()
         .filter(|line| {
@@ -3302,24 +3305,54 @@ fn a_hung_renderer_leaves_the_writer_its_time() {
     assert!(!said.contains("writer"), "{said}");
 }
 
-/// Whether process `pid` is running (or not yet reaped).
-fn alive(pid: u64) -> bool {
+/// Processes watched from before they may end, to be asked whether they
+/// have. On Windows by a handle to each, held from the start: the system
+/// gives an ended process's id to the next one soon (and the tests start
+/// many machopos at once), so a later look by id may find another
+/// process, which the handle keeps from being given it. Elsewhere by id
+/// (`kill -0`): Linux and macOS give an id out again only once they have
+/// gone round the others.
+struct Watched {
     #[cfg(unix)]
-    let asked = Process::new("kill")
-        .args(["-0", &pid.to_string()])
-        .stderr(Stdio::null())
-        .status()
-        .expect("kill runs")
-        .success();
+    pids: Vec<u64>,
     #[cfg(windows)]
-    let asked = {
-        let listed = Process::new("tasklist")
-            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
-            .output()
-            .expect("tasklist runs");
-        String::from_utf8_lossy(&listed.stdout).contains(&format!(" {pid} "))
-    };
-    asked
+    processes: Vec<std::os::windows::io::OwnedHandle>,
+}
+
+impl Watched {
+    fn new(pids: &[u64]) -> Self {
+        Self {
+            #[cfg(unix)]
+            pids: pids.to_vec(),
+            #[cfg(windows)]
+            processes: pids
+                .iter()
+                .map(|&pid| {
+                    let id = u32::try_from(pid).expect("a process id");
+                    sunaba::windows::open(id).unwrap_or_else(|e| panic!("{pid}: {e}"))
+                })
+                .collect(),
+        }
+    }
+
+    /// Whether any is running (or not yet reaped).
+    fn any_alive(&self) -> bool {
+        #[cfg(unix)]
+        let alive = self.pids.iter().any(|pid| {
+            Process::new("kill")
+                .args(["-0", &pid.to_string()])
+                .stderr(Stdio::null())
+                .status()
+                .expect("kill runs")
+                .success()
+        });
+        #[cfg(windows)]
+        let alive = self.processes.iter().any(|process| {
+            use std::os::windows::io::AsHandle as _;
+            sunaba::windows::running(process.as_handle())
+        });
+        alive
+    }
 }
 
 /// The ids of machopo's renderer processes (`SystemInfo.getProcessInfo`).
@@ -3386,11 +3419,12 @@ fn renderers_go_with_a_killed_browser(scripts: &[Option<&str>]) {
     }
     let pids = renderer_pids(&mut browser);
     assert_eq!(pids.len(), scripts.len(), "{pids:?}");
+    let watched = Watched::new(&pids);
     std::thread::sleep(Duration::from_secs(1));
     browser.child.kill().unwrap();
     browser.child.wait().unwrap();
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    while pids.iter().any(|&pid| alive(pid)) {
+    while watched.any_alive() {
         assert!(
             std::time::Instant::now() < deadline,
             "a renderer outlived its browser"
