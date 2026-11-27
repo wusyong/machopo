@@ -119,6 +119,12 @@ pub fn renderer_launcher(process_per_tab: bool, test_fonts: bool) -> browser::Re
         command.arg(RENDERER_PROCESS_SWITCH);
         renderer_sandbox::ChildSwitches::for_renderer(test_fonts).append_to(&mut command);
         renderer_sandbox::limit_environment(&mut command);
+        // This machine's time zone, by name: ICU then finds it without the
+        // zone files, which the renderer's sandbox doesn't let it read.
+        #[cfg(target_os = "linux")]
+        if let Some(zone) = renderer_sandbox::linux::renderer_time_zone() {
+            command.env("TZ", zone);
+        }
         // Its input is nothing, as a Chromium child's (`LaunchProcess`); its
         // output and errors are the browser's, as a Chromium child's are.
         // The pipe isn't among them: the browser took its ends

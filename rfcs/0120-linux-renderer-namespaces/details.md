@@ -54,7 +54,11 @@ glibc 2.44 讀不到時退回 `sched_getaffinity`：平常相同，process 被�
 - 這台的 `/etc/localtime` 是 symlink（`../usr/share/zoneinfo/Asia/Tokyo`）。
 - 暫時把 policy 的 `/etc/localtime` 和 `/usr/share/zoneinfo` 拿掉（沒有 commit，量完還原），跑 `renderer_sandbox::a_renderer_process_has_only_the_listed_part_of_its_browsers_environment`（Browser 帶 `TZ=Asia/Tokyo`）和 `renderer_sandbox::a_sandboxed_renderer_shows_a_page_as_one_outside_does`（沒有 `TZ`，系統的時區）：兩個都通過，sandbox 裡的 renderer 看到 `Asia/Tokyo`、-540。
 - 所以：有 `TZ` 時 ICU 用它內建的時區資料、不讀檔；沒有 `TZ` 時 ICU 從 `readlink("/etc/localtime")` 解出名字，Landlock 不擋 `readlink`（它只管打開）。chroot 之後 `/etc/localtime` 不在了，兩個之中只剩 `TZ` 行得通。
-- 沒試的：`/etc/localtime` 是一般檔案時（ICU 要打開它、和 zoneinfo 裡的檔案比對）；`TZ` 是 POSIX 的格式（`JST-9`）或 `:` 開頭的路徑時 ICU 怎麼解。
+- 沒試的：`/etc/localtime` 是一般檔案時（ICU 要打開它、和 zoneinfo 裡的檔案比對）。
+- 第 1 段做的時候查到的（rusty_v8 帶的 ICU，`putil.cpp`、`timezone.cpp`；2026-11-27）：
+  - ICU 收不收 `TZ` 照 `isValidOlsonID`：不含數字和逗號，或最後最多兩個數字（`Etc/GMT+11`、`JST-9`），或 `PST8PDT`、`MST7MDT`、`CST6CDT`、`EST5EDT`；收下時拿掉開頭的 `:` 和 `posix/`、`right/`。不收的（`AST4ADT`、`CST6CDT5,J129,J131/19:30`）它改去讀 `/etc/localtime`。
+  - `TimeZone::detectHostTimeZone` 收下名字之後還呼叫 glibc 的 `tzset`、拿 glibc 的時差（`uprv_timezone`），名字是三或四個字、兩邊的時差對不上時，把名字當成有歧義的縮寫丟掉，改用「glibc 的時差、沒有夏令時間」的時區。glibc 的時差要讀 zoneinfo 裡那個檔案（`strace -k`：`detectHostTimeZone` 的 `tzset` 開 `/usr/share/zoneinfo/<TZ>`），sandbox 裡讀不到時是 0：`TZ=CET` 的 renderer 會是 UTC+0、沒有夏令時間；`Asia/Tokyo` 這種長的名字不受影響。所以短的名字照舊放行時區的檔案（`README.md` 的第 4 條）。ICU 把 `CET` 叫做 `Europe/Brussels`。
+  - 長的名字時 glibc 自己的時區（`localtime` 那一類）在 sandbox 裡是 UTC：網頁看到的時間都經過 ICU，不受影響。
 
 ### V8 的亂數
 

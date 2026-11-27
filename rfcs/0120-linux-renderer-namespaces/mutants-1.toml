@@ -1,0 +1,87 @@
+# Stage 1's mutants (Linux: the renderer's Landlock reads no path but the time zone's where its TZ names no zone): `python3 scripts/test.py mutate rfcs/0120-linux-renderer-namespaces/mutants-1.toml`, on Linux.
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "--test", "it", "--", "renderer_sandbox::"]
+timeout = 900
+
+[[mutant]]
+name = "the time zone's files are read whatever the TZ"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''        if reads_time_zone {
+            policy.read_only(LOCALTIME).read_only("/usr/share/zoneinfo");'''
+to = '''        if reads_time_zone || true {
+            policy.read_only(LOCALTIME).read_only("/usr/share/zoneinfo");'''
+
+[[mutant]]
+name = "the time zone's files are never read"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''        if reads_time_zone {
+            policy.read_only(LOCALTIME).read_only("/usr/share/zoneinfo");'''
+to = '''        if reads_time_zone && false {
+            policy.read_only(LOCALTIME).read_only("/usr/share/zoneinfo");'''
+
+[[mutant]]
+name = "a renderer told no TZ reads no zone file"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''        let Some(tz) = tz.and_then(OsStr::to_str) else {
+            return true;
+        };'''
+to = '''        let Some(tz) = tz.and_then(OsStr::to_str) else {
+            return false;
+        };'''
+
+[[mutant]]
+name = "ICU's rule takes any digits at the end"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''        (rest.len() <= 2 && rest.bytes().all(|b| b.is_ascii_digit()))'''
+to = '''        rest.bytes().all(|b| b.is_ascii_digit())'''
+
+[[mutant]]
+name = "ICU's rule has no POSIX exceptions"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''["PST8PDT", "MST7MDT", "CST6CDT", "EST5EDT"]'''
+to = '''["PST8PDT", "MST7MDT", "CST6CDT"]'''
+
+[[mutant]]
+name = "the browser tells no renderer its zone"
+file = "crates/shell/src/lib.rs"
+from = '''            command.env("TZ", zone);'''
+to = '''            let _ = zone;'''
+
+[[mutant]]
+name = "the browser's zone overrides the user's TZ"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''        if std::env::var_os("TZ").is_some() {
+            return None;
+        }
+        zone_from_link'''
+to = '''        zone_from_link'''
+
+[[mutant]]
+name = "a zone is named by the whole link"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''        let (_, zone) = target.rsplit_once("zoneinfo/")?;'''
+to = '''        let zone = target;'''
+
+[[mutant]]
+name = "a zone keeps its posix/ part"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''            .strip_prefix("posix/")
+            .or_else(|| zone.strip_prefix("right/"))'''
+to = '''            .strip_prefix("right/")'''
+
+[[mutant]]
+name = "a zone's parts may be anything"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''                    .all(|b| b.is_ascii_alphanumeric() || b"_+-".contains(&b))'''
+to = '''                    .all(|b| b != b'/')'''
+
+[[mutant]]
+name = "V8 has no entropy source"
+file = "crates/bindings/src/platform.rs"
+from = '''        v8::V8::set_entropy_source(fill_with_entropy);'''
+to = '''        let _ = fill_with_entropy;'''
+
+[[mutant]]
+name = "a short name ICU checks against glibc's offset reads no zone file"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''        !icu_takes_as_a_zone(tz) || (3..=4).contains(&id.len())'''
+to = '''        !icu_takes_as_a_zone(tz)'''

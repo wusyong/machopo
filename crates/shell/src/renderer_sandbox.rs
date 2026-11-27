@@ -258,7 +258,10 @@ pub fn enter(switches: &ChildSwitches) -> Result<(), String> {
         return Ok(());
     }
     #[cfg(target_os = "linux")]
-    sunaba::linux::enter(&linux::policy()).map_err(|error| error.to_string())?;
+    sunaba::linux::enter(&linux::policy(linux::reads_time_zone_files(
+        std::env::var_os("TZ").as_deref(),
+    )))
+    .map_err(|error| error.to_string())?;
     #[cfg(target_os = "macos")]
     {
         let browser = std::os::unix::process::parent_id();
@@ -539,26 +542,100 @@ pub mod macos {
 
 #[cfg(target_os = "linux")]
 pub mod linux {
+    use std::ffi::OsStr;
+    use std::path::Path;
+
     use sunaba::linux::{Arg, Policy, Test};
 
     fn int(value: libc::c_int) -> u64 {
         u64::from(value.unsigned_abs())
     }
 
-    /// The renderer's policy: the few files whose lack would change what a
-    /// page sees (no font: the browser opens the system's and hands them
-    /// over); the system calls V8, wasmtime, the allocators, the channel
-    /// and the standard library make. The rest ends the process. The same
-    /// whatever its fonts.
-    pub fn policy() -> Policy {
+    /// Where the system says its time zone is: a link into the zone files
+    /// (`../usr/share/zoneinfo/Asia/Tokyo`), or a copy of one.
+    const LOCALTIME: &str = "/etc/localtime";
+
+    /// The zone the time zone file `target` (where `/etc/localtime` links)
+    /// is, by its name in the zone files (`Asia/Tokyo`): what ICU makes of
+    /// the same link. `None` when it isn't in any zone files' directory,
+    /// or isn't a name.
+    pub fn zone_from_link(target: &Path) -> Option<String> {
+        let target = target.to_str()?;
+        let (_, zone) = target.rsplit_once("zoneinfo/")?;
+        // The same zones, with or without leap seconds: ICU's by name.
+        let zone = zone
+            .strip_prefix("posix/")
+            .or_else(|| zone.strip_prefix("right/"))
+            .unwrap_or(zone);
+        let named = zone.split('/').all(|part| {
+            !part.is_empty()
+                && !part.starts_with('.')
+                && part
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"_+-".contains(&b))
+        });
+        (named && icu_takes_as_a_zone(zone)).then(|| zone.to_owned())
+    }
+
+    /// The time zone a renderer process is told (its `TZ`) where the user
+    /// told the browser none: this machine's, by name, which ICU finds in
+    /// the zone data built into V8 without reading a file. `None` when the
+    /// user's `TZ` stands, or this machine's zone can't be named so (its
+    /// `/etc/localtime` is a copy, not a link, or ICU wouldn't take the
+    /// name from `TZ`): ICU then finds it from the files itself.
+    pub fn renderer_time_zone() -> Option<String> {
+        if std::env::var_os("TZ").is_some() {
+            return None;
+        }
+        zone_from_link(&std::fs::read_link(LOCALTIME).ok()?)
+    }
+
+    /// Whether ICU takes `tz` (the `TZ` variable's value) as its time zone
+    /// and so reads no file to find one, as ICU's `isValidOlsonID` decides
+    /// (`putil.cpp`): no digit and no comma, but for at most two digits at
+    /// the end (`Etc/GMT+11`), or one of four zones POSIX spells with
+    /// digits. Anything else (`AST4ADT`, `CST6CDT5,J129,J131/19:30`) ICU
+    /// leaves for `/etc/localtime` and the zone files.
+    pub fn icu_takes_as_a_zone(tz: &str) -> bool {
+        // What follows the part with no digit and no comma.
+        let rest = tz.trim_start_matches(|c: char| !c.is_ascii_digit() && c != ',');
+        (rest.len() <= 2 && rest.bytes().all(|b| b.is_ascii_digit()))
+            || ["PST8PDT", "MST7MDT", "CST6CDT", "EST5EDT"].contains(&tz)
+    }
+
+    /// Whether a renderer whose `TZ` is `tz` reads the system's time zone
+    /// files to find its zone: where ICU doesn't take `tz` as its zone, and
+    /// where it does but checks it against glibc's offset (which glibc
+    /// reads from the zone's file): a name of three or four letters, which
+    /// ICU takes for an ambiguous abbreviation unless the offsets agree
+    /// (`TimeZone::detectHostTimeZone`). Without the file glibc's offset is
+    /// 0, and `CET` would become a zone of no offset and no summer time.
+    pub fn reads_time_zone_files(tz: Option<&OsStr>) -> bool {
+        let Some(tz) = tz.and_then(OsStr::to_str) else {
+            return true;
+        };
+        let id = tz.strip_prefix(':').unwrap_or(tz);
+        let id = id
+            .strip_prefix("posix/")
+            .or_else(|| id.strip_prefix("right/"))
+            .unwrap_or(id);
+        !icu_takes_as_a_zone(tz) || (3..=4).contains(&id.len())
+    }
+
+    /// The renderer's policy: no file is read but the system's time zone's,
+    /// where `reads_time_zone` (its `TZ` names no zone: ICU reads
+    /// `/etc/localtime` and the zone files to find it). The number of CPUs
+    /// isn't read (glibc counts the ones this process may run on), nor
+    /// `/dev/urandom` (V8's seeds are the system's, given it), nor any
+    /// font (the browser opens the system's and hands them over). The
+    /// system calls V8, wasmtime, the allocators, the channel and the
+    /// standard library make; the rest ends the process. The same whatever
+    /// its fonts.
+    pub fn policy(reads_time_zone: bool) -> Policy {
         let mut policy = Policy::new();
-        policy
-            // The number of CPUs (glibc's `get_nprocs`, for V8's and
-            // abseil's thread counts), V8's random seed, the time zone.
-            .read_only("/sys/devices/system/cpu/online")
-            .read_only("/dev/urandom")
-            .read_only("/etc/localtime")
-            .read_only("/usr/share/zoneinfo");
+        if reads_time_zone {
+            policy.read_only(LOCALTIME).read_only("/usr/share/zoneinfo");
+        }
 
         policy.allow(&[
             // Memory.
@@ -925,6 +1002,98 @@ mod tests {
                 pair("LANG", "ja_JP.UTF-8"),
                 pair("MACHOPO_V8_FLAGS", "--trace-gc"),
                 pair("TZ", "Asia/Tokyo"),
+            ]
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_zone_is_named_by_where_the_systems_time_zone_links() {
+        let zone = |target: &str| linux::zone_from_link(std::path::Path::new(target));
+        assert_eq!(
+            zone("../usr/share/zoneinfo/Asia/Tokyo").as_deref(),
+            Some("Asia/Tokyo")
+        );
+        assert_eq!(zone("/usr/share/zoneinfo/UTC").as_deref(), Some("UTC"));
+        assert_eq!(
+            zone("/usr/share/zoneinfo/America/Argentina/Buenos_Aires").as_deref(),
+            Some("America/Argentina/Buenos_Aires")
+        );
+        assert_eq!(
+            zone("/usr/share/zoneinfo/Etc/GMT+11").as_deref(),
+            Some("Etc/GMT+11")
+        );
+        // The same zones, with or without leap seconds.
+        assert_eq!(
+            zone("/usr/share/zoneinfo/posix/Europe/Paris").as_deref(),
+            Some("Europe/Paris")
+        );
+        assert_eq!(
+            zone("/usr/share/zoneinfo/right/Europe/Paris").as_deref(),
+            Some("Europe/Paris")
+        );
+        // Another system's zone files.
+        assert_eq!(
+            zone("/usr/lib/zoneinfo/Asia/Taipei").as_deref(),
+            Some("Asia/Taipei")
+        );
+        // Not a zone's name.
+        for target in [
+            "/etc/my-own-zone",
+            "/usr/share/zoneinfo/",
+            "/usr/share/zoneinfo/Asia//Tokyo",
+            "/usr/share/zoneinfo/../etc/passwd",
+            "/usr/share/zoneinfo/Asia/To kyo",
+            // One ICU wouldn't take from `TZ`.
+            "/usr/share/zoneinfo/Etc/GMT+123",
+        ] {
+            assert_eq!(zone(target), None, "{target}");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn icu_takes_a_tz_as_its_zone_as_it_decides() {
+        for zone in [
+            "Asia/Tokyo",
+            "UTC",
+            "Etc/GMT+11",
+            "GMT-9",
+            // Taken, if not known: its name is no zone's.
+            "JST-9",
+            "EST5EDT",
+            ":Asia/Tokyo",
+            "",
+        ] {
+            assert!(linux::icu_takes_as_a_zone(zone), "{zone}");
+        }
+        for posix in ["AST4ADT", "CST6CDT5,J129,J131/19:30", "GMT+123"] {
+            assert!(!linux::icu_takes_as_a_zone(posix), "{posix}");
+        }
+        assert!(linux::reads_time_zone_files(None));
+        assert!(linux::reads_time_zone_files(Some("AST4ADT".as_ref())));
+        assert!(!linux::reads_time_zone_files(Some("Asia/Tokyo".as_ref())));
+        assert!(!linux::reads_time_zone_files(Some(":Etc/UTC".as_ref())));
+        // ICU checks a short name against glibc's offset, which glibc
+        // reads from the zone's file.
+        for short in ["CET", "EST", "UTC", ":HST", "posix/CET", "WET0"] {
+            assert!(
+                linux::reads_time_zone_files(Some(short.as_ref())),
+                "{short}"
+            );
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_renderer_reads_no_file_but_the_time_zones_it_has_to_find() {
+        let read = |reads_time_zone| linux::policy(reads_time_zone).read_only_paths().to_vec();
+        assert_eq!(read(false), Vec::<std::path::PathBuf>::new());
+        assert_eq!(
+            read(true),
+            [
+                std::path::PathBuf::from("/etc/localtime"),
+                "/usr/share/zoneinfo".into()
             ]
         );
     }

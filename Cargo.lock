@@ -270,6 +270,7 @@ dependencies = [
  "base",
  "ctor",
  "elise",
+ "getrandom 0.3.4",
  "serde_json",
  "trace_event",
  "tracing",

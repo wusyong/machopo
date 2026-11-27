@@ -8,6 +8,7 @@
 //! ```text
 //! nothing
 //! read PATH | list PATH | write PATH | remove PATH | stat PATH
+//! open PATH                       (to read, reading nothing: a device too)
 //! chmod PATH | truncate PATH      (to rw-------; opened read-only with O_TRUNC)
 //! field PATH NAME                 (the number after `NAME:` in the file)
 //! syscall NUMBER [ARGUMENT...]
@@ -115,6 +116,8 @@ fn attempt(arguments: &[String]) -> std::io::Result<usize> {
     match words.as_slice() {
         ["nothing"] => Ok(0),
         ["read", path] => std::fs::read(path).map(|bytes| bytes.len()),
+        // Opened to read and closed: a file that never ends (a device) too.
+        ["open", path] => std::fs::File::open(path).map(|_| 0),
         ["list", path] => std::fs::read_dir(path).map(Iterator::count),
         ["write", path] => std::fs::write(path, b"written").map(|()| 0),
         ["remove", path] => std::fs::remove_file(path).map(|()| 0),

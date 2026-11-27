@@ -1,7 +1,7 @@
 # RFC 0120：Linux 的 renderer sandbox 的下一級：namespace 和 chroot
 
 - 開始日期：2026-11-27
-- 狀態：👍 已接受：2026-11-27（第 1 段要定的都定了，已決定的事項第 1 到 4 條；第 2、3 段的在那兩段開始時定）
+- 狀態：🚧 已排程：2026-11-27（第 1 段做完：Landlock 只剩時區的兩個路徑，只在要讀時放行；第 2 段：namespace；進度在 `progress.md`）
 - 細節：`details.md`
 
 ## 摘要
@@ -116,8 +116,8 @@ GitHub 的 `ubuntu-24.04` runner（machopo 的 CI 都在上面）照 Ubuntu 的�
 
 ### 分階段
 
-0. 草稿和探測（這一版；`details.md`）。
-1. **Landlock 拿掉四個路徑**：V8 的 entropy source；Browser 給 `TZ`；CPU 的數量讓它讀不到（先確認 CI 的 glibc）。和 namespace 無關，最小。
+0. 草稿和探測（做完；`details.md`）。
+1. **Landlock 拿掉四個路徑**（做完，2026-11-27；時區的兩個只在要讀時放行，第 4 條）：V8 的 entropy source；Browser 給 `TZ`；CPU 的數量讓它讀不到（先確認 CI 的 glibc）。和 namespace 無關，最小。
 2. **namespace**：user、PID、network；init；外面的 pid、trace 和 census 的檔名、seccomp 的「自己」；退路；CI。
 3. **chroot**：要第 1、2 段（在 user namespace 裡才有 chroot 的權限，檔案都不用讀了才 chroot 得了）。
 
@@ -150,7 +150,7 @@ GitHub 的 `ubuntu-24.04` runner（machopo 的 CI 都在上面）照 Ubuntu 的�
 1. **分段照前提的順序：四個路徑、namespace、chroot（O1）**（2026-11-27，使用者決定）：第 1 段讓 Landlock 一個路徑都不放，第 2 段 user、PID、network namespace，第 3 段 chroot。理由：第 1 段小、風險低、和 namespace 無關，也修一件本來就該做的事（V8 的亂數不再靠 `/dev/urandom`，讀不到時不退到用時間當種子）；第 2 段要的探測（Chromium 的原始碼、CI 的設定、外面的 pid 怎麼知道）可以在第 1 段的期間做。代價：第 1 段在安全上幾乎沒有直接的收益，它是 chroot 的前提。不選 namespace 先（O2：收益比較大的那一層先到，但最難、要改啟動流程的那一段最先做，它的探測還沒做完）。
 2. **CPU 的數量：讓它讀不到（P1）**（2026-11-27，使用者決定）：policy 拿掉 `/sys/devices/system/cpu/online`，glibc 的 `get_nprocs` 讀不到時退回 `sched_getaffinity`（這個 process 能用的 CPU）。理由：glibc 2.44 上平常數字相同，process 被限制在部分 CPU 上時更準；Chromium 一樣：它的 renderer 的 seccomp 對檔案系統的 system call 一律回錯誤，`base::SysInfo::NumberOfProcessors()` 用 `sched_getaffinity` 數（`details.md` 的「Chromium 的 CPU 的數量」）。第 1 段開始時先在 CI 的 glibc（2.39）上確認退路一樣；不一樣的話再加「V8 的 worker 數由 machopo 用 `available_parallelism` 給」（P2）。不選照舊放行（P3：第 3 段的 chroot 之後這個檔案也不在了）。
 3. **V8 的亂數種子：三個平台都裝 entropy source，用 `getrandom`（R1）**（2026-11-27，使用者決定）：`bindings` 初始化 V8 時呼叫 rusty_v8 的 `V8::set_entropy_source`，用 `getrandom` 這個 crate 填（`crypto.getRandomValues()` 用的同一個來源；Linux 上是 `getrandom(2)`，在 seccomp 的清單上）；它失敗時回 `false`，V8 照它自己的做法。policy 拿掉 `/dev/urandom`。理由：V8 不再自己讀 `/dev/urandom`，讀不到時也不退到用時間當種子；三個平台同一條路；和 Chromium 一樣：`gin/v8_initializer.cc` 在所有平台上裝 `GenerateEntropy`，用 `base::RandBytes`（Linux 上是 BoringSSL 的 `RAND_bytes`；`details.md` 的「Chromium 的 V8 的亂數」）。不選只在 Linux 上裝（R2：多一條平台分支）。不選固定的 `--random-seed`（R3：每個 renderer 的亂數一樣，`Math.random()` 猜得到）。
-4. **時區：使用者沒設 `TZ` 時，Browser 照 `/etc/localtime` 的連結解出 IANA 的名字、設成 renderer 的 `TZ`；解不出來的那個 renderer 照舊放行時區的兩個路徑（T1）**（2026-11-27，使用者決定）：名字取連結目標裡 `zoneinfo/` 之後的部分（`../usr/share/zoneinfo/Asia/Tokyo` 是 `Asia/Tokyo`）；`/etc/localtime` 是一般檔案（有些容器）時解不出來。理由：ICU 拿到 `TZ` 就用它內建的時區資料、不讀檔（`details.md` 的「時區不讀檔」）；大多數機器上 Landlock 一個路徑都不放，解不出來的機器時區也不會錯；改得少。代價：解不出來的機器少這一點收益，第 3 段的 chroot 時要再處理；執行期間改了時區，開著的 renderer 不跟著變（和現在一樣）。不選 Browser 照 ICU 的方法比對檔案的內容（T2：所有機器都不放，但要在 Browser 裡重寫 ICU 的那段、結果要和 ICU 一致）。不選照 Chromium 經過訊息給、renderer 設 ICU 的預設時區（T3：之後能做到時區改了跟著變，但 `bindings` 要能設 ICU 的時區，可能要改 rusty_v8 的 C++、重編 V8；「之後的可能」）。Chromium 的做法在 `details.md` 的「Chromium 的時區」。
+4. **時區：使用者沒設 `TZ` 時，Browser 照 `/etc/localtime` 的連結解出 IANA 的名字、設成 renderer 的 `TZ`；解不出來的那個 renderer 照舊放行時區的兩個路徑（T1）**（2026-11-27，使用者決定）：名字取連結目標裡 `zoneinfo/` 之後的部分（`../usr/share/zoneinfo/Asia/Tokyo` 是 `Asia/Tokyo`）；`/etc/localtime` 是一般檔案（有些容器）時解不出來。理由：ICU 拿到 `TZ` 就用它內建的時區資料、不讀檔（`details.md` 的「時區不讀檔」）；大多數機器上 Landlock 一個路徑都不放，解不出來的機器時區也不會錯；改得少。代價：解不出來的機器少這一點收益，第 3 段的 chroot 時要再處理；執行期間改了時區，開著的 renderer 不跟著變（和現在一樣）。不選 Browser 照 ICU 的方法比對檔案的內容（T2：所有機器都不放，但要在 Browser 裡重寫 ICU 的那段、結果要和 ICU 一致）。不選照 Chromium 經過訊息給、renderer 設 ICU 的預設時區（T3：之後能做到時區改了跟著變，但 `bindings` 要能設 ICU 的時區，可能要改 rusty_v8 的 C++、重編 V8；「之後的可能」）。Chromium 的做法在 `details.md` 的「Chromium 的時區」。實作時查到、照這條的原則補上的（2026-11-27）：時區的兩個路徑放不放行由 renderer 照它的 `TZ` 決定，照 ICU 自己的規則：ICU 不收的 `TZ`（`putil.cpp` 的 `isValidOlsonID`：帶數字的大多不收，例如 `AST4ADT`）它會改去讀 `/etc/localtime`，所以放行；ICU 收下的名字是三或四個字（`CET`、`EST`）時，它會拿 glibc 的時差比對（`TimeZone::detectHostTimeZone`），glibc 的時差要讀 zoneinfo 裡那個檔案，讀不到時是 0，`CET` 就安靜地變成沒有時差、沒有夏令時間的時區，所以也放行（`details.md` 的「時區不讀檔」）。
 
 ## 待決定
 

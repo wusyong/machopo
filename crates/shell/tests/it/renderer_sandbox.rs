@@ -73,7 +73,8 @@ fn a_sandboxed_renderer_shows_a_page_as_one_outside_does() {
         browser.navigate(&session, page);
         let read = "return [[...document.querySelectorAll('span')].map(s => s.offsetWidth), \
             Intl.DateTimeFormat().resolvedOptions().timeZone, new Date(0).getTimezoneOffset(), \
-            Intl.DateTimeFormat().resolvedOptions().locale, new Intl.NumberFormat().format(1234.5)]";
+            Intl.DateTimeFormat().resolvedOptions().locale, new Intl.NumberFormat().format(1234.5), \
+            navigator.hardwareConcurrency]";
         script(&mut browser, &session, read, serde_json::json!([])).unwrap()
     };
     let on_a_thread = seen(&["--single-process"]);
@@ -102,13 +103,23 @@ const SIGSYS: Outcome = Outcome::Signal(libc::SIGSYS);
 const EACCES: Outcome = Outcome::Errno(libc::EACCES);
 
 fn probe_with(switches: &[&str], attempt: &[&str]) -> (Outcome, String) {
-    let output = Command::new(MACHOPO)
+    probe_in_zone(std::env::var("TZ").ok().as_deref(), switches, attempt)
+}
+
+/// [`probe_with`], its `TZ` `tz` (none, with `None`), as a renderer
+/// process's is.
+fn probe_in_zone(tz: Option<&str>, switches: &[&str], attempt: &[&str]) -> (Outcome, String) {
+    let mut command = Command::new(MACHOPO);
+    command
         .arg(shell::renderer_sandbox::PROBE_SWITCH)
         .args(switches)
         .arg("--")
-        .args(attempt)
-        .output()
-        .expect("machopo runs");
+        .args(attempt);
+    match tz {
+        Some(tz) => command.env("TZ", tz),
+        None => command.env_remove("TZ"),
+    };
+    let output = command.output().expect("machopo runs");
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     let stdout = String::from_utf8_lossy(&output.stdout);
     let outcome = if let Some(signal) = output.status.signal() {
@@ -188,7 +199,7 @@ fn a_file_under(directory: &std::path::Path) -> Option<PathBuf> {
 }
 
 #[test]
-fn a_renderer_reads_no_font_of_the_systems_but_the_time_zone() {
+fn a_renderer_reads_no_font_of_the_systems() {
     let home = std::env::var("HOME").unwrap_or_default();
     // Everyone's fonts and the user's, fontconfig's configuration and its
     // caches: what fontconfig reads to find them.
@@ -220,11 +231,38 @@ fn a_renderer_reads_no_font_of_the_systems_but_the_time_zone() {
                 "{font:?}"
             );
         }
-        if std::path::Path::new("/etc/localtime").exists() {
-            assert!(matches!(
-                probe_with(switches, &["read", "/etc/localtime"]).0,
-                Outcome::Ok(_)
-            ));
+    }
+}
+
+/// A renderer reads no file: not the number of CPUs (glibc counts the ones
+/// it may run on), not `/dev/urandom` (V8's seeds are given it), and not
+/// the time zone's when its `TZ` names one that ICU takes; only where it
+/// doesn't, or checks it against glibc's (a short name), the zone's files
+/// are open: `/etc/localtime` and the zone files.
+#[test]
+fn a_renderer_reads_no_file_but_the_time_zones_it_has_to_find() {
+    let zone_files = ["/etc/localtime", "/usr/share/zoneinfo/UTC"];
+    // `CET`: a short name, which ICU checks against glibc's offset, read
+    // from the zone's file.
+    for tz in [None, Some("Asia/Tokyo"), Some("AST4ADT"), Some("CET")] {
+        for path in ["/sys/devices/system/cpu/online", "/dev/urandom"] {
+            assert_eq!(
+                probe_in_zone(tz, &[], &["open", path]).0,
+                EACCES,
+                "{path} {tz:?}"
+            );
+        }
+        let finds_its_own = tz != Some("Asia/Tokyo");
+        for path in zone_files {
+            if !std::path::Path::new(path).exists() {
+                continue;
+            }
+            let opened = probe_in_zone(tz, &[], &["open", path]).0;
+            if finds_its_own {
+                assert_eq!(opened, Outcome::Ok(0), "{path} {tz:?}");
+            } else {
+                assert_eq!(opened, EACCES, "{path} {tz:?}");
+            }
         }
     }
 }
@@ -402,7 +440,12 @@ fn a_renderer_process_has_only_the_listed_part_of_its_browsers_environment() {
     let secret = std::ffi::OsStr::new("not for a renderer");
     let switch = std::ffi::OsStr::new("given");
     let lang = std::ffi::OsStr::new("ja_JP.UTF-8");
-    let tz = std::ffi::OsStr::new("Asia/Tokyo");
+    // Not this machine's: the user's zone is the one that stands.
+    let (zone, offset) = match shell::renderer_sandbox::linux::renderer_time_zone().as_deref() {
+        Some("Asia/Tokyo") => ("America/New_York", 300),
+        _ => ("Asia/Tokyo", -540),
+    };
+    let tz = std::ffi::OsStr::new(zone);
     let env = [
         ("SOME_API_TOKEN", secret),
         ("MACHOPO_TEST_SWITCH", switch),
@@ -420,10 +463,7 @@ fn a_renderer_process_has_only_the_listed_part_of_its_browsers_environment() {
     };
     let (on_a_thread, none) = seen(&["--single-process"]);
     assert!(none.is_empty(), "{none:?}");
-    assert_eq!(
-        on_a_thread,
-        serde_json::json!(["ja-JP", "Asia/Tokyo", -540])
-    );
+    assert_eq!(on_a_thread, serde_json::json!(["ja-JP", zone, offset]));
     for args in [
         &["--process-per-tab"][..],
         &["--process-per-tab", "--no-sandbox"],
@@ -449,8 +489,70 @@ fn a_renderer_process_has_only_the_listed_part_of_its_browsers_environment() {
         assert_eq!(value("HOME"), None, "{args:?}");
         assert_eq!(value("MACHOPO_TEST_SWITCH"), Some("given"), "{args:?}");
         assert_eq!(value("LANG"), Some("ja_JP.UTF-8"), "{args:?}");
-        assert_eq!(value("TZ"), Some("Asia/Tokyo"), "{args:?}");
+        assert_eq!(value("TZ"), Some(zone), "{args:?}");
         // Set after the environment is limited: the channel's.
         assert!(value("MACHOPO_IPC_FD").is_some(), "{args:?}: {names:?}");
     }
+}
+
+/// A renderer process whose browser was told no `TZ` is told this
+/// machine's zone by name (where `/etc/localtime` links), and sees the
+/// time zone a renderer on the browser's thread finds itself.
+#[test]
+fn a_renderer_process_is_told_this_machines_time_zone_by_name() {
+    if std::env::var_os("TZ").is_some() {
+        // The user's stands, and is passed on as it is.
+        return;
+    }
+    let zone = shell::renderer_sandbox::linux::renderer_time_zone();
+    let read = "return [Intl.DateTimeFormat().resolvedOptions().timeZone, \
+        new Date(2026, 0, 1).getTimezoneOffset(), new Date(2026, 6, 1).getTimezoneOffset()]";
+    let seen = |args: &[&str]| {
+        let mut browser = Browser::start_in(args, &[], std::process::Stdio::null());
+        let session = browser.attach();
+        browser.navigate(&session, "about:blank");
+        let seen = script(&mut browser, &session, read, serde_json::json!([])).unwrap();
+        (seen, renderer_pids(&mut browser))
+    };
+    let (on_a_thread, _) = seen(&["--single-process"]);
+    for args in [
+        &["--process-per-tab"][..],
+        &["--process-per-tab", "--no-sandbox"],
+    ] {
+        let (seen, pids) = seen(args);
+        assert_eq!(seen, on_a_thread, "{args:?}");
+        let environment = environment_of(pids[0]);
+        let tz = environment
+            .iter()
+            .find(|(name, _)| name == "TZ")
+            .map(|(_, value)| value.clone());
+        assert_eq!(tz, zone, "{args:?}");
+    }
+    if let Some(zone) = zone {
+        assert_eq!(on_a_thread[0], zone);
+    }
+}
+
+/// A short zone name (`CET`), which ICU checks against glibc's offset, is
+/// the same zone in a renderer process as on the browser's thread: its
+/// offset in winter and in summer, not a zone of no offset.
+#[test]
+fn a_short_zone_name_is_the_zone_in_a_renderer_process_too() {
+    let env = [("TZ", std::ffi::OsStr::new("CET"))];
+    let read = "return [Intl.DateTimeFormat().resolvedOptions().timeZone, \
+        new Date(2026, 0, 1).getTimezoneOffset(), new Date(2026, 6, 1).getTimezoneOffset()]";
+    let seen = |args: &[&str]| {
+        let mut browser = Browser::start_in(args, &env, std::process::Stdio::null());
+        let session = browser.attach();
+        browser.navigate(&session, "about:blank");
+        script(&mut browser, &session, read, serde_json::json!([])).unwrap()
+    };
+    let on_a_thread = seen(&["--single-process"]);
+    // By the name ICU gives it (`Europe/Brussels`).
+    assert_eq!(
+        (&on_a_thread[1], &on_a_thread[2]),
+        (&serde_json::json!(-60), &serde_json::json!(-120)),
+        "{on_a_thread}"
+    );
+    assert_eq!(seen(&["--process-per-tab"]), on_a_thread);
 }

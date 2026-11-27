@@ -29,6 +29,8 @@ tracing.workspace = true
 trace_event.workspace = true
 # The inspector's context data (`auxData`), as JSON.
 serde_json.workspace = true
+# V8's random numbers' seeds, from the operating system's (`platform`).
+getrandom.workspace = true
 
 [dev-dependencies]
 

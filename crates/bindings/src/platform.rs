@@ -60,6 +60,9 @@ pub fn initialize_with_flags(flags: &str) {
         let extra = std::env::var("MACHOPO_V8_FLAGS").unwrap_or_default();
         let flags = format!("{CHROME_FLAGS} {flags} {extra} {PINNED_FLAGS}");
         v8::V8::set_flags_from_string(&flags);
+        // Before anything of V8's draws a random number (its cage's
+        // layout does, as it initializes).
+        v8::V8::set_entropy_source(fill_with_entropy);
         let threads = std::env::var("MACHOPO_V8_THREAD_POOL_SIZE")
             .ok()
             .and_then(|v| v.parse().ok())
@@ -87,6 +90,15 @@ pub fn initialize_with_flags(flags: &str) {
         );
         platform
     });
+}
+
+/// V8's random numbers' seeds (Chromium's `gin::GenerateEntropy`): the
+/// operating system's random numbers, as `crypto.getRandomValues()` has
+/// them. Without one V8 opens `/dev/urandom` itself on Linux, which a
+/// sandboxed renderer may not, and falls back to the time, a weak seed.
+/// `false` when the system gives none: V8 then seeds as it would have.
+fn fill_with_entropy(buffer: &mut [u8]) -> bool {
+    getrandom::fill(buffer).is_ok()
 }
 
 /// The platform [`initialize`] set up (initialising first if needed): its
