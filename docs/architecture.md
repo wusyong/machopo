@@ -193,9 +193,9 @@ canvas 的快照是沒有 mipmap 的雙線性，`<img>` 和背景有 mipmap；2D
 
 | 項目 | Chromium | machopo | 之後 |
 | --- | --- | --- | --- |
-| Process model | Site-isolated Renderer、GPU process、Network Service | 單一 process，用 thread 模擬 | 之後拆成多個 process |
-| IPC | Mojo + `.mojom` | serde message + crossbeam channel | 拆 process 時 |
-| Viz 的位置 | GPU process | Browser 端的獨立 thread（和 Chromium 早期相同） | GPU process 在拆 process 之後 |
+| Process model | Site-isolated Renderer、GPU process、Network Service | 每個分頁一個 renderer process，關在作業系統的 sandbox 裡（`--single-process` 換回 Browser 的 process 裡的 thread）；Viz、GPU 和網路在 Browser 的 process 裡（「Process 的邊界」） | site isolation：每個 site 一個 process；GPU process、network service 是另外的路線 |
+| IPC | Mojo + `.mojom` | `ipc` 的通道：serde 的訊息（postcard），大的位元組放在共用記憶體的 region，handle 照平台跟著訊息過去；renderer 送的由 Browser 的 IO thread 檢查；同一個 process 裡的 renderer 用 crossbeam channel | — |
+| Viz 的位置 | GPU process | Browser 端的獨立 thread（和 Chromium 早期相同）：GPU 的記憶體用完或驅動當掉時 Browser 跟著結束（`docs/limitations.md`） | GPU process：做 WebGL、WebGPU，或 raster 搬到 Viz 那一側之前 |
 | 沒有 GPU 時的合成 | SwiftShader，或退回 software compositing（`viz::SoftwareRenderer`） | 一律經過 GPU 的路（wgpu），沒有 GPU 時用 wgpu 的 CPU adapter（WARP、lavapipe、llvmpipe）；沒有 software compositing：只維護一份合成，測試也走使用者看到的那條路；兩者都沒有的機器畫不出東西 | 不打算加回 |
 | Raster 的位置 | OOP-R：在 GPU process 執行，非同步（沒畫好的 tile 先畫 checkerboard） | Renderer 的 compositor thread 上（`--num-raster-threads` 時在 raster worker 上），同步：draw 之前 tile 都畫好，不會露出空白，raster 慢就是 frame 變長。Chrome 的 renderer 也只有 1 條 raster worker，但它只錄製，像素在 GPU 上畫 | 非同步的 raster 要 tile 的優先順序和 activation 的條件；GPU raster、OOP-R 在之後（OOP-R 在拆 process 之後） |
 | Scheduler | 多條有優先順序的 task queue | main thread 照來源分成幾個 task queue（沒有優先順序，照送進來的順序取；停在斷點時只取 DevTools 和 rendering 的），compositor thread 一條 | 之後 |
