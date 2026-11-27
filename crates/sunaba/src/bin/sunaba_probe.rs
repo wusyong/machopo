@@ -4,7 +4,8 @@
 //! ```text
 //! sunaba_probe [--read-only PATH]... [--allow NUMBER]... [--fail NUMBER ERRNO]...
 //!              [--allow-int NUMBER INDEX VALUE]... [--allow-long NUMBER INDEX VALUE]...
-//!              [--fail-masked NUMBER ERRNO INDEX MASK VALUE]... [--thread-first] -- ATTEMPT...
+//!              [--fail-masked NUMBER ERRNO INDEX MASK VALUE]... [--chroot] [--thread-first]
+//!              -- ATTEMPT...
 //! ```
 //!
 //! `--thread-first` has a second thread running when the sandbox is
@@ -97,6 +98,9 @@ fn main() {
                 let value = number(arguments.next());
                 let args = [Arg::int(index, Test::MaskedEquals { mask, value })];
                 policy.fail_when(call, &args, errno);
+            }
+            "--chroot" => {
+                policy.chroot();
             }
             "--thread-first" => {
                 // Parked for good: the process ends under it.

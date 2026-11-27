@@ -459,3 +459,109 @@ fn a_process_with_a_second_thread_doesnt_enter() {
     assert_eq!(outcome, Outcome::Exit(2));
     assert!(stderr.contains("2 threads"), "{stderr}");
 }
+
+/// [`probe`], started in user and network namespaces of its own with
+/// `CAP_SYS_CHROOT` kept through the exec (by util-linux's `unshare` and
+/// `setpriv`), as `Namespaces::keeping_chroot` starts a child. `None`
+/// where the machine lets no program make a user namespace.
+fn probe_may_chroot(policy: &[&str], attempt: &[&str]) -> Option<Outcome> {
+    let made = Command::new("unshare")
+        .args(["--user", "--net", "true"])
+        .status()
+        .is_ok_and(|status| status.success());
+    if !made {
+        return None;
+    }
+    let output = Command::new("unshare")
+        .args([
+            "--user",
+            "--net",
+            "--map-current-user",
+            "--keep-caps",
+            "setpriv",
+        ])
+        .args([
+            "--inh-caps",
+            "-all,+sys_chroot",
+            "--ambient-caps",
+            "-all,+sys_chroot",
+        ])
+        .arg(env!("CARGO_BIN_EXE_sunaba_probe"))
+        .args(policy)
+        .arg("--")
+        .args(attempt)
+        .output()
+        .expect("the probe runs");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Some(if let Some(signal) = output.status.signal() {
+        Outcome::Signal(signal)
+    } else if output.status.code() != Some(0) {
+        Outcome::Exit(output.status.code().unwrap())
+    } else if let Some(number) = stdout.trim().strip_prefix("ok ") {
+        Outcome::Ok(number.parse().unwrap())
+    } else if let Some(errno) = stdout.trim().strip_prefix("error ") {
+        Outcome::Errno(errno.parse().unwrap())
+    } else {
+        panic!("the probe printed {stdout:?}");
+    })
+}
+
+#[test]
+fn a_chroot_leaves_no_path_not_even_to_say_what_is_there() {
+    let Some(outcome) = probe_may_chroot(&["--chroot"], &["stat", "/etc"]) else {
+        return;
+    };
+    assert_eq!(outcome, Outcome::Errno(libc::ESRCH));
+    // The root is there, a directory that no longer is: nothing in it.
+    assert_eq!(
+        probe_may_chroot(&["--chroot"], &["stat", "/"]),
+        Some(Outcome::Ok(0))
+    );
+    for attempt in [
+        &["list", "/"][..],
+        &["stat", "/proc"],
+        &["read", "/etc/hostname"],
+        &["stat", "/home"],
+    ] {
+        assert_eq!(
+            probe_may_chroot(&["--chroot"], attempt),
+            Some(Outcome::Errno(libc::ESRCH)),
+            "{attempt:?}"
+        );
+    }
+    // On a thread made later, too.
+    assert_eq!(
+        probe_may_chroot(&["--chroot"], &["thread", "stat", "/etc"]),
+        Some(Outcome::Errno(libc::ESRCH))
+    );
+}
+
+#[test]
+fn a_chroot_is_made_only_where_the_process_may() {
+    // With no capability, the policy goes without: a path's metadata is
+    // as Landlock leaves it (read, not opened).
+    assert_eq!(outcome(&["--chroot"], &["stat", "/etc"]), Outcome::Ok(0));
+    // A policy that chroots reads no path.
+    assert_eq!(
+        outcome(&["--chroot", "--read-only", "/etc"], &["nothing"]),
+        Outcome::Exit(2)
+    );
+}
+
+#[test]
+fn every_capability_is_given_up_on_entering() {
+    // Kept through the exec, and still there for the policy's chroot it
+    // doesn't make.
+    let Some(outcome) = probe_may_chroot(
+        &["--read-only", "/proc"],
+        &["field", "/proc/self/status", "CapEff"],
+    ) else {
+        return;
+    };
+    assert_eq!(outcome, Outcome::Ok(0));
+    let ambient = probe_may_chroot(
+        &["--read-only", "/proc"],
+        &["field", "/proc/self/status", "CapAmb"],
+    );
+    assert_eq!(ambient, Some(Outcome::Ok(0)));
+}

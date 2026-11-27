@@ -1,0 +1,87 @@
+# Stage 3's mutants (Linux: a renderer process chroots into a directory that is no more, where its zone needs no file): `python3 scripts/test.py mutate rfcs/0120-linux-renderer-namespaces/mutants-3.toml`, on Linux, where unprivileged user namespaces are allowed.
+test = ["cargo", "test", "-q", "-p", "sunaba", "-p", "shell", "--lib", "--test", "it", "--", "renderer_sandbox::", "linux::"]
+timeout = 1200
+
+[[mutant]]
+name = "the child keeps no chroot's capability"
+file = "crates/sunaba/src/linux/namespaces.rs"
+from = '''        if self.keeps_chroot {'''
+to = '''        if self.keeps_chroot && false {'''
+
+[[mutant]]
+name = "the capability isn't kept through the exec"
+file = "crates/sunaba/src/linux/namespaces.rs"
+from = '''                    libc::PR_CAP_AMBIENT_RAISE as libc::c_ulong,'''
+to = '''                    libc::PR_CAP_AMBIENT_IS_SET as libc::c_ulong,'''
+
+[[mutant]]
+name = "the browser's namespaces keep no chroot's capability"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''                let namespaces = sunaba::linux::Namespaces::new().keeping_chroot();'''
+to = '''                let namespaces = sunaba::linux::Namespaces::new();'''
+
+[[mutant]]
+name = "no chroot is made"
+file = "crates/sunaba/src/linux.rs"
+from = '''    let chrooted = policy.chroot && may_chroot();'''
+to = '''    let chrooted = policy.chroot && may_chroot() && false;'''
+
+[[mutant]]
+name = "a chroot is tried where the process may not"
+file = "crates/sunaba/src/linux.rs"
+from = '''    let chrooted = policy.chroot && may_chroot();'''
+to = '''    let chrooted = policy.chroot;'''
+
+[[mutant]]
+name = "the chroot is into the root it was"
+file = "crates/sunaba/src/linux.rs"
+from = '''                libc::chroot(c"/proc/thread-self/fdinfo".as_ptr()) == 0'''
+to = '''                libc::chroot(c"/".as_ptr()) == 0'''
+
+[[mutant]]
+name = "the capabilities are kept"
+file = "crates/sunaba/src/linux.rs"
+from = '''    drop_capabilities().map_err(Error::Chroot)?;'''
+to = '''    let _ = drop_capabilities;'''
+
+[[mutant]]
+name = "glibc isn't asked for the time zone first"
+file = "crates/sunaba/src/linux.rs"
+from = '''    unsafe { tzset() };'''
+to = '''    let _ = tzset;'''
+
+[[mutant]]
+name = "a policy that chroots may read paths"
+file = "crates/sunaba/src/linux.rs"
+from = '''    if policy.chroot && !policy.read_only.is_empty() {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "a renderer's policy never chroots"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''            policy.chroot();'''
+to = ''''''
+
+[[mutant]]
+name = "a copied localtime isn't named"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''                    .get_or_init(|| zone_copied(Path::new(LOCALTIME), Path::new(ZONEINFO)))'''
+to = '''                    .get_or_init(|| None)'''
+
+[[mutant]]
+name = "a copy's name isn't an area's first"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''        in_an_area.or(found.first()).cloned()'''
+to = '''        { let _ = in_an_area; found.first().cloned() }'''
+
+[[mutant]]
+name = "posix/ is looked in"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''                    && ["posix", "right", "posixrules", "localtime", "Factory"]'''
+to = '''                    && ["right", "posixrules", "localtime", "Factory"]'''
+
+[[mutant]]
+name = "a copy's name needn't be one ICU takes"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''        found.retain(|zone| zone_from_link(&Path::new("zoneinfo").join(zone)).is_some());'''
+to = ''''''

@@ -38,6 +38,8 @@ pub struct Policy {
     calls: BTreeMap<i64, Call>,
     /// Calls that return an `errno` for some arguments.
     failing_when: Vec<(i64, Vec<Arg>, u32)>,
+    /// Into a directory that is no more, where the process may.
+    chroot: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -91,6 +93,19 @@ impl Arg {
 impl Policy {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Where the process may chroot (it holds `CAP_SYS_CHROOT`: a child
+    /// started in [`Namespaces::keeping_chroot`]), its root becomes a
+    /// directory that no longer exists (Chromium's
+    /// `ChrootToSafeEmptyDir`): no path leads anywhere, not even to say
+    /// whether a file is there (`ESRCH`, for any path), and `/proc` is out
+    /// of reach. Where it may not, the process goes without, as before.
+    /// A policy that chroots reads no path: [`enter`] refuses one that
+    /// does.
+    pub fn chroot(&mut self) -> &mut Self {
+        self.chroot = true;
+        self
     }
 
     /// `path` can be opened for reading: the file, or everything beneath
@@ -169,6 +184,11 @@ impl Policy {
     /// The paths that can be read.
     pub fn read_only_paths(&self) -> &[PathBuf] {
         &self.read_only
+    }
+
+    /// Whether the policy chroots, where the process may ([`Policy::chroot`]).
+    pub fn chroots(&self) -> bool {
+        self.chroot
     }
 
     /// The filters to install, in order. seccomp runs every installed
@@ -266,6 +286,8 @@ pub struct Entered {
     /// later ones add what seccomp refuses here as well (TCP, abstract
     /// sockets, signals to other processes).
     pub landlock_abi: i32,
+    /// Whether the policy's chroot was made (the process could).
+    pub chrooted: bool,
 }
 
 /// Why the process isn't in the sandbox. A process that gets one of these
@@ -284,8 +306,10 @@ pub enum Error {
     /// The handler that says which system call was refused.
     Signal(std::io::Error),
     /// The policy doesn't make a filter (too many system calls, an
-    /// argument past the sixth).
+    /// argument past the sixth), or chroots and reads a path.
     Policy(String),
+    /// The chroot, or giving up the capabilities after it, failed.
+    Chroot(std::io::Error),
 }
 
 impl fmt::Display for Error {
@@ -304,6 +328,7 @@ impl fmt::Display for Error {
             Self::Seccomp(why) => write!(f, "seccomp refused the filter: {why}"),
             Self::Signal(error) => write!(f, "the SIGSYS handler wasn't installed: {error}"),
             Self::Policy(why) => write!(f, "the policy doesn't make a seccomp filter: {why}"),
+            Self::Chroot(error) => write!(f, "the chroot wasn't made: {error}"),
         }
     }
 }
@@ -320,16 +345,95 @@ pub fn enter(policy: &Policy) -> Result<Entered, Error> {
     if threads != 1 {
         return Err(Error::Threads(threads));
     }
+    if policy.chroot && !policy.read_only.is_empty() {
+        return Err(Error::Policy(
+            "it chroots, and so can't read the paths it names".into(),
+        ));
+    }
     // Before anything is restricted: a policy that makes no filter leaves
     // the process as it was.
     let filters = policy.filters()?;
     sigsys::install().map_err(Error::Signal)?;
+    // glibc reads the time zone `TZ` names (or `/etc/localtime`) once,
+    // as it is first asked, and not again while `TZ` stays: asked here,
+    // it has it from here on, whatever can be read later.
+    // SAFETY: no argument; the process is one thread.
+    unsafe { tzset() };
+    let chrooted = policy.chroot && may_chroot();
+    if chrooted {
+        chroot_to_nothing().map_err(Error::Chroot)?;
+    }
+    // Whatever capability the process has (a chroot's, or any of a user
+    // namespace of its own) is no use from here on.
+    drop_capabilities().map_err(Error::Chroot)?;
     // Landlock first: seccomp refuses its system calls.
     let landlock_abi = restrict_files(&policy.read_only)?;
     for filter in &filters {
         seccompiler::apply_filter(filter).map_err(|error| Error::Seccomp(error.to_string()))?;
     }
-    Ok(Entered { landlock_abi })
+    Ok(Entered {
+        landlock_abi,
+        chrooted,
+    })
+}
+
+unsafe extern "C" {
+    /// glibc's (`<time.h>`): reads the time zone, once.
+    fn tzset();
+}
+
+/// Whether the calling thread may chroot.
+fn may_chroot() -> bool {
+    namespaces::capabilities()
+        .is_some_and(|sets| sets[0].effective & (1 << namespaces::CAP_SYS_CHROOT) != 0)
+}
+
+/// Makes the process's root a directory that is no more: a thread (which
+/// shares the process's root and working directory) chroots into its own
+/// `/proc/thread-self/fdinfo`, which has no directory in it, and ends,
+/// taking the directory with it. Then it is checked: `/proc` is out of
+/// reach.
+fn chroot_to_nothing() -> std::io::Result<()> {
+    let chrooting = std::thread::Builder::new()
+        .name("sunaba-chroot".into())
+        .spawn(|| {
+            // SAFETY: C string literals, alive for the calls.
+            let made = unsafe {
+                libc::chroot(c"/proc/thread-self/fdinfo".as_ptr()) == 0
+                    && libc::chdir(c"/".as_ptr()) == 0
+            };
+            if made {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error())
+            }
+        })?;
+    chrooting
+        .join()
+        .map_err(|_| std::io::Error::other("the chroot's thread panicked"))??;
+    if std::fs::symlink_metadata("/proc").is_ok() {
+        return Err(std::io::Error::other("/proc is still there"));
+    }
+    Ok(())
+}
+
+/// Gives up every capability, ambient ones too.
+fn drop_capabilities() -> std::io::Result<()> {
+    // SAFETY: integers alone.
+    let cleared = unsafe {
+        libc::prctl(
+            libc::PR_CAP_AMBIENT,
+            libc::PR_CAP_AMBIENT_CLEAR_ALL as libc::c_ulong,
+            0 as libc::c_ulong,
+            0 as libc::c_ulong,
+            0 as libc::c_ulong,
+        )
+    };
+    // A kernel before 4.3 has no ambient capabilities to clear.
+    if cleared != 0 && std::io::Error::last_os_error().raw_os_error() != Some(libc::EINVAL) {
+        return Err(std::io::Error::last_os_error());
+    }
+    namespaces::set_capabilities(&[namespaces::CapabilityData::default(); 2])
 }
 
 /// How many threads the process has; 0 when the kernel wouldn't say (no

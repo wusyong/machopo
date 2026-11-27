@@ -127,6 +127,33 @@ glibc 2.44 讀不到時退回 `sched_getaffinity`：平常相同，process 被�
 - `sandbox/linux/services/credentials.cc`：`MoveToNewUserNS` 是在呼叫的 process 裡 `unshare(CLONE_NEWUSER)`、寫對應；`ChrootToSafeEmptyDir`：一個共用檔案系統資訊（`CLONE_FS`）的 child chroot 到自己的 `/proc/self/fdinfo/` 再結束，那個目錄跟著消失，裡面沒有子目錄、出不去；之後確認 `/proc` 看不到了、沒有開著的目錄。`DropAllCapabilities` 要只有一條 thread。
 - `sandbox/policy/linux/sandbox_linux.cc` 的 `InitializeSandbox`：只有一條 thread 的檢查、先開好 `/proc`，namespace 的那一套（user namespace、chroot、丟掉權限；zygote 留 `CAP_SYS_ADMIN`）、限制記憶體（`RLIMIT_DATA`）、seccomp-bpf，照這個順序。要求 namespace 但做不到時 `CHECK` 失敗；退到 setuid 的 helper 是在啟動的地方決定的，沒讀到。
 
+## 第 3 段的探測
+
+2026-11-27，同一台。
+
+### 進了 sandbox 之後還碰的路徑（量的）
+
+`strace -f -e trace=%file,landlock_restrict_self,clone,clone3` 跟著 `renderer_sandbox::` 的四個會載入頁面的測試（7 個 renderer process），只列 `landlock_restrict_self` 之後的：
+
+| 路徑 | 結果 | 誰（推測） |
+| --- | --- | --- |
+| `""`（`statx` 自己開著的 fd） | 成功，340 次 | 標準庫的 `metadata` |
+| `/proc/stat`、`/sys/devices/system/cpu/online` | `EACCES`，各 12 次 | glibc 的 `get_nprocs`（退回 `sched_getaffinity`） |
+| `/proc/self/cgroup` | `EACCES` | CPU 數的另一條路 |
+| `/sys/devices/system/cpu/cpu0/tsc_freq_khz`、`/sys/devices/system/node/node1` | `ENOENT` | 本來就沒有 |
+| `/usr/share/zoneinfo/America/New_York`、`/usr/share/zoneinfo/Asia/Tokyo` | `EACCES` | glibc 的 `tzset`（長的名字：ICU 不看 glibc 的時差） |
+| `/usr/share/zoneinfo/CET` | 成功 | glibc 的 `tzset`（短的名字：第 4 條放行的） |
+
+chroot 之後會壞的只有最後一個：短的名字。chroot 之前呼叫一次 `tzset()`，glibc 讀好之後 `TZ` 沒變就不再讀檔；`/etc/localtime` 是一般檔案的機器另外處理。
+
+### chroot 的權限和一個會消失的目錄（量的）
+
+`chroot.c`（這個資料夾）：child 進 user 和 network namespace、對應到自己，把 `CAP_SYS_CHROOT` 放進 inheritable 和 ambient，exec 自己；exec 之後一條 thread `chroot("/proc/thread-self/fdinfo")`、`chdir("/")`、結束，main thread 丟掉全部的權限：
+
+- exec 之後：`CapInh`、`CapPrm`、`CapEff`、`CapAmb` 都是 `0000000000040000`（只有 `CAP_SYS_CHROOT`）。
+- chroot 之後：`stat("/etc")`、`stat("/proc")`、`opendir("/")`、再一次 `chroot("/")` 都是 `ESRCH`（根目錄是那條已經結束的 thread 的目錄），`getcwd` 是 `/`。找不到的錯誤是 `ESRCH`，不是 `ENOENT`。
+- sunaba 的 `enter` 讀 `/proc/self/status` 確認只有一條 thread：chroot 要在它之後。
+
 ## Ubuntu 和 CI
 
 2026-11-27 搜尋的：

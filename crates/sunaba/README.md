@@ -40,6 +40,7 @@ fn main() {
 - **`allow_when(call, args)`**: the call when every `Arg` holds; said again for the same call, when either set holds. `Arg::int` tests an argument's low 32 bits (what the kernel reads of an `int`), `Arg::long` all 64. A filter reads the arguments' values and never the memory a pointer leads to.
 - **`fail(call, errno)`**: the call isn't made and returns `errno`: for what a library tries first and has another way without.
 - **`fail_when(call, args, errno)`**: the same, only when every `Arg` holds; the call's other uses are as the policy says elsewhere. For a call that is fine but for some flags: `openat`, but not with `O_TRUNC`.
+- **`chroot()`**: where the process may (it holds `CAP_SYS_CHROOT`: a child started in `Namespaces::keeping_chroot()`), its root becomes a directory that no longer exists, as Chromium's `ChrootToSafeEmptyDir` makes it: a thread chroots into its own `/proc/thread-self/fdinfo` and ends, and the directory with it. No path leads anywhere, not even to say whether a file is there (`ESRCH`, for any path but `/`), and `/proc` is out of reach. Where it may not, the process goes without. A policy that chroots reads no path (`enter` returns `Error::Policy`).
 - **`allow_threads()`**: threads and nothing else. `clone3` returns `ENOSYS` (its arguments are in memory), and `clone` is allowed with `CLONE_THREAD` and no new namespace.
 - **Anything else ends the process**, by `SIGSYS`, after one line on stderr: `sunaba: system call 41 (socket) isn't allowed in this sandbox`. The line is missing when the call was made with signals blocked (libc does so around `clone`): the process ends by `SIGSYS` all the same.
 
@@ -47,7 +48,7 @@ The file system calls (`openat`, `unlinkat`…) are for the policy to allow: Lan
 
 ### Entering
 
-`enter` is for the first thing in `main`:
+`enter` is for the first thing in `main`. In order: it checks there is one thread, has glibc read the time zone (`tzset`: glibc reads the zone `TZ` names, or `/etc/localtime`, once, and not again while `TZ` stays, so it has it whatever can be read later), makes the policy's chroot, gives up every capability the process has (ambient ones too), then restricts the files and the system calls.
 
 - **One thread.** Both restrictions are the calling thread's and those of what it makes later. With a second thread already running, `enter` restricts nothing and returns `Error::Threads`.
 - **For good.** Nothing takes a restriction off; a policy is everything the process will ever need.
@@ -55,7 +56,7 @@ The file system calls (`openat`, `unlinkat`…) are for the policy to allow: Lan
 
 ### Namespaces of a child's own
 
-A process may also be started in user and network namespaces of its own, by whoever starts it: `Namespaces::new()` before the fork (it writes the maps then, so that nothing is allocated after), `namespaces.enter()` in the child between the fork and the exec (`CommandExt::pre_exec`). The child has no network interface but loopback. Its user and group ids map to themselves, so it is the same user inside, not root, and the exec takes every capability the new user namespace gave it.
+A process may also be started in user and network namespaces of its own, by whoever starts it: `Namespaces::new()` before the fork (it writes the maps then, so that nothing is allocated after), `namespaces.enter()` in the child between the fork and the exec (`CommandExt::pre_exec`). The child has no network interface but loopback. Its user and group ids map to themselves, so it is the same user inside, not root, and the exec takes every capability the new user namespace gave it; with `keeping_chroot()`, all but `CAP_SYS_CHROOT`, kept as an ambient capability for its policy's `chroot()`, which `enter` then drops with the rest.
 
 Not every machine allows a program that isn't privileged to make them: a kernel may be built or set without them, and Ubuntu (since 23.10) lets only the programs its AppArmor profiles name. `namespaces.available()` tries in a child of its own, which ends at once, and says whether a child started with them would start. A starter that is told no goes without them: the process's own `enter` restricts it all the same.
 

@@ -568,7 +568,8 @@ pub mod linux {
             std::sync::OnceLock::new();
         NAMESPACES
             .get_or_init(|| {
-                let namespaces = sunaba::linux::Namespaces::new();
+                // Its chroot is the renderer's own to make (`policy`).
+                let namespaces = sunaba::linux::Namespaces::new().keeping_chroot();
                 if namespaces.available() {
                     return Some(namespaces);
                 }
@@ -611,15 +612,76 @@ pub mod linux {
 
     /// The time zone a renderer process is told (its `TZ`) where the user
     /// told the browser none: this machine's, by name, which ICU finds in
-    /// the zone data built into V8 without reading a file. `None` when the
-    /// user's `TZ` stands, or this machine's zone can't be named so (its
-    /// `/etc/localtime` is a copy, not a link, or ICU wouldn't take the
-    /// name from `TZ`): ICU then finds it from the files itself.
+    /// the zone data built into V8 without reading a file. Where
+    /// `/etc/localtime` links into the zone files, by where it links; where
+    /// it is a copy of one (some containers), by which it is a copy of, as
+    /// ICU finds it (found once for the browser). `None` when the user's
+    /// `TZ` stands, or this machine's zone can't be named (a zone of its
+    /// own making, or one ICU wouldn't take from `TZ`): ICU then finds it
+    /// from the files itself, and the renderer reads them.
     pub fn renderer_time_zone() -> Option<String> {
         if std::env::var_os("TZ").is_some() {
             return None;
         }
-        zone_from_link(&std::fs::read_link(LOCALTIME).ok()?)
+        match std::fs::read_link(LOCALTIME) {
+            Ok(target) => zone_from_link(&target),
+            Err(_) => {
+                static COPIED: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+                COPIED
+                    .get_or_init(|| zone_copied(Path::new(LOCALTIME), Path::new(ZONEINFO)))
+                    .clone()
+            }
+        }
+    }
+
+    /// The zone files' directory.
+    const ZONEINFO: &str = "/usr/share/zoneinfo";
+
+    /// The name in `zoneinfo` of the zone whose file `localtime` is a copy
+    /// of (ICU's `searchForTZFile`: the same bytes): of the files with
+    /// them, the first by name of those in an area's directory
+    /// (`Asia/Tokyo`, not `Japan`), else the first. Not `posix/` or
+    /// `right/` (the same zones again), nor `posixrules`, `localtime` or
+    /// `Factory`. `None` when no file has them, or none is a name ICU would
+    /// take from `TZ`.
+    pub fn zone_copied(localtime: &Path, zoneinfo: &Path) -> Option<String> {
+        let wanted = std::fs::read(localtime).ok()?;
+        let mut found = Vec::new();
+        let mut directories = vec![(zoneinfo.to_path_buf(), String::new())];
+        while let Some((directory, prefix)) = directories.pop() {
+            let Ok(entries) = std::fs::read_dir(&directory) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                    continue;
+                };
+                let zone = format!("{prefix}{name}");
+                if prefix.is_empty()
+                    && ["posix", "right", "posixrules", "localtime", "Factory"]
+                        .contains(&name.as_str())
+                {
+                    continue;
+                }
+                let Ok(kind) = entry.file_type() else {
+                    continue;
+                };
+                if kind.is_dir() {
+                    directories.push((entry.path(), format!("{zone}/")));
+                } else if kind.is_file()
+                    && entry.metadata().is_ok_and(|metadata| {
+                        usize::try_from(metadata.len()).is_ok_and(|len| len == wanted.len())
+                    })
+                    && std::fs::read(entry.path()).is_ok_and(|bytes| bytes == wanted)
+                {
+                    found.push(zone);
+                }
+            }
+        }
+        found.retain(|zone| zone_from_link(&Path::new("zoneinfo").join(zone)).is_some());
+        found.sort();
+        let in_an_area = found.iter().find(|zone| zone.contains('/'));
+        in_an_area.or(found.first()).cloned()
     }
 
     /// Whether ICU takes `tz` (the `TZ` variable's value) as its time zone
@@ -636,27 +698,22 @@ pub mod linux {
     }
 
     /// Whether a renderer whose `TZ` is `tz` reads the system's time zone
-    /// files to find its zone: where ICU doesn't take `tz` as its zone, and
-    /// where it does but checks it against glibc's offset (which glibc
-    /// reads from the zone's file): a name of three or four letters, which
-    /// ICU takes for an ambiguous abbreviation unless the offsets agree
-    /// (`TimeZone::detectHostTimeZone`). Without the file glibc's offset is
-    /// 0, and `CET` would become a zone of no offset and no summer time.
+    /// files to find its zone: where ICU doesn't take `tz` as its zone (or
+    /// there is none), and reads `/etc/localtime` and the zone files. Where
+    /// ICU takes it, ICU checks a name of three or four letters (`CET`)
+    /// against glibc's offset (`TimeZone::detectHostTimeZone`), which
+    /// glibc reads from the zone's file: `sunaba`'s `enter` has glibc read
+    /// it first (`tzset`), while it can.
     pub fn reads_time_zone_files(tz: Option<&OsStr>) -> bool {
-        let Some(tz) = tz.and_then(OsStr::to_str) else {
-            return true;
-        };
-        let id = tz.strip_prefix(':').unwrap_or(tz);
-        let id = id
-            .strip_prefix("posix/")
-            .or_else(|| id.strip_prefix("right/"))
-            .unwrap_or(id);
-        !icu_takes_as_a_zone(tz) || (3..=4).contains(&id.len())
+        !tz.and_then(OsStr::to_str).is_some_and(icu_takes_as_a_zone)
     }
 
     /// The renderer's policy: no file is read but the system's time zone's,
     /// where `reads_time_zone` (its `TZ` names no zone: ICU reads
-    /// `/etc/localtime` and the zone files to find it). The number of CPUs
+    /// `/etc/localtime` and the zone files to find it); where it doesn't,
+    /// none at all, and its root is a directory that no longer is, where
+    /// the renderer may chroot (in namespaces of its own, given
+    /// `CAP_SYS_CHROOT`). The number of CPUs
     /// isn't read (glibc counts the ones this process may run on), nor
     /// `/dev/urandom` (V8's seeds are the system's, given it), nor any
     /// font (the browser opens the system's and hands them over). The
@@ -666,7 +723,9 @@ pub mod linux {
     pub fn policy(reads_time_zone: bool) -> Policy {
         let mut policy = Policy::new();
         if reads_time_zone {
-            policy.read_only(LOCALTIME).read_only("/usr/share/zoneinfo");
+            policy.read_only(LOCALTIME).read_only(ZONEINFO);
+        } else {
+            policy.chroot();
         }
 
         policy.allow(&[
@@ -1085,6 +1144,48 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn a_copied_zone_is_named_by_the_file_it_is_a_copy_of() {
+        let dir = std::env::temp_dir().join(format!("machopo-zoneinfo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let zoneinfo = dir.join("zoneinfo");
+        let write = |zone: &str, bytes: &[u8]| {
+            let path = zoneinfo.join(zone);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, bytes).unwrap();
+        };
+        let tokyo = b"TZif tokyo";
+        write("Asia/Tokyo", tokyo);
+        write("Japan", tokyo);
+        write("posix/Asia/Tokyo", tokyo);
+        write("posixrules", tokyo);
+        write("Europe/Paris", b"TZif paris");
+        // An older name that sorts before its area's.
+        write("Eire", b"TZif dublin");
+        write("Europe/Dublin", b"TZif dublin");
+        write("posix/Asia/Seoul", b"TZif seoul");
+        write("UTC", b"TZif utc");
+        // Not a name ICU would take from `TZ`.
+        write("Etc/GMT+123", b"TZif odd");
+        let localtime = dir.join("localtime");
+        let named = |bytes: &[u8]| {
+            std::fs::write(&localtime, bytes).unwrap();
+            linux::zone_copied(&localtime, &zoneinfo)
+        };
+        // An area's, before an older name for it; not `posix/`'s.
+        assert_eq!(named(tokyo).as_deref(), Some("Asia/Tokyo"));
+        assert_eq!(named(b"TZif paris").as_deref(), Some("Europe/Paris"));
+        assert_eq!(named(b"TZif dublin").as_deref(), Some("Europe/Dublin"));
+        // `posix/`'s alone: the same zones again, not looked in.
+        assert_eq!(named(b"TZif seoul"), None);
+        assert_eq!(named(b"TZif utc").as_deref(), Some("UTC"));
+        assert_eq!(named(b"TZif of its own"), None);
+        assert_eq!(named(b"TZif odd"), None);
+        assert_eq!(linux::zone_copied(&dir.join("none"), &zoneinfo), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn icu_takes_a_tz_as_its_zone_as_it_decides() {
         for zone in [
             "Asia/Tokyo",
@@ -1106,11 +1207,11 @@ mod tests {
         assert!(linux::reads_time_zone_files(Some("AST4ADT".as_ref())));
         assert!(!linux::reads_time_zone_files(Some("Asia/Tokyo".as_ref())));
         assert!(!linux::reads_time_zone_files(Some(":Etc/UTC".as_ref())));
-        // ICU checks a short name against glibc's offset, which glibc
-        // reads from the zone's file.
+        // ICU checks a short name against glibc's offset, which glibc has
+        // read as the renderer entered.
         for short in ["CET", "EST", "UTC", ":HST", "posix/CET", "WET0"] {
             assert!(
-                linux::reads_time_zone_files(Some(short.as_ref())),
+                !linux::reads_time_zone_files(Some(short.as_ref())),
                 "{short}"
             );
         }
@@ -1121,6 +1222,9 @@ mod tests {
     fn a_renderer_reads_no_file_but_the_time_zones_it_has_to_find() {
         let read = |reads_time_zone| linux::policy(reads_time_zone).read_only_paths().to_vec();
         assert_eq!(read(false), Vec::<std::path::PathBuf>::new());
+        // Reading none, its root is nothing, where it may chroot.
+        assert!(linux::policy(false).chroots());
+        assert!(!linux::policy(true).chroots());
         assert_eq!(
             read(true),
             [

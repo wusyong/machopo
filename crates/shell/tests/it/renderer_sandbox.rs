@@ -237,13 +237,13 @@ fn a_renderer_reads_no_font_of_the_systems() {
 /// A renderer reads no file: not the number of CPUs (glibc counts the ones
 /// it may run on), not `/dev/urandom` (V8's seeds are given it), and not
 /// the time zone's when its `TZ` names one that ICU takes; only where it
-/// doesn't, or checks it against glibc's (a short name), the zone's files
-/// are open: `/etc/localtime` and the zone files.
+/// doesn't (or there is none), the zone's files are open: `/etc/localtime`
+/// and the zone files.
 #[test]
 fn a_renderer_reads_no_file_but_the_time_zones_it_has_to_find() {
     let zone_files = ["/etc/localtime", "/usr/share/zoneinfo/UTC"];
-    // `CET`: a short name, which ICU checks against glibc's offset, read
-    // from the zone's file.
+    // `CET`: a short name, which ICU checks against glibc's offset, which
+    // glibc has read from the zone's file as the renderer entered.
     for tz in [None, Some("Asia/Tokyo"), Some("AST4ADT"), Some("CET")] {
         for path in ["/sys/devices/system/cpu/online", "/dev/urandom"] {
             assert_eq!(
@@ -252,7 +252,9 @@ fn a_renderer_reads_no_file_but_the_time_zones_it_has_to_find() {
                 "{path} {tz:?}"
             );
         }
-        let finds_its_own = tz != Some("Asia/Tokyo");
+        // A name ICU takes, short or not (glibc reads a short one's file
+        // as the renderer enters), needs no zone file.
+        let finds_its_own = matches!(tz, None | Some("AST4ADT"));
         for path in zone_files {
             if !std::path::Path::new(path).exists() {
                 continue;
@@ -566,8 +568,9 @@ fn namespace_of(pid: &str, kind: &str) -> String {
 
 /// A renderer process in its sandbox is in user and network namespaces of
 /// its own, where this machine allows them: its only network interface is
-/// loopback, and it has no capability in them; it is the same user. Where
-/// the machine doesn't, it is in this process's, as before. Out of its
+/// loopback, its root a directory that is no more, and it has no
+/// capability in them; it is the same user. Where the machine doesn't, it
+/// is in this process's, its root this process's, as before. Out of its
 /// sandbox (`--no-sandbox`), in this process's either way.
 #[test]
 fn a_renderer_process_has_namespaces_of_its_own_where_the_machine_allows() {
@@ -621,6 +624,15 @@ fn a_renderer_process_has_namespaces_of_its_own_where_the_machine_allows() {
             .trim()
             .to_owned();
         assert_eq!(field("Uid"), our_uid, "{args:?}");
+        // Its root: a thread's `fdinfo` (the thread is gone, and the
+        // directory with it), or this process's.
+        let root = std::fs::read_link(format!("/proc/{pid}/root")).unwrap();
+        if own {
+            assert!(root.ends_with("fdinfo"), "{root:?}");
+            assert!(!root.exists(), "{root:?}");
+        } else {
+            assert_eq!(root, std::path::Path::new("/"), "{args:?}");
+        }
         if own {
             for capabilities in ["CapPrm", "CapEff", "CapInh", "CapAmb"] {
                 assert_eq!(field(capabilities), "0000000000000000", "{capabilities}");
@@ -692,4 +704,77 @@ fn a_renderer_process_goes_without_namespaces_where_the_machine_forbids_them() {
         1,
         "{said}"
     );
+}
+
+/// Where `/etc/localtime` is a copy of a zone's file, not a link (some
+/// containers), the browser names the zone by which file it is a copy of:
+/// a renderer process is told that name, chroots, and sees the offsets a
+/// renderer on the browser's thread finds itself. Made here by a mount
+/// namespace of the test's own with a copy over `/etc/localtime` (where
+/// the machine allows a user namespace at all).
+#[test]
+fn a_renderer_process_is_told_the_zone_a_copied_localtime_is() {
+    let made = Command::new("unshare")
+        .args(["--user", "--map-root-user", "--mount", "true"])
+        .status()
+        .is_ok_and(|status| status.success());
+    let paris = std::path::Path::new("/usr/share/zoneinfo/Europe/Paris");
+    if !made || !paris.is_file() {
+        return;
+    }
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("renderer-copied-localtime");
+    std::fs::create_dir_all(&dir).unwrap();
+    let copy = dir.join("localtime");
+    std::fs::copy(paris, &copy).unwrap();
+    let zone = shell::renderer_sandbox::linux::zone_copied(&copy, "/usr/share/zoneinfo".as_ref())
+        .expect("a zone of the copy's");
+    // `/etc/localtime` is a link, which a bind mount would follow: `/etc`
+    // itself is put over, by one of links to the real one's entries but
+    // for `localtime`, the copy.
+    let etc = dir.join("etc");
+    let real = dir.join("real");
+    let _ = std::fs::remove_dir_all(&etc);
+    std::fs::create_dir_all(&etc).unwrap();
+    std::fs::create_dir_all(&real).unwrap();
+    let mount = format!(
+        "mount --bind /etc '{real}' && for entry in '{real}'/* '{real}'/.[!.]*; do \
+           [ -e \"$entry\" ] || [ -L \"$entry\" ] || continue; \
+           ln -sfn \"$entry\" '{etc}'/\"$(basename \"$entry\")\" || exit 1; done && \
+         rm -f '{etc}/localtime' && cp '{copy}' '{etc}/localtime' && \
+         mount --bind '{etc}' /etc && exec \"$@\"",
+        real = real.display(),
+        etc = etc.display(),
+        copy = copy.display(),
+    );
+    let copied = [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "sh",
+        "-c",
+        &mount,
+        "sh",
+    ];
+    let read = "return [new Date(2026, 0, 1).getTimezoneOffset(), \
+        new Date(2026, 6, 1).getTimezoneOffset()]";
+    let seen = |args: &[&str]| {
+        let mut browser = Browser::start_wrapped(&copied, args, std::process::Stdio::null());
+        let session = browser.attach();
+        browser.navigate(&session, "about:blank");
+        let seen = script(&mut browser, &session, read, serde_json::json!([])).unwrap();
+        (seen, renderer_pids(&mut browser))
+    };
+    let (on_a_thread, _) = seen(&["--single-process"]);
+    assert_eq!(on_a_thread, serde_json::json!([-60, -120]));
+    let (in_a_process, pids) = seen(&["--process-per-tab"]);
+    assert_eq!(in_a_process, on_a_thread);
+    let pid = pids[0].to_string();
+    let tz = environment_of(pids[0])
+        .into_iter()
+        .find(|(name, _)| name == "TZ")
+        .map(|(_, value)| value);
+    assert_eq!(tz.as_deref(), Some(zone.as_str()));
+    let root = std::fs::read_link(format!("/proc/{pid}/root")).unwrap();
+    assert!(root.ends_with("fdinfo"), "{root:?}");
 }

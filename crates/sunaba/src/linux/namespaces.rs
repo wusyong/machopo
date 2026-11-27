@@ -7,7 +7,10 @@
 //! Its user and group ids map to themselves: the child is the same user
 //! inside as out, not root, so the exec takes every capability the new
 //! user namespace gave it (the kernel recomputes them for a user that
-//! isn't root, from a program that has none of its own).
+//! isn't root, from a program that has none of its own); all but
+//! `CAP_SYS_CHROOT`, where it is kept for the child's own chroot
+//! ([`Namespaces::keeping_chroot`]), which [`enter`](super::enter) makes
+//! and then drops every capability.
 //!
 //! Unprivileged user namespaces aren't everywhere: a kernel may be built
 //! or set without them, and Ubuntu (since 23.10) lets only programs its
@@ -23,6 +26,56 @@ use std::io;
 pub struct Namespaces {
     uid_map: Vec<u8>,
     gid_map: Vec<u8>,
+    keeps_chroot: bool,
+}
+
+/// `CAP_SYS_CHROOT`'s number (`<linux/capability.h>`).
+pub(super) const CAP_SYS_CHROOT: u32 = 18;
+
+/// `capget` and `capset`'s header, for the version of 64-bit sets
+/// (`_LINUX_CAPABILITY_VERSION_3`).
+#[repr(C)]
+pub(super) struct CapabilityHeader {
+    pub version: u32,
+    pub pid: libc::c_int,
+}
+
+/// One half (32 capabilities) of each of a thread's three sets.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub(super) struct CapabilityData {
+    pub effective: u32,
+    pub permitted: u32,
+    pub inheritable: u32,
+}
+
+pub(super) const CAPABILITY_VERSION_3: u32 = 0x2008_0522;
+
+/// The calling thread's sets, or `None` when the kernel won't say.
+pub(super) fn capabilities() -> Option<[CapabilityData; 2]> {
+    let mut header = CapabilityHeader {
+        version: CAPABILITY_VERSION_3,
+        pid: 0,
+    };
+    let mut data = [CapabilityData::default(); 2];
+    // SAFETY: the header and two halves, as the version says the kernel
+    // writes, locals alive for the call.
+    let got = unsafe { libc::syscall(libc::SYS_capget, &raw mut header, data.as_mut_ptr()) };
+    (got == 0).then_some(data)
+}
+
+/// Sets the calling thread's sets to `data`.
+pub(super) fn set_capabilities(data: &[CapabilityData; 2]) -> io::Result<()> {
+    let mut header = CapabilityHeader {
+        version: CAPABILITY_VERSION_3,
+        pid: 0,
+    };
+    // SAFETY: the header and two halves, as the version says the kernel
+    // reads, alive for the call.
+    if unsafe { libc::syscall(libc::SYS_capset, &raw mut header, data.as_ptr()) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 impl Default for Namespaces {
@@ -39,7 +92,17 @@ impl Namespaces {
         Self {
             uid_map: format!("{uid} {uid} 1\n").into_bytes(),
             gid_map: format!("{gid} {gid} 1\n").into_bytes(),
+            keeps_chroot: false,
         }
+    }
+
+    /// The child keeps `CAP_SYS_CHROOT` alone through its exec (as an
+    /// ambient capability), for a policy's chroot: it may chroot within
+    /// its own namespaces until [`enter`](super::enter) drops it with
+    /// every other.
+    pub fn keeping_chroot(mut self) -> Self {
+        self.keeps_chroot = true;
+        self
     }
 
     /// Moves the calling process into a new user namespace and a new
@@ -56,7 +119,31 @@ impl Namespaces {
         // group only once it has given up setting supplementary ones.
         write_all(c"/proc/self/setgroups", b"deny")?;
         write_all(c"/proc/self/uid_map", &self.uid_map)?;
-        write_all(c"/proc/self/gid_map", &self.gid_map)
+        write_all(c"/proc/self/gid_map", &self.gid_map)?;
+        if self.keeps_chroot {
+            // Inheritable and then ambient: the one set a program with no
+            // capabilities of its own keeps through an exec, for a user
+            // that isn't root.
+            let mut sets = capabilities().ok_or_else(io::Error::last_os_error)?;
+            sets[0].inheritable = 1 << CAP_SYS_CHROOT;
+            sets[1].inheritable = 0;
+            set_capabilities(&sets)?;
+            let raise = libc::c_ulong::from(CAP_SYS_CHROOT);
+            // SAFETY: integers alone.
+            let raised = unsafe {
+                libc::prctl(
+                    libc::PR_CAP_AMBIENT,
+                    libc::PR_CAP_AMBIENT_RAISE as libc::c_ulong,
+                    raise,
+                    0 as libc::c_ulong,
+                    0 as libc::c_ulong,
+                )
+            };
+            if raised != 0 {
+                return Err(io::Error::last_os_error());
+            }
+        }
+        Ok(())
     }
 
     /// Whether a child of this process can be given its namespaces here:

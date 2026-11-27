@@ -1,7 +1,7 @@
 # RFC 0120：Linux 的 renderer sandbox 的下一級：namespace 和 chroot
 
 - 開始日期：2026-11-27
-- 狀態：🚧 已排程：2026-11-27（第 1、2 段做完：Landlock 只在要讀時放行時區的兩個路徑；renderer 在自己的 user 和 network namespace 裡；第 3 段：chroot；進度在 `progress.md`）
+- 狀態：🚧 已排程：2026-11-27（三段都做完，待收尾：Landlock 只在要讀時放行時區的兩個路徑；renderer 在自己的 user 和 network namespace 裡、chroot 到一個已經不在的目錄；進度在 `progress.md`）
 - 細節：`details.md`
 
 ## 摘要
@@ -88,9 +88,11 @@ Landlock 放行的四個路徑，各自改成不用讀檔（誰在讀的是 rend
 
 ### chroot
 
-- 時機：namespace 建好、權限丟掉之前（chroot 要那個權限），Landlock 和 seccomp 之前。目錄要是空的、renderer 寫不了的。
-- 之後還會開檔的：上面的四個（第 1 段之後沒有了）；`/proc/sys/vm/overcommit_memory`（glibc 的 malloc，讀不到就照預設，現在已經是讀不到）；panic 的 backtrace 讀 `/proc/self/exe` 和它的 debug info（chroot 之後解不出函式名）。第 3 段開始時再用 `strace -k` 量一次。
-- 做法（空的 tmpfs、刪掉的目錄、Chromium 的做法）在第 3 段定。
+- **權限**（第 8 條）：Browser 在 `pre_exec` 裡只把 `CAP_SYS_CHROOT` 留成 ambient capability（`Namespaces::keeping_chroot`），renderer exec 之後只有它。
+- **在哪裡、怎麼做**（第 9 條）：sunaba 的 `enter`，照順序：確認只有一條 thread（讀 `/proc`，所以在 chroot 之前）、`tzset()`、policy 要 chroot 而且 process 有那個權限時，一條 thread chroot 到自己的 `/proc/thread-self/fdinfo`、`chdir("/")` 再結束（Chromium 的 `ChrootToSafeEmptyDir`）、確認 `/proc` 看不到了、丟掉全部的權限（ambient 的也是）、Landlock、seccomp。chroot 的 policy 不讀任何路徑（`enter` 拒絕讀的）。
+- **哪些 renderer chroot**：時區不用讀檔的（`TZ` 是 ICU 收的名字：Browser 照 `/etc/localtime` 的連結或複本給的，或使用者的）而且在自己的 namespace 裡的；不能用 namespace 的機器（沒有權限）、`/etc/localtime` 是自己做的時區檔的機器（第 10 條），照第 1、2 段的做法。
+- **時區**：`tzset()` 讓 glibc 在還讀得到時讀好 `TZ` 的時區（短的名字，ICU 拿 glibc 的時差比對的，不用再放行檔案）；`/etc/localtime` 是複本時，Browser 比對 zoneinfo 找出名字（第 10 條）。
+- **之後還會開檔的**（量的，`details.md` 的「第 3 段的探測」）：chroot 之前就已經讀不到或本來就不在的那幾個，沒有新的；panic 的 backtrace 讀不到執行檔，解不出函式名（`docs/limitations.md`）。找不到的錯誤碼是 `ESRCH`：`shell` 的整套測試在 chroot 的 renderer 上照樣通過。
 
 ### CI
 
@@ -107,7 +109,7 @@ GitHub 的 `ubuntu-24.04` runner（machopo 的 CI 都在上面）照 Ubuntu 的�
 ### 測試
 
 - **renderer 真的在 namespace 裡**：從外面看真的 renderer process：`/proc/<pid>/ns/{user,net}` 和 Browser 的不同；probe 從裡面看：網路介面只有 loopback（`/proc/net` 讀不到，改用 system call），權限都丟掉了。
-- **chroot**：probe 從裡面 `stat("/")` 是空的目錄、`/proc` 不在；`docs/limitations.md` 的 (1) 那幾種探測都失敗。
+- **chroot**：從外面看真的 renderer process 的根目錄是一條已經結束的 thread 的 `fdinfo`（`/proc/<pid>/root`），權限都是 0；sunaba 的 probe 從裡面看，`/` 以外的路徑都是 `ESRCH`；`/etc/localtime` 是複本時，renderer 拿到名字、chroot、看到的時差和 thread 上的相同；短的名字（`CET`）在 chroot 的 renderer 裡照樣對。
 - **退路**：user namespace 開不了時 renderer 照舊啟動、在 Landlock 加 seccomp 裡、stderr 說了一次。
 - **網頁看到的不變**：現有的 sandbox 裡外和 thread 上的比較（時區、`Intl`、寬度）、`navigator.hardwareConcurrency`；用 `TZ` 和一般檔案的 `/etc/localtime` 各跑一次時區。
 - **crash**：`about:crash` 照舊是 `SIGABRT`、分頁顯示 sad tab。
@@ -119,7 +121,7 @@ GitHub 的 `ubuntu-24.04` runner（machopo 的 CI 都在上面）照 Ubuntu 的�
 0. 草稿和探測（做完；`details.md`）。
 1. **Landlock 拿掉四個路徑**（做完，2026-11-27；時區的兩個只在要讀時放行，第 4 條）：V8 的 entropy source；Browser 給 `TZ`；CPU 的數量讓它讀不到（先確認 CI 的 glibc）。和 namespace 無關，最小。
 2. **namespace**（做完，2026-11-27）：user、network（第 6 條）；退路（第 5 條）；CI 先不處理（第 7 條）。
-3. **chroot**：要第 1、2 段（在 user namespace 裡才有 chroot 的權限，檔案都不用讀了才 chroot 得了）。
+3. **chroot**（做完，2026-11-27；第 8 到 10 條）：要第 1、2 段（在 user namespace 裡才有 chroot 的權限，檔案都不用讀了才 chroot 得了）。
 
 每一段做完可以先 merge（`rfcs/README.md` 的「階段的 merge」）。
 
@@ -127,7 +129,8 @@ GitHub 的 `ubuntu-24.04` runner（machopo 的 CI 都在上面）照 Ubuntu 的�
 
 - 啟動一個 renderer 多一次 `unshare` 和寫對應：約 0.5 ms（量的：`unshare --user --net` 加上去的中位數，`details.md`）；Browser 第一次啟動 renderer 時多一次 fork 試。
 - 新的啟動程式是 machopo 自己的程式碼：丟權限的順序、fork 之後只能做的事，寫錯了就是洞或 renderer 起不來。
-- chroot 之後 panic 的 backtrace 解不出函式名。
+- chroot 之後 panic 的 backtrace 解不出函式名；找不到的錯誤碼是 `ESRCH`、不是 `ENOENT`。
+- Browser 多一段照 ICU 的方法比對 zoneinfo 的程式，挑出的名字可能是同一份規則的別名（時間一樣）。
 - Ubuntu 的預設設定上收不到這兩層的好處（U1），兩種設定都要測。
 - 收益是多一層：network namespace 擋的「網路」seccomp 已經擋；只有 chroot 擋住現在擋不住的（路徑在不在、`/proc`）。沒有 PID namespace，「別的 process」還是只有 seccomp 一層（第 6 條）。
 
@@ -153,12 +156,13 @@ GitHub 的 `ubuntu-24.04` runner（machopo 的 CI 都在上面）照 Ubuntu 的�
 5. **不能用沒有特權的 user namespace 時，退回現在的 Landlock 加 seccomp，Browser 說一次（U1）**（2026-11-27，第 2 段開始時，使用者決定）：能不能用在一個 child 裡試、確認新的 namespace 裡權限都在（Ubuntu 的限制下 `unshare` 會成功、但沒有權限），不行的話那個 child 結束，原本的 process 沒碰過 namespace，照現在的做法繼續。Browser 第一次遇到不行的時在 stderr 說一次為什麼、怎麼打開（Ubuntu 的 `sysctl` 或 AppArmor 的 profile）。原本寫的是由 renderer 在第一則訊息裡說它有沒有進 namespace；做的時候發現試的就是 Browser 自己（第 6 條：namespace 由 Browser 啟動時給），它本來就知道，renderer 不用多一個欄位（2026-11-27）。理由：不會比現在差，Ubuntu 的預設設定上照樣能用，使用者知道少了這兩層；只說一次。Chromium 也是先在 child 裡試（`CanCreateProcessInNewUserNS`）。代價：兩種設定都要測。不選什麼都不說（U2）。不選不啟動、要 `--no-sandbox`（U3：和 Chromium 一樣，但 Ubuntu 的預設設定上就不能用了，使用者加了 `--no-sandbox` 反而連 Landlock 和 seccomp 都沒有）。
 6. **只要 user 和 network namespace，不要 PID namespace；Browser 啟動 renderer 時在 `pre_exec` 裡 `unshare`（K5）**（2026-11-27，第 2 段，使用者決定）：一個分頁照舊一個 process，pid 不變。理由：PID namespace 帶來的大多已經有了（碰不到別的 process 是 seccomp，看不到是 Landlock 和第 3 段的 chroot），chroot 要的權限是 user namespace 給的；而它要的東西比預期多：init（renderer 是 PID 1 時 `abort()` 變成 `SIGSEGV`，量過）、外面等著交回結束狀態的 process、trace 和 census 的檔名、量測工具、Browser 另外知道 renderer 外面的 pid；使用者看到 10 個分頁會是 30 個 process（K2）。代價：沒有 PID namespace 這一層，「別的 process」只靠 seccomp（現在就是這樣），chroot 之前 renderer 看得到 pid 的清單；和 Chromium 不同（它三種都用，靠 zygote 吸收那些事）。不選三種都要、Browser 用 `clone` 啟動、renderer 是 PID 1（K3：process 不多，但要自己 `clone` 加 exec、處理 PID 1）。不選 renderer 自己 fork 出 PID 1 的 renderer（K1：兩個 process，`abort()` 被 handler 接走）。不選再加一層 init（K2：量過行得通，但一個分頁三個 process）。PID namespace 留在「之後的可能」。
 7. **CI 先不處理（C3）**（2026-11-27，第 2 段，使用者決定）：CI 的 `ubuntu-24.04` runner 照 Ubuntu 的預設多半不允許沒有特權的 user namespace，renderer 在那裡會走退路（第 5 條）。測試照 Browser 試出來的結果檢查（有 namespace 的檢查它在 namespace 裡、沒有的檢查它照現在的做法），兩種設定都會過；namespace 的那條路在不允許的 runner 上只在開發機上測，記在 `docs/test-gaps.md`。理由：使用者決定先不煩惱 CI。不選 CI 跑測試前用 `sysctl` 打開、再在限制下多跑一次 sandbox 的測試（C1：兩條路都在 CI 上測到，要改 workflow）。不選給執行檔寫 AppArmor 的 profile（C2：CI 的執行檔路徑不固定，要 root）。
+8. **chroot 的權限：exec 之前只把 `CAP_SYS_CHROOT` 留成 ambient capability（A1）**（2026-11-27，第 3 段開始時，使用者決定）：`pre_exec` 裡（進了 user namespace、寫好對應之後）把它放進 inheritable 和 ambient 兩組，exec 之後 renderer 只有它；`enter` 在確認只有一條 thread 之後 chroot，接著丟掉全部的權限，再進 Landlock 和 seccomp。理由：量過行得通（exec 之後 `CapEff` 只有 `CAP_SYS_CHROOT`，`details.md` 的「第 3 段的探測」）；uid 照舊不是 root；exec 到 chroot 之間只有這一個權限，而且只對 renderer 自己的 namespace 有效。代價：`pre_exec` 多 `capset`、`prctl` 兩個 system call；`enter` 要負責丟掉，由從外面看 `CapEff` 的測試守。不選 uid 對到 0（A2：exec 到 chroot 之間有全部的權限，`getuid()` 是 0）。不選 exec 之前 chroot（A3：之後找不到執行檔和函式庫）。Chromium 的 renderer 從 zygote fork、不 exec，權限自然留著。
+9. **chroot 到一條 thread 自己的 `/proc/thread-self/fdinfo`，thread 結束、目錄跟著消失（R1）**（2026-11-27，第 3 段，使用者決定）：`enter` 開一條 thread（thread 共用根目錄），它 `chroot`、`chdir("/")` 之後結束，`enter` 等它結束才繼續，所以之後照樣只有一條 thread。理由：量過行得通；不在檔案系統上建任何東西、沒有要清的；裡面什麼都沒有、也沒有子目錄爬得出去；和 Chromium 的 `ChrootToSafeEmptyDir` 同一個方法（它用 `clone(CLONE_FS)` 的 child）。代價：找不到的錯誤碼是 `ESRCH`、不是 `ENOENT`（Chromium 也是），實作時用整套測試確認沒有程式依賴 `ENOENT`；chroot 那一刻要有 `/proc`。不選在 `/tmp` 建一個空的目錄、chroot 之後刪掉（R2：錯誤碼照常，但每次啟動要寫檔案系統，當掉在中間會留下目錄）。不選系統本來就空的目錄（R3：不是每個發行版都有，保證不了是空的）。
+10. **`/etc/localtime` 是一般檔案時，Browser 照 ICU 的方法比對 zoneinfo 的檔案找出名字；找不到的機器不 chroot（Z1）**（2026-11-27，第 3 段，使用者決定）：拿 `/etc/localtime` 的內容和 zoneinfo 裡的檔案比，一樣的那個的名字就是 renderer 的 `TZ`（整個 Browser 找一次、記住；跳過 `posix/`、`right/` 這類重複的）。真的找不到的（自己做的時區檔），那台機器的 renderer 照舊放行時區的兩個路徑、不 chroot。另外 chroot 之前呼叫一次 `tzset()`，glibc 讀好 `TZ` 的時區之後就不再讀檔：短的名字（`CET`）不用再放行時區的檔案，第 4 條的「三四個字的名字」那一條跟著拿掉。理由：找得到名字的機器都 chroot 得成、時區正確；找不到的極少數時區照樣正確，只少 chroot 這一層；Chromium 的 Browser 有 ICU，自己決定時區、把名字給 renderer，這等於在 machopo 的 Browser 裡補上 ICU 找名字的那一段。代價：Browser 要重寫那段比對、結果要和 ICU 的一致（同一個內容有好幾個名字時，挑法不一定和 ICU 一樣，但規則一樣、時間一樣）；那種機器上第一次啟動 renderer 時掃一次 zoneinfo。不選這種機器一律不 chroot（Z2：主要是容器，都少一層）。不選只讓 glibc 先讀好、其餘交給 ICU（Z3：ICU 拿不到名字，會照時差猜出沒有夏令時間的時區，時間安靜地錯）。
 
 ## 待決定
 
-第 1 段之前要定的都定了（第 1 到 4 條）。
-
-第 2 段要定的都定了（第 5 到 7 條；外面的 pid 跟著第 6 條不用問了）。第 3 段開始時定的：chroot 到哪裡；`/etc/localtime` 是一般檔案的機器怎麼辦（第 4 條留下的）。
+第 3 段要定的都定了（第 8 到 10 條）。
 
 ## 之後的可能
 
