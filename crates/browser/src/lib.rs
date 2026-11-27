@@ -46,7 +46,7 @@ pub use render_process_host::{
 };
 pub use renderer::{
     ChildExit, ChildInit, NEW_CONTENT_RENDERING_DELAY, ParserBudget, RendererFlags,
-    ScriptEngineFactory, SystemFonts, run_child_process,
+    ScriptEngineFactory, run_child_process,
 };
 pub use storage_partition::StoragePartition;
 pub use user_agent::user_agent;

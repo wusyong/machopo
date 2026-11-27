@@ -1,0 +1,38 @@
+# Stage 3's mutants (Linux: a file crosses as a descriptor, the renderers are served the system's fonts, the policy reads no font): `python3 scripts/test.py mutate rfcs/0118-font-service/mutants-3.toml`, on Linux.
+test = ["cargo", "test", "-q", "-p", "ipc", "--lib", "--test", "it", "--", "file_in_message::", "platform::linux::channel::"]
+timeout = 900
+
+[[mutant]]
+name = "Linux's channel sends no file"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''        Some(file.into())'''
+to = '''        { drop(file); None }'''
+
+[[mutant]]
+name = "Linux's channel makes no file of what it is sent"
+file = "crates/ipc/src/platform/linux/channel.rs"
+from = '''        Some(handle.into())'''
+to = '''        { drop(handle); None }'''
+
+[[mutant]]
+name = "Linux's renderers find the system's fonts themselves"
+file = "crates/browser/src/font_data_service.rs"
+from = '''    cfg!(any(target_os = "linux", target_os = "macos", windows));'''
+to = '''    cfg!(any(target_os = "macos", windows));'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "renderer_sandbox::"]
+
+[[mutant]]
+name = "the policy lets a renderer read the system's fonts"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''            .read_only("/usr/share/zoneinfo");'''
+to = '''            .read_only("/usr/share/zoneinfo")
+            .read_only("/usr/share/fonts");'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "renderer_sandbox::"]
+
+[[mutant]]
+name = "the policy lets a renderer read fontconfig's configuration"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''            .read_only("/usr/share/zoneinfo");'''
+to = '''            .read_only("/usr/share/zoneinfo")
+            .read_only("/etc/fonts");'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "renderer_sandbox::"]

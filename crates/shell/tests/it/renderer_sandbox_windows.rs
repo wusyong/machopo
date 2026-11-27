@@ -152,7 +152,7 @@ fn a_sandboxed_renderer_shows_a_page_as_one_outside_does() {
         "{inside}"
     );
     assert_eq!(inside, seen(&["--process-per-tab", "--no-sandbox"]));
-    assert_eq!(inside, seen(&[]));
+    assert_eq!(inside, seen(&["--single-process"]));
 }
 
 /// The names of the DLLs process `id` has loaded, as the system lists

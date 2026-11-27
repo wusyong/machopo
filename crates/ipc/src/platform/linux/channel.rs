@@ -1,8 +1,8 @@
 //! A channel's end over a Unix stream socket (Chromium's `ChannelPosix`):
 //! the core's messages are bytes in a stream, written as far as the
 //! socket takes them and read as they come, and the core cuts the
-//! messages out of them. Handles are descriptors (a region's memfd), sent
-//! with the bytes they belong to (`SCM_RIGHTS`).
+//! messages out of them. Handles are descriptors (a region's memfd, an
+//! open file), sent with the bytes they belong to (`SCM_RIGHTS`).
 //!
 //! The IO thread waits with one epoll on all its channels' sockets and on
 //! an eventfd other threads wake it by. Level-triggered: each wait reads
@@ -283,13 +283,16 @@ impl Platform for Channel {
         memory::create(len, peer_writes)
     }
 
-    // Files don't cross on this platform yet.
-    fn send_file(&self, _: File) -> Option<OwnedFd> {
-        None
+    // A descriptor crosses as it is: the peer is given its own of the
+    // same open file, open as it is here (to read).
+    fn send_file(&self, file: File) -> Option<OwnedFd> {
+        Some(file.into())
     }
 
-    fn file(&self, _: OwnedFd) -> Option<File> {
-        None
+    // The host's word for what it is (as for a region's); a descriptor
+    // that isn't a file doesn't map.
+    fn file(&self, handle: OwnedFd) -> Option<File> {
+        Some(handle.into())
     }
 
     fn shut(&self) {
@@ -651,6 +654,44 @@ mod tests {
                 mapping.ptr().write(0x42);
                 assert_eq!(mapped.unwrap().ptr().read(), 0x42);
             }
+        });
+    }
+
+    #[test]
+    fn a_file_sent_is_the_same_open_file_to_read_closed_on_exec() {
+        use std::io::{Read, Seek, Write};
+        within(|| {
+            let (host, child) = Channel::pair().unwrap();
+            let mut childs = serving(&[&child]);
+            let path =
+                std::env::temp_dir().join(format!("machopo-ipc-linux-file-{}", std::process::id()));
+            std::fs::write(&path, b"descriptor").unwrap();
+            let file = File::open(&path).unwrap();
+            // What is sent is the open file, not its name.
+            std::fs::remove_file(&path).unwrap();
+            let mut handles = vec![host.send_file(file).unwrap()];
+            assert_eq!(host.write(b"f", &mut handles), Ok(1));
+            let (mut made, mut again) = childs.wait(|waited| match waited {
+                Waited::Channel { handles, .. } => {
+                    let handle = handles.pop().unwrap();
+                    assert_eq!(fcntl_getfd(&handle), Ok(FdFlags::CLOEXEC));
+                    let made = child.file(handle).unwrap();
+                    let again = made.try_clone().unwrap();
+                    (made, again)
+                }
+                Waited::Interrupted => panic!("interrupted"),
+            });
+            let mut bytes = String::new();
+            made.read_to_string(&mut bytes).unwrap();
+            assert_eq!(bytes, "descriptor");
+            // The same open file: its offset is shared.
+            let mut rest = String::new();
+            again.read_to_string(&mut rest).unwrap();
+            assert_eq!(rest, "");
+            again.rewind().unwrap();
+            // Open to read, as it was: not to write.
+            assert!(made.write_all(b"x").is_err());
+            assert!(made.set_len(0).is_err());
         });
     }
 

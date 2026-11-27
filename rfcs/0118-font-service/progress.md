@@ -15,6 +15,10 @@
 | 2c. renderer 那一側：`TextContext` 照需要向 Browser 要、名字由 machopo 自己對、文字交給 parley 之前掃 script；三種 renderer 都切過去 | 做完 | 2026-11-27 |
 | 2d. 守著的測試（同一組文字，問 Browser 的和直接問系統的排出來的字形相同）；sandbox 裡的 renderer 不再載入 `dwrite.dll` | 做完 | 2026-11-27 |
 | 2e. 第 2 段的檢查和文件 | 做完 | 2026-11-27 |
+| 3a. 第 3 段的探測：`fontcheck.rs` 在 Linux 上比 `.ttc`，對得上；沒有要決定的事 | 做完 | 2026-11-27 |
+| 3b. `ipc`：Linux 的通道把檔案的 fd 跟著訊息交給 child（`SCM_RIGHTS`）；測試、README、`soundness.md` | 做完 | 2026-11-27 |
+| 3c. Linux 的三種 renderer 切到字型服務；policy 不放行字型的目錄，進 sandbox 回到 renderer 的第一件事（不再先初始化 fontconfig）；`--font-directory` 和 Browser 啟動時列目錄的那一輪拿掉 | 做完 | 2026-11-27 |
+| 3d. 第 3 段的檢查和文件 | 做完 | 2026-11-27 |
 | 4a. 第 4 段的探測和決定（已決定的事項第 12 條） | 做完 | 2026-11-27 |
 | 4b. `ipc`：macOS 的通道把檔案包成 fileport 交給 child、child 還原；測試、`soundness.md` | 做完 | 2026-11-27 |
 | 4c. macOS 的三種 renderer 切到字型服務；profile 拿掉字型的目錄和 `com.apple.fonts` | 做完 | 2026-11-27 |
@@ -29,6 +33,9 @@
 | 第 2 段：sandbox 裡外的 renderer process 都不載入 `dwrite.dll`，畫出來和 Browser 的 thread 上的 renderer 相同 | `crates/shell/tests/it/renderer_sandbox_windows.rs` 的 `a_renderer_process_has_the_systems_fonts_from_its_browser`、`a_sandboxed_renderer_shows_a_page_as_one_outside_does`（加上了 thread 的 renderer） |
 | 第 2 段：同一個問題不問第二次；文字交給 parley 之前問好它的 script；檔案每次最多 16 個 | `font_service.rs` 的 `each_family_script_and_file_is_asked_for_once`、`a_texts_scripts_are_asked_for_before_it_is_shaped`、`files_are_asked_for_sixteen_at_a_time` |
 | 第 2 段：Browser 不回答沒給過的編號、太多的檔案、不是 script 的 tag，當成壞訊息 | `crates/browser/src/render_process_host.rs` 的 `the_io_thread_refuses_font_questions_of_nothing_it_gave` |
+| 第 3 段：Linux 上 Browser 開的檔案的 fd 跟著訊息交給 child，child 拿到的是同一個開著的檔案、只能讀、close-on-exec | `crates/ipc/src/platform/linux/channel.rs` 的 `a_file_sent_is_the_same_open_file_to_read_closed_on_exec`；`file_in_message.rs` 的真的 child（`a_child_maps_the_files_its_host_sends_as_its_own`，名字已經刪掉的檔案也是） |
+| 第 3 段：Linux 上 Browser 給的系統字型排出來的字形，和 renderer 自己經過 fontconfig 找到的相同（加上可變字型的 `.ttc` 裡的 family 和粗細） | `crates/layout/tests/it/font_service.rs` 的 `served_system_fonts_lay_text_out_as_the_systems_own`（三個平台） |
+| 第 3 段：Linux 的 sandbox 裡的 renderer 讀不了字型的目錄、字型檔、fontconfig 的設定和 cache（兩種字型都是），讀得到時區；畫出來和 sandbox 外的、Browser 的 thread 上的相同 | `crates/shell/tests/it/renderer_sandbox.rs` 的 `a_renderer_reads_no_font_of_the_systems_but_the_time_zone`、`a_sandboxed_renderer_shows_a_page_as_one_outside_does` |
 | 第 4 段：macOS 上 Browser 開的檔案包成 fileport 跟著訊息交給 child，child 還原成自己的、唯讀的 descriptor（close-on-exec）；memory entry 和 fileport 互相不認 | `crates/ipc/src/platform/macos/fileport.rs` 的單元測試；`file_in_message.rs` 的真的 child（`a_child_maps_the_files_its_host_sends_as_its_own`，名字已經刪掉的檔案也是） |
 | 第 4 段：macOS 上 Browser 給的系統字型排出來的字形，和 renderer 自己用 CoreText 找到的相同 | `crates/layout/tests/it/font_service.rs` 的 `served_system_fonts_lay_text_out_as_the_systems_own`（Windows 和 macOS） |
 | 第 4 段：macOS 的 sandbox 裡的 renderer 讀不了任何字型的目錄和檔案、查不到 `com.apple.fonts`，畫出來和 sandbox 外的、Browser 的 thread 上的相同 | `crates/shell/tests/it/renderer_sandbox_macos.rs` 的 `a_renderer_reads_no_font_of_the_systems_nor_reaches_its_font_service`、`a_sandboxed_renderer_shows_a_page_as_one_outside_does` |
@@ -52,6 +59,16 @@
 - **沒列成 mutant 的**：字型 thread 送不出檔案時改送沒有檔案的回答、字型 thread 不在時 IO thread 回答沒有（測試造不出來，記在 `docs/test-gaps.md`）；`--single-process` 的 renderer 也問 Browser（改成自己找，排出來一樣，Browser 的 process 本來就載入 `dwrite.dll`；同上）。
 - **跑過的測試**：`cargo test -p layout -p protocol -p renderer -p browser`（browser 39、189；layout 32、490；protocol 7、13；renderer 122，都通過）；`cargo test -p shell --test it renderer_sandbox_windows::`（10 個通過）。
 - **第 2 段做完的檢查**：`sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs；`cargo fmt --check`；`cargo clippy --workspace --all-targets -- -D warnings`（修了兩處：`SystemFontSource::Found` 放進 `Box`，字型 thread 的 `send` 回傳問題的編號、不回傳整則訊息）；`cargo test --workspace`（63 個 binary，4993 個通過，2 個 ignored，沒有失敗）。fmt 改了換行之後，`mutants-2.toml` 有一個 mutant 對不上，改好、重跑抓到。
+
+### 3a 到 3d（2026-11-27，Fedora 45，Linux 7.3.3，x86-64）
+
+- **探測**：`fontcheck.rs` 在這台上跑（細節在 `details.md` 的「照檔案註冊和系統說的對不對得上（每個平台）」）：114 個 family、306 個字型（30 個在可變字型的 `.ttc` 裡），0 個對不上，fork 不用改。
+- **新的測試**：`ipc` 的 `platform::linux::channel` 單元測試 `a_file_sent_is_the_same_open_file_to_read_closed_on_exec`（名字已經刪掉的檔案；對方拿到的共用 offset、寫不進去、截不短、close-on-exec）；`file_in_message.rs` 的真的 child 在 Linux 上也跑。`layout` 的 `served_system_fonts_lay_text_out_as_the_systems_own` 在 Linux 上也跑，頁面多了 Linux 常見的名字（`Noto Sans CJK JP` 的粗體、`Noto Serif CJK TC` 的 300、`DejaVu Sans`、`Liberation Mono`）。`shell` 的 `renderer_sandbox.rs`：`a_renderer_reads_no_font_of_the_systems_but_the_time_zone`（兩種字型的 renderer 都讀不了 `/usr/share/fonts`、`/usr/local/share/fonts`、家目錄的兩處字型、`/etc/fonts`、fontconfig 的三處 cache，讀不了一個真的字型檔，讀得到 `/etc/localtime`；取代原本「讀得到給它的字型目錄」的那個），`a_sandboxed_renderer_shows_a_page_as_one_outside_does`（取代原本只比 sandbox 裡外兩個 span 寬度的那個：八種 script 和 generic family、時區，比 sandbox 外的和 `--single-process` 的）。`renderer_sandbox` 的單元測試跟著 `ChildSwitches` 改。
+- **找到的測試的 bug**（第 2、4 段留下的）：Windows 和 macOS 的 `a_sandboxed_renderer_shows_a_page_as_one_outside_does` 說要比「Browser 的 thread 上的 renderer」，比的卻是 `seen(&[])`：machopo 預設每個分頁一個 process，所以那是第三個 sandbox 裡的 renderer process，thread 上的 renderer 一直沒有比到。Linux 的 mutation test 抓到的（下面）：「Linux 的 renderer 自己找系統字型」時兩個 process 都排不出字，寬度都是 0，Linux 的版本又照「沒有字型的機器」早退，所以沒失敗。三個平台都改成 `seen(&["--single-process"])`，Linux 的早退改成看 thread 上的那一個；Windows 和 macOS 的改動在那兩台上還沒跑過。
+- **Mutation test**（`mutants-3.toml`，5 個，`--keep-going`）：第一輪抓到 4 個；漏的是「Linux 的 renderer 自己找系統字型」，原因是上一條的測試的 bug。修好之後重跑，5 個全部抓到：通道不送檔案、不把收到的當成檔案、Linux 的 renderer 自己找系統字型（sandbox 裡排不出字，和 thread 上的不同）、policy 放行 `/usr/share/fonts`、放行 `/etc/fonts`。檔案都還原了（`git status`，`target/mutate/originals/` 是空的）。
+- **沒列成 mutant 的**：Linux 的 `file` 不分 region 和檔案（照 host 的值說的，和 Windows 一樣；region 那一邊的 `map` 本來就只收封住不能縮短的 memfd，`platform::linux::memory` 的 `what_isnt_a_region_isnt_mapped` 守著）。
+- **中途的一件**：第一次跑 mutation test 時 `ci.py third-party` 停下：`../third_party/rusty_v8` 在 `cb5186f`（比釘的 `92a2314` 少一個 commit），`gen/src_binding_ptrcomp_release_x86_64-unknown-linux-gnu.sum` 有沒 commit 的改動（只有網址從 `kun-v152.2.0-28` 換成 `machopo-v152.2.0-30`，`sha256` 相同：build 照 `RUSTY_V8_MIRROR_TAG` 重寫的）。照使用者的意思 `git restore` 那個檔案、`ci.py third-party` 同步到 `92a2314` 之後重跑；之後的 build 沒有再改它。在那之前跑過的測試（下面的第一輪）是在 `cb5186f` 上 build 的，同步之後的 `cargo test --workspace` 重跑過。
+- **跑過的檢查**：`cargo test -p ipc -p layout -p browser -p renderer -p protocol -p shell`（ipc 84、112；layout 32、490；browser 39、193；protocol 7、13；renderer 122；shell 97、13、760，都通過）；量測工具的測試（renderer 的啟動參數變了：`speedometer_test.py`、`blink_perf_test.py`、`raster_test.py`、`census_test.py`，都通過）；`sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs；第 3 段做完的 `cargo fmt --check`（改了一處換行）、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace`（63 個 binary，4976 個通過，1 個 ignored，沒有失敗）。
 
 ### 4a 到 4d（2026-11-27，macOS 26.6.2，Apple Silicon）
 

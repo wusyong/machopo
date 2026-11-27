@@ -579,10 +579,10 @@ fn a_generic_family_is_asked_for_when_it_is_used() {
 
 /// The system's fonts as the browser serves them lay text out as the
 /// system's fonts found in the renderer do: a page of many scripts, the
-/// generic families, Chrome's alternate names and names that aren't
-/// there, in a block, in SVG and on a canvas. Where renderers are served
-/// the system's fonts.
-#[cfg(any(windows, target_os = "macos"))]
+/// generic families, Chrome's alternate names, faces of a font collection
+/// and names that aren't there, in a block, in SVG and on a canvas. Where
+/// renderers are served the system's fonts.
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 #[test]
 fn served_system_fonts_lay_text_out_as_the_systems_own() {
     let page = "<style>div { font: 24px serif }</style>\
@@ -600,6 +600,10 @@ fn served_system_fonts_lay_text_out_as_the_systems_own() {
         <div>ქართული Հայերեն বাংলা தமிழ் ລາວ ខ្មែរ ᠮᠣᠩᠭᠣᠯ ☃ ★ → ⅓ ①</div>\
         <div style='font-family: \"MS Gothic\"'>ＭＳ ゴシック</div>\
         <div style='font-family: \"微軟正黑體\"'>微軟正黑體</div>\
+        <div style='font-family: \"Noto Sans CJK JP\"'>日本語 <b>太字</b></div>\
+        <div style='font-family: \"Noto Serif CJK TC\"; font-weight: 300'>細明體</div>\
+        <div style='font-family: \"DejaVu Sans\"'>DejaVu</div>\
+        <div style='font-family: \"Liberation Mono\"'>Liberation</div>\
         <svg><text y=24 style='font: 24px serif'>SVG 中文 العربية</text></svg>";
     let (served, ..) = served(SystemFontManager::new(layout::SystemFonts::find()));
     let found = TextContext::with_system_fonts(layout::SystemFonts::find());

@@ -55,7 +55,7 @@ fn child() {
         _ => {}
     }
     let exit = match ipc::platform::inherited() {
-        Some(channel) => match renderer::run_child_process(channel, SCRIPT_ENGINES, None) {
+        Some(channel) => match renderer::run_child_process(channel, SCRIPT_ENGINES) {
             renderer::ChildExit::Ended => 0,
             renderer::ChildExit::NotStarted => 3,
             renderer::ChildExit::Crashed => 4,

@@ -48,7 +48,7 @@ kernel 和標準庫的行為，`ipc` 證明不了。每一條有測試在那個�
 | K7 | **out-of-line 收到的記憶體是這個 process 自己的一份**（只有 macOS 用） | 送的一方那幾頁的 copy-on-write，之後它再改也看不到。測試：`what_is_sent_out_of_line_is_the_bytes_as_they_were_when_sent` | | |
 | K8 | **進行中的 I/O 的規則**（只有 Windows 用） | | | 在 completion port 上的 handle，發出操作的 thread 結束時操作不會被取消（`a_write_outlives_the_thread_that_started_it`）；每筆進行中的操作恰好留下一個通知，被取消的也是；設了 `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` 之後當場完成的不留（`what_goes_on_holds_its_end_until_its_completion_is_taken`、`what_is_done_at_once_holds_nothing`） |
 | K9 | **`std::env::remove_var` 在 Windows 上多條 thread 也安全**（標準庫的文件寫明） | | 不成立，所以 Linux 的 child 不拿掉變數 | `inherited` 靠它 |
-| K11 | **map 著的檔案的內容不變**：沒有人寫它、截短它（Windows 和 macOS 交檔案） | 假設，沒有東西擋：檔案沒有不讓別人寫的開法。交的是系統的字型，系統的是 root 的、使用者自己裝的是使用者的；renderer 自己 map 系統字型時（fontique）也是這個前提 | 還不交檔案 | `ReadOnlyFile::open` 開檔時不讓別人寫（只允許讀和刪除），這個限制在檔案的任何一個 handle 還開著時都在（兩端的 handle 是同一個檔案物件），`MappedFile` 一直拿著它的 handle；map 著的檔案不能截短（文件寫明）。測試：`nobody_writes_an_open_file_but_it_may_be_renamed`、跨 process 的 `a_child_maps_the_files_its_host_sends_as_its_own`（host 放掉自己的之後，child 的還擋著） |
+| K11 | **map 著的檔案的內容不變**：沒有人寫它、截短它（三個平台交檔案） | 假設，沒有東西擋：檔案沒有不讓別人寫的開法。交的是系統的字型，系統的是 root 的、使用者自己裝的是使用者的；renderer 自己 map 系統字型時（fontique）也是這個前提 | 同 macOS：沒有強制的檔案鎖（`flock`、lease 都只是約定或通知），交的是系統的字型 | `ReadOnlyFile::open` 開檔時不讓別人寫（只允許讀和刪除），這個限制在檔案的任何一個 handle 還開著時都在（兩端的 handle 是同一個檔案物件），`MappedFile` 一直拿著它的 handle；map 著的檔案不能截短（文件寫明）。測試：`nobody_writes_an_open_file_but_it_may_be_renamed`、跨 process 的 `a_child_maps_the_files_its_host_sends_as_its_own`（host 放掉自己的之後，child 的還擋著） |
 | K10 | **job 最後一個 handle 關掉時，kernel 結束裡面的 process**，而一個 process 怎麼結束，它的 handle 都會被關掉（只有 Windows 用） | | | 設了 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`（文件寫明）。測試：`children_share_a_job_and_end_when_it_closes`、`a_hosts_children_go_with_it_whatever_they_are_doing`。正在結束的 process 放不進 job，而那時它還不算結束（實測，Windows 11 10.0.26300：最久差 16 ms），所以被拒絕時最多等 1 秒看它是不是正在結束。測試：`a_child_that_is_exiting_needs_no_job` |
 
 macOS 那一層的測試在 `src/platform/macos/` 各檔的單元測試和 `crates/ipc/tests/it/mach_channel.rs`；Linux 的在 `src/platform/linux/` 和 `crates/ipc/tests/it/linux_channel.rs`；Windows 的在 `src/platform/windows/` 和 `crates/ipc/tests/it/windows_channel.rs`；三個平台共用的跨 process 測試是 `crates/ipc/tests/it/process_channel.rs`。
@@ -63,7 +63,7 @@ macOS 那一層的測試在 `src/platform/macos/` 各檔的單元測試和 `crat
 | I2 | **`Memory` 的實作**：值活著的期間 `ptr()` 起 `len()` 個位元組可讀（放進 `Pool` 的還要可寫）、不搬動、不比底下的物件長 | `unsafe trait`：每個實作有自己的 `// SAFETY:`（下面的表）；平台的 `map` 在 map 之前確認長度（Linux 先看 seal 再量；macOS 和 Windows 由 kernel 拒絕） |
 | I3 | **對方可能在寫的共用記憶體只被複製出來**，不當成有不變量的型別、不借成 `&[u8]` 或 `&T` 交出去 | 對方寫的 region（表裡的）只有三個讀的地方，都在 `core/region.rs`：`Table::read`（整段複製到 `Vec`）、`copy_out`（複製到呼叫的人給的 slice）、`chunks_out`（一段一段以值交出去，給只能寫、拿不到 slice 的目的地）。`SharedBuffer` 拿著 region 時只提供後兩種，`as_bytes` 回 `None`。複製出來之後才解碼。審查；`crates/ipc/tests/it/shared_buffer.rs` |
 | I4 | **交給核心的 handle 是 kernel 為這則訊息搬進來的**，不是對方寫的數值 | macOS、Linux：假設 K3。Windows：child 寫的位元組沒有這一層的表頭，host 那一端沒有把數值包成 handle 的程式，所以對方不能附 handle 的一端看不到任何數值（`a_child_gives_no_handle_and_a_host_takes_no_value_for_one`） |
-| I5 | **child 信任 host 的地方只有這幾處** | Windows 的 child 把 host 寫的數值包成 handle（`End::next`）、不檢查收到的 section 是哪一種；三個平台的 child 照環境變數或 rendezvous 拿它那一端；被 pipe 驅動的 process 收下 3、4 或命令列指名的 handle（`inherited_pipe`）；child 把 host 給它寫的 region 借成 slice 來畫（I10），相信 host 不寫那一塊；child 相信 host 給的檔案是 `ReadOnlyFile::open` 開的（K11 在 Windows 上靠開檔的方式），Windows 的 child 把 host 說是檔案的 handle 當成檔案。新增一處要寫在這裡 |
+| I5 | **child 信任 host 的地方只有這幾處** | Windows 的 child 把 host 寫的數值包成 handle（`End::next`）、不檢查收到的 section 是哪一種；三個平台的 child 照環境變數或 rendezvous 拿它那一端；被 pipe 驅動的 process 收下 3、4 或命令列指名的 handle（`inherited_pipe`）；child 把 host 給它寫的 region 借成 slice 來畫（I10），相信 host 不寫那一塊；child 相信 host 給的檔案是 `ReadOnlyFile::open` 開的（K11 在 Windows 上靠開檔的方式），Windows 和 Linux 的 child 把 host 說是檔案的 handle 當成檔案（Linux 上 region 的那一邊不信：`map` 只收封住不能縮短的 memfd）。新增一處要寫在這裡 |
 | I6 | **平台的函式除了 `wait` 都不等**（啟動 child 的 `spawn` 不算：不在核心的鎖底下呼叫，Windows 上 child 放不進 job 時最多等它 1 秒） | 審查；`core/channel.rs` 在自己的鎖底下呼叫 `write` |
 | I7 | **一條通道只有一條 thread 讀**（IO thread） | `Endpoint` 交給迴圈時是搬進去的，只能交一次；Linux 的 waiter 拒絕已經被別的 waiter 等著的一端（`an_end_has_one_waiter`），Windows 的 pipe 只上得了一個 completion port |
 | I8 | **Windows 上進行中的操作讓它的通道活著**，直到它的通知從 port 取走：那之前 kernel 隨時會寫它的 `OVERLAPPED` 和緩衝區 | `hold`、`let_go` 和 `wait` 裡的 `Arc::from_raw` 成對（下面的表）。waiter 丟掉時還在進行的不釋放：刻意洩漏 |
@@ -93,7 +93,7 @@ macOS 那一層的測試在 `src/platform/macos/` 各檔的單元測試和 `crat
 
 | 地方 | 為什麼安全 |
 | --- | --- |
-| `file.rs` 的 `ReadOnlyFile::map`（`memmap2::Mmap::map`） | 只 map 成唯讀，`MappedFile` 拿著檔案，mapping 活多久檔案就開多久，借出去的 `&[u8]` 活不過 `MappedFile`。memmap2 要求的是 map 著的期間檔案不被別人寫或截短：Windows 上 K11；macOS 上是假設（K11：交的是沒有人寫的系統字型）；Linux 上還不交檔案。長度 0 的檔案是空的 mapping（memmap2 不呼叫系統） |
+| `file.rs` 的 `ReadOnlyFile::map`（`memmap2::Mmap::map`） | 只 map 成唯讀，`MappedFile` 拿著檔案，mapping 活多久檔案就開多久，借出去的 `&[u8]` 活不過 `MappedFile`。memmap2 要求的是 map 著的期間檔案不被別人寫或截短：Windows 上 K11；macOS 和 Linux 上是假設（K11：交的是沒有人寫的系統字型）。長度 0 的檔案是空的 mapping（memmap2 不呼叫系統） |
 
 ### macOS（`platform/macos/`）
 

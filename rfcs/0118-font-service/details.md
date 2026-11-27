@@ -84,7 +84,7 @@
   - `.ttc` 裡的 64 個字型：名字、分組、粗細、樣式、寬度全部對得上。
   - 對不上的 7 個 family 是另一種情況：**一個檔案在系統裡是好幾個 family**（可變字型的光學尺寸：`Segoe UI Variable` 的 Display、Text、Small 是同一個檔案，`Sitka` 的六個也是）。原型一個檔案只註冊一次，掛在第一個問到的名字底下，其餘的名字找不到。改成「單一字型的檔案，在系統裡屬於幾個 family 就各註冊一次」（多註冊 12 次）之後，0 個對不上。
   - **family 的其他名字**（28 個：同一個 family 在別的語言的寫法，例如 `ＭＳ 明朝` 是 `MS Mincho`）照檔案註冊的那一份不認得。所以名字到 family 的對應不能靠排版用的那個 `Collection` 的名字表：要由 machopo 照 Browser 給的名字的清單自己對（清單裡每個名字指到哪個 family），`FontFallbackMap::resolve` 現在是問 `Collection` 的。
-- **Linux：系統說了算，沒量**。`backend/fontconfig.rs` 的 family 名字、粗細、寬度、樣式、檔案裡的第幾個都來自 fontconfig 的 pattern。單一字型的檔案帶著 fontconfig 給的名字和屬性註冊，和 Windows 一樣；`.ttc`（Noto CJK 那一類）照檔案自己的，fontconfig 的名字通常就是檔案裡的英文名字，但 fontconfig 的設定可以改名、可以把粗細換算成別的值，要在 Linux 上比一次才知道。
+- **Linux：系統說了算，量過**。`backend/fontconfig.rs` 的 family 名字、粗細、寬度、樣式、檔案裡的第幾個都來自 fontconfig 的 pattern。單一字型的檔案帶著 fontconfig 給的名字和屬性註冊，和 Windows 一樣；`.ttc`（Noto CJK 那一類）照檔案自己的。fontconfig 的設定可以改名、可以把粗細換算成別的值，所以 2026-11-27 在 Fedora 45（kernel 7.3.3，fontconfig 的預設設定，578 個字型）上用 `fontcheck.rs` 比了一次：114 個 family（155 個名字）、306 個字型（276 個在單一字型的檔案裡，30 個在 `.ttc` 裡：`NotoSansCJK-VF.ttc`、`NotoSerifCJK-VF.ttc`、`NotoSansMonoCJK-VF.ttc` 這三個可變字型，每個檔案五個語言的 family），0 個對不上；沒有「一個檔案在系統裡是好幾個 family」的單一字型檔案。照檔案註冊的那一份不認得的其他名字 40 個（fontconfig 給的另一種寫法，例如 `Source Code Pro Light` 是 `Source Code Pro`、`STIX Two Math` 是 `STIX`），和 Windows 一樣由 Browser 給的名字的清單對。使用者自己的 fontconfig 設定改了 `.ttc` 的名字或粗細時會對不上，沒試。
 
 ## Chromium 的做法
 

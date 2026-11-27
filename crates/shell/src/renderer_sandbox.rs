@@ -4,18 +4,15 @@
 //! that. The mechanism is `sunaba`'s; this is machopo's list.
 //!
 //! A renderer process enters, then takes its channel and starts its
-//! threads. On Linux it finds the system's fonts first (their list is in
-//! files the sandbox then closes off, and it is entered while the process
-//! is one thread); on macOS entering is the first thing it does, and the
-//! system's fonts are its browser's to hand it. On Windows a renderer
-//! process is in its sandbox from its start: its browser starts it in one
+//! threads: on Linux and macOS entering is the first thing it does (on
+//! Linux, while the process is one thread). On Windows a renderer process
+//! is in its sandbox from its start: its browser starts it in one
 //! ([`sandbox`]), and entering is the renderer lowering itself the rest
-//! of the way. Elsewhere [`enter`] does nothing.
+//! of the way. Elsewhere [`enter`] does nothing. On all three the
+//! system's fonts are its browser's to open and hand it.
 
 use std::ffi::OsString;
-use std::path::PathBuf;
 use std::process::Command;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The renderer isn't put in a sandbox: the browser's switch, and the one
@@ -23,8 +20,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub const NO_SANDBOX_SWITCH: &str = "--no-sandbox";
 /// Only the built-in fonts: nothing of the system's is to be read.
 const TEST_FONTS_SWITCH: &str = "--test-fonts";
-/// A directory of the system's font files, in the next argument.
-const FONT_DIRECTORY_SWITCH: &str = "--font-directory";
 
 /// What tells the executable to test the renderer's sandbox from inside
 /// (its first argument, as `--type=renderer` is): it enters as a renderer
@@ -92,22 +87,6 @@ pub fn sandbox() -> Option<ipc::platform::Sandbox> {
 /// Whether this build puts a renderer process in a sandbox at all.
 pub const SUPPORTED: bool = cfg!(any(target_os = "linux", target_os = "macos", windows));
 
-/// Whether a renderer is told where the system's font files are
-/// ([`font_directories`]): where the sandbox lets files be read by the
-/// directories a policy names, and the system's fonts are wherever its
-/// configuration says. macOS keeps them in places a profile can name
-/// outright.
-pub const LISTS_FONT_DIRECTORIES: bool = cfg!(target_os = "linux");
-
-/// The directories the system's font files are in, found once for the
-/// browser: finding them opens every font file, which each renderer
-/// process would otherwise do as it starts. Fonts installed later are seen
-/// by the next browser.
-pub fn font_directories() -> &'static [PathBuf] {
-    static DIRECTORIES: OnceLock<Vec<PathBuf>> = OnceLock::new();
-    DIRECTORIES.get_or_init(|| browser::SystemFonts::find().directories())
-}
-
 /// What a renderer process is told on its command line, after
 /// `--type=renderer`: only what it has to know before it enters its
 /// sandbox, which is before it has a channel to be told anything on.
@@ -115,22 +94,15 @@ pub fn font_directories() -> &'static [PathBuf] {
 pub struct ChildSwitches {
     pub no_sandbox: bool,
     pub test_fonts: bool,
-    pub font_directories: Vec<PathBuf>,
 }
 
 impl ChildSwitches {
-    /// For a renderer of a browser with `test_fonts`: the browser's
-    /// `--no-sandbox`, and the font directories where they will be read.
+    /// For a renderer of a browser with `test_fonts`, and the browser's
+    /// `--no-sandbox`.
     pub fn for_renderer(test_fonts: bool) -> Self {
-        let no_sandbox = disabled();
         Self {
-            no_sandbox,
+            no_sandbox: disabled(),
             test_fonts,
-            font_directories: if LISTS_FONT_DIRECTORIES && !no_sandbox && !test_fonts {
-                font_directories().to_vec()
-            } else {
-                Vec::new()
-            },
         }
     }
 
@@ -141,64 +113,44 @@ impl ChildSwitches {
         if self.test_fonts {
             command.arg(TEST_FONTS_SWITCH);
         }
-        for directory in &self.font_directories {
-            command.arg(FONT_DIRECTORY_SWITCH).arg(directory);
-        }
     }
 
     /// From a renderer process's arguments after `--type=renderer`. What
     /// it doesn't know it leaves: the browser is this same executable.
     pub fn parse(arguments: impl IntoIterator<Item = OsString>) -> Self {
         let mut switches = Self::default();
-        let mut arguments = arguments.into_iter();
-        while let Some(argument) = arguments.next() {
+        for argument in arguments {
             if argument == NO_SANDBOX_SWITCH {
                 switches.no_sandbox = true;
             } else if argument == TEST_FONTS_SWITCH {
                 switches.test_fonts = true;
-            } else if argument == FONT_DIRECTORY_SWITCH
-                && let Some(directory) = arguments.next()
-            {
-                switches.font_directories.push(directory.into());
             }
         }
         switches
     }
 }
 
-/// A renderer process enters its sandbox, unless told not to. On Linux
-/// the system's fonts are found first (their list and what the system
-/// says of each, read from files the sandbox then closes off), which the
-/// renderer's main thread is handed in place of finding them itself; on
-/// macOS nothing comes first (the browser hands it the fonts). Called
-/// before the process has a second thread.
+/// A renderer process enters its sandbox, unless told not to: nothing
+/// comes first, whatever its fonts (the browser hands it the system's).
+/// Called before the process has a second thread.
 ///
 /// An error is why the process isn't in a sandbox, and it is not to go on.
-pub fn enter(switches: &ChildSwitches) -> Result<Option<browser::SystemFonts>, String> {
+pub fn enter(switches: &ChildSwitches) -> Result<(), String> {
     if switches.no_sandbox || !SUPPORTED {
-        return Ok(None);
+        return Ok(());
     }
+    #[cfg(target_os = "linux")]
+    sunaba::linux::enter(&linux::policy()).map_err(|error| error.to_string())?;
     #[cfg(target_os = "macos")]
     {
         let browser = std::os::unix::process::parent_id();
         sunaba::macos::enter(&macos::profile(browser)).map_err(|error| error.to_string())?;
-        Ok(None)
     }
     // The renderer was started in its sandbox; it gives up what it could
     // only be started with.
     #[cfg(windows)]
-    {
-        sunaba::windows::lower().map_err(|error| error.to_string())?;
-        Ok(None)
-    }
-    #[cfg(not(any(target_os = "macos", windows)))]
-    {
-        let fonts = (!switches.test_fonts).then(browser::SystemFonts::find);
-        #[cfg(target_os = "linux")]
-        sunaba::linux::enter(&linux::policy(&switches.font_directories))
-            .map_err(|error| error.to_string())?;
-        Ok(fonts)
-    }
+    sunaba::windows::lower().map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 /// The executable as [`PROBE_SWITCH`] has it: `arguments` are a renderer's
@@ -469,23 +421,19 @@ pub mod macos {
 
 #[cfg(target_os = "linux")]
 pub mod linux {
-    use std::path::PathBuf;
-
     use sunaba::linux::{Arg, Policy, Test};
 
     fn int(value: libc::c_int) -> u64 {
         u64::from(value.unsigned_abs())
     }
 
-    /// The renderer's policy: the font files and three files whose lack
-    /// would change what a page sees; the system calls V8, wasmtime, the
-    /// allocators, the channel and the standard library make. The rest
-    /// ends the process.
-    pub fn policy(font_directories: &[PathBuf]) -> Policy {
+    /// The renderer's policy: the few files whose lack would change what a
+    /// page sees (no font: the browser opens the system's and hands them
+    /// over); the system calls V8, wasmtime, the allocators, the channel
+    /// and the standard library make. The rest ends the process. The same
+    /// whatever its fonts.
+    pub fn policy() -> Policy {
         let mut policy = Policy::new();
-        for directory in font_directories {
-            policy.read_only(directory);
-        }
         policy
             // The number of CPUs (glibc's `get_nprocs`, for V8's and
             // abseil's thread counts), V8's random seed, the time zone.
@@ -714,20 +662,14 @@ mod tests {
 
     #[test]
     fn a_renderers_switches_come_back_from_its_command_line() {
-        let switches = ChildSwitches {
-            no_sandbox: false,
-            test_fonts: false,
-            font_directories: vec!["/usr/share/fonts/a b".into(), "/home/u/.fonts".into()],
-        };
+        let switches = ChildSwitches::default();
         let mut command = Command::new("machopo");
         switches.append_to(&mut command);
-        let arguments: Vec<OsString> = command.get_args().map(OsString::from).collect();
-        assert_eq!(ChildSwitches::parse(arguments), switches);
+        assert_eq!(command.get_args().count(), 0);
 
         let switches = ChildSwitches {
             no_sandbox: true,
             test_fonts: true,
-            font_directories: Vec::new(),
         };
         let mut command = Command::new("machopo");
         switches.append_to(&mut command);
@@ -737,31 +679,21 @@ mod tests {
     }
 
     #[test]
-    fn a_renderer_is_handed_the_font_directories_unless_it_reads_none() {
+    fn a_renderer_is_told_its_browsers_fonts_and_sandbox() {
         assert_eq!(
             ChildSwitches::for_renderer(true),
             ChildSwitches {
                 no_sandbox: false,
                 test_fonts: true,
-                font_directories: Vec::new(),
             }
         );
-        let system = ChildSwitches::for_renderer(false);
-        assert!(!system.test_fonts);
-        let expected = if LISTS_FONT_DIRECTORIES {
-            font_directories()
-        } else {
-            &[]
-        };
-        assert_eq!(system.font_directories, expected);
+        assert_eq!(ChildSwitches::for_renderer(false), ChildSwitches::default());
     }
 
     #[test]
     fn a_renderer_with_no_switches_is_sandboxed_with_the_systems_fonts() {
         assert_eq!(parsed(&[]), ChildSwitches::default());
         assert!(!parsed(&["--something-else"]).no_sandbox);
-        // A directory switch with nothing after it names none.
-        assert!(parsed(&["--font-directory"]).font_directories.is_empty());
     }
 
     #[cfg(windows)]

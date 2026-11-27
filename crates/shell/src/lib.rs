@@ -60,10 +60,8 @@ pub const RENDERER_PROCESS_SWITCH: &str = "--type=renderer";
 pub const NO_CHANNEL_EXIT: u8 = 2;
 
 /// A renderer process as it has started, before it is anything else: in
-/// its sandbox, with what it had to find before entering.
-pub struct RendererStart {
-    system_fonts: Option<browser::SystemFonts>,
-}
+/// its sandbox.
+pub struct RendererStart(());
 
 /// The first thing a renderer process does, before it has a second thread
 /// (a log, a trace): it enters its sandbox, as its arguments after
@@ -72,7 +70,7 @@ pub struct RendererStart {
 pub fn start_renderer() -> Result<RendererStart, u8> {
     let switches = renderer_sandbox::ChildSwitches::parse(std::env::args_os().skip(2));
     match renderer_sandbox::enter(&switches) {
-        Ok(system_fonts) => Ok(RendererStart { system_fonts }),
+        Ok(()) => Ok(RendererStart(())),
         Err(error) => {
             eprintln!(
                 "machopo: the renderer process isn't started: it couldn't enter its sandbox: \
@@ -88,7 +86,7 @@ pub fn start_renderer() -> Result<RendererStart, u8> {
 /// end of the channel its browser started it with, and the renderer run
 /// on it with this executable's script engines. What the process exits
 /// with.
-pub fn renderer_main(start: RendererStart) -> u8 {
+pub fn renderer_main(_: RendererStart) -> u8 {
     let Some(channel) = ipc::platform::inherited() else {
         eprintln!(
             "machopo: {RENDERER_PROCESS_SWITCH} is how machopo starts its own renderers: \
@@ -96,7 +94,7 @@ pub fn renderer_main(start: RendererStart) -> u8 {
         );
         return NO_CHANNEL_EXIT;
     };
-    match browser::run_child_process(channel, SCRIPT_ENGINES, start.system_fonts) {
+    match browser::run_child_process(channel, SCRIPT_ENGINES) {
         browser::ChildExit::Ended => 0,
         browser::ChildExit::NotStarted => 3,
         browser::ChildExit::Crashed => 4,
@@ -111,15 +109,6 @@ pub fn renderer_main(start: RendererStart) -> u8 {
 pub fn renderer_launcher(process_per_tab: bool, test_fonts: bool) -> browser::RendererLauncher {
     if !process_per_tab {
         return browser::RendererLauncher::InProcess(SCRIPT_ENGINES);
-    }
-    // The fonts' directories are found off the thread that starts the
-    // first renderer, which then waits only for what is left of it.
-    if renderer_sandbox::LISTS_FONT_DIRECTORIES && !renderer_sandbox::disabled() && !test_fonts {
-        let _ = std::thread::Builder::new()
-            .name("FontDirectories".into())
-            .spawn(|| {
-                renderer_sandbox::font_directories();
-            });
     }
     browser::RendererLauncher::Process(std::sync::Arc::new(move || {
         // The executable as it was started: one replaced on disk since is

@@ -317,8 +317,8 @@ let bytes: MappedFile = files.into_iter().next().unwrap().map().unwrap();
 - **只有能附 handle 的一端送**（`Config::may_attach`）：另一端送是 `SendError::Refused`。一則訊息最多 `MAX_HANDLES`（16）個，多的整則送不出去（`Refused`），通道照常。
 - **送出去的值還是這一端的**：對方拿到的是自己的 handle，兩邊各自關。
 - **拿到的是 map 好的位元組，不是路徑**：`map` 只 map 一般的檔案，長度 0 的是空的。`MappedFile` 拿著檔案，map 多久就開多久。
-- **map 著的期間沒有人寫它**：Windows 上 `open` 開檔時只允許別人讀和刪除（改名、刪除後原本的位元組不變），這在檔案的任何一個 handle 還開著時都成立，兩端的 handle 是同一個檔案物件。macOS 上沒有這種開法，是假設（交的是系統的字型）；Linux 上還不交檔案。為什麼重要在 `crates/ipc/soundness.md` 的 K11。
-- **哪個平台交得了**：Windows（`platform::windows::channel`，host 往 child）、macOS（`platform::macos::fileport`，包成 port 跟著訊息搬過去）和同一個 process 裡的 `local`；Linux 的平台層還不交（`send_file` 回 `None`，值送不出去）。
+- **map 著的期間沒有人寫它**：Windows 上 `open` 開檔時只允許別人讀和刪除（改名、刪除後原本的位元組不變），這在檔案的任何一個 handle 還開著時都成立，兩端的 handle 是同一個檔案物件。macOS 和 Linux 上沒有這種開法，是假設（交的是系統的字型）。為什麼重要在 `crates/ipc/soundness.md` 的 K11。
+- **哪個平台交得了**：Windows（`platform::windows::channel`，host 往 child）、macOS（`platform::macos::fileport`，包成 port 跟著訊息搬過去）、Linux（`platform::linux::channel`，fd 跟著訊息過去）和同一個 process 裡的 `local`。
 - 給上層的訊息帶的 handle，值沒拿走的跟著訊息關掉，不是壞訊息。
 
 ## `local`
@@ -452,7 +452,7 @@ let rights = rendezvous::fetch(std::os::unix::process::parent_id(), wait)?;
 
 ### `platform::linux::channel`
 
-通道的一端（Chromium 的 `ChannelPosix`）是一條 Unix stream socket：核心的訊息是串流裡的位元組，寫多少算多少、讀到多少交多少，訊息由核心自己切出來。handle 是 fd（region 的 memfd），跟著它那一則的位元組走（`SCM_RIGHTS`）。
+通道的一端（Chromium 的 `ChannelPosix`）是一條 Unix stream socket：核心的訊息是串流裡的位元組，寫多少算多少、讀到多少交多少，訊息由核心自己切出來。handle 是 fd（region 的 memfd、開著的檔案），跟著它那一則的位元組走（`SCM_RIGHTS`）。對方拿到的是同一個開著的檔案（同一個 offset、同樣只能讀），不是路徑；收到的是 region 還是檔案，照 host 的值說的（和 Windows 一樣），不是檔案的 fd 在 `ReadOnlyFile::map` map 不成，不是 region 的（沒有封住不能縮短的）`map` 不收。
 
 - **child 怎麼拿到它那一端**：`spawn` 用 `socketpair` 建兩端（都是 close-on-exec），在 `Command` 的 `pre_exec` 裡，也就是 fork 之後、exec 之前、只在 child 的 process 裡，拿掉 child 那一端的 close-on-exec，號碼放在環境變數 `MACHOPO_IPC_FD`。所以只有這個 child 繼承到，同時啟動的別的 child 拿不到；host 開著的別的東西（其他 child 的通道、region）它也拿不到。`inherited` 讀環境變數，確認那個號碼是 `AF_UNIX` 的 stream socket（0、1、2 不算），收下、重新設 close-on-exec；只拿一次。變數留在 child 的環境裡（在 Linux 上拿掉它只有沒有別的 thread 時才安全），它啟動的 process 看得到，但那個號碼在那裡是關著的，拿不到通道。
   - 號碼不是秘密：fd 只在自己的 process 裡有意義。不放在命令列：child 可能是有自己參數的程式（測試的 child 就是）。
@@ -595,7 +595,7 @@ python3 scripts/test.py ipc tla      # crates/ipc/tla/ 的三個 TLA+ 模型（T
 
 `tests/it/unix_exit.rs`（只有 macOS 和 Linux；測試把自己再執行一次當成 child）：child 的一條 thread 卡在迴圈裡、stdout 的緩衝區裡還有沒寫出去的字時，另一條 thread 呼叫 `terminate_current_process_immediately`：process 以給的代碼結束，緩衝區裡的沒有被寫出去。
 
-`src/platform/linux/channel.rs` 的單元測試（只在 Linux；同一個 process 裡的兩端，各有自己的 waiter）：一端寫的另一端照順序讀到，比一次讀的量長的分好幾次、位元組一樣；沒有位元組的寫入不帶走 handle；handle 跟著它那一則到、寫的一端的關掉了、收到的帶 close-on-exec、map 得到同一塊記憶體；16 個 handle 照順序到；17 個不送；對方一次送 17 個和 64 個都當成對方不在了；「可寫」只在寫入被擋之後說一次，沒被擋不說，有 waiter 之前被擋的加入之後說，和位元組同時來時兩個都說；對方不在了排在它送的東西後面，之後的寫入被拒絕（process 沒有被 signal 結束）；shut 的一端對方知道、兩邊都寫不進去、不能再被等；一個 waiter 分得出三條通道，移掉的不再說、它被擋的寫入不動原本的 waiter、可以換一個 waiter；移掉的 socket 真的離開 epoll（看 `/proc/self/fdinfo`）；一條通道只有一個 waiter；打斷叫五次只說一次、從別的 thread 打斷正在等的；waiter 先結束，通道的寫入照常被擋。整個單元測試的 binary 重複跑 3000 次都過。
+`src/platform/linux/channel.rs` 的單元測試（只在 Linux；同一個 process 裡的兩端，各有自己的 waiter）：一端寫的另一端照順序讀到，比一次讀的量長的分好幾次、位元組一樣；沒有位元組的寫入不帶走 handle；handle 跟著它那一則到、寫的一端的關掉了、收到的帶 close-on-exec、map 得到同一塊記憶體；送的檔案在對方是同一個開著的檔案（共用 offset）、只能讀、帶 close-on-exec，名字已經刪掉的也一樣；16 個 handle 照順序到；17 個不送；對方一次送 17 個和 64 個都當成對方不在了；「可寫」只在寫入被擋之後說一次，沒被擋不說，有 waiter 之前被擋的加入之後說，和位元組同時來時兩個都說；對方不在了排在它送的東西後面，之後的寫入被拒絕（process 沒有被 signal 結束）；shut 的一端對方知道、兩邊都寫不進去、不能再被等；一個 waiter 分得出三條通道，移掉的不再說、它被擋的寫入不動原本的 waiter、可以換一個 waiter；移掉的 socket 真的離開 epoll（看 `/proc/self/fdinfo`）；一條通道只有一個 waiter；打斷叫五次只說一次、從別的 thread 打斷正在等的；waiter 先結束，通道的寫入照常被擋。整個單元測試的 binary 重複跑 3000 次都過。
 
 `tests/it/linux_channel.rs`（只有 Linux 的通道有的：child 怎麼拿到它那一端）：child 只多拿到一個 fd，就是它的通道，host 開著的別的通道和 region 都不在它手上，拿的時候沒有多開或少開 fd，拿到的帶 close-on-exec，第二次拿不到；`Command` 活得比 child 久，host 照樣知道 child 結束了；環境變數沒有、不是數字、是 0 到 2（連 stdin 就是一條 Unix stream socket 時）、沒開著、開著但是 memfd、datagram 的 Unix socket、TCP 和 UDP 的 socket，都拿不到；是 Unix stream socket 就拿得到。
 

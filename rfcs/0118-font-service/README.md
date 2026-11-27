@@ -1,7 +1,7 @@
 # RFC 0118：字型服務（系統字型由 Browser 給 renderer）
 
 - 開始日期：2026-11-26
-- 狀態：🚧 已排程：2026-11-27（第 1、2、4 段做完；第 3 段：Linux；進度在 `progress.md`）
+- 狀態：🚧 已排程：2026-11-27（第 1 到 4 段做完；第 5 段：Windows 的 restricted token，放在這份還是另一份待決定；進度在 `progress.md`）
 - 細節：`details.md`
 
 ## 摘要
@@ -71,7 +71,7 @@ fontique 的系統後端是編譯時選的一個型別（`backend::SystemFonts`�
 | Q1 | **fork 加一個「字型來源由外面給」的介面**：`Collection` 可以用一個實作了那三樣的物件建（trait），系統後端是它的一種實作 | renderer 那一側只要實作這個 trait（問 Browser）；`Collection` 其餘的行為（延後載入、快取、比對）不變；介面小，寫成可以送上游的樣子 | 改 fork：fontique 的 `FamilyInfo`、`FontInfo` 現在要從字型的內容建，介面要讓外面給得出這兩樣；上游收不收不知道 |
 | Q2 | **不動 fork**：renderer 的 `Collection` 不帶系統字型（`system_fonts: false`），machopo 在上面一層照需要把字型註冊進去（`register_fonts`）、把 fallback 填進去（`set_fallbacks`） | fork 不多一個 commit；原型做過，畫出來相同 | fallback 是 parley 在 shaping 裡面才問的，machopo 要在 shaping 之前先掃文字有哪些 script、先填好；註冊一個 family 要它每個字型的內容，交過來的檔案比現在開的多（一頁 35 到 41 個，現在 3 到 12 個）；`.ttc` 裡的字型只能照它自己的名字和屬性註冊 |
 
-看法（2026-11-26，原型之後改的）：**先照 Q2**。原本的看法是 Q1，理由是 Q2 要把 parley 裡面的一段邏輯複製到外面；讀了 parley 問 fallback 的地方，要複製的只是「這段文字有哪些 script，加上漢字」，做了原型（`details.md` 的「不改 fork 的原型」）：五頁的截圖都和現在逐 byte 相同，fork 一行沒動。Q2 留下的風險：猜漏了是安靜的錯（少一個 fallback、畫出豆腐），parley 改了問法時 machopo 要跟著改；用一個測試守（同一組文字，兩種 `Collection` 排出來的字形逐一比）。原本擔心 `.ttc` 裡的字型不能帶著系統給的名字和屬性註冊；查了之後（`details.md` 的「照檔案註冊和系統說的對不對得上（每個平台）」）：macOS 的後端本來就是自己掃檔案，照檔案註冊一定一樣；Windows 上整台機器比過，`.ttc` 的都對得上，對不上的是「一個檔案在系統裡是好幾個 family」（各註冊一次就好）和 family 的其他名字（名字由 machopo 照 Browser 的清單自己對，不靠 `Collection` 的名字表）；Linux 的 `.ttc` 沒量，要在那裡比一次，對不上時才是改 fork 的理由（加一個「註冊檔案裡的某一個字型」的小介面）。
+看法（2026-11-26，原型之後改的）：**先照 Q2**。原本的看法是 Q1，理由是 Q2 要把 parley 裡面的一段邏輯複製到外面；讀了 parley 問 fallback 的地方，要複製的只是「這段文字有哪些 script，加上漢字」，做了原型（`details.md` 的「不改 fork 的原型」）：五頁的截圖都和現在逐 byte 相同，fork 一行沒動。Q2 留下的風險：猜漏了是安靜的錯（少一個 fallback、畫出豆腐），parley 改了問法時 machopo 要跟著改；用一個測試守（同一組文字，兩種 `Collection` 排出來的字形逐一比）。原本擔心 `.ttc` 裡的字型不能帶著系統給的名字和屬性註冊；查了之後（`details.md` 的「照檔案註冊和系統說的對不對得上（每個平台）」）：macOS 的後端本來就是自己掃檔案，照檔案註冊一定一樣；Windows 上整台機器比過，`.ttc` 的都對得上，對不上的是「一個檔案在系統裡是好幾個 family」（各註冊一次就好）和 family 的其他名字（名字由 machopo 照 Browser 的清單自己對，不靠 `Collection` 的名字表）；Linux 上整台機器比過（2026-11-27，Fedora 45），可變字型的 `.ttc` 也都對得上，fork 不用改。
 
 ### Browser 和 renderer 之間問什麼
 
@@ -166,7 +166,7 @@ fontique 建一個 family 時要每個字型的寬度、樣式、粗細、可變
 
 ## 已決定的事項
 
-1. **fontique 的 fork 不改：renderer 的 `Collection` 不帶系統字型，由 machopo 照需要填（Q2）**（2026-11-26，使用者決定；先做了原型和整台機器的比對才定的，`details.md` 的「不改 fork 的原型」「照檔案註冊和系統說的對不對得上（每個平台）」）：family 在 machopo 把 CSS 的 `font-family` 對到名字的那一步向 Browser 要、用 `register_fonts` 註冊；generic family 用到時 `set_generic_families`；fallback 在文字交給 parley 之前掃它的字元，每一種還沒問過的 script 加上漢字，問好之後 `set_fallbacks`。跟著定的兩點：單一字型的檔案，在系統裡屬於幾個 family 就各註冊一次，帶著系統給的 family 名和屬性；名字對到哪個 family 由 machopo 照 Browser 給的清單自己對，不靠排版用的 `Collection` 的名字表。理由：原型的五頁截圖和現在逐 byte 相同；Windows 上 104 個 family 逐一比過都對得上；macOS 的後端本來就是自己掃檔案，照檔案註冊一定一樣；量到的代價是每個 renderer 多交二三十個字型檔，合計不到 1 ms；fork 不多一個要長期帶著、每次跟上游都可能衝突的 commit。代價：字型的屬性只能由 renderer 從檔案讀（P1），一個 family 第一次用到時它全部的檔案都要交過來；「掃文字有哪些 script」和 parley 問 fallback 的方式綁在一起，parley 改了問法時 machopo 要跟著改（猜漏了是少一個 fallback、畫出豆腐，不會報錯），用一個測試守：同一組文字，machopo 填的和直接問系統的兩種 `Collection` 排出來的字形逐一比。不選在 fork 加「字型來源由外面給」的介面（Q1：fallback 用到才問、沒有猜的問題，可以只要用到的那幾個粗細；但要一個寫成能送上游的 commit，上游收不收不知道）。之後才會回頭改 fork 的情況：Linux 上被 fontconfig 的設定改過名字或粗細的 `.ttc`（沒量；那時加的是「註冊檔案裡的某一個字型、帶上指定的名字和屬性」的小函式）。
+1. **fontique 的 fork 不改：renderer 的 `Collection` 不帶系統字型，由 machopo 照需要填（Q2）**（2026-11-26，使用者決定；先做了原型和整台機器的比對才定的，`details.md` 的「不改 fork 的原型」「照檔案註冊和系統說的對不對得上（每個平台）」）：family 在 machopo 把 CSS 的 `font-family` 對到名字的那一步向 Browser 要、用 `register_fonts` 註冊；generic family 用到時 `set_generic_families`；fallback 在文字交給 parley 之前掃它的字元，每一種還沒問過的 script 加上漢字，問好之後 `set_fallbacks`。跟著定的兩點：單一字型的檔案，在系統裡屬於幾個 family 就各註冊一次，帶著系統給的 family 名和屬性；名字對到哪個 family 由 machopo 照 Browser 給的清單自己對，不靠排版用的 `Collection` 的名字表。理由：原型的五頁截圖和現在逐 byte 相同；Windows 上 104 個 family 逐一比過都對得上；macOS 的後端本來就是自己掃檔案，照檔案註冊一定一樣；量到的代價是每個 renderer 多交二三十個字型檔，合計不到 1 ms；fork 不多一個要長期帶著、每次跟上游都可能衝突的 commit。代價：字型的屬性只能由 renderer 從檔案讀（P1），一個 family 第一次用到時它全部的檔案都要交過來；「掃文字有哪些 script」和 parley 問 fallback 的方式綁在一起，parley 改了問法時 machopo 要跟著改（猜漏了是少一個 fallback、畫出豆腐，不會報錯），用一個測試守：同一組文字，machopo 填的和直接問系統的兩種 `Collection` 排出來的字形逐一比。不選在 fork 加「字型來源由外面給」的介面（Q1：fallback 用到才問、沒有猜的問題，可以只要用到的那幾個粗細；但要一個寫成能送上游的 commit，上游收不收不知道）。之後才會回頭改 fork 的情況：Linux 上被 fontconfig 的設定改過名字或粗細的 `.ttc`（2026-11-27 在 Fedora 45 的預設設定上量過，對得上；使用者自己的設定改了它們時才會對不上，那時加的是「註冊檔案裡的某一個字型、帶上指定的名字和屬性」的小函式）。
 2. **Browser 回答，renderer 記著；family 的名字的清單在 renderer 啟動時一次給（A3）**（2026-11-27，使用者決定）：renderer 的第一則訊息裡有每個名字（含同一個 family 的其他寫法）指到哪個 family、generic family 各是哪幾個；排版遇到一個名字時自己查表，有才向 Browser 要那個 family 的字型；遇到一種新的 script 時問 fallback 是哪個 family；要到的都記著，同一個 process 不問第二次。問的都是同步的（renderer 現有的 `sync_call`）。理由：答案和現在一樣（Browser 用現在同一份 fontique 的系統後端回答）；量到一般的頁面每個 process 約 10 個問題、最多的一頁 31 個，一次來回約 27 微秒，合計不到 1 ms（`details.md`）；名字本來就要由 machopo 自己對（第 1 條），啟動時給齊比邊問邊長直接；不在這台機器上的名字（CSS 的字型清單常常列一串）不用各問一次；renderer 不用自己建字型的清單。代價：Browser 執行期間新裝的字型，已經開著的分頁看不到，新的分頁才看得到（現在 macOS 和 Windows 上看得到，Linux 上看不到）；字型變了時通知 renderer 重拿清單記在「之後的可能」。不選全部用到才問（A1，Chromium：新裝的字型立刻看得到，不在的名字每個多一次來回）。不選整份清單放共用記憶體（A2，Firefox：省下的是那不到 1 ms，要一套跨 process 的表，而且 fallback 改成 renderer 自己照字找，答案會和系統的不同）。
 3. **字型檔的內容：Browser 開好，把開著的檔案交給 renderer，renderer 自己 mmap（D1）**（2026-11-27，使用者決定）：`ipc` 的通道底層本來就帶得了這種東西（Linux 是 file descriptor、Windows 是 handle、macOS 是 Mach port），訊息這一層多一種「開著的檔案」；macOS 把 file descriptor 包成 port、另一側還原。renderer 拿到的是那個檔案的讀取權，拿不到路徑；map 了之後不放（已經交出去的字型還指著它）。理由：不多用記憶體（同一個字型檔在每個 process 裡是同一批頁面，用到才載入）；三個平台的 sandbox 都不擋已經開著的檔案。不選複製進共用記憶體（D2：不改 fork 之後一個 renderer 要三四十個字型檔，中日韓的一個十幾到三十 MB，每個分頁都多一份）。Chromium 的 `FontDataService` 優先給檔案的 handle，拿不到檔案時才複製；machopo 的系統字型都有路徑，那條退路不做。要驗的：macOS 上 sandbox 裡的 renderer 還原那個 port、mmap 它。
 4. **三個平台都做，分段，Windows 先（R1）**（2026-11-27，使用者決定）：Browser 的字型服務和 renderer 那一側不分平台（Browser 用 fontique 回答，哪個平台由 fontique 自己知道），做一次；每個平台是「分階段」的一段：那個平台的 renderer 切過去、sandbox 跟著收緊、在那個平台上驗。Windows 先：它是唯一不做就上不了下一級 sandbox 的，原型和比對也是在它上面做的。理由：只切一個平台的話，文字的路永遠分成「經過 Browser 的」和「直接問系統的」兩種，之後每個文字的問題都要分兩種看、兩條路都要測試。代價：Linux 和 macOS 的那兩段要在那兩台機器上做；macOS 那一段收益最小、未知最多（Chromium 在 macOS 上沒有字型服務，renderer 直接讀字型的目錄、連系統的字型服務；`ipc` 在 macOS 上傳檔案沒驗過）。做完之後 macOS 的 renderer 比 Chromium 的緊。不選只做 Windows（R2：工作量最少、都驗過）。不選 Windows 和 Linux、macOS 不做（R3：對齊 Chromium）。
@@ -186,13 +186,12 @@ fontique 建一個 family 時要每個字型的寬度、樣式、粗細、可變
 
 探測之前要定的四條都定了（已決定的事項第 1 到 4 條），第 1 段的三條也定了（第 5 到 7 條）。每一段開始前只定那一段的。
 
-第 2 段的五件定了（第 8 到 10 條，和它們後面的兩件），做的時候多出的一件也定了（第 11 條）。第 4 段的一件也定了（第 12 條）。
+第 2 段的五件定了（第 8 到 10 條，和它們後面的兩件），做的時候多出的一件也定了（第 11 條）。第 4 段的一件也定了（第 12 條）。第 3 段沒有要決定的事：`.ttc` 對得上（`details.md`），fd 照第 3、5 條跟著訊息過去（`SCM_RIGHTS`，region 本來就這樣交；Chromium 的 `ChannelPosix` 也是），K11 在 Linux 上和 macOS 一樣是假設（第 5 條已經寫了）。
 
 做的時候照設計細化、不用決定的：Browser 檢查檔案的編號只看「字型 thread 給過這個編號」，不看「給過這個 renderer」：每個檔案都能經過問它的 family 拿到，照 renderer 分開記換不到什麼，還要每個 renderer 一張表。
 
 之後的段落：
 
-- Linux：被 fontconfig 的設定改過名字或粗細的 `.ttc` 對不對得上（第 1 條留的那個情況）。
 - Windows 的 restricted token 放在這份的最後一段，還是另一份。
 
 ## 之後的可能

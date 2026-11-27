@@ -54,29 +54,38 @@ fn a_renderer_process_told_no_sandbox_is_in_none() {
     assert_eq!(renderer.browser_goes(), Some(0));
 }
 
-/// The system's fonts are found before the process enters and handed to
-/// the renderer: in the sandbox it lays text out as wide as outside it,
-/// with the same fonts. (Found inside, there would be none: the system's
-/// list of them can't be read there.)
+/// The system's fonts are the browser's to open and hand the renderer: in
+/// the sandbox, which reads none of them, it lays text out as wide as
+/// outside it and as a renderer on a thread of the browser's does, with
+/// the same fonts, the same fallbacks and the same time zone. (Found
+/// inside, there would be none: the system's list of them can't be read
+/// there.)
 #[test]
-fn a_sandboxed_renderer_lays_text_out_with_the_systems_fonts() {
-    if shell::renderer_sandbox::font_directories().is_empty() {
-        // A machine with no fonts has nothing to tell the two apart.
-        return;
-    }
-    let page = "data:text/html,<span id=s style='font: 40px serif'>Sandbox mmmm</span>\
-        <span id=t style='font: 40px monospace'>Sandbox mmmm</span>";
-    let widths = |args: &[&str]| {
+fn a_sandboxed_renderer_shows_a_page_as_one_outside_does() {
+    let page = "data:text/html;charset=utf-8,<span style='font: 40px serif'>Sandbox mmmm</span>\
+        <span style='font: 40px monospace'>Sandbox mmmm</span>\
+        <span style='font: 40px sans-serif'>中文字</span><span style='font: 40px serif'>日本語</span>\
+        <span style='font: 40px serif'>한국어</span><span style='font: 40px serif'>العربية</span>\
+        <span style='font: 40px serif'>ไทย</span><span style='font: 40px system-ui'>System</span>";
+    let seen = |args: &[&str]| {
         let mut browser = Browser::start_with_system_fonts(args);
         let session = browser.attach();
         browser.navigate(&session, page);
-        let read = "return [s.offsetWidth, t.offsetWidth]";
+        let read = "return [[...document.querySelectorAll('span')].map(s => s.offsetWidth), \
+            Intl.DateTimeFormat().resolvedOptions().timeZone, new Date(0).getTimezoneOffset()]";
         script(&mut browser, &session, read, serde_json::json!([])).unwrap()
     };
-    let inside = widths(&["--process-per-tab"]);
-    assert!(inside[0].as_f64().unwrap() > 100.0, "{inside}");
-    assert!(inside[1].as_f64().unwrap() > 100.0, "{inside}");
-    assert_eq!(inside, widths(&["--process-per-tab", "--no-sandbox"]));
+    let on_a_thread = seen(&["--single-process"]);
+    let widths = on_a_thread[0].as_array().unwrap();
+    assert_eq!(widths.len(), 8);
+    if widths[0].as_f64().unwrap() == 0.0 {
+        // A machine with no fonts has nothing to tell them apart.
+        return;
+    }
+    assert!(widths[0].as_f64().unwrap() > 100.0, "{on_a_thread}");
+    assert!(widths[1].as_f64().unwrap() > 100.0, "{on_a_thread}");
+    assert_eq!(seen(&["--process-per-tab"]), on_a_thread);
+    assert_eq!(seen(&["--process-per-tab", "--no-sandbox"]), on_a_thread);
 }
 
 /// What the probe did: its line (`ok N`, `error ERRNO`) or the signal that
@@ -144,7 +153,7 @@ fn directory(name: &str) -> (PathBuf, String) {
 fn the_probe_enters_and_makes_a_thread() {
     assert_eq!(probe(&["nothing"]), Outcome::Ok(0));
     assert_eq!(probe(&["thread", "nothing"]), Outcome::Ok(0));
-    // With the system's fonts found first, as a renderer for a window.
+    // With the system's fonts, as a renderer for a window.
     assert_eq!(probe_with(&[], &["nothing"]).0, Outcome::Ok(0));
 }
 
@@ -163,30 +172,67 @@ fn a_renderer_reads_no_file_of_the_users() {
     assert_eq!(probe(&["thread", "read", &file]), EACCES);
 }
 
+/// The first file found under `directory`, depth first.
+fn a_file_under(directory: &std::path::Path) -> Option<PathBuf> {
+    let mut entries: Vec<_> = std::fs::read_dir(directory).ok()?.flatten().collect();
+    entries.sort_by_key(std::fs::DirEntry::path);
+    entries.into_iter().find_map(|entry| {
+        let path = entry.path();
+        if path.is_file() {
+            Some(path)
+        } else {
+            a_file_under(&path)
+        }
+    })
+}
+
 #[test]
-fn a_renderer_reads_the_font_directories_it_was_given_and_the_time_zone() {
-    let (dir, file) = directory("fonts");
-    let fonts = ["--font-directory", dir.to_str().unwrap()];
-    assert_eq!(probe_with(&fonts, &["read", &file]).0, Outcome::Ok(8));
-    assert_eq!(
-        probe_with(&fonts, &["list", dir.to_str().unwrap()]).0,
-        Outcome::Ok(1)
-    );
-    // Not without being given it; and not with only the built-in fonts.
-    assert_eq!(probe_with(&[], &["read", &file]).0, EACCES);
-    if std::path::Path::new("/etc/localtime").exists() {
-        assert!(matches!(probe(&["read", "/etc/localtime"]), Outcome::Ok(_)));
+fn a_renderer_reads_no_font_of_the_systems_but_the_time_zone() {
+    let home = std::env::var("HOME").unwrap_or_default();
+    // Everyone's fonts and the user's, fontconfig's configuration and its
+    // caches: what fontconfig reads to find them.
+    let directories = [
+        "/usr/share/fonts".to_owned(),
+        "/usr/local/share/fonts".to_owned(),
+        format!("{home}/.local/share/fonts"),
+        format!("{home}/.fonts"),
+        "/etc/fonts".to_owned(),
+        "/var/cache/fontconfig".to_owned(),
+        "/usr/lib/fontconfig/cache".to_owned(),
+        format!("{home}/.cache/fontconfig"),
+    ];
+    let font = a_file_under(std::path::Path::new("/usr/share/fonts"));
+    for switches in [&[][..], &["--test-fonts"][..]] {
+        for directory in &directories {
+            if std::path::Path::new(directory).is_dir() {
+                assert_eq!(
+                    probe_with(switches, &["list", directory]).0,
+                    EACCES,
+                    "{directory} {switches:?}"
+                );
+            }
+        }
+        if let Some(font) = &font {
+            assert_eq!(
+                probe_with(switches, &["read", font.to_str().unwrap()]).0,
+                EACCES,
+                "{font:?}"
+            );
+        }
+        if std::path::Path::new("/etc/localtime").exists() {
+            assert!(matches!(
+                probe_with(switches, &["read", "/etc/localtime"]).0,
+                Outcome::Ok(_)
+            ));
+        }
     }
 }
 
 #[test]
 fn a_renderer_changes_nothing_in_the_file_system() {
     let (dir, file) = directory("write");
-    // Where it can read as much as where it can't.
-    for switches in [
-        &["--font-directory", dir.to_str().unwrap()][..],
-        &["--test-fonts"][..],
-    ] {
+    // With the system's fonts as much as with the built-in ones.
+    for switches in [&[][..], &["--test-fonts"][..]] {
         let new = dir.join("new.txt");
         let attempts: [&[&str]; 5] = [
             &["write", new.to_str().unwrap()],

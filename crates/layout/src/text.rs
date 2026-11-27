@@ -58,36 +58,14 @@ pub struct TextContext {
 }
 
 /// The system's fonts, found: the list of them and what the operating
-/// system says of each (on Linux, fontconfig's configuration and caches,
-/// read here and not again). A process that is about to lose the file
-/// system finds them first, then keeps only the font files' directories
-/// readable ([`Self::directories`]).
+/// system says of each (fontconfig's configuration and caches, CoreText's
+/// or DirectWrite's collection). Where a browser serves them, its font
+/// thread finds them, and no renderer does.
 pub struct SystemFonts(FontContext);
 
 impl SystemFonts {
     pub fn find() -> Self {
         Self(FontContext::new())
-    }
-
-    /// The directories the system's font files are in: all a text needs
-    /// to read from here on.
-    pub fn directories(&mut self) -> Vec<std::path::PathBuf> {
-        let collection = &mut self.0.collection;
-        let families: Vec<_> = collection.family_ids().collect();
-        let mut directories = std::collections::BTreeSet::new();
-        for family in families {
-            let Some(family) = collection.family(family) else {
-                continue;
-            };
-            for font in family.fonts() {
-                if let parley::fontique::SourceKind::Path(path) = font.source().kind()
-                    && let Some(directory) = path.parent()
-                {
-                    directories.insert(directory.to_path_buf());
-                }
-            }
-        }
-        directories.into_iter().collect()
     }
 
     pub(crate) fn into_context(self) -> FontContext {

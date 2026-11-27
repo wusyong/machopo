@@ -413,7 +413,7 @@ fn a_handle_that_isnt_a_file_where_a_file_is_is_a_bad_message() {
     assert!(child.mapping.0.is_empty());
 }
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod process {
     //! A real child: the files it is sent are its own, even once the host
     //! has let go of its own; on Windows nobody writes one while the

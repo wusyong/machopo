@@ -19,7 +19,8 @@ use crate::bad_message::BadMessageReason;
 /// Whether this platform's renderers ask the browser for the system's
 /// fonts (all three kinds: a process in a sandbox, one out of it, a thread
 /// of the browser's). Elsewhere a renderer still finds them itself.
-pub(crate) const SERVES_SYSTEM_FONTS: bool = cfg!(any(windows, target_os = "macos"));
+pub(crate) const SERVES_SYSTEM_FONTS: bool =
+    cfg!(any(target_os = "linux", target_os = "macos", windows));
 
 /// A renderer's question, checked.
 #[derive(Debug, Clone, PartialEq, Eq)]

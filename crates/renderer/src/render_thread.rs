@@ -69,10 +69,8 @@ pub enum SystemFontSource {
     /// what the browser says of them to begin with. The renderer opens no
     /// font file and asks the system nothing.
     Browser(protocol::font::FontNames),
-    /// As this process found them already (one that finds them before it
-    /// loses the file system). Boxed: the other two are a fraction of it.
-    Found(Box<layout::SystemFonts>),
-    /// As the main thread finds them.
+    /// As the main thread finds them: where the browser doesn't serve them
+    /// (a platform with no sandbox), or couldn't (no font thread).
     FindHere,
 }
 
@@ -621,7 +619,6 @@ impl RenderThread {
                         scheduler: scheduler.clone(),
                     }),
                 ),
-                SystemFontSource::Found(fonts) => TextContext::with_system_fonts(*fonts),
                 SystemFontSource::FindHere => TextContext::new(false),
             },
             canvas_encoder: CanvasEncoder::new(scheduler.clone()),
