@@ -1021,3 +1021,40 @@ fn a_float_among_lines_is_placed_in_the_width_its_box_is_given() {
     assert_eq!(laid.rect("float"), RectF::new(790.0, 0.0, 10.0, 5.0));
     assert_eq!(lines(&laid.view)[0].rect, RectF::new(0.0, 0.0, 20.0, 20.0));
 }
+
+/// A paragraph whose inline elements and text runs are more than a `u16`
+/// counts lays out (Blink has no such limit): each element and each text
+/// run is a style of the text layout's, and every run still finds its text
+/// node. It used to end the renderer when the text layout ran out of style
+/// indices. Each span is two styles, which 33,000 spans take past 65,536.
+#[test]
+fn a_paragraph_of_more_styles_than_a_u16_counts_lays_out() {
+    const SPANS: usize = 33_000;
+    let html = format!(
+        "{AHEM}<div style='width: 400px; word-break: break-all'>{}</div>",
+        "<span>x</span>".repeat(SPANS)
+    );
+    let view = lay_out(&html);
+    let lines = lines(&view);
+    // Twenty 20px squares a line, broken anywhere.
+    assert_eq!(lines.len(), SPANS / 20);
+    let last = lines.last().expect("a line");
+    assert_eq!(last.glyph_x.len(), 20);
+    assert_eq!(last.glyph_x.last().copied(), Some(380.0));
+    fn walk(fragment: &BoxFragment, nodes: &mut std::collections::HashSet<NodeId>) -> usize {
+        let mut runs = 0;
+        for line in &fragment.lines {
+            for run in &line.runs {
+                runs += 1;
+                nodes.insert(run.node.expect("a text node's run"));
+            }
+        }
+        for child in &fragment.children {
+            runs += walk(&child.fragment, nodes);
+        }
+        runs
+    }
+    let mut nodes = std::collections::HashSet::new();
+    let runs = walk(&view, &mut nodes);
+    assert_eq!((runs, nodes.len()), (SPANS, SPANS));
+}

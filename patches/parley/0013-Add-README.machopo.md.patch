@@ -7,16 +7,16 @@ Where the fork starts, what each of its commits does and whether upstream
 has it, how to test and update it. Always the last commit, and the only one
 that changes this file, so that the others can go upstream as they are.
 ---
- README.machopo.md | 85 +++++++++++++++++++++++++++++++++++++++++++++++
- 1 file changed, 85 insertions(+)
+ README.machopo.md | 86 +++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 86 insertions(+)
  create mode 100644 README.machopo.md
 
 diff --git a/README.machopo.md b/README.machopo.md
 new file mode 100644
-index 0000000000000000000000000000000000000000..7d85b6a04b04f62a8b866614485741784d515998
+index 0000000000000000000000000000000000000000..7dd891073e957ddf82a5f36864cf3feac87c77ed
 --- /dev/null
 +++ b/README.machopo.md
-@@ -0,0 +1,85 @@
+@@ -0,0 +1,86 @@
 +# parley (machopo's fork)
 +
 +| | |
@@ -58,6 +58,7 @@ index 0000000000000000000000000000000000000000..7d85b6a04b04f62a8b86661448574178
 +| Look line breaks up in a table | `analyze_text` finds the line break opportunities of a text under the default rules in a table for characters up to U+017F and from U+2000 to U+203F (`parley_engine`'s `line_table.rs`), as UAX #14's pair table does. The table is what ICU4X's line segmenter gives, generated from it by a test that fails when the table is out of date and prints it anew; a word with a character outside the table (an inline object's among them), or a pair that changes with the characters around it, is given to ICU4X with the words on either side. A debug build gives every text looked up to ICU4X whole too and compares. Blink's `LazyLineBreakIterator` looks pairs up in a table of its own. `AnalysisOptions::skip_word_boundaries` (`LayoutContext::set_word_boundaries`, on by default) leaves word boundaries out, for text no one moves through by words with parley's clusters. Tests: `line_table`'s own and `test_line_break_table`. | Not proposed yet |
 +| Take font families as ids already looked up | `StyleProperty::FontFamilyIds`: the families of a `font-family` value as `fontique::FamilyId`s, which the embedder has looked up in the collection (generic families too). It sets what `StyleProperty::FontFamily` does without looking a name up: resolving a list of names looks each up for every span that sets it, and machopo keeps what a `font-family` value resolved to. `TextStyle` has no field for it (adding one breaks every literal of it): a tree builder's root style takes it with `push_default`, the next commit. Tests: `test_family_ids`. | Not proposed yet |
 +| Set a property of a tree builder's root style | `TreeBuilder::push_default`: applies a property to the root style, as `RangedBuilder::push_default` does, for one the root `TextStyle` can't hold (the family ids). A span around all the text isn't the same: the root style is also that of a layout with no text and of a line with nothing on it, whose height is its font's. It panics once anything is pushed, since the spans and runs pushed would keep the style the root had. Tests: `test_tree_default`. | Not proposed yet |
++| Index styles with u32 | Every style index of a layout is a `u32`: the builders' (`TreeBuilder`, `RangedBuilder`, the style run builder), each character's and each cluster's, where upstream's are `u16` and the 65,536th style panics with `too many styles`. machopo pushes two styles a span (the element's, and a brush per text run), so a paragraph of 32,768 inline elements ended the renderer; Blink has no limit, as an inline item points at its layout object. `Character` and `ShapedCluster` keep their sizes; `Char`, only while building, grows from 8 to 12 bytes. The fork's version also widens `shape/cache.rs`'s copy of the indices, which upstream doesn't have. Tests: `test_builders`' `builders_take_more_styles_than_a_u16_indexes`. | Not proposed yet |
 +| Add README.machopo.md | This file. Always the last commit, and the only one that changes it, so that the others can go upstream as they are. | Fork only |
 +
 +Changes are marked with `machopo:` comments. Anything sent upstream is

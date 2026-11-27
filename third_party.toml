@@ -29,7 +29,7 @@ rev = "ef4e89208a52fc6b017e16197e76033fa500190b"
 repository = "https://github.com/wusyong/parley"
 # The `machopo` branch: upstream's main at `upstream_rev` (2026-11-08) and
 # the commits in `patches/parley/`.
-rev = "227d7191625d7f14a4c29099cdc3f840b1bbfed7"
+rev = "3ad4731a551b324e3d4c7869aa134a079a8e3861"
 upstream = "https://github.com/linebender/parley"
 upstream_rev = "1b67b7539616e5c7dc92d8fc79a1f7678525993c"
 

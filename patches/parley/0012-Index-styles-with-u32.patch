@@ -1,0 +1,1032 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Wu Yuwei <yuweiwu@pm.me>
+Date: Fri, 27 Nov 2026 18:03:18 +0900
+Subject: [PATCH] Index styles with u32
+
+A layout's styles were indexed with `u16`, so pushing the 65,536th
+style panicked with `too many styles` in `TreeBuilder`, `RangedBuilder`
+and the style run builder. A browser gets there with an ordinary page:
+an inline element per word or two over a long article, each element a
+span and each span a style, or more than one when the embedder tells
+runs apart with styles of its own. Blink has no such limit: an inline
+item points at its layout object, and the style comes from there.
+
+Every style index is a `u32` now: the builders' style tables,
+`char_style_indices`, the characters and clusters the shaper makes, and
+the style metrics' and line breaker's references to styles. The three
+builders still panic with `too many styles` past `u32::MAX`, through a
+checked conversion.
+
+`Character` and `ShapedCluster`, which a layout keeps, keep their sizes:
+the index takes padding that was there already. `Char`, which exists only
+while a layout is built, grows from 8 to 12 bytes, and
+`char_style_indices` from 2 to 4 bytes a character. Across
+`parley_bench` the median change is +1%; the glyph-run benches with a
+new style every 16 characters are about 10% slower.
+
+Tests: `builders_take_more_styles_than_a_u16_indexes` lays out 70,000
+styles with each of the three builders and checks that the last glyph
+run has the last style and is shaped with its font: the last style has
+a family the others don't, which an index that wraps would miss.
+---
+ examples/editor/src/accessibility.rs   |   2 +-
+ parley/src/builder.rs                  |   9 +-
+ parley/src/context.rs                  |   2 +-
+ parley/src/inline_box.rs               |   4 +-
+ parley/src/layout/cluster.rs           |   4 +-
+ parley/src/layout/data.rs              |  16 +--
+ parley/src/layout/line.rs              |  18 ++--
+ parley/src/layout/line_break.rs        |  36 +++----
+ parley/src/layout/mod.rs               |   2 +-
+ parley/src/layout/style_metrics.rs     |  16 +--
+ parley/src/resolve/mod.rs              |   4 +-
+ parley/src/resolve/range.rs            |   4 +-
+ parley/src/resolve/tree.rs             |  21 ++--
+ parley/src/shape/cache.rs              |   4 +-
+ parley/src/shape/mod.rs                |  14 +--
+ parley/src/tests/test_builders.rs      | 142 ++++++++++++++++++++++++-
+ parley/src/tests/utils/asserts.rs      |   4 +-
+ parley_engine/src/shape/cluster.rs     |   6 +-
+ parley_engine/src/shape/data.rs        |   4 +-
+ parley_engine/src/shape/shaped_text.rs |   6 +-
+ parley_engine/src/shape/shaper.rs      |  10 +-
+ parley_tests/tests/basic.rs            |   2 +-
+ 22 files changed, 230 insertions(+), 100 deletions(-)
+
+diff --git a/examples/editor/src/accessibility.rs b/examples/editor/src/accessibility.rs
+index 93a82ec4a29af962cace981c9022e010efd95730..7140bbe2198c44aabd2e76bd57655c6a7e576e7c 100644
+--- a/examples/editor/src/accessibility.rs
++++ b/examples/editor/src/accessibility.rs
+@@ -181,7 +181,7 @@ impl LayoutAccessibility {
+                     add_span(update, parent_node, last_id, last_node);
+                 }
+ 
+-                let mut prev_style_index: Option<u16> = None;
++                let mut prev_style_index: Option<u32> = None;
+                 let mut span_text = String::new();
+                 let mut character_lengths = Vec::new();
+                 let mut span_offset = 0.0;
+diff --git a/parley/src/builder.rs b/parley/src/builder.rs
+index 7951aab52f59d2692d1e5ee296758f76ba8a84e0..0943feb771516f4a0c1cc6bb7e51795be376379d 100644
+--- a/parley/src/builder.rs
++++ b/parley/src/builder.rs
+@@ -160,22 +160,21 @@ impl<'b, B: Brush> StyleRunBuilder<'b, B> {
+     pub fn push_style<'family, 'settings>(
+         &mut self,
+         style: TextStyle<'family, 'settings, B>,
+-    ) -> u16 {
++    ) -> u32 {
+         let resolved = self
+             .lcx
+             .rcx
+             .resolve_entire_style_set(self.fcx, &style, self.options.scale);
+-        let style_index = self.lcx.style_table.len();
+-        assert!(style_index <= u16::MAX as usize, "too many styles");
++        let style_index = u32::try_from(self.lcx.style_table.len()).expect("too many styles");
+         self.lcx.style_table.push(resolved);
+-        style_index as u16
++        style_index
+     }
+ 
+     /// Adds a style run referencing an entry from the style table.
+     ///
+     /// Runs must be contiguous and non-overlapping, and must cover
+     /// `0..text.len()` once all runs have been added.
+-    pub fn push_style_run(&mut self, style_index: u16, range: impl RangeBounds<usize>) {
++    pub fn push_style_run(&mut self, style_index: u32, range: impl RangeBounds<usize>) {
+         let range = resolve_range(range, self.len);
+         assert!(
+             range.start == self.cursor,
+diff --git a/parley/src/context.rs b/parley/src/context.rs
+index fa9157cf70098ffe72d1eb6d58af638bc891ffbd..844ce4b52920ad9a4f219ca332d4fb7bda7a62d5 100644
+--- a/parley/src/context.rs
++++ b/parley/src/context.rs
+@@ -45,7 +45,7 @@ pub struct LayoutContext<B: Brush = [u8; 4]> {
+     pub(crate) tree_style_builder: TreeStyleBuilder<B>,
+ 
+     /// Style index for each character, parallel to [`Analysis::char_info`].
+-    pub(crate) char_style_indices: Vec<u16>,
++    pub(crate) char_style_indices: Vec<u32>,
+     pub(crate) scx: Shaper,
+     // machopo: shapings kept for layouts alike.
+     pub(crate) shape_cache: super::shape::ShapeCache,
+diff --git a/parley/src/inline_box.rs b/parley/src/inline_box.rs
+index 5578faaec87290a833b8309b870e2cdacf6eca9d..5480a515ecafed7660c85a47f0d4803650abee46 100644
+--- a/parley/src/inline_box.rs
++++ b/parley/src/inline_box.rs
+@@ -43,7 +43,7 @@ pub(crate) struct LayoutInlineBox {
+     pub(crate) inline_box: InlineBox,
+     /// Style index of the span containing the box, against which the box's `vertical_align`
+     /// is resolved. The box itself has no style of its own.
+-    pub(crate) parent_style_index: u16,
++    pub(crate) parent_style_index: u32,
+     /// Offset of the box's baseline above the baseline of the independent aligned subtree it
+     /// belongs to (that of the parent style), resolved when the layout is built and when the box
+     /// is edited (see [`crate::Layout::edit_inline_box`]). Always zero for out-of-flow boxes, and
+@@ -57,7 +57,7 @@ pub(crate) struct LayoutInlineBox {
+ }
+ 
+ impl LayoutInlineBox {
+-    pub(crate) fn new(inline_box: InlineBox, parent_style_index: u16) -> Self {
++    pub(crate) fn new(inline_box: InlineBox, parent_style_index: u32) -> Self {
+         Self {
+             inline_box,
+             parent_style_index,
+diff --git a/parley/src/layout/cluster.rs b/parley/src/layout/cluster.rs
+index 68c78d830811692b2d8fe67812cdf94fa451a196..1bd1712bba28859058ee4087da7c70f2542ddde4 100644
+--- a/parley/src/layout/cluster.rs
++++ b/parley/src/layout/cluster.rs
+@@ -169,7 +169,7 @@ impl<'a, B: Brush> Cluster<'a, B> {
+     ///
+     /// See also [`Self::style_index`].
+     pub fn style(&self) -> &'a Style<B> {
+-        &self.run.layout.styles()[usize::from(self.style_index())]
++        &self.run.layout.styles()[self.style_index() as usize]
+     }
+ 
+     /// Returns the style index of the character this cluster represents.
+@@ -177,7 +177,7 @@ impl<'a, B: Brush> Cluster<'a, B> {
+     /// All of the cluster's glyphs share this style.
+     ///
+     /// See also [`Self::style`].
+-    pub fn style_index(&self) -> u16 {
++    pub fn style_index(&self) -> u32 {
+         self.first_character().style_index
+     }
+ 
+diff --git a/parley/src/layout/data.rs b/parley/src/layout/data.rs
+index be4fd18a43758503073eba298173aa00b1f934d8..e05bb5b4baadfd802cc319fcd41955be438ea322 100644
+--- a/parley/src/layout/data.rs
++++ b/parley/src/layout/data.rs
+@@ -111,7 +111,7 @@ pub(crate) struct LineData {
+ #[derive(Clone, Copy, Debug, PartialEq)]
+ pub(crate) struct AlignedSubtreeOffset {
+     /// Style index of the subtree root (a span with `vertical-align: top | bottom`)
+-    pub(crate) root: u16,
++    pub(crate) root: u32,
+     /// Offset from the line's baseline to the subtree's baseline (positive upwards).
+     pub(crate) baseline_offset: f32,
+ }
+@@ -122,7 +122,7 @@ impl LineData {
+     pub(crate) fn aligned_subtree_offset(
+         &self,
+         offsets: &[AlignedSubtreeOffset],
+-        root: u16,
++        root: u32,
+     ) -> f32 {
+         if root == 0 {
+             return 0.;
+@@ -393,7 +393,7 @@ impl<B: Brush> LayoutData<B> {
+         shaped_run_idx: usize,
+         run_style: &ResolvedStyle<B>,
+         spacing: Spacing,
+-        char_styles: &[u16],
++        char_styles: &[u32],
+     ) {
+         let shaped_run = &self.shaped_text.runs()[shaped_run_idx];
+         debug_assert!(
+@@ -414,15 +414,15 @@ impl<B: Brush> LayoutData<B> {
+         let run_box = {
+             let chars = shaped_run.range.char_range.clone();
+             let first_style = char_styles[chars.start];
+-            let line_height = self.styles[usize::from(first_style)].line_height;
++            let line_height = self.styles[first_style as usize].line_height;
+ 
+-            let uniform_line_height = char_styles[chars].iter().all(|&s| {
+-                s == first_style || self.styles[usize::from(s)].line_height == line_height
+-            });
++            let uniform_line_height = char_styles[chars]
++                .iter()
++                .all(|&s| s == first_style || self.styles[s as usize].line_height == line_height);
+ 
+             if uniform_line_height {
+                 run_box_metrics(
+-                    &self.styles[usize::from(first_style)],
++                    &self.styles[first_style as usize],
+                     shaped_run,
+                     self.quantize,
+                 )
+diff --git a/parley/src/layout/line.rs b/parley/src/layout/line.rs
+index 251a922cd73a36843ddabb61f0c4af2cc55f3a8c..0f128e76a61e20325c81ad32170ede686c48f4d4 100644
+--- a/parley/src/layout/line.rs
++++ b/parley/src/layout/line.rs
+@@ -72,8 +72,8 @@ impl<'a, B: Brush> Line<'a, B> {
+ 
+     /// Block-axis coordinate of the baseline of the span box generated by `style_index`, taking
+     /// its (and its ancestors') `vertical-align` into account.
+-    pub(crate) fn style_baseline(&self, style_index: u16) -> f32 {
+-        match self.layout.data.style_metrics.get(usize::from(style_index)) {
++    pub(crate) fn style_baseline(&self, style_index: u32) -> f32 {
++        match self.layout.data.style_metrics.get(style_index as usize) {
+             Some(metrics) => self
+                 .data
+                 .style_baseline(&self.layout.data.aligned_subtree_offsets, metrics),
+@@ -93,7 +93,7 @@ impl<'a, B: Brush> Line<'a, B> {
+                     .layout
+                     .data
+                     .style_metrics
+-                    .get(usize::from(layout_box.parent_style_index))
++                    .get(layout_box.parent_style_index as usize)
+                     .map_or(0, |m| m.aligned_subtree_root);
+                 let ascent = inline_box.baseline.unwrap_or(inline_box.height);
+                 self.data.metrics.baseline
+@@ -288,7 +288,7 @@ pub struct PositionedInlineBox {
+ #[derive(Clone)]
+ pub struct GlyphRun<'a, B: Brush> {
+     run: Run<'a, B>,
+-    style_index: u16,
++    style_index: u32,
+     /// The glyph run's shaped clusters, indexing into the shaped run this [`Run`] belongs to.
+     ///
+     /// Both bounds are atom boundaries, as glyph runs must span full ligatures.
+@@ -308,13 +308,13 @@ impl<'a, B: Brush> GlyphRun<'a, B> {
+     ///
+     /// See also [`Self::style_index`].
+     pub fn style(&self) -> &'a Style<B> {
+-        &self.run.layout.styles()[usize::from(self.style_index)]
++        &self.run.layout.styles()[self.style_index as usize]
+     }
+ 
+     /// Returns the associated style index.
+     ///
+     /// See also [`Self::style`].
+-    pub fn style_index(&self) -> u16 {
++    pub fn style_index(&self) -> u32 {
+         self.style_index
+     }
+ 
+@@ -324,7 +324,7 @@ impl<'a, B: Brush> GlyphRun<'a, B> {
+     /// another font. Blink positions `line-through` from this ascent (i.e. the primary font's),
+     /// for example, so a strikethrough placed from it keeps one height across fallback fonts.
+     pub fn span_metrics(&self) -> SpanMetrics {
+-        self.run.layout.data.style_metrics[usize::from(self.style_index)].span_metrics()
++        self.run.layout.data.style_metrics[self.style_index as usize].span_metrics()
+     }
+ 
+     /// Returns the offset to the baseline.
+@@ -390,7 +390,7 @@ pub struct GlyphSpan {
+     /// its clusters are the ones of that style there, glyphs or not, as
+     /// [`Run::visual_clusters`] gives them.
+     line_clusters: Range<u32>,
+-    style_index: u16,
++    style_index: u32,
+     is_rtl: bool,
+     spacing: EffectiveSpacing,
+ }
+@@ -600,7 +600,7 @@ impl<'a, B: Brush> Iterator for GlyphRunIter<'a, B> {
+                     let mut advance = 0.0;
+                     let mut glyph_count = 0;
+                     // The style index and shaped cluster range of the glyph run being accumulated.
+-                    let mut glyph_run: Option<(u16, Range<u32>)> = None;
++                    let mut glyph_run: Option<(u32, Range<u32>)> = None;
+                     while let Some(atom) = atoms.peek() {
+                         let (atom_glyph_count, atom_advance) = atoms.measure(&atom);
+                         if atom_glyph_count != 0 {
+diff --git a/parley/src/layout/line_break.rs b/parley/src/layout/line_break.rs
+index 72ae945e7d9f799846bfd27df580598077c97250..df3faf078f9237d1734e040ce44b4394a2d7a279 100644
+--- a/parley/src/layout/line_break.rs
++++ b/parley/src/layout/line_break.rs
+@@ -146,7 +146,7 @@ struct LineBoxMetrics {
+     /// treated as having zero height (an "invisible" line box).
+     has_content: bool,
+     /// The layout item and style of the last text atom added, whose boxes are already on the line.
+-    last_text: (usize, u16),
++    last_text: (usize, u32),
+ }
+ 
+ /// Extents of one [independent aligned subtree] on the current line, measured from the subtree's
+@@ -157,7 +157,7 @@ struct LineBoxMetrics {
+ struct SubtreeExtents {
+     /// Style index of the subtree root: `0` for the root span box, otherwise a style with
+     /// `vertical-align: top | bottom`.
+-    root: u16,
++    root: u32,
+     /// The line-height expanded extents.
+     ///
+     /// The extents are in block flow direction; i.e., for horizontal text, these are vertical, and
+@@ -223,7 +223,7 @@ impl Extents {
+ }
+ 
+ impl SubtreeExtents {
+-    fn new(root: u16) -> Self {
++    fn new(root: u32) -> Self {
+         Self {
+             root,
+             line_box: Extents::default(),
+@@ -290,7 +290,7 @@ impl SubtreeHistory {
+ 
+     /// Grow the subtree rooted at `root` to include a box whose baseline is `baseline_offset`
+     /// above the subtree's baseline. Returns the subtree's new extents.
+-    fn grow(&mut self, root: u16, baseline_offset: f32, metrics: BoxMetrics) -> SubtreeExtents {
++    fn grow(&mut self, root: u32, baseline_offset: f32, metrics: BoxMetrics) -> SubtreeExtents {
+         let index = self.entries.iter().rposition(|s| s.root == root);
+         let old = index.map(|i| self.entries[i]);
+         let mut new = old.unwrap_or(SubtreeExtents::new(root));
+@@ -349,7 +349,7 @@ impl LineBoxMetrics {
+     #[inline]
+     fn add_box(
+         &mut self,
+-        aligned_subtree_root: u16,
++        aligned_subtree_root: u32,
+         baseline_offset: f32,
+         metrics: BoxMetrics,
+         subtrees: &mut SubtreeHistory,
+@@ -377,15 +377,15 @@ impl LineBoxMetrics {
+     /// not yet on the line.
+     fn add_style(
+         &mut self,
+-        style_index: u16,
++        style_index: u32,
+         style_metrics: &[StyleMetrics],
+-        contributed: &mut Vec<u16>,
++        contributed: &mut Vec<u32>,
+         subtrees: &mut SubtreeHistory,
+     ) {
+         let mut index = style_index;
+         while !contributed.contains(&index) {
+             contributed.push(index);
+-            let Some(metrics) = style_metrics.get(usize::from(index)) else {
++            let Some(metrics) = style_metrics.get(index as usize) else {
+                 return;
+             };
+             let span_box = BoxMetrics {
+@@ -424,10 +424,10 @@ impl LineBoxMetrics {
+         &mut self,
+         item_idx: usize,
+         run_idx: usize,
+-        style_index: u16,
++        style_index: u32,
+         characters: &[Character],
+         data: &LayoutData<B>,
+-        contributed: &mut Vec<u16>,
++        contributed: &mut Vec<u32>,
+         subtrees: &mut SubtreeHistory,
+     ) {
+         self.has_content = true;
+@@ -456,10 +456,10 @@ impl LineBoxMetrics {
+         &mut self,
+         item_idx: usize,
+         run_idx: usize,
+-        style_index: u16,
++        style_index: u32,
+         characters: &[Character],
+         data: &LayoutData<B>,
+-        contributed: &mut Vec<u16>,
++        contributed: &mut Vec<u32>,
+         subtrees: &mut SubtreeHistory,
+     ) {
+         self.last_text = (item_idx, style_index);
+@@ -479,7 +479,7 @@ impl LineBoxMetrics {
+                 }
+             }
+         }
+-        let style = usize::from(style_index);
++        let style = style_index as usize;
+         let shaped_run = &data.shaped_text.runs()[run_idx];
+         if let Some(run_box) = data.runs[run_idx]
+             .run_box
+@@ -536,7 +536,7 @@ impl LineBoxMetrics {
+     /// `aligned_subtree_root`.
+     fn add_inline_box(
+         &mut self,
+-        aligned_subtree_root: u16,
++        aligned_subtree_root: u32,
+         baseline_offset: f32,
+         ascent: f32,
+         descent: f32,
+@@ -690,7 +690,7 @@ pub struct BreakerState {
+     /// Style indices whose span box has already been added to the current line (see
+     /// [`LineBoxMetrics::add_style`]). Lives here rather than in [`LineState`] so that saving a
+     /// line-breaking opportunity only records its length; reverting truncates it back.
+-    contributed: Vec<u16>,
++    contributed: Vec<u32>,
+     /// Extents of the aligned subtrees rooted at `top`/`bottom` spans on the current line. Like
+     /// [`Self::contributed`], saving a line-breaking opportunity only records its length.
+     subtrees: SubtreeHistory,
+@@ -794,7 +794,7 @@ impl BreakerState {
+         &mut self,
+         atom: &Atom<'_>,
+         next_x: f32,
+-        style_index: u16,
++        style_index: u32,
+         data: &LayoutData<B>,
+         is_word_separator: bool,
+     ) {
+@@ -1704,7 +1704,7 @@ impl<'a, B: Brush> BreakLines<'a, B> {
+         let mut bottom_height = box_metrics.line_relative_bottom_height;
+         for subtree in &subtrees {
+             let height = subtree.line_box.height();
+-            match self.layout.data.styles[usize::from(subtree.root)]
++            match self.layout.data.styles[subtree.root as usize]
+                 .vertical_align
+                 .shift
+             {
+@@ -1725,7 +1725,7 @@ impl<'a, B: Brush> BreakLines<'a, B> {
+         line.aligned_subtree_offsets.start = offsets.len() as u32;
+         for subtree in &subtrees {
+             let extents = subtree.line_box.or_zero();
+-            let offset = match self.layout.data.styles[usize::from(subtree.root)]
++            let offset = match self.layout.data.styles[subtree.root as usize]
+                 .vertical_align
+                 .shift
+             {
+diff --git a/parley/src/layout/mod.rs b/parley/src/layout/mod.rs
+index 0437b979f3eafec28a38b00e5bf03580791685f9..271d00071a5be7624dc65fd1baba8a8aa8701267 100644
+--- a/parley/src/layout/mod.rs
++++ b/parley/src/layout/mod.rs
+@@ -53,7 +53,7 @@ use crate::{LineHeight, OverflowWrap, TextWrapMode, VerticalAlign, WhiteSpaceCol
+ pub struct Style<B: Brush> {
+     /// Index of the style of the enclosing span in [`Layout::styles`]. The root style (index 0)
+     /// refers to itself.
+-    pub(crate) parent: u16,
++    pub(crate) parent: u32,
+     /// Brush for drawing glyphs.
+     pub brush: B,
+     /// Underline decoration.
+diff --git a/parley/src/layout/style_metrics.rs b/parley/src/layout/style_metrics.rs
+index 69488376ffd98e89bac784d456d408cd70064e63..bbf23c2bf124705719d135050d22983287488c10 100644
+--- a/parley/src/layout/style_metrics.rs
++++ b/parley/src/layout/style_metrics.rs
+@@ -90,10 +90,10 @@ pub(crate) struct StyleMetrics {
+     /// if there is none.
+     ///
+     /// [independent aligned subtree]: self#aligned-subtrees
+-    pub(crate) aligned_subtree_root: u16,
++    pub(crate) aligned_subtree_root: u32,
+     /// Style index of the parent span; always less than the span's own index, except for the
+     /// root (index `0`), whose parent is `0`.
+-    pub(crate) parent: u16,
++    pub(crate) parent: u32,
+     /// The style's font size, against which `sub`/`super` of children are resolved.
+     pub(crate) font_size: f32,
+ }
+@@ -139,7 +139,7 @@ pub(crate) fn resolve_style_metrics<B: Brush>(
+             metrics.exact_baseline_offset = 0.;
+             metrics.aligned_subtree_root = 0;
+         } else {
+-            let parent_index = usize::from(style.parent);
++            let parent_index = style.parent as usize;
+             debug_assert!(
+                 parent_index < index,
+                 "style table must be ordered parent-first"
+@@ -150,13 +150,13 @@ pub(crate) fn resolve_style_metrics<B: Brush>(
+             } else {
+                 0
+             };
+-            metrics.parent = parent_index as u16;
++            metrics.parent = parent_index as u32;
+             let parent = &out[parent_index];
+             let align = style.vertical_align;
+             if align.is_line_relative() {
+                 metrics.baseline_offset = 0.;
+                 metrics.exact_baseline_offset = 0.;
+-                metrics.aligned_subtree_root = index as u16;
++                metrics.aligned_subtree_root = index as u32;
+             } else {
+                 let shift = shift_from_parent(align, metrics.over, metrics.under, parent);
+                 metrics.exact_baseline_offset = parent.exact_baseline_offset + shift;
+@@ -311,7 +311,7 @@ pub(crate) fn shift_from_parent(
+ #[derive(Clone, Copy, Debug)]
+ pub(crate) struct InlineBoxPlacement {
+     /// Style index of the aligned subtree root (see [`StyleMetrics::aligned_subtree_root`]).
+-    pub(crate) aligned_subtree_root: u16,
++    pub(crate) aligned_subtree_root: u32,
+     /// Offset of the box's baseline above the subtree root's baseline.
+     pub(crate) baseline_offset: f32,
+     /// Height of the box above its baseline.
+@@ -329,14 +329,14 @@ pub(crate) struct InlineBoxPlacement {
+ /// [`crate::Line::inline_box_top`]).
+ pub(crate) fn inline_box_placement(
+     inline_box: &InlineBox,
+-    parent_style: u16,
++    parent_style: u32,
+     style_metrics: &[StyleMetrics],
+     quantize: bool,
+ ) -> InlineBoxPlacement {
+     let ascent = inline_box.baseline.unwrap_or(inline_box.height);
+     let descent = inline_box.height - ascent;
+     let parent = style_metrics
+-        .get(usize::from(parent_style))
++        .get(parent_style as usize)
+         .copied()
+         .unwrap_or_default();
+     let shift = shift_from_parent(inline_box.vertical_align, ascent, descent, &parent);
+diff --git a/parley/src/resolve/mod.rs b/parley/src/resolve/mod.rs
+index da166353919f2ef753ce3c05ffff71bd07171a56..8cb9c55739cad5a986370091f478823fa2a88fed 100644
+--- a/parley/src/resolve/mod.rs
++++ b/parley/src/resolve/mod.rs
+@@ -34,7 +34,7 @@ pub(crate) struct RangedStyle<B: Brush> {
+ /// Run that references a style in a shared style table.
+ #[derive(Debug, Clone)]
+ pub(crate) struct StyleRun {
+-    pub(crate) style_index: u16,
++    pub(crate) style_index: u32,
+     pub(crate) range: Range<usize>,
+ }
+ 
+@@ -437,7 +437,7 @@ fn scale_tab_stops(value: Option<TabStops>, scale: f32) -> Option<TabStops> {
+ pub(crate) struct ResolvedStyle<B: Brush> {
+     /// Index in the style table of the style of the enclosing span (the root style refers to
+     /// itself).
+-    pub(crate) parent: u16,
++    pub(crate) parent: u32,
+     /// `font-family`.
+     pub(crate) font_family: Resolved<FamilyId>,
+     /// Font size.
+diff --git a/parley/src/resolve/range.rs b/parley/src/resolve/range.rs
+index 43866a9bce74f535f61acd46421862b3e985fe8a..f9164c14b45571f6e9c20c94db1b556a45ff8374 100644
+--- a/parley/src/resolve/range.rs
++++ b/parley/src/resolve/range.rs
+@@ -162,9 +162,9 @@ impl<B: Brush> RangedStyleBuilder<B> {
+             let style_index = if style.style == style_table[0] {
+                 0
+             } else {
+-                assert!(style_table.len() <= u16::MAX as usize, "too many styles");
++                let style_index = u32::try_from(style_table.len()).expect("too many styles");
+                 style_table.push(style.style);
+-                (style_table.len() - 1) as u16
++                style_index
+             };
+             style_runs.push(StyleRun {
+                 style_index,
+diff --git a/parley/src/resolve/tree.rs b/parley/src/resolve/tree.rs
+index ea1b1d69717288f9433646d76f2de6f3c12fa5d9..b1246f1a6a5d05b3d05be842085fdcb94331ee46 100644
+--- a/parley/src/resolve/tree.rs
++++ b/parley/src/resolve/tree.rs
+@@ -12,10 +12,10 @@ use super::{Brush, ResolvedProperty, ResolvedStyle, StyleRun};
+ struct StyleTreeNode<B: Brush> {
+     parent: Option<usize>,
+     style: ResolvedStyle<B>,
+-    style_id: Option<u16>,
++    style_id: Option<u32>,
+     /// The style's id when it is used for whitespace that wrapping is allowed after, which differs
+     /// from `style_id` only for spans that disable wrapping.
+-    wrappable_style_id: Option<u16>,
++    wrappable_style_id: Option<u32>,
+ }
+ 
+ /// A collapsible whitespace sequence that has not been committed yet.
+@@ -199,7 +199,7 @@ impl<B: Brush> TreeStyleBuilder<B> {
+     }
+ 
+     /// The style table index of the span that text is currently being pushed into.
+-    pub(crate) fn resolve_current_style_id(&mut self) -> u16 {
++    pub(crate) fn resolve_current_style_id(&mut self) -> u32 {
+         self.resolve_style_id(self.current_span)
+     }
+ 
+@@ -210,7 +210,7 @@ impl<B: Brush> TreeStyleBuilder<B> {
+     }
+ 
+     /// Appends already white space processed `text` to the buffer with the given style.
+-    fn commit_styled_text(&mut self, style_index: u16, text: &str) {
++    fn commit_styled_text(&mut self, style_index: u32, text: &str) {
+         let start = self.text.len();
+         self.text.push_str(text);
+         match self.style_runs.last_mut() {
+@@ -227,7 +227,7 @@ impl<B: Brush> TreeStyleBuilder<B> {
+     /// The index of `span`'s style in the style table, adding it (and any ancestors that have not
+     /// yet been added) to the table if necessary. Ancestors are added first so that a style's
+     /// parent always has a lower index than the style itself.
+-    fn resolve_style_id(&mut self, span: usize) -> u16 {
++    fn resolve_style_id(&mut self, span: usize) -> u32 {
+         if let Some(style_id) = self.tree[span].style_id {
+             return style_id;
+         }
+@@ -242,15 +242,14 @@ impl<B: Brush> TreeStyleBuilder<B> {
+         style_id
+     }
+ 
+-    fn push_style(&mut self, style: ResolvedStyle<B>) -> u16 {
+-        let style_id = self.style_table.len();
+-        assert!(style_id <= u16::MAX as usize, "too many styles");
++    fn push_style(&mut self, style: ResolvedStyle<B>) -> u32 {
++        let style_id = u32::try_from(self.style_table.len()).expect("too many styles");
+         self.style_table.push(style);
+-        style_id as u16
++        style_id
+     }
+ 
+     /// The index of `span`'s style with wrapping enabled, adding it to the table if necessary.
+-    fn resolve_wrappable_style_id(&mut self, span: usize) -> u16 {
++    fn resolve_wrappable_style_id(&mut self, span: usize) -> u32 {
+         if self.tree[span].style.text_wrap_mode == TextWrapMode::Wrap {
+             return self.resolve_style_id(span);
+         }
+@@ -259,7 +258,7 @@ impl<B: Brush> TreeStyleBuilder<B> {
+         }
+         // Materialise the span itself first so the wrappable variant shares its parent.
+         let span_id = self.resolve_style_id(span);
+-        let mut style = self.style_table[usize::from(span_id)].clone();
++        let mut style = self.style_table[span_id as usize].clone();
+         style.text_wrap_mode = TextWrapMode::Wrap;
+         let style_id = self.push_style(style);
+         self.tree[span].wrappable_style_id = Some(style_id);
+diff --git a/parley/src/shape/cache.rs b/parley/src/shape/cache.rs
+index abbf36e89ed6114b5ce1440d6e801a6889883ef7..bb3614b48203485b65d19bcb01822239d3398a8d 100644
+--- a/parley/src/shape/cache.rs
++++ b/parley/src/shape/cache.rs
+@@ -116,7 +116,7 @@ impl<'a> Key<'a> {
+         styles: &[ResolvedStyle<B>],
+         inline_boxes: &[LayoutInlineBox],
+         analysis: &'a Analysis,
+-        char_style_indices: &[u16],
++        char_style_indices: &[u32],
+         text: &'a str,
+         scale: f32,
+         hasher: &impl BuildHasher,
+@@ -127,7 +127,7 @@ impl<'a> Key<'a> {
+             .collect();
+         let mut runs: Vec<(usize, RunStyle)> = Vec::new();
+         for (i, &style_index) in char_style_indices.iter().enumerate() {
+-            let style = &run_styles[usize::from(style_index)];
++            let style = &run_styles[style_index as usize];
+             match runs.last_mut() {
+                 Some((end, last)) if last == style => *end = i + 1,
+                 _ => runs.push((i + 1, style.clone())),
+diff --git a/parley/src/shape/mod.rs b/parley/src/shape/mod.rs
+index d5206fb9a31bd6e9dcc9710290968b286e175fcc..5d7f7bf23d3a470a7318ba98ca9ea492c79c1c8d 100644
+--- a/parley/src/shape/mod.rs
++++ b/parley/src/shape/mod.rs
+@@ -52,7 +52,7 @@ pub(crate) fn shape_text<'a, B: Brush>(
+     styles: &'a [ResolvedStyle<B>],
+     inline_boxes: &[LayoutInlineBox],
+     analysis: &Analysis,
+-    char_style_indices: &[u16],
++    char_style_indices: &[u32],
+     scx: &mut Shaper,
+     text: &str,
+     layout: &mut Layout<B>,
+@@ -120,7 +120,7 @@ pub(crate) fn shape_text<'a, B: Brush>(
+             }
+ 
+             let item_style_index = char_style_indices[item_start_char];
+-            let item_style = &styles[usize::from(item_style_index)];
++            let item_style = &styles[item_style_index as usize];
+ 
+             // Items are at least one character long, therefore the item's own first character is
+             // never a split point.
+@@ -155,7 +155,7 @@ pub(crate) fn shape_text<'a, B: Brush>(
+ 
+                 let style_index = char_style_indices[char_index];
+                 if style_index != item_style_index {
+-                    let style = &styles[usize::from(style_index)];
++                    let style = &styles[style_index as usize];
+                     split = !nearly_eq(style.font_size, item_style.font_size)
+                         || style.locale != item_style.locale
+                         || style.font_variations != item_style.font_variations
+@@ -290,7 +290,7 @@ pub(crate) fn shape_text<'a, B: Brush>(
+         let shaped_run = &layout.data.shaped_text.runs()[shaped_run_idx];
+         let run_text_byte_start = shaped_run.range.byte_range.start;
+         let run_style_index = char_style_indices[shaped_run.range.char_range.start];
+-        let run_style = &styles[usize::from(run_style_index)];
++        let run_style = &styles[run_style_index as usize];
+ 
+         // Push out-of-flow boxes positioned before the start of this item.
+         //
+@@ -353,7 +353,7 @@ struct FontSelector<'a, 'b, B: Brush> {
+     fonts_id: Option<usize>,
+     rcx: &'a ResolveContext,
+     styles: &'a [ResolvedStyle<B>],
+-    style_index: u16,
++    style_index: u32,
+     attrs: fontique::Attributes,
+ 
+     /// The first font [`Self::query`] yields with a charmap, if any, cached.
+@@ -411,8 +411,8 @@ impl<'a, 'b, B: Brush> parley_engine::FontSelector for FontSelector<'a, 'b, B> {
+         self.first_font = None;
+     }
+ 
+-    fn font_style(&self, style_index: u16) -> Option<u32> {
+-        self.font_styles.get(usize::from(style_index)).copied()
++    fn font_style(&self, style_index: u32) -> Option<u32> {
++        self.font_styles.get(style_index as usize).copied()
+     }
+ 
+     fn select_font(
+diff --git a/parley/src/tests/test_builders.rs b/parley/src/tests/test_builders.rs
+index 14cfa1c30e396e80d5afb745d5ff88690cd2d7f2..08f75fcc9157a9d5b16fe8b6477c524b95ec6ece 100644
+--- a/parley/src/tests/test_builders.rs
++++ b/parley/src/tests/test_builders.rs
+@@ -3,7 +3,7 @@
+ 
+ //! Test that the various builders produce the same results.
+ 
+-use std::{vec, vec::Vec};
++use std::{borrow::Cow, vec, vec::Vec};
+ 
+ use fontique::{FontStyle, FontWeight, FontWidth};
+ use peniko::color::palette;
+@@ -14,10 +14,10 @@ use super::utils::{
+     fonts::{FONT_FAMILY_LIST, create_font_context},
+ };
+ use crate::{
+-    BaseDirection, BreakReason, FontContext, FontFamily, FontFeatures, FontVariations, Layout,
+-    LayoutContext, LineBreak, LineHeight, OverflowWrap, RangedBuilder, SoftHyphens, StyleProperty,
+-    StyleRunBuilder, TabStops, TextStyle, TextWrapMode, TreeBuilder, VerticalAlign,
+-    WhiteSpaceCollapse, WordBreak,
++    BaseDirection, BreakReason, FontContext, FontFamily, FontFamilyName, FontFeatures,
++    FontVariations, Layout, LayoutContext, LineBreak, LineHeight, OverflowWrap,
++    PositionedLayoutItem, RangedBuilder, SoftHyphens, StyleProperty, StyleRunBuilder, TabStops,
++    TextStyle, TextWrapMode, TreeBuilder, VerticalAlign, WhiteSpaceCollapse, WordBreak,
+ };
+ 
+ /// Set of options for [`build_layout_with_ranged`].
+@@ -663,3 +663,135 @@ fn builders_newline_inside_complex_script_run_is_hard_break() {
+         );
+     }
+ }
++
++/// More styles than a `u16` can index: one per character, each with a brush of its own. The text
++/// is broken into many lines, as a line's span boxes are kept in a list searched for each new one.
++const MANY_STYLES: u32 = 70_000;
++
++/// The family of the last of [`MANY_STYLES`], which the others don't have: an index that wraps
++/// would select the font of the style it wraps to.
++const MANY_STYLES_LAST_FAMILY: &[FontFamilyName<'_>] =
++    &[FontFamilyName::Named(Cow::Borrowed("Arimo"))];
++
++/// The brush of the `i`th of [`MANY_STYLES`].
++fn many_styles_brush(i: u32) -> ColorBrush {
++    let [_, r, g, b] = i.to_be_bytes();
++    ColorBrush::new(peniko::color::AlphaColor::from_rgba8(r, g, b, 255))
++}
++
++/// The last glyph run's style index and brush, and whether its font is other than the first's.
++fn last_glyph_run_style(layout: &Layout<ColorBrush>) -> (u32, ColorBrush, bool) {
++    let mut runs = layout.lines().flat_map(|line| {
++        line.items().filter_map(|item| match item {
++            PositionedLayoutItem::GlyphRun(run) => Some(run),
++            _ => None,
++        })
++    });
++    let first = runs.next().expect("a glyph run");
++    let last = runs.last().expect("another glyph run");
++    let font = |run: &crate::GlyphRun<'_, ColorBrush>| {
++        let font = run.run().font();
++        (font.data.id(), font.index)
++    };
++    (
++        last.style_index(),
++        last.style().brush,
++        font(&last) != font(&first),
++    )
++}
++
++#[test]
++fn builders_take_more_styles_than_a_u16_indexes() {
++    let text = "a".repeat(MANY_STYLES as usize);
++    let mut fcx = create_font_context();
++    let mut lcx: LayoutContext<ColorBrush> = LayoutContext::new();
++    let root_style = create_root_style();
++    let last_brush = many_styles_brush(MANY_STYLES - 1);
++
++    let ranged = build_layout_with_ranged(
++        &mut fcx,
++        &mut lcx,
++        &RangedOptions {
++            scale: 1.,
++            quantize: false,
++            max_advance: Some(200.),
++            text: &text,
++        },
++        |rb| {
++            set_root_style(rb);
++            for i in 0..MANY_STYLES {
++                let i_usize = i as usize;
++                rb.push(
++                    StyleProperty::Brush(many_styles_brush(i)),
++                    i_usize..i_usize + 1,
++                );
++            }
++            let last = MANY_STYLES as usize - 1;
++            rb.push(FontFamily::from(MANY_STYLES_LAST_FAMILY), last..last + 1);
++        },
++    );
++    let (index, brush, other_font) = last_glyph_run_style(&ranged);
++    assert!(index > u32::from(u16::MAX), "{index}");
++    assert_eq!(brush, last_brush);
++    assert!(other_font);
++
++    let tree = build_layout_with_tree(
++        &mut fcx,
++        &mut lcx,
++        &TreeOptions {
++            scale: 1.,
++            quantize: false,
++            max_advance: Some(200.),
++            root_style: &root_style,
++        },
++        |tb| {
++            for i in 0..MANY_STYLES - 1 {
++                tb.push_style_modification_span(&[StyleProperty::Brush(many_styles_brush(i))]);
++                tb.push_text("a");
++                tb.pop_style_span();
++            }
++            tb.push_style_modification_span(&[
++                StyleProperty::Brush(last_brush),
++                StyleProperty::FontFamily(FontFamily::from(MANY_STYLES_LAST_FAMILY)),
++            ]);
++            tb.push_text("a");
++            tb.pop_style_span();
++        },
++    );
++    let (index, brush, other_font) = last_glyph_run_style(&tree);
++    assert!(index > u32::from(u16::MAX), "{index}");
++    assert_eq!(brush, last_brush);
++    assert!(other_font);
++
++    let runs = build_layout_with_style_runs(
++        &mut fcx,
++        &mut lcx,
++        &RangedOptions {
++            scale: 1.,
++            quantize: false,
++            max_advance: Some(200.),
++            text: &text,
++        },
++        |rb| {
++            for i in 0..MANY_STYLES {
++                let font_family = if i == MANY_STYLES - 1 {
++                    FontFamily::from(MANY_STYLES_LAST_FAMILY)
++                } else {
++                    root_style.font_family.clone()
++                };
++                let style = rb.push_style(TextStyle {
++                    brush: many_styles_brush(i),
++                    font_family,
++                    ..root_style.clone()
++                });
++                assert_eq!(style, i);
++                let i_usize = i as usize;
++                rb.push_style_run(style, i_usize..i_usize + 1);
++            }
++        },
++    );
++    let (index, brush, other_font) = last_glyph_run_style(&runs);
++    assert_eq!(index, MANY_STYLES - 1);
++    assert_eq!(brush, last_brush);
++    assert!(other_font);
++}
+diff --git a/parley/src/tests/utils/asserts.rs b/parley/src/tests/utils/asserts.rs
+index 77e74a5b5efc5d1578cb2e5036926fc8c20ef4a5..340600d81997da7e0570feb8fe5e2a8b7ab392b2 100644
+--- a/parley/src/tests/utils/asserts.rs
++++ b/parley/src/tests/utils/asserts.rs
+@@ -28,9 +28,9 @@ fn canonicalize_layout_data<B: Brush>(layout_data: &LayoutData<B>) -> LayoutData
+             .iter()
+             .position(|existing| *existing == style)
+         {
+-            remap.push(index as u16);
++            remap.push(index as u32);
+         } else {
+-            let index = canonical_styles.len() as u16;
++            let index = canonical_styles.len() as u32;
+             canonical_styles.push(style);
+             canonical_metrics.push(metrics);
+             remap.push(index);
+diff --git a/parley_engine/src/shape/cluster.rs b/parley_engine/src/shape/cluster.rs
+index 661cc72653cf09ca169ec11ecacfa63d9ff94efa..bf019511d94e8c064936bf19ca6a2a969b9a4864 100644
+--- a/parley_engine/src/shape/cluster.rs
++++ b/parley_engine/src/shape/cluster.rs
+@@ -62,7 +62,7 @@ pub struct Char {
+     pub contributes_to_shaping: bool,
+     /// Indexes into the list of styles for the containing text run, to find the style applicable
+     /// to this character.
+-    pub style_index: u16,
++    pub style_index: u32,
+ }
+ 
+ /// Whitespace class of a character.
+@@ -262,7 +262,7 @@ impl CharCluster {
+ 
+     /// Returns the primary style index for the cluster.
+     #[inline(always)]
+-    pub fn style_index(&self) -> u16 {
++    pub fn style_index(&self) -> u32 {
+         self.chars[0].style_index
+     }
+ 
+@@ -402,7 +402,7 @@ impl CharCluster {
+     #[inline]
+     pub(crate) fn fill(
+         &mut self,
+-        chars: impl Iterator<Item = (char, CharInfo, u16)>,
++        chars: impl Iterator<Item = (char, CharInfo, u32)>,
+         code_unit_offset_in_string: &mut usize,
+     ) {
+         // Reset cluster but keep allocation
+diff --git a/parley_engine/src/shape/data.rs b/parley_engine/src/shape/data.rs
+index 779a71908c296b7455a37f8b51b8f6642e7b8fb5..3981bc4913ae43a549a6aedc0e66f5f761e4de2c 100644
+--- a/parley_engine/src/shape/data.rs
++++ b/parley_engine/src/shape/data.rs
+@@ -15,7 +15,7 @@ use crate::shape::Whitespace;
+ pub struct Character {
+     pub text_byte_start: u32,
+     /// Style index for this character.
+-    pub style_index: u16,
++    pub style_index: u32,
+     /// The whitespace class of this character.
+     pub whitespace: Whitespace,
+     /// Properties of this character.
+@@ -200,7 +200,7 @@ pub struct ShapedCluster {
+     pub(crate) chars_range: (u32, u32),
+ 
+     /// Style index for this cluster.
+-    pub style_index: u16,
++    pub style_index: u32,
+ 
+     /// The index into the glyph array where this cluster's glyphs start.
+     ///
+diff --git a/parley_engine/src/shape/shaped_text.rs b/parley_engine/src/shape/shaped_text.rs
+index 10d28b81887c5a72ea4300c8e14a75bd184041e5..92e91f819f559e5277f90d905803278d9b21028b 100644
+--- a/parley_engine/src/shape/shaped_text.rs
++++ b/parley_engine/src/shape/shaped_text.rs
+@@ -334,7 +334,7 @@ impl ShapedText {
+     /// otherwise identical. This is not for public consumption!
+     #[doc(hidden)]
+     #[inline(always)]
+-    pub fn remap_styles(&mut self, remap: &[u16]) {
++    pub fn remap_styles(&mut self, remap: &[u32]) {
+         for character in self.characters.iter_mut() {
+             character.style_index = remap[character.style_index as usize];
+         }
+@@ -348,7 +348,7 @@ impl ShapedText {
+     // colors, say): each character takes this one's style, and each shaped
+     // cluster its first character's, as shaping gives them.
+     #[doc(hidden)]
+-    pub fn set_style_indices(&mut self, style_indices: &[u16]) {
++    pub fn set_style_indices(&mut self, style_indices: &[u32]) {
+         for (character, &style_index) in self.characters.iter_mut().zip(style_indices) {
+             character.style_index = style_index;
+         }
+@@ -419,7 +419,7 @@ impl ShapedText {
+         is_item_start: bool,
+         options: &ShapeOptions<'_>,
+         char_info: &[CharInfo],
+-        char_style_indices: &[u16],
++        char_style_indices: &[u32],
+         font: &FontInstance,
+         // machopo: the glyphs harfrust gave, from its buffer or kept for words.
+         glyphs: impl DoubleEndedIterator<Item = HarfGlyph>,
+diff --git a/parley_engine/src/shape/shaper.rs b/parley_engine/src/shape/shaper.rs
+index b62bb3927c991e9e84260ad218d7738ede31a116..bdfe6b1c2d8db59883aafbf5034d5cce567d0960 100644
+--- a/parley_engine/src/shape/shaper.rs
++++ b/parley_engine/src/shape/shaper.rs
+@@ -198,7 +198,7 @@ impl Shaper {
+         text: &str,
+         analysis: &Analysis,
+         // TODO: rename to something like `user_data` (s.t. we don't assume it's a style per se).
+-        char_style_indices: &[u16],
++        char_style_indices: &[u32],
+         items: impl IntoIterator<Item = Item<'options>>,
+         mut select_font: impl FontSelector,
+         produce_safe_to_concat_flags: bool,
+@@ -295,7 +295,7 @@ fn shape_segment(
+     options: &ShapeOptions<'_>,
+     select_font: &mut impl FontSelector,
+     char_info: &[CharInfo],
+-    char_style_indices: &[u16],
++    char_style_indices: &[u32],
+     shaped_text: &mut ShapedText,
+ ) -> Result<(), ()> {
+     select_font.begin_segment(segment, options);
+@@ -617,7 +617,7 @@ struct WordRuns<'a, 't> {
+     is_item_start: bool,
+     options: &'t ShapeOptions<'t>,
+     char_info: &'t [CharInfo],
+-    char_style_indices: &'t [u16],
++    char_style_indices: &'t [u32],
+     shaped_text: &'a mut ShapedText,
+     glyphs: &'a mut Vec<HarfGlyph>,
+     /// The run being put together: its font, its text and its font instance's coords.
+@@ -861,7 +861,7 @@ fn shape_words(
+     options: &ShapeOptions<'_>,
+     select_font: &mut impl FontSelector,
+     char_info: &[CharInfo],
+-    char_style_indices: &[u16],
++    char_style_indices: &[u32],
+     shaped_text: &mut ShapedText,
+ ) -> Result<bool, ()> {
+     let options_id = words.options_id(segment.script, options);
+@@ -1167,7 +1167,7 @@ pub trait FontSelector {
+     /// [`Shaper::clear_words`]: with ids, a word shaped before with the same ids, script and
+     /// options takes the fonts it took then, without asking for them. `None` shapes the
+     /// segment's words anew.
+-    fn font_style(&self, style_index: u16) -> Option<u32> {
++    fn font_style(&self, style_index: u32) -> Option<u32> {
+         let _ = style_index;
+         None
+     }
+diff --git a/parley_tests/tests/basic.rs b/parley_tests/tests/basic.rs
+index 2e3fd00a958cb9c3be3bc453e9be83a13dd1ddc1..ccfe229d5b6ae8030a862e0aaa00b09ce2a6aa2b 100644
+--- a/parley_tests/tests/basic.rs
++++ b/parley_tests/tests/basic.rs
+@@ -652,7 +652,7 @@ fn collapsed_space_belongs_to_first_span() {
+     layout.break_all_lines(None);
+     assert_eq!(text, "aa bb");
+ 
+-    let style_indices: Vec<u16> = layout
++    let style_indices: Vec<u32> = layout
+         .get(0)
+         .unwrap()
+         .runs()
