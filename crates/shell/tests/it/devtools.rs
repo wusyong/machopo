@@ -342,13 +342,21 @@ fn uncaught_exceptions_and_rejections_reach_devtools() {
 }
 
 /// The tab's session stays when its renderer goes: the next renderer has
-/// it too, and the main frame is the same frame for DevTools.
+/// it too, and the main frame is the same frame for DevTools. What it is
+/// sent while the tab has no renderer fails, as Chrome's `Target crashed`.
 #[test]
 fn a_session_outlives_its_renderer() {
     let server = server(&[("/", Route::ok("text/html", "<!DOCTYPE html>back"))]);
     let machopo = Machopo::start();
     let (mut page, target) = page(&machopo);
     assert_eq!(evaluate(&mut page, "1 + 1", None), 2);
+    // On in the renderer that goes: on in the next too.
+    page.call(None, "Page.enable", json!({}));
+    page.call(
+        None,
+        "Page.setLifecycleEventsEnabled",
+        json!({ "enabled": true }),
+    );
     page.call(None, "Page.navigate", json!({ "url": "about:crash" }));
     let gone = loop {
         let answer = page.call(None, "Runtime.evaluate", json!({ "expression": "1" }));
@@ -357,7 +365,17 @@ fn a_session_outlives_its_renderer() {
         }
     };
     assert_eq!(gone["error"]["code"], -32000, "{gone}");
-    load(&mut page, &server.url("/"));
+    assert_eq!(gone["error"]["message"], "Target crashed", "{gone}");
+    // A navigation launches the next renderer, with `Page` and its
+    // lifecycle events on as the one before had them.
+    let navigated = page.call(None, "Page.navigate", json!({ "url": server.url("/") }));
+    let loader = navigated["result"]["loaderId"].clone();
+    loop {
+        let event = page.event("Page.lifecycleEvent");
+        if event["params"]["name"] == "load" && event["params"]["loaderId"] == loader {
+            break;
+        }
+    }
     assert_eq!(
         evaluate(&mut page, "document.body.textContent", None),
         "back"
@@ -428,7 +446,7 @@ fn text_is_utf8_both_ways() {
 }
 
 /// A command the renderer hasn't answered when it goes is answered that
-/// it has gone; one it answered, not again.
+/// it has gone, as Chrome's (`Target crashed`); one it answered, not again.
 #[test]
 fn a_command_left_waiting_is_answered_when_the_renderer_goes() {
     let machopo = Machopo::start();
@@ -444,7 +462,7 @@ fn a_command_left_waiting_is_answered_when_the_renderer_goes() {
     page.call(None, "Page.navigate", json!({ "url": "about:crash" }));
     let answer = page.answer(waiting);
     assert_eq!(answer["error"]["code"], -32000, "{answer}");
-    assert_eq!(answer["error"]["message"], "the tab's renderer has gone");
+    assert_eq!(answer["error"]["message"], "Target crashed");
     // What came with it has come by the next answer.
     page.call(None, "Runtime.evaluate", json!({ "expression": "1" }));
     assert!(!page.answered(done));
@@ -499,6 +517,74 @@ fn a_debugger_statement_pauses_the_page_until_resumed() {
     page.event("Debugger.resumed");
     assert_eq!(page.answer(evaluated)["result"]["result"]["value"], 2);
     until_true(&mut page, &format!("ticks > {ticks}"));
+}
+
+/// A breakpoint set by URL while the page's script is paused goes on in
+/// the tab's next renderer (its renderer ended): the new document's script
+/// pauses there without the session setting it again, with the id it was
+/// given. Nothing but the pause's commands goes to V8 after the breakpoint:
+/// what the pause takes is told as it takes it.
+#[test]
+fn a_breakpoint_set_while_paused_goes_on_in_the_next_renderer() {
+    let script = "<!DOCTYPE html><script src=/b.js></script>";
+    let server = server(&[
+        ("/", Route::ok("text/html", "<!DOCTYPE html>")),
+        ("/b", Route::ok("text/html", script)),
+        (
+            "/b.js",
+            Route::ok("text/javascript", "window.b = 1;\nwindow.b = 2;\n"),
+        ),
+    ]);
+    let machopo = Machopo::start();
+    let (mut page, _) = page(&machopo);
+    load(&mut page, &server.url("/"));
+    page.call(None, "Debugger.enable", json!({}));
+    // The page's own task pauses, not the command's.
+    page.call(
+        None,
+        "Runtime.evaluate",
+        json!({ "expression": "setTimeout(() => { debugger; }, 0); 1" }),
+    );
+    page.event("Debugger.paused");
+    let set = page.call(
+        None,
+        "Debugger.setBreakpointByUrl",
+        json!({ "url": server.url("/b.js"), "lineNumber": 1 }),
+    );
+    let id = set["result"]["breakpointId"].clone();
+    assert!(id.is_string(), "{set}");
+    page.call(None, "Debugger.resume", json!({}));
+    page.event("Debugger.resumed");
+    page.call(None, "Page.navigate", json!({ "url": "about:crash" }));
+    page.send(None, "Page.navigate", json!({ "url": server.url("/b") }));
+    let paused = page.event("Debugger.paused")["params"].clone();
+    assert_eq!(paused["hitBreakpoints"], json!([id]), "{paused}");
+    page.call(None, "Debugger.resume", json!({}));
+}
+
+/// The pause on exceptions, set while script runs, goes on in the tab's
+/// next renderer: the new document's exception pauses it.
+#[test]
+fn the_pause_on_exceptions_goes_on_in_the_next_renderer() {
+    let script = "<!DOCTYPE html><script>try { throw 1; } catch {}</script>";
+    let server = server(&[
+        ("/", Route::ok("text/html", "<!DOCTYPE html>")),
+        ("/b", Route::ok("text/html", script)),
+    ]);
+    let machopo = Machopo::start();
+    let (mut page, _) = page(&machopo);
+    load(&mut page, &server.url("/"));
+    page.call(None, "Debugger.enable", json!({}));
+    page.call(
+        None,
+        "Debugger.setPauseOnExceptions",
+        json!({ "state": "all" }),
+    );
+    page.call(None, "Page.navigate", json!({ "url": "about:crash" }));
+    page.send(None, "Page.navigate", json!({ "url": server.url("/b") }));
+    let paused = page.event("Debugger.paused")["params"].clone();
+    assert_eq!(paused["reason"], "exception", "{paused}");
+    page.call(None, "Debugger.resume", json!({}));
 }
 
 /// A breakpoint by URL and line pauses there; stepping goes on a line;

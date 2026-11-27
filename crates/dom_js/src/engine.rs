@@ -1726,8 +1726,12 @@ impl ScriptEngine for V8Engine {
         self.state().frames.main_token = Some(token);
     }
 
-    fn devtools_attach(&mut self, session: String, send: DevToolsSend) {
-        self.data.devtools_attach(session, send);
+    fn devtools_attach(&mut self, session: String, send: DevToolsSend, state: Option<&[u8]>) {
+        self.data.devtools_attach(session, send, state);
+    }
+
+    fn devtools_state(&self, session: &str) -> Option<Vec<u8>> {
+        self.data.devtools_state(session)
     }
 
     fn devtools_detach(&mut self, session: &str) {
@@ -1748,7 +1752,10 @@ impl ScriptEngine for V8Engine {
 
     fn set_devtools_queue(&mut self, queue: Box<dyn DevToolsQueue>) -> DevToolsInterrupter {
         self.data
-            .set_devtools_queue(Box::new(crate::devtools::Queue(queue)))
+            .set_devtools_queue(Box::new(crate::devtools::Queue(
+                queue,
+                std::cell::RefCell::default(),
+            )))
     }
 
     /// The DOM notes who asks while they are wanted; the stacks are

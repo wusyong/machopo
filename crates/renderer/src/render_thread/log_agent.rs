@@ -206,6 +206,23 @@ impl LogAgent {
         self.enabled.borrow_mut().retain(|on| on != session);
     }
 
+    /// What `session` has on, for the tab's next renderer to go on from
+    /// (Blink's `InspectorAgentState`): none if nothing.
+    pub(crate) fn state(&self, session: &str) -> Option<Value> {
+        self.enabled
+            .borrow()
+            .iter()
+            .any(|on| on == session)
+            .then(|| json!({}))
+    }
+
+    /// `session` goes on with `Log` on, as the renderer before had it: the
+    /// entries kept come, as they do when it turns it on.
+    pub(crate) fn restore(&self, session: &str, _state: &Value) {
+        self.enabled.borrow_mut().push(session.to_owned());
+        self.replay(session);
+    }
+
     /// Answers `message`, a command of `session`'s, if it is one of the
     /// agent's: whether it was.
     pub(crate) fn handle(&self, session: &str, message: &str) -> bool {
@@ -363,5 +380,24 @@ mod tests {
         let told = sent(&from);
         // The live ones `s` still hears of, then `t`'s.
         assert_eq!(told[1001], "1 log entry is not shown.");
+    }
+
+    /// What a session has on goes to another renderer's agent as it was:
+    /// `Log`.
+    #[test]
+    fn a_sessions_log_goes_on_in_another_agent() {
+        let (to_browser, from) = crossbeam_channel::unbounded();
+        let agent = LogAgent::new(to_browser.clone().into());
+        assert_eq!(agent.state("a"), None);
+        assert!(agent.handle("a", &command("Log.enable")));
+        let state = agent.state("a").expect("on");
+        let next = LogAgent::new(to_browser.into());
+        next.restore("a", &state);
+        assert_eq!(next.state("a"), Some(state));
+        next.add(entry("after"));
+        assert!(
+            sent(&from).contains(&"after".to_owned()),
+            "told to the session"
+        );
     }
 }

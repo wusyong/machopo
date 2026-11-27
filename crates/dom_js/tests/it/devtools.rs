@@ -43,6 +43,12 @@ impl Inspected {
     /// Its top-level frame's token `TOP_TOKEN`; a child frame's, the one
     /// the engine drew.
     fn new() -> Self {
+        Self::going_on_from(None)
+    }
+
+    /// [`Self::new`], its session going on from `state` (another engine's
+    /// `devtools_state`), if given.
+    fn going_on_from(state: Option<&[u8]>) -> Self {
         let mut engine = crate::TestEngine::new(EngineSettings::default());
         engine.set_main_frame_token(TOP_TOKEN);
         let sent: Rc<RefCell<Vec<Value>>> = Rc::default();
@@ -53,6 +59,7 @@ impl Inspected {
                 to.borrow_mut()
                     .push(serde_json::from_str(&message).unwrap())
             }),
+            state,
         );
         Self {
             engine,
@@ -421,7 +428,10 @@ fn script_paused_takes_the_queue() {
         .create_window(top, "https://example.test/a/", Instant::now())
         .unwrap();
     page.call("Debugger.enable", json!({}));
-    let attach = DevToolsQueued::Attach("t".to_owned());
+    let attach = DevToolsQueued::Attach {
+        session: "t".to_owned(),
+        state: None,
+    };
     let waiting = DevToolsQueued::Message {
         session: "t".to_owned(),
         message: r#"{"id":1,"method":"Runtime.enable"}"#.to_owned(),
@@ -534,6 +544,7 @@ fn a_session_detached_while_paused_lets_script_go_on() {
             to.borrow_mut()
                 .push(serde_json::from_str(&message).unwrap())
         }),
+        None,
     );
     let answer = page.call(
         "Runtime.evaluate",
@@ -663,4 +674,137 @@ fn the_stacks_of_script_that_asks_for_loads_are_captured() {
         top_function(dom.take_request_stack(StackAsker::Element(owner))),
         "addFrame"
     );
+}
+
+/// A session goes on in another engine (the tab's next renderer's) from
+/// the state the first gave: `Runtime` on (the new realm is told), the
+/// pause on exceptions, and the breakpoint set by URL, with the id the
+/// client knows it by. The breakpoint set again is no one's to answer.
+#[test]
+fn a_session_goes_on_in_another_engine_from_its_state() {
+    let mut first = Inspected::new();
+    first.call("Runtime.enable", json!({}));
+    first.call("Debugger.enable", json!({}));
+    first.call("Debugger.setPauseOnExceptions", json!({ "state": "all" }));
+    let set = first.call(
+        "Debugger.setBreakpointByUrl",
+        json!({ "url": "https://example.test/b.js", "lineNumber": 1 }),
+    );
+    let id = set["result"]["breakpointId"].clone();
+    assert!(id.is_string(), "{set}");
+    let state = first.engine.devtools_state("s").expect("the session's");
+
+    let mut next = Inspected::going_on_from(Some(&state));
+    assert!(
+        next.sent
+            .borrow()
+            .iter()
+            .all(|message| message.get("id").is_none()),
+        "{:?}",
+        next.sent.borrow()
+    );
+    let queue = Rc::new(Queue::default());
+    let _interrupter = next
+        .engine
+        .set_devtools_queue(Box::new(SharedQueue(queue.clone())));
+    queue.queued.borrow_mut().extend([
+        message(100, "Debugger.resume"),
+        message(101, "Debugger.resume"),
+    ]);
+    let top = next.engine.top_frame();
+    next.engine
+        .create_window(top, "https://example.test/a/", Instant::now())
+        .unwrap();
+    next.engine.run_classic_script(
+        top,
+        &ClassicScript {
+            source: "window.a = 1;\nwindow.b = 2;\ntry { throw 1; } catch {}",
+            url: "https://example.test/b.js",
+            base_url: None,
+            line: 1,
+            muted: false,
+            use_credentials: false,
+        },
+    );
+    let events = next.events();
+    assert!(
+        events
+            .iter()
+            .any(|(method, _)| method == "Runtime.executionContextCreated"),
+        "{events:?}"
+    );
+    let paused: Vec<(&str, &Value)> = events
+        .iter()
+        .filter(|(method, _)| method == "Debugger.paused")
+        .map(|(_, params)| {
+            (
+                params["reason"].as_str().unwrap_or_default(),
+                &params["hitBreakpoints"],
+            )
+        })
+        .collect();
+    assert_eq!(paused.len(), 2, "{events:?}");
+    assert_eq!(paused[0].1, &json!([id]), "{events:?}");
+    assert_eq!(paused[1].0, "exception", "{events:?}");
+}
+
+/// A breakpoint removed, or `Debugger` turned off, goes from the state:
+/// another engine going on from it doesn't pause there.
+#[test]
+fn a_breakpoint_removed_goes_from_the_state() {
+    for removal in ["Debugger.removeBreakpoint", "Debugger.disable"] {
+        let mut first = Inspected::new();
+        first.call("Debugger.enable", json!({}));
+        let set = first.call(
+            "Debugger.setBreakpointByUrl",
+            json!({ "url": "https://example.test/b.js", "lineNumber": 0 }),
+        );
+        let id = set["result"]["breakpointId"].clone();
+        first.call(removal, json!({ "breakpointId": id }));
+        first.call("Debugger.enable", json!({}));
+        let state = first.engine.devtools_state("s").expect("the session's");
+        let mut next = Inspected::going_on_from(Some(&state));
+        let top = next.engine.top_frame();
+        next.engine
+            .create_window(top, "https://example.test/a/", Instant::now())
+            .unwrap();
+        next.engine.run_classic_script(
+            top,
+            &ClassicScript {
+                source: "window.a = 1;",
+                url: "https://example.test/b.js",
+                base_url: None,
+                line: 1,
+                muted: false,
+                use_credentials: false,
+            },
+        );
+        assert_eq!(pauses(&next.events()), Vec::<&str>::new(), "{removal}");
+    }
+}
+
+/// State that isn't one (a renderer wrote it) is taken as none: the
+/// session starts afresh.
+#[test]
+fn a_state_that_isnt_one_starts_the_session_afresh() {
+    for state in [
+        &b""[..],
+        b"\x05\x00",
+        b"\xff\xff\xff\xff",
+        b"\x00\x00\x00\x00[1]",
+    ] {
+        let mut next = Inspected::going_on_from(Some(state));
+        let top = next.engine.top_frame();
+        next.engine
+            .create_window(top, "https://example.test/a/", Instant::now())
+            .unwrap();
+        let answer = next.call(
+            "Runtime.evaluate",
+            json!({ "expression": "1", "returnByValue": true }),
+        );
+        assert_eq!(
+            answer["result"]["result"]["value"], 1,
+            "{state:?}: {answer}"
+        );
+    }
 }

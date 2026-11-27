@@ -1353,7 +1353,7 @@ impl ScriptEngine for WasmEngine {
     }
 
     // No inspector: DevTools' sessions hear nothing of script here.
-    fn devtools_attach(&mut self, _: String, _: DevToolsSend) {}
+    fn devtools_attach(&mut self, _: String, _: DevToolsSend, _: Option<&[u8]>) {}
 
     fn devtools_detach(&mut self, _: &str) {}
 

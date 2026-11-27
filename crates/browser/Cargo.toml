@@ -39,3 +39,5 @@ getrandom.workspace = true
 dom_js.workspace = true
 # The tests send the renderer its `BeginFrame`s.
 viz.workspace = true
+# DevTools' messages, which the tests read and write.
+serde_json.workspace = true

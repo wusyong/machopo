@@ -120,6 +120,35 @@ pub struct HistoryEntryParams {
     pub entries_heard: u64,
 }
 
+/// What a DevTools session has on in a renderer, as the renderer wrote it
+/// (Chromium's `blink::mojom::DevToolsSessionState`, the session's state
+/// cookie): the browser keeps it without reading it, and gives it to the
+/// next renderer the session is attached to, which goes on from there.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DevToolsSessionState {
+    /// The renderer's own agents' (`Page`, `Network`, `Log`, `DOM`, `CSS`,
+    /// `Overlay`), each by its domain, as JSON.
+    pub agents: Vec<(String, String)>,
+    /// The script engine's inspector's, as the engine wrote it (V8's
+    /// session state).
+    pub engine: Option<BigBuffer>,
+}
+
+impl DevToolsSessionState {
+    /// The most bytes a renderer may give for one: far more than its
+    /// agents' switches and settings and V8's take.
+    pub const MAX_BYTES: usize = 1 << 20;
+
+    /// The bytes it takes, as counted against [`Self::MAX_BYTES`].
+    pub fn bytes(&self) -> usize {
+        self.agents
+            .iter()
+            .map(|(domain, state)| domain.len().saturating_add(state.len()))
+            .fold(0, usize::saturating_add)
+            .saturating_add(self.engine.as_ref().map_or(0, |engine| engine.len()))
+    }
+}
+
 /// A storage area as the browser opens it for a renderer: its number
 /// (each renderer's own, one for each storage key it has opened), and its
 /// items, if the renderer didn't have the area already.
@@ -415,8 +444,13 @@ pub enum RendererMsg {
     /// `DevToolsAgent::AttachDevToolsSession`): its commands go to the
     /// script engine's inspector (V8's), which answers through
     /// `RendererHostMsg::DevToolsMessage`. Whatever the flags: a window a
-    /// person uses has DevTools too.
-    DevToolsAttach { session: String },
+    /// person uses has DevTools too. With `state`, the session goes on
+    /// where it was in the renderer before (the tab has another: Blink's
+    /// `reattach_session_state`), as that one told it.
+    DevToolsAttach {
+        session: String,
+        state: Option<DevToolsSessionState>,
+    },
     /// The browser's `session` has gone.
     DevToolsDetach { session: String },
     /// A DevTools command, as JSON, for the browser's `session`: one the
@@ -994,6 +1028,13 @@ pub enum RendererHostMsg {
     DevToolsMessage {
         session: String,
         message: String,
+    },
+    /// What the browser's DevTools `session` has on in the renderer now, as
+    /// a command changed it: the browser keeps it, for the next renderer
+    /// of the tab (Blink's session state updates, sent with its answers).
+    DevToolsSessionState {
+        session: String,
+        state: DevToolsSessionState,
     },
     /// The renderer has gone, exited or crashed. The renderer never sends
     /// it: the browser's IO thread reports it once the renderer's channel

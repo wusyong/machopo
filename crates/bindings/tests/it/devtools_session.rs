@@ -22,6 +22,7 @@ impl Session {
                 sent.borrow_mut()
                     .push(serde_json::from_str(&message).unwrap());
             }),
+            None,
         );
         Self {
             answers,

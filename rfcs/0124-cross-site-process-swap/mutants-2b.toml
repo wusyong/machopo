@@ -1,0 +1,83 @@
+# Stage 2b's mutants (V8's part of a session's state and its breakpoints by URL, kept and given to the next engine; what V8 takes while script is paused told too). The tests link a V8 built from the fork's checkout: `RUSTY_V8_ARCHIVE=../third_party/rusty_v8_artifacts python3 scripts/test.py mutate rfcs/0124-cross-site-process-swap/mutants-2b.toml`.
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "devtools::"]
+timeout = 1800
+
+[[mutant]]
+name = "V8's state isn't given to the session going on"
+file = "crates/bindings/src/devtools.rs"
+from = '''            StringView::from(v8_state),'''
+to = '''            StringView::from(&v8_state[..0]),'''
+
+[[mutant]]
+name = "V8's state isn't written"
+file = "crates/bindings/src/devtools.rs"
+from = '''            .and_then(|state| state.string().characters8().map(<[u8]>::to_vec))'''
+to = '''            .and_then(|_| None::<Vec<u8>>)'''
+
+[[mutant]]
+name = "the breakpoints by URL aren't set again"
+file = "crates/bindings/src/devtools.rs"
+from = '''        for (n, command) in (1i32..).zip(commands) {'''
+to = '''        for (n, command) in (1i32..).zip(commands).take(0) {'''
+
+[[mutant]]
+name = "a breakpoint set again is answered to the client"
+file = "crates/bindings/src/devtools.rs"
+from = '''            attached.url_breakpoints.borrow_mut().restoring.push(id);'''
+to = ''''''
+
+[[mutant]]
+name = "a breakpoint set by URL isn't kept"
+file = "crates/bindings/src/devtools.rs"
+from = '''            self.set.push((id.to_owned(), command));'''
+to = ''''''
+
+[[mutant]]
+name = "a breakpoint removed stays in the state"
+file = "crates/bindings/src/devtools.rs"
+from = '''                self.set.retain(|(id, _)| Some(id.as_str()) != removed);'''
+to = '''                let _ = removed;'''
+
+[[mutant]]
+name = "Debugger turned off leaves its breakpoints in the state"
+file = "crates/bindings/src/devtools.rs"
+from = '''            Some("Debugger.disable") => self.set.clear(),'''
+to = '''            Some("Debugger.disable") => {}'''
+
+[[mutant]]
+name = "a state that isn't one is read past its end"
+file = "crates/bindings/src/devtools.rs"
+from = '''        let (v8_state, commands) = rest.split_at_checked(length)?;'''
+to = '''        let (v8_state, commands) = rest.split_at(length);'''
+
+[[mutant]]
+name = "what V8 takes while script is paused isn't told"
+file = "crates/bindings/src/devtools.rs"
+from = '''                        if self.dispatch(&session, &message) {
+                            if let Some(state) = self.state(&session) {
+                                queue.dispatched(&session, state);
+                            }'''
+to = '''                        if self.dispatch(&session, &message) {
+                            let _ = self.state(&session);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "devtools::"]
+
+[[mutant]]
+name = "a new engine isn't attached with the sessions' state"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''            let state = self.devtools_states.engine(session);'''
+to = '''            let state: Option<Vec<u8>> = None;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "devtools::"]
+
+[[mutant]]
+name = "what V8 has on isn't told after a command"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''            .and_then(|engine| engine.devtools_state(session))'''
+to = '''            .and_then(|_| None::<Vec<u8>>)'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "devtools::"]
+
+[[mutant]]
+name = "what V8 has on while script is paused isn't told"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''            Some(state),'''
+to = '''            self.devtools_states.engine(session).or(Some(state).filter(|_| false)),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "devtools::"]

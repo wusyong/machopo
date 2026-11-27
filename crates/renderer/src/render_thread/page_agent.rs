@@ -505,6 +505,27 @@ impl PageAgent {
         self.enabled.borrow_mut().retain(|known| known != session);
     }
 
+    /// What `session` has on, for the tab's next renderer to go on from
+    /// (Blink's `InspectorAgentState`): none if nothing.
+    pub(crate) fn state(&self, session: &str) -> Option<Value> {
+        let enabled = self.enabled.borrow().iter().any(|known| known == session);
+        let lifecycle = self.lifecycle.borrow().iter().any(|known| known == session);
+        (enabled || lifecycle).then(|| json!({ "enabled": enabled, "lifecycle": lifecycle }))
+    }
+
+    /// `session` goes on from `state` (`state`'s), as the renderer before
+    /// had it: the lifecycle events so far come again, as they do when it
+    /// turns them on.
+    pub(crate) fn restore(&self, session: &str, state: &Value) {
+        if state["enabled"].as_bool() == Some(true) {
+            self.enabled.borrow_mut().push(session.to_owned());
+        }
+        if state["lifecycle"].as_bool() == Some(true) {
+            self.lifecycle.borrow_mut().push(session.to_owned());
+            self.replay_lifecycle(session);
+        }
+    }
+
     /// The tree from the main frame down (`Page.FrameTree`, or with
     /// `resources`, `Page.FrameResourceTree`).
     fn tree(&self, resources: bool) -> Value {
@@ -794,5 +815,37 @@ mod tests {
                 ("https://a.test/3", true)
             ]
         );
+    }
+
+    /// What a session has on goes to another renderer's agent as it was:
+    /// `Page` and its lifecycle events.
+    #[test]
+    fn a_sessions_page_goes_on_in_another_agent() {
+        let (to_browser, _from) = crossbeam_channel::unbounded();
+        let to_browser: BrowserSender = to_browser.into();
+        let network = || {
+            Rc::new(NetworkAgent::new(
+                to_browser.clone(),
+                0,
+                Rc::new(super::super::log_agent::LogAgent::new(to_browser.clone())),
+            ))
+        };
+        let agent = PageAgent::new(to_browser.clone(), network());
+        assert_eq!(agent.state("a"), None);
+        let command = |method: &str, params: Value| {
+            json!({ "id": 1, "method": method, "params": params }).to_string()
+        };
+        assert!(agent.handle("a", &command("Page.enable", json!({}))));
+        assert!(agent.handle(
+            "a",
+            &command("Page.setLifecycleEventsEnabled", json!({ "enabled": true }))
+        ));
+        let state = agent.state("a").expect("on");
+        let next = PageAgent::new(to_browser.clone(), network());
+        next.restore("a", &state);
+        assert!(next.any_enabled());
+        assert_eq!(next.state("a"), Some(state));
+        assert!(agent.handle("a", &command("Page.disable", json!({}))));
+        assert_eq!(agent.state("a"), None);
     }
 }

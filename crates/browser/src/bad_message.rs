@@ -77,6 +77,9 @@ pub enum BadMessageReason {
     /// `SharedImageStub`'s of a shared image's pixels): it doesn't go on
     /// to Viz.
     FrameSink(protocol::viz::InvalidFrameSinkMsg),
+    /// A DevTools session's state over `DevToolsSessionState::MAX_BYTES`:
+    /// more than the renderer's agents and V8 ever write.
+    DevToolsSessionStateTooLarge,
     /// What the channel to a renderer process itself refused: bytes that
     /// are no message, a message that is none of its kind, a handle or a
     /// pipe a renderer may not send, more queued than may wait (Mojo's

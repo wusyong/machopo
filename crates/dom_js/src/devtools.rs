@@ -6,19 +6,33 @@
 //! The exceptions reported, told to its console (`exception_thrown`), and
 //! the host's DevTools queue, as the inspector takes from it.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use bindings::devtools::Queued;
 use dom::NodeRoot;
-use dom_api::{DevToolsQueue, DevToolsQueued, FrameId};
+use dom_api::{DevToolsQueue, DevToolsQueued, DevToolsSessionState, FrameId};
 
 use crate::state::Scope;
 
-/// The host's DevTools queue, as `bindings`' inspector takes from it.
-pub(crate) struct Queue(pub(crate) Box<dyn DevToolsQueue>);
+/// The host's DevTools queue, as `bindings`' inspector takes from it; and
+/// the state each session attached while script was paused goes on from,
+/// held till its attach is put back (`bindings` knows nothing of it). One
+/// thread's: `bindings`' queue takes `&self`.
+pub(crate) struct Queue(
+    pub(crate) Box<dyn DevToolsQueue>,
+    pub(crate) RefCell<HashMap<String, DevToolsSessionState>>,
+);
 
 impl bindings::devtools::Queue for Queue {
     fn next(&self) -> Queued {
         match self.0.next() {
-            DevToolsQueued::Attach(session) => Queued::Attach(session),
+            DevToolsQueued::Attach { session, state } => {
+                if let Some(state) = state {
+                    self.1.borrow_mut().insert(session.clone(), state);
+                }
+                Queued::Attach(session)
+            }
             DevToolsQueued::Detach(session) => Queued::Detach(session),
             DevToolsQueued::Message { session, message } => Queued::Message { session, message },
             DevToolsQueued::Quit => Queued::Quit,
@@ -35,7 +49,10 @@ impl bindings::devtools::Queue for Queue {
             queued
                 .into_iter()
                 .map(|queued| match queued {
-                    Queued::Attach(session) => DevToolsQueued::Attach(session),
+                    Queued::Attach(session) => {
+                        let state = self.1.borrow_mut().remove(&session);
+                        DevToolsQueued::Attach { session, state }
+                    }
                     Queued::Detach(session) => DevToolsQueued::Detach(session),
                     Queued::Message { session, message } => {
                         DevToolsQueued::Message { session, message }
@@ -54,6 +71,10 @@ impl bindings::devtools::Queue for Queue {
             message,
             &mut crate::devtools_page::Page::new(isolate),
         )
+    }
+
+    fn dispatched(&self, session: &str, state: Vec<u8>) {
+        self.0.dispatched(session, state);
     }
 
     fn paused(&self, isolate: &mut v8::Isolate) {

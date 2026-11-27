@@ -744,6 +744,25 @@ impl CssAgent {
 
     /// `session` has gone: what it forced goes too (from `dom`, if the
     /// renderer has one).
+    /// What `session` has on, for the tab's next renderer to go on from
+    /// (Blink's `InspectorAgentState`): none if nothing. Only that it is on:
+    /// the node it tracks and the pseudo-classes it forces were the
+    /// renderer's nodes'.
+    pub(crate) fn state(&self, session: &str) -> Option<Value> {
+        self.sessions
+            .borrow()
+            .contains_key(session)
+            .then(|| json!({}))
+    }
+
+    /// `session` goes on with `CSS` on: the sheets come as they are added.
+    pub(crate) fn restore(&self, session: &str, _state: &Value) {
+        self.sessions
+            .borrow_mut()
+            .entry(session.to_owned())
+            .or_default();
+    }
+
     pub(crate) fn detach(&self, session: &str, dom: Option<&mut Dom>) {
         let gone = self.sessions.borrow_mut().remove(session);
         if let (Some(gone), Some(dom)) = (gone, dom) {
@@ -1774,5 +1793,29 @@ mod tests {
         assert_eq!(text_end(2, 7, "\na {}\n"), (4, 0));
         assert_eq!(text_end(2, 7, "\na {}é"), (3, 5));
         assert_eq!(text_end(2, 7, ""), (2, 7));
+    }
+
+    /// What a session has on goes to another renderer's agent as it was:
+    /// `CSS` on.
+    #[test]
+    fn a_sessions_css_goes_on_in_another_agent() {
+        use std::rc::Rc;
+
+        let (to_browser, _from) = crossbeam_channel::unbounded();
+        let to_browser: protocol::control_channel::BrowserSender = to_browser.into();
+        let log = Rc::new(super::super::log_agent::LogAgent::new(to_browser.clone()));
+        let network = Rc::new(super::super::network_agent::NetworkAgent::new(
+            to_browser.clone(),
+            0,
+            log,
+        ));
+        let page = Rc::new(super::PageAgent::new(to_browser.clone(), network));
+        let dom = Rc::new(super::DomAgent::new(to_browser.clone()));
+        let agent = super::CssAgent::new(to_browser, dom, page, 0);
+        assert_eq!(agent.state("a"), None);
+        agent.restore("a", &serde_json::json!({}));
+        assert_eq!(agent.state("a"), Some(serde_json::json!({})));
+        agent.detach("a", None);
+        assert_eq!(agent.state("a"), None);
     }
 }

@@ -702,7 +702,9 @@ impl RendererSender {
             return scheduler.post_reply(request_id, msg);
         }
         let (queued, interrupt) = match msg {
-            RendererMsg::DevToolsAttach { session } => (DevToolsQueued::Attach(session), false),
+            RendererMsg::DevToolsAttach { session, state } => {
+                (DevToolsQueued::Attach { session, state }, false)
+            }
             RendererMsg::DevToolsDetach { session } => (DevToolsQueued::Detach(session), false),
             RendererMsg::DevToolsMessage {
                 session,
@@ -996,6 +998,7 @@ mod tests {
             message("b", "3", true),
             RendererMsg::DevToolsAttach {
                 session: "c".to_owned(),
+                state: None,
             },
             message("c", "4", true),
         ] {
@@ -1021,7 +1024,7 @@ mod tests {
                 "devtools 0",
                 "browser",
                 "devtools 1",
-                "Attach(\"c\")",
+                "Attach { session: \"c\", state: None }",
                 "devtools 4"
             ]
         );

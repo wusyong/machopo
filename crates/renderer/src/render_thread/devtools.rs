@@ -10,9 +10,12 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use dom_api::{DevToolsQueued, EngineSettings, ScriptEngine};
 use protocol::control_channel::BrowserSender;
-use protocol::renderer::{RendererHostMsg, RendererMsg};
+use protocol::renderer::{DevToolsSessionState, RendererHostMsg, RendererMsg};
 use url::Url;
 
 use super::RenderThread;
@@ -28,7 +31,7 @@ impl RenderThread {
     /// scheduler's that script paused or interrupted didn't take already.
     pub(super) fn run_devtools_task(&mut self, queued: DevToolsQueued) {
         match queued {
-            DevToolsQueued::Attach(session) => self.devtools_attach(session),
+            DevToolsQueued::Attach { session, state } => self.devtools_attach(session, state),
             DevToolsQueued::Detach(session) => self.devtools_detach(&session),
             DevToolsQueued::Message { session, message } => {
                 self.devtools_message(&session, &message);
@@ -39,12 +42,78 @@ impl RenderThread {
         }
     }
 
-    pub(super) fn devtools_attach(&mut self, session: String) {
+    /// `session` attached; with `state`, it goes on where it was in the
+    /// tab's renderer before (Blink's `DevToolsSession` reattaching), each
+    /// agent as that one told it: `DOM` before the two that need it.
+    pub(super) fn devtools_attach(&mut self, session: String, state: Option<DevToolsSessionState>) {
         if let Some(engine) = &mut self.engine {
-            engine.devtools_attach(session.clone(), devtools_send(&self.to_browser, &session));
+            let engine_state = state.as_ref().and_then(|state| state.engine.as_deref());
+            engine.devtools_attach(
+                session.clone(),
+                devtools_send(&self.to_browser, &session),
+                engine_state,
+            );
         }
         self.devtools_sessions.retain(|known| *known != session);
-        self.devtools_sessions.push(session);
+        self.devtools_sessions.push(session.clone());
+        let Some(state) = state else {
+            return;
+        };
+        let agent_state = |domain: &str| {
+            state
+                .agents
+                .iter()
+                .find(|(of, _)| of == domain)
+                .and_then(|(_, state)| serde_json::from_str::<serde_json::Value>(state).ok())
+        };
+        if let Some(page) = agent_state("Page") {
+            self.page_agent.restore(&session, &page);
+        }
+        if let Some(network) = agent_state("Network") {
+            self.network_agent.restore(&session, &network);
+        }
+        if let Some(log) = agent_state("Log") {
+            self.log_agent.restore(&session, &log);
+        }
+        if let Some(dom) = agent_state("DOM") {
+            self.dom_agent.restore(&session, &dom);
+            if let Some(engine) = &mut self.engine {
+                engine.dom_mut().set_dom_changes_wanted(true);
+            }
+        }
+        if let Some(css) = agent_state("CSS") {
+            self.css_agent.restore(&session, &css);
+        }
+        if let Some(overlay) = agent_state("Overlay") {
+            self.overlay_agent.restore(&session, &overlay);
+        }
+        self.update_stacks_wanted();
+        self.devtools_states.restored(&session, state);
+    }
+
+    /// Tells the browser what `session` has on now, if a command changed it:
+    /// the engine's part as it has it, or as the browser was last told
+    /// while there is no engine with an inspector (before the first, the
+    /// wasm one).
+    pub(super) fn tell_devtools_state(&self, session: &str) {
+        let engine = self
+            .engine
+            .as_ref()
+            .and_then(|engine| engine.devtools_state(session))
+            .or_else(|| self.devtools_states.engine(session));
+        self.devtools_states.tell(
+            session,
+            engine,
+            agents_state(
+                &self.page_agent,
+                &self.network_agent,
+                &self.log_agent,
+                &self.dom_agent,
+                &self.css_agent,
+                &self.overlay_agent,
+                session,
+            ),
+        );
     }
 
     pub(super) fn devtools_detach(&mut self, session: &str) {
@@ -64,6 +133,7 @@ impl RenderThread {
                 .set_dom_changes_wanted(self.dom_agent.any_enabled());
         }
         self.devtools_sessions.retain(|known| known != session);
+        self.devtools_states.forget(session);
         self.update_stacks_wanted();
     }
 
@@ -157,6 +227,7 @@ impl RenderThread {
             // The stacks they want from now on (`Page.enable`,
             // `Network.setAttachDebugStack`).
             self.update_stacks_wanted();
+            self.tell_devtools_state(session);
             return;
         }
         if self.engine.is_none() {
@@ -176,6 +247,7 @@ impl RenderThread {
             // that wanted them (Blink's `InspectorResourceContentLoader`
             // fetches in `CSS.enable`'s).
             self.start_css_refetches();
+            self.tell_devtools_state(session);
             return;
         }
         let handled = self
@@ -186,6 +258,7 @@ impl RenderThread {
             // What its script left for the page (its results, warnings).
             self.send_harness_results();
             self.log_console_warnings();
+            self.tell_devtools_state(session);
             return;
         }
         let Some((id, method)) = command_of(message) else {
@@ -280,6 +353,7 @@ impl RenderThread {
             dom_agent: self.dom_agent.clone(),
             css_agent: self.css_agent.clone(),
             overlay_agent: self.overlay_agent.clone(),
+            devtools_states: self.devtools_states.clone(),
             to_browser: self.to_browser.clone(),
             automation: self.automation,
             cannot_render: Cell::new(false),
@@ -288,13 +362,26 @@ impl RenderThread {
         if let Some(token) = self.render_frames.top_token() {
             engine.set_main_frame_token(token);
         }
+        // Going on from what the browser was last told: the sessions as the
+        // engine before had them (of the other kind, or the tab's renderer
+        // before as it was attached).
         for session in &self.devtools_sessions {
-            engine.devtools_attach(session.clone(), devtools_send(&self.to_browser, session));
+            let state = self.devtools_states.engine(session);
+            engine.devtools_attach(
+                session.clone(),
+                devtools_send(&self.to_browser, session),
+                state.as_deref(),
+            );
         }
         engine.set_stacks_wanted(
             self.network_agent.wants_stacks(),
             self.page_agent.any_enabled(),
         );
+        // A session that came with `DOM` on (from the tab's renderer
+        // before) hears of the new engine's DOM's changes too.
+        engine
+            .dom_mut()
+            .set_dom_changes_wanted(self.dom_agent.any_enabled());
         engine
     }
 
@@ -347,6 +434,7 @@ struct DevToolsQueueHandle {
     dom_agent: Rc<super::dom_agent::DomAgent>,
     css_agent: Rc<super::css_agent::CssAgent>,
     overlay_agent: Rc<super::overlay_agent::OverlayAgent>,
+    devtools_states: Rc<SessionStates>,
     /// For a frame asked for (`RequestVisualState`) while paused.
     to_browser: BrowserSender,
     automation: bool,
@@ -400,7 +488,7 @@ impl dom_api::DevToolsQueue for DevToolsQueueHandle {
         message: &str,
         page: &mut dyn dom_api::DevToolsPage,
     ) -> bool {
-        self.page_agent.handle(session, message)
+        let answered = self.page_agent.handle(session, message)
             || self.network_agent.handle(session, message)
             || self.log_agent.handle(session, message)
             || (self.dom_agent.handle(session, message, page) && {
@@ -408,7 +496,39 @@ impl dom_api::DevToolsQueue for DevToolsQueueHandle {
                 true
             })
             || self.css_agent.handle(session, message, page)
-            || self.overlay_agent.handle(session, message, page)
+            || self.overlay_agent.handle(session, message, page);
+        if answered {
+            self.devtools_states.tell(
+                session,
+                self.devtools_states.engine(session),
+                agents_state(
+                    &self.page_agent,
+                    &self.network_agent,
+                    &self.log_agent,
+                    &self.dom_agent,
+                    &self.css_agent,
+                    &self.overlay_agent,
+                    session,
+                ),
+            );
+        }
+        answered
+    }
+
+    fn dispatched(&self, session: &str, state: Vec<u8>) {
+        self.devtools_states.tell(
+            session,
+            Some(state),
+            agents_state(
+                &self.page_agent,
+                &self.network_agent,
+                &self.log_agent,
+                &self.dom_agent,
+                &self.css_agent,
+                &self.overlay_agent,
+                session,
+            ),
+        );
     }
 
     fn paused(&self, page: &mut dyn dom_api::DevToolsPage) {
@@ -522,4 +642,83 @@ pub(super) fn secure_context(url: &str, parent: Option<&'static str>) -> &'stati
         },
         _ => "InsecureScheme",
     }
+}
+
+/// What each DevTools session has on, as last told to the browser
+/// (`RendererHostMsg::DevToolsSessionState`, Blink's session state
+/// updates): told again only once a command changed it. The render
+/// thread's and the engine's DevTools queue's, which answers commands while
+/// script is paused, as the agents are (`Rc`).
+pub(super) struct SessionStates {
+    to_browser: BrowserSender,
+    told: RefCell<HashMap<String, DevToolsSessionState>>,
+}
+
+impl SessionStates {
+    pub(super) fn new(to_browser: BrowserSender) -> Self {
+        Self {
+            to_browser,
+            told: RefCell::default(),
+        }
+    }
+
+    /// `session` has `engine` and `agents` on now: the browser hears, if it
+    /// is other than it last heard.
+    fn tell(&self, session: &str, engine: Option<Vec<u8>>, agents: Vec<(String, String)>) {
+        let state = DevToolsSessionState {
+            agents,
+            engine: engine.map(Into::into),
+        };
+        let mut told = self.told.borrow_mut();
+        if told.get(session) == Some(&state) {
+            return;
+        }
+        let _ = self.to_browser.send(RendererHostMsg::DevToolsSessionState {
+            session: session.to_owned(),
+            state: state.clone(),
+        });
+        told.insert(session.to_owned(), state);
+    }
+
+    /// `session` went on from `state`, which the browser has.
+    fn restored(&self, session: &str, state: DevToolsSessionState) {
+        self.told.borrow_mut().insert(session.to_owned(), state);
+    }
+
+    /// The engine's part of what the browser last heard of `session`.
+    fn engine(&self, session: &str) -> Option<Vec<u8>> {
+        self.told
+            .borrow()
+            .get(session)
+            .and_then(|state| state.engine.as_ref())
+            .map(|engine| engine.to_vec())
+    }
+
+    fn forget(&self, session: &str) {
+        self.told.borrow_mut().remove(session);
+    }
+}
+
+/// What `session` has on in each of the renderer's agents, by domain, as
+/// JSON: those it has nothing on in left out.
+fn agents_state(
+    page: &super::page_agent::PageAgent,
+    network: &super::network_agent::NetworkAgent,
+    log: &super::log_agent::LogAgent,
+    dom: &super::dom_agent::DomAgent,
+    css: &super::css_agent::CssAgent,
+    overlay: &super::overlay_agent::OverlayAgent,
+    session: &str,
+) -> Vec<(String, String)> {
+    [
+        ("Page", page.state(session)),
+        ("Network", network.state(session)),
+        ("Log", log.state(session)),
+        ("DOM", dom.state(session)),
+        ("CSS", css.state(session)),
+        ("Overlay", overlay.state(session)),
+    ]
+    .into_iter()
+    .filter_map(|(domain, state)| Some((domain.to_owned(), state?.to_string())))
+    .collect()
 }

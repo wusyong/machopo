@@ -523,6 +523,8 @@ struct RenderThread {
     webdriver_state: webdriver::WebDriverState,
     /// The browser's DevTools sessions.
     devtools_sessions: Vec<String>,
+    /// What each of them has on, as last told to the browser.
+    devtools_states: Rc<devtools::SessionStates>,
     /// A child frame was made, went or committed a document since
     /// DevTools last looked at the frames: they are looked at again after
     /// the task, the `Page` agent telling of a new frame's initial
@@ -615,6 +617,7 @@ impl RenderThread {
             dom_agent.clone(),
         ));
         let blob_urls = BlobUrls::new(to_browser.clone());
+        let devtools_states = Rc::new(devtools::SessionStates::new(to_browser.clone()));
         tracing::info!(raster = raster::BACKEND, "renderer main thread up");
         let _ = to_browser.send(RendererHostMsg::RendererReady);
         Self {
@@ -684,6 +687,7 @@ impl RenderThread {
             terminator,
             webdriver_state: webdriver::WebDriverState::new(id_prefix),
             devtools_sessions: Vec::new(),
+            devtools_states,
             frames_changed: false,
             page_agent,
             network_agent,

@@ -10,6 +10,7 @@
 )]
 
 mod cookies;
+mod devtools_session;
 mod dom_storage;
 mod loaders;
 mod navigation;

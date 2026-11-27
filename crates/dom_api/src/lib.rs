@@ -197,6 +197,9 @@ pub use menu_list::{
 pub use mutation_observer::deliver_mutations;
 pub use navigator::{InputMonitor, PendingInput};
 pub use performance::RANDOMIZED_TRIGGER_RATE;
+/// What a DevTools session has on, as an engine is given it with its attach
+/// (`DevToolsQueued::Attach`).
+pub use protocol::renderer::DevToolsSessionState;
 pub use resize_observer::{
     ResizeObserverRound, gather_and_broadcast, has_resize_observations, report_loop_error,
 };

@@ -9,8 +9,9 @@ use protocol::network::{
     RequestDestination, ResourceRequest, ResponseHead,
 };
 use protocol::renderer::{
-    BeginNavigationKind, FrameLoadType, HistoryEntryParams, NavigationLoad, RedirectHop,
-    RendererHostMsg, RendererMsg, StorageKind, VisualProperties, WindowOpenDisposition,
+    BeginNavigationKind, DevToolsSessionState, FrameLoadType, HistoryEntryParams, NavigationLoad,
+    RedirectHop, RendererHostMsg, RendererMsg, StorageKind, VisualProperties,
+    WindowOpenDisposition,
 };
 use protocol::viz::{
     BeginFrameArgs, BeginFrameObserver, ContextProvider, DisplayMsg, FrameSinkId, LocalSurfaceId,
@@ -236,6 +237,11 @@ pub struct WebContents {
     /// Input events handed to the renderer that it (or its compositor) has
     /// yet to acknowledge (`RenderWidgetHostImpl::in_flight_event_count_`).
     input_in_flight: u32,
+    /// The browser's DevTools sessions attached to the tab, in order, and
+    /// what each has on in the renderer, as it last told
+    /// (`RenderFrameDevToolsAgentHost`'s sessions and their state
+    /// cookies): attached to every renderer the tab has, going on from it.
+    devtools_sessions: Vec<(String, Option<DevToolsSessionState>)>,
 }
 
 /// What the renderer said of a navigation it asked for: its number for
@@ -394,6 +400,7 @@ impl WebContents {
             entries_heard: SequenceNumber::new(),
             launch,
             input_in_flight: 0,
+            devtools_sessions: Vec::new(),
         })
     }
 
@@ -1001,6 +1008,15 @@ impl WebContents {
         }
         if self.focused {
             self.process.send(RendererMsg::SetFocus(true));
+        }
+        // The DevTools sessions, before anything the new renderer loads
+        // (Chromium reattaches them as the navigation is ready to commit,
+        // `RenderFrameDevToolsAgentHost::UpdateFrameHost`).
+        for (session, state) in &self.devtools_sessions {
+            self.process.send(RendererMsg::DevToolsAttach {
+                session: session.clone(),
+                state: state.clone(),
+            });
         }
     }
 
@@ -1764,15 +1780,20 @@ impl WebContents {
 
     /// Attaches a DevTools session of the browser's to the page
     /// (`RendererMsg::DevToolsAttach`): the commands it can't answer go
-    /// there.
-    pub fn devtools_attach(&self, session: &str) {
+    /// there, in this renderer and each one after, which goes on where the
+    /// one before was.
+    pub fn devtools_attach(&mut self, session: &str) {
+        self.devtools_sessions.retain(|(known, _)| known != session);
+        self.devtools_sessions.push((session.to_owned(), None));
         self.process.send(RendererMsg::DevToolsAttach {
             session: session.to_owned(),
+            state: None,
         });
     }
 
     /// The session has gone.
-    pub fn devtools_detach(&self, session: &str) {
+    pub fn devtools_detach(&mut self, session: &str) {
+        self.devtools_sessions.retain(|(known, _)| known != session);
         self.process.send(RendererMsg::DevToolsDetach {
             session: session.to_owned(),
         });
@@ -2033,6 +2054,20 @@ impl WebContents {
             RendererHostMsg::RendererGone => {
                 self.process.ended();
                 self.renderer_gone();
+            }
+            RendererHostMsg::DevToolsSessionState { session, state } => {
+                if state.bytes() > DevToolsSessionState::MAX_BYTES {
+                    return self
+                        .received_bad_message(BadMessageReason::DevToolsSessionStateTooLarge);
+                }
+                // One detached since is the renderer's no more.
+                if let Some((_, kept)) = self
+                    .devtools_sessions
+                    .iter_mut()
+                    .find(|(known, _)| known == session)
+                {
+                    *kept = Some(state.clone());
+                }
             }
             RendererHostMsg::RendererReady => {}
             RendererHostMsg::DidCreateChildFrame {

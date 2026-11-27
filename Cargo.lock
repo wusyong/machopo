@@ -377,6 +377,7 @@ dependencies = [
  "net",
  "protocol",
  "renderer",
+ "serde_json",
  "site",
  "sql",
  "trace_event",

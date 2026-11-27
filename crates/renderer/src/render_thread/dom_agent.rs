@@ -252,6 +252,33 @@ impl DomAgent {
         self.sessions.borrow_mut().remove(session);
     }
 
+    /// What `session` has on, for the tab's next renderer to go on from
+    /// (Blink's `InspectorAgentState`): none if nothing. Whether it is on and how; not its numbers,
+    /// which were the renderer's nodes'.
+    pub(crate) fn state(&self, session: &str) -> Option<Value> {
+        self.sessions
+            .borrow()
+            .get(session)
+            .filter(|state| state.enabled)
+            .map(|state| {
+                let whitespace = if state.include_whitespace {
+                    "all"
+                } else {
+                    "none"
+                };
+                json!({ "includeWhitespace": whitespace })
+            })
+    }
+
+    /// `session` goes on with `DOM` on as `state` has it: it asks for the
+    /// document again (`DOM.getDocument`), as after `documentUpdated`.
+    pub(crate) fn restore(&self, session: &str, state: &Value) {
+        let mut sessions = self.sessions.borrow_mut();
+        let restored = sessions.entry(session.to_owned()).or_default();
+        restored.enabled = true;
+        restored.include_whitespace = state["includeWhitespace"].as_str() == Some("all");
+    }
+
     /// The DOM is going (its engine with it): every node a session kept
     /// goes before its heap, and every number.
     pub(crate) fn dom_gone(&self) {
@@ -2114,6 +2141,33 @@ mod tests {
         assert!(agent.sessions.borrow().get("b").is_none());
         // Another domain's command isn't the agent's.
         assert!(!agent.handle("a", &command("CSS.enable"), page));
+        drop(document);
+    }
+
+    /// What a session has on goes to another renderer's agent as it was:
+    /// `DOM`, white space included or not.
+    #[test]
+    fn a_sessions_dom_goes_on_in_another_agent() {
+        let (to_browser, _from) = crossbeam_channel::unbounded();
+        let to_browser: BrowserSender = to_browser.into();
+        let agent = DomAgent::new(to_browser.clone());
+        let (mut dom, document) = page(&agent);
+        let page = &mut Lent(&mut dom);
+        assert_eq!(agent.state("a"), None);
+        let enable = json!({
+            "id": 1,
+            "method": "DOM.enable",
+            "params": { "includeWhitespace": "all" },
+        });
+        assert!(agent.handle("a", &enable.to_string(), page));
+        let state = agent.state("a").expect("on");
+        assert_eq!(state["includeWhitespace"], "all");
+        let next = DomAgent::new(to_browser);
+        next.restore("a", &state);
+        assert!(next.enabled("a"));
+        assert_eq!(next.state("a"), Some(state));
+        assert!(agent.handle("a", &command("DOM.disable"), page));
+        assert_eq!(agent.state("a"), None);
         drop(document);
     }
 }

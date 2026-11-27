@@ -72,9 +72,21 @@ impl V8PerIsolateData {
     }
 
     /// A DevTools session of the browser's `session`, whose answers and
-    /// events go to `send`, as JSON.
-    pub fn devtools_attach(&mut self, session: String, send: Box<dyn Fn(String)>) {
-        self.devtools.attach(session, send);
+    /// events go to `send`, as JSON; going on from `state` (what
+    /// [`Self::devtools_state`] gave, of another isolate), if given.
+    pub fn devtools_attach(
+        &mut self,
+        session: String,
+        send: Box<dyn Fn(String)>,
+        state: Option<&[u8]>,
+    ) {
+        self.devtools.attach(session, send, state);
+    }
+
+    /// What the browser's `session` has on in the inspector, for another
+    /// isolate's to go on from; none for a session it hasn't.
+    pub fn devtools_state(&self, session: &str) -> Option<Vec<u8>> {
+        self.devtools.state(session)
     }
 
     /// The browser's `session` has gone.
@@ -97,11 +109,7 @@ impl V8PerIsolateData {
     /// `session`; a session that has gone takes none. V8 may run page
     /// script for it (`Runtime.evaluate`), so only a script entry calls it.
     pub fn dispatch_devtools_message(&mut self, session: &str, message: &str) -> bool {
-        let Some(session) = self.devtools.session(session) else {
-            return false;
-        };
-        session.dispatch_protocol_message(v8::inspector::StringView::from(message.as_bytes()));
-        true
+        self.devtools.dispatch(session, message)
     }
 
     /// Tells DevTools `context` has gone with its document.

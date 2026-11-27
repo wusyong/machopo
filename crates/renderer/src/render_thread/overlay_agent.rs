@@ -166,8 +166,10 @@ struct Shown {
 struct Session {
     enabled: bool,
     /// Its inspect mode, if on: how what the mouse is over is highlighted,
-    /// and whether in user-agent shadow trees too.
+    /// and whether in user-agent shadow trees too; and the parameters it was
+    /// set with, for the tab's next renderer (`state`).
     inspect: Option<(HighlightConfig, bool)>,
+    inspect_params: Option<Value>,
     /// What `setPausedInDebuggerMessage` asked to show.
     paused_message: Option<String>,
 }
@@ -240,6 +242,37 @@ impl OverlayAgent {
     }
 
     /// `session` has gone: what it showed goes with it.
+    /// What `session` has on, for the tab's next renderer to go on from
+    /// (Blink's `InspectorAgentState`): none if nothing.
+    pub(crate) fn state(&self, session: &str) -> Option<Value> {
+        self.sessions.borrow().get(session).map(|state| {
+            json!({
+                "enabled": state.enabled,
+                "inspectMode": state.inspect_params,
+                "pausedMessage": state.paused_message,
+            })
+        })
+    }
+
+    /// `session` goes on with `Overlay` as `state` has it: its inspect mode
+    /// as it was set, the message shown while paused.
+    pub(crate) fn restore(&self, session: &str, state: &Value) {
+        let inspect_params = state.get("inspectMode").filter(|params| params.is_object());
+        let inspect = inspect_params.and_then(|params| inspect_mode(params).ok().flatten());
+        let restored = Session {
+            enabled: state["enabled"].as_bool().unwrap_or(false),
+            inspect_params: inspect.is_some().then(|| inspect_params.cloned()).flatten(),
+            inspect,
+            paused_message: state["pausedMessage"].as_str().map(str::to_owned),
+        };
+        if restored.paused_message.is_some() {
+            self.version.set(self.version.get().wrapping_add(1));
+        }
+        self.sessions
+            .borrow_mut()
+            .insert(session.to_owned(), restored);
+    }
+
     pub(crate) fn detach(&self, session: &str) {
         if self
             .sessions
@@ -351,25 +384,13 @@ impl OverlayAgent {
                 Ok(json!({}))
             }
             "setInspectMode" => {
-                let mode = params["mode"].as_str().unwrap_or_default();
-                if !matches!(
-                    mode,
-                    "none" | "searchForNode" | "searchForUAShadowDOM" | "captureAreaScreenshot"
-                ) {
-                    return Err(format!("Unknown mode \"{mode}\" was provided."));
+                let inspect = inspect_mode(params)?;
+                {
+                    let mut sessions = self.sessions.borrow_mut();
+                    let session = sessions.entry(name.to_owned()).or_default();
+                    session.inspect_params = inspect.is_some().then(|| params.clone());
+                    session.inspect = inspect;
                 }
-                let config = if params["highlightConfig"].is_object() {
-                    HighlightConfig::parse(&params["highlightConfig"])?
-                } else {
-                    HighlightConfig::parse(&json!({}))?
-                };
-                let inspect = matches!(mode, "searchForNode" | "searchForUAShadowDOM")
-                    .then(|| (config, mode == "searchForUAShadowDOM"));
-                self.sessions
-                    .borrow_mut()
-                    .entry(name.to_owned())
-                    .or_default()
-                    .inspect = inspect;
                 if !self.inspecting()
                     && self
                         .shown
@@ -1275,6 +1296,26 @@ fn draw_text(
     }
 }
 
+/// `Overlay.setInspectMode`'s mode, as `params` ask: how what the mouse is
+/// over is highlighted and whether in user-agent shadow trees too, if it is
+/// one that inspects; none for the others.
+fn inspect_mode(params: &Value) -> Result<Option<(HighlightConfig, bool)>, String> {
+    let mode = params["mode"].as_str().unwrap_or_default();
+    if !matches!(
+        mode,
+        "none" | "searchForNode" | "searchForUAShadowDOM" | "captureAreaScreenshot"
+    ) {
+        return Err(format!("Unknown mode \"{mode}\" was provided."));
+    }
+    let config = if params["highlightConfig"].is_object() {
+        HighlightConfig::parse(&params["highlightConfig"])?
+    } else {
+        HighlightConfig::parse(&json!({}))?
+    };
+    Ok(matches!(mode, "searchForNode" | "searchForUAShadowDOM")
+        .then(|| (config, mode == "searchForUAShadowDOM")))
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -1392,5 +1433,31 @@ mod tests {
             "background-color": "#00000000",
         });
         assert!(style_rows(&quiet, "hex").is_empty());
+    }
+
+    /// What a session has on goes to another renderer's agent as it was:
+    /// `Overlay` on, inspecting as it was set to, its paused message.
+    #[test]
+    fn a_sessions_overlay_goes_on_in_another_agent() {
+        use std::rc::Rc;
+
+        let (to_browser, _from) = crossbeam_channel::unbounded();
+        let to_browser: protocol::control_channel::BrowserSender = to_browser.into();
+        let dom = Rc::new(super::DomAgent::new(to_browser.clone()));
+        let agent = super::OverlayAgent::new(to_browser.clone(), dom.clone());
+        assert_eq!(agent.state("a"), None);
+        let state = json!({
+            "enabled": true,
+            "inspectMode": { "mode": "searchForNode", "highlightConfig": { "showInfo": true } },
+            "pausedMessage": "Paused",
+        });
+        agent.restore("a", &state);
+        assert!(agent.inspecting());
+        assert_eq!(agent.state("a"), Some(state));
+        let none = json!({ "enabled": true, "inspectMode": null, "pausedMessage": null });
+        let next = super::OverlayAgent::new(to_browser, dom);
+        next.restore("a", &none);
+        assert!(!next.inspecting());
+        assert_eq!(next.state("a"), Some(none));
     }
 }

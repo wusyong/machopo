@@ -1044,8 +1044,18 @@ pub trait ScriptEngine: ParserHost {
 
     /// A DevTools session of the browser's `session` for the engine's
     /// frames, whose answers and events go to `send`, as JSON (V8's
-    /// inspector answers `Runtime`, `Debugger`...).
-    fn devtools_attach(&mut self, session: String, send: DevToolsSend);
+    /// inspector answers `Runtime`, `Debugger`...); going on from `state`,
+    /// what [`Self::devtools_state`] gave (another engine's: the tab's
+    /// renderer before, or the engine of the other kind), if given.
+    fn devtools_attach(&mut self, session: String, send: DevToolsSend, state: Option<&[u8]>);
+
+    /// What the browser's `session` has on in the engine's inspector, for
+    /// another engine to go on from; none for an engine with no inspector,
+    /// or a session it hasn't.
+    fn devtools_state(&self, session: &str) -> Option<Vec<u8>> {
+        let _ = session;
+        None
+    }
 
     /// The browser's `session` has gone (none of the engine's: nothing).
     fn devtools_detach(&mut self, session: &str);
@@ -1247,7 +1257,12 @@ pub type DevToolsInterrupter = Box<dyn Fn() + Send + Sync>;
 /// the host's DevTools queue holds it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DevToolsQueued {
-    Attach(String),
+    /// A session attached, going on from `state` if it had one in the
+    /// tab's renderer before (`RendererMsg::DevToolsAttach`).
+    Attach {
+        session: String,
+        state: Option<protocol::renderer::DevToolsSessionState>,
+    },
     Detach(String),
     Message {
         session: String,
@@ -1286,6 +1301,13 @@ pub trait DevToolsQueue {
     /// Script paused: the host draws the frame `next` said it has
     /// ([`DevToolsQueued::Render`]) with the page as it is.
     fn render(&self, page: &mut dyn DevToolsPage);
+    /// The engine's inspector took a command of `session`'s while script
+    /// was paused or running: `state` is what the session has on in it now
+    /// ([`ScriptEngine::devtools_state`]), for the host to tell the browser
+    /// if it changed.
+    fn dispatched(&self, session: &str, state: Vec<u8>) {
+        let _ = (session, state);
+    }
 }
 
 /// The page as an engine lends it to its host's DevTools agents, as they

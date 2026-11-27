@@ -169,6 +169,37 @@ struct Attached {
     log: bool,
 }
 
+/// A command for a tab's renderer, until it answers: the renderer it went
+/// to, and what it is, to go again to the tab's next renderer if the one
+/// it went to is replaced first (Chromium re-sends what is on its way to
+/// the new host).
+struct Forwarded {
+    reply: Reply,
+    tab: TabId,
+    renderer: browser::RendererId,
+    method: String,
+    message: String,
+    interrupt: bool,
+    /// Its place among those forwarded (`forward_order`).
+    order: u64,
+}
+
+/// The commands that may run the page's script (Chromium's
+/// `MayCauseJavascriptExecution`): one on its way as the tab's renderer is
+/// replaced fails ([`TARGET_CLOSED`]); the others go to the new renderer.
+const MAY_RUN_SCRIPT: &[&str] = &[
+    "Runtime.awaitPromise",
+    "Runtime.callFunctionOn",
+    "Runtime.evaluate",
+    "Runtime.runScript",
+    "Runtime.terminateExecution",
+];
+
+/// Chromium's errors for a command whose renderer was replaced, or
+/// crashed, before it answered: clients match them verbatim.
+const TARGET_CLOSED: &str = "Inspected target navigated or closed";
+const TARGET_CRASHED: &str = "Target crashed";
+
 /// The largest DevTools message a renderer may send: room for the largest
 /// answers (`Debugger.getScriptSource` of a bundle of megabytes, a CPU
 /// profile), the size Chromium's IPC takes in one message (mojo's 256 MB).
@@ -323,20 +354,10 @@ pub struct AutomationSession {
     committed: HashMap<(TabId, FrameToken), String>,
     /// The tabs whose renderer has gone, as last told (`targetCrashed`).
     crashed: Vec<TabId>,
-    /// The renderer each tab had as last looked: the tab's DevTools
-    /// sessions are attached to it, and to the next one that takes its
-    /// place.
-    renderers: HashMap<TabId, browser::RendererId>,
     /// Each tab's latest navigation that has loaded (`DidFinishLoad`).
     loaded: HashMap<TabId, u64>,
     /// `Machopo.waitForLoad`s, by tab and the navigation they wait for.
     loads: Vec<(TabId, u64, Reply)>,
-    /// The commands the browser sent a new renderer itself, to restore a
-    /// session as it was, by session and (negative) id: no client waits for
-    /// their answers.
-    restoring: HashSet<(String, i64)>,
-    /// From 1.
-    restore_ids: SequenceNumber<i64>,
     /// `Page.navigate`s, by tab and their navigation, answered as it is
     /// about to commit (Chromium's `PageHandler::Navigate`).
     navigates: Vec<(TabId, u64, Reply)>,
@@ -366,10 +387,11 @@ pub struct AutomationSession {
     webdriver_ids: SequenceNumber<u64>,
     /// The `Machopo` domain's WebDriver methods, by request.
     webdriver: HashMap<u64, (TabId, Reply)>,
-    /// Commands handed to a renderer, by session and id, until it answers:
-    /// answered that the renderer has gone if it goes first (Chromium's
-    /// `DevToolsSession` keeps them too).
-    forwarded: HashMap<(String, i32), Reply>,
+    /// Commands for a tab's renderer, by session and id, until it answers
+    /// (Chromium's `DevToolsSession`'s pending messages).
+    forwarded: HashMap<(String, i32), Forwarded>,
+    /// Numbers the commands forwarded from 1, in the order they came.
+    forward_order: SequenceNumber<u64>,
     /// `Browser.close` was answered: the embedder ends the browser.
     close: bool,
     /// The browser has the platform's window (`in_platform_window`).
@@ -516,13 +538,10 @@ impl AutomationSession {
             starting: HashMap::new(),
             committed: HashMap::new(),
             crashed: Vec::new(),
-            renderers: HashMap::new(),
             loaded: HashMap::new(),
             loads: Vec::new(),
             navigates: Vec::new(),
             responded: std::collections::HashSet::new(),
-            restoring: HashSet::new(),
-            restore_ids: SequenceNumber::starting_at(1),
             query_ids: SequenceNumber::starting_at(1),
             queries: HashMap::new(),
             visual_states: SequenceNumber::starting_at(1),
@@ -534,6 +553,7 @@ impl AutomationSession {
             webdriver_ids: SequenceNumber::starting_at(1),
             webdriver: HashMap::new(),
             forwarded: HashMap::new(),
+            forward_order: SequenceNumber::starting_at(1),
             close: false,
             windowed: false,
         };
@@ -563,7 +583,7 @@ impl AutomationSession {
         &mut self,
         outbox: Outbox,
         page: Option<&str>,
-        browser: &BrowserWindow,
+        browser: &mut BrowserWindow,
     ) -> Option<ClientId> {
         self.changes(browser);
         let Some(target) = page else {
@@ -595,7 +615,7 @@ impl AutomationSession {
     /// to go to.
     fn detach(&mut self, browser: &mut BrowserWindow, client: ClientId, session: &str, tab: TabId) {
         self.sessions.remove(session);
-        if let Some(contents) = browser.view().contents(tab) {
+        if let Some(contents) = browser.view_mut().contents_mut(tab) {
             contents.devtools_detach(session);
         }
         self.update_cache_disabled(browser, tab);
@@ -638,19 +658,20 @@ impl AutomationSession {
     /// The client has gone: its sessions with it, in the renderers too.
     pub fn disconnect(&mut self, client: ClientId, browser: &mut BrowserWindow) {
         self.clients.remove(&client);
-        let view = browser.view();
-        let mut tabs = Vec::new();
+        let mut gone = Vec::new();
         self.sessions.retain(|id, attached| {
             if attached.client != client {
                 return true;
             }
-            if let Some(contents) = view.contents(attached.tab) {
-                contents.devtools_detach(id);
-            }
-            tabs.push(attached.tab);
+            gone.push((id.clone(), attached.tab));
             false
         });
-        for tab in tabs {
+        for (id, tab) in &gone {
+            if let Some(contents) = browser.view_mut().contents_mut(*tab) {
+                contents.devtools_detach(id);
+            }
+        }
+        for (_, tab) in gone {
             self.update_cache_disabled(browser, tab);
         }
         // Its commands' answers have no one to go to.
@@ -771,12 +792,12 @@ impl AutomationSession {
     /// methods the browser doesn't have go there.
     fn attach(
         &mut self,
-        browser: &BrowserWindow,
+        browser: &mut BrowserWindow,
         client: ClientId,
         tab: TabId,
         session_id: String,
     ) {
-        if let Some(contents) = browser.view().contents(tab) {
+        if let Some(contents) = browser.view_mut().contents_mut(tab) {
             contents.devtools_attach(&session_id);
         }
         self.sessions.insert(
@@ -1056,14 +1077,11 @@ impl AutomationSession {
             return;
         };
         let client = attached.client;
-        // An answer: no longer waited for; the browser's own, for no one.
-        if let Some(id) = object.get("id").and_then(Value::as_i64) {
-            if self.restoring.remove(&(session.to_owned(), id)) {
-                return;
-            }
-            if let Ok(id) = i32::try_from(id) {
-                self.forwarded.remove(&(session.to_owned(), id));
-            }
+        // An answer: no longer waited for.
+        if let Some(id) = object.get("id").and_then(Value::as_i64)
+            && let Ok(id) = i32::try_from(id)
+        {
+            self.forwarded.remove(&(session.to_owned(), id));
         }
         self.send(
             client,
@@ -1118,12 +1136,13 @@ impl AutomationSession {
             .retain(|id| self.webdriver.contains_key(id));
         let (forwarded, kept): (HashMap<_, _>, _) = std::mem::take(&mut self.forwarded)
             .into_iter()
-            .partition(|((session, _), _)| {
-                self.sessions
-                    .get(session)
-                    .is_some_and(|attached| attached.tab == tab)
-            });
+            .partition(|(_, forwarded)| forwarded.tab == tab);
         self.forwarded = kept;
+        for (_, forwarded) in forwarded {
+            forwarded
+                .reply
+                .answer(Err(Error::new(SERVER_ERROR, TARGET_CRASHED)));
+        }
         let gone_by_id: Vec<Reply> = [queries, copies, captures, scrolls, webdriver]
             .into_iter()
             .flat_map(|map: HashMap<u64, (TabId, Reply)>| map.into_values())
@@ -1150,8 +1169,7 @@ impl AutomationSession {
                     .into_iter()
                     .map(|(_, _, reply): (_, _, Reply)| reply),
             )
-            .chain(handled.into_iter().map(|(_, reply): (_, Reply)| reply))
-            .chain(forwarded.into_values());
+            .chain(handled.into_iter().map(|(_, reply): (_, Reply)| reply));
         for reply in waiting {
             reply.answer(gone());
         }
@@ -1507,41 +1525,8 @@ impl AutomationSession {
                     self.crashed.retain(|known| *known != tab);
                 }
             }
-            // Another renderer in the one's place the sessions are attached
-            // to (one launched after one had gone): the tab's sessions are
-            // its too, `Page` and its lifecycle events on as they were (what
-            // else they enabled in the last one, they enable again).
-            let renderer = contents.renderer_id();
-            if !crashed
-                && self
-                    .renderers
-                    .insert(tab, renderer)
-                    .is_some_and(|before| before != renderer)
-            {
-                let mut restoring = Vec::new();
-                for (id, attached) in &self.sessions {
-                    if attached.tab == tab {
-                        contents.devtools_attach(id);
-                        if attached.page {
-                            restoring.push((id.clone(), json!({ "method": "Page.enable" })));
-                        }
-                        if attached.lifecycle {
-                            restoring.push((
-                                id.clone(),
-                                json!({
-                                    "method": "Page.setLifecycleEventsEnabled",
-                                    "params": { "enabled": true },
-                                }),
-                            ));
-                        }
-                    }
-                }
-                for (session, mut command) in restoring {
-                    let id = self.restore_ids.get_next().saturating_neg();
-                    command["id"] = id.into();
-                    self.restoring.insert((session.clone(), id));
-                    contents.devtools_message(&session, command.to_string(), false);
-                }
+            if !crashed {
+                self.forward_to_renderer(contents);
             }
             let loader = contents.latest_navigation_id();
             let known = self.loaders.insert(tab, loader);
@@ -1662,10 +1647,41 @@ impl AutomationSession {
         }
         self.sessions
             .retain(|_, attached| now.contains(&attached.tab));
-        self.renderers.retain(|tab, _| now.contains(tab));
         self.tabs = now;
         for tab in newly_crashed {
             self.renderer_gone(tab, browser);
+        }
+    }
+
+    /// What is on its way to a renderer `contents`' has replaced, as the tab
+    /// has this one: a command
+    /// that may run the page's script fails, the document it was for being
+    /// no more ([`TARGET_CLOSED`]); the others go to this renderer, in the
+    /// order they came (Chromium's `DevToolsSession::AttachToAgent`).
+    fn forward_to_renderer(&mut self, contents: &WebContents) {
+        let tab = contents.tab();
+        let renderer = contents.renderer_id();
+        let mut waiting: Vec<(u64, (String, i32))> = self
+            .forwarded
+            .iter()
+            .filter(|(_, forwarded)| forwarded.tab == tab && forwarded.renderer != renderer)
+            .map(|(key, forwarded)| (forwarded.order, key.clone()))
+            .collect();
+        waiting.sort_unstable();
+        for (_, key) in waiting {
+            let Some(forwarded) = self.forwarded.get_mut(&key) else {
+                continue;
+            };
+            if MAY_RUN_SCRIPT.contains(&forwarded.method.as_str()) {
+                if let Some(forwarded) = self.forwarded.remove(&key) {
+                    forwarded
+                        .reply
+                        .answer(Err(Error::new(SERVER_ERROR, TARGET_CLOSED)));
+                }
+                continue;
+            }
+            contents.devtools_message(&key.0, forwarded.message.clone(), forwarded.interrupt);
+            forwarded.renderer = renderer;
         }
     }
 
@@ -2094,13 +2110,26 @@ impl AutomationSession {
         let Some(contents) = browser.view().contents(tab) else {
             return Dispatched::Now(Err(no_target()));
         };
+        // Chromium holds it till the tab is loaded again, then fails it so
+        // (`RenderFrameDevToolsAgentHost::UpdateFrameAlive`): failed now,
+        // no one waits that long.
         if contents.is_crashed() {
-            return Dispatched::Now(Err(Error::new(SERVER_ERROR, "the tab's renderer has gone")));
+            return Dispatched::Now(Err(Error::new(SERVER_ERROR, TARGET_CRASHED)));
         }
-        let message = json!({ "id": command.id, "method": name, "params": params });
-        contents.devtools_message(session, message.to_string(), INTERRUPTING.contains(&name));
+        let message = json!({ "id": command.id, "method": name, "params": params }).to_string();
+        let interrupt = INTERRUPTING.contains(&name);
+        contents.devtools_message(session, message.clone(), interrupt);
+        let forwarded = Forwarded {
+            reply: self.reply(client, command),
+            tab,
+            renderer: contents.renderer_id(),
+            method: name.to_owned(),
+            message,
+            interrupt,
+            order: self.forward_order.get_next(),
+        };
         self.forwarded
-            .insert((session.clone(), command.id), self.reply(client, command));
+            .insert((session.clone(), command.id), forwarded);
         Dispatched::Later
     }
 

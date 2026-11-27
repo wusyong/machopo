@@ -111,6 +111,10 @@ pub trait Queue {
     /// Script paused: the frame `next` said is to be drawn, with the
     /// isolate's state as `answer_here` borrows it.
     fn render(&self, isolate: &mut v8::Isolate);
+    /// The inspector took a command of `session`'s while script was paused
+    /// or running: what the session has on in it now ([`Inspector::state`]),
+    /// for the renderer to tell the browser if it changed.
+    fn dispatched(&self, session: &str, state: Vec<u8>);
 }
 
 /// A session of the inspector's, and whether the browser still has it.
@@ -118,6 +122,128 @@ struct Attached {
     session: Rc<V8InspectorSession>,
     /// Off once the browser detached it: what it sends then is dropped.
     alive: Rc<Cell<bool>>,
+    /// The breakpoints it set by URL, which its outlet notes as V8 answers.
+    url_breakpoints: Rc<RefCell<UrlBreakpoints>>,
+}
+
+impl Attached {
+    /// Hands V8 `message`, a command of the session's, noting the
+    /// breakpoints by URL it sets or removes.
+    fn dispatch(&self, message: &str) {
+        self.url_breakpoints.borrow_mut().asked(message);
+        dispatch(&self.session, message);
+    }
+
+    /// What the session has on: V8's session state
+    /// (`V8InspectorSession::state`), then the commands that set its
+    /// breakpoints by URL, which that hasn't (V8 keeps them apart,
+    /// `V8DebuggerAgentImpl::m_urlBreakpoints`): the bytes of V8's, as a
+    /// little-endian `u32`, V8's, then the commands, as a JSON array.
+    fn state(&self) -> Vec<u8> {
+        let v8_state = self.session.state();
+        let v8_state = v8_state
+            .as_ref()
+            .and_then(|state| state.string().characters8().map(<[u8]>::to_vec))
+            .unwrap_or_default();
+        let commands = {
+            let breakpoints = self.url_breakpoints.borrow();
+            let commands: Vec<&str> = breakpoints
+                .set
+                .iter()
+                .map(|(_, command)| command.as_str())
+                .collect();
+            serde_json::to_vec(&commands).unwrap_or_default()
+        };
+        let Ok(length) = u32::try_from(v8_state.len()) else {
+            return Vec::new();
+        };
+        let mut state = Vec::with_capacity(
+            4usize
+                .saturating_add(v8_state.len())
+                .saturating_add(commands.len()),
+        );
+        state.extend_from_slice(&length.to_le_bytes());
+        state.extend_from_slice(&v8_state);
+        state.extend_from_slice(&commands);
+        state
+    }
+}
+
+/// [`Attached::state`]'s parts: V8's session state, and the commands that
+/// set the breakpoints by URL. Nothing of either for bytes that aren't one
+/// (a renderer wrote them: the browser doesn't read them).
+fn parse_state(state: &[u8]) -> (&[u8], Vec<String>) {
+    let parsed = state.split_first_chunk::<4>().and_then(|(length, rest)| {
+        let length = usize::try_from(u32::from_le_bytes(*length)).ok()?;
+        let (v8_state, commands) = rest.split_at_checked(length)?;
+        let commands = serde_json::from_slice::<Vec<String>>(commands).ok()?;
+        Some((v8_state, commands))
+    });
+    parsed.unwrap_or_default()
+}
+
+/// The breakpoints a session set by URL (`Debugger.setBreakpointByUrl`),
+/// by the ids V8 gave them, each with the command that set it, in order:
+/// V8's session state hasn't them.
+#[derive(Default)]
+struct UrlBreakpoints {
+    /// Those asked for, by call id, till V8 answers.
+    asked: HashMap<i32, String>,
+    set: Vec<(String, String)>,
+    /// The calls set again as the session went on from a state (negative
+    /// ids): their answers are no one's.
+    restoring: Vec<i32>,
+}
+
+impl UrlBreakpoints {
+    /// `message`, a command V8 is handed: one that sets a breakpoint by URL
+    /// waits for its id; one that removes a breakpoint, or turns
+    /// `Debugger` off (`V8DebuggerAgentImpl::disable` drops them all),
+    /// drops what it drops.
+    fn asked(&mut self, message: &str) {
+        if !message.contains("Debugger.") {
+            return;
+        }
+        let Ok(command) = serde_json::from_str::<serde_json::Value>(message) else {
+            return;
+        };
+        match command["method"].as_str() {
+            Some("Debugger.setBreakpointByUrl") => {
+                let id = command["id"].as_i64().and_then(|id| i32::try_from(id).ok());
+                if let Some(id) = id {
+                    let command = serde_json::json!({
+                        "method": "Debugger.setBreakpointByUrl",
+                        "params": command["params"],
+                    });
+                    self.asked.insert(id, command.to_string());
+                }
+            }
+            Some("Debugger.removeBreakpoint") => {
+                let removed = command["params"]["breakpointId"].as_str();
+                self.set.retain(|(id, _)| Some(id.as_str()) != removed);
+            }
+            Some("Debugger.disable") => self.set.clear(),
+            _ => {}
+        }
+    }
+
+    /// V8 answered call `call_id` with `message`: a breakpoint set by URL
+    /// is kept by its id. Whether the answer is the session's client's
+    /// (not one of a breakpoint set again).
+    fn answered(&mut self, call_id: i32, message: &str) -> bool {
+        if let Some(command) = self.asked.remove(&call_id)
+            && let Ok(answer) = serde_json::from_str::<serde_json::Value>(message)
+            && let Some(id) = answer["result"]["breakpointId"].as_str()
+        {
+            self.set.retain(|(known, _)| known != id);
+            self.set.push((id.to_owned(), command));
+        }
+        let restoring = self.restoring.iter().position(|&id| id == call_id);
+        if let Some(at) = restoring {
+            self.restoring.swap_remove(at);
+        }
+        restoring.is_none()
+    }
 }
 
 /// What the inspector's client and the isolate's slot share.
@@ -138,6 +264,32 @@ impl Shared {
             .borrow()
             .get(session)
             .map(|attached| attached.session.clone())
+    }
+
+    /// Hands V8 `message`, a command of `session`'s, as
+    /// [`Attached::dispatch`]: whether the session is the inspector's. Not
+    /// borrowed meanwhile: V8 may run script that attaches or detaches.
+    fn dispatch(&self, session: &str, message: &str) -> bool {
+        let attached = self
+            .sessions
+            .borrow()
+            .get(session)
+            .map(|attached| Attached {
+                session: attached.session.clone(),
+                alive: attached.alive.clone(),
+                url_breakpoints: attached.url_breakpoints.clone(),
+            });
+        let Some(attached) = attached else {
+            return false;
+        };
+        attached.dispatch(message);
+        true
+    }
+
+    /// What `session` has on ([`Attached::state`]), if it is the
+    /// inspector's.
+    fn state(&self, session: &str) -> Option<Vec<u8>> {
+        self.sessions.borrow().get(session).map(Attached::state)
     }
 
     /// While script is paused (Blink's `ClientMessageLoopAdapter::Run`):
@@ -168,9 +320,12 @@ impl Shared {
                     if waiting {
                         after.push(Queued::Message { session, message });
                     } else if !queue.answer_here(isolate, &session, &message) {
-                        match self.session(&session) {
-                            Some(attached) => dispatch(&attached, &message),
-                            None => after.push(Queued::Message { session, message }),
+                        if self.dispatch(&session, &message) {
+                            if let Some(state) = self.state(&session) {
+                                queue.dispatched(&session, state);
+                            }
+                        } else {
+                            after.push(Queued::Message { session, message });
                         }
                     }
                 }
@@ -212,9 +367,12 @@ impl Shared {
             return;
         };
         for (session, message) in queue.take_interrupting() {
-            match self.session(&session) {
-                Some(attached) => dispatch(&attached, &message),
-                None => tracing::warn!(session, "an interrupting DevTools message for no session"),
+            if !self.dispatch(&session, &message) {
+                tracing::warn!(session, "an interrupting DevTools message for no session");
+                continue;
+            }
+            if let Some(state) = self.state(&session) {
+                queue.dispatched(&session, state);
             }
         }
     }
@@ -330,6 +488,7 @@ impl V8InspectorClientImpl for Client {
 struct Outlet {
     send: Box<dyn Fn(String)>,
     alive: Rc<Cell<bool>>,
+    url_breakpoints: Rc<RefCell<UrlBreakpoints>>,
 }
 
 impl Outlet {
@@ -343,8 +502,14 @@ impl Outlet {
 }
 
 impl ChannelImpl for Outlet {
-    fn send_response(&self, _call_id: i32, message: UniquePtr<StringBuffer>) {
-        self.send(&message);
+    fn send_response(&self, call_id: i32, message: UniquePtr<StringBuffer>) {
+        let text = message
+            .as_ref()
+            .map(|message| message.string().to_string())
+            .unwrap_or_default();
+        if self.url_breakpoints.borrow_mut().answered(call_id, &text) {
+            self.send(&message);
+        }
     }
 
     fn send_notification(&self, message: UniquePtr<StringBuffer>) {
@@ -410,26 +575,54 @@ impl DevTools {
 
     /// A session of a DevTools client, the browser's `session`, whose
     /// answers and events go to `send`. Fully trusted: whoever reaches the
-    /// renderer's sessions already controls the browser.
-    pub(crate) fn attach(&self, session: String, send: Box<dyn Fn(String)>) {
+    /// renderer's sessions already controls the browser. With `state`
+    /// ([`Self::state`], another isolate's inspector's), it goes on from
+    /// there: V8 restores its domains as they were, and its breakpoints by
+    /// URL are set again (their answers no one's).
+    pub(crate) fn attach(&self, session: String, send: Box<dyn Fn(String)>, state: Option<&[u8]>) {
         let alive = Rc::new(Cell::new(true));
+        let url_breakpoints = Rc::new(RefCell::new(UrlBreakpoints::default()));
         let outlet = Outlet {
             send,
             alive: alive.clone(),
+            url_breakpoints: url_breakpoints.clone(),
         };
+        let (v8_state, commands) = state.map(parse_state).unwrap_or_default();
         let connected = self.inspector.connect(
             CONTEXT_GROUP,
             Channel::new(Box::new(outlet)),
-            StringView::empty(),
+            StringView::from(v8_state),
             V8InspectorClientTrustLevel::FullyTrusted,
         );
         let attached = Attached {
             session: Rc::new(connected),
             alive,
+            url_breakpoints,
         };
+        for (n, command) in (1i32..).zip(commands) {
+            let Ok(serde_json::Value::Object(mut command)) = serde_json::from_str(&command) else {
+                continue;
+            };
+            let id = n.saturating_neg();
+            command.insert("id".to_owned(), id.into());
+            attached.url_breakpoints.borrow_mut().restoring.push(id);
+            attached.dispatch(&serde_json::Value::Object(command).to_string());
+        }
         // One it replaces goes after the borrow.
         let replaced = self.shared.sessions.borrow_mut().insert(session, attached);
         drop(replaced);
+    }
+
+    /// What the browser's `session` has on, for another isolate's inspector
+    /// to go on from ([`Attached::state`]); none for a session it hasn't.
+    pub(crate) fn state(&self, session: &str) -> Option<Vec<u8>> {
+        self.shared.state(session)
+    }
+
+    /// Hands V8 `message`, a command of the browser's `session`
+    /// ([`Attached::dispatch`]): whether the session is the inspector's.
+    pub(crate) fn dispatch(&self, session: &str, message: &str) -> bool {
+        self.shared.dispatch(session, message)
     }
 
     /// The browser's `session` has gone. Not while script is paused: the

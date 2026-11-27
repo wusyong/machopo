@@ -1,0 +1,103 @@
+# Stage 2a's mutants (a DevTools session's state written by the renderer's agents, kept by the tab, given to the next renderer, which goes on from it; a command for a tab with no renderer, or one its renderer had as it crashed, fails as Chrome's): `python3 scripts/test.py mutate rfcs/0124-cross-site-process-swap/mutants-2a.toml`.
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "devtools_session"]
+timeout = 1200
+
+[[mutant]]
+name = "Page doesn't go on in the next renderer"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''        if let Some(page) = agent_state("Page") {'''
+to = '''        if let Some(page) = None::<serde_json::Value> {'''
+
+[[mutant]]
+name = "Network doesn't go on in the next renderer"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''        if let Some(network) = agent_state("Network") {'''
+to = '''        if let Some(network) = None::<serde_json::Value> {'''
+
+[[mutant]]
+name = "Log doesn't go on in the next renderer"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''        if let Some(log) = agent_state("Log") {'''
+to = '''        if let Some(log) = None::<serde_json::Value> {'''
+
+[[mutant]]
+name = "DOM doesn't go on in the next renderer"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''        if let Some(dom) = agent_state("DOM") {'''
+to = '''        if let Some(dom) = None::<serde_json::Value> {'''
+
+[[mutant]]
+name = "CSS doesn't go on in the next renderer"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''        if let Some(css) = agent_state("CSS") {'''
+to = '''        if let Some(css) = None::<serde_json::Value> {'''
+
+[[mutant]]
+name = "Overlay doesn't go on in the next renderer"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''        if let Some(overlay) = agent_state("Overlay") {'''
+to = '''        if let Some(overlay) = None::<serde_json::Value> {'''
+
+[[mutant]]
+name = "what Page, Network and Log commands change isn't told"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''            self.update_stacks_wanted();
+            self.tell_devtools_state(session);
+            return;'''
+to = '''            self.update_stacks_wanted();
+            return;'''
+
+[[mutant]]
+name = "what DOM, CSS and Overlay commands change isn't told"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''            self.start_css_refetches();
+            self.tell_devtools_state(session);
+            return;'''
+to = '''            self.start_css_refetches();
+            return;'''
+
+[[mutant]]
+name = "a state told again unchanged"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''        if told.get(session) == Some(&state) {'''
+to = '''        if told.get(session) == Some(&state) && false {'''
+
+[[mutant]]
+name = "the state a session went on from isn't noted"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''        self.devtools_states.restored(&session, state);'''
+to = '''        drop(state);'''
+
+[[mutant]]
+name = "a new renderer isn't attached to the tab's sessions"
+file = "crates/browser/src/web_contents.rs"
+from = '''        for (session, state) in &self.devtools_sessions {
+            self.process.send(RendererMsg::DevToolsAttach {'''
+to = '''        for (session, state) in self.devtools_sessions.iter().take(0) {
+            self.process.send(RendererMsg::DevToolsAttach {'''
+
+[[mutant]]
+name = "the tab doesn't keep a session's state"
+file = "crates/browser/src/web_contents.rs"
+from = '''                    *kept = Some(state.clone());'''
+to = '''                    let _ = kept;'''
+
+[[mutant]]
+name = "a state of any size is taken"
+file = "crates/browser/src/web_contents.rs"
+from = '''                if state.bytes() > DevToolsSessionState::MAX_BYTES {'''
+to = '''                if state.bytes() > usize::MAX {'''
+
+[[mutant]]
+name = "a command for a tab with no renderer is sent to the one that has gone"
+file = "crates/shell/src/automation_session.rs"
+from = '''            return Dispatched::Now(Err(Error::new(SERVER_ERROR, TARGET_CRASHED)));'''
+to = '''            let _ = TARGET_CRASHED;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "devtools::"]
+
+[[mutant]]
+name = "a command its renderer had as it crashed fails as machopo's own"
+file = "crates/shell/src/automation_session.rs"
+from = '''                .answer(Err(Error::new(SERVER_ERROR, TARGET_CRASHED)));'''
+to = '''                .answer(Err(Error::new(SERVER_ERROR, "the tab's renderer has gone")));'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "devtools::"]

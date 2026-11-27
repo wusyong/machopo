@@ -508,6 +508,31 @@ impl NetworkAgent {
         self.sessions.borrow_mut().remove(session);
     }
 
+    /// What `session` has on, for the tab's next renderer to go on from
+    /// (Blink's `InspectorAgentState`): none if nothing. Its settings; not the bodies kept, which
+    /// were the renderer's requests'.
+    pub(crate) fn state(&self, session: &str) -> Option<Value> {
+        self.sessions.borrow().get(session).map(|state| {
+            json!({
+                "maxTotalBufferSize": state.max_total_buffer_size,
+                "maxResourceBufferSize": state.max_resource_buffer_size,
+                "maxPostDataSize": state.max_post_data_size,
+                "attachDebugStack": state.attach_debug_stack,
+                "cacheDisabled": state.cache_disabled,
+            })
+        })
+    }
+
+    /// `session` goes on with `Network` on as `state` has it.
+    pub(crate) fn restore(&self, session: &str, state: &Value) {
+        let mut restored = Session::new(state);
+        restored.attach_debug_stack = state["attachDebugStack"].as_bool().unwrap_or(false);
+        restored.cache_disabled = state["cacheDisabled"].as_bool().unwrap_or(false);
+        self.sessions
+            .borrow_mut()
+            .insert(session.to_owned(), restored);
+    }
+
     /// Answers `message`, a command of `session`'s, if it is one of the
     /// agent's: whether it was.
     pub(crate) fn handle(&self, session: &str, message: &str) -> bool {
@@ -1053,5 +1078,37 @@ mod tests {
         agent.handle("s", &attach);
         agent.detach("s");
         assert!(!agent.wants_stacks() && !agent.enabled());
+    }
+
+    /// What a session has on goes to another renderer's agent as it was:
+    /// `Network` and its settings.
+    #[test]
+    fn a_sessions_network_goes_on_in_another_agent() {
+        let (agent, _from) = agent();
+        assert_eq!(agent.state("a"), None);
+        let command = |method: &str, params: Value| {
+            json!({ "id": 1, "method": method, "params": params }).to_string()
+        };
+        assert!(agent.handle(
+            "a",
+            &command(
+                "Network.enable",
+                json!({ "maxTotalBufferSize": 1000, "maxPostDataSize": 10 })
+            )
+        ));
+        assert!(agent.handle(
+            "a",
+            &command("Network.setCacheDisabled", json!({ "cacheDisabled": true }))
+        ));
+        assert!(agent.handle(
+            "a",
+            &command("Network.setAttachDebugStack", json!({ "enabled": true }))
+        ));
+        let state = agent.state("a").expect("on");
+        let (next, _from) = self::agent();
+        next.restore("a", &state);
+        assert!(next.cache_disabled());
+        assert!(next.wants_stacks());
+        assert_eq!(next.state("a"), Some(state));
     }
 }

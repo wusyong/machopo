@@ -84,6 +84,23 @@
 - WPT（經過 machopodriver）、`--window` 的情境、量測工具：真的 `machopo`，每個分頁一個 renderer process。
 - 可以把別的 host 對到本機（`--host-resolver-rules`、`net::HostMappingRules`），`shell` 的測試已經用它做跨網站的頁面（`documents.rs`、`devtools.rs`、`webdriver.rs`）。
 
+## DevTools 的 session 的狀態（第 2 段開始時的盤點）
+
+2026-11-27 讀的（`0124`，`d07e93e8`）。
+
+- **Browser 這一側**（`shell` 的 `automation_session.rs` 的 `Attached`）每個 session 記五個旗標：`Page.enable`、`Page.setLifecycleEventsEnabled`、`Network.enable`、`Network.setCacheDisabled`、`Log.enable`。換了 renderer 只重送前兩個（回答丟掉）；後三個 Browser 照樣當成開著，新的 renderer 裡卻沒有。其他的命令 Browser 不看、原樣轉給 renderer。
+- **renderer 的 agent**（`renderer` 的 `render_thread/`），每個 session 的狀態：
+  - Page（`page_agent.rs`）：開著沒有、lifecycle 的事件要不要；打開 lifecycle 時重播到目前為止的事件。
+  - Network（`network_agent.rs`）：`Network.enable` 的三個 buffer 的上限、`setAttachDebugStack`、`setCacheDisabled`，和留著的 response body。
+  - Log（`log_agent.rs`）：開著沒有；打開時重播留著的 entry。
+  - DOM（`dom_agent.rs`）：開著沒有、`includeWhitespace`；node 的編號、搜尋的結果、`DOM.setInspectedNode`（存在 V8 的 session 裡）。
+  - CSS（`css_agent.rs`）：開著沒有（要 DOM 開著）、`trackComputedStyleUpdatesForNode`、`forcePseudoState`（也寫進 DOM）、告訴過它的 sheet。
+  - Overlay（`overlay_agent.rs`）：開著沒有、`setInspectMode`、`setPausedInDebuggerMessage`。
+- **V8 的 inspector**：每個 session 的狀態在 V8 自己的 `V8InspectorSessionImpl::m_state`：Runtime 的 `enable`、custom formatter、`setMaxCallStackSizeToCapture`、`addBinding`；Debugger 的 `enable`、`setBreakpointsActive`、`setSkipAllPauses`、`setPauseOnExceptions`、`setAsyncCallStackDepth`、`setBlackboxPatterns`、instrumentation breakpoint；Profiler、HeapProfiler、Console 的 `enable` 和設定。`setBreakpointByUrl` 的斷點不在 `m_state`，在 `m_urlBreakpoints`（V8 15.2：只能經過 `V8EmbedderState` 還原）。
+  - V8 能存下和還原它：`V8InspectorSession::state()` 給 CBOR，`connect` 給它非空的狀態時各個 agent `restore()`。但 rusty_v8 的 fork 沒有把 `state()` 接出來（`src/inspector.rs`、`src/binding.cc` 都沒有），machopo 的 `bindings` 的 `devtools.rs` 一律給空的狀態（換 engine 時也是，所以 JS 和 wasm 的 engine 互換時 V8 的狀態現在就會不見）。
+- **編號**：DOM 的 `nodeId`、V8 的 `objectId`、`scriptId`、execution context 的 id 都是那份文件、那個 renderer 的，換了文件本來就不能用；CSS 的 `styleSheetId` 和 Network 的 `requestId` 帶著 renderer 的前綴。main frame 的 frame id 是 Browser 取的，每個 renderer 都一樣。
+- **machopodriver** 只開 `Page.enable` 和 `Page.setLifecycleEventsEnabled`（`crates/driver` 的 `session.rs`），正好是 Browser 現在重送的；其餘的經過 `Machopo.*`，不靠 session 的狀態。
+
 ## 量的：啟動一個 renderer process 要多久
 
 2026-11-27，`acdd0704`，release（`cargo build --release`），Linux（Fedora 45、AMD Radeon 890M 的那台），sandbox 開著（Landlock、seccomp、user 和 network namespace），`machopo --remote-debugging-pipe --headless`。每種 30 次、跑兩輪，從 CDP 的命令送出到 `Runtime.evaluate` 回答為止：
