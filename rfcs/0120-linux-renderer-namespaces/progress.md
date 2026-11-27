@@ -1,6 +1,6 @@
 # RFC 0120 的進度：Linux 的 renderer sandbox 的下一級：namespace 和 chroot
 
-開始日期：2026-11-27。
+開始日期：2026-11-27。完成日期：2026-11-27（Linux：Fedora 45，kernel 7.3.3，glibc 2.44，x86-64；三段都在這台上做和驗。CI 的 `ubuntu-24.04` runner 多半不允許沒有特權的 user namespace，那裡的測試走的是退路：已決定的事項第 7 條、`docs/test-gaps.md`）。
 
 ## 步驟
 
@@ -20,21 +20,16 @@
 
 ## 驗收
 
-| 項目 | 怎麼驗證 |
-| --- | --- |
-| 時區的名字照 `/etc/localtime` 的連結解（`posix/`、`right/` 拿掉；不是名字的、ICU 不收的不給）；`TZ` 照 ICU 的 `isValidOlsonID` 判斷收不收；policy 只在要讀時放行時區的兩個路徑，其他一個都不放 | `cargo test -p shell --lib renderer_sandbox::`（`a_zone_is_named_by_where_the_systems_time_zone_links`、`icu_takes_a_tz_as_its_zone_as_it_decides`、`a_renderer_reads_no_file_but_the_time_zones_it_has_to_find`） |
-| sandbox 裡的 renderer 開不了 `/sys/devices/system/cpu/online`、`/dev/urandom`；`TZ` 是 ICU 收的名字時也開不了時區的檔案，沒有 `TZ` 或 ICU 不收時開得了 | `cargo test -p shell --test it renderer_sandbox::a_renderer_reads_no_file_but_the_time_zones_it_has_to_find` |
-| Browser 沒有 `TZ` 時，renderer process（sandbox 裡外）的 `TZ` 是這台的時區的名字，看到的時區和 thread 上的 renderer 相同；使用者的 `TZ` 不被蓋掉 | `renderer_sandbox::a_renderer_process_is_told_this_machines_time_zone_by_name`、`renderer_sandbox::a_renderer_process_has_only_the_listed_part_of_its_browsers_environment` |
-| sandbox 裡、外和 thread 上的 renderer 看到的時區、`Intl`、`navigator.hardwareConcurrency`、寬度相同 | `renderer_sandbox::a_sandboxed_renderer_shows_a_page_as_one_outside_does` |
-| 短的名字（`TZ=CET`）在 renderer process 裡也是那個時區：冬天 -60、夏天 -120，和 thread 上的相同 | `renderer_sandbox::a_short_zone_name_is_the_zone_in_a_renderer_process_too` |
-| V8 不自己開 `/dev/urandom` | 手動：`docs/test-gaps.md` 的「只做過手動確認」 |
-| 機器允許時，sandbox 裡的 renderer process 在自己的 user 和 network namespace 裡（PID、mount 的是 Browser 的）：網路介面只有 `lo`，`CapPrm`、`CapEff`、`CapInh`、`CapAmb` 都是 0，和 Browser 同一個使用者；`--no-sandbox` 的不在；預期值由 `unshare --user --net true` 獨立判斷 | `cargo test -p shell --test it renderer_sandbox::a_renderer_process_has_namespaces_of_its_own_where_the_machine_allows` |
-| 機器不允許時（一個不准再開 user namespace 的 namespace 裡），renderer process 照舊啟動、畫得出頁面，和 Browser 在同一個 user、network namespace 裡，Browser 說了一次 | `renderer_sandbox::a_renderer_process_goes_without_namespaces_where_the_machine_forbids_them` |
-| `Namespaces` 的對應是自己的 id；多執行緒的 process 開不了 | `cargo test -p sunaba --lib namespaces` |
-| 機器允許時，renderer process 的根目錄是一條已經結束的 thread 的 `fdinfo`，沒有任何權限；不允許的、`--no-sandbox` 的是 `/` | `renderer_sandbox::a_renderer_process_has_namespaces_of_its_own_where_the_machine_allows` |
-| chroot 之後 `/` 以外的路徑都是 `ESRCH`（thread 上也是）；沒有權限時不 chroot；chroot 的 policy 讀路徑會被拒絕；`enter` 之後沒有任何權限 | `cargo test -p sunaba --test it linux::`（`a_chroot_leaves_no_path_not_even_to_say_what_is_there`、`a_chroot_is_made_only_where_the_process_may`、`every_capability_is_given_up_on_entering`） |
-| `/etc/localtime` 是複本時，Browser 照 zoneinfo 找出名字（area 的優先、不看 `posix/`、ICU 不收的不算），renderer 拿到它、chroot，看到的時差和 thread 上的相同 | `cargo test -p shell --lib renderer_sandbox::tests::a_copied_zone_is_named_by_the_file_it_is_a_copy_of`、`renderer_sandbox::a_renderer_process_is_told_the_zone_a_copied_localtime_is` |
-| 短的名字（`TZ=CET`）在 chroot 的 renderer 裡照樣是那個時區（glibc 在 chroot 之前讀好了） | `renderer_sandbox::a_short_zone_name_is_the_zone_in_a_renderer_process_too` |
+| 領域 | 項目 | 怎麼驗證 |
+| --- | --- | --- |
+| Landlock 的路徑 | policy 不放行任何路徑，只有時區要讀檔時放行時區的兩個；sandbox 裡的 renderer 開不了 CPU 數的檔案、`/dev/urandom`，`TZ` 是 ICU 收的名字時也開不了時區的檔案 | `cargo test -p shell --lib renderer_sandbox::`（`a_renderer_reads_no_file_but_the_time_zones_it_has_to_find`）；`cargo test -p shell --test it renderer_sandbox::a_renderer_reads_no_file_but_the_time_zones_it_has_to_find` |
+| Landlock 的路徑 | V8 不自己開 `/dev/urandom` | 手動：`docs/test-gaps.md` 的「只做過手動確認」 |
+| 時區 | 名字照 `/etc/localtime` 的連結解；複本照 zoneinfo 比對（area 的優先、不看 `posix/`、ICU 不收的不算）；`TZ` 照 ICU 的 `isValidOlsonID` 判斷收不收 | `cargo test -p shell --lib renderer_sandbox::`（`a_zone_is_named_by_where_the_systems_time_zone_links`、`a_copied_zone_is_named_by_the_file_it_is_a_copy_of`、`icu_takes_a_tz_as_its_zone_as_it_decides`） |
+| 時區 | Browser 沒有 `TZ` 時 renderer process 拿到這台的時區的名字，使用者的 `TZ` 不被蓋掉；`/etc/localtime` 是複本時也拿到；短的名字（`CET`）照樣對；都和 thread 上的 renderer 相同 | `renderer_sandbox::a_renderer_process_is_told_this_machines_time_zone_by_name`、`a_renderer_process_has_only_the_listed_part_of_its_browsers_environment`、`a_renderer_process_is_told_the_zone_a_copied_localtime_is`、`a_short_zone_name_is_the_zone_in_a_renderer_process_too` |
+| namespace | 機器允許時 renderer process 在自己的 user 和 network namespace 裡（PID、mount 的是 Browser 的）：只有 `lo`、同一個使用者、沒有任何權限；`--no-sandbox` 的不在；預期值由 `unshare --user --net true` 獨立判斷 | `renderer_sandbox::a_renderer_process_has_namespaces_of_its_own_where_the_machine_allows`；`cargo test -p sunaba --lib namespaces` |
+| namespace | 機器不允許時照舊啟動、畫得出頁面、和 Browser 在同一個 namespace、Browser 說一次 | `renderer_sandbox::a_renderer_process_goes_without_namespaces_where_the_machine_forbids_them` |
+| chroot | renderer process 的根目錄是一條已經結束的 thread 的 `fdinfo`（不允許的、`--no-sandbox` 的是 `/`）；從裡面看 `/` 以外的路徑都是 `ESRCH`；沒有權限時不 chroot；chroot 的 policy 讀路徑被拒絕；`enter` 之後沒有任何權限 | `renderer_sandbox::a_renderer_process_has_namespaces_of_its_own_where_the_machine_allows`；`cargo test -p sunaba --test it linux::` |
+| 網頁看到的 | sandbox 裡、外和 thread 上的 renderer 看到的時區、`Intl`、`navigator.hardwareConcurrency`、寬度相同；chroot 的 renderer 上整套 `shell` 的測試通過 | `renderer_sandbox::a_sandboxed_renderer_shows_a_page_as_one_outside_does`；`cargo test -p shell` |
 
 ## 做過的檢查
 
@@ -71,4 +66,11 @@
 - **chroot 的 renderer 上的整套測試**：`cargo test -p shell` 全部通過（767 個整合測試），沒有程式依賴 `ENOENT`。
 - **Mutation test**（`mutants-3.toml`，14 個，`--keep-going`）：13 個抓到，1 個寫法編不過（「複本不比對」），改寫之後單獨重跑抓到。抓到的：child 不留 chroot 的權限、權限沒留過 exec、Browser 的 namespace 不留、不 chroot、沒有權限也 chroot、chroot 到原本的根目錄、權限不丟、不先 `tzset`、chroot 的 policy 可以讀路徑、renderer 的 policy 不 chroot、複本不比對、複本的名字不先挑 area 的、看 `posix/`、名字不檢查 ICU 收不收。檔案都還原了。
 - **跑過的檢查**：`cargo test -p shell -p sunaba -p ipc`（都通過）；量測工具的測試（四個，都通過）；`sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs；第 3 段做完的 `cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace`（63 個 binary，4994 個通過，1 個 ignored，沒有失敗）。
+
+### Speedometer（2026-11-27，同一台：AMD Ryzen AI 9 HX 370，接電源，瀏覽器綁在 CPU 0-3、12-15）
+
+使用者要求時量的（`python3 scripts/bench.py speedometer --against 5ba58434 --runs 3`）：`against` 是 `main` 的 `5ba58434`（這份 RFC 的草稿：字型服務和環境變數的過濾都在），`current` 是 `261ec4be`（三段都做完）；兩邊的 renderer 都是自己的 process，輪流各跑 3 次，每次 10 個 iteration。
+
+- **時間**：20 個 suite 的 current / against 的幾何平均是 0.999（-0.1%）；每個 suite 的中位數的差在 -4.7%（Charts-chartjs）到 +2.7%（TodoMVC-React-Complex-DOM）之間，都在兩邊的 95% 區間裡重疊：量不出差別。
+- **記憶體的高峰**（Browser 加上 renderer 的 VmHWM）：-10.7% 到 +1.0%；Browser 的幾乎不變（138 到 169 MB），renderer 的大多少了一點（NewsSite-Next 362 → 307 MB，其餘多半是 0 到 6%）。推測（沒有驗證）是 CPU 的數量：工具用 `taskset` 把瀏覽器綁在 8 個 CPU 上，第 1 段之後 renderer 讀不到 `/sys/devices/system/cpu/online`，glibc 照 affinity 數成 8 個（之前是整台的 24 個），V8 的 worker 和 glibc 的 malloc 的 arena 跟著少。
 

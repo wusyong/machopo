@@ -1,12 +1,13 @@
 # RFC 0120：Linux 的 renderer sandbox 的下一級：namespace 和 chroot
 
 - 開始日期：2026-11-27
-- 狀態：🚧 已排程：2026-11-27（三段都做完，待收尾：Landlock 只在要讀時放行時區的兩個路徑；renderer 在自己的 user 和 network namespace 裡、chroot 到一個已經不在的目錄；進度在 `progress.md`）
+- 狀態：✅ 已完成：2026-11-27（Linux：Fedora 45；CI 的 runner 多半只測得到退路，第 7 條）
+- 進度和驗收：`progress.md`
 - 細節：`details.md`
 
 ## 摘要
 
-Linux 的 renderer process 現在關在 Landlock（檔案照路徑唯讀，只放行四個）加 seccomp-bpf（system call 的白名單）裡。這份在上面再加三層，接近 Chromium 的 Linux renderer 那一級：renderer 在自己的 user 和 network namespace 裡（沒有網路介面，chroot 的權限從這裡來；PID namespace 不做，第 6 條）；Landlock 一個路徑都不放（CPU 的數量、亂數、時區改成不用讀檔）；最後 chroot 到空的目錄（連路徑在不在都探不出來，`/proc` 整個看不到）。機器不允許沒有特權的 user namespace 時（Ubuntu 23.10 起預設不允許），退回現在的 Landlock 加 seccomp。三段做，每段可以先 merge。
+Linux 的 renderer process 原本關在 Landlock（檔案照路徑唯讀，放行四個）加 seccomp-bpf（system call 的白名單）裡。這份在上面加了三層，接近 Chromium 的 Linux renderer 那一級：Landlock 一個路徑都不放（CPU 的數量讓 glibc 照 affinity 數，V8 的種子來自 `getrandom`，時區由 Browser 照名字給；只有找不出時區名字的機器照舊讀時區的檔案）；renderer 在自己的 user 和 network namespace 裡（沒有網路介面，和 Browser 同一個使用者；PID namespace 不做，第 6 條）；最後 chroot 到一個已經不在的目錄（連路徑在不在都探不出來，`/proc` 整個看不到），權限只為 chroot 留到那一刻、之後全部丟掉。機器不允許沒有特權的 user namespace 時（Ubuntu 23.10 起預設不允許），照原本的 Landlock 加 seccomp，Browser 說一次。三段做完（已決定的事項第 1 到 10 條）。
 
 ## 動機
 
@@ -44,7 +45,7 @@ Linux 的 renderer process 現在關在 Landlock（檔案照路徑唯讀，只�
 
 ## 詳細設計
 
-下面每一節是選項和比較；沒有對應的條目的「看法」是 2026-11-27 的。探測的結果在 `details.md`。
+下面每一節是選項和比較，最後是選了哪個（理由在「已決定的事項」）。探測的結果在 `details.md`。
 
 ### 不能用 user namespace 的機器
 
@@ -80,7 +81,7 @@ Linux 的 renderer process 現在關在 Landlock（檔案照路徑唯讀，只�
 
 Landlock 放行的四個路徑，各自改成不用讀檔（誰在讀的是 renderer sandbox 那份 RFC 用 `strace -k` 查的）：
 
-| 路徑 | 誰讀 | 看法 |
+| 路徑 | 誰讀 | 定了的做法 |
 | --- | --- | --- |
 | `/sys/devices/system/cpu/online` | glibc 的 `get_nprocs`：V8 的 worker 數、absl、malloc 的 arena | 定了**讓它讀不到**（第 2 條）：glibc 2.44 讀不到時退回 `sched_getaffinity`，平常數字相同，process 被限制在部分 CPU 上時是那幾個（比較準）。CI 的 glibc（2.39）的退路要確認 |
 | `/dev/urandom` | V8 的亂數產生器的種子（`fopen`），讀不到時用時間 | 定了**給 V8 一個 entropy source**（第 3 條）（rusty_v8 的 `V8::set_entropy_source`），用 `getrandom`（已經在 seccomp 的清單裡）；V8 的註解也說這是 embedder 的責任 |
@@ -162,7 +163,7 @@ GitHub 的 `ubuntu-24.04` runner（machopo 的 CI 都在上面）照 Ubuntu 的�
 
 ## 待決定
 
-第 3 段要定的都定了（第 8 到 10 條）。
+沒有。
 
 ## 之後的可能
 
