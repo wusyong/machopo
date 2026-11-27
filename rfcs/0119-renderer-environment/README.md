@@ -1,7 +1,7 @@
 # RFC 0119：renderer process 的環境變數只給它要的
 
 - 開始日期：2026-11-27
-- 狀態：🚧 已排程：2026-11-27（第 1 段做完：Linux；第 2、3 段：macOS、Windows，在那兩台上做；進度在 `progress.md`）
+- 狀態：🚧 已排程：2026-11-27（第 1、2 段做完：Linux、macOS；第 3 段：Windows，在那台上做；進度在 `progress.md`）
 - 細節：`details.md`
 
 ## 摘要
@@ -62,10 +62,10 @@ renderer process 現在繼承 Browser 的整份環境變數，使用者放在環
 | machopo 自己的 | `MACHOPO_` 開頭的全部 | 開發用的開關（`MACHOPO_V8_FLAGS`、`MACHOPO_TRACE`、`MACHOPO_GC_OPTIONS`……）；新的開關不用記得加進清單。通道用的（`MACHOPO_IPC_FD`、`MACHOPO_IPC_CHANNEL`）由 `ipc` 在清空之後加 |
 | Rust 和 mimalloc | `RUST_LOG`、`RUST_BACKTRACE`、`RUST_LIB_BACKTRACE`、`RUST_MIN_STACK`、`NO_COLOR`；`MIMALLOC_` 開頭的 | log、panic 的 backtrace、thread 的 stack；mimalloc 自己讀它的選項（`MIMALLOC_PURGE_DELAY` 在 `--help` 裡） |
 | 語系和時區 | `LANG`、`LC_ALL`、`LC_` 開頭的、`TZ`、`ICU_DATA`、`ICU_TIMEZONE_FILES_DIR` | ICU 用它們決定 `Intl` 的預設語系和時區（量到 renderer 讀 `LANG`、`LC_ALL`、`LC_MESSAGES`、`TZ`）；拿掉的話 `Intl` 的預設語系安靜地變成 `und`、日期的格式跟著變（量的：`LANG`、`LC_ALL` 是空的時），使用者設的 `TZ` 不作用、改用 `/etc/localtime`。ICU 的資料位置（`ICU_DATA`、`ICU_TIMEZONE_FILES_DIR`）也在：量到 renderer 讀它們，平常沒有值 |
-| 動態連結器 | Linux：`LD_PRELOAD`、`LD_LIBRARY_PATH` | 不是秘密；拿掉的話包著 machopo 跑的工具（profiler、量測）進不了 renderer。machopo 自己不靠它們（`env -i` 的 renderer 照樣啟動） |
-| 平台的系統 | Windows：`SystemRoot`、`SystemDrive`、`Path`、`TEMP`、`TMP`、`LOCALAPPDATA`（Chromium 的清單）；macOS：在那一段量 | 系統的 DLL、暫存的位置、AppContainer 的資料夾 |
+| 動態連結器 | Linux：`LD_PRELOAD`、`LD_LIBRARY_PATH`；macOS：`DYLD_INSERT_LIBRARIES`、`DYLD_LIBRARY_PATH`，和 samply 的 `SAMPLY_BOOTSTRAP_SERVER_NAME` | 不是秘密；拿掉的話包著 machopo 跑的工具（profiler、Guard Malloc、量測）進不了 renderer。machopo 自己不靠它們（`env -i` 的 renderer 照樣啟動）。macOS 的 samply 預載的函式庫照後者找 samply 的 Mach service、交出 task port |
+| 平台的系統 | Windows：`SystemRoot`、`SystemDrive`、`Path`、`TEMP`、`TMP`、`LOCALAPPDATA`（Chromium 的清單）；macOS：`__CF_USER_TEXT_ENCODING` | Windows：系統的 DLL、暫存的位置、AppContainer 的資料夾。macOS：CoreFoundation 的初始化讀它，沒有時向目錄服務查使用者、讀家目錄的 `~/.CFUserTextEncoding`（量的） |
 
-沒放的（例）：`HOME`、`USER`、`PATH`（Linux、macOS）、`DISPLAY`、`WAYLAND_DISPLAY`、`XDG_*`、`DBUS_SESSION_BUS_ADDRESS`、`SSH_AUTH_SOCK`、`XAUTHORITY`、終端機的、別的程式的 token。renderer 不再用 fontconfig 之後，原本它要的 `HOME`、`XDG_*`、`FONTCONFIG_*` 也不用了。量到 renderer 讀、但不給的：`SIMDUTF_FORCE_IMPLEMENTATION`、`OPENSSL_ia32cap`（強制走哪一條 CPU 的路的除錯開關，結果相同），和 glibc 的 `GLIBC_TUNABLES`、`MALLOC_*`（調整 glibc 的配置器；用到時再加）。
+沒放的（例）：`HOME`、`USER`、`PATH`（Linux、macOS）、`DISPLAY`、`WAYLAND_DISPLAY`、`XDG_*`、`DBUS_SESSION_BUS_ADDRESS`、`SSH_AUTH_SOCK`、`XAUTHORITY`、終端機的、別的程式的 token。renderer 不再用 fontconfig 之後，原本它要的 `HOME`、`XDG_*`、`FONTCONFIG_*` 也不用了。量到 renderer 讀、但不給的：`SIMDUTF_FORCE_IMPLEMENTATION`、`OPENSSL_ia32cap`（強制走哪一條 CPU 的路的除錯開關，結果相同），和 glibc 的 `GLIBC_TUNABLES`、`MALLOC_*`（調整 glibc 的配置器；用到時再加）。macOS 上量到 renderer 讀、但不給的：`USER`（CoreFoundation 的初始化讀，拿掉看不出差別）、系統框架的除錯開關（`NSZombieEnabled`、`CF*`、`OS_ACTIVITY_*`、`OSLogRateLimit`……，平常沒有值）、`OPENSSL_armcap`；也不給 `TMPDIR`、`XPC_*`、`DYLD_FRAMEWORK_PATH` 和 libmalloc 的 `Malloc*`（用到時和 glibc 的一起加）。
 
 語系和時區照環境傳下去，還是改成 Browser 決定、照訊息給（Chromium 的語系是 Browser 給的 `--lang`，照記憶、沒有對原始碼；時區沒查）：
 
@@ -103,7 +103,7 @@ renderer process 現在繼承 Browser 的整份環境變數，使用者放在環
 
 0. 草稿和 Linux 的量測（這一版；`details.md`）。
 1. **Linux**（做完，2026-11-27）：清單和清空的機制（不分平台的部分在這一段做出來）；renderer process 切過去；測試。
-2. **macOS**：量 renderer 讀了什麼（`getenv` 的 interpose：`DYLD_INSERT_LIBRARIES`，SIP 擋不擋自己 build 的執行檔要確認）、macOS 的那幾個；切過去。
+2. **macOS**（做完，2026-11-27）：量 renderer 讀了什麼（`getenv` 的 interpose：`DYLD_INSERT_LIBRARIES`；SIP 不擋自己 build 的執行檔）、macOS 的那幾個；切過去；從外面讀 renderer 的環境（`sunaba::macos::environment`）。
 3. **Windows**：`sunaba::windows::Command` 照清空的命令建；Chromium 的清單；量 renderer 讀了什麼（API Monitor 或 `GetEnvironmentVariableW` 的 hook）；切過去。
 
 每一段在它的平台上做和驗，做完可以先 merge（`rfcs/README.md` 的「階段的 merge」）：還沒切的平台照舊繼承整份。
@@ -134,12 +134,18 @@ renderer process 現在繼承 Browser 的整份環境變數，使用者放在環
 3. **語系和時區照環境傳下去（L1）**（2026-11-27，使用者決定）：`LANG`、`LC_` 開頭的、`TZ` 在清單上（第 2 條），renderer 的 ICU 照舊從環境和 `/etc/localtime` 決定 `Intl` 的預設語系和時區。理由：renderer 看到的和現在一樣，語系和時區不是秘密，改由 Browser 給在 Linux 的 chroot 之前換不到安全。不選 Browser 決定、照啟動的訊息給（L2：Chromium 的語系是 Browser 給的，但 Browser 沒有 ICU，要另外找出和 ICU 一致的語系和時區，時區變了要通知 renderer）；L2 留給 Linux 的 chroot 那一份（「之後的可能」）。
 4. **sandbox 裡和 `--no-sandbox` 的 renderer process 都清（N1）**（2026-11-27，使用者決定）：`--single-process` 的 renderer 是 Browser 的 thread，不在範圍內。理由：一條啟動的路，`--no-sandbox` 的測試跑的就是真的那條；sandbox 裡外的比較只差在 sandbox，清單漏了的裡外一起壞，和 thread 上的 renderer 比就看得出來。和字型服務那份 RFC 的第 8 條同一個理由。代價：除錯時要給 renderer 清單以外的變數，先改清單（`MACHOPO_` 開頭的照前綴已經放行）。不選只清 sandbox 裡的（N2：除錯方便，但兩條路，清單漏了的只在 sandbox 裡壞，分不出是 sandbox 擋的還是環境少了）。
 5. **三個平台各一段，Linux 先（R1）**（2026-11-27，使用者決定）：清空和放回的機制、清單的結構、測試不分平台，在 Linux 那一段做出來；macOS 和 Windows 各一段，補那個平台的變數、在那台上量和驗，兩者的順序看哪台先有空。理由：清單要在那個平台上量過才知道漏了什麼，沒量過就打開是安靜地壞；這台是 Linux，量測也做了。代價：中間有一段時間三個平台不一樣（還沒切的照舊繼承整份）。不選三個平台的程式一次寫好、之後只驗（R2：macOS 和 Windows 的部分寫好了也不能先打開）。不選照 Chromium 先做 Windows（R3：不在那台上就動不了，Linux 和 macOS 的洞留得比較久）。
+6. **macOS 的系統要的變數只給 `__CF_USER_TEXT_ENCODING`（M1）**（2026-11-27，使用者決定）：`USER`、`HOME`、`TMPDIR`、`XPC_*` 和系統框架的除錯開關都不給。理由：量到 libxpc 和 CoreFoundation 的初始化（`main` 之前、進 sandbox 之前）讀它；沒有它時 CoreFoundation 向 opendirectoryd 查使用者、打開家目錄的 `~/.CFUserTextEncoding`，每個 renderer 各一次（`details.md` 的「renderer 讀了哪些變數（macOS，量的）」）。它的值是 uid、文字的編碼和地區三個數字，不是秘密。`USER` 也是 CoreFoundation 的初始化讀的，拿掉看不出差別。不選 macOS 不多給（M2：清單和 Linux 一樣，但 renderer 在進 sandbox 前讀使用者的檔案、查目錄服務）。對照 Chromium：macOS 上不過濾，有 sandbox 時多加 `OS_ACTIVITY_MODE=disable`（關系統 log 的雜訊，和環境的洩漏無關，這份不跟）。
+7. **macOS 給 `DYLD_INSERT_LIBRARIES`、`DYLD_LIBRARY_PATH`（D1）**（2026-11-27，使用者決定）：Linux 的 `LD_PRELOAD`、`LD_LIBRARY_PATH`（第 2 條）在 macOS 上的對應。理由：包著 machopo 跑的工具（Guard Malloc 的 `libgmalloc.dylib`、這份的 `getenv_log.c`）照樣進得了 renderer（目標 4）；不是秘密，能設定 Browser 環境的人本來就控制得了 Browser。不選再加 `DYLD_FRAMEWORK_PATH` 和 libmalloc 的 `Malloc` 開頭的除錯開關（D2：Linux 也沒給 glibc 的 `MALLOC_*`，用到時兩個平台一起加）。不選都不給（D3：工具和量測進不了 renderer，換不到安全）。
+8. **macOS 的測試用 `sunaba::macos::environment(pid)` 從外面讀 renderer 的環境（R1）**（2026-11-27，使用者決定）：照 `sysctl` 的 `KERN_PROCARGS2`，和 `sunaba::macos::sandboxed(pid)` 一樣是給啟動的一方看 child 的。理由：量到它讀得到 sandbox 裡的 process 啟動時的環境（只對系統的執行檔遮掉，machopo 不是），名字和值照 NUL 分得精確。代價：`sunaba` 多一處 `unsafe`（論證在它的 `soundness.md`）。不選解析 `ps -E` 的輸出（R2：參數和環境照空白接在一起，值裡的空白分不出來，又靠 `ps` 的格式）。不選 probe 從裡面印自己的環境（R3：probe 是測試啟動的，不經過 Browser 啟動 renderer 的那條路）。
+9. **macOS 給 samply 的 `SAMPLY_BOOTSTRAP_SERVER_NAME`（S1）**（2026-11-27，使用者決定）：量測工具的測試（`speedometer_test.py` 的 `test_the_stacks_in_the_timed_windows`）在清單打開後失敗：macOS 的 samply 用 `DYLD_INSERT_LIBRARIES` 預載自己的函式庫，那個函式庫照這個變數找 samply 的 Mach service、交出 process 的 task port；沒有它時 `bench.py speedometer --sample` 安靜地沒有 renderer 的樣本。理由：目標 4（包著 machopo 跑的工具照樣進得了 renderer）；值是 samply 每次隨機取的 service 的名字，不是秘密；連上在 `main` 之前，renderer 進 sandbox 之後查不到它。代價：清單多一個只為一個工具的項目。不選不給（S2：macOS 上的 `--sample` 量不到 renderer，那個測試要改成跳過）。Linux 的 `perf` 和 Windows 的 samply（ETW）不靠環境。
 
 ## 待決定
 
 開始第 1 段之前要定的五件都定了（已決定的事項第 1 到 5 條）。
 
-各平台那一段才定的：那個平台的系統要的變數（量過之後）；從外面讀 renderer 的環境的做法；Windows 上 `sunaba::windows::Command` 怎麼照清空的命令建。
+第 2 段（macOS）要定的都定了（第 6 到 9 條；第 9 條是量測工具的測試找到的）。
+
+Windows 那一段才定的：系統要的變數（量過之後）；從外面讀 renderer 的環境的做法；`sunaba::windows::Command` 怎麼照清空的命令建。
 
 ## 之後的可能
 

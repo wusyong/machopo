@@ -34,13 +34,50 @@ LD_PRELOAD=$PWD/getenv_log.so ENVPROBE_DIR=/tmp/envprobe \
 
 - 不經過 `getenv` 的：glibc 自己讀的（`tzset` 讀 `TZ`、`GLIBC_TUNABLES`、`MALLOC_*`），動態連結器讀的（`LD_*`，在 `main` 之前），mimalloc 自己掃 `environ` 讀的 `MIMALLOC_*`，`std::env::vars()` 那種整份走一遍的。清單照文件和原始碼補（`README.md` 的「清單放什麼」）。
 - 這兩個測試沒走到的路：wasm 的文件、worker、canvas 的文字、WebDriver、`census` 的 build（`MACHOPO_CENSUS`）。第 1 段再用整套 `shell` 的測試量一次。
-- macOS 和 Windows：在各自的那一段量。
+- macOS：「renderer 讀了哪些變數（macOS，量的）」；Windows：在那一段量。
 
 **Browser 讀的**比 renderer 多很多（fontconfig、expat、Mesa、Vulkan 的 loader、`HOME`、`XDG_*`、`LD_LIBRARY_PATH`……），都不在 renderer 裡：它們是 Browser 的字型、GPU 和視窗要的。
 
 **這台 shell 的環境**：79 個變數，renderer 現在全部拿到。其中有 SSH agent 的 socket（`SSH_AUTH_SOCK`）、D-Bus 的 socket（`DBUS_SESSION_BUS_ADDRESS`）、X 的認證檔（`XAUTHORITY`），和別的程式放在環境裡的 token。
 
 **清空環境的 renderer 照樣啟動**：`env -i target/debug/machopo --type=renderer` 進了 sandbox、因為沒有通道而結束（exit 2，「there is no browser to render for」）。machopo 連結的動態函式庫都在系統的目錄（`ldd`），不靠 `LD_LIBRARY_PATH`。
+
+## renderer 讀了哪些變數（macOS，量的）
+
+2026-11-27，macOS 26.6.2（arm64），debug build，`360a4c8f`。
+
+**做法**：同一個 `getenv_log.c`，macOS 上用 dyld 的 interpose（`__DATA,__interpose`）攔 `getenv`（macOS 沒有 `secure_getenv`），用 `DYLD_INSERT_LIBRARIES` 載入；是不是 renderer 看 `_NSGetArgv`。debug build 是 linker 的 ad-hoc 簽章、沒有 hardened runtime，SIP 不擋，sandbox 裡的 renderer 也寫得進載入時開好的檔案。SIP 會從**系統的**執行檔（`/usr/bin/caffeinate`、`/usr/bin/env`……）的環境拿掉 `DYLD_*`，它們再啟動的程式就沒有了：所以在它們裡面才設。編法和用法：
+
+```sh
+cc -shared -O2 -o getenv_log.dylib rfcs/0119-renderer-environment/getenv_log.c -DENVPROBE_DEFAULT_DIR='"/tmp/envprobe"'
+caffeinate -i zsh -c "DYLD_INSERT_LIBRARIES=$PWD/getenv_log.dylib cargo test -p shell"
+```
+
+libSystem 自己裡面的呼叫看不到（例如 libmalloc 直接讀 `envp` 的 `Malloc*`），mimalloc 掃 `environ` 讀的也看不到，和 Linux 一樣。
+
+**renderer 讀的**（整套 `shell` 的測試，413 個 renderer process 合起來，清單還沒打開時；「有值」是這台機器的環境）：
+
+| 變數 | 誰讀 | 這台有值 |
+| --- | --- | --- |
+| `MACHOPO_TRACE`、`MACHOPO_V8_FLAGS`、`MACHOPO_V8_THREAD_POOL_SIZE`、`MACHOPO_GC_OPTIONS`、`RUST_LOG`、`RUST_MIN_STACK`、`NO_COLOR` | 和 Linux 一樣 | 測試設的時候有 |
+| `LANG`、`LC_ALL`、`LC_MESSAGES`、`TZ`、`ICU_DATA`、`ICU_TIMEZONE_FILES_DIR` | V8 裡的 ICU，和 Linux 一樣；`TZ` 也是 CoreFoundation 的初始化讀 | 沒有（這個 shell 沒有 `LANG`） |
+| `__CF_USER_TEXT_ENCODING` | libxpc 和 CoreFoundation 的初始化（`main` 之前） | 有：uid、文字的編碼和地區三個數字 |
+| `USER` | CoreFoundation 的初始化 | 有 |
+| `OSLogRateLimit` | libtrace 的初始化 | 有（這個環境設的） |
+| `TZFILE`、`CFProcessPath`、`CF_CHARSET_PATH`、`CFNumberDisableCache`、`CFStringDisableROM`、`NSZombieEnabled`、`NSDebugEnabled`……、`OS_ACTIVITY_*`、`OS_LOG_FAULT_REPORTS`、`LIBDISPATCH_*`、`DYLD_IMAGE_SUFFIX`、`IPHONE_SIMULATOR_ROOT`、`FEATUREFLAGS_*`、`MallocStackLogging` | CoreFoundation、Foundation、objc、libtrace、libdispatch 的除錯開關（初始化時讀） | 沒有 |
+| `OPENSSL_armcap` | 帶 OpenSSL 式 CPU 功能偵測的函式庫（同 Linux 的 `OPENSSL_ia32cap`） | 沒有 |
+
+renderer 不讀 `HOME`、`TMPDIR`、`PATH`、`XPC_*`。只跑 sandbox 那幾個測試量到的也是同一組，整套多跑的沒有新的。
+
+**沒有 `__CF_USER_TEXT_ENCODING` 時**（`env -i` 的 renderer，另外攔 `getpwuid_r` 和 `open`）：CoreFoundation 的初始化向目錄服務查使用者（`getpwuid_r`，opendirectoryd）、打開 `~/.CFUserTextEncoding`，各兩次；只給它時這兩件都沒有。都在 `main` 之前，所以 sandbox 擋不到，也不會有 sandbox 的拒絕。拿掉 `USER` 看不出差別。清空環境的 renderer 照樣啟動、因為沒有通道而結束（exit 2）。
+
+**清單打開之後**（同一套測試，在 shim 底下，`DYLD_INSERT_LIBRARIES` 照清單傳下去）：760 個整合測試都通過；renderer 讀的變數和打開之前一樣，`USER`、`OSLogRateLimit` 變成沒有值；`MallocStackLogging` 沒有人讀了（打開之前也只有 4 個 process 讀、沒有值，大概是環境裡 libmalloc 的其他變數引起的，沒查）。
+
+**從外面讀 process 的環境**：`sysctl` 的 `KERN_PROCARGS2` 回 process 啟動時的參數區：參數的個數、執行檔的路徑、補齊的 NUL、參數、環境，一個空字串，然後是系統的字串（`ptr_munge=`、`executable_path=`……，值被清掉）。同一個使用者的 process 讀得到，在 sandbox 裡的也是（`sandbox-exec` 的 `(deny default)`）；系統的執行檔（`/bin/sleep`）的環境被拿掉、只剩參數。`ps -E` 讀的是同一份，系統的執行檔也一樣看不到。
+
+**samply**（`bench.py speedometer --sample` 在 macOS 上用的）：它啟動的程式的環境多了 `DYLD_INSERT_LIBRARIES`（它的預載函式庫）和 `SAMPLY_BOOTSTRAP_SERVER_NAME`（它的 Mach service 的名字，每次隨機），預載的函式庫在 `main` 之前照後者找到 samply、交出 task port。清單打開、沒有後者時 renderer 沒有樣本（`speedometer_test.py` 的 `test_the_stacks_in_the_timed_windows`：「no samples of the renderer process's main thread」）；給了就有。`getenv_log.c` 看不到它被讀：samply 的函式庫是在 shim 之外的 image。
+
+**這台 shell 的環境**：73 個變數，清單打開之前 renderer 全部拿到。其中有別的程式的 token 和 API key、SSH agent 的 socket。
 
 ## Chromium
 
@@ -54,5 +91,4 @@ LD_PRELOAD=$PWD/getenv_log.so ENVPROBE_DIR=/tmp/envprobe \
 ## 沒有查到的
 
 - Firefox 的 content process 的環境有沒有過濾。
-- macOS 上自己 build 的執行檔，`DYLD_INSERT_LIBRARIES` 能不能進 sandbox 裡的 renderer（量測要用）。
 - Windows 上 renderer 實際讀了哪些變數。

@@ -9,7 +9,7 @@
 
 pub mod probe;
 
-use std::ffi::{CStr, CString, c_char, c_int};
+use std::ffi::{CStr, CString, OsString, c_char, c_int};
 use std::fmt;
 
 /// What a process may still ask of the system once it has entered: the
@@ -144,4 +144,146 @@ pub fn sandboxed(pid: u32) -> bool {
     // process id, and answers whether that process has a sandbox at all
     // (1), or not (0).
     unsafe { sandbox_check(pid, std::ptr::null(), 0) == 1 }
+}
+
+/// The environment the process `pid` was started with, by the kernel's
+/// account (`KERN_PROCARGS2`): for whoever started a process to see what
+/// it was given, in a sandbox or out of one. What the process changed in
+/// its environment since isn't seen. `None` for a process that isn't
+/// there or isn't this user's; empty for one of the system's executables,
+/// whose environment the kernel keeps from other processes.
+pub fn environment(pid: u32) -> Option<Vec<(OsString, OsString)>> {
+    let pid = c_int::try_from(pid).ok()?;
+    let mut name = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
+    let length = libc::c_uint::try_from(name.len()).ok()?;
+    let mut size: libc::size_t = 0;
+    // SAFETY: `name` is `length` integers, alive across the call; with no
+    // buffer the call only writes the size it needs to `size`, a place
+    // for one `size_t`; nothing is set.
+    let sized = unsafe {
+        libc::sysctl(
+            name.as_mut_ptr(),
+            length,
+            std::ptr::null_mut(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if sized != 0 {
+        return None;
+    }
+    let mut buffer = vec![0_u8; size];
+    // SAFETY: as above; the buffer is `size` bytes, alive across the
+    // call, and the call writes at most `size` of them, then how many it
+    // wrote to `size`.
+    let read = unsafe {
+        libc::sysctl(
+            name.as_mut_ptr(),
+            length,
+            buffer.as_mut_ptr().cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if read != 0 {
+        return None;
+    }
+    buffer.truncate(size);
+    environment_in(&buffer)
+}
+
+/// The environment in `KERN_PROCARGS2`'s answer: the number of
+/// arguments, the executable's path, NULs up to the arguments, the
+/// arguments, then each variable, `NAME=value`, until an empty string
+/// (what follows is the system's, not the environment). `None` when it
+/// isn't of that shape, or has no arguments: where the environment
+/// starts is then not told.
+fn environment_in(answer: &[u8]) -> Option<Vec<(OsString, OsString)>> {
+    use std::os::unix::ffi::OsStrExt;
+    let (count, rest) = answer.split_first_chunk::<4>()?;
+    let count = usize::try_from(c_int::from_ne_bytes(*count)).ok()?;
+    if count == 0 {
+        return None;
+    }
+    let mut strings = rest.split(|&byte| byte == 0);
+    strings.next()?;
+    // An argument that is empty would be taken for the padding: a
+    // process's first argument is its name.
+    let mut arguments = strings.skip_while(|string| string.is_empty());
+    for _ in 0..count {
+        arguments.next()?;
+    }
+    let environment = arguments
+        .take_while(|string| !string.is_empty())
+        .map(|variable| {
+            let (name, value) = match variable.iter().position(|&byte| byte == b'=') {
+                Some(at) => (&variable[..at], &variable[at.saturating_add(1)..]),
+                None => (variable, &[][..]),
+            };
+            (
+                std::ffi::OsStr::from_bytes(name).to_owned(),
+                std::ffi::OsStr::from_bytes(value).to_owned(),
+            )
+        })
+        .collect();
+    Some(environment)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn answer(count: i32, strings: &[&str]) -> Vec<u8> {
+        let mut answer = count.to_ne_bytes().to_vec();
+        for string in strings {
+            answer.extend_from_slice(string.as_bytes());
+            answer.push(0);
+        }
+        answer
+    }
+
+    fn pairs(pairs: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
+        pairs
+            .iter()
+            .map(|(name, value)| (OsString::from(name), OsString::from(value)))
+            .collect()
+    }
+
+    #[test]
+    fn the_environment_is_after_the_arguments_and_before_the_systems_strings() {
+        let answer = answer(
+            2,
+            &[
+                "/bin/x",
+                "",
+                "",
+                "x",
+                "--flag",
+                "A=1",
+                "B=x y=z",
+                "C",
+                "",
+                "",
+                "ptr_munge=",
+                "executable_path=/bin/x",
+            ],
+        );
+        assert_eq!(
+            environment_in(&answer),
+            Some(pairs(&[("A", "1"), ("B", "x y=z"), ("C", "")]))
+        );
+    }
+
+    #[test]
+    fn an_empty_environment_is_empty_and_a_short_answer_is_none() {
+        assert_eq!(
+            environment_in(&answer(1, &["/bin/x", "", "x", "", "ptr_munge="])),
+            Some(Vec::new())
+        );
+        assert_eq!(environment_in(&answer(3, &["/bin/x", "", "x"])), None);
+        assert_eq!(environment_in(&answer(0, &["/bin/x", "", "A=1"])), None);
+        assert_eq!(environment_in(&[1, 0]), None);
+    }
 }

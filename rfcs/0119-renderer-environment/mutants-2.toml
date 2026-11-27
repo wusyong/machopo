@@ -1,0 +1,110 @@
+# Stage 2's mutants (macOS: a renderer process is started with only the listed part of the browser's environment, and the tests read it from outside): `python3 scripts/test.py mutate rfcs/0119-renderer-environment/mutants-2.toml`, on macOS.
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "--test", "it", "--", "renderer_sandbox"]
+timeout = 900
+
+[[mutant]]
+name = "macOS's renderers aren't limited"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''pub const LIMITS_ENVIRONMENT: bool = cfg!(any(target_os = "linux", target_os = "macos"));'''
+to = '''pub const LIMITS_ENVIRONMENT: bool = cfg!(target_os = "linux");'''
+
+[[mutant]]
+name = "the environment isn't cleared"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''    command.env_clear();
+    command.envs(renderer_environment(std::env::vars_os()));'''
+to = '''    command.envs(renderer_environment(std::env::vars_os()));'''
+
+[[mutant]]
+name = "the launcher doesn't limit the renderer's environment"
+file = "crates/shell/src/lib.rs"
+from = '''        renderer_sandbox::limit_environment(&mut command);'''
+to = ''''''
+
+[[mutant]]
+name = "the user's text encoding isn't given"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''    #[cfg(target_os = "macos")]
+    "__CF_USER_TEXT_ENCODING",'''
+to = ''''''
+
+[[mutant]]
+name = "dyld's preloading isn't given"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''    #[cfg(target_os = "macos")]
+    "DYLD_INSERT_LIBRARIES",'''
+to = ''''''
+
+[[mutant]]
+name = "dyld's library path isn't given"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''    #[cfg(target_os = "macos")]
+    "DYLD_LIBRARY_PATH",'''
+to = ''''''
+
+[[mutant]]
+name = "the locale isn't given"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''    "LANG",
+    "TZ",'''
+to = '''    "TZ",'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "renderer_sandbox_macos::a_renderer_process_has_only"]
+
+[[mutant]]
+name = "the time zone isn't given"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''    "LANG",
+    "TZ",'''
+to = '''    "LANG",'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "renderer_sandbox_macos::a_renderer_process_has_only"]
+
+[[mutant]]
+name = "the padding before the arguments is taken for them"
+file = "crates/sunaba/src/macos.rs"
+from = '''    let mut arguments = strings.skip_while(|string| string.is_empty());'''
+to = '''    let mut arguments = strings;'''
+test = ["cargo", "test", "-q", "-p", "sunaba", "--", "macos"]
+
+[[mutant]]
+name = "one argument fewer is skipped"
+file = "crates/sunaba/src/macos.rs"
+from = '''    for _ in 0..count {'''
+to = '''    for _ in 1..count {'''
+test = ["cargo", "test", "-q", "-p", "sunaba", "--", "macos"]
+
+[[mutant]]
+name = "the system's strings are taken for variables"
+file = "crates/sunaba/src/macos.rs"
+from = '''        .take_while(|string| !string.is_empty())'''
+to = '''        .filter(|string| !string.is_empty())'''
+test = ["cargo", "test", "-q", "-p", "sunaba", "--", "macos"]
+
+[[mutant]]
+name = "a variable is split at its last ="
+file = "crates/sunaba/src/macos.rs"
+from = '''            let (name, value) = match variable.iter().position(|&byte| byte == b'=') {'''
+to = '''            let (name, value) = match variable.iter().rposition(|&byte| byte == b'=') {'''
+test = ["cargo", "test", "-q", "-p", "sunaba", "--", "macos"]
+
+[[mutant]]
+name = "an answer with no arguments is read"
+file = "crates/sunaba/src/macos.rs"
+from = '''    if count == 0 {
+        return None;
+    }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "sunaba", "--", "macos"]
+
+[[mutant]]
+name = "the answer isn't cut to what the kernel wrote"
+file = "crates/sunaba/src/macos.rs"
+from = '''    buffer.truncate(size);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "sunaba", "--", "macos"]
+
+[[mutant]]
+name = "samply's service isn't given"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''    #[cfg(target_os = "macos")]
+    "SAMPLY_BOOTSTRAP_SERVER_NAME",'''
+to = ''''''

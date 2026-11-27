@@ -91,7 +91,7 @@ pub const SUPPORTED: bool = cfg!(any(target_os = "linux", target_os = "macos", w
 /// browser's environment that [`passes_to_renderer`] lets through, in a
 /// sandbox or out of one. Where it isn't (until a platform's list is
 /// measured there), it inherits the browser's whole environment.
-pub const LIMITS_ENVIRONMENT: bool = cfg!(target_os = "linux");
+pub const LIMITS_ENVIRONMENT: bool = cfg!(any(target_os = "linux", target_os = "macos"));
 
 /// The variables a renderer process is given by name: none is a secret,
 /// each changes how the renderer runs.
@@ -115,6 +115,25 @@ const RENDERER_VARIABLES: &[&str] = &[
     "LD_PRELOAD",
     #[cfg(target_os = "linux")]
     "LD_LIBRARY_PATH",
+    // dyld's, for the same: on macOS what `LD_PRELOAD` and
+    // `LD_LIBRARY_PATH` are on Linux.
+    #[cfg(target_os = "macos")]
+    "DYLD_INSERT_LIBRARIES",
+    #[cfg(target_os = "macos")]
+    "DYLD_LIBRARY_PATH",
+    // CoreFoundation's and libxpc's initializers read the user's text
+    // encoding here (the user's id, an encoding's and a region's
+    // numbers); where it isn't, CoreFoundation looks the user up in the
+    // directory service and reads `~/.CFUserTextEncoding`, before the
+    // renderer is in its sandbox.
+    #[cfg(target_os = "macos")]
+    "__CF_USER_TEXT_ENCODING",
+    // samply's (the profiler `bench.py speedometer --sample` runs machopo
+    // under): the name of its Mach service, which the library it
+    // preloads gives the process's task port to before `main`, so before
+    // the renderer is in its sandbox.
+    #[cfg(target_os = "macos")]
+    "SAMPLY_BOOTSTRAP_SERVER_NAME",
 ];
 
 /// The variables a renderer process is given by what their names start
@@ -803,6 +822,29 @@ mod tests {
             passes_to_renderer("LD_PRELOAD".as_ref()),
             cfg!(target_os = "linux")
         );
+        for macos in [
+            "DYLD_INSERT_LIBRARIES",
+            "DYLD_LIBRARY_PATH",
+            "__CF_USER_TEXT_ENCODING",
+            "SAMPLY_BOOTSTRAP_SERVER_NAME",
+        ] {
+            assert_eq!(
+                passes_to_renderer(macos.as_ref()),
+                cfg!(target_os = "macos"),
+                "{macos}"
+            );
+        }
+        for not_even_on_macos in [
+            "DYLD_FRAMEWORK_PATH",
+            "TMPDIR",
+            "XPC_FLAGS",
+            "MallocNanoZone",
+        ] {
+            assert!(
+                !passes_to_renderer(not_even_on_macos.as_ref()),
+                "{not_even_on_macos}"
+            );
+        }
         #[cfg(unix)]
         {
             use std::os::unix::ffi::OsStrExt;

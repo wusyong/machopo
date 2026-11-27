@@ -112,6 +112,7 @@ A profile is a program in the sandbox's own language (`sandbox(7)`'s, a Scheme: 
 - **For good.** Entering again with another profile is refused, looser or stricter (the same profile again is taken, and changes nothing).
 - **An error means end the process**: the profile didn't compile (`Error::Refused`, with the system's message) or held a NUL (`Error::Nul`). Nothing was restricted.
 - **`entered()`** says whether this process is in a sandbox; **`sandboxed(pid)`** whether a running process is, for whoever started it to check.
+- **`environment(pid)`** is the environment a running process was started with, by the kernel's account (`KERN_PROCARGS2`), in a sandbox or out of one: for whoever started it to check what it was given. What the process changed since isn't seen; the system's own executables' is empty (the kernel keeps it from other processes).
 
 `sandbox_init_with_parameters` is in no public header, and `sandbox_init` is deprecated in the ones it is in: the system's own daemons, Chromium and Firefox all enter this way, and there is no other for a process that isn't an App Store app.
 

@@ -94,6 +94,43 @@ fn a_sandboxed_process_is_seen_to_be_from_outside() {
     assert!(child.wait().unwrap().success());
 }
 
+/// What a process was started with is seen from outside, in its sandbox:
+/// each variable whole, a value with spaces and `=` in it too, and
+/// nothing else.
+#[test]
+fn a_sandboxed_processs_environment_is_seen_from_outside() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_sunaba_probe"))
+        .args(["--", "wait"])
+        .env_clear()
+        .env("SOME_NAME", "a value with spaces")
+        .env("OTHER", "x=y")
+        .env("EMPTY", "")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let entered = (0..500).any(|_| {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        sunaba::macos::sandboxed(child.id())
+    });
+    assert!(entered);
+    let mut environment = sunaba::macos::environment(child.id()).expect("its environment");
+    environment.sort();
+    let pair = |name: &str, value: &str| (name.into(), value.into());
+    assert_eq!(
+        environment,
+        [
+            pair("EMPTY", ""),
+            pair("OTHER", "x=y"),
+            pair("SOME_NAME", "a value with spaces"),
+        ]
+    );
+    let pid = child.id();
+    drop(child.stdin.take());
+    assert!(child.wait().unwrap().success());
+    assert_eq!(sunaba::macos::environment(pid), None);
+}
+
 #[test]
 fn nothing_of_the_file_system_is_reached_by_default() {
     let (_, _, outside) = files("default");
