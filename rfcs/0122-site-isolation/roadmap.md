@@ -36,7 +36,7 @@
 - **F1**：`frame-ancestors` 放 Browser 還是照 Chromium 放 renderer。
 - **C**：換不換 process 的規則（哪些導覽留在原來的 process）；同一個 site 的分頁共不共用 process；舊的文件的 `unload` 在哪裡跑、等不等；`beforeunload` 要不要在這份加；新的 renderer 要不要預先啟動；`--single-process` 和測試的 process 裡的分頁怎麼辦（不換）。
 - **B**：`about:blank`、`data:`、`blob:`、`srcdoc`、錯誤頁、`file:` 各自怎麼鎖；jail 之外要不要 citadel 的檢查。
-- **W**：跨網站的彈出視窗在 O4 之前沒有 `opener`，還是等 O4 再開放跨網站的 `window.open`；新視窗還是新分頁。**renderer 要能裝好幾個分頁**（同一個 site 的彈出視窗和開它的頁面同步存取對方，一定在同一個 process）：這是第一個非做不可的地方，做的時候把 RFC 0124 留到這時的兩件事重新考慮一次：(1) 同一個 site 的一般分頁要不要也共用 process、要不要設 process 數的上限（RFC 0124 的已決定的事項第 10 條現在是不共用）；(2) renderer 是 Browser 的 process 裡的 thread 時（`--single-process`、測試）跨網站的導覽怎麼換（RFC 0124 的已決定的事項第 11 條現在是換一組新的 thread）：renderer 能裝好幾個分頁之後，可以照 Chromium 的 `--single-process` 改成同一個 renderer 裡換一個新的 frame，Browser 這一側不變。
+- **W**：跨網站的彈出視窗在 O4 之前沒有 `opener`，還是等 O4 再開放跨網站的 `window.open`；新視窗還是新分頁。新分頁的初始文件被開它的頁面碰過之後，網址列不再顯示還沒 commit 的網址（RFC 0125 的已決定的事項第 1 條，Chromium 的 `IsUnmodifiedBlankTab`）。**renderer 要能裝好幾個分頁**（同一個 site 的彈出視窗和開它的頁面同步存取對方，一定在同一個 process）：這是第一個非做不可的地方，做的時候把 RFC 0124 留到這時的兩件事重新考慮一次：(1) 同一個 site 的一般分頁要不要也共用 process、要不要設 process 數的上限（RFC 0124 的已決定的事項第 10 條現在是不共用）；(2) renderer 是 Browser 的 process 裡的 thread 時（`--single-process`、測試）跨網站的導覽怎麼換（RFC 0124 的已決定的事項第 11 條現在是換一組新的 thread）：renderer 能裝好幾個分頁之後，可以照 Chromium 的 `--single-process` 改成同一個 renderer 裡換一個新的 frame，Browser 這一側不變。
 - **G**：設過 `document.domain` 的文件的 security token 怎麼辦（Blink 的做法要對原始碼）；OOPIF 之後照 site 的 agent cluster 和 origin 的鎖怎麼並存。
 - **O1 到 O5**：原型之後。
 

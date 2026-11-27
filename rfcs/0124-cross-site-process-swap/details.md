@@ -54,6 +54,13 @@
 - renderer 收到 `Shutdown`（關分頁、machopo 結束）只是離開 event loop，**不分派 `pagehide`、`unload`**。
 - 所以新的文件在別的 process commit 時，舊的 renderer 沒有人叫它跑 `unload`：要一個新的訊息。
 
+### 畫面：paint holding
+
+- `renderer` 的 `render_thread.rs`（`new_content_rendering_delay`、`start_new_content_rendering_timeout`、`new_content_rendering_timeout`）：main frame 的文件 commit 時開始計時（`RendererFlags::new_content_rendering_delay`，`NEW_CONTENT_RENDERING_DELAY` 是 4 秒，Blink 的 `kNewContentRenderingDelay`）；文件被擋住（`render_blocked`：body 還沒開始、stylesheet 擋著）時不交新的 frame，畫面上留著舊的文件；時間到還被擋住，交一個只有背景的 frame（`render_thread/documents.rs` 的 `commit_empty_frame`，Chromium 的 `RenderWidgetHostImpl::ClearDisplayedGraphics`）。測試：`browser` 的 `navigation.rs` 的 `a_new_document_that_cant_be_drawn_shows_empty_after_the_delay`。
+- 不看新舊是不是同一個 origin、舊頁面有沒有被使用者操作過。
+- renderer 記著 sticky user activation（`dom` 的 `window.rs` 的 `has_sticky_activation`），Browser 不知道。
+- Viz 留著一個 sink 的 frame 和它的 shared image，直到 Browser 叫它作廢那個 sink（`VizMsg::InvalidateFrameSinkId`，`display.rs` 的 `remove_frame_sink`），renderer 的 process 結束了也一樣。嵌入的 surface 沒有 frame 時畫背景色（`surface_aggregator.rs`）；沒有「先畫另一個」的 fallback。
+
 ### 嵌入的人
 
 - **視窗和沒有平台視窗的視窗**（`shell` 的 `browser_view.rs`）：每個 frame 問 `contents.surface_id()` 再嵌進 UI 的 frame，分頁換了 sink 會跟著；分頁建立時向 Viz 登記 sink（`browser_window.rs`），`relaunch` 自己登記新的。
@@ -161,6 +168,7 @@
 
 - commit 之後、新的 renderer 畫出第一個 frame 之前，新的 view 可以先顯示舊頁面的 surface（paint holding）。main frame 只在這幾種情況才留（`navigator.cc` 的 `allow_main_frame_paint_holding`）：初始的空白文件、新舊同一個 origin、或舊的頁面有過使用者的操作（`HasStickyUserActivation`）。所以**跨 origin 的導覽只有在使用者操作過舊頁面時才留舊的畫面**。
 - 最多留 4 秒（`third_party/blink/common/widget/constants.cc` 的 `kNewContentRenderingDelay`），之後清掉。留著的期間新頁面不收 input。
+- **為什麼限制**（`navigator.cc` 的註解：「Commonly used attacks are done without user activation -- which will not enable paint holding. However, if the user interacts with the page, we treat it as a valid case for paint holding.」「See https://issues.chromium.org/40942531 for reasons we limit paint holding.」）：issue 40942531，「Security: Origin spoof caused by navigation that doesn't paint any content」（Chrome 119）：導覽 commit 之後什麼都沒畫時，畫面照樣顯示前一頁 4 秒，「even if it's a cross-origin cross-site page」；攻擊的頁面讓分頁導覽到受害的網站、讓它畫不出東西，網址列是受害的網站、畫面是攻擊者的，重複導覽能延長。讀了報告的本文，沒有讀留言。
 
 ### `beforeunload`
 

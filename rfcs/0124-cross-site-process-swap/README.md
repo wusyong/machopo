@@ -32,6 +32,7 @@ RFC 0122 路線圖的 C（M2 的第一份）。
 要解決的 `docs/limitations.md` 的限制（做完時照這份清單改）：
 
 - 「隔離」的「名稱表和屬性值的表在同一個 renderer 裡共用」：同一個分頁先後導覽過的**不同網站**不再共用（各自的 process）；同一個網站的網頁之間、頁面和它跨網站的 iframe 之間照舊。
+- 「隔離」的「新文件畫出來之前留著舊的畫面，不看是不是同一個 origin」：照 Chromium 的條件（已決定的事項第 7 條），刪掉。
 - 「GC 和 `dom`」的「名稱表只增不減……同一個分頁導覽到別的網頁也不清」：跨網站的導覽之後跟著舊的 process 還給系統，同一個網站裡的照舊。
 
 ## 設計概要
@@ -79,7 +80,7 @@ renderer 當掉之後的下一次導覽，`WebContents::relaunch` 已經會「�
 
 1. **鋪路，行為不變**：commit 時才定送給哪個 renderer；「分頁換了 renderer」變成明確的一件事，DevTools 的 session 重新接上、`headless` 跟著換 sink 都聽它，不再靠 `crashed` 變回來。用現有的「當掉之後重新載入」驗證。
 2. **DevTools 的 session 的狀態跨過換 renderer**：同樣先用當掉之後重新載入驗證。
-3. **規則和換**：跨網站的 commit 在新的 process；舊文件的 `unload`；中間的畫面。
+3. **規則和換**：跨網站的 commit 在新的 process；舊文件的 `unload`；中間的畫面和同一個 renderer 裡跨 origin 的 paint holding（第 7 條）。
 4. **收尾**：量測工具、WPT 的預期結果、文件。
 
 每一段做完 `main` 上的行為都是一致的：前兩段不改變什麼時候換，第三段打開時工具已經接得上。第 4 段另外有一件要在別的機器上做的：在 macOS 和 Windows 量 renderer 啟動的時間（第 5 條）。
@@ -127,7 +128,12 @@ renderer 當掉之後的下一次導覽，`WebContents::relaunch` 已經會「�
    知道的後果：site 包含 scheme，已經在 `http://a.com` 的頁面導覽到 `https://a.com` 會換（輸入 `a.com`、被 redirect 到 https 是看最後的網址，只算一次）；Chromium 也是（`IsSameSite` 先比 scheme）。上一頁、下一頁照網址重新算，不像 Chromium 在 entry 裡存當時的 `SiteInstance`：沒有 `window.open` 時結果一樣，做 `window.open` 那一份時再看要不要存。不選每次導覽都換、只換 Browser 發起的（「理由和其他做法」）。
 5. **response 到了才決定換不換，當場啟動新的 process（T1）**（2026-11-27，使用者決定）：redirect 跟完、要 commit 時，照最後的網址和第 1 到 4 條的規則決定；要換就啟動新的 renderer、commit 直接送給它（訊息排在通道裡）。載入期間只有舊的 renderer，舊的頁面照常顯示、照常能用。理由：不會猜錯、沒有要丟掉的 process，Browser 不多一種「猜的那個 renderer」的狀態（被取消、被取代、redirect 到別的網站時怎麼收）；代價是啟動的時間（這台 Linux 約 11 ms）排在 response 之後，不能和網路請求同時。不選開始時先猜、先啟動、response 到了再確認（T2，Chromium 的 speculative `RenderFrameHost`：猜對時省下那 11 ms，但經過轉址的連結、http 轉 https、登入後跳轉都會猜錯，白啟動一個；載入期間多一個 process）；之後可以升級成它，決定的函式是同一個。不選只在開始時決定（T3：redirect 到別的網站時 B 的文件落在照 A 猜的 process 裡）。**要做的**：在 macOS 和 Windows 量一次啟動的時間，明顯比較慢時重新考慮 T2。
 6. **送出 commit 的同時換過去、叫舊的跑 `unload`，不等它（U1）**（2026-11-27，使用者決定）：決定要換的那一刻一次做完：啟動新的 renderer、送 commit，分頁從此算它的；同時告訴舊的 renderer 它的文件被換掉了。舊的分派 `pagehide`、`unload`、回報做完，Browser 收掉它；500 ms 沒回報就結束它（Chromium 的 `kUnloadTimeout`）。新的 renderer 啟動失敗（當場知道）時留在舊的頁面。理由：換只發生在一個時間點，是 `relaunch` 的推廣，Browser 不用管「舊的還算目前的、新的正在 commit」的中間狀態；新頁面不等舊頁面的 handler，卡住的舊頁面擋不住導覽。代價：新的 renderer 在 commit 之前當掉時是 sad tab，不是留在舊的頁面。不選新的回報 commit 之後才換（U2，Chromium 的順序：舊的頁面多留幾十毫秒、新的當掉時留在舊的，但 Browser 要同時認兩個 renderer；Chromium 提前啟動新的 process，並存的是整段載入，第 5 條之後這裡只有幾十毫秒）。不選等舊的跑完才 commit（U3：舊頁面的 handler 拖住導覽）、不跑直接結束（U4：靠 `pagehide` 存狀態的頁面壞掉）。知道的後果：舊頁面在 `pagehide`、`unload` 裡送出的網路請求在舊的 process 收掉時取消（沒有 `sendBeacon`，`keepalive` 沒有作用）；寫 `localStorage` 不受影響（在回報做完之前就到 Browser）。記進 `docs/limitations.md`。
-7. **換的中間不特別處理畫面（P0）**（2026-11-27，使用者決定）：換的那一刻分頁的 surface 是新的 sink，它還沒有 frame 時 Viz 畫白色的底，到新的 renderer 畫出第一個 frame（`relaunch` 現在的做法）。理由：machopo 的 renderer 沒有 paint holding（找不到「新文件有內容之前不交 frame」的機制；沒有錄畫面確認），同一個 renderer 裡的導覽 commit 之後本來就先是白的，換 process 只多了啟動的時間（約 11 ms，不到一個 frame）；不用改 Viz；網址列顯示 B 時畫面上不留 A 的內容。不選留著舊的畫面到新的 renderer 的第一個 frame（P1：Viz 要有墊著的 surface、要通知 Browser 第一個 frame 到了、舊的 process 結束之後它的 GPU 資源還要留著，而第一個 frame 多半是白的，只把白延後不到一個 frame）。真正消掉白的是 paint holding（P2），對同一個網站裡的導覽一樣有用，是另一份工作（「之後的可能」）。Chromium 兩者都有，但 main frame 只在新舊同一個 origin、或使用者操作過舊頁面時才留舊的畫面，最多 4 秒。
+7. **換的中間：使用者操作過舊頁面時留著舊的畫面，沒有時不留（P2）；同一個 renderer 裡跨 origin 的導覽照同一條規則**（2026-11-27，使用者決定；同一天先定了 P0，是照一個錯的事實定的，改了）：
+   - **現況**（`details.md` 的「畫面：paint holding」）：machopo 的 renderer 有 paint holding：main frame 的新文件 commit 之後、能畫出來之前（body 還沒開始、被 stylesheet 擋住），不交新的 frame，畫面上留著舊頁面，最多 4 秒（Blink 的 `kNewContentRenderingDelay`），之後交一個只有背景的 frame。不看新舊是不是同一個 origin、舊頁面有沒有被使用者操作過：Chromium 修掉的偽造（issue 40942531：「Origin spoof caused by navigation that doesn't paint any content」：網址列是 B、畫面是 A 留下的，最多 4 秒，重複導覽還能延長）machopo 現在就有。
+   - **換 process 時**：新的 sink 還沒有 frame 時，Viz 先畫舊的 sink 的最後一個 frame（Chromium 的 fallback surface），**只在舊頁面有過使用者的操作（sticky user activation）時**；沒有時直接顯示新的 sink（白色的底，到新頁面畫出來）。期限不另外做：新的 renderer 自己最多 4 秒就交出 frame。Browser 在換的時候要知道舊頁面有沒有被操作過：renderer 告訴它。
+   - **同一個 renderer 裡**（同 site、跨 origin，例如 `a.example` 到 `shop.a.example`）：同一條規則放在 renderer：新文件和舊文件不同 origin、舊頁面沒有被操作過時，不留舊的畫面。和換 process 在第 3 段一起做。
+   - 規則照 Chromium 的 `navigator.cc`（`allow_main_frame_paint_holding`）：新舊同一個 origin、舊頁面有過使用者的操作、或從新分頁的初始空白文件出發時才留；註解：「Commonly used attacks are done without user activation -- which will not enable paint holding.」
+   - 理由：點連結離開（最常見的）照樣不閃白；頁面自己用 script 導覽走時不留，偽造做不成。不選換的那一刻就顯示新的 sink（P0：點連結到別的網站會閃白，Chromium 那時留著舊的畫面）。不選一律留著（P1：把 Chromium 修掉的偽造帶過去）。
 8. **`beforeunload` 不在這份，另開一份 RFC 和對話框一起做，排在路線圖的 C、B 之後（B0、X1）**（2026-11-27，使用者決定）：換 process 不需要它：它接在導覽開始之前（Browser 發起的先問目前的 renderer，頁面發起的 renderer 自己先跑），那時舊的 renderer 還是目前的（第 5 條）。它要的是 machopo 現在沒有的：Browser 的對話框、renderer 停下來等使用者的回答、WebDriver 處理對話框的命令、關分頁和重新整理也要問；前三樣和 `alert`、`confirm`、`prompt` 是同一套，一起做只蓋一次。不選當這份的一個階段（X2：這份變大、process lock 被擋住，對話框只為它蓋一半）、現在就做排在 B 之前（X3：它是相容性的功能，B 關的是安全的洞）、只分派事件永遠不問（頁面以為攔得住使用者）。
 9. **不預先備一個 renderer（R0）**（2026-11-27，使用者決定）：啟動一個約 11 ms（這台 Linux），不到一個 frame；不多養一個平常沒在用的 process（一個 V8 的 isolate，有 GPU 時加 4 MiB 的共用記憶體；佔多少沒有量），不多一組「什麼時候備、記憶體吃緊時不備、被拿走之後何時補」的規則。不選一直備一個（R1，Chromium 桌面版的預設 `kSpareRendererForSitePerProcess`：它的 renderer 啟動慢得多）。和第 5 條綁在一起：macOS 和 Windows 量到啟動明顯比較慢時，提前啟動和備一個一起重新考慮。
 10. **同一個 site 的分頁不共用 process（S0）**（2026-11-27，使用者決定）：每個分頁自己的 renderer，規則只看這個分頁現在的 renderer 是哪個 site 的。理由：一個分頁當掉、卡住或吃光記憶體不影響同網站的另一個；process 的生命跟著一個分頁，不用計數；安全上共不共用沒有差別（同一個 site 本來就互相讀得到）。不選共用（S1：省記憶體，但 renderer 要能同時裝好幾個分頁、process 要計數、一個分頁卡在 script 裡時同 process 的一起卡住）。Chromium 的預設也是不共用（`ProcessReusePolicy::kDefault`），超過 process 數的軟性上限才重用同一個 site 的。做 `window.open` 那一份時 renderer 要能裝好幾個分頁，那時再看一般的分頁要不要共用、要不要設 process 數的上限（記在 RFC 0122 的 `roadmap.md` 的「每一份開始時要定的（先記下來）」的 W）。
@@ -146,7 +152,6 @@ renderer 當掉之後的下一次導覽，`WebContents::relaunch` 已經會「�
 - process lock 和 Browser 的檢查（路線圖的 B），直接建在這份上。
 - 開始時先猜、先啟動（Chromium 的 speculative `RenderFrameHost`），或備一個 spare renderer：其他平台量到啟動明顯比較慢時。
 - 對話框的 RFC：`alert`、`confirm`、`prompt` 和 `beforeunload`（已決定的事項第 8 條），排在路線圖的 C、B 之後。
-- paint holding：新文件有內容之前留著舊的畫面（renderer 不交 frame，或 Viz 墊著舊的 surface），對所有的導覽；跨 origin 時照 Chromium 的限制一起考慮。
 - `sendBeacon` 和有作用的 `keepalive`：頁面結束之後 Browser 繼續完成它離開時送出的請求（Chromium 讓 process 多留最多 30 秒，`kKeepAliveHandleFactoryTimeout`）。
 - back-forward cache：舊的 renderer 不收掉、留著給上一頁。
 - renderer 能裝好幾個分頁之後（`window.open` 那一份要的）：同一個 site 的分頁共用 process、process 數的上限、thread 的 renderer 照 Chromium 在同一個 renderer 裡換 frame，都重新考慮一次（RFC 0122 的 `roadmap.md` 記在 W 底下）。

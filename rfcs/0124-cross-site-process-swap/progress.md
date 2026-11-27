@@ -12,6 +12,8 @@
 | 3. 規則和換：跨網站的 commit 在新的 renderer；舊文件的 `unload`、逾時；thread 的 renderer 一樣換 | 還沒開始 | |
 | 4. 收尾：量測工具、WPT、`--window` 的情境、文件、整個 workspace 的測試 | 還沒開始 | |
 
+第 1 段開始之前先做 RFC 0125（網址列的偽造，2026-11-27 使用者決定）。
+
 在別的機器上要做的：macOS 和 Windows 上量 renderer process 啟動的時間（已決定的事項第 5 條），明顯比這台 Linux 的 11 ms 慢時重新考慮提前啟動和預備的 renderer。
 
 ## 驗收
