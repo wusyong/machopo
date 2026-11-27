@@ -10,7 +10,10 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use sunaba::windows::{LOW, Mitigation, UNTRUSTED, in_app_container, integrity, mitigation, open};
+use sunaba::windows::{
+    AccessToken, LOW, Mitigation, UNTRUSTED, in_app_container, integrity, loader_threads,
+    mitigation, open,
+};
 
 use crate::automation_pipe::{Browser, renderer_pids, script};
 use crate::renderer_process::{MACHOPO, RunningRenderer};
@@ -20,12 +23,41 @@ fn flags(id: u32, which: Mitigation) -> u32 {
     mitigation(open(id).unwrap().as_handle(), which).unwrap()
 }
 
+/// Whether the token of `process` is a lockdown app container's: every
+/// group only denies, only what the null SID is granted is granted, and
+/// what it makes is the user's and its own app container's alone.
+fn is_lockdown(process: &std::os::windows::io::OwnedHandle) -> bool {
+    let token = AccessToken::of(process.as_handle()).unwrap();
+    let Some(container) = &token.app_container else {
+        return false;
+    };
+    let granted: Vec<&str> = token
+        .default_dacl
+        .iter()
+        .flatten()
+        .map(|ace| ace.sid.as_str())
+        .collect();
+    token.user.deny_only
+        && token
+            .groups
+            .iter()
+            .all(|group| group.integrity || group.deny_only)
+        && token.restricting == ["S-1-0-0"]
+        && granted.contains(&container.as_str())
+        && !granted
+            .iter()
+            .any(|sid| sid.starts_with("S-1-5-5-") || *sid == "S-1-5-12")
+}
+
 #[test]
 fn a_renderer_process_is_in_the_sandbox() {
     let renderer = RunningRenderer::start(&["--test-fonts"]);
     let id = renderer.child.id();
     let process = open(id).unwrap();
     assert!(in_app_container(process.as_handle()).unwrap());
+    assert!(is_lockdown(&process));
+    // Its loader mapped its DLLs on the thread that may open them.
+    assert_eq!(loader_threads(id), Some(1));
     // It has lowered itself by the time its threads are started.
     assert_eq!(integrity(process.as_handle()).unwrap(), UNTRUSTED);
     // No win32k, no file system control codes; no extension points; only
@@ -49,6 +81,8 @@ fn a_renderer_process_told_no_sandbox_is_in_none() {
     let id = renderer.child.id();
     let process = open(id).unwrap();
     assert!(!in_app_container(process.as_handle()).unwrap());
+    assert!(!is_lockdown(&process));
+    assert_eq!(loader_threads(id), Some(0));
     assert!(integrity(process.as_handle()).unwrap() > LOW);
     assert_eq!(flags(id, Mitigation::SystemCallDisable) & 0b101, 0);
     assert_eq!(flags(id, Mitigation::Signature) & 1, 0);
@@ -99,6 +133,7 @@ fn a_browsers_renderer_is_in_the_sandbox_unless_the_browser_is_told_otherwise() 
     let _session = browser.attach();
     let id = renderer_of(&browser, true);
     assert!(in_app_container(open(id).unwrap().as_handle()).unwrap());
+    assert!(is_lockdown(&open(id).unwrap()));
     assert_eq!(flags(id, Mitigation::SystemCallDisable) & 1, 1);
     assert_eq!(flags(id, Mitigation::Signature) & 1, 1);
     drop(browser);
@@ -154,6 +189,34 @@ fn a_sandboxed_renderer_shows_a_page_as_one_outside_does() {
     );
     assert_eq!(inside, seen(&["--process-per-tab", "--no-sandbox"]));
     assert_eq!(inside, seen(&["--single-process"]));
+}
+
+/// A wasm document's guest is compiled and run in the sandbox, which
+/// opens nothing once the renderer has lowered itself, as it is on the
+/// browser's thread: the two draw the same, and not what the page draws
+/// with no guest.
+#[test]
+fn a_sandboxed_renderer_runs_a_wasm_document_as_one_outside_does() {
+    use crate::wasm_documents::{META, document, page};
+    let script = r#"<script type="application/wasm" src="page.wasm"></script>"#;
+    let ran = page("sandbox.html", &document(META, script));
+    let empty = page("sandbox-empty.html", &document(META, ""));
+    let shot = |args: &[&str], url: &str| {
+        let mut browser = Browser::start_with_args_and_env(args, &[]);
+        let session = browser.attach();
+        browser.navigate(&session, url);
+        let shot = browser
+            .call(
+                Some(&session),
+                "Page.captureScreenshot",
+                serde_json::json!({}),
+            )
+            .unwrap();
+        shot["data"].as_str().unwrap().to_owned()
+    };
+    let inside = shot(&["--process-per-tab"], &ran);
+    assert_eq!(inside, shot(&["--single-process"], &ran));
+    assert_ne!(inside, shot(&["--process-per-tab"], &empty));
 }
 
 /// A renderer process, in its sandbox or out of it, is given only the
@@ -304,6 +367,11 @@ enum Outcome {
 const DENIED: Outcome = Outcome::Error(5);
 
 fn probe_with(switches: &[&str], attempt: &[&str]) -> Outcome {
+    probed(switches, attempt).0
+}
+
+/// The probe's outcome, and what it wrote to its errors.
+fn probed(switches: &[&str], attempt: &[&str]) -> (Outcome, String) {
     let output = Command::new(MACHOPO)
         .arg(shell::renderer_sandbox::PROBE_SWITCH)
         .args(switches)
@@ -312,10 +380,10 @@ fn probe_with(switches: &[&str], attempt: &[&str]) -> Outcome {
         .stdin(Stdio::null())
         .output()
         .expect("machopo runs");
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     let stdout = String::from_utf8_lossy(&output.stdout);
     let line = stdout.lines().next().unwrap_or("").trim();
-    if let Some(number) = line.strip_prefix("ok ") {
+    let outcome = if let Some(number) = line.strip_prefix("ok ") {
         Outcome::Ok(number.parse().unwrap())
     } else if let Some(code) = line.strip_prefix("error ") {
         Outcome::Error(code.parse().unwrap())
@@ -323,7 +391,8 @@ fn probe_with(switches: &[&str], attempt: &[&str]) -> Outcome {
         Outcome::Exit(output.status.code().unwrap_or(-1))
     } else {
         panic!("the probe printed {stdout:?} ({stderr})");
-    }
+    };
+    (outcome, stderr)
 }
 
 fn probe(attempt: &[&str]) -> Outcome {
@@ -353,12 +422,11 @@ fn system_root() -> String {
 fn the_probe_is_started_as_a_renderer_is_and_lowers_itself() {
     for switches in [&[][..], &["--test-fonts"][..]] {
         assert_eq!(probe_with(switches, &["nothing"]), Outcome::Ok(0));
-        assert_eq!(probe_with(switches, &["container"]), Outcome::Ok(1));
-        assert_eq!(
-            probe_with(switches, &["integrity"]),
-            Outcome::Ok(u64::from(UNTRUSTED))
-        );
         assert_eq!(probe_with(switches, &["thread", "nothing"]), Outcome::Ok(0));
+        // A lockdown token can't be read even by its own process: what
+        // it is is read from outside (`a_renderer_process_is_in_the_sandbox`).
+        assert_eq!(probe_with(switches, &["container"]), DENIED);
+        assert_eq!(probe_with(switches, &["integrity"]), DENIED);
     }
     // The executable itself, which links what its browser side draws
     // with, starts with win32k's calls turned off.
@@ -396,23 +464,45 @@ fn a_renderer_makes_changes_and_removes_no_file() {
     assert!(!temp.exists());
 }
 
-/// Not kept from it: the system's fonts are read by the renderer itself,
-/// and with them whatever the system lets every application read.
+/// Nor of the system's, which every application may read: its fonts
+/// the renderer has from its browser
+/// (`a_renderer_process_has_the_systems_fonts_from_its_browser`).
 #[test]
-fn a_renderer_reads_the_systems_fonts_and_what_every_application_may() {
+fn a_renderer_reads_nothing_of_the_systems() {
     let fonts = format!(r"{}\Fonts", system_root());
-    assert!(matches!(probe(&["list", &fonts]), Outcome::Ok(files) if files > 0));
+    assert_eq!(probe(&["list", &fonts]), DENIED);
     let dll = format!(r"{}\System32\kernel32.dll", system_root());
-    assert!(matches!(probe(&["read", &dll]), Outcome::Ok(bytes) if bytes > 0));
+    assert_eq!(probe(&["read", &dll]), DENIED);
+    assert_eq!(
+        probe(&["read", &format!(r"{}\win.ini", system_root())]),
+        DENIED
+    );
 }
 
 #[test]
 fn a_renderer_reaches_no_network_starts_no_program_and_opens_no_process() {
-    // `WSAEACCES`, for an address no machine has.
-    assert_eq!(probe(&["connect", "192.0.2.1:80"]), Outcome::Error(10013));
     let cmd = format!(r"{}\System32\cmd.exe", system_root());
-    // `ERROR_CHILD_PROCESS_BLOCKED`.
-    assert_eq!(probe(&["run", &cmd, "/c", "exit 0"]), Outcome::Error(367));
+    assert_eq!(probe(&["run", &cmd, "/c", "exit 0"]), DENIED);
     let this = std::process::id().to_string();
     assert_eq!(probe(&["process", &this]), DENIED);
+}
+
+/// The executable loads Winsock when a socket is first made, which a
+/// renderer can't once it has lowered itself: it ends, and says which
+/// DLL it was on its errors.
+#[test]
+fn a_renderer_ends_on_a_dll_it_cant_load_and_says_which() {
+    let (outcome, stderr) = probed(&[], &["connect", "192.0.2.1:80"]);
+    // `VcppException(ERROR_SEVERITY_ERROR, ERROR_MOD_NOT_FOUND)`, the
+    // delay-load helper's.
+    assert_eq!(
+        outcome,
+        Outcome::Exit(0xC06D_007E_u32.cast_signed()),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("ws2_32.dll couldn't be loaded")
+            && stderr.contains("once a process in a sandbox has lowered itself"),
+        "{stderr}"
+    );
 }

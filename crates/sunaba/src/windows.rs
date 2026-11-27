@@ -33,14 +33,19 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::Security::Isolation::DeriveAppContainerSidFromAppContainerName;
 use windows_sys::Win32::Security::{
-    CreateWellKnownSid, FreeSid, GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation,
-    PSID, SECURITY_CAPABILITIES, SID_AND_ATTRIBUTES, SetTokenInformation, TOKEN_ADJUST_DEFAULT,
-    TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_MANDATORY_LABEL, TOKEN_QUERY, TokenIntegrityLevel,
-    TokenIsAppContainer, WinUntrustedLabelSid,
+    ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, CreateRestrictedToken, CreateWellKnownSid,
+    DISABLE_MAX_PRIVILEGE, DuplicateTokenEx, FreeSid, GetAce, GetSidIdentifierAuthority,
+    GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, PSID, RevertToSelf,
+    SECURITY_CAPABILITIES, SID_AND_ATTRIBUTES, SecurityImpersonation, SetTokenInformation,
+    TOKEN_ADJUST_DEFAULT, TOKEN_APPCONTAINER_INFORMATION, TOKEN_ASSIGN_PRIMARY, TOKEN_DEFAULT_DACL,
+    TOKEN_DUPLICATE, TOKEN_GROUPS, TOKEN_IMPERSONATE, TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
+    TOKEN_USER, TokenAppContainerSid, TokenDefaultDacl, TokenGroups, TokenImpersonation,
+    TokenIntegrityLevel, TokenIsAppContainer, TokenRestrictedSids, TokenUser, WinNullSid,
+    WinUntrustedLabelSid,
 };
 use windows_sys::Win32::Storage::FileSystem::{FILE_TYPE_DISK, FILE_TYPE_PIPE, GetFileType};
 use windows_sys::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE};
-use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
+use windows_sys::Win32::System::Diagnostics::Debug::{ReadProcessMemory, WriteProcessMemory};
 use windows_sys::Win32::System::JobObjects::{
     CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS, JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION,
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_BASIC_UI_RESTRICTIONS,
@@ -48,21 +53,26 @@ use windows_sys::Win32::System::JobObjects::{
     JobObjectExtendedLimitInformation, SetInformationJobObject,
 };
 use windows_sys::Win32::System::Threading::{
-    CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW, CreateProcessW,
+    CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW, CreateProcessW,
     DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess,
     GetExitCodeProcess, GetProcessMitigationPolicy, INFINITE, InitializeProcThreadAttributeList,
     OpenProcess, OpenProcessToken, PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY,
     PROC_THREAD_ATTRIBUTE_COMPONENT_FILTER, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
     PROC_THREAD_ATTRIBUTE_JOB_LIST, PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY,
     PROCESS_BASIC_INFORMATION, PROCESS_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION,
-    PROCESS_SYNCHRONIZE as SYNCHRONIZE, PROCESS_VM_READ, STARTF_USESTDHANDLES, STARTUPINFOEXW,
-    SetProcessMitigationPolicy, TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
+    PROCESS_SYNCHRONIZE as SYNCHRONIZE, PROCESS_VM_READ, ResumeThread, STARTF_USESTDHANDLES,
+    STARTUPINFOEXW, SetProcessMitigationPolicy, SetThreadToken, TerminateProcess,
+    UpdateProcThreadAttribute, WaitForSingleObject,
 };
 
 /// The most a SID takes (`SECURITY_MAX_SID_SIZE`).
 const SID_MAX: usize = 68;
 /// A group's attribute: it is the token's integrity level.
 const SE_GROUP_INTEGRITY: u32 = 0x20;
+/// A group's attribute: it only ever denies access, never grants it.
+const SE_GROUP_USE_FOR_DENY_ONLY: u32 = 0x10;
+/// A group's attributes: it is the logon session's.
+const SE_GROUP_LOGON_ID: u32 = 0xC000_0000;
 /// The untrusted integrity level's last number.
 pub const UNTRUSTED: u32 = 0;
 /// The low integrity level's last number: what an app container's token
@@ -199,16 +209,26 @@ fn owned(handle: HANDLE) -> OwnedHandle {
     unsafe { OwnedHandle::from_raw_handle(handle) }
 }
 
-/// What a process started under it can't do: read or write the user's
-/// files or make any, reach the network, open another process, start a
-/// program, use a window, the clipboard or a hook, or load a DLL that
-/// isn't the system's. It still reads what the system lets every
-/// application read.
+/// What a process started under it can't do: open a file, the user's,
+/// the system's or another program's, or make one; use a socket; open
+/// another process, or what another process under a policy made; start a
+/// program; use a window, the clipboard or a hook; or load a DLL once it
+/// has lowered itself ([`lower`]). Until then its first thread may read
+/// what the system lets every application read: that is how the process
+/// loads the DLLs it starts with, and has the system make the random
+/// numbers it will need.
 ///
-/// The process is in an app container with no capabilities, one of its
-/// own if `app_container` is a name no other process is given; in a job
-/// of one process with every user interface restriction; and with the
-/// mitigations Chromium gives a renderer at its creation.
+/// The process's token is an app container's with no capabilities, one
+/// of its own if `app_container` is a name no other process is given,
+/// made from a restricted token that has every group of its starter's
+/// only to deny access by and grants nothing but what is granted to the
+/// null SID (Chromium's `USER_LOCKDOWN`). Its first thread starts with
+/// the same app container's token made from one that is restricted to
+/// all of those groups, so lets the thread do what an app container may
+/// (Chromium's `USER_RESTRICTED_SAME_ACCESS`), which [`lower`] gives
+/// back. The process is in a job of one process with every user
+/// interface restriction, and has the mitigations Chromium gives a
+/// renderer at its creation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Policy {
     app_container: String,
@@ -413,8 +433,8 @@ impl Command {
             }
         }
 
-        let token = match policy {
-            Some(policy) => Some(app_container_token(&policy.app_container)?),
+        let tokens = match policy {
+            Some(policy) => Some(Tokens::new(&policy.app_container)?),
             None => None,
         };
         let job = match policy {
@@ -456,7 +476,12 @@ impl Command {
             startup.StartupInfo.hStdError = standard[1];
         }
         startup.lpAttributeList = attributes.list();
-        let flags = CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT;
+        let mut flags = CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT;
+        // Its first thread is given its token, and the loader told to
+        // load on that thread alone, before it runs.
+        if tokens.is_some() {
+            flags |= CREATE_SUSPENDED;
+        }
         let inherit = i32::from(!handles.is_empty());
         let directory = directory.as_ref().map_or(null(), |wide| wide.as_ptr());
         let mut made = PROCESS_INFORMATION::default();
@@ -472,9 +497,9 @@ impl Command {
         // handles in the list are inherited, and each of them is the
         // caller's to hand on or a copy made here.
         let created = unsafe {
-            match &token {
-                Some(token) => CreateProcessAsUserW(
-                    token.as_raw_handle(),
+            match &tokens {
+                Some(tokens) => CreateProcessAsUserW(
+                    tokens.primary.as_raw_handle(),
                     application.as_ptr(),
                     line.as_mut_ptr(),
                     null(),
@@ -501,10 +526,16 @@ impl Command {
             }
         };
         check("CreateProcess", created != 0)?;
-        drop(owned(made.hThread));
-        drop(copies);
+        let process = owned(made.hProcess);
+        let thread = owned(made.hThread);
+        // On an error the process, which hasn't run, ends with the job,
+        // whose only handle is dropped on the way out.
+        if let Some(tokens) = &tokens {
+            start(&process, &thread, &tokens.initial)?;
+        }
+        drop((thread, copies));
         Ok(Child {
-            process: owned(made.hProcess),
+            process,
             id: made.dwProcessId,
             job,
         })
@@ -675,9 +706,171 @@ fn process_token(access: u32) -> Result<OwnedHandle, Error> {
     Ok(owned(token))
 }
 
-/// This process's token as the app container `name`'s, with no
-/// capabilities: a primary token for a new process.
-fn app_container_token(name: &str) -> Result<OwnedHandle, Error> {
+/// The tokens of a process started under a policy: its primary token, a
+/// lockdown app container's, and its first thread's to start with, an
+/// app container's that may do what any app container may (Chromium's
+/// target's lockdown token and initial token, both made app containers').
+struct Tokens {
+    primary: OwnedHandle,
+    initial: OwnedHandle,
+}
+
+impl Tokens {
+    /// Made from this process's token, for the app container `name`.
+    fn new(name: &str) -> Result<Self, Error> {
+        let base = process_token(TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY)?;
+        let sids = Sids::of(&base)?;
+        let null_sid = well_known(WinNullSid)?;
+        let restricting_null = [SID_AND_ATTRIBUTES {
+            Sid: null_sid.as_ptr().cast_mut().cast(),
+            Attributes: 0,
+        }];
+        // Every group only denies, and nothing is granted but what is
+        // granted to the null SID, which nothing is: an app container's
+        // token made from it opens nothing, and loads no DLL that isn't
+        // a known one (those are mapped for every process). With no
+        // privileges, but for the one to traverse.
+        let lockdown = restricted(&base, DISABLE_MAX_PRIVILEGE, &sids.list, &restricting_null)?;
+        // Restricted to every group it has: what it is granted is what
+        // the unrestricted token would be. A process whose primary token
+        // is restricted can't impersonate one that isn't (the system
+        // takes that for a token to identify by), so its first thread's
+        // is restricted too.
+        let same_access = restricted(&base, 0, &[], &sids.list)?;
+        let primary = app_container_token(&lockdown, name)?;
+        let initial = app_container_token(&same_access, name)?;
+        let mut impersonating = null_mut();
+        // SAFETY: `initial` is open with the right to be duplicated; no
+        // attributes; `impersonating` is written.
+        let made = unsafe {
+            DuplicateTokenEx(
+                initial.as_raw_handle(),
+                TOKEN_IMPERSONATE | TOKEN_QUERY,
+                null(),
+                SecurityImpersonation,
+                TokenImpersonation,
+                &raw mut impersonating,
+            )
+        };
+        check("DuplicateTokenEx", made != 0)?;
+        Ok(Self {
+            primary,
+            initial: owned(impersonating),
+        })
+    }
+}
+
+/// The SIDs of a token a restricted token is made of: its user's and
+/// each of its groups' but its integrity level's (what Chromium's
+/// `RestrictedToken::AddAllSidsForDenyOnly` and
+/// `AddRestrictingSidAllSids` take).
+struct Sids {
+    /// The token's answers, which the list points into.
+    _user: Vec<u64>,
+    _groups: Vec<u64>,
+    list: Vec<SID_AND_ATTRIBUTES>,
+}
+
+impl Sids {
+    fn of(token: &OwnedHandle) -> Result<Self, Error> {
+        let what = "GetTokenInformation";
+        let user = information(token, TokenUser).map_err(|source| Error { what, source })?;
+        let groups = information(token, TokenGroups).map_err(|source| Error { what, source })?;
+        let mut list = Vec::new();
+        // SAFETY: the buffer holds the structure the class returns,
+        // aligned; its SID points inside the buffer.
+        let sid = unsafe { (*user.as_ptr().cast::<TOKEN_USER>()).User.Sid };
+        list.push(SID_AND_ATTRIBUTES {
+            Sid: sid,
+            Attributes: 0,
+        });
+        for group in groups_in(&groups).map_err(|source| Error { what, source })? {
+            if group.Attributes & SE_GROUP_INTEGRITY == 0 {
+                list.push(SID_AND_ATTRIBUTES {
+                    Sid: group.Sid,
+                    Attributes: 0,
+                });
+            }
+        }
+        Ok(Self {
+            _user: user,
+            _groups: groups,
+            list,
+        })
+    }
+}
+
+/// The groups of the `TOKEN_GROUPS` a token's answer holds.
+fn groups_in(answer: &[u64]) -> io::Result<&[SID_AND_ATTRIBUTES]> {
+    let groups = answer.as_ptr().cast::<TOKEN_GROUPS>();
+    // SAFETY: the buffer is at least one word, the first of which is the
+    // count.
+    let count = unsafe { (*groups).GroupCount };
+    let count = usize::try_from(count).map_err(io::Error::other)?;
+    let needed = size_of::<SID_AND_ATTRIBUTES>()
+        .checked_mul(count)
+        .and_then(|bytes| bytes.checked_add(std::mem::offset_of!(TOKEN_GROUPS, Groups)))
+        .ok_or_else(|| io::Error::other("too many groups"))?;
+    if needed > size_of_val(answer) {
+        return Err(io::Error::other("fewer groups than counted"));
+    }
+    // SAFETY: the groups follow the count inside the buffer, which holds
+    // all of them (checked above), aligned as the structure is; they are
+    // borrowed for as long as the buffer is.
+    Ok(unsafe {
+        std::slice::from_raw_parts(
+            (&raw const (*groups).Groups).cast::<SID_AND_ATTRIBUTES>(),
+            count,
+        )
+    })
+}
+
+/// A restricted token made from `base`: `deny` only deny access, and if
+/// any are `restricting`, what is granted is only what is granted to one
+/// of them as well.
+fn restricted(
+    base: &OwnedHandle,
+    flags: u32,
+    deny: &[SID_AND_ATTRIBUTES],
+    restricting: &[SID_AND_ATTRIBUTES],
+) -> Result<OwnedHandle, Error> {
+    let what = "CreateRestrictedToken";
+    let mut token = null_mut();
+    // SAFETY: `base` is open with the right to be duplicated; each list
+    // is as long as said, and the SIDs it points to are alive for the
+    // call (the caller's); no privilege is named; `token` is written.
+    let made = unsafe {
+        CreateRestrictedToken(
+            base.as_raw_handle(),
+            flags,
+            size32(what, deny.len())?,
+            deny.as_ptr(),
+            0,
+            null(),
+            size32(what, restricting.len())?,
+            restricting.as_ptr(),
+            &raw mut token,
+        )
+    };
+    check(what, made != 0)?;
+    Ok(owned(token))
+}
+
+/// A well-known SID (`WELL_KNOWN_SID_TYPE`), in a buffer the most a SID
+/// takes.
+fn well_known(kind: i32) -> Result<[u8; SID_MAX], Error> {
+    let mut sid = [0u8; SID_MAX];
+    let mut len = size32("a SID", SID_MAX)?;
+    // SAFETY: the buffer is the most a SID takes, `len` long.
+    let made =
+        unsafe { CreateWellKnownSid(kind, null_mut(), sid.as_mut_ptr().cast(), &raw mut len) };
+    check("CreateWellKnownSid", made != 0)?;
+    Ok(sid)
+}
+
+/// `base` as the app container `name`'s, with no capabilities: a primary
+/// token for a new process.
+fn app_container_token(base: &OwnedHandle, name: &str) -> Result<OwnedHandle, Error> {
     let name = wide(OsStr::new(name))?;
     let mut sid: PSID = null_mut();
     // SAFETY: `name` is NUL-terminated; `sid` is written with a SID the
@@ -695,24 +888,89 @@ fn app_container_token(name: &str) -> Result<OwnedHandle, Error> {
         CapabilityCount: 0,
         Reserved: 0,
     };
-    let result =
-        process_token(TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY).and_then(|base| {
-            let mut token = null_mut();
-            // SAFETY: `base` is open, `capabilities` and the SID it
-            // points to are alive, and `token` is written.
-            let made = unsafe {
-                CreateAppContainerToken(
-                    base.as_raw_handle(),
-                    &raw const capabilities,
-                    &raw mut token,
-                )
-            };
-            check("CreateAppContainerToken", made != 0)?;
-            Ok(owned(token))
-        });
+    let mut token = null_mut();
+    // SAFETY: `base` is open, `capabilities` and the SID it points to
+    // are alive, and `token` is written.
+    let made = unsafe {
+        CreateAppContainerToken(
+            base.as_raw_handle(),
+            &raw const capabilities,
+            &raw mut token,
+        )
+    };
+    let result = check("CreateAppContainerToken", made != 0).map(|()| owned(token));
     // SAFETY: allocated by the call that derived it, freed once.
     unsafe { FreeSid(sid) };
     result
+}
+
+/// Lets a process made suspended under a policy run: its first thread
+/// with `initial` until it lowers itself, and the loader mapping the DLLs
+/// it starts with on that thread alone. The loader's own threads (four,
+/// by default) would have only the primary token, which opens no DLL
+/// that isn't a known one: one given to them fails the process's start.
+fn start(process: &OwnedHandle, thread: &OwnedHandle, initial: &OwnedHandle) -> Result<(), Error> {
+    one_loader_thread(process)?;
+    let thread = thread.as_raw_handle();
+    // SAFETY: `thread` is an open handle of the first thread of a
+    // process made just now, with every access; `initial` is an
+    // impersonation token open with the right to impersonate.
+    let set = unsafe { SetThreadToken(&raw const thread, initial.as_raw_handle()) };
+    check("SetThreadToken", set != 0)?;
+    // SAFETY: as above; the thread was made suspended, and is resumed
+    // once.
+    let resumed = unsafe { ResumeThread(thread) };
+    check("ResumeThread", resumed != u32::MAX)
+}
+
+/// Writes 1 to a suspended process's `LoaderThreads` (in its
+/// `RTL_USER_PROCESS_PARAMETERS`, not in any public header): the loader
+/// reads it as the process's first thread starts, and with 1 makes no
+/// threads of its own.
+#[cfg(target_pointer_width = "64")]
+fn one_loader_thread(process: &OwnedHandle) -> Result<(), Error> {
+    let what = "the process's LoaderThreads";
+    let unread = || Error::other(what, "the process's parameters weren't read");
+    let parameters = parameters_of(process).ok_or_else(unread)?;
+    // The structure's first word is how long it is: a field past its end
+    // is not one to write.
+    let mut length = [0_u8; 4];
+    read_from(process, parameters, &mut length).ok_or_else(unread)?;
+    let end = peb::LOADER_THREADS.saturating_add(size_of::<u32>());
+    if usize::try_from(u32::from_ne_bytes(length)).map_or(true, |length| length < end) {
+        return Err(Error::other(
+            what,
+            "past the end of the process's parameters",
+        ));
+    }
+    let address = parameters
+        .checked_add(peb::LOADER_THREADS)
+        .ok_or_else(|| Error::other(what, "out of the address space"))?;
+    let one = 1_u32.to_ne_bytes();
+    let mut written = 0_usize;
+    // SAFETY: `process` is open with every access and hasn't run; the
+    // four bytes written are this process's own and alive for the call;
+    // they go to the other process's memory, where the field is a word
+    // inside its parameters (checked above) that nothing there has read
+    // yet.
+    let done = unsafe {
+        WriteProcessMemory(
+            process.as_raw_handle(),
+            std::ptr::without_provenance(address),
+            one.as_ptr().cast(),
+            one.len(),
+            &raw mut written,
+        )
+    };
+    check(what, done != 0 && written == one.len())
+}
+
+#[cfg(not(target_pointer_width = "64"))]
+fn one_loader_thread(_process: &OwnedHandle) -> Result<(), Error> {
+    Err(Error::other(
+        "the process's LoaderThreads",
+        "known only on 64-bit Windows",
+    ))
 }
 
 /// A job of one process that ends it when the job's handle closes or an
@@ -825,28 +1083,119 @@ unsafe extern "system" {
     fn SetDefaultDllDirectories(flags: u32) -> i32;
 }
 
+#[link(name = "advapi32", kind = "raw-dylib")]
+unsafe extern "system" {
+    /// `RtlGenRandom`, by its exported name: what the C runtime's
+    /// `rand_s` calls, and V8 with it.
+    #[link_name = "SystemFunction036"]
+    fn RtlGenRandom(buffer: *mut c_void, length: u32) -> u8;
+}
+
+/// Whether this process has lowered itself: a DLL it loads from then on
+/// fails for that.
+static LOWERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// `delayimp.h`'s `DelayLoadInfo`: what the linker's delay-load helper
+/// says of a DLL, or a function of one, it couldn't load.
+#[cfg(target_env = "msvc")]
+#[repr(C)]
+struct DelayLoadInfo {
+    size: u32,
+    descriptor: *const c_void,
+    slot: *mut c_void,
+    dll: *const std::ffi::c_char,
+    /// `DelayLoadProc`: whether the function is asked for by name, and
+    /// its name or its ordinal.
+    by_name: i32,
+    name_or_ordinal: *const std::ffi::c_char,
+    module: *mut c_void,
+    function: *mut c_void,
+    last_error: u32,
+}
+
+/// The hook the delay-load helper calls when it fails (it reads this
+/// variable): an executable linked with `/DELAYLOAD` loads such a DLL
+/// when it is first called, which a process that has lowered itself
+/// can't, and the helper then raises an exception that ends it with a
+/// code and nothing else. This says on its errors which DLL and function
+/// it was first, then lets it end so (Chromium's `chrome.exe` has a hook
+/// of its own for the same).
+#[cfg(target_env = "msvc")]
+#[unsafe(no_mangle)]
+static __pfnDliFailureHook2: Option<
+    unsafe extern "system" fn(u32, *const DelayLoadInfo) -> *mut c_void,
+> = Some(delay_load_failed);
+
+/// What [`__pfnDliFailureHook2`] calls: says what failed and returns
+/// nothing, for the helper to raise its exception.
+///
+/// # Safety
+///
+/// `info` is the helper's, valid for the call.
+#[cfg(target_env = "msvc")]
+unsafe extern "system" fn delay_load_failed(
+    notification: u32,
+    info: *const DelayLoadInfo,
+) -> *mut c_void {
+    use std::io::Write as _;
+    // `dliFailLoadLib`, and `dliFailGetProc` for a function the DLL
+    // doesn't have.
+    const DLL: u32 = 3;
+    let text = |name: *const std::ffi::c_char| {
+        if name.is_null() {
+            "?".into()
+        } else {
+            // SAFETY: the helper's strings are NUL-terminated, alive for
+            // the call.
+            unsafe { std::ffi::CStr::from_ptr(name) }.to_string_lossy()
+        }
+    };
+    // SAFETY: the caller's.
+    let Some(info) = (unsafe { info.as_ref() }) else {
+        return null_mut();
+    };
+    let function = if info.by_name != 0 {
+        text(info.name_or_ordinal).into_owned()
+    } else {
+        format!("#{}", info.name_or_ordinal.addr() & 0xFFFF_FFFF)
+    };
+    let what = if notification == DLL {
+        "couldn't be loaded"
+    } else {
+        "has no such function"
+    };
+    let why = if LOWERED.load(std::sync::atomic::Ordering::Relaxed) {
+        ": no DLL is loaded once a process in a sandbox has lowered itself".to_owned()
+    } else {
+        format!(" (error {})", info.last_error)
+    };
+    let _ = writeln!(
+        std::io::stderr(),
+        "sunaba: {} {what}, for {function} when it was first called{why}",
+        text(info.dll)
+    );
+    null_mut()
+}
+
 /// A process started under a [`Policy`] gives up what it could only be
-/// started with, for good: first thing in `main`. Its integrity level
-/// goes from low to untrusted (it can no longer write what low-integrity
-/// processes may); DLLs are looked for in the system's directories and
-/// its own, not the current one; and a handle that isn't one ends the
-/// process instead of being an error it might go on from.
+/// started with, for good: first thing in `main`, on its first thread.
+/// Its integrity level goes from low to untrusted (it can no longer
+/// write what low-integrity processes may); DLLs are looked for in the
+/// system's directories and its own, not the current one; a handle that
+/// isn't one ends the process instead of being an error it might go on
+/// from; and the first thread gives back the token it started with,
+/// after which the process opens no file and loads no DLL. Before that
+/// it has the system make a random number once, which the first time
+/// loads what makes them (Chromium's `WarmupRandomnessInfrastructure`).
+///
+/// A process started with no policy may call it too: it lowers its
+/// integrity level, and the rest is the same, but it has no token to
+/// give back.
 ///
 /// On an error the process is not to go on.
 pub fn lower() -> Result<(), Error> {
     let token = process_token(TOKEN_ADJUST_DEFAULT)?;
-    let mut sid = [0u8; SID_MAX];
-    let mut len = size32("a SID", SID_MAX)?;
-    // SAFETY: the buffer is the most a SID takes, `len` long.
-    let made = unsafe {
-        CreateWellKnownSid(
-            WinUntrustedLabelSid,
-            null_mut(),
-            sid.as_mut_ptr().cast(),
-            &raw mut len,
-        )
-    };
-    check("CreateWellKnownSid", made != 0)?;
+    let mut sid = well_known(WinUntrustedLabelSid)?;
     let label = TOKEN_MANDATORY_LABEL {
         Label: SID_AND_ATTRIBUTES {
             Sid: sid.as_mut_ptr().cast(),
@@ -883,7 +1232,22 @@ pub fn lower() -> Result<(), Error> {
             size_of::<u32>(),
         )
     };
-    check("SetProcessMitigationPolicy", set != 0)
+    check("SetProcessMitigationPolicy", set != 0)?;
+    let mut random = [0_u8; 16];
+    // SAFETY: the buffer is this function's, as long as said.
+    let made = unsafe {
+        RtlGenRandom(
+            random.as_mut_ptr().cast(),
+            size32("a number", random.len())?,
+        )
+    };
+    check("RtlGenRandom", made != 0)?;
+    // SAFETY: takes no argument; on a thread that impersonates nothing
+    // it does nothing.
+    let reverted = unsafe { RevertToSelf() };
+    check("RevertToSelf", reverted != 0)?;
+    LOWERED.store(true, std::sync::atomic::Ordering::Relaxed);
+    Ok(())
 }
 
 /// The process `id`, open to be asked about ([`integrity`],
@@ -913,12 +1277,21 @@ pub fn this_process() -> BorrowedHandle<'static> {
 
 /// `class` of `process`'s token, in memory aligned for its structure.
 fn token_information(process: BorrowedHandle<'_>, class: i32) -> io::Result<Vec<u64>> {
+    information(&token_of(process)?, class)
+}
+
+/// `process`'s token, open to be asked about.
+fn token_of(process: BorrowedHandle<'_>) -> io::Result<OwnedHandle> {
     let mut token = null_mut();
     // SAFETY: `process` is open; `token` is written.
     if unsafe { OpenProcessToken(process.as_raw_handle(), TOKEN_QUERY, &raw mut token) } == 0 {
         return Err(io::Error::last_os_error());
     }
-    let token = owned(token);
+    Ok(owned(token))
+}
+
+/// `class` of `token`, in memory aligned for its structure.
+fn information(token: &OwnedHandle, class: i32) -> io::Result<Vec<u64>> {
     let mut len = 0u32;
     // SAFETY: with no buffer the call only writes the length it needs.
     unsafe { GetTokenInformation(token.as_raw_handle(), class, null_mut(), 0, &raw mut len) };
@@ -968,34 +1341,201 @@ pub fn in_app_container(process: BorrowedHandle<'_>) -> io::Result<bool> {
     Ok(answer.first().is_some_and(|word| *word & 0xFFFF_FFFF != 0))
 }
 
-/// Where a 64-bit process's environment is: its PEB's pointer to its
-/// parameters (`RTL_USER_PROCESS_PARAMETERS`), and in those the block's
-/// address and size in bytes. The last two aren't in the public
-/// `winternl.h`; they have been where they are since Windows Vista.
+/// What a process's token is, read from outside (Chromium's
+/// `base::win::AccessToken`): for whoever started a process to see what
+/// it was started with. SIDs are in their text form (`S-1-5-32-544`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AccessToken {
+    /// The user's SID, as a group is.
+    pub user: Group,
+    pub groups: Vec<Group>,
+    /// What access is also checked against, when there are any: the
+    /// token is a restricted one.
+    pub restricting: Vec<String>,
+    /// Its app container's SID, when it is one's.
+    pub app_container: Option<String>,
+    /// What an object it makes with no security of its own is given:
+    /// `None` when that is no DACL at all (everyone may).
+    pub default_dacl: Option<Vec<Ace>>,
+}
+
+/// A SID of a token's, and how it counts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Group {
+    pub sid: String,
+    /// Access is only ever denied by it, never granted.
+    pub deny_only: bool,
+    /// It is the token's integrity level.
+    pub integrity: bool,
+    /// It is the logon session's.
+    pub logon: bool,
+}
+
+/// An entry of an access control list: whom it grants (or denies) what.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Ace {
+    /// `ACCESS_ALLOWED_ACE_TYPE` (0), `ACCESS_DENIED_ACE_TYPE` (1), or
+    /// another, whose SID isn't read (empty).
+    pub kind: u8,
+    pub mask: u32,
+    pub sid: String,
+}
+
+impl AccessToken {
+    /// `process`'s token.
+    pub fn of(process: BorrowedHandle<'_>) -> io::Result<Self> {
+        let token = token_of(process)?;
+        let user = information(&token, TokenUser)?;
+        // SAFETY: the buffer holds the structure the class returns,
+        // aligned, and its SID points inside the buffer.
+        let user = unsafe { group(&(*user.as_ptr().cast::<TOKEN_USER>()).User) };
+        let groups = information(&token, TokenGroups)?;
+        // SAFETY: each group's SID points inside the buffer.
+        let groups = groups_in(&groups)?
+            .iter()
+            .map(|each| unsafe { group(each) })
+            .collect();
+        let restricting = information(&token, TokenRestrictedSids)?;
+        // SAFETY: as above.
+        let restricting = groups_in(&restricting)?
+            .iter()
+            .map(|each| unsafe { sid_text(each.Sid) })
+            .collect();
+        let container = information(&token, TokenAppContainerSid)?;
+        // SAFETY: the buffer holds the structure the class returns, whose
+        // SID is null or points inside the buffer.
+        let app_container = unsafe {
+            let sid =
+                (*container.as_ptr().cast::<TOKEN_APPCONTAINER_INFORMATION>()).TokenAppContainer;
+            (!sid.is_null()).then(|| sid_text(sid))
+        };
+        let dacl = information(&token, TokenDefaultDacl)?;
+        // SAFETY: the buffer holds the structure the class returns, whose
+        // ACL is null or a valid one inside the buffer.
+        let default_dacl = unsafe {
+            let acl = (*dacl.as_ptr().cast::<TOKEN_DEFAULT_DACL>()).DefaultDacl;
+            if acl.is_null() {
+                None
+            } else {
+                Some(aces(acl)?)
+            }
+        };
+        Ok(Self {
+            user,
+            groups,
+            restricting,
+            app_container,
+            default_dacl,
+        })
+    }
+}
+
+/// # Safety
+///
+/// `each`'s SID is a valid one, alive for the call.
+unsafe fn group(each: &SID_AND_ATTRIBUTES) -> Group {
+    Group {
+        // SAFETY: the caller's.
+        sid: unsafe { sid_text(each.Sid) },
+        deny_only: each.Attributes & SE_GROUP_USE_FOR_DENY_ONLY != 0,
+        integrity: each.Attributes & SE_GROUP_INTEGRITY != 0,
+        logon: each.Attributes & SE_GROUP_LOGON_ID == SE_GROUP_LOGON_ID,
+    }
+}
+
+/// The entries of `acl`.
+///
+/// # Safety
+///
+/// `acl` is a valid ACL, alive for the call.
+unsafe fn aces(acl: *const ACL) -> io::Result<Vec<Ace>> {
+    // SAFETY: the caller's.
+    let count = unsafe { (*acl).AceCount };
+    (0..u32::from(count))
+        .map(|index| {
+            let mut ace = null_mut();
+            // SAFETY: the ACL is valid and has `count` entries; `ace` is
+            // written with one of them, inside the ACL.
+            if unsafe { GetAce(acl, index, &raw mut ace) } == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            // SAFETY: every entry starts with its header; an allowed or
+            // a denied entry (the two kinds whose layout this is) has
+            // its mask after it and its SID last, inside the entry.
+            Ok(unsafe {
+                let kind = (*ace.cast::<ACE_HEADER>()).AceType;
+                let allowed = ace.cast::<ACCESS_ALLOWED_ACE>();
+                let mask = (*allowed).Mask;
+                let sid = if kind <= 1 {
+                    sid_text((&raw const (*allowed).SidStart).cast_mut().cast())
+                } else {
+                    String::new()
+                };
+                Ace { kind, mask, sid }
+            })
+        })
+        .collect()
+}
+
+/// `sid` in its text form: `S-`, its revision, its authority, and each
+/// of its numbers, after a `-`.
+///
+/// # Safety
+///
+/// `sid` is a valid SID, alive for the call.
+unsafe fn sid_text(sid: PSID) -> String {
+    use std::fmt::Write as _;
+    // SAFETY: a valid SID's first byte is its revision; it has an
+    // authority of six bytes and as many numbers as it counts.
+    unsafe {
+        let revision = *sid.cast::<u8>();
+        let authority = (*GetSidIdentifierAuthority(sid)).Value;
+        let authority = authority
+            .iter()
+            .fold(0_u64, |value, &byte| (value << 8) | u64::from(byte));
+        // As the system writes it: in hexadecimal when it doesn't fit 32
+        // bits.
+        let mut text = if authority >> 32 == 0 {
+            format!("S-{revision}-{authority}")
+        } else {
+            format!("S-{revision}-0x{authority:012X}")
+        };
+        for index in 0..u32::from(*GetSidSubAuthorityCount(sid)) {
+            let _ = write!(text, "-{}", *GetSidSubAuthority(sid, index));
+        }
+        text
+    }
+}
+
+/// Where in a 64-bit process its parameters are
+/// (`RTL_USER_PROCESS_PARAMETERS`, which its PEB points to), and in
+/// those its environment block's address and size in bytes, and how many
+/// threads its loader is to use. The last three aren't in the public
+/// `winternl.h`; the first two have been where they are since Windows
+/// Vista, the third since Windows 10.
 #[cfg(target_pointer_width = "64")]
 mod peb {
     pub const PROCESS_PARAMETERS: usize = 0x20;
     pub const ENVIRONMENT: usize = 0x80;
     pub const ENVIRONMENT_SIZE: usize = 0x3F0;
+    pub const LOADER_THREADS: usize = 0x40C;
     /// More than any environment is: a size read past it is taken for a
     /// misread.
     pub const MOST: usize = 1 << 24;
 }
 
-/// The environment of the process `id` as it is now, by the system's
-/// account of it (its PEB's): for whoever started a process to see what
-/// it was given, in a sandbox or out of one. What the process has removed
-/// from it since isn't seen. `None` for a process that isn't there, isn't
-/// this user's, or can't be read.
-#[cfg(target_pointer_width = "64")]
-pub fn environment(id: u32) -> Option<Vec<(OsString, OsString)>> {
+/// The process `id`, open to read its memory, when it is there and this
+/// user's.
+fn open_to_read(id: u32) -> Option<OwnedHandle> {
     // SAFETY: opens a handle or fails; nothing is read or written.
     let process =
         unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, 0, id) };
-    if process.is_null() {
-        return None;
-    }
-    let process = owned(process);
+    (!process.is_null()).then(|| owned(process))
+}
+
+/// Where `process`'s parameters are, in its memory.
+#[cfg(target_pointer_width = "64")]
+fn parameters_of(process: &OwnedHandle) -> Option<usize> {
     // SAFETY: all-zero is a valid `PROCESS_BASIC_INFORMATION` (numbers
     // and a pointer that is only read as a number).
     let mut basic: PROCESS_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
@@ -1015,7 +1555,35 @@ pub fn environment(id: u32) -> Option<Vec<(OsString, OsString)>> {
         return None;
     }
     let peb = basic.PebBaseAddress.addr();
-    let parameters = word_at(&process, peb.checked_add(peb::PROCESS_PARAMETERS)?)?;
+    word_at(process, peb.checked_add(peb::PROCESS_PARAMETERS)?)
+}
+
+/// How many threads the process `id`'s loader was told to map its DLLs
+/// with, as it started: 1 for a process started under a policy, 0 (the
+/// system's default, four) for one with none. `None` for a process that
+/// isn't there, isn't this user's, or can't be read.
+#[cfg(target_pointer_width = "64")]
+pub fn loader_threads(id: u32) -> Option<u32> {
+    let process = open_to_read(id)?;
+    let parameters = parameters_of(&process)?;
+    let mut threads = [0_u8; 4];
+    read_from(
+        &process,
+        parameters.checked_add(peb::LOADER_THREADS)?,
+        &mut threads,
+    )?;
+    Some(u32::from_ne_bytes(threads))
+}
+
+/// The environment of the process `id` as it is now, by the system's
+/// account of it (its PEB's): for whoever started a process to see what
+/// it was given, in a sandbox or out of one. What the process has removed
+/// from it since isn't seen. `None` for a process that isn't there, isn't
+/// this user's, or can't be read.
+#[cfg(target_pointer_width = "64")]
+pub fn environment(id: u32) -> Option<Vec<(OsString, OsString)>> {
+    let process = open_to_read(id)?;
+    let parameters = parameters_of(&process)?;
     let block = word_at(&process, parameters.checked_add(peb::ENVIRONMENT)?)?;
     let size = word_at(&process, parameters.checked_add(peb::ENVIRONMENT_SIZE)?)?;
     if size > peb::MOST {

@@ -99,7 +99,7 @@ machopo 現在的（`sunaba::windows` 的 `Command::spawn` 和 `lower`，`shell:
 
 ## 要探測的
 
-第 1 段之前（做了，上一節；4 的後半「實際讓另一個 renderer 開」沒做）：
+第 1 段之前（做了，上一節；4 的後半「實際讓另一個 renderer 開」由第 1 段的測試做了：另一個 AppContainer 的 lockdown 的 process，用 lockdown 的 token 或啟動用的 token，都開不了它的 process（process 的安全描述來自它的 default DACL），使用者的一般 process 開得了）：
 
 1. `CreateAppContainerToken` 從 `USER_LOCKDOWN` 的 restricted token 建得出 AppContainer 的 token 嗎（T1）；第一個 thread 帶的 impersonation token 要哪一種（現在那種 AppContainer 的，或 restricted 的 same access 加 AppContainer）。
 2. 疊上之後，系統字型、測試字型的頁面和 wasm 的文件和沒有 sandbox 時相同嗎；暖機除了亂數還要什麼（降權後失敗的 DLL、檔案）。

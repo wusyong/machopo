@@ -1,0 +1,102 @@
+# Stage 1's mutants (Windows: a process under a policy has a lockdown app container's token, its first thread the one it starts with until it lowers itself, its loader one thread, and a delay-loaded DLL it can't load said on its errors): `python3 scripts/test.py mutate rfcs/0121-windows-renderer-lockdown/mutants-1.toml`, on Windows.
+test = ["cargo", "test", "-q", "-p", "sunaba"]
+timeout = 900
+
+[[mutant]]
+name = "the primary token isn't made from the lockdown one"
+file = "crates/sunaba/src/windows.rs"
+from = '''        let primary = app_container_token(&lockdown, name)?;'''
+to = '''        let primary = app_container_token(&base, name)?;'''
+
+[[mutant]]
+name = "the lockdown token's groups don't only deny"
+file = "crates/sunaba/src/windows.rs"
+from = '''        let lockdown = restricted(&base, DISABLE_MAX_PRIVILEGE, &sids.list, &restricting_null)?;'''
+to = '''        let lockdown = restricted(&base, DISABLE_MAX_PRIVILEGE, &[], &restricting_null)?;'''
+
+[[mutant]]
+name = "the lockdown token isn't restricted to the null SID"
+file = "crates/sunaba/src/windows.rs"
+from = '''        let lockdown = restricted(&base, DISABLE_MAX_PRIVILEGE, &sids.list, &restricting_null)?;'''
+to = '''        let lockdown = restricted(&base, DISABLE_MAX_PRIVILEGE, &sids.list, &[])?;'''
+
+[[mutant]]
+name = "the first thread starts with a token that isn't restricted"
+file = "crates/sunaba/src/windows.rs"
+from = '''        let initial = app_container_token(&same_access, name)?;'''
+to = '''        let initial = app_container_token(&base, name)?;'''
+
+[[mutant]]
+name = "the first thread isn't given its token"
+file = "crates/sunaba/src/windows.rs"
+from = '''    let set = unsafe { SetThreadToken(&raw const thread, initial.as_raw_handle()) };
+    check("SetThreadToken", set != 0)?;'''
+to = '''    let _ = initial;'''
+
+[[mutant]]
+name = "the loader keeps its threads"
+file = "crates/sunaba/src/windows.rs"
+from = '''    one_loader_thread(process)?;
+    let thread = thread.as_raw_handle();'''
+to = '''    let thread = thread.as_raw_handle();'''
+
+[[mutant]]
+name = "the first thread doesn't give its token back"
+file = "crates/sunaba/src/windows.rs"
+from = '''    let reverted = unsafe { RevertToSelf() };
+    check("RevertToSelf", reverted != 0)?;'''
+to = ''''''
+
+[[mutant]]
+name = "no random number before the token is given back"
+file = "crates/sunaba/src/windows.rs"
+from = '''    let made = unsafe { RtlGenRandom(random.as_mut_ptr().cast(), size32("a number", random.len())?) };
+    check("RtlGenRandom", made != 0)?;'''
+to = '''    let _ = &mut random;'''
+
+[[mutant]]
+name = "a group is read as denying only by another bit"
+file = "crates/sunaba/src/windows.rs"
+from = '''        deny_only: each.Attributes & SE_GROUP_USE_FOR_DENY_ONLY != 0,'''
+to = '''        deny_only: each.Attributes & SE_GROUP_INTEGRITY == 0,'''
+
+[[mutant]]
+name = "no group is read as the logon session's"
+file = "crates/sunaba/src/windows.rs"
+from = '''        logon: each.Attributes & SE_GROUP_LOGON_ID == SE_GROUP_LOGON_ID,'''
+to = '''        logon: false,'''
+
+[[mutant]]
+name = "the default DACL's SIDs aren't read"
+file = "crates/sunaba/src/windows.rs"
+from = '''                let sid = if kind <= 1 {'''
+to = '''                let sid = if kind > 1 {'''
+
+[[mutant]]
+name = "the probe doesn't start Winsock itself"
+file = "crates/sunaba/src/windows/probe.rs"
+from = '''    match unsafe { WSAStartup(0x0202, &raw mut data) } {
+        0 => Ok(()),'''
+to = '''    match 0 {
+        0 => Ok(()),'''
+
+[[mutant]]
+name = "no delay-load failure hook"
+file = "crates/sunaba/src/windows.rs"
+from = '''> = Some(delay_load_failed);'''
+to = '''> = None;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "renderer_sandbox_windows"]
+
+[[mutant]]
+name = "the hook doesn't know the process has lowered itself"
+file = "crates/sunaba/src/windows.rs"
+from = '''    LOWERED.store(true, std::sync::atomic::Ordering::Relaxed);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "renderer_sandbox_windows"]
+
+[[mutant]]
+name = "the primary token isn't made from the lockdown one, for machopo's renderers"
+file = "crates/sunaba/src/windows.rs"
+from = '''        let primary = app_container_token(&lockdown, name)?;'''
+to = '''        let primary = app_container_token(&base, name)?;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "renderer_sandbox_windows"]

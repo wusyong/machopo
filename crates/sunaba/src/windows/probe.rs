@@ -26,14 +26,15 @@
 //!
 //! and prints one line: `ok` and a number (bytes read, entries listed, a
 //! level, flags), or `error` and the system's error code (5 is access
-//! denied; a socket's are Winsock's). The sandbox refuses by failing the
-//! call: nothing ends the process, but a handle that isn't one once the
-//! process has lowered itself.
+//! denied; a socket's are Winsock's, and 10107 is Winsock not starting).
+//! The sandbox refuses by failing the call: nothing ends the process, but
+//! a handle that isn't one once the process has lowered itself.
 
 use std::io::{Read as _, Write as _};
 use std::os::windows::io::{BorrowedHandle, RawHandle};
 
 use windows_sys::Win32::Foundation::{GetHandleInformation, SetHandleInformation};
+use windows_sys::Win32::Networking::WinSock::{WSADATA, WSAStartup};
 use windows_sys::Win32::Storage::FileSystem::{FILE_TYPE_CHAR, GetFileType};
 use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_VM_READ};
 
@@ -74,12 +75,16 @@ fn attempt(arguments: &[String]) -> std::io::Result<usize> {
         ["stat", path] => std::fs::metadata(path).map(|_| 0),
         // Connected, and a byte each way: one the other end sends back.
         ["connect", address] => {
+            winsock()?;
             let mut stream = std::net::TcpStream::connect(address)?;
             stream.write_all(b"x")?;
             let mut byte = [0u8; 1];
             stream.read(&mut byte)
         }
-        ["listen"] => std::net::TcpListener::bind("127.0.0.1:0").map(|_| 0),
+        ["listen"] => {
+            winsock()?;
+            std::net::TcpListener::bind("127.0.0.1:0").map(|_| 0)
+        }
         ["run", path, rest @ ..] => std::process::Command::new(path)
             .args(rest)
             .status()
@@ -153,6 +158,19 @@ fn attempt(arguments: &[String]) -> std::io::Result<usize> {
         // Ends the process as a program that gives up does.
         ["abort"] => std::process::abort(),
         _ => Err(invalid()),
+    }
+}
+
+/// Winsock started, or why it wasn't: the standard library starts it too
+/// as a socket is first made, and ends the process when it can't.
+fn winsock() -> std::io::Result<()> {
+    // SAFETY: all-zero is a valid `WSADATA` (numbers, and pointers that
+    // aren't read), which the call writes.
+    let mut data: WSADATA = unsafe { std::mem::zeroed() };
+    // SAFETY: as above; version 2.2.
+    match unsafe { WSAStartup(0x0202, &raw mut data) } {
+        0 => Ok(()),
+        error => Err(std::io::Error::from_raw_os_error(error)),
     }
 }
 

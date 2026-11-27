@@ -1,7 +1,7 @@
 # RFC 0121：Windows 的 renderer sandbox 的下一級：restricted token 和另一個 desktop
 
 - 開始日期：2026-11-27
-- 狀態：👍 已接受：2026-11-27（第 1 段要定的都定了，已決定的事項第 1 到 5 條；第 2、3 段的在那兩段開始時定）
+- 狀態：🚧 已排程：2026-11-27（第 1 段做完：renderer 的 token 是 lockdown 加 AppContainer 的，降權之後開不了任何檔案、建不了 socket；第 2 段：desktop 和記憶體上限；進度在 `progress.md`）
 - 細節：`details.md`
 
 ## 摘要

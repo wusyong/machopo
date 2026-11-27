@@ -8,7 +8,7 @@ use std::os::windows::io::AsHandle as _;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use sunaba::windows::{LOW, UNTRUSTED};
+use sunaba::windows::{AccessToken, LOW, UNTRUSTED};
 
 /// What a probe did: its one line (`ok N`, `error CODE`), or what the
 /// started process exited with when it printed none.
@@ -21,6 +21,10 @@ enum Outcome {
 
 /// `ERROR_ACCESS_DENIED`: what the sandbox fails a call with.
 const DENIED: Outcome = Outcome::Error(5);
+
+/// `WSASYSCALLFAILURE`: Winsock doesn't start in a process that opens
+/// nothing of the system's.
+const NO_WINSOCK: Outcome = Outcome::Error(10107);
 
 fn probe(options: &[&str], attempt: &[&str]) -> (Outcome, String) {
     let output = Command::new(env!("CARGO_BIN_EXE_sunaba_probe"))
@@ -75,9 +79,28 @@ fn file(name: &str) -> (String, String) {
     )
 }
 
+fn system_root() -> String {
+    std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into())
+}
+
 fn system32(name: &str) -> String {
-    let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
-    format!(r"{root}\System32\{name}")
+    format!(r"{}\System32\{name}", system_root())
+}
+
+/// The probe started under the policy, with the app container `name`
+/// (of this test's), sleeping once it has lowered itself.
+fn lowered(name: &str) -> sunaba::windows::Child {
+    let mut command = sunaba::windows::Command::new(env!("CARGO_BIN_EXE_sunaba_probe"));
+    command.arg("--inside").arg("sleep").arg("20");
+    let policy = sunaba::windows::Policy::new(format!("sunaba.test.{}.{name}", std::process::id()));
+    let child = command.spawn(Some(&policy)).unwrap();
+    let process = sunaba::windows::open(child.id()).unwrap();
+    let lowered = (0..500).any(|_| {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        sunaba::windows::integrity(process.as_handle()).unwrap() == UNTRUSTED
+    });
+    assert!(lowered);
+    child
 }
 
 #[test]
@@ -92,9 +115,18 @@ fn a_process_started_with_no_policy_is_as_its_starter() {
 #[test]
 fn a_process_under_the_policy_is_in_an_app_container() {
     assert_eq!(inside(&["nothing"]), Outcome::Ok(0));
-    assert_eq!(inside(&["container"]), Outcome::Ok(1));
-    // On a thread made later too: the token is the process's.
-    assert_eq!(inside(&["thread", "container"]), Outcome::Ok(1));
+    let mut child = lowered("container");
+    let process = sunaba::windows::open(child.id()).unwrap();
+    assert!(sunaba::windows::in_app_container(process.as_handle()).unwrap());
+    child.kill().unwrap();
+    // Its first thread starts with a token of the same app container's,
+    // which may read itself.
+    assert_eq!(outcome(&["--no-lower"], &["container"]), Outcome::Ok(1));
+    // The process's own, which every other thread has from the start
+    // and the first once it has lowered itself, can't even be read.
+    assert_eq!(outcome(&["--no-lower"], &["thread", "container"]), DENIED);
+    assert_eq!(inside(&["container"]), DENIED);
+    assert_eq!(inside(&["thread", "container"]), DENIED);
 }
 
 #[test]
@@ -103,7 +135,88 @@ fn it_starts_at_low_integrity_and_lowers_itself_to_untrusted() {
         outcome(&["--no-lower"], &["integrity"]),
         Outcome::Ok(u64::from(LOW))
     );
-    assert_eq!(inside(&["integrity"]), Outcome::Ok(u64::from(UNTRUSTED)));
+    let mut child = lowered("integrity");
+    let process = sunaba::windows::open(child.id()).unwrap();
+    assert_eq!(
+        sunaba::windows::integrity(process.as_handle()).unwrap(),
+        UNTRUSTED
+    );
+    child.kill().unwrap();
+}
+
+/// From outside: its token is an app container's made from a lockdown
+/// one, whose every group only denies and which grants only what is
+/// granted to the null SID, as its starter's isn't; and what it makes is
+/// for the user and its own app container, not its logon session's or
+/// any restricted token's.
+#[test]
+fn the_process_has_a_lockdown_app_containers_token() {
+    let mut child = lowered("token");
+    let process = sunaba::windows::open(child.id()).unwrap();
+    let token = AccessToken::of(process.as_handle()).unwrap();
+    child.kill().unwrap();
+    assert!(token.user.deny_only, "{token:?}");
+    assert!(
+        token
+            .groups
+            .iter()
+            .all(|group| group.integrity || group.deny_only),
+        "{token:?}"
+    );
+    assert!(token.groups.iter().any(|group| group.logon), "{token:?}");
+    assert_eq!(token.restricting, ["S-1-0-0"]);
+    let container = token.app_container.clone().expect("an app container's");
+    assert!(container.starts_with("S-1-15-2-"), "{container}");
+    let dacl = token.default_dacl.clone().expect("a default DACL");
+    let granted: Vec<&str> = dacl.iter().map(|ace| ace.sid.as_str()).collect();
+    assert!(dacl.iter().all(|ace| ace.kind == 0), "{dacl:?}");
+    assert!(granted.contains(&container.as_str()), "{dacl:?}");
+    assert!(granted.contains(&token.user.sid.as_str()), "{dacl:?}");
+    assert!(
+        !granted.iter().any(|sid| sid.starts_with("S-1-5-5-")),
+        "{dacl:?}"
+    );
+    // RESTRICTED, and every app container (ALL APPLICATION PACKAGES).
+    assert!(!granted.contains(&"S-1-5-12"), "{dacl:?}");
+    assert!(!granted.contains(&"S-1-15-2-1"), "{dacl:?}");
+
+    let own = AccessToken::of(sunaba::windows::this_process()).unwrap();
+    assert!(!own.user.deny_only && own.restricting.is_empty());
+    assert_eq!(own.app_container, None);
+    assert_eq!(own.user.sid, token.user.sid);
+}
+
+/// What one process under a policy makes (its process, whose security
+/// comes from its token's default DACL) another can't open, by its
+/// lockdown token or by the one it starts with, which isn't the first
+/// one's app container's; the user's other processes can.
+#[test]
+fn what_a_process_makes_another_under_a_policy_cant_open() {
+    let mut child = lowered("made");
+    let id = child.id().to_string();
+    assert_eq!(inside(&["process", &id]), DENIED);
+    assert_eq!(outcome(&["--no-lower"], &["process", &id]), DENIED);
+    assert_eq!(outside(&["process", &id]), Outcome::Ok(0));
+    child.kill().unwrap();
+}
+
+/// The loader maps the DLLs a process under a policy starts with on its
+/// first thread alone, the only one that may open them.
+#[test]
+fn the_loader_of_a_process_under_the_policy_has_one_thread() {
+    let mut child = lowered("loader");
+    assert_eq!(sunaba::windows::loader_threads(child.id()), Some(1));
+    child.kill().unwrap();
+    let mut command = sunaba::windows::Command::new(env!("CARGO_BIN_EXE_sunaba_probe"));
+    command
+        .arg("--inside")
+        .arg("--no-lower")
+        .arg("sleep")
+        .arg("20");
+    let mut child = command.spawn(None).unwrap();
+    // The system's default.
+    assert_eq!(sunaba::windows::loader_threads(child.id()), Some(0));
+    child.kill().unwrap();
 }
 
 #[test]
@@ -145,23 +258,37 @@ fn no_file_is_made_changed_or_removed() {
     assert_eq!(outside(&["write", &new]), Outcome::Ok(0));
 }
 
+/// What the system lets every application read, an app container
+/// reads: a lockdown one doesn't. Only its first thread, until the
+/// process has lowered itself, may (which is how its DLLs are loaded).
 #[test]
-fn what_the_system_lets_every_application_read_is_read() {
-    // Not promised away: an app container reads the system's own files,
-    // which its fonts and its DLLs are among.
+fn nothing_of_the_systems_is_read_once_the_process_has_lowered_itself() {
     let dll = system32("kernel32.dll");
-    assert!(matches!(inside(&["read", &dll]), Outcome::Ok(bytes) if bytes > 0));
+    let root = system_root();
+    let fonts = format!(r"{root}\Fonts");
+    let ini = format!(r"{root}\win.ini");
+    let programs = std::env::var("ProgramFiles").unwrap_or_else(|_| r"C:\Program Files".into());
+    assert!(matches!(outside(&["read", &dll]), Outcome::Ok(bytes) if bytes > 0));
+    assert!(matches!(outside(&["list", &fonts]), Outcome::Ok(files) if files > 0));
+    assert_eq!(inside(&["read", &dll]), DENIED);
+    assert_eq!(inside(&["read", &ini]), DENIED);
+    assert_eq!(inside(&["list", &fonts]), DENIED);
+    assert_eq!(inside(&["list", &programs]), DENIED);
+    assert_eq!(inside(&["stat", &system32("cmd.exe")]), DENIED);
+    assert!(matches!(
+        outcome(&["--no-lower"], &["read", &dll]),
+        Outcome::Ok(bytes) if bytes > 0
+    ));
+    assert_eq!(outcome(&["--no-lower"], &["thread", "read", &dll]), DENIED);
 }
 
 #[test]
-fn nothing_is_connected_to_outside_the_machine() {
-    // An address no machine has (TEST-NET-1): refused before anything
-    // leaves, where a process with no policy would wait for an answer.
-    assert_eq!(
-        inside(&["connect", "192.0.2.1:80"]),
-        // `WSAEACCES`.
-        Outcome::Error(10013)
-    );
+fn no_socket_is_made() {
+    // An address no machine has (TEST-NET-1), and a port of the
+    // machine's to listen on: Winsock doesn't even start.
+    assert_eq!(inside(&["connect", "192.0.2.1:80"]), NO_WINSOCK);
+    assert_eq!(inside(&["listen"]), NO_WINSOCK);
+    assert_eq!(outside(&["listen"]), Outcome::Ok(0));
 }
 
 #[test]
@@ -187,31 +314,21 @@ fn nothing_is_connected_to_on_the_machine() {
         more
     });
     assert_eq!(outside(&["connect", &address]), Outcome::Ok(1));
-    let mut sandboxed = Command::new(env!("CARGO_BIN_EXE_sunaba_probe"))
-        .args(["--", "connect", &address])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+    assert_eq!(inside(&["connect", &address]), NO_WINSOCK);
     assert_eq!(answering.join().unwrap(), 0, "it reached the listener");
-    // It is still waiting for an answer that can't come.
-    assert!(
-        sandboxed.try_wait().unwrap().is_none(),
-        "it gave up at once"
-    );
-    sandboxed.kill().unwrap();
-    sandboxed.wait().unwrap();
 }
 
 #[test]
 fn no_program_is_started() {
     let cmd = system32("cmd.exe");
     assert_eq!(outside(&["run", &cmd, "/c", "exit 0"]), Outcome::Ok(0));
-    // `ERROR_CHILD_PROCESS_BLOCKED`: the process's own attribute.
-    assert_eq!(inside(&["run", &cmd, "/c", "exit 0"]), Outcome::Error(367));
+    // The program can't be opened.
+    assert_eq!(inside(&["run", &cmd, "/c", "exit 0"]), DENIED);
+    assert_eq!(inside(&["thread", "run", &cmd, "/c", "exit 0"]), DENIED);
+    // And where it can, by the token the first thread starts with:
+    // `ERROR_CHILD_PROCESS_BLOCKED`, the process's own attribute.
     assert_eq!(
-        inside(&["thread", "run", &cmd, "/c", "exit 0"]),
+        outcome(&["--no-lower"], &["run", &cmd, "/c", "exit 0"]),
         Outcome::Error(367)
     );
 }

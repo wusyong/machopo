@@ -14,7 +14,7 @@ use shell::headless::{self, Frame};
 /// A page with `html` in this test's scratch directory, the page guest
 /// beside it as `page.wasm` and, the same bytes, as `page.bin` (not
 /// `application/wasm`); its `file:` URL.
-fn page(name: &str, html: &str) -> String {
+pub(crate) fn page(name: &str, html: &str) -> String {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("shell-wasm-documents");
     std::fs::create_dir_all(&dir).unwrap();
     let guest =
@@ -39,11 +39,11 @@ fn render(url: &str) -> Frame {
 
 /// The page with `head` in its head and one script, `script`: the guest's
 /// `hello` case appends a paragraph to the root element.
-fn document(head: &str, script: &str) -> String {
+pub(crate) fn document(head: &str, script: &str) -> String {
     format!(r#"<!DOCTYPE html><html data-case="hello"><head>{head}</head><body>{script}"#)
 }
 
-const META: &str = r#"<meta name="script" content="wasm">"#;
+pub(crate) const META: &str = r#"<meta name="script" content="wasm">"#;
 
 #[test]
 fn a_wasm_documents_script_runs_and_what_it_adds_is_drawn() {

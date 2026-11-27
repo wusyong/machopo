@@ -8,7 +8,7 @@ The crate is the mechanism alone and knows no program's policy (Chromium's split
 | --- | --- | --- |
 | Linux | Landlock (which files open), seccomp-bpf (which system calls are made) | `sunaba::linux` |
 | macOS | The kernel's sandbox (Seatbelt) under a profile: which files, Mach services and `sysctl`s, and no sockets or processes | `sunaba::macos` |
-| Windows | An app container with no capabilities (no files of the user's, no network, no other process), a job (one process, no user interface), the process's mitigations (no win32k, no DLL but the system's); given as the process is started | `sunaba::windows` |
+| Windows | An app container with no capabilities, made from a lockdown restricted token (no files of the user's or the system's, no sockets, no other process), a job (one process, no user interface), the process's mitigations (no win32k, no DLL but the system's); given as the process is started | `sunaba::windows` |
 
 Why it holds, what it doesn't promise, and what to review when changing it: `soundness.md`.
 
@@ -168,7 +168,8 @@ The started process's output and errors are the starter's where those are a file
 
 `Policy::new(name)` is the whole of it; the name is the app container's, and a process given a name no other has is in a container of its own. Nothing is registered under the name. A process started under it:
 
-- is in an **app container** with no capabilities: it reads nothing of the user's and writes nothing anywhere, reaches no network (not the machine's own ports either), and opens no other process. It does read what the system lets every application read (`C:\Windows`, its fonts);
+- is in an **app container** with no capabilities, whose token is made from a **lockdown** restricted token (Chromium's `USER_LOCKDOWN`: every group only denies, and only what is granted to the null SID is granted): it opens no file, the user's or the system's (not `C:\Windows` or its fonts either), makes no socket (Winsock doesn't start), opens no other process and nothing another process under a policy made, and can't read its own token. What it makes is its user's and its app container's alone (the default DACL the system gives an app container's token);
+- has a first thread that starts with a token of the same app container's that may do what an app container may (Chromium's `USER_RESTRICTED_SAME_ACCESS`), until `lower` gives it back: the loader maps the DLLs the program starts with on that thread alone (the process's `LoaderThreads` is 1), since the lockdown token opens no DLL that isn't a known one;
 - is in a **job** of one process with every user interface restriction, which ends it when the job's handle closes or an exception goes unhandled;
 - has, from its first instruction, Chromium's **mitigations** for a renderer: no calls into win32k, no file system control codes, no extension points, only DLLs Microsoft signed, only the system's fonts in the kernel, no DLL from another machine or from where a low-integrity process could write, no child processes, branch prediction kept to itself, no transaction manager, and DEP, SEHOP, heap termination and bottom-up ASLR.
 
@@ -176,11 +177,13 @@ Two things a program may need of it: `allow_win32k` for one that loads `user32.d
 
 ### Lowering
 
-`lower()`, first thing in the started process's `main`: its integrity level goes from low to untrusted, DLLs are looked for in the system's directories and its own, and a handle that isn't one ends the process. None of it can be undone. On an error the process is to end.
+`lower()`, first thing in the started process's `main`, on its first thread: its integrity level goes from low to untrusted, DLLs are looked for in the system's directories and its own, a handle that isn't one ends the process, the system makes one random number (the first time loads what makes them), and the first thread gives back the token it started with. None of it can be undone. On an error the process is to end.
+
+From then on the process loads no DLL. A program linked to load some DLLs on first use (`/DELAYLOAD`) that calls into one ends with the delay-load helper's exception (`0xC06D007E`); the crate defines the helper's failure hook (`__pfnDliFailureHook2`, MSVC's), which first says on the process's errors which DLL and function it was. Whatever the process needs of a DLL is to be loaded before `lower`.
 
 ### Looking from outside
 
-`open(id)` and then `in_app_container`, `integrity`, `mitigation` and `running` say what a process is in, for the starter's tests of the real thing. `environment(id)` is a process's environment as it is now, by its PEB (64-bit processes): what its starter gave it, less what the process removed since; `None` for one that has ended or can't be read.
+`open(id)` and then `in_app_container`, `integrity`, `mitigation` and `running` say what a process is in, for the starter's tests of the real thing; `AccessToken::of` is its token's user, groups (which only deny), restricting SIDs, app container and default DACL. `environment(id)` is a process's environment as it is now, by its PEB (64-bit processes): what its starter gave it, less what the process removed since; `loader_threads(id)` is how many threads its loader was told to use; `None` for one that has ended or can't be read.
 
 ### Testing a policy
 
@@ -192,6 +195,7 @@ The crate's own tests (`tests/it/windows.rs`) run `sunaba_probe`, which starts i
 cargo test -p sunaba
 target/debug/sunaba_probe -- read C:\Users\me\notes.txt                # error 5
 target/debug/sunaba_probe --no-policy -- read C:\Users\me\notes.txt    # ok 120
-target/debug/sunaba_probe -- connect 192.0.2.1:80                       # error 10013
+target/debug/sunaba_probe -- connect 192.0.2.1:80                       # error 10107
+target/debug/sunaba_probe -- integrity                                  # error 5
 target/debug/sunaba_probe --no-lower -- integrity                       # ok 4096
 ```

@@ -91,6 +91,10 @@ impl Browser {
 
     /// [`Browser::start_logging`], machopo started by the program and
     /// arguments `wrapper` (`machopo`'s path and arguments after them).
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(dead_code, reason = "only Linux's sandbox tests start machopo so")
+    )]
     pub(crate) fn start_wrapped(wrapper: &[&str], args: &[&str], stderr: Stdio) -> Self {
         Self::start_headless_or_not(true, true, wrapper, args, &[], stderr)
     }
@@ -166,7 +170,12 @@ impl Browser {
 
     /// Sends `method` with `params`, for `session`; its answer. The events
     /// before it are kept.
-    fn call(&mut self, session: Option<&str>, method: &str, params: Value) -> Result<Value, Error> {
+    pub(crate) fn call(
+        &mut self,
+        session: Option<&str>,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, Error> {
         let id = self.send(session, method, params);
         self.answer(id)
     }
