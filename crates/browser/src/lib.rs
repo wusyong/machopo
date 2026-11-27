@@ -59,7 +59,8 @@ pub use profile::{
     Platform, Profile, ProfileError, default_user_data_dir, user_cache_dir_on, user_data_dir_on,
 };
 pub use render_process_host::{
-    GaveUp, RenderProcessHost, RendererId, RendererLauncher, RendererProcess,
+    ChildProcessTerminationInfo, GaveUp, RenderProcessHost, RendererId, RendererLauncher,
+    RendererProcess,
 };
 pub use renderer::{
     ChildExit, ChildInit, NEW_CONTENT_RENDERING_DELAY, ParserBudget, RendererFlags,

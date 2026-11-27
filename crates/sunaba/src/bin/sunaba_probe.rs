@@ -30,14 +30,16 @@
 //!
 //! ```text
 //! sunaba_probe [--no-policy] [--allow-win32k] [--allow-third-party-modules]
-//!              [--no-lower] [--env NAME VALUE]... [--env-remove NAME]...
-//!              [--abandon] -- ATTEMPT...
+//!              [--memory-limit MEGABYTES] [--no-lower] [--env NAME VALUE]...
+//!              [--env-remove NAME]... [--abandon] -- ATTEMPT...
 //! ```
 //!
 //! `--no-policy` starts it with no sandbox, which still inherits only
 //! what is named; `--no-lower` leaves the started process as it was
 //! started; `--abandon` lets go of the started process and prints whether
-//! it runs on (`ok 1`). `{named}` and `{unnamed}` in the attempt are the values of
+//! it runs on (`ok 1`); `--memory-limit` limits the memory it commits,
+//! and once it has ended says on stderr whether it asked for more.
+//! `{named}` and `{unnamed}` in the attempt are the values of
 //! two handles the started process could inherit, of which it is given
 //! the first.
 
@@ -244,6 +246,15 @@ fn main() {
                     policy.allow_third_party_modules();
                 }
             }
+            "--memory-limit" => {
+                let megabytes: usize = arguments
+                    .next()
+                    .and_then(|word| word.parse().ok())
+                    .unwrap_or_default();
+                if let Some(policy) = &mut policy {
+                    policy.limit_memory(megabytes.saturating_mul(1 << 20));
+                }
+            }
             other => {
                 eprintln!("sunaba_probe: no such option: {other}");
                 std::process::exit(2);
@@ -281,6 +292,9 @@ fn main() {
         }
         Ok(mut child) => {
             let status = child.wait().ok().and_then(|status| status.code());
+            if child.exceeded_memory_limit() {
+                eprintln!("sunaba_probe: it asked for more memory than its limit");
+            }
             std::process::exit(status.unwrap_or(3));
         }
         Err(error) => {

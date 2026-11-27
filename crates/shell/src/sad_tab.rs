@@ -25,6 +25,9 @@ pub enum Reason {
     /// what it is made of (Windows): something other than the system's
     /// may have been put in its way.
     NotLoaded,
+    /// It asked for more memory than its sandbox lets it have (Chromium's
+    /// out-of-memory sad tab): reloading may run out again.
+    OutOfMemory,
 }
 
 /// What Windows ends a process with when a DLL it needs isn't found,
@@ -34,6 +37,14 @@ pub enum Reason {
 const NOT_LOADED: [u32; 3] = [0xC000_0135, 0xC000_0428, 0xC000_0142];
 
 impl Reason {
+    /// From how the renderer's process ended, if it has.
+    pub fn of(exit: Option<browser::ChildProcessTerminationInfo>) -> Self {
+        match exit {
+            Some(exit) if exit.out_of_memory => Self::OutOfMemory,
+            _ => Self::of_exit(exit.and_then(|exit| exit.status).and_then(|status| status.code())),
+        }
+    }
+
     /// From what the renderer's process exited with, if it has.
     pub fn of_exit(code: Option<i32>) -> Self {
         if code == Some(i32::from(crate::renderer_sandbox::NO_SANDBOX_EXIT)) {
@@ -49,6 +60,7 @@ impl Reason {
         match self {
             Self::Crashed => TITLE,
             Self::NoSandbox | Self::NotLoaded => "This page can't be shown",
+            Self::OutOfMemory => "This page ran out of memory",
         }
     }
 
@@ -60,6 +72,7 @@ impl Reason {
                 "Its renderer didn't start. If other software loads into every program, try \
                  --allow-third-party-modules."
             }
+            Self::OutOfMemory => "It needed more memory than a page is given, and was ended.",
         }
     }
 }
@@ -287,6 +300,51 @@ mod tests {
             format!("{:?}", list.ops())
         };
         assert_ne!(glyphs(Reason::NoSandbox), glyphs(Reason::Crashed));
+    }
+
+    /// A process's status as having exited with `code`.
+    fn exited_with(code: u32) -> std::process::ExitStatus {
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::ExitStatusExt as _;
+            std::process::ExitStatus::from_raw(code)
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt as _;
+            // A wait status: the code is its second byte.
+            let code = i32::try_from(code).unwrap().checked_mul(256).unwrap();
+            std::process::ExitStatus::from_raw(code)
+        }
+    }
+
+    #[test]
+    fn a_renderer_that_ran_out_of_memory_is_told_apart_whatever_it_exited_with() {
+        let ended = |code: Option<u32>, out_of_memory| {
+            Reason::of(Some(browser::ChildProcessTerminationInfo {
+                status: code.map(exited_with),
+                out_of_memory,
+            }))
+        };
+        // Crashed, killed, or exited of what an allocation that failed
+        // does (on Windows: a stack that couldn't grow, Rust's abort).
+        let mut codes = vec![Some(1), Some(4), None];
+        if cfg!(windows) {
+            codes.extend([Some(0xC000_00FD), Some(0xC000_0409)]);
+        }
+        for &code in &codes {
+            assert_eq!(ended(code, true), Reason::OutOfMemory, "{code:?}");
+            assert_eq!(ended(code, false), Reason::Crashed, "{code:?}");
+        }
+        let no_sandbox = u32::from(crate::renderer_sandbox::NO_SANDBOX_EXIT);
+        assert_eq!(ended(Some(no_sandbox), false), Reason::NoSandbox);
+        assert_eq!(Reason::of(None), Reason::Crashed);
+        assert!(Reason::OutOfMemory.message().contains("memory"));
+        let glyphs = |reason| {
+            let list = SadTab::new().paint(&mut TextContexts::new(true), SIZE, reason);
+            format!("{:?}", list.ops())
+        };
+        assert_ne!(glyphs(Reason::OutOfMemory), glyphs(Reason::Crashed));
     }
 
     #[test]

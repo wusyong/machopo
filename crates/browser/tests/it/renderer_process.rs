@@ -65,6 +65,15 @@ fn child() {
                 let _ = link.send(to_browser::FRAME_SINK, &msg);
             })
         }
+        // Takes its end of the channel, then more memory until it is
+        // refused, and ends as a failed allocation ends a Rust program.
+        Some("a renderer that runs out of memory") => {
+            let _channel = ipc::platform::inherited();
+            let mut held = Vec::new();
+            loop {
+                held.push(vec![1_u8; 64 << 20]);
+            }
+        }
         _ => {}
     }
     let exit = match ipc::platform::inherited() {
@@ -166,6 +175,11 @@ fn as_a_process() -> RendererLauncher {
 
 /// Starts this test binary again as what `role` says ([`child`]).
 fn launching(role: &'static str) -> RendererLauncher {
+    launching_in(role, None)
+}
+
+/// [`launching`], in `sandbox` when there is one.
+fn launching_in(role: &'static str, sandbox: Option<ipc::platform::Sandbox>) -> RendererLauncher {
     RendererLauncher::Process(Arc::new(move || {
         let mut command = Command::new(std::env::current_exe().expect("the test's own path"));
         command
@@ -176,7 +190,9 @@ fn launching(role: &'static str) -> RendererLauncher {
                 "--test-threads=1",
             ])
             .env(RENDERER, role);
-        browser::RendererProcess::new(command)
+        let mut process = browser::RendererProcess::new(command);
+        process.sandbox.clone_from(&sandbox);
+        process
     }))
 }
 
@@ -564,6 +580,66 @@ fn state_of(pid: u32) -> Option<String> {
     (!state.is_empty()).then_some(state)
 }
 
+/// A sandbox that lets a renderer process commit 256 MiB, and call into
+/// win32k: this test binary loads `user32.dll` as it starts.
+#[cfg(windows)]
+fn limited_memory(name: &str) -> ipc::platform::Sandbox {
+    let mut sandbox =
+        ipc::platform::Sandbox::new(format!("machopo.test.{}.{name}", std::process::id()));
+    sandbox.allow_win32k().limit_memory(256 << 20);
+    sandbox
+}
+
+/// Waits for the tab's renderer to go by itself.
+#[cfg(windows)]
+fn gone(
+    web_contents: &mut browser::WebContents,
+    host_rx: &crossbeam_channel::Receiver<browser::ContentsEvent>,
+) {
+    loop {
+        let msg = next_message(web_contents, host_rx, TIMEOUT).expect("the renderer goes");
+        web_contents.on_renderer_message(&msg);
+        if matches!(msg, RendererHostMsg::RendererGone) {
+            return;
+        }
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn a_renderer_process_that_ran_out_of_its_memory_is_told_apart() {
+    let (mut web_contents, host_rx) = tab_launched(
+        launching_in(
+            "a renderer that runs out of memory",
+            Some(limited_memory("out")),
+        ),
+        false,
+        gfx::SystemColors::DEFAULT,
+        in_memory(),
+    );
+    gone(&mut web_contents, &host_rx);
+    assert!(web_contents.is_crashed());
+    let exit = web_contents.renderer_exit().expect("ended");
+    assert!(exit.out_of_memory, "{exit:?}");
+    assert!(exit.status.is_some_and(|status| !status.success()), "{exit:?}");
+    web_contents.shutdown();
+
+    // One under the same limit that crashed for another reason didn't.
+    let (mut web_contents, host_rx) = tab_launched(
+        launching_in("a renderer", Some(limited_memory("crash"))),
+        false,
+        gfx::SystemColors::DEFAULT,
+        in_memory(),
+    );
+    web_contents.navigate("data:text/html,<title>one</title>");
+    assert_eq!(next_commit(&mut web_contents, &host_rx).2, "one");
+    web_contents.navigate("about:crash");
+    assert!(web_contents.is_crashed());
+    let exit = web_contents.renderer_exit().expect("ended");
+    assert!(!exit.out_of_memory, "{exit:?}");
+    web_contents.shutdown();
+}
+
 /// The signal `abort` ends a process with, and the one that kills it.
 #[cfg(unix)]
 const ABORTED: i32 = 6;
@@ -576,6 +652,7 @@ fn ended_by(web_contents: &browser::WebContents) -> Option<i32> {
     use std::os::unix::process::ExitStatusExt;
     web_contents
         .renderer_exit()
+        .and_then(|exit| exit.status)
         .and_then(|status| status.signal())
 }
 

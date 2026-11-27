@@ -85,6 +85,9 @@ pub fn sandbox() -> Option<ipc::platform::Sandbox> {
         if THIRD_PARTY_MODULES.load(Ordering::Relaxed) {
             policy.allow_third_party_modules();
         }
+        policy.limit_memory(windows::renderer_memory_limit(
+            sunaba::windows::physical_memory(),
+        ));
         Some(policy)
     }
     #[cfg(not(any(windows, target_os = "linux")))]
@@ -493,6 +496,22 @@ pub mod windows {
     /// The name of the app container of the renderer `number` of the
     /// browser `browser`: one no other renderer has, of this browser or
     /// of another running beside it.
+    /// The least a renderer process may commit, whatever the machine.
+    pub const LEAST_MEMORY_LIMIT: u64 = 4 << 30;
+
+    /// The most memory a renderer process may commit, on a machine of
+    /// `physical` bytes of memory (`None`: the system didn't say): half of
+    /// it, and [`LEAST_MEMORY_LIMIT`] at least. A page that runs away with
+    /// memory ends its renderer before it takes all the machine's (with a
+    /// pagefile, long after it would have it swapping), and a heavy one
+    /// still has room: the heaviest measured (a benchmark's) commit under
+    /// half a gigabyte. Chromium's renderer's limit is 1 TiB, which the
+    /// machine's own limit on what is committed comes before.
+    pub fn renderer_memory_limit(physical: Option<u64>) -> usize {
+        let half = physical.map_or(0, |physical| physical / 2);
+        usize::try_from(half.max(LEAST_MEMORY_LIMIT)).unwrap_or(usize::MAX)
+    }
+
     pub fn app_container(browser: u32, number: u64) -> String {
         format!("machopo.renderer.{browser}.{number}")
     }
@@ -1238,6 +1257,26 @@ mod tests {
     fn a_renderer_with_no_switches_is_sandboxed_with_the_systems_fonts() {
         assert_eq!(parsed(&[]), ChildSwitches::default());
         assert!(!parsed(&["--something-else"]).no_sandbox);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_renderer_may_commit_half_the_machines_memory_and_4_gib_at_least() {
+        const GIB: u64 = 1 << 30;
+        let limit = |physical| u64::try_from(windows::renderer_memory_limit(physical)).unwrap();
+        assert_eq!(limit(Some(64 * GIB)), 32 * GIB);
+        assert_eq!(limit(Some(16 * GIB)), 8 * GIB);
+        assert_eq!(limit(Some(8 * GIB)), 4 * GIB);
+        assert_eq!(limit(Some(2 * GIB)), 4 * GIB);
+        assert_eq!(limit(None), 4 * GIB);
+        // This machine's, which the system tells, and what a renderer is
+        // started with.
+        let physical = sunaba::windows::physical_memory();
+        assert!(physical.is_some_and(|physical| physical > GIB));
+        assert_eq!(
+            sandbox().and_then(|policy| policy.memory_limit()),
+            Some(windows::renderer_memory_limit(physical))
+        );
     }
 
     #[cfg(windows)]

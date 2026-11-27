@@ -162,7 +162,7 @@ if let Err(error) = sunaba::windows::lower() {
 
 The started process's output and errors are the starter's where those are a file or a pipe (`stderr` hands it another); its input is nothing. Where neither is, it is left to its console's.
 
-`Child` is the process: `id`, `kill`, `wait`, `try_wait`. One started under a policy ends when its `Child` is dropped.
+`Child` is the process: `id`, `kill`, `wait`, `try_wait`, `exceeded_memory_limit`. One started under a policy ends when its `Child` is dropped.
 
 ### The policy
 
@@ -170,7 +170,7 @@ The started process's output and errors are the starter's where those are a file
 
 - is in an **app container** with no capabilities, whose token is made from a **lockdown** restricted token (Chromium's `USER_LOCKDOWN`: every group only denies, and only what is granted to the null SID is granted): it opens no file, the user's or the system's (not `C:\Windows` or its fonts either), makes no socket (Winsock doesn't start), opens no other process and nothing another process under a policy made, and can't read its own token. What it makes is its user's and its app container's alone (the default DACL the system gives an app container's token);
 - has a first thread that starts with a token of the same app container's that may do what an app container may (Chromium's `USER_RESTRICTED_SAME_ACCESS`), until `lower` gives it back: the loader maps the DLLs the program starts with on that thread alone (the process's `LoaderThreads` is 1), since the lockdown token opens no DLL that isn't a known one;
-- is in a **job** of one process with every user interface restriction, which ends it when the job's handle closes or an exception goes unhandled;
+- is in a **job** of one process with every user interface restriction, which ends it when the job's handle closes or an exception goes unhandled, and, with `limit_memory(bytes)`, commits no more than that for it: what it asks for beyond is refused (an allocation fails, as when the machine has no more), and its `Child` says so once it has ended (`exceeded_memory_limit`, from the job's completion port; it may have gone on, and ended for another reason). Only committed memory counts, not what it reserves;
 - is on **another window station and desktop** (Chromium's alternate ones): the starter's first start under a policy makes them, and keeps them until it ends, for every later one. Their DACLs are the starter's token's default, which grants an app container nothing: a process that did reach win32k couldn't connect to them. The window station has no name, so it is the logon session's one; the desktop is named after the starter (`sunaba-<pid>`);
 - has, from its first instruction, Chromium's **mitigations** for a renderer: no calls into win32k, no file system control codes, no extension points, only DLLs Microsoft signed, only the system's fonts in the kernel, no DLL from another machine or from where a low-integrity process could write, no child processes, branch prediction kept to itself, no transaction manager, and DEP, SEHOP, heap termination and bottom-up ASLR.
 
@@ -184,13 +184,13 @@ From then on the process loads no DLL. A program linked to load some DLLs on fir
 
 ### Looking from outside
 
-`open(id)` and then `in_app_container`, `integrity`, `mitigation` and `running` say what a process is in, for the starter's tests of the real thing; `AccessToken::of` is its token's user, groups (which only deny), restricting SIDs, app container and default DACL. `environment(id)` is a process's environment as it is now, by its PEB (64-bit processes): what its starter gave it, less what the process removed since; `loader_threads(id)` is how many threads its loader was told to use; `desktop(id)` is the window station and desktop it was started on (`station\desktop`); `None` for one that has ended or can't be read. `alternate_desktop_name()` is the starter's own: the window station and desktop it starts processes under a policy on, once it has started one.
+`open(id)` and then `in_app_container`, `integrity`, `mitigation` and `running` say what a process is in, for the starter's tests of the real thing; `AccessToken::of` is its token's user, groups (which only deny), restricting SIDs, app container and default DACL. `environment(id)` is a process's environment as it is now, by its PEB (64-bit processes): what its starter gave it, less what the process removed since; `loader_threads(id)` is how many threads its loader was told to use; `desktop(id)` is the window station and desktop it was started on (`station\desktop`); `None` for one that has ended or can't be read. `physical_memory()` is how much the machine has, for a starter's limit. `alternate_desktop_name()` is the starter's own: the window station and desktop it starts processes under a policy on, once it has started one.
 
 The crate calls `user32.dll` in the starter, to make those. A program that links the crate and is itself started under a policy is to load `user32.dll` on first use (`/DELAYLOAD`), as `sunaba_probe` does (`build.rs`), or it doesn't start with win32k's calls turned off.
 
 ### Testing a policy
 
-`sunaba::windows::probe::attempt_and_exit(arguments)` is the started process's `main` after `lower`: it tries the one thing its arguments say (read, list, write, remove or stat a path; a TCP connection or a listener; a program; another process; whether a number is a handle; its own integrity level, container and mitigations; any of these on a new thread) and prints `ok N` or `error CODE`.
+`sunaba::windows::probe::attempt_and_exit(arguments)` is the started process's `main` after `lower`: it tries the one thing its arguments say (read, list, write, remove or stat a path; a TCP connection or a listener; a program; another process; whether a number is a handle; committing memory; its own integrity level, container and mitigations; any of these on a new thread) and prints `ok N` or `error CODE`.
 
 The crate's own tests (`tests/it/windows.rs`) run `sunaba_probe`, which starts itself under the whole policy, less what its arguments say:
 

@@ -263,6 +263,27 @@ fn a_process_under_the_policy_is_on_a_desktop_its_starter_made() {
     }
 }
 
+/// What the probe says once the process it started has ended, if it
+/// asked for more memory than its limit.
+const ASKED_FOR_MORE: &str = "asked for more memory than its limit";
+
+#[test]
+fn a_process_with_a_memory_limit_is_refused_more_and_its_starter_told() {
+    // Refused, as an allocation fails when the machine has no more: the
+    // process goes on (it reports the failure), and its starter is told.
+    let (outcome, said) = probe(&["--memory-limit", "64"], &["allocate", "256"]);
+    assert_eq!(outcome, Outcome::Error(8));
+    assert!(said.contains(ASKED_FOR_MORE), "{said}");
+    // Less than the limit is given, and nothing is told.
+    let (outcome, said) = probe(&["--memory-limit", "64"], &["allocate", "16"]);
+    assert_eq!(outcome, Outcome::Ok(16));
+    assert!(!said.contains(ASKED_FOR_MORE), "{said}");
+    // With no limit, the machine's.
+    let (outcome, said) = probe(&[], &["allocate", "256"]);
+    assert_eq!(outcome, Outcome::Ok(256));
+    assert!(!said.contains(ASKED_FOR_MORE), "{said}");
+}
+
 #[test]
 fn lowering_isnt_only_for_a_process_in_a_sandbox() {
     // A process as its starter can lower its integrity too; it is then

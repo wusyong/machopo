@@ -51,12 +51,15 @@ use windows_sys::Win32::System::StationsAndDesktops::{
     DESKTOP_READOBJECTS, GetProcessWindowStation, GetUserObjectInformationW, HWINSTA,
     SetProcessWindowStation, UOI_NAME,
 };
+use windows_sys::Win32::System::IO::{CreateIoCompletionPort, GetQueuedCompletionStatus};
 use windows_sys::Win32::System::JobObjects::{
     CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS, JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION,
-    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_BASIC_UI_RESTRICTIONS,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectBasicUIRestrictions,
-    JobObjectExtendedLimitInformation, SetInformationJobObject,
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_PROCESS_MEMORY,
+    JOBOBJECT_ASSOCIATE_COMPLETION_PORT, JOBOBJECT_BASIC_UI_RESTRICTIONS,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectAssociateCompletionPortInformation,
+    JobObjectBasicUIRestrictions, JobObjectExtendedLimitInformation, SetInformationJobObject,
 };
+use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 use windows_sys::Win32::System::Threading::{
     CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW, CreateProcessW,
     DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess,
@@ -78,6 +81,9 @@ const SE_GROUP_INTEGRITY: u32 = 0x20;
 const SE_GROUP_USE_FOR_DENY_ONLY: u32 = 0x10;
 /// A group's attributes: it is the logon session's.
 const SE_GROUP_LOGON_ID: u32 = 0xC000_0000;
+/// What a job's completion port is told when a process of the job's asks
+/// for more memory than its limit lets it commit.
+const JOB_OBJECT_MSG_PROCESS_MEMORY_LIMIT: u32 = 9;
 /// A window station's right to have desktops made on it.
 const WINSTA_CREATEDESKTOP: u32 = 0x8;
 /// An object's right to have its security descriptor read.
@@ -243,6 +249,7 @@ pub struct Policy {
     app_container: String,
     win32k: bool,
     third_party_modules: bool,
+    memory_limit: Option<usize>,
 }
 
 impl Policy {
@@ -253,6 +260,7 @@ impl Policy {
             app_container: app_container.into(),
             win32k: false,
             third_party_modules: false,
+            memory_limit: None,
         }
     }
 
@@ -270,6 +278,21 @@ impl Policy {
     pub fn allow_third_party_modules(&mut self) -> &mut Self {
         self.third_party_modules = true;
         self
+    }
+
+    /// The process commits at most `bytes` of memory (the job's
+    /// `ProcessMemoryLimit`): what it asks for beyond that it isn't given,
+    /// as when the machine has no more, and its [`Child`] says it asked
+    /// ([`Child::exceeded_memory_limit`]). Memory it only reserves isn't
+    /// counted. With none, it commits what the machine lets it.
+    pub fn limit_memory(&mut self, bytes: usize) -> &mut Self {
+        self.memory_limit = Some(bytes);
+        self
+    }
+
+    /// The most the process may commit, if [`Self::limit_memory`] said.
+    pub fn memory_limit(&self) -> Option<usize> {
+        self.memory_limit
     }
 
     /// The two words of `PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY`.
@@ -452,9 +475,12 @@ impl Command {
             Some(policy) if !policy.win32k => Some(alternate_desktop()?),
             _ => None,
         };
-        let job = match policy {
-            Some(_) => Some(lockdown_job()?),
-            None => None,
+        let (job, port) = match policy {
+            Some(policy) => {
+                let (job, port) = lockdown_job(policy.memory_limit)?;
+                (Some(job), port)
+            }
+            None => (None, None),
         };
         let jobs: Vec<HANDLE> = job.iter().map(|job| job.as_raw_handle()).collect();
         let mitigations = policy.map(Policy::creation_mitigations);
@@ -557,6 +583,8 @@ impl Command {
             process,
             id: made.dwProcessId,
             job,
+            port,
+            exceeded_memory_limit: false,
         })
     }
 }
@@ -994,8 +1022,12 @@ fn one_loader_thread(_process: &OwnedHandle) -> Result<(), Error> {
 
 /// A job of one process that ends it when the job's handle closes or an
 /// exception goes unhandled, with every user interface restriction
-/// (Chromium's `JobLevel::kLockdown`).
-fn lockdown_job() -> Result<OwnedHandle, Error> {
+/// (Chromium's `JobLevel::kLockdown`), and that commits at most
+/// `memory_limit`, when there is one. A job with a limit has a completion
+/// port, which is told when the process asks for more: nothing waits on
+/// it, and what it was told is read once the process has ended
+/// ([`Child::exceeded_memory_limit`]).
+fn lockdown_job(memory_limit: Option<usize>) -> Result<(OwnedHandle, Option<OwnedHandle>), Error> {
     // SAFETY: no attributes (so it isn't inherited) and no name.
     let job = unsafe { CreateJobObjectW(null(), null()) };
     check("CreateJobObjectW", !job.is_null())?;
@@ -1005,6 +1037,10 @@ fn lockdown_job() -> Result<OwnedHandle, Error> {
         | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
         | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
     limits.BasicLimitInformation.ActiveProcessLimit = 1;
+    if let Some(limit) = memory_limit {
+        limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_PROCESS_MEMORY;
+        limits.ProcessMemoryLimit = limit;
+    }
     let ui = JOBOBJECT_BASIC_UI_RESTRICTIONS {
         UIRestrictionsClass: UI_RESTRICTIONS,
     };
@@ -1029,7 +1065,39 @@ fn lockdown_job() -> Result<OwnedHandle, Error> {
         )
     };
     check("SetInformationJobObject", limited != 0 && restricted != 0)?;
-    Ok(job)
+    let port = match memory_limit {
+        Some(_) => Some(completion_port(&job)?),
+        None => None,
+    };
+    Ok((job, port))
+}
+
+/// A completion port that `job` tells of what its processes do. It is
+/// told before any process is in the job, so it hears of all of them.
+fn completion_port(job: &OwnedHandle) -> Result<OwnedHandle, Error> {
+    // SAFETY: no file, so a new port; no key; one thread, which no thread
+    // ever is.
+    let port = unsafe { CreateIoCompletionPort(INVALID_HANDLE_VALUE, null_mut(), 0, 1) };
+    check("CreateIoCompletionPort", !port.is_null())?;
+    let port = owned(port);
+    let association = JOBOBJECT_ASSOCIATE_COMPLETION_PORT {
+        CompletionKey: job.as_raw_handle(),
+        CompletionPort: port.as_raw_handle(),
+    };
+    let length = size32("the job's port", size_of_val(&association))?;
+    // SAFETY: the job and the port are open; the structure is the one
+    // the class reads, as long as said and alive for the call. The key is
+    // only ever given back, never followed.
+    let associated = unsafe {
+        SetInformationJobObject(
+            job.as_raw_handle(),
+            JobObjectAssociateCompletionPortInformation,
+            (&raw const association).cast(),
+            length,
+        )
+    };
+    check("SetInformationJobObject", associated != 0)?;
+    Ok(port)
 }
 
 /// The window station and desktop a process under a policy is started on
@@ -1159,6 +1227,10 @@ pub struct Child {
     process: OwnedHandle,
     id: u32,
     job: Option<OwnedHandle>,
+    /// The job's completion port, when the process's memory is limited.
+    port: Option<OwnedHandle>,
+    /// Its port has said so.
+    exceeded_memory_limit: bool,
 }
 
 impl Child {
@@ -1169,6 +1241,42 @@ impl Child {
     /// Whether the process is in a job that ends it with this value.
     pub fn ends_with_this(&self) -> bool {
         self.job.is_some()
+    }
+
+    /// Whether the process has asked for more memory than its policy's
+    /// limit lets it commit ([`Policy::limit_memory`]), as far as its job
+    /// has said: what the job said by the time the process ended is all
+    /// said once it has. It may have gone on after it was refused (a
+    /// program that takes a failed allocation in its stride), and ended
+    /// for another reason. `false` for a process whose memory isn't
+    /// limited.
+    pub fn exceeded_memory_limit(&mut self) -> bool {
+        let Some(port) = &self.port else {
+            return false;
+        };
+        loop {
+            let mut message = 0;
+            let mut key = 0;
+            let mut process = null_mut();
+            // SAFETY: the port is open; the three are written; no wait.
+            let got = unsafe {
+                GetQueuedCompletionStatus(
+                    port.as_raw_handle(),
+                    &raw mut message,
+                    &raw mut key,
+                    &raw mut process,
+                    0,
+                )
+            };
+            // Nothing more to read: a job's messages are never failures.
+            if got == 0 {
+                break;
+            }
+            if message == JOB_OBJECT_MSG_PROCESS_MEMORY_LIMIT {
+                self.exceeded_memory_limit = true;
+            }
+        }
+        self.exceeded_memory_limit
     }
 
     /// Ends the process, which is not to be confused with its having
@@ -1227,6 +1335,19 @@ unsafe extern "system" {
     /// `rand_s` calls, and V8 with it.
     #[link_name = "SystemFunction036"]
     fn RtlGenRandom(buffer: *mut c_void, length: u32) -> u8;
+}
+
+/// How much physical memory the machine has, in bytes, by the system's
+/// account; `None` if it gives none.
+pub fn physical_memory() -> Option<u64> {
+    let mut status = MEMORYSTATUSEX {
+        dwLength: u32::try_from(size_of::<MEMORYSTATUSEX>()).ok()?,
+        ..MEMORYSTATUSEX::default()
+    };
+    // SAFETY: the structure is as long as its first field says, and is
+    // written.
+    let read = unsafe { GlobalMemoryStatusEx(&raw mut status) };
+    (read != 0).then_some(status.ullTotalPhys)
 }
 
 /// Whether this process has lowered itself: a DLL it loads from then on

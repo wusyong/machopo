@@ -157,6 +157,18 @@ fn attempt(arguments: &[String]) -> std::io::Result<usize> {
         }
         // Ends the process as a program that gives up does.
         ["abort"] => std::process::abort(),
+        // Commits that many MiB, and gives them back: a refusal is
+        // `ERROR_NOT_ENOUGH_MEMORY`, and the process goes on.
+        ["allocate", megabytes] => {
+            let megabytes: usize = megabytes.parse().map_err(|_| invalid())?;
+            let bytes = megabytes.checked_mul(1 << 20).ok_or_else(invalid)?;
+            let mut memory: Vec<u8> = Vec::new();
+            memory
+                .try_reserve_exact(bytes)
+                .map_err(|_| std::io::Error::from_raw_os_error(8))?;
+            memory.resize(bytes, 1);
+            Ok(megabytes)
+        }
         _ => Err(invalid()),
     }
 }

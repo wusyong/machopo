@@ -889,8 +889,9 @@ impl WebContents {
     }
 
     /// How the tab's renderer process ended, if it has: what the system
-    /// says of it (an exit code, or the signal that ended it).
-    pub fn renderer_exit(&self) -> Option<std::process::ExitStatus> {
+    /// says of it (an exit code, or the signal that ended it), and whether
+    /// it ran out of the memory its sandbox lets it have.
+    pub fn renderer_exit(&self) -> Option<crate::ChildProcessTerminationInfo> {
         self.process.exit()
     }
 

@@ -196,7 +196,7 @@ pub struct RenderProcessHost {
     /// its channel.
     child: Option<(ipc::platform::Child, ChannelLink)>,
     /// How the process ended, once it has.
-    exit: Option<std::process::ExitStatus>,
+    exit: Option<ChildProcessTerminationInfo>,
     /// A renderer with nothing at the other end: what handles the messages
     /// handed in for it, and the queues the browser's messages wait in.
     detached: Option<(IoThreadHost, renderer::RendererReceiver)>,
@@ -586,7 +586,7 @@ impl RenderProcessHost {
     pub fn kill(&mut self) {
         self.forwarding.store(false, Ordering::Release);
         match self.child.take() {
-            Some((child, link)) => self.exit = end_child(child, &link, None).status,
+            Some((child, link)) => self.exit = Some(end_child(child, &link, None).info),
             None => self.send(RendererMsg::Shutdown),
         }
     }
@@ -598,7 +598,7 @@ impl RenderProcessHost {
     /// and is killed.
     pub(crate) fn ended(&mut self) {
         if let Some((child, link)) = self.child.take() {
-            self.exit = end_child(child, &link, Some(GONE_EXIT_WAIT)).status;
+            self.exit = Some(end_child(child, &link, Some(GONE_EXIT_WAIT)).info);
         }
     }
 
@@ -615,13 +615,12 @@ impl RenderProcessHost {
         };
         self.forwarding.store(false, Ordering::Release);
         self.send(RendererMsg::Crash);
-        self.exit = end_child(child, &link, Some(CRASH_WAIT)).status;
+        self.exit = Some(end_child(child, &link, Some(CRASH_WAIT)).info);
         true
     }
 
-    /// How the renderer's process ended, if it has (Chromium's
-    /// `ChildProcessTerminationInfo`): what the system says of it.
-    pub(crate) fn exit(&self) -> Option<std::process::ExitStatus> {
+    /// How the renderer's process ended, if it has.
+    pub(crate) fn exit(&self) -> Option<ChildProcessTerminationInfo> {
         self.exit
     }
 
@@ -779,6 +778,21 @@ impl RenderProcessHost {
     }
 }
 
+/// How a renderer's process ended (Chromium's
+/// `ChildProcessTerminationInfo`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChildProcessTerminationInfo {
+    /// What the system says of it: its exit code, or the signal that
+    /// ended it. `None` where that couldn't be read.
+    pub status: Option<std::process::ExitStatus>,
+    /// It asked for more memory than its sandbox lets it commit (Chromium's
+    /// `TERMINATION_STATUS_OOM`), whatever it ended with: the limit makes
+    /// an allocation fail, and a process may end of that in several ways,
+    /// or take it in its stride and end later for another reason. Only a
+    /// sandbox that limits memory says so (Windows's).
+    pub out_of_memory: bool,
+}
+
 /// What [`RenderProcessHost::wait_for_shutdown`] gave up on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GaveUp {
@@ -811,8 +825,7 @@ const GONE_EXIT_WAIT: std::time::Duration = std::time::Duration::from_millis(200
 
 /// How [`end_child`] ended a process.
 struct ChildEnd {
-    /// What the system says of it.
-    status: Option<std::process::ExitStatus>,
+    info: ChildProcessTerminationInfo,
     /// It didn't exit by itself in time, and was killed.
     killed: bool,
 }
@@ -843,16 +856,25 @@ fn end_child(
         let _ = child.kill();
         child.wait().ok()
     };
+    // What its job said by the time it ended, all of it now.
+    #[cfg(windows)]
+    let out_of_memory = child.exceeded_memory_limit();
+    #[cfg(not(windows))]
+    let out_of_memory = false;
     tracing::info!(
         pid = child.id(),
         ?status,
         killed = !exited,
+        out_of_memory,
         "a renderer process ended"
     );
     link.close();
     ipc::platform::child_gone(child.id());
     ChildEnd {
-        status,
+        info: ChildProcessTerminationInfo {
+            status,
+            out_of_memory,
+        },
         killed: !exited,
     }
 }

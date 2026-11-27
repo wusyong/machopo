@@ -1711,9 +1711,8 @@ impl BrowserView {
             .map(|view| {
                 let exit = self
                     .contents(view.contents)
-                    .and_then(WebContents::renderer_exit)
-                    .and_then(|status| status.code());
-                (view.bounds, view.radius, sad_tab::Reason::of_exit(exit))
+                    .and_then(WebContents::renderer_exit);
+                (view.bounds, view.radius, sad_tab::Reason::of(exit))
             })
             .collect();
         let popup_dirty = std::mem::take(&mut self.popup_dirty);

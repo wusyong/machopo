@@ -11,7 +11,7 @@
 | 1b. 測試（斷言舊行為的改過來）、mutation test、第 1 段的檢查和文件 | 做完 | 2026-11-27 |
 | 2 之前. 探測（`details.md` 的「探測：desktop 和記憶體上限（第 2 段之前）」）、第 2 段的決定（已決定的事項第 6 到 9 條） | 做完 | 2026-11-27 |
 | 2a. desktop：`sunaba` 第一次照 policy 啟動時建 window station 和它上面的 desktop、之後的都用它（允許 win32k 的不用）；從外面讀 `DesktopInfo`（`desktop`）；`sunaba_probe` 延後載入 `user32`；測試 | 做完 | 2026-11-27 |
-| 2b. job 的記憶體上限（實體記憶體的一半，最少 4 GB）、job 的 completion port、Browser 存的結束帶「碰過記憶體上限」、sad tab 的「記憶體不夠」；測試 | 還沒開始 | |
+| 2b. job 的記憶體上限（實體記憶體的一半，最少 4 GB）、job 的 completion port、Browser 存的結束帶「碰過記憶體上限」、sad tab 的「記憶體不夠」；測試 | 做完 | 2026-11-27 |
 | 2c. V8 的 OOM：`bindings` 設 `set_oom_error_handler`、固定的結束碼、sad tab 對到「記憶體不夠」（三個平台）；測試 | 還沒開始 | |
 | 2d. 第 2 段的檢查和文件 | 還沒開始 | |
 | 3. 探測的三件（handle、CSRSS、shim） | 還沒開始 | |
@@ -57,3 +57,11 @@
 - **Mutation test**（`mutants-2a.toml`，9 個，`--keep-going`）：都抓到：不給 `lpDesktop`（`sunaba` 的和 machopo 的 renderer 各一次）、允許 win32k 的也放上去、不換回 starter 的 window station、不存起來給下一次、desktop 的名字不帶 PID、`alternate_desktop_name` 說沒有、`DesktopInfo` 讀錯位置、讀成它的最大長度。跑完確認 `windows.rs` 都還原了。
 - **補不了測試的**：另一個 desktop 的 DACL 擋住連上 win32k 的 process（`sunaba` 不把允許 win32k 的 process 放上去，沒有 process 是兩者都有的；探測時看過）：記進 `docs/test-gaps.md` 的「只做過手動確認」。
 - **跑過的檢查**：`cargo test -p sunaba -p ipc -p shell`（`sunaba` 的 unit test 8 個、整合測試 26 個，`shell` 的整合測試 755 個，都通過）；`sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs（都通過）。`cargo test --workspace`、fmt 和 clippy 等第 2 段做完時跑。
+
+### 2b（2026-11-27，同一台）
+
+- **做法**：`sunaba` 的 `Policy::limit_memory` 讓 job 帶 `JOB_OBJECT_LIMIT_PROCESS_MEMORY`（每個 process 能 commit 的上限），有上限時 job 接一個 completion port；`Child::exceeded_memory_limit` 把 port 上的通知收完（不等），看過 `JOB_OBJECT_MSG_PROCESS_MEMORY_LIMIT` 就記住。`browser` 存的 renderer 的結束從 `ExitStatus` 改成 `ChildProcessTerminationInfo`（結束碼和「碰過上限」），在 process 結束之後問。`shell` 的 renderer 的上限是實體記憶體的一半、最少 4 GB（`physical_memory` 讀 `GlobalMemoryStatusEx`），sad tab 多一種「記憶體不夠」，碰過上限的不管結束碼是什麼都說是它。
+- **新的測試**：`sunaba` 的整合測試 1 個（64 MB 的上限底下要 256 MB 被拒、starter 被告知；16 MB 的照常拿到、沒有告知；沒有上限的拿得到 256 MB；`sunaba_probe` 多了 `allocate` 的嘗試和 `--memory-limit`）；`browser` 的整合測試 1 個（256 MiB 的上限底下一直要記憶體的 renderer 結束時帶「碰過上限」，同樣上限的 `about:crash` 不帶）；`shell` 的 unit test 2 個（上限的算法和 renderer 的 policy 帶著它；sad tab 照「碰過上限」說，不管結束碼）。
+- **Mutation test**（`mutants-2b.toml`，10 個，`--keep-going`）：抓到 9 個：job 不設上限、有上限的 job 沒有 port、每則通知都當成碰到上限、只讀第一則通知、Browser 不問、sad tab 不看「碰過上限」、renderer 不設上限、上限是全部的實體記憶體、上限是最多 4 GB。沒抓到 1 個：`browser_view` 只把結束碼交給 sad tab（`shell` 沒有讓分頁的 renderer 碰到上限的測試）：記進 `docs/test-gaps.md` 的「只靠審查」。跑完確認改過的檔案都還原了。
+- **一次失敗的整套**：第一次跑 `shell` 的整合測試時，`automation_pipe` 的 12 個在同一刻等滿 30 秒逾時（`machopo answers`），其他 743 個通過；那時這台機器正在跑 VR 遊戲（VR 的 compositor 佔住 GPU），這幾個測試每一格都等 wgpu。單獨跑、只跑 `automation_pipe::`、再跑整套兩次（一次在重新 link 之後，排除剛 link 的執行檔被掃描）都通過。GPU 被別的程式佔住時，碰 GPU 的測試的結果不能用。
+- **跑過的檢查**：`cargo test -p sunaba -p ipc -p browser -p shell`（`shell` 的整合測試 755 個，和其他的都通過，除了上面那一次）；`sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs（都通過）。`cargo test --workspace`、fmt 和 clippy 等第 2 段做完時跑。
