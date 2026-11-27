@@ -239,6 +239,130 @@ impl CompositorFrame {
     }
 }
 
+/// The most quads a frame may draw, in all its render passes. Viz puts a
+/// frame's vertices in one buffer (six of 80 bytes a quad: 120 MiB, under
+/// the 256 MiB a buffer may have on any device it takes) and draws every
+/// client's frames on one thread: a frame of millions would hold up every
+/// tab's. A page's compositor draws a quad a visible tile, a few thousand
+/// at most, and draws no more than this (it leaves the rest out).
+pub const MAX_QUADS: usize = 1 << 18;
+
+/// The most render passes a frame may have (Viz draws the last).
+pub const MAX_RENDER_PASSES: usize = 1024;
+
+/// What makes a client's message to Viz wrong whatever Viz holds (Chromium's
+/// checks as the mojo traits read a `CompositorFrame`, and as
+/// `SharedImageStub` validates a shared image's pixels): the client's bad
+/// message. What depends on Viz (a shared image it no longer has after a
+/// lost device, a sink no longer registered) isn't one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidFrameSinkMsg {
+    /// A frame without a render pass.
+    NoRenderPass,
+    /// A frame whose root pass draws nothing: an output that is empty, or
+    /// no rect at all (NaN).
+    EmptyOutput,
+    /// More than [`MAX_RENDER_PASSES`].
+    TooManyRenderPasses,
+    /// More than [`MAX_QUADS`] in all the passes.
+    TooManyQuads,
+    /// More shared quad states than [`MAX_QUADS`] and one (a layer's clip
+    /// is a state, whether any of its tiles is drawn or not).
+    TooManySharedQuadStates,
+    /// A quad of a shared quad state its pass hasn't.
+    SharedQuadStateOutOfRange,
+    /// A quad of a resource its frame hasn't.
+    UnknownResource,
+    /// Two resources of one id.
+    DuplicateResource,
+    /// A resource's pixels that aren't those of a texture of its size Viz
+    /// can make, or pixels besides its shared image.
+    ResourcePixels,
+    /// A surface embedded by a client that may embed none (a renderer's
+    /// compositor embeds no other's).
+    EmbedsSurface,
+    /// A `CreateSharedImage` of no size, or pixels that aren't those of a
+    /// texture of its size Viz can make.
+    SharedImagePixels,
+}
+
+/// Whether `pixels` bytes are the pixels of an RGBA8 texture of `size`
+/// Viz can make: no side past [`MAX_TEXTURE_SIZE`], and as many as the
+/// size has (Chromium's `CheckedNumeric` size of a shared bitmap).
+pub fn pixels_fit(size: Size, pixels: usize) -> bool {
+    size.width <= MAX_TEXTURE_SIZE
+        && size.height <= MAX_TEXTURE_SIZE
+        && size.checked_byte_size() == Some(pixels)
+}
+
+impl CompositorFrame {
+    /// Whether the frame can be right, from a client that `may_embed`
+    /// others' surfaces (the browser's own UI) or not (a renderer's).
+    /// Coordinates of NaN or infinity are not checked: they draw nothing,
+    /// and wgpu takes them (vertices aren't validated).
+    pub fn check(&self, may_embed: bool) -> Result<(), InvalidFrameSinkMsg> {
+        let Some(root) = self.root_pass() else {
+            return Err(InvalidFrameSinkMsg::NoRenderPass);
+        };
+        if !(root.output_rect.width > 0.0 && root.output_rect.height > 0.0) {
+            return Err(InvalidFrameSinkMsg::EmptyOutput);
+        }
+        if self.render_pass_list.len() > MAX_RENDER_PASSES {
+            return Err(InvalidFrameSinkMsg::TooManyRenderPasses);
+        }
+        let (mut quads, mut states) = (0_usize, 0_usize);
+        for pass in &self.render_pass_list {
+            quads = quads.saturating_add(pass.quad_list.len());
+            states = states.saturating_add(pass.shared_quad_state_list.len());
+        }
+        if quads > MAX_QUADS {
+            return Err(InvalidFrameSinkMsg::TooManyQuads);
+        }
+        if states > MAX_QUADS.saturating_add(1) {
+            return Err(InvalidFrameSinkMsg::TooManySharedQuadStates);
+        }
+        let mut resources = std::collections::HashSet::with_capacity(self.resource_list.len());
+        for resource in &self.resource_list {
+            if !resources.insert(resource.id) {
+                return Err(InvalidFrameSinkMsg::DuplicateResource);
+            }
+            let fits = match resource.shared_image {
+                // Its size is what the quads sample in.
+                Some(_) => {
+                    resource.pixels.is_empty()
+                        && resource.size.width <= MAX_TEXTURE_SIZE
+                        && resource.size.height <= MAX_TEXTURE_SIZE
+                }
+                None => pixels_fit(resource.size, resource.pixels.len()),
+            };
+            if !fits {
+                return Err(InvalidFrameSinkMsg::ResourcePixels);
+            }
+        }
+        for pass in &self.render_pass_list {
+            for quad in &pass.quad_list {
+                if quad.shared_quad_state >= pass.shared_quad_state_list.len() {
+                    return Err(InvalidFrameSinkMsg::SharedQuadStateOutOfRange);
+                }
+                match quad.material {
+                    Material::SolidColor { .. } => {}
+                    Material::Texture { resource_id, .. } => {
+                        if !resources.contains(&resource_id) {
+                            return Err(InvalidFrameSinkMsg::UnknownResource);
+                        }
+                    }
+                    Material::Surface { .. } => {
+                        if !may_embed {
+                            return Err(InvalidFrameSinkMsg::EmbedsSurface);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Client -> Viz (`viz.mojom.CompositorFrameSink`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CompositorFrameSinkMsg {
@@ -275,6 +399,30 @@ pub enum CompositorFrameSinkMsg {
     /// (`DestroySharedImage`). Viz lets its texture go once no frame it
     /// holds draws it.
     DestroySharedImage { mailbox: Mailbox },
+}
+
+/// Whether a `CreateSharedImage` of `size` and `bytes` of pixels can be
+/// right: some size, and the pixels of it ([`pixels_fit`]).
+pub fn check_shared_image(size: Size, bytes: usize) -> Result<(), InvalidFrameSinkMsg> {
+    if size.is_empty() || !pixels_fit(size, bytes) {
+        Err(InvalidFrameSinkMsg::SharedImagePixels)
+    } else {
+        Ok(())
+    }
+}
+
+impl CompositorFrameSinkMsg {
+    /// Whether the message can be right, from a client that `may_embed`
+    /// others' surfaces or not ([`CompositorFrame::check`]).
+    pub fn check(&self, may_embed: bool) -> Result<(), InvalidFrameSinkMsg> {
+        match self {
+            Self::SubmitCompositorFrame { frame, .. } => frame.check(may_embed),
+            Self::CreateSharedImage { size, pixels, .. } => check_shared_image(*size, pixels.len()),
+            Self::SetNeedsBeginFrame(_)
+            | Self::DidNotProduceFrame
+            | Self::DestroySharedImage { .. } => Ok(()),
+        }
+    }
 }
 
 /// `viz::BeginFrameArgs`: a frame is due. Viz sends it to the clients that
@@ -495,6 +643,299 @@ pub struct VizGone;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn quad(shared_quad_state: usize, material: Material) -> DrawQuad {
+        DrawQuad {
+            rect: RectF::new(0.0, 0.0, 4.0, 4.0),
+            shared_quad_state,
+            material,
+        }
+    }
+
+    fn solid() -> Material {
+        Material::SolidColor {
+            color: Color::WHITE,
+        }
+    }
+
+    fn texture(id: u64) -> Material {
+        Material::Texture {
+            resource_id: ResourceId(id),
+            tex_coord_rect: RectF::new(0.0, 0.0, 2.0, 2.0),
+            nearest_neighbor: true,
+        }
+    }
+
+    fn resource(
+        id: u64,
+        size: Size,
+        bytes: usize,
+        shared_image: Option<u64>,
+    ) -> TransferableResource {
+        TransferableResource {
+            id: ResourceId(id),
+            size,
+            format: ResourceFormat::Rgba8Premul,
+            pixels: BigBuffer::from(vec![0; bytes]),
+            shared_image: shared_image.map(|m| SharedImage::from_mailbox(Mailbox(m))),
+        }
+    }
+
+    fn pass(states: usize, quads: Vec<DrawQuad>) -> CompositorRenderPass {
+        let area = RectF::new(0.0, 0.0, 8.0, 8.0);
+        CompositorRenderPass {
+            id: RenderPassId(1),
+            output_rect: area,
+            damage_rect: area,
+            shared_quad_state_list: vec![SharedQuadState::default(); states],
+            quad_list: quads,
+        }
+    }
+
+    /// What a page's compositor sends: tiles of shared images and of
+    /// pixels, a solid one, and a clipped layer with no tile drawn (its
+    /// state is there all the same).
+    fn page() -> CompositorFrame {
+        CompositorFrame {
+            metadata: CompositorFrameMetadata {
+                device_scale_factor: 2.0,
+                frame_token: 1,
+                root_background_color: Color::WHITE,
+            },
+            resource_list: vec![
+                resource(1, Size::new(2, 2), 0, Some(9)),
+                resource(2, Size::new(2, 2), 16, None),
+                // An empty layer's snapshot.
+                resource(3, Size::new(0, 3), 0, None),
+            ],
+            render_pass_list: vec![pass(
+                3,
+                vec![
+                    quad(0, texture(1)),
+                    quad(1, texture(2)),
+                    quad(1, texture(3)),
+                    quad(0, solid()),
+                ],
+            )],
+        }
+    }
+
+    #[track_caller]
+    fn refused(frame: &CompositorFrame, why: InvalidFrameSinkMsg) {
+        assert_eq!(frame.check(false), Err(why));
+        assert_eq!(frame.check(true), Err(why));
+    }
+
+    #[test]
+    fn a_pages_frame_can_be_right() {
+        assert_eq!(page().check(false), Ok(()));
+    }
+
+    /// The root pass's output is the frame's size: one without a pass,
+    /// or whose root draws no rect, can't be.
+    #[test]
+    fn a_frame_draws_somewhere() {
+        let mut frame = page();
+        frame.render_pass_list.clear();
+        refused(&frame, InvalidFrameSinkMsg::NoRenderPass);
+        for (width, height) in [
+            (0.0, 8.0),
+            (8.0, 0.0),
+            (-1.0, 8.0),
+            (f32::NAN, 8.0),
+            (8.0, f32::NAN),
+        ] {
+            let mut frame = page();
+            frame.render_pass_list[0].output_rect = RectF::new(0.0, 0.0, width, height);
+            refused(&frame, InvalidFrameSinkMsg::EmptyOutput);
+        }
+        // Only the root's counts: Viz draws only it.
+        let mut frame = page();
+        frame.render_pass_list.insert(0, pass(1, Vec::new()));
+        frame.render_pass_list[0].output_rect = RectF::default();
+        assert_eq!(frame.check(false), Ok(()));
+    }
+
+    #[test]
+    fn a_frame_has_so_many_passes_quads_and_states_at_most() {
+        let mut frame = page();
+        frame.render_pass_list = vec![pass(1, Vec::new()); MAX_RENDER_PASSES];
+        assert_eq!(frame.check(false), Ok(()));
+        frame.render_pass_list.push(pass(1, Vec::new()));
+        refused(&frame, InvalidFrameSinkMsg::TooManyRenderPasses);
+
+        // Quads of every pass, together.
+        let mut frame = page();
+        let others = MAX_QUADS - frame.render_pass_list[0].quad_list.len();
+        frame
+            .render_pass_list
+            .insert(0, pass(1, vec![quad(0, solid()); others]));
+        assert_eq!(frame.check(false), Ok(()));
+        frame.render_pass_list[1].quad_list.push(quad(0, solid()));
+        refused(&frame, InvalidFrameSinkMsg::TooManyQuads);
+
+        // States too, though no quad is of them.
+        let mut frame = page();
+        let others = MAX_QUADS + 1 - frame.render_pass_list[0].shared_quad_state_list.len();
+        frame.render_pass_list.insert(0, pass(others, Vec::new()));
+        assert_eq!(frame.check(false), Ok(()));
+        frame.render_pass_list[0]
+            .shared_quad_state_list
+            .push(SharedQuadState::default());
+        refused(&frame, InvalidFrameSinkMsg::TooManySharedQuadStates);
+    }
+
+    /// A quad's state and resource are its frame's: one of none it has
+    /// can't be right (they used to draw with the default state, and not
+    /// at all).
+    #[test]
+    fn a_quad_is_of_its_frames_state_and_resource() {
+        let mut frame = page();
+        frame.render_pass_list[0].quad_list[1].shared_quad_state = 3;
+        refused(&frame, InvalidFrameSinkMsg::SharedQuadStateOutOfRange);
+        frame.render_pass_list[0].quad_list[1].shared_quad_state = usize::MAX;
+        refused(&frame, InvalidFrameSinkMsg::SharedQuadStateOutOfRange);
+        // Each pass's own states.
+        let mut frame = page();
+        frame
+            .render_pass_list
+            .insert(0, pass(1, vec![quad(2, solid())]));
+        refused(&frame, InvalidFrameSinkMsg::SharedQuadStateOutOfRange);
+
+        let mut frame = page();
+        frame.render_pass_list[0].quad_list[0].material = texture(4);
+        refused(&frame, InvalidFrameSinkMsg::UnknownResource);
+
+        let mut frame = page();
+        frame
+            .resource_list
+            .push(resource(2, Size::new(1, 1), 4, None));
+        refused(&frame, InvalidFrameSinkMsg::DuplicateResource);
+    }
+
+    #[test]
+    fn a_resources_pixels_are_those_of_its_size() {
+        let wide = (MAX_TEXTURE_SIZE as usize + 1) * 4;
+        for bad in [
+            resource(2, Size::new(2, 2), 15, None),
+            resource(2, Size::new(2, 2), 17, None),
+            resource(2, Size::new(MAX_TEXTURE_SIZE + 1, 1), wide, None),
+            resource(2, Size::new(1, MAX_TEXTURE_SIZE + 1), wide, None),
+            // A shared image's are on the GPU: none come with it.
+            resource(1, Size::new(2, 2), 16, Some(9)),
+            resource(1, Size::new(MAX_TEXTURE_SIZE + 1, 1), 0, Some(9)),
+            resource(1, Size::new(1, MAX_TEXTURE_SIZE + 1), 0, Some(9)),
+        ] {
+            let mut frame = page();
+            let at = frame
+                .resource_list
+                .iter()
+                .position(|r| r.id == bad.id)
+                .unwrap();
+            frame.resource_list[at] = bad;
+            refused(&frame, InvalidFrameSinkMsg::ResourcePixels);
+        }
+        let mut frame = page();
+        frame.resource_list[1] = resource(
+            2,
+            Size::new(MAX_TEXTURE_SIZE, 1),
+            MAX_TEXTURE_SIZE as usize * 4,
+            None,
+        );
+        frame.resource_list[0] =
+            resource(1, Size::new(MAX_TEXTURE_SIZE, MAX_TEXTURE_SIZE), 0, Some(9));
+        assert_eq!(frame.check(false), Ok(()));
+    }
+
+    /// Only a client that may embed others' surfaces (the browser's UI)
+    /// sends a surface's quad: a renderer's compositor embeds none.
+    #[test]
+    fn only_a_client_that_may_embed_embeds() {
+        let mut frame = page();
+        frame.render_pass_list[0].quad_list.push(quad(
+            0,
+            Material::Surface {
+                surface_id: SurfaceId {
+                    frame_sink_id: FrameSinkId {
+                        client_id: 2,
+                        sink_id: 1,
+                    },
+                    local_surface_id: LocalSurfaceId::default(),
+                },
+                default_background_color: Color::WHITE,
+            },
+        ));
+        assert_eq!(frame.check(false), Err(InvalidFrameSinkMsg::EmbedsSurface));
+        assert_eq!(frame.check(true), Ok(()));
+    }
+
+    /// Coordinates aren't checked: NaN and infinity draw nothing, and
+    /// wgpu takes them.
+    #[test]
+    fn odd_coordinates_can_be_right() {
+        for odd in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, f32::MAX] {
+            let mut frame = page();
+            let pass = &mut frame.render_pass_list[0];
+            pass.quad_list[0].rect = RectF::new(odd, odd, odd, odd);
+            pass.shared_quad_state_list[1].clip_rect = Some(RectF::new(odd, 0.0, odd, 1.0));
+            pass.shared_quad_state_list[1].opacity = odd;
+            pass.damage_rect = RectF::new(odd, odd, odd, odd);
+            frame.metadata.device_scale_factor = odd;
+            assert_eq!(frame.check(false), Ok(()));
+        }
+    }
+
+    #[test]
+    fn a_shared_images_pixels_are_those_of_its_size() {
+        let wide = (MAX_TEXTURE_SIZE as usize + 1) * 4;
+        for (size, bytes) in [
+            (Size::new(0, 0), 0),
+            (Size::new(0, 4), 0),
+            (Size::new(2, 2), 15),
+            (Size::new(2, 2), 17),
+            (Size::new(MAX_TEXTURE_SIZE + 1, 1), wide),
+            (Size::new(1, MAX_TEXTURE_SIZE + 1), wide),
+        ] {
+            assert_eq!(
+                check_shared_image(size, bytes),
+                Err(InvalidFrameSinkMsg::SharedImagePixels),
+                "{size:?} {bytes}"
+            );
+        }
+        assert_eq!(check_shared_image(Size::new(2, 2), 16), Ok(()));
+        let widest = MAX_TEXTURE_SIZE as usize * 4;
+        assert_eq!(
+            check_shared_image(Size::new(MAX_TEXTURE_SIZE, 1), widest),
+            Ok(())
+        );
+    }
+
+    /// A message checks what it carries: a frame, or nothing.
+    #[test]
+    fn a_message_is_checked_for_what_it_carries() {
+        for fine in [
+            CompositorFrameSinkMsg::SetNeedsBeginFrame(true),
+            CompositorFrameSinkMsg::DidNotProduceFrame,
+            CompositorFrameSinkMsg::DestroySharedImage {
+                mailbox: Mailbox(1),
+            },
+        ] {
+            assert_eq!(fine.check(false), Ok(()));
+        }
+        let submitted = |frame| CompositorFrameSinkMsg::SubmitCompositorFrame {
+            local_surface_id: LocalSurfaceId::default(),
+            frame,
+        };
+        assert_eq!(submitted(page()).check(false), Ok(()));
+        let none = CompositorFrame {
+            render_pass_list: Vec::new(),
+            ..page()
+        };
+        assert_eq!(
+            submitted(none).check(true),
+            Err(InvalidFrameSinkMsg::NoRenderPass)
+        );
+    }
 
     /// What a client sends goes as its own sink's: it names no other.
     #[test]

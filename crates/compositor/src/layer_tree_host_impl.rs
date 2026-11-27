@@ -1481,7 +1481,8 @@ impl LayerTreeHostImpl {
             }
         }
         over.append(&mut quads);
-        let quads = over;
+        let mut quads = over;
+        fit_to_limits(&mut quads, &mut shared_quad_states);
         // What changed since the last frame drawn, where it is drawn now;
         // everything if anything moved.
         let drawn_at = (scroll, offsets);
@@ -1501,7 +1502,7 @@ impl LayerTreeHostImpl {
         self.damage = Damage::None;
         self.drawn_at = Some(drawn_at);
         let token = self.frame_tokens.get_next();
-        Some(CompositorFrame {
+        let frame = CompositorFrame {
             metadata: CompositorFrameMetadata {
                 device_scale_factor: tree.device_scale_factor,
                 frame_token: token,
@@ -1515,8 +1516,61 @@ impl LayerTreeHostImpl {
                 shared_quad_state_list: shared_quad_states,
                 quad_list: quads,
             }],
-        })
+        };
+        // What Viz takes: a frame that can't be right is the renderer's bad
+        // message, which ends it. Only the browser's own UI embeds others'
+        // surfaces.
+        debug_assert_eq!(frame.check(true), Ok(()));
+        debug_assert!(
+            frame.render_pass_list.iter().all(drawn_where_it_is),
+            "a quad or clip nowhere: {frame:?}"
+        );
+        Some(frame)
     }
+}
+
+/// Keeps a frame's quads (front to back) and their states within what Viz
+/// takes ([`protocol::viz::MAX_QUADS`]): the ones furthest back are left
+/// out (Chromium has no such limit: it draws no quads of one buffer), and
+/// a state no quad left is of goes, so there are no more of them than
+/// quads, and one.
+fn fit_to_limits(quads: &mut Vec<DrawQuad>, states: &mut Vec<SharedQuadState>) {
+    use protocol::viz::MAX_QUADS;
+    if quads.len() <= MAX_QUADS && states.len() <= MAX_QUADS.saturating_add(1) {
+        return;
+    }
+    tracing::warn!(
+        quads = quads.len(),
+        states = states.len(),
+        "compositor: more quads than Viz takes: the ones furthest back are left out"
+    );
+    quads.truncate(MAX_QUADS);
+    let mut kept: Vec<SharedQuadState> = vec![SharedQuadState::default()];
+    let mut moved = HashMap::new();
+    for quad in quads.iter_mut() {
+        let at = *moved.entry(quad.shared_quad_state).or_insert_with(|| {
+            kept.push(
+                states
+                    .get(quad.shared_quad_state)
+                    .copied()
+                    .unwrap_or_default(),
+            );
+            kept.len().saturating_sub(1)
+        });
+        quad.shared_quad_state = at;
+    }
+    *states = kept;
+}
+
+/// Whether every quad and clip of `pass` is somewhere: none of NaN or of
+/// infinity (Viz takes them, and draws nothing of them).
+fn drawn_where_it_is(pass: &CompositorRenderPass) -> bool {
+    let finite = |r: &RectF| [r.x, r.y, r.width, r.height].iter().all(|v| v.is_finite());
+    pass.quad_list.iter().all(|q| finite(&q.rect))
+        && pass
+            .shared_quad_state_list
+            .iter()
+            .all(|s| s.clip_rect.as_ref().is_none_or(finite) && s.opacity.is_finite())
 }
 
 fn sub(a: PointF, b: PointF) -> PointF {
@@ -1540,6 +1594,82 @@ mod tests {
 
     use super::{LayerImpl, TileDrawInfo};
     use crate::fake_gpu::FakeGpu;
+
+    /// More quads than Viz takes: the ones furthest back (last) are left
+    /// out, and the states no quad left is of, and what is left is a frame
+    /// Viz takes, each quad with the state it had.
+    #[test]
+    fn a_frame_keeps_within_what_viz_takes() {
+        use protocol::viz::{
+            CompositorFrameMetadata, CompositorRenderPass, DrawQuad, MAX_QUADS, RenderPassId,
+            SharedQuadState,
+        };
+        let state = |x: f32| SharedQuadState {
+            clip_rect: Some(RectF::new(x, 0.0, 1.0, 1.0)),
+            ..SharedQuadState::default()
+        };
+        // Clipped layers of no quads, then as many quads as Viz takes and
+        // ten more, in turn of two states.
+        let mut states: Vec<_> = (0..MAX_QUADS + 5).map(|i| state(i as f32)).collect();
+        let (a, b) = (MAX_QUADS + 3, MAX_QUADS + 4);
+        let mut quads: Vec<_> = (0..MAX_QUADS + 10)
+            .map(|i| DrawQuad {
+                rect: RectF::new(i as f32, 0.0, 1.0, 1.0),
+                shared_quad_state: if i % 2 == 0 { a } else { b },
+                material: Material::SolidColor {
+                    color: Color::WHITE,
+                },
+            })
+            .collect();
+        let before = quads.clone();
+        let had = states.clone();
+        super::fit_to_limits(&mut quads, &mut states);
+        assert_eq!(quads.len(), MAX_QUADS);
+        for (kept, was) in quads.iter().zip(&before) {
+            assert_eq!(kept.rect, was.rect);
+            assert_eq!(states[kept.shared_quad_state], had[was.shared_quad_state]);
+        }
+        let area = RectF::new(0.0, 0.0, 8.0, 8.0);
+        let frame = CompositorFrame {
+            metadata: CompositorFrameMetadata {
+                device_scale_factor: 1.0,
+                frame_token: 1,
+                root_background_color: Color::WHITE,
+            },
+            resource_list: Vec::new(),
+            render_pass_list: vec![CompositorRenderPass {
+                id: RenderPassId(1),
+                output_rect: area,
+                damage_rect: area,
+                shared_quad_state_list: states,
+                quad_list: quads,
+            }],
+        };
+        assert_eq!(frame.check(false), Ok(()));
+
+        // States past them alone (clipped layers of no tile drawn): the
+        // quads stay, each with its state.
+        let mut quads = before[..3].to_vec();
+        let mut states = had.clone();
+        super::fit_to_limits(&mut quads, &mut states);
+        assert_eq!(quads.len(), 3);
+        assert!(states.len() <= 4, "{} states", states.len());
+        for (kept, was) in quads.iter().zip(&before) {
+            assert_eq!(states[kept.shared_quad_state], had[was.shared_quad_state]);
+        }
+
+        // Within them, nothing changes.
+        let mut quads = before[..3].to_vec();
+        let mut states = had.clone();
+        states.truncate(MAX_QUADS + 1);
+        for quad in &mut quads {
+            quad.shared_quad_state = 7;
+        }
+        let (quads_were, states_were) = (quads.clone(), states.clone());
+        super::fit_to_limits(&mut quads, &mut states);
+        assert_eq!(quads, quads_were);
+        assert_eq!(states, states_were);
+    }
 
     fn host() -> (
         LayerTreeHost<SingleThreadProxy>,

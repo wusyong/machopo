@@ -72,6 +72,11 @@ pub enum BadMessageReason {
     /// message, of a script that is no ISO 15924 tag, or from a renderer
     /// it doesn't serve the system's fonts.
     FontRequest,
+    /// A message to Viz that can't be right whatever Viz holds (Chromium's
+    /// mojo traits' checks as they read a `CompositorFrame`, and
+    /// `SharedImageStub`'s of a shared image's pixels): it doesn't go on
+    /// to Viz.
+    FrameSink(protocol::viz::InvalidFrameSinkMsg),
     /// What the channel to a renderer process itself refused: bytes that
     /// are no message, a message that is none of its kind, a handle or a
     /// pipe a renderer may not send, more queued than may wait (Mojo's

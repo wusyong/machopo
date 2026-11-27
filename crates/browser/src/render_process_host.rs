@@ -140,6 +140,17 @@ impl Handler<Channel> for ChannelHost {
             }
             to_browser::FRAME_SINK => {
                 let msg = message.decode::<CompositorFrameSinkMsg>()?;
+                // Checked here, as it is read, as Chromium's mojo traits
+                // check a frame: what can't be right is the renderer's bad
+                // message, and Viz never has it. A renderer's compositor
+                // embeds no other's surface.
+                if let Err(bad) = msg.check(false) {
+                    tracing::warn!(?bad, "a renderer's message to Viz can't be right");
+                    if let Some(host) = &self.host {
+                        (host.forward)(Err(BadMessageReason::FrameSink(bad)));
+                    }
+                    return Ok(());
+                }
                 // Viz gone: the browser is ending.
                 let _ = self.viz.send(VizMsg::FrameSink(self.frame_sink_id, msg));
             }

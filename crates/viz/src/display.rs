@@ -5,8 +5,8 @@ use std::sync::Arc;
 use gfx::Size;
 use protocol::SharedBuffer;
 use protocol::viz::{
-    CompositorFrame, CopyOutputRequest, CopyOutputResult, FrameSinkId, LocalSurfaceId,
-    MAX_TEXTURE_SIZE, Mailbox,
+    CompositorFrame, CopyOutputRequest, CopyOutputResult, FrameSinkId, LocalSurfaceId, Mailbox,
+    pixels_fit,
 };
 
 /// A shared image as its renderer keeps it (its texture): what Viz's table
@@ -116,10 +116,12 @@ impl<R: DirectRenderer> Display<R> {
 
     /// `sink`'s new frame, once checked: a frame from a sink that isn't the
     /// root or registered is dropped (Chromium's comes on a pipe closed with
-    /// its sink), and so is a frame whose resources aren't what they say,
-    /// the last one staying (Chromium reports the client's bad message and
-    /// ends its process; here a client is a thread of the same process, so
-    /// such a frame is machopo's own bug).
+    /// its sink), and so is one that can't be right
+    /// ([`CompositorFrame::check`]; only the root embeds others' surfaces),
+    /// the last one staying. A renderer of a process of its own has had its
+    /// frames checked as they came (a bad one is its bad message, and it
+    /// ends); one in this process (a thread) is machopo's own, and so is
+    /// its bug.
     pub fn submit_compositor_frame(
         &mut self,
         sink: FrameSinkId,
@@ -130,8 +132,8 @@ impl<R: DirectRenderer> Display<R> {
             tracing::debug!(?sink, "viz: dropping a frame of a sink it doesn't know");
             return;
         }
-        if let Some(bad) = bad_resource(&frame) {
-            tracing::error!(?sink, bad, "viz: dropping a frame");
+        if let Err(bad) = frame.check(sink == self.root_frame_sink) {
+            tracing::error!(?sink, ?bad, "viz: dropping a frame that can't be right");
             return;
         }
         tracing::debug!(
@@ -372,35 +374,6 @@ impl<'a> From<&'a SharedBuffer> for Pixels<'a> {
     }
 }
 
-/// Whether `pixels` bytes are the pixels of an RGBA8 texture of `size`
-/// Viz can make: no side past [`MAX_TEXTURE_SIZE`], and as many as the
-/// size has (Chromium's `CheckedNumeric` size of a shared bitmap).
-pub(crate) fn pixels_fit(size: Size, pixels: usize) -> bool {
-    size.width <= MAX_TEXTURE_SIZE
-        && size.height <= MAX_TEXTURE_SIZE
-        && size.checked_byte_size() == Some(pixels)
-}
-
-/// What is wrong with `frame`'s resources, if anything: one of pixels that
-/// don't fit its size ([`pixels_fit`]). One on a shared image was checked
-/// as it was made (`SharedImageInterface::create_shared_image`).
-fn bad_resource(frame: &CompositorFrame) -> Option<String> {
-    frame
-        .resource_list
-        .iter()
-        .find(|resource| {
-            resource.shared_image.is_none() && !pixels_fit(resource.size, resource.pixels.len())
-        })
-        .map(|resource| {
-            format!(
-                "resource {:?}: {} bytes for {:?}",
-                resource.id,
-                resource.pixels.len(),
-                resource.size
-            )
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -409,8 +382,8 @@ mod tests {
 
     use gfx::{Color, RectF};
     use protocol::viz::{
-        CompositorFrameMetadata, CompositorRenderPass, DrawQuad, Material, RenderPassId,
-        SharedQuadState, SurfaceId,
+        CompositorFrameMetadata, CompositorRenderPass, DrawQuad, MAX_TEXTURE_SIZE, Material,
+        RenderPassId, SharedQuadState, SurfaceId,
     };
 
     #[derive(Default)]
@@ -523,6 +496,56 @@ mod tests {
         display.remove_frame_sink(tab);
         display.submit_compositor_frame(tab, LocalSurfaceId::default(), frame(Color::WHITE));
         assert!(display.surfaces.latest(tab).is_none(), "removed");
+    }
+
+    /// Only the root (the browser's UI) embeds others' surfaces: a frame
+    /// of another sink that does (a renderer in this process, which its
+    /// compositor never makes) is dropped, and one that can't be right
+    /// otherwise too (a quad of no state its pass has).
+    #[test]
+    fn a_frame_that_cant_be_right_is_dropped() {
+        let tab = FrameSinkId {
+            client_id: 2,
+            sink_id: 1,
+        };
+        let embedding = |color| {
+            let mut frame = frame(color);
+            let pass = &mut frame.render_pass_list[0];
+            pass.quad_list.push(DrawQuad {
+                material: Material::Surface {
+                    surface_id: SurfaceId {
+                        frame_sink_id: ROOT,
+                        local_surface_id: LocalSurfaceId::default(),
+                    },
+                    default_background_color: color,
+                },
+                ..pass.quad_list[0]
+            });
+            frame
+        };
+        let mut display = Display::new(Renderer::default(), ROOT);
+        display.add_frame_sink(tab);
+        display.submit_compositor_frame(tab, LocalSurfaceId::default(), frame(Color::WHITE));
+        display.submit_compositor_frame(tab, LocalSurfaceId::default(), embedding(Color::BLACK));
+        let latest = display.surfaces.latest(tab).unwrap();
+        assert_eq!(latest.metadata.root_background_color, Color::WHITE);
+        let mut stateless = frame(Color::BLACK);
+        stateless.render_pass_list[0].quad_list[0].shared_quad_state = 1;
+        display.submit_compositor_frame(tab, LocalSurfaceId::default(), stateless);
+        let latest = display.surfaces.latest(tab).unwrap();
+        assert_eq!(latest.metadata.root_background_color, Color::WHITE);
+        // The root's own may.
+        let mut embeds_tab = embedding(Color::BLACK);
+        embeds_tab.render_pass_list[0].quad_list[1].material = Material::Surface {
+            surface_id: SurfaceId {
+                frame_sink_id: tab,
+                local_surface_id: LocalSurfaceId::default(),
+            },
+            default_background_color: Color::BLACK,
+        };
+        display.submit_compositor_frame(ROOT, LocalSurfaceId::default(), embeds_tab);
+        let latest = display.surfaces.latest(ROOT).unwrap();
+        assert_eq!(latest.metadata.root_background_color, Color::BLACK);
     }
 
     /// A frame whose pixels don't fit their resource's size, or a size

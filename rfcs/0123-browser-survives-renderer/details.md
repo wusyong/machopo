@@ -84,8 +84,85 @@ cargo clippy --workspace --lib --bins --message-format=json -- \
 - `Device::on_uncaptured_error(handler)`：沒有被 scope 接到的錯誤交給它；沒裝時是預設的 handler（panic）。
 - **不經過錯誤回報的 panic**：`util::DeviceExt::create_buffer_init`（`src/util/device.rs`）先 `create_buffer`（`mapped_at_creation`），再對 buffer `get_mapped_range_mut(..).expect("Failed to get mapped range for buffer created with mapped_at_creation")`：buffer 建不出來（例如超過 `max_buffer_size`）時，錯誤進了 scope 或 handler，這個 `expect` 照樣 panic。照程式讀的，沒有跑過。`viz` 的 `WgpuRenderer` 用它建每個 frame 的頂點 buffer。其他呼叫有沒有同樣的情形，第 0 步逐一看。
 
+## 第 0 步的探測
+
+2026-11-27，`0123` 的 `1c2c8825`，Linux（Fedora 45）。程式在 `probe.rs`（`viz` 的 `wgpu_renderer.rs` 最後一個測試模組 `include!` 它）和 `probe_shell.rs`（`crates/shell/tests/it/automation_pipe.rs` 最後 `include!` 它；另外暫時讓 `viz` 的 `thread.rs` 在 `MACHOPO_PROBE_VIZ_PANIC` 時收到 renderer 的 frame 就 panic）；跑完拿掉了，不是 build 的一部分。兩個 adapter：AMD Radeon 890M（RADV），和 CI 用的 CPU adapter（`MACHOPO_GPU_ADAPTER=cpu`：llvmpipe）。
+
+### 上限
+
+兩個 adapter 都是 `max_buffer_size` 256 MiB、`max_texture_dimension_2d` 16384：machopo 要的是 `Limits::downlevel_defaults().using_resolution(..)`（`gpu_context.rs`），buffer 的上限是 WebGPU 預設的 256 MiB，和 adapter 無關。一個頂點 80 bytes，一個 quad 六個：一個 frame 最多 559,240 個 quad。
+
+### wgpu 的錯誤
+
+| 做了什麼 | 結果（兩個 adapter 一樣） |
+| --- | --- |
+| 現在的 Viz 畫 559,241 個 quad 的 frame | panic：預設的 uncaptured handler，「In Device::create_buffer, label = 'viz quads' Buffer size 268435680 is greater than the maximum buffer size (268435456)」 |
+| 同上，包著三層 error scope、裝了 uncaptured handler | scope 接到 `MaxBufferSize` 的驗證錯誤；接著 `create_buffer_init` 照樣 panic（`util/device.rs:72`，「Failed to get mapped range for buffer created with mapped_at_creation: MapRangeError(...Buffer with 'viz quads' label is invalid)」）：照程式讀的那條確認了 |
+| `create_buffer` 超過上限（沒用 `create_buffer_init`）、texture 超過 16384、texture 寬是 0 | 都是 scope 接到的驗證錯誤；`get_mapped_range_mut` 回 `Err`；handler 沒收到東西；之後同一個 device 畫的 frame 照樣對 |
+| quad、clip、圓角、`tex_coord_rect`、`opacity`、`device_scale_factor`、`output_rect` 是 NaN、±無限大、±`f32::MAX`、-0 的 36 種組合 | 36 個都畫了，沒有任何錯誤 |
+| 每個 frame 三層 error scope（200 個 quad） | push 和 pop 三層：RADV 0.25 µs、llvmpipe 0.18 µs；一個 frame 90–100 µs（RADV）、385–490 µs（llvmpipe），有沒有 scope 的差在雜訊裡 |
+
+`pop()` 回的 future 在 native 後端當場就好（`pollster::block_on` 不等）。
+
+### 記憶體不夠
+
+CPU adapter，4096 見方的 texture 一個 64 MiB，一個接一個建、寫像素（`write_texture`，Viz 的 `upload` 也是這條；`create_shared_image` 的像素在一般記憶體時也走它）：
+
+- 不限制：20 個沒有錯誤。
+- `ulimit -v` 12 GB：100 個沒有錯誤；再多就是 **segfault**（SIGSEGV，不是 panic），在 wgpu-core 的 `Queue::write_texture`（`device/queue.rs:999`）把像素複製進 staging buffer 的 `memmove`，目的地是 `0xffffffffffffffff`（mmap 失敗時的 `MAP_FAILED`）。沒有 OutOfMemory 的錯誤，scope 和 handler 都沒收到東西。像是驅動（llvmpipe）沒檢查 mmap 的失敗就把位址交出來，沒有對 Mesa 的原始碼確認。
+- 真的 GPU 沒試：890M 是內顯，它的記憶體就是這台機器的，用完時整台機器都受影響。
+
+所以 GPU 記憶體用完時，至少有一個 adapter 是 process 直接當掉：error scope 擋不住，只有不讓它用完（shared image 的預算）擋得住。
+
+### wgpu 的呼叫失敗時
+
+讀 wgpu 30.0.1 的 native 後端（`src/backend/wgpu_core.rs`）：
+
+| 呼叫（Viz 用到的） | 失敗時 |
+| --- | --- |
+| `create_buffer`、`create_texture`、`create_view`、`create_bind_group`、`create_command_encoder`、render pass 的 `set_*` 和 `draw`、`finish`、`Queue::submit`、`write_texture`、`write_buffer`、`copy_*`、`present`、`Surface::configure`、`map_async`、`unmap` | 進 device 的錯誤（`handle_error`、`handle_error_nolabel`）：error scope 或 uncaptured handler。render pass 裡的錯誤在 pass 結束或 `finish` 時才回報 |
+| `get_mapped_range`、`get_mapped_range_mut` | 回 `Result`（Viz 的 `stage` 和讀回的路已經處理 `Err`） |
+| `util::DeviceExt::create_buffer_init` | **直接 panic**（上面的探測）：每個 frame 的頂點 buffer 用它 |
+| `Device::poll` | 不是 `PollError` 的錯誤 **直接 panic**（`handle_error_fatal`）；Viz 的 `finish` 和讀回呼叫它，`Err` 已經處理 |
+| `Surface::get_current_texture` | 沒有 error sink 時 **直接 panic**（`handle_error_fatal`）；Viz 先 `configure` 才拿，有 sink |
+| `Buffer::slice`、`map_async` 的範圍和對齊 | API 層的 `# Panics`：範圍由 Viz 自己算（`slice(..)`），renderer 管不到 |
+
+### Viz thread panic 之後
+
+`viz` 的 `thread.rs` 沒有接 panic；thread 結束之後，送給它的 `viz.send(..)` 都回錯誤，Browser 用 `let _ =` 丟掉。
+
+- **headless（automation pipe）**：探測裡，Viz 在 renderer 的第一個 frame panic，Browser 約 1 秒內結束，exit status 1，記錄「Viz can't draw: Viz has ended without a renderer」（`windowless.rs` 的 `context_lost.failed`：它的 sender 跟著 Viz 的 renderer 走，renderer 跟著 unwind drop 了）。renderer 的 process 跟著正常結束。也就是說，Viz 的 panic 現在等於 Browser 結束：G1 要拿掉的正是這個。
+- **視窗**：照程式讀（沒有在視窗裡試）：失敗的通知是 renderer 的 `on_failure` 的 closure 送的 `ShellEvent::GpuFailed`，drop 的時候不送；視窗留著、不再畫，輸入照常到分頁。
+
+### renderer 的 compositor 送多少
+
+照程式讀（`compositor` 的 `layer_tree_host_impl.rs`）：
+
+- quad：每個 picture layer 的每個可見的 tile 一個（tile 256 px 見方），每個 surface layer 一個，加上顏色單一的 tile。誠實的 frame 是幾百到幾千個；每個元素都是自己的 layer（`will-change` 一萬個）時是幾萬個。
+- shared image：每個 tile 一個，保留 interest rect 裡的（可見的範圍往四邊各擴大 `max(寬, 高)`）；沒有記憶體的預算。4K 的 viewport（3840 × 2160 個像素）滿版的一個 layer：interest rect 11,520 × 9,840，約 1,755 個 tile、450 MiB。
+
+## Chromium 怎麼做
+
+2026-11-27 讀的（`chromium/src` 的 `main`）。
+
+### tile 的記憶體預算：renderer 自己守
+
+- Blink 的 `third_party/blink/renderer/platform/widget/compositing/layer_tree_settings.cc` 的 `GetGpuMemoryPolicy` 給 renderer 的 cc 一個預算 `bytes_limit_when_visible`：桌面最少 512 MB（`kDefaultMemoryMB`），照螢幕的像素放大（2056 × 1329、scale 2 時 1152 MB，`kLargeResolutionMemoryMB`），最多實體記憶體的四分之一；Android 96 MB（低階、或記憶體不到 2 GB）或 256 MB；`--force-gpu-mem-available-mb` 蓋過。`priority_cutoff_when_visible` 是 `CUTOFF_ALLOW_NICE_TO_HAVE`（`cc/trees/managed_memory_policy.cc`：`ALLOW_PREPAINT_ONLY`）。resource 的個數另有 `kDefaultNumResourcesLimit` 一千萬。
+- `cc/trees/layer_tree_host_impl.cc`：hard limit 是那個預算，soft limit 是它的 `max_memory_for_prepaint_percentage`（預設 100）%。`cc/tiles/tile_manager.cc` 照 tile 的優先順序排：「現在要畫的」用 hard limit，其他（prepaint）用 soft limit；超過時先 evict 優先順序低的 tile 的 resource，還是放不下的「現在要畫的」tile 是 `OOM_MODE`（不 raster，畫成單色）。
+- 這是 renderer 自己的設定：GPU process 那一側沒有對應的檢查（下面）。
+
+### Viz 收 frame：檢查形狀，不數 quad
+
+- 解開的時候（mojo 的 `StructTraits`）：`services/viz/public/cpp/compositing/compositor_frame_mojom_traits.cc`：render pass 不是空的、最後一個 pass 的 `output_rect` 不是空的、view transition 提到的 pass 在 frame 裡、capture 的範圍在 frame 裡；`compositor_render_pass_mojom_traits.cc`：pass 的 id 不是 0、`subtree_size` 不超過 `output_rect`、每個 quad 的種類認得、每個 quad 有 shared quad state（沒帶的用上一個，第一個 quad 一定要帶）。沒有 quad 數的上限。解不開是 mojo 的驗證錯誤；那條 pipe 在 GPU process 裡，之後怎麼處理 renderer 沒有讀。
+- 交出去的時候（`components/viz/service/frame_sinks/compositor_frame_sink_support.cc` 的 `MaybeSubmitCompositorFrame`）：`LocalSurfaceId` 合法、frame 不是空的（`INVALID_FRAME`）、不是 root 的不能帶 display transform、`BeginFrameAck` 合法、copy request 是不是允許、surface 的序號沒有變小、surface 是這個 client 的、hit test 的資料合法、大小和 surface 的一樣（`SIZE_MISMATCH`）。
+- 不過的時候（`compositor_frame_sink_impl.cc`）：`DLOG(ERROR)`，`ResetWithReason` 關掉那個 `CompositorFrameSink` 的 pipe：不是從這裡結束 renderer；renderer 的那一端看到斷線。
+
+### GPU process 建 shared image：失敗就停掉那個 client 的 channel
+
+- `gpu/ipc/service/shared_image_stub.cc`：參數不合（格式、用途、上傳資料的大小）或 `CreateSharedImage` 失敗（記憶體不夠也是）都是 `OnError()`，也就是 `channel_->Stop()`：那個 client 的整條 GPU channel 停掉（renderer 的 context 不見了，自己重來：照記憶，沒有讀 renderer 那一側）。`memory_tracker_` 記大小，沒有看到每個 client 的上限。
+- GPU process 自己當掉時 Browser 重開它：GPU 的記憶體用完傷不到 Browser。machopo 的 Viz 和 GPU 在 Browser 的 process 裡，這一點沒有對應的。
+
 ## 沒有查到的
 
-- Chromium 的 Viz 對 client 的 frame 驗證哪些（`components/viz/service/frame_sinks/compositor_frame_sink_support.cc`、mojo 的 `StructTraits`）；cc 和 GPU 的記憶體預算。
-- wgpu 的 error scope 在 native 後端的成本、錯誤之後 device 和 encoder 的狀態。
-- lavapipe 上記憶體不夠時的行為和真的 GPU 一不一樣。
+- Chromium 的 mojo 驗證錯誤在 GPU process 的 pipe 上之後怎麼處理（renderer 有沒有被結束）；renderer 在 GPU channel 停掉之後怎麼重來。
+- 真的 GPU 上記憶體不夠時的行為（內顯的記憶體是整台機器的，沒試）；llvmpipe 的 segfault 是不是 Mesa 的 bug。

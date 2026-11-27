@@ -174,7 +174,7 @@ impl GpuSharedImages {
     fn upload(&self, size: Size, pixels: Pixels<'_>) -> Option<SharedImageBacking> {
         let gpu = self.gpu.read().unwrap_or_else(|e| e.into_inner()).clone()?;
         // Not one Viz can make (the GPU process checks a client's too).
-        if size.is_empty() || !crate::display::pixels_fit(size, pixels.len()) {
+        if size.is_empty() || !protocol::viz::pixels_fit(size, pixels.len()) {
             return None;
         }
         let _submitting = gpu.submit_lock.lock().unwrap_or_else(|e| e.into_inner());
@@ -1443,8 +1443,10 @@ mod drawing_tests {
     }
 
     /// A resource naming a shared image its client never made draws
-    /// nothing, whatever pixels the frame carries: a client can't get its
-    /// own bytes drawn in place of an image it doesn't have.
+    /// nothing (a lost device's, or a renderer's that is wrong). One that
+    /// carries pixels besides can't be right, and its frame isn't taken
+    /// (`CompositorFrame::check`): a client can't get its own bytes drawn
+    /// in place of an image it doesn't have.
     #[test]
     fn a_shared_image_nobody_made_isnt_drawn() {
         let _gpu = gpu();
@@ -1466,10 +1468,14 @@ mod drawing_tests {
             id: ResourceId(7),
             size,
             format: ResourceFormat::Rgba8Premul,
-            pixels: protocol::BigBuffer::from([255, 0, 0, 255].repeat(4)),
+            pixels: protocol::BigBuffer::from([]),
             shared_image: Some(SharedImage::from_mailbox(Mailbox(4))),
         });
         let mut display = display(size);
+        let mut carrying = f.clone();
+        carrying.resource_list[0].pixels = protocol::BigBuffer::from([255, 0, 0, 255].repeat(4));
+        display.submit_compositor_frame(SINK, LocalSurfaceId::default(), carrying);
+        assert!(!display.needs_draw());
         display.submit_compositor_frame(SINK, LocalSurfaceId::default(), f);
         let copy = draw(&mut display);
         assert_eq!(px(&copy, 0, 0), [255, 255, 255, 255]);

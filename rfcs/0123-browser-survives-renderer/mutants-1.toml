@@ -1,0 +1,220 @@
+# Stage 1's mutants (what a client's message to Viz can't be, checked as the browser's IO thread reads it; the compositor keeps within the limits): `python3 scripts/test.py mutate rfcs/0123-browser-survives-renderer/mutants-1.toml`.
+test = ["cargo", "test", "-q", "-p", "protocol", "--lib", "--", "viz::"]
+timeout = 900
+
+[[mutant]]
+name = "a frame of no pass is taken"
+file = "crates/protocol/src/viz.rs"
+from = '''        let Some(root) = self.root_pass() else {
+            return Err(InvalidFrameSinkMsg::NoRenderPass);
+        };
+        if !(root.output_rect.width > 0.0 && root.output_rect.height > 0.0) {'''
+to = '''        let Some(root) = self.root_pass() else {
+            return Ok(());
+        };
+        if !(root.output_rect.width > 0.0 && root.output_rect.height > 0.0) {'''
+
+[[mutant]]
+name = "a root of no height draws"
+file = "crates/protocol/src/viz.rs"
+from = '''        if !(root.output_rect.width > 0.0 && root.output_rect.height > 0.0) {'''
+to = '''        if !(root.output_rect.width > 0.0) {'''
+
+[[mutant]]
+name = "a root of NaN draws"
+file = "crates/protocol/src/viz.rs"
+from = '''        if !(root.output_rect.width > 0.0 && root.output_rect.height > 0.0) {'''
+to = '''        if root.output_rect.width <= 0.0 || root.output_rect.height <= 0.0 {'''
+
+[[mutant]]
+name = "one pass more"
+file = "crates/protocol/src/viz.rs"
+from = '''        if self.render_pass_list.len() > MAX_RENDER_PASSES {'''
+to = '''        if self.render_pass_list.len() > MAX_RENDER_PASSES + 1 {'''
+
+[[mutant]]
+name = "one pass fewer"
+file = "crates/protocol/src/viz.rs"
+from = '''        if self.render_pass_list.len() > MAX_RENDER_PASSES {'''
+to = '''        if self.render_pass_list.len() >= MAX_RENDER_PASSES {'''
+
+[[mutant]]
+name = "only the root's quads count"
+file = "crates/protocol/src/viz.rs"
+from = '''            quads = quads.saturating_add(pass.quad_list.len());'''
+to = '''            quads = pass.quad_list.len();'''
+
+[[mutant]]
+name = "one quad more"
+file = "crates/protocol/src/viz.rs"
+from = '''        if quads > MAX_QUADS {'''
+to = '''        if quads > MAX_QUADS + 1 {'''
+
+[[mutant]]
+name = "one quad fewer"
+file = "crates/protocol/src/viz.rs"
+from = '''        if quads > MAX_QUADS {'''
+to = '''        if quads >= MAX_QUADS {'''
+
+[[mutant]]
+name = "states without a limit"
+file = "crates/protocol/src/viz.rs"
+from = '''        if states > MAX_QUADS.saturating_add(1) {'''
+to = '''        if states > usize::MAX - 1 {'''
+
+[[mutant]]
+name = "one state fewer"
+file = "crates/protocol/src/viz.rs"
+from = '''        if states > MAX_QUADS.saturating_add(1) {'''
+to = '''        if states > MAX_QUADS {'''
+
+[[mutant]]
+name = "two resources of one id"
+file = "crates/protocol/src/viz.rs"
+from = '''            if !resources.insert(resource.id) {
+                return Err(InvalidFrameSinkMsg::DuplicateResource);
+            }'''
+to = '''            resources.insert(resource.id);'''
+
+[[mutant]]
+name = "pixels besides a shared image"
+file = "crates/protocol/src/viz.rs"
+from = '''                    resource.pixels.is_empty()
+                        && resource.size.width <= MAX_TEXTURE_SIZE'''
+to = '''                    resource.size.width <= MAX_TEXTURE_SIZE'''
+
+[[mutant]]
+name = "a shared image of any height"
+file = "crates/protocol/src/viz.rs"
+from = '''                        && resource.size.height <= MAX_TEXTURE_SIZE
+                }'''
+to = '''                }'''
+
+[[mutant]]
+name = "a resource's pixels of any length"
+file = "crates/protocol/src/viz.rs"
+from = '''                None => pixels_fit(resource.size, resource.pixels.len()),'''
+to = '''                None => true,'''
+
+[[mutant]]
+name = "a quad of a state its pass hasn't"
+file = "crates/protocol/src/viz.rs"
+from = '''                if quad.shared_quad_state >= pass.shared_quad_state_list.len() {'''
+to = '''                if quad.shared_quad_state > pass.shared_quad_state_list.len() {'''
+
+[[mutant]]
+name = "a quad of a resource its frame hasn't"
+file = "crates/protocol/src/viz.rs"
+from = '''                        if !resources.contains(&resource_id) {'''
+to = '''                        if resources.is_empty() {'''
+
+[[mutant]]
+name = "anyone embeds"
+file = "crates/protocol/src/viz.rs"
+from = '''                        if !may_embed {'''
+to = '''                        if false {'''
+
+[[mutant]]
+name = "a shared image of no size"
+file = "crates/protocol/src/viz.rs"
+from = '''    if size.is_empty() || !pixels_fit(size, bytes) {'''
+to = '''    if !pixels_fit(size, bytes) {'''
+
+[[mutant]]
+name = "a shared image's pixels of any length"
+file = "crates/protocol/src/viz.rs"
+from = '''    if size.is_empty() || !pixels_fit(size, bytes) {'''
+to = '''    if size.is_empty() {'''
+
+[[mutant]]
+name = "a submitted frame isn't checked"
+file = "crates/protocol/src/viz.rs"
+from = '''            Self::SubmitCompositorFrame { frame, .. } => frame.check(may_embed),'''
+to = '''            Self::SubmitCompositorFrame { .. } => Ok(()),'''
+
+[[mutant]]
+name = "the IO thread doesn't check"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                if let Err(bad) = msg.check(false) {'''
+to = '''                if let Err(bad) = Ok::<(), protocol::viz::InvalidFrameSinkMsg>(()) {'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "--", "renderer_process::what_viz"]
+
+[[mutant]]
+name = "the IO thread takes a renderer's surfaces"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                if let Err(bad) = msg.check(false) {'''
+to = '''                if let Err(bad) = msg.check(true) {'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "--", "renderer_process::what_viz"]
+
+[[mutant]]
+name = "a bad message to Viz isn't the tab's to hear"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                        (host.forward)(Err(BadMessageReason::FrameSink(bad)));'''
+to = '''                        let _ = (host, bad);'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "--", "renderer_process::what_viz"]
+
+[[mutant]]
+name = "a bad message goes on to Viz"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                        (host.forward)(Err(BadMessageReason::FrameSink(bad)));
+                    }
+                    return Ok(());'''
+to = '''                        (host.forward)(Err(BadMessageReason::FrameSink(bad)));
+                    }'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "--", "renderer_process::what_viz"]
+
+[[mutant]]
+name = "Viz takes any sink's surfaces"
+file = "crates/viz/src/display.rs"
+from = '''        if let Err(bad) = frame.check(sink == self.root_frame_sink) {'''
+to = '''        if let Err(bad) = frame.check(true) {'''
+test = ["cargo", "test", "-q", "-p", "viz", "--lib", "--", "display::"]
+
+[[mutant]]
+name = "Viz takes the root's no surfaces"
+file = "crates/viz/src/display.rs"
+from = '''        if let Err(bad) = frame.check(sink == self.root_frame_sink) {'''
+to = '''        if let Err(bad) = frame.check(false) {'''
+test = ["cargo", "test", "-q", "-p", "viz", "--lib", "--", "display::"]
+
+[[mutant]]
+name = "Viz doesn't check"
+file = "crates/viz/src/display.rs"
+from = '''        if let Err(bad) = frame.check(sink == self.root_frame_sink) {'''
+to = '''        if let Err(bad) = Ok::<(), protocol::viz::InvalidFrameSinkMsg>(()) {'''
+test = ["cargo", "test", "-q", "-p", "viz", "--lib", "--", "display::"]
+
+[[mutant]]
+name = "the compositor sends what it has"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''    if quads.len() <= MAX_QUADS && states.len() <= MAX_QUADS.saturating_add(1) {'''
+to = '''    if true {'''
+test = ["cargo", "test", "-q", "-p", "compositor", "--lib", "--", "a_frame_keeps"]
+
+[[mutant]]
+name = "the compositor minds only its quads"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''    if quads.len() <= MAX_QUADS && states.len() <= MAX_QUADS.saturating_add(1) {'''
+to = '''    if quads.len() <= MAX_QUADS {'''
+test = ["cargo", "test", "-q", "-p", "compositor", "--lib", "--", "a_frame_keeps"]
+
+[[mutant]]
+name = "the compositor leaves out no quad"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''    quads.truncate(MAX_QUADS);'''
+to = '''    quads.truncate(usize::MAX);'''
+test = ["cargo", "test", "-q", "-p", "compositor", "--lib", "--", "a_frame_keeps"]
+
+[[mutant]]
+name = "the compositor's quads keep the old numbers of their states"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''        quad.shared_quad_state = at;'''
+to = '''        let _ = at;'''
+test = ["cargo", "test", "-q", "-p", "compositor", "--lib", "--", "a_frame_keeps"]
+
+[[mutant]]
+name = "the compositor keeps every state"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''    *states = kept;'''
+to = '''    states.extend(kept.into_iter().take(0));'''
+test = ["cargo", "test", "-q", "-p", "compositor", "--lib", "--", "a_frame_keeps"]

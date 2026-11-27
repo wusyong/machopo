@@ -52,6 +52,19 @@ fn child() {
             };
             let _ = link.send(to_browser::HOST, &cookie);
         }),
+        // What Viz would be handed, as its compositor sends it: one that
+        // can't be right, and one that can.
+        Some(
+            role @ ("a frame that can't be right"
+            | "a shared image that can't be right"
+            | "a frame that embeds another's"
+            | "a frame that can be right"),
+        ) => {
+            let msg = frame_sink_msg(role);
+            rogue(|link| {
+                let _ = link.send(to_browser::FRAME_SINK, &msg);
+            })
+        }
         _ => {}
     }
     let exit = match ipc::platform::inherited() {
@@ -84,6 +97,65 @@ fn rogue(send: impl FnOnce(&ChannelLink)) -> ! {
     send(&link);
     loop {
         std::thread::sleep(std::time::Duration::from_secs(60));
+    }
+}
+
+/// What a renderer of `role` sends Viz ([`child`]).
+fn frame_sink_msg(role: &str) -> CompositorFrameSinkMsg {
+    use protocol::viz::{
+        CompositorFrame, CompositorFrameMetadata, CompositorRenderPass, DrawQuad, LocalSurfaceId,
+        Mailbox, Material, RenderPassId, ResourceId, SharedQuadState,
+    };
+    let area = gfx::RectF::new(0.0, 0.0, 200.0, 200.0);
+    let material = match role {
+        "a frame that can't be right" => Material::Texture {
+            resource_id: ResourceId(7),
+            tex_coord_rect: area,
+            nearest_neighbor: true,
+        },
+        // The browser's UI's, say, whose sink is the first.
+        "a frame that embeds another's" => Material::Surface {
+            surface_id: protocol::viz::SurfaceId {
+                frame_sink_id: protocol::viz::FrameSinkId {
+                    client_id: 0,
+                    sink_id: 1,
+                },
+                local_surface_id: LocalSurfaceId::default(),
+            },
+            default_background_color: gfx::Color::WHITE,
+        },
+        "a shared image that can't be right" => {
+            return CompositorFrameSinkMsg::CreateSharedImage {
+                mailbox: Mailbox(1),
+                size: gfx::Size::new(2, 2),
+                pixels: protocol::SharedBuffer::from(bytes::Bytes::from(vec![0; 15])),
+            };
+        }
+        _ => Material::SolidColor {
+            color: gfx::Color::WHITE,
+        },
+    };
+    CompositorFrameSinkMsg::SubmitCompositorFrame {
+        local_surface_id: LocalSurfaceId::default(),
+        frame: CompositorFrame {
+            metadata: CompositorFrameMetadata {
+                device_scale_factor: 1.0,
+                frame_token: 1,
+                root_background_color: gfx::Color::WHITE,
+            },
+            resource_list: Vec::new(),
+            render_pass_list: vec![CompositorRenderPass {
+                id: RenderPassId(1),
+                output_rect: area,
+                damage_rect: area,
+                shared_quad_state_list: vec![SharedQuadState::default()],
+                quad_list: vec![DrawQuad {
+                    rect: area,
+                    shared_quad_state: 0,
+                    material,
+                }],
+            }],
+        },
     }
 }
 
@@ -574,4 +646,82 @@ fn a_process_that_sends_what_no_renderer_does_is_killed() {
         assert_eq!(web_contents.renderer_pid(), None, "{role}");
         web_contents.shutdown();
     }
+}
+
+/// What a renderer sends Viz is checked as the browser's IO thread reads
+/// it: what can't be right whatever Viz holds (a quad of a resource its
+/// frame hasn't, a shared image's pixels that aren't of its size, a
+/// surface embedded, which a renderer's compositor never does) is its
+/// bad message, which ends it, and Viz never has it; what can goes on to
+/// Viz.
+#[cfg(unix)]
+#[test]
+fn what_viz_is_sent_that_cant_be_right_ends_its_renderer() {
+    use protocol::viz::InvalidFrameSinkMsg;
+    let tab = |role| {
+        let (mut web_contents, host_rx, viz_rx, _) = tab_with_launcher(
+            launching(role),
+            true,
+            false,
+            None,
+            gfx::SystemColors::DEFAULT,
+            Default::default(),
+            browser::NEW_CONTENT_RENDERING_DELAY,
+            in_memory(),
+        );
+        web_contents.resize(gfx::Size::new(200, 200), 1.0);
+        (web_contents, host_rx, viz_rx)
+    };
+    let to_viz = |viz_rx: &crossbeam_channel::Receiver<VizMsg>| {
+        viz_rx
+            .try_iter()
+            .filter_map(|msg| match msg {
+                VizMsg::FrameSink(_, msg) => Some(format!("{msg:?}")),
+                _ => None,
+            })
+            .filter(|msg| !msg.starts_with("SetNeedsBeginFrame"))
+            .collect::<Vec<_>>()
+    };
+    for (role, bad) in [
+        (
+            "a frame that can't be right",
+            InvalidFrameSinkMsg::UnknownResource,
+        ),
+        (
+            "a shared image that can't be right",
+            InvalidFrameSinkMsg::SharedImagePixels,
+        ),
+        (
+            "a frame that embeds another's",
+            InvalidFrameSinkMsg::EmbedsSurface,
+        ),
+    ] {
+        let (mut web_contents, host_rx, viz_rx) = tab(role);
+        let pid = web_contents.renderer_pid().expect("a process of its own");
+        assert_eq!(
+            bad_message_of(&mut web_contents, &host_rx),
+            browser::BadMessageReason::FrameSink(bad),
+            "{role}"
+        );
+        assert!(web_contents.is_crashed(), "{role}");
+        assert_eq!(ended_by(&web_contents), Some(KILLED), "{role}");
+        assert_eq!(state_of(pid), None, "{role}: still there");
+        // Checked before it went on: Viz would have had it by now.
+        assert_eq!(to_viz(&viz_rx), Vec::<String>::new(), "{role}");
+        web_contents.shutdown();
+    }
+    // One that can be right gets to Viz, from the sink the renderer was
+    // bound to, and the renderer goes on.
+    let (mut web_contents, _host_rx, viz_rx) = tab("a frame that can be right");
+    let sink = web_contents.frame_sink_id();
+    let from = loop {
+        if let VizMsg::FrameSink(from, CompositorFrameSinkMsg::SubmitCompositorFrame { .. }) =
+            viz_rx.recv_timeout(TIMEOUT).expect("Viz hears")
+        {
+            break from;
+        }
+    };
+    assert_eq!(from, sink);
+    assert!(!web_contents.is_crashed());
+    web_contents.shutdown();
 }

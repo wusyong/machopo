@@ -37,7 +37,7 @@
 - **Linux 的 sandbox 要 kernel 有 Landlock**（5.13 起，編進去而且開機時開著）：沒有時 renderer process 不啟動（分頁顯示原因，log 有 kernel 的說法），要 `--no-sandbox` 才能用。沒有比較弱的退路。
 - **sandbox 裡的 renderer 建不了檔案**（Linux、macOS）：它自己的 trace 檔和 census 檔是進 sandbox 之前開好的；其他會讓 V8 自己寫檔案的 `MACHOPO_V8_FLAGS`（`--perf-basic-prof` 的 `/tmp/perf-<pid>.map`、`--prof` 和 `--logfile` 的 log）在 renderer 裡寫不出來，要加 `--no-sandbox`（`bench.py speedometer --sample` 自己加；Chrome 的 `--perf-prof` 也要 `--no-sandbox`）。trace 裡 renderer 的 process 名稱這類 Perfetto 從 `/proc/self/stat`、`/proc/self/cmdline` 讀的資料沒有（macOS：機器和 kernel 的版本那幾欄沒有，renderer 的 stderr 多一行 Perfetto 讀不到的訊息）。
 - **Browser 執行期間新裝的字型，renderer 要重開 machopo 才讀得到**（三個平台）：系統的字型是 Browser 的字型 thread 在第一個 renderer 啟動時列一次的（Linux 上 fontconfig 的 cache 過期時也由那一次更新），之後的每個 renderer（新的分頁也是）拿到的都是那一份名字的清單；字型變了時通知字型 thread 重列、renderer 重拿清單，還沒做。
-- **renderer 還有兩條路能讓 Browser 結束**：它送的 frame 是在 Browser 裡交給 GPU 的，而 wgpu 的驗證錯誤會結束整個程式（Viz 收到 frame 時的檢查沒有涵蓋所有會走到 wgpu 的值）；Browser 處理 renderer 訊息的程式裡如果有 `unwrap` 或越界，壞訊息能讓它 panic（有 fuzz target 在找，跑過的時間不長、涵蓋還在增加）。
+- **renderer 還有兩條路能讓 Browser 結束**：它送的 frame 是在 Browser 裡交給 GPU 的，而 wgpu 的錯誤會結束整個程式：IO thread 擋掉了說不通的訊息（包括 quad 太多、會超過 wgpu 的 buffer 上限的 frame），但 wgpu 的驗證錯誤和記憶體不夠都還沒有接住，shared image 也沒有數量和記憶體的上限（記憶體用完時至少 CPU 的 adapter 是 segfault，不是 panic）；Browser 處理 renderer 訊息的程式裡如果有 `unwrap` 或越界，壞訊息能讓它 panic（有 fuzz target 在找，跑過的時間不長、涵蓋還在增加）。
 - **`--single-process` 時 renderer 記憶體耗盡、abort 或記憶體出錯，結束的是整個程式**（renderer 是自己的 process 時只結束那個 renderer，分頁顯示 sad tab、可以重新載入）。例如 `border-collapse: collapse` 的表格的邊是一個密的陣列（Blink 的 `TableBorders` 也是），一列 1000 個 `colspan=1000` 再加上幾千列的表格要好幾十 GB，配置不到時 process 就結束。
 - `gfx::FontData` 和 `gfx::ImageData` 不能序列化：現在字型和圖片都留在 renderer 這一側（raster 在 renderer 裡），不用過 process 的邊界；raster 搬到 Viz 那一側時要改成像 Chromium 那樣傳 typeface 和圖片。
 - **名稱表和屬性值的表在同一個 renderer 裡共用**（`dom` 的 `names.rs` 和 `string.rs`，thread-local：同一個分頁導覽過的網頁和它們的 iframe 都用同一份）：前面的網頁的名稱一直留著（見「GC 和 `dom`」），屬性值（包括 CSRF token、hidden input 的值）留到值的表下一次丟掉沒人用的。沒有 API 讀得到表的內容，但 intern 時找到的只 clone、沒有的要配置，花的時間不同：頁面可以一次測一組猜得到的名稱或值有沒有出現過，例如某個網站特有的 custom element 名稱（這個分頁去過哪裡）或低熵的值；隨機的 token 猜不到，測不出來。跨 site 的網頁和 iframe 分到各有一份表的 renderer 時才沒有；只回收沒人用的名稱擋不住（還活著的 iframe 的名稱照樣測得到）。
@@ -275,7 +275,8 @@
 - GPU device 遺失之後，新的 device 做不出來時（重試 3 次）直接結束程式：視窗沒有 software 的輸出可以退回（Chromium 退到 software compositing）。
 - Viz 不用 texture 上限小於 8192 的 adapter（renderer 把不超過它的 canvas 當成 layer）：這樣的 GPU 建不出 device、程式結束，不會改用下一個 adapter（例如 CPU 的）。目前的桌機 GPU 和 lavapipe、WARP 都到 16384 以上。
 - 視窗的實體像素超過 GPU 的 texture 上限（Apple Silicon 每邊 16384；使用者把視窗拉過好幾個高 DPI 的螢幕時）時 surface 的設定失敗、整個程式結束：Viz 的輸出是一張 texture，沒有夾到上限、也沒有分塊畫（Chrome 的視窗一樣受 GPU 的限制）。automation 設的大小夾到 8192（見「WebDriver 和自動化」）。
-- Viz 收到 renderer 送來的不合法的 frame（resource 的像素和大小對不上、超過 texture 的上限）時丟掉它、照舊顯示上一個，記一筆錯誤；Chromium 結束那個 renderer 的 process，machopo 的 renderer 是同一個 process 裡的 thread，停不乾淨，要等拆 process。
+- `--single-process` 的 renderer（Browser 的 process 裡的 thread）送給 Viz 的說不通的訊息只丟掉、照舊顯示上一個 frame，記一筆錯誤：沒有可以結束的 process（renderer 是自己的 process 時那是它的壞訊息，它被結束）。
+- 一個 frame 最多 262,144 個 quad（`protocol::viz::MAX_QUADS`）：超過時 renderer 的 compositor 丟掉最底下的（記一筆警告），Chromium 沒有這個上限（它的 Viz 不把一個 frame 的頂點放在一個 buffer 裡）。誠實的 frame 一個可見的 tile 一個 quad，幾千個。
 - 只會在原地重建 device，不會重啟 process；GPU 驅動程式真的 crash 會讓整個程式結束，要等拆 process。
 - device 遺失到 compositor 送來新的 frame 之間，舊 device 上的 tile 不畫，露出背景色，可能閃一兩個 frame。
 - `machopo` 的 Rust 那一側用 mimalloc，空出來的記憶體預設留 10 ms（arena 的再乘 10）才還給系統：Speedometer 的記憶體峰值比平台的 allocator 多約 13%（macOS，phys footprint；TodoMVC-jQuery 多約 40%）。`MIMALLOC_PURGE_DELAY=0` 立刻歸還，峰值只多約 6%，時間慢約 2.7%。Linux 和 Windows 上還沒量。C++ 那一側（V8）照舊用平台的 `malloc`。
