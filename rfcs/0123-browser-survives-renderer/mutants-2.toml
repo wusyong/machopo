@@ -1,0 +1,93 @@
+# Stage 2's mutants (wgpu's errors caught and handled by their kind; a frame's vertices in buffers made without create_buffer_init): `python3 scripts/test.py mutate rfcs/0123-browser-survives-renderer/mutants-2.toml`.
+test = ["cargo", "test", "-q", "-p", "viz", "--lib", "--", "drawing_tests::"]
+timeout = 900
+
+[[mutant]]
+name = "a scope's caller isn't told"
+file = "crates/viz/src/gpu_context.rs"
+from = '''                worst = worst.max(Some(report('''
+to = '''                let _ = worst.max(Some(report('''
+
+[[mutant]]
+name = "a validation error never panics"
+file = "crates/viz/src/gpu_context.rs"
+from = '''                !cfg!(debug_assertions) || tolerating_validation(),'''
+to = '''                true || tolerating_validation(),'''
+
+[[mutant]]
+name = "a validation error panics though tolerated"
+file = "crates/viz/src/gpu_context.rs"
+from = '''                !cfg!(debug_assertions) || tolerating_validation(),'''
+to = '''                !cfg!(debug_assertions),'''
+
+[[mutant]]
+name = "out of memory keeps the pool"
+file = "crates/viz/src/gpu_context.rs"
+from = '''            if let Some(pool) = pool.upgrade() {
+                pool.clear();
+            }'''
+to = '''            let _ = pool;'''
+
+[[mutant]]
+name = "the pool clears nothing"
+file = "crates/viz/src/gpu_context.rs"
+from = '''        free.textures.clear();
+        free.bytes = 0;'''
+to = '''        free.bytes = 0;'''
+
+[[mutant]]
+name = "an internal error isn't a lost device"
+file = "crates/viz/src/gpu_context.rs"
+from = '''            lost.store(true, Ordering::Release);
+            GpuError::Internal'''
+to = '''            GpuError::Internal'''
+
+[[mutant]]
+name = "an internal error is told as out of memory"
+file = "crates/viz/src/gpu_context.rs"
+from = '''            lost.store(true, Ordering::Release);
+            GpuError::Internal'''
+to = '''            lost.store(true, Ordering::Release);
+            GpuError::OutOfMemory'''
+
+[[mutant]]
+name = "no handler for what no scope takes"
+file = "crates/viz/src/gpu_context.rs"
+from = '''        device.on_uncaptured_error(Arc::new(move |error: wgpu::Error| {
+            report(&error, "something no scope was around", &flag, &freed);
+        }));'''
+to = '''        let _ = (&flag, &freed);'''
+
+[[mutant]]
+name = "a frame of an error is copied"
+file = "crates/viz/src/wgpu_renderer.rs"
+from = '''        if error.is_some() {
+            return Ok(None);
+        }'''
+to = '''        if error.is_some() && false {
+            return Ok(None);
+        }'''
+
+[[mutant]]
+name = "the frame isn't in a scope"
+file = "crates/viz/src/wgpu_renderer.rs"
+from = '''        let (readback, error) = context.scoped("a frame", || self.record(frame, &target, copy));'''
+to = '''        let (readback, error) = (self.record(frame, &target, copy), None::<crate::gpu_context::GpuError>);'''
+
+[[mutant]]
+name = "the second buffer is never bound"
+file = "crates/viz/src/wgpu_renderer.rs"
+from = '''                    if bound != Some(cmd.buffer) {'''
+to = '''                    if bound.is_none() {'''
+
+[[mutant]]
+name = "every quad from the first buffer"
+file = "crates/viz/src/wgpu_renderer.rs"
+from = '''                        let Some(buffer) = buffers.get(cmd.buffer) else {'''
+to = '''                        let Some(buffer) = buffers.first() else {'''
+
+[[mutant]]
+name = "a buffer's vertices aren't written"
+file = "crates/viz/src/wgpu_renderer.rs"
+from = '''        mapped.slice(..).copy_from_slice(bytes);'''
+to = '''        let _ = &mut mapped;'''

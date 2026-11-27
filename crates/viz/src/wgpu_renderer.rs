@@ -26,7 +26,6 @@ use protocol::viz::{
     ContextLostObserver, ContextProvider, CopyOutputResult, Material, ResourceId,
     TransferableResource,
 };
-use wgpu::util::DeviceExt;
 
 use crate::display::{CopyFailure, DirectRenderer, Pixels, SharedImageHandle};
 use crate::gpu_context::GpuContext;
@@ -179,14 +178,19 @@ impl GpuSharedImages {
         }
         let _submitting = gpu.submit_lock.lock().unwrap_or_else(|e| e.into_inner());
         let write = trace_event::trace_event!("SharedImage::Write");
-        let uploaded = match gpu.pool.take(size) {
-            Some(texture) => {
-                gpu.write(&texture, pixels);
-                texture
-            }
-            None => gpu.upload(size, pixels),
-        };
+        let (uploaded, error) =
+            gpu.scoped("a shared image's upload", || match gpu.pool.take(size) {
+                Some(texture) => {
+                    gpu.write(&texture, pixels);
+                    texture
+                }
+                None => gpu.upload(size, pixels),
+            });
         drop(write);
+        // As one never made: a frame that draws it draws nothing of it.
+        if error.is_some() {
+            return None;
+        }
         Some(SharedImageBacking {
             generation: gpu.generation,
             uploaded,
@@ -219,7 +223,10 @@ impl GpuSharedImages {
         // they don't pile up holding their staging copies.
         let _submitting = gpu.submit_lock.lock().unwrap_or_else(|e| e.into_inner());
         let _submit = trace_event::trace_event!("SharedImage::Submit");
-        gpu.queue.submit(gpu.take_staged());
+        // What went wrong is handled as it is caught: nothing else of it.
+        let ((), _) = gpu.scoped("the shared images' copies", || {
+            gpu.queue.submit(gpu.take_staged());
+        });
     }
 }
 
@@ -237,8 +244,16 @@ struct DrawCmd {
     /// Sampled bilinearly rather than at the nearest texel.
     linear: bool,
     scissor: Option<(u32, u32, u32, u32)>,
+    /// Which of the frame's vertex buffers, and where in it.
+    buffer: usize,
     first_vertex: u32,
 }
+
+/// The most vertices in one buffer: the most quads a client's frame has,
+/// six each (120 MiB, under the 256 MiB a buffer may have on any device
+/// Viz takes). A frame aggregated from several clients' is drawn from
+/// several.
+const VERTICES_PER_BUFFER: usize = protocol::viz::MAX_QUADS * 6;
 
 /// Makes a window's surface again, on the process's instance.
 pub type MakeSurface = Box<dyn Fn() -> Result<wgpu::Surface<'static>, String> + Send>;
@@ -777,11 +792,35 @@ impl WgpuRenderer {
         // piles them up, gigabytes a minute with an animation running. The
         // next frame drawn uploads what it needs.
         let target = self.target()?;
+        // What wgpu reports of the frame is caught before it is presented:
+        // one it reported an error of isn't (the last stays on the screen),
+        // nor copied.
+        let context = self.context.clone();
+        let (readback, error) = context.scoped("a frame", || self.record(frame, &target, copy));
+        if error.is_some() {
+            return Ok(None);
+        }
+        if let Target::Surface(surface_texture) = target {
+            self.context.queue.present(surface_texture);
+        }
+        Ok(readback.and_then(|readback| readback.read(&self.context.device)))
+    }
+
+    /// Uploads what `frame` needs, draws it into `target` and submits it,
+    /// with a copy if `copy` and the output can be copied from. Nothing is
+    /// submitted if its vertices have no buffer.
+    fn record(
+        &mut self,
+        frame: &AggregatedFrame<'_>,
+        target: &Target,
+        copy: bool,
+    ) -> Option<Readback> {
         self.sync_resources(frame);
         let size = self.output().size();
 
-        // Build vertices back-to-front (quad lists are front-to-back).
-        let mut vertices: Vec<Vertex> = Vec::new();
+        // Build vertices back-to-front (quad lists are front-to-back), in
+        // buffers of VERTICES_PER_BUFFER at most.
+        let mut vertices: Vec<Vec<Vertex>> = vec![Vec::new()];
         let mut cmds: Vec<DrawCmd> = Vec::new();
         if let Some(root) = frame.render_pass_list.last() {
             for quad in root.quad_list.iter().rev() {
@@ -827,10 +866,19 @@ impl WgpuRenderer {
                     (r.x, r.bottom(), uv.x, uv.bottom()),
                     (r.right(), r.bottom(), uv.right(), uv.bottom()),
                 ];
+                if vertices
+                    .last()
+                    .is_none_or(|v| v.len() >= VERTICES_PER_BUFFER)
+                {
+                    vertices.push(Vec::with_capacity(6));
+                }
+                let buffer = vertices.len().saturating_sub(1);
+                let Some(vertices) = vertices.last_mut() else {
+                    continue;
+                };
                 #[expect(
                     clippy::cast_possible_truncation,
-                    reason = "six vertices of 80 bytes a quad: u32::MAX of them would be \
-                              hundreds of GB, and the frame's quads in memory first"
+                    reason = "fewer than VERTICES_PER_BUFFER (1.5 million) in a buffer"
                 )]
                 let first_vertex = vertices.len() as u32;
                 let (clip, clip_rx, clip_ry) = match sqs.rounded_clip {
@@ -856,6 +904,7 @@ impl WgpuRenderer {
                     resource,
                     linear,
                     scissor: Self::scissor(size, sqs.clip_rect),
+                    buffer,
                     first_vertex,
                 });
             }
@@ -865,15 +914,11 @@ impl WgpuRenderer {
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let pipeline = self.context.pipeline(texture.format());
 
-        let vertex_buffer = (!vertices.is_empty()).then(|| {
-            self.context
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("viz quads"),
-                    contents: bytemuck::cast_slice(&vertices),
-                    usage: wgpu::BufferUsages::VERTEX,
-                })
-        });
+        let buffers = vertices
+            .iter()
+            .filter(|vertices| !vertices.is_empty())
+            .map(|vertices| self.vertex_buffer(vertices))
+            .collect::<Option<Vec<_>>>()?;
 
         let bg = frame.background_color.premultiplied_f32();
         let mut encoder = self
@@ -902,14 +947,21 @@ impl WgpuRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            if let Some(vb) = &vertex_buffer {
+            if !buffers.is_empty() {
                 pass.set_pipeline(&pipeline);
-                pass.set_vertex_buffer(0, vb.slice(..));
                 let full = (0, 0, size.width, size.height);
+                let mut bound = None;
                 for cmd in &cmds {
                     let (x, y, w, h) = cmd.scissor.unwrap_or(full);
                     if w == 0 || h == 0 {
                         continue;
+                    }
+                    if bound != Some(cmd.buffer) {
+                        let Some(buffer) = buffers.get(cmd.buffer) else {
+                            continue;
+                        };
+                        pass.set_vertex_buffer(0, buffer.slice(..));
+                        bound = Some(cmd.buffer);
                     }
                     pass.set_scissor_rect(x, y, w, h);
                     let bind_group = match cmd.resource {
@@ -943,10 +995,31 @@ impl WgpuRenderer {
                 .queue
                 .submit(staged.into_iter().chain([encoder.finish()]));
         }
-        if let Target::Surface(surface_texture) = target {
-            self.context.queue.present(surface_texture);
-        }
-        Ok(readback.and_then(|readback| readback.read(&self.context.device)))
+        readback
+    }
+
+    /// A buffer of `vertices` to draw from, made mapped and written into
+    /// (as `DeviceExt::create_buffer_init` does, which panics when the
+    /// buffer can't be made: past the device's limit, out of memory, a lost
+    /// device). `None` then: what went wrong is the frame's error scope's.
+    fn vertex_buffer(&self, vertices: &[Vertex]) -> Option<wgpu::Buffer> {
+        let bytes: &[u8] = bytemuck::cast_slice(vertices);
+        let buffer = self.context.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("viz quads"),
+            size: bytes.len() as u64,
+            usage: wgpu::BufferUsages::VERTEX,
+            mapped_at_creation: true,
+        });
+        // Not mapped, there is nothing to unmap (which wgpu would take as
+        // another error).
+        let Ok(mut mapped) = buffer.get_mapped_range_mut(..) else {
+            tracing::debug!(bytes = bytes.len(), "viz: no buffer for a frame's vertices");
+            return None;
+        };
+        mapped.slice(..).copy_from_slice(bytes);
+        drop(mapped);
+        buffer.unmap();
+        Some(buffer)
     }
 }
 
@@ -2067,5 +2140,257 @@ mod drawing_tests {
                 .create_shared_image(widest, &vec![0; MAX_TEXTURE_SIZE as usize * 4])
                 .is_some()
         );
+    }
+
+    /// Lets Viz's tests of catching a validation error make one without a
+    /// panic in a debug build, while it is held.
+    struct Tolerating;
+
+    impl Tolerating {
+        fn new() -> Self {
+            crate::gpu_context::TOLERATE_VALIDATION
+                .store(true, std::sync::atomic::Ordering::Release);
+            Self
+        }
+    }
+
+    impl Drop for Tolerating {
+        fn drop(&mut self) {
+            crate::gpu_context::TOLERATE_VALIDATION
+                .store(false, std::sync::atomic::Ordering::Release);
+        }
+    }
+
+    /// A frame aggregated from several clients' may have more vertices
+    /// than a buffer takes: it is drawn from several, in order. Here the
+    /// root's quads fill one buffer but for one, and the tab it embeds
+    /// draws two over them, the front one from a second buffer.
+    #[test]
+    fn a_frame_of_more_vertices_than_a_buffer_takes_is_drawn_from_several() {
+        let _gpu = gpu();
+        let size = Size::new(4, 4);
+        let tab = FrameSinkId {
+            client_id: 2,
+            sink_id: 1,
+        };
+        let full = RectF::new(0.0, 0.0, 4.0, 4.0);
+        let mut quads = vec![DrawQuad {
+            rect: full,
+            shared_quad_state: 0,
+            material: Material::Surface {
+                surface_id: SurfaceId {
+                    frame_sink_id: tab,
+                    local_surface_id: LocalSurfaceId::default(),
+                },
+                default_background_color: Color::WHITE,
+            },
+        }];
+        quads.extend(std::iter::repeat_n(
+            solid(Color::rgb(0, 255, 0), full),
+            protocol::viz::MAX_QUADS - 1,
+        ));
+        let mut display = display(size);
+        display.add_frame_sink(tab);
+        display.submit_compositor_frame(
+            tab,
+            LocalSurfaceId::default(),
+            frame(
+                size,
+                SharedQuadState::default(),
+                vec![
+                    solid(Color::rgb(0, 0, 255), RectF::new(0.0, 0.0, 1.0, 1.0)),
+                    solid(Color::rgb(255, 0, 0), full),
+                ],
+            ),
+        );
+        display.submit_compositor_frame(
+            SINK,
+            LocalSurfaceId::default(),
+            frame(size, SharedQuadState::default(), quads),
+        );
+        let copy = draw(&mut display);
+        assert_eq!(px(&copy, 0, 0), [0, 0, 255, 255], "the second buffer's");
+        assert_eq!(
+            px(&copy, 2, 2),
+            [255, 0, 0, 255],
+            "the first's, over the root's"
+        );
+    }
+
+    /// What wgpu reports is handled by its kind: a validation error is
+    /// only told of (and panics in a debug build, unless a test of it
+    /// tolerates it); out of memory lets the pool's textures go; an
+    /// internal error takes the device as lost.
+    #[test]
+    fn wgpus_errors_are_handled_by_their_kind() {
+        use crate::gpu_context::{GpuError, report};
+        let _gpu = gpu();
+        let context = GpuContext::shared(None).expect("a device");
+        let source = || -> wgpu::ErrorSource { Box::new(std::io::Error::other("a test's")) };
+        let pool = Arc::new(crate::gpu_context::TexturePool::default());
+        pool.put(context.upload(Size::new(2, 2), &[0; 16]));
+        assert_eq!(pool.sizes(), [Size::new(2, 2)]);
+        let lost = std::sync::atomic::AtomicBool::new(false);
+        let weak = Arc::downgrade(&pool);
+
+        let tolerating = Tolerating::new();
+        let validation = wgpu::Error::Validation {
+            source: source(),
+            description: "a test's".into(),
+        };
+        assert_eq!(
+            report(&validation, "a test", &lost, &weak),
+            GpuError::Validation
+        );
+        drop(tolerating);
+        assert_eq!(pool.sizes().len(), 1);
+        assert!(!lost.load(std::sync::atomic::Ordering::Acquire));
+
+        let memory = wgpu::Error::OutOfMemory { source: source() };
+        assert_eq!(
+            report(&memory, "a test", &lost, &weak),
+            GpuError::OutOfMemory
+        );
+        assert_eq!(pool.sizes(), Vec::<Size>::new());
+        assert!(!lost.load(std::sync::atomic::Ordering::Acquire));
+
+        let internal = wgpu::Error::Internal {
+            source: source(),
+            description: "a test's".into(),
+        };
+        assert_eq!(
+            report(&internal, "a test", &lost, &weak),
+            GpuError::Internal
+        );
+        assert!(lost.load(std::sync::atomic::Ordering::Acquire));
+        // Worst last: a scope's caller is told the worst.
+        assert!(GpuError::Validation < GpuError::OutOfMemory);
+        assert!(GpuError::OutOfMemory < GpuError::Internal);
+    }
+
+    /// A debug build panics on a validation error: a check before it is
+    /// missing, and every test that gets there says so.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "a check missing before it")]
+    fn a_validation_error_panics_in_a_debug_build() {
+        let _gpu = gpu();
+        let context = GpuContext::shared(None).expect("a device");
+        let too_large = context.device.limits().max_buffer_size + 4;
+        let _ = context.scoped("a test", || {
+            context.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("too large"),
+                size: too_large,
+                usage: wgpu::BufferUsages::VERTEX,
+                mapped_at_creation: false,
+            })
+        });
+    }
+
+    /// Error scopes catch what they are around, on the thread they are
+    /// on, and only that: the device draws on after.
+    #[test]
+    fn an_error_scope_catches_what_it_is_around() {
+        let _gpu = gpu();
+        let context = GpuContext::shared(None).expect("a device");
+        let _tolerating = Tolerating::new();
+        let too_large = context.device.limits().max_buffer_size + 4;
+        let ((), error) = context.scoped("a test", || {
+            let _ = context.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("too large"),
+                size: too_large,
+                usage: wgpu::BufferUsages::VERTEX,
+                mapped_at_creation: false,
+            });
+        });
+        assert_eq!(error, Some(crate::gpu_context::GpuError::Validation));
+        let ((), error) = context.scoped("a test", || {
+            let _ = context.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("fine"),
+                size: 64,
+                usage: wgpu::BufferUsages::VERTEX,
+                mapped_at_creation: false,
+            });
+        });
+        assert_eq!(error, None);
+        assert!(!context.is_lost());
+    }
+
+    /// An error no scope is around goes to Viz's handler, as a scope's
+    /// would: told of, not wgpu's panic.
+    #[test]
+    fn an_error_no_scope_is_around_is_handled() {
+        let _gpu = gpu();
+        let context = GpuContext::shared(None).expect("a device");
+        let _tolerating = Tolerating::new();
+        let too_large = context.device.limits().max_buffer_size + 4;
+        let _ = context.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("too large, in no scope"),
+            size: too_large,
+            usage: wgpu::BufferUsages::VERTEX,
+            mapped_at_creation: false,
+        });
+        assert!(!context.is_lost());
+    }
+
+    /// A frame wgpu reports an error of (here pixels shorter than their
+    /// resource's size, which Viz's checks would have stopped: the frame
+    /// goes to the renderer around them) isn't presented, nor copied, and
+    /// the frame after is drawn as usual.
+    #[test]
+    fn a_frame_wgpu_reports_an_error_of_isnt_copied_and_the_next_is_drawn() {
+        let _gpu = gpu();
+        let _tolerating = Tolerating::new();
+        let size = Size::new(2, 2);
+        let mut renderer =
+            WgpuRenderer::offscreen(size, GpuSharedImages::new()).expect("an adapter");
+        let short = TransferableResource {
+            id: ResourceId(1),
+            size,
+            format: ResourceFormat::Rgba8Premul,
+            pixels: protocol::BigBuffer::from([255, 0, 0, 255]),
+            shared_image: None,
+        };
+        fn aggregated<'a>(
+            size: Size,
+            quads: Vec<DrawQuad>,
+            resources: HashMap<ResourceId, &'a TransferableResource>,
+        ) -> AggregatedFrame<'a> {
+            let f = frame(size, SharedQuadState::default(), quads);
+            AggregatedFrame {
+                render_pass_list: f.render_pass_list,
+                resources,
+                images: HashMap::new(),
+                background_color: Color::WHITE,
+                size_in_pixels: size,
+                embedded: Default::default(),
+            }
+        }
+        let bad = aggregated(
+            size,
+            vec![DrawQuad {
+                rect: RectF::new(0.0, 0.0, 2.0, 2.0),
+                shared_quad_state: 0,
+                material: Material::Texture {
+                    resource_id: ResourceId(1),
+                    tex_coord_rect: RectF::new(0.0, 0.0, 2.0, 2.0),
+                    nearest_neighbor: true,
+                },
+            }],
+            HashMap::from([(ResourceId(1), &short)]),
+        );
+        assert_eq!(
+            renderer.draw_frame_and_copy(&bad).err(),
+            Some(CopyFailure::Unsupported)
+        );
+        assert!(!renderer.context.is_lost());
+        let good = aggregated(
+            size,
+            vec![solid(Color::rgb(0, 0, 255), RectF::new(0.0, 0.0, 2.0, 2.0))],
+            HashMap::new(),
+        );
+        let copy = renderer.draw_frame_and_copy(&good).expect("drawn");
+        assert_eq!(px(&copy, 1, 1), [0, 0, 255, 255]);
+        renderer.shutdown();
     }
 }

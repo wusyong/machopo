@@ -157,6 +157,69 @@ pub(crate) struct GpuContext {
     pub(crate) pool: Arc<TexturePool>,
 }
 
+/// The kinds of wgpu's errors, as Viz handles them (Chromium's GPU process
+/// loses the context on a client's error); the worst last.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum GpuError {
+    /// Something Viz handed wgpu that it should have checked first
+    /// (`CompositorFrameSinkMsg::check`): machopo's bug. What it was of is
+    /// dropped; debug builds panic, so that tests see the check missing.
+    Validation,
+    /// No memory for it: dropped, and the pool's textures let go, so the
+    /// next may fit.
+    OutOfMemory,
+    /// wgpu's or the driver's own: the device is taken as lost, and the
+    /// next draw makes another, as `about:gpucrash` does.
+    Internal,
+}
+
+/// Handles `error` of `what` (a scope's, or one no scope took): logs it,
+/// and does what its kind asks ([`GpuError`]).
+pub(crate) fn report(
+    error: &wgpu::Error,
+    what: &str,
+    lost: &AtomicBool,
+    pool: &std::sync::Weak<TexturePool>,
+) -> GpuError {
+    match error {
+        wgpu::Error::Validation { .. } => {
+            tracing::error!(%error, what, "viz: wgpu's validation error: dropped");
+            assert!(
+                !cfg!(debug_assertions) || tolerating_validation(),
+                "viz: wgpu's validation error, of {what}: a check missing before it: {error}"
+            );
+            GpuError::Validation
+        }
+        wgpu::Error::OutOfMemory { .. } => {
+            tracing::error!(%error, what, "viz: the GPU's memory is out: dropped");
+            if let Some(pool) = pool.upgrade() {
+                pool.clear();
+            }
+            GpuError::OutOfMemory
+        }
+        wgpu::Error::Internal { .. } => {
+            tracing::error!(%error, what, "viz: wgpu's internal error: the device is taken as lost");
+            lost.store(true, Ordering::Release);
+            GpuError::Internal
+        }
+    }
+}
+
+/// Whether a validation error is taken without a panic in a debug build:
+/// only by Viz's tests of catching one.
+#[cfg(not(test))]
+fn tolerating_validation() -> bool {
+    false
+}
+
+#[cfg(test)]
+pub(crate) static TOLERATE_VALIDATION: AtomicBool = AtomicBool::new(false);
+
+#[cfg(test)]
+fn tolerating_validation() -> bool {
+    TOLERATE_VALIDATION.load(Ordering::Acquire)
+}
+
 /// cc's `ResourcePool`, on Viz's side: the textures of shared images their
 /// clients and Viz have let go of, kept to be written over by the next
 /// shared image of their size rather than made anew (making a tile's
@@ -213,6 +276,13 @@ impl TexturePool {
             };
             free.bytes = free.bytes.saturating_sub(texture_bytes(oldest.size));
         }
+    }
+
+    /// Lets every texture go (the GPU's memory is out).
+    pub(crate) fn clear(&self) {
+        let mut free = self.free();
+        free.textures.clear();
+        free.bytes = 0;
     }
 
     #[cfg(test)]
@@ -406,6 +476,13 @@ impl GpuContext {
             tracing::warn!(?reason, %message, generation, "viz: the GPU device was lost");
             flag.store(true, Ordering::Release);
         });
+        // What no error scope took (wgpu panics on it by default): handled
+        // as a scope's would be, the operation it was of not known.
+        let pool: Arc<TexturePool> = Arc::default();
+        let (flag, freed) = (lost.clone(), Arc::downgrade(&pool));
+        device.on_uncaptured_error(Arc::new(move |error: wgpu::Error| {
+            report(&error, "something no scope was around", &flag, &freed);
+        }));
 
         Ok(Self {
             generation,
@@ -422,8 +499,40 @@ impl GpuContext {
             white,
             submit_lock: Arc::new(Mutex::new(())),
             staged: Mutex::new(None),
-            pool: Arc::default(),
+            pool,
         })
+    }
+
+    /// Does `f` in wgpu's error scopes (on this thread: wgpu's scopes are
+    /// each thread's own), and handles what they caught, as `what`'s
+    /// ([`GpuError`]): the worst of it, if any, for the caller to drop
+    /// what `f` made.
+    pub(crate) fn scoped<T>(
+        &self,
+        what: &'static str,
+        f: impl FnOnce() -> T,
+    ) -> (T, Option<GpuError>) {
+        let scopes = [
+            wgpu::ErrorFilter::Validation,
+            wgpu::ErrorFilter::OutOfMemory,
+            wgpu::ErrorFilter::Internal,
+        ]
+        .map(|filter| self.device.push_error_scope(filter));
+        let made = f();
+        let mut worst = None;
+        // A stack: the last pushed first. The native backend has the
+        // errors at once (the future is ready).
+        for scope in scopes.into_iter().rev() {
+            if let Some(error) = pollster::block_on(scope.pop()) {
+                worst = worst.max(Some(report(
+                    &error,
+                    what,
+                    &self.lost,
+                    &Arc::downgrade(&self.pool),
+                )));
+            }
+        }
+        (made, worst)
     }
 
     pub(crate) fn is_lost(&self) -> bool {

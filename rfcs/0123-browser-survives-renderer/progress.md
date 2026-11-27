@@ -9,7 +9,8 @@
 | 0. 草稿、盤點、探測（`details.md` 的「第 0 步的探測」「Chromium 怎麼做」）、已決定的事項第 1 到 6 條 | 做完 | 2026-11-27 |
 | 1a. `protocol::viz` 的 `CompositorFrameSinkMsg::check`、`MAX_QUADS`、`MAX_RENDER_PASSES`；Browser 的 IO thread 解開就檢查、不過的是 `BadMessageReason::FrameSink`；Viz 收到的每個 frame 照同樣的檢查、只有 root 嵌別的 surface；renderer 的 compositor 守上限、debug build 送出前檢查 | 做完 | 2026-11-27 |
 | 1b. 測試、第 1 段的檢查和文件 | 做完 | 2026-11-27 |
-| 2. wgpu 的錯誤接住；換掉 `create_buffer_init` | 還沒開始 | |
+| 2a. 已決定的事項第 7 條；`GpuContext::scoped`（三種 error scope）和 uncaptured error 的 handler，照種類處理（`GpuError`）；畫一個 frame、上傳和送出 shared image 都在 scope 裡，有錯誤的 frame 不 present、不給 copy；頂點照 `MAX_QUADS` 分成幾個自己建的 buffer，不用 `create_buffer_init` | 做完 | 2026-11-27 |
+| 2b. 測試、第 2 段的檢查和文件 | 做完 | 2026-11-27 |
 | 3. renderer 的 tile 的記憶體預算；量測；Viz 的 shared image 的上限 | 還沒開始 | |
 | 4. panic 的 lint；Viz 的 fuzzer；CI | 還沒開始 | |
 
@@ -20,6 +21,8 @@
 | 說不通的訊息 | 每一種（沒有 pass、root 的輸出是空的或 NaN、pass、quad、shared quad state 超過上限（剛好在上限的收）、quad 的 state 和 resource 不是 frame 的、resource 的 id 重複、resource 的像素和大小不合或帶著 shared image 又帶像素、超過 `MAX_TEXTURE_SIZE`、renderer 嵌 surface、`CreateSharedImage` 的大小和像素）被擋；誠實的 frame、NaN 和無限大的座標收 | `cargo test -p protocol --lib viz::` |
 | 壞訊息 | renderer process 送說不通的 frame、shared image、嵌別人 surface 的 frame 時，分頁收到 `BadMessageReason::FrameSink`、process 被結束、Viz 沒收到；說得通的到 Viz、從綁給它的 sink | `cargo test -p browser --test it renderer_process::what_viz_is_sent_that_cant_be_right_ends_its_renderer` |
 | Viz | 只有 root 的 frame 嵌別的 surface；說不通的 frame 丟掉、上一個留著；帶像素的 shared image 的 resource 整個 frame 不收、沒建過的 mailbox 不畫 | `cargo test -p viz --lib`（`a_frame_that_cant_be_right_is_dropped`、`a_frame_of_bad_resources_is_dropped`、`a_shared_image_nobody_made_isnt_drawn`） |
+| wgpu 的錯誤 | scope 接到它包著的錯誤、只接那些，device 照常；沒有 scope 包著的由 handler 收、不 panic；驗證錯誤在 debug build panic（測試容許時不）、記憶體不夠放掉池子、內部錯誤讓 device 當成遺失；wgpu 回報錯誤的 frame 不給 copy、下一個照畫；GPU 和 CPU 的 adapter 都過 | `cargo test -p viz --lib drawing_tests::`（`an_error_scope_catches_what_it_is_around`、`an_error_no_scope_is_around_is_handled`、`a_validation_error_panics_in_a_debug_build`、`wgpus_errors_are_handled_by_their_kind`、`a_frame_wgpu_reports_an_error_of_isnt_copied_and_the_next_is_drawn`）；`MACHOPO_GPU_ADAPTER=cpu` 再跑一次 |
+| 頂點的 buffer | 比一個 buffer 多的頂點從幾個 buffer 照順序畫（第二個 buffer 的 quad 在最上面） | `drawing_tests::a_frame_of_more_vertices_than_a_buffer_takes_is_drawn_from_several` |
 | compositor | quad 超過上限時丟掉最底下的、沒有 quad 的 state 拿掉，剩下的 Viz 收、每個 quad 的 state 不變；只有 state 超過時也一樣；在上限以內不動；每個測試的 frame 都過檢查（debug build 的 assert） | `cargo test -p compositor --lib` |
 
 ## 做過的檢查
@@ -37,3 +40,11 @@
 - **mutation test**（`python3 scripts/test.py mutate rfcs/0123-browser-survives-renderer/mutants-1.toml`）：32 個全部抓到。`protocol` 的檢查每一條拿掉、每個上限多一個和少一個、quad 只數 root 的、嵌 surface 一律放行、shared image 的大小和像素不檢查、送來的 frame 不檢查（`protocol` 的 `viz::` 測試）；IO thread 不檢查、把 renderer 當成能嵌 surface、壞訊息不告訴分頁、壞訊息照樣送給 Viz（`renderer_process::what_viz_is_sent_that_cant_be_right_ends_its_renderer`）；Viz 不檢查、任何 sink 都能嵌、root 也不能嵌（`viz` 的 `display::`）；compositor 不守上限、只看 quad、不丟 quad、quad 的 state 沒有跟著換號、留著所有的 state（`a_frame_keeps_within_what_viz_takes`）。跑完 32 個 `from` 都在原處。
 - 沒有放進 mutation test 的兩處，只靠審查（`docs/test-gaps.md`）：compositor 的 `generate_compositor_frame` 呼叫 `fit_to_limits`（測試沒有超過 262,144 個 quad 的頁面：一個可見的 tile 一個 quad，要 26 萬個 tile）；送出前的 debug build 的 assert（誠實的 compositor 不會觸發，拿掉它沒有測試會失敗）。
 - 第 1 段做完時：`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`（新的測試的 `single_match` 改掉之後）、`cargo test --workspace --no-fail-fast`（5006 個通過、0 個失敗、1 個 ignored）通過。
+
+### 2a 和 2b（2026-11-27，同一台）
+
+- `cargo test -p viz`（56 個；`MACHOPO_GPU_ADAPTER=cpu` 也跑）、`cargo test -p shell`（883 個：debug build 的驗證錯誤會 panic，沒有一個觸發）、`python3 scripts/test.py reftest scroll/ effects/ canvas/ frames/ hidpi/ paint/ images/`（0 個非預期的結果）通過。
+- 讀 wgpu 30 的 native 後端確認：`ErrorScopeGuard::pop` 的 future 當場就好（第 0 步的探測也是），所以 Viz 在 thread 上 `block_on` 不等；scope 是每條 thread 一份，shared image 在 renderer 的 thread 上傳時，scope 也在那條 thread 上。
+- **mutation test**（`python3 scripts/test.py mutate rfcs/0123-browser-survives-renderer/mutants-2.toml`）：13 個全部抓到（`drawing_tests::`）：scope 接到的不告訴呼叫的、驗證錯誤在 debug build 不 panic、容許時也 panic、記憶體不夠不放掉池子、池子放不掉、內部錯誤不當成遺失、內部錯誤當成記憶體不夠、沒有 uncaptured error 的 handler、有錯誤的 frame 照樣給 copy、frame 不在 scope 裡、第二個 buffer 不 bind、每個 quad 都從第一個 buffer 畫、buffer 沒寫進頂點。「沒有 handler」的 mutant 第一次寫錯、編不過（括號），改成換掉整個敘述後重跑，抓到。跑完 13 個 `from` 都在原處。
+- 沒有列成 mutant 的：scope 告訴呼叫的是最輕的而不是最重的（`max` 換成 `min`）：一個 scope 裡同時有兩種錯誤才分得出來，測試造不出記憶體不夠和內部錯誤；每個 quad 一個 buffer（分 buffer 的條件永遠成立）：畫出來一樣，只是慢，不算錯；`VERTICES_PER_BUFFER` 大一點：一個 buffer 要超過 256 MiB 才看得出來，Browser 的 UI 和一個分頁的 frame 合起來最多 240 MiB。上傳和頂點的 buffer 出錯的那兩條只靠審查（`docs/test-gaps.md`）。
+- 第 2 段做完時：`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace --no-fail-fast`（5012 個通過、0 個失敗、1 個 ignored）、`sanity.py` 的七項通過。

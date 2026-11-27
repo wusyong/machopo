@@ -177,6 +177,7 @@ Browser 自己的 UI 的 frame（root sink）不合格是 machopo 的 bug：debu
    和定的時候不同的兩處（實作時找到的，`progress.md` 的「做過的檢查」）：shared quad state 原本打算是「不超過 quad 數加 1」，但 renderer 的 compositor 每個有 clip 的 layer 給一個 state，那個 layer 的 tile 一個都沒畫時 state 照樣在，照 quad 數會讓誠實的 frame 變成壞訊息，所以改成 quad 的上限加 1；嵌 surface 是表裡原本沒有的：Viz 以前照收任何 sink 的 `Material::Surface`，renderer 能把別的分頁或 Browser 的 UI 的畫面嵌進自己的 frame，renderer 的 compositor 從來不嵌，所以算壞訊息（之後有 OOPIF 時照 Chromium 的 frame sink 的階層放行）。
 
    quad 的上限是一個 sink 的一個 frame 的：Browser 的 UI 和分頁的 frame 合起來畫時會超過，第 2 段換掉 `create_buffer_init` 時照上限把頂點分成幾個 buffer。
+7. **第 2 段：接到的錯誤照種類處理，debug build 的驗證錯誤 panic（E1 加 D1）**（2026-11-27，使用者決定）：`Validation`（machopo 的檢查漏了）丟掉那個 frame、畫面留著上一個，上傳的 shared image 當成沒建出來，記錯誤；`OutOfMemory` 一樣，再放掉 Viz 的 texture 的池子，下一個 frame 再試；`Internal` 當成 device 遺失，走 `about:gpucrash` 的路（新的 device，client 重建它的 shared image）。debug build 接到 `Validation` 時 panic（每天的 `cargo test`、reftest、情境、WPT 和 fuzzer 都看得到漏掉的檢查），release 只記錯誤；Viz 自己測「接得住」的測試用只有測試設得到的開關關掉那個 panic；`OutOfMemory`、`Internal` 在 debug build 也不 panic（不是 machopo 的 bug）。理由：Chromium 的 GPU process 在 context 出錯時是 lost context，`Internal` 照它；另外兩種不必每個分頁都重建 tile。不選三種都當成 device 遺失（E2：漏一個檢查、記憶體不夠一次，所有的分頁閃一下、重建 tile）。不選 debug build 也只記錯誤、測試讀計數（D2：每個測試都要記得看）。
 
 ## 待決定
 
