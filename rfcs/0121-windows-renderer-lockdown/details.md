@@ -97,6 +97,50 @@ machopo 現在的（`sunaba::windows` 的 `Command::spawn` 和 `lower`，`shell:
 - T1：15 個 group 全部只能拒絕（連同使用者的 SID 和 logon session），限制在 null SID，AppContainer，Untrusted。
 - **default DACL 兩者相同**：使用者、Administrators、SYSTEM、它自己的 AppContainer，各 `GENERIC_ALL`；沒有 logon session、沒有 RESTRICTED。Chromium 的 `SetLockdownDefaultDacl` 做的（拿掉 logon session、不給 RESTRICTED）已經是這樣：系統給 AppContainer 的 token 的 default DACL 本來就沒有它們。另一個 renderer 要開它的物件，要同時過一般的檢查和 AppContainer 的檢查（它的 AppContainer 的 SID 不在上面），開不了。沒有實際建一個物件讓另一個 renderer 去開。
 
+## 探測：desktop 和記憶體上限（第 2 段之前）
+
+2026-11-27，同一台機器（實體記憶體 63.6 GB，commit 的上限 67.6 GB），debug build，`f53ab848` 加上只為探測寫的原型（沒有 commit）：環境變數 `SUNABA_PROBE_DESKTOP` 有值時，`sunaba::windows::Command::spawn` 第一次給 policy 底下的 process 建一個 window station 和 desktop（`winsta`：新的 window station 和它上面的 desktop，照 Chromium 暫時換 Browser 的 window station；`desktop`：Browser 的 window station 上的 desktop，不用換），之後的都用它，`lpDesktop` 是它的完整名字；`SUNABA_PROBE_DACL=copy` 時照 Chromium 複製 Browser 的 window station 和 desktop 的 DACL，否則用預設的（建的人的 token 的 default DACL）。`SUNABA_PROBE_MEMORY_MB` 有值時 job 設 `JOB_OBJECT_LIMIT_PROCESS_MEMORY`，job 接一個 completion port，另一個 thread 把收到的訊息印出來。`sunaba_probe` 暫時多一個嘗試：`EnumWindows` 數它的 desktop 上的視窗。從外面看的工具（沒有放進這個資料夾）：讀 process 的 `DesktopInfo`（x64 的 `RTL_USER_PROCESS_PARAMETERS` + `0xC0`）、列它的 window station 和 desktop 的 handle（`NtQuerySystemInformation` 的 handle 表，複製過來問型別和名字）、讀它的 commit（`PeakPagefileUsage`）。
+
+**desktop**：
+
+- 現在：renderer 的 `DesktopInfo` 是 `WinSta0\Default`（使用者的），但它**沒有任何 window station 或 desktop 的 handle**：win32k 關著，沒有 thread 連上去。
+- 四種組合（`winsta`、`desktop` × 預設的、複製的 DACL）renderer 都起得來，`DesktopInfo` 是 Browser 建的那個，頁面照常（視窗裡開 `about:demo`；`shell` 的 `renderer_sandbox_windows` 13 個測試在 `winsta` 加預設的 DACL 底下都通過，其中截圖比較 sandbox 裡外的兩個；32 個 Browser，每個的 renderer 都在它建的 desktop 上）。DACL 不影響 renderer，因為它不連上 desktop。
+- **允許 win32k 的 process**（`sunaba_probe --allow-win32k -- windows`，lockdown 的 token、AppContainer、job 的 UI 限制；複製的 DACL 連得上，推測是第一個 thread 連上 desktop 時還帶著啟動用的 token，沒有查）：
+
+  | desktop | 結果 |
+  | --- | --- |
+  | 使用者的（現在） | 起得來，看到 0 個視窗（job 的 UI 限制擋住別的 process 的；沒有 policy 的看到 890 個） |
+  | 新的，預設的 DACL | **起不來**：`0xC0000142`（`DLL_INIT_FAILED`，user32 連不上 desktop：DACL 沒有它的 AppContainer 或 ALL APPLICATION PACKAGES） |
+  | 新的，複製的 DACL | 起得來，`EnumWindows` 沒有視窗 |
+
+  所以預設的 DACL 比 Chromium 的（複製加上 RESTRICTED 的拒絕、把 integrity 的標籤降到 renderer 的）更緊：win32k 的限制被繞過時，process 連 desktop 都連不上。Chromium 複製的理由是它的其他 process（GPU 等）和以前的 renderer 要用 win32k。
+- **換 window station 的那一下**（`SetProcessWindowStation` 到新的、建 desktop、換回來）：0.11～0.42 ms（33 次）；整個建立 0.5～1 ms。建它的是 Browser 的 UI thread（`RenderProcessHost::launch` 在 UI thread 上同步啟動 renderer），它在那之前就連在使用者的 desktop 上了，換 process 的 window station 不影響已經連上的 thread；那一下之內第一次用 `user32` 的別的 thread 會連到新的 window station 上（沒有看到，也沒有在測）。Chromium 一樣在其他 thread 跑著時換（broker 第一次啟動要它的 target 時）。
+- **window station 的名字**：`CreateWindowStationW` 不給名字時，名字是 `Service-0x0-<logon session 的 ID>$`，同一個 logon session 的每個呼叫拿到的是**同一個** window station（DACL 是第一個建它的人的），各個 Browser 的 desktop 名字不同（帶 Browser 的 PID）。Chromium 也不給名字，所以和同一個使用者的 Chrome 的 renderer 共用一個 window station（各自的 desktop）。window station 擁有 clipboard、atom table：renderer 連不上 win32k，用不到它們。
+- 一個 Browser 一個 desktop（S1）時，desktop heap 只多用一份。
+
+**記憶體上限**（上限 1 GB，三種長不停的頁面）：
+
+| 頁面 | 碰到上限（job 的訊息 9，`PROCESS_MEMORY_LIMIT`） | 結果 |
+| --- | --- | --- |
+| JS 的物件一直加 | 1.6 s | 一個 thread 的 stack 長不了（commit 不到）、V8 印出「Fatal process out of memory」，結束碼 `0xC00000FD`（stack overflow），訊息 8（不正常的結束） |
+| `ArrayBuffer`（64 MB）一直加 | 0.24 s | **renderer 沒有結束**：配置失敗是 JS 的 `RangeError`，頁面接住了照樣跑 |
+| DOM（`div`）一直加 | 1.4 s | 1.9 s 後「memory allocation of 666894336 bytes failed」，結束碼 `0xC0000409`（Rust 的配置失敗 abort） |
+
+- **結束碼說不出是記憶體**：同一個原因有三種結束碼（還有下一條的第四種），`sad_tab::Reason::of_exit` 都是「當掉」。job 的訊息 9 每次都有，而且在結束之前：Browser 要知道是上限，看 job 的 completion port（訊息排在 port 裡，不用有 thread 等著：renderer 結束時不等待地讀它就好）。Chromium 的做法是 broker 的 thread 收到訊息 9 就結束整個 job（結束碼 `SBOX_FATAL_MEMORY_EXCEEDED`，7012），對應到 `TERMINATION_STATUS_OOM`，sad tab 有記憶體不夠的標題和說明（只有 Windows 有那些字串）。照那樣做的話，上面接住 `RangeError` 的頁面也會被結束。
+- **沒有上限時**：JS 的頁面停在 V8 自己的 heap 上限（commit 最多 1570 MB，「Ineffective mark-compacts near heap limit」）。結束碼是 `0xC06D007E`：V8 的 fatal 的處理要印 stack，叫 `dbghelp.dll` 的 `SymSetOptions`，它是延後載入的，降權之後載不進來，走到延後載入失敗的 hook（stderr 有那一行）。bindings 沒有設 V8 的 OOM 的處理（`set_oom_error_handler`）。DOM 的頁面沒有東西擋：140 s 長到 19.6 GB 還在長，最後會用到 commit 的上限（整台機器的配置都開始失敗）。
+- 順便看到的（和這份無關）：一個段落裡超過 65536 個有樣式的 inline 元素時，parley 的 `push_style` 的 assert（「too many styles」）讓 renderer panic（結束碼 4）。
+
+**renderer 最多 commit 多少**（`PeakPagefileUsage`，每 0.3～0.5 s 讀一次所有的 renderer；每次讀要 1 s 左右找出 renderer，活不到那麼久的沒有讀到）：
+
+| 頁面 | renderer | 最多 |
+| --- | --- | --- |
+| `about:demo` | 1 | 86～101 MB |
+| Speedometer 3.1（`bench.py speedometer --browser machopo`，perf profile，每個 suite 10 次） | 20 個 suite，讀到 19 個 | 349 MB（其次 331、305 MB） |
+| blink_perf（`bench.py blink-perf`，`pages.txt` 的 30 頁） | 讀到 10 個 | 464 MB（其次 253、170 MB；其他 100 MB 以下） |
+| 上面的 JS 的頁面，沒有上限 | 1 | 1570 MB（V8 的 heap 上限） |
+
+正常的頁面離 1 GB 都還遠，V8 的 heap 自己停在 1.5 GB 左右；擋不住的是 DOM、layout、圖片、canvas、wasm 的記憶體這些 V8 的 heap 以外的。
+
 ## 要探測的
 
 第 1 段之前（做了，上一節；4 的後半「實際讓另一個 renderer 開」由第 1 段的測試做了：另一個 AppContainer 的 lockdown 的 process，用 lockdown 的 token 或啟動用的 token，都開不了它的 process（process 的安全描述來自它的 default DACL），使用者的一般 process 開得了）：
@@ -106,7 +150,7 @@ machopo 現在的（`sunaba::windows` 的 `Command::spawn` 和 `lower`，`shell:
 3. 從裡面試的那幾件（檔案、socket、綁本機的 port、啟動 process）在 T1 底下的結果。
 4. T1 的 token 的 default DACL 長什麼樣；照 Chromium 鎖住之後，另一個 renderer（另一個 AppContainer）和 Browser 各開不開得了 renderer 建的有名字的物件。
 
-第 2 段之前：
+第 2 段之前（做了，上一節）：
 
 5. 從外面讀 `RTL_USER_PROCESS_PARAMETERS` 的 `DesktopInfo`（x64 的位移），確認 renderer 在 Browser 建的 desktop 上。
 6. S1：所有 renderer 共用時，第一個 renderer 啟動時換 Browser 的 window station 的那一下，對 Browser 的 UI thread 有沒有影響（只有建 window station 時要換）。

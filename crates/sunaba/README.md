@@ -8,7 +8,7 @@ The crate is the mechanism alone and knows no program's policy (Chromium's split
 | --- | --- | --- |
 | Linux | Landlock (which files open), seccomp-bpf (which system calls are made) | `sunaba::linux` |
 | macOS | The kernel's sandbox (Seatbelt) under a profile: which files, Mach services and `sysctl`s, and no sockets or processes | `sunaba::macos` |
-| Windows | An app container with no capabilities, made from a lockdown restricted token (no files of the user's or the system's, no sockets, no other process), a job (one process, no user interface), the process's mitigations (no win32k, no DLL but the system's); given as the process is started | `sunaba::windows` |
+| Windows | An app container with no capabilities, made from a lockdown restricted token (no files of the user's or the system's, no sockets, no other process), a job (one process, no user interface), another window station and desktop, the process's mitigations (no win32k, no DLL but the system's); given as the process is started | `sunaba::windows` |
 
 Why it holds, what it doesn't promise, and what to review when changing it: `soundness.md`.
 
@@ -171,9 +171,10 @@ The started process's output and errors are the starter's where those are a file
 - is in an **app container** with no capabilities, whose token is made from a **lockdown** restricted token (Chromium's `USER_LOCKDOWN`: every group only denies, and only what is granted to the null SID is granted): it opens no file, the user's or the system's (not `C:\Windows` or its fonts either), makes no socket (Winsock doesn't start), opens no other process and nothing another process under a policy made, and can't read its own token. What it makes is its user's and its app container's alone (the default DACL the system gives an app container's token);
 - has a first thread that starts with a token of the same app container's that may do what an app container may (Chromium's `USER_RESTRICTED_SAME_ACCESS`), until `lower` gives it back: the loader maps the DLLs the program starts with on that thread alone (the process's `LoaderThreads` is 1), since the lockdown token opens no DLL that isn't a known one;
 - is in a **job** of one process with every user interface restriction, which ends it when the job's handle closes or an exception goes unhandled;
+- is on **another window station and desktop** (Chromium's alternate ones): the starter's first start under a policy makes them, and keeps them until it ends, for every later one. Their DACLs are the starter's token's default, which grants an app container nothing: a process that did reach win32k couldn't connect to them. The window station has no name, so it is the logon session's one; the desktop is named after the starter (`sunaba-<pid>`);
 - has, from its first instruction, Chromium's **mitigations** for a renderer: no calls into win32k, no file system control codes, no extension points, only DLLs Microsoft signed, only the system's fonts in the kernel, no DLL from another machine or from where a low-integrity process could write, no child processes, branch prediction kept to itself, no transaction manager, and DEP, SEHOP, heap termination and bottom-up ASLR.
 
-Two things a program may need of it: `allow_win32k` for one that loads `user32.dll` or `gdi32.dll` as it starts (it doesn't start otherwise; link them to be loaded on first use instead, `/DELAYLOAD`), and `allow_third_party_modules` for a machine where other software puts its DLL into every process.
+Two things a program may need of it: `allow_win32k` for one that loads `user32.dll` or `gdi32.dll` as it starts (it doesn't start otherwise; link them to be loaded on first use instead, `/DELAYLOAD`), which is then left on its starter's desktop, and `allow_third_party_modules` for a machine where other software puts its DLL into every process.
 
 ### Lowering
 
@@ -183,7 +184,9 @@ From then on the process loads no DLL. A program linked to load some DLLs on fir
 
 ### Looking from outside
 
-`open(id)` and then `in_app_container`, `integrity`, `mitigation` and `running` say what a process is in, for the starter's tests of the real thing; `AccessToken::of` is its token's user, groups (which only deny), restricting SIDs, app container and default DACL. `environment(id)` is a process's environment as it is now, by its PEB (64-bit processes): what its starter gave it, less what the process removed since; `loader_threads(id)` is how many threads its loader was told to use; `None` for one that has ended or can't be read.
+`open(id)` and then `in_app_container`, `integrity`, `mitigation` and `running` say what a process is in, for the starter's tests of the real thing; `AccessToken::of` is its token's user, groups (which only deny), restricting SIDs, app container and default DACL. `environment(id)` is a process's environment as it is now, by its PEB (64-bit processes): what its starter gave it, less what the process removed since; `loader_threads(id)` is how many threads its loader was told to use; `desktop(id)` is the window station and desktop it was started on (`station\desktop`); `None` for one that has ended or can't be read. `alternate_desktop_name()` is the starter's own: the window station and desktop it starts processes under a policy on, once it has started one.
+
+The crate calls `user32.dll` in the starter, to make those. A program that links the crate and is itself started under a policy is to load `user32.dll` on first use (`/DELAYLOAD`), as `sunaba_probe` does (`build.rs`), or it doesn't start with win32k's calls turned off.
 
 ### Testing a policy
 

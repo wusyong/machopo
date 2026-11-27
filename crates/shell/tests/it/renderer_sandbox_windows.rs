@@ -11,8 +11,8 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use sunaba::windows::{
-    AccessToken, LOW, Mitigation, UNTRUSTED, in_app_container, integrity, loader_threads,
-    mitigation, open,
+    AccessToken, LOW, Mitigation, UNTRUSTED, alternate_desktop_name, desktop, in_app_container,
+    integrity, loader_threads, mitigation, open,
 };
 
 use crate::automation_pipe::{Browser, renderer_pids, script};
@@ -58,6 +58,9 @@ fn a_renderer_process_is_in_the_sandbox() {
     assert!(is_lockdown(&process));
     // Its loader mapped its DLLs on the thread that may open them.
     assert_eq!(loader_threads(id), Some(1));
+    // It is on the window station and desktop its starter made.
+    assert!(alternate_desktop_name().is_some());
+    assert_eq!(desktop(id), alternate_desktop_name());
     // It has lowered itself by the time its threads are started.
     assert_eq!(integrity(process.as_handle()).unwrap(), UNTRUSTED);
     // No win32k, no file system control codes; no extension points; only
@@ -83,10 +86,18 @@ fn a_renderer_process_told_no_sandbox_is_in_none() {
     assert!(!in_app_container(process.as_handle()).unwrap());
     assert!(!is_lockdown(&process));
     assert_eq!(loader_threads(id), Some(0));
+    assert!(!is_on_a_browsers_desktop(id));
     assert!(integrity(process.as_handle()).unwrap() > LOW);
     assert_eq!(flags(id, Mitigation::SystemCallDisable) & 0b101, 0);
     assert_eq!(flags(id, Mitigation::Signature) & 1, 0);
     assert_eq!(renderer.browser_goes(), Some(0));
+}
+
+/// Whether the process `id` is on a window station and desktop a browser
+/// made for its renderers.
+fn is_on_a_browsers_desktop(id: u32) -> bool {
+    let desktop = desktop(id).unwrap();
+    desktop.to_str().unwrap().contains("\\sunaba-")
 }
 
 /// The processes whose parent is `parent`, as the system lists them.
@@ -134,6 +145,12 @@ fn a_browsers_renderer_is_in_the_sandbox_unless_the_browser_is_told_otherwise() 
     let id = renderer_of(&browser, true);
     assert!(in_app_container(open(id).unwrap().as_handle()).unwrap());
     assert!(is_lockdown(&open(id).unwrap()));
+    // On the logon session's window station with no name, and a desktop
+    // of the browser's.
+    let on = desktop(id).unwrap().into_string().unwrap();
+    let (station, made) = on.split_once('\\').unwrap();
+    assert!(station.starts_with("Service-0x0-"), "{on}");
+    assert_eq!(made, format!("sunaba-{}", browser.child.id()));
     assert_eq!(flags(id, Mitigation::SystemCallDisable) & 1, 1);
     assert_eq!(flags(id, Mitigation::Signature) & 1, 1);
     drop(browser);
@@ -154,6 +171,7 @@ fn a_browsers_renderer_is_in_the_sandbox_unless_the_browser_is_told_otherwise() 
     let _session = browser.attach();
     let id = renderer_of(&browser, false);
     assert!(!in_app_container(open(id).unwrap().as_handle()).unwrap());
+    assert!(!is_on_a_browsers_desktop(id));
 }
 
 /// A page of the system's fonts: generic families, and scripts the

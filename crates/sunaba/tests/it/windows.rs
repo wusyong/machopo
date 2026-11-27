@@ -220,6 +220,50 @@ fn the_loader_of_a_process_under_the_policy_has_one_thread() {
 }
 
 #[test]
+fn a_process_under_the_policy_is_on_a_desktop_its_starter_made() {
+    let mut first = lowered("desktop.1");
+    let mut second = lowered("desktop.2");
+    let made = sunaba::windows::alternate_desktop_name().expect("made by the first start");
+    let made = made.to_str().unwrap().to_owned();
+    // The logon session's window station with no name, and a desktop of
+    // this process's.
+    let (station, desktop) = made.split_once('\\').unwrap();
+    assert!(
+        station.starts_with("Service-0x0-") && station.ends_with('$'),
+        "{made}"
+    );
+    assert_eq!(desktop, format!("sunaba-{}", std::process::id()));
+    for child in [&first, &second] {
+        assert_eq!(
+            sunaba::windows::desktop(child.id()),
+            Some(made.clone().into())
+        );
+    }
+    first.kill().unwrap();
+    second.kill().unwrap();
+
+    // One with no policy, and one that may call into win32k, are on this
+    // process's.
+    let sleeping = |policy: Option<&sunaba::windows::Policy>| {
+        let mut command = sunaba::windows::Command::new(env!("CARGO_BIN_EXE_sunaba_probe"));
+        command
+            .arg("--inside")
+            .arg("--no-lower")
+            .arg("sleep")
+            .arg("20");
+        command.spawn(policy).unwrap()
+    };
+    let mut win32k =
+        sunaba::windows::Policy::new(format!("sunaba.test.{}.desktop.3", std::process::id()));
+    win32k.allow_win32k();
+    for mut child in [sleeping(None), sleeping(Some(&win32k))] {
+        let desktop = sunaba::windows::desktop(child.id()).expect("read");
+        assert_ne!(desktop, std::ffi::OsString::from(&made));
+        child.kill().unwrap();
+    }
+}
+
+#[test]
 fn lowering_isnt_only_for_a_process_in_a_sandbox() {
     // A process as its starter can lower its integrity too; it is then
     // refused what a low-integrity process may write.

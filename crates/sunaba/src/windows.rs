@@ -28,7 +28,7 @@ use std::ptr::{null, null_mut};
 
 use windows_sys::Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation};
 use windows_sys::Win32::Foundation::{
-    DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
+    DUPLICATE_SAME_ACCESS, DuplicateHandle, GENERIC_READ, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
     WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Security::Isolation::DeriveAppContainerSidFromAppContainerName;
@@ -46,6 +46,11 @@ use windows_sys::Win32::Security::{
 use windows_sys::Win32::Storage::FileSystem::{FILE_TYPE_DISK, FILE_TYPE_PIPE, GetFileType};
 use windows_sys::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE};
 use windows_sys::Win32::System::Diagnostics::Debug::{ReadProcessMemory, WriteProcessMemory};
+use windows_sys::Win32::System::StationsAndDesktops::{
+    CloseWindowStation, CreateDesktopW, CreateWindowStationW, DESKTOP_CREATEWINDOW,
+    DESKTOP_READOBJECTS, GetProcessWindowStation, GetUserObjectInformationW, HWINSTA,
+    SetProcessWindowStation, UOI_NAME,
+};
 use windows_sys::Win32::System::JobObjects::{
     CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS, JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION,
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_BASIC_UI_RESTRICTIONS,
@@ -73,6 +78,10 @@ const SE_GROUP_INTEGRITY: u32 = 0x20;
 const SE_GROUP_USE_FOR_DENY_ONLY: u32 = 0x10;
 /// A group's attributes: it is the logon session's.
 const SE_GROUP_LOGON_ID: u32 = 0xC000_0000;
+/// A window station's right to have desktops made on it.
+const WINSTA_CREATEDESKTOP: u32 = 0x8;
+/// An object's right to have its security descriptor read.
+const READ_CONTROL: u32 = 0x0002_0000;
 /// The untrusted integrity level's last number.
 pub const UNTRUSTED: u32 = 0;
 /// The low integrity level's last number: what an app container's token
@@ -437,6 +446,12 @@ impl Command {
             Some(policy) => Some(Tokens::new(&policy.app_container)?),
             None => None,
         };
+        // A process that may call into win32k is left on this process's
+        // desktop: the other one grants it nothing to connect with.
+        let mut desktop = match policy {
+            Some(policy) if !policy.win32k => Some(alternate_desktop()?),
+            _ => None,
+        };
         let job = match policy {
             Some(_) => Some(lockdown_job()?),
             None => None,
@@ -476,6 +491,9 @@ impl Command {
             startup.StartupInfo.hStdError = standard[1];
         }
         startup.lpAttributeList = attributes.list();
+        if let Some(desktop) = &mut desktop {
+            startup.StartupInfo.lpDesktop = desktop.as_mut_ptr();
+        }
         let mut flags = CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT;
         // Its first thread is given its token, and the loader told to
         // load on that thread alone, before it runs.
@@ -492,7 +510,8 @@ impl Command {
         // structure the flags say it is, its size in `cb`, and its
         // attribute list and every value the list points to (`handles`,
         // `mitigations`, `jobs`, `one`) are alive until the list is
-        // dropped, after the call; `made` is written. The token, when
+        // dropped, after the call, as the desktop's name (NUL-terminated)
+        // is; `made` is written. The token, when
         // there is one, is a primary token open for the call. Only the
         // handles in the list are inherited, and each of them is the
         // caller's to hand on or a copy made here.
@@ -1013,6 +1032,125 @@ fn lockdown_job() -> Result<OwnedHandle, Error> {
     Ok(job)
 }
 
+/// The window station and desktop a process under a policy is started on
+/// (Chromium's alternate window station and desktop): made by the first
+/// such start, and kept, their handles never closed, until this process
+/// ends, so that every later one is started on them by name. A start that
+/// couldn't make them is refused, and the next tries again. The name is
+/// NUL-terminated.
+static ALTERNATE_DESKTOP: std::sync::Mutex<Option<Vec<u16>>> = std::sync::Mutex::new(None);
+
+/// The full name (`station\desktop`) of the window station and desktop a
+/// process under a policy is started on, made if they aren't yet.
+fn alternate_desktop() -> Result<Vec<u16>, Error> {
+    // A start that panicked while holding it left either a name or none.
+    let mut made = ALTERNATE_DESKTOP
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(name) = &*made {
+        return Ok(name.clone());
+    }
+    let name = make_alternate_desktop()?;
+    *made = Some(name.clone());
+    Ok(name)
+}
+
+/// A window station with no name, and a desktop on it named after this
+/// process. Neither is given a security descriptor: their DACLs are this
+/// process's token's default DACL (its user, the administrators and the
+/// system), which grants a process in an app container nothing, so one
+/// that did reach win32k couldn't connect to either. A window station
+/// with no name is the logon session's one (`Service-0x0-<session>$`),
+/// whoever asks; the desktop's name is this process's alone.
+fn make_alternate_desktop() -> Result<Vec<u16>, Error> {
+    // SAFETY: takes nothing; the handle it returns isn't to be closed.
+    let current = unsafe { GetProcessWindowStation() };
+    check("GetProcessWindowStation", !current.is_null())?;
+    // SAFETY: no name, no flags, no attributes (so not inherited).
+    let station =
+        unsafe { CreateWindowStationW(null(), 0, GENERIC_READ | WINSTA_CREATEDESKTOP, null()) };
+    check("CreateWindowStationW", !station.is_null())?;
+    let made = desktop_on(station, current);
+    if made.is_err() {
+        // SAFETY: the handle was made above and is closed once.
+        unsafe { CloseWindowStation(station) };
+    }
+    made
+}
+
+/// Makes this process's desktop on `station`: a desktop is made only on
+/// the window station of the process that makes it, so this process's is
+/// `station` for the call, then `current` again. A thread of this
+/// process's that is connected to its desktop already stays on it; one
+/// that first calls into win32k meanwhile would connect to `station`.
+fn desktop_on(station: HWINSTA, current: HWINSTA) -> Result<Vec<u16>, Error> {
+    let desktop = OsString::from(format!("sunaba-{}", std::process::id()));
+    let desktop_wide = wide(&desktop)?;
+    let mut name = object_name(station)?;
+    name.push("\\");
+    name.push(&desktop);
+    let name = wide(&name)?;
+    // SAFETY: the handle is an open window station.
+    let switched = unsafe { SetProcessWindowStation(station) };
+    check("SetProcessWindowStation", switched != 0)?;
+    // SAFETY: the name is NUL-terminated and alive for the call; no
+    // device, mode, flags or attributes.
+    let made = unsafe {
+        CreateDesktopW(
+            desktop_wide.as_ptr(),
+            null(),
+            null(),
+            0,
+            DESKTOP_CREATEWINDOW | DESKTOP_READOBJECTS | READ_CONTROL,
+            null(),
+        )
+    };
+    let made = check("CreateDesktopW", !made.is_null());
+    // SAFETY: the handle is this process's window station as it was.
+    let back = unsafe { SetProcessWindowStation(current) };
+    made?;
+    check("SetProcessWindowStation", back != 0)?;
+    Ok(name)
+}
+
+/// A window station's or desktop's name.
+fn object_name(object: HANDLE) -> Result<OsString, Error> {
+    use std::os::windows::ffi::OsStringExt as _;
+    // More than a window station's or desktop's name is.
+    let mut buffer = [0_u16; 256];
+    let mut needed = 0;
+    let length = size32("a name", size_of_val(&buffer))?;
+    // SAFETY: `object` is open; the buffer is writable for the length
+    // given, which the call writes at most of, and `needed` is written.
+    let read = unsafe {
+        GetUserObjectInformationW(
+            object,
+            UOI_NAME,
+            buffer.as_mut_ptr().cast(),
+            length,
+            &raw mut needed,
+        )
+    };
+    check("GetUserObjectInformationW", read != 0)?;
+    let end = buffer
+        .iter()
+        .position(|&unit| unit == 0)
+        .unwrap_or(buffer.len());
+    Ok(OsString::from_wide(&buffer[..end]))
+}
+
+/// The full name (`station\desktop`) of the window station and desktop
+/// this process starts a process under a policy on, once it has started
+/// one; `None` before.
+pub fn alternate_desktop_name() -> Option<OsString> {
+    use std::os::windows::ffi::OsStringExt as _;
+    let made = ALTERNATE_DESKTOP
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    made.as_ref()
+        .map(|name| OsString::from_wide(name.strip_suffix(&[0]).unwrap_or(name)))
+}
+
 /// A process [`Command::spawn`] started. One started under a policy is
 /// ended when this is dropped (its job closes); one started with none
 /// runs on.
@@ -1517,6 +1655,9 @@ unsafe fn sid_text(sid: PSID) -> String {
 mod peb {
     pub const PROCESS_PARAMETERS: usize = 0x20;
     pub const ENVIRONMENT: usize = 0x80;
+    /// `DesktopInfo`, a `UNICODE_STRING`: its length in bytes, the most it
+    /// may be, padding, and where the string is.
+    pub const DESKTOP_INFO: usize = 0xC0;
     pub const ENVIRONMENT_SIZE: usize = 0x3F0;
     pub const LOADER_THREADS: usize = 0x40C;
     /// More than any environment is: a size read past it is taken for a
@@ -1573,6 +1714,37 @@ pub fn loader_threads(id: u32) -> Option<u32> {
         &mut threads,
     )?;
     Some(u32::from_ne_bytes(threads))
+}
+
+/// The window station and desktop the process `id` was started on
+/// (`station\desktop`), by the name it was given: its parameters'
+/// `DesktopInfo`, empty where it was given none (it is then on its
+/// starter's). `None` for a process that isn't there, isn't this user's,
+/// or can't be read.
+#[cfg(target_pointer_width = "64")]
+pub fn desktop(id: u32) -> Option<OsString> {
+    use std::os::windows::ffi::OsStringExt as _;
+    let process = open_to_read(id)?;
+    let parameters = parameters_of(&process)?;
+    let mut string = [0_u8; 16];
+    read_from(
+        &process,
+        parameters.checked_add(peb::DESKTOP_INFO)?,
+        &mut string,
+    )?;
+    let length = usize::from(u16::from_le_bytes([string[0], string[1]]));
+    let address = usize::from_ne_bytes(*string.last_chunk::<8>()?);
+    let mut bytes = vec![0_u8; length];
+    if length > 0 {
+        read_from(&process, address, &mut bytes)?;
+    }
+    let units: Vec<u16> = bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&pair| u16::from_le_bytes(pair))
+        .collect();
+    Some(OsString::from_wide(&units))
 }
 
 /// The environment of the process `id` as it is now, by the system's
@@ -1694,6 +1866,23 @@ mod tests {
         assert_eq!(quoted(r"C:\a b\"), r#""C:\a b\\""#);
         assert_eq!(quoted(r#"a\"b"#), r#""a\\\"b""#);
         assert_eq!(quoted(r"a\\b c"), r#""a\\b c""#);
+    }
+
+    #[test]
+    fn making_the_desktop_leaves_this_process_on_its_own_window_station() {
+        use std::os::windows::ffi::OsStringExt as _;
+        let station = || {
+            // SAFETY: takes nothing; the handle isn't to be closed.
+            let station = unsafe { GetProcessWindowStation() };
+            object_name(station).unwrap()
+        };
+        let before = station();
+        let made = alternate_desktop().unwrap();
+        assert_eq!(station(), before);
+        let made = OsString::from_wide(made.strip_suffix(&[0]).unwrap());
+        assert_ne!(made.to_str().unwrap().split_once('\\').unwrap().0, before);
+        // Made once.
+        assert_eq!(alternate_desktop_name(), Some(made));
     }
 
     #[test]

@@ -9,7 +9,11 @@
 | 0. 草稿、探測（`details.md`）、第 1 段的五條決定 | 做完 | 2026-11-27 |
 | 1a. `sunaba`：lockdown 加 AppContainer 的 primary token、第一個 thread 帶 same-access 加 AppContainer 的 token、process 暫停著建、`LoaderThreads` 寫成 1；`lower` 要一次亂數、還回 token；延後載入失敗的 hook；從外面讀 token（`AccessToken`）和 `loader_threads` | 做完 | 2026-11-27 |
 | 1b. 測試（斷言舊行為的改過來）、mutation test、第 1 段的檢查和文件 | 做完 | 2026-11-27 |
-| 2. desktop 和記憶體上限 | 還沒開始 | |
+| 2 之前. 探測（`details.md` 的「探測：desktop 和記憶體上限（第 2 段之前）」）、第 2 段的決定（已決定的事項第 6 到 9 條） | 做完 | 2026-11-27 |
+| 2a. desktop：`sunaba` 第一次照 policy 啟動時建 window station 和它上面的 desktop、之後的都用它（允許 win32k 的不用）；從外面讀 `DesktopInfo`（`desktop`）；`sunaba_probe` 延後載入 `user32`；測試 | 做完 | 2026-11-27 |
+| 2b. job 的記憶體上限（實體記憶體的一半，最少 4 GB）、job 的 completion port、Browser 存的結束帶「碰過記憶體上限」、sad tab 的「記憶體不夠」；測試 | 還沒開始 | |
+| 2c. V8 的 OOM：`bindings` 設 `set_oom_error_handler`、固定的結束碼、sad tab 對到「記憶體不夠」（三個平台）；測試 | 還沒開始 | |
+| 2d. 第 2 段的檢查和文件 | 還沒開始 | |
 | 3. 探測的三件（handle、CSRSS、shim） | 還沒開始 | |
 
 ## 驗收
@@ -22,6 +26,7 @@
 | 讀不到的 | 降權之後讀不到 `kernel32.dll`、`win.ini`，列不了 `Fonts`、`Program Files`，`stat` 不了 `cmd.exe`；啟動不了程式（開不了執行檔；開得了時是 child process 的限制） | `sunaba` 的 `nothing_of_the_systems_is_read_once_the_process_has_lowered_itself`、`no_program_is_started`；`shell` 的 `a_renderer_reads_nothing_of_the_systems`、`a_renderer_reaches_no_network_starts_no_program_and_opens_no_process` |
 | socket | Winsock 起不來：連外面、連本機、聽本機的 port 都是 `WSAStartup` 失敗（10107），本機的 listener 沒收到連線 | `sunaba` 的 `no_socket_is_made`、`nothing_is_connected_to_on_the_machine` |
 | default DACL | 從外面讀：都是允許的項目，有使用者和它自己的 AppContainer，沒有 logon session、RESTRICTED、ALL APPLICATION PACKAGES；另一個 policy 底下的 process 用 lockdown 的 token 或啟動用的 token 都開不了它的 process（安全描述來自它的 default DACL），使用者的一般 process 開得了 | `sunaba` 的 `the_process_has_a_lockdown_app_containers_token`、`what_a_process_makes_another_under_a_policy_cant_open`；`shell` 的 `a_renderer_process_is_in_the_sandbox` |
+| desktop | policy 底下的 process 在 starter 建的 window station（logon session 的沒有名字的那一個）和 desktop（`sunaba-<starter 的 PID>`）上，同一個 starter 的都在同一個上；沒有 policy 的、允許 win32k 的在 starter 的上；建完之後 starter 自己的 window station 不變；renderer 在 Browser 建的上，`--no-sandbox` 的不在 | `sunaba` 的 `a_process_under_the_policy_is_on_a_desktop_its_starter_made`、`making_the_desktop_leaves_this_process_on_its_own_window_station`；`shell` 的 `a_renderer_process_is_in_the_sandbox`、`a_renderer_process_told_no_sandbox_is_in_none`、`a_browsers_renderer_is_in_the_sandbox_unless_the_browser_is_told_otherwise` |
 | 延後載入 | renderer 降權之後碰到延後載入的 DLL（`ws2_32`）時以 `0xC06D007E` 結束，stderr 有一行說是哪一個 DLL、它在 sandbox 裡降權之後載不進來 | `shell` 的 `a_renderer_ends_on_a_dll_it_cant_load_and_says_which` |
 | 網頁看到的 | sandbox 裡、外和 thread 上的 renderer 畫的系統字型、測試字型、時區和 `Intl` 相同；wasm 的文件在 sandbox 裡和 thread 上畫的相同；整套 `shell` 的測試在 lockdown 的 renderer 上通過 | `shell` 的 `a_sandboxed_renderer_shows_a_page_as_one_outside_does`、`a_sandboxed_renderer_runs_a_wasm_document_as_one_outside_does`、`a_renderer_process_has_the_systems_fonts_from_its_browser`；`cargo test -p shell` |
 
@@ -43,3 +48,12 @@
 - **補不了測試的**：寫 `LoaderThreads` 前的長度檢查、hook 對「函式找不到」的說法：記進 `docs/test-gaps.md` 的「只靠審查」。
 - **順手修的**：`shell` 的測試的 `Browser::start_wrapped` 只有 Linux 的測試用到，Windows 上 workspace 的 clippy 因為 dead code 失敗（不是這一段造成的）：不是 Linux 時 `expect(dead_code)`。
 - **跑過的檢查**：`cargo test -p sunaba`（整合測試 25 個，都通過）；`cargo test -p shell -p ipc`（都通過）；`cargo test -p shell --test it renderer_sandbox_windows`（13 個，都通過）；`cargo test --workspace`、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`（都通過）；量測工具的測試（`speedometer_test.py`、`blink_perf_test.py`、`raster_test.py`、`census_test.py`，都通過）；`sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs（都通過）。
+
+### 2a（2026-11-27，同一台）
+
+- **做法**：探測的原型（沒有 commit）改寫成 `sunaba` 的 `alternate_desktop`：一個 `Mutex<Option<Vec<u16>>>` 存名字，第一次照 policy 啟動時建（`CreateWindowStationW` 不給名字，暫時 `SetProcessWindowStation` 過去，`CreateDesktopW` 名字是 `sunaba-<PID>`，再換回來），handle 不關；建不了時 `spawn` 回錯誤、不啟動，下一次再試。允許 win32k 的 process 不放上去。`desktop(id)` 讀 process 的參數的 `DesktopInfo`（x64 的 `+ 0xC0`）。window station 的 handle 要 `GENERIC_READ` 才讀得到名字（只給 `WINSTA_CREATEDESKTOP` 時 `GetUserObjectInformationW` 被拒，`sunaba` 的測試全部失敗）：照 Chromium 給 `GENERIC_READ | WINSTA_CREATEDESKTOP`。名字在建 desktop 之前讀，讀不到時不留下 desktop。
+- **`user32` 的延後載入**：`sunaba` 現在呼叫 `user32` 的函式，連結它的 `sunaba_probe` 啟動時就載入 `user32`，關著 win32k 的 probe 起不來；`sunaba` 加了 `build.rs`，讓 `sunaba_probe` 和 machopo 的執行檔一樣 `/DELAYLOAD:user32.dll`。改了之後 `sunaba` 原有的測試照樣通過。
+- **新的測試**：`sunaba` 的整合測試 1 個（兩個 policy 底下的 process 在同一個 starter 建的 desktop 上，名字的形式；沒有 policy 的、允許 win32k 的不在上面）、unit test 1 個（建完之後 starter 的 window station 不變、只建一次）；`shell` 的 `renderer_sandbox_windows` 的 3 個加上 desktop 的檢查（測試的 process 啟動的 renderer 在它建的上；Browser 啟動的在 `sunaba-<Browser 的 PID>` 上；`--no-sandbox` 的不在）。
+- **Mutation test**（`mutants-2a.toml`，9 個，`--keep-going`）：都抓到：不給 `lpDesktop`（`sunaba` 的和 machopo 的 renderer 各一次）、允許 win32k 的也放上去、不換回 starter 的 window station、不存起來給下一次、desktop 的名字不帶 PID、`alternate_desktop_name` 說沒有、`DesktopInfo` 讀錯位置、讀成它的最大長度。跑完確認 `windows.rs` 都還原了。
+- **補不了測試的**：另一個 desktop 的 DACL 擋住連上 win32k 的 process（`sunaba` 不把允許 win32k 的 process 放上去，沒有 process 是兩者都有的；探測時看過）：記進 `docs/test-gaps.md` 的「只做過手動確認」。
+- **跑過的檢查**：`cargo test -p sunaba -p ipc -p shell`（`sunaba` 的 unit test 8 個、整合測試 26 個，`shell` 的整合測試 755 個，都通過）；`sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs（都通過）。`cargo test --workspace`、fmt 和 clippy 等第 2 段做完時跑。
