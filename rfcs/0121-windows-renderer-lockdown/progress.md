@@ -16,7 +16,7 @@
 | 2d. 第 2 段的檢查和文件 | 做完 | 2026-11-27 |
 | 3 之前. 探測（`details.md` 的「探測：handle、CSRSS、shim（第 3 段之前）」）、第 3 段的決定（已決定的事項第 11 條） | 做完 | 2026-11-27 |
 | 3a. 降權時關掉 `\Device\KsecDD`、空出的位置放 event 的複本（`sunaba` 的 `windows/handles.rs`）；從外面列 process 的 handle（`handles`）；測試 | 做完 | 2026-11-27 |
-| 3b. 建立時把 `pShimData` 寫成 0、開了 CIG 時加 module tampering protection；測試 | 還沒開始 | |
+| 3b. 建立時把 `pShimData` 寫成 0（x64 在 ARM64 上模擬時不寫）、開了 CIG 時加 module tampering protection；從外面讀 `pShimData`（`shim_data`）；測試 | 做完 | 2026-11-27 |
 | 3c. 第 3 段的檢查和文件 | 還沒開始 | |
 
 ## 驗收
@@ -94,3 +94,10 @@
 - **Mutation test**（`mutants-3a.toml`，11 個，`--keep-going`）：抓到 8 個：降權不關、關別的裝置、不放複本、複本不留、event 不留、名字從錯的位置讀、handle 的值讀錯、handle 數讀錯。沒抓到 3 個（預期的，記進 `docs/test-gaps.md` 的「只靠審查」）：不拿掉不許關的保護、問 pipe 的名字、thread 不留在同一個處理器上：測試的 process 沒有這三種情況。複本是不是在空出的那個位置也只靠審查：handle 的值每個 process 不一樣，從外面看不出來。跑完確認改過的檔案都還原了。
 - **整理**：第 2 段的三份 spec（`mutants-2a.toml`、`mutants-2b.toml`、`mutants-2c.toml`）當時只留在本機，補進這個資料夾；`mutants-1.toml` 的「降權前不要亂數」那一條照 `cargo fmt` 之後的排版更新。現在五份的每一條都還對得上程式。
 - **跑過的檢查**：`cargo test -p sunaba -p shell`（`sunaba` 的 Windows 整合測試 28 個、`shell` 的整合測試 755 個，和其他的都通過）；`sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs（都通過）。`cargo test --workspace`、fmt 和 clippy 等第 3 段做完時跑。
+
+### 3b（2026-11-27，同一台）
+
+- **做法**：照已決定的事項第 11 條（H1、M1）和「3b 的做法」。查了 Chromium（`sandbox_policy_base.cc` 的 `ApplyZeroAppShimToSuspendedProcess`、`sandbox_win.cc` 開它的條件、`process_mitigations.cc`）：`sunaba` 的 `start` 在寫 `LoaderThreads` 之後，把暫停著的 process 的 PEB 的 `pShimData`（`+0x2D8`，x64 和 ARM64 一樣）寫成 0，寫不了時不啟動；`IsWow64Process2` 說系統原生的架構和執行檔的不同（x64 在 ARM64 上模擬）時不寫。建立時的第二個 mitigation 字在沒有 `allow_third_party_modules` 時多一個 `MODULE_TAMPERING_PROTECTION_ALWAYS_ON`（bit 12）。`sunaba` 加上從外面讀 `pShimData` 的 `shim_data(id)`；讀 PEB 位置的部分從 `parameters_of` 拆成 `peb_of`。
+- **新的測試**：`sunaba` 的整合測試 1 個（policy 底下的 process 的 `pShimData` 是 0；沒有 policy 的只斷言讀得到：這台機器上它不是 0，別的機器上可能本來就是 0）；`sunaba` 的 mitigation 的單元測試加上 bit 12、`allow_third_party_modules` 時沒有它。實際的 renderer 用探測的腳本從外面看：`pShimData` 是 0（之前不是 0）、沒有 `apphelp.dll`、KsecDD 是 0，頁面照常（開著 module tampering protection 也起得來）。
+- **Mutation test**（`mutants-3b.toml`，8 個，`--keep-going`）：抓到 7 個：不寫 `pShimData`、寫在後面 8 個 byte、每台機器都當成模擬、執行檔當成 ARM64 的、不加 module tampering protection、加成關掉它的那一個 bit、允許別人的 DLL 時也加。沒抓到 1 個（預期的）：寫失敗時不當成錯誤：暫停著的 process 有全部的權限，測試寫不失敗；和 module tampering protection 的效果、模擬時不寫的那條路一起記進 `docs/test-gaps.md` 的「只靠審查」。跑完確認改過的檔案都還原了。
+- **跑過的檢查**：`cargo test -p sunaba -p shell`（`sunaba` 的 Windows 整合測試 29 個、`shell` 的整合測試 755 個，和其他的都通過）；`sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs（都通過）。`cargo test --workspace`、fmt 和 clippy 等第 3 段做完時跑。

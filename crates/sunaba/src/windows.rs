@@ -62,12 +62,14 @@ use windows_sys::Win32::System::StationsAndDesktops::{
     DESKTOP_READOBJECTS, GetProcessWindowStation, GetUserObjectInformationW, HWINSTA,
     SetProcessWindowStation, UOI_NAME,
 };
-use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+use windows_sys::Win32::System::SystemInformation::{
+    GlobalMemoryStatusEx, IMAGE_FILE_MACHINE_AMD64, IMAGE_FILE_MACHINE_ARM64, MEMORYSTATUSEX,
+};
 use windows_sys::Win32::System::Threading::{
     CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW, CreateProcessW,
     DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess,
     GetExitCodeProcess, GetProcessMitigationPolicy, INFINITE, InitializeProcThreadAttributeList,
-    OpenProcess, OpenProcessToken, PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY,
+    IsWow64Process2, OpenProcess, OpenProcessToken, PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY,
     PROC_THREAD_ATTRIBUTE_COMPONENT_FILTER, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
     PROC_THREAD_ATTRIBUTE_JOB_LIST, PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY,
     PROCESS_BASIC_INFORMATION, PROCESS_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -134,6 +136,12 @@ mod creation2 {
     /// Indirect branches aren't predicted from what another security
     /// domain trained.
     pub const RESTRICT_INDIRECT_BRANCH_PREDICTION: u64 = 0x1 << 16;
+    /// The loader maps a clean copy of the executable when its import
+    /// table was changed before the process started (by software that
+    /// puts its DLL into every process), instead of following the
+    /// change; with only Microsoft-signed DLLs allowed, following it
+    /// would fail the start.
+    pub const MODULE_TAMPERING_PROTECTION: u64 = 0x1 << 12;
     /// No file system control codes (Windows 10 22H2; ignored before).
     pub const FSCTL_DISABLE: u64 = 0x1 << 56;
 }
@@ -311,13 +319,12 @@ impl Policy {
         if !self.win32k {
             first |= creation::WIN32K_DISABLE;
         }
+        let mut second = creation2::RESTRICT_INDIRECT_BRANCH_PREDICTION | creation2::FSCTL_DISABLE;
         if !self.third_party_modules {
             first |= creation::MICROSOFT_SIGNED_ONLY;
+            second |= creation2::MODULE_TAMPERING_PROTECTION;
         }
-        [
-            first,
-            creation2::RESTRICT_INDIRECT_BRANCH_PREDICTION | creation2::FSCTL_DISABLE,
-        ]
+        [first, second]
     }
 }
 
@@ -955,12 +962,14 @@ fn app_container_token(base: &OwnedHandle, name: &str) -> Result<OwnedHandle, Er
 }
 
 /// Lets a process made suspended under a policy run: its first thread
-/// with `initial` until it lowers itself, and the loader mapping the DLLs
-/// it starts with on that thread alone. The loader's own threads (four,
-/// by default) would have only the primary token, which opens no DLL
-/// that isn't a known one: one given to them fails the process's start.
+/// with `initial` until it lowers itself, the loader mapping the DLLs
+/// it starts with on that thread alone, and no compatibility shim. The
+/// loader's own threads (four, by default) would have only the primary
+/// token, which opens no DLL that isn't a known one: one given to them
+/// fails the process's start.
 fn start(process: &OwnedHandle, thread: &OwnedHandle, initial: &OwnedHandle) -> Result<(), Error> {
     one_loader_thread(process)?;
+    no_app_shim(process)?;
     let thread = thread.as_raw_handle();
     // SAFETY: `thread` is an open handle of the first thread of a
     // process made just now, with every access; `initial` is an
@@ -1013,6 +1022,69 @@ fn one_loader_thread(process: &OwnedHandle) -> Result<(), Error> {
         )
     };
     check(what, done != 0 && written == one.len())
+}
+
+/// Writes 0 to a suspended process's `pShimData` (in its PEB, not in any
+/// public header), as Chromium does for its renderers: the system puts
+/// there the compatibility shims the user or the system chose for the
+/// executable, and the loader, as the process's first thread starts,
+/// then loads `apphelp.dll` and the shims' DLLs, which hook the system's
+/// functions in the process. With 0 it loads none. Not on an ARM64
+/// machine running this x64 executable emulated, where the emulation
+/// relies on them (Chromium doesn't there either).
+#[cfg(target_pointer_width = "64")]
+fn no_app_shim(process: &OwnedHandle) -> Result<(), Error> {
+    if emulated() {
+        return Ok(());
+    }
+    let what = "the process's pShimData";
+    let address = peb_of(process)
+        .and_then(|peb| peb.checked_add(peb::SHIM_DATA))
+        .ok_or_else(|| Error::other(what, "the process's PEB wasn't read"))?;
+    let zero = 0_usize.to_ne_bytes();
+    let mut written = 0_usize;
+    // SAFETY: `process` is open with every access and hasn't run; the
+    // bytes written are this process's own and alive for the call; they
+    // go to the other process's memory, where the field is a pointer in
+    // its PEB that nothing there has read yet.
+    let done = unsafe {
+        WriteProcessMemory(
+            process.as_raw_handle(),
+            std::ptr::without_provenance(address),
+            zero.as_ptr().cast(),
+            zero.len(),
+            &raw mut written,
+        )
+    };
+    check(what, done != 0 && written == zero.len())
+}
+
+#[cfg(not(target_pointer_width = "64"))]
+fn no_app_shim(_process: &OwnedHandle) -> Result<(), Error> {
+    Err(Error::other(
+        "the process's pShimData",
+        "known only on 64-bit Windows",
+    ))
+}
+
+/// Whether this executable runs emulated: built for another machine than
+/// the one it is on (x64 on ARM64).
+fn emulated() -> bool {
+    let built_for = if cfg!(target_arch = "aarch64") {
+        IMAGE_FILE_MACHINE_ARM64
+    } else {
+        IMAGE_FILE_MACHINE_AMD64
+    };
+    let (mut process, mut native) = (0, 0);
+    // SAFETY: on this process's pseudo-handle; both answers are locals.
+    let asked = unsafe {
+        IsWow64Process2(
+            this_process().as_raw_handle(),
+            &raw mut process,
+            &raw mut native,
+        )
+    };
+    asked != 0 && native != built_for
 }
 
 #[cfg(not(target_pointer_width = "64"))]
@@ -1789,6 +1861,8 @@ mod peb {
     pub const DESKTOP_INFO: usize = 0xC0;
     pub const ENVIRONMENT_SIZE: usize = 0x3F0;
     pub const LOADER_THREADS: usize = 0x40C;
+    /// In the PEB itself: `pShimData`, the same on x64 and ARM64.
+    pub const SHIM_DATA: usize = 0x2D8;
     /// More than any environment is: a size read past it is taken for a
     /// misread.
     pub const MOST: usize = 1 << 24;
@@ -1806,6 +1880,13 @@ fn open_to_read(id: u32) -> Option<OwnedHandle> {
 /// Where `process`'s parameters are, in its memory.
 #[cfg(target_pointer_width = "64")]
 fn parameters_of(process: &OwnedHandle) -> Option<usize> {
+    let peb = peb_of(process)?;
+    word_at(process, peb.checked_add(peb::PROCESS_PARAMETERS)?)
+}
+
+/// Where `process`'s PEB is, in its memory.
+#[cfg(target_pointer_width = "64")]
+fn peb_of(process: &OwnedHandle) -> Option<usize> {
     // SAFETY: all-zero is a valid `PROCESS_BASIC_INFORMATION` (numbers
     // and a pointer that is only read as a number).
     let mut basic: PROCESS_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
@@ -1824,8 +1905,18 @@ fn parameters_of(process: &OwnedHandle) -> Option<usize> {
     if status != 0 {
         return None;
     }
-    let peb = basic.PebBaseAddress.addr();
-    word_at(process, peb.checked_add(peb::PROCESS_PARAMETERS)?)
+    Some(basic.PebBaseAddress.addr())
+}
+
+/// The process `id`'s `pShimData` as it is now: 0 for a process started
+/// under a policy (on a machine that doesn't run this executable
+/// emulated), and for one with none what the system gave it, which is
+/// often not 0 whether or not it has shims. `None` for a process that
+/// isn't there, isn't this user's, or can't be read.
+#[cfg(target_pointer_width = "64")]
+pub fn shim_data(id: u32) -> Option<usize> {
+    let process = open_to_read(id)?;
+    word_at(&process, peb_of(&process)?.checked_add(peb::SHIM_DATA)?)
 }
 
 /// How many threads the process `id`'s loader was told to map its DLLs
@@ -2029,13 +2120,18 @@ mod tests {
                 | (1 << 52)
                 | (1 << 56)
         );
-        assert_eq!(all[1], (1 << 16) | (1 << 56));
+        assert_eq!(all[1], (1 << 12) | (1 << 16) | (1 << 56));
         let mut policy = Policy::new("x");
         policy.allow_win32k();
         assert_eq!(policy.creation_mitigations()[0], all[0] & !(1 << 28));
         let mut policy = Policy::new("x");
         policy.allow_third_party_modules();
-        assert_eq!(policy.creation_mitigations()[0], all[0] & !(1 << 44));
+        // Module tampering protection only with Microsoft-signed DLLs
+        // alone: without them, a changed import table is followed.
+        assert_eq!(
+            policy.creation_mitigations(),
+            [all[0] & !(1 << 44), all[1] & !(1 << 12)]
+        );
     }
 
     #[test]

@@ -1,0 +1,54 @@
+# 3b's mutants (Windows: a process under a policy is started with no compatibility shim, and with module tampering protection when it loads only Microsoft-signed DLLs): `python3 scripts/test.py mutate rfcs/0121-windows-renderer-lockdown/mutants-3b.toml --keep-going`, on Windows.
+test = ["cargo", "test", "-q", "-p", "sunaba"]
+timeout = 900
+
+[[mutant]]
+name = "the shims are left as the system gave them"
+file = "crates/sunaba/src/windows.rs"
+from = '''    no_app_shim(process)?;'''
+to = ''''''
+
+[[mutant]]
+name = "the zero is written past pShimData"
+file = "crates/sunaba/src/windows.rs"
+from = '''        .and_then(|peb| peb.checked_add(peb::SHIM_DATA))'''
+to = '''        .and_then(|peb| peb.checked_add(peb::SHIM_DATA + 8))'''
+
+[[mutant]]
+name = "every machine is taken for one that emulates"
+file = "crates/sunaba/src/windows.rs"
+from = '''    asked != 0 && native != built_for'''
+to = '''    asked != 0 || native != built_for'''
+
+[[mutant]]
+name = "the executable is taken as built for ARM64"
+file = "crates/sunaba/src/windows.rs"
+from = '''    let built_for = if cfg!(target_arch = "aarch64") {'''
+to = '''    let built_for = if !cfg!(target_arch = "aarch64") {'''
+
+[[mutant]]
+name = "no module tampering protection"
+file = "crates/sunaba/src/windows.rs"
+from = '''            second |= creation2::MODULE_TAMPERING_PROTECTION;'''
+to = ''''''
+
+[[mutant]]
+name = "module tampering protection's bit is the one that turns it off"
+file = "crates/sunaba/src/windows.rs"
+from = '''    pub const MODULE_TAMPERING_PROTECTION: u64 = 0x1 << 12;'''
+to = '''    pub const MODULE_TAMPERING_PROTECTION: u64 = 0x2 << 12;'''
+
+[[mutant]]
+name = "module tampering protection with other people's DLLs allowed"
+file = "crates/sunaba/src/windows.rs"
+from = '''        let mut second = creation2::RESTRICT_INDIRECT_BRANCH_PREDICTION | creation2::FSCTL_DISABLE;'''
+to = '''        let mut second = creation2::RESTRICT_INDIRECT_BRANCH_PREDICTION | creation2::FSCTL_DISABLE | creation2::MODULE_TAMPERING_PROTECTION;'''
+
+# Expected to be missed: the tests can't make the write fail (a process made just now, with every access).
+
+[[mutant]]
+name = "a write that failed isn't an error"
+file = "crates/sunaba/src/windows.rs"
+from = '''    check(what, done != 0 && written == zero.len())'''
+to = '''    let _ = (done, written);
+    Ok(())'''

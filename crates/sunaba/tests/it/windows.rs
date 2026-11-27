@@ -283,6 +283,26 @@ fn a_process_that_lowered_itself_has_no_handle_to_the_kernels_security_device() 
     assert_eq!(inside(&["random"]), Outcome::Ok(16));
 }
 
+/// The system gives a process the compatibility shims chosen for its
+/// executable in its PEB (`pShimData`); one under a policy has none.
+#[test]
+fn a_process_under_the_policy_is_given_no_compatibility_shim() {
+    let mut child = lowered("shim");
+    assert_eq!(sunaba::windows::shim_data(child.id()), Some(0));
+    child.kill().unwrap();
+    // One with no policy has what the system gave it, which may be 0 on
+    // another machine too: only that it is read.
+    let mut command = sunaba::windows::Command::new(env!("CARGO_BIN_EXE_sunaba_probe"));
+    command
+        .arg("--inside")
+        .arg("--no-lower")
+        .arg("sleep")
+        .arg("20");
+    let mut child = command.spawn(None).unwrap();
+    assert!(sunaba::windows::shim_data(child.id()).is_some());
+    child.kill().unwrap();
+}
+
 #[test]
 fn a_process_under_the_policy_is_on_a_desktop_its_starter_made() {
     let mut first = lowered("desktop.1");
