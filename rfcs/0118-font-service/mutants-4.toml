@@ -1,0 +1,60 @@
+# Stage 4's mutants (macOS: a file crosses as a fileport, the renderers are served the system's fonts, the profile reads no font): `python3 scripts/test.py mutate rfcs/0118-font-service/mutants-4.toml`, on macOS.
+test = ["cargo", "test", "-q", "-p", "ipc", "--lib", "--test", "it", "--", "file_in_message::", "fileport::"]
+timeout = 900
+
+[[mutant]]
+name = "macOS's channel sends no file"
+file = "crates/ipc/src/platform/macos/channel.rs"
+from = '''        fileport::make_port(&file)'''
+to = '''        { let _ = fileport::make_port(&file); None }'''
+
+[[mutant]]
+name = "macOS's channel makes no file of what it is sent"
+file = "crates/ipc/src/platform/macos/channel.rs"
+from = '''        fileport::make_file(&handle)'''
+to = '''        { let _ = fileport::make_file(&handle); None }'''
+
+[[mutant]]
+name = "a right that isn't a fileport is a file"
+file = "crates/ipc/src/platform/macos/fileport.rs"
+from = '''    if fd < 0 {
+        return None;
+    }'''
+to = '''    if fd < -1 {
+        return None;
+    }'''
+
+[[mutant]]
+name = "a port is made for no file"
+file = "crates/ipc/src/platform/macos/fileport.rs"
+from = '''    let result = unsafe { fileport_makeport(file.as_raw_fd(), &raw mut name) };'''
+to = '''    let result = unsafe { fileport_makeport(-1, &raw mut name) };'''
+
+[[mutant]]
+name = "macOS's renderers find the system's fonts themselves"
+file = "crates/browser/src/font_data_service.rs"
+from = '''pub(crate) const SERVES_SYSTEM_FONTS: bool = cfg!(any(windows, target_os = "macos"));'''
+to = '''pub(crate) const SERVES_SYSTEM_FONTS: bool = cfg!(windows);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "renderer_sandbox_macos::"]
+
+[[mutant]]
+name = "the profile lets a renderer look up the font service"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''(allow mach-lookup
+  (global-name (string-append "org.machopo.MachPortRendezvousServer." (param "BROWSER_PID"))))'''
+to = '''(allow mach-lookup
+  (global-name (string-append "org.machopo.MachPortRendezvousServer." (param "BROWSER_PID")))
+  (global-name "com.apple.fonts"))'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "renderer_sandbox_macos::"]
+
+[[mutant]]
+name = "the profile lets a renderer read the system's fonts"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''(allow file-read*
+  (literal "/private/etc/localtime")
+  (subpath "/private/var/db/timezone"))'''
+to = '''(allow file-read*
+  (literal "/private/etc/localtime")
+  (subpath "/private/var/db/timezone")
+  (subpath "/System/Library/Fonts"))'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "renderer_sandbox_macos::"]

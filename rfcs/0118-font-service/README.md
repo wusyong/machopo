@@ -1,7 +1,7 @@
 # RFC 0118：字型服務（系統字型由 Browser 給 renderer）
 
 - 開始日期：2026-11-26
-- 狀態：🚧 已排程：2026-11-27（第 1 段做完；第 2 段：Windows 的字型服務；進度在 `progress.md`）
+- 狀態：🚧 已排程：2026-11-27（第 1、2、4 段做完；第 3 段：Linux；進度在 `progress.md`）
 - 細節：`details.md`
 
 ## 摘要
@@ -178,20 +178,21 @@ fontique 建一個 family 時要每個字型的寬度、樣式、粗細、可變
 10. **generic family 用到哪一種才要哪一種（G2）**（2026-11-27，使用者決定）：啟動時的名字清單裡已經有每種 generic 是哪幾個 family，用到時照那幾個 family 要，和一般的 family 同一條路。理由：不用另外的機制；沒用到的（`cursive`、`fantasy`……）不交檔案。不選第一次排版時全部要來（G1，原型的做法：少幾次來回，每個 renderer 多交十幾個檔案）。
 11. **名字的清單整個 Browser 只列一次**（2026-11-27，第 2 段做的時候，使用者決定）：字型 thread 在第一個 renderer 啟動時列出系統的字型，之後的每個 renderer 都拿這一份，family 和檔案的編號也是這一份的。所以 Browser 執行期間新裝的字型，新的分頁也看不到，要重開 machopo：比第 2 條寫的代價（已經開著的分頁看不到，新的分頁看得到）多一點。理由：照第 2 條的話每啟動一個 renderer 就要重列一次（DirectWrite 重新拿系統的字型集合），清單變了時建一份新的、舊的 renderer 繼續問舊的那份，字型 thread 要同時留著幾份、編號要分得出是哪一份的；這和「字型變了時通知 renderer 重拿清單」（之後的可能）是同一件事，到那時一起做。不選每啟動一個 renderer 就重列。
 
+12. **macOS 上交的是 fileport（M1）**（2026-11-27，第 4 段開始時，使用者決定）：Browser 用 `fileport_makeport` 把開著的檔案的 file descriptor 包成一個 port 的 send right，跟著訊息搬過去；renderer 用 `fileport_makefd` 還原成自己的 file descriptor，之後和另外兩個平台一樣由 `ipc` map 成唯讀的位元組。理由：第 3 條寫的就是這樣（三個平台交的都是開著的檔案），`ipc` 平台層的「交出檔案、還原檔案」的形狀不用改；Chromium 的 Mojo 在 macOS 上交 file descriptor 也是這樣（`ChannelMac`）。探測（2026-11-27，這台 Mac）：同一組文字，Browser 的字型 thread 回答的和 renderer 自己用 CoreText 找的排出來逐一相同；renderer 的 `Collection` 不帶系統字型，fontique 不建 CoreText 的後端。代價：兩個函式是私有的 API（不在 SDK 的 header 裡，`mach2` 沒有，在 `ipc` 裡自己宣告；Chromium 和 XPC 都在用）；renderer 拿到的 file descriptor 查得到檔案的路徑（`F_GETPATH`）、讀得到那個檔案，和 Windows 的第 6 條一樣，照路徑它在 sandbox 裡開不了。不選檔案的 memory entry（M2：Browser 先唯讀地 map、用 `mach_make_memory_entry_64` 建只能讀的 entry 交過去：不用私有的 API、renderer 拿不到路徑，和 `ipc` 的共用記憶體同一種做法；但 macOS 和另外兩個平台不同，長度要另外跟著訊息送，平台層的介面要改，和 Windows 不選 W2 的理由一樣）。
+
 第 2 段開始時查到、不用決定的兩件：worker 裡沒有文字（machopo 沒有 `OffscreenCanvas`，worker 不排版），之後有了走同一條路；machopo 不把 `lang` 交給 parley（沒有 `StyleProperty::Locale`），所以 fallback 一律照 script、不帶語言，和現在一樣，這一段照這樣做。
 
 ## 待決定
 
 探測之前要定的四條都定了（已決定的事項第 1 到 4 條），第 1 段的三條也定了（第 5 到 7 條）。每一段開始前只定那一段的。
 
-第 2 段的五件定了（第 8 到 10 條，和它們後面的兩件），做的時候多出的一件也定了（第 11 條）。
+第 2 段的五件定了（第 8 到 10 條，和它們後面的兩件），做的時候多出的一件也定了（第 11 條）。第 4 段的一件也定了（第 12 條）。
 
 做的時候照設計細化、不用決定的：Browser 檢查檔案的編號只看「字型 thread 給過這個編號」，不看「給過這個 renderer」：每個檔案都能經過問它的 family 拿到，照 renderer 分開記換不到什麼，還要每個 renderer 一張表。
 
 之後的段落：
 
 - Linux：被 fontconfig 的設定改過名字或粗細的 `.ttc` 對不對得上（第 1 條留的那個情況）。
-- macOS：renderer 不連系統的字型服務時的排版。
 - Windows 的 restricted token 放在這份的最後一段，還是另一份。
 
 ## 之後的可能

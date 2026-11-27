@@ -7,10 +7,10 @@
 //! threads. On Linux it finds the system's fonts first (their list is in
 //! files the sandbox then closes off, and it is entered while the process
 //! is one thread); on macOS entering is the first thing it does, and the
-//! system's font service is among what it can still reach. Elsewhere
-//! On Windows a renderer process is in its sandbox from its start: its
-//! browser starts it in one ([`sandbox`]), and entering is the renderer
-//! lowering itself the rest of the way. Elsewhere [`enter`] does nothing.
+//! system's fonts are its browser's to hand it. On Windows a renderer
+//! process is in its sandbox from its start: its browser starts it in one
+//! ([`sandbox`]), and entering is the renderer lowering itself the rest
+//! of the way. Elsewhere [`enter`] does nothing.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -170,7 +170,7 @@ impl ChildSwitches {
 /// the system's fonts are found first (their list and what the system
 /// says of each, read from files the sandbox then closes off), which the
 /// renderer's main thread is handed in place of finding them itself; on
-/// macOS nothing comes first, and the fonts are found inside. Called
+/// macOS nothing comes first (the browser hands it the fonts). Called
 /// before the process has a second thread.
 ///
 /// An error is why the process isn't in a sandbox, and it is not to go on.
@@ -180,14 +180,12 @@ pub fn enter(switches: &ChildSwitches) -> Result<Option<browser::SystemFonts>, S
     }
     #[cfg(target_os = "macos")]
     {
-        let home = std::env::var("HOME").ok();
         let browser = std::os::unix::process::parent_id();
-        sunaba::macos::enter(&macos::profile(switches, browser, home.as_deref()))
-            .map_err(|error| error.to_string())?;
+        sunaba::macos::enter(&macos::profile(browser)).map_err(|error| error.to_string())?;
         Ok(None)
     }
     // The renderer was started in its sandbox; it gives up what it could
-    // only be started with. The system's fonts are found inside.
+    // only be started with.
     #[cfg(windows)]
     {
         sunaba::windows::lower().map_err(|error| error.to_string())?;
@@ -424,14 +422,13 @@ pub mod windows {
 pub mod macos {
     use sunaba::macos::Profile;
 
-    use super::ChildSwitches;
-
     /// The renderer's profile (Chromium's `sandbox/policy/mac`:
     /// `common.sb` and `renderer.sb`, of which this is the part a
     /// renderer with no Cocoa, no GPU and no preferences needs). Nothing
     /// is allowed but what is named here: no file is written, no socket
     /// or process made, no process signalled, and of the system's
-    /// services only the two named are spoken to.
+    /// services none is spoken to: the one service looked up is its
+    /// browser's.
     const SOURCE: &str = r#"(version 1)
 (deny default)
 ; What `(deny default)` leaves allowed.
@@ -458,34 +455,14 @@ pub mod macos {
 (allow sysctl-read
   (sysctl-name "hw.ncpu")
   (sysctl-name-prefix "hw.optional."))
-
-; The system's fonts: their files, and the font service, which says
-; which font has a character that the page's fonts lack.
-(if (string=? (param "SYSTEM_FONTS") "TRUE")
-  (begin
-    (allow mach-lookup (global-name "com.apple.fonts"))
-    (allow file-read*
-      (subpath "/System/Library/Fonts")
-      (subpath "/Library/Fonts")
-      (subpath "/System/Library/PrivateFrameworks/FontServices.framework")
-      (regex #"^/System/Library/AssetsV2/com_apple_MobileAsset_Font[0-9]+(/|$)"))
-    (if (string? (param "HOME"))
-      (allow file-read* (subpath (string-append (param "HOME") "/Library/Fonts"))))))
 "#;
 
-    /// The profile of a renderer started with `switches` by the process
-    /// `browser`, for a user whose home directory is `home`.
-    pub fn profile(switches: &ChildSwitches, browser: u32, home: Option<&str>) -> Profile {
+    /// The profile of a renderer started by the process `browser`. The
+    /// same whatever its fonts: the system's are its browser's to open
+    /// and hand it, and the built-in ones are in the executable.
+    pub fn profile(browser: u32) -> Profile {
         let mut profile = Profile::new(SOURCE);
-        profile
-            .parameter("BROWSER_PID", browser.to_string())
-            .parameter(
-                "SYSTEM_FONTS",
-                if switches.test_fonts { "FALSE" } else { "TRUE" },
-            );
-        if let Some(home) = home {
-            profile.parameter("HOME", home);
-        }
+        profile.parameter("BROWSER_PID", browser.to_string());
         profile
     }
 }
@@ -858,28 +835,16 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn a_renderers_profile_is_told_its_browser_its_home_and_whether_it_reads_fonts() {
-        let parameters = |switches: &[&str], home| {
-            let profile = macos::profile(&parsed(switches), 42, home);
-            assert!(
-                profile
-                    .source()
-                    .starts_with("(version 1)\n(deny default)\n")
-            );
-            profile.parameters().to_vec()
-        };
-        let pair = |name: &str, value: &str| (name.to_owned(), value.to_owned());
-        assert_eq!(
-            parameters(&[], Some("/Users/someone")),
-            [
-                pair("BROWSER_PID", "42"),
-                pair("SYSTEM_FONTS", "TRUE"),
-                pair("HOME", "/Users/someone")
-            ]
+    fn a_renderers_profile_is_told_its_browser_alone() {
+        let profile = macos::profile(42);
+        assert!(
+            profile
+                .source()
+                .starts_with("(version 1)\n(deny default)\n")
         );
         assert_eq!(
-            parameters(&["--test-fonts"], None),
-            [pair("BROWSER_PID", "42"), pair("SYSTEM_FONTS", "FALSE")]
+            profile.parameters(),
+            [("BROWSER_PID".to_owned(), "42".to_owned())]
         );
     }
 }

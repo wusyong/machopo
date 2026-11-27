@@ -317,8 +317,8 @@ let bytes: MappedFile = files.into_iter().next().unwrap().map().unwrap();
 - **只有能附 handle 的一端送**（`Config::may_attach`）：另一端送是 `SendError::Refused`。一則訊息最多 `MAX_HANDLES`（16）個，多的整則送不出去（`Refused`），通道照常。
 - **送出去的值還是這一端的**：對方拿到的是自己的 handle，兩邊各自關。
 - **拿到的是 map 好的位元組，不是路徑**：`map` 只 map 一般的檔案，長度 0 的是空的。`MappedFile` 拿著檔案，map 多久就開多久。
-- **map 著的期間沒有人寫它**：Windows 上 `open` 開檔時只允許別人讀和刪除（改名、刪除後原本的位元組不變），這在檔案的任何一個 handle 還開著時都成立，兩端的 handle 是同一個檔案物件。其他平台上還不交檔案。為什麼重要在 `crates/ipc/soundness.md` 的 K11。
-- **哪個平台交得了**：Windows（`platform::windows::channel`，host 往 child）和同一個 process 裡的 `local`；macOS 和 Linux 的平台層還不交（`send_file` 回 `None`，值送不出去）。
+- **map 著的期間沒有人寫它**：Windows 上 `open` 開檔時只允許別人讀和刪除（改名、刪除後原本的位元組不變），這在檔案的任何一個 handle 還開著時都成立，兩端的 handle 是同一個檔案物件。macOS 上沒有這種開法，是假設（交的是系統的字型）；Linux 上還不交檔案。為什麼重要在 `crates/ipc/soundness.md` 的 K11。
+- **哪個平台交得了**：Windows（`platform::windows::channel`，host 往 child）、macOS（`platform::macos::fileport`，包成 port 跟著訊息搬過去）和同一個 process 裡的 `local`；Linux 的平台層還不交（`send_file` 回 `None`，值送不出去）。
 - 給上層的訊息帶的 handle，值沒拿走的跟著訊息關掉，不是壞訊息。
 
 ## `local`
@@ -350,6 +350,10 @@ let channel = ipc::platform::inherited()?;
 - `child_gone`：child 還沒拿它那一端就結束時，macOS 的 kernel 不會告訴 host（那一端還替它留著），要 host 自己說；說了之後 host 這一端就收到「對方不在了」。拿過的 child、kernel 自己會說的平台（Linux：host 在 child 啟動之後就不拿著它那一端），它什麼都不做。
 - **平台要自己守的一條**（`Platform` 的說明）：交給端點的 handle 一定是 kernel 為這則訊息搬進來的，不能是對方寫的數值。handle 以數值走在位元組裡的平台（送的一方把它複製進收的一方），對方不能附 handle 時，那個數值不看、一個 handle 都不交上去，說自己有 handle 的訊息由核心拒絕（壞訊息）：數值指的是這個 process 自己的 handle，而且是對方挑的。
 
+### `platform::macos::fileport`
+
+開著的檔案在 Mach 訊息裡是一個 fileport：代表那個開著的檔案的 port（Chromium 的 `ChannelMac` 也這樣交 descriptor）。`make_port(&file)` 給一個 send right，訊息把它搬給對方；對方 `make_file(&right)` 拿到自己的 descriptor（kernel 設好 close-on-exec）。port 自己拿著開著的檔案：送的一方的 descriptor 關掉、檔案改名或刪掉都不影響，開的方式照原本的（只能讀的就只能讀）。不是 fileport 的 right（region 的 memory entry）做不出檔案，fileport 也 map 不成 region。兩個函式是 kernel 的私有 API（`<sys/fileport.h>` 不在 SDK 裡），自己宣告。
+
 ### `platform::macos::memory`
 
 共用記憶體是 Mach 的 memory entry：一個 port 代表那塊記憶體，沒有名字、沒有檔案描述子，也不能改大小。
@@ -373,7 +377,7 @@ let theirs = memory::map(&handle, len, writable)?;
 
 這個 task 拿著的 Mach port 的 right，每一種 drop 時放掉：忘了放的 handle 是一個永遠不死的 port，對方就永遠不知道通道結束了。
 
-- `SendRight`：送訊息的對象，也是 region 的 handle。
+- `SendRight`：送訊息的對象，也是 region 和檔案的 handle。
 - `SendOnceRight`：回一次答案用的。沒用就 drop 的話，kernel 會告訴那個 port 的主人「不會有答案了」。
 - `ReceiveRight`：一個 port 本身。`new` 建一個、`make_send` 做出通往它的 send right、`tell_when_no_senders` 請 kernel 在沒有 send right 剩下時通知、`raise_queue_limit` 把佇列從 5 則開到 1024 則。drop 時 port 就死了，通往它的 send right 變成 dead name。
 - `SendRight` 的兩種通知：`tell_when_dead`（那個 port 死了；對已經死掉的名字登記會失敗）、`tell_when_sendable`（那個 port 的佇列有空間了）。dead-name 的通知會多給那個名字一個計數，`dead_name_told` 放掉它。

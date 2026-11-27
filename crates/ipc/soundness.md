@@ -25,7 +25,7 @@
 | --- | --- | --- | --- |
 | G1 | **記憶體**：不管對方在共用記憶體裡寫什麼、在訊息裡給什麼編號和長度，這一端讀寫的都在它自己 map 的那一塊裡面 | `core/region.rs`：訊息提到的編號和長度由 `Table::named` 檢查（超過是 `OutsideRegion`、不在表裡是 `UnknownRegion`），`Table::read` 和訊息帶來的 `SharedBuffer` 都經過它；之後從 `SharedBuffer` 讀的每一段（`copy_out`、`chunks_out`）再和訊息說的長度比一次。`Pool::put` 寫的和 `Pool::take` 交出去的那一塊由 `core/fit.rs` 的 `best_fit` 選，夠長是證明過的。mapping 不會比物件長：I2 和假設 K1 | `core/region.rs` 的單元測試；`crates/ipc/tests/it/shared_buffer.rs`；`region` fuzzer（對著一個簡單的模型，開 ASan）；核心在 Miri 底下；`fit.rs` 的 Verus 證明；三個平台各自的 `no_more_than_a_region_has_is_mapped` |
 | G2 | **壞的輸入**：從通道讀到的任何位元組，結果只有兩種：照規則處理，或當成壞訊息關掉通道。不 panic、不卡住、不 stack overflow，用掉的記憶體有上限 | `core/frame.rs`：長度上限（`MAX_PAYLOAD_LEN`）、照實際收到的量配置、序號、handle 的個數；`codec.rs`：巢狀深度上限（`MAX_DEPTH`）；`core/channel.rs`：目的地要認得；`endpoint.rs`：上層解不出來就是壞訊息 | `frame`、`endpoint` 兩個 fuzzer（任何輸入都不 panic，怎麼切結果都一樣）；`crates/ipc/tests/it/codec.rs`；`crates/ipc/tests/it/endpoint.rs` 裡亂送的對端；跨 process 的 `what_a_child_may_not_send_closes_its_channel` |
-| G3 | **handle**：沒有權限的一端送的訊息，不會讓收的一端留下任何 handle；有權限的一端送的，每個 handle 最多變成值裡的一個檔案，沒被拿走的跟著訊息關掉 | `core/frame.rs` 的 `Decoder`：對方不能附時，有 handle 到了就是 `HandlesNotAllowed`，到了的全部丟掉；個數超過是 `TooManyHandles`。交給核心的 handle 一定是 kernel 搬進來的：I4。給上層的訊息的 handle 由 `endpoint.rs` 照值說的第幾個交出去，交過的就不在了，再提到或提到沒有的是 `UnknownHandle`；不是檔案的是 `Rejected` | `frame` fuzzer（沒有權限的一端留不下 handle，留著的不比到了的多）；跨 process 的 `what_a_child_may_not_send_closes_its_channel`；macOS 的 `a_receive_right_isnt_a_handle`；Windows 的 `a_child_gives_no_handle_and_a_host_takes_no_value_for_one`；值裡的檔案：`crates/ipc/tests/it/file_in_message.rs` |
+| G3 | **handle**：沒有權限的一端送的訊息，不會讓收的一端留下任何 handle；有權限的一端送的，每個 handle 最多變成值裡的一個檔案，沒被拿走的跟著訊息關掉 | `core/frame.rs` 的 `Decoder`：對方不能附時，有 handle 到了就是 `HandlesNotAllowed`，到了的全部丟掉；個數超過是 `TooManyHandles`。交給核心的 handle 一定是 kernel 搬進來的：I4。給上層的訊息的 handle 由 `endpoint.rs` 照值說的第幾個交出去，交過的就不在了，再提到或提到沒有的是 `UnknownHandle`；不是檔案的是 `Rejected`（macOS 上 memory entry 和 fileport 互相不認：`a_regions_handle_is_no_file_and_a_files_port_no_region`） | `frame` fuzzer（沒有權限的一端留不下 handle，留著的不比到了的多）；跨 process 的 `what_a_child_may_not_send_closes_its_channel`；macOS 的 `a_receive_right_isnt_a_handle`；Windows 的 `a_child_gives_no_handle_and_a_host_takes_no_value_for_one`；值裡的檔案：`crates/ipc/tests/it/file_in_message.rs` |
 | G4 | **region 的歸屬**：一塊 region 只在建它時指定的那條通道的表裡；收回之後不在任何表裡 | 池子和表是每個端點自己的（`endpoint.rs`），兩個方向的 region 都由能附 handle 的一端編號；對方提到沒給過它的、還沒寫過的、還兩次的、這一端拿去寫還沒送出去的（I10）都是壞訊息（`UnknownRegion`、`RegionNotOut`）。一個 Browser 對好幾個 renderer 時「不交給別的 renderer」由上層守，`ipc` 這一層只有一條通道 | `crates/ipc/tla/Regions.tla`；`region` fuzzer；`crates/ipc/tests/it/endpoint.rs` |
 | G5 | **不被卡住**：送訊息不等對方；對方不讀時，這一端的佇列到上限就關掉通道 | `core/channel.rs`：`send` 不等，收不下的排隊，超過 `MAX_QUEUED_BYTES` 是 `Gone::QueueFull`；平台的 `write` 不等（I6） | `core/channel.rs` 的單元測試；loom、shuttle；跨 process 的 `a_child_that_isnt_reading_delays_nothing_for_good` |
 | G6 | **順序**：一條通道上，收的一端交出訊息的順序就是送的一端送的順序，不重複、不漏 | `core/channel.rs`：一把鎖守著編號和寫出去的順序；`core/frame.rs`：序號不連續是 `OutOfOrder` | loom（每一種交錯）、shuttle；`crates/ipc/tla/Channel.tla`；`frame` fuzzer |
@@ -48,7 +48,7 @@ kernel 和標準庫的行為，`ipc` 證明不了。每一條有測試在那個�
 | K7 | **out-of-line 收到的記憶體是這個 process 自己的一份**（只有 macOS 用） | 送的一方那幾頁的 copy-on-write，之後它再改也看不到。測試：`what_is_sent_out_of_line_is_the_bytes_as_they_were_when_sent` | | |
 | K8 | **進行中的 I/O 的規則**（只有 Windows 用） | | | 在 completion port 上的 handle，發出操作的 thread 結束時操作不會被取消（`a_write_outlives_the_thread_that_started_it`）；每筆進行中的操作恰好留下一個通知，被取消的也是；設了 `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` 之後當場完成的不留（`what_goes_on_holds_its_end_until_its_completion_is_taken`、`what_is_done_at_once_holds_nothing`） |
 | K9 | **`std::env::remove_var` 在 Windows 上多條 thread 也安全**（標準庫的文件寫明） | | 不成立，所以 Linux 的 child 不拿掉變數 | `inherited` 靠它 |
-| K11 | **map 著的檔案的內容不變**：沒有人寫它、截短它（只有 Windows 交檔案） | | 還不交檔案 | `ReadOnlyFile::open` 開檔時不讓別人寫（只允許讀和刪除），這個限制在檔案的任何一個 handle 還開著時都在（兩端的 handle 是同一個檔案物件），`MappedFile` 一直拿著它的 handle；map 著的檔案不能截短（文件寫明）。測試：`nobody_writes_an_open_file_but_it_may_be_renamed`、跨 process 的 `a_child_maps_the_files_its_host_sends_and_nobody_writes_them`（host 放掉自己的之後，child 的還擋著） |
+| K11 | **map 著的檔案的內容不變**：沒有人寫它、截短它（Windows 和 macOS 交檔案） | 假設，沒有東西擋：檔案沒有不讓別人寫的開法。交的是系統的字型，系統的是 root 的、使用者自己裝的是使用者的；renderer 自己 map 系統字型時（fontique）也是這個前提 | 還不交檔案 | `ReadOnlyFile::open` 開檔時不讓別人寫（只允許讀和刪除），這個限制在檔案的任何一個 handle 還開著時都在（兩端的 handle 是同一個檔案物件），`MappedFile` 一直拿著它的 handle；map 著的檔案不能截短（文件寫明）。測試：`nobody_writes_an_open_file_but_it_may_be_renamed`、跨 process 的 `a_child_maps_the_files_its_host_sends_as_its_own`（host 放掉自己的之後，child 的還擋著） |
 | K10 | **job 最後一個 handle 關掉時，kernel 結束裡面的 process**，而一個 process 怎麼結束，它的 handle 都會被關掉（只有 Windows 用） | | | 設了 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`（文件寫明）。測試：`children_share_a_job_and_end_when_it_closes`、`a_hosts_children_go_with_it_whatever_they_are_doing`。正在結束的 process 放不進 job，而那時它還不算結束（實測，Windows 11 10.0.26300：最久差 16 ms），所以被拒絕時最多等 1 秒看它是不是正在結束。測試：`a_child_that_is_exiting_needs_no_job` |
 
 macOS 那一層的測試在 `src/platform/macos/` 各檔的單元測試和 `crates/ipc/tests/it/mach_channel.rs`；Linux 的在 `src/platform/linux/` 和 `crates/ipc/tests/it/linux_channel.rs`；Windows 的在 `src/platform/windows/` 和 `crates/ipc/tests/it/windows_channel.rs`；三個平台共用的跨 process 測試是 `crates/ipc/tests/it/process_channel.rs`。
@@ -93,7 +93,7 @@ macOS 那一層的測試在 `src/platform/macos/` 各檔的單元測試和 `crat
 
 | 地方 | 為什麼安全 |
 | --- | --- |
-| `file.rs` 的 `ReadOnlyFile::map`（`memmap2::Mmap::map`） | 只 map 成唯讀，`MappedFile` 拿著檔案，mapping 活多久檔案就開多久，借出去的 `&[u8]` 活不過 `MappedFile`。memmap2 要求的是 map 著的期間檔案不被別人寫或截短：Windows 上 K11；macOS 和 Linux 上還不交檔案，交了之後是假設（交的是沒有人寫的系統字型）。長度 0 的檔案是空的 mapping（memmap2 不呼叫系統） |
+| `file.rs` 的 `ReadOnlyFile::map`（`memmap2::Mmap::map`） | 只 map 成唯讀，`MappedFile` 拿著檔案，mapping 活多久檔案就開多久，借出去的 `&[u8]` 活不過 `MappedFile`。memmap2 要求的是 map 著的期間檔案不被別人寫或截短：Windows 上 K11；macOS 上是假設（K11：交的是沒有人寫的系統字型）；Linux 上還不交檔案。長度 0 的檔案是空的 mapping（memmap2 不呼叫系統） |
 
 ### macOS（`platform/macos/`）
 
@@ -112,6 +112,7 @@ macOS 那一層的測試在 `src/platform/macos/` 各檔的單元測試和 `crat
 | `platform/macos/message.rs` 的 `try_send`（`mach_msg` 和失敗時的 `mach_msg_destroy`） | 緩衝區裡是一則完整的訊息；right 是複製的（呼叫的人的不動），out-of-line 的記憶體是 `body`，活到呼叫結束，kernel 做 copy-on-write、不從這個 task 解除。送失敗時 kernel 把訊息退回成收到的樣子（每個 right 多一個計數、記憶體重新 map 一份、descriptor 改成要解除）：`mach_msg_destroy` 放掉的剛好是這些。這個行為是實測的（macOS 26），有測試守著：佇列滿時連送 64 次，位址空間和 right 的計數都不變 |
 | `platform/macos/message.rs` 的 `Buffer::body`（out-of-line 的那一支）、`Mapped` 的 `Drop` | kernel 為這一則訊息 map 進來的 `len` 位元組，是送的一方那幾頁的 copy-on-write 的一份，只有這個 task 碰得到，所以可以當成 `&[u8]`（和共用的 region 不同）；借出去的 slice 活不過 `Received`，`Received` drop 時解除一次 |
 | `platform/macos/port.rs` 的 `request`、`PortSet`、`raise_queue_limit`、`dead_name_told` | 都是對這個 task 自己拿著的名字做的呼叫，讀寫的是活到呼叫結束的區域變數。`mach_port_insert_member`、`mach_port_set_attributes` 是自己宣告的（mach2 沒有），照 `<mach/mach_port.h>` 的原型。`dead_name_told` 放掉的是通知多給的那一個計數，值自己的那一個留著 |
+| `platform/macos/fileport.rs` 的 `fileport_makeport`、`fileport_makefd`、`File::from_raw_fd` | 兩個都是 kernel 的私有 API（`<sys/fileport.h>` 不在 SDK 裡，mach2 沒有），照 XNU 的原型自己宣告；Chromium 的 Mojo 和 XPC 也用它們交 descriptor。`fileport_makeport` 讀的是呼叫期間開著的 descriptor，port 的名字寫進活到呼叫結束的區域變數；回 0、名字不是 null 才包成 right（新的 send right，只有這裡拿著）。port 自己拿著那個開著的檔案，descriptor 關掉也不影響。`fileport_makefd` 對這個 task 拿著的 right 做，成功時給一個新的 descriptor（kernel 設好 close-on-exec，測試 `a_files_port_makes_a_file_open_as_it_was_and_closed_on_exec`），只有這次呼叫拿到，才包成 `File`；不是 fileport 的 right 回 -1 |
 | `platform/macos/rendezvous.rs` 的 `bootstrap_check_in`、`bootstrap_look_up` | 傳進去的是活到呼叫結束的 C 字串和一個放名字的區域變數。成功才把名字包成 right：check-in 給的是 service 的 receive right，look-up 給的是 send right |
 
 ### Linux（`platform/linux/`）
@@ -187,7 +188,7 @@ Miri 和 fuzzer 碰不到平台層（系統呼叫）：那一層靠跨 process �
 - **K5 對「同一個使用者的其他 process」的部分只靠審查**：Windows 的 pipe 建立時的保護，和 `spawn_with_pipe` 啟動 child 時的繼承（經過標準庫，靠一把鎖）。`spawn` 啟動的 child 只繼承指定的 handle，由 `sunaba` 的 `Command` 保證，有測試。
 - **Windows 的 `hold` 和 `let_go` 成對**：弄壞是釋放後被 kernel 寫，測試看不出來，沒有列成 mutant。
 - **標「實測」的假設**只在一個版本的系統上試過。
-- **K11 只在 Windows 上由 kernel 守住**：macOS 和 Linux 上檔案交過去之後，有寫入權限的人（系統字型是 root 的）改了它，map 著的位元組就變了。fontique 自己 map 系統字型時也是這個前提。
+- **K11 只在 Windows 上由 kernel 守住**：macOS 和 Linux 上檔案交過去之後，有寫入權限的人（系統字型是 root 的，使用者自己裝的是使用者的）改了它，map 著的位元組就變了，截短了它的話讀到被截掉的那幾頁時 renderer 當掉。fontique 自己 map 系統字型時也是這個前提。
 
 ## 修改時要審查的
 

@@ -26,9 +26,11 @@ fn a_renderer_process_told_no_sandbox_is_in_none() {
     assert_eq!(renderer.browser_goes(), Some(0));
 }
 
-/// In the sandbox a renderer finds the system's fonts, the font that has
-/// a character the page's lack (the system's font service says which),
-/// and the time zone, as it does outside.
+/// In the sandbox a renderer has the system's fonts (its browser's, as
+/// every renderer's), the font that has a character the page's lack, and
+/// the time zone, as it does outside, and as a renderer that is a thread
+/// of the browser's: though it may read no font and reach no font service
+/// of the system's itself.
 #[test]
 fn a_sandboxed_renderer_shows_a_page_as_one_outside_does() {
     let page = "data:text/html;charset=utf-8,<span style='font: 40px serif'>Sandbox mmmm</span>\
@@ -52,6 +54,7 @@ fn a_sandboxed_renderer_shows_a_page_as_one_outside_does() {
         "{inside}"
     );
     assert_eq!(inside, seen(&["--process-per-tab", "--no-sandbox"]));
+    assert_eq!(inside, seen(&[]));
 }
 
 /// What the probe did: its line (`ok N`, `error ERRNO`) or the signal that
@@ -162,53 +165,66 @@ fn a_renderer_reads_no_file_of_the_users_nor_learns_of_one() {
     }
 }
 
+/// The system's fonts are the browser's to open: a renderer reads none of
+/// them, whichever fonts it uses, nor speaks to the system's font
+/// service.
 #[test]
-fn a_renderer_reads_the_systems_fonts_unless_it_uses_only_its_own() {
+fn a_renderer_reads_no_font_of_the_systems_nor_reaches_its_font_service() {
     let (home, font, _) = home("fonts");
-    let system = "/System/Library/Fonts";
-    assert!(matches!(probe(&["list", system]), Outcome::Ok(files) if files > 10));
     // Everyone's fonts, the ones the system keeps for itself, and the
     // ones it has downloaded (a directory for each, with what it is in
     // its name).
-    assert!(matches!(probe(&["list", "/Library/Fonts"]), Outcome::Ok(_)));
-    let reserved = "/System/Library/PrivateFrameworks/FontServices.framework/Resources/Reserved";
-    if std::path::Path::new(reserved).exists() {
-        assert!(matches!(probe(&["list", reserved]), Outcome::Ok(_)));
-        assert_eq!(probe_with_test_fonts(&["list", reserved]), REFUSED);
-    }
-    let assets = std::fs::read_dir("/System/Library/AssetsV2")
-        .into_iter()
-        .flatten()
+    let mut directories = vec![
+        "/System/Library/Fonts".to_owned(),
+        "/Library/Fonts".to_owned(),
+        "/System/Library/PrivateFrameworks/FontServices.framework/Resources/Reserved".to_owned(),
+    ];
+    directories.extend(
+        std::fs::read_dir("/System/Library/AssetsV2")
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                name.strip_prefix("com_apple_MobileAsset_Font")
+                    .is_some_and(|rest| {
+                        !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit())
+                    })
+            })
+            .map(|path| path.to_str().unwrap().to_owned()),
+    );
+    let font_file = std::fs::read_dir("/System/Library/Fonts")
+        .unwrap()
         .flatten()
         .map(|entry| entry.path())
-        .find(|path| {
-            let name = path.file_name().unwrap().to_string_lossy().into_owned();
-            name.strip_prefix("com_apple_MobileAsset_Font")
-                .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
-        });
-    if let Some(assets) = assets {
-        let assets = assets.to_str().unwrap();
-        assert!(matches!(probe(&["list", assets]), Outcome::Ok(_)));
-        assert_eq!(probe_with_test_fonts(&["list", assets]), REFUSED);
+        .find(|path| path.is_file())
+        .unwrap();
+    for switches in [&[][..], &["--test-fonts"][..]] {
+        for directory in &directories {
+            if std::path::Path::new(directory).exists() {
+                assert_eq!(
+                    probe_in(None, switches, &["list", directory]),
+                    REFUSED,
+                    "{directory} {switches:?}"
+                );
+            }
+        }
+        assert_eq!(
+            probe_in(None, switches, &["read", font_file.to_str().unwrap()]),
+            REFUSED
+        );
+        assert_eq!(probe_in(Some(&home), switches, &["read", &font]), REFUSED);
+        assert_eq!(
+            probe_in(None, switches, &["lookup", "com.apple.fonts"]),
+            NOT_PRIVILEGED,
+            "the font service"
+        );
+        assert_eq!(
+            probe_in(None, switches, &["lookup", "com.apple.FontObjectsServer"]),
+            NOT_PRIVILEGED
+        );
     }
-    // Not the other assets beside them.
-    assert_eq!(probe(&["list", "/System/Library/AssetsV2"]), REFUSED);
-    assert_eq!(probe_in(Some(&home), &[], &["read", &font]), Outcome::Ok(8));
-    assert_eq!(
-        probe(&["lookup", "com.apple.fonts"]),
-        Outcome::Ok(0),
-        "the font service"
-    );
-    // With only the built-in fonts, none of it.
-    assert_eq!(probe_with_test_fonts(&["list", system]), REFUSED);
-    assert_eq!(
-        probe_in(Some(&home), &["--test-fonts"], &["read", &font]),
-        REFUSED
-    );
-    assert_eq!(
-        probe_with_test_fonts(&["lookup", "com.apple.fonts"]),
-        NOT_PRIVILEGED
-    );
 }
 
 #[test]

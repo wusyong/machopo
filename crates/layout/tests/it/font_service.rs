@@ -582,7 +582,7 @@ fn a_generic_family_is_asked_for_when_it_is_used() {
 /// generic families, Chrome's alternate names and names that aren't
 /// there, in a block, in SVG and on a canvas. Where renderers are served
 /// the system's fonts.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 #[test]
 fn served_system_fonts_lay_text_out_as_the_systems_own() {
     let page = "<style>div { font: 24px serif }</style>\

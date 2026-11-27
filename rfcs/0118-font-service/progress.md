@@ -14,17 +14,24 @@
 | 2b. 協定和 Browser 那一側：名字的清單、family、fallback、檔案四種問答；字型 thread；IO thread 上的檢查 | 做完 | 2026-11-27 |
 | 2c. renderer 那一側：`TextContext` 照需要向 Browser 要、名字由 machopo 自己對、文字交給 parley 之前掃 script；三種 renderer 都切過去 | 做完 | 2026-11-27 |
 | 2d. 守著的測試（同一組文字，問 Browser 的和直接問系統的排出來的字形相同）；sandbox 裡的 renderer 不再載入 `dwrite.dll` | 做完 | 2026-11-27 |
-| 2e. 第 2 段的檢查和文件 | | |
+| 2e. 第 2 段的檢查和文件 | 做完 | 2026-11-27 |
+| 4a. 第 4 段的探測和決定（已決定的事項第 12 條） | 做完 | 2026-11-27 |
+| 4b. `ipc`：macOS 的通道把檔案包成 fileport 交給 child、child 還原；測試、`soundness.md` | 做完 | 2026-11-27 |
+| 4c. macOS 的三種 renderer 切到字型服務；profile 拿掉字型的目錄和 `com.apple.fonts` | 做完 | 2026-11-27 |
+| 4d. 第 4 段的檢查和文件 | 做完 | 2026-11-27 |
 
 ## 驗收
 
 | 項目 | 怎麼驗證 |
 | --- | --- |
-| 第 1 段：Browser 開的檔案跟著訊息交給 child，child map 成唯讀的位元組；map 著的期間沒有人寫得了它 | `crates/ipc/tests/it/file_in_message.rs`：同一個 process 裡的端點；Windows 上真的 child（`a_child_maps_the_files_its_host_sends_and_nobody_writes_them`） |
+| 第 1 段：Browser 開的檔案跟著訊息交給 child，child map 成唯讀的位元組；map 著的期間沒有人寫得了它 | `crates/ipc/tests/it/file_in_message.rs`：同一個 process 裡的端點；Windows 上真的 child（`a_child_maps_the_files_its_host_sends_as_its_own`） |
 | 第 2 段：Browser 給的系統字型排出來的字形，和 renderer 自己找到的系統字型的相同（多種 script、generic family、粗細和斜體、其他的名字、找不到的名字；block、SVG、canvas） | `crates/layout/tests/it/font_service.rs` 的 `served_system_fonts_lay_text_out_as_the_systems_own`（Windows）；測試字型在每個平台上的 `served_fonts_lay_text_out_as_found_ones` |
 | 第 2 段：sandbox 裡外的 renderer process 都不載入 `dwrite.dll`，畫出來和 Browser 的 thread 上的 renderer 相同 | `crates/shell/tests/it/renderer_sandbox_windows.rs` 的 `a_renderer_process_has_the_systems_fonts_from_its_browser`、`a_sandboxed_renderer_shows_a_page_as_one_outside_does`（加上了 thread 的 renderer） |
 | 第 2 段：同一個問題不問第二次；文字交給 parley 之前問好它的 script；檔案每次最多 16 個 | `font_service.rs` 的 `each_family_script_and_file_is_asked_for_once`、`a_texts_scripts_are_asked_for_before_it_is_shaped`、`files_are_asked_for_sixteen_at_a_time` |
 | 第 2 段：Browser 不回答沒給過的編號、太多的檔案、不是 script 的 tag，當成壞訊息 | `crates/browser/src/render_process_host.rs` 的 `the_io_thread_refuses_font_questions_of_nothing_it_gave` |
+| 第 4 段：macOS 上 Browser 開的檔案包成 fileport 跟著訊息交給 child，child 還原成自己的、唯讀的 descriptor（close-on-exec）；memory entry 和 fileport 互相不認 | `crates/ipc/src/platform/macos/fileport.rs` 的單元測試；`file_in_message.rs` 的真的 child（`a_child_maps_the_files_its_host_sends_as_its_own`，名字已經刪掉的檔案也是） |
+| 第 4 段：macOS 上 Browser 給的系統字型排出來的字形，和 renderer 自己用 CoreText 找到的相同 | `crates/layout/tests/it/font_service.rs` 的 `served_system_fonts_lay_text_out_as_the_systems_own`（Windows 和 macOS） |
+| 第 4 段：macOS 的 sandbox 裡的 renderer 讀不了任何字型的目錄和檔案、查不到 `com.apple.fonts`，畫出來和 sandbox 外的、Browser 的 thread 上的相同 | `crates/shell/tests/it/renderer_sandbox_macos.rs` 的 `a_renderer_reads_no_font_of_the_systems_nor_reaches_its_font_service`、`a_sandboxed_renderer_shows_a_page_as_one_outside_does` |
 
 ## 做過的檢查
 
@@ -45,3 +52,14 @@
 - **沒列成 mutant 的**：字型 thread 送不出檔案時改送沒有檔案的回答、字型 thread 不在時 IO thread 回答沒有（測試造不出來，記在 `docs/test-gaps.md`）；`--single-process` 的 renderer 也問 Browser（改成自己找，排出來一樣，Browser 的 process 本來就載入 `dwrite.dll`；同上）。
 - **跑過的測試**：`cargo test -p layout -p protocol -p renderer -p browser`（browser 39、189；layout 32、490；protocol 7、13；renderer 122，都通過）；`cargo test -p shell --test it renderer_sandbox_windows::`（10 個通過）。
 - **第 2 段做完的檢查**：`sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs；`cargo fmt --check`；`cargo clippy --workspace --all-targets -- -D warnings`（修了兩處：`SystemFontSource::Found` 放進 `Box`，字型 thread 的 `send` 回傳問題的編號、不回傳整則訊息）；`cargo test --workspace`（63 個 binary，4993 個通過，2 個 ignored，沒有失敗）。fmt 改了換行之後，`mutants-2.toml` 有一個 mutant 對不上，改好、重跑抓到。
+
+### 4a 到 4d（2026-11-27，macOS 26.6.2，Apple Silicon）
+
+- **探測**：`served_system_fonts_lay_text_out_as_the_systems_own` 暫時拿掉 `#[cfg(windows)]` 在 Mac 上跑：Browser 的字型 thread（fontique 的 CoreText 後端）回答的和 renderer 自己找的排出來逐一相同。renderer 的 `Collection` 是 `system_fonts: false`，fontique 不建 CoreText 的後端（讀程式）。之後照第 12 條做，這個測試在 macOS 上也跑。
+- **新的測試**：`ipc` 的 `platform::macos::fileport` 單元測試 2 個（還原的 descriptor 是同一個開著的檔案、只能讀、close-on-exec，port 放掉之後還在；region 的 handle 做不出檔案、fileport map 不成 region）；`file_in_message.rs` 的真的 child 在 macOS 上也跑，多送一個名字已經刪掉的檔案。`shell` 的 `renderer_sandbox_macos.rs`：`a_renderer_reads_no_font_of_the_systems_nor_reaches_its_font_service`（兩種字型的 renderer 都讀不了 `/System/Library/Fonts`、`/Library/Fonts`、`FontServices.framework` 的 `Reserved`、系統下載的字型、家目錄的 `Library/Fonts`，查不到 `com.apple.fonts`、`com.apple.FontObjectsServer`；取代原本「讀得到系統字型」的那個），`a_sandboxed_renderer_shows_a_page_as_one_outside_does` 多比 Browser 的 thread 上的 renderer。`renderer_sandbox.rs` 的 profile 的單元測試改成只帶 Browser 的 pid。
+- **改了的測試**：`a_child_maps_the_files_its_host_sends_and_nobody_writes_them` 改名成 `a_child_maps_the_files_its_host_sends_as_its_own`（「沒有人寫得了」只在 Windows 上成立，那幾行留在 `#[cfg(windows)]`）。`mutants-2.toml` 的一個 mutant 跟著 `SERVES_SYSTEM_FONTS` 改。
+- **Mutation test**（`mutants-4.toml`，7 個，`--keep-going`）：全部抓到：通道不送檔案、不還原檔案、`fileport_makefd` 失敗也當成檔案、拿 -1 做 port、macOS 的 renderer 自己找系統字型（sandbox 裡讀不了字型，排出來和外面的不同）、profile 放行 `com.apple.fonts`、放行 `/System/Library/Fonts`。檔案都還原了（每個 `from` 都在原處）。
+- **沒列成 mutant 的**：`make_port` 的「回 0 但名字是 null」的檢查（kernel 成功時一定給名字，造不出來）。
+- **手動確認，沒做成**：想從系統的 log 看 sandbox 裡的 renderer 有沒有被拒絕的嘗試（例如 CoreText 連字型服務），但這台機器的 `log show` 連 probe 故意被拒絕的也看不到。守著同一件事的是 sandbox 裡外的比較：renderer 自己叫 CoreText 的話，在 sandbox 裡失敗、外面成功，寬度就不同（上面第五個 mutant 就是這樣抓到的）。
+- **中途的一件**：第一次跑 mutation test 時 `ci.py third-party` 停下（`../third_party/rusty_v8` 不在釘的 `92a2314`，有 11/22 留下、沒 commit 的格式變更），使用者處理之後同步，相關的測試重跑過。
+- **跑過的檢查**：`cargo test -p ipc -p layout -p browser -p renderer -p protocol -p shell`（ipc 96、121；layout 32、490；browser 39、193；protocol 7、13；renderer 122；shell 759，都通過）；`sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs；第 4 段做完的 `cargo fmt --check`（改了兩處換行）、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace`（63 個 binary，4992 個通過，1 個 ignored，沒有失敗）。

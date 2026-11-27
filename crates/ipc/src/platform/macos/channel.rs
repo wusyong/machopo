@@ -2,7 +2,8 @@
 //! receive port and a send right to the peer's. One of the core's
 //! messages is one Mach message, whole or not at all: in the message
 //! itself up to [`INLINE_MAX`] bytes, out of line past that. Handles are
-//! send rights (a region's memory entry), copied into the message.
+//! send rights (a region's memory entry, a file's fileport), moved into
+//! the message.
 //!
 //! A process's IO thread waits on one port set ([`PortWaiter`]): the
 //! port of each channel's end, where its peer's messages and the
@@ -25,6 +26,7 @@ use std::time::Duration;
 
 use mach2::notify::{MACH_NOTIFY_DEAD_NAME, MACH_NOTIFY_NO_SENDERS, MACH_NOTIFY_SEND_POSSIBLE};
 
+use super::fileport;
 use super::memory::{self, Mapping};
 use super::message::{self, Buffer, ReceiveError, SendError, Sender};
 use super::port::{PortSet, ReceiveRight, Right, SendRight};
@@ -221,13 +223,16 @@ impl Platform for Channel {
         memory::create(len, peer_writes)
     }
 
-    // Files don't cross on this platform yet: a descriptor isn't a port.
-    fn send_file(&self, _: File) -> Option<SendRight> {
-        None
+    // A descriptor isn't a port: the file goes as a port that stands for
+    // it, open as it is here (to read).
+    fn send_file(&self, file: File) -> Option<SendRight> {
+        fileport::make_port(&file)
     }
 
-    fn file(&self, _: SendRight) -> Option<File> {
-        None
+    // The host's word for what it is (as for a region's); a right that
+    // isn't a fileport makes no file.
+    fn file(&self, handle: SendRight) -> Option<File> {
+        fileport::make_file(&handle)
     }
 
     fn shut(&self) {

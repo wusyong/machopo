@@ -4,8 +4,8 @@
 //! its own, which it maps to read. Only the end that may attach handles
 //! sends one, and a message's handles are each a value's once.
 //!
-//! On Windows a real child is given files too: what it maps can't be
-//! written by anyone while it keeps the mapping.
+//! On Windows and macOS a real child is given files too; on Windows what
+//! it maps can't be written by anyone while it keeps the mapping.
 
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -413,11 +413,11 @@ fn a_handle_that_isnt_a_file_where_a_file_is_is_a_bad_message() {
     assert!(child.mapping.0.is_empty());
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 mod process {
-    //! A real child: the files it is sent are its own, and nobody writes
-    //! one while it keeps it mapped, even once the host has let go of
-    //! its own.
+    //! A real child: the files it is sent are its own, even once the host
+    //! has let go of its own; on Windows nobody writes one while the
+    //! child keeps it mapped.
 
     use std::sync::mpsc;
     use std::thread;
@@ -500,7 +500,7 @@ mod process {
     }
 
     #[test]
-    fn a_child_maps_the_files_its_host_sends_and_nobody_writes_them() {
+    fn a_child_maps_the_files_its_host_sends_as_its_own() {
         let (child, channel) =
             platform::spawn(&mut command("file_in_message::process::child", "files")).unwrap();
         let host = Host::over(channel, child);
@@ -512,10 +512,20 @@ mod process {
         assert_eq!(host.next(), (0, Msg::Text("alpha,beta".into())));
         // The host's own handles are gone (the value was dropped as it
         // was sent): the child's keep writers out.
+        #[cfg(windows)]
         let write = |scratch: &Scratch| std::fs::OpenOptions::new().write(true).open(&scratch.0);
+        #[cfg(windows)]
         assert!(write(&a).is_err() && write(&b).is_err());
+        // One with no name any more: what the child is given is the open
+        // file, not its path.
+        let c = Scratch::new(b"gamma");
+        let open = c.open();
+        drop(c);
+        host.link.send(0, &ToChild::Files(vec![open])).unwrap();
+        assert_eq!(host.next(), (0, Msg::Text("gamma".into())));
         host.link.send(0, &ToChild::Quit).unwrap();
         assert_eq!(host.end(), (Gone::PeerClosed, pc::CLOSED));
+        #[cfg(windows)]
         assert!(write(&a).is_ok(), "once the child is gone");
     }
 }

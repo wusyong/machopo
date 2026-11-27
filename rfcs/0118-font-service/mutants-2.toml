@@ -271,8 +271,8 @@ test = ["cargo", "test", "-q", "-p", "browser", "--lib", "--", "font"]
 [[mutant]]
 name = "Windows's renderers find the system's fonts themselves"
 file = "crates/browser/src/font_data_service.rs"
-from = '''pub(crate) const SERVES_SYSTEM_FONTS: bool = cfg!(windows);'''
-to = '''pub(crate) const SERVES_SYSTEM_FONTS: bool = cfg!(windows) && false;'''
+from = '''pub(crate) const SERVES_SYSTEM_FONTS: bool = cfg!(any(windows, target_os = "macos"));'''
+to = '''pub(crate) const SERVES_SYSTEM_FONTS: bool = cfg!(any(windows, target_os = "macos")) && false;'''
 test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "renderer_sandbox_windows::a_renderer_process_has_the_systems_fonts_from_its_browser"]
 
 [[mutant]]
