@@ -69,6 +69,7 @@
 - 改到的 crate 的測試（`bindings`、`dom_api`、`dom_js`、`dom_wasm`、`renderer`、`browser`、`driver`、`shell`）：2,230 個通過，0 個失敗。
 - **段落結束的檢查**（連結本機編的 V8）：`cargo test --workspace` 5,057 個通過（1 個 ignored）；`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`（抓到 `bindings` 的一個沒寫明溢位的負號、`shell` 的一個可以合併的 `if`，改了；改了寫法的 mutant 重跑，抓到）、`sanity.py` 的每一項都通過；`test.py wpt html/browsers/history/the-location-interface/`（改了 `automation_session`）0 個非預期的結果；量測工具的測試：`blink_perf`、`raster`、`census` 通過，`speedometer_test.py` 的 `test_the_windows_are_the_runners_times` 失敗一次，是 RFC 0125 的 `progress.md` 記過、`main` 上也會的那個（不追）。
 - **merge 之前**：第 2b 段改了 fork 的 C++，現在的 prebuilt V8（`machopo-v152.2.0-30`）沒有 `state()`：CI 和其他機器連結 prebuilt，merge 之前要發 fork 的新 release、把 `RUSTY_V8_MIRROR_TAG` 和 `third_party.toml` 移過去（fork 的 `README.machopo.md` 的「Releases」）。
+- **fork 的 release**（2026-11-28）：fork 的 `bfa542c` 推到 `machopo`、打了 `machopo-v152.2.0-31` 的 tag，`machopo-release` 的 workflow 六個 job 都通過（約 2 小時，macOS 的 debug 最久）。`RUSTY_V8_MIRROR_TAG` 移到它、`third_party.toml` 拿掉 rusty_v8 的 `rev`；不設 `RUSTY_V8_ARCHIVE`、從 release 下載 prebuilt 的 V8（build script 的輸出確認是 GitHub 上那個 tag 的）跑 `bindings`、`dom_js`、`browser`、`shell` 的測試，1,808 個通過。
 
 ### 第 3 段開始時（2026-11-28）
 
