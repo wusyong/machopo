@@ -34,7 +34,7 @@ LD_PRELOAD=$PWD/getenv_log.so ENVPROBE_DIR=/tmp/envprobe \
 
 - 不經過 `getenv` 的：glibc 自己讀的（`tzset` 讀 `TZ`、`GLIBC_TUNABLES`、`MALLOC_*`），動態連結器讀的（`LD_*`，在 `main` 之前），mimalloc 自己掃 `environ` 讀的 `MIMALLOC_*`，`std::env::vars()` 那種整份走一遍的。清單照文件和原始碼補（`README.md` 的「清單放什麼」）。
 - 這兩個測試沒走到的路：wasm 的文件、worker、canvas 的文字、WebDriver、`census` 的 build（`MACHOPO_CENSUS`）。第 1 段再用整套 `shell` 的測試量一次。
-- macOS：「renderer 讀了哪些變數（macOS，量的）」；Windows：在那一段量。
+- macOS：「renderer 讀了哪些變數（macOS，量的）」；Windows：「renderer 讀了哪些變數（Windows，量的）」。
 
 **Browser 讀的**比 renderer 多很多（fontconfig、expat、Mesa、Vulkan 的 loader、`HOME`、`XDG_*`、`LD_LIBRARY_PATH`……），都不在 renderer 裡：它們是 Browser 的字型、GPU 和視窗要的。
 
@@ -79,6 +79,39 @@ renderer 不讀 `HOME`、`TMPDIR`、`PATH`、`XPC_*`。只跑 sandbox 那幾個�
 
 **這台 shell 的環境**：73 個變數，清單打開之前 renderer 全部拿到。其中有別的程式的 token 和 API key、SSH agent 的 socket。
 
+## renderer 讀了哪些變數（Windows，量的）
+
+2026-11-27，Windows 11（10.0.26300，x86-64），debug build，`47ca58be`（清單還沒打開）。
+
+**做法**：`getenv_trace.py`（這個資料夾）是一個 Python 的小 debugger（ctypes，不用編譯）。它用 `DEBUG_PROCESS` 啟動一個指令，那個指令啟動的 process 也都被 debug，sandbox 裡（AppContainer）的 renderer 也是；machopo 以外的 process（測試用的 PowerShell）不跟，在 debugger 底下太慢。系統的 DLL 在同一次開機的每個 process 裡位置相同，所以它在自己這裡找到讀一個變數的 export 的位置，在每個 debug 的 process 裡下 breakpoint：`kernelbase` 的 `GetEnvironmentVariable{A,W}`、`ExpandEnvironmentStrings{A,W}`、`GetEnvironmentStringsW`，`ntdll` 的 `RtlQueryEnvironmentVariable`、`RtlQueryEnvironmentVariable_U`，`ucrtbase` 的 `getenv`、`_wgetenv`、`getenv_s`、`_wgetenv_s`、`_dupenv_s`、`_wdupenv_s`。CRT 的 `getenv` 讀的是它啟動時用 `GetEnvironmentStringsW` 抄的一份，不經過 `kernelbase`，所以 `ucrtbase` 也要攔。命令列有 `--type=renderer` 的是 renderer，`--type=renderer-sandbox-probe` 的是 probe（它自己啟動 child，分開算）。用法：
+
+```sh
+python -I rfcs/0119-renderer-environment/getenv_trace.py --out target/envtrace/shell.txt -- target/debug/deps/it-<hash>.exe
+```
+
+量不到的：整份環境走一遍的（只看得到 `GetEnvironmentStringsW` 被叫）；breakpoint 拿掉的那一步之間，別的 thread 經過它（不攔住別的 thread：兩個 thread 同時碰到時會互相等），只在那時讀一次的名字會漏。
+
+**renderer 讀的**（整套 `shell` 的整合測試，263 個 renderer process 合起來；只跑 sandbox 那 10 個測試時量到的是同一組）：
+
+| 變數 | 誰讀 | 說明 |
+| --- | --- | --- |
+| `MACHOPO_IPC_CHANNEL`、`MACHOPO_TRACE`、`MACHOPO_V8_FLAGS`、`MACHOPO_V8_THREAD_POOL_SIZE`、`MACHOPO_GC_OPTIONS`、`RUST_LOG`、`RUST_MIN_STACK`、`NO_COLOR` | 和 Linux 一樣 | |
+| `mimalloc_` 開頭的（54 個，小寫） | mimalloc（`GetEnvironmentVariableA`） | Linux 上 mimalloc 走一遍 `environ` 讀，Windows 上一個一個問、照小寫的名字：Windows 的名字不分大小寫，清單的前綴要不分大小寫比，不然 `MIMALLOC_` 開頭的都安靜地不作用 |
+| `ICU_DATA`、`ICU_TIMEZONE_FILES_DIR` | V8 裡的 ICU | 沒有讀 `LANG`、`LC_*`、`TZ`：Windows 上 ICU 照系統的設定決定預設的語系和時區 |
+| `SIMDUTF_FORCE_IMPLEMENTATION`、`OPENSSL_ia32cap` | 和 Linux 一樣 | 不給 |
+| `PATH` | loader（process 啟動時） | 不給：machopo 用到的 DLL 都在系統的目錄；`lower()` 之後 DLL 只照系統的目錄和執行檔的目錄找 |
+| `_NO_DEBUG_HEAP`、`SHIM_DEBUG_LEVEL`、`SHIM_FILE_LOG`、`SHIMENG_DEBUG_LEVEL`、`ProgramW6432`、`CommonProgramW6432`、`PROCESSOR_ARCHITEW6432` | ntdll、apphelp 的除錯開關，WOW64 的 | 平常沒有值；不給 |
+
+renderer 不讀 `SystemRoot`、`SystemDrive`、`TEMP`、`TMP`、`LOCALAPPDATA`、`USERPROFILE`、`APPDATA`。只有 probe 讀 `TMP`、`__COMPAT_LAYER`、`SB_ENABLE_TRACE`（它啟動 child，`CreateProcess` 裡讀的），網路那個 probe 載入 winsock 時展開 `%SystemRoot%\system32\mswsock.dll`；Browser 載入 `rsaenh.dll` 時也一樣展開 `%SystemRoot%`。系統的元件照登錄裡 `REG_EXPAND_SZ` 的路徑載入 DLL 時都這樣：沒有 `SystemRoot` 時展開不出來，那個 DLL 載不進來。
+
+那一輪 752 個測試裡 34 個逾時（28 個 `automation_pipe`，`webdriver`、`documents`、`event_loop`、`script` 各幾個：`machopo answers: Timeout`、`machopo didn't end`），是 debugger 慢下來，不是環境；它們的 renderer 照樣啟動、量到了。不帶 debugger 時全部通過。
+
+**清單打開、不給任何 Windows 系統的變數時**（只有共用的那份清單）：整套 `cargo test -p shell`（單元 104、`machopo` 13、整合 752）都通過；在 `getenv_trace.py` 底下從外面讀 Browser 啟動的 renderer 的環境，拿到通道之後是空的（測試的環境沒有清單上的開關）。`sunaba` 的測試裡只有三個變數、沒有 `SystemRoot` 的 sandbox 裡的 process 照常啟動、降級。所以給 `SystemRoot`、`SystemDrive` 是預防測試沒走到的系統元件（`README.md` 的已決定的事項第 13 條），不是量到的需要。
+
+**從外面讀 process 的環境**：`NtQueryInformationProcess` 的 `ProcessBasicInformation` 拿 PEB，`ReadProcessMemory` 讀 `PEB` + `0x20` 的 `ProcessParameters`，再讀它的 + `0x80`（`Environment`）和 + `0x3F0`（`EnvironmentSize`，位元組）。只要 `PROCESS_QUERY_LIMITED_INFORMATION` 和 `PROCESS_VM_READ`：同一個使用者的測試讀得到 sandbox 裡、已經降到 Untrusted 的 renderer（整套測試裡 252 個都讀到，沒有失敗；剩下的 11 個 thread 太少，工具沒去讀）。讀到的是現在的環境：renderer 拿到通道後拿掉 `MACHOPO_IPC_CHANNEL`，區塊照它前移，第一個空字串之後還留著舊的字（解析要在那裡停）。
+
+**這台 shell 的環境**：110 個左右的變數，清單打開之前 renderer 全部拿到。其中有別的程式的 token 和帳號的 ID。
+
 ## Chromium
 
 2026-11-27 讀的（`main`）：
@@ -91,4 +124,3 @@ renderer 不讀 `HOME`、`TMPDIR`、`PATH`、`XPC_*`。只跑 sandbox 那幾個�
 ## 沒有查到的
 
 - Firefox 的 content process 的環境有沒有過濾。
-- Windows 上 renderer 實際讀了哪些變數。

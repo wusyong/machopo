@@ -755,7 +755,7 @@ pub fn spawn(command: &mut Command) -> io::Result<(Child, Channel)> {
 /// (`job`). Hearing that the channel is over is only enough for a child
 /// that isn't stuck. Chromium likewise puts each child in a job.
 pub fn spawn_in(command: &mut Command, sandbox: Option<&Sandbox>) -> io::Result<(Child, Channel)> {
-    start(command, sandbox, None, &[])
+    start(command, sandbox, None, &[], false)
 }
 
 /// [`spawn_in`], with `files` handed to the child beside its end of the
@@ -763,12 +763,18 @@ pub fn spawn_in(command: &mut Command, sandbox: Option<&Sandbox>) -> io::Result<
 /// the command is to tell it (it takes one with [`inherited_file`]). For
 /// what a child in a sandbox is to write and couldn't open itself. The
 /// files stay the caller's to close: the child's are its own.
+///
+/// With `clear_environment` (Chromium's `LaunchOptions::clear_environment`)
+/// the child has only the variables `command` sets and the channel's, none
+/// of this process's: what the caller did with `env_clear` on `command`,
+/// which can't be read back from it (only what it sets and removes can).
 pub fn spawn_handing(
     command: &mut Command,
     sandbox: Option<&Sandbox>,
     files: &[std::fs::File],
+    clear_environment: bool,
 ) -> io::Result<(Child, Channel)> {
-    start(command, sandbox, None, files)
+    start(command, sandbox, None, files, clear_environment)
 }
 
 /// In a process started with a file handed to it ([`spawn_handing`]): the
@@ -800,7 +806,7 @@ pub fn spawn_reading_errors(
     let (reader, writer) = io::pipe()?;
     // The writer closes here once the child has its copy: the reader
     // reads the end when the child goes.
-    let (child, channel) = start(command, sandbox, Some(writer.as_handle()), &[])?;
+    let (child, channel) = start(command, sandbox, Some(writer.as_handle()), &[], false)?;
     Ok((child, channel, reader))
 }
 
@@ -809,6 +815,7 @@ fn start(
     sandbox: Option<&Sandbox>,
     errors: Option<BorrowedHandle<'_>>,
     files: &[std::fs::File],
+    clear_environment: bool,
 ) -> io::Result<(Child, Channel)> {
     let (server, client) = pipe().ok_or_else(|| io::Error::other("no pipe could be made"))?;
     let value = client.as_raw_handle().expose_provenance();
@@ -818,6 +825,16 @@ fn start(
             return Err(io::Error::last_os_error());
         }
         let mut start = sunaba::windows::Command::from_std(command);
+        // Built on this process's environment, as `command` can't say it
+        // was cleared: then only what it sets is kept.
+        if clear_environment {
+            start.env_clear();
+            for (name, value) in command.get_envs() {
+                if let Some(value) = value {
+                    start.env(name, value);
+                }
+            }
+        }
         start.env(CHANNEL_VARIABLE, value.to_string());
         start.inherit(client.as_handle());
         if let Some(errors) = errors {

@@ -1,0 +1,103 @@
+# Stage 3's mutants (Windows: a renderer process is started with only the listed part of the browser's environment, and the tests read it from outside): `python3 scripts/test.py mutate rfcs/0119-renderer-environment/mutants-3.toml`, on Windows.
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "--test", "it", "--", "renderer_sandbox"]
+timeout = 900
+
+[[mutant]]
+name = "Windows's renderers aren't limited"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''pub const LIMITS_ENVIRONMENT: bool = cfg!(any(target_os = "linux", target_os = "macos", windows));'''
+to = '''pub const LIMITS_ENVIRONMENT: bool = cfg!(any(target_os = "linux", target_os = "macos"));'''
+
+[[mutant]]
+name = "the launcher doesn't tell ipc to clear the environment"
+file = "crates/shell/src/lib.rs"
+from = '''            process.clear_environment = renderer_sandbox::LIMITS_ENVIRONMENT;'''
+to = '''            process.clear_environment = false;'''
+
+[[mutant]]
+name = "ipc doesn't clear the environment"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''            start.env_clear();
+            for (name, value) in command.get_envs() {'''
+to = '''            for (name, value) in command.get_envs() {'''
+
+[[mutant]]
+name = "ipc clears the environment and doesn't put the command's back"
+file = "crates/ipc/src/platform/windows/channel.rs"
+from = '''            start.env_clear();
+            for (name, value) in command.get_envs() {
+                if let Some(value) = value {
+                    start.env(name, value);
+                }
+            }'''
+to = '''            start.env_clear();'''
+
+[[mutant]]
+name = "sunaba's env_clear clears nothing"
+file = "crates/sunaba/src/windows.rs"
+from = '''        self.environment.clear();'''
+to = ''''''
+
+[[mutant]]
+name = "sunaba's env_clear clears nothing (sunaba's tests)"
+file = "crates/sunaba/src/windows.rs"
+from = '''        self.environment.clear();'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "sunaba"]
+
+[[mutant]]
+name = "SystemRoot isn't given"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''    #[cfg(windows)]
+    "SystemRoot",'''
+to = ''''''
+
+[[mutant]]
+name = "SystemDrive isn't given"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''    #[cfg(windows)]
+    "SystemDrive",'''
+to = ''''''
+
+[[mutant]]
+name = "Windows's names are compared with their case"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''    if cfg!(windows) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "a prefix is compared with the whole name"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''                name.get(..prefix.len())'''
+to = '''                Some(name)'''
+
+[[mutant]]
+name = "the block isn't ended at its empty string"
+file = "crates/sunaba/src/windows.rs"
+from = '''        .take_while(|variable| !variable.is_empty())'''
+to = '''        .filter(|variable| !variable.is_empty())'''
+test = ["cargo", "test", "-q", "-p", "sunaba"]
+
+[[mutant]]
+name = "a name may end at its first unit"
+file = "crates/sunaba/src/windows.rs"
+from = '''                .skip(1)
+                .position(|&unit| unit == EQUALS)
+                .map_or(variable.len(), |at| at.saturating_add(1));'''
+to = '''                .position(|&unit| unit == EQUALS)
+                .map_or(variable.len(), |at| at);'''
+test = ["cargo", "test", "-q", "-p", "sunaba"]
+
+[[mutant]]
+name = "the environment is read a unit late"
+file = "crates/sunaba/src/windows.rs"
+from = '''    let block = word_at(&process, parameters.checked_add(peb::ENVIRONMENT)?)?;'''
+to = '''    let block = word_at(&process, parameters.checked_add(peb::ENVIRONMENT)?)?.saturating_add(2);'''
+test = ["cargo", "test", "-q", "-p", "sunaba"]
+
+[[mutant]]
+name = "a short read is taken whole"
+file = "crates/sunaba/src/windows.rs"
+from = '''    (done != 0 && read == buffer.len()).then_some(())'''
+to = '''    (done != 0).then_some(())'''
+test = ["cargo", "test", "-q", "-p", "sunaba"]

@@ -12,8 +12,8 @@ to = '''    command.envs(renderer_environment(std::env::vars_os()));'''
 [[mutant]]
 name = "Linux's renderers aren't limited"
 file = "crates/shell/src/renderer_sandbox.rs"
-from = '''pub const LIMITS_ENVIRONMENT: bool = cfg!(any(target_os = "linux", target_os = "macos"));'''
-to = '''pub const LIMITS_ENVIRONMENT: bool = cfg!(target_os = "macos");'''
+from = '''pub const LIMITS_ENVIRONMENT: bool = cfg!(any(target_os = "linux", target_os = "macos", windows));'''
+to = '''pub const LIMITS_ENVIRONMENT: bool = cfg!(any(target_os = "macos", windows));'''
 
 [[mutant]]
 name = "the launcher doesn't limit the renderer's environment"

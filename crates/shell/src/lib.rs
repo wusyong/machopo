@@ -126,6 +126,12 @@ pub fn renderer_launcher(process_per_tab: bool, test_fonts: bool) -> browser::Re
         // pipe end as the browser does, not once the last renderer has.
         command.stdin(std::process::Stdio::null());
         let mut process = browser::RendererProcess::new(command);
+        // What `limit_environment` cleared, where the process isn't the
+        // standard library's to start.
+        #[cfg(windows)]
+        {
+            process.clear_environment = renderer_sandbox::LIMITS_ENVIRONMENT;
+        }
         process.sandbox = renderer_sandbox::sandbox();
         // Started inside its sandbox, it can open nothing: what it writes
         // is opened for it here.

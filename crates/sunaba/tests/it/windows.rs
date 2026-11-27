@@ -356,6 +356,47 @@ fn arguments_and_the_environment_arrive_as_they_were_given() {
     );
 }
 
+/// Its starter reads what a sandboxed process was given from outside:
+/// with only the variables set after its environment was cleared, and
+/// once it has lowered itself.
+#[test]
+fn a_sandboxed_processs_environment_is_seen_from_outside() {
+    let mut command = sunaba::windows::Command::new(env!("CARGO_BIN_EXE_sunaba_probe"));
+    command
+        .arg("--inside")
+        .arg("sleep")
+        .arg("20")
+        .env("SUNABA_BEFORE", "cleared")
+        .env_clear()
+        .env("SOME_NAME", "a value with spaces")
+        .env("OTHER", "x=y")
+        .env("EMPTY", "");
+    let policy = sunaba::windows::Policy::new(format!("sunaba.test.{}.env", std::process::id()));
+    let mut child = command.spawn(Some(&policy)).unwrap();
+    let process = sunaba::windows::open(child.id()).unwrap();
+    let lowered = (0..500).any(|_| {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        sunaba::windows::integrity(process.as_handle()).unwrap() == UNTRUSTED
+    });
+    assert!(lowered);
+    let mut environment = sunaba::windows::environment(child.id()).expect("its environment");
+    environment.sort();
+    let pair = |name: &str, value: &str| (name.into(), value.into());
+    assert_eq!(
+        environment,
+        [
+            pair("EMPTY", ""),
+            pair("OTHER", "x=y"),
+            pair("SOME_NAME", "a value with spaces"),
+        ]
+    );
+    let id = child.id();
+    child.kill().unwrap();
+    child.wait().unwrap();
+    drop((child, process));
+    assert_eq!(sunaba::windows::environment(id), None);
+}
+
 #[test]
 fn the_process_ends_as_a_program_that_gives_up_does() {
     // `STATUS_STACK_BUFFER_OVERRUN`: a fast fail, which `abort` is.

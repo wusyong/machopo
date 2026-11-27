@@ -89,9 +89,9 @@ pub const SUPPORTED: bool = cfg!(any(target_os = "linux", target_os = "macos", w
 
 /// Whether a renderer process is started with only the variables of the
 /// browser's environment that [`passes_to_renderer`] lets through, in a
-/// sandbox or out of one. Where it isn't (until a platform's list is
-/// measured there), it inherits the browser's whole environment.
-pub const LIMITS_ENVIRONMENT: bool = cfg!(any(target_os = "linux", target_os = "macos"));
+/// sandbox or out of one. Where it isn't (a platform whose list hasn't
+/// been measured on it), it inherits the browser's whole environment.
+pub const LIMITS_ENVIRONMENT: bool = cfg!(any(target_os = "linux", target_os = "macos", windows));
 
 /// The variables a renderer process is given by name: none is a secret,
 /// each changes how the renderer runs.
@@ -103,7 +103,9 @@ const RENDERER_VARIABLES: &[&str] = &[
     "RUST_LIB_BACKTRACE",
     "RUST_MIN_STACK",
     // ICU's (V8's): the default locale and time zone `Intl` has, and where
-    // its data is when it isn't built in.
+    // its data is when it isn't built in. On Windows ICU takes the locale
+    // and the zone from the system's settings, not these: they are given
+    // there all the same, as one list.
     "LANG",
     "TZ",
     "ICU_DATA",
@@ -134,6 +136,16 @@ const RENDERER_VARIABLES: &[&str] = &[
     // the renderer is in its sandbox.
     #[cfg(target_os = "macos")]
     "SAMPLY_BOOTSTRAP_SERVER_NAME",
+    // Where Windows is: the system's components expand paths in the
+    // registry with them (`%SystemRoot%\system32\...`), and a DLL found
+    // so isn't loaded where they aren't, without a word. Neither is the
+    // user's; `Path`, `TEMP`, `TMP` and `LOCALAPPDATA`, which are, aren't
+    // given: once lowered, a renderer looks for DLLs in the system's
+    // directories and its own alone, and writes nowhere.
+    #[cfg(windows)]
+    "SystemRoot",
+    #[cfg(windows)]
+    "SystemDrive",
 ];
 
 /// The variables a renderer process is given by what their names start
@@ -144,14 +156,29 @@ const RENDERER_PREFIXES: &[&str] = &["MACHOPO_", "MIMALLOC_", "LC_"];
 
 /// Whether the variable `name` of the browser's environment is given to
 /// a renderer process. A name that isn't Unicode isn't any of them.
+///
+/// On Windows a name is the same whatever its case (`Path` is `PATH`,
+/// and mimalloc asks for its options in lower case), so it is compared
+/// so. Only ASCII's case is: a name the system would take for a listed
+/// one by another letter's isn't given, which a renderer can do without.
 pub fn passes_to_renderer(name: &std::ffi::OsStr) -> bool {
     let Some(name) = name.to_str() else {
         return false;
     };
-    RENDERER_VARIABLES.contains(&name)
-        || RENDERER_PREFIXES
+    if cfg!(windows) {
+        RENDERER_VARIABLES
             .iter()
-            .any(|prefix| name.starts_with(prefix))
+            .any(|listed| listed.eq_ignore_ascii_case(name))
+            || RENDERER_PREFIXES.iter().any(|prefix| {
+                name.get(..prefix.len())
+                    .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
+            })
+    } else {
+        RENDERER_VARIABLES.contains(&name)
+            || RENDERER_PREFIXES
+                .iter()
+                .any(|prefix| name.starts_with(prefix))
+    }
 }
 
 /// What of `environment` a renderer process is given.
@@ -802,7 +829,6 @@ mod tests {
         }
         for other in [
             "HOME",
-            "PATH",
             "USER",
             "SSH_AUTH_SOCK",
             "DBUS_SESSION_BUS_ADDRESS",
@@ -813,10 +839,40 @@ mod tests {
             "XMACHOPO_V8_FLAGS",
             "MACHOPO",
             "LANGUAGE",
-            "rust_log",
             "",
         ] {
             assert!(!passes_to_renderer(other.as_ref()), "{other}");
+        }
+        // Whatever their case, where the system's names are (Windows).
+        for cased in [
+            "rust_log",
+            "Lang",
+            "Machopo_V8_Flags",
+            "mimalloc_purge_delay",
+        ] {
+            assert_eq!(passes_to_renderer(cased.as_ref()), cfg!(windows), "{cased}");
+        }
+        for windows in ["SystemRoot", "SYSTEMDRIVE"] {
+            assert_eq!(
+                passes_to_renderer(windows.as_ref()),
+                cfg!(windows),
+                "{windows}"
+            );
+        }
+        for not_even_on_windows in [
+            "PATH",
+            "Path",
+            "TEMP",
+            "TMP",
+            "LOCALAPPDATA",
+            "USERPROFILE",
+            "APPDATA",
+            "SystemRootX",
+        ] {
+            assert!(
+                !passes_to_renderer(not_even_on_windows.as_ref()),
+                "{not_even_on_windows}"
+            );
         }
         assert_eq!(
             passes_to_renderer("LD_PRELOAD".as_ref()),

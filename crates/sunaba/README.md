@@ -151,7 +151,7 @@ if let Err(error) = sunaba::windows::lower() {
 
 ### Starting a process
 
-`Command` is a program, its arguments, its whole environment (this process's, with what `env` and `env_remove` change), its directory, and the handles of this process's it inherits (`inherit`; each has to be inheritable). `Command::from_std` takes those from a standard library's command. `spawn(None)` starts it as usual, except that it has no handle of the starter's but the ones named, where the standard library's lets it have every inheritable one: that is all the crate adds for a process with no sandbox, and a reason to start one here.
+`Command` is a program, its arguments, its whole environment (this process's, with what `env` and `env_remove` change; after `env_clear`, only what is set after it), its directory, and the handles of this process's it inherits (`inherit`; each has to be inheritable). `Command::from_std` takes those from a standard library's command. `spawn(None)` starts it as usual, except that it has no handle of the starter's but the ones named, where the standard library's lets it have every inheritable one: that is all the crate adds for a process with no sandbox, and a reason to start one here.
 
 The started process's output and errors are the starter's where those are a file or a pipe (`stderr` hands it another); its input is nothing. Where neither is, it is left to its console's.
 
@@ -173,7 +173,7 @@ Two things a program may need of it: `allow_win32k` for one that loads `user32.d
 
 ### Looking from outside
 
-`open(id)` and then `in_app_container`, `integrity`, `mitigation` and `running` say what a process is in, for the starter's tests of the real thing.
+`open(id)` and then `in_app_container`, `integrity`, `mitigation` and `running` say what a process is in, for the starter's tests of the real thing. `environment(id)` is a process's environment as it is now, by its PEB (64-bit processes): what its starter gave it, less what the process removed since; `None` for one that has ended or can't be read.
 
 ### Testing a policy
 

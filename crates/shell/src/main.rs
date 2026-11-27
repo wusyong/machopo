@@ -176,12 +176,13 @@ Options:
                       may but Chrome's DevTools' own.
   -h, --help          Print this help.
 
-Environment (on Linux and macOS, a renderer in a process of its own is
-given these, the other MACHOPO_ and MIMALLOC_ ones, RUST_BACKTRACE,
-RUST_MIN_STACK, NO_COLOR, the locale's and the time zone's, LD_PRELOAD and
-LD_LIBRARY_PATH on Linux, DYLD_INSERT_LIBRARIES, DYLD_LIBRARY_PATH,
-__CF_USER_TEXT_ENCODING and SAMPLY_BOOTSTRAP_SERVER_NAME on macOS, and
-nothing else of the environment):
+Environment (a renderer in a process of its own is given these, the other
+MACHOPO_ and MIMALLOC_ ones, RUST_BACKTRACE, RUST_MIN_STACK, NO_COLOR, the
+locale's and the time zone's, LD_PRELOAD and LD_LIBRARY_PATH on Linux,
+DYLD_INSERT_LIBRARIES, DYLD_LIBRARY_PATH, __CF_USER_TEXT_ENCODING and
+SAMPLY_BOOTSTRAP_SERVER_NAME on macOS, SystemRoot and SystemDrive on
+Windows, where names are in any case, and nothing else of the
+environment):
   RUST_LOG                 Log filter (default: {DEFAULT_LOG_FILTER}).
                            style=debug lists the CSS that was ignored.
                            style, layout, paint and compositor at debug log

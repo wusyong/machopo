@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use sunaba::windows::{LOW, Mitigation, UNTRUSTED, in_app_container, integrity, mitigation, open};
 
-use crate::automation_pipe::{Browser, script};
+use crate::automation_pipe::{Browser, renderer_pids, script};
 use crate::renderer_process::{MACHOPO, RunningRenderer};
 
 /// The flags of mitigation `which` of the process `id`.
@@ -141,7 +141,8 @@ fn a_sandboxed_renderer_shows_a_page_as_one_outside_does() {
         browser.navigate(&session, page);
         let read = "return [[...document.querySelectorAll('span')].map(s => s.offsetWidth), \
             Intl.DateTimeFormat().resolvedOptions().timeZone, new Date(0).getTimezoneOffset(), \
-            navigator.language]";
+            navigator.language, Intl.DateTimeFormat().resolvedOptions().locale, \
+            new Intl.NumberFormat().format(1234.5)]";
         script(&mut browser, &session, read, serde_json::json!([])).unwrap()
     };
     let inside = seen(&["--process-per-tab"]);
@@ -153,6 +154,91 @@ fn a_sandboxed_renderer_shows_a_page_as_one_outside_does() {
     );
     assert_eq!(inside, seen(&["--process-per-tab", "--no-sandbox"]));
     assert_eq!(inside, seen(&["--single-process"]));
+}
+
+/// A renderer process, in its sandbox or out of it, is given only the
+/// listed part of its browser's environment: not a secret the browser
+/// has, nor the user's own directories, but machopo's switches (whatever
+/// their names' case) and where Windows is. The locale and the time zone
+/// are passed on too, though on Windows the page has them from the
+/// system's settings: it sees what a renderer on the browser's thread
+/// does.
+#[test]
+fn a_renderer_process_has_only_the_listed_part_of_its_browsers_environment() {
+    let secret = std::ffi::OsStr::new("not for a renderer");
+    let switch = std::ffi::OsStr::new("given");
+    let cased = std::ffi::OsStr::new("given too");
+    let lang = std::ffi::OsStr::new("ja_JP.UTF-8");
+    let tz = std::ffi::OsStr::new("Asia/Tokyo");
+    let env = [
+        ("SOME_API_TOKEN", secret),
+        ("MACHOPO_TEST_SWITCH", switch),
+        ("Machopo_Test_Cased", cased),
+        ("LANG", lang),
+        ("TZ", tz),
+    ];
+    let read = "return [Intl.DateTimeFormat().resolvedOptions().locale, \
+        Intl.DateTimeFormat().resolvedOptions().timeZone, new Date(0).getTimezoneOffset(), \
+        new Intl.NumberFormat().format(1234.5)]";
+    let seen = |args: &[&str]| {
+        let mut browser = Browser::start_in(args, &env, Stdio::null());
+        let session = browser.attach();
+        browser.navigate(&session, "about:blank");
+        let seen = script(&mut browser, &session, read, serde_json::json!([])).unwrap();
+        let environments: Vec<_> = renderer_pids(&mut browser)
+            .into_iter()
+            .map(|pid| sunaba::windows::environment(u32::try_from(pid).unwrap()))
+            .collect();
+        (seen, environments)
+    };
+    let (on_a_thread, none) = seen(&["--single-process"]);
+    assert!(none.is_empty(), "{none:?}");
+    let system = |name: &str| std::env::var_os(name).expect(name);
+    for args in [
+        &["--process-per-tab"][..],
+        &["--process-per-tab", "--no-sandbox"],
+    ] {
+        let (seen, environments) = seen(args);
+        assert_eq!(seen, on_a_thread, "{args:?}");
+        let [Some(environment)] = &environments[..] else {
+            panic!("{args:?}: {environments:?}");
+        };
+        let names: Vec<_> = environment.iter().map(|(name, _)| name).collect();
+        for (name, _) in environment {
+            assert!(
+                shell::renderer_sandbox::passes_to_renderer(name),
+                "{args:?}: {name:?} isn't listed: {names:?}"
+            );
+        }
+        let value = |name: &str| {
+            environment
+                .iter()
+                .find(|(found, _)| found.eq_ignore_ascii_case(name))
+                .map(|(_, value)| value.as_os_str())
+        };
+        for absent in [
+            "SOME_API_TOKEN",
+            "USERPROFILE",
+            "PATH",
+            "TEMP",
+            "LOCALAPPDATA",
+        ] {
+            assert_eq!(value(absent), None, "{args:?}: {absent}");
+        }
+        assert_eq!(value("MACHOPO_TEST_SWITCH"), Some(switch), "{args:?}");
+        assert_eq!(value("MACHOPO_TEST_CASED"), Some(cased), "{args:?}");
+        assert_eq!(value("LANG"), Some(lang), "{args:?}");
+        assert_eq!(value("TZ"), Some(tz), "{args:?}");
+        for windows in ["SystemRoot", "SystemDrive"] {
+            assert_eq!(
+                value(windows),
+                Some(system(windows).as_os_str()),
+                "{args:?}"
+            );
+        }
+        // The renderer takes its channel's out once it has the channel.
+        assert_eq!(value("MACHOPO_IPC_CHANNEL"), None, "{args:?}");
+    }
 }
 
 /// The names of the DLLs process `id` has loaded, as the system lists

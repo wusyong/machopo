@@ -26,6 +26,7 @@ use std::path::PathBuf;
 use std::process::ExitStatus;
 use std::ptr::{null, null_mut};
 
+use windows_sys::Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation};
 use windows_sys::Win32::Foundation::{
     DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
     WAIT_TIMEOUT,
@@ -39,6 +40,7 @@ use windows_sys::Win32::Security::{
 };
 use windows_sys::Win32::Storage::FileSystem::{FILE_TYPE_DISK, FILE_TYPE_PIPE, GetFileType};
 use windows_sys::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE};
+use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
 use windows_sys::Win32::System::JobObjects::{
     CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS, JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION,
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_BASIC_UI_RESTRICTIONS,
@@ -51,10 +53,10 @@ use windows_sys::Win32::System::Threading::{
     GetExitCodeProcess, GetProcessMitigationPolicy, INFINITE, InitializeProcThreadAttributeList,
     OpenProcess, OpenProcessToken, PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY,
     PROC_THREAD_ATTRIBUTE_COMPONENT_FILTER, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-    PROC_THREAD_ATTRIBUTE_JOB_LIST, PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY, PROCESS_INFORMATION,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE as SYNCHRONIZE, STARTF_USESTDHANDLES,
-    STARTUPINFOEXW, SetProcessMitigationPolicy, TerminateProcess, UpdateProcThreadAttribute,
-    WaitForSingleObject,
+    PROC_THREAD_ATTRIBUTE_JOB_LIST, PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY,
+    PROCESS_BASIC_INFORMATION, PROCESS_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION,
+    PROCESS_SYNCHRONIZE as SYNCHRONIZE, PROCESS_VM_READ, STARTF_USESTDHANDLES, STARTUPINFOEXW,
+    SetProcessMitigationPolicy, TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
 };
 
 /// The most a SID takes (`SECURITY_MAX_SID_SIZE`).
@@ -329,6 +331,13 @@ impl Command {
 
     pub fn env_remove(&mut self, name: impl AsRef<OsStr>) -> &mut Self {
         self.environment.remove(&upper(name.as_ref()));
+        self
+    }
+
+    /// Nothing of this process's environment: the program has only the
+    /// variables set after this (the standard library's `env_clear`).
+    pub fn env_clear(&mut self) -> &mut Self {
+        self.environment.clear();
         self
     }
 
@@ -959,6 +968,122 @@ pub fn in_app_container(process: BorrowedHandle<'_>) -> io::Result<bool> {
     Ok(answer.first().is_some_and(|word| *word & 0xFFFF_FFFF != 0))
 }
 
+/// Where a 64-bit process's environment is: its PEB's pointer to its
+/// parameters (`RTL_USER_PROCESS_PARAMETERS`), and in those the block's
+/// address and size in bytes. The last two aren't in the public
+/// `winternl.h`; they have been where they are since Windows Vista.
+#[cfg(target_pointer_width = "64")]
+mod peb {
+    pub const PROCESS_PARAMETERS: usize = 0x20;
+    pub const ENVIRONMENT: usize = 0x80;
+    pub const ENVIRONMENT_SIZE: usize = 0x3F0;
+    /// More than any environment is: a size read past it is taken for a
+    /// misread.
+    pub const MOST: usize = 1 << 24;
+}
+
+/// The environment of the process `id` as it is now, by the system's
+/// account of it (its PEB's): for whoever started a process to see what
+/// it was given, in a sandbox or out of one. What the process has removed
+/// from it since isn't seen. `None` for a process that isn't there, isn't
+/// this user's, or can't be read.
+#[cfg(target_pointer_width = "64")]
+pub fn environment(id: u32) -> Option<Vec<(OsString, OsString)>> {
+    // SAFETY: opens a handle or fails; nothing is read or written.
+    let process =
+        unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, 0, id) };
+    if process.is_null() {
+        return None;
+    }
+    let process = owned(process);
+    // SAFETY: all-zero is a valid `PROCESS_BASIC_INFORMATION` (numbers
+    // and a pointer that is only read as a number).
+    let mut basic: PROCESS_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
+    let length = u32::try_from(size_of::<PROCESS_BASIC_INFORMATION>()).ok()?;
+    // SAFETY: `process` is open; `basic` is the structure the class
+    // writes, of the length given, alive across the call.
+    let status = unsafe {
+        NtQueryInformationProcess(
+            process.as_raw_handle(),
+            ProcessBasicInformation,
+            (&raw mut basic).cast(),
+            length,
+            null_mut(),
+        )
+    };
+    if status != 0 {
+        return None;
+    }
+    let peb = basic.PebBaseAddress.addr();
+    let parameters = word_at(&process, peb.checked_add(peb::PROCESS_PARAMETERS)?)?;
+    let block = word_at(&process, parameters.checked_add(peb::ENVIRONMENT)?)?;
+    let size = word_at(&process, parameters.checked_add(peb::ENVIRONMENT_SIZE)?)?;
+    if size > peb::MOST {
+        return None;
+    }
+    let mut bytes = vec![0_u8; size];
+    read_from(&process, block, &mut bytes)?;
+    let units: Vec<u16> = bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&pair| u16::from_le_bytes(pair))
+        .collect();
+    Some(environment_in(&units))
+}
+
+/// `buffer.len()` bytes of `process`'s memory at `address`, all of them
+/// or `None`.
+fn read_from(process: &OwnedHandle, address: usize, buffer: &mut [u8]) -> Option<()> {
+    let mut read = 0_usize;
+    // SAFETY: `process` is open; the buffer is this process's, writable
+    // for its length, and alive across the call, which writes at most
+    // that many bytes to it and how many to `read`. What is read is
+    // another process's memory, so it can't alias anything here.
+    let done = unsafe {
+        ReadProcessMemory(
+            process.as_raw_handle(),
+            std::ptr::without_provenance(address),
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+            &raw mut read,
+        )
+    };
+    (done != 0 && read == buffer.len()).then_some(())
+}
+
+/// The pointer-sized number at `address` in `process`.
+fn word_at(process: &OwnedHandle, address: usize) -> Option<usize> {
+    let mut word = [0_u8; size_of::<usize>()];
+    read_from(process, address, &mut word)?;
+    Some(usize::from_ne_bytes(word))
+}
+
+/// The variables in an environment block: `NAME=value` strings, each
+/// ended by a NUL, until an empty one (what follows isn't the
+/// environment). A name may start with `=` (the per-drive directories a
+/// shell keeps), so it ends at the first `=` after its first unit.
+fn environment_in(block: &[u16]) -> Vec<(OsString, OsString)> {
+    use std::os::windows::ffi::OsStringExt as _;
+    const EQUALS: u16 = b'=' as u16;
+    block
+        .split(|&unit| unit == 0)
+        .take_while(|variable| !variable.is_empty())
+        .map(|variable| {
+            let at = variable
+                .iter()
+                .skip(1)
+                .position(|&unit| unit == EQUALS)
+                .map_or(variable.len(), |at| at.saturating_add(1));
+            let value = variable.get(at.saturating_add(1)..).unwrap_or_default();
+            (
+                OsString::from_wide(&variable[..at]),
+                OsString::from_wide(value),
+            )
+        })
+        .collect()
+}
+
 /// The flags of `process`'s mitigation policy `which`.
 pub fn mitigation(process: BorrowedHandle<'_>, which: Mitigation) -> io::Result<u32> {
     let mut flags = 0u32;
@@ -1037,6 +1162,52 @@ mod tests {
         assert_eq!(entry, &("SUNABA_TEST".into(), "2".into()));
         command.env_remove("sunaba_test");
         assert!(!command.environment.contains_key(OsStr::new("SUNABA_TEST")));
+    }
+
+    #[test]
+    fn a_cleared_commands_environment_is_only_what_is_set_after() {
+        let mut command = Command::new("x");
+        command.env("SUNABA_BEFORE", "1").env_clear();
+        assert!(command.environment.is_empty());
+        command.env("SUNABA_AFTER", "2");
+        assert_eq!(
+            command.environment.values().collect::<Vec<_>>(),
+            [&("SUNABA_AFTER".into(), "2".into())]
+        );
+    }
+
+    #[test]
+    fn an_environment_block_is_read_up_to_its_empty_string() {
+        let block = |strings: &[&str]| -> Vec<u16> {
+            strings
+                .iter()
+                .flat_map(|string| string.encode_utf16().chain([0]))
+                .collect()
+        };
+        let pair = |name: &str, value: &str| (OsString::from(name), OsString::from(value));
+        assert_eq!(
+            environment_in(&block(&[
+                "Path=C:\\Windows",
+                "SPACED=a b",
+                "EQUALS=a=b",
+                "=C:=C:\\x",
+                "EMPTY=",
+                "",
+                "AFTER=the end",
+            ])),
+            [
+                pair("Path", "C:\\Windows"),
+                pair("SPACED", "a b"),
+                pair("EQUALS", "a=b"),
+                pair("=C:", "C:\\x"),
+                pair("EMPTY", ""),
+            ]
+        );
+        // Without its empty string, or its last NUL; without an `=`.
+        assert_eq!(environment_in(&block(&["A=1"])), [pair("A", "1")]);
+        assert_eq!(environment_in(&block(&["A=1"])[..3]), [pair("A", "1")]);
+        assert_eq!(environment_in(&block(&["A"])), [pair("A", "")]);
+        assert!(environment_in(&[]).is_empty());
     }
 
     #[test]

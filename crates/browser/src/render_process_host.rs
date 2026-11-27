@@ -44,6 +44,12 @@ pub struct RendererProcess {
     pub command: Command,
     pub sandbox: Option<ipc::platform::Sandbox>,
     pub files: Vec<std::fs::File>,
+    /// The process has only the variables `command` sets, none of the
+    /// browser's: `command`'s `env_clear`, which the standard library
+    /// doesn't let be read back, and the process isn't started by it on
+    /// Windows. Elsewhere `env_clear` is followed as it is.
+    #[cfg(windows)]
+    pub clear_environment: bool,
     /// Called with the process's id once it has started.
     pub started: Option<Box<dyn FnOnce(u32) + Send>>,
 }
@@ -55,6 +61,8 @@ impl RendererProcess {
             command,
             sandbox: None,
             files: Vec::new(),
+            #[cfg(windows)]
+            clear_environment: false,
             started: None,
         }
     }
@@ -420,6 +428,7 @@ impl RenderProcessHost {
                         &mut process.command,
                         process.sandbox.as_ref(),
                         &process.files,
+                        process.clear_environment,
                     )?;
                     #[cfg(not(windows))]
                     let (child, channel) =
