@@ -26,6 +26,8 @@ pub(super) struct NavigationCommit {
     /// Its load as far as its head, with its end once it has one.
     pub(super) loaded: Option<Box<NavigationLoad>>,
     pub(super) navigation_type: FrameLoadType,
+    /// The main frame's page before may stay shown till it is drawn.
+    pub(super) paint_holding: bool,
 }
 
 /// A document's body as a commit brings it: its start (all of it, for one

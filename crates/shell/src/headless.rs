@@ -3,6 +3,7 @@
 //! on the process's GPU device. Its `BeginFrame`s are virtual, so a page
 //! comes out the same on every run (as content_shell's web test mode).
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::Path;
@@ -296,6 +297,15 @@ fn drive(
         web_contents.frame_sink_id(),
         Box::new(web_contents.begin_frame_sender()),
     );
+    // Each renderer's sink's way back to it, for the pixels of its shared
+    // images: the tab has the one it was made with, and another for each
+    // renderer that takes the tab's place (a navigation to another site).
+    // Those whose first frame has come, which each is told once.
+    let mut first_frames = std::collections::HashSet::new();
+    let mut clients = HashMap::from([(
+        web_contents.frame_sink_id(),
+        web_contents.begin_frame_observer(),
+    )]);
     let mut frame_time = 0.0;
     let mut title = None;
     // The navigation `DidFinishLoad` was for and the token of the frame it
@@ -413,6 +423,11 @@ fn drive(
             ))) => {
                 let token = frame.metadata.frame_token;
                 display.submit_compositor_frame(sink, local_surface_id, frame);
+                if let Some(client) = clients.get(&sink)
+                    && first_frames.insert(sink)
+                {
+                    client.on_first_frame();
+                }
                 if frames_drawn == 0 && display.needs_draw() {
                     let into = first_copy.clone();
                     display.request_copy_of_output(CopyOutputRequest::new(move |result| {
@@ -439,20 +454,31 @@ fn drive(
                 display.flush_shared_images();
                 // The buffer is the renderer's again.
                 drop(pixels);
-                web_contents.shared_image_pixels_returned(mailbox);
+                if let Some(client) = clients.get(&sink) {
+                    client.on_pixels_returned(mailbox);
+                }
             }
             Ok(Event::Viz(VizMsg::FrameSink(
                 sink,
                 CompositorFrameSinkMsg::DestroySharedImage { mailbox },
             ))) => display.destroy_shared_image(sink, mailbox),
-            // Headless has one tab, its client from the start: it navigates
-            // once, and a renderer gone ends the run, so none is launched
-            // again with a sink of its own.
-            Ok(Event::Viz(
-                VizMsg::Display(_)
-                | VizMsg::RegisterFrameSinkId(..)
-                | VizMsg::InvalidateFrameSinkId(_),
-            )) => {}
+            // Headless has one tab, whose surface fills the output: a
+            // renderer that takes its place (a navigation to another site)
+            // has a sink of its own, which the output shows from then on,
+            // and the one it replaced goes (a renderer gone ends the run).
+            Ok(Event::Viz(VizMsg::RegisterFrameSinkId(sink, observer))) => {
+                display.set_root_frame_sink(sink);
+                let begin_frame = observer.clone();
+                begin_frames
+                    .add_client(sink, Box::new(move |args| begin_frame.on_begin_frame(args)));
+                clients.insert(sink, observer);
+            }
+            Ok(Event::Viz(VizMsg::InvalidateFrameSinkId(sink))) => {
+                begin_frames.remove_client(sink);
+                clients.remove(&sink);
+                display.remove_frame_sink(sink);
+            }
+            Ok(Event::Viz(VizMsg::Display(_))) => {}
             Ok(Event::Navigation(event)) => web_contents.on_navigation_event(*event),
             Ok(Event::Bad(renderer, reason)) => {
                 if web_contents.is_current_renderer(renderer) {

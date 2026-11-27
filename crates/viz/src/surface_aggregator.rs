@@ -213,14 +213,28 @@ impl SurfaceAggregator {
             match quad.material {
                 Material::Surface {
                     surface_id,
+                    fallback,
                     default_background_color,
                 } => {
-                    let child_sink = surface_id.frame_sink_id;
-                    out.embedded.insert(child_sink);
+                    // The surface's frame, or else its fallback's
+                    // (`SurfaceManager::GetLatestInFlightSurface`): a frame
+                    // of either may change what is drawn.
+                    let primary = surface_id.frame_sink_id;
+                    out.embedded.insert(primary);
+                    if let Some(fallback) = fallback {
+                        out.embedded.insert(fallback.frame_sink_id);
+                    }
                     let surface_clip = intersect(quad_clip, Some(rect));
-                    let child = manager
-                        .latest(child_sink)
-                        .filter(|_| !path.contains(&child_sink));
+                    let (child_sink, child) = std::iter::once(primary)
+                        .chain(fallback.map(|fallback| fallback.frame_sink_id))
+                        .find_map(|sink| {
+                            manager
+                                .latest(sink)
+                                .filter(|_| !path.contains(&sink))
+                                .map(|frame| (sink, frame))
+                        })
+                        .unzip();
+                    let child_sink = child_sink.unwrap_or(primary);
                     // Without a frame (or embedding itself), the default
                     // background.
                     let background = child.map_or(default_background_color, |child| {
@@ -397,6 +411,7 @@ mod tests {
                     frame_sink_id: sink,
                     local_surface_id: LocalSurfaceId::default(),
                 },
+                fallback: None,
                 default_background_color: Color::WHITE,
             },
         }
@@ -445,6 +460,75 @@ mod tests {
             Material::Texture { resource_id, .. } => resource_id,
             other => panic!("not a texture: {other:?}"),
         }
+    }
+
+    /// A surface with no frame yet shows its fallback's (the tab's
+    /// renderer before, as another site's takes its place), then its own
+    /// once it has one; with neither, the quad's background.
+    #[test]
+    fn a_surface_shows_its_fallback_till_it_has_a_frame() {
+        const BEFORE: FrameSinkId = FrameSinkId {
+            client_id: 2,
+            sink_id: 2,
+        };
+        let embed = |manager: &mut SurfaceManager| {
+            let mut quad = surface(TAB, RectF::new(0.0, 0.0, 8.0, 8.0));
+            if let Material::Surface { fallback, .. } = &mut quad.material {
+                *fallback = Some(SurfaceId {
+                    frame_sink_id: BEFORE,
+                    local_surface_id: LocalSurfaceId::default(),
+                });
+            }
+            submit(manager, BROWSER, frame(vec![quad], vec![], Color::WHITE));
+        };
+        let drawn = |manager: &SurfaceManager| {
+            let mut aggregator = SurfaceAggregator::default();
+            let frame = aggregator.aggregate(manager, BROWSER).unwrap();
+            let embedded = frame.embedded.clone();
+            (
+                quads(&frame).into_iter().map(|q| q.2).collect::<Vec<_>>(),
+                embedded,
+            )
+        };
+        let mut manager = SurfaceManager::default();
+        embed(&mut manager);
+        let (q, _) = drawn(&manager);
+        assert_eq!(
+            q,
+            [Material::SolidColor {
+                color: Color::WHITE
+            }],
+            "neither"
+        );
+        submit(
+            &mut manager,
+            BEFORE,
+            frame(
+                vec![solid(RED, RectF::new(0.0, 0.0, 2.0, 2.0))],
+                vec![],
+                GREEN,
+            ),
+        );
+        let (q, embedded) = drawn(&manager);
+        assert_eq!(
+            q,
+            [
+                Material::SolidColor { color: RED },
+                Material::SolidColor { color: GREEN },
+            ],
+            "the fallback's"
+        );
+        // A frame of either is drawn again.
+        assert!(embedded.contains(&TAB) && embedded.contains(&BEFORE));
+        submit(&mut manager, TAB, frame(vec![], vec![], Color::BLACK));
+        let (q, _) = drawn(&manager);
+        assert_eq!(
+            q,
+            [Material::SolidColor {
+                color: Color::BLACK
+            }],
+            "its own"
+        );
     }
 
     #[test]

@@ -150,7 +150,10 @@ pub struct SurfaceLayer {
     pub position: PointF,
     pub bounds: SizeF,
     pub surface_id: SurfaceId,
-    /// Shown until the surface has a frame.
+    /// Shown until the surface has a frame, if it has a frame itself
+    /// (`cc::SurfaceLayer`'s oldest acceptable fallback).
+    pub fallback_surface_id: Option<SurfaceId>,
+    /// Shown until either has a frame.
     pub background_color: Color,
     /// Its corners' radius, CSS px (0: square): the surface is cut to it,
     /// anti-aliased (`ui::Layer::SetRoundedCornerRadius`, a rounded

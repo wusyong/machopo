@@ -1,0 +1,167 @@
+# Stage 3a's mutants (a main frame navigation to another site commits in a new renderer, the one before unloading its document and ending; the embedders follow the tab to it; commands on their way to the one before go on or fail as Chromium's): `python3 scripts/test.py mutate rfcs/0124-cross-site-process-swap/mutants-3a.toml`.
+test = ["sh", "-c", "cargo test -q -p browser --lib site_info && cargo test -q -p browser --test it process_swap"]
+timeout = 1200
+
+[[mutant]]
+name = "no navigation swaps"
+file = "crates/browser/src/site_info.rs"
+from = '''        (Some(current), Some(site)) => current != site,'''
+to = '''        (Some(_), Some(_)) => false,'''
+
+[[mutant]]
+name = "a reload swaps as a new entry does"
+file = "crates/browser/src/site_info.rs"
+from = '''    if matches!(
+        navigation_type,
+        FrameLoadType::Reload | FrameLoadType::ReloadBypassingCache
+    ) {
+        return false;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "every local file a site of its own"
+file = "crates/browser/src/site_info.rs"
+from = '''        return Some(Self::File);'''
+to = '''        return Some(Self::Web(Site::of_url(&parsed)));'''
+
+[[mutant]]
+name = "about:blank takes a site"
+file = "crates/browser/src/site_info.rs"
+from = '''            return (path != "blank").then(|| Self::BuiltIn(path.to_owned()));'''
+to = '''            return Some(Self::BuiltIn(path.to_owned()));'''
+
+[[mutant]]
+name = "a renderer never takes a site"
+file = "crates/browser/src/web_contents.rs"
+from = '''            if let Some(site) = site {
+                self.process.set_site_info(site);
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "the renderer replaced isn't told"
+file = "crates/browser/src/web_contents.rs"
+from = '''        let replaced = std::mem::replace(&mut self.process, process);
+        self.renderer_replaced = true;'''
+to = '''        let replaced = std::mem::replace(&mut self.process, process);'''
+
+[[mutant]]
+name = "the document before's frames stay"
+file = "crates/browser/src/web_contents.rs"
+from = '''        self.input_in_flight = 0;
+        self.frame_tree.reset();
+        true'''
+to = '''        self.input_in_flight = 0;
+        true'''
+
+[[mutant]]
+name = "the input the renderer before had stays in flight"
+file = "crates/browser/src/web_contents.rs"
+from = '''        // What it was handed it will never acknowledge.
+        self.input_in_flight = 0;'''
+to = ''''''
+test = ["sh", "-c", "cargo test -q -p browser --test it -- navigation::links::input_the_renderer_before"]
+
+[[mutant]]
+name = "the commit keeps the renderer before's number for it"
+file = "crates/browser/src/web_contents.rs"
+from = '''                params.forget_begin_id();'''
+to = ''''''
+test = ["sh", "-c", "cargo test -q -p browser --test it process_swap && cargo test -q -p shell --test it -- automation_pipe:: script::the_output_follows"]
+
+[[mutant]]
+name = "the renderer before is left, not unloaded"
+file = "crates/browser/src/web_contents.rs"
+from = '''        replaced.unload();'''
+to = '''        replaced.abandon();'''
+test = ["sh", "-c", "cargo test -q -p shell --test it -- automation_pipe::a_documents_unload"]
+
+[[mutant]]
+name = "the renderer told to unload doesn't unload its document"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                if let Some(engine) = self.engine.as_mut() {
+                    let top = engine.top_frame();
+                    engine.unload_document(top);
+                }
+                return false;'''
+to = '''                return false;'''
+test = ["sh", "-c", "cargo test -q -p shell --test it -- automation_pipe::a_documents_unload"]
+
+[[mutant]]
+name = "unloading doesn't end a pause"
+file = "crates/renderer/src/task_queue.rs"
+from = '''let shutdown = matches!(msg, RendererMsg::Shutdown | RendererMsg::Unload);'''
+to = '''let shutdown = matches!(msg, RendererMsg::Shutdown);'''
+test = ["sh", "-c", "cargo test -q -p shell --test it -- automation_pipe::a_renderer_paused"]
+
+[[mutant]]
+name = "a renderer process whose unload doesn't end is waited for long"
+file = "crates/browser/src/render_process_host.rs"
+from = '''            self.exit = Some(end_child(child, &link, Some(wait)).info);
+            return;'''
+to = '''            self.exit = Some(end_child(child, &link, Some(wait.saturating_mul(100))).info);
+            return;'''
+test = ["sh", "-c", "cargo test -q -p shell --test it -- automation_pipe::a_renderer_whose_unload"]
+
+[[mutant]]
+name = "headless doesn't follow the tab to its new sink"
+file = "crates/shell/src/headless.rs"
+from = '''                display.set_root_frame_sink(sink);'''
+to = ''''''
+test = ["sh", "-c", "cargo test -q -p shell --test it -- script::the_output_follows"]
+
+[[mutant]]
+name = "the window keeps the cursor of the renderer before"
+file = "crates/shell/src/browser_view.rs"
+from = '''        self.cursors.remove(&tab);
+        if self.captured == Some(Target::WebView(tab)) {
+            self.captured = None;
+        }
+        if self.popup.as_ref().is_some_and(|popup| popup.tab() == tab) {'''
+to = '''        if self.captured == Some(Target::WebView(tab)) {
+            self.captured = None;
+        }
+        if self.popup.as_ref().is_some_and(|popup| popup.tab() == tab) {'''
+test = ["sh", "-c", "cargo test -q -p shell --test it -- browser_view::another_sites"]
+
+[[mutant]]
+name = "the window keeps the capture of the renderer before"
+file = "crates/shell/src/browser_view.rs"
+from = '''        self.cursors.remove(&tab);
+        if self.captured == Some(Target::WebView(tab)) {
+            self.captured = None;
+        }
+        if self.popup.as_ref().is_some_and(|popup| popup.tab() == tab) {'''
+to = '''        self.cursors.remove(&tab);
+        if self.popup.as_ref().is_some_and(|popup| popup.tab() == tab) {'''
+test = ["sh", "-c", "cargo test -q -p shell --test it -- browser_view::another_sites"]
+
+[[mutant]]
+name = "the window keeps the dropdown of the renderer before"
+file = "crates/shell/src/browser_view.rs"
+from = '''        if self.popup.as_ref().is_some_and(|popup| popup.tab() == tab) {
+            self.popup = None;
+            self.pressed_in_popup = false;
+            self.popup_dirty = true;
+        }
+        self.sync_ui();'''
+to = '''        self.sync_ui();'''
+test = ["sh", "-c", "cargo test -q -p shell --test it -- browser_view::another_sites"]
+
+[[mutant]]
+name = "a command that may run script goes to the new renderer too"
+file = "crates/shell/src/automation_session.rs"
+from = '''            if MAY_RUN_SCRIPT.contains(&forwarded.method.as_str()) {
+                if let Some(forwarded) = self.forwarded.remove(&key) {'''
+to = '''            if false {
+                if let Some(forwarded) = self.forwarded.remove(&key) {'''
+test = ["sh", "-c", "cargo test -q -p shell --test it -- automation_pipe::commands_on_their_way"]
+
+[[mutant]]
+name = "a command on its way isn't sent to the new renderer"
+file = "crates/shell/src/automation_session.rs"
+from = '''            contents.devtools_message(&key.0, forwarded.message.clone(), forwarded.interrupt);
+            forwarded.renderer = renderer;'''
+to = '''            forwarded.renderer = renderer;'''
+test = ["sh", "-c", "timeout 300 cargo test -q -p shell --test it -- automation_pipe::commands_on_their_way"]

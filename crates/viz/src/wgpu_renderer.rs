@@ -1608,6 +1608,7 @@ mod drawing_tests {
                     frame_sink_id: sink,
                     local_surface_id: LocalSurfaceId::default(),
                 },
+                fallback: None,
                 default_background_color: Color::WHITE,
             },
         };
@@ -1761,6 +1762,7 @@ mod drawing_tests {
                             frame_sink_id: tab,
                             local_surface_id: LocalSurfaceId::default(),
                         },
+                        fallback: None,
                         default_background_color: Color::WHITE,
                     },
                 },
@@ -2275,6 +2277,7 @@ mod drawing_tests {
                     frame_sink_id: tab,
                     local_surface_id: LocalSurfaceId::default(),
                 },
+                fallback: None,
                 default_background_color: Color::WHITE,
             },
         }];

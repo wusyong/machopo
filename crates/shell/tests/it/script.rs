@@ -51,6 +51,32 @@ fn a_javascript_link_runs_in_its_document() {
     );
 }
 
+/// A page that takes the tab to another site (a local file to a web
+/// page) is drawn there: the output follows the tab to the frame sink of
+/// the renderer that takes its place.
+#[test]
+fn the_output_follows_the_tab_to_another_sites_renderer() {
+    let server = net::test_server::TestServer::start(std::collections::HashMap::from([(
+        "/".to_owned(),
+        net::test_server::Route::ok(
+            "text/html",
+            "<!DOCTYPE html><style>html { background-color: green }</style>",
+        ),
+    )]))
+    .expect("test server starts");
+    let to = server.url("/");
+    let url = page(
+        "to-another-site.html",
+        &format!(
+            "<!DOCTYPE html><style>html {{ background-color: red }}</style>\
+             <script>location.href = '{to}'</script>"
+        ),
+    );
+    let frame = headless::render(&url, Size::new(200, 200), 1.0, true).expect("the page renders");
+    assert_eq!(frame.url.as_deref(), Some(to.as_str()));
+    assert_eq!(pixel(&frame, 50, 50), GREEN);
+}
+
 /// `load` fires before `DidFinishLoad`, so the frame it reports shows what
 /// the listener did.
 #[test]

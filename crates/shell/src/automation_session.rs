@@ -1249,7 +1249,9 @@ impl AutomationSession {
         self.changes(browser);
         let main_frame_id = self.target(tab);
         match event {
-            ContentsEvent::Renderer { .. } | ContentsEvent::BadMessage { .. } => {}
+            ContentsEvent::Renderer { .. }
+            | ContentsEvent::BadMessage { .. }
+            | ContentsEvent::FirstFrame(_) => {}
             // The main frame's as the session sees its loader change
             // (`changes`), in order with what started it.
             ContentsEvent::NavigationStarted(started) if started.main_frame => {}

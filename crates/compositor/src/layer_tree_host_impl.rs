@@ -1418,6 +1418,7 @@ impl LayerTreeHostImpl {
                 shared_quad_state,
                 material: Material::Surface {
                     surface_id: layer.surface_id,
+                    fallback: layer.fallback_surface_id,
                     default_background_color: layer.background_color,
                 },
             });
@@ -3641,6 +3642,7 @@ mod tests {
             position: gfx::PointF::new(0.0, 0.0),
             bounds: SizeF::new(100.0, 100.0),
             surface_id,
+            fallback_surface_id: None,
             background_color: Color::WHITE,
             corner_radius: 0.0,
         }]);
@@ -3681,6 +3683,7 @@ mod tests {
             position: gfx::PointF::new(0.0, 20.0),
             bounds: SizeF::new(100.0, 30.0),
             surface_id,
+            fallback_surface_id: None,
             background_color: Color::WHITE,
             corner_radius: 0.0,
         };
@@ -3698,6 +3701,7 @@ mod tests {
             quads[0].material,
             Material::Surface {
                 surface_id,
+                fallback: None,
                 default_background_color: Color::WHITE
             }
         );
@@ -3732,6 +3736,7 @@ mod tests {
             position: gfx::PointF::new(10.0, 20.0),
             bounds: SizeF::new(80.0, 30.0),
             surface_id,
+            fallback_surface_id: None,
             background_color: Color::WHITE,
             corner_radius: 8.0,
         }]);

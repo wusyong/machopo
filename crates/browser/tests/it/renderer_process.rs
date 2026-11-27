@@ -131,6 +131,7 @@ fn frame_sink_msg(role: &str) -> CompositorFrameSinkMsg {
                 },
                 local_surface_id: LocalSurfaceId::default(),
             },
+            fallback: None,
             default_background_color: gfx::Color::WHITE,
         },
         "a shared image that can't be right" => {

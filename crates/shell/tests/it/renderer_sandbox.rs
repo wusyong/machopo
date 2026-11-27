@@ -513,19 +513,22 @@ fn a_renderer_process_is_told_this_machines_time_zone_by_name() {
         new Date(2026, 0, 1).getTimezoneOffset(), new Date(2026, 6, 1).getTimezoneOffset(), \
         arguments[0] === null ? null \
             : Intl.DateTimeFormat(undefined, {timeZone: arguments[0]}).resolvedOptions().timeZone]";
+    // The browser is kept till the renderer's environment is read: its
+    // renderers end with it.
     let seen = |args: &[&str]| {
         let mut browser = Browser::start_in(args, &[], std::process::Stdio::null());
         let session = browser.attach();
         browser.navigate(&session, "about:blank");
         let seen = script(&mut browser, &session, read, serde_json::json!([zone])).unwrap();
-        (seen, renderer_pids(&mut browser))
+        let pids = renderer_pids(&mut browser);
+        (seen, pids, browser)
     };
-    let (on_a_thread, _) = seen(&["--single-process"]);
+    let (on_a_thread, _, _) = seen(&["--single-process"]);
     for args in [
         &["--process-per-tab"][..],
         &["--process-per-tab", "--no-sandbox"],
     ] {
-        let (seen, pids) = seen(args);
+        let (seen, pids, _browser) = seen(args);
         assert_eq!(seen, on_a_thread, "{args:?}");
         let environment = environment_of(pids[0]);
         let tz = environment

@@ -28,6 +28,7 @@ use crate::navigation_request::{
     DocumentLoad, HeldCommit, Loading, NavigationRequest, NavigationResponse,
 };
 use crate::render_process_host::{CommitParams, CommittedDocument, is_file_url};
+use crate::site_info::{self, SiteInfo};
 use crate::{RenderProcessHost, RendererFlags, RendererId, RendererLauncher, StoragePartition};
 
 /// What a tab's other threads have for its UI thread: the embedder posts
@@ -101,6 +102,10 @@ pub enum ContentsEvent {
         navigation_id: u64,
         result: LoadResult,
     },
+    /// Viz has the first frame of the tab's renderer's frame sink `sink`
+    /// (`DelegatedFrameHost::OnFirstSurfaceActivation`), from Viz's thread:
+    /// the page before, shown in its place till then, may go.
+    FirstFrame(FrameSinkId),
 }
 
 /// A navigation's load's client (`NavigationURLLoaderImpl`), on the network
@@ -242,6 +247,23 @@ pub struct WebContents {
     /// (`RenderFrameDevToolsAgentHost`'s sessions and their state
     /// cookies): attached to every renderer the tab has, going on from it.
     devtools_sessions: Vec<(String, Option<DevToolsSessionState>)>,
+    /// Another renderer took the tab's place since the embedder last asked
+    /// (`take_renderer_replaced`): what its UI keeps of the one before
+    /// (its cursor, the pointer's capture, its dropdown) is that one's.
+    renderer_replaced: bool,
+    /// The frame sink of the renderer before, whose last frame shows till
+    /// the tab's renderer's first does (`TakeFallbackContentFrom`): kept
+    /// from Viz's forgetting till then.
+    fallback_sink: Option<FrameSinkId>,
+    /// Viz has had a frame of the tab's renderer's sink
+    /// (`ContentsEvent::FirstFrame`): it may stand for the page as another
+    /// renderer takes its place.
+    sink_drawn: bool,
+    /// The main frame's document has sticky activation, as its renderer
+    /// told (`RendererHostMsg::DidReceiveUserActivation`, Chromium's
+    /// `FrameTreeNode::HasStickyUserActivation`): the next document may
+    /// show over its last frame.
+    main_frame_activated: bool,
 }
 
 /// What the renderer said of a navigation it asked for: its number for
@@ -401,6 +423,10 @@ impl WebContents {
             launch,
             input_in_flight: 0,
             devtools_sessions: Vec::new(),
+            renderer_replaced: false,
+            fallback_sink: None,
+            sink_drawn: false,
+            main_frame_activated: false,
         })
     }
 
@@ -450,8 +476,14 @@ impl WebContents {
     /// The same, for registering with Viz while it runs
     /// (`VizMsg::RegisterFrameSinkId`).
     pub fn begin_frame_observer(&self) -> BeginFrameObserver {
+        let on_event = self.launch.on_event.clone();
+        let (tab, sink) = (self.tab, self.frame_sink_id);
         BeginFrameObserver::new(self.begin_frame_sender())
             .with_pixels_returned(self.process.pixels_returned_sender())
+            .with_first_frame(move || {
+                let on_event = on_event.lock().unwrap_or_else(|e| e.into_inner());
+                on_event(tab, ContentsEvent::FirstFrame(sink));
+            })
     }
 
     /// Viz has done with the pixels of the tab's renderer's shared image
@@ -468,6 +500,17 @@ impl WebContents {
             frame_sink_id: self.frame_sink_id,
             local_surface_id: self.visual_properties.local_surface_id,
         }
+    }
+
+    /// What shows in [`surface_id`](Self::surface_id)'s place till it has
+    /// a frame, if anything does: the last frame of the renderer before, as
+    /// a renderer of another site has taken the tab's place and the page
+    /// before may stay shown (`SurfaceRange`'s start).
+    pub fn fallback_surface_id(&self) -> Option<SurfaceId> {
+        self.fallback_sink.map(|frame_sink_id| SurfaceId {
+            frame_sink_id,
+            local_surface_id: LocalSurfaceId::default(),
+        })
     }
 
     /// The URL to show the tab at (`WebContents::GetVisibleURL`): that of
@@ -959,6 +1002,14 @@ impl WebContents {
         self.crashed
     }
 
+    /// Whether another renderer has taken the tab's place since this was
+    /// last asked (a navigation to another site, or the next after one
+    /// had gone): the UI's state of the one before (its cursor, the
+    /// pointer's capture, its dropdown) is to go.
+    pub fn take_renderer_replaced(&mut self) -> bool {
+        std::mem::take(&mut self.renderer_replaced)
+    }
+
     /// `RenderFrameHostManager`'s new process for a navigation after a
     /// crash: the same tab, the size and visibility it had, and a new frame
     /// sink, as Chromium's new process has. Viz forgets the old sink and its
@@ -968,6 +1019,57 @@ impl WebContents {
     /// it wants none, would otherwise stand for the new one's. Viz hears of
     /// the new sink before the new renderer hears anything.
     fn relaunch(&mut self) {
+        // The frame tree is the main frame alone already: it was reset as
+        // the renderer before went. The new one tells of its frames.
+        if let Some(gone) = self.replace_renderer(false) {
+            gone.abandon();
+        }
+    }
+
+    /// Whether the main frame's new document, of `origin`, may show over
+    /// the last frame of the one before till it can be drawn (Chromium's
+    /// `allow_main_frame_paint_holding`, which `Navigator::DidNavigate`
+    /// decides): from the tab's first, empty document, from one of the
+    /// same origin, or from one the user acted on. A page that navigates
+    /// to another origin itself, which then draws nothing, would otherwise
+    /// keep its own drawing up under the other's URL (Chromium's issue
+    /// 40942531): "Commonly used attacks are done without user activation".
+    fn allows_paint_holding(&self, origin: &url::Origin) -> bool {
+        let root = self.frame_tree.root();
+        self.committed_url.is_none()
+            || self.main_frame_activated
+            || self
+                .frame_tree
+                .committed_origin(root)
+                .is_some_and(|before| before.origin == *origin)
+    }
+
+    /// `RenderFrameHostManager::CommitPending` for a navigation to another
+    /// site (`site_info::swaps`): a new renderer takes the tab's place, as
+    /// after a crash, and the one it replaces unloads its document and
+    /// ends, given a while, without the tab waiting for it
+    /// (`RenderProcessHost::unload`). Its document's frames go with it.
+    /// With `paint_holding`, its last frame shows till the new one's first
+    /// does. False if no renderer could be launched: the tab stays with
+    /// the one it has, at its page.
+    fn swap_renderer(&mut self, paint_holding: bool) -> bool {
+        let Some(replaced) = self.replace_renderer(paint_holding) else {
+            return false;
+        };
+        replaced.unload();
+        // What it was handed it will never acknowledge.
+        self.input_in_flight = 0;
+        self.frame_tree.reset();
+        true
+    }
+
+    /// A new renderer, with a new frame sink, in the place of the tab's,
+    /// told what the tab is (its size, where it is, whether it shows or
+    /// has the focus, its DevTools sessions) before anything else; the one
+    /// it replaced. None if it couldn't be launched. With `keep_drawn`, the
+    /// last frame of the one before, if it drew one, shows till the new one
+    /// draws (Viz keeps its sink till then).
+    fn replace_renderer(&mut self, keep_drawn: bool) -> Option<RenderProcessHost> {
         let frame_sink_id = FrameSinkId {
             client_id: self.frame_sink_id.client_id,
             sink_id: self.sink_ids.get_next(),
@@ -978,16 +1080,24 @@ impl WebContents {
         {
             Ok(process) => process,
             Err(e) => {
-                tracing::error!("failed to launch a renderer again: {e}");
-                return;
+                tracing::error!("failed to launch a renderer: {e}");
+                return None;
             }
         };
-        // The frame tree is the main frame alone already: it was reset as
-        // the renderer before went. The new one tells of its frames.
-        std::mem::replace(&mut self.process, process).abandon();
-        let _ = self
-            .viz
-            .send(VizMsg::InvalidateFrameSinkId(self.frame_sink_id));
+        let replaced = std::mem::replace(&mut self.process, process);
+        self.renderer_replaced = true;
+        // One that drew nothing leaves nothing to show (Chromium's
+        // `TakeFallbackContentFrom` takes none from a view showing
+        // nothing): what showed in its place goes too.
+        self.forget_fallback();
+        if keep_drawn && self.sink_drawn {
+            self.fallback_sink = Some(self.frame_sink_id);
+        } else {
+            let _ = self
+                .viz
+                .send(VizMsg::InvalidateFrameSinkId(self.frame_sink_id));
+        }
+        self.sink_drawn = false;
         self.frame_sink_id = frame_sink_id;
         let _ = self.viz.send(VizMsg::RegisterFrameSinkId(
             self.frame_sink_id,
@@ -1018,6 +1128,7 @@ impl WebContents {
                 state: state.clone(),
             });
         }
+        Some(replaced)
     }
 
     /// The main frame's navigation to `url`, a new entry or another of
@@ -1308,18 +1419,45 @@ impl WebContents {
     /// GrantCommitURL`), before the renderer has it: the main frame's new
     /// document decides, its child frames going with the one before; a
     /// child frame's local one lets it too.
+    ///
+    /// The main frame's new document commits in another renderer if it is
+    /// of another site than the documents the tab's holds (`site_info`),
+    /// an error page by the URL it failed to go to. None if that renderer
+    /// couldn't be launched: the navigation goes, and the tab stays at its
+    /// page.
     fn commit(
         &mut self,
         frame: FrameToken,
         navigation_id: u64,
-        params: CommitParams,
+        mut params: CommitParams,
         document: CommittedDocument,
         origin: Option<CommittedOrigin>,
-    ) -> crate::render_process_host::LoadCompleter {
+    ) -> Option<crate::render_process_host::LoadCompleter> {
         if self.crashed {
             self.relaunch();
         }
         let origin = origin.unwrap_or_else(|| document.origin());
+        if frame == self.frame_tree.root() {
+            let paint_holding = self.allows_paint_holding(&origin.origin);
+            params.set_paint_holding(paint_holding);
+            let site = SiteInfo::of_url(&document.url);
+            if site_info::swaps(
+                self.process.site_info(),
+                params.navigation_type(),
+                site.as_ref(),
+            ) {
+                if !self.swap_renderer(paint_holding) {
+                    self.controller.did_stop(navigation_id);
+                    return None;
+                }
+                // The new renderer asked for nothing: the number was the
+                // one before's.
+                params.forget_begin_id();
+            }
+            if let Some(site) = site {
+                self.process.set_site_info(site);
+            }
+        }
         let local = origin.local;
         if frame == self.frame_tree.root() {
             self.process.set_file_access(local);
@@ -1332,7 +1470,6 @@ impl WebContents {
         self.frame_tree
             .committing(frame, navigation_id, &document.url, origin);
         let before = self.frame_tree.take_any_document_load(frame);
-        let mut params = params;
         let place = self.controller.commit_place(navigation_id);
         params.set_history_place(place, self.entries_heard.peek());
         let loader = self.process.register_loader(loader_params);
@@ -1343,7 +1480,7 @@ impl WebContents {
         // hears it was aborted after the commit that takes its place (it
         // would commit what it has of it, else).
         drop(before);
-        completer
+        Some(completer)
     }
 
     /// One of a navigation's events (its redirect, response, body's data,
@@ -1376,9 +1513,27 @@ impl WebContents {
                 navigation_id,
                 result,
             } => self.on_navigation_blob_loaded(frame, navigation_id, result),
+            ContentsEvent::FirstFrame(sink) => self.first_frame(sink),
             ContentsEvent::Renderer { .. }
             | ContentsEvent::BadMessage { .. }
             | ContentsEvent::NavigationStarted(_) => {}
+        }
+    }
+
+    /// Viz has the first frame of frame sink `sink`: if it is the tab's
+    /// renderer's, what showed in its place goes.
+    fn first_frame(&mut self, sink: FrameSinkId) {
+        if sink != self.frame_sink_id {
+            return;
+        }
+        self.sink_drawn = true;
+        self.forget_fallback();
+    }
+
+    /// Viz forgets the sink shown in the tab's renderer's place, if one is.
+    fn forget_fallback(&mut self) {
+        if let Some(fallback) = self.fallback_sink.take() {
+            let _ = self.viz.send(VizMsg::InvalidateFrameSinkId(fallback));
         }
     }
 
@@ -1573,7 +1728,9 @@ impl WebContents {
             error_page: false,
         };
         let completer = self.commit(frame, navigation_id, commit_params, document, None);
-        if !ended {
+        if let Some(completer) = completer
+            && !ended
+        {
             self.frame_tree
                 .set_document_load(frame, DocumentLoad::new(navigation_id, load, completer));
         }
@@ -1883,6 +2040,7 @@ impl WebContents {
     /// this on the UI thread after the IO thread forwarded it.
     pub fn on_renderer_message(&mut self, msg: &RendererHostMsg) {
         match msg {
+            RendererHostMsg::DidReceiveUserActivation => self.main_frame_activated = true,
             RendererHostMsg::UpdateTitle(title) => {
                 let title = truncated_title(title);
                 self.title = title.clone();
@@ -1898,6 +2056,8 @@ impl WebContents {
                 }
                 if *frame == self.frame_tree.root() {
                     self.committed_url = Some(url.clone());
+                    // The new document's window has no activation yet.
+                    self.main_frame_activated = false;
                 }
                 self.controller
                     .did_commit(&self.frame_tree, *frame, *navigation_id, url.clone());
@@ -2115,6 +2275,8 @@ impl WebContents {
     fn renderer_gone(&mut self) {
         self.crashed = true;
         self.input_in_flight = 0;
+        // The sad tab shows in its place, not the page before.
+        self.forget_fallback();
         let root = self.frame_tree.root();
         if self
             .frame_tree

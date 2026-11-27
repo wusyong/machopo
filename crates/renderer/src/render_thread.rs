@@ -431,6 +431,9 @@ struct RenderThread {
     new_content_rendering_delay: Duration,
     new_content_due: Option<Instant>,
     empty_frame_wanted: bool,
+    /// The browser has heard the top-level document has sticky activation
+    /// (`RendererHostMsg::DidReceiveUserActivation`): once for each.
+    activation_told: bool,
     /// The frame's pre-paint count, the DOM's intersection observations'
     /// version and, while an observer tracks visibility, the last paint,
     /// when the intersections were last computed: they are again only once
@@ -657,6 +660,7 @@ impl RenderThread {
             new_content_rendering_delay: flags.new_content_rendering_delay,
             new_content_due: None,
             empty_frame_wanted: false,
+            activation_told: false,
             next_caret_blink: None,
             intersections_computed: None,
             intersections_due: None,
@@ -1019,6 +1023,7 @@ impl RenderThread {
                             }
                             InputDispatch::NonBlocking => self.dispatch_wheel_only(event, document),
                         }
+                        self.tell_user_activation();
                     }
                     ToMainThread::RasterFailed { message, count } => self.log_raster_failure(
                         log_agent::RasterFailed::Tile,
@@ -1151,6 +1156,7 @@ impl RenderThread {
             navigation_start,
             loaded,
             navigation_type,
+            paint_holding,
         } = commit;
         let time_origin = self
             .clock
@@ -1232,6 +1238,9 @@ impl RenderThread {
                 },
             )
         };
+        if committed && main_frame && !paint_holding {
+            self.end_paint_holding();
+        }
         if committed
             && let Some((status, status_text)) = status
             && status >= 400
@@ -1263,6 +1272,7 @@ impl RenderThread {
                 navigation_start,
                 loaded,
                 navigation_type,
+                paint_holding,
             } => {
                 let commit = document_body::NavigationCommit {
                     frame,
@@ -1278,6 +1288,7 @@ impl RenderThread {
                     navigation_start,
                     loaded,
                     navigation_type,
+                    paint_holding,
                 };
                 self.commit_navigation_body(commit, body.into_bytes(), body_pipe);
             }
@@ -1416,6 +1427,15 @@ impl RenderThread {
                 }
             }
             RendererMsg::Shutdown => return false,
+            RendererMsg::Unload => {
+                // Its document goes as a navigation's would take it, the
+                // documents of its frames after it; the renderer with it.
+                if let Some(engine) = self.engine.as_mut() {
+                    let top = engine.top_frame();
+                    engine.unload_document(top);
+                }
+                return false;
+            }
             // A process's IO thread acts on it before it gets here; threads
             // of the browser's can't crash without taking the browser
             // along.
@@ -1677,6 +1697,17 @@ impl RenderThread {
             self.empty_frame_wanted = true;
             self.request_main_frame();
         }
+    }
+
+    /// The main frame's new document isn't to show over the page before
+    /// (the browser said: one of another origin the user didn't act on,
+    /// Chromium's `ForceFirstFrameAfterNavigationTimeout`): its delay is up
+    /// now, and if it can't be drawn yet it shows empty.
+    fn end_paint_holding(&mut self) {
+        let now = Instant::now();
+        self.new_content_due = Some(now);
+        self.scheduler
+            .post_internal_at(InternalTask::NewContentTimeout, now);
     }
 
     /// The main frame's document committed: the page before stays shown

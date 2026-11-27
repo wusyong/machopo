@@ -537,6 +537,207 @@ fn a_navigation_on_its_way_as_the_renderer_goes_commits_in_a_new_one() {
     assert!(browser.end().success());
 }
 
+/// The answers to the commands `ids`, in whatever order they come: the
+/// events meanwhile are kept.
+fn answers(browser: &mut Browser, ids: &[i32]) -> HashMap<i32, Result<Value, Error>> {
+    let mut answers = HashMap::new();
+    while answers.len() < ids.len() {
+        let Ok(message) = browser.messages.recv_timeout(TIMEOUT) else {
+            panic!("only {answers:?} of {ids:?}");
+        };
+        match message {
+            Message::Response(response) if ids.contains(&response.id) => {
+                answers.insert(response.id, response.result);
+            }
+            Message::Response(response) => panic!("unasked answer {response:?}"),
+            Message::Event(event) => browser.events.push(event),
+            // The renderer's `Page` events (`frameNavigated`...).
+            Message::Raw { object, .. } if renderer_event(&object) => {}
+            Message::Raw { object, .. } => panic!("unasked {object:?}"),
+        }
+    }
+    answers
+}
+
+/// Two sites on one server: its address's, and `localhost`'s.
+fn other_site(server: &TestServer, path: &str) -> String {
+    server.url_for_host("localhost", path)
+}
+
+/// Commands on their way to the tab's renderer as a renderer of another
+/// site takes its place (Chromium's `DevToolsSession` as it attaches to
+/// the new agent): one that may run the page's script fails, the document
+/// it was for being no more; any other goes to the new renderer, and is
+/// answered there.
+#[test]
+fn commands_on_their_way_as_another_sites_renderer_takes_the_tabs_place() {
+    let server = server(&[
+        ("/", Route::ok("text/html", "<!DOCTYPE html>a")),
+        (
+            "/b",
+            Route::ok("text/html", "<!DOCTYPE html><title>b</title>"),
+        ),
+    ]);
+    let mut browser = Browser::start();
+    let session = browser.attach();
+    browser.navigate(&session, &server.url("/"));
+    // The page keeps its renderer busy a while, and what is sent it
+    // meanwhile waits there.
+    script(
+        &mut browser,
+        &session,
+        "setTimeout(() => { const end = Date.now() + 3000; while (Date.now() < end); }, 0)",
+        json!([]),
+    )
+    .unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    let waits = browser.send(Some(&session), "Page.getFrameTree", json!({}));
+    let runs = browser.send(
+        Some(&session),
+        "Runtime.evaluate",
+        json!({ "expression": "1" }),
+    );
+    let navigate = browser.send(
+        Some(&session),
+        "Page.navigate",
+        json!({ "url": other_site(&server, "/b") }),
+    );
+    let answers = answers(&mut browser, &[waits, runs, navigate]);
+    assert!(answers[&navigate].is_ok(), "{answers:?}");
+    let error = answers[&runs].clone().unwrap_err();
+    assert_eq!(error.code, SERVER_ERROR);
+    assert_eq!(error.message, "Inspected target navigated or closed");
+    let tree = answers[&waits].clone().unwrap();
+    assert!(tree["frameTree"]["frame"]["id"].is_string(), "{tree}");
+    let loader = answers[&navigate].clone().unwrap()["loaderId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    browser.load(&loader);
+    let title = browser
+        .call(
+            Some(&session),
+            "Runtime.evaluate",
+            json!({ "expression": "document.title", "returnByValue": true }),
+        )
+        .unwrap();
+    assert_eq!(title["result"]["value"], "b");
+    assert!(browser.end().success());
+}
+
+/// The document a renderer of another site takes the place of is unloaded
+/// in its own renderer, its `pagehide` and `unload` run: what they write
+/// to `localStorage` is there when the tab is back at its site. With the
+/// renderer a process of its own, and threads of machopo's.
+#[test]
+fn a_documents_unload_runs_as_another_site_takes_its_place() {
+    let server = server(&[
+        (
+            "/a",
+            Route::ok(
+                "text/html",
+                "<!DOCTYPE html><script>localStorage.x = 'start';
+                addEventListener('pagehide', () => { localStorage.x = 'pagehide'; });
+                addEventListener('unload', () => { localStorage.x += ',unload'; });</script>",
+            ),
+        ),
+        ("/b", Route::ok("text/html", "<!DOCTYPE html>b")),
+        ("/c", Route::ok("text/html", "<!DOCTYPE html>c")),
+    ]);
+    for mode in PROCESS_SWITCHES {
+        let mut browser = Browser::start_with(&[mode]);
+        let session = browser.attach();
+        browser.navigate(&session, &server.url("/a"));
+        browser.navigate(&session, &other_site(&server, "/b"));
+        browser.navigate(&session, &server.url("/c"));
+        let x = script(&mut browser, &session, "return localStorage.x", json!([])).unwrap();
+        assert_eq!(x, "pagehide,unload", "{mode}");
+        assert!(browser.end().success(), "{mode}");
+    }
+}
+
+/// A renderer paused in the debugger as another site's takes the tab's
+/// place goes on, to unload its document: the session is the new
+/// renderer's, and nothing would end the pause.
+#[test]
+fn a_renderer_paused_in_the_debugger_unloads_as_another_site_takes_its_place() {
+    let server = server(&[
+        (
+            "/a",
+            Route::ok(
+                "text/html",
+                "<!DOCTYPE html><script>localStorage.y = 'start';
+                addEventListener('pagehide', () => { localStorage.y = 'pagehide'; });</script>",
+            ),
+        ),
+        ("/b", Route::ok("text/html", "<!DOCTYPE html>b")),
+        ("/c", Route::ok("text/html", "<!DOCTYPE html>c")),
+    ]);
+    let mut browser = Browser::start();
+    let session = browser.attach();
+    browser.navigate(&session, &server.url("/a"));
+    browser
+        .call(Some(&session), "Debugger.enable", json!({}))
+        .unwrap();
+    script(
+        &mut browser,
+        &session,
+        "setTimeout(() => { debugger; })",
+        json!([]),
+    )
+    .unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    browser.navigate(&session, &other_site(&server, "/b"));
+    browser.navigate(&session, &server.url("/c"));
+    let y = script(&mut browser, &session, "return localStorage.y", json!([])).unwrap();
+    assert_eq!(y, "pagehide");
+    assert!(browser.end().success());
+}
+
+/// A renderer whose document's `unload` never ends is ended: the tab's
+/// next document, another site's, doesn't wait for it, and its process is
+/// gone a moment later (Chromium's `kUnloadTimeout`, 500 ms).
+#[cfg(unix)]
+#[test]
+fn a_renderer_whose_unload_doesnt_end_is_ended() {
+    let server = server(&[
+        (
+            "/a",
+            Route::ok(
+                "text/html",
+                "<!DOCTYPE html><script>addEventListener('unload', () => { for (;;) {} });</script>",
+            ),
+        ),
+        (
+            "/b",
+            Route::ok("text/html", "<!DOCTYPE html><title>b</title>"),
+        ),
+    ]);
+    let mut browser = Browser::start_with(&["--process-per-tab"]);
+    let session = browser.attach();
+    browser.navigate(&session, &server.url("/a"));
+    let pid = renderer_pids(&mut browser)[0];
+    browser.navigate(&session, &other_site(&server, "/b"));
+    assert_ne!(renderer_pids(&mut browser), [pid]);
+    let alive = || {
+        Process::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    };
+    let asked = std::time::Instant::now();
+    while alive() {
+        assert!(
+            asked.elapsed() < Duration::from_secs(10),
+            "the renderer process {pid} is still there"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(browser.end().success());
+}
+
 /// The session history: back to another document loads it; back to an
 /// entry the document made of itself (`pushState`) doesn't, and is told
 /// as a navigation within the document; a reload is a loader of its own.

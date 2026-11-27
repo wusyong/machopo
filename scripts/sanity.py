@@ -290,6 +290,9 @@ PROTOCOL_ALLOWED = {
             "browser and Viz",
         "pixels_returned: Option<Arc<dyn Fn(Mailbox) + Send + Sync>>,": "browser and Viz",
         "returned: impl Fn(Mailbox) + Send + Sync + 'static,": "browser and Viz",
+        "first_frame: Option<Arc<dyn Fn() + Send + Sync>>,": "browser and Viz",
+        "pub fn with_first_frame(mut self, first: impl Fn() + Send + Sync + 'static) -> Self {":
+            "browser and Viz",
     },
 }
 

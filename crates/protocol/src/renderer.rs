@@ -260,6 +260,14 @@ pub enum RendererMsg {
         loaded: Option<Box<NavigationLoad>>,
         /// How the navigation came about.
         navigation_type: FrameLoadType,
+        /// For the main frame's: the page before may stay shown until this
+        /// one can be drawn (Chromium's `allow_main_frame_paint_holding`,
+        /// which the browser decides): it is of the same origin, the user
+        /// acted on it, or it was the tab's first, empty one. Otherwise the
+        /// document shows at once, empty until it is drawn: a page that
+        /// navigates to another origin and has it draw nothing keeps none
+        /// of its own drawing up under another URL.
+        paint_holding: bool,
     },
     /// `URLLoaderClient::OnComplete` of the load of the document navigation
     /// `navigation_id` committed in `frame`, which hadn't ended when it
@@ -489,6 +497,12 @@ pub enum RendererMsg {
     PopupMenuClosed(PopupMenuResult),
     /// Orderly shutdown of the renderer main thread.
     Shutdown,
+    /// The tab's next document commits in another renderer (a navigation
+    /// to another site): the document this one shows is unloaded, its
+    /// `pagehide` and `unload` dispatched, and the renderer shuts down
+    /// (Blink's `LocalFrame::Unload` as its frame swaps out, the process
+    /// going with its last frame). The browser ends it if it takes long.
+    Unload,
     /// The renderer is to crash (`chrome://crash`, which has the renderer
     /// crash itself): only to a renderer in a process of its own, which
     /// ends itself abnormally as soon as it reads this. One that is the
@@ -812,6 +826,12 @@ pub enum RendererHostMsg {
     InputEventAck {
         frame_token: Option<u64>,
     },
+    /// The top-level document has sticky activation, the user having
+    /// acted on it or a frame in it (Chromium's
+    /// `UpdateUserActivationState` with `kNotifyActivation`): once for
+    /// each document. The browser lets the next document show over its
+    /// last frame for it.
+    DidReceiveUserActivation,
     UpdateTitle(String),
     /// A subresource load (Blink's `ResourceFetcher` through a
     /// `URLLoaderFactory`). Answered with `RendererMsg::ResourceResponse`,

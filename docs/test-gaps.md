@@ -183,6 +183,8 @@
 | parser 在有輸入等著時讓出（`dom_api` 的 `document_loader.rs` 的 `parse` 的 `input_waits`，renderer 的 `advance_document` 給的，Blink 的 `ShouldYieldForHighPriorityWork`；拿掉就只看預算） | 輸入要在 parser 的一次 run 裡排進 Input 的 queue，而新文件畫出來之前對著舊畫面的輸入照樣丟掉：要 `browser` 的測試用 `DrivenViz` 先畫出文件，再在 script 忙的時候送一個按鍵 | 審查 | `browser` 的測試：預算很大、每片很小的 parser，body 裡第一個 script 忙 300 ms，這段時間送 `keydown`，之後的 script 在 `keydown` 之後跑 |
 | body 裡的 parser-blocking script 跑完之後，那次 run 的預算縮回已經用掉的加上 10 ms（`dom_api` 的 `document_loader.rs` 的 `parse` 的 `kHaveTokensAfterScript` 那一段，`ParseRun::after_script`） | 測試的 parser 每片都讓出（預算是 0，縮了也是 0）；預設的預算下差別只在時間 | 審查 | 預算讓測試設得很大、script 忙過預設的預算時，看 script 之後的下一片前有沒有讓出（計時器先跑） |
 | script 跑著時打斷它的 DevTools 命令改了 V8 的 session 的狀態，renderer 照樣告訴 Browser（`bindings` 的 `devtools.rs` 的 `dispatch_interrupting` 之後的 `Queue::dispatched`；拿掉時沒有測試失敗） | 要頁面跑一段很久的 script，在中途送一個標著打斷的命令（`Debugger.setBreakpointsActive`），之後 renderer 不再回報任何狀態、就結束它，再看新的 renderer 有沒有那個設定；之後只要有任何一個命令回報，算的都是 V8 當下完整的狀態，會把缺漏蓋掉 | 審查；暫停時和一般的那兩條路有 `shell` 的 `devtools::a_breakpoint_set_while_paused_goes_on_in_the_next_renderer`、`the_pause_on_exceptions_goes_on_in_the_next_renderer` | `shell` 的 DevTools 測試：頁面跑 `while (!window.stop) {}`，送 `Debugger.setBreakpointsActive`（打斷），`about:crash`，重新載入後看斷點有沒有作用 |
+| renderer 是 Browser 的 thread 時（`--single-process`、測試），換到別的網站之後 `unload` 不結束的舊的 renderer 在 500 ms 後被打斷 script（`browser` 的 `render_process_host.rs` 的 `end_after_unload` 的 thread 那一半；拿掉打斷時沒有測試失敗） | 舊的 renderer 交給 `UnloadTimer` thread 之後分頁不再拿著它，測試看不到那條 thread 有沒有結束：頁面那一側的效果只是 CPU 不再被佔著 | 審查；process 的那一半有 `shell` 的 `automation_pipe::a_renderer_whose_unload_doesnt_end_is_ended` | `browser` 的測試：Linux 上數 `/proc/self/task` 裡名叫 `CrRendererMain` 的 thread（要一個不和其他測試同時跑的 binary），或讓 `RenderProcessHost::unload` 回報它結束了 |
+| 換到別的網站時新的 renderer 啟動失敗，導覽停掉、分頁留在原來的頁面（`browser` 的 `web_contents.rs` 的 `commit` 的 `swap_renderer` 回 false 那一段） | 測試的 renderer 都啟動得了：要一個第二次才失敗的 `RendererLauncher` | 審查 | `RendererLauncher` 加一個測試用、照次數失敗的 launcher 時補 |
 | `Network.getCookies` 的最上層網址是分頁 commit 了的網址（`shell` 的 `automation_cookies.rs`；改成顯示的網址時不會有測試失敗） | 兩者只在 Browser 發起、還在路上的導覽期間不同，而且只有 partitioned cookie 照最上層的網站分：要一個設了 partitioned cookie 的頁面，在一個往別的網站、回應很慢的 `Page.navigate` 還沒回答時讀 cookie | 審查 | `shell` 的自動化測試：頁面的 response 設 `Partitioned` 的 cookie，送出往別的網站的 `Page.navigate`（不等回答），`Network.getCookies` 照樣拿到那個 cookie |
 | parser 讓出的次數讓預算變大（`dom_api` 的 `document_loader.rs` 的 `parse` 的 `yields`，renderer 的 `parse_run` 照它算 `ParserBudget::of_run`：6 次之後一輪 500 ms） | `of_run` 有單元測試（`the_parsers_budget_grows_after_six_yields`），把次數傳進去的這一段只差在時間：測試的 parser 每片都讓出（預算是 0） | 審查 | 預算讓測試設得很大的頁面，script 忙過 10 ms 但不到 500 ms 時，看第 7 次之後還讓不讓出 |
 | 已經排了 task 接著 parse 的 parser，body 又來一段時不在收到它的 task 裡 parse（`dom_api` 的 `document_loader.rs` 的 `parse_unless_due`，renderer 收到 body 和 parser 的 script 時叫它；Blink 的 parser 排了下一段之後不被收到的資料推動；同一類的還有一輪開始時清掉排著的 task，`parse` 的 `parse_task = None`） | 拿掉時只是在收到資料的 task 裡先 parse 一次，parse 的內容一樣，只有和計時器的先後不同；測試的 body 一次到齊 | 審查 | 每片都讓出的 parser 配上 body 分兩次到的伺服器，看兩段之間的計時器是不是照 scheduler 的順序跑 |
@@ -333,6 +335,10 @@
 ## 等價、不用處理的 mutation
 
 弄壞之後行為完全一樣，記在這裡免得重複追查。
+
+**換到別的網站的 renderer 時，commit 拿掉發起的 renderer 自己的導覽編號（`browser` 的 `web_contents.rs` 的 `commit` 的 `forget_begin_id`）**
+
+- 拿掉時新的 renderer 收到舊的 renderer 的 `begin_id`：它在第一次 commit 之前沒跑過任何 script，沒有自己的導覽，照那個編號找（`take_navigation`）什麼也找不到，和沒有編號一樣。留著是因為編號是另一個 renderer 的：新的 renderer 一開始就有自己的導覽時（預先啟動的 renderer、同一個 renderer 裝好幾個分頁）就不再等價。
 
 **Viz 把像素複製進暫存的 buffer（`viz` 的 `gpu_context.rs` 的 `copy_rows_from_slice`）**
 

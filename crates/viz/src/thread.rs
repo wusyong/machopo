@@ -62,6 +62,9 @@ where
                 FrameSinkId,
                 protocol::viz::BeginFrameObserver,
             > = std::collections::HashMap::new();
+            // Those whose first frame has come.
+            let mut first_frames: std::collections::HashSet<FrameSinkId> =
+                std::collections::HashSet::new();
             let start = Instant::now();
             let mut next_begin_frame = start;
             // When the last `BeginFrame` went out, and whether it has been
@@ -101,7 +104,16 @@ where
                                 local_surface_id,
                                 frame,
                             },
-                        ) => display.submit_compositor_frame(sink, local_surface_id, frame),
+                        ) => {
+                            display.submit_compositor_frame(sink, local_surface_id, frame);
+                            // A client's first frame is told it (what showed
+                            // in its place may go): once.
+                            if let Some(client) = clients.get(&sink)
+                                && first_frames.insert(sink)
+                            {
+                                client.on_first_frame();
+                            }
+                        }
                         VizMsg::FrameSink(_, CompositorFrameSinkMsg::SetNeedsBeginFrame(_))
                         | VizMsg::FrameSink(_, CompositorFrameSinkMsg::DidNotProduceFrame) => {}
                         VizMsg::FrameSink(
@@ -145,6 +157,7 @@ where
                         VizMsg::InvalidateFrameSinkId(sink) => {
                             begin_frames.remove_client(sink);
                             clients.remove(&sink);
+                            first_frames.remove(&sink);
                             display.remove_frame_sink(sink);
                         }
                     }
@@ -514,6 +527,91 @@ mod tests {
             .expect("the copy comes")
             .expect("read back");
         assert_eq!(copy.pixels, [0, 0, 0, 255]);
+        tx.send(VizMsg::Display(DisplayMsg::Shutdown)).unwrap();
+        thread.join().unwrap();
+    }
+
+    /// A client is told its first frame has come, once: what showed in its
+    /// place may go. One registered again (a new sink) is told again.
+    #[test]
+    fn a_client_is_told_its_first_frame_once() {
+        let (tx, rx) = unbounded();
+        let root = FrameSinkId {
+            client_id: 0,
+            sink_id: 1,
+        };
+        let thread = spawn_viz_compositor_thread(
+            rx,
+            root,
+            BeginFrameSource::new(),
+            Default::default(),
+            || Ok(Copying),
+        )
+        .unwrap();
+        let tab = FrameSinkId {
+            client_id: 2,
+            sink_id: 1,
+        };
+        let rect = RectF::new(0.0, 0.0, 1.0, 1.0);
+        let submit_to = |sink, frame_token| {
+            tx.send(VizMsg::FrameSink(
+                sink,
+                CompositorFrameSinkMsg::SubmitCompositorFrame {
+                    local_surface_id: LocalSurfaceId::default(),
+                    frame: CompositorFrame {
+                        metadata: CompositorFrameMetadata {
+                            device_scale_factor: 1.0,
+                            frame_token,
+                            root_background_color: Color::BLACK,
+                        },
+                        resource_list: Vec::new(),
+                        render_pass_list: vec![CompositorRenderPass {
+                            id: RenderPassId(1),
+                            output_rect: rect,
+                            damage_rect: rect,
+                            shared_quad_state_list: vec![SharedQuadState::default()],
+                            quad_list: Vec::new(),
+                        }],
+                    },
+                },
+            ))
+            .unwrap();
+        };
+        let submit = |frame_token| submit_to(tab, frame_token);
+        let (first_tx, first) = unbounded();
+        let register = || {
+            let first_tx = first_tx.clone();
+            let observer = BeginFrameObserver::new(|_| {}).with_first_frame(move || {
+                let _ = first_tx.send(());
+            });
+            tx.send(VizMsg::RegisterFrameSinkId(tab, observer)).unwrap();
+        };
+        register();
+        submit(1);
+        submit(2);
+        first
+            .recv_timeout(Duration::from_secs(10))
+            .expect("told of the first");
+        // What came after it was handled before the root's frame is drawn
+        // and read back.
+        submit_to(root, 1);
+        let (copy_tx, copy_rx) = unbounded();
+        tx.send(VizMsg::Display(DisplayMsg::RequestCopyOfOutput(
+            CopyOutputRequest::new(move |_| {
+                let _ = copy_tx.send(());
+            }),
+        )))
+        .unwrap();
+        copy_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the root drawn");
+        assert!(first.try_recv().is_err(), "once");
+        tx.send(VizMsg::InvalidateFrameSinkId(tab)).unwrap();
+        register();
+        submit(3);
+        first
+            .recv_timeout(Duration::from_secs(10))
+            .expect("told again, registered again");
         tx.send(VizMsg::Display(DisplayMsg::Shutdown)).unwrap();
         thread.join().unwrap();
     }

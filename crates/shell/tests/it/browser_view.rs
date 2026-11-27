@@ -85,6 +85,8 @@ struct Window {
     display: Display<WgpuRenderer>,
     /// Each client, for what Viz tells it besides its `BeginFrame`s.
     clients: HashMap<FrameSinkId, protocol::viz::BeginFrameObserver>,
+    /// The clients whose first frame has come, as Viz tells each once.
+    first_frames: std::collections::HashSet<FrameSinkId>,
     /// How many shared images the browser's own compositor made.
     toolbar_images: usize,
     clipboard: SharedClipboard,
@@ -149,6 +151,7 @@ impl Window {
                 BROWSER_FRAME_SINK,
             ),
             clients: HashMap::new(),
+            first_frames: std::collections::HashSet::new(),
             toolbar_images: 0,
             clipboard,
         }
@@ -286,6 +289,8 @@ impl Window {
             VizMsg::InvalidateFrameSinkId(sink) => {
                 self.begin_frames.remove_client(*sink);
                 self.display.remove_frame_sink(*sink);
+                self.clients.remove(sink);
+                self.first_frames.remove(sink);
             }
             VizMsg::RegisterFrameSinkId(sink, observer) => {
                 let observer = observer.clone();
@@ -391,6 +396,11 @@ impl Window {
         };
         self.display
             .submit_compositor_frame(sink, local_surface_id, frame);
+        if let Some(client) = self.clients.get(&sink)
+            && self.first_frames.insert(sink)
+        {
+            client.on_first_frame();
+        }
         Some(sink)
     }
 
@@ -1847,6 +1857,110 @@ const SELECT: &str = "<!DOCTYPE html><style>html, body { margin: 0 }
      <p id=out>one</p>
      <script>const s = document.getElementById('s');
      s.onchange = () => { document.getElementById('out').textContent = s.value; };</script>";
+
+/// A renderer of another site taking the tab's place (a navigation to
+/// another site) has none of the UI the one before had: the cursor it
+/// asked for, the pointer's capture, its dropdown.
+#[test]
+fn another_sites_renderer_has_none_of_the_ui_the_one_before_had() {
+    let server = server(&[
+        ("/", &links(&["/a"])),
+        ("/select", SELECT),
+        ("/plain", "<!DOCTYPE html>plain"),
+    ]);
+    let other = server.url_for_host("localhost", "/plain");
+    let mut window = Window::open(Size::new(400, 300), 1.0);
+    window.load(&server.url("/"));
+    // Over the link, the hand; pressed there, the page has the pointer.
+    window.view.pointer_moved(PointF::new(10.0, TOP + 10.0));
+    window.until(|msg| matches!(msg, RendererHostMsg::SetCursor(_)));
+    assert_eq!(window.view.cursor(), CursorType::Hand);
+    window.view.mouse_input(MouseButton::Left, true);
+    window.load(&other);
+    assert_eq!(window.view.cursor(), CursorType::Pointer, "the cursor");
+    // Not captured: over the address field, its I-beam.
+    let field = window.view.omnibox_rect();
+    window
+        .view
+        .pointer_moved(PointF::new(field.x + 20.0, field.y + 10.0));
+    assert_eq!(window.view.cursor(), CursorType::IBeam, "the capture");
+    window.view.mouse_input(MouseButton::Left, false);
+    window.load(&server.url("/select"));
+    window.click(10.0, TOP + 10.0);
+    window.until(|msg| matches!(msg, RendererHostMsg::ShowPopupMenu(_)));
+    assert!(window.view.popup_menu().is_some());
+    window.load(&other);
+    assert!(window.view.popup_menu().is_none(), "the dropdown");
+    window.close();
+}
+
+/// As a renderer of another site takes the tab's place, the page before
+/// shows till the new one draws if the user acted on it (Chromium's paint
+/// holding, kept by the old renderer's surface standing in for the new
+/// one's); if they didn't (the page navigated itself), the tab shows the
+/// new page, empty, at once.
+#[test]
+fn the_page_before_shows_till_another_sites_renderer_draws_if_the_user_acted_on_it() {
+    let server = TestServer::start(HashMap::from([
+        ("/".to_owned(), Route::ok("text/html", GREEN_PAGE)),
+        (
+            "/b".to_owned(),
+            Route::ok(
+                "text/html",
+                "<!DOCTYPE html><link rel=stylesheet href=/slow.css><p>b",
+            ),
+        ),
+        (
+            "/slow.css".to_owned(),
+            Route::ok("text/css", "html { background-color: blue }")
+                .with_delay(Duration::from_secs(3)),
+        ),
+    ]))
+    .expect("test server starts");
+    let blue = [0, 0, 255, 255];
+    let other = server.url_for_host("localhost", "/b");
+    let at = (10, (TOP + 10.0) as u32);
+    for acted in [true, false] {
+        let mut window = Window::open(Size::new(400, 300), 1.0);
+        window.load(&server.url("/"));
+        window.until_pixel(at.0, at.1, GREEN);
+        if acted {
+            window.click(10.0, TOP + 10.0);
+            window.until(|msg| matches!(msg, RendererHostMsg::DidReceiveUserActivation));
+        }
+        let before = window.view.web_contents().renderer_id();
+        window.view.navigate(&other);
+        window.until(|msg| matches!(msg, RendererHostMsg::DidCommitNavigation { .. }));
+        assert_ne!(window.view.web_contents().renderer_id(), before);
+        window.draw();
+        if acted {
+            assert_eq!(window.pixel(at.0, at.1), GREEN, "the page before");
+        } else {
+            assert_ne!(window.pixel(at.0, at.1), GREEN, "not the page before");
+        }
+        window.until_pixel(at.0, at.1, blue);
+        assert_eq!(
+            window.view.web_contents().fallback_surface_id(),
+            None,
+            "the page before goes once the new one draws"
+        );
+        if acted {
+            // Back to the first site the same way: its renderer gone
+            // before it draws, the page before goes with it (the sad tab
+            // shows).
+            window.click(10.0, TOP + 10.0);
+            window.until(|msg| matches!(msg, RendererHostMsg::DidReceiveUserActivation));
+            window.view.navigate(&server.url("/b"));
+            window.until(|msg| matches!(msg, RendererHostMsg::DidCommitNavigation { .. }));
+            assert!(window.view.web_contents().fallback_surface_id().is_some());
+            window
+                .view
+                .on_renderer_message(TabId(0), &RendererHostMsg::RendererGone);
+            assert_eq!(window.view.web_contents().fallback_surface_id(), None);
+        }
+        window.close();
+    }
+}
 
 /// A select's dropdown: a click opens it below the select, drawn by the
 /// browser over the page's surface; ↓ and Enter pick the next option,

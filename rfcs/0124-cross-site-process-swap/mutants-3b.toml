@@ -1,0 +1,150 @@
+# Stage 3b's mutants (the page before stays shown till the next document is drawn only if it is of the same origin or the user acted on it, the browser deciding; across renderers, Viz draws the one before's last frame in the new one's place): `python3 scripts/test.py mutate rfcs/0124-cross-site-process-swap/mutants-3b.toml`.
+test = ["sh", "-c", "cargo test -q -p browser --test it -- navigation::links::a_page_of_another_origin navigation::a_new_document_that_cant_be_drawn"]
+timeout = 1200
+
+[[mutant]]
+name = "the page before always stays"
+file = "crates/browser/src/web_contents.rs"
+from = '''        let root = self.frame_tree.root();
+        self.committed_url.is_none()'''
+to = '''        let root = self.frame_tree.root();
+        true || self.committed_url.is_none()'''
+
+[[mutant]]
+name = "the user's acting on the page before doesn't count"
+file = "crates/browser/src/web_contents.rs"
+from = '''        self.committed_url.is_none()
+            || self.main_frame_activated
+            || self'''
+to = '''        self.committed_url.is_none()
+            || self'''
+
+[[mutant]]
+name = "the same origin doesn't count"
+file = "crates/browser/src/web_contents.rs"
+from = '''                .is_some_and(|before| before.origin == *origin)'''
+to = '''                .is_some_and(|_| false)'''
+
+[[mutant]]
+name = "the tab's first document doesn't count"
+file = "crates/browser/src/web_contents.rs"
+from = '''        self.committed_url.is_none()
+            || self.main_frame_activated'''
+to = '''        self.main_frame_activated'''
+test = ["sh", "-c", "cargo test -q -p browser --test it -- navigation:: && cargo test -q -p shell --test it -- browser_view::"]
+
+[[mutant]]
+name = "a new document is taken as acted on as the one before was"
+file = "crates/browser/src/web_contents.rs"
+from = '''                    // The new document's window has no activation yet.
+                    self.main_frame_activated = false;'''
+to = ''''''
+
+[[mutant]]
+name = "the renderer's telling of activation isn't heard"
+file = "crates/browser/src/web_contents.rs"
+from = '''            RendererHostMsg::DidReceiveUserActivation => self.main_frame_activated = true,'''
+to = '''            RendererHostMsg::DidReceiveUserActivation => {}'''
+
+[[mutant]]
+name = "the renderer isn't told whether the page before stays"
+file = "crates/browser/src/web_contents.rs"
+from = '''            params.set_paint_holding(paint_holding);'''
+to = ''''''
+
+[[mutant]]
+name = "the renderer never tells of activation"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                        self.tell_user_activation();'''
+to = ''''''
+
+[[mutant]]
+name = "the renderer tells of one document's activation alone"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        // The new document's window has none yet.
+        self.activation_told = false;'''
+to = ''''''
+
+[[mutant]]
+name = "the renderer keeps the page before whatever the browser says"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        if committed && main_frame && !paint_holding {
+            self.end_paint_holding();
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a renderer of another site always has the page before shown"
+file = "crates/browser/src/web_contents.rs"
+from = '''                if !self.swap_renderer(paint_holding) {'''
+to = '''                if !self.swap_renderer(true) {'''
+test = ["sh", "-c", "cargo test -q -p browser --test it -- process_swap::the_sink_before && cargo test -q -p shell --test it -- browser_view::the_page_before_shows"]
+
+[[mutant]]
+name = "a renderer of another site never has the page before shown"
+file = "crates/browser/src/web_contents.rs"
+from = '''        if keep_drawn && self.sink_drawn {
+            self.fallback_sink = Some(self.frame_sink_id);'''
+to = '''        if false {
+            self.fallback_sink = Some(self.frame_sink_id);'''
+test = ["sh", "-c", "cargo test -q -p shell --test it -- browser_view::the_page_before_shows"]
+
+[[mutant]]
+name = "the page before stays after the new renderer draws"
+file = "crates/browser/src/web_contents.rs"
+from = '''        self.sink_drawn = true;
+        self.forget_fallback();'''
+to = '''        self.sink_drawn = true;'''
+test = ["sh", "-c", "cargo test -q -p shell --test it -- browser_view::the_page_before_shows"]
+
+[[mutant]]
+name = "the page before stays after the new renderer has gone"
+file = "crates/browser/src/web_contents.rs"
+from = '''        // The sad tab shows in its place, not the page before.
+        self.forget_fallback();'''
+to = ''''''
+test = ["sh", "-c", "cargo test -q -p shell --test it -- browser_view::the_page_before_shows"]
+
+[[mutant]]
+name = "the window doesn't embed the page before"
+file = "crates/shell/src/browser_view.rs"
+from = '''                    fallback_surface_id: contents.fallback_surface_id(),'''
+to = '''                    fallback_surface_id: None,'''
+test = ["sh", "-c", "cargo test -q -p shell --test it -- browser_view::the_page_before_shows"]
+
+[[mutant]]
+name = "the aggregator doesn't draw a fallback"
+file = "crates/viz/src/surface_aggregator.rs"
+from = '''                        .chain(fallback.map(|fallback| fallback.frame_sink_id))'''
+to = ''''''
+test = ["sh", "-c", "cargo test -q -p viz --lib surface_aggregator"]
+
+[[mutant]]
+name = "a frame of the fallback isn't drawn again"
+file = "crates/viz/src/surface_aggregator.rs"
+from = '''                    if let Some(fallback) = fallback {
+                        out.embedded.insert(fallback.frame_sink_id);
+                    }'''
+to = ''''''
+test = ["sh", "-c", "cargo test -q -p viz --lib surface_aggregator"]
+
+[[mutant]]
+name = "Viz never tells a client its first frame"
+file = "crates/viz/src/thread.rs"
+from = '''                                client.on_first_frame();'''
+to = ''''''
+test = ["sh", "-c", "cargo test -q -p viz --lib thread::"]
+
+[[mutant]]
+name = "Viz tells a client every frame"
+file = "crates/viz/src/thread.rs"
+from = '''                                && first_frames.insert(sink)'''
+to = '''                                && (first_frames.insert(sink) || true)'''
+test = ["sh", "-c", "cargo test -q -p viz --lib thread::"]
+
+[[mutant]]
+name = "a sink registered again isn't told its first frame"
+file = "crates/viz/src/thread.rs"
+from = '''                            first_frames.remove(&sink);'''
+to = ''''''
+test = ["sh", "-c", "cargo test -q -p viz --lib thread::"]

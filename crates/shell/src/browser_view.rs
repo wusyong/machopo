@@ -1496,6 +1496,7 @@ impl BrowserView {
                     return None;
                 }
                 self.on_renderer_message(tab, &msg);
+                self.forget_replaced_renderer(tab);
                 Some(msg)
             }
             ContentsEvent::BadMessage { renderer, reason } => {
@@ -1508,14 +1509,39 @@ impl BrowserView {
             }
             // For DevTools.
             ContentsEvent::NavigationStarted(_) => None,
-            // A navigation's.
+            // A navigation's: its commit may be in another renderer.
             event => {
                 if let Some(contents) = self.contents_mut(tab) {
                     contents.on_navigation_event(event);
                 }
+                self.forget_replaced_renderer(tab);
                 None
             }
         }
+    }
+
+    /// What the UI keeps of `tab`'s renderer goes if another has taken its
+    /// place (a navigation to another site): its cursor, the pointer's
+    /// capture, and its dropdown, which closes without an answer (the
+    /// renderer that asked for it is no more).
+    fn forget_replaced_renderer(&mut self, tab: TabId) {
+        if !self
+            .contents_mut(tab)
+            .is_some_and(WebContents::take_renderer_replaced)
+        {
+            return;
+        }
+        self.cursors.remove(&tab);
+        if self.captured == Some(Target::WebView(tab)) {
+            self.captured = None;
+        }
+        if self.popup.as_ref().is_some_and(|popup| popup.tab() == tab) {
+            self.popup = None;
+            self.pressed_in_popup = false;
+            self.popup_dirty = true;
+        }
+        self.sync_ui();
+        self.update();
     }
 
     /// A message from `tab`'s renderer, on the UI thread. A tab whose
@@ -1849,11 +1875,15 @@ impl BrowserView {
             .filter(|(view, _)| !view.bounds.is_empty() && !self.crashed(view.contents))
             .filter_map(|(view, id)| {
                 let bounds = css(view.bounds);
+                let contents = self.contents(view.contents)?;
                 Some(SurfaceLayer {
                     id: LayerId(id),
                     position: PointF::new(bounds.x, bounds.y),
                     bounds: bounds.size(),
-                    surface_id: self.contents(view.contents)?.surface_id(),
+                    surface_id: contents.surface_id(),
+                    // The page before, as another site's renderer takes the
+                    // tab's place, till that one draws.
+                    fallback_surface_id: contents.fallback_surface_id(),
                     background_color: Color::WHITE,
                     corner_radius: view.radius,
                 })

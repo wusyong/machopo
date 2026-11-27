@@ -33,6 +33,7 @@ use renderer::{
 use crate::StoragePartition;
 use crate::bad_message::BadMessageReason;
 use crate::font_data_service::{FontDataService, FontRequest, SERVES_SYSTEM_FONTS};
+use crate::site_info::SiteInfo;
 
 /// A renderer process to start: its command, and what its starter gives
 /// it beside the command where the operating system has the starter give
@@ -208,6 +209,11 @@ pub struct RenderProcessHost {
     /// The loaders the browser gave the renderer's documents, which the IO
     /// thread checks their requests by (`register_loader`).
     loaders: Arc<Mutex<Loaders>>,
+    /// The site of the documents it holds, from the first one with one
+    /// that committed in it (Chromium's `SiteInstance`'s `SiteInfo`, which
+    /// its process is locked to): none before. A navigation to another
+    /// site commits in another renderer.
+    site_info: Option<SiteInfo>,
 }
 
 /// The params of a loader the browser gives a document as it commits
@@ -513,7 +519,20 @@ impl RenderProcessHost {
             renderer_id,
             forwarding,
             loaders,
+            site_info: None,
         })
+    }
+
+    /// The site of the documents it holds, if one has committed.
+    pub(crate) fn site_info(&self) -> Option<&SiteInfo> {
+        self.site_info.as_ref()
+    }
+
+    /// A document of `site` commits in it: the first gives it its site,
+    /// and any after is of that site (the tab commits another's in another
+    /// renderer).
+    pub(crate) fn set_site_info(&mut self, site: SiteInfo) {
+        self.site_info = Some(site);
     }
 
     /// A loader for a document about to commit, with `params`: its number,
@@ -692,6 +711,68 @@ impl RenderProcessHost {
         self.file_access.store(may, Ordering::Relaxed);
     }
 
+    /// The tab's next document commits in another renderer: this one is
+    /// told to unload the document it shows (its `pagehide` and `unload`)
+    /// and to shut down, and is given [`UNLOAD_TIMEOUT`] (Chromium's
+    /// `kUnloadTimeout`) before it is ended, without the tab waiting
+    /// (Chromium's `RenderFrameHostImpl::Unload`, deleted on its ack or the
+    /// timeout, its process going with it). Nothing more it sends counts:
+    /// the tab's next document is another renderer's. What goes through
+    /// its IO thread alone still does (`localStorage` it writes as it
+    /// unloads).
+    pub(crate) fn unload(self) {
+        self.forwarding.store(false, Ordering::Release);
+        self.send(RendererMsg::Unload);
+        if self.detached.is_some() {
+            // Nothing at the other end to wait for.
+            return;
+        }
+        let deadline = std::time::Instant::now().checked_add(UNLOAD_TIMEOUT);
+        if let Err(e) = std::thread::Builder::new()
+            .name("UnloadTimer".into())
+            .spawn(move || self.end_after_unload(deadline))
+        {
+            // The host went with the closure: ended at once, as a renderer
+            // replaced after a crash is.
+            tracing::error!("no thread to wait for a renderer to unload: {e}");
+        }
+    }
+
+    /// Waits until `deadline` for a renderer told to unload to end, then
+    /// ends it: a process is killed; the script of a renderer of this
+    /// process is stopped, again and again till its thread ends, and one
+    /// that doesn't end even so (in native code) is left running.
+    fn end_after_unload(mut self, deadline: Option<std::time::Instant>) {
+        let wait = deadline.map_or(std::time::Duration::ZERO, |deadline| {
+            deadline.saturating_duration_since(std::time::Instant::now())
+        });
+        if let Some((child, link)) = self.child.take() {
+            self.exit = Some(end_child(child, &link, Some(wait)).info);
+            return;
+        }
+        let Some(thread) = &self.renderer_thread else {
+            return;
+        };
+        let asked = std::time::Instant::now();
+        while !thread.is_finished() && asked.elapsed() < wait {
+            std::thread::sleep(SCRIPT_STOP_INTERVAL);
+        }
+        if let Some(terminator) = &self.terminator {
+            let stopping = std::time::Instant::now();
+            while !thread.is_finished() {
+                if stopping.elapsed() >= CHILD_EXIT_WAIT {
+                    tracing::warn!("a renderer thread told to unload left running");
+                    self.renderer_thread.take();
+                    self.io_thread.take();
+                    return;
+                }
+                terminator.terminate();
+                std::thread::sleep(SCRIPT_STOP_INTERVAL);
+            }
+        }
+        self.join_threads();
+    }
+
     /// Asks the renderer to exit and waits for it (a tab closed), a
     /// process for [`CHILD_EXIT_WAIT`] at most.
     pub fn shutdown(&mut self) {
@@ -785,6 +866,10 @@ pub enum GaveUp {
 /// machopo waits for it to end.
 const SCRIPT_STOP_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
 
+/// How long a renderer told to unload, its document replaced by another
+/// renderer's, is given before it is ended (Chromium's `kUnloadTimeout`).
+pub(crate) const UNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+
 /// How long a renderer process asked to exit is given before it is ended.
 const CHILD_EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -875,6 +960,9 @@ pub(crate) struct CommitParams {
     /// `navigation_start`).
     navigation_start: ipc::TimeTicks,
     navigation_type: FrameLoadType,
+    /// The main frame's page before may stay shown till it is drawn
+    /// (`CommitNavigation`'s `paint_holding`).
+    paint_holding: bool,
 }
 
 /// A navigation's document as it commits.
@@ -934,6 +1022,24 @@ impl CommittedDocument {
 }
 
 impl CommitParams {
+    /// What kind of load it is (a reload stays in the renderer it is
+    /// in, whatever its URL's site).
+    pub(crate) fn navigation_type(&self) -> FrameLoadType {
+        self.navigation_type
+    }
+
+    /// Whether the page before may stay shown till it is drawn, as the
+    /// browser decided as it commits.
+    pub(crate) fn set_paint_holding(&mut self, paint_holding: bool) {
+        self.paint_holding = paint_holding;
+    }
+
+    /// It commits in another renderer than the one that asked for it,
+    /// which hasn't the renderer's number for it.
+    pub(crate) fn forget_begin_id(&mut self) {
+        self.begin_id = None;
+    }
+
     /// Navigation `frame`'s commit (the renderer's `begin_id`, if it asked
     /// for it), to an entry with `history`.
     pub(crate) fn new(
@@ -949,6 +1055,7 @@ impl CommitParams {
             history,
             navigation_start,
             navigation_type,
+            paint_holding: true,
         }
     }
 
@@ -1000,6 +1107,7 @@ impl RenderProcessHost {
             navigation_start: params.navigation_start,
             loaded: document.loaded.map(Box::new),
             navigation_type: params.navigation_type,
+            paint_holding: params.paint_holding,
         });
         completer
     }

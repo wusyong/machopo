@@ -14,6 +14,7 @@ mod devtools_session;
 mod dom_storage;
 mod loaders;
 mod navigation;
+mod process_swap;
 mod profile;
 mod renderer_gone;
 mod renderer_message_fuzz;

@@ -718,7 +718,7 @@ impl RendererSender {
             msg => {
                 // Script paused is to go on, for the main thread to get
                 // to the message.
-                let shutdown = matches!(msg, RendererMsg::Shutdown);
+                let shutdown = matches!(msg, RendererMsg::Shutdown | RendererMsg::Unload);
                 scheduler.post(TaskQueue::Browser, MainThreadTask::Browser(msg), false)?;
                 if shutdown {
                     scheduler.shutting_down();

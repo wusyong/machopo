@@ -189,6 +189,14 @@ impl<R: DirectRenderer> Display<R> {
         self.frame_sinks.insert(sink);
     }
 
+    /// The client whose surface fills the output is `sink` from now on (in
+    /// headless mode, the tab's next renderer's): drawn once it has a
+    /// frame.
+    pub fn set_root_frame_sink(&mut self, sink: FrameSinkId) {
+        self.root_frame_sink = sink;
+        self.needs_draw = true;
+    }
+
     /// `sink`'s new frame: one from a sink that isn't the root or
     /// registered is dropped (Chromium's comes on a pipe closed with its
     /// sink). What a frame is isn't checked here: a renderer of a process
@@ -718,6 +726,7 @@ mod tests {
                     frame_sink_id: tab,
                     local_surface_id: LocalSurfaceId::default(),
                 },
+                fallback: None,
                 default_background_color: Color::WHITE,
             },
         });

@@ -536,7 +536,39 @@ impl RenderThread {
         // arrow until it moves, or the new one is laid out under it.
         self.set_cursor(CursorType::Pointer);
         self.start_new_content_rendering_timeout();
+        // The new document's window has none yet.
+        self.activation_told = false;
         self.start_body(top, start);
+    }
+
+    /// Tells the browser once the top-level document's window has sticky
+    /// activation (Chromium's `UpdateUserActivationState`): input activates
+    /// the window it is in and those of the frames above it, so the top's
+    /// says whether the user acted on the page.
+    pub(super) fn tell_user_activation(&mut self) {
+        if self.activation_told {
+            return;
+        }
+        let Some(document) = self
+            .render_frames
+            .top_document()
+            .map(|top| top.document.clone())
+        else {
+            return;
+        };
+        let Some(engine) = self.engine.as_mut() else {
+            return;
+        };
+        let activated = engine.dom_mut().mutate(|cx| {
+            cx.window_of(document.get(cx.gc))
+                .is_some_and(|window| cx.has_sticky_activation(window))
+        });
+        if activated {
+            self.activation_told = true;
+            let _ = self
+                .to_browser
+                .send(RendererHostMsg::DidReceiveUserActivation);
+        }
     }
 
     /// The page's engine replaced by one of the other kind (`wasm`: the

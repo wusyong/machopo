@@ -195,7 +195,8 @@
 ### 預備的 renderer 和重用
 
 - **spare renderer**（`spare_render_process_host_manager_impl.cc`）：完整的 site isolation 時一直備著一個啟動好、還沒鎖的 process（`kSpareRendererForSitePerProcess` 預設開），被拿走之後再備一個；記憶體有壓力或 process 數到上限時不備。文件只說「This avoids the need to wait for a new process to start.」，沒有寫省多少。
-- **同一個 site 的兩個分頁**預設不共用 process（`ProcessReusePolicy::kDefault`：「SiteInstances don't proactively reuse processes」），超過軟性的上限才開始重用同一個 site 的（上限是實體記憶體的一半除以每個分頁估的 85 MB，夾在 3 和平台的上限之間：16 GB 是 96 個）。Chrome 自己對預設的搜尋引擎等少數情況例外。
+- **同一個 site 的兩個分頁**預設不共用 process（`ProcessReusePolicy::kDefault`：「SiteInstances don't proactively reuse processes」），超過軟性的上限才開始重用同一個 site 的（上限是實體記憶體的一半除以每個分頁估的 85 MB，夾在 3 和平台的上限之間：16 GB 是 96 個）。
+- **例外：預設的搜尋引擎**（2026-11-28 讀的，`main`）：content 這一層有 `kProcessPerSiteUpToMainFrameThreshold`（`content_features.cc`，Android 以外預設開）：新的 main frame 的 `SiteInstance` 重用同一個 site 已經在用的 process（`kReusePendingOrCommittedSiteWithMainFrameThreshold`，`render_frame_host_manager.cc` 的 `UpdateProcessReusePolicyForMainFrame`），一個 process 最多 2 個 main frame（`kProcessPerSiteMainFrameThreshold`），那個 process 有 DevTools 接著、或估的記憶體不夠時不重用（`render_process_host_impl.cc` 的 `IsBelowReuseResourceThresholds`；註解：DevTools 在一個 renderer 有好幾個 main frame 時不好用）。content 的預設是每個網站都這樣（`ContentBrowserClient::ShouldAllowProcessPerSiteForMultipleMainFrames` 回 `true`），但要 embedder 對網址說可以（`ShouldReuseAnyExistingProcessForNewMainFrameSiteInstance`，content 的預設回 `false`）。Chrome 只對預設的搜尋引擎說可以（`kProcessPerSiteForDSE`，Android 以外預設開；`prerender_utils.cc`），而且受管理的（enterprise）使用者不用（`kProcessPerSiteSkipEnterpriseUsers` 預設開）。所以 Chrome 裡兩個不相干、同一個 site 的分頁，只有預設的搜尋引擎（例如兩個 Google 搜尋的分頁）會共用 process，其他的網站不會。
 
 ### 跨過換 process 留著的
 

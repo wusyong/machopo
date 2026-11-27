@@ -199,7 +199,12 @@ pub enum Material {
     /// sees one.
     Surface {
         surface_id: SurfaceId,
-        /// Shown while the surface has no frame yet.
+        /// Drawn while `surface_id`'s sink has no frame yet, if it has one
+        /// (Chromium's `SurfaceRange`, whose start is the fallback): the
+        /// tab's renderer before, as a renderer of another site takes its
+        /// place, till the new one draws.
+        fallback: Option<SurfaceId>,
+        /// Shown while neither has a frame.
         default_background_color: Color,
     },
 }
@@ -557,6 +562,8 @@ pub struct BeginFrameObserver {
     send: Option<Arc<dyn Fn(BeginFrameArgs) + Send + Sync>>,
     #[serde(skip)]
     pixels_returned: Option<Arc<dyn Fn(Mailbox) + Send + Sync>>,
+    #[serde(skip)]
+    first_frame: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl BeginFrameObserver {
@@ -564,6 +571,23 @@ impl BeginFrameObserver {
         Self {
             send: Some(Arc::new(send)),
             pixels_returned: None,
+            first_frame: None,
+        }
+    }
+
+    /// Also told when the client's first frame has come (Chromium's
+    /// `OnFirstSurfaceActivation`): what showed in its place till then
+    /// may go.
+    #[must_use]
+    pub fn with_first_frame(mut self, first: impl Fn() + Send + Sync + 'static) -> Self {
+        self.first_frame = Some(Arc::new(first));
+        self
+    }
+
+    /// The client's first frame has come.
+    pub fn on_first_frame(&self) {
+        if let Some(first) = &self.first_frame {
+            first();
         }
     }
 
@@ -921,6 +945,7 @@ mod tests {
                     },
                     local_surface_id: LocalSurfaceId::default(),
                 },
+                fallback: None,
                 default_background_color: Color::WHITE,
             },
         ));

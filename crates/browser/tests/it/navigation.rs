@@ -3043,6 +3043,138 @@ document.querySelector('base').setAttribute('href', '/later/');
         web_contents.shutdown();
     }
 
+    /// The page before stays shown while a new document of another origin
+    /// can't be drawn only if the user acted on it (Chromium's
+    /// `allow_main_frame_paint_holding`): if not, the new document shows
+    /// at once, empty. Each document starts not acted on. (Documents of the
+    /// same site, here other ports: the same renderer, which the browser
+    /// tells.)
+    #[test]
+    fn a_page_of_another_origin_shows_at_once_unless_the_user_acted_on_the_one_before() {
+        let blocked = "<!DOCTYPE html><link rel=stylesheet href=/slow.css><p>b";
+        let sheet_delay = Duration::from_secs(2);
+        let routes = [
+            (
+                "/a",
+                Route::ok("text/html", "<!DOCTYPE html><p style='background: green'>a"),
+            ),
+            ("/b", Route::ok("text/html", blocked)),
+            (
+                "/slow.css",
+                Route::ok("text/css", "p { background: blue }").with_delay(sheet_delay),
+            ),
+        ];
+        let (a, b) = (server(&routes), server(&routes));
+        let (mut web_contents, host_rx, viz_rx, begin_frames) = tab_with_flags(
+            true,
+            false,
+            None,
+            gfx::SystemColors::DEFAULT,
+            Default::default(),
+            // Longer than the sheet takes: the page before shows till the
+            // sheet comes, unless the browser says it isn't to.
+            Duration::from_secs(30),
+            in_memory(),
+        );
+        web_contents.resize(gfx::Size::new(200, 200), 1.0);
+        let mut viz = DrivenViz::new(viz_rx, begin_frames);
+        let renderer = web_contents.renderer_id();
+        let act = |web_contents: &mut WebContents, viz: &mut DrivenViz| {
+            click(web_contents, 10.0, 10.0);
+            viz.run_until(web_contents, &host_rx, "the activation", |_, msg| {
+                matches!(msg, Some(RendererHostMsg::DidReceiveUserActivation))
+            });
+        };
+        // To `url`, a document the sheet blocks: whether an empty frame
+        // showed before the sheet came, the document then drawn.
+        let to = |web_contents: &mut WebContents, viz: &mut DrivenViz, url: String| {
+            // What the page before draws (for a click) is drawn first.
+            viz.run_until(web_contents, &host_rx, "the page drawn", |viz, _| {
+                viz.idle()
+            });
+            let before = viz.frames.len();
+            let navigated = std::time::Instant::now();
+            web_contents.navigate(url);
+            // One of the page before's may come first, on its way as the
+            // navigation started.
+            let empty = |viz: &DrivenViz| {
+                viz.frames[before..]
+                    .iter()
+                    .any(|token| viz.resources[token].is_empty())
+            };
+            let mut empty_before_the_sheet = false;
+            viz.run_until(web_contents, &host_rx, "the sheet", |viz, _| {
+                if empty(viz) && navigated.elapsed() < sheet_delay {
+                    empty_before_the_sheet = true;
+                }
+                navigated.elapsed() >= sheet_delay
+                    && viz.frames[before..]
+                        .last()
+                        .is_some_and(|token| !viz.resources[token].is_empty())
+            });
+            empty_before_the_sheet
+        };
+        // From the tab's first, empty document: held (nothing to keep up).
+        assert!(
+            !to(&mut web_contents, &mut viz, b.url("/b")),
+            "the first document"
+        );
+        web_contents.navigate(a.url("/a"));
+        viz.until_loaded(&mut web_contents, &host_rx);
+        assert!(
+            to(&mut web_contents, &mut viz, b.url("/b")),
+            "not acted on: at once"
+        );
+        act(&mut web_contents, &mut viz);
+        assert!(
+            !to(&mut web_contents, &mut viz, a.url("/b")),
+            "acted on: held"
+        );
+        // The document it led to wasn't acted on itself.
+        assert!(
+            to(&mut web_contents, &mut viz, b.url("/b")),
+            "the next: at once"
+        );
+        act(&mut web_contents, &mut viz);
+        assert!(
+            !to(&mut web_contents, &mut viz, a.url("/b")),
+            "acted on again"
+        );
+        assert_eq!(web_contents.renderer_id(), renderer, "the same site");
+        web_contents.shutdown();
+    }
+
+    /// Input the renderer before was handed, waiting for a frame it will
+    /// never draw, isn't waited for once a renderer of another site takes
+    /// the tab's place: the new one has none in flight.
+    #[test]
+    fn input_the_renderer_before_had_isnt_in_flight() {
+        let html = "<!DOCTYPE html><script>\
+             document.addEventListener('click', () => { document.body.style.background = 'green'; });\
+             </script>";
+        let server = server(&[
+            ("/", Route::ok("text/html", html)),
+            ("/x", Route::ok("text/html", "<!DOCTYPE html>x")),
+        ]);
+        let (mut web_contents, host_rx, viz_rx, begin_frames) = tab_with_viz();
+        let mut viz = DrivenViz::new(viz_rx, begin_frames);
+        web_contents.resize(gfx::Size::new(200, 200), 1.0);
+        web_contents.navigate(server.url("/"));
+        viz.until_loaded(&mut web_contents, &host_rx);
+        viz.hold(&mut web_contents, &host_rx);
+        let before = web_contents.renderer_id();
+        click(&mut web_contents, 10.0, 10.0);
+        assert_eq!(web_contents.input_in_flight(), 2, "both wait for a frame");
+        web_contents.navigate(server.url_for_host("localhost", "/x"));
+        // Committed (the Viz here doesn't draw for a new renderer's sink).
+        viz.run_until(&mut web_contents, &host_rx, "the commit", |_, msg| {
+            matches!(msg, Some(RendererHostMsg::DidCommitNavigation { .. }))
+        });
+        assert_ne!(web_contents.renderer_id(), before);
+        assert_eq!(web_contents.input_in_flight(), 0);
+        web_contents.shutdown();
+    }
+
     /// A hidden tab draws no frame for an ack to wait for. Hiding it sends
     /// the acks waiting for one: a click's, which the main thread holds
     /// until a main frame, and a wheel's, which the compositor scrolled and
