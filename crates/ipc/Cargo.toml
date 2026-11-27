@@ -43,6 +43,10 @@ rustix.workspace = true
 # `_exit`: how a child whose host is gone ends.
 libc.workspace = true
 
+# A child's own user and network namespaces, made as it is started.
+[target.'cfg(target_os = "linux")'.dependencies]
+sunaba.workspace = true
+
 # Mach ports and memory entries: the channel and its shared memory.
 [target.'cfg(target_os = "macos")'.dependencies]
 mach2.workspace = true

@@ -455,6 +455,7 @@ let rights = rendezvous::fetch(std::os::unix::process::parent_id(), wait)?;
 通道的一端（Chromium 的 `ChannelPosix`）是一條 Unix stream socket：核心的訊息是串流裡的位元組，寫多少算多少、讀到多少交多少，訊息由核心自己切出來。handle 是 fd（region 的 memfd、開著的檔案），跟著它那一則的位元組走（`SCM_RIGHTS`）。對方拿到的是同一個開著的檔案（同一個 offset、同樣只能讀），不是路徑；收到的是 region 還是檔案，照 host 的值說的（和 Windows 一樣），不是檔案的 fd 在 `ReadOnlyFile::map` map 不成，不是 region 的（沒有封住不能縮短的）`map` 不收。
 
 - **child 怎麼拿到它那一端**：`spawn` 用 `socketpair` 建兩端（都是 close-on-exec），在 `Command` 的 `pre_exec` 裡，也就是 fork 之後、exec 之前、只在 child 的 process 裡，拿掉 child 那一端的 close-on-exec，號碼放在環境變數 `MACHOPO_IPC_FD`。所以只有這個 child 繼承到，同時啟動的別的 child 拿不到；host 開著的別的東西（其他 child 的通道、region）它也拿不到。`inherited` 讀環境變數，確認那個號碼是 `AF_UNIX` 的 stream socket（0、1、2 不算），收下、重新設 close-on-exec；只拿一次。變數留在 child 的環境裡（在 Linux 上拿掉它只有沒有別的 thread 時才安全），它啟動的 process 看得到，但那個號碼在那裡是關著的，拿不到通道。
+- **在自己的 user 和 network namespace 裡啟動**（`spawn_in`、`spawn_reading_errors` 給了 `Sandbox` 時：Linux 上它是 `sunaba::linux::Namespaces`）：同一個 `pre_exec` 裡，在拿掉 close-on-exec 之前呼叫 `Namespaces::enter`（只做事先備好內容的系統呼叫）；它失敗時 child 不 exec，`spawn` 回錯誤。能不能用是啟動的一方事先問 `Namespaces::available` 的。
   - 號碼不是秘密：fd 只在自己的 process 裡有意義。不放在命令列：child 可能是有自己參數的程式（測試的 child 就是）。
   - 不 dup2 到別的號碼：dup2 會悄悄關掉目標號碼上原本的 fd，來源和目標同號時又什麼都不做。
   - `pre_exec` 的 closure 留在 `Command` 裡，所以那個 `Command` 不能再用：再啟動一次，它會把那個號碼上當時的 fd 交出去。

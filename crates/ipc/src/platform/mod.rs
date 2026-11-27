@@ -63,12 +63,16 @@ pub use std::process::Child;
 #[cfg(windows)]
 pub use sunaba::windows::Child;
 
-/// What a child is started in ([`spawn_in`]) where the operating system
-/// has a process's sandbox given by whoever starts it: Windows. Elsewhere
-/// a process enters its own, and there is nothing to start it with.
+#[cfg(target_os = "linux")]
+pub use sunaba::linux::Namespaces as Sandbox;
+/// What a child is started in ([`spawn_in`]), where part of a process's
+/// sandbox is given by whoever starts it: on Windows all of it, on Linux
+/// its own user and network namespaces (it enters the rest itself).
+/// Elsewhere a process enters its own, and there is nothing to start it
+/// with.
 #[cfg(windows)]
 pub use sunaba::windows::Policy as Sandbox;
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 #[derive(Clone, Debug)]
 pub enum Sandbox {}
 
@@ -95,10 +99,21 @@ pub fn spawn_in(
     command: &mut std::process::Command,
     sandbox: Option<&Sandbox>,
 ) -> std::io::Result<(Child, Channel)> {
-    match sandbox {
-        Some(sandbox) => match *sandbox {},
-        None => spawn(command),
+    #[cfg(target_os = "linux")]
+    if let Some(namespaces) = sandbox {
+        let namespaces = namespaces.clone();
+        // SAFETY: the closure runs in the child between fork and exec,
+        // where only what is async-signal-safe may be done: `enter` makes
+        // system calls on what it was made with, allocating nothing.
+        unsafe {
+            std::os::unix::process::CommandExt::pre_exec(command, move || namespaces.enter());
+        }
     }
+    #[cfg(not(target_os = "linux"))]
+    if let Some(sandbox) = sandbox {
+        match *sandbox {}
+    }
+    spawn(command)
 }
 #[cfg(windows)]
 pub use windows::disk::available_disk_space;

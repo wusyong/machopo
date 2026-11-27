@@ -10,6 +10,9 @@
 | 1a. V8 的 entropy source（`bindings`）；policy 不放行 CPU 的數量和 `/dev/urandom`，時區的兩個路徑只在 renderer 的 `TZ` 不是 ICU 收的名字、或是三四個字的名字時放行；Browser 照 `/etc/localtime` 的連結給 renderer `TZ` | 做完 | 2026-11-27 |
 | 1b. 測試；CI 的 glibc 的退路 | 做完 | 2026-11-27 |
 | 1c. 第 1 段的檢查和文件 | 做完 | 2026-11-27 |
+| 2a. 第 2 段的探測（`nsinit.c`、Chromium 的原始碼）和三條決定（已決定的事項第 5 到 7 條） | 做完 | 2026-11-27 |
+| 2b. `sunaba::linux::Namespaces`；`ipc` 的 Linux 上 `Sandbox` 是它、`spawn_in` 在 `pre_exec` 裡進去；Browser 試一次、給 renderer process，不行的話說一次 | 做完 | 2026-11-27 |
+| 2c. 測試、第 2 段的檢查和文件 | 做完 | 2026-11-27 |
 
 ## 驗收
 
@@ -21,6 +24,9 @@
 | sandbox 裡、外和 thread 上的 renderer 看到的時區、`Intl`、`navigator.hardwareConcurrency`、寬度相同 | `renderer_sandbox::a_sandboxed_renderer_shows_a_page_as_one_outside_does` |
 | 短的名字（`TZ=CET`）在 renderer process 裡也是那個時區：冬天 -60、夏天 -120，和 thread 上的相同 | `renderer_sandbox::a_short_zone_name_is_the_zone_in_a_renderer_process_too` |
 | V8 不自己開 `/dev/urandom` | 手動：`docs/test-gaps.md` 的「只做過手動確認」 |
+| 機器允許時，sandbox 裡的 renderer process 在自己的 user 和 network namespace 裡（PID、mount 的是 Browser 的）：網路介面只有 `lo`，`CapPrm`、`CapEff`、`CapInh`、`CapAmb` 都是 0，和 Browser 同一個使用者；`--no-sandbox` 的不在；預期值由 `unshare --user --net true` 獨立判斷 | `cargo test -p shell --test it renderer_sandbox::a_renderer_process_has_namespaces_of_its_own_where_the_machine_allows` |
+| 機器不允許時（一個不准再開 user namespace 的 namespace 裡），renderer process 照舊啟動、畫得出頁面，和 Browser 在同一個 user、network namespace 裡，Browser 說了一次 | `renderer_sandbox::a_renderer_process_goes_without_namespaces_where_the_machine_forbids_them` |
+| `Namespaces` 的對應是自己的 id；多執行緒的 process 開不了 | `cargo test -p sunaba --lib namespaces` |
 
 ## 做過的檢查
 
@@ -39,3 +45,14 @@
 - **新的測試**：`shell` 的單元測試 3 個（時區的名字、ICU 收不收 `TZ` 和要不要讀時區的檔案、policy 放行的路徑）；`renderer_sandbox.rs` 的 `a_renderer_reads_no_file_but_the_time_zones_it_has_to_find`（四種 `TZ`：沒有、`Asia/Tokyo`、`AST4ADT`、`CET`；`open` CPU 的檔案、`/dev/urandom`、時區的檔案）、`a_renderer_process_is_told_this_machines_time_zone_by_name`、`a_short_zone_name_is_the_zone_in_a_renderer_process_too`。`a_renderer_process_has_only_the_listed_part_of_its_browsers_environment` 的時區改成和這台不同的（這台是 `Asia/Tokyo` 時用 `America/New_York`）：原本用的剛好是這台的，蓋掉使用者的 `TZ` 也看不出來（下面的 mutation test 抓到的）。`a_sandboxed_renderer_shows_a_page_as_one_outside_does` 多比 `navigator.hardwareConcurrency`。原本的 `a_renderer_reads_no_font_of_the_systems_but_the_time_zone` 改名 `a_renderer_reads_no_font_of_the_systems`，時區的部分搬到新的那個。`sunaba` 的 Linux probe 多一種 `open PATH`（開了就關，不讀：`/dev/urandom` 這種讀不完的也能試）。
 - **Mutation test**（`mutants-1.toml`，12 個，`--keep-going`）：第一輪（11 個）抓到 9 個。沒抓到的兩個：「Browser 的時區蓋掉使用者的 `TZ`」（測試的 `TZ` 剛好是這台的，改了之後重跑抓到）；「V8 沒有 entropy source」（測不到，手動確認，上面）。改了短的名字之後整份重跑（多一個「短的名字不放行時區的檔案」，一個 mutant 跟著改寫過的函式改）：12 個抓到 11 個，只剩 entropy source。抓到的：時區的檔案不管 `TZ` 都放行、都不放行、沒有 `TZ` 時不放行、ICU 的規則收任意多個數字、少一個 POSIX 的例外、Browser 不給 `TZ`、Browser 的蓋掉使用者的、名字取整個連結、留著 `posix/`、名字的字元不檢查、短的名字不放行。檔案都還原了（`git status`，`target/mutate/originals/` 不在）。
 - **跑過的檢查**：`cargo test -p shell -p bindings -p sunaba`（都通過）；量測工具的測試（`speedometer_test.py`、`blink_perf_test.py`、`raster_test.py`、`census_test.py`，都通過）；`strace` 再看一次最後的 build：renderer 沒有開 `/dev/urandom`；`sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs；第 1 段做完的 `cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`（抓到 ICU 的規則裡一個沒寫明溢位的加法，改寫成不用加法，它的兩個 mutant 重跑都抓到）、`cargo test --workspace`（63 個 binary，4985 個通過，1 個 ignored，沒有失敗）。
+
+### 2a 到 2c（2026-11-27，同一台）
+
+- **探測**（`details.md` 的「第 2 段的探測」）：`nsinit.c` 量到沒有特權也能在只有一條 thread 時 `unshare` user、network、PID namespace、fork 出 init 和 renderer；`SCM_CREDENTIALS` 的 pid 被 kernel 換成收的一方的 namespace 的；init 和外面的 process 把 renderer 的 `SIGABRT` 原樣交回。讀了 Chromium 的 `namespace_sandbox.cc`、`credentials.cc`、`zygote_linux.cc`、`sandbox_linux.cc`。之後定了不要 PID namespace（第 6 條），這些留著給之後。
+- **新的測試**：`sunaba` 的單元測試 2 個（對應、多執行緒被拒絕）；`shell` 的 `renderer_sandbox.rs` 的 `a_renderer_process_has_namespaces_of_its_own_where_the_machine_allows`（從外面看 `/proc/<pid>/ns`、`/proc/<pid>/status`、`/proc/<pid>/net/dev`；sandbox 裡外），`a_renderer_process_goes_without_namespaces_where_the_machine_forbids_them`（`unshare -Ur sh -c 'echo 0 > /proc/sys/user/max_user_namespaces && exec …'` 包著啟動 Browser：畫得出、和 Browser 在同一個 namespace、stderr 說了一次）。`automation_pipe.rs` 的 `Browser` 多一種包著啟動的（`start_wrapped`）。
+- **找到的測試的洞**：第一版「這台允許嗎」是測試自己問 `namespaces()`，和 Browser 用的是同一段程式：`enter` 壞了的話兩邊都說不允許、renderer 安靜地走退路，測試照樣過。改成用 `unshare --user --net true` 獨立判斷，再確認兩者一致（下面的「no user namespace」「setgroups isn't given up」「the machine never allows them」就是靠它抓到的）。
+- **手動確認**：在一個不准再開 user namespace 的 namespace 裡跑整組 `renderer_sandbox::`（16 個，那時還沒有退路的測試），都通過。
+- **Mutation test**（`mutants-2.toml`，10 個，`--keep-going`）：全部抓到：沒有 network namespace、沒有 user namespace、不放棄 `setgroups`、在 namespace 裡是 root（exec 之後權限還在）、機器一律允許、一律不允許、child 沒有進去、Linux 的 renderer 不給、`--no-sandbox` 的也給、不說少了。檔案都還原了（`git status`，`target/mutate/originals/` 不在）。
+- **量的**：開 user 和 network namespace、寫對應，每次啟動多 0.48 ms（中位數，`details.md`）。
+- **跑過的檢查**：`cargo test -p shell -p ipc -p sunaba`（都通過）；量測工具的測試（`speedometer_test.py`、`blink_perf_test.py`、`raster_test.py`、`census_test.py`，都通過）；`sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs；第 2 段做完的 `cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace`（63 個 binary，4989 個通過，1 個 ignored，沒有失敗）。
+

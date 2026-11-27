@@ -77,26 +77,41 @@ impl Browser {
     /// With the system's fonts, not the built-in ones every other test
     /// here has: what is drawn is the machine's.
     pub(crate) fn start_with_system_fonts(args: &[&str]) -> Self {
-        Self::start_headless_or_not(true, false, args, &[], Stdio::null())
+        Self::start_headless_or_not(true, false, &[], args, &[], Stdio::null())
     }
 
     pub(crate) fn start_in(args: &[&str], env: &[(&str, &std::ffi::OsStr)], stderr: Stdio) -> Self {
-        Self::start_headless_or_not(true, true, args, env, stderr)
+        Self::start_headless_or_not(true, true, &[], args, env, stderr)
     }
 
     /// In the platform's window (no `--headless`).
     fn start_in_the_real_window() -> Self {
-        Self::start_headless_or_not(false, true, &[], &[], Stdio::null())
+        Self::start_headless_or_not(false, true, &[], &[], &[], Stdio::null())
+    }
+
+    /// [`Browser::start_logging`], machopo started by the program and
+    /// arguments `wrapper` (`machopo`'s path and arguments after them).
+    pub(crate) fn start_wrapped(wrapper: &[&str], args: &[&str], stderr: Stdio) -> Self {
+        Self::start_headless_or_not(true, true, wrapper, args, &[], stderr)
     }
 
     fn start_headless_or_not(
         headless: bool,
         test_fonts: bool,
+        wrapper: &[&str],
         args: &[&str],
         env: &[(&str, &std::ffi::OsStr)],
         stderr: Stdio,
     ) -> Self {
-        let mut command = Process::new(env!("CARGO_BIN_EXE_machopo"));
+        let machopo = env!("CARGO_BIN_EXE_machopo");
+        let mut command = match wrapper {
+            [] => Process::new(machopo),
+            [program, arguments @ ..] => {
+                let mut command = Process::new(program);
+                command.args(arguments).arg(machopo);
+                command
+            }
+        };
         command
             .arg("--remote-debugging-pipe")
             .args(test_fonts.then_some("--test-fonts"))

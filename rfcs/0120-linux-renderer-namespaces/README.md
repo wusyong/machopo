@@ -1,12 +1,12 @@
 # RFC 0120：Linux 的 renderer sandbox 的下一級：namespace 和 chroot
 
 - 開始日期：2026-11-27
-- 狀態：🚧 已排程：2026-11-27（第 1 段做完：Landlock 只剩時區的兩個路徑，只在要讀時放行；第 2 段：namespace；進度在 `progress.md`）
+- 狀態：🚧 已排程：2026-11-27（第 1、2 段做完：Landlock 只在要讀時放行時區的兩個路徑；renderer 在自己的 user 和 network namespace 裡；第 3 段：chroot；進度在 `progress.md`）
 - 細節：`details.md`
 
 ## 摘要
 
-Linux 的 renderer process 現在關在 Landlock（檔案照路徑唯讀，只放行四個）加 seccomp-bpf（system call 的白名單）裡。這份在上面再加三層，到 Chromium 的 Linux renderer 那一級：renderer 在自己的 user、PID 和 network namespace 裡（看不到、指不到外面的 process，沒有網路介面）；Landlock 一個路徑都不放（CPU 的數量、亂數、時區改成不用讀檔）；最後 chroot 到空的目錄（連路徑在不在都探不出來，`/proc` 整個看不到）。機器不允許沒有特權的 user namespace 時（Ubuntu 23.10 起預設不允許），退回現在的 Landlock 加 seccomp。三段做，每段可以先 merge。
+Linux 的 renderer process 現在關在 Landlock（檔案照路徑唯讀，只放行四個）加 seccomp-bpf（system call 的白名單）裡。這份在上面再加三層，接近 Chromium 的 Linux renderer 那一級：renderer 在自己的 user 和 network namespace 裡（沒有網路介面，chroot 的權限從這裡來；PID namespace 不做，第 6 條）；Landlock 一個路徑都不放（CPU 的數量、亂數、時區改成不用讀檔）；最後 chroot 到空的目錄（連路徑在不在都探不出來，`/proc` 整個看不到）。機器不允許沒有特權的 user namespace 時（Ubuntu 23.10 起預設不允許），退回現在的 Landlock 加 seccomp。三段做，每段可以先 merge。
 
 ## 動機
 
@@ -18,7 +18,7 @@ Linux 的 renderer process 現在關在 Landlock（檔案照路徑唯讀，只�
 
 **目標**：
 
-1. renderer 在自己的 PID 和 network namespace 裡：外面的 process 在它看來不存在，它沒有網路介面。這一層不靠 seccomp 的清單寫對。
+1. renderer 在自己的 user 和 network namespace 裡：它沒有網路介面，這一層不靠 seccomp 的清單寫對；user namespace 給第 3 段的 chroot 要的權限。原本也打算放進自己的 PID namespace（外面的 process 在它看來不存在），定了不做（第 6 條）。
 2. Landlock 一個路徑都不放：CPU 的數量、V8 的亂數、時區都不讀檔。
 3. chroot 到空的目錄：路徑在不在、檔案多大、`/proc` 都看不到。
 4. 網頁看到的不變（時區、`navigator.hardwareConcurrency`、文字、`Intl`），sandbox 裡外、thread 上的 renderer 都相同。
@@ -40,7 +40,6 @@ Linux 的 renderer process 現在關在 Landlock（檔案照路徑唯讀，只�
 
 給改 machopo 的人：
 
-- renderer 在 namespace 裡看到的自己的 pid 不是外面的（不是 1 就是 2）：要寫 pid 的地方（檔名、trace）用 Browser 告訴它的那一個。
 - renderer 在 chroot 之後打不開任何檔案：要讀的東西在進 sandbox 之前讀好，或由 Browser 給。panic 的 backtrace 解不出函式名（要讀執行檔），除錯時用 `--no-sandbox`。
 
 ## 詳細設計
@@ -55,26 +54,27 @@ Linux 的 renderer process 現在關在 Landlock（檔案照路徑唯讀，只�
 | U2 | 退回，什麼都不說 | 使用者不知道少了兩層 |
 | U3 | 不啟動 renderer，要 `--no-sandbox` | 和 Chromium 一樣，但 Ubuntu 的預設設定上 machopo 就不能用了，`--no-sandbox` 反而連 Landlock 和 seccomp 都沒有 |
 
-看法：**U1**。
+定了 **U1**（已決定的事項第 5 條）。
 
-### 誰建 namespace、誰是 PID 1
+### 哪幾種 namespace、誰建
 
-namespace 裡的 PID 1 對沒有 handler 的訊號有特別的待遇：量到它呼叫 `abort()` 時 `SIGABRT` 被忽略，glibc 退到別的方法，process 以 `SIGSEGV` 結束（`details.md`）。所以 renderer 不能是 PID 1，前面要有一個只負責收屍、照 renderer 的結果結束的 init。
+原本打算 user、PID、network 三種都要。PID namespace 要的東西比預期多：namespace 裡的 PID 1 對沒有 handler 的訊號有特別的待遇（量到它呼叫 `abort()` 時以 `SIGSEGV` 結束，`details.md`），renderer 不能直接是 PID 1，前面要有 init；外面要有一個 process 把結束的狀態原樣交回 Browser（量過，行得通）；renderer 在裡面的 pid 不是外面的，trace、census 的檔名和量測工具都要改，Browser 要另外知道它外面的 pid（量過 `SCM_CREDENTIALS` 行得通）。而它帶來的大多已經有了：碰不到別的 process 是 seccomp 擋的（只能對自己送訊號，`ptrace`、`process_vm_readv` 都擋），看不到別的 process 是 Landlock（`/proc` 底下開不了）和第 3 段的 chroot（`/proc` 整個看不到）；chroot 要的權限是 user namespace 給的，不用 PID namespace。
 
-| | 做法 | 好處 | 代價 |
-| --- | --- | --- | --- |
-| S1 | **Browser 啟動時就在新的 namespace 裡**：`ipc` 的 `spawn` 在 fork 之後、exec 之前（`pre_exec`）`unshare` user 和 network，寫好 uid、gid 的對應；renderer 的 `main` 一開始 `unshare` PID、fork 兩次：第一個 child 是 PID 1（init），它的 child 是 renderer（PID 2） | 改的地方集中在 `ipc` 和 `shell` 的啟動；`std::process::Command` 照用 | 一個 renderer 三個 process（外面那個等著、init、renderer）；init 也要進 sandbox |
-| S2 | Browser 用 `clone`（帶 namespace 的旗標）自己啟動 child，不經過 `std::process::Command`；child 是 PID 1、當 init，它 fork 出 renderer | 少一層 process | `clone` 之後到 exec 之前的那段要自己寫（多執行緒的 process 裡 fork 之後只能做 async-signal-safe 的事），是新的 `unsafe`；`ipc` 現在的 `spawn` 要改寫 |
-| S3 | renderer 自己在 `main` 一開始 `unshare` 全部、fork 出 init 和 renderer，Browser 不變 | Browser 和 `ipc` 都不改 | user namespace 要在多執行緒之前 `unshare`（renderer 在 `main` 一開始還是一條 thread，做得到）；三個 process 的結構同 S1 |
+| | 做法 | 一個分頁幾個 process | 好處 | 代價 |
+| --- | --- | --- | --- | --- |
+| K5 | **只要 user 和 network**：`ipc` 的 `spawn` 在 fork 之後、exec 之前（`pre_exec`，通道的設定也在這裡）`unshare` 這兩個、寫好 uid、gid 的對應；能不能用，Browser 在一個 child 裡試一次、記住（第 5 條） | 1 | process 和 pid 都和現在一樣，trace、census、工具不用改，不用知道外面的 pid；沒有 PID 1 的問題；renderer 沒有網路介面；chroot 做得成 | 沒有 PID namespace 這一層：「別的 process」只靠 seccomp（現在就是）；chroot 之前還看得到 pid 的清單（`/proc` 的目錄名） |
+| K3 | 三種都要，Browser 用帶旗標的 `clone` 啟動，renderer 是 PID 1、裝訊號的 handler | 1 | 有 PID namespace | `ipc` 要自己 `clone` 加 exec（新的 `unsafe`，在多執行緒的 Browser 裡）；PID 1、外面的 pid、檔名都要處理 |
+| K1 | 三種都要，renderer 在 `main` 一開始 fork 出進新 namespace 的 child，child 是 renderer、是 PID 1（裝 handler），原本的 process 在外面等 | 2 | 不改 Browser 和 `ipc` | renderer 的 `abort()` 被 handler 接走、沒有 core dump；V8、wasmtime 也裝訊號的 handler；外面的 pid、檔名 |
+| K2 | 同 K1，但 child 是 init（PID 1），init 再 fork 出 renderer（PID 2） | 3 | renderer 是普通的 process（量過：`nsinit.c`） | 10 個分頁 30 個 process；外面的 pid、檔名 |
 
-看法：先在第 2 段的探測比 S1 和 S3（差在 user 和 network namespace 由誰開），S2 只在前兩個做不到時考慮。對照 Chromium（照記憶，沒有對原始碼）：Browser 用 `clone` 帶 namespace 的旗標啟動 zygote，zygote 在 namespace 裡當 init，renderer 是它 fork 出來的。
+定了 **K5**（已決定的事項第 6 條）。對照 Chromium：三種都用，每個 renderer 是自己的 PID namespace 的 PID 1（裝 handler），zygote 是所有 renderer 的父 process，等、收屍、回報結束的狀態（`details.md` 的「Chromium 的 namespace sandbox」）；machopo 沒有 zygote，PID namespace 的那些事要由每個 renderer 自己扛。
 
-不管哪一個，都要做的：
+要做的：
 
-- **外面的 pid**：renderer 在 namespace 裡不知道外面看到的自己的 pid。Browser 照舊從啟動拿到 child 的 pid，但那是外面那一層的；renderer 的 pid 要另外知道（工具照它找 renderer、讀 `/proc/<pid>`）。候選：renderer 經過通道送一次 `SCM_CREDENTIALS`，kernel 把裡面的 pid 換成收的一方的 namespace 的（`details.md`）。
-- **trace 和 census 的檔名**：現在 renderer 用自己的 pid（`.<pid>`）命名，namespace 裡每個都是 2，會撞名。改成 Browser 給的名字或外面的 pid。
-- **seccomp 的「只能對自己送訊號」**：照 `std::process::id()` 算，要在進 PID namespace 之後算（量到在 namespace 裡算的和 kernel 看到的一致）。
-- **權限**：在 user namespace 裡 renderer 對它自己的 namespace 是 root，在跑任何網頁的程式之前全部丟掉，再裝 seccomp；seccomp 本來就擋 `unshare`、`setns`、`mount`、帶 namespace 旗標的 `clone`。
+- **在哪裡**：`ipc::platform::linux::channel::spawn` 的 `pre_exec`（fork 之後、exec 之前，只能做 async-signal-safe 的事：`unshare` 和寫 `/proc/self/uid_map` 這類 system call，不配置記憶體）；`unsafe` 在 `ipc`，照 `crates/ipc/soundness.md` 寫論證。要不要 namespace 由啟動的一方告訴 `spawn`（只有 renderer 要，machopodriver、測試的 child 不要）。
+- **權限**：uid 和 gid 在 namespace 裡對到自己（不是 0），renderer 在裡面是同一個使用者、不是 root，exec 時 kernel 照「不是 root、程式沒有自己的權限」重算，user namespace 給的權限全部沒了（量過：`CapPrm`、`CapEff` 都是 0）。第 3 段的 chroot 要權限時，在那一段定怎麼留。seccomp 本來就擋 `unshare`、`setns`、`mount`、建 socket。
+- **退路**：Browser 第一次啟動 renderer 之前在一個 fork 出來的 child 裡試一次（`unshare` 和寫對應都成功），記住結果；不行的話照現在的做法啟動，Browser 在 stderr 說一次（第 5 條）。
+- **機制在 `sunaba`**（`sunaba::linux::Namespaces`：`new` 在 fork 之前寫好對應，`enter` 在 child 裡做，`available` 試），`ipc` 的 Linux 上 `Sandbox` 就是它，`spawn_in` 在 `pre_exec` 裡呼叫 `enter`；`shell::renderer_sandbox::sandbox()` 在 Linux 上給它（`--no-sandbox` 時不給）。
 
 ### CPU 的數量、亂數、時區
 
@@ -102,35 +102,34 @@ GitHub 的 `ubuntu-24.04` runner（machopo 的 CI 都在上面）照 Ubuntu 的�
 | C2 | 給 machopo 的執行檔寫一份 AppArmor profile | 和 Ubuntu 給 Chrome 的一樣；但 CI 的執行檔在 `target/` 裡，路徑每次不同 |
 | C3 | 不處理，CI 只測退路 | namespace 的那條路只在開發機上測 |
 
-看法：**C1**，加上一個「退路」的測試在 CI 上用 `unshare` 失敗的情況跑（第 2 段定怎麼造）。
+定了 **C3**（已決定的事項第 7 條）：測試兩種設定都會過，不允許的 runner 上測的是退路。
 
 ### 測試
 
-- **renderer 真的在 namespace 裡**：從外面看真的 renderer process：`/proc/<pid>/ns/{user,pid,net}` 和 Browser 的不同，`/proc/<pid>/status` 的 `NSpid` 有兩層；probe 從裡面看：只看得到自己和 init，網路介面只有 loopback（`/proc/net` 讀不到，改用 system call）。
+- **renderer 真的在 namespace 裡**：從外面看真的 renderer process：`/proc/<pid>/ns/{user,net}` 和 Browser 的不同；probe 從裡面看：網路介面只有 loopback（`/proc/net` 讀不到，改用 system call），權限都丟掉了。
 - **chroot**：probe 從裡面 `stat("/")` 是空的目錄、`/proc` 不在；`docs/limitations.md` 的 (1) 那幾種探測都失敗。
 - **退路**：user namespace 開不了時 renderer 照舊啟動、在 Landlock 加 seccomp 裡、stderr 說了一次。
 - **網頁看到的不變**：現有的 sandbox 裡外和 thread 上的比較（時區、`Intl`、寬度）、`navigator.hardwareConcurrency`；用 `TZ` 和一般檔案的 `/etc/localtime` 各跑一次時區。
-- **crash**：`about:crash` 照舊是 `SIGABRT`、分頁顯示 sad tab（renderer 不是 PID 1）。
-- **工具**：trace、census 各自寫到自己的檔，`renderer_pids` 拿到的是外面的 pid，量測工具的測試（`CLAUDE.md`）。
-- mutation test：不開 namespace、不 chroot、不丟權限、seccomp 的「自己」照外面的 pid 算。
+- **crash**：`about:crash` 照舊是 `SIGABRT`、分頁顯示 sad tab。
+- **工具**：量測工具的測試（`CLAUDE.md`：改了 renderer 怎麼啟動）。
+- mutation test：不開 namespace、不寫對應、退路的判斷反了、不 chroot、不丟權限。
 
 ### 分階段
 
 0. 草稿和探測（做完；`details.md`）。
 1. **Landlock 拿掉四個路徑**（做完，2026-11-27；時區的兩個只在要讀時放行，第 4 條）：V8 的 entropy source；Browser 給 `TZ`；CPU 的數量讓它讀不到（先確認 CI 的 glibc）。和 namespace 無關，最小。
-2. **namespace**：user、PID、network；init；外面的 pid、trace 和 census 的檔名、seccomp 的「自己」；退路；CI。
+2. **namespace**（做完，2026-11-27）：user、network（第 6 條）；退路（第 5 條）；CI 先不處理（第 7 條）。
 3. **chroot**：要第 1、2 段（在 user namespace 裡才有 chroot 的權限，檔案都不用讀了才 chroot 得了）。
 
 每一段做完可以先 merge（`rfcs/README.md` 的「階段的 merge」）。
 
 ## 缺點
 
-- 啟動一個 renderer 多一兩個 process（init），多一次 `unshare` 和 fork；renderer 啟動多等一點（第 2 段量）。
-- 新的啟動程式是 machopo 自己的程式碼：丟權限的順序、init 的收屍、fork 之後只能做的事，寫錯了就是洞或 renderer 起不來。
-- pid 有兩個（裡面的、外面的），工具和 log 要分清楚；這類錯誤常常是量測工具安靜地量錯。
+- 啟動一個 renderer 多一次 `unshare` 和寫對應：約 0.5 ms（量的：`unshare --user --net` 加上去的中位數，`details.md`）；Browser 第一次啟動 renderer 時多一次 fork 試。
+- 新的啟動程式是 machopo 自己的程式碼：丟權限的順序、fork 之後只能做的事，寫錯了就是洞或 renderer 起不來。
 - chroot 之後 panic 的 backtrace 解不出函式名。
 - Ubuntu 的預設設定上收不到這兩層的好處（U1），兩種設定都要測。
-- 收益是多一層：namespace 擋的「別的 process」「網路」seccomp 已經擋；只有 chroot 擋住現在擋不住的（路徑在不在、`/proc`）。
+- 收益是多一層：network namespace 擋的「網路」seccomp 已經擋；只有 chroot 擋住現在擋不住的（路徑在不在、`/proc`）。沒有 PID namespace，「別的 process」還是只有 seccomp 一層（第 6 條）。
 
 ## 理由和其他做法
 
@@ -141,24 +140,29 @@ GitHub 的 `ubuntu-24.04` runner（machopo 的 CI 都在上面）照 Ubuntu 的�
 
 ## 先例
 
-- **Chromium**（照記憶，第 2 段開始前對原始碼）：Linux 的 renderer 在 user、PID、network namespace 裡、chroot 到空的目錄、丟掉權限，再加 seccomp-bpf；namespace 不能用時改用 setuid 的 helper（`chrome-sandbox`），兩個都不行時不啟動。時區由 sandbox 外面的 process 算（renderer sandbox 那份 RFC 的 `details.md`：「only the out-of-process localtime implementation uses the Sandbox IPC」）。
+- **Chromium**（2026-11-27 對過原始碼，`details.md` 的「Chromium 的 namespace sandbox」）：Linux 的 renderer 在 user、PID、network namespace 裡（每個 renderer 是自己的 PID namespace 的 PID 1，zygote 是它們的父 process）、chroot 到空的目錄、丟掉權限，再加 seccomp-bpf；要求 namespace 但開不了時 `CHECK` 失敗；改用 setuid 的 helper（`chrome-sandbox`）是在啟動的地方決定的（沒讀到）。時區由 sandbox 外面的 process 算（renderer sandbox 那份 RFC 的 `details.md`：「only the out-of-process localtime implementation uses the Sandbox IPC」）。
 - **Firefox**：Linux 的 content process 也用 user namespace 和 chroot（照記憶，沒查）。
 - **Ubuntu**：23.10 起用 AppArmor 限制沒有特權的 user namespace，給 Chrome、Firefox 的預設安裝路徑另外寫了 profile 放行（`details.md`）。
 
 ## 已決定的事項
 
-1. **分段照前提的順序：四個路徑、namespace、chroot（O1）**（2026-11-27，使用者決定）：第 1 段讓 Landlock 一個路徑都不放，第 2 段 user、PID、network namespace，第 3 段 chroot。理由：第 1 段小、風險低、和 namespace 無關，也修一件本來就該做的事（V8 的亂數不再靠 `/dev/urandom`，讀不到時不退到用時間當種子）；第 2 段要的探測（Chromium 的原始碼、CI 的設定、外面的 pid 怎麼知道）可以在第 1 段的期間做。代價：第 1 段在安全上幾乎沒有直接的收益，它是 chroot 的前提。不選 namespace 先（O2：收益比較大的那一層先到，但最難、要改啟動流程的那一段最先做，它的探測還沒做完）。
+1. **分段照前提的順序：四個路徑、namespace、chroot（O1）**（2026-11-27，使用者決定）：第 1 段讓 Landlock 一個路徑都不放，第 2 段 namespace（後來定了只要 user 和 network，第 6 條），第 3 段 chroot。理由：第 1 段小、風險低、和 namespace 無關，也修一件本來就該做的事（V8 的亂數不再靠 `/dev/urandom`，讀不到時不退到用時間當種子）；第 2 段要的探測（Chromium 的原始碼、CI 的設定、外面的 pid 怎麼知道）可以在第 1 段的期間做。代價：第 1 段在安全上幾乎沒有直接的收益，它是 chroot 的前提。不選 namespace 先（O2：收益比較大的那一層先到，但最難、要改啟動流程的那一段最先做，它的探測還沒做完）。
 2. **CPU 的數量：讓它讀不到（P1）**（2026-11-27，使用者決定）：policy 拿掉 `/sys/devices/system/cpu/online`，glibc 的 `get_nprocs` 讀不到時退回 `sched_getaffinity`（這個 process 能用的 CPU）。理由：glibc 2.44 上平常數字相同，process 被限制在部分 CPU 上時更準；Chromium 一樣：它的 renderer 的 seccomp 對檔案系統的 system call 一律回錯誤，`base::SysInfo::NumberOfProcessors()` 用 `sched_getaffinity` 數（`details.md` 的「Chromium 的 CPU 的數量」）。第 1 段開始時先在 CI 的 glibc（2.39）上確認退路一樣；不一樣的話再加「V8 的 worker 數由 machopo 用 `available_parallelism` 給」（P2）。不選照舊放行（P3：第 3 段的 chroot 之後這個檔案也不在了）。
 3. **V8 的亂數種子：三個平台都裝 entropy source，用 `getrandom`（R1）**（2026-11-27，使用者決定）：`bindings` 初始化 V8 時呼叫 rusty_v8 的 `V8::set_entropy_source`，用 `getrandom` 這個 crate 填（`crypto.getRandomValues()` 用的同一個來源；Linux 上是 `getrandom(2)`，在 seccomp 的清單上）；它失敗時回 `false`，V8 照它自己的做法。policy 拿掉 `/dev/urandom`。理由：V8 不再自己讀 `/dev/urandom`，讀不到時也不退到用時間當種子；三個平台同一條路；和 Chromium 一樣：`gin/v8_initializer.cc` 在所有平台上裝 `GenerateEntropy`，用 `base::RandBytes`（Linux 上是 BoringSSL 的 `RAND_bytes`；`details.md` 的「Chromium 的 V8 的亂數」）。不選只在 Linux 上裝（R2：多一條平台分支）。不選固定的 `--random-seed`（R3：每個 renderer 的亂數一樣，`Math.random()` 猜得到）。
 4. **時區：使用者沒設 `TZ` 時，Browser 照 `/etc/localtime` 的連結解出 IANA 的名字、設成 renderer 的 `TZ`；解不出來的那個 renderer 照舊放行時區的兩個路徑（T1）**（2026-11-27，使用者決定）：名字取連結目標裡 `zoneinfo/` 之後的部分（`../usr/share/zoneinfo/Asia/Tokyo` 是 `Asia/Tokyo`）；`/etc/localtime` 是一般檔案（有些容器）時解不出來。理由：ICU 拿到 `TZ` 就用它內建的時區資料、不讀檔（`details.md` 的「時區不讀檔」）；大多數機器上 Landlock 一個路徑都不放，解不出來的機器時區也不會錯；改得少。代價：解不出來的機器少這一點收益，第 3 段的 chroot 時要再處理；執行期間改了時區，開著的 renderer 不跟著變（和現在一樣）。不選 Browser 照 ICU 的方法比對檔案的內容（T2：所有機器都不放，但要在 Browser 裡重寫 ICU 的那段、結果要和 ICU 一致）。不選照 Chromium 經過訊息給、renderer 設 ICU 的預設時區（T3：之後能做到時區改了跟著變，但 `bindings` 要能設 ICU 的時區，可能要改 rusty_v8 的 C++、重編 V8；「之後的可能」）。Chromium 的做法在 `details.md` 的「Chromium 的時區」。實作時查到、照這條的原則補上的（2026-11-27）：時區的兩個路徑放不放行由 renderer 照它的 `TZ` 決定，照 ICU 自己的規則：ICU 不收的 `TZ`（`putil.cpp` 的 `isValidOlsonID`：帶數字的大多不收，例如 `AST4ADT`）它會改去讀 `/etc/localtime`，所以放行；ICU 收下的名字是三或四個字（`CET`、`EST`）時，它會拿 glibc 的時差比對（`TimeZone::detectHostTimeZone`），glibc 的時差要讀 zoneinfo 裡那個檔案，讀不到時是 0，`CET` 就安靜地變成沒有時差、沒有夏令時間的時區，所以也放行（`details.md` 的「時區不讀檔」）。
+5. **不能用沒有特權的 user namespace 時，退回現在的 Landlock 加 seccomp，Browser 說一次（U1）**（2026-11-27，第 2 段開始時，使用者決定）：能不能用在一個 child 裡試、確認新的 namespace 裡權限都在（Ubuntu 的限制下 `unshare` 會成功、但沒有權限），不行的話那個 child 結束，原本的 process 沒碰過 namespace，照現在的做法繼續。Browser 第一次遇到不行的時在 stderr 說一次為什麼、怎麼打開（Ubuntu 的 `sysctl` 或 AppArmor 的 profile）。原本寫的是由 renderer 在第一則訊息裡說它有沒有進 namespace；做的時候發現試的就是 Browser 自己（第 6 條：namespace 由 Browser 啟動時給），它本來就知道，renderer 不用多一個欄位（2026-11-27）。理由：不會比現在差，Ubuntu 的預設設定上照樣能用，使用者知道少了這兩層；只說一次。Chromium 也是先在 child 裡試（`CanCreateProcessInNewUserNS`）。代價：兩種設定都要測。不選什麼都不說（U2）。不選不啟動、要 `--no-sandbox`（U3：和 Chromium 一樣，但 Ubuntu 的預設設定上就不能用了，使用者加了 `--no-sandbox` 反而連 Landlock 和 seccomp 都沒有）。
+6. **只要 user 和 network namespace，不要 PID namespace；Browser 啟動 renderer 時在 `pre_exec` 裡 `unshare`（K5）**（2026-11-27，第 2 段，使用者決定）：一個分頁照舊一個 process，pid 不變。理由：PID namespace 帶來的大多已經有了（碰不到別的 process 是 seccomp，看不到是 Landlock 和第 3 段的 chroot），chroot 要的權限是 user namespace 給的；而它要的東西比預期多：init（renderer 是 PID 1 時 `abort()` 變成 `SIGSEGV`，量過）、外面等著交回結束狀態的 process、trace 和 census 的檔名、量測工具、Browser 另外知道 renderer 外面的 pid；使用者看到 10 個分頁會是 30 個 process（K2）。代價：沒有 PID namespace 這一層，「別的 process」只靠 seccomp（現在就是這樣），chroot 之前 renderer 看得到 pid 的清單；和 Chromium 不同（它三種都用，靠 zygote 吸收那些事）。不選三種都要、Browser 用 `clone` 啟動、renderer 是 PID 1（K3：process 不多，但要自己 `clone` 加 exec、處理 PID 1）。不選 renderer 自己 fork 出 PID 1 的 renderer（K1：兩個 process，`abort()` 被 handler 接走）。不選再加一層 init（K2：量過行得通，但一個分頁三個 process）。PID namespace 留在「之後的可能」。
+7. **CI 先不處理（C3）**（2026-11-27，第 2 段，使用者決定）：CI 的 `ubuntu-24.04` runner 照 Ubuntu 的預設多半不允許沒有特權的 user namespace，renderer 在那裡會走退路（第 5 條）。測試照 Browser 試出來的結果檢查（有 namespace 的檢查它在 namespace 裡、沒有的檢查它照現在的做法），兩種設定都會過；namespace 的那條路在不允許的 runner 上只在開發機上測，記在 `docs/test-gaps.md`。理由：使用者決定先不煩惱 CI。不選 CI 跑測試前用 `sysctl` 打開、再在限制下多跑一次 sandbox 的測試（C1：兩條路都在 CI 上測到，要改 workflow）。不選給執行檔寫 AppArmor 的 profile（C2：CI 的執行檔路徑不固定，要 root）。
 
 ## 待決定
 
 第 1 段之前要定的都定了（第 1 到 4 條）。
 
-第 2 段開始時定的：不能用 user namespace 時怎麼辦（U1 到 U3）、誰建 namespace 和 init（S1 到 S3）、外面的 pid 怎麼知道、CI（C1 到 C3）。第 3 段開始時定的：chroot 到哪裡；`/etc/localtime` 是一般檔案的機器怎麼辦（第 4 條留下的）。
+第 2 段要定的都定了（第 5 到 7 條；外面的 pid 跟著第 6 條不用問了）。第 3 段開始時定的：chroot 到哪裡；`/etc/localtime` 是一般檔案的機器怎麼辦（第 4 條留下的）。
 
 ## 之後的可能
+
+- PID namespace（第 6 條不做的）：照 Chromium，每個 renderer 是自己的 PID namespace 的 PID 1（裝訊號的 handler），或加一層 init；要處理外面的 pid（`SCM_CREDENTIALS` 量過行得通）、trace 和 census 的檔名、結束狀態的交回（`details.md` 的「第 2 段的探測」）。
 
 - seccomp 的清單再收：namespace 和 chroot 之後，有些 system call（`openat`、`statx`、`readlinkat`、`getdents64`）只剩函式庫自己的退路在用，可以改成讓它失敗。
 - 時區在執行期間改了時 Browser 通知 renderer（現在 renderer 啟動時決定一次）：照 Chromium，Browser 把時區的名字經過訊息給、renderer 設 ICU 的預設時區、通知 V8（第 4 條不選的 T3），三個平台一起做。

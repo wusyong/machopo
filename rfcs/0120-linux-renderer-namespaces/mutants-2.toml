@@ -1,0 +1,72 @@
+# Stage 2's mutants (Linux: a renderer process is started in user and network namespaces of its own, where the machine allows them): `python3 scripts/test.py mutate rfcs/0120-linux-renderer-namespaces/mutants-2.toml`, on Linux, where unprivileged user namespaces are allowed.
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "renderer_sandbox::", "renderer_process::"]
+timeout = 900
+
+[[mutant]]
+name = "no network namespace"
+file = "crates/sunaba/src/linux/namespaces.rs"
+from = '''        if unsafe { libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWNET) } != 0 {'''
+to = '''        if unsafe { libc::unshare(libc::CLONE_NEWUSER) } != 0 {'''
+
+[[mutant]]
+name = "no user namespace"
+file = "crates/sunaba/src/linux/namespaces.rs"
+from = '''        if unsafe { libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWNET) } != 0 {'''
+to = '''        if unsafe { libc::unshare(libc::CLONE_NEWNET) } != 0 {'''
+
+[[mutant]]
+name = "setgroups isn't given up"
+file = "crates/sunaba/src/linux/namespaces.rs"
+from = '''        write_all(c"/proc/self/setgroups", b"deny")?;'''
+to = ''''''
+
+[[mutant]]
+name = "the child is root in its namespace (and keeps its capabilities through the exec)"
+file = "crates/sunaba/src/linux/namespaces.rs"
+from = '''            uid_map: format!("{uid} {uid} 1\n").into_bytes(),'''
+to = '''            uid_map: format!("0 {uid} 1\n").into_bytes(),'''
+
+[[mutant]]
+name = "the machine always allows them"
+file = "crates/sunaba/src/linux/namespaces.rs"
+from = '''        libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0'''
+to = '''        true'''
+
+[[mutant]]
+name = "the machine never allows them"
+file = "crates/sunaba/src/linux/namespaces.rs"
+from = '''            let code = if self.enter().is_ok() { 0 } else { 1 };'''
+to = '''            let code = 1;'''
+
+[[mutant]]
+name = "the child isn't moved into them"
+file = "crates/ipc/src/platform/mod.rs"
+from = '''            std::os::unix::process::CommandExt::pre_exec(command, move || namespaces.enter());'''
+to = '''            std::os::unix::process::CommandExt::pre_exec(command, move || { let _ = &namespaces; Ok(()) });'''
+
+[[mutant]]
+name = "Linux's renderers aren't given them"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''        linux::namespaces().cloned()'''
+to = '''        linux::namespaces().cloned().and(None)'''
+
+[[mutant]]
+name = "a renderer out of its sandbox is given them"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''pub fn sandbox() -> Option<ipc::platform::Sandbox> {
+    if disabled() {
+        return None;
+    }'''
+to = '''pub fn sandbox() -> Option<ipc::platform::Sandbox> {
+    #[cfg(windows)]
+    if disabled() {
+        return None;
+    }'''
+
+[[mutant]]
+name = "the browser doesn't say they are missing"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''                eprintln!(
+                    "machopo: renderers are sandboxed without user and network namespaces of \'''
+to = '''                let _ = format!(
+                    "machopo: renderers are sandboxed without user and network namespaces of \'''

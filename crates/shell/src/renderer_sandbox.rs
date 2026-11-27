@@ -61,13 +61,20 @@ pub fn allow_third_party_modules() {
     THIRD_PARTY_MODULES.store(true, Ordering::Relaxed);
 }
 
-/// What a renderer process is started in, where its sandbox is its
-/// starter's to give (Windows): an app container of its own, by a name
-/// no other process of this browser's is given. `None` where a renderer
-/// enters its own, or the browser was told `--no-sandbox`.
+/// What a renderer process is started in, where some of its sandbox is
+/// its starter's to give: on Windows an app container of its own, by a
+/// name no other process of this browser's is given; on Linux user and
+/// network namespaces of its own, where this machine lets a process that
+/// isn't privileged make them (else it is started as it was before,
+/// which is said once). `None` where a renderer enters its own, or the
+/// browser was told `--no-sandbox`.
 pub fn sandbox() -> Option<ipc::platform::Sandbox> {
     if disabled() {
         return None;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux::namespaces().cloned()
     }
     #[cfg(windows)]
     {
@@ -80,7 +87,7 @@ pub fn sandbox() -> Option<ipc::platform::Sandbox> {
         }
         Some(policy)
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "linux")))]
     None
 }
 
@@ -549,6 +556,31 @@ pub mod linux {
 
     fn int(value: libc::c_int) -> u64 {
         u64::from(value.unsigned_abs())
+    }
+
+    /// The namespaces each renderer process is started in, where this
+    /// machine allows them: tried once for the browser, in a child of its
+    /// own. Where it doesn't, the renderer goes without (Landlock and
+    /// seccomp alone, as before), and the browser says so once, with how
+    /// to allow them.
+    pub fn namespaces() -> Option<&'static sunaba::linux::Namespaces> {
+        static NAMESPACES: std::sync::OnceLock<Option<sunaba::linux::Namespaces>> =
+            std::sync::OnceLock::new();
+        NAMESPACES
+            .get_or_init(|| {
+                let namespaces = sunaba::linux::Namespaces::new();
+                if namespaces.available() {
+                    return Some(namespaces);
+                }
+                eprintln!(
+                    "machopo: renderers are sandboxed without user and network namespaces of \
+                     their own: this machine doesn't let a program that isn't privileged make \
+                     them (on Ubuntu, `sysctl kernel.apparmor_restrict_unprivileged_userns=0`, \
+                     or an AppArmor profile for machopo that allows `userns`, does)"
+                );
+                None
+            })
+            .as_ref()
     }
 
     /// Where the system says its time zone is: a link into the zone files

@@ -1,12 +1,14 @@
 //! Linux: Landlock decides which files can be opened, seccomp-bpf which
 //! system calls can be made (Chromium's `sandbox/linux`, which builds
-//! namespaces where this uses Landlock).
+//! namespaces and a chroot where this uses Landlock); a child may be
+//! started in user and network namespaces of its own ([`Namespaces`]).
 //!
 //! [`enter`] is for the start of `main`, while the process is one thread:
 //! both restrictions are the calling thread's and what it makes later, so
 //! a thread already running would stay outside.
 
 mod names;
+mod namespaces;
 pub mod probe;
 mod sigsys;
 
@@ -24,6 +26,7 @@ use seccompiler::{
 };
 
 pub use names::name;
+pub use namespaces::Namespaces;
 
 /// What a process may still ask of the kernel once it has entered:
 /// the paths it can read, and each system call it can make. A system call

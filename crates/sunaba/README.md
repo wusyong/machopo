@@ -53,6 +53,12 @@ The file system calls (`openat`, `unlinkat`…) are for the policy to allow: Lan
 - **For good.** Nothing takes a restriction off; a policy is everything the process will ever need.
 - **An error means end the process.** `Error::Seccomp` can come after the files were restricted.
 
+### Namespaces of a child's own
+
+A process may also be started in user and network namespaces of its own, by whoever starts it: `Namespaces::new()` before the fork (it writes the maps then, so that nothing is allocated after), `namespaces.enter()` in the child between the fork and the exec (`CommandExt::pre_exec`). The child has no network interface but loopback. Its user and group ids map to themselves, so it is the same user inside, not root, and the exec takes every capability the new user namespace gave it.
+
+Not every machine allows a program that isn't privileged to make them: a kernel may be built or set without them, and Ubuntu (since 23.10) lets only the programs its AppArmor profiles name. `namespaces.available()` tries in a child of its own, which ends at once, and says whether a child started with them would start. A starter that is told no goes without them: the process's own `enter` restricts it all the same.
+
 ### What the kernel has to have
 
 Landlock (Linux 5.13, built with `CONFIG_SECURITY_LANDLOCK` and named in the boot's `lsm=`) and seccomp filters. Without Landlock `enter` returns `Error::NoLandlock` and restricts nothing: there is no weaker sandbox to fall back to. A newer kernel's Landlock also refuses TCP's `bind` and `connect`, abstract Unix sockets and signals to other processes; these are asked for and taken where they are, and a policy's seccomp list is what refuses them everywhere.

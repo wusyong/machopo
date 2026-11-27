@@ -556,3 +556,140 @@ fn a_short_zone_name_is_the_zone_in_a_renderer_process_too() {
     );
     assert_eq!(seen(&["--process-per-tab"]), on_a_thread);
 }
+
+/// Which namespace of `kind` process `pid` is in (`/proc/<pid>/ns/<kind>`,
+/// `user:[4026531837]`).
+fn namespace_of(pid: &str, kind: &str) -> String {
+    let link = std::fs::read_link(format!("/proc/{pid}/ns/{kind}")).expect("its namespace");
+    link.to_string_lossy().into_owned()
+}
+
+/// A renderer process in its sandbox is in user and network namespaces of
+/// its own, where this machine allows them: its only network interface is
+/// loopback, and it has no capability in them; it is the same user. Where
+/// the machine doesn't, it is in this process's, as before. Out of its
+/// sandbox (`--no-sandbox`), in this process's either way.
+#[test]
+fn a_renderer_process_has_namespaces_of_its_own_where_the_machine_allows() {
+    // Asked of another program, not of machopo's own way of trying: one
+    // that fails would have the renderers go without, unseen.
+    let allowed = Command::new("unshare")
+        .args(["--user", "--net", "true"])
+        .status()
+        .is_ok_and(|status| status.success());
+    assert_eq!(
+        shell::renderer_sandbox::linux::namespaces().is_some(),
+        allowed
+    );
+    let ours = |kind| namespace_of("self", kind);
+    for (args, own) in [
+        (&["--process-per-tab"][..], allowed),
+        (&["--process-per-tab", "--no-sandbox"][..], false),
+    ] {
+        let mut browser = Browser::start_in(args, &[], std::process::Stdio::null());
+        let session = browser.attach();
+        browser.navigate(&session, "about:blank");
+        let pids = renderer_pids(&mut browser);
+        assert_eq!(pids.len(), 1, "{args:?}: {pids:?}");
+        let pid = pids[0].to_string();
+        for kind in ["user", "net"] {
+            assert_eq!(
+                namespace_of(&pid, kind) != ours(kind),
+                own,
+                "{args:?}: {kind}"
+            );
+        }
+        // Namespaces it isn't given are this process's.
+        for kind in ["pid", "mnt"] {
+            assert_eq!(namespace_of(&pid, kind), ours(kind), "{args:?}: {kind}");
+        }
+        let status = std::fs::read_to_string(format!("/proc/{pid}/status")).unwrap();
+        let field = |name: &str| {
+            status
+                .lines()
+                .find_map(|line| line.strip_prefix(name)?.strip_prefix(':'))
+                .map(str::trim)
+                .unwrap_or_else(|| panic!("no {name}"))
+                .to_owned()
+        };
+        // The same user (as this process sees it).
+        let our_status = std::fs::read_to_string("/proc/self/status").unwrap();
+        let our_uid = our_status
+            .lines()
+            .find_map(|line| line.strip_prefix("Uid:"))
+            .unwrap()
+            .trim()
+            .to_owned();
+        assert_eq!(field("Uid"), our_uid, "{args:?}");
+        if own {
+            for capabilities in ["CapPrm", "CapEff", "CapInh", "CapAmb"] {
+                assert_eq!(field(capabilities), "0000000000000000", "{capabilities}");
+            }
+            let interfaces: Vec<String> = std::fs::read_to_string(format!("/proc/{pid}/net/dev"))
+                .unwrap()
+                .lines()
+                .skip(2)
+                .filter_map(|line| Some(line.split_once(':')?.0.trim().to_owned()))
+                .collect();
+            assert_eq!(interfaces, ["lo"], "{args:?}");
+        }
+    }
+}
+
+/// Where the machine lets no program make user namespaces, a renderer
+/// process goes without (in its browser's, as before) and shows its page,
+/// and the browser says why once. Made here by a user namespace of the
+/// test's own whose processes may make none (where the machine allows
+/// one at all; where it doesn't, every other test here is this one).
+#[test]
+fn a_renderer_process_goes_without_namespaces_where_the_machine_forbids_them() {
+    let made = Command::new("unshare")
+        .args(["--user", "--map-root-user", "true"])
+        .status()
+        .is_ok_and(|status| status.success());
+    if !made {
+        return;
+    }
+    let forbidding = [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "sh",
+        "-c",
+        "echo 0 > /proc/sys/user/max_user_namespaces && exec \"$@\"",
+        "sh",
+    ];
+    let log = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("renderer-without-namespaces.log");
+    let mut browser = Browser::start_wrapped(
+        &forbidding,
+        &["--process-per-tab"],
+        std::process::Stdio::from(std::fs::File::create(&log).unwrap()),
+    );
+    let session = browser.attach();
+    browser.navigate(&session, "data:text/html,<span id=s>mmm</span>");
+    let width = script(
+        &mut browser,
+        &session,
+        "return s.offsetWidth",
+        serde_json::json!([]),
+    )
+    .unwrap();
+    assert!(width.as_f64().unwrap() > 0.0, "{width}");
+    let pids = renderer_pids(&mut browser);
+    assert_eq!(pids.len(), 1, "{pids:?}");
+    let (renderer, machopo) = (pids[0].to_string(), browser.child.id().to_string());
+    for kind in ["user", "net"] {
+        assert_eq!(
+            namespace_of(&renderer, kind),
+            namespace_of(&machopo, kind),
+            "{kind}"
+        );
+    }
+    drop(browser);
+    let said = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(
+        said.matches("without user and network namespaces").count(),
+        1,
+        "{said}"
+    );
+}

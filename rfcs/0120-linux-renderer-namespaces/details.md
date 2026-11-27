@@ -99,6 +99,34 @@ glibc 2.44 讀不到時退回 `sched_getaffinity`：平常相同，process 被�
 - `third_party/blink/renderer/core/timezone/timezone_controller.cc`：renderer 經過 mojo 的 `TimeZoneMonitor` 登記自己（`AddClient`），收到 `OnTimeZoneChange(timezone_id)` 時 `icu::TimeZone::createTimeZone`、`adoptDefault`，再 `isolate->DateTimeConfigurationChangeNotification()`，也通知 worker、發 `timezonechange` 事件。renderer 一開始的時區是它自己在 constructor 裡 `createDefault()` 的（`kLazyBlinkTimezoneInit` 預設關著）。
 - 沒讀的：那個 `createDefault()` 是不是在 renderer 進 sandbox 之前（renderer 是從 zygote fork 的，zygote 進 sandbox 之前初始化了 ICU，可能直接繼承）；`AddClient` 時會不會先送一次目前的時區。
 
+## 第 2 段的探測
+
+### 自己開 namespace、init、外面的 pid、crash 的狀態（量的）
+
+2026-11-27，同一台。`nsinit.c`（這個資料夾）：一個 process（Browser）fork 出 child（Browser 啟動的 renderer process）；child 在只有一條 thread 時 `unshare(CLONE_NEWUSER | CLONE_NEWNET | CLONE_NEWPID)`，拒絕 `setgroups`、寫 `uid_map`、`gid_map`（自己的 uid、gid 對到 0），fork 出 init（新的 PID namespace 的 PID 1），init 再 fork 出「renderer」；renderer 經過 Browser 給的 socket pair 送一次 `SCM_CREDENTIALS`（寫的是自己在 namespace 裡的 pid）。init 等 renderer，把它的結束編成 exit code（訊號是 128 加訊號），child 等 init，是訊號的話用同一個訊號結束自己（child 不在新的 PID namespace 裡，不是 PID 1，訊號照常有作用）。
+
+- 沒有特權也做得到，renderer 在裡面是 PID 2。
+- Browser 那一端設了 `SO_PASSCRED`，收到的 `SCM_CREDENTIALS` 的 pid 是 kernel 換成 Browser 的 namespace 的（例如 3582438）；`/proc/3582438/status` 的 `NSpid` 是 `3582438	2`。
+- renderer `_exit(7)`：Browser 看到 child 以 7 結束；renderer `abort()`：Browser 看到 child 被訊號 6（`SIGABRT`）結束，和現在 renderer 直接是 Browser 的 child 時一樣。
+- 沒試的：Landlock 和 seccomp 接在這之後（第 0 步用 `unshare -Urpn` 試過，裝得上）；丟掉權限；Browser 從 child 的 pid 找 renderer 的 pid 的其他方法（`/proc/<pid>/task/<pid>/children`）。
+
+### 多花的時間（量的）
+
+2026-11-27，同一台：Python 啟動 200 次取中位數：`/usr/bin/true` 0.30 ms，`unshare /usr/bin/true`（不開 namespace）0.61 ms，`unshare --user --net --map-current-user /usr/bin/true` 1.08 ms：開 user 和 network namespace、寫對應多 0.48 ms。
+
+### 不允許 user namespace 的情況（造出來的）
+
+一個 user namespace 裡把 `/proc/sys/user/max_user_namespaces` 寫成 0，裡面的 process 再開 user namespace 就失敗（`ENOSPC`）：`unshare -Ur sh -c 'echo 0 > /proc/sys/user/max_user_namespaces && unshare -U true'`。在這裡面跑 `renderer_sandbox::` 的測試，走的是退路，都通過；`a_renderer_process_goes_without_namespaces_where_the_machine_forbids_them` 照這個方法自己造（外面允許 user namespace 時）。
+
+### Chromium 的 namespace sandbox
+
+2026-11-27 讀的（`main`）：
+
+- `sandbox/linux/services/namespace_sandbox.cc`：預設的 namespace 是 `CLONE_NEWUSER | CLONE_NEWPID | CLONE_NEWNET`，user namespace 是必要的（`CHECK`）；clone 在 `base::LaunchProcess` 裡做（`launch_options.clone_flags`）；uid、gid 的對應在 exec 之前的 delegate 裡寫（先拒絕 `setgroups`）。`ForkInNewPidNamespace` 用 `CLONE_NEWPID` fork，child 是 PID 1。`InstallDefaultTerminationSignalHandlers` 給 `SIGHUP`、`SIGINT`、`SIGABRT`、`SIGQUIT`、`SIGPIPE`、`SIGTERM`、`SIGUSR1`、`SIGUSR2` 裝 handler，收到時 `_exit` 一個代表那個訊號的 exit code。
+- `content/zygote/zygote_linux.cc`：有 PID 和 user namespace 時，每個 renderer 用 `ForkInNewPidNamespace` fork，各自是自己的 PID namespace 的 PID 1，裝上面那些 handler（註解：「If the process is the init process inside a PID namespace, it must have explicit signal handlers」）。renderer 對「PID oracle」的 socket ping 一次，讓 Browser 找到它真的 pid（Browser 那一側沒讀）。zygote 收屍（`waitpid`，2 秒後 `SIGKILL`），把結束的狀態和 exit code 回報給 Browser，Browser 照 exit code 換回「被殺掉」。zygote 自己是 zygote 的 PID namespace 的 PID 1。
+- `sandbox/linux/services/credentials.cc`：`MoveToNewUserNS` 是在呼叫的 process 裡 `unshare(CLONE_NEWUSER)`、寫對應；`ChrootToSafeEmptyDir`：一個共用檔案系統資訊（`CLONE_FS`）的 child chroot 到自己的 `/proc/self/fdinfo/` 再結束，那個目錄跟著消失，裡面沒有子目錄、出不去；之後確認 `/proc` 看不到了、沒有開著的目錄。`DropAllCapabilities` 要只有一條 thread。
+- `sandbox/policy/linux/sandbox_linux.cc` 的 `InitializeSandbox`：只有一條 thread 的檢查、先開好 `/proc`，namespace 的那一套（user namespace、chroot、丟掉權限；zygote 留 `CAP_SYS_ADMIN`）、限制記憶體（`RLIMIT_DATA`）、seccomp-bpf，照這個順序。要求 namespace 但做不到時 `CHECK` 失敗；退到 setuid 的 helper 是在啟動的地方決定的，沒讀到。
+
 ## Ubuntu 和 CI
 
 2026-11-27 搜尋的：
