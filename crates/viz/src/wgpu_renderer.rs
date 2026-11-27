@@ -2426,10 +2426,10 @@ mod drawing_tests {
         assert!(!context.is_lost());
     }
 
-    /// A frame wgpu reports an error of (here pixels shorter than their
-    /// resource's size, which Viz's checks would have stopped: the frame
-    /// goes to the renderer around them) isn't presented, nor copied, and
-    /// the frame after is drawn as usual.
+    /// A frame wgpu reports an error of (here a resource wider than any
+    /// texture the device makes, which the IO thread's checks would have
+    /// stopped: the frame goes to the renderer around them) isn't
+    /// presented, nor copied, and the frame after is drawn as usual.
     #[test]
     fn a_frame_wgpu_reports_an_error_of_isnt_copied_and_the_next_is_drawn() {
         let _gpu = gpu();
@@ -2437,11 +2437,15 @@ mod drawing_tests {
         let size = Size::new(2, 2);
         let mut renderer =
             WgpuRenderer::offscreen(size, GpuSharedImages::new()).expect("an adapter");
+        let wide_size = Size::new(
+            renderer.context.device.limits().max_texture_dimension_2d + 1,
+            1,
+        );
         let short = TransferableResource {
             id: ResourceId(1),
-            size,
+            size: wide_size,
             format: ResourceFormat::Rgba8Premul,
-            pixels: protocol::BigBuffer::from([255, 0, 0, 255]),
+            pixels: protocol::BigBuffer::from(vec![255; wide_size.checked_byte_size().unwrap()]),
             shared_image: None,
         };
         fn aggregated<'a>(
@@ -2485,5 +2489,50 @@ mod drawing_tests {
         let copy = renderer.draw_frame_and_copy(&good).expect("drawn");
         assert_eq!(px(&copy, 1, 1), [0, 0, 255, 255]);
         renderer.shutdown();
+    }
+
+    /// A texture's pixels land in the order they come, however they came:
+    /// a shared image of pixels in shared memory let go before the next
+    /// submit puts its texture in the pool with its copy still waiting,
+    /// and the next image of its size, of pixels in memory, gets that
+    /// texture. Its pixels are what is drawn, not the first image's (a
+    /// copy left waiting by the queue's own writes going first).
+    #[test]
+    fn pixels_land_in_the_order_they_come() {
+        let _gpu = gpu();
+        let size = Size::new(2, 2);
+        let images = GpuSharedImages::new();
+        let renderer = WgpuRenderer::offscreen(size, images.clone()).unwrap();
+        let mut display = Display::new(renderer, SINK);
+        let zeros = ipc::local::shared_buffer(&[0; 16]).unwrap();
+        // Staged, and let go: its texture to the pool, its copy waiting.
+        drop(images.create_shared_image(size, &zeros).expect("made"));
+        // That texture again.
+        display.create_shared_image(SINK, Mailbox(3), size, &[0, 0, 255, 255].repeat(4));
+        display.flush_shared_images();
+        let mut f = frame(
+            size,
+            SharedQuadState::default(),
+            vec![DrawQuad {
+                rect: RectF::new(0.0, 0.0, 2.0, 2.0),
+                shared_quad_state: 0,
+                material: Material::Texture {
+                    resource_id: ResourceId(7),
+                    tex_coord_rect: RectF::new(0.0, 0.0, 2.0, 2.0),
+                    nearest_neighbor: true,
+                },
+            }],
+        );
+        f.resource_list.push(TransferableResource {
+            id: ResourceId(7),
+            size,
+            format: ResourceFormat::Rgba8Premul,
+            pixels: protocol::BigBuffer::from([]),
+            shared_image: Some(SharedImage::from_mailbox(Mailbox(3))),
+        });
+        display.submit_compositor_frame(SINK, LocalSurfaceId::default(), f);
+        let copy = draw(&mut display);
+        assert_eq!(px(&copy, 0, 0), [0, 0, 255, 255]);
+        assert_eq!(px(&copy, 1, 1), [0, 0, 255, 255]);
     }
 }

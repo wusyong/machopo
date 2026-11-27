@@ -595,44 +595,39 @@ impl GpuContext {
 
     /// `pixels` (premultiplied RGBA, `size`) as a texture to draw.
     pub(crate) fn upload<'a>(&self, size: Size, pixels: impl Into<Pixels<'a>>) -> UploadedResource {
-        match pixels.into() {
-            Pixels::Own(pixels) => upload(
-                &self.device,
-                &self.queue,
-                &self.bind_group_layout,
-                &self.sampler,
-                size,
-                pixels,
-            ),
-            Pixels::Shared(pixels) => {
-                let texture = texture(&self.device, size);
-                self.stage(&texture, size, pixels);
-                resource(
-                    &self.device,
-                    &self.bind_group_layout,
-                    &self.sampler,
-                    size,
-                    texture,
-                )
-            }
-        }
+        let texture = texture(&self.device, size);
+        self.stage(&texture, size, pixels.into());
+        resource(
+            &self.device,
+            &self.bind_group_layout,
+            &self.sampler,
+            size,
+            texture,
+        )
     }
 
     /// `pixels` over what `resource`, of their size, had.
     pub(crate) fn write<'a>(&self, resource: &UploadedResource, pixels: impl Into<Pixels<'a>>) {
-        match pixels.into() {
-            Pixels::Own(pixels) => write(&self.queue, &resource.texture, resource.size, pixels),
-            Pixels::Shared(pixels) => self.stage(&resource.texture, resource.size, pixels),
-        }
+        self.stage(&resource.texture, resource.size, pixels.into());
     }
 
-    /// `pixels` (of `size`, which they fit) on their way to `texture`,
-    /// from memory whoever drew them shares and may still write: copied
-    /// once, into a buffer of the GPU's mapped for it, which the next
-    /// submit copies to the texture. `Queue::write_texture` copies the
-    /// same once, but out of a slice, which that memory can't be.
-    fn stage(&self, texture: &wgpu::Texture, size: Size, pixels: &SharedBuffer) {
-        let _write = trace_event::trace_event!("SharedImage::StageTexture");
+    /// `pixels` (of `size`, which they fit) on their way to `texture`:
+    /// copied once, into a buffer of the GPU's mapped for it, which the
+    /// next submit copies to the texture, in the order they come. Every
+    /// texture's pixels go this way, whether in memory whoever drew them
+    /// shares (which gives no slice for `Queue::write_texture` to copy
+    /// out of) or not: the queue's own writes go before every command
+    /// buffer of a submit, so a texture written both ways before a submit
+    /// is written out of order. A shared image let go puts its texture in
+    /// the pool at once, its copy perhaps still waiting: the next image of
+    /// its size written by the queue would have that copy land over it.
+    fn stage(&self, texture: &wgpu::Texture, size: Size, pixels: Pixels<'_>) {
+        // Named for where the pixels come from, as the trace's readers
+        // tell them apart (`scripts/bench/raster`).
+        let _write = match pixels {
+            Pixels::Own(_) => trace_event::trace_event!("SharedImage::WriteTexture"),
+            Pixels::Shared(_) => trace_event::trace_event!("SharedImage::StageTexture"),
+        };
         #[expect(
             clippy::arithmetic_side_effects,
             reason = "the pixels fit their size (`pixels_fit`): no wider than MAX_TEXTURE_SIZE, \
@@ -662,7 +657,10 @@ impl GpuContext {
             return;
         };
         let copying = trace_event::trace_event!("SharedImage::StageCopy");
-        let copied = copy_rows(pixels, mapped.slice(..), row, padded_row);
+        let copied = match pixels {
+            Pixels::Own(pixels) => copy_rows_from_slice(pixels, mapped.slice(..), row, padded_row),
+            Pixels::Shared(pixels) => copy_rows(pixels, mapped.slice(..), row, padded_row),
+        };
         drop(copying);
         let unmapping = trace_event::trace_event!("SharedImage::StageUnmap");
         drop(mapped);
@@ -723,6 +721,41 @@ impl GpuContext {
             )
         })
     }
+}
+
+/// `pixels`, rows of `row` bytes, into `into`, `padded_row` bytes apart:
+/// false if they aren't whole rows that fill it.
+fn copy_rows_from_slice(
+    pixels: &[u8],
+    mut into: wgpu::WriteOnly<'_, [u8]>,
+    row: u32,
+    padded_row: u32,
+) -> bool {
+    let (Ok(row), Ok(padded_row)) = (usize::try_from(row), usize::try_from(padded_row)) else {
+        return false;
+    };
+    if row == 0 || padded_row < row || !pixels.len().is_multiple_of(row) {
+        return false;
+    }
+    let Some(rows) = pixels.len().checked_div(row) else {
+        return false;
+    };
+    if rows.checked_mul(padded_row) != Some(into.len()) {
+        return false;
+    }
+    // Rows with nothing between them (a tile's, 256 pixels wide): all of
+    // them as one.
+    if row == padded_row {
+        into.copy_from_slice(pixels);
+        return true;
+    }
+    for from in pixels.chunks_exact(row) {
+        let Some(mut padded) = into.split_off(..padded_row) else {
+            return false;
+        };
+        padded.slice(..row).copy_from_slice(from);
+    }
+    true
 }
 
 /// The pixels' rows, `row` bytes each, copied to `into` `padded_row`

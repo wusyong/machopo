@@ -150,7 +150,6 @@
 | CI | 整套每天跑一次，GC 的 `matrix`、`fuzz` 每週一次（`testing.md` 的「CI」），merge 不等它；CI 只在 Linux（x86-64）上跑，畫面只經過 lavapipe，沒有 GPU 的路；沒有 CODEOWNERS | 開發機上照 `CLAUDE.md` 的清單跑改動相關的部分；每次 push 跑 lint、`sanity.py` 和 Linux 的 `cargo test --workspace`（Rust 的 `webdriver`、`automation_pipe` 測試跟著它） | 之後加 Windows 的 `cargo test`、`reftest` 和 macOS（ARM64）的 `matrix`；真視窗的情境（`test.py scenarios --window`）：GitHub 的標準 runner 沒有 GPU 也沒有螢幕，要 xvfb 或 headless 的 Wayland compositor 加上 lavapipe，還沒試 |
 | `ipc` 在 Linux 上建共用記憶體時，kernel 不認得 `MFD_NOEXEC_SEAL` 就不帶它再建一次（`platform/linux/memory.rs` 的 `memfd`） | 只有 6.3 之前的 kernel 回那個錯誤（`EINVAL`），開發機和 CI 的都比它新；同樣地，5.1 之前的 kernel 沒有 `F_SEAL_FUTURE_WRITE` 時「建的一端寫」的 region 建不出來，也沒有在那種 kernel 上跑過 | 「不認得就再問一次、別的拒絕不再問」用假的 `memfd_create` 測；真的 kernel 回的是不是 `EINVAL` 靠 kernel 的文件和 Chromium 同樣的做法 | 有舊 kernel 的機器或 CI 的 image 時在上面跑一次 `cargo test -p ipc` |
 | `ipc` 的 Linux 通道幾條沒有測試走得到的路（`platform/linux/channel.rs`）：`spawn` 在 child 那一端的號碼是 0 到 2 時先換一個號碼；`spawn` 用過的 `Command` 再啟動一次會交出那個號碼上當時的 fd（只寫在說明裡）；讀的時候 kernel 說有 fd 放不下（`MSG_CTRUNC`）而剩下的沒超過 16 個 | 第一條要 host 自己啟動時 stdin、stdout 或 stderr 是關著的；第三條只在這個 process 的 fd 用完時發生（放不下的情況剩下的一定超過 16 個，由數個數的檢查抓到） | 審查。第三條沒有那個檢查時，那則訊息的 handle 比它說的少，核心照樣判成壞訊息、關掉通道 | 有能限制 child 的 fd 上限的測試工具時補第三條；第二條在 `browser` 接上 `spawn` 時看要不要讓介面擋（收下 `Command`、不還） |
-| `viz` 的 `a_shared_image_made_by_a_message_is_drawn` 不穩定：和其他測試一起跑時約 3% 失敗（RADV 和 llvmpipe 都是），像素是畫之前的 texture 的內容（全透明），只用一條 thread 時沒有失敗 | 原因還沒找到（2026-11-27 查的）：shared image 建出來了、generation 對、renderer 找到它的 resource、quad 畫了，取到的 texture 卻沒有那次 `queue.write_texture` 的像素；texture 新建的、從池子重用的都會；照失敗時的順序直接接著跑那兩個測試不會，所以是和同時跑的測試的時序有關 | 每天的 CI 的 `cargo test --workspace` 偶爾因它失敗：失敗時看是不是這一個 | 下一件就查：wgpu 的 pending writes 和 submit 的順序，和我們什麼時候 submit |
 | `browser`、`viz`、`net` 和 `protocol` 的 `viz.rs` 打開 panic 的 lint（它們根的 `#![warn(clippy::unwrap_used, ...)]`） | lint 是 clippy 的，拿掉那一行沒有測試會失敗 | 審查；每次 push 和每天的 CI 跑 `cargo clippy -- -D warnings`，在的時候新的 `unwrap`、`expect`、索引會被擋 | 有 sanity 的檢查清單時加一項 |
 | `ipc` 的核心在 `cargo test` 以外的五種檢查（`python3 scripts/test.py ipc` 的 `fuzz`、`miri`、`models`、`tla`、`verus`） | CI 不跑：要另外裝五種工具，等 `ipc` 分成獨立的專案時在它自己的 CI 做 | 改到 `ipc` 的核心的人在本機跑；fuzzer 找到過的輸入留在 `crates/ipc/fuzz/regressions/`，由 `cargo test -p ipc` 重放（每天的 CI 跑） | `ipc` 分出去時排進它的 CI |
 | Browser 對 renderer 的訊息的 fuzzer（`python3 scripts/test.py browser fuzz`） | CI 不跑（和上一列同樣的理由：cargo-fuzz 要另外裝，每次跑多久沒有定論） | 改到 `browser` 處理 renderer 訊息的地方（`render_process_host.rs`、`web_contents.rs`、`frame_tree.rs`）的人在本機跑；找到過的輸入留在 `crates/browser/fuzz/regressions/`，由 `cargo test -p browser` 重放 | 決定 fuzzer 在 CI 上怎麼跑的時候一起排 |
@@ -324,6 +323,10 @@
 ## 等價、不用處理的 mutation
 
 弄壞之後行為完全一樣，記在這裡免得重複追查。
+
+**Viz 把像素複製進暫存的 buffer（`viz` 的 `gpu_context.rs` 的 `copy_rows_from_slice`）**
+
+- 每列沒有空隙時（一列剛好是 `COPY_BYTES_PER_ROW_ALIGNMENT` 的倍數，256 個像素寬的 tile）整批一次複製：拿掉時一列一列地複製，結果一樣，只是慢。
 
 **DevTools 的 `CSS` 的命令要的 sheet 的原文（`devtools.rs` 的 `devtools_message`）**
 
