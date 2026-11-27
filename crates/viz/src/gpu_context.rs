@@ -381,7 +381,7 @@ impl GpuContext {
                 .collect();
         let types: Vec<_> = adapters.iter().map(|a| a.get_info().device_type).collect();
         let adapter = pick_adapter(&types, preference)
-            .map(|i| adapters[i].clone())
+            .and_then(|i| adapters.get(i).cloned())
             .ok_or_else(|| match preference {
                 AdapterPreference::Gpu => "no GPU adapter, and no CPU one either \
                     (WARP on Windows; on Linux, Mesa's lavapipe or llvmpipe)"

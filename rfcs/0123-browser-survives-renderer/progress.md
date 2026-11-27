@@ -14,7 +14,8 @@
 | 3a. 已決定的事項第 8 到 10 條；`ipc::platform::amount_of_physical_memory`；`browser::tile_memory_limit`、`shared_image_limits`（Blink 的 `GetGpuMemoryPolicy`）；`RendererFlags::tile_memory_limit`；compositor 照距離給 tile 的記憶體（`assign_tile_memory`）、放不下的可見 tile 畫成背景色；Viz 的 `SharedImageLimits` | 做完 | 2026-11-27 |
 | 3b. 量測（`details.md` 的「第 3 段的量測」）；已決定的事項第 11 到 13 條（Viz 不再檢查 frame；commit 時放掉 active tree 的 tile；單色的 tile 不佔預算） | 做完 | 2026-11-27 |
 | 3c. 測試、第 3 段的檢查和文件 | 做完 | 2026-11-27 |
-| 4. panic 的 lint；Viz 的 fuzzer；CI | 還沒開始 | |
+| 4a. 已決定的事項第 14、15 條（不加 fuzzer；lint 在 `browser`、`viz`、`net` 和 `protocol` 的 `viz.rs`）；五個 lint 打開，80 處改寫或寫明理由；規則寫進 `crates/base/README.md` 和 `CLAUDE.md` | 做完 | 2026-11-27 |
+| 4b. 第 4 段的檢查和文件 | 做完 | 2026-11-27 |
 
 ## 驗收
 
@@ -30,6 +31,7 @@
 | tile 的記憶體 | 可見的先、再照距離（貼著的不算可見）；放不下的放掉，可見的畫成背景色，之後放得下時 raster；一張放不下之後的都放不下；單色的不佔，沒 raster 過的也一樣；commit 時舊的 tile 在新的建立之前放掉 | `cargo test -p compositor --lib`（`the_tiles_nearest_the_viewport_take_the_tile_memory`、`once_a_tile_is_over_the_ones_after_it_are`、`a_tiles_distance_is_across_and_down`、`tiles_of_one_color_take_no_tile_memory`、`a_commit_lets_the_tiles_it_doesnt_keep_go_before_it_rasters`） |
 | 預算到 renderer | renderer process 收到 Browser 給的預算（1 byte：一張 tile 都不建，照樣送 frame；給預設的就建） | `cargo test -p browser --test it renderer_process::a_renderer_process_keeps_the_tile_memory_it_is_given` |
 | Viz 的上限 | 每個 client 的張數、位元組，所有 client 合計的位元組，各自擋得住；刪掉的、client 不在了的讓出空間；Viz thread 用啟動時給的上限 | `cargo test -p viz --lib`（`shared_images_past_the_gpu_memorys_limits_arent_made`、`thread::the_thread_keeps_the_shared_image_limits_it_is_given`） |
+| panic 的 lint | `browser`、`viz`、`net` 和 `protocol` 的 `viz.rs` 在 clippy 下沒有 `unwrap`、`expect`、索引、`panic!`、`unreachable!`，除了帶理由的 `#[expect]` | `cargo clippy -p browser -p viz -p net -p protocol --lib --tests -- -D warnings` |
 | compositor | quad 超過上限時丟掉最底下的、沒有 quad 的 state 拿掉，剩下的 Viz 收、每個 quad 的 state 不變；只有 state 超過時也一樣；在上限以內不動；每個測試的 frame 都過檢查（debug build 的 assert） | `cargo test -p compositor --lib` |
 
 ## 做過的檢查
@@ -67,3 +69,16 @@
 - **mutation test**（`python3 scripts/test.py mutate rfcs/0123-browser-survives-renderer/mutants-3.toml`）：第一次 29 個抓到 24 個，漏的五個：放不下之後更小的照放（測試的 tile 一樣大：補了 `once_a_tile_is_over_the_ones_after_it_are`，邊上半寬的 tile）；距離只算縱向、只算橫向（預算剛好是可見的那幾張，距離只排可見以外的：補了 `a_tiles_distance_is_across_and_down`）；沒有像素的 tile 在滿了之後也算超過（那一段用同一個 host，單色的已經判定過、不在這一次裡：改成新的 host）；放得下的 OOM tile 重設成沒 raster（S1 之後它照計畫 raster，重設沒有作用：拿掉了那段和它的 mutant）。補完再跑那四個，都抓到：28 個全部抓到。跑完 28 個 `from` 都在原處。spec 第一次因為一個 `from` 對不上（S1 改了那一行）沒有開始跑，改了再跑。
 - 只靠審查的（`docs/test-gaps.md`）：`BrowserWindow` 把預算和上限接到 renderer、Viz 的那幾行，和視窗模式用的螢幕。
 - 第 3 段做完時：`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace --no-fail-fast`（5023 個通過、0 個失敗、1 個 ignored）、`sanity.py` 的七項、`python3 scripts/test.py reftest scroll/ effects/ canvas/ frames/ hidpi/ paint/ images/ invalidation/`（0 個非預期的結果）、`cargo check -p ipc --target x86_64-pc-windows-msvc` 和 `aarch64-apple-darwin` 通過。macOS 和 Windows 上沒有跑 `amount_of_physical_memory` 的測試。
+
+### 4a 和 4b（2026-11-27，同一台）
+
+- **lint 的 80 處**（第 0 步用 clippy 數的：`browser` 41、`viz` 9、`net` 30，`protocol` 的 `viz.rs` 沒有；`net` 的 `test_server` 另外 8 處）：
+  - 改寫成不 panic 的：`viz` 的 adapter 照索引拿（`get`）、沒有輸出時不畫（以前 `unreachable!`）、四個角照順序解構（以前照索引）、畫的命令找不到它的 resource 時不畫那個（以前索引）、讀回的一列不夠長時停；`net` 的解壓縮（brotli、deflate、gzip 的 input 和 output、gzip 開頭的 magic）、`file:` 的磁碟代號、host mapping 的 glob、sniff 的開頭、HTTP cache 淘汰時的大小（跟著排序帶著），都改成 `get` 或不再索引；`net` 的 blob URL 和 load 的鎖、`browser` 的 IO thread 的 loads 的鎖被 poison 時照拿（`unwrap_or_else(|e| e.into_inner())`，`viz` 原本就這樣）；`browser` 的 `about:blank` 的 origin 直接是新的 opaque origin（以前 parse 一個常數再 `expect`）、commit 時找送出的導覽改成 `get` 和壞訊息（不可能的分支照 `CommitOfNoNavigation`）、session history 的三處（`is_initial`、`current_place`、`set_title`）和 `place` 的一處改成 `get`。
+  - 寫了 `#[expect]` 的：`browser` 的 session history（`current` 一定是 `entries` 的索引：`push` 設成它推進去的那一個、只截掉它之後的，歷史導覽設成它檢查過在的那一個；entry 的 place 提到的 item 都在 `items` 裡：`new_item` 放進去、`sweep` 只丟沒有 place 提到的。逐一讀過所有改 `current`、`entries`、`items` 的地方，renderer 的訊息都只經過這幾條）、記憶體裡的 localStorage 資料庫、作業系統的亂數（兩處）、frame 的 unique name 的編號；`viz` 的 renderer 的輸出（三處：只在重建 device 的那一下和失敗之後是 `None`，呼叫的都先看過）；`net` 的網路服務的 tokio runtime（啟動時建一次）；`net` 的 `test_server` 整個模組（給測試的 server）。
+  - 跑 `cargo test -p browser -p viz -p net -p protocol`：`net` 173 個加 108 個、`browser`、`protocol` 通過；`viz` 有一次失敗，是原本就有的不穩定測試（下一條）。
+- **原本就有的不穩定測試**（`viz` 的 `a_shared_image_made_by_a_message_is_drawn`，`docs/test-gaps.md`）：照規則沒有用重跑蓋過去，查了，原因還沒找到，這份做完之後回頭查清（使用者決定，2026-11-27）。
+  - 頻率：這一版 RADV 40 次 2 次、80 次 5 次，`MACHOPO_GPU_ADAPTER=cpu`（llvmpipe）200 次 6 次；RFC 0123 之前的 `1c2c8825`（另一個 worktree 另外編）120 次 3 次、同一個測試、同樣的症狀：不是這份造成的。
+  - 只用一條 thread（`--test-threads=1`）80 次沒有失敗；跳過這份加的 GPU 測試照樣失敗；GPU 的測試都拿著同一把鎖、不拿的三個不碰 GPU，沒有測試另外開 thread；照失敗時的順序直接接著跑前一個（`the_texture_pool_keeps_the_newest_within_its_limits`）和它，20 輪沒有失敗。
+  - 暫時加的紀錄（查完拿掉了）：失敗時 image 建出來了（`shared_image_count` 是 1）、renderer 的 device 和 image 的 generation 一樣、沒有遺失、`sync_resources` 放進了它的 resource；背景改成黑色時失敗的像素是黑的，所以 quad 畫了、取到的是全透明的 texture：那次 `queue.write_texture` 的像素沒有在畫之前到。texture 新建的（`upload`）、從池子拿的（`write`）都會（失敗 1 次和 3 次）。
+- 第 4 段沒有 mutation test：lint 是 clippy 的靜態檢查（拿掉它沒有測試會失敗，`docs/test-gaps.md`），改寫照原本的行為（不可能的分支照壞訊息或不畫那個），由原本的測試守。
+- 第 4 段做完時：`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace --no-fail-fast`（5023 個通過、0 個失敗、1 個 ignored；那個不穩定的測試這次沒有失敗）、`sanity.py` 的七項通過。

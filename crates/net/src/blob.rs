@@ -63,7 +63,7 @@ impl BlobUrlRegistry {
         };
         self.entries
             .lock()
-            .expect("the blob URLs")
+            .unwrap_or_else(|e| e.into_inner())
             .insert(key, entry);
     }
 
@@ -72,7 +72,7 @@ impl BlobUrlRegistry {
         let Some(key) = key(url) else {
             return;
         };
-        let mut entries = self.entries.lock().expect("the blob URLs");
+        let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = entries.get_mut(&key).filter(|entry| entry.owner == owner) {
             entry.revoked = true;
         }
@@ -84,7 +84,7 @@ impl BlobUrlRegistry {
         let Some(key) = key(url) else {
             return;
         };
-        let mut entries = self.entries.lock().expect("the blob URLs");
+        let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         if entries.get(&key).is_some_and(|entry| entry.owner == owner) {
             entries.remove(&key);
         }
@@ -94,7 +94,7 @@ impl BlobUrlRegistry {
     pub(crate) fn revoke_all_of(&self, owner: u64) {
         self.entries
             .lock()
-            .expect("the blob URLs")
+            .unwrap_or_else(|e| e.into_inner())
             .retain(|_, entry| entry.owner != owner);
     }
 
@@ -107,7 +107,7 @@ impl BlobUrlRegistry {
         let not_found = || NetError::new(NetErrorCode::FileNotFound, request.url.clone());
         let key = key(&request.url).ok_or_else(not_found)?;
         let (mime_type, bytes) = {
-            let entries = self.entries.lock().expect("the blob URLs");
+            let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
             let entry = entries
                 .get(&key)
                 .filter(|entry| {

@@ -248,21 +248,21 @@ impl DiskBackend {
             return;
         }
         let low = self.max_size.saturating_sub(twentieth.saturating_mul(2));
-        let mut by_score: Vec<(u128, &String)> = self
+        let mut by_score: Vec<(u128, &String, u64)> = self
             .index
             .iter()
-            .map(|(key, indexed)| (score(indexed, now), key))
+            .map(|(key, indexed)| (score(indexed, now), key, indexed.size))
             .collect();
         // The highest first; of the same score, by key, so it is always the
         // same.
         by_score.sort_unstable_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(b.1)));
         let mut size = self.size;
         let mut gone = Vec::new();
-        for (_, key) in by_score {
+        for (_, key, entry_size) in by_score {
             if size <= low {
                 break;
             }
-            size = size.saturating_sub(self.index[key].size);
+            size = size.saturating_sub(entry_size);
             gone.push(key.clone());
         }
         for key in gone {

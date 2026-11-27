@@ -101,9 +101,8 @@ impl CommittedOrigin {
     /// error page's).
     pub(crate) fn opaque() -> Self {
         Self {
-            origin: url::Url::parse("about:blank")
-                .expect("about:blank")
-                .origin(),
+            // `about:blank`'s: a new opaque one.
+            origin: url::Origin::new_opaque(),
             local: false,
         }
     }
@@ -295,9 +294,8 @@ impl FrameTree {
             let site = url::Url::parse(url).map_or_else(
                 |_| {
                     Site::of(
-                        &url::Url::parse("about:blank")
-                            .expect("about:blank")
-                            .origin(),
+                        // `about:blank`'s: a new opaque one.
+                        &url::Origin::new_opaque(),
                     )
                 },
                 |url| Site::of_url(&url),
@@ -494,14 +492,15 @@ impl FrameTree {
             else {
                 return Err(BadMessageReason::CommitOfNoNavigation);
             };
-            if node.committing[at].url != url {
+            if node.committing.get(at).is_some_and(|sent| sent.url != url) {
                 return Err(BadMessageReason::CommitOfAnotherUrl);
             }
-            node.committing
-                .drain(..=at)
-                .next_back()
-                .expect("one at `at`")
-                .origin
+            // The one at `at`, and those sent before it (what the renderer
+            // will commit no more).
+            let Some(sent) = node.committing.drain(..=at).next_back() else {
+                return Err(BadMessageReason::CommitOfNoNavigation);
+            };
+            sent.origin
         };
         let parent = node.parent;
         let storage_key = self.storage_key_in(parent, &origin.origin);

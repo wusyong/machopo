@@ -33,6 +33,16 @@
 //! [`load`]: NetworkContext::load
 //! [`fetch`]: NetworkContext::fetch
 
+// What the network answers reaches this crate's code in the browser's process, where a
+// panic ends every tab: each place that can panic says why it doesn't
+// (`#[expect(..., reason)]`, as integer overflow does; `crates/base/README.md`).
+#![warn(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::unreachable
+)]
 #![cfg_attr(
     test,
     allow(
@@ -40,6 +50,11 @@
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
         clippy::cast_possible_wrap,
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::panic,
+        clippy::unreachable,
         reason = "tests"
     )
 )]
@@ -166,7 +181,7 @@ impl Redirects<'_> {
     async fn wait_at(&mut self, redirect: RedirectInfo) {
         let (follow, followed) = oneshot::channel();
         // Before telling, so a follow that comes at once finds it.
-        self.state.lock().expect("a load's state").follow = Some(follow);
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).follow = Some(follow);
         (self.tell)(redirect);
         // The state keeps the sender until the handle follows: this only
         // ends when it does (or the task is aborted).
@@ -185,7 +200,12 @@ impl LoadHandle {
     /// Lets a load waiting at a redirect go on to where it leads
     /// (`URLLoader::FollowRedirect`). Nothing if it isn't waiting at one.
     pub fn follow_redirect(&self) {
-        let follow = self.state.lock().expect("a load's state").follow.take();
+        let follow = self
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .follow
+            .take();
         if let Some(follow) = follow {
             let _ = follow.send(());
         }
@@ -194,7 +214,7 @@ impl LoadHandle {
     /// Stops the load (closing the `URLLoader` pipe): it stops at its next
     /// wait, without calling back; one that called back already is over.
     pub fn cancel(self) {
-        let mut state = self.state.lock().expect("a load's state");
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.cancelled = true;
         if let Some(task) = state.task.take() {
             task.abort();
@@ -296,6 +316,11 @@ impl NetworkContext {
         std::thread::Builder::new()
             .name("NetworkService".into())
             .spawn(move || {
+                #[expect(
+                    clippy::expect_used,
+                    reason = "made once, as the network service starts, before any page: it \
+                              fails only when the system has no threads or descriptors left"
+                )]
                 let runtime = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
@@ -334,7 +359,7 @@ impl NetworkContext {
                         let transport = transport.clone();
                         let cookies = cookies.clone();
                         let cache = cache.clone();
-                        let mut state = job.state.lock().expect("a load's state");
+                        let mut state = job.state.lock().unwrap_or_else(|e| e.into_inner());
                         if state.cancelled {
                             continue;
                         }

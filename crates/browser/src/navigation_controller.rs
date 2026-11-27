@@ -296,11 +296,17 @@ impl NavigationController {
     /// next new entry takes the place of.
     pub(crate) fn is_initial(&self) -> bool {
         self.current
-            .is_some_and(|current| self.entries[current].initial)
+            .and_then(|current| self.entries.get(current))
+            .is_some_and(|entry| entry.initial)
     }
 
     /// An item an entry has a place for: there is one, as `sweep` keeps
     /// every item a place has.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "every item an entry's place names is in `items` (`new_item` puts it there, \
+                  `sweep` drops only those no place names)"
+    )]
     fn item(&self, item: u64) -> &FrameNavigationEntry {
         &self.items[&item]
     }
@@ -355,6 +361,12 @@ impl NavigationController {
     /// What the renderer is told of the item `frame`'s navigation of
     /// `kind` will commit to, as things are now: its state, and its entry's
     /// place.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "`current` is one of `entries`' indices (`push` sets it to the one it pushes and \
+                  keeps those up to it; a history navigation sets it to one it checked is there), \
+                  and so is a history navigation's checked above"
+    )]
     pub(crate) fn entry_params(
         &self,
         tree: &FrameTree,
@@ -401,7 +413,9 @@ impl NavigationController {
         match (kind, self.current) {
             (NavigationType::HistoryIndex(index), _) if index < len => (index, len),
             (NavigationType::Reload | NavigationType::Replace, Some(current)) => (current, len),
-            (NavigationType::NewEntry, Some(current)) if self.entries[current].initial => {
+            (NavigationType::NewEntry, Some(current))
+                if self.entries.get(current).is_some_and(|entry| entry.initial) =>
+            {
                 (current, len)
             }
             (_, current) => {
@@ -452,6 +466,12 @@ impl NavigationController {
         self.sweep();
     }
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "`current` is one of `entries`' indices (`push` sets it to the one it pushes and \
+                  keeps those up to it; a history navigation sets it to one it checked is there), \
+                  and so is a history navigation's checked above"
+    )]
     fn did_commit_main_frame(
         &mut self,
         kind: Option<NavigationType>,
@@ -503,6 +523,15 @@ impl NavigationController {
     /// place, or the frame's place in the current one. Nothing for a frame
     /// whose parent has no place in it (Chromium's neither), or with no
     /// entry yet.
+    #[expect(
+        clippy::indexing_slicing,
+        clippy::expect_used,
+        reason = "`current` is one of `entries`' indices (`push` sets it to the one it pushes and \
+                  keeps those up to it; a history navigation sets it to one it checked is there), \
+                  and so is a history navigation's checked above every item an entry's place names \
+                  is in `items` (`new_item` puts it there, `sweep` drops only those no place \
+                  names)"
+    )]
     fn did_commit_child_frame(
         &mut self,
         tree: &FrameTree,
@@ -575,6 +604,15 @@ impl NavigationController {
     /// item's new URL and state. A frame with no place in the current entry
     /// (on its initial `about:blank`, its document the browser's 0: none it
     /// committed) gets one, if its parent has one.
+    #[expect(
+        clippy::indexing_slicing,
+        clippy::expect_used,
+        reason = "`current` is one of `entries`' indices (`push` sets it to the one it pushes and \
+                  keeps those up to it; a history navigation sets it to one it checked is there), \
+                  and so is a history navigation's checked above every item an entry's place names \
+                  is in `items` (`new_item` puts it there, `sweep` drops only those no place \
+                  names)"
+    )]
     pub(crate) fn did_commit_same_document(
         &mut self,
         tree: &FrameTree,
@@ -648,6 +686,15 @@ impl NavigationController {
     /// at `url` (`DidCommitSameDocumentNavigation` of a history
     /// navigation): its entry is the current one, the frame's item there
     /// at `url`.
+    #[expect(
+        clippy::indexing_slicing,
+        clippy::expect_used,
+        reason = "`current` is one of `entries`' indices (`push` sets it to the one it pushes and \
+                  keeps those up to it; a history navigation sets it to one it checked is there), \
+                  and so is a history navigation's checked above every item an entry's place names \
+                  is in `items` (`new_item` puts it there, `sweep` drops only those no place \
+                  names)"
+    )]
     pub(crate) fn did_commit_history_same_document(
         &mut self,
         tree: &FrameTree,
@@ -713,7 +760,7 @@ impl NavigationController {
         tree: &FrameTree,
         frame: FrameToken,
     ) -> Option<HistoryPlace> {
-        let entry = &self.entries[self.current?];
+        let entry = self.entries.get(self.current?)?;
         let path = path(tree, frame)?;
         let item = self.item(entry.root.find(&path)?.item);
         Some(HistoryPlace {
@@ -796,6 +843,15 @@ impl NavigationController {
     /// `frame`'s scroll restoration mode in the current entry
     /// (`UpdateState`): nothing for a frame with no place there (one
     /// showing its initial `about:blank`).
+    #[expect(
+        clippy::indexing_slicing,
+        clippy::expect_used,
+        reason = "`current` is one of `entries`' indices (`push` sets it to the one it pushes and \
+                  keeps those up to it; a history navigation sets it to one it checked is there), \
+                  and so is a history navigation's checked above every item an entry's place names \
+                  is in `items` (`new_item` puts it there, `sweep` drops only those no place \
+                  names)"
+    )]
     pub(crate) fn set_manual_scroll_restoration(
         &mut self,
         tree: &FrameTree,
@@ -818,8 +874,11 @@ impl NavigationController {
 
     /// The title of the entry shown.
     pub(crate) fn set_title(&mut self, title: String) {
-        if let Some(current) = self.current {
-            self.entries[current].title = title;
+        if let Some(entry) = self
+            .current
+            .and_then(|current| self.entries.get_mut(current))
+        {
+            entry.title = title;
         }
     }
 
@@ -868,6 +927,11 @@ impl NavigationController {
 
     /// `item`'s frame has its document again, a new one: the entries that
     /// have it have it.
+    #[expect(
+        clippy::expect_used,
+        reason = "every item an entry's place names is in `items` (`new_item` puts it there, \
+                  `sweep` drops only those no place names)"
+    )]
     fn loaded_again(&mut self, item: u64, url: String, document: u64) {
         let item = self.items.get_mut(&item).expect("an entry's");
         item.url = url;

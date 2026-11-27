@@ -107,7 +107,8 @@ impl Coding {
                     match brotli.write(input) {
                         // The stream is over: the rest is left out.
                         Ok(0) => break,
-                        Ok(taken) => input = &input[taken..],
+                        // At most what it was given (`Write`'s contract).
+                        Ok(taken) => input = input.get(taken..).unwrap_or_default(),
                         Err(e) => return Err(e.to_string()),
                     }
                 }
@@ -170,7 +171,7 @@ impl Inflate {
                 .unwrap_or(usize::MAX)
                 .min(input.len());
             let produced = self.state.total_out().saturating_sub(out_before);
-            input = &input[consumed..];
+            input = input.get(consumed..).unwrap_or_default();
             taken = taken.saturating_add(consumed);
             match status {
                 Status::StreamEnd => self.ended = true,
@@ -233,8 +234,10 @@ impl Gzip {
         if let GzipStage::Body(inflate) = &mut self.stage {
             let start = out.len();
             let taken = inflate.push(input, out)?;
-            self.crc.update(&out[start..]);
-            input = &input[taken..];
+            // What it added to `out`, and the rest of `input` (it takes
+            // no more than it is given).
+            self.crc.update(out.get(start..).unwrap_or_default());
+            input = input.get(taken..).unwrap_or_default();
             if inflate.ended {
                 self.stage = GzipStage::Trailer;
             }
@@ -242,7 +245,7 @@ impl Gzip {
         if matches!(self.stage, GzipStage::Trailer) {
             let wanted = GZIP_TRAILER_LENGTH.saturating_sub(self.pending.len());
             self.pending
-                .extend_from_slice(&input[..wanted.min(input.len())]);
+                .extend_from_slice(input.get(..wanted).unwrap_or(input));
             if let Ok(trailer) = <[u8; GZIP_TRAILER_LENGTH]>::try_from(self.pending.as_slice()) {
                 let crc = u32::from_le_bytes([trailer[0], trailer[1], trailer[2], trailer[3]]);
                 let length = u32::from_le_bytes([trailer[4], trailer[5], trailer[6], trailer[7]]);
@@ -265,8 +268,7 @@ fn gzip_header_length(data: &[u8]) -> Result<Option<usize>, String> {
     const FNAME: u8 = 0x08;
     const FCOMMENT: u8 = 0x10;
     const RESERVED: u8 = 0xe0;
-    let seen = data.len().min(MAGIC.len());
-    if data[..seen] != MAGIC[..seen] {
+    if data.iter().zip(MAGIC).any(|(&byte, magic)| byte != magic) {
         return Err("not a gzip header".into());
     }
     // ID1 ID2 CM FLG MTIME(4) XFL OS.

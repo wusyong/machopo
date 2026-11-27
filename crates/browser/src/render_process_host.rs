@@ -1187,7 +1187,7 @@ impl IoThreadHost {
                     self.network.revoke_blob_url(self.renderer_id, &url);
                     self.forward_on(RendererHostMsg::RevokeBlobUrl { url });
                 }
-                let mut loads = self.loads.lock().expect("the loads");
+                let mut loads = self.loads.lock().unwrap_or_else(|e| e.into_inner());
                 let ended: Vec<LoadKey> = loads
                     .keys()
                     .copied()
@@ -1335,7 +1335,7 @@ impl IoThreadHost {
                 if let Some(load) = self
                     .loads
                     .lock()
-                    .expect("the loads")
+                    .unwrap_or_else(|e| e.into_inner())
                     .get(&LoadKey::Resource { worker, request_id })
                 {
                     load.follow_redirect();
@@ -1345,7 +1345,7 @@ impl IoThreadHost {
                 let load = self
                     .loads
                     .lock()
-                    .expect("the loads")
+                    .unwrap_or_else(|e| e.into_inner())
                     .remove(&LoadKey::Resource { worker, request_id });
                 if let Some(load) = load {
                     load.cancel();
@@ -1358,7 +1358,7 @@ impl IoThreadHost {
     /// The renderer's channel closed (Chromium's `OnChannelError`): its
     /// loads go with it (its `URLLoader`s close), and its blob URLs.
     fn on_channel_closed(self) {
-        for (_, load) in self.loads.lock().expect("the loads").drain() {
+        for (_, load) in self.loads.lock().unwrap_or_else(|e| e.into_inner()).drain() {
             load.cancel();
         }
         self.network.revoke_blob_urls_of(self.renderer_id);
@@ -1392,11 +1392,11 @@ fn fetch_for_renderer(
     }
     // Held while the load starts, so one that is over at once finds its
     // entry to take out.
-    let mut held = loads.lock().expect("the loads");
+    let mut held = loads.lock().unwrap_or_else(|e| e.into_inner());
     let over = loads.clone();
     let answered = to_renderer.clone();
     let done = move |result| {
-        over.lock().expect("the loads").remove(&load);
+        over.lock().unwrap_or_else(|e| e.into_inner()).remove(&load);
         let _ = answered.send(load.answer(result));
     };
     let handle = match load {

@@ -487,7 +487,7 @@ async fn respond(url: Url, raw: RawResponse, redirected: bool) -> Result<Respons
         Some(parsed) => parsed,
         None => {
             let start = body.read_ahead(SNIFF_LENGTH).await?;
-            let sniffed = &start[..start.len().min(SNIFF_LENGTH)];
+            let sniffed = start.get(..SNIFF_LENGTH).unwrap_or(&start);
             (mime::sniff(sniffed).to_owned(), None)
         }
     };

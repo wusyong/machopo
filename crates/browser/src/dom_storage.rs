@@ -692,8 +692,14 @@ impl LocalStorage {
             });
             opened.unwrap_or_else(|error| {
                 tracing::warn!(%error, "couldn't open localStorage's database: kept in memory");
+                #[expect(
+                    clippy::expect_used,
+                    reason = "a database in memory of the schema this crate has: it opens and \
+                              takes the schema but out of memory (no renderer's to say)"
+                )]
                 let mut database =
                     Database::open(None, DATABASE).expect("a database in memory opens");
+                #[expect(clippy::expect_used, reason = "as above")]
                 database
                     .migrate(MIGRATIONS)
                     .expect("a new database in memory takes the schema");

@@ -5,6 +5,15 @@
 //! ([`start_keep_alive`](TestServer::start_keep_alive)). It serves fixed
 //! routes.
 
+// A test's server, which machopo never starts and no page reaches: it
+// panics when the test is wrong.
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    reason = "a test's server"
+)]
+
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};

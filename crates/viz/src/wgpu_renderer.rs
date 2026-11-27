@@ -440,6 +440,11 @@ impl WgpuRenderer {
         self
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "None only while `recreate_context` makes the next device's (it puts one \
+                  back or fails) and once failed, which every caller returns at first"
+    )]
     fn output(&self) -> &Output {
         self.output.as_ref().expect("an output")
     }
@@ -512,7 +517,13 @@ impl WgpuRenderer {
             // chain's buffers, say) keeps its swap chain alive, and a window
             // takes no other while it is.
             self.context = context;
-            let output = match self.output.take().expect("an output") {
+            #[expect(
+                clippy::expect_used,
+                reason = "a renderer that hasn't failed has an output, and this one is \
+                          drawing (`draw` returns first once it has failed)"
+            )]
+            let taken = self.output.take().expect("an output");
+            let output = match taken {
                 Output::Surface {
                     surface,
                     make_surface,
@@ -616,7 +627,12 @@ impl DirectRenderer for WgpuRenderer {
         if size.is_empty() || self.failed {
             return; // minimised; keep the old configuration
         }
-        match self.output.as_mut().expect("an output") {
+        #[expect(
+            clippy::expect_used,
+            reason = "a renderer that hasn't failed has an output: returned above if it has"
+        )]
+        let output = self.output.as_mut().expect("an output");
+        match output {
             Output::Surface { config, .. } => {
                 config.width = size.width;
                 config.height = size.height;
@@ -715,10 +731,11 @@ impl WgpuRenderer {
             ..
         }) = &mut self.output
         else {
-            let Some(Output::Offscreen { texture }) = &self.output else {
-                unreachable!("an output")
+            // No output (a failed renderer's) has nothing to draw into.
+            return match &self.output {
+                Some(Output::Offscreen { texture }) => Ok(Target::Offscreen(texture.clone())),
+                _ => Err(CopyFailure::NotDrawn),
             };
-            return Ok(Target::Offscreen(texture.clone()));
         };
         // Getting one may wait for one to come free (the display's
         // refresh); logged when that is long.
@@ -889,8 +906,15 @@ impl WgpuRenderer {
                     ),
                     None => ([0.0, 0.0, -1.0, -1.0], [0.0; 4], [0.0; 4]),
                 };
-                for i in [0, 1, 2, 2, 1, 3] {
-                    let (x, y, u, v) = corners[i];
+                let [top_left, top_right, bottom_left, bottom_right] = corners;
+                for (x, y, u, v) in [
+                    top_left,
+                    top_right,
+                    bottom_left,
+                    bottom_left,
+                    top_right,
+                    bottom_right,
+                ] {
                     vertices.push(Vertex {
                         position: Self::to_ndc(size, x, y),
                         uv: [u, v],
@@ -964,9 +988,11 @@ impl WgpuRenderer {
                         bound = Some(cmd.buffer);
                     }
                     pass.set_scissor_rect(x, y, w, h);
-                    let bind_group = match cmd.resource {
-                        Some(id) if cmd.linear => self.context.linear(&self.resources[&id]),
-                        Some(id) => &self.resources[&id].bind_group,
+                    // A command is made for a resource it has (see where).
+                    let bind_group = match cmd.resource.map(|id| self.resources.get(&id)) {
+                        Some(None) => continue,
+                        Some(Some(resource)) if cmd.linear => self.context.linear(resource),
+                        Some(Some(resource)) => &resource.bind_group,
                         None => &self.context.white.bind_group,
                     };
                     pass.set_bind_group(0, bind_group, &[]);
@@ -1142,7 +1168,12 @@ fn tightly_packed_rgba(rows: &[u8], size: Size, stride: u32, bgra: bool) -> Vec<
     // Only a hint: a size whose bytes don't fit takes none (a texture's do).
     let mut pixels = Vec::with_capacity(size.checked_byte_size().unwrap_or(0));
     for row in rows.chunks(stride as usize).take(size.height as usize) {
-        pixels.extend_from_slice(&row[..row_bytes]);
+        // Each row is `stride` (at least its pixels') bytes but the last,
+        // which may end at them.
+        let Some(row) = row.get(..row_bytes) else {
+            break;
+        };
+        pixels.extend_from_slice(row);
     }
     if bgra {
         for px in pixels.as_chunks_mut::<4>().0 {

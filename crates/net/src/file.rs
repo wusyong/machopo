@@ -183,7 +183,7 @@ pub fn file_path(url: &str) -> Option<PathBuf> {
     let decoded = percent_decode(path)?;
     // `/C:/...` on Windows.
     let bytes = decoded.as_bytes();
-    let path = if bytes.len() >= 3 && bytes[2] == b':' && bytes[1].is_ascii_alphabetic() {
+    let path = if bytes.get(2) == Some(&b':') && bytes.get(1).is_some_and(u8::is_ascii_alphabetic) {
         &decoded[1..]
     } else {
         &decoded[..]

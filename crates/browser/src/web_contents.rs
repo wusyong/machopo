@@ -285,6 +285,11 @@ impl Launch {
 
 /// A tab's main frame token, its id for DevTools: 128 bits of the
 /// operating system's random numbers, as Chrome's.
+#[expect(
+    clippy::expect_used,
+    reason = "the operating system's random numbers, which every platform machopo runs on \
+              gives (Chromium's `base::RandBytes` aborts too without them)"
+)]
 fn devtools_frame_token() -> FrameToken {
     let mut bytes = [0u8; 16];
     getrandom::fill(&mut bytes).expect("the operating system gives random numbers");

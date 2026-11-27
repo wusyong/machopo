@@ -26,7 +26,7 @@ renderer process 關在 sandbox 裡，但它送給 Browser 的東西有兩條路
 1. renderer 送任何 `CompositorFrameSinkMsg`、任何 `RendererHostMsg`，Browser 的 process 都不結束、不卡住；其他分頁照常。
 2. 送了不合格的東西的 renderer 被結束（壞訊息），分頁顯示 sad tab：和 Browser 其他的檢查同一條路。
 3. wgpu 的錯誤（驗證、記憶體不夠）不是 panic。
-4. 上面三條有 fuzzer 和測試守著，fuzzer 定期跑。
+4. 上面三條有測試守著（原本也有 fuzzer 定期跑：已決定的事項第 14 條拿掉了）。
 
 **不在範圍內**：
 
@@ -43,8 +43,8 @@ renderer process 關在 sandbox 裡，但它送給 Browser 的東西有兩條路
 
 給改 machopo 的人：
 
-- 在 `protocol::viz` 加新的 quad、新的欄位時，要在 Viz 的檢查（`viz` 的 `display.rs`）說它合格的範圍；fuzzer 會餵任意的值。
-- Viz 裡呼叫 wgpu、參數來自 client 的地方，錯誤不會 panic，但那表示檢查漏了：debug build 和 fuzzer 把它當成失敗。
+- 在 `protocol::viz` 加新的 quad、新的欄位時，要在 `CompositorFrameSinkMsg::check` 說它合格的範圍。
+- Viz 裡呼叫 wgpu、參數來自 client 的地方，錯誤不會 panic，但那表示檢查漏了：debug build 把它當成失敗（panic）。
 
 ## 詳細設計
 
@@ -111,7 +111,7 @@ Browser 自己的 UI 的 frame（root sink）不合格是 machopo 的 bug：debu
 - **不合格的 frame 結束那個 renderer，Viz 沒收到**：`browser` 的整合測試，假的 renderer process（`renderer_process.rs` 的 `child` 的角色）送說不通的 frame、shared image 和嵌別人 surface 的 frame，看分頁收到壞訊息、process 被結束、Viz 沒收到它；說得通的到 Viz。原本打算寫成 `shell` 的整合測試（Browser 還在、另一個分頁照畫），但 `machopo` 的執行檔裡的 renderer 送不出說不通的 frame，要假的就得在執行檔裡留一條測試用的路；Viz 沒收到，其他分頁畫什麼就和它無關。
 - **wgpu 的錯誤不 panic**：`viz` 的測試直接對 `WgpuRenderer` 做會造成驗證錯誤的事（繞過檢查），確認接住、下一個 frame 照畫。
 - **上限**：剛好在 quad 的上限和超過一個的 frame（超過的是壞訊息）；Viz 的 shared image 的上限剛好到和超過（超過的那個不做、其他照畫）；renderer 的 compositor 超過預算時先放掉 prepaint 的 tile、現在要畫的放不下時畫成單色，量測的頁面都在預算裡。
-- **Browser 的 `expect` 和索引**：打開 lint 的模組 clippy 沒有警告（每一處有帶理由的 `#[expect]`，或改寫掉了）；逐一看的結果寫進 `progress.md`，破得了的補檢查和 fuzzer 的 regression。
+- **Browser 的 `expect` 和索引**：打開 lint 的模組 clippy 沒有警告（每一處有帶理由的 `#[expect]`，或改寫掉了）；逐一看的結果寫進 `progress.md`，破得了的補檢查和測試。
 - mutation test：每一條檢查拿掉、error scope 拿掉、壞訊息不回報。
 
 ### 分階段
@@ -120,14 +120,14 @@ Browser 自己的 UI 的 frame（root sink）不合格是 machopo 的 bug：debu
 1. Viz 的檢查補齊、不合格的 frame 算壞訊息（V1）、quad 數的上限（第 5 條的一）。
 2. wgpu 的錯誤接住（G1 的 (b)、(c)）；不經過錯誤回報、直接 panic 的呼叫換掉（頂點 buffer 的 `create_buffer_init` 換成 `create_buffer` 再處理 mapped range 的 `Err`，和 shared image 的 `stage` 一樣；`details.md` 的「wgpu 的呼叫失敗時」）。
 3. renderer 的 compositor 的 tile 的記憶體預算（第 5 條的二）；量測誠實的頁面用到多少；Viz 的 shared image 的上限（S1）照量到的定。
-4. `browser` 和 `viz` 處理 renderer 輸入的模組打開 panic 的 lint、逐一寫理由或改寫（第 3 條）；規則寫進 `crates/base/README.md` 和 `CLAUDE.md`；Viz 的 fuzzer；CI。
+4. `browser` 和 `viz` 處理 renderer 輸入的模組打開 panic 的 lint、逐一寫理由或改寫（第 3 條）；規則寫進 `crates/base/README.md` 和 `CLAUDE.md`。原本還有 Viz 的 fuzzer 和兩個 fuzzer 進 CI，第 14 條拿掉了。
 
 ## 缺點
 
 - 多一層檢查和 error scope：每個 frame 多一點成本（第 0 步量）。
 - 上限是新的「合法的網頁可能撞到」的地方：renderer 的 compositor 要自己守同一個 quad 的上限（超過時少畫），不然 quad 很多的頁面會變成 sad tab；tile 的預算讓 prepaint 的 tile 比以前少，捲動快的時候可能先看到單色的 tile。
 - machopo 自己的 bug（compositor 送出不合格的 frame）以前是畫錯或沒畫，之後是 sad tab：比較吵，但看得到。
-- fuzzer 進 CI 之後要有人看它的結果。
+- 沒有 fuzzer 找沒想到的輸入（第 14 條）：守著的是 IO thread 的檢查、手寫的測試、mutation test 和 debug build 的 panic，每天的測試只餵誠實的頁面。
 
 ## 理由和其他做法
 
@@ -184,6 +184,8 @@ Browser 自己的 UI 的 frame（root sink）不合格是 machopo 的 bug：debu
 11. **Viz 不再檢查它收到的 frame（O1）**（2026-11-27，使用者決定；改了第 6 條）：只有 IO thread 檢查。原本 Viz 對每個 frame 再檢查一次，為的是不經過 IO thread 的 thread renderer（`--single-process`）和 Browser 的 UI；但量了之後（一個 frame 2,000 個 quad 約 30 µs，`progress.md`），process 的 renderer 的 frame 每個都多花一次，而那一次對 thread renderer 也沒有作用：它在 Browser 的 process 裡、compositor 是 machopo 自己的，被攻破時 Browser 已經被攻破；抓 machopo 自己的 bug 由 compositor 的 debug build 送出前的檢查做；第 2 段之後 Viz 收到說不通的 frame 也畫得下去（不是 frame 的 state 用預設的、不是 frame 的 resource 不畫、頂點分 buffer、wgpu 的錯誤接住），不會讓 Browser 結束。只有 Browser 的 UI 嵌別的 surface，renderer process 的由 IO thread 守，machopo 的 thread renderer 從來不嵌。shared image 的大小和像素在 Viz 照舊檢查（`Display::create_shared_image`：一張一次，不是每個 frame）。不選只對沒經過 IO thread 的 sink 檢查（O2：註冊 sink 的訊息要多帶一個欄位，省不到的只是 `--single-process`）。
 12. **commit 時放掉 active tree 裡 pending tree 沒接手的 tile（A1）**（2026-11-27，使用者決定）：量測時（`progress.md`）改視窗大小的那一下，一個分頁在 Viz 用到預算的將近兩倍（2,000 個捲動容器的頁面，1,010 MiB，上限 1,024 MiB）：commit 建好的 pending tree 重新 raster 一整批，舊的 active tree 拿著它的那批到 activate 才放。machopo 的 raster 是同步的，兩個 proxy 都在同一個呼叫裡 commit、`prepare_tiles`、`activate`，active tree 在這之間不會再被畫，那些 tile 沒有用處：建好 pending tree 就放掉（它接手的是同一張 shared image，不受影響），一個分頁最多用到預算，Viz 的上限（兩倍）有一倍的空間。前提是同步的 raster：Chromium 的 raster 是非同步的（GPU process 裡），active tree 在 pending tree raster 的那幾個 frame 裡照樣畫、捲動，兩邊的 tile 都要留，預算由 cc 的 `TileManager` 分給兩棵樹；machopo 改成非同步的 raster 時要拿掉這一步、改成那樣（`docs/limitations.md`）。不選 Viz 的上限改成三倍（U1：記憶體照樣白白多一倍）。不選照 cc 讓預算涵蓋兩棵樹（U2：同步的 raster 底下不必要，改視窗大小時 pending tree 的可見 tile 會因為舊的還在而放不下）。
 13. **單色的 tile 不佔預算：分配之前先看 paint 的指令（S1）**（2026-11-27，使用者決定）：還沒 raster 的 tile 先照它的指令預測是不是單色（原本 raster 之前做的同一件事，搬到分配之前），是的不算記憶體。理由：量測時 NewsSite-Next 在 Viz 只用了 259 MB，compositor 卻以為超過 512 MiB、放掉最多 7,863 張：還沒 raster 的一律算一整張，其中很多是單色的。在預算內的本來就要預測，沒有多做；超過的也預測一次（比 raster 便宜得多）。不選照舊（S2：cc 也是 raster 之前先算一整張，但誠實的頁面少了很多預先畫好的 tile）。
+14. **不加 fuzzer，CI 也不跑（Z1）**（2026-11-27，使用者決定；取代第 4 條）：Viz 的 fuzzer 不寫，現有的 `renderer_message` fuzzer 照舊只在本機跑。理由：誠實的 renderer 送的本來就說得通，這份做的檢查、上限是對被攻破的 renderer 和 machopo 自己的 bug；守著它們的是 IO thread 的檢查（每一條有單元測試、mutation test）、debug build 遇到 wgpu 的驗證錯誤 panic（每天的 `cargo test`、reftest、情境、WPT 都經過 Viz），不再多維護一個 cargo-fuzz 的 target 和 CI 的 job。代價：沒有東西找沒想到的輸入（`docs/test-gaps.md`）。原本選的是兩個 fuzzer 進每週的 CI（C1）；不選改成 `cargo test` 裡固定種子的隨機測試（Z2：不照涵蓋率找輸入，找得到的淺）。
+15. **第 4 段：lint 打開在整個 `browser`、`viz`、`net` crate 和 `protocol` 的 `viz.rs`（L1 加 `net`）**（2026-11-27，使用者決定；第 3 條的範圍）：在 crate（`viz.rs` 是模組）的根打開，以後新的模組自動在裡面。`net` 原本不在：網路上的回應是比 renderer 更直接的不可信的輸入（不必先攻破 renderer），它在 Browser 的 process 裡。不選只標碰得到 renderer 的輸入的那幾個檔案（L2：新的模組要有人記得標）。不開一份讓整個 workspace 都不能 panic 的 RFC（2,922 處，九成以上在 renderer 這一側，那裡的 panic 是那個分頁的 sad tab；硬改成 `get` 會把「立刻停下」換成「默默畫錯」；Chromium 的方向是多用 `CHECK`）：管的是信任的邊界，不是 panic 本身。
 
 ## 待決定
 

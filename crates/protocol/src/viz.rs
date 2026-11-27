@@ -5,6 +5,28 @@
 //! (textures) those quads reference. Viz aggregates the frames of every
 //! surface into one and draws it.
 
+// The browser's IO thread checks what a renderer sends Viz with this
+// module's code (`CompositorFrameSinkMsg::check`): a panic in it ends every
+// tab. Each place that can says why it doesn't.
+#![warn(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::unreachable
+)]
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::panic,
+        clippy::unreachable,
+        reason = "tests"
+    )
+)]
+
 use std::sync::{Arc, Weak};
 
 use crate::BigBuffer;

@@ -13,6 +13,16 @@
 //! dedicated thread in the browser ("VizCompositorThread"), matching
 //! Chromium's in-process Viz configuration.
 
+// What a renderer sends Viz reaches this crate's code in the browser's process, where a
+// panic ends every tab: each place that can panic says why it doesn't
+// (`#[expect(..., reason)]`, as integer overflow does; `crates/base/README.md`).
+#![warn(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::unreachable
+)]
 #![cfg_attr(
     test,
     allow(
@@ -20,6 +30,11 @@
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
         clippy::cast_possible_wrap,
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::panic,
+        clippy::unreachable,
         reason = "tests"
     )
 )]

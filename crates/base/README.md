@@ -24,6 +24,15 @@ workspace 打開 clippy 的 `arithmetic_side_effects`、`cast_possible_truncatio
 - **atomic 整數的 `fetch_add`** 由 `clippy.toml` 的 `disallowed-methods` 擋：它是方法呼叫，lint 看不到它悄悄 wrap。產生 ID 的用 `AtomicSequenceNumber`；單純統計、wrap 也無妨的寫 `#[expect(clippy::disallowed_methods, reason = "...")]`。
 - **lint 看不到的**要自己注意：`pow`、`abs`（`i32::MIN.abs()`）、`Iterator::sum`、`product`、atomic 的 `fetch_sub`、`Duration::from_secs_f64`（負數、NaN、太大時 panic）。lint 看得到 `Instant + Duration`（溢位時 panic）：用 `checked_add`，或寫明時間從哪裡來、為什麼不會太大。
 
+## 不可信的輸入走到的地方寫明為什麼不 panic
+
+`browser`、`viz`、`net` 三個 crate 的根和 `protocol` 的 `viz.rs` 打開 clippy 的 `unwrap_used`、`expect_used`、`indexing_slicing`、`panic`、`unreachable`：renderer 送的訊息、網路上的回應在 Browser 的 process 裡走到它們，那裡的 panic 結束所有的分頁。renderer 這一側不打開（panic 只是那個分頁的 sad tab：崩潰得早比默默畫錯好）。
+
+- 能自然改寫成不 panic 的就改寫：`get(..)` 加上明確的處理（一個不可能的分支照壞訊息處理、或不畫那一個），鎖被 poison 時 `unwrap_or_else(|e| e.into_inner())`（拿著鎖的 thread panic 過，資料照樣是一個 map）。
+- 改寫不了的寫 `#[expect(lint, reason = "...")]`，理由寫那個不變式為什麼成立、renderer 或網路為什麼破不了，例如 `reason = "a history navigation's index was checked against entries.len() above"`。和整數運算一樣：不用 `#[allow]`，屬性最小放在 `let`、statement 或函式上。
+- 測試不套用：三個 crate 的根的 `cfg_attr(test, allow(...))` 包括這五個；`net` 的 `test_server` 是給測試用的 server（machopo 從不啟動它），整個模組 `#![expect(..., reason = "a test's server")]`。
+- 新的 crate 或模組處理 Browser 的 process 收到的不可信的輸入時，在它的根打開同樣的五個。
+
 ## `numerics`
 
 ```rust

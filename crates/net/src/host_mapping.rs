@@ -87,7 +87,9 @@ impl HostMappingRules {
 fn matches(pattern: &[u8], text: &[u8]) -> bool {
     match pattern.split_first() {
         None => text.is_empty(),
-        Some((b'*', rest)) => (0..=text.len()).any(|skip| matches(rest, &text[skip..])),
+        Some((b'*', rest)) => {
+            (0..=text.len()).any(|skip| text.get(skip..).is_some_and(|text| matches(rest, text)))
+        }
         Some((&c, rest)) => match text.split_first() {
             Some((&t, text)) if c == b'?' || c == t => matches(rest, text),
             _ => false,

@@ -29,6 +29,11 @@ pub(crate) fn for_new_child(
 ) -> String {
     if created_by_script {
         let mut bytes = [0u8; 16];
+        #[expect(
+            clippy::expect_used,
+            reason = "the operating system's random numbers, which every platform machopo runs \
+                      on gives (Chromium's `base::RandBytes` aborts too without them)"
+        )]
         getrandom::fill(&mut bytes).expect("the operating system gives random numbers");
         return format!("{DYNAMIC_FRAME_MARKER}{}{SUFFIX}", FrameToken(bytes));
     }
@@ -48,6 +53,10 @@ pub(crate) fn for_new_child(
     }
     // Deterministic, so that it is the same as the page loads again.
     let prefix = format!("{candidate}{}/", frame_position(tree, parent));
+    #[expect(
+        clippy::expect_used,
+        reason = "the tree's frames are fewer than u32::MAX: one of the numbers is no other's"
+    )]
     (0u32..)
         .map(|retry| format!("{prefix}{retry}{SUFFIX}"))
         .find(|candidate| is_unique(tree, candidate))
