@@ -1,12 +1,13 @@
 # RFC 0123：renderer 送什麼都不能讓 Browser 結束
 
 - 開始日期：2026-11-27
-- 狀態：👍 已接受：2026-11-27（已決定的事項第 1 到 5 條）
+- 狀態：✅ 已完成：2026-11-27（Linux：Fedora 45，AMD Radeon 890M 和 llvmpipe；`ipc` 的實體記憶體在 macOS 和 Windows 只編過）
+- 進度和驗收：`progress.md`
 - 細節：`details.md`
 
 ## 摘要
 
-renderer process 關在 sandbox 裡，但它送給 Browser 的東西有兩條路能讓整個 Browser 結束：它的 frame 是在 Browser 的 process 裡（Viz thread）交給 wgpu 的，而 wgpu 的錯誤（驗證錯誤、記憶體不夠）預設是 panic；Browser 處理它的訊息的程式如果 panic，結束的也是 Browser。這份把這兩條路關上：Viz 在把值交給 wgpu 之前驗完、不合格的 frame 算那個 renderer 的壞訊息（結束那個 renderer，像 Browser 其他的檢查一樣）；wgpu 的錯誤接住、不結束程式；fuzzer 加上 frame 的、進每週的 CI。這是 site isolation 路線圖（RFC 0122）的 A，里程碑 M1 的第一份。
+renderer process 關在 sandbox 裡，但它送給 Browser 的東西原本有兩條路能讓整個 Browser 結束：它的 frame 是在 Browser 的 process 裡（Viz thread）交給 wgpu 的，wgpu 的錯誤（驗證錯誤、記憶體不夠）預設是 panic，一個 quad 太多的 frame 就能讓 Browser panic（第 0 步的探測）；Browser 處理它的訊息的程式如果 panic，結束的也是 Browser。這份把它們關上：Browser 的 IO thread 解開 renderer 送給 Viz 的訊息就檢查（`CompositorFrameSinkMsg::check`），說不通的是那個 renderer 的壞訊息、Viz 收不到；wgpu 的錯誤用 error scope 和 uncaptured error 的 handler 接住，照種類處理（debug build 的驗證錯誤 panic，讓測試看到漏掉的檢查）；GPU 的記憶體由 Browser 分：照 Blink 的公式算每個 renderer 的 tile 的預算，compositor 照距離留 tile，Viz 再對每個 client 和全部設上限；`browser`、`viz`、`net` 裡會 panic 的地方都寫明不變式（clippy 的 lint）。這是 site isolation 路線圖（RFC 0122）的 A，里程碑 M1 的第一份。
 
 ## 動機
 
@@ -26,123 +27,128 @@ renderer process 關在 sandbox 裡，但它送給 Browser 的東西有兩條路
 1. renderer 送任何 `CompositorFrameSinkMsg`、任何 `RendererHostMsg`，Browser 的 process 都不結束、不卡住；其他分頁照常。
 2. 送了不合格的東西的 renderer 被結束（壞訊息），分頁顯示 sad tab：和 Browser 其他的檢查同一條路。
 3. wgpu 的錯誤（驗證、記憶體不夠）不是 panic。
-4. 上面三條有測試守著（原本也有 fuzzer 定期跑：已決定的事項第 14 條拿掉了）。
+4. 上面三條有測試守著。
 
 **不在範圍內**：
 
 - GPU process（驅動程式自己 crash、device 遺失重建不了）：另外的路線。
 - renderer 的記憶體上限、CPU 的用量：失控的 renderer 拖慢整台機器是另一件事。
-- Browser 的其他不可信的輸入：網路的回應（`net`）、DevTools 的 client、WebDriver。
+- Browser 的其他不可信的輸入的檢查：網路的回應（`net`：這份只替它打開 panic 的 lint，第 15 條）、DevTools 的 client、WebDriver。
 - ORB、process lock：路線圖的 N、B。
 
 要解決的 `docs/limitations.md` 裡的限制：「隔離」的「renderer 還有兩條路能讓 Browser 結束」；「Viz、GPU 和記憶體」的「Viz 收到 renderer 送來的不合法的 frame……Chromium 會結束那個 client」。
 
 ## 設計概要
 
-給 machopo 的使用者：看不到改變；一個壞掉（或被攻破）的分頁只會讓自己變成 sad tab。
+給 machopo 的使用者：看不到改變；一個壞掉（或被攻破）的分頁只會讓自己變成 sad tab。一個分頁用的 GPU 記憶體有上限（最少 512 MB，照螢幕放大），超過時捲得快的地方可能先看到背景色的 tile。
 
 給改 machopo 的人：
 
 - 在 `protocol::viz` 加新的 quad、新的欄位時，要在 `CompositorFrameSinkMsg::check` 說它合格的範圍。
-- Viz 裡呼叫 wgpu、參數來自 client 的地方，錯誤不會 panic，但那表示檢查漏了：debug build 把它當成失敗（panic）。
+- Viz 呼叫 wgpu 的新地方包在 `GpuContext::scoped` 裡；不經過錯誤回報、直接 panic 的 wgpu 呼叫（`DeviceExt::create_buffer_init`）不用。驗證錯誤表示檢查漏了：debug build 是 panic。
+- `browser`、`viz`、`net` 和 `protocol` 的 `viz.rs` 裡新的 `unwrap`、`expect`、索引，clippy 會擋：改寫成不 panic 的，或寫帶理由的 `#[expect]`（`crates/base/README.md`）。
+- compositor 的 raster 改成非同步時，commit 時放掉 active tree 的 tile 那一步要拿掉，預算改成兩棵樹一起分（第 12 條）。
 
 ## 詳細設計
 
-下面每一節是選項和比較，最後是選了哪個（理由在「已決定的事項」）；「數量的上限」還沒定。
+下面每一節是選項和比較，最後是選了哪個（理由在「已決定的事項」）。探測、量測和 Chromium 的原始碼在 `details.md`。
 
-### 不合格的 frame 怎麼處理
+### 說不通的訊息
 
 | | 做法 | 好處 | 代價 |
 | --- | --- | --- | --- |
-| V1 | **算壞訊息**：Viz 告訴 Browser 是哪個 sink，Browser 照 `received_bad_message` 結束那個 renderer（`BadMessageReason` 多一種） | 和 Browser 其他的檢查一樣；被攻破的 renderer 不能一直試；和 Chromium 一樣（Viz 對 client 的 frame 做驗證，不過的 `ReportBadMessage`） | Viz 要有一條回 Browser 的路（現在只有 begin frame 和 context lost 的 observer）；machopo 自己的 bug 也會變成 sad tab（好處：看得到） |
+| V1 | **算壞訊息**，結束那個 renderer（`BadMessageReason` 多一種） | 和 Browser 其他的檢查一樣；被攻破的 renderer 不能一直試；和 Chromium 一樣 | machopo 自己的 compositor 的 bug 也變成 sad tab（看得到） |
 | V2 | 照舊丟掉、記一筆 | 不用改 | 被攻破的 renderer 可以無限次地試；錯誤藏在 log 裡 |
 
-Browser 自己的 UI 的 frame（root sink）不合格是 machopo 的 bug：debug build 是 assert，release 丟掉。
-
-定了 **V1**（已決定的事項第 1 條），只對「這一則訊息自己說不通」的；因為時序（device 換了、sink 不在了、大小變了）、資源不夠、或 machopo 自己的 bug（NaN 的座標）發生的，不算壞訊息（同一條的表）。
+定了 **V1**，只對「這一則訊息自己說不通」的（第 1 條的表）；時序（device 換了、sink 不在了、大小變了）、資源不夠、NaN 這類的不算。檢查放在 IO thread 解碼之後（B1，第 6 條，Chromium 在 mojo 解碼時驗），不過的 Viz 收不到；Viz 不再檢查一次（第 11 條：thread renderer 和 Browser 的 UI 是 machopo 自己的 compositor，debug build 送出前檢查，Viz 收到說不通的也畫得下去）。檢查的項目在第 6 條的表：沒有 pass、root 的輸出是空的；quad（262,144）、shared quad state（quad 的上限加 1）、render pass（1,024）的數量；quad 的 state 和 resource 是 frame 的、resource 的 id 不重複；resource 和 `CreateSharedImage` 的像素和大小；renderer 的 frame 不嵌別的 surface（實作時找到 Viz 以前照收，第 6 條）。
 
 ### wgpu 的錯誤
 
 | | 做法 | 好處 | 代價 |
 | --- | --- | --- | --- |
-| G1 | **先驗完，再加一層接住的**：(a) 交給 wgpu 之前把會造成錯誤的值和數量都擋掉（V1 的檢查）；(b) 每次畫一個 frame、每次上傳 shared image 包在 error scope 裡（驗證和記憶體不夠兩種），有錯誤就丟掉那一次：上傳的知道是哪個 sink，算它的壞訊息；畫的（幾個 sink 的 quad 合在一起）不知道是誰的，那個 frame 不畫、下一個照常；(c) 再裝 uncaptured error 的 handler，記錯誤、不 panic | 檢查漏了也不會結束 Browser；上傳的錯誤找得到人；debug build 和 fuzzer 把 (b)、(c) 接到的當成失敗，所以漏掉的檢查會被發現 | error scope 每個 frame 多兩次 push 和 pop（要量；wgpu 的 native 後端是同步的）；接住之後 device 的狀態要確認還能用 |
-| G2 | 只裝 uncaptured error 的 handler（不 panic） | 最少 | 不知道是哪一次、哪個 client；錯誤之後照樣 submit 半個 frame |
-| G3 | 只做先驗完，錯誤照舊 panic（當成 assert） | 沒有執行時的成本 | 檢查只要漏一個，renderer 就能結束 Browser；記憶體不夠擋不住 |
+| G1 | **先驗完，再加一層接住的**：(a) 交給 wgpu 之前把會造成錯誤的值和數量擋掉；(b) 畫一個 frame、上傳和送出 shared image 包在 error scope 裡；(c) uncaptured error 的 handler | 檢查漏了也不結束 Browser；debug build 把接到的驗證錯誤當成失敗，漏掉的檢查找得到 | 每個 frame 三層 error scope 的進出（量過：約 0.2 µs） |
+| G2 | 只裝 uncaptured error 的 handler | 最少 | 不知道是哪一次；壞的 frame 畫一半 |
+| G3 | 只先驗完，錯誤照舊 panic | 沒有執行時的成本 | 漏一個檢查就能結束 Browser；記憶體不夠擋不住 |
 
-定了 **G1**（已決定的事項第 2 條；(b)、(c) 接到的只丟掉、不結束 renderer）。對照 Chromium：client 的命令在 GPU process 裡驗證，不過的那個 client 失去 context；GPU process 自己 crash 也不會帶走 Browser。machopo 沒有 GPU process，所以要靠「驗完加接住」。
+定了 **G1**（第 2 條），接到的照種類處理（第 7 條）：驗證錯誤丟掉那一次（frame 不 present、不給 copy，shared image 當成沒建出來），debug build panic；記憶體不夠也丟掉，再放掉 texture 的池子；內部錯誤當成 device 遺失。第 0 步的探測找到 `create_buffer_init` 在 buffer 建不出來時、錯誤進了 scope 之後照樣 panic：每個 frame 的頂點改成 Viz 自己建的 buffer，照 `MAX_QUADS` 分成幾個。GPU 的記憶體用完時，llvmpipe 在 wgpu 裡 segfault、什麼都接不到：只有不讓它用完擋得住（下兩節）。
 
-### 數量的上限
+### tile 的記憶體
 
-要擋的是「合格的值、不合理的量」：
+| 什麼 | 做法 |
+| --- | --- |
+| 預算 | Browser 照 Blink 的 `GetGpuMemoryPolicy` 算（1152 MB 對 2056 x 1329、scale 2，照螢幕的像素放大；最少 512 MB；最多實體記憶體的四分之一），放進 `RendererFlags::tile_memory_limit`（第 8 條：renderer 在 sandbox 裡不知道螢幕和機器） |
+| 分給誰 | 照 cc 的 `AssignGpuMemoryToTiles` 的核心（第 9 條）：和可見範圍重疊的 tile 最先，再照距離；一張放不下之後的都放不下；放不下的放掉，可見的畫成 layer 的背景色（`OOM_MODE`），之後放得下時 raster |
+| 單色的 | 不佔：還沒 raster 的先照 paint 的指令預測（第 13 條） |
+| 兩棵樹 | commit 建好 pending tree 就放掉 active tree 沒被接手的 tile（第 12 條：raster 是同步的，active tree 不會再被畫） |
 
-| 什麼 | 現在 | 看法 |
+量測（`details.md` 的「第 3 段的量測」）之後每一頁都在預算以內：1920 x 1080、scale 2 時 Gutenberg 123 MB、SQLite 22 MB、NewsSite-Next 207 MB；刻意做的 2,000 個捲動容器剛好到 512 MiB。
+
+### Viz 的上限
+
+| | 做法 | 說明 |
 | --- | --- | --- |
-| 一個 frame 的 quad 數 | 沒有上限（一則訊息最多 128 MiB，放得下幾百萬個） | 上限照 device 的 `max_buffer_size` 換算，超過算壞訊息，而且 renderer 的 compositor 自己守同一個上限（誠實的、很重的頁面不會超過，第 1 條）；或頂點分批畫（不設上限）。第 0 步先確認超過時 wgpu 怎麼反應 |
-| 一個 sink 的 shared image 數和合計的像素 | 沒有上限 | 給一個預算（待決定：多少；Chromium 的 cc 照記憶體的預算管 tile，照記憶、沒對原始碼），超過的不做、算壞訊息還是只丟掉也待決定 |
-| render pass 數、resource 數 | 只用最後一個 pass；resource 照 frame 提到的 | 跟著 quad 數的上限 |
+| V1 | **每個 client 的位元組和張數，所有 client 合計的位元組** | Chromium 的 GPU process 只記帳，兩個上限在 renderer 的 cc；machopo 的 GPU 在 Browser 裡，所以 Viz 再擋一次，合計代替「GPU process 當掉也沒關係」 |
+| V2 | 每個 client 只限位元組 | 一大堆 1×1 的圖只佔幾 MB |
+| V3 | 只限合計 | 一個分頁用光合計，其他分頁建不出 tile |
 
-記憶體不夠（wgpu 的 OutOfMemory）由 G1 的 (b) 接住，不算誰的壞訊息。
-
-定了：quad 數是固定的上限、超過算壞訊息；shared image 由 renderer 的 compositor 照預算管，Viz 另有每個 sink 和合計的上限、超過的只丟掉（已決定的事項第 5 條）。
+定了 **V1**（第 10 條）：每個 client 是預算的兩倍、65,536 張，合計是實體記憶體的一半；超過的那個 `CreateSharedImage` 不做、不結束 renderer（第 5 條）。量到的最多是一個分頁 512 MiB、2,310 張。
 
 ### Browser 處理訊息時的 panic
 
 | | 做法 | 好處 | 代價 |
 | --- | --- | --- | --- |
-| P1 | **照現在：不 panic 是程式的性質，靠審查、lint 和 fuzzer**；這份把現有的 `expect` 逐一看過（哪些不變式是 renderer 的訊息順序破得了的）、fuzzer 進 CI | 和 Chromium 一樣（它的 `CHECK` 失敗就是 Browser crash，靠驗證和 fuzz）；狀態不會壞一半 | 漏一個就是 Browser 結束 |
-| P2 | P1，再在訊息的入口 `catch_unwind`：panic 當成那個 renderer 的壞訊息 | 漏掉的也只結束一個分頁 | panic 的當下 Browser 的狀態可能改了一半（frame 樹、session history、拿著的鎖會 poison）；之後的行為沒有保證，可能比結束更糟（安靜地錯）；Rust 的慣例是 panic 不當成錯誤處理 |
+| P1 | **不接 panic：不 panic 是程式的性質，靠檢查、審查和 lint** | 狀態不會壞一半；和 Chromium 一樣（`CHECK` 失敗是 crash） | 不變式錯了照樣結束 Browser |
+| P2 | P1，再在訊息的入口 `catch_unwind` | 漏掉的也只結束一個分頁 | panic 的當下狀態可能改了一半（session history、被 poison 的鎖），之後可能安靜地錯 |
 
-定了 **P1**，加上只在處理 renderer 輸入的模組打開 panic 的 lint（已決定的事項第 3 條）；Viz thread 也一樣（它的 panic 由 G1 拿掉來源，不用 `catch_unwind`）。第 0 步試一次「Viz thread panic 之後 Browser 怎麼樣」，結果是卡住（沒有 frame、沒有結束）的話，至少讓它變成明確的結束。
+定了 **P1**，加上 lint（第 3、15 條）：`browser`、`viz`、`net` 的根和 `protocol` 的 `viz.rs` 打開 `unwrap_used`、`expect_used`、`indexing_slicing`、`panic`、`unreachable`。原本的 80 處多半改寫成不 panic 的（`net` 的解壓縮、鎖、Viz 的 resource、commit 的導覽），其他寫帶理由的 `#[expect]`（session history 的 `current` 和 `items` 的不變式，逐一讀過所有改它們的地方）。不打開整個 workspace（2,922 處，九成以上在 renderer 這一側，那裡的 panic 是那個分頁的 sad tab）。
 
-### fuzzer 和 CI
-
-- 新的 fuzz target：任意的 `CompositorFrameSinkMsg` 序列餵給 `Display`，用真的 wgpu（CPU adapter：lavapipe）畫；找 panic、wgpu 的錯誤（G1 的 (b)、(c) 接到的算失敗）、卡住。和現有的 `renderer_message` 一樣，檢查寫成整合測試、fuzz target 只是呼叫它，找到的輸入留在 `regressions/` 由 `cargo test` 重放。
-- 現有的 `renderer_message` fuzzer 不改。
+### fuzzer
 
 | | 做法 | 說明 |
 | --- | --- | --- |
-| C1 | **兩個 fuzzer 進每週的 CI**（`gc.yml` 那一類排程的 job，各跑固定的分鐘數） | 定期有人跑；找到的要有人看（失敗的輸入存成 artifact） |
-| C2 | 照舊只在本機跑（`docs/test-gaps.md` 現在的樣子） | 不動 CI；改到這幾個檔案的人記得跑 |
+| Z1 | **不加，CI 也不跑** | 檢查有單元測試和 mutation test；debug build 的驗證錯誤 panic，每天的測試都經過 Viz |
+| C1 | Viz 的 frame 的 fuzzer，兩個 fuzzer 進每週的 CI | 原本選的 |
+| Z2 | `cargo test` 裡固定種子的隨機輸入 | 不照涵蓋率找，淺 |
 
-定了 **C1**（已決定的事項第 4 條）。
+定了 **Z1**（第 14 條，取代第 4 條）。現有的 `renderer_message` fuzzer 照舊只在本機跑。
 
 ### 測試
 
-- **不合格的 frame 結束那個 renderer，Viz 沒收到**：`browser` 的整合測試，假的 renderer process（`renderer_process.rs` 的 `child` 的角色）送說不通的 frame、shared image 和嵌別人 surface 的 frame，看分頁收到壞訊息、process 被結束、Viz 沒收到它；說得通的到 Viz。原本打算寫成 `shell` 的整合測試（Browser 還在、另一個分頁照畫），但 `machopo` 的執行檔裡的 renderer 送不出說不通的 frame，要假的就得在執行檔裡留一條測試用的路；Viz 沒收到，其他分頁畫什麼就和它無關。
-- **wgpu 的錯誤不 panic**：`viz` 的測試直接對 `WgpuRenderer` 做會造成驗證錯誤的事（繞過檢查），確認接住、下一個 frame 照畫。
-- **上限**：剛好在 quad 的上限和超過一個的 frame（超過的是壞訊息）；Viz 的 shared image 的上限剛好到和超過（超過的那個不做、其他照畫）；renderer 的 compositor 超過預算時先放掉 prepaint 的 tile、現在要畫的放不下時畫成單色，量測的頁面都在預算裡。
-- **Browser 的 `expect` 和索引**：打開 lint 的模組 clippy 沒有警告（每一處有帶理由的 `#[expect]`，或改寫掉了）；逐一看的結果寫進 `progress.md`，破得了的補檢查和測試。
-- mutation test：每一條檢查拿掉、error scope 拿掉、壞訊息不回報。
+- **說不通的訊息**：`protocol` 的單元測試（每一種、每個上限的邊）；`browser` 的整合測試：假的 renderer process 送說不通的 frame、shared image 和嵌別人 surface 的 frame，分頁收到壞訊息、process 被結束、Viz 沒收到，說得通的到 Viz（原本打算是 `shell` 的整合測試，但 `machopo` 的執行檔裡的 renderer 送不出說不通的 frame）；Viz 收到說不通的畫得下去、沒有 wgpu 的錯誤。
+- **wgpu 的錯誤**：scope 接到它包著的、只接那些；沒有 scope 的由 handler 收；三種各自的處理；debug build 的驗證錯誤 panic；有錯誤的 frame 不給 copy、下一個照畫；比一個 buffer 多的頂點從幾個 buffer 畫。GPU 和 CPU 的 adapter 都過。
+- **記憶體**：實體記憶體和 `/proc/meminfo` 一致；預算和上限的公式；compositor 照距離給、一張放不下之後的都放不下、單色的不佔、commit 時舊的 tile 先放掉；renderer process 收到預算；Viz 的三個上限各自擋得住、讓出空間。
+- **lint**：四個範圍在 clippy 下沒有警告。
+- mutation test：第 1 段 32 個、第 2 段 13 個、第 3 段 28 個，全部抓到（`progress.md`）；第 4 段沒有（lint 是靜態的，改寫照原本的行為）。
 
 ### 分階段
 
-0. 草稿和盤點（這一版），加上探測：Viz 用到的每個 wgpu 呼叫失敗時是走錯誤回報、回 `Result`，還是直接 panic（`create_buffer_init` 是直接 panic 的候選）。2026-11-27 做完，結果在 `details.md` 的「第 0 步的探測」；超過 `max_buffer_size` 和 GPU 記憶體不夠時實際怎麼反應；NaN 的座標有沒有驗證錯誤；Viz thread panic 之後 Browser 怎麼樣；error scope 的成本。
-1. Viz 的檢查補齊、不合格的 frame 算壞訊息（V1）、quad 數的上限（第 5 條的一）。
-2. wgpu 的錯誤接住（G1 的 (b)、(c)）；不經過錯誤回報、直接 panic 的呼叫換掉（頂點 buffer 的 `create_buffer_init` 換成 `create_buffer` 再處理 mapped range 的 `Err`，和 shared image 的 `stage` 一樣；`details.md` 的「wgpu 的呼叫失敗時」）。
-3. renderer 的 compositor 的 tile 的記憶體預算（第 5 條的二）；量測誠實的頁面用到多少；Viz 的 shared image 的上限（S1）照量到的定。
-4. `browser` 和 `viz` 處理 renderer 輸入的模組打開 panic 的 lint、逐一寫理由或改寫（第 3 條）；規則寫進 `crates/base/README.md` 和 `CLAUDE.md`。原本還有 Viz 的 fuzzer 和兩個 fuzzer 進 CI，第 14 條拿掉了。
+0. 草稿、盤點和探測（做完；`details.md` 的「第 0 步的探測」）。
+1. **說不通的訊息是壞訊息**（做完，2026-11-27；第 1、6 條）：`CompositorFrameSinkMsg::check`、IO thread、quad 的上限、compositor 守上限。
+2. **wgpu 的錯誤接住**（做完，2026-11-27；第 2、7 條）：error scope、handler、頂點的 buffer。
+3. **GPU 的記憶體**（做完，2026-11-27；第 8 到 13 條）：預算、compositor 的分配、Viz 的上限、量測，量測之後 Viz 不再檢查 frame、commit 時放掉 active tree 的 tile、單色的不佔。
+4. **panic 的 lint**（做完，2026-11-27；第 14、15 條）。
 
 ## 缺點
 
-- 多一層檢查和 error scope：每個 frame 多一點成本（第 0 步量）。
-- 上限是新的「合法的網頁可能撞到」的地方：renderer 的 compositor 要自己守同一個 quad 的上限（超過時少畫），不然 quad 很多的頁面會變成 sad tab；tile 的預算讓 prepaint 的 tile 比以前少，捲動快的時候可能先看到單色的 tile。
-- machopo 自己的 bug（compositor 送出不合格的 frame）以前是畫錯或沒畫，之後是 sad tab：比較吵，但看得到。
-- 沒有 fuzzer 找沒想到的輸入（第 14 條）：守著的是 IO thread 的檢查、手寫的測試、mutation test 和 debug build 的 panic，每天的測試只餵誠實的頁面。
+- 每個 frame 多一點成本：IO thread 的檢查（2,000 個 quad 約 30 µs，開發的 build）、三層 error scope（約 0.2 µs）、compositor 照距離排 tile。
+- 上限是誠實的網頁可能撞到的地方：quad 超過 262,144 個時 compositor 丟掉最底下的；tile 的預算讓極重的頁面少了預先畫好的 tile，捲得快時先看到背景色。
+- machopo 自己的 compositor 的 bug 以前是畫錯或沒畫，現在是 sad tab：比較吵，但看得到。
+- 沒有 fuzzer 找沒想到的輸入（第 14 條）；GPU 驅動自己的 bug、記憶體用完時驅動不回報的，照樣結束 Browser（`docs/limitations.md`）。
 
 ## 理由和其他做法
 
-- **不做的話**：被攻破的 renderer 不用逃出 sandbox，送一個讓 wgpu 驗證失敗的 frame 就結束整個 Browser、所有分頁；site isolation 後面幾份的前提（壞訊息只結束那個 renderer）不成立。
-- **直接做 GPU process**：Chromium 的做法，wgpu 的錯誤和驅動程式的 crash 都只影響 GPU process；但那是另一個量級的工作，而且 frame 的驗證還是要做。
+- **不做的話**：被攻破的 renderer 不用逃出 sandbox，送一個 quad 太多的 frame 就結束整個 Browser；site isolation 後面幾份的前提（壞訊息只結束那個 renderer）不成立。
+- **直接做 GPU process**：Chromium 的做法，wgpu 的錯誤和驅動的 crash 都只影響 GPU process，記憶體用完時是它結束、Browser 重開它；但那是另一個量級的工作（renderer 的 frame、Browser 的 UI 都要跨 process，各平台的 GPU sandbox），frame 的驗證照樣要做。做 WebGL、WebGPU 或把 raster 搬到 Viz 那一側之前該做。
 - 各節的選項比較在上面。
 
 ## 先例
 
-- **Chromium**（照記憶，各節開始時對原始碼）：Viz 在 GPU process；client 的 frame 經過 mojo 的型別驗證和 `viz` 的檢查，不過的 `ReportBadMessage`、結束那個 client；GPU 的命令在 GPU process 驗證，不過的 client 失去 context；Browser 的 `CHECK` 失敗就是 crash，靠驗證和 fuzz（`content/browser/bad_message.h` 的那一長串理由）。
+- **Chromium**（2026-11-27 對了原始碼，`details.md` 的「Chromium 怎麼做」）：Viz 在 GPU process；mojo 的 traits 讀 `CompositorFrame` 時驗形狀（不數 quad），`MaybeSubmitCompositorFrame` 驗 surface 的狀態，不過的關掉那個 `CompositorFrameSink` 的 pipe；`SharedImageStub` 建不出 shared image（記憶體不夠也是）時停掉那個 client 的 GPU channel；GPU process 對 client 只記帳（`MemoryTracker`），tile 的預算在 renderer 的 cc（`GetGpuMemoryPolicy`、`TileManager`）；Browser 的 `CHECK` 失敗是 crash，DoS 不算安全漏洞（security FAQ）。
 - **Firefox**：沒查。
 
 ## 已決定的事項
 
-1. **不合格的 frame 算那個 renderer 的壞訊息（V1）**（2026-11-27，使用者決定）：Viz 告訴 Browser 是哪個 sink，Browser 照 `received_bad_message` 結束那個 renderer、分頁顯示 sad tab（`BadMessageReason` 多一種）。Browser 自己的 UI 的 frame（root sink）不合格是 machopo 的 bug：debug build 是 assert，release 丟掉。理由：和 Browser 其他的檢查同一條路；被攻破的 renderer 不能一直試；Chromium 也是不過的結束那個 client。代價：Viz 要多一條回 Browser 的路；machopo 自己的 compositor 的 bug 也變成 sad tab（比較吵，但看得到）。不選照舊丟掉、記一筆（V2）。
+1. **不合格的 frame 算那個 renderer 的壞訊息（V1）**（2026-11-27，使用者決定）：Viz 告訴 Browser 是哪個 sink，Browser 照 `received_bad_message` 結束那個 renderer、分頁顯示 sad tab（`BadMessageReason` 多一種）。Browser 自己的 UI 的 frame（root sink）不合格是 machopo 的 bug：debug build 是 assert，release 丟掉。理由：和 Browser 其他的檢查同一條路；被攻破的 renderer 不能一直試；Chromium 也是不過的結束那個 client。代價：Viz 要多一條回 Browser 的路；machopo 自己的 compositor 的 bug 也變成 sad tab（比較吵，但看得到）。不選照舊丟掉、記一筆（V2）。（誰檢查、怎麼回報，第 6 條改成 IO thread 解碼時、走現有的壞訊息的路，Viz 不必回 Browser。）
    **只有「這一則訊息自己說不通」的才算**（2026-11-27，使用者問「不合格的 frame 會不會是不穩定造成的」之後補的）：誠實的 renderer 在任何時序下都不會送的（像素的長度和大小對不上、超過兩邊都知道的 texture 上限、超過 renderer 自己也守的數量上限）。其他的照下表，實作時每一條檢查標明是哪一類：
 
    | 情況 | 處理 |
@@ -154,11 +160,11 @@ Browser 自己的 UI 的 frame（root sink）不合格是 machopo 的 bug：debu
 
    Chromium 的原則也是這樣：只有 renderer 本來就該知道不能這樣的才結束它，可能因為時序發生的一律忽略。實作時要釐清的：device 遺失之後 renderer 用同一個 mailbox 的編號重建 shared image，和現在「同一個編號建兩次」的檢查會不會撞。
 2. **wgpu 的錯誤：先驗完，再用 error scope 和 uncaptured error 的 handler 接住（G1）**（2026-11-27，使用者決定）：(a) 交給 wgpu 之前把會造成錯誤的值和數量擋掉（第 1 條的檢查）；(b) 每次畫一個 frame、每次上傳 shared image 包在 error scope 裡（`Validation`、`OutOfMemory`、`Internal` 三種各一層），有錯誤就丟掉那一次；(c) 裝 uncaptured error 的 handler，記錯誤、不 panic。(b)、(c) 接到的一律只丟掉、記錯誤，不結束 renderer（記憶體不夠不是誰的錯；驗證錯誤表示 (a) 漏了，是 machopo 要修的；畫的時候幾個 sink 的 quad 合在一起，也分不出是誰的）：結束 renderer 只靠 (a)。debug build 和 fuzzer 把 (b)、(c) 接到的驗證錯誤當成失敗，漏掉的檢查才找得出來。理由：(b)、(c) 就是 wgpu 自己說的兩種處理錯誤的方式（`Error` 的文件：「By default, errors translate into panics……use `Device::push_error_scope()` or `Device::on_uncaptured_error()`」）；但它們接不住全部：wgpu 自己的 Rust 程式裡有直接 panic 的路（`create_buffer_init` 建不出 buffer 時，錯誤進了 error scope，下一行對 mapped range 的 `expect` 照樣 panic；照程式讀的，`details.md` 的「wgpu 的錯誤處理」），那些只有 (a) 擋得住，或換成不會 panic 的寫法。error scope 是每條 thread 一份，Viz 的 wgpu 呼叫都在 Viz thread 上。代價：每個 frame 多幾次 error scope 的進出（第 0 步量）。不選只裝 handler（G2：不知道是哪一次，壞的 frame 畫一半）。不選只先驗完、錯誤照舊 panic（G3：漏一個檢查就能結束 Browser，記憶體不夠擋不住）。Chromium 在 GPU process 驗證命令，machopo 沒有 GPU process。
-3. **Browser 的 panic 不接；處理 renderer 輸入的模組用 lint 守（P1 加 E1）**（2026-11-27，使用者決定）：不在訊息的入口 `catch_unwind`。`browser` 處理 renderer 訊息的模組和 `viz` 收 frame 的模組打開 clippy 的 `unwrap_used`、`expect_used`、`indexing_slicing`、`panic`、`unreachable`；留下的每一處用 `#[expect(lint, reason = "...")]`，理由寫 renderer 為什麼破不了那個不變式（和整數運算的規則同一個寫法，`crates/base/README.md`）；測試不套用。理由：2026-11-27 用 clippy 數過（只編 lib 和執行檔，不含測試；`details.md` 的「會 panic 的寫法有多少（量的）」）：整個 workspace 2,922 處，renderer 的輸入在 Browser 這一側走得到的只有約 50 處（`browser` 43：22 個 `expect`、21 個索引，28 處在 `navigation_controller.rs`；`viz` 9），逐一寫理由做得到；這份本來就要逐一論證它們，lint 讓論證留在程式裡，之後新加的被擋下來、不靠人記得，補上「不接 panic」漏一處就結束 Browser 的弱點。不接的理由：panic 的當下狀態可能改了一半（session history、被 poison 的鎖），接住之後的行為沒有保證，可能安靜地錯；Chromium 的 `CHECK` 失敗也是 Browser crash，靠驗證和 fuzz。不選整個 workspace 都打開（E2：2,922 處，九成以上在 renderer 這一側，其中 1,663 處是 layout、paint 這類的索引；renderer 的 panic 只是那個分頁的 sad tab）。不選不加 lint（E3：這次論證過的，之後再加一處就沒人看）。不選 `catch_unwind` 當最後一道（P2）。
+3. **Browser 的 panic 不接；處理 renderer 輸入的模組用 lint 守（P1 加 E1）**（2026-11-27，使用者決定）：不在訊息的入口 `catch_unwind`。`browser` 處理 renderer 訊息的模組和 `viz` 收 frame 的模組打開 clippy 的 `unwrap_used`、`expect_used`、`indexing_slicing`、`panic`、`unreachable`；留下的每一處用 `#[expect(lint, reason = "...")]`，理由寫 renderer 為什麼破不了那個不變式（和整數運算的規則同一個寫法，`crates/base/README.md`）；測試不套用。理由：2026-11-27 用 clippy 數過（只編 lib 和執行檔，不含測試；`details.md` 的「會 panic 的寫法有多少（量的）」）：整個 workspace 2,922 處，renderer 的輸入在 Browser 這一側走得到的只有約 50 處（`browser` 43：22 個 `expect`、21 個索引，28 處在 `navigation_controller.rs`；`viz` 9），逐一寫理由做得到；這份本來就要逐一論證它們，lint 讓論證留在程式裡，之後新加的被擋下來、不靠人記得，補上「不接 panic」漏一處就結束 Browser 的弱點。不接的理由：panic 的當下狀態可能改了一半（session history、被 poison 的鎖），接住之後的行為沒有保證，可能安靜地錯；Chromium 的 `CHECK` 失敗也是 Browser crash，靠驗證和 fuzz。不選整個 workspace 都打開（E2：2,922 處，九成以上在 renderer 這一側，其中 1,663 處是 layout、paint 這類的索引；renderer 的 panic 只是那個分頁的 sad tab）。不選不加 lint（E3：這次論證過的，之後再加一處就沒人看）。不選 `catch_unwind` 當最後一道（P2）。（範圍第 15 條改成整個 `browser`、`viz` crate，加上 `net` 和 `protocol` 的 `viz.rs`。）
 4. **兩個 fuzzer 進每週的 CI（C1）**（2026-11-27，使用者決定）：現有的 `renderer_message`（Browser 對 renderer 的訊息）和這份新的 Viz frame 的 fuzzer，放進每週排程的 job（照 `gc.yml` 的 GC fuzz 的寫法：有時限、失敗的輸入存成 artifact），runner 上裝 cargo-fuzz。理由：CI 現在跑的 fuzz 只有 GC 的（隨機的 GC 設定，不是 cargo-fuzz），cargo-fuzz 的兩種（`browser`、`ipc`）都只在本機跑，每天的 `cargo test` 只重放找到過的輸入；這份的保證靠 fuzzer，lint（第 3 條）擋不住的「訊息的順序破了不變式」正是要長時間跑的。代價：改 workflow；Viz 的 fuzzer 在 CI 上只有 CPU 的 adapter（lavapipe）；失敗要有人看。不選照舊只在本機跑（C2）。`ipc` 的 fuzzer 進不進 CI 不在這份。
 5. **數量的上限：quad 數固定、超過算壞訊息；tile 的預算在 renderer，Viz 另設上限、超過只丟掉（Q1 加 S1，renderer 的預算放在這份）**（2026-11-27，使用者決定）：
    - 一、**一個 frame 的 quad 數**：protocol 的常數（暫定 2^18 = 262,144 個，頂點約 120 MiB），超過算壞訊息：從訊息本身就看得出（第 1 條）；renderer 的 compositor 送出前守同一個常數（超過時少畫後面的，debug build 會 assert）。理由：Viz 把一個 frame 的頂點放在一個 wgpu 的 buffer 裡，上限 256 MiB（machopo 要的 limits，和 adapter 無關；`details.md` 的「第 0 步的探測」）；Viz 只有一條 thread，幾百萬個 quad 的 frame 卡住所有的分頁。Chromium 的 Viz 不數 quad（`details.md` 的「Chromium 怎麼做」），它畫 quad 不受一個 buffer 的限制。不選頂點分批畫（Q2：記憶體能用固定的 buffer 分幾次 submit 擋住，Viz thread 的時間擋不住）。不選超過只丟掉（Q3：誠實的 bug 看不到）。
-   - 二、**shared image**：renderer 的 compositor 有 tile 的記憶體預算，照 Chromium 的 `GetGpuMemoryPolicy`（最少 512 MB、照螢幕的像素放大、最多實體記憶體的四分之一），超過時照 cc 的 TileManager：先放掉 prepaint 的 tile，現在要畫的放不下時畫成單色。Viz 另有每個 sink 的上限（暫定 renderer 預算的兩倍）和所有 sink 合計的上限，超過的那個 `CreateSharedImage` 不做、記錯誤，不結束 renderer（S1；第 1 條的「資源不夠」）。數字在第 3 段量過誠實的頁面之後定：`scripts/bench/raster` 的頁面（Gutenberg、SQLite、NewsSite-Next；捲動、改視窗大小、scale 2），加上刻意做的三種（一萬個 `will-change` 的元素、4K 的視窗裡一個很大的 layer、很多分頁）。理由：Chromium 的預算是 renderer 自己守的，GPU process 那一側沒有上限，建不出 shared image 時停掉那個 client 的 GPU channel，GPU process 當掉時 Browser 重開它；machopo 的 GPU 在 Browser 的 process 裡，記憶體用完時（至少 llvmpipe）是 segfault、error scope 接不到，所以 Browser 這一側要有上限。誠實的 renderer 照預算就不會撞到 Viz 的上限，所以超過的只丟掉、不結束 renderer。不選超過算壞訊息（S2：預算估錯時誠實的重頁面是 sad tab）。不選像 Chromium 一樣丟掉那個 sink 所有的 shared image、告訴它 context 不見了（S4：renderer 重建、又撞到，一直重來）。不選只靠 OutOfMemory 的 error scope（S3：接不到 segfault）。renderer 的預算放在這份而不是另一份：沒有它，Viz 的上限沒有依據，誠實的重頁面也會缺 tile。
+   - 二、**shared image**：renderer 的 compositor 有 tile 的記憶體預算，照 Chromium 的 `GetGpuMemoryPolicy`（最少 512 MB、照螢幕的像素放大、最多實體記憶體的四分之一），超過時照 cc 的 TileManager：先放掉 prepaint 的 tile，現在要畫的放不下時畫成單色。Viz 另有每個 sink 的上限（暫定 renderer 預算的兩倍）和所有 sink 合計的上限，超過的那個 `CreateSharedImage` 不做、記錯誤，不結束 renderer（S1；第 1 條的「資源不夠」）。數字在第 3 段量過誠實的頁面之後定：`scripts/bench/raster` 的頁面（Gutenberg、SQLite、NewsSite-Next；捲動、改視窗大小、scale 2），加上刻意做的三種（一萬個 `will-change` 的元素、4K 的視窗裡一個很大的 layer、很多分頁）（量的時候改成 2,000 個捲動容器和一個長頁面：machopo 的 `will-change` 不成為 layer，捲動容器才會；很多分頁是每個分頁的量相加，沒有另外量；`details.md` 的「第 3 段的量測」）。理由：Chromium 的預算是 renderer 自己守的，GPU process 那一側沒有上限，建不出 shared image 時停掉那個 client 的 GPU channel，GPU process 當掉時 Browser 重開它；machopo 的 GPU 在 Browser 的 process 裡，記憶體用完時（至少 llvmpipe）是 segfault、error scope 接不到，所以 Browser 這一側要有上限。誠實的 renderer 照預算就不會撞到 Viz 的上限，所以超過的只丟掉、不結束 renderer。不選超過算壞訊息（S2：預算估錯時誠實的重頁面是 sad tab）。不選像 Chromium 一樣丟掉那個 sink 所有的 shared image、告訴它 context 不見了（S4：renderer 重建、又撞到，一直重來）。不選只靠 OutOfMemory 的 error scope（S3：接不到 segfault）。renderer 的預算放在這份而不是另一份：沒有它，Viz 的上限沒有依據，誠實的重頁面也會缺 tile。
 6. **第 1 段：只看訊息本身的檢查在 IO thread 解碼之後跑（B1），算壞訊息的照下表**（2026-11-27，使用者決定）：檢查是 `protocol::viz` 的一個函式，Browser 的 IO thread 解開 `CompositorFrameSinkMsg` 之後就跑，不過的走現有的壞訊息的路（分頁結束那個 renderer）；renderer 的 compositor 送出前在 debug build 跑同一個並 assert。原本 Viz 也對每個 frame 再跑一次（同一個 process 裡的 thread renderer，`--single-process`，不經過 IO thread），不過的丟掉；第 11 條拿掉了。要看 Viz 的狀態的（mailbox 認不認得、sink 登記了沒）照第 1 條只丟掉。理由：Chromium 在 mojo 解碼時驗（`StructTraits` 的 `Read`，`details.md` 的「Chromium 怎麼做」）；IO thread 已經有回報壞訊息的路，Viz 沒有回 Browser 的路。代價：IO thread 每個 frame 多走一次 quad。不選在 Viz 驗、另開一條回 Browser 的通道（B2：多一條通道，Viz 要從 sink 找到分頁）。
 
    | 檢查 | 之後 |
@@ -189,10 +195,12 @@ Browser 自己的 UI 的 frame（root sink）不合格是 machopo 的 bug：debu
 
 ## 待決定
 
-沒有。各段開始前要決定的，開始時再列。
+沒有。
 
 ## 之後的可能
 
-- GPU process。
-- renderer 的記憶體和 GPU 記憶體的預算（Chromium 的 cc 的 tile 管理）。
+- GPU process（做 WebGL、WebGPU 或把 raster 搬到 Viz 那一側之前）。
+- 非同步的 raster：tile 的預算兩棵樹一起分、activation 的條件（第 12 條）。
+- renderer 的 tile 的優先順序照捲動的方向和速度（cc 的 `skewport`）。
 - Browser 其他不可信的輸入的 fuzzer（`net` 的回應、DevTools 的訊息）。
+- panic 時經過 log 記下來、log 寫進檔案（現在只到 stderr）。

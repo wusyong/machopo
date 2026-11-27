@@ -12,7 +12,7 @@
 
 | 代號 | RFC | 範圍 | 規模 | 依賴 | 主要動到 | 里程碑 |
 | --- | --- | --- | --- | --- | --- | --- |
-| A：[RFC 0123](../0123-browser-survives-renderer/README.md)（2026-11-27 接受） | Browser 不被 renderer 弄倒 | Viz 收 frame 時把會走到 wgpu 的值驗完；wgpu 的驗證錯誤用 error scope 接住、丟掉那個 frame、算那個 renderer 的壞訊息；Browser 處理 renderer 訊息的路上不 panic（逐一看 `unwrap`、索引、整數運算）；Browser 訊息的 fuzzer 加上 frame 的、放進每週的 CI | S–M | — | `viz`、`browser`、fuzz | M1 |
+| A：[RFC 0123](../0123-browser-survives-renderer/README.md)（2026-11-27 完成） | Browser 不被 renderer 弄倒 | IO thread 解開 renderer 送給 Viz 的訊息就檢查，說不通的是它的壞訊息；wgpu 的錯誤用 error scope 和 handler 接住；GPU 的記憶體有預算和上限；`browser`、`viz`、`net` 會 panic 的地方寫明不變式（lint）；不加 fuzzer（原本打算加、進 CI） | S–M | — | `viz`、`browser`、`compositor`、`net` | M1 |
 | N | 跨源的回應不交給不該拿的 renderer | ORB（Fetch 的 opaque response blocking：`no-cors` 的跨源回應照 MIME type 和內容的開頭擋掉 HTML、JSON、XML）；`Cross-Origin-Resource-Policy`；都在 network service 這一側（renderer 拿到的是擋過的） | M | — | `net`、`protocol` | M1 |
 | F1 | 不讓別人嵌：`X-Frame-Options` 和 CSP 的 `frame-ancestors` | Browser 在子 frame 的導覽 commit 之前檢查（Chromium 的 `AncestorThrottle`；`frame-ancestors` Chromium 在 renderer 檢查，machopo 兩個都放 Browser）；不准的顯示錯誤頁。完整的 CSP 不在這份 | S–M | — | `browser` 的導覽、`net` 的 header | M1 |
 | C | 跨網站的導覽換 process | Browser 的 `SiteInstance`、`BrowsingInstance`（先是一個分頁一個 group）；決定一次導覽要不要換 process（site 不同、錯誤頁、`about:blank` 和 `data:` 跟著發起者、`file:`）；在新的 process commit、舊的收掉（`pagehide`、`unload` 的時機）；session history、DevTools 的 session、WebDriver 的 session、automation 跨過換 process；renderer 啟動的時間（要不要先備一個） | L | — | `browser`（`web_contents`、`frame_tree`、`navigation_controller`、`render_process_host`）、`shell` 的 automation、`scripts/bench` | M2 |
