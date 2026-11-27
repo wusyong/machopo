@@ -18,25 +18,25 @@ renderer 的設定（`AddDefaultConfigForSandboxedProcess`、`GenerateConfigForS
 - **shim**：`SetZeroAppShim()`，`kWinSboxZeroAppShim` 預設開（WOW 和 ARM64 的模擬底下不做）。
 - **環境**：`SetFilterEnvironment(true)`。
 - **AppContainer**：`kRendererAppContainer`，預設關。
-- 其他：一份會出問題的 DLL 的清單在啟動時卸掉（`kTroublesomeDlls`）；`kWinSboxModuleTamperingProtection` 預設開，但上面讀的檔案沒有用到它（不知道它在哪裡、對 renderer 做什麼）。
+- 其他：一份會出問題的 DLL 的清單在啟動時卸掉（`kTroublesomeDlls`）；`kWinSboxModuleTamperingProtection` 預設開：`process_mitigations.cc` 把它變成建立時的 `MODULE_TAMPERING_PROTECTION_ALWAYS_ON`，給建立時就開 CIG 的 process（主程式的 import 表被改過時換上乾淨的映像）；Chromium 的 renderer 的 CIG 是降權之後開的，用不到它（第 3 段之前查的）。
 
 ## 和 machopo 的對照
 
-machopo 現在的（`sunaba::windows` 的 `Command::spawn` 和 `lower`，`shell::renderer_sandbox` 的 Windows 的 policy）：
+machopo 的（`sunaba::windows` 的 `Command::spawn` 和 `lower`，`shell::renderer_sandbox` 的 Windows 的 policy；這份做完之後，粗體是這份改的）：
 
 | | Chromium 的 renderer | machopo 的 renderer |
 | --- | --- | --- |
-| token | restricted：`USER_RESTRICTED_SAME_ACCESS` 再到 `USER_LOCKDOWN` | AppContainer（沒有 capability，每個 renderer 一個），沒有 restricted 的 SID |
-| default DACL | 鎖住 | 系統給 AppContainer 的 token 的 |
+| token | restricted：`USER_RESTRICTED_SAME_ACCESS` 再到 `USER_LOCKDOWN` | AppContainer（沒有 capability，每個 renderer 一個），**從 `USER_LOCKDOWN` 的 restricted token 建；第一個 thread 帶 same-access 加 AppContainer 的，降權時還回；loader 一條 thread** |
+| default DACL | 鎖住 | 系統給 AppContainer 的 token 的（就是 Chromium 要的樣子，**測試守著**） |
 | integrity | Low 再到 Untrusted | 同左（renderer 自己降） |
-| job | 一個 process、關掉時結束、例外時結束、UI 的限制、記憶體 1 TB | 同左，**沒有記憶體上限** |
-| desktop | 另一個 window station 和 desktop | **和 Browser 同一個** |
-| 建立時的 mitigation | 上面那一串，加 win32k | 同左，加 child process 的限制；只許 Microsoft 簽章的也在建立時（Chromium 在降權後） |
+| job | 一個 process、關掉時結束、例外時結束、UI 的限制、記憶體 1 TB | 同左，**記憶體上限是實體記憶體的一半、最少 4 GB** |
+| desktop | 另一個 window station 和 desktop | **Browser 建的另一個 window station 和 desktop** |
+| 建立時的 mitigation | 上面那一串，加 win32k | 同左，加 child process 的限制；只許 Microsoft 簽章的也在建立時（Chromium 在降權後），**和 module tampering protection 一起** |
 | 降權後 | DLL 的搜尋順序、嚴格的 handle 檢查 | 同左 |
 | CET、ACG | 只有 jitless 的開 | 都沒開（沒有 jitless 的模式） |
-| 關掉的 handle | `DeviceApi`、`KsecDD`、shell 的 global counters | **沒有** |
+| 關掉的 handle | `DeviceApi`、`KsecDD`、shell 的 global counters | **`KsecDD`**（另外兩種沒有） |
 | CSRSS | 預設不斷開 | 不斷開 |
-| shim | 不載入 | **載入**（量環境變數時 apphelp 在 renderer 裡讀 `SHIM_*`） |
+| shim | 不載入 | **不載入**（ARM64 上模擬時照系統給的，和 Chromium 一樣） |
 | 環境 | 過濾 | 過濾（清單） |
 | 不共用 CPU core | 預設關 | 沒有 |
 
@@ -181,7 +181,7 @@ module 15 個，有 `CRYPTBASE.DLL`、`bcrypt.dll`、`bcryptprimitives.dll`，�
 6. S1：所有 renderer 共用時，第一個 renderer 啟動時換 Browser 的 window station 的那一下，對 Browser 的 UI thread 有沒有影響（只有建 window station 時要換）。
 7. 記憶體上限：renderer 超過時怎麼結束（結束碼、Browser 看到的、分頁的說明）；常見的頁面和量測工具（Speedometer、blink_perf）的 renderer 最多 commit 多少，訂 M2 的數字。
 
-第 3 段之前：
+第 3 段之前（做了，上一節）：
 
 8. 降權後的 renderer 拿著哪些 handle（從外面列 process 的 handle 和它們的型別、名字），有沒有 `\Device\DeviceApi`、`\Device\KsecDD`、shell 的 global counters 的 section。
 9. renderer 有沒有連到 csrss 的 ALPC port；關掉之後頁面照不照常。

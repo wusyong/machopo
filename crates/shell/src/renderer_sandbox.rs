@@ -493,9 +493,6 @@ pub mod windows {
     /// started: it is inside, and is to make the attempt itself.
     pub const INSIDE: &str = "inside";
 
-    /// The name of the app container of the renderer `number` of the
-    /// browser `browser`: one no other renderer has, of this browser or
-    /// of another running beside it.
     /// The least a renderer process may commit, whatever the machine.
     pub const LEAST_MEMORY_LIMIT: u64 = 4 << 30;
 
@@ -512,6 +509,9 @@ pub mod windows {
         usize::try_from(half.max(LEAST_MEMORY_LIMIT)).unwrap_or(usize::MAX)
     }
 
+    /// The name of the app container of the renderer `number` of the
+    /// browser `browser`: one no other renderer has, of this browser or
+    /// of another running beside it.
     pub fn app_container(browser: u32, number: u64) -> String {
         format!("machopo.renderer.{browser}.{number}")
     }

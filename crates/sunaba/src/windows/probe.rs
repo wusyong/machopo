@@ -21,6 +21,7 @@
 //! words WORD...                   (how many arguments it was given)
 //! length WORD                     (how many bytes the argument is)
 //! env NAME                        (how many bytes the variable is)
+//! allocate MEGABYTES              (committed, then given back)
 //! sleep SECONDS
 //! abort
 //! ```

@@ -37,8 +37,8 @@ to = '''    let _ = initial;'''
 name = "the loader keeps its threads"
 file = "crates/sunaba/src/windows.rs"
 from = '''    one_loader_thread(process)?;
-    let thread = thread.as_raw_handle();'''
-to = '''    let thread = thread.as_raw_handle();'''
+    no_app_shim(process)?;'''
+to = '''    no_app_shim(process)?;'''
 
 [[mutant]]
 name = "the first thread doesn't give its token back"

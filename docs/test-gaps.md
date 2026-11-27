@@ -588,4 +588,3 @@
 - `ipc` 的 macOS 和 Linux 的 `available_disk_space`（`platform/unix.rs`）用 `f_bavail`（一般使用者能用的），換成 `f_bfree`（連 superuser 保留的也算）：macOS 的 APFS 沒有保留給 superuser 的空間，兩個數一樣，所以在 macOS 上是等價的；Linux 的 ext4 預設保留 5%，`crates/ipc/tests/it/disk_space.rs` 拿來比的 `df -kP` 的 Available 是 `f_bavail`，在那裡抓得到。留著 `f_bavail` 是照 Chromium 的 `AmountOfFreeDiskSpace`。
 - `sunaba` 的 macOS 的 `environment`（`macos.rs`）不把 buffer 截到 `sysctl` 說寫了多少：buffer 是同一個 `sysctl` 先回答的大小，kernel 沒寫到的部分是 0，解析讀到環境之後的空字串就停，多出來的 0 讀不到。留著截掉，是讓解析的只有 kernel 給的。
 - `sunaba` 的 Windows 的 `environment`（`windows.rs`）不確認 `ReadProcessMemory` 讀滿了要的長度：它讀不滿時本來就回報失敗（`ERROR_PARTIAL_COPY`），回報成功時讀的就是全部。留著比，是不靠那個說法也不會把沒讀到的部分當成環境。
-- `sunaba` 的 Windows 的 `lower` 在還回啟動用的 token 之前要一次亂數（`RtlGenRandom`）：這台 Windows 11 上做亂數的 DLL 在 process 啟動時就由 loader 載入了，拿掉之後 process 照樣起得來、renderer 畫的頁面相同。留著是因為那不是 machopo 保證的：以前的探測裡 V8 第一次要亂數時才載入它，載不進來就 `abort`、沒有訊息，換了 Windows 的版本或 DLL 的載入順序就會回來（Chromium 的 `WarmupRandomnessInfrastructure` 也是）。

@@ -1,6 +1,6 @@
 # RFC 0121 的進度：Windows 的 renderer sandbox 的下一級：restricted token 和另一個 desktop
 
-開始日期：2026-11-27（Windows 11，10.0.26300，x86-64）。
+開始日期：2026-11-27。完成日期：2026-11-27（Windows 11，10.0.26300，x86-64；三段都在這台上做和驗。Windows 10 和 ARM64 沒試；V8 的 OOM 改到的 Linux、macOS 由 CI 的測試看）。
 
 ## 步驟
 
@@ -61,54 +61,22 @@
 - **順手修的**：`shell` 的測試的 `Browser::start_wrapped` 只有 Linux 的測試用到，Windows 上 workspace 的 clippy 因為 dead code 失敗（不是這一段造成的）：不是 Linux 時 `expect(dead_code)`。
 - **跑過的檢查**：`cargo test -p sunaba`（整合測試 25 個，都通過）；`cargo test -p shell -p ipc`（都通過）；`cargo test -p shell --test it renderer_sandbox_windows`（13 個，都通過）；`cargo test --workspace`、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`（都通過）；量測工具的測試（`speedometer_test.py`、`blink_perf_test.py`、`raster_test.py`、`census_test.py`，都通過）；`sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs（都通過）。
 
-### 2a（2026-11-27，同一台）
+### 2a 到 2d（2026-11-27，同一台）
 
-- **做法**：探測的原型（沒有 commit）改寫成 `sunaba` 的 `alternate_desktop`：一個 `Mutex<Option<Vec<u16>>>` 存名字，第一次照 policy 啟動時建（`CreateWindowStationW` 不給名字，暫時 `SetProcessWindowStation` 過去，`CreateDesktopW` 名字是 `sunaba-<PID>`，再換回來），handle 不關；建不了時 `spawn` 回錯誤、不啟動，下一次再試。允許 win32k 的 process 不放上去。`desktop(id)` 讀 process 的參數的 `DesktopInfo`（x64 的 `+ 0xC0`）。window station 的 handle 要 `GENERIC_READ` 才讀得到名字（只給 `WINSTA_CREATEDESKTOP` 時 `GetUserObjectInformationW` 被拒，`sunaba` 的測試全部失敗）：照 Chromium 給 `GENERIC_READ | WINSTA_CREATEDESKTOP`。名字在建 desktop 之前讀，讀不到時不留下 desktop。
-- **`user32` 的延後載入**：`sunaba` 現在呼叫 `user32` 的函式，連結它的 `sunaba_probe` 啟動時就載入 `user32`，關著 win32k 的 probe 起不來；`sunaba` 加了 `build.rs`，讓 `sunaba_probe` 和 machopo 的執行檔一樣 `/DELAYLOAD:user32.dll`。改了之後 `sunaba` 原有的測試照樣通過。
-- **新的測試**：`sunaba` 的整合測試 1 個（兩個 policy 底下的 process 在同一個 starter 建的 desktop 上，名字的形式；沒有 policy 的、允許 win32k 的不在上面）、unit test 1 個（建完之後 starter 的 window station 不變、只建一次）；`shell` 的 `renderer_sandbox_windows` 的 3 個加上 desktop 的檢查（測試的 process 啟動的 renderer 在它建的上；Browser 啟動的在 `sunaba-<Browser 的 PID>` 上；`--no-sandbox` 的不在）。
-- **Mutation test**（`mutants-2a.toml`，9 個，`--keep-going`）：都抓到：不給 `lpDesktop`（`sunaba` 的和 machopo 的 renderer 各一次）、允許 win32k 的也放上去、不換回 starter 的 window station、不存起來給下一次、desktop 的名字不帶 PID、`alternate_desktop_name` 說沒有、`DesktopInfo` 讀錯位置、讀成它的最大長度。跑完確認 `windows.rs` 都還原了。
-- **補不了測試的**：另一個 desktop 的 DACL 擋住連上 win32k 的 process（`sunaba` 不把允許 win32k 的 process 放上去，沒有 process 是兩者都有的；探測時看過）：記進 `docs/test-gaps.md` 的「只做過手動確認」。
-- **跑過的檢查**：`cargo test -p sunaba -p ipc -p shell`（`sunaba` 的 unit test 8 個、整合測試 26 個，`shell` 的整合測試 755 個，都通過）；`sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs（都通過）。`cargo test --workspace`、fmt 和 clippy 等第 2 段做完時跑。
+- **做法**：探測的原型（沒有 commit）改寫成 `sunaba` 的 `alternate_desktop`：一個 `Mutex<Option<Vec<u16>>>` 存名字，第一次照 policy 啟動時建（`CreateWindowStationW` 不給名字，暫時 `SetProcessWindowStation` 過去，`CreateDesktopW` 名字是 `sunaba-<PID>`，再換回來），handle 不關；建不了時 `spawn` 回錯誤、不啟動，下一次再試；允許 win32k 的 process 不放上去。window station 的 handle 照 Chromium 給 `GENERIC_READ | WINSTA_CREATEDESKTOP`（只給後者時讀不到名字，`sunaba` 的測試全部失敗）。`desktop(id)` 讀 process 的參數的 `DesktopInfo`（x64 的 `+ 0xC0`）。`Policy::limit_memory` 讓 job 帶 `JOB_OBJECT_LIMIT_PROCESS_MEMORY` 和一個 completion port，`Child::exceeded_memory_limit` 不等待地收完 port 上的通知；`browser` 存的 renderer 的結束改成 `ChildProcessTerminationInfo`（結束碼和「碰過上限」）；`shell` 的上限是實體記憶體的一半、最少 4 GB，sad tab 多一種「記憶體不夠」。查了 Chromium（`gin/v8_initializer.cc`、`gin/isolate_holder.cc`、Blink 的 `v8_oom.cc`）之後，`bindings` 的 `oom` 在每個 isolate 上設 `set_oom_error_handler`，往 stderr 分段寫一行（不配置記憶體），以 `OUT_OF_MEMORY_EXIT`（6）當場結束，sad tab 照它說記憶體不夠（已決定的事項第 10 條）。
+- **`user32` 的延後載入**：`sunaba` 呼叫 `user32` 之後，連結它的 `sunaba_probe` 啟動時就載入 `user32`，關著 win32k 起不來；`sunaba` 加了 `build.rs`，讓 `sunaba_probe` 和 machopo 的執行檔一樣 `/DELAYLOAD:user32.dll`。
+- **新的測試**：`sunaba` 的整合測試 2 個（policy 底下的 process 在 starter 建的 desktop 上、沒有 policy 的和允許 win32k 的不在；有上限時多要的被拒、starter 被告知，以內的和沒有上限的照常）、unit test 1 個（建完之後 starter 的 window station 不變、只建一次）；`browser` 的整合測試 1 個（一直要記憶體的 renderer 結束時帶「碰過上限」，`about:crash` 不帶）；`bindings` 的整合測試 1 個（`--max-old-space-size=16` 底下一直配置的 script：結束碼 6、stderr 那一行、緩衝裡的字沒有寫出來）；`shell` 的 unit test（上限的算法、sad tab 照「碰過上限」和結束碼 6 說），`renderer_sandbox_windows` 的 3 個加上 desktop 的檢查。
+- **Mutation test**（`mutants-2a.toml` 9 個、`mutants-2b.toml` 10 個、`mutants-2c.toml` 8 個，都 `--keep-going`）：2a 全部抓到（不給 `lpDesktop`、允許 win32k 的也放上去、不換回、不存、名字不帶 PID、讀錯位置等）。2b 抓到 9 個，沒抓到的是 `browser_view` 只把結束碼交給 sad tab（`shell` 沒有讓分頁的 renderer 碰到上限的測試）。2c 抓到 6 個；照一般的方式結束（`std::process::exit`）的那一個補了 stdout 緩衝的檢查之後單獨再跑抓到，不寫 V8 的細節的那一個測不到（heap 用完時 V8 不給細節）。沒抓到的記進 `docs/test-gaps.md` 的「只靠審查」；另一個 desktop 的 DACL 擋住連上 win32k 的 process 記進「只做過手動確認」。每次跑完確認檔案都還原了。
+- **一次失敗的整套**：2b 第一次跑 `shell` 的整合測試時，`automation_pipe` 的 12 個在同一刻等滿 30 秒逾時，其他 743 個通過；那時這台機器正在跑 VR 遊戲（VR 的 compositor 佔住 GPU），這幾個測試每一格都等 wgpu。單獨跑、只跑 `automation_pipe::`、再跑整套兩次（一次在重新 link 之後）都通過。GPU 被別的程式佔住時，碰 GPU 的測試的結果不能用。
+- **情境**：沒有加。「記憶體不夠」的 sad tab 是 Browser 畫的，不在 DOM 裡，情境也沒有辦法給 renderer 一個小的 heap；`--window` 的那時沒跑（GPU 被 VR 遊戲佔住）。字和當掉的不同由 `sad_tab` 的 unit test 守著。
+- **跑過的檢查**：各段的 `cargo test -p sunaba -p ipc -p browser -p bindings -p dom_js -p shell`（都通過，除了上面那一次）；`sanity.py` 的七項；第 2 段做完的 `cargo fmt --check`（2b 的三個檔案的排版，改了）、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace`（63 個測試 binary，5012 個通過、2 個 ignored，沒有失敗）。
 
-### 2b（2026-11-27，同一台）
+### 3a 到 3c（2026-11-27，同一台）
 
-- **做法**：`sunaba` 的 `Policy::limit_memory` 讓 job 帶 `JOB_OBJECT_LIMIT_PROCESS_MEMORY`（每個 process 能 commit 的上限），有上限時 job 接一個 completion port；`Child::exceeded_memory_limit` 把 port 上的通知收完（不等），看過 `JOB_OBJECT_MSG_PROCESS_MEMORY_LIMIT` 就記住。`browser` 存的 renderer 的結束從 `ExitStatus` 改成 `ChildProcessTerminationInfo`（結束碼和「碰過上限」），在 process 結束之後問。`shell` 的 renderer 的上限是實體記憶體的一半、最少 4 GB（`physical_memory` 讀 `GlobalMemoryStatusEx`），sad tab 多一種「記憶體不夠」，碰過上限的不管結束碼是什麼都說是它。
-- **新的測試**：`sunaba` 的整合測試 1 個（64 MB 的上限底下要 256 MB 被拒、starter 被告知；16 MB 的照常拿到、沒有告知；沒有上限的拿得到 256 MB；`sunaba_probe` 多了 `allocate` 的嘗試和 `--memory-limit`）；`browser` 的整合測試 1 個（256 MiB 的上限底下一直要記憶體的 renderer 結束時帶「碰過上限」，同樣上限的 `about:crash` 不帶）；`shell` 的 unit test 2 個（上限的算法和 renderer 的 policy 帶著它；sad tab 照「碰過上限」說，不管結束碼）。
-- **Mutation test**（`mutants-2b.toml`，10 個，`--keep-going`）：抓到 9 個：job 不設上限、有上限的 job 沒有 port、每則通知都當成碰到上限、只讀第一則通知、Browser 不問、sad tab 不看「碰過上限」、renderer 不設上限、上限是全部的實體記憶體、上限是最多 4 GB。沒抓到 1 個：`browser_view` 只把結束碼交給 sad tab（`shell` 沒有讓分頁的 renderer 碰到上限的測試）：記進 `docs/test-gaps.md` 的「只靠審查」。跑完確認改過的檔案都還原了。
-- **一次失敗的整套**：第一次跑 `shell` 的整合測試時，`automation_pipe` 的 12 個在同一刻等滿 30 秒逾時（`machopo answers`），其他 743 個通過；那時這台機器正在跑 VR 遊戲（VR 的 compositor 佔住 GPU），這幾個測試每一格都等 wgpu。單獨跑、只跑 `automation_pipe::`、再跑整套兩次（一次在重新 link 之後，排除剛 link 的執行檔被掃描）都通過。GPU 被別的程式佔住時，碰 GPU 的測試的結果不能用。
-- **跑過的檢查**：`cargo test -p sunaba -p ipc -p browser -p shell`（`shell` 的整合測試 755 個，和其他的都通過，除了上面那一次）；`sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs（都通過）。`cargo test --workspace`、fmt 和 clippy 等第 2 段做完時跑。
-
-### 2c（2026-11-27，同一台）
-
-- **做法**：查了 Chromium（`gin/v8_initializer.cc`、`gin/isolate_holder.cc`、Blink 的 `v8_oom.cc`）之後照已決定的事項第 10 條（O1）：`bindings` 的 `oom` 在每個 isolate 上設 `set_oom_error_handler`，往 stderr 分段寫一行（不配置記憶體），用 `ipc::platform::terminate_current_process_immediately` 以 `OUT_OF_MEMORY_EXIT`（6）結束；`dom_js` 轉出這個常數，sad tab 照它說記憶體不夠。
-- **新的測試**：`bindings` 的整合測試 1 個（測試的 binary 再執行一次自己，`--max-old-space-size=16` 底下跑一直配置的 script：結束碼 6、stderr 那一行是 heap 的、帶 V8 給的位置、stdout 緩衝裡的字沒有寫出來、測試框架的結尾那一行沒有出現）；`shell` 的 sad tab 的 unit test 加上結束碼 6（碰沒碰過上限都說記憶體不夠）。
-- **Mutation test**（`mutants-2c.toml`，8 個，`--keep-going`）：抓到 6 個：isolate 沒有 handler、結束碼不對、stderr 什麼都不寫、heap 的說成 process 的、不寫位置、sad tab 不認這個結束碼。沒抓到 2 個：照一般的方式結束（`std::process::exit`）：補了 stdout 緩衝的檢查之後單獨再跑，抓到了；不寫 V8 的細節：heap 用完時 V8 不給細節，記進 `docs/test-gaps.md` 的「只靠審查」。跑完確認改過的檔案都還原了。
-- **跑過的檢查**：`cargo test -p bindings -p dom_js -p ipc -p shell`（`bindings` 的整合測試 61 個、`shell` 的整合測試 755 個，和其他的都通過）；`sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs（都通過）。`cargo test --workspace`、fmt 和 clippy 等第 2 段做完時跑。
-
-### 2d（2026-11-27，同一台）
-
-- **第 2 段的檢查**：`cargo fmt --check` 只有 2b 的三個檔案的排版（`cargo fmt` 改了，在這一段的 commit 裡）；`cargo clippy --workspace --all-targets -- -D warnings` 沒有警告；`cargo test --workspace`（63 個測試 binary，5012 個通過、2 個 ignored，沒有失敗）。
-- **情境**：沒有加。「記憶體不夠」的 sad tab 是 Browser 畫的，不在 DOM 裡，情境只能截圖給人看；情境也沒有辦法給 renderer 一個小的 heap（不然要用掉好幾 GB）。沒有平台視窗的情境不存截圖（試過一份暫時的、用 `MACHOPO_V8_FLAGS=--max-old-space-size=16` 跑，看完刪掉了），`--window` 的那時沒跑（這台機器在跑 VR 遊戲，GPU 被佔住）。字和當掉的不同由 `sad_tab` 的 unit test 守著，畫的是和 `sad-tab.txt` 截的同一條路。
-- **文件**：驗收加上記憶體上限、V8 的 OOM、sad tab 的五項；`docs/limitations.md` 的兩條（Windows 的上限、V8 的 OOM 沒涵蓋的）、`docs/test-gaps.md` 的三條（另一個 desktop 的 DACL、`browser_view` 交給 sad tab 的、V8 的細節）在各段裡加了；`sanity.py docs` 通過。
-
-### 3a（2026-11-27，同一台）
-
-- **做法**：照已決定的事項第 11 條（D1）。`lower` 在要過一次亂數之後、開嚴格的 handle 檢查之前，列出自己的 handle（`ProcessHandleInformation`），問每個的種類和名字（pipe 不問名字：會等著別人在讀的那一次），關掉 `\Device\KsecDD` 的；每關一個，讓 thread 留在同一個處理器上，複製一個 event 的 handle 直到複本落在空出的位置（Chromium 的 `AttemptToStuffHandleSlot`），event 和那個複本留到 process 結束。排在嚴格的檢查之前，是因為另一條 thread 在列的期間關掉的 handle 這時只是錯誤、跳過，不會結束 process（Chromium 也是關完 handle 才開這個 mitigation）。`sunaba` 加上從外面列 handle 的 `handles(id)`（值、種類、名字、物件的 handle 數），`sunaba_probe` 加上 `random` 的嘗試。
-- **新的測試**：`sunaba` 的整合測試 1 個：policy 底下、要過亂數但沒有降權的 process 開著那個裝置；降權的沒有，有「裝置的 handle 數加一」個 handle 指到同一個 event，而且亂數照常。實際的 renderer 用探測的腳本從外面看：KsecDD 從 2 個變成 0 個，頁面的 `crypto.getRandomValues`、`Math.random`、`crypto.randomUUID` 照常。
-- **Mutation test**（`mutants-3a.toml`，11 個，`--keep-going`）：抓到 8 個：降權不關、關別的裝置、不放複本、複本不留、event 不留、名字從錯的位置讀、handle 的值讀錯、handle 數讀錯。沒抓到 3 個（預期的，記進 `docs/test-gaps.md` 的「只靠審查」）：不拿掉不許關的保護、問 pipe 的名字、thread 不留在同一個處理器上：測試的 process 沒有這三種情況。複本是不是在空出的那個位置也只靠審查：handle 的值每個 process 不一樣，從外面看不出來。跑完確認改過的檔案都還原了。
-- **整理**：第 2 段的三份 spec（`mutants-2a.toml`、`mutants-2b.toml`、`mutants-2c.toml`）當時只留在本機，補進這個資料夾；`mutants-1.toml` 的「降權前不要亂數」那一條照 `cargo fmt` 之後的排版更新。現在五份的每一條都還對得上程式。
-- **跑過的檢查**：`cargo test -p sunaba -p shell`（`sunaba` 的 Windows 整合測試 28 個、`shell` 的整合測試 755 個，和其他的都通過）；`sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs（都通過）。`cargo test --workspace`、fmt 和 clippy 等第 3 段做完時跑。
-
-### 3b（2026-11-27，同一台）
-
-- **做法**：照已決定的事項第 11 條（H1、M1）和「3b 的做法」。查了 Chromium（`sandbox_policy_base.cc` 的 `ApplyZeroAppShimToSuspendedProcess`、`sandbox_win.cc` 開它的條件、`process_mitigations.cc`）：`sunaba` 的 `start` 在寫 `LoaderThreads` 之後，把暫停著的 process 的 PEB 的 `pShimData`（`+0x2D8`，x64 和 ARM64 一樣）寫成 0，寫不了時不啟動；`IsWow64Process2` 說系統原生的架構和執行檔的不同（x64 在 ARM64 上模擬）時不寫。建立時的第二個 mitigation 字在沒有 `allow_third_party_modules` 時多一個 `MODULE_TAMPERING_PROTECTION_ALWAYS_ON`（bit 12）。`sunaba` 加上從外面讀 `pShimData` 的 `shim_data(id)`；讀 PEB 位置的部分從 `parameters_of` 拆成 `peb_of`。
-- **新的測試**：`sunaba` 的整合測試 1 個（policy 底下的 process 的 `pShimData` 是 0；沒有 policy 的只斷言讀得到：這台機器上它不是 0，別的機器上可能本來就是 0）；`sunaba` 的 mitigation 的單元測試加上 bit 12、`allow_third_party_modules` 時沒有它。實際的 renderer 用探測的腳本從外面看：`pShimData` 是 0（之前不是 0）、沒有 `apphelp.dll`、KsecDD 是 0，頁面照常（開著 module tampering protection 也起得來）。
-- **Mutation test**（`mutants-3b.toml`，8 個，`--keep-going`）：抓到 7 個：不寫 `pShimData`、寫在後面 8 個 byte、每台機器都當成模擬、執行檔當成 ARM64 的、不加 module tampering protection、加成關掉它的那一個 bit、允許別人的 DLL 時也加。沒抓到 1 個（預期的）：寫失敗時不當成錯誤：暫停著的 process 有全部的權限，測試寫不失敗；和 module tampering protection 的效果、模擬時不寫的那條路一起記進 `docs/test-gaps.md` 的「只靠審查」。跑完確認改過的檔案都還原了。
-- **跑過的檢查**：`cargo test -p sunaba -p shell`（`sunaba` 的 Windows 整合測試 29 個、`shell` 的整合測試 755 個，和其他的都通過）；`sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs（都通過）。`cargo test --workspace`、fmt 和 clippy 等第 3 段做完時跑。
-
-### 3c（2026-11-27，同一台）
-
-- **第 3 段的檢查**：`cargo fmt --check` 沒有差異；`cargo clippy --workspace --all-targets -- -D warnings` 一處（`handles.rs` 讀 handle 的清單時用 `chunks_exact`，改成 `as_chunks`）；`cargo test --workspace` 第一次 1 個失敗（下一條），cargo 停在 `shell`，後面 14 個 binary 沒跑；用 `--no-fail-fast` 再跑一次：63 個測試 binary，5014 個通過、2 個 ignored，沒有失敗。`sanity.py` 的七項都通過。
-- **不穩定的測試**：`automation_pipe::hung_renderers_take_the_limit_once`（Windows）在第一次的整套裡失敗：「machopo 結束之後 renderer 都不在了」那一個 assert，`tasklist` 還列得到三個 pid 裡的某一個。單獨跑 10 次都通過。這是已知的（另一份 RFC 的「不穩定的測試」記過同一個 assert：整套平行跑時偶爾失敗，推測是 pid 在 machopo 結束到測試問 `tasklist` 之間被別的測試的 machopo 重用）。這次另外確認了：結束了、但還有人拿著 handle 的 process，`tasklist` 不列，所以不是有人拿著 renderer 的 handle。這一段沒有改到 renderer 怎麼結束；修法還是不要事後用 pid 問系統，沒有在這份 RFC 裡改。
-- **renderer process 的驗收**：`shell` 的 `a_renderer_process_is_in_the_sandbox` 加上從外面看 `pShimData` 是 0、沒有 KsecDD 的 handle（之前只用探測的腳本看過）。`mutants-3c.toml`（2 個：renderer 降權時不關、建立時不寫 `pShimData`）都抓到，跑完確認檔案都還原了。
-- **文件**：驗收加上 handle、shim、mitigation、探測的三件四項；RFC 和 `rfcs/README.md` 的狀態寫上第 3 段做完；`sanity.py docs` 通過。
+- **做法**：照已決定的事項第 11 條。`lower` 在要過一次亂數之後、開嚴格的 handle 檢查之前，列出自己的 handle（`ProcessHandleInformation`），問每個的種類和名字（pipe 不問名字：會等著別人在讀的那一次），關掉 `\Device\KsecDD` 的；每關一個，讓 thread 留在同一個處理器上，複製一個 event 的 handle 直到複本落在空出的位置（Chromium 的 `AttemptToStuffHandleSlot`），event 和那個複本留到 process 結束。查了 Chromium（`sandbox_policy_base.cc` 的 `ApplyZeroAppShimToSuspendedProcess`、`sandbox_win.cc` 開它的條件、`process_mitigations.cc`）之後，`sunaba` 的 `start` 在寫 `LoaderThreads` 之後把 PEB 的 `pShimData`（`+0x2D8`）寫成 0，寫不了時不啟動，`IsWow64Process2` 說是模擬時不寫；沒有 `allow_third_party_modules` 時建立時的第二個 mitigation 字多一個 `MODULE_TAMPERING_PROTECTION_ALWAYS_ON`。`sunaba` 加上從外面看的 `handles(id)`、`shim_data(id)`，`sunaba_probe` 加上 `random` 的嘗試。
+- **新的測試**：`sunaba` 的整合測試 2 個（要過亂數、沒有降權的 process 開著那個裝置，降權的沒有、有「裝置的 handle 數加一」個 handle 指到同一個 event、亂數照常；policy 底下的 process 的 `pShimData` 是 0，沒有 policy 的只斷言讀得到：別的機器上可能本來就是 0）；mitigation 的單元測試加上 bit 12、`allow_third_party_modules` 時沒有它；`shell` 的 `a_renderer_process_is_in_the_sandbox` 從外面看 renderer process 沒有 KsecDD 的 handle、`pShimData` 是 0。探測的腳本另外看了實際的 renderer：KsecDD 從 2 個變成 0 個，`pShimData` 從非 0 變成 0，沒有 `apphelp.dll`，頁面的 `crypto.getRandomValues`、`Math.random`、`crypto.randomUUID` 照常。
+- **Mutation test**（`mutants-3a.toml` 11 個、`mutants-3b.toml` 8 個，`--keep-going`；`mutants-3c.toml` 2 個）：3a 抓到 8 個；沒抓到的 3 個（不拿掉不許關的保護、問 pipe 的名字、thread 不留在同一個處理器上）是測試的 process 沒有的情況，和「複本在空出的那個位置」（handle 的值每個 process 不一樣，從外面看不出來）一起記進 `docs/test-gaps.md` 的「只靠審查」。3b 抓到 7 個；寫失敗時不當成錯誤的那一個測不到（暫停著的 process 有全部的權限），和 module tampering protection 的效果、模擬時不寫的那條路一起記進「只靠審查」。3c 的兩個（renderer 降權時不關、建立時不寫 `pShimData`）由 `shell` 的測試抓到。每次跑完確認檔案都還原了。
+- **整理**：第 2 段的三份 spec 當時只留在本機，補進這個資料夾；`mutants-1.toml` 的「降權前不要亂數」那一條照 `cargo fmt` 之後的排版更新，「loader 照舊平行」那一條照 3b 在中間加的 `no_app_shim` 更新（完成時的檢查才發現）。兩條重跑都抓到；七份的每一條都對得上程式。
+- **不暖機不再是等價的**：第 1 段記成等價的那一個（不在降權前要一次亂數），重跑時由 3a 的 `a_process_that_lowered_itself_has_no_handle_to_the_kernels_security_device` 抓到（只用它跑也抓到）：KsecDD 的 handle 是暖機的亂數開的，沒有暖機就沒有 handle、沒有填進去的 event。從 `docs/test-gaps.md` 的「等價、不用處理的 mutation」和 `crates/sunaba/soundness.md` 的 Windows 沒有測試、靠審查的那一串拿掉。
+- **不穩定的測試**：`automation_pipe::hung_renderers_take_the_limit_once`（Windows）在第 3 段做完的第一次整套裡失敗：「machopo 結束之後 renderer 都不在了」那一個 assert，`tasklist` 還列得到三個 pid 裡的某一個；單獨跑 10 次都通過。這是已知的（另一份 RFC 的「不穩定的測試」記過同一個 assert，推測是 pid 在 machopo 結束到測試問 `tasklist` 之間被別的測試的 machopo 重用）。這次另外確認了：結束了、但還有人拿著 handle 的 process，`tasklist` 不列，所以不是有人拿著 renderer 的 handle。這份沒有改到 renderer 怎麼結束；修法（不要事後用 pid 問系統）不在這份裡做。
+- **跑過的檢查**：各段的 `cargo test -p sunaba -p shell`（都通過）；`sanity.py` 的七項；第 3 段做完的 `cargo fmt --check`（沒有差異）、`cargo clippy --workspace --all-targets -- -D warnings`（一處：讀 handle 的清單時的 `chunks_exact` 改成 `as_chunks`）、`cargo test --workspace`：第一次停在上面那個失敗，用 `--no-fail-fast` 再跑一次：63 個測試 binary，5014 個通過、2 個 ignored，沒有失敗。

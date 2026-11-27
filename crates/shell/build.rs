@@ -7,9 +7,8 @@
 //! as they load turned off: a process with them loaded at its start
 //! doesn't start that way.
 
-/// What the executable links that a renderer process doesn't call.
-/// `dwrite.dll` a renderer does call, for the system's fonts: it is
-/// loaded then, and brings in neither `user32.dll` nor `gdi32.dll`.
+/// What the executable links that a renderer process doesn't call:
+/// `dwrite.dll` too, as a renderer is given its fonts by the browser.
 const DELAY_LOADED: &[&str] = &[
     "user32", "gdi32", "imm32", "ole32", "dwmapi", "uxtheme", "shell32", "oleaut32", "setupapi",
     "dxgi", "opengl32", "winmm", "dbghelp", "crypt32", "ws2_32", "userenv", "dwrite",

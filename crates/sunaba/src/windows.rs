@@ -285,7 +285,8 @@ impl Policy {
 
     /// DLLs that Microsoft didn't sign may be loaded: for a machine
     /// where other software puts its own into every process, and the
-    /// process wouldn't start without.
+    /// process wouldn't start without. Module tampering protection, which
+    /// the system gives only with that signature check, is left off too.
     pub fn allow_third_party_modules(&mut self) -> &mut Self {
         self.third_party_modules = true;
         self
@@ -1848,10 +1849,12 @@ unsafe fn sid_text(sid: PSID) -> String {
 
 /// Where in a 64-bit process its parameters are
 /// (`RTL_USER_PROCESS_PARAMETERS`, which its PEB points to), and in
-/// those its environment block's address and size in bytes, and how many
-/// threads its loader is to use. The last three aren't in the public
-/// `winternl.h`; the first two have been where they are since Windows
-/// Vista, the third since Windows 10.
+/// those its environment block's address and size in bytes, its
+/// desktop's name, and how many threads its loader is to use; and, in
+/// the PEB itself, its compatibility shims. Only the first is in the
+/// public `winternl.h`; the environment's and the desktop's have been
+/// where they are since Windows Vista, the loader's since Windows 10, and
+/// the shims' is where Chromium writes it.
 #[cfg(target_pointer_width = "64")]
 mod peb {
     pub const PROCESS_PARAMETERS: usize = 0x20;
