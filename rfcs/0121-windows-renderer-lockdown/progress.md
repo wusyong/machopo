@@ -13,7 +13,7 @@
 | 2a. desktop：`sunaba` 第一次照 policy 啟動時建 window station 和它上面的 desktop、之後的都用它（允許 win32k 的不用）；從外面讀 `DesktopInfo`（`desktop`）；`sunaba_probe` 延後載入 `user32`；測試 | 做完 | 2026-11-27 |
 | 2b. job 的記憶體上限（實體記憶體的一半，最少 4 GB）、job 的 completion port、Browser 存的結束帶「碰過記憶體上限」、sad tab 的「記憶體不夠」；測試 | 做完 | 2026-11-27 |
 | 2c. V8 的 OOM：`bindings` 設 `set_oom_error_handler`、固定的結束碼、sad tab 對到「記憶體不夠」（三個平台）；測試 | 做完 | 2026-11-27 |
-| 2d. 第 2 段的檢查和文件 | 還沒開始 | |
+| 2d. 第 2 段的檢查和文件 | 做完 | 2026-11-27 |
 | 3. 探測的三件（handle、CSRSS、shim） | 還沒開始 | |
 
 ## 驗收
@@ -29,6 +29,11 @@
 | desktop | policy 底下的 process 在 starter 建的 window station（logon session 的沒有名字的那一個）和 desktop（`sunaba-<starter 的 PID>`）上，同一個 starter 的都在同一個上；沒有 policy 的、允許 win32k 的在 starter 的上；建完之後 starter 自己的 window station 不變；renderer 在 Browser 建的上，`--no-sandbox` 的不在 | `sunaba` 的 `a_process_under_the_policy_is_on_a_desktop_its_starter_made`、`making_the_desktop_leaves_this_process_on_its_own_window_station`；`shell` 的 `a_renderer_process_is_in_the_sandbox`、`a_renderer_process_told_no_sandbox_is_in_none`、`a_browsers_renderer_is_in_the_sandbox_unless_the_browser_is_told_otherwise` |
 | 延後載入 | renderer 降權之後碰到延後載入的 DLL（`ws2_32`）時以 `0xC06D007E` 結束，stderr 有一行說是哪一個 DLL、它在 sandbox 裡降權之後載不進來 | `shell` 的 `a_renderer_ends_on_a_dll_it_cant_load_and_says_which` |
 | 網頁看到的 | sandbox 裡、外和 thread 上的 renderer 畫的系統字型、測試字型、時區和 `Intl` 相同；wasm 的文件在 sandbox 裡和 thread 上畫的相同；整套 `shell` 的測試在 lockdown 的 renderer 上通過 | `shell` 的 `a_sandboxed_renderer_shows_a_page_as_one_outside_does`、`a_sandboxed_renderer_runs_a_wasm_document_as_one_outside_does`、`a_renderer_process_has_the_systems_fonts_from_its_browser`；`cargo test -p shell` |
+| 記憶體上限 | policy 帶上限時，process 要超過它的記憶體被拒、starter 從 job 知道它碰過上限；上限以內的照常拿到、不告知；沒有上限的不限 | `cargo test -p sunaba --test it windows::`（`a_process_with_a_memory_limit_is_refused_more_and_its_starter_told`） |
+| 記憶體上限 | renderer 的上限是實體記憶體的一半、最少 4 GB，renderer 的 policy 帶著它 | `cargo test -p shell --lib renderer_sandbox`（`a_renderer_may_commit_half_the_machines_memory_and_4_gib_at_least`） |
+| 記憶體上限 | Browser 存下的 renderer 的結束帶「碰過上限」：一直要記憶體的 renderer 有，同樣上限底下 `about:crash` 的沒有 | `cargo test -p browser --test it renderer_process::`（`a_renderer_process_that_ran_out_of_its_memory_is_told_apart`） |
+| V8 的 OOM | V8 用完 heap 時 process 當場以結束碼 6 結束（緩衝裡的不寫出、測試框架的結尾不出現），stderr 有一行說是 heap、V8 給的位置 | `cargo test -p bindings --test it out_of_memory::`（`a_script_that_runs_v8_out_of_its_heap_ends_its_process_saying_so`） |
+| sad tab | 碰過上限的（不管結束碼）、以結束碼 6 結束的都說記憶體不夠，字和當掉的不同；sandbox 進不去、DLL 載不進來的照舊 | `cargo test -p shell --lib sad_tab`（`a_renderer_that_ran_out_of_memory_is_told_apart_whatever_it_exited_with`、`a_renderer_that_couldnt_enter_its_sandbox_is_told_apart_from_a_crash`） |
 
 ## 做過的檢查
 
@@ -72,3 +77,9 @@
 - **新的測試**：`bindings` 的整合測試 1 個（測試的 binary 再執行一次自己，`--max-old-space-size=16` 底下跑一直配置的 script：結束碼 6、stderr 那一行是 heap 的、帶 V8 給的位置、stdout 緩衝裡的字沒有寫出來、測試框架的結尾那一行沒有出現）；`shell` 的 sad tab 的 unit test 加上結束碼 6（碰沒碰過上限都說記憶體不夠）。
 - **Mutation test**（`mutants-2c.toml`，8 個，`--keep-going`）：抓到 6 個：isolate 沒有 handler、結束碼不對、stderr 什麼都不寫、heap 的說成 process 的、不寫位置、sad tab 不認這個結束碼。沒抓到 2 個：照一般的方式結束（`std::process::exit`）：補了 stdout 緩衝的檢查之後單獨再跑，抓到了；不寫 V8 的細節：heap 用完時 V8 不給細節，記進 `docs/test-gaps.md` 的「只靠審查」。跑完確認改過的檔案都還原了。
 - **跑過的檢查**：`cargo test -p bindings -p dom_js -p ipc -p shell`（`bindings` 的整合測試 61 個、`shell` 的整合測試 755 個，和其他的都通過）；`sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs（都通過）。`cargo test --workspace`、fmt 和 clippy 等第 2 段做完時跑。
+
+### 2d（2026-11-27，同一台）
+
+- **第 2 段的檢查**：`cargo fmt --check` 只有 2b 的三個檔案的排版（`cargo fmt` 改了，在這一段的 commit 裡）；`cargo clippy --workspace --all-targets -- -D warnings` 沒有警告；`cargo test --workspace`（63 個測試 binary，5012 個通過、2 個 ignored，沒有失敗）。
+- **情境**：沒有加。「記憶體不夠」的 sad tab 是 Browser 畫的，不在 DOM 裡，情境只能截圖給人看；情境也沒有辦法給 renderer 一個小的 heap（不然要用掉好幾 GB）。沒有平台視窗的情境不存截圖（試過一份暫時的、用 `MACHOPO_V8_FLAGS=--max-old-space-size=16` 跑，看完刪掉了），`--window` 的那時沒跑（這台機器在跑 VR 遊戲，GPU 被佔住）。字和當掉的不同由 `sad_tab` 的 unit test 守著，畫的是和 `sad-tab.txt` 截的同一條路。
+- **文件**：驗收加上記憶體上限、V8 的 OOM、sad tab 的五項；`docs/limitations.md` 的兩條（Windows 的上限、V8 的 OOM 沒涵蓋的）、`docs/test-gaps.md` 的三條（另一個 desktop 的 DACL、`browser_view` 交給 sad tab 的、V8 的細節）在各段裡加了；`sanity.py docs` 通過。

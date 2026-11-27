@@ -621,7 +621,10 @@ fn a_renderer_process_that_ran_out_of_its_memory_is_told_apart() {
     assert!(web_contents.is_crashed());
     let exit = web_contents.renderer_exit().expect("ended");
     assert!(exit.out_of_memory, "{exit:?}");
-    assert!(exit.status.is_some_and(|status| !status.success()), "{exit:?}");
+    assert!(
+        exit.status.is_some_and(|status| !status.success()),
+        "{exit:?}"
+    );
     web_contents.shutdown();
 
     // One under the same limit that crashed for another reason didn't.

@@ -28,8 +28,8 @@ use std::ptr::{null, null_mut};
 
 use windows_sys::Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation};
 use windows_sys::Win32::Foundation::{
-    DUPLICATE_SAME_ACCESS, DuplicateHandle, GENERIC_READ, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
-    WAIT_TIMEOUT,
+    DUPLICATE_SAME_ACCESS, DuplicateHandle, GENERIC_READ, HANDLE, INVALID_HANDLE_VALUE,
+    WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Security::Isolation::DeriveAppContainerSidFromAppContainerName;
 use windows_sys::Win32::Security::{
@@ -46,11 +46,6 @@ use windows_sys::Win32::Security::{
 use windows_sys::Win32::Storage::FileSystem::{FILE_TYPE_DISK, FILE_TYPE_PIPE, GetFileType};
 use windows_sys::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE};
 use windows_sys::Win32::System::Diagnostics::Debug::{ReadProcessMemory, WriteProcessMemory};
-use windows_sys::Win32::System::StationsAndDesktops::{
-    CloseWindowStation, CreateDesktopW, CreateWindowStationW, DESKTOP_CREATEWINDOW,
-    DESKTOP_READOBJECTS, GetProcessWindowStation, GetUserObjectInformationW, HWINSTA,
-    SetProcessWindowStation, UOI_NAME,
-};
 use windows_sys::Win32::System::IO::{CreateIoCompletionPort, GetQueuedCompletionStatus};
 use windows_sys::Win32::System::JobObjects::{
     CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS, JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION,
@@ -58,6 +53,11 @@ use windows_sys::Win32::System::JobObjects::{
     JOBOBJECT_ASSOCIATE_COMPLETION_PORT, JOBOBJECT_BASIC_UI_RESTRICTIONS,
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectAssociateCompletionPortInformation,
     JobObjectBasicUIRestrictions, JobObjectExtendedLimitInformation, SetInformationJobObject,
+};
+use windows_sys::Win32::System::StationsAndDesktops::{
+    CloseWindowStation, CreateDesktopW, CreateWindowStationW, DESKTOP_CREATEWINDOW,
+    DESKTOP_READOBJECTS, GetProcessWindowStation, GetUserObjectInformationW, HWINSTA,
+    SetProcessWindowStation, UOI_NAME,
 };
 use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 use windows_sys::Win32::System::Threading::{

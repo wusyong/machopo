@@ -41,7 +41,10 @@ impl Reason {
     pub fn of(exit: Option<browser::ChildProcessTerminationInfo>) -> Self {
         match exit {
             Some(exit) if exit.out_of_memory => Self::OutOfMemory,
-            _ => Self::of_exit(exit.and_then(|exit| exit.status).and_then(|status| status.code())),
+            _ => Self::of_exit(
+                exit.and_then(|exit| exit.status)
+                    .and_then(|status| status.code()),
+            ),
         }
     }
 

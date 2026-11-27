@@ -1,7 +1,7 @@
 # RFC 0121：Windows 的 renderer sandbox 的下一級：restricted token 和另一個 desktop
 
 - 開始日期：2026-11-27
-- 狀態：🚧 已排程：2026-11-27（第 1 段做完：renderer 的 token 是 lockdown 加 AppContainer 的，降權之後開不了任何檔案、建不了 socket；第 2 段做到 2c：renderer 在 Browser 建的 window station 和 desktop 上，能 commit 的記憶體有上限，碰到上限或 V8 用完記憶體時分頁說記憶體不夠；進度在 `progress.md`）
+- 狀態：🚧 已排程：2026-11-27（第 1 段做完：renderer 的 token 是 lockdown 加 AppContainer 的，降權之後開不了任何檔案、建不了 socket；第 2 段做完：renderer 在 Browser 建的 window station 和 desktop 上，能 commit 的記憶體有上限，碰到上限或 V8 用完記憶體時分頁說記憶體不夠；進度在 `progress.md`）
 - 細節：`details.md`
 
 ## 摘要
