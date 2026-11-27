@@ -802,9 +802,10 @@ fn the_windows_bounds_are_css_px() {
     browser.shutdown();
 }
 
-/// What waits for the shown tab's renderer fails once it has gone: a load,
-/// a query, a capture, a scroll waiting for its frame and input waiting to
-/// be handled.
+/// What waits for the shown tab's renderer fails once it has gone: a
+/// query, a capture, a scroll waiting for its frame and input waiting to be
+/// handled. A load of the browser's navigation on its way waits still: the
+/// navigation goes on, to commit in a new renderer.
 #[test]
 fn a_renderer_gone_fails_what_waits_for_it() {
     let dir = pages("gone", &[("one.html", BUTTON)]);
@@ -856,7 +857,13 @@ fn a_renderer_gone_fails_what_waits_for_it() {
     let gone = RendererHostMsg::RendererGone;
     session.on_renderer_message(TabId(0), &gone, &browser);
     let answers: Vec<_> = messages.try_iter().collect();
-    for id in [2, 3, 4, 5, 7] {
+    assert!(
+        !answers
+            .iter()
+            .any(|message| matches!(message, Message::Response(response) if response.id == 2)),
+        "the load waits: {answers:?}"
+    );
+    for id in [3, 4, 5, 7] {
         let answered = answers.iter().find_map(|message| match message {
             Message::Response(response) if response.id == id => Some(&response.result),
             _ => None,

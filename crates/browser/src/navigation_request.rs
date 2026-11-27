@@ -8,7 +8,7 @@ use net::LoadHandle;
 use protocol::network::{CompletionStatus, NetError, NetErrorCode, ResponseHead};
 use protocol::renderer::RedirectHop;
 
-use crate::render_process_host::{Committer, LoadCompleter};
+use crate::render_process_host::{CommitParams, LoadCompleter};
 
 /// A navigation loading: what the browser's navigation `id` is, the
 /// renderer's number for it if the renderer asked for it (`begin_id`),
@@ -19,7 +19,11 @@ pub(crate) struct NavigationRequest {
     pub(crate) url: String,
     /// The redirects it followed, for Navigation Timing.
     pub(crate) redirects: Vec<RedirectHop>,
-    pub(crate) committer: Committer,
+    /// What it commits with: in the renderer the tab has as it commits.
+    pub(crate) commit_params: CommitParams,
+    /// A page asked for it (Chromium's `IsRendererInitiated`): it goes if
+    /// the renderer does, which may have been ended for what it sent.
+    pub(crate) renderer_initiated: bool,
     pub(crate) load: Loading,
     /// Its response, once its head has come, and the start of its body
     /// read so far: it commits with the head and the body's first bytes.

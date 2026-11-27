@@ -14,6 +14,7 @@ mod dom_storage;
 mod loaders;
 mod navigation;
 mod profile;
+mod renderer_gone;
 mod renderer_message_fuzz;
 mod renderer_process;
 mod visible_url;

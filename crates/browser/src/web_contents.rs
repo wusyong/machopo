@@ -26,7 +26,7 @@ use crate::navigation_controller::{HistoryLoad, NavigationController, Navigation
 use crate::navigation_request::{
     DocumentLoad, HeldCommit, Loading, NavigationRequest, NavigationResponse,
 };
-use crate::render_process_host::{CommittedDocument, Committer, is_file_url};
+use crate::render_process_host::{CommitParams, CommittedDocument, is_file_url};
 use crate::{RenderProcessHost, RendererFlags, RendererId, RendererLauncher, StoragePartition};
 
 /// What a tab's other threads have for its UI thread: the embedder posts
@@ -254,6 +254,9 @@ struct Asked {
     /// The renderer's say on how it uses the HTTP cache (a child frame's
     /// in a reload past it), added to the browser's own.
     load_flags: LoadFlags,
+    /// A page asked for it (`BeginNavigation`, or `history.back()` and
+    /// the like), not the browser.
+    renderer_initiated: bool,
 }
 
 /// What launches this tab's renderers.
@@ -412,6 +415,13 @@ impl WebContents {
         renderer == self.process.id() && !self.crashed
     }
 
+    /// The tab's renderer now (`RenderFrameHost::GetProcess`'s id): another
+    /// once a renderer is launched in the place of one that has gone. What
+    /// was attached to the one before (DevTools' sessions) is to be again.
+    pub fn renderer_id(&self) -> RendererId {
+        self.process.id()
+    }
+
     /// The tab's frames: the main frame, and the child frames its renderer
     /// told of.
     pub fn frame_tree(&self) -> &FrameTree {
@@ -542,8 +552,7 @@ impl WebContents {
                 if !self.process.crash() {
                     self.process.kill();
                 }
-                self.crashed = true;
-                self.frame_tree.reset();
+                self.renderer_gone();
             }
             None => self.begin_navigation(url, NavigationType::NewEntry, Asked::default()),
         }
@@ -611,6 +620,12 @@ impl WebContents {
     /// (Chromium's `NavigateToExistingPendingEntry` drops it so). After a
     /// crash, the main frame loads it. False if there is no such entry.
     pub fn go_to_offset(&mut self, offset: isize) -> bool {
+        self.traverse(offset, false)
+    }
+
+    /// [`go_to_offset`](Self::go_to_offset), as the page asked if
+    /// `renderer_initiated`.
+    fn traverse(&mut self, offset: isize, renderer_initiated: bool) -> bool {
         let Some(index) = self.controller.index_for_offset(offset) else {
             return false;
         };
@@ -640,7 +655,11 @@ impl WebContents {
             };
             let (url, document) = (item.url.clone(), item.document);
             if load == HistoryLoad::DifferentDocument {
-                self.history_load(frame, index, url, Asked::default());
+                let asked = Asked {
+                    renderer_initiated,
+                    ..Asked::default()
+                };
+                self.history_load(frame, index, url, asked);
                 continue;
             }
             let kind = NavigationType::HistoryIndex(index);
@@ -718,6 +737,7 @@ impl WebContents {
             // reloads past the cache.
             bypass_cache: false,
             load_flags,
+            renderer_initiated: true,
         };
         // A new child frame of a document back or forward loaded: what the
         // session history has for it in the entry its parent's document is
@@ -819,7 +839,7 @@ impl WebContents {
                         self.commit(
                             frame,
                             navigation_id,
-                            navigation.committer,
+                            navigation.commit_params,
                             document,
                             Some(origin),
                         );
@@ -1055,13 +1075,14 @@ impl WebContents {
             devtools_initiator: asked.devtools_initiator,
             loads: page.is_none(),
         }));
-        let committer = self.process.committer(
+        let commit_params = CommitParams::new(
             frame,
             asked.begin_id,
             history,
             navigation_start,
             navigation_type,
         );
+        let renderer_initiated = asked.renderer_initiated;
         if let Some((document, origin)) = page {
             // The renderer's: held till the task that asked is over.
             if asked.begin_id.is_some() {
@@ -1070,7 +1091,8 @@ impl WebContents {
                     begin_id: asked.begin_id,
                     url,
                     redirects: Vec::new(),
-                    committer,
+                    commit_params,
+                    renderer_initiated,
                     load: Loading::default(),
                     response: None,
                     end: None,
@@ -1085,7 +1107,7 @@ impl WebContents {
             if let Some(before) = self.frame_tree.take_any_navigation(frame) {
                 self.replaced(frame, before);
             }
-            self.commit(frame, navigation_id, committer, document, Some(origin));
+            self.commit(frame, navigation_id, commit_params, document, Some(origin));
             return;
         }
         let destination = if main_frame {
@@ -1112,7 +1134,8 @@ impl WebContents {
             begin_id: asked.begin_id,
             url,
             redirects: Vec::new(),
-            committer,
+            commit_params,
+            renderer_initiated,
             load: Loading::default(),
             response: None,
             end: None,
@@ -1259,8 +1282,10 @@ impl WebContents {
         on_event(self.tab, event);
     }
 
-    /// `frame` commits `document`, navigation `navigation_id`'s, through
-    /// `committer`, which is the frame's as the renderer reports it
+    /// `frame` commits `document`, navigation `navigation_id`'s, with
+    /// `params`, in the renderer the tab has now (a new one if the one
+    /// before has gone since the navigation started: Chromium's crashed
+    /// frame `must_be_replaced_for_crash`), as the renderer reports it
     /// committed: of `origin` if it has one from another document, else
     /// its URL's (an error page's, opaque). Whether the renderer may read
     /// local files goes with it (`ChildProcessSecurityPolicy::
@@ -1271,10 +1296,13 @@ impl WebContents {
         &mut self,
         frame: FrameToken,
         navigation_id: u64,
-        committer: Committer,
+        params: CommitParams,
         document: CommittedDocument,
         origin: Option<CommittedOrigin>,
     ) -> crate::render_process_host::LoadCompleter {
+        if self.crashed {
+            self.relaunch();
+        }
         let origin = origin.unwrap_or_else(|| document.origin());
         let local = origin.local;
         if frame == self.frame_tree.root() {
@@ -1284,15 +1312,17 @@ impl WebContents {
         }
         // Its loader's params, by the frames it is in now (before its own
         // commit, which the renderer hasn't reported).
-        let params = self.frame_tree.loader_params(frame, &origin.origin);
+        let loader_params = self.frame_tree.loader_params(frame, &origin.origin);
         self.frame_tree
             .committing(frame, navigation_id, &document.url, origin);
         let before = self.frame_tree.take_any_document_load(frame);
-        let mut committer = committer;
+        let mut params = params;
         let place = self.controller.commit_place(navigation_id);
-        committer.set_history_place(place, self.entries_heard.peek());
-        let loader = self.process.register_loader(params);
-        let completer = committer.commit(navigation_id, document, loader);
+        params.set_history_place(place, self.entries_heard.peek());
+        let loader = self.process.register_loader(loader_params);
+        let completer = self
+            .process
+            .commit_navigation(params, navigation_id, document, loader);
         // The document before is no more: its body stops, and the renderer
         // hears it was aborted after the commit that takes its place (it
         // would commit what it has of it, else).
@@ -1457,7 +1487,13 @@ impl WebContents {
             navigation.url.clone(),
             crate::loader::error_page(&error),
         );
-        self.commit(frame, navigation_id, navigation.committer, document, None);
+        self.commit(
+            frame,
+            navigation_id,
+            navigation.commit_params,
+            document,
+            None,
+        );
     }
 
     /// Navigation `navigation_id` of `frame`, which has its response and
@@ -1474,7 +1510,7 @@ impl WebContents {
             return;
         };
         let NavigationRequest {
-            committer,
+            commit_params,
             redirects,
             load,
             response,
@@ -1520,7 +1556,7 @@ impl WebContents {
             loaded: Some(loaded),
             error_page: false,
         };
-        let completer = self.commit(frame, navigation_id, committer, document, None);
+        let completer = self.commit(frame, navigation_id, commit_params, document, None);
         if !ended {
             self.frame_tree
                 .set_document_load(frame, DocumentLoad::new(navigation_id, load, completer));
@@ -1546,7 +1582,7 @@ impl WebContents {
             return;
         };
         let NavigationRequest {
-            committer,
+            commit_params,
             url,
             redirects,
             ..
@@ -1591,7 +1627,7 @@ impl WebContents {
                 CommittedDocument::error_page(url, crate::loader::error_page(&error))
             }
         };
-        self.commit(frame, navigation_id, committer, document, None);
+        self.commit(frame, navigation_id, commit_params, document, None);
     }
 
     /// `RenderWidgetHostImpl::SynchronizeVisualProperties`. Allocates a new
@@ -1903,7 +1939,7 @@ impl WebContents {
                 }
             }
             RendererHostMsg::GoToEntryAtOffset(offset) => {
-                self.go_to_offset(*offset as isize);
+                self.traverse(*offset as isize, true);
             }
             RendererHostMsg::NavigationCancellationWindowEnded { ids } => {
                 self.cancellation_windows_ended(ids);
@@ -1996,9 +2032,7 @@ impl WebContents {
             // renderer starts with nothing in flight.
             RendererHostMsg::RendererGone => {
                 self.process.ended();
-                self.crashed = true;
-                self.input_in_flight = 0;
-                self.frame_tree.reset();
+                self.renderer_gone();
             }
             RendererHostMsg::RendererReady => {}
             RendererHostMsg::DidCreateChildFrame {
@@ -2033,8 +2067,28 @@ impl WebContents {
     pub fn received_bad_message(&mut self, reason: BadMessageReason) {
         tracing::error!(?reason, "the renderer sent a bad message; ending it");
         self.process.kill();
+        self.renderer_gone();
+    }
+
+    /// The renderer has gone, crashed or ended (`RenderFrameHostImpl::
+    /// RenderProcessGone`): the main frame is left alone, showing nothing,
+    /// and what was sent to commit goes with the renderer; so does a page's
+    /// own navigation, which its renderer's ending cancels (Chromium's
+    /// `OnNavigationClientDisconnected`): it may have been ended for what
+    /// it sent. The browser's own navigation goes on, to commit in a new
+    /// renderer. What was in flight will never be acknowledged.
+    fn renderer_gone(&mut self) {
         self.crashed = true;
         self.input_in_flight = 0;
+        let root = self.frame_tree.root();
+        if self
+            .frame_tree
+            .navigation(root)
+            .is_some_and(|navigation| navigation.renderer_initiated)
+            && let Some(navigation) = self.frame_tree.take_any_navigation(root)
+        {
+            self.controller.did_stop(navigation.id);
+        }
         self.frame_tree.reset();
     }
 

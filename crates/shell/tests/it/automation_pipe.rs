@@ -499,6 +499,44 @@ fn the_targets_url_is_the_address_bars() {
     assert!(browser.end().success());
 }
 
+/// A navigation of the session's that loads as the tab's renderer is
+/// ended (`about:crash`) goes on, and commits in a new renderer, which the
+/// session is attached to: its commands go there.
+#[test]
+fn a_navigation_on_its_way_as_the_renderer_goes_commits_in_a_new_one() {
+    let server = server(&[(
+        "/slow",
+        Route::ok("text/html", "<!DOCTYPE html><title>slow</title>")
+            .with_delay(Duration::from_millis(500)),
+    )]);
+    let mut browser = Browser::start();
+    let session = browser.attach();
+    let slow = server.url("/slow");
+    // `Page.navigate` answers as its navigation is about to commit;
+    // `about:crash` starts none, and is answered with the one on its way.
+    let navigate = browser.send(Some(&session), "Page.navigate", json!({ "url": slow }));
+    let crash = browser.send(
+        Some(&session),
+        "Page.navigate",
+        json!({ "url": "about:crash" }),
+    );
+    let loader = browser.answer(navigate).unwrap()["loaderId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    browser.answer(crash).unwrap();
+    browser.load(&loader);
+    let title = browser
+        .call(
+            Some(&session),
+            "Runtime.evaluate",
+            json!({ "expression": "document.title", "returnByValue": true }),
+        )
+        .unwrap();
+    assert_eq!(title["result"]["value"], "slow");
+    assert!(browser.end().success());
+}
+
 /// The session history: back to another document loads it; back to an
 /// entry the document made of itself (`pushState`) doesn't, and is told
 /// as a navigation within the document; a reload is a loader of its own.

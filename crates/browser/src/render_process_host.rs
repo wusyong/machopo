@@ -692,27 +692,6 @@ impl RenderProcessHost {
         self.file_access.store(may, Ordering::Relaxed);
     }
 
-    /// What commits navigation `frame`'s document of a navigation (the
-    /// renderer's `begin_id`, if it asked for it), to an entry with
-    /// `history`.
-    pub(crate) fn committer(
-        &self,
-        frame: FrameToken,
-        begin_id: Option<u64>,
-        history: HistoryEntryParams,
-        navigation_start: ipc::TimeTicks,
-        navigation_type: FrameLoadType,
-    ) -> Committer {
-        Committer {
-            to_renderer: self.to_renderer.clone(),
-            frame,
-            begin_id,
-            history,
-            navigation_start,
-            navigation_type,
-        }
-    }
-
     /// Asks the renderer to exit and waits for it (a tab closed), a
     /// process for [`CHILD_EXIT_WAIT`] at most.
     pub fn shutdown(&mut self) {
@@ -885,9 +864,10 @@ impl Drop for RenderProcessHost {
     }
 }
 
-/// Commits a frame's navigation.
-pub(crate) struct Committer {
-    to_renderer: RendererSender,
+/// What a frame's navigation commits with, whichever renderer it commits
+/// in (Chromium's `CommitNavigationParams`): that is decided as it
+/// commits, not as it starts, as the renderer may have gone meanwhile.
+pub(crate) struct CommitParams {
     frame: FrameToken,
     begin_id: Option<u64>,
     history: HistoryEntryParams,
@@ -953,7 +933,25 @@ impl CommittedDocument {
     }
 }
 
-impl Committer {
+impl CommitParams {
+    /// Navigation `frame`'s commit (the renderer's `begin_id`, if it asked
+    /// for it), to an entry with `history`.
+    pub(crate) fn new(
+        frame: FrameToken,
+        begin_id: Option<u64>,
+        history: HistoryEntryParams,
+        navigation_start: ipc::TimeTicks,
+        navigation_type: FrameLoadType,
+    ) -> Self {
+        Self {
+            frame,
+            begin_id,
+            history,
+            navigation_start,
+            navigation_type,
+        }
+    }
+
     /// Where its entry is in the session history as it commits, and how
     /// many entries there are then (Chromium's
     /// `UpdateHistoryParamsInCommitNavigationParams`, as `CommitNavigation`
@@ -967,25 +965,30 @@ impl Committer {
         }
         self.history.entries_heard = entries_heard;
     }
+}
 
-    /// Sends the commit, its subresources through loader `loader`; what
-    /// tells the renderer how its load ended, if it hasn't yet, comes back.
-    pub(crate) fn commit(
-        self,
+impl RenderProcessHost {
+    /// Sends navigation `navigation_id`'s commit with `params`
+    /// (`RenderFrameHostImpl::CommitNavigation`), its subresources through
+    /// loader `loader`; what tells the renderer how its load ended, if it
+    /// hasn't yet, comes back.
+    pub(crate) fn commit_navigation(
+        &self,
+        params: CommitParams,
         navigation_id: u64,
         document: CommittedDocument,
         loader: u64,
     ) -> LoadCompleter {
         let completer = LoadCompleter {
             to_renderer: self.to_renderer.clone(),
-            frame: self.frame,
+            frame: params.frame,
             navigation_id,
         };
         let _ = self.to_renderer.send(RendererMsg::CommitNavigation {
-            frame: self.frame,
+            frame: params.frame,
             loader,
             navigation_id,
-            begin_id: self.begin_id,
+            begin_id: params.begin_id,
             url: document.url,
             error_page: document.error_page,
             mime_type: document.mime_type,
@@ -993,10 +996,10 @@ impl Committer {
             content_language: document.content_language,
             body: document.body.into(),
             body_pipe: document.body_pipe,
-            history: self.history,
-            navigation_start: self.navigation_start,
+            history: params.history,
+            navigation_start: params.navigation_start,
             loaded: document.loaded.map(Box::new),
-            navigation_type: self.navigation_type,
+            navigation_type: params.navigation_type,
         });
         completer
     }

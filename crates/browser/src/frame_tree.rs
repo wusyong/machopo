@@ -626,8 +626,9 @@ impl FrameTree {
 
     /// The main frame alone again, showing nothing: its renderer has gone,
     /// or another took its place (`RenderFrameHostImpl::ResetChildren` as
-    /// the process is gone). Its navigation goes on: the next renderer
-    /// commits it.
+    /// the process is gone). What was sent to commit goes; its navigation
+    /// on its way, if the caller left it, goes on, to commit in the next
+    /// renderer.
     pub fn reset(&mut self) {
         let navigation = self
             .nodes

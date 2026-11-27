@@ -1,0 +1,78 @@
+# Stage 1's mutants (a navigation commits in the renderer the tab has as it commits; a renderer that goes takes what it asked for and what it was sent, the browser's own navigation goes on in a new one; the automation follows the tab's renderer): `python3 scripts/test.py mutate rfcs/0124-cross-site-process-swap/mutants-1.toml`.
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it"]
+timeout = 1200
+
+[[mutant]]
+name = "a commit goes to a renderer that has gone"
+file = "crates/browser/src/web_contents.rs"
+from = '''    ) -> crate::render_process_host::LoadCompleter {
+        if self.crashed {
+            self.relaunch();
+        }
+        let origin = origin.unwrap_or_else(|| document.origin());'''
+to = '''    ) -> crate::render_process_host::LoadCompleter {
+        let origin = origin.unwrap_or_else(|| document.origin());'''
+
+[[mutant]]
+name = "a page's navigation goes on as its renderer goes"
+file = "crates/browser/src/web_contents.rs"
+from = '''            .is_some_and(|navigation| navigation.renderer_initiated)'''
+to = '''            .is_some_and(|_| false)'''
+
+[[mutant]]
+name = "the browser's navigation goes with the renderer too"
+file = "crates/browser/src/web_contents.rs"
+from = '''            .is_some_and(|navigation| navigation.renderer_initiated)'''
+to = '''            .is_some_and(|_| true)'''
+
+[[mutant]]
+name = "a page's BeginNavigation is taken for the browser's"
+file = "crates/browser/src/web_contents.rs"
+from = '''            renderer_initiated: true,'''
+to = '''            renderer_initiated: false,'''
+
+[[mutant]]
+name = "a page's history.back() is taken for the browser's"
+file = "crates/browser/src/web_contents.rs"
+from = '''                self.traverse(*offset as isize, true);'''
+to = '''                self.traverse(*offset as isize, false);'''
+
+[[mutant]]
+name = "the page's cancelled navigation stays pending in the history"
+file = "crates/browser/src/web_contents.rs"
+from = '''            && let Some(navigation) = self.frame_tree.take_any_navigation(root)
+        {
+            self.controller.did_stop(navigation.id);
+        }'''
+to = '''            && let Some(_navigation) = self.frame_tree.take_any_navigation(root)
+        {
+        }'''
+
+[[mutant]]
+name = "the sessions stay with a renderer that was replaced"
+file = "crates/shell/src/automation_session.rs"
+from = '''                    .is_some_and(|before| before != renderer)'''
+to = '''                    .is_some_and(|_| false)'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "automation_pipe::", "devtools", "windowless::"]
+
+[[mutant]]
+name = "Machopo.waitForLoad of the navigation that goes on fails"
+file = "crates/shell/src/automation_session.rs"
+from = '''        let (loads, kept) = std::mem::take(&mut self.loads)
+            .into_iter()
+            .partition(|(of, id, _)| *of == tab && Some(*id) != going_on);'''
+to = '''        let (loads, kept) = std::mem::take(&mut self.loads)
+            .into_iter()
+            .partition(|(of, _, _)| *of == tab);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "automation_pipe::", "devtools", "windowless::"]
+
+[[mutant]]
+name = "Page.navigate of the navigation that goes on fails"
+file = "crates/shell/src/automation_session.rs"
+from = '''        let (navigates, kept) = std::mem::take(&mut self.navigates)
+            .into_iter()
+            .partition(|(of, id, _)| *of == tab && Some(*id) != going_on);'''
+to = '''        let (navigates, kept) = std::mem::take(&mut self.navigates)
+            .into_iter()
+            .partition(|(of, _, _)| *of == tab);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "automation_pipe::", "devtools", "windowless::"]

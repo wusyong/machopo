@@ -187,6 +187,15 @@
 - `sessionStorage` 的 namespace 是分頁的 `NavigationController` 的，每個新的 view 都被告知。
 - **DevTools**：agent host 照 `FrameTreeNode`；`devtools_frame_token` 建 speculative 的 `RenderFrameHost` 時傳下去，所以 target id 和 main frame 的 id 不變。session 的交接：導覽開始時暫停往 agent 送（`SuspendSendingMessagesToAgent`），`ReadyToCommitNavigation`（commit 的訊息之前）對新的 process 重新 attach，導覽結束再繼續送。**session 的狀態**靠一份 cookie：renderer 的 agent 在每個回答和事件裡附上狀態的變動，Browser 存著，重新 attach 時交給新的 agent（`devtools_agent.mojom`：「cross-process navigation in a frame creates a new DevToolsAgent (in a different process), but we can preserve the state of debugging session by copying it from one agent to another」）。暫停期間會跑 script 的命令以 target 關閉的錯誤結束，其餘的之後重送。
 
+### renderer 在導覽的途中不在了
+
+2026-11-27 讀的（同一份 `main`）。
+
+- **current 的 `RenderFrameHost` 的 process 不在了**（`render_frame_host_impl.cc` 的 `RenderFrameHostImpl::RenderProcessGone`）：「The renderer process is gone, so this frame can no longer be loading.」`ResetOwnedNavigationRequests(NavigationDiscardReason::kRenderProcessGone)` 丟掉**這個 `RenderFrameHost` 擁有的**導覽，也就是已經交給它、等它 commit 的（`ResetOwnedNavigationRequests` 的註解：pending commit 的導覽只在「the FrameTreeNode or renderer process is gone/will be gone soon」時取消）；子 frame 清掉（`ResetChildren`）；標成 `must_be_replaced_for_crash_`。
+- **還在載入的導覽**歸 `FrameTreeNode` 擁有，`RenderProcessGone` 不碰它們。commit 時 current 的 `RenderFrameHost` 一定要換（`must_be_replaced_for_crash`），所以在新的 process commit。
+- **頁面發起的導覽**跟著它的 renderer 結束：導覽開著一條通往發起它的 renderer 的 `NavigationClient`（`request_navigation_client_`），renderer 不在了這條通道就斷，`NavigationRequest::OnNavigationClientDisconnected` 把沒有說原因的斷線當成取消（`kNoExplicitReason` → `kInternalCancellation`），還沒到 READY_TO_COMMIT 的就 `CancelNavigation`。
+- 沒有逐行追：Browser 發起、還在載入的導覽在 response 到了時確實走到新的 process（從 `must_be_replaced_for_crash` 和上面的「early swap」推的）；`history.back()` 這種頁面發起的 history 導覽有沒有那條 `NavigationClient`。
+
 ### 沒有 site isolation 的模式
 
 記憶體小的 Android：頁面發起的跨網站導覽留在同一個 process；Browser 發起的跨網站導覽（網址列、書籤）照樣換 `BrowsingInstance`、換 process。這條規則不依賴 site isolation。

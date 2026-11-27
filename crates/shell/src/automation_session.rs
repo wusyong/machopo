@@ -323,6 +323,10 @@ pub struct AutomationSession {
     committed: HashMap<(TabId, FrameToken), String>,
     /// The tabs whose renderer has gone, as last told (`targetCrashed`).
     crashed: Vec<TabId>,
+    /// The renderer each tab had as last looked: the tab's DevTools
+    /// sessions are attached to it, and to the next one that takes its
+    /// place.
+    renderers: HashMap<TabId, browser::RendererId>,
     /// Each tab's latest navigation that has loaded (`DidFinishLoad`).
     loaded: HashMap<TabId, u64>,
     /// `Machopo.waitForLoad`s, by tab and the navigation they wait for.
@@ -512,6 +516,7 @@ impl AutomationSession {
             starting: HashMap::new(),
             committed: HashMap::new(),
             crashed: Vec::new(),
+            renderers: HashMap::new(),
             loaded: HashMap::new(),
             loads: Vec::new(),
             navigates: Vec::new(),
@@ -1018,7 +1023,7 @@ impl AutomationSession {
                 self.dispatch_to_client(tab, session, message);
             }
             // Nothing more will come from it: what waits for it fails.
-            RendererHostMsg::RendererGone => self.renderer_gone(tab),
+            RendererHostMsg::RendererGone => self.renderer_gone(tab, browser),
             _ => {}
         }
     }
@@ -1070,8 +1075,20 @@ impl AutomationSession {
     }
 
     /// `tab`'s renderer has gone (it crashed, or `about:crash` ended it):
-    /// what waits for it fails, as nothing more will come from it.
-    fn renderer_gone(&mut self, tab: TabId) {
+    /// what waits for it fails, as nothing more will come from it; but a
+    /// `Page.navigate` and a `Machopo.waitForLoad` of the browser's
+    /// navigation that goes on, to commit in a new renderer, wait still.
+    fn renderer_gone(&mut self, tab: TabId, browser: &BrowserWindow) {
+        let going_on = browser
+            .view()
+            .contents(tab)
+            .map(WebContents::latest_navigation_id)
+            .filter(|&id| {
+                browser
+                    .view()
+                    .contents(tab)
+                    .is_some_and(|contents| contents.is_navigating(id))
+            });
         let gone = || Err(Error::new(SERVER_ERROR, "the tab's renderer has gone"));
         let (queries, kept) = std::mem::take(&mut self.queries)
             .into_iter()
@@ -1114,11 +1131,11 @@ impl AutomationSession {
             .collect();
         let (loads, kept) = std::mem::take(&mut self.loads)
             .into_iter()
-            .partition(|(of, _, _)| *of == tab);
+            .partition(|(of, id, _)| *of == tab && Some(*id) != going_on);
         self.loads = kept;
         let (navigates, kept) = std::mem::take(&mut self.navigates)
             .into_iter()
-            .partition(|(of, _, _)| *of == tab);
+            .partition(|(of, id, _)| *of == tab && Some(*id) != going_on);
         self.navigates = kept;
         let (handled, kept) = std::mem::take(&mut self.input_handled)
             .into_iter()
@@ -1488,33 +1505,42 @@ impl AutomationSession {
                     newly_crashed.push(tab);
                 } else {
                     self.crashed.retain(|known| *known != tab);
-                    // A new renderer: the tab's sessions are its too, `Page`
-                    // and its lifecycle events on as they were (what else
-                    // they enabled in the last one, they enable again).
-                    let mut restoring = Vec::new();
-                    for (id, attached) in &self.sessions {
-                        if attached.tab == tab {
-                            contents.devtools_attach(id);
-                            if attached.page {
-                                restoring.push((id.clone(), json!({ "method": "Page.enable" })));
-                            }
-                            if attached.lifecycle {
-                                restoring.push((
-                                    id.clone(),
-                                    json!({
-                                        "method": "Page.setLifecycleEventsEnabled",
-                                        "params": { "enabled": true },
-                                    }),
-                                ));
-                            }
+                }
+            }
+            // Another renderer in the one's place the sessions are attached
+            // to (one launched after one had gone): the tab's sessions are
+            // its too, `Page` and its lifecycle events on as they were (what
+            // else they enabled in the last one, they enable again).
+            let renderer = contents.renderer_id();
+            if !crashed
+                && self
+                    .renderers
+                    .insert(tab, renderer)
+                    .is_some_and(|before| before != renderer)
+            {
+                let mut restoring = Vec::new();
+                for (id, attached) in &self.sessions {
+                    if attached.tab == tab {
+                        contents.devtools_attach(id);
+                        if attached.page {
+                            restoring.push((id.clone(), json!({ "method": "Page.enable" })));
+                        }
+                        if attached.lifecycle {
+                            restoring.push((
+                                id.clone(),
+                                json!({
+                                    "method": "Page.setLifecycleEventsEnabled",
+                                    "params": { "enabled": true },
+                                }),
+                            ));
                         }
                     }
-                    for (session, mut command) in restoring {
-                        let id = self.restore_ids.get_next().saturating_neg();
-                        command["id"] = id.into();
-                        self.restoring.insert((session.clone(), id));
-                        contents.devtools_message(&session, command.to_string(), false);
-                    }
+                }
+                for (session, mut command) in restoring {
+                    let id = self.restore_ids.get_next().saturating_neg();
+                    command["id"] = id.into();
+                    self.restoring.insert((session.clone(), id));
+                    contents.devtools_message(&session, command.to_string(), false);
                 }
             }
             let loader = contents.latest_navigation_id();
@@ -1636,9 +1662,10 @@ impl AutomationSession {
         }
         self.sessions
             .retain(|_, attached| now.contains(&attached.tab));
+        self.renderers.retain(|tab, _| now.contains(tab));
         self.tabs = now;
         for tab in newly_crashed {
-            self.renderer_gone(tab);
+            self.renderer_gone(tab, browser);
         }
     }
 

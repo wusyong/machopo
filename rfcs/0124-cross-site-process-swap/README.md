@@ -56,10 +56,12 @@ RFC 0122 路線圖的 C（M2 的第一份）。
 
 renderer 當掉之後的下一次導覽，`WebContents::relaunch` 已經會「換一個 renderer」：新的 frame sink、啟動新的 `RenderProcessHost`、放掉舊的、把分頁的狀態（DevTools 的 token、大小、螢幕上的位置、可見、focus）再送一次。跨網站的換從它推廣，多出來的是：
 
-- **決定的時機**：`relaunch` 在導覽開始時；跨網站的要看到最後的網址（redirect 之後）才知道。現在 `Committer`（commit 送給誰）在導覽開始時就向當時的 process 拿了，要改成 commit 時才定。
+- **決定的時機**：`relaunch` 在導覽開始時；跨網站的要看到最後的網址（redirect 之後）才知道。第 1 段把導覽在開始時綁定 renderer 的 `Committer` 換成只有參數的 `CommitParams`，commit 時由分頁當時的 renderer 送（`RenderProcessHost::commit_navigation`）；renderer 在那之前不在了，就先 `relaunch`（第 13 條）。
+- **換的順序**：commit 時換 renderer，要在 frame 樹記下「正在 commit 哪一筆」（`FrameTree::committing`）之前清空 frame 樹、換好 renderer，否則新的 renderer 回報 commit 時 Browser 找不到那一筆，當成壞訊息；網址列在那一段顯示的是那一筆（`visible_url`）。
 - **舊的 renderer 還活著**：要叫它跑 `unload`、等它、逾時結束它；它在這段時間送來的訊息不能被當成新的 renderer 的（`RendererId` 和 `is_current_renderer` 已經在擋）。
 - **舊的畫面**：`relaunch` 直接作廢舊的 sink（那時本來就是 sad tab）；跨網站的換要決定中間顯示什麼。
-- **DevTools 的 session**：現在靠 `is_crashed` 從 `true` 變回 `false` 才重新接上，只重送 `Page.enable` 和 lifecycle；換 process 沒有「當掉」這一步，client 也不知道換了。
+- **DevTools 的 session**：原本靠 `is_crashed` 從 `true` 變回 `false` 才重新接上，換 process 沒有「當掉」這一步。第 1 段改成自動化的 session 記著每個分頁上次的 renderer（`WebContents::renderer_id`），不同了就重新接上，只重送 `Page.enable` 和 lifecycle（其餘的狀態是第 2 段）。`Page.navigate` 和 `Machopo.waitForLoad` 在 renderer 不在了時，若等的是繼續的那一次導覽就繼續等。
+- **`headless` 和視窗**：`headless`（reftest 走的路）的畫面跟著換 sink、視窗清掉跟著舊 renderer 的 UI 狀態（游標、滑鼠的 capture、選單），在第 3 段做：第 1 段結束時換 renderer 只發生在 renderer 不在了之後，那時 `headless` 本來就以錯誤結束、視窗在 `RendererGone` 時清掉了，測不到它們。
 
 ### 規則
 
@@ -78,9 +80,9 @@ renderer 當掉之後的下一次導覽，`WebContents::relaunch` 已經會「�
 
 四段（已決定的事項第 12 條）：
 
-1. **鋪路，行為不變**：commit 時才定送給哪個 renderer；「分頁換了 renderer」變成明確的一件事，DevTools 的 session 重新接上、`headless` 跟著換 sink 都聽它，不再靠 `crashed` 變回來。用現有的「當掉之後重新載入」驗證。
+1. **鋪路**：commit 時才定送給哪個 renderer，renderer 在導覽途中不在了照第 13 條（原本卡在 sad tab 的這一種行為改了，其餘不變）；自動化照分頁的 renderer 是哪一個重新接上 DevTools 的 session，不再靠 `crashed` 變回來（`headless` 和視窗在第 3 段，見「現在最接近的路：`relaunch`」）。用「當掉之後重新載入」和「載入途中當掉」驗證。
 2. **DevTools 的 session 的狀態跨過換 renderer**：同樣先用當掉之後重新載入驗證。
-3. **規則和換**：跨網站的 commit 在新的 process；舊文件的 `unload`；中間的畫面和同一個 renderer 裡跨 origin 的 paint holding（第 7 條）。
+3. **規則和換**：跨網站的 commit 在新的 process；舊文件的 `unload`；中間的畫面和同一個 renderer 裡跨 origin 的 paint holding（第 7 條）；`headless` 跟著換 sink、視窗清掉跟著舊 renderer 的 UI 狀態。
 4. **收尾**：量測工具、WPT 的預期結果、文件。
 
 每一段做完 `main` 上的行為都是一致的：前兩段不改變什麼時候換，第三段打開時工具已經接得上。第 4 段另外有一件要在別的機器上做的：在 macOS 和 Windows 量 renderer 啟動的時間（第 5 條）。
@@ -139,6 +141,7 @@ renderer 當掉之後的下一次導覽，`WebContents::relaunch` 已經會「�
 10. **同一個 site 的分頁不共用 process（S0）**（2026-11-27，使用者決定）：每個分頁自己的 renderer，規則只看這個分頁現在的 renderer 是哪個 site 的。理由：一個分頁當掉、卡住或吃光記憶體不影響同網站的另一個；process 的生命跟著一個分頁，不用計數；安全上共不共用沒有差別（同一個 site 本來就互相讀得到）。不選共用（S1：省記憶體，但 renderer 要能同時裝好幾個分頁、process 要計數、一個分頁卡在 script 裡時同 process 的一起卡住）。Chromium 的預設也是不共用（`ProcessReusePolicy::kDefault`），超過 process 數的軟性上限才重用同一個 site 的。做 `window.open` 那一份時 renderer 要能裝好幾個分頁，那時再看一般的分頁要不要共用、要不要設 process 數的上限（記在 RFC 0122 的 `roadmap.md` 的「每一份開始時要定的（先記下來）」的 W）。
 11. **renderer 不是自己的 process 時一樣換（I1）**（2026-11-27，使用者決定）：Browser 這一側只有一條路，不看 renderer 是哪一種。renderer 是 Browser 的 process 裡的 thread 時（`--single-process`、`cargo test` 裡直接建的分頁、沒有平台視窗的情境、reftest），跨網站的導覽啟動一組新的 thread（新的 V8 isolate），舊的那組跑完 `unload` 結束；另一端沒有東西的（`Detached`）換一個新的。理由：machopo 大部分的測試跑在 thread 的 renderer 上，這樣它們測到的是換的那條路；下一份的 process lock 可以假設「一個 renderer 一個 site」在三種跑法下都成立，不用為 thread 開例外；`--single-process` 的行為和正式的一致。和 Chromium 的 `--single-process` 在 Browser 這一側一樣（照樣算 `SiteInstance`、換 `RenderFrameHost`、跑舊的 `unload`；`RenderProcessHost::IsProcessLimitReached` 第一行 `if (run_renderer_in_process()) return true;`，每個 `SiteInstance` 分到同一個 renderer），renderer 這一側不同：它在同一個 renderer 裡換一個新的 frame，machopo 的 renderer 只裝一個分頁（第 10 條），所以換一組新的 thread。代價：`--single-process` 換不到安全上的好處；thread 不能從外面結束，舊的 renderer 500 ms 沒回報時只能叫 V8 停掉 script、放著等它結束（machopo 關閉時對卡住的 thread 已經這樣做），卡在原生程式碼裡的會留著。不選只有自己的 process 才換（I2：Browser 兩條路，測試跑的大多是不換的那條；Chromium 沒有這種做法）。renderer 能裝好幾個分頁之後重新考慮（RFC 0122 的 `roadmap.md` 記在 W 底下）。
 12. **分四段做：鋪路、DevTools 的狀態、規則和換、收尾（G1）**（2026-11-27，使用者決定）：照「分階段」的順序。理由：每一段可以單獨 merge 回 `main`，`main` 上的行為一直一致：前兩段不改變什麼時候換，用現有的「renderer 當掉之後重新載入」驗證（它已經是一次換 renderer）；第三段把換打開時，DevTools 和 WebDriver 的 session 已經接得上。不選先做換、再補工具（G2：最早看到成果，但中間 `main` 上跨網站的導覽會讓 session 掉狀態，每天的 CI 經過 machopodriver 跑 WPT，可能在那段期間失敗）。
+13. **renderer 在導覽途中不在了：照 Chromium 分三種（K1）**（2026-11-27，使用者決定；第 1 段開始時，用臨時的測試確認了 machopo 原本把 commit 送給不在了的 renderer、分頁卡在 sad tab、網址列停在要去的網址）：已經送出 commit、還沒回報的丟掉；頁面發起的（包括頁面發起的上一頁、下一頁）取消；Browser 發起的（網址列、重新整理、DevTools、WebDriver）繼續，commit 時 renderer 不在了就先啟動新的再送。理由：Chromium 的 `RenderFrameHostImpl::RenderProcessGone` 丟掉已經交給那個 frame 的導覽，頁面發起的導覽因為通往發起它的 renderer 的 `NavigationClient` 斷了而取消，Browser 發起的 commit 到新的 process（`must_be_replaced_for_crash`；`details.md` 的「renderer 在導覽的途中不在了」）；renderer 可能是因為壞訊息被結束的，它要求的導覽不該在新的 renderer 裡完成；使用者輸入的網址照樣會到。commit 時換一個 renderer 也就是第 3 段跨網站換 process 要走的同一條路。不選全部取消（K2：使用者輸入的網址不見，要再輸入一次）、全部繼續（K3：被攻破的 renderer 要求的導覽照樣完成）。
 
 ## 待決定
 

@@ -15,7 +15,7 @@ use protocol::renderer::{BeginNavigationKind, RendererHostMsg};
 
 use crate::navigation::{TIMEOUT, in_memory, server, tab_launched};
 
-fn tab() -> (WebContents, Receiver<ContentsEvent>) {
+pub(crate) fn tab() -> (WebContents, Receiver<ContentsEvent>) {
     tab_launched(
         RendererLauncher::Detached,
         false,
@@ -36,7 +36,11 @@ fn pages() -> TestServer {
 
 /// Runs the tab's navigation events until navigation `id` is sent to
 /// commit.
-fn until_sent(web_contents: &mut WebContents, host_rx: &Receiver<ContentsEvent>, id: u64) {
+pub(crate) fn until_sent(
+    web_contents: &mut WebContents,
+    host_rx: &Receiver<ContentsEvent>,
+    id: u64,
+) {
     let deadline = Instant::now() + TIMEOUT;
     while web_contents.is_navigating(id) {
         let event = host_rx
@@ -53,7 +57,7 @@ fn until_sent(web_contents: &mut WebContents, host_rx: &Receiver<ContentsEvent>,
 
 /// The renderer reports the main frame's navigation `id` committed, at
 /// `url`.
-fn committed(web_contents: &mut WebContents, id: u64, url: &str) {
+pub(crate) fn committed(web_contents: &mut WebContents, id: u64, url: &str) {
     web_contents.on_renderer_message(&RendererHostMsg::DidCommitNavigation {
         frame: web_contents.devtools_frame_token(),
         navigation_id: id,
@@ -62,7 +66,7 @@ fn committed(web_contents: &mut WebContents, id: u64, url: &str) {
 }
 
 /// The browser's navigation to `url`, committed.
-fn load(web_contents: &mut WebContents, host_rx: &Receiver<ContentsEvent>, url: &str) {
+pub(crate) fn load(web_contents: &mut WebContents, host_rx: &Receiver<ContentsEvent>, url: &str) {
     web_contents.navigate(url);
     let id = web_contents.latest_navigation_id();
     until_sent(web_contents, host_rx, id);
@@ -71,7 +75,7 @@ fn load(web_contents: &mut WebContents, host_rx: &Receiver<ContentsEvent>, url: 
 
 /// The page asks for its main frame to navigate to `url`, its navigation
 /// `begin_id`.
-fn page_navigates(web_contents: &mut WebContents, begin_id: u64, url: &str) {
+pub(crate) fn page_navigates(web_contents: &mut WebContents, begin_id: u64, url: &str) {
     let main = web_contents.devtools_frame_token();
     web_contents.on_renderer_message(&RendererHostMsg::BeginNavigation {
         frame: main,
@@ -89,7 +93,7 @@ fn page_navigates(web_contents: &mut WebContents, begin_id: u64, url: &str) {
 
 /// The task that asked for the page's navigation `begin_id` is over: it
 /// may commit.
-fn window_ended(web_contents: &mut WebContents, begin_id: u64) {
+pub(crate) fn window_ended(web_contents: &mut WebContents, begin_id: u64) {
     web_contents.on_renderer_message(&RendererHostMsg::NavigationCancellationWindowEnded {
         ids: vec![begin_id],
     });
