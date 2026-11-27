@@ -162,6 +162,7 @@ impl RunningRenderer {
                 user_agent: browser::user_agent(),
                 system_colors: gfx::SystemColors::DEFAULT,
                 num_raster_threads: None,
+                tile_memory_limit: None,
                 caret_blink_interval: None,
                 parser_budget: Default::default(),
                 new_content_rendering_delay: browser::NEW_CONTENT_RENDERING_DELAY,

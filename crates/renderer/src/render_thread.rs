@@ -109,6 +109,11 @@ pub struct RendererFlags {
     /// which the browser passes its renderers); `None`: the compositor's
     /// default, its own thread.
     pub num_raster_threads: Option<usize>,
+    /// The bytes of tiles the compositor keeps (cc's
+    /// `ManagedMemoryPolicy`, which the browser works out for the screen
+    /// and the machine: a renderer in its sandbox knows neither); `None`:
+    /// the compositor's default.
+    pub tile_memory_limit: Option<u64>,
     /// How long the caret stays shown, and then hidden, as it blinks
     /// (Chromium's `RendererPreferences::caret_blink_interval`); `None`:
     /// it doesn't blink, as in web tests.
@@ -290,6 +295,9 @@ pub fn spawn_renderer_main_thread(
             num_raster_threads: flags
                 .num_raster_threads
                 .unwrap_or(defaults.num_raster_threads),
+            tile_memory_limit: flags
+                .tile_memory_limit
+                .unwrap_or(defaults.tile_memory_limit),
             ..defaults
         },
         Box::new(frame_sink),

@@ -7,11 +7,13 @@
 | 步驟 | 狀態 | 完成日期 |
 | --- | --- | --- |
 | 0. 草稿、盤點、探測（`details.md` 的「第 0 步的探測」「Chromium 怎麼做」）、已決定的事項第 1 到 6 條 | 做完 | 2026-11-27 |
-| 1a. `protocol::viz` 的 `CompositorFrameSinkMsg::check`、`MAX_QUADS`、`MAX_RENDER_PASSES`；Browser 的 IO thread 解開就檢查、不過的是 `BadMessageReason::FrameSink`；Viz 收到的每個 frame 照同樣的檢查、只有 root 嵌別的 surface；renderer 的 compositor 守上限、debug build 送出前檢查 | 做完 | 2026-11-27 |
+| 1a. `protocol::viz` 的 `CompositorFrameSinkMsg::check`、`MAX_QUADS`、`MAX_RENDER_PASSES`；Browser 的 IO thread 解開就檢查、不過的是 `BadMessageReason::FrameSink`；Viz 收到的每個 frame 照同樣的檢查、只有 root 嵌別的 surface（第 3 段時拿掉了：已決定的事項第 11 條）；renderer 的 compositor 守上限、debug build 送出前檢查 | 做完 | 2026-11-27 |
 | 1b. 測試、第 1 段的檢查和文件 | 做完 | 2026-11-27 |
 | 2a. 已決定的事項第 7 條；`GpuContext::scoped`（三種 error scope）和 uncaptured error 的 handler，照種類處理（`GpuError`）；畫一個 frame、上傳和送出 shared image 都在 scope 裡，有錯誤的 frame 不 present、不給 copy；頂點照 `MAX_QUADS` 分成幾個自己建的 buffer，不用 `create_buffer_init` | 做完 | 2026-11-27 |
 | 2b. 測試、第 2 段的檢查和文件 | 做完 | 2026-11-27 |
-| 3. renderer 的 tile 的記憶體預算；量測；Viz 的 shared image 的上限 | 還沒開始 | |
+| 3a. 已決定的事項第 8 到 10 條；`ipc::platform::amount_of_physical_memory`；`browser::tile_memory_limit`、`shared_image_limits`（Blink 的 `GetGpuMemoryPolicy`）；`RendererFlags::tile_memory_limit`；compositor 照距離給 tile 的記憶體（`assign_tile_memory`）、放不下的可見 tile 畫成背景色；Viz 的 `SharedImageLimits` | 做完 | 2026-11-27 |
+| 3b. 量測（`details.md` 的「第 3 段的量測」）；已決定的事項第 11 到 13 條（Viz 不再檢查 frame；commit 時放掉 active tree 的 tile；單色的 tile 不佔預算） | 做完 | 2026-11-27 |
+| 3c. 測試、第 3 段的檢查和文件 | 做完 | 2026-11-27 |
 | 4. panic 的 lint；Viz 的 fuzzer；CI | 還沒開始 | |
 
 ## 驗收
@@ -20,9 +22,14 @@
 | --- | --- | --- |
 | 說不通的訊息 | 每一種（沒有 pass、root 的輸出是空的或 NaN、pass、quad、shared quad state 超過上限（剛好在上限的收）、quad 的 state 和 resource 不是 frame 的、resource 的 id 重複、resource 的像素和大小不合或帶著 shared image 又帶像素、超過 `MAX_TEXTURE_SIZE`、renderer 嵌 surface、`CreateSharedImage` 的大小和像素）被擋；誠實的 frame、NaN 和無限大的座標收 | `cargo test -p protocol --lib viz::` |
 | 壞訊息 | renderer process 送說不通的 frame、shared image、嵌別人 surface 的 frame 時，分頁收到 `BadMessageReason::FrameSink`、process 被結束、Viz 沒收到；說得通的到 Viz、從綁給它的 sink | `cargo test -p browser --test it renderer_process::what_viz_is_sent_that_cant_be_right_ends_its_renderer` |
-| Viz | 只有 root 的 frame 嵌別的 surface；說不通的 frame 丟掉、上一個留著；帶像素的 shared image 的 resource 整個 frame 不收、沒建過的 mailbox 不畫 | `cargo test -p viz --lib`（`a_frame_that_cant_be_right_is_dropped`、`a_frame_of_bad_resources_is_dropped`、`a_shared_image_nobody_made_isnt_drawn`） |
+| Viz | 不檢查它收到的 frame（已決定的事項第 11 條），說不通的也畫得下去、沒有 wgpu 的錯誤（不是 frame 的 state 用預設的、不是 frame 的 resource 不畫、嵌回 root 的停在那裡）；沒建過的 mailbox 不畫，帶著像素也一樣 | `cargo test -p viz --lib`（`what_cant_be_right_is_drawn_as_far_as_it_can_be`、`a_shared_image_nobody_made_isnt_drawn`） |
 | wgpu 的錯誤 | scope 接到它包著的錯誤、只接那些，device 照常；沒有 scope 包著的由 handler 收、不 panic；驗證錯誤在 debug build panic（測試容許時不）、記憶體不夠放掉池子、內部錯誤讓 device 當成遺失；wgpu 回報錯誤的 frame 不給 copy、下一個照畫；GPU 和 CPU 的 adapter 都過 | `cargo test -p viz --lib drawing_tests::`（`an_error_scope_catches_what_it_is_around`、`an_error_no_scope_is_around_is_handled`、`a_validation_error_panics_in_a_debug_build`、`wgpus_errors_are_handled_by_their_kind`、`a_frame_wgpu_reports_an_error_of_isnt_copied_and_the_next_is_drawn`）；`MACHOPO_GPU_ADAPTER=cpu` 再跑一次 |
 | 頂點的 buffer | 比一個 buffer 多的頂點從幾個 buffer 照順序畫（第二個 buffer 的 quad 在最上面） | `drawing_tests::a_frame_of_more_vertices_than_a_buffer_takes_is_drawn_from_several` |
+| 實體記憶體 | 有、在合理的範圍、和 `/proc/meminfo` 的 `MemTotal` 一致（Linux）；三個平台都編得過 | `cargo test -p ipc --test it disk_space::`；`cargo check -p ipc --target x86_64-pc-windows-msvc`、`aarch64-apple-darwin` |
+| 預算和上限 | 照 Chromium 的公式（1152 MB 對 2056 x 1329、scale 2，照像素放大；最少 512 MB；最多實體記憶體的四分之一，比最少的小時也是）；Viz 的是兩倍、65,536 張、實體記憶體的一半 | `cargo test -p browser --lib gpu_memory::` |
+| tile 的記憶體 | 可見的先、再照距離（貼著的不算可見）；放不下的放掉，可見的畫成背景色，之後放得下時 raster；一張放不下之後的都放不下；單色的不佔，沒 raster 過的也一樣；commit 時舊的 tile 在新的建立之前放掉 | `cargo test -p compositor --lib`（`the_tiles_nearest_the_viewport_take_the_tile_memory`、`once_a_tile_is_over_the_ones_after_it_are`、`a_tiles_distance_is_across_and_down`、`tiles_of_one_color_take_no_tile_memory`、`a_commit_lets_the_tiles_it_doesnt_keep_go_before_it_rasters`） |
+| 預算到 renderer | renderer process 收到 Browser 給的預算（1 byte：一張 tile 都不建，照樣送 frame；給預設的就建） | `cargo test -p browser --test it renderer_process::a_renderer_process_keeps_the_tile_memory_it_is_given` |
+| Viz 的上限 | 每個 client 的張數、位元組，所有 client 合計的位元組，各自擋得住；刪掉的、client 不在了的讓出空間；Viz thread 用啟動時給的上限 | `cargo test -p viz --lib`（`shared_images_past_the_gpu_memorys_limits_arent_made`、`thread::the_thread_keeps_the_shared_image_limits_it_is_given`） |
 | compositor | quad 超過上限時丟掉最底下的、沒有 quad 的 state 拿掉，剩下的 Viz 收、每個 quad 的 state 不變；只有 state 超過時也一樣；在上限以內不動；每個測試的 frame 都過檢查（debug build 的 assert） | `cargo test -p compositor --lib` |
 
 ## 做過的檢查
@@ -48,3 +55,15 @@
 - **mutation test**（`python3 scripts/test.py mutate rfcs/0123-browser-survives-renderer/mutants-2.toml`）：13 個全部抓到（`drawing_tests::`）：scope 接到的不告訴呼叫的、驗證錯誤在 debug build 不 panic、容許時也 panic、記憶體不夠不放掉池子、池子放不掉、內部錯誤不當成遺失、內部錯誤當成記憶體不夠、沒有 uncaptured error 的 handler、有錯誤的 frame 照樣給 copy、frame 不在 scope 裡、第二個 buffer 不 bind、每個 quad 都從第一個 buffer 畫、buffer 沒寫進頂點。「沒有 handler」的 mutant 第一次寫錯、編不過（括號），改成換掉整個敘述後重跑，抓到。跑完 13 個 `from` 都在原處。
 - 沒有列成 mutant 的：scope 告訴呼叫的是最輕的而不是最重的（`max` 換成 `min`）：一個 scope 裡同時有兩種錯誤才分得出來，測試造不出記憶體不夠和內部錯誤；每個 quad 一個 buffer（分 buffer 的條件永遠成立）：畫出來一樣，只是慢，不算錯；`VERTICES_PER_BUFFER` 大一點：一個 buffer 要超過 256 MiB 才看得出來，Browser 的 UI 和一個分頁的 frame 合起來最多 240 MiB。上傳和頂點的 buffer 出錯的那兩條只靠審查（`docs/test-gaps.md`）。
 - 第 2 段做完時：`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace --no-fail-fast`（5012 個通過、0 個失敗、1 個 ignored）、`sanity.py` 的七項通過。
+
+### 第 1 段之後的改動（2026-11-27，第 3 段之中）
+
+- **Viz 不再檢查 frame**（已決定的事項第 11 條）：一個 frame 的檢查量過（開發的 build，`opt-level = 1`；暫時的測試，量完拿掉）：150 個 quad 4.3 µs、2,000 個 29.9 µs、20,000 個 315 µs、262,144 個 6.6 ms（一個 15 到 28 ns），renderer process 的每個 frame 原本在 IO thread 和 Viz 各跑一次。拿掉了 Viz 的那一次，和守它的兩個測試（`a_frame_that_cant_be_right_is_dropped`、`a_frame_of_bad_resources_is_dropped`）、`mutants-1.toml` 的三個 mutant（「Viz takes any sink's surfaces」「Viz takes the root's no surfaces」「Viz doesn't check」：它們改的程式不在了）；加了 `what_cant_be_right_is_drawn_as_far_as_it_can_be`（Viz 收到說不通的 frame 畫得下去，debug build 裡也沒有 wgpu 的錯誤），`a_shared_image_nobody_made_isnt_drawn` 改回帶著像素也不畫。
+
+### 3a 到 3c（2026-11-27，同一台）
+
+- **量測**：`details.md` 的「第 3 段的量測」。第一次之後定了第 12、13 條；第二次每一頁都在預算以內，Viz 的上限照暫定的。
+- **補 mutation 的測試時找到的 bug**：只是貼著可見範圍的 tile（距離 0）也當成可見的，照位置排在真的可見的前面，用掉了預算（捲到中間、layer 比視窗寬時，8 張的預算只 raster 了 3 張可見的；`the_tiles_nearest_the_viewport_take_the_tile_memory` 的第四段）。改成先看有沒有重疊、再照距離。第一次的量測是修正前的 binary。
+- **mutation test**（`python3 scripts/test.py mutate rfcs/0123-browser-survives-renderer/mutants-3.toml`）：第一次 29 個抓到 24 個，漏的五個：放不下之後更小的照放（測試的 tile 一樣大：補了 `once_a_tile_is_over_the_ones_after_it_are`，邊上半寬的 tile）；距離只算縱向、只算橫向（預算剛好是可見的那幾張，距離只排可見以外的：補了 `a_tiles_distance_is_across_and_down`）；沒有像素的 tile 在滿了之後也算超過（那一段用同一個 host，單色的已經判定過、不在這一次裡：改成新的 host）；放得下的 OOM tile 重設成沒 raster（S1 之後它照計畫 raster，重設沒有作用：拿掉了那段和它的 mutant）。補完再跑那四個，都抓到：28 個全部抓到。跑完 28 個 `from` 都在原處。spec 第一次因為一個 `from` 對不上（S1 改了那一行）沒有開始跑，改了再跑。
+- 只靠審查的（`docs/test-gaps.md`）：`BrowserWindow` 把預算和上限接到 renderer、Viz 的那幾行，和視窗模式用的螢幕。
+- 第 3 段做完時：`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace --no-fail-fast`（5023 個通過、0 個失敗、1 個 ignored）、`sanity.py` 的七項、`python3 scripts/test.py reftest scroll/ effects/ canvas/ frames/ hidpi/ paint/ images/ invalidation/`（0 個非預期的結果）、`cargo check -p ipc --target x86_64-pc-windows-msvc` 和 `aarch64-apple-darwin` 通過。macOS 和 Windows 上沒有跑 `amount_of_physical_memory` 的測試。

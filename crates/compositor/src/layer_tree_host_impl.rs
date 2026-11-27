@@ -90,6 +90,8 @@ pub(crate) struct TilesPrepared {
     /// or an opaque fill covers them).
     pub(crate) skipped: usize,
     pub(crate) kept: usize,
+    /// Left out for the tile memory: let go, or not rastered.
+    pub(crate) over_budget: usize,
     /// Of those rastered, what a renderer that fills on the GPU could have
     /// drawn, and what kept the others from it (a tile can have several).
     pub(crate) gpu: usize,
@@ -147,6 +149,10 @@ enum TileDrawInfo {
     ),
     /// Drawn as a `SolidColor` quad; not at all if transparent.
     SolidColor(Color),
+    /// Visible, but past the tile memory (cc's `OOM_MODE`): drawn in its
+    /// layer's background color (not at all if the layer isn't opaque),
+    /// and rastered once the memory fits it.
+    OutOfMemory(Color),
 }
 
 impl TileDrawInfo {
@@ -273,6 +279,16 @@ struct PictureLayerImpl {
 }
 
 impl PictureLayerImpl {
+    /// What its tiles are rastered onto: its background color if it is
+    /// opaque, else nothing.
+    fn clear_color(&self) -> Color {
+        if self.layer.contents_opaque {
+            self.layer.background_color
+        } else {
+            Color::TRANSPARENT
+        }
+    }
+
     /// Whether `layer`'s tiles would come out the same as this one's: the
     /// same recording (the same `Arc`, as paint hands out a new display list
     /// whenever anything in it changes), size, scale and tile clearing.
@@ -562,6 +578,22 @@ impl LayerTreeHostImpl {
             root_scroll_origin: state.root_scroll_origin,
             source_frame_number: state.source_frame_number,
         });
+        // The active tree isn't drawn again: the raster is synchronous, and
+        // the pending tree is rastered and activated as soon as it is
+        // committed (`ProxyImpl::commit`, `SingleThreadProxy::composite`).
+        // The tiles the pending tree took over are its own too (the same
+        // shared images); the others go now, before it rasters, so the two
+        // trees never hold the tile memory twice. A raster that went on
+        // while the active tree was drawn (cc's, asynchronous) would need
+        // them kept, and the tile memory shared between the trees (cc's
+        // `TileManager` gives it to both).
+        if let Some(active) = &mut self.active_tree {
+            for layer in &mut active.layers {
+                if let LayerImpl::Picture(layer) = layer {
+                    layer.tiling.tiles.clear();
+                }
+            }
+        }
     }
 
     /// What a commit to the same document changes of what is drawn, in the
@@ -680,6 +712,11 @@ impl LayerTreeHostImpl {
     #[cfg(test)]
     pub(crate) fn tiles_prepared(&self) -> TilesPrepared {
         self.tiles_prepared
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_tile_memory_limit(&mut self, bytes: u64) {
+        self.settings.tile_memory_limit = bytes;
     }
 
     /// How many of the active tree's tiles have been rastered and kept.
@@ -987,6 +1024,7 @@ impl LayerTreeHostImpl {
         let scroll = self.scroll_offset_in_pixels(tree);
         self.tiles_prepared_for = Some((PointF::new(visible.x, visible.y), self.scroll_offsets()));
         let interest = visible.inset(-visible.width.max(visible.height));
+        let tile_memory_limit = self.settings.tile_memory_limit;
         let Some(tree) = self.pending_tree.as_mut().or(self.active_tree.as_mut()) else {
             return;
         };
@@ -1000,7 +1038,7 @@ impl LayerTreeHostImpl {
         // The tiles to raster, in the order they are drawn: their resources
         // are numbered in that order, however many threads raster them.
         let mut jobs = Vec::new();
-        for (index, (layer, origin)) in tree.layers.iter_mut().zip(origins).enumerate() {
+        for (layer, origin) in tree.layers.iter_mut().zip(origins.iter().copied()) {
             let layer = match layer {
                 LayerImpl::Picture(layer) => layer,
                 // A snapshot not on the GPU yet: put there (once for each),
@@ -1046,12 +1084,6 @@ impl LayerTreeHostImpl {
             };
             // The interest rect in the layer's own space.
             let interest = interest.offset(-origin.x, -origin.y);
-            let clear_color = if layer.layer.contents_opaque {
-                layer.layer.background_color
-            } else {
-                Color::TRANSPARENT
-            };
-            let contents_scale = layer.tiling.contents_scale;
             // Only the tiles it touches exist: the others go, and those
             // missing are made.
             let (rows, columns) = layer.tiling.tiles_in(interest);
@@ -1068,26 +1100,35 @@ impl LayerTreeHostImpl {
                     });
                 }
             }
+        }
+        // The tile memory, the tiles nearest the viewport first; the rest
+        // aren't rastered (and let go if they were). What it plans to raster
+        // it has looked at already, to tell those of one color.
+        let mut planned = assign_tile_memory(
+            &mut tree.layers,
+            &origins,
+            visible,
+            tile_memory_limit,
+            &mut prepared,
+        );
+        for (index, layer) in tree.layers.iter_mut().enumerate() {
+            let LayerImpl::Picture(layer) = layer else {
+                continue;
+            };
+            let list = &layer.layer.display_list;
             for (&key, tile) in layer.tiling.tiles.iter_mut() {
-                if tile.draw_info.is_some() {
-                    prepared.kept = prepared.kept.saturating_add(1);
+                let Some(Planned {
+                    params,
+                    ops,
+                    predicted,
+                }) = planned.remove(&(index, key))
+                else {
+                    // Rastered already, or over.
+                    if tile.draw_info.is_some() {
+                        prepared.kept = prepared.kept.saturating_add(1);
+                    }
                     continue;
-                }
-                let params = PlaybackParams {
-                    content_rect: tile.content_rect,
-                    contents_scale,
-                    clear_color,
                 };
-                let list = &layer.layer.display_list;
-                let ops = raster::ops_for(list, &params);
-                // Of one color, if its ops tell (none drawing in it, or an
-                // opaque fill over it): what rastering it would come to.
-                let predicted = list.color_if_solid_in_rect(
-                    &ops,
-                    tile.content_rect,
-                    contents_scale,
-                    clear_color,
-                );
                 if let Some(color) = predicted {
                     prepared.skipped = prepared.skipped.saturating_add(1);
                     tile.draw_info = Some(TileDrawInfo::SolidColor(color));
@@ -1251,12 +1292,13 @@ impl LayerTreeHostImpl {
                 image,
             ));
         }
-        if prepared.rastered > 0 || prepared.skipped > 0 {
+        if prepared.rastered > 0 || prepared.skipped > 0 || prepared.over_budget > 0 {
             tracing::debug!(
                 rastered = prepared.rastered,
                 solid = prepared.solid,
                 skipped = prepared.skipped,
                 kept = prepared.kept,
+                over_budget = prepared.over_budget,
                 gpu = prepared.gpu,
                 gpu_but_images = prepared.gpu_but_images,
                 images = prepared.images,
@@ -1470,8 +1512,14 @@ impl LayerTreeHostImpl {
                         }
                     }
                     // Nothing to draw.
-                    TileDrawInfo::SolidColor(color) if color.a == 0 => continue,
-                    TileDrawInfo::SolidColor(color) => Material::SolidColor { color: *color },
+                    TileDrawInfo::SolidColor(color) | TileDrawInfo::OutOfMemory(color)
+                        if color.a == 0 =>
+                    {
+                        continue;
+                    }
+                    TileDrawInfo::SolidColor(color) | TileDrawInfo::OutOfMemory(color) => {
+                        Material::SolidColor { color: *color }
+                    }
                 };
                 quads.push(DrawQuad {
                     rect: RectF::new(r.x + at.x, r.y + at.y, r.width, r.height),
@@ -1562,6 +1610,119 @@ fn fit_to_limits(quads: &mut Vec<DrawQuad>, states: &mut Vec<SharedQuadState>) {
     *states = kept;
 }
 
+/// A tile to raster, as [`assign_tile_memory`] looked at it.
+struct Planned {
+    params: PlaybackParams,
+    ops: Vec<usize>,
+    /// Of one color, if its ops tell (none drawing in it, or an opaque
+    /// fill over it): what rastering it would come to.
+    predicted: Option<Color>,
+}
+
+/// `TileManager::AssignGpuMemoryToTiles`: gives `limit` bytes of tile
+/// memory to the picture layers' tiles nearest the `visible` rect (target
+/// space; each layer's at its `origins`), the visible ones first, until a
+/// tile doesn't fit; each one after it is over (cc's eviction of the
+/// lowest priorities), smaller or not: let go, and drawn in its layer's
+/// background color if visible (`OOM_MODE`). One that fits again is
+/// rastered again. A tile
+/// of one color takes none: one not rastered yet is looked at first (its
+/// ops), so one its ops tell is of one color takes none either, rather
+/// than a tile's worth. The tiles to raster, by layer and tile, with what
+/// was looked at.
+fn assign_tile_memory(
+    layers: &mut [LayerImpl],
+    origins: &[PointF],
+    visible: RectF,
+    limit: u64,
+    prepared: &mut TilesPrepared,
+) -> HashMap<(usize, (u64, u64)), Planned> {
+    let mut wanted = Vec::new();
+    let mut planned = HashMap::new();
+    for (index, (layer, origin)) in layers.iter().zip(origins).enumerate() {
+        let LayerImpl::Picture(layer) = layer else {
+            continue;
+        };
+        let visible = visible.offset(-origin.x, -origin.y);
+        let list = &layer.layer.display_list;
+        let contents_scale = layer.tiling.contents_scale;
+        let clear_color = layer.clear_color();
+        for (&key, tile) in &layer.tiling.tiles {
+            let r = tile.content_rect;
+            let mut bytes = clamp_ceil::<u64>(r.width)
+                .saturating_mul(clamp_ceil(r.height))
+                .saturating_mul(4);
+            match tile.draw_info {
+                Some(TileDrawInfo::SolidColor(_)) => continue,
+                Some(TileDrawInfo::Resource(..)) => {}
+                None | Some(TileDrawInfo::OutOfMemory(_)) => {
+                    let params = PlaybackParams {
+                        content_rect: r,
+                        contents_scale,
+                        clear_color,
+                    };
+                    let ops = raster::ops_for(list, &params);
+                    let predicted =
+                        list.color_if_solid_in_rect(&ops, r, contents_scale, clear_color);
+                    if predicted.is_some() {
+                        bytes = 0;
+                    }
+                    planned.insert(
+                        (index, key),
+                        Planned {
+                            params,
+                            ops,
+                            predicted,
+                        },
+                    );
+                }
+            }
+            // Touching the visible rect (0 away) isn't in it.
+            let shown = !r.intersect(&visible).is_empty();
+            wanted.push((!shown, distance_between(r, visible), index, key, bytes));
+        }
+    }
+    // The visible first, then the nearest; the same order every time among
+    // those as near.
+    wanted.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then(a.1.total_cmp(&b.1))
+            .then(a.2.cmp(&b.2))
+            .then(a.3.cmp(&b.3))
+    });
+    let mut used = 0_u64;
+    let mut full = false;
+    for (hidden, _, index, key, bytes) in wanted {
+        let Some(LayerImpl::Picture(layer)) = layers.get_mut(index) else {
+            continue;
+        };
+        let clear_color = layer.clear_color();
+        let Some(tile) = layer.tiling.tiles.get_mut(&key) else {
+            continue;
+        };
+        // One of no pixels fits however full it is.
+        full = full || used.checked_add(bytes).is_none_or(|after| after > limit);
+        // One that fits is rastered as planned (one out of memory too:
+        // its raster takes the place of its color).
+        if !full || bytes == 0 {
+            used = used.saturating_add(bytes);
+            continue;
+        }
+        prepared.over_budget = prepared.over_budget.saturating_add(1);
+        planned.remove(&(index, key));
+        tile.draw_info = (!hidden).then_some(TileDrawInfo::OutOfMemory(clear_color));
+    }
+    planned
+}
+
+/// How far apart `a` and `b` are, across and down (0 if they touch or
+/// overlap): cc's Manhattan distance of a tile to the visible rect.
+fn distance_between(a: RectF, b: RectF) -> f32 {
+    let across = (b.x - a.right()).max(a.x - b.right()).max(0.0);
+    let down = (b.y - a.bottom()).max(a.y - b.bottom()).max(0.0);
+    across + down
+}
+
 /// Whether every quad and clip of `pass` is somewhere: none of NaN or of
 /// infinity (Viz takes them, and draws nothing of them).
 fn drawn_where_it_is(pass: &CompositorRenderPass) -> bool {
@@ -1594,6 +1755,250 @@ mod tests {
 
     use super::{LayerImpl, TileDrawInfo};
     use crate::fake_gpu::FakeGpu;
+
+    /// Past the tile memory, the tiles nearest the viewport are kept: the
+    /// visible ones first, and of those, those that fit; the visible ones
+    /// that don't are drawn in the layer's background color, and rastered
+    /// once they fit; the others aren't rastered.
+    #[test]
+    fn the_tiles_nearest_the_viewport_take_the_tile_memory() {
+        // 64px tiles, all of them of more than one color (the dots):
+        // 16 KiB each. A 256x128 viewport shows rows 0 and 1, four tiles
+        // across; the interest rect reaches rows 0 to 5.
+        const TILE: u64 = 64 * 64 * 4;
+        let (mut host, frames) = host();
+        let mut list = DisplayItemList::new();
+        dots(&mut list, 256.0, 640.0);
+        list.finalize();
+        host.set_root_layer(PictureLayer {
+            id: LayerId(1),
+            bounds: SizeF::new(256.0, 640.0),
+            display_list: Arc::new(list),
+            contents_opaque: true,
+            background_color: Color::rgb(0, 0, 255),
+            invalidation: None,
+            properties: Default::default(),
+        });
+        let drawn = |frames: &Mutex<Vec<CompositorFrame>>| {
+            let frames = frames.lock().unwrap();
+            let frame = frames.last().unwrap();
+            let mut textures = 0;
+            let mut background = Vec::new();
+            for quad in &frame.root_pass().unwrap().quad_list {
+                match quad.material {
+                    Material::Texture { .. } => textures += 1,
+                    Material::SolidColor { color } => {
+                        assert_eq!(color, Color::rgb(0, 0, 255));
+                        background.push((quad.rect.x, quad.rect.y));
+                    }
+                    Material::Surface { .. } => panic!("no surface"),
+                }
+            }
+            background.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            (textures, background, frame.resource_list.len())
+        };
+
+        // The visible ones, and no more.
+        host.set_tile_memory_limit(8 * TILE);
+        host.set_viewport_rect_and_scale(Size::new(256, 128), 1.0, LocalSurfaceId::default());
+        assert!(host.composite().is_some());
+        let prepared = host.host_impl().tiles_prepared();
+        assert_eq!((prepared.rastered, prepared.over_budget), (8, 16));
+        assert_eq!(drawn(&frames), (8, Vec::new(), 8));
+
+        // Not all the visible ones: the first five (by row, then column)
+        // are kept, the others drawn in the background color.
+        let (mut host, frames) = self::host();
+        let mut list = DisplayItemList::new();
+        dots(&mut list, 256.0, 640.0);
+        list.finalize();
+        host.set_root_layer(PictureLayer {
+            id: LayerId(1),
+            bounds: SizeF::new(256.0, 640.0),
+            display_list: Arc::new(list),
+            contents_opaque: true,
+            background_color: Color::rgb(0, 0, 255),
+            invalidation: None,
+            properties: Default::default(),
+        });
+        host.set_tile_memory_limit(5 * TILE);
+        host.set_viewport_rect_and_scale(Size::new(256, 128), 1.0, LocalSurfaceId::default());
+        assert!(host.composite().is_some());
+        let prepared = host.host_impl().tiles_prepared();
+        assert_eq!((prepared.rastered, prepared.over_budget), (5, 19));
+        assert_eq!(
+            drawn(&frames),
+            (5, vec![(64.0, 64.0), (128.0, 64.0), (192.0, 64.0)], 5)
+        );
+
+        // With the memory for them, they are rastered.
+        host.set_tile_memory_limit(8 * TILE);
+        host.set_viewport_rect_and_scale(Size::new(256, 128), 1.0, LocalSurfaceId::default());
+        host.set_needs_commit();
+        assert!(host.composite().is_some());
+        let prepared = host.host_impl().tiles_prepared();
+        assert_eq!((prepared.rastered, prepared.kept), (3, 5));
+        assert_eq!(drawn(&frames), (8, Vec::new(), 8));
+
+        // Nearest by distance, not by place: scrolled to rows 3 and 4 of a
+        // layer twice as wide as the viewport, the visible eight are kept,
+        // not the first rows' nor those of the visible rows off to the side.
+        let (mut host, frames) = self::host();
+        let mut list = DisplayItemList::new();
+        dots(&mut list, 512.0, 640.0);
+        list.finalize();
+        host.set_root_layer(PictureLayer {
+            id: LayerId(1),
+            bounds: SizeF::new(512.0, 640.0),
+            display_list: Arc::new(list),
+            contents_opaque: true,
+            background_color: Color::rgb(0, 0, 255),
+            invalidation: None,
+            properties: Default::default(),
+        });
+        host.set_tile_memory_limit(8 * TILE);
+        host.set_viewport_rect_and_scale(Size::new(256, 128), 1.0, LocalSurfaceId::default());
+        host.set_root_scroll_offset(gfx::PointF::new(0.0, 192.0));
+        assert!(host.composite().is_some());
+        let prepared = host.host_impl().tiles_prepared();
+        assert_eq!(prepared.rastered, 8);
+        assert_eq!(drawn(&frames), (8, Vec::new(), 8));
+    }
+
+    /// Once a tile doesn't fit, none after it does, though smaller: the
+    /// half-wide tile at the layer's edge, touching the visible rect, would
+    /// fit the half a tile left, but comes after a visible one that didn't.
+    #[test]
+    fn once_a_tile_is_over_the_ones_after_it_are() {
+        const TILE: u64 = 64 * 64 * 4;
+        let (mut host, _frames) = host();
+        let mut list = DisplayItemList::new();
+        dots(&mut list, 288.0, 640.0);
+        list.finalize();
+        host.set_root_layer(PictureLayer {
+            id: LayerId(1),
+            bounds: SizeF::new(288.0, 640.0),
+            display_list: Arc::new(list),
+            contents_opaque: true,
+            background_color: Color::WHITE,
+            invalidation: None,
+            properties: Default::default(),
+        });
+        host.set_tile_memory_limit(7 * TILE + TILE / 2);
+        host.set_viewport_rect_and_scale(Size::new(256, 128), 1.0, LocalSurfaceId::default());
+        assert!(host.composite().is_some());
+        // Rows 0 to 5, five across: the eighth visible one, and the 22
+        // that aren't visible.
+        let prepared = host.host_impl().tiles_prepared();
+        assert_eq!((prepared.rastered, prepared.over_budget), (7, 23));
+    }
+
+    /// How far a tile is from the visible rect: across and down added up,
+    /// none touching or within it.
+    #[test]
+    fn a_tiles_distance_is_across_and_down() {
+        let visible = RectF::new(100.0, 100.0, 50.0, 50.0);
+        let at = |x, y| super::distance_between(RectF::new(x, y, 10.0, 10.0), visible);
+        assert_eq!(at(120.0, 120.0), 0.0, "within");
+        assert_eq!(at(150.0, 120.0), 0.0, "touching");
+        assert_eq!(at(170.0, 120.0), 20.0, "right");
+        assert_eq!(at(60.0, 120.0), 30.0, "left");
+        assert_eq!(at(120.0, 180.0), 30.0, "below");
+        assert_eq!(at(120.0, 70.0), 20.0, "above");
+        assert_eq!(at(170.0, 180.0), 50.0, "both");
+    }
+
+    /// A tile of one color takes no tile memory, though not rastered yet:
+    /// its ops tell first. With a tile's worth for eight visible tiles of
+    /// which one alone draws anything, that one is rastered, wherever it
+    /// is among them.
+    #[test]
+    fn tiles_of_one_color_take_no_tile_memory() {
+        const TILE: u64 = 64 * 64 * 4;
+        let one_dot = || {
+            let mut list = DisplayItemList::new();
+            // In the last visible tile (row 1, column 3) alone.
+            list.push_op(PaintOp::DrawRect {
+                rect: RectF::new(193.0, 65.0, 1.0, 1.0),
+                flags: PaintFlags::fill(Color::BLACK),
+            });
+            list.finalize();
+            PictureLayer {
+                id: LayerId(1),
+                bounds: SizeF::new(256.0, 640.0),
+                display_list: Arc::new(list),
+                contents_opaque: true,
+                background_color: Color::WHITE,
+                invalidation: None,
+                properties: Default::default(),
+            }
+        };
+        let (mut host, frames) = host();
+        host.set_root_layer(one_dot());
+        host.set_tile_memory_limit(TILE);
+        host.set_viewport_rect_and_scale(Size::new(256, 128), 1.0, LocalSurfaceId::default());
+        assert!(host.composite().is_some());
+        assert_eq!(host.host_impl().tiles_prepared().over_budget, 0);
+        let frames = frames.lock().unwrap();
+        let frame = frames.last().unwrap();
+        assert_eq!(frame.resource_list.len(), 1);
+        let pass = frame.root_pass().unwrap();
+        let textured: Vec<_> = pass
+            .quad_list
+            .iter()
+            .filter(|q| matches!(q.material, Material::Texture { .. }))
+            .map(|q| (q.rect.x, q.rect.y))
+            .collect();
+        assert_eq!(textured, [(192.0, 64.0)]);
+        drop(frames);
+        // Not even that one fits: it alone is over, not the tiles of one
+        // color after it (a new tab's: none told of one color yet).
+        let (mut host, _frames) = self::host();
+        host.set_root_layer(one_dot());
+        host.set_tile_memory_limit(TILE / 2);
+        host.set_viewport_rect_and_scale(Size::new(256, 128), 1.0, LocalSurfaceId::default());
+        assert!(host.composite().is_some());
+        assert_eq!(host.host_impl().tiles_prepared().over_budget, 1);
+    }
+
+    /// A commit lets the active tree's tiles it doesn't take over go
+    /// before the new ones are rastered: the raster is synchronous, and
+    /// the active tree isn't drawn again, so the two never hold a layer's
+    /// tiles at once.
+    #[test]
+    fn a_commit_lets_the_tiles_it_doesnt_keep_go_before_it_rasters() {
+        let gpu = FakeGpu::default();
+        let (mut host, _frames) = host_with(Some(gpu.images.clone()));
+        let layer = |invalidation: Option<Vec<RectF>>| {
+            let mut list = DisplayItemList::new();
+            dots(&mut list, 256.0, 640.0);
+            list.finalize();
+            PictureLayer {
+                id: LayerId(1),
+                bounds: SizeF::new(256.0, 640.0),
+                display_list: Arc::new(list),
+                contents_opaque: true,
+                background_color: Color::WHITE,
+                invalidation: invalidation.map(Arc::from),
+                properties: Default::default(),
+            }
+        };
+        host.set_root_layer(layer(None));
+        host.set_viewport_rect_and_scale(Size::new(256, 128), 1.0, LocalSurfaceId::default());
+        assert!(host.composite().is_some());
+        // The interest rect's: rows 0 to 5, four across.
+        assert_eq!(gpu.alive(), 24);
+        // All of it changed: every tile is rastered again.
+        host.set_root_layer(layer(Some(vec![RectF::new(0.0, 0.0, 256.0, 640.0)])));
+        assert!(host.composite().is_some());
+        assert_eq!(gpu.made(), 48);
+        assert_eq!(gpu.alive(), 24);
+        assert_eq!(
+            gpu.most_alive(),
+            24,
+            "the old ones while the new ones were made"
+        );
+    }
 
     /// More quads than Viz takes: the ones furthest back (last) are left
     /// out, and the states no quad left is of, and what is left is a frame

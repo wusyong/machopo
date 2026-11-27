@@ -247,6 +247,43 @@ impl CompositorFrame {
 /// at most, and draws no more than this (it leaves the rest out).
 pub const MAX_QUADS: usize = 1 << 18;
 
+/// The tile memory a renderer's compositor keeps when it isn't told
+/// another (Blink's `kDefaultMemoryMB`, desktops' least): the browser
+/// tells its renderers one for their screen and the machine.
+pub const DEFAULT_TILE_MEMORY_LIMIT: u64 = 512 << 20;
+
+/// The most shared images a client keeps in Viz: a texture and what draws
+/// it each, whatever their size. A page's compositor keeps a tile one, a
+/// few thousand.
+pub const SHARED_IMAGES_PER_CLIENT: usize = 65_536;
+
+/// How much of the GPU's memory Viz lets clients' shared images take
+/// (cc's limits, a renderer's own, held once more where the GPU is: in
+/// Chromium a GPU process out of memory ends, and the browser starts
+/// another; here the GPU is the browser's). A `CreateSharedImage` past one
+/// isn't made.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SharedImageLimits {
+    /// The bytes of a client's images.
+    pub bytes_per_client: u64,
+    /// How many a client has.
+    pub images_per_client: usize,
+    /// The bytes of every client's together.
+    pub bytes: u64,
+}
+
+impl Default for SharedImageLimits {
+    /// Twice the default tile memory a client, and no limit together (the
+    /// machine's memory not known).
+    fn default() -> Self {
+        Self {
+            bytes_per_client: DEFAULT_TILE_MEMORY_LIMIT.saturating_mul(2),
+            images_per_client: SHARED_IMAGES_PER_CLIENT,
+            bytes: u64::MAX,
+        }
+    }
+}
+
 /// The most render passes a frame may have (Viz draws the last).
 pub const MAX_RENDER_PASSES: usize = 1024;
 

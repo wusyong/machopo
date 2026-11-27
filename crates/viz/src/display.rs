@@ -6,7 +6,7 @@ use gfx::Size;
 use protocol::SharedBuffer;
 use protocol::viz::{
     CompositorFrame, CopyOutputRequest, CopyOutputResult, FrameSinkId, LocalSurfaceId, Mailbox,
-    pixels_fit,
+    SharedImageLimits, pixels_fit,
 };
 
 /// A shared image as its renderer keeps it (its texture): what Viz's table
@@ -53,6 +53,67 @@ pub trait DirectRenderer {
     fn shutdown(&mut self) {}
 }
 
+/// The bytes and number of each client's shared images, and the bytes of
+/// all of them. What a frame still draws after its image is destroyed
+/// isn't counted: it goes with the frame.
+#[derive(Default)]
+struct SharedImageUsage {
+    by_sink: HashMap<FrameSinkId, (u64, usize)>,
+    bytes: u64,
+    /// The most each client's have taken, for the log.
+    most: HashMap<FrameSinkId, u64>,
+}
+
+impl SharedImageUsage {
+    /// Which limit one more image of `bytes` for `sink` is past, if any.
+    fn past(
+        &self,
+        sink: FrameSinkId,
+        bytes: u64,
+        limits: &SharedImageLimits,
+    ) -> Option<&'static str> {
+        let (sink_bytes, images) = self.by_sink.get(&sink).copied().unwrap_or_default();
+        if images >= limits.images_per_client {
+            Some("the client's images")
+        } else if sink_bytes.saturating_add(bytes) > limits.bytes_per_client {
+            Some("the client's bytes")
+        } else if self.bytes.saturating_add(bytes) > limits.bytes {
+            Some("every client's bytes")
+        } else {
+            None
+        }
+    }
+
+    /// The client's bytes and images now, if its bytes are more than
+    /// they have been.
+    fn add(&mut self, sink: FrameSinkId, bytes: u64) -> Option<(u64, usize)> {
+        let (sink_bytes, images) = self.by_sink.entry(sink).or_default();
+        *sink_bytes = sink_bytes.saturating_add(bytes);
+        *images = images.saturating_add(1);
+        self.bytes = self.bytes.saturating_add(bytes);
+        let now = (*sink_bytes, *images);
+        let most = self.most.entry(sink).or_default();
+        (now.0 > *most).then(|| {
+            *most = now.0;
+            now
+        })
+    }
+
+    fn remove(&mut self, sink: FrameSinkId, bytes: u64) {
+        if let Some((sink_bytes, images)) = self.by_sink.get_mut(&sink) {
+            *sink_bytes = sink_bytes.saturating_sub(bytes);
+            *images = images.saturating_sub(1);
+        }
+        self.bytes = self.bytes.saturating_sub(bytes);
+    }
+
+    fn remove_sink(&mut self, sink: FrameSinkId) {
+        if let Some((bytes, _)) = self.by_sink.remove(&sink) {
+            self.bytes = self.bytes.saturating_sub(bytes);
+        }
+    }
+}
+
 /// Why a renderer has no copy of the frame it was given.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CopyFailure {
@@ -82,7 +143,13 @@ pub struct Display<R: DirectRenderer> {
     /// (Chromium's `SharedImageManager`, by mailbox): a client names its
     /// own alone. A frame holds those it draws too, so one destroyed is
     /// still drawn until its client's next frame.
-    shared_images: HashMap<(FrameSinkId, Mailbox), SharedImageHandle>,
+    /// With the bytes of each.
+    shared_images: HashMap<(FrameSinkId, Mailbox), (SharedImageHandle, u64)>,
+    /// What those take, a client's and all of them (Chromium's
+    /// `MemoryTracker`s, and the GPU process's `GpuPeakMemoryMonitor`),
+    /// within `limits`.
+    usage: SharedImageUsage,
+    limits: SharedImageLimits,
     /// Whether a shared image was made since the last flush.
     shared_images_made: bool,
     needs_draw: bool,
@@ -103,10 +170,18 @@ impl<R: DirectRenderer> Display<R> {
             embedded: HashSet::new(),
             renderer,
             shared_images: HashMap::new(),
+            usage: SharedImageUsage::default(),
+            limits: SharedImageLimits::default(),
             shared_images_made: false,
             needs_draw: false,
             copy_requests: Vec::new(),
         }
+    }
+
+    /// How much of the GPU's memory clients' shared images may take from
+    /// now on: one past it isn't made (those made stay).
+    pub fn set_shared_image_limits(&mut self, limits: SharedImageLimits) {
+        self.limits = limits;
     }
 
     /// `sink` may submit frames (`RegisterFrameSinkId`).
@@ -114,14 +189,16 @@ impl<R: DirectRenderer> Display<R> {
         self.frame_sinks.insert(sink);
     }
 
-    /// `sink`'s new frame, once checked: a frame from a sink that isn't the
-    /// root or registered is dropped (Chromium's comes on a pipe closed with
-    /// its sink), and so is one that can't be right
-    /// ([`CompositorFrame::check`]; only the root embeds others' surfaces),
-    /// the last one staying. A renderer of a process of its own has had its
-    /// frames checked as they came (a bad one is its bad message, and it
-    /// ends); one in this process (a thread) is machopo's own, and so is
-    /// its bug.
+    /// `sink`'s new frame: one from a sink that isn't the root or
+    /// registered is dropped (Chromium's comes on a pipe closed with its
+    /// sink). What a frame is isn't checked here: a renderer of a process
+    /// of its own has had its frames checked as the browser's IO thread
+    /// read them ([`CompositorFrame::check`]: one that can't be right is
+    /// its bad message, and never comes); the rest are this process's own
+    /// compositors', whose debug builds check what they send. Whatever
+    /// comes, the renderer draws what it can of it (a state or resource the
+    /// frame hasn't is the default one, or nothing), and what wgpu reports
+    /// of it is caught.
     pub fn submit_compositor_frame(
         &mut self,
         sink: FrameSinkId,
@@ -132,14 +209,15 @@ impl<R: DirectRenderer> Display<R> {
             tracing::debug!(?sink, "viz: dropping a frame of a sink it doesn't know");
             return;
         }
-        if let Err(bad) = frame.check(sink == self.root_frame_sink) {
-            tracing::error!(?sink, ?bad, "viz: dropping a frame that can't be right");
-            return;
-        }
         tracing::debug!(
             client_id = sink.client_id,
             sink_id = sink.sink_id,
             frame_token = frame.metadata.frame_token,
+            quads = frame
+                .render_pass_list
+                .iter()
+                .map(|pass| pass.quad_list.len())
+                .sum::<usize>(),
             "viz: frame arrived"
         );
         // What the frame draws of its client's shared images, held with
@@ -150,7 +228,7 @@ impl<R: DirectRenderer> Display<R> {
             .iter()
             .filter_map(|resource| {
                 let mailbox = resource.shared_image.as_ref()?.mailbox;
-                let image = self.shared_images.get(&(sink, mailbox))?;
+                let (image, _) = self.shared_images.get(&(sink, mailbox))?;
                 Some((resource.id, image.clone()))
             })
             .collect();
@@ -191,8 +269,29 @@ impl<R: DirectRenderer> Display<R> {
             tracing::error!(?sink, ?mailbox, "viz: a shared image made twice");
             return;
         }
+        // The pixels fit `size`: its bytes are theirs.
+        let bytes = u64::try_from(pixels.len()).unwrap_or(u64::MAX);
+        if let Some(past) = self.usage.past(sink, bytes, &self.limits) {
+            tracing::error!(
+                ?sink,
+                ?size,
+                past,
+                "viz: a shared image past the GPU memory's limit isn't made"
+            );
+            return;
+        }
         if let Some(image) = self.renderer.create_shared_image(size, pixels) {
-            self.shared_images.insert((sink, mailbox), image);
+            self.shared_images.insert((sink, mailbox), (image, bytes));
+            if let Some((bytes, images)) = self.usage.add(sink, bytes) {
+                tracing::debug!(
+                    client_id = sink.client_id,
+                    sink_id = sink.sink_id,
+                    bytes,
+                    images,
+                    all = self.usage.bytes,
+                    "viz: a client's shared images at their most yet"
+                );
+            }
             self.shared_images_made = true;
         }
     }
@@ -200,7 +299,9 @@ impl<R: DirectRenderer> Display<R> {
     /// `sink`'s `DestroySharedImage`: its `mailbox` is its client's no
     /// more. A frame that draws it holds it until it is replaced.
     pub fn destroy_shared_image(&mut self, sink: FrameSinkId, mailbox: Mailbox) {
-        self.shared_images.remove(&(sink, mailbox));
+        if let Some((_, bytes)) = self.shared_images.remove(&(sink, mailbox)) {
+            self.usage.remove(sink, bytes);
+        }
     }
 
     /// After a batch of messages: what the shared images made in it were
@@ -252,6 +353,7 @@ impl<R: DirectRenderer> Display<R> {
         self.surfaces.remove(sink);
         // Its shared images go with it (its channel to the GPU closed).
         self.shared_images.retain(|(owner, _), _| *owner != sink);
+        self.usage.remove_sink(sink);
         self.embedded.remove(&sink);
         self.needs_draw = true;
     }
@@ -496,108 +598,6 @@ mod tests {
         display.remove_frame_sink(tab);
         display.submit_compositor_frame(tab, LocalSurfaceId::default(), frame(Color::WHITE));
         assert!(display.surfaces.latest(tab).is_none(), "removed");
-    }
-
-    /// Only the root (the browser's UI) embeds others' surfaces: a frame
-    /// of another sink that does (a renderer in this process, which its
-    /// compositor never makes) is dropped, and one that can't be right
-    /// otherwise too (a quad of no state its pass has).
-    #[test]
-    fn a_frame_that_cant_be_right_is_dropped() {
-        let tab = FrameSinkId {
-            client_id: 2,
-            sink_id: 1,
-        };
-        let embedding = |color| {
-            let mut frame = frame(color);
-            let pass = &mut frame.render_pass_list[0];
-            pass.quad_list.push(DrawQuad {
-                material: Material::Surface {
-                    surface_id: SurfaceId {
-                        frame_sink_id: ROOT,
-                        local_surface_id: LocalSurfaceId::default(),
-                    },
-                    default_background_color: color,
-                },
-                ..pass.quad_list[0]
-            });
-            frame
-        };
-        let mut display = Display::new(Renderer::default(), ROOT);
-        display.add_frame_sink(tab);
-        display.submit_compositor_frame(tab, LocalSurfaceId::default(), frame(Color::WHITE));
-        display.submit_compositor_frame(tab, LocalSurfaceId::default(), embedding(Color::BLACK));
-        let latest = display.surfaces.latest(tab).unwrap();
-        assert_eq!(latest.metadata.root_background_color, Color::WHITE);
-        let mut stateless = frame(Color::BLACK);
-        stateless.render_pass_list[0].quad_list[0].shared_quad_state = 1;
-        display.submit_compositor_frame(tab, LocalSurfaceId::default(), stateless);
-        let latest = display.surfaces.latest(tab).unwrap();
-        assert_eq!(latest.metadata.root_background_color, Color::WHITE);
-        // The root's own may.
-        let mut embeds_tab = embedding(Color::BLACK);
-        embeds_tab.render_pass_list[0].quad_list[1].material = Material::Surface {
-            surface_id: SurfaceId {
-                frame_sink_id: tab,
-                local_surface_id: LocalSurfaceId::default(),
-            },
-            default_background_color: Color::BLACK,
-        };
-        display.submit_compositor_frame(ROOT, LocalSurfaceId::default(), embeds_tab);
-        let latest = display.surfaces.latest(ROOT).unwrap();
-        assert_eq!(latest.metadata.root_background_color, Color::BLACK);
-    }
-
-    /// A frame whose pixels don't fit their resource's size, or a size
-    /// past a texture's, is dropped: the frame before stays, and nothing
-    /// is drawn again.
-    #[test]
-    fn a_frame_of_bad_resources_is_dropped() {
-        use protocol::viz::{ResourceFormat, ResourceId, TransferableResource};
-        let resource = |size: Size, bytes: usize| TransferableResource {
-            id: ResourceId(1),
-            size,
-            format: ResourceFormat::Rgba8Premul,
-            pixels: vec![0; bytes].into(),
-            shared_image: None,
-        };
-        let with = |resource| CompositorFrame {
-            resource_list: vec![resource],
-            ..frame(Color::BLACK)
-        };
-        let mut display = Display::new(Renderer::default(), ROOT);
-        display.submit_compositor_frame(ROOT, LocalSurfaceId::default(), frame(Color::WHITE));
-        display.draw_and_swap();
-        for bad in [
-            resource(Size::new(2, 2), 15),
-            resource(Size::new(2, 2), 17),
-            resource(
-                Size::new(MAX_TEXTURE_SIZE + 1, 1),
-                (MAX_TEXTURE_SIZE as usize + 1) * 4,
-            ),
-            resource(
-                Size::new(1, MAX_TEXTURE_SIZE + 1),
-                (MAX_TEXTURE_SIZE as usize + 1) * 4,
-            ),
-        ] {
-            display.submit_compositor_frame(ROOT, LocalSurfaceId::default(), with(bad));
-            let latest = display.surfaces.latest(ROOT).unwrap();
-            assert_eq!(latest.metadata.root_background_color, Color::WHITE);
-            assert!(!display.needs_draw());
-        }
-        let good = [
-            resource(Size::new(2, 2), 16),
-            resource(
-                Size::new(MAX_TEXTURE_SIZE, 1),
-                MAX_TEXTURE_SIZE as usize * 4,
-            ),
-            resource(Size::new(0, 3), 0),
-        ];
-        for good in good {
-            display.submit_compositor_frame(ROOT, LocalSurfaceId::default(), with(good));
-            let latest = display.surfaces.latest(ROOT).unwrap();
-            assert_eq!(latest.metadata.root_background_color, Color::BLACK);
-        }
     }
 
     /// `about:gpucrash` reaches the renderer, and a draw follows at once,
@@ -903,5 +903,45 @@ mod tests {
         assert_eq!(display.shared_image_count(ROOT), 0);
         display.flush_shared_images();
         assert_eq!(display.renderer().flushed, 0);
+    }
+
+    /// A client's shared images take so many bytes and are so many at
+    /// most, and all of them so many bytes: one past a limit isn't made
+    /// (and the pixels go back all the same); one destroyed, or a client
+    /// gone, makes room again. Past one client's, another's are made.
+    #[test]
+    fn shared_images_past_the_gpu_memorys_limits_arent_made() {
+        let quad = Size::new(2, 2);
+        let mut display = Display::new(Images::default(), ROOT);
+        display.add_frame_sink(TAB);
+        display.set_shared_image_limits(SharedImageLimits {
+            bytes_per_client: 40,
+            images_per_client: 3,
+            bytes: 56,
+        });
+        // The client's bytes: two of 16, not a third (48 > 40).
+        display.create_shared_image(TAB, Mailbox(1), quad, &[0; 16]);
+        display.create_shared_image(TAB, Mailbox(2), quad, &[0; 16]);
+        display.create_shared_image(TAB, Mailbox(3), quad, &[0; 16]);
+        assert_eq!(display.shared_image_count(TAB), 2, "the client's bytes");
+        // One destroyed makes room; then its number: a fourth of 4 bytes
+        // would fit the bytes (28), not the three images.
+        display.destroy_shared_image(TAB, Mailbox(2));
+        display.create_shared_image(TAB, Mailbox(3), PIXEL, &[0; 4]);
+        display.create_shared_image(TAB, Mailbox(4), PIXEL, &[0; 4]);
+        assert_eq!(display.shared_image_count(TAB), 3);
+        display.create_shared_image(TAB, Mailbox(5), PIXEL, &[0; 4]);
+        assert_eq!(display.shared_image_count(TAB), 3, "the client's images");
+        // Every client's bytes: the tab's 24 and the root's 32 are 56;
+        // 4 more would be the root's 36, within its own, but past them all.
+        display.create_shared_image(ROOT, Mailbox(1), quad, &[0; 16]);
+        display.create_shared_image(ROOT, Mailbox(2), quad, &[0; 16]);
+        display.create_shared_image(ROOT, Mailbox(3), PIXEL, &[0; 4]);
+        assert_eq!(display.shared_image_count(ROOT), 2, "every client's bytes");
+        // The tab gone, its room is the root's.
+        display.remove_frame_sink(TAB);
+        display.create_shared_image(ROOT, Mailbox(3), PIXEL, &[0; 4]);
+        assert_eq!(display.shared_image_count(ROOT), 3);
+        assert_eq!(display.renderer().made.len(), 7);
     }
 }

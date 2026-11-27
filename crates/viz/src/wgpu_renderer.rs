@@ -1516,10 +1516,10 @@ mod drawing_tests {
     }
 
     /// A resource naming a shared image its client never made draws
-    /// nothing (a lost device's, or a renderer's that is wrong). One that
-    /// carries pixels besides can't be right, and its frame isn't taken
-    /// (`CompositorFrame::check`): a client can't get its own bytes drawn
-    /// in place of an image it doesn't have.
+    /// nothing (a lost device's, or a renderer's that is wrong), whatever
+    /// pixels it carries besides (which a renderer process's can't: the IO
+    /// thread's `CompositorFrame::check`): a client can't get its own bytes
+    /// drawn in place of an image it doesn't have.
     #[test]
     fn a_shared_image_nobody_made_isnt_drawn() {
         let _gpu = gpu();
@@ -1541,18 +1541,80 @@ mod drawing_tests {
             id: ResourceId(7),
             size,
             format: ResourceFormat::Rgba8Premul,
-            pixels: protocol::BigBuffer::from([]),
+            pixels: protocol::BigBuffer::from([255, 0, 0, 255].repeat(4)),
             shared_image: Some(SharedImage::from_mailbox(Mailbox(4))),
         });
         let mut display = display(size);
-        let mut carrying = f.clone();
-        carrying.resource_list[0].pixels = protocol::BigBuffer::from([255, 0, 0, 255].repeat(4));
-        display.submit_compositor_frame(SINK, LocalSurfaceId::default(), carrying);
-        assert!(!display.needs_draw());
         display.submit_compositor_frame(SINK, LocalSurfaceId::default(), f);
         let copy = draw(&mut display);
         assert_eq!(px(&copy, 0, 0), [255, 255, 255, 255]);
         assert_eq!(px(&copy, 1, 1), [255, 255, 255, 255]);
+    }
+
+    /// Viz doesn't check what it is handed (the IO thread has, of a
+    /// renderer process's; the rest are machopo's own compositors'), and
+    /// draws what it can of a frame that can't be right, with no wgpu
+    /// error (which panics in this debug build): a quad of a state its pass
+    /// hasn't is the default state's, one of a resource the frame hasn't
+    /// isn't drawn, and a client that isn't the root embedding the root
+    /// gets the surface's default background where it would embed itself.
+    #[test]
+    fn what_cant_be_right_is_drawn_as_far_as_it_can_be() {
+        let _gpu = gpu();
+        let size = Size::new(4, 4);
+        let tab = FrameSinkId {
+            client_id: 2,
+            sink_id: 1,
+        };
+        let full = RectF::new(0.0, 0.0, 4.0, 4.0);
+        let mut display = display(size);
+        display.add_frame_sink(tab);
+        let embeds = |sink| DrawQuad {
+            rect: full,
+            shared_quad_state: 0,
+            material: Material::Surface {
+                surface_id: SurfaceId {
+                    frame_sink_id: sink,
+                    local_surface_id: LocalSurfaceId::default(),
+                },
+                default_background_color: Color::WHITE,
+            },
+        };
+        let tabs = frame(
+            size,
+            SharedQuadState::default(),
+            vec![
+                DrawQuad {
+                    material: Material::Texture {
+                        resource_id: ResourceId(99),
+                        tex_coord_rect: full,
+                        nearest_neighbor: true,
+                    },
+                    ..solid(Color::WHITE, full)
+                },
+                DrawQuad {
+                    shared_quad_state: 5,
+                    ..solid(Color::rgb(0, 0, 255), RectF::new(0.0, 0.0, 2.0, 2.0))
+                },
+                solid(Color::rgb(255, 0, 0), full),
+                // Under the rest: the root's, which embeds this one (drawn as
+                // its default background, where it would embed itself).
+                embeds(SINK),
+            ],
+        );
+        display.submit_compositor_frame(tab, LocalSurfaceId::default(), tabs);
+        display.submit_compositor_frame(
+            SINK,
+            LocalSurfaceId::default(),
+            frame(size, SharedQuadState::default(), vec![embeds(tab)]),
+        );
+        let copy = draw(&mut display);
+        assert_eq!(px(&copy, 0, 0), [0, 0, 255, 255], "of the default state");
+        assert_eq!(
+            px(&copy, 3, 3),
+            [255, 0, 0, 255],
+            "the resource it hasn't drew nothing"
+        );
     }
 
     /// A texture scaled up is sampled bilinearly (a canvas's), clamped at

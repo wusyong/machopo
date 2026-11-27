@@ -273,6 +273,49 @@ fn tab_with_a_gpu() -> (
     )
 }
 
+/// The tile memory the browser gives a renderer process is what its
+/// compositor keeps: given none, it rasters no tile and makes no shared
+/// image, and draws its frames all the same (each visible tile in the
+/// page's background color).
+#[test]
+fn a_renderer_process_keeps_the_tile_memory_it_is_given() {
+    let gpu = Arc::new(RecordingGpu::default());
+    let (mut web_contents, host_rx, viz_rx, begin_frames) =
+        crate::navigation::tab_with_renderer_flags(
+            as_a_process(),
+            browser::RendererFlags {
+                test_fonts: false,
+                web_tests: false,
+                wait_for_all_pipeline_stages_before_draw: true,
+                automation: false,
+                user_agent: browser::user_agent(),
+                system_colors: gfx::SystemColors::DEFAULT,
+                num_raster_threads: None,
+                tile_memory_limit: Some(1),
+                caret_blink_interval: None,
+                parser_budget: Default::default(),
+                new_content_rendering_delay: browser::NEW_CONTENT_RENDERING_DELAY,
+            },
+            Some(gpu.clone()),
+            in_memory(),
+        );
+    web_contents.resize(gfx::Size::new(600, 600), 1.0);
+    let mut viz = DrivenViz::new(viz_rx, begin_frames);
+    web_contents.navigate(TILES);
+    viz.until_loaded(&mut web_contents, &host_rx);
+    // Once it wants no more frames, it has drawn what it would: its
+    // tiles would have been made by then.
+    viz.run_until(&mut web_contents, &host_rx, "the page drawn", |viz, _| {
+        !viz.frames.is_empty() && viz.idle()
+    });
+    assert_eq!(
+        (viz.pixels_shared, viz.pixels_own),
+        (0, 0),
+        "a tile's shared image"
+    );
+    web_contents.shutdown();
+}
+
 /// A page with more than one tile of text.
 const TILES: &str = "data:text/html,<p style='font-size:80px'>tiles tiles tiles tiles tiles";
 

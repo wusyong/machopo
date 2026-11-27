@@ -22,6 +22,7 @@ mod debug_urls;
 mod dom_storage;
 mod font_data_service;
 mod frame_tree;
+mod gpu_memory;
 pub mod loader;
 mod navigation_controller;
 mod navigation_request;
@@ -36,6 +37,7 @@ mod web_contents;
 pub use bad_message::BadMessageReason;
 pub use dom_storage::{CommitOptions, DomStorageContext, ToRenderer};
 pub use frame_tree::FrameTree;
+pub use gpu_memory::{shared_image_limits, tile_memory_limit};
 pub use navigation_controller::{FrameNavigationEntry, NavigationController, NavigationEntry};
 pub use net::{HostMapping, HostMappingRules, NetworkContext, NetworkContextParams};
 pub use profile::{

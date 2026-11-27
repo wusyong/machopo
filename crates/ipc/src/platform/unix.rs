@@ -31,6 +31,20 @@ pub fn available_disk_space(path: &std::path::Path) -> std::io::Result<u64> {
     Ok(stat.f_bavail.saturating_mul(stat.f_frsize))
 }
 
+/// The machine's physical memory, in bytes (Chromium's
+/// `base::SysInfo::AmountOfPhysicalMemory`): its pages times their size,
+/// as `sysconf` says (Linux's and macOS's alike). `None` if it doesn't.
+pub fn amount_of_physical_memory() -> Option<u64> {
+    // SAFETY: `sysconf` takes any name and only answers it: it reads no
+    // memory of the caller's and writes none (an unknown name is -1).
+    let pages = unsafe { libc::sysconf(libc::_SC_PHYS_PAGES) };
+    // SAFETY: as above.
+    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    let pages = u64::try_from(pages).ok().filter(|&n| n > 0)?;
+    let page = u64::try_from(page).ok().filter(|&n| n > 0)?;
+    pages.checked_mul(page)
+}
+
 /// The signals that end machopo as closing it does (Chromium's
 /// `InstallShutdownSignalHandlers`: SIGTERM, SIGINT, SIGHUP).
 const SHUTDOWN_SIGNALS: [libc::c_int; 3] = [libc::SIGTERM, libc::SIGINT, libc::SIGHUP];

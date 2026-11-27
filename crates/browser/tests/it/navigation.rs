@@ -183,10 +183,8 @@ pub(crate) fn tab_with_launcher(
     Receiver<VizMsg>,
     BeginFrameSource,
 ) {
-    let (viz_tx, viz_rx) = unbounded::<VizMsg>();
-    let (host_tx, host_rx) = unbounded();
-    let web_contents = WebContents::new(
-        TabId(TAB_IDS.get_next()),
+    tab_with_renderer_flags(
+        launcher,
         browser::RendererFlags {
             test_fonts: false,
             web_tests: false,
@@ -195,10 +193,33 @@ pub(crate) fn tab_with_launcher(
             user_agent: browser::user_agent(),
             system_colors,
             num_raster_threads: None,
+            tile_memory_limit: None,
             caret_blink_interval: None,
             parser_budget,
             new_content_rendering_delay,
         },
+        gpu,
+        partition,
+    )
+}
+
+/// A tab whose renderers `launcher` launches with `flags`.
+pub(crate) fn tab_with_renderer_flags(
+    launcher: browser::RendererLauncher,
+    flags: browser::RendererFlags,
+    gpu: Option<Arc<dyn ContextProvider>>,
+    partition: StoragePartition,
+) -> (
+    WebContents,
+    Receiver<ContentsEvent>,
+    Receiver<VizMsg>,
+    BeginFrameSource,
+) {
+    let (viz_tx, viz_rx) = unbounded::<VizMsg>();
+    let (host_tx, host_rx) = unbounded();
+    let web_contents = WebContents::new(
+        TabId(TAB_IDS.get_next()),
+        flags,
         launcher,
         viz_tx,
         gpu,
@@ -290,6 +311,7 @@ fn a_renderer_that_ends_on_its_own_is_reported_gone() {
             user_agent: browser::user_agent(),
             system_colors: gfx::SystemColors::DEFAULT,
             num_raster_threads: None,
+            tile_memory_limit: None,
             caret_blink_interval: None,
             parser_budget: browser::ParserBudget::default(),
             new_content_rendering_delay: Duration::ZERO,
@@ -462,7 +484,7 @@ impl DrivenViz {
 
     /// Whether the renderer wants no `BeginFrame` and has answered the
     /// last.
-    fn idle(&self) -> bool {
+    pub(crate) fn idle(&self) -> bool {
         !self.begin_frames.wants_begin_frame() && !self.begin_frames.is_pending()
     }
 

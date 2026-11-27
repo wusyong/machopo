@@ -1,6 +1,7 @@
-//! How much a disk has free, as the platform says.
+//! How much a disk has free, and how much memory the machine has, as the
+//! platform says.
 
-use ipc::platform::available_disk_space;
+use ipc::platform::{amount_of_physical_memory, available_disk_space};
 
 #[test]
 fn a_disks_free_space_is_told_in_bytes() {
@@ -31,4 +32,27 @@ fn a_disks_free_space_is_told_in_bytes() {
 fn a_path_that_isnt_there_has_none() {
     let nowhere = std::env::temp_dir().join("machopo-nowhere/not/there");
     assert!(available_disk_space(&nowhere).is_err());
+}
+
+#[test]
+fn the_machines_memory_is_told_in_bytes() {
+    let memory = amount_of_physical_memory().expect("the system says");
+    // More than a phone's least, less than a server's most.
+    assert!(memory > 256 << 20 && memory < 1 << 50, "{memory}");
+    // Linux's `/proc/meminfo` says the same (in KiB), but for what the
+    // kernel keeps for itself (its own code, memory set aside).
+    #[cfg(target_os = "linux")]
+    {
+        let meminfo = std::fs::read_to_string("/proc/meminfo").unwrap();
+        let line = meminfo
+            .lines()
+            .find(|l| l.starts_with("MemTotal:"))
+            .unwrap();
+        let kib: u64 = line.split_whitespace().nth(1).unwrap().parse().unwrap();
+        let told = kib * 1024;
+        assert!(
+            memory >= told && memory - told < memory / 10,
+            "{memory} against /proc/meminfo's {told}"
+        );
+    }
 }

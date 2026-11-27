@@ -56,6 +56,11 @@ impl LayerTreeHost<SingleThreadProxy> {
         &self.proxy.host_impl
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_tile_memory_limit(&mut self, bytes: u64) {
+        self.proxy.host_impl.set_tile_memory_limit(bytes);
+    }
+
     /// Commit + prepare tiles + draw + submit, right now
     /// (`SingleThreadProxy::CompositeImmediately`). Returns the submitted
     /// frame token, or `None` if there was nothing to draw.

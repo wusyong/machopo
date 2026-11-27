@@ -162,6 +162,35 @@ CPU adapter，4096 見方的 texture 一個 64 MiB，一個接一個建、寫像
 - `gpu/ipc/service/shared_image_stub.cc`：參數不合（格式、用途、上傳資料的大小）或 `CreateSharedImage` 失敗（記憶體不夠也是）都是 `OnError()`，也就是 `channel_->Stop()`：那個 client 的整條 GPU channel 停掉（renderer 的 context 不見了，自己重來：照記憶，沒有讀 renderer 那一側）。`memory_tracker_` 記大小，沒有看到每個 client 的上限。
 - GPU process 自己當掉時 Browser 重開它：GPU 的記憶體用完傷不到 Browser。machopo 的 Viz 和 GPU 在 Browser 的 process 裡，這一點沒有對應的。
 
+### GPU process 的記憶體：記帳，不設上限
+
+2026-11-27 讀的：
+- 每個 client 有一個 `gpu::MemoryTracker`（`gpu/command_buffer/service/memory_tracking.h`：`TrackMemoryAllocatedChange`、`GetSize`），`GpuChannelManager::GpuPeakMemoryMonitor`（`gpu/ipc/service/gpu_channel_manager.cc`）合計所有的，用來記錄和量。`SharedImageStub`、`SharedImageManager`、`SharedImageFactory`、`GpuChannel` 裡沒有看到超過多少就拒絕的檢查。
+- 有記憶體壓力時（`OnMemoryPressure`、`OnApplicationBackgrounded`）清 cache（`SharedContextState::PurgeMemory`、Skia 的 `PurgeAllCaches`）。
+- context 一直遺失時（第五次，或和上一次在五秒以內：`force_restart`）重開整個 GPU process。
+- GPU process 被作業系統因記憶體不夠結束時，Browser 記下來（`content/browser/gpu/gpu_process_host.cc` 的 `PROCESS_WAS_KILLED_BY_OOM`）、再開一個。
+- 所以張數的上限在 renderer：cc 的 `ManagedMemoryPolicy::kDefaultNumResourcesLimit` 一千萬。
+
+## 第 3 段的量測
+
+2026-11-27，同一台（Fedora 45，AMD Radeon 890M）。一次性的腳本（沒有放進 repo）照 `scripts/bench/raster` 的做法：`machopo --remote-debugging-pipe --headless --scale 2`（開發的 build），頁面載入、等 2 秒，捲動 120 次（滾輪，一次 100 px），改視窗大小 21 次（到 680 x 500），讀 Viz 的 debug log：每個 client 的 shared image 到新高時的位元組和張數（`viz: a client's shared images at their most yet`）、每個 frame 的 quad 數（`viz: frame arrived` 的 `quads`）、compositor 超過預算的 tile（`prepared tiles` 的 `over_budget`）。頁面是 `raster` 的三個（Gutenberg、SQLite、Speedometer 的 NewsSite-Next），和兩個刻意做的：2,000 個捲動容器（machopo 裡捲動容器才成為 layer，`will-change` 不會）、1,500 段的長頁面。預算在每一次都是 512 MiB：headless 的「螢幕」是啟動時的視窗，不是 `Browser.setWindowBounds` 之後的。
+
+分頁（client 1）的峰值，視窗 1280 x 800 / 1920 x 1080：
+
+| 頁面 | 第一次（A1、S1 之前） | 超過預算的 tile | 第二次（A1、S1 之後） | 超過預算的 tile | 一個 frame 最多的 quad |
+| --- | --- | --- | --- | --- | --- |
+| Gutenberg | 89 / 182 MB，340 / 695 張 | 0 / 0 | 60 / 123 MB，227 / 468 張 | 0 / 0 | 70 / 135 |
+| SQLite | 34 / 44 MB，138 / 170 張 | 0 / 0 | 17 / 22 MB，70 / 88 張 | 0 / 0 | 70 / 120 |
+| NewsSite-Next | 160 / 259 MB，630 / 1,041 張 | 2,595 / 7,863 | 127 / 207 MB，502 / 827 張 | 0 / 0 | 330 / 517 |
+| 捲動容器 | 921 / 1,010 MiB，3,997 / 4,570 張 | 0 / 2,721 | 474 / 512 MiB，2,152 / 2,310 張 | 0 / 2,563 | 626 / 1,273 |
+| 長頁面 | 140 / 294 MB，540 / 1,140 張 | 0 / 0 | 71 / 153 MB，270 / 585 張 | 0 / 0 | 70 / 135 |
+
+Browser 的 UI（client 0）：第一次 5.2 / 7.9 MB、20 / 30 張，第二次 2.6 / 3.9 MB、10 / 15 張。
+
+- 第一次的捲動容器在改視窗大小時用到預算的將近兩倍：那一次 `PrepareTiles` raster 了 2,257 張新的（tile 的位置都變了），舊的 active tree 還拿著它的那批到 activate（已決定的事項第 12 條）。NewsSite 的超過預算是還沒 raster 的單色 tile 也算了一整張（第 13 條）。第一次的 binary 還有「貼著可見範圍的 tile 當成可見的」那個 bug（`progress.md`）。
+- 第二次（第 12、13 條之後）每一頁都在預算以內；只有刻意做的捲動容器在大的視窗剛好到預算（512 MiB），放掉了 2,563 張預先畫的 tile。
+- 所以 Viz 的上限照暫定的：每個分頁是預算的兩倍（512 MiB 時 1 GiB：最多的頁面是它的一半）、65,536 張（最多 2,310 張，28 倍）、所有的合計是實體記憶體的一半（這台 31 GiB）；quad 的上限（262,144）是最多的 200 倍。
+
 ## 沒有查到的
 
 - Chromium 的 mojo 驗證錯誤在 GPU process 的 pipe 上之後怎麼處理（renderer 有沒有被結束）；renderer 在 GPU channel 停掉之後怎麼重來。

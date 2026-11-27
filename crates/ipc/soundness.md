@@ -130,6 +130,7 @@ macOS 那一層的測試在 `src/platform/macos/` 各檔的單元測試和 `crat
 | --- | --- |
 | `platform/unix.rs` 的 `install`（`libc::sigaction`、`sigemptyset`） | 兩個結構都是清成 0 的區域變數（全 0 是合法的 `sigaction`：沒有旗標、空的 mask、預設的動作），活到呼叫結束；`sigaction` 只讀一個、寫另一個。裝上的 `handle` 是 `extern "C" fn(c_int)`，沒有 `SA_SIGINFO` 時 `sa_sigaction` 要的就是這種，而且它只做 handler 能做的事（下一列） |
 | `platform/unix.rs` 的 `handle`（`libc::write`、讀寫 `errno`）、`errno_location`（`__errno_location`、`__error`） | handler 在任何一條 thread、任何兩個指令之間跑：`write` 和讀寫 `errno` 是 POSIX 列為 async-signal-safe 的，不配置、不拿鎖。socket 在 `install` 之前就設好、之後一直開著（`into_raw_fd`，沒有人關它），nonblocking，所以 handler 不會等；寫的 byte 是活到 `write` 回來的區域變數。`errno` 是這條 thread 的，寫完放回原本的值，被打斷的程式之後讀得到它自己的。`errno` 的位址由 C library 自己的 accessor 給，不帶參數、一直可以呼叫，在 thread 活著時有效 |
+| `platform/unix.rs` 的 `amount_of_physical_memory`（`libc::sysconf`） | `sysconf` 只回答給它的名字：不讀也不寫呼叫者的記憶體，不認得的名字回 -1（轉成 `u64` 失敗，是 `None`）。兩個答案的乘積用 checked 的乘法 |
 | `platform/unix.rs` 的 `terminate_current_process_immediately`（`libc::_exit`） | `_exit` 接受任何代碼、不回來，不讀也不寫這個 process 的記憶體：它就是結束 process 的系統呼叫，kernel 停掉每一條 thread、關掉 process 開著的東西。呼叫之後這個 process 沒有程式再跑，所以沒有東西會看到沒被 drop 的值。不跑 exit handler 和 destructor 正是用它的理由（其他 thread 還在跑），不是安全上的問題：留下的只是沒寫出去的緩衝區 |
 
 ### 被 pipe 驅動的 process 的兩端（`platform/pipe.rs`）
@@ -159,6 +160,7 @@ macOS 那一層的測試在 `src/platform/macos/` 各檔的單元測試和 `crat
 | `platform/windows/channel.rs` 的 `inherited`、`end_named`（`std::env::remove_var`、`GetFileType`、`OwnedHandle::from_raw_handle`、`SetHandleInformation`） | `remove_var`：標準庫寫明它在 Windows 上單一和多條 thread 的程式裡都安全（改環境是系統的一個呼叫，別的 thread 可以同時讀）；這個模組只在 Windows 上編。`GetFileType` 只查那個數值，不是 handle 時它自己會說。包成 `OwnedHandle` 的數值是 host（可信）為這件事放進這個 process 的、剛確認過是 pipe，而且 `inherited` 的旗標讓它只被包一次。變數被別人設成這個 process 自己的另一個 pipe 的數值時，那個 pipe 會被當成通道、之後被關掉：能設 child 的環境的人本來就是啟動它的人 |
 | `platform/windows/channel.rs` 的 `named_pipe`、`IocpWaiter` 的 port（`CreateNamedPipeW`、`CreateFileW`、`ConnectNamedPipe`、`CreateIoCompletionPort`、`PostQueuedCompletionStatus`、`GetQueuedCompletionStatus`、`CancelIoEx`） | 名字是以 0 結尾、活到呼叫結束的陣列。回來的 handle 檢查過才包成 `OwnedHandle`（新的，只有這裡拿著）。其餘的呼叫都是對自己拿著、呼叫期間開著的 handle 做的，寫的是活到呼叫結束的區域變數 |
 | `platform/windows/process.rs` 的 `terminate_current_process_immediately`（`GetCurrentProcess`、`TerminateProcess`） | `GetCurrentProcess` 回來的是不用關、一直開著的 pseudo-handle。`TerminateProcess` 對它不讀也不寫這個 process 的記憶體：kernel 停掉每一條 thread、關掉 process 開著的東西，之後這個 process 沒有程式再跑，所以沒有東西會看到沒被 drop 的值。萬一失敗回來了，`abort` 照樣結束。不跑 DLL 的 detach 和 destructor 正是用它的理由，和 Unix 的 `_exit` 一樣 |
+| `platform/windows/disk.rs` 的 `amount_of_physical_memory`（`GlobalMemoryStatusEx`） | 結構是活到呼叫結束的區域變數，每個欄位都先給了值，`dwLength` 是它的大小（呼叫要求的）；呼叫只寫它。不拿、不留任何 handle |
 | `platform/windows/disk.rs` 的 `available_disk_space`（`GetDiskFreeSpaceExW`） | 名字是以 0 結尾、活到呼叫結束的陣列，裡面沒有別的 0（有的話不呼叫，是 `InvalidInput`：會變成另一個比較短的路徑）；結果寫進活到呼叫結束的區域變數，另外兩個輸出是 null（文件寫明可以不要）。不拿、不留任何 handle |
 | `platform/windows/job.rs`（`CreateJobObjectW`、`OwnedHandle::from_raw_handle`、`SetInformationJobObject`、`AssignProcessToJobObject`、`WaitForSingleObject`） | 建 job 時兩個指標都是 null（沒有名字、不被繼承），回來的不是 null 才包成 `OwnedHandle`（新的，只有這裡拿著）。limits 是活到呼叫結束的區域變數，型別和長度照那個 class 要的。放進 job 和等待用的是借來的、呼叫期間開著的 handle；kernel 自己檢查是不是 process、權限夠不夠 |
 

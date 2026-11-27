@@ -37,7 +37,7 @@
 - **Linux 的 sandbox 要 kernel 有 Landlock**（5.13 起，編進去而且開機時開著）：沒有時 renderer process 不啟動（分頁顯示原因，log 有 kernel 的說法），要 `--no-sandbox` 才能用。沒有比較弱的退路。
 - **sandbox 裡的 renderer 建不了檔案**（Linux、macOS）：它自己的 trace 檔和 census 檔是進 sandbox 之前開好的；其他會讓 V8 自己寫檔案的 `MACHOPO_V8_FLAGS`（`--perf-basic-prof` 的 `/tmp/perf-<pid>.map`、`--prof` 和 `--logfile` 的 log）在 renderer 裡寫不出來，要加 `--no-sandbox`（`bench.py speedometer --sample` 自己加；Chrome 的 `--perf-prof` 也要 `--no-sandbox`）。trace 裡 renderer 的 process 名稱這類 Perfetto 從 `/proc/self/stat`、`/proc/self/cmdline` 讀的資料沒有（macOS：機器和 kernel 的版本那幾欄沒有，renderer 的 stderr 多一行 Perfetto 讀不到的訊息）。
 - **Browser 執行期間新裝的字型，renderer 要重開 machopo 才讀得到**（三個平台）：系統的字型是 Browser 的字型 thread 在第一個 renderer 啟動時列一次的（Linux 上 fontconfig 的 cache 過期時也由那一次更新），之後的每個 renderer（新的分頁也是）拿到的都是那一份名字的清單；字型變了時通知字型 thread 重列、renderer 重拿清單，還沒做。
-- **renderer 還有兩條路能讓 Browser 結束**：它送的 frame 是在 Browser 裡交給 GPU 的：IO thread 擋掉了說不通的訊息，wgpu 回報的錯誤也接住了，但 shared image 沒有數量和記憶體的上限，GPU 的記憶體用完時至少 CPU 的 adapter 是 segfault（在 wgpu 裡，不經過錯誤的回報），接不住；Browser 處理 renderer 訊息的程式裡如果有 `unwrap` 或越界，壞訊息能讓它 panic（有 fuzz target 在找，跑過的時間不長、涵蓋還在增加）。
+- **renderer 還有兩條路能讓 Browser 結束**：它送的 frame 是在 Browser 裡交給 GPU 的：IO thread 擋掉了說不通的訊息，wgpu 回報的錯誤也接住了，shared image 有每個 client 和合計的上限，但合計是照實體記憶體算的（wgpu 不說 GPU 有多少記憶體）：獨立顯示卡的記憶體比實體記憶體的一半少，用完時靠驅動回報 OutOfMemory（接住、丟掉那一張）；驅動不回報、自己當掉的（第 0 步的 llvmpipe 在 address space 用完時是 segfault），Browser 跟著結束；Browser 處理 renderer 訊息的程式裡如果有 `unwrap` 或越界，壞訊息能讓它 panic（有 fuzz target 在找，跑過的時間不長、涵蓋還在增加）。
 - **`--single-process` 時 renderer 記憶體耗盡、abort 或記憶體出錯，結束的是整個程式**（renderer 是自己的 process 時只結束那個 renderer，分頁顯示 sad tab、可以重新載入）。例如 `border-collapse: collapse` 的表格的邊是一個密的陣列（Blink 的 `TableBorders` 也是），一列 1000 個 `colspan=1000` 再加上幾千列的表格要好幾十 GB，配置不到時 process 就結束。
 - `gfx::FontData` 和 `gfx::ImageData` 不能序列化：現在字型和圖片都留在 renderer 這一側（raster 在 renderer 裡），不用過 process 的邊界；raster 搬到 Viz 那一側時要改成像 Chromium 那樣傳 typeface 和圖片。
 - **名稱表和屬性值的表在同一個 renderer 裡共用**（`dom` 的 `names.rs` 和 `string.rs`，thread-local：同一個分頁導覽過的網頁和它們的 iframe 都用同一份）：前面的網頁的名稱一直留著（見「GC 和 `dom`」），屬性值（包括 CSRF token、hidden input 的值）留到值的表下一次丟掉沒人用的。沒有 API 讀得到表的內容，但 intern 時找到的只 clone、沒有的要配置，花的時間不同：頁面可以一次測一組猜得到的名稱或值有沒有出現過，例如某個網站特有的 custom element 名稱（這個分頁去過哪裡）或低熵的值；隨機的 token 猜不到，測不出來。跨 site 的網頁和 iframe 分到各有一份表的 renderer 時才沒有；只回收沒人用的名稱擋不住（還活著的 iframe 的名稱照樣測得到）。
@@ -270,12 +270,14 @@
 - shared image 的生命週期是兩則訊息（建立、銷毀），Viz 讓 frame 拿著它畫的那幾個；沒有 cc 的 `ReturnResources`（Viz 告訴 client 哪些 resource 沒有 frame 在用了：machopo 的 client 自己決定什麼時候銷毀，Viz 只把像素的緩衝區還回去）。Viz 照舊整個畫面重畫（damage rect 送到了，但沒用來 partial swap）。
 - 網頁 frame 的 `LocalSurfaceId` 不比對：Viz 用那個 sink 最新的 frame，視窗大小改變的那一下會先顯示舊大小的 frame。
 - `about:demo` 的 GPU 那份比活著的 texture 多約 95 MB，跟著動畫出現（每個 frame 上傳一個 tile、畫一個 frame），不會繼續長；不是 texture 建立和銷毀造成的（重用 texture 試過，省不下來），原因還沒查到。
+- tile 的記憶體預算（`browser::tile_memory_limit`）在 renderer 啟動時定：視窗移到另一個螢幕不跟著變（Chromium 也只看啟動時的 `initial_screen_size`）；headless 的是啟動時的視窗，`Browser.setWindowBounds` 之後也不變。canvas 成為 layer 時的快照不算在預算裡（Viz 的上限照樣算它）。Viz 在 `DestroySharedImage` 時就不算那張了，但 frame 畫著它時 texture 留到下一個 frame。
 - tile 和 canvas 的 texture 重用的方式和 cc 的 `ResourcePool` 不同：texture 的池子在 Viz 這一側（一個 device 一個），shared image 被銷毀、畫它的 frame 也換掉時才還回去，只照大小找；最多留 32 MB、256 張，超過時放掉最舊的，沒有閒置逾時（閒著的最多多佔 32 MB，到 device 遺失或程式結束）。Viz 自己上傳的資源（沒有 shared image、像素跟著 frame 來的）不重用。compositor 這一側另有 tile 的像素緩衝區的池子（raster 直接畫進去、交給 Viz、用完還回來）：最多留 64 塊，只照長度找，沒有閒置逾時也不照記憶體的壓力放掉（256×256 的 tile 一塊 256 KiB，最多約 16 MB）。
 - raster 的字型快取（`RasterCache`，每個畫過的字型和 face 一筆，握著字型檔的 bytes）跟著 compositor，不會變小：頁面換掉的 web font 也留著（Blink 的 `FontCache` 會清掉不用的 `FontPlatformData`）。
 - GPU device 遺失之後，新的 device 做不出來時（重試 3 次）直接結束程式：視窗沒有 software 的輸出可以退回（Chromium 退到 software compositing）。
 - Viz 不用 texture 上限小於 8192 的 adapter（renderer 把不超過它的 canvas 當成 layer）：這樣的 GPU 建不出 device、程式結束，不會改用下一個 adapter（例如 CPU 的）。目前的桌機 GPU 和 lavapipe、WARP 都到 16384 以上。
 - 視窗的實體像素超過 GPU 的 texture 上限（Apple Silicon 每邊 16384；使用者把視窗拉過好幾個高 DPI 的螢幕時）時 surface 的設定失敗、整個程式結束：Viz 的輸出是一張 texture，沒有夾到上限、也沒有分塊畫（Chrome 的視窗一樣受 GPU 的限制）。automation 設的大小夾到 8192（見「WebDriver 和自動化」）。
-- `--single-process` 的 renderer（Browser 的 process 裡的 thread）送給 Viz 的說不通的訊息只丟掉、照舊顯示上一個 frame，記一筆錯誤：沒有可以結束的 process（renderer 是自己的 process 時那是它的壞訊息，它被結束）。
+- `--single-process` 的 renderer（Browser 的 process 裡的 thread）送給 Viz 的 frame 在 release build 裡沒有人檢查：Viz 畫它畫得下去的部分（renderer 是自己的 process 時，說不通的是它的壞訊息，它被結束）。那是 machopo 自己的 compositor 的 bug，debug build 送出前檢查、assert。
+- compositor 在 commit 時就放掉 active tree 裡 pending tree 沒接手的 tile（raster 是同步的，commit、raster、activate 在同一個呼叫裡，active tree 不會再被畫）：改成非同步的 raster（GPU raster 在 Viz 那一側時多半會）時，active tree 在 pending tree raster 的期間照樣要畫，要拿掉這一步，tile 的記憶體改成兩棵樹一起分（cc 的 `TileManager`），否則改視窗大小時一個分頁會用到預算的兩倍。
 - 一個 frame 最多 262,144 個 quad（`protocol::viz::MAX_QUADS`）：超過時 renderer 的 compositor 丟掉最底下的（記一筆警告），Chromium 沒有這個上限（它的 Viz 不把一個 frame 的頂點放在一個 buffer 裡）。誠實的 frame 一個可見的 tile 一個 quad，幾千個。
 - 只會在原地重建 device，不會重啟 process；GPU 驅動程式真的 crash 會讓整個程式結束，要等拆 process。
 - device 遺失到 compositor 送來新的 frame 之間，舊 device 上的 tile 不畫，露出背景色，可能閃一兩個 frame。

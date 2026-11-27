@@ -220,6 +220,8 @@ pub fn run(pipe: Pipe, options: Options) -> Result<(), String> {
             // A web test's: no blinking, so each frame is the same.
             caret_blink_interval: None,
             profile: options.profile,
+            // Headless: the output is the screen.
+            screen: None,
         },
         size,
         options.scale,

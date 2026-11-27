@@ -57,4 +57,19 @@ impl FakeGpu {
     pub(crate) fn alive(&self) -> usize {
         self.made() - self.destroyed().len()
     }
+
+    /// The most there were at once, made and not destroyed yet.
+    pub(crate) fn most_alive(&self) -> usize {
+        let sent = self.sent.lock().unwrap();
+        let (mut now, mut most) = (0_usize, 0_usize);
+        for msg in sent.iter() {
+            match msg {
+                CompositorFrameSinkMsg::CreateSharedImage { .. } => now += 1,
+                CompositorFrameSinkMsg::DestroySharedImage { .. } => now -= 1,
+                _ => {}
+            }
+            most = most.max(now);
+        }
+        most
+    }
 }

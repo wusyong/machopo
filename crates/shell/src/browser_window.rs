@@ -38,6 +38,10 @@ pub struct Options {
     pub network: NetworkContextParams,
     /// Where what the window's tabs keep is; by default in memory.
     pub profile: browser::Profile,
+    /// The screen the window is on, physical px: the tiles' memory grows
+    /// with it (`browser::tile_memory_limit`); `None`, as a window as big
+    /// as the output (headless).
+    pub screen: Option<Size>,
 }
 
 pub struct BrowserWindow {
@@ -79,6 +83,14 @@ impl BrowserWindow {
         };
         let partition = StoragePartition::new(&options.profile, network)
             .map_err(|e| format!("start the storage and the network service: {e}"))?;
+        // The GPU's memory, the browser's to give (Blink's
+        // `GetGpuMemoryPolicy`, worked out here: a renderer in its sandbox
+        // knows neither the screen nor the machine): each renderer's
+        // tiles, and Viz's limits on every client's shared images.
+        let memory = ipc::platform::amount_of_physical_memory();
+        let tile_memory_limit = browser::tile_memory_limit(options.screen.unwrap_or(size), memory);
+        let shared_image_limits = browser::shared_image_limits(tile_memory_limit, memory);
+        tracing::debug!(tile_memory_limit, ?shared_image_limits, "the GPU's memory");
         let mut tabs = WindowTabs {
             launcher: crate::renderer_launcher(options.process_per_tab, options.test_fonts),
             flags: RendererFlags {
@@ -90,6 +102,7 @@ impl BrowserWindow {
                 user_agent,
                 system_colors: crate::system_colors::for_window(options.test_fonts),
                 num_raster_threads: options.num_raster_threads,
+                tile_memory_limit: Some(tile_memory_limit),
                 caret_blink_interval: options.caret_blink_interval,
                 parser_budget: Default::default(),
                 new_content_rendering_delay: browser::NEW_CONTENT_RENDERING_DELAY,
@@ -109,6 +122,7 @@ impl BrowserWindow {
             viz_rx,
             BROWSER_FRAME_SINK,
             viz::BeginFrameSource::new(),
+            shared_image_limits,
             make_renderer,
         )
         .map_err(|e| format!("spawn viz thread: {e}"))?;
@@ -239,6 +253,7 @@ mod tests {
                 user_agent: browser::user_agent(),
                 system_colors: gfx::SystemColors::DEFAULT,
                 num_raster_threads: None,
+                tile_memory_limit: None,
                 caret_blink_interval: None,
                 parser_budget: Default::default(),
                 new_content_rendering_delay: browser::NEW_CONTENT_RENDERING_DELAY,

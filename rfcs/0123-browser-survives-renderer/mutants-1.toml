@@ -164,27 +164,6 @@ to = '''                        (host.forward)(Err(BadMessageReason::FrameSink(b
 test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "--", "renderer_process::what_viz"]
 
 [[mutant]]
-name = "Viz takes any sink's surfaces"
-file = "crates/viz/src/display.rs"
-from = '''        if let Err(bad) = frame.check(sink == self.root_frame_sink) {'''
-to = '''        if let Err(bad) = frame.check(true) {'''
-test = ["cargo", "test", "-q", "-p", "viz", "--lib", "--", "display::"]
-
-[[mutant]]
-name = "Viz takes the root's no surfaces"
-file = "crates/viz/src/display.rs"
-from = '''        if let Err(bad) = frame.check(sink == self.root_frame_sink) {'''
-to = '''        if let Err(bad) = frame.check(false) {'''
-test = ["cargo", "test", "-q", "-p", "viz", "--lib", "--", "display::"]
-
-[[mutant]]
-name = "Viz doesn't check"
-file = "crates/viz/src/display.rs"
-from = '''        if let Err(bad) = frame.check(sink == self.root_frame_sink) {'''
-to = '''        if let Err(bad) = Ok::<(), protocol::viz::InvalidFrameSinkMsg>(()) {'''
-test = ["cargo", "test", "-q", "-p", "viz", "--lib", "--", "display::"]
-
-[[mutant]]
 name = "the compositor sends what it has"
 file = "crates/compositor/src/layer_tree_host_impl.rs"
 from = '''    if quads.len() <= MAX_QUADS && states.len() <= MAX_QUADS.saturating_add(1) {'''

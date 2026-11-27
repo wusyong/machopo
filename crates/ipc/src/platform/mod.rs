@@ -23,10 +23,11 @@
 //! starts it hands them over with [`spawn_with_pipe`], or as Chrome's
 //! clients do, and it takes them with [`inherited_pipe`].
 //!
-//! Beside the channel, one thing of the system's that the rest asks for:
-//! how much a disk has free ([`available_disk_space`], for the HTTP
-//! cache's size), a system call like the others, in the one place that
-//! makes them.
+//! Beside the channel, two things of the system's that the rest asks
+//! for: how much a disk has free ([`available_disk_space`], for the HTTP
+//! cache's size) and how much memory the machine has
+//! ([`amount_of_physical_memory`], for the GPU's budgets), system calls
+//! like the others, in the one place that makes them.
 
 #[cfg(target_os = "linux")]
 pub mod linux;
@@ -47,7 +48,10 @@ pub use linux::channel::{Channel, child_gone, inherited, spawn};
 #[cfg(target_os = "macos")]
 pub use macos::channel::{Channel, child_gone, inherited, spawn};
 #[cfg(unix)]
-pub use unix::{available_disk_space, on_shutdown_signals, terminate_current_process_immediately};
+pub use unix::{
+    amount_of_physical_memory, available_disk_space, on_shutdown_signals,
+    terminate_current_process_immediately,
+};
 #[cfg(windows)]
 pub use windows::channel::{
     Channel, child_gone, inherited, inherited_file, spawn, spawn_handing, spawn_in,
@@ -116,6 +120,6 @@ pub fn spawn_in(
     spawn(command)
 }
 #[cfg(windows)]
-pub use windows::disk::available_disk_space;
+pub use windows::disk::{amount_of_physical_memory, available_disk_space};
 #[cfg(windows)]
 pub use windows::{on_shutdown_signals, terminate_current_process_immediately};

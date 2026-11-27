@@ -32,6 +32,12 @@ pub struct LayerTreeSettings {
     /// suites, a few % more memory), so they are asked for. Chromium's
     /// renderer has 1 too, rastering on the GPU.
     pub num_raster_threads: usize,
+    /// The bytes of tiles' pixels kept (cc's
+    /// `ManagedMemoryPolicy::bytes_limit_when_visible`, which the browser
+    /// gives each renderer for its screen and machine): past it the tiles
+    /// furthest from the viewport go, and visible ones that don't fit are
+    /// drawn in their layer's background color.
+    pub tile_memory_limit: u64,
 }
 
 impl std::fmt::Debug for LayerTreeSettings {
@@ -44,6 +50,7 @@ impl std::fmt::Debug for LayerTreeSettings {
             )
             .field("shared_images", &self.shared_images.is_some())
             .field("num_raster_threads", &self.num_raster_threads)
+            .field("tile_memory_limit", &self.tile_memory_limit)
             .finish()
     }
 }
@@ -55,6 +62,7 @@ impl Default for LayerTreeSettings {
             wait_for_all_pipeline_stages_before_draw: true,
             shared_images: None,
             num_raster_threads: 1,
+            tile_memory_limit: protocol::viz::DEFAULT_TILE_MEMORY_LIMIT,
         }
     }
 }

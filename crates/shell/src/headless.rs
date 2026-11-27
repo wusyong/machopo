@@ -258,6 +258,9 @@ fn drive(
             // A web test's (content_shell's): the same on every platform.
             system_colors: gfx::SystemColors::DEFAULT,
             num_raster_threads,
+            // The compositor's default: a web test's viewport (800x600) is
+            // given the least anyway.
+            tile_memory_limit: None,
             // A web test's: no blinking, so each frame comes out the same.
             caret_blink_interval: None,
             parser_budget: Default::default(),

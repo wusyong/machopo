@@ -37,6 +37,7 @@ pub fn spawn_viz_compositor_thread<R, F>(
     rx: Receiver<VizMsg>,
     root_frame_sink: FrameSinkId,
     mut begin_frames: BeginFrameSource,
+    shared_image_limits: protocol::viz::SharedImageLimits,
     make_renderer: F,
 ) -> std::io::Result<JoinHandle<()>>
 where
@@ -54,6 +55,7 @@ where
                 }
             };
             let mut display = Display::new(renderer, root_frame_sink);
+            display.set_shared_image_limits(shared_image_limits);
             // The clients, for what Viz tells each besides its
             // `BeginFrame`s.
             let mut clients: std::collections::HashMap<
@@ -243,6 +245,62 @@ mod tests {
         }
     }
 
+    /// Counts the shared images it makes.
+    struct Making(Arc<AtomicU32>);
+
+    impl DirectRenderer for Making {
+        fn resize(&mut self, _: Size) {}
+        fn draw_frame(&mut self, _: &AggregatedFrame<'_>) {}
+        fn create_shared_image(
+            &mut self,
+            _: Size,
+            _: crate::display::Pixels<'_>,
+        ) -> Option<crate::display::SharedImageHandle> {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "a test's count: far from wrapping"
+            )]
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Some(Arc::new(()))
+        }
+    }
+
+    /// The thread's display keeps the shared image limits it is started
+    /// with: the client's second image isn't made.
+    #[test]
+    fn the_thread_keeps_the_shared_image_limits_it_is_given() {
+        let made = Arc::new(AtomicU32::new(0));
+        let (tx, rx) = unbounded();
+        let renderer = Making(made.clone());
+        let root = FrameSinkId {
+            client_id: 0,
+            sink_id: 1,
+        };
+        let limits = protocol::viz::SharedImageLimits {
+            images_per_client: 1,
+            ..Default::default()
+        };
+        let thread =
+            spawn_viz_compositor_thread(rx, root, BeginFrameSource::new(), limits, move || {
+                Ok(renderer)
+            })
+            .unwrap();
+        for mailbox in [1, 2] {
+            tx.send(VizMsg::FrameSink(
+                root,
+                CompositorFrameSinkMsg::CreateSharedImage {
+                    mailbox: protocol::viz::Mailbox(mailbox),
+                    size: Size::new(1, 1),
+                    pixels: protocol::SharedBuffer::from(bytes::Bytes::from_static(&[0; 4])),
+                },
+            ))
+            .unwrap();
+        }
+        tx.send(VizMsg::Display(DisplayMsg::Shutdown)).unwrap();
+        thread.join().unwrap();
+        assert_eq!(made.load(Ordering::Relaxed), 1);
+    }
+
     /// The renderer is shut down as the thread ends, told to or with no
     /// one left to send it anything.
     #[test]
@@ -255,11 +313,14 @@ mod tests {
         for told in [true, false] {
             let (tx, rx) = unbounded();
             let renderer = ShutDown(shut_down.clone());
-            let thread =
-                spawn_viz_compositor_thread(rx, root, BeginFrameSource::new(), move || {
-                    Ok(renderer)
-                })
-                .unwrap();
+            let thread = spawn_viz_compositor_thread(
+                rx,
+                root,
+                BeginFrameSource::new(),
+                Default::default(),
+                move || Ok(renderer),
+            )
+            .unwrap();
             if told {
                 tx.send(VizMsg::Display(DisplayMsg::Shutdown)).unwrap();
             } else {
@@ -279,9 +340,14 @@ mod tests {
             client_id: 0,
             sink_id: 1,
         };
-        let thread =
-            spawn_viz_compositor_thread(rx, root, BeginFrameSource::new(), move || Ok(renderer))
-                .unwrap();
+        let thread = spawn_viz_compositor_thread(
+            rx,
+            root,
+            BeginFrameSource::new(),
+            Default::default(),
+            move || Ok(renderer),
+        )
+        .unwrap();
         tx.send(VizMsg::Display(DisplayMsg::LoseContext)).unwrap();
         tx.send(VizMsg::Display(DisplayMsg::Shutdown)).unwrap();
         thread.join().unwrap();
@@ -297,8 +363,14 @@ mod tests {
             client_id: 0,
             sink_id: 1,
         };
-        let thread =
-            spawn_viz_compositor_thread(rx, root, BeginFrameSource::new(), || Ok(Copying)).unwrap();
+        let thread = spawn_viz_compositor_thread(
+            rx,
+            root,
+            BeginFrameSource::new(),
+            Default::default(),
+            || Ok(Copying),
+        )
+        .unwrap();
         let tab = FrameSinkId {
             client_id: 2,
             sink_id: 1,
@@ -345,8 +417,14 @@ mod tests {
             client_id: 0,
             sink_id: 1,
         };
-        let thread =
-            spawn_viz_compositor_thread(rx, root, BeginFrameSource::new(), || Ok(Copying)).unwrap();
+        let thread = spawn_viz_compositor_thread(
+            rx,
+            root,
+            BeginFrameSource::new(),
+            Default::default(),
+            || Ok(Copying),
+        )
+        .unwrap();
         let tab = FrameSinkId {
             client_id: 2,
             sink_id: 1,
@@ -393,8 +471,14 @@ mod tests {
             client_id: 0,
             sink_id: 1,
         };
-        let thread =
-            spawn_viz_compositor_thread(rx, root, BeginFrameSource::new(), || Ok(Copying)).unwrap();
+        let thread = spawn_viz_compositor_thread(
+            rx,
+            root,
+            BeginFrameSource::new(),
+            Default::default(),
+            || Ok(Copying),
+        )
+        .unwrap();
         let rect = RectF::new(0.0, 0.0, 1.0, 1.0);
         let frame = CompositorFrame {
             metadata: CompositorFrameMetadata {

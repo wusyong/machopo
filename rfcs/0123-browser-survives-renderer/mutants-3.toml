@@ -1,0 +1,217 @@
+# Stage 3's mutants (the browser works out the tiles' memory and Viz's limits; the compositor keeps the tiles nearest the viewport; Viz counts its clients' shared images): `python3 scripts/test.py mutate rfcs/0123-browser-survives-renderer/mutants-3.toml`, on Linux.
+test = ["cargo", "test", "-q", "-p", "compositor", "--lib", "--", "the_tiles_nearest"]
+timeout = 900
+
+[[mutant]]
+name = "the machine's memory is its pages"
+file = "crates/ipc/src/platform/unix.rs"
+from = '''    pages.checked_mul(page)'''
+to = '''    Some(pages)'''
+test = ["cargo", "test", "-q", "-p", "ipc", "--test", "it", "--", "disk_space::"]
+
+[[mutant]]
+name = "the budget doesn't grow with the screen"
+file = "crates/browser/src/gpu_memory.rs"
+from = '''    let mb = LARGE_RESOLUTION_MB
+        .saturating_mul(pixels)'''
+to = '''    let mb = LARGE_RESOLUTION_MB
+        .saturating_mul(pixels.min(1))'''
+test = ["cargo", "test", "-q", "-p", "browser", "--lib", "--", "gpu_memory::"]
+
+[[mutant]]
+name = "the budget has no cap"
+file = "crates/browser/src/gpu_memory.rs"
+from = '''        Some(quarter) if mb > quarter => quarter,'''
+to = '''        Some(quarter) if mb > quarter && false => quarter,'''
+test = ["cargo", "test", "-q", "-p", "browser", "--lib", "--", "gpu_memory::"]
+
+[[mutant]]
+name = "the budget has no least"
+file = "crates/browser/src/gpu_memory.rs"
+from = '''        _ => mb.max(least),'''
+to = '''        _ => mb,'''
+test = ["cargo", "test", "-q", "-p", "browser", "--lib", "--", "gpu_memory::"]
+
+[[mutant]]
+name = "the least before the quarter"
+file = "crates/browser/src/gpu_memory.rs"
+from = '''        Some(quarter) if mb > quarter => quarter,
+        _ => mb.max(least),'''
+to = '''        Some(quarter) => mb.max(least).min(quarter),
+        _ => mb.max(least),'''
+test = ["cargo", "test", "-q", "-p", "browser", "--lib", "--", "gpu_memory::"]
+
+[[mutant]]
+name = "a client's bytes are the budget, not twice it"
+file = "crates/browser/src/gpu_memory.rs"
+from = '''        bytes_per_client: tile_memory_limit.saturating_mul(2),'''
+to = '''        bytes_per_client: tile_memory_limit,'''
+test = ["cargo", "test", "-q", "-p", "browser", "--lib", "--", "gpu_memory::"]
+
+[[mutant]]
+name = "every client's bytes are the machine's"
+file = "crates/browser/src/gpu_memory.rs"
+from = '''        bytes: physical_memory.map_or(u64::MAX, |bytes| bytes / 2),'''
+to = '''        bytes: physical_memory.unwrap_or(u64::MAX),'''
+test = ["cargo", "test", "-q", "-p", "browser", "--lib", "--", "gpu_memory::"]
+
+[[mutant]]
+name = "the renderer isn't given the budget"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            tile_memory_limit: flags
+                .tile_memory_limit
+                .unwrap_or(defaults.tile_memory_limit),'''
+to = '''            tile_memory_limit: defaults.tile_memory_limit,'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "--", "renderer_process::a_renderer_process_keeps"]
+
+[[mutant]]
+name = "no tile is over"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''        full = full || used.checked_add(bytes).is_none_or(|after| after > limit);'''
+to = '''        full = false;'''
+
+[[mutant]]
+name = "a tile that just fits is over"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''        full = full || used.checked_add(bytes).is_none_or(|after| after > limit);'''
+to = '''        full = full || used.checked_add(bytes).is_none_or(|after| after >= limit);'''
+
+[[mutant]]
+name = "a smaller tile after one over fits"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+test = ["cargo", "test", "-q", "-p", "compositor", "--lib", "--", "once_a_tile_is_over"]
+from = '''        full = full || used.checked_add(bytes).is_none_or(|after| after > limit);'''
+to = '''        full = used.checked_add(bytes).is_none_or(|after| after > limit);'''
+
+[[mutant]]
+name = "the tiles over are rastered all the same"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''        planned.remove(&(index, key));'''
+to = '''        let _ = (index, key);'''
+
+[[mutant]]
+name = "a visible tile over isn't drawn in the background color"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''        tile.draw_info = (!hidden).then_some(TileDrawInfo::OutOfMemory(clear_color));'''
+to = '''        tile.draw_info = None;'''
+
+[[mutant]]
+name = "tiles touching the visible rect are in it"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''            let shown = !r.intersect(&visible).is_empty();'''
+to = '''            let shown = distance_between(r, visible) == 0.0;'''
+
+[[mutant]]
+name = "the visible ones aren't first"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''        a.0.cmp(&b.0)
+            .then(a.1.total_cmp(&b.1))'''
+to = '''        a.1.total_cmp(&b.1)'''
+
+[[mutant]]
+name = "tiles in the order they are kept, not nearest first"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''        a.0.cmp(&b.0)
+            .then(a.1.total_cmp(&b.1))
+            .then(a.2.cmp(&b.2))'''
+to = '''        a.2.cmp(&b.2)'''
+
+[[mutant]]
+name = "the distance is down only"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+test = ["cargo", "test", "-q", "-p", "compositor", "--lib", "--", "a_tiles_distance"]
+from = '''    across + down
+}'''
+to = '''    let _ = across;
+    down
+}'''
+
+[[mutant]]
+name = "the distance is across only"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+test = ["cargo", "test", "-q", "-p", "compositor", "--lib", "--", "a_tiles_distance"]
+from = '''    across + down
+}'''
+to = '''    let _ = down;
+    across
+}'''
+
+[[mutant]]
+name = "a client's images aren't counted"
+file = "crates/viz/src/display.rs"
+from = '''        if images >= limits.images_per_client {'''
+to = '''        if images > limits.images_per_client {'''
+test = ["cargo", "test", "-q", "-p", "viz", "--lib", "--", "display::"]
+
+[[mutant]]
+name = "a client's bytes have no limit"
+file = "crates/viz/src/display.rs"
+from = '''        } else if sink_bytes.saturating_add(bytes) > limits.bytes_per_client {'''
+to = '''        } else if sink_bytes > limits.bytes_per_client {'''
+test = ["cargo", "test", "-q", "-p", "viz", "--lib", "--", "display::"]
+
+[[mutant]]
+name = "every client's bytes have no limit"
+file = "crates/viz/src/display.rs"
+from = '''        } else if self.bytes.saturating_add(bytes) > limits.bytes {'''
+to = '''        } else if self.bytes > limits.bytes {'''
+test = ["cargo", "test", "-q", "-p", "viz", "--lib", "--", "display::"]
+
+[[mutant]]
+name = "an image destroyed keeps its room"
+file = "crates/viz/src/display.rs"
+from = '''        if let Some((sink_bytes, images)) = self.by_sink.get_mut(&sink) {
+            *sink_bytes = sink_bytes.saturating_sub(bytes);
+            *images = images.saturating_sub(1);
+        }'''
+to = '''        let _ = (&sink, bytes);'''
+test = ["cargo", "test", "-q", "-p", "viz", "--lib", "--", "display::"]
+
+[[mutant]]
+name = "a client gone keeps its room"
+file = "crates/viz/src/display.rs"
+from = '''        if let Some((bytes, _)) = self.by_sink.remove(&sink) {
+            self.bytes = self.bytes.saturating_sub(bytes);
+        }'''
+to = '''        let _ = sink;'''
+test = ["cargo", "test", "-q", "-p", "viz", "--lib", "--", "display::"]
+
+[[mutant]]
+name = "Viz's thread isn't given the limits"
+file = "crates/viz/src/thread.rs"
+from = '''            display.set_shared_image_limits(shared_image_limits);'''
+to = '''            let _ = shared_image_limits;'''
+test = ["cargo", "test", "-q", "-p", "viz", "--lib", "--", "thread::"]
+
+[[mutant]]
+name = "a commit keeps the active tree's tiles"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                    layer.tiling.tiles.clear();'''
+to = '''                    let _ = &layer.tiling;'''
+test = ["cargo", "test", "-q", "-p", "compositor", "--lib", "--", "a_commit_lets"]
+
+[[mutant]]
+name = "a tile of one color not rastered yet takes a tile's memory"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                    if predicted.is_some() {
+                        bytes = 0;
+                    }'''
+to = '''                    let _ = &mut bytes;'''
+test = ["cargo", "test", "-q", "-p", "compositor", "--lib", "--", "tiles_of_one_color_take"]
+
+[[mutant]]
+name = "a tile of no pixels is over once one is"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''        if !full || bytes == 0 {'''
+to = '''        if !full {'''
+test = ["cargo", "test", "-q", "-p", "compositor", "--lib", "--", "tiles_of_one_color_take"]
+
+[[mutant]]
+name = "a tile of one color is rastered all the same"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                if let Some(color) = predicted {
+                    prepared.skipped = prepared.skipped.saturating_add(1);'''
+to = '''                if let Some(color) = predicted.filter(|_| false) {
+                    prepared.skipped = prepared.skipped.saturating_add(1);'''
+test = ["cargo", "test", "-q", "-p", "compositor", "--lib"]
+

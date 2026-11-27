@@ -367,6 +367,11 @@ impl App {
                 process_per_tab: self.process_per_tab,
                 caret_blink_interval,
                 profile: self.profile.clone(),
+                // Where it opens (Chromium's `initial_screen_size`): moved
+                // to another, its renderers keep what they were given.
+                screen: window
+                    .current_monitor()
+                    .map(|monitor| size_of(monitor.size())),
             },
             size,
             scale,
