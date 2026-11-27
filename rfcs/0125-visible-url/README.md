@@ -1,7 +1,7 @@
 # RFC 0125：網址列只顯示已經 commit 的網址（頁面發起的導覽）
 
 - 開始日期：2026-11-27
-- 狀態：🚧 已排程：2026-11-27
+- 狀態：✅ 已完成：2026-11-27（Linux：Fedora 45）
 - 進度和驗收：`progress.md`
 - 細節：`details.md`
 
@@ -19,7 +19,7 @@
 
   導覽永遠不 commit，網址列一直是 `https://bank.example/login`，畫面是這個頁面自己畫的（例如假的登入頁）。沒有時間上限，不用使用者做任何事，不用攻破 renderer。2026-11-27 用臨時的測試確認過（`details.md` 的「確認」）。
 - Chromium 正是為了這個這樣規定（`GetVisibleEntry` 的註解：「Most renderer-initiated navigations should not show the pending entry, to prevent URL spoof attacks.」）。
-- 路線圖（RFC 0122 的 `roadmap.md`）沒有一份管這件事，所以排在 RFC 0124 的第 1 段之前先做（RFC 0124 的已決定的事項之外，2026-11-27 使用者決定）。
+- 路線圖（RFC 0122 的 `roadmap.md`）沒有一份管這件事，所以排在 RFC 0124 的第 1 段之前先做（2026-11-27 使用者決定）。
 
 **目標**
 
@@ -44,19 +44,18 @@
 
 ## 詳細設計
 
-`WebContents` 現在只有一個 `url`，一開始就換、commit 時再設一次。它換成：
+`WebContents` 原本只有一個 `url`，一開始就換、commit 時再設一次。它換成：
 
 - **最後 commit 的網址**（Chromium 的 `GetLastCommittedURL`）：main frame commit 時設（`DidCommitNavigation`、`DidCommitSameDocumentNavigation`），就是現在 commit 時設的那一個。
-- **顯示的網址**（`GetVisibleURL`）：不存，照第 1、3 條從 main frame 的導覽算。導覽要記著它是不是「可以顯示的那種」：Browser 發起的新導覽，或分頁的第一次（`NavigationController` 還是初始的 entry）；renderer 發起的（帶著 `begin_id`）、上一頁和下一頁、重新整理都不是。
+- **顯示的網址**（`visible_url`，`GetVisibleURL`）：不存，照第 1、3 條從 main frame 的導覽算。`WebContents` 只記最新的那一次 main frame 的導覽是不是「可以顯示的那種」（`shown_navigation`，它的編號）：Browser 發起的新導覽，或什麼都還沒顯示、或只顯示著初始的 entry 的分頁裡的新導覽；renderer 發起的（帶著 `begin_id`）、上一頁和下一頁、重新整理都不是。那一次導覽還在 frame 樹上（在路上，或送出 commit、renderer 還沒回報：`FrameTree::uncommitted_url`）時顯示它的網址，否則顯示最後 commit 的。
+- **最新的導覽要去的網址**（`latest_navigation_url`）：`Page.frameStartedNavigating` 用。
 - 分頁的第一次導覽之前（什麼都還沒 commit）：顯示的是那一次導覽的網址，最後 commit 的沒有。
 
-用到的地方照第 2 條改；`Page.frameStartedNavigating` 從那一次導覽的開始的事件取網址（`ContentsEvent::NavigationStarted` 已經帶著）。
+用到的地方照第 2 條改（`shell` 的 `browser_view.rs`、`automation_session.rs`、`automation_cookies.rs`、`headless.rs`；machopodriver 的 `session.rs` 的 `current_url`）。原本的 `WebContents::url` 拿掉了，每個用到的地方都要選一種。
 
 ### 測試
 
-- `browser` 的整合測試：頁面發起的導覽在 commit 之前顯示的網址不變（包括一直取代的那種）；Browser 發起的、新分頁的第一次在載入期間就是新的；停下、被取代、失敗之後回到現在的文件的。
-- 自動化：`Target.getTargets` 的 `url`、WebDriver 的 Get Current URL 照顯示的網址。
-- 情境：視窗的網址列在點連結之後、commit 之前還是舊的。
+`progress.md` 的「驗收」：`browser` 的 `tests/it/visible_url.rs`（renderer 另一端沒有東西，commit 由測試回報）；`shell` 的視窗、自動化的 pipe 和 WebDriver 的測試各一個。`Network.getCookies` 的最上層網址只靠審查（`docs/test-gaps.md`）。
 
 ### 分階段
 
@@ -94,7 +93,7 @@
 
 ## 待決定
 
-無：第 1 到 3 條定了。
+無。
 
 ## 之後的可能
 

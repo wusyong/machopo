@@ -1244,7 +1244,7 @@ fn the_gpu_crash_url_loses_the_gpu_and_navigates_nowhere() {
     let (mut web_contents, _host_rx, viz_rx, _begin_frames) = tab_with_viz();
     web_contents.navigate("about:gpucrash");
     assert_eq!(web_contents.latest_navigation_id(), 0);
-    assert_eq!(web_contents.url(), None);
+    assert_eq!(web_contents.visible_url(), None);
     let sent: Vec<VizMsg> = viz_rx.try_iter().collect();
     let lost = sent
         .iter()
@@ -1515,7 +1515,7 @@ mod links {
         let before = web_contents.surface_id();
         web_contents.navigate("about:crash");
         assert!(web_contents.is_crashed());
-        assert_eq!(web_contents.url(), Some(server.url("/").as_str()));
+        assert_eq!(web_contents.visible_url(), Some(server.url("/").as_str()));
         // Not even `RendererGone`: the tab knows.
         while let Ok(msg) = next_message(&mut web_contents, &host_rx, Duration::from_millis(300)) {
             assert!(!matches!(msg, RendererHostMsg::RendererGone), "{msg:?}");
@@ -2254,7 +2254,10 @@ ${e.isTrusted}:${e.bubbles}:${e.cancelable}`);\
              revoked by another TypeError | navigated true blob:"
         );
         // Revoked since: going there again is a network error.
-        let url = web_contents.url().expect("the blob URL").to_owned();
+        let url = web_contents
+            .last_committed_url()
+            .expect("the blob URL")
+            .to_owned();
         web_contents.navigate(url);
         let title = wait_for(&mut web_contents, &host_rx, |msg| match msg {
             RendererHostMsg::UpdateTitle(title) if title.starts_with("ERR_") => Some(title.clone()),
@@ -2590,7 +2593,7 @@ document.querySelector('base').setAttribute('href', '/later/');
             (&*format!("{url}#x"), &*format!("{url}#y"))
         );
         assert_eq!(history(&web_contents), (vec![url, x, y.clone()], Some(2)));
-        assert_eq!(web_contents.url(), Some(y.as_str()));
+        assert_eq!(web_contents.last_committed_url(), Some(y.as_str()));
         assert_eq!(server.requests().len(), 1);
         web_contents.shutdown();
     }
@@ -4059,7 +4062,7 @@ document.querySelector('base').setAttribute('href', '/later/');
         assert!(!navigation.main_frame && navigation.loads, "{navigation:?}");
         assert_eq!(navigation.url, url);
         // Not the tab's: its URL and history are its main frame's.
-        assert_eq!(web_contents.url(), Some(server.url("/").as_str()));
+        assert_eq!(web_contents.visible_url(), Some(server.url("/").as_str()));
         assert_eq!(history(&web_contents), (vec![server.url("/")], Some(0)));
         assert_eq!(report(&mut web_contents, &host_rx), "child");
         web_contents.shutdown();

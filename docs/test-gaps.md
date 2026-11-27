@@ -181,6 +181,7 @@
 | parser 停下（讓出、或等其餘的 body）時馬上開始它做出的元素要的載入（`renderer` 的 `documents.rs` 的 `parser_stopped`；拿掉時 `<link>` 的 sheet 要等停下的那個 task 之後的 `request_next_frame_if_dom_changed` 才開始） | loop 跑完一個 task 就接著跑它之後的觀察者，compositor 的 frame 排不進中間，差別只在同一個 task 裡、停下之後的工作和請求的先後；測試看不出來 | 審查（loop 一次跑一批 task 時，`browser` 的 `a_child_frame_waits_for_its_stylesheets` 拿掉時約六次失敗一次） | 測試能數請求送出之前 parser 又做了什麼，或 headless 記下每一張 frame 用到的 sheet |
 | parser 在有輸入等著時讓出（`dom_api` 的 `document_loader.rs` 的 `parse` 的 `input_waits`，renderer 的 `advance_document` 給的，Blink 的 `ShouldYieldForHighPriorityWork`；拿掉就只看預算） | 輸入要在 parser 的一次 run 裡排進 Input 的 queue，而新文件畫出來之前對著舊畫面的輸入照樣丟掉：要 `browser` 的測試用 `DrivenViz` 先畫出文件，再在 script 忙的時候送一個按鍵 | 審查 | `browser` 的測試：預算很大、每片很小的 parser，body 裡第一個 script 忙 300 ms，這段時間送 `keydown`，之後的 script 在 `keydown` 之後跑 |
 | body 裡的 parser-blocking script 跑完之後，那次 run 的預算縮回已經用掉的加上 10 ms（`dom_api` 的 `document_loader.rs` 的 `parse` 的 `kHaveTokensAfterScript` 那一段，`ParseRun::after_script`） | 測試的 parser 每片都讓出（預算是 0，縮了也是 0）；預設的預算下差別只在時間 | 審查 | 預算讓測試設得很大、script 忙過預設的預算時，看 script 之後的下一片前有沒有讓出（計時器先跑） |
+| `Network.getCookies` 的最上層網址是分頁 commit 了的網址（`shell` 的 `automation_cookies.rs`；改成顯示的網址時不會有測試失敗） | 兩者只在 Browser 發起、還在路上的導覽期間不同，而且只有 partitioned cookie 照最上層的網站分：要一個設了 partitioned cookie 的頁面，在一個往別的網站、回應很慢的 `Page.navigate` 還沒回答時讀 cookie | 審查 | `shell` 的自動化測試：頁面的 response 設 `Partitioned` 的 cookie，送出往別的網站的 `Page.navigate`（不等回答），`Network.getCookies` 照樣拿到那個 cookie |
 | parser 讓出的次數讓預算變大（`dom_api` 的 `document_loader.rs` 的 `parse` 的 `yields`，renderer 的 `parse_run` 照它算 `ParserBudget::of_run`：6 次之後一輪 500 ms） | `of_run` 有單元測試（`the_parsers_budget_grows_after_six_yields`），把次數傳進去的這一段只差在時間：測試的 parser 每片都讓出（預算是 0） | 審查 | 預算讓測試設得很大的頁面，script 忙過 10 ms 但不到 500 ms 時，看第 7 次之後還讓不讓出 |
 | 已經排了 task 接著 parse 的 parser，body 又來一段時不在收到它的 task 裡 parse（`dom_api` 的 `document_loader.rs` 的 `parse_unless_due`，renderer 收到 body 和 parser 的 script 時叫它；Blink 的 parser 排了下一段之後不被收到的資料推動；同一類的還有一輪開始時清掉排著的 task，`parse` 的 `parse_task = None`） | 拿掉時只是在收到資料的 task 裡先 parse 一次，parse 的內容一樣，只有和計時器的先後不同；測試的 body 一次到齊 | 審查 | 每片都讓出的 parser 配上 body 分兩次到的伺服器，看兩段之間的計時器是不是照 scheduler 的順序跑 |
 | wasm 文件的 script trap 之後，它的 Store 從 `StoreSet` 拿掉（`dom_wasm` 的 `engine.rs` 的 `turn`，和 listener trap 時的 `Host::call_listener`） | 不拿掉時 Store 只是留到換頁才丟（洩漏到那時候），engine 自己的清單已經沒有它，從外面看不出來 | 審查 | `StoreSet` 能數活著的 Store 時，在 trap 的測試裡斷言少一個 |
@@ -334,6 +335,14 @@
 **Viz 把像素複製進暫存的 buffer（`viz` 的 `gpu_context.rs` 的 `copy_rows_from_slice`）**
 
 - 每列沒有空隙時（一列剛好是 `COPY_BYTES_PER_ROW_ALIGNMENT` 的倍數，256 個像素寬的 tile）整批一次複製：拿掉時一列一列地複製，結果一樣，只是慢。
+
+**分頁顯示的網址（`browser` 的 `frame_tree.rs` 的 `uncommitted_url`）**
+
+- 只取編號是 `shown_navigation` 的那一次導覽：拿掉這個比對沒有差別。main frame 的每一次導覽都經過 `WebContents::begin_navigation`，它每次都重設 `shown_navigation`，所以 frame 樹上 main frame 的導覽一定就是它記的那一次，或是一次把它設成沒有的更新的導覽。留著是讓 `uncommitted_url` 自己就對。
+
+**reftest 的結果的網址（`shell` 的 `headless.rs`）**
+
+- 用 commit 了的網址或顯示的網址一樣：headless 只做一次 Browser 發起的導覽，在它 commit、畫完之後才讀，那時沒有導覽在路上。
 
 **DevTools 的 `CSS` 的命令要的 sheet 的原文（`devtools.rs` 的 `devtools_message`）**
 

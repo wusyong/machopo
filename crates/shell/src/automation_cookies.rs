@@ -54,7 +54,11 @@ pub(crate) fn run(name: &str, params: &Value, contents: &WebContents, reply: Rep
                     .filter_map(|url| Url::parse(url).ok())
                     .collect(),
             };
-            let top_frame = contents.url().and_then(|url| Url::parse(url).ok());
+            // The page shown's, as its frames' URLs are
+            // (`ComputeCookieURLs`).
+            let top_frame = contents
+                .last_committed_url()
+                .and_then(|url| Url::parse(url).ok());
             network.get_cookie_list(urls, top_frame, move |cookies| {
                 reply.answer(Ok(json!({ "cookies": cookies_json(&cookies) })));
             });

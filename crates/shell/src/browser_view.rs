@@ -1583,7 +1583,12 @@ impl BrowserView {
         UiState {
             titles: self.tabs.iter().map(tab_title).collect(),
             active: self.tabs.active_index(),
-            url: self.tabs.active().url().unwrap_or_default().to_owned(),
+            url: self
+                .tabs
+                .active()
+                .visible_url()
+                .unwrap_or_default()
+                .to_owned(),
             can_go_back: controller.can_go_back(),
             can_go_forward: controller.can_go_forward(),
             mac: self.mac,
@@ -1889,10 +1894,16 @@ impl BrowserView {
     }
 }
 
-/// What a tab is called: its page's title, or its URL while it has none.
+/// What a tab is called: its page's title, or its URL while it has none:
+/// the page shown's (`GetNavigationEntryForTitle` keeps the old page's
+/// till the new one commits), the one it loads while it has shown none.
 fn tab_title(contents: &WebContents) -> String {
     match contents.title() {
-        "" => contents.url().unwrap_or("machopo").to_owned(),
+        "" => contents
+            .last_committed_url()
+            .or(contents.visible_url())
+            .unwrap_or("machopo")
+            .to_owned(),
         title => title.to_owned(),
     }
 }

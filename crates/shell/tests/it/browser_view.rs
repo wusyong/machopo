@@ -480,8 +480,9 @@ impl Window {
         self.view.set_modifiers(ModifiersState::empty());
     }
 
+    /// The URL the address bar shows.
     fn url(&self) -> Option<&str> {
-        self.view.web_contents().url()
+        self.view.web_contents().visible_url()
     }
 
     fn field_text(&self) -> String {
@@ -964,6 +965,54 @@ fn the_back_and_forward_buttons() {
     window.click(forward.0, forward.1);
     window.until_loaded();
     assert_eq!(window.url(), Some(server.url("/two").as_str()));
+    window.close();
+}
+
+/// A page's own navigation (a link clicked) leaves the address field,
+/// and the tab's text of a page with no title, at the page shown till it
+/// commits: a page could otherwise have them name another site while it
+/// draws what it likes (Chromium's `GetVisibleEntry`). The address typed
+/// shows as it loads.
+#[test]
+fn a_pages_navigation_shows_in_the_address_field_once_it_commits() {
+    let page = Route::ok("text/html", "<!DOCTYPE html><title>a</title>");
+    let server = TestServer::start(HashMap::from([
+        ("/".to_owned(), Route::ok("text/html", links(&["/slow"]))),
+        (
+            "/slow".to_owned(),
+            page.clone().with_delay(Duration::from_secs(30)),
+        ),
+        (
+            "/typed".to_owned(),
+            page.with_delay(Duration::from_secs(30)),
+        ),
+    ]))
+    .expect("test server starts");
+    let mut window = Window::open(Size::new(400, 300), 1.0);
+    // A tab that has shown nothing: where it goes, in its text too.
+    window.view.navigate(&server.url("/slow"));
+    assert_eq!(window.view.title(), server.url("/slow"));
+    window.load(&server.url("/"));
+    window.click(10.0, TOP + 10.0);
+    window.until(|msg| {
+        matches!(
+            msg,
+            RendererHostMsg::NavigationCancellationWindowEnded { .. }
+        )
+    });
+    let contents = window.view.web_contents();
+    assert_eq!(
+        contents.latest_navigation_url(),
+        Some(server.url("/slow").as_str())
+    );
+    assert_eq!(window.url(), Some(server.url("/").as_str()));
+    assert_eq!(window.field_text(), server.url("/"));
+    assert_eq!(window.view.title(), server.url("/"));
+    window.view.navigate(&server.url("/typed"));
+    assert_eq!(window.url(), Some(server.url("/typed").as_str()));
+    assert_eq!(window.field_text(), server.url("/typed"));
+    // The page shown has no title: its URL, not where the navigation goes.
+    assert_eq!(window.view.title(), server.url("/"));
     window.close();
 }
 

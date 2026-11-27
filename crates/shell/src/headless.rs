@@ -529,7 +529,7 @@ fn drive(
             }
         }
     };
-    let url = web_contents.url().map(str::to_owned);
+    let url = web_contents.last_committed_url().map(str::to_owned);
     // Its script stopped if it runs on, and waited for with machopo's
     // limit: a test of a page that never returns ends all the same.
     let asked = std::time::Instant::now();

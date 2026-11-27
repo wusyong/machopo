@@ -453,6 +453,52 @@ fn a_session_navigates_and_hears_the_loaders_lifecycle() {
     assert!(browser.end().success());
 }
 
+/// The target's URL is the address bar's (`RenderFrameDevToolsAgentHost::
+/// GetURL`): where a navigation the browser started goes as it loads, the
+/// page shown's while the page's own navigation is on its way; and
+/// `Page.frameStartedNavigating` tells where the page's goes.
+#[test]
+fn the_targets_url_is_the_address_bars() {
+    let slow = || Route::ok("text/html", "<!DOCTYPE html>slow").with_delay(Duration::from_secs(2));
+    let server = server(&[("/slow", slow()), ("/page-slow", slow())]);
+    let mut browser = Browser::start();
+    let session = browser.attach();
+    let slow = server.url("/slow");
+    // `Page.navigate` answers once its navigation has committed: what
+    // `Target.getTargetInfo`, sent after it, answers comes first.
+    let navigate = browser.send(Some(&session), "Page.navigate", json!({ "url": slow }));
+    let info = browser.send(Some(&session), "Target.getTargetInfo", json!({}));
+    let url = |info: Value| info["targetInfo"]["url"].as_str().unwrap().to_owned();
+    assert_eq!(url(browser.answer(info).unwrap()), slow, "on its way");
+    let loader = browser.answer(navigate).unwrap()["loaderId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    browser.load(&loader);
+    browser
+        .call(Some(&session), "Page.enable", json!({}))
+        .unwrap();
+    browser
+        .call(
+            Some(&session),
+            "Runtime.evaluate",
+            json!({ "expression": "location = '/page-slow'" }),
+        )
+        .unwrap();
+    let started = browser.wait_for(|event| match &event.event {
+        EventKind::FrameStartedNavigating { url, .. } if url.ends_with("/page-slow") => {
+            Some(url.clone())
+        }
+        _ => None,
+    });
+    assert_eq!(started, server.url("/page-slow"));
+    let info = browser
+        .call(Some(&session), "Target.getTargetInfo", json!({}))
+        .unwrap();
+    assert_eq!(url(info), slow, "the page's on its way");
+    assert!(browser.end().success());
+}
+
 /// The session history: back to another document loads it; back to an
 /// entry the document made of itself (`pushState`) doesn't, and is told
 /// as a navigation within the document; a reload is a loader of its own.

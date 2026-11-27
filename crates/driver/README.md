@@ -31,6 +31,7 @@ Status、New Session、Delete Session、Get / Set Timeouts、Navigate To、Get C
 
 - session 回答 `setWindowRect: true`；`acceptInsecureCerts` 是 `false`（machopo 不能被告知接受不信任的憑證）；沒有 proxy，`webSocketUrl`（BiDi）不行。其他瀏覽器自己的 capability（`goog:chromeOptions`）不管。
 - Get Current URL、Get Title、Get Window Handle 在分頁的 renderer 當掉時回答 `tab crashed`（chromedriver 也是）；導覽照樣進行，它會啟動新的 renderer。
+- Get Current URL 是分頁顯示的文件 commit 的網址（session history 的目前那一筆，chromedriver 是 `document.URL`），不是 window 的 target 的 `url`：Browser 發起、還在路上的導覽（`pageLoadStrategy` 是 `none` 時 Navigate To 立刻回答），target 的 `url` 已經是要去的網址（網址列顯示的）。
 - Get Title 是分頁的標題：renderer 在每個 task 之後把改了的 `document.title` 告訴 browser。
 - 找元素只有 `css selector` 和 `tag name`；`link text`、`partial link text`、`xpath` 回答 `unsupported operation`：連結文字要元素畫出來的文字（`innerText`），`xpath` 要 XPath，machopo 都還沒有。
 - Set Window Rect 改給了的部分（`x`、`y`、`width`、`height` 各自，wdspec 的 `test_partial_input`），沒給的不變；沒有平台視窗時位置只是記下來，網頁的 `screenX`、`screenY` 照樣跟著它。沒有最小化、最大化、全螢幕。

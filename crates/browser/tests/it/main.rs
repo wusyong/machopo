@@ -16,3 +16,4 @@ mod navigation;
 mod profile;
 mod renderer_message_fuzz;
 mod renderer_process;
+mod visible_url;

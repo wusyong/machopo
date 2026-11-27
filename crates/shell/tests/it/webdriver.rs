@@ -258,6 +258,34 @@ fn a_session_navigates() {
     session.delete();
 }
 
+/// Get Current URL is the URL of the document shown, as it committed
+/// (chromedriver's `document.URL`): not where a navigation on its way goes,
+/// though the address bar (and the window's target) shows that for a
+/// navigation the browser started. With the `none` page load strategy the
+/// navigation is on its way as Navigate To answers.
+#[test]
+fn the_current_url_is_the_documents_shown() {
+    let server = server(&[
+        ("/a", Route::ok("text/html", "<!DOCTYPE html>a")),
+        (
+            "/slow",
+            Route::ok("text/html", "<!DOCTYPE html>slow").with_delay(Duration::from_secs(3)),
+        ),
+    ]);
+    let addr = driver();
+    let (session, _) = Session::new(addr, json!({ "pageLoadStrategy": "none" }));
+    let a = server.url("/a");
+    ok(session.navigate(&a));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while session.get("/url") != a.as_str() {
+        assert!(Instant::now() < deadline, "`/a` commits");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    ok(session.navigate(&server.url("/slow")));
+    assert_eq!(session.get("/url"), a.as_str());
+    session.delete();
+}
+
 /// The page load strategy: `normal` waits for `load` (the slow image),
 /// `eager` only for `DOMContentLoaded`; past the page load timeout,
 /// `timeout`.

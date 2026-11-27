@@ -196,10 +196,7 @@ impl Dispatcher {
                 session.navigate(&params.url)?;
                 Ok(WebDriverResponse::Void)
             }
-            WebDriverCommand::GetCurrentUrl => {
-                let info = session.live_window_info()?;
-                Ok(value(info["url"].clone()))
-            }
+            WebDriverCommand::GetCurrentUrl => Ok(value(session.current_url()?.into())),
             WebDriverCommand::GetTitle => {
                 let info = session.live_window_info()?;
                 Ok(value(info["title"].clone()))
@@ -575,6 +572,28 @@ impl Session {
             return Err(Failure::tab_crashed());
         }
         Ok(info)
+    }
+
+    /// Get Current URL: the URL of the document the window shows, as it
+    /// committed, from its session history's current entry (chromedriver
+    /// asks the page for `document.URL`, and that entry for an error page):
+    /// not its target's, which is the address bar's and may be where a
+    /// navigation the browser started is on its way to. `about:blank` for
+    /// a window that has shown nothing yet.
+    fn current_url(&mut self) -> Result<String> {
+        self.live_window_info()?;
+        let history = self
+            .machopo
+            .call_ok(Some(&self.page()), Method::PageGetNavigationHistory)?;
+        let current = history["currentIndex"]
+            .as_u64()
+            .and_then(|index| usize::try_from(index).ok())
+            .unwrap_or(0);
+        Ok(history["entries"]
+            .get(current)
+            .and_then(|entry| entry["url"].as_str())
+            .unwrap_or("about:blank")
+            .to_owned())
     }
 
     fn window_handles(&mut self) -> Result<Vec<String>> {

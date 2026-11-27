@@ -740,7 +740,8 @@ impl AutomationSession {
             target_id: self.target(contents.tab()),
             kind: "page".into(),
             title: contents.title().to_owned(),
-            url: contents.url().unwrap_or("about:blank").to_owned(),
+            // The address bar's (`RenderFrameDevToolsAgentHost::GetURL`).
+            url: contents.visible_url().unwrap_or("about:blank").to_owned(),
             attached: self.attached(contents.tab()),
             can_access_opener: false,
         }
@@ -1529,7 +1530,10 @@ impl AutomationSession {
             }
             if known.is_some_and(|known| known != loader) {
                 let navigation_type = self.starting.remove(&tab).unwrap_or("differentDocument");
-                let url = contents.url().unwrap_or_default().to_owned();
+                let url = contents
+                    .latest_navigation_url()
+                    .unwrap_or_default()
+                    .to_owned();
                 self.to_pages(
                     tab,
                     |attached| attached.page,

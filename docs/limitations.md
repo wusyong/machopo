@@ -44,7 +44,6 @@
 - **renderer 的 V8 用完它的 heap、或配置不到記憶體時，renderer 以結束碼 6 結束，分頁說記憶體不夠**（三個平台；`bindings` 的 `oom`），這只在 V8 有 isolate 的 thread 上：V8 自己的背景 thread（編譯、GC）配置不到時照 V8 原本的做法印出 stack、abort，Linux、macOS 的分頁說是當掉，Windows 上碰過上限的照樣說記憶體不夠，但 stderr 是 V8 的錯誤（印 stack 要的 DLL 在 sandbox 裡載不進來）。Rust 那一側（DOM、style、layout）配置不到時照 Rust 的做法 abort，一樣是 Windows 上說記憶體不夠、Linux 和 macOS 上說當掉。
 - `gfx::FontData` 和 `gfx::ImageData` 不能序列化：現在字型和圖片都留在 renderer 這一側（raster 在 renderer 裡），不用過 process 的邊界；raster 搬到 Viz 那一側時要改成像 Chromium 那樣傳 typeface 和圖片。
 - **名稱表和屬性值的表在同一個 renderer 裡共用**（`dom` 的 `names.rs` 和 `string.rs`，thread-local：同一個分頁導覽過的網頁和它們的 iframe 都用同一份）：前面的網頁的名稱一直留著（見「GC 和 `dom`」），屬性值（包括 CSRF token、hidden input 的值）留到值的表下一次丟掉沒人用的。沒有 API 讀得到表的內容，但 intern 時找到的只 clone、沒有的要配置，花的時間不同：頁面可以一次測一組猜得到的名稱或值有沒有出現過，例如某個網站特有的 custom element 名稱（這個分頁去過哪裡）或低熵的值；隨機的 token 猜不到，測不出來。跨 site 的網頁和 iframe 分到各有一份表的 renderer 時才沒有；只回收沒人用的名稱擋不住（還活著的 iframe 的名稱照樣測得到）。
-- **頁面自己發起的導覽，還沒 commit 時網址列就顯示它要去的網址**（`browser` 的 `WebContents::url`，導覽開始時就換）：頁面可以讓網址列寫著別的網站、畫面還是它自己的。一直發起再取代（`setInterval(() => location = '…', 50)`）的導覽永遠不 commit，沒有時間上限，不用使用者做任何事。Chrome 只對 Browser 發起的新導覽（網址列、書籤）和沒被動過的新分頁顯示還沒 commit 的網址（`NavigationControllerImpl::GetVisibleEntry`：「to prevent URL spoof attacks」）。
 - **新文件畫出來之前留著舊的畫面，不看是不是同一個 origin**（renderer 的 paint holding，最多 4 秒）：導覽到別的 origin、新頁面畫不出東西（body 還沒來、stylesheet 擋著）時，網址列是新的、畫面是舊頁面的。Chrome 只在新舊同一個 origin、或舊頁面有過使用者的操作時才留（`navigator.cc` 的 `allow_main_frame_paint_holding`，為了 issue 40942531 的偽造）。
 
 ## GC 和 `dom`

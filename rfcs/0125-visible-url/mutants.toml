@@ -1,0 +1,140 @@
+# The mutants of the visible URL (`WebContents::visible_url`, `last_committed_url`) and the places that read it: `python3 scripts/test.py mutate rfcs/0125-visible-url/mutants.toml`.
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it"]
+timeout = 1200
+
+[[mutant]]
+name = "a page's own navigation shows before it commits"
+file = "crates/browser/src/web_contents.rs"
+from = '''            (new_entry && (asked.begin_id.is_none() || shows_nothing_yet)).then_some(navigation_id);'''
+to = '''            (new_entry).then_some(navigation_id);'''
+
+[[mutant]]
+name = "a history navigation shows before it commits"
+file = "crates/browser/src/web_contents.rs"
+from = '''            (new_entry && (asked.begin_id.is_none() || shows_nothing_yet)).then_some(navigation_id);'''
+to = '''            (asked.begin_id.is_none() || shows_nothing_yet).then_some(navigation_id);'''
+
+[[mutant]]
+name = "a page's navigation in a tab that has shown nothing doesn't show"
+file = "crates/browser/src/web_contents.rs"
+from = '''            (new_entry && (asked.begin_id.is_none() || shows_nothing_yet)).then_some(navigation_id);'''
+to = '''            (new_entry && asked.begin_id.is_none()).then_some(navigation_id);'''
+
+[[mutant]]
+name = "a tab showing its first document counts as having shown a page"
+file = "crates/browser/src/web_contents.rs"
+from = '''            self.controller.current_index().is_none() || self.controller.is_initial();'''
+to = '''            self.controller.current_index().is_none();'''
+
+[[mutant]]
+name = "a tab that has shown nothing counts as having shown a page"
+file = "crates/browser/src/web_contents.rs"
+from = '''            self.controller.current_index().is_none() || self.controller.is_initial();'''
+to = '''            self.controller.is_initial();'''
+
+[[mutant]]
+name = "a navigation sent to commit no longer shows"
+file = "crates/browser/src/frame_tree.rs"
+from = '''        node.committing
+            .iter()
+            .find(|sent| sent.navigation_id == navigation_id)
+            .map(|sent| sent.url.as_str())'''
+to = '''        None'''
+
+[[mutant]]
+name = "any navigation on its way shows"
+file = "crates/browser/src/frame_tree.rs"
+from = '''        if let Some(navigation) = node.navigation.as_ref().filter(|n| n.id == navigation_id) {'''
+to = '''        if let Some(navigation) = node.navigation.as_ref() {'''
+
+[[mutant]]
+name = "the shown navigation shows when it has gone"
+file = "crates/browser/src/web_contents.rs"
+from = '''            .and_then(|id| self.frame_tree.uncommitted_url(self.frame_tree.root(), id))'''
+to = '''            .and(self.document_navigation_url.as_deref())'''
+
+[[mutant]]
+name = "the latest navigation's URL isn't kept"
+file = "crates/browser/src/web_contents.rs"
+from = '''        self.document_navigation_url = Some(url.clone());'''
+to = '''        '''
+
+[[mutant]]
+name = "a navigation within the document leaves the committed URL"
+file = "crates/browser/src/web_contents.rs"
+from = '''                if let Err(reason) = self.frame_tree.did_commit_same_document(*frame, url) {
+                    return self.received_bad_message(reason);
+                }
+                if *frame == self.frame_tree.root() {
+                    self.committed_url = Some(url.clone());'''
+to = '''                if let Err(reason) = self.frame_tree.did_commit_same_document(*frame, url) {
+                    return self.received_bad_message(reason);
+                }
+                if *frame == self.frame_tree.root() {'''
+
+[[mutant]]
+name = "the address field shows where a navigation goes"
+file = "crates/shell/src/browser_view.rs"
+from = '''                .active()
+                .visible_url()
+                .unwrap_or_default()'''
+to = '''                .active()
+                .latest_navigation_url()
+                .unwrap_or_default()'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::"]
+
+[[mutant]]
+name = "the tab's text is where a navigation goes"
+file = "crates/shell/src/browser_view.rs"
+from = '''            .last_committed_url()
+            .or(contents.visible_url())'''
+to = '''            .visible_url()
+            .or(contents.visible_url())'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::"]
+
+[[mutant]]
+name = "a tab that has shown nothing has no URL in its text"
+file = "crates/shell/src/browser_view.rs"
+from = '''            .last_committed_url()
+            .or(contents.visible_url())'''
+to = '''            .last_committed_url()'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::"]
+
+[[mutant]]
+name = "the target's URL is the committed one"
+file = "crates/shell/src/automation_session.rs"
+from = '''            url: contents.visible_url().unwrap_or("about:blank").to_owned(),'''
+to = '''            url: contents.last_committed_url().unwrap_or("about:blank").to_owned(),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "automation_pipe::", "devtools"]
+
+[[mutant]]
+name = "frameStartedNavigating tells the address bar's URL"
+file = "crates/shell/src/automation_session.rs"
+from = '''                let url = contents
+                    .latest_navigation_url()'''
+to = '''                let url = contents
+                    .visible_url()'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "automation_pipe::", "devtools"]
+
+[[mutant]]
+name = "cookies go by the address bar's URL"
+file = "crates/shell/src/automation_cookies.rs"
+from = '''                .last_committed_url()
+                .and_then(|url| Url::parse(url).ok());'''
+to = '''                .visible_url()
+                .and_then(|url| Url::parse(url).ok());'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "automation_pipe::", "devtools", "cookies"]
+
+[[mutant]]
+name = "a reftest's URL is the address bar's"
+file = "crates/shell/src/headless.rs"
+from = '''    let url = web_contents.last_committed_url().map(str::to_owned);'''
+to = '''    let url = web_contents.visible_url().map(str::to_owned);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "headless", "reftest"]
+
+[[mutant]]
+name = "Get Current URL is the target's"
+file = "crates/driver/src/session.rs"
+from = '''            WebDriverCommand::GetCurrentUrl => Ok(value(session.current_url()?.into())),'''
+to = '''            WebDriverCommand::GetCurrentUrl => Ok(value(session.live_window_info()?["url"].clone())),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "webdriver::"]

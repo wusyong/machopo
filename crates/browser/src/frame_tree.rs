@@ -355,6 +355,21 @@ impl FrameTree {
         self.nodes.get(&frame)?.navigation.as_ref()
     }
 
+    /// The URL of `frame`'s navigation `navigation_id` while it is on its
+    /// way, or sent to commit and not yet reported committed: none once it
+    /// has committed, or stopped, or another took its place, or the frame
+    /// went.
+    pub(crate) fn uncommitted_url(&self, frame: FrameToken, navigation_id: u64) -> Option<&str> {
+        let node = self.nodes.get(&frame)?;
+        if let Some(navigation) = node.navigation.as_ref().filter(|n| n.id == navigation_id) {
+            return Some(&navigation.url);
+        }
+        node.committing
+            .iter()
+            .find(|sent| sent.navigation_id == navigation_id)
+            .map(|sent| sent.url.as_str())
+    }
+
     /// The frame whose navigation on its way is the renderer's `begin_id`
     /// (`BeginNavigation`'s), and the browser's number for it.
     pub(crate) fn navigation_of_begin_id(&self, begin_id: u64) -> Option<(FrameToken, u64)> {

@@ -193,9 +193,22 @@ pub struct WebContents {
     /// traversal within the document shown, nor a child frame's).
     document_navigation_id: u64,
     controller: NavigationController,
-    /// The URL to show: the latest navigation's while it loads, then the
-    /// committed one (Chromium's visible URL).
-    url: Option<String>,
+    /// The main frame's document's URL, as last committed (Chromium's
+    /// `GetLastCommittedURL`), its own navigations within it included; none
+    /// before the first.
+    committed_url: Option<String>,
+    /// The latest main frame navigation, if its URL shows before it commits
+    /// (Chromium's pending entry, as `GetVisibleEntry` shows it): one the
+    /// browser started for a new entry, or any for a new entry while the tab
+    /// has shown nothing but its first document. A page's own would let it
+    /// name another site in the address bar while it draws what it likes,
+    /// as long as it keeps navigating (each replacing the one before); a
+    /// history navigation's URL is what pages put in the history. Kept by
+    /// its id alone: it shows only while it is on its way (`visible_url`).
+    shown_navigation: Option<u64>,
+    /// The URL the latest navigation that loads a document in the main
+    /// frame was to (`document_navigation_id`'s).
+    document_navigation_url: Option<String>,
     title: String,
     /// Links the renderer followed to new tabs, for the embedder to open
     /// (`WebContentsDelegate::OpenURLFromTab`).
@@ -366,7 +379,9 @@ impl WebContents {
                 local_surface_id: LocalSurfaceId::default(),
             },
             window_screen_rect: None,
-            url: None,
+            committed_url: None,
+            shown_navigation: None,
+            document_navigation_url: None,
             title: String::new(),
             opened: Vec::new(),
             visible: true,
@@ -438,8 +453,26 @@ impl WebContents {
         }
     }
 
-    pub fn url(&self) -> Option<&str> {
-        self.url.as_deref()
+    /// The URL to show the tab at (`WebContents::GetVisibleURL`): that of
+    /// the main frame navigation on its way if it may show before it
+    /// commits (`shown_navigation`), else the one committed.
+    pub fn visible_url(&self) -> Option<&str> {
+        self.shown_navigation
+            .and_then(|id| self.frame_tree.uncommitted_url(self.frame_tree.root(), id))
+            .or(self.committed_url.as_deref())
+    }
+
+    /// The main frame's document's URL, as last committed
+    /// (`WebContents::GetLastCommittedURL`): what the page shown is at.
+    pub fn last_committed_url(&self) -> Option<&str> {
+        self.committed_url.as_deref()
+    }
+
+    /// The URL the latest navigation that loads a document in the main
+    /// frame is to ([`latest_navigation_id`](Self::latest_navigation_id)'s),
+    /// as it started.
+    pub fn latest_navigation_url(&self) -> Option<&str> {
+        self.document_navigation_url.as_deref()
     }
 
     /// The network context of the tab's profile (its storage partition's):
@@ -965,7 +998,15 @@ impl WebContents {
         let history = self.controller.entry_params(&self.frame_tree, root, kind);
         self.controller.did_start(navigation_id, root, kind);
         tracing::info!(%url, navigation_id, ?kind, "navigate");
-        self.url = Some(url.clone());
+        self.document_navigation_url = Some(url.clone());
+        let new_entry = matches!(
+            kind,
+            NavigationType::NewEntry | NavigationType::Replace | NavigationType::Initial
+        );
+        let shows_nothing_yet =
+            self.controller.current_index().is_none() || self.controller.is_initial();
+        self.shown_navigation =
+            (new_entry && (asked.begin_id.is_none() || shows_nothing_yet)).then_some(navigation_id);
         let navigation_type = match kind {
             NavigationType::Reload if asked.bypass_cache => FrameLoadType::ReloadBypassingCache,
             NavigationType::Reload => FrameLoadType::Reload,
@@ -1799,7 +1840,7 @@ impl WebContents {
                     return self.received_bad_message(reason);
                 }
                 if *frame == self.frame_tree.root() {
-                    self.url = Some(url.clone());
+                    self.committed_url = Some(url.clone());
                 }
                 self.controller
                     .did_commit(&self.frame_tree, *frame, *navigation_id, url.clone());
@@ -1825,7 +1866,7 @@ impl WebContents {
                     return self.received_bad_message(reason);
                 }
                 if *frame == self.frame_tree.root() {
-                    self.url = Some(url.clone());
+                    self.committed_url = Some(url.clone());
                 }
                 match navigation_id {
                     Some(id) => {
