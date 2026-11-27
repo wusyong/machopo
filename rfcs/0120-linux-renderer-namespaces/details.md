@@ -159,7 +159,7 @@ chroot 之後會壞的只有最後一個：短的名字。chroot 之前呼叫一
 2026-11-27 搜尋的：
 
 - Ubuntu 23.10 起用 AppArmor 限制沒有特權的 user namespace，24.04 LTS 也是：沒有被限制、而且 AppArmor 的 profile 裡有 `userns` 規則的 process 才開得了。Ubuntu 給 Chrome 的預設安裝路徑（`/opt/google/chrome/chrome`）寫了 profile；裝在別處的 Chrome、Firefox 的 nightly 這類就起不來（「No usable sandbox」、「failed to find unprivileged_userns profile」）。關掉的方法是 `kernel.apparmor_restrict_unprivileged_userns=0`，Chromium 的文件說它關掉了 Ubuntu 的一項保護，建議改寫一份 profile 給那個執行檔。
-- machopo 的 CI 都在 GitHub 的 `ubuntu-24.04` runner 上（`.github/workflows/`）；runner 的映像檔有沒有改這個設定沒有查。
+- machopo 的 CI 都在 GitHub 的 `ubuntu-24.04` runner 上（`.github/workflows/`）；runner 的映像檔沒有改這個設定：merge 之後 CI 的失敗看得出來（記在 `progress.md` 的「做過的檢查」）。
 - Debian 的 `kernel.unprivileged_userns_clone` 的預設值沒查到。
 
 ## 沒有查到的

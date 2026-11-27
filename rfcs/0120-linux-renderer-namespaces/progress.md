@@ -74,3 +74,12 @@
 - **時間**：20 個 suite 的 current / against 的幾何平均是 0.999（-0.1%）；每個 suite 的中位數的差在 -4.7%（Charts-chartjs）到 +2.7%（TodoMVC-React-Complex-DOM）之間，都在兩邊的 95% 區間裡重疊：量不出差別。
 - **記憶體的高峰**（Browser 加上 renderer 的 VmHWM）：-10.7% 到 +1.0%；Browser 的幾乎不變（138 到 169 MB），renderer 的大多少了一點（NewsSite-Next 362 → 307 MB，其餘多半是 0 到 6%）。推測（沒有驗證）是 CPU 的數量：工具用 `taskset` 把瀏覽器綁在 8 個 CPU 上，第 1 段之後 renderer 讀不到 `/sys/devices/system/cpu/online`，glibc 照 affinity 數成 8 個（之前是整台的 24 個），V8 的 worker 和 glibc 的 malloc 的 arena 跟著少。
 
+
+### merge 之後：CI 上失敗的測試（2026-11-27，在 macOS 上改，Linux 上還沒跑）
+
+merge 之後 CI（GitHub 的 `ubuntu-24.04` runner）的 `cargo test --workspace` 每次都失敗，Fedora 上都通過。兩個原因都在測試，不在實作：
+
+- **時區的名字**：runner 的 `/etc/localtime` 連到 `Etc/UTC`，`a_renderer_process_is_told_this_machines_time_zone_by_name` 最後要 Browser 的 thread 上的 renderer 看到的 `Intl.DateTimeFormat().resolvedOptions().timeZone` 就是這個名字，但 ECMA-402 把 `Etc/UTC`、`Etc/GMT`、`GMT` 都叫做 `UTC`（Fedora 這台是 `Asia/Tokyo`，名字不變）。第 1 段起就失敗。改成比 Intl 對同一個名字的叫法（`timeZone` 給它這個名字的 `DateTimeFormat`）：renderer 收到的 `TZ` 照樣是 `Etc/UTC`。
+- **「這台允許嗎」問得太鬆**：`a_renderer_process_has_namespaces_of_its_own_where_the_machine_allows` 和 sunaba 的 `probe_may_chroot` 用 `unshare --user --net true` 判斷，Ubuntu 的 AppArmor 的限制下它會成功（第 5 條寫的：namespace 開得出來、但沒有權限），Browser 自己試的寫不了對應、走退路，兩邊對不上（shell 的那個：`false` 對 `true`）；sunaba 的接著用 `--map-current-user` 和 `setpriv` 啟動 probe，寫不了對應，`unshare` 結束在 1（`Exit(1)`，`a_chroot_leaves_no_path_not_even_to_say_what_is_there`、`every_capability_is_given_up_on_entering`）。同一個 runner 上用 `--map-root-user` 判斷的兩個測試照樣跳過，也合得上。第 7 條原本以為測試在兩種設定上都會過，沒在 Ubuntu 上跑過。兩處都改成照 machopo 的做法全部做一次（`unshare --user --net --map-current-user --keep-caps setpriv --inh-caps -all,+sys_chroot --ambient-caps -all,+sys_chroot true`）：runner 上 shell 的那個走退路、sunaba 的 chroot 的測試跳過。
+- **還沒確認**：是 AppArmor 擋了對應這一點，是照失敗的樣子推論的（probe 的 stderr 沒有印出來，這台是 macOS）；要在 Fedora 上跑 `cargo test -p shell --test it renderer_sandbox::` 和 `cargo test -p sunaba --test it linux::`，再看 CI。
+- **另外一個不穩定的測試**（和這份無關）：`automation_pipe::a_client_not_reading_doesnt_hold_machopo_up` 在 runner 上失敗過兩次（2026-11-26、2026-11-27，花了 5.6 秒，上限 5 秒）：量的時間除了 2 秒的時限，還有讀完、回答 5000 個指令的時間，runner 忙的時候超過 3.5 秒。上限改成 10 秒；完全不放掉 writer 的話，由 `wait` 的 30 秒抓到（mutation 照樣抓得到）。macOS 上這個和 `a_hung_renderer_leaves_the_writer_its_time` 都通過。

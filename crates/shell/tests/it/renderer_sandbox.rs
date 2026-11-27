@@ -507,13 +507,17 @@ fn a_renderer_process_is_told_this_machines_time_zone_by_name() {
         return;
     }
     let zone = shell::renderer_sandbox::linux::renderer_time_zone();
+    // And the name Intl gives the zone named `zone`: not always that name
+    // (`Etc/UTC` is `UTC`, as ECMA-402 has it).
     let read = "return [Intl.DateTimeFormat().resolvedOptions().timeZone, \
-        new Date(2026, 0, 1).getTimezoneOffset(), new Date(2026, 6, 1).getTimezoneOffset()]";
+        new Date(2026, 0, 1).getTimezoneOffset(), new Date(2026, 6, 1).getTimezoneOffset(), \
+        arguments[0] === null ? null \
+            : Intl.DateTimeFormat(undefined, {timeZone: arguments[0]}).resolvedOptions().timeZone]";
     let seen = |args: &[&str]| {
         let mut browser = Browser::start_in(args, &[], std::process::Stdio::null());
         let session = browser.attach();
         browser.navigate(&session, "about:blank");
-        let seen = script(&mut browser, &session, read, serde_json::json!([])).unwrap();
+        let seen = script(&mut browser, &session, read, serde_json::json!([zone])).unwrap();
         (seen, renderer_pids(&mut browser))
     };
     let (on_a_thread, _) = seen(&["--single-process"]);
@@ -530,8 +534,8 @@ fn a_renderer_process_is_told_this_machines_time_zone_by_name() {
             .map(|(_, value)| value.clone());
         assert_eq!(tz, zone, "{args:?}");
     }
-    if let Some(zone) = zone {
-        assert_eq!(on_a_thread[0], zone);
+    if zone.is_some() {
+        assert_eq!(on_a_thread[0], on_a_thread[3], "{zone:?}");
     }
 }
 
@@ -575,9 +579,23 @@ fn namespace_of(pid: &str, kind: &str) -> String {
 #[test]
 fn a_renderer_process_has_namespaces_of_its_own_where_the_machine_allows() {
     // Asked of another program, not of machopo's own way of trying: one
-    // that fails would have the renderers go without, unseen.
+    // that fails would have the renderers go without, unseen. All that
+    // machopo does with them, by util-linux's `unshare` and `setpriv`:
+    // under Ubuntu's AppArmor the namespaces are made, but with no
+    // capability in them, and the maps can't be written.
     let allowed = Command::new("unshare")
-        .args(["--user", "--net", "true"])
+        .args([
+            "--user",
+            "--net",
+            "--map-current-user",
+            "--keep-caps",
+            "setpriv",
+            "--inh-caps",
+            "-all,+sys_chroot",
+            "--ambient-caps",
+            "-all,+sys_chroot",
+            "true",
+        ])
         .status()
         .is_ok_and(|status| status.success());
     assert_eq!(

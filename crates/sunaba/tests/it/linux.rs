@@ -463,29 +463,36 @@ fn a_process_with_a_second_thread_doesnt_enter() {
 /// [`probe`], started in user and network namespaces of its own with
 /// `CAP_SYS_CHROOT` kept through the exec (by util-linux's `unshare` and
 /// `setpriv`), as `Namespaces::keeping_chroot` starts a child. `None`
-/// where the machine lets no program make a user namespace.
+/// where the machine doesn't let them start a program so: under Ubuntu's
+/// AppArmor the namespaces are made, but with no capability in them, and
+/// the maps can't be written.
 fn probe_may_chroot(policy: &[&str], attempt: &[&str]) -> Option<Outcome> {
-    let made = Command::new("unshare")
-        .args(["--user", "--net", "true"])
+    let keeping_chroot = || {
+        let mut command = Command::new("unshare");
+        command
+            .args([
+                "--user",
+                "--net",
+                "--map-current-user",
+                "--keep-caps",
+                "setpriv",
+            ])
+            .args([
+                "--inh-caps",
+                "-all,+sys_chroot",
+                "--ambient-caps",
+                "-all,+sys_chroot",
+            ]);
+        command
+    };
+    let made = keeping_chroot()
+        .arg("true")
         .status()
         .is_ok_and(|status| status.success());
     if !made {
         return None;
     }
-    let output = Command::new("unshare")
-        .args([
-            "--user",
-            "--net",
-            "--map-current-user",
-            "--keep-caps",
-            "setpriv",
-        ])
-        .args([
-            "--inh-caps",
-            "-all,+sys_chroot",
-            "--ambient-caps",
-            "-all,+sys_chroot",
-        ])
+    let output = keeping_chroot()
         .arg(env!("CARGO_BIN_EXE_sunaba_probe"))
         .args(policy)
         .arg("--")

@@ -3252,7 +3252,10 @@ fn a_client_not_reading_doesnt_hold_machopo_up() {
     let asked = std::time::Instant::now();
     let status = wait(&mut child);
     let took = asked.elapsed();
-    assert!(took < Duration::from_secs(5), "{took:?}");
+    // The limit (2 s), and the time to read and answer 5000 commands
+    // first: past 5 s on a busy CI runner. A writer waited for without a
+    // limit is `wait`'s to catch.
+    assert!(took < Duration::from_secs(10), "{took:?}");
     assert!(status.success());
     let said = std::fs::read_to_string(&log).unwrap();
     assert!(
