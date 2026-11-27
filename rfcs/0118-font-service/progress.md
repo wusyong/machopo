@@ -1,6 +1,6 @@
 # RFC 0118 的進度：字型服務（系統字型由 Browser 給 renderer）
 
-開始日期：2026-11-27。
+開始日期：2026-11-27。完成日期：2026-11-27（Windows 11 10.0.26300：第 1、2 段；macOS 26.6.2，Apple Silicon：第 4 段；Linux：Fedora 45，kernel 7.3.3：第 3 段。每一段在它的平台上做和驗。第 3 段改了 Windows 和 macOS 的 `a_sandboxed_renderer_shows_a_page_as_one_outside_does`（改成真的和 thread 上的 renderer 比），那兩台上還沒重跑。原本的第 5 段（Windows 的 restricted token）移到另一份 RFC，README 的已決定的事項第 13 條）。
 
 ## 步驟
 
@@ -26,19 +26,17 @@
 
 ## 驗收
 
-| 項目 | 怎麼驗證 |
-| --- | --- |
-| 第 1 段：Browser 開的檔案跟著訊息交給 child，child map 成唯讀的位元組；map 著的期間沒有人寫得了它 | `crates/ipc/tests/it/file_in_message.rs`：同一個 process 裡的端點；Windows 上真的 child（`a_child_maps_the_files_its_host_sends_as_its_own`） |
-| 第 2 段：Browser 給的系統字型排出來的字形，和 renderer 自己找到的系統字型的相同（多種 script、generic family、粗細和斜體、其他的名字、找不到的名字；block、SVG、canvas） | `crates/layout/tests/it/font_service.rs` 的 `served_system_fonts_lay_text_out_as_the_systems_own`（Windows）；測試字型在每個平台上的 `served_fonts_lay_text_out_as_found_ones` |
-| 第 2 段：sandbox 裡外的 renderer process 都不載入 `dwrite.dll`，畫出來和 Browser 的 thread 上的 renderer 相同 | `crates/shell/tests/it/renderer_sandbox_windows.rs` 的 `a_renderer_process_has_the_systems_fonts_from_its_browser`、`a_sandboxed_renderer_shows_a_page_as_one_outside_does`（加上了 thread 的 renderer） |
-| 第 2 段：同一個問題不問第二次；文字交給 parley 之前問好它的 script；檔案每次最多 16 個 | `font_service.rs` 的 `each_family_script_and_file_is_asked_for_once`、`a_texts_scripts_are_asked_for_before_it_is_shaped`、`files_are_asked_for_sixteen_at_a_time` |
-| 第 2 段：Browser 不回答沒給過的編號、太多的檔案、不是 script 的 tag，當成壞訊息 | `crates/browser/src/render_process_host.rs` 的 `the_io_thread_refuses_font_questions_of_nothing_it_gave` |
-| 第 3 段：Linux 上 Browser 開的檔案的 fd 跟著訊息交給 child，child 拿到的是同一個開著的檔案、只能讀、close-on-exec | `crates/ipc/src/platform/linux/channel.rs` 的 `a_file_sent_is_the_same_open_file_to_read_closed_on_exec`；`file_in_message.rs` 的真的 child（`a_child_maps_the_files_its_host_sends_as_its_own`，名字已經刪掉的檔案也是） |
-| 第 3 段：Linux 上 Browser 給的系統字型排出來的字形，和 renderer 自己經過 fontconfig 找到的相同（加上可變字型的 `.ttc` 裡的 family 和粗細） | `crates/layout/tests/it/font_service.rs` 的 `served_system_fonts_lay_text_out_as_the_systems_own`（三個平台） |
-| 第 3 段：Linux 的 sandbox 裡的 renderer 讀不了字型的目錄、字型檔、fontconfig 的設定和 cache（兩種字型都是），讀得到時區；畫出來和 sandbox 外的、Browser 的 thread 上的相同 | `crates/shell/tests/it/renderer_sandbox.rs` 的 `a_renderer_reads_no_font_of_the_systems_but_the_time_zone`、`a_sandboxed_renderer_shows_a_page_as_one_outside_does` |
-| 第 4 段：macOS 上 Browser 開的檔案包成 fileport 跟著訊息交給 child，child 還原成自己的、唯讀的 descriptor（close-on-exec）；memory entry 和 fileport 互相不認 | `crates/ipc/src/platform/macos/fileport.rs` 的單元測試；`file_in_message.rs` 的真的 child（`a_child_maps_the_files_its_host_sends_as_its_own`，名字已經刪掉的檔案也是） |
-| 第 4 段：macOS 上 Browser 給的系統字型排出來的字形，和 renderer 自己用 CoreText 找到的相同 | `crates/layout/tests/it/font_service.rs` 的 `served_system_fonts_lay_text_out_as_the_systems_own`（Windows 和 macOS） |
-| 第 4 段：macOS 的 sandbox 裡的 renderer 讀不了任何字型的目錄和檔案、查不到 `com.apple.fonts`，畫出來和 sandbox 外的、Browser 的 thread 上的相同 | `crates/shell/tests/it/renderer_sandbox_macos.rs` 的 `a_renderer_reads_no_font_of_the_systems_nor_reaches_its_font_service`、`a_sandboxed_renderer_shows_a_page_as_one_outside_does` |
+| 領域 | 項目 | 怎麼驗證 |
+| --- | --- | --- |
+| `ipc` | 開著的檔案是訊息的值裡的欄位：照順序附上、解回來各是自己的檔案；別的序列化器送不出；號碼不是這則訊息的、提兩次的是壞訊息；超過 16 個整則不送 | `cargo test -p ipc --test it file_in_message::` |
+| `ipc` | 三個平台真的 child 收到 host 送的檔案、map 成唯讀的位元組，名字已經刪掉的也是；Windows 上 map 著的期間沒有人寫得了它 | `file_in_message.rs` 的 `a_child_maps_the_files_its_host_sends_as_its_own` |
+| `ipc` | Linux：對方拿到的是同一個開著的檔案、只能讀、close-on-exec。macOS：fileport 還原成唯讀、close-on-exec 的 descriptor，memory entry 和 fileport 互相不認 | `cargo test -p ipc --lib platform::linux::channel::`（`a_file_sent_is_the_same_open_file_to_read_closed_on_exec`）；`platform::macos::fileport::` |
+| 字型服務 | Browser 給的系統字型排出來的字形，和 renderer 自己找到的相同（多種 script、generic family、粗細和斜體、其他的名字、`.ttc` 的 family、找不到的名字；block、SVG、canvas）；測試字型也一樣 | `cargo test -p layout --test it font_service::`（`served_system_fonts_lay_text_out_as_the_systems_own` 在三個平台上，`served_fonts_lay_text_out_as_found_ones` 在每個平台上） |
+| 字型服務 | 同一個 family、script、檔案不問第二次；文字交給 parley 之前問好它的 script；檔案每次最多 16 個；名字先照 Browser 的清單；generic family 用到才問；一個 family 的字型照 Browser 的 family 註冊 | `font_service.rs` 的其他 7 個 |
+| 字型服務 | Browser 不回答沒給過的編號、太多的檔案、不是 script 的 tag，當成壞訊息；IO thread 轉過去的問題由字型 thread 直接回答 | `cargo test -p browser --lib render_process_host::` |
+| Linux 的 sandbox | renderer 讀不了字型的目錄、字型檔、fontconfig 的設定和 cache（兩種字型都是），讀得到時區；sandbox 裡、外和 thread 上的 renderer 畫出同一頁的寬度和時區相同 | `cargo test -p shell --test it renderer_sandbox::` |
+| macOS 的 sandbox | renderer 讀不了任何字型的目錄和檔案、查不到 `com.apple.fonts`、`com.apple.FontObjectsServer`；同上的比較 | `cargo test -p shell --test it renderer_sandbox_macos::`（和 thread 上的 renderer 比的那一行在 macOS 上還沒跑過） |
+| Windows 的 sandbox | sandbox 裡外的 renderer process 都不載入 `dwrite.dll`、拿到 Browser 給的字型；同上的比較 | `cargo test -p shell --test it renderer_sandbox_windows::`（和 thread 上的 renderer 比的那一行在 Windows 上還沒跑過） |
 
 ## 做過的檢查
 

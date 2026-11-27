@@ -1,12 +1,13 @@
 # RFC 0118：字型服務（系統字型由 Browser 給 renderer）
 
 - 開始日期：2026-11-26
-- 狀態：🚧 已排程：2026-11-27（第 1 到 4 段做完；第 5 段：Windows 的 restricted token，放在這份還是另一份待決定；進度在 `progress.md`）
+- 狀態：✅ 已完成：2026-11-27（Windows、macOS、Linux 各在自己的機器上做完；第 3 段改到的 Windows 和 macOS 的 sandbox 測試在那兩台上還沒重跑；Windows 的 restricted token 移到另一份，已決定的事項第 13 條）
+- 進度和驗收：`progress.md`
 - 細節：`details.md`
 
 ## 摘要
 
-renderer 現在自己向作業系統問有哪些字型、自己開字型檔（parley 的 fontique：Linux 經過 fontconfig，macOS 經過 CoreText，Windows 經過 DirectWrite），所以三個平台的 sandbox 都為它留了一塊：Linux 放行字型的目錄，macOS 放行字型的目錄和系統的字型服務，Windows 因為 DirectWrite 在更緊的 token 底下不能用而停在 AppContainer。這份把「問系統」搬到 Browser：renderer 的 fontique 換成一個向 Browser 問的後端，Browser 用現在同一份 fontique 回答，字型檔由 Browser 開好、把開著的檔案交給 renderer。做完之後 renderer 不開任何字型的檔案、不碰系統的字型服務，三個平台的 sandbox 各收緊一級。fontique 的 fork 不改；family 的名字的清單在 renderer 啟動時給，其餘用到才同步問 Browser；三個平台都做，分段，Windows 先（已決定的事項第 1 到 4 條）。
+renderer 原本自己向作業系統問有哪些字型、自己開字型檔（parley 的 fontique：Linux 經過 fontconfig，macOS 經過 CoreText，Windows 經過 DirectWrite），所以三個平台的 sandbox 都為它留了一塊：Linux 放行字型的目錄，macOS 放行字型的目錄和系統的字型服務，Windows 因為 DirectWrite 在更緊的 token 底下不能用而停在 AppContainer。這份把「問系統」搬到 Browser：Browser 的一條字型 thread 用同一份 fontique 的系統後端回答，renderer 的 `Collection` 不帶系統字型，由 machopo 照需要向 Browser 要、註冊進去；字型檔由 Browser 開好，開著的檔案跟著訊息交給 renderer，renderer map 成唯讀的位元組。renderer 不再開任何字型的檔案、不碰系統的字型服務：Linux 的 policy 不放行字型的目錄、進 sandbox 回到第一件事，macOS 的 profile 拿掉字型的目錄和 `com.apple.fonts`，Windows 的 renderer 不再載入 `dwrite.dll`。fontique 的 fork 沒改；family 的名字的清單在 renderer 啟動時給，其餘用到才同步問 Browser；三種 renderer（sandbox 裡外的 process、`--single-process` 的 thread）都走這條路；分段做，Windows、macOS、Linux 各一段（已決定的事項第 1 到 12 條）。Windows 在 AppContainer 上疊 restricted token 是另一份（第 13 條）。
 
 ## 動機
 
@@ -27,8 +28,8 @@ renderer 現在自己向作業系統問有哪些字型、自己開字型檔（pa
 4. sandbox 跟著收緊，每個平台一步：
    - Linux：不放行字型的目錄，鎖回到 `main` 的第一件事，命令列的字型目錄和 Browser 啟動時的那一輪列舉拿掉。
    - macOS：profile 拿掉字型的目錄和 `com.apple.fonts`。
-   - Windows：在 AppContainer 上疊 Chromium 的 restricted token（`USER_LOCKDOWN`）。
-5. `--single-process`、`--test-fonts`、Browser 自己的 UI 的文字照舊（它們不經過這條路）。
+   - Windows：renderer 不再載入 `dwrite.dll`，之後才能在 AppContainer 上疊 Chromium 的 restricted token（`USER_LOCKDOWN`；疊上去是另一份，第 13 條）。
+5. `--test-fonts`、Browser 自己的 UI 的文字照舊（它們不經過這條路）。`--single-process` 的 renderer 原本也打算照舊，定了一樣走字型服務（第 8 條）。
 
 **不在範圍內**：
 
@@ -36,7 +37,7 @@ renderer 現在自己向作業系統問有哪些字型、自己開字型檔（pa
 - 改 fallback 的規則、family 名字的對應（`font_families.rs`）：這份只換「誰去問系統」，問的內容和答案不變。
 - 環境變數的過濾：另一件事（renderer sandbox 那份 RFC 的「之後的可能」）；字型服務做完之後它的清單可以拿掉字型用的那幾個。
 
-要解決的 `docs/limitations.md` 裡的限制：「Linux 的 sandbox 擋不住的」的 (2)、「macOS 的 sandbox 擋不住的」的 (2)、「Windows 的 sandbox 擋不住的」的 (1)；Linux 上 Browser 執行期間新裝的字型要重開才看得到的那一條（看選的做法）。
+要解決的 `docs/limitations.md` 裡的限制：「Linux 的 sandbox 擋不住的」的 (2)、「macOS 的 sandbox 擋不住的」的 (2)（都拿掉了）、「Windows 的 sandbox 擋不住的」的 (1)（renderer 不用 DirectWrite 了，token 還沒加上，那一條留著）；Linux 上 Browser 執行期間新裝的字型要重開才看得到的那一條（沒有解決：名字的清單整個 Browser 只列一次，第 11 條，三個平台都要重開）。
 
 ## 設計概要
 
@@ -44,13 +45,14 @@ renderer 現在自己向作業系統問有哪些字型、自己開字型檔（pa
 
 給改 machopo 的人：
 
-- renderer 這一側要字型時照舊用 `TextContext`；它底下的 fontique 不再碰系統，改成問 Browser。在 renderer 裡直接開字型檔、叫 CoreText、DirectWrite、fontconfig 的程式，做完之後在 sandbox 裡會失敗。
-- Browser 多一個回答字型問題的地方（Chromium 的 `FontDataService`），它擁有唯一一份「問系統」的 fontique。
+- renderer 這一側要字型時照舊用 `TextContext`（`crates/layout/src/text.rs`、`font_service.rs`）；它底下的 fontique 不碰系統，缺的 family 和 fallback 向 Browser 要（`renderer` 的 `font_data.rs`，經過 scheduler 的 `sync_call`）。新的 shaping 的地方要在交給 parley 之前呼叫 `TextContext::resolve_text`（`docs/architecture.md` 的「快取和增量：加新東西時要跟著改的地方」）。在 renderer 裡直接開字型檔、叫 CoreText、DirectWrite、fontconfig 的程式在 sandbox 裡會失敗。
+- Browser 多一條回答字型問題的 thread（`browser` 的 `font_data_service.rs`，Chromium 的 `FontDataService`），它擁有唯一一份「問系統」的 fontique；IO thread 先檢查問題（`render_process_host.rs`）。協定在 `protocol` 的 `font.rs` 和 `RendererMsg`、`RendererHostMsg`。
+- 開著的檔案是 `ipc` 的 `file::ReadOnlyFile`，訊息的值裡的一種欄位（`crates/ipc/README.md`）。
 - 測試字型（`--test-fonts`）是編在執行檔裡的，不經過字型服務。
 
 ## 詳細設計
 
-下面每一節是選項和比較；定了的寫在「已決定的事項」，沒有對應的條目的「看法」是 2026-11-26 的。fontique 現在的結構和 Chromium、Firefox 的做法（都對過原始碼）在 `details.md`。
+下面每一節是選項和比較，最後是選了哪個（理由在「已決定的事項」）。fontique 的結構和 Chromium、Firefox 的做法（都對過原始碼）在 `details.md`。
 
 ### 誰來決定「這個名字是哪個字型」「這個字用哪個字型」
 
@@ -60,7 +62,7 @@ renderer 現在自己向作業系統問有哪些字型、自己開字型檔（pa
 | A2 | **整份清單放在共用記憶體**：Browser 啟動時把所有 family、字型的屬性、每個字型有哪些字（character map）建成一張表，每個 renderer 唯讀地 map 它，比對和 fallback 都在 renderer 裡算 | 平常沒有同步的來回 | 要設計和維護一張跨 process 的表（配置、版本、延後填入）；fallback 改成 renderer 自己照字找，和現在問系統的答案不一定一樣（現在 Windows 問 DirectWrite、macOS 問 CoreText）；Browser 啟動時要讀每個字型檔 |
 | A3 | **A1，但 family 的名字在啟動時一次給**：名字的清單（幾百個字串）放在 renderer 的第一則訊息裡，其餘照 A1 | 合 fontique 現在的結構（它一建立就要名字的表），fork 改得最少；「這個名字在不在」不用問；renderer 不用自己建清單（現在每個 renderer 1.5 ms 以上，Linux 十幾 ms）；其餘同 A1 | 第一則訊息多幾十 KB；Browser 執行期間新裝的字型，已經開著的 renderer 看不到（新的分頁看得到） |
 
-看法：**A3**。對照：Chromium 是 A1（`FontDataService`：`MatchFamilyName`、`MatchFamilyNameCharacter` 都是同步的，renderer 有一層 LRU 的快取；它說「取全部 family 的名字」這個呼叫「strongly discouraged」，因為 Skia 的比對是照名字問、不用清單，而 fontique 是先有名字的清單再比對）。Firefox 是 A2（它自己的說明：共用的清單裡有 family、字型的屬性和 character map，由 parent process 建，content process 唯讀；fallback 在 content process 裡走遍清單，還沒有 character map 的 family 先跳過、之後補上再重排）。A2 換到的是沒有同步的來回，要付的是一套新的資料結構和一份和系統不一定一致的 fallback。量過了（`details.md` 的「現在一頁問幾次、一次來回多久（量的）」）：一般的頁面每個 renderer process 大約 10 個問題、最多的一頁 31 個，一次同步的來回約 27 微秒，合計不到 1 ms，所以 A2 省下的量不出來。A1 和 A3 的差別也不在次數（「這個名字在不在」一頁只問 0 到 3 次），在 fontique 的結構：它的 `Collection` 一建立就要有名字和編號的對照表，照名字比對都從那張表開始；A1 要把這張表也改成用到才問，fork 要改得更深。
+定了 **A3**（已決定的事項第 2 條；名字的清單整個 Browser 只列一次，第 11 條）。對照：Chromium 是 A1（`FontDataService`：`MatchFamilyName`、`MatchFamilyNameCharacter` 都是同步的，renderer 有一層 LRU 的快取；它說「取全部 family 的名字」這個呼叫「strongly discouraged」，因為 Skia 的比對是照名字問、不用清單，而 fontique 是先有名字的清單再比對）。Firefox 是 A2（它自己的說明：共用的清單裡有 family、字型的屬性和 character map，由 parent process 建，content process 唯讀；fallback 在 content process 裡走遍清單，還沒有 character map 的 family 先跳過、之後補上再重排）。A2 換到的是沒有同步的來回，要付的是一套新的資料結構和一份和系統不一定一致的 fallback。量過了（`details.md` 的「現在一頁問幾次、一次來回多久（量的）」）：一般的頁面每個 renderer process 大約 10 個問題、最多的一頁 31 個，一次同步的來回約 27 微秒，合計不到 1 ms，所以 A2 省下的量不出來。A1 和 A3 的差別也不在次數（「這個名字在不在」一頁只問 0 到 3 次），在 fontique 的結構：它的 `Collection` 一建立就要有名字和編號的對照表，照名字比對都從那張表開始；A1 要把這張表也改成用到才問，fork 要改得更深。
 
 ### fontique 怎麼接
 
@@ -71,23 +73,23 @@ fontique 的系統後端是編譯時選的一個型別（`backend::SystemFonts`�
 | Q1 | **fork 加一個「字型來源由外面給」的介面**：`Collection` 可以用一個實作了那三樣的物件建（trait），系統後端是它的一種實作 | renderer 那一側只要實作這個 trait（問 Browser）；`Collection` 其餘的行為（延後載入、快取、比對）不變；介面小，寫成可以送上游的樣子 | 改 fork：fontique 的 `FamilyInfo`、`FontInfo` 現在要從字型的內容建，介面要讓外面給得出這兩樣；上游收不收不知道 |
 | Q2 | **不動 fork**：renderer 的 `Collection` 不帶系統字型（`system_fonts: false`），machopo 在上面一層照需要把字型註冊進去（`register_fonts`）、把 fallback 填進去（`set_fallbacks`） | fork 不多一個 commit；原型做過，畫出來相同 | fallback 是 parley 在 shaping 裡面才問的，machopo 要在 shaping 之前先掃文字有哪些 script、先填好；註冊一個 family 要它每個字型的內容，交過來的檔案比現在開的多（一頁 35 到 41 個，現在 3 到 12 個）；`.ttc` 裡的字型只能照它自己的名字和屬性註冊 |
 
-看法（2026-11-26，原型之後改的）：**先照 Q2**。原本的看法是 Q1，理由是 Q2 要把 parley 裡面的一段邏輯複製到外面；讀了 parley 問 fallback 的地方，要複製的只是「這段文字有哪些 script，加上漢字」，做了原型（`details.md` 的「不改 fork 的原型」）：五頁的截圖都和現在逐 byte 相同，fork 一行沒動。Q2 留下的風險：猜漏了是安靜的錯（少一個 fallback、畫出豆腐），parley 改了問法時 machopo 要跟著改；用一個測試守（同一組文字，兩種 `Collection` 排出來的字形逐一比）。原本擔心 `.ttc` 裡的字型不能帶著系統給的名字和屬性註冊；查了之後（`details.md` 的「照檔案註冊和系統說的對不對得上（每個平台）」）：macOS 的後端本來就是自己掃檔案，照檔案註冊一定一樣；Windows 上整台機器比過，`.ttc` 的都對得上，對不上的是「一個檔案在系統裡是好幾個 family」（各註冊一次就好）和 family 的其他名字（名字由 machopo 照 Browser 的清單自己對，不靠 `Collection` 的名字表）；Linux 上整台機器比過（2026-11-27，Fedora 45），可變字型的 `.ttc` 也都對得上，fork 不用改。
+定了 **Q2**（第 1 條）。原本的看法是 Q1，理由是 Q2 要把 parley 裡面的一段邏輯複製到外面；讀了 parley 問 fallback 的地方，要複製的只是「這段文字有哪些 script，加上漢字」，做了原型（`details.md` 的「不改 fork 的原型」）：五頁的截圖都和現在逐 byte 相同，fork 一行沒動。Q2 留下的風險：猜漏了是安靜的錯（少一個 fallback、畫出豆腐），parley 改了問法時 machopo 要跟著改；用一個測試守（同一組文字，兩種 `Collection` 排出來的字形逐一比：`crates/layout/tests/it/font_service.rs` 的 `served_system_fonts_lay_text_out_as_the_systems_own`，三個平台）。原本擔心 `.ttc` 裡的字型不能帶著系統給的名字和屬性註冊；查了之後（`details.md` 的「照檔案註冊和系統說的對不對得上（每個平台）」）：macOS 的後端本來就是自己掃檔案，照檔案註冊一定一樣；Windows 上整台機器比過，`.ttc` 的都對得上，對不上的是「一個檔案在系統裡是好幾個 family」（各註冊一次就好）和 family 的其他名字（名字由 machopo 照 Browser 的清單自己對，不靠 `Collection` 的名字表）；Linux 上整台機器比過（2026-11-27，Fedora 45），可變字型的 `.ttc` 也都對得上，fork 不用改。
 
 ### Browser 和 renderer 之間問什麼
 
-照 A3 和 Q1，介面就是 fontique 後端的那三樣，加上字型檔的內容：
+照 A3 和 Q2，介面是 fontique 後端的那三樣，加上字型檔的內容：
 
 | 問 | 什麼時候 | 答 |
 | --- | --- | --- |
 | （不用問）family 的名字、generic family 是哪幾個 | renderer 啟動，在第一則訊息裡 | 名字的清單，每個名字一個編號；generic family 對到的編號 |
-| 這個 family 有哪些字型 | 第一次用到這個 family | 每個字型：哪個檔案（一個編號）、檔案裡的第幾個、它的屬性（或讓 renderer 從內容讀，見下面） |
-| 這個 script、這個語言的 fallback 是哪個 family | 第一次遇到這個 script | 一個 family 的編號，或沒有 |
-| 這個檔案的內容 | 第一次用到這個檔案裡的字型 | 開著的檔案（renderer 自己 mmap），或共用記憶體 |
+| 這個 family 有哪些字型（`GetFontFamily`） | 第一次用到這個 family（generic family 是用到那一種時，第 10 條） | family 的名字；每個字型：哪個檔案（一個編號，同一個檔案一個）、檔案裡的第幾個、系統說的粗細、樣式、寬度 |
+| 這個 script 的 fallback 是哪幾個 family（`GetFontFallback`） | 文字交給 parley 之前，遇到還沒問過的 script（每次加上漢字） | family 的編號（可能沒有） |
+| 這些檔案（`GetFontFiles`） | 註冊一個 family 之前，它還沒拿到的檔案 | 開著的檔案，每次最多 16 個（第 3、7 條）；開不了的是空的 |
 
-- 問的都是同步的：排版要當場知道。renderer 已經有同步呼叫（`scheduler.sync_call`，現在三處在用）。
+- 問的都是同步的：排版要當場知道（renderer 的 `scheduler.sync_call`）。Browser 那一側在自己的一條 thread 上回答（第 9 條）。
 - 每一種答案 renderer 記著，同一個 process 不問第二次（fontique 的 `Collection` 本來就記 family 和 fallback，`SourceCache` 記內容）。
-- **Browser 不信 renderer 給的編號**：每個都查表，查不到就是壞訊息（「Process 的邊界」第 6 條）。renderer 拿不到路徑，只有編號（Chromium 舊的 Linux 字型服務把路徑也給了 renderer，它自己的註解說要補上這個洞）。
-- fontique 的 fallback 是照 script 和語言問的（一種 script 一次），不是照每個字：比 Chromium 照字元問的少很多次。
+- **Browser 不信 renderer 給的編號**：family 的編號要在名字的清單裡，檔案的編號要是字型 thread 給過的（不看是不是給過這個 renderer：每個檔案都能經過問它的 family 拿到，照 renderer 分開記換不到什麼），檔案最多 16 個、不是空的，script 要是四個字母；不是的回答沒有、當成壞訊息（「Process 的邊界」第 6 條）。renderer 拿不到路徑，只有編號（Chromium 舊的 Linux 字型服務把路徑也給了 renderer，它自己的註解說要補上這個洞）。
+- fontique 的 fallback 是照 script 和語言問的（一種 script 一次），不是照每個字：比 Chromium 照字元問的少很多次。machopo 不把 `lang` 交給 parley，所以只照 script 問，和原本一樣。
 
 ### 字型檔的內容怎麼過去
 
@@ -97,7 +99,7 @@ fontique 的系統後端是編譯時選的一個型別（`backend::SystemFonts`�
 | D2 | **複製進共用記憶體**：Browser 讀檔、放進一塊共用記憶體交過去 | `ipc` 不用新的東西 | 每個用到的字型檔在記憶體裡多一份（CJK 的字型一個十幾 MB）；Browser 要管這些區域什麼時候放掉 |
 | D3 | **Browser mmap 檔案，把那塊對應交過去** | 不複製 | 「一塊 mmap 的檔案」在三個平台上變成能交給別的 process 的東西，做法各不相同，等於 D1 的另一種寫法 |
 
-看法：**D1**。對照 Chromium：`FontDataService` 優先給檔案的 handle（它的註解：「avoiding copy of the content of the file」），拿不到檔案時才複製進共用記憶體；renderer map 了之後不再放掉。
+定了 **D1**（第 3 條）：值裡的一種欄位（第 5 條）；Windows 交檔案的 handle（第 6 條），macOS 交 fileport（第 12 條），Linux 交 fd（`SCM_RIGHTS`，和 region 的 memfd 一樣）。對照 Chromium：`FontDataService` 優先給檔案的 handle（它的註解：「avoiding copy of the content of the file」），拿不到檔案時才複製進共用記憶體；renderer map 了之後不再放掉。
 
 ### 字型的屬性誰讀
 
@@ -108,53 +110,56 @@ fontique 建一個 family 時要每個字型的寬度、樣式、粗細、可變
 | P1 | renderer 拿到檔案之後自己讀 | 用現在同一段程式；代價是「這個 family 有哪些字型」的答案要連同每個字型的檔案一起給，一個 family 有十幾個檔案時一次交十幾個 |
 | P2 | Browser 讀好、把屬性放在答案裡 | renderer 只在真的用到某個字型時才要它的檔案；代價是 fontique 的 `FontInfo` 要能從外面給的屬性建（fork 多一點） |
 
-看法：照 Q2 的話只能是 **P1**（`register_fonts` 要內容）；P2 要改 fork。原型量到的代價是每個 renderer 多交二三十個檔案。
+跟著 Q2，是 **P1**（`register_fonts` 要內容）；P2 要改 fork。原型量到的代價是每個 renderer 多交二三十個檔案。單一字型的檔案註冊時帶上 Browser 說的 family 名和屬性，`.ttc` 照檔案自己的（第 1 條）。
 
-### 各平台做完之後收緊什麼
+### 各平台收緊了什麼
 
-每個平台一步，各自可以先 merge：
+每個平台一段，在那個平台上做和驗：
 
-- **Linux**：policy 不再放行字型的目錄；renderer 的 `main` 不再先初始化 fontconfig，進 sandbox 回到第一件事；`--font-directory`、Browser 啟動時列目錄的那一輪拿掉。時區和其他零星的讀取（`/etc/localtime`……）不在這份。
-- **macOS**：profile 拿掉字型的四處目錄和 `com.apple.fonts`。要確認的：CoreText 在 Browser 裡回答 fallback 之後，renderer 自己拿到字型的內容能不能照樣 shaping（fontique 的 shaping 不經過 CoreText，預期可以；探測）。
-- **Windows**：renderer 不再載入 `dwrite.dll`。之後才能在 AppContainer 上疊 restricted token：那是 sandbox 的機制，不是字型的事，但它是做這份的主要理由之一；放在這份的最後一段，還是另開一份，待決定。
+- **Linux**：policy 不放行字型的目錄（Landlock 只剩時區、CPU 的數量和 `/dev/urandom`）；renderer 進 sandbox 之前不再初始化 fontconfig，進 sandbox 回到第一件事；`--font-directory`、Browser 啟動時列目錄的那一輪拿掉。`fontcheck.rs` 先比過 `.ttc`，對得上（`details.md`）。時區和其他零星的讀取不在這份。
+- **macOS**：profile 拿掉字型的四處目錄和 `com.apple.fonts`，只帶 Browser 的 pid。先探測過：Browser 的字型 thread（CoreText 的後端）回答的和 renderer 自己找的排出來相同，renderer 的 `Collection` 不建 CoreText 的後端（第 12 條）。
+- **Windows**：renderer 不再載入 `dwrite.dll`。在 AppContainer 上疊 restricted token 是 sandbox 的機制、不是字型的事，移到另一份（第 13 條）。
 
 ### 不經過字型服務的
 
 - `--test-fonts`：內建的兩個字型，照舊。
-- `--single-process` 和在測試的 process 裡建的分頁：renderer 是 Browser 的 thread，直接用系統後端，照舊。
 - Browser 的 UI（`ui` crate、網址列）：在 Browser 裡，照舊。
-- `--no-sandbox` 的 renderer process：走字型服務還是照舊直接問系統，待決定（看法：一樣走字型服務，少一條只有除錯時才走的路）。
+- 不經過的只有這兩個：sandbox 裡外的 renderer process 和 `--single-process`（和在測試的 process 裡建的分頁）的 renderer thread 都問 Browser（第 8 條）。同一個 process 裡的不經過 codec，開著的檔案直接搬過去。Browser 不提供系統字型的平台（沒有 sandbox 的），和字型 thread 起不來時，renderer 照舊自己找（`SystemFontSource::FindHere`）。
 
 ### 測試
 
-- **畫出來不變**：同一組頁面（各種 script、粗細、generic family、找不到的名字、fallback）在 sandbox 裡外、做完前後的截圖相同；三個平台各自的 `a_sandboxed_renderer_shows_a_page_as_one_outside_does` 已經在比 sandbox 裡外。
-- **renderer 真的不碰字型了**：每個平台的「做不到」的測試加上字型的目錄（讀不到）、系統的字型服務（連不到）；Windows 上 renderer 載入的 DLL 裡沒有 `dwrite.dll`。
-- **介面**：renderer 給壞的編號時 Browser 當成壞訊息；同一個問題不問第二次（數同步呼叫的次數）；Browser 結束或不回答時 renderer 不卡住。
-- **fork**：fontique 的新介面在 fork 裡有自己的測試（一個假的來源）。
-- mutation test；量測：同步呼叫的次數和時間（一頁文字多的頁面、Speedometer 使用者要求時）。
+驗收的清單和指令在 `progress.md`。
+
+- **畫出來不變**：同一組文字（多種 script、粗細和斜體、generic family、其他的名字、找不到的名字；block、SVG、canvas），Browser 給的和 renderer 自己找到的系統字型排出來的字形逐一相同（`layout` 的 `font_service.rs`，三個平台）；sandbox 裡、sandbox 外和 thread 上的 renderer 畫出同一頁的寬度和時區相同（`shell` 的三個平台的 `a_sandboxed_renderer_shows_a_page_as_one_outside_does`）。
+- **renderer 真的不碰字型了**：每個平台的「做不到」的測試加上字型的目錄和檔案（讀不到）、系統的字型服務（macOS：查不到）、fontconfig 的設定和 cache（Linux）；Windows 上 renderer 載入的 DLL 裡沒有 `dwrite.dll`。
+- **介面**：同一個 family、script、檔案不問第二次；文字交給 parley 之前問好它的 script；檔案每次最多 16 個；Browser 不回答沒給過的編號、太多的檔案、不是 script 的 tag，當成壞訊息。Browser 的字型 thread 送不出檔案、或不在時 renderer 不卡住，只靠審查（`docs/test-gaps.md`）。
+- **`ipc`**：檔案跟著訊息過去，三個平台真的 child 收到、map 成唯讀的位元組（`file_in_message.rs`）。
+- mutation test：每一段一份（`mutants-1.toml`、`mutants-2.toml`、`mutants-3.toml`、`mutants-4.toml`）。量測沒有做：同步呼叫的次數和時間在草稿時量過（`details.md`），Speedometer 只在使用者要求時量。
 
 ### 分階段
 
 0. 草稿、量測和原型（做完，2026-11-26 到 27；`details.md`）：一頁問幾次、一次來回多久；不改 fork 的原型；照檔案註冊和系統說的對不對得上；定了第 1 到 4 條。
-1. `ipc` 多一種跟著訊息過去的東西（開著的檔案）。先做 Windows 的；Linux 和 macOS 的在各自的那一段。
-2. **Windows**：Browser 的字型服務和 renderer 那一側（這兩塊不分平台，在這一段做出來）；有 sandbox 的 renderer 切過去，畫出來要和切之前相同；renderer 不再載入 `dwrite.dll`。
-3. **Linux**：`ipc` 的檔案；renderer 切過去；policy 不放行字型的目錄，進 sandbox 回到 `main` 的第一件事，`--font-directory` 和 Browser 啟動時列目錄的那一輪拿掉。先跑 `fontcheck.rs` 看 `.ttc`。
-4. **macOS**：`ipc` 的檔案（file descriptor 包成 port）；renderer 切過去；profile 拿掉字型的目錄和 `com.apple.fonts`。先探測：Browser 回答 fallback 之後，renderer 不連系統的字型服務時排版對不對。
-5. Windows 在 AppContainer 上疊 restricted token（放在這份還是另一份，待決定）。
+1. `ipc` 多一種跟著訊息過去的東西（開著的檔案）：Windows 的（做完，2026-11-27；第 5 到 7 條）。Linux 和 macOS 的在各自的那一段。
+2. **Windows**（做完，2026-11-27；第 8 到 11 條）：Browser 的字型服務和 renderer 那一側（這兩塊不分平台，在這一段做出來）；三種 renderer 切過去，畫出來和切之前相同；renderer 不再載入 `dwrite.dll`。
+3. **Linux**（做完，2026-11-27）：`fontcheck.rs` 看 `.ttc`；`ipc` 的檔案；renderer 切過去；policy 不放行字型的目錄，進 sandbox 回到第一件事，`--font-directory` 和 Browser 啟動時列目錄的那一輪拿掉。沒有要決定的事。
+4. **macOS**（做完，2026-11-27；第 12 條）：先探測；`ipc` 的檔案（fileport）；renderer 切過去；profile 拿掉字型的目錄和 `com.apple.fonts`。
+5. ~~Windows 在 AppContainer 上疊 restricted token~~：移到另一份（第 13 條）。
 
-每一段在它的平台上做和驗，做完可以先 merge（`rfcs/README.md` 的「階段的 merge」）：還沒切的平台照舊自己問系統。
+段落的編號照接受時的順序；做的順序是 1、2、4、3。每一段做完可以先 merge（`rfcs/README.md` 的「階段的 merge」）。
 
 ## 缺點
 
 - 排版多了同步的來回：renderer 的 main thread 等 Browser。次數有上限（每個 process、每個 family 和 script 一次），但第一頁的第一次排版會集中遇到。
 - Browser 多一塊要一直在的服務，它卡住時每個 renderer 的排版都卡住。
-- fork 多一個 commit，上游不收的話要一直帶著。
-- `ipc` 多一種 handle，三個平台各有一段新的 `unsafe` 和論證。
+- 「掃文字有哪些 script」和 parley 問 fallback 的方式綁在一起（Q2 的代價，第 1 條）：parley 改了問法時 machopo 要跟著改，猜漏了是少一個 fallback、畫出豆腐，不會報錯；由 `served_system_fonts_lay_text_out_as_the_systems_own` 守。新的 shaping 的地方忘了 `resolve_text` 也是同樣的結果。
+- 一個 family 第一次用到時，它全部的字型檔都要交過來（P1）：一個 renderer 比原本多 map 二三十個檔案。
+- `ipc` 多一種 handle：`file.rs` 的 map 和 macOS 的 fileport 是新的 `unsafe`；K11（map 著的檔案不變）在 macOS 和 Linux 上是假設（`crates/ipc/soundness.md`）。
+- Browser 執行期間新裝的字型，三個平台都要重開 machopo 才看得到（第 11 條；原本 macOS 和 Windows 上新的分頁看得到）。
 
 ## 理由和其他做法
 
 - **不做的話**：三個平台的 sandbox 都停在現在這一級，Windows 上不了 Chromium 的 token。
-- **只做 Windows**（另外兩個平台照舊讀字型的目錄）：Windows 是唯一「不做就上不了下一級」的；但字型的路分成兩種之後，文字的 bug 要在兩種底下各看一次，而 Linux 和 macOS 能拿掉的那幾條放行也是真的收緊。看法是三個平台都做，分段。
+- **只做 Windows**（另外兩個平台照舊讀字型的目錄）：Windows 是唯一「不做就上不了下一級」的；但字型的路分成兩種之後，文字的 bug 要在兩種底下各看一次，而 Linux 和 macOS 能拿掉的那幾條放行也是真的收緊。定了三個平台都做，分段（第 4 條）。
 - 各節的選項比較在上面。
 
 ## 先例
@@ -182,20 +187,18 @@ fontique 建一個 family 時要每個字型的寬度、樣式、粗細、可變
 
 第 2 段開始時查到、不用決定的兩件：worker 裡沒有文字（machopo 沒有 `OffscreenCanvas`，worker 不排版），之後有了走同一條路；machopo 不把 `lang` 交給 parley（沒有 `StyleProperty::Locale`），所以 fallback 一律照 script、不帶語言，和現在一樣，這一段照這樣做。
 
+第 3 段沒有要決定的事：`.ttc` 對得上（`details.md`），fd 照第 3、5 條跟著訊息過去（`SCM_RIGHTS`，region 本來就這樣交；Chromium 的 `ChannelPosix` 也是），K11 在 Linux 上和 macOS 一樣是假設（第 5 條已經寫了）。
+
+13. **Windows 在 AppContainer 上疊 restricted token 不在這份，另開一份（S2）**（2026-11-27，第 3 段做完之後，使用者決定）：這份到第 4 段為止、收尾；token 和另一個 window station、desktop（renderer sandbox 那份 RFC 的第 26 條沒做的）一起放進一份「Windows 的 renderer sandbox 的下一級」。理由：token 是 sandbox 的機制，改的是 `sunaba` 和 `shell` 的 Windows policy，論證在 `crates/sunaba/soundness.md`，和字型無關；這份做的是讓它疊得上去（renderer 不再載入 `dwrite.dll`），三個平台的目標都達成了，不用為了一台 Windows 一直開著；token 和 desktop 都是 Chromium 的 Windows renderer 有、machopo 還沒有的，兩件都探測過，在同一台機器上一起做、一起驗。不選放在這份當第 5 段（S1：動機寫在一起，但這份要一直開著、已經做完的不能整份 merge）。不選一份大的「sandbox 的下一級」三個平台各一段（S3：三個平台的機制完全不同，要三台機器；Linux 的 namespace 本身就要好幾段）。
+
 ## 待決定
 
-探測之前要定的四條都定了（已決定的事項第 1 到 4 條），第 1 段的三條也定了（第 5 到 7 條）。每一段開始前只定那一段的。
-
-第 2 段的五件定了（第 8 到 10 條，和它們後面的兩件），做的時候多出的一件也定了（第 11 條）。第 4 段的一件也定了（第 12 條）。第 3 段沒有要決定的事：`.ttc` 對得上（`details.md`），fd 照第 3、5 條跟著訊息過去（`SCM_RIGHTS`，region 本來就這樣交；Chromium 的 `ChannelPosix` 也是），K11 在 Linux 上和 macOS 一樣是假設（第 5 條已經寫了）。
-
-做的時候照設計細化、不用決定的：Browser 檢查檔案的編號只看「字型 thread 給過這個編號」，不看「給過這個 renderer」：每個檔案都能經過問它的 family 拿到，照 renderer 分開記換不到什麼，還要每個 renderer 一張表。
-
-之後的段落：
-
-- Windows 的 restricted token 放在這份的最後一段，還是另一份。
+沒有。
 
 ## 之後的可能
 
+- Windows 在 AppContainer 上疊 restricted token（`USER_LOCKDOWN`）和另一個 window station、desktop：另一份 RFC（第 13 條）。
+- Browser 的背景工作共用一組可以等待的 thread（Chromium 的 ThreadPool 的 `MayBlock` sequence；`FontDataService` 在 Chromium 跑在上面）：現在 `FontDataService`、`LocalStorage`、`CookieStore`、`HttpCacheStore` 各一條 thread。2026-11-27 和使用者討論過：字型不合進 IO thread（開檔的那幾 ms 卡住所有通道）、UI thread（Browser 忙時排版跟著等）或 `LocalStorage`（一個 profile 一條、兩邊都有 renderer 同步地等）；一條閒著的 thread 成本很小，要收的話是這幾條一起改成 pool 上的 sequence，先量多的 thread 是不是問題。
 - 字型裝了、移除了時 Browser 通知 renderer 重拿名字的清單，開著的分頁也看得到新的字型。
 - 字型的清單放進共用記憶體（A2），如果量到同步的來回是問題。
 - renderer 啟動時先把常用的 family 問好（Chromium 有一個預設關著的 prewarm）。
