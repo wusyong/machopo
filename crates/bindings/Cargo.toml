@@ -31,6 +31,8 @@ trace_event.workspace = true
 serde_json.workspace = true
 # V8's random numbers' seeds, from the operating system's (`platform`).
 getrandom.workspace = true
+# Ending the process at once when V8 runs out of memory (`oom`).
+ipc.workspace = true
 
 [dev-dependencies]
 

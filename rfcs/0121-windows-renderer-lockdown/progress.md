@@ -12,7 +12,7 @@
 | 2 之前. 探測（`details.md` 的「探測：desktop 和記憶體上限（第 2 段之前）」）、第 2 段的決定（已決定的事項第 6 到 9 條） | 做完 | 2026-11-27 |
 | 2a. desktop：`sunaba` 第一次照 policy 啟動時建 window station 和它上面的 desktop、之後的都用它（允許 win32k 的不用）；從外面讀 `DesktopInfo`（`desktop`）；`sunaba_probe` 延後載入 `user32`；測試 | 做完 | 2026-11-27 |
 | 2b. job 的記憶體上限（實體記憶體的一半，最少 4 GB）、job 的 completion port、Browser 存的結束帶「碰過記憶體上限」、sad tab 的「記憶體不夠」；測試 | 做完 | 2026-11-27 |
-| 2c. V8 的 OOM：`bindings` 設 `set_oom_error_handler`、固定的結束碼、sad tab 對到「記憶體不夠」（三個平台）；測試 | 還沒開始 | |
+| 2c. V8 的 OOM：`bindings` 設 `set_oom_error_handler`、固定的結束碼、sad tab 對到「記憶體不夠」（三個平台）；測試 | 做完 | 2026-11-27 |
 | 2d. 第 2 段的檢查和文件 | 還沒開始 | |
 | 3. 探測的三件（handle、CSRSS、shim） | 還沒開始 | |
 
@@ -65,3 +65,10 @@
 - **Mutation test**（`mutants-2b.toml`，10 個，`--keep-going`）：抓到 9 個：job 不設上限、有上限的 job 沒有 port、每則通知都當成碰到上限、只讀第一則通知、Browser 不問、sad tab 不看「碰過上限」、renderer 不設上限、上限是全部的實體記憶體、上限是最多 4 GB。沒抓到 1 個：`browser_view` 只把結束碼交給 sad tab（`shell` 沒有讓分頁的 renderer 碰到上限的測試）：記進 `docs/test-gaps.md` 的「只靠審查」。跑完確認改過的檔案都還原了。
 - **一次失敗的整套**：第一次跑 `shell` 的整合測試時，`automation_pipe` 的 12 個在同一刻等滿 30 秒逾時（`machopo answers`），其他 743 個通過；那時這台機器正在跑 VR 遊戲（VR 的 compositor 佔住 GPU），這幾個測試每一格都等 wgpu。單獨跑、只跑 `automation_pipe::`、再跑整套兩次（一次在重新 link 之後，排除剛 link 的執行檔被掃描）都通過。GPU 被別的程式佔住時，碰 GPU 的測試的結果不能用。
 - **跑過的檢查**：`cargo test -p sunaba -p ipc -p browser -p shell`（`shell` 的整合測試 755 個，和其他的都通過，除了上面那一次）；`sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs（都通過）。`cargo test --workspace`、fmt 和 clippy 等第 2 段做完時跑。
+
+### 2c（2026-11-27，同一台）
+
+- **做法**：查了 Chromium（`gin/v8_initializer.cc`、`gin/isolate_holder.cc`、Blink 的 `v8_oom.cc`）之後照已決定的事項第 10 條（O1）：`bindings` 的 `oom` 在每個 isolate 上設 `set_oom_error_handler`，往 stderr 分段寫一行（不配置記憶體），用 `ipc::platform::terminate_current_process_immediately` 以 `OUT_OF_MEMORY_EXIT`（6）結束；`dom_js` 轉出這個常數，sad tab 照它說記憶體不夠。
+- **新的測試**：`bindings` 的整合測試 1 個（測試的 binary 再執行一次自己，`--max-old-space-size=16` 底下跑一直配置的 script：結束碼 6、stderr 那一行是 heap 的、帶 V8 給的位置、stdout 緩衝裡的字沒有寫出來、測試框架的結尾那一行沒有出現）；`shell` 的 sad tab 的 unit test 加上結束碼 6（碰沒碰過上限都說記憶體不夠）。
+- **Mutation test**（`mutants-2c.toml`，8 個，`--keep-going`）：抓到 6 個：isolate 沒有 handler、結束碼不對、stderr 什麼都不寫、heap 的說成 process 的、不寫位置、sad tab 不認這個結束碼。沒抓到 2 個：照一般的方式結束（`std::process::exit`）：補了 stdout 緩衝的檢查之後單獨再跑，抓到了；不寫 V8 的細節：heap 用完時 V8 不給細節，記進 `docs/test-gaps.md` 的「只靠審查」。跑完確認改過的檔案都還原了。
+- **跑過的檢查**：`cargo test -p bindings -p dom_js -p ipc -p shell`（`bindings` 的整合測試 61 個、`shell` 的整合測試 755 個，和其他的都通過）；`sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs（都通過）。`cargo test --workspace`、fmt 和 clippy 等第 2 段做完時跑。

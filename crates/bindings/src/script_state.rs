@@ -35,6 +35,8 @@ impl V8PerIsolateData {
             },
         );
         let mut isolate = v8::Isolate::new(v8::CreateParams::default().cpp_heap(heap));
+        // Running out ends the process with a code its browser knows.
+        isolate.set_oom_error_handler(crate::oom::out_of_memory);
         // HTML's event loop decides when microtasks run, not V8.
         isolate.set_microtasks_policy(v8::MicrotasksPolicy::Explicit);
         // V8 records an error's full stack for DevTools only while a session

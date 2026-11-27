@@ -54,6 +54,9 @@ pub use worker::V8WorkerEngine;
 /// before V8 is.
 pub use bindings::trace;
 
+/// The exit code of a renderer whose V8 ran out of memory.
+pub use bindings::OUT_OF_MEMORY_EXIT;
+
 pub use machopo_dom::{
     cached_strings, dom_mut, fresh_strings, heap_stats, install_machopo_dom, names_made,
     string_conversions, uncaught_exceptions, wrappers_ahead, wrappers_made, wrappers_wasted,

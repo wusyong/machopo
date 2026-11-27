@@ -49,6 +49,8 @@ impl Reason {
     pub fn of_exit(code: Option<i32>) -> Self {
         if code == Some(i32::from(crate::renderer_sandbox::NO_SANDBOX_EXIT)) {
             Self::NoSandbox
+        } else if code == Some(i32::from(dom_js::OUT_OF_MEMORY_EXIT)) {
+            Self::OutOfMemory
         } else if code.is_some_and(|code| NOT_LOADED.contains(&code.cast_unsigned())) {
             Self::NotLoaded
         } else {
@@ -338,6 +340,10 @@ mod tests {
         }
         let no_sandbox = u32::from(crate::renderer_sandbox::NO_SANDBOX_EXIT);
         assert_eq!(ended(Some(no_sandbox), false), Reason::NoSandbox);
+        // One whose V8 ran out says so by its exit code, sandbox or none.
+        let v8_ran_out = u32::from(dom_js::OUT_OF_MEMORY_EXIT);
+        assert_eq!(ended(Some(v8_ran_out), false), Reason::OutOfMemory);
+        assert_eq!(ended(Some(v8_ran_out), true), Reason::OutOfMemory);
         assert_eq!(Reason::of(None), Reason::Crashed);
         assert!(Reason::OutOfMemory.message().contains("memory"));
         let glyphs = |reason| {

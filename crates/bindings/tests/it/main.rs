@@ -18,6 +18,7 @@ mod gc_platform;
 mod heap_snapshot;
 mod isolate_state;
 mod modules;
+mod out_of_memory;
 mod promise_resolvers;
 mod stack_traces;
 mod termination;

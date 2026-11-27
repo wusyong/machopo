@@ -1,7 +1,7 @@
 # RFC 0121：Windows 的 renderer sandbox 的下一級：restricted token 和另一個 desktop
 
 - 開始日期：2026-11-27
-- 狀態：🚧 已排程：2026-11-27（第 1 段做完：renderer 的 token 是 lockdown 加 AppContainer 的，降權之後開不了任何檔案、建不了 socket；第 2 段做到 2b：renderer 在 Browser 建的 window station 和 desktop 上，能 commit 的記憶體有上限，碰到時分頁說記憶體不夠；進度在 `progress.md`）
+- 狀態：🚧 已排程：2026-11-27（第 1 段做完：renderer 的 token 是 lockdown 加 AppContainer 的，降權之後開不了任何檔案、建不了 socket；第 2 段做到 2c：renderer 在 Browser 建的 window station 和 desktop 上，能 commit 的記憶體有上限，碰到上限或 V8 用完記憶體時分頁說記憶體不夠；進度在 `progress.md`）
 - 細節：`details.md`
 
 ## 摘要
@@ -157,6 +157,8 @@ Chromium 的 renderer 啟動時是 `USER_RESTRICTED_SAME_ACCESS`（限制在全�
 9. **第 2 段的做法：分成 2a、2b、2c，和四個小的選擇**（2026-11-27，使用者決定）：2a 是 desktop，2b 是 job 的記憶體上限和 sad tab 的「記憶體不夠」，2c 是 V8 的 OOM（三個平台）。(1) window station 和 desktop 放在 `sunaba` 裡，一個 process 一份（第一次照 policy 啟動時建，handle 不關，到 Browser 的 process 結束），不由 Browser 擁有、傳給每個 `Policy`：`Policy` 是每個 renderer 各一個的，Chromium 的 broker 也是建一次、留在全域。(2) Browser 存的 renderer 的結束從 `ExitStatus` 改成多帶「碰過記憶體上限」（Chromium 的 `ChildProcessTerminationInfo` 和 `TERMINATION_STATUS_OOM`），不從結束碼猜：同一個原因有三種結束碼。(3) V8 的 OOM 的結束碼是一個 `u8` 的常數，三個平台一樣，放在 `bindings`；不照 Chromium 在 Windows 用例外碼 `0xE0000008`（給它的 crash reporter 的，machopo 沒有；Linux、macOS 的結束碼只有 8 位元）。(4) OOM 時立刻結束（Windows 的 `TerminateProcess`，Linux、macOS 的 `_exit`），不跑 atexit 和其他的清理：V8 的狀態已經壞了；thread 上的 renderer（`--single-process`）碰到時整個 machopo 結束，Chromium 的單一 process 模式一樣。
 
    做 2a 時另外定的（2026-11-27，照建議做、事後告知）：允許 win32k 的 process（`Policy::allow_win32k`，只有 `sunaba` 的測試用）留在 starter 的 desktop 上：另一個 desktop 的 DACL 不給 AppContainer，它在上面一載入 `user32` 就起不來（探測時的 `0xC0000142`），放上去等於這個選項沒有用。`sunaba` 在 starter 裡呼叫 `user32`，所以連結 `sunaba`、又在 policy 底下啟動的程式要延後載入 `user32`：`sunaba_probe` 和 machopo 的執行檔一樣用 `/DELAYLOAD`（`sunaba` 的 `build.rs`）。
+
+10. **V8 的 OOM 只設 isolate 的 handler（O1）**（2026-11-27，使用者決定）：`bindings` 在每個 isolate 上設 `set_oom_error_handler`（renderer 和 worker 的 isolate 都經過 `V8PerIsolateData::new`）：往 stderr 寫一行（heap 的上限或 process 的記憶體、V8 給的位置），不配置記憶體，再用 `ipc::platform::terminate_current_process_immediately` 以結束碼 6（`OUT_OF_MEMORY_EXIT`）結束，`ipc` 已經有兩個平台的實作，`bindings` 不用多一處 `unsafe` 的結束；sad tab 照這個結束碼說記憶體不夠。不選 O2（照 Chromium 再設 process 層的 `V8::SetFatalMemoryErrorCallback`：`v8` crate 沒有綁它，要改 rusty_v8 的 C++、重編 V8、換共用的 artifact）。O1 沒涵蓋的是 V8 沒有 isolate 的 thread（背景編譯、GC 的 worker）上的 OOM，照 V8 原本的做法印出 stack、abort：Windows 上那多半是碰到 job 的上限，分頁照第 8 條已經說記憶體不夠，只是 stderr 是 V8 的；Linux、macOS 沒有上限，背景 thread 的配置很少失敗（Linux 上多半是 OOM killer 的 `SIGKILL`，兩種做法都分不出來）。對照 Chromium：gin 在 `InitializePlatform` 之後就設 process 層的那一個，每個 isolate 的 `CreateParams` 也帶同一個（`gin/v8_initializer.cc`、`gin/isolate_holder.cc`）；Blink 的 `ReportV8OOMError`（`v8_oom.cc`）記一行 log 再 `OOM_CRASH`。
 
 ## 待決定
 

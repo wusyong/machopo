@@ -42,6 +42,7 @@ pub mod devtools;
 mod gc_platform;
 mod isolate_state;
 mod module_record;
+mod oom;
 mod platform;
 mod platform_tasks;
 mod promise_resolvers;
@@ -66,6 +67,7 @@ pub use module_record::{
     Compiled, Evaluation, ModuleRecords, Request, ResolveSpecifier, begin_dynamic_import,
     finish_dynamic_import, reject_dynamic_import,
 };
+pub use oom::OUT_OF_MEMORY_EXIT;
 pub use platform::{initialize, initialize_with_flags, platform, v8_version};
 pub use platform_tasks::PlatformTaskWaker;
 
