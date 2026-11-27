@@ -80,7 +80,7 @@ impl Browser {
         Self::start_headless_or_not(true, false, args, &[], Stdio::null())
     }
 
-    fn start_in(args: &[&str], env: &[(&str, &std::ffi::OsStr)], stderr: Stdio) -> Self {
+    pub(crate) fn start_in(args: &[&str], env: &[(&str, &std::ffi::OsStr)], stderr: Stdio) -> Self {
         Self::start_headless_or_not(true, true, args, env, stderr)
     }
 
@@ -3296,7 +3296,7 @@ fn alive(pid: u64) -> bool {
 }
 
 /// The ids of machopo's renderer processes (`SystemInfo.getProcessInfo`).
-fn renderer_pids(browser: &mut Browser) -> Vec<u64> {
+pub(crate) fn renderer_pids(browser: &mut Browser) -> Vec<u64> {
     let info = browser
         .call(None, "SystemInfo.getProcessInfo", json!({}))
         .unwrap();

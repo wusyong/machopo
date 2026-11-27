@@ -1,6 +1,9 @@
 // Logs every getenv/secure_getenv a process makes (name, found or not) to
 // $ENVPROBE_DIR/<kind>.<pid>, kind being "renderer" or "browser". The file
-// is opened at load time, before a sandbox closes the file system.
+// is opened at load time, before a sandbox closes the file system. Built
+// with -DENVPROBE_DEFAULT_DIR='"..."', that directory is used where the
+// variable isn't set: a renderer whose environment is limited doesn't
+// have it.
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <fcntl.h>
@@ -17,6 +20,9 @@ __attribute__((constructor)) static void init(void) {
   real_getenv = dlsym(RTLD_NEXT, "getenv");
   real_secure_getenv = dlsym(RTLD_NEXT, "secure_getenv");
   const char *dir = real_getenv("ENVPROBE_DIR");
+#ifdef ENVPROBE_DEFAULT_DIR
+  if (!dir) dir = ENVPROBE_DEFAULT_DIR;
+#endif
   if (!dir) return;
   char cmd[4096] = {0};
   int c = open("/proc/self/cmdline", O_RDONLY);

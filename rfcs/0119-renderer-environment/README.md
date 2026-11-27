@@ -1,7 +1,7 @@
 # RFC 0119：renderer process 的環境變數只給它要的
 
 - 開始日期：2026-11-27
-- 狀態：👍 已接受：2026-11-27（設計的五件定了，已決定的事項第 1 到 5 條）
+- 狀態：🚧 已排程：2026-11-27（第 1 段做完：Linux；第 2、3 段：macOS、Windows，在那兩台上做；進度在 `progress.md`）
 - 細節：`details.md`
 
 ## 摘要
@@ -61,11 +61,11 @@ renderer process 現在繼承 Browser 的整份環境變數，使用者放在環
 | --- | --- | --- |
 | machopo 自己的 | `MACHOPO_` 開頭的全部 | 開發用的開關（`MACHOPO_V8_FLAGS`、`MACHOPO_TRACE`、`MACHOPO_GC_OPTIONS`……）；新的開關不用記得加進清單。通道用的（`MACHOPO_IPC_FD`、`MACHOPO_IPC_CHANNEL`）由 `ipc` 在清空之後加 |
 | Rust 和 mimalloc | `RUST_LOG`、`RUST_BACKTRACE`、`RUST_LIB_BACKTRACE`、`RUST_MIN_STACK`、`NO_COLOR`；`MIMALLOC_` 開頭的 | log、panic 的 backtrace、thread 的 stack；mimalloc 自己讀它的選項（`MIMALLOC_PURGE_DELAY` 在 `--help` 裡） |
-| 語系和時區 | `LANG`、`LC_ALL`、`LC_` 開頭的、`TZ` | ICU 用它們決定 `Intl` 的預設語系和時區（量到 renderer 讀 `LANG`、`LC_ALL`、`LC_MESSAGES`、`TZ`）；拿掉的話 `Intl` 的預設語系安靜地變成 POSIX 的（預期是 `en-US-u-va-posix`，第 1 段驗），使用者設的 `TZ` 不作用、改用 `/etc/localtime` |
+| 語系和時區 | `LANG`、`LC_ALL`、`LC_` 開頭的、`TZ`、`ICU_DATA`、`ICU_TIMEZONE_FILES_DIR` | ICU 用它們決定 `Intl` 的預設語系和時區（量到 renderer 讀 `LANG`、`LC_ALL`、`LC_MESSAGES`、`TZ`）；拿掉的話 `Intl` 的預設語系安靜地變成 `und`、日期的格式跟著變（量的：`LANG`、`LC_ALL` 是空的時），使用者設的 `TZ` 不作用、改用 `/etc/localtime`。ICU 的資料位置（`ICU_DATA`、`ICU_TIMEZONE_FILES_DIR`）也在：量到 renderer 讀它們，平常沒有值 |
 | 動態連結器 | Linux：`LD_PRELOAD`、`LD_LIBRARY_PATH` | 不是秘密；拿掉的話包著 machopo 跑的工具（profiler、量測）進不了 renderer。machopo 自己不靠它們（`env -i` 的 renderer 照樣啟動） |
 | 平台的系統 | Windows：`SystemRoot`、`SystemDrive`、`Path`、`TEMP`、`TMP`、`LOCALAPPDATA`（Chromium 的清單）；macOS：在那一段量 | 系統的 DLL、暫存的位置、AppContainer 的資料夾 |
 
-沒放的（例）：`HOME`、`USER`、`PATH`（Linux、macOS）、`DISPLAY`、`WAYLAND_DISPLAY`、`XDG_*`、`DBUS_SESSION_BUS_ADDRESS`、`SSH_AUTH_SOCK`、`XAUTHORITY`、終端機的、別的程式的 token。renderer 不再用 fontconfig 之後，原本它要的 `HOME`、`XDG_*`、`FONTCONFIG_*` 也不用了。
+沒放的（例）：`HOME`、`USER`、`PATH`（Linux、macOS）、`DISPLAY`、`WAYLAND_DISPLAY`、`XDG_*`、`DBUS_SESSION_BUS_ADDRESS`、`SSH_AUTH_SOCK`、`XAUTHORITY`、終端機的、別的程式的 token。renderer 不再用 fontconfig 之後，原本它要的 `HOME`、`XDG_*`、`FONTCONFIG_*` 也不用了。量到 renderer 讀、但不給的：`SIMDUTF_FORCE_IMPLEMENTATION`、`OPENSSL_ia32cap`（強制走哪一條 CPU 的路的除錯開關，結果相同），和 glibc 的 `GLIBC_TUNABLES`、`MALLOC_*`（調整 glibc 的配置器；用到時再加）。
 
 語系和時區照環境傳下去，還是改成 Browser 決定、照訊息給（Chromium 的語系是 Browser 給的 `--lang`，照記憶、沒有對原始碼；時區沒查）：
 
@@ -102,7 +102,7 @@ renderer process 現在繼承 Browser 的整份環境變數，使用者放在環
 ### 分階段
 
 0. 草稿和 Linux 的量測（這一版；`details.md`）。
-1. **Linux**：清單和清空的機制（不分平台的部分在這一段做出來）；renderer process 切過去；測試。
+1. **Linux**（做完，2026-11-27）：清單和清空的機制（不分平台的部分在這一段做出來）；renderer process 切過去；測試。
 2. **macOS**：量 renderer 讀了什麼（`getenv` 的 interpose：`DYLD_INSERT_LIBRARIES`，SIP 擋不擋自己 build 的執行檔要確認）、macOS 的那幾個；切過去。
 3. **Windows**：`sunaba::windows::Command` 照清空的命令建；Chromium 的清單；量 renderer 讀了什麼（API Monitor 或 `GetEnvironmentVariableW` 的 hook）；切過去。
 

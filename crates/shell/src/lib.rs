@@ -118,6 +118,7 @@ pub fn renderer_launcher(process_per_tab: bool, test_fonts: bool) -> browser::Re
         let mut command = std::process::Command::new(executable);
         command.arg(RENDERER_PROCESS_SWITCH);
         renderer_sandbox::ChildSwitches::for_renderer(test_fonts).append_to(&mut command);
+        renderer_sandbox::limit_environment(&mut command);
         // Its input is nothing, as a Chromium child's (`LaunchProcess`); its
         // output and errors are the browser's, as a Chromium child's are.
         // The pipe isn't among them: the browser took its ends

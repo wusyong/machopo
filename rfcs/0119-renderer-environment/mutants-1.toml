@@ -1,0 +1,64 @@
+# Stage 1's mutants (Linux: a renderer process is started with only the listed part of the browser's environment): `python3 scripts/test.py mutate rfcs/0119-renderer-environment/mutants-1.toml`, on Linux.
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "--test", "it", "--", "renderer_sandbox::"]
+timeout = 900
+
+[[mutant]]
+name = "the environment isn't cleared"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''    command.env_clear();
+    command.envs(renderer_environment(std::env::vars_os()));'''
+to = '''    command.envs(renderer_environment(std::env::vars_os()));'''
+
+[[mutant]]
+name = "Linux's renderers aren't limited"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''pub const LIMITS_ENVIRONMENT: bool = cfg!(target_os = "linux");'''
+to = '''pub const LIMITS_ENVIRONMENT: bool = cfg!(target_os = "macos");'''
+
+[[mutant]]
+name = "the launcher doesn't limit the renderer's environment"
+file = "crates/shell/src/lib.rs"
+from = '''        renderer_sandbox::limit_environment(&mut command);'''
+to = ''''''
+
+[[mutant]]
+name = "a prefix is matched as a whole name"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''            .any(|prefix| name.starts_with(prefix))'''
+to = '''            .any(|prefix| name == *prefix)'''
+
+[[mutant]]
+name = "the locale isn't given"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''    "LANG",
+    "TZ",'''
+to = '''    "TZ",'''
+
+[[mutant]]
+name = "the time zone isn't given"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''    "LANG",
+    "TZ",'''
+to = '''    "LANG",'''
+
+[[mutant]]
+name = "machopo's switches aren't given"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''const RENDERER_PREFIXES: &[&str] = &["MACHOPO_", "MIMALLOC_", "LC_"];'''
+to = '''const RENDERER_PREFIXES: &[&str] = &["MIMALLOC_", "LC_"];'''
+
+[[mutant]]
+name = "the locale's categories aren't given"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''const RENDERER_PREFIXES: &[&str] = &["MACHOPO_", "MIMALLOC_", "LC_"];'''
+to = '''const RENDERER_PREFIXES: &[&str] = &["MACHOPO_", "MIMALLOC_"];'''
+
+[[mutant]]
+name = "a name that isn't Unicode is given"
+file = "crates/shell/src/renderer_sandbox.rs"
+from = '''    let Some(name) = name.to_str() else {
+        return false;
+    };'''
+to = '''    let Some(name) = name.to_str() else {
+        return true;
+    };'''

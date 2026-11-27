@@ -87,6 +87,78 @@ pub fn sandbox() -> Option<ipc::platform::Sandbox> {
 /// Whether this build puts a renderer process in a sandbox at all.
 pub const SUPPORTED: bool = cfg!(any(target_os = "linux", target_os = "macos", windows));
 
+/// Whether a renderer process is started with only the variables of the
+/// browser's environment that [`passes_to_renderer`] lets through, in a
+/// sandbox or out of one. Where it isn't (until a platform's list is
+/// measured there), it inherits the browser's whole environment.
+pub const LIMITS_ENVIRONMENT: bool = cfg!(target_os = "linux");
+
+/// The variables a renderer process is given by name: none is a secret,
+/// each changes how the renderer runs.
+const RENDERER_VARIABLES: &[&str] = &[
+    // The log's filter and colours, a panic's backtrace, a thread's stack.
+    "RUST_LOG",
+    "NO_COLOR",
+    "RUST_BACKTRACE",
+    "RUST_LIB_BACKTRACE",
+    "RUST_MIN_STACK",
+    // ICU's (V8's): the default locale and time zone `Intl` has, and where
+    // its data is when it isn't built in.
+    "LANG",
+    "TZ",
+    "ICU_DATA",
+    "ICU_TIMEZONE_FILES_DIR",
+    // The dynamic linker's: a tool run around the whole browser (a
+    // profiler that preloads itself) reaches its renderers too. machopo
+    // itself needs neither.
+    #[cfg(target_os = "linux")]
+    "LD_PRELOAD",
+    #[cfg(target_os = "linux")]
+    "LD_LIBRARY_PATH",
+];
+
+/// The variables a renderer process is given by what their names start
+/// with: machopo's own switches (a new one reaches the renderer without
+/// being listed), mimalloc's options (it reads them itself), and the
+/// locale's categories.
+const RENDERER_PREFIXES: &[&str] = &["MACHOPO_", "MIMALLOC_", "LC_"];
+
+/// Whether the variable `name` of the browser's environment is given to
+/// a renderer process. A name that isn't Unicode isn't any of them.
+pub fn passes_to_renderer(name: &std::ffi::OsStr) -> bool {
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    RENDERER_VARIABLES.contains(&name)
+        || RENDERER_PREFIXES
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+}
+
+/// What of `environment` a renderer process is given.
+pub fn renderer_environment(
+    environment: impl IntoIterator<Item = (OsString, OsString)>,
+) -> Vec<(OsString, OsString)> {
+    environment
+        .into_iter()
+        .filter(|(name, _)| passes_to_renderer(name))
+        .collect()
+}
+
+/// Starts `command` (a renderer process's) with only what of this
+/// process's environment a renderer is given, where it is limited: what
+/// a renderer is to know is told it on its command line and its channel,
+/// and the rest of a user's environment (tokens, keys, sockets' paths)
+/// would be in its memory, which no sandbox keeps it from. What is set on
+/// `command` after this (the channel's variable) goes too.
+pub fn limit_environment(command: &mut Command) {
+    if !LIMITS_ENVIRONMENT {
+        return;
+    }
+    command.env_clear();
+    command.envs(renderer_environment(std::env::vars_os()));
+}
+
 /// What a renderer process is told on its command line, after
 /// `--type=renderer`: only what it has to know before it enters its
 /// sandbox, which is before it has a channel to be told anything on.
@@ -688,6 +760,75 @@ mod tests {
             }
         );
         assert_eq!(ChildSwitches::for_renderer(false), ChildSwitches::default());
+    }
+
+    #[test]
+    fn a_renderer_is_given_the_variables_listed_and_no_other() {
+        for listed in [
+            "RUST_LOG",
+            "RUST_BACKTRACE",
+            "RUST_MIN_STACK",
+            "NO_COLOR",
+            "LANG",
+            "TZ",
+            "ICU_DATA",
+            // By what they start with.
+            "MACHOPO_V8_FLAGS",
+            "MACHOPO_SOMETHING_NEW",
+            "MIMALLOC_PURGE_DELAY",
+            "LC_ALL",
+            "LC_TIME",
+        ] {
+            assert!(passes_to_renderer(listed.as_ref()), "{listed}");
+        }
+        for other in [
+            "HOME",
+            "PATH",
+            "USER",
+            "SSH_AUTH_SOCK",
+            "DBUS_SESSION_BUS_ADDRESS",
+            "XAUTHORITY",
+            "SOME_API_TOKEN",
+            // Not by a part of their name.
+            "RUST_LOG_STYLE",
+            "XMACHOPO_V8_FLAGS",
+            "MACHOPO",
+            "LANGUAGE",
+            "rust_log",
+            "",
+        ] {
+            assert!(!passes_to_renderer(other.as_ref()), "{other}");
+        }
+        assert_eq!(
+            passes_to_renderer("LD_PRELOAD".as_ref()),
+            cfg!(target_os = "linux")
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let not_unicode = std::ffi::OsStr::from_bytes(b"MACHOPO_\xff");
+            assert!(!passes_to_renderer(not_unicode));
+        }
+    }
+
+    #[test]
+    fn a_renderers_environment_is_the_listed_part_of_the_browsers() {
+        let pair = |name: &str, value: &str| (OsString::from(name), OsString::from(value));
+        let browsers = [
+            pair("HOME", "/home/someone"),
+            pair("LANG", "ja_JP.UTF-8"),
+            pair("SOME_API_TOKEN", "secret"),
+            pair("MACHOPO_V8_FLAGS", "--trace-gc"),
+            pair("TZ", "Asia/Tokyo"),
+        ];
+        assert_eq!(
+            renderer_environment(browsers),
+            [
+                pair("LANG", "ja_JP.UTF-8"),
+                pair("MACHOPO_V8_FLAGS", "--trace-gc"),
+                pair("TZ", "Asia/Tokyo"),
+            ]
+        );
     }
 
     #[test]

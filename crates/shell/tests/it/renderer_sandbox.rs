@@ -8,7 +8,7 @@ use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
 use std::process::Command;
 
-use crate::automation_pipe::{Browser, script};
+use crate::automation_pipe::{Browser, renderer_pids, script};
 use crate::renderer_process::{MACHOPO, RunningRenderer};
 
 /// `name`'s number in every thread's `/proc/<pid>/task/<tid>/status`.
@@ -72,7 +72,8 @@ fn a_sandboxed_renderer_shows_a_page_as_one_outside_does() {
         let session = browser.attach();
         browser.navigate(&session, page);
         let read = "return [[...document.querySelectorAll('span')].map(s => s.offsetWidth), \
-            Intl.DateTimeFormat().resolvedOptions().timeZone, new Date(0).getTimezoneOffset()]";
+            Intl.DateTimeFormat().resolvedOptions().timeZone, new Date(0).getTimezoneOffset(), \
+            Intl.DateTimeFormat().resolvedOptions().locale, new Intl.NumberFormat().format(1234.5)]";
         script(&mut browser, &session, read, serde_json::json!([])).unwrap()
     };
     let on_a_thread = seen(&["--single-process"]);
@@ -376,4 +377,80 @@ fn a_renderers_calls_are_allowed_for_the_arguments_it_uses() {
     ));
     assert_eq!(syscall(libc::SYS_prlimit64, &[0, stack, 1, 0]), SIGSYS);
     assert_eq!(syscall(libc::SYS_prlimit64, &[1, stack, 0, 0]), SIGSYS);
+}
+
+/// A process's environment as it was started (`/proc/<pid>/environ`).
+fn environment_of(pid: u64) -> Vec<(String, String)> {
+    let environ = std::fs::read(format!("/proc/{pid}/environ")).expect("its environment");
+    environ
+        .split(|&byte| byte == 0)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            let entry = String::from_utf8_lossy(entry);
+            let (name, value) = entry.split_once('=').unwrap_or((&entry, ""));
+            (name.to_owned(), value.to_owned())
+        })
+        .collect()
+}
+
+/// A renderer process, in its sandbox or out of it, is given only the
+/// listed part of its browser's environment: not a secret the browser
+/// has, but machopo's switches, the locale and the time zone, which the
+/// page then sees as a renderer on the browser's thread does.
+#[test]
+fn a_renderer_process_has_only_the_listed_part_of_its_browsers_environment() {
+    let secret = std::ffi::OsStr::new("not for a renderer");
+    let switch = std::ffi::OsStr::new("given");
+    let lang = std::ffi::OsStr::new("ja_JP.UTF-8");
+    let tz = std::ffi::OsStr::new("Asia/Tokyo");
+    let env = [
+        ("SOME_API_TOKEN", secret),
+        ("MACHOPO_TEST_SWITCH", switch),
+        ("LANG", lang),
+        ("TZ", tz),
+    ];
+    let read = "return [Intl.DateTimeFormat().resolvedOptions().locale, \
+        Intl.DateTimeFormat().resolvedOptions().timeZone, new Date(0).getTimezoneOffset()]";
+    let seen = |args: &[&str]| {
+        let mut browser = Browser::start_in(args, &env, std::process::Stdio::null());
+        let session = browser.attach();
+        browser.navigate(&session, "about:blank");
+        let seen = script(&mut browser, &session, read, serde_json::json!([])).unwrap();
+        (seen, renderer_pids(&mut browser))
+    };
+    let (on_a_thread, none) = seen(&["--single-process"]);
+    assert!(none.is_empty(), "{none:?}");
+    assert_eq!(
+        on_a_thread,
+        serde_json::json!(["ja-JP", "Asia/Tokyo", -540])
+    );
+    for args in [
+        &["--process-per-tab"][..],
+        &["--process-per-tab", "--no-sandbox"],
+    ] {
+        let (seen, pids) = seen(args);
+        assert_eq!(seen, on_a_thread, "{args:?}");
+        assert_eq!(pids.len(), 1, "{args:?}: {pids:?}");
+        let environment = environment_of(pids[0]);
+        let names: Vec<&str> = environment.iter().map(|(name, _)| name.as_str()).collect();
+        for (name, _) in &environment {
+            assert!(
+                shell::renderer_sandbox::passes_to_renderer(name.as_ref()),
+                "{args:?}: {name} isn't listed: {names:?}"
+            );
+        }
+        let value = |name: &str| {
+            environment
+                .iter()
+                .find(|(found, _)| found == name)
+                .map(|(_, value)| value.as_str())
+        };
+        assert_eq!(value("SOME_API_TOKEN"), None, "{args:?}");
+        assert_eq!(value("HOME"), None, "{args:?}");
+        assert_eq!(value("MACHOPO_TEST_SWITCH"), Some("given"), "{args:?}");
+        assert_eq!(value("LANG"), Some("ja_JP.UTF-8"), "{args:?}");
+        assert_eq!(value("TZ"), Some("Asia/Tokyo"), "{args:?}");
+        // Set after the environment is limited: the channel's.
+        assert!(value("MACHOPO_IPC_FD").is_some(), "{args:?}: {names:?}");
+    }
 }
