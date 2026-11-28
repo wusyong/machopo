@@ -10,6 +10,7 @@
 //! response without the header is allowed, as Chrome's for a page that
 //! sends none.
 
+use protocol::network::BlockedByResponseReason;
 use url::{Host, Origin, Url};
 
 /// The header's name (lowercase, as the response's headers are kept).
@@ -77,16 +78,17 @@ fn schemelessly_same_site(initiator: &Origin, url: &Url) -> bool {
     domain(initiator_name) == domain(name)
 }
 
-/// Whether the response at `url` with `headers` is blocked for a
-/// `no-cors` request from `initiator` (serialized; `null` for an opaque
-/// origin) of a document of `embedder` policy (Fetch's "cross-origin
-/// resource policy internal check", not for a navigation).
+/// Why the response at `url` with `headers` is blocked for a `no-cors`
+/// request from `initiator` (serialized; `null` for an opaque origin) of a
+/// document of `embedder` policy, if it is (Fetch's "cross-origin resource
+/// policy internal check", not for a navigation; Chromium's
+/// `CrossOriginResourcePolicy::IsBlocked`, which gives the reason).
 pub(crate) fn blocks(
     initiator: &str,
     url: &Url,
     headers: &[(String, String)],
     embedder: EmbedderPolicy,
-) -> bool {
+) -> Option<BlockedByResponseReason> {
     let policy = match (policy(headers), embedder) {
         (policy, EmbedderPolicy::UnsafeNone) => policy,
     };
@@ -95,15 +97,16 @@ pub(crate) fn blocks(
         _ => Origin::new_opaque(),
     };
     match policy {
-        None | Some(Policy::CrossOrigin) => false,
-        Some(_) if initiator == url.origin() => false,
-        Some(Policy::SameOrigin) => true,
+        None | Some(Policy::CrossOrigin) => None,
+        Some(_) if initiator == url.origin() => None,
+        Some(Policy::SameOrigin) => Some(BlockedByResponseReason::CorpNotSameOrigin),
         Some(Policy::SameSite) => {
             let secure = |scheme: &str| scheme == "https";
             let initiator_secure =
                 matches!(&initiator, Origin::Tuple(scheme, ..) if secure(scheme));
-            !(schemelessly_same_site(&initiator, url)
-                && (initiator_secure || !secure(url.scheme())))
+            (!(schemelessly_same_site(&initiator, url)
+                && (initiator_secure || !secure(url.scheme()))))
+            .then_some(BlockedByResponseReason::CorpNotSameSite)
         }
     }
 }
@@ -117,12 +120,19 @@ mod tests {
             .map(|value| (HEADER.to_owned(), value.to_owned()))
             .into_iter()
             .collect();
-        blocks(
+        let reason = blocks(
             initiator,
             &Url::parse(url).unwrap(),
             &headers,
             EmbedderPolicy::UnsafeNone,
-        )
+        );
+        // Each policy's own.
+        let expected = match value.map(str::trim) {
+            Some("same-site") => BlockedByResponseReason::CorpNotSameSite,
+            _ => BlockedByResponseReason::CorpNotSameOrigin,
+        };
+        assert!(reason.is_none_or(|reason| reason == expected), "{reason:?}");
+        reason.is_some()
     }
 
     /// No header, `cross-origin`, and any value that isn't one of the
@@ -216,11 +226,14 @@ mod tests {
             (HEADER.to_owned(), "same-origin".to_owned()),
             (HEADER.to_owned(), "same-origin".to_owned()),
         ];
-        assert!(!blocks(
-            "https://b.example",
-            &Url::parse("https://a.example/").unwrap(),
-            &headers,
-            EmbedderPolicy::UnsafeNone
-        ));
+        assert_eq!(
+            blocks(
+                "https://b.example",
+                &Url::parse("https://a.example/").unwrap(),
+                &headers,
+                EmbedderPolicy::UnsafeNone
+            ),
+            None
+        );
     }
 }

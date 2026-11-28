@@ -117,6 +117,7 @@
 | Windows 上 `--allow-third-party-modules` 真的讓別人的 DLL 載得進 renderer，沒有它時 renderer 因此起不來、分頁提示這個開關 | 要一個會把沒有 Microsoft 簽章的 DLL 注入 renderer 的軟體；開發機和 CI 沒有。測試守得住的是開關改了 renderer 的 mitigation 的狀態，和三個結束碼對到說明 | 審查 | 有那樣的機器時手動確認一次 |
 | Windows 上從 console 啟動時 renderer 的 stdout、stderr（兩個都是 console 時留給 console；只有一個接到檔案時另一個沒有） | 測試的 stdout、stderr 都是 pipe | 手動確認過一次（2026-11-26：真的 console 裡，sandbox 裡的 process 起得來、結束碼 0） | 之後有開 console 的測試工具時補 |
 | Browser 擋下子 frame 的回應時，DevTools 的 `loadingFailed` 只送一次（`shell` 的 `automation_session` 收到 `NavigationRefused` 時不把導覽從 `responded` 拿掉） | 要網路那邊在 Browser 停下載入之前已經送出結束（body 在 head 之後出錯）、那個事件排在擋下之後才處理，測試排不出這個先後 | 審查：停下的載入不再回呼（`net` 的 `LoadHandle::cancel`），所以之後最多一個排著的結束，留著的那一筆讓它照回應之後的錯誤不送；`devtools_network` 的 `a_refused_frame_fails_after_its_response` 守著一般的情況只有一次 | 導覽的事件能在測試裡排先後時（例如能卡住 UI thread 的 test hook）寫成測試 |
+| Browser 把 `frame-ancestors` 的違規送給不准的那個祖先的 frame（`browser` 的 `WebContents::check_ancestors` 把祖先的編號換成 frame 的 token），frame 已經不在時 renderer 丟掉 Browser 的訊息（`renderer` 的 `add_message_to_console`、`report_csp_violation`），沒有 commit 時不送 `X-Frame-Options` 的訊息 | 一個分頁的 frame 都在同一個 renderer、同一份 `Log`，違規的訊息沒有 `url`：送到哪個 frame 在 DevTools 看起來一樣；frame 不在、commit 不成要 renderer 和 Browser 的先後排不出的時序，或 renderer 的鎖拒絕 | 審查；違規是哪一層祖先的由 `net` 的 `frame_ancestors` 的單元測試守著（`frame_ancestors_violations_are_the_ancestors_not_allowed`），訊息的原文、`source`、`url` 由 `shell` 的 `devtools_log::what_the_browser_refuses_is_logged_as_chrome_logs_it` 守著 | 有 OOPIF、跨網站的 frame 是自己的 target 時，寫成測試：訊息在那個 frame 的 target 的 `Log` 裡 |
 
 ## 只做過手動確認
 

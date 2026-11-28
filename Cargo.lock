@@ -2885,6 +2885,7 @@ dependencies = [
  "flate2",
  "hyper",
  "ipc",
+ "percent-encoding",
  "protocol",
  "reqwest",
  "rustls",

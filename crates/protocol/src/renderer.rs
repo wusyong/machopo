@@ -177,6 +177,27 @@ pub fn storage_quota_for(key: &str, value: &str) -> usize {
         .saturating_mul(2)
 }
 
+/// A console message's level (`blink::mojom::ConsoleMessageLevel`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ConsoleMessageLevel {
+    Verbose,
+    Info,
+    Warning,
+    Error,
+}
+
+impl ConsoleMessageLevel {
+    /// DevTools' `Log.LogEntry`'s `level`.
+    pub fn devtools_name(self) -> &'static str {
+        match self {
+            Self::Verbose => "verbose",
+            Self::Info => "info",
+            Self::Warning => "warning",
+            Self::Error => "error",
+        }
+    }
+}
+
 /// Which storage an area is of: `localStorage`'s (the profile's) or
 /// `sessionStorage`'s (the tab's).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -284,6 +305,28 @@ pub enum RendererMsg {
     /// the renderer asked for as `id` (`BeginNavigation`'s) won't commit,
     /// the browser didn't take it. The frame no longer waits for it.
     NavigationDropped { frame: crate::FrameToken, id: u64 },
+    /// A message the browser has for `frame`'s console (Chromium's
+    /// `RenderFrameHost::AddMessageToConsole`, which
+    /// `blink::mojom::LocalFrame::AddMessageToConsole` carries): written
+    /// into the page's log as of the frame's document (its URL, line 0;
+    /// `source` `other`). The browser sends one about a navigation after
+    /// its commit, so it is of the document that committed. One for a
+    /// frame the renderer no longer has is dropped.
+    AddMessageToConsole {
+        frame: crate::FrameToken,
+        level: ConsoleMessageLevel,
+        text: String,
+    },
+    /// A CSP violation the browser found, told to `frame`, the one whose
+    /// context it is of (Chromium's `ReportCSPViolation` on the frame's
+    /// outside-context reporter, as the browser tells a
+    /// `frame-ancestors` violation to the ancestor that isn't allowed):
+    /// its message, in the page's log (`source` `security`, `error`, of no
+    /// URL). One for a frame the renderer no longer has is dropped.
+    ReportCspViolation {
+        frame: crate::FrameToken,
+        message: String,
+    },
     /// `CommitSameDocumentNavigation` of a history traversal: back or
     /// forward to an entry of the document `frame` shows, `document` (the
     /// `navigation_id` that committed it). The renderer changes the URL,

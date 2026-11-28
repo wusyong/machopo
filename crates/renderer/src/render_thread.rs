@@ -1298,6 +1298,12 @@ impl RenderThread {
                 status,
             } => self.document_load_completed(frame, navigation_id, status),
             RendererMsg::NavigationDropped { frame, id } => self.navigation_dropped(frame, id),
+            RendererMsg::AddMessageToConsole { frame, level, text } => {
+                self.add_message_to_console(frame, level, text);
+            }
+            RendererMsg::ReportCspViolation { frame, message } => {
+                self.report_csp_violation(frame, message);
+            }
             RendererMsg::CommitSameDocumentNavigation {
                 frame,
                 navigation_id,
@@ -1922,14 +1928,17 @@ impl RenderThread {
     /// What the page's log says of request `request_id`'s `result`, if
     /// anything: a response of 400 or more (Blink's
     /// `FrameConsole::ReportResourceResponseReceived`), a load that failed
-    /// (`FrameConsole::DidFailLoading`; a cancelled one isn't answered).
+    /// (`FrameConsole::DidFailLoading`; a cancelled one isn't answered),
+    /// but for one ORB blocked (as Blink leaves those to the network
+    /// service's DevTools issues, which machopo hasn't).
     fn log_load(&self, request_id: u64, url: Option<&str>, result: &LoadResult) {
         let text = match result {
             Ok(response) if response.head.status >= 400 => {
                 status_message(response.head.status, &response.head.status_text)
             }
             Ok(_) => return,
-            Err(error) => format!("Failed to load resource: net::{}", error.code.name()),
+            Err(error) if error.code == protocol::network::NetErrorCode::BlockedByOrb => return,
+            Err(error) => format!("Failed to load resource: {}", error.error_text()),
         };
         let url = match result {
             Ok(response) => response.head.url.clone(),

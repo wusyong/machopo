@@ -1,0 +1,384 @@
+# Stage 2's mutants (the consoles' messages, the blocked reasons): `python3 scripts/test.py mutate rfcs/0129-frame-ancestors/mutants-2.toml`.
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "--", "csp", "frame_ancestors", "corp"]
+timeout = 1200
+
+[[mutant]]
+name = "a scheme source is written without its colon"
+file = "crates/net/src/csp.rs"
+from = '''            return write!(f, "{}:", self.scheme);'''
+to = '''            return write!(f, "{}", self.scheme);'''
+
+[[mutant]]
+name = "a host source's scheme is written without ://"
+file = "crates/net/src/csp.rs"
+from = '''            write!(f, "{}://", self.scheme)?;'''
+to = '''            write!(f, "{}", self.scheme)?;'''
+
+[[mutant]]
+name = "a wildcard host is written without its dot"
+file = "crates/net/src/csp.rs"
+from = '''            (true, false) => write!(f, "*.{}", self.host)?,'''
+to = '''            (true, false) => write!(f, "*{}", self.host)?,'''
+
+[[mutant]]
+name = "https://* is written without its star"
+file = "crates/net/src/csp.rs"
+from = '''            (true, true) => f.write_str("*")?,'''
+to = '''            (true, true) => {}'''
+
+[[mutant]]
+name = ":* isn't written"
+file = "crates/net/src/csp.rs"
+from = '''            Some(Port::Any) => f.write_str(":*")?,'''
+to = '''            Some(Port::Any) => {}'''
+
+[[mutant]]
+name = "a port isn't written"
+file = "crates/net/src/csp.rs"
+from = '''            Some(Port::Number(port)) => write!(f, ":{port}")?,'''
+to = '''            Some(Port::Number(_)) => {}'''
+
+[[mutant]]
+name = "a path isn't written"
+file = "crates/net/src/csp.rs"
+from = '''        f.write_str(&self.path)
+    }'''
+to = '''        Ok(())
+    }'''
+
+[[mutant]]
+name = "a list with * is written whole"
+file = "crates/net/src/csp.rs"
+from = '''        if self.allow_star {
+            return f.write_str("*");
+        }'''
+to = '''        if self.allow_star && false {
+            return f.write_str("*");
+        }'''
+
+[[mutant]]
+name = "an empty list is written empty"
+file = "crates/net/src/csp.rs"
+from = '''            return f.write_str("'none'");'''
+to = '''            return f.write_str("");'''
+
+[[mutant]]
+name = "'self' isn't written"
+file = "crates/net/src/csp.rs"
+from = '''            .then(|| "'self'".to_owned())'''
+to = '''            .then(String::new)'''
+
+[[mutant]]
+name = "a host of * alone isn't one"
+file = "crates/net/src/csp.rs"
+from = '''    if text == "*" {
+        return Some((String::new(), true));
+    }'''
+to = '''    if text == "*" {
+        return None;
+    }'''
+
+[[mutant]]
+name = "an empty label is taken"
+file = "crates/net/src/csp.rs"
+from = '''            (!label.is_empty() || at == last)'''
+to = '''            (true || at == last)'''
+
+[[mutant]]
+name = "a trailing dot isn't taken"
+file = "crates/net/src/csp.rs"
+from = '''            (!label.is_empty() || at == last)'''
+to = '''            (!label.is_empty() || at == usize::MAX)'''
+
+[[mutant]]
+name = "a label takes any character"
+file = "crates/net/src/csp.rs"
+from = '''                && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')'''
+to = '''                && label.chars().all(|c| c != '\0')'''
+
+[[mutant]]
+name = "a host keeps its case"
+file = "crates/net/src/csp.rs"
+from = '''    valid.then(|| (host.to_ascii_lowercase(), wildcard))'''
+to = '''    valid.then(|| (host.to_owned(), wildcard))'''
+
+[[mutant]]
+name = "a port with a sign is taken"
+file = "crates/net/src/csp.rs"
+from = '''    if text.is_empty() || !text.chars().all(|c| c.is_ascii_digit()) {'''
+to = '''    if text.is_empty() {'''
+
+[[mutant]]
+name = "a port past an int is taken"
+file = "crates/net/src/csp.rs"
+from = '''    text.parse::<i32>()
+        .ok()
+        .and_then(|port| u32::try_from(port).ok())
+        .map(Port::Number)'''
+to = '''    text.parse::<u32>().ok().map(Port::Number)'''
+
+[[mutant]]
+name = "a scheme source is a host source"
+file = "crates/net/src/csp.rs"
+from = '''            source.scheme_only = true;'''
+to = '''            source.scheme_only = false;'''
+
+[[mutant]]
+name = "a scheme with one slash is taken"
+file = "crates/net/src/csp.rs"
+from = '''            rest = after.strip_prefix('/')?;'''
+to = '''            rest = after.strip_prefix('/').unwrap_or(after);'''
+
+[[mutant]]
+name = "a path keeps its query"
+file = "crates/net/src/csp.rs"
+from = '''        let path = rest.get(..rest.find(['?', '#']).unwrap_or(rest.len()))?;'''
+to = '''        let path = rest;'''
+
+[[mutant]]
+name = "a path isn't decoded"
+file = "crates/net/src/csp.rs"
+from = '''        source.path = percent_encoding::percent_decode_str(path)
+            .decode_utf8_lossy()
+            .into_owned();'''
+to = '''        source.path = path.to_owned();'''
+
+[[mutant]]
+name = "values that differ don't conflict"
+file = "crates/net/src/frame_ancestors.rs"
+from = '''                return FrameOptions::Conflict;'''
+to = '''                options = this;'''
+
+[[mutant]]
+name = "a value that isn't a keyword allows all"
+file = "crates/net/src/frame_ancestors.rs"
+from = '''                _ => FrameOptions::Invalid,'''
+to = '''                _ => FrameOptions::AllowAll,'''
+
+[[mutant]]
+name = "a response's origin is written without its slash"
+file = "crates/net/src/frame_ancestors.rs"
+from = '''        Origin::Tuple(..) => format!("{}/", origin.ascii_serialization()),'''
+to = '''        Origin::Tuple(..) => origin.ascii_serialization(),'''
+
+[[mutant]]
+name = "a report-only violation is written as blocked"
+file = "crates/net/src/frame_ancestors.rs"
+from = '''        Disposition::Report => (
+            "report-only ",
+            "The violation has been logged, but no further action has been taken.",
+        ),'''
+to = '''        Disposition::Report => ("", "The request has been blocked."),'''
+
+[[mutant]]
+name = "a * that didn't match has no note"
+file = "crates/net/src/frame_ancestors.rs"
+from = '''    if list.allows_star() {'''
+to = '''    if list.allows_star() && false {'''
+
+[[mutant]]
+name = "a violation's message has no newline"
+file = "crates/net/src/frame_ancestors.rs"
+from = '''    text.push('\n');
+    text'''
+to = '''    text'''
+
+[[mutant]]
+name = "a report-only violation refuses"
+file = "crates/net/src/frame_ancestors.rs"
+from = '''                blocked |= *disposition == Disposition::Enforce;'''
+to = '''                blocked = true;'''
+
+[[mutant]]
+name = "every violation is the parent's"
+file = "crates/net/src/frame_ancestors.rs"
+from = '''                    .push((at, violation(&origin, *disposition, list)));'''
+to = '''                    .push((0, violation(&origin, *disposition, list)));'''
+
+[[mutant]]
+name = "the ancestors above one refused are checked too"
+file = "crates/net/src/frame_ancestors.rs"
+from = '''            checked.refused = Some(Refused::FrameAncestors);
+            return checked;'''
+to = '''            checked.refused = Some(Refused::FrameAncestors);'''
+
+[[mutant]]
+name = "an enforced frame-ancestors leaves X-Frame-Options its say"
+file = "crates/net/src/frame_ancestors.rs"
+from = '''        .any(|(disposition, _)| *disposition == Disposition::Enforce)
+    {
+        return checked;
+    }'''
+to = '''        .any(|(disposition, _)| *disposition == Disposition::Enforce)
+        && false
+    {
+        return checked;
+    }'''
+
+[[mutant]]
+name = "headers' values are joined with a comma alone"
+file = "crates/net/src/frame_ancestors.rs"
+from = '''            .join(", ")'''
+to = '''            .join(",")'''
+
+[[mutant]]
+name = "a value in a message isn't trimmed"
+file = "crates/net/src/frame_ancestors.rs"
+from = '''            .map(|(_, value)| value.trim_matches([' ', '\t']))
+            .collect::<Vec<_>>()'''
+to = '''            .map(|(_, value)| value.as_str())
+            .collect::<Vec<_>>()'''
+
+[[mutant]]
+name = "an invalid one has no message"
+file = "crates/net/src/frame_ancestors.rs"
+from = '''        FrameOptions::Invalid => checked.deferred.push(format!('''
+to = '''        FrameOptions::Invalid => drop(format!('''
+
+[[mutant]]
+name = "a CORP same-site is a same-origin"
+file = "crates/net/src/corp.rs"
+from = '''            .then_some(BlockedByResponseReason::CorpNotSameSite)'''
+to = '''            .then_some(BlockedByResponseReason::CorpNotSameOrigin)'''
+
+[[mutant]]
+name = "the violations aren't told"
+file = "crates/browser/src/web_contents.rs"
+from = '''                self.process.send(RendererMsg::ReportCspViolation {'''
+to = '''                drop(RendererMsg::ReportCspViolation {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_log::what_the_browser_refuses"]
+
+[[mutant]]
+name = "a refused frame's messages aren't told"
+file = "crates/browser/src/web_contents.rs"
+from = '''            if self
+                .commit(frame, navigation_id, commit_params, document, None)
+                .is_some()
+            {
+                self.add_messages_to_console(frame, deferred);
+            }'''
+to = '''            if self
+                .commit(frame, navigation_id, commit_params, document, None)
+                .is_some()
+            {
+                drop(deferred);
+            }'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_log::what_the_browser_refuses"]
+
+[[mutant]]
+name = "a refused frame's messages are told before it commits"
+file = "crates/browser/src/web_contents.rs"
+from = '''            if self
+                .commit(frame, navigation_id, commit_params, document, None)
+                .is_some()
+            {
+                self.add_messages_to_console(frame, deferred);
+            }'''
+to = '''            self.add_messages_to_console(frame, deferred);
+            if self
+                .commit(frame, navigation_id, commit_params, document, None)
+                .is_some()
+            {
+            }'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_log::what_the_browser_refuses"]
+
+[[mutant]]
+name = "a document's messages aren't told"
+file = "crates/browser/src/web_contents.rs"
+from = '''        if completer.is_some() {
+            self.add_messages_to_console(frame, deferred);
+        }'''
+to = '''        if completer.is_some() {
+            drop(deferred);
+        }'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_log::what_the_browser_refuses"]
+
+[[mutant]]
+name = "the browser's message is of no document"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            text,
+            url.to_string(),
+        ));'''
+to = '''            text,
+            String::new() + &url.to_string()[..0],
+        ));'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_log::what_the_browser_refuses"]
+
+[[mutant]]
+name = "the browser's message has no line"
+file = "crates/renderer/src/render_thread/log_agent.rs"
+from = '''            line_number: Some(0),'''
+to = '''            line_number: None,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_log::what_the_browser_refuses"]
+
+[[mutant]]
+name = "a line isn't told"
+file = "crates/renderer/src/render_thread/log_agent.rs"
+from = '''        if let Some(line) = self.line_number {
+            entry["lineNumber"] = line.into();
+        }'''
+to = '''        let _ = self.line_number;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_log::what_the_browser_refuses"]
+
+[[mutant]]
+name = "a CSP violation's source is other"
+file = "crates/renderer/src/render_thread/log_agent.rs"
+from = '''            source: "security",'''
+to = '''            source: "other",'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_log::what_the_browser_refuses"]
+
+[[mutant]]
+name = "what ORB blocks is logged"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            Err(error) if error.code == protocol::network::NetErrorCode::BlockedByOrb => return,'''
+to = '''            Err(error) if error.code == protocol::network::NetErrorCode::BlockedByOrb && false => return,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_log::orb_is_not_logged"]
+
+[[mutant]]
+name = "an error's text has no reason"
+file = "crates/protocol/src/network.rs"
+from = '''            Some(reason) => format!("net::{}.{}", self.code.name(), reason.suffix()),'''
+to = '''            Some(_) => format!("net::{}", self.code.name()),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_log::orb_is_not_logged"]
+
+[[mutant]]
+name = "a same-site's reason is written as same-origin's"
+file = "crates/protocol/src/network.rs"
+from = '''            Self::CorpNotSameSite => "NotSameSite",'''
+to = '''            Self::CorpNotSameSite => "NotSameOrigin",'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_network::a_blocked_response"]
+
+[[mutant]]
+name = "a same-site's blocked reason is same-origin's"
+file = "crates/protocol/src/network.rs"
+from = '''            Self::CorpNotSameSite => "corp-not-same-site",'''
+to = '''            Self::CorpNotSameSite => "corp-not-same-origin",'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_network::a_blocked_response"]
+
+[[mutant]]
+name = "a response blocked without a reason has no blocked reason"
+file = "crates/protocol/src/network.rs"
+from = '''                .map_or("other", BlockedByResponseReason::devtools_name)'''
+to = '''                .map_or("", BlockedByResponseReason::devtools_name)'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_network::a_refused_frame"]
+
+[[mutant]]
+name = "every error has a blocked reason"
+file = "crates/protocol/src/network.rs"
+from = '''        (self.code == NetErrorCode::BlockedByResponse).then(|| {'''
+to = '''        true.then(|| {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_network::a_blocked_response"]
+
+[[mutant]]
+name = "a subresource's failure has no blocked reason"
+file = "crates/renderer/src/render_thread/network_agent.rs"
+from = '''            params["blockedReason"] = reason.into();'''
+to = '''            let _ = reason;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_network::a_blocked_response"]
+
+[[mutant]]
+name = "a navigation's failure has no blocked reason"
+file = "crates/shell/src/automation_session.rs"
+from = '''        params["blockedReason"] = reason.into();'''
+to = '''        let _ = reason;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_network::a_refused_frame"]

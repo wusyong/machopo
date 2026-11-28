@@ -35,6 +35,8 @@ pub(crate) struct LogEntry {
     pub(crate) url: String,
     /// The request it is about, as DevTools' `Network` calls it.
     pub(crate) network_request_id: Option<String>,
+    /// The line of `url` it is about, if it says one.
+    pub(crate) line_number: Option<u32>,
     /// Milliseconds since the Unix epoch (`Runtime.Timestamp`).
     pub(crate) timestamp: f64,
 }
@@ -48,6 +50,36 @@ impl LogEntry {
             text,
             url,
             network_request_id: Some(network_request_id),
+            line_number: None,
+            timestamp: wall_time() * 1000.0,
+        }
+    }
+
+    /// A message the browser has for a frame of document `url`, at
+    /// `level` (`source` `other`), now: Blink's `LocalFrame::
+    /// AddMessageToConsole`, which names the document and line 0.
+    pub(crate) fn of_browser(level: &'static str, text: String, url: String) -> Self {
+        Self {
+            source: "other",
+            level,
+            text,
+            url,
+            network_request_id: None,
+            line_number: Some(0),
+            timestamp: wall_time() * 1000.0,
+        }
+    }
+
+    /// A CSP violation the browser found (`source` `security`, `error`, of
+    /// no URL), now.
+    pub(crate) fn csp_violation(text: String) -> Self {
+        Self {
+            source: "security",
+            level: "error",
+            text,
+            url: String::new(),
+            network_request_id: None,
+            line_number: None,
             timestamp: wall_time() * 1000.0,
         }
     }
@@ -61,6 +93,7 @@ impl LogEntry {
             text,
             url: String::new(),
             network_request_id: None,
+            line_number: None,
             timestamp: wall_time() * 1000.0,
         }
     }
@@ -85,6 +118,7 @@ impl LogEntry {
             text: format!("{left}: drawing it failed ({message}). It has happened {count} times."),
             url: url.to_owned(),
             network_request_id: None,
+            line_number: None,
             timestamp: wall_time() * 1000.0,
         }
     }
@@ -101,6 +135,9 @@ impl LogEntry {
         }
         if let Some(id) = &self.network_request_id {
             entry["networkRequestId"] = id.as_str().into();
+        }
+        if let Some(line) = self.line_number {
+            entry["lineNumber"] = line.into();
         }
         entry
     }
@@ -155,10 +192,12 @@ impl LogAgent {
     /// A message of the page's: printed, kept, and told to every session
     /// that turned `Log` on.
     pub(crate) fn add(&self, entry: LogEntry) {
+        // A CSP violation's ends in a newline already.
+        let text = entry.text.trim_end_matches('\n');
         super::print_line(if entry.url.is_empty() {
-            format!("[console] {}\n", entry.text)
+            format!("[console] {text}\n")
         } else {
-            format!("[console] {} ({})\n", entry.text, entry.url)
+            format!("[console] {text} ({})\n", entry.url)
         });
         let json = entry.to_json();
         {
@@ -184,6 +223,7 @@ impl LogAgent {
                 text,
                 url: String::new(),
                 network_request_id: None,
+                line_number: None,
                 timestamp: wall_time() * 1000.0,
             };
             self.tell(session, &entry.to_json());

@@ -509,6 +509,24 @@ fn network_answer(name: &str, params: &Value) -> Option<Result<Value, Error>> {
     })
 }
 
+/// `Network.loadingFailed`'s params for document navigation
+/// `navigation_id`, which failed with `error`: its `blockedReason` too,
+/// if the error has one (as Chrome tells a frame `X-Frame-Options`
+/// refused, `other`).
+fn loading_failed(navigation_id: u64, error: &protocol::network::NetError) -> Value {
+    let mut params = json!({
+        "requestId": navigation_id.to_string(),
+        "timestamp": TimeTicks::now().as_secs_f64(),
+        "type": "Document",
+        "errorText": error.error_text(),
+        "canceled": false,
+    });
+    if let Some(reason) = error.devtools_blocked_reason() {
+        params["blockedReason"] = reason.into();
+    }
+    params
+}
+
 fn no_target() -> Error {
     Error::new(SERVER_ERROR, "No target with given id found")
 }
@@ -1454,17 +1472,11 @@ impl AutomationSession {
                 navigation_id,
                 result: Err(error),
             } if !self.responded.remove(&(tab, *navigation_id)) => {
-                let error_text = format!("net::{}", error.code.name());
+                let error_text = error.error_text();
                 self.to_network(
                     tab,
                     "Network.loadingFailed",
-                    json!({
-                        "requestId": navigation_id.to_string(),
-                        "timestamp": TimeTicks::now().as_secs_f64(),
-                        "type": "Document",
-                        "errorText": error_text,
-                        "canceled": false,
-                    }),
+                    loading_failed(*navigation_id, error),
                 );
                 // Its error page commits, if no response came.
                 if frame.to_string() == main_frame_id {
@@ -1484,13 +1496,7 @@ impl AutomationSession {
                 self.to_network(
                     tab,
                     "Network.loadingFailed",
-                    json!({
-                        "requestId": navigation_id.to_string(),
-                        "timestamp": TimeTicks::now().as_secs_f64(),
-                        "type": "Document",
-                        "errorText": format!("net::{}", error.code.name()),
-                        "canceled": false,
-                    }),
+                    loading_failed(*navigation_id, error),
                 );
             }
             ContentsEvent::NavigationCompleted { navigation_id, .. } => {

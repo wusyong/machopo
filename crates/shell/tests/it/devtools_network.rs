@@ -245,8 +245,9 @@ fn a_document_whose_body_stops_short_fails_once() {
 }
 
 /// A frame the browser refuses its response (`X-Frame-Options: DENY`)
-/// ends in one `loadingFailed`, `net::ERR_BLOCKED_BY_RESPONSE`, after its
-/// `responseReceived`, as Chrome tells it; its error page commits.
+/// ends in one `loadingFailed`, `net::ERR_BLOCKED_BY_RESPONSE` blocked
+/// for `other`, after its `responseReceived`, as Chrome tells it; its
+/// error page commits.
 #[test]
 fn a_refused_frame_fails_after_its_response() {
     let server = server(&[
@@ -280,12 +281,73 @@ fn a_refused_frame_fails_after_its_response() {
     assert_eq!(ends.len(), 1, "{events:#?}");
     assert_eq!(ends[0]["method"], "Network.loadingFailed");
     assert_eq!(
-        ends[0]["params"]["errorText"],
-        json!("net::ERR_BLOCKED_BY_RESPONSE")
+        (
+            &ends[0]["params"]["errorText"],
+            &ends[0]["params"]["blockedReason"]
+        ),
+        (&json!("net::ERR_BLOCKED_BY_RESPONSE"), &json!("other"))
     );
     assert_eq!(
         of(&events, "Network.responseReceived", &id)["response"]["status"],
         json!(200)
+    );
+}
+
+/// A response CORP blocks fails with its reason, in its `errorText` and as
+/// its `blockedReason` (Chrome's `corp-not-same-origin`,
+/// `corp-not-same-site`); one ORB blocks with none, as in Chrome.
+#[test]
+fn a_blocked_response_fails_with_its_reason() {
+    let server = server(&[
+        ("/", Route::ok("text/html", "<!DOCTYPE html>page")),
+        ("/json", Route::ok("application/json", "{\"a\": 1}")),
+        (
+            "/corp",
+            Route::ok("image/png", "png")
+                .with_header("Cross-Origin-Resource-Policy", "same-origin"),
+        ),
+        (
+            "/site",
+            Route::ok("image/png", "png").with_header("Cross-Origin-Resource-Policy", "same-site"),
+        ),
+    ]);
+    let machopo = Machopo::start();
+    let (mut page, _) = page(&machopo);
+    load(&mut page, &server.url("/"));
+    page.call(None, "Network.enable", json!({}));
+    // The page is of an IP address, which no other origin is the same
+    // site as (CORP's `same-site` takes none).
+    let urls: Vec<String> = ["/json", "/corp", "/site"]
+        .iter()
+        .map(|path| server.url_for_host("localhost", path))
+        .collect();
+    evaluate(
+        &mut page,
+        &format!("for (const url of {urls:?}) new Image().src = url; 0"),
+        None,
+    );
+    let events = network_events(&mut page, 3);
+    let failed = |path: &str| {
+        let params = of(&events, "Network.loadingFailed", &id_of(&events, path));
+        (
+            params["errorText"].clone(),
+            params.get("blockedReason").cloned(),
+        )
+    };
+    assert_eq!(failed("/json"), (json!("net::ERR_BLOCKED_BY_ORB"), None));
+    assert_eq!(
+        failed("/corp"),
+        (
+            json!("net::ERR_BLOCKED_BY_RESPONSE.NotSameOrigin"),
+            Some(json!("corp-not-same-origin"))
+        )
+    );
+    assert_eq!(
+        failed("/site"),
+        (
+            json!("net::ERR_BLOCKED_BY_RESPONSE.NotSameSite"),
+            Some(json!("corp-not-same-site"))
+        )
     );
 }
 

@@ -588,11 +588,45 @@ impl NetErrorCode {
     }
 }
 
+/// Why a response was blocked, with `ERR_BLOCKED_BY_RESPONSE` (Chromium's
+/// `network::mojom::BlockedByResponseReason`, the ones machopo has: no
+/// COEP, so none of CORP's defaulted by it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BlockedByResponseReason {
+    /// `Cross-Origin-Resource-Policy: same-origin`.
+    CorpNotSameOrigin,
+    /// `Cross-Origin-Resource-Policy: same-site`.
+    CorpNotSameSite,
+}
+
+impl BlockedByResponseReason {
+    /// What Blink puts after the error's name in its description
+    /// (`ERR_BLOCKED_BY_RESPONSE.NotSameOrigin`).
+    fn suffix(self) -> &'static str {
+        match self {
+            Self::CorpNotSameOrigin => "NotSameOrigin",
+            Self::CorpNotSameSite => "NotSameSite",
+        }
+    }
+
+    /// DevTools' `Network.BlockedReason`.
+    fn devtools_name(self) -> &'static str {
+        match self {
+            Self::CorpNotSameOrigin => "corp-not-same-origin",
+            Self::CorpNotSameSite => "corp-not-same-site",
+        }
+    }
+}
+
 /// A failed load: the code, plus a detail for logs and error pages.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NetError {
     pub code: NetErrorCode,
     pub detail: String,
+    /// Why, for `BlockedByResponse` (Chromium's
+    /// `URLLoaderCompletionStatus::blocked_by_response_reason`): none for
+    /// what the browser blocked of a navigation (`X-Frame-Options`, CSP).
+    pub blocked_by_response: Option<BlockedByResponseReason>,
 }
 
 impl NetError {
@@ -600,7 +634,38 @@ impl NetError {
         Self {
             code,
             detail: detail.into(),
+            blocked_by_response: None,
         }
+    }
+
+    /// `ERR_BLOCKED_BY_RESPONSE`, for `reason`.
+    pub fn blocked_by_response(reason: BlockedByResponseReason, detail: impl Into<String>) -> Self {
+        Self {
+            blocked_by_response: Some(reason),
+            ..Self::new(NetErrorCode::BlockedByResponse, detail)
+        }
+    }
+
+    /// As DevTools and the console name it (Blink's
+    /// `ResourceError::LocalizedDescription`): `net::` and the code's
+    /// name, and the reason it was blocked, if there is one
+    /// (`net::ERR_BLOCKED_BY_RESPONSE.NotSameOrigin`).
+    pub fn error_text(&self) -> String {
+        match self.blocked_by_response {
+            Some(reason) => format!("net::{}.{}", self.code.name(), reason.suffix()),
+            None => format!("net::{}", self.code.name()),
+        }
+    }
+
+    /// DevTools' `Network.loadingFailed`'s `blockedReason`: a blocked
+    /// response's reason, `other` for one without (as Chrome tells a
+    /// frame `X-Frame-Options` refused); none for any other error (ORB's
+    /// included, as in Chrome).
+    pub fn devtools_blocked_reason(&self) -> Option<&'static str> {
+        (self.code == NetErrorCode::BlockedByResponse).then(|| {
+            self.blocked_by_response
+                .map_or("other", BlockedByResponseReason::devtools_name)
+        })
     }
 }
 

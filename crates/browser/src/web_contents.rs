@@ -1745,6 +1745,52 @@ impl WebContents {
         );
     }
 
+    /// Whether child frame `frame`'s response `head` is one its ancestors
+    /// may show (Chromium's `AncestorThrottle::WillProcessResponse`, for the
+    /// final response alone and one that is rendered: not a 204 or 205),
+    /// and the messages for the frame's console once it commits
+    /// (`X-Frame-Options`', deferred as Chromium's
+    /// `AddDeferredConsoleMessage`). `frame-ancestors`' violations are told
+    /// now, each to the ancestor that isn't allowed (through its CSP
+    /// context, as Chromium's).
+    fn check_ancestors(
+        &self,
+        frame: FrameToken,
+        head: &ResponseHead,
+    ) -> (Option<net::frame_ancestors::Refused>, Vec<String>) {
+        if matches!(head.status, 204 | 205) {
+            return (None, Vec::new());
+        }
+        let Ok(url) = url::Url::parse(&head.url) else {
+            return (None, Vec::new());
+        };
+        let ancestors = self.frame_tree.ancestor_origins(frame);
+        let origins: Vec<url::Origin> =
+            ancestors.iter().map(|(_, origin)| origin.clone()).collect();
+        let checked = net::frame_ancestors::check(&url, &head.headers, &origins);
+        for (at, message) in checked.violations {
+            if let Some((ancestor, _)) = ancestors.get(at) {
+                self.process.send(RendererMsg::ReportCspViolation {
+                    frame: *ancestor,
+                    message,
+                });
+            }
+        }
+        (checked.refused, checked.deferred)
+    }
+
+    /// The browser's `messages` for `frame`'s console, errors, after what
+    /// it committed (Chromium's `SendDeferredConsoleMessages`).
+    fn add_messages_to_console(&self, frame: FrameToken, messages: Vec<String>) {
+        for text in messages {
+            self.process.send(RendererMsg::AddMessageToConsole {
+                frame,
+                level: protocol::renderer::ConsoleMessageLevel::Error,
+                text,
+            });
+        }
+    }
+
     /// Navigation `navigation_id` of `frame`, which has its response and
     /// the start of its body, commits: its load, if it hasn't ended, kept
     /// until it does.
@@ -1776,18 +1822,10 @@ impl WebContents {
             done,
             ..
         } = response;
-        // A child frame's response its ancestors aren't allowed to show
-        // (Chromium's `AncestorThrottle::WillProcessResponse`, for the final
-        // response alone and one that is rendered: not a 204 or 205): its
+        // A child frame's response its ancestors aren't allowed to show: its
         // error page commits in its place, the response's body let go.
-        if !matches!(head.status, 204 | 205)
-            && let Ok(url) = url::Url::parse(&head.url)
-            && let Err(refused) = net::frame_ancestors::check(
-                &url,
-                &head.headers,
-                &self.frame_tree.ancestor_origins(frame),
-            )
-        {
+        let (refused, deferred) = self.check_ancestors(frame, &head);
+        if let Some(refused) = refused {
             let error = NetError::new(
                 NetErrorCode::BlockedByResponse,
                 format!("{}: refused to be framed ({refused:?})", head.url),
@@ -1801,7 +1839,12 @@ impl WebContents {
             });
             let document =
                 CommittedDocument::error_page(head.url, crate::loader::error_page(&error));
-            self.commit(frame, navigation_id, commit_params, document, None);
+            if self
+                .commit(frame, navigation_id, commit_params, document, None)
+                .is_some()
+            {
+                self.add_messages_to_console(frame, deferred);
+            }
             return;
         }
         let header = |name: &str| {
@@ -1834,6 +1877,9 @@ impl WebContents {
             error_page: false,
         };
         let completer = self.commit(frame, navigation_id, commit_params, document, None);
+        if completer.is_some() {
+            self.add_messages_to_console(frame, deferred);
+        }
         if let Some(completer) = completer
             && !ended
         {

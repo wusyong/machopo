@@ -214,7 +214,8 @@ http-body-util = "0.1"
 # the same. Without its client (`connect`): machopo only answers there.
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
-# `/json/new?<url>`'s URL, escaped as a query (`url` brings it).
+# `/json/new?<url>`'s URL, escaped as a query (`url` brings it), and a CSP
+# source's path, decoded (`net`).
 percent-encoding = "2"
 # The HTTP cache's `Vary` on disk (`net`), as Chromium keeps it: a SHA-256
 # of the values. In the tree already, through cranelift and wasmtime.

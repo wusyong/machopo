@@ -305,3 +305,116 @@ fn script_warnings_are_logged_without_a_session() {
         );
     }
 }
+
+/// `entry` without its time, which no two runs share.
+fn timeless(mut entry: Value) -> Value {
+    entry.as_object_mut().expect("an entry").remove("timestamp");
+    entry
+}
+
+/// What the browser refuses a frame, and an `X-Frame-Options` it can't
+/// read, is in the page's log as Chrome logs it: `X-Frame-Options`'
+/// messages of the frame's document once it commits (its error page, or
+/// the document an invalid one didn't refuse), line 0; a `frame-ancestors`
+/// violation a `security` message of no URL.
+#[test]
+fn what_the_browser_refuses_is_logged_as_chrome_logs_it() {
+    let html = "<!DOCTYPE html>\
+                <iframe src=/deny></iframe>\
+                <iframe src=/invalid></iframe>\
+                <iframe src=/framed></iframe>";
+    let server = server(&[
+        ("/", Route::ok("text/html", html)),
+        (
+            "/deny",
+            Route::ok("text/html", "deny").with_header("X-Frame-Options", "DENY"),
+        ),
+        (
+            "/invalid",
+            Route::ok("text/html", "invalid").with_header("X-Frame-Options", "bogus"),
+        ),
+        (
+            "/framed",
+            Route::ok("text/html", "framed")
+                .with_header("Content-Security-Policy", "frame-ancestors 'none'"),
+        ),
+    ]);
+    let origin = server.url("/");
+    let machopo = Machopo::start();
+    let (mut page, _) = page(&machopo);
+    page.call(None, "Log.enable", json!({}));
+    load(&mut page, &origin);
+    // The frames load side by side: their messages in any order.
+    let mut logged: Vec<Value> = (0..3).map(|_| timeless(next_entry(&mut page))).collect();
+    logged.sort_by_key(|entry| entry["text"].as_str().map(str::to_owned));
+    assert_eq!(
+        logged,
+        [
+            json!({
+                "source": "security",
+                "level": "error",
+                "text": format!("Framing '{origin}' violates the following Content Security Policy directive: \"frame-ancestors 'none'\". The request has been blocked.\n"),
+            }),
+            json!({
+                "source": "other",
+                "level": "error",
+                "text": format!("Invalid 'X-Frame-Options' header encountered when loading '{origin}': 'bogus' is not a recognized directive. The header will be ignored."),
+                "url": server.url("/invalid"),
+                "lineNumber": 0,
+            }),
+            json!({
+                "source": "other",
+                "level": "error",
+                "text": format!("Refused to display '{origin}' in a frame because it set 'X-Frame-Options' to 'deny'."),
+                "url": "chrome-error://chromewebdata/",
+                "lineNumber": 0,
+            }),
+        ]
+    );
+    // Nothing else.
+    evaluate(&mut page, "0", None);
+    assert_eq!(entries(&mut page), Vec::<Value>::new());
+}
+
+/// What ORB blocks isn't logged, as Blink leaves it to the network
+/// service's DevTools issues; what CORP blocks is, with its reason. The
+/// image CORP blocks is asked for once the one ORB blocks has failed, so
+/// that the first message would be ORB's, were there one.
+#[test]
+fn orb_is_not_logged_and_corp_is_with_its_reason() {
+    let server = server(&[
+        ("/", Route::ok("text/html", "<!DOCTYPE html>page")),
+        ("/json", Route::ok("application/json", "{\"a\": 1}")),
+        (
+            "/corp",
+            Route::ok("image/png", "png")
+                .with_header("Cross-Origin-Resource-Policy", "same-origin"),
+        ),
+    ]);
+    let (json_url, corp_url) = (
+        server.url_for_host("localhost", "/json"),
+        server.url_for_host("localhost", "/corp"),
+    );
+    let machopo = Machopo::start();
+    let (mut page, _) = page(&machopo);
+    page.call(None, "Log.enable", json!({}));
+    load(&mut page, &server.url("/"));
+    evaluate(
+        &mut page,
+        &format!(
+            "const orb = new Image();\
+             orb.onerror = () => {{ new Image().src = {corp_url:?}; }};\
+             orb.src = {json_url:?}; 0"
+        ),
+        None,
+    );
+    let logged = next_entry(&mut page);
+    assert_eq!(
+        (&logged["source"], &logged["text"], &logged["url"]),
+        (
+            &json!("network"),
+            &json!("Failed to load resource: net::ERR_BLOCKED_BY_RESPONSE.NotSameOrigin"),
+            &json!(corp_url)
+        )
+    );
+}

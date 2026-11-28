@@ -26,6 +26,8 @@ flate2.workspace = true
 hyper.workspace = true
 ipc.workspace = true
 data-url.workspace = true
+# A CSP source's path, decoded as Chromium's parser decodes it.
+percent-encoding.workspace = true
 protocol.workspace = true
 reqwest.workspace = true
 # To recognise certificate errors in reqwest's error chain, to read PEM

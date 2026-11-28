@@ -752,6 +752,47 @@ impl RenderThread {
         self.engine.as_mut()?.frame_token(frame)
     }
 
+    /// The frame whose token is `token`, the top-level one or a child, if
+    /// it is there.
+    pub(super) fn frame_of_token(&mut self, token: protocol::FrameToken) -> Option<FrameId> {
+        if self.render_frames.top_token() == Some(token) {
+            self.render_frames.top()
+        } else {
+            self.child_of_token(token)
+        }
+    }
+
+    /// The browser's message for `token`'s console
+    /// (`LocalFrame::AddMessageToConsole`): in the page's log, of the
+    /// frame's document; dropped if the frame isn't there.
+    pub(super) fn add_message_to_console(
+        &mut self,
+        token: protocol::FrameToken,
+        level: protocol::renderer::ConsoleMessageLevel,
+        text: String,
+    ) {
+        let Some(url) = self
+            .frame_of_token(token)
+            .and_then(|frame| self.document_url(frame))
+        else {
+            return;
+        };
+        self.log_agent.add(super::log_agent::LogEntry::of_browser(
+            level.devtools_name(),
+            text,
+            url.to_string(),
+        ));
+    }
+
+    /// A CSP violation the browser found in `token`'s context: its message
+    /// in the page's log; dropped if the frame isn't there.
+    pub(super) fn report_csp_violation(&mut self, token: protocol::FrameToken, message: String) {
+        if self.frame_of_token(token).is_some() {
+            self.log_agent
+                .add(super::log_agent::LogEntry::csp_violation(message));
+        }
+    }
+
     /// The child frame whose token is `token`, if the engine has it.
     pub(super) fn child_of_token(&mut self, token: protocol::FrameToken) -> Option<FrameId> {
         self.engine.as_mut()?.frame_of_token(token)
@@ -924,12 +965,7 @@ impl RenderThread {
         url: &str,
         history: protocol::renderer::HistoryEntryParams,
     ) {
-        let frame = if self.render_frames.top_token() == Some(token) {
-            self.render_frames.top()
-        } else {
-            self.child_of_token(token)
-        };
-        let frame = frame.filter(|frame| {
+        let frame = self.frame_of_token(token).filter(|frame| {
             self.doc(*frame)
                 .is_some_and(|next| next.navigation_id == document)
         });
@@ -1409,11 +1445,7 @@ impl RenderThread {
         token: protocol::FrameToken,
         navigation_id: u64,
     ) -> Option<FrameId> {
-        let frame = if Some(token) == self.render_frames.top_token() {
-            self.render_frames.top()?
-        } else {
-            self.child_of_token(token)?
-        };
+        let frame = self.frame_of_token(token)?;
         self.doc(frame)
             .filter(|next| next.navigation_id == navigation_id && next.body.is_some())
             .map(|next| next.frame)
@@ -1517,7 +1549,7 @@ impl RenderThread {
             && error.code != protocol::network::NetErrorCode::Aborted
         {
             self.log_agent.add(super::log_agent::LogEntry::network(
-                format!("Failed to load resource: net::{}", error.code.name()),
+                format!("Failed to load resource: {}", error.error_text()),
                 finished.url,
                 navigation_id.to_string(),
             ));

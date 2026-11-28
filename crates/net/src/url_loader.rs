@@ -295,15 +295,15 @@ pub(crate) async fn load(
         // browser's own have none), each hop's response.
         if request.mode == protocol::network::RequestMode::NoCors
             && let Some(initiator) = request.initiator.as_deref()
-            && crate::corp::blocks(
+            && let Some(reason) = crate::corp::blocks(
                 initiator,
                 &url,
                 &raw.headers,
                 crate::corp::EmbedderPolicy::default(),
             )
         {
-            return Err(NetError::new(
-                NetErrorCode::BlockedByResponse,
+            return Err(NetError::blocked_by_response(
+                reason,
                 format!("{url}: its Cross-Origin-Resource-Policy isn't for {initiator}"),
             ));
         }

@@ -394,21 +394,18 @@ impl NetworkAgent {
 
     /// `known` failed with `error`, or was cancelled.
     fn failed(&self, known: &Request, error: Option<&NetError>) {
-        let error_text = error.map_or_else(
-            || "net::ERR_ABORTED".to_owned(),
-            |error| format!("net::{}", error.code.name()),
-        );
-        self.tell(
-            &known.sessions,
-            "Network.loadingFailed",
-            &json!({
-                "requestId": known.id,
-                "timestamp": TimeTicks::now().as_secs_f64(),
-                "type": known.kind,
-                "errorText": error_text,
-                "canceled": error.is_none(),
-            }),
-        );
+        let error_text = error.map_or_else(|| "net::ERR_ABORTED".to_owned(), NetError::error_text);
+        let mut params = json!({
+            "requestId": known.id,
+            "timestamp": TimeTicks::now().as_secs_f64(),
+            "type": known.kind,
+            "errorText": error_text,
+            "canceled": error.is_none(),
+        });
+        if let Some(reason) = error.and_then(NetError::devtools_blocked_reason) {
+            params["blockedReason"] = reason.into();
+        }
+        self.tell(&known.sessions, "Network.loadingFailed", &params);
     }
 
     /// `length` more bytes came of the body of the document navigation
@@ -462,7 +459,7 @@ impl NetworkAgent {
                     "requestId": id,
                     "timestamp": end,
                     "type": "Document",
-                    "errorText": format!("net::{}", error.code.name()),
+                    "errorText": error.error_text(),
                     "canceled": error.code == protocol::network::NetErrorCode::Aborted,
                 }),
             ),

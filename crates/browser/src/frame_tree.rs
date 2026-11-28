@@ -250,7 +250,8 @@ impl FrameTree {
     /// frame): the site it is first party to, by the frames it is in as
     /// they are now, the top-level frame's site, and its own.
     pub(crate) fn loader_params(&self, frame: FrameToken, origin: &url::Origin) -> LoaderParams {
-        let ancestors: Vec<&url::Origin> = self.ancestors(frame).collect();
+        let ancestors: Vec<&url::Origin> =
+            self.ancestors(frame).map(|(_, origin)| origin).collect();
         let top = ancestors.last().copied().unwrap_or(origin);
         let site_for_cookies = SiteForCookies::of_frame(origin, ancestors.iter().copied());
         let top_frame_site = Site::of(top);
@@ -314,19 +315,22 @@ impl FrameTree {
         params
     }
 
-    /// The origins of `frame`'s ancestors' documents, its parent's first, the
-    /// top-level frame's last (none for the main frame): those a response
-    /// in it would be shown in, as they last committed (Chromium's
-    /// `GetLastCommittedOrigin` of each).
-    pub(crate) fn ancestor_origins(&self, frame: FrameToken) -> Vec<url::Origin> {
-        self.ancestors(frame).cloned().collect()
+    /// `frame`'s ancestors and the origins of their documents, its
+    /// parent's first, the top-level frame's last (none for the main
+    /// frame): those a response in it would be shown in, as they last
+    /// committed (Chromium's `GetLastCommittedOrigin` of each).
+    pub(crate) fn ancestor_origins(&self, frame: FrameToken) -> Vec<(FrameToken, url::Origin)> {
+        self.ancestors(frame)
+            .map(|(at, origin)| (at, origin.clone()))
+            .collect()
     }
 
-    /// The origins of `frame`'s ancestors' documents, its parent's first.
-    fn ancestors(&self, frame: FrameToken) -> impl Iterator<Item = &url::Origin> {
+    /// `frame`'s ancestors and their documents' origins, its parent's
+    /// first.
+    fn ancestors(&self, frame: FrameToken) -> impl Iterator<Item = (FrameToken, &url::Origin)> {
         let parent = self.nodes.get(&frame).and_then(|node| node.parent);
         std::iter::successors(parent, |at| self.nodes.get(at)?.parent)
-            .filter_map(|at| self.nodes.get(&at).map(|node| &node.origin))
+            .filter_map(|at| self.nodes.get(&at).map(|node| (at, &node.origin)))
     }
 
     /// `frame`'s document's origin and whether it may open local files,
