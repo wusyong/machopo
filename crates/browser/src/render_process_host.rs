@@ -216,6 +216,10 @@ pub struct RenderProcessHost {
     site_info: Option<SiteInfo>,
 }
 
+/// A loader refused: its top-level site isn't the renderer's lock's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ProcessLockMismatch;
+
 /// The params of a loader the browser gives a document as it commits
 /// (Chromium's `URLLoaderFactoryParams`): the origin its requests'
 /// initiator is to be (`request_initiator_origin_lock`), and what its
@@ -566,16 +570,33 @@ impl RenderProcessHost {
         self.site_info.as_ref()
     }
 
-    /// A document of `site` commits in it: the first gives it its site,
-    /// and any after is of that site (the tab commits another's in another
-    /// renderer).
-    pub(crate) fn set_site_info(&mut self, site: SiteInfo) {
-        self.site_info = Some(site);
+    /// A main frame's document of `site` commits in it: the first locks it
+    /// to that site, for as long as it is (Chromium's `ProcessLock`, set
+    /// before the process loads anything, and never changed); any after is
+    /// of that site. `Err` with its lock for one of another, which the tab
+    /// would have committed in another renderer (`site_info::admits`).
+    pub(crate) fn set_site_info(&mut self, site: SiteInfo) -> Result<(), Option<SiteInfo>> {
+        match &self.site_info {
+            Some(lock) if *lock != site => Err(self.site_info.clone()),
+            _ => {
+                self.site_info = Some(site);
+                Ok(())
+            }
+        }
     }
 
     /// A loader for a document about to commit, with `params`: its number,
-    /// which the commit carries (`CommitNavigation`'s `loader`).
-    pub(crate) fn register_loader(&self, params: LoaderParams) -> u64 {
+    /// which the commit carries (`CommitNavigation`'s `loader`). `Err` if
+    /// its top-level site isn't one the renderer's lock lets it have
+    /// (`site_info::allows`): every request and cookie through it would be
+    /// that site's.
+    pub(crate) fn register_loader(&self, params: LoaderParams) -> Result<u64, ProcessLockMismatch> {
+        if !crate::site_info::allows(
+            self.site_info.as_ref(),
+            params.trusted.top_frame_site.as_deref(),
+        ) {
+            return Err(ProcessLockMismatch);
+        }
         let mut loaders = self.loaders.lock().unwrap_or_else(PoisonError::into_inner);
         #[expect(
             clippy::arithmetic_side_effects,
@@ -586,7 +607,7 @@ impl RenderProcessHost {
         }
         let id = loaders.last;
         loaders.params.insert(id, params);
-        id
+        Ok(id)
     }
 
     /// Its number, which its blob URLs are registered under.
@@ -1053,12 +1074,6 @@ impl CommittedDocument {
 }
 
 impl CommitParams {
-    /// What kind of load it is (a reload stays in the renderer it is
-    /// in, whatever its URL's site).
-    pub(crate) fn navigation_type(&self) -> FrameLoadType {
-        self.navigation_type
-    }
-
     /// Whether the page before may stay shown till it is drawn, as the
     /// browser decided as it commits.
     pub(crate) fn set_paint_holding(&mut self, paint_holding: bool) {
@@ -1876,6 +1891,95 @@ mod tests {
             Ok(Ok(RendererHostMsg::RendererGone))
         ));
         assert!(forwarded.try_recv().is_err());
+    }
+
+    /// A host of no renderer (`RendererLauncher::Detached`), for what it
+    /// decides itself.
+    fn detached() -> RenderProcessHost {
+        let flags = RendererFlags {
+            test_fonts: true,
+            web_tests: false,
+            wait_for_all_pipeline_stages_before_draw: false,
+            automation: false,
+            user_agent: crate::user_agent(),
+            system_colors: gfx::SystemColors::DEFAULT,
+            num_raster_threads: None,
+            tile_memory_limit: None,
+            caret_blink_interval: None,
+            parser_budget: Default::default(),
+            new_content_rendering_delay: renderer::NEW_CONTENT_RENDERING_DELAY,
+        };
+        let partition = crate::StoragePartition::new(
+            &crate::Profile::in_memory(),
+            crate::NetworkContextParams::default(),
+        )
+        .unwrap();
+        let (viz, _) = crossbeam_channel::unbounded();
+        RenderProcessHost::launch(
+            TabId(1),
+            FrameSinkId {
+                client_id: 1,
+                sink_id: 1,
+            },
+            flags,
+            &RendererLauncher::Detached,
+            viz,
+            None,
+            partition,
+            Box::new(|_, _, _| {}),
+        )
+        .unwrap()
+    }
+
+    fn loader_of(top: Option<&str>) -> LoaderParams {
+        LoaderParams {
+            origin: url::Origin::new_opaque(),
+            trusted: TrustedParams {
+                top_frame_site: top.map(str::to_owned),
+                ..TrustedParams::default()
+            },
+        }
+    }
+
+    /// The first document of a site a renderer commits locks it to that
+    /// site, for good: another's is refused, the same one's taken. Before
+    /// it is locked it is given loaders of an opaque top-level site alone;
+    /// after, of its site's too, of another's never.
+    #[test]
+    fn a_renderer_is_locked_to_its_first_site() {
+        let site = |url: &str| {
+            crate::site_info::SiteInfo::of_document(
+                url,
+                &crate::frame_tree::CommittedOrigin {
+                    origin: url::Url::parse(url).unwrap().origin(),
+                    local: false,
+                },
+            )
+            .unwrap()
+        };
+        let mut host = detached();
+        assert_eq!(
+            host.register_loader(loader_of(Some("https://a.example"))),
+            Err(ProcessLockMismatch)
+        );
+        assert!(host.register_loader(loader_of(None)).is_ok());
+        assert_eq!(host.set_site_info(site("https://a.example/")), Ok(()));
+        assert_eq!(host.set_site_info(site("https://www.a.example/")), Ok(()));
+        assert_eq!(
+            host.set_site_info(site("https://b.example/")),
+            Err(Some(site("https://a.example/")))
+        );
+        assert_eq!(host.site_info(), Some(&site("https://a.example/")));
+        assert!(
+            host.register_loader(loader_of(Some("https://a.example")))
+                .is_ok()
+        );
+        assert!(host.register_loader(loader_of(None)).is_ok());
+        assert_eq!(
+            host.register_loader(loader_of(Some("https://b.example"))),
+            Err(ProcessLockMismatch)
+        );
+        host.kill();
     }
 
     /// A blob URL is registered through a loader the renderer was given,

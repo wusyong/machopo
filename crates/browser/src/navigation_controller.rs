@@ -14,6 +14,7 @@ use protocol::FrameToken;
 use protocol::renderer::HistoryEntryParams;
 
 use crate::frame_tree::FrameTree;
+use crate::site_info::SiteInfo;
 
 /// `content::FrameNavigationEntry`: a frame's history item, which the
 /// entries it is in share.
@@ -33,6 +34,11 @@ pub struct FrameNavigationEntry {
     pub state: Option<protocol::BigBuffer>,
     /// Its scroll restoration mode is `"manual"`.
     pub manual_scroll_restoration: bool,
+    /// A main frame's: the site of the document it committed, which a
+    /// reload or a traversal to it goes by while its URL is the same
+    /// (Chromium's `NavigationEntry` keeps its `SiteInstance`): a `data:`
+    /// URL's opaque site is the same one again.
+    pub(crate) site_info: Option<SiteInfo>,
 }
 
 /// A frame's place in an entry: its item, and its child frames' places.
@@ -246,10 +252,13 @@ pub(crate) enum HistoryLoad {
 }
 
 /// A navigation started and not committed yet: whose, and what it does.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct Pending {
     frame: FrameToken,
     kind: NavigationType,
+    /// A main frame's, as it commits: the site of its document, for the
+    /// item it commits to (`committing_site`).
+    site: Option<SiteInfo>,
 }
 
 #[derive(Debug, Default)]
@@ -355,7 +364,14 @@ impl NavigationController {
         frame: FrameToken,
         kind: NavigationType,
     ) {
-        self.pending.insert(navigation_id, Pending { frame, kind });
+        self.pending.insert(
+            navigation_id,
+            Pending {
+                frame,
+                kind,
+                site: None,
+            },
+        );
     }
 
     /// What the renderer is told of the item `frame`'s navigation of
@@ -406,6 +422,37 @@ impl NavigationController {
         Some((count(index), count(length)))
     }
 
+    /// The site the main frame's navigation `navigation_id` commits its
+    /// document at `url` as, if it goes to an entry there is (a reload, a
+    /// traversal) whose item's document was at `url` too: the site that one
+    /// committed as. None for a new entry, another URL (a redirect), or an
+    /// item of no site.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "`current` is one of `entries`' indices (`push` sets it to the one it pushes and \
+                  keeps those up to it), and a history navigation's is checked first"
+    )]
+    pub(crate) fn kept_site(&self, navigation_id: u64, url: &str) -> Option<SiteInfo> {
+        let index = match (self.pending.get(&navigation_id)?.kind, self.current) {
+            (NavigationType::HistoryIndex(index), _) if index < self.entries.len() => index,
+            (NavigationType::Reload, Some(current)) => current,
+            _ => return None,
+        };
+        let item = self.items.get(&self.entries[index].root.item)?;
+        if item.url != url {
+            return None;
+        }
+        item.site_info.clone()
+    }
+
+    /// The main frame's navigation `navigation_id` commits its document as
+    /// of `site`: the item it commits to keeps it.
+    pub(crate) fn committing_site(&mut self, navigation_id: u64, site: Option<SiteInfo>) {
+        if let Some(pending) = self.pending.get_mut(&navigation_id) {
+            pending.site = site;
+        }
+    }
+
     /// Where the entry a navigation of `kind` commits to will be, and how
     /// many entries there will be then, as things are now.
     fn place(&self, kind: NavigationType) -> (usize, usize) {
@@ -452,14 +499,22 @@ impl NavigationController {
         url: String,
     ) {
         let main_frame = frame == tree.root();
-        let kind = self
+        let (kind, site) = self
             .pending
             .remove(&navigation_id)
-            .map(|pending| pending.kind);
+            .map_or((None, None), |pending| (Some(pending.kind), pending.site));
         self.pending
             .retain(|id, pending| *id > navigation_id || !(main_frame || pending.frame == frame));
         if main_frame {
             self.did_commit_main_frame(kind, navigation_id, url);
+            if let Some(item) = self
+                .current
+                .and_then(|current| self.entries.get(current))
+                .map(|entry| entry.root.item)
+                .and_then(|item| self.items.get_mut(&item))
+            {
+                item.site_info = site;
+            }
         } else {
             self.did_commit_child_frame(tree, frame, kind, navigation_id, url);
         }
@@ -667,6 +722,8 @@ impl NavigationController {
                 document: before.document,
                 state,
                 manual_scroll_restoration: before.manual_scroll_restoration,
+                // The same document's.
+                site_info: before.site_info,
             },
         );
         if !root.place_keeping(&path, item, true) {
@@ -736,6 +793,7 @@ impl NavigationController {
             Some(Pending {
                 frame,
                 kind: NavigationType::HistoryIndex(index),
+                ..
             }) if index < self.entries.len() => Some((frame, index)),
             _ => None,
         }

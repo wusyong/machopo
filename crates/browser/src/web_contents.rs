@@ -1072,7 +1072,8 @@ impl WebContents {
     }
 
     /// `RenderFrameHostManager::CommitPending` for a navigation to another
-    /// site (`site_info::swaps`): a new renderer takes the tab's place, as
+    /// site (one the renderer's lock doesn't take, `site_info::admits`): a
+    /// new renderer takes the tab's place, as
     /// after a crash, and the one it replaces unloads its document and
     /// ends, given a while, without the tab waiting for it
     /// (`RenderProcessHost::unload`). Its document's frames go with it.
@@ -1453,11 +1454,15 @@ impl WebContents {
     /// document decides, its child frames going with the one before; a
     /// child frame's local one lets it too.
     ///
-    /// The main frame's new document commits in another renderer if it is
-    /// of another site than the documents the tab's holds (`site_info`),
-    /// an error page by the URL it failed to go to. None if that renderer
-    /// couldn't be launched: the navigation goes, and the tab stays at its
-    /// page.
+    /// The main frame's new document commits in another renderer if the
+    /// tab's renderer's lock doesn't take its site (`SiteInfo::of_document`,
+    /// or what its history entry committed as: `site_info::admits`); its
+    /// site locks a renderer that has none yet. A document, a loader the
+    /// lock doesn't let the renderer have (`site_info::allows`) is the
+    /// browser's mistake: the renderer ends as for a bad message, and
+    /// nothing commits (Chromium's `CanCommitOriginAndUrl`). None if that
+    /// renderer couldn't be launched, or the lock refused: the navigation
+    /// goes, and the tab stays at its page.
     fn commit(
         &mut self,
         frame: FrameToken,
@@ -1473,12 +1478,13 @@ impl WebContents {
         if frame == self.frame_tree.root() {
             let paint_holding = self.allows_paint_holding(&origin.origin);
             params.set_paint_holding(paint_holding);
-            let site = SiteInfo::of_url(&document.url);
-            if site_info::swaps(
-                self.process.site_info(),
-                params.navigation_type(),
-                site.as_ref(),
-            ) {
+            // A reload's or a traversal's to the same URL, the site its
+            // entry's document committed as (a `data:` URL's opaque one).
+            let site = self
+                .controller
+                .kept_site(navigation_id, &document.url)
+                .or_else(|| SiteInfo::of_document(&document.url, &origin));
+            if !site_info::admits(self.process.site_info(), site.as_ref()) {
                 if !self.swap_renderer(paint_holding) {
                     self.controller.did_stop(navigation_id);
                     return None;
@@ -1487,8 +1493,13 @@ impl WebContents {
                 // one before's.
                 params.forget_begin_id();
             }
-            if let Some(site) = site {
-                self.process.set_site_info(site);
+            self.controller.committing_site(navigation_id, site.clone());
+            if let Some(site) = site
+                && let Err(lock) = self.process.set_site_info(site.clone())
+            {
+                self.lock_mismatch(&lock, &format!("{site:?}"), "a document");
+                self.controller.did_stop(navigation_id);
+                return None;
             }
         }
         let local = origin.local;
@@ -1500,12 +1511,18 @@ impl WebContents {
         // Its loader's params, by the frames it is in now (before its own
         // commit, which the renderer hasn't reported).
         let loader_params = self.frame_tree.loader_params(frame, &origin.origin);
+        let top = loader_params.trusted.top_frame_site.clone();
+        let Ok(loader) = self.process.register_loader(loader_params) else {
+            let lock = self.process.site_info().cloned();
+            self.lock_mismatch(&lock, top.as_deref().unwrap_or("null"), "a loader");
+            self.controller.did_stop(navigation_id);
+            return None;
+        };
         self.frame_tree
             .committing(frame, navigation_id, &document.url, origin);
         let before = self.frame_tree.take_any_document_load(frame);
         let place = self.controller.commit_place(navigation_id);
         params.set_history_place(place, self.entries_heard.peek());
-        let loader = self.process.register_loader(loader_params);
         let completer = self
             .process
             .commit_navigation(params, navigation_id, document, loader);
@@ -1514,6 +1531,23 @@ impl WebContents {
         // would commit what it has of it, else).
         drop(before);
         Some(completer)
+    }
+
+    /// The renderer locked to `lock` was to be given `what` of `requested`'s
+    /// site, which its lock doesn't let it have (Chromium's
+    /// `CanAccessDataForOrigin` failing, its crash keys
+    /// `expected_process_lock` and `requested_origin` told): the browser's
+    /// own mistake, or what a renderer's message made it work out. Nothing
+    /// is given, and the renderer ends as for a bad message: the error
+    /// shows, and no site's data goes where it mustn't.
+    fn lock_mismatch(&mut self, lock: &Option<SiteInfo>, requested: &str, what: &str) {
+        tracing::error!(
+            ?lock,
+            requested,
+            what,
+            "a renderer's lock refuses what it was to be given"
+        );
+        self.received_bad_message(BadMessageReason::ProcessLockMismatch);
     }
 
     /// One of a navigation's events (its redirect, response, body's data,
@@ -2048,11 +2082,23 @@ impl WebContents {
     /// `request_id` it waits for; none for a frame that has gone (its
     /// iframe removed as the message came), which is to have its answer
     /// all the same.
-    fn open_storage_area(&self, frame: FrameToken, kind: StorageKind, request_id: u64) {
+    fn open_storage_area(&mut self, frame: FrameToken, kind: StorageKind, request_id: u64) {
         let sender = self.process.sender();
         let to_renderer: crate::ToRenderer = Arc::new(move |msg| {
             let _ = sender.send(msg);
         });
+        if let Some(key) = self.frame_tree.storage_key(frame) {
+            let top = key.top_level_site();
+            let top = (!top.is_opaque()).then(|| top.serialize());
+            if !site_info::allows(self.process.site_info(), top.as_deref()) {
+                let lock = self.process.site_info().cloned();
+                return self.lock_mismatch(
+                    &lock,
+                    top.as_deref().unwrap_or("null"),
+                    "a storage area",
+                );
+            }
+        }
         match self.frame_tree.storage_key(frame) {
             Some(key) => self.partition.dom_storage().open(
                 self.process.renderer_id(),

@@ -51,6 +51,9 @@ pub struct Route {
     /// What its `304` says in place of the route's headers of the same
     /// names (a server telling a new freshness, say).
     pub not_modified_headers: Vec<(String, String)>,
+    /// What answers every request after the first: a page that moved
+    /// meanwhile, say ([`then`](Self::then)). Shared by the route's clones.
+    pub next: Option<(Arc<AtomicBool>, Box<Route>)>,
 }
 
 /// When a route's request is read and its connection closed without an
@@ -86,6 +89,7 @@ impl Route {
             unanswered: Unanswered::Never,
             revalidates: false,
             not_modified_headers: Vec::new(),
+            next: None,
         }
     }
 
@@ -147,6 +151,21 @@ impl Route {
 
     /// Revalidated (see [`revalidated`](Self::revalidated)), its `304`
     /// saying `name: value` in place of the route's `name`.
+    /// This route for the first request, `next` for those after.
+    pub fn then(mut self, next: Route) -> Self {
+        self.next = Some((Arc::default(), Box::new(next)));
+        self
+    }
+
+    /// The route that answers a request now: this one the first time, its
+    /// `next` (as it answers) after.
+    fn answering(&self) -> &Route {
+        match &self.next {
+            Some((answered, next)) if answered.swap(true, Ordering::Relaxed) => next.answering(),
+            _ => self,
+        }
+    }
+
     pub fn with_304_header(mut self, name: &str, value: &str) -> Self {
         self.revalidates = true;
         self.not_modified_headers.push((name.into(), value.into()));
@@ -547,7 +566,7 @@ fn serve(
         .routes
         .get(&route_key)
         .or_else(|| site.routes.get(&path))
-        .unwrap_or(&not_found);
+        .map_or(&not_found, Route::answering);
     match route.unanswered {
         Unanswered::Always => return None,
         Unanswered::OnReusedConnection if reused => return None,

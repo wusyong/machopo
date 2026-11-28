@@ -1,7 +1,7 @@
 # RFC 0127：process lock 和 Browser 的檢查
 
 - 開始日期：2026-11-28
-- 狀態：🚧 已排程：2026-11-28
+- 狀態：✅ 已完成：2026-11-28（Linux：Fedora 45）
 - 進度和驗收：`progress.md`
 - 細節：`details.md`
 
@@ -9,7 +9,7 @@ RFC 0122 路線圖的 B（M2 的第二份）。
 
 ## 摘要
 
-跨網站的導覽已經換 renderer（RFC 0124）：一個 renderer 的一生裡只裝過一個最上層的網站，Browser 也記著是哪一個（`RenderProcessHost` 的 `SiteInfo`）。但 Browser 還沒有拿它檢查過任何東西。這份把它變成 process lock：Browser 每次交給 renderer 拿資料的權限時（文件的 loader、storage 的 area、commit），都確認那份資料的最上層網站就是這個 renderer 鎖的網站；對不上就是壞訊息，結束那個 renderer。另外，renderer 自己說了算的幾個地方改成照 Browser 給的東西檢查，被攻破的 renderer 就不能用它們拿到別的網站的 origin：blob URL 的 origin、從頁面開的新分頁的發起者。最後用一個測試用的「被攻破的 renderer」逐一確認。
+跨網站的導覽已經換 renderer（RFC 0124）：一個 renderer 的一生裡只裝過一個最上層的網站，Browser 也記著是哪一個（`RenderProcessHost` 的 `SiteInfo`）。但 Browser 還沒有拿它檢查過任何東西。這份把它變成 process lock：一份文件是誰的只算一次（`SiteInfo::of_document`），換不換 renderer 和檢查都用它；Browser 每次交給 renderer 拿資料的權限時（文件的 loader、storage 的 area、commit），都確認那份資料的最上層網站就是這個 renderer 鎖的網站；對不上就是壞訊息，結束那個 renderer。另外，renderer 自己說了算的幾個地方改成照 Browser 給的東西檢查，被攻破的 renderer 就不能用它們拿到別的網站的 origin：blob URL 的 origin、從頁面開的新分頁的發起者。最後用一個測試用的「被攻破的 renderer」逐一確認。
 
 ## 動機
 
@@ -38,7 +38,7 @@ RFC 0124 讓 process 裡只有一個最上層網站的東西，但 Browser 的�
 - **嵌在頁面裡的跨網站 iframe**：照 L1（RFC 0122 的已決定的事項第 4 條），它和頁面在同一個 process，鎖是最上層的網站，所以 iframe 的東西照樣在裡面。被攻破的 renderer 可以拿 iframe 的身分發起導覽，這要等 OOPIF。
 - `window.open`、`BrowsingInstance`、`SiteInstance`（路線圖的 W）。
 
-要解決的 `docs/limitations.md` 的限制：沒有。這份補的洞都沒有寫進 limitations：blob URL 的 origin 只記在 RFC 0122 的盤點裡，新分頁的 `SameSite` 是這次盤點才找到的。做完時看要不要把 L1 留下的缺口（上面那條 iframe）寫進「隔離」。
+要解決的 `docs/limitations.md` 的限制：沒有。這份補的洞都沒有寫進 limitations：blob URL 的 origin 只記在 RFC 0122 的盤點裡，新分頁的 `SameSite` 是這次盤點才找到的。新寫進去的：L1 留下的缺口（上面那條 iframe），在「iframe」的「跨網站的 iframe 和頁面在同一個 renderer」。
 
 ## 設計概要
 
@@ -48,7 +48,7 @@ RFC 0124 讓 process 裡只有一個最上層網站的東西，但 Browser 的�
 
 - `RenderProcessHost` 的 `site_info` 變成鎖：第一次寫入之後就不再改。它還沒有值時（新分頁的第一個 renderer，還沒 commit 過網頁），renderer 只能拿到 opaque 的東西。
 - 新加一個「renderer 向 Browser 要資料」的訊息時，要說它照什麼檢查（`docs/architecture.md` 的「Process 的邊界」 寫成規則）。做法是讓它帶著 Browser 給過的東西（loader、area、frame），由 Browser 從那裡取 origin；不要讓 renderer 自己報 origin 或網址。
-- 鎖的比較是一個函式（`ProcessLock::allows`，名字待定），單元測試照表對。
+- 鎖的比較是 `site_info` 的兩個函式：`admits`（renderer 收不收一份文件，換不換和 commit 的檢查共用）、`allows`（交出的 loader 和 storage area 的最上層網站），單元測試照表對。
 
 ## 詳細設計
 
@@ -74,8 +74,8 @@ RFC 0124 讓 process 裡只有一個最上層網站的東西，但 Browser 的�
 
 用到它的地方都呼叫同一個函式，所以換的決定和檢查不會對不上：
 
-- **換不換**：`swaps` 改成「renderer 的鎖收不收這份文件」：鎖還沒有、文件沒有網站、或兩者相同時不換，其他都換。commit 時的檢查用的是同一個比較，所以 Browser 不會把文件放進它自己會拒絕的 renderer。
-- **重新整理、上一頁、下一頁**：歷史紀錄的每一筆（`navigation_controller` 的 entry）記著它 commit 時的 `SiteInfo`。Chromium 的 `NavigationEntry` 記著它的 `SiteInstance`，也是這個道理。走回同一筆、最後的網址又沒變時沿用它，不重算，所以 `data:` 的重新整理還是同一個網站，不用寫「opaque 的除外」。重新整理之後被 redirect 到別的網址時，最後的文件是新的，照新的算，該換就換。
+- **換不換**：0124 的 `swaps` 換成「renderer 的鎖收不收這份文件」（`site_info::admits`）：鎖還沒有、文件沒有網站、或兩者相同時不換，其他都換。commit 時的檢查用的是同一個比較，所以 Browser 不會把文件放進它自己會拒絕的 renderer。
+- **重新整理、上一頁、下一頁**：歷史紀錄的每一筆記著它 commit 時的 `SiteInfo`（main frame 的 `FrameNavigationEntry::site_info`：`WebContents::commit` 把算好的交給 controller 的 `committing_site`，renderer 回報 commit 時記進那一筆；同一份文件的 `pushState` 的那一筆跟著；`kept_site` 取回）。Chromium 的 `NavigationEntry` 記著它的 `SiteInstance`，也是這個道理。走回同一筆、最後的網址又沒變時沿用它，不重算，所以 `data:` 的重新整理還是同一個網站，不用寫「opaque 的除外」。重新整理之後被 redirect 到別的網址時，最後的文件是新的，照新的算，該換就換。
 - **之後的特例**（`window.open`、iframe 的 `sandbox`、COOP）：都只改 `of_document` 這一個地方。
 
 ### 檢查什麼、在哪裡（已決定的事項第 2 條）
@@ -91,7 +91,7 @@ RFC 0124 讓 process 裡只有一個最上層網站的東西，但 Browser 的�
 比較的規則（`allows`，最上層網站是 `top`）：
 
 - `top` 是 opaque 的：任何鎖都允許（包括還沒有鎖的）。opaque 的最上層網站底下沒有 cookie（site for cookies 是空的）；它底下的 iframe 的 storage 分區每次都是新的 opaque 網站，只有這個 process 裡的文件碰得到。所以給哪個 process 都拿不到別人的東西。錯誤頁就靠這一條：它的 origin 是 opaque 的，放在它要去的網址的 renderer 裡（第 1 條）。
-- `top` 是 `file:` 的：鎖要是 `File`。
+- `file:` 的文件：它的 origin 是 opaque 的（`url` crate 的，machopo 的 `file:` 文件都是），最上層網站也就是 opaque 的，照上一條給任何 renderer；它底下沒有 cookie、沒有 storage，讀本機檔案另外照 commit 給的權限（`RenderProcessHost::set_file_access`）。草稿原本寫「鎖要是 `File`」，實作時照這個改了：最上層網站分不出 `file:` 和其他 opaque 的。
 - 其他：鎖要是同一個 `Site`。還沒有鎖的 renderer 一律不允許，這就是 Chromium 的 citadel 檢查在 machopo 的樣子：每個 renderer 遲早都會鎖，鎖之前只裝得了 opaque 的文件。
 
 ### renderer 說了算的地方
@@ -109,21 +109,18 @@ RFC 0124 讓 process 裡只有一個最上層網站的東西，但 Browser 的�
 
 ### 測試
 
-- `of_document`、`allows` 和「鎖收不收」照表的單元測試：每一種文件、每一種鎖、每一種最上層網站。
-- 歷史紀錄沿用 `SiteInfo`：`data:` 的重新整理、上一頁回到 `data:` 不換；重新整理之後被 redirect 到別的網站時換。
-- 被攻破的 renderer：`crates/browser/tests/it/renderer_process.rs` 已經有一個送偽造訊息的 child process（`rogue()`，照角色送）。每一種偽造的訊息加一個角色，確認 renderer 被結束、理由對：
-  - 別的 origin 的 blob URL；
-  - 蓋掉別人的 blob URL；
-  - 不在樹上的 frame 開的新分頁。
-- 鎖的安全網：Browser 這一側的錯，正常的程式走不到，所以用 `RendererLauncher::Detached` 和 `deliver_from_renderer` 直接造出錯的狀態（例如對一個鎖給 a.example 的 renderer commit b.example）。
-- 正常的瀏覽不踩鎖：`cargo test --workspace`、情境、WPT 照常通過。0124 的跨網站情境（`sites.txt`）和 `dom_storage`、`cookies`、`navigation` 的整合測試會走到每一種交出權限的路。
-- 新分頁的 `SameSite`：整合測試，一個頁面用連結開到另一個網站，伺服器看不到 `Strict` 的 cookie。看有沒有現成的 WPT（`cookies/samesite/`）。
-- 重新整理之後 redirect 到別的網站：整合測試，確認換了 renderer。
-- mutation test：每一條檢查、`allows` 的每一個分支。
+測試的清單、mutation test 的結果在 `progress.md`。
+
+- `site_info` 照表的單元測試：每一種文件的 `of_document`，每一種鎖的 `admits` 和 `allows`；`render_process_host` 的：鎖在第一個網站之後不變、不合鎖的 loader 不登記，blob URL 的每一種登記。
+- 整合測試：重新整理之後落在別的網站換 renderer（測試伺服器的路由加了 `Route::then`：第一次回這個，之後回下一個）；繼承了跨網站 iframe 的 origin 的 `about:blank` 換到那個網站的 renderer；`data:` 的重新整理、上一頁回到它沿用 entry 的網站；新分頁的 `SameSite` 和 `about:blank` 的 origin。
+- 被攻破的 renderer：`crates/browser/tests/it/renderer_process.rs` 的 `rogue_on_commit` 讀 Browser 送的 commit、拿它的 loader，登記別的網站的 blob URL、別人的網址，兩種都被結束；不在樹上的 frame 開的新分頁在壞訊息的清單裡。
+- 鎖的安全網（`WebContents` 裡鎖拒絕時不交出、結束 renderer 的那幾支）從外面走不到：換不換和檢查是同一個比較，frame 樹在換 renderer 時清成一個 opaque 的 main frame，renderer 送什麼都做不出不合鎖的東西。草稿想用 `RendererLauncher::Detached` 造出錯的狀態，做不到；比較本身有單元測試，那幾支記在 `docs/test-gaps.md` 的「只靠審查」。
+- 正常的瀏覽不踩鎖：`cargo test --workspace`、情境（`--window` 也是）、WPT 照常通過。
+- WPT 的 `cookies/samesite/` 幾乎都要 `window.open`（`tests/wpt/include.txt` 因此不收），沒有跑；新分頁的 `SameSite` 用整合測試守。
 
 ### 分階段
 
-兩段（已決定的事項第 7 條），每一段做完都可以 merge 回 `main`：
+兩段（已決定的事項第 7 條），都做完了：
 
 1. **renderer 說了算的地方**：blob URL 照 loader 檢查（第 3 條）、`OpenUrl` 帶發起者（新分頁的 `SameSite`）；被攻破的 renderer 的角色；`docs/architecture.md` 的「Process 的邊界」 寫明「要資料的訊息一定帶 Browser 給過的權限」。
 2. **鎖**：`of_document` 和歷史紀錄的 `SiteInfo`、「鎖收不收」取代 `swaps`（重新整理、`about:blank`）、`allows`、交出權限時的三個檢查、`set_site_info` 只寫一次、`ProcessLockMismatch` 和它的測試；收尾。

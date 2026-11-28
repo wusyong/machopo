@@ -86,6 +86,12 @@ pub enum BadMessageReason {
     /// `SharedImageStub`'s of a shared image's pixels): it doesn't go on
     /// to Viz.
     FrameSink(protocol::viz::InvalidFrameSinkMsg),
+    /// What the renderer was to be given (a document's commit, a loader, a
+    /// storage area) is of a top-level site its lock doesn't let it have
+    /// (Chromium's `CanAccessDataForOrigin` and `CanCommitOriginAndUrl`
+    /// failing, which kill the process): the browser's own mistake, or
+    /// what a renderer's messages made it work out. Nothing is given.
+    ProcessLockMismatch,
     /// A DevTools session's state over `DevToolsSessionState::MAX_BYTES`:
     /// more than the renderer's agents and V8 ever write.
     DevToolsSessionStateTooLarge,

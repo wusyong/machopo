@@ -1,7 +1,10 @@
 //! A main frame navigation to another site commits in a new renderer
 //! (Chromium's `RenderFrameHostManager` swapping for a cross-site
 //! navigation), the one before unloading and ending; one within the
-//! site, a reload and `about:blank` stay in the renderer the tab has.
+//! site, a reload of the same page and an opaque `about:blank` stay in the
+//! renderer the tab has. Where a document goes is whose it is: a reload
+//! that lands elsewhere, and an `about:blank` of another site's origin, go
+//! where that site's do.
 
 use crossbeam_channel::Receiver;
 use net::test_server::{Route, TestServer};
@@ -89,8 +92,9 @@ fn going_back_to_the_site_before_commits_in_a_new_renderer() {
     web_contents.shutdown();
 }
 
-/// A reload stays in the renderer it is in; `about:blank` stays too,
-/// whatever the renderer holds, and leaves it the site it had.
+/// A reload of the same page stays in the renderer it is in; an opaque
+/// `about:blank` (the browser's own navigation to it) stays too, whatever
+/// the renderer holds, and leaves it the site it had.
 #[test]
 fn a_reload_and_about_blank_stay() {
     let (server, a, _b) = two_sites();
@@ -104,8 +108,76 @@ fn a_reload_and_about_blank_stay() {
     web_contents.shutdown();
 }
 
+/// A reload goes by where it lands: a page that moved to another site
+/// meanwhile (its server redirects there now) is a new renderer's; the
+/// renderer of the site before takes none of that site's.
+#[test]
+fn a_reload_that_lands_on_another_site_commits_in_a_new_renderer() {
+    let elsewhere = server(&[("/gone", Route::ok("text/html", "<!DOCTYPE html>gone"))]);
+    let gone = elsewhere.url_for_host("localhost", "/gone");
+    let server = server(&[(
+        "/moving",
+        Route::ok("text/html", "<!DOCTYPE html>here").then(Route::redirect(302, &gone)),
+    )]);
+    let (mut web_contents, host_rx) = tab_in(in_memory());
+    let here = load(&mut web_contents, &host_rx, &server.url("/moving"));
+    web_contents.reload();
+    let landed = wait_for_load(&mut web_contents, &host_rx);
+    assert_ne!(landed, here);
+    assert_eq!(web_contents.last_committed_url(), Some(gone.as_str()));
+    web_contents.shutdown();
+}
+
+/// An `about:blank` the main frame is navigated to by its child frame of
+/// another site is of that site (its origin the child's): a new renderer,
+/// that site's, not the page's.
+#[test]
+fn about_blank_of_another_sites_origin_commits_in_that_sites_renderer() {
+    let server = server(&[
+        (
+            "/",
+            Route::ok(
+                "text/html",
+                "<!DOCTYPE html><script>const frame = document.createElement('iframe'); \
+                 frame.src = `http://localhost:${location.port}/child`; \
+                 document.documentElement.append(frame);</script>",
+            ),
+        ),
+        ("/child", Route::ok("text/html", "<!DOCTYPE html>child")),
+    ]);
+    let (mut web_contents, host_rx) = tab_in(in_memory());
+    let page = load(&mut web_contents, &host_rx, &server.url("/"));
+    let main = web_contents.devtools_frame_token();
+    let child = web_contents.frame_tree().children(main)[0];
+    let child_origin = url::Url::parse(&server.url_for_host("localhost", "/"))
+        .unwrap()
+        .origin();
+    assert_eq!(web_contents.frame_tree().origin(child), Some(&child_origin));
+    // The renderer's, as the child frame's `top.location = 'about:blank'`.
+    web_contents.on_renderer_message(&RendererHostMsg::BeginNavigation {
+        frame: main,
+        initiator: child,
+        id: 1,
+        kind: protocol::renderer::BeginNavigationKind::To {
+            url: "about:blank".into(),
+            replace: false,
+        },
+        devtools_initiator: None,
+        history_in_new_child_frame: false,
+        load_flags: Default::default(),
+    });
+    // Its task is over: the browser may commit it.
+    web_contents
+        .on_renderer_message(&RendererHostMsg::NavigationCancellationWindowEnded { ids: vec![1] });
+    let blank = wait_for_load(&mut web_contents, &host_rx);
+    assert_ne!(blank, page);
+    assert_eq!(web_contents.frame_tree().origin(main), Some(&child_origin));
+    web_contents.shutdown();
+}
+
 /// A `data:` URL's origin is opaque, the same site as nothing: each
-/// navigation to one is a new renderer, but for a reload of it.
+/// navigation to one is a new renderer, but for a reload of it, and a
+/// traversal to its entry, which keep the site it committed as.
 #[test]
 fn every_data_url_is_a_site_of_its_own() {
     let (_server, a, _b) = two_sites();
@@ -118,6 +190,21 @@ fn every_data_url_is_a_site_of_its_own() {
     assert_ne!(again, first);
     web_contents.reload();
     assert_eq!(wait_for_load(&mut web_contents, &host_rx), again);
+    // Back to it, and forward: each entry's site the one it committed as,
+    // the renderer the one there is for it now.
+    assert!(web_contents.go_back());
+    let back = wait_for_load(&mut web_contents, &host_rx);
+    assert_ne!(back, again);
+    assert!(web_contents.go_forward());
+    let forward = wait_for_load(&mut web_contents, &host_rx);
+    assert_ne!(forward, back);
+    web_contents.reload();
+    assert_eq!(wait_for_load(&mut web_contents, &host_rx), forward);
+    // An opaque `about:blank` stays in its renderer; back from it to the
+    // `data:` entry is that entry's site again: the same renderer.
+    assert_eq!(load(&mut web_contents, &host_rx, "about:blank"), forward);
+    assert!(web_contents.go_back());
+    assert_eq!(wait_for_load(&mut web_contents, &host_rx), forward);
     web_contents.shutdown();
 }
 

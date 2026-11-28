@@ -1,0 +1,140 @@
+# Stage 2's mutants (the lock: whose a document is worked out once, the renderer's lock checked as the browser hands out a commit, a loader, a storage area): `python3 scripts/test.py mutate rfcs/0127-process-lock/mutants-2.toml`.
+test = ["sh", "-c", "cargo test -q -p browser --lib && cargo test -q -p browser --test it -- process_swap"]
+timeout = 1200
+
+[[mutant]]
+name = "about:blank goes by its URL, not its origin"
+file = "crates/browser/src/site_info.rs"
+from = '''        if crate::loader::about_path(url) == Some("blank") {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "about:blank of a local file's origin is of no site"
+file = "crates/browser/src/site_info.rs"
+from = '''                url::Origin::Opaque(_) => origin.local.then_some(Self::File),'''
+to = '''                url::Origin::Opaque(_) => None,'''
+
+[[mutant]]
+name = "a renderer takes any site"
+file = "crates/browser/src/site_info.rs"
+from = '''        (Some(lock), Some(site)) => lock == site,'''
+to = '''        (Some(_), Some(_)) => true,'''
+
+[[mutant]]
+name = "a renderer takes no document of no site"
+file = "crates/browser/src/site_info.rs"
+from = '''        (Some(lock), Some(site)) => lock == site,
+        _ => true,'''
+to = '''        (Some(lock), Some(site)) => lock == site,
+        (_, None) => false,
+        _ => true,'''
+
+[[mutant]]
+name = "what goes by an opaque top-level site is no one's"
+file = "crates/browser/src/site_info.rs"
+from = '''    let Some(top) = top else {
+        return true;
+    };'''
+to = '''    let Some(top) = top else {
+        return false;
+    };'''
+
+[[mutant]]
+name = "any renderer is given any site's"
+file = "crates/browser/src/site_info.rs"
+from = '''    matches!(lock, Some(SiteInfo::Web(site)) if !site.is_opaque() && site.serialize() == top)'''
+to = '''    let _ = (lock, top);
+    true'''
+
+[[mutant]]
+name = "an unlocked renderer is given any site's"
+file = "crates/browser/src/site_info.rs"
+from = '''    matches!(lock, Some(SiteInfo::Web(site)) if !site.is_opaque() && site.serialize() == top)'''
+to = '''    lock.is_none()
+        || matches!(lock, Some(SiteInfo::Web(site)) if !site.is_opaque() && site.serialize() == top)'''
+
+[[mutant]]
+name = "an opaque lock is given what goes by \"null\""
+file = "crates/browser/src/site_info.rs"
+from = '''Some(SiteInfo::Web(site)) if !site.is_opaque() && site.serialize() == top)'''
+to = '''Some(SiteInfo::Web(site)) if site.serialize() == top)'''
+
+[[mutant]]
+name = "a renderer's lock changes"
+file = "crates/browser/src/render_process_host.rs"
+from = '''            Some(lock) if *lock != site => Err(self.site_info.clone()),'''
+to = '''            Some(lock) if *lock != site && false => Err(self.site_info.clone()),'''
+
+[[mutant]]
+name = "a loader isn't checked by the lock"
+file = "crates/browser/src/render_process_host.rs"
+from = '''        if !crate::site_info::allows(
+            self.site_info.as_ref(),
+            params.trusted.top_frame_site.as_deref(),
+        ) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a history entry's site isn't kept"
+file = "crates/browser/src/web_contents.rs"
+from = '''            let site = self
+                .controller
+                .kept_site(navigation_id, &document.url)
+                .or_else(|| SiteInfo::of_document(&document.url, &origin));'''
+to = '''            let site = SiteInfo::of_document(&document.url, &origin);'''
+
+[[mutant]]
+name = "an entry's site is kept whatever its URL"
+file = "crates/browser/src/navigation_controller.rs"
+from = '''        if item.url != url {
+            return None;
+        }
+        item.site_info.clone()'''
+to = '''        item.site_info.clone()'''
+
+[[mutant]]
+name = "a traversal keeps no site"
+file = "crates/browser/src/navigation_controller.rs"
+from = '''            (NavigationType::HistoryIndex(index), _) if index < self.entries.len() => index,
+            (NavigationType::Reload, Some(current)) => current,
+            _ => return None,'''
+to = '''            (NavigationType::Reload, Some(current)) => current,
+            _ => return None,'''
+
+[[mutant]]
+name = "a committed entry has no site"
+file = "crates/browser/src/navigation_controller.rs"
+from = '''                item.site_info = site;'''
+to = '''                let _ = (item, site);'''
+
+[[mutant]]
+name = "the site committing isn't told the controller"
+file = "crates/browser/src/web_contents.rs"
+from = '''            self.controller.committing_site(navigation_id, site.clone());'''
+to = ''''''
+
+[[mutant]]
+name = "a document the lock refuses commits anyway"
+file = "crates/browser/src/web_contents.rs"
+from = '''                self.lock_mismatch(&lock, &format!("{site:?}"), "a document");
+                self.controller.did_stop(navigation_id);
+                return None;'''
+to = '''                let _ = lock;'''
+test = ["sh", "-c", "cargo test -q -p browser --test it"]
+
+[[mutant]]
+name = "a storage area the lock refuses is opened"
+file = "crates/browser/src/web_contents.rs"
+from = '''            if !site_info::allows(self.process.site_info(), top.as_deref()) {'''
+to = '''            if false {'''
+test = ["sh", "-c", "cargo test -q -p browser --test it"]
+
+[[mutant]]
+name = "a lock's mismatch isn't a bad message"
+file = "crates/browser/src/web_contents.rs"
+from = '''            "a renderer's lock refuses what it was to be given"
+        );
+        self.received_bad_message(BadMessageReason::ProcessLockMismatch);'''
+to = '''            "a renderer's lock refuses what it was to be given"
+        );'''
+test = ["sh", "-c", "cargo test -q -p browser --test it"]
