@@ -778,7 +778,6 @@ fn a_renderer_paused_in_the_debugger_unloads_as_another_site_takes_its_place() {
 /// A renderer whose document's `unload` never ends is ended: the tab's
 /// next document, another site's, doesn't wait for it, and its process is
 /// gone a moment later (Chromium's `kUnloadTimeout`, 500 ms).
-#[cfg(unix)]
 #[test]
 fn a_renderer_whose_unload_doesnt_end_is_ended() {
     let server = server(&[
@@ -798,18 +797,12 @@ fn a_renderer_whose_unload_doesnt_end_is_ended() {
     let session = browser.attach();
     browser.navigate(&session, &server.url("/a"));
     let pid = renderer_pids(&mut browser)[0];
+    // Before it may end: on Windows its id may soon be another's.
+    let watched = Watched::new(&[pid]);
     browser.navigate(&session, &other_site(&server, "/b"));
     assert_ne!(renderer_pids(&mut browser), [pid]);
-    let alive = || {
-        Process::new("kill")
-            .args(["-0", &pid.to_string()])
-            .stderr(Stdio::null())
-            .status()
-            .unwrap()
-            .success()
-    };
     let asked = Instant::now();
-    while alive() {
+    while watched.any_alive() {
         assert!(
             asked.elapsed() < Duration::from_secs(10),
             "the renderer process {pid} is still there"

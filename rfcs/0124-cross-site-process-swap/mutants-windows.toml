@@ -1,0 +1,19 @@
+# The renderer process whose unload doesn't end, on Windows (the test had run on unix alone): `python3 scripts/test.py mutate rfcs/0124-cross-site-process-swap/mutants-windows.toml`, on Windows.
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "automation_pipe::a_renderer_whose_unload"]
+timeout = 900
+
+[[mutant]]
+name = "a renderer process whose unload doesn't end is waited for long"
+file = "crates/browser/src/render_process_host.rs"
+from = '''            self.exit = Some(end_child(child, &link, Some(wait)).info);
+            return;'''
+to = '''            self.exit = Some(end_child(child, &link, Some(wait.saturating_mul(100))).info);
+            return;'''
+
+[[mutant]]
+name = "a renderer process whose unload doesn't end is left running"
+file = "crates/browser/src/render_process_host.rs"
+from = '''            self.exit = Some(end_child(child, &link, Some(wait)).info);
+            return;'''
+to = '''            std::mem::forget((child, link, wait));
+            return;'''
