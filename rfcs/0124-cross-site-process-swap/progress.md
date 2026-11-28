@@ -16,7 +16,7 @@
 
 第 1 段開始之前先做 RFC 0125（網址列的偽造，2026-11-27 使用者決定）。
 
-還沒做、要在別的機器上做的：macOS 和 Windows 上量 renderer process 啟動的時間（已決定的事項第 5 條），明顯比這台 Linux 的 11 ms 慢時重新考慮提前啟動和預備的 renderer（`README.md` 的「之後的可能」）。
+還沒做、要在別的機器上做的：Windows 上量 renderer process 啟動的時間（已決定的事項第 5 條），明顯比 Linux 的 11 ms、macOS 的 12 ms 慢時重新考慮提前啟動和預備的 renderer（`README.md` 的「之後的可能」）。
 
 ## 驗收
 
@@ -116,3 +116,12 @@
 - **mutation test**（`mutants-4.toml`，14 個）：12 個抓到。第一次跑時情境的測試指令沒設 `MACHOPO_SLOW_TESTS`，`cargo test` 跳過情境、baseline 空跑，漏了「網址照 server 的位址、不看主機」；補上之後抓到。漏的 2 個（重送的請求記成新的 renderer 的、回答了的從清單拿掉）只造成重複的請求，結果一樣，記進 `docs/test-gaps.md` 的「能補、還沒補的測試空缺」。
 - **情境**：沒有平台視窗的全部（99 個）通過；`--window` 的全部（75 個）在修好第 21 條之前只有 `sites` 失敗，修好之後 `sites` 和 `navigation` 連跑 3 次、`sites` 再連跑 10 次都通過。
 - **第 4 段結束的檢查**（連結 prebuilt 的 V8，`machopo-v152.2.0-31`）：`cargo test --workspace` 5,088 個通過（1 個 ignored）；`cargo clippy --workspace --all-targets -- -D warnings` 通過；`cargo fmt --check` 有幾處排版，`cargo fmt` 改了（`mutants-4.toml` 的每一個 `from` 照樣找得到）；`sanity.py` 的每一項都通過。量測工具的測試（改了 automation pipe 的 CDP 方法）：`speedometer_test.py`、`blink_perf_test.py`、`raster_test.py`、`census_test.py` 都通過。`test.py wpt html/browsers/history/the-location-interface/ html/browsers/browsing-the-web/navigating-across-documents/ html/browsers/browsing-the-web/unloading-documents/`（改了 `automation_session`）0 個非預期的結果。
+
+### macOS 上的驗證（2026-11-28，macOS 26.6.2，Apple M4，`a2f67b3a`，連結 prebuilt 的 V8 `machopo-v152.2.0-31`）
+
+- **`cargo test --workspace`**：5,092 個通過（1 個 ignored；比 Linux 多的是只在 macOS 跑的測試）。第一次沒編過：本機的 `../third_party/rusty_v8` 還在 tag 之前的 commit，直接跑 `cargo` 不會同步；`python3 scripts/ci.py third-party` 之後編過。
+- **情境**：`python3 scripts/test.py scenarios sites --window` 通過，截圖（`a`、`b`）的網址、文字和計數都對；log 裡 4 次換 renderer 的舊 process 都自己結束（status 0，沒有等到 500 ms 被結束）。
+- **WPT**：`test.py wpt html/browsers/history/the-location-interface/ html/browsers/browsing-the-web/navigating-across-documents/ html/browsers/browsing-the-web/unloading-documents/` 0 個非預期的結果（只有清單裡標過的 known intermittent）。
+- **量測工具的測試**：`speedometer_test.py`、`blink_perf_test.py`、`raster_test.py`、`census_test.py` 都通過；跳過的只有要 Chrome for Testing（沒下載）、Linux 的 `perf` 和 Windows 的，machopo 用 samply 取樣的有跑。
+- **renderer 啟動的時間**：約 12 ms（`details.md` 的「量的：啟動一個 renderer process 要多久」）。
+- **手動確認**（使用者，release，`https://example.com/` 點連結到 `iana.org`，換 renderer）：游標回到箭頭，不停在手指；換的中間舊頁面留到新的畫出來，沒有閃空白。response 慢的一次（約 0.6 秒）和快的一次（約 12 ms）都看過。

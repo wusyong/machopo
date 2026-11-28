@@ -111,7 +111,8 @@
 | 已經有 renderer 的分頁導覽到 `about:blank`（`Page.navigate`，再跑一句 script） | 1.3、1.4 ms | 1.2 | 2.7 |
 
 - 差的約 **11 ms** 就是多啟動一個 renderer process 的時間（spawn、進 sandbox、V8 的 isolate、IO thread 接上通道、有 GPU 時給 tile 的共用記憶體）。確認過兩個分頁時 Browser 底下是兩個 `machopo --type=renderer`。
-- 只在這一台、Linux 上量過；macOS 和 Windows 沒量（Windows 的 process 建立通常比較慢）。debug build 沒有量：連結的是 release 的 V8，其餘的慢不代表使用者看到的。
+- **macOS**（2026-11-28，`a2f67b3a`，macOS 26.6.2、Apple M4，release、sandbox 開著，同樣的量法）：新的分頁 12.8、12.7 ms（最小 12.3、最大 13.5），已經有 renderer 的分頁導覽到 `about:blank` 0.5、0.4 ms，差約 **12 ms**，和 Linux 差不多，不用重新考慮提前啟動和備一個（`README.md` 的第 5、9 條）。另外量了換 renderer 本身：同一個分頁每次導覽到新的 `data:` 網址（每個是一個 site）12.9、13.0 ms，就是啟動一個 renderer 加上一次導覽（每輪第一次 1.5 ms：`about:blank` 的 renderer 還沒有 site，拿下第一個 `data:`、不用換）。兩輪共結束 122 個 renderer，正好是 31 個分頁加 30 次換的兩倍。
+- Windows 沒量（Windows 的 process 建立通常比較慢）。debug build 沒有量：連結的是 release 的 V8，其餘的慢不代表使用者看到的。
 - 腳本是當場寫的、沒有留在 repo（用 `scripts/bench/common.py` 的 `MachopoPipe`）。
 
 ## Chromium

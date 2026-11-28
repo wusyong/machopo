@@ -110,7 +110,7 @@ renderer 當掉之後的下一次導覽，`WebContents::relaunch` 原本就會�
 3. **規則和換**：跨網站的 commit 在新的 process；舊文件的 `unload`；中間的畫面和同一個 renderer 裡跨 origin 的 paint holding（第 7 條）；`headless` 跟著換 sink、視窗清掉跟著舊 renderer 的 UI 狀態。
 4. **收尾**：量測工具、WPT 的預期結果、情境（第 20 條）、文件。
 
-每一段做完 `main` 上的行為都是一致的：前兩段不改變什麼時候換，第三段打開時工具已經接得上。第 3 段做的時候分成 3a（換）和 3b（畫面），分開審查。在 macOS 和 Windows 量 renderer 啟動的時間（第 5 條）要在那兩台機器上做，還沒做（「之後的可能」）。
+每一段做完 `main` 上的行為都是一致的：前兩段不改變什麼時候換，第三段打開時工具已經接得上。第 3 段做的時候分成 3a（換）和 3b（畫面），分開審查。renderer 啟動的時間（第 5 條）在 macOS 上量過（約 12 ms，和 Linux 差不多）；Windows 要在那台機器上量，還沒做（「之後的可能」）。
 
 ## 缺點
 
@@ -153,7 +153,7 @@ renderer 當掉之後的下一次導覽，`WebContents::relaunch` 原本就會�
    | 子 frame | 永遠不換（等 OOPIF） |
 
    知道的後果：site 包含 scheme，已經在 `http://a.com` 的頁面導覽到 `https://a.com` 會換（輸入 `a.com`、被 redirect 到 https 是看最後的網址，只算一次）；Chromium 也是（`IsSameSite` 先比 scheme）。上一頁、下一頁照網址重新算，不像 Chromium 在 entry 裡存當時的 `SiteInstance`：沒有 `window.open` 時結果一樣，做 `window.open` 那一份時再看要不要存。不選每次導覽都換、只換 Browser 發起的（「理由和其他做法」）。
-5. **response 到了才決定換不換，當場啟動新的 process（T1）**（2026-11-27，使用者決定）：redirect 跟完、要 commit 時，照最後的網址和第 1 到 4 條的規則決定；要換就啟動新的 renderer、commit 直接送給它（訊息排在通道裡）。載入期間只有舊的 renderer，舊的頁面照常顯示、照常能用。理由：不會猜錯、沒有要丟掉的 process，Browser 不多一種「猜的那個 renderer」的狀態（被取消、被取代、redirect 到別的網站時怎麼收）；代價是啟動的時間（這台 Linux 約 11 ms）排在 response 之後，不能和網路請求同時。不選開始時先猜、先啟動、response 到了再確認（T2，Chromium 的 speculative `RenderFrameHost`：猜對時省下那 11 ms，但經過轉址的連結、http 轉 https、登入後跳轉都會猜錯，白啟動一個；載入期間多一個 process）；之後可以升級成它，決定的函式是同一個。不選只在開始時決定（T3：redirect 到別的網站時 B 的文件落在照 A 猜的 process 裡）。**要做的**：在 macOS 和 Windows 量一次啟動的時間，明顯比較慢時重新考慮 T2。
+5. **response 到了才決定換不換，當場啟動新的 process（T1）**（2026-11-27，使用者決定）：redirect 跟完、要 commit 時，照最後的網址和第 1 到 4 條的規則決定；要換就啟動新的 renderer、commit 直接送給它（訊息排在通道裡）。載入期間只有舊的 renderer，舊的頁面照常顯示、照常能用。理由：不會猜錯、沒有要丟掉的 process，Browser 不多一種「猜的那個 renderer」的狀態（被取消、被取代、redirect 到別的網站時怎麼收）；代價是啟動的時間（這台 Linux 約 11 ms）排在 response 之後，不能和網路請求同時。不選開始時先猜、先啟動、response 到了再確認（T2，Chromium 的 speculative `RenderFrameHost`：猜對時省下那 11 ms，但經過轉址的連結、http 轉 https、登入後跳轉都會猜錯，白啟動一個；載入期間多一個 process）；之後可以升級成它，決定的函式是同一個。不選只在開始時決定（T3：redirect 到別的網站時 B 的文件落在照 A 猜的 process 裡）。**要做的**：在 Windows 量一次啟動的時間，明顯比較慢時重新考慮 T2（macOS 2026-11-28 量過，約 12 ms，不用重新考慮；`details.md` 的「量的：啟動一個 renderer process 要多久」）。
 6. **送出 commit 的同時換過去、叫舊的跑 `unload`，不等它（U1）**（2026-11-27，使用者決定）：決定要換的那一刻一次做完：啟動新的 renderer、送 commit，分頁從此算它的；同時告訴舊的 renderer 它的文件被換掉了。舊的分派 `pagehide`、`unload`、回報做完，Browser 收掉它；500 ms 沒回報就結束它（Chromium 的 `kUnloadTimeout`）。新的 renderer 啟動失敗（當場知道）時留在舊的頁面。理由：換只發生在一個時間點，是 `relaunch` 的推廣，Browser 不用管「舊的還算目前的、新的正在 commit」的中間狀態；新頁面不等舊頁面的 handler，卡住的舊頁面擋不住導覽。代價：新的 renderer 在 commit 之前當掉時是 sad tab，不是留在舊的頁面。不選新的回報 commit 之後才換（U2，Chromium 的順序：舊的頁面多留幾十毫秒、新的當掉時留在舊的，但 Browser 要同時認兩個 renderer；Chromium 提前啟動新的 process，並存的是整段載入，第 5 條之後這裡只有幾十毫秒）。不選等舊的跑完才 commit（U3：舊頁面的 handler 拖住導覽）、不跑直接結束（U4：靠 `pagehide` 存狀態的頁面壞掉）。知道的後果：舊頁面在 `pagehide`、`unload` 裡送出的網路請求在舊的 process 收掉時取消（沒有 `sendBeacon`，`keepalive` 沒有作用）；寫 `localStorage` 不受影響（在回報做完之前就到 Browser）。記進 `docs/limitations.md`。
 7. **換的中間：使用者操作過舊頁面時留著舊的畫面，沒有時不留（P2）；同一個 renderer 裡跨 origin 的導覽照同一條規則**（2026-11-27，使用者決定；同一天先定了 P0，是照一個錯的事實定的，改了）：
    - **現況**（`details.md` 的「畫面：paint holding」）：machopo 的 renderer 有 paint holding：main frame 的新文件 commit 之後、能畫出來之前（body 還沒開始、被 stylesheet 擋住），不交新的 frame，畫面上留著舊頁面，最多 4 秒（Blink 的 `kNewContentRenderingDelay`），之後交一個只有背景的 frame。不看新舊是不是同一個 origin、舊頁面有沒有被使用者操作過：Chromium 修掉的偽造（issue 40942531：「Origin spoof caused by navigation that doesn't paint any content」：網址列是 B、畫面是 A 留下的，最多 4 秒，重複導覽還能延長）machopo 現在就有。
@@ -183,7 +183,7 @@ renderer 當掉之後的下一次導覽，`WebContents::relaunch` 原本就會�
 ## 之後的可能
 
 - process lock 和 Browser 的檢查（路線圖的 B），直接建在這份上。
-- **在 macOS 和 Windows 量 renderer 啟動的時間**（第 5 條的「要做的」，這份沒做到：只有這台 Linux 的約 11 ms）；明顯比較慢時，開始時先猜、先啟動（Chromium 的 speculative `RenderFrameHost`），或備一個 spare renderer（第 9 條）。
+- **在 Windows 量 renderer 啟動的時間**（第 5 條的「要做的」，這份沒做到：Linux 約 11 ms、macOS 約 12 ms）；明顯比較慢時，開始時先猜、先啟動（Chromium 的 speculative `RenderFrameHost`），或備一個 spare renderer（第 9 條）。
 - 對話框的 RFC：`alert`、`confirm`、`prompt` 和 `beforeunload`（已決定的事項第 8 條），排在路線圖的 C、B 之後。
 - `sendBeacon` 和有作用的 `keepalive`：頁面結束之後 Browser 繼續完成它離開時送出的請求（Chromium 讓 process 多留最多 30 秒，`kKeepAliveHandleFactoryTimeout`）。
 - back-forward cache：舊的 renderer 不收掉、留著給上一頁。
