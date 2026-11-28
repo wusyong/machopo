@@ -7,7 +7,7 @@
 
 ## 摘要
 
-把 process 的 sandbox `sunaba`（`crates/sunaba`）搬出 machopo，像 elise 一樣成為自己的 repo：保留它在 machopo 裡的歷史，有自己的 CI（Linux、macOS、Windows 都跑）、測試的缺口和修改的規則；machopo 用 path 依賴旁邊的 ../third_party/sunaba，在 `third_party.toml` 釘住它 `main` 上 CI 測過的 commit。`ipc` 照舊依賴它，`ipc` 要不要、怎麼分出去不在這份裡。選了哪些做法見「已決定的事項」。
+把 process 的 sandbox `sunaba`（`crates/sunaba`）搬出 machopo，像 elise 一樣成為自己的 repo：從一個新的 commit 開始（每一行的理由留在 machopo 的歷史裡），有自己的 CI（Linux、macOS、Windows 都跑）、測試的缺口和修改的規則；machopo 用 path 依賴旁邊的 ../third_party/sunaba，在 `third_party.toml` 釘住它 `main` 上 CI 測過的 commit。`ipc` 照舊依賴它，`ipc` 要不要、怎麼分出去不在這份裡。選了哪些做法見「已決定的事項」。
 
 ## 動機
 
@@ -26,20 +26,20 @@
 
 - `ipc` 分出去，或拿掉 `ipc` 對 `sunaba` 的依賴（`ipc::platform` 現在直接露出 `sunaba::windows::Policy`、`Child`、`sunaba::linux::Namespaces`）：使用者之後再想（2026-11-27）。
 - 發布到 crates.io、穩定 API、版本號的規則：之後的可能。
-- 改 `sunaba` 的行為或 API。
+- 改 `sunaba` 的行為或 API（Linux 的 chroot 的測試接受兩種 errno 只改測試，已決定的事項第 11 條）。
 
 ## 設計概要
 
 做完之後：
 
-- `sunaba` 的程式、測試和文件在 `https://github.com/wusyong/sunaba`（名稱待決定），machopo 的 repo 裡沒有 `crates/sunaba`。clone 下來在任何一個平台上 `cargo test` 就是它全部的測試（`sunaba_probe` 照舊是它自己的 bin）。
+- `sunaba` 的程式、測試和文件在 `https://github.com/wusyong/sunaba`，machopo 的 repo 裡沒有 `crates/sunaba`。clone 下來在任何一個平台上 `cargo test` 就是它全部的測試（`sunaba_probe` 照舊是它自己的 bin）。
 - machopo 這一側：`python3 scripts/ci.py third-party` 把它 clone 到 ../third_party/sunaba，workspace 的 `sunaba = { path = "../third_party/sunaba" }`；`shell` 和 `ipc` 照舊 `sunaba.workspace = true`。
 - 改 `sunaba` 的人照 elise 的做法：在 ../third_party/sunaba 改、跑它的測試和檢查、commit 並 push 到它的 `main`，等它的 CI 通過，再在同一次 machopo 的改動裡更新 `third_party.toml` 的 `rev`（先 push `sunaba`、再 push machopo）。renderer 的 policy 照舊在 machopo 改。
 - `CLAUDE.md` 要人動到 `sunaba` 前先讀 `crates/sunaba/soundness.md` 的那一句，改成讀 ../third_party/sunaba 裡的那一份；「`unsafe` 只在 `bindings`、`ipc` 和 `sunaba`」裡的 `sunaba` 改成照它自己的規則（elise 的寫法）。
 
 ## 詳細設計
 
-### 搬出去的方式（P1、H1，已決定的事項第 1、2 條）
+### 搬出去的方式（P1、H2，已決定的事項第 1、9 條）
 
 **接回 machopo 的方式**：
 
@@ -50,7 +50,7 @@
 | P3 | 發布到 crates.io | 別人最好用 | 要版本號和 API 的承諾；改一次要發一版，現在 API 還跟著 machopo 變 |
 | P4 | 留在 machopo，只補自己的 CI | 最便宜 | 不是這份要的「獨立」；CI 要在 machopo 裡開 macOS、Windows 的 job |
 
-**歷史**：H1 用 `git filter-repo --subdirectory-filter crates/sunaba` 留下它在 machopo 裡的 commit（`git blame` 看得到每一行為什麼這樣寫；commit message 裡的 RFC 編號指回 machopo）；H2 從一個新的 commit 開始（乾淨，但理由只留在 machopo 的歷史裡）。選了 H1。
+**歷史**：H1 用 `git filter-repo --subdirectory-filter crates/sunaba` 留下它在 machopo 裡的 commit（`git blame` 看得到每一行為什麼這樣寫；commit message 裡的 RFC 編號指回 machopo）；H2 從一個新的 commit 開始（乾淨，但理由只留在 machopo 的歷史裡）。先選了 H1，第 2 段開始前改成 H2。
 
 ### 要補的設定（`details.md` 的「現況」有完整的清單）
 
@@ -77,7 +77,7 @@
 
 - **C1**：`sunaba` 的 CI 在 `ubuntu-latest`、`macos-latest`、`windows-latest` 上跑 `cargo test`、`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`sanity.py`，每次 push 都跑；machopo 照舊只在 `ubuntu-24.04` 上跑（`renderer_sandbox_linux` 和 `ipc` 的測試照樣經過 `sunaba`）。
 - C2：machopo 的 CI 也在 macOS 和 Windows 上跑 `sunaba` 的測試（在 ../third_party/sunaba 跑）：重複，而且要為它開 machopo 的 macOS、Windows 的 job。
-- Linux 的 runner 不允許沒有特權的 user namespace（Ubuntu 的 AppArmor 預設），`Namespaces` 的測試在那裡走「不能用」的那一條，和 machopo 的 CI 一樣（`docs/test-gaps.md` 已經記著）；之後可以在 runner 上打開（`sysctl kernel.apparmor_restrict_unprivileged_userns=0`）讓兩條都跑：待決定。
+- Linux 的 runner 不允許沒有特權的 user namespace（Ubuntu 的 AppArmor 預設），`Namespaces` 的測試在那裡走「不能用」的那一條，和 machopo 的 CI 一樣（`docs/test-gaps.md` 已經記著）；`sunaba` 的 CI 在 runner 上打開（`sysctl kernel.apparmor_restrict_unprivileged_userns=0`），chroot 的測試也跑（已決定的事項第 8 條）。
 
 ### machopo 這一側要改的
 
@@ -85,18 +85,18 @@
 - `third_party.toml` 加 `[sunaba]`（`repository`、`rev`），寫法照 `[elise]`。
 - `scripts/sanity.py`：`UNSAFE_ALLOWED` 拿掉 `crates/sunaba/src/lib.rs`，訊息裡的 `sunaba` 拿掉（machopo 自己的 `unsafe` 只在 `bindings` 和 `ipc`）。`deps`、`tests`、`numerics` 是照 `crates/*` 走的，不用改。
 - 文件：`CLAUDE.md`（先讀、`unsafe`、第三方的專案那一節）、根目錄的 `README.md`（第三方的專案）、`docs/README.md`（`crates/sunaba/soundness.md` 那一列改成指 ../third_party/sunaba）、`docs/architecture.md`（crate 的表、`unsafe` 的位置、第三方的選型照 elise 那一列寫）、`docs/test-gaps.md`（`sunaba` 自己的缺口搬走，renderer 的 policy 的留下）、`docs/limitations.md`（只確認，看法是不用改）。
-- 已完成的 RFC 的 `mutants-*.toml`（0117、0119、0120、0121）寫的是 `crates/sunaba/...`，照 `rfcs/README.md` 的規則不改：它們記的是當時的路徑。
+- 已完成的 RFC 的 `mutants-*.toml`（0117、0119、0120、0121）寫的是 `crates/sunaba` 底下的路徑，照 `rfcs/README.md` 的規則不改：它們記的是當時的路徑。
 
 ### 測試
 
 - `sunaba`：在新的 repo 的 CI 上，三個平台的 `cargo test`、clippy、fmt、`sanity.py` 都通過；本機在 Windows 上照新的 repo 的樣子單獨跑一次（不在 machopo 的 workspace 裡）。
 - machopo：`python3 scripts/ci.py third-party` 從空的 `../third_party` clone 得出 `sunaba`；`cargo test -p shell -p ipc -p browser` 和 `renderer_sandbox_*` 的測試通過；`sanity.py` 的七項通過；`cargo test --workspace`、fmt、clippy（搬完的階段）。
-- 程式不改，所以不用 mutation test；只確認 `test.py mutate` 的 spec 能不能指 ../third_party/sunaba 的檔案（之後改 `sunaba` 時要用；待決定）。
+- 程式不改，所以不用 mutation test；只確認 `test.py mutate` 的 spec 能不能指 ../third_party/sunaba 的檔案（之後改 `sunaba` 時要用；待決定的第 1 條）。
 
 ### 分階段
 
 1. **在 machopo 裡先切乾淨**：`crates/sunaba` 的 `Cargo.toml` 不再從 workspace 繼承（lint 除外：留到搬出去時才換成自己的那份，不然 machopo 的 `sanity.py unsafe` 要它 `[lints] workspace = true`）、改掉提到 machopo 的地方、補 `__pfnDliFailureHook2` 的說明；把它複製到 machopo 外面的空目錄，加上 toolchain、lint、clippy 的設定，單獨 `cargo test` 通過。
-2. **建 repo、搬出去**：使用者在 GitHub 建 repo（對外的動作，由使用者做或確認）；`git filter-repo` 帶出歷史，加上第 1 段試過的設定、文件、`sanity.py`、CI，push，等 CI 在三個平台上通過。
+2. **建 repo、搬出去**：使用者在 GitHub 建 repo（對外的動作，由使用者做或確認）；從第 1 段做完時的 `crates/sunaba` 開始一個新的 commit，加上第 1 段試過的設定、文件、`sanity.py`、CI，push，等 CI 在三個平台上通過。
 3. **machopo 改接**：照上一節改 `Cargo.toml`、`third_party.toml`、`sanity.py` 和文件，拿掉 `crates/sunaba`；跑測試和檢查。
 
 ## 缺點
@@ -121,18 +121,27 @@
 2026-11-27，使用者照草稿的看法確認：
 
 1. **照 elise 接回 machopo（P1）**：`sunaba` 是自己的 repo，machopo 用 path 依賴 ../third_party/sunaba，`third_party.toml` 釘它 `main` 上 CI 測過的 commit，`ci.py third-party` 照 elise 的那一條路 clone 和切換。理由：和 elise、fork 同一套流程和工具，本機改了馬上能在 machopo 裡試。不選 Cargo 的 git 依賴（P2：本機的改動要先 push 或另寫 `[patch]` 才試得到，和其他第三方的專案不一樣）、crates.io（P3：要版本號和 API 的承諾，API 還跟著 machopo 變）、不搬只補 CI（P4：不是要的獨立，machopo 的 CI 要為一個 crate 開兩個平台的 job）。
-2. **保留歷史（H1）**：用 `git filter-repo --subdirectory-filter crates/sunaba` 帶出它在 machopo 裡的 commit。理由：`git blame` 看得到每一行的理由。不選從新的 commit 開始（H2：理由只留在 machopo 的歷史裡）。
+2. ~~**保留歷史（H1）**~~（2026-11-28 改成 H2，第 9 條）：用 `git filter-repo --subdirectory-filter crates/sunaba` 帶出它在 machopo 裡的 commit。理由：`git blame` 看得到每一行的理由。不選從新的 commit 開始（H2：理由只留在 machopo 的歷史裡）。
 3. **文件全部英文（L1）**：README、soundness 和新的 contributing、testing 都是英文。理由：README 和 `soundness.md` 本來就是英文的，要給 machopo 以外的人讀。不選照 elise 的中文 docs/（L2）。
 4. **CI 在三個平台上跑（C1）**：`sunaba` 的 CI 在 `ubuntu-latest`、`macos-latest`、`windows-latest` 上跑 `cargo test`、clippy（`-D warnings`）、`cargo fmt --check` 和它的 `sanity.py`，每次 push 都跑；machopo 的 CI 照舊只在 `ubuntu-24.04` 上。理由：macOS 和 Windows 的程式第一次有 CI，machopo 不用為它開新的平台。不選讓 machopo 的 CI 也跑它的測試（C2：重複）。
 
 5. **延後載入失敗的 hook 是預設開著的 feature（D2）**（2026-11-27，第 1 段開始前，使用者確認）：`__pfnDliFailureHook2` 和它呼叫的 `delay_load_failed` 只在 `delay-load-hook` 這個 feature 開著時定義，`default = ["delay-load-hook"]`。理由：一個程式只能有一個這個變數，library 自己定義時，已經有自己的 hook 的程式連結不起來；預設開著，machopo、`ipc` 和 `sunaba` 自己的測試都不用改。不選照舊、只在 README 寫明（D1：那種程式用不了 `sunaba`）；不選照 Chromium 由執行檔自己定義（D3：`chrome.exe` 的 hook 在 `chrome/app`，但 machopo 的 `shell` 就要寫 `#[unsafe(no_mangle)]`，違反 `unsafe` 只在 `bindings`、`ipc` 和 `sunaba`）。
 6. **版本從 0.1.0 開始**（2026-11-27，同上）：從 workspace 繼承的 0.0.1 是 machopo 的佔位；`publish` 照舊是 `false`（不發布到 crates.io，第 1 條）。
 
+2026-11-28，第 2 段開始前，使用者確認：
+
+7. **repo 是 `github.com/wusyong/sunaba`**（公開），授權照 machopo 的 `MIT OR Apache-2.0`：使用者已經在 GitHub 建好（空的）。`Cargo.toml` 的 `repository` 和 `third_party.toml` 的 `repository` 都寫這個網址，大小寫一致（搬 elise 時留下三種寫法，`details.md`）。
+8. **Linux 的 CI 打開沒有特權的 user namespace**：Linux 的 job 跑測試前先 `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`。理由：不打開時 chroot 的兩個測試在 runner 上直接 return，看不出來沒跑；打開之後沒有權限的那一條照樣由 `a_chroot_is_made_only_where_the_process_may` 守著（它不經過 `unshare`），所以一個 Linux 的 job 就夠。不選照舊（chroot 只在開發機上測得到），也不選開兩個 Linux 的 job（多出來的那個測不到新的東西）。
+9. **歷史從一個新的 commit 開始（H2）**，取代第 2 條：新的 repo 的第一個 commit 是第 1 段做完時的 `crates/sunaba`（machopo 的 f0d1bf86）加上新的設定和文件，commit message 寫明它是從 machopo 的哪個 commit 搬來的；每一行的理由照舊在 machopo 的 `git log -- crates/sunaba` 裡。不選 H1（`git filter-repo` 帶出歷史）。
+
+2026-11-28，第一次 CI 之後（`progress.md` 的第 2 步），使用者照看法確認：
+
+10. **sunaba 的 repo 用 machopo 的 `main` 上的 default DACL 的修正**（2026-11-28 改寫）：sunaba 第一次的 CI 在 Windows 上看到 sandbox 裡的 process 的 default DACL 有 logon session；同一天 machopo 的 `main` 已經在 `crates/sunaba` 修好（fc17f43d，RFC 0121 的已決定的事項第 12 條：K2，照 Chromium 的 `SetLockdownDefaultDacl`），在 Windows 上用一般使用者跑過測試和 mutation test。sunaba 的 repo 照搬它（sunaba 的 7973001），不用第 2 段自己寫的那一版（sunaba 的 56f8237：建好 AppContainer 的 token 之後才改，第一個 thread 的 token 沒有測試）。程式和 machopo 的 `crates/sunaba` 一樣，所以不是這份 RFC 改了 sunaba 的行為。
+11. **chroot 之後查路徑的 errno 接受 `ESRCH` 或 `ENOENT`**：只改測試和文件。chroot 到已經結束的 thread 的 `/proc/thread-self/fdinfo`，查路徑失敗回哪一個看 kernel 的版本（開發機 `ESRCH`、runner `ENOENT`）；要守的是「每個路徑都一樣失敗」，Chromium 的同一個做法也不看 errno。
+
 ## 待決定
 
-1. repo 的名字（`sunaba`）和位置（`github.com/wusyong/sunaba`）；授權照 machopo 的 `MIT OR Apache-2.0`。第 2 段開始前，由使用者在 GitHub 建 repo 時定。
-2. Linux 的 runner 要不要打開沒有特權的 user namespace（`Namespaces` 的兩條路都跑）：第 2 段寫 CI 時決定。
-3. `test.py mutate` 要不要支援 ../third_party 底下的檔案（elise 的 mutation test 現在怎麼跑，先查）：第 3 段之前。
+1. `test.py mutate` 要不要支援 ../third_party 底下的檔案（elise 的 mutation test 現在怎麼跑，先查）：第 3 段之前。
 
 ## 之後的可能
 

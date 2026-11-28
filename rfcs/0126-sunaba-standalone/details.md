@@ -33,7 +33,7 @@
 - `scripts/sanity.py`：`UNSAFE_ALLOWED` 有 `crates/sunaba/src/lib.rs`，`unsafe` 的訊息提到它；`unsafe` 也要每個 `crates/*/Cargo.toml` 有 `[lints] workspace = true`。`deps`、`tests`、`numerics`、`boundary` 照 `crates/*` 走，沒有它的專屬設定；`docs` 讀 `crates/*/*.md`。
 - `scripts/test.py`、`scripts/ci.py`、量測的腳本、`.github/workflows/`：沒有提到它；CI 經過 `cargo clippy --workspace`、`cargo test --workspace` 和 `sanity.py` 間接跑它，都在 `ubuntu-24.04` 上。
 - 文件：`CLAUDE.md`（先讀它的 `soundness.md`、`sanity.py unsafe`、`unsafe` 的位置）、`docs/README.md`（`crates/sunaba/soundness.md` 那一列）、`docs/architecture.md`（crate 的表、`unsafe` 的位置、Linux 的 namespace）、`docs/limitations.md`（兩處提到）、`docs/test-gaps.md`（約二十條，一部分是 `sunaba` 自己的缺口，一部分是 renderer 的 policy 的；`SIGSYS` 的那一條寫「`sunaba` 獨立之後」）。
-- 已完成的 RFC 0117、0119、0120、0121 的 `mutants-*.toml` 寫 `crates/sunaba/...` 和 `cargo test -p sunaba`。
+- 已完成的 RFC 0117、0119、0120、0121 的 `mutants-*.toml` 寫 `crates/sunaba` 底下的路徑和 `cargo test -p sunaba`。
 
 ### elise 怎麼接在 machopo 上（照著做的樣子）
 

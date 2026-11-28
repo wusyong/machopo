@@ -7,7 +7,7 @@
 | 步驟 | 狀態 | 完成日期 |
 | --- | --- | --- |
 | 1. 在 machopo 裡先切乾淨：`Cargo.toml` 不再從 workspace 繼承（lint 除外）、改掉提到 machopo 的地方、延後載入失敗的 hook；複製到外面單獨編和測；已決定的事項第 5、6 條 | 做完 | 2026-11-27 |
-| 2. 建 repo、搬出去：帶出歷史，設定、文件、`sanity.py`、三個平台的 CI | 還沒開始 | |
+| 2. 建 repo、搬出去：從一個新的 commit 開始，設定、文件、`sanity.py`、三個平台的 CI；已決定的事項第 7–9 條 | 做完 | 2026-11-28 |
 | 3. machopo 改接：`Cargo.toml`、`third_party.toml`、`sanity.py`、文件，拿掉 `crates/sunaba` | 還沒開始 | |
 
 ## 驗收
@@ -30,3 +30,23 @@
 - **Mutation test**（`mutants-1.toml`，2 個，`--keep-going`）：hook 不是預設的（`default = []`）、hook 不跟著 feature（條件反過來）：都由 `shell` 的 `renderer_sandbox_windows::` 抓到（看不到延後載入失敗的那一行）。跑完確認檔案都還原了。
 - **測不到的**：關掉 feature 時沒有定義那個變數，只看得到編得起來（記在 `crates/sunaba/soundness.md` 的 Windows 沒有測試、靠審查的那一串）；macOS 和 Linux 上這一段改到的只有 `Cargo.toml`，沒有在那裡編（第 2 段的 CI 會）。
 - **跑過的檢查**：`cargo test -p sunaba`（unit 8 個、整合 29 個通過）；`cargo clippy -p sunaba --all-targets -- -D warnings`，加 `--no-default-features` 再一次（都沒有警告）；`cargo test -p shell --test it renderer_sandbox_windows`（13 個通過）；`cargo test -p ipc`（都通過）；`sanity.py` 的七項（都通過）。`Cargo.lock` 跟著改了 `sunaba` 的版本。
+
+### 2（2026-11-28，macOS 26，Apple Silicon；Linux 和 Windows 由 sunaba 的 CI）
+
+- **做法**：在 ../third_party/sunaba 開一個新的 repo（`main`，`origin` 是 `https://github.com/wusyong/sunaba`），檔案是 f0d1bf86 的 `crates/sunaba`（`git ls-files`），`soundness.md` 移到 `docs/soundness.md`（`lib.rs` 和 README 指過去）。`Cargo.toml` 加 `[workspace]`（在哪裡 checkout 都單獨編得起來；machopo 用 path 依賴時有自己的 workspace，elise 也是這樣）、`repository`、`readme`，`[lints] workspace = true` 換成自己的 `[lints.rust]`、`[lints.clippy]`（照 machopo 抄，不抄 `unexpected_cfgs`）。第 1 段試過的 `rust-toolchain.toml`（1.99.0）、`clippy.toml`（只有 `fetch_add`），加上 `.gitattributes`、`.gitignore`、machopo 的兩份授權。README 的「It depends on nothing of the workspace it sits in」改成說 policy 由用它的程式寫、machopo 是例子，加 Building and testing、Contributing、License；`cargo test -p sunaba` 改成 `cargo test`。
+- **新的文件**（英文，已決定的事項第 3 條）：`docs/contributing.md`（和 machopo 的關係、改一次的三步、規則、整數運算的規則照 elise 的那份翻成英文、做完之前跑什麼）；`docs/testing.md`（指令、CI、測試守不住的地方：從 machopo 的 `docs/test-gaps.md` 搬過去的 `sunaba` 自己的那幾條，加上 `docs/soundness.md` 寫著只靠審查、還沒列在 machopo 的幾條：fork 和 exec 之間不配置、沒有 Landlock 的 kernel、Windows 10、console；由用它的程式的測試守著的 namespace；兩條等價的 mutation）。machopo 那一側的刪除是第 3 段的事。
+- **`scripts/sanity.py`**：`unsafe`（`Cargo.toml` deny `unsafe_code` 和 `unsafe_op_in_unsafe_fn`、打開 `undocumented_unsafe_blocks`；只有 `src/lib.rs` allow `unsafe_code`；`src/` 底下 code 裡有 `unsafe` 的檔案都在 `docs/soundness.md` 的表裡有一列，表裡的檔案都在）、`tests`、`numerics`（照 elise 的那份，改成一個 crate 在根目錄）。`// SAFETY:` 本身由 clippy 的 `undocumented_unsafe_blocks` 檢查（block 和 impl），extern block 和 `#[unsafe(no_mangle)]` 的論證在 soundness 的表裡，所以 `unsafe` 檢查的是表。在一份複本裡弄壞過：`unsafe_code` 改成 warn、`names.rs` 加一個 `unsafe` block、`macos.rs` allow `unsafe_code`、表裡寫一個不存在的檔案、`linux.rs` 用 `#[allow]` 關掉轉型的 lint、`tests/` 底下多一個檔案、`tests/it/` 多一個沒宣告的模組：每一項都報了。
+- **CI**（`.github/workflows/ci.yml`）：每次 push、PR 和每天一次；`ubuntu-latest`、`macos-latest`、`windows-latest` 上 `cargo test`、clippy（`-D warnings`），Windows 上再不帶預設的 feature 跑一次兩者（feature 只有 Windows 用）；Linux 先 `sysctl` 打開 user namespace（已決定的事項第 8 條）；`ubuntu-latest` 上 fmt 和 `sanity.py` 的三項。
+- **本機（macOS）**：`cargo test`（unit 2 個、整合 19 個通過）、`--no-default-features`（一樣）、兩種 feature 的 clippy `-D warnings`、`cargo fmt --check`、`sanity.py` 的三項都通過。
+- **要注意的**：使用者的全域 gitignore 排除 `.gitattributes`，commit 時要 `git add -f`（machopo 和 elise 的也是這樣進去的）。
+- **第一次 push 和 CI**（sunaba 的 0b77de23，run 46091850428）：`lint` 和 macOS 通過；Linux 和 Windows 各有一個測試失敗，都是第一次在那種機器上跑才看得到的：
+  - Linux（打開 user namespace 之後 chroot 的測試第一次在 CI 上跑）：`a_chroot_leaves_no_path_not_even_to_say_what_is_there` 的 `stat /etc` 是 `ENOENT`，不是測試要的 `ESRCH`。chroot 到已經結束的 thread 的 `/proc/thread-self/fdinfo` 之後，查路徑失敗的 errno 看 kernel 的版本（開發機的是 `ESRCH`）；「沒有路徑」照樣成立。
+  - Windows（runner 是 elevated 的系統管理員）：`the_process_has_a_lockdown_app_containers_token` 讀到的 default DACL 是 Administrators、SYSTEM、logon session（`S-1-5-5-…`）和它自己的 AppContainer，沒有使用者。RFC 0121 的已決定的事項第 3 條（K1）不另外設 default DACL，靠的是系統給的預設沒有 logon session，探測的是一般使用者的開發機；這個測試就是為了系統的預設不同時看得到。
+  - 處理（使用者 2026-11-28 照看法確認，已決定的事項第 10、11 條）：Windows 照 Chromium 自己設 default DACL（`windows.rs` 的 `lockdown_default_dacl`，用在 primary 和第一個 thread 的 token；soundness 的表多一列，README 和承諾第 1 條寫明）；Linux 的測試接受 `ESRCH` 或 `ENOENT`（`is_no_path`），README、`linux.rs` 的說明和 soundness 跟著改。`docs/testing.md` 加上 CI 的 Windows 是 elevated 的系統管理員、第一個 thread 的 token 的 default DACL 只靠審查。
+  - 在 macOS 上只編得到 Linux 和 Windows 以外的部分：本機的 `cargo test`、clippy、fmt、`sanity.py unsafe` 通過；Windows 的程式和 Linux 的測試要等 CI。
+  - CI（sunaba 的 `fix-ci` branch，56f8237，run 46092690361）：三個平台的 test 和 lint 都通過；Linux 的整合測試 22 個（chroot 的那幾個真的跑了：上一次是在它的斷言失敗的）、Windows 的 29 個（`the_process_has_a_lockdown_app_containers_token` 通過），Windows 不帶預設的 feature 也通過。Windows 編 `sunaba_probe` 的測試版本時連結器警告 `LNK4199`（`/DELAYLOAD:user32.dll` 沒有用到：測試的 harness 版本不呼叫 `user32`），只是警告。
+  - sunaba 的 `main` fast-forward 到 56f8237、push（使用者確認）。
+  - **改成 machopo 的修正**（使用者確認，已決定的事項第 10 條改寫）：machopo 的 `origin/main` 同時有修同一件事的 fc17f43d（在 Windows 上用一般使用者跑過，mutation 9 個抓到 8 個）。sunaba 的 `dacl-from-machopo` branch（7973001）把 56f8237 的 Windows 那一半換成 fc17f43d 對 `crates/sunaba` 的改動（`git diff --relative=crates/sunaba`，`soundness.md` 的路徑改成 `docs/`，和第 1 段的改動重疊的兩段手動套），Linux 那一半留著。確認過：`src/windows.rs`、`windows/probe.rs`、`windows/handles.rs`、`tests/it/windows.rs` 和 0126 rebase 到 `origin/main` 之後的 `crates/sunaba` 的完全一樣；其他檔案只差 sunaba 的 repo 自己的改動（`Cargo.toml` 的 workspace 和 lint、`lib.rs` 指的 `docs/soundness.md`、Linux 的 errno、README 和 soundness 的那幾句）。default DACL 的 mutation test 不在這裡重跑：程式和 machopo 跑過的那份一樣。
+  - CI（`dacl-from-machopo`，run 46093751158）：三個平台和 lint 都通過；Windows 的整合測試 30 個（多了 `what_its_threads_make_isnt_for_the_logon_session`），兩種 feature 都是；Linux 22 個。sunaba 的 `main` fast-forward 到 7973001、push。
+  - **和 CI 對不上的事實**：fc17f43d 和它的 `docs/test-gaps.md` 寫「CI 的 Windows runner 是 UAC 關掉的管理員，和 elevated 一樣，看不出來」，以及「不給使用者 `GENERIC_ALL` 是等價的 mutation」。sunaba 的第一次 CI（run 46091850428，`windows-latest`）讀到的 default DACL 是 Administrators、SYSTEM、logon session（`S-1-5-5-0-…`）和 AppContainer、沒有使用者：logon session 在上面（那個測試就是因此失敗的），使用者不在上面（`GENERIC_ALL` 那個 mutation 在 runner 上抓得到）。sunaba 的 `docs/testing.md` 照這個寫；machopo 的 `docs/test-gaps.md` 的那兩條第 3 段搬走時拿掉。
+- 推送：HTTPS 沒有認證，`origin` 的 push URL 設成 SSH（`git@github.com:wusyong/sunaba.git`，只在 ../third_party/sunaba 的設定），fetch 照舊是 HTTPS。
