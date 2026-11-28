@@ -275,8 +275,10 @@ impl<'r> Cors<'r> {
     /// sees (a CORS-filtered response's headers, an opaque one's status
     /// and headers) is the renderer's, as Blink's `FetchResponseData` does
     /// it, so DevTools there sees the response as it came; but an opaque
-    /// `fetch()`'s body stays here: no script may read it, and machopo has no
-    /// opaque response blocking to keep a renderer from it otherwise.
+    /// `fetch()`'s body stays here: no script may read it (Chromium's
+    /// opaque response blocking gives a blocked one's `fetch()` an empty
+    /// response too). The other destinations' opaque responses go on to
+    /// opaque response blocking (`orb`).
     pub(crate) fn filter(&self, mut response: Response) -> Response {
         response.head.tainting = self.tainting;
         if self.tainting == ResponseTainting::Opaque

@@ -552,6 +552,9 @@ pub enum NetErrorCode {
     /// The response said it isn't for whoever asked
     /// (`Cross-Origin-Resource-Policy`).
     BlockedByResponse,
+    /// A renderer's opaque response that is plainly HTML, XML or JSON,
+    /// which it may not have (opaque response blocking).
+    BlockedByOrb,
 }
 
 impl NetErrorCode {
@@ -576,6 +579,7 @@ impl NetErrorCode {
             Self::CertAuthorityInvalid => "ERR_CERT_AUTHORITY_INVALID",
             Self::CertDateInvalid => "ERR_CERT_DATE_INVALID",
             Self::BlockedByResponse => "ERR_BLOCKED_BY_RESPONSE",
+            Self::BlockedByOrb => "ERR_BLOCKED_BY_ORB",
             Self::CertCommonNameInvalid => "ERR_CERT_COMMON_NAME_INVALID",
             Self::CertInvalid => "ERR_CERT_INVALID",
             Self::ContentDecodingFailed => "ERR_CONTENT_DECODING_FAILED",

@@ -71,6 +71,7 @@ mod host_mapping;
 mod http;
 mod http_cache;
 mod mime;
+mod orb;
 pub mod test_server;
 mod url_loader;
 

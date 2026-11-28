@@ -1,0 +1,145 @@
+# Stage 2's mutants (opaque response blocking): `python3 scripts/test.py mutate rfcs/0128-orb/mutants-2.toml`.
+test = ["sh", "-c", "cargo test -q -p net --lib orb"]
+timeout = 1200
+
+[[mutant]]
+name = "no response is blocked"
+file = "crates/net/src/url_loader.rs"
+from = '''                return crate::orb::check(request, response).await;'''
+to = '''                return Ok(response);'''
+test = ["sh", "-c", "python3 scripts/test.py wpt fetch/corb/ 2>&1 | grep -q 'Got 0 unexpected'"]
+
+[[mutant]]
+name = "a same-origin response is looked at"
+file = "crates/net/src/orb.rs"
+from = '''        && tainting == ResponseTainting::Opaque'''
+to = '''        && tainting != ResponseTainting::Cors'''
+
+[[mutant]]
+name = "the browser's own requests are looked at"
+file = "crates/net/src/orb.rs"
+from = '''        && request.initiator.is_some()'''
+to = ''''''
+
+[[mutant]]
+name = "a fetch()'s response is looked at"
+file = "crates/net/src/orb.rs"
+from = '''        && request.destination != RequestDestination::Empty'''
+to = ''''''
+test = ["sh", "-c", "cargo test -q -p net --lib orb && python3 scripts/test.py wpt fetch/orb/ 2>&1 | grep -q 'Got 0 unexpected'"]
+
+[[mutant]]
+name = "nothing is safelisted"
+file = "crates/net/src/orb.rs"
+from = '''        if safelisted(mime_type) {
+            return Decision::Allow;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "media isn't safelisted"
+file = "crates/net/src/orb.rs"
+from = '''    ) || mime_type.starts_with("audio/")
+        || mime_type.starts_with("video/")'''
+to = '''    )'''
+
+[[mutant]]
+name = "never-sniffed types are sniffed"
+file = "crates/net/src/orb.rs"
+from = '''            Kind::NeverSniffed => return Decision::Block(Blocked::NeverSniffedMimeType),'''
+to = ''''''
+
+[[mutant]]
+name = "nosniff blocks nothing"
+file = "crates/net/src/orb.rs"
+from = '''            Kind::Html | Kind::Json | Kind::Plain | Kind::Xml if nosniff(headers) => {'''
+to = '''            Kind::Html | Kind::Json | Kind::Plain | Kind::Xml if false => {'''
+
+[[mutant]]
+name = "nosniff blocks any type"
+file = "crates/net/src/orb.rs"
+from = '''            Kind::Html | Kind::Json | Kind::Plain | Kind::Xml if nosniff(headers) => {'''
+to = '''            _ if nosniff(headers) => {'''
+
+[[mutant]]
+name = "SVG is XML"
+file = "crates/net/src/orb.rs"
+from = '''        "image/svg+xml" | "application/dash+xml" => Kind::Others,'''
+to = ''''''
+
+[[mutant]]
+name = "any range is blocked"
+file = "crates/net/src/orb.rs"
+from = '''            .is_some_and(|first| first > 0)'''
+to = '''            .is_some()'''
+
+[[mutant]]
+name = "a range from the middle is allowed"
+file = "crates/net/src/orb.rs"
+from = '''    if range_from_the_middle(status, headers) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "an unlabeled body is sniffed as HTML"
+file = "crates/net/src/orb.rs"
+from = '''    if mime_type.is_none() {
+        return Ok(());
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "HTML isn't sniffed"
+file = "crates/net/src/orb.rs"
+from = '''    if sniff_html(data) == Sniffed::Yes {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "HTML comments aren't skipped"
+file = "crates/net/src/orb.rs"
+from = '''            Some(rest) => data = rest,'''
+to = '''            Some(_) => return Sniffed::No,'''
+
+[[mutant]]
+name = "HTML signatures are case sensitive"
+file = "crates/net/src/orb.rs"
+from = '''        let found = matches_signature(data, SIGNATURES, true);'''
+to = '''        let found = matches_signature(data, SIGNATURES, false);'''
+
+[[mutant]]
+name = "XML isn't sniffed"
+file = "crates/net/src/orb.rs"
+from = '''    if sniff_xml(data) == Sniffed::Yes {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "JSON's key isn't looked for"
+file = "crates/net/src/orb.rs"
+from = '''            (State::RightQuote, b':') => return Sniffed::Yes,'''
+to = '''            (State::RightQuote, _) => return Sniffed::Yes,'''
+
+[[mutant]]
+name = "script-breaking prefixes aren't sniffed"
+file = "crates/net/src/orb.rs"
+from = '''    let found = matches_signature(data, PREFIXES, false);
+    if found != Sniffed::No {
+        return found;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "a BOM isn't stripped"
+file = "crates/net/src/orb.rs"
+from = '''    data.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(data)'''
+to = '''    data'''
+
+[[mutant]]
+name = "the MIME type is Fetch's"
+file = "crates/net/src/orb.rs"
+from = '''value.find([' ', '\t', ';', '('])'''
+to = '''value.find([';'])'''
+
+[[mutant]]
+name = "nosniff is any value"
+file = "crates/net/src/orb.rs"
+from = '''        .and_then(|(_, value)| value.split(',').next())'''
+to = '''        .and_then(|(_, value)| value.split(',').last())'''

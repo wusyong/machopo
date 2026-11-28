@@ -330,6 +330,10 @@
 
 弄壞之後行為完全一樣，記在這裡免得重複追查。
 
+**ORB 把 `image/svg+xml`、`application/dash+xml` 先分到「其他」，不讓 `+xml` 的字尾把它們當成 XML（`net` 的 `orb.rs` 的 `kind`）**
+
+- 拿掉時它們成了 XML，但走不到：兩者都在放行清單裡（`safelisted`），判斷種類之前就放行了。留著是照 Chromium 的 `GetCanonicalMimeType`，放行清單改了時才不等價。
+
 **換到別的網站的 renderer 時，commit 拿掉發起的 renderer 自己的導覽編號（`browser` 的 `web_contents.rs` 的 `commit` 的 `forget_begin_id`）**
 
 - 拿掉時新的 renderer 收到舊的 renderer 的 `begin_id`：它在第一次 commit 之前沒跑過任何 script，沒有自己的導覽，照那個編號找（`take_navigation`）什麼也找不到，和沒有編號一樣。留著是因為編號是另一個 renderer 的：新的 renderer 一開始就有自己的導覽時（預先啟動的 renderer、同一個 renderer 裝好幾個分頁）就不再等價。

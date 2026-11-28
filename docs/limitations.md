@@ -331,6 +331,7 @@
   - 導覽不記住它解析時對應的 blob（Chrome 帶著 `BlobURLToken`）：撤銷之後重新載入那份文件會失敗（規範和 Chrome 照樣載得到；WPT 的 `url-reload.window.js`）。要修就照 Chrome 讓導覽帶著解析好的 blob，上一條也一起修掉。
   - `Request` 不記住它的網址建立時對應的 blob：建立 `Request` 之後撤銷，再 `fetch(request)` 是 network error（規範和 Chrome 拿得到；WPT 的 `url-with-fetch.any.js`）。
   - 用 `target=_blank` 等開到新分頁的 blob URL，要等 embedder 開好分頁才載入，那時可能已經撤銷了。
+  - 子資源的 blob URL 照登記它的 renderer 找，不照 origin：同一個 renderer 裡別的 origin（跨網站的 iframe）做的 blob URL 也載得到（Chrome 照 storage key 分開，拿不到；WPT 的 `fetch/corb/script-html-via-cross-origin-blob-url.sub.html`）。
   - blob 的 `Content-Type` 照 blob 的 type 送，不檢查是不是合法的 MIME type；`Range` 的單位不分大小寫。兩者都照 Chrome 152，WPT 要求的是空的 type 和分大小寫。
 - `URL` 和 `URLSearchParams`：沒有 `webkitURL` 這個舊名字；`URL.createObjectURL` 只收 `Blob`（沒有 `MediaSource`）。解析用 `url` crate（2.5.8）和它的 `idna`，和 URL Standard 不一致的地方不在 machopo 這邊修：WPT 的 URL 資料（2026-10-08）`urltestdata` 896 個裡 69 個不過（`file:` URL 的 host 和多個斜線、Windows 的磁碟代號 `|`、opaque path 結尾的空白沒有編碼成 `%20`、IPv4 形式的 host 裡的 `xn--` 標籤），setter 278 個裡 22 個，`toascii` 87 個裡 21 個，`IdnaTestV2` 2671 個裡 759 個（大多是 `xn--` 標籤解碼之後的檢查比規範嚴）。Lua 的 runtime 把 table 當成 record 時，順序是 Lua 的 `next` 的（Lua 的 table 沒有別的順序），JS 的物件和 wasm 的 `list<tuple<…>>` 照給的順序。
 - shadow DOM 有 shadow tree（`attachShadow()`、`shadowRoot`、`ShadowRoot` 的設定、markup 和 `getElementById`），裡面的節點和 host 一起算在 document 裡（`isConnected`、`getRootNode({ composed })`、執行 `<script>`、載入 `<iframe>`，`clonable` 的跟著 host 複製），事件經過 shadow root 到 host、retarget（`composed`、`composedPath()`、`relatedTarget`），`activeElement` 照 shadow tree retarget；還沒有的：

@@ -1,7 +1,7 @@
 # RFC 0128：跨源的回應不交給不該拿的 renderer（ORB 和 CORP）
 
 - 開始日期：2026-11-28
-- 狀態：🚧 已排程：2026-11-28
+- 狀態：✅ 已完成：2026-11-28（Linux：Fedora 45）
 - 進度和驗收：`progress.md`
 - 細節：`details.md`
 
@@ -40,17 +40,19 @@ RFC 0122 路線圖的 N（M1 的第二份）。
 - **`Sec-Fetch-*`**（路線圖的 FM，RFC 0127 的已決定的事項第 5 條）。
 - DevTools 的 Network 面板顯示「被 ORB 擋掉」、console 的警告：之後的可能。
 
-要解決的 `docs/limitations.md` 的限制：沒有直接的一條。「隔離」裡沒有寫 ORB；`net` 的 `cors.rs` 的註解寫著「machopo has no opaque response blocking」，做完時改。
+要解決的 `docs/limitations.md` 的限制：「網路」的「`null` 的發起者照收、不核對 precursor」（拿掉了，「發起者」）。「隔離」裡沒有寫 ORB；`net` 的 `cors.rs` 的註解寫著「machopo has no opaque response blocking」，改了。
+
+做的時候找到、寫進 `docs/limitations.md` 的（都是本來就有的，和這份的改動無關）：`<img crossorigin>` 沒有作用；子資源的 blob URL 照 renderer 找、不照 origin。
 
 ## 設計概要
 
 給使用網頁的人：
 
-- `<img>` 指到別的網站的 JSON、HTML，現在就畫不出來，之後也一樣，只是 renderer 拿到的是網路錯誤，不是那份內容。
-- `<script src>` 指到別的網站的 JSON（JSONP 以外的 API）：現在 renderer 拿得到內容、執行時語法錯誤；之後是網路錯誤，`onerror` 照樣觸發。
+- `<img>` 指到別的網站的 JSON、HTML：本來就畫不出來，現在 renderer 拿到的是網路錯誤，不是那份內容。
+- `<script src>` 指到別的網站的 JSON（JSONP 以外的 API）：原本 renderer 拿得到內容、執行時語法錯誤；現在是網路錯誤，`onerror` 照樣觸發。
 - `fetch(url, {mode: 'no-cors'})` 拿到的照樣是 opaque 的回應，看不到內容。
 - 伺服器送 `Cross-Origin-Resource-Policy: same-origin` 的圖片、script，別的網站用不了，和 Chrome 一樣。
-- `data:` 網址的 worker 發的請求不再帶 cookie，和 Chrome 一樣（現在帶）。
+- `data:` 網址的 worker 發的請求不再帶 cookie，和 Chrome 一樣（原本帶）。
 - 被擋掉時頁面看到的，和 Chrome 一樣：`no-cors` 的 `fetch()` 照樣是 opaque 的回應，`<img>`、`<script>` 是網路錯誤（已決定的事項第 2 條）。
 
 給改 machopo 的人：
@@ -62,9 +64,9 @@ RFC 0122 路線圖的 N（M1 的第二份）。
 
 ### 發起者（已決定的事項第 3 條）
 
-- **不帶的是壞訊息**：Browser 的 `check_request` 收到 renderer 的子資源請求 `initiator` 是 `None` 的，是壞訊息（新的 `BadMessageReason`，或擴大 `InitiatorMismatch`）。renderer 在文件不在時（`load_origin` 找不到 document）現在送 `None`，改成不送那個請求。
+- **不帶的是壞訊息**：Browser 的 `check_request` 收到 renderer 的子資源請求 `initiator` 是 `None` 的，是壞訊息（`BadMessageReason::NoInitiator`，Chromium 的 `kNoInitiator`）。renderer 在文件不在時（`load_origin` 找不到 document）不送那個請求（原本送 `None`）。
 - **CORS 照 `mode`**：renderer 的請求一定帶發起者，到了 `net` 就一律照 `mode` 走 CORS（`no-cors` 的回應是 opaque 的）。`net` 的 `Cors::new` 照舊在沒有 `initiator` 時不走 CORS：只剩 Browser 自己的請求（導覽）沒有，它們不該走 CORS（導覽的回應不是 opaque 的），也不走 ORB（Chromium 的 `IsOpaqueResponse`：「Browser-initiated requests are never opaque」）。草稿原本寫「`Cors::new` 改成照 `mode`」，實作時發現它照「有沒有發起者」分的正是「renderer 的、Browser 自己的」，擋在 Browser 這一側（壞訊息）就夠了，`net` 不用改。
-- **opaque 的 worker 有自己的參數**：`data:` 網址的 worker（和它開的 worker）的 origin 是 opaque 的，現在用的是建它的文件的 loader，所以照那個文件的可信參數帶 cookie，Chrome 不帶（`details.md` 的「opaque 的 context 和 cookie」）。改成照 Chromium 的結構：每個 dedicated worker 有自己的參數（Chromium 的 `CreateNetworkFactoryForSubresources`），origin 是 opaque 的拿 opaque 的可信參數，site for cookies 是空的（Chromium 的 `UpdateIsolationInfoAndStorageAccessForOpaqueOrigin`），最上層的網站照舊（HTTP cache 的分區不變）。Browser 在 `DedicatedWorkerCreated` 時知道它的主 script 的網址和建它的是誰，就知道它是不是 opaque 的；worker 的請求本來就帶 worker 的編號，IO thread 照編號換上它的參數，protocol 不用多一則訊息。
+- **opaque 的 worker 有自己的參數**：`data:` 網址的 worker（和它開的 worker）的 origin 是 opaque 的，用的是建它的文件的 loader，原本照那個文件的可信參數帶 cookie，Chrome 不帶（`details.md` 的「opaque 的 context 和 cookie」）。改成照 Chromium 的結構：每個 dedicated worker 有自己的參數（Chromium 的 `CreateNetworkFactoryForSubresources`），origin 是 opaque 的拿 opaque 的可信參數，site for cookies 是空的（Chromium 的 `UpdateIsolationInfoAndStorageAccessForOpaqueOrigin`），最上層的網站照舊（HTTP cache 的分區不變）。Browser 在 `DedicatedWorkerCreated` 時知道它的主 script 的網址和建它的是誰，就知道它是不是 opaque 的；worker 的請求本來就帶 worker 的編號，IO thread 照編號換上它的參數，protocol 不用多一則訊息。
 - **文件的 loader 收到 `"null"`**：照收（Chromium 的 `VerifyRequestInitiatorLock`：「Opaque |initiator| is always allowed」，factory 被 opaque 的 frame 沿用時會這樣），但當成 opaque 的 context 發的：可信參數的 site for cookies 換成空的，不帶 cookie。這樣被攻破的 renderer 拿文件的 loader、寫 `"null"`、對信任 `Origin: null` 的伺服器發帶 credentials 的 CORS 請求，拿到的和任何網頁用 `data:` worker 拿到的一樣（沒有 cookie）。`docs/limitations.md` 的「網路」裡「請求的 `initiator` 是 opaque 的（`null`）時照收，不像 Chromium 核對它的 precursor」那一句拿掉：Chromium 也不核對（「opaque 的 context 和 cookie」），machopo 又多了不帶 cookie。
 
 ### ORB
@@ -78,11 +80,16 @@ RFC 0122 路線圖的 N（M1 的第二份）。
 3. HTML、JSON、`text/plain`、XML，又有 `nosniff`：擋。
 4. `206` 而且不是從頭開始（`Content-Range` 的第一個 byte 大於 0）：擋。Chromium 對之前記住是媒體的 URL 放行，machopo 沒有媒體，一律擋。
 5. sniff 開頭的 1024 bytes（`net` 的 `SNIFF_LENGTH`）：
-   - 是圖片、音訊、影片的特徵：放行；
+   - 沒有 `Content-Type` 的：放行；
    - 是 HTML（`<!doctype html`、`<script`、`<html` 這類，`<!--` 不算）、XML（`<?xml`）、JSON（`{"…":` 的開頭，或 `)]}'`、`{}&&`、`for(;;);` 這類 JavaScript 跑不了的前綴）：擋；
    - 都不是：放行（Chromium 的「fail open」，規範的完整 ORB 在這裡 parse JavaScript）。
 
-sniff 要的 HTML、XML、JSON 的特徵是新寫的（`net` 的 `mime::sniff` 現在只分 `<` 開頭和文字），照 Chromium 的 `orb_sniffers.cc`。圖片的特徵（PNG、JPEG、GIF、WebP……）照 `mime sniff` 規範的「image type pattern」。
+sniff 要的 HTML、XML、JSON 的特徵是新寫的（`net` 的 `mime::sniff` 只分 `<` 開頭和文字），照 Chromium 的 `orb_sniffers.cc`：HTML 跳過開頭的空白和 `<!-- … -->`（註解跳過之後從那一行的結尾接著看），特徵不分大小寫、只比前綴；XML 只認大小寫相同的 `<?xml`；JSON 是 `{`、雙引號的字串、`:` 的狀態機。Chromium 在這些之前先照 `net::SniffMimeTypeFromLocalData` 的特徵放行圖片和影音，並記下影音的網址：machopo 不做這一步，因為沒有一種圖片或影音的特徵是 `<`、`{`、`)` 這些開頭的，放行和不放行結果一樣（mutation test 抓不到，寫了也沒有測試守得住）；記網址要等媒體元素。
+
+實作時照原始碼確認、和草稿不同的兩處：
+
+- **MIME type 只看 `Content-Type`，照 Chromium 的寬鬆解析**：沒有 `Content-Type` 的回應直接放行（不 sniff HTML 這些，Chromium 的 `Sniff` 是這樣）。ORB 判斷時用的 MIME type 照 Chromium 的 `HttpUtil::ParseContentType`：值在第一個空白、`;`、`(` 停下，所以 `image/svg xml`（query 裡的 `+` 被解成空白）是 `image/svg`；Fetch 的解析把它當成沒有。renderer 看到的 MIME type 照舊照 Fetch。不照 Chromium 的話，這種回應不 sniff 就放行，WPT 的 `fetch/corb/script-resource-with-json-parser-breaker` 和 Chrome 不同。
+- **影音**：Chromium 把 sniff 出是影音的網址記下來，之後同一個網址的從中間開始的 `206` 放行；machopo 沒有媒體元素，不 sniff 影音也不記，從中間開始的 `206` 一律擋。做 `<video>`、`<audio>` 時兩者一起加（「之後的可能」）。
 
 被擋的回應（已決定的事項第 2 條）：destination 是空的（`fetch()`）換成空的回應，其他的換成網路錯誤。
 
@@ -99,21 +106,21 @@ sniff 要的 HTML、XML、JSON 的特徵是新寫的（`net` 的 `mime::sniff` �
 
 ### 被擋掉之後
 
-- `net` 記一筆 log（URL、為什麼擋、哪一條規則），DevTools 的 Network 和 console 之後再說（「之後的可能」）。
+- `net` 記一筆 debug 的 log（URL、哪一條規則，`orb::Blocked`），DevTools 的 Network 和 console 之後再說（「之後的可能」）。
 - renderer 收到的和網路錯誤一樣（或空的回應），它不知道是被擋的：和 Chromium 一樣，不讓頁面從錯誤的種類分辨出內容是什麼。
 
 ### 測試
 
-- `net` 的單元測試：每一條 ORB 的規則（MIME type 的清單、`nosniff`、`206`、每一種 sniff 的特徵、fail open）、CORP 的每一種值和 `same-site` 的 scheme、IP 位址。
-- WPT：`fetch/orb/tentative/`、`fetch/cross-origin-resource-policy/`、`fetch/corb/` 能跑的加進 `tests/wpt/include.txt`（要 `<video>`、COEP、HTTPS 的另外看），預期結果照 Chrome。
-- 被攻破的 renderer：不帶發起者的請求是壞訊息（`rogue_on_commit` 加一個角色）；拿文件的 loader 寫 `"null"` 的 CORS 請求不帶 cookie。
-- `data:` worker 帶 credentials 的請求不帶 cookie、`Origin` 是 `null`（照 Chrome 實測的）。
-- 整合測試：跨網站的 `<img>`、classic `<script>` 拿到 JSON、HTML 時是網路錯誤，CSS、圖片、JavaScript 照常；`no-cors` 的 `fetch()` 照樣 resolve 成 opaque 的回應。
-- mutation test：每一條規則。
+測試的清單、mutation test 的結果在 `progress.md`。
+
+- `net` 的單元測試：ORB 的每一條規則（MIME type 的清單、`nosniff`、`206`、每一種 sniffer、Chromium 的 `Content-Type` 解析、fail open、只看哪些請求），CORP 的每一種值、大小寫、`same-site` 的 scheme 和 IP 位址。
+- `browser` 的：不帶發起者是壞訊息、`"null"` 和 opaque 的 worker 拿 opaque 的參數；被攻破的 renderer（自己的 process）送不帶發起者的請求被結束；`data:` worker 的 `fetch()` 和它的 module 的靜態 import 不帶 cookie。
+- WPT：`fetch/orb/`、`fetch/corb/`、`fetch/cross-origin-resource-policy/` 加進 `tests/wpt/include.txt`。CORP 的失敗都是 machopo 沒有的東西（`SharedWorker`、service worker、`<img crossorigin>`）。`fetch/orb/`、`fetch/corb/` 的每個 subtest 都和 Chrome 158 stable 的結果比過（2026-11-27 的 wpt.fyi 的 run）：不同的只在 machopo 沒有的 `<audio>`、`<video>`、`<link rel=preload>`、`ping`，和本來就有的「子資源的 blob URL 不照 origin 分開」（`docs/limitations.md`）。跨網站的 `<img>`、`<script>`、stylesheet 拿到 HTML、JSON 和標錯的 JavaScript、CSS 的情況，`fetch/corb/` 的 `script-*`、`img-*`、`style-*` 都有，另外寫的整合測試就省了。
+- 圖片和 script 元素的 WPT 目錄照常通過（ORB 沒有誤擋）。
 
 ### 分階段
 
-兩段（已決定的事項第 5 條），每一段做完都可以 merge 回 `main`：
+兩段（已決定的事項第 5 條），都做完了：
 
 1. **發起者和 CORP**：`None` 是壞訊息、CORS 照 `mode`、`data:` worker 有自己的參數、文件的 loader 收到 `"null"` 不帶 cookie（第 3 條）；CORP（第 4 條）；被攻破的 renderer 的角色；`fetch/cross-origin-resource-policy/` 的 WPT。
 2. **ORB**：MIME type 的清單、`nosniff`、`206`、sniffer、被擋時的回應（第 1、2 條）；`fetch/orb/`、`fetch/corb/` 的 WPT；收尾。
@@ -121,14 +128,14 @@ sniff 要的 HTML、XML、JSON 的特徵是新寫的（`net` 的 `mime::sniff` �
 ## 缺點
 
 - **ORB v0.1 是 fail open 的**：看不出是什麼的照樣交給 renderer（例如沒有 `Content-Type`、開頭不是 HTML、JSON 特徵的私密文字）。Chromium 也是，完整的 ORB 要 parse JavaScript，太慢也太難（規範的作者自己說「infeasible」）。
-- **相容性**：伺服器把 JavaScript 標成 `text/html`、`application/json` 時，跨網站的 `<script>` 會壞掉。Chromium 從 CORB（2018）到 ORB 都這樣擋，網站大多早就改了，machopo 照 Chromium，壞的範圍和 Chrome 一樣。
+- **相容性**：跨網站的 `<script>`、`<img>` 用的資源開頭像 HTML、XML、JSON 時（例如 JSONP 以外的 JSON 被當成 script 載入），或標成 HTML、JSON、`text/plain`、XML 又加了 `nosniff` 時，會被擋掉。標錯 MIME type 的 JavaScript、CSS、圖片照樣放行（會 sniff）。Chromium 從 CORB（2018）到 ORB 都這樣擋，壞的範圍和 Chrome 一樣。
 - 多一層每個跨源 `no-cors` 請求都要走的檢查：sniff 最多 1024 bytes，body 本來就在記憶體裡，花費很小。
 
 ## 理由和其他做法
 
 - **不做的話**：鎖住的 renderer 照樣把別的網站沒有 cookie 的回應整份要進自己的記憶體，內網的資源也是。
 - **在 renderer 裡擋**：沒有意義，被攻破的 renderer 不會照做。一定要在 Browser 這一側（`net`）。
-- 各題的選項在「待決定」。
+- 各題的選項和不選的理由在「已決定的事項」。
 
 ## 先例
 

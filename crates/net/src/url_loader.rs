@@ -117,7 +117,7 @@ impl Body {
 
     /// Its first `length` bytes, or all of it if it is shorter, read ahead:
     /// they still come from [`next`](Self::next).
-    async fn read_ahead(&mut self, length: usize) -> Result<Bytes, NetError> {
+    pub(crate) async fn read_ahead(&mut self, length: usize) -> Result<Bytes, NetError> {
         let mut pieces: Vec<Bytes> = self.ahead.take().into_iter().collect();
         let mut read = pieces.first().map_or(0, Bytes::len);
         while read < length {
@@ -346,8 +346,8 @@ pub(crate) async fn load(
                 }
                 // Its body isn't read: dropping it closes the connection.
                 if let Some(redirects) = &mut redirects {
-                    let mime =
-                        content_type(&raw).unwrap_or_else(|| (mime::sniff(b"").into(), None));
+                    let mime = content_type(&raw.headers)
+                        .unwrap_or_else(|| (mime::sniff(b"").into(), None));
                     let (response, _body) = split(url.clone(), raw, hops > 0, mime);
                     redirects
                         .wait_at(RedirectInfo {
@@ -362,7 +362,10 @@ pub(crate) async fn load(
                     cors.start(&url)?;
                 }
             }
-            None => return Ok(filter(&cors, respond(url, raw, hops > 0).await?)),
+            None => {
+                let response = filter(&cors, respond(url, raw, hops > 0).await?);
+                return crate::orb::check(request, response).await;
+            }
         }
     }
     Err(NetError::new(
@@ -473,9 +476,8 @@ pub(crate) fn local_timing(start: TimeTicks) -> LoadTiming {
 /// usable one but `*/*`, with the charset of the last of the same type
 /// that had one. A server that sends two (`application/json`, then
 /// `text/html`) gets the last.
-fn content_type(raw: &RawResponse) -> Option<(String, Option<String>)> {
-    let values = raw
-        .headers
+fn content_type(headers: &[(String, String)]) -> Option<(String, Option<String>)> {
+    let values = headers
         .iter()
         .filter(|(name, _)| name == "content-type")
         .flat_map(|(_, value)| mime::split_header_values(value));
@@ -496,7 +498,7 @@ fn content_type(raw: &RawResponse) -> Option<(String, Option<String>)> {
 /// `Content-Type`, or sniffed from the start of its body (Chromium's
 /// `network::URLLoader` sniffs before it gives the head too).
 async fn respond(url: Url, raw: RawResponse, redirected: bool) -> Result<Response, NetError> {
-    let content_type = content_type(&raw);
+    let content_type = content_type(&raw.headers);
     let (mut head, body) = split(url, raw, redirected, (String::new(), None));
     let mut body = Body::http(body);
     (head.mime_type, head.charset) = match content_type {

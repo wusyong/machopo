@@ -889,6 +889,18 @@ fetch/api/cors/
 # (its CORS image loads are blocked as no-cors ones).
 fetch/cross-origin-resource-policy/
 
+# Opaque response blocking, as Chromium's ORB v0.1 (the network service
+# blocks a renderer's no-cors opaque response that is plainly HTML, XML or
+# JSON): `fetch/orb/` is the full ORB's, tentative, `fetch/corb/` its
+# predecessor's. Their results are Chrome's but where machopo lacks what
+# a test uses: `<audio>` and `<video>` (the `.any.html` files' later
+# subtests don't run after the first media one times out; the `.worker`
+# ones have the `fetch()` subtests alone), `<link rel=preload>`, and blob
+# URLs kept apart by origin (`script-html-via-cross-origin-blob-url`).
+# `fetch()` gets an empty opaque response, not an error, as in Chrome.
+fetch/orb/
+fetch/corb/
+
 # `Location` and `hashchange`. The whole directory of `Location`, but for
 # what is `disabled`; `javascript:` URLs.
 html/browsers/history/the-location-interface/
@@ -1485,15 +1497,10 @@ svg/text/scripted/getstartpositionofchar-dominant-baseline-shift.html
 svg/text/scripted/getstartpositionofchar-dominant-baseline.html
 svg/text/scripted/getsubstringlength-emoji-ligatures.html
 
-# SVG as an image: the reftests of `<img>`s showing SVG files (`fetch/corb/`
-# for which MIME types make one; `svg/linking/reftests/`' media fragments
-# and `svgView()` aren't there yet, and `svg/as-image/`'s other file needs
-# `<object>`).
-fetch/corb/img-svg-doctype-html-mimetype-empty.sub.html
-fetch/corb/img-svg-doctype-html-mimetype-svg.sub.html
-fetch/corb/img-svg-labeled-as-dash.sub.html
-fetch/corb/img-svg-labeled-as-svg-xml.sub.html
-fetch/corb/img-svg-xml-decl.sub.html
+# SVG as an image: the reftests of `<img>`s showing SVG files (`fetch/corb/`,
+# below, has those for which MIME types make one; `svg/linking/reftests/`'
+# media fragments and `svgView()` aren't there yet, and `svg/as-image/`'s
+# other file needs `<object>`).
 html/semantics/embedded-content/the-img-element/svg-img-with-external-stylesheet.html
 svg/as-image/sprite-sheet-fractional-size.html
 svg/styling/padding-on-svg-via-img.tentative.html
