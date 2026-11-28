@@ -16,7 +16,7 @@
 
 第 1 段開始之前先做 RFC 0125（網址列的偽造，2026-11-27 使用者決定）。
 
-還沒做、要在別的機器上做的：Windows 上量 renderer process 啟動的時間（已決定的事項第 5 條），明顯比 Linux 的 11 ms、macOS 的 12 ms 慢時重新考慮提前啟動和預備的 renderer（`README.md` 的「之後的可能」）。
+renderer process 啟動的時間（已決定的事項第 5 條）在 macOS 和 Windows 上都量了（「做過的檢查」最後兩節）：和 Linux 差不多，不用重新考慮提前啟動和預備的 renderer。
 
 ## 驗收
 
@@ -125,3 +125,13 @@
 - **量測工具的測試**：`speedometer_test.py`、`blink_perf_test.py`、`raster_test.py`、`census_test.py` 都通過；跳過的只有要 Chrome for Testing（沒下載）、Linux 的 `perf` 和 Windows 的，machopo 用 samply 取樣的有跑。
 - **renderer 啟動的時間**：約 12 ms（`details.md` 的「量的：啟動一個 renderer process 要多久」）。
 - **手動確認**（使用者，release，`https://example.com/` 點連結到 `iana.org`，換 renderer）：游標回到箭頭，不停在手指；換的中間舊頁面留到新的畫出來，沒有閃空白。response 慢的一次（約 0.6 秒）和快的一次（約 12 ms）都看過。
+
+### Windows 上的驗證（2026-11-28，Windows 11 10.0.26300，x86-64，Intel Core i9-13900K；`a2f67b3a`，連結 prebuilt 的 V8，`machopo-v152.2.0-31`）
+
+- **prebuilt 的 V8**：Windows 的 `rusty_v8_ptrcomp_release_x86_64-pc-windows-msvc.lib` 連結起來。`cargo test -p bindings -p dom_js -p browser -p shell`：1,794 個通過（1 個 ignored），3 個失敗，都和這份無關：
+  - `automation_pipe::a_client_not_reading_doesnt_hold_machopo_up`：整套跑時 10.79 s，超過測試的 10 s；單獨跑通過。機器忙。
+  - `renderer_sandbox_windows::a_renderer_process_is_in_the_sandbox`、`a_browsers_renderer_is_in_the_sandbox_unless_the_browser_is_told_otherwise`（`sunaba` 的 `the_process_has_a_lockdown_app_containers_token` 也是）：renderer 的 token 的 default DACL 有 logon session 的 SID（`GENERIC_READ | GENERIC_EXECUTE`）。`sunaba` 不自己設 default DACL，`CreateAppContainerToken` 給的是啟動它的 token 的、加上 AppContainer：這次的 shell 沒有提權（Medium），DACL 是使用者、SYSTEM、logon session；RFC 0121 讀到的是使用者、Administrators、SYSTEM，推測那時的 shell 是提權的。沒有提權的使用者開的 machopo 都是這樣。這份沒改 `sunaba`，另外處理。
+- **`unload` 不結束的 renderer 被結束**：`automation_pipe::a_renderer_whose_unload_doesnt_end_is_ended` 用 `kill -0` 看 process，只在 unix 上跑。暫時改成用 `tasklist` 看 pid，跑 3 次都通過：換過去時舊的 process 還在，0.55 到 0.6 s 之後不在了（500 ms 加上 `tasklist` 的時間）；試完還原。
+- **情境**：`test.py scenarios sites` 通過；`--window` 的 `sites` 連跑 13 次都通過，截圖（`a.test` 記下的值，`b.test` 沒有、count 是 1）和 log 沒有問題。
+- **WPT**：`html/browsers/` 清單裡的 11 個目錄分開跑（一次給全部會 `WinError 206`）：沒有失敗；非預期的通過 2 個，連跑 3 次都一樣，這份開始之前的 `c527c2ee` 上也一樣（不是這份造成的，不追）：`overlapping-navigations-and-traversals/cross-document-traversal-cross-document-nav.html` 的第一個子測試（第 1 段記過的那個），`the-history-interface/history_pushstate_url_rewriting.html` 是 OK、預期的是 ERROR。
+- **renderer 啟動的時間**：約 11 ms，和 Linux 一樣；換 process 的導覽比同一個 site 裡的多約 12.5 ms（`details.md` 的「量的：啟動一個 renderer process 要多久」）。

@@ -112,8 +112,20 @@
 
 - 差的約 **11 ms** 就是多啟動一個 renderer process 的時間（spawn、進 sandbox、V8 的 isolate、IO thread 接上通道、有 GPU 時給 tile 的共用記憶體）。確認過兩個分頁時 Browser 底下是兩個 `machopo --type=renderer`。
 - **macOS**（2026-11-28，`a2f67b3a`，macOS 26.6.2、Apple M4，release、sandbox 開著，同樣的量法）：新的分頁 12.8、12.7 ms（最小 12.3、最大 13.5），已經有 renderer 的分頁導覽到 `about:blank` 0.5、0.4 ms，差約 **12 ms**，和 Linux 差不多，不用重新考慮提前啟動和備一個（`README.md` 的第 5、9 條）。另外量了換 renderer 本身：同一個分頁每次導覽到新的 `data:` 網址（每個是一個 site）12.9、13.0 ms，就是啟動一個 renderer 加上一次導覽（每輪第一次 1.5 ms：`about:blank` 的 renderer 還沒有 site，拿下第一個 `data:`、不用換）。兩輪共結束 122 個 renderer，正好是 31 個分頁加 30 次換的兩倍。
-- Windows 沒量（Windows 的 process 建立通常比較慢）。debug build 沒有量：連結的是 release 的 V8，其餘的慢不代表使用者看到的。
+- debug build 沒有量：連結的是 release 的 V8，其餘的慢不代表使用者看到的。
 - 腳本是當場寫的、沒有留在 repo（用 `scripts/bench/common.py` 的 `MachopoPipe`）。
+
+2026-11-28，`a2f67b3a`（這份做完時），release，Windows 11（10.0.26300，x86-64，Intel Core i9-13900K，64 GB），同樣的量法：sandbox 開著（lockdown 的 token、AppContainer、自己的 desktop、job）和 `--no-sandbox` 各兩輪，每輪每種 30 次（之前各暖身 3 次）。多量了換 process 的那一次導覽：`--host-resolver-rules "MAP *.test 127.0.0.1"`，`http://a.test:<port>/` 和 `http://b.test:<port>/` 之間來回（每次都換），對照同一個 site 裡的導覽（`Page.navigate` 送出到 `Runtime.evaluate` 回答）：
+
+| 中位數（兩輪） | sandbox 開著 | `--no-sandbox` |
+| --- | --- | --- |
+| 新的分頁 | 12.2、12.3 ms | 11.3、11.2 ms |
+| 已經有 renderer 的分頁導覽到 `about:blank` | 1.0、1.0 ms | 1.0、1.0 ms |
+| 導覽到別的網站（新的 renderer，舊的跑 `unload`） | 15.0、14.7 ms | 13.7、13.9 ms |
+| 同一個 site 裡的導覽 | 2.3、2.4 ms | 2.7、2.7 ms |
+
+- 啟動一個 renderer process 約 **11 ms**（12.2 - 1.0），和 Linux 一樣；sandbox 佔約 1 ms。換 process 的導覽比同一個 site 裡的多約 12.5 ms，最慢的一次 27 到 36 ms。每輪結束時只剩一個 renderer process：舊的都收掉了。
+- 第一次試跑用 `127.0.0.1` 和 `localhost` 當兩個網站，到 `localhost` 的導覽每次多約 300 ms，和換不換 process 無關（同一個 site 裡到 `localhost` 的也是）。推測是 `localhost` 先試 `::1`（server 只聽 `127.0.0.1`），沒有查；改用 `.test` 之後沒有。
 
 ## Chromium
 
