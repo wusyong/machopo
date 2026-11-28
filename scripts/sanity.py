@@ -34,9 +34,8 @@ ROOT = Path(__file__).resolve().parent.parent
 # Where `#![allow(unsafe_code)]` may appear. The workspace denies
 # `unsafe_code`; only `bindings` (V8 FFI) and `ipc` (shared memory mapped
 # into two processes, and the Windows FFI) opt back in, at their crate roots,
-# plus their integration tests. The DOM's GC heap is elise's (next to the
-# repo) and the process's sandbox sunaba's (a crates.io release), under
-# their own rules.
+# plus their integration tests. The DOM's GC heap is elise's and the
+# process's sandbox sunaba's (crates.io releases), under their own rules.
 UNSAFE_ALLOWED = [
     "crates/bindings/src/lib.rs",
     "crates/ipc/src/lib.rs",

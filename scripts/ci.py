@@ -160,7 +160,7 @@ PAST_PREBUILT = re.compile(r"\.github/.*|.*\.(rs|md)")
 
 
 def third_party_pins() -> dict[str, Pin]:
-    """Each project in `../third_party`. The forks', elise's and WPT's from
+    """Each project in `../third_party`. The forks' and WPT's from
     `third_party.toml`; rusty_v8's repository and release tag from
     `RUSTY_V8_MIRROR` and `RUSTY_V8_MIRROR_TAG` in `.cargo/config.toml`, so
     its source matches the prebuilt V8, and its commit from

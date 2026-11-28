@@ -36,7 +36,7 @@ wptrunner, in a venv of its own, against the debug build or another
 profile's (`--profile ci`, as the nightly CI). Every command first syncs
 ../third_party to the commits machopo pins (`ci.py third-party`), and runs
 nothing if it can't. The GC's own checks (loom, shuttle, its fuzzer,
-Verus, Miri) are elise's, in ../third_party/elise/scripts/test.py.
+Verus, Miri) are elise's, in its repository's scripts/test.py.
 The checks of the repo's rules are in `sanity.py`, the tools around the build
 in `ci.py`. Each command's arguments are below, and in `test.py <command> -h`.
 
@@ -1431,9 +1431,9 @@ def cmd_wdspec(args: argparse.Namespace) -> int:
 MUTATE_DIR = ROOT / "target" / "mutate"
 MUTATE_ORIGINALS = MUTATE_DIR / "originals"
 # Where the originals of files outside the repo wait (a spec may break one
-# of `../third_party/elise`, or of a checkout of sunaba there that Cargo is
-# patched to: machopo's own projects next to it): by their path from the
-# repo's parent, under
+# of a checkout of elise or sunaba in `../third_party` that Cargo is patched
+# to: machopo's own projects next to it): by their path from the repo's
+# parent, under
 # `originals/` like the rest, so that `--restore` and the check for a run
 # that didn't finish find them.
 MUTATE_OUTSIDE = "_outside"

@@ -24,14 +24,16 @@ bindings = { path = "crates/bindings" }
 ipc = { path = "crates/ipc" }
 site = { path = "crates/site" }
 sql = { path = "crates/sql" }
-# The DOM's GC: machopo's own project (not a fork), next to the repo at the
-# commit `third_party.toml` pins; its docs are in ../third_party/elise/docs.
-elise = { path = "../third_party/elise/crates/elise" }
-# The process's sandbox: machopo's own project too, released on crates.io
-# (github.com/wusyong/sunaba, its docs in docs/ there); Cargo.lock pins the
-# release. A change to it is tried here before it is released by patching it
-# to a checkout, in a `.cargo/config.toml` in the repo's parent (this one's is
-# committed): `[patch.crates-io] sunaba = { path = "third_party/sunaba" }`.
+# machopo's own projects (not forks), released on crates.io; Cargo.lock pins
+# each release. A change to one is tried here before it is released by
+# patching it to a checkout beside the repo, in a `.cargo/config.toml` in the
+# repo's parent (this one's is committed; a path there is from the parent):
+# `[patch.crates-io] elise = { path = "third_party/elise/crates/elise" }`.
+# The DOM's GC (github.com/wusyong/elise, its docs in docs/ there). The
+# wasmtime fork depends on the same release: a store borrows the DOM's heap,
+# so both have to be one crate, and one patch takes both.
+elise = "0.3.1"
+# The process's sandbox (github.com/wusyong/sunaba, its docs in docs/ there).
 # The renderer's policy is `shell`'s (`renderer_sandbox`).
 sunaba = "0.1"
 dom = { path = "crates/dom" }

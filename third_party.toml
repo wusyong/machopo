@@ -1,8 +1,8 @@
 # The commits of the projects machopo builds and tests against, checked out next
-# to the repo in `../third_party/<name>`: our forks and elise (Cargo.toml
-# depends on them by path), and upstream WPT, Speedometer and Blink's perf
-# tests (read in place, never changed). sunaba, machopo's own too, isn't
-# here: it is a crates.io release, which Cargo.lock pins.
+# to the repo in `../third_party/<name>`: our forks (Cargo.toml depends on
+# them by path), and upstream WPT, Speedometer and Blink's perf tests (read in
+# place, never changed). machopo's own projects, elise and sunaba, aren't
+# here: they are crates.io releases, which Cargo.lock pins.
 # `python scripts/ci.py third-party` clones them there at these commits, or
 # checks that the existing checkouts match; a project with `archive` is the
 # folder of that path in the repository at `rev`, downloaded rather than
@@ -14,17 +14,11 @@
 # `RUSTY_V8_MIRROR_TAG` in `.cargo/config.toml`: machopo links that release's
 # prebuilt V8.
 
-[elise]
-# The DOM's GC: machopo's own project, not a fork. Its `main` branch, a commit
-# its CI has tested (it runs on every push).
-repository = "https://github.com/wusyong/elise"
-rev = "3351108d3e1c9879e87a5c41153f02a80b731685"
-
 [wasmtime]
 # wasm scripts' engine, with elise as a collector (`gc-elise`). The `machopo`
 # branch, from upstream's tag v50.0.1.
 repository = "https://github.com/wusyong/wasmtime"
-rev = "ef4e89208a52fc6b017e16197e76033fa500190b"
+rev = "465373ec5b24249a266f80b399bb14897bac7635"
 
 [parley]
 repository = "https://github.com/wusyong/parley"

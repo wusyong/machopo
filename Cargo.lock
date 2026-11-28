@@ -1336,7 +1336,9 @@ checksum = "252afb9ae5eaa683babdc6a068b3f5726eb19e05070c731f9b2a23a7c3e8ed34"
 
 [[package]]
 name = "elise"
-version = "0.3.0"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33c111005d5e645cf37a59735cf94ba17a3126915af671330f33a497995274f9"
 dependencies = [
  "elise-derive",
  "loom",
@@ -1348,7 +1350,9 @@ dependencies = [
 
 [[package]]
 name = "elise-derive"
-version = "0.3.0"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a3f41e3e6571188212173f3a0d141d343852927ac76e893eb69b98282935a922"
 dependencies = [
  "proc-macro2",
  "quote",
