@@ -30,9 +30,14 @@ fn only_child(engine: &mut dom_js::V8Engine, parent: FrameId) -> (FrameId, Frame
     )
 }
 
+/// Every message a session sent, with the state it came with.
+type WithStates = Rc<RefCell<Vec<(Value, Option<Vec<u8>>)>>>;
+
 struct Inspected {
     engine: crate::TestEngine,
     sent: Rc<RefCell<Vec<Value>>>,
+    /// Every message sent, with the state it came with, kept.
+    with_states: WithStates,
     next_id: u64,
 }
 
@@ -52,18 +57,21 @@ impl Inspected {
         let mut engine = crate::TestEngine::new(EngineSettings::default());
         engine.set_main_frame_token(TOP_TOKEN);
         let sent: Rc<RefCell<Vec<Value>>> = Rc::default();
-        let to = sent.clone();
+        let with_states: WithStates = Rc::default();
+        let (to, to_with_states) = (sent.clone(), with_states.clone());
         engine.devtools_attach(
             "s".to_owned(),
-            Box::new(move |message| {
-                to.borrow_mut()
-                    .push(serde_json::from_str(&message).unwrap())
+            Box::new(move |message, state| {
+                let message: Value = serde_json::from_str(&message).unwrap();
+                to.borrow_mut().push(message.clone());
+                to_with_states.borrow_mut().push((message, state));
             }),
             state,
         );
         Self {
             engine,
             sent,
+            with_states,
             next_id: 0,
         }
     }
@@ -540,7 +548,7 @@ fn a_session_detached_while_paused_lets_script_go_on() {
     let to = page.sent.clone();
     page.engine.devtools_attach(
         "s".to_owned(),
-        Box::new(move |message| {
+        Box::new(move |message, _| {
             to.borrow_mut()
                 .push(serde_json::from_str(&message).unwrap())
         }),
@@ -746,6 +754,76 @@ fn a_session_goes_on_in_another_engine_from_its_state() {
     assert_eq!(paused.len(), 2, "{events:?}");
     assert_eq!(paused[0].1, &json!([id]), "{events:?}");
     assert_eq!(paused[1].0, "exception", "{events:?}");
+}
+
+/// Each answer comes with what the session has on as it is answered (what
+/// the command turned on in it), for the browser to have before the
+/// answer; an event comes with nothing. Another engine going on from the
+/// state an answer came with has what that command turned on.
+#[test]
+fn an_answer_comes_with_the_sessions_state() {
+    let mut first = Inspected::new();
+    let top = first.engine.top_frame();
+    first
+        .engine
+        .create_window(top, "https://example.test/a/", Instant::now())
+        .unwrap();
+    for (method, params) in [
+        ("Runtime.enable", json!({})),
+        ("Debugger.enable", json!({})),
+        ("Debugger.setPauseOnExceptions", json!({ "state": "all" })),
+        (
+            "Debugger.setBreakpointByUrl",
+            json!({ "url": "https://example.test/b.js", "lineNumber": 1 }),
+        ),
+    ] {
+        let answer = first.call(method, params);
+        let now = first.engine.devtools_state("s").expect("the session's");
+        let with_states = first.with_states.borrow();
+        let given = with_states
+            .iter()
+            .find(|(message, _)| *message == answer)
+            .map(|(_, state)| state.clone());
+        assert_eq!(given, Some(Some(now)), "{method}");
+    }
+    let with_states = first.with_states.borrow();
+    let events: Vec<&Value> = with_states
+        .iter()
+        .filter(|(message, _)| message.get("id").is_none())
+        .map(|(message, state)| {
+            assert_eq!(state, &None, "{message}");
+            message
+        })
+        .collect();
+    assert!(!events.is_empty());
+    let paused_on = with_states
+        .iter()
+        .find(|(message, _)| message["id"] == 3)
+        .and_then(|(_, state)| state.clone())
+        .expect("setPauseOnExceptions' answer's state");
+    drop(with_states);
+
+    let mut next = Inspected::going_on_from(Some(&paused_on));
+    let queue = Rc::new(Queue::default());
+    let _interrupter = next
+        .engine
+        .set_devtools_queue(Box::new(SharedQueue(queue.clone())));
+    queue
+        .queued
+        .borrow_mut()
+        .push_back(message(100, "Debugger.resume"));
+    let top = next.engine.top_frame();
+    next.engine
+        .create_window(top, "https://example.test/a/", Instant::now())
+        .unwrap();
+    next.run(top, "try { throw 1; } catch {}");
+    let reasons: Vec<Value> = next
+        .events()
+        .into_iter()
+        .filter(|(method, _)| method == "Debugger.paused")
+        .map(|(_, params)| params["reason"].clone())
+        .collect();
+    assert_eq!(reasons, [json!("exception")]);
 }
 
 /// A breakpoint removed, or `Debugger` turned off, goes from the state:

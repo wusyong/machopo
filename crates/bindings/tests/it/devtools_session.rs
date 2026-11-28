@@ -18,7 +18,7 @@ impl Session {
         let sent = answers.clone();
         data.devtools_attach(
             "session".to_owned(),
-            Box::new(move |message: String| {
+            Box::new(move |message: String, _| {
                 sent.borrow_mut()
                     .push(serde_json::from_str(&message).unwrap());
             }),

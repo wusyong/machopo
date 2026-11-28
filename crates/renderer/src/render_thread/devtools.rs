@@ -50,7 +50,7 @@ impl RenderThread {
             let engine_state = state.as_ref().and_then(|state| state.engine.as_deref());
             engine.devtools_attach(
                 session.clone(),
-                devtools_send(&self.to_browser, &session),
+                devtools_send(&self.to_browser, &self.devtools_states, &session),
                 engine_state,
             );
         }
@@ -220,34 +220,39 @@ impl RenderThread {
     pub(super) fn devtools_message(&mut self, session: &str, message: &str) {
         // The agents', with the frames as they are now.
         self.tell_frames();
-        if self.page_agent.handle(session, message)
-            || self.network_agent.handle(session, message)
-            || self.log_agent.handle(session, message)
-        {
+        let answer = self
+            .page_agent
+            .dispatch(session, message)
+            .or_else(|| self.network_agent.dispatch(session, message))
+            .or_else(|| self.log_agent.dispatch(session, message));
+        if let Some(answer) = answer {
             // The stacks they want from now on (`Page.enable`,
             // `Network.setAttachDebugStack`).
             self.update_stacks_wanted();
             self.tell_devtools_state(session);
+            send_answer(&self.to_browser, session, &answer);
             return;
         }
         if self.engine.is_none() {
             self.engine = Some(self.make_engine());
         }
-        let answered = self.engine.as_mut().is_some_and(|engine| {
+        let answer = self.engine.as_mut().and_then(|engine| {
             let mut page = engine.devtools_page();
-            if self.dom_agent.handle(session, message, &mut *page) {
+            if let Some(answer) = self.dom_agent.dispatch(session, message, &mut *page) {
                 self.css_agent.dom_answered(session, &mut *page);
-                return true;
+                return Some(answer);
             }
-            self.css_agent.handle(session, message, &mut *page)
-                || self.overlay_agent.handle(session, message, &mut *page)
+            self.css_agent
+                .dispatch(session, message, &mut *page)
+                .or_else(|| self.overlay_agent.dispatch(session, message, &mut *page))
         });
-        if answered {
+        if let Some(answer) = answer {
             // The sheets `CSS` wants the texts of, asked for in the task
             // that wanted them (Blink's `InspectorResourceContentLoader`
             // fetches in `CSS.enable`'s).
             self.start_css_refetches();
             self.tell_devtools_state(session);
+            send_answer(&self.to_browser, session, &answer);
             return;
         }
         let handled = self
@@ -369,7 +374,7 @@ impl RenderThread {
             let state = self.devtools_states.engine(session);
             engine.devtools_attach(
                 session.clone(),
-                devtools_send(&self.to_browser, session),
+                devtools_send(&self.to_browser, &self.devtools_states, session),
                 state.as_deref(),
             );
         }
@@ -406,12 +411,40 @@ impl RenderThread {
     }
 }
 
+/// An agent's `answer` to a command of `session`'s, to the browser, sent
+/// once it has been told what the command turned on: the same as the
+/// engine's inspector's answers (`devtools_send`), and for the same
+/// reason. `Value::Null` is one the agent answers later (`CSS`'s, once the
+/// sheet it fetches again comes), which nothing is sent for now.
+fn send_answer(to_browser: &BrowserSender, session: &str, answer: &serde_json::Value) {
+    if answer.is_null() {
+        return;
+    }
+    let _ = to_browser.send(RendererHostMsg::DevToolsMessage {
+        session: session.to_owned(),
+        message: answer.to_string(),
+    });
+}
+
 /// Where a session's answers and events from the engine's inspector go:
-/// to the browser, as the session's.
-fn devtools_send(to_browser: &BrowserSender, session: &str) -> dom_api::DevToolsSend {
+/// to the browser, as the session's. What an answer's command turned on in
+/// the inspector goes first, if it changed (Blink sends the session state's
+/// updates with the answer, `DispatchProtocolResponse`): the browser has it
+/// before whoever asked reads the answer, so a renderer ended right after
+/// (`about:crash`, which the browser ends at once, dropping what it sent
+/// after) still leaves it to the tab's next renderer.
+fn devtools_send(
+    to_browser: &BrowserSender,
+    states: &Rc<SessionStates>,
+    session: &str,
+) -> dom_api::DevToolsSend {
     let to_browser = to_browser.clone();
+    let states = states.clone();
     let session = session.to_owned();
-    Box::new(move |message| {
+    Box::new(move |message, state| {
+        if let Some(engine) = state {
+            states.tell_engine(&session, engine);
+        }
         let _ = to_browser.send(RendererHostMsg::DevToolsMessage {
             session: session.clone(),
             message,
@@ -488,31 +521,36 @@ impl dom_api::DevToolsQueue for DevToolsQueueHandle {
         message: &str,
         page: &mut dyn dom_api::DevToolsPage,
     ) -> bool {
-        let answered = self.page_agent.handle(session, message)
-            || self.network_agent.handle(session, message)
-            || self.log_agent.handle(session, message)
-            || (self.dom_agent.handle(session, message, page) && {
+        let answer = self
+            .page_agent
+            .dispatch(session, message)
+            .or_else(|| self.network_agent.dispatch(session, message))
+            .or_else(|| self.log_agent.dispatch(session, message))
+            .or_else(|| {
+                let answer = self.dom_agent.dispatch(session, message, page)?;
                 self.css_agent.dom_answered(session, page);
-                true
+                Some(answer)
             })
-            || self.css_agent.handle(session, message, page)
-            || self.overlay_agent.handle(session, message, page);
-        if answered {
-            self.devtools_states.tell(
+            .or_else(|| self.css_agent.dispatch(session, message, page))
+            .or_else(|| self.overlay_agent.dispatch(session, message, page));
+        let Some(answer) = answer else {
+            return false;
+        };
+        self.devtools_states.tell(
+            session,
+            self.devtools_states.engine(session),
+            agents_state(
+                &self.page_agent,
+                &self.network_agent,
+                &self.log_agent,
+                &self.dom_agent,
+                &self.css_agent,
+                &self.overlay_agent,
                 session,
-                self.devtools_states.engine(session),
-                agents_state(
-                    &self.page_agent,
-                    &self.network_agent,
-                    &self.log_agent,
-                    &self.dom_agent,
-                    &self.css_agent,
-                    &self.overlay_agent,
-                    session,
-                ),
-            );
-        }
-        answered
+            ),
+        );
+        send_answer(&self.to_browser, session, &answer);
+        true
     }
 
     fn dispatched(&self, session: &str, state: Vec<u8>) {
@@ -678,6 +716,19 @@ impl SessionStates {
             state: state.clone(),
         });
         told.insert(session.to_owned(), state);
+    }
+
+    /// `session` has `engine` on in the engine's inspector now, the agents
+    /// as the browser last heard: the browser hears, if it is other than it
+    /// last heard.
+    fn tell_engine(&self, session: &str, engine: Vec<u8>) {
+        let agents = self
+            .told
+            .borrow()
+            .get(session)
+            .map(|state| state.agents.clone())
+            .unwrap_or_default();
+        self.tell(session, Some(engine), agents);
     }
 
     /// `session` went on from `state`, which the browser has.

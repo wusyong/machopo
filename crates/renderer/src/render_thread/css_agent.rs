@@ -846,22 +846,24 @@ impl CssAgent {
         })
     }
 
-    /// Answers `message`, a command of `session`'s, if it is one of the
-    /// agent's: whether it was. The DOM's changes go to the sessions first,
-    /// so the nodes the answer names are theirs.
-    pub(crate) fn handle(&self, session: &str, message: &str, page: &mut dyn DevToolsPage) -> bool {
-        let Ok(command) = serde_json::from_str::<Value>(message) else {
-            return false;
-        };
-        let Some(method) = command
+    /// `message`, a command of `session`'s, taken if it is one of the
+    /// agent's: its answer (`Value::Null`: one it answers later), for the
+    /// render thread to send once the browser has what the command turned
+    /// on. The DOM's changes go to the sessions first, so the nodes the
+    /// answer names are theirs.
+    pub(crate) fn dispatch(
+        &self,
+        session: &str,
+        message: &str,
+        page: &mut dyn DevToolsPage,
+    ) -> Option<Value> {
+        let command = serde_json::from_str::<Value>(message).ok()?;
+        let method = command
             .get("method")
             .and_then(Value::as_str)
-            .and_then(|method| method.strip_prefix("CSS."))
-        else {
-            return false;
-        };
+            .and_then(|method| method.strip_prefix("CSS."))?;
         if !COMMANDS.contains(&method) {
-            return false;
+            return None;
         }
         self.dom_agent.take_changes(page.dom());
         let id = command.get("id").cloned().unwrap_or(Value::Null);
@@ -873,18 +875,16 @@ impl CssAgent {
                 "message": "Invalid parameters",
                 "data": "Failed to deserialize params.forcedPseudoClasses - BINDINGS: array expected",
             });
-            self.send(session, &json!({ "id": id, "error": error }));
-            return true;
+            return Some(json!({ "id": id, "error": error }));
         }
         let answer = self.answer(session, method, &params, &id, page);
         let message = match answer {
             // Answered later.
-            Ok(Value::Null) => return true,
+            Ok(Value::Null) => return Some(Value::Null),
             Ok(result) => json!({ "id": id, "result": result }),
             Err(error) => json!({ "id": id, "error": { "code": -32000, "message": error } }),
         };
-        self.send(session, &message);
-        true
+        Some(message)
     }
 
     /// The answer to the command `method` (with `params`, numbered

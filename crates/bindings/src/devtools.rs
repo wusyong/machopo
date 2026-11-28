@@ -134,39 +134,41 @@ impl Attached {
         dispatch(&self.session, message);
     }
 
-    /// What the session has on: V8's session state
-    /// (`V8InspectorSession::state`), then the commands that set its
-    /// breakpoints by URL, which that hasn't (V8 keeps them apart,
-    /// `V8DebuggerAgentImpl::m_urlBreakpoints`): the bytes of V8's, as a
-    /// little-endian `u32`, V8's, then the commands, as a JSON array.
+    /// What the session has on ([`session_state`]).
     fn state(&self) -> Vec<u8> {
-        let v8_state = self.session.state();
-        let v8_state = v8_state
-            .as_ref()
-            .and_then(|state| state.string().characters8().map(<[u8]>::to_vec))
-            .unwrap_or_default();
-        let commands = {
-            let breakpoints = self.url_breakpoints.borrow();
-            let commands: Vec<&str> = breakpoints
-                .set
-                .iter()
-                .map(|(_, command)| command.as_str())
-                .collect();
-            serde_json::to_vec(&commands).unwrap_or_default()
-        };
-        let Ok(length) = u32::try_from(v8_state.len()) else {
-            return Vec::new();
-        };
-        let mut state = Vec::with_capacity(
-            4usize
-                .saturating_add(v8_state.len())
-                .saturating_add(commands.len()),
-        );
-        state.extend_from_slice(&length.to_le_bytes());
-        state.extend_from_slice(&v8_state);
-        state.extend_from_slice(&commands);
-        state
+        session_state(&self.session, &self.url_breakpoints.borrow())
     }
+}
+
+/// What `session` has on: V8's session state
+/// (`V8InspectorSession::state`), then the commands that set its
+/// breakpoints by URL, `url_breakpoints`, which that hasn't (V8 keeps them
+/// apart, `V8DebuggerAgentImpl::m_urlBreakpoints`): the bytes of V8's, as a
+/// little-endian `u32`, V8's, then the commands, as a JSON array.
+fn session_state(session: &V8InspectorSession, url_breakpoints: &UrlBreakpoints) -> Vec<u8> {
+    let v8_state = session.state();
+    let v8_state = v8_state
+        .as_ref()
+        .and_then(|state| state.string().characters8().map(<[u8]>::to_vec))
+        .unwrap_or_default();
+    let commands: Vec<&str> = url_breakpoints
+        .set
+        .iter()
+        .map(|(_, command)| command.as_str())
+        .collect();
+    let commands = serde_json::to_vec(&commands).unwrap_or_default();
+    let Ok(length) = u32::try_from(v8_state.len()) else {
+        return Vec::new();
+    };
+    let mut state = Vec::with_capacity(
+        4usize
+            .saturating_add(v8_state.len())
+            .saturating_add(commands.len()),
+    );
+    state.extend_from_slice(&length.to_le_bytes());
+    state.extend_from_slice(&v8_state);
+    state.extend_from_slice(&commands);
+    state
 }
 
 /// [`Attached::state`]'s parts: V8's session state, and the commands that
@@ -483,20 +485,28 @@ impl V8InspectorClientImpl for Client {
     }
 }
 
+/// Where a session's answers and events go, as JSON: an answer with what
+/// the session has on as V8 answers ([`session_state`]), an event with
+/// nothing.
+pub(crate) type SessionSend = Box<dyn Fn(String, Option<Vec<u8>>)>;
+
 /// A session's way out: its answers and events, as JSON, while the
 /// browser has it.
 struct Outlet {
-    send: Box<dyn Fn(String)>,
+    send: SessionSend,
     alive: Rc<Cell<bool>>,
     url_breakpoints: Rc<RefCell<UrlBreakpoints>>,
+    /// The session, once V8 has made it (with this, its channel): weak, as
+    /// the session owns its channel.
+    session: Rc<OnceCell<std::rc::Weak<V8InspectorSession>>>,
 }
 
 impl Outlet {
-    fn send(&self, message: &UniquePtr<StringBuffer>) {
+    fn send(&self, message: &UniquePtr<StringBuffer>, state: Option<Vec<u8>>) {
         if let Some(message) = message.as_ref()
             && self.alive.get()
         {
-            (self.send)(message.string().to_string());
+            (self.send)(message.string().to_string(), state);
         }
     }
 }
@@ -507,13 +517,24 @@ impl ChannelImpl for Outlet {
             .as_ref()
             .map(|message| message.string().to_string())
             .unwrap_or_default();
-        if self.url_breakpoints.borrow_mut().answered(call_id, &text) {
-            self.send(&message);
+        if !self.url_breakpoints.borrow_mut().answered(call_id, &text) {
+            return;
         }
+        // What the command turned on goes with its answer, as V8 has
+        // already set it (Blink's `DevToolsSession::SendProtocolResponse`
+        // reads `V8InspectorSession::state` there): told after, it would
+        // be lost to a renderer that is ended as soon as the answer is
+        // read, and the tab's next renderer would go on without it.
+        let state = self
+            .session
+            .get()
+            .and_then(std::rc::Weak::upgrade)
+            .map(|session| session_state(&session, &self.url_breakpoints.borrow()));
+        self.send(&message, state);
     }
 
     fn send_notification(&self, message: UniquePtr<StringBuffer>) {
-        self.send(&message);
+        self.send(&message, None);
     }
 
     fn flush_protocol_notifications(&self) {}
@@ -579,23 +600,26 @@ impl DevTools {
     /// ([`Self::state`], another isolate's inspector's), it goes on from
     /// there: V8 restores its domains as they were, and its breakpoints by
     /// URL are set again (their answers no one's).
-    pub(crate) fn attach(&self, session: String, send: Box<dyn Fn(String)>, state: Option<&[u8]>) {
+    pub(crate) fn attach(&self, session: String, send: SessionSend, state: Option<&[u8]>) {
         let alive = Rc::new(Cell::new(true));
         let url_breakpoints = Rc::new(RefCell::new(UrlBreakpoints::default()));
+        let made = Rc::new(OnceCell::new());
         let outlet = Outlet {
             send,
             alive: alive.clone(),
             url_breakpoints: url_breakpoints.clone(),
+            session: made.clone(),
         };
         let (v8_state, commands) = state.map(parse_state).unwrap_or_default();
-        let connected = self.inspector.connect(
+        let connected = Rc::new(self.inspector.connect(
             CONTEXT_GROUP,
             Channel::new(Box::new(outlet)),
             StringView::from(v8_state),
             V8InspectorClientTrustLevel::FullyTrusted,
-        );
+        ));
+        let _ = made.set(Rc::downgrade(&connected));
         let attached = Attached {
-            session: Rc::new(connected),
+            session: connected,
             alive,
             url_breakpoints,
         };

@@ -299,20 +299,20 @@ impl OverlayAgent {
         *self.drawn.borrow_mut() = None;
     }
 
-    /// Answers `message`, a command of `session`'s, if it is one of the
-    /// agent's: whether it was.
-    pub(crate) fn handle(&self, session: &str, message: &str, page: &mut dyn DevToolsPage) -> bool {
-        let Ok(command) = serde_json::from_str::<Value>(message) else {
-            return false;
-        };
-        let Some(method) = command.get("method").and_then(Value::as_str) else {
-            return false;
-        };
-        let Some(method) = method.strip_prefix("Overlay.") else {
-            return false;
-        };
+    /// `message`, a command of `session`'s, taken if it is one of the
+    /// agent's: its answer, for the render thread to send once the
+    /// browser has what the command turned on.
+    pub(crate) fn dispatch(
+        &self,
+        session: &str,
+        message: &str,
+        page: &mut dyn DevToolsPage,
+    ) -> Option<Value> {
+        let command = serde_json::from_str::<Value>(message).ok()?;
+        let method = command.get("method").and_then(Value::as_str)?;
+        let method = method.strip_prefix("Overlay.")?;
         if !COMMANDS.contains(&method) && !method.starts_with("setShow") {
-            return false;
+            return None;
         }
         let id = command.get("id").cloned().unwrap_or(Value::Null);
         let params = command.get("params").cloned().unwrap_or_else(|| json!({}));
@@ -325,16 +325,14 @@ impl OverlayAgent {
                 "message": "Invalid parameters",
                 "data": "Failed to deserialize params.highlightConfig - BINDINGS: mandatory field missing",
             });
-            self.send(session, &json!({ "id": id, "error": error }));
-            return true;
+            return Some(json!({ "id": id, "error": error }));
         }
         let answer = self.answer(session, method, &params, page);
         let message = match answer {
             Ok(result) => json!({ "id": id, "result": result }),
             Err(error) => json!({ "id": id, "error": { "code": -32000, "message": error } }),
         };
-        self.send(session, &message);
-        true
+        Some(message)
     }
 
     fn answer(

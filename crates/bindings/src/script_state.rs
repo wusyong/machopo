@@ -72,12 +72,14 @@ impl V8PerIsolateData {
     }
 
     /// A DevTools session of the browser's `session`, whose answers and
-    /// events go to `send`, as JSON; going on from `state` (what
-    /// [`Self::devtools_state`] gave, of another isolate), if given.
+    /// events go to `send`, as JSON, each answer with what the session has
+    /// on as it answers (as [`Self::devtools_state`] says it), each event
+    /// with nothing; going on from `state` (what [`Self::devtools_state`]
+    /// gave, of another isolate), if given.
     pub fn devtools_attach(
         &mut self,
         session: String,
-        send: Box<dyn Fn(String)>,
+        send: Box<dyn Fn(String, Option<Vec<u8>>)>,
         state: Option<&[u8]>,
     ) {
         self.devtools.attach(session, send, state);

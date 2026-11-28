@@ -424,17 +424,28 @@ impl DomAgent {
     }
 
     /// Answers `message`, a command of `session`'s, if it is one of the
-    /// agent's: whether it was. The DOM's changes so far are told first,
-    /// so what it answers and what it told agree.
+    /// agent's: whether it was ([`Self::dispatch`], its answer sent).
+    #[cfg(test)]
     pub(crate) fn handle(&self, session: &str, message: &str, page: &mut dyn DevToolsPage) -> bool {
-        let Ok(command) = serde_json::from_str::<Value>(message) else {
-            return false;
-        };
-        let Some(method) = command.get("method").and_then(Value::as_str) else {
-            return false;
-        };
+        self.dispatch(session, message, page)
+            .map(|answer| self.send(session, &answer))
+            .is_some()
+    }
+
+    /// `message`, a command of `session`'s, taken if it is one of the
+    /// agent's: its answer, for the render thread to send once the
+    /// browser has what the command turned on. The DOM's changes so far
+    /// are told first, so what it answers and what it told agree.
+    pub(crate) fn dispatch(
+        &self,
+        session: &str,
+        message: &str,
+        page: &mut dyn DevToolsPage,
+    ) -> Option<Value> {
+        let command = serde_json::from_str::<Value>(message).ok()?;
+        let method = command.get("method").and_then(Value::as_str)?;
         if !COMMANDS.contains(&method) {
-            return false;
+            return None;
         }
         self.take_changes(page.dom());
         let id = command.get("id").cloned().unwrap_or(Value::Null);
@@ -444,9 +455,8 @@ impl DomAgent {
             Ok(result) => json!({ "id": id, "result": result }),
             Err(error) => json!({ "id": id, "error": { "code": -32000, "message": error } }),
         };
-        self.send(session, &message);
         page.dom().set_dom_changes_wanted(self.any_enabled());
-        true
+        Some(message)
     }
 
     fn answer(

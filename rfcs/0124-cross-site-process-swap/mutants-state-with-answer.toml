@@ -1,0 +1,92 @@
+# The DevTools session's state that a command turns on goes to the browser before its answer, the engine's inspector's and the renderer's agents' (a renderer ended as the answer is read left it unsaid, and the tab's next renderer went on without it): `python3 scripts/test.py mutate rfcs/0124-cross-site-process-swap/mutants-state-with-answer.toml`.
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "devtools::"]
+timeout = 1200
+
+[[mutant]]
+name = "an answer comes with no state"
+file = "crates/bindings/src/devtools.rs"
+from = '''        self.send(&message, state);'''
+to = '''        let _ = state;
+        self.send(&message, None);'''
+
+[[mutant]]
+name = "the outlet isn't given its session"
+file = "crates/bindings/src/devtools.rs"
+from = '''        let _ = made.set(Rc::downgrade(&connected));'''
+to = '''        let _ = &made;'''
+
+[[mutant]]
+name = "an event comes with a state"
+file = "crates/bindings/src/devtools.rs"
+from = '''        self.send(&message, None);
+    }'''
+to = '''        self.send(&message, Some(Vec::new()));
+    }'''
+
+[[mutant]]
+name = "the renderer doesn't tell the state that came with an answer"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''            states.tell_engine(&session, engine);'''
+to = '''            let _ = engine;'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "devtools_session::"]
+
+[[mutant]]
+name = "the state told with an answer leaves the engine's out"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''        self.tell(session, Some(engine), agents);'''
+to = '''        let _ = engine;
+        self.tell(session, None, agents);'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "devtools_session::"]
+
+[[mutant]]
+name = "the state told with an answer leaves the agents out"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''            .map(|state| state.agents.clone())'''
+to = '''            .map(|_| Vec::new())'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "devtools_session::"]
+
+[[mutant]]
+name = "Page's, Network's and Log's answers go before their state"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''            self.update_stacks_wanted();
+            self.tell_devtools_state(session);
+            send_answer(&self.to_browser, session, &answer);'''
+to = '''            self.update_stacks_wanted();
+            send_answer(&self.to_browser, session, &answer);
+            self.tell_devtools_state(session);'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "devtools_session::"]
+
+[[mutant]]
+name = "DOM's, CSS's and Overlay's answers go before their state"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''            self.start_css_refetches();
+            self.tell_devtools_state(session);
+            send_answer(&self.to_browser, session, &answer);'''
+to = '''            self.start_css_refetches();
+            send_answer(&self.to_browser, session, &answer);
+            self.tell_devtools_state(session);'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "devtools_session::"]
+
+[[mutant]]
+name = "an agent's answer while script is paused goes before its state"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''        let Some(answer) = answer else {
+            return false;
+        };
+        self.devtools_states.tell('''
+to = '''        let Some(answer) = answer else {
+            return false;
+        };
+        send_answer(&self.to_browser, session, &answer);
+        let answer = serde_json::Value::Null;
+        self.devtools_states.tell('''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "devtools_session::"]
+
+[[mutant]]
+name = "an answer to come later is sent now, as null"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''    if answer.is_null() {
+        return;
+    }'''
+to = '''    let _ = answer.is_null();'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "devtools_session::"]

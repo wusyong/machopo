@@ -345,14 +345,20 @@ impl PageAgent {
     }
 
     /// Answers `message`, a command of `session`'s, if it is one of the
-    /// agent's: whether it was.
+    /// agent's: whether it was ([`Self::dispatch`], its answer sent).
+    #[cfg(test)]
     pub(crate) fn handle(&self, session: &str, message: &str) -> bool {
-        let Ok(command) = serde_json::from_str::<Value>(message) else {
-            return false;
-        };
-        let Some(method) = command.get("method").and_then(Value::as_str) else {
-            return false;
-        };
+        self.dispatch(session, message)
+            .map(|answer| self.send(session, &answer))
+            .is_some()
+    }
+
+    /// `message`, a command of `session`'s, taken if it is one of the
+    /// agent's: its answer, for the render thread to send once the
+    /// browser has what the command turned on.
+    pub(crate) fn dispatch(&self, session: &str, message: &str) -> Option<Value> {
+        let command = serde_json::from_str::<Value>(message).ok()?;
+        let method = command.get("method").and_then(Value::as_str)?;
         let params = command.get("params").cloned().unwrap_or(Value::Null);
         let result = match method {
             "Page.enable" => {
@@ -393,7 +399,7 @@ impl PageAgent {
                     Err((SERVER_ERROR, "Agent is not enabled.".into()))
                 }
             }
-            _ => return false,
+            _ => return None,
         };
         let id = command.get("id").cloned().unwrap_or(Value::Null);
         let answer = match result {
@@ -402,8 +408,7 @@ impl PageAgent {
                 json!({ "id": id, "error": { "code": code, "message": message } })
             }
         };
-        self.send(session, &answer);
-        true
+        Some(answer)
     }
 
     /// The main frame's document fired `DOMContentLoaded`

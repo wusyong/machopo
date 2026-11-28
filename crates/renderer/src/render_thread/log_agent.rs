@@ -224,21 +224,27 @@ impl LogAgent {
     }
 
     /// Answers `message`, a command of `session`'s, if it is one of the
-    /// agent's: whether it was.
+    /// agent's: whether it was ([`Self::dispatch`], its answer sent).
+    #[cfg(test)]
     pub(crate) fn handle(&self, session: &str, message: &str) -> bool {
-        let Ok(command) = serde_json::from_str::<Value>(message) else {
-            return false;
-        };
-        let Some(method) = command.get("method").and_then(Value::as_str) else {
-            return false;
-        };
+        self.dispatch(session, message)
+            .map(|answer| self.send(session, &answer))
+            .is_some()
+    }
+
+    /// `message`, a command of `session`'s, taken if it is one of the
+    /// agent's: its answer, for the render thread to send once the
+    /// browser has what the command turned on.
+    pub(crate) fn dispatch(&self, session: &str, message: &str) -> Option<Value> {
+        let command = serde_json::from_str::<Value>(message).ok()?;
+        let method = command.get("method").and_then(Value::as_str)?;
         match method {
             "Log.enable"
             | "Log.disable"
             | "Log.clear"
             | "Log.startViolationsReport"
             | "Log.stopViolationsReport" => {}
-            _ => return false,
+            _ => return None,
         }
         match method {
             "Log.enable" => {
@@ -256,8 +262,7 @@ impl LogAgent {
         // After the kept messages, as Blink's agent sends them while
         // enabling.
         let id = command.get("id").cloned().unwrap_or(Value::Null);
-        self.send(session, &json!({ "id": id, "result": {} }));
-        true
+        Some(json!({ "id": id, "result": {} }))
     }
 
     /// The messages kept, to `session`, which just turned `Log` on: first

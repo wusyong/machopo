@@ -1252,8 +1252,11 @@ pub trait WorkerEngine {
 }
 
 /// Where a DevTools session's answers and events go, as JSON
-/// ([`ScriptEngine::devtools_attach`]).
-pub type DevToolsSend = Box<dyn Fn(String)>;
+/// ([`ScriptEngine::devtools_attach`]): an answer with what the session has
+/// on in the engine's inspector as it answers (as
+/// [`ScriptEngine::devtools_state`] says it), for the browser to have before
+/// the answer, an event with nothing.
+pub type DevToolsSend = Box<dyn Fn(String, Option<Vec<u8>>)>;
 
 /// What has the engine's thread take the DevTools messages that are to
 /// interrupt script, called from any thread
