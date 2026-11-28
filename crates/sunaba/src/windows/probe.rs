@@ -15,6 +15,8 @@
 //! handle VALUE                    (whether it is a handle to a device here)
 //! integrity                       (this process's integrity level)
 //! container                       (1 in an app container, 0 outside)
+//! logon                           (entries of this thread's token's default
+//!                                  DACL for its logon session)
 //! mitigation NUMBER               (the flags of that mitigation policy)
 //! thread ATTEMPT...               (the attempt, on a new thread)
 //! random [ATTEMPT...]             (16 random bytes from the system, then the attempt)
@@ -40,7 +42,9 @@ use windows_sys::Win32::Networking::WinSock::{WSADATA, WSAStartup};
 use windows_sys::Win32::Storage::FileSystem::{FILE_TYPE_CHAR, GetFileType};
 use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_VM_READ};
 
-use super::{Mitigation, in_app_container, integrity, mitigation, owned, this_process};
+use super::{
+    AccessToken, Mitigation, in_app_container, integrity, mitigation, owned, this_process,
+};
 
 /// `HANDLE_FLAG_INHERIT`.
 const INHERIT: u32 = 1;
@@ -124,6 +128,23 @@ fn attempt(arguments: &[String]) -> std::io::Result<usize> {
         }
         ["integrity"] => integrity(this_process()).and_then(number),
         ["container"] => in_app_container(this_process()).map(usize::from),
+        // What the thread makes with no security of its own is given its
+        // token's default DACL.
+        ["logon"] => {
+            let token = AccessToken::of_this_thread()?;
+            let logon: Vec<&str> = token
+                .groups
+                .iter()
+                .filter(|group| group.logon)
+                .map(|group| group.sid.as_str())
+                .collect();
+            Ok(token
+                .default_dacl
+                .unwrap_or_default()
+                .iter()
+                .filter(|ace| logon.contains(&ace.sid.as_str()))
+                .count())
+        }
         ["mitigation", which] => {
             let which = match which.parse::<i32>().map_err(|_| invalid())? {
                 3 => Mitigation::StrictHandleCheck,

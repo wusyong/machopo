@@ -1,0 +1,60 @@
+# The lockdown default DACL (Windows: what a process under a policy makes, on its first thread's token or the process's, has no entry for the logon session, and the user may do everything with it): `python3 scripts/test.py mutate rfcs/0121-windows-renderer-lockdown/mutants-dacl.toml --keep-going`, on Windows, as a user who isn't elevated (an elevated one's default DACL has no entry for the logon session to begin with).
+test = ["cargo", "test", "-q", "-p", "sunaba", "--test", "it", "windows::"]
+timeout = 900
+
+[[mutant]]
+name = "the logon session's entry isn't taken out"
+file = "crates/sunaba/src/windows.rs"
+from = '''    if let Some(logon) = sids.logon {'''
+to = '''    if let Some(logon) = None::<PSID> {'''
+
+[[mutant]]
+name = "the logon session's entry isn't taken out (machopo's tests)"
+file = "crates/sunaba/src/windows.rs"
+from = '''    if let Some(logon) = sids.logon {'''
+to = '''    if let Some(logon) = None::<PSID> {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "renderer_sandbox_windows"]
+
+[[mutant]]
+name = "another group is taken for the logon session's"
+file = "crates/sunaba/src/windows.rs"
+from = '''            if group.Attributes & SE_GROUP_LOGON_ID == SE_GROUP_LOGON_ID {'''
+to = '''            if group.Attributes & SE_GROUP_INTEGRITY != 0 {'''
+
+[[mutant]]
+name = "the user isn't granted everything"
+file = "crates/sunaba/src/windows.rs"
+from = '''        grfAccessPermissions: GENERIC_ALL,
+        grfAccessMode: GRANT_ACCESS,'''
+to = '''        grfAccessPermissions: GENERIC_READ,
+        grfAccessMode: GRANT_ACCESS,'''
+
+[[mutant]]
+name = "the user's entry is taken out instead"
+file = "crates/sunaba/src/windows.rs"
+from = '''        grfAccessMode: GRANT_ACCESS,'''
+to = '''        grfAccessMode: REVOKE_ACCESS,'''
+
+[[mutant]]
+name = "the lockdown token keeps its default DACL"
+file = "crates/sunaba/src/windows.rs"
+from = '''        lock_down_default_dacl(&lockdown, &sids)?;'''
+to = '''        let _ = &lockdown;'''
+
+[[mutant]]
+name = "the first thread's token keeps its default DACL"
+file = "crates/sunaba/src/windows.rs"
+from = '''        lock_down_default_dacl(&same_access, &sids)?;'''
+to = '''        let _ = &same_access;'''
+
+[[mutant]]
+name = "the default DACL made isn't set"
+file = "crates/sunaba/src/windows.rs"
+from = '''    let default = TOKEN_DEFAULT_DACL { DefaultDacl: new };'''
+to = '''    let default = TOKEN_DEFAULT_DACL { DefaultDacl: old };'''
+
+[[mutant]]
+name = "the tokens made can't have their default DACL set"
+file = "crates/sunaba/src/windows.rs"
+from = '''            TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT,'''
+to = '''            TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY,'''

@@ -186,6 +186,39 @@ fn the_process_has_a_lockdown_app_containers_token() {
     assert_eq!(own.user.sid, token.user.sid);
 }
 
+/// From inside: what its first thread makes with the token it starts
+/// with (the loader, the start of `main`) isn't for its logon session
+/// either, nor what any thread makes with the process's. Its starter's
+/// is when the user isn't elevated.
+#[test]
+fn what_its_threads_make_isnt_for_the_logon_session() {
+    let own = AccessToken::of(sunaba::windows::this_process()).unwrap();
+    let logon: Vec<&str> = own
+        .groups
+        .iter()
+        .filter(|group| group.logon)
+        .map(|group| group.sid.as_str())
+        .collect();
+    assert!(!logon.is_empty(), "{own:?}");
+    let starters = own
+        .default_dacl
+        .iter()
+        .flatten()
+        .filter(|ace| logon.contains(&ace.sid.as_str()))
+        .count();
+    assert_eq!(
+        outside(&["logon"]),
+        Outcome::Ok(u64::try_from(starters).unwrap())
+    );
+
+    assert_eq!(outcome(&["--no-lower"], &["logon"]), Outcome::Ok(0));
+    assert_eq!(
+        outcome(&["--no-lower"], &["thread", "logon"]),
+        Outcome::Ok(0)
+    );
+    assert_eq!(inside(&["logon"]), Outcome::Ok(0));
+}
+
 /// What one process under a policy makes (its process, whose security
 /// comes from its token's default DACL) another can't open, by its
 /// lockdown token or by the one it starts with, which isn't the first

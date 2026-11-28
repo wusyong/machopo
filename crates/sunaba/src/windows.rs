@@ -31,20 +31,24 @@ use std::ptr::{null, null_mut};
 
 use windows_sys::Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation};
 use windows_sys::Win32::Foundation::{
-    DUPLICATE_SAME_ACCESS, DuplicateHandle, GENERIC_READ, HANDLE, INVALID_HANDLE_VALUE,
-    WAIT_OBJECT_0, WAIT_TIMEOUT,
+    DUPLICATE_SAME_ACCESS, DuplicateHandle, GENERIC_ALL, GENERIC_READ, HANDLE,
+    INVALID_HANDLE_VALUE, LocalFree, WAIT_OBJECT_0, WAIT_TIMEOUT,
+};
+use windows_sys::Win32::Security::Authorization::{
+    EXPLICIT_ACCESS_W, GRANT_ACCESS, NO_MULTIPLE_TRUSTEE, REVOKE_ACCESS, SetEntriesInAclW,
+    TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
 };
 use windows_sys::Win32::Security::Isolation::DeriveAppContainerSidFromAppContainerName;
 use windows_sys::Win32::Security::{
     ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, CreateRestrictedToken, CreateWellKnownSid,
     DISABLE_MAX_PRIVILEGE, DuplicateTokenEx, FreeSid, GetAce, GetSidIdentifierAuthority,
-    GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, PSID, RevertToSelf,
-    SECURITY_CAPABILITIES, SID_AND_ATTRIBUTES, SecurityImpersonation, SetTokenInformation,
-    TOKEN_ADJUST_DEFAULT, TOKEN_APPCONTAINER_INFORMATION, TOKEN_ASSIGN_PRIMARY, TOKEN_DEFAULT_DACL,
-    TOKEN_DUPLICATE, TOKEN_GROUPS, TOKEN_IMPERSONATE, TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
-    TOKEN_USER, TokenAppContainerSid, TokenDefaultDacl, TokenGroups, TokenImpersonation,
-    TokenIntegrityLevel, TokenIsAppContainer, TokenRestrictedSids, TokenUser, WinNullSid,
-    WinUntrustedLabelSid,
+    GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, NO_INHERITANCE, PSID,
+    RevertToSelf, SECURITY_CAPABILITIES, SID_AND_ATTRIBUTES, SecurityImpersonation,
+    SetTokenInformation, TOKEN_ADJUST_DEFAULT, TOKEN_APPCONTAINER_INFORMATION,
+    TOKEN_ASSIGN_PRIMARY, TOKEN_DEFAULT_DACL, TOKEN_DUPLICATE, TOKEN_GROUPS, TOKEN_IMPERSONATE,
+    TOKEN_MANDATORY_LABEL, TOKEN_QUERY, TOKEN_USER, TokenAppContainerSid, TokenDefaultDacl,
+    TokenGroups, TokenImpersonation, TokenIntegrityLevel, TokenIsAppContainer, TokenRestrictedSids,
+    TokenUser, WinNullSid, WinUntrustedLabelSid,
 };
 use windows_sys::Win32::Storage::FileSystem::{FILE_TYPE_DISK, FILE_TYPE_PIPE, GetFileType};
 use windows_sys::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE};
@@ -101,6 +105,10 @@ pub const LOW: u32 = 0x1000;
 /// `SetDefaultDllDirectories`: the application's directory, System32 and
 /// what `AddDllDirectory` named, and not the current directory.
 const LOAD_LIBRARY_SEARCH_DEFAULT_DIRS: u32 = 0x1000;
+/// `GetCurrentThreadEffectiveToken()`, -6: a pseudo-handle to the token
+/// the thread impersonates, or else its process's, which may be asked
+/// about with no access checked.
+const EFFECTIVE_TOKEN: RawHandle = std::ptr::without_provenance_mut(usize::MAX - 5);
 
 /// Every user interface restriction a job has (`JOB_OBJECT_UILIMIT_*`):
 /// other processes' window handles, the clipboard both ways, the
@@ -776,7 +784,12 @@ struct Tokens {
 impl Tokens {
     /// Made from this process's token, for the app container `name`.
     fn new(name: &str) -> Result<Self, Error> {
-        let base = process_token(TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY)?;
+        // A restricted token's handle has the access of the one it is made
+        // from: adjusting the default DACL of the two made here is asked
+        // for here.
+        let base = process_token(
+            TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT,
+        )?;
         let sids = Sids::of(&base)?;
         let null_sid = well_known(WinNullSid)?;
         let restricting_null = [SID_AND_ATTRIBUTES {
@@ -795,6 +808,11 @@ impl Tokens {
         // takes that for a token to identify by), so its first thread's
         // is restricted too.
         let same_access = restricted(&base, 0, &[], &sids.list)?;
+        // Both before they are made app containers', whose tokens are
+        // given the default DACL of the token they are made from (with
+        // the container added).
+        lock_down_default_dacl(&lockdown, &sids)?;
+        lock_down_default_dacl(&same_access, &sids)?;
         let primary = app_container_token(&lockdown, name)?;
         let initial = app_container_token(&same_access, name)?;
         let mut impersonating = null_mut();
@@ -823,10 +841,13 @@ impl Tokens {
 /// `RestrictedToken::AddAllSidsForDenyOnly` and
 /// `AddRestrictingSidAllSids` take).
 struct Sids {
-    /// The token's answers, which the list points into.
+    /// The token's answers, which the list and `logon` point into.
     _user: Vec<u64>,
     _groups: Vec<u64>,
+    /// The user's first, then the groups'.
     list: Vec<SID_AND_ATTRIBUTES>,
+    /// The logon session's, when the token has one (a service's may not).
+    logon: Option<PSID>,
 }
 
 impl Sids {
@@ -842,6 +863,7 @@ impl Sids {
             Sid: sid,
             Attributes: 0,
         });
+        let mut logon = None;
         for group in groups_in(&groups).map_err(|source| Error { what, source })? {
             if group.Attributes & SE_GROUP_INTEGRITY == 0 {
                 list.push(SID_AND_ATTRIBUTES {
@@ -849,13 +871,97 @@ impl Sids {
                     Attributes: 0,
                 });
             }
+            if group.Attributes & SE_GROUP_LOGON_ID == SE_GROUP_LOGON_ID {
+                logon = Some(group.Sid);
+            }
         }
         Ok(Self {
             _user: user,
             _groups: groups,
             list,
+            logon,
         })
     }
+
+    /// The user's SID.
+    fn user(&self) -> PSID {
+        // The list starts with it (`of`).
+        self.list.first().map_or(null_mut(), |user| user.Sid)
+    }
+}
+
+/// Makes `token`'s default DACL, which what a process or thread with it
+/// makes with no security of its own is given, the lockdown one
+/// (Chromium's `SetLockdownDefaultDacl`, its `RestrictedToken`'s
+/// `RevokeLogonSidFromDefaultDacl` and `AddUserSidToDefaultDacl`): no
+/// entry for the logon session's SID, and the user granted everything.
+/// The default DACL a token starts with is its starter's, which for a
+/// user who isn't elevated lets the logon session's SID read and run
+/// what is made: so would any process of the session whose access is
+/// checked by that SID, as a restricted token of another sandbox's may
+/// be, though not by the user's.
+fn lock_down_default_dacl(token: &OwnedHandle, sids: &Sids) -> Result<(), Error> {
+    let dacl = information(token, TokenDefaultDacl).map_err(|source| Error {
+        what: "GetTokenInformation",
+        source,
+    })?;
+    // SAFETY: the buffer holds the structure the class returns, aligned;
+    // its ACL is null or inside the buffer, and valid (the system's).
+    let old = unsafe { (*dacl.as_ptr().cast::<TOKEN_DEFAULT_DACL>()).DefaultDacl };
+    let trustee = |sid: PSID| TRUSTEE_W {
+        pMultipleTrustee: null_mut(),
+        MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
+        TrusteeForm: TRUSTEE_IS_SID,
+        TrusteeType: TRUSTEE_IS_UNKNOWN,
+        ptstrName: sid.cast(),
+    };
+    let mut entries = Vec::with_capacity(2);
+    if let Some(logon) = sids.logon {
+        entries.push(EXPLICIT_ACCESS_W {
+            grfAccessPermissions: 0,
+            grfAccessMode: REVOKE_ACCESS,
+            grfInheritance: NO_INHERITANCE,
+            Trustee: trustee(logon),
+        });
+    }
+    entries.push(EXPLICIT_ACCESS_W {
+        grfAccessPermissions: GENERIC_ALL,
+        grfAccessMode: GRANT_ACCESS,
+        grfInheritance: NO_INHERITANCE,
+        Trustee: trustee(sids.user()),
+    });
+    let count = size32("the default DACL's entries", entries.len())?;
+    let len = size32("the default DACL", size_of::<TOKEN_DEFAULT_DACL>())?;
+    let mut new: *mut ACL = null_mut();
+    // SAFETY: the entries are as many as said, and alive for the call;
+    // each trustee is a SID, which points into `sids`'s answers, alive
+    // across it. The old ACL is null or `dacl`'s, alive too. `new` is
+    // written with an ACL the call allocated, freed below.
+    let error = unsafe { SetEntriesInAclW(count, entries.as_ptr(), old, &raw mut new) };
+    if error != 0 {
+        return Err(Error {
+            what: "SetEntriesInAclW",
+            // A Win32 error code, which is below `i32::MAX`.
+            source: io::Error::from_raw_os_error(error.cast_signed()),
+        });
+    }
+    let default = TOKEN_DEFAULT_DACL { DefaultDacl: new };
+    // SAFETY: `token` is open with the right to set this (`Tokens::new`);
+    // `default` is the structure the class reads, its length its size,
+    // and the ACL it points to is alive across the call, which copies it.
+    let set = unsafe {
+        SetTokenInformation(
+            token.as_raw_handle(),
+            TokenDefaultDacl,
+            (&raw const default).cast(),
+            len,
+        )
+    };
+    let set = check("SetTokenInformation", set != 0);
+    // SAFETY: `new` is the ACL `SetEntriesInAclW` allocated (with
+    // `LocalAlloc`), freed once, after the token has a copy of it.
+    unsafe { LocalFree(new.cast()) };
+    set
 }
 
 /// The groups of the `TOKEN_GROUPS` a token's answer holds.
@@ -1631,7 +1737,8 @@ fn token_of(process: BorrowedHandle<'_>) -> io::Result<OwnedHandle> {
 }
 
 /// `class` of `token`, in memory aligned for its structure.
-fn information(token: &OwnedHandle, class: i32) -> io::Result<Vec<u64>> {
+fn information(token: impl AsHandle, class: i32) -> io::Result<Vec<u64>> {
+    let token = token.as_handle();
     let mut len = 0u32;
     // SAFETY: with no buffer the call only writes the length it needs.
     unsafe { GetTokenInformation(token.as_raw_handle(), class, null_mut(), 0, &raw mut len) };
@@ -1724,24 +1831,37 @@ pub struct Ace {
 impl AccessToken {
     /// `process`'s token.
     pub fn of(process: BorrowedHandle<'_>) -> io::Result<Self> {
-        let token = token_of(process)?;
-        let user = information(&token, TokenUser)?;
+        Self::read(token_of(process)?.as_handle())
+    }
+
+    /// This thread's: the token it impersonates, or else its process's.
+    /// Read through the pseudo-handle for it, which is never opened: a
+    /// process under a policy can't open its own token once it has
+    /// lowered itself.
+    pub(crate) fn of_this_thread() -> io::Result<Self> {
+        // SAFETY: `GetCurrentThreadEffectiveToken`'s pseudo-handle, a
+        // constant that may always be asked about and is never closed.
+        Self::read(unsafe { BorrowedHandle::borrow_raw(EFFECTIVE_TOKEN) })
+    }
+
+    fn read(token: BorrowedHandle<'_>) -> io::Result<Self> {
+        let user = information(token, TokenUser)?;
         // SAFETY: the buffer holds the structure the class returns,
         // aligned, and its SID points inside the buffer.
         let user = unsafe { group(&(*user.as_ptr().cast::<TOKEN_USER>()).User) };
-        let groups = information(&token, TokenGroups)?;
+        let groups = information(token, TokenGroups)?;
         // SAFETY: each group's SID points inside the buffer.
         let groups = groups_in(&groups)?
             .iter()
             .map(|each| unsafe { group(each) })
             .collect();
-        let restricting = information(&token, TokenRestrictedSids)?;
+        let restricting = information(token, TokenRestrictedSids)?;
         // SAFETY: as above.
         let restricting = groups_in(&restricting)?
             .iter()
             .map(|each| unsafe { sid_text(each.Sid) })
             .collect();
-        let container = information(&token, TokenAppContainerSid)?;
+        let container = information(token, TokenAppContainerSid)?;
         // SAFETY: the buffer holds the structure the class returns, whose
         // SID is null or points inside the buffer.
         let app_container = unsafe {
@@ -1749,7 +1869,7 @@ impl AccessToken {
                 (*container.as_ptr().cast::<TOKEN_APPCONTAINER_INFORMATION>()).TokenAppContainer;
             (!sid.is_null()).then(|| sid_text(sid))
         };
-        let dacl = information(&token, TokenDefaultDacl)?;
+        let dacl = information(token, TokenDefaultDacl)?;
         // SAFETY: the buffer holds the structure the class returns, whose
         // ACL is null or a valid one inside the buffer.
         let default_dacl = unsafe {
