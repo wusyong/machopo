@@ -1538,7 +1538,7 @@ static LOWERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::n
 
 /// `delayimp.h`'s `DelayLoadInfo`: what the linker's delay-load helper
 /// says of a DLL, or a function of one, it couldn't load.
-#[cfg(target_env = "msvc")]
+#[cfg(all(target_env = "msvc", feature = "delay-load-hook"))]
 #[repr(C)]
 struct DelayLoadInfo {
     size: u32,
@@ -1560,8 +1560,10 @@ struct DelayLoadInfo {
 /// can't, and the helper then raises an exception that ends it with a
 /// code and nothing else. This says on its errors which DLL and function
 /// it was first, then lets it end so (Chromium's `chrome.exe` has a hook
-/// of its own for the same).
-#[cfg(target_env = "msvc")]
+/// of its own for the same). A program has one such variable, so this is
+/// the `delay-load-hook` feature's, on by default: a program with a hook
+/// of its own turns it off.
+#[cfg(all(target_env = "msvc", feature = "delay-load-hook"))]
 #[unsafe(no_mangle)]
 static __pfnDliFailureHook2: Option<
     unsafe extern "system" fn(u32, *const DelayLoadInfo) -> *mut c_void,
@@ -1573,7 +1575,7 @@ static __pfnDliFailureHook2: Option<
 /// # Safety
 ///
 /// `info` is the helper's, valid for the call.
-#[cfg(target_env = "msvc")]
+#[cfg(all(target_env = "msvc", feature = "delay-load-hook"))]
 unsafe extern "system" fn delay_load_failed(
     notification: u32,
     info: *const DelayLoadInfo,

@@ -1,11 +1,11 @@
 [package]
 name = "sunaba"
 description = "A process's sandbox: on Linux, Landlock and seccomp-bpf, and on macOS, Seatbelt, entered by the process itself as it starts; on Windows, an app container, a job and mitigations, given as the process is started."
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-publish.workspace = true
-license.workspace = true
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+publish = false
+license = "MIT OR Apache-2.0"
 
 # No doc examples: skip rustdoc's pass in `cargo test`.
 [lib]
@@ -13,6 +13,14 @@ doctest = false
 
 [lints]
 workspace = true
+
+[features]
+default = ["delay-load-hook"]
+# Windows (MSVC): the crate defines the delay-load helper's failure hook
+# (`__pfnDliFailureHook2`), which says which DLL a lowered process couldn't
+# load. One definition per program: a program with a hook of its own turns
+# this off.
+delay-load-hook = []
 
 # Nothing of the workspace's: the crate is written to stand on its own.
 [target.'cfg(target_os = "linux")'.dependencies]

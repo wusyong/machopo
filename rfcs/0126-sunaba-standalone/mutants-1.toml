@@ -1,0 +1,18 @@
+# Stage 1's mutants (the delay-load hook is a feature, on by default):
+# `python3 scripts/test.py mutate rfcs/0126-sunaba-standalone/mutants-1.toml`, on Windows.
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "renderer_sandbox_windows::"]
+timeout = 900
+
+[[mutant]]
+name = "the hook isn't on by default"
+file = "crates/sunaba/Cargo.toml"
+from = '''default = ["delay-load-hook"]'''
+to = '''default = []'''
+
+[[mutant]]
+name = "the hook doesn't follow its feature"
+file = "crates/sunaba/src/windows.rs"
+from = '''#[cfg(all(target_env = "msvc", feature = "delay-load-hook"))]
+#[unsafe(no_mangle)]'''
+to = '''#[cfg(all(target_env = "msvc", not(feature = "delay-load-hook")))]
+#[unsafe(no_mangle)]'''

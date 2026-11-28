@@ -1,7 +1,8 @@
 # RFC 0126：`sunaba` 成為獨立的專案
 
 - 開始日期：2026-11-27
-- 狀態：👍 已接受：2026-11-27
+- 狀態：🚧 已排程：2026-11-27
+- 進度和驗收：`progress.md`
 - 細節：`details.md`
 
 ## 摘要
@@ -53,17 +54,17 @@
 
 ### 要補的設定（`details.md` 的「現況」有完整的清單）
 
-- `Cargo.toml`：`version`、`edition`、`rust-version`、`license`、`publish` 寫明（現在從 workspace 繼承：0.0.1、2024、1.99、`publish = false`、`MIT OR Apache-2.0`）；加 `repository`、`readme`。版本從 0.1.0 開始（看法）。
+- `Cargo.toml`：`version`、`edition`、`rust-version`、`license`、`publish` 寫明（現在從 workspace 繼承：0.0.1、2024、1.99、`publish = false`、`MIT OR Apache-2.0`）；版本從 0.1.0 開始（已決定的事項第 6 條）；`repository` 等第 2 段 repo 的名字定了再加。
 - lint：照 machopo 的 workspace lint 抄一份自己的（`unsafe_code` 和 `unsafe_op_in_unsafe_fn` 是 deny、`undocumented_unsafe_blocks`、整數運算和轉型的 lint），elise 也是這樣抄；`unexpected_cfgs` 拿掉 machopo 的 `ipc_loom` 那些。
 - `rust-toolchain.toml` 釘和 machopo 一樣的版本（1.99.0），之後和 machopo、elise 一起調（`docs/README.md` 的「其他會牽動文件的變更」加上它）。
 - `clippy.toml`：只留和它有關的（`fetch_add` 的那一條；V8 的那幾條不要）。
-- `.cargo/config.toml`：machopo 的 Windows 的 `/NODEFAULTLIB:libcmt.lib` 和 `rust-lld` 是為了 V8，`sunaba` 不需要（待確認：拿掉之後 `sunaba_probe` 的延後載入照樣連得起來）。
+- `.cargo/config.toml`：不要。machopo 的 Windows 的 `/NODEFAULTLIB:libcmt.lib` 和 `rust-lld` 是為了 V8；第 1 段在 machopo 外面用 MSVC 預設的連結器編過，`sunaba_probe` 的延後載入照樣連得起來，測試都通過（`progress.md`）。
 - `.gitattributes`（LF）、`.gitignore`、`LICENSE-MIT`、`LICENSE-APACHE`。
 
 ### 提到 machopo 的地方
 
 - `build.rs` 的「as machopo's executable does」、`soundness.md` 的兩處「machopo's tests …」：改成說用的程式要怎麼做（延後載入的程式要連 `delayimp.lib`；namespace 和延後載入的那兩項由用它的程式的測試看），machopo 只當例子。
-- `__pfnDliFailureHook2`：`sunaba` 是 library，任何連結它、又用 `/DELAYLOAD` 的執行檔都拿到這個 hook。現在是 machopo 自己知道；獨立之後寫進 README 的 API（Windows 的「Lowering」一節），讓用的人知道。
+- `__pfnDliFailureHook2`：`sunaba` 是 library，任何連結它、又用 `/DELAYLOAD` 的執行檔都拿到這個 hook；一個程式只能有一個，自己也定義了的程式連結時撞名。改成 cargo feature `delay-load-hook`、預設開著（已決定的事項第 5 條），README 的 Windows 的「Lowering」寫明。
 - desktop 的名字 `sunaba-<PID>` 本來就是通用的，不改（`shell` 的測試照它斷言）。
 
 ### 新的 repo 的內容
@@ -124,12 +125,14 @@
 3. **文件全部英文（L1）**：README、soundness 和新的 contributing、testing 都是英文。理由：README 和 `soundness.md` 本來就是英文的，要給 machopo 以外的人讀。不選照 elise 的中文 docs/（L2）。
 4. **CI 在三個平台上跑（C1）**：`sunaba` 的 CI 在 `ubuntu-latest`、`macos-latest`、`windows-latest` 上跑 `cargo test`、clippy（`-D warnings`）、`cargo fmt --check` 和它的 `sanity.py`，每次 push 都跑；machopo 的 CI 照舊只在 `ubuntu-24.04` 上。理由：macOS 和 Windows 的程式第一次有 CI，machopo 不用為它開新的平台。不選讓 machopo 的 CI 也跑它的測試（C2：重複）。
 
+5. **延後載入失敗的 hook 是預設開著的 feature（D2）**（2026-11-27，第 1 段開始前，使用者確認）：`__pfnDliFailureHook2` 和它呼叫的 `delay_load_failed` 只在 `delay-load-hook` 這個 feature 開著時定義，`default = ["delay-load-hook"]`。理由：一個程式只能有一個這個變數，library 自己定義時，已經有自己的 hook 的程式連結不起來；預設開著，machopo、`ipc` 和 `sunaba` 自己的測試都不用改。不選照舊、只在 README 寫明（D1：那種程式用不了 `sunaba`）；不選照 Chromium 由執行檔自己定義（D3：`chrome.exe` 的 hook 在 `chrome/app`，但 machopo 的 `shell` 就要寫 `#[unsafe(no_mangle)]`，違反 `unsafe` 只在 `bindings`、`ipc` 和 `sunaba`）。
+6. **版本從 0.1.0 開始**（2026-11-27，同上）：從 workspace 繼承的 0.0.1 是 machopo 的佔位；`publish` 照舊是 `false`（不發布到 crates.io，第 1 條）。
+
 ## 待決定
 
 1. repo 的名字（`sunaba`）和位置（`github.com/wusyong/sunaba`）；授權照 machopo 的 `MIT OR Apache-2.0`。第 2 段開始前，由使用者在 GitHub 建 repo 時定。
 2. Linux 的 runner 要不要打開沒有特權的 user namespace（`Namespaces` 的兩條路都跑）：第 2 段寫 CI 時決定。
 3. `test.py mutate` 要不要支援 ../third_party 底下的檔案（elise 的 mutation test 現在怎麼跑，先查）：第 3 段之前。
-4. `.cargo/config.toml` 的 Windows 的連結設定，`sunaba` 單獨編時要不要：第 1 段單獨編的時候試。
 
 ## 之後的可能
 

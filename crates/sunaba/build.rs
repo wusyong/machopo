@@ -1,6 +1,6 @@
 //! On Windows, the probe loads `user32.dll` when it is first called, not
-//! as the process starts (the linker's `/DELAYLOAD`), as machopo's
-//! executable does: the crate calls it to make the window station and
+//! as the process starts (the linker's `/DELAYLOAD`), as any program that
+//! links the crate and is started under a policy is to: the crate calls it to make the window station and
 //! desktop it starts a process under a policy on, and a process with it
 //! loaded at its start doesn't start with win32k's calls turned off.
 
