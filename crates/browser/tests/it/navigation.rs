@@ -4269,6 +4269,147 @@ document.querySelector('base').setAttribute('href', '/later/');
         web_contents.shutdown();
     }
 
+    /// A page that puts an iframe at `src` (a path, at `localhost` of the
+    /// same port if `cross`: another origin) and reports, once loaded,
+    /// whether the iframe fired `load`.
+    fn framing(src: &str, cross: bool) -> String {
+        let src = if cross {
+            format!("`http://localhost:${{location.port}}{src}`")
+        } else {
+            format!("'{src}'")
+        };
+        format!(
+            "{}<script>\
+               const frame = document.createElement('iframe');\
+               frame.onload = () => {{ window.framed = true; }};\
+               frame.src = {src};\
+               document.documentElement.append(frame);\
+             </script>",
+            after_load("report(`${window.framed}`)")
+        )
+    }
+
+    /// The origin of the document of `frame`'s first child frame, once the
+    /// page reported.
+    fn child_origin(web_contents: &WebContents, frame: protocol::FrameToken) -> url::Origin {
+        let child = web_contents.frame_tree().children(frame)[0];
+        web_contents
+            .frame_tree()
+            .origin(child)
+            .cloned()
+            .expect("a child frame")
+    }
+
+    /// A child frame whose response its ancestors may not show
+    /// (`X-Frame-Options`, CSP's `frame-ancestors`) commits an error page,
+    /// of no origin, its iframe's `load` fired all the same, as Chrome
+    /// does; one they may, its document. A 204 and the main frame aren't
+    /// checked.
+    #[test]
+    fn a_frame_its_response_refuses_commits_an_error_page() {
+        let csp = "Content-Security-Policy";
+        let xfo = "X-Frame-Options";
+        for (header, value, cross, refused) in [
+            (xfo, "DENY", true, true),
+            (xfo, "DENY", false, true),
+            (xfo, "SAMEORIGIN", true, true),
+            (xfo, "SAMEORIGIN", false, false),
+            (csp, "frame-ancestors 'none'", false, true),
+            (csp, "frame-ancestors 'self'", true, true),
+            (csp, "frame-ancestors 'self'", false, false),
+            (csp, "frame-ancestors *", true, false),
+            ("X-Other", "DENY", true, false),
+        ] {
+            let server = server(&[
+                ("/", Route::ok("text/html", framing("/child", cross))),
+                (
+                    "/child",
+                    Route::ok("text/html", "child").with_header(header, value),
+                ),
+            ]);
+            let (mut web_contents, host_rx) = tab();
+            let main = web_contents.devtools_frame_token();
+            web_contents.navigate(server.url("/"));
+            assert_eq!(
+                report(&mut web_contents, &host_rx),
+                "true",
+                "{header}: {value}"
+            );
+            let origin = child_origin(&web_contents, main);
+            assert_eq!(!origin.is_tuple(), refused, "{header}: {value}, {cross}");
+            web_contents.shutdown();
+        }
+        // A 204 isn't checked (it shows nothing, Chromium's throttle lets it
+        // be).
+        let empty = server(&[
+            ("/", Route::ok("text/html", framing("/child", true))),
+            ("/child", Route::new(204, "").with_header(xfo, "DENY")),
+        ]);
+        let (mut web_contents, host_rx) = tab();
+        let main = web_contents.devtools_frame_token();
+        web_contents.navigate(empty.url("/"));
+        assert_eq!(report(&mut web_contents, &host_rx), "true");
+        assert!(child_origin(&web_contents, main).is_tuple(), "a 204");
+        web_contents.shutdown();
+        let server = server(&[("/", Route::ok("text/html", "top").with_header(xfo, "DENY"))]);
+        let (mut web_contents, host_rx) = tab();
+        web_contents.navigate(server.url("/"));
+        wait_until_loaded(&mut web_contents, &host_rx);
+        let main = web_contents.devtools_frame_token();
+        assert!(web_contents.frame_tree().origin(main).unwrap().is_tuple());
+        web_contents.shutdown();
+    }
+
+    /// `SAMEORIGIN` and `frame-ancestors` look at every ancestor, the top's
+    /// too: a frame of the response's origin in a frame of its origin in a
+    /// page of another is refused. A redirect's hop isn't checked, its
+    /// final response is.
+    #[test]
+    fn every_ancestor_counts_and_only_the_final_response() {
+        for (header, value) in [
+            ("X-Frame-Options", "SAMEORIGIN"),
+            ("Content-Security-Policy", "frame-ancestors 'self'"),
+        ] {
+            let inner = "<!DOCTYPE html><iframe src=/child></iframe>";
+            let server = server(&[
+                ("/", Route::ok("text/html", framing("/inner", true))),
+                ("/inner", Route::ok("text/html", inner)),
+                (
+                    "/child",
+                    Route::ok("text/html", "child").with_header(header, value),
+                ),
+            ]);
+            let (mut web_contents, host_rx) = tab();
+            let main = web_contents.devtools_frame_token();
+            web_contents.navigate(server.url("/"));
+            assert_eq!(report(&mut web_contents, &host_rx), "true");
+            let inner = web_contents.frame_tree().children(main)[0];
+            assert!(web_contents.frame_tree().origin(inner).unwrap().is_tuple());
+            assert!(
+                !child_origin(&web_contents, inner).is_tuple(),
+                "{header}: {value}"
+            );
+            web_contents.shutdown();
+        }
+        let server = server(&[
+            ("/", Route::ok("text/html", framing("/hop", true))),
+            (
+                "/hop",
+                Route::redirect(302, "/child").with_header("X-Frame-Options", "DENY"),
+            ),
+            ("/child", Route::ok("text/html", "child")),
+        ]);
+        let (mut web_contents, host_rx) = tab();
+        let main = web_contents.devtools_frame_token();
+        web_contents.navigate(server.url("/"));
+        assert_eq!(report(&mut web_contents, &host_rx), "true");
+        assert!(
+            child_origin(&web_contents, main).is_tuple(),
+            "the hop's isn't checked"
+        );
+        web_contents.shutdown();
+    }
+
     /// A child frame's `location.reload()` is the browser's to load, from
     /// the URL it has for the frame: its document loaded again, a reload.
     #[test]

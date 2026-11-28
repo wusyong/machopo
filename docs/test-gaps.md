@@ -116,6 +116,7 @@
 | Windows 上 Browser 建不出 renderer 的 sandbox 時不啟動 renderer（`sunaba` 的 `Command::spawn` 回錯誤，分頁照 renderer 起不來處理）；renderer 降不了 integrity 時以結束碼 5 結束 | 要沒有 `CreateAppContainerToken` 或不收某個屬性的 Windows；降 integrity 在自己的 token 上不會失敗 | 審查；`sunaba` 的 `a_program_that_isnt_there_starts_nothing` 測了「回錯誤、沒有 process」的那條路，結束碼對到說明有單元測試 | 支援新的 Windows 版本時在那一版上跑一次 `renderer_sandbox_windows` |
 | Windows 上 `--allow-third-party-modules` 真的讓別人的 DLL 載得進 renderer，沒有它時 renderer 因此起不來、分頁提示這個開關 | 要一個會把沒有 Microsoft 簽章的 DLL 注入 renderer 的軟體；開發機和 CI 沒有。測試守得住的是開關改了 renderer 的 mitigation 的狀態，和三個結束碼對到說明 | 審查 | 有那樣的機器時手動確認一次 |
 | Windows 上從 console 啟動時 renderer 的 stdout、stderr（兩個都是 console 時留給 console；只有一個接到檔案時另一個沒有） | 測試的 stdout、stderr 都是 pipe | 手動確認過一次（2026-11-26：真的 console 裡，sandbox 裡的 process 起得來、結束碼 0） | 之後有開 console 的測試工具時補 |
+| Browser 擋下子 frame 的回應時，DevTools 的 `loadingFailed` 只送一次（`shell` 的 `automation_session` 收到 `NavigationRefused` 時不把導覽從 `responded` 拿掉） | 要網路那邊在 Browser 停下載入之前已經送出結束（body 在 head 之後出錯）、那個事件排在擋下之後才處理，測試排不出這個先後 | 審查：停下的載入不再回呼（`net` 的 `LoadHandle::cancel`），所以之後最多一個排著的結束，留著的那一筆讓它照回應之後的錯誤不送；`devtools_network` 的 `a_refused_frame_fails_after_its_response` 守著一般的情況只有一次 | 導覽的事件能在測試裡排先後時（例如能卡住 UI thread 的 test hook）寫成測試 |
 
 ## 只做過手動確認
 

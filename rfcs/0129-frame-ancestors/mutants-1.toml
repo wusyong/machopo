@@ -1,0 +1,333 @@
+# Stage 1's mutants (the checks, the error page, `loadingFailed`): `python3 scripts/test.py mutate rfcs/0129-frame-ancestors/mutants-1.toml`.
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "--", "csp", "frame_ancestors"]
+timeout = 1200
+
+[[mutant]]
+name = "a header's policies aren't split at commas"
+file = "crates/net/src/csp.rs"
+from = '''        for part in value.split(',') {
+            let mut directives'''
+to = '''        for part in std::iter::once(value.as_str()) {
+            let mut directives'''
+
+[[mutant]]
+name = "an empty directive is one"
+file = "crates/net/src/csp.rs"
+from = '''                if name.is_empty() {
+                    continue;
+                }
+                let name = name.to_ascii_lowercase();'''
+to = '''                let name = name.to_ascii_lowercase();'''
+
+[[mutant]]
+name = "a directive's name keeps its case"
+file = "crates/net/src/csp.rs"
+from = '''                let name = name.to_ascii_lowercase();'''
+to = '''                let name = name.to_owned();'''
+
+[[mutant]]
+name = "a directive given twice is kept twice"
+file = "crates/net/src/csp.rs"
+from = '''                if directives.iter().any(|(known, _)| *known == name) {
+                    continue;
+                }'''
+to = '''                let _ = &directives;'''
+
+[[mutant]]
+name = "a report-only policy is enforced"
+file = "crates/net/src/csp.rs"
+from = '''            "content-security-policy-report-only" => Disposition::Report,'''
+to = '''            "content-security-policy-report-only" => Disposition::Enforce,'''
+
+[[mutant]]
+name = "'self' isn't taken"
+file = "crates/net/src/csp.rs"
+from = '''                list.allow_self = true;'''
+to = '''                {}'''
+
+[[mutant]]
+name = "'self' is taken in any case but lower"
+file = "crates/net/src/csp.rs"
+from = '''            if token.eq_ignore_ascii_case("'self'") {'''
+to = '''            if token == "'self'" {'''
+
+[[mutant]]
+name = "* isn't taken"
+file = "crates/net/src/csp.rs"
+from = '''                list.allow_star = true;'''
+to = '''                {}'''
+
+[[mutant]]
+name = "an opaque ancestor matches"
+file = "crates/net/src/csp.rs"
+from = '''        let Origin::Tuple(scheme, host, port) = ancestor else {
+            return false;
+        };'''
+to = '''        let Origin::Tuple(scheme, host, port) = ancestor else {
+            return true;
+        };'''
+
+[[mutant]]
+name = "* is any origin"
+file = "crates/net/src/csp.rs"
+from = '''        if self.allow_star && matches!(scheme.as_str(), "http" | "https") {'''
+to = '''        if self.allow_star {'''
+
+[[mutant]]
+name = "'self' is any port of its host"
+file = "crates/net/src/csp.rs"
+from = '''                port: Some(Port::Number(*self_port)),'''
+to = '''                port: Some(Port::Any),'''
+
+[[mutant]]
+name = "a scheme source matches any scheme"
+file = "crates/net/src/csp.rs"
+from = '''        return source.scheme_only && schemes != Matching::No;'''
+to = '''        return source.scheme_only;'''
+
+[[mutant]]
+name = "http is no upgrade to https"
+file = "crates/net/src/csp.rs"
+from = '''        ("http", "https") | ("ws", "wss") => Matching::Upgrade,'''
+to = '''        ("ws", "wss") => Matching::Upgrade,'''
+
+[[mutant]]
+name = "a wildcard host matches the domain itself"
+file = "crates/net/src/csp.rs"
+from = '''        source.host.is_empty() || host.ends_with(&format!(".{}", source.host))'''
+to = '''        source.host.is_empty() || host.ends_with(&source.host)'''
+
+[[mutant]]
+name = "https://* matches no host"
+file = "crates/net/src/csp.rs"
+from = '''        source.host.is_empty() || host.ends_with(&format!(".{}", source.host))'''
+to = '''        !source.host.is_empty() && host.ends_with(&format!(".{}", source.host))'''
+
+[[mutant]]
+name = "a host source's host isn't compared"
+file = "crates/net/src/csp.rs"
+from = '''    if !hosts {
+        return false;
+    }'''
+to = '''    let _ = hosts;'''
+
+[[mutant]]
+name = "a host is compared in its case"
+file = "crates/net/src/csp.rs"
+from = '''        host: host.to_ascii_lowercase(),
+        host_wildcard,'''
+to = '''        host: host.to_owned(),
+        host_wildcard,'''
+
+[[mutant]]
+name = "a source with no port takes any"
+file = "crates/net/src/csp.rs"
+from = '''        None => Matching::No,
+        Some(Port::Number(port))'''
+to = '''        None => Matching::Wildcard,
+        Some(Port::Number(port))'''
+
+[[mutant]]
+name = "a source with no port takes none"
+file = "crates/net/src/csp.rs"
+from = '''        None if default_port(place.scheme) == Some(place.port) => Matching::Wildcard,'''
+to = '''        None if default_port(place.scheme) == Some(place.port) => Matching::No,'''
+
+[[mutant]]
+name = ":* takes no port"
+file = "crates/net/src/csp.rs"
+from = '''        Some(Port::Any) => Matching::Wildcard,'''
+to = '''        Some(Port::Any) => Matching::No,'''
+
+[[mutant]]
+name = "port 80 is no upgrade to 443"
+file = "crates/net/src/csp.rs"
+from = '''        Some(Port::Number(80)) if place.port == 443 => Matching::Upgrade,'''
+to = '''        Some(Port::Number(80)) if place.port == 443 => Matching::No,'''
+
+[[mutant]]
+name = "an upgraded scheme takes any port"
+file = "crates/net/src/csp.rs"
+from = '''        || (schemes == Matching::Upgrade
+            && !matches!(ports, Matching::Upgrade | Matching::Wildcard))'''
+to = '''        || (schemes == Matching::Upgrade && false)'''
+
+[[mutant]]
+name = "an upgraded port takes any scheme"
+file = "crates/net/src/csp.rs"
+from = '''        || (ports == Matching::Upgrade && schemes != Matching::Upgrade)'''
+to = '''        || (ports == Matching::Upgrade && false)'''
+
+[[mutant]]
+name = "a source with a path matches"
+file = "crates/net/src/csp.rs"
+from = '''        .is_none_or(|path| path.is_empty() || path == "/")'''
+to = '''        .is_none_or(|_| true)'''
+
+[[mutant]]
+name = "a port that isn't a number is any"
+file = "crates/net/src/csp.rs"
+from = '''        Some((host, port)) => (host, Some(Port::Number(port.parse().ok()?))),'''
+to = '''        Some((host, port)) => (host, port.parse().ok().map(Port::Number)),'''
+
+[[mutant]]
+name = "X-Frame-Options isn't split at commas"
+file = "crates/net/src/frame_ancestors.rs"
+from = '''        for value in value.split(',') {'''
+to = '''        for value in std::iter::once(value.as_str()) {'''
+
+[[mutant]]
+name = "an X-Frame-Options value isn't trimmed"
+file = "crates/net/src/frame_ancestors.rs"
+from = '''            let value = value.trim_matches([' ', '\t']).to_ascii_lowercase();'''
+to = '''            let value = value.to_ascii_lowercase();'''
+
+[[mutant]]
+name = "X-Frame-Options keeps its case"
+file = "crates/net/src/frame_ancestors.rs"
+from = '''            let value = value.trim_matches([' ', '\t']).to_ascii_lowercase();'''
+to = '''            let value = value.trim_matches([' ', '\t']).to_owned();'''
+
+[[mutant]]
+name = "the same X-Frame-Options value twice conflicts"
+file = "crates/net/src/frame_ancestors.rs"
+from = '''            if !values.contains(&value) {
+                values.push(value);
+            }'''
+to = '''            values.push(value);'''
+
+[[mutant]]
+name = "values that conflict allow"
+file = "crates/net/src/frame_ancestors.rs"
+from = '''        [_, _, ..] if values.iter().any(keyword) => Err(Refused::Conflict),'''
+to = '''        [_, _, ..] if values.iter().any(keyword) => Ok(()),'''
+
+[[mutant]]
+name = "values that aren't keywords conflict"
+file = "crates/net/src/frame_ancestors.rs"
+from = '''        [_, _, ..] => Ok(()),'''
+to = '''        [_, _, ..] => Err(Refused::Conflict),'''
+
+[[mutant]]
+name = "DENY allows"
+file = "crates/net/src/frame_ancestors.rs"
+from = '''            "deny" => Err(Refused::Deny),'''
+to = '''            "deny" => Ok(()),'''
+
+[[mutant]]
+name = "SAMEORIGIN looks at the parent alone"
+file = "crates/net/src/frame_ancestors.rs"
+from = '''            "sameorigin" if ancestors.iter().any(|ancestor| ancestor != origin) => {'''
+to = '''            "sameorigin" if ancestors.first().is_some_and(|ancestor| ancestor != origin) => {'''
+
+[[mutant]]
+name = "a main frame is checked"
+file = "crates/net/src/frame_ancestors.rs"
+from = '''    if ancestors.is_empty() {
+        return Ok(());
+    }
+    let origin'''
+to = '''    let origin'''
+
+[[mutant]]
+name = "a report-only frame-ancestors overrides X-Frame-Options"
+file = "crates/net/src/frame_ancestors.rs"
+from = '''        if policy.disposition != Disposition::Enforce {
+            continue;
+        }'''
+to = '''        if policy.disposition != Disposition::Enforce {
+            enforced = true;
+            continue;
+        }'''
+
+[[mutant]]
+name = "frame-ancestors doesn't override X-Frame-Options"
+file = "crates/net/src/frame_ancestors.rs"
+from = '''        enforced = true;
+        if !ancestors'''
+to = '''        if !ancestors'''
+
+[[mutant]]
+name = "frame-ancestors wants one ancestor allowed"
+file = "crates/net/src/frame_ancestors.rs"
+from = '''            .all(|ancestor| list.allows(ancestor, &origin))'''
+to = '''            .any(|ancestor| list.allows(ancestor, &origin))'''
+
+[[mutant]]
+name = "only the first policy's frame-ancestors counts"
+file = "crates/net/src/frame_ancestors.rs"
+from = '''            return Err(Refused::FrameAncestors);
+        }
+    }'''
+to = '''            return Err(Refused::FrameAncestors);
+        }
+        break;
+    }'''
+
+[[mutant]]
+name = "the browser doesn't check a frame's response"
+file = "crates/browser/src/web_contents.rs"
+from = '''            && let Err(refused) = net::frame_ancestors::check('''
+to = '''            && false
+            && let Err(refused) = net::frame_ancestors::check('''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "--", "a_frame_its_response_refuses", "every_ancestor_counts"]
+
+[[mutant]]
+name = "a 204 is checked"
+file = "crates/browser/src/web_contents.rs"
+from = '''        if !matches!(head.status, 204 | 205)'''
+to = '''        if !matches!(head.status, 1)'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "--", "a_frame_its_response_refuses"]
+
+[[mutant]]
+name = "a frame's ancestors are its parent alone"
+file = "crates/browser/src/frame_tree.rs"
+from = '''        self.ancestors(frame).cloned().collect()'''
+to = '''        self.ancestors(frame).take(1).cloned().collect()'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "--", "every_ancestor_counts"]
+
+[[mutant]]
+name = "a refused frame's error page isn't a commit's"
+file = "crates/browser/src/web_contents.rs"
+from = '''            self.commit(frame, navigation_id, commit_params, document, None);
+            return;
+        }
+        let header'''
+to = '''            let _ = (document, commit_params);
+            return;
+        }
+        let header'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "--", "a_frame_its_response_refuses"]
+
+[[mutant]]
+name = "the refusal isn't told"
+file = "crates/browser/src/web_contents.rs"
+from = '''            self.post(ContentsEvent::NavigationRefused {'''
+to = '''            std::mem::drop(ContentsEvent::NavigationRefused {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_network::a_refused_frame"]
+
+[[mutant]]
+name = "a refused frame's load is told to have finished"
+file = "crates/shell/src/automation_session.rs"
+from = '''                    "Network.loadingFailed",
+                    json!({
+                        "requestId": navigation_id.to_string(),
+                        "timestamp": TimeTicks::now().as_secs_f64(),
+                        "type": "Document",
+                        "errorText": format!("net::{}", error.code.name()),'''
+to = '''                    "Network.loadingFinished",
+                    json!({
+                        "requestId": navigation_id.to_string(),
+                        "timestamp": TimeTicks::now().as_secs_f64(),
+                        "type": "Document",
+                        "errorText": format!("net::{}", error.code.name()),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_network::a_refused_frame"]
+
+[[mutant]]
+name = "a refused frame's error is another"
+file = "crates/browser/src/web_contents.rs"
+from = '''                NetErrorCode::BlockedByResponse,
+                format!("{}: refused to be framed ({refused:?})", head.url),'''
+to = '''                NetErrorCode::Failed,
+                format!("{}: refused to be framed ({refused:?})", head.url),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_network::a_refused_frame"]

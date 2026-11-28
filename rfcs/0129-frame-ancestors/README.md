@@ -1,7 +1,8 @@
 # RFC 0129：不讓別人嵌：`X-Frame-Options` 和 CSP 的 `frame-ancestors`
 
 - 開始日期：2026-11-28
-- 狀態：👍 已接受：2026-11-28
+- 狀態：🚧 已排程：2026-11-28
+- 進度和驗收：`progress.md`
 - 細節：`details.md`
 
 RFC 0122 路線圖的 F1（M1 的最後一份）。
@@ -71,17 +72,17 @@ RFC 0122 路線圖的 F1（M1 的最後一份）。
 - **每一層祖先都要合**，從父 frame 往上到最上層：
   - `'none'`：空的清單，什麼都不合。
   - `'self'`：回應的網址的 origin；`http` 的 `'self'` 也合 `https` 的同一個主機（Chromium 的 scheme upgrade）。
-  - `*`：合任何 `http`、`https` 的祖先，和回應自己的 scheme 的；不合 `data:`、`blob:`、`file:` 和 opaque 的祖先。
+  - `*`：合任何 `http`、`https` 的祖先；不合 `data:`、`file:` 和 opaque 的祖先。Chromium 的 `*` 也合回應自己的 scheme（給 `chrome-extension:` 這類），machopo 不寫這一支：`url` 給不是 special 的 scheme 的是 opaque 的 origin，祖先是文件，special 的 scheme 裡除了 `http`、`https` 只剩 `file:`（也是 opaque），走不到。
   - 主機的來源：`https://a.example`、`*.a.example`（不合 `a.example` 本身）、port（沒寫的合預設的 port、`:*` 合任何 port）；路徑對祖先的 origin 沒有意義。
   - scheme 的來源：`https:`。
-  - opaque 的祖先（`data:` 的 iframe、錯誤頁）：任何強制的清單都不合，`*` 也不合（Chromium 拿 opaque origin 的 `GetURL()` 去比，照程式推是空的網址、什麼都不合；實作時用 WPT 的 `frame-ancestors-nested-cross-in-sandboxed-cross-url-block.html` 這類和 Chrome 比）。
-- 不認得的來源（`'unsafe-inline'` 這些）忽略。
+  - opaque 的祖先（`data:` 的 iframe、錯誤頁）：任何強制的清單都不合，`*` 也不合（Chromium 拿 opaque origin 的 `GetURL()` 去比，照程式推是空的網址、什麼都不合）。WPT 裡 Chrome 擋 sandbox 的祖先（`frame-ancestors-nested-cross-in-sandboxed-cross-url-block.html`、`frame-ancestors-sandbox-same-origin-self.html`），合這一條；machopo 沒有 iframe 的 `sandbox`，祖先不是 opaque 的，這兩個比不了（預期的失敗），由 `net` 的單元測試守著。
+- 不認得的來源（`'unsafe-inline'` 這些）什麼都不合；`'none'` 和別的來源一起時不算（Chromium 忽略它）。
 
 ### `X-Frame-Options`
 
 照 Chromium 的 `x_frame_options_parser.cc` 和 `ancestor_throttle.cc`：
 
-- **解析**：照 HTML 的「get, decode, and split」，每一個 header 的值照 `,` 切開，每個值去掉前後空白、不分大小寫：`deny`、`sameorigin`、`allowall`，其他的是無效。值不同就是衝突，衝突了不再變。不支援 `ALLOW-FROM`。
+- **解析**：照 HTML 的「get, decode, and split」，每一個 header 的值照 `,` 切開，每個值去掉前後的空格和 tab、不分大小寫：`deny`、`sameorigin`、`allowall`，其他的是無效。去掉重複之後有兩個以上、其中有關鍵字的是衝突；都是無效的值不算（Chromium 把每個值先分類再比，無效的都是同一類，結果一樣）。不支援 `ALLOW-FROM`。
   - 一個 header 裡的 `DENY, SAMEORIGIN` 是衝突、擋：Chrome 實測是這樣（`details.md` 的「Chrome 實測」）。Chromium 的 `x_frame_options_parser.cc` 本身不切，切開應該是它列舉 header 的 `EnumerateHeader` 做的（照結果推的，沒讀到）。
 - **判斷**：
   - 有強制的 `frame-ancestors`：不看 `X-Frame-Options`（`DENY`、衝突、無效都一樣），只照 `frame-ancestors`；report-only 的不算。
@@ -91,11 +92,11 @@ RFC 0122 路線圖的 F1（M1 的最後一份）。
 
 ### 被擋之後（已決定的事項第 2 條）
 
-照 Chromium：導覽失敗，子 frame commit 錯誤頁（opaque 的 origin，記著要去的網址），錯誤碼 `ERR_BLOCKED_BY_RESPONSE`，iframe 的 `load` 照樣觸發（Chrome 實測的，`details.md` 的「Chrome 實測」）。回應的 body 不送給 renderer。machopo 現在只有「沒拿到回應」才 commit 錯誤頁（`on_navigation_completed`），這是新的一條：在 `commit_response` 拿到 head、還沒 commit 時改走錯誤頁，回應的 body 丟掉。
+照 Chromium：導覽失敗，子 frame commit 錯誤頁（opaque 的 origin，記著要去的網址），錯誤碼 `ERR_BLOCKED_BY_RESPONSE`，iframe 的 `load` 照樣觸發（Chrome 實測的，`details.md` 的「Chrome 實測」）。回應的 body 不送給 renderer。machopo 現在只有「沒拿到回應」才 commit 錯誤頁（`on_navigation_completed`），這是新的一條：在 `commit_response` 拿到 head、還沒 commit 時改走錯誤頁，回應的 body 丟掉、載入停下（`net::LoadHandle::cancel`，不再回呼）。
 
 ### DevTools 看得到的（已決定的事項第 3 條）
 
-- **Network**：拿到 head 之後才失敗的子 frame 導覽，自動化（`shell` 的 `automation_session.rs`）照 Chrome 送 `Network.loadingFailed`（`errorText` 是 `net::ERR_BLOCKED_BY_RESPONSE`、type 是 `Document`）。現在這種導覽什麼都不送，Network 面板停在「收到回應」。
+- **Network**：拿到 head 之後才失敗的子 frame 導覽，自動化（`shell` 的 `automation_session.rs`）照 Chrome 送 `Network.loadingFailed`（`errorText` 是 `net::ERR_BLOCKED_BY_RESPONSE`、type 是 `Document`）。原本這種導覽什麼都不送，Network 面板停在「收到回應」。`WebContents` 擋下時發一個新的 `ContentsEvent::NavigationRefused`（帶 `NetError`），自動化照它送；導覽留在「已經收到回應」的那一組裡，載入在停下之前已經結束、結束的事件還排著時，照回應之後的錯誤不再送一次（`docs/test-gaps.md`）。
 - **console**：Browser 替一個 frame 加一條 console 訊息（Chromium 的 `NavigationRequest::AddDeferredConsoleMessage`、`RenderFrameHost::AddMessageToConsole`），renderer 照 DevTools 的 `Log` 送出去。四種：
   - `X-Frame-Options`：Chromium 的三句原文（`details.md` 的「Chromium」），level `error`；
   - `frame-ancestors`：「Framing '…' violates the following Content Security Policy directive: "…". The request has been blocked.」，level `error`；

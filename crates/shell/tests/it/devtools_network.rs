@@ -244,6 +244,51 @@ fn a_document_whose_body_stops_short_fails_once() {
     of(&events, "Network.dataReceived", &id);
 }
 
+/// A frame the browser refuses its response (`X-Frame-Options: DENY`)
+/// ends in one `loadingFailed`, `net::ERR_BLOCKED_BY_RESPONSE`, after its
+/// `responseReceived`, as Chrome tells it; its error page commits.
+#[test]
+fn a_refused_frame_fails_after_its_response() {
+    let server = server(&[
+        (
+            "/",
+            Route::ok("text/html", "<!DOCTYPE html><iframe src=/framed></iframe>"),
+        ),
+        (
+            "/framed",
+            Route::ok("text/html", "<!DOCTYPE html>framed").with_header("X-Frame-Options", "DENY"),
+        ),
+    ]);
+    let machopo = Machopo::start();
+    let (mut page, _) = page(&machopo);
+    page.call(None, "Network.enable", json!({}));
+    load(&mut page, &server.url("/"));
+    let mut events = network_events(&mut page, 2);
+    evaluate(&mut page, "0", None);
+    events.extend(page.take_events("Network."));
+    let id = id_of(&events, "/framed");
+    let ends: Vec<&Value> = events
+        .iter()
+        .filter(|event| {
+            event["params"]["requestId"] == id
+                && matches!(
+                    event["method"].as_str(),
+                    Some("Network.loadingFinished" | "Network.loadingFailed")
+                )
+        })
+        .collect();
+    assert_eq!(ends.len(), 1, "{events:#?}");
+    assert_eq!(ends[0]["method"], "Network.loadingFailed");
+    assert_eq!(
+        ends[0]["params"]["errorText"],
+        json!("net::ERR_BLOCKED_BY_RESPONSE")
+    );
+    assert_eq!(
+        of(&events, "Network.responseReceived", &id)["response"]["status"],
+        json!(200)
+    );
+}
+
 /// A `fetch()` is told as it is sent: its redirect, which comes while the
 /// script that sent it is busy, is told after it, as the same request's
 /// second `requestWillBeSent` (were it told only once the script's task

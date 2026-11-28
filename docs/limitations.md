@@ -44,6 +44,7 @@
 - **renderer 的 V8 用完它的 heap、或配置不到記憶體時，renderer 以結束碼 6 結束，分頁說記憶體不夠**（三個平台；`bindings` 的 `oom`），這只在 V8 有 isolate 的 thread 上：V8 自己的背景 thread（編譯、GC）配置不到時照 V8 原本的做法印出 stack、abort，Linux、macOS 的分頁說是當掉，Windows 上碰過上限的照樣說記憶體不夠，但 stderr 是 V8 的錯誤（印 stack 要的 DLL 在 sandbox 裡載不進來）。Rust 那一側（DOM、style、layout）配置不到時照 Rust 的做法 abort，一樣是 Windows 上說記憶體不夠、Linux 和 macOS 上說當掉。
 - `gfx::FontData` 和 `gfx::ImageData` 不能序列化：現在字型和圖片都留在 renderer 這一側（raster 在 renderer 裡），不用過 process 的邊界；raster 搬到 Viz 那一側時要改成像 Chromium 那樣傳 typeface 和圖片。
 - **名稱表和屬性值的表在同一個 renderer 裡共用**（`dom` 的 `names.rs` 和 `string.rs`，thread-local：同一個分頁導覽過的同一個網站的網頁和它們的 iframe 都用同一份；導覽到別的網站換一個新的 renderer，從頭開始）：前面的網頁的名稱一直留著（見「GC 和 `dom`」），屬性值（包括 CSRF token、hidden input 的值）留到值的表下一次丟掉沒人用的。沒有 API 讀得到表的內容，但 intern 時找到的只 clone、沒有的要配置，花的時間不同：頁面可以一次測一組猜得到的名稱或值有沒有出現過，例如某個網站特有的 custom element 名稱（這個分頁去過哪裡）或低熵的值；隨機的 token 猜不到，測不出來。跨 site 的 iframe 分到各有一份表的 renderer 時才沒有（最上層的網頁已經是了）；只回收沒人用的名稱擋不住（還活著的 iframe 的名稱照樣測得到）。
+- **CSP 只有 `frame-ancestors`**：`Content-Security-Policy` 的 header 解析成 policy 和 directive，只有 `frame-ancestors` 有作用（Browser 在子 frame 的最後的回應 commit 之前檢查，和 `X-Frame-Options` 一起，照 Chromium；不准的 commit 錯誤頁，和 Chrome 一樣）。其他的 directive（`script-src`、`default-src`……）不執行，`<meta http-equiv="Content-Security-Policy">` 不收，`Content-Security-Policy-Report-Only` 不算，沒有違規的報告（`report-uri`、`report-to`、`securitypolicyviolation`）。iframe 沒有 `sandbox`（見「iframe」），sandbox 的祖先照它的網址的 origin 比對（Chrome 的 opaque 祖先什麼都不合，被擋）。
 
 ## GC 和 `dom`
 
@@ -439,6 +440,7 @@ iframe 照同源、同 process 的情形做：有自己的 browsing context、wi
 - 子 frame 導覽到別的文件（`src`、點連結、`location.href = …`、`location.reload()`）由 browser 載入、換掉子 frame 的文件（舊的文件裡的 frame 跟著不在），進 session history（第一份文件併進目前的 entry，之後的是新的 entry，`history.length` 每個 frame 都是整個分頁的），上一頁、下一頁照 entry 換回每個 frame 的文件，上一頁、下一頁重新載入的文件在 `load` 之前建的子 frame 照 entry 還原（重新整理照 `src`，和 Chrome 一樣）。`about:blank` 的 origin 照 HTML 是發起導覽的文件的，`srcdoc` 的是父 frame 的；`about:srcdoc` 只有和父 frame 同源的文件能叫子 frame 導覽過去（或同源的 `srcdoc` 重新載入自己，Chromium 的規則），其他的是錯誤頁。子 frame 裡導覽到自己的 `#fragment`（連結、`location.hash`）和 `pushState` 照樣捲動、改網址、分派 `popstate` 和 `hashchange`，browser 記下網址（子 frame 的 `location.reload()` 載入它）和 entry。
 - `javascript:` 的 `src` 不執行（commit 一份空的文件，網址是那個 `javascript:` 網址，origin 是它的 iframe 的文件的，和 Chrome 一樣沿用初始 `about:blank` 的視窗；Chrome 執行它，字串的結果取代文件）。`loading`、`sandbox`、`allow` 都還沒有（sandbox 的 iframe 照樣跑 script，裡面的 `loading="lazy"` 的圖照樣等到接近 viewport 才載入；`name` 的名稱給 window 的具名屬性和連結的 `target`，沒有 `window.name`；連結找 `target` 時讀 iframe 現在的 `name`，HTML 是子 frame 建立時的名稱，browser 記的也是建立時的）；`referrerpolicy` 只用在子 frame 的 navigation timing（`no-referrer` 時 redirect 的 `Timing-Allow-Origin` 只認 `*`；machopo 的請求都不送 `Referer`）。
 - 載入失敗（網路錯誤）的子 frame 是錯誤頁，和 main frame 的一樣：文件的網址是 `chrome-error://chromewebdata/`（opaque 的 origin，父 frame 讀不到它），browser 記著失敗的網址。頁面不准的導覽（不是 `file:` 的文件要開 `file:`、browser 不載入的 scheme）什麼都不載入：iframe 留著原本的文件，父文件的 `load` 不等它。
+- 回應是 204、205 的導覽照樣 commit 一份空的文件（子 frame 和 main frame 都是）：HTML 和 Chrome 不 commit，留著原本的文件。它也不經過 `X-Frame-Options` 和 `frame-ancestors` 的檢查（照 Chromium，它什麼都不顯示）。
 - `window[i]` 和集合的 indexed property 一樣只能讀：設定、刪除、`Object.defineProperty` 會在 global 上建一般的屬性（規範是失敗）。
 
 ## 連結導航和 hit testing

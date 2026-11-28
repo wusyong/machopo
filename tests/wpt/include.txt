@@ -901,6 +901,16 @@ fetch/cross-origin-resource-policy/
 fetch/orb/
 fetch/corb/
 
+# Whether a site lets itself be framed: `X-Frame-Options` and CSP's
+# `frame-ancestors`, checked by the browser before a child frame's final
+# response commits. Their results are Chrome's but where machopo lacks
+# what a test uses: the iframe's `sandbox` (its frames aren't opaque, so
+# the two sandboxed ones aren't blocked), service workers, and CSP's
+# violation reports. `get-decode-split.html` passes; Chrome's run of it
+# on wpt.fyi times out.
+x-frame-options/
+content-security-policy/frame-ancestors/
+
 # `Location` and `hashchange`. The whole directory of `Location`, but for
 # what is `disabled`; `javascript:` URLs.
 html/browsers/history/the-location-interface/

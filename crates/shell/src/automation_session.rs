@@ -1471,6 +1471,28 @@ impl AutomationSession {
                     self.navigation_ready(tab, *navigation_id, Some(error_text));
                 }
             }
+            // The browser refused a child frame's response it had (its
+            // `X-Frame-Options`, `frame-ancestors`): it failed after its
+            // `responseReceived`, as Chrome tells it. It stays among those
+            // responded: its load, cancelled, calls back no more, but may
+            // have ended before, its end still to come.
+            ContentsEvent::NavigationRefused {
+                navigation_id,
+                error,
+                ..
+            } => {
+                self.to_network(
+                    tab,
+                    "Network.loadingFailed",
+                    json!({
+                        "requestId": navigation_id.to_string(),
+                        "timestamp": TimeTicks::now().as_secs_f64(),
+                        "type": "Document",
+                        "errorText": format!("net::{}", error.code.name()),
+                        "canceled": false,
+                    }),
+                );
+            }
             ContentsEvent::NavigationCompleted { navigation_id, .. } => {
                 self.responded.remove(&(tab, *navigation_id));
             }

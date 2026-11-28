@@ -102,6 +102,16 @@ pub enum ContentsEvent {
         navigation_id: u64,
         result: LoadResult,
     },
+    /// The browser refused navigation `navigation_id` of child frame
+    /// `frame` the response it had (its `frame-ancestors` or
+    /// `X-Frame-Options` doesn't allow the frames it would be in, Chromium's
+    /// `AncestorThrottle` blocking it): its error page commits, for those
+    /// that watch (DevTools' `loadingFailed`), on the UI thread.
+    NavigationRefused {
+        frame: FrameToken,
+        navigation_id: u64,
+        error: NetError,
+    },
     /// Viz has the first frame of the tab's renderer's frame sink `sink`
     /// (`DelegatedFrameHost::OnFirstSurfaceActivation`), from Viz's thread:
     /// the page before, shown in its place till then, may go.
@@ -1583,7 +1593,8 @@ impl WebContents {
             ContentsEvent::FirstFrame(sink) => self.first_frame(sink),
             ContentsEvent::Renderer { .. }
             | ContentsEvent::BadMessage { .. }
-            | ContentsEvent::NavigationStarted(_) => {}
+            | ContentsEvent::NavigationStarted(_)
+            | ContentsEvent::NavigationRefused { .. } => {}
         }
     }
 
@@ -1765,6 +1776,34 @@ impl WebContents {
             done,
             ..
         } = response;
+        // A child frame's response its ancestors aren't allowed to show
+        // (Chromium's `AncestorThrottle::WillProcessResponse`, for the final
+        // response alone and one that is rendered: not a 204 or 205): its
+        // error page commits in its place, the response's body let go.
+        if !matches!(head.status, 204 | 205)
+            && let Ok(url) = url::Url::parse(&head.url)
+            && let Err(refused) = net::frame_ancestors::check(
+                &url,
+                &head.headers,
+                &self.frame_tree.ancestor_origins(frame),
+            )
+        {
+            let error = NetError::new(
+                NetErrorCode::BlockedByResponse,
+                format!("{}: refused to be framed ({refused:?})", head.url),
+            );
+            tracing::warn!(url = %head.url, ?refused, "a frame's response refused");
+            drop((body, load));
+            self.post(ContentsEvent::NavigationRefused {
+                frame,
+                navigation_id,
+                error: error.clone(),
+            });
+            let document =
+                CommittedDocument::error_page(head.url, crate::loader::error_page(&error));
+            self.commit(frame, navigation_id, commit_params, document, None);
+            return;
+        }
         let header = |name: &str| {
             head.headers
                 .iter()
